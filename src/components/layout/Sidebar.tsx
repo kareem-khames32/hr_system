@@ -45,6 +45,7 @@ const menuItems: MenuItem[] = [
       { label: 'إضافة موظف', href: '/employees/add' },
       { label: 'الهيكل التنظيمي', href: '/employees/org-chart' },
       { label: 'المستندات', href: '/employees/documents' },
+      { label: 'الموظفين المؤرشفين', href: '/employees/archived' },
     ],
   },
   {
@@ -55,6 +56,9 @@ const menuItems: MenuItem[] = [
       { label: 'سجل الحضور', href: '/attendance' },
       { label: 'الورديات', href: '/attendance/shifts' },
       { label: 'الأذونات', href: '/attendance/permissions' },
+      { label: 'العمل الإضافي', href: '/attendance/overtime' },
+      { label: 'الإدخال اليدوي', href: '/attendance/manual-entry' },
+      { label: 'أجهزة البصمة', href: '/attendance/devices' },
       { label: 'تقارير الحضور', href: '/attendance/reports' },
     ],
   },
@@ -64,7 +68,9 @@ const menuItems: MenuItem[] = [
     icon: <Calendar size={20} />,
     children: [
       { label: 'طلبات الإجازات', href: '/leaves' },
+      { label: 'طلب إجازة', href: '/leaves/request' },
       { label: 'رصيد الإجازات', href: '/leaves/balance' },
+      { label: 'تقويم الإجازات', href: '/leaves/calendar' },
       { label: 'الإجازات الرسمية', href: '/leaves/holidays' },
       { label: 'أنواع الإجازات', href: '/leaves/types' },
     ],
@@ -76,7 +82,9 @@ const menuItems: MenuItem[] = [
     children: [
       { label: 'مسير الرواتب', href: '/payroll' },
       { label: 'قسائم الراتب', href: '/payroll/payslips' },
+      { label: 'البدلات', href: '/payroll/allowances' },
       { label: 'السلف والقروض', href: '/payroll/loans' },
+      { label: 'التأمينات (GOSI)', href: '/payroll/gosi' },
       { label: 'التقارير المالية', href: '/payroll/reports' },
     ],
   },
@@ -87,6 +95,8 @@ const menuItems: MenuItem[] = [
     children: [
       { label: 'الوظائف الشاغرة', href: '/recruitment' },
       { label: 'المتقدمين', href: '/recruitment/applicants' },
+      { label: 'المقابلات', href: '/recruitment/interviews' },
+      { label: 'عروض العمل', href: '/recruitment/offers' },
       { label: 'إضافة وظيفة', href: '/recruitment/add' },
     ],
   },
@@ -96,7 +106,10 @@ const menuItems: MenuItem[] = [
     icon: <Target size={20} />,
     children: [
       { label: 'التقييمات', href: '/performance' },
+      { label: 'تقييم جديد', href: '/performance/new' },
       { label: 'الأهداف', href: '/performance/goals' },
+      { label: 'دورات التقييم', href: '/performance/cycles' },
+      { label: 'النماذج', href: '/performance/templates' },
     ],
   },
   {
@@ -106,19 +119,28 @@ const menuItems: MenuItem[] = [
     children: [
       { label: 'الدورات التدريبية', href: '/training' },
       { label: 'دوراتي', href: '/training/my-courses' },
+      { label: 'إضافة دورة', href: '/training/add' },
+      { label: 'الشهادات', href: '/training/certificates' },
     ],
   },
   {
     id: 'reports',
     label: 'التقارير',
     icon: <FileText size={20} />,
-    href: '/reports',
+    children: [
+      { label: 'لوحة التقارير', href: '/reports' },
+      { label: 'تقارير مخصصة', href: '/reports/custom' },
+    ],
   },
   {
     id: 'settings',
     label: 'الإعدادات',
     icon: <Settings size={20} />,
-    href: '/settings',
+    children: [
+      { label: 'الإعدادات العامة', href: '/settings' },
+      { label: 'المستخدمين', href: '/settings/users' },
+      { label: 'الأدوار والصلاحيات', href: '/settings/roles' },
+    ],
   },
 ]
 
