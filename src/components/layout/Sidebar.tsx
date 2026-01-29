@@ -1,0 +1,234 @@
+'use client'
+
+import { useState } from 'react'
+import Link from 'next/link'
+import { usePathname } from 'next/navigation'
+import {
+  LayoutDashboard,
+  Users,
+  Clock,
+  Calendar,
+  Wallet,
+  UserPlus,
+  Target,
+  GraduationCap,
+  FileText,
+  Settings,
+  ChevronDown,
+  Building2,
+  LogOut,
+  Bell,
+} from 'lucide-react'
+import clsx from 'clsx'
+
+interface MenuItem {
+  id: string
+  label: string
+  icon: React.ReactNode
+  href?: string
+  children?: { label: string; href: string }[]
+}
+
+const menuItems: MenuItem[] = [
+  {
+    id: 'dashboard',
+    label: 'لوحة التحكم',
+    icon: <LayoutDashboard size={20} />,
+    href: '/',
+  },
+  {
+    id: 'employees',
+    label: 'إدارة الموظفين',
+    icon: <Users size={20} />,
+    children: [
+      { label: 'قائمة الموظفين', href: '/employees' },
+      { label: 'إضافة موظف', href: '/employees/add' },
+      { label: 'الهيكل التنظيمي', href: '/employees/org-chart' },
+      { label: 'المستندات', href: '/employees/documents' },
+    ],
+  },
+  {
+    id: 'attendance',
+    label: 'الحضور والانصراف',
+    icon: <Clock size={20} />,
+    children: [
+      { label: 'سجل الحضور', href: '/attendance' },
+      { label: 'الورديات', href: '/attendance/shifts' },
+      { label: 'الأذونات', href: '/attendance/permissions' },
+      { label: 'تقارير الحضور', href: '/attendance/reports' },
+    ],
+  },
+  {
+    id: 'leaves',
+    label: 'الإجازات',
+    icon: <Calendar size={20} />,
+    children: [
+      { label: 'طلبات الإجازات', href: '/leaves' },
+      { label: 'رصيد الإجازات', href: '/leaves/balance' },
+      { label: 'الإجازات الرسمية', href: '/leaves/holidays' },
+      { label: 'أنواع الإجازات', href: '/leaves/types' },
+    ],
+  },
+  {
+    id: 'payroll',
+    label: 'الرواتب',
+    icon: <Wallet size={20} />,
+    children: [
+      { label: 'مسير الرواتب', href: '/payroll' },
+      { label: 'قسائم الراتب', href: '/payroll/payslips' },
+      { label: 'السلف والقروض', href: '/payroll/loans' },
+      { label: 'التقارير المالية', href: '/payroll/reports' },
+    ],
+  },
+  {
+    id: 'recruitment',
+    label: 'التوظيف',
+    icon: <UserPlus size={20} />,
+    children: [
+      { label: 'الوظائف الشاغرة', href: '/recruitment/jobs' },
+      { label: 'المتقدمين', href: '/recruitment/applicants' },
+      { label: 'المقابلات', href: '/recruitment/interviews' },
+    ],
+  },
+  {
+    id: 'performance',
+    label: 'إدارة الأداء',
+    icon: <Target size={20} />,
+    children: [
+      { label: 'دورات التقييم', href: '/performance/cycles' },
+      { label: 'الأهداف', href: '/performance/goals' },
+      { label: 'التقييمات', href: '/performance/reviews' },
+    ],
+  },
+  {
+    id: 'training',
+    label: 'التدريب والتطوير',
+    icon: <GraduationCap size={20} />,
+    children: [
+      { label: 'الدورات التدريبية', href: '/training/courses' },
+      { label: 'طلبات التدريب', href: '/training/requests' },
+      { label: 'الشهادات', href: '/training/certificates' },
+    ],
+  },
+  {
+    id: 'reports',
+    label: 'التقارير',
+    icon: <FileText size={20} />,
+    href: '/reports',
+  },
+  {
+    id: 'settings',
+    label: 'الإعدادات',
+    icon: <Settings size={20} />,
+    children: [
+      { label: 'إعدادات الشركة', href: '/settings/company' },
+      { label: 'المستخدمين والصلاحيات', href: '/settings/users' },
+      { label: 'إعدادات النظام', href: '/settings/system' },
+    ],
+  },
+]
+
+export default function Sidebar() {
+  const pathname = usePathname()
+  const [expandedItems, setExpandedItems] = useState<string[]>(['employees'])
+
+  const toggleExpanded = (id: string) => {
+    setExpandedItems((prev) =>
+      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
+    )
+  }
+
+  const isActive = (href: string) => pathname === href
+  const isChildActive = (children?: { href: string }[]) =>
+    children?.some((child) => pathname === child.href)
+
+  return (
+    <aside className="fixed right-0 top-0 h-screen w-72 bg-white border-l border-gray-100 flex flex-col z-50">
+      {/* Logo */}
+      <div className="p-6 border-b border-gray-100">
+        <div className="flex items-center gap-3">
+          <div className="w-12 h-12 bg-gradient-to-br from-primary-500 to-primary-600 rounded-2xl flex items-center justify-center shadow-lg shadow-primary-500/30">
+            <Building2 className="w-7 h-7 text-white" />
+          </div>
+          <div>
+            <h1 className="font-bold text-gray-800 text-lg">نظام HR</h1>
+            <p className="text-xs text-gray-400">إدارة الموارد البشرية</p>
+          </div>
+        </div>
+      </div>
+
+      {/* Navigation */}
+      <nav className="flex-1 overflow-y-auto p-4 space-y-1">
+        {menuItems.map((item) => (
+          <div key={item.id}>
+            {item.href ? (
+              <Link
+                href={item.href}
+                className={clsx('sidebar-item', isActive(item.href) && 'active')}
+              >
+                {item.icon}
+                <span className="font-medium">{item.label}</span>
+              </Link>
+            ) : (
+              <>
+                <button
+                  onClick={() => toggleExpanded(item.id)}
+                  className={clsx(
+                    'sidebar-item w-full justify-between',
+                    isChildActive(item.children) && 'bg-primary-50 text-primary-600'
+                  )}
+                >
+                  <div className="flex items-center gap-3">
+                    {item.icon}
+                    <span className="font-medium">{item.label}</span>
+                  </div>
+                  <ChevronDown
+                    size={18}
+                    className={clsx(
+                      'transition-transform duration-200',
+                      expandedItems.includes(item.id) && 'rotate-180'
+                    )}
+                  />
+                </button>
+                {expandedItems.includes(item.id) && item.children && (
+                  <div className="mr-8 mt-1 space-y-1">
+                    {item.children.map((child) => (
+                      <Link
+                        key={child.href}
+                        href={child.href}
+                        className={clsx(
+                          'block px-4 py-2.5 rounded-xl text-sm transition-all',
+                          isActive(child.href)
+                            ? 'bg-primary-500 text-white shadow-lg shadow-primary-500/30'
+                            : 'text-gray-500 hover:text-primary-600 hover:bg-primary-50'
+                        )}
+                      >
+                        {child.label}
+                      </Link>
+                    ))}
+                  </div>
+                )}
+              </>
+            )}
+          </div>
+        ))}
+      </nav>
+
+      {/* User Profile */}
+      <div className="p-4 border-t border-gray-100">
+        <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50">
+          <div className="w-10 h-10 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center text-white font-bold">
+            أ
+          </div>
+          <div className="flex-1">
+            <p className="font-medium text-gray-800 text-sm">أحمد محمد</p>
+            <p className="text-xs text-gray-400">مدير الموارد البشرية</p>
+          </div>
+          <button className="p-2 hover:bg-gray-200 rounded-lg transition-colors">
+            <LogOut size={18} className="text-gray-400" />
+          </button>
+        </div>
+      </div>
+    </aside>
+  )
+}

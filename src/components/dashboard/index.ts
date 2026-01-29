@@ -1,0 +1,7 @@
+export { default as StatsCards } from './StatsCards'
+export { default as AttendanceChart } from './AttendanceChart'
+export { default as RecentActivities } from './RecentActivities'
+export { default as PendingApprovals } from './PendingApprovals'
+export { default as QuickActions } from './QuickActions'
+export { default as UpcomingEvents } from './UpcomingEvents'
+export { default as DepartmentStats } from './DepartmentStats'
