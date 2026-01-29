@@ -85,9 +85,9 @@ const menuItems: MenuItem[] = [
     label: 'التوظيف',
     icon: <UserPlus size={20} />,
     children: [
-      { label: 'الوظائف الشاغرة', href: '/recruitment/jobs' },
+      { label: 'الوظائف الشاغرة', href: '/recruitment' },
       { label: 'المتقدمين', href: '/recruitment/applicants' },
-      { label: 'المقابلات', href: '/recruitment/interviews' },
+      { label: 'إضافة وظيفة', href: '/recruitment/add' },
     ],
   },
   {
@@ -95,9 +95,8 @@ const menuItems: MenuItem[] = [
     label: 'إدارة الأداء',
     icon: <Target size={20} />,
     children: [
-      { label: 'دورات التقييم', href: '/performance/cycles' },
+      { label: 'التقييمات', href: '/performance' },
       { label: 'الأهداف', href: '/performance/goals' },
-      { label: 'التقييمات', href: '/performance/reviews' },
     ],
   },
   {
@@ -105,9 +104,8 @@ const menuItems: MenuItem[] = [
     label: 'التدريب والتطوير',
     icon: <GraduationCap size={20} />,
     children: [
-      { label: 'الدورات التدريبية', href: '/training/courses' },
-      { label: 'طلبات التدريب', href: '/training/requests' },
-      { label: 'الشهادات', href: '/training/certificates' },
+      { label: 'الدورات التدريبية', href: '/training' },
+      { label: 'دوراتي', href: '/training/my-courses' },
     ],
   },
   {
@@ -120,11 +118,7 @@ const menuItems: MenuItem[] = [
     id: 'settings',
     label: 'الإعدادات',
     icon: <Settings size={20} />,
-    children: [
-      { label: 'إعدادات الشركة', href: '/settings/company' },
-      { label: 'المستخدمين والصلاحيات', href: '/settings/users' },
-      { label: 'إعدادات النظام', href: '/settings/system' },
-    ],
+    href: '/settings',
   },
 ]
 
