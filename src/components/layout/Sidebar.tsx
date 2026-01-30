@@ -54,6 +54,7 @@ const menuItems: MenuItem[] = [
     icon: <Clock size={20} />,
     children: [
       { label: 'سجل الحضور', href: '/attendance' },
+      { label: 'الجدول الأسبوعي', href: '/attendance/weekly-schedule' },
       { label: 'الورديات', href: '/attendance/shifts' },
       { label: 'الأذونات', href: '/attendance/permissions' },
       { label: 'العمل الإضافي', href: '/attendance/overtime' },
@@ -82,6 +83,7 @@ const menuItems: MenuItem[] = [
     children: [
       { label: 'مسير الرواتب', href: '/payroll' },
       { label: 'قسائم الراتب', href: '/payroll/payslips' },
+      { label: 'معادلات الرواتب', href: '/payroll/formulas' },
       { label: 'البدلات', href: '/payroll/allowances' },
       { label: 'السلف والقروض', href: '/payroll/loans' },
       { label: 'التأمينات (GOSI)', href: '/payroll/gosi' },
@@ -138,6 +140,7 @@ const menuItems: MenuItem[] = [
     icon: <Settings size={20} />,
     children: [
       { label: 'الإعدادات العامة', href: '/settings' },
+      { label: 'أيام العمل', href: '/settings/work-days' },
       { label: 'المستخدمين', href: '/settings/users' },
       { label: 'الأدوار والصلاحيات', href: '/settings/roles' },
     ],

@@ -43,28 +43,28 @@ const course = {
       id: 's1',
       title: 'مقدمة في الأمن السيبراني',
       lessons: [
-        { id: 'l1', title: 'ما هو الأمن السيبراني؟', duration: '15 دقيقة', type: 'video', completed: true },
-        { id: 'l2', title: 'أهمية الأمن السيبراني', duration: '12 دقيقة', type: 'video', completed: true },
-        { id: 'l3', title: 'اختبار: المفاهيم الأساسية', duration: '10 دقائق', type: 'quiz', completed: true },
+        { id: 'l1', title: 'ما هو الأمن السيبراني؟', duration: '15 دقيقة', type: 'video', completed: true, locked: false },
+        { id: 'l2', title: 'أهمية الأمن السيبراني', duration: '12 دقيقة', type: 'video', completed: true, locked: false },
+        { id: 'l3', title: 'اختبار: المفاهيم الأساسية', duration: '10 دقائق', type: 'quiz', completed: true, locked: false },
       ],
     },
     {
       id: 's2',
       title: 'التهديدات الإلكترونية',
       lessons: [
-        { id: 'l4', title: 'أنواع البرمجيات الخبيثة', duration: '20 دقيقة', type: 'video', completed: true },
-        { id: 'l5', title: 'هجمات التصيد الاحتيالي', duration: '18 دقيقة', type: 'video', completed: true },
-        { id: 'l6', title: 'الهندسة الاجتماعية', duration: '15 دقيقة', type: 'video', completed: true },
-        { id: 'l7', title: 'اختبار: التهديدات الإلكترونية', duration: '15 دقيقة', type: 'quiz', completed: false },
+        { id: 'l4', title: 'أنواع البرمجيات الخبيثة', duration: '20 دقيقة', type: 'video', completed: true, locked: false },
+        { id: 'l5', title: 'هجمات التصيد الاحتيالي', duration: '18 دقيقة', type: 'video', completed: true, locked: false },
+        { id: 'l6', title: 'الهندسة الاجتماعية', duration: '15 دقيقة', type: 'video', completed: true, locked: false },
+        { id: 'l7', title: 'اختبار: التهديدات الإلكترونية', duration: '15 دقيقة', type: 'quiz', completed: false, locked: false },
       ],
     },
     {
       id: 's3',
       title: 'حماية البيانات',
       lessons: [
-        { id: 'l8', title: 'كلمات المرور القوية', duration: '12 دقيقة', type: 'video', completed: true },
-        { id: 'l9', title: 'التشفير والحماية', duration: '20 دقيقة', type: 'video', completed: true },
-        { id: 'l10', title: 'النسخ الاحتياطي', duration: '10 دقائق', type: 'video', completed: true },
+        { id: 'l8', title: 'كلمات المرور القوية', duration: '12 دقيقة', type: 'video', completed: true, locked: false },
+        { id: 'l9', title: 'التشفير والحماية', duration: '20 دقيقة', type: 'video', completed: true, locked: false },
+        { id: 'l10', title: 'النسخ الاحتياطي', duration: '10 دقائق', type: 'video', completed: true, locked: false },
       ],
     },
     {
