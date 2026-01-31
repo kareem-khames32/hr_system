@@ -141,6 +141,7 @@ const menuItems: MenuItem[] = [
     children: [
       { label: 'الإعدادات العامة', href: '/settings' },
       { label: 'أيام العمل', href: '/settings/work-days' },
+      { label: 'سياسات الإجازات والأوفرتايم', href: '/settings/policies' },
       { label: 'المستخدمين', href: '/settings/users' },
       { label: 'الأدوار والصلاحيات', href: '/settings/roles' },
     ],

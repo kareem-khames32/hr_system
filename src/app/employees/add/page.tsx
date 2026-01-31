@@ -506,6 +506,75 @@ export default function AddEmployeePage() {
                 </div>
               </div>
 
+              {/* Leave Entitlements */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                استحقاقات الإجازات
+              </h3>
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <label className="label">الإجازة السنوية (يوم/سنة) *</label>
+                  <input type="number" className="input" placeholder="21" defaultValue="21" />
+                  <p className="text-xs text-gray-400 mt-1">حسب نظام العمل السعودي</p>
+                </div>
+                <div>
+                  <label className="label">طريقة الاستحقاق *</label>
+                  <select className="input">
+                    <option value="monthly">شهري (X يوم/شهر)</option>
+                    <option value="yearly">سنوي (دفعة واحدة)</option>
+                    <option value="daily">يومي (تراكمي)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">بداية الاستحقاق *</label>
+                  <select className="input">
+                    <option value="after_probation">بعد فترة التجربة</option>
+                    <option value="from_joining">من تاريخ التعيين</option>
+                    <option value="after_6months">بعد 6 أشهر</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">فترة التجربة (أشهر)</label>
+                  <input type="number" className="input" placeholder="3" defaultValue="3" />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-4 gap-4 mt-4">
+                <div>
+                  <label className="label">الإجازة المرضية (يوم/سنة)</label>
+                  <input type="number" className="input" placeholder="30" defaultValue="30" />
+                </div>
+                <div>
+                  <label className="label">الإجازة الطارئة (يوم/سنة)</label>
+                  <input type="number" className="input" placeholder="5" defaultValue="5" />
+                </div>
+                <div>
+                  <label className="label">السماح بالترحيل</label>
+                  <select className="input">
+                    <option value="yes">نعم</option>
+                    <option value="no">لا</option>
+                    <option value="limited">محدود</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">الحد الأقصى للترحيل (يوم)</label>
+                  <input type="number" className="input" placeholder="10" defaultValue="10" />
+                </div>
+              </div>
+
+              <div className="p-4 bg-blue-50 rounded-xl mt-4">
+                <div className="flex items-start gap-3">
+                  <Calendar size={20} className="text-blue-500 mt-0.5" />
+                  <div>
+                    <p className="font-medium text-blue-800">ملخص الاستحقاقات السنوية</p>
+                    <div className="grid grid-cols-3 gap-4 mt-2 text-sm text-blue-700">
+                      <div>إجازة سنوية: <strong>21 يوم</strong></div>
+                      <div>إجازة مرضية: <strong>30 يوم</strong></div>
+                      <div>إجازة طارئة: <strong>5 أيام</strong></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
               {/* Work Email */}
               <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
                 البريد الإلكتروني للعمل
