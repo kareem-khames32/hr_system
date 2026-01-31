@@ -32,6 +32,7 @@ const steps = [
 
 export default function AddEmployeePage() {
   const [currentStep, setCurrentStep] = useState(1)
+  const [leaveEntitled, setLeaveEntitled] = useState(true)
 
   const nextStep = () => {
     if (currentStep < steps.length) {
@@ -510,33 +511,63 @@ export default function AddEmployeePage() {
               <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
                 استحقاقات الإجازات
               </h3>
-              <div className="grid grid-cols-4 gap-4">
-                <div>
-                  <label className="label">الإجازة السنوية (يوم/سنة) *</label>
-                  <input type="number" className="input" placeholder="21" defaultValue="21" />
-                  <p className="text-xs text-gray-400 mt-1">حسب نظام العمل السعودي</p>
+
+              {/* Toggle for leave entitlement */}
+              <div className={`p-4 rounded-xl flex items-center justify-between ${leaveEntitled ? 'bg-green-50' : 'bg-gray-50'}`}>
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${leaveEntitled ? 'bg-green-100' : 'bg-gray-200'}`}>
+                    <Calendar size={20} className={leaveEntitled ? 'text-green-600' : 'text-gray-400'} />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-800">يستحق إجازات سنوية</p>
+                    <p className="text-sm text-gray-500">
+                      {leaveEntitled ? 'الموظف يستحق إجازات سنوية' : 'الموظف لا يستحق إجازات سنوية'}
+                    </p>
+                  </div>
                 </div>
-                <div>
-                  <label className="label">طريقة الاستحقاق *</label>
-                  <select className="input">
-                    <option value="monthly">شهري (X يوم/شهر)</option>
-                    <option value="yearly">سنوي (دفعة واحدة)</option>
-                    <option value="daily">يومي (تراكمي)</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="label">بداية الاستحقاق *</label>
-                  <select className="input">
-                    <option value="after_probation">بعد فترة التجربة</option>
-                    <option value="from_joining">من تاريخ التعيين</option>
-                    <option value="after_6months">بعد 6 أشهر</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="label">فترة التجربة (أشهر)</label>
-                  <input type="number" className="input" placeholder="3" defaultValue="3" />
-                </div>
+                <button
+                  type="button"
+                  onClick={() => setLeaveEntitled(!leaveEntitled)}
+                  className={`px-4 py-2 rounded-xl font-medium transition-all ${
+                    leaveEntitled
+                      ? 'bg-green-500 text-white'
+                      : 'bg-gray-200 text-gray-600'
+                  }`}
+                >
+                  {leaveEntitled ? 'يستحق ✓' : 'لا يستحق'}
+                </button>
               </div>
+
+              {/* Leave fields - shown only if entitled */}
+              {leaveEntitled && (
+              <div className="space-y-4 mt-4">
+                <div className="grid grid-cols-4 gap-4">
+                  <div>
+                    <label className="label">الإجازة السنوية (يوم/سنة) *</label>
+                    <input type="number" className="input" placeholder="21" defaultValue="21" min="0" />
+                    <p className="text-xs text-gray-400 mt-1">حسب نظام العمل السعودي</p>
+                  </div>
+                  <div>
+                    <label className="label">طريقة الاستحقاق *</label>
+                    <select className="input">
+                      <option value="monthly">شهري (X يوم/شهر)</option>
+                      <option value="yearly">سنوي (دفعة واحدة)</option>
+                      <option value="daily">يومي (تراكمي)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">بداية الاستحقاق *</label>
+                    <select className="input">
+                      <option value="after_probation">بعد فترة التجربة</option>
+                      <option value="from_joining">من تاريخ التعيين</option>
+                      <option value="after_6months">بعد 6 أشهر</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">فترة التجربة (أشهر)</label>
+                    <input type="number" className="input" placeholder="3" defaultValue="3" />
+                  </div>
+                </div>
 
               <div className="grid grid-cols-4 gap-4 mt-4">
                 <div>
@@ -574,6 +605,8 @@ export default function AddEmployeePage() {
                   </div>
                 </div>
               </div>
+              </div>
+              )}
 
               {/* Work Email */}
               <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
