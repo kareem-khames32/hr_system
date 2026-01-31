@@ -82,6 +82,8 @@ const menuItems: MenuItem[] = [
     icon: <Wallet size={20} />,
     children: [
       { label: 'مسير الرواتب', href: '/payroll' },
+      { label: 'المكافآت', href: '/payroll/bonuses' },
+      { label: 'الخصومات', href: '/payroll/deductions' },
       { label: 'قسائم الراتب', href: '/payroll/payslips' },
       { label: 'معادلات الرواتب', href: '/payroll/formulas' },
       { label: 'البدلات', href: '/payroll/allowances' },
