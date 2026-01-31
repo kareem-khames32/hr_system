@@ -19,8 +19,88 @@ import {
   Mail,
   MapPin,
   Building2,
+  Clock,
+  Sun,
+  Moon,
+  Coffee,
 } from 'lucide-react'
 import Link from 'next/link'
+
+// Work schedules data
+const workSchedules = [
+  {
+    id: 'morning',
+    name: 'الدوام الصباحي',
+    nameEn: 'Morning Shift',
+    startTime: '08:00',
+    endTime: '16:00',
+    workHours: 8,
+    breakDuration: 60,
+    icon: '☀️',
+    color: 'warning',
+    days: ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'],
+  },
+  {
+    id: 'evening',
+    name: 'الدوام المسائي',
+    nameEn: 'Evening Shift',
+    startTime: '16:00',
+    endTime: '00:00',
+    workHours: 8,
+    breakDuration: 60,
+    icon: '🌙',
+    color: 'primary',
+    days: ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'],
+  },
+  {
+    id: 'night',
+    name: 'الدوام الليلي',
+    nameEn: 'Night Shift',
+    startTime: '00:00',
+    endTime: '08:00',
+    workHours: 8,
+    breakDuration: 60,
+    icon: '🌃',
+    color: 'gray',
+    days: ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'],
+  },
+  {
+    id: 'flexible',
+    name: 'دوام مرن',
+    nameEn: 'Flexible',
+    startTime: '07:00-10:00',
+    endTime: '15:00-18:00',
+    workHours: 8,
+    breakDuration: 60,
+    icon: '🔄',
+    color: 'success',
+    days: ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'],
+  },
+  {
+    id: 'split',
+    name: 'دوام مقسم',
+    nameEn: 'Split Shift',
+    startTime: '08:00-12:00 / 16:00-20:00',
+    endTime: '',
+    workHours: 8,
+    breakDuration: 240,
+    icon: '⏸️',
+    color: 'danger',
+    days: ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'],
+  },
+  {
+    id: 'rotational',
+    name: 'دوام متناوب',
+    nameEn: 'Rotational',
+    startTime: 'متغير',
+    endTime: 'متغير',
+    workHours: 8,
+    breakDuration: 60,
+    icon: '🔁',
+    color: 'primary',
+    days: ['حسب الجدول الأسبوعي'],
+  },
+]
 
 const steps = [
   { id: 1, title: 'البيانات الشخصية', icon: User },
@@ -33,6 +113,7 @@ const steps = [
 export default function AddEmployeePage() {
   const [currentStep, setCurrentStep] = useState(1)
   const [leaveEntitled, setLeaveEntitled] = useState(true)
+  const [selectedSchedule, setSelectedSchedule] = useState('')
 
   const nextStep = () => {
     if (currentStep < steps.length) {
@@ -506,6 +587,91 @@ export default function AddEmployeePage() {
                   </div>
                 </div>
               </div>
+
+              {/* Work Schedule */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2 flex items-center gap-2">
+                <Clock size={18} className="text-primary-500" />
+                جدول العمل
+              </h3>
+              <p className="text-sm text-gray-500 mb-4">اختر جدول العمل الذي سيتبعه الموظف</p>
+
+              <div className="grid grid-cols-3 gap-4">
+                {workSchedules.map((schedule) => {
+                  const isSelected = selectedSchedule === schedule.id
+                  return (
+                    <div
+                      key={schedule.id}
+                      onClick={() => setSelectedSchedule(schedule.id)}
+                      className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                        isSelected
+                          ? 'border-primary-500 bg-primary-50 shadow-lg shadow-primary-500/20'
+                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-center gap-3 mb-3">
+                        <span className="text-2xl">{schedule.icon}</span>
+                        <div>
+                          <p className={`font-bold ${isSelected ? 'text-primary-700' : 'text-gray-800'}`}>
+                            {schedule.name}
+                          </p>
+                          <p className="text-xs text-gray-400">{schedule.nameEn}</p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-2 text-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">وقت الدوام:</span>
+                          <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
+                            {schedule.startTime} {schedule.endTime && `- ${schedule.endTime}`}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">ساعات العمل:</span>
+                          <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
+                            {schedule.workHours} ساعات
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">فترة الراحة:</span>
+                          <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
+                            {schedule.breakDuration} دقيقة
+                          </span>
+                        </div>
+                      </div>
+
+                      {isSelected && (
+                        <div className="mt-3 pt-3 border-t border-primary-200">
+                          <p className="text-xs text-gray-500 mb-1">أيام العمل:</p>
+                          <div className="flex flex-wrap gap-1">
+                            {schedule.days.map((day, idx) => (
+                              <span
+                                key={idx}
+                                className="px-2 py-0.5 bg-primary-100 text-primary-700 rounded text-xs"
+                              >
+                                {day}
+                              </span>
+                            ))}
+                          </div>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+
+              {selectedSchedule && (
+                <div className="mt-4 p-4 bg-blue-50 rounded-xl flex items-start gap-3">
+                  <Clock size={20} className="text-blue-500 mt-0.5" />
+                  <div>
+                    <p className="font-medium text-blue-800">
+                      تم اختيار: {workSchedules.find(s => s.id === selectedSchedule)?.name}
+                    </p>
+                    <p className="text-sm text-blue-700 mt-1">
+                      يمكن تغيير جدول العمل لاحقاً من صفحة الجدول الأسبوعي أو من ملف الموظف
+                    </p>
+                  </div>
+                </div>
+              )}
 
               {/* Leave Entitlements */}
               <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
