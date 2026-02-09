@@ -24,6 +24,8 @@ import {
   User,
   Globe,
   Hash,
+  UserMinus,
+  Calculator,
 } from 'lucide-react'
 
 // Mock employee data
@@ -117,6 +119,7 @@ const tabs = [
 
 export default function EmployeeProfilePage() {
   const [activeTab, setActiveTab] = useState('personal')
+  const [showActionsMenu, setShowActionsMenu] = useState(false)
 
   return (
     <MainLayout>
@@ -193,9 +196,42 @@ export default function EmployeeProfilePage() {
                 <Edit size={18} />
                 تعديل
               </Link>
-              <button className="p-2.5 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors">
-                <MoreVertical size={18} className="text-gray-600" />
-              </button>
+              <div className="relative">
+                <button
+                  onClick={() => setShowActionsMenu(!showActionsMenu)}
+                  className="p-2.5 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"
+                >
+                  <MoreVertical size={18} className="text-gray-600" />
+                </button>
+
+                {showActionsMenu && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-10"
+                      onClick={() => setShowActionsMenu(false)}
+                    />
+                    <div className="absolute left-0 top-full mt-2 w-56 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+                      <Link
+                        href={`/employees/${employee.id}/settlement`}
+                        className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 transition-colors"
+                        onClick={() => setShowActionsMenu(false)}
+                      >
+                        <Calculator size={18} className="text-primary-500" />
+                        <span>تصفية المستحقات</span>
+                      </Link>
+                      <div className="border-t border-gray-100 my-1" />
+                      <Link
+                        href={`/employees/${employee.id}/terminate`}
+                        className="flex items-center gap-3 px-4 py-3 text-danger-600 hover:bg-danger-50 transition-colors"
+                        onClick={() => setShowActionsMenu(false)}
+                      >
+                        <UserMinus size={18} />
+                        <span>إنهاء الخدمة</span>
+                      </Link>
+                    </div>
+                  </>
+                )}
+              </div>
             </div>
           </div>
 
