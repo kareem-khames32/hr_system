@@ -142,6 +142,10 @@ const menuItems: MenuItem[] = [
     icon: <Settings size={20} />,
     children: [
       { label: 'الإعدادات العامة', href: '/settings' },
+      { label: 'الفروع', href: '/settings/branches' },
+      { label: 'الأقسام والإدارات', href: '/settings/departments' },
+      { label: 'المسميات الوظيفية', href: '/settings/job-titles' },
+      { label: 'الدرجات الوظيفية', href: '/settings/grades' },
       { label: 'أيام العمل', href: '/settings/work-days' },
       { label: 'سياسات الإجازات والأوفرتايم', href: '/settings/policies' },
       { label: 'المستخدمين', href: '/settings/users' },
