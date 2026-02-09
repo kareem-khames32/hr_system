@@ -144,6 +144,7 @@ const menuItems: MenuItem[] = [
       { label: 'الإعدادات العامة', href: '/settings' },
       { label: 'الفروع', href: '/settings/branches' },
       { label: 'الأقسام والإدارات', href: '/settings/departments' },
+      { label: 'الفرق', href: '/settings/teams' },
       { label: 'المسميات الوظيفية', href: '/settings/job-titles' },
       { label: 'الدرجات الوظيفية', href: '/settings/grades' },
       { label: 'أيام العمل', href: '/settings/work-days' },

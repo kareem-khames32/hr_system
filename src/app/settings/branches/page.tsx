@@ -89,19 +89,6 @@ const initialBranches = [
   },
 ]
 
-const cities = [
-  'الرياض',
-  'جدة',
-  'الدمام',
-  'المدينة المنورة',
-  'مكة المكرمة',
-  'الطائف',
-  'تبوك',
-  'بريدة',
-  'خميس مشيط',
-  'حائل',
-]
-
 export default function BranchesPage() {
   const [branches, setBranches] = useState(initialBranches)
   const [searchQuery, setSearchQuery] = useState('')
@@ -504,20 +491,15 @@ export default function BranchesPage() {
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       المدينة *
                     </label>
-                    <select
+                    <input
+                      type="text"
                       value={formData.city}
                       onChange={(e) =>
                         setFormData({ ...formData, city: e.target.value })
                       }
                       className="input w-full"
-                    >
-                      <option value="">اختر المدينة</option>
-                      {cities.map((city) => (
-                        <option key={city} value={city}>
-                          {city}
-                        </option>
-                      ))}
-                    </select>
+                      placeholder="مثال: الرياض"
+                    />
                   </div>
                 </div>
 
