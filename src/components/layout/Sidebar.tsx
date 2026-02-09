@@ -149,6 +149,7 @@ const menuItems: MenuItem[] = [
       { label: 'الدرجات الوظيفية', href: '/settings/grades' },
       { label: 'أيام العمل', href: '/settings/work-days' },
       { label: 'سياسات الإجازات والأوفرتايم', href: '/settings/policies' },
+      { label: 'الاعتمادات والموافقات', href: '/settings/approvals' },
       { label: 'المستخدمين', href: '/settings/users' },
       { label: 'الأدوار والصلاحيات', href: '/settings/roles' },
     ],
