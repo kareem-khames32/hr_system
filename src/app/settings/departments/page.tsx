@@ -16,6 +16,7 @@ import {
   ChevronLeft,
   Building2,
   User,
+  UsersRound,
 } from 'lucide-react'
 
 // Mock data for departments
@@ -133,13 +134,82 @@ const branches = [
   'فرع المدينة المنورة',
 ]
 
+// Mock teams data
+const initialTeams = [
+  {
+    id: 't1',
+    name: 'فريق التطوير',
+    code: 'IT-DEV',
+    departmentId: '3',
+    leaderName: 'عمر فهد القحطاني',
+    membersCount: 8,
+  },
+  {
+    id: 't2',
+    name: 'فريق الدعم الفني',
+    code: 'IT-SUP',
+    departmentId: '3',
+    leaderName: 'ناصر عبدالله المالكي',
+    membersCount: 5,
+  },
+  {
+    id: 't3',
+    name: 'فريق التوظيف',
+    code: 'HR-REC',
+    departmentId: '2',
+    leaderName: 'ريم سالم العنزي',
+    membersCount: 4,
+  },
+  {
+    id: 't4',
+    name: 'فريق شؤون الموظفين',
+    code: 'HR-EMP',
+    departmentId: '2',
+    leaderName: 'منى أحمد السالم',
+    membersCount: 3,
+  },
+  {
+    id: 't5',
+    name: 'فريق المحاسبة',
+    code: 'FIN-ACC',
+    departmentId: '6',
+    leaderName: 'خالد محمد العمري',
+    membersCount: 6,
+  },
+  {
+    id: 't6',
+    name: 'فريق المبيعات الداخلية',
+    code: 'SAL-INT',
+    departmentId: '7',
+    leaderName: 'فيصل سعد الشمري',
+    membersCount: 10,
+  },
+  {
+    id: 't7',
+    name: 'فريق المبيعات الخارجية',
+    code: 'SAL-EXT',
+    departmentId: '7',
+    leaderName: 'عبدالله ناصر الحربي',
+    membersCount: 12,
+  },
+  {
+    id: 't8',
+    name: 'فريق التسويق الرقمي',
+    code: 'MKT-DIG',
+    departmentId: '8',
+    leaderName: 'سارة محمد العتيبي',
+    membersCount: 5,
+  },
+]
+
 export default function DepartmentsPage() {
   const [departments, setDepartments] = useState(initialDepartments)
+  const [teams] = useState(initialTeams)
   const [searchQuery, setSearchQuery] = useState('')
   const [showModal, setShowModal] = useState(false)
   const [editingDept, setEditingDept] = useState<typeof initialDepartments[0] | null>(null)
   const [activeMenu, setActiveMenu] = useState<string | null>(null)
-  const [viewMode, setViewMode] = useState<'list' | 'tree'>('list')
+  const [viewMode, setViewMode] = useState<'list' | 'tree'>('tree')
   const [expandedDepts, setExpandedDepts] = useState<string[]>(['1', '3'])
 
   const [formData, setFormData] = useState({
@@ -162,6 +232,10 @@ export default function DepartmentsPage() {
 
   const getChildren = (parentId: string | null) => {
     return departments.filter((d) => d.parentId === parentId)
+  }
+
+  const getTeamsForDepartment = (deptId: string) => {
+    return teams.filter((t) => t.departmentId === deptId)
   }
 
   const handleOpenModal = (dept?: typeof initialDepartments[0]) => {
@@ -235,7 +309,8 @@ export default function DepartmentsPage() {
 
   const renderTreeItem = (dept: typeof initialDepartments[0], level: number = 0) => {
     const children = getChildren(dept.id)
-    const hasChildren = children.length > 0
+    const deptTeams = getTeamsForDepartment(dept.id)
+    const hasChildren = children.length > 0 || deptTeams.length > 0
     const isExpanded = expandedDepts.includes(dept.id)
 
     return (
@@ -290,7 +365,42 @@ export default function DepartmentsPage() {
 
         {isExpanded && hasChildren && (
           <div className="border-r-2 border-gray-100 mr-4">
+            {/* Render child departments first */}
             {children.map((child) => renderTreeItem(child, level + 1))}
+
+            {/* Then render teams */}
+            {deptTeams.map((team) => (
+              <div
+                key={team.id}
+                className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50 transition-colors"
+                style={{ marginRight: (level + 1) * 32 }}
+              >
+                <div className="w-7" />
+
+                <div className="w-10 h-10 bg-success-100 rounded-xl flex items-center justify-center">
+                  <UsersRound size={20} className="text-success-600" />
+                </div>
+
+                <div className="flex-1">
+                  <div className="flex items-center gap-2">
+                    <span className="font-medium text-gray-800">{team.name}</span>
+                    <span className="text-xs text-gray-400 font-mono">({team.code})</span>
+                    <span className="text-xs bg-success-50 text-success-600 px-2 py-0.5 rounded-full">فريق</span>
+                  </div>
+                  <p className="text-sm text-gray-500">{team.leaderName}</p>
+                </div>
+
+                <div className="flex items-center gap-4">
+                  <div className="flex items-center gap-1 text-sm text-gray-500">
+                    <Users size={14} />
+                    <span>{team.membersCount}</span>
+                  </div>
+                  <button className="p-2 hover:bg-gray-200 rounded-lg transition-colors">
+                    <Edit size={16} className="text-gray-500" />
+                  </button>
+                </div>
+              </div>
+            ))}
           </div>
         )}
       </div>
