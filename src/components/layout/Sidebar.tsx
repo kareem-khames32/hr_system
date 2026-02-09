@@ -151,6 +151,7 @@ const menuItems: MenuItem[] = [
       { label: 'سياسات الإجازات والأوفرتايم', href: '/settings/policies' },
       { label: 'الاعتمادات والموافقات', href: '/settings/approvals' },
       { label: 'أنواع المستندات', href: '/settings/documents' },
+      { label: 'قوالب المستندات', href: '/settings/document-templates' },
       { label: 'المستخدمين', href: '/settings/users' },
       { label: 'الأدوار والصلاحيات', href: '/settings/roles' },
     ],
