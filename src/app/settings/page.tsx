@@ -648,40 +648,16 @@ export default function SettingsPage() {
                     <h2 className="text-lg font-bold text-gray-800">إعدادات المستندات</h2>
                     <p className="text-sm text-gray-500 mt-1">أنواع المستندات وتنبيهاتها</p>
                   </div>
-                  <button className="btn-primary flex items-center gap-2">
-                    <Save size={18} />
-                    حفظ
-                  </button>
                 </div>
 
-                <div>
-                  <h3 className="font-medium text-gray-700 mb-4">تنبيهات انتهاء المستندات (أيام قبل)</h3>
-                  <div className="flex flex-wrap gap-2">
-                    {[90, 60, 30, 14, 7].map((days) => (
-                      <label key={days} className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-lg cursor-pointer">
-                        <input type="checkbox" defaultChecked className="rounded" />
-                        <span className="text-sm text-gray-700">{days} يوم</span>
-                      </label>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="pt-4 border-t border-gray-100">
-                  <h3 className="font-medium text-gray-700 mb-4">المستندات المطلوبة (إلزامية)</h3>
-                  <div className="space-y-2">
-                    {[
-                      'صورة الهوية / الإقامة',
-                      'صورة جواز السفر',
-                      'عقد العمل',
-                      'شهادة المؤهل',
-                      'شهادات الخبرة',
-                    ].map((doc) => (
-                      <label key={doc} className="flex items-center gap-2 cursor-pointer">
-                        <input type="checkbox" defaultChecked className="rounded" />
-                        <span className="text-sm text-gray-700">{doc}</span>
-                      </label>
-                    ))}
-                  </div>
+                <div className="text-center py-8">
+                  <FileText size={48} className="mx-auto text-gray-300 mb-4" />
+                  <p className="text-gray-600 mb-4">لإدارة أنواع المستندات والتحكم فيها بشكل كامل</p>
+                  <a href="/settings/documents" className="btn-primary inline-flex items-center gap-2">
+                    <Settings size={18} />
+                    انتقل لإدارة أنواع المستندات
+                    <ChevronLeft size={18} />
+                  </a>
                 </div>
               </div>
             )}
