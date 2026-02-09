@@ -24,6 +24,10 @@ import {
   Users,
   Briefcase,
   X,
+  UserPlus,
+  Building2,
+  Search,
+  User,
 } from 'lucide-react'
 
 // أيام الأسبوع
@@ -203,6 +207,7 @@ export default function WorkDaysSettingsPage() {
   const [showAddSchedule, setShowAddSchedule] = useState(false)
   const [showEditSchedule, setShowEditSchedule] = useState(false)
   const [showAddRule, setShowAddRule] = useState(false)
+  const [showAssignModal, setShowAssignModal] = useState(false)
   const [expandedRules, setExpandedRules] = useState<string[]>(['1'])
 
   // تبديل يوم العمل
@@ -542,6 +547,13 @@ export default function WorkDaysSettingsPage() {
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => setShowAssignModal(true)}
+                        className="btn-primary flex items-center gap-2 text-sm py-2"
+                      >
+                        <UserPlus size={16} />
+                        تعيين للموظفين
+                      </button>
                       {!selectedSchedule.isDefault && (
                         <button
                           onClick={() => setAsDefault(selectedSchedule.id)}
@@ -880,6 +892,27 @@ export default function WorkDaysSettingsPage() {
           <AddRuleModal
             onClose={() => setShowAddRule(false)}
             onAdd={addRule}
+          />
+        )}
+
+        {/* Modal تعيين الجدول للموظفين */}
+        {showAssignModal && selectedSchedule && (
+          <AssignScheduleModal
+            schedule={selectedSchedule}
+            onClose={() => setShowAssignModal(false)}
+            onAssign={(count) => {
+              // تحديث عدد الموظفين
+              const updatedSchedule = {
+                ...selectedSchedule,
+                employeeCount: selectedSchedule.employeeCount + count,
+              }
+              setSchedules(prev =>
+                prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
+              )
+              setSelectedSchedule(updatedSchedule)
+              setShowAssignModal(false)
+              alert(`تم تعيين الجدول لـ ${count} موظف بنجاح!`)
+            }}
           />
         )}
       </div>
@@ -1423,6 +1456,328 @@ function AddRuleModal({
         <div className="p-6 border-t border-gray-100 flex gap-3">
           <button onClick={handleSubmit} className="flex-1 btn-primary">
             إضافة القاعدة
+          </button>
+          <button onClick={onClose} className="flex-1 btn-secondary">
+            إلغاء
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// بيانات الموظفين (للعرض فقط)
+const sampleEmployees = [
+  { id: '1', name: 'أحمد محمد السعيد', department: 'تقنية المعلومات', position: 'مطور برمجيات', scheduleId: '1' },
+  { id: '2', name: 'فاطمة علي الحسن', department: 'الموارد البشرية', position: 'أخصائي موارد بشرية', scheduleId: '1' },
+  { id: '3', name: 'محمد عبدالله الراشد', department: 'المالية', position: 'محاسب', scheduleId: '2' },
+  { id: '4', name: 'نورة سعد العتيبي', department: 'التسويق', position: 'مدير تسويق', scheduleId: '1' },
+  { id: '5', name: 'خالد إبراهيم المطيري', department: 'تقنية المعلومات', position: 'مدير تقنية', scheduleId: '1' },
+  { id: '6', name: 'سارة أحمد الشمري', department: 'المبيعات', position: 'مندوب مبيعات', scheduleId: '2' },
+  { id: '7', name: 'عبدالرحمن فهد القحطاني', department: 'المالية', position: 'مدير مالي', scheduleId: '1' },
+  { id: '8', name: 'مريم حسن الدوسري', department: 'الموارد البشرية', position: 'مدير موارد بشرية', scheduleId: '1' },
+]
+
+const departments = [
+  { id: 'it', name: 'تقنية المعلومات', employeeCount: 12 },
+  { id: 'hr', name: 'الموارد البشرية', employeeCount: 8 },
+  { id: 'finance', name: 'المالية', employeeCount: 10 },
+  { id: 'sales', name: 'المبيعات', employeeCount: 15 },
+  { id: 'marketing', name: 'التسويق', employeeCount: 7 },
+]
+
+// Modal تعيين الجدول للموظفين
+function AssignScheduleModal({
+  schedule,
+  onClose,
+  onAssign,
+}: {
+  schedule: WorkSchedule
+  onClose: () => void
+  onAssign: (count: number) => void
+}) {
+  const [scope, setScope] = useState<'individual' | 'department' | 'company' | 'custom'>('individual')
+  const [selectedDepartment, setSelectedDepartment] = useState('')
+  const [selectedEmployees, setSelectedEmployees] = useState<string[]>([])
+  const [searchQuery, setSearchQuery] = useState('')
+
+  // الموظفين المفلترين
+  const filteredEmployees = sampleEmployees.filter(emp =>
+    emp.name.includes(searchQuery) ||
+    emp.department.includes(searchQuery) ||
+    emp.position.includes(searchQuery)
+  )
+
+  // عدد الموظفين المتأثرين
+  const getAffectedCount = () => {
+    switch (scope) {
+      case 'individual':
+        return selectedEmployees.length
+      case 'department':
+        return departments.find(d => d.id === selectedDepartment)?.employeeCount || 0
+      case 'company':
+        return sampleEmployees.length
+      case 'custom':
+        return selectedEmployees.length
+      default:
+        return 0
+    }
+  }
+
+  const handleSubmit = () => {
+    const count = getAffectedCount()
+    if (count === 0) {
+      alert('الرجاء اختيار موظف واحد على الأقل')
+      return
+    }
+    onAssign(count)
+  }
+
+  const toggleEmployee = (empId: string) => {
+    setSelectedEmployees(prev =>
+      prev.includes(empId)
+        ? prev.filter(id => id !== empId)
+        : [...prev, empId]
+    )
+  }
+
+  const selectAllEmployees = () => {
+    setSelectedEmployees(filteredEmployees.map(e => e.id))
+  }
+
+  const clearSelection = () => {
+    setSelectedEmployees([])
+  }
+
+  const colorClass = scheduleColors.find(c => c.id === schedule.color)?.class || 'bg-blue-500'
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+          <div className="flex items-center gap-3">
+            <div className={`w-12 h-12 ${colorClass} rounded-xl flex items-center justify-center`}>
+              <Calendar size={24} className="text-white" />
+            </div>
+            <div>
+              <h2 className="text-xl font-bold text-gray-800">تعيين جدول العمل</h2>
+              <p className="text-gray-500 text-sm mt-1">تعيين "{schedule.name}" للموظفين</p>
+            </div>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100">
+            <X size={20} className="text-gray-500" />
+          </button>
+        </div>
+
+        <div className="p-6 flex-1 overflow-y-auto space-y-6">
+          {/* نطاق التعيين */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-3">
+              نطاق التعيين
+            </label>
+            <div className="grid grid-cols-4 gap-3">
+              <button
+                onClick={() => { setScope('individual'); setSelectedEmployees([]); }}
+                className={`p-4 rounded-xl border-2 text-center transition-all ${
+                  scope === 'individual'
+                    ? 'border-primary-500 bg-primary-50'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <User size={24} className={`mx-auto mb-2 ${scope === 'individual' ? 'text-primary-600' : 'text-gray-400'}`} />
+                <p className={`font-medium ${scope === 'individual' ? 'text-primary-700' : 'text-gray-700'}`}>
+                  موظف واحد
+                </p>
+              </button>
+
+              <button
+                onClick={() => { setScope('department'); setSelectedEmployees([]); }}
+                className={`p-4 rounded-xl border-2 text-center transition-all ${
+                  scope === 'department'
+                    ? 'border-primary-500 bg-primary-50'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <Briefcase size={24} className={`mx-auto mb-2 ${scope === 'department' ? 'text-primary-600' : 'text-gray-400'}`} />
+                <p className={`font-medium ${scope === 'department' ? 'text-primary-700' : 'text-gray-700'}`}>
+                  قسم كامل
+                </p>
+              </button>
+
+              <button
+                onClick={() => { setScope('company'); setSelectedEmployees([]); }}
+                className={`p-4 rounded-xl border-2 text-center transition-all ${
+                  scope === 'company'
+                    ? 'border-primary-500 bg-primary-50'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <Building2 size={24} className={`mx-auto mb-2 ${scope === 'company' ? 'text-primary-600' : 'text-gray-400'}`} />
+                <p className={`font-medium ${scope === 'company' ? 'text-primary-700' : 'text-gray-700'}`}>
+                  الشركة كلها
+                </p>
+              </button>
+
+              <button
+                onClick={() => { setScope('custom'); setSelectedEmployees([]); }}
+                className={`p-4 rounded-xl border-2 text-center transition-all ${
+                  scope === 'custom'
+                    ? 'border-primary-500 bg-primary-50'
+                    : 'border-gray-200 hover:border-gray-300'
+                }`}
+              >
+                <Users size={24} className={`mx-auto mb-2 ${scope === 'custom' ? 'text-primary-600' : 'text-gray-400'}`} />
+                <p className={`font-medium ${scope === 'custom' ? 'text-primary-700' : 'text-gray-700'}`}>
+                  اختيار متعدد
+                </p>
+              </button>
+            </div>
+          </div>
+
+          {/* اختيار القسم */}
+          {scope === 'department' && (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                اختر القسم
+              </label>
+              <div className="grid grid-cols-2 gap-3">
+                {departments.map(dept => (
+                  <button
+                    key={dept.id}
+                    onClick={() => setSelectedDepartment(dept.id)}
+                    className={`p-4 rounded-xl border-2 text-right transition-all ${
+                      selectedDepartment === dept.id
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <div className="flex items-center justify-between">
+                      <div>
+                        <p className={`font-medium ${selectedDepartment === dept.id ? 'text-primary-700' : 'text-gray-800'}`}>
+                          {dept.name}
+                        </p>
+                        <p className="text-sm text-gray-500 mt-1">
+                          {dept.employeeCount} موظف
+                        </p>
+                      </div>
+                      {selectedDepartment === dept.id && (
+                        <CheckCircle size={20} className="text-primary-600" />
+                      )}
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* رسالة الشركة كلها */}
+          {scope === 'company' && (
+            <div className="p-4 bg-warning-50 rounded-xl flex items-start gap-3">
+              <AlertCircle size={20} className="text-warning-600 mt-0.5" />
+              <div>
+                <p className="font-medium text-warning-800">تنبيه</p>
+                <p className="text-sm text-warning-700 mt-1">
+                  سيتم تعيين هذا الجدول لجميع موظفي الشركة ({sampleEmployees.length} موظف).
+                  سيتم استبدال جداولهم الحالية.
+                </p>
+              </div>
+            </div>
+          )}
+
+          {/* اختيار الموظفين */}
+          {(scope === 'individual' || scope === 'custom') && (
+            <div>
+              <div className="flex items-center justify-between mb-3">
+                <label className="block text-sm font-medium text-gray-700">
+                  {scope === 'individual' ? 'اختر موظف' : 'اختر الموظفين'}
+                </label>
+                {scope === 'custom' && (
+                  <div className="flex gap-2">
+                    <button onClick={selectAllEmployees} className="text-sm text-primary-600 hover:text-primary-700">
+                      تحديد الكل
+                    </button>
+                    <span className="text-gray-300">|</span>
+                    <button onClick={clearSelection} className="text-sm text-gray-500 hover:text-gray-700">
+                      إلغاء التحديد
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              {/* بحث */}
+              <div className="relative mb-3">
+                <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                <input
+                  type="text"
+                  value={searchQuery}
+                  onChange={(e) => setSearchQuery(e.target.value)}
+                  placeholder="ابحث بالاسم أو القسم..."
+                  className="input w-full pr-10"
+                />
+              </div>
+
+              {/* قائمة الموظفين */}
+              <div className="border border-gray-200 rounded-xl max-h-64 overflow-y-auto">
+                {filteredEmployees.map(emp => (
+                  <div
+                    key={emp.id}
+                    onClick={() => {
+                      if (scope === 'individual') {
+                        setSelectedEmployees([emp.id])
+                      } else {
+                        toggleEmployee(emp.id)
+                      }
+                    }}
+                    className={`p-3 flex items-center gap-3 cursor-pointer border-b border-gray-100 last:border-0 hover:bg-gray-50 ${
+                      selectedEmployees.includes(emp.id) ? 'bg-primary-50' : ''
+                    }`}
+                  >
+                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
+                      selectedEmployees.includes(emp.id) ? 'bg-primary-500 text-white' : 'bg-gray-100 text-gray-500'
+                    }`}>
+                      {selectedEmployees.includes(emp.id) ? (
+                        <CheckCircle size={20} />
+                      ) : (
+                        <User size={20} />
+                      )}
+                    </div>
+                    <div className="flex-1">
+                      <p className="font-medium text-gray-800">{emp.name}</p>
+                      <p className="text-sm text-gray-500">
+                        {emp.department} • {emp.position}
+                      </p>
+                    </div>
+                    {emp.scheduleId !== schedule.id && (
+                      <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded">
+                        جدول مختلف
+                      </span>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* ملخص */}
+          <div className="p-4 bg-gray-50 rounded-xl">
+            <div className="flex items-center justify-between">
+              <span className="text-gray-600">عدد الموظفين المتأثرين:</span>
+              <span className="text-2xl font-bold text-primary-600">{getAffectedCount()}</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="p-6 border-t border-gray-100 flex gap-3">
+          <button
+            onClick={handleSubmit}
+            disabled={getAffectedCount() === 0}
+            className={`flex-1 btn-primary flex items-center justify-center gap-2 ${
+              getAffectedCount() === 0 ? 'opacity-50 cursor-not-allowed' : ''
+            }`}
+          >
+            <UserPlus size={18} />
+            تعيين الجدول
           </button>
           <button onClick={onClose} className="flex-1 btn-secondary">
             إلغاء
