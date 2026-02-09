@@ -485,7 +485,7 @@ export default function AddEmployeePage() {
                   </select>
                 </div>
                 <div>
-                  <label className="label">الإدارة *</label>
+                  <label className="label">الإدارة/القسم *</label>
                   <select className="input">
                     <option value="">اختر</option>
                     <option value="it">تقنية المعلومات</option>
@@ -499,10 +499,15 @@ export default function AddEmployeePage() {
 
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="label">القسم</label>
+                  <label className="label">الفريق</label>
                   <select className="input">
-                    <option value="">اختر</option>
+                    <option value="">بدون فريق (تابع للقسم مباشرة)</option>
+                    <option value="it-dev">فريق التطوير</option>
+                    <option value="it-sup">فريق الدعم الفني</option>
+                    <option value="hr-rec">فريق التوظيف</option>
+                    <option value="hr-emp">فريق شؤون الموظفين</option>
                   </select>
+                  <p className="text-xs text-gray-400 mt-1">مدير الفريق سيكون المدير المباشر</p>
                 </div>
                 <div>
                   <label className="label">المسمى الوظيفي *</label>
@@ -531,9 +536,11 @@ export default function AddEmployeePage() {
                 <div>
                   <label className="label">المدير المباشر</label>
                   <select className="input">
-                    <option value="">اختر</option>
-                    <option value="emp001">أحمد محمد - مدير تقنية المعلومات</option>
+                    <option value="">اختر (أو يتحدد من الفريق)</option>
+                    <option value="team-leader">خالد عبدالله الشمري - قائد فريق التطوير</option>
+                    <option value="dept-manager">أحمد محمد - مدير تقنية المعلومات</option>
                   </select>
+                  <p className="text-xs text-gray-400 mt-1">يتحدد تلقائياً عند اختيار الفريق</p>
                 </div>
                 <div>
                   <label className="label">موقع العمل</label>
