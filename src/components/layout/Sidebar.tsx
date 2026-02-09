@@ -150,6 +150,7 @@ const menuItems: MenuItem[] = [
       { label: 'أيام العمل', href: '/settings/work-days' },
       { label: 'سياسات الإجازات والأوفرتايم', href: '/settings/policies' },
       { label: 'الاعتمادات والموافقات', href: '/settings/approvals' },
+      { label: 'أنواع المستندات', href: '/settings/documents' },
       { label: 'المستخدمين', href: '/settings/users' },
       { label: 'الأدوار والصلاحيات', href: '/settings/roles' },
     ],
