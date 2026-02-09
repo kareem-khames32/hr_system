@@ -26,81 +26,86 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 
-// Work schedules data
-const workSchedules = [
+// أيام الأسبوع
+const weekDays = [
+  { key: 'sunday', name: 'الأحد', shortName: 'س' },
+  { key: 'monday', name: 'الاثنين', shortName: 'ن' },
+  { key: 'tuesday', name: 'الثلاثاء', shortName: 'ث' },
+  { key: 'wednesday', name: 'الأربعاء', shortName: 'ر' },
+  { key: 'thursday', name: 'الخميس', shortName: 'خ' },
+  { key: 'friday', name: 'الجمعة', shortName: 'ج' },
+  { key: 'saturday', name: 'السبت', shortName: 'س' },
+]
+
+// جداول العمل المتاحة (يتم جلبها من الإعدادات)
+const workSchedules: Array<{
+  id: string
+  name: string
+  description: string
+  color: string
+  isDefault: boolean
+  workDays: { [key: string]: boolean }
+  workHours: { start: string; end: string }
+  employeeCount: number
+  rulesCount: number
+}> = [
   {
-    id: 'morning',
-    name: 'الدوام الصباحي',
-    nameEn: 'Morning Shift',
-    startTime: '08:00',
-    endTime: '16:00',
-    workHours: 8,
-    breakDuration: 60,
-    icon: '☀️',
-    color: 'warning',
-    days: ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'],
+    id: '1',
+    name: 'الجدول الأساسي',
+    description: 'جمعة وسبت إجازة',
+    color: 'blue',
+    isDefault: true,
+    workDays: {
+      sunday: true,
+      monday: true,
+      tuesday: true,
+      wednesday: true,
+      thursday: true,
+      friday: false,
+      saturday: false,
+    },
+    workHours: {
+      start: '08:00',
+      end: '17:00',
+    },
+    employeeCount: 45,
+    rulesCount: 1,
   },
   {
-    id: 'evening',
-    name: 'الدوام المسائي',
-    nameEn: 'Evening Shift',
-    startTime: '16:00',
-    endTime: '00:00',
-    workHours: 8,
-    breakDuration: 60,
-    icon: '🌙',
-    color: 'primary',
-    days: ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'],
-  },
-  {
-    id: 'night',
-    name: 'الدوام الليلي',
-    nameEn: 'Night Shift',
-    startTime: '00:00',
-    endTime: '08:00',
-    workHours: 8,
-    breakDuration: 60,
-    icon: '🌃',
-    color: 'gray',
-    days: ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'],
-  },
-  {
-    id: 'flexible',
-    name: 'دوام مرن',
-    nameEn: 'Flexible',
-    startTime: '07:00-10:00',
-    endTime: '15:00-18:00',
-    workHours: 8,
-    breakDuration: 60,
-    icon: '🔄',
-    color: 'success',
-    days: ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'],
-  },
-  {
-    id: 'split',
-    name: 'دوام مقسم',
-    nameEn: 'Split Shift',
-    startTime: '08:00-12:00 / 16:00-20:00',
-    endTime: '',
-    workHours: 8,
-    breakDuration: 240,
-    icon: '⏸️',
-    color: 'danger',
-    days: ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس'],
-  },
-  {
-    id: 'rotational',
-    name: 'دوام متناوب',
-    nameEn: 'Rotational',
-    startTime: 'متغير',
-    endTime: 'متغير',
-    workHours: 8,
-    breakDuration: 60,
-    icon: '🔁',
-    color: 'primary',
-    days: ['حسب الجدول الأسبوعي'],
+    id: '2',
+    name: 'جدول السبت فقط',
+    description: 'السبت فقط إجازة - الجمعة دوام',
+    color: 'green',
+    isDefault: false,
+    workDays: {
+      sunday: true,
+      monday: true,
+      tuesday: true,
+      wednesday: true,
+      thursday: true,
+      friday: true,
+      saturday: false,
+    },
+    workHours: {
+      start: '08:00',
+      end: '16:00',
+    },
+    employeeCount: 23,
+    rulesCount: 0,
   },
 ]
+
+// الألوان المتاحة للجداول
+const scheduleColors: { [key: string]: string } = {
+  blue: 'bg-blue-500',
+  green: 'bg-green-500',
+  purple: 'bg-purple-500',
+  orange: 'bg-orange-500',
+  pink: 'bg-pink-500',
+  teal: 'bg-teal-500',
+  indigo: 'bg-indigo-500',
+  red: 'bg-red-500',
+}
 
 const steps = [
   { id: 1, title: 'البيانات الشخصية', icon: User },
@@ -593,11 +598,14 @@ export default function AddEmployeePage() {
                 <Clock size={18} className="text-primary-500" />
                 جدول العمل
               </h3>
-              <p className="text-sm text-gray-500 mb-4">اختر جدول العمل الذي سيتبعه الموظف</p>
+              <p className="text-sm text-gray-500 mb-4">اختر جدول العمل الذي سيتبعه الموظف (يمكن إنشاء جداول جديدة من الإعدادات)</p>
 
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-2 gap-4">
                 {workSchedules.map((schedule) => {
                   const isSelected = selectedSchedule === schedule.id
+                  const colorClass = scheduleColors[schedule.color] || 'bg-blue-500'
+                  const workDaysCount = Object.values(schedule.workDays).filter(Boolean).length
+
                   return (
                     <div
                       key={schedule.id}
@@ -608,50 +616,70 @@ export default function AddEmployeePage() {
                           : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
                       }`}
                     >
-                      <div className="flex items-center gap-3 mb-3">
-                        <span className="text-2xl">{schedule.icon}</span>
-                        <div>
-                          <p className={`font-bold ${isSelected ? 'text-primary-700' : 'text-gray-800'}`}>
-                            {schedule.name}
-                          </p>
-                          <p className="text-xs text-gray-400">{schedule.nameEn}</p>
+                      <div className="flex items-start gap-3 mb-4">
+                        <div className={`w-10 h-10 ${colorClass} rounded-xl flex items-center justify-center flex-shrink-0`}>
+                          <Calendar size={20} className="text-white" />
                         </div>
-                      </div>
-
-                      <div className="space-y-2 text-sm">
-                        <div className="flex items-center justify-between">
-                          <span className="text-gray-500">وقت الدوام:</span>
-                          <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
-                            {schedule.startTime} {schedule.endTime && `- ${schedule.endTime}`}
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-gray-500">ساعات العمل:</span>
-                          <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
-                            {schedule.workHours} ساعات
-                          </span>
-                        </div>
-                        <div className="flex items-center justify-between">
-                          <span className="text-gray-500">فترة الراحة:</span>
-                          <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
-                            {schedule.breakDuration} دقيقة
-                          </span>
-                        </div>
-                      </div>
-
-                      {isSelected && (
-                        <div className="mt-3 pt-3 border-t border-primary-200">
-                          <p className="text-xs text-gray-500 mb-1">أيام العمل:</p>
-                          <div className="flex flex-wrap gap-1">
-                            {schedule.days.map((day, idx) => (
-                              <span
-                                key={idx}
-                                className="px-2 py-0.5 bg-primary-100 text-primary-700 rounded text-xs"
-                              >
-                                {day}
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className={`font-bold ${isSelected ? 'text-primary-700' : 'text-gray-800'}`}>
+                              {schedule.name}
+                            </p>
+                            {schedule.isDefault && (
+                              <span className="px-2 py-0.5 bg-primary-100 text-primary-600 rounded-full text-xs font-medium">
+                                افتراضي
                               </span>
-                            ))}
+                            )}
                           </div>
+                          <p className="text-sm text-gray-500 mt-1">{schedule.description}</p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 text-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500 flex items-center gap-1">
+                            <Clock size={14} />
+                            ساعات العمل:
+                          </span>
+                          <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
+                            {schedule.workHours.start} - {schedule.workHours.end}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">أيام العمل:</span>
+                          <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
+                            {workDaysCount} أيام في الأسبوع
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">عدد الموظفين:</span>
+                          <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
+                            {schedule.employeeCount} موظف
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* أيام العمل */}
+                      <div className="flex gap-1 mt-4 pt-3 border-t border-gray-100">
+                        {weekDays.map(day => (
+                          <div
+                            key={day.key}
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
+                              schedule.workDays[day.key]
+                                ? `${colorClass} text-white`
+                                : 'bg-gray-100 text-gray-400'
+                            }`}
+                          >
+                            {day.shortName}
+                          </div>
+                        ))}
+                      </div>
+
+                      {schedule.rulesCount > 0 && (
+                        <div className="mt-3 text-xs text-gray-500">
+                          <span className="px-2 py-1 bg-warning-100 text-warning-700 rounded">
+                            {schedule.rulesCount} قاعدة استثنائية
+                          </span>
                         </div>
                       )}
                     </div>
@@ -667,11 +695,24 @@ export default function AddEmployeePage() {
                       تم اختيار: {workSchedules.find(s => s.id === selectedSchedule)?.name}
                     </p>
                     <p className="text-sm text-blue-700 mt-1">
-                      يمكن تغيير جدول العمل لاحقاً من صفحة الجدول الأسبوعي أو من ملف الموظف
+                      يمكن تغيير جدول العمل لاحقاً من صفحة الإعدادات أو من ملف الموظف
                     </p>
                   </div>
                 </div>
               )}
+
+              {/* Link to settings */}
+              <div className="mt-4 p-4 bg-gray-50 rounded-xl flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Building2 size={20} className="text-gray-400" />
+                  <p className="text-sm text-gray-600">
+                    لإنشاء جداول عمل جديدة أو تعديل الجداول الحالية
+                  </p>
+                </div>
+                <a href="/settings/work-days" className="text-sm text-primary-600 hover:text-primary-700 font-medium">
+                  الذهاب للإعدادات ←
+                </a>
+              </div>
 
               {/* Leave Entitlements */}
               <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">

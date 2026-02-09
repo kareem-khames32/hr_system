@@ -20,6 +20,10 @@ import {
   ToggleRight,
   ChevronDown,
   ChevronUp,
+  Edit3,
+  Users,
+  Briefcase,
+  X,
 } from 'lucide-react'
 
 // أيام الأسبوع
@@ -92,117 +96,242 @@ interface WorkRule {
     holidayName?: string
   }
   priority: number
-  appliesTo: 'all' | 'department' | 'employee'
-  targetIds?: string[]
 }
 
-// البيانات الافتراضية
-const defaultWorkDays: { [key: string]: boolean } = {
-  sunday: true,
-  monday: true,
-  tuesday: true,
-  wednesday: true,
-  thursday: true,
-  friday: false,
-  saturday: false,
+// نوع جدول العمل
+interface WorkSchedule {
+  id: string
+  name: string
+  description: string
+  color: string
+  isDefault: boolean
+  workDays: { [key: string]: boolean }
+  workHours: {
+    start: string
+    end: string
+    breakStart: string
+    breakEnd: string
+  }
+  rules: WorkRule[]
+  employeeCount: number
 }
 
-const initialRules: WorkRule[] = [
+// الألوان المتاحة للجداول
+const scheduleColors = [
+  { id: 'blue', name: 'أزرق', class: 'bg-blue-500' },
+  { id: 'green', name: 'أخضر', class: 'bg-green-500' },
+  { id: 'purple', name: 'بنفسجي', class: 'bg-purple-500' },
+  { id: 'orange', name: 'برتقالي', class: 'bg-orange-500' },
+  { id: 'pink', name: 'وردي', class: 'bg-pink-500' },
+  { id: 'teal', name: 'تركوازي', class: 'bg-teal-500' },
+  { id: 'indigo', name: 'نيلي', class: 'bg-indigo-500' },
+  { id: 'red', name: 'أحمر', class: 'bg-red-500' },
+]
+
+// الجداول الافتراضية
+const initialSchedules: WorkSchedule[] = [
   {
     id: '1',
-    description: 'آخر سبت في الشهر - دوام رسمي',
-    type: 'off_to_work',
-    isActive: true,
-    conditions: {
-      dayOfWeek: ['saturday'],
-      position: 'last',
-      period: 'month',
+    name: 'الجدول الأساسي',
+    description: 'جمعة وسبت إجازة',
+    color: 'blue',
+    isDefault: true,
+    workDays: {
+      sunday: true,
+      monday: true,
+      tuesday: true,
+      wednesday: true,
+      thursday: true,
+      friday: false,
+      saturday: false,
     },
-    result: {
-      shiftId: 'default',
+    workHours: {
+      start: '08:00',
+      end: '17:00',
+      breakStart: '12:00',
+      breakEnd: '13:00',
     },
-    priority: 1,
-    appliesTo: 'all',
+    rules: [
+      {
+        id: '1',
+        description: 'آخر سبت في الشهر - دوام رسمي',
+        type: 'off_to_work',
+        isActive: true,
+        conditions: {
+          dayOfWeek: ['saturday'],
+          position: 'last',
+          period: 'month',
+        },
+        result: {
+          shiftId: 'default',
+        },
+        priority: 1,
+      },
+    ],
+    employeeCount: 45,
   },
   {
     id: '2',
-    description: 'أول أحد في رمضان - إجازة',
-    type: 'work_to_off',
-    isActive: true,
-    conditions: {
-      dayOfWeek: ['sunday'],
-      position: 'first',
-      period: 'ramadan',
+    name: 'جدول السبت فقط',
+    description: 'السبت فقط إجازة - الجمعة دوام',
+    color: 'green',
+    isDefault: false,
+    workDays: {
+      sunday: true,
+      monday: true,
+      tuesday: true,
+      wednesday: true,
+      thursday: true,
+      friday: true,
+      saturday: false,
     },
-    result: {
-      isHoliday: true,
-      holidayName: 'إجازة رمضان',
+    workHours: {
+      start: '08:00',
+      end: '16:00',
+      breakStart: '12:00',
+      breakEnd: '12:30',
     },
-    priority: 2,
-    appliesTo: 'all',
-  },
-  {
-    id: '3',
-    description: 'كل خميس في رمضان - نصف يوم',
-    type: 'half_day',
-    isActive: true,
-    conditions: {
-      dayOfWeek: ['thursday'],
-      position: 'every',
-      period: 'ramadan',
-    },
-    result: {
-      shiftId: 'half_morning',
-    },
-    priority: 3,
-    appliesTo: 'all',
+    rules: [],
+    employeeCount: 23,
   },
 ]
 
 export default function WorkDaysSettingsPage() {
-  const [workDays, setWorkDays] = useState(defaultWorkDays)
-  const [rules, setRules] = useState<WorkRule[]>(initialRules)
+  const [schedules, setSchedules] = useState<WorkSchedule[]>(initialSchedules)
+  const [selectedSchedule, setSelectedSchedule] = useState<WorkSchedule | null>(initialSchedules[0])
   const [hasChanges, setHasChanges] = useState(false)
+  const [showAddSchedule, setShowAddSchedule] = useState(false)
+  const [showEditSchedule, setShowEditSchedule] = useState(false)
   const [showAddRule, setShowAddRule] = useState(false)
-  const [editingRule, setEditingRule] = useState<WorkRule | null>(null)
-  const [expandedRules, setExpandedRules] = useState<string[]>(['1', '2', '3'])
+  const [expandedRules, setExpandedRules] = useState<string[]>(['1'])
 
   // تبديل يوم العمل
   const toggleWorkDay = (day: string) => {
-    setWorkDays(prev => ({
-      ...prev,
-      [day]: !prev[day],
-    }))
+    if (!selectedSchedule) return
+
+    const updatedSchedule = {
+      ...selectedSchedule,
+      workDays: {
+        ...selectedSchedule.workDays,
+        [day]: !selectedSchedule.workDays[day],
+      },
+    }
+
+    setSelectedSchedule(updatedSchedule)
+    setSchedules(prev =>
+      prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
+    )
     setHasChanges(true)
   }
 
   // تبديل حالة القاعدة
   const toggleRuleActive = (ruleId: string) => {
-    setRules(prev =>
-      prev.map(rule =>
-        rule.id === ruleId ? { ...rule, isActive: !rule.isActive } : rule
-      )
+    if (!selectedSchedule) return
+
+    const updatedRules = selectedSchedule.rules.map(rule =>
+      rule.id === ruleId ? { ...rule, isActive: !rule.isActive } : rule
+    )
+
+    const updatedSchedule = { ...selectedSchedule, rules: updatedRules }
+    setSelectedSchedule(updatedSchedule)
+    setSchedules(prev =>
+      prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
     )
     setHasChanges(true)
   }
 
   // حذف قاعدة
   const deleteRule = (ruleId: string) => {
-    if (confirm('هل أنت متأكد من حذف هذه القاعدة؟')) {
-      setRules(prev => prev.filter(rule => rule.id !== ruleId))
-      setHasChanges(true)
-    }
+    if (!selectedSchedule) return
+    if (!confirm('هل أنت متأكد من حذف هذه القاعدة؟')) return
+
+    const updatedRules = selectedSchedule.rules.filter(rule => rule.id !== ruleId)
+    const updatedSchedule = { ...selectedSchedule, rules: updatedRules }
+    setSelectedSchedule(updatedSchedule)
+    setSchedules(prev =>
+      prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
+    )
+    setHasChanges(true)
   }
 
   // نسخ قاعدة
   const duplicateRule = (rule: WorkRule) => {
+    if (!selectedSchedule) return
+
     const newRule: WorkRule = {
       ...rule,
       id: Date.now().toString(),
       description: rule.description + ' (نسخة)',
       isActive: false,
     }
-    setRules(prev => [...prev, newRule])
+
+    const updatedSchedule = {
+      ...selectedSchedule,
+      rules: [...selectedSchedule.rules, newRule],
+    }
+    setSelectedSchedule(updatedSchedule)
+    setSchedules(prev =>
+      prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
+    )
+    setHasChanges(true)
+  }
+
+  // إضافة قاعدة جديدة
+  const addRule = (rule: Omit<WorkRule, 'id'>) => {
+    if (!selectedSchedule) return
+
+    const newRule: WorkRule = {
+      ...rule,
+      id: Date.now().toString(),
+    }
+
+    const updatedSchedule = {
+      ...selectedSchedule,
+      rules: [...selectedSchedule.rules, newRule],
+    }
+    setSelectedSchedule(updatedSchedule)
+    setSchedules(prev =>
+      prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
+    )
+    setHasChanges(true)
+    setShowAddRule(false)
+  }
+
+  // حذف جدول
+  const deleteSchedule = (scheduleId: string) => {
+    const schedule = schedules.find(s => s.id === scheduleId)
+    if (!schedule) return
+
+    if (schedule.isDefault) {
+      alert('لا يمكن حذف الجدول الافتراضي')
+      return
+    }
+
+    if (schedule.employeeCount > 0) {
+      if (!confirm(`هذا الجدول مرتبط بـ ${schedule.employeeCount} موظف. هل تريد حذفه؟ سيتم نقل الموظفين للجدول الافتراضي.`)) {
+        return
+      }
+    } else {
+      if (!confirm('هل أنت متأكد من حذف هذا الجدول؟')) {
+        return
+      }
+    }
+
+    setSchedules(prev => prev.filter(s => s.id !== scheduleId))
+    if (selectedSchedule?.id === scheduleId) {
+      setSelectedSchedule(schedules.find(s => s.isDefault) || schedules[0])
+    }
+    setHasChanges(true)
+  }
+
+  // تعيين كافتراضي
+  const setAsDefault = (scheduleId: string) => {
+    setSchedules(prev =>
+      prev.map(s => ({
+        ...s,
+        isDefault: s.id === scheduleId,
+      }))
+    )
     setHasChanges(true)
   }
 
@@ -225,16 +354,23 @@ export default function WorkDaysSettingsPage() {
     return availableShifts.find(s => s.id === shiftId) || availableShifts[0]
   }
 
+  // الحصول على لون الجدول
+  const getScheduleColor = (colorId: string) => {
+    return scheduleColors.find(c => c.id === colorId) || scheduleColors[0]
+  }
+
   // حفظ التغييرات
   const saveChanges = () => {
-    // هنا يتم الحفظ في الـ backend
     setHasChanges(false)
     alert('تم حفظ الإعدادات بنجاح!')
   }
 
   // إحصائيات
-  const activeRulesCount = rules.filter(r => r.isActive).length
-  const workDaysCount = Object.values(workDays).filter(Boolean).length
+  const totalEmployees = schedules.reduce((sum, s) => sum + s.employeeCount, 0)
+  const activeRulesCount = selectedSchedule?.rules.filter(r => r.isActive).length || 0
+  const workDaysCount = selectedSchedule
+    ? Object.values(selectedSchedule.workDays).filter(Boolean).length
+    : 0
 
   return (
     <MainLayout>
@@ -242,8 +378,8 @@ export default function WorkDaysSettingsPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">إعدادات أيام العمل</h1>
-            <p className="text-gray-500 mt-1">تحديد أيام العمل الأساسية والقواعد الاستثنائية</p>
+            <h1 className="text-2xl font-bold text-gray-800">جداول العمل</h1>
+            <p className="text-gray-500 mt-1">إدارة جداول العمل المختلفة وتعيينها للموظفين</p>
           </div>
           <div className="flex items-center gap-3">
             {hasChanges && (
@@ -263,305 +399,830 @@ export default function WorkDaysSettingsPage() {
           </div>
         </div>
 
-        {/* Stats */}
+        {/* إحصائيات عامة */}
         <div className="grid grid-cols-4 gap-4">
           <div className="card flex items-center gap-4">
             <div className="w-12 h-12 bg-primary-100 rounded-2xl flex items-center justify-center">
-              <Calendar size={24} className="text-primary-600" />
+              <Briefcase size={24} className="text-primary-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">أيام العمل</p>
-              <p className="text-2xl font-bold text-gray-800">{workDaysCount} أيام</p>
+              <p className="text-sm text-gray-500">جداول العمل</p>
+              <p className="text-2xl font-bold text-gray-800">{schedules.length}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
             <div className="w-12 h-12 bg-success-50 rounded-2xl flex items-center justify-center">
-              <CheckCircle size={24} className="text-success-600" />
+              <Users size={24} className="text-success-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">قواعد نشطة</p>
-              <p className="text-2xl font-bold text-success-600">{activeRulesCount}</p>
+              <p className="text-sm text-gray-500">إجمالي الموظفين</p>
+              <p className="text-2xl font-bold text-success-600">{totalEmployees}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
             <div className="w-12 h-12 bg-warning-50 rounded-2xl flex items-center justify-center">
-              <Settings size={24} className="text-warning-600" />
+              <Calendar size={24} className="text-warning-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">إجمالي القواعد</p>
-              <p className="text-2xl font-bold text-warning-600">{rules.length}</p>
+              <p className="text-sm text-gray-500">أيام العمل (الجدول المختار)</p>
+              <p className="text-2xl font-bold text-warning-600">{workDaysCount} أيام</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
             <div className="w-12 h-12 bg-purple-100 rounded-2xl flex items-center justify-center">
-              <Clock size={24} className="text-purple-600" />
+              <Settings size={24} className="text-purple-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">ساعات العمل الأسبوعية</p>
-              <p className="text-2xl font-bold text-purple-600">{workDaysCount * 8} ساعة</p>
+              <p className="text-sm text-gray-500">قواعد نشطة (الجدول المختار)</p>
+              <p className="text-2xl font-bold text-purple-600">{activeRulesCount}</p>
             </div>
           </div>
         </div>
 
-        {/* أيام العمل الأساسية */}
-        <div className="card">
-          <div className="flex items-center gap-3 mb-6">
-            <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
-              <Calendar size={20} className="text-primary-600" />
-            </div>
-            <div>
-              <h2 className="text-lg font-bold text-gray-800">أيام العمل الأساسية</h2>
-              <p className="text-sm text-gray-500">حدد أيام الدوام الرسمية في الأسبوع</p>
-            </div>
-          </div>
-
-          <div className="flex items-center justify-center gap-3">
-            {weekDays.map(day => (
-              <button
-                key={day.key}
-                onClick={() => toggleWorkDay(day.key)}
-                className={`w-20 h-24 rounded-2xl flex flex-col items-center justify-center gap-2 transition-all ${
-                  workDays[day.key]
-                    ? 'bg-primary-500 text-white shadow-lg shadow-primary-500/30'
-                    : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-                }`}
-              >
-                <span className="text-2xl font-bold">{day.shortName}</span>
-                <span className="text-xs">{day.name}</span>
-                <div className={`w-6 h-6 rounded-full flex items-center justify-center ${
-                  workDays[day.key] ? 'bg-white/20' : 'bg-gray-200'
-                }`}>
-                  {workDays[day.key] ? (
-                    <CheckCircle size={16} className="text-white" />
-                  ) : (
-                    <span className="text-gray-400 text-xs">✕</span>
-                  )}
-                </div>
-              </button>
-            ))}
-          </div>
-
-          <div className="mt-6 p-4 bg-blue-50 rounded-xl flex items-start gap-3">
-            <Info size={20} className="text-blue-500 mt-0.5" />
-            <div className="text-sm text-blue-700">
-              <p className="font-medium">ملاحظة:</p>
-              <p>هذه الأيام هي أيام العمل الافتراضية لجميع الموظفين. يمكنك إضافة قواعد استثنائية أدناه لتخصيص أيام معينة.</p>
-            </div>
-          </div>
-        </div>
-
-        {/* القواعد الاستثنائية */}
-        <div className="card">
-          <div className="flex items-center justify-between mb-6">
-            <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-warning-100 rounded-xl flex items-center justify-center">
-                <Settings size={20} className="text-warning-600" />
-              </div>
-              <div>
-                <h2 className="text-lg font-bold text-gray-800">القواعد الاستثنائية</h2>
-                <p className="text-sm text-gray-500">قواعد خاصة تطبق على أيام محددة</p>
-              </div>
-            </div>
-            <button
-              onClick={() => setShowAddRule(true)}
-              className="btn-primary flex items-center gap-2"
-            >
-              <Plus size={18} />
-              إضافة قاعدة
-            </button>
-          </div>
-
-          {/* قائمة القواعد */}
-          <div className="space-y-4">
-            {rules.map((rule, index) => {
-              const ruleType = getRuleType(rule.type)
-              const RuleIcon = ruleType.icon
-              const isExpanded = expandedRules.includes(rule.id)
-
-              return (
-                <div
-                  key={rule.id}
-                  className={`border-2 rounded-2xl overflow-hidden transition-all ${
-                    rule.isActive
-                      ? 'border-gray-200 bg-white'
-                      : 'border-gray-100 bg-gray-50 opacity-60'
-                  }`}
+        <div className="grid grid-cols-12 gap-6">
+          {/* قائمة الجداول */}
+          <div className="col-span-4">
+            <div className="card">
+              <div className="flex items-center justify-between mb-4">
+                <h2 className="text-lg font-bold text-gray-800">جداول العمل</h2>
+                <button
+                  onClick={() => setShowAddSchedule(true)}
+                  className="btn-primary flex items-center gap-2 text-sm py-2"
                 >
-                  {/* Header */}
-                  <div
-                    className="p-4 flex items-center justify-between cursor-pointer hover:bg-gray-50"
-                    onClick={() => toggleRuleExpanded(rule.id)}
-                  >
-                    <div className="flex items-center gap-4">
-                      <div className={`w-10 h-10 ${ruleType.color} rounded-xl flex items-center justify-center`}>
-                        <RuleIcon size={20} className="text-white" />
+                  <Plus size={16} />
+                  جدول جديد
+                </button>
+              </div>
+
+              <div className="space-y-3">
+                {schedules.map(schedule => {
+                  const color = getScheduleColor(schedule.color)
+                  const isSelected = selectedSchedule?.id === schedule.id
+
+                  return (
+                    <div
+                      key={schedule.id}
+                      onClick={() => setSelectedSchedule(schedule)}
+                      className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                        isSelected
+                          ? 'border-primary-500 bg-primary-50'
+                          : 'border-gray-200 hover:border-gray-300 bg-white'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3">
+                        <div className={`w-10 h-10 ${color.class} rounded-xl flex items-center justify-center flex-shrink-0`}>
+                          <Calendar size={20} className="text-white" />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2">
+                            <h3 className="font-bold text-gray-800 truncate">{schedule.name}</h3>
+                            {schedule.isDefault && (
+                              <span className="px-2 py-0.5 bg-primary-100 text-primary-600 rounded-full text-xs font-medium">
+                                افتراضي
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm text-gray-500 mt-1">{schedule.description}</p>
+                          <div className="flex items-center gap-4 mt-2 text-xs text-gray-400">
+                            <span className="flex items-center gap-1">
+                              <Users size={12} />
+                              {schedule.employeeCount} موظف
+                            </span>
+                            <span className="flex items-center gap-1">
+                              <Clock size={12} />
+                              {schedule.workHours.start} - {schedule.workHours.end}
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+
+                      {/* أيام العمل */}
+                      <div className="flex gap-1 mt-3">
+                        {weekDays.map(day => (
+                          <div
+                            key={day.key}
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
+                              schedule.workDays[day.key]
+                                ? `${color.class} text-white`
+                                : 'bg-gray-100 text-gray-400'
+                            }`}
+                          >
+                            {day.shortName}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )
+                })}
+              </div>
+            </div>
+          </div>
+
+          {/* تفاصيل الجدول المختار */}
+          <div className="col-span-8 space-y-6">
+            {selectedSchedule ? (
+              <>
+                {/* معلومات الجدول */}
+                <div className="card">
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-3">
+                      <div className={`w-12 h-12 ${getScheduleColor(selectedSchedule.color).class} rounded-xl flex items-center justify-center`}>
+                        <Calendar size={24} className="text-white" />
                       </div>
                       <div>
                         <div className="flex items-center gap-2">
-                          <span className="text-xs text-gray-400">القاعدة #{index + 1}</span>
-                          <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                            rule.isActive
-                              ? 'bg-success-100 text-success-600'
-                              : 'bg-gray-200 text-gray-500'
-                          }`}>
-                            {rule.isActive ? 'نشطة' : 'معطلة'}
-                          </span>
+                          <h2 className="text-xl font-bold text-gray-800">{selectedSchedule.name}</h2>
+                          {selectedSchedule.isDefault && (
+                            <span className="px-2 py-1 bg-primary-100 text-primary-600 rounded-full text-xs font-medium">
+                              الجدول الافتراضي
+                            </span>
+                          )}
                         </div>
-                        <h3 className="font-bold text-gray-800 mt-1">{rule.description}</h3>
+                        <p className="text-gray-500">{selectedSchedule.description}</p>
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
-                      <span className={`px-3 py-1 rounded-lg text-sm ${ruleType.color} bg-opacity-10 ${ruleType.color.replace('bg-', 'text-')}`}>
-                        {ruleType.name}
-                      </span>
-                      {isExpanded ? (
-                        <ChevronUp size={20} className="text-gray-400" />
-                      ) : (
-                        <ChevronDown size={20} className="text-gray-400" />
+                      {!selectedSchedule.isDefault && (
+                        <button
+                          onClick={() => setAsDefault(selectedSchedule.id)}
+                          className="btn-secondary text-sm py-2"
+                        >
+                          تعيين كافتراضي
+                        </button>
+                      )}
+                      <button
+                        onClick={() => setShowEditSchedule(true)}
+                        className="p-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200"
+                      >
+                        <Edit3 size={18} />
+                      </button>
+                      {!selectedSchedule.isDefault && (
+                        <button
+                          onClick={() => deleteSchedule(selectedSchedule.id)}
+                          className="p-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100"
+                        >
+                          <Trash2 size={18} />
+                        </button>
                       )}
                     </div>
                   </div>
 
-                  {/* Content */}
-                  {isExpanded && (
-                    <div className="px-4 pb-4 border-t border-gray-100">
-                      <div className="mt-4 grid grid-cols-2 gap-6">
-                        {/* الشرط */}
-                        <div>
-                          <h4 className="text-sm font-medium text-gray-600 mb-3">الشرط:</h4>
-                          <div className="p-4 bg-gray-50 rounded-xl space-y-2">
-                            <div className="flex items-center gap-2">
-                              <span className="text-gray-500">اليوم =</span>
-                              <span className="px-2 py-1 bg-primary-100 text-primary-700 rounded-lg text-sm font-medium">
-                                {rule.conditions.dayOfWeek.map(d =>
-                                  weekDays.find(w => w.key === d)?.name
-                                ).join('، ')}
-                              </span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-gray-400">AND</span>
-                            </div>
-                            <div className="flex items-center gap-2">
-                              <span className="text-gray-500">الموقع =</span>
-                              <span className="px-2 py-1 bg-warning-100 text-warning-700 rounded-lg text-sm font-medium">
-                                {dayPositions.find(p => p.id === rule.conditions.position)?.name}
-                              </span>
-                              <span className="text-gray-500">في</span>
-                              <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-sm font-medium">
-                                {timePeriods.find(p => p.id === rule.conditions.period)?.name}
-                              </span>
-                            </div>
-                          </div>
-                        </div>
-
-                        {/* النتيجة */}
-                        <div>
-                          <h4 className="text-sm font-medium text-gray-600 mb-3">النتيجة:</h4>
-                          <div className="p-4 bg-gray-50 rounded-xl space-y-3">
-                            {rule.result.isHoliday ? (
-                              <div className="flex items-center gap-2">
-                                <Moon size={18} className="text-red-500" />
-                                <span className="text-gray-700">إجازة رسمية</span>
-                                {rule.result.holidayName && (
-                                  <span className="text-gray-500">({rule.result.holidayName})</span>
-                                )}
-                              </div>
-                            ) : (
-                              <>
-                                <div className="flex items-center gap-2">
-                                  <Sun size={18} className="text-green-500" />
-                                  <span className="text-gray-700">يوم عمل رسمي</span>
-                                </div>
-                                {rule.result.shiftId && (
-                                  <div className="flex items-center gap-2 mt-2">
-                                    <Clock size={16} className="text-gray-400" />
-                                    <span className="text-gray-500">الوردية:</span>
-                                    <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm font-medium">
-                                      {getShift(rule.result.shiftId).name}
-                                    </span>
-                                    <span className="text-xs text-gray-400">
-                                      ({getShift(rule.result.shiftId).time})
-                                    </span>
-                                  </div>
-                                )}
-                              </>
-                            )}
-                          </div>
-                        </div>
+                  {/* ساعات العمل */}
+                  <div className="grid grid-cols-2 gap-4 mb-6">
+                    <div className="p-4 bg-gray-50 rounded-xl">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Clock size={16} className="text-gray-400" />
+                        <span className="text-sm text-gray-600">ساعات العمل</span>
                       </div>
+                      <p className="text-lg font-bold text-gray-800">
+                        {selectedSchedule.workHours.start} - {selectedSchedule.workHours.end}
+                      </p>
+                    </div>
+                    <div className="p-4 bg-gray-50 rounded-xl">
+                      <div className="flex items-center gap-2 mb-2">
+                        <Clock size={16} className="text-gray-400" />
+                        <span className="text-sm text-gray-600">وقت الاستراحة</span>
+                      </div>
+                      <p className="text-lg font-bold text-gray-800">
+                        {selectedSchedule.workHours.breakStart} - {selectedSchedule.workHours.breakEnd}
+                      </p>
+                    </div>
+                  </div>
 
-                      {/* Actions */}
-                      <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
-                        <div className="flex items-center gap-2">
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              toggleRuleActive(rule.id)
-                            }}
-                            className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
-                              rule.isActive
-                                ? 'bg-success-50 text-success-600 hover:bg-success-100'
-                                : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                            }`}
-                          >
-                            {rule.isActive ? (
-                              <ToggleRight size={18} />
-                            ) : (
-                              <ToggleLeft size={18} />
-                            )}
-                            {rule.isActive ? 'تعطيل' : 'تفعيل'}
-                          </button>
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              duplicateRule(rule)
-                            }}
-                            className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
-                          >
-                            <Copy size={18} />
-                            نسخ
-                          </button>
-                        </div>
+                  {/* أيام العمل */}
+                  <div>
+                    <h3 className="text-sm font-medium text-gray-600 mb-3">أيام العمل</h3>
+                    <div className="flex items-center justify-center gap-3">
+                      {weekDays.map(day => (
                         <button
-                          onClick={(e) => {
-                            e.stopPropagation()
-                            deleteRule(rule.id)
-                          }}
-                          className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
+                          key={day.key}
+                          onClick={() => toggleWorkDay(day.key)}
+                          className={`w-16 h-20 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all ${
+                            selectedSchedule.workDays[day.key]
+                              ? `${getScheduleColor(selectedSchedule.color).class} text-white shadow-lg`
+                              : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                          }`}
                         >
-                          <Trash2 size={18} />
-                          حذف
+                          <span className="text-xl font-bold">{day.shortName}</span>
+                          <span className="text-xs">{day.name}</span>
+                          <div className={`w-5 h-5 rounded-full flex items-center justify-center ${
+                            selectedSchedule.workDays[day.key] ? 'bg-white/20' : 'bg-gray-200'
+                          }`}>
+                            {selectedSchedule.workDays[day.key] ? (
+                              <CheckCircle size={14} className="text-white" />
+                            ) : (
+                              <span className="text-gray-400 text-xs">✕</span>
+                            )}
+                          </div>
                         </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+
+                {/* القواعد الاستثنائية */}
+                <div className="card">
+                  <div className="flex items-center justify-between mb-6">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-warning-100 rounded-xl flex items-center justify-center">
+                        <Settings size={20} className="text-warning-600" />
+                      </div>
+                      <div>
+                        <h2 className="text-lg font-bold text-gray-800">القواعد الاستثنائية</h2>
+                        <p className="text-sm text-gray-500">قواعد خاصة تطبق على هذا الجدول</p>
                       </div>
                     </div>
-                  )}
-                </div>
-              )
-            })}
+                    <button
+                      onClick={() => setShowAddRule(true)}
+                      className="btn-primary flex items-center gap-2"
+                    >
+                      <Plus size={18} />
+                      إضافة قاعدة
+                    </button>
+                  </div>
 
-            {rules.length === 0 && (
-              <div className="text-center py-12 text-gray-500">
-                <Settings size={48} className="mx-auto mb-4 text-gray-300" />
-                <p>لا توجد قواعد استثنائية</p>
-                <p className="text-sm mt-1">أضف قاعدة جديدة لتخصيص أيام العمل</p>
+                  {/* قائمة القواعد */}
+                  <div className="space-y-4">
+                    {selectedSchedule.rules.map((rule, index) => {
+                      const ruleType = getRuleType(rule.type)
+                      const RuleIcon = ruleType.icon
+                      const isExpanded = expandedRules.includes(rule.id)
+
+                      return (
+                        <div
+                          key={rule.id}
+                          className={`border-2 rounded-2xl overflow-hidden transition-all ${
+                            rule.isActive
+                              ? 'border-gray-200 bg-white'
+                              : 'border-gray-100 bg-gray-50 opacity-60'
+                          }`}
+                        >
+                          {/* Header */}
+                          <div
+                            className="p-4 flex items-center justify-between cursor-pointer hover:bg-gray-50"
+                            onClick={() => toggleRuleExpanded(rule.id)}
+                          >
+                            <div className="flex items-center gap-4">
+                              <div className={`w-10 h-10 ${ruleType.color} rounded-xl flex items-center justify-center`}>
+                                <RuleIcon size={20} className="text-white" />
+                              </div>
+                              <div>
+                                <div className="flex items-center gap-2">
+                                  <span className="text-xs text-gray-400">القاعدة #{index + 1}</span>
+                                  <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
+                                    rule.isActive
+                                      ? 'bg-success-100 text-success-600'
+                                      : 'bg-gray-200 text-gray-500'
+                                  }`}>
+                                    {rule.isActive ? 'نشطة' : 'معطلة'}
+                                  </span>
+                                </div>
+                                <h3 className="font-bold text-gray-800 mt-1">{rule.description}</h3>
+                              </div>
+                            </div>
+                            <div className="flex items-center gap-2">
+                              <span className={`px-3 py-1 rounded-lg text-sm ${ruleType.color} bg-opacity-10 ${ruleType.color.replace('bg-', 'text-')}`}>
+                                {ruleType.name}
+                              </span>
+                              {isExpanded ? (
+                                <ChevronUp size={20} className="text-gray-400" />
+                              ) : (
+                                <ChevronDown size={20} className="text-gray-400" />
+                              )}
+                            </div>
+                          </div>
+
+                          {/* Content */}
+                          {isExpanded && (
+                            <div className="px-4 pb-4 border-t border-gray-100">
+                              <div className="mt-4 grid grid-cols-2 gap-6">
+                                {/* الشرط */}
+                                <div>
+                                  <h4 className="text-sm font-medium text-gray-600 mb-3">الشرط:</h4>
+                                  <div className="p-4 bg-gray-50 rounded-xl space-y-2">
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-gray-500">اليوم =</span>
+                                      <span className="px-2 py-1 bg-primary-100 text-primary-700 rounded-lg text-sm font-medium">
+                                        {rule.conditions.dayOfWeek.map(d =>
+                                          weekDays.find(w => w.key === d)?.name
+                                        ).join('، ')}
+                                      </span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-gray-400">AND</span>
+                                    </div>
+                                    <div className="flex items-center gap-2">
+                                      <span className="text-gray-500">الموقع =</span>
+                                      <span className="px-2 py-1 bg-warning-100 text-warning-700 rounded-lg text-sm font-medium">
+                                        {dayPositions.find(p => p.id === rule.conditions.position)?.name}
+                                      </span>
+                                      <span className="text-gray-500">في</span>
+                                      <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-sm font-medium">
+                                        {timePeriods.find(p => p.id === rule.conditions.period)?.name}
+                                      </span>
+                                    </div>
+                                  </div>
+                                </div>
+
+                                {/* النتيجة */}
+                                <div>
+                                  <h4 className="text-sm font-medium text-gray-600 mb-3">النتيجة:</h4>
+                                  <div className="p-4 bg-gray-50 rounded-xl space-y-3">
+                                    {rule.result.isHoliday ? (
+                                      <div className="flex items-center gap-2">
+                                        <Moon size={18} className="text-red-500" />
+                                        <span className="text-gray-700">إجازة رسمية</span>
+                                        {rule.result.holidayName && (
+                                          <span className="text-gray-500">({rule.result.holidayName})</span>
+                                        )}
+                                      </div>
+                                    ) : (
+                                      <>
+                                        <div className="flex items-center gap-2">
+                                          <Sun size={18} className="text-green-500" />
+                                          <span className="text-gray-700">يوم عمل رسمي</span>
+                                        </div>
+                                        {rule.result.shiftId && (
+                                          <div className="flex items-center gap-2 mt-2">
+                                            <Clock size={16} className="text-gray-400" />
+                                            <span className="text-gray-500">الوردية:</span>
+                                            <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm font-medium">
+                                              {getShift(rule.result.shiftId).name}
+                                            </span>
+                                            <span className="text-xs text-gray-400">
+                                              ({getShift(rule.result.shiftId).time})
+                                            </span>
+                                          </div>
+                                        )}
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              </div>
+
+                              {/* Actions */}
+                              <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      toggleRuleActive(rule.id)
+                                    }}
+                                    className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
+                                      rule.isActive
+                                        ? 'bg-success-50 text-success-600 hover:bg-success-100'
+                                        : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                                    }`}
+                                  >
+                                    {rule.isActive ? (
+                                      <ToggleRight size={18} />
+                                    ) : (
+                                      <ToggleLeft size={18} />
+                                    )}
+                                    {rule.isActive ? 'تعطيل' : 'تفعيل'}
+                                  </button>
+                                  <button
+                                    onClick={(e) => {
+                                      e.stopPropagation()
+                                      duplicateRule(rule)
+                                    }}
+                                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
+                                  >
+                                    <Copy size={18} />
+                                    نسخ
+                                  </button>
+                                </div>
+                                <button
+                                  onClick={(e) => {
+                                    e.stopPropagation()
+                                    deleteRule(rule.id)
+                                  }}
+                                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
+                                >
+                                  <Trash2 size={18} />
+                                  حذف
+                                </button>
+                              </div>
+                            </div>
+                          )}
+                        </div>
+                      )
+                    })}
+
+                    {selectedSchedule.rules.length === 0 && (
+                      <div className="text-center py-12 text-gray-500">
+                        <Settings size={48} className="mx-auto mb-4 text-gray-300" />
+                        <p>لا توجد قواعد استثنائية</p>
+                        <p className="text-sm mt-1">أضف قاعدة جديدة لتخصيص أيام العمل</p>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                {/* ملاحظة */}
+                <div className="p-4 bg-blue-50 rounded-xl flex items-start gap-3">
+                  <Info size={20} className="text-blue-500 mt-0.5" />
+                  <div className="text-sm text-blue-700">
+                    <p className="font-medium">كيفية تعيين الجدول للموظفين:</p>
+                    <p className="mt-1">عند إضافة موظف جديد أو تعديل موظف حالي، يمكنك اختيار جدول العمل المناسب له من قائمة الجداول المتاحة.</p>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <div className="card flex items-center justify-center h-96 text-gray-500">
+                <div className="text-center">
+                  <Calendar size={48} className="mx-auto mb-4 text-gray-300" />
+                  <p>اختر جدول عمل من القائمة</p>
+                </div>
               </div>
             )}
           </div>
         </div>
 
+        {/* Modal إضافة جدول */}
+        {showAddSchedule && (
+          <AddScheduleModal
+            onClose={() => setShowAddSchedule(false)}
+            onAdd={(schedule) => {
+              const newSchedule: WorkSchedule = {
+                ...schedule,
+                id: Date.now().toString(),
+                employeeCount: 0,
+                rules: [],
+              }
+              setSchedules(prev => [...prev, newSchedule])
+              setSelectedSchedule(newSchedule)
+              setHasChanges(true)
+              setShowAddSchedule(false)
+            }}
+          />
+        )}
+
+        {/* Modal تعديل جدول */}
+        {showEditSchedule && selectedSchedule && (
+          <EditScheduleModal
+            schedule={selectedSchedule}
+            onClose={() => setShowEditSchedule(false)}
+            onSave={(updated) => {
+              const updatedSchedule = { ...selectedSchedule, ...updated }
+              setSchedules(prev =>
+                prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
+              )
+              setSelectedSchedule(updatedSchedule)
+              setHasChanges(true)
+              setShowEditSchedule(false)
+            }}
+          />
+        )}
+
         {/* Modal إضافة قاعدة */}
         {showAddRule && (
           <AddRuleModal
             onClose={() => setShowAddRule(false)}
-            onAdd={(rule) => {
-              setRules(prev => [...prev, { ...rule, id: Date.now().toString() }])
-              setHasChanges(true)
-              setShowAddRule(false)
-            }}
+            onAdd={addRule}
           />
         )}
       </div>
     </MainLayout>
+  )
+}
+
+// Modal إضافة جدول جديد
+function AddScheduleModal({
+  onClose,
+  onAdd,
+}: {
+  onClose: () => void
+  onAdd: (schedule: Omit<WorkSchedule, 'id' | 'employeeCount' | 'rules'>) => void
+}) {
+  const [name, setName] = useState('')
+  const [description, setDescription] = useState('')
+  const [color, setColor] = useState('blue')
+  const [workDays, setWorkDays] = useState<{ [key: string]: boolean }>({
+    sunday: true,
+    monday: true,
+    tuesday: true,
+    wednesday: true,
+    thursday: true,
+    friday: false,
+    saturday: false,
+  })
+  const [workHours, setWorkHours] = useState({
+    start: '08:00',
+    end: '17:00',
+    breakStart: '12:00',
+    breakEnd: '13:00',
+  })
+
+  const handleSubmit = () => {
+    if (!name) {
+      alert('الرجاء إدخال اسم الجدول')
+      return
+    }
+
+    onAdd({
+      name,
+      description,
+      color,
+      isDefault: false,
+      workDays,
+      workHours,
+    })
+  }
+
+  const toggleDay = (day: string) => {
+    setWorkDays(prev => ({
+      ...prev,
+      [day]: !prev[day],
+    }))
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-gray-800">إضافة جدول عمل جديد</h2>
+            <p className="text-gray-500 text-sm mt-1">أنشئ جدول عمل جديد للموظفين</p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100">
+            <X size={20} className="text-gray-500" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-6">
+          {/* الاسم والوصف */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                اسم الجدول *
+              </label>
+              <input
+                type="text"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="مثال: جدول الإدارة"
+                className="input w-full"
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">
+                الوصف
+              </label>
+              <input
+                type="text"
+                value={description}
+                onChange={(e) => setDescription(e.target.value)}
+                placeholder="مثال: جمعة وسبت إجازة"
+                className="input w-full"
+              />
+            </div>
+          </div>
+
+          {/* اللون */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              اللون
+            </label>
+            <div className="flex gap-3">
+              {scheduleColors.map(c => (
+                <button
+                  key={c.id}
+                  onClick={() => setColor(c.id)}
+                  className={`w-10 h-10 rounded-xl ${c.class} transition-all ${
+                    color === c.id
+                      ? 'ring-4 ring-offset-2 ring-primary-300'
+                      : 'hover:scale-110'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* أيام العمل */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              أيام العمل
+            </label>
+            <div className="flex gap-2">
+              {weekDays.map(day => (
+                <button
+                  key={day.key}
+                  onClick={() => toggleDay(day.key)}
+                  className={`w-14 h-16 rounded-xl flex flex-col items-center justify-center gap-1 transition-all ${
+                    workDays[day.key]
+                      ? `${scheduleColors.find(c => c.id === color)?.class || 'bg-blue-500'} text-white`
+                      : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
+                  }`}
+                >
+                  <span className="text-lg font-bold">{day.shortName}</span>
+                  <span className="text-xs">{workDays[day.key] ? 'دوام' : 'إجازة'}</span>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {/* ساعات العمل */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              ساعات العمل
+            </label>
+            <div className="grid grid-cols-4 gap-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">بداية الدوام</label>
+                <input
+                  type="time"
+                  value={workHours.start}
+                  onChange={(e) => setWorkHours(prev => ({ ...prev, start: e.target.value }))}
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">نهاية الدوام</label>
+                <input
+                  type="time"
+                  value={workHours.end}
+                  onChange={(e) => setWorkHours(prev => ({ ...prev, end: e.target.value }))}
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">بداية الاستراحة</label>
+                <input
+                  type="time"
+                  value={workHours.breakStart}
+                  onChange={(e) => setWorkHours(prev => ({ ...prev, breakStart: e.target.value }))}
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">نهاية الاستراحة</label>
+                <input
+                  type="time"
+                  value={workHours.breakEnd}
+                  onChange={(e) => setWorkHours(prev => ({ ...prev, breakEnd: e.target.value }))}
+                  className="input w-full"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="p-6 border-t border-gray-100 flex gap-3">
+          <button onClick={handleSubmit} className="flex-1 btn-primary">
+            إضافة الجدول
+          </button>
+          <button onClick={onClose} className="flex-1 btn-secondary">
+            إلغاء
+          </button>
+        </div>
+      </div>
+    </div>
+  )
+}
+
+// Modal تعديل جدول
+function EditScheduleModal({
+  schedule,
+  onClose,
+  onSave,
+}: {
+  schedule: WorkSchedule
+  onClose: () => void
+  onSave: (updated: Partial<WorkSchedule>) => void
+}) {
+  const [name, setName] = useState(schedule.name)
+  const [description, setDescription] = useState(schedule.description)
+  const [color, setColor] = useState(schedule.color)
+  const [workHours, setWorkHours] = useState(schedule.workHours)
+
+  const handleSubmit = () => {
+    if (!name) {
+      alert('الرجاء إدخال اسم الجدول')
+      return
+    }
+
+    onSave({
+      name,
+      description,
+      color,
+      workHours,
+    })
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-lg">
+        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+          <h2 className="text-xl font-bold text-gray-800">تعديل الجدول</h2>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100">
+            <X size={20} className="text-gray-500" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-6">
+          {/* الاسم والوصف */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              اسم الجدول *
+            </label>
+            <input
+              type="text"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              className="input w-full"
+            />
+          </div>
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              الوصف
+            </label>
+            <input
+              type="text"
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              className="input w-full"
+            />
+          </div>
+
+          {/* اللون */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              اللون
+            </label>
+            <div className="flex gap-3">
+              {scheduleColors.map(c => (
+                <button
+                  key={c.id}
+                  onClick={() => setColor(c.id)}
+                  className={`w-10 h-10 rounded-xl ${c.class} transition-all ${
+                    color === c.id
+                      ? 'ring-4 ring-offset-2 ring-primary-300'
+                      : 'hover:scale-110'
+                  }`}
+                />
+              ))}
+            </div>
+          </div>
+
+          {/* ساعات العمل */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">
+              ساعات العمل
+            </label>
+            <div className="grid grid-cols-2 gap-4">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">بداية الدوام</label>
+                <input
+                  type="time"
+                  value={workHours.start}
+                  onChange={(e) => setWorkHours(prev => ({ ...prev, start: e.target.value }))}
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">نهاية الدوام</label>
+                <input
+                  type="time"
+                  value={workHours.end}
+                  onChange={(e) => setWorkHours(prev => ({ ...prev, end: e.target.value }))}
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">بداية الاستراحة</label>
+                <input
+                  type="time"
+                  value={workHours.breakStart}
+                  onChange={(e) => setWorkHours(prev => ({ ...prev, breakStart: e.target.value }))}
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1">نهاية الاستراحة</label>
+                <input
+                  type="time"
+                  value={workHours.breakEnd}
+                  onChange={(e) => setWorkHours(prev => ({ ...prev, breakEnd: e.target.value }))}
+                  className="input w-full"
+                />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Actions */}
+        <div className="p-6 border-t border-gray-100 flex gap-3">
+          <button onClick={handleSubmit} className="flex-1 btn-primary">
+            حفظ التغييرات
+          </button>
+          <button onClick={onClose} className="flex-1 btn-secondary">
+            إلغاء
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
@@ -579,7 +1240,6 @@ function AddRuleModal({
   const [position, setPosition] = useState('last')
   const [period, setPeriod] = useState('month')
   const [shiftId, setShiftId] = useState('default')
-  const [isHoliday, setIsHoliday] = useState(false)
   const [holidayName, setHolidayName] = useState('')
 
   const handleSubmit = () => {
@@ -603,7 +1263,6 @@ function AddRuleModal({
         holidayName: ruleType === 'work_to_off' ? holidayName : undefined,
       },
       priority: 1,
-      appliesTo: 'all',
     })
   }
 
@@ -618,9 +1277,14 @@ function AddRuleModal({
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
       <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        <div className="p-6 border-b border-gray-100">
-          <h2 className="text-xl font-bold text-gray-800">إضافة قاعدة جديدة</h2>
-          <p className="text-gray-500 text-sm mt-1">أنشئ قاعدة استثنائية لأيام العمل</p>
+        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h2 className="text-xl font-bold text-gray-800">إضافة قاعدة جديدة</h2>
+            <p className="text-gray-500 text-sm mt-1">أنشئ قاعدة استثنائية لأيام العمل</p>
+          </div>
+          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100">
+            <X size={20} className="text-gray-500" />
+          </button>
         </div>
 
         <div className="p-6 space-y-6">
