@@ -26,6 +26,11 @@ import {
   Hash,
   UserMinus,
   Calculator,
+  FileSignature,
+  Eye,
+  X,
+  Check,
+  AlertCircle,
 } from 'lucide-react'
 
 // Mock employee data
@@ -117,9 +122,258 @@ const tabs = [
   { id: 'documents', label: 'المستندات', icon: FileText },
 ]
 
+// Document templates
+const documentTemplates = [
+  {
+    id: '1',
+    name: 'عقد العمل',
+    nameEn: 'Employment Contract',
+    category: 'contracts',
+    icon: FileSignature,
+  },
+  {
+    id: '2',
+    name: 'خطاب تعريف بالراتب',
+    nameEn: 'Salary Certificate',
+    category: 'letters',
+    icon: FileText,
+  },
+  {
+    id: '3',
+    name: 'شهادة خبرة',
+    nameEn: 'Experience Certificate',
+    category: 'certificates',
+    icon: Award,
+  },
+  {
+    id: '4',
+    name: 'خطاب تعريف للبنك',
+    nameEn: 'Bank Letter',
+    category: 'letters',
+    icon: FileText,
+  },
+  {
+    id: '5',
+    name: 'خطاب تعريف للسفارة',
+    nameEn: 'Embassy Letter',
+    category: 'letters',
+    icon: FileText,
+  },
+  {
+    id: '6',
+    name: 'إخلاء طرف',
+    nameEn: 'Clearance Letter',
+    category: 'forms',
+    icon: FileText,
+  },
+]
+
+// Sample contract with employee data filled
+const generateDocument = (templateId: string, emp: typeof employee) => {
+  const templates: Record<string, string> = {
+    '1': `بسم الله الرحمن الرحيم
+
+عقد عمل
+
+تم بعون الله وتوفيقه في يوم ${new Date().toLocaleDateString('ar-SA')} إبرام هذا العقد بين كل من:
+
+الطرف الأول (صاحب العمل):
+شركة التقنية المتقدمة
+السجل التجاري: 1010123456
+العنوان: الرياض، حي العليا، شارع الملك فهد
+
+الطرف الثاني (الموظف):
+الاسم: ${emp.name}
+رقم الهوية: ${emp.nationalId}
+الجنسية: ${emp.nationality}
+العنوان: ${emp.address}
+
+تمهيد:
+حيث أن الطرف الأول شركة تعمل في مجال التقنية، وحيث أن الطرف الثاني يرغب في العمل لدى الطرف الأول، فقد اتفق الطرفان على الشروط التالية:
+
+المادة الأولى: مدة العقد
+مدة هذا العقد ${emp.contractType} تبدأ من ${emp.contractStart}.
+
+المادة الثانية: طبيعة العمل
+يعمل الطرف الثاني لدى الطرف الأول بمسمى ${emp.jobTitle} في قسم ${emp.department}.
+
+المادة الثالثة: الأجر
+يتقاضى الطرف الثاني راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ريال موزعاً كالتالي:
+- الراتب الأساسي: ${emp.basicSalary.toLocaleString()} ريال
+- بدل السكن: ${emp.housingAllowance.toLocaleString()} ريال
+- بدل النقل: ${emp.transportAllowance.toLocaleString()} ريال
+
+المادة الرابعة: ساعات العمل
+ساعات العمل 8 ساعات يومياً حسب نظام العمل السعودي.
+
+المادة الخامسة: الإجازات
+يستحق الموظف إجازة سنوية مدتها ${emp.leaveBalance.annual.total} يوم.
+
+المادة السادسة: أحكام عامة
+يخضع هذا العقد لأحكام نظام العمل السعودي.
+
+
+الطرف الأول                                         الطرف الثاني
+شركة التقنية المتقدمة                              ${emp.name}
+
+التوقيع: _______________                           التوقيع: _______________`,
+
+    '2': `التاريخ: ${new Date().toLocaleDateString('ar-SA')}
+الموافق: ${new Date().toLocaleDateString('en-GB')}
+
+إلى من يهمه الأمر،
+
+خطاب تعريف بالراتب
+
+تشهد شركة التقنية المتقدمة بأن السيد/ة ${emp.name} حامل الهوية رقم ${emp.nationalId} يعمل لديها بمسمى ${emp.jobTitle} في قسم ${emp.department} منذ تاريخ ${emp.joinDate}.
+
+ويتقاضى راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ريال سعودي فقط لا غير، موزعاً كالتالي:
+
+- الراتب الأساسي: ${emp.basicSalary.toLocaleString()} ريال
+- بدل السكن: ${emp.housingAllowance.toLocaleString()} ريال
+- بدل المواصلات: ${emp.transportAllowance.toLocaleString()} ريال
+
+أُعطي هذا الخطاب بناءً على طلبه دون أي مسؤولية على الشركة.
+
+والله الموفق،
+
+شركة التقنية المتقدمة
+إدارة الموارد البشرية
+
+_______________
+التوقيع والختم`,
+
+    '3': `التاريخ: ${new Date().toLocaleDateString('ar-SA')}
+
+شهادة خبرة
+
+تشهد شركة التقنية المتقدمة بأن السيد/ة ${emp.name} حامل الهوية رقم ${emp.nationalId} قد عمل لديها بمسمى ${emp.jobTitle} في قسم ${emp.department} خلال الفترة من ${emp.joinDate} وحتى تاريخه.
+
+وخلال فترة عمله معنا أظهر كفاءة عالية والتزاماً في العمل.
+
+نتمنى له التوفيق في مسيرته المهنية.
+
+شركة التقنية المتقدمة
+إدارة الموارد البشرية`,
+
+    '4': `التاريخ: ${new Date().toLocaleDateString('ar-SA')}
+
+إلى: ${emp.bankName}
+
+الموضوع: خطاب تعريف
+
+السلام عليكم ورحمة الله وبركاته،
+
+نفيدكم بأن السيد/ة ${emp.name} حامل الهوية رقم ${emp.nationalId} يعمل لدى شركة التقنية المتقدمة بمسمى ${emp.jobTitle} منذ تاريخ ${emp.joinDate}.
+
+ويتقاضى راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ريال سعودي يُحوّل على حسابه البنكي رقم ${emp.bankAccount}.
+
+هذا الخطاب صادر بناءً على طلب الموظف.
+
+وتقبلوا وافر الاحترام والتقدير،
+
+شركة التقنية المتقدمة
+إدارة الموارد البشرية`,
+
+    '5': `التاريخ: ${new Date().toLocaleDateString('ar-SA')}
+
+إلى: السفارة / القنصلية
+
+الموضوع: خطاب تعريف للحصول على تأشيرة
+
+السلام عليكم ورحمة الله وبركاته،
+
+نفيدكم بأن السيد/ة ${emp.name}
+جواز السفر رقم: ${emp.passportNo}
+الجنسية: ${emp.nationality}
+
+يعمل لدى شركة التقنية المتقدمة بمسمى ${emp.jobTitle} منذ تاريخ ${emp.joinDate}.
+
+ويتقاضى راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ريال سعودي.
+
+نتعهد بعودته إلى عمله بعد انتهاء إجازته.
+
+وتقبلوا وافر الاحترام والتقدير،
+
+شركة التقنية المتقدمة
+إدارة الموارد البشرية`,
+
+    '6': `نموذج إخلاء طرف
+
+التاريخ: ${new Date().toLocaleDateString('ar-SA')}
+
+بيانات الموظف:
+الاسم: ${emp.name}
+الرقم الوظيفي: ${emp.employeeId}
+القسم: ${emp.department}
+تاريخ التعيين: ${emp.joinDate}
+
+أولاً: العهد والأصول
+□ تم تسليم جميع العهد والأصول
+□ لابتوب: ____________
+□ جوال: ____________
+□ بطاقة الدخول: ____________
+
+ثانياً: الإدارة المالية
+□ لا يوجد سلف مستحقة
+□ تمت تسوية جميع المستحقات
+
+ثالثاً: تقنية المعلومات
+□ تم إلغاء الصلاحيات
+□ تم حذف الحسابات
+
+رابعاً: الموارد البشرية
+□ تم استلام المستندات
+□ تمت مقابلة الخروج
+
+التوقيعات:
+الموظف: _______________
+المدير المباشر: _______________
+الموارد البشرية: _______________
+الإدارة المالية: _______________
+تقنية المعلومات: _______________`,
+  }
+  return templates[templateId] || ''
+}
+
 export default function EmployeeProfilePage() {
   const [activeTab, setActiveTab] = useState('personal')
   const [showActionsMenu, setShowActionsMenu] = useState(false)
+  const [showDocumentModal, setShowDocumentModal] = useState(false)
+  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null)
+  const [generatedDocument, setGeneratedDocument] = useState<string>('')
+  const [showPreview, setShowPreview] = useState(false)
+
+  const handleGenerateDocument = (templateId: string) => {
+    setSelectedTemplate(templateId)
+    const content = generateDocument(templateId, employee)
+    setGeneratedDocument(content)
+    setShowPreview(true)
+  }
+
+  const handlePrint = () => {
+    const printWindow = window.open('', '_blank')
+    if (printWindow) {
+      printWindow.document.write(`
+        <html dir="rtl">
+          <head>
+            <title>طباعة المستند</title>
+            <style>
+              body {
+                font-family: 'Arial', 'Tahoma', sans-serif;
+                padding: 40px;
+                line-height: 1.8;
+                white-space: pre-wrap;
+              }
+            </style>
+          </head>
+          <body>${generatedDocument}</body>
+        </html>
+      `)
+      printWindow.document.close()
+      printWindow.print()
+    }
+  }
 
   return (
     <MainLayout>
@@ -734,34 +988,189 @@ export default function EmployeeProfilePage() {
             <div className="space-y-8">
               <div className="flex items-center justify-between border-b border-gray-100 pb-4">
                 <h2 className="text-lg font-bold text-gray-800">المستندات</h2>
-                <button className="btn-primary flex items-center gap-2">
-                  <FileText size={18} />
-                  إنشاء خطاب
+                <button
+                  onClick={() => setShowDocumentModal(true)}
+                  className="btn-primary flex items-center gap-2"
+                >
+                  <FileSignature size={18} />
+                  إنشاء مستند
                 </button>
               </div>
 
-              <div className="grid grid-cols-3 gap-4">
-                {['صورة الهوية', 'جواز السفر', 'عقد العمل', 'شهادة المؤهل', 'السيرة الذاتية'].map((doc, index) => (
-                  <div key={index} className="p-4 border border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
-                        <FileText size={20} className="text-gray-500" />
+              {/* Uploaded Documents */}
+              <div>
+                <h3 className="font-medium text-gray-700 mb-4">المستندات المرفوعة</h3>
+                <div className="grid grid-cols-3 gap-4">
+                  {['صورة الهوية', 'جواز السفر', 'عقد العمل', 'شهادة المؤهل', 'السيرة الذاتية'].map((doc, index) => (
+                    <div key={index} className="p-4 border border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
+                          <FileText size={20} className="text-gray-500" />
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-medium text-gray-800">{doc}</p>
+                          <p className="text-xs text-gray-400">PDF - 1.2 MB</p>
+                        </div>
+                        <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                          <Download size={18} className="text-gray-500" />
+                        </button>
                       </div>
-                      <div className="flex-1">
-                        <p className="font-medium text-gray-800">{doc}</p>
-                        <p className="text-xs text-gray-400">PDF - 1.2 MB</p>
-                      </div>
-                      <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-                        <Download size={18} className="text-gray-500" />
-                      </button>
                     </div>
-                  </div>
-                ))}
+                  ))}
+                </div>
+              </div>
+
+              {/* Quick Generate Section */}
+              <div className="pt-6 border-t border-gray-100">
+                <h3 className="font-medium text-gray-700 mb-4">إنشاء مستند سريع</h3>
+                <div className="grid grid-cols-3 gap-4">
+                  {documentTemplates.map((template) => (
+                    <button
+                      key={template.id}
+                      onClick={() => handleGenerateDocument(template.id)}
+                      className="p-4 border border-gray-200 rounded-xl hover:border-primary-300 hover:bg-primary-50 transition-all text-right group"
+                    >
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center group-hover:bg-primary-200 transition-colors">
+                          <template.icon size={20} className="text-primary-600" />
+                        </div>
+                        <div className="flex-1">
+                          <p className="font-medium text-gray-800">{template.name}</p>
+                          <p className="text-xs text-gray-400">{template.nameEn}</p>
+                        </div>
+                      </div>
+                    </button>
+                  ))}
+                </div>
               </div>
             </div>
           )}
         </div>
       </div>
+
+      {/* Document Template Selection Modal */}
+      {showDocumentModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-2xl">
+            <div className="p-6 border-b flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">إنشاء مستند</h2>
+                <p className="text-sm text-gray-500 mt-1">اختر نوع المستند لإنشائه للموظف {employee.name}</p>
+              </div>
+              <button
+                onClick={() => setShowDocumentModal(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-6">
+              <div className="grid grid-cols-2 gap-4">
+                {documentTemplates.map((template) => (
+                  <button
+                    key={template.id}
+                    onClick={() => {
+                      handleGenerateDocument(template.id)
+                      setShowDocumentModal(false)
+                    }}
+                    className="p-4 border border-gray-200 rounded-xl hover:border-primary-500 hover:bg-primary-50 transition-all text-right group"
+                  >
+                    <div className="flex items-center gap-4">
+                      <div className="w-12 h-12 bg-primary-100 rounded-xl flex items-center justify-center group-hover:bg-primary-200 transition-colors">
+                        <template.icon size={24} className="text-primary-600" />
+                      </div>
+                      <div className="flex-1">
+                        <p className="font-bold text-gray-800">{template.name}</p>
+                        <p className="text-sm text-gray-500">{template.nameEn}</p>
+                      </div>
+                    </div>
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div className="p-4 border-t bg-gray-50 flex justify-between items-center">
+              <Link
+                href="/settings/document-templates"
+                className="text-sm text-primary-600 hover:text-primary-700"
+              >
+                إدارة قوالب المستندات
+              </Link>
+              <button
+                onClick={() => setShowDocumentModal(false)}
+                className="btn-secondary"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Document Preview Modal */}
+      {showPreview && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
+            <div className="p-6 border-b flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-gray-900">
+                  معاينة المستند - {documentTemplates.find(t => t.id === selectedTemplate)?.name}
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">للموظف: {employee.name}</p>
+              </div>
+              <button
+                onClick={() => {
+                  setShowPreview(false)
+                  setGeneratedDocument('')
+                  setSelectedTemplate(null)
+                }}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto p-8 bg-gray-100">
+              <div className="bg-white rounded-lg shadow-lg p-8 max-w-3xl mx-auto min-h-[600px]">
+                <pre className="whitespace-pre-wrap font-sans text-gray-800 text-sm leading-relaxed" dir="rtl">
+                  {generatedDocument}
+                </pre>
+              </div>
+            </div>
+
+            <div className="p-4 border-t bg-gray-50 flex justify-between items-center">
+              <div className="flex items-center gap-2 text-sm text-green-600">
+                <Check size={18} />
+                تم إنشاء المستند بنجاح
+              </div>
+              <div className="flex gap-2">
+                <button
+                  onClick={() => {
+                    setShowPreview(false)
+                    setGeneratedDocument('')
+                    setSelectedTemplate(null)
+                  }}
+                  className="btn-secondary"
+                >
+                  إغلاق
+                </button>
+                <button className="btn-secondary flex items-center gap-2">
+                  <Download size={16} />
+                  تحميل PDF
+                </button>
+                <button
+                  onClick={handlePrint}
+                  className="btn-primary flex items-center gap-2"
+                >
+                  <Printer size={16} />
+                  طباعة
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </MainLayout>
   )
 }
