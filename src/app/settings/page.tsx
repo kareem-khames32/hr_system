@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import Link from 'next/link'
 import {
   Building2,
   Globe,
@@ -16,12 +17,25 @@ import {
   Calendar,
   Mail,
   Smartphone,
-  Link,
+  LinkIcon,
   Key,
   Settings,
   ChevronLeft,
   Save,
   Upload,
+  CheckCircle2,
+  AlertCircle,
+  ExternalLink,
+  Briefcase,
+  Building,
+  UsersRound,
+  Award,
+  CalendarClock,
+  FileCheck,
+  FileSignature,
+  UserCog,
+  ShieldCheck,
+  ArrowLeft,
 } from 'lucide-react'
 
 const settingsSections = [
@@ -34,19 +48,83 @@ const settingsSections = [
   { id: 'leaves', label: 'الإجازات', icon: Calendar },
   { id: 'payroll', label: 'الرواتب', icon: DollarSign },
   { id: 'documents', label: 'المستندات', icon: FileText },
-  { id: 'integrations', label: 'التكاملات', icon: Link },
+  { id: 'integrations', label: 'التكاملات', icon: LinkIcon },
+]
+
+const quickLinks = [
+  { label: 'الفروع', href: '/settings/branches', icon: Building, color: 'bg-blue-100 text-blue-600' },
+  { label: 'الأقسام', href: '/settings/departments', icon: Building2, color: 'bg-purple-100 text-purple-600' },
+  { label: 'الفرق', href: '/settings/teams', icon: UsersRound, color: 'bg-green-100 text-green-600' },
+  { label: 'المسميات الوظيفية', href: '/settings/job-titles', icon: Briefcase, color: 'bg-orange-100 text-orange-600' },
+  { label: 'الدرجات الوظيفية', href: '/settings/grades', icon: Award, color: 'bg-pink-100 text-pink-600' },
+  { label: 'أيام العمل', href: '/settings/work-days', icon: CalendarClock, color: 'bg-cyan-100 text-cyan-600' },
+  { label: 'الاعتمادات والموافقات', href: '/settings/approvals', icon: FileCheck, color: 'bg-yellow-100 text-yellow-600' },
+  { label: 'سياسات الإجازات', href: '/settings/policies', icon: FileSignature, color: 'bg-red-100 text-red-600' },
+  { label: 'المستخدمين', href: '/settings/users', icon: UserCog, color: 'bg-indigo-100 text-indigo-600' },
+  { label: 'الأدوار والصلاحيات', href: '/settings/roles', icon: ShieldCheck, color: 'bg-emerald-100 text-emerald-600' },
+  { label: 'أنواع المستندات', href: '/settings/documents', icon: FileText, color: 'bg-teal-100 text-teal-600' },
+  { label: 'قوالب المستندات', href: '/settings/document-templates', icon: FileSignature, color: 'bg-violet-100 text-violet-600' },
 ]
 
 export default function SettingsPage() {
   const [activeSection, setActiveSection] = useState('company')
 
+  // Calculate company profile completion
+  const companyProfileFields = [
+    { name: 'اسم الشركة', complete: true },
+    { name: 'السجل التجاري', complete: true },
+    { name: 'الرقم الضريبي', complete: true },
+    { name: 'رقم التأمينات', complete: true },
+    { name: 'شعار الشركة', complete: false },
+    { name: 'العنوان', complete: true },
+    { name: 'معلومات الاتصال', complete: true },
+  ]
+  const completionPercentage = Math.round(
+    (companyProfileFields.filter((f) => f.complete).length / companyProfileFields.length) * 100
+  )
+
   return (
     <MainLayout>
       <div className="space-y-6">
         {/* Page Header */}
-        <div>
-          <h1 className="text-2xl font-bold text-gray-800">الإعدادات</h1>
-          <p className="text-gray-500 mt-1">إدارة إعدادات النظام والشركة</p>
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-800">الإعدادات</h1>
+            <p className="text-gray-500 mt-1">إدارة إعدادات النظام والشركة</p>
+          </div>
+          <div className="flex items-center gap-3">
+            <div className={`flex items-center gap-2 px-4 py-2 rounded-xl ${
+              completionPercentage === 100 ? 'bg-success-50 text-success-700' : 'bg-warning-50 text-warning-700'
+            }`}>
+              {completionPercentage === 100 ? (
+                <CheckCircle2 size={18} />
+              ) : (
+                <AlertCircle size={18} />
+              )}
+              <span className="font-medium">اكتمال الملف: {completionPercentage}%</span>
+            </div>
+          </div>
+        </div>
+
+        {/* Quick Links */}
+        <div className="card">
+          <h2 className="text-lg font-bold text-gray-800 mb-4">روابط سريعة</h2>
+          <div className="grid grid-cols-6 gap-3">
+            {quickLinks.map((link) => (
+              <Link
+                key={link.href}
+                href={link.href}
+                className="flex flex-col items-center gap-2 p-4 rounded-xl hover:bg-gray-50 transition-colors group"
+              >
+                <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${link.color}`}>
+                  <link.icon size={24} />
+                </div>
+                <span className="text-sm text-gray-600 text-center group-hover:text-primary-600">
+                  {link.label}
+                </span>
+              </Link>
+            ))}
+          </div>
         </div>
 
         {/* Settings Layout */}
@@ -87,6 +165,31 @@ export default function SettingsPage() {
                     <Save size={18} />
                     حفظ التغييرات
                   </button>
+                </div>
+
+                {/* Completion Progress */}
+                <div className="bg-gray-50 rounded-xl p-4">
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-sm font-medium text-gray-700">اكتمال ملف الشركة</span>
+                    <span className="text-sm text-gray-500">{completionPercentage}%</span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2">
+                    <div
+                      className={`h-2 rounded-full transition-all ${
+                        completionPercentage === 100 ? 'bg-success-500' : 'bg-primary-500'
+                      }`}
+                      style={{ width: `${completionPercentage}%` }}
+                    />
+                  </div>
+                  {completionPercentage < 100 && (
+                    <div className="mt-3 flex flex-wrap gap-2">
+                      {companyProfileFields.filter((f) => !f.complete).map((field) => (
+                        <span key={field.name} className="text-xs px-2 py-1 bg-warning-50 text-warning-700 rounded-lg">
+                          {field.name} مطلوب
+                        </span>
+                      ))}
+                    </div>
+                  )}
                 </div>
 
                 {/* Logo */}
@@ -241,7 +344,13 @@ export default function SettingsPage() {
                 </div>
 
                 <div className="pt-4 border-t border-gray-100">
-                  <h3 className="font-medium text-gray-700 mb-4">أيام العطلة الأسبوعية</h3>
+                  <div className="flex items-center justify-between mb-4">
+                    <h3 className="font-medium text-gray-700">أيام العطلة الأسبوعية</h3>
+                    <Link href="/settings/work-days" className="text-primary-600 text-sm hover:underline flex items-center gap-1">
+                      إدارة أيام العمل
+                      <ArrowLeft size={14} />
+                    </Link>
+                  </div>
                   <div className="flex flex-wrap gap-2">
                     {['السبت', 'الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة'].map(
                       (day, index) => (
@@ -323,10 +432,16 @@ export default function SettingsPage() {
                     <h2 className="text-lg font-bold text-gray-800">إدارة المستخدمين</h2>
                     <p className="text-sm text-gray-500 mt-1">المستخدمين والأدوار والصلاحيات</p>
                   </div>
-                  <button className="btn-primary flex items-center gap-2">
-                    <Users size={18} />
-                    إضافة مستخدم
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <Link href="/settings/roles" className="btn-secondary flex items-center gap-2">
+                      <ShieldCheck size={18} />
+                      الأدوار والصلاحيات
+                    </Link>
+                    <Link href="/settings/users" className="btn-primary flex items-center gap-2">
+                      <Users size={18} />
+                      إدارة المستخدمين
+                    </Link>
+                  </div>
                 </div>
 
                 {/* Roles */}
@@ -334,7 +449,7 @@ export default function SettingsPage() {
                   <h3 className="font-medium text-gray-700 mb-4">الأدوار</h3>
                   <div className="grid grid-cols-2 gap-4">
                     {[
-                      { name: 'مدير النظام', users: 2, color: 'bg-danger-500' },
+                      { name: 'مدير النظام', users: 2, color: 'bg-red-500' },
                       { name: 'مدير الموارد البشرية', users: 3, color: 'bg-primary-500' },
                       { name: 'مدير', users: 15, color: 'bg-warning-500' },
                       { name: 'موظف', users: 230, color: 'bg-success-500' },
@@ -522,7 +637,7 @@ export default function SettingsPage() {
                     ].map((rule, index) => (
                       <div key={index} className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                         <span className="text-gray-700">{rule.range}</span>
-                        <span className="text-danger-600 font-medium">{rule.deduction}</span>
+                        <span className="text-red-600 font-medium">{rule.deduction}</span>
                       </div>
                     ))}
                   </div>
@@ -538,16 +653,22 @@ export default function SettingsPage() {
                     <h2 className="text-lg font-bold text-gray-800">إعدادات الإجازات</h2>
                     <p className="text-sm text-gray-500 mt-1">أنواع الإجازات وقواعدها</p>
                   </div>
-                  <button className="btn-primary flex items-center gap-2">
-                    <Save size={18} />
-                    حفظ
-                  </button>
+                  <div className="flex items-center gap-3">
+                    <Link href="/settings/policies" className="btn-secondary flex items-center gap-2">
+                      <FileSignature size={18} />
+                      سياسات الإجازات
+                    </Link>
+                    <button className="btn-primary flex items-center gap-2">
+                      <Save size={18} />
+                      حفظ
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-4">
                   {[
                     { name: 'إجازة سنوية', days: 30, color: 'bg-primary-500', paid: true },
-                    { name: 'إجازة مرضية', days: 30, color: 'bg-danger-500', paid: true },
+                    { name: 'إجازة مرضية', days: 30, color: 'bg-red-500', paid: true },
                     { name: 'إجازة طارئة', days: 6, color: 'bg-warning-500', paid: true },
                     { name: 'إجازة زواج', days: 5, color: 'bg-pink-500', paid: true },
                     { name: 'إجازة وفاة', days: 5, color: 'bg-gray-500', paid: true },
@@ -646,18 +767,75 @@ export default function SettingsPage() {
                 <div className="flex items-center justify-between border-b border-gray-100 pb-4">
                   <div>
                     <h2 className="text-lg font-bold text-gray-800">إعدادات المستندات</h2>
-                    <p className="text-sm text-gray-500 mt-1">أنواع المستندات وتنبيهاتها</p>
+                    <p className="text-sm text-gray-500 mt-1">أنواع المستندات وقوالبها</p>
                   </div>
                 </div>
 
-                <div className="text-center py-8">
-                  <FileText size={48} className="mx-auto text-gray-300 mb-4" />
-                  <p className="text-gray-600 mb-4">لإدارة أنواع المستندات والتحكم فيها بشكل كامل</p>
-                  <a href="/settings/documents" className="btn-primary inline-flex items-center gap-2">
-                    <Settings size={18} />
-                    انتقل لإدارة أنواع المستندات
-                    <ChevronLeft size={18} />
-                  </a>
+                <div className="grid grid-cols-2 gap-4">
+                  <Link
+                    href="/settings/documents"
+                    className="p-6 border border-gray-200 rounded-xl hover:border-primary-300 hover:shadow-md transition-all group"
+                  >
+                    <div className="w-14 h-14 bg-primary-100 rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                      <FileText size={28} className="text-primary-600" />
+                    </div>
+                    <h3 className="font-bold text-gray-800 mb-1">أنواع المستندات</h3>
+                    <p className="text-sm text-gray-500">إدارة أنواع المستندات المطلوبة من الموظفين</p>
+                    <div className="mt-4 flex items-center gap-1 text-primary-600 text-sm font-medium">
+                      <span>الذهاب للصفحة</span>
+                      <ArrowLeft size={14} />
+                    </div>
+                  </Link>
+
+                  <Link
+                    href="/settings/document-templates"
+                    className="p-6 border border-gray-200 rounded-xl hover:border-primary-300 hover:shadow-md transition-all group"
+                  >
+                    <div className="w-14 h-14 bg-purple-100 rounded-xl flex items-center justify-center mb-4 group-hover:scale-110 transition-transform">
+                      <FileSignature size={28} className="text-purple-600" />
+                    </div>
+                    <h3 className="font-bold text-gray-800 mb-1">قوالب المستندات</h3>
+                    <p className="text-sm text-gray-500">إنشاء وإدارة قوالب العقود والخطابات</p>
+                    <div className="mt-4 flex items-center gap-1 text-primary-600 text-sm font-medium">
+                      <span>الذهاب للصفحة</span>
+                      <ArrowLeft size={14} />
+                    </div>
+                  </Link>
+                </div>
+
+                <div className="pt-4 border-t border-gray-100">
+                  <h3 className="font-medium text-gray-700 mb-4">إعدادات عامة للمستندات</h3>
+                  <div className="space-y-4">
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
+                      <div>
+                        <p className="font-medium text-gray-800">تنبيه انتهاء المستندات</p>
+                        <p className="text-sm text-gray-500">إرسال تنبيه قبل انتهاء صلاحية المستند</p>
+                      </div>
+                      <select className="input w-40">
+                        <option value="30">قبل 30 يوم</option>
+                        <option value="14">قبل 14 يوم</option>
+                        <option value="7">قبل 7 أيام</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
+                      <div>
+                        <p className="font-medium text-gray-800">الحد الأقصى لحجم الملف</p>
+                        <p className="text-sm text-gray-500">الحجم الأقصى المسموح لكل مستند</p>
+                      </div>
+                      <select className="input w-40">
+                        <option value="5">5 MB</option>
+                        <option value="10">10 MB</option>
+                        <option value="20">20 MB</option>
+                      </select>
+                    </div>
+                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
+                      <div>
+                        <p className="font-medium text-gray-800">أنواع الملفات المسموحة</p>
+                        <p className="text-sm text-gray-500">امتدادات الملفات المسموح رفعها</p>
+                      </div>
+                      <span className="text-sm text-gray-600">PDF, JPG, PNG, DOC, DOCX</span>
+                    </div>
+                  </div>
                 </div>
               </div>
             )}

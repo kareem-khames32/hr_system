@@ -44,9 +44,16 @@ const menuItems: MenuItem[] = [
       { label: 'قائمة الموظفين', href: '/employees' },
       { label: 'إضافة موظف', href: '/employees/add' },
       { label: 'الهيكل التنظيمي', href: '/employees/org-chart' },
+      { label: 'إدارة العقود', href: '/employees/contracts' },
       { label: 'المستندات', href: '/employees/documents' },
       { label: 'الموظفين المؤرشفين', href: '/employees/archived' },
     ],
+  },
+  {
+    id: 'calendar',
+    label: 'التقويم الموحد',
+    icon: <Calendar size={20} />,
+    href: '/calendar',
   },
   {
     id: 'attendance',
