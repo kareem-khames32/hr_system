@@ -55,6 +55,7 @@ const menuItems: MenuItem[] = [
     children: [
       { label: 'قائمة الموظفين', href: '/employees' },
       { label: 'إضافة موظف', href: '/employees/add' },
+      { label: 'تهيئة الموظفين الجدد', href: '/employees/onboarding' },
       { label: 'الهيكل التنظيمي', href: '/employees/org-chart' },
       { label: 'إدارة العقود', href: '/employees/contracts' },
       { label: 'المستندات', href: '/employees/documents' },

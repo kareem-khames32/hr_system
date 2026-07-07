@@ -119,6 +119,7 @@ const tabs = [
   { id: 'qualifications', label: 'المؤهلات', icon: GraduationCap },
   { id: 'leaves', label: 'الإجازات', icon: Calendar },
   { id: 'assets', label: 'العهد', icon: FileText },
+  { id: 'history', label: 'السجل الوظيفي', icon: Clock },
   { id: 'documents', label: 'المستندات', icon: FileText },
 ]
 
@@ -976,6 +977,106 @@ export default function EmployeeProfilePage() {
                     <div className="text-left">
                       <p className="font-mono text-primary-600">{asset.assetId}</p>
                       <p className="text-sm text-gray-400">استلام: {asset.date}</p>
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+
+          {/* Job History Tab */}
+          {activeTab === 'history' && (
+            <div className="space-y-8">
+              <h2 className="text-lg font-bold text-gray-800 border-b border-gray-100 pb-4">
+                السجل الوظيفي — كل تغيير مؤرَّخ وموثَّق
+              </h2>
+
+              <div className="relative space-y-0">
+                {[
+                  {
+                    date: '2026-04-01',
+                    type: 'salary_change',
+                    title: 'زيادة راتب',
+                    from: '10,500 ر.س',
+                    to: '12,000 ر.س',
+                    reason: 'مراجعة سنوية — تقييم ممتاز (4.8/5)',
+                    approvedBy: 'مدير الموارد البشرية + المدير المالي',
+                    color: 'bg-success-100 text-success-600',
+                  },
+                  {
+                    date: '2025-07-01',
+                    type: 'promotion',
+                    title: 'ترقية',
+                    from: 'مطور برمجيات',
+                    to: 'مطور برمجيات أول',
+                    reason: 'ترقية ضمن دورة الترقيات السنوية',
+                    approvedBy: 'رئيس القسم → HR → المدير العام',
+                    color: 'bg-indigo-100 text-indigo-600',
+                  },
+                  {
+                    date: '2024-09-15',
+                    type: 'transfer',
+                    title: 'نقل بين فرق',
+                    from: 'فريق الدعم الفني',
+                    to: 'فريق التطوير',
+                    reason: 'حاجة المشروع الجديد لخبرته',
+                    approvedBy: 'مدير تقنية المعلومات',
+                    color: 'bg-blue-100 text-blue-600',
+                  },
+                  {
+                    date: '2023-06-15',
+                    type: 'confirmation',
+                    title: 'تثبيت بعد فترة التجربة',
+                    from: 'تحت التجربة',
+                    to: 'مثبَّت',
+                    reason: 'اجتياز فترة التجربة (90 يوم) بتقييم جيد جداً',
+                    approvedBy: 'المدير المباشر → HR',
+                    color: 'bg-teal-100 text-teal-600',
+                  },
+                  {
+                    date: '2023-03-15',
+                    type: 'hire',
+                    title: 'تعيين',
+                    from: '—',
+                    to: 'مطور برمجيات — تقنية المعلومات، الفرع الرئيسي',
+                    reason: 'تعيين جديد (من التوظيف: عرض JOB-2023-014)',
+                    approvedBy: 'مدير الموارد البشرية',
+                    color: 'bg-primary-100 text-primary-600',
+                  },
+                ].map((event, index, arr) => (
+                  <div key={index} className="flex gap-4 relative">
+                    {/* الخط الزمني */}
+                    <div className="flex flex-col items-center">
+                      <div
+                        className={`w-10 h-10 rounded-xl flex items-center justify-center shrink-0 z-10 ${event.color}`}
+                      >
+                        <Clock size={18} />
+                      </div>
+                      {index < arr.length - 1 && (
+                        <div className="w-0.5 flex-1 bg-gray-100 my-1" />
+                      )}
+                    </div>
+                    {/* التفاصيل */}
+                    <div className="pb-8 flex-1">
+                      <div className="flex items-center gap-3">
+                        <h3 className="font-bold text-gray-800">{event.title}</h3>
+                        <span className="text-xs text-gray-400" dir="ltr">
+                          {event.date}
+                        </span>
+                      </div>
+                      <div className="mt-2 p-4 bg-gray-50 rounded-xl space-y-1.5">
+                        <div className="flex items-center gap-2 text-sm">
+                          <span className="text-gray-400">من:</span>
+                          <span className="text-gray-600">{event.from}</span>
+                          <span className="text-gray-300 mx-1">←</span>
+                          <span className="text-gray-400">إلى:</span>
+                          <span className="font-medium text-gray-800">{event.to}</span>
+                        </div>
+                        <p className="text-sm text-gray-500">السبب: {event.reason}</p>
+                        <p className="text-xs text-gray-400">
+                          اعتمده: {event.approvedBy}
+                        </p>
+                      </div>
                     </div>
                   </div>
                 ))}
