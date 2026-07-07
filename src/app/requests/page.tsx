@@ -14,37 +14,42 @@ import {
   ChevronLeft,
   X,
   Send,
-  User,
   Users,
+  EyeOff,
 } from 'lucide-react'
+import {
+  requestsCatalog,
+  statusLabels,
+  statusStyles,
+  categoryLabels,
+  type RequestStatus,
+} from '@/data/requestsCatalog'
 
-// أنواع الطلبات المتاحة للموظف الحالي — حسب جمهور كل نوع في «بانِي الطلبات»
-const availableRequestTypes = [
-  { id: 'rt1', name: 'طلب إجازة', description: 'إجازة من الرصيد المتاح', audience: 'كل الموظفين' },
-  { id: 'rt2', name: 'طلب استقالة', description: 'يمر بالمدير ثم HR ثم الإدارة', audience: 'كل الموظفين' },
-  { id: 'rt3', name: 'طلب تغيير بيانات', description: 'يُطبَّق بعد اعتماد HR', audience: 'كل الموظفين' },
-  { id: 'rt5', name: 'طلب سلفة', description: 'تُخصم على أقساط من الراتب', audience: 'قسمك' },
-  { id: 'rt7', name: 'طلب شهادة تعريف بالراتب', description: 'خطاب موجّه للبنك أو السفارة', audience: 'كل الموظفين' },
-]
-
-type RequestStatus = 'pending' | 'approved' | 'rejected' | 'returned'
+// الأنواع المتاحة للموظف — من الكتالوج الموحّد (data-driven)
+// المرحلة P1 التي يقدّمها الموظف، مجمّعة بالفئات التسع
+const availableRequestTypes = requestsCatalog.filter(
+  (t) => t.phase === 'P1' && t.submitter.includes('E')
+)
 
 interface MyRequest {
   id: string
   type: string
+  typeCode: string
   submittedAt: string
   status: RequestStatus
   // سلسلة الاعتماد وخطوتها الحالية
   steps: { name: string; state: 'done' | 'current' | 'waiting' | 'rejected' }[]
   details: string
+  destinationRecord?: string // مرجع الوجهة بعد الاكتمال
 }
 
 const initialRequests: MyRequest[] = [
   {
     id: 'REQ-1042',
-    type: 'طلب إجازة سنوية',
+    type: 'إجازة سنوية',
+    typeCode: 'LEAVE_ANNUAL',
     submittedAt: '2026-07-05',
-    status: 'pending',
+    status: 'UNDER_REVIEW',
     steps: [
       { name: 'المدير المباشر', state: 'current' },
       { name: 'مدير الموارد البشرية', state: 'waiting' },
@@ -52,18 +57,30 @@ const initialRequests: MyRequest[] = [
     details: '5 أيام — من 12 يوليو إلى 16 يوليو',
   },
   {
+    id: 'REQ-1036',
+    type: 'تعريف راتب',
+    typeCode: 'LETTER_SALARY',
+    submittedAt: '2026-07-03',
+    status: 'IN_EXECUTION',
+    steps: [{ name: 'HR', state: 'done' }],
+    details: 'موجّه لبنك الراجحي — جارٍ توليد الـ PDF',
+  },
+  {
     id: 'REQ-1029',
-    type: 'طلب تغيير بيانات',
+    type: 'تحديث بيانات شخصية',
+    typeCode: 'PERSONAL_DATA_UPDATE',
     submittedAt: '2026-07-01',
-    status: 'approved',
-    steps: [{ name: 'مدير الموارد البشرية', state: 'done' }],
+    status: 'COMPLETED',
+    steps: [{ name: 'HR (تحقق)', state: 'done' }],
     details: 'تحديث رقم الجوال',
+    destinationRecord: 'سجل الموظف — حُدِّث في 2 يوليو',
   },
   {
     id: 'REQ-1017',
-    type: 'طلب عمل إضافي',
+    type: 'عمل إضافي',
+    typeCode: 'OVERTIME',
     submittedAt: '2026-06-28',
-    status: 'rejected',
+    status: 'REJECTED',
     steps: [
       { name: 'المدير المباشر', state: 'done' },
       { name: 'مدير الموارد البشرية', state: 'rejected' },
@@ -72,9 +89,10 @@ const initialRequests: MyRequest[] = [
   },
   {
     id: 'REQ-1003',
-    type: 'طلب سلفة',
+    type: 'سلفة',
+    typeCode: 'LOAN',
     submittedAt: '2026-06-15',
-    status: 'returned',
+    status: 'RETURNED_FOR_INFO',
     steps: [
       { name: 'المدير المباشر', state: 'done' },
       { name: 'مدير الموارد البشرية', state: 'current' },
@@ -83,30 +101,22 @@ const initialRequests: MyRequest[] = [
   },
 ]
 
-const statusLabels: Record<RequestStatus, string> = {
-  pending: 'قيد الاعتماد',
-  approved: 'معتمد',
-  rejected: 'مرفوض',
-  returned: 'أُعيد إليك',
-}
-
-const statusStyles: Record<RequestStatus, string> = {
-  pending: 'bg-warning-50 text-warning-700',
-  approved: 'bg-success-50 text-success-700',
-  rejected: 'bg-red-100 text-red-700',
-  returned: 'bg-blue-100 text-blue-700',
-}
-
-const statusIcons: Record<RequestStatus, typeof Clock> = {
-  pending: Clock,
-  approved: CheckCircle2,
-  rejected: XCircle,
-  returned: RotateCcw,
+const statusIcons: Partial<Record<RequestStatus, typeof Clock>> = {
+  SUBMITTED: Send,
+  UNDER_REVIEW: Clock,
+  APPROVED: CheckCircle2,
+  IN_EXECUTION: RotateCcw,
+  COMPLETED: CheckCircle2,
+  REJECTED: XCircle,
+  RETURNED_FOR_INFO: RotateCcw,
+  DRAFT: FileText,
+  CANCELLED: XCircle,
 }
 
 export default function MyRequestsPage() {
   const [requests, setRequests] = useState(initialRequests)
   const [filter, setFilter] = useState<'all' | RequestStatus>('all')
+  const [selectedCategory, setSelectedCategory] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [showNewModal, setShowNewModal] = useState(false)
   const [selectedType, setSelectedType] = useState('')
@@ -114,32 +124,37 @@ export default function MyRequestsPage() {
 
   const filtered = requests.filter(
     (r) =>
-      (filter === 'all' || r.status === filter) &&
+      (filter === 'all' ||
+        (filter === 'IN_EXECUTION'
+          ? ['APPROVED', 'IN_EXECUTION'].includes(r.status)
+          : r.status === filter)) &&
       (r.type.includes(searchQuery) || r.id.includes(searchQuery))
   )
 
-  const counts = {
+  const counts: Record<string, number> = {
     all: requests.length,
-    pending: requests.filter((r) => r.status === 'pending').length,
-    approved: requests.filter((r) => r.status === 'approved').length,
-    rejected: requests.filter((r) => r.status === 'rejected').length,
-    returned: requests.filter((r) => r.status === 'returned').length,
+    UNDER_REVIEW: requests.filter((r) => r.status === 'UNDER_REVIEW').length,
+    IN_EXECUTION: requests.filter((r) => ['APPROVED', 'IN_EXECUTION'].includes(r.status)).length,
+    COMPLETED: requests.filter((r) => r.status === 'COMPLETED').length,
+    REJECTED: requests.filter((r) => r.status === 'REJECTED').length,
+    RETURNED_FOR_INFO: requests.filter((r) => r.status === 'RETURNED_FOR_INFO').length,
   }
 
   const handleSubmit = () => {
-    const type = availableRequestTypes.find((t) => t.id === selectedType)
+    const type = availableRequestTypes.find((t) => t.code === selectedType)
     if (!type) return
     setRequests([
       {
         id: 'REQ-' + (1043 + requests.length),
-        type: type.name,
+        type: type.nameAr,
+        typeCode: type.code,
         submittedAt: '2026-07-07',
-        status: 'pending',
+        status: 'SUBMITTED',
         steps: [
           { name: 'المدير المباشر', state: 'current' },
           { name: 'مدير الموارد البشرية', state: 'waiting' },
         ],
-        details: requestNote || type.description,
+        details: requestNote || type.destination,
       },
       ...requests,
     ])
@@ -179,10 +194,11 @@ export default function MyRequestsPage() {
           {(
             [
               ['all', 'الكل'],
-              ['pending', 'قيد الاعتماد'],
-              ['approved', 'معتمد'],
-              ['rejected', 'مرفوض'],
-              ['returned', 'أُعيد إليّ'],
+              ['UNDER_REVIEW', 'قيد المراجعة'],
+              ['IN_EXECUTION', 'قيد التنفيذ'],
+              ['COMPLETED', 'مكتمل'],
+              ['REJECTED', 'مرفوض'],
+              ['RETURNED_FOR_INFO', 'مُرجَع إليّ'],
             ] as const
           ).map(([id, label]) => (
             <button
@@ -200,7 +216,7 @@ export default function MyRequestsPage() {
                   filter === id ? 'bg-white/20' : 'bg-white'
                 }`}
               >
-                {counts[id]}
+                {counts[id] ?? 0}
               </span>
             </button>
           ))}
@@ -222,7 +238,7 @@ export default function MyRequestsPage() {
         {/* Requests List */}
         <div className="space-y-4">
           {filtered.map((req) => {
-            const StatusIcon = statusIcons[req.status]
+            const StatusIcon = statusIcons[req.status] ?? Clock
             return (
               <div key={req.id} className="card p-5">
                 <div className="flex items-start justify-between">
@@ -240,12 +256,17 @@ export default function MyRequestsPage() {
                         </span>
                       </div>
                       <p className="text-sm text-gray-500 mt-1">{req.details}</p>
+                      {req.destinationRecord && (
+                        <p className="text-xs text-success-600 mt-1">
+                          ✓ الوجهة: {req.destinationRecord}
+                        </p>
+                      )}
                       <p className="text-xs text-gray-400 mt-1" dir="ltr">
                         {req.id} • {req.submittedAt}
                       </p>
                     </div>
                   </div>
-                  {req.status === 'pending' && (
+                  {['SUBMITTED', 'UNDER_REVIEW'].includes(req.status) && (
                     <button
                       onClick={() => withdraw(req.id)}
                       className="text-xs px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-red-50 hover:text-red-600"
@@ -253,7 +274,7 @@ export default function MyRequestsPage() {
                       سحب الطلب
                     </button>
                   )}
-                  {req.status === 'returned' && (
+                  {req.status === 'RETURNED_FOR_INFO' && (
                     <button className="text-xs px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100">
                       استكمال وإعادة إرسال
                     </button>
@@ -319,39 +340,79 @@ export default function MyRequestsPage() {
                 </button>
               </div>
               <div className="p-6 space-y-4">
-                <div className="grid grid-cols-1 gap-3">
-                  {availableRequestTypes.map((t) => (
-                    <button
-                      key={t.id}
-                      onClick={() => setSelectedType(t.id)}
-                      className={`p-4 rounded-xl border-2 text-right transition-all flex items-center justify-between ${
-                        selectedType === t.id
-                          ? 'border-primary-500 bg-primary-50'
-                          : 'border-gray-100 hover:border-gray-200'
-                      }`}
-                    >
-                      <div className="flex items-center gap-3">
-                        <FileText
-                          size={20}
-                          className={
-                            selectedType === t.id ? 'text-primary-600' : 'text-gray-400'
-                          }
-                        />
-                        <div>
-                          <p className="font-bold text-gray-800 text-sm">{t.name}</p>
-                          <p className="text-xs text-gray-500">{t.description}</p>
+                {/* فئات الكتالوج */}
+                <div className="flex gap-2 flex-wrap">
+                  <button
+                    onClick={() => setSelectedCategory('')}
+                    className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
+                      !selectedCategory ? 'bg-primary-500 text-white' : 'bg-gray-100 text-gray-600'
+                    }`}
+                  >
+                    الكل
+                  </button>
+                  {Object.entries(categoryLabels).map(([catId, catLabel]) => {
+                    const count = availableRequestTypes.filter((t) => t.category === catId).length
+                    if (!count) return null
+                    return (
+                      <button
+                        key={catId}
+                        onClick={() => setSelectedCategory(selectedCategory === catId ? '' : catId)}
+                        className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
+                          selectedCategory === catId
+                            ? 'bg-primary-500 text-white'
+                            : 'bg-gray-100 text-gray-600'
+                        }`}
+                      >
+                        {catLabel} ({count})
+                      </button>
+                    )
+                  })}
+                </div>
+
+                <div className="grid grid-cols-1 gap-3 max-h-80 overflow-y-auto">
+                  {availableRequestTypes
+                    .filter((t) => !selectedCategory || t.category === selectedCategory)
+                    .map((t) => (
+                      <button
+                        key={t.code}
+                        onClick={() => setSelectedType(t.code)}
+                        className={`p-4 rounded-xl border-2 text-right transition-all flex items-center justify-between ${
+                          selectedType === t.code
+                            ? 'border-primary-500 bg-primary-50'
+                            : 'border-gray-100 hover:border-gray-200'
+                        }`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <FileText
+                            size={20}
+                            className={
+                              selectedType === t.code ? 'text-primary-600' : 'text-gray-400'
+                            }
+                          />
+                          <div>
+                            <p className="font-bold text-gray-800 text-sm">
+                              {t.nameAr}
+                              {t.autoGeneratesPdf && (
+                                <span className="mr-2 badge text-[10px] bg-teal-50 text-teal-700">PDF آلي</span>
+                              )}
+                              {t.confidential && (
+                                <span className="mr-2 badge text-[10px] bg-gray-800 text-white">
+                                  <EyeOff size={9} className="inline ml-0.5" />
+                                  سرّي
+                                </span>
+                              )}
+                            </p>
+                            <p className="text-xs text-gray-500">
+                              السلسلة: {t.approvalChain} • الوجهة: {t.destination}
+                            </p>
+                          </div>
                         </div>
-                      </div>
-                      <span className="flex items-center gap-1 text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg">
-                        {t.audience === 'كل الموظفين' ? (
+                        <span className="flex items-center gap-1 text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg whitespace-nowrap">
                           <Users size={12} />
-                        ) : (
-                          <User size={12} />
-                        )}
-                        {t.audience}
-                      </span>
-                    </button>
-                  ))}
+                          {categoryLabels[t.category]}
+                        </span>
+                      </button>
+                    ))}
                 </div>
 
                 {selectedType && (

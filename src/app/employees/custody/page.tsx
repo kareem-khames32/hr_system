@@ -20,7 +20,8 @@ import { branches as branchOptions, getBranchName } from '@/data/branches'
 
 type CustodyStatus =
   | 'pending_approval' // بانتظار اعتماد التسليم
-  | 'assigned' // مسلَّمة
+  | 'pending_ack' // معتمدة — بانتظار تأكيد استلام الموظف (§7.3)
+  | 'assigned' // مسلَّمة (الموظف أقرّ بالاستلام — سجل ملزِم)
   | 'return_pending' // بانتظار اعتماد الإخلاء
   | 'returned' // مُخلاة
   | 'lost' // مفقودة
@@ -34,6 +35,7 @@ interface CustodyRecord {
   assetType: string
   serialNumber: string
   assignedDate: string
+  acknowledgedDate?: string // تاريخ إقرار الموظف بالاستلام — السجل الملزِم قانونياً
   returnedDate?: string
   status: CustodyStatus
   value: number
@@ -42,6 +44,7 @@ interface CustodyRecord {
 
 const statusLabels: Record<CustodyStatus, string> = {
   pending_approval: 'بانتظار اعتماد التسليم',
+  pending_ack: 'بانتظار تأكيد استلام الموظف',
   assigned: 'مسلَّمة',
   return_pending: 'بانتظار اعتماد الإخلاء',
   returned: 'مُخلاة',
@@ -51,6 +54,7 @@ const statusLabels: Record<CustodyStatus, string> = {
 
 const statusStyles: Record<CustodyStatus, string> = {
   pending_approval: 'bg-warning-50 text-warning-700',
+  pending_ack: 'bg-indigo-100 text-indigo-700',
   assigned: 'bg-success-50 text-success-700',
   return_pending: 'bg-blue-100 text-blue-700',
   returned: 'bg-gray-100 text-gray-600',
@@ -69,6 +73,7 @@ const initialRecords: CustodyRecord[] = [
     assetType: 'لابتوب',
     serialNumber: 'LP-2024-001',
     assignedDate: '2024-03-15',
+    acknowledgedDate: '2024-03-16',
     status: 'assigned',
     value: 4500,
   },
@@ -80,8 +85,21 @@ const initialRecords: CustodyRecord[] = [
     assetType: 'بطاقة دخول',
     serialNumber: 'AC-101',
     assignedDate: '2024-03-15',
+    acknowledgedDate: '2024-03-15',
     status: 'assigned',
     value: 100,
+  },
+  {
+    id: 'c7',
+    employeeId: 'EMP012',
+    employeeName: 'محمود سامي رضوان',
+    branchId: '2',
+    assetType: 'لابتوب',
+    serialNumber: 'LP-2026-012',
+    assignedDate: '2026-07-06',
+    status: 'pending_ack',
+    value: 4800,
+    notes: 'اعتمد المدير — لن تُفعَّل العهدة إلا بإقرار الموظف بالاستلام',
   },
   {
     id: 'c3',
@@ -202,6 +220,11 @@ export default function CustodyPage() {
           ? {
               ...r,
               status,
+              // إقرار الاستلام = السجل الملزِم قانونياً (acknowledged_at)
+              acknowledgedDate:
+                status === 'assigned' && !r.acknowledgedDate
+                  ? '2026-07-07'
+                  : r.acknowledgedDate,
               returnedDate: status === 'returned' ? '2026-07-07' : r.returnedDate,
             }
           : r
@@ -358,6 +381,11 @@ export default function CustodyPage() {
                     <span className={`badge text-xs ${statusStyles[r.status]}`}>
                       {statusLabels[r.status]}
                     </span>
+                    {r.acknowledgedDate && (
+                      <p className="text-[10px] text-indigo-500 mt-0.5">
+                        أقرّ بالاستلام: {r.acknowledgedDate}
+                      </p>
+                    )}
                     {r.notes && (
                       <p className="text-xs text-gray-400 mt-1 max-w-[200px]">{r.notes}</p>
                     )}
@@ -366,10 +394,19 @@ export default function CustodyPage() {
                     <div className="flex items-center gap-2">
                       {r.status === 'pending_approval' && (
                         <button
-                          onClick={() => updateStatus(r.id, 'assigned')}
+                          onClick={() => updateStatus(r.id, 'pending_ack')}
                           className="text-xs px-3 py-1.5 bg-success-50 text-success-700 rounded-lg hover:bg-success-100"
                         >
                           اعتماد التسليم
+                        </button>
+                      )}
+                      {r.status === 'pending_ack' && (
+                        <button
+                          onClick={() => updateStatus(r.id, 'assigned')}
+                          className="text-xs px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg hover:bg-indigo-100 font-medium"
+                          title="إقرار: استلمت الصنف بالحالة الموصوفة — سجل ملزِم"
+                        >
+                          ✍️ تأكيد الاستلام (الموظف)
                         </button>
                       )}
                       {r.status === 'assigned' && (

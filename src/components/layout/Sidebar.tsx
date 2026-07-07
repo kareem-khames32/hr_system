@@ -67,6 +67,7 @@ const menuItems: MenuItem[] = [
       { label: 'إدارة العقود', href: '/employees/contracts' },
       { label: 'المستندات', href: '/employees/documents' },
       { label: 'سجل العهد', href: '/employees/custody' },
+      { label: 'لوج النقل', href: '/employees/transfers' },
       { label: 'الموظفين المؤرشفين', href: '/employees/archived' },
     ],
   },
