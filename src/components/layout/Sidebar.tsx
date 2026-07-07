@@ -37,6 +37,18 @@ const menuItems: MenuItem[] = [
     href: '/',
   },
   {
+    id: 'my-requests',
+    label: 'طلباتي',
+    icon: <FileText size={20} />,
+    href: '/requests',
+  },
+  {
+    id: 'approvals-inbox',
+    label: 'صندوق الموافقات',
+    icon: <Bell size={20} />,
+    href: '/approvals-inbox',
+  },
+  {
     id: 'employees',
     label: 'إدارة الموظفين',
     icon: <Users size={20} />,
