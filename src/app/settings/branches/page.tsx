@@ -19,7 +19,10 @@ import {
   Globe,
   CheckCircle,
   XCircle,
+  UserCheck,
+  Landmark,
 } from 'lucide-react'
+import { employees, getEmployeeName } from '@/data/employees'
 
 // Mock data for branches
 const initialBranches = [
@@ -32,7 +35,9 @@ const initialBranches = [
     address: 'حي العليا، شارع الملك فهد، الرياض',
     phone: '+966 11 123 4567',
     email: 'riyadh@company.com',
+    managerId: 'EMP001',
     manager: 'محمد أحمد السعيد',
+    costCenter: 'CC-100',
     employeesCount: 150,
     workingHours: '08:00 - 17:00',
     timezone: 'Asia/Riyadh',
@@ -48,7 +53,9 @@ const initialBranches = [
     address: 'حي الروضة، شارع التحلية، جدة',
     phone: '+966 12 234 5678',
     email: 'jeddah@company.com',
+    managerId: 'EMP002',
     manager: 'عبدالله محمد العمري',
+    costCenter: 'CC-200',
     employeesCount: 85,
     workingHours: '08:00 - 17:00',
     timezone: 'Asia/Riyadh',
@@ -64,7 +71,9 @@ const initialBranches = [
     address: 'حي الفيصلية، شارع الملك سعود، الدمام',
     phone: '+966 13 345 6789',
     email: 'dammam@company.com',
+    managerId: 'EMP003',
     manager: 'سالم عبدالرحمن القحطاني',
+    costCenter: 'CC-300',
     employeesCount: 62,
     workingHours: '08:00 - 17:00',
     timezone: 'Asia/Riyadh',
@@ -80,7 +89,9 @@ const initialBranches = [
     address: 'حي العزيزية، المدينة المنورة',
     phone: '+966 14 456 7890',
     email: 'madinah@company.com',
+    managerId: 'EMP004',
     manager: 'فهد سعد الحربي',
+    costCenter: 'CC-400',
     employeesCount: 45,
     workingHours: '08:00 - 17:00',
     timezone: 'Asia/Riyadh',
@@ -104,7 +115,8 @@ export default function BranchesPage() {
     address: '',
     phone: '',
     email: '',
-    manager: '',
+    managerId: '',
+    costCenter: '',
     workingHours: '08:00 - 17:00',
     timezone: 'Asia/Riyadh',
     isActive: true,
@@ -130,7 +142,8 @@ export default function BranchesPage() {
         address: branch.address,
         phone: branch.phone,
         email: branch.email,
-        manager: branch.manager,
+        managerId: branch.managerId,
+        costCenter: branch.costCenter,
         workingHours: branch.workingHours,
         timezone: branch.timezone,
         isActive: branch.isActive,
@@ -146,7 +159,8 @@ export default function BranchesPage() {
         address: '',
         phone: '',
         email: '',
-        manager: '',
+        managerId: '',
+        costCenter: '',
         workingHours: '08:00 - 17:00',
         timezone: 'Asia/Riyadh',
         isActive: true,
@@ -157,11 +171,13 @@ export default function BranchesPage() {
   }
 
   const handleSave = () => {
+    // اسم المدير يُشتق من اختيار الموظف (مصدر واحد للحقيقة)
+    const managerName = getEmployeeName(formData.managerId)
     if (editingBranch) {
       setBranches(
         branches.map((b) =>
           b.id === editingBranch.id
-            ? { ...b, ...formData }
+            ? { ...b, ...formData, manager: managerName }
             : b
         )
       )
@@ -169,6 +185,7 @@ export default function BranchesPage() {
       const newBranch = {
         id: String(Date.now()),
         ...formData,
+        manager: managerName,
         employeesCount: 0,
       }
       setBranches([...branches, newBranch])
@@ -410,9 +427,17 @@ export default function BranchesPage() {
                     {branch.employeesCount} موظف
                   </span>
                 </div>
-                <div className="text-sm text-gray-500">
-                  المدير: {branch.manager}
+                <div className="flex items-center gap-2 text-sm text-gray-500">
+                  <UserCheck size={16} className="text-primary-500" />
+                  {branch.manager || 'لم يُحدد مدير'}
                 </div>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <Landmark size={14} className="text-gray-400" />
+                <span className="text-xs font-mono text-gray-500 bg-gray-50 px-2 py-1 rounded-lg" dir="ltr">
+                  {branch.costCenter || '—'}
+                </span>
+                <span className="text-xs text-gray-400">مركز التكلفة</span>
               </div>
             </div>
           ))}
@@ -556,17 +581,25 @@ export default function BranchesPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      مدير الفرع
+                      مدير الفرع *
                     </label>
-                    <input
-                      type="text"
-                      value={formData.manager}
+                    <select
+                      value={formData.managerId}
                       onChange={(e) =>
-                        setFormData({ ...formData, manager: e.target.value })
+                        setFormData({ ...formData, managerId: e.target.value })
                       }
                       className="input w-full"
-                      placeholder="اسم مدير الفرع"
-                    />
+                    >
+                      <option value="">— اختر الموظف المسؤول —</option>
+                      {employees.map((emp) => (
+                        <option key={emp.id} value={emp.id}>
+                          {emp.name} — {emp.position}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-gray-400 mt-1">
+                      المدير المُسنَد يُستخدم في دورات الاعتماد وصلاحيات الفرع
+                    </p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -582,6 +615,28 @@ export default function BranchesPage() {
                       placeholder="08:00 - 17:00"
                       dir="ltr"
                     />
+                  </div>
+                </div>
+
+                {/* Cost Center */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      مركز التكلفة
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.costCenter}
+                      onChange={(e) =>
+                        setFormData({ ...formData, costCenter: e.target.value.toUpperCase() })
+                      }
+                      className="input w-full font-mono"
+                      placeholder="مثال: CC-100"
+                      dir="ltr"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      تُحمَّل عليه رواتب ومصاريف الفرع في التقارير المالية
+                    </p>
                   </div>
                 </div>
 
