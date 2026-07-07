@@ -119,6 +119,10 @@ export default function AddEmployeePage() {
   const [currentStep, setCurrentStep] = useState(1)
   const [leaveEntitled, setLeaveEntitled] = useState(true)
   const [selectedSchedule, setSelectedSchedule] = useState('')
+  // الرصيد الافتتاحي المُرحّل من نظام سابق وصلاحيته
+  const [openingBalance, setOpeningBalance] = useState('')
+  const [openingExpiry, setOpeningExpiry] = useState<'end_of_year' | 'custom_date' | 'no_expiry'>('end_of_year')
+  const [openingExpiryDate, setOpeningExpiryDate] = useState('')
 
   const nextStep = () => {
     if (currentStep < steps.length) {
@@ -804,6 +808,68 @@ export default function AddEmployeePage() {
                   <label className="label">الحد الأقصى للترحيل (يوم)</label>
                   <input type="number" className="input" placeholder="10" defaultValue="10" />
                 </div>
+              </div>
+
+              {/* الرصيد الافتتاحي (للموظفين الحاليين المنقولين للنظام) */}
+              <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 mt-4">
+                <div className="flex items-start gap-3 mb-4">
+                  <Calendar size={20} className="text-amber-600 mt-0.5" />
+                  <div>
+                    <p className="font-medium text-amber-800">رصيد افتتاحي مُرحّل (اختياري)</p>
+                    <p className="text-sm text-amber-700 mt-0.5">
+                      لموظف قائم لديه رصيد سابق قبل دخوله النظام — الرصيد الجديد
+                      يُحسب تلقائياً من تاريخ التعيين، وهذا الرصيد يبقى صالحاً حتى
+                      التاريخ المحدد
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="label">الرصيد الافتتاحي (يوم)</label>
+                    <input
+                      type="number"
+                      className="input"
+                      placeholder="مثال: 15"
+                      min="0"
+                      value={openingBalance}
+                      onChange={(e) => setOpeningBalance(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">صلاحية الرصيد الافتتاحي</label>
+                    <select
+                      className="input"
+                      value={openingExpiry}
+                      onChange={(e) =>
+                        setOpeningExpiry(e.target.value as typeof openingExpiry)
+                      }
+                    >
+                      <option value="end_of_year">حتى نهاية السنة الحالية</option>
+                      <option value="custom_date">حتى تاريخ أحدده</option>
+                      <option value="no_expiry">بدون انتهاء</option>
+                    </select>
+                  </div>
+                  {openingExpiry === 'custom_date' && (
+                    <div>
+                      <label className="label">تاريخ انتهاء الرصيد</label>
+                      <input
+                        type="date"
+                        className="input"
+                        value={openingExpiryDate}
+                        onChange={(e) => setOpeningExpiryDate(e.target.value)}
+                      />
+                    </div>
+                  )}
+                </div>
+                {openingBalance && Number(openingBalance) > 0 && (
+                  <p className="text-xs text-amber-700 mt-3">
+                    ✓ سيبدأ الموظف برصيد {openingBalance} يوم
+                    {openingExpiry === 'end_of_year' && ' صالح حتى 31 ديسمبر'}
+                    {openingExpiry === 'custom_date' && openingExpiryDate && ` صالح حتى ${openingExpiryDate}`}
+                    {openingExpiry === 'no_expiry' && ' بدون تاريخ انتهاء'}
+                    ، بالإضافة إلى الرصيد الجديد المتراكم من تاريخ التعيين
+                  </p>
+                )}
               </div>
 
               <div className="p-4 bg-blue-50 rounded-xl mt-4">

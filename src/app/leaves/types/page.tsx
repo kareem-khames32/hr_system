@@ -20,6 +20,7 @@ interface LeaveType {
   maxDays: number
   carryOver: boolean
   carryOverLimit: number
+  carryOverExpiry?: string // متى تنتهي صلاحية الرصيد المُرحّل
   requiresApproval: boolean
   requiresAttachment: boolean
   paidLeave: boolean
@@ -36,6 +37,7 @@ const leaveTypes: LeaveType[] = [
     maxDays: 30,
     carryOver: true,
     carryOverLimit: 10,
+    carryOverExpiry: 'نهاية مارس من السنة التالية',
     requiresApproval: true,
     requiresAttachment: false,
     paidLeave: true,
@@ -211,6 +213,11 @@ export default function LeaveTypesPage() {
                 {type.carryOver && (
                   <span className="px-3 py-1 rounded-full text-xs font-medium bg-blue-100 text-blue-700">
                     قابلة للترحيل ({type.carryOverLimit} يوم)
+                  </span>
+                )}
+                {type.carryOver && type.carryOverExpiry && (
+                  <span className="px-3 py-1 rounded-full text-xs font-medium bg-amber-100 text-amber-700">
+                    الرصيد المُرحّل يسقط: {type.carryOverExpiry}
                   </span>
                 )}
                 {type.requiresAttachment && (

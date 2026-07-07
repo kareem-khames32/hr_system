@@ -19,13 +19,17 @@ import {
   AlertTriangle,
   CheckCircle2,
   Edit2,
+  Building2,
+  X,
 } from 'lucide-react'
+import { branches as branchOptions, getBranchName } from '@/data/branches'
 
 interface Device {
   id: string
   name: string
   model: string
   serialNumber: string
+  branchId: string
   ipAddress: string
   location: string
   status: 'online' | 'offline' | 'error'
@@ -34,12 +38,13 @@ interface Device {
   todayRecords: number
 }
 
-const devices: Device[] = [
+const initialDevices: Device[] = [
   {
     id: '1',
     name: 'جهاز البصمة - المدخل الرئيسي',
     model: 'ZKTeco K40',
     serialNumber: 'ZK-2024-001',
+    branchId: '1',
     ipAddress: '192.168.1.101',
     location: 'المدخل الرئيسي',
     status: 'online',
@@ -52,6 +57,7 @@ const devices: Device[] = [
     name: 'جهاز البصمة - الدور الثاني',
     model: 'ZKTeco K40',
     serialNumber: 'ZK-2024-002',
+    branchId: '1',
     ipAddress: '192.168.1.102',
     location: 'الدور الثاني - تقنية المعلومات',
     status: 'online',
@@ -64,6 +70,7 @@ const devices: Device[] = [
     name: 'جهاز البصمة - المستودع',
     model: 'ZKTeco U160',
     serialNumber: 'ZK-2024-003',
+    branchId: '3',
     ipAddress: '192.168.1.103',
     location: 'مبنى المستودعات',
     status: 'offline',
@@ -76,6 +83,7 @@ const devices: Device[] = [
     name: 'جهاز البصمة - الكافيتريا',
     model: 'ZKTeco iClock880',
     serialNumber: 'ZK-2024-004',
+    branchId: '2',
     ipAddress: '192.168.1.104',
     location: 'الكافيتريا',
     status: 'error',
@@ -104,14 +112,42 @@ const statusIcons = {
 }
 
 export default function DevicesPage() {
+  const [devices, setDevices] = useState(initialDevices)
   const [searchTerm, setSearchTerm] = useState('')
+  const [filterBranch, setFilterBranch] = useState('')
+  const [showModal, setShowModal] = useState(false)
+  const [formData, setFormData] = useState({
+    name: '',
+    model: '',
+    serialNumber: '',
+    ipAddress: '',
+    location: '',
+    branchId: '',
+  })
 
   const filteredDevices = devices.filter(
     (device) =>
-      device.name.includes(searchTerm) ||
-      device.serialNumber.includes(searchTerm) ||
-      device.location.includes(searchTerm)
+      (device.name.includes(searchTerm) ||
+        device.serialNumber.includes(searchTerm) ||
+        device.location.includes(searchTerm)) &&
+      (!filterBranch || device.branchId === filterBranch)
   )
+
+  const handleRegister = () => {
+    setDevices([
+      ...devices,
+      {
+        id: String(Date.now()),
+        ...formData,
+        status: 'offline' as const,
+        lastSync: '—',
+        employeesCount: 0,
+        todayRecords: 0,
+      },
+    ])
+    setFormData({ name: '', model: '', serialNumber: '', ipAddress: '', location: '', branchId: '' })
+    setShowModal(false)
+  }
 
   const stats = {
     total: devices.length,
@@ -135,9 +171,12 @@ export default function DevicesPage() {
               <RefreshCw size={18} />
               مزامنة الكل
             </button>
-            <button className="btn-primary flex items-center gap-2">
+            <button
+              onClick={() => setShowModal(true)}
+              className="btn-primary flex items-center gap-2"
+            >
               <Plus size={18} />
-              إضافة جهاز
+              تسجيل جهاز جديد
             </button>
           </div>
         </div>
@@ -191,17 +230,31 @@ export default function DevicesPage() {
           </div>
         </div>
 
-        {/* Search */}
+        {/* Search & Branch Filter */}
         <div className="card">
-          <div className="relative">
-            <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="بحث عن جهاز..."
-              className="input pr-10 w-full"
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-            />
+          <div className="flex items-center gap-3">
+            <div className="relative flex-1">
+              <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+              <input
+                type="text"
+                placeholder="بحث عن جهاز..."
+                className="input pr-10 w-full"
+                value={searchTerm}
+                onChange={(e) => setSearchTerm(e.target.value)}
+              />
+            </div>
+            <select
+              value={filterBranch}
+              onChange={(e) => setFilterBranch(e.target.value)}
+              className="input w-56"
+            >
+              <option value="">كل الفروع</option>
+              {branchOptions.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -243,6 +296,10 @@ export default function DevicesPage() {
                   <div>
                     <h3 className="font-bold text-gray-800">{device.name}</h3>
                     <p className="text-sm text-gray-500">{device.model}</p>
+                    <span className="inline-flex items-center gap-1 text-xs text-indigo-600 bg-indigo-50 px-2 py-0.5 rounded-lg mt-1">
+                      <Building2 size={12} />
+                      {getBranchName(device.branchId) || 'غير مرتبط بفرع'}
+                    </span>
                   </div>
                 </div>
                 <div className="flex items-center gap-2">
@@ -304,7 +361,10 @@ export default function DevicesPage() {
         </div>
 
         {/* Add Device Card */}
-        <div className="card border-2 border-dashed border-gray-300 hover:border-primary-400 transition-colors cursor-pointer">
+        <div
+          onClick={() => setShowModal(true)}
+          className="card border-2 border-dashed border-gray-300 hover:border-primary-400 transition-colors cursor-pointer"
+        >
           <div className="flex flex-col items-center justify-center py-8">
             <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mb-4">
               <Plus size={32} className="text-gray-400" />
@@ -337,9 +397,123 @@ export default function DevicesPage() {
                 <CheckCircle2 size={16} className="text-blue-600 mt-1" />
                 <p className="text-sm text-blue-700">راجع سجلات الأخطاء عند حدوث مشاكل</p>
               </div>
+              <div className="flex items-start gap-2">
+                <CheckCircle2 size={16} className="text-blue-600 mt-1" />
+                <p className="text-sm text-blue-700">
+                  بصمة الموظف تُطابَق بكوده الوظيفي (EMP...) — الجهاز هو مصدر
+                  سجلات الحضور والانصراف لفرعه
+                </p>
+              </div>
             </div>
           </div>
         </div>
+
+        {/* Register Device Modal */}
+        {showModal && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
+              <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-800">تسجيل جهاز بصمة</h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    اربط الجهاز بالفرع — سجلاته تُحتسب على موظفي هذا الفرع
+                  </p>
+                </div>
+                <button onClick={() => setShowModal(false)} className="p-2 hover:bg-gray-100 rounded-lg">
+                  <X size={20} className="text-gray-500" />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">اسم الجهاز *</label>
+                    <input
+                      type="text"
+                      value={formData.name}
+                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
+                      className="input w-full"
+                      placeholder="مثال: بصمة المدخل الرئيسي"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">الموديل</label>
+                    <input
+                      type="text"
+                      value={formData.model}
+                      onChange={(e) => setFormData({ ...formData, model: e.target.value })}
+                      className="input w-full"
+                      placeholder="مثال: ZKTeco K40"
+                      dir="ltr"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">كود الجهاز / الرقم التسلسلي *</label>
+                    <input
+                      type="text"
+                      value={formData.serialNumber}
+                      onChange={(e) => setFormData({ ...formData, serialNumber: e.target.value.toUpperCase() })}
+                      className="input w-full font-mono"
+                      placeholder="ZK-2026-005"
+                      dir="ltr"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">عنوان IP</label>
+                    <input
+                      type="text"
+                      value={formData.ipAddress}
+                      onChange={(e) => setFormData({ ...formData, ipAddress: e.target.value })}
+                      className="input w-full font-mono"
+                      placeholder="192.168.1.105"
+                      dir="ltr"
+                    />
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">الفرع *</label>
+                    <select
+                      value={formData.branchId}
+                      onChange={(e) => setFormData({ ...formData, branchId: e.target.value })}
+                      className="input w-full"
+                    >
+                      <option value="">— اختر الفرع —</option>
+                      {branchOptions.map((b) => (
+                        <option key={b.id} value={b.id}>
+                          {b.name}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">الموقع داخل الفرع</label>
+                    <input
+                      type="text"
+                      value={formData.location}
+                      onChange={(e) => setFormData({ ...formData, location: e.target.value })}
+                      className="input w-full"
+                      placeholder="مثال: المدخل الرئيسي"
+                    />
+                  </div>
+                </div>
+              </div>
+              <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">
+                <button onClick={() => setShowModal(false)} className="btn-secondary">
+                  إلغاء
+                </button>
+                <button
+                  onClick={handleRegister}
+                  className="btn-primary"
+                  disabled={!formData.name || !formData.serialNumber || !formData.branchId}
+                >
+                  تسجيل الجهاز
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </MainLayout>
   )
