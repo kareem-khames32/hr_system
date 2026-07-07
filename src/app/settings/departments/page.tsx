@@ -18,6 +18,8 @@ import {
   User,
   UsersRound,
 } from 'lucide-react'
+import { employees, getEmployeeName } from '@/data/employees'
+import { branches as branchOptions, getBranchName } from '@/data/branches'
 
 // Mock data for departments
 const initialDepartments = [
@@ -30,6 +32,7 @@ const initialDepartments = [
     managerId: '1',
     managerName: 'محمد أحمد السعيد',
     branch: 'الفرع الرئيسي - الرياض',
+    branchId: '1',
     employeesCount: 5,
     description: 'الإدارة التنفيذية للشركة',
     isActive: true,
@@ -43,6 +46,7 @@ const initialDepartments = [
     managerId: '2',
     managerName: 'أحمد محمد علي',
     branch: 'الفرع الرئيسي - الرياض',
+    branchId: '1',
     employeesCount: 12,
     description: 'إدارة شؤون الموظفين والتوظيف',
     isActive: true,
@@ -56,6 +60,7 @@ const initialDepartments = [
     managerId: '3',
     managerName: 'خالد سالم العتيبي',
     branch: 'الفرع الرئيسي - الرياض',
+    branchId: '1',
     employeesCount: 25,
     description: 'إدارة البنية التحتية والتطوير',
     isActive: true,
@@ -69,6 +74,7 @@ const initialDepartments = [
     managerId: '4',
     managerName: 'عمر فهد القحطاني',
     branch: 'الفرع الرئيسي - الرياض',
+    branchId: '1',
     employeesCount: 15,
     description: 'فريق تطوير البرمجيات',
     isActive: true,
@@ -82,6 +88,7 @@ const initialDepartments = [
     managerId: '5',
     managerName: 'ناصر عبدالله المالكي',
     branch: 'الفرع الرئيسي - الرياض',
+    branchId: '1',
     employeesCount: 10,
     description: 'دعم المستخدمين والأنظمة',
     isActive: true,
@@ -95,6 +102,7 @@ const initialDepartments = [
     managerId: '6',
     managerName: 'سعد محمد الدوسري',
     branch: 'الفرع الرئيسي - الرياض',
+    branchId: '1',
     employeesCount: 18,
     description: 'الشؤون المالية والمحاسبة',
     isActive: true,
@@ -108,6 +116,7 @@ const initialDepartments = [
     managerId: '7',
     managerName: 'فيصل عبدالرحمن الشمري',
     branch: 'الفرع الرئيسي - الرياض',
+    branchId: '1',
     employeesCount: 35,
     description: 'إدارة المبيعات والعملاء',
     isActive: true,
@@ -121,18 +130,14 @@ const initialDepartments = [
     managerId: '8',
     managerName: 'عبدالعزيز سلطان الحربي',
     branch: 'الفرع الرئيسي - الرياض',
+    branchId: '1',
     employeesCount: 14,
     description: 'التسويق والعلاقات العامة',
     isActive: true,
   },
 ]
 
-const branches = [
-  'الفرع الرئيسي - الرياض',
-  'فرع جدة',
-  'فرع الدمام',
-  'فرع المدينة المنورة',
-]
+// قائمة الفروع تأتي الآن من طبقة البيانات المشتركة (@/data/branches)
 
 // Mock teams data
 const initialTeams = [
@@ -217,8 +222,8 @@ export default function DepartmentsPage() {
     nameEn: '',
     code: '',
     parentId: '',
-    managerName: '',
-    branch: '',
+    managerId: '',
+    branchId: '',
     description: '',
     isActive: true,
   })
@@ -246,8 +251,10 @@ export default function DepartmentsPage() {
         nameEn: dept.nameEn,
         code: dept.code,
         parentId: dept.parentId || '',
-        managerName: dept.managerName,
-        branch: dept.branch,
+        // مطابقة المدير الحالي بالاسم مع قائمة الموظفين المشتركة
+        managerId:
+          employees.find((e) => e.name === dept.managerName)?.id || '',
+        branchId: dept.branchId || '',
         description: dept.description,
         isActive: dept.isActive,
       })
@@ -258,8 +265,8 @@ export default function DepartmentsPage() {
         nameEn: '',
         code: '',
         parentId: '',
-        managerName: '',
-        branch: '',
+        managerId: '',
+        branchId: '',
         description: '',
         isActive: true,
       })
@@ -268,11 +275,16 @@ export default function DepartmentsPage() {
   }
 
   const handleSave = () => {
+    // الاسم والفرع يُشتقان من الاختيار (مصدر واحد للحقيقة)
+    const derived = {
+      managerName: getEmployeeName(formData.managerId),
+      branch: getBranchName(formData.branchId),
+    }
     if (editingDept) {
       setDepartments(
         departments.map((d) =>
           d.id === editingDept.id
-            ? { ...d, ...formData, parentId: formData.parentId || null }
+            ? { ...d, ...formData, ...derived, parentId: formData.parentId || null }
             : d
         )
       )
@@ -280,8 +292,8 @@ export default function DepartmentsPage() {
       const newDept = {
         id: String(Date.now()),
         ...formData,
+        ...derived,
         parentId: formData.parentId || null,
-        managerId: String(Date.now()),
         employeesCount: 0,
       }
       setDepartments([...departments, newDept])
@@ -735,33 +747,41 @@ export default function DepartmentsPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      مدير القسم
+                      مدير القسم *
                     </label>
-                    <input
-                      type="text"
-                      value={formData.managerName}
+                    <select
+                      value={formData.managerId}
                       onChange={(e) =>
-                        setFormData({ ...formData, managerName: e.target.value })
+                        setFormData({ ...formData, managerId: e.target.value })
                       }
                       className="input w-full"
-                      placeholder="اسم المدير"
-                    />
+                    >
+                      <option value="">— اختر الموظف المسؤول —</option>
+                      {employees.map((emp) => (
+                        <option key={emp.id} value={emp.id}>
+                          {emp.name} — {emp.position}
+                        </option>
+                      ))}
+                    </select>
+                    <p className="text-xs text-gray-400 mt-1">
+                      يُستخدم في دورات الاعتماد (رئيس القسم)
+                    </p>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      الفرع
+                      الفرع *
                     </label>
                     <select
-                      value={formData.branch}
+                      value={formData.branchId}
                       onChange={(e) =>
-                        setFormData({ ...formData, branch: e.target.value })
+                        setFormData({ ...formData, branchId: e.target.value })
                       }
                       className="input w-full"
                     >
                       <option value="">اختر الفرع</option>
-                      {branches.map((branch) => (
-                        <option key={branch} value={branch}>
-                          {branch}
+                      {branchOptions.map((branch) => (
+                        <option key={branch.id} value={branch.id}>
+                          {branch.name}
                         </option>
                       ))}
                     </select>
