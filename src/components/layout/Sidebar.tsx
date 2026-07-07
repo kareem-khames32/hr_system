@@ -18,6 +18,7 @@ import {
   Building2,
   LogOut,
   Bell,
+  ClipboardList,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -47,6 +48,12 @@ const menuItems: MenuItem[] = [
     label: 'صندوق الموافقات',
     icon: <Bell size={20} />,
     href: '/approvals-inbox',
+  },
+  {
+    id: 'requests-console',
+    label: 'لوحة الطلبات (HR)',
+    icon: <ClipboardList size={20} />,
+    href: '/requests-console',
   },
   {
     id: 'employees',
