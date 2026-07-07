@@ -30,6 +30,7 @@ import {
   ToggleRight,
   ToggleLeft,
 } from 'lucide-react'
+import { branches as branchOptions, getBranchName } from '@/data/branches'
 
 // أنواع الطلبات التي تحتاج اعتماد
 const requestTypes = [
@@ -64,6 +65,7 @@ const initialWorkflows = [
     requestType: 'leave',
     description: 'إجازات أقل من 5 أيام',
     isActive: true,
+    branchId: 'all',
     conditions: [
       { field: 'days', operator: 'less_than', value: 5 },
     ],
@@ -85,6 +87,7 @@ const initialWorkflows = [
     requestType: 'leave',
     description: 'إجازات 5 أيام أو أكثر',
     isActive: true,
+    branchId: 'all',
     conditions: [
       { field: 'days', operator: 'greater_equal', value: 5 },
     ],
@@ -115,6 +118,7 @@ const initialWorkflows = [
     requestType: 'expense',
     description: 'مصاريف أقل من 5,000 ريال',
     isActive: true,
+    branchId: 'all',
     conditions: [
       { field: 'amount', operator: 'less_than', value: 5000 },
     ],
@@ -136,6 +140,7 @@ const initialWorkflows = [
     requestType: 'expense',
     description: 'مصاريف من 5,000 إلى 20,000 ريال',
     isActive: true,
+    branchId: 'all',
     conditions: [
       { field: 'amount', operator: 'greater_equal', value: 5000 },
       { field: 'amount', operator: 'less_than', value: 20000 },
@@ -167,6 +172,7 @@ const initialWorkflows = [
     requestType: 'expense',
     description: 'مصاريف 20,000 ريال أو أكثر',
     isActive: true,
+    branchId: 'all',
     conditions: [
       { field: 'amount', operator: 'greater_equal', value: 20000 },
     ],
@@ -206,6 +212,7 @@ const initialWorkflows = [
     requestType: 'loan',
     description: 'جميع طلبات السلف',
     isActive: true,
+    branchId: 'all',
     conditions: [],
     steps: [
       {
@@ -243,6 +250,7 @@ const initialWorkflows = [
     requestType: 'overtime',
     description: 'جميع طلبات الأوفرتايم',
     isActive: true,
+    branchId: 'all',
     conditions: [],
     steps: [
       {
@@ -262,6 +270,7 @@ const initialWorkflows = [
     requestType: 'promotion',
     description: 'جميع طلبات الترقية',
     isActive: true,
+    branchId: 'all',
     conditions: [],
     steps: [
       {
@@ -312,6 +321,7 @@ export default function ApprovalsPage() {
   const [workflows, setWorkflows] = useState(initialWorkflows)
   const [searchQuery, setSearchQuery] = useState('')
   const [filterType, setFilterType] = useState('')
+  const [filterBranch, setFilterBranch] = useState('')
   const [showModal, setShowModal] = useState(false)
   const [editingWorkflow, setEditingWorkflow] = useState<typeof initialWorkflows[0] | null>(null)
   const [activeMenu, setActiveMenu] = useState<string | null>(null)
@@ -320,6 +330,7 @@ export default function ApprovalsPage() {
   const [formData, setFormData] = useState({
     name: '',
     requestType: '',
+    branchId: 'all',
     description: '',
     isActive: true,
     steps: [] as typeof initialWorkflows[0]['steps'],
@@ -330,7 +341,11 @@ export default function ApprovalsPage() {
       wf.name.includes(searchQuery) ||
       wf.description.includes(searchQuery)
     const matchesType = !filterType || wf.requestType === filterType
-    return matchesSearch && matchesType
+    const matchesBranch =
+      !filterBranch ||
+      wf.branchId === filterBranch ||
+      (filterBranch === 'all' && wf.branchId === 'all')
+    return matchesSearch && matchesType && matchesBranch
   })
 
   // Group workflows by request type
@@ -348,6 +363,7 @@ export default function ApprovalsPage() {
       setFormData({
         name: workflow.name,
         requestType: workflow.requestType,
+        branchId: workflow.branchId || 'all',
         description: workflow.description,
         isActive: workflow.isActive,
         steps: [...workflow.steps],
@@ -357,6 +373,7 @@ export default function ApprovalsPage() {
       setFormData({
         name: '',
         requestType: '',
+        branchId: 'all',
         description: '',
         isActive: true,
         steps: [
@@ -577,6 +594,19 @@ export default function ApprovalsPage() {
                 </option>
               ))}
             </select>
+            <select
+              value={filterBranch}
+              onChange={(e) => setFilterBranch(e.target.value)}
+              className="input w-48"
+            >
+              <option value="">كل الفروع</option>
+              <option value="all">مسارات عامة (كل الفروع)</option>
+              {branchOptions.map((b) => (
+                <option key={b.id} value={b.id}>
+                  {b.name}
+                </option>
+              ))}
+            </select>
           </div>
         </div>
 
@@ -649,6 +679,11 @@ export default function ApprovalsPage() {
                               <h4 className="font-bold text-gray-800">{workflow.name}</h4>
                               <span className={`badge text-xs ${workflow.isActive ? 'badge-success' : 'badge-danger'}`}>
                                 {workflow.isActive ? 'نشط' : 'معطل'}
+                              </span>
+                              <span className="badge text-xs bg-indigo-100 text-indigo-700">
+                                {workflow.branchId === 'all'
+                                  ? 'كل الفروع'
+                                  : getBranchName(workflow.branchId)}
                               </span>
                             </div>
                             <p className="text-sm text-gray-500 mt-1">{workflow.description}</p>
@@ -888,6 +923,29 @@ export default function ApprovalsPage() {
                       ))}
                     </select>
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    نطاق الفرع *
+                  </label>
+                  <select
+                    value={formData.branchId}
+                    onChange={(e) =>
+                      setFormData({ ...formData, branchId: e.target.value })
+                    }
+                    className="input w-full"
+                  >
+                    <option value="all">كل الفروع (مسار عام)</option>
+                    {branchOptions.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name} فقط
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">
+                    المسار الخاص بفرع يُطبَّق على طلبات موظفي هذا الفرع فقط — كل فرع بدوراته المنفصلة
+                  </p>
                 </div>
 
                 <div>
