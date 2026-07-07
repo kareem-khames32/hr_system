@@ -63,6 +63,8 @@ interface EmployeeSchedule {
 // الورديات المتاحة
 const shifts: Shift[] = [
   { id: 'morning', name: 'صباحي', code: 'ص', color: 'text-blue-700', bgColor: 'bg-blue-100', startTime: '08:00', endTime: '17:00', workHours: 8 },
+  { id: 'ten', name: 'وردية 10', code: '10', color: 'text-sky-700', bgColor: 'bg-sky-100', startTime: '10:00', endTime: '19:00', workHours: 8 },
+  { id: 'eleven', name: 'وردية 11', code: '11', color: 'text-violet-700', bgColor: 'bg-violet-100', startTime: '11:00', endTime: '20:00', workHours: 8 },
   { id: 'evening', name: 'مسائي', code: 'م', color: 'text-orange-700', bgColor: 'bg-orange-100', startTime: '14:00', endTime: '23:00', workHours: 8 },
   { id: 'night', name: 'ليلي', code: 'ل', color: 'text-purple-700', bgColor: 'bg-purple-100', startTime: '22:00', endTime: '07:00', workHours: 8 },
   { id: 'flexible', name: 'مرن', code: 'ر', color: 'text-green-700', bgColor: 'bg-green-100', startTime: '07:00', endTime: '19:00', workHours: 8 },
@@ -224,6 +226,47 @@ const initialSchedules: EmployeeSchedule[] = [
   },
 ]
 
+// ===== التخزين المؤرَّخ: كل أسبوع بجدوله المستقل =====
+// مفتاح الأسبوع = تاريخ بداية الأسبوع (الأحد) بصيغة YYYY-MM-DD
+const weekKeyOf = (d: Date) => {
+  const x = new Date(d)
+  x.setHours(12, 0, 0, 0)
+  return x.toISOString().slice(0, 10)
+}
+
+const cloneWeek = (src: EmployeeSchedule[]): EmployeeSchedule[] =>
+  src.map((e) => ({
+    ...e,
+    schedule: Object.fromEntries(
+      Object.entries(e.schedule).map(([k, v]) => [k, { ...v }])
+    ),
+  }))
+
+const withShiftAllWeek = (
+  src: EmployeeSchedule[],
+  empId: string,
+  shiftId: string
+): EmployeeSchedule[] =>
+  cloneWeek(src).map((e) =>
+    e.id === empId
+      ? {
+          ...e,
+          schedule: Object.fromEntries(
+            Object.entries(e.schedule).map(([day, v]) => [
+              day,
+              v.shiftId === 'off' || v.isLocked ? v : { ...v, shiftId },
+            ])
+          ),
+        }
+      : e
+  )
+
+// ديمو حساب التأخير: أحمد وردية 10 هذا الأسبوع، ووردية 11 الأسبوع القادم
+const initialWeeklyData: Record<string, EmployeeSchedule[]> = {
+  '2026-07-05': withShiftAllWeek(initialSchedules, '1', 'ten'),
+  '2026-07-12': withShiftAllWeek(initialSchedules, '1', 'eleven'),
+}
+
 // القوالب الجاهزة
 const templates = [
   { id: 'standard', name: 'دوام عادي', description: 'أحد-خميس صباحي، الجمعة والسبت إجازة', icon: Sun },
@@ -234,8 +277,20 @@ const templates = [
 ]
 
 export default function WeeklySchedulePage() {
-  const [schedules, setSchedules] = useState<EmployeeSchedule[]>(initialSchedules)
-  const [currentWeekStart, setCurrentWeekStart] = useState(new Date('2026-01-25'))
+  const [weeklyData, setWeeklyData] = useState<Record<string, EmployeeSchedule[]>>(initialWeeklyData)
+  const [currentWeekStart, setCurrentWeekStart] = useState(new Date('2026-07-05'))
+
+  // جدول الأسبوع المعروض — يُنشأ من النمط الأساسي إن لم يُخصَّص بعد
+  const currentKey = weekKeyOf(currentWeekStart)
+  const isCustomWeek = Boolean(weeklyData[currentKey])
+  const schedules = weeklyData[currentKey] ?? cloneWeek(initialSchedules)
+  const setSchedules = (
+    updater: (prev: EmployeeSchedule[]) => EmployeeSchedule[]
+  ) =>
+    setWeeklyData((prev) => ({
+      ...prev,
+      [currentKey]: updater(prev[currentKey] ?? cloneWeek(initialSchedules)),
+    }))
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedDepartment, setSelectedDepartment] = useState('all')
   const [selectedCell, setSelectedCell] = useState<{ empId: string; day: string } | null>(null)
@@ -318,16 +373,20 @@ export default function WeeklySchedulePage() {
   // الأقسام المتاحة
   const departments = Array.from(new Set(schedules.map(emp => emp.department)))
 
-  // حفظ التغييرات
+  // حفظ التغييرات — الجدول مخزَّن بمفتاح أسبوعه المؤرَّخ
   const saveChanges = () => {
     setHasChanges(false)
-    alert('تم حفظ الجدول بنجاح!')
+    alert(`تم حفظ جدول الأسبوع ${currentKey} — كل أسبوع يُخزَّن بتواريخه المستقلة`)
   }
 
-  // نسخ من الأسبوع السابق
+  // نسخ فعلي من الأسبوع السابق إلى الأسبوع المعروض
   const copyFromPreviousWeek = () => {
+    const prevDate = new Date(currentWeekStart)
+    prevDate.setDate(prevDate.getDate() - 7)
+    const prevKey = weekKeyOf(prevDate)
+    const source = weeklyData[prevKey] ?? cloneWeek(initialSchedules)
+    setWeeklyData((prev) => ({ ...prev, [currentKey]: cloneWeek(source) }))
     setShowCopyModal(false)
-    alert('تم نسخ الجدول من الأسبوع السابق!')
     setHasChanges(true)
   }
 

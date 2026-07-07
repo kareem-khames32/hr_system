@@ -19,6 +19,12 @@ import {
   XCircle,
   Timer,
 } from 'lucide-react'
+import {
+  shiftFor,
+  computeAttendance,
+  formatWorkHours,
+  type ShiftTime,
+} from '@/lib/attendance'
 
 interface AttendanceRecord {
   id: string
@@ -31,108 +37,114 @@ interface AttendanceRecord {
   checkOut: string | null
   workHours: string | null
   status: 'present' | 'absent' | 'late' | 'early_leave' | 'on_leave' | 'holiday'
+  shift: ShiftTime // وردية اليوم من الجدول المؤرَّخ
+  lateMinutes: number // محسوبة — ليست مُدخَلة
   location: string
   verificationMethod: 'face' | 'fingerprint' | 'card' | 'manual'
 }
 
-const attendanceRecords: AttendanceRecord[] = [
+// ===== البصمات الخام: الحالة والتأخير يُحسبان من المحرّك، لا يُكتبان يدوياً =====
+interface RawPunch {
+  id: string
+  employeeId: string
+  employeeName: string
+  avatar: string
+  department: string
+  date: string // YYYY-MM-DD
+  checkIn: string | null
+  checkOut: string | null
+  location: string
+  verificationMethod: AttendanceRecord['verificationMethod']
+  override?: 'on_leave' | 'holiday' // إجازة/عطلة معتمدة تتجاوز الحساب
+}
+
+const rawPunches: RawPunch[] = [
+  // ديمو حساب التأخير: أحمد — أسبوع وردية 10 → حضر 10:25 = متأخر 25د
   {
     id: '1',
     employeeId: 'EMP001',
     employeeName: 'أحمد محمد علي',
     avatar: 'أ',
     department: 'تقنية المعلومات',
-    date: '2026/01/29',
-    checkIn: '08:05',
-    checkOut: '17:15',
-    workHours: '9:10',
-    status: 'present',
+    date: '2026-07-07',
+    checkIn: '10:25',
+    checkOut: '19:10',
     location: 'المكتب الرئيسي',
-    verificationMethod: 'face',
+    verificationMethod: 'fingerprint',
   },
+  // نفس أحمد — الأسبوع القادم وردية 11 → حضر 10:50 = منضبط (قبل موعده)
   {
     id: '2',
-    employeeId: 'EMP002',
-    employeeName: 'سارة أحمد الخالدي',
-    avatar: 'س',
-    department: 'الموارد البشرية',
-    date: '2026/01/29',
-    checkIn: '08:45',
-    checkOut: '17:00',
-    workHours: '8:15',
-    status: 'late',
-    location: 'المكتب الرئيسي',
-    verificationMethod: 'face',
-  },
-  {
-    id: '3',
-    employeeId: 'EMP003',
-    employeeName: 'محمد خالد السعيد',
-    avatar: 'م',
-    department: 'المبيعات',
-    date: '2026/01/29',
-    checkIn: null,
-    checkOut: null,
-    workHours: null,
-    status: 'absent',
-    location: '-',
-    verificationMethod: 'manual',
-  },
-  {
-    id: '4',
-    employeeId: 'EMP004',
-    employeeName: 'فاطمة علي الزهراني',
-    avatar: 'ف',
-    department: 'المحاسبة',
-    date: '2026/01/29',
-    checkIn: '07:55',
-    checkOut: '15:30',
-    workHours: '7:35',
-    status: 'early_leave',
+    employeeId: 'EMP001',
+    employeeName: 'أحمد محمد علي',
+    avatar: 'أ',
+    department: 'تقنية المعلومات',
+    date: '2026-07-14',
+    checkIn: '10:50',
+    checkOut: '20:05',
     location: 'المكتب الرئيسي',
     verificationMethod: 'fingerprint',
   },
   {
-    id: '5',
-    employeeId: 'EMP005',
-    employeeName: 'عمر سالم الحربي',
-    avatar: 'ع',
-    department: 'التسويق',
-    date: '2026/01/29',
+    id: '3',
+    employeeId: 'EMP002',
+    employeeName: 'سارة أحمد الخالدي',
+    avatar: 'س',
+    department: 'الموارد البشرية',
+    date: '2026-07-07',
+    checkIn: '08:45',
+    checkOut: '17:00',
+    location: 'المكتب الرئيسي',
+    verificationMethod: 'face',
+  },
+  {
+    id: '4',
+    employeeId: 'EMP003',
+    employeeName: 'محمد خالد السعيد',
+    avatar: 'م',
+    department: 'المبيعات',
+    date: '2026-07-07',
     checkIn: null,
     checkOut: null,
-    workHours: null,
-    status: 'on_leave',
     location: '-',
     verificationMethod: 'manual',
   },
   {
+    id: '5',
+    employeeId: 'EMP004',
+    employeeName: 'فاطمة علي الزهراني',
+    avatar: 'ف',
+    department: 'المحاسبة',
+    date: '2026-07-07',
+    checkIn: '07:55',
+    checkOut: '15:30',
+    location: 'المكتب الرئيسي',
+    verificationMethod: 'fingerprint',
+  },
+  {
     id: '6',
+    employeeId: 'EMP005',
+    employeeName: 'عمر سالم الحربي',
+    avatar: 'ع',
+    department: 'التسويق',
+    date: '2026-07-07',
+    checkIn: null,
+    checkOut: null,
+    location: '-',
+    verificationMethod: 'manual',
+    override: 'on_leave',
+  },
+  {
+    id: '7',
     employeeId: 'EMP006',
     employeeName: 'نورة محمد العتيبي',
     avatar: 'ن',
     department: 'خدمة العملاء',
-    date: '2026/01/29',
+    date: '2026-07-07',
     checkIn: '07:58',
     checkOut: '17:05',
-    workHours: '9:07',
-    status: 'present',
     location: 'فرع الدمام',
     verificationMethod: 'face',
-  },
-  {
-    id: '7',
-    employeeId: 'EMP007',
-    employeeName: 'خالد عبدالله القحطاني',
-    avatar: 'خ',
-    department: 'العمليات',
-    date: '2026/01/29',
-    checkIn: '08:02',
-    checkOut: null,
-    workHours: null,
-    status: 'present',
-    location: 'المكتب الرئيسي',
-    verificationMethod: 'card',
   },
   {
     id: '8',
@@ -140,15 +152,28 @@ const attendanceRecords: AttendanceRecord[] = [
     employeeName: 'ريم سعود الدوسري',
     avatar: 'ر',
     department: 'تقنية المعلومات',
-    date: '2026/01/29',
+    date: '2026-07-07',
     checkIn: '09:30',
     checkOut: null,
-    workHours: null,
-    status: 'late',
     location: 'عن بُعد',
     verificationMethod: 'face',
   },
 ]
+
+// كل سجل يمر على المحرّك: وردية اليوم من الجدول المؤرَّخ ← حساب التأخير
+const attendanceRecords: AttendanceRecord[] = rawPunches.map((p) => {
+  const shift = shiftFor(p.employeeId, p.date)
+  const computed = p.override
+    ? { status: p.override, lateMinutes: 0, earlyLeaveMinutes: 0 }
+    : computeAttendance(p.checkIn, p.checkOut, shift)
+  return {
+    ...p,
+    shift,
+    status: computed.status,
+    lateMinutes: computed.lateMinutes,
+    workHours: formatWorkHours(p.checkIn, p.checkOut),
+  }
+})
 
 const getStatusBadge = (status: AttendanceRecord['status']) => {
   switch (status) {
@@ -364,6 +389,7 @@ export default function AttendancePage() {
                 <tr className="table-header">
                   <th className="text-right px-4 py-4">الموظف</th>
                   <th className="text-right px-4 py-4">القسم</th>
+                  <th className="text-center px-4 py-4">وردية اليوم</th>
                   <th className="text-center px-4 py-4">الحضور</th>
                   <th className="text-center px-4 py-4">الانصراف</th>
                   <th className="text-center px-4 py-4">ساعات العمل</th>
@@ -388,6 +414,13 @@ export default function AttendancePage() {
                     </td>
                     <td className="table-cell text-gray-600">{record.department}</td>
                     <td className="table-cell text-center">
+                      <div className="text-sm font-medium text-gray-700">{record.shift.name}</div>
+                      <div className="text-xs text-gray-400 font-mono" dir="ltr">
+                        {record.shift.start} - {record.shift.end}
+                      </div>
+                      <div className="text-[10px] text-gray-400" dir="ltr">{record.date}</div>
+                    </td>
+                    <td className="table-cell text-center">
                       {record.checkIn ? (
                         <span className="font-mono text-success-600 font-medium">{record.checkIn}</span>
                       ) : (
@@ -408,7 +441,14 @@ export default function AttendancePage() {
                         <span className="text-gray-400">-</span>
                       )}
                     </td>
-                    <td className="table-cell text-center">{getStatusBadge(record.status)}</td>
+                    <td className="table-cell text-center">
+                      {getStatusBadge(record.status)}
+                      {record.lateMinutes > 0 && (
+                        <p className="text-xs text-warning-600 mt-1 font-medium">
+                          متأخر {record.lateMinutes} دقيقة عن {record.shift.name}
+                        </p>
+                      )}
+                    </td>
                     <td className="table-cell text-center">
                       <div className="flex items-center justify-center gap-1 text-sm text-gray-600">
                         <MapPin size={14} className="text-gray-400" />

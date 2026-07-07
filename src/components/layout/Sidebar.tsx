@@ -81,6 +81,7 @@ const menuItems: MenuItem[] = [
       { label: 'العمل الإضافي', href: '/attendance/overtime' },
       { label: 'الإدخال اليدوي', href: '/attendance/manual-entry' },
       { label: 'أجهزة البصمة', href: '/attendance/devices' },
+      { label: 'الكشف الشهري', href: '/attendance/monthly-sheet' },
       { label: 'تقارير الحضور', href: '/attendance/reports' },
     ],
   },
