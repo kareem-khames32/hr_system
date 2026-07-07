@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import { branches as branchOptions, getBranchName, getBranchById } from '@/data/branches'
 import {
   Search,
   Filter,
@@ -51,8 +52,12 @@ interface PayrollRecord {
   totalDeductions: number
   netSalary: number
   bankName: string
+  branchId: string
+  payMethod: 'transfer' | 'cash' | 'visa'
   status: 'calculated' | 'approved' | 'paid'
 }
+
+const payMethodLabels = { transfer: 'تحويل بنكي', cash: 'كاش', visa: 'فيزا' }
 
 const payrollRecords: PayrollRecord[] = [
   {
@@ -73,6 +78,8 @@ const payrollRecords: PayrollRecord[] = [
     totalDeductions: 1462.50,
     netSalary: 19787.50,
     bankName: 'الراجحي',
+    branchId: '1',
+    payMethod: 'transfer',
     status: 'calculated',
   },
   {
@@ -93,6 +100,8 @@ const payrollRecords: PayrollRecord[] = [
     totalDeductions: 2170,
     netSalary: 14330,
     bankName: 'الأهلي',
+    branchId: '1',
+    payMethod: 'transfer',
     status: 'calculated',
   },
   {
@@ -113,6 +122,8 @@ const payrollRecords: PayrollRecord[] = [
     totalDeductions: 1475,
     netSalary: 14025,
     bankName: 'الراجحي',
+    branchId: '2',
+    payMethod: 'cash',
     status: 'calculated',
   },
   {
@@ -133,6 +144,8 @@ const payrollRecords: PayrollRecord[] = [
     totalDeductions: 780,
     netSalary: 10020,
     bankName: 'الإنماء',
+    branchId: '1',
+    payMethod: 'transfer',
     status: 'calculated',
   },
   {
@@ -153,6 +166,8 @@ const payrollRecords: PayrollRecord[] = [
     totalDeductions: 3365,
     netSalary: 16135,
     bankName: 'ساب',
+    branchId: '2',
+    payMethod: 'visa',
     status: 'calculated',
   },
   {
@@ -173,6 +188,8 @@ const payrollRecords: PayrollRecord[] = [
     totalDeductions: 1177.50,
     netSalary: 11322.50,
     bankName: 'الراجحي',
+    branchId: '3',
+    payMethod: 'cash',
     status: 'calculated',
   },
 ]
@@ -189,6 +206,37 @@ export default function PayrollPage() {
   const [selectedDepartment, setSelectedDepartment] = useState('all')
   const [periodType, setPeriodType] = useState<'monthly' | 'custom'>('monthly')
   const [customPeriod, setCustomPeriod] = useState({ from: '2026-01-01', to: '2026-01-31' })
+  // مسير مستقل لكل فرع
+  const [selectedBranch, setSelectedBranch] = useState('1')
+  // دورة الرواتب: تبدأ يوم X وتنتهي يوم X-1 من الشهر التالي (مثال: 23 → 22)
+  const [cycleStartDay, setCycleStartDay] = useState(23)
+  // سلسلة اعتماد المسير الفعلية حتى الرئيس التنفيذي ثم الصرف
+  const runStages = [
+    'جمع البيانات',
+    'الحساب',
+    'مراجعة HR',
+    'اعتماد مدير HR',
+    'اعتماد المدير المالي',
+    'اعتماد الرئيس التنفيذي',
+    'الصرف',
+  ]
+  const [runStage, setRunStage] = useState(2)
+  const [approvalsLog, setApprovalsLog] = useState<string[]>([
+    'جمع البيانات ✓ — تلقائي من الحضور والإجازات والعهد',
+    'الحساب ✓ — بواسطة النظام (معادلات الرواتب)',
+  ])
+  const advanceStage = () => {
+    if (runStage >= runStages.length - 1) return
+    const next = runStage + 1
+    setApprovalsLog((prev) => [...prev, `${runStages[next]} ✓ — ${['','','','مدير الموارد البشرية','المدير المالي','الرئيس التنفيذي','أمين الصندوق / البنك'][next] || 'النظام'}`])
+    setRunStage(next)
+  }
+  // حالة الصرف لكل موظف (بعد اعتماد الرئيس التنفيذي)
+  const [disbursedIds, setDisbursedIds] = useState<string[]>([])
+  const toggleDisbursed = (id: string) =>
+    setDisbursedIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    )
   const [showAdjustmentModal, setShowAdjustmentModal] = useState(false)
   const [selectedEmployee, setSelectedEmployee] = useState<PayrollRecord | null>(null)
   const [adjustmentType, setAdjustmentType] = useState<'bonus' | 'deduction'>('bonus')
@@ -278,6 +326,9 @@ export default function PayrollPage() {
         return false
       }
       if (selectedDepartment !== 'all' && record.department !== selectedDepartment) {
+        return false
+      }
+      if (record.branchId !== selectedBranch) {
         return false
       }
       return true
@@ -370,7 +421,7 @@ export default function PayrollPage() {
 
             {/* Period Selection */}
             {periodType === 'monthly' ? (
-              <div className="flex items-center gap-4">
+              <div className="flex items-center gap-4 flex-wrap">
                 <select
                   value={selectedCycle}
                   onChange={(e) => setSelectedCycle(e.target.value)}
@@ -382,6 +433,40 @@ export default function PayrollPage() {
                     </option>
                   ))}
                 </select>
+                {/* إعداد دورة الرواتب المخصّصة */}
+                <div className="flex items-center gap-2 p-2 px-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                  <span className="text-sm text-gray-700">دورة الشركة: من يوم</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={28}
+                    value={cycleStartDay}
+                    onChange={(e) => setCycleStartDay(Number(e.target.value) || 1)}
+                    className="input w-16 text-center py-1"
+                  />
+                  <span className="text-sm text-gray-700">
+                    إلى يوم {cycleStartDay - 1 || 28} من الشهر التالي
+                  </span>
+                  <span className="text-xs text-indigo-600 font-medium mr-2">
+                    الفترة الحالية: {cycleStartDay} يونيو ← {cycleStartDay - 1 || 28} يوليو 2026
+                  </span>
+                </div>
+                {/* مسير مستقل لكل فرع */}
+                <div className="flex items-center gap-2 p-2 px-4 bg-primary-50 rounded-xl border border-primary-100">
+                  <span className="text-sm font-medium text-gray-700">مسير فرع:</span>
+                  <select
+                    value={selectedBranch}
+                    onChange={(e) => setSelectedBranch(e.target.value)}
+                    className="input w-56 py-1"
+                  >
+                    {branchOptions.map((b) => (
+                      <option key={b.id} value={b.id}>
+                        {b.name}
+                      </option>
+                    ))}
+                  </select>
+                  <span className="text-xs text-primary-600">كل فرع بمسيره واعتماداته المستقلة</span>
+                </div>
               </div>
             ) : (
               <div className="flex items-center gap-4 p-4 bg-blue-50 rounded-xl">
@@ -471,52 +556,106 @@ export default function PayrollPage() {
           </div>
         </div>
 
-        {/* Workflow Steps */}
+        {/* Workflow Steps — سلسلة اعتماد فعلية حتى الرئيس التنفيذي */}
         <div className="card">
-          <h3 className="font-bold text-gray-800 mb-4">خطوات معالجة الرواتب</h3>
+          <div className="flex items-center justify-between mb-4">
+            <h3 className="font-bold text-gray-800">
+              دورة اعتماد مسير {getBranchName(selectedBranch)}
+            </h3>
+            {runStage < runStages.length - 1 ? (
+              <button onClick={advanceStage} className="btn-primary flex items-center gap-2 text-sm">
+                <CheckCircle size={16} />
+                {runStage < 2 ? 'التالي' : `اعتماد: ${runStages[runStage + 1]}`}
+              </button>
+            ) : (
+              <span className="badge badge-success">المسير مصروف ومقفل ✓</span>
+            )}
+          </div>
           <div className="flex items-center justify-between">
-            <div className="flex items-center gap-4 flex-1">
-              <div className="flex flex-col items-center">
-                <div className="w-12 h-12 bg-success-500 rounded-2xl flex items-center justify-center text-white">
-                  <CheckCircle size={24} />
+            <div className="flex items-center gap-2 flex-1">
+              {runStages.map((stage, i) => (
+                <div key={stage} className="flex items-center flex-1 last:flex-none">
+                  <div className="flex flex-col items-center">
+                    <div
+                      className={`w-11 h-11 rounded-2xl flex items-center justify-center text-white ${
+                        i < runStage
+                          ? 'bg-success-500'
+                          : i === runStage
+                          ? 'bg-warning-500'
+                          : 'bg-gray-200'
+                      }`}
+                    >
+                      {i < runStage ? <CheckCircle size={22} /> : i === runStage ? <Clock size={22} /> : <Lock size={22} className="text-gray-400" />}
+                    </div>
+                    <span
+                      className={`text-xs font-medium mt-2 whitespace-nowrap ${
+                        i < runStage ? 'text-success-600' : i === runStage ? 'text-warning-600' : 'text-gray-400'
+                      }`}
+                    >
+                      {i + 1}. {stage}
+                    </span>
+                  </div>
+                  {i < runStages.length - 1 && (
+                    <div className={`flex-1 h-1 rounded mx-2 ${i < runStage ? 'bg-success-500' : 'bg-gray-200'}`} />
+                  )}
                 </div>
-                <span className="text-sm font-medium text-success-600 mt-2">1. جمع البيانات</span>
-              </div>
-              <div className="flex-1 h-1 bg-success-500 rounded" />
-
-              <div className="flex flex-col items-center">
-                <div className="w-12 h-12 bg-success-500 rounded-2xl flex items-center justify-center text-white">
-                  <CheckCircle size={24} />
-                </div>
-                <span className="text-sm font-medium text-success-600 mt-2">2. الحساب</span>
-              </div>
-              <div className="flex-1 h-1 bg-gray-200 rounded" />
-
-              <div className="flex flex-col items-center">
-                <div className="w-12 h-12 bg-warning-500 rounded-2xl flex items-center justify-center text-white">
-                  <Clock size={24} />
-                </div>
-                <span className="text-sm font-medium text-warning-600 mt-2">3. المراجعة</span>
-              </div>
-              <div className="flex-1 h-1 bg-gray-200 rounded" />
-
-              <div className="flex flex-col items-center">
-                <div className="w-12 h-12 bg-gray-200 rounded-2xl flex items-center justify-center text-gray-400">
-                  <Lock size={24} />
-                </div>
-                <span className="text-sm font-medium text-gray-400 mt-2">4. الاعتماد</span>
-              </div>
-              <div className="flex-1 h-1 bg-gray-200 rounded" />
-
-              <div className="flex flex-col items-center">
-                <div className="w-12 h-12 bg-gray-200 rounded-2xl flex items-center justify-center text-gray-400">
-                  <Send size={24} />
-                </div>
-                <span className="text-sm font-medium text-gray-400 mt-2">5. الصرف</span>
-              </div>
+              ))}
+            </div>
+          </div>
+          {/* سجل الاعتمادات */}
+          <div className="mt-4 pt-4 border-t border-gray-100">
+            <p className="text-xs text-gray-400 mb-2">سجل الاعتمادات:</p>
+            <div className="flex flex-wrap gap-2">
+              {approvalsLog.map((log, i) => (
+                <span key={i} className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded-lg border border-gray-100">
+                  {log}
+                </span>
+              ))}
             </div>
           </div>
         </div>
+
+        {/* مراكز التكلفة — بعد اعتماد الرئيس التنفيذي */}
+        {runStage >= 5 && (
+          <div className="card border-2 border-teal-200">
+            <div className="flex items-center justify-between mb-4">
+              <div>
+                <h3 className="font-bold text-gray-800">التحميل على مراكز التكلفة</h3>
+                <p className="text-sm text-gray-500 mt-1">
+                  بعد قفل المسير تُحمَّل التكلفة على مركز تكلفة الفرع وتُوزَّع على الأقسام
+                </p>
+              </div>
+              <button className="btn-primary text-sm">اعتماد التحميل</button>
+            </div>
+            <div className="grid grid-cols-4 gap-4">
+              <div className="p-4 bg-teal-50 rounded-xl border border-teal-100">
+                <p className="text-xs text-teal-600">مركز تكلفة الفرع</p>
+                <p className="text-lg font-bold text-teal-800 font-mono" dir="ltr">
+                  {getBranchById(selectedBranch)?.costCenter}
+                </p>
+                <p className="text-sm text-teal-700 mt-1">
+                  {adjustedTotals.netSalary.toLocaleString()} ر.س إجمالي
+                </p>
+              </div>
+              {Array.from(new Set(filteredRecords.map((r) => r.department))).map((dept) => {
+                const deptTotal = filteredRecords
+                  .filter((r) => r.department === dept)
+                  .reduce((s, r) => s + r.netSalary, 0)
+                return (
+                  <div key={dept} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
+                    <p className="text-xs text-gray-500">قسم: {dept}</p>
+                    <p className="text-lg font-bold text-gray-800">
+                      {deptTotal.toLocaleString()} ر.س
+                    </p>
+                    <p className="text-xs text-gray-400 mt-1">
+                      {Math.round((deptTotal / (adjustedTotals.netSalary || 1)) * 100)}% من مسير الفرع
+                    </p>
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Filters */}
         <div className="card">
@@ -572,6 +711,8 @@ export default function PayrollPage() {
                   <th className="text-center px-4 py-4">خصومات</th>
                   <th className="text-center px-4 py-4 bg-danger-50">إجمالي الخصم</th>
                   <th className="text-center px-4 py-4 bg-primary-50 font-bold">الصافي</th>
+                  <th className="text-center px-4 py-4">طريقة الصرف</th>
+                  <th className="text-center px-4 py-4">حالة الصرف</th>
                   <th className="text-center px-4 py-4">تعديلات</th>
                   <th className="text-center px-4 py-4">عرض</th>
                 </tr>
@@ -658,6 +799,32 @@ export default function PayrollPage() {
                     </td>
                     <td className="table-cell text-center font-mono font-bold text-primary-600 bg-primary-50 text-lg">
                       {record.netSalary.toLocaleString()}
+                    </td>
+                    <td className="table-cell text-center">
+                      <span className={`badge text-xs ${
+                        record.payMethod === 'transfer' ? 'bg-blue-50 text-blue-700'
+                        : record.payMethod === 'cash' ? 'bg-amber-50 text-amber-700'
+                        : 'bg-purple-50 text-purple-700'
+                      }`}>
+                        {payMethodLabels[record.payMethod]}
+                      </span>
+                      <p className="text-[10px] text-gray-400 mt-0.5">{record.bankName}</p>
+                    </td>
+                    <td className="table-cell text-center">
+                      {runStage >= 5 ? (
+                        <button
+                          onClick={() => toggleDisbursed(record.id)}
+                          className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${
+                            disbursedIds.includes(record.id)
+                              ? 'bg-success-500 text-white'
+                              : 'bg-gray-100 text-gray-600 hover:bg-success-50'
+                          }`}
+                        >
+                          {disbursedIds.includes(record.id) ? 'صُرف ✓' : 'تسجيل الصرف'}
+                        </button>
+                      ) : (
+                        <span className="text-xs text-gray-400">بانتظار الاعتماد</span>
+                      )}
                     </td>
                     <td className="table-cell">
                       <div className="flex items-center justify-center gap-1">
