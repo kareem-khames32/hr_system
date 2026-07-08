@@ -226,10 +226,14 @@ export const leaveTypesSeed = [
   { code: 'COMPENSATORY', nameAr: 'تعويضية/بدل', isPaid: true, balanceSource: 'none' },
 ]
 
-// ===== إعدادات المحرك (DDL §9) =====
+// ===== إعدادات المحرك (DDL §9) + الحضور =====
 export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'overtime.biometric_requires_confirmation', value: 'true' },
+  { key: 'overtime.detection_threshold_hours', value: '0.5' },
   { key: 'loan.finance_approval_threshold', value: '5000' },
   { key: 'salary_increase.executive_threshold_pct', value: '10' },
   { key: 'transfer.execution_mode', value: 'effective_date' },
+  { key: 'attendance.grace_minutes', value: '10' },
+  // مفتاح استقبال بصمات ZKTeco — غيّره في الإنتاج
+  { key: 'attendance.device_key', value: 'zk-device-key-change-me' },
 ]

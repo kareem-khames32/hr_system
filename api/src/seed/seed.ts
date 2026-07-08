@@ -35,6 +35,11 @@ import { RequestAttachment } from '../requests/entities/request-attachment.entit
 import { RequestType } from '../requests/entities/request-type.entity'
 import { Request } from '../requests/entities/request.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import {
+  AttendanceDay,
+  AttendancePunch,
+  ScheduleEntry,
+} from '../attendance/attendance.entities'
 import { ensureLeaveBalance, seedRequests } from './seed-requests'
 
 const dbType = (process.env.DB_TYPE ?? 'mssql') as 'mssql' | 'mysql'
@@ -73,6 +78,10 @@ const common = {
     Asset,
     CustodyAssignment,
     LetterRequest,
+    // الحضور
+    AttendancePunch,
+    ScheduleEntry,
+    AttendanceDay,
   ],
   synchronize: true, // البذر ينشئ الجداول لو مش موجودة
 }

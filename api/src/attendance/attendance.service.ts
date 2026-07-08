@@ -1,0 +1,359 @@
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+  UnauthorizedException,
+} from '@nestjs/common'
+import { InjectRepository } from '@nestjs/typeorm'
+import { Between, In, Repository } from 'typeorm'
+import type { JwtPayload } from '../auth/auth.service'
+import { branchScopeOf } from '../auth/guards'
+import { Employee } from '../employees/employee.entity'
+import { OvertimeEntry } from '../requests/entities/attendance.entities'
+import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import {
+  AttendanceDay,
+  AttendancePunch,
+  AttendanceStatus,
+  ScheduleEntry,
+} from './attendance.entities'
+
+// الوردية الافتراضية عند غياب جدولة الأسبوع — مرآة src/lib/attendance.ts
+const DEFAULT_SHIFT = { name: 'صباحي', start: '08:00', end: '17:00' }
+
+const toMinutes = (hhmm: string): number => {
+  const [h, m] = hhmm.split(':').map(Number)
+  return h * 60 + m
+}
+
+const hhmmOf = (d: Date): string =>
+  `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+
+// مفتاح الأسبوع = تاريخ الأحد الذي يقع فيه اليوم (الأحد = 0)
+export const weekKeyOf = (dateStr: string): string => {
+  const d = new Date(`${dateStr}T12:00:00`)
+  d.setDate(d.getDate() - d.getDay())
+  return d.toISOString().slice(0, 10)
+}
+
+export interface PunchDto {
+  employeeCode: string
+  timestamp: string // ISO أو 'YYYY-MM-DD HH:mm:ss' من الجهاز
+  deviceSn?: string
+}
+
+@Injectable()
+export class AttendanceService {
+  private readonly logger = new Logger(AttendanceService.name)
+
+  constructor(
+    @InjectRepository(AttendancePunch)
+    private readonly punches: Repository<AttendancePunch>,
+    @InjectRepository(ScheduleEntry)
+    private readonly schedule: Repository<ScheduleEntry>,
+    @InjectRepository(AttendanceDay)
+    private readonly days: Repository<AttendanceDay>,
+    @InjectRepository(Employee)
+    private readonly employees: Repository<Employee>,
+    @InjectRepository(OvertimeEntry)
+    private readonly overtime: Repository<OvertimeEntry>,
+    @InjectRepository(RequestsConfig)
+    private readonly config: Repository<RequestsConfig>
+  ) {}
+
+  private async configValue(key: string, fallback: string): Promise<string> {
+    const row = await this.config.findOne({ where: { key } })
+    return row?.value ?? fallback
+  }
+
+  // ===== استقبال بصمات ZKTeco (دفعة) — مفتاح الجهاز أو JWT =====
+  async ingest(punchesDto: PunchDto[], deviceKey?: string, user?: JwtPayload) {
+    if (!user) {
+      const expected = await this.configValue('attendance.device_key', '')
+      if (!expected || deviceKey !== expected) {
+        throw new UnauthorizedException('مفتاح الجهاز غير صحيح')
+      }
+    }
+    if (!punchesDto?.length) return { received: 0, matched: 0 }
+
+    const codes = [...new Set(punchesDto.map((p) => p.employeeCode))]
+    const emps = await this.employees.find({
+      where: { employeeCode: In(codes) },
+    })
+    const byCode = new Map(emps.map((e) => [e.employeeCode, e]))
+
+    const rows: AttendancePunch[] = []
+    const affected = new Set<string>() // employeeId|date
+    for (const p of punchesDto) {
+      const emp = byCode.get(p.employeeCode)
+      const punchTime = new Date(p.timestamp.replace(' ', 'T'))
+      if (Number.isNaN(punchTime.getTime())) continue
+      rows.push(
+        this.punches.create({
+          employeeCode: p.employeeCode,
+          employeeId: emp?.id,
+          punchTime,
+          deviceSn: p.deviceSn,
+        })
+      )
+      if (emp) {
+        affected.add(`${emp.id}|${punchTime.toISOString().slice(0, 10)}`)
+      }
+    }
+    await this.punches.save(rows)
+
+    // إعادة حساب الأيام المتأثرة فوراً
+    for (const key of affected) {
+      const [employeeId, date] = key.split('|')
+      await this.computeDay(Number(employeeId), date)
+    }
+    return {
+      received: rows.length,
+      matched: rows.filter((r) => r.employeeId).length,
+      recomputedDays: affected.size,
+    }
+  }
+
+  // ===== وردية الموظف في يوم محدد — حسب أسبوع ذلك اليوم =====
+  async shiftFor(employeeId: number, date: string) {
+    const entry = await this.schedule.findOne({
+      where: { weekStart: weekKeyOf(date), employeeId },
+    })
+    if (entry) {
+      return { name: entry.shiftName, start: entry.startTime, end: entry.endTime }
+    }
+    return DEFAULT_SHIFT
+  }
+
+  // ===== الحساب الفعلي: أول/آخر بصمة مقابل وردية اليوم + فترة السماح =====
+  async computeDay(employeeId: number, date: string): Promise<AttendanceDay> {
+    const emp = await this.employees.findOne({ where: { id: employeeId } })
+    if (!emp) throw new NotFoundException('الموظف غير موجود')
+
+    const dayStart = new Date(`${date}T00:00:00`)
+    const dayEnd = new Date(`${date}T23:59:59`)
+    const punches = await this.punches.find({
+      where: { employeeId, punchTime: Between(dayStart, dayEnd) },
+      order: { punchTime: 'ASC' },
+    })
+
+    const shift = await this.shiftFor(employeeId, date)
+    const grace = Number(await this.configValue('attendance.grace_minutes', '10'))
+
+    const checkIn = punches.length > 0 ? hhmmOf(punches[0].punchTime) : null
+    // بصمة واحدة فقط = دخول بلا انصراف
+    const checkOut =
+      punches.length > 1 ? hhmmOf(punches[punches.length - 1].punchTime) : null
+
+    let status: AttendanceStatus = 'absent'
+    let lateMinutes = 0
+    let earlyLeaveMinutes = 0
+    let workMinutes = 0
+
+    if (checkIn) {
+      const lateRaw = toMinutes(checkIn) - toMinutes(shift.start)
+      lateMinutes = lateRaw > grace ? lateRaw : 0
+      if (checkOut) {
+        const earlyRaw = toMinutes(shift.end) - toMinutes(checkOut)
+        earlyLeaveMinutes = earlyRaw > grace ? earlyRaw : 0
+        workMinutes = Math.max(0, toMinutes(checkOut) - toMinutes(checkIn))
+      }
+      status = lateMinutes > 0 ? 'late' : earlyLeaveMinutes > 0 ? 'early_leave' : 'present'
+    }
+
+    let day = await this.days.findOne({ where: { employeeId, date } })
+    if (!day) day = this.days.create({ employeeId, date })
+    Object.assign(day, {
+      branchId: emp.branchId,
+      checkIn,
+      checkOut,
+      shiftName: shift.name,
+      shiftStart: shift.start,
+      shiftEnd: shift.end,
+      status,
+      lateMinutes,
+      earlyLeaveMinutes,
+      workMinutes,
+      computedAt: new Date(),
+    })
+    day = await this.days.save(day)
+
+    // الأوفرتايم × البصمة
+    if (checkOut) await this.detectOvertime(emp, date, shift, checkOut)
+    return day
+  }
+
+  // ===== الأوفرتايم: مطابقة المسبق أو كشف تلقائي فوق العتبة =====
+  private async detectOvertime(
+    emp: Employee,
+    date: string,
+    shift: { end: string },
+    checkOut: string
+  ) {
+    const extraMinutes = toMinutes(checkOut) - toMinutes(shift.end)
+    const actualHours = Math.round((extraMinutes / 60) * 100) / 100
+    const threshold = Number(
+      await this.configValue('overtime.detection_threshold_hours', '0.5')
+    )
+
+    // 1) طلب مسبق معتمد → payable = min(المعتمد، الفعلي)
+    const preApproved = await this.overtime.findOne({
+      where: { employeeId: emp.id, date, source: 'PRE_REQUESTED' },
+    })
+    if (preApproved) {
+      preApproved.hoursActual = Math.max(0, actualHours)
+      if (preApproved.status === 'APPROVED') {
+        preApproved.payableHours = Math.min(
+          Number(preApproved.hoursRequested ?? 0),
+          Math.max(0, actualHours)
+        )
+      }
+      await this.overtime.save(preApproved)
+      return
+    }
+
+    // 2) كشف تلقائي: فوق العتبة → قيد DETECTED بانتظار تأكيد المدير المباشر
+    if (actualHours < threshold) return
+    const existing = await this.overtime.findOne({
+      where: { employeeId: emp.id, date, source: 'BIOMETRIC_DETECTED' },
+    })
+    if (existing) {
+      existing.hoursActual = actualHours
+      if (existing.status === 'DETECTED') existing.payableHours = null as any
+      await this.overtime.save(existing)
+      return
+    }
+    const requiresConfirmation =
+      (await this.configValue(
+        'overtime.biometric_requires_confirmation',
+        'true'
+      )) === 'true'
+    await this.overtime.save(
+      this.overtime.create({
+        employeeId: emp.id,
+        date,
+        source: 'BIOMETRIC_DETECTED',
+        hoursActual: actualHours,
+        // بدون تأكيد مطلوب → اعتماد فوري بالفعلي
+        status: requiresConfirmation ? 'DETECTED' : 'APPROVED',
+        payableHours: requiresConfirmation ? undefined : actualHours,
+      })
+    )
+  }
+
+  // ===== الجدولة الأسبوعية =====
+  async upsertSchedule(
+    entries: Array<{
+      weekStart: string
+      employeeId: number
+      shiftName: string
+      startTime: string
+      endTime: string
+    }>
+  ) {
+    const saved: ScheduleEntry[] = []
+    for (const e of entries) {
+      const weekStart = weekKeyOf(e.weekStart)
+      let row = await this.schedule.findOne({
+        where: { weekStart, employeeId: e.employeeId },
+      })
+      if (!row) row = this.schedule.create({ weekStart, employeeId: e.employeeId })
+      Object.assign(row, {
+        shiftName: e.shiftName,
+        startTime: e.startTime,
+        endTime: e.endTime,
+      })
+      saved.push(await this.schedule.save(row))
+    }
+    return saved
+  }
+
+  weekSchedule(week: string) {
+    return this.schedule.find({ where: { weekStart: weekKeyOf(week) } })
+  }
+
+  // ===== الاستعلامات (بنطاق الفرع) =====
+  async daily(user: JwtPayload, date: string) {
+    const scope = branchScopeOf(user)
+    const where: Record<string, unknown> = { date }
+    if (scope !== null) where.branchId = scope
+    return this.days.find({ where: where as any, order: { employeeId: 'ASC' } })
+  }
+
+  async monthly(user: JwtPayload, employeeId: number, month: string) {
+    if (!/^\d{4}-\d{2}$/.test(month)) {
+      throw new BadRequestException('صيغة الشهر YYYY-MM')
+    }
+    const scope = branchScopeOf(user)
+    const emp = await this.employees.findOne({ where: { id: employeeId } })
+    if (!emp) throw new NotFoundException('الموظف غير موجود')
+    if (scope !== null && emp.branchId !== scope && user.employeeId !== employeeId) {
+      throw new BadRequestException('خارج نطاق فرعك')
+    }
+    const rows = await this.days.find({
+      where: { employeeId } as any,
+      order: { date: 'ASC' },
+    })
+    const monthRows = rows.filter((r) => r.date.startsWith(month))
+    return {
+      employeeId,
+      month,
+      days: monthRows,
+      summary: {
+        present: monthRows.filter((r) => r.status === 'present').length,
+        late: monthRows.filter((r) => r.status === 'late').length,
+        absent: monthRows.filter((r) => r.status === 'absent').length,
+        earlyLeave: monthRows.filter((r) => r.status === 'early_leave').length,
+        totalLateMinutes: monthRows.reduce((s, r) => s + r.lateMinutes, 0),
+        totalWorkMinutes: monthRows.reduce((s, r) => s + r.workMinutes, 0),
+      },
+    }
+  }
+
+  // الأوفرتايم المكتشف بانتظار تأكيد المدير
+  async pendingOvertime(user: JwtPayload) {
+    const rows = await this.overtime.find({
+      where: { status: 'DETECTED' },
+      order: { date: 'DESC' },
+    })
+    const scope = branchScopeOf(user)
+    if (scope === null) return rows
+    const emps = await this.employees.find({ where: { branchId: scope } })
+    const ids = new Set(emps.map((e) => e.id))
+    return rows.filter((r) => ids.has(r.employeeId))
+  }
+
+  // تأكيد/رفض المدير للأوفرتايم المكتشف — payable = الفعلي
+  async confirmOvertime(user: JwtPayload, id: number, approve: boolean) {
+    const row = await this.overtime.findOne({ where: { id } })
+    if (!row) throw new NotFoundException('قيد الأوفرتايم غير موجود')
+    if (row.status !== 'DETECTED') {
+      throw new BadRequestException('القيد ليس بانتظار التأكيد')
+    }
+    if (approve) {
+      row.status = 'APPROVED'
+      row.payableHours = Number(row.hoursActual ?? 0)
+    } else {
+      row.status = 'REJECTED'
+      row.payableHours = 0
+    }
+    await this.overtime.save(row)
+    return row
+  }
+
+  // إعادة حساب يوم كامل لكل موظفي فرع/النظام (تصحيح بأثر رجعي)
+  async recomputeDate(date: string) {
+    const punchRows = await this.punches.find({
+      where: {
+        punchTime: Between(
+          new Date(`${date}T00:00:00`),
+          new Date(`${date}T23:59:59`)
+        ),
+      },
+    })
+    const ids = [...new Set(punchRows.map((p) => p.employeeId).filter(Boolean))]
+    for (const id of ids) await this.computeDay(id as number, date)
+    return { recomputed: ids.length }
+  }
+}

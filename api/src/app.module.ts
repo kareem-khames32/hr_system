@@ -7,6 +7,7 @@ import { AuthModule } from './auth/auth.module'
 import { OrgModule } from './org/org.module'
 import { EmployeesModule } from './employees/employees.module'
 import { RequestsModule } from './requests/requests.module'
+import { AttendanceModule } from './attendance/attendance.module'
 
 @Module({
   imports: [
@@ -54,6 +55,7 @@ import { RequestsModule } from './requests/requests.module'
     OrgModule,
     EmployeesModule,
     RequestsModule,
+    AttendanceModule,
   ],
   controllers: [HealthController],
 })
