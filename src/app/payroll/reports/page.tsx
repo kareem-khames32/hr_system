@@ -14,6 +14,7 @@ import {
   AlertTriangle,
 } from 'lucide-react'
 import { fetchPayrollReport } from '@/lib/api'
+import { useCurrency } from '@/lib/currency'
 
 interface ReportRun {
   id: number
@@ -63,6 +64,7 @@ const payMethodLabels: Record<string, string> = {
 }
 
 export default function PayrollReportsPage() {
+  const currency = useCurrency()
   const [report, setReport] = useState<PayrollReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -178,7 +180,7 @@ export default function PayrollReportsPage() {
                       <p className="text-sm text-gray-500">{Number(m.count)} موظف</p>
                     </div>
                   </div>
-                  <p className="font-bold text-primary-600">{Number(m.total).toLocaleString()} ر.س</p>
+                  <p className="font-bold text-primary-600">{Number(m.total).toLocaleString()} {currency}</p>
                 </div>
               ))}
               {byMethod.length === 0 && (

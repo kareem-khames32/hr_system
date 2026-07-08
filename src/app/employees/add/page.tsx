@@ -118,6 +118,20 @@ const scheduleColors: { [key: string]: string } = {
   red: 'bg-red-500',
 }
 
+// الحقول الشخصية والمالية الجديدة المدعومة في الباك إند (ليست بعد ضمن ApiEmployee)
+type EmployeeExtras = {
+  birthDate?: string
+  gender?: string
+  maritalStatus?: string
+  nationality?: string
+  address?: string
+  emergencyContactName?: string
+  emergencyContactPhone?: string
+  housingAllowance?: number
+  transportAllowance?: number
+  otherAllowance?: number
+}
+
 const steps = [
   { id: 1, title: 'البيانات الشخصية', icon: User },
   { id: 2, title: 'البيانات الوظيفية', icon: Briefcase },
@@ -155,6 +169,14 @@ export default function AddEmployeePage() {
     nationalId: '',
     phone: '',
     personalEmail: '',
+    birthDate: '',
+    gender: '',
+    maritalStatus: '',
+    nationality: '',
+    addressCity: '',
+    addressDistrict: '',
+    emergencyName: '',
+    emergencyPhone: '',
     employeeCode: '',
     fingerprintCode: '',
     joinDate: '',
@@ -166,6 +188,10 @@ export default function AddEmployeePage() {
     jobTitle: '',
     workEmail: '',
     basicSalary: '',
+    housingAllowance: '',
+    transportAllowance: '',
+    phoneAllowance: '',
+    workNatureAllowance: '',
     payMethod: 'transfer',
     bankName: '',
     iban: '',
@@ -203,11 +229,19 @@ export default function AddEmployeePage() {
     ? teams.filter((t) => t.departmentId === Number(form.departmentId))
     : teams
 
+  // إجمالي الراتب الشهري = الأساسي + البدلات الثابتة (يُحدَّث لحظياً في الخطوة المالية)
+  const totalMonthlySalary =
+    (Number(form.basicSalary) || 0) +
+    (Number(form.housingAllowance) || 0) +
+    (Number(form.transportAllowance) || 0) +
+    (Number(form.phoneAllowance) || 0) +
+    (Number(form.workNatureAllowance) || 0)
+
   const handleSubmit = async () => {
     setError('')
     setSubmitting(true)
     try {
-      const payload: Partial<ApiEmployee> = {
+      const payload: Partial<ApiEmployee> & EmployeeExtras = {
         employeeCode: (form.employeeCode || form.fingerprintCode).trim(),
         fullName: fullNameAr,
         status: form.status,
@@ -228,6 +262,24 @@ export default function AddEmployeePage() {
       if (form.bankName) payload.bankName = form.bankName
       const iban = form.iban.replace(/\s+/g, '').toUpperCase()
       if (iban) payload.iban = iban
+      // الحقول الشخصية الجديدة — تُرسل فقط عند تعبئتها
+      if (form.birthDate) payload.birthDate = form.birthDate
+      if (form.gender) payload.gender = form.gender
+      if (form.maritalStatus) payload.maritalStatus = form.maritalStatus
+      if (form.nationality) payload.nationality = form.nationality
+      const address = [form.addressDistrict.trim(), form.addressCity.trim()]
+        .filter(Boolean)
+        .join('، ')
+      if (address) payload.address = address
+      if (form.emergencyName.trim()) payload.emergencyContactName = form.emergencyName.trim()
+      if (form.emergencyPhone.trim()) payload.emergencyContactPhone = form.emergencyPhone.trim()
+      // البدلات الثابتة
+      if (form.housingAllowance !== '') payload.housingAllowance = Number(form.housingAllowance)
+      if (form.transportAllowance !== '') payload.transportAllowance = Number(form.transportAllowance)
+      const otherAllowance =
+        (Number(form.phoneAllowance) || 0) + (Number(form.workNatureAllowance) || 0)
+      if (form.phoneAllowance !== '' || form.workNatureAllowance !== '')
+        payload.otherAllowance = otherAllowance
 
       await createEmployee(payload)
       window.location.href = '/employees'
@@ -377,7 +429,7 @@ export default function AddEmployeePage() {
                 <div>
                   <label className="label">تاريخ الميلاد *</label>
                   <div className="relative">
-                    <input type="date" className="input pl-10" />
+                    <input type="date" className="input pl-10" value={form.birthDate} onChange={(e) => setField('birthDate', e.target.value)} />
                     <Calendar size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   </div>
                 </div>
@@ -387,7 +439,7 @@ export default function AddEmployeePage() {
                 </div>
                 <div>
                   <label className="label">الجنس *</label>
-                  <select className="input">
+                  <select className="input" value={form.gender} onChange={(e) => setField('gender', e.target.value)}>
                     <option value="">اختر</option>
                     <option value="male">ذكر</option>
                     <option value="female">أنثى</option>
@@ -395,7 +447,7 @@ export default function AddEmployeePage() {
                 </div>
                 <div>
                   <label className="label">الحالة الاجتماعية *</label>
-                  <select className="input">
+                  <select className="input" value={form.maritalStatus} onChange={(e) => setField('maritalStatus', e.target.value)}>
                     <option value="">اختر</option>
                     <option value="single">أعزب</option>
                     <option value="married">متزوج</option>
@@ -409,13 +461,13 @@ export default function AddEmployeePage() {
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="label">الجنسية *</label>
-                  <select className="input">
+                  <select className="input" value={form.nationality} onChange={(e) => setField('nationality', e.target.value)}>
                     <option value="">اختر</option>
-                    <option value="SA">سعودي</option>
-                    <option value="EG">مصري</option>
-                    <option value="JO">أردني</option>
-                    <option value="SY">سوري</option>
-                    <option value="other">أخرى</option>
+                    <option value="سعودي">سعودي</option>
+                    <option value="مصري">مصري</option>
+                    <option value="أردني">أردني</option>
+                    <option value="سوري">سوري</option>
+                    <option value="أخرى">أخرى</option>
                   </select>
                 </div>
                 <div>
@@ -472,11 +524,11 @@ export default function AddEmployeePage() {
                 </div>
                 <div>
                   <label className="label">المدينة</label>
-                  <input type="text" className="input" placeholder="الرياض" />
+                  <input type="text" className="input" placeholder="الرياض" value={form.addressCity} onChange={(e) => setField('addressCity', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">الحي</label>
-                  <input type="text" className="input" placeholder="العليا" />
+                  <input type="text" className="input" placeholder="العليا" value={form.addressDistrict} onChange={(e) => setField('addressDistrict', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">الرمز البريدي</label>
@@ -491,7 +543,7 @@ export default function AddEmployeePage() {
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="label">الاسم</label>
-                  <input type="text" className="input" placeholder="اسم جهة الاتصال" />
+                  <input type="text" className="input" placeholder="اسم جهة الاتصال" value={form.emergencyName} onChange={(e) => setField('emergencyName', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">صلة القرابة</label>
@@ -506,7 +558,7 @@ export default function AddEmployeePage() {
                 </div>
                 <div>
                   <label className="label">رقم الجوال</label>
-                  <input type="tel" className="input" placeholder="+966 50 123 4567" dir="ltr" />
+                  <input type="tel" className="input" placeholder="+966 50 123 4567" dir="ltr" value={form.emergencyPhone} onChange={(e) => setField('emergencyPhone', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">رقم بديل</label>
@@ -1073,26 +1125,26 @@ export default function AddEmployeePage() {
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="label">بدل السكن</label>
-                  <input type="number" className="input" placeholder="2500" dir="ltr" />
+                  <input type="number" className="input" placeholder="2500" dir="ltr" value={form.housingAllowance} onChange={(e) => setField('housingAllowance', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">بدل المواصلات</label>
-                  <input type="number" className="input" placeholder="1000" dir="ltr" />
+                  <input type="number" className="input" placeholder="1000" dir="ltr" value={form.transportAllowance} onChange={(e) => setField('transportAllowance', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">بدل الهاتف</label>
-                  <input type="number" className="input" placeholder="500" dir="ltr" />
+                  <input type="number" className="input" placeholder="500" dir="ltr" value={form.phoneAllowance} onChange={(e) => setField('phoneAllowance', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">بدل طبيعة العمل</label>
-                  <input type="number" className="input" placeholder="0" dir="ltr" />
+                  <input type="number" className="input" placeholder="0" dir="ltr" value={form.workNatureAllowance} onChange={(e) => setField('workNatureAllowance', e.target.value)} />
                 </div>
               </div>
 
               <div className="p-4 bg-primary-50 rounded-xl">
                 <div className="flex items-center justify-between">
                   <span className="font-medium text-gray-700">إجمالي الراتب الشهري</span>
-                  <span className="text-2xl font-bold text-primary-600">14,000 ر.س</span>
+                  <span className="text-2xl font-bold text-primary-600">{totalMonthlySalary.toLocaleString()} ر.س</span>
                 </div>
               </div>
 

@@ -57,12 +57,15 @@ const parseJson = <T,>(raw: string | null | undefined, fallback: T): T => {
 
 const roleLabels: Record<string, string> = {
   direct_manager_of_requester: 'المدير المباشر',
+  department_manager_of_requester: 'مدير القسم',
+  branch_manager_of_requester: 'مدير الفرع',
   receiving_team_manager: 'المدير المستقبِل',
   hr: 'الموارد البشرية',
   finance: 'المالية',
   executive: 'الإدارة التنفيذية',
   custody_officer: 'أمين العهدة',
   it: 'تقنية المعلومات',
+  specific_employee: 'موظف بعينه',
 }
 
 const fieldLabels: Record<string, string> = {
@@ -70,6 +73,7 @@ const fieldLabels: Record<string, string> = {
   fromDate: 'من تاريخ',
   toDate: 'إلى تاريخ',
   effectiveDate: 'تاريخ السريان',
+  lastWorkingDate: 'آخر يوم عمل',
   from: 'من الساعة',
   to: 'إلى الساعة',
   days: 'عدد الأيام',

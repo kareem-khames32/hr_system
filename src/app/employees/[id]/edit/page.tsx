@@ -23,6 +23,20 @@ import {
 
 const bankOptions = ['البنك الأهلي', 'بنك الراجحي', 'بنك الرياض', 'البنك السعودي الفرنسي']
 
+// الحقول الشخصية والمالية الجديدة المدعومة في الباك إند (ليست بعد ضمن ApiEmployee)
+type EmployeeExtras = {
+  birthDate?: string
+  gender?: string
+  maritalStatus?: string
+  nationality?: string
+  address?: string
+  emergencyContactName?: string
+  emergencyContactPhone?: string
+  housingAllowance?: number
+  transportAllowance?: number
+  otherAllowance?: number
+}
+
 export default function EditEmployeePage() {
   const params = useParams()
   const employeeId = Number(params.id)
@@ -39,6 +53,8 @@ export default function EditEmployeePage() {
     maritalStatus: 'single',
     nationality: '',
     address: '',
+    emergencyContactName: '',
+    emergencyContactPhone: '',
 
     // Employment Info
     employeeId: '',
@@ -55,6 +71,7 @@ export default function EditEmployeePage() {
     basicSalary: '',
     housingAllowance: '',
     transportAllowance: '',
+    otherAllowance: '',
   })
 
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
@@ -70,7 +87,8 @@ export default function EditEmployeePage() {
       return
     }
     Promise.all([fetchEmployee(employeeId), fetchDepartments(), fetchEmployees()])
-      .then(([emp, depts, emps]) => {
+      .then(([empData, depts, emps]) => {
+        const emp = empData as ApiEmployee & EmployeeExtras
         setDepartments(depts)
         setManagers(emps.filter((e) => e.id !== emp.id))
         const parts = (emp.fullName ?? '').trim().split(/\s+/)
@@ -81,6 +99,13 @@ export default function EditEmployeePage() {
           email: emp.email ?? '',
           phone: emp.phone ?? '',
           nationalId: emp.nationalId ?? '',
+          birthDate: emp.birthDate ? String(emp.birthDate).slice(0, 10) : '',
+          gender: emp.gender ?? 'male',
+          maritalStatus: emp.maritalStatus ?? 'single',
+          nationality: emp.nationality ?? '',
+          address: emp.address ?? '',
+          emergencyContactName: emp.emergencyContactName ?? '',
+          emergencyContactPhone: emp.emergencyContactPhone ?? '',
           employeeId: emp.employeeCode,
           departmentId: emp.departmentId != null ? String(emp.departmentId) : '',
           position: emp.jobTitle ?? '',
@@ -89,6 +114,9 @@ export default function EditEmployeePage() {
           bankName: emp.bankName ?? '',
           iban: emp.iban ?? '',
           basicSalary: emp.basicSalary != null ? String(Number(emp.basicSalary)) : '',
+          housingAllowance: emp.housingAllowance != null ? String(Number(emp.housingAllowance)) : '',
+          transportAllowance: emp.transportAllowance != null ? String(Number(emp.transportAllowance)) : '',
+          otherAllowance: emp.otherAllowance != null ? String(Number(emp.otherAllowance)) : '',
         }))
       })
       .catch((err) =>
@@ -106,12 +134,21 @@ export default function EditEmployeePage() {
     setError('')
     setSaving(true)
     try {
-      const changes: Partial<ApiEmployee> = {}
+      const changes: Partial<ApiEmployee> & EmployeeExtras = {}
       const fullName = `${formData.firstName} ${formData.lastName}`.trim()
       if (fullName) changes.fullName = fullName
       if (formData.email.trim()) changes.email = formData.email.trim()
       if (formData.phone.trim()) changes.phone = formData.phone.trim()
       if (formData.nationalId.trim()) changes.nationalId = formData.nationalId.trim()
+      if (formData.birthDate) changes.birthDate = formData.birthDate
+      if (formData.gender) changes.gender = formData.gender
+      if (formData.maritalStatus) changes.maritalStatus = formData.maritalStatus
+      if (formData.nationality.trim()) changes.nationality = formData.nationality.trim()
+      if (formData.address.trim()) changes.address = formData.address.trim()
+      if (formData.emergencyContactName.trim())
+        changes.emergencyContactName = formData.emergencyContactName.trim()
+      if (formData.emergencyContactPhone.trim())
+        changes.emergencyContactPhone = formData.emergencyContactPhone.trim()
       if (formData.position.trim()) changes.jobTitle = formData.position.trim()
       if (formData.departmentId) changes.departmentId = Number(formData.departmentId)
       if (formData.managerId) changes.managerEmployeeId = Number(formData.managerId)
@@ -120,6 +157,9 @@ export default function EditEmployeePage() {
       const iban = formData.iban.replace(/\s+/g, '').toUpperCase()
       if (iban) changes.iban = iban
       if (formData.basicSalary !== '') changes.basicSalary = Number(formData.basicSalary)
+      if (formData.housingAllowance !== '') changes.housingAllowance = Number(formData.housingAllowance)
+      if (formData.transportAllowance !== '') changes.transportAllowance = Number(formData.transportAllowance)
+      if (formData.otherAllowance !== '') changes.otherAllowance = Number(formData.otherAllowance)
 
       await updateEmployee(employeeId, changes)
       window.location.href = '/employees'
@@ -289,6 +329,25 @@ export default function EditEmployeePage() {
                 onChange={(e) => handleChange('address', e.target.value)}
               />
             </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">جهة اتصال للطوارئ (الاسم)</label>
+              <input
+                type="text"
+                className="input w-full"
+                value={formData.emergencyContactName}
+                onChange={(e) => handleChange('emergencyContactName', e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">جهة اتصال للطوارئ (الجوال)</label>
+              <input
+                type="tel"
+                className="input w-full"
+                dir="ltr"
+                value={formData.emergencyContactPhone}
+                onChange={(e) => handleChange('emergencyContactPhone', e.target.value)}
+              />
+            </div>
           </div>
         </div>
 
@@ -446,6 +505,18 @@ export default function EditEmployeePage() {
                   className="input w-full pl-12"
                   value={formData.transportAllowance}
                   onChange={(e) => handleChange('transportAllowance', e.target.value)}
+                />
+                <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">ر.س</span>
+              </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">بدلات أخرى</label>
+              <div className="relative">
+                <input
+                  type="number"
+                  className="input w-full pl-12"
+                  value={formData.otherAllowance}
+                  onChange={(e) => handleChange('otherAllowance', e.target.value)}
                 />
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">ر.س</span>
               </div>

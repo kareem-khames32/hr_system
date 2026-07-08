@@ -16,6 +16,7 @@ import {
   XCircle,
 } from 'lucide-react'
 import { createCatalogItem, fetchCatalog, updateCatalogItem } from '@/lib/api'
+import { useCurrency } from '@/lib/currency'
 
 interface Grade {
   id: number
@@ -33,6 +34,7 @@ const emptyForm = {
 }
 
 export default function GradesPage() {
+  const currency = useCurrency()
   const [grades, setGrades] = useState<Grade[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -190,7 +192,7 @@ export default function GradesPage() {
               <div>
                 <p className="text-sm text-gray-500">متوسط الراتب</p>
                 <p className="text-2xl font-bold text-gray-800">
-                  {avgSalary.toLocaleString()} <span className="text-sm text-gray-500">ر.س</span>
+                  {avgSalary.toLocaleString()} <span className="text-sm text-gray-500">{currency}</span>
                 </p>
               </div>
             </div>
@@ -203,7 +205,7 @@ export default function GradesPage() {
               <div>
                 <p className="text-sm text-gray-500">أعلى راتب</p>
                 <p className="text-2xl font-bold text-gray-800">
-                  {maxSalary.toLocaleString()} <span className="text-sm text-gray-500">ر.س</span>
+                  {maxSalary.toLocaleString()} <span className="text-sm text-gray-500">{currency}</span>
                 </p>
               </div>
             </div>
@@ -312,7 +314,7 @@ export default function GradesPage() {
                       <span className="text-2xl font-bold text-gray-800">
                         {Number(grade.minSalary).toLocaleString()}
                       </span>
-                      <span className="text-gray-500 text-sm mr-1">ر.س</span>
+                      <span className="text-gray-500 text-sm mr-1">{currency}</span>
                     </div>
                     <div className="flex-1 mx-4">
                       <div className="h-2 bg-gray-200 rounded-full">
@@ -326,7 +328,7 @@ export default function GradesPage() {
                       <span className="text-2xl font-bold text-primary-600">
                         {Number(grade.maxSalary).toLocaleString()}
                       </span>
-                      <span className="text-gray-500 text-sm mr-1">ر.س</span>
+                      <span className="text-gray-500 text-sm mr-1">{currency}</span>
                     </div>
                   </div>
                 </div>
@@ -391,7 +393,7 @@ export default function GradesPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      الحد الأدنى للراتب (ر.س) *
+                      الحد الأدنى للراتب ({currency}) *
                     </label>
                     <input
                       type="number"
@@ -405,7 +407,7 @@ export default function GradesPage() {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      الحد الأقصى للراتب (ر.س) *
+                      الحد الأقصى للراتب ({currency}) *
                     </label>
                     <input
                       type="number"

@@ -158,8 +158,10 @@ export interface ApiAttendanceDay {
   id: number; employeeId: number; branchId?: number; date: string
   checkIn?: string; checkOut?: string
   shiftName: string; shiftStart: string; shiftEnd: string
-  status: 'present' | 'late' | 'absent' | 'early_leave'
+  status: 'present' | 'late' | 'absent' | 'early_leave' | 'leave' | 'holiday'
   lateMinutes: number; earlyLeaveMinutes: number; workMinutes: number
+  // دقائق معذورة بإذن معتمد — لا تُخصم
+  excusedMinutes: number
 }
 export interface ApiLeave {
   id: number; requestId?: number; employeeId: number; leaveType: string

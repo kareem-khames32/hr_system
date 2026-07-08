@@ -36,13 +36,15 @@ const formatMinutes = (mins: number): string | null => {
 const currentMonth = () => new Date().toISOString().slice(0, 7)
 
 const statusConfig: Record<
-  ApiAttendanceDay['status'],
+  string,
   { label: string; className: string; icon: typeof CheckCircle }
 > = {
   present: { label: 'حاضر', className: 'badge-success', icon: CheckCircle },
   late: { label: 'متأخر', className: 'badge-warning', icon: AlertTriangle },
   absent: { label: 'غائب', className: 'badge-danger', icon: XCircle },
   early_leave: { label: 'خروج مبكر', className: 'bg-orange-50 text-orange-600', icon: Clock },
+  leave: { label: 'في إجازة', className: 'bg-indigo-50 text-indigo-600', icon: Calendar },
+  holiday: { label: 'عطلة', className: 'bg-blue-50 text-blue-600', icon: Calendar },
 }
 
 export default function MonthlySheetPage() {
@@ -193,6 +195,7 @@ export default function MonthlySheetPage() {
                       const cfg = statusConfig[row.status] ?? statusConfig.present
                       const StatusIcon = cfg.icon
                       const lateMinutes = Number(row.lateMinutes)
+                      const excusedMinutes = Number((row as any).excusedMinutes ?? 0)
                       return (
                         <tr key={row.id} className="table-row">
                           <td className="table-cell font-medium text-gray-700">
@@ -228,6 +231,11 @@ export default function MonthlySheetPage() {
                               </span>
                             ) : (
                               <span className="text-gray-300">—</span>
+                            )}
+                            {excusedMinutes > 0 && (
+                              <p className="text-xs text-success-600 mt-1 font-medium">
+                                معذور بإذن: {excusedMinutes} د
+                              </p>
                             )}
                           </td>
                           <td className="table-cell text-center">

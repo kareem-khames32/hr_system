@@ -129,6 +129,7 @@ export const requestsCatalog: RequestTypeDef[] = [
   { code: 'CONTRACT_TYPE_CHANGE', nameAr: 'تغيير نوع العقد', category: 'employment_status', submitter: ['E', 'HR'], requiredAttachments: null, approvalChain: 'مدير → HR', destination: 'سجل العقود', destinationHandler: 'contracts_register', phase: 'P3' },
   { code: 'SECONDMENT', nameAr: 'إعارة/انتداب لجهة أخرى', category: 'employment_status', submitter: ['HR'], requiredAttachments: null, approvalChain: 'HR → تنفيذي', destination: 'سجل الإسناد', destinationHandler: 'assignments_register', phase: 'P3' },
   { code: 'RETIREMENT', nameAr: 'تقاعد', category: 'employment_status', submitter: ['E', 'HR'], requiredAttachments: null, approvalChain: 'HR', destination: 'تحديث الحالة', destinationHandler: 'employee_status', phase: 'P3' },
+  { code: 'RESIGNATION', nameAr: 'استقالة', category: 'employment_status', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير → HR → تنفيذي', destination: 'تحديث الحالة إلى فترة إشعار + السجل الوظيفي', destinationHandler: 'employee_status', phase: 'P1' },
 
   // ===== الفئة 5: البيانات الشخصية =====
   { code: 'PERSONAL_DATA_UPDATE', nameAr: 'تحديث بيانات شخصية', category: 'personal_data', submitter: ['E'], requiredAttachments: null, approvalChain: 'HR (تحقق)', destination: 'سجل الموظف', destinationHandler: 'employee_record', phase: 'P1' },

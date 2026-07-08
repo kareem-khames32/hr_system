@@ -38,7 +38,23 @@ import {
   fetchDepartments,
   fetchTeams,
   fetchEmployees,
+  type ApiEmployee,
 } from '@/lib/api'
+import { useCurrency, loadCurrency } from '@/lib/currency'
+
+// الحقول الشخصية والمالية الجديدة المدعومة في الباك إند (ليست بعد ضمن ApiEmployee)
+type EmployeeExtras = {
+  birthDate?: string
+  gender?: string
+  maritalStatus?: string
+  nationality?: string
+  address?: string
+  emergencyContactName?: string
+  emergencyContactPhone?: string
+  housingAllowance?: number
+  transportAllowance?: number
+  otherAllowance?: number
+}
 
 // نموذج العرض — يُملأ من الباك إند، والحقول غير المدعومة تظهر «—»
 interface EmployeeVM {
@@ -75,6 +91,9 @@ interface EmployeeVM {
   basicSalary: number
   housingAllowance: number
   transportAllowance: number
+  otherAllowance: number
+  emergencyContactName: string
+  emergencyContactPhone: string
   totalSalary: number
   payMethod: string
   bankName: string
@@ -176,6 +195,18 @@ const PAY_METHOD_AR: Record<string, string> = {
   visa: 'فيزا',
 }
 
+const GENDER_AR: Record<string, string> = {
+  male: 'ذكر',
+  female: 'أنثى',
+}
+
+const MARITAL_AR: Record<string, string> = {
+  single: 'أعزب',
+  married: 'متزوج',
+  divorced: 'مطلق',
+  widowed: 'أرمل',
+}
+
 const statusBadge = (status: string) => {
   switch (status) {
     case 'active':
@@ -214,7 +245,8 @@ const tenureText = (joinDate?: string | null) => {
 // السجل الوظيفي — تحويل مداخل salary:/team:/title:/iban: إلى عربية مقروءة
 const parseHistoryEntry = (
   h: { oldStatus?: string; newStatus: string; reason?: string; changedAt: string; requestId?: number },
-  teamNameById: Map<number, string>
+  teamNameById: Map<number, string>,
+  currency: string
 ): HistoryEventView => {
   const split = (v: string): [string | null, string] => {
     const i = v.indexOf(':')
@@ -232,8 +264,8 @@ const parseHistoryEntry = (
       return {
         ...base,
         title: 'تغيير راتب',
-        from: `الراتب: ${Number(fromVal || 0).toLocaleString()} ر.س`,
-        to: `${Number(toVal || 0).toLocaleString()} ر.س`,
+        from: `الراتب: ${Number(fromVal || 0).toLocaleString()} ${currency}`,
+        to: `${Number(toVal || 0).toLocaleString()} ${currency}`,
         color: 'bg-success-100 text-success-600',
       }
     case 'team':
@@ -338,7 +370,7 @@ const documentTemplates = [
 ]
 
 // Sample contract with employee data filled
-const generateDocument = (templateId: string, emp: EmployeeVM) => {
+const generateDocument = (templateId: string, emp: EmployeeVM, currency: string) => {
   const templates: Record<string, string> = {
     '1': `بسم الله الرحمن الرحيم
 
@@ -367,10 +399,11 @@ const generateDocument = (templateId: string, emp: EmployeeVM) => {
 يعمل الطرف الثاني لدى الطرف الأول بمسمى ${emp.jobTitle} في قسم ${emp.department}.
 
 المادة الثالثة: الأجر
-يتقاضى الطرف الثاني راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ريال موزعاً كالتالي:
-- الراتب الأساسي: ${emp.basicSalary.toLocaleString()} ريال
-- بدل السكن: ${emp.housingAllowance.toLocaleString()} ريال
-- بدل النقل: ${emp.transportAllowance.toLocaleString()} ريال
+يتقاضى الطرف الثاني راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ${currency} موزعاً كالتالي:
+- الراتب الأساسي: ${emp.basicSalary.toLocaleString()} ${currency}
+- بدل السكن: ${emp.housingAllowance.toLocaleString()} ${currency}
+- بدل النقل: ${emp.transportAllowance.toLocaleString()} ${currency}
+- بدلات أخرى: ${emp.otherAllowance.toLocaleString()} ${currency}
 
 المادة الرابعة: ساعات العمل
 ساعات العمل 8 ساعات يومياً حسب نظام العمل السعودي.
@@ -396,11 +429,12 @@ const generateDocument = (templateId: string, emp: EmployeeVM) => {
 
 تشهد شركة التقنية المتقدمة بأن السيد/ة ${emp.name} حامل الهوية رقم ${emp.nationalId} يعمل لديها بمسمى ${emp.jobTitle} في قسم ${emp.department} منذ تاريخ ${emp.joinDate}.
 
-ويتقاضى راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ريال سعودي فقط لا غير، موزعاً كالتالي:
+ويتقاضى راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ${currency} فقط لا غير، موزعاً كالتالي:
 
-- الراتب الأساسي: ${emp.basicSalary.toLocaleString()} ريال
-- بدل السكن: ${emp.housingAllowance.toLocaleString()} ريال
-- بدل المواصلات: ${emp.transportAllowance.toLocaleString()} ريال
+- الراتب الأساسي: ${emp.basicSalary.toLocaleString()} ${currency}
+- بدل السكن: ${emp.housingAllowance.toLocaleString()} ${currency}
+- بدل المواصلات: ${emp.transportAllowance.toLocaleString()} ${currency}
+- بدلات أخرى: ${emp.otherAllowance.toLocaleString()} ${currency}
 
 أُعطي هذا الخطاب بناءً على طلبه دون أي مسؤولية على الشركة.
 
@@ -435,7 +469,7 @@ _______________
 
 نفيدكم بأن السيد/ة ${emp.name} حامل الهوية رقم ${emp.nationalId} يعمل لدى شركة التقنية المتقدمة بمسمى ${emp.jobTitle} منذ تاريخ ${emp.joinDate}.
 
-ويتقاضى راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ريال سعودي يُحوّل على حسابه البنكي رقم ${emp.bankAccount}.
+ويتقاضى راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ${currency} يُحوّل على حسابه البنكي رقم ${emp.bankAccount}.
 
 هذا الخطاب صادر بناءً على طلب الموظف.
 
@@ -458,7 +492,7 @@ _______________
 
 يعمل لدى شركة التقنية المتقدمة بمسمى ${emp.jobTitle} منذ تاريخ ${emp.joinDate}.
 
-ويتقاضى راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ريال سعودي.
+ويتقاضى راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ${currency}.
 
 نتعهد بعودته إلى عمله بعد انتهاء إجازته.
 
@@ -511,6 +545,7 @@ export default function EmployeeProfilePage({
   params: { id: string }
 }) {
   const [activeTab, setActiveTab] = useState('personal')
+  const currency = useCurrency()
   const [showActionsMenu, setShowActionsMenu] = useState(false)
   const [showDocumentModal, setShowDocumentModal] = useState(false)
   const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null)
@@ -532,15 +567,16 @@ export default function EmployeeProfilePage({
       setLoading(true)
       setError('')
       try {
-        const [profile, branches, departments, teams, allEmployees] =
+        const [profile, branches, departments, teams, allEmployees, currencyNow] =
           await Promise.all([
             fetchEmployeeProfile(Number(params.id)),
             fetchBranches(),
             fetchDepartments(),
             fetchTeams(),
             fetchEmployees(),
+            loadCurrency(),
           ])
-        const e = profile.employee
+        const e = profile.employee as ApiEmployee & EmployeeExtras
         const branchById = new Map(branches.map((b) => [b.id, b.name]))
         const deptById = new Map(departments.map((d) => [d.id, d.name]))
         const teamById = new Map(teams.map((t) => [t.id, t.name]))
@@ -601,23 +637,32 @@ export default function EmployeeProfilePage({
           branch: branchById.get(e.branchId) ?? '—',
           manager: manager?.fullName ?? '—',
           managerTitle: manager?.jobTitle ?? '',
-          nationality: '—',
+          nationality: e.nationality || '—',
           nationalId: e.nationalId ?? '—',
           passportNo: '—',
           passportExpiry: '—',
-          birthDate: '—',
+          birthDate: fmtDate(e.birthDate),
           birthPlace: '—',
-          gender: '—',
-          maritalStatus: '—',
+          gender: e.gender ? GENDER_AR[e.gender] ?? e.gender : '—',
+          maritalStatus: e.maritalStatus
+            ? MARITAL_AR[e.maritalStatus] ?? e.maritalStatus
+            : '—',
           children: '—',
-          address: '—',
+          address: e.address || '—',
           contractType: '—',
           contractStart: fmtDate(e.joinDate),
           employmentType: '—',
           basicSalary: Number(e.basicSalary ?? 0),
-          housingAllowance: 0,
-          transportAllowance: 0,
-          totalSalary: Number(e.basicSalary ?? 0),
+          housingAllowance: Number(e.housingAllowance ?? 0),
+          transportAllowance: Number(e.transportAllowance ?? 0),
+          otherAllowance: Number(e.otherAllowance ?? 0),
+          emergencyContactName: e.emergencyContactName || '—',
+          emergencyContactPhone: e.emergencyContactPhone || '—',
+          totalSalary:
+            Number(e.basicSalary ?? 0) +
+            Number(e.housingAllowance ?? 0) +
+            Number(e.transportAllowance ?? 0) +
+            Number(e.otherAllowance ?? 0),
           payMethod: PAY_METHOD_AR[e.payMethod] ?? e.payMethod ?? '—',
           bankName: e.bankName ?? '—',
           bankAccount: e.iban ?? '—',
@@ -655,7 +700,9 @@ export default function EmployeeProfilePage({
         )
 
         setHistoryEvents(
-          (profile.history ?? []).map((h: any) => parseHistoryEntry(h, teamById))
+          (profile.history ?? []).map((h: any) =>
+            parseHistoryEntry(h, teamById, currencyNow)
+          )
         )
 
         setDocs(
@@ -682,7 +729,7 @@ export default function EmployeeProfilePage({
   const handleGenerateDocument = (templateId: string) => {
     if (!employee) return
     setSelectedTemplate(templateId)
-    const content = generateDocument(templateId, employee)
+    const content = generateDocument(templateId, employee, currency)
     setGeneratedDocument(content)
     setShowPreview(true)
   }
@@ -1004,6 +1051,31 @@ export default function EmployeeProfilePage({
                   </div>
                 </div>
               </div>
+
+              {/* Emergency Contact */}
+              <div className="pt-6 border-t border-gray-100">
+                <h3 className="text-md font-bold text-gray-700 mb-4">جهة اتصال للطوارئ</h3>
+                <div className="grid grid-cols-2 gap-8">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-primary-50 rounded-xl flex items-center justify-center">
+                      <User size={18} className="text-primary-500" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">الاسم</p>
+                      <p className="font-medium text-gray-800">{employee.emergencyContactName}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-primary-50 rounded-xl flex items-center justify-center">
+                      <Phone size={18} className="text-primary-500" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">رقم الجوال</p>
+                      <p className="font-medium text-gray-800" dir="ltr">{employee.emergencyContactPhone}</p>
+                    </div>
+                  </div>
+                </div>
+              </div>
             </div>
           )}
 
@@ -1085,22 +1157,26 @@ export default function EmployeeProfilePage({
               </h2>
 
               {/* Salary Breakdown */}
-              <div className="grid grid-cols-4 gap-4">
+              <div className="grid grid-cols-5 gap-4">
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">الراتب الأساسي</p>
-                  <p className="font-bold text-gray-800 text-xl mt-1">{employee.basicSalary.toLocaleString()} ر.س</p>
+                  <p className="font-bold text-gray-800 text-xl mt-1">{Number(employee.basicSalary).toLocaleString()} {currency}</p>
                 </div>
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">بدل السكن</p>
-                  <p className="font-bold text-gray-800 text-xl mt-1">—</p>
+                  <p className="font-bold text-gray-800 text-xl mt-1">{Number(employee.housingAllowance).toLocaleString()} {currency}</p>
                 </div>
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">بدل المواصلات</p>
-                  <p className="font-bold text-gray-800 text-xl mt-1">—</p>
+                  <p className="font-bold text-gray-800 text-xl mt-1">{Number(employee.transportAllowance).toLocaleString()} {currency}</p>
+                </div>
+                <div className="p-4 bg-gray-50 rounded-xl">
+                  <p className="text-sm text-gray-500">بدلات أخرى</p>
+                  <p className="font-bold text-gray-800 text-xl mt-1">{Number(employee.otherAllowance).toLocaleString()} {currency}</p>
                 </div>
                 <div className="p-4 bg-primary-50 rounded-xl">
                   <p className="text-sm text-primary-600">إجمالي الراتب</p>
-                  <p className="font-bold text-primary-600 text-xl mt-1">{employee.totalSalary.toLocaleString()} ر.س</p>
+                  <p className="font-bold text-primary-600 text-xl mt-1">{Number(employee.totalSalary).toLocaleString()} {currency}</p>
                 </div>
               </div>
 

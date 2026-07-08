@@ -20,6 +20,7 @@ import {
   type ApiEmployee,
   type ApiRequest,
 } from '@/lib/api'
+import { useCurrency } from '@/lib/currency'
 
 const runStatusLabels: Record<string, string> = {
   CALCULATED: 'محسوب',
@@ -52,6 +53,7 @@ const parsePayload = (raw?: string): { reason?: string } => {
 }
 
 export default function DeductionsPage() {
+  const currency = useCurrency()
   const [runs, setRuns] = useState<ApiPayrollRun[]>([])
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null)
   const [run, setRun] = useState<ApiPayrollRun | null>(null)
@@ -285,20 +287,20 @@ export default function DeductionsPage() {
               <div className="space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-danger-100">خصم التأخير:</span>
-                  <span className="font-bold">{totals.lateness.toLocaleString()} ر.س</span>
+                  <span className="font-bold">{totals.lateness.toLocaleString()} {currency}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-danger-100">إجازات بدون راتب:</span>
-                  <span className="font-bold">{totals.unpaidLeave.toLocaleString()} ر.س</span>
+                  <span className="font-bold">{totals.unpaidLeave.toLocaleString()} {currency}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-danger-100">أقساط السلف:</span>
-                  <span className="font-bold">{totals.loans.toLocaleString()} ر.س</span>
+                  <span className="font-bold">{totals.loans.toLocaleString()} {currency}</span>
                 </div>
                 <div className="border-t border-white/20 pt-3 mt-3">
                   <div className="flex items-center justify-between">
                     <span className="text-danger-100">الإجمالي:</span>
-                    <span className="font-bold text-2xl">{grandTotal.toLocaleString()} ر.س</span>
+                    <span className="font-bold text-2xl">{grandTotal.toLocaleString()} {currency}</span>
                   </div>
                 </div>
               </div>

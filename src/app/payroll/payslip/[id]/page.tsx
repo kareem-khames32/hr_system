@@ -20,6 +20,10 @@ import {
   type ApiEmployee,
   type ApiBranch,
 } from '@/lib/api'
+import { useCurrency } from '@/lib/currency'
+
+// حقل البدلات الجديد في بند المسير (ليس بعد ضمن ApiPayrollItem)
+type PayrollItemWithAllowances = ApiPayrollItem & { allowances?: number }
 
 const runStatusLabels: Record<string, string> = {
   CALCULATED: 'محسوب',
@@ -33,7 +37,7 @@ const payMethodLabels: Record<string, string> = {
   cheque: 'شيك',
 }
 
-function numberToArabicWords(num: number): string {
+function numberToArabicWords(num: number, currency: string): string {
   // Simplified version - in real app would be more comprehensive
   const ones = ['', 'واحد', 'اثنان', 'ثلاثة', 'أربعة', 'خمسة', 'ستة', 'سبعة', 'ثمانية', 'تسعة']
   const tens = ['', 'عشرة', 'عشرون', 'ثلاثون', 'أربعون', 'خمسون', 'ستون', 'سبعون', 'ثمانون', 'تسعون']
@@ -71,16 +75,17 @@ function numberToArabicWords(num: number): string {
     }
   }
 
-  result += ' ريال'
+  result += ` ${currency}`
 
   if (decPart > 0) {
-    result += ` و${decPart} هللة`
+    result += ` و${decPart} من المئة`
   }
 
-  return result + ' سعودي فقط لا غير'
+  return result + ' فقط لا غير'
 }
 
 export default function PayslipPage({ params }: { params: { id: string } }) {
+  const currency = useCurrency()
   const [item, setItem] = useState<ApiPayrollItem | null>(null)
   const [run, setRun] = useState<ApiPayrollRun | null>(null)
   const [employee, setEmployee] = useState<ApiEmployee | null>(null)
@@ -104,6 +109,11 @@ export default function PayslipPage({ params }: { params: { id: string } }) {
   const earnings = item
     ? [
         { name: 'الراتب الأساسي', nameEn: 'Basic Salary', amount: Number(item.basicSalary) },
+        {
+          name: 'البدلات',
+          nameEn: 'Allowances',
+          amount: Number((item as PayrollItemWithAllowances).allowances ?? 0),
+        },
         {
           name: 'العمل الإضافي',
           nameEn: `Overtime (${Number(item.overtimeHours)} h)`,
@@ -321,8 +331,8 @@ export default function PayslipPage({ params }: { params: { id: string } }) {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-primary-100">صافي الراتب (Net Salary)</p>
-                <p className="text-4xl font-bold mt-1">{netSalary.toLocaleString()} ر.س</p>
-                <p className="text-primary-200 text-sm mt-2">{numberToArabicWords(netSalary)}</p>
+                <p className="text-4xl font-bold mt-1">{netSalary.toLocaleString()} {currency}</p>
+                <p className="text-primary-200 text-sm mt-2">{numberToArabicWords(netSalary, currency)}</p>
               </div>
               <div className="w-20 h-20 bg-white/20 rounded-2xl flex items-center justify-center">
                 <CreditCard size={40} />

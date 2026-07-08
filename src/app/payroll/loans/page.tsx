@@ -20,6 +20,7 @@ import {
   X,
 } from 'lucide-react'
 import { fetchLoans, createRequest } from '@/lib/api'
+import { useCurrency } from '@/lib/currency'
 
 interface LoanInstallment {
   id: number
@@ -77,6 +78,7 @@ const getStatusBadge = (status: string) => {
 }
 
 export default function LoansPage() {
+  const currency = useCurrency()
   const [activeTab, setActiveTab] = useState<'all' | 'open' | 'settled'>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [showNewLoanModal, setShowNewLoanModal] = useState(false)
@@ -484,7 +486,7 @@ export default function LoansPage() {
 
             <div className="space-y-4">
               <div>
-                <label className="label">مبلغ السلفة (ر.س) *</label>
+                <label className="label">مبلغ السلفة ({currency}) *</label>
                 <input
                   type="number"
                   value={loanAmount}

@@ -19,6 +19,7 @@ import {
   type ApiPayrollItem,
   type ApiEmployee,
 } from '@/lib/api'
+import { useCurrency } from '@/lib/currency'
 
 const runStatusLabels: Record<string, string> = {
   CALCULATED: 'محسوب',
@@ -39,6 +40,7 @@ const payMethodLabels: Record<string, string> = {
 }
 
 export default function PayslipsListPage() {
+  const currency = useCurrency()
   const [searchTerm, setSearchTerm] = useState('')
   const [runs, setRuns] = useState<ApiPayrollRun[]>([])
   const [selectedRunId, setSelectedRunId] = useState<number | null>(null)
@@ -126,7 +128,7 @@ export default function PayslipsListPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-primary-100">إجمالي صافي الرواتب</p>
-              <p className="text-4xl font-bold mt-1">{totalNet.toLocaleString()} ر.س</p>
+              <p className="text-4xl font-bold mt-1">{totalNet.toLocaleString()} {currency}</p>
               <p className="text-primary-100 mt-2">
                 {filteredItems.length} قسيمة راتب
                 {run ? ` — فترة ${run.period}` : ''}

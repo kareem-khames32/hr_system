@@ -27,10 +27,12 @@ import {
 } from 'lucide-react'
 import {
   ApiBranch,
+  ApiEmployee,
   ChainStepInput,
   createApprovalChain,
   fetchApprovalChains,
   fetchBranches,
+  fetchEmployees,
   replaceChainSteps,
   updateApprovalChain,
 } from '@/lib/api'
@@ -48,6 +50,7 @@ interface ApiChainStep {
   slaDays: number | null
   escalateTo: string | null
   canDelegate: boolean
+  specificEmployeeId?: number | null
 }
 
 interface ApiChain {
@@ -62,23 +65,34 @@ interface ApiChain {
 // أدوار المعتمدين الحقيقية في المحرك
 const roleLabels: Record<string, string> = {
   direct_manager_of_requester: 'المدير المباشر',
+  department_manager_of_requester: 'مدير القسم',
+  branch_manager_of_requester: 'مدير الفرع',
   receiving_team_manager: 'المدير المستقبِل',
   hr: 'الموارد البشرية',
   finance: 'المالية',
-  executive: 'التنفيذي',
   custody_officer: 'أمين العهدة',
   it: 'تقنية المعلومات',
+  executive: 'التنفيذي',
+  specific_employee: 'موظف بعينه',
 }
 
 const roleDescriptions: Record<string, string> = {
   direct_manager_of_requester: 'مدير مقدم الطلب المباشر',
+  department_manager_of_requester: 'مدير قسم مقدم الطلب',
+  branch_manager_of_requester: 'مدير فرع مقدم الطلب',
   receiving_team_manager: 'مدير الفريق المستقبِل (النقل)',
   hr: 'إدارة الموارد البشرية',
   finance: 'الإدارة المالية',
-  executive: 'الإدارة التنفيذية',
   custody_officer: 'المسؤول عن العُهد',
   it: 'قسم تقنية المعلومات',
+  executive: 'الإدارة التنفيذية',
+  specific_employee: 'موظف محدد بالاسم يعتمد الخطوة',
 }
+
+// أدوار التصعيد — كل الأدوار عدا «موظف بعينه»
+const escalationRoles = Object.entries(roleLabels).filter(
+  ([id]) => id !== 'specific_employee'
+)
 
 const thresholdFieldLabels: Record<string, string> = {
   amount: 'المبلغ',
@@ -120,6 +134,7 @@ const suggestCode = (nameAr: string): string =>
 type StepForm = {
   key: string
   approverRole: string
+  specificEmployeeId: string
   slaDays: string
   escalateTo: string
   thresholdField: string
@@ -130,6 +145,7 @@ type StepForm = {
 const emptyStep = (): StepForm => ({
   key: `s-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
   approverRole: 'direct_manager_of_requester',
+  specificEmployeeId: '',
   slaDays: '',
   escalateTo: '',
   thresholdField: '',
@@ -140,6 +156,7 @@ const emptyStep = (): StepForm => ({
 export default function ApprovalsPage() {
   const [chains, setChains] = useState<ApiChain[]>([])
   const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -173,9 +190,14 @@ export default function ApprovalsPage() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [ch, brs] = await Promise.all([fetchApprovalChains(), fetchBranches()])
+        const [ch, brs, emps] = await Promise.all([
+          fetchApprovalChains(),
+          fetchBranches(),
+          fetchEmployees(),
+        ])
         setChains(ch as ApiChain[])
         setBranches(brs)
+        setEmployees(emps)
         setError(null)
       } catch (err: any) {
         setError(err.message)
@@ -190,6 +212,17 @@ export default function ApprovalsPage() {
     branchId === null
       ? 'كل الفروع'
       : branches.find((b) => b.id === branchId)?.name ?? `فرع #${branchId}`
+
+  const employeeNameOf = (employeeId: number | null | undefined) =>
+    employeeId == null
+      ? ''
+      : employees.find((e) => e.id === employeeId)?.fullName ?? `موظف #${employeeId}`
+
+  // تسمية الخطوة — خطوة «موظف بعينه» تعرض اسم الموظف المحدد
+  const stepRoleLabel = (step: ApiChainStep) =>
+    step.approverRole === 'specific_employee' && step.specificEmployeeId != null
+      ? `موظف بعينه: ${employeeNameOf(step.specificEmployeeId)}`
+      : roleLabels[step.approverRole] ?? step.approverRole
 
   const filteredChains = chains.filter((chain) => {
     const matchesSearch =
@@ -213,6 +246,8 @@ export default function ApprovalsPage() {
         steps: chain.steps.map((s) => ({
           key: `db-${s.id}`,
           approverRole: s.approverRole,
+          specificEmployeeId:
+            s.specificEmployeeId != null ? String(s.specificEmployeeId) : '',
           slaDays: s.slaDays != null ? String(s.slaDays) : '',
           escalateTo: s.escalateTo ?? '',
           thresholdField: s.thresholdField ?? '',
@@ -278,6 +313,10 @@ export default function ApprovalsPage() {
       return 'كود الدورة: أحرف إنجليزية وأرقام و _ أو - فقط (من 3 إلى 50 خانة)'
     }
     for (const s of formData.steps) {
+      if (s.approverRole === 'specific_employee' && s.specificEmployeeId === '') {
+        // نفس رسالة الباك إند حرفياً
+        return 'خطوة «موظف بعينه» تحتاج تحديد الموظف'
+      }
       const parts = [
         s.thresholdField.trim() !== '',
         s.thresholdOp !== '',
@@ -299,18 +338,25 @@ export default function ApprovalsPage() {
   }
 
   const buildSteps = (): ChainStepInput[] =>
-    formData.steps.map((s) => ({
-      approverRole: s.approverRole,
-      ...(s.slaDays !== '' ? { slaDays: Number(s.slaDays) } : {}),
-      ...(s.escalateTo ? { escalateTo: s.escalateTo } : {}),
-      ...(s.thresholdField.trim()
-        ? {
-            thresholdField: s.thresholdField.trim(),
-            thresholdOp: s.thresholdOp as ChainStepInput['thresholdOp'],
-            thresholdValue: Number(s.thresholdValue),
-          }
-        : {}),
-    }))
+    formData.steps.map(
+      (s) =>
+        ({
+          approverRole: s.approverRole,
+          // «موظف بعينه» — المفتاح مقبول في الباك وإن لم يكن مُعرَّفاً في ChainStepInput
+          ...(s.approverRole === 'specific_employee' && s.specificEmployeeId !== ''
+            ? { specificEmployeeId: Number(s.specificEmployeeId) }
+            : {}),
+          ...(s.slaDays !== '' ? { slaDays: Number(s.slaDays) } : {}),
+          ...(s.escalateTo ? { escalateTo: s.escalateTo } : {}),
+          ...(s.thresholdField.trim()
+            ? {
+                thresholdField: s.thresholdField.trim(),
+                thresholdOp: s.thresholdOp as ChainStepInput['thresholdOp'],
+                thresholdValue: Number(s.thresholdValue),
+              }
+            : {}),
+        }) as any
+    )
 
   const handleSave = async () => {
     const problem = validateForm()
@@ -651,7 +697,7 @@ export default function ApprovalsPage() {
                                   {step.stepOrder}
                                 </span>
                                 <span className="text-sm text-gray-700">
-                                  {roleLabels[step.approverRole] ?? step.approverRole}
+                                  {stepRoleLabel(step)}
                                 </span>
                                 {step.canDelegate && (
                                   <Zap size={12} className="text-warning-500" />
@@ -698,10 +744,12 @@ export default function ApprovalsPage() {
                               </span>
                               <div>
                                 <p className="font-medium text-gray-800">
-                                  {roleLabels[step.approverRole] ?? step.approverRole}
+                                  {stepRoleLabel(step)}
                                 </p>
                                 <p className="text-xs text-gray-500">
-                                  {roleDescriptions[step.approverRole] ?? ''}
+                                  {step.approverRole === 'specific_employee'
+                                    ? employeeNameOf(step.specificEmployeeId)
+                                    : roleDescriptions[step.approverRole] ?? ''}
                                 </p>
                               </div>
                             </div>
@@ -955,7 +1003,7 @@ export default function ApprovalsPage() {
                               className="input w-full text-sm"
                             >
                               <option value="">بدون تصعيد</option>
-                              {Object.entries(roleLabels).map(([id, name]) => (
+                              {escalationRoles.map(([id, name]) => (
                                 <option key={id} value={id}>
                                   {name}
                                 </option>
@@ -963,6 +1011,32 @@ export default function ApprovalsPage() {
                             </select>
                           </div>
                         </div>
+
+                        {/* اختيار الموظف — لخطوة «موظف بعينه» فقط */}
+                        {step.approverRole === 'specific_employee' && (
+                          <div>
+                            <label className="text-xs text-gray-500 mb-1 block">
+                              الموظف المعتمد *
+                            </label>
+                            <select
+                              value={step.specificEmployeeId}
+                              onChange={(e) =>
+                                updateStep(index, 'specificEmployeeId', e.target.value)
+                              }
+                              className="input w-full text-sm"
+                            >
+                              <option value="">— اختر الموظف —</option>
+                              {employees.map((emp) => (
+                                <option key={emp.id} value={emp.id}>
+                                  {emp.fullName}
+                                </option>
+                              ))}
+                            </select>
+                            <p className="text-xs text-gray-400 mt-1">
+                              هذا الموظف بعينه هو من يعتمد الخطوة أياً كان مقدم الطلب
+                            </p>
+                          </div>
+                        )}
 
                         {/* شرط العتبة — الثلاثة معاً أو لا شيء */}
                         <div>

@@ -40,11 +40,12 @@ interface AttendanceRecord {
   checkIn: string | null
   checkOut: string | null
   workHours: string | null
-  status: ApiAttendanceDay['status']
+  status: string
   shiftName: string
   shiftStart: string
   shiftEnd: string
   lateMinutes: number
+  excusedMinutes: number
   location: string
 }
 
@@ -89,6 +90,20 @@ const getStatusBadge = (status: AttendanceRecord['status']) => {
         <span className="badge bg-orange-50 text-orange-600 flex items-center gap-1">
           <Timer size={12} />
           خروج مبكر
+        </span>
+      )
+    case 'leave':
+      return (
+        <span className="badge bg-indigo-50 text-indigo-600 flex items-center gap-1">
+          <Calendar size={12} />
+          في إجازة
+        </span>
+      )
+    case 'holiday':
+      return (
+        <span className="badge bg-blue-50 text-blue-600 flex items-center gap-1">
+          <Calendar size={12} />
+          عطلة
         </span>
       )
   }
@@ -154,6 +169,7 @@ export default function AttendancePage() {
         shiftStart: d.shiftStart,
         shiftEnd: d.shiftEnd,
         lateMinutes: Number(d.lateMinutes),
+        excusedMinutes: Number((d as any).excusedMinutes ?? 0),
         location: branch?.name ?? '-',
       }
     })
@@ -321,6 +337,8 @@ export default function AttendancePage() {
               <option value="absent">غائب</option>
               <option value="late">متأخر</option>
               <option value="early_leave">خروج مبكر</option>
+              <option value="leave">في إجازة</option>
+              <option value="holiday">عطلة</option>
             </select>
           </div>
         </div>
@@ -410,6 +428,11 @@ export default function AttendancePage() {
                         {record.lateMinutes > 0 && (
                           <p className="text-xs text-warning-600 mt-1 font-medium">
                             متأخر {record.lateMinutes} دقيقة عن {record.shiftName}
+                          </p>
+                        )}
+                        {record.excusedMinutes > 0 && (
+                          <p className="text-xs text-success-600 mt-1 font-medium">
+                            معذور بإذن: {record.excusedMinutes} د
                           </p>
                         )}
                       </td>

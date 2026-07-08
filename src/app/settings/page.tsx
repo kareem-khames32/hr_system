@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
 import { fetchConfig, updateConfig } from '@/lib/api'
+import { invalidateCurrency } from '@/lib/currency'
 import {
   Building2,
   Globe,
@@ -79,6 +80,7 @@ const enginePanels: Record<string, string[]> = {
     'payroll.cycle_start_day',
     'loan.finance_approval_threshold',
     'salary_increase.executive_threshold_pct',
+    'system.currency',
   ],
 }
 
@@ -93,6 +95,7 @@ const engineLabels: Record<string, string> = {
   'payroll.cycle_start_day': 'يوم بداية دورة الرواتب',
   'loan.finance_approval_threshold': 'عتبة موافقة المالية على السلف',
   'salary_increase.executive_threshold_pct': 'عتبة موافقة التنفيذي على الزيادة (%)',
+  'system.currency': 'عملة النظام',
 }
 
 export default function SettingsPage() {
@@ -140,6 +143,8 @@ export default function SettingsPage() {
         ...prev,
         ...Object.fromEntries(enginePanels[panel].map((k) => [k, configValues[k]])),
       }))
+      // بعد حفظ عملة النظام — مسح كاش العملة لتنعكس فوراً على كل الشاشات
+      if (enginePanels[panel].includes('system.currency')) invalidateCurrency()
       setPanelSaved(panel)
     } catch (err: any) {
       setConfigError(err.message)
@@ -150,6 +155,18 @@ export default function SettingsPage() {
 
   const renderEngineField = (key: string) => {
     const value = configValues[key] ?? ''
+    if (key === 'system.currency') {
+      return (
+        <select
+          className="input"
+          value={value || 'SAR'}
+          onChange={(e) => setConfigValue(key, e.target.value)}
+        >
+          <option value="SAR">ريال سعودي (ر.س)</option>
+          <option value="EGP">جنيه مصري (ج.م)</option>
+        </select>
+      )
+    }
     if (key === 'overtime.biometric_requires_confirmation') {
       return (
         <select

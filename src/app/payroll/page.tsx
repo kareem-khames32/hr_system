@@ -37,6 +37,10 @@ import {
   Banknote,
 } from 'lucide-react'
 import Link from 'next/link'
+import { useCurrency } from '@/lib/currency'
+
+// حقل البدلات الجديد في بند المسير (ليس بعد ضمن ApiPayrollItem)
+type PayrollItemWithAllowances = ApiPayrollItem & { allowances?: number }
 
 const payMethodLabels: Record<string, string> = {
   transfer: 'تحويل بنكي',
@@ -62,8 +66,11 @@ const stageOfStatus: Record<ApiPayrollRun['status'], number> = {
 // القيم العشرية قد تصل نصوصاً من قاعدة البيانات
 const n = (v: unknown): number => Number(v ?? 0) || 0
 const fmtDate = (s?: string) => (s ? s.slice(0, 10) : '')
+const allowancesOf = (item: ApiPayrollItem) =>
+  n((item as PayrollItemWithAllowances).allowances)
 
 export default function PayrollPage() {
+  const currency = useCurrency()
   const [runs, setRuns] = useState<ApiPayrollRun[]>([])
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
@@ -188,7 +195,7 @@ export default function PayrollPage() {
   // إجماليات المسير من البنود الفعلية
   const totals = filteredItems.reduce(
     (acc, item) => {
-      const gross = n(item.basicSalary) + n(item.overtimeAmount)
+      const gross = n(item.basicSalary) + allowancesOf(item) + n(item.overtimeAmount)
       const deductions =
         n(item.latenessDeduction) + n(item.unpaidLeaveDeduction) + n(item.loanInstallments)
       return {
@@ -396,7 +403,7 @@ export default function PayrollPage() {
               <div>
                 <p className="text-primary-100 text-sm">إجمالي الاستحقاقات</p>
                 <p className="text-3xl font-bold mt-1">{totals.totalEarnings.toLocaleString()}</p>
-                <p className="text-primary-200 text-sm mt-1">ريال سعودي</p>
+                <p className="text-primary-200 text-sm mt-1">{currency}</p>
               </div>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
                 <TrendingUp size={28} />
@@ -409,7 +416,7 @@ export default function PayrollPage() {
               <div>
                 <p className="text-danger-100 text-sm">إجمالي الخصومات</p>
                 <p className="text-3xl font-bold mt-1">{totals.totalDeductions.toLocaleString()}</p>
-                <p className="text-danger-200 text-sm mt-1">ريال سعودي</p>
+                <p className="text-danger-200 text-sm mt-1">{currency}</p>
               </div>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
                 <DollarSign size={28} />
@@ -422,7 +429,7 @@ export default function PayrollPage() {
               <div>
                 <p className="text-success-100 text-sm">صافي الرواتب</p>
                 <p className="text-3xl font-bold mt-1">{totals.netSalary.toLocaleString()}</p>
-                <p className="text-success-200 text-sm mt-1">ريال سعودي</p>
+                <p className="text-success-200 text-sm mt-1">{currency}</p>
               </div>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
                 <Banknote size={28} />
@@ -536,14 +543,14 @@ export default function PayrollPage() {
                   {branches.find((b) => b.id === runDetail.branchId)?.costCenter ?? '—'}
                 </p>
                 <p className="text-sm text-teal-700 mt-1">
-                  {n(runDetail.totalNet).toLocaleString()} ر.س إجمالي
+                  {n(runDetail.totalNet).toLocaleString()} {currency} إجمالي
                 </p>
               </div>
               {Object.entries(payMethods).map(([method, data]) => (
                 <div key={method} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
                   <p className="text-xs text-gray-500">{payMethodLabels[method] ?? method}</p>
                   <p className="text-lg font-bold text-gray-800">
-                    {n(data.total).toLocaleString()} ر.س
+                    {n(data.total).toLocaleString()} {currency}
                   </p>
                   <p className="text-xs text-gray-400 mt-1">{n(data.count)} موظف</p>
                 </div>
@@ -588,6 +595,7 @@ export default function PayrollPage() {
                 <tr className="table-header">
                   <th className="text-right px-4 py-4">الموظف</th>
                   <th className="text-center px-4 py-4">الأساسي</th>
+                  <th className="text-center px-4 py-4">البدلات</th>
                   <th className="text-center px-4 py-4">العمل الإضافي</th>
                   <th className="text-center px-4 py-4 bg-success-50">الإجمالي</th>
                   <th className="text-center px-4 py-4">خصم التأخير</th>
@@ -603,7 +611,7 @@ export default function PayrollPage() {
               <tbody>
                 {filteredItems.length === 0 && (
                   <tr>
-                    <td colSpan={12} className="px-4 py-10 text-center text-sm text-gray-400">
+                    <td colSpan={13} className="px-4 py-10 text-center text-sm text-gray-400">
                       {runDetail ? 'لا توجد بنود في هذا المسير' : 'اختر مسيراً أو احسب مسيراً جديداً'}
                     </td>
                   </tr>
@@ -611,7 +619,7 @@ export default function PayrollPage() {
                 {filteredItems.map((item) => {
                   const emp = employeeOf(item.employeeId)
                   const name = emp?.fullName ?? `موظف #${item.employeeId}`
-                  const gross = n(item.basicSalary) + n(item.overtimeAmount)
+                  const gross = n(item.basicSalary) + allowancesOf(item) + n(item.overtimeAmount)
                   const totalDeductions =
                     n(item.latenessDeduction) + n(item.unpaidLeaveDeduction) + n(item.loanInstallments)
 
@@ -631,6 +639,9 @@ export default function PayrollPage() {
                       </div>
                     </td>
                     <td className="table-cell text-center font-mono">{n(item.basicSalary).toLocaleString()}</td>
+                    <td className="table-cell text-center font-mono">
+                      {allowancesOf(item) > 0 ? allowancesOf(item).toLocaleString() : '-'}
+                    </td>
                     <td className="table-cell text-center font-mono">
                       <div className="flex flex-col items-center">
                         <span className={n(item.overtimeAmount) > 0 ? 'text-success-600 font-bold' : ''}>
@@ -721,6 +732,9 @@ export default function PayrollPage() {
                   <td className="px-4 py-4 font-bold text-gray-800">الإجمالي</td>
                   <td className="px-4 py-4 text-center font-mono font-bold">
                     {filteredItems.reduce((s, r) => s + n(r.basicSalary), 0).toLocaleString()}
+                  </td>
+                  <td className="px-4 py-4 text-center font-mono font-bold">
+                    {filteredItems.reduce((s, r) => s + allowancesOf(r), 0).toLocaleString()}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold">
                     {filteredItems.reduce((s, r) => s + n(r.overtimeAmount), 0).toLocaleString()}

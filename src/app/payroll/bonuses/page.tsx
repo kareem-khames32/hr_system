@@ -18,6 +18,7 @@ import {
   type ApiRequest,
   type ApiEmployee,
 } from '@/lib/api'
+import { useCurrency } from '@/lib/currency'
 
 const bonusReasons = [
   { id: 'أداء متميز', name: 'أداء متميز', icon: '⭐' },
@@ -54,6 +55,7 @@ const parsePayload = (raw?: string): { amount?: number; reason?: string; employe
 }
 
 export default function BonusesPage() {
+  const currency = useCurrency()
   const [requests, setRequests] = useState<ApiRequest[]>([])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [loading, setLoading] = useState(true)
@@ -189,7 +191,7 @@ export default function BonusesPage() {
                 </div>
 
                 <div>
-                  <label className="label">مبلغ المكافأة (ر.س) *</label>
+                  <label className="label">مبلغ المكافأة ({currency}) *</label>
                   <input
                     type="number"
                     value={bonusAmount}
@@ -335,7 +337,7 @@ export default function BonusesPage() {
                   <div className="flex items-center justify-between">
                     <span className="text-success-100">المبلغ:</span>
                     <span className="font-bold text-2xl">
-                      {Number(bonusAmount || '0').toLocaleString()} ر.س
+                      {Number(bonusAmount || '0').toLocaleString()} {currency}
                     </span>
                   </div>
                 </div>
@@ -355,7 +357,7 @@ export default function BonusesPage() {
               <div className="space-y-3">
                 <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                   <span className="text-gray-600">مكافآت هذا الشهر</span>
-                  <span className="font-bold text-gray-800">{stats.monthTotal.toLocaleString()} ر.س</span>
+                  <span className="font-bold text-gray-800">{stats.monthTotal.toLocaleString()} {currency}</span>
                 </div>
                 <div className="flex items-center justify-between p-3 bg-gray-50 rounded-xl">
                   <span className="text-gray-600">عدد المستفيدين</span>
@@ -392,7 +394,7 @@ export default function BonusesPage() {
                       <div className="flex items-center justify-between mt-1 text-sm">
                         <span className="text-gray-500">{payload.reason ?? '—'}</span>
                         <span className="font-bold text-success-600">
-                          {Number(payload.amount ?? 0).toLocaleString()} ر.س
+                          {Number(payload.amount ?? 0).toLocaleString()} {currency}
                         </span>
                       </div>
                     </div>
