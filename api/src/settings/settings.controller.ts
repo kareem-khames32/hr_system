@@ -19,6 +19,7 @@ import {
   IsInt,
   IsOptional,
   IsString,
+  Matches,
   MaxLength,
   MinLength,
   ValidateNested,
@@ -145,6 +146,11 @@ class ChainStepDto {
   @IsIn(APPROVER_ROLES, { message: 'دور الموافقة غير صالح' })
   approverRole: string
 
+  // متوازية مع الخطوة السابقة (نفس المستوى — كلهم يعتمدون)
+  @IsOptional()
+  @IsBoolean()
+  isParallel?: boolean
+
   // إجباري فقط عند اختيار «موظف بعينه»
   @IsOptional()
   @Type(() => Number)
@@ -206,6 +212,131 @@ class UpdateChainDto {
 
   @IsOptional()
   isActive?: boolean
+
+  // نقل الدورة لفرع (أو null = عامة) — §2.2 تعديل كامل بعد الإنشاء
+  @IsOptional()
+  branchId?: number | null
+}
+
+// ===== بانِي أنواع الطلبات: نوع من الصفر بحقول مخصوصة وجمهور =====
+const FIELD_TYPES = ['text', 'number', 'date', 'select', 'file']
+const AUDIENCE_MODES = ['all', 'departments', 'roles', 'employees']
+// الوجهات المتاحة للبانِي (المنفذة فعلياً + بدون تنفيذ آلي)
+const AVAILABLE_HANDLERS: Array<{ key: string; labelAr: string }> = [
+  { key: 'none', labelAr: 'بدون تنفيذ آلي (الطلب نفسه هو السجل)' },
+  { key: 'leave_calendar_balance', labelAr: 'إجازة تُخصم من الرصيد' },
+  { key: 'leave_calendar_payroll', labelAr: 'إجازة بلا خصم رصيد' },
+  { key: 'overtime_entries', labelAr: 'قيد أوفرتايم' },
+  { key: 'attendance_corrections', labelAr: 'تصحيح بصمة' },
+  { key: 'loans_installments', labelAr: 'سلفة بجدول أقساط' },
+  { key: 'salary_update_history', labelAr: 'تحديث راتب' },
+  { key: 'transfers_effective_date', labelAr: 'نقل بتاريخ سريان' },
+  { key: 'employee_update_promotions', labelAr: 'ترقية' },
+  { key: 'employee_record', labelAr: 'تحديث بيانات الموظف' },
+  { key: 'payroll_bank_secure', labelAr: 'تغيير حساب بنكي (مسار أمني)' },
+  { key: 'letter_pdf_generator', labelAr: 'خطاب PDF' },
+  { key: 'custody_assignments_ack', labelAr: 'عهدة بتأكيد استلام' },
+  { key: 'employee_status', labelAr: 'تغيير حالة وظيفية (استقالة/تقاعد)' },
+]
+
+class CustomFieldDto {
+  @IsString({ message: 'مفتاح الحقل مطلوب' })
+  @Matches(/^[a-zA-Z][a-zA-Z0-9_]{1,40}$/, {
+    message: 'مفتاح الحقل: حروف إنجليزية وأرقام و_ (يبدأ بحرف)',
+  })
+  key: string
+
+  @IsString({ message: 'تسمية الحقل مطلوبة' })
+  @MinLength(2)
+  @MaxLength(100)
+  label: string
+
+  @IsIn(FIELD_TYPES, { message: 'نوع الحقل: text/number/date/select/file' })
+  type: string
+
+  @IsOptional()
+  @IsBoolean()
+  required?: boolean
+
+  @IsOptional()
+  @IsArray()
+  options?: string[]
+}
+
+class CreateRequestTypeDto {
+  @IsString({ message: 'اسم النوع مطلوب' })
+  @MinLength(3)
+  @MaxLength(200)
+  nameAr: string
+
+  @IsIn(
+    ['leaves', 'time_attendance', 'financial', 'employment_status', 'personal_data', 'letters', 'custody_assets', 'training', 'employee_relations'],
+    { message: 'الفئة غير صالحة' }
+  )
+  category: string
+
+  @IsOptional()
+  @Matches(/^[A-Z][A-Z0-9_]{2,40}$/, {
+    message: 'الكود: حروف إنجليزية كبيرة وأرقام و_ (اتركه فارغاً للتوليد)',
+  })
+  code?: string
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CustomFieldDto)
+  customFields?: CustomFieldDto[]
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  requiredAttachments?: string
+
+  @IsOptional()
+  @IsString()
+  destinationHandler?: string
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  approvalChainId?: number
+
+  @IsOptional()
+  visibleTo?: { mode: string; ids: Array<number | string> }
+}
+
+class UpdateRequestTypeFullDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  @MaxLength(200)
+  nameAr?: string
+
+  @IsOptional()
+  isActive?: boolean
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  approvalChainId?: number
+
+  @IsOptional()
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => CustomFieldDto)
+  customFields?: CustomFieldDto[]
+
+  @IsOptional()
+  visibleTo?: { mode: string; ids: Array<number | string> }
+
+  @IsOptional()
+  @IsString()
+  destinationHandler?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  requiredAttachments?: string
 }
 
 // إعدادات النظام — كلها للأدمن/HR
@@ -325,13 +456,15 @@ export class SettingsController {
         branchId: dto.branchId,
       })
     )
-    let order = 1
+    let order = 0
     for (const s of dto.steps) {
+      if (!s.isParallel || order === 0) order++
       await this.steps.save(
         this.steps.create({
           chainId: chain.id,
-          stepOrder: order++,
+          stepOrder: order,
           approverRole: s.approverRole as any,
+          isParallel: !!s.isParallel,
           specificEmployeeId: s.specificEmployeeId,
           thresholdField: s.thresholdField,
           thresholdOp: s.thresholdOp as any,
@@ -356,7 +489,19 @@ export class SettingsController {
   ) {
     const chain = await this.chains.findOne({ where: { id } })
     if (!chain) throw new NotFoundException('السلسلة غير موجودة')
-    Object.assign(chain, dto)
+    // نقل الدورة لفرع آخر: الكود لازم يفضل فريداً داخل النطاق الجديد
+    if (dto.branchId !== undefined && dto.branchId !== chain.branchId) {
+      const dup = await this.chains.findOne({
+        where: { code: chain.code, branchId: (dto.branchId ?? null) as any },
+      })
+      if (dup && dup.id !== chain.id) {
+        throw new BadRequestException(
+                  )
+      }
+      chain.branchId = dto.branchId as any
+    }
+    if (dto.nameAr !== undefined) chain.nameAr = dto.nameAr
+    if (dto.isActive !== undefined) chain.isActive = dto.isActive
     return this.chains.save(chain)
   }
 
@@ -379,13 +524,15 @@ export class SettingsController {
       }
     }
     await this.steps.delete({ chainId: id })
-    let order = 1
+    let order = 0
     for (const s of dto.steps) {
+      if (!s.isParallel || order === 0) order++
       await this.steps.save(
         this.steps.create({
           chainId: id,
-          stepOrder: order++,
+          stepOrder: order,
           approverRole: s.approverRole as any,
+          isParallel: !!s.isParallel,
           specificEmployeeId: s.specificEmployeeId,
           thresholdField: s.thresholdField,
           thresholdOp: s.thresholdOp as any,
@@ -402,18 +549,97 @@ export class SettingsController {
     return { ...chain, steps }
   }
 
-  // ===== بانِي الطلبات (الحد الأدنى): كل الأنواع + تفعيل/ربط سلسلة =====
+  // ===== بانِي الطلبات: عرض + إنشاء من الصفر + تعديل شامل =====
   @Perm('request_types.manage')
   @Get('request-types')
   listRequestTypes() {
     return this.requestTypes.find({ order: { category: 'ASC', id: 'ASC' } })
   }
 
+  // الوجهات المتاحة — لقائمة اختيار البانِي
+  @Perm('request_types.manage')
+  @Get('destination-handlers')
+  destinationHandlers() {
+    return AVAILABLE_HANDLERS
+  }
+
+  private validateAudience(v?: { mode: string; ids: Array<number | string> }) {
+    if (v === undefined) return undefined
+    if (!v.mode || !AUDIENCE_MODES.includes(v.mode)) {
+      throw new BadRequestException('جمهور النوع: all/departments/roles/employees')
+    }
+    if (v.mode !== 'all' && (!Array.isArray(v.ids) || v.ids.length === 0)) {
+      throw new BadRequestException('حدد عناصر الجمهور (ids)')
+    }
+    return JSON.stringify({ mode: v.mode, ids: v.ids ?? [] })
+  }
+
+  private validateCustomFields(fields?: CustomFieldDto[]) {
+    if (fields === undefined) return undefined
+    const keys = new Set<string>()
+    for (const f of fields) {
+      if (keys.has(f.key)) {
+        throw new BadRequestException(`مفتاح الحقل مكرر: ${f.key}`)
+      }
+      keys.add(f.key)
+      if (f.type === 'select' && (!Array.isArray(f.options) || f.options.length === 0)) {
+        throw new BadRequestException(`حقل القائمة «${f.label}» يحتاج خيارات`)
+      }
+    }
+    return JSON.stringify(fields)
+  }
+
+  // §2.2: نوع طلب جديد من الصفر
+  @Perm('request_types.manage')
+  @Post('request-types')
+  async createRequestType(@Body() dto: CreateRequestTypeDto) {
+    // توليد كود من الاسم إن لم يُحدد
+    let code = dto.code
+    if (!code) {
+      const count = await this.requestTypes.count()
+      code = `CUSTOM_${count + 1}`
+    }
+    const dup = await this.requestTypes.findOne({ where: { code } })
+    if (dup) throw new BadRequestException(`الكود ${code} مستخدم بالفعل`)
+    const handler = dto.destinationHandler ?? 'none'
+    if (!AVAILABLE_HANDLERS.some((h) => h.key === handler)) {
+      throw new BadRequestException('الوجهة غير معروفة — اختر من القائمة')
+    }
+    if (dto.approvalChainId) {
+      const chain = await this.chains.findOne({
+        where: { id: dto.approvalChainId },
+      })
+      if (!chain) throw new BadRequestException('سلسلة الاعتماد غير موجودة')
+    }
+    const customFields = this.validateCustomFields(dto.customFields)
+    // الحقول المطلوبة (القديمة) تُشتق من المخصّصة الإجبارية
+    const requiredKeys = (dto.customFields ?? [])
+      .filter((f) => f.required)
+      .map((f) => f.key)
+    return this.requestTypes.save(
+      this.requestTypes.create({
+        code,
+        nameAr: dto.nameAr,
+        category: dto.category as any,
+        customFields,
+        requiredFields: requiredKeys.length
+          ? JSON.stringify(requiredKeys)
+          : undefined,
+        requiredAttachments: dto.requiredAttachments,
+        destinationHandler: handler,
+        approvalChainId: dto.approvalChainId,
+        visibleTo: this.validateAudience(dto.visibleTo),
+        phase: 'P1',
+      })
+    )
+  }
+
+  // تعديل شامل: اسم/تفعيل/سلسلة/حقول/جمهور/وجهة/مرفقات
   @Perm('request_types.manage')
   @Patch('request-types/:id')
   async updateRequestType(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: { isActive?: boolean; approvalChainId?: number }
+    @Body() dto: UpdateRequestTypeFullDto
   ) {
     const type = await this.requestTypes.findOne({ where: { id } })
     if (!type) throw new NotFoundException('نوع الطلب غير موجود')
@@ -423,6 +649,28 @@ export class SettingsController {
       })
       if (!chain) throw new BadRequestException('سلسلة الاعتماد غير موجودة')
       type.approvalChainId = dto.approvalChainId
+    }
+    if (dto.destinationHandler !== undefined) {
+      if (!AVAILABLE_HANDLERS.some((h) => h.key === dto.destinationHandler)) {
+        throw new BadRequestException('الوجهة غير معروفة')
+      }
+      type.destinationHandler = dto.destinationHandler
+    }
+    if (dto.customFields !== undefined) {
+      type.customFields = this.validateCustomFields(dto.customFields) as string
+      const requiredKeys = dto.customFields
+        .filter((f) => f.required)
+        .map((f) => f.key)
+      type.requiredFields = requiredKeys.length
+        ? JSON.stringify(requiredKeys)
+        : (null as any)
+    }
+    if (dto.visibleTo !== undefined) {
+      type.visibleTo = this.validateAudience(dto.visibleTo) as string
+    }
+    if (dto.nameAr !== undefined) type.nameAr = dto.nameAr
+    if (dto.requiredAttachments !== undefined) {
+      type.requiredAttachments = dto.requiredAttachments
     }
     if (dto.isActive !== undefined) type.isActive = dto.isActive
     return this.requestTypes.save(type)

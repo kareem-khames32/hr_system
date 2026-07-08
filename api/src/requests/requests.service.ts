@@ -50,12 +50,53 @@ export class RequestsService {
     private readonly employees: Repository<Employee>
   ) {}
 
-  // ===== الكتالوج =====
-  catalog() {
-    return this.types.find({
+  // ===== الكتالوج — مفلتر بجمهور كل نوع (visible_to) =====
+  async catalog(user?: JwtPayload) {
+    const all = await this.types.find({
       where: { isActive: true },
       order: { category: 'ASC', id: 'ASC' },
     })
+    if (!user) return all
+    const emp = user.employeeId
+      ? await this.employees.findOne({ where: { id: user.employeeId } })
+      : null
+    return all.filter((t) => this.audienceAllows(t, user, emp))
+  }
+
+  // هل النوع متاح للمستخدم ده؟ (الأدمن/HR يشوفون الكل)
+  private audienceAllows(
+    type: RequestType,
+    user: JwtPayload,
+    emp: Employee | null
+  ): boolean {
+    if (
+      user.role === 'super_admin' ||
+      (user.permissions ?? []).includes('*') ||
+      (user.permissions ?? []).includes('request_types.manage')
+    ) {
+      return true
+    }
+    if (!type.visibleTo) return true
+    try {
+      const v = JSON.parse(type.visibleTo) as {
+        mode: string
+        ids: Array<number | string>
+      }
+      switch (v.mode) {
+        case 'all':
+          return true
+        case 'departments':
+          return !!emp?.departmentId && v.ids.map(Number).includes(emp.departmentId)
+        case 'roles':
+          return v.ids.map(String).includes(user.role)
+        case 'employees':
+          return !!user.employeeId && v.ids.map(Number).includes(user.employeeId)
+        default:
+          return true
+      }
+    } catch {
+      return true
+    }
   }
 
   // ===== الإنشاء =====
@@ -71,10 +112,49 @@ export class RequestsService {
       throw new BadRequestException('الحساب غير مربوط بموظف')
     }
 
-    // التحقق من الحقول المطلوبة المعرّفة على النوع
+    // جمهور النوع: مين يقدر يقدّمه (§2.2)
+    const requester = await this.employees.findOne({
+      where: { id: user.employeeId },
+    })
+    if (!this.audienceAllows(type, user, requester)) {
+      throw new ForbiddenException('هذا النوع من الطلبات غير متاح لك')
+    }
+
+    // التحقق من الحقول: القديمة (أسماء) + المخصّصة (كاملة الوصف)
     const required: string[] = type.requiredFields
       ? JSON.parse(type.requiredFields)
       : []
+    try {
+      const custom: Array<{ key: string; label: string; required: boolean; type: string; options?: string[] }> =
+        type.customFields ? JSON.parse(type.customFields) : []
+      const payload0 = dto.payload ?? {}
+      for (const f of custom) {
+        if (f.required && !required.includes(f.key)) required.push(f.key)
+        // قائمة اختيار: القيمة لازم من الخيارات
+        if (
+          f.type === 'select' &&
+          payload0[f.key] !== undefined &&
+          payload0[f.key] !== '' &&
+          Array.isArray(f.options) &&
+          !f.options.includes(String(payload0[f.key]))
+        ) {
+          throw new BadRequestException(
+            `قيمة «${f.label}» خارج الخيارات المسموحة`
+          )
+        }
+        if (
+          f.type === 'number' &&
+          payload0[f.key] !== undefined &&
+          payload0[f.key] !== '' &&
+          Number.isNaN(Number(payload0[f.key]))
+        ) {
+          throw new BadRequestException(`«${f.label}» لازم يكون رقماً`)
+        }
+      }
+    } catch (e) {
+      if (e instanceof BadRequestException) throw e
+      /* customFields تالف — تجاهل */
+    }
     const payload = dto.payload ?? {}
     const missing = required.filter(
       (f) => payload[f] === undefined || payload[f] === null || payload[f] === ''
@@ -248,23 +328,33 @@ export class RequestsService {
   }
 
   // ===== فعل الموافقة (اعتماد/رفض/إرجاع) =====
+  // الخطوات بنفس stepOrder = مجموعة متوازية: كلهم لازم يعتمدوا للتقدم،
+  // وأي رفض يرفض الطلب كله
   async act(user: JwtPayload, id: number, dto: ActDto) {
     const req = await this.scoped(user, id)
     if (req.status !== 'UNDER_REVIEW') {
       throw new BadRequestException('الطلب ليس قيد المراجعة')
     }
     const resolved: ResolvedStep[] = JSON.parse(req.resolvedSteps ?? '[]')
-    const current = resolved.find((s) => s.stepOrder === req.currentStep)
-    if (!current) throw new BadRequestException('لا توجد خطوة حالية')
+    const group = resolved.filter((s) => s.stepOrder === req.currentStep)
+    if (group.length === 0) throw new BadRequestException('لا توجد خطوة حالية')
 
-    if (!this.resolver.satisfies(user, current)) {
-      throw new ForbiddenException('لا تملك صلاحية التصرف في هذه الخطوة')
+    // عضو المجموعة الذي لم يتصرف بعد ويطابق المستخدم
+    const mine = group.find(
+      (s) => !s.actedAt && this.resolver.satisfies(user, s)
+    )
+    if (!mine) {
+      throw new ForbiddenException(
+        group.every((s) => s.actedAt)
+          ? 'كل أعضاء هذه الخطوة تصرفوا بالفعل'
+          : 'لا تملك صلاحية التصرف في هذه الخطوة'
+      )
     }
 
     // سجل التدقيق غير القابل للتعديل — قبل أي تغيير حالة
     await this.approvals.save({
       requestId: req.id,
-      step: current.stepOrder,
+      step: mine.stepOrder,
       approverId: user.sub,
       action:
         dto.action === 'APPROVE'
@@ -275,8 +365,8 @@ export class RequestsService {
       comment: dto.comment,
     })
 
-    current.actedAt = new Date().toISOString()
-    current.action = dto.action
+    mine.actedAt = new Date().toISOString()
+    mine.action = dto.action
 
     if (dto.action === 'REJECT') {
       assertTransition(req.status, 'REJECTED')
@@ -293,11 +383,20 @@ export class RequestsService {
       return this.requests.save(req)
     }
 
-    // APPROVE: الخطوة التالية أو التنفيذ
-    const idx = resolved.findIndex((s) => s.stepOrder === current.stepOrder)
-    const next = resolved[idx + 1]
-    if (next) {
-      req.currentStep = next.stepOrder
+    // APPROVE: باقي موازيين في نفس المجموعة؟ ننتظرهم
+    const stillPending = group.filter((s) => !s.actedAt)
+    if (stillPending.length > 0) {
+      req.resolvedSteps = JSON.stringify(resolved)
+      return this.requests.save(req)
+    }
+
+    // المجموعة اكتملت → المجموعة التالية أو التنفيذ
+    const orders = [...new Set(resolved.map((s) => s.stepOrder))].sort(
+      (a, b) => a - b
+    )
+    const nextOrder = orders[orders.indexOf(req.currentStep!) + 1]
+    if (nextOrder !== undefined) {
+      req.currentStep = nextOrder
       req.resolvedSteps = JSON.stringify(resolved)
       return this.requests.save(req)
     }
@@ -461,8 +560,13 @@ export class RequestsService {
     })
     return candidates.filter((req) => {
       const resolved: ResolvedStep[] = JSON.parse(req.resolvedSteps ?? '[]')
-      const current = resolved.find((s) => s.stepOrder === req.currentStep)
-      return current ? this.resolver.satisfies(user, current) : false
+      // المجموعة الحالية: أي عضو لم يتصرف ويطابق المستخدم
+      return resolved.some(
+        (s) =>
+          s.stepOrder === req.currentStep &&
+          !s.actedAt &&
+          this.resolver.satisfies(user, s)
+      )
     })
   }
 
@@ -485,7 +589,10 @@ export class RequestsService {
     let escalated = 0
     for (const req of overdue) {
       const resolved: ResolvedStep[] = JSON.parse(req.resolvedSteps ?? '[]')
-      const current = resolved.find((s) => s.stepOrder === req.currentStep)
+      // مع المجموعات المتوازية: نصعّد أول عضو متأخر لم يتصرف
+      const current = resolved.find(
+        (s) => s.stepOrder === req.currentStep && !s.actedAt
+      )
       if (!current?.dueAt || current.dueAt > now) continue
       if (!current.escalateTo) continue
       // التصعيد: الدور يتغير + سجل تدقيق + SLA جديد بنفس المدة

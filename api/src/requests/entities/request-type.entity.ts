@@ -27,9 +27,19 @@ export class RequestType {
   @Column({ length: 50 })
   category: RequestCategory
 
-  // JSON: تعريف الحقول المطلوبة عند التقديم
+  // JSON: تعريف الحقول المطلوبة عند التقديم (أسماء فقط — الشكل القديم)
   @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
   requiredFields: string
+
+  // JSON: حقول مخصّصة كاملة الوصف —
+  // [{key, label, type: text|number|date|select|file, required, options?}]
+  @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
+  customFields: string
+
+  // JSON: جمهور النوع — مين يقدر يقدمه:
+  // {mode: 'all'|'departments'|'roles'|'employees', ids: number[]|string[]}
+  @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
+  visibleTo: string
 
   // JSON: المرفقات المطلوبة
   @Column({ type: 'nvarchar', length: 'MAX', nullable: true })

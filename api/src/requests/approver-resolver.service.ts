@@ -120,13 +120,33 @@ export class ApproverResolver {
           user.employeeId === step.approverEmployeeId
         )
       case 'hr':
-        return user.role === 'hr_manager' || granted.includes('hr')
+        return (
+          user.role === 'hr_manager' ||
+          granted.includes('approve.hr') ||
+          granted.includes('hr') // توافق قديم
+        )
       case 'executive':
-        return granted.includes('executive')
+        return (
+          granted.includes('approve.executive') || granted.includes('executive')
+        )
       case 'finance':
+        return (
+          user.role === 'finance' ||
+          granted.includes('approve.finance') ||
+          granted.includes('finance')
+        )
       case 'it':
+        return (
+          user.role === 'it' ||
+          granted.includes('approve.it') ||
+          granted.includes('it')
+        )
       case 'custody_officer':
-        return user.role === step.role || granted.includes(step.role)
+        return (
+          user.role === 'custody_officer' ||
+          granted.includes('approve.custody') ||
+          granted.includes('custody_officer')
+        )
       default:
         return false
     }

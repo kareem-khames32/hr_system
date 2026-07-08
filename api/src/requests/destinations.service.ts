@@ -52,6 +52,10 @@ export class DestinationsService {
     type: RequestType
   ): Promise<DestinationResult> {
     const payload = req.payload ? JSON.parse(req.payload) : {}
+    // «بدون تنفيذ آلي»: الطلب نفسه هو السجل الدائم
+    if (type.destinationHandler === 'none') {
+      return { ref: refOf('REQ', req.id), completed: true }
+    }
     const handler = this.handlers[type.destinationHandler]
     if (!handler) {
       // handler لسه متبنّاش — الطلب نفسه هو السجل الدائم القابل للفلترة

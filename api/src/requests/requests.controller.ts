@@ -56,10 +56,10 @@ export class RequestsController {
     private readonly balances: LeaveBalancesService
   ) {}
 
-  // كتالوج الأنواع — لبناء شاشة «طلب جديد»
+  // كتالوج الأنواع — مفلتر بجمهور كل نوع للمستخدم الحالي
   @Get('types')
-  catalog() {
-    return this.service.catalog()
+  catalog(@CurrentUser() user: JwtPayload) {
+    return this.service.catalog(user)
   }
 
   // أرصدة إجازاتي بالطبقات (افتتاحي مُرحّل + استحقاق السنة)
