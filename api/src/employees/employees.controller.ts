@@ -8,12 +8,14 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common'
+import { ForbiddenException } from '@nestjs/common'
 import {
   branchScopeOf,
   CurrentUser,
   JwtAuthGuard,
-  Roles,
+  Perm,
   RolesGuard,
+  userHasPerm,
 } from '../auth/guards'
 import type { JwtPayload } from '../auth/auth.service'
 import { CreateEmployeeDto, UpdateEmployeeDto } from './employees.dto'
@@ -24,21 +26,26 @@ import { EmployeesService } from './employees.service'
 export class EmployeesController {
   constructor(private readonly employees: EmployeesService) {}
 
+  @Perm('employees.view')
   @Get()
   findAll(@CurrentUser() user: JwtPayload) {
     return this.employees.findAll(branchScopeOf(user))
   }
 
+  // الموظف يشوف سجله هو — غيره يحتاج employees.view
   @Get(':id')
   findOne(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: JwtPayload
   ) {
+    if (user.employeeId !== id && !userHasPerm(user, 'employees.view')) {
+      throw new ForbiddenException('لا تملك صلاحية عرض الموظفين')
+    }
     return this.employees.findOne(id, branchScopeOf(user))
   }
 
+  @Perm('employees.create')
   @Post()
-  @Roles('super_admin', 'hr_manager', 'branch_manager')
   create(@Body() dto: CreateEmployeeDto, @CurrentUser() user: JwtPayload) {
     // مدير الفرع يضيف داخل فرعه فقط
     const scope = branchScopeOf(user)
@@ -46,8 +53,8 @@ export class EmployeesController {
     return this.employees.create(dto)
   }
 
+  @Perm('employees.edit')
   @Patch(':id')
-  @Roles('super_admin', 'hr_manager', 'branch_manager')
   update(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateEmployeeDto,
@@ -57,8 +64,8 @@ export class EmployeesController {
   }
 
   // أرشفة بدل حذف — السجل الوظيفي يبقى
+  @Perm('employees.archive')
   @Post(':id/archive')
-  @Roles('super_admin', 'hr_manager')
   archive(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: JwtPayload

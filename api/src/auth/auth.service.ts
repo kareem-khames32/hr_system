@@ -6,6 +6,8 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { JwtService } from '@nestjs/jwt'
 import { Repository } from 'typeorm'
 import * as bcrypt from 'bcryptjs'
+import { effectivePermissions, ROLE_PRESETS } from './permissions'
+import { Role, UserPermissionOverride } from './role.entity'
 import { User } from './user.entity'
 
 // حمولة التوكن — الدور والفرع هما أساس عزل البيانات
@@ -23,8 +25,47 @@ export interface JwtPayload {
 export class AuthService {
   constructor(
     @InjectRepository(User) private readonly users: Repository<User>,
+    @InjectRepository(Role) private readonly roles: Repository<Role>,
+    @InjectRepository(UserPermissionOverride)
+    private readonly overrides: Repository<UserPermissionOverride>,
     private readonly jwt: JwtService
   ) {}
+
+  // الصلاحيات النهائية = حزمة الدور + GRANTs − REVOKEs
+  async resolvePermissions(user: User): Promise<string[]> {
+    let rolePerms: string[] = []
+    const roleRow = await this.roles.findOne({ where: { code: user.role } })
+    if (roleRow) {
+      try {
+        rolePerms = JSON.parse(roleRow.permissions)
+      } catch {
+        rolePerms = []
+      }
+    } else {
+      // fallback للـ presets لو الجدول لسه ما اتبذرش
+      rolePerms =
+        ROLE_PRESETS.find((r) => r.code === user.role)?.permissions ?? []
+    }
+    const ovr = await this.overrides.find({ where: { userId: user.id } })
+    const grants = ovr.filter((o) => o.effect === 'GRANT').map((o) => o.permission)
+    const revokes = ovr.filter((o) => o.effect === 'REVOKE').map((o) => o.permission)
+
+    // توافق خلفي: صلاحيات العمود القديم permissions (functional roles) كـ GRANTs
+    try {
+      const legacy: string[] = user.permissions ? JSON.parse(user.permissions) : []
+      const legacyMap: Record<string, string> = {
+        hr: 'approve.hr',
+        finance: 'approve.finance',
+        it: 'approve.it',
+        custody_officer: 'approve.custody',
+        executive: 'approve.executive',
+      }
+      for (const l of legacy) grants.push(legacyMap[l] ?? l)
+    } catch {
+      /* تجاهل */
+    }
+    return effectivePermissions(rolePerms, grants, revokes)
+  }
 
   async login(email: string, password: string) {
     const user = await this.users.findOne({
@@ -41,12 +82,7 @@ export class AuthService {
     user.lastLoginAt = new Date()
     await this.users.save(user)
 
-    let permissions: string[] = []
-    try {
-      permissions = user.permissions ? JSON.parse(user.permissions) : []
-    } catch {
-      permissions = []
-    }
+    const permissions = await this.resolvePermissions(user)
 
     const payload: JwtPayload = {
       sub: user.id,

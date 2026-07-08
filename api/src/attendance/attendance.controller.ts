@@ -20,7 +20,7 @@ import {
 } from 'class-validator'
 import { Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
-import { CurrentUser, JwtAuthGuard, Roles, RolesGuard } from '../auth/guards'
+import { CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import { AttendanceService, PunchDto } from './attendance.service'
 
 class IngestDto {
@@ -71,14 +71,14 @@ export class AttendanceController {
 
   // رفع يدوي من الأدمن/HR بنفس الصيغة (بدون مفتاح جهاز)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('super_admin', 'hr_manager')
+  @Perm('attendance.manage')
   @Post('punches/manual')
   ingestManual(@Body() dto: IngestDto, @CurrentUser() user: JwtPayload) {
     return this.service.ingest(dto.punches, undefined, user)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('super_admin', 'hr_manager', 'branch_manager')
+  @Perm('attendance.manage')
   @Post('schedule')
   upsertSchedule(@Body() dto: UpsertScheduleDto) {
     return this.service.upsertSchedule(dto.entries)
@@ -90,7 +90,8 @@ export class AttendanceController {
     return this.service.weekSchedule(week)
   }
 
-  @UseGuards(JwtAuthGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.view_all')
   @Get('daily')
   daily(@CurrentUser() user: JwtPayload, @Query('date') date: string) {
     return this.service.daily(user, date)
@@ -108,14 +109,14 @@ export class AttendanceController {
 
   // الأوفرتايم المكتشف من البصمة بانتظار تأكيد المدير
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('super_admin', 'hr_manager', 'branch_manager')
+  @Perm('overtime.confirm')
   @Get('overtime/pending')
   pendingOvertime(@CurrentUser() user: JwtPayload) {
     return this.service.pendingOvertime(user)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('super_admin', 'hr_manager', 'branch_manager')
+  @Perm('overtime.confirm')
   @Post('overtime/:id/confirm')
   confirmOvertime(
     @CurrentUser() user: JwtPayload,
@@ -127,7 +128,7 @@ export class AttendanceController {
 
   // إعادة حساب يوم بأثر رجعي (بعد تصحيح بصمة/تعديل جدول)
   @UseGuards(JwtAuthGuard, RolesGuard)
-  @Roles('super_admin', 'hr_manager')
+  @Perm('attendance.manage')
   @Post('recompute')
   recompute(@Query('date') date: string) {
     return this.service.recomputeDate(date)

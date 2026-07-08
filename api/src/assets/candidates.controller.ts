@@ -22,7 +22,7 @@ import {
   MinLength,
 } from 'class-validator'
 import { Type } from 'class-transformer'
-import { JwtAuthGuard, Roles, RolesGuard } from '../auth/guards'
+import { JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { EmployeesService } from '../employees/employees.service'
 import { Candidate, CandidateStage } from './assets.entities'
 
@@ -104,7 +104,7 @@ class HireCandidateDto {
 
 // المرشحون — pipeline التوظيف حتى التعيين الفعلي
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('super_admin', 'hr_manager', 'branch_manager')
+@Perm('candidates.manage')
 @Controller('candidates')
 export class CandidatesController {
   constructor(

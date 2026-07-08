@@ -386,3 +386,35 @@ export const fetchAdminRequestTypes = () => get<ApiRequestType[]>('/settings/req
 export const updateRequestType = (id: number, d: { isActive?: boolean; approvalChainId?: number }) =>
   patch<ApiRequestType>(`/settings/request-types/${id}`, d)
 export const fetchRoles = () => get<Array<{ role: string; nameAr: string; scope: string; permissions: string[] }>>('/settings/roles')
+
+// ===== الصلاحيات الدقيقة والأدوار =====
+export interface ApiPermission { key: string; labelAr: string; group: string }
+export interface ApiRole {
+  id: number; code: string; nameAr: string
+  permissions: string[]; isSystem: boolean; isActive: boolean
+}
+export const fetchPermissionsRegistry = () => get<ApiPermission[]>('/permissions-registry')
+export const fetchRolesFull = () => get<ApiRole[]>('/roles')
+export const createRole = (r: { code: string; nameAr: string; permissions: string[] }) =>
+  post<ApiRole>('/roles', r)
+export const updateRole = (id: number, r: { nameAr?: string; permissions?: string[]; isActive?: boolean }) =>
+  patch<ApiRole>(`/roles/${id}`, r)
+export const fetchUserPermissions = (userId: number) =>
+  get<{ role: string; grants: string[]; revokes: string[]; effective: string[] }>(`/users/${userId}/permissions`)
+export const setUserPermissions = (userId: number, grants: string[], revokes: string[]) =>
+  apiFetch<{ role: string; grants: string[]; revokes: string[]; effective: string[] }>(
+    `/users/${userId}/permissions`, { method: 'PUT', body: JSON.stringify({ grants, revokes }) })
+
+// هل المستخدم الحالي يملك الصلاحية؟ (للإخفاء في الواجهة — الفرض الحقيقي في الباك)
+export const can = (perm: string): boolean => {
+  const u = getCurrentUser()
+  if (!u) return false
+  if (u.role === 'super_admin') return true
+  const p = u.permissions ?? []
+  return p.includes('*') || p.includes(perm)
+}
+
+// ===== بورتال الموظف (خدمة ذاتية) =====
+export const fetchMyCustody = () => get<ApiCustody[]>('/custody/mine')
+export const fetchMyPayslips = () =>
+  get<Array<{ item: ApiPayrollItem; run: ApiPayrollRun }>>('/payroll/my-payslips')

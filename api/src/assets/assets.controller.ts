@@ -15,7 +15,7 @@ import { In, Repository } from 'typeorm'
 import { IsInt, IsOptional, IsString, MaxLength, MinLength } from 'class-validator'
 import { Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Roles, RolesGuard } from '../auth/guards'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { Asset, CustodyAssignment } from '../requests/entities/custody.entities'
 
@@ -65,6 +65,7 @@ export class AssetsController {
   ) {}
 
   // ===== الأصول =====
+  @Perm('custody.assign')
   @Get('assets')
   async listAssets() {
     const rows = await this.assets.find({ order: { id: 'ASC' } })
@@ -79,13 +80,13 @@ export class AssetsController {
     }))
   }
 
-  @Roles('super_admin', 'hr_manager', 'branch_manager')
+  @Perm('custody.assign')
   @Post('assets')
   createAsset(@Body() dto: CreateAssetDto) {
     return this.assets.save(this.assets.create(dto))
   }
 
-  @Roles('super_admin', 'hr_manager', 'branch_manager')
+  @Perm('custody.assign')
   @Patch('assets/:id')
   async updateAsset(
     @Param('id', ParseIntPipe) id: number,
@@ -97,7 +98,29 @@ export class AssetsController {
     return this.assets.save(asset)
   }
 
+  // عهدي — بورتال الموظف (خدمة ذاتية)
+  @Get('custody/mine')
+  async myCustody(@CurrentUser() user: JwtPayload) {
+    if (!user.employeeId) return []
+    const rows = await this.custody.find({
+      where: { employeeId: user.employeeId },
+      order: { assignedAt: 'DESC' },
+    })
+    const assetIds = [...new Set(rows.map((r) => r.assetId))]
+    const assetRows = assetIds.length
+      ? await this.assets.find({ where: { id: In(assetIds) } })
+      : []
+    const byId = new Map(assetRows.map((a) => [a.id, a]))
+    return rows.map((r) => ({
+      ...r,
+      assetName: byId.get(r.assetId)?.name ?? '#' + r.assetId,
+      assetCategory: byId.get(r.assetId)?.category ?? '',
+      serialNumber: byId.get(r.assetId)?.serialNumber ?? null,
+    }))
+  }
+
   // ===== إسنادات العهدة =====
+  @Perm('custody.assign')
   @Get('custody')
   async listCustody(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)
@@ -125,7 +148,7 @@ export class AssetsController {
   }
 
   // تسليم مباشر من HR — بانتظار تأكيد استلام الموظف (الملزِم قانونياً)
-  @Roles('super_admin', 'hr_manager', 'branch_manager')
+  @Perm('custody.assign')
   @Post('custody/assign')
   async assign(@Body() dto: AssignCustodyDto) {
     const asset = await this.assets.findOne({ where: { id: dto.assetId } })
@@ -151,7 +174,7 @@ export class AssetsController {
     )
   }
 
-  @Roles('super_admin', 'hr_manager', 'branch_manager')
+  @Perm('custody.assign')
   @Post('custody/:id/return')
   async returnCustody(
     @Param('id', ParseIntPipe) id: number,

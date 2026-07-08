@@ -266,6 +266,21 @@ export class PayrollService {
     return { ...run, items }
   }
 
+  // كل قسائم موظف (المسيرات المعتمدة/المصروفة فقط) — لبورتال الموظف
+  async payslipsOf(employeeId: number) {
+    const items = await this.items.find({
+      where: { employeeId },
+      order: { id: 'DESC' },
+    })
+    const result = []
+    for (const item of items) {
+      const run = await this.runs.findOne({ where: { id: item.runId } })
+      if (!run || run.status === 'CALCULATED') continue // المسودة لا تظهر للموظف
+      result.push({ item, run })
+    }
+    return result
+  }
+
   // قسيمة راتب: البند + المسير + الموظف — لشاشة payslip
   async payslip(itemId: number) {
     const item = await this.items.findOne({ where: { id: itemId } })

@@ -12,7 +12,7 @@ import {
   branchScopeOf,
   CurrentUser,
   JwtAuthGuard,
-  Roles,
+  Perm,
   RolesGuard,
 } from '../auth/guards'
 import type { JwtPayload } from '../auth/auth.service'
@@ -38,13 +38,13 @@ export class OrgController {
   }
 
   @Post('branches')
-  @Roles('super_admin', 'hr_manager')
+  @Perm('org.manage')
   createBranch(@Body() dto: CreateBranchDto) {
     return this.org.createBranch(dto)
   }
 
   @Patch('branches/:id')
-  @Roles('super_admin', 'hr_manager')
+  @Perm('org.manage')
   updateBranch(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateBranchDto
@@ -59,13 +59,13 @@ export class OrgController {
   }
 
   @Post('departments')
-  @Roles('super_admin', 'hr_manager')
+  @Perm('org.manage')
   createDepartment(@Body() dto: CreateDepartmentDto) {
     return this.org.createDepartment(dto)
   }
 
   @Patch('departments/:id')
-  @Roles('super_admin', 'hr_manager')
+  @Perm('org.manage')
   updateDepartment(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateDepartmentDto
@@ -80,13 +80,13 @@ export class OrgController {
   }
 
   @Post('teams')
-  @Roles('super_admin', 'hr_manager')
+  @Perm('org.manage')
   createTeam(@Body() dto: CreateTeamDto) {
     return this.org.createTeam(dto)
   }
 
   @Patch('teams/:id')
-  @Roles('super_admin', 'hr_manager')
+  @Perm('org.manage')
   updateTeam(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateTeamDto

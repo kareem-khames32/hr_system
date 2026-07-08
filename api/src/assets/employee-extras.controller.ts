@@ -2,7 +2,8 @@ import { Controller, Get, Param, ParseIntPipe, UseGuards } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard } from '../auth/guards'
+import { ForbiddenException } from '@nestjs/common'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { EmployeesService } from '../employees/employees.service'
 import { Team } from '../org/entities/team.entity'
@@ -16,7 +17,7 @@ import { Loan, LoanInstallment } from '../requests/entities/financial.entities'
 import { EmployeeDocument } from './assets.entities'
 
 // لوج النقل + التاريخ الوظيفي + الملف المجمّع للموظف + السلف
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
 export class EmployeeExtrasController {
   constructor(
@@ -40,6 +41,7 @@ export class EmployeeExtrasController {
   ) {}
 
   // ===== لوج النقل بين الفرق (بتاريخ السريان) =====
+  @Perm('transfers.view')
   @Get('transfers')
   async listTransfers(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)
@@ -62,6 +64,7 @@ export class EmployeeExtrasController {
   }
 
   // ===== السلف وأقساطها =====
+  @Perm('payroll.view')
   @Get('loans')
   async listLoans(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)
@@ -99,6 +102,9 @@ export class EmployeeExtrasController {
     @CurrentUser() user: JwtPayload,
     @Param('id', ParseIntPipe) id: number
   ) {
+    if (user.employeeId !== id && !userHasPerm(user, 'employees.view')) {
+      throw new ForbiddenException('لا تملك صلاحية عرض ملفات الموظفين')
+    }
     const employee = await this.employeesService.findOne(id, branchScopeOf(user))
     const [empLeaves, empBalances, empHistory, empDocs, empLoans] =
       await Promise.all([
@@ -138,6 +144,9 @@ export class EmployeeExtrasController {
     @CurrentUser() user: JwtPayload,
     @Param('id', ParseIntPipe) id: number
   ) {
+    if (user.employeeId !== id && !userHasPerm(user, 'employees.view')) {
+      throw new ForbiddenException('لا تملك صلاحية عرض ملفات الموظفين')
+    }
     await this.employeesService.findOne(id, branchScopeOf(user))
     return this.history.find({
       where: { employeeId: id },

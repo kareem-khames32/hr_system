@@ -20,27 +20,53 @@ export const CurrentUser = createParamDecorator(
   }
 )
 
-// @Roles('hr_manager', 'super_admin') — تقييد المسار بأدوار
+// @Roles('hr_manager', 'super_admin') — تقييد المسار بأدوار (توافق قديم)
 export const ROLES_KEY = 'roles'
 export const Roles = (...roles: string[]) => SetMetadata(ROLES_KEY, roles)
+
+// @Perm('employees.create') — الفرض الدقيق بالصلاحيات (الأساس الجديد)
+// أكثر من صلاحية = يكفي امتلاك أي واحدة منها
+export const PERMS_KEY = 'perms'
+export const Perm = (...perms: string[]) => SetMetadata(PERMS_KEY, perms)
 
 @Injectable()
 export class RolesGuard implements CanActivate {
   constructor(private readonly reflector: Reflector) {}
 
   canActivate(ctx: ExecutionContext): boolean {
+    const user: JwtPayload = ctx.switchToHttp().getRequest().user
+    // super_admin يتخطى كل الفحوصات
+    if (user?.role === 'super_admin' || user?.permissions?.includes('*')) {
+      return true
+    }
+
+    // فحص الصلاحيات الدقيقة أولاً
+    const perms = this.reflector.getAllAndOverride<string[]>(PERMS_KEY, [
+      ctx.getHandler(),
+      ctx.getClass(),
+    ])
+    if (perms && perms.length > 0) {
+      if (!user) return false
+      return perms.some((p) => (user.permissions ?? []).includes(p))
+    }
+
+    // ثم فحص الأدوار (المسارات القديمة)
     const required = this.reflector.getAllAndOverride<string[]>(ROLES_KEY, [
       ctx.getHandler(),
       ctx.getClass(),
     ])
     if (!required || required.length === 0) return true
-    const user: JwtPayload = ctx.switchToHttp().getRequest().user
     if (!user) return false
-    // الدور نفسه أو صلاحية إضافية ممنوحة بنفس الاسم
     if (required.includes(user.role)) return true
     return (user.permissions ?? []).some((p) => required.includes(p))
   }
 }
+
+// فحص برمجي داخل الخدمات
+export const userHasPerm = (user: JwtPayload, perm: string): boolean =>
+  user.role === 'super_admin' ||
+  (user.permissions ?? []).includes('*') ||
+  (user.permissions ?? []).includes(perm)
 
 // نطاق الفرع (القاعدة الأساسية للعزل):
 // super_admin يرى كل الفروع — أي دور آخر مقفول على فرعه

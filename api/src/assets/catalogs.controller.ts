@@ -13,7 +13,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
 import type { ObjectLiteral } from 'typeorm'
-import { JwtAuthGuard, Roles, RolesGuard } from '../auth/guards'
+import { JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { AttendancePunch } from '../attendance/attendance.entities'
 import { Branch } from '../org/entities/branch.entity'
 import {
@@ -89,7 +89,7 @@ export class CatalogsController {
     return rows
   }
 
-  @Roles('super_admin', 'hr_manager')
+  @Perm('settings.manage')
   @Post(':kind')
   async create(@Param('kind') kind: string, @Body() body: Record<string, unknown>) {
     const repo = this.repoOf(kind)
@@ -105,7 +105,7 @@ export class CatalogsController {
     }
   }
 
-  @Roles('super_admin', 'hr_manager')
+  @Perm('settings.manage')
   @Patch(':kind/:id')
   async update(
     @Param('kind') kind: string,

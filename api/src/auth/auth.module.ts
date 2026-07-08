@@ -7,12 +7,14 @@ import { Employee } from '../employees/employee.entity'
 import { AuthController } from './auth.controller'
 import { AuthService } from './auth.service'
 import { JwtStrategy } from './jwt.strategy'
+import { Role, UserPermissionOverride } from './role.entity'
+import { RolesController } from './roles.controller'
 import { User } from './user.entity'
 import { UsersController } from './users.controller'
 
 @Module({
   imports: [
-    TypeOrmModule.forFeature([User, Employee]),
+    TypeOrmModule.forFeature([User, Employee, Role, UserPermissionOverride]),
     PassportModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
@@ -24,7 +26,7 @@ import { UsersController } from './users.controller'
       }),
     }),
   ],
-  controllers: [AuthController, UsersController],
+  controllers: [AuthController, UsersController, RolesController],
   providers: [AuthService, JwtStrategy],
   exports: [AuthService],
 })

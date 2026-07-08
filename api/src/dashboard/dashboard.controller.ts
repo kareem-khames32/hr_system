@@ -2,10 +2,11 @@ import { Controller, Get, UseGuards } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard } from '../auth/guards'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 
 // إحصائيات اللوحة — استعلامات مجمعة بنطاق الفرع
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Perm('dashboard.view_all')
 @Controller('dashboard')
 export class DashboardController {
   constructor(@InjectDataSource() private readonly ds: DataSource) {}

@@ -2,12 +2,13 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard } from '../auth/guards'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { Leave } from './entities/leave.entities'
 
 // سجل الإجازات (الوجهة الدائمة) — قراءة بنطاق الفرع
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Perm('leaves.view_all')
 @Controller('leaves')
 export class LeavesController {
   constructor(

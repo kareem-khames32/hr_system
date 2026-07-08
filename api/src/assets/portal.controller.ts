@@ -2,7 +2,7 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Between, In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard } from '../auth/guards'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { RequestApproval } from '../requests/entities/request-approval.entity'
 import { Request } from '../requests/entities/request.entity'
@@ -10,7 +10,7 @@ import { Leave } from '../requests/entities/leave.entities'
 import { PublicHoliday } from './assets.entities'
 
 // التقويم الموحّد + الإشعارات المشتقة (بلا جدول إشعارات — من الأحداث الفعلية)
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
 export class PortalController {
   constructor(
@@ -46,7 +46,10 @@ export class PortalController {
           ? { status: 'APPROVED', employeeId: In(emps.map((e) => e.id)) }
           : { status: 'APPROVED' },
     })
-    const monthLeaves = allLeaves.filter(
+    const visibleLeaves = userHasPerm(user, 'calendar.view_all')
+      ? allLeaves
+      : allLeaves.filter((l) => l.employeeId === user.employeeId)
+    const monthLeaves = visibleLeaves.filter(
       (l) => l.fromDate.slice(0, 7) <= m && l.toDate.slice(0, 7) >= m
     )
     return {

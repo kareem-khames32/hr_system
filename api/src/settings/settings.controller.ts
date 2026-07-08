@@ -24,7 +24,7 @@ import {
   ValidateNested,
 } from 'class-validator'
 import { Type } from 'class-transformer'
-import { JwtAuthGuard, Roles, RolesGuard } from '../auth/guards'
+import { JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { ApprovalChain } from '../requests/entities/approval-chain.entity'
 import { ApprovalStep } from '../requests/entities/approval-step.entity'
 import { LeaveType } from '../requests/entities/leave.entities'
@@ -210,7 +210,7 @@ class UpdateChainDto {
 
 // إعدادات النظام — كلها للأدمن/HR
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('super_admin', 'hr_manager')
+@Perm('settings.manage')
 @Controller('settings')
 export class SettingsController {
   constructor(
@@ -266,6 +266,7 @@ export class SettingsController {
   }
 
   // ===== سلاسل الاعتماد (عرض + تعديل SLA/العتبات) =====
+  @Perm('approval_chains.manage')
   @Get('approval-chains')
   async listChains() {
     const chains = await this.chains.find({ order: { id: 'ASC' } })
@@ -276,6 +277,7 @@ export class SettingsController {
     }))
   }
 
+  @Perm('approval_chains.manage')
   @Patch('approval-steps/:id')
   async updateStep(
     @Param('id', ParseIntPipe) id: number,
@@ -288,6 +290,7 @@ export class SettingsController {
   }
 
   // ===== بانِي السلاسل: إنشاء سلسلة كاملة بخطواتها =====
+  @Perm('approval_chains.manage')
   @Post('approval-chains')
   async createChain(@Body() dto: CreateChainDto) {
     if (!Array.isArray(dto.steps)) {
@@ -345,6 +348,7 @@ export class SettingsController {
     return { ...chain, steps }
   }
 
+  @Perm('approval_chains.manage')
   @Patch('approval-chains/:id')
   async updateChain(
     @Param('id', ParseIntPipe) id: number,
@@ -358,6 +362,7 @@ export class SettingsController {
 
   // استبدال خطوات سلسلة بالكامل — الطلبات الجارية لا تتأثر
   // (خطواتها محلولة ومخزنة على الطلب نفسه وقت التقديم)
+  @Perm('approval_chains.manage')
   @Patch('approval-chains/:id/steps')
   async replaceChainSteps(
     @Param('id', ParseIntPipe) id: number,
@@ -398,11 +403,13 @@ export class SettingsController {
   }
 
   // ===== بانِي الطلبات (الحد الأدنى): كل الأنواع + تفعيل/ربط سلسلة =====
+  @Perm('request_types.manage')
   @Get('request-types')
   listRequestTypes() {
     return this.requestTypes.find({ order: { category: 'ASC', id: 'ASC' } })
   }
 
+  @Perm('request_types.manage')
   @Patch('request-types/:id')
   async updateRequestType(
     @Param('id', ParseIntPipe) id: number,

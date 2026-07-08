@@ -6,6 +6,8 @@ dotenv.config()
 
 import { DataSource } from 'typeorm'
 import * as bcrypt from 'bcryptjs'
+import { ROLE_PRESETS } from '../auth/permissions'
+import { Role, UserPermissionOverride } from '../auth/role.entity'
 import { User } from '../auth/user.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
@@ -63,6 +65,8 @@ const common = {
   database: process.env.DB_DATABASE ?? 'hr_system',
   entities: [
     User,
+    Role,
+    UserPermissionOverride,
     Branch,
     Department,
     Team,
@@ -329,6 +333,90 @@ async function main() {
       { name: 'الدرجة الثالثة', minSalary: 5000, maxSalary: 9000 },
     ])
     console.log('✓ الدرجات الوظيفية')
+  }
+
+  // ===== الأدوار (حزم الصلاحيات) — إدراج الناقص فقط، لا يمس المعدَّل =====
+  const rolesRepo = ds.getRepository(Role)
+  for (const preset of ROLE_PRESETS) {
+    const existing = await rolesRepo.findOne({ where: { code: preset.code } })
+    if (!existing) {
+      await rolesRepo.save(
+        rolesRepo.create({
+          code: preset.code,
+          nameAr: preset.nameAr,
+          permissions: JSON.stringify(preset.permissions),
+          isSystem: preset.isSystem,
+        })
+      )
+    }
+  }
+  console.log('✓ الأدوار الأساسية (حزم الصلاحيات)')
+
+  // ===== مستخدمو الاختبار — واحد لكل دور/وظيفة (لا يتكررون) =====
+  const overridesRepo = ds.getRepository(UserPermissionOverride)
+  const testAccounts: Array<{
+    email: string
+    password: string
+    displayName: string
+    role: string
+    employeeCode: string
+    jobTitle: string
+    grants?: string[]
+  }> = [
+    {
+      email: 'hr@company.com', password: 'Hr@123456',
+      displayName: 'هالة مصطفى — HR', role: 'hr_manager',
+      employeeCode: 'HR-001', jobTitle: 'مدير موارد بشرية',
+    },
+    {
+      email: 'custody@company.com', password: 'Custody@123',
+      displayName: 'سامي فؤاد — أمين العهدة', role: 'employee',
+      employeeCode: 'CUS-001', jobTitle: 'أمين عهدة',
+      grants: ['custody.assign', 'approve.custody'],
+    },
+    {
+      email: 'accountant@company.com', password: 'Finance@123',
+      displayName: 'منى حسن — محاسبة', role: 'employee',
+      employeeCode: 'ACC-001', jobTitle: 'محاسبة',
+      grants: ['approve.finance', 'payroll.view'],
+    },
+  ]
+  for (const acc of testAccounts) {
+    if (await users.findOne({ where: { email: acc.email } })) continue
+    let emp = await employees.findOne({
+      where: { employeeCode: acc.employeeCode },
+    })
+    if (!emp) {
+      emp = await employees.save(
+        employees.create({
+          employeeCode: acc.employeeCode,
+          fullName: acc.displayName.split(' — ')[0],
+          jobTitle: acc.jobTitle,
+          branchId: mainBranch.id,
+          departmentId: hrDept.id,
+          managerEmployeeId: adminEmp.id,
+          status: 'active',
+          basicSalary: 7000,
+        })
+      )
+      await ensureLeaveBalance(ds, emp.id)
+    }
+    const saved = await users.save(
+      users.create({
+        email: acc.email,
+        passwordHash: await bcrypt.hash(acc.password, 10),
+        displayName: acc.displayName,
+        role: acc.role as any,
+        branchId: mainBranch.id,
+        employeeId: emp.id,
+      })
+    )
+    for (const g of acc.grants ?? []) {
+      await overridesRepo.save(
+        overridesRepo.create({ userId: saved.id, permission: g, effect: 'GRANT' })
+      )
+    }
+    console.log(`✓ حساب اختبار: ${acc.email} / ${acc.password}`)
   }
 
   // ===== محرك الطلبات: السلاسل + الأنواع + الإجازات + الإعدادات =====

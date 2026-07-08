@@ -2,13 +2,14 @@ import { BadRequestException, Controller, Get, Query, UseGuards } from '@nestjs/
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard } from '../auth/guards'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 
 const MONTH_RE = /^\d{4}-\d{2}$/
 const YEAR_RE = /^\d{4}$/
 
 // التقارير المجمعة — استعلامات حقيقية بنطاق الفرع
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Perm('reports.view')
 @Controller('reports')
 export class ReportsController {
   constructor(@InjectDataSource() private readonly ds: DataSource) {}

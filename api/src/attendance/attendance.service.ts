@@ -366,11 +366,18 @@ export class AttendanceService {
     if (!/^\d{4}-\d{2}$/.test(month)) {
       throw new BadRequestException('صيغة الشهر YYYY-MM')
     }
-    const scope = branchScopeOf(user)
     const emp = await this.employees.findOne({ where: { id: employeeId } })
     if (!emp) throw new NotFoundException('الموظف غير موجود')
-    if (scope !== null && emp.branchId !== scope && user.employeeId !== employeeId) {
-      throw new BadRequestException('خارج نطاق فرعك')
+    // الموظف يشوف شهره هو فقط — غير كده يحتاج attendance.view_all وداخل نطاقه
+    if (user.employeeId !== employeeId) {
+      const scope = branchScopeOf(user)
+      const canViewAll =
+        user.role === 'super_admin' ||
+        (user.permissions ?? []).includes('*') ||
+        (user.permissions ?? []).includes('attendance.view_all')
+      if (!canViewAll || (scope !== null && emp.branchId !== scope)) {
+        throw new BadRequestException('لا تملك صلاحية عرض حضور غيرك')
+      }
     }
     const rows = await this.days.find({
       where: { employeeId } as any,

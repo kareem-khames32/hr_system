@@ -16,7 +16,7 @@ import {
   MaxLength,
 } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
-import { CurrentUser, JwtAuthGuard, Roles, RolesGuard } from '../auth/guards'
+import { CurrentUser, JwtAuthGuard, Perm, Roles, RolesGuard, userHasPerm } from '../auth/guards'
 import { LeaveBalancesService } from './leave-balances.service'
 import { RequestsService } from './requests.service'
 
@@ -68,14 +68,14 @@ export class RequestsController {
     return user.employeeId ? this.balances.allBalances(user.employeeId) : []
   }
 
-  @Roles('super_admin', 'hr_manager', 'branch_manager')
+  @Perm('leaves.view_all', 'employees.view')
   @Get('leave-balances/:employeeId')
   employeeBalances(@Param('employeeId', ParseIntPipe) employeeId: number) {
     return this.balances.allBalances(employeeId)
   }
 
   // الترحيل السنوي: متبقي السنة → طبقة افتتاحية بصلاحية للسنة الجديدة
-  @Roles('super_admin', 'hr_manager')
+  @Perm('leave_balances.manage')
   @Post('leave-balances/rollover/:fromPeriod')
   rollover(@Param('fromPeriod') fromPeriod: string) {
     return this.balances.rollover(fromPeriod)
@@ -87,7 +87,7 @@ export class RequestsController {
   }
 
   // السجل الكامل — كونسول HR (بنطاق الفرع)
-  @Roles('super_admin', 'hr_manager', 'branch_manager')
+  @Perm('requests.view_all')
   @Get('all')
   listAll(
     @CurrentUser() user: JwtPayload,
@@ -160,13 +160,13 @@ export class RequestsController {
   }
 
   // تشغيل يدوي لمحركي التصعيد والنقل المجدول (للأدمن — والـ cron يشغلهما تلقائياً)
-  @Roles('super_admin', 'hr_manager')
+  @Perm('settings.manage')
   @Post('engine/run-escalations')
   runEscalations() {
     return this.service.runEscalations()
   }
 
-  @Roles('super_admin', 'hr_manager')
+  @Perm('settings.manage')
   @Post('engine/run-scheduled-transfers')
   runScheduledTransfers() {
     return this.service.runScheduledTransfers()

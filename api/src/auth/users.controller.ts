@@ -27,7 +27,7 @@ import {
 } from 'class-validator'
 import { Type } from 'class-transformer'
 import type { JwtPayload } from './auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Roles, RolesGuard } from './guards'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from './guards'
 import { User, UserRole } from './user.entity'
 import { Employee } from '../employees/employee.entity'
 
@@ -117,7 +117,7 @@ class UpdateUserDto {
 
 // إدارة حسابات الدخول — منفصلة عن سجل الموظف نفسه
 @UseGuards(JwtAuthGuard, RolesGuard)
-@Roles('super_admin', 'hr_manager')
+@Perm('users.manage')
 @Controller('users')
 export class UsersController {
   constructor(

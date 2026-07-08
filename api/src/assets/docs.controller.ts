@@ -16,7 +16,7 @@ import { In, Repository } from 'typeorm'
 import { IsInt, IsOptional, IsString, Matches, MaxLength, MinLength } from 'class-validator'
 import { Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Roles, RolesGuard } from '../auth/guards'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { EmployeeDocument } from './assets.entities'
 
@@ -71,6 +71,10 @@ export class DocsController {
     @Query('employeeId') employeeId?: string,
     @Query('expiringDays') expiringDays?: string
   ) {
+    // بلا documents.manage → الموظف يشوف مستنداته هو فقط
+    if (!userHasPerm(user, 'documents.manage')) {
+      employeeId = String(user.employeeId ?? -1)
+    }
     const scope = branchScopeOf(user)
     const emps = await this.employees.find({
       where: scope !== null ? { branchId: scope } : {},
@@ -97,7 +101,7 @@ export class DocsController {
     }))
   }
 
-  @Roles('super_admin', 'hr_manager', 'branch_manager')
+  @Perm('documents.manage')
   @Post()
   async create(@Body() dto: CreateDocumentDto) {
     const emp = await this.employees.findOne({ where: { id: dto.employeeId } })
@@ -108,7 +112,7 @@ export class DocsController {
     return this.docs.save(this.docs.create(dto))
   }
 
-  @Roles('super_admin', 'hr_manager', 'branch_manager')
+  @Perm('documents.manage')
   @Patch(':id')
   async update(
     @Param('id', ParseIntPipe) id: number,
