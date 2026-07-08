@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Search,
   Bell,
@@ -11,6 +11,7 @@ import {
   Sun,
   Moon,
 } from 'lucide-react'
+import { fetchNotifications } from '@/lib/api'
 
 interface Notification {
   id: string
@@ -19,40 +20,52 @@ interface Notification {
   time: string
   read: boolean
   type: 'info' | 'warning' | 'success' | 'danger'
+  link?: string
 }
 
-const notifications: Notification[] = [
-  {
-    id: '1',
-    title: 'طلب إجازة جديد',
-    message: 'قدم أحمد علي طلب إجازة سنوية',
-    time: 'منذ 5 دقائق',
-    read: false,
-    type: 'info',
-  },
-  {
-    id: '2',
-    title: 'تنبيه انتهاء وثيقة',
-    message: 'جواز سفر محمد سالم سينتهي خلال 30 يوم',
-    time: 'منذ ساعة',
-    read: false,
-    type: 'warning',
-  },
-  {
-    id: '3',
-    title: 'تم اعتماد الراتب',
-    message: 'تم اعتماد مسير رواتب شهر يناير',
-    time: 'منذ 3 ساعات',
-    read: true,
-    type: 'success',
-  },
-]
+const formatTime = (at: string) => {
+  const diff = Date.now() - new Date(at).getTime()
+  const minutes = Math.floor(diff / (1000 * 60))
+  const hours = Math.floor(minutes / 60)
+  const days = Math.floor(hours / 24)
+  if (minutes < 1) return 'الآن'
+  if (minutes < 60) return `منذ ${minutes} دقيقة`
+  if (hours < 24) return `منذ ${hours} ساعة`
+  if (days < 7) return `منذ ${days} يوم`
+  return new Date(at).toLocaleDateString('ar-SA')
+}
 
 export default function Header() {
   const [showNotifications, setShowNotifications] = useState(false)
   const [showSearch, setShowSearch] = useState(false)
+  const [notifications, setNotifications] = useState<Notification[]>([])
 
-  const unreadCount = notifications.filter((n) => !n.read).length
+  useEffect(() => {
+    fetchNotifications()
+      .then((items) =>
+        setNotifications(
+          items.map((item) => ({
+            id: item.id,
+            title: item.title,
+            message: item.body,
+            time: formatTime(item.at),
+            read: false,
+            type:
+              item.kind === 'error'
+                ? 'danger'
+                : item.kind === 'success'
+                ? 'success'
+                : item.kind === 'warning'
+                ? 'warning'
+                : 'info',
+            link: item.link || undefined,
+          }))
+        )
+      )
+      .catch(() => {})
+  }, [])
+
+  const unreadCount = notifications.length
 
   const today = new Date()
   const formattedDate = today.toLocaleDateString('ar-SA', {
@@ -100,7 +113,7 @@ export default function Header() {
               <Bell size={20} className="text-gray-600" />
               {unreadCount > 0 && (
                 <span className="absolute -top-1 -right-1 w-5 h-5 bg-danger-500 text-white text-xs rounded-full flex items-center justify-center">
-                  {unreadCount}
+                  {unreadCount > 9 ? '9+' : unreadCount}
                 </span>
               )}
             </button>
@@ -114,9 +127,15 @@ export default function Header() {
                   </button>
                 </div>
                 <div className="max-h-96 overflow-y-auto">
+                  {notifications.length === 0 && (
+                    <p className="p-4 text-sm text-gray-500 text-center">لا توجد إشعارات</p>
+                  )}
                   {notifications.map((notification) => (
                     <div
                       key={notification.id}
+                      onClick={() => {
+                        if (notification.link) window.location.href = notification.link
+                      }}
                       className={`p-4 border-b border-gray-50 hover:bg-gray-50 cursor-pointer transition-colors ${
                         !notification.read ? 'bg-primary-50/50' : ''
                       }`}
@@ -149,7 +168,12 @@ export default function Header() {
                   ))}
                 </div>
                 <div className="p-3 bg-gray-50">
-                  <button className="w-full text-center text-sm text-primary-500 hover:text-primary-600 font-medium">
+                  <button
+                    onClick={() => {
+                      window.location.href = '/notifications'
+                    }}
+                    className="w-full text-center text-sm text-primary-500 hover:text-primary-600 font-medium"
+                  >
                     عرض كل الإشعارات
                   </button>
                 </div>

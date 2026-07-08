@@ -1,175 +1,203 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
-  Filter,
   Plus,
   Briefcase,
-  MapPin,
-  Clock,
   Users,
   Eye,
-  Edit2,
-  Trash2,
-  MoreVertical,
   Building2,
-  DollarSign,
   Calendar,
-  TrendingUp,
   UserPlus,
   FileText,
   CheckCircle2,
-  XCircle,
+  Mail,
+  Phone,
+  X,
 } from 'lucide-react'
 import Link from 'next/link'
+import {
+  fetchCandidates,
+  createCandidate,
+  updateCandidate,
+  hireCandidate,
+  fetchBranches,
+  type ApiCandidate,
+  type ApiBranch,
+} from '@/lib/api'
 
-interface JobPosting {
-  id: string
-  title: string
-  department: string
-  location: string
-  type: 'full-time' | 'part-time' | 'contract' | 'remote'
-  experience: string
-  salary: { min: number; max: number }
-  applicants: number
-  newApplicants: number
-  status: 'active' | 'paused' | 'closed'
-  postedDate: string
-  closingDate: string
+const stageLabels: Record<string, string> = {
+  applied: 'تقدّم',
+  screening: 'فرز',
+  interview: 'مقابلة',
+  offer: 'عرض',
+  hired: 'مُعيَّن',
+  rejected: 'مرفوض',
 }
 
-const jobPostings: JobPosting[] = [
-  {
-    id: '1',
-    title: 'مطور واجهات أمامية Senior',
-    department: 'تقنية المعلومات',
-    location: 'الرياض',
-    type: 'full-time',
-    experience: '5+ سنوات',
-    salary: { min: 18000, max: 25000 },
-    applicants: 45,
-    newApplicants: 12,
-    status: 'active',
-    postedDate: '2024-01-15',
-    closingDate: '2024-02-15',
-  },
-  {
-    id: '2',
-    title: 'مدير مشاريع',
-    department: 'إدارة المشاريع',
-    location: 'جدة',
-    type: 'full-time',
-    experience: '7+ سنوات',
-    salary: { min: 22000, max: 30000 },
-    applicants: 28,
-    newApplicants: 5,
-    status: 'active',
-    postedDate: '2024-01-10',
-    closingDate: '2024-02-10',
-  },
-  {
-    id: '3',
-    title: 'أخصائي موارد بشرية',
-    department: 'الموارد البشرية',
-    location: 'الرياض',
-    type: 'full-time',
-    experience: '3+ سنوات',
-    salary: { min: 12000, max: 16000 },
-    applicants: 67,
-    newApplicants: 8,
-    status: 'active',
-    postedDate: '2024-01-20',
-    closingDate: '2024-02-20',
-  },
-  {
-    id: '4',
-    title: 'مصمم UI/UX',
-    department: 'تقنية المعلومات',
-    location: 'عن بُعد',
-    type: 'remote',
-    experience: '4+ سنوات',
-    salary: { min: 15000, max: 20000 },
-    applicants: 89,
-    newApplicants: 23,
-    status: 'active',
-    postedDate: '2024-01-18',
-    closingDate: '2024-02-18',
-  },
-  {
-    id: '5',
-    title: 'محاسب',
-    department: 'المالية',
-    location: 'الرياض',
-    type: 'full-time',
-    experience: '2+ سنوات',
-    salary: { min: 10000, max: 14000 },
-    applicants: 34,
-    newApplicants: 0,
-    status: 'paused',
-    postedDate: '2024-01-05',
-    closingDate: '2024-02-05',
-  },
-  {
-    id: '6',
-    title: 'مندوب مبيعات',
-    department: 'المبيعات',
-    location: 'الدمام',
-    type: 'full-time',
-    experience: '1+ سنة',
-    salary: { min: 8000, max: 12000 },
-    applicants: 56,
-    newApplicants: 0,
-    status: 'closed',
-    postedDate: '2023-12-15',
-    closingDate: '2024-01-15',
-  },
-]
-
-const typeLabels = {
-  'full-time': 'دوام كامل',
-  'part-time': 'دوام جزئي',
-  'contract': 'عقد مؤقت',
-  'remote': 'عن بُعد',
+const stageColors: Record<string, string> = {
+  applied: 'bg-gray-100 text-gray-700',
+  screening: 'bg-blue-100 text-blue-700',
+  interview: 'bg-purple-100 text-purple-700',
+  offer: 'bg-warning-50 text-warning-700',
+  hired: 'bg-success-50 text-success-700',
+  rejected: 'bg-red-100 text-red-700',
 }
 
-const typeColors = {
-  'full-time': 'bg-blue-100 text-blue-700',
-  'part-time': 'bg-purple-100 text-purple-700',
-  'contract': 'bg-orange-100 text-orange-700',
-  'remote': 'bg-green-100 text-green-700',
-}
+const stageOrder = ['applied', 'screening', 'interview', 'offer', 'hired', 'rejected']
 
-const statusLabels = {
-  active: 'نشط',
-  paused: 'متوقف',
-  closed: 'مغلق',
-}
-
-const statusColors = {
-  active: 'bg-success-50 text-success-700',
-  paused: 'bg-warning-50 text-warning-700',
-  closed: 'bg-gray-100 text-gray-700',
+const emptyAddForm = {
+  fullName: '',
+  email: '',
+  phone: '',
+  positionTitle: '',
+  branchId: '',
+  notes: '',
 }
 
 export default function RecruitmentPage() {
+  const [candidates, setCandidates] = useState<ApiCandidate[]>([])
+  const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [searchTerm, setSearchTerm] = useState('')
-  const [filterStatus, setFilterStatus] = useState('all')
-  const [filterDepartment, setFilterDepartment] = useState('all')
+  const [filterStage, setFilterStage] = useState('all')
+  const [filterBranch, setFilterBranch] = useState('all')
 
-  const filteredJobs = jobPostings.filter((job) => {
-    const matchesSearch = job.title.includes(searchTerm) || job.department.includes(searchTerm)
-    const matchesStatus = filterStatus === 'all' || job.status === filterStatus
-    const matchesDepartment = filterDepartment === 'all' || job.department === filterDepartment
-    return matchesSearch && matchesStatus && matchesDepartment
+  // نموذج إضافة مرشح
+  const [showAdd, setShowAdd] = useState(false)
+  const [addForm, setAddForm] = useState(emptyAddForm)
+  const [addError, setAddError] = useState('')
+  const [addSaving, setAddSaving] = useState(false)
+
+  // نافذة التعيين
+  const [hireTarget, setHireTarget] = useState<ApiCandidate | null>(null)
+  const [hireForm, setHireForm] = useState({ employeeCode: '', branchId: '', basicSalary: '' })
+  const [hireError, setHireError] = useState('')
+  const [hireSaving, setHireSaving] = useState(false)
+  const [hiredEmployeeId, setHiredEmployeeId] = useState<number | null>(null)
+
+  const load = async () => {
+    try {
+      setError('')
+      const data = await fetchCandidates()
+      setCandidates(data)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تحميل المرشحين')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+    fetchBranches()
+      .then(setBranches)
+      .catch(() => {})
+  }, [])
+
+  const branchName = (id?: number | null) =>
+    branches.find((b) => b.id === id)?.name ?? '—'
+
+  const stageCount = (stage: string) => candidates.filter((c) => c.stage === stage).length
+
+  const moveStage = async (candidate: ApiCandidate, stage: string) => {
+    if (!stage || stage === candidate.stage) return
+    try {
+      setError('')
+      await updateCandidate(candidate.id, { stage })
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر نقل المرشح بين المراحل')
+    }
+  }
+
+  const openAdd = () => {
+    setAddForm(emptyAddForm)
+    setAddError('')
+    setShowAdd(true)
+  }
+
+  const submitAdd = async () => {
+    if (!addForm.fullName.trim() || !addForm.positionTitle.trim()) {
+      setAddError('الاسم الكامل والمسمى الوظيفي مطلوبان')
+      return
+    }
+    setAddSaving(true)
+    setAddError('')
+    try {
+      await createCandidate({
+        fullName: addForm.fullName.trim(),
+        email: addForm.email.trim() || undefined,
+        phone: addForm.phone.trim() || undefined,
+        positionTitle: addForm.positionTitle.trim(),
+        branchId: addForm.branchId ? Number(addForm.branchId) : undefined,
+        notes: addForm.notes.trim() || undefined,
+      })
+      setShowAdd(false)
+      setLoading(true)
+      await load()
+    } catch (err) {
+      setAddError(err instanceof Error ? err.message : 'تعذر إضافة المرشح')
+    } finally {
+      setAddSaving(false)
+    }
+  }
+
+  const openHire = (candidate: ApiCandidate) => {
+    setHireTarget(candidate)
+    setHireForm({
+      employeeCode: '',
+      branchId: candidate.branchId ? String(candidate.branchId) : '',
+      basicSalary: '',
+    })
+    setHireError('')
+    setHiredEmployeeId(null)
+  }
+
+  const submitHire = async () => {
+    if (!hireTarget) return
+    if (!hireForm.employeeCode.trim() || !hireForm.branchId) {
+      setHireError('الرقم الوظيفي والفرع مطلوبان')
+      return
+    }
+    setHireSaving(true)
+    setHireError('')
+    try {
+      const res = await hireCandidate(hireTarget.id, {
+        employeeCode: hireForm.employeeCode.trim(),
+        branchId: Number(hireForm.branchId),
+        ...(hireForm.basicSalary ? { basicSalary: Number(hireForm.basicSalary) } : {}),
+      })
+      setHiredEmployeeId(res.employee.id)
+      await load()
+    } catch (err) {
+      setHireError(err instanceof Error ? err.message : 'تعذر إتمام التعيين')
+    } finally {
+      setHireSaving(false)
+    }
+  }
+
+  const filteredCandidates = candidates.filter((candidate) => {
+    const matchesSearch =
+      candidate.fullName.includes(searchTerm) ||
+      candidate.positionTitle.includes(searchTerm) ||
+      (candidate.email ?? '').includes(searchTerm)
+    const matchesStage = filterStage === 'all' || candidate.stage === filterStage
+    const matchesBranch =
+      filterBranch === 'all' || String(candidate.branchId ?? '') === filterBranch
+    return matchesSearch && matchesStage && matchesBranch
   })
 
   const stats = {
-    activeJobs: jobPostings.filter((j) => j.status === 'active').length,
-    totalApplicants: jobPostings.reduce((sum, j) => sum + j.applicants, 0),
-    newApplicants: jobPostings.reduce((sum, j) => sum + j.newApplicants, 0),
-    hiredThisMonth: 8,
+    total: candidates.length,
+    inPipeline: candidates.filter((c) =>
+      ['applied', 'screening', 'interview', 'offer'].includes(c.stage)
+    ).length,
+    offers: stageCount('offer'),
+    hired: stageCount('hired'),
   }
 
   return (
@@ -179,19 +207,22 @@ export default function RecruitmentPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">إدارة التوظيف</h1>
-            <p className="text-gray-500 mt-1">إدارة الوظائف الشاغرة وطلبات التوظيف</p>
+            <p className="text-gray-500 mt-1">إدارة المرشحين ومراحل التوظيف</p>
           </div>
           <div className="flex items-center gap-3">
             <Link href="/recruitment/applicants" className="btn-secondary flex items-center gap-2">
               <Users size={18} />
               المتقدمين
             </Link>
-            <Link href="/recruitment/add" className="btn-primary flex items-center gap-2">
+            <button onClick={openAdd} className="btn-primary flex items-center gap-2">
               <Plus size={18} />
-              إضافة وظيفة
-            </Link>
+              إضافة مرشح
+            </button>
           </div>
         </div>
+
+        {/* Error Banner */}
+        {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
 
         {/* Stats Cards */}
         <div className="grid grid-cols-4 gap-4">
@@ -200,8 +231,8 @@ export default function RecruitmentPage() {
               <Briefcase size={24} className="text-primary-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">وظائف نشطة</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.activeJobs}</p>
+              <p className="text-sm text-gray-500">إجمالي المرشحين</p>
+              <p className="text-2xl font-bold text-gray-800">{stats.total}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
@@ -209,8 +240,8 @@ export default function RecruitmentPage() {
               <Users size={24} className="text-blue-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">إجمالي المتقدمين</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.totalApplicants}</p>
+              <p className="text-sm text-gray-500">في مسار التوظيف</p>
+              <p className="text-2xl font-bold text-gray-800">{stats.inPipeline}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
@@ -218,8 +249,8 @@ export default function RecruitmentPage() {
               <UserPlus size={24} className="text-success-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">متقدمين جدد</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.newApplicants}</p>
+              <p className="text-sm text-gray-500">عروض قائمة</p>
+              <p className="text-2xl font-bold text-gray-800">{stats.offers}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
@@ -227,8 +258,8 @@ export default function RecruitmentPage() {
               <CheckCircle2 size={24} className="text-purple-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">تم توظيفهم هذا الشهر</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.hiredThisMonth}</p>
+              <p className="text-sm text-gray-500">تم تعيينهم</p>
+              <p className="text-2xl font-bold text-gray-800">{stats.hired}</p>
             </div>
           </div>
         </div>
@@ -240,131 +271,145 @@ export default function RecruitmentPage() {
               <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
-                placeholder="بحث عن وظيفة..."
+                placeholder="بحث عن مرشح..."
                 className="input pr-10 w-full"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
             <select
-              value={filterStatus}
-              onChange={(e) => setFilterStatus(e.target.value)}
+              value={filterStage}
+              onChange={(e) => setFilterStage(e.target.value)}
               className="input w-40"
             >
-              <option value="all">كل الحالات</option>
-              <option value="active">نشط</option>
-              <option value="paused">متوقف</option>
-              <option value="closed">مغلق</option>
+              <option value="all">كل المراحل</option>
+              {stageOrder.map((stage) => (
+                <option key={stage} value={stage}>
+                  {stageLabels[stage]}
+                </option>
+              ))}
             </select>
             <select
-              value={filterDepartment}
-              onChange={(e) => setFilterDepartment(e.target.value)}
+              value={filterBranch}
+              onChange={(e) => setFilterBranch(e.target.value)}
               className="input w-48"
             >
-              <option value="all">كل الأقسام</option>
-              <option value="تقنية المعلومات">تقنية المعلومات</option>
-              <option value="الموارد البشرية">الموارد البشرية</option>
-              <option value="المبيعات">المبيعات</option>
-              <option value="المالية">المالية</option>
-              <option value="إدارة المشاريع">إدارة المشاريع</option>
+              <option value="all">كل الفروع</option>
+              {branches.map((branch) => (
+                <option key={branch.id} value={String(branch.id)}>
+                  {branch.name}
+                </option>
+              ))}
             </select>
           </div>
         </div>
 
-        {/* Job Listings */}
-        <div className="grid gap-4">
-          {filteredJobs.map((job) => (
-            <div
-              key={job.id}
-              className="card hover:shadow-lg transition-shadow"
-            >
-              <div className="flex items-start justify-between">
-                <div className="flex-1">
-                  <div className="flex items-center gap-3 mb-2">
-                    <h3 className="text-lg font-bold text-gray-800">{job.title}</h3>
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${statusColors[job.status]}`}>
-                      {statusLabels[job.status]}
-                    </span>
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${typeColors[job.type]}`}>
-                      {typeLabels[job.type]}
-                    </span>
-                  </div>
-
-                  <div className="flex items-center gap-6 text-sm text-gray-500 mb-4">
-                    <div className="flex items-center gap-1">
-                      <Building2 size={16} />
-                      <span>{job.department}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <MapPin size={16} />
-                      <span>{job.location}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <Clock size={16} />
-                      <span>{job.experience}</span>
-                    </div>
-                    <div className="flex items-center gap-1">
-                      <DollarSign size={16} />
-                      <span>{job.salary.min.toLocaleString()} - {job.salary.max.toLocaleString()} ر.س</span>
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-6">
-                    <div className="flex items-center gap-2">
-                      <div className="flex items-center gap-1 text-gray-600">
-                        <Users size={16} />
-                        <span className="font-medium">{job.applicants}</span>
-                        <span className="text-gray-400">متقدم</span>
-                      </div>
-                      {job.newApplicants > 0 && (
-                        <span className="px-2 py-0.5 bg-primary-100 text-primary-700 rounded-full text-xs font-medium">
-                          +{job.newApplicants} جديد
-                        </span>
-                      )}
-                    </div>
-                    <div className="flex items-center gap-1 text-gray-500 text-sm">
-                      <Calendar size={14} />
-                      <span>نُشرت: {new Date(job.postedDate).toLocaleDateString('ar-SA')}</span>
-                    </div>
-                    <div className="flex items-center gap-1 text-gray-500 text-sm">
-                      <Clock size={14} />
-                      <span>تنتهي: {new Date(job.closingDate).toLocaleDateString('ar-SA')}</span>
-                    </div>
-                  </div>
-                </div>
-
-                <div className="flex items-center gap-2">
-                  <Link
-                    href={`/recruitment/applicants?job=${job.id}`}
-                    className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-                    title="عرض المتقدمين"
-                  >
-                    <Users size={18} className="text-gray-600" />
-                  </Link>
-                  <Link
-                    href={`/recruitment/${job.id}`}
-                    className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-                    title="عرض التفاصيل"
-                  >
-                    <Eye size={18} className="text-gray-600" />
-                  </Link>
-                  <button
-                    className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
-                    title="تعديل"
-                  >
-                    <Edit2 size={18} className="text-gray-600" />
-                  </button>
-                  <button
-                    className="p-2 bg-gray-100 rounded-lg hover:bg-red-100 transition-colors"
-                    title="حذف"
-                  >
-                    <Trash2 size={18} className="text-gray-600 hover:text-red-600" />
-                  </button>
-                </div>
+        {/* Candidates List */}
+        {loading ? (
+          <div className="flex justify-center py-12">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+          <div className="grid gap-4">
+            {filteredCandidates.length === 0 ? (
+              <div className="card text-center py-12">
+                <Users size={48} className="text-gray-300 mx-auto mb-4" />
+                <p className="text-gray-500">لا يوجد مرشحون</p>
               </div>
-            </div>
-          ))}
-        </div>
+            ) : (
+              filteredCandidates.map((candidate) => (
+                <div key={candidate.id} className="card hover:shadow-lg transition-shadow">
+                  <div className="flex items-start justify-between">
+                    <div className="flex-1">
+                      <div className="flex items-center gap-3 mb-2">
+                        <h3 className="text-lg font-bold text-gray-800">{candidate.fullName}</h3>
+                        <span
+                          className={`px-3 py-1 rounded-full text-xs font-medium ${
+                            stageColors[candidate.stage] ?? 'bg-gray-100 text-gray-700'
+                          }`}
+                        >
+                          {stageLabels[candidate.stage] ?? candidate.stage}
+                        </span>
+                      </div>
+
+                      <div className="flex items-center gap-6 text-sm text-gray-500 mb-4">
+                        <div className="flex items-center gap-1">
+                          <Briefcase size={16} />
+                          <span>{candidate.positionTitle}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Building2 size={16} />
+                          <span>{branchName(candidate.branchId)}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Mail size={16} />
+                          <span>{candidate.email ?? '—'}</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <Phone size={16} />
+                          <span dir="ltr">{candidate.phone ?? '—'}</span>
+                        </div>
+                      </div>
+
+                      <div className="flex items-center gap-6">
+                        <div className="flex items-center gap-1 text-gray-500 text-sm">
+                          <Calendar size={14} />
+                          <span>
+                            تقدّم بتاريخ: {new Date(candidate.createdAt).toLocaleDateString('ar-SA')}
+                          </span>
+                        </div>
+                        {candidate.notes && (
+                          <div className="flex items-center gap-1 text-gray-500 text-sm">
+                            <FileText size={14} />
+                            <span>{candidate.notes}</span>
+                          </div>
+                        )}
+                        {candidate.hiredEmployeeId != null && (
+                          <div className="flex items-center gap-1 text-success-600 text-sm">
+                            <CheckCircle2 size={14} />
+                            <span>رقم الموظف: {candidate.hiredEmployeeId}</span>
+                          </div>
+                        )}
+                      </div>
+                    </div>
+
+                    <div className="flex items-center gap-2">
+                      <select
+                        value={candidate.stage}
+                        onChange={(e) => moveStage(candidate, e.target.value)}
+                        className="input w-36 text-sm"
+                        disabled={candidate.stage === 'hired'}
+                        title="نقل المرحلة"
+                      >
+                        {stageOrder.map((stage) => (
+                          <option key={stage} value={stage} disabled={stage === 'hired'}>
+                            {stageLabels[stage]}
+                          </option>
+                        ))}
+                      </select>
+                      {(candidate.stage === 'interview' || candidate.stage === 'offer') && (
+                        <button
+                          onClick={() => openHire(candidate)}
+                          className="p-2 bg-success-50 rounded-lg hover:bg-success-100 transition-colors"
+                          title="تعيين كموظف"
+                        >
+                          <UserPlus size={18} className="text-success-600" />
+                        </button>
+                      )}
+                      <Link
+                        href="/recruitment/applicants"
+                        className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+                        title="عرض المتقدمين"
+                      >
+                        <Eye size={18} className="text-gray-600" />
+                      </Link>
+                    </div>
+                  </div>
+                </div>
+              ))
+            )}
+          </div>
+        )}
 
         {/* Hiring Pipeline Summary */}
         <div className="card">
@@ -374,39 +419,228 @@ export default function RecruitmentPage() {
               <div className="w-12 h-12 bg-gray-200 rounded-full flex items-center justify-center mx-auto mb-2">
                 <FileText size={20} className="text-gray-600" />
               </div>
-              <p className="text-2xl font-bold text-gray-800">319</p>
-              <p className="text-sm text-gray-500">طلبات جديدة</p>
+              <p className="text-2xl font-bold text-gray-800">{stageCount('applied')}</p>
+              <p className="text-sm text-gray-500">تقدّم</p>
             </div>
             <div className="text-center p-4 bg-blue-50 rounded-xl">
               <div className="w-12 h-12 bg-blue-200 rounded-full flex items-center justify-center mx-auto mb-2">
                 <Eye size={20} className="text-blue-600" />
               </div>
-              <p className="text-2xl font-bold text-blue-800">156</p>
-              <p className="text-sm text-blue-600">قيد المراجعة</p>
+              <p className="text-2xl font-bold text-blue-800">{stageCount('screening')}</p>
+              <p className="text-sm text-blue-600">فرز</p>
             </div>
             <div className="text-center p-4 bg-purple-50 rounded-xl">
               <div className="w-12 h-12 bg-purple-200 rounded-full flex items-center justify-center mx-auto mb-2">
                 <Users size={20} className="text-purple-600" />
               </div>
-              <p className="text-2xl font-bold text-purple-800">48</p>
-              <p className="text-sm text-purple-600">مقابلات</p>
+              <p className="text-2xl font-bold text-purple-800">{stageCount('interview')}</p>
+              <p className="text-sm text-purple-600">مقابلة</p>
             </div>
             <div className="text-center p-4 bg-success-50 rounded-xl">
               <div className="w-12 h-12 bg-success-200 rounded-full flex items-center justify-center mx-auto mb-2">
                 <CheckCircle2 size={20} className="text-success-600" />
               </div>
-              <p className="text-2xl font-bold text-success-800">23</p>
-              <p className="text-sm text-success-600">عروض مقدمة</p>
+              <p className="text-2xl font-bold text-success-800">{stageCount('offer')}</p>
+              <p className="text-sm text-success-600">عرض</p>
             </div>
             <div className="text-center p-4 bg-primary-50 rounded-xl">
               <div className="w-12 h-12 bg-primary-200 rounded-full flex items-center justify-center mx-auto mb-2">
                 <UserPlus size={20} className="text-primary-600" />
               </div>
-              <p className="text-2xl font-bold text-primary-800">8</p>
-              <p className="text-sm text-primary-600">تم التوظيف</p>
+              <p className="text-2xl font-bold text-primary-800">{stageCount('hired')}</p>
+              <p className="text-sm text-primary-600">مُعيَّن</p>
             </div>
           </div>
         </div>
+
+        {/* Add Candidate Modal */}
+        {showAdd && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl w-full max-w-md">
+              <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+                <h2 className="text-lg font-bold text-gray-800">إضافة مرشح جديد</h2>
+                <button
+                  onClick={() => setShowAdd(false)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="p-6 space-y-4 max-h-[70vh] overflow-y-auto">
+                {addError && <div className="bg-red-50 text-red-700 rounded-xl p-4">{addError}</div>}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    الاسم الكامل <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="input w-full"
+                    value={addForm.fullName}
+                    onChange={(e) => setAddForm((prev) => ({ ...prev, fullName: e.target.value }))}
+                  />
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    المسمى الوظيفي <span className="text-red-500">*</span>
+                  </label>
+                  <input
+                    type="text"
+                    className="input w-full"
+                    value={addForm.positionTitle}
+                    onChange={(e) =>
+                      setAddForm((prev) => ({ ...prev, positionTitle: e.target.value }))
+                    }
+                  />
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      البريد الإلكتروني
+                    </label>
+                    <input
+                      type="email"
+                      className="input w-full"
+                      value={addForm.email}
+                      onChange={(e) => setAddForm((prev) => ({ ...prev, email: e.target.value }))}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">رقم الجوال</label>
+                    <input
+                      type="text"
+                      className="input w-full"
+                      value={addForm.phone}
+                      onChange={(e) => setAddForm((prev) => ({ ...prev, phone: e.target.value }))}
+                    />
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">الفرع</label>
+                  <select
+                    className="input w-full"
+                    value={addForm.branchId}
+                    onChange={(e) => setAddForm((prev) => ({ ...prev, branchId: e.target.value }))}
+                  >
+                    <option value="">بدون فرع</option>
+                    {branches.map((branch) => (
+                      <option key={branch.id} value={String(branch.id)}>
+                        {branch.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">ملاحظات</label>
+                  <textarea
+                    className="input w-full h-24"
+                    value={addForm.notes}
+                    onChange={(e) => setAddForm((prev) => ({ ...prev, notes: e.target.value }))}
+                  />
+                </div>
+              </div>
+              <div className="p-4 border-t bg-gray-50 flex justify-end gap-2 rounded-b-xl">
+                <button onClick={() => setShowAdd(false)} className="btn-secondary">
+                  إلغاء
+                </button>
+                <button onClick={submitAdd} disabled={addSaving} className="btn-primary">
+                  {addSaving ? 'جارٍ الحفظ...' : 'حفظ المرشح'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Hire Modal */}
+        {hireTarget && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-xl w-full max-w-md">
+              <div className="p-4 border-b border-gray-100 flex items-center justify-between">
+                <h2 className="text-lg font-bold text-gray-800">
+                  تعيين المرشح: {hireTarget.fullName}
+                </h2>
+                <button
+                  onClick={() => setHireTarget(null)}
+                  className="text-gray-400 hover:text-gray-600"
+                >
+                  <X size={18} />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                {hireError && <div className="bg-red-50 text-red-700 rounded-xl p-4">{hireError}</div>}
+                {hiredEmployeeId != null ? (
+                  <div className="bg-success-50 text-success-700 rounded-xl p-4">
+                    تم التعيين بنجاح — رقم الموظف الجديد: {hiredEmployeeId}
+                  </div>
+                ) : (
+                  <>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        الرقم الوظيفي <span className="text-red-500">*</span>
+                      </label>
+                      <input
+                        type="text"
+                        className="input w-full"
+                        placeholder="مثال: EMP100"
+                        value={hireForm.employeeCode}
+                        onChange={(e) =>
+                          setHireForm((prev) => ({ ...prev, employeeCode: e.target.value }))
+                        }
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        الفرع <span className="text-red-500">*</span>
+                      </label>
+                      <select
+                        className="input w-full"
+                        value={hireForm.branchId}
+                        onChange={(e) =>
+                          setHireForm((prev) => ({ ...prev, branchId: e.target.value }))
+                        }
+                      >
+                        <option value="">اختر الفرع</option>
+                        {branches.map((branch) => (
+                          <option key={branch.id} value={String(branch.id)}>
+                            {branch.name}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        الراتب الأساسي
+                      </label>
+                      <input
+                        type="number"
+                        className="input w-full"
+                        value={hireForm.basicSalary}
+                        onChange={(e) =>
+                          setHireForm((prev) => ({ ...prev, basicSalary: e.target.value }))
+                        }
+                      />
+                    </div>
+                  </>
+                )}
+              </div>
+              <div className="p-4 border-t bg-gray-50 flex justify-end gap-2 rounded-b-xl">
+                {hiredEmployeeId != null ? (
+                  <button onClick={() => setHireTarget(null)} className="btn-primary">
+                    إغلاق
+                  </button>
+                ) : (
+                  <>
+                    <button onClick={() => setHireTarget(null)} className="btn-secondary">
+                      إلغاء
+                    </button>
+                    <button onClick={submitHire} disabled={hireSaving} className="btn-primary">
+                      {hireSaving ? 'جارٍ التعيين...' : 'تعيين'}
+                    </button>
+                  </>
+                )}
+              </div>
+            </div>
+          </div>
+        )}
       </div>
     </MainLayout>
   )

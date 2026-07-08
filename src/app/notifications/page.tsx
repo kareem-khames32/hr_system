@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Bell,
@@ -16,6 +16,7 @@ import {
   Trash2,
   Check,
 } from 'lucide-react'
+import { fetchNotifications } from '@/lib/api'
 
 interface Notification {
   id: string
@@ -27,68 +28,6 @@ interface Notification {
   read: boolean
   actionUrl?: string
 }
-
-const notifications: Notification[] = [
-  {
-    id: '1',
-    title: 'تمت الموافقة على طلب الإجازة',
-    message: 'تمت الموافقة على طلب إجازتك من 28 يناير إلى 1 فبراير',
-    type: 'success',
-    category: 'leave',
-    timestamp: '2024-01-25T10:30:00',
-    read: false,
-    actionUrl: '/leaves',
-  },
-  {
-    id: '2',
-    title: 'قسيمة الراتب متاحة',
-    message: 'قسيمة راتب شهر يناير 2024 متاحة الآن للتحميل',
-    type: 'info',
-    category: 'payroll',
-    timestamp: '2024-01-25T09:00:00',
-    read: false,
-    actionUrl: '/payroll/payslip/1',
-  },
-  {
-    id: '3',
-    title: 'تذكير: دورة تدريبية إلزامية',
-    message: 'يرجى إكمال دورة "أساسيات الأمن السيبراني" قبل 15 فبراير',
-    type: 'warning',
-    category: 'training',
-    timestamp: '2024-01-24T14:00:00',
-    read: false,
-    actionUrl: '/training/1',
-  },
-  {
-    id: '4',
-    title: 'طلب موافقة جديد',
-    message: 'لديك طلب إجازة جديد من أحمد السعيد بانتظار موافقتك',
-    type: 'alert',
-    category: 'approval',
-    timestamp: '2024-01-24T11:30:00',
-    read: true,
-    actionUrl: '/leaves',
-  },
-  {
-    id: '5',
-    title: 'تحديث النظام',
-    message: 'سيتم إجراء صيانة مجدولة للنظام يوم السبت 27 يناير',
-    type: 'info',
-    category: 'system',
-    timestamp: '2024-01-23T16:00:00',
-    read: true,
-  },
-  {
-    id: '6',
-    title: 'تسجيل حضور ناقص',
-    message: 'لم يتم تسجيل انصرافك يوم الثلاثاء 23 يناير',
-    type: 'warning',
-    category: 'attendance',
-    timestamp: '2024-01-23T08:00:00',
-    read: true,
-    actionUrl: '/attendance',
-  },
-]
 
 const typeIcons = {
   info: Info,
@@ -122,9 +61,48 @@ const categoryLabels = {
   approval: 'الموافقات',
 }
 
+const mapKind = (kind: string): Notification['type'] => {
+  if (kind === 'success') return 'success'
+  if (kind === 'warning') return 'warning'
+  if (kind === 'error') return 'alert'
+  return 'info'
+}
+
+const mapCategory = (link: string): Notification['category'] => {
+  if (link.includes('request')) return 'approval'
+  if (link.includes('payroll') || link.includes('payslip')) return 'payroll'
+  if (link.includes('attendance')) return 'attendance'
+  if (link.includes('leave') || link.includes('balance')) return 'leave'
+  return 'system'
+}
+
 export default function NotificationsPage() {
   const [filter, setFilter] = useState('all')
-  const [notificationsList, setNotificationsList] = useState(notifications)
+  const [notificationsList, setNotificationsList] = useState<Notification[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    fetchNotifications()
+      .then((items) => {
+        setNotificationsList(
+          items.map((item) => ({
+            id: item.id,
+            title: item.title,
+            message: item.body,
+            type: mapKind(item.kind),
+            category: mapCategory(item.link ?? ''),
+            timestamp: item.at,
+            read: false,
+            actionUrl: item.link || undefined,
+          }))
+        )
+      })
+      .catch((err) => {
+        setError(err instanceof Error ? err.message : 'تعذر تحميل الإشعارات')
+      })
+      .finally(() => setLoading(false))
+  }, [])
 
   const filteredNotifications = notificationsList.filter((n) => {
     if (filter === 'all') return true
@@ -146,6 +124,13 @@ export default function NotificationsPage() {
 
   const deleteNotification = (id: string) => {
     setNotificationsList((prev) => prev.filter((n) => n.id !== id))
+  }
+
+  const handleClick = (notification: Notification) => {
+    markAsRead(notification.id)
+    if (notification.actionUrl) {
+      window.location.href = notification.actionUrl
+    }
   }
 
   const formatTime = (timestamp: string) => {
@@ -183,6 +168,9 @@ export default function NotificationsPage() {
           )}
         </div>
 
+        {/* Error Banner */}
+        {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
         {/* Filters */}
         <div className="flex gap-2 flex-wrap">
           {[
@@ -215,75 +203,81 @@ export default function NotificationsPage() {
         </div>
 
         {/* Notifications List */}
-        <div className="space-y-3">
-          {filteredNotifications.length === 0 ? (
-            <div className="card text-center py-12">
-              <Bell size={48} className="text-gray-300 mx-auto mb-4" />
-              <p className="text-gray-500">لا توجد إشعارات</p>
-            </div>
-          ) : (
-            filteredNotifications.map((notification) => {
-              const TypeIcon = typeIcons[notification.type]
-              const CategoryIcon = categoryIcons[notification.category]
+        {loading ? (
+          <div className="flex justify-center py-12">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+          <div className="space-y-3">
+            {filteredNotifications.length === 0 ? (
+              <div className="card text-center py-12">
+                <Bell size={48} className="text-gray-300 mx-auto mb-4" />
+                <p className="text-gray-500">لا توجد إشعارات</p>
+              </div>
+            ) : (
+              filteredNotifications.map((notification) => {
+                const TypeIcon = typeIcons[notification.type]
+                const CategoryIcon = categoryIcons[notification.category]
 
-              return (
-                <div
-                  key={notification.id}
-                  className={`card hover:shadow-lg transition-all cursor-pointer ${
-                    !notification.read ? 'border-r-4 border-r-primary-500 bg-primary-50/30' : ''
-                  }`}
-                  onClick={() => markAsRead(notification.id)}
-                >
-                  <div className="flex items-start gap-4">
-                    <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${typeColors[notification.type]}`}>
-                      <TypeIcon size={24} />
-                    </div>
-                    <div className="flex-1">
-                      <div className="flex items-start justify-between">
-                        <div>
-                          <div className="flex items-center gap-2 mb-1">
-                            <h3 className={`font-bold ${!notification.read ? 'text-gray-900' : 'text-gray-700'}`}>
-                              {notification.title}
-                            </h3>
-                            <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full flex items-center gap-1">
-                              <CategoryIcon size={12} />
-                              {categoryLabels[notification.category]}
-                            </span>
-                          </div>
-                          <p className="text-gray-600">{notification.message}</p>
-                          <p className="text-sm text-gray-400 mt-2">{formatTime(notification.timestamp)}</p>
-                        </div>
-                        <div className="flex items-center gap-2">
-                          {!notification.read && (
-                            <div className="w-2 h-2 bg-primary-500 rounded-full" />
-                          )}
-                          <button
-                            onClick={(e) => {
-                              e.stopPropagation()
-                              deleteNotification(notification.id)
-                            }}
-                            className="p-2 bg-gray-100 rounded-lg hover:bg-red-100 transition-colors"
-                          >
-                            <Trash2 size={16} className="text-gray-600 hover:text-red-600" />
-                          </button>
-                        </div>
+                return (
+                  <div
+                    key={notification.id}
+                    className={`card hover:shadow-lg transition-all cursor-pointer ${
+                      !notification.read ? 'border-r-4 border-r-primary-500 bg-primary-50/30' : ''
+                    }`}
+                    onClick={() => handleClick(notification)}
+                  >
+                    <div className="flex items-start gap-4">
+                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${typeColors[notification.type]}`}>
+                        <TypeIcon size={24} />
                       </div>
-                      {notification.actionUrl && (
-                        <a
-                          href={notification.actionUrl}
-                          className="inline-block mt-3 text-primary-600 font-medium text-sm hover:text-primary-700"
-                          onClick={(e) => e.stopPropagation()}
-                        >
-                          عرض التفاصيل ←
-                        </a>
-                      )}
+                      <div className="flex-1">
+                        <div className="flex items-start justify-between">
+                          <div>
+                            <div className="flex items-center gap-2 mb-1">
+                              <h3 className={`font-bold ${!notification.read ? 'text-gray-900' : 'text-gray-700'}`}>
+                                {notification.title}
+                              </h3>
+                              <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full flex items-center gap-1">
+                                <CategoryIcon size={12} />
+                                {categoryLabels[notification.category]}
+                              </span>
+                            </div>
+                            <p className="text-gray-600">{notification.message}</p>
+                            <p className="text-sm text-gray-400 mt-2">{formatTime(notification.timestamp)}</p>
+                          </div>
+                          <div className="flex items-center gap-2">
+                            {!notification.read && (
+                              <div className="w-2 h-2 bg-primary-500 rounded-full" />
+                            )}
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation()
+                                deleteNotification(notification.id)
+                              }}
+                              className="p-2 bg-gray-100 rounded-lg hover:bg-red-100 transition-colors"
+                            >
+                              <Trash2 size={16} className="text-gray-600 hover:text-red-600" />
+                            </button>
+                          </div>
+                        </div>
+                        {notification.actionUrl && (
+                          <a
+                            href={notification.actionUrl}
+                            className="inline-block mt-3 text-primary-600 font-medium text-sm hover:text-primary-700"
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            عرض التفاصيل ←
+                          </a>
+                        )}
+                      </div>
                     </div>
                   </div>
-                </div>
-              )
-            })
-          )}
-        </div>
+                )
+              })
+            )}
+          </div>
+        )}
       </div>
     </MainLayout>
   )
