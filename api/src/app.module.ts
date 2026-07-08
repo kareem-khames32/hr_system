@@ -11,6 +11,7 @@ import { AttendanceModule } from './attendance/attendance.module'
 import { PayrollModule } from './payroll/payroll.module'
 import { SettingsModule } from './settings/settings.module'
 import { ExtrasModule } from './assets/extras.module'
+import { OffboardingModule } from './offboarding/offboarding.module'
 import { DashboardController } from './dashboard/dashboard.controller'
 import { ReportsController } from './reports/reports.controller'
 
@@ -64,6 +65,7 @@ import { ReportsController } from './reports/reports.controller'
     PayrollModule,
     SettingsModule,
     ExtrasModule,
+    OffboardingModule,
   ],
   controllers: [HealthController, DashboardController, ReportsController],
 })

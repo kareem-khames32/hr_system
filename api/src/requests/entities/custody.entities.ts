@@ -27,8 +27,11 @@ export class Asset {
   currentHolderId: number
 }
 
+// الدورة: PENDING_ACK (بانتظار تأكيد الموظف) → PENDING_MANAGER_CONFIRM
+// (بانتظار اعتماد المدير المباشر) → ACTIVE (ملزِم قانونياً) → RETURNED
 export type CustodyStatus =
   | 'PENDING_ACK'
+  | 'PENDING_MANAGER_CONFIRM'
   | 'ACTIVE'
   | 'RETURN_REQUESTED'
   | 'RETURNED'
@@ -51,12 +54,20 @@ export class CustodyAssignment {
   @Column()
   employeeId: number
 
+  // مين أسند العهدة (employees.id)
+  @Column({ nullable: true })
+  assignedBy: number
+
   @CreateDateColumn()
   assignedAt: Date
 
-  // تأكيد الاستلام = السجل الملزِم قانونياً
+  // تأكيد الموظف بالاستلام
   @Column({ type: 'datetime', nullable: true })
   acknowledgedAt: Date
+
+  // اعتماد المدير المباشر — بعده تصبح ملزِمة (ACTIVE)
+  @Column({ type: 'datetime', nullable: true })
+  managerConfirmAt: Date
 
   @Column({ type: 'datetime', nullable: true })
   returnedAt: Date

@@ -244,6 +244,8 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'leave.carryover_expiry_months', value: '3' },
   // عملة النظام: SAR أو EGP — كل الشاشات تقرأها
   { key: 'system.currency', value: 'SAR' },
+  // مكافأة نهاية الخدمة: شهور لكل سنة خدمة (راجِعها مع القانوني)
+  { key: 'eos.months_per_year', value: '0.5' },
   // الرواتب: دورة 23 → 22 ومعاملات الحساب
   { key: 'payroll.cycle_start_day', value: '23' },
   { key: 'payroll.monthly_days', value: '30' },

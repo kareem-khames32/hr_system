@@ -123,7 +123,7 @@ export class CreateEmployeeDto {
   contractEnd?: string
 
   @IsOptional()
-  @IsIn(['active', 'probation', 'notice_period', 'suspended', 'archived'], {
+  @IsIn(['active', 'probation', 'notice_period', 'suspended', 'terminated', 'archived'], {
     message: 'حالة الموظف غير صالحة',
   })
   status?: string
@@ -277,7 +277,7 @@ export class UpdateEmployeeDto {
   contractEnd?: string
 
   @IsOptional()
-  @IsIn(['active', 'probation', 'notice_period', 'suspended', 'archived'], {
+  @IsIn(['active', 'probation', 'notice_period', 'suspended', 'terminated', 'archived'], {
     message: 'حالة الموظف غير صالحة',
   })
   status?: string

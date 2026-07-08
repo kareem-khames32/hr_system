@@ -150,13 +150,22 @@ export class RequestsController {
     return this.service.cancel(user, id)
   }
 
-  // تأكيد استلام العهدة — السجل الملزِم قانونياً
+  // تأكيد استلام العهدة (الموظف) → بانتظار اعتماد المدير
   @Post('custody/:assignmentId/acknowledge')
   acknowledge(
     @CurrentUser() user: JwtPayload,
     @Param('assignmentId', ParseIntPipe) assignmentId: number
   ) {
     return this.service.acknowledgeCustody(user, assignmentId)
+  }
+
+  // اعتماد المدير المباشر → العهدة ACTIVE (الملزِم قانونياً)
+  @Post('custody/:assignmentId/manager-confirm')
+  managerConfirm(
+    @CurrentUser() user: JwtPayload,
+    @Param('assignmentId', ParseIntPipe) assignmentId: number
+  ) {
+    return this.service.managerConfirmCustody(user, assignmentId)
   }
 
   // تشغيل يدوي لمحركي التصعيد والنقل المجدول (للأدمن — والـ cron يشغلهما تلقائياً)

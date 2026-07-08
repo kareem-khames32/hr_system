@@ -9,8 +9,9 @@ import {
 export type EmployeeStatus =
   | 'active'
   | 'probation'
-  | 'notice_period'
+  | 'notice_period' // فترة إشعار (استقالة معتمدة — إخلاء الطرف جارٍ)
   | 'suspended'
+  | 'terminated' // انتهت الخدمة (بعد التصفية وآخر يوم عمل)
   | 'archived'
 
 @Entity('employees')

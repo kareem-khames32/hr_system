@@ -110,6 +110,21 @@ export class RequestsService {
     const type = await this.types.findOne({ where: { code: req.typeCode } })
     if (!type) throw new NotFoundException('نوع الطلب غير موجود')
 
+    // §2.9: النقل ممنوع وعلى الموظف عهدة مفتوحة — تسليم قبل النقل
+    if (type.code === 'TEAM_TRANSFER') {
+      const openCustody = await this.ds.getRepository(CustodyAssignment).count({
+        where: {
+          employeeId: req.requesterId,
+          status: In(['PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'ACTIVE', 'RETURN_REQUESTED']),
+        },
+      })
+      if (openCustody > 0) {
+        throw new BadRequestException(
+          `على الموظف ${openCustody} عهدة مفتوحة — يجب إرجاعها أو نقلها قبل النقل`
+        )
+      }
+    }
+
     // الإجازات التي تمس الرصيد: تحقق الكفاية بالطبقات قبل دخول الدورة
     if (type.affectsBalance && type.category === 'leaves') {
       const payload = req.payload ? JSON.parse(req.payload) : {}
@@ -351,7 +366,7 @@ export class RequestsService {
     return this.requests.save(req)
   }
 
-  // ===== تأكيد استلام العهدة — يُكمل الطلب المعلّق =====
+  // ===== تأكيد استلام العهدة (الموظف) → بانتظار اعتماد المدير المباشر =====
   async acknowledgeCustody(user: JwtPayload, assignmentId: number) {
     const row = await this.ds.getRepository(CustodyAssignment).findOne({
       where: { id: assignmentId },
@@ -363,8 +378,32 @@ export class RequestsService {
     if (row.status !== 'PENDING_ACK') {
       throw new BadRequestException('العهدة ليست بانتظار التأكيد')
     }
-    row.status = 'ACTIVE'
+    row.status = 'PENDING_MANAGER_CONFIRM'
     row.acknowledgedAt = new Date()
+    return this.ds.getRepository(CustodyAssignment).save(row)
+  }
+
+  // ===== اعتماد المدير المباشر → ACTIVE (الملزِم قانونياً) =====
+  async managerConfirmCustody(user: JwtPayload, assignmentId: number) {
+    const row = await this.ds.getRepository(CustodyAssignment).findOne({
+      where: { id: assignmentId },
+    })
+    if (!row) throw new NotFoundException('إسناد العهدة غير موجود')
+    if (row.status !== 'PENDING_MANAGER_CONFIRM') {
+      throw new BadRequestException('العهدة ليست بانتظار اعتماد المدير')
+    }
+    // المدير المباشر لصاحب العهدة، أو صاحب صلاحية العهدة، أو super_admin
+    const directManager = await this.resolver.directManagerOf(row.employeeId)
+    const isManager = user.employeeId === directManager
+    const hasPerm =
+      user.role === 'super_admin' ||
+      (user.permissions ?? []).includes('*') ||
+      (user.permissions ?? []).includes('custody.assign')
+    if (!isManager && !hasPerm) {
+      throw new ForbiddenException('اعتماد العهدة للمدير المباشر أو مسؤول العهدة')
+    }
+    row.status = 'ACTIVE'
+    row.managerConfirmAt = new Date()
     await this.ds.getRepository(CustodyAssignment).save(row)
     await this.ds
       .getRepository('assets')

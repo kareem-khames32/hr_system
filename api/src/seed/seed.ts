@@ -42,6 +42,11 @@ import {
   AttendancePunch,
   ScheduleEntry,
 } from '../attendance/attendance.entities'
+import {
+  ClearanceItem,
+  OffboardingCase,
+  SettlementLine,
+} from '../offboarding/offboarding.entities'
 import { PayrollItem, PayrollRun } from '../payroll/payroll.entities'
 import {
   AssetType,
@@ -100,6 +105,10 @@ const common = {
     // الرواتب
     PayrollRun,
     PayrollItem,
+    // إنهاء الخدمة
+    OffboardingCase,
+    ClearanceItem,
+    SettlementLine,
     // الملحقات
     EmployeeDocument,
     PublicHoliday,

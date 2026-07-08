@@ -1,5 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common'
-import { EntityManager } from 'typeorm'
+import { EntityManager, In } from 'typeorm'
+import {
+  ClearanceItem,
+  OffboardingCase,
+} from '../offboarding/offboarding.entities'
 import { LeaveBalancesService } from './leave-balances.service'
 import { Request } from './entities/request.entity'
 import { RequestType } from './entities/request-type.entity'
@@ -331,7 +335,7 @@ export class DestinationsService {
     return { ref: refOf('BNK', hist.id), completed: true }
   }
 
-  // تغيير الحالة الوظيفية: استقالة → فترة إشعار، تقاعد → أرشفة
+  // تغيير الحالة الوظيفية: استقالة → فترة إشعار + فتح إخلاء الطرف أوتوماتيك
   private employeeStatusHandler: Handler = async (em, req, type, payload) => {
     const emp = await em.getRepository(Employee).findOne({
       where: { id: req.requesterId },
@@ -357,6 +361,45 @@ export class DestinationsService {
           : String(payload.reason ?? type.nameAr),
       requestId: req.id,
     })
+
+    // §2.7: الاستقالة المعتمدة تفتح حالة إخلاء طرف بجهاتها الخمس
+    if (type.code === 'RESIGNATION') {
+      const existing = await em.getRepository(OffboardingCase).findOne({
+        where: { employeeId: emp.id, status: In(['IN_CLEARANCE', 'IN_SETTLEMENT', 'SETTLED']) },
+      })
+      if (!existing) {
+        const kase = await em.getRepository(OffboardingCase).save({
+          employeeId: emp.id,
+          resignationRequestId: req.id,
+          lastWorkingDay: String(
+            payload.lastWorkingDate ?? new Date().toISOString().slice(0, 10)
+          ),
+          status: 'IN_CLEARANCE' as const,
+        })
+        const openCustody = await em.getRepository(CustodyAssignment).count({
+          where: {
+            employeeId: emp.id,
+            status: In(['PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'ACTIVE', 'RETURN_REQUESTED']),
+          },
+        })
+        await em.getRepository(ClearanceItem).save([
+          { caseId: kase.id, party: 'manager', label: 'تسليم المهام ونقل المعرفة' },
+          {
+            caseId: kase.id,
+            party: 'custody',
+            label: `إرجاع العهد والأصول${openCustody ? ` (${openCustody} عهدة مفتوحة)` : ' (لا عهد مفتوحة)'}`,
+          },
+          { caseId: kase.id, party: 'it', label: 'إلغاء الصلاحيات والأجهزة' },
+          { caseId: kase.id, party: 'finance', label: 'تسوية السلف وحساب المستحقات' },
+          { caseId: kase.id, party: 'hr', label: 'تسليم الوثائق وشهادة الخبرة' },
+        ] as any)
+        return {
+          ref: refOf('OFB', kase.id),
+          completed: true,
+          note: 'فُتحت حالة إخلاء الطرف',
+        }
+      }
+    }
     return { ref: refOf('ST', hist.id), completed: true }
   }
 
