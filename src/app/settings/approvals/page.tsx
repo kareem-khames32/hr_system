@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
 import {
@@ -8,14 +8,10 @@ import {
   Plus,
   Search,
   CheckCircle2,
-  Settings,
-  Users,
   GitBranch,
   Edit,
   Trash2,
   MoreVertical,
-  Calendar,
-  Wallet,
   FileText,
   Clock,
   UserCheck,
@@ -23,368 +19,158 @@ import {
   ChevronLeft,
   AlertCircle,
   Zap,
-  Shield,
-  Building2,
-  ArrowDownUp,
   Copy,
   ToggleRight,
   ToggleLeft,
 } from 'lucide-react'
-import { branches as branchOptions, getBranchName } from '@/data/branches'
+import { ApiBranch, fetchApprovalChains, fetchBranches } from '@/lib/api'
 
-// أنواع الطلبات التي تحتاج اعتماد
-const requestTypes = [
-  { id: 'leave', name: 'طلبات الإجازات', icon: Calendar, color: 'blue' },
-  { id: 'expense', name: 'طلبات المصاريف', icon: Wallet, color: 'green' },
-  { id: 'loan', name: 'طلبات السلف', icon: Wallet, color: 'purple' },
-  { id: 'overtime', name: 'طلبات العمل الإضافي', icon: Clock, color: 'orange' },
-  { id: 'salary_change', name: 'تعديلات الرواتب', icon: Wallet, color: 'red' },
-  { id: 'promotion', name: 'الترقيات', icon: ArrowDownUp, color: 'indigo' },
-  { id: 'resignation', name: 'الاستقالات', icon: FileText, color: 'gray' },
-  { id: 'document', name: 'طلبات المستندات', icon: FileText, color: 'teal' },
-  { id: 'permission', name: 'الأذونات', icon: Clock, color: 'cyan' },
-  { id: 'business_trip', name: 'رحلات العمل', icon: Building2, color: 'pink' },
-]
+// شكل سلسلة الاعتماد كما يرجعها الباك إند
+interface ApiChainStep {
+  id: number
+  chainId: number
+  stepOrder: number
+  approverRole: string
+  isParallel: boolean
+  thresholdField: string | null
+  thresholdOp: string | null
+  thresholdValue: number | null
+  slaDays: number | null
+  escalateTo: string | null
+  canDelegate: boolean
+}
 
-// مستويات المعتمدين
-const approverLevels = [
-  { id: 'direct_manager', name: 'المدير المباشر', description: 'مدير الموظف المباشر' },
-  { id: 'department_head', name: 'رئيس القسم', description: 'رئيس قسم الموظف' },
-  { id: 'hr_manager', name: 'مدير الموارد البشرية', description: 'مدير إدارة HR' },
-  { id: 'finance_manager', name: 'المدير المالي', description: 'للطلبات المالية' },
-  { id: 'ceo', name: 'المدير العام', description: 'للطلبات الكبيرة' },
-  { id: 'specific_person', name: 'شخص محدد', description: 'تحديد موظف بعينه' },
-  { id: 'role', name: 'صلاحية محددة', description: 'أي شخص له صلاحية معينة' },
-]
+interface ApiChain {
+  id: number
+  code: string
+  nameAr: string
+  branchId: number | null
+  isActive: boolean
+  steps: ApiChainStep[]
+}
 
-// شجرة الاعتمادات الافتراضية
-const initialWorkflows = [
-  {
-    id: '1',
-    name: 'اعتماد الإجازات - قصيرة',
-    requestType: 'leave',
-    description: 'إجازات أقل من 5 أيام',
-    isActive: true,
-    branchId: 'all',
-    conditions: [
-      { field: 'days', operator: 'less_than', value: 5 },
-    ],
-    steps: [
-      {
-        id: 's1',
-        level: 1,
-        approverType: 'direct_manager',
-        approverName: 'المدير المباشر',
-        canDelegate: true,
-        timeoutDays: 3,
-        autoApprove: false,
-      },
-    ],
-  },
-  {
-    id: '2',
-    name: 'اعتماد الإجازات - طويلة',
-    requestType: 'leave',
-    description: 'إجازات 5 أيام أو أكثر',
-    isActive: true,
-    branchId: 'all',
-    conditions: [
-      { field: 'days', operator: 'greater_equal', value: 5 },
-    ],
-    steps: [
-      {
-        id: 's1',
-        level: 1,
-        approverType: 'direct_manager',
-        approverName: 'المدير المباشر',
-        canDelegate: true,
-        timeoutDays: 3,
-        autoApprove: false,
-      },
-      {
-        id: 's2',
-        level: 2,
-        approverType: 'hr_manager',
-        approverName: 'مدير الموارد البشرية',
-        canDelegate: true,
-        timeoutDays: 2,
-        autoApprove: false,
-      },
-    ],
-  },
-  {
-    id: '3',
-    name: 'اعتماد المصاريف - صغيرة',
-    requestType: 'expense',
-    description: 'مصاريف أقل من 5,000 ريال',
-    isActive: true,
-    branchId: 'all',
-    conditions: [
-      { field: 'amount', operator: 'less_than', value: 5000 },
-    ],
-    steps: [
-      {
-        id: 's1',
-        level: 1,
-        approverType: 'direct_manager',
-        approverName: 'المدير المباشر',
-        canDelegate: true,
-        timeoutDays: 2,
-        autoApprove: false,
-      },
-    ],
-  },
-  {
-    id: '4',
-    name: 'اعتماد المصاريف - متوسطة',
-    requestType: 'expense',
-    description: 'مصاريف من 5,000 إلى 20,000 ريال',
-    isActive: true,
-    branchId: 'all',
-    conditions: [
-      { field: 'amount', operator: 'greater_equal', value: 5000 },
-      { field: 'amount', operator: 'less_than', value: 20000 },
-    ],
-    steps: [
-      {
-        id: 's1',
-        level: 1,
-        approverType: 'direct_manager',
-        approverName: 'المدير المباشر',
-        canDelegate: true,
-        timeoutDays: 2,
-        autoApprove: false,
-      },
-      {
-        id: 's2',
-        level: 2,
-        approverType: 'finance_manager',
-        approverName: 'المدير المالي',
-        canDelegate: false,
-        timeoutDays: 3,
-        autoApprove: false,
-      },
-    ],
-  },
-  {
-    id: '5',
-    name: 'اعتماد المصاريف - كبيرة',
-    requestType: 'expense',
-    description: 'مصاريف 20,000 ريال أو أكثر',
-    isActive: true,
-    branchId: 'all',
-    conditions: [
-      { field: 'amount', operator: 'greater_equal', value: 20000 },
-    ],
-    steps: [
-      {
-        id: 's1',
-        level: 1,
-        approverType: 'direct_manager',
-        approverName: 'المدير المباشر',
-        canDelegate: true,
-        timeoutDays: 2,
-        autoApprove: false,
-      },
-      {
-        id: 's2',
-        level: 2,
-        approverType: 'finance_manager',
-        approverName: 'المدير المالي',
-        canDelegate: false,
-        timeoutDays: 3,
-        autoApprove: false,
-      },
-      {
-        id: 's3',
-        level: 3,
-        approverType: 'ceo',
-        approverName: 'المدير العام',
-        canDelegate: false,
-        timeoutDays: 5,
-        autoApprove: false,
-      },
-    ],
-  },
-  {
-    id: '6',
-    name: 'اعتماد السلف',
-    requestType: 'loan',
-    description: 'جميع طلبات السلف',
-    isActive: true,
-    branchId: 'all',
-    conditions: [],
-    steps: [
-      {
-        id: 's1',
-        level: 1,
-        approverType: 'direct_manager',
-        approverName: 'المدير المباشر',
-        canDelegate: true,
-        timeoutDays: 2,
-        autoApprove: false,
-      },
-      {
-        id: 's2',
-        level: 2,
-        approverType: 'hr_manager',
-        approverName: 'مدير الموارد البشرية',
-        canDelegate: true,
-        timeoutDays: 2,
-        autoApprove: false,
-      },
-      {
-        id: 's3',
-        level: 3,
-        approverType: 'finance_manager',
-        approverName: 'المدير المالي',
-        canDelegate: false,
-        timeoutDays: 3,
-        autoApprove: false,
-      },
-    ],
-  },
-  {
-    id: '7',
-    name: 'اعتماد العمل الإضافي',
-    requestType: 'overtime',
-    description: 'جميع طلبات الأوفرتايم',
-    isActive: true,
-    branchId: 'all',
-    conditions: [],
-    steps: [
-      {
-        id: 's1',
-        level: 1,
-        approverType: 'direct_manager',
-        approverName: 'المدير المباشر',
-        canDelegate: true,
-        timeoutDays: 1,
-        autoApprove: false,
-      },
-    ],
-  },
-  {
-    id: '8',
-    name: 'اعتماد الترقيات',
-    requestType: 'promotion',
-    description: 'جميع طلبات الترقية',
-    isActive: true,
-    branchId: 'all',
-    conditions: [],
-    steps: [
-      {
-        id: 's1',
-        level: 1,
-        approverType: 'department_head',
-        approverName: 'رئيس القسم',
-        canDelegate: false,
-        timeoutDays: 5,
-        autoApprove: false,
-      },
-      {
-        id: 's2',
-        level: 2,
-        approverType: 'hr_manager',
-        approverName: 'مدير الموارد البشرية',
-        canDelegate: false,
-        timeoutDays: 5,
-        autoApprove: false,
-      },
-      {
-        id: 's3',
-        level: 3,
-        approverType: 'ceo',
-        approverName: 'المدير العام',
-        canDelegate: false,
-        timeoutDays: 7,
-        autoApprove: false,
-      },
-    ],
-  },
-]
+// أدوار المعتمدين الحقيقية في المحرك
+const roleLabels: Record<string, string> = {
+  direct_manager_of_requester: 'المدير المباشر',
+  receiving_team_manager: 'المدير المستقبِل',
+  hr: 'الموارد البشرية',
+  finance: 'المالية',
+  executive: 'التنفيذي',
+  custody_officer: 'أمين العهدة',
+  it: 'تقنية المعلومات',
+}
 
-const colorMap: Record<string, string> = {
-  blue: 'bg-blue-100 text-blue-600',
-  green: 'bg-green-100 text-green-600',
-  purple: 'bg-purple-100 text-purple-600',
-  orange: 'bg-orange-100 text-orange-600',
-  red: 'bg-red-100 text-red-600',
-  indigo: 'bg-indigo-100 text-indigo-600',
-  gray: 'bg-gray-100 text-gray-600',
-  teal: 'bg-teal-100 text-teal-600',
-  cyan: 'bg-cyan-100 text-cyan-600',
-  pink: 'bg-pink-100 text-pink-600',
+const roleDescriptions: Record<string, string> = {
+  direct_manager_of_requester: 'مدير مقدم الطلب المباشر',
+  receiving_team_manager: 'مدير الفريق المستقبِل (النقل)',
+  hr: 'إدارة الموارد البشرية',
+  finance: 'الإدارة المالية',
+  executive: 'الإدارة التنفيذية',
+  custody_officer: 'المسؤول عن العُهد',
+  it: 'قسم تقنية المعلومات',
+}
+
+const thresholdFieldLabels: Record<string, string> = {
+  amount: 'المبلغ',
+  increase_pct: 'نسبة الزيادة %',
+}
+
+const READONLY_TITLE = 'التعديل في مرحلة لاحقة'
+
+type StepForm = {
+  id: number | string
+  approverRole: string
+  slaDays: number
+  canDelegate: boolean
 }
 
 export default function ApprovalsPage() {
-  const [workflows, setWorkflows] = useState(initialWorkflows)
+  const [chains, setChains] = useState<ApiChain[]>([])
+  const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [filterType, setFilterType] = useState('')
   const [filterBranch, setFilterBranch] = useState('')
   const [showModal, setShowModal] = useState(false)
-  const [editingWorkflow, setEditingWorkflow] = useState<typeof initialWorkflows[0] | null>(null)
-  const [activeMenu, setActiveMenu] = useState<string | null>(null)
-  const [expandedWorkflow, setExpandedWorkflow] = useState<string | null>(null)
+  const [editingChain, setEditingChain] = useState<ApiChain | null>(null)
+  const [activeMenu, setActiveMenu] = useState<number | null>(null)
+  const [expandedChain, setExpandedChain] = useState<number | null>(null)
 
-  const [formData, setFormData] = useState({
+  const [formData, setFormData] = useState<{
+    name: string
+    code: string
+    branchId: string
+    isActive: boolean
+    steps: StepForm[]
+  }>({
     name: '',
-    requestType: '',
+    code: '',
     branchId: 'all',
-    description: '',
     isActive: true,
-    steps: [] as typeof initialWorkflows[0]['steps'],
+    steps: [],
   })
 
-  const filteredWorkflows = workflows.filter((wf) => {
+  useEffect(() => {
+    const load = async () => {
+      try {
+        const [ch, brs] = await Promise.all([fetchApprovalChains(), fetchBranches()])
+        setChains(ch as ApiChain[])
+        setBranches(brs)
+        setError(null)
+      } catch (err: any) {
+        setError(err.message)
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+  }, [])
+
+  const branchLabelOf = (branchId: number | null) =>
+    branchId === null
+      ? 'كل الفروع'
+      : branches.find((b) => b.id === branchId)?.name ?? `فرع #${branchId}`
+
+  const filteredChains = chains.filter((chain) => {
     const matchesSearch =
-      wf.name.includes(searchQuery) ||
-      wf.description.includes(searchQuery)
-    const matchesType = !filterType || wf.requestType === filterType
+      chain.nameAr.includes(searchQuery) ||
+      chain.code.toLowerCase().includes(searchQuery.toLowerCase())
     const matchesBranch =
       !filterBranch ||
-      wf.branchId === filterBranch ||
-      (filterBranch === 'all' && wf.branchId === 'all')
-    return matchesSearch && matchesType && matchesBranch
+      (filterBranch === 'all'
+        ? chain.branchId === null
+        : chain.branchId === Number(filterBranch))
+    return matchesSearch && matchesBranch
   })
 
-  // Group workflows by request type
-  const groupedWorkflows = filteredWorkflows.reduce((acc, wf) => {
-    if (!acc[wf.requestType]) {
-      acc[wf.requestType] = []
-    }
-    acc[wf.requestType].push(wf)
-    return acc
-  }, {} as Record<string, typeof initialWorkflows>)
-
-  const handleOpenModal = (workflow?: typeof initialWorkflows[0]) => {
-    if (workflow) {
-      setEditingWorkflow(workflow)
+  const handleOpenModal = (chain?: ApiChain) => {
+    if (chain) {
+      setEditingChain(chain)
       setFormData({
-        name: workflow.name,
-        requestType: workflow.requestType,
-        branchId: workflow.branchId || 'all',
-        description: workflow.description,
-        isActive: workflow.isActive,
-        steps: [...workflow.steps],
+        name: chain.nameAr,
+        code: chain.code,
+        branchId: chain.branchId === null ? 'all' : String(chain.branchId),
+        isActive: chain.isActive,
+        steps: chain.steps.map((s) => ({
+          id: s.id,
+          approverRole: s.approverRole,
+          slaDays: s.slaDays ?? 3,
+          canDelegate: s.canDelegate,
+        })),
       })
     } else {
-      setEditingWorkflow(null)
+      setEditingChain(null)
       setFormData({
         name: '',
-        requestType: '',
+        code: '',
         branchId: 'all',
-        description: '',
         isActive: true,
         steps: [
           {
             id: 's1',
-            level: 1,
-            approverType: 'direct_manager',
-            approverName: 'المدير المباشر',
+            approverRole: 'direct_manager_of_requester',
+            slaDays: 3,
             canDelegate: true,
-            timeoutDays: 3,
-            autoApprove: false,
           },
         ],
       })
@@ -392,99 +178,37 @@ export default function ApprovalsPage() {
     setShowModal(true)
   }
 
-  const handleSave = () => {
-    if (editingWorkflow) {
-      setWorkflows(
-        workflows.map((wf) =>
-          wf.id === editingWorkflow.id
-            ? { ...wf, ...formData, conditions: editingWorkflow.conditions }
-            : wf
-        )
-      )
-    } else {
-      const newWorkflow = {
-        id: String(Date.now()),
-        ...formData,
-        conditions: [],
-      }
-      setWorkflows([...workflows, newWorkflow])
-    }
-    setShowModal(false)
-  }
-
-  const handleDelete = (id: string) => {
-    if (confirm('هل أنت متأكد من حذف هذه الشجرة؟')) {
-      setWorkflows(workflows.filter((wf) => wf.id !== id))
-    }
-    setActiveMenu(null)
-  }
-
-  const toggleActive = (id: string) => {
-    setWorkflows(
-      workflows.map((wf) =>
-        wf.id === id ? { ...wf, isActive: !wf.isActive } : wf
-      )
-    )
-    setActiveMenu(null)
-  }
-
-  const duplicateWorkflow = (workflow: typeof initialWorkflows[0]) => {
-    const newWorkflow = {
-      ...workflow,
-      id: String(Date.now()),
-      name: workflow.name + ' (نسخة)',
-    }
-    setWorkflows([...workflows, newWorkflow])
-    setActiveMenu(null)
-  }
-
   const addStep = () => {
-    const newStep = {
-      id: `s${formData.steps.length + 1}`,
-      level: formData.steps.length + 1,
-      approverType: 'direct_manager',
-      approverName: 'المدير المباشر',
-      canDelegate: true,
-      timeoutDays: 3,
-      autoApprove: false,
-    }
     setFormData({
       ...formData,
-      steps: [...formData.steps, newStep],
+      steps: [
+        ...formData.steps,
+        {
+          id: `s${formData.steps.length + 1}-${Date.now()}`,
+          approverRole: 'direct_manager_of_requester',
+          slaDays: 3,
+          canDelegate: true,
+        },
+      ],
     })
   }
 
   const removeStep = (index: number) => {
-    const newSteps = formData.steps.filter((_, i) => i !== index)
-    // Re-number levels
-    newSteps.forEach((step, i) => {
-      step.level = i + 1
-    })
     setFormData({
       ...formData,
-      steps: newSteps,
+      steps: formData.steps.filter((_, i) => i !== index),
     })
   }
 
-  const updateStep = (index: number, field: string, value: any) => {
+  const updateStep = (index: number, field: keyof StepForm, value: any) => {
     const newSteps = [...formData.steps]
     ;(newSteps[index] as any)[field] = value
-
-    // Update approver name based on type
-    if (field === 'approverType') {
-      const approver = approverLevels.find((a) => a.id === value)
-      newSteps[index].approverName = approver?.name || ''
-    }
-
-    setFormData({
-      ...formData,
-      steps: newSteps,
-    })
+    setFormData({ ...formData, steps: newSteps })
   }
 
-  const totalWorkflows = workflows.length
-  const activeWorkflows = workflows.filter((wf) => wf.isActive).length
-  const typesWithWorkflows = new Set(workflows.map((wf) => wf.requestType)).size
+  const totalChains = chains.length
+  const activeChains = chains.filter((c) => c.isActive).length
+  const totalSteps = chains.reduce((sum, c) => sum + c.steps.length, 0)
 
   return (
     <MainLayout>
@@ -502,7 +226,7 @@ export default function ApprovalsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">الاعتمادات والموافقات</h1>
-            <p className="text-gray-500 mt-1">إدارة شجرة الاعتمادات ومسارات الموافقة</p>
+            <p className="text-gray-500 mt-1">سلاسل الاعتماد الفعلية المطبقة على الطلبات</p>
           </div>
           <button
             onClick={() => handleOpenModal()}
@@ -513,6 +237,9 @@ export default function ApprovalsPage() {
           </button>
         </div>
 
+        {/* Error Banner */}
+        {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
           <div className="card p-4">
@@ -522,7 +249,7 @@ export default function ApprovalsPage() {
               </div>
               <div>
                 <p className="text-sm text-gray-500">مسارات الاعتماد</p>
-                <p className="text-2xl font-bold text-gray-800">{totalWorkflows}</p>
+                <p className="text-2xl font-bold text-gray-800">{totalChains}</p>
               </div>
             </div>
           </div>
@@ -533,7 +260,7 @@ export default function ApprovalsPage() {
               </div>
               <div>
                 <p className="text-sm text-gray-500">المسارات النشطة</p>
-                <p className="text-2xl font-bold text-success-600">{activeWorkflows}</p>
+                <p className="text-2xl font-bold text-success-600">{activeChains}</p>
               </div>
             </div>
           </div>
@@ -543,8 +270,8 @@ export default function ApprovalsPage() {
                 <FileText size={24} className="text-warning-500" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">أنواع الطلبات</p>
-                <p className="text-2xl font-bold text-gray-800">{typesWithWorkflows}</p>
+                <p className="text-sm text-gray-500">إجمالي الخطوات</p>
+                <p className="text-2xl font-bold text-gray-800">{totalSteps}</p>
               </div>
             </div>
           </div>
@@ -556,10 +283,7 @@ export default function ApprovalsPage() {
               <div>
                 <p className="text-sm text-gray-500">متوسط المستويات</p>
                 <p className="text-2xl font-bold text-gray-800">
-                  {Math.round(
-                    workflows.reduce((sum, wf) => sum + wf.steps.length, 0) /
-                      workflows.length
-                  ) || 0}
+                  {totalChains > 0 ? Math.round(totalSteps / totalChains) : 0}
                 </p>
               </div>
             </div>
@@ -583,25 +307,13 @@ export default function ApprovalsPage() {
               />
             </div>
             <select
-              value={filterType}
-              onChange={(e) => setFilterType(e.target.value)}
-              className="input w-48"
-            >
-              <option value="">كل الأنواع</option>
-              {requestTypes.map((type) => (
-                <option key={type.id} value={type.id}>
-                  {type.name}
-                </option>
-              ))}
-            </select>
-            <select
               value={filterBranch}
               onChange={(e) => setFilterBranch(e.target.value)}
               className="input w-48"
             >
               <option value="">كل الفروع</option>
               <option value="all">مسارات عامة (كل الفروع)</option>
-              {branchOptions.map((b) => (
+              {branches.map((b) => (
                 <option key={b.id} value={b.id}>
                   {b.name}
                 </option>
@@ -610,281 +322,277 @@ export default function ApprovalsPage() {
           </div>
         </div>
 
-        {/* Request Types Overview */}
-        <div className="card p-6">
-          <h3 className="font-bold text-gray-800 mb-4">أنواع الطلبات</h3>
-          <div className="grid grid-cols-5 gap-4">
-            {requestTypes.map((type) => {
-              const typeWorkflows = workflows.filter((wf) => wf.requestType === type.id)
-              const activeCount = typeWorkflows.filter((wf) => wf.isActive).length
-
-              return (
-                <button
-                  key={type.id}
-                  onClick={() => setFilterType(filterType === type.id ? '' : type.id)}
-                  className={`p-4 rounded-xl border-2 transition-all text-right ${
-                    filterType === type.id
-                      ? 'border-primary-500 bg-primary-50'
-                      : 'border-gray-100 hover:border-gray-200'
-                  }`}
-                >
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center mb-3 ${colorMap[type.color]}`}>
-                    <type.icon size={20} />
-                  </div>
-                  <p className="font-medium text-gray-800 text-sm">{type.name}</p>
-                  <p className="text-xs text-gray-500 mt-1">
-                    {typeWorkflows.length} مسار • {activeCount} نشط
-                  </p>
-                </button>
-              )
-            })}
+        {/* Loading */}
+        {loading && (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
           </div>
-        </div>
+        )}
 
-        {/* Workflows List */}
-        <div className="space-y-6">
-          {Object.entries(groupedWorkflows).map(([typeId, typeWorkflows]) => {
-            const type = requestTypes.find((t) => t.id === typeId)
-            if (!type) return null
+        {/* Chains List */}
+        {!loading && filteredChains.length > 0 && (
+          <div className="space-y-4">
+            {/* Section Header */}
+            <div className="flex items-center gap-3">
+              <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
+                <GitBranch size={20} className="text-primary-600" />
+              </div>
+              <div>
+                <h3 className="font-bold text-gray-800">سلاسل الاعتماد</h3>
+                <p className="text-sm text-gray-500">{filteredChains.length} مسار اعتماد</p>
+              </div>
+            </div>
 
-            return (
-              <div key={typeId} className="space-y-4">
-                {/* Type Header */}
-                <div className="flex items-center gap-3">
-                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${colorMap[type.color]}`}>
-                    <type.icon size={20} />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-gray-800">{type.name}</h3>
-                    <p className="text-sm text-gray-500">{typeWorkflows.length} مسار اعتماد</p>
-                  </div>
-                </div>
-
-                {/* Workflows */}
-                <div className="grid grid-cols-1 gap-4 mr-13">
-                  {typeWorkflows.map((workflow) => (
-                    <div
-                      key={workflow.id}
-                      className={`card p-5 ${!workflow.isActive ? 'opacity-60' : ''}`}
-                    >
-                      <div className="flex items-start justify-between">
-                        <div className="flex items-start gap-4">
-                          <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                            workflow.isActive ? 'bg-success-100' : 'bg-gray-100'
-                          }`}>
-                            <GitBranch size={24} className={workflow.isActive ? 'text-success-600' : 'text-gray-400'} />
+            {/* Chains */}
+            <div className="grid grid-cols-1 gap-4 mr-13">
+              {filteredChains.map((chain) => {
+                const thresholdSteps = chain.steps.filter((s) => s.thresholdField)
+                return (
+                  <div
+                    key={chain.id}
+                    className={`card p-5 ${!chain.isActive ? 'opacity-60' : ''}`}
+                  >
+                    <div className="flex items-start justify-between">
+                      <div className="flex items-start gap-4">
+                        <div
+                          className={`w-12 h-12 rounded-xl flex items-center justify-center ${
+                            chain.isActive ? 'bg-success-100' : 'bg-gray-100'
+                          }`}
+                        >
+                          <GitBranch
+                            size={24}
+                            className={chain.isActive ? 'text-success-600' : 'text-gray-400'}
+                          />
+                        </div>
+                        <div>
+                          <div className="flex items-center gap-2">
+                            <h4 className="font-bold text-gray-800">{chain.nameAr}</h4>
+                            <span
+                              className={`badge text-xs ${
+                                chain.isActive ? 'badge-success' : 'badge-danger'
+                              }`}
+                            >
+                              {chain.isActive ? 'نشط' : 'معطل'}
+                            </span>
+                            <span className="badge text-xs bg-indigo-100 text-indigo-700">
+                              {branchLabelOf(chain.branchId)}
+                            </span>
                           </div>
-                          <div>
-                            <div className="flex items-center gap-2">
-                              <h4 className="font-bold text-gray-800">{workflow.name}</h4>
-                              <span className={`badge text-xs ${workflow.isActive ? 'badge-success' : 'badge-danger'}`}>
-                                {workflow.isActive ? 'نشط' : 'معطل'}
-                              </span>
-                              <span className="badge text-xs bg-indigo-100 text-indigo-700">
-                                {workflow.branchId === 'all'
-                                  ? 'كل الفروع'
-                                  : getBranchName(workflow.branchId)}
+                          <p className="text-sm text-gray-500 mt-1 font-mono" dir="ltr">
+                            {chain.code}
+                          </p>
+
+                          {/* Conditions */}
+                          {thresholdSteps.length > 0 && (
+                            <div className="flex items-center gap-2 mt-2">
+                              <AlertCircle size={14} className="text-warning-500" />
+                              <span className="text-xs text-warning-600">
+                                {thresholdSteps.length} شرط عتبة
                               </span>
                             </div>
-                            <p className="text-sm text-gray-500 mt-1">{workflow.description}</p>
-
-                            {/* Conditions */}
-                            {workflow.conditions.length > 0 && (
-                              <div className="flex items-center gap-2 mt-2">
-                                <AlertCircle size={14} className="text-warning-500" />
-                                <span className="text-xs text-warning-600">
-                                  {workflow.conditions.length} شرط
-                                </span>
-                              </div>
-                            )}
-                          </div>
-                        </div>
-
-                        {/* Actions */}
-                        <div className="relative">
-                          <button
-                            onClick={() =>
-                              setActiveMenu(activeMenu === workflow.id ? null : workflow.id)
-                            }
-                            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                          >
-                            <MoreVertical size={18} className="text-gray-500" />
-                          </button>
-
-                          {activeMenu === workflow.id && (
-                            <>
-                              <div
-                                className="fixed inset-0 z-10"
-                                onClick={() => setActiveMenu(null)}
-                              />
-                              <div className="absolute left-0 top-full mt-1 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
-                                <button
-                                  onClick={() => {
-                                    handleOpenModal(workflow)
-                                    setActiveMenu(null)
-                                  }}
-                                  className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50 text-sm"
-                                >
-                                  <Edit size={16} />
-                                  تعديل
-                                </button>
-                                <button
-                                  onClick={() => duplicateWorkflow(workflow)}
-                                  className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50 text-sm"
-                                >
-                                  <Copy size={16} />
-                                  نسخ
-                                </button>
-                                <button
-                                  onClick={() => toggleActive(workflow.id)}
-                                  className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50 text-sm"
-                                >
-                                  {workflow.isActive ? (
-                                    <>
-                                      <ToggleLeft size={16} />
-                                      تعطيل
-                                    </>
-                                  ) : (
-                                    <>
-                                      <ToggleRight size={16} />
-                                      تفعيل
-                                    </>
-                                  )}
-                                </button>
-                                <div className="border-t border-gray-100 my-1" />
-                                <button
-                                  onClick={() => handleDelete(workflow.id)}
-                                  className="w-full flex items-center gap-2 px-4 py-2 text-danger-600 hover:bg-danger-50 text-sm"
-                                >
-                                  <Trash2 size={16} />
-                                  حذف
-                                </button>
-                              </div>
-                            </>
                           )}
                         </div>
                       </div>
 
-                      {/* Approval Steps */}
-                      <div className="mt-4 pt-4 border-t border-gray-100">
-                        <div className="flex items-center gap-3">
-                          <span className="text-sm text-gray-500">مستويات الاعتماد:</span>
-                          <div className="flex items-center gap-2">
-                            {workflow.steps.map((step, index) => (
-                              <div key={step.id} className="flex items-center gap-2">
-                                <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-lg">
-                                  <span className="w-5 h-5 bg-primary-500 text-white rounded-full flex items-center justify-center text-xs font-bold">
-                                    {step.level}
-                                  </span>
-                                  <span className="text-sm text-gray-700">{step.approverName}</span>
-                                  {step.canDelegate && (
-                                    <Zap size={12} className="text-warning-500" />
-                                  )}
-                                </div>
-                                {index < workflow.steps.length - 1 && (
-                                  <ChevronLeft size={16} className="text-gray-400" />
+                      {/* Actions */}
+                      <div className="relative">
+                        <button
+                          onClick={() =>
+                            setActiveMenu(activeMenu === chain.id ? null : chain.id)
+                          }
+                          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                        >
+                          <MoreVertical size={18} className="text-gray-500" />
+                        </button>
+
+                        {activeMenu === chain.id && (
+                          <>
+                            <div
+                              className="fixed inset-0 z-10"
+                              onClick={() => setActiveMenu(null)}
+                            />
+                            <div className="absolute left-0 top-full mt-1 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+                              <button
+                                onClick={() => {
+                                  handleOpenModal(chain)
+                                  setActiveMenu(null)
+                                }}
+                                className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50 text-sm"
+                              >
+                                <Edit size={16} />
+                                عرض / تعديل
+                              </button>
+                              <button
+                                disabled
+                                title={READONLY_TITLE}
+                                className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 opacity-50 cursor-not-allowed text-sm"
+                              >
+                                <Copy size={16} />
+                                نسخ
+                              </button>
+                              <button
+                                disabled
+                                title={READONLY_TITLE}
+                                className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 opacity-50 cursor-not-allowed text-sm"
+                              >
+                                {chain.isActive ? (
+                                  <>
+                                    <ToggleLeft size={16} />
+                                    تعطيل
+                                  </>
+                                ) : (
+                                  <>
+                                    <ToggleRight size={16} />
+                                    تفعيل
+                                  </>
+                                )}
+                              </button>
+                              <div className="border-t border-gray-100 my-1" />
+                              <button
+                                disabled
+                                title={READONLY_TITLE}
+                                className="w-full flex items-center gap-2 px-4 py-2 text-danger-600 opacity-50 cursor-not-allowed text-sm"
+                              >
+                                <Trash2 size={16} />
+                                حذف
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </div>
+
+                    {/* Approval Steps */}
+                    <div className="mt-4 pt-4 border-t border-gray-100">
+                      <div className="flex items-center gap-3">
+                        <span className="text-sm text-gray-500">مستويات الاعتماد:</span>
+                        <div className="flex items-center gap-2 flex-wrap">
+                          {chain.steps.length === 0 && (
+                            <span className="text-sm text-gray-400">
+                              بلا موافقات — تنفيذ تلقائي
+                            </span>
+                          )}
+                          {chain.steps.map((step, index) => (
+                            <div key={step.id} className="flex items-center gap-2">
+                              <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-lg">
+                                <span className="w-5 h-5 bg-primary-500 text-white rounded-full flex items-center justify-center text-xs font-bold">
+                                  {step.stepOrder}
+                                </span>
+                                <span className="text-sm text-gray-700">
+                                  {roleLabels[step.approverRole] ?? step.approverRole}
+                                </span>
+                                {step.canDelegate && (
+                                  <Zap size={12} className="text-warning-500" />
                                 )}
                               </div>
-                            ))}
-                          </div>
+                              {index < chain.steps.length - 1 && (
+                                <ChevronLeft size={16} className="text-gray-400" />
+                              )}
+                            </div>
+                          ))}
                         </div>
                       </div>
+                    </div>
 
-                      {/* Expand for more details */}
+                    {/* Expand for more details */}
+                    {chain.steps.length > 0 && (
                       <button
                         onClick={() =>
-                          setExpandedWorkflow(
-                            expandedWorkflow === workflow.id ? null : workflow.id
-                          )
+                          setExpandedChain(expandedChain === chain.id ? null : chain.id)
                         }
                         className="mt-3 text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
                       >
                         <ChevronDown
                           size={16}
                           className={`transition-transform ${
-                            expandedWorkflow === workflow.id ? 'rotate-180' : ''
+                            expandedChain === chain.id ? 'rotate-180' : ''
                           }`}
                         />
-                        {expandedWorkflow === workflow.id ? 'إخفاء التفاصيل' : 'عرض التفاصيل'}
+                        {expandedChain === chain.id ? 'إخفاء التفاصيل' : 'عرض التفاصيل'}
                       </button>
+                    )}
 
-                      {/* Expanded Details */}
-                      {expandedWorkflow === workflow.id && (
-                        <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
-                          {workflow.steps.map((step) => (
-                            <div
-                              key={step.id}
-                              className="flex items-center justify-between p-3 bg-gray-50 rounded-xl"
-                            >
-                              <div className="flex items-center gap-3">
-                                <span className="w-8 h-8 bg-primary-500 text-white rounded-lg flex items-center justify-center font-bold">
-                                  {step.level}
-                                </span>
-                                <div>
-                                  <p className="font-medium text-gray-800">{step.approverName}</p>
-                                  <p className="text-xs text-gray-500">
-                                    {approverLevels.find((a) => a.id === step.approverType)?.description}
-                                  </p>
-                                </div>
-                              </div>
-                              <div className="flex items-center gap-4 text-sm text-gray-500">
-                                <div className="flex items-center gap-1">
-                                  <Clock size={14} />
-                                  <span>{step.timeoutDays} أيام</span>
-                                </div>
-                                {step.canDelegate && (
-                                  <span className="px-2 py-1 bg-warning-100 text-warning-700 rounded text-xs">
-                                    يمكن التفويض
-                                  </span>
-                                )}
-                                {step.autoApprove && (
-                                  <span className="px-2 py-1 bg-success-100 text-success-700 rounded text-xs">
-                                    موافقة تلقائية
-                                  </span>
-                                )}
+                    {/* Expanded Details */}
+                    {expandedChain === chain.id && (
+                      <div className="mt-4 pt-4 border-t border-gray-100 space-y-3">
+                        {chain.steps.map((step) => (
+                          <div
+                            key={step.id}
+                            className="flex items-center justify-between p-3 bg-gray-50 rounded-xl"
+                          >
+                            <div className="flex items-center gap-3">
+                              <span className="w-8 h-8 bg-primary-500 text-white rounded-lg flex items-center justify-center font-bold">
+                                {step.stepOrder}
+                              </span>
+                              <div>
+                                <p className="font-medium text-gray-800">
+                                  {roleLabels[step.approverRole] ?? step.approverRole}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {roleDescriptions[step.approverRole] ?? ''}
+                                </p>
                               </div>
                             </div>
-                          ))}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              </div>
-            )
-          })}
-        </div>
+                            <div className="flex items-center gap-4 text-sm text-gray-500">
+                              {step.thresholdField && (
+                                <span className="px-2 py-1 bg-warning-100 text-warning-700 rounded text-xs">
+                                  {thresholdFieldLabels[step.thresholdField] ??
+                                    step.thresholdField}{' '}
+                                  {step.thresholdOp} {step.thresholdValue}
+                                </span>
+                              )}
+                              {step.slaDays != null && (
+                                <div className="flex items-center gap-1">
+                                  <Clock size={14} />
+                                  <span>{step.slaDays} أيام</span>
+                                </div>
+                              )}
+                              {step.escalateTo && (
+                                <span className="px-2 py-1 bg-gray-200 text-gray-600 rounded text-xs">
+                                  التصعيد إلى: {roleLabels[step.escalateTo] ?? step.escalateTo}
+                                </span>
+                              )}
+                              {step.canDelegate && (
+                                <span className="px-2 py-1 bg-warning-100 text-warning-700 rounded text-xs">
+                                  يمكن التفويض
+                                </span>
+                              )}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Empty State */}
-        {filteredWorkflows.length === 0 && (
+        {!loading && filteredChains.length === 0 && (
           <div className="card p-12 text-center">
             <GitBranch size={48} className="mx-auto text-gray-300 mb-4" />
             <h3 className="text-lg font-bold text-gray-800 mb-2">لا توجد مسارات اعتماد</h3>
             <p className="text-gray-500 mb-4">
-              {searchQuery || filterType
+              {searchQuery || filterBranch
                 ? 'لم يتم العثور على مسارات مطابقة للبحث'
-                : 'ابدأ بإضافة مسار اعتماد جديد'}
+                : 'لم تُعرَّف سلاسل اعتماد بعد'}
             </p>
-            {!searchQuery && !filterType && (
-              <button
-                onClick={() => handleOpenModal()}
-                className="btn-primary inline-flex items-center gap-2"
-              >
-                <Plus size={18} />
-                إضافة مسار اعتماد
-              </button>
-            )}
           </div>
         )}
 
-        {/* Modal */}
+        {/* Modal (عرض فقط — التعديل في مرحلة لاحقة) */}
         {showModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b border-gray-100">
                 <h2 className="text-xl font-bold text-gray-800">
-                  {editingWorkflow ? 'تعديل مسار الاعتماد' : 'إضافة مسار اعتماد جديد'}
+                  {editingChain ? 'تعديل مسار الاعتماد' : 'إضافة مسار اعتماد جديد'}
                 </h2>
+                <p className="text-sm text-warning-600 mt-1">
+                  عرض فقط — {READONLY_TITLE}
+                </p>
               </div>
 
               <div className="p-6 space-y-6">
@@ -906,22 +614,18 @@ export default function ApprovalsPage() {
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      نوع الطلب *
+                      كود المسار *
                     </label>
-                    <select
-                      value={formData.requestType}
+                    <input
+                      type="text"
+                      value={formData.code}
                       onChange={(e) =>
-                        setFormData({ ...formData, requestType: e.target.value })
+                        setFormData({ ...formData, code: e.target.value.toUpperCase() })
                       }
-                      className="input w-full"
-                    >
-                      <option value="">اختر نوع الطلب</option>
-                      {requestTypes.map((type) => (
-                        <option key={type.id} value={type.id}>
-                          {type.name}
-                        </option>
-                      ))}
-                    </select>
+                      className="input w-full font-mono"
+                      placeholder="CHAIN_X"
+                      dir="ltr"
+                    />
                   </div>
                 </div>
 
@@ -937,7 +641,7 @@ export default function ApprovalsPage() {
                     className="input w-full"
                   >
                     <option value="all">كل الفروع (مسار عام)</option>
-                    {branchOptions.map((b) => (
+                    {branches.map((b) => (
                       <option key={b.id} value={b.id}>
                         {b.name} فقط
                       </option>
@@ -946,21 +650,6 @@ export default function ApprovalsPage() {
                   <p className="text-xs text-gray-400 mt-1">
                     المسار الخاص بفرع يُطبَّق على طلبات موظفي هذا الفرع فقط — كل فرع بدوراته المنفصلة
                   </p>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    الوصف
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.description}
-                    onChange={(e) =>
-                      setFormData({ ...formData, description: e.target.value })
-                    }
-                    className="input w-full"
-                    placeholder="وصف مختصر للمسار وشروطه"
-                  />
                 </div>
 
                 {/* Approval Steps */}
@@ -1009,15 +698,15 @@ export default function ApprovalsPage() {
                               المعتمد
                             </label>
                             <select
-                              value={step.approverType}
+                              value={step.approverRole}
                               onChange={(e) =>
-                                updateStep(index, 'approverType', e.target.value)
+                                updateStep(index, 'approverRole', e.target.value)
                               }
                               className="input w-full text-sm"
                             >
-                              {approverLevels.map((level) => (
-                                <option key={level.id} value={level.id}>
-                                  {level.name}
+                              {Object.entries(roleLabels).map(([id, name]) => (
+                                <option key={id} value={id}>
+                                  {name}
                                 </option>
                               ))}
                             </select>
@@ -1028,9 +717,9 @@ export default function ApprovalsPage() {
                             </label>
                             <input
                               type="number"
-                              value={step.timeoutDays}
+                              value={step.slaDays}
                               onChange={(e) =>
-                                updateStep(index, 'timeoutDays', parseInt(e.target.value) || 1)
+                                updateStep(index, 'slaDays', parseInt(e.target.value) || 1)
                               }
                               className="input w-full text-sm"
                               min={1}
@@ -1050,17 +739,6 @@ export default function ApprovalsPage() {
                               className="w-4 h-4 rounded border-gray-300 text-primary-600"
                             />
                             <span className="text-sm text-gray-600">يمكن التفويض</span>
-                          </label>
-                          <label className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              checked={step.autoApprove}
-                              onChange={(e) =>
-                                updateStep(index, 'autoApprove', e.target.checked)
-                              }
-                              className="w-4 h-4 rounded border-gray-300 text-primary-600"
-                            />
-                            <span className="text-sm text-gray-600">موافقة تلقائية عند انتهاء المهلة</span>
                           </label>
                         </div>
                       </div>
@@ -1088,8 +766,12 @@ export default function ApprovalsPage() {
                 >
                   إلغاء
                 </button>
-                <button onClick={handleSave} className="btn-primary">
-                  {editingWorkflow ? 'حفظ التغييرات' : 'إضافة المسار'}
+                <button
+                  disabled
+                  title={READONLY_TITLE}
+                  className="btn-primary opacity-50 cursor-not-allowed"
+                >
+                  {editingChain ? 'حفظ التغييرات' : 'إضافة المسار'}
                 </button>
               </div>
             </div>

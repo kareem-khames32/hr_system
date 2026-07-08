@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
 import {
@@ -13,313 +13,158 @@ import {
   MoreVertical,
   Users,
   ChevronDown,
-  ChevronLeft,
   Building2,
   User,
   UsersRound,
 } from 'lucide-react'
-import { employees, getEmployeeName } from '@/data/employees'
-import { branches as branchOptions, getBranchName } from '@/data/branches'
+import {
+  ApiBranch,
+  ApiDepartment,
+  ApiEmployee,
+  ApiTeam,
+  createDepartment,
+  fetchBranches,
+  fetchDepartments,
+  fetchEmployees,
+  fetchTeams,
+  updateDepartment,
+} from '@/lib/api'
 
-// Mock data for departments
-const initialDepartments = [
-  {
-    id: '1',
-    name: 'الإدارة العليا',
-    nameEn: 'Executive Management',
-    code: 'EXEC',
-    parentId: null,
-    managerId: '1',
-    managerName: 'محمد أحمد السعيد',
-    branch: 'الفرع الرئيسي - الرياض',
-    branchId: '1',
-    employeesCount: 5,
-    description: 'الإدارة التنفيذية للشركة',
-    isActive: true,
-  },
-  {
-    id: '2',
-    name: 'الموارد البشرية',
-    nameEn: 'Human Resources',
-    code: 'HR',
-    parentId: '1',
-    managerId: '2',
-    managerName: 'أحمد محمد علي',
-    branch: 'الفرع الرئيسي - الرياض',
-    branchId: '1',
-    employeesCount: 12,
-    description: 'إدارة شؤون الموظفين والتوظيف',
-    isActive: true,
-  },
-  {
-    id: '3',
-    name: 'تقنية المعلومات',
-    nameEn: 'Information Technology',
-    code: 'IT',
-    parentId: '1',
-    managerId: '3',
-    managerName: 'خالد سالم العتيبي',
-    branch: 'الفرع الرئيسي - الرياض',
-    branchId: '1',
-    employeesCount: 25,
-    description: 'إدارة البنية التحتية والتطوير',
-    isActive: true,
-  },
-  {
-    id: '4',
-    name: 'التطوير',
-    nameEn: 'Development',
-    code: 'IT-DEV',
-    parentId: '3',
-    managerId: '4',
-    managerName: 'عمر فهد القحطاني',
-    branch: 'الفرع الرئيسي - الرياض',
-    branchId: '1',
-    employeesCount: 15,
-    description: 'فريق تطوير البرمجيات',
-    isActive: true,
-  },
-  {
-    id: '5',
-    name: 'الدعم الفني',
-    nameEn: 'Technical Support',
-    code: 'IT-SUP',
-    parentId: '3',
-    managerId: '5',
-    managerName: 'ناصر عبدالله المالكي',
-    branch: 'الفرع الرئيسي - الرياض',
-    branchId: '1',
-    employeesCount: 10,
-    description: 'دعم المستخدمين والأنظمة',
-    isActive: true,
-  },
-  {
-    id: '6',
-    name: 'المالية',
-    nameEn: 'Finance',
-    code: 'FIN',
-    parentId: '1',
-    managerId: '6',
-    managerName: 'سعد محمد الدوسري',
-    branch: 'الفرع الرئيسي - الرياض',
-    branchId: '1',
-    employeesCount: 18,
-    description: 'الشؤون المالية والمحاسبة',
-    isActive: true,
-  },
-  {
-    id: '7',
-    name: 'المبيعات',
-    nameEn: 'Sales',
-    code: 'SALES',
-    parentId: '1',
-    managerId: '7',
-    managerName: 'فيصل عبدالرحمن الشمري',
-    branch: 'الفرع الرئيسي - الرياض',
-    branchId: '1',
-    employeesCount: 35,
-    description: 'إدارة المبيعات والعملاء',
-    isActive: true,
-  },
-  {
-    id: '8',
-    name: 'التسويق',
-    nameEn: 'Marketing',
-    code: 'MKT',
-    parentId: '1',
-    managerId: '8',
-    managerName: 'عبدالعزيز سلطان الحربي',
-    branch: 'الفرع الرئيسي - الرياض',
-    branchId: '1',
-    employeesCount: 14,
-    description: 'التسويق والعلاقات العامة',
-    isActive: true,
-  },
-]
-
-// قائمة الفروع تأتي الآن من طبقة البيانات المشتركة (@/data/branches)
-
-// Mock teams data
-const initialTeams = [
-  {
-    id: 't1',
-    name: 'فريق التطوير',
-    code: 'IT-DEV',
-    departmentId: '3',
-    leaderName: 'عمر فهد القحطاني',
-    membersCount: 8,
-  },
-  {
-    id: 't2',
-    name: 'فريق الدعم الفني',
-    code: 'IT-SUP',
-    departmentId: '3',
-    leaderName: 'ناصر عبدالله المالكي',
-    membersCount: 5,
-  },
-  {
-    id: 't3',
-    name: 'فريق التوظيف',
-    code: 'HR-REC',
-    departmentId: '2',
-    leaderName: 'ريم سالم العنزي',
-    membersCount: 4,
-  },
-  {
-    id: 't4',
-    name: 'فريق شؤون الموظفين',
-    code: 'HR-EMP',
-    departmentId: '2',
-    leaderName: 'منى أحمد السالم',
-    membersCount: 3,
-  },
-  {
-    id: 't5',
-    name: 'فريق المحاسبة',
-    code: 'FIN-ACC',
-    departmentId: '6',
-    leaderName: 'خالد محمد العمري',
-    membersCount: 6,
-  },
-  {
-    id: 't6',
-    name: 'فريق المبيعات الداخلية',
-    code: 'SAL-INT',
-    departmentId: '7',
-    leaderName: 'فيصل سعد الشمري',
-    membersCount: 10,
-  },
-  {
-    id: 't7',
-    name: 'فريق المبيعات الخارجية',
-    code: 'SAL-EXT',
-    departmentId: '7',
-    leaderName: 'عبدالله ناصر الحربي',
-    membersCount: 12,
-  },
-  {
-    id: 't8',
-    name: 'فريق التسويق الرقمي',
-    code: 'MKT-DIG',
-    departmentId: '8',
-    leaderName: 'سارة محمد العتيبي',
-    membersCount: 5,
-  },
-]
+const emptyForm = {
+  name: '',
+  nameEn: '',
+  code: '',
+  parentId: '',
+  managerId: '',
+  branchId: '',
+  isActive: true,
+}
 
 export default function DepartmentsPage() {
-  const [departments, setDepartments] = useState(initialDepartments)
-  const [teams] = useState(initialTeams)
+  const [departments, setDepartments] = useState<ApiDepartment[]>([])
+  const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  const [teams, setTeams] = useState<ApiTeam[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [showModal, setShowModal] = useState(false)
-  const [editingDept, setEditingDept] = useState<typeof initialDepartments[0] | null>(null)
-  const [activeMenu, setActiveMenu] = useState<string | null>(null)
+  const [modalError, setModalError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [editingDept, setEditingDept] = useState<ApiDepartment | null>(null)
+  const [activeMenu, setActiveMenu] = useState<number | null>(null)
   const [viewMode, setViewMode] = useState<'list' | 'tree'>('tree')
-  const [expandedDepts, setExpandedDepts] = useState<string[]>(['1', '3'])
+  const [expandedDepts, setExpandedDepts] = useState<number[]>([])
 
-  const [formData, setFormData] = useState({
-    name: '',
-    nameEn: '',
-    code: '',
-    parentId: '',
-    managerId: '',
-    branchId: '',
-    description: '',
-    isActive: true,
-  })
+  const [formData, setFormData] = useState({ ...emptyForm })
+
+  const loadData = async () => {
+    try {
+      const [deps, brs, emps, tms] = await Promise.all([
+        fetchDepartments(),
+        fetchBranches(),
+        fetchEmployees(),
+        fetchTeams(),
+      ])
+      setDepartments(deps)
+      setBranches(brs)
+      setEmployees(emps)
+      setTeams(tms)
+      setExpandedDepts(deps.filter((d) => !d.parentId).map((d) => d.id))
+      setError(null)
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  const managerNameOf = (managerEmployeeId?: number) =>
+    employees.find((e) => e.id === managerEmployeeId)?.fullName ?? '—'
+
+  const branchNameOf = (branchId: number) =>
+    branches.find((b) => b.id === branchId)?.name ?? '—'
+
+  const employeesCountOf = (deptId: number) =>
+    employees.filter((e) => e.departmentId === deptId).length
+
+  const teamMembersCountOf = (teamId: number) =>
+    employees.filter((e) => e.teamId === teamId).length
 
   const filteredDepartments = departments.filter(
     (dept) =>
       dept.name.includes(searchQuery) ||
-      dept.nameEn.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      dept.code.toLowerCase().includes(searchQuery.toLowerCase())
+      (dept.nameEn ?? '').toLowerCase().includes(searchQuery.toLowerCase()) ||
+      (dept.code ?? '').toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const getChildren = (parentId: string | null) => {
-    return departments.filter((d) => d.parentId === parentId)
+  const getChildren = (parentId: number | null) => {
+    return departments.filter((d) => (d.parentId ?? null) === parentId)
   }
 
-  const getTeamsForDepartment = (deptId: string) => {
+  const getTeamsForDepartment = (deptId: number) => {
     return teams.filter((t) => t.departmentId === deptId)
   }
 
-  const handleOpenModal = (dept?: typeof initialDepartments[0]) => {
+  const handleOpenModal = (dept?: ApiDepartment) => {
+    setModalError(null)
     if (dept) {
       setEditingDept(dept)
       setFormData({
         name: dept.name,
-        nameEn: dept.nameEn,
-        code: dept.code,
-        parentId: dept.parentId || '',
-        // مطابقة المدير الحالي بالاسم مع قائمة الموظفين المشتركة
-        managerId:
-          employees.find((e) => e.name === dept.managerName)?.id || '',
-        branchId: dept.branchId || '',
-        description: dept.description,
+        nameEn: dept.nameEn ?? '',
+        code: dept.code ?? '',
+        parentId: dept.parentId ? String(dept.parentId) : '',
+        managerId: dept.managerEmployeeId ? String(dept.managerEmployeeId) : '',
+        branchId: String(dept.branchId),
         isActive: dept.isActive,
       })
     } else {
       setEditingDept(null)
-      setFormData({
-        name: '',
-        nameEn: '',
-        code: '',
-        parentId: '',
-        managerId: '',
-        branchId: '',
-        description: '',
-        isActive: true,
-      })
+      setFormData({ ...emptyForm })
     }
     setShowModal(true)
   }
 
-  const handleSave = () => {
-    // الاسم والفرع يُشتقان من الاختيار (مصدر واحد للحقيقة)
-    const derived = {
-      managerName: getEmployeeName(formData.managerId),
-      branch: getBranchName(formData.branchId),
+  const handleSave = async () => {
+    setSaving(true)
+    setModalError(null)
+    const payload: Partial<ApiDepartment> = {
+      name: formData.name,
+      nameEn: formData.nameEn || undefined,
+      code: formData.code || undefined,
+      branchId: formData.branchId ? Number(formData.branchId) : undefined,
+      parentId: formData.parentId ? Number(formData.parentId) : undefined,
+      managerEmployeeId: formData.managerId ? Number(formData.managerId) : undefined,
     }
-    if (editingDept) {
-      setDepartments(
-        departments.map((d) =>
-          d.id === editingDept.id
-            ? { ...d, ...formData, ...derived, parentId: formData.parentId || null }
-            : d
-        )
-      )
-    } else {
-      const newDept = {
-        id: String(Date.now()),
-        ...formData,
-        ...derived,
-        parentId: formData.parentId || null,
-        employeesCount: 0,
+    try {
+      if (editingDept) {
+        await updateDepartment(editingDept.id, { ...payload, isActive: formData.isActive })
+      } else {
+        const created = await createDepartment(payload)
+        // الإنشاء لا يقبل isActive — نعطّله بعد الإنشاء لو طُلب ذلك
+        if (!formData.isActive) await updateDepartment(created.id, { isActive: false })
       }
-      setDepartments([...departments, newDept])
+      await loadData()
+      setShowModal(false)
+    } catch (err: any) {
+      setModalError(err.message)
+    } finally {
+      setSaving(false)
     }
-    setShowModal(false)
   }
 
-  const handleDelete = (id: string) => {
-    const hasChildren = departments.some((d) => d.parentId === id)
-    if (hasChildren) {
-      alert('لا يمكن حذف قسم له أقسام فرعية')
-      return
-    }
-    if (confirm('هل أنت متأكد من حذف هذا القسم؟')) {
-      setDepartments(departments.filter((d) => d.id !== id))
-    }
-    setActiveMenu(null)
-  }
-
-  const toggleExpand = (id: string) => {
+  const toggleExpand = (id: number) => {
     setExpandedDepts((prev) =>
       prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id]
     )
   }
 
-  const renderTreeItem = (dept: typeof initialDepartments[0], level: number = 0) => {
+  const renderTreeItem = (dept: ApiDepartment, level: number = 0) => {
     const children = getChildren(dept.id)
     const deptTeams = getTeamsForDepartment(dept.id)
     const hasChildren = children.length > 0 || deptTeams.length > 0
@@ -356,15 +201,15 @@ export default function DepartmentsPage() {
           <div className="flex-1">
             <div className="flex items-center gap-2">
               <span className="font-medium text-gray-800">{dept.name}</span>
-              <span className="text-xs text-gray-400 font-mono">({dept.code})</span>
+              <span className="text-xs text-gray-400 font-mono">({dept.code || '—'})</span>
             </div>
-            <p className="text-sm text-gray-500">{dept.managerName}</p>
+            <p className="text-sm text-gray-500">{managerNameOf(dept.managerEmployeeId)}</p>
           </div>
 
           <div className="flex items-center gap-4">
             <div className="flex items-center gap-1 text-sm text-gray-500">
               <Users size={14} />
-              <span>{dept.employeesCount}</span>
+              <span>{employeesCountOf(dept.id)}</span>
             </div>
             <button
               onClick={() => handleOpenModal(dept)}
@@ -396,20 +241,23 @@ export default function DepartmentsPage() {
                 <div className="flex-1">
                   <div className="flex items-center gap-2">
                     <span className="font-medium text-gray-800">{team.name}</span>
-                    <span className="text-xs text-gray-400 font-mono">({team.code})</span>
+                    <span className="text-xs text-gray-400 font-mono">({team.code || '—'})</span>
                     <span className="text-xs bg-success-50 text-success-600 px-2 py-0.5 rounded-full">فريق</span>
                   </div>
-                  <p className="text-sm text-gray-500">{team.leaderName}</p>
+                  <p className="text-sm text-gray-500">{managerNameOf(team.leaderEmployeeId)}</p>
                 </div>
 
                 <div className="flex items-center gap-4">
                   <div className="flex items-center gap-1 text-sm text-gray-500">
                     <Users size={14} />
-                    <span>{team.membersCount}</span>
+                    <span>{teamMembersCountOf(team.id)}</span>
                   </div>
-                  <button className="p-2 hover:bg-gray-200 rounded-lg transition-colors">
+                  <Link
+                    href="/settings/teams"
+                    className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+                  >
                     <Edit size={16} className="text-gray-500" />
-                  </button>
+                  </Link>
                 </div>
               </div>
             ))}
@@ -419,7 +267,7 @@ export default function DepartmentsPage() {
     )
   }
 
-  const totalEmployees = departments.reduce((sum, d) => sum + d.employeesCount, 0)
+  const totalEmployees = employees.length
   const rootDepartments = departments.filter((d) => !d.parentId)
 
   return (
@@ -449,6 +297,9 @@ export default function DepartmentsPage() {
           </button>
         </div>
 
+        {/* Error Banner */}
+        {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
           <div className="card p-4">
@@ -470,7 +321,7 @@ export default function DepartmentsPage() {
               <div>
                 <p className="text-sm text-gray-500">الأقسام الرئيسية</p>
                 <p className="text-2xl font-bold text-success-600">
-                  {departments.filter((d) => !d.parentId).length}
+                  {rootDepartments.length}
                 </p>
               </div>
             </div>
@@ -494,7 +345,10 @@ export default function DepartmentsPage() {
               <div>
                 <p className="text-sm text-gray-500">متوسط حجم القسم</p>
                 <p className="text-2xl font-bold text-gray-800">
-                  {Math.round(totalEmployees / departments.length)} موظف
+                  {departments.length > 0
+                    ? Math.round(totalEmployees / departments.length)
+                    : 0}{' '}
+                  موظف
                 </p>
               </div>
             </div>
@@ -542,15 +396,22 @@ export default function DepartmentsPage() {
           </div>
         </div>
 
+        {/* Loading */}
+        {loading && (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
+
         {/* Tree View */}
-        {viewMode === 'tree' && (
+        {!loading && viewMode === 'tree' && (
           <div className="card p-4">
             {rootDepartments.map((dept) => renderTreeItem(dept))}
           </div>
         )}
 
         {/* List View */}
-        {viewMode === 'list' && (
+        {!loading && viewMode === 'list' && (
           <div className="card overflow-hidden">
             <table className="w-full">
               <thead className="bg-gray-50 border-b border-gray-100">
@@ -588,13 +449,13 @@ export default function DepartmentsPage() {
                         </div>
                         <div>
                           <p className="font-medium text-gray-800">{dept.name}</p>
-                          <p className="text-sm text-gray-500">{dept.nameEn}</p>
+                          <p className="text-sm text-gray-500">{dept.nameEn ?? ''}</p>
                         </div>
                       </div>
                     </td>
                     <td className="py-4 px-6">
                       <span className="font-mono text-sm text-primary-600 bg-primary-50 px-2 py-1 rounded">
-                        {dept.code}
+                        {dept.code || '—'}
                       </span>
                     </td>
                     <td className="py-4 px-6 text-gray-600">
@@ -602,17 +463,19 @@ export default function DepartmentsPage() {
                         ? departments.find((d) => d.id === dept.parentId)?.name
                         : '-'}
                     </td>
-                    <td className="py-4 px-6 text-gray-600">{dept.managerName}</td>
+                    <td className="py-4 px-6 text-gray-600">
+                      {managerNameOf(dept.managerEmployeeId)}
+                    </td>
                     <td className="py-4 px-6 text-gray-600">
                       <div className="flex items-center gap-2">
                         <Building2 size={14} className="text-gray-400" />
-                        <span className="text-sm">{dept.branch}</span>
+                        <span className="text-sm">{branchNameOf(dept.branchId)}</span>
                       </div>
                     </td>
                     <td className="py-4 px-6">
                       <div className="flex items-center gap-1">
                         <Users size={14} className="text-gray-400" />
-                        <span className="text-gray-600">{dept.employeesCount}</span>
+                        <span className="text-gray-600">{employeesCountOf(dept.id)}</span>
                       </div>
                     </td>
                     <td className="py-4 px-6">
@@ -644,8 +507,9 @@ export default function DepartmentsPage() {
                                 تعديل
                               </button>
                               <button
-                                onClick={() => handleDelete(dept.id)}
-                                className="w-full flex items-center gap-2 px-4 py-2 text-danger-600 hover:bg-danger-50"
+                                disabled
+                                title="الحذف غير متاح — عطّل القسم من نافذة التعديل"
+                                className="w-full flex items-center gap-2 px-4 py-2 text-danger-600 opacity-50 cursor-not-allowed"
                               >
                                 <Trash2 size={16} />
                                 حذف
@@ -673,6 +537,11 @@ export default function DepartmentsPage() {
               </div>
 
               <div className="p-6 space-y-4">
+                {/* Modal Error */}
+                {modalError && (
+                  <div className="bg-red-50 text-red-700 rounded-xl p-4">{modalError}</div>
+                )}
+
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -734,13 +603,21 @@ export default function DepartmentsPage() {
                     >
                       <option value="">بدون (قسم رئيسي)</option>
                       {departments
-                        .filter((d) => d.id !== editingDept?.id)
+                        .filter(
+                          (d) =>
+                            d.id !== editingDept?.id &&
+                            (!formData.branchId ||
+                              d.branchId === Number(formData.branchId))
+                        )
                         .map((d) => (
                           <option key={d.id} value={d.id}>
                             {d.name}
                           </option>
                         ))}
                     </select>
+                    <p className="text-xs text-gray-400 mt-1">
+                      تظهر أقسام الفرع المختار فقط
+                    </p>
                   </div>
                 </div>
 
@@ -759,7 +636,8 @@ export default function DepartmentsPage() {
                       <option value="">— اختر الموظف المسؤول —</option>
                       {employees.map((emp) => (
                         <option key={emp.id} value={emp.id}>
-                          {emp.name} — {emp.position}
+                          {emp.fullName}
+                          {emp.jobTitle ? ` — ${emp.jobTitle}` : ''}
                         </option>
                       ))}
                     </select>
@@ -774,32 +652,22 @@ export default function DepartmentsPage() {
                     <select
                       value={formData.branchId}
                       onChange={(e) =>
-                        setFormData({ ...formData, branchId: e.target.value })
+                        setFormData({
+                          ...formData,
+                          branchId: e.target.value,
+                          parentId: '',
+                        })
                       }
                       className="input w-full"
                     >
                       <option value="">اختر الفرع</option>
-                      {branchOptions.map((branch) => (
+                      {branches.map((branch) => (
                         <option key={branch.id} value={branch.id}>
                           {branch.name}
                         </option>
                       ))}
                     </select>
                   </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    الوصف
-                  </label>
-                  <textarea
-                    value={formData.description}
-                    onChange={(e) =>
-                      setFormData({ ...formData, description: e.target.value })
-                    }
-                    className="input w-full h-24 resize-none"
-                    placeholder="وصف مختصر للقسم..."
-                  />
                 </div>
 
                 <label className="flex items-center gap-2">
@@ -822,8 +690,8 @@ export default function DepartmentsPage() {
                 >
                   إلغاء
                 </button>
-                <button onClick={handleSave} className="btn-primary">
-                  {editingDept ? 'حفظ التغييرات' : 'إضافة القسم'}
+                <button onClick={handleSave} disabled={saving} className="btn-primary">
+                  {saving ? 'جارٍ الحفظ...' : editingDept ? 'حفظ التغييرات' : 'إضافة القسم'}
                 </button>
               </div>
             </div>

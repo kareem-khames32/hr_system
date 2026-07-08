@@ -1,16 +1,15 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
+import { fetchConfig, updateConfig } from '@/lib/api'
 import {
   Building2,
   Globe,
   Bell,
   Shield,
   Users,
-  Database,
-  Palette,
   Clock,
   FileText,
   DollarSign,
@@ -19,13 +18,10 @@ import {
   Smartphone,
   LinkIcon,
   Key,
-  Settings,
-  ChevronLeft,
   Save,
   Upload,
   CheckCircle2,
   AlertCircle,
-  ExternalLink,
   Briefcase,
   Building,
   UsersRound,
@@ -66,8 +62,178 @@ const quickLinks = [
   { label: 'قوالب المستندات', href: '/settings/document-templates', icon: FileSignature, color: 'bg-violet-100 text-violet-600' },
 ]
 
+// إعدادات المحرك — مفاتيح حقيقية من الباك إند مجمعة حسب التبويب
+const enginePanels: Record<string, string[]> = {
+  attendance: [
+    'attendance.grace_minutes',
+    'overtime.detection_threshold_hours',
+    'overtime.biometric_requires_confirmation',
+    'attendance.device_key',
+  ],
+  leaves: [
+    'leave.annual_entitled',
+    'leave.carryover_max_days',
+    'leave.carryover_expiry_months',
+  ],
+  payroll: [
+    'payroll.cycle_start_day',
+    'loan.finance_approval_threshold',
+    'salary_increase.executive_threshold_pct',
+  ],
+}
+
+const engineLabels: Record<string, string> = {
+  'attendance.grace_minutes': 'فترة السماح للحضور (دقائق)',
+  'overtime.detection_threshold_hours': 'عتبة رصد العمل الإضافي (ساعات)',
+  'overtime.biometric_requires_confirmation': 'أوفرتايم البصمة يتطلب تأكيداً',
+  'attendance.device_key': 'مفتاح جهاز البصمة',
+  'leave.annual_entitled': 'الاستحقاق السنوي للإجازات (يوم)',
+  'leave.carryover_max_days': 'الحد الأقصى للرصيد المُرحّل (يوم)',
+  'leave.carryover_expiry_months': 'صلاحية الرصيد المُرحّل (شهور)',
+  'payroll.cycle_start_day': 'يوم بداية دورة الرواتب',
+  'loan.finance_approval_threshold': 'عتبة موافقة المالية على السلف',
+  'salary_increase.executive_threshold_pct': 'عتبة موافقة التنفيذي على الزيادة (%)',
+}
+
 export default function SettingsPage() {
   const [activeSection, setActiveSection] = useState('company')
+
+  // ===== إعدادات المحرك (config الحقيقي) =====
+  const [configValues, setConfigValues] = useState<Record<string, string>>({})
+  const [configSaved, setConfigSaved] = useState<Record<string, string>>({})
+  const [configLoading, setConfigLoading] = useState(true)
+  const [configError, setConfigError] = useState<string | null>(null)
+  const [panelSaving, setPanelSaving] = useState<string | null>(null)
+  const [panelSaved, setPanelSaved] = useState<string | null>(null)
+
+  useEffect(() => {
+    fetchConfig()
+      .then((rows) => {
+        const map: Record<string, string> = {}
+        rows.forEach((r) => {
+          map[r.key] = r.value
+        })
+        setConfigValues(map)
+        setConfigSaved(map)
+        setConfigError(null)
+      })
+      .catch((err: any) => setConfigError(err.message))
+      .finally(() => setConfigLoading(false))
+  }, [])
+
+  const setConfigValue = (key: string, value: string) => {
+    setPanelSaved(null)
+    setConfigValues((prev) => ({ ...prev, [key]: value }))
+  }
+
+  const saveEnginePanel = async (panel: string) => {
+    setPanelSaving(panel)
+    setPanelSaved(null)
+    setConfigError(null)
+    try {
+      for (const key of enginePanels[panel]) {
+        if (configValues[key] !== configSaved[key]) {
+          await updateConfig(key, configValues[key] ?? '')
+        }
+      }
+      setConfigSaved((prev) => ({
+        ...prev,
+        ...Object.fromEntries(enginePanels[panel].map((k) => [k, configValues[k]])),
+      }))
+      setPanelSaved(panel)
+    } catch (err: any) {
+      setConfigError(err.message)
+    } finally {
+      setPanelSaving(null)
+    }
+  }
+
+  const renderEngineField = (key: string) => {
+    const value = configValues[key] ?? ''
+    if (key === 'overtime.biometric_requires_confirmation') {
+      return (
+        <select
+          className="input"
+          value={value}
+          onChange={(e) => setConfigValue(key, e.target.value)}
+        >
+          <option value="true">نعم — يتطلب تأكيد المدير</option>
+          <option value="false">لا — يُحتسب مباشرة</option>
+        </select>
+      )
+    }
+    if (key === 'attendance.device_key') {
+      return (
+        <input
+          type="password"
+          className="input"
+          value={value}
+          onChange={(e) => setConfigValue(key, e.target.value)}
+          dir="ltr"
+          autoComplete="new-password"
+        />
+      )
+    }
+    return (
+      <input
+        type="number"
+        step={key === 'overtime.detection_threshold_hours' ? '0.25' : '1'}
+        className="input"
+        value={value}
+        onChange={(e) => setConfigValue(key, e.target.value)}
+        dir="ltr"
+      />
+    )
+  }
+
+  const renderEnginePanel = (panel: string) => (
+    <div className="pt-4 border-t border-gray-100">
+      <div className="flex items-center justify-between mb-4">
+        <div>
+          <h3 className="font-medium text-gray-700">إعدادات المحرك</h3>
+          <p className="text-xs text-gray-400 mt-0.5">
+            قيم فعلية تُحفظ في قاعدة البيانات وتؤثر على الحسابات
+          </p>
+        </div>
+        <div className="flex items-center gap-3">
+          {panelSaved === panel && (
+            <span className="flex items-center gap-1 text-sm text-success-600">
+              <CheckCircle2 size={16} />
+              تم الحفظ بنجاح
+            </span>
+          )}
+          <button
+            onClick={() => saveEnginePanel(panel)}
+            disabled={panelSaving === panel || configLoading}
+            className="btn-primary flex items-center gap-2"
+          >
+            <Save size={18} />
+            {panelSaving === panel ? 'جارٍ الحفظ...' : 'حفظ'}
+          </button>
+        </div>
+      </div>
+      {configError && (
+        <div className="bg-red-50 text-red-700 rounded-xl p-4 mb-4">{configError}</div>
+      )}
+      {configLoading ? (
+        <div className="flex items-center justify-center py-8">
+          <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : (
+        <div className="grid grid-cols-2 gap-4">
+          {enginePanels[panel].map((key) => (
+            <div key={key}>
+              <label className="label">{engineLabels[key]}</label>
+              {renderEngineField(key)}
+              <p className="text-xs text-gray-400 mt-1 font-mono" dir="ltr">
+                {key}
+              </p>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  )
 
   // Calculate company profile completion
   const companyProfileFields = [
@@ -642,6 +808,8 @@ export default function SettingsPage() {
                     ))}
                   </div>
                 </div>
+
+                {renderEnginePanel('attendance')}
               </div>
             )}
 
@@ -691,6 +859,8 @@ export default function SettingsPage() {
                     </div>
                   ))}
                 </div>
+
+                {renderEnginePanel('leaves')}
               </div>
             )}
 
@@ -758,6 +928,8 @@ export default function SettingsPage() {
                     </div>
                   </div>
                 </div>
+
+                {renderEnginePanel('payroll')}
               </div>
             )}
 
