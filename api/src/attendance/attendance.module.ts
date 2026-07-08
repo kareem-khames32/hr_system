@@ -10,6 +10,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import {
   AttendanceDay,
   AttendancePunch,
+  ScheduleDayOverride,
   ScheduleEntry,
 } from './attendance.entities'
 import { AttendanceController } from './attendance.controller'
@@ -30,6 +31,7 @@ import { DeviceSyncService } from './device-sync.service'
       BiometricDevice,
       Branch,
       PublicHoliday,
+      ScheduleDayOverride,
     ]),
   ],
   controllers: [AttendanceController],

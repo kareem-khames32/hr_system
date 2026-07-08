@@ -58,6 +58,31 @@ export class ScheduleEntry {
   endTime: string // HH:mm
 }
 
+// تجاوز وردية يوم بعينه — يتقدم على وردية الأسبوع (حالة خاصة/يوم استثنائي)
+@Entity('schedule_day_overrides')
+@Unique(['employeeId', 'date'])
+export class ScheduleDayOverride {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Index()
+  @Column()
+  employeeId: number
+
+  @Index()
+  @Column({ type: 'date' })
+  date: string
+
+  @Column({ length: 100 })
+  shiftName: string
+
+  @Column({ length: 5 })
+  startTime: string // HH:mm
+
+  @Column({ length: 5 })
+  endTime: string
+}
+
 export type AttendanceStatus =
   | 'present'
   | 'late'

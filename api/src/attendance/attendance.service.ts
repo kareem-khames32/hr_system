@@ -20,6 +20,7 @@ import {
   AttendanceDay,
   AttendancePunch,
   AttendanceStatus,
+  ScheduleDayOverride,
   ScheduleEntry,
 } from './attendance.entities'
 
@@ -71,7 +72,9 @@ export class AttendanceService {
     @InjectRepository(PublicHoliday)
     private readonly holidays: Repository<PublicHoliday>,
     @InjectRepository(Branch)
-    private readonly branches: Repository<Branch>
+    private readonly branches: Repository<Branch>,
+    @InjectRepository(ScheduleDayOverride)
+    private readonly dayOverrides: Repository<ScheduleDayOverride>
   ) {}
 
   // §2.4: يوم عطلة؟ (ويك إند من الإعدادات/الفرع + العطلات الرسمية)
@@ -154,8 +157,19 @@ export class AttendanceService {
     }
   }
 
-  // ===== وردية الموظف في يوم محدد — حسب أسبوع ذلك اليوم =====
+  // ===== وردية الموظف في يوم محدد =====
+  // الأولوية: تجاوز اليوم الواحد ← وردية الأسبوع ← الافتراضية
   async shiftFor(employeeId: number, date: string) {
+    const override = await this.dayOverrides.findOne({
+      where: { employeeId, date },
+    })
+    if (override) {
+      return {
+        name: `${override.shiftName} (يوم خاص)`,
+        start: override.startTime,
+        end: override.endTime,
+      }
+    }
     const entry = await this.schedule.findOne({
       where: { weekStart: weekKeyOf(date), employeeId },
     })
@@ -163,6 +177,76 @@ export class AttendanceService {
       return { name: entry.shiftName, start: entry.startTime, end: entry.endTime }
     }
     return DEFAULT_SHIFT
+  }
+
+  // ===== تجاوز وردية يوم بعينه (أو مسحه) + إعادة حساب اليوم فوراً =====
+  async setDayOverride(dto: {
+    employeeId: number
+    date: string
+    shiftName?: string
+    startTime?: string
+    endTime?: string
+    clear?: boolean
+  }) {
+    const emp = await this.employees.findOne({ where: { id: dto.employeeId } })
+    if (!emp) throw new NotFoundException('الموظف غير موجود')
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(dto.date)) {
+      throw new BadRequestException('التاريخ بصيغة YYYY-MM-DD')
+    }
+    if (dto.clear) {
+      await this.dayOverrides.delete({
+        employeeId: dto.employeeId,
+        date: dto.date,
+      })
+    } else {
+      const timeRe = /^([01]\d|2[0-3]):[0-5]\d$/
+      if (
+        !dto.shiftName ||
+        !timeRe.test(dto.startTime ?? '') ||
+        !timeRe.test(dto.endTime ?? '')
+      ) {
+        throw new BadRequestException(
+          'تجاوز اليوم يحتاج: اسم الوردية + بداية ونهاية بصيغة HH:mm'
+        )
+      }
+      let row = await this.dayOverrides.findOne({
+        where: { employeeId: dto.employeeId, date: dto.date },
+      })
+      if (!row) {
+        row = this.dayOverrides.create({
+          employeeId: dto.employeeId,
+          date: dto.date,
+        })
+      }
+      row.shiftName = dto.shiftName
+      row.startTime = dto.startTime!
+      row.endTime = dto.endTime!
+      await this.dayOverrides.save(row)
+    }
+    // إعادة حساب اليوم فوراً لو فيه بصمات
+    const hasPunches = await this.punches.count({
+      where: {
+        employeeId: dto.employeeId,
+        punchTime: Between(
+          new Date(`${dto.date}T00:00:00`),
+          new Date(`${dto.date}T23:59:59`)
+        ),
+      },
+    })
+    if (hasPunches > 0) {
+      return this.computeDay(dto.employeeId, dto.date)
+    }
+    return { ok: true, date: dto.date, cleared: !!dto.clear }
+  }
+
+  // تجاوزات أسبوع (لعرضها في شاشة الجدولة)
+  async weekDayOverrides(week: string) {
+    const start = weekKeyOf(week)
+    const end = new Date(`${start}T12:00:00`)
+    end.setDate(end.getDate() + 6)
+    const endStr = end.toISOString().slice(0, 10)
+    const all = await this.dayOverrides.find()
+    return all.filter((o) => o.date >= start && o.date <= endStr)
   }
 
   // الأذونات المعتمدة لليوم — نوافذ [from, to] بالدقائق

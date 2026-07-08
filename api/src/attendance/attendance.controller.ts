@@ -94,6 +94,30 @@ export class AttendanceController {
     return this.service.weekSchedule(week)
   }
 
+  // تجاوز وردية يوم بعينه (حالة خاصة) — أو مسحه بـ clear:true
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.manage')
+  @Post('schedule/day')
+  setDayOverride(
+    @Body()
+    dto: {
+      employeeId: number
+      date: string
+      shiftName?: string
+      startTime?: string
+      endTime?: string
+      clear?: boolean
+    }
+  ) {
+    return this.service.setDayOverride(dto)
+  }
+
+  @UseGuards(JwtAuthGuard)
+  @Get('schedule/day-overrides')
+  weekDayOverrides(@Query('week') week: string) {
+    return this.service.weekDayOverrides(week)
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.view_all')
   @Get('daily')

@@ -462,6 +462,15 @@ export interface ApiSyncResult {
 export const syncDevice = (id: number) => post<ApiSyncResult>(`/attendance/devices/${id}/sync`)
 export const syncAllDevices = () => post<ApiSyncResult[]>('/attendance/devices/sync-all')
 
+// تجاوز وردية يوم بعينه (حالة خاصة) — clear:true يرجّع اليوم لوردية الأسبوع
+export const setDayShiftOverride = (d: {
+  employeeId: number; date: string
+  shiftName?: string; startTime?: string; endTime?: string; clear?: boolean
+}) => post('/attendance/schedule/day', d)
+export const fetchWeekDayOverrides = (week: string) =>
+  get<Array<{ id: number; employeeId: number; date: string; shiftName: string; startTime: string; endTime: string }>>(
+    `/attendance/schedule/day-overrides?week=${week}`)
+
 // ===== الملفات =====
 export const uploadFile = async (
   file: File,

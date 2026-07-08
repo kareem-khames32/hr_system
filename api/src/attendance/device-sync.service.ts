@@ -92,11 +92,14 @@ export class DeviceSyncService {
           })
           if (dup) continue
 
+          // تنسيق محلي — toISOString كانت تزحزح الوقت 3 ساعات (UTC)
+          const pad = (n: number) => String(n).padStart(2, '0')
+          const localTs = `${punchTime.getFullYear()}-${pad(punchTime.getMonth() + 1)}-${pad(punchTime.getDate())} ${pad(punchTime.getHours())}:${pad(punchTime.getMinutes())}:${pad(punchTime.getSeconds())}`
           const result = await this.attendance.ingest(
             [
               {
                 employeeCode,
-                timestamp: punchTime.toISOString().replace('T', ' ').slice(0, 19),
+                timestamp: localTs,
                 deviceSn: device.serialNumber,
               },
             ],

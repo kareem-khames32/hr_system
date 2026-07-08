@@ -26,12 +26,15 @@ import {
   Layers,
   UserCheck,
   X,
+  Star,
 } from 'lucide-react'
 import {
   fetchWeekSchedule,
   upsertWeekSchedule,
   fetchEmployees,
   fetchDepartments,
+  fetchWeekDayOverrides,
+  setDayShiftOverride,
   type ApiEmployee,
   type ApiDepartment,
 } from '@/lib/api'
@@ -46,6 +49,16 @@ interface Shift {
   startTime: string
   endTime: string
   workHours: number
+}
+
+// تجاوز وردية يوم بعينه — يتقدم على وردية الأسبوع (من السيرفر)
+interface DayOverride {
+  id: number
+  employeeId: number
+  date: string // YYYY-MM-DD
+  shiftName: string
+  startTime: string
+  endTime: string
 }
 
 // صف الموظف في الجدول — الوردية من السيرفر (وردية واحدة لكل موظف/أسبوع)
@@ -104,6 +117,14 @@ const sundayOf = (d: Date) => {
   return x
 }
 
+// تاريخ يوم داخل الأسبوع المعروض بصيغة YYYY-MM-DD
+const dateOfDayIndex = (weekStart: Date, dayIndex: number) => {
+  const x = new Date(weekStart)
+  x.setHours(12, 0, 0, 0)
+  x.setDate(x.getDate() + dayIndex)
+  return x.toISOString().slice(0, 10)
+}
+
 // مطابقة وردية السيرفر مع الكتالوج المحلي (بالاسم ثم بالمواعيد)
 const matchShift = (entry: { shiftName: string; startTime: string; endTime: string }): Shift => {
   const byName = shifts.find((s) => s.name === entry.shiftName)
@@ -138,6 +159,14 @@ export default function WeeklySchedulePage() {
   const [departmentsList, setDepartmentsList] = useState<ApiDepartment[]>([])
   // وردية الأسبوع لكل موظف — من weekly_schedule_entries في السيرفر
   const [assignments, setAssignments] = useState<Record<number, Shift>>({})
+  // تجاوزات الأيام الخاصة — مفتاحها "employeeId|date"
+  const [dayOverrides, setDayOverrides] = useState<Record<string, DayOverride>>({})
+  const [overrideModal, setOverrideModal] = useState<{
+    empId: number
+    empName: string
+    date: string
+    dayName: string
+  } | null>(null)
   const [dirtyIds, setDirtyIds] = useState<number[]>([])
   const [currentWeekStart, setCurrentWeekStart] = useState(() => sundayOf(new Date()))
   const [loading, setLoading] = useState(true)
@@ -182,8 +211,25 @@ export default function WeeklySchedulePage() {
       .finally(() => setLoading(false))
   }
 
+  // تجاوزات الأيام الخاصة للأسبوع المعروض
+  const loadOverrides = (weekKey: string) => {
+    fetchWeekDayOverrides(weekKey)
+      .then((list) => {
+        const map: Record<string, DayOverride> = {}
+        for (const o of list) {
+          const date = String(o.date).slice(0, 10)
+          map[`${o.employeeId}|${date}`] = { ...o, date }
+        }
+        setDayOverrides(map)
+      })
+      .catch((e) =>
+        setError(e instanceof Error ? e.message : 'تعذر تحميل ورديات الأيام الخاصة')
+      )
+  }
+
   useEffect(() => {
     loadWeek(currentKey)
+    loadOverrides(currentKey)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentKey])
 
@@ -274,6 +320,7 @@ export default function WeeklySchedulePage() {
     try {
       await upsertWeekSchedule(entries)
       loadWeek(currentKey)
+      loadOverrides(currentKey)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'تعذر حفظ الجدول')
     } finally {
@@ -528,6 +575,12 @@ export default function WeeklySchedulePage() {
               </div>
             ))}
           </div>
+          <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100">
+            <Star size={14} className="text-amber-500 fill-amber-400" />
+            <span className="text-xs text-gray-500">
+              اليوم المميز = وردية خاصة تتقدم على وردية الأسبوع
+            </span>
+          </div>
         </div>
 
         {/* Schedule Table */}
@@ -592,16 +645,20 @@ export default function WeeklySchedulePage() {
                     </td>
 
                     {/* Schedule Cells */}
-                    {weekDays.map(day => {
+                    {weekDays.map((day, dayIndex) => {
                       const isWeekend = WEEKEND_DAYS.includes(day.key)
                       const shift = isWeekend ? OFF_SHIFT : shiftOf(employee.id)
                       const isSelected = selectedCell?.empId === employee.id && selectedCell?.day === day.key
                       const isLocked = isWeekend
                       const isUnassigned = !isWeekend && !assignments[employee.id]
+                      const dayDate = dateOfDayIndex(currentWeekStart, dayIndex)
+                      const override = isWeekend
+                        ? undefined
+                        : dayOverrides[`${employee.id}|${dayDate}`]
 
                       return (
                         <td key={day.key} className="p-1.5 text-center">
-                          <div className="relative">
+                          <div className="relative group">
                             <button
                               onClick={() => {
                                 if (viewMode === 'edit' && !isLocked) {
@@ -609,15 +666,62 @@ export default function WeeklySchedulePage() {
                                 }
                               }}
                               disabled={viewMode === 'view' || isLocked}
-                              className={`w-full py-2.5 px-1 rounded-lg ${shift.bgColor} ${shift.color} font-medium text-sm transition-all relative ${
+                              className={`w-full rounded-lg font-medium text-sm transition-all relative ${
+                                override
+                                  ? 'py-1 px-1 bg-amber-50 text-amber-800 border-2 border-amber-400'
+                                  : `py-2.5 px-1 ${shift.bgColor} ${shift.color}`
+                              } ${
                                 viewMode === 'edit' && !isLocked ? 'hover:opacity-80 cursor-pointer' : ''
                               } ${isSelected ? 'ring-2 ring-primary-500 ring-offset-1' : ''} ${
                                 isLocked ? 'opacity-60 cursor-not-allowed' : ''
-                              } ${isUnassigned ? 'opacity-50' : ''}`}
-                              title={isUnassigned ? 'غير مجدوَل — الوردية الافتراضية' : ''}
+                              } ${isUnassigned && !override ? 'opacity-50' : ''}`}
+                              title={
+                                override
+                                  ? 'يوم خاص — وردية تتقدم على وردية الأسبوع'
+                                  : isUnassigned
+                                    ? 'غير مجدوَل — الوردية الافتراضية'
+                                    : ''
+                              }
                             >
-                              {shift.name}
+                              {override ? (
+                                <>
+                                  <span className="block truncate text-xs font-bold">
+                                    {override.shiftName}
+                                  </span>
+                                  <span className="block text-[10px] text-amber-600" dir="ltr">
+                                    {override.startTime}–{override.endTime}
+                                  </span>
+                                  <span className="inline-block px-1.5 rounded-full bg-amber-400 text-white text-[9px] leading-4">
+                                    يوم خاص
+                                  </span>
+                                </>
+                              ) : (
+                                shift.name
+                              )}
                             </button>
+
+                            {/* زر وردية اليوم الخاص — يظهر عند المرور أو عند وجود تجاوز */}
+                            {viewMode === 'edit' && !isWeekend && (
+                              <button
+                                onClick={(e) => {
+                                  e.stopPropagation()
+                                  setOverrideModal({
+                                    empId: employee.id,
+                                    empName: employee.employeeName,
+                                    date: dayDate,
+                                    dayName: day.name,
+                                  })
+                                }}
+                                className={`absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full flex items-center justify-center shadow border z-10 transition-opacity ${
+                                  override
+                                    ? 'bg-amber-400 text-white border-amber-500 opacity-100'
+                                    : 'bg-white text-gray-400 border-gray-200 opacity-0 group-hover:opacity-100 hover:text-amber-500'
+                                }`}
+                                title="وردية يوم خاص"
+                              >
+                                <Star size={11} />
+                              </button>
+                            )}
 
                             {/* Shift Selector Dropdown — التعيين لكل الأسبوع */}
                             {isSelected && viewMode === 'edit' && (
@@ -804,8 +908,184 @@ export default function WeeklySchedulePage() {
             }}
           />
         )}
+
+        {/* Day Override Modal — وردية يوم خاص */}
+        {overrideModal && (
+          <DayOverrideModal
+            empId={overrideModal.empId}
+            empName={overrideModal.empName}
+            date={overrideModal.date}
+            dayName={overrideModal.dayName}
+            override={dayOverrides[`${overrideModal.empId}|${overrideModal.date}`]}
+            shiftOptions={assignableShifts}
+            onClose={() => setOverrideModal(null)}
+            onSaved={() => {
+              setOverrideModal(null)
+              loadOverrides(currentKey)
+            }}
+          />
+        )}
       </div>
     </MainLayout>
+  )
+}
+
+// Modal وردية اليوم الخاص — تجاوز يوم واحد يتقدم على وردية الأسبوع
+function DayOverrideModal({
+  empId,
+  empName,
+  date,
+  dayName,
+  override,
+  shiftOptions,
+  onClose,
+  onSaved,
+}: {
+  empId: number
+  empName: string
+  date: string
+  dayName: string
+  override?: DayOverride
+  shiftOptions: Shift[]
+  onClose: () => void
+  onSaved: () => void
+}) {
+  // لو التجاوز الحالي باسم خارج الكتالوج نعرضه كخيار إضافي
+  const currentShift = override ? matchShift(override) : null
+  const options =
+    currentShift && !shiftOptions.some((s) => s.id === currentShift.id)
+      ? [currentShift, ...shiftOptions]
+      : shiftOptions
+  const [selectedId, setSelectedId] = useState(currentShift?.id ?? '')
+  const [saving, setSaving] = useState(false)
+  const [modalError, setModalError] = useState('')
+
+  const handleSave = async () => {
+    const s = options.find((o) => o.id === selectedId)
+    if (!s) {
+      setModalError('الرجاء اختيار الوردية')
+      return
+    }
+    setSaving(true)
+    setModalError('')
+    try {
+      await setDayShiftOverride({
+        employeeId: empId,
+        date,
+        shiftName: s.name,
+        startTime: s.startTime,
+        endTime: s.endTime,
+      })
+      onSaved()
+    } catch (e) {
+      setModalError(e instanceof Error ? e.message : 'تعذر حفظ وردية اليوم')
+      setSaving(false)
+    }
+  }
+
+  const handleClear = async () => {
+    setSaving(true)
+    setModalError('')
+    try {
+      await setDayShiftOverride({ employeeId: empId, date, clear: true })
+      onSaved()
+    } catch (e) {
+      setModalError(e instanceof Error ? e.message : 'تعذر إرجاع وردية الأسبوع')
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-hidden flex flex-col">
+        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h3 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+              <Star size={20} className="text-amber-500 fill-amber-400" />
+              وردية يوم خاص — {empName}
+            </h3>
+            <p className="text-gray-500 text-sm mt-1">
+              {dayName} <span dir="ltr">{date}</span>
+            </p>
+          </div>
+          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
+            <X size={20} className="text-gray-500" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-4 overflow-y-auto flex-1">
+          {modalError && (
+            <div className="bg-red-50 text-red-700 rounded-xl p-3 flex items-center gap-2 text-sm">
+              <AlertCircle size={16} className="flex-shrink-0" />
+              {modalError}
+            </div>
+          )}
+
+          {override && (
+            <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
+              التجاوز الحالي: <b>{override.shiftName}</b>{' '}
+              <span dir="ltr">
+                {override.startTime}–{override.endTime}
+              </span>
+            </div>
+          )}
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-3">الوردية</label>
+            <div className="grid grid-cols-3 gap-2">
+              {options.map((shift) => (
+                <button
+                  key={shift.id}
+                  onClick={() => setSelectedId(shift.id)}
+                  className={`p-3 rounded-xl border-2 transition-all ${
+                    selectedId === shift.id
+                      ? 'border-amber-400 bg-amber-50'
+                      : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <div
+                    className={`w-8 h-8 ${shift.bgColor} ${shift.color} rounded-lg flex items-center justify-center text-sm font-bold mx-auto mb-2`}
+                  >
+                    {shift.code}
+                  </div>
+                  <p className="text-sm text-gray-700 text-center">{shift.name}</p>
+                  <p className="text-xs text-gray-400 text-center" dir="ltr">
+                    {shift.startTime}–{shift.endTime}
+                  </p>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <p className="text-xs text-gray-500">
+            الوردية الخاصة تتقدم على وردية الأسبوع لهذا اليوم فقط، ولو فيه بصمات لليوم
+            سيُعاد حسابه تلقائياً.
+          </p>
+        </div>
+
+        <div className="p-4 border-t border-gray-100 flex gap-3">
+          <button
+            onClick={handleSave}
+            disabled={saving || !selectedId}
+            className="flex-1 btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {saving ? 'جارٍ الحفظ...' : 'حفظ'}
+          </button>
+          {override && (
+            <button
+              onClick={handleClear}
+              disabled={saving}
+              className={`flex-1 btn-secondary ${saving ? 'opacity-50 cursor-not-allowed' : ''}`}
+            >
+              إرجاع لوردية الأسبوع
+            </button>
+          )}
+          <button onClick={onClose} className="flex-1 btn-secondary">
+            إلغاء
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }
 
