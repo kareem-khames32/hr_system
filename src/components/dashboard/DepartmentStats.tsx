@@ -1,5 +1,6 @@
 'use client'
 
+// TODO: ربط بالتقارير — يحتاج endpoint حضور مجمّع حسب القسم (غير متوفر في الباك إند حالياً)
 interface Department {
   id: string
   name: string

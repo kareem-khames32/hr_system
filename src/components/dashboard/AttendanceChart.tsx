@@ -1,5 +1,6 @@
 'use client'
 
+// TODO: ربط بالتقارير — يحتاج endpoint حضور أسبوعي/شهري (إحصائيات اليوم فقط متاحة حالياً في /dashboard/stats)
 import { useState } from 'react'
 
 interface DayData {

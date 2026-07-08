@@ -1,7 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import { getCurrentUser } from '@/lib/api'
 import {
   StatsCards,
   AttendanceChart,
@@ -14,9 +15,15 @@ import {
 import EmployeeHome from '@/components/dashboard/EmployeeHome'
 import { LayoutDashboard, User } from 'lucide-react'
 
-// اللوحة تختلف حسب الدور — هذا المبدّل للمعاينة حتى يُربط بدور المستخدم الفعلي من الـ Backend
+// اللوحة تختلف حسب الدور — تُهيّأ من دور المستخدم الفعلي، والمبدّل يبقى للمعاينة اليدوية
 export default function DashboardPage() {
   const [view, setView] = useState<'admin' | 'employee'>('admin')
+
+  // تهيئة العرض من الدور الحقيقي بعد التركيب (localStorage غير متاح على السيرفر)
+  useEffect(() => {
+    const role = getCurrentUser()?.role
+    if (role === 'employee') setView('employee')
+  }, [])
 
   return (
     <MainLayout>
