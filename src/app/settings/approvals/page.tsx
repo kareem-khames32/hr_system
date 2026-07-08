@@ -140,6 +140,7 @@ type StepForm = {
   thresholdField: string
   thresholdOp: string
   thresholdValue: string
+  isParallel: boolean
 }
 
 const emptyStep = (): StepForm => ({
@@ -151,6 +152,7 @@ const emptyStep = (): StepForm => ({
   thresholdField: '',
   thresholdOp: '',
   thresholdValue: '',
+  isParallel: false,
 })
 
 export default function ApprovalsPage() {
@@ -253,6 +255,7 @@ export default function ApprovalsPage() {
           thresholdField: s.thresholdField ?? '',
           thresholdOp: s.thresholdOp ?? '',
           thresholdValue: s.thresholdValue != null ? String(s.thresholdValue) : '',
+          isParallel: !!s.isParallel,
         })),
       })
     } else {
@@ -297,7 +300,11 @@ export default function ApprovalsPage() {
     setFormData({ ...formData, steps })
   }
 
-  const updateStep = (index: number, field: keyof StepForm, value: string) => {
+  const updateStep = (
+    index: number,
+    field: keyof StepForm,
+    value: string | boolean
+  ) => {
     const steps = formData.steps.map((s, i) =>
       i === index ? { ...s, [field]: value } : s
     )
@@ -339,9 +346,11 @@ export default function ApprovalsPage() {
 
   const buildSteps = (): ChainStepInput[] =>
     formData.steps.map(
-      (s) =>
+      (s, i) =>
         ({
           approverRole: s.approverRole,
+          // «موازية مع السابقة» — مدعومة في الباك وإن لم تكن مُعرَّفة في ChainStepInput
+          isParallel: i > 0 && s.isParallel,
           // «موظف بعينه» — المفتاح مقبول في الباك وإن لم يكن مُعرَّفاً في ChainStepInput
           ...(s.approverRole === 'specific_employee' && s.specificEmployeeId !== ''
             ? { specificEmployeeId: Number(s.specificEmployeeId) }
@@ -699,13 +708,27 @@ export default function ApprovalsPage() {
                                 <span className="text-sm text-gray-700">
                                   {stepRoleLabel(step)}
                                 </span>
+                                {step.isParallel && (
+                                  <span className="badge text-[10px] bg-indigo-100 text-indigo-700">
+                                    متوازية
+                                  </span>
+                                )}
                                 {step.canDelegate && (
                                   <Zap size={12} className="text-warning-500" />
                                 )}
                               </div>
-                              {index < chain.steps.length - 1 && (
-                                <ChevronLeft size={16} className="text-gray-400" />
-                              )}
+                              {index < chain.steps.length - 1 &&
+                                (chain.steps[index + 1].isParallel ? (
+                                  <span
+                                    className="text-indigo-500 font-bold text-sm"
+                                    dir="ltr"
+                                    title="خطوات متوازية — نفس مستوى الاعتماد"
+                                  >
+                                    ∥
+                                  </span>
+                                ) : (
+                                  <ChevronLeft size={16} className="text-gray-400" />
+                                ))}
                             </div>
                           ))}
                         </div>
@@ -754,6 +777,11 @@ export default function ApprovalsPage() {
                               </div>
                             </div>
                             <div className="flex items-center gap-4 text-sm text-gray-500">
+                              {step.isParallel && (
+                                <span className="px-2 py-1 bg-indigo-100 text-indigo-700 rounded text-xs">
+                                  متوازية مع السابقة
+                                </span>
+                              )}
                               {step.thresholdField && (
                                 <span className="px-2 py-1 bg-warning-100 text-warning-700 rounded text-xs">
                                   {thresholdFieldLabels[step.thresholdField] ??
@@ -929,6 +957,29 @@ export default function ApprovalsPage() {
                             <span className="text-sm font-medium text-gray-700">
                               الخطوة {index + 1}
                             </span>
+                            <label
+                              className={`flex items-center gap-1.5 mr-3 ${
+                                index === 0 ? 'opacity-40 cursor-not-allowed' : ''
+                              }`}
+                              title={
+                                index === 0
+                                  ? 'الخطوة الأولى لا يمكن أن تكون موازية'
+                                  : 'تُعتمد بالتوازي مع الخطوة السابقة (نفس الترتيب)'
+                              }
+                            >
+                              <input
+                                type="checkbox"
+                                checked={index > 0 && step.isParallel}
+                                disabled={index === 0}
+                                onChange={(e) =>
+                                  updateStep(index, 'isParallel', e.target.checked)
+                                }
+                                className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed"
+                              />
+                              <span className="text-xs text-gray-600">
+                                موازية مع السابقة
+                              </span>
+                            </label>
                           </div>
                           <div className="flex items-center gap-1">
                             <button

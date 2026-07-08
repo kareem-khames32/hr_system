@@ -16,6 +16,7 @@ import {
   Send,
   Users,
   EyeOff,
+  Paperclip,
 } from 'lucide-react'
 import {
   getTypeByCode,
@@ -30,8 +31,10 @@ import {
   createRequest,
   cancelRequest,
   resubmitRequest,
+  uploadFile,
   type ApiRequest,
   type ApiRequestType,
+  type CustomFieldDef,
 } from '@/lib/api'
 
 // ===== أدوات فك حقول JSON القادمة من الباك (payload / resolvedSteps / requiredFields) =====
@@ -178,6 +181,9 @@ export default function MyRequestsPage() {
   const [requestNote, setRequestNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  // رفع الملفات لحقول «مرفق» — الحقل الجاري رفعه + أسماء الملفات المرفوعة
+  const [uploadingField, setUploadingField] = useState<string | null>(null)
+  const [uploadedFiles, setUploadedFiles] = useState<Record<string, string>>({})
 
   const load = async () => {
     try {
@@ -212,6 +218,12 @@ export default function MyRequestsPage() {
 
   const selectedTypeDef = availableRequestTypes.find((t) => t.code === selectedType)
   const requiredFields = parseJson<string[]>(selectedTypeDef?.requiredFields, [])
+  // الحقول المخصّصة كاملة الوصف — إن وُجدت تحل محل الاستنتاج القديم
+  const customFields = parseJson<CustomFieldDef[]>(
+    (selectedTypeDef as any)?.customFields,
+    []
+  )
+  const hasCustomFields = customFields.length > 0
 
   const filtered = requests.filter(
     (r) =>
@@ -231,12 +243,36 @@ export default function MyRequestsPage() {
     RETURNED_FOR_INFO: requests.filter((r) => r.status === 'RETURNED_FOR_INFO').length,
   }
 
+  // رفع ملف لحقل «مرفق» — يخزّن المرجع file:N في قيمة الحقل
+  const handleFileUpload = async (key: string, file: File | null) => {
+    if (!file) return
+    setUploadingField(key)
+    setSubmitError(null)
+    try {
+      const res = await uploadFile(file, { entityType: 'request' })
+      setFieldValues((prev) => ({ ...prev, [key]: res.ref }))
+      setUploadedFiles((prev) => ({ ...prev, [key]: res.originalName }))
+    } catch (err) {
+      setSubmitError(err instanceof Error ? err.message : 'فشل رفع الملف')
+    } finally {
+      setUploadingField(null)
+    }
+  }
+
   const handleSubmit = async () => {
     if (!selectedTypeDef || submitting) return
     const payload: Record<string, unknown> = {}
-    for (const f of requiredFields) {
-      const raw = (fieldValues[f] ?? '').trim()
-      payload[f] = isNumberField(f) && raw !== '' ? Number(raw) : raw
+    if (hasCustomFields) {
+      // النموذج المبني من تعريف الحقول المخصّصة
+      for (const f of customFields) {
+        const raw = (fieldValues[f.key] ?? '').trim()
+        payload[f.key] = f.type === 'number' && raw !== '' ? Number(raw) : raw
+      }
+    } else {
+      for (const f of requiredFields) {
+        const raw = (fieldValues[f] ?? '').trim()
+        payload[f] = isNumberField(f) && raw !== '' ? Number(raw) : raw
+      }
     }
     if (requestNote.trim()) payload.note = requestNote.trim()
     setSubmitting(true)
@@ -245,6 +281,7 @@ export default function MyRequestsPage() {
       await createRequest(selectedTypeDef.code, payload)
       setSelectedType('')
       setFieldValues({})
+      setUploadedFiles({})
       setRequestNote('')
       setShowNewModal(false)
       await load()
@@ -506,6 +543,7 @@ export default function MyRequestsPage() {
                           onClick={() => {
                             setSelectedType(t.code)
                             setFieldValues({})
+                            setUploadedFiles({})
                             setSubmitError(null)
                           }}
                           className={`p-4 rounded-xl border-2 text-right transition-all flex items-center justify-between ${
@@ -549,7 +587,89 @@ export default function MyRequestsPage() {
                     })}
                 </div>
 
-                {selectedType && requiredFields.length > 0 && (
+                {/* النموذج من تعريف الحقول المخصّصة — يحل محل الاستنتاج القديم */}
+                {selectedType && hasCustomFields && (
+                  <div className="grid grid-cols-2 gap-3">
+                    {customFields.map((f) => (
+                      <div key={f.key} className={f.type === 'file' ? 'col-span-2' : ''}>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          {f.label}
+                          {f.required && <span className="text-red-500 mr-1">*</span>}
+                        </label>
+                        {f.type === 'select' ? (
+                          <select
+                            className="input w-full"
+                            value={fieldValues[f.key] ?? ''}
+                            onChange={(e) =>
+                              setFieldValues({ ...fieldValues, [f.key]: e.target.value })
+                            }
+                          >
+                            <option value="">— اختر —</option>
+                            {(f.options ?? []).map((o) => (
+                              <option key={o} value={o}>
+                                {o}
+                              </option>
+                            ))}
+                          </select>
+                        ) : f.type === 'file' ? (
+                          <label
+                            className={`flex items-center gap-2 p-3 border-2 border-dashed rounded-xl cursor-pointer transition-colors ${
+                              uploadedFiles[f.key]
+                                ? 'border-success-300 bg-success-50'
+                                : 'border-gray-200 hover:border-primary-300'
+                            }`}
+                          >
+                            <Paperclip
+                              size={16}
+                              className={
+                                uploadedFiles[f.key]
+                                  ? 'text-success-500'
+                                  : 'text-gray-400'
+                              }
+                            />
+                            <span className="text-sm text-gray-600 flex-1 truncate">
+                              {uploadingField === f.key
+                                ? 'جارٍ رفع الملف...'
+                                : uploadedFiles[f.key] ?? 'اختر ملفاً للرفع'}
+                            </span>
+                            {uploadingField === f.key && (
+                              <span className="w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                            )}
+                            {uploadedFiles[f.key] && uploadingField !== f.key && (
+                              <CheckCircle2 size={16} className="text-success-500" />
+                            )}
+                            <input
+                              type="file"
+                              className="hidden"
+                              disabled={uploadingField !== null}
+                              onChange={(e) =>
+                                handleFileUpload(f.key, e.target.files?.[0] ?? null)
+                              }
+                            />
+                          </label>
+                        ) : (
+                          <input
+                            type={
+                              f.type === 'date'
+                                ? 'date'
+                                : f.type === 'number'
+                                ? 'number'
+                                : 'text'
+                            }
+                            className="input w-full"
+                            value={fieldValues[f.key] ?? ''}
+                            onChange={(e) =>
+                              setFieldValues({ ...fieldValues, [f.key]: e.target.value })
+                            }
+                          />
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {/* الاستنتاج القديم — عند غياب الحقول المخصّصة */}
+                {selectedType && !hasCustomFields && requiredFields.length > 0 && (
                   <div className="grid grid-cols-2 gap-3">
                     {requiredFields.map((f) => (
                       <div key={f}>
@@ -593,7 +713,7 @@ export default function MyRequestsPage() {
                 <button
                   onClick={handleSubmit}
                   className="btn-primary flex items-center gap-2"
-                  disabled={!selectedType || submitting}
+                  disabled={!selectedType || submitting || uploadingField !== null}
                 >
                   <Send size={16} />
                   {submitting ? 'جارٍ الإرسال...' : 'إرسال الطلب'}

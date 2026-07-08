@@ -15,8 +15,23 @@ import {
   Edit2,
   Building2,
   X,
+  DownloadCloud,
+  Timer,
+  AlertCircle,
+  Globe,
 } from 'lucide-react'
-import { fetchCatalog, createCatalogItem, updateCatalogItem, fetchBranches, type ApiBranch } from '@/lib/api'
+import {
+  fetchCatalog,
+  createCatalogItem,
+  updateCatalogItem,
+  fetchBranches,
+  fetchConfig,
+  updateConfig,
+  syncDevice,
+  syncAllDevices,
+  type ApiBranch,
+  type ApiSyncResult,
+} from '@/lib/api'
 
 interface Device {
   id: number
@@ -26,7 +41,15 @@ interface Device {
   branchName: string | null
   isActive: boolean
   lastSeen: string | null
+  // اتصال السحب المباشر ونتيجة آخر مزامنة
+  ip: string | null
+  port: number | null
+  lastStatus: string | null
+  lastSyncCount: number
+  lastSyncAt: string | null
 }
+
+const SYNC_INTERVAL_KEY = 'attendance.sync_interval_minutes'
 
 // «آخر ظهور» — تنسيق محلي مقروء أو «لم يظهر بعد»
 const formatLastSeen = (lastSeen: string | null): string => {
@@ -36,7 +59,7 @@ const formatLastSeen = (lastSeen: string | null): string => {
   return d.toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' })
 }
 
-const emptyForm = { name: '', serialNumber: '', branchId: '' }
+const emptyForm = { name: '', serialNumber: '', branchId: '', ip: '', port: '' }
 
 export default function DevicesPage() {
   const [devices, setDevices] = useState<Device[]>([])
@@ -52,6 +75,16 @@ export default function DevicesPage() {
   const [modalError, setModalError] = useState('')
   const [saving, setSaving] = useState(false)
 
+  // المزامنة اليدوية — جهاز واحد أو الكل + نتائجها
+  const [syncingId, setSyncingId] = useState<number | null>(null)
+  const [syncingAll, setSyncingAll] = useState(false)
+  const [syncResults, setSyncResults] = useState<ApiSyncResult[] | null>(null)
+
+  // فاصل المزامنة التلقائية (دقائق) — 0 = متوقفة
+  const [intervalMinutes, setIntervalMinutes] = useState('')
+  const [savingInterval, setSavingInterval] = useState(false)
+  const [notice, setNotice] = useState('')
+
   const loadDevices = () => {
     setLoading(true)
     setError('')
@@ -66,7 +99,67 @@ export default function DevicesPage() {
     fetchBranches()
       .then((rows) => setBranches(rows))
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل الفروع'))
+    fetchConfig()
+      .then((rows) => {
+        const row = rows.find((r) => r.key === SYNC_INTERVAL_KEY)
+        if (row) setIntervalMinutes(row.value)
+      })
+      .catch(() => {
+        /* الإعداد اختياري — لا نُفشل الشاشة */
+      })
   }, [])
+
+  // ===== المزامنة اليدوية =====
+  const syncOne = async (device: Device) => {
+    setSyncingId(device.id)
+    setError('')
+    try {
+      const result = await syncDevice(device.id)
+      setSyncResults([result])
+      loadDevices()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر سحب بصمات الجهاز')
+    } finally {
+      setSyncingId(null)
+    }
+  }
+
+  const syncAll = async () => {
+    setSyncingAll(true)
+    setError('')
+    try {
+      const results = await syncAllDevices()
+      setSyncResults(results)
+      loadDevices()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر سحب بصمات الأجهزة')
+    } finally {
+      setSyncingAll(false)
+    }
+  }
+
+  // حفظ فاصل المزامنة التلقائية
+  const saveInterval = async () => {
+    const n = Number(intervalMinutes)
+    if (!Number.isInteger(n) || n < 0) {
+      setError('فاصل المزامنة: عدد دقائق صحيح (0 = متوقفة)')
+      return
+    }
+    setSavingInterval(true)
+    setError('')
+    try {
+      await updateConfig(SYNC_INTERVAL_KEY, String(n))
+      setNotice(
+        n === 0
+          ? 'تم إيقاف المزامنة التلقائية'
+          : `المزامنة التلقائية كل ${n} دقيقة`
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر حفظ فاصل المزامنة')
+    } finally {
+      setSavingInterval(false)
+    }
+  }
 
   const openAdd = () => {
     setEditingDevice(null)
@@ -81,6 +174,8 @@ export default function DevicesPage() {
       name: device.name,
       serialNumber: device.serialNumber,
       branchId: device.branchId ? String(device.branchId) : '',
+      ip: device.ip ?? '',
+      port: device.port != null ? String(device.port) : '',
     })
     setModalError('')
     setShowModal(true)
@@ -94,6 +189,8 @@ export default function DevicesPage() {
         name: formData.name,
         serialNumber: formData.serialNumber,
         branchId: Number(formData.branchId),
+        ip: formData.ip.trim() || null,
+        port: formData.port.trim() ? Number(formData.port) : 4370,
       }
       if (editingDevice) {
         await updateCatalogItem('devices', editingDevice.id, body)
@@ -138,6 +235,18 @@ export default function DevicesPage() {
               <RefreshCw size={18} />
               تحديث
             </button>
+            <button
+              onClick={syncAll}
+              disabled={syncingAll}
+              className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+            >
+              {syncingAll ? (
+                <span className="w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+              ) : (
+                <DownloadCloud size={18} />
+              )}
+              {syncingAll ? 'جارٍ السحب...' : 'سحب الكل الآن'}
+            </button>
             <button onClick={openAdd} className="btn-primary flex items-center gap-2">
               <Plus size={18} />
               تسجيل جهاز جديد
@@ -146,6 +255,70 @@ export default function DevicesPage() {
         </div>
 
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
+        {/* Success Notice */}
+        {notice && (
+          <div className="bg-success-50 text-success-700 rounded-xl p-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 size={18} />
+              <span>{notice}</span>
+            </div>
+            <button onClick={() => setNotice('')} className="p-1 hover:bg-success-100 rounded-lg">
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
+        {/* نتائج المزامنة اليدوية */}
+        {syncResults && (
+          <div className="card border border-gray-200">
+            <div className="flex items-center justify-between mb-3">
+              <div className="flex items-center gap-2">
+                <DownloadCloud size={18} className="text-primary-600" />
+                <h3 className="font-bold text-gray-800">نتائج السحب</h3>
+                <span className="text-sm text-gray-500">
+                  {syncResults.filter((r) => r.ok).length} نجحت •{' '}
+                  {syncResults.filter((r) => !r.ok).length} فشلت
+                </span>
+              </div>
+              <button
+                onClick={() => setSyncResults(null)}
+                className="p-1.5 hover:bg-gray-100 rounded-lg"
+              >
+                <X size={16} className="text-gray-500" />
+              </button>
+            </div>
+            <div className="space-y-2">
+              {syncResults.length === 0 && (
+                <p className="text-sm text-gray-500">
+                  لا أجهزة قابلة للسحب — أضف عنوان IP للأجهزة النشطة أولاً
+                </p>
+              )}
+              {syncResults.map((r) => (
+                <div
+                  key={r.deviceId}
+                  className={`flex items-center gap-2 p-3 rounded-xl text-sm ${
+                    r.ok ? 'bg-success-50 text-success-700' : 'bg-red-50 text-red-700'
+                  }`}
+                >
+                  {r.ok ? (
+                    <CheckCircle2 size={16} className="shrink-0" />
+                  ) : (
+                    <AlertCircle size={16} className="shrink-0" />
+                  )}
+                  <span className="font-medium">{r.deviceName}:</span>
+                  {r.ok ? (
+                    <span>
+                      سُحبت {r.pulled} بصمة — أُدخلت {r.inserted} (تطابقت {r.matched})
+                    </span>
+                  ) : (
+                    <span>{r.error ?? 'فشل غير معروف'}</span>
+                  )}
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-5 gap-4">
@@ -221,6 +394,29 @@ export default function DevicesPage() {
                 </option>
               ))}
             </select>
+            <div className="flex items-center gap-2 whitespace-nowrap border-r border-gray-100 pr-3">
+              <Timer size={18} className="text-gray-400" />
+              <span className="text-sm text-gray-600">
+                فاصل المزامنة التلقائية (دقائق)
+              </span>
+              <input
+                type="number"
+                min={0}
+                value={intervalMinutes}
+                onChange={(e) => setIntervalMinutes(e.target.value)}
+                className="input w-24 text-sm"
+                dir="ltr"
+                title="0 = متوقفة"
+              />
+              <button
+                onClick={saveInterval}
+                disabled={savingInterval}
+                className="btn-secondary text-sm py-2 disabled:opacity-50"
+              >
+                {savingInterval ? 'جارٍ الحفظ...' : 'حفظ'}
+              </button>
+              <span className="text-xs text-gray-400">0 = متوقفة</span>
+            </div>
           </div>
         </div>
 
@@ -280,6 +476,28 @@ export default function DevicesPage() {
                     <Clock size={16} className="text-gray-400" />
                     <span className="text-sm text-gray-600">آخر ظهور: {formatLastSeen(device.lastSeen)}</span>
                   </div>
+                  <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-xl">
+                    <Activity size={16} className="text-gray-400 shrink-0" />
+                    <span className="text-sm text-gray-600 truncate" title={device.lastStatus ?? undefined}>
+                      آخر مزامنة: {device.lastStatus ?? 'لم تجرِ بعد'}
+                      {device.lastSyncCount > 0 && (
+                        <span className="text-success-600"> — {device.lastSyncCount} بصمة</span>
+                      )}
+                    </span>
+                  </div>
+                  <div className="flex items-center gap-2 p-3 bg-gray-50 rounded-xl">
+                    <Globe size={16} className="text-gray-400" />
+                    <span className="text-sm text-gray-600">
+                      الاتصال:{' '}
+                      {device.ip ? (
+                        <span className="font-mono" dir="ltr">
+                          {device.ip}:{device.port ?? 4370}
+                        </span>
+                      ) : (
+                        'بلا IP — أضفه من «تعديل» لتفعيل السحب'
+                      )}
+                    </span>
+                  </div>
                 </div>
 
                 <div className="text-xs text-gray-400 mb-4">
@@ -293,6 +511,19 @@ export default function DevicesPage() {
                   >
                     <Edit2 size={16} />
                     تعديل
+                  </button>
+                  <button
+                    onClick={() => syncOne(device)}
+                    disabled={syncingId === device.id || syncingAll || !device.ip}
+                    title={!device.ip ? 'أضف عنوان IP أولاً' : 'سحب البصمات من الجهاز الآن'}
+                    className="flex-1 btn-primary flex items-center justify-center gap-2 text-sm py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    {syncingId === device.id ? (
+                      <span className="w-4 h-4 border-2 border-white border-t-transparent rounded-full animate-spin" />
+                    ) : (
+                      <DownloadCloud size={16} />
+                    )}
+                    {syncingId === device.id ? 'جارٍ السحب...' : 'سحب الآن'}
                   </button>
                 </div>
               </div>
@@ -405,6 +636,38 @@ export default function DevicesPage() {
                         </option>
                       ))}
                     </select>
+                  </div>
+                </div>
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      عنوان IP (للسحب المباشر)
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.ip}
+                      onChange={(e) => setFormData({ ...formData, ip: e.target.value })}
+                      className="input w-full font-mono"
+                      placeholder="192.168.1.201"
+                      dir="ltr"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      اتركه فارغاً إن كان الجهاز يدفع السجلات بنفسه
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      المنفذ (Port)
+                    </label>
+                    <input
+                      type="number"
+                      value={formData.port}
+                      onChange={(e) => setFormData({ ...formData, port: e.target.value })}
+                      className="input w-full font-mono"
+                      placeholder="4370"
+                      dir="ltr"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">افتراضي ZKTeco: 4370</p>
                   </div>
                 </div>
               </div>

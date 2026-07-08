@@ -418,3 +418,88 @@ export const can = (perm: string): boolean => {
 export const fetchMyCustody = () => get<ApiCustody[]>('/custody/mine')
 export const fetchMyPayslips = () =>
   get<Array<{ item: ApiPayrollItem; run: ApiPayrollRun }>>('/payroll/my-payslips')
+
+// ===== العهدة: اعتماد المدير المباشر =====
+export const managerConfirmCustody = (assignmentId: number) =>
+  post<ApiCustody>(`/requests/custody/${assignmentId}/manager-confirm`)
+export const fetchCustodyPendingMyConfirm = () =>
+  get<ApiCustody[]>('/custody/pending-my-confirm')
+
+// ===== إنهاء الخدمة (إخلاء الطرف + التصفية) =====
+export interface ApiClearanceItem {
+  id: number; caseId: number; party: string; label: string
+  status: string; note?: string; amount?: number; doneBy?: number; doneAt?: string
+}
+export interface ApiSettlementLine {
+  id: number; caseId: number; label: string; type: 'CREDIT' | 'DEBIT'
+  amount: number; isAuto: boolean
+}
+export interface ApiOffboardingCase {
+  id: number; employeeId: number; resignationRequestId?: number
+  lastWorkingDay: string; status: string
+  settlementNet?: number; settlementDocRef?: string; clearanceCertRef?: string
+  employeeName?: string; employeeCode?: string
+  employee?: ApiEmployee; items?: ApiClearanceItem[]; lines?: ApiSettlementLine[]
+  openCustodyCount?: number; net?: number
+  createdAt: string
+}
+export const fetchOffboardingCases = () => get<ApiOffboardingCase[]>('/offboarding')
+export const fetchOffboardingCase = (id: number) => get<ApiOffboardingCase>(`/offboarding/${id}`)
+export const completeClearanceItem = (itemId: number, d?: { note?: string; amount?: number }) =>
+  post<ApiOffboardingCase>(`/offboarding/items/${itemId}/complete`, d ?? {})
+export const addSettlementLine = (caseId: number, d: { label: string; type: 'CREDIT' | 'DEBIT'; amount: number }) =>
+  post<ApiOffboardingCase>(`/offboarding/${caseId}/lines`, d)
+export const updateSettlementLine = (lineId: number, d: { label?: string; amount?: number }) =>
+  patch<ApiOffboardingCase>(`/offboarding/lines/${lineId}`, d)
+export const approveSettlement = (caseId: number) =>
+  post<ApiOffboardingCase>(`/offboarding/${caseId}/approve-settlement`)
+
+// ===== مزامنة أجهزة البصمة =====
+export interface ApiSyncResult {
+  deviceId: number; deviceName: string; ok: boolean
+  pulled: number; inserted: number; matched: number; error?: string
+}
+export const syncDevice = (id: number) => post<ApiSyncResult>(`/attendance/devices/${id}/sync`)
+export const syncAllDevices = () => post<ApiSyncResult[]>('/attendance/devices/sync-all')
+
+// ===== الملفات =====
+export const uploadFile = async (
+  file: File,
+  meta?: { entityType?: string; entityId?: number; employeeId?: number }
+): Promise<{ id: number; originalName: string; size: number; mime: string; ref: string }> => {
+  const p = new URLSearchParams()
+  if (meta?.entityType) p.set('entityType', meta.entityType)
+  if (meta?.entityId) p.set('entityId', String(meta.entityId))
+  if (meta?.employeeId) p.set('employeeId', String(meta.employeeId))
+  const fd = new FormData()
+  fd.append('file', file)
+  const token = getToken()
+  const res = await fetch(`${API_BASE}/files/upload?${p.toString()}`, {
+    method: 'POST',
+    headers: token ? { Authorization: `Bearer ${token}` } : {},
+    body: fd,
+  })
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    throw new ApiError(res.status, body.message ?? 'فشل رفع الملف')
+  }
+  return res.json()
+}
+// رابط معاينة/تحميل ملف مخزّن (يتطلب توكن — استخدمه مع fetch أو افتحه بجلسة)
+export const fileDownloadUrl = (id: number) => `${API_BASE}/files/${id}`
+
+// ===== بانِي أنواع الطلبات =====
+export interface CustomFieldDef {
+  key: string; label: string; type: 'text' | 'number' | 'date' | 'select' | 'file'
+  required?: boolean; options?: string[]
+}
+export const fetchDestinationHandlers = () =>
+  get<Array<{ key: string; labelAr: string }>>('/settings/destination-handlers')
+export const createRequestType = (d: {
+  nameAr: string; category: string; code?: string
+  customFields?: CustomFieldDef[]; requiredAttachments?: string
+  destinationHandler?: string; approvalChainId?: number
+  visibleTo?: { mode: string; ids: Array<number | string> }
+}) => post<ApiRequestType>('/settings/request-types', d)
+export const updateRequestTypeFull = (id: number, d: Record<string, unknown>) =>
+  patch<ApiRequestType>(`/settings/request-types/${id}`, d)

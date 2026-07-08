@@ -43,6 +43,9 @@ import {
   fetchEmployees,
   createDocument,
   updateDocument,
+  uploadFile,
+  fileDownloadUrl,
+  getToken,
   ApiEmployee,
 } from '@/lib/api'
 
@@ -58,6 +61,7 @@ interface DocumentRow {
   issueDate: string
   expiryDate: string
   notes: string
+  fileRef: string
   status: 'valid' | 'expiring' | 'expired'
 }
 
@@ -96,6 +100,7 @@ const emptyForm = {
   issueDate: '',
   expiryDate: '',
   notes: '',
+  fileRef: '',
 }
 
 export default function DocumentsPage() {
@@ -119,6 +124,10 @@ export default function DocumentsPage() {
 
   // نموذج الإضافة/التعديل — يُرسل إلى /documents
   const [uploadForm, setUploadForm] = useState({ ...emptyForm })
+  // رفع الملف الفعلي داخل المودال + خطأ المودال
+  const [uploadingFile, setUploadingFile] = useState(false)
+  const [uploadedName, setUploadedName] = useState('')
+  const [modalError, setModalError] = useState('')
 
   const loadData = async () => {
     setLoading(true)
@@ -146,6 +155,7 @@ export default function DocumentsPage() {
             issueDate: d.issueDate ? String(d.issueDate).slice(0, 10) : '',
             expiryDate: expiry,
             notes: d.notes ?? '',
+            fileRef: d.fileRef ?? '',
             status: expired
               ? ('expired' as const)
               : expiry && expiry <= expiryLimit
@@ -205,6 +215,8 @@ export default function DocumentsPage() {
   const openCreate = () => {
     setEditingId(null)
     setUploadForm({ ...emptyForm })
+    setUploadedName('')
+    setModalError('')
     setShowUploadModal(true)
   }
 
@@ -217,15 +229,57 @@ export default function DocumentsPage() {
       issueDate: doc.issueDate,
       expiryDate: doc.expiryDate,
       notes: doc.notes,
+      fileRef: doc.fileRef,
     })
+    setUploadedName('')
+    setModalError('')
     setShowPreviewModal(false)
     setShowUploadModal(true)
+  }
+
+  // رفع الملف الفعلي — يخزّن المرجع file:N في fileRef
+  const handleDocFile = async (file: File | null) => {
+    if (!file) return
+    setUploadingFile(true)
+    setModalError('')
+    try {
+      const res = await uploadFile(file, {
+        entityType: 'document',
+        ...(uploadForm.employeeId
+          ? { employeeId: Number(uploadForm.employeeId) }
+          : {}),
+      })
+      setUploadForm((prev) => ({ ...prev, fileRef: res.ref }))
+      setUploadedName(res.originalName)
+    } catch (err) {
+      setModalError(err instanceof Error ? err.message : 'فشل رفع الملف')
+    } finally {
+      setUploadingFile(false)
+    }
+  }
+
+  // فتح الملف المخزّن — fetch بالتوكن ثم blob
+  const viewFile = async (fileRef: string) => {
+    const fileId = Number(fileRef.slice(5))
+    if (!Number.isFinite(fileId) || fileId <= 0) return
+    setError('')
+    try {
+      const token = getToken()
+      const res = await fetch(fileDownloadUrl(fileId), {
+        headers: token ? { Authorization: `Bearer ${token}` } : {},
+      })
+      if (!res.ok) throw new Error(`تعذر تحميل الملف (${res.status})`)
+      const blob = await res.blob()
+      window.open(URL.createObjectURL(blob))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر عرض الملف')
+    }
   }
 
   const handleSave = async () => {
     if (!uploadForm.docType || !uploadForm.employeeId) return
     setSaving(true)
-    setError('')
+    setModalError('')
     try {
       const payload = {
         employeeId: Number(uploadForm.employeeId),
@@ -234,6 +288,7 @@ export default function DocumentsPage() {
         issueDate: uploadForm.issueDate || undefined,
         expiryDate: uploadForm.expiryDate || undefined,
         notes: uploadForm.notes || undefined,
+        fileRef: uploadForm.fileRef || undefined,
       }
       if (editingId != null) {
         await updateDocument(editingId, payload)
@@ -243,9 +298,10 @@ export default function DocumentsPage() {
       setShowUploadModal(false)
       setEditingId(null)
       setUploadForm({ ...emptyForm })
+      setUploadedName('')
       await loadData()
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'تعذر حفظ المستند')
+      setModalError(err instanceof Error ? err.message : 'تعذر حفظ المستند')
     } finally {
       setSaving(false)
     }
@@ -540,6 +596,15 @@ export default function DocumentsPage() {
                       </td>
                       <td className="px-4 py-4">
                         <div className="flex items-center justify-center gap-2">
+                          {doc.fileRef.startsWith('file:') && (
+                            <button
+                              onClick={() => viewFile(doc.fileRef)}
+                              className="p-2 bg-primary-50 rounded-lg hover:bg-primary-100"
+                              title="عرض الملف"
+                            >
+                              <Download size={16} className="text-primary-600" />
+                            </button>
+                          )}
                           <button
                             onClick={() => openPreview(doc)}
                             className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200"
@@ -607,6 +672,15 @@ export default function DocumentsPage() {
                       <Eye size={14} />
                       معاينة
                     </button>
+                    {doc.fileRef.startsWith('file:') && (
+                      <button
+                        onClick={() => viewFile(doc.fileRef)}
+                        className="p-2 bg-primary-50 rounded-lg hover:bg-primary-100"
+                        title="عرض الملف"
+                      >
+                        <Download size={14} className="text-primary-600" />
+                      </button>
+                    )}
                     <button
                       onClick={() => openEdit(doc)}
                       className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200"
@@ -645,6 +719,11 @@ export default function DocumentsPage() {
                 </div>
               </div>
               <div className="p-6 space-y-4">
+                {modalError && (
+                  <div className="bg-red-50 text-red-700 rounded-xl p-4 text-sm">
+                    {modalError}
+                  </div>
+                )}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">نوع المستند *</label>
                   <input
@@ -706,6 +785,49 @@ export default function DocumentsPage() {
                   </div>
                 </div>
 
+                {/* ملف المستند الفعلي — يُرفع فوراً ويُخزَّن مرجعه */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    ملف المستند (اختياري)
+                  </label>
+                  <label
+                    className={`flex items-center gap-2 p-3 border-2 border-dashed rounded-xl cursor-pointer transition-colors ${
+                      uploadForm.fileRef.startsWith('file:')
+                        ? 'border-success-300 bg-success-50'
+                        : 'border-gray-200 hover:border-primary-300'
+                    }`}
+                  >
+                    <FileUp
+                      size={18}
+                      className={
+                        uploadForm.fileRef.startsWith('file:')
+                          ? 'text-success-500'
+                          : 'text-gray-400'
+                      }
+                    />
+                    <span className="text-sm text-gray-600 flex-1 truncate">
+                      {uploadingFile
+                        ? 'جارٍ رفع الملف...'
+                        : uploadedName ||
+                          (uploadForm.fileRef.startsWith('file:')
+                            ? 'ملف مرفوع مسبقاً — اختر ملفاً لاستبداله'
+                            : 'اختر ملفاً للرفع (PDF / صورة / مستند)')}
+                    </span>
+                    {uploadingFile && (
+                      <span className="w-4 h-4 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                    )}
+                    {!uploadingFile && uploadForm.fileRef.startsWith('file:') && (
+                      <CheckCircle2 size={18} className="text-success-500" />
+                    )}
+                    <input
+                      type="file"
+                      className="hidden"
+                      disabled={uploadingFile}
+                      onChange={(e) => handleDocFile(e.target.files?.[0] ?? null)}
+                    />
+                  </label>
+                </div>
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">ملاحظات</label>
                   <textarea
@@ -727,7 +849,9 @@ export default function DocumentsPage() {
                 <button
                   onClick={handleSave}
                   className="btn-primary"
-                  disabled={saving || !uploadForm.docType || !uploadForm.employeeId}
+                  disabled={
+                    saving || uploadingFile || !uploadForm.docType || !uploadForm.employeeId
+                  }
                 >
                   {editingId != null ? 'حفظ التعديلات' : 'إضافة المستند'}
                 </button>
@@ -772,7 +896,20 @@ export default function DocumentsPage() {
                 <div className="bg-gray-100 rounded-xl h-96 flex items-center justify-center">
                   <div className="text-center">
                     <FileText size={64} className="mx-auto text-gray-400 mb-4" />
-                    <p className="text-gray-500">لا يوجد ملف مرفق — سجل بيانات فقط</p>
+                    {previewDoc.fileRef.startsWith('file:') ? (
+                      <>
+                        <p className="text-gray-600 mb-3">مستند بملف مرفق</p>
+                        <button
+                          onClick={() => viewFile(previewDoc.fileRef)}
+                          className="btn-primary flex items-center gap-2 mx-auto"
+                        >
+                          <Download size={16} />
+                          عرض الملف
+                        </button>
+                      </>
+                    ) : (
+                      <p className="text-gray-500">لا يوجد ملف مرفق — سجل بيانات فقط</p>
+                    )}
                   </div>
                 </div>
 
