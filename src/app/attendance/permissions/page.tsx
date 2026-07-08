@@ -1,15 +1,13 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
-  Plus,
   Clock,
   CheckCircle,
   XCircle,
   AlertCircle,
-  Eye,
   ChevronLeft,
   ChevronRight,
   LogOut,
@@ -18,159 +16,90 @@ import {
   Briefcase,
   Calendar,
 } from 'lucide-react'
+import {
+  fetchAllRequests,
+  fetchEmployees,
+  actOnRequest,
+  getCurrentUser,
+  type ApiRequest,
+  type ApiEmployee,
+} from '@/lib/api'
 
-interface PermissionRequest {
-  id: string
-  employeeId: string
+// حالات محرك الطلبات — تسميات عربية
+const statusLabels: Record<string, string> = {
+  DRAFT: 'مسودة',
+  UNDER_REVIEW: 'قيد المراجعة',
+  RETURNED: 'معاد للتعديل',
+  COMPLETED: 'مكتمل',
+  REJECTED: 'مرفوض',
+  CANCELLED: 'ملغي',
+}
+
+interface PermissionRow {
+  id: number
+  requesterId: number
   employeeName: string
+  employeeCode: string
   avatar: string
-  department: string
-  permissionType: 'early_leave' | 'late_arrival' | 'mid_day' | 'work_assignment'
   date: string
   fromTime: string
   toTime: string
   hours: number
   reason: string
-  status: 'pending' | 'approved' | 'rejected'
-  submittedDate: string
-  approvedBy?: string
+  status: string
 }
 
-const permissionRequests: PermissionRequest[] = [
-  {
-    id: '1',
-    employeeId: 'EMP001',
-    employeeName: 'أحمد محمد علي',
-    avatar: 'أ',
-    department: 'تقنية المعلومات',
-    permissionType: 'early_leave',
-    date: '2026/01/29',
-    fromTime: '15:00',
-    toTime: '17:00',
-    hours: 2,
-    reason: 'موعد طبي',
-    status: 'pending',
-    submittedDate: '2026/01/28',
-  },
-  {
-    id: '2',
-    employeeId: 'EMP003',
-    employeeName: 'محمد خالد السعيد',
-    avatar: 'م',
-    department: 'المبيعات',
-    permissionType: 'late_arrival',
-    date: '2026/01/30',
-    fromTime: '08:00',
-    toTime: '10:00',
-    hours: 2,
-    reason: 'مراجعة جهة حكومية',
-    status: 'pending',
-    submittedDate: '2026/01/29',
-  },
-  {
-    id: '3',
-    employeeId: 'EMP002',
-    employeeName: 'سارة أحمد الخالدي',
-    avatar: 'س',
-    department: 'الموارد البشرية',
-    permissionType: 'mid_day',
-    date: '2026/01/28',
-    fromTime: '12:00',
-    toTime: '14:00',
-    hours: 2,
-    reason: 'استلام أوراق من المدرسة',
-    status: 'approved',
-    submittedDate: '2026/01/27',
-    approvedBy: 'محمد سالم',
-  },
-  {
-    id: '4',
-    employeeId: 'EMP005',
-    employeeName: 'عمر سالم الحربي',
-    avatar: 'ع',
-    department: 'التسويق',
-    permissionType: 'work_assignment',
-    date: '2026/01/29',
-    fromTime: '09:00',
-    toTime: '13:00',
-    hours: 4,
-    reason: 'زيارة عميل',
-    status: 'approved',
-    submittedDate: '2026/01/28',
-    approvedBy: 'أحمد محمد',
-  },
-  {
-    id: '5',
-    employeeId: 'EMP006',
-    employeeName: 'نورة محمد العتيبي',
-    avatar: 'ن',
-    department: 'خدمة العملاء',
-    permissionType: 'early_leave',
-    date: '2026/01/27',
-    fromTime: '14:00',
-    toTime: '17:00',
-    hours: 3,
-    reason: 'ظرف عائلي',
-    status: 'rejected',
-    submittedDate: '2026/01/26',
-    approvedBy: 'سارة أحمد',
-  },
-]
+// مدة الإذن بالساعات من from/to (HH:mm)
+const hoursBetween = (from: string, to: string): number => {
+  const [fh, fm] = (from || '').split(':').map(Number)
+  const [th, tm] = (to || '').split(':').map(Number)
+  if ([fh, fm, th, tm].some((n) => Number.isNaN(n))) return 0
+  const mins = th * 60 + tm - (fh * 60 + fm)
+  return mins > 0 ? Math.round((mins / 60) * 10) / 10 : 0
+}
 
-const getPermissionTypeBadge = (type: PermissionRequest['permissionType']) => {
-  switch (type) {
-    case 'early_leave':
-      return (
-        <span className="badge bg-orange-50 text-orange-600 flex items-center gap-1">
-          <LogOut size={12} />
-          خروج مبكر
-        </span>
-      )
-    case 'late_arrival':
-      return (
-        <span className="badge badge-warning flex items-center gap-1">
-          <LogIn size={12} />
-          دخول متأخر
-        </span>
-      )
-    case 'mid_day':
-      return (
-        <span className="badge badge-primary flex items-center gap-1">
-          <Timer size={12} />
-          خروج أثناء الدوام
-        </span>
-      )
-    case 'work_assignment':
-      return (
-        <span className="badge badge-success flex items-center gap-1">
-          <Briefcase size={12} />
-          مهمة عمل
-        </span>
-      )
+const parsePayload = (payload?: string): { date: string; from: string; to: string; reason: string } => {
+  try {
+    const p = JSON.parse(payload ?? '{}')
+    return {
+      date: p.date ?? '—',
+      from: p.from ?? '—',
+      to: p.to ?? '—',
+      reason: p.reason ?? '—',
+    }
+  } catch {
+    return { date: '—', from: '—', to: '—', reason: '—' }
   }
 }
 
-const getStatusBadge = (status: PermissionRequest['status']) => {
+const getStatusBadge = (status: string) => {
   switch (status) {
-    case 'pending':
+    case 'UNDER_REVIEW':
       return (
         <span className="badge badge-warning flex items-center gap-1">
           <AlertCircle size={12} />
-          في الانتظار
+          قيد المراجعة
         </span>
       )
-    case 'approved':
+    case 'COMPLETED':
       return (
         <span className="badge badge-success flex items-center gap-1">
           <CheckCircle size={12} />
-          موافق عليه
+          مكتمل
         </span>
       )
-    case 'rejected':
+    case 'REJECTED':
       return (
         <span className="badge badge-danger flex items-center gap-1">
           <XCircle size={12} />
           مرفوض
+        </span>
+      )
+    default:
+      return (
+        <span className="badge bg-gray-100 text-gray-600 flex items-center gap-1">
+          <Clock size={12} />
+          {statusLabels[status] ?? status}
         </span>
       )
   }
@@ -179,23 +108,83 @@ const getStatusBadge = (status: PermissionRequest['status']) => {
 export default function PermissionsPage() {
   const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all')
   const [searchQuery, setSearchQuery] = useState('')
-  const [selectedType, setSelectedType] = useState('all')
+  const [selectedDate, setSelectedDate] = useState('')
 
-  const stats = {
-    all: permissionRequests.length,
-    pending: permissionRequests.filter((p) => p.status === 'pending').length,
-    approved: permissionRequests.filter((p) => p.status === 'approved').length,
-    rejected: permissionRequests.filter((p) => p.status === 'rejected').length,
-    totalHours: permissionRequests.filter((p) => p.status === 'approved').reduce((sum, p) => sum + p.hours, 0),
+  const [requests, setRequests] = useState<ApiRequest[]>([])
+  const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [actingId, setActingId] = useState<number | null>(null)
+
+  const currentUser = getCurrentUser()
+  const canAct = !!currentUser && currentUser.role !== 'employee'
+
+  const loadRequests = () => {
+    setLoading(true)
+    setError('')
+    fetchAllRequests({ typeCode: 'PERMISSION' })
+      .then((rows) => setRequests(rows))
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل طلبات الاستئذان'))
+      .finally(() => setLoading(false))
   }
 
-  const filteredRequests = permissionRequests.filter((req) => {
-    if (activeTab !== 'all' && req.status !== activeTab) return false
-    if (selectedType !== 'all' && req.permissionType !== selectedType) return false
+  useEffect(() => {
+    loadRequests()
+    fetchEmployees()
+      .then((rows) => setEmployees(rows))
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل الموظفين'))
+  }, [])
+
+  const handleAct = async (id: number, action: 'APPROVE' | 'REJECT') => {
+    setActingId(id)
+    setError('')
+    try {
+      await actOnRequest(id, action)
+      loadRequests()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر تنفيذ الإجراء')
+    } finally {
+      setActingId(null)
+    }
+  }
+
+  const empById = new Map(employees.map((e) => [e.id, e]))
+
+  const rows: PermissionRow[] = requests.map((req) => {
+    const emp = empById.get(req.requesterId)
+    const payload = parsePayload(req.payload)
+    return {
+      id: req.id,
+      requesterId: req.requesterId,
+      employeeName: emp?.fullName ?? `موظف ${req.requesterId}`,
+      employeeCode: emp?.employeeCode ?? `#${req.requesterId}`,
+      avatar: (emp?.fullName ?? 'م').charAt(0),
+      date: payload.date,
+      fromTime: payload.from,
+      toTime: payload.to,
+      hours: hoursBetween(payload.from, payload.to),
+      reason: payload.reason,
+      status: req.status,
+    }
+  })
+
+  const stats = {
+    all: rows.length,
+    pending: rows.filter((p) => p.status === 'UNDER_REVIEW').length,
+    approved: rows.filter((p) => p.status === 'COMPLETED').length,
+    rejected: rows.filter((p) => p.status === 'REJECTED').length,
+    totalHours: rows.filter((p) => p.status === 'COMPLETED').reduce((sum, p) => sum + p.hours, 0),
+  }
+
+  const filteredRequests = rows.filter((req) => {
+    if (activeTab === 'pending' && req.status !== 'UNDER_REVIEW') return false
+    if (activeTab === 'approved' && req.status !== 'COMPLETED') return false
+    if (activeTab === 'rejected' && req.status !== 'REJECTED') return false
+    if (selectedDate && req.date !== selectedDate) return false
     if (
       searchQuery &&
       !req.employeeName.includes(searchQuery) &&
-      !req.employeeId.toLowerCase().includes(searchQuery.toLowerCase())
+      !req.employeeCode.toLowerCase().includes(searchQuery.toLowerCase())
     )
       return false
     return true
@@ -210,11 +199,9 @@ export default function PermissionsPage() {
             <h1 className="text-2xl font-bold text-gray-800">الأذونات والاستئذان</h1>
             <p className="text-gray-500 mt-1">إدارة طلبات الأذونات للموظفين</p>
           </div>
-          <button className="btn-primary flex items-center gap-2">
-            <Plus size={18} />
-            طلب إذن جديد
-          </button>
         </div>
+
+        {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
 
         {/* Stats */}
         <div className="grid grid-cols-5 gap-4">
@@ -242,7 +229,7 @@ export default function PermissionsPage() {
                 <AlertCircle size={24} className="text-warning-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">في الانتظار</p>
+                <p className="text-sm text-gray-500">قيد المراجعة</p>
                 <p className="text-2xl font-bold text-warning-600">{stats.pending}</p>
               </div>
             </div>
@@ -257,7 +244,7 @@ export default function PermissionsPage() {
                 <CheckCircle size={24} className="text-success-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">موافق عليها</p>
+                <p className="text-sm text-gray-500">مكتملة</p>
                 <p className="text-2xl font-bold text-success-600">{stats.approved}</p>
               </div>
             </div>
@@ -307,107 +294,111 @@ export default function PermissionsPage() {
               </div>
             </div>
 
-            <select
-              value={selectedType}
-              onChange={(e) => setSelectedType(e.target.value)}
-              className="input w-48"
-            >
-              <option value="all">كل الأنواع</option>
-              <option value="early_leave">خروج مبكر</option>
-              <option value="late_arrival">دخول متأخر</option>
-              <option value="mid_day">خروج أثناء الدوام</option>
-              <option value="work_assignment">مهمة عمل</option>
-            </select>
-
             <div className="flex items-center gap-2">
               <Calendar size={18} className="text-gray-400" />
-              <input type="date" className="input w-40" />
+              <input
+                type="date"
+                className="input w-40"
+                value={selectedDate}
+                onChange={(e) => setSelectedDate(e.target.value)}
+              />
             </div>
           </div>
         </div>
 
         {/* Permissions Table */}
-        <div className="card overflow-hidden p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="table-header">
-                  <th className="text-right px-4 py-4">الموظف</th>
-                  <th className="text-center px-4 py-4">نوع الإذن</th>
-                  <th className="text-center px-4 py-4">التاريخ</th>
-                  <th className="text-center px-4 py-4">من</th>
-                  <th className="text-center px-4 py-4">إلى</th>
-                  <th className="text-center px-4 py-4">المدة</th>
-                  <th className="text-right px-4 py-4">السبب</th>
-                  <th className="text-center px-4 py-4">الحالة</th>
-                  <th className="text-center px-4 py-4">الإجراءات</th>
-                </tr>
-              </thead>
-              <tbody>
-                {filteredRequests.map((request) => (
-                  <tr key={request.id} className="table-row">
-                    <td className="table-cell">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center text-white font-bold">
-                          {request.avatar}
-                        </div>
-                        <div>
-                          <p className="font-medium text-gray-800">{request.employeeName}</p>
-                          <p className="text-sm text-gray-400">{request.department}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="table-cell text-center">{getPermissionTypeBadge(request.permissionType)}</td>
-                    <td className="table-cell text-center text-gray-600">{request.date}</td>
-                    <td className="table-cell text-center font-mono text-success-600">{request.fromTime}</td>
-                    <td className="table-cell text-center font-mono text-danger-600">{request.toTime}</td>
-                    <td className="table-cell text-center">
-                      <span className="font-bold text-primary-600">{request.hours} ساعة</span>
-                    </td>
-                    <td className="table-cell text-gray-600 max-w-[200px] truncate">{request.reason}</td>
-                    <td className="table-cell text-center">{getStatusBadge(request.status)}</td>
-                    <td className="table-cell">
-                      <div className="flex items-center justify-center gap-1">
-                        <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-                          <Eye size={18} className="text-gray-500" />
-                        </button>
-                        {request.status === 'pending' && (
-                          <>
-                            <button className="p-2 bg-success-50 hover:bg-success-100 rounded-lg transition-colors">
-                              <CheckCircle size={18} className="text-success-600" />
-                            </button>
-                            <button className="p-2 bg-danger-50 hover:bg-danger-100 rounded-lg transition-colors">
-                              <XCircle size={18} className="text-danger-600" />
-                            </button>
-                          </>
-                        )}
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        {loading ? (
+          <div className="card flex items-center justify-center py-16">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
           </div>
+        ) : (
+          <div className="card overflow-hidden p-0">
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="table-header">
+                    <th className="text-right px-4 py-4">الموظف</th>
+                    <th className="text-center px-4 py-4">التاريخ</th>
+                    <th className="text-center px-4 py-4">من</th>
+                    <th className="text-center px-4 py-4">إلى</th>
+                    <th className="text-center px-4 py-4">المدة</th>
+                    <th className="text-right px-4 py-4">السبب</th>
+                    <th className="text-center px-4 py-4">الحالة</th>
+                    {canAct && <th className="text-center px-4 py-4">الإجراءات</th>}
+                  </tr>
+                </thead>
+                <tbody>
+                  {filteredRequests.map((request) => (
+                    <tr key={request.id} className="table-row">
+                      <td className="table-cell">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center text-white font-bold">
+                            {request.avatar}
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-800">{request.employeeName}</p>
+                            <p className="text-sm text-gray-400">{request.employeeCode}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="table-cell text-center text-gray-600">{request.date}</td>
+                      <td className="table-cell text-center font-mono text-success-600">{request.fromTime}</td>
+                      <td className="table-cell text-center font-mono text-danger-600">{request.toTime}</td>
+                      <td className="table-cell text-center">
+                        <span className="font-bold text-primary-600">{request.hours} ساعة</span>
+                      </td>
+                      <td className="table-cell text-gray-600 max-w-[200px] truncate">{request.reason}</td>
+                      <td className="table-cell text-center">{getStatusBadge(request.status)}</td>
+                      {canAct && (
+                        <td className="table-cell">
+                          <div className="flex items-center justify-center gap-1">
+                            {request.status === 'UNDER_REVIEW' && (
+                              <>
+                                <button
+                                  onClick={() => handleAct(request.id, 'APPROVE')}
+                                  disabled={actingId === request.id}
+                                  className="p-2 bg-success-50 hover:bg-success-100 rounded-lg transition-colors"
+                                >
+                                  <CheckCircle size={18} className="text-success-600" />
+                                </button>
+                                <button
+                                  onClick={() => handleAct(request.id, 'REJECT')}
+                                  disabled={actingId === request.id}
+                                  className="p-2 bg-danger-50 hover:bg-danger-100 rounded-lg transition-colors"
+                                >
+                                  <XCircle size={18} className="text-danger-600" />
+                                </button>
+                              </>
+                            )}
+                          </div>
+                        </td>
+                      )}
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
 
-          {/* Pagination */}
-          <div className="flex items-center justify-between px-4 py-4 border-t border-gray-100">
-            <p className="text-sm text-gray-500">
-              عرض <span className="font-medium text-gray-700">1-{filteredRequests.length}</span> من{' '}
-              <span className="font-medium text-gray-700">{filteredRequests.length}</span> طلب
-            </p>
-            <div className="flex items-center gap-2">
-              <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50" disabled>
-                <ChevronRight size={18} />
-              </button>
-              <button className="px-4 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium">
-                1
-              </button>
-              <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50" disabled>
-                <ChevronLeft size={18} />
-              </button>
+            {/* Pagination */}
+            <div className="flex items-center justify-between px-4 py-4 border-t border-gray-100">
+              <p className="text-sm text-gray-500">
+                عرض <span className="font-medium text-gray-700">1-{filteredRequests.length}</span> من{' '}
+                <span className="font-medium text-gray-700">{filteredRequests.length}</span> طلب
+              </p>
+              <div className="flex items-center gap-2">
+                <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50" disabled>
+                  <ChevronRight size={18} />
+                </button>
+                <button className="px-4 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium">
+                  1
+                </button>
+                <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50" disabled>
+                  <ChevronLeft size={18} />
+                </button>
+              </div>
             </div>
           </div>
-        </div>
+        )}
 
         {/* Permission Types Info */}
         <div className="grid grid-cols-4 gap-4">

@@ -1,50 +1,80 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   ChevronRight,
   ChevronLeft,
   Calendar,
-  Filter,
-  Users,
+  Star,
+  AlertTriangle,
 } from 'lucide-react'
+import { fetchCalendar, type ApiLeave } from '@/lib/api'
 
-interface LeaveEvent {
-  id: string
-  employeeName: string
-  type: string
-  startDate: string
-  endDate: string
-  color: string
+interface CalendarHoliday {
+  id: number
+  name: string
+  date: string
+  endDate?: string | null
+  country?: string | null
 }
 
-const leaveEvents: LeaveEvent[] = [
-  { id: '1', employeeName: 'أحمد محمد', type: 'سنوية', startDate: '2024-01-15', endDate: '2024-01-19', color: '#3B82F6' },
-  { id: '2', employeeName: 'سارة أحمد', type: 'مرضية', startDate: '2024-01-22', endDate: '2024-01-24', color: '#EF4444' },
-  { id: '3', employeeName: 'عمر سالم', type: 'طارئة', startDate: '2024-01-10', endDate: '2024-01-10', color: '#F97316' },
-  { id: '4', employeeName: 'نورة محمد', type: 'سنوية', startDate: '2024-01-28', endDate: '2024-02-02', color: '#3B82F6' },
-  { id: '5', employeeName: 'فهد عبدالله', type: 'سنوية', startDate: '2024-01-08', endDate: '2024-01-12', color: '#3B82F6' },
-]
+const LEAVE_TYPE_META: Record<string, { label: string; color: string }> = {
+  ANNUAL: { label: 'سنوية', color: '#3B82F6' },
+  SICK: { label: 'مرضية', color: '#EF4444' },
+  CASUAL: { label: 'طارئة', color: '#F97316' },
+  UNPAID: { label: 'بدون راتب', color: '#6B7280' },
+  MATERNITY: { label: 'وضع', color: '#A855F7' },
+  PATERNITY: { label: 'أبوة', color: '#6366F1' },
+  HAJJ: { label: 'حج', color: '#22C55E' },
+  MARRIAGE: { label: 'زواج', color: '#EC4899' },
+  BEREAVEMENT: { label: 'وفاة/عدة', color: '#6B7280' },
+  EXAM: { label: 'امتحانات', color: '#14B8A6' },
+  COMPENSATORY: { label: 'تعويضية', color: '#06B6D4' },
+}
+
+const leaveMeta = (code: string) =>
+  LEAVE_TYPE_META[code] ?? { label: code, color: '#6B7280' }
+
+const HOLIDAY_COLOR = '#16A34A'
 
 const daysOfWeek = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت']
 
+const monthNames = [
+  'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
+  'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
+]
+
 export default function LeaveCalendarPage() {
-  const [currentDate, setCurrentDate] = useState(new Date(2024, 0, 1))
-  const [selectedDepartment, setSelectedDepartment] = useState('all')
+  const [currentDate, setCurrentDate] = useState(() => {
+    const now = new Date()
+    return new Date(now.getFullYear(), now.getMonth(), 1)
+  })
+  const [holidays, setHolidays] = useState<CalendarHoliday[]>([])
+  const [leaves, setLeaves] = useState<ApiLeave[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
   const year = currentDate.getFullYear()
   const month = currentDate.getMonth()
+  const monthKey = `${year}-${String(month + 1).padStart(2, '0')}`
+
+  useEffect(() => {
+    setLoading(true)
+    setError('')
+    fetchCalendar(monthKey)
+      .then((data) => {
+        setHolidays((data.holidays ?? []) as CalendarHoliday[])
+        setLeaves(data.leaves ?? [])
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل التقويم'))
+      .finally(() => setLoading(false))
+  }, [monthKey])
 
   const firstDayOfMonth = new Date(year, month, 1)
   const lastDayOfMonth = new Date(year, month + 1, 0)
   const firstDayWeekday = firstDayOfMonth.getDay()
   const totalDays = lastDayOfMonth.getDate()
-
-  const monthNames = [
-    'يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو',
-    'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
-  ]
 
   const prevMonth = () => {
     setCurrentDate(new Date(year, month - 1, 1))
@@ -54,17 +84,20 @@ export default function LeaveCalendarPage() {
     setCurrentDate(new Date(year, month + 1, 1))
   }
 
-  const getEventsForDay = (day: number) => {
-    const dateStr = `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
-    return leaveEvents.filter((event) => {
-      const start = new Date(event.startDate)
-      const end = new Date(event.endDate)
-      const current = new Date(dateStr)
-      return current >= start && current <= end
-    })
+  const dateStrOf = (day: number) =>
+    `${year}-${String(month + 1).padStart(2, '0')}-${String(day).padStart(2, '0')}`
+
+  const getLeavesForDay = (day: number) => {
+    const dateStr = dateStrOf(day)
+    return leaves.filter((l) => l.fromDate <= dateStr && dateStr <= l.toDate)
   }
 
-  const calendarDays = []
+  const getHolidaysForDay = (day: number) => {
+    const dateStr = dateStrOf(day)
+    return holidays.filter((h) => h.date <= dateStr && dateStr <= (h.endDate ?? h.date))
+  }
+
+  const calendarDays: Array<number | null> = []
   for (let i = 0; i < firstDayWeekday; i++) {
     calendarDays.push(null)
   }
@@ -79,21 +112,17 @@ export default function LeaveCalendarPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">تقويم الإجازات</h1>
-            <p className="text-gray-500 mt-1">عرض تقويمي لإجازات الموظفين</p>
-          </div>
-          <div className="flex items-center gap-3">
-            <select
-              value={selectedDepartment}
-              onChange={(e) => setSelectedDepartment(e.target.value)}
-              className="input w-48"
-            >
-              <option value="all">كل الأقسام</option>
-              <option value="it">تقنية المعلومات</option>
-              <option value="hr">الموارد البشرية</option>
-              <option value="sales">المبيعات</option>
-            </select>
+            <p className="text-gray-500 mt-1">عرض تقويمي لإجازات الموظفين والعطلات الرسمية</p>
           </div>
         </div>
+
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
+            <AlertTriangle size={18} />
+            {error}
+          </div>
+        )}
 
         {/* Calendar Navigation */}
         <div className="card">
@@ -115,7 +144,11 @@ export default function LeaveCalendarPage() {
             </button>
           </div>
 
-          {/* Calendar Grid */}
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
           <div className="grid grid-cols-7 gap-1">
             {/* Day Headers */}
             {daysOfWeek.map((day) => (
@@ -129,7 +162,20 @@ export default function LeaveCalendarPage() {
 
             {/* Calendar Days */}
             {calendarDays.map((day, index) => {
-              const events = day ? getEventsForDay(day) : []
+              const dayLeaves = day ? getLeavesForDay(day) : []
+              const dayHolidays = day ? getHolidaysForDay(day) : []
+              const events = [
+                ...dayHolidays.map((h) => ({
+                  key: `h-${h.id}`,
+                  label: h.name,
+                  color: HOLIDAY_COLOR,
+                })),
+                ...dayLeaves.map((l) => ({
+                  key: `l-${l.id}`,
+                  label: l.employeeName ?? `موظف #${l.employeeId}`,
+                  color: leaveMeta(l.leaveType).color,
+                })),
+              ]
               const isToday = day === new Date().getDate() &&
                               month === new Date().getMonth() &&
                               year === new Date().getFullYear()
@@ -156,14 +202,14 @@ export default function LeaveCalendarPage() {
                       <div className="space-y-1">
                         {events.slice(0, 3).map((event) => (
                           <div
-                            key={event.id}
+                            key={event.key}
                             className="text-xs p-1 rounded truncate"
                             style={{
                               backgroundColor: `${event.color}20`,
                               color: event.color,
                             }}
                           >
-                            {event.employeeName}
+                            {event.label}
                           </div>
                         ))}
                         {events.length > 3 && (
@@ -178,12 +224,17 @@ export default function LeaveCalendarPage() {
               )
             })}
           </div>
+          )}
         </div>
 
         {/* Legend */}
         <div className="card">
           <h3 className="font-bold text-gray-800 mb-4">دليل الألوان</h3>
           <div className="flex flex-wrap gap-4">
+            <div className="flex items-center gap-2">
+              <div className="w-4 h-4 rounded" style={{ backgroundColor: HOLIDAY_COLOR }} />
+              <span className="text-sm text-gray-600">عطلة رسمية</span>
+            </div>
             <div className="flex items-center gap-2">
               <div className="w-4 h-4 rounded" style={{ backgroundColor: '#3B82F6' }} />
               <span className="text-sm text-gray-600">إجازة سنوية</span>
@@ -203,39 +254,68 @@ export default function LeaveCalendarPage() {
           </div>
         </div>
 
-        {/* Upcoming Leaves */}
+        {/* Month Events */}
         <div className="card">
-          <h3 className="font-bold text-gray-800 mb-4">الإجازات القادمة</h3>
+          <h3 className="font-bold text-gray-800 mb-4">أحداث الشهر</h3>
           <div className="space-y-3">
-            {leaveEvents.map((event) => (
+            {holidays.map((h) => (
               <div
-                key={event.id}
+                key={`h-${h.id}`}
                 className="flex items-center justify-between p-3 bg-gray-50 rounded-xl"
               >
                 <div className="flex items-center gap-3">
                   <div
                     className="w-10 h-10 rounded-xl flex items-center justify-center"
-                    style={{ backgroundColor: `${event.color}20` }}
+                    style={{ backgroundColor: `${HOLIDAY_COLOR}20` }}
                   >
-                    <Calendar size={20} style={{ color: event.color }} />
+                    <Star size={20} style={{ color: HOLIDAY_COLOR }} />
                   </div>
                   <div>
-                    <p className="font-medium text-gray-800">{event.employeeName}</p>
-                    <p className="text-sm text-gray-500">{event.type}</p>
+                    <p className="font-medium text-gray-800">{h.name}</p>
+                    <p className="text-sm text-gray-500">عطلة رسمية</p>
                   </div>
                 </div>
                 <div className="text-left">
-                  <p className="text-sm font-medium text-gray-800">
-                    {new Date(event.startDate).toLocaleDateString('ar-SA')}
-                  </p>
-                  {event.startDate !== event.endDate && (
-                    <p className="text-xs text-gray-500">
-                      إلى {new Date(event.endDate).toLocaleDateString('ar-SA')}
-                    </p>
+                  <p className="text-sm font-medium text-gray-800">{h.date}</p>
+                  {h.endDate && (
+                    <p className="text-xs text-gray-500">إلى {h.endDate}</p>
                   )}
                 </div>
               </div>
             ))}
+            {leaves.map((l) => {
+              const meta = leaveMeta(l.leaveType)
+              return (
+                <div
+                  key={`l-${l.id}`}
+                  className="flex items-center justify-between p-3 bg-gray-50 rounded-xl"
+                >
+                  <div className="flex items-center gap-3">
+                    <div
+                      className="w-10 h-10 rounded-xl flex items-center justify-center"
+                      style={{ backgroundColor: `${meta.color}20` }}
+                    >
+                      <Calendar size={20} style={{ color: meta.color }} />
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-800">
+                        {l.employeeName ?? `موظف #${l.employeeId}`}
+                      </p>
+                      <p className="text-sm text-gray-500">{meta.label} — {Number(l.days)} يوم</p>
+                    </div>
+                  </div>
+                  <div className="text-left">
+                    <p className="text-sm font-medium text-gray-800">{l.fromDate}</p>
+                    {l.fromDate !== l.toDate && (
+                      <p className="text-xs text-gray-500">إلى {l.toDate}</p>
+                    )}
+                  </div>
+                </div>
+              )
+            })}
+            {holidays.length === 0 && leaves.length === 0 && !loading && (
+              <p className="text-sm text-gray-400 text-center py-6">لا توجد أحداث في هذا الشهر</p>
+            )}
           </div>
         </div>
       </div>

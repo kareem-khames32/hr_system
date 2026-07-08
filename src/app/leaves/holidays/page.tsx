@@ -1,95 +1,106 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Plus,
   Calendar,
   Edit2,
-  Trash2,
   Star,
   Sun,
-  Moon,
+  X,
+  AlertTriangle,
 } from 'lucide-react'
+import { fetchCatalog, createCatalogItem, updateCatalogItem } from '@/lib/api'
 
 interface Holiday {
-  id: string
+  id: number
   name: string
   date: string
-  endDate?: string
-  type: 'religious' | 'national' | 'company'
-  days: number
-  recurring: boolean
+  endDate?: string | null
+  country?: string | null
 }
 
-const holidays: Holiday[] = [
-  {
-    id: '1',
-    name: 'عيد الفطر',
-    date: '2024-04-10',
-    endDate: '2024-04-13',
-    type: 'religious',
-    days: 4,
-    recurring: true,
-  },
-  {
-    id: '2',
-    name: 'عيد الأضحى',
-    date: '2024-06-16',
-    endDate: '2024-06-19',
-    type: 'religious',
-    days: 4,
-    recurring: true,
-  },
-  {
-    id: '3',
-    name: 'اليوم الوطني',
-    date: '2024-09-23',
-    type: 'national',
-    days: 1,
-    recurring: true,
-  },
-  {
-    id: '4',
-    name: 'يوم التأسيس',
-    date: '2024-02-22',
-    type: 'national',
-    days: 1,
-    recurring: true,
-  },
-  {
-    id: '5',
-    name: 'إجازة نهاية السنة',
-    date: '2024-12-31',
-    type: 'company',
-    days: 1,
-    recurring: false,
-  },
-]
-
-const typeLabels = {
-  religious: 'دينية',
-  national: 'وطنية',
-  company: 'خاصة بالشركة',
-}
-
-const typeColors = {
-  religious: 'bg-green-100 text-green-700',
-  national: 'bg-primary-100 text-primary-700',
-  company: 'bg-purple-100 text-purple-700',
-}
-
-const typeIcons = {
-  religious: Moon,
-  national: Star,
-  company: Sun,
+const daysOf = (h: Holiday): number => {
+  if (!h.endDate) return 1
+  const start = new Date(h.date).getTime()
+  const end = new Date(h.endDate).getTime()
+  if (isNaN(start) || isNaN(end) || end < start) return 1
+  return Math.round((end - start) / 86400000) + 1
 }
 
 export default function HolidaysPage() {
-  const [showModal, setShowModal] = useState(false)
-  const [selectedYear, setSelectedYear] = useState('2024')
+  const [holidays, setHolidays] = useState<Holiday[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
-  const totalDays = holidays.reduce((sum, h) => sum + h.days, 0)
+  const [showModal, setShowModal] = useState(false)
+  const [editing, setEditing] = useState<Holiday | null>(null)
+  const [formName, setFormName] = useState('')
+  const [formDate, setFormDate] = useState('')
+  const [formEndDate, setFormEndDate] = useState('')
+  const [formCountry, setFormCountry] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [saveError, setSaveError] = useState('')
+
+  const load = () => {
+    setLoading(true)
+    fetchCatalog<Holiday>('holidays')
+      .then(setHolidays)
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل العطلات الرسمية'))
+      .finally(() => setLoading(false))
+  }
+
+  useEffect(load, [])
+
+  const openAdd = () => {
+    setEditing(null)
+    setFormName('')
+    setFormDate('')
+    setFormEndDate('')
+    setFormCountry('')
+    setSaveError('')
+    setShowModal(true)
+  }
+
+  const openEdit = (h: Holiday) => {
+    setEditing(h)
+    setFormName(h.name)
+    setFormDate(h.date)
+    setFormEndDate(h.endDate ?? '')
+    setFormCountry(h.country ?? '')
+    setSaveError('')
+    setShowModal(true)
+  }
+
+  const save = async () => {
+    setSaveError('')
+    setSaving(true)
+    const payload: Record<string, unknown> = {
+      name: formName,
+      date: formDate,
+      endDate: formEndDate || null,
+      country: formCountry || null,
+    }
+    try {
+      if (editing) {
+        await updateCatalogItem('holidays', editing.id, payload)
+      } else {
+        await createCatalogItem('holidays', payload)
+      }
+      setShowModal(false)
+      load()
+    } catch (e) {
+      setSaveError(e instanceof Error ? e.message : 'تعذر حفظ العطلة')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const today = new Date().toISOString().slice(0, 10)
+  const totalDays = holidays.reduce((sum, h) => sum + daysOf(h), 0)
+  const upcoming = holidays.filter((h) => (h.endDate ?? h.date) >= today).length
+  const multiDay = holidays.filter((h) => daysOf(h) > 1).length
 
   return (
     <MainLayout>
@@ -101,20 +112,20 @@ export default function HolidaysPage() {
             <p className="text-gray-500 mt-1">إدارة العطلات والإجازات الرسمية</p>
           </div>
           <div className="flex items-center gap-3">
-            <select
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(e.target.value)}
-              className="input w-32"
-            >
-              <option value="2024">2024</option>
-              <option value="2025">2025</option>
-            </select>
-            <button className="btn-primary flex items-center gap-2">
+            <button onClick={openAdd} className="btn-primary flex items-center gap-2">
               <Plus size={18} />
               إضافة إجازة
             </button>
           </div>
         </div>
+
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
+            <AlertTriangle size={18} />
+            {error}
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
@@ -123,30 +134,26 @@ export default function HolidaysPage() {
               <Calendar size={24} className="text-primary-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">إجمالي الإجازات</p>
+              <p className="text-sm text-gray-500">إجمالي العطلات</p>
               <p className="text-2xl font-bold text-gray-800">{holidays.length}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
             <div className="w-12 h-12 bg-green-100 rounded-2xl flex items-center justify-center">
-              <Moon size={24} className="text-green-600" />
+              <Star size={24} className="text-green-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">إجازات دينية</p>
-              <p className="text-2xl font-bold text-gray-800">
-                {holidays.filter((h) => h.type === 'religious').length}
-              </p>
+              <p className="text-sm text-gray-500">عطلات قادمة</p>
+              <p className="text-2xl font-bold text-gray-800">{upcoming}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
             <div className="w-12 h-12 bg-blue-100 rounded-2xl flex items-center justify-center">
-              <Star size={24} className="text-blue-600" />
+              <Calendar size={24} className="text-blue-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">إجازات وطنية</p>
-              <p className="text-2xl font-bold text-gray-800">
-                {holidays.filter((h) => h.type === 'national').length}
-              </p>
+              <p className="text-sm text-gray-500">عطلات متعددة الأيام</p>
+              <p className="text-2xl font-bold text-gray-800">{multiDay}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
@@ -160,6 +167,12 @@ export default function HolidaysPage() {
           </div>
         </div>
 
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+        <>
         {/* Calendar View */}
         <div className="card">
           <h2 className="text-lg font-bold text-gray-800 mb-4">التقويم السنوي</h2>
@@ -178,23 +191,21 @@ export default function HolidaysPage() {
                   <h3 className="font-medium text-gray-800 mb-2">{month}</h3>
                   {monthHolidays.length > 0 ? (
                     <div className="space-y-2">
-                      {monthHolidays.map((h) => {
-                        const Icon = typeIcons[h.type]
-                        return (
-                          <div
-                            key={h.id}
-                            className={`p-2 rounded-lg text-xs ${typeColors[h.type]}`}
-                          >
-                            <div className="flex items-center gap-1">
-                              <Icon size={12} />
-                              <span className="font-medium">{h.name}</span>
-                            </div>
-                            <span className="text-xs opacity-75">
-                              {new Date(h.date).getDate()}{h.endDate ? ` - ${new Date(h.endDate).getDate()}` : ''}
-                            </span>
+                      {monthHolidays.map((h) => (
+                        <div
+                          key={h.id}
+                          className="p-2 rounded-lg text-xs bg-primary-100 text-primary-700"
+                        >
+                          <div className="flex items-center gap-1">
+                            <Star size={12} />
+                            <span className="font-medium">{h.name}</span>
                           </div>
-                        )
-                      })}
+                          <span className="text-xs opacity-75">
+                            {new Date(h.date).getDate()}
+                            {h.endDate ? ` - ${new Date(h.endDate).getDate()}` : ''}
+                          </span>
+                        </div>
+                      ))}
                     </div>
                   ) : (
                     <p className="text-xs text-gray-400">لا توجد إجازات</p>
@@ -209,47 +220,134 @@ export default function HolidaysPage() {
         <div className="card">
           <h2 className="text-lg font-bold text-gray-800 mb-4">قائمة الإجازات</h2>
           <div className="space-y-3">
-            {holidays.map((holiday) => {
-              const Icon = typeIcons[holiday.type]
-              return (
-                <div
-                  key={holiday.id}
-                  className="flex items-center justify-between p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors"
-                >
-                  <div className="flex items-center gap-4">
-                    <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${typeColors[holiday.type]}`}>
-                      <Icon size={24} />
-                    </div>
-                    <div>
-                      <h3 className="font-medium text-gray-800">{holiday.name}</h3>
-                      <p className="text-sm text-gray-500">
-                        {new Date(holiday.date).toLocaleDateString('ar-SA')}
-                        {holiday.endDate && ` - ${new Date(holiday.endDate).toLocaleDateString('ar-SA')}`}
-                      </p>
-                    </div>
+            {holidays.map((holiday) => (
+              <div
+                key={holiday.id}
+                className="flex items-center justify-between p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors"
+              >
+                <div className="flex items-center gap-4">
+                  <div className="w-12 h-12 rounded-xl flex items-center justify-center bg-primary-100 text-primary-700">
+                    <Star size={24} />
                   </div>
-                  <div className="flex items-center gap-4">
-                    <div className="text-left">
-                      <span className={`px-3 py-1 rounded-full text-xs font-medium ${typeColors[holiday.type]}`}>
-                        {typeLabels[holiday.type]}
-                      </span>
-                      <p className="text-sm text-gray-500 mt-1">{holiday.days} يوم</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      <button className="p-2 bg-white rounded-lg hover:bg-gray-200">
-                        <Edit2 size={16} className="text-gray-600" />
-                      </button>
-                      <button className="p-2 bg-white rounded-lg hover:bg-red-100">
-                        <Trash2 size={16} className="text-gray-600 hover:text-red-600" />
-                      </button>
-                    </div>
+                  <div>
+                    <h3 className="font-medium text-gray-800">{holiday.name}</h3>
+                    <p className="text-sm text-gray-500">
+                      {holiday.date}
+                      {holiday.endDate && ` - ${holiday.endDate}`}
+                    </p>
                   </div>
                 </div>
-              )
-            })}
+                <div className="flex items-center gap-4">
+                  <div className="text-left">
+                    {holiday.country && (
+                      <span className="px-3 py-1 rounded-full text-xs font-medium bg-primary-100 text-primary-700">
+                        {holiday.country}
+                      </span>
+                    )}
+                    <p className="text-sm text-gray-500 mt-1">{daysOf(holiday)} يوم</p>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => openEdit(holiday)}
+                      className="p-2 bg-white rounded-lg hover:bg-gray-200"
+                    >
+                      <Edit2 size={16} className="text-gray-600" />
+                    </button>
+                  </div>
+                </div>
+              </div>
+            ))}
+            {holidays.length === 0 && (
+              <p className="text-sm text-gray-400 text-center py-6">لا توجد عطلات مسجلة</p>
+            )}
           </div>
         </div>
+        </>
+        )}
       </div>
+
+      {/* Add/Edit Modal */}
+      {showModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-gray-800 text-lg">
+                {editing ? 'تعديل العطلة' : 'إضافة عطلة جديدة'}
+              </h3>
+              <button
+                onClick={() => setShowModal(false)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
+
+            {saveError && (
+              <div className="bg-red-50 text-red-700 rounded-xl p-4 mb-4 flex items-center gap-2">
+                <AlertTriangle size={18} />
+                {saveError}
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="label">اسم العطلة *</label>
+                <input
+                  type="text"
+                  value={formName}
+                  onChange={(e) => setFormName(e.target.value)}
+                  className="input"
+                  placeholder="مثال: عيد الفطر"
+                />
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="label">تاريخ البداية *</label>
+                  <input
+                    type="date"
+                    value={formDate}
+                    onChange={(e) => setFormDate(e.target.value)}
+                    className="input"
+                  />
+                </div>
+                <div>
+                  <label className="label">تاريخ النهاية (اختياري)</label>
+                  <input
+                    type="date"
+                    value={formEndDate}
+                    onChange={(e) => setFormEndDate(e.target.value)}
+                    className="input"
+                  />
+                </div>
+              </div>
+              <div>
+                <label className="label">الدولة (اختياري)</label>
+                <input
+                  type="text"
+                  value={formCountry}
+                  onChange={(e) => setFormCountry(e.target.value)}
+                  className="input"
+                  placeholder="مثال: EG"
+                  dir="ltr"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 mt-6 pt-4 border-t border-gray-100">
+              <button
+                onClick={save}
+                disabled={saving || !formName || !formDate}
+                className="btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {saving ? 'جارٍ الحفظ...' : editing ? 'حفظ التعديلات' : 'إضافة العطلة'}
+              </button>
+              <button onClick={() => setShowModal(false)} className="btn-secondary">
+                إلغاء
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </MainLayout>
   )
 }

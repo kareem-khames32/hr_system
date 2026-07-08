@@ -1,5 +1,6 @@
 'use client'
 
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
 import {
@@ -7,86 +8,29 @@ import {
   Download,
   Printer,
   Mail,
-  Building2,
-  Phone,
   MapPin,
-  Calendar,
-  User,
   CreditCard,
-  FileText,
+  AlertTriangle,
 } from 'lucide-react'
+import {
+  fetchPayslip,
+  fetchBranches,
+  type ApiPayrollItem,
+  type ApiPayrollRun,
+  type ApiEmployee,
+  type ApiBranch,
+} from '@/lib/api'
 
-// Mock payslip data
-const payslipData = {
-  // Company Info
-  company: {
-    name: 'شركة التقنية المتقدمة',
-    nameEn: 'Advanced Tech Company',
-    address: 'الرياض، المملكة العربية السعودية',
-    phone: '+966 11 123 4567',
-    email: 'hr@advtech.com.sa',
-    logo: 'ATC',
-    crNumber: '1010123456',
-    vatNumber: '300123456789012',
-  },
+const runStatusLabels: Record<string, string> = {
+  CALCULATED: 'محسوب',
+  APPROVED: 'معتمد',
+  PAID: 'مدفوع',
+}
 
-  // Employee Info
-  employee: {
-    id: 'EMP001',
-    name: 'أحمد محمد علي السعيد',
-    nameEn: 'Ahmed Mohammed Ali Alsaeed',
-    department: 'تقنية المعلومات',
-    jobTitle: 'مدير تقنية المعلومات',
-    joinDate: '2020/03/15',
-    nationality: 'سعودي',
-    nationalId: '1234567890',
-    bankName: 'بنك الراجحي',
-    bankAccount: 'SA00 0000 0000 0000 0000 0000',
-    gosiNumber: '1234567890',
-  },
-
-  // Payroll Period
-  period: {
-    month: 'يناير',
-    year: '2026',
-    startDate: '2026/01/01',
-    endDate: '2026/01/31',
-    payDate: '2026/01/28',
-    workingDays: 22,
-    actualDays: 22,
-  },
-
-  // Earnings
-  earnings: [
-    { name: 'الراتب الأساسي', nameEn: 'Basic Salary', amount: 15000 },
-    { name: 'بدل السكن', nameEn: 'Housing Allowance', amount: 3750 },
-    { name: 'بدل المواصلات', nameEn: 'Transportation Allowance', amount: 1500 },
-    { name: 'بدل الهاتف', nameEn: 'Phone Allowance', amount: 500 },
-    { name: 'بدل طبيعة العمل', nameEn: 'Nature of Work Allowance', amount: 500 },
-    { name: 'العمل الإضافي', nameEn: 'Overtime', amount: 0 },
-  ],
-
-  // Deductions
-  deductions: [
-    { name: 'التأمينات الاجتماعية (9.75%)', nameEn: 'GOSI (9.75%)', amount: 1462.50 },
-    { name: 'قسط السلفة', nameEn: 'Loan Installment', amount: 0 },
-    { name: 'خصم الغياب', nameEn: 'Absence Deduction', amount: 0 },
-    { name: 'خصم التأخير', nameEn: 'Late Deduction', amount: 0 },
-    { name: 'خصومات أخرى', nameEn: 'Other Deductions', amount: 0 },
-  ],
-
-  // Leave Balance
-  leaveBalance: {
-    annual: { total: 30, used: 12, remaining: 18 },
-    sick: { total: 30, used: 3, remaining: 27 },
-  },
-
-  // Loan Balance
-  loanBalance: {
-    total: 0,
-    paid: 0,
-    remaining: 0,
-  },
+const payMethodLabels: Record<string, string> = {
+  transfer: 'تحويل بنكي',
+  cash: 'نقداً',
+  cheque: 'شيك',
 }
 
 function numberToArabicWords(num: number): string {
@@ -136,10 +80,57 @@ function numberToArabicWords(num: number): string {
   return result + ' سعودي فقط لا غير'
 }
 
-export default function PayslipPage() {
-  const totalEarnings = payslipData.earnings.reduce((sum, e) => sum + e.amount, 0)
-  const totalDeductions = payslipData.deductions.reduce((sum, d) => sum + d.amount, 0)
-  const netSalary = totalEarnings - totalDeductions
+export default function PayslipPage({ params }: { params: { id: string } }) {
+  const [item, setItem] = useState<ApiPayrollItem | null>(null)
+  const [run, setRun] = useState<ApiPayrollRun | null>(null)
+  const [employee, setEmployee] = useState<ApiEmployee | null>(null)
+  const [branch, setBranch] = useState<ApiBranch | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    setLoading(true)
+    Promise.all([fetchPayslip(Number(params.id)), fetchBranches().catch(() => [] as ApiBranch[])])
+      .then(([data, branches]) => {
+        setItem(data.item)
+        setRun(data.run)
+        setEmployee(data.employee)
+        setBranch(branches.find((b) => b.id === data.run.branchId) ?? null)
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل قسيمة الراتب'))
+      .finally(() => setLoading(false))
+  }, [params.id])
+
+  const earnings = item
+    ? [
+        { name: 'الراتب الأساسي', nameEn: 'Basic Salary', amount: Number(item.basicSalary) },
+        {
+          name: 'العمل الإضافي',
+          nameEn: `Overtime (${Number(item.overtimeHours)} h)`,
+          amount: Number(item.overtimeAmount),
+        },
+      ]
+    : []
+
+  const deductions = item
+    ? [
+        {
+          name: 'خصم التأخير',
+          nameEn: `Lateness (${Number(item.lateMinutes)} min)`,
+          amount: Number(item.latenessDeduction),
+        },
+        {
+          name: 'إجازة بدون راتب',
+          nameEn: `Unpaid Leave (${Number(item.unpaidLeaveDays)} d)`,
+          amount: Number(item.unpaidLeaveDeduction),
+        },
+        { name: 'أقساط السلف', nameEn: 'Loan Installments', amount: Number(item.loanInstallments) },
+      ]
+    : []
+
+  const totalEarnings = earnings.reduce((sum, e) => sum + e.amount, 0)
+  const totalDeductions = deductions.reduce((sum, d) => sum + d.amount, 0)
+  const netSalary = item ? Number(item.netPay) : 0
 
   return (
     <MainLayout>
@@ -162,38 +153,50 @@ export default function PayslipPage() {
               <Download size={18} />
               تحميل PDF
             </button>
-            <button className="btn-primary flex items-center gap-2">
+            <button onClick={() => window.print()} className="btn-primary flex items-center gap-2">
               <Printer size={18} />
               طباعة
             </button>
           </div>
         </div>
 
-        {/* Payslip Card */}
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
+            <AlertTriangle size={18} />
+            {error}
+          </div>
+        )}
+
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : item && run && employee ? (
         <div className="card max-w-4xl mx-auto" id="payslip">
           {/* Header */}
           <div className="flex items-start justify-between border-b border-gray-200 pb-6 mb-6">
             <div className="flex items-center gap-4">
               <div className="w-20 h-20 bg-gradient-to-br from-primary-500 to-primary-600 rounded-2xl flex items-center justify-center text-white font-bold text-2xl">
-                {payslipData.company.logo}
+                HR
               </div>
               <div>
-                <h1 className="text-xl font-bold text-gray-800">{payslipData.company.name}</h1>
-                <p className="text-gray-500">{payslipData.company.nameEn}</p>
+                <h1 className="text-xl font-bold text-gray-800">{branch?.name ?? 'نظام الموارد البشرية'}</h1>
+                <p className="text-gray-500">{branch?.nameEn ?? ''}</p>
                 <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
-                  <span className="flex items-center gap-1">
-                    <MapPin size={14} />
-                    {payslipData.company.address}
-                  </span>
+                  {branch?.city && (
+                    <span className="flex items-center gap-1">
+                      <MapPin size={14} />
+                      {branch.city}
+                    </span>
+                  )}
                 </div>
               </div>
             </div>
             <div className="text-left">
               <h2 className="text-2xl font-bold text-primary-600">قسيمة الراتب</h2>
               <p className="text-gray-500">Payslip</p>
-              <p className="text-lg font-bold text-gray-800 mt-2">
-                {payslipData.period.month} {payslipData.period.year}
-              </p>
+              <p className="text-lg font-bold text-gray-800 mt-2">{run.period}</p>
             </div>
           </div>
 
@@ -203,22 +206,19 @@ export default function PayslipPage() {
               <h3 className="font-bold text-gray-700 border-b border-gray-200 pb-2">بيانات الموظف</h3>
               <div className="grid grid-cols-2 gap-y-3 text-sm">
                 <span className="text-gray-500">الاسم:</span>
-                <span className="font-medium text-gray-800">{payslipData.employee.name}</span>
+                <span className="font-medium text-gray-800">{employee.fullName}</span>
 
                 <span className="text-gray-500">الرقم الوظيفي:</span>
-                <span className="font-medium text-gray-800 font-mono">{payslipData.employee.id}</span>
-
-                <span className="text-gray-500">القسم:</span>
-                <span className="font-medium text-gray-800">{payslipData.employee.department}</span>
+                <span className="font-medium text-gray-800 font-mono">{employee.employeeCode}</span>
 
                 <span className="text-gray-500">المسمى الوظيفي:</span>
-                <span className="font-medium text-gray-800">{payslipData.employee.jobTitle}</span>
+                <span className="font-medium text-gray-800">{employee.jobTitle ?? '—'}</span>
 
                 <span className="text-gray-500">تاريخ التعيين:</span>
-                <span className="font-medium text-gray-800">{payslipData.employee.joinDate}</span>
+                <span className="font-medium text-gray-800">{employee.joinDate ?? '—'}</span>
 
                 <span className="text-gray-500">رقم الهوية:</span>
-                <span className="font-medium text-gray-800 font-mono">{payslipData.employee.nationalId}</span>
+                <span className="font-medium text-gray-800 font-mono">{employee.nationalId ?? '—'}</span>
               </div>
             </div>
 
@@ -227,23 +227,20 @@ export default function PayslipPage() {
               <div className="grid grid-cols-2 gap-y-3 text-sm">
                 <span className="text-gray-500">الفترة:</span>
                 <span className="font-medium text-gray-800">
-                  {payslipData.period.startDate} - {payslipData.period.endDate}
+                  {run.startDate} - {run.endDate}
                 </span>
 
-                <span className="text-gray-500">تاريخ الصرف:</span>
-                <span className="font-medium text-gray-800">{payslipData.period.payDate}</span>
+                <span className="text-gray-500">حالة المسير:</span>
+                <span className="font-medium text-gray-800">{runStatusLabels[run.status] ?? run.status}</span>
 
-                <span className="text-gray-500">أيام العمل:</span>
-                <span className="font-medium text-gray-800">{payslipData.period.workingDays} يوم</span>
+                <span className="text-gray-500">طريقة الدفع:</span>
+                <span className="font-medium text-gray-800">{payMethodLabels[item.payMethod] ?? item.payMethod}</span>
 
                 <span className="text-gray-500">البنك:</span>
-                <span className="font-medium text-gray-800">{payslipData.employee.bankName}</span>
+                <span className="font-medium text-gray-800">{employee.bankName ?? '—'}</span>
 
-                <span className="text-gray-500">رقم الحساب:</span>
-                <span className="font-medium text-gray-800 font-mono text-xs">{payslipData.employee.bankAccount}</span>
-
-                <span className="text-gray-500">رقم التأمينات:</span>
-                <span className="font-medium text-gray-800 font-mono">{payslipData.employee.gosiNumber}</span>
+                <span className="text-gray-500">رقم الحساب (IBAN):</span>
+                <span className="font-medium text-gray-800 font-mono text-xs">{employee.iban ?? '—'}</span>
               </div>
             </div>
           </div>
@@ -258,7 +255,7 @@ export default function PayslipPage() {
               <div className="border border-gray-200 border-t-0 rounded-b-xl overflow-hidden">
                 <table className="w-full">
                   <tbody>
-                    {payslipData.earnings.map((earning, index) => (
+                    {earnings.map((earning, index) => (
                       <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                         <td className="px-4 py-3 text-sm">
                           <div>
@@ -292,7 +289,7 @@ export default function PayslipPage() {
               <div className="border border-gray-200 border-t-0 rounded-b-xl overflow-hidden">
                 <table className="w-full">
                   <tbody>
-                    {payslipData.deductions.map((deduction, index) => (
+                    {deductions.map((deduction, index) => (
                       <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                         <td className="px-4 py-3 text-sm">
                           <div>
@@ -333,51 +330,6 @@ export default function PayslipPage() {
             </div>
           </div>
 
-          {/* Additional Info */}
-          <div className="grid grid-cols-2 gap-8 mb-8">
-            {/* Leave Balance */}
-            <div className="p-4 bg-gray-50 rounded-xl">
-              <h4 className="font-bold text-gray-700 mb-3">رصيد الإجازات</h4>
-              <div className="space-y-2">
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">إجازة سنوية:</span>
-                  <span className="font-medium">
-                    {payslipData.leaveBalance.annual.remaining} من {payslipData.leaveBalance.annual.total} يوم
-                  </span>
-                </div>
-                <div className="flex justify-between text-sm">
-                  <span className="text-gray-500">إجازة مرضية:</span>
-                  <span className="font-medium">
-                    {payslipData.leaveBalance.sick.remaining} من {payslipData.leaveBalance.sick.total} يوم
-                  </span>
-                </div>
-              </div>
-            </div>
-
-            {/* Loan Balance */}
-            <div className="p-4 bg-gray-50 rounded-xl">
-              <h4 className="font-bold text-gray-700 mb-3">رصيد السلفة</h4>
-              {payslipData.loanBalance.total > 0 ? (
-                <div className="space-y-2">
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">إجمالي السلفة:</span>
-                    <span className="font-medium">{payslipData.loanBalance.total.toLocaleString()} ر.س</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">المسدد:</span>
-                    <span className="font-medium text-success-600">{payslipData.loanBalance.paid.toLocaleString()} ر.س</span>
-                  </div>
-                  <div className="flex justify-between text-sm">
-                    <span className="text-gray-500">المتبقي:</span>
-                    <span className="font-medium text-danger-600">{payslipData.loanBalance.remaining.toLocaleString()} ر.س</span>
-                  </div>
-                </div>
-              ) : (
-                <p className="text-gray-400 text-sm">لا توجد سلفة حالية</p>
-              )}
-            </div>
-          </div>
-
           {/* Footer */}
           <div className="border-t border-gray-200 pt-6 text-center">
             <p className="text-xs text-gray-400">
@@ -393,6 +345,7 @@ export default function PayslipPage() {
             </div>
           </div>
         </div>
+        ) : null}
       </div>
     </MainLayout>
   )

@@ -1,54 +1,89 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Download,
   Printer,
-  Calendar,
-  TrendingUp,
-  TrendingDown,
   DollarSign,
   Users,
-  PieChart,
   BarChart3,
   FileText,
+  TrendingDown,
+  CreditCard,
+  AlertTriangle,
 } from 'lucide-react'
+import { fetchPayrollReport } from '@/lib/api'
 
-const monthlyData = [
-  { month: 'يناير', salaries: 3200000, allowances: 960000, deductions: 416000, net: 3744000 },
-  { month: 'فبراير', salaries: 3280000, allowances: 984000, deductions: 426400, net: 3837600 },
-  { month: 'مارس', salaries: 3320000, allowances: 996000, deductions: 431600, net: 3884400 },
-  { month: 'أبريل', salaries: 3400000, allowances: 1020000, deductions: 442000, net: 3978000 },
-  { month: 'مايو', salaries: 3450000, allowances: 1035000, deductions: 448500, net: 4036500 },
-  { month: 'يونيو', salaries: 3520000, allowances: 1056000, deductions: 457600, net: 4118400 },
-]
+interface ReportRun {
+  id: number
+  period: string
+  status: string
+  totalNet: number
+  branchName: string
+  employees: number
+}
 
-const departmentBreakdown = [
-  { name: 'تقنية المعلومات', amount: 1200000, percentage: 34, color: 'bg-blue-500' },
-  { name: 'المبيعات', amount: 900000, percentage: 25, color: 'bg-green-500' },
-  { name: 'الموارد البشرية', amount: 500000, percentage: 14, color: 'bg-purple-500' },
-  { name: 'المالية', amount: 450000, percentage: 13, color: 'bg-yellow-500' },
-  { name: 'التسويق', amount: 350000, percentage: 10, color: 'bg-pink-500' },
-  { name: 'أخرى', amount: 120000, percentage: 4, color: 'bg-gray-500' },
-]
+interface ReportByMethod {
+  payMethod: string
+  count: number
+  total: number
+}
+
+interface ReportDeductions {
+  period: string
+  lateness: number
+  unpaidLeave: number
+  loans: number
+  overtime: number
+}
+
+interface PayrollReport {
+  runs: ReportRun[]
+  byMethod: ReportByMethod[]
+  deductions: ReportDeductions[]
+}
+
+const runStatusLabels: Record<string, string> = {
+  CALCULATED: 'محسوب',
+  APPROVED: 'معتمد',
+  PAID: 'مدفوع',
+}
+
+const runStatusColors: Record<string, string> = {
+  CALCULATED: 'bg-blue-100 text-blue-700',
+  APPROVED: 'bg-warning-50 text-warning-700',
+  PAID: 'bg-success-50 text-success-700',
+}
+
+const payMethodLabels: Record<string, string> = {
+  transfer: 'تحويل بنكي',
+  cash: 'نقداً',
+  cheque: 'شيك',
+}
 
 export default function PayrollReportsPage() {
-  const [selectedYear, setSelectedYear] = useState('2024')
-  const [selectedReport, setSelectedReport] = useState('summary')
+  const [report, setReport] = useState<PayrollReport | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
 
-  const totalSalaries = monthlyData.reduce((sum, m) => sum + m.salaries, 0)
-  const totalAllowances = monthlyData.reduce((sum, m) => sum + m.allowances, 0)
-  const totalDeductions = monthlyData.reduce((sum, m) => sum + m.deductions, 0)
-  const totalNet = monthlyData.reduce((sum, m) => sum + m.net, 0)
+  useEffect(() => {
+    fetchPayrollReport()
+      .then((data) => setReport(data as PayrollReport))
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل تقرير الرواتب'))
+      .finally(() => setLoading(false))
+  }, [])
 
-  const availableReports = [
-    { id: 'summary', name: 'ملخص الرواتب', icon: FileText },
-    { id: 'department', name: 'حسب القسم', icon: PieChart },
-    { id: 'monthly', name: 'التقرير الشهري', icon: Calendar },
-    { id: 'gosi', name: 'تقرير التأمينات', icon: Users },
-    { id: 'tax', name: 'التقرير الضريبي', icon: DollarSign },
-  ]
+  const runs = report?.runs ?? []
+  const byMethod = report?.byMethod ?? []
+  const deductions = report?.deductions ?? []
+
+  const totalNet = runs.reduce((sum, r) => sum + Number(r.totalNet), 0)
+  const totalEmployees = runs.reduce((sum, r) => sum + Number(r.employees), 0)
+  const totalDeductions = deductions.reduce(
+    (sum, d) => sum + Number(d.lateness) + Number(d.unpaidLeave) + Number(d.loans),
+    0
+  )
 
   return (
     <MainLayout>
@@ -57,17 +92,9 @@ export default function PayrollReportsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">التقارير المالية</h1>
-            <p className="text-gray-500 mt-1">تحليلات وتقارير الرواتب والمصروفات</p>
+            <p className="text-gray-500 mt-1">تحليلات وتقارير مسيرات الرواتب والخصومات</p>
           </div>
           <div className="flex items-center gap-3">
-            <select
-              value={selectedYear}
-              onChange={(e) => setSelectedYear(e.target.value)}
-              className="input w-32"
-            >
-              <option value="2024">2024</option>
-              <option value="2023">2023</option>
-            </select>
             <button className="btn-secondary flex items-center gap-2">
               <Printer size={18} />
               طباعة
@@ -79,24 +106,20 @@ export default function PayrollReportsPage() {
           </div>
         </div>
 
-        {/* Report Types */}
-        <div className="flex gap-2">
-          {availableReports.map((report) => (
-            <button
-              key={report.id}
-              onClick={() => setSelectedReport(report.id)}
-              className={`flex items-center gap-2 px-4 py-2 rounded-xl font-medium transition-colors ${
-                selectedReport === report.id
-                  ? 'bg-primary-500 text-white'
-                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-              }`}
-            >
-              <report.icon size={18} />
-              {report.name}
-            </button>
-          ))}
-        </div>
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
+            <AlertTriangle size={18} />
+            {error}
+          </div>
+        )}
 
+        {loading ? (
+          <div className="flex items-center justify-center py-16">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+        <>
         {/* Summary Cards */}
         <div className="grid grid-cols-4 gap-4">
           <div className="card">
@@ -104,149 +127,155 @@ export default function PayrollReportsPage() {
               <div className="w-12 h-12 bg-blue-100 rounded-2xl flex items-center justify-center">
                 <DollarSign size={24} className="text-blue-600" />
               </div>
-              <span className="flex items-center gap-1 text-sm text-success-600">
-                <TrendingUp size={14} />
-                +5.2%
-              </span>
             </div>
-            <p className="text-sm text-gray-500">إجمالي الرواتب</p>
-            <p className="text-2xl font-bold text-gray-800">{(totalSalaries / 1000000).toFixed(1)}M</p>
+            <p className="text-sm text-gray-500">إجمالي صافي الرواتب</p>
+            <p className="text-2xl font-bold text-gray-800">{totalNet.toLocaleString()}</p>
           </div>
           <div className="card">
             <div className="flex items-center justify-between mb-4">
               <div className="w-12 h-12 bg-green-100 rounded-2xl flex items-center justify-center">
-                <TrendingUp size={24} className="text-green-600" />
+                <FileText size={24} className="text-green-600" />
               </div>
-              <span className="flex items-center gap-1 text-sm text-success-600">
-                <TrendingUp size={14} />
-                +3.8%
-              </span>
             </div>
-            <p className="text-sm text-gray-500">إجمالي البدلات</p>
-            <p className="text-2xl font-bold text-gray-800">{(totalAllowances / 1000000).toFixed(1)}M</p>
+            <p className="text-sm text-gray-500">عدد المسيرات</p>
+            <p className="text-2xl font-bold text-gray-800">{runs.length}</p>
           </div>
           <div className="card">
             <div className="flex items-center justify-between mb-4">
               <div className="w-12 h-12 bg-red-100 rounded-2xl flex items-center justify-center">
                 <TrendingDown size={24} className="text-red-600" />
               </div>
-              <span className="flex items-center gap-1 text-sm text-red-600">
-                <TrendingUp size={14} />
-                +2.1%
-              </span>
             </div>
             <p className="text-sm text-gray-500">إجمالي الخصومات</p>
-            <p className="text-2xl font-bold text-gray-800">{(totalDeductions / 1000000).toFixed(1)}M</p>
+            <p className="text-2xl font-bold text-gray-800">{totalDeductions.toLocaleString()}</p>
           </div>
           <div className="card">
             <div className="flex items-center justify-between mb-4">
               <div className="w-12 h-12 bg-primary-100 rounded-2xl flex items-center justify-center">
                 <BarChart3 size={24} className="text-primary-600" />
               </div>
-              <span className="flex items-center gap-1 text-sm text-success-600">
-                <TrendingUp size={14} />
-                +4.5%
-              </span>
             </div>
-            <p className="text-sm text-gray-500">صافي الرواتب</p>
-            <p className="text-2xl font-bold text-gray-800">{(totalNet / 1000000).toFixed(1)}M</p>
+            <p className="text-sm text-gray-500">إجمالي بنود الموظفين</p>
+            <p className="text-2xl font-bold text-gray-800">{totalEmployees}</p>
           </div>
         </div>
 
-        {/* Charts */}
+        {/* By Pay Method */}
         <div className="grid grid-cols-2 gap-6">
-          {/* Monthly Trend */}
           <div className="card">
-            <h2 className="text-lg font-bold text-gray-800 mb-4">تطور الرواتب الشهري</h2>
-            <div className="h-64 flex items-end gap-2">
-              {monthlyData.map((month, index) => (
-                <div key={index} className="flex-1 flex flex-col items-center">
-                  <span className="text-xs text-gray-600 mb-1">
-                    {(month.net / 1000000).toFixed(1)}M
-                  </span>
-                  <div
-                    className="w-full bg-gradient-to-t from-primary-500 to-primary-400 rounded-t-lg"
-                    style={{ height: `${(month.net / 4500000) * 100}%` }}
-                  />
-                  <span className="text-xs text-gray-500 mt-2">{month.month}</span>
+            <h2 className="text-lg font-bold text-gray-800 mb-4">حسب طريقة الدفع</h2>
+            <div className="space-y-4">
+              {byMethod.map((m) => (
+                <div key={m.payMethod} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
+                      <CreditCard size={20} className="text-primary-600" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-800">
+                        {payMethodLabels[m.payMethod] ?? m.payMethod}
+                      </p>
+                      <p className="text-sm text-gray-500">{Number(m.count)} موظف</p>
+                    </div>
+                  </div>
+                  <p className="font-bold text-primary-600">{Number(m.total).toLocaleString()} ر.س</p>
                 </div>
               ))}
+              {byMethod.length === 0 && (
+                <p className="text-sm text-gray-400">لا توجد بيانات دفع بعد</p>
+              )}
             </div>
           </div>
 
-          {/* Department Breakdown */}
+          {/* Deductions by period */}
           <div className="card">
-            <h2 className="text-lg font-bold text-gray-800 mb-4">توزيع الرواتب حسب القسم</h2>
-            <div className="space-y-4">
-              {departmentBreakdown.map((dept, index) => (
-                <div key={index}>
-                  <div className="flex items-center justify-between mb-1">
-                    <span className="text-sm text-gray-600">{dept.name}</span>
-                    <span className="text-sm font-medium text-gray-800">
-                      {(dept.amount / 1000).toLocaleString()}K ر.س
-                    </span>
-                  </div>
-                  <div className="w-full h-3 bg-gray-100 rounded-full overflow-hidden">
-                    <div
-                      className={`h-full ${dept.color} rounded-full`}
-                      style={{ width: `${dept.percentage}%` }}
-                    />
-                  </div>
-                </div>
-              ))}
-            </div>
+            <h2 className="text-lg font-bold text-gray-800 mb-4">الخصومات والإضافي حسب الفترة</h2>
+            <table className="w-full">
+              <thead className="bg-gray-50">
+                <tr>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الفترة</th>
+                  <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">التأخير</th>
+                  <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">بدون راتب</th>
+                  <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">السلف</th>
+                  <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">الإضافي</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {deductions.map((d) => (
+                  <tr key={d.period} className="hover:bg-gray-50">
+                    <td className="px-4 py-3 font-medium text-gray-800">{d.period}</td>
+                    <td className="px-4 py-3 text-center text-red-600">
+                      -{Number(d.lateness).toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-center text-red-600">
+                      -{Number(d.unpaidLeave).toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-center text-red-600">
+                      -{Number(d.loans).toLocaleString()}
+                    </td>
+                    <td className="px-4 py-3 text-center text-success-600">
+                      +{Number(d.overtime).toLocaleString()}
+                    </td>
+                  </tr>
+                ))}
+                {deductions.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="text-center py-8 text-gray-400">
+                      لا توجد بيانات
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
           </div>
         </div>
 
-        {/* Detailed Table */}
+        {/* Runs Table */}
         <div className="card">
-          <h2 className="text-lg font-bold text-gray-800 mb-4">التفاصيل الشهرية</h2>
+          <h2 className="text-lg font-bold text-gray-800 mb-4">مسيرات الرواتب</h2>
           <table className="w-full">
             <thead className="bg-gray-50">
               <tr>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الشهر</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">الرواتب الأساسية</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">البدلات</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">الخصومات</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">الصافي</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">التغيير</th>
+                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الفترة</th>
+                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الفرع</th>
+                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">الحالة</th>
+                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">الموظفون</th>
+                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">صافي الإجمالي</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
-              {monthlyData.map((month, index) => {
-                const prevNet = index > 0 ? monthlyData[index - 1].net : month.net
-                const change = ((month.net - prevNet) / prevNet * 100).toFixed(1)
-                return (
-                  <tr key={index} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 font-medium text-gray-800">{month.month}</td>
-                    <td className="px-4 py-3 text-center text-gray-600">
-                      {(month.salaries / 1000000).toFixed(2)}M
-                    </td>
-                    <td className="px-4 py-3 text-center text-success-600">
-                      +{(month.allowances / 1000).toLocaleString()}K
-                    </td>
-                    <td className="px-4 py-3 text-center text-red-600">
-                      -{(month.deductions / 1000).toLocaleString()}K
-                    </td>
-                    <td className="px-4 py-3 text-center font-bold text-gray-800">
-                      {(month.net / 1000000).toFixed(2)}M
-                    </td>
-                    <td className="px-4 py-3 text-center">
-                      {index > 0 && (
-                        <span className={`flex items-center justify-center gap-1 ${
-                          parseFloat(change) >= 0 ? 'text-success-600' : 'text-red-600'
-                        }`}>
-                          {parseFloat(change) >= 0 ? <TrendingUp size={14} /> : <TrendingDown size={14} />}
-                          {Math.abs(parseFloat(change))}%
-                        </span>
-                      )}
-                    </td>
-                  </tr>
-                )
-              })}
+              {runs.map((r) => (
+                <tr key={r.id} className="hover:bg-gray-50">
+                  <td className="px-4 py-3 font-medium text-gray-800">{r.period}</td>
+                  <td className="px-4 py-3 text-gray-600">{r.branchName}</td>
+                  <td className="px-4 py-3 text-center">
+                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${runStatusColors[r.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                      {runStatusLabels[r.status] ?? r.status}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-center text-gray-600">
+                    <span className="flex items-center justify-center gap-1">
+                      <Users size={14} className="text-gray-400" />
+                      {Number(r.employees)}
+                    </span>
+                  </td>
+                  <td className="px-4 py-3 text-center font-bold text-gray-800">
+                    {Number(r.totalNet).toLocaleString()}
+                  </td>
+                </tr>
+              ))}
+              {runs.length === 0 && (
+                <tr>
+                  <td colSpan={5} className="text-center py-8 text-gray-400">
+                    لا توجد مسيرات رواتب بعد
+                  </td>
+                </tr>
+              )}
             </tbody>
           </table>
         </div>
+        </>
+        )}
       </div>
     </MainLayout>
   )

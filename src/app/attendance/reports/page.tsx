@@ -1,125 +1,88 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
   Download,
-  Calendar,
   Clock,
   Users,
   TrendingUp,
-  TrendingDown,
   BarChart3,
-  Filter,
-  FileText,
   Printer,
 } from 'lucide-react'
+import { fetchAttendanceReport, fetchOvertimeReport } from '@/lib/api'
 
-interface AttendanceReport {
-  employeeId: string
-  employeeName: string
-  department: string
-  workDays: number
+interface AttendanceReportRow {
+  employeeId: number
+  fullName: string
+  employeeCode: string
   presentDays: number
-  absentDays: number
   lateDays: number
+  absentDays: number
   earlyLeaveDays: number
-  overtimeHours: number
-  attendanceRate: number
+  totalLateMinutes: number
+  totalWorkMinutes: number
 }
 
-const reportData: AttendanceReport[] = [
-  {
-    employeeId: 'EMP001',
-    employeeName: 'أحمد محمد علي',
-    department: 'تقنية المعلومات',
-    workDays: 22,
-    presentDays: 21,
-    absentDays: 1,
-    lateDays: 2,
-    earlyLeaveDays: 0,
-    overtimeHours: 12,
-    attendanceRate: 95.5,
-  },
-  {
-    employeeId: 'EMP002',
-    employeeName: 'سارة أحمد الخالدي',
-    department: 'الموارد البشرية',
-    workDays: 22,
-    presentDays: 22,
-    absentDays: 0,
-    lateDays: 1,
-    earlyLeaveDays: 1,
-    overtimeHours: 8,
-    attendanceRate: 100,
-  },
-  {
-    employeeId: 'EMP003',
-    employeeName: 'عمر سالم الحربي',
-    department: 'المبيعات',
-    workDays: 22,
-    presentDays: 20,
-    absentDays: 2,
-    lateDays: 4,
-    earlyLeaveDays: 2,
-    overtimeHours: 0,
-    attendanceRate: 90.9,
-  },
-  {
-    employeeId: 'EMP004',
-    employeeName: 'نورة محمد الدوسري',
-    department: 'التسويق',
-    workDays: 22,
-    presentDays: 21,
-    absentDays: 1,
-    lateDays: 0,
-    earlyLeaveDays: 0,
-    overtimeHours: 15,
-    attendanceRate: 95.5,
-  },
-  {
-    employeeId: 'EMP005',
-    employeeName: 'فهد عبدالله السعيد',
-    department: 'تقنية المعلومات',
-    workDays: 22,
-    presentDays: 22,
-    absentDays: 0,
-    lateDays: 0,
-    earlyLeaveDays: 0,
-    overtimeHours: 20,
-    attendanceRate: 100,
-  },
-]
+interface OvertimeReportRow {
+  employeeId: number
+  fullName: string
+  status: string
+  entries: number
+  actualHours: number
+  payableHours: number
+}
 
-const monthlyStats = [
-  { month: 'يناير', rate: 94.5 },
-  { month: 'فبراير', rate: 95.2 },
-  { month: 'مارس', rate: 93.8 },
-  { month: 'أبريل', rate: 96.1 },
-  { month: 'مايو', rate: 95.8 },
-  { month: 'يونيو', rate: 94.9 },
-]
+// دقائق → H:mm
+const formatMinutes = (mins: number): string => {
+  const m = Number(mins)
+  if (!m || m <= 0) return '0:00'
+  return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`
+}
+
+const overtimeStatusLabels: Record<string, string> = {
+  PENDING: 'قيد التأكيد',
+  CONFIRMED: 'مؤكد',
+  REJECTED: 'مرفوض',
+  PAID: 'مدفوع',
+}
+
+const currentMonth = () => new Date().toISOString().slice(0, 7)
 
 export default function AttendanceReportsPage() {
-  const [selectedMonth, setSelectedMonth] = useState('2024-01')
-  const [selectedDepartment, setSelectedDepartment] = useState('all')
+  const [selectedMonth, setSelectedMonth] = useState(currentMonth())
   const [searchTerm, setSearchTerm] = useState('')
 
-  const filteredData = reportData.filter((emp) => {
-    const matchesSearch = emp.employeeName.includes(searchTerm)
-    const matchesDept =
-      selectedDepartment === 'all' || emp.department === selectedDepartment
-    return matchesSearch && matchesDept
-  })
+  const [attendanceRows, setAttendanceRows] = useState<AttendanceReportRow[]>([])
+  const [overtimeRows, setOvertimeRows] = useState<OvertimeReportRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!selectedMonth) return
+    setLoading(true)
+    setError('')
+    Promise.all([fetchAttendanceReport(selectedMonth), fetchOvertimeReport(selectedMonth)])
+      .then(([att, ot]) => {
+        setAttendanceRows(Array.isArray(att) ? att : [])
+        setOvertimeRows(Array.isArray(ot) ? ot : [])
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل التقارير'))
+      .finally(() => setLoading(false))
+  }, [selectedMonth])
+
+  const filteredData = attendanceRows.filter(
+    (emp) =>
+      (emp.fullName ?? '').includes(searchTerm) ||
+      (emp.employeeCode ?? '').toLowerCase().includes(searchTerm.toLowerCase())
+  )
 
   const stats = {
-    avgAttendance: (
-      reportData.reduce((sum, e) => sum + e.attendanceRate, 0) / reportData.length
-    ).toFixed(1),
-    totalAbsent: reportData.reduce((sum, e) => sum + e.absentDays, 0),
-    totalLate: reportData.reduce((sum, e) => sum + e.lateDays, 0),
-    totalOvertime: reportData.reduce((sum, e) => sum + e.overtimeHours, 0),
+    totalPresent: attendanceRows.reduce((sum, e) => sum + Number(e.presentDays), 0),
+    totalAbsent: attendanceRows.reduce((sum, e) => sum + Number(e.absentDays), 0),
+    totalLate: attendanceRows.reduce((sum, e) => sum + Number(e.lateDays), 0),
+    totalOvertime: overtimeRows.reduce((sum, e) => sum + Number(e.payableHours), 0),
   }
 
   return (
@@ -143,6 +106,8 @@ export default function AttendanceReportsPage() {
           </div>
         </div>
 
+        {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
           <div className="card flex items-center gap-4">
@@ -150,8 +115,8 @@ export default function AttendanceReportsPage() {
               <TrendingUp size={24} className="text-primary-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">متوسط الحضور</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.avgAttendance}%</p>
+              <p className="text-sm text-gray-500">أيام الحضور</p>
+              <p className="text-2xl font-bold text-gray-800">{stats.totalPresent}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
@@ -177,26 +142,9 @@ export default function AttendanceReportsPage() {
               <BarChart3 size={24} className="text-success-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">ساعات إضافية</p>
+              <p className="text-sm text-gray-500">ساعات إضافية مستحقة</p>
               <p className="text-2xl font-bold text-gray-800">{stats.totalOvertime}</p>
             </div>
-          </div>
-        </div>
-
-        {/* Chart */}
-        <div className="card">
-          <h2 className="text-lg font-bold text-gray-800 mb-4">معدل الحضور الشهري</h2>
-          <div className="h-48 flex items-end gap-4">
-            {monthlyStats.map((month, index) => (
-              <div key={index} className="flex-1 flex flex-col items-center">
-                <span className="text-sm font-medium text-gray-800 mb-2">{month.rate}%</span>
-                <div
-                  className="w-full bg-gradient-to-t from-primary-500 to-primary-400 rounded-t-lg transition-all hover:from-primary-600 hover:to-primary-500"
-                  style={{ height: `${month.rate}%` }}
-                />
-                <span className="text-xs text-gray-500 mt-2">{month.month}</span>
-              </div>
-            ))}
           </div>
         </div>
 
@@ -219,68 +167,129 @@ export default function AttendanceReportsPage() {
               value={selectedMonth}
               onChange={(e) => setSelectedMonth(e.target.value)}
             />
-            <select
-              value={selectedDepartment}
-              onChange={(e) => setSelectedDepartment(e.target.value)}
-              className="input w-48"
-            >
-              <option value="all">كل الأقسام</option>
-              <option value="تقنية المعلومات">تقنية المعلومات</option>
-              <option value="الموارد البشرية">الموارد البشرية</option>
-              <option value="المبيعات">المبيعات</option>
-              <option value="التسويق">التسويق</option>
-            </select>
           </div>
         </div>
 
-        {/* Table */}
-        <div className="card overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الموظف</th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">القسم</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">أيام العمل</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">حضور</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">غياب</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">تأخير</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">خروج مبكر</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">إضافي</th>
-                <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">النسبة</th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filteredData.map((emp) => (
-                <tr key={emp.employeeId} className="hover:bg-gray-50">
-                  <td className="px-4 py-4">
-                    <p className="font-medium text-gray-800">{emp.employeeName}</p>
-                    <p className="text-sm text-gray-500">{emp.employeeId}</p>
-                  </td>
-                  <td className="px-4 py-4 text-gray-600">{emp.department}</td>
-                  <td className="px-4 py-4 text-center text-gray-600">{emp.workDays}</td>
-                  <td className="px-4 py-4 text-center text-success-600 font-medium">{emp.presentDays}</td>
-                  <td className="px-4 py-4 text-center text-red-600 font-medium">{emp.absentDays}</td>
-                  <td className="px-4 py-4 text-center text-warning-600 font-medium">{emp.lateDays}</td>
-                  <td className="px-4 py-4 text-center text-orange-600 font-medium">{emp.earlyLeaveDays}</td>
-                  <td className="px-4 py-4 text-center text-blue-600 font-medium">{emp.overtimeHours}h</td>
-                  <td className="px-4 py-4 text-center">
-                    <span
-                      className={`px-3 py-1 rounded-full text-sm font-medium ${
-                        emp.attendanceRate >= 95
-                          ? 'bg-success-50 text-success-700'
-                          : emp.attendanceRate >= 90
-                          ? 'bg-warning-50 text-warning-700'
-                          : 'bg-red-100 text-red-700'
-                      }`}
-                    >
-                      {emp.attendanceRate}%
-                    </span>
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        {loading ? (
+          <div className="card flex items-center justify-center py-16">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+          <>
+            {/* Attendance Report Table */}
+            <div className="card overflow-hidden">
+              <h2 className="text-lg font-bold text-gray-800 px-4 pt-4 pb-2">
+                تقرير الحضور — {selectedMonth}
+              </h2>
+              <table className="w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الموظف</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">حضور</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">تأخير</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">غياب</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">خروج مبكر</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">دقائق التأخير</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">ساعات العمل</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {filteredData.length === 0 ? (
+                    <tr>
+                      <td colSpan={7} className="px-4 py-10 text-center text-gray-400">
+                        لا توجد بيانات حضور لهذا الشهر
+                      </td>
+                    </tr>
+                  ) : (
+                    filteredData.map((emp) => (
+                      <tr key={emp.employeeId} className="hover:bg-gray-50">
+                        <td className="px-4 py-4">
+                          <p className="font-medium text-gray-800">{emp.fullName}</p>
+                          <p className="text-sm text-gray-500">{emp.employeeCode}</p>
+                        </td>
+                        <td className="px-4 py-4 text-center text-success-600 font-medium">
+                          {Number(emp.presentDays)}
+                        </td>
+                        <td className="px-4 py-4 text-center text-warning-600 font-medium">
+                          {Number(emp.lateDays)}
+                        </td>
+                        <td className="px-4 py-4 text-center text-red-600 font-medium">
+                          {Number(emp.absentDays)}
+                        </td>
+                        <td className="px-4 py-4 text-center text-orange-600 font-medium">
+                          {Number(emp.earlyLeaveDays)}
+                        </td>
+                        <td className="px-4 py-4 text-center text-gray-600 font-medium">
+                          {Number(emp.totalLateMinutes)}
+                        </td>
+                        <td className="px-4 py-4 text-center text-blue-600 font-medium font-mono">
+                          {formatMinutes(Number(emp.totalWorkMinutes))}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Overtime Report Table */}
+            <div className="card overflow-hidden">
+              <h2 className="text-lg font-bold text-gray-800 px-4 pt-4 pb-2">
+                تقرير الساعات الإضافية — {selectedMonth}
+              </h2>
+              <table className="w-full">
+                <thead className="bg-gray-50">
+                  <tr>
+                    <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الموظف</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">الحالة</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">عدد الأيام</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">ساعات فعلية</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">ساعات مستحقة</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-gray-100">
+                  {overtimeRows.length === 0 ? (
+                    <tr>
+                      <td colSpan={5} className="px-4 py-10 text-center text-gray-400">
+                        لا توجد ساعات إضافية لهذا الشهر
+                      </td>
+                    </tr>
+                  ) : (
+                    overtimeRows.map((row, index) => (
+                      <tr key={`${row.employeeId}-${row.status}-${index}`} className="hover:bg-gray-50">
+                        <td className="px-4 py-4">
+                          <p className="font-medium text-gray-800">{row.fullName}</p>
+                        </td>
+                        <td className="px-4 py-4 text-center">
+                          <span
+                            className={`px-3 py-1 rounded-full text-sm font-medium ${
+                              row.status === 'PAID' || row.status === 'CONFIRMED'
+                                ? 'bg-success-50 text-success-700'
+                                : row.status === 'REJECTED'
+                                ? 'bg-red-100 text-red-700'
+                                : 'bg-warning-50 text-warning-700'
+                            }`}
+                          >
+                            {overtimeStatusLabels[row.status] ?? row.status}
+                          </span>
+                        </td>
+                        <td className="px-4 py-4 text-center text-gray-600 font-medium">
+                          {Number(row.entries)}
+                        </td>
+                        <td className="px-4 py-4 text-center text-gray-600 font-medium">
+                          {Number(row.actualHours)}
+                        </td>
+                        <td className="px-4 py-4 text-center text-blue-600 font-medium">
+                          {Number(row.payableHours)}
+                        </td>
+                      </tr>
+                    ))
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </>
+        )}
       </div>
     </MainLayout>
   )

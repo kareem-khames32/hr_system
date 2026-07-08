@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { Fragment, useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
@@ -10,205 +10,135 @@ import {
   Clock,
   CheckCircle,
   XCircle,
-  AlertCircle,
-  Eye,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
+  ChevronUp,
   Wallet,
   TrendingDown,
-  Calendar,
-  User,
+  AlertTriangle,
+  X,
 } from 'lucide-react'
-import Link from 'next/link'
+import { fetchLoans, createRequest } from '@/lib/api'
 
-interface LoanRequest {
-  id: string
-  employeeId: string
-  employeeName: string
-  avatar: string
-  department: string
-  loanType: 'salary_advance' | 'long_term' | 'emergency'
+interface LoanInstallment {
+  id: number
+  loanId: number
+  dueDate: string
   amount: number
-  installments: number
-  installmentAmount: number
-  reason: string
-  status: 'pending' | 'approved' | 'rejected' | 'active' | 'completed'
-  requestDate: string
-  approvedDate?: string
+  paid: boolean
+}
+
+interface Loan {
+  id: number
+  requestId?: number
+  employeeId: number
+  amount: number
+  status: string // APPROVED | DISBURSED | SETTLED
+  disbursedAt?: string | null
+  employeeName?: string
+  installments: LoanInstallment[]
+  paidCount: number
   paidAmount: number
   remainingAmount: number
-  startDate?: string
-  endDate?: string
 }
 
-const loanRequests: LoanRequest[] = [
-  {
-    id: '1',
-    employeeId: 'EMP002',
-    employeeName: 'سارة أحمد الخالدي',
-    avatar: 'س',
-    department: 'الموارد البشرية',
-    loanType: 'long_term',
-    amount: 20000,
-    installments: 20,
-    installmentAmount: 1000,
-    reason: 'شراء سيارة',
-    status: 'active',
-    requestDate: '2025/06/15',
-    approvedDate: '2025/06/20',
-    paidAmount: 7000,
-    remainingAmount: 13000,
-    startDate: '2025/07/01',
-    endDate: '2027/02/01',
-  },
-  {
-    id: '2',
-    employeeId: 'EMP005',
-    employeeName: 'عمر سالم الحربي',
-    avatar: 'ع',
-    department: 'التسويق',
-    loanType: 'long_term',
-    amount: 30000,
-    installments: 15,
-    installmentAmount: 2000,
-    reason: 'تجديد المنزل',
-    status: 'active',
-    requestDate: '2025/09/01',
-    approvedDate: '2025/09/10',
-    paidAmount: 8000,
-    remainingAmount: 22000,
-    startDate: '2025/10/01',
-    endDate: '2027/01/01',
-  },
-  {
-    id: '3',
-    employeeId: 'EMP003',
-    employeeName: 'محمد خالد السعيد',
-    avatar: 'م',
-    department: 'المبيعات',
-    loanType: 'salary_advance',
-    amount: 5000,
-    installments: 1,
-    installmentAmount: 5000,
-    reason: 'ظروف شخصية طارئة',
-    status: 'pending',
-    requestDate: '2026/01/25',
-    paidAmount: 0,
-    remainingAmount: 5000,
-  },
-  {
-    id: '4',
-    employeeId: 'EMP008',
-    employeeName: 'ريم سعود الدوسري',
-    avatar: 'ر',
-    department: 'تقنية المعلومات',
-    loanType: 'emergency',
-    amount: 10000,
-    installments: 5,
-    installmentAmount: 2000,
-    reason: 'حالة طبية طارئة',
-    status: 'pending',
-    requestDate: '2026/01/28',
-    paidAmount: 0,
-    remainingAmount: 10000,
-  },
-  {
-    id: '5',
-    employeeId: 'EMP006',
-    employeeName: 'نورة محمد العتيبي',
-    avatar: 'ن',
-    department: 'خدمة العملاء',
-    loanType: 'salary_advance',
-    amount: 4500,
-    installments: 1,
-    installmentAmount: 4500,
-    reason: 'سفر عائلي',
-    status: 'completed',
-    requestDate: '2025/11/10',
-    approvedDate: '2025/11/12',
-    paidAmount: 4500,
-    remainingAmount: 0,
-    startDate: '2025/11/15',
-    endDate: '2025/12/28',
-  },
-]
-
-const getLoanTypeBadge = (type: LoanRequest['loanType']) => {
-  switch (type) {
-    case 'salary_advance':
-      return <span className="badge badge-primary">سلفة راتب</span>
-    case 'long_term':
-      return <span className="badge badge-warning">قرض طويل</span>
-    case 'emergency':
-      return <span className="badge badge-danger">سلفة طوارئ</span>
-  }
-}
-
-const getStatusBadge = (status: LoanRequest['status']) => {
+const getStatusBadge = (status: string) => {
   switch (status) {
-    case 'pending':
-      return (
-        <span className="badge badge-warning flex items-center gap-1">
-          <Clock size={12} />
-          في الانتظار
-        </span>
-      )
-    case 'approved':
+    case 'APPROVED':
       return (
         <span className="badge badge-primary flex items-center gap-1">
           <CheckCircle size={12} />
           معتمد
         </span>
       )
-    case 'rejected':
-      return (
-        <span className="badge badge-danger flex items-center gap-1">
-          <XCircle size={12} />
-          مرفوض
-        </span>
-      )
-    case 'active':
+    case 'DISBURSED':
       return (
         <span className="badge badge-success flex items-center gap-1">
           <DollarSign size={12} />
           جاري السداد
         </span>
       )
-    case 'completed':
+    case 'SETTLED':
       return (
         <span className="badge bg-gray-100 text-gray-600 flex items-center gap-1">
           <CheckCircle size={12} />
           مكتمل
         </span>
       )
+    default:
+      return (
+        <span className="badge badge-warning flex items-center gap-1">
+          <Clock size={12} />
+          {status}
+        </span>
+      )
   }
 }
 
 export default function LoansPage() {
-  const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'active' | 'completed'>('all')
+  const [activeTab, setActiveTab] = useState<'all' | 'open' | 'settled'>('all')
   const [searchQuery, setSearchQuery] = useState('')
   const [showNewLoanModal, setShowNewLoanModal] = useState(false)
+  const [expandedId, setExpandedId] = useState<number | null>(null)
 
-  // Calculate stats
-  const stats = {
-    totalActive: loanRequests
-      .filter((l) => l.status === 'active')
-      .reduce((sum, l) => sum + l.remainingAmount, 0),
-    pendingCount: loanRequests.filter((l) => l.status === 'pending').length,
-    activeCount: loanRequests.filter((l) => l.status === 'active').length,
-    monthlyDeductions: loanRequests
-      .filter((l) => l.status === 'active')
-      .reduce((sum, l) => sum + l.installmentAmount, 0),
+  const [loans, setLoans] = useState<Loan[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  // نموذج طلب سلفة جديد
+  const [loanAmount, setLoanAmount] = useState('')
+  const [loanMonths, setLoanMonths] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+  const [submitError, setSubmitError] = useState('')
+  const [submitSuccess, setSubmitSuccess] = useState('')
+
+  const loadLoans = () => {
+    setLoading(true)
+    fetchLoans()
+      .then((data) => setLoans(data as Loan[]))
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل سجل السلف'))
+      .finally(() => setLoading(false))
   }
 
-  const filteredLoans = loanRequests.filter((loan) => {
-    if (activeTab !== 'all' && loan.status !== activeTab) return false
-    if (
-      searchQuery &&
-      !loan.employeeName.includes(searchQuery) &&
-      !loan.employeeId.toLowerCase().includes(searchQuery.toLowerCase())
-    )
-      return false
+  useEffect(loadLoans, [])
+
+  const submitNewLoan = async () => {
+    setSubmitError('')
+    setSubmitSuccess('')
+    setSubmitting(true)
+    try {
+      await createRequest('LOAN', {
+        amount: Number(loanAmount),
+        months: Number(loanMonths),
+      })
+      setSubmitSuccess('تم إرسال طلب السلفة للاعتماد — سيظهر في السجل بعد اكتمال الموافقات')
+      setLoanAmount('')
+      setLoanMonths('')
+      loadLoans()
+    } catch (e) {
+      setSubmitError(e instanceof Error ? e.message : 'تعذر إرسال الطلب')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  // Calculate stats
+  const openLoans = loans.filter((l) => Number(l.remainingAmount) > 0)
+  const stats = {
+    totalActive: openLoans.reduce((sum, l) => sum + Number(l.remainingAmount), 0),
+    disbursedCount: loans.filter((l) => l.status === 'DISBURSED').length,
+    activeCount: openLoans.length,
+    monthlyDeductions: openLoans.reduce((sum, l) => {
+      const next = l.installments.find((i) => !i.paid)
+      return sum + Number(next?.amount ?? 0)
+    }, 0),
+  }
+
+  const filteredLoans = loans.filter((loan) => {
+    if (activeTab === 'open' && Number(loan.remainingAmount) <= 0) return false
+    if (activeTab === 'settled' && Number(loan.remainingAmount) > 0) return false
+    if (searchQuery && !(loan.employeeName ?? '').includes(searchQuery)) return false
     return true
   })
 
@@ -219,7 +149,7 @@ export default function LoansPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">السلف والقروض</h1>
-            <p className="text-gray-500 mt-1">إدارة طلبات السلف والقروض للموظفين</p>
+            <p className="text-gray-500 mt-1">سجل السلف المعتمدة من محرك الطلبات وجدول الأقساط</p>
           </div>
           <div className="flex items-center gap-3">
             <button className="btn-secondary flex items-center gap-2">
@@ -236,6 +166,14 @@ export default function LoansPage() {
           </div>
         </div>
 
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
+            <AlertTriangle size={18} />
+            {error}
+          </div>
+        )}
+
         {/* Stats Cards */}
         <div className="grid grid-cols-4 gap-4">
           <div className="card">
@@ -246,7 +184,7 @@ export default function LoansPage() {
               <div>
                 <p className="text-sm text-gray-500">إجمالي السلف النشطة</p>
                 <p className="text-2xl font-bold text-primary-600">{stats.totalActive.toLocaleString()}</p>
-                <p className="text-xs text-gray-400">ريال سعودي</p>
+                <p className="text-xs text-gray-400">المتبقي بدون سداد</p>
               </div>
             </div>
           </div>
@@ -257,9 +195,9 @@ export default function LoansPage() {
                 <Clock size={24} className="text-warning-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">طلبات معلقة</p>
-                <p className="text-2xl font-bold text-warning-600">{stats.pendingCount}</p>
-                <p className="text-xs text-gray-400">بانتظار الموافقة</p>
+                <p className="text-sm text-gray-500">سلف مصروفة</p>
+                <p className="text-2xl font-bold text-warning-600">{stats.disbursedCount}</p>
+                <p className="text-xs text-gray-400">تم صرفها للموظف</p>
               </div>
             </div>
           </div>
@@ -272,7 +210,7 @@ export default function LoansPage() {
               <div>
                 <p className="text-sm text-gray-500">سلف جاري سدادها</p>
                 <p className="text-2xl font-bold text-success-600">{stats.activeCount}</p>
-                <p className="text-xs text-gray-400">موظف</p>
+                <p className="text-xs text-gray-400">سلفة</p>
               </div>
             </div>
           </div>
@@ -283,9 +221,9 @@ export default function LoansPage() {
                 <DollarSign size={24} className="text-danger-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">إجمالي الخصم الشهري</p>
+                <p className="text-sm text-gray-500">القسط القادم (إجمالي)</p>
                 <p className="text-2xl font-bold text-danger-600">{stats.monthlyDeductions.toLocaleString()}</p>
-                <p className="text-xs text-gray-400">ريال سعودي</p>
+                <p className="text-xs text-gray-400">يُخصم من المسير</p>
               </div>
             </div>
           </div>
@@ -295,10 +233,9 @@ export default function LoansPage() {
         <div className="card p-2">
           <div className="flex items-center gap-2">
             {[
-              { id: 'all', label: 'الكل', count: loanRequests.length },
-              { id: 'pending', label: 'في الانتظار', count: loanRequests.filter((l) => l.status === 'pending').length },
-              { id: 'active', label: 'نشط', count: loanRequests.filter((l) => l.status === 'active').length },
-              { id: 'completed', label: 'مكتمل', count: loanRequests.filter((l) => l.status === 'completed').length },
+              { id: 'all', label: 'الكل', count: loans.length },
+              { id: 'open', label: 'جاري السداد', count: openLoans.length },
+              { id: 'settled', label: 'مكتمل', count: loans.length - openLoans.length },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -330,101 +267,143 @@ export default function LoansPage() {
                 <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
-                  placeholder="بحث بالاسم أو الرقم الوظيفي..."
+                  placeholder="بحث باسم الموظف..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="input pr-10"
                 />
               </div>
             </div>
-
-            <select className="input w-40">
-              <option value="all">كل الأنواع</option>
-              <option value="salary_advance">سلفة راتب</option>
-              <option value="long_term">قرض طويل</option>
-              <option value="emergency">سلفة طوارئ</option>
-            </select>
           </div>
         </div>
 
         {/* Loans Table */}
         <div className="card overflow-hidden p-0">
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="table-header">
                   <th className="text-right px-4 py-4">الموظف</th>
-                  <th className="text-center px-4 py-4">النوع</th>
                   <th className="text-center px-4 py-4">المبلغ</th>
                   <th className="text-center px-4 py-4">الأقساط</th>
-                  <th className="text-center px-4 py-4">القسط الشهري</th>
+                  <th className="text-center px-4 py-4">المسدد منها</th>
                   <th className="text-center px-4 py-4">المسدد</th>
                   <th className="text-center px-4 py-4">المتبقي</th>
                   <th className="text-center px-4 py-4">الحالة</th>
-                  <th className="text-center px-4 py-4">الإجراءات</th>
+                  <th className="text-center px-4 py-4">الجدول</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredLoans.map((loan) => (
-                  <tr key={loan.id} className="table-row">
+                  <Fragment key={loan.id}>
+                  <tr className="table-row">
                     <td className="table-cell">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center text-white font-bold">
-                          {loan.avatar}
+                          {(loan.employeeName ?? '؟').charAt(0)}
                         </div>
                         <div>
-                          <p className="font-medium text-gray-800">{loan.employeeName}</p>
-                          <p className="text-sm text-gray-400">{loan.department}</p>
+                          <p className="font-medium text-gray-800">{loan.employeeName ?? `موظف #${loan.employeeId}`}</p>
+                          <p className="text-sm text-gray-400">{loan.requestId ? `طلب رقم #${loan.requestId}` : `سلفة #${loan.id}`}</p>
                         </div>
                       </div>
                     </td>
-                    <td className="table-cell text-center">{getLoanTypeBadge(loan.loanType)}</td>
                     <td className="table-cell text-center font-mono font-bold text-gray-800">
-                      {loan.amount.toLocaleString()}
+                      {Number(loan.amount).toLocaleString()}
                     </td>
-                    <td className="table-cell text-center">{loan.installments} شهر</td>
-                    <td className="table-cell text-center font-mono text-danger-600">
-                      {loan.installmentAmount.toLocaleString()}
-                    </td>
+                    <td className="table-cell text-center">{loan.installments.length} شهر</td>
+                    <td className="table-cell text-center">{loan.paidCount} من {loan.installments.length}</td>
                     <td className="table-cell text-center">
                       <div>
-                        <span className="font-mono text-success-600">{loan.paidAmount.toLocaleString()}</span>
-                        {loan.status === 'active' && (
+                        <span className="font-mono text-success-600">{Number(loan.paidAmount).toLocaleString()}</span>
+                        {Number(loan.remainingAmount) > 0 && (
                           <div className="w-full h-1.5 bg-gray-100 rounded-full mt-1">
                             <div
                               className="h-full bg-success-500 rounded-full"
-                              style={{ width: `${(loan.paidAmount / loan.amount) * 100}%` }}
+                              style={{ width: `${(Number(loan.paidAmount) / Math.max(Number(loan.amount), 1)) * 100}%` }}
                             />
                           </div>
                         )}
                       </div>
                     </td>
                     <td className="table-cell text-center font-mono font-bold text-primary-600">
-                      {loan.remainingAmount.toLocaleString()}
+                      {Number(loan.remainingAmount).toLocaleString()}
                     </td>
                     <td className="table-cell text-center">{getStatusBadge(loan.status)}</td>
                     <td className="table-cell">
                       <div className="flex items-center justify-center gap-1">
-                        <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-                          <Eye size={18} className="text-gray-500" />
+                        <button
+                          onClick={() => setExpandedId(expandedId === loan.id ? null : loan.id)}
+                          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                        >
+                          {expandedId === loan.id ? (
+                            <ChevronUp size={18} className="text-gray-500" />
+                          ) : (
+                            <ChevronDown size={18} className="text-gray-500" />
+                          )}
                         </button>
-                        {loan.status === 'pending' && (
-                          <>
-                            <button className="p-2 bg-success-50 hover:bg-success-100 rounded-lg transition-colors">
-                              <CheckCircle size={18} className="text-success-600" />
-                            </button>
-                            <button className="p-2 bg-danger-50 hover:bg-danger-100 rounded-lg transition-colors">
-                              <XCircle size={18} className="text-danger-600" />
-                            </button>
-                          </>
-                        )}
                       </div>
                     </td>
                   </tr>
+                  {expandedId === loan.id && (
+                    <tr key={`inst-${loan.id}`}>
+                      <td colSpan={8} className="bg-gray-50 px-6 py-4">
+                        <p className="font-medium text-gray-700 mb-3">جدول الأقساط</p>
+                        <div className="overflow-x-auto">
+                          <table className="w-full">
+                            <thead>
+                              <tr className="table-header">
+                                <th className="text-right px-4 py-2">#</th>
+                                <th className="text-center px-4 py-2">تاريخ الاستحقاق</th>
+                                <th className="text-center px-4 py-2">المبلغ</th>
+                                <th className="text-center px-4 py-2">الحالة</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {loan.installments.map((inst, idx) => (
+                                <tr key={inst.id} className="table-row">
+                                  <td className="table-cell">{idx + 1}</td>
+                                  <td className="table-cell text-center font-mono">{inst.dueDate}</td>
+                                  <td className="table-cell text-center font-mono">{Number(inst.amount).toLocaleString()}</td>
+                                  <td className="table-cell text-center">
+                                    {inst.paid ? (
+                                      <span className="badge badge-success flex items-center gap-1 justify-center w-fit mx-auto">
+                                        <CheckCircle size={12} />
+                                        مسدد
+                                      </span>
+                                    ) : (
+                                      <span className="badge badge-warning flex items-center gap-1 justify-center w-fit mx-auto">
+                                        <Clock size={12} />
+                                        مستحق
+                                      </span>
+                                    )}
+                                  </td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      </td>
+                    </tr>
+                  )}
+                  </Fragment>
                 ))}
+                {filteredLoans.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="text-center py-10 text-gray-400">
+                      لا توجد سلف مسجلة
+                    </td>
+                  </tr>
+                )}
               </tbody>
             </table>
           </div>
+          )}
 
           {/* Pagination */}
           <div className="flex items-center justify-between px-4 py-4 border-t border-gray-100">
@@ -446,34 +425,110 @@ export default function LoansPage() {
           </div>
         </div>
 
-        {/* Loan Types Info */}
+        {/* Loan Flow Info */}
         <div className="grid grid-cols-3 gap-4">
           <div className="card border-r-4 border-primary-500">
-            <h3 className="font-bold text-gray-800 mb-2">سلفة راتب</h3>
+            <h3 className="font-bold text-gray-800 mb-2">تقديم الطلب</h3>
             <ul className="text-sm text-gray-600 space-y-1">
-              <li>• حد أقصى 50% من الراتب</li>
-              <li>• تُخصم من راتب الشهر التالي</li>
-              <li>• بدون فوائد</li>
+              <li>• يقدَّم الطلب من محرك الطلبات (نوع «سلفة»)</li>
+              <li>• يحدد الموظف المبلغ وعدد الأشهر</li>
             </ul>
           </div>
           <div className="card border-r-4 border-warning-500">
-            <h3 className="font-bold text-gray-800 mb-2">قرض طويل الأجل</h3>
+            <h3 className="font-bold text-gray-800 mb-2">الاعتماد</h3>
             <ul className="text-sm text-gray-600 space-y-1">
-              <li>• حد أقصى 3 رواتب</li>
-              <li>• تقسيط حتى 24 شهر</li>
-              <li>• بدون فوائد</li>
+              <li>• يمر الطلب بسلسلة الموافقات المعتمدة</li>
+              <li>• عند الاكتمال يُنشأ سجل السلفة وجدول الأقساط آلياً</li>
             </ul>
           </div>
           <div className="card border-r-4 border-danger-500">
-            <h3 className="font-bold text-gray-800 mb-2">سلفة طوارئ</h3>
+            <h3 className="font-bold text-gray-800 mb-2">السداد</h3>
             <ul className="text-sm text-gray-600 space-y-1">
-              <li>• للحالات الطارئة فقط</li>
-              <li>• موافقة سريعة</li>
-              <li>• تقسيط حتى 6 أشهر</li>
+              <li>• تُخصم الأقساط المستحقة آلياً من مسير الرواتب</li>
+              <li>• تُعلَّم السلفة «مكتملة» بعد سداد آخر قسط</li>
             </ul>
           </div>
         </div>
       </div>
+
+      {/* New Loan Modal */}
+      {showNewLoanModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-gray-800 text-lg">طلب سلفة جديد</h3>
+              <button
+                onClick={() => {
+                  setShowNewLoanModal(false)
+                  setSubmitError('')
+                  setSubmitSuccess('')
+                }}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
+
+            {submitError && (
+              <div className="bg-red-50 text-red-700 rounded-xl p-4 mb-4 flex items-center gap-2">
+                <XCircle size={18} />
+                {submitError}
+              </div>
+            )}
+            {submitSuccess && (
+              <div className="bg-success-50 text-success-700 rounded-xl p-4 mb-4 flex items-center gap-2">
+                <CheckCircle size={18} />
+                {submitSuccess}
+              </div>
+            )}
+
+            <div className="space-y-4">
+              <div>
+                <label className="label">مبلغ السلفة (ر.س) *</label>
+                <input
+                  type="number"
+                  value={loanAmount}
+                  onChange={(e) => setLoanAmount(e.target.value)}
+                  className="input"
+                  placeholder="0.00"
+                  dir="ltr"
+                />
+              </div>
+              <div>
+                <label className="label">عدد أشهر السداد *</label>
+                <input
+                  type="number"
+                  value={loanMonths}
+                  onChange={(e) => setLoanMonths(e.target.value)}
+                  className="input"
+                  placeholder="0"
+                  dir="ltr"
+                />
+              </div>
+            </div>
+
+            <div className="flex items-center gap-3 mt-6 pt-4 border-t border-gray-100">
+              <button
+                onClick={submitNewLoan}
+                disabled={submitting || !loanAmount || !loanMonths}
+                className="btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {submitting ? 'جارٍ الإرسال...' : 'إرسال الطلب'}
+              </button>
+              <button
+                onClick={() => {
+                  setShowNewLoanModal(false)
+                  setSubmitError('')
+                  setSubmitSuccess('')
+                }}
+                className="btn-secondary"
+              >
+                إغلاق
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </MainLayout>
   )
 }
