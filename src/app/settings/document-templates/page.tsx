@@ -1,30 +1,24 @@
 "use client";
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import {
   FileText,
   Plus,
   Search,
   Edit2,
-  Trash2,
   Eye,
-  Copy,
   Download,
-  Upload,
   FileSignature,
   Variable,
   CheckCircle,
-  Clock,
   Filter,
-  MoreVertical,
   Code,
-  Briefcase,
-  UserMinus,
   Award,
   FileCheck,
   Mail,
   AlertTriangle,
 } from "lucide-react";
+import { ApiDocument, fetchDocuments } from "@/lib/api";
 
 interface TemplateVariable {
   key: string;
@@ -41,11 +35,7 @@ interface DocumentTemplate {
   description: string;
   content: string;
   variables: string[];
-  isActive: boolean;
   isDefault: boolean;
-  createdAt: string;
-  updatedAt: string;
-  usageCount: number;
 }
 
 const templateCategories = [
@@ -170,7 +160,8 @@ const sampleContractTemplate = `بسم الله الرحمن الرحيم
 
 التوقيع: _______________                           التوقيع: _______________`;
 
-const initialTemplates: DocumentTemplate[] = [
+// قوالب افتراضية مضمّنة في الواجهة — توليد المستندات منها يُفعَّل في مرحلة لاحقة
+const builtInTemplates: DocumentTemplate[] = [
   {
     id: "1",
     name: "عقد العمل الأساسي",
@@ -179,11 +170,7 @@ const initialTemplates: DocumentTemplate[] = [
     description: "عقد العمل القياسي للموظفين الجدد",
     content: sampleContractTemplate,
     variables: ["employee_name", "national_id", "job_title", "basic_salary", "total_salary", "contract_start", "contract_end"],
-    isActive: true,
     isDefault: true,
-    createdAt: "2024-01-01",
-    updatedAt: "2024-01-15",
-    usageCount: 45,
   },
   {
     id: "2",
@@ -204,11 +191,7 @@ const initialTemplates: DocumentTemplate[] = [
 {{company_name}}
 إدارة الموارد البشرية`,
     variables: ["employee_name", "job_title", "department", "hire_date", "total_salary"],
-    isActive: true,
     isDefault: true,
-    createdAt: "2024-01-01",
-    updatedAt: "2024-01-10",
-    usageCount: 120,
   },
   {
     id: "3",
@@ -229,11 +212,7 @@ const initialTemplates: DocumentTemplate[] = [
 {{company_name}}
 إدارة الموارد البشرية`,
     variables: ["employee_name", "national_id", "job_title", "hire_date", "termination_date", "termination_reason"],
-    isActive: true,
     isDefault: true,
-    createdAt: "2024-01-01",
-    updatedAt: "2024-01-01",
-    usageCount: 30,
   },
   {
     id: "4",
@@ -260,16 +239,14 @@ const initialTemplates: DocumentTemplate[] = [
 {{company_name}}
 إدارة الموارد البشرية`,
     variables: ["employee_name", "termination_date", "termination_reason", "notice_period", "end_of_service"],
-    isActive: true,
-    isDefault: false,
-    createdAt: "2024-01-01",
-    updatedAt: "2024-01-01",
-    usageCount: 8,
+    isDefault: true,
   },
 ];
 
 export default function DocumentTemplatesPage() {
-  const [templates, setTemplates] = useState<DocumentTemplate[]>(initialTemplates);
+  const [documents, setDocuments] = useState<ApiDocument[]>([]);
+  const [loadingDocs, setLoadingDocs] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [searchTerm, setSearchTerm] = useState("");
   const [filterCategory, setFilterCategory] = useState("all");
   const [showModal, setShowModal] = useState(false);
@@ -285,8 +262,24 @@ export default function DocumentTemplatesPage() {
     category: "contracts",
     description: "",
     content: "",
-    isActive: true,
   });
+
+  useEffect(() => {
+    const loadData = async () => {
+      try {
+        const docs = await fetchDocuments();
+        setDocuments(docs);
+        setError(null);
+      } catch (err: any) {
+        setError(err.message);
+      } finally {
+        setLoadingDocs(false);
+      }
+    };
+    loadData();
+  }, []);
+
+  const templates = builtInTemplates;
 
   const filteredTemplates = templates.filter((template) => {
     const matchesSearch =
@@ -296,38 +289,11 @@ export default function DocumentTemplatesPage() {
     return matchesSearch && matchesCategory;
   });
 
-  const handleSubmit = () => {
-    const usedVariables = availableVariables
-      .filter((v) => formData.content.includes(v.key))
-      .map((v) => v.key.replace(/[{}]/g, ""));
-
-    if (editingTemplate) {
-      setTemplates(
-        templates.map((t) =>
-          t.id === editingTemplate.id
-            ? {
-                ...t,
-                ...formData,
-                variables: usedVariables,
-                updatedAt: new Date().toISOString().split("T")[0],
-              }
-            : t
-        )
-      );
-    } else {
-      const newTemplate: DocumentTemplate = {
-        id: Date.now().toString(),
-        ...formData,
-        variables: usedVariables,
-        isDefault: false,
-        createdAt: new Date().toISOString().split("T")[0],
-        updatedAt: new Date().toISOString().split("T")[0],
-        usageCount: 0,
-      };
-      setTemplates([...templates, newTemplate]);
-    }
-    resetForm();
-  };
+  // أنواع المستندات المستخدَمة فعلياً في النظام
+  const docTypesInUse = [...new Set(documents.map((d) => d.docType))].map((docType) => ({
+    docType,
+    count: documents.filter((d) => d.docType === docType).length,
+  }));
 
   const resetForm = () => {
     setShowModal(false);
@@ -339,7 +305,6 @@ export default function DocumentTemplatesPage() {
       category: "contracts",
       description: "",
       content: "",
-      isActive: true,
     });
   };
 
@@ -351,7 +316,6 @@ export default function DocumentTemplatesPage() {
       category: template.category,
       description: template.description,
       content: template.content,
-      isActive: template.isActive,
     });
     setShowModal(true);
   };
@@ -359,26 +323,6 @@ export default function DocumentTemplatesPage() {
   const handlePreview = (template: DocumentTemplate) => {
     setPreviewTemplate(template);
     setShowPreviewModal(true);
-  };
-
-  const handleDelete = (id: string) => {
-    if (confirm("هل أنت متأكد من حذف هذا القالب؟")) {
-      setTemplates(templates.filter((t) => t.id !== id));
-    }
-  };
-
-  const handleDuplicate = (template: DocumentTemplate) => {
-    const newTemplate: DocumentTemplate = {
-      ...template,
-      id: Date.now().toString(),
-      name: template.name + " (نسخة)",
-      nameEn: template.nameEn + " (Copy)",
-      isDefault: false,
-      createdAt: new Date().toISOString().split("T")[0],
-      updatedAt: new Date().toISOString().split("T")[0],
-      usageCount: 0,
-    };
-    setTemplates([...templates, newTemplate]);
   };
 
   const insertVariable = (variable: string) => {
@@ -407,9 +351,9 @@ export default function DocumentTemplatesPage() {
 
   const stats = {
     total: templates.length,
-    active: templates.filter((t) => t.isActive).length,
     contracts: templates.filter((t) => t.category === "contracts").length,
-    totalUsage: templates.reduce((sum, t) => sum + t.usageCount, 0),
+    docTypes: docTypesInUse.length,
+    documents: documents.length,
   };
 
   return (
@@ -418,7 +362,7 @@ export default function DocumentTemplatesPage() {
       <div className="flex items-center justify-between">
         <div>
           <h1 className="text-2xl font-bold text-gray-900">قوالب المستندات</h1>
-          <p className="text-gray-600 mt-1">إنشاء وإدارة قوالب العقود والخطابات والشهادات</p>
+          <p className="text-gray-600 mt-1">قوالب العقود والخطابات والشهادات — توليد المستندات يُفعَّل في مرحلة لاحقة</p>
         </div>
         <button
           onClick={() => setShowModal(true)}
@@ -429,6 +373,9 @@ export default function DocumentTemplatesPage() {
         </button>
       </div>
 
+      {/* Error Banner */}
+      {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
       {/* Stats */}
       <div className="grid grid-cols-4 gap-4">
         <div className="card p-4">
@@ -438,18 +385,7 @@ export default function DocumentTemplatesPage() {
             </div>
             <div>
               <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
-              <p className="text-sm text-gray-600">إجمالي القوالب</p>
-            </div>
-          </div>
-        </div>
-        <div className="card p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-              <CheckCircle className="text-green-600" size={20} />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-gray-900">{stats.active}</p>
-              <p className="text-sm text-gray-600">قوالب مفعّلة</p>
+              <p className="text-sm text-gray-600">قوالب افتراضية</p>
             </div>
           </div>
         </div>
@@ -466,14 +402,45 @@ export default function DocumentTemplatesPage() {
         </div>
         <div className="card p-4">
           <div className="flex items-center gap-3">
+            <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
+              <CheckCircle className="text-green-600" size={20} />
+            </div>
+            <div>
+              <p className="text-2xl font-bold text-gray-900">{stats.docTypes}</p>
+              <p className="text-sm text-gray-600">أنواع مستندات مستخدَمة</p>
+            </div>
+          </div>
+        </div>
+        <div className="card p-4">
+          <div className="flex items-center gap-3">
             <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
               <Download className="text-orange-600" size={20} />
             </div>
             <div>
-              <p className="text-2xl font-bold text-gray-900">{stats.totalUsage}</p>
-              <p className="text-sm text-gray-600">مرات الاستخدام</p>
+              <p className="text-2xl font-bold text-gray-900">{stats.documents}</p>
+              <p className="text-sm text-gray-600">مستندات مسجلة</p>
             </div>
           </div>
+        </div>
+      </div>
+
+      {/* أنواع المستندات المستخدَمة فعلياً */}
+      <div className="card p-4">
+        <div className="flex items-center justify-between mb-3">
+          <h2 className="font-bold text-gray-900">أنواع المستندات المستخدَمة فعلياً</h2>
+          {loadingDocs && (
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          )}
+        </div>
+        <div className="flex flex-wrap gap-2">
+          {docTypesInUse.map((t) => (
+            <span key={t.docType} className="badge badge-secondary">
+              {t.docType} — {t.count} مستند
+            </span>
+          ))}
+          {!loadingDocs && docTypesInUse.length === 0 && (
+            <p className="text-sm text-gray-500">لا توجد مستندات مسجلة بعد</p>
+          )}
         </div>
       </div>
 
@@ -515,7 +482,7 @@ export default function DocumentTemplatesPage() {
           return (
             <div
               key={template.id}
-              className={`card p-5 hover:shadow-lg transition-shadow ${!template.isActive ? "opacity-60" : ""}`}
+              className="card p-5 hover:shadow-lg transition-shadow"
             >
               <div className="flex items-start justify-between mb-4">
                 <div className="flex items-center gap-3">
@@ -531,42 +498,6 @@ export default function DocumentTemplatesPage() {
                   {template.isDefault && (
                     <span className="badge badge-primary text-xs">افتراضي</span>
                   )}
-                  <div className="relative group">
-                    <button className="p-2 hover:bg-gray-100 rounded-lg">
-                      <MoreVertical size={18} className="text-gray-400" />
-                    </button>
-                    <div className="absolute left-0 top-full mt-1 bg-white rounded-lg shadow-lg border py-1 min-w-[150px] hidden group-hover:block z-10">
-                      <button
-                        onClick={() => handlePreview(template)}
-                        className="w-full px-4 py-2 text-right text-sm hover:bg-gray-50 flex items-center gap-2"
-                      >
-                        <Eye size={16} />
-                        معاينة
-                      </button>
-                      <button
-                        onClick={() => handleEdit(template)}
-                        className="w-full px-4 py-2 text-right text-sm hover:bg-gray-50 flex items-center gap-2"
-                      >
-                        <Edit2 size={16} />
-                        تعديل
-                      </button>
-                      <button
-                        onClick={() => handleDuplicate(template)}
-                        className="w-full px-4 py-2 text-right text-sm hover:bg-gray-50 flex items-center gap-2"
-                      >
-                        <Copy size={16} />
-                        نسخ
-                      </button>
-                      <hr className="my-1" />
-                      <button
-                        onClick={() => handleDelete(template.id)}
-                        className="w-full px-4 py-2 text-right text-sm hover:bg-red-50 text-red-600 flex items-center gap-2"
-                      >
-                        <Trash2 size={16} />
-                        حذف
-                      </button>
-                    </div>
-                  </div>
                 </div>
               </div>
 
@@ -580,16 +511,13 @@ export default function DocumentTemplatesPage() {
               </div>
 
               <div className="flex items-center justify-between pt-4 border-t">
-                <div className="flex items-center gap-4 text-sm text-gray-500">
-                  <span className="flex items-center gap-1">
-                    <Download size={14} />
-                    {template.usageCount} استخدام
-                  </span>
-                  <span className="flex items-center gap-1">
-                    <Clock size={14} />
-                    {template.updatedAt}
-                  </span>
-                </div>
+                <button
+                  onClick={() => handleEdit(template)}
+                  className="btn-secondary text-sm py-1.5 px-3"
+                >
+                  <Edit2 size={14} className="inline ml-1" />
+                  تعديل
+                </button>
                 <button
                   onClick={() => handlePreview(template)}
                   className="btn-secondary text-sm py-1.5 px-3"
@@ -610,7 +538,7 @@ export default function DocumentTemplatesPage() {
         </div>
       )}
 
-      {/* Add/Edit Modal */}
+      {/* Add/Edit Modal (عرض فقط — الحفظ يُفعَّل لاحقاً) */}
       {showModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex">
@@ -666,28 +594,15 @@ export default function DocumentTemplatesPage() {
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">الحالة</label>
-                    <label className="flex items-center gap-2 mt-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={formData.isActive}
-                        onChange={(e) => setFormData({ ...formData, isActive: e.target.checked })}
-                        className="w-4 h-4 rounded border-gray-300"
-                      />
-                      <span>مفعّل</span>
-                    </label>
+                    <label className="block text-sm font-medium text-gray-700 mb-1">الوصف</label>
+                    <input
+                      type="text"
+                      value={formData.description}
+                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
+                      className="input w-full"
+                      placeholder="وصف مختصر للقالب..."
+                    />
                   </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-1">الوصف</label>
-                  <input
-                    type="text"
-                    value={formData.description}
-                    onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                    className="input w-full"
-                    placeholder="وصف مختصر للقالب..."
-                  />
                 </div>
 
                 <div>
@@ -723,9 +638,9 @@ export default function DocumentTemplatesPage() {
                   إلغاء
                 </button>
                 <button
-                  onClick={handleSubmit}
-                  className="btn-primary"
-                  disabled={!formData.name || !formData.content}
+                  className="btn-primary opacity-50 cursor-not-allowed"
+                  disabled
+                  title="التعديل الكامل في مرحلة لاحقة"
                 >
                   {editingTemplate ? "حفظ التعديلات" : "إضافة القالب"}
                 </button>
@@ -814,7 +729,11 @@ export default function DocumentTemplatesPage() {
                 المتغيرات المستخدمة: {previewTemplate.variables.length}
               </div>
               <div className="flex gap-2">
-                <button className="btn-secondary flex items-center gap-2">
+                <button
+                  className="btn-secondary flex items-center gap-2 opacity-50 cursor-not-allowed"
+                  disabled
+                  title="توليد PDF يُفعَّل في مرحلة لاحقة"
+                >
                   <Download size={16} />
                   تحميل PDF
                 </button>

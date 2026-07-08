@@ -1,7 +1,8 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import { fetchConfig } from '@/lib/api'
 import {
   Calendar,
   Plus,
@@ -204,6 +205,26 @@ export default function WorkDaysSettingsPage() {
   const [schedules, setSchedules] = useState<WorkSchedule[]>(initialSchedules)
   const [selectedSchedule, setSelectedSchedule] = useState<WorkSchedule | null>(initialSchedules[0])
   const [hasChanges, setHasChanges] = useState(false)
+  const [config, setConfig] = useState<Array<{ key: string; value: string }>>([])
+  const [configLoading, setConfigLoading] = useState(true)
+  const [configError, setConfigError] = useState<string | null>(null)
+
+  useEffect(() => {
+    const loadConfig = async () => {
+      try {
+        const cfg = await fetchConfig()
+        setConfig(cfg)
+        setConfigError(null)
+      } catch (err: any) {
+        setConfigError(err.message)
+      } finally {
+        setConfigLoading(false)
+      }
+    }
+    loadConfig()
+  }, [])
+
+  const configValue = (key: string) => config.find((c) => c.key === key)?.value
   const [showAddSchedule, setShowAddSchedule] = useState(false)
   const [showEditSchedule, setShowEditSchedule] = useState(false)
   const [showAddRule, setShowAddRule] = useState(false)
@@ -364,12 +385,6 @@ export default function WorkDaysSettingsPage() {
     return scheduleColors.find(c => c.id === colorId) || scheduleColors[0]
   }
 
-  // حفظ التغييرات
-  const saveChanges = () => {
-    setHasChanges(false)
-    alert('تم حفظ الإعدادات بنجاح!')
-  }
-
   // إحصائيات
   const totalEmployees = schedules.reduce((sum, s) => sum + s.employeeCount, 0)
   const activeRulesCount = selectedSchedule?.rules.filter(r => r.isActive).length || 0
@@ -390,13 +405,13 @@ export default function WorkDaysSettingsPage() {
             {hasChanges && (
               <span className="flex items-center gap-2 text-warning-600 bg-warning-50 px-3 py-2 rounded-lg">
                 <AlertCircle size={18} />
-                يوجد تغييرات غير محفوظة
+                أيام العمل تُفعَّل مع محرك الجدولة
               </span>
             )}
             <button
-              onClick={saveChanges}
-              disabled={!hasChanges}
-              className={`btn-primary flex items-center gap-2 ${!hasChanges ? 'opacity-50 cursor-not-allowed' : ''}`}
+              disabled
+              className="btn-primary flex items-center gap-2 opacity-50 cursor-not-allowed"
+              title="أيام العمل تُفعَّل مع محرك الجدولة — الحفظ في مرحلة لاحقة"
             >
               <Save size={18} />
               حفظ الإعدادات
@@ -443,6 +458,50 @@ export default function WorkDaysSettingsPage() {
             </div>
           </div>
         </div>
+
+        {/* الإعدادات الفعلية من الخادم */}
+        {configError && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4">{configError}</div>
+        )}
+        {configLoading ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+          !configError && (
+            <div className="card">
+              <div className="flex items-center gap-3 mb-4">
+                <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
+                  <Settings size={20} className="text-primary-600" />
+                </div>
+                <div>
+                  <h2 className="text-lg font-bold text-gray-800">الإعدادات الفعلية من الخادم</h2>
+                  <p className="text-sm text-gray-500">قيم حقيقية من إعدادات النظام — تُدار من الخادم</p>
+                </div>
+              </div>
+              <div className="grid grid-cols-2 gap-4">
+                <div className="p-4 bg-gray-50 rounded-xl">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Calendar size={16} className="text-gray-400" />
+                    <span className="text-sm text-gray-600">بداية دورة الرواتب</span>
+                  </div>
+                  <p className="text-lg font-bold text-gray-800">
+                    يوم {configValue('payroll.cycle_start_day') ?? '—'} من الشهر
+                  </p>
+                </div>
+                <div className="p-4 bg-gray-50 rounded-xl">
+                  <div className="flex items-center gap-2 mb-2">
+                    <Clock size={16} className="text-gray-400" />
+                    <span className="text-sm text-gray-600">سماحية التأخير</span>
+                  </div>
+                  <p className="text-lg font-bold text-gray-800">
+                    {configValue('attendance.grace_minutes') ?? '—'} دقيقة
+                  </p>
+                </div>
+              </div>
+            </div>
+          )
+        )}
 
         <div className="grid grid-cols-12 gap-6">
           {/* قائمة الجداول */}
@@ -603,7 +662,12 @@ export default function WorkDaysSettingsPage() {
 
                   {/* أيام العمل */}
                   <div>
-                    <h3 className="text-sm font-medium text-gray-600 mb-3">أيام العمل</h3>
+                    <h3 className="text-sm font-medium text-gray-600 mb-3">
+                      أيام العمل
+                      <span className="text-xs text-gray-400 mr-2">
+                        (عرض تجريبي — أيام العمل تُفعَّل مع محرك الجدولة)
+                      </span>
+                    </h3>
                     <div className="flex items-center justify-center gap-3">
                       {weekDays.map(day => (
                         <button
@@ -911,7 +975,6 @@ export default function WorkDaysSettingsPage() {
               )
               setSelectedSchedule(updatedSchedule)
               setShowAssignModal(false)
-              alert(`تم تعيين الجدول لـ ${count} موظف بنجاح!`)
             }}
           />
         )}

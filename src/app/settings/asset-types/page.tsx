@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
 import {
@@ -8,172 +8,100 @@ import {
   Plus,
   Package,
   Edit,
-  Trash2,
   MoreVertical,
   CheckCircle,
   XCircle,
-  Laptop,
-  Smartphone,
-  Car,
-  KeyRound,
-  CreditCard,
-  Shield,
-  GitBranch,
 } from 'lucide-react'
+import { createCatalogItem, fetchCatalog, updateCatalogItem } from '@/lib/api'
 
 interface AssetType {
-  id: string
+  id: number
   name: string
-  nameEn: string
-  icon: 'laptop' | 'phone' | 'car' | 'key' | 'card' | 'other'
-  requiresApproval: boolean // التسليم يمر بدورة اعتماد؟
-  requiresReturnApproval: boolean // الإخلاء يمر بدورة اعتماد؟
-  deductIfLost: boolean // يُخصم عند الفقد/التلف؟
-  defaultValue: number // القيمة التقديرية للخصم
   isActive: boolean
-  assignedCount: number
 }
-
-const iconMap = {
-  laptop: Laptop,
-  phone: Smartphone,
-  car: Car,
-  key: KeyRound,
-  card: CreditCard,
-  other: Package,
-}
-
-const iconLabels = {
-  laptop: 'لابتوب',
-  phone: 'جوال',
-  car: 'سيارة',
-  key: 'مفاتيح',
-  card: 'بطاقة',
-  other: 'أخرى',
-}
-
-const initialAssetTypes: AssetType[] = [
-  {
-    id: 'at1',
-    name: 'لابتوب',
-    nameEn: 'Laptop',
-    icon: 'laptop',
-    requiresApproval: true,
-    requiresReturnApproval: true,
-    deductIfLost: true,
-    defaultValue: 4500,
-    isActive: true,
-    assignedCount: 84,
-  },
-  {
-    id: 'at2',
-    name: 'هاتف جوال',
-    nameEn: 'Mobile Phone',
-    icon: 'phone',
-    requiresApproval: true,
-    requiresReturnApproval: false,
-    deductIfLost: true,
-    defaultValue: 2000,
-    isActive: true,
-    assignedCount: 45,
-  },
-  {
-    id: 'at3',
-    name: 'سيارة شركة',
-    nameEn: 'Company Car',
-    icon: 'car',
-    requiresApproval: true,
-    requiresReturnApproval: true,
-    deductIfLost: false,
-    defaultValue: 0,
-    isActive: true,
-    assignedCount: 7,
-  },
-  {
-    id: 'at4',
-    name: 'بطاقة دخول',
-    nameEn: 'Access Card',
-    icon: 'card',
-    requiresApproval: false,
-    requiresReturnApproval: false,
-    deductIfLost: true,
-    defaultValue: 100,
-    isActive: true,
-    assignedCount: 156,
-  },
-  {
-    id: 'at5',
-    name: 'مفاتيح مكتب',
-    nameEn: 'Office Keys',
-    icon: 'key',
-    requiresApproval: false,
-    requiresReturnApproval: false,
-    deductIfLost: true,
-    defaultValue: 50,
-    isActive: true,
-    assignedCount: 32,
-  },
-]
 
 const emptyForm = {
   name: '',
-  nameEn: '',
-  icon: 'other' as AssetType['icon'],
-  requiresApproval: true,
-  requiresReturnApproval: false,
-  deductIfLost: true,
-  defaultValue: 0,
   isActive: true,
 }
 
 export default function AssetTypesPage() {
-  const [assetTypes, setAssetTypes] = useState(initialAssetTypes)
+  const [assetTypes, setAssetTypes] = useState<AssetType[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [showModal, setShowModal] = useState(false)
+  const [modalError, setModalError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<AssetType | null>(null)
-  const [activeMenu, setActiveMenu] = useState<string | null>(null)
-  const [formData, setFormData] = useState(emptyForm)
+  const [activeMenu, setActiveMenu] = useState<number | null>(null)
+  const [formData, setFormData] = useState({ ...emptyForm })
 
-  const totalAssigned = assetTypes.reduce((s, t) => s + t.assignedCount, 0)
+  const loadData = async () => {
+    try {
+      const data = await fetchCatalog<AssetType>('asset-types')
+      setAssetTypes(data)
+      setError(null)
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadData()
+  }, [])
+
+  const activeCount = assetTypes.filter((t) => t.isActive).length
 
   const handleOpenModal = (t?: AssetType) => {
+    setModalError(null)
     if (t) {
       setEditing(t)
-      setFormData({
-        name: t.name,
-        nameEn: t.nameEn,
-        icon: t.icon,
-        requiresApproval: t.requiresApproval,
-        requiresReturnApproval: t.requiresReturnApproval,
-        deductIfLost: t.deductIfLost,
-        defaultValue: t.defaultValue,
-        isActive: t.isActive,
-      })
+      setFormData({ name: t.name, isActive: t.isActive })
     } else {
       setEditing(null)
-      setFormData(emptyForm)
+      setFormData({ ...emptyForm })
     }
     setShowModal(true)
   }
 
-  const handleSave = () => {
-    if (editing) {
-      setAssetTypes(
-        assetTypes.map((t) => (t.id === editing.id ? { ...t, ...formData } : t))
-      )
-    } else {
-      setAssetTypes([
-        ...assetTypes,
-        { id: 'at' + Date.now(), ...formData, assignedCount: 0 },
-      ])
+  const handleSave = async () => {
+    setSaving(true)
+    setModalError(null)
+    try {
+      if (editing) {
+        const updated = await updateCatalogItem<AssetType>('asset-types', editing.id, {
+          name: formData.name,
+          isActive: formData.isActive,
+        })
+        setAssetTypes(assetTypes.map((t) => (t.id === editing.id ? updated : t)))
+      } else {
+        const created = await createCatalogItem<AssetType>('asset-types', {
+          name: formData.name,
+          isActive: formData.isActive,
+        })
+        setAssetTypes([...assetTypes, created])
+      }
+      setShowModal(false)
+    } catch (err: any) {
+      setModalError(err.message)
+    } finally {
+      setSaving(false)
     }
-    setShowModal(false)
   }
 
-  const handleDelete = (id: string) => {
-    if (confirm('هل أنت متأكد من حذف نوع العهدة؟')) {
-      setAssetTypes(assetTypes.filter((t) => t.id !== id))
-    }
+  const toggleActive = async (t: AssetType) => {
     setActiveMenu(null)
+    try {
+      const updated = await updateCatalogItem<AssetType>('asset-types', t.id, {
+        isActive: !t.isActive,
+      })
+      setAssetTypes(assetTypes.map((x) => (x.id === t.id ? updated : x)))
+      setError(null)
+    } catch (err: any) {
+      setError(err.message)
+    }
   }
 
   return (
@@ -193,7 +121,7 @@ export default function AssetTypesPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-800">أنواع العهد</h1>
             <p className="text-gray-500 mt-1">
-              عرّف العهد التي تُسلَّم للموظفين وقواعد اعتمادها وخصمها
+              عرّف العهد التي تُسلَّم للموظفين في النظام
             </p>
           </div>
           <button
@@ -204,6 +132,9 @@ export default function AssetTypesPage() {
             إضافة نوع عهدة
           </button>
         </div>
+
+        {/* Error Banner */}
+        {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
 
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4">
@@ -221,28 +152,34 @@ export default function AssetTypesPage() {
               <CheckCircle size={24} className="text-success-500" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">عهد مسلَّمة حالياً</p>
-              <p className="text-2xl font-bold text-gray-800">{totalAssigned}</p>
+              <p className="text-sm text-gray-500">مفعّلة</p>
+              <p className="text-2xl font-bold text-gray-800">{activeCount}</p>
             </div>
           </div>
           <div className="card p-4 flex items-center gap-3">
             <div className="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center">
-              <GitBranch size={24} className="text-indigo-500" />
+              <XCircle size={24} className="text-indigo-500" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">تتطلب اعتماداً عند التسليم</p>
+              <p className="text-sm text-gray-500">معطّلة</p>
               <p className="text-2xl font-bold text-indigo-600">
-                {assetTypes.filter((t) => t.requiresApproval).length}
+                {assetTypes.length - activeCount}
               </p>
             </div>
           </div>
         </div>
 
+        {/* Loading */}
+        {loading && (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
+
         {/* Types Grid */}
-        <div className="grid grid-cols-3 gap-4">
-          {assetTypes.map((t) => {
-            const Icon = iconMap[t.icon]
-            return (
+        {!loading && (
+          <div className="grid grid-cols-3 gap-4">
+            {assetTypes.map((t) => (
               <div
                 key={t.id}
                 className={`card p-5 relative ${!t.isActive ? 'opacity-60' : ''}`}
@@ -272,11 +209,20 @@ export default function AssetTypesPage() {
                           تعديل
                         </button>
                         <button
-                          onClick={() => handleDelete(t.id)}
-                          className="w-full flex items-center gap-2 px-4 py-2 text-danger-600 hover:bg-danger-50"
+                          onClick={() => toggleActive(t)}
+                          className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50"
                         >
-                          <Trash2 size={16} />
-                          حذف
+                          {t.isActive ? (
+                            <>
+                              <XCircle size={16} />
+                              تعطيل
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle size={16} />
+                              تفعيل
+                            </>
+                          )}
                         </button>
                       </div>
                     </>
@@ -285,51 +231,15 @@ export default function AssetTypesPage() {
 
                 <div className="flex items-center gap-3">
                   <div className="w-12 h-12 bg-primary-100 rounded-2xl flex items-center justify-center">
-                    <Icon size={24} className="text-primary-600" />
+                    <Package size={24} className="text-primary-600" />
                   </div>
                   <div>
                     <h3 className="font-bold text-gray-800">{t.name}</h3>
-                    <p className="text-xs text-gray-400">{t.nameEn}</p>
-                  </div>
-                </div>
-
-                <div className="mt-4 space-y-2 text-sm">
-                  <div className="flex items-center gap-2">
-                    {t.requiresApproval ? (
-                      <CheckCircle size={15} className="text-success-500" />
-                    ) : (
-                      <XCircle size={15} className="text-gray-300" />
-                    )}
-                    <span className="text-gray-600">التسليم باعتماد</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {t.requiresReturnApproval ? (
-                      <CheckCircle size={15} className="text-success-500" />
-                    ) : (
-                      <XCircle size={15} className="text-gray-300" />
-                    )}
-                    <span className="text-gray-600">الإخلاء باعتماد</span>
-                  </div>
-                  <div className="flex items-center gap-2">
-                    {t.deductIfLost ? (
-                      <CheckCircle size={15} className="text-warning-500" />
-                    ) : (
-                      <XCircle size={15} className="text-gray-300" />
-                    )}
-                    <span className="text-gray-600">
-                      يُخصم عند الفقد
-                      {t.deductIfLost && t.defaultValue > 0 && (
-                        <span className="text-xs text-gray-400">
-                          {' '}
-                          (~{t.defaultValue.toLocaleString()} ر.س)
-                        </span>
-                      )}
-                    </span>
                   </div>
                 </div>
 
                 <div className="mt-4 pt-3 border-t border-gray-100 flex items-center justify-between text-sm">
-                  <span className="text-gray-500">{t.assignedCount} مسلَّمة</span>
+                  <span className="text-gray-500">#{t.id}</span>
                   <span
                     className={`badge text-xs ${
                       t.isActive ? 'badge-success' : 'badge-danger'
@@ -339,9 +249,17 @@ export default function AssetTypesPage() {
                   </span>
                 </div>
               </div>
-            )
-          })}
-        </div>
+            ))}
+          </div>
+        )}
+
+        {!loading && assetTypes.length === 0 && (
+          <div className="card p-12 text-center">
+            <Package size={48} className="mx-auto text-gray-300 mb-4" />
+            <h3 className="text-lg font-bold text-gray-800 mb-2">لا توجد أنواع عهد</h3>
+            <p className="text-gray-500">أضف أول نوع عهدة من الزر أعلاه</p>
+          </div>
+        )}
 
         {/* Modal */}
         {showModal && (
@@ -353,137 +271,23 @@ export default function AssetTypesPage() {
                 </h2>
               </div>
               <div className="p-6 space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      الاسم (عربي) *
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.name}
-                      onChange={(e) =>
-                        setFormData({ ...formData, name: e.target.value })
-                      }
-                      className="input w-full"
-                      placeholder="مثال: لابتوب"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      الاسم (إنجليزي)
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.nameEn}
-                      onChange={(e) =>
-                        setFormData({ ...formData, nameEn: e.target.value })
-                      }
-                      className="input w-full"
-                      dir="ltr"
-                      placeholder="Laptop"
-                    />
-                  </div>
-                </div>
+                {modalError && (
+                  <div className="bg-red-50 text-red-700 rounded-xl p-4">{modalError}</div>
+                )}
 
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      الأيقونة
-                    </label>
-                    <select
-                      value={formData.icon}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          icon: e.target.value as AssetType['icon'],
-                        })
-                      }
-                      className="input w-full"
-                    >
-                      {Object.entries(iconLabels).map(([id, label]) => (
-                        <option key={id} value={id}>
-                          {label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      القيمة التقديرية (للخصم عند الفقد)
-                    </label>
-                    <input
-                      type="number"
-                      value={formData.defaultValue}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          defaultValue: Number(e.target.value),
-                        })
-                      }
-                      className="input w-full"
-                      min="0"
-                    />
-                  </div>
-                </div>
-
-                <div className="p-4 bg-gray-50 rounded-xl space-y-3">
-                  <label className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Shield size={16} className="text-indigo-500" />
-                      <span className="text-sm text-gray-700">
-                        التسليم يمر بدورة اعتماد
-                      </span>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={formData.requiresApproval}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          requiresApproval: e.target.checked,
-                        })
-                      }
-                      className="w-4 h-4 rounded border-gray-300 text-primary-600"
-                    />
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    الاسم *
                   </label>
-                  <label className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Shield size={16} className="text-indigo-500" />
-                      <span className="text-sm text-gray-700">
-                        الإخلاء/الإرجاع يمر بدورة اعتماد
-                      </span>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={formData.requiresReturnApproval}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          requiresReturnApproval: e.target.checked,
-                        })
-                      }
-                      className="w-4 h-4 rounded border-gray-300 text-primary-600"
-                    />
-                  </label>
-                  <label className="flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <Package size={16} className="text-warning-500" />
-                      <span className="text-sm text-gray-700">
-                        يُخصم من الراتب/التصفية عند الفقد أو التلف
-                      </span>
-                    </div>
-                    <input
-                      type="checkbox"
-                      checked={formData.deductIfLost}
-                      onChange={(e) =>
-                        setFormData({
-                          ...formData,
-                          deductIfLost: e.target.checked,
-                        })
-                      }
-                      className="w-4 h-4 rounded border-gray-300 text-primary-600"
-                    />
-                  </label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) =>
+                      setFormData({ ...formData, name: e.target.value })
+                    }
+                    className="input w-full"
+                    placeholder="مثال: لابتوب"
+                  />
                 </div>
 
                 <label className="flex items-center gap-2">
@@ -505,9 +309,9 @@ export default function AssetTypesPage() {
                 <button
                   onClick={handleSave}
                   className="btn-primary"
-                  disabled={!formData.name}
+                  disabled={!formData.name || saving}
                 >
-                  {editing ? 'حفظ التغييرات' : 'إضافة النوع'}
+                  {saving ? 'جارٍ الحفظ...' : editing ? 'حفظ التغييرات' : 'إضافة النوع'}
                 </button>
               </div>
             </div>

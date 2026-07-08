@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
 import {
@@ -9,272 +9,118 @@ import {
   Search,
   Briefcase,
   Edit,
-  Trash2,
   MoreVertical,
-  Users,
-  Layers,
+  CheckCircle,
+  XCircle,
   Award,
 } from 'lucide-react'
+import { createCatalogItem, fetchCatalog, updateCatalogItem } from '@/lib/api'
 
-// Mock data for job titles
-const initialJobTitles = [
-  {
-    id: '1',
-    name: 'الرئيس التنفيذي',
-    nameEn: 'Chief Executive Officer',
-    code: 'CEO',
-    department: 'الإدارة العليا',
-    grade: 'Grade 10',
-    level: 'executive',
-    employeesCount: 1,
-    description: 'المسؤول الأول عن إدارة الشركة',
-    isActive: true,
-  },
-  {
-    id: '2',
-    name: 'مدير الموارد البشرية',
-    nameEn: 'HR Manager',
-    code: 'HR-MGR',
-    department: 'الموارد البشرية',
-    grade: 'Grade 8',
-    level: 'manager',
-    employeesCount: 1,
-    description: 'إدارة شؤون الموظفين والتوظيف',
-    isActive: true,
-  },
-  {
-    id: '3',
-    name: 'أخصائي موارد بشرية',
-    nameEn: 'HR Specialist',
-    code: 'HR-SP',
-    department: 'الموارد البشرية',
-    grade: 'Grade 5',
-    level: 'professional',
-    employeesCount: 5,
-    description: 'متابعة شؤون الموظفين',
-    isActive: true,
-  },
-  {
-    id: '4',
-    name: 'مدير تقنية المعلومات',
-    nameEn: 'IT Manager',
-    code: 'IT-MGR',
-    department: 'تقنية المعلومات',
-    grade: 'Grade 8',
-    level: 'manager',
-    employeesCount: 1,
-    description: 'إدارة البنية التحتية التقنية',
-    isActive: true,
-  },
-  {
-    id: '5',
-    name: 'مطور برمجيات أول',
-    nameEn: 'Senior Software Developer',
-    code: 'IT-SSD',
-    department: 'تقنية المعلومات',
-    grade: 'Grade 6',
-    level: 'senior',
-    employeesCount: 8,
-    description: 'تطوير وبرمجة الأنظمة',
-    isActive: true,
-  },
-  {
-    id: '6',
-    name: 'مطور برمجيات',
-    nameEn: 'Software Developer',
-    code: 'IT-SD',
-    department: 'تقنية المعلومات',
-    grade: 'Grade 4',
-    level: 'professional',
-    employeesCount: 12,
-    description: 'تطوير وبرمجة الأنظمة',
-    isActive: true,
-  },
-  {
-    id: '7',
-    name: 'محاسب',
-    nameEn: 'Accountant',
-    code: 'FIN-ACC',
-    department: 'المالية',
-    grade: 'Grade 4',
-    level: 'professional',
-    employeesCount: 6,
-    description: 'المحاسبة والتقارير المالية',
-    isActive: true,
-  },
-  {
-    id: '8',
-    name: 'مندوب مبيعات',
-    nameEn: 'Sales Representative',
-    code: 'SALES-REP',
-    department: 'المبيعات',
-    grade: 'Grade 3',
-    level: 'entry',
-    employeesCount: 20,
-    description: 'بيع المنتجات والخدمات',
-    isActive: true,
-  },
-  {
-    id: '9',
-    name: 'مدير مبيعات',
-    nameEn: 'Sales Manager',
-    code: 'SALES-MGR',
-    department: 'المبيعات',
-    grade: 'Grade 7',
-    level: 'manager',
-    employeesCount: 2,
-    description: 'إدارة فريق المبيعات',
-    isActive: true,
-  },
-  {
-    id: '10',
-    name: 'سكرتير تنفيذي',
-    nameEn: 'Executive Secretary',
-    code: 'EXEC-SEC',
-    department: 'الإدارة العليا',
-    grade: 'Grade 4',
-    level: 'professional',
-    employeesCount: 3,
-    description: 'دعم الإدارة التنفيذية',
-    isActive: true,
-  },
-]
-
-const departments = [
-  'الإدارة العليا',
-  'الموارد البشرية',
-  'تقنية المعلومات',
-  'المالية',
-  'المبيعات',
-  'التسويق',
-]
-
-const grades = [
-  'Grade 1',
-  'Grade 2',
-  'Grade 3',
-  'Grade 4',
-  'Grade 5',
-  'Grade 6',
-  'Grade 7',
-  'Grade 8',
-  'Grade 9',
-  'Grade 10',
-]
-
-const levels = [
-  { value: 'entry', label: 'مبتدئ' },
-  { value: 'professional', label: 'متخصص' },
-  { value: 'senior', label: 'أول' },
-  { value: 'manager', label: 'مدير' },
-  { value: 'executive', label: 'تنفيذي' },
-]
-
-const getLevelLabel = (level: string) => {
-  return levels.find((l) => l.value === level)?.label || level
+interface JobTitle {
+  id: number
+  title: string
+  titleEn: string | null
+  isActive: boolean
 }
 
-const getLevelColor = (level: string) => {
-  const colors: Record<string, string> = {
-    entry: 'bg-gray-100 text-gray-600',
-    professional: 'bg-blue-100 text-blue-600',
-    senior: 'bg-purple-100 text-purple-600',
-    manager: 'bg-warning-100 text-warning-600',
-    executive: 'bg-primary-100 text-primary-600',
-  }
-  return colors[level] || 'bg-gray-100 text-gray-600'
+const emptyForm = {
+  title: '',
+  titleEn: '',
+  isActive: true,
 }
 
 export default function JobTitlesPage() {
-  const [jobTitles, setJobTitles] = useState(initialJobTitles)
+  const [jobTitles, setJobTitles] = useState<JobTitle[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
-  const [filterDepartment, setFilterDepartment] = useState('')
-  const [filterLevel, setFilterLevel] = useState('')
   const [showModal, setShowModal] = useState(false)
-  const [editingJob, setEditingJob] = useState<typeof initialJobTitles[0] | null>(null)
-  const [activeMenu, setActiveMenu] = useState<string | null>(null)
+  const [modalError, setModalError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [editingJob, setEditingJob] = useState<JobTitle | null>(null)
+  const [activeMenu, setActiveMenu] = useState<number | null>(null)
+  const [formData, setFormData] = useState({ ...emptyForm })
 
-  const [formData, setFormData] = useState({
-    name: '',
-    nameEn: '',
-    code: '',
-    department: '',
-    grade: '',
-    level: 'professional',
-    description: '',
-    isActive: true,
-  })
+  const loadData = async () => {
+    try {
+      const data = await fetchCatalog<JobTitle>('job-titles')
+      setJobTitles(data)
+      setError(null)
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
 
-  const filteredJobTitles = jobTitles.filter((job) => {
-    const matchesSearch =
-      job.name.includes(searchQuery) ||
-      job.nameEn.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      job.code.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesDepartment = !filterDepartment || job.department === filterDepartment
-    const matchesLevel = !filterLevel || job.level === filterLevel
-    return matchesSearch && matchesDepartment && matchesLevel
-  })
+  useEffect(() => {
+    loadData()
+  }, [])
 
-  const handleOpenModal = (job?: typeof initialJobTitles[0]) => {
+  const filteredJobTitles = jobTitles.filter(
+    (job) =>
+      job.title.includes(searchQuery) ||
+      (job.titleEn ?? '').toLowerCase().includes(searchQuery.toLowerCase())
+  )
+
+  const activeCount = jobTitles.filter((j) => j.isActive).length
+
+  const handleOpenModal = (job?: JobTitle) => {
+    setModalError(null)
     if (job) {
       setEditingJob(job)
       setFormData({
-        name: job.name,
-        nameEn: job.nameEn,
-        code: job.code,
-        department: job.department,
-        grade: job.grade,
-        level: job.level,
-        description: job.description,
+        title: job.title,
+        titleEn: job.titleEn ?? '',
         isActive: job.isActive,
       })
     } else {
       setEditingJob(null)
-      setFormData({
-        name: '',
-        nameEn: '',
-        code: '',
-        department: '',
-        grade: '',
-        level: 'professional',
-        description: '',
-        isActive: true,
-      })
+      setFormData({ ...emptyForm })
     }
     setShowModal(true)
   }
 
-  const handleSave = () => {
-    if (editingJob) {
-      setJobTitles(
-        jobTitles.map((j) =>
-          j.id === editingJob.id ? { ...j, ...formData } : j
+  const handleSave = async () => {
+    setSaving(true)
+    setModalError(null)
+    const payload = {
+      title: formData.title,
+      titleEn: formData.titleEn || undefined,
+      isActive: formData.isActive,
+    }
+    try {
+      if (editingJob) {
+        const updated = await updateCatalogItem<JobTitle>(
+          'job-titles',
+          editingJob.id,
+          payload
         )
-      )
-    } else {
-      const newJob = {
-        id: String(Date.now()),
-        ...formData,
-        employeesCount: 0,
+        setJobTitles(jobTitles.map((j) => (j.id === editingJob.id ? updated : j)))
+      } else {
+        const created = await createCatalogItem<JobTitle>('job-titles', payload)
+        setJobTitles([...jobTitles, created])
       }
-      setJobTitles([...jobTitles, newJob])
+      setShowModal(false)
+    } catch (err: any) {
+      setModalError(err.message)
+    } finally {
+      setSaving(false)
     }
-    setShowModal(false)
   }
 
-  const handleDelete = (id: string) => {
-    const job = jobTitles.find((j) => j.id === id)
-    if (job && job.employeesCount > 0) {
-      alert('لا يمكن حذف مسمى وظيفي مرتبط بموظفين')
-      return
-    }
-    if (confirm('هل أنت متأكد من حذف هذا المسمى الوظيفي؟')) {
-      setJobTitles(jobTitles.filter((j) => j.id !== id))
-    }
+  const toggleActive = async (job: JobTitle) => {
     setActiveMenu(null)
+    try {
+      const updated = await updateCatalogItem<JobTitle>('job-titles', job.id, {
+        isActive: !job.isActive,
+      })
+      setJobTitles(jobTitles.map((j) => (j.id === job.id ? updated : j)))
+      setError(null)
+    } catch (err: any) {
+      setError(err.message)
+    }
   }
-
-  const totalEmployees = jobTitles.reduce((sum, j) => sum + j.employeesCount, 0)
 
   return (
     <MainLayout>
@@ -303,6 +149,9 @@ export default function JobTitlesPage() {
           </button>
         </div>
 
+        {/* Error Banner */}
+        {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
           <div className="card p-4">
@@ -319,23 +168,23 @@ export default function JobTitlesPage() {
           <div className="card p-4">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 bg-success-50 rounded-xl flex items-center justify-center">
-                <Users size={24} className="text-success-500" />
+                <CheckCircle size={24} className="text-success-500" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">إجمالي الموظفين</p>
-                <p className="text-2xl font-bold text-success-600">{totalEmployees}</p>
+                <p className="text-sm text-gray-500">مسميات مفعّلة</p>
+                <p className="text-2xl font-bold text-success-600">{activeCount}</p>
               </div>
             </div>
           </div>
           <div className="card p-4">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 bg-warning-50 rounded-xl flex items-center justify-center">
-                <Layers size={24} className="text-warning-500" />
+                <XCircle size={24} className="text-warning-500" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">الأقسام</p>
+                <p className="text-sm text-gray-500">مسميات معطّلة</p>
                 <p className="text-2xl font-bold text-gray-800">
-                  {new Set(jobTitles.map((j) => j.department)).size}
+                  {jobTitles.length - activeCount}
                 </p>
               </div>
             </div>
@@ -346,9 +195,9 @@ export default function JobTitlesPage() {
                 <Award size={24} className="text-purple-500" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">الوظائف الإدارية</p>
+                <p className="text-sm text-gray-500">بمسمى إنجليزي</p>
                 <p className="text-2xl font-bold text-gray-800">
-                  {jobTitles.filter((j) => j.level === 'manager' || j.level === 'executive').length}
+                  {jobTitles.filter((j) => j.titleEn).length}
                 </p>
               </div>
             </div>
@@ -371,144 +220,131 @@ export default function JobTitlesPage() {
                 className="input pr-10 w-full"
               />
             </div>
-            <select
-              value={filterDepartment}
-              onChange={(e) => setFilterDepartment(e.target.value)}
-              className="input w-48"
-            >
-              <option value="">كل الأقسام</option>
-              {departments.map((dept) => (
-                <option key={dept} value={dept}>
-                  {dept}
-                </option>
-              ))}
-            </select>
-            <select
-              value={filterLevel}
-              onChange={(e) => setFilterLevel(e.target.value)}
-              className="input w-48"
-            >
-              <option value="">كل المستويات</option>
-              {levels.map((level) => (
-                <option key={level.value} value={level.value}>
-                  {level.label}
-                </option>
-              ))}
-            </select>
           </div>
         </div>
 
-        {/* Table */}
-        <div className="card overflow-hidden">
-          <table className="w-full">
-            <thead className="bg-gray-50 border-b border-gray-100">
-              <tr>
-                <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
-                  المسمى الوظيفي
-                </th>
-                <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
-                  الكود
-                </th>
-                <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
-                  القسم
-                </th>
-                <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
-                  الدرجة
-                </th>
-                <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
-                  المستوى
-                </th>
-                <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
-                  الموظفين
-                </th>
-                <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
-                  إجراءات
-                </th>
-              </tr>
-            </thead>
-            <tbody className="divide-y divide-gray-100">
-              {filteredJobTitles.map((job) => (
-                <tr key={job.id} className="hover:bg-gray-50 transition-colors">
-                  <td className="py-4 px-6">
-                    <div className="flex items-center gap-3">
-                      <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
-                        <Briefcase size={20} className="text-primary-600" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-gray-800">{job.name}</p>
-                        <p className="text-sm text-gray-500">{job.nameEn}</p>
-                      </div>
-                    </div>
-                  </td>
-                  <td className="py-4 px-6">
-                    <span className="font-mono text-sm text-primary-600 bg-primary-50 px-2 py-1 rounded">
-                      {job.code}
-                    </span>
-                  </td>
-                  <td className="py-4 px-6 text-gray-600">{job.department}</td>
-                  <td className="py-4 px-6">
-                    <span className="text-sm text-gray-600">{job.grade}</span>
-                  </td>
-                  <td className="py-4 px-6">
-                    <span
-                      className={`px-3 py-1 rounded-full text-xs font-medium ${getLevelColor(
-                        job.level
-                      )}`}
-                    >
-                      {getLevelLabel(job.level)}
-                    </span>
-                  </td>
-                  <td className="py-4 px-6">
-                    <div className="flex items-center gap-1">
-                      <Users size={14} className="text-gray-400" />
-                      <span className="text-gray-600">{job.employeesCount}</span>
-                    </div>
-                  </td>
-                  <td className="py-4 px-6">
-                    <div className="relative">
-                      <button
-                        onClick={() =>
-                          setActiveMenu(activeMenu === job.id ? null : job.id)
-                        }
-                        className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                      >
-                        <MoreVertical size={18} className="text-gray-500" />
-                      </button>
+        {/* Loading */}
+        {loading && (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
 
-                      {activeMenu === job.id && (
-                        <>
-                          <div
-                            className="fixed inset-0 z-10"
-                            onClick={() => setActiveMenu(null)}
-                          />
-                          <div className="absolute left-0 top-full mt-1 w-40 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
-                            <button
-                              onClick={() => {
-                                handleOpenModal(job)
-                                setActiveMenu(null)
-                              }}
-                              className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50"
-                            >
-                              <Edit size={16} />
-                              تعديل
-                            </button>
-                            <button
-                              onClick={() => handleDelete(job.id)}
-                              className="w-full flex items-center gap-2 px-4 py-2 text-danger-600 hover:bg-danger-50"
-                            >
-                              <Trash2 size={16} />
-                              حذف
-                            </button>
-                          </div>
-                        </>
-                      )}
-                    </div>
-                  </td>
+        {/* Table */}
+        {!loading && (
+          <div className="card overflow-hidden">
+            <table className="w-full">
+              <thead className="bg-gray-50 border-b border-gray-100">
+                <tr>
+                  <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
+                    المسمى الوظيفي
+                  </th>
+                  <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
+                    الرقم
+                  </th>
+                  <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
+                    الحالة
+                  </th>
+                  <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
+                    إجراءات
+                  </th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+              </thead>
+              <tbody className="divide-y divide-gray-100">
+                {filteredJobTitles.map((job) => (
+                  <tr key={job.id} className="hover:bg-gray-50 transition-colors">
+                    <td className="py-4 px-6">
+                      <div className="flex items-center gap-3">
+                        <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
+                          <Briefcase size={20} className="text-primary-600" />
+                        </div>
+                        <div>
+                          <p className="font-medium text-gray-800">{job.title}</p>
+                          <p className="text-sm text-gray-500">{job.titleEn ?? ''}</p>
+                        </div>
+                      </div>
+                    </td>
+                    <td className="py-4 px-6">
+                      <span className="font-mono text-sm text-primary-600 bg-primary-50 px-2 py-1 rounded">
+                        #{job.id}
+                      </span>
+                    </td>
+                    <td className="py-4 px-6">
+                      <span
+                        className={`px-3 py-1 rounded-full text-xs font-medium ${
+                          job.isActive
+                            ? 'bg-blue-100 text-blue-600'
+                            : 'bg-gray-100 text-gray-600'
+                        }`}
+                      >
+                        {job.isActive ? 'مفعّل' : 'معطّل'}
+                      </span>
+                    </td>
+                    <td className="py-4 px-6">
+                      <div className="relative">
+                        <button
+                          onClick={() =>
+                            setActiveMenu(activeMenu === job.id ? null : job.id)
+                          }
+                          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                        >
+                          <MoreVertical size={18} className="text-gray-500" />
+                        </button>
+
+                        {activeMenu === job.id && (
+                          <>
+                            <div
+                              className="fixed inset-0 z-10"
+                              onClick={() => setActiveMenu(null)}
+                            />
+                            <div className="absolute left-0 top-full mt-1 w-40 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+                              <button
+                                onClick={() => {
+                                  handleOpenModal(job)
+                                  setActiveMenu(null)
+                                }}
+                                className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50"
+                              >
+                                <Edit size={16} />
+                                تعديل
+                              </button>
+                              <button
+                                onClick={() => toggleActive(job)}
+                                className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50"
+                              >
+                                {job.isActive ? (
+                                  <>
+                                    <XCircle size={16} />
+                                    تعطيل
+                                  </>
+                                ) : (
+                                  <>
+                                    <CheckCircle size={16} />
+                                    تفعيل
+                                  </>
+                                )}
+                              </button>
+                            </div>
+                          </>
+                        )}
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+
+            {filteredJobTitles.length === 0 && (
+              <div className="p-12 text-center">
+                <Briefcase size={48} className="mx-auto text-gray-300 mb-4" />
+                <h3 className="text-lg font-bold text-gray-800 mb-2">
+                  لا توجد مسميات وظيفية
+                </h3>
+                <p className="text-gray-500">أضف أول مسمى وظيفي من الزر أعلاه</p>
+              </div>
+            )}
+          </div>
+        )}
 
         {/* Modal */}
         {showModal && (
@@ -521,6 +357,10 @@ export default function JobTitlesPage() {
               </div>
 
               <div className="p-6 space-y-4">
+                {modalError && (
+                  <div className="bg-red-50 text-red-700 rounded-xl p-4">{modalError}</div>
+                )}
+
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -528,9 +368,9 @@ export default function JobTitlesPage() {
                     </label>
                     <input
                       type="text"
-                      value={formData.name}
+                      value={formData.title}
                       onChange={(e) =>
-                        setFormData({ ...formData, name: e.target.value })
+                        setFormData({ ...formData, title: e.target.value })
                       }
                       className="input w-full"
                       placeholder="مثال: مطور برمجيات"
@@ -542,106 +382,15 @@ export default function JobTitlesPage() {
                     </label>
                     <input
                       type="text"
-                      value={formData.nameEn}
+                      value={formData.titleEn}
                       onChange={(e) =>
-                        setFormData({ ...formData, nameEn: e.target.value })
+                        setFormData({ ...formData, titleEn: e.target.value })
                       }
                       className="input w-full"
                       placeholder="e.g. Software Developer"
                       dir="ltr"
                     />
                   </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      الكود *
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.code}
-                      onChange={(e) =>
-                        setFormData({ ...formData, code: e.target.value.toUpperCase() })
-                      }
-                      className="input w-full font-mono"
-                      placeholder="مثال: IT-SD"
-                      dir="ltr"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      القسم *
-                    </label>
-                    <select
-                      value={formData.department}
-                      onChange={(e) =>
-                        setFormData({ ...formData, department: e.target.value })
-                      }
-                      className="input w-full"
-                    >
-                      <option value="">اختر القسم</option>
-                      {departments.map((dept) => (
-                        <option key={dept} value={dept}>
-                          {dept}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      الدرجة الوظيفية
-                    </label>
-                    <select
-                      value={formData.grade}
-                      onChange={(e) =>
-                        setFormData({ ...formData, grade: e.target.value })
-                      }
-                      className="input w-full"
-                    >
-                      <option value="">اختر الدرجة</option>
-                      {grades.map((grade) => (
-                        <option key={grade} value={grade}>
-                          {grade}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      المستوى الوظيفي
-                    </label>
-                    <select
-                      value={formData.level}
-                      onChange={(e) =>
-                        setFormData({ ...formData, level: e.target.value })
-                      }
-                      className="input w-full"
-                    >
-                      {levels.map((level) => (
-                        <option key={level.value} value={level.value}>
-                          {level.label}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    الوصف الوظيفي
-                  </label>
-                  <textarea
-                    value={formData.description}
-                    onChange={(e) =>
-                      setFormData({ ...formData, description: e.target.value })
-                    }
-                    className="input w-full h-24 resize-none"
-                    placeholder="وصف المهام والمسؤوليات..."
-                  />
                 </div>
 
                 <label className="flex items-center gap-2">
@@ -664,8 +413,12 @@ export default function JobTitlesPage() {
                 >
                   إلغاء
                 </button>
-                <button onClick={handleSave} className="btn-primary">
-                  {editingJob ? 'حفظ التغييرات' : 'إضافة المسمى'}
+                <button
+                  onClick={handleSave}
+                  className="btn-primary"
+                  disabled={!formData.title || saving}
+                >
+                  {saving ? 'جارٍ الحفظ...' : editingJob ? 'حفظ التغييرات' : 'إضافة المسمى'}
                 </button>
               </div>
             </div>

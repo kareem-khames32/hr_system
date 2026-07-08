@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
 import {
@@ -9,256 +9,124 @@ import {
   Search,
   Award,
   Edit,
-  Trash2,
   MoreVertical,
-  Users,
   TrendingUp,
   DollarSign,
-  Briefcase,
+  CheckCircle,
+  XCircle,
 } from 'lucide-react'
+import { createCatalogItem, fetchCatalog, updateCatalogItem } from '@/lib/api'
 
-// Mock data for grades
-const initialGrades = [
-  {
-    id: '1',
-    name: 'Grade 1',
-    nameAr: 'الدرجة الأولى',
-    level: 1,
-    minSalary: 3000,
-    maxSalary: 5000,
-    jobTitlesCount: 2,
-    employeesCount: 15,
-    description: 'وظائف المستوى الأول - موظفين جدد',
-    benefits: ['تأمين طبي أساسي', 'إجازة سنوية 21 يوم'],
-    isActive: true,
-  },
-  {
-    id: '2',
-    name: 'Grade 2',
-    nameAr: 'الدرجة الثانية',
-    level: 2,
-    minSalary: 5000,
-    maxSalary: 7000,
-    jobTitlesCount: 3,
-    employeesCount: 22,
-    description: 'وظائف المستوى الثاني',
-    benefits: ['تأمين طبي أساسي', 'إجازة سنوية 21 يوم', 'بدل مواصلات'],
-    isActive: true,
-  },
-  {
-    id: '3',
-    name: 'Grade 3',
-    nameAr: 'الدرجة الثالثة',
-    level: 3,
-    minSalary: 7000,
-    maxSalary: 10000,
-    jobTitlesCount: 4,
-    employeesCount: 28,
-    description: 'وظائف المستوى الثالث',
-    benefits: ['تأمين طبي شامل', 'إجازة سنوية 25 يوم', 'بدل مواصلات', 'بدل هاتف'],
-    isActive: true,
-  },
-  {
-    id: '4',
-    name: 'Grade 4',
-    nameAr: 'الدرجة الرابعة',
-    level: 4,
-    minSalary: 10000,
-    maxSalary: 14000,
-    jobTitlesCount: 5,
-    employeesCount: 18,
-    description: 'متخصصين',
-    benefits: ['تأمين طبي شامل للعائلة', 'إجازة سنوية 25 يوم', 'بدل مواصلات', 'بدل هاتف'],
-    isActive: true,
-  },
-  {
-    id: '5',
-    name: 'Grade 5',
-    nameAr: 'الدرجة الخامسة',
-    level: 5,
-    minSalary: 14000,
-    maxSalary: 18000,
-    jobTitlesCount: 4,
-    employeesCount: 12,
-    description: 'متخصصين أول',
-    benefits: ['تأمين طبي شامل للعائلة', 'إجازة سنوية 30 يوم', 'بدل سكن', 'بدل مواصلات', 'بدل هاتف'],
-    isActive: true,
-  },
-  {
-    id: '6',
-    name: 'Grade 6',
-    nameAr: 'الدرجة السادسة',
-    level: 6,
-    minSalary: 18000,
-    maxSalary: 24000,
-    jobTitlesCount: 3,
-    employeesCount: 8,
-    description: 'مشرفين وقادة فرق',
-    benefits: ['تأمين طبي VIP', 'إجازة سنوية 30 يوم', 'بدل سكن', 'سيارة شركة', 'بدل تعليم'],
-    isActive: true,
-  },
-  {
-    id: '7',
-    name: 'Grade 7',
-    nameAr: 'الدرجة السابعة',
-    level: 7,
-    minSalary: 24000,
-    maxSalary: 32000,
-    jobTitlesCount: 2,
-    employeesCount: 5,
-    description: 'مدراء أقسام',
-    benefits: ['تأمين طبي VIP', 'إجازة سنوية 30 يوم', 'بدل سكن', 'سيارة شركة', 'بدل تعليم', 'تذاكر سفر'],
-    isActive: true,
-  },
-  {
-    id: '8',
-    name: 'Grade 8',
-    nameAr: 'الدرجة الثامنة',
-    level: 8,
-    minSalary: 32000,
-    maxSalary: 45000,
-    jobTitlesCount: 2,
-    employeesCount: 4,
-    description: 'مدراء إدارات',
-    benefits: ['تأمين طبي VIP', 'إجازة سنوية 35 يوم', 'بدل سكن', 'سيارة فاخرة', 'بدل تعليم', 'تذاكر سفر درجة أعمال'],
-    isActive: true,
-  },
-  {
-    id: '9',
-    name: 'Grade 9',
-    nameAr: 'الدرجة التاسعة',
-    level: 9,
-    minSalary: 45000,
-    maxSalary: 60000,
-    jobTitlesCount: 1,
-    employeesCount: 2,
-    description: 'المدراء التنفيذيين',
-    benefits: ['تأمين طبي دولي', 'إجازة سنوية 35 يوم', 'سكن مؤثث', 'سيارة فاخرة مع سائق', 'تعليم الأبناء', 'تذاكر سفر درجة أولى'],
-    isActive: true,
-  },
-  {
-    id: '10',
-    name: 'Grade 10',
-    nameAr: 'الدرجة العاشرة',
-    level: 10,
-    minSalary: 60000,
-    maxSalary: 100000,
-    jobTitlesCount: 1,
-    employeesCount: 1,
-    description: 'الإدارة العليا',
-    benefits: ['تأمين طبي دولي VIP', 'إجازة مفتوحة', 'سكن فاخر', 'سيارة فاخرة مع سائق', 'تعليم الأبناء', 'تذاكر سفر درجة أولى', 'مكافأة سنوية'],
-    isActive: true,
-  },
-]
+interface Grade {
+  id: number
+  name: string
+  minSalary: number
+  maxSalary: number
+  isActive: boolean
+}
+
+const emptyForm = {
+  name: '',
+  minSalary: '',
+  maxSalary: '',
+  isActive: true,
+}
 
 export default function GradesPage() {
-  const [grades, setGrades] = useState(initialGrades)
+  const [grades, setGrades] = useState<Grade[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [showModal, setShowModal] = useState(false)
-  const [editingGrade, setEditingGrade] = useState<typeof initialGrades[0] | null>(null)
-  const [activeMenu, setActiveMenu] = useState<string | null>(null)
+  const [modalError, setModalError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
+  const [editingGrade, setEditingGrade] = useState<Grade | null>(null)
+  const [activeMenu, setActiveMenu] = useState<number | null>(null)
+  const [formData, setFormData] = useState({ ...emptyForm })
 
-  const [formData, setFormData] = useState({
-    name: '',
-    nameAr: '',
-    level: 1,
-    minSalary: 0,
-    maxSalary: 0,
-    description: '',
-    benefits: [] as string[],
-    isActive: true,
-  })
-  const [newBenefit, setNewBenefit] = useState('')
+  const loadData = async () => {
+    try {
+      const data = await fetchCatalog<Grade>('grades')
+      setGrades(data)
+      setError(null)
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setLoading(false)
+    }
+  }
 
-  const filteredGrades = grades.filter(
-    (grade) =>
-      grade.name.toLowerCase().includes(searchQuery.toLowerCase()) ||
-      grade.nameAr.includes(searchQuery)
-  )
+  useEffect(() => {
+    loadData()
+  }, [])
 
-  const handleOpenModal = (grade?: typeof initialGrades[0]) => {
+  const filteredGrades = grades.filter((grade) => grade.name.includes(searchQuery))
+
+  const activeCount = grades.filter((g) => g.isActive).length
+  const avgSalary =
+    grades.length > 0
+      ? Math.round(
+          grades.reduce((sum, g) => sum + (Number(g.minSalary) + Number(g.maxSalary)) / 2, 0) /
+            grades.length
+        )
+      : 0
+  const maxSalary =
+    grades.length > 0 ? Math.max(...grades.map((g) => Number(g.maxSalary))) : 0
+
+  const handleOpenModal = (grade?: Grade) => {
+    setModalError(null)
     if (grade) {
       setEditingGrade(grade)
       setFormData({
         name: grade.name,
-        nameAr: grade.nameAr,
-        level: grade.level,
-        minSalary: grade.minSalary,
-        maxSalary: grade.maxSalary,
-        description: grade.description,
-        benefits: [...grade.benefits],
+        minSalary: String(grade.minSalary),
+        maxSalary: String(grade.maxSalary),
         isActive: grade.isActive,
       })
     } else {
       setEditingGrade(null)
-      setFormData({
-        name: '',
-        nameAr: '',
-        level: grades.length + 1,
-        minSalary: 0,
-        maxSalary: 0,
-        description: '',
-        benefits: [],
-        isActive: true,
-      })
+      setFormData({ ...emptyForm })
     }
     setShowModal(true)
   }
 
-  const handleSave = () => {
-    if (editingGrade) {
-      setGrades(
-        grades.map((g) =>
-          g.id === editingGrade.id
-            ? { ...g, ...formData }
-            : g
-        )
-      )
-    } else {
-      const newGrade = {
-        id: String(Date.now()),
-        ...formData,
-        jobTitlesCount: 0,
-        employeesCount: 0,
+  const handleSave = async () => {
+    setSaving(true)
+    setModalError(null)
+    const payload = {
+      name: formData.name,
+      minSalary: Number(formData.minSalary) || 0,
+      maxSalary: Number(formData.maxSalary) || 0,
+      isActive: formData.isActive,
+    }
+    try {
+      if (editingGrade) {
+        const updated = await updateCatalogItem<Grade>('grades', editingGrade.id, payload)
+        setGrades(grades.map((g) => (g.id === editingGrade.id ? updated : g)))
+      } else {
+        const created = await createCatalogItem<Grade>('grades', payload)
+        setGrades([...grades, created])
       }
-      setGrades([...grades, newGrade])
+      setShowModal(false)
+    } catch (err: any) {
+      setModalError(err.message)
+    } finally {
+      setSaving(false)
     }
-    setShowModal(false)
   }
 
-  const handleDelete = (id: string) => {
-    const grade = grades.find((g) => g.id === id)
-    if (grade && grade.employeesCount > 0) {
-      alert('لا يمكن حذف درجة مرتبطة بموظفين')
-      return
-    }
-    if (confirm('هل أنت متأكد من حذف هذه الدرجة الوظيفية؟')) {
-      setGrades(grades.filter((g) => g.id !== id))
-    }
+  const toggleActive = async (grade: Grade) => {
     setActiveMenu(null)
-  }
-
-  const addBenefit = () => {
-    if (newBenefit.trim()) {
-      setFormData({
-        ...formData,
-        benefits: [...formData.benefits, newBenefit.trim()],
+    try {
+      const updated = await updateCatalogItem<Grade>('grades', grade.id, {
+        isActive: !grade.isActive,
       })
-      setNewBenefit('')
+      setGrades(grades.map((g) => (g.id === grade.id ? updated : g)))
+      setError(null)
+    } catch (err: any) {
+      setError(err.message)
     }
   }
-
-  const removeBenefit = (index: number) => {
-    setFormData({
-      ...formData,
-      benefits: formData.benefits.filter((_, i) => i !== index),
-    })
-  }
-
-  const totalEmployees = grades.reduce((sum, g) => sum + g.employeesCount, 0)
-  const avgSalary = Math.round(
-    grades.reduce((sum, g) => sum + (g.minSalary + g.maxSalary) / 2, 0) / grades.length
-  )
 
   return (
     <MainLayout>
@@ -287,6 +155,9 @@ export default function GradesPage() {
           </button>
         </div>
 
+        {/* Error Banner */}
+        {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
           <div className="card p-4">
@@ -303,11 +174,11 @@ export default function GradesPage() {
           <div className="card p-4">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 bg-success-50 rounded-xl flex items-center justify-center">
-                <Users size={24} className="text-success-500" />
+                <CheckCircle size={24} className="text-success-500" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">إجمالي الموظفين</p>
-                <p className="text-2xl font-bold text-success-600">{totalEmployees}</p>
+                <p className="text-sm text-gray-500">درجات مفعّلة</p>
+                <p className="text-2xl font-bold text-success-600">{activeCount}</p>
               </div>
             </div>
           </div>
@@ -332,7 +203,7 @@ export default function GradesPage() {
               <div>
                 <p className="text-sm text-gray-500">أعلى راتب</p>
                 <p className="text-2xl font-bold text-gray-800">
-                  {Math.max(...grades.map((g) => g.maxSalary)).toLocaleString()} <span className="text-sm text-gray-500">ر.س</span>
+                  {maxSalary.toLocaleString()} <span className="text-sm text-gray-500">ر.س</span>
                 </p>
               </div>
             </div>
@@ -356,125 +227,136 @@ export default function GradesPage() {
           </div>
         </div>
 
+        {/* Loading */}
+        {loading && (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
+
         {/* Grades Grid */}
-        <div className="grid grid-cols-2 gap-6">
-          {filteredGrades.map((grade) => (
-            <div key={grade.id} className="card p-6 relative">
-              {/* Actions */}
-              <div className="absolute top-4 left-4">
-                <button
-                  onClick={() =>
-                    setActiveMenu(activeMenu === grade.id ? null : grade.id)
-                  }
-                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                >
-                  <MoreVertical size={18} className="text-gray-500" />
-                </button>
+        {!loading && (
+          <div className="grid grid-cols-2 gap-6">
+            {filteredGrades.map((grade, index) => (
+              <div
+                key={grade.id}
+                className={`card p-6 relative ${!grade.isActive ? 'opacity-60' : ''}`}
+              >
+                {/* Actions */}
+                <div className="absolute top-4 left-4">
+                  <button
+                    onClick={() =>
+                      setActiveMenu(activeMenu === grade.id ? null : grade.id)
+                    }
+                    className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                  >
+                    <MoreVertical size={18} className="text-gray-500" />
+                  </button>
 
-                {activeMenu === grade.id && (
-                  <>
-                    <div
-                      className="fixed inset-0 z-10"
-                      onClick={() => setActiveMenu(null)}
-                    />
-                    <div className="absolute left-0 top-full mt-1 w-40 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
-                      <button
-                        onClick={() => {
-                          handleOpenModal(grade)
-                          setActiveMenu(null)
-                        }}
-                        className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50"
-                      >
-                        <Edit size={16} />
-                        تعديل
-                      </button>
-                      <button
-                        onClick={() => handleDelete(grade.id)}
-                        className="w-full flex items-center gap-2 px-4 py-2 text-danger-600 hover:bg-danger-50"
-                      >
-                        <Trash2 size={16} />
-                        حذف
-                      </button>
-                    </div>
-                  </>
-                )}
-              </div>
-
-              {/* Header */}
-              <div className="flex items-start gap-4">
-                <div className="w-14 h-14 bg-gradient-to-br from-primary-400 to-primary-600 rounded-2xl flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-primary-500/30">
-                  {grade.level}
-                </div>
-                <div>
-                  <h3 className="font-bold text-gray-800 text-lg">{grade.name}</h3>
-                  <p className="text-gray-500">{grade.nameAr}</p>
-                  <p className="text-sm text-gray-400 mt-1">{grade.description}</p>
-                </div>
-              </div>
-
-              {/* Salary Range */}
-              <div className="mt-6 p-4 bg-gray-50 rounded-xl">
-                <p className="text-sm text-gray-500 mb-2">نطاق الراتب</p>
-                <div className="flex items-center justify-between">
-                  <div>
-                    <span className="text-2xl font-bold text-gray-800">
-                      {grade.minSalary.toLocaleString()}
-                    </span>
-                    <span className="text-gray-500 text-sm mr-1">ر.س</span>
-                  </div>
-                  <div className="flex-1 mx-4">
-                    <div className="h-2 bg-gray-200 rounded-full">
+                  {activeMenu === grade.id && (
+                    <>
                       <div
-                        className="h-full bg-gradient-to-l from-primary-500 to-primary-300 rounded-full"
-                        style={{ width: '100%' }}
+                        className="fixed inset-0 z-10"
+                        onClick={() => setActiveMenu(null)}
                       />
-                    </div>
-                  </div>
-                  <div>
-                    <span className="text-2xl font-bold text-primary-600">
-                      {grade.maxSalary.toLocaleString()}
-                    </span>
-                    <span className="text-gray-500 text-sm mr-1">ر.س</span>
-                  </div>
-                </div>
-              </div>
-
-              {/* Benefits */}
-              <div className="mt-4">
-                <p className="text-sm text-gray-500 mb-2">المزايا والبدلات</p>
-                <div className="flex flex-wrap gap-2">
-                  {grade.benefits.slice(0, 4).map((benefit, index) => (
-                    <span
-                      key={index}
-                      className="px-3 py-1 bg-primary-50 text-primary-600 rounded-full text-xs"
-                    >
-                      {benefit}
-                    </span>
-                  ))}
-                  {grade.benefits.length > 4 && (
-                    <span className="px-3 py-1 bg-gray-100 text-gray-500 rounded-full text-xs">
-                      +{grade.benefits.length - 4} مزايا أخرى
-                    </span>
+                      <div className="absolute left-0 top-full mt-1 w-40 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+                        <button
+                          onClick={() => {
+                            handleOpenModal(grade)
+                            setActiveMenu(null)
+                          }}
+                          className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50"
+                        >
+                          <Edit size={16} />
+                          تعديل
+                        </button>
+                        <button
+                          onClick={() => toggleActive(grade)}
+                          className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50"
+                        >
+                          {grade.isActive ? (
+                            <>
+                              <XCircle size={16} />
+                              تعطيل
+                            </>
+                          ) : (
+                            <>
+                              <CheckCircle size={16} />
+                              تفعيل
+                            </>
+                          )}
+                        </button>
+                      </div>
+                    </>
                   )}
                 </div>
-              </div>
 
-              {/* Stats */}
-              <div className="mt-6 pt-4 border-t border-gray-100 flex items-center gap-6">
-                <div className="flex items-center gap-2">
-                  <Briefcase size={16} className="text-gray-400" />
-                  <span className="text-sm text-gray-600">
-                    {grade.jobTitlesCount} مسميات وظيفية
+                {/* Header */}
+                <div className="flex items-start gap-4">
+                  <div className="w-14 h-14 bg-gradient-to-br from-primary-400 to-primary-600 rounded-2xl flex items-center justify-center text-white font-bold text-xl shadow-lg shadow-primary-500/30">
+                    {index + 1}
+                  </div>
+                  <div>
+                    <h3 className="font-bold text-gray-800 text-lg">{grade.name}</h3>
+                    <p className="text-sm text-gray-400 mt-1">
+                      {grade.isActive ? 'درجة مفعّلة' : 'درجة معطّلة'}
+                    </p>
+                  </div>
+                </div>
+
+                {/* Salary Range */}
+                <div className="mt-6 p-4 bg-gray-50 rounded-xl">
+                  <p className="text-sm text-gray-500 mb-2">نطاق الراتب</p>
+                  <div className="flex items-center justify-between">
+                    <div>
+                      <span className="text-2xl font-bold text-gray-800">
+                        {Number(grade.minSalary).toLocaleString()}
+                      </span>
+                      <span className="text-gray-500 text-sm mr-1">ر.س</span>
+                    </div>
+                    <div className="flex-1 mx-4">
+                      <div className="h-2 bg-gray-200 rounded-full">
+                        <div
+                          className="h-full bg-gradient-to-l from-primary-500 to-primary-300 rounded-full"
+                          style={{ width: '100%' }}
+                        />
+                      </div>
+                    </div>
+                    <div>
+                      <span className="text-2xl font-bold text-primary-600">
+                        {Number(grade.maxSalary).toLocaleString()}
+                      </span>
+                      <span className="text-gray-500 text-sm mr-1">ر.س</span>
+                    </div>
+                  </div>
+                </div>
+
+                {/* Stats */}
+                <div className="mt-6 pt-4 border-t border-gray-100 flex items-center gap-6">
+                  <div className="flex items-center gap-2">
+                    <Award size={16} className="text-gray-400" />
+                    <span className="text-sm text-gray-600">درجة رقم {grade.id}</span>
+                  </div>
+                  <span
+                    className={`badge text-xs ${
+                      grade.isActive ? 'badge-success' : 'badge-danger'
+                    }`}
+                  >
+                    {grade.isActive ? 'مفعّلة' : 'معطّلة'}
                   </span>
                 </div>
-                <div className="flex items-center gap-2">
-                  <Users size={16} className="text-gray-400" />
-                  <span className="text-sm text-gray-600">{grade.employeesCount} موظف</span>
-                </div>
               </div>
-            </div>
-          ))}
-        </div>
+            ))}
+          </div>
+        )}
+
+        {!loading && filteredGrades.length === 0 && (
+          <div className="card p-12 text-center">
+            <Award size={48} className="mx-auto text-gray-300 mb-4" />
+            <h3 className="text-lg font-bold text-gray-800 mb-2">لا توجد درجات وظيفية</h3>
+            <p className="text-gray-500">أضف أول درجة وظيفية من الزر أعلاه</p>
+          </div>
+        )}
 
         {/* Modal */}
         {showModal && (
@@ -487,51 +369,23 @@ export default function GradesPage() {
               </div>
 
               <div className="p-6 space-y-4">
-                <div className="grid grid-cols-3 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      الاسم (إنجليزي) *
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.name}
-                      onChange={(e) =>
-                        setFormData({ ...formData, name: e.target.value })
-                      }
-                      className="input w-full"
-                      placeholder="e.g. Grade 1"
-                      dir="ltr"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      الاسم (عربي) *
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.nameAr}
-                      onChange={(e) =>
-                        setFormData({ ...formData, nameAr: e.target.value })
-                      }
-                      className="input w-full"
-                      placeholder="مثال: الدرجة الأولى"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      المستوى *
-                    </label>
-                    <input
-                      type="number"
-                      value={formData.level}
-                      onChange={(e) =>
-                        setFormData({ ...formData, level: parseInt(e.target.value) || 1 })
-                      }
-                      className="input w-full"
-                      min={1}
-                      max={20}
-                    />
-                  </div>
+                {modalError && (
+                  <div className="bg-red-50 text-red-700 rounded-xl p-4">{modalError}</div>
+                )}
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    اسم الدرجة *
+                  </label>
+                  <input
+                    type="text"
+                    value={formData.name}
+                    onChange={(e) =>
+                      setFormData({ ...formData, name: e.target.value })
+                    }
+                    className="input w-full"
+                    placeholder="مثال: الدرجة الأولى"
+                  />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
@@ -543,7 +397,7 @@ export default function GradesPage() {
                       type="number"
                       value={formData.minSalary}
                       onChange={(e) =>
-                        setFormData({ ...formData, minSalary: parseInt(e.target.value) || 0 })
+                        setFormData({ ...formData, minSalary: e.target.value })
                       }
                       className="input w-full"
                       min={0}
@@ -557,64 +411,11 @@ export default function GradesPage() {
                       type="number"
                       value={formData.maxSalary}
                       onChange={(e) =>
-                        setFormData({ ...formData, maxSalary: parseInt(e.target.value) || 0 })
+                        setFormData({ ...formData, maxSalary: e.target.value })
                       }
                       className="input w-full"
                       min={0}
                     />
-                  </div>
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    الوصف
-                  </label>
-                  <input
-                    type="text"
-                    value={formData.description}
-                    onChange={(e) =>
-                      setFormData({ ...formData, description: e.target.value })
-                    }
-                    className="input w-full"
-                    placeholder="وصف مختصر للدرجة..."
-                  />
-                </div>
-
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    المزايا والبدلات
-                  </label>
-                  <div className="flex gap-2 mb-2">
-                    <input
-                      type="text"
-                      value={newBenefit}
-                      onChange={(e) => setNewBenefit(e.target.value)}
-                      className="input flex-1"
-                      placeholder="أضف ميزة..."
-                      onKeyPress={(e) => e.key === 'Enter' && addBenefit()}
-                    />
-                    <button
-                      onClick={addBenefit}
-                      className="btn-secondary px-4"
-                    >
-                      إضافة
-                    </button>
-                  </div>
-                  <div className="flex flex-wrap gap-2">
-                    {formData.benefits.map((benefit, index) => (
-                      <span
-                        key={index}
-                        className="px-3 py-1 bg-primary-50 text-primary-600 rounded-full text-sm flex items-center gap-2"
-                      >
-                        {benefit}
-                        <button
-                          onClick={() => removeBenefit(index)}
-                          className="hover:text-danger-600"
-                        >
-                          ×
-                        </button>
-                      </span>
-                    ))}
                   </div>
                 </div>
 
@@ -638,8 +439,12 @@ export default function GradesPage() {
                 >
                   إلغاء
                 </button>
-                <button onClick={handleSave} className="btn-primary">
-                  {editingGrade ? 'حفظ التغييرات' : 'إضافة الدرجة'}
+                <button
+                  onClick={handleSave}
+                  className="btn-primary"
+                  disabled={!formData.name || saving}
+                >
+                  {saving ? 'جارٍ الحفظ...' : editingGrade ? 'حفظ التغييرات' : 'إضافة الدرجة'}
                 </button>
               </div>
             </div>
