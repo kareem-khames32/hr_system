@@ -8,6 +8,9 @@ import {
 
 // ============ وجهة العهدة والأصول ============
 
+// حالة الأصل في المخزون: متاح → مُسنَد → متقاعد (تالف/مفقود/مستهلك)
+export type AssetStatus = 'AVAILABLE' | 'ASSIGNED' | 'RETIRED'
+
 @Entity('assets')
 export class Asset {
   @PrimaryGeneratedColumn()
@@ -21,6 +24,13 @@ export class Asset {
 
   @Column({ length: 100, nullable: true })
   serialNumber: string
+
+  // قيمة الأصل (اختيارية) — تغذي خصم «عهدة لم تُرجَع» في التصفية
+  @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
+  value: number
+
+  @Column({ length: 20, default: 'AVAILABLE' })
+  status: AssetStatus
 
   // مين ماسك الأصل دلوقتي
   @Column({ nullable: true })

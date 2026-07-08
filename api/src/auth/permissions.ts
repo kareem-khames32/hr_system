@@ -18,6 +18,7 @@ export const PERMISSIONS: Record<string, string> = {
   'roles.manage': 'إدارة الأدوار والصلاحيات',
   // الطلبات
   'requests.view_all': 'كونسول الطلبات (سجل النطاق كاملاً)',
+  'requests.create_on_behalf': 'تقديم طلبات نيابة عن أي موظف',
   // خطوات الاعتماد الوظيفية (تُستخدم في حل خطوات الدورات)
   'approve.hr': 'اعتماد خطوات الموارد البشرية',
   'approve.finance': 'اعتماد خطوات المالية',
@@ -79,7 +80,7 @@ export const ROLE_PRESETS: Array<{
     permissions: [
       'employees.view', 'employees.create', 'employees.edit', 'employees.archive',
       'org.manage', 'users.manage',
-      'requests.view_all', 'approve.hr',
+      'requests.view_all', 'requests.create_on_behalf', 'approve.hr',
       'attendance.view_all', 'attendance.manage', 'attendance.sync', 'overtime.confirm',
       'leaves.view_all', 'leave_balances.manage',
       'payroll.view', 'payroll.calculate', 'payroll.approve', 'payroll.pay',

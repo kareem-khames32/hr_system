@@ -40,6 +40,8 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import {
   AttendanceDay,
   AttendancePunch,
+  PermissionType,
+  ScheduleDayOverride,
   ScheduleEntry,
 } from '../attendance/attendance.entities'
 import {
@@ -102,6 +104,8 @@ const common = {
     // الحضور
     AttendancePunch,
     ScheduleEntry,
+    ScheduleDayOverride,
+    PermissionType,
     AttendanceDay,
     // الرواتب
     PayrollRun,
@@ -337,6 +341,21 @@ async function main() {
     ])
     console.log('✓ أنواع الأصول')
   }
+  // أنواع الإذن الافتراضية (بدون خصم هو المعتاد)
+  const permTypesRepo = ds.getRepository(PermissionType)
+  if ((await permTypesRepo.count()) === 0) {
+    await permTypesRepo.save([
+      { nameAr: 'إذن شخصي (بدون خصم)', isDeductible: false, maxDurationMinutes: 180 },
+      { nameAr: 'إذن رسمي/مأمورية قصيرة', isDeductible: false },
+      { nameAr: 'إذن بخصم', isDeductible: true, maxDurationMinutes: 240 },
+    ])
+    console.log('✓ أنواع الإذن')
+  }
+  // ترحيل بيانات: الإجازات القديمة غير المدفوعة تتعلم isUnpaid
+  await ds.query(
+    `UPDATE leaves SET isUnpaid = 1 WHERE leaveType = 'UNPAID' AND isUnpaid = 0`
+  )
+
   const gradesRepo = ds.getRepository(Grade)
   if ((await gradesRepo.count()) === 0) {
     await gradesRepo.save([
@@ -360,6 +379,20 @@ async function main() {
           isSystem: preset.isSystem,
         })
       )
+    } else if (existing.isSystem) {
+      // مفاتيح جديدة في الـ preset تُضاف للحزمة (union) — تعديلات المستخدم تبقى
+      try {
+        const current: string[] = JSON.parse(existing.permissions)
+        if (!current.includes('*')) {
+          const merged = [...new Set([...current, ...preset.permissions])]
+          if (merged.length !== current.length) {
+            existing.permissions = JSON.stringify(merged)
+            await rolesRepo.save(existing)
+          }
+        }
+      } catch {
+        /* حزمة تالفة — تُترك */
+      }
     }
   }
   console.log('✓ الأدوار الأساسية (حزم الصلاحيات)')

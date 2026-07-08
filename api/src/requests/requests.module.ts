@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
+import { AttendanceModule } from '../attendance/attendance.module'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
@@ -31,6 +32,7 @@ import { RequestsService } from './requests.service'
 
 @Module({
   imports: [
+    AttendanceModule,
     TypeOrmModule.forFeature([
       // المحرك
       RequestType,

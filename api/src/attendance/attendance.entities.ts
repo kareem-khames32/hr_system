@@ -58,6 +58,28 @@ export class ScheduleEntry {
   endTime: string // HH:mm
 }
 
+// أنواع الإذن: «بدون خصم» يعذر التأخير مجاناً (الافتراضي)،
+// «بخصم» يعذره من الغياب لكن دقائق التأخير المتداخلة تُسجل للخصم بالمسير
+@Entity('permission_types')
+export class PermissionType {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Index({ unique: true })
+  @Column({ length: 100 })
+  nameAr: string
+
+  @Column({ default: false })
+  isDeductible: boolean
+
+  // أقصى مدة للإذن بالدقائق (NULL = بلا حد)
+  @Column({ nullable: true })
+  maxDurationMinutes: number
+
+  @Column({ default: true })
+  isActive: boolean
+}
+
 // تجاوز وردية يوم بعينه — يتقدم على وردية الأسبوع (حالة خاصة/يوم استثنائي)
 @Entity('schedule_day_overrides')
 @Unique(['employeeId', 'date'])
@@ -88,7 +110,8 @@ export type AttendanceStatus =
   | 'late'
   | 'absent'
   | 'early_leave'
-  | 'leave' // في إجازة معتمدة
+  | 'leave' // في إجازة معتمدة (يوم كامل)
+  | 'partial_leave' // إجازة نصف يوم — الفترة المغطاة بلا تأخير
   | 'holiday' // عطلة رسمية
 
 // اليوم المحسوب: البصمة مقابل وردية اليوم + فترة السماح
@@ -133,9 +156,13 @@ export class AttendanceDay {
   @Column({ default: 0 })
   earlyLeaveMinutes: number
 
-  // دقائق معذورة بإذن معتمد — لا تُخصم في المسير
+  // دقائق معذورة بإذن معتمد «بدون خصم» أو إجازة جزئية — لا تُخصم
   @Column({ default: 0 })
   excusedMinutes: number
+
+  // دقائق متأخرة غطاها إذن «بخصم» — لا تُحسب غياباً لكنها تُخصم بالمسير
+  @Column({ default: 0 })
+  deductibleMinutes: number
 
   @Column({ default: 0 })
   workMinutes: number

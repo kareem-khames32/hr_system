@@ -124,28 +124,36 @@ export class PayrollService {
         )
       )
 
-      // 2) خصم التأخير من أيام الحضور المحسوبة
+      // 2) خصم التأخير: الدقائق غير المعذورة + دقائق الإذن «بخصم»
+      // (المعذور بإذن بدون خصم أو إجازة جزئية لا يُخصم)
       const attRows = await this.attendance.find({
         where: { employeeId: emp.id, date: Between(startDate, endDate) },
       })
-      const lateMinutes = attRows.reduce((s, r) => s + r.lateMinutes, 0)
+      const lateMinutes = attRows.reduce(
+        (s, r) => s + r.lateMinutes + (r.deductibleMinutes ?? 0),
+        0
+      )
       const latenessDeduction = lateEnabled
         ? round2(lateMinutes * minuteRate)
         : 0
 
-      // 3) الإجازات بدون راتب المتقاطعة مع الفترة
+      // 3) الإجازات غير المدفوعة (isUnpaid من تعريف النوع — أي نوع
+      // غير مدفوع يُخصم يوم بيوم، بلا سياسة غياب) المتقاطعة مع الفترة
       const unpaidLeaves = await this.leaves.find({
-        where: { employeeId: emp.id, leaveType: 'UNPAID', status: 'APPROVED' },
+        where: { employeeId: emp.id, isUnpaid: true, status: 'APPROVED' },
       })
       let unpaidDays = 0
       for (const lv of unpaidLeaves) {
         const from = lv.fromDate < startDate ? startDate : lv.fromDate
         const to = lv.toDate > endDate ? endDate : lv.toDate
         if (from <= to) {
-          unpaidDays +=
+          const fullDays =
             Math.round(
               (new Date(to).getTime() - new Date(from).getTime()) / 86400000
             ) + 1
+          // نصف اليوم غير المدفوع = نصف يوم خصم
+          unpaidDays +=
+            (lv.period ?? 'FULL') === 'FULL' ? fullDays : fullDays * 0.5
         }
       }
       const unpaidDeduction = round2(unpaidDays * dayRate)

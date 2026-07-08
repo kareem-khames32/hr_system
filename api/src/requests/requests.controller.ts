@@ -30,6 +30,10 @@ class CreateRequestDto {
 
   @IsOptional()
   submit?: boolean
+
+  // نيابة عن موظف آخر — تتطلب requests.create_on_behalf
+  @IsOptional()
+  onBehalfEmployeeId?: number
 }
 
 class ActDto {
@@ -157,6 +161,15 @@ export class RequestsController {
     @Param('assignmentId', ParseIntPipe) assignmentId: number
   ) {
     return this.service.acknowledgeCustody(user, assignmentId)
+  }
+
+  // الموظف يعلّم «سلّمت العهدة» → مسؤول العهد يؤكد الاستلام والحالة
+  @Post('custody/:assignmentId/handover')
+  handover(
+    @CurrentUser() user: JwtPayload,
+    @Param('assignmentId', ParseIntPipe) assignmentId: number
+  ) {
+    return this.service.requestCustodyHandover(user, assignmentId)
   }
 
   // اعتماد المدير المباشر → العهدة ACTIVE (الملزِم قانونياً)

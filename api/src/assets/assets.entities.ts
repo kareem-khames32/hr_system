@@ -166,6 +166,23 @@ export class Grade {
   isActive: boolean
 }
 
+// مراكز التكلفة — مثال: مركز تكلفة لكل عميل، تُربط بموظف/قسم/فرع
+@Entity('cost_centers')
+export class CostCenter {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Index({ unique: true })
+  @Column({ length: 50 })
+  code: string
+
+  @Column({ length: 200 })
+  name: string
+
+  @Column({ default: true })
+  isActive: boolean
+}
+
 // المرشحون للتوظيف — pipeline بسيط حتى التعيين
 export type CandidateStage =
   | 'applied'

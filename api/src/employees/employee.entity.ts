@@ -78,6 +78,10 @@ export class Employee {
   @Column({ nullable: true })
   managerEmployeeId: number
 
+  // مركز التكلفة (اختياري) — يتقدم على مركز تكلفة الفرع في التقارير
+  @Column({ nullable: true })
+  costCenterId: number
+
   @Column({ type: 'date', nullable: true })
   joinDate: string
 

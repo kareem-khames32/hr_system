@@ -10,6 +10,8 @@ import { DataSource, In, IsNull, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
+import { PermissionType } from '../attendance/attendance.entities'
+import { AttendanceService } from '../attendance/attendance.service'
 import { ApproverResolver, ResolvedStep } from './approver-resolver.service'
 import { DestinationsService } from './destinations.service'
 import { LeaveBalancesService } from './leave-balances.service'
@@ -19,7 +21,7 @@ import { ApprovalStep } from './entities/approval-step.entity'
 import { RequestApproval } from './entities/request-approval.entity'
 import { RequestType } from './entities/request-type.entity'
 import { Request, RequestStatus } from './entities/request.entity'
-import { CustodyAssignment } from './entities/custody.entities'
+import { Asset, CustodyAssignment } from './entities/custody.entities'
 import { Transfer } from './entities/employment.entities'
 import { assertTransition } from './state-machine'
 
@@ -37,6 +39,7 @@ export class RequestsService {
     private readonly resolver: ApproverResolver,
     private readonly destinations: DestinationsService,
     private readonly leaveBalances: LeaveBalancesService,
+    private readonly attendance: AttendanceService,
     @InjectRepository(Request) private readonly requests: Repository<Request>,
     @InjectRepository(RequestType)
     private readonly types: Repository<RequestType>,
@@ -99,22 +102,49 @@ export class RequestsService {
     }
   }
 
-  // ===== الإنشاء =====
+  // ===== الإنشاء — لنفسي أو نيابة عن موظف آخر (بصلاحية) =====
   async create(
     user: JwtPayload,
-    dto: { typeCode: string; payload?: Record<string, any>; submit?: boolean }
+    dto: {
+      typeCode: string
+      payload?: Record<string, any>
+      submit?: boolean
+      onBehalfEmployeeId?: number
+    }
   ) {
     const type = await this.types.findOne({
       where: { code: dto.typeCode, isActive: true },
     })
     if (!type) throw new NotFoundException('نوع الطلب غير موجود')
-    if (!user.employeeId) {
+
+    // نيابة عن الغير: صلاحية requests.create_on_behalf إجبارية
+    let requesterId = user.employeeId
+    if (
+      dto.onBehalfEmployeeId &&
+      dto.onBehalfEmployeeId !== user.employeeId
+    ) {
+      const canOnBehalf =
+        user.role === 'super_admin' ||
+        (user.permissions ?? []).includes('*') ||
+        (user.permissions ?? []).includes('requests.create_on_behalf')
+      if (!canOnBehalf) {
+        throw new ForbiddenException('لا تملك صلاحية التقديم نيابة عن الغير')
+      }
+      const target = await this.employees.findOne({
+        where: { id: dto.onBehalfEmployeeId },
+      })
+      if (!target) throw new BadRequestException('الموظف المستهدف غير موجود')
+      requesterId = target.id
+    }
+    if (!requesterId) {
       throw new BadRequestException('الحساب غير مربوط بموظف')
     }
+    // من هنا: كل المنطق باسم الطالب الفعلي
+    user = { ...user, employeeId: requesterId }
 
     // جمهور النوع: مين يقدر يقدّمه (§2.2)
     const requester = await this.employees.findOne({
-      where: { id: user.employeeId },
+      where: { id: requesterId },
     })
     if (!this.audienceAllows(type, user, requester)) {
       throw new ForbiddenException('هذا النوع من الطلبات غير متاح لك')
@@ -163,13 +193,12 @@ export class RequestsService {
       throw new BadRequestException(`حقول ناقصة: ${missing.join('، ')}`)
     }
 
-    const emp = await this.employees.findOne({
-      where: { id: user.employeeId },
-    })
+    const emp = requester
 
     let req = this.requests.create({
       typeCode: type.code,
-      requesterId: user.employeeId,
+      requesterId,
+      createdByUserId: user.sub,
       branchId: emp?.branchId ?? user.branchId ?? undefined,
       status: 'DRAFT' as RequestStatus,
       payload: JSON.stringify(payload),
@@ -201,6 +230,63 @@ export class RequestsService {
       if (openCustody > 0) {
         throw new BadRequestException(
           `على الموظف ${openCustody} عهدة مفتوحة — يجب إرجاعها أو نقلها قبل النقل`
+        )
+      }
+    }
+
+    // طلب العهدة: الأصول المختارة لازم تكون متاحة في الكتالوج
+    if (type.code === 'CUSTODY_REQUEST') {
+      const p = req.payload ? JSON.parse(req.payload) : {}
+      const ids: number[] = Array.isArray(p.assetIds)
+        ? p.assetIds.map(Number).filter(Boolean)
+        : []
+      if (ids.length === 0) {
+        throw new BadRequestException('اختر أصلاً واحداً على الأقل من الأصول المتاحة')
+      }
+      for (const assetId of ids) {
+        const asset = await this.ds
+          .getRepository(Asset)
+          .findOne({ where: { id: assetId } })
+        if (!asset || asset.status !== 'AVAILABLE' || asset.currentHolderId) {
+          throw new BadRequestException(
+            `الأصل «${asset?.name ?? '#' + assetId}» غير متاح — اختر من المتاح فقط`
+          )
+        }
+      }
+    }
+
+    // الإذن: تحقق نوعه وأقصى مدته قبل دخول الدورة
+    if (type.code === 'PERMISSION') {
+      const p = req.payload ? JSON.parse(req.payload) : {}
+      if (p.permissionType) {
+        const pt = await this.ds
+          .getRepository(PermissionType)
+          .findOne({ where: { nameAr: String(p.permissionType) } })
+        if (!pt || !pt.isActive) {
+          throw new BadRequestException('نوع الإذن غير معروف أو معطل')
+        }
+        if (pt.maxDurationMinutes && p.from && p.to) {
+          const [fh, fm] = String(p.from).split(':').map(Number)
+          const [th, tm] = String(p.to).split(':').map(Number)
+          const dur = th * 60 + tm - (fh * 60 + fm)
+          if (dur > pt.maxDurationMinutes) {
+            throw new BadRequestException(
+              `مدة الإذن ${dur} دقيقة تتجاوز الحد الأقصى لنوع «${pt.nameAr}» (${pt.maxDurationMinutes} دقيقة)`
+            )
+          }
+        }
+      }
+    }
+
+    // نصف اليوم: لازم يكون يوماً واحداً
+    if (type.category === 'leaves') {
+      const p = req.payload ? JSON.parse(req.payload) : {}
+      if (
+        ['MORNING', 'EVENING'].includes(String(p.period)) &&
+        p.fromDate !== p.toDate
+      ) {
+        throw new BadRequestException(
+          'إجازة نصف اليوم تكون ليوم واحد فقط (تاريخ البداية = النهاية)'
         )
       }
     }
@@ -411,7 +497,7 @@ export class RequestsService {
 
   // ===== تنفيذ الوجهة داخل معاملة — الكتابة في السجل الدائم =====
   private async executeDestination(requestId: number) {
-    return this.ds.transaction(async (em) => {
+    const saved = await this.ds.transaction(async (em) => {
       const req = await em.getRepository(Request).findOne({
         where: { id: requestId },
       })
@@ -431,6 +517,31 @@ export class RequestsService {
       }
       return em.getRepository(Request).save(req)
     })
+
+    // بعد الالتزام: إجازة/إذن معتمد يعيد حساب أيام الحضور المتأثرة فوراً
+    // (خارج المعاملة — عشان الحساب يشوف السجل الجديد)
+    try {
+      const payload = saved.payload ? JSON.parse(saved.payload) : {}
+      const isLeave = saved.typeCode.startsWith('LEAVE_')
+      const isPermission = saved.typeCode === 'PERMISSION'
+      if (isLeave && payload.fromDate && payload.toDate) {
+        const from = new Date(`${payload.fromDate}T12:00:00`)
+        const to = new Date(`${payload.toDate}T12:00:00`)
+        for (
+          let d = new Date(from), i = 0;
+          d <= to && i < 62;
+          d.setDate(d.getDate() + 1), i++
+        ) {
+          const ds = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+          await this.attendance.computeDay(saved.requesterId, ds)
+        }
+      } else if (isPermission && payload.date) {
+        await this.attendance.computeDay(saved.requesterId, String(payload.date))
+      }
+    } catch {
+      /* إعادة الحساب best-effort — اليوم يتصحح مع أي بصمة/recompute */
+    }
+    return saved
   }
 
   // ===== إعادة التقديم بعد الإرجاع لاستكمال معلومات =====
@@ -482,6 +593,22 @@ export class RequestsService {
     return this.ds.getRepository(CustodyAssignment).save(row)
   }
 
+  // ===== الموظف يعلّم «سلّمت العهدة» → بانتظار تأكيد مسؤول العهد =====
+  async requestCustodyHandover(user: JwtPayload, assignmentId: number) {
+    const row = await this.ds.getRepository(CustodyAssignment).findOne({
+      where: { id: assignmentId },
+    })
+    if (!row) throw new NotFoundException('إسناد العهدة غير موجود')
+    if (row.employeeId !== user.employeeId) {
+      throw new ForbiddenException('العهدة ليست باسمك')
+    }
+    if (!['ACTIVE', 'PENDING_MANAGER_CONFIRM', 'PENDING_ACK'].includes(row.status)) {
+      throw new BadRequestException('العهدة ليست بحوزتك حالياً')
+    }
+    row.status = 'RETURN_REQUESTED'
+    return this.ds.getRepository(CustodyAssignment).save(row)
+  }
+
   // ===== اعتماد المدير المباشر → ACTIVE (الملزِم قانونياً) =====
   async managerConfirmCustody(user: JwtPayload, assignmentId: number) {
     const row = await this.ds.getRepository(CustodyAssignment).findOne({
@@ -504,18 +631,33 @@ export class RequestsService {
     row.status = 'ACTIVE'
     row.managerConfirmAt = new Date()
     await this.ds.getRepository(CustodyAssignment).save(row)
+    // الأصل يتعلّم «مُسنَد» في المخزون
     await this.ds
       .getRepository('assets')
-      .update({ id: row.assetId }, { currentHolderId: row.employeeId })
+      .update(
+        { id: row.assetId },
+        { currentHolderId: row.employeeId, status: 'ASSIGNED' }
+      )
 
     if (row.requestId) {
-      const req = await this.requests.findOne({
-        where: { id: row.requestId },
-      })
-      if (req && req.status === 'IN_EXECUTION') {
-        req.status = 'COMPLETED'
-        req.completedAt = new Date()
-        await this.requests.save(req)
+      // الطلب يكتمل فقط لما كل أصوله تتسلّم فعلياً (لا إسنادات معلّقة شقيقة)
+      const stillPending = await this.ds
+        .getRepository(CustodyAssignment)
+        .count({
+          where: {
+            requestId: row.requestId,
+            status: In(['PENDING_ACK', 'PENDING_MANAGER_CONFIRM']),
+          },
+        })
+      if (stillPending === 0) {
+        const req = await this.requests.findOne({
+          where: { id: row.requestId },
+        })
+        if (req && req.status === 'IN_EXECUTION') {
+          req.status = 'COMPLETED'
+          req.completedAt = new Date()
+          await this.requests.save(req)
+        }
       }
     }
     return row
@@ -644,11 +786,13 @@ export class RequestsService {
 
   // ===== أدوات وصول =====
 
-  // طلب يملكه المستخدم (مقدّمه)
+  // طلب يملكه المستخدم: صاحبه أو منشئه (نيابة عن الغير) أو الأدمن
   private async owned(user: JwtPayload, id: number): Promise<Request> {
     const req = await this.requests.findOne({ where: { id } })
     if (!req) throw new NotFoundException('الطلب غير موجود')
-    if (req.requesterId !== user.employeeId && user.role !== 'super_admin') {
+    const isOwner = req.requesterId === user.employeeId
+    const isCreator = req.createdByUserId === user.sub
+    if (!isOwner && !isCreator && user.role !== 'super_admin') {
       throw new ForbiddenException('الطلب ليس لك')
     }
     return req

@@ -68,6 +68,15 @@ export class Leave {
   @Column({ type: 'decimal', precision: 5, scale: 2 })
   days: number
 
+  // نصف اليوم: FULL يوم كامل، MORNING النصف الأول من الوردية،
+  // EVENING النصف الثاني — الفترة المغطاة لا تأخير فيها
+  @Column({ length: 10, default: 'FULL' })
+  period: 'FULL' | 'MORNING' | 'EVENING'
+
+  // غير مدفوعة؟ تُخصم يوم بيوم في بيانات المسير (من leave_types.isPaid)
+  @Column({ default: false })
+  isUnpaid: boolean
+
   @Column({ length: 30 })
   status: string // APPROVED | CANCELLED
 }

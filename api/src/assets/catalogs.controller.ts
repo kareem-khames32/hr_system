@@ -14,11 +14,12 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
 import type { ObjectLiteral } from 'typeorm'
 import { JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
-import { AttendancePunch } from '../attendance/attendance.entities'
+import { AttendancePunch, PermissionType } from '../attendance/attendance.entities'
 import { Branch } from '../org/entities/branch.entity'
 import {
   AssetType,
   BiometricDevice,
+  CostCenter,
   Grade,
   JobTitle,
   PublicHoliday,
@@ -41,6 +42,10 @@ export class CatalogsController {
     @InjectRepository(Grade) private readonly grades: Repository<Grade>,
     @InjectRepository(AssetType)
     private readonly assetTypes: Repository<AssetType>,
+    @InjectRepository(CostCenter)
+    private readonly costCenters: Repository<CostCenter>,
+    @InjectRepository(PermissionType)
+    private readonly permissionTypes: Repository<PermissionType>,
     @InjectRepository(AttendancePunch)
     private readonly punches: Repository<AttendancePunch>,
     @InjectRepository(Branch) private readonly branches: Repository<Branch>
@@ -60,6 +65,10 @@ export class CatalogsController {
         return this.grades
       case 'asset-types':
         return this.assetTypes
+      case 'permission-types':
+        return this.permissionTypes
+      case 'cost-centers':
+        return this.costCenters
       default:
         throw new NotFoundException('كتالوج غير معروف')
     }
@@ -160,6 +169,13 @@ export class CatalogsController {
         break
       case 'asset-types':
         need('name', 'اسم النوع')
+        break
+      case 'permission-types':
+        need('nameAr', 'اسم نوع الإذن')
+        break
+      case 'cost-centers':
+        need('name', 'اسم مركز التكلفة')
+        need('code', 'كود مركز التكلفة')
         break
     }
   }

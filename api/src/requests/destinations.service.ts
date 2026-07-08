@@ -72,13 +72,25 @@ export class DestinationsService {
   private leaveHandler =
     (deductBalance: boolean): Handler =>
     async (em, req, _type, payload) => {
+      const leaveTypeCode = String(
+        payload.leaveType ?? _type.code.replace('LEAVE_', '')
+      )
+      // نصف اليوم: MORNING/EVENING — والدفع من تعريف نوع الإجازة
+      const period = ['MORNING', 'EVENING'].includes(String(payload.period))
+        ? (String(payload.period) as 'MORNING' | 'EVENING')
+        : 'FULL'
+      const ltDef = await em.getRepository(LeaveType).findOne({
+        where: { code: leaveTypeCode },
+      })
       const leave = await em.getRepository(Leave).save({
         requestId: req.id,
         employeeId: req.requesterId,
-        leaveType: String(payload.leaveType ?? _type.code.replace('LEAVE_', '')),
+        leaveType: leaveTypeCode,
         fromDate: String(payload.fromDate),
         toDate: String(payload.toDate),
         days: Number(payload.days),
+        period,
+        isUnpaid: ltDef ? !ltDef.isPaid : false,
         status: 'APPROVED',
       })
 
@@ -424,29 +436,46 @@ export class DestinationsService {
 
   // ========== العهدة ==========
 
-  // تسليم عهدة: يُنشئ الإسناد بانتظار تأكيد استلام الموظف (الملزِم قانونياً)
+  // تسليم عهدة: الموظف اختار أصولاً متاحة من الكتالوج —
+  // الاعتماد يحوّلها تلقائياً لإسنادات بانتظار تأكيد الاستلام
   private custodyAssignHandler: Handler = async (em, req, _t, payload) => {
-    let assetId = Number(payload.assetId)
-    if (!assetId) {
-      const asset = await em.getRepository(Asset).save({
-        name: String(payload.assetName ?? 'أصل جديد'),
-        category: String(payload.category ?? 'عام'),
-        serialNumber: payload.serialNumber
-          ? String(payload.serialNumber)
-          : undefined,
-      })
-      assetId = asset.id
+    const ids: number[] = Array.isArray(payload.assetIds)
+      ? payload.assetIds.map(Number).filter(Boolean)
+      : payload.assetId
+        ? [Number(payload.assetId)]
+        : []
+    if (ids.length === 0) {
+      return {
+        ref: refOf('CU', req.id),
+        completed: true,
+        note: 'لم تُحدد أصول — راجع الطلب',
+      }
     }
-    const row = await em.getRepository(CustodyAssignment).save({
-      requestId: req.id,
-      assetId,
-      employeeId: req.requesterId,
-      status: 'PENDING_ACK',
-    })
+    let firstId = 0
+    for (const assetId of ids) {
+      const asset = await em.getRepository(Asset).findOne({
+        where: { id: assetId },
+      })
+      if (!asset) {
+        throw new Error(`الأصل #${assetId} غير موجود`)
+      }
+      if (asset.status !== 'AVAILABLE' || asset.currentHolderId) {
+        throw new Error(
+          `«${asset.name}» لم يعد متاحاً في المخزون — راجع الكتالوج`
+        )
+      }
+      const row = await em.getRepository(CustodyAssignment).save({
+        requestId: req.id,
+        assetId,
+        employeeId: req.requesterId,
+        status: 'PENDING_ACK',
+      })
+      if (!firstId) firstId = row.id
+    }
     return {
-      ref: refOf('CU', row.id),
+      ref: refOf('CU', firstId),
       completed: false,
-      note: 'بانتظار تأكيد استلام الموظف',
+      note: `${ids.length} أصل بانتظار تأكيد استلام الموظف`,
     }
   }
 

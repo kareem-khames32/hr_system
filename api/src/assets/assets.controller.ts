@@ -12,7 +12,7 @@ import {
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { In, Repository } from 'typeorm'
-import { IsInt, IsOptional, IsString, MaxLength, MinLength } from 'class-validator'
+import { IsInt, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator'
 import { Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
@@ -33,6 +33,12 @@ class CreateAssetDto {
   @IsString()
   @MaxLength(100)
   serialNumber?: string
+
+  // قيمة الأصل — اختيارية
+  @IsOptional()
+  @Type(() => Number)
+  @Min(0, { message: 'القيمة لا تكون سالبة' })
+  value?: number
 }
 
 class AssignCustodyDto {
@@ -96,6 +102,47 @@ export class AssetsController {
     if (!asset) throw new NotFoundException('الأصل غير موجود')
     Object.assign(asset, dto)
     return this.assets.save(asset)
+  }
+
+  // إحالة أصل للتقاعد (تالف/مستهلك) — ممنوعة وهو مُسنَد
+  @Perm('custody.assign')
+  @Post('assets/:id/retire')
+  async retireAsset(@Param('id', ParseIntPipe) id: number) {
+    const asset = await this.assets.findOne({ where: { id } })
+    if (!asset) throw new NotFoundException('الأصل غير موجود')
+    if (asset.status === 'ASSIGNED' || asset.currentHolderId) {
+      throw new BadRequestException('الأصل مُسنَد لموظف — أرجعه أولاً')
+    }
+    asset.status = 'RETIRED'
+    return this.assets.save(asset)
+  }
+
+  // إعادة تفعيل أصل متقاعد
+  @Perm('custody.assign')
+  @Post('assets/:id/reactivate')
+  async reactivateAsset(@Param('id', ParseIntPipe) id: number) {
+    const asset = await this.assets.findOne({ where: { id } })
+    if (!asset) throw new NotFoundException('الأصل غير موجود')
+    if (asset.status !== 'RETIRED') {
+      throw new BadRequestException('الأصل ليس متقاعداً')
+    }
+    asset.status = 'AVAILABLE'
+    return this.assets.save(asset)
+  }
+
+  // الأصول المتاحة — لنموذج «طلب عهدة» (خدمة ذاتية، بيانات مختصرة)
+  @Get('assets/available')
+  async availableAssets() {
+    const rows = await this.assets.find({
+      where: { status: 'AVAILABLE' },
+      order: { category: 'ASC', name: 'ASC' },
+    })
+    return rows.map((a) => ({
+      id: a.id,
+      name: a.name,
+      category: a.category,
+      serialNumber: a.serialNumber,
+    }))
   }
 
   // عهدي — بورتال الموظف (خدمة ذاتية)
@@ -181,7 +228,10 @@ export class AssetsController {
   async assign(@Body() dto: AssignCustodyDto) {
     const asset = await this.assets.findOne({ where: { id: dto.assetId } })
     if (!asset) throw new BadRequestException('الأصل غير موجود')
-    if (asset.currentHolderId) {
+    if (asset.status === 'RETIRED') {
+      throw new BadRequestException('الأصل متقاعد — لا يُسنَد')
+    }
+    if (asset.status === 'ASSIGNED' || asset.currentHolderId) {
       throw new BadRequestException('الأصل مسلَّم بالفعل لموظف آخر — أرجعه أولاً')
     }
     const emp = await this.employees.findOne({ where: { id: dto.employeeId } })
@@ -217,7 +267,42 @@ export class AssetsController {
     row.returnedAt = new Date()
     row.condition = dto.condition ?? 'سليمة'
     await this.custody.save(row)
-    await this.assets.update({ id: row.assetId }, { currentHolderId: null as any })
+    // الأصل يرجع متاحاً في المخزون
+    await this.assets.update(
+      { id: row.assetId },
+      { currentHolderId: null as any, status: 'AVAILABLE' }
+    )
     return row
+  }
+
+  // شطب عهدة مفقودة/تالفة: يقفل الإسناد ويتقاعد الأصل —
+  // القيمة تُستخدم كخصم في تصفية إنهاء الخدمة
+  @Perm('custody.assign')
+  @Post('custody/:id/write-off')
+  async writeOff(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: { condition?: string; lost?: boolean }
+  ) {
+    const row = await this.custody.findOne({ where: { id } })
+    if (!row) throw new NotFoundException('الإسناد غير موجود')
+    if (!['PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'ACTIVE', 'RETURN_REQUESTED'].includes(row.status)) {
+      throw new BadRequestException('الإسناد مقفول بالفعل')
+    }
+    const asset = await this.assets.findOne({ where: { id: row.assetId } })
+    row.status = dto.lost === false ? 'DAMAGED' : 'LOST'
+    row.returnedAt = new Date()
+    row.condition = dto.condition ?? (dto.lost === false ? 'تالفة' : 'مفقودة')
+    await this.custody.save(row)
+    await this.assets.update(
+      { id: row.assetId },
+      { currentHolderId: null as any, status: 'RETIRED' }
+    )
+    return {
+      ...row,
+      assetValue: asset?.value ?? null,
+      note: asset?.value
+        ? `قيمة الأصل ${asset.value} — سجّلها خصماً في التصفية`
+        : 'الأصل بلا قيمة مسجلة',
+    }
   }
 }

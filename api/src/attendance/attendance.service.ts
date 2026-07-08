@@ -20,6 +20,7 @@ import {
   AttendanceDay,
   AttendancePunch,
   AttendanceStatus,
+  PermissionType,
   ScheduleDayOverride,
   ScheduleEntry,
 } from './attendance.entities'
@@ -74,7 +75,9 @@ export class AttendanceService {
     @InjectRepository(Branch)
     private readonly branches: Repository<Branch>,
     @InjectRepository(ScheduleDayOverride)
-    private readonly dayOverrides: Repository<ScheduleDayOverride>
+    private readonly dayOverrides: Repository<ScheduleDayOverride>,
+    @InjectRepository(PermissionType)
+    private readonly permissionTypes: Repository<PermissionType>
   ) {}
 
   // §2.4: يوم عطلة؟ (ويك إند من الإعدادات/الفرع + العطلات الرسمية)
@@ -249,11 +252,12 @@ export class AttendanceService {
     return all.filter((o) => o.date >= start && o.date <= endStr)
   }
 
-  // الأذونات المعتمدة لليوم — نوافذ [from, to] بالدقائق
+  // الأذونات المعتمدة لليوم — نوافذ [from, to] بالدقائق مع نوع الخصم
+  // (بدون خصم = معذور مجاناً، بخصم = الدقائق المتداخلة تُسجل للمسير)
   private async approvedPermissionWindows(
     employeeId: number,
     date: string
-  ): Promise<Array<{ from: number; to: number }>> {
+  ): Promise<Array<{ from: number; to: number; deductible: boolean }>> {
     const rows = await this.requests.find({
       where: {
         requesterId: employeeId,
@@ -261,12 +265,23 @@ export class AttendanceService {
         status: In(['COMPLETED', 'APPROVED', 'IN_EXECUTION']),
       },
     })
-    const windows: Array<{ from: number; to: number }> = []
+    const windows: Array<{ from: number; to: number; deductible: boolean }> = []
     for (const r of rows) {
       try {
         const p = JSON.parse(r.payload ?? '{}')
         if (p.date === date && p.from && p.to) {
-          windows.push({ from: toMinutes(p.from), to: toMinutes(p.to) })
+          let deductible = false
+          if (p.permissionType) {
+            const pt = await this.permissionTypes.findOne({
+              where: { nameAr: String(p.permissionType) },
+            })
+            deductible = !!pt?.isDeductible
+          }
+          windows.push({
+            from: toMinutes(p.from),
+            to: toMinutes(p.to),
+            deductible,
+          })
         }
       } catch {
         /* payload تالف — تجاهل */
@@ -309,23 +324,40 @@ export class AttendanceService {
     const checkOut =
       punches.length > 1 ? hhmmOf(punches[punches.length - 1].punchTime) : null
 
-    // إجازة معتمدة تغطي اليوم؟ اليوم محسوب كإجازة مهما كانت البصمات
+    // الإجازات المعتمدة المغطية لليوم: يوم كامل ← 'leave'،
+    // نصف يوم ← نافذة تغطية (النصف الأول أو الثاني من الوردية)
     const approvedLeaves = await this.leaves.find({
       where: { employeeId, status: 'APPROVED' },
     })
-    const isLeaveDay = approvedLeaves.some(
+    const dayLeaves = approvedLeaves.filter(
       (l) => l.fromDate <= date && l.toDate >= date
     )
+    const isFullLeaveDay = dayLeaves.some(
+      (l) => (l.period ?? 'FULL') === 'FULL'
+    )
+    const shiftStart = toMinutes(shift.start)
+    const shiftEnd = toMinutes(shift.end)
+    const shiftMid = Math.round((shiftStart + shiftEnd) / 2)
+    // نوافذ الإجازات الجزئية — معذورة بلا خصم دائماً (الإجازة لها نظام رصيدها)
+    const halfLeaveWindows = dayLeaves
+      .filter((l) => (l.period ?? 'FULL') !== 'FULL')
+      .map((l) => ({
+        from: l.period === 'MORNING' ? shiftStart : shiftMid,
+        to: l.period === 'MORNING' ? shiftMid : shiftEnd,
+        deductible: false,
+      }))
+    const hasHalfLeave = halfLeaveWindows.length > 0
 
     let status: AttendanceStatus = 'absent'
     let lateMinutes = 0
     let earlyLeaveMinutes = 0
     let excusedMinutes = 0
+    let deductibleMinutes = 0
     let workMinutes = 0
 
     const isHoliday = await this.isNonWorkingDay(date, emp.branchId)
 
-    if (isLeaveDay) {
+    if (isFullLeaveDay) {
       status = 'leave'
     } else if (isHoliday) {
       // ويك إند/عطلة رسمية: لا تأخير ولا غياب — الحضور يُسجل كعمل بيوم عطلة
@@ -333,38 +365,54 @@ export class AttendanceService {
       if (checkIn && checkOut) {
         workMinutes = Math.max(0, toMinutes(checkOut) - toMinutes(checkIn))
       }
-    } else if (checkIn) {
+    } else if (checkIn || hasHalfLeave) {
       const permissions = await this.approvedPermissionWindows(employeeId, date)
+      // كل نوافذ التغطية: إجازات جزئية + أذونات (بنوعيها)
+      const coverage = [...halfLeaveWindows, ...permissions]
+      const freeCoverage = coverage.filter((w) => !w.deductible)
+      const paidCoverage = coverage.filter((w) => w.deductible)
 
-      // التأخير الخام ناقص المعذور بإذن — ثم فترة السماح
-      const lateRaw = toMinutes(checkIn) - toMinutes(shift.start)
-      let excusedLate = 0
-      if (lateRaw > 0) {
-        excusedLate = this.overlapMinutes(
-          toMinutes(shift.start),
-          toMinutes(checkIn),
-          permissions
-        )
-      }
-      const effectiveLate = lateRaw - excusedLate
-      lateMinutes = effectiveLate > grace ? effectiveLate : 0
-
-      let excusedEarly = 0
-      if (checkOut) {
-        const earlyRaw = toMinutes(shift.end) - toMinutes(checkOut)
-        if (earlyRaw > 0) {
-          excusedEarly = this.overlapMinutes(
-            toMinutes(checkOut),
-            toMinutes(shift.end),
-            permissions
-          )
+      if (!checkIn) {
+        // نصف يوم إجازة ومفيش بصمة خالص: النصف الآخر غياب — يبقى جزئية
+        status = 'partial_leave'
+      } else {
+        // التأخير الخام: المجاني يعذره، و«بخصم» يعذره من الغياب
+        // لكن دقائقه المتداخلة تتسجل للخصم في المسير
+        const lateRaw = toMinutes(checkIn) - shiftStart
+        let excusedLate = 0
+        let deductibleLate = 0
+        if (lateRaw > 0) {
+          excusedLate = this.overlapMinutes(shiftStart, toMinutes(checkIn), freeCoverage)
+          deductibleLate = this.overlapMinutes(shiftStart, toMinutes(checkIn), paidCoverage)
         }
-        const effectiveEarly = earlyRaw - excusedEarly
-        earlyLeaveMinutes = effectiveEarly > grace ? effectiveEarly : 0
-        workMinutes = Math.max(0, toMinutes(checkOut) - toMinutes(checkIn))
+        const effectiveLate = lateRaw - excusedLate - deductibleLate
+        lateMinutes = effectiveLate > grace ? effectiveLate : 0
+
+        let excusedEarly = 0
+        let deductibleEarly = 0
+        if (checkOut) {
+          const earlyRaw = shiftEnd - toMinutes(checkOut)
+          if (earlyRaw > 0) {
+            excusedEarly = this.overlapMinutes(toMinutes(checkOut), shiftEnd, freeCoverage)
+            deductibleEarly = this.overlapMinutes(toMinutes(checkOut), shiftEnd, paidCoverage)
+          }
+          const effectiveEarly = earlyRaw - excusedEarly - deductibleEarly
+          earlyLeaveMinutes = effectiveEarly > grace ? effectiveEarly : 0
+          workMinutes = Math.max(0, toMinutes(checkOut) - toMinutes(checkIn))
+        }
+        excusedMinutes = excusedLate + excusedEarly
+        deductibleMinutes = deductibleLate + deductibleEarly
+        // العرض الصحيح: إجازة جزئية تظهر «إجازة جزئية» مش «متأخر»
+        // طالما الفترة غير المغطاة سليمة
+        status =
+          lateMinutes > 0
+            ? 'late'
+            : earlyLeaveMinutes > 0
+              ? 'early_leave'
+              : hasHalfLeave
+                ? 'partial_leave'
+                : 'present'
       }
-      excusedMinutes = excusedLate + excusedEarly
-      status = lateMinutes > 0 ? 'late' : earlyLeaveMinutes > 0 ? 'early_leave' : 'present'
     }
 
     let day = await this.days.findOne({ where: { employeeId, date } })
@@ -380,13 +428,14 @@ export class AttendanceService {
       lateMinutes,
       earlyLeaveMinutes,
       excusedMinutes,
+      deductibleMinutes,
       workMinutes,
       computedAt: new Date(),
     })
     day = await this.days.save(day)
 
     // الأوفرتايم × البصمة (لا يُكتشف في يوم إجازة أو عطلة)
-    if (checkOut && !isLeaveDay && !isHoliday) {
+    if (checkOut && !isFullLeaveDay && !isHoliday) {
       await this.detectOvertime(emp, date, shift, checkOut)
     }
     return day

@@ -29,7 +29,11 @@ export class Request {
 
   @Index()
   @Column()
-  requesterId: number // employees.id
+  requesterId: number // employees.id — صاحب الطلب الفعلي
+
+  // مين أنشأ الطلب (users.id) — يختلف عن الطالب في «نيابة عن الغير»
+  @Column({ nullable: true })
+  createdByUserId: number
 
   @Index()
   @Column({ nullable: true })

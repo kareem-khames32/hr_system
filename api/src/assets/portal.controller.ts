@@ -6,6 +6,7 @@ import { branchScopeOf, CurrentUser, JwtAuthGuard, RolesGuard, userHasPerm } fro
 import { Employee } from '../employees/employee.entity'
 import { RequestApproval } from '../requests/entities/request-approval.entity'
 import { Request } from '../requests/entities/request.entity'
+import { RequestType } from '../requests/entities/request-type.entity'
 import { Leave } from '../requests/entities/leave.entities'
 import { PublicHoliday } from './assets.entities'
 
@@ -20,6 +21,8 @@ export class PortalController {
     @InjectRepository(Employee)
     private readonly employees: Repository<Employee>,
     @InjectRepository(Request) private readonly requests: Repository<Request>,
+    @InjectRepository(RequestType)
+    private readonly requestTypes: Repository<RequestType>,
     @InjectRepository(RequestApproval)
     private readonly approvals: Repository<RequestApproval>
   ) {}
@@ -94,13 +97,22 @@ export class PortalController {
           RETURNED_FOR_INFO: 'أُعيد لاستكمال معلومات',
           ESCALATED: 'تم تصعيد',
         }
+        // الاسم العربي للنوع — الكود لا يظهر للمستخدم أبداً
+        const typeCodes = [...new Set(myRequests.map((r) => r.typeCode))]
+        const typeRows = typeCodes.length
+          ? await this.requestTypes.find({ where: { code: In(typeCodes) } })
+          : []
+        const nameByCode = new Map(typeRows.map((t) => [t.code, t.nameAr]))
         for (const a of acts) {
           const req = reqById.get(a.requestId)
+          const typeName = req
+            ? (nameByCode.get(req.typeCode) ?? 'طلب')
+            : 'طلب'
           items.push({
             id: `act-${a.id}`,
             kind: a.action === 'APPROVED' ? 'success' : a.action === 'REJECTED' ? 'error' : 'warning',
             title: `${actLabel[a.action] ?? a.action} طلبك`,
-            body: `طلب ${req?.typeCode ?? ''} #${a.requestId}${a.comment ? ` — ${a.comment}` : ''}`,
+            body: `${typeName}${a.comment ? ` — ${a.comment}` : ''}`,
             at: a.actedAt,
             link: '/requests',
           })
