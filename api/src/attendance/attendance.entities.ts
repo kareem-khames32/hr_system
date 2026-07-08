@@ -58,7 +58,13 @@ export class ScheduleEntry {
   endTime: string // HH:mm
 }
 
-export type AttendanceStatus = 'present' | 'late' | 'absent' | 'early_leave'
+export type AttendanceStatus =
+  | 'present'
+  | 'late'
+  | 'absent'
+  | 'early_leave'
+  | 'leave' // في إجازة معتمدة
+  | 'holiday' // عطلة رسمية
 
 // اليوم المحسوب: البصمة مقابل وردية اليوم + فترة السماح
 @Entity('attendance_days')
@@ -101,6 +107,10 @@ export class AttendanceDay {
 
   @Column({ default: 0 })
   earlyLeaveMinutes: number
+
+  // دقائق معذورة بإذن معتمد — لا تُخصم في المسير
+  @Column({ default: 0 })
+  excusedMinutes: number
 
   @Column({ default: 0 })
   workMinutes: number

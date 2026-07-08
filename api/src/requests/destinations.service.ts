@@ -171,10 +171,12 @@ export class DestinationsService {
     const rows: Partial<LoanInstallment>[] = []
     const start = new Date()
     for (let i = 1; i <= months; i++) {
+      // تنسيق محلي — toISOString يزحزح اليوم بفارق التوقيت
       const due = new Date(start.getFullYear(), start.getMonth() + i, 1)
+      const dueDate = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-01`
       rows.push({
         loanId: loan.id,
-        dueDate: due.toISOString().slice(0, 10),
+        dueDate,
         // القسط الأخير يمتص فروق التقريب
         amount: i === months ? amount - per * (months - 1) : per,
       })
@@ -329,6 +331,35 @@ export class DestinationsService {
     return { ref: refOf('BNK', hist.id), completed: true }
   }
 
+  // تغيير الحالة الوظيفية: استقالة → فترة إشعار، تقاعد → أرشفة
+  private employeeStatusHandler: Handler = async (em, req, type, payload) => {
+    const emp = await em.getRepository(Employee).findOne({
+      where: { id: req.requesterId },
+    })
+    if (!emp) return { ref: refOf('ST', req.id), completed: true }
+    const oldStatus = emp.status
+    const newStatus =
+      type.code === 'RESIGNATION'
+        ? 'notice_period'
+        : type.code === 'RETIREMENT'
+          ? 'archived'
+          : String(payload.newStatus ?? emp.status)
+    emp.status = newStatus as any
+    if (newStatus === 'archived') emp.isActive = false
+    await em.getRepository(Employee).save(emp)
+    const hist = await em.getRepository(EmployeeStatusHistory).save({
+      employeeId: emp.id,
+      oldStatus,
+      newStatus,
+      reason:
+        type.code === 'RESIGNATION'
+          ? `استقالة — آخر يوم عمل ${payload.lastWorkingDate ?? '—'}: ${payload.reason ?? ''}`
+          : String(payload.reason ?? type.nameAr),
+      requestId: req.id,
+    })
+    return { ref: refOf('ST', hist.id), completed: true }
+  }
+
   // ========== الخطابات ==========
 
   private letterHandler: Handler = async (em, req, type, payload) => {
@@ -419,6 +450,8 @@ export class DestinationsService {
     employee_record: this.employeeRecordHandler,
     employee_record_auto: this.employeeRecordHandler,
     payroll_bank_secure: this.bankChangeHandler,
+    // حالة وظيفية (استقالة/تقاعد)
+    employee_status: this.employeeStatusHandler,
     // خطابات
     letter_pdf_generator: this.letterHandler,
     // عهدة

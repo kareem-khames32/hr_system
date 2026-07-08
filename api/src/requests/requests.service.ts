@@ -185,7 +185,8 @@ export class RequestsService {
       const approverEmployeeId = await this.resolver.resolveApproverEmployee(
         s.approverRole,
         req.requesterId,
-        payload
+        payload,
+        s.specificEmployeeId
       )
       // السرّي يتخطى المدير المباشر (الشكاوى/البلاغات)
       if (

@@ -11,12 +11,15 @@ import { ApprovalChain } from './approval-chain.entity'
 // الأدوار تُحل ديناميكياً من الهيكل التنظيمي وقت التشغيل — شوف ApproverResolver
 export type ApproverRole =
   | 'direct_manager_of_requester'
+  | 'department_manager_of_requester'
+  | 'branch_manager_of_requester'
   | 'receiving_team_manager'
   | 'hr'
   | 'finance'
   | 'custody_officer'
   | 'it'
   | 'executive'
+  | 'specific_employee'
 
 @Entity('approval_steps')
 export class ApprovalStep {
@@ -36,6 +39,10 @@ export class ApprovalStep {
 
   @Column({ length: 60 })
   approverRole: ApproverRole
+
+  // للدور specific_employee — موظف بعينه هو صاحب الخطوة
+  @Column({ nullable: true })
+  specificEmployeeId: number
 
   @Column({ default: false })
   isParallel: boolean

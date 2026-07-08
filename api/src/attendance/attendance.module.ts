@@ -2,6 +2,8 @@ import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { Employee } from '../employees/employee.entity'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
+import { Leave } from '../requests/entities/leave.entities'
+import { Request } from '../requests/entities/request.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import {
   AttendanceDay,
@@ -20,6 +22,8 @@ import { AttendanceService } from './attendance.service'
       Employee,
       OvertimeEntry,
       RequestsConfig,
+      Leave,
+      Request,
     ]),
   ],
   controllers: [AttendanceController],

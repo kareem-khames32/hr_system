@@ -68,6 +68,10 @@ export class PayrollItem {
   @Column({ type: 'decimal', precision: 18, scale: 2 })
   basicSalary: number
 
+  // إجمالي البدلات (سكن + انتقال + أخرى) — من ملف الموظف وقت الحساب
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
+  allowances: number
+
   @Column({ type: 'decimal', precision: 8, scale: 2, default: 0 })
   overtimeHours: number
 

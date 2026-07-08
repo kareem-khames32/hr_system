@@ -171,6 +171,8 @@ export const typesSeed: TypeSeed[] = [
   { code: 'CONTRACT_TYPE_CHANGE', nameAr: 'تغيير نوع العقد', category: 'employment_status', chain: 'CHAIN_MANAGER_HR', handler: 'contracts_register', phase: 'P3' },
   { code: 'SECONDMENT', nameAr: 'إعارة/انتداب لجهة أخرى', category: 'employment_status', chain: 'CHAIN_HR_EXEC', handler: 'assignments_register', phase: 'P3' },
   { code: 'RETIREMENT', nameAr: 'تقاعد', category: 'employment_status', chain: 'CHAIN_HR', handler: 'employee_status', phase: 'P3' },
+  // الاستقالة: مدير → HR → تنفيذي، والاعتماد يدخل الموظف فترة الإشعار
+  { code: 'RESIGNATION', nameAr: 'استقالة', category: 'employment_status', chain: 'CHAIN_MANAGER_HR_EXEC', handler: 'employee_status', requiredFields: ['lastWorkingDate', 'reason'], phase: 'P1' },
 
   // ===== 5) البيانات الشخصية =====
   { code: 'PERSONAL_DATA_UPDATE', nameAr: 'تحديث بيانات شخصية', category: 'personal_data', chain: 'CHAIN_HR', handler: 'employee_record', phase: 'P1' },
@@ -240,6 +242,8 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'leave.annual_entitled', value: '21' },
   { key: 'leave.carryover_max_days', value: '10' },
   { key: 'leave.carryover_expiry_months', value: '3' },
+  // عملة النظام: SAR أو EGP — كل الشاشات تقرأها
+  { key: 'system.currency', value: 'SAR' },
   // الرواتب: دورة 23 → 22 ومعاملات الحساب
   { key: 'payroll.cycle_start_day', value: '23' },
   { key: 'payroll.monthly_days', value: '30' },

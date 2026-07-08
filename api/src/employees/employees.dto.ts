@@ -48,6 +48,39 @@ export class CreateEmployeeDto {
   nationalId?: string
 
   @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ الميلاد بصيغة YYYY-MM-DD' })
+  birthDate?: string
+
+  @IsOptional()
+  @IsIn(['male', 'female'], { message: 'النوع: male أو female' })
+  gender?: string
+
+  @IsOptional()
+  @IsIn(['single', 'married', 'divorced', 'widowed'], {
+    message: 'الحالة الاجتماعية غير صالحة',
+  })
+  maritalStatus?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  nationality?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  address?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  emergencyContactName?: string
+
+  @IsOptional()
+  @Matches(/^[+\d][\d\s-]{6,20}$/, { message: 'هاتف الطوارئ غير صالح' })
+  emergencyContactPhone?: string
+
+  @IsOptional()
   @IsString()
   @MaxLength(100)
   jobTitle?: string
@@ -86,6 +119,24 @@ export class CreateEmployeeDto {
   @IsNumber({}, { message: 'الراتب الأساسي رقم' })
   @Min(0, { message: 'الراتب لا يكون سالباً' })
   basicSalary?: number
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'بدل السكن رقم' })
+  @Min(0, { message: 'البدل لا يكون سالباً' })
+  housingAllowance?: number
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'بدل الانتقال رقم' })
+  @Min(0, { message: 'البدل لا يكون سالباً' })
+  transportAllowance?: number
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'البدلات الأخرى رقم' })
+  @Min(0, { message: 'البدل لا يكون سالباً' })
+  otherAllowance?: number
 
   @IsOptional()
   @IsIn(['transfer', 'cash', 'visa'], { message: 'طريقة الصرف: transfer/cash/visa' })
@@ -136,6 +187,39 @@ export class UpdateEmployeeDto {
   nationalId?: string
 
   @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ الميلاد بصيغة YYYY-MM-DD' })
+  birthDate?: string
+
+  @IsOptional()
+  @IsIn(['male', 'female'], { message: 'النوع: male أو female' })
+  gender?: string
+
+  @IsOptional()
+  @IsIn(['single', 'married', 'divorced', 'widowed'], {
+    message: 'الحالة الاجتماعية غير صالحة',
+  })
+  maritalStatus?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(100)
+  nationality?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  address?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  emergencyContactName?: string
+
+  @IsOptional()
+  @Matches(/^[+\d][\d\s-]{6,20}$/, { message: 'هاتف الطوارئ غير صالح' })
+  emergencyContactPhone?: string
+
+  @IsOptional()
   @IsString()
   @MaxLength(100)
   jobTitle?: string
@@ -175,6 +259,24 @@ export class UpdateEmployeeDto {
   @IsNumber({}, { message: 'الراتب الأساسي رقم' })
   @Min(0, { message: 'الراتب لا يكون سالباً' })
   basicSalary?: number
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'بدل السكن رقم' })
+  @Min(0, { message: 'البدل لا يكون سالباً' })
+  housingAllowance?: number
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'بدل الانتقال رقم' })
+  @Min(0, { message: 'البدل لا يكون سالباً' })
+  transportAllowance?: number
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'البدلات الأخرى رقم' })
+  @Min(0, { message: 'البدل لا يكون سالباً' })
+  otherAllowance?: number
 
   @IsOptional()
   @IsIn(['transfer', 'cash', 'visa'], { message: 'طريقة الصرف: transfer/cash/visa' })

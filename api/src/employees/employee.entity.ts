@@ -38,6 +38,28 @@ export class Employee {
   @Column({ length: 50, nullable: true })
   nationalId: string
 
+  // ===== البيانات الشخصية =====
+  @Column({ type: 'date', nullable: true })
+  birthDate: string
+
+  @Column({ length: 10, nullable: true })
+  gender: 'male' | 'female'
+
+  @Column({ length: 20, nullable: true })
+  maritalStatus: string // single | married | divorced | widowed
+
+  @Column({ length: 100, nullable: true })
+  nationality: string
+
+  @Column({ length: 500, nullable: true })
+  address: string
+
+  @Column({ length: 200, nullable: true })
+  emergencyContactName: string
+
+  @Column({ length: 50, nullable: true })
+  emergencyContactPhone: string
+
   @Column({ length: 100, nullable: true })
   jobTitle: string
 
@@ -63,6 +85,16 @@ export class Employee {
 
   @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
   basicSalary: number
+
+  // البدلات — تدخل في إجمالي الراتب بالمسير
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
+  housingAllowance: number
+
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
+  transportAllowance: number
+
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
+  otherAllowance: number
 
   // طريقة الصرف — لتقارير حالة الصرف في المسير
   @Column({ length: 20, default: 'transfer' })

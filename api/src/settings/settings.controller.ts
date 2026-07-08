@@ -130,17 +130,26 @@ class UpdateStepDto {
 // أدوار الموافقة المسموحة — تُحل ديناميكياً وقت التشغيل
 const APPROVER_ROLES = [
   'direct_manager_of_requester',
+  'department_manager_of_requester',
+  'branch_manager_of_requester',
   'receiving_team_manager',
   'hr',
   'finance',
   'custody_officer',
   'it',
   'executive',
+  'specific_employee',
 ]
 
 class ChainStepDto {
   @IsIn(APPROVER_ROLES, { message: 'دور الموافقة غير صالح' })
   approverRole: string
+
+  // إجباري فقط عند اختيار «موظف بعينه»
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  specificEmployeeId?: number
 
   @IsOptional()
   @IsString()
@@ -300,6 +309,11 @@ export class SettingsController {
           'الخطوة الشرطية تحتاج: حقل + معامل + قيمة عتبة'
         )
       }
+      if (s.approverRole === 'specific_employee' && !s.specificEmployeeId) {
+        throw new BadRequestException(
+          'خطوة «موظف بعينه» تحتاج تحديد الموظف'
+        )
+      }
     }
     const chain = await this.chains.save(
       this.chains.create({
@@ -315,6 +329,7 @@ export class SettingsController {
           chainId: chain.id,
           stepOrder: order++,
           approverRole: s.approverRole as any,
+          specificEmployeeId: s.specificEmployeeId,
           thresholdField: s.thresholdField,
           thresholdOp: s.thresholdOp as any,
           thresholdValue: s.thresholdValue,
@@ -366,6 +381,7 @@ export class SettingsController {
           chainId: id,
           stepOrder: order++,
           approverRole: s.approverRole as any,
+          specificEmployeeId: s.specificEmployeeId,
           thresholdField: s.thresholdField,
           thresholdOp: s.thresholdOp as any,
           thresholdValue: s.thresholdValue,

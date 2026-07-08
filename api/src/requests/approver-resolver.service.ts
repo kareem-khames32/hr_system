@@ -56,15 +56,40 @@ export class ApproverResolver {
     return null
   }
 
+  // مدير قسم الموظف
+  async departmentManagerOf(employeeId: number): Promise<number | null> {
+    const emp = await this.employees.findOne({ where: { id: employeeId } })
+    if (!emp?.departmentId) return null
+    const dept = await this.departments.findOne({
+      where: { id: emp.departmentId },
+    })
+    return dept?.managerEmployeeId ?? null
+  }
+
+  // مدير فرع الموظف
+  async branchManagerOf(employeeId: number): Promise<number | null> {
+    const emp = await this.employees.findOne({ where: { id: employeeId } })
+    if (!emp) return null
+    const branch = await this.branches.findOne({ where: { id: emp.branchId } })
+    return branch?.managerEmployeeId ?? null
+  }
+
   // حل الدور لموظف محدد وقت التقديم (للأدوار الهيكلية فقط)
   async resolveApproverEmployee(
     role: ApproverRole,
     requesterId: number,
-    payload: Record<string, unknown>
+    payload: Record<string, unknown>,
+    specificEmployeeId?: number | null
   ): Promise<number | null> {
     switch (role) {
       case 'direct_manager_of_requester':
         return this.directManagerOf(requesterId)
+      case 'department_manager_of_requester':
+        return this.departmentManagerOf(requesterId)
+      case 'branch_manager_of_requester':
+        return this.branchManagerOf(requesterId)
+      case 'specific_employee':
+        return specificEmployeeId ?? null
       case 'receiving_team_manager': {
         const toTeamId = Number(payload['toTeamId'])
         if (!toTeamId) return null
@@ -86,7 +111,10 @@ export class ApproverResolver {
 
     switch (step.role) {
       case 'direct_manager_of_requester':
+      case 'department_manager_of_requester':
+      case 'branch_manager_of_requester':
       case 'receiving_team_manager':
+      case 'specific_employee':
         return (
           step.approverEmployeeId !== null &&
           user.employeeId === step.approverEmployeeId

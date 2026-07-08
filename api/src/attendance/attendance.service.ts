@@ -11,6 +11,8 @@ import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
+import { Leave } from '../requests/entities/leave.entities'
+import { Request } from '../requests/entities/request.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import {
   AttendanceDay,
@@ -59,7 +61,11 @@ export class AttendanceService {
     @InjectRepository(OvertimeEntry)
     private readonly overtime: Repository<OvertimeEntry>,
     @InjectRepository(RequestsConfig)
-    private readonly config: Repository<RequestsConfig>
+    private readonly config: Repository<RequestsConfig>,
+    @InjectRepository(Leave)
+    private readonly leaves: Repository<Leave>,
+    @InjectRepository(Request)
+    private readonly requests: Repository<Request>
   ) {}
 
   private async configValue(key: string, fallback: string): Promise<string> {
@@ -126,7 +132,47 @@ export class AttendanceService {
     return DEFAULT_SHIFT
   }
 
-  // ===== الحساب الفعلي: أول/آخر بصمة مقابل وردية اليوم + فترة السماح =====
+  // الأذونات المعتمدة لليوم — نوافذ [from, to] بالدقائق
+  private async approvedPermissionWindows(
+    employeeId: number,
+    date: string
+  ): Promise<Array<{ from: number; to: number }>> {
+    const rows = await this.requests.find({
+      where: {
+        requesterId: employeeId,
+        typeCode: 'PERMISSION',
+        status: In(['COMPLETED', 'APPROVED', 'IN_EXECUTION']),
+      },
+    })
+    const windows: Array<{ from: number; to: number }> = []
+    for (const r of rows) {
+      try {
+        const p = JSON.parse(r.payload ?? '{}')
+        if (p.date === date && p.from && p.to) {
+          windows.push({ from: toMinutes(p.from), to: toMinutes(p.to) })
+        }
+      } catch {
+        /* payload تالف — تجاهل */
+      }
+    }
+    return windows
+  }
+
+  // تداخل نافذة [a1,a2] مع مجموعة نوافذ الإذن — مجموع الدقائق المتغطاة
+  private overlapMinutes(
+    a1: number,
+    a2: number,
+    windows: Array<{ from: number; to: number }>
+  ): number {
+    let total = 0
+    for (const w of windows) {
+      total += Math.max(0, Math.min(a2, w.to) - Math.max(a1, w.from))
+    }
+    return Math.min(total, Math.max(0, a2 - a1))
+  }
+
+  // ===== الحساب الفعلي: أول/آخر بصمة مقابل وردية اليوم + فترة السماح
+  // + الإذن المعتمد يعذر التأخير/الانصراف المبكر + الإجازة تعلّم اليوم =====
   async computeDay(employeeId: number, date: string): Promise<AttendanceDay> {
     const emp = await this.employees.findOne({ where: { id: employeeId } })
     if (!emp) throw new NotFoundException('الموظف غير موجود')
@@ -146,19 +192,53 @@ export class AttendanceService {
     const checkOut =
       punches.length > 1 ? hhmmOf(punches[punches.length - 1].punchTime) : null
 
+    // إجازة معتمدة تغطي اليوم؟ اليوم محسوب كإجازة مهما كانت البصمات
+    const approvedLeaves = await this.leaves.find({
+      where: { employeeId, status: 'APPROVED' },
+    })
+    const isLeaveDay = approvedLeaves.some(
+      (l) => l.fromDate <= date && l.toDate >= date
+    )
+
     let status: AttendanceStatus = 'absent'
     let lateMinutes = 0
     let earlyLeaveMinutes = 0
+    let excusedMinutes = 0
     let workMinutes = 0
 
-    if (checkIn) {
+    if (isLeaveDay) {
+      status = 'leave'
+    } else if (checkIn) {
+      const permissions = await this.approvedPermissionWindows(employeeId, date)
+
+      // التأخير الخام ناقص المعذور بإذن — ثم فترة السماح
       const lateRaw = toMinutes(checkIn) - toMinutes(shift.start)
-      lateMinutes = lateRaw > grace ? lateRaw : 0
+      let excusedLate = 0
+      if (lateRaw > 0) {
+        excusedLate = this.overlapMinutes(
+          toMinutes(shift.start),
+          toMinutes(checkIn),
+          permissions
+        )
+      }
+      const effectiveLate = lateRaw - excusedLate
+      lateMinutes = effectiveLate > grace ? effectiveLate : 0
+
+      let excusedEarly = 0
       if (checkOut) {
         const earlyRaw = toMinutes(shift.end) - toMinutes(checkOut)
-        earlyLeaveMinutes = earlyRaw > grace ? earlyRaw : 0
+        if (earlyRaw > 0) {
+          excusedEarly = this.overlapMinutes(
+            toMinutes(checkOut),
+            toMinutes(shift.end),
+            permissions
+          )
+        }
+        const effectiveEarly = earlyRaw - excusedEarly
+        earlyLeaveMinutes = effectiveEarly > grace ? effectiveEarly : 0
         workMinutes = Math.max(0, toMinutes(checkOut) - toMinutes(checkIn))
       }
+      excusedMinutes = excusedLate + excusedEarly
       status = lateMinutes > 0 ? 'late' : earlyLeaveMinutes > 0 ? 'early_leave' : 'present'
     }
 
@@ -174,13 +254,14 @@ export class AttendanceService {
       status,
       lateMinutes,
       earlyLeaveMinutes,
+      excusedMinutes,
       workMinutes,
       computedAt: new Date(),
     })
     day = await this.days.save(day)
 
-    // الأوفرتايم × البصمة
-    if (checkOut) await this.detectOvertime(emp, date, shift, checkOut)
+    // الأوفرتايم × البصمة (لا يُكتشف في يوم إجازة)
+    if (checkOut && !isLeaveDay) await this.detectOvertime(emp, date, shift, checkOut)
     return day
   }
 

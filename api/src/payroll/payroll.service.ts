@@ -95,7 +95,13 @@ export class PayrollService {
     let totalNet = 0
     for (const emp of emps) {
       const basic = Number(emp.basicSalary ?? 0)
-      const dayRate = basic / monthlyDays
+      // الإجمالي = الأساسي + البدلات — وهو أساس معدلات الخصم والإضافي
+      const allowances =
+        Number(emp.housingAllowance ?? 0) +
+        Number(emp.transportAllowance ?? 0) +
+        Number(emp.otherAllowance ?? 0)
+      const gross = basic + allowances
+      const dayRate = gross / monthlyDays
       const hourRate = dayRate / dailyHours
       const minuteRate = hourRate / 60
 
@@ -163,7 +169,7 @@ export class PayrollService {
       )
 
       const netPay = round2(
-        basic + otAmount - latenessDeduction - unpaidDeduction - loanDeduction
+        gross + otAmount - latenessDeduction - unpaidDeduction - loanDeduction
       )
       totalNet = round2(totalNet + netPay)
 
@@ -172,6 +178,7 @@ export class PayrollService {
           runId: run.id,
           employeeId: emp.id,
           basicSalary: basic,
+          allowances: round2(allowances),
           overtimeHours: otHours,
           overtimeAmount: otAmount,
           lateMinutes,
