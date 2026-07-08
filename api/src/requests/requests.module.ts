@@ -6,6 +6,7 @@ import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { ApproverResolver } from './approver-resolver.service'
 import { DestinationsService } from './destinations.service'
+import { LeaveBalancesService } from './leave-balances.service'
 import { ApprovalChain } from './entities/approval-chain.entity'
 import { ApprovalStep } from './entities/approval-step.entity'
 import { AttendanceCorrection, OvertimeEntry } from './entities/attendance.entities'
@@ -64,8 +65,9 @@ import { RequestsService } from './requests.service'
     RequestsService,
     ApproverResolver,
     DestinationsService,
+    LeaveBalancesService,
     RequestsScheduler,
   ],
-  exports: [RequestsService],
+  exports: [RequestsService, LeaveBalancesService],
 })
 export class RequestsModule {}

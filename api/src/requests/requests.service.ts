@@ -12,6 +12,8 @@ import { branchScopeOf } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { ApproverResolver, ResolvedStep } from './approver-resolver.service'
 import { DestinationsService } from './destinations.service'
+import { LeaveBalancesService } from './leave-balances.service'
+import { LeaveType } from './entities/leave.entities'
 import { ApprovalChain } from './entities/approval-chain.entity'
 import { ApprovalStep } from './entities/approval-step.entity'
 import { RequestApproval } from './entities/request-approval.entity'
@@ -34,6 +36,7 @@ export class RequestsService {
     private readonly ds: DataSource,
     private readonly resolver: ApproverResolver,
     private readonly destinations: DestinationsService,
+    private readonly leaveBalances: LeaveBalancesService,
     @InjectRepository(Request) private readonly requests: Repository<Request>,
     @InjectRepository(RequestType)
     private readonly types: Repository<RequestType>,
@@ -106,6 +109,29 @@ export class RequestsService {
 
     const type = await this.types.findOne({ where: { code: req.typeCode } })
     if (!type) throw new NotFoundException('نوع الطلب غير موجود')
+
+    // الإجازات التي تمس الرصيد: تحقق الكفاية بالطبقات قبل دخول الدورة
+    if (type.affectsBalance && type.category === 'leaves') {
+      const payload = req.payload ? JSON.parse(req.payload) : {}
+      const days = Number(payload.days)
+      if (days > 0) {
+        const ltCode = String(
+          payload.leaveType ?? type.code.replace('LEAVE_', '')
+        )
+        const lt = await this.ds
+          .getRepository(LeaveType)
+          .findOne({ where: { code: ltCode } })
+        const balanceType = lt?.balanceSource ?? 'annual'
+        if (balanceType !== 'none') {
+          await this.leaveBalances.assertSufficient(
+            req.requesterId,
+            balanceType,
+            days,
+            String(payload.fromDate ?? new Date().toISOString().slice(0, 10))
+          )
+        }
+      }
+    }
 
     const resolved = await this.resolveChain(type, req)
     req.resolvedSteps = JSON.stringify(resolved)

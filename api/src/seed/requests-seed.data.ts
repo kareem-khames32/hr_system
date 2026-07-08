@@ -236,4 +236,13 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'attendance.grace_minutes', value: '10' },
   // مفتاح استقبال بصمات ZKTeco — غيّره في الإنتاج
   { key: 'attendance.device_key', value: 'zk-device-key-change-me' },
+  // الإجازات: الترحيل السنوي بالطبقات
+  { key: 'leave.annual_entitled', value: '21' },
+  { key: 'leave.carryover_max_days', value: '10' },
+  { key: 'leave.carryover_expiry_months', value: '3' },
+  // الرواتب: دورة 23 → 22 ومعاملات الحساب
+  { key: 'payroll.cycle_start_day', value: '23' },
+  { key: 'payroll.monthly_days', value: '30' },
+  { key: 'payroll.daily_hours', value: '8' },
+  { key: 'payroll.late_deduction_enabled', value: 'true' },
 ]

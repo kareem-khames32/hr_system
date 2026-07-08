@@ -16,6 +16,7 @@ import {
 } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Roles, RolesGuard } from '../auth/guards'
+import { LeaveBalancesService } from './leave-balances.service'
 import { RequestsService } from './requests.service'
 
 class CreateRequestDto {
@@ -49,12 +50,34 @@ class ResubmitDto {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('requests')
 export class RequestsController {
-  constructor(private readonly service: RequestsService) {}
+  constructor(
+    private readonly service: RequestsService,
+    private readonly balances: LeaveBalancesService
+  ) {}
 
   // كتالوج الأنواع — لبناء شاشة «طلب جديد»
   @Get('types')
   catalog() {
     return this.service.catalog()
+  }
+
+  // أرصدة إجازاتي بالطبقات (افتتاحي مُرحّل + استحقاق السنة)
+  @Get('leave-balances/mine')
+  myBalances(@CurrentUser() user: JwtPayload) {
+    return user.employeeId ? this.balances.allBalances(user.employeeId) : []
+  }
+
+  @Roles('super_admin', 'hr_manager', 'branch_manager')
+  @Get('leave-balances/:employeeId')
+  employeeBalances(@Param('employeeId', ParseIntPipe) employeeId: number) {
+    return this.balances.allBalances(employeeId)
+  }
+
+  // الترحيل السنوي: متبقي السنة → طبقة افتتاحية بصلاحية للسنة الجديدة
+  @Roles('super_admin', 'hr_manager')
+  @Post('leave-balances/rollover/:fromPeriod')
+  rollover(@Param('fromPeriod') fromPeriod: string) {
+    return this.balances.rollover(fromPeriod)
   }
 
   @Get('mine')

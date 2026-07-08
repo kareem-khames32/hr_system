@@ -40,6 +40,7 @@ import {
   AttendancePunch,
   ScheduleEntry,
 } from '../attendance/attendance.entities'
+import { PayrollItem, PayrollRun } from '../payroll/payroll.entities'
 import { ensureLeaveBalance, seedRequests } from './seed-requests'
 
 const dbType = (process.env.DB_TYPE ?? 'mssql') as 'mssql' | 'mysql'
@@ -82,6 +83,9 @@ const common = {
     AttendancePunch,
     ScheduleEntry,
     AttendanceDay,
+    // الرواتب
+    PayrollRun,
+    PayrollItem,
   ],
   synchronize: true, // البذر ينشئ الجداول لو مش موجودة
 }

@@ -98,6 +98,9 @@ export class LeaveBalance {
   @Column({ type: 'decimal', precision: 6, scale: 2, default: 0 })
   openingDays: number
 
+  @Column({ type: 'decimal', precision: 6, scale: 2, default: 0 })
+  openingTaken: number
+
   @Column({ type: 'date', nullable: true })
   openingExpiry: string // NULL = بلا انتهاء
 }

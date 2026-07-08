@@ -8,6 +8,7 @@ import { OrgModule } from './org/org.module'
 import { EmployeesModule } from './employees/employees.module'
 import { RequestsModule } from './requests/requests.module'
 import { AttendanceModule } from './attendance/attendance.module'
+import { PayrollModule } from './payroll/payroll.module'
 
 @Module({
   imports: [
@@ -56,6 +57,7 @@ import { AttendanceModule } from './attendance/attendance.module'
     EmployeesModule,
     RequestsModule,
     AttendanceModule,
+    PayrollModule,
   ],
   controllers: [HealthController],
 })

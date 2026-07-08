@@ -1,8 +1,9 @@
 import { Injectable, Logger } from '@nestjs/common'
 import { EntityManager } from 'typeorm'
+import { LeaveBalancesService } from './leave-balances.service'
 import { Request } from './entities/request.entity'
 import { RequestType } from './entities/request-type.entity'
-import { Leave, LeaveBalance, LeaveType } from './entities/leave.entities'
+import { Leave, LeaveType } from './entities/leave.entities'
 import {
   AttendanceCorrection,
   OvertimeEntry,
@@ -37,6 +38,8 @@ const refOf = (prefix: string, id: number): string =>
 @Injectable()
 export class DestinationsService {
   private readonly logger = new Logger(DestinationsService.name)
+
+  constructor(private readonly leaveBalances: LeaveBalancesService) {}
 
   // ===== القاعدة الذهبية: كل طلب معتمد يُكتب في سجل دائم =====
   async execute(
@@ -77,18 +80,14 @@ export class DestinationsService {
         })
         const balanceType = lt?.balanceSource ?? 'annual'
         if (balanceType !== 'none') {
-          const period = String(new Date().getFullYear())
-          const bal = await em.getRepository(LeaveBalance).findOne({
-            where: {
-              employeeId: req.requesterId,
-              balanceType,
-              period,
-            },
-          })
-          if (bal) {
-            bal.taken = Number(bal.taken) + Number(leave.days)
-            await em.getRepository(LeaveBalance).save(bal)
-          }
+          // خصم بالطبقات: الافتتاحي الساري أولاً ثم استحقاق السنة
+          await this.leaveBalances.deduct(
+            em,
+            req.requesterId,
+            balanceType,
+            Number(leave.days),
+            leave.fromDate
+          )
         }
       }
       return { ref: refOf('LV', leave.id), completed: true }
@@ -115,14 +114,13 @@ export class DestinationsService {
     })
     const balanceType = lt?.balanceSource ?? 'annual'
     if (balanceType !== 'none') {
-      const period = String(new Date().getFullYear())
-      const bal = await em.getRepository(LeaveBalance).findOne({
-        where: { employeeId: req.requesterId, balanceType, period },
-      })
-      if (bal) {
-        bal.taken = Math.max(0, Number(bal.taken) - Number(leave.days))
-        await em.getRepository(LeaveBalance).save(bal)
-      }
+      await this.leaveBalances.restore(
+        em,
+        req.requesterId,
+        balanceType,
+        Number(leave.days),
+        leave.fromDate.slice(0, 4)
+      )
     }
     return { ref: refOf('LVX', leave.id), completed: true }
   }
