@@ -1,17 +1,15 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
-  Filter,
   Plus,
   Download,
   Upload,
   MoreVertical,
   Eye,
   Edit,
-  Trash2,
   Mail,
   Phone,
   Building2,
@@ -19,9 +17,16 @@ import {
   ChevronRight,
 } from 'lucide-react'
 import Link from 'next/link'
+import {
+  fetchEmployees,
+  fetchBranches,
+  fetchDepartments,
+  archiveEmployee,
+  ApiDepartment,
+} from '@/lib/api'
 
 interface Employee {
-  id: string
+  id: number
   employeeId: string
   name: string
   nameEn: string
@@ -30,127 +35,12 @@ interface Employee {
   phone: string
   department: string
   jobTitle: string
-  status: 'active' | 'probation' | 'suspended' | 'resigned'
+  status: string
   joinDate: string
   branch: string
 }
 
-const employees: Employee[] = [
-  {
-    id: '1',
-    employeeId: 'EMP001',
-    name: 'أحمد محمد علي',
-    nameEn: 'Ahmed Mohammed Ali',
-    avatar: 'أ',
-    email: 'ahmed.m@company.com',
-    phone: '+966 50 123 4567',
-    department: 'تقنية المعلومات',
-    jobTitle: 'مدير تقنية المعلومات',
-    status: 'active',
-    joinDate: '2020/03/15',
-    branch: 'الرياض',
-  },
-  {
-    id: '2',
-    employeeId: 'EMP002',
-    name: 'سارة أحمد الخالدي',
-    nameEn: 'Sara Ahmed Alkhaldi',
-    avatar: 'س',
-    email: 'sara.a@company.com',
-    phone: '+966 55 234 5678',
-    department: 'الموارد البشرية',
-    jobTitle: 'أخصائي موارد بشرية',
-    status: 'active',
-    joinDate: '2021/07/01',
-    branch: 'الرياض',
-  },
-  {
-    id: '3',
-    employeeId: 'EMP003',
-    name: 'محمد خالد السعيد',
-    nameEn: 'Mohammed Khaled Alsaeed',
-    avatar: 'م',
-    email: 'mohammed.k@company.com',
-    phone: '+966 54 345 6789',
-    department: 'المبيعات',
-    jobTitle: 'مندوب مبيعات أول',
-    status: 'active',
-    joinDate: '2019/11/20',
-    branch: 'جدة',
-  },
-  {
-    id: '4',
-    employeeId: 'EMP004',
-    name: 'فاطمة علي الزهراني',
-    nameEn: 'Fatima Ali Alzahrani',
-    avatar: 'ف',
-    email: 'fatima.a@company.com',
-    phone: '+966 56 456 7890',
-    department: 'المحاسبة',
-    jobTitle: 'محاسب',
-    status: 'probation',
-    joinDate: '2025/12/01',
-    branch: 'الرياض',
-  },
-  {
-    id: '5',
-    employeeId: 'EMP005',
-    name: 'عمر سالم الحربي',
-    nameEn: 'Omar Salem Alharbi',
-    avatar: 'ع',
-    email: 'omar.s@company.com',
-    phone: '+966 50 567 8901',
-    department: 'التسويق',
-    jobTitle: 'مدير التسويق',
-    status: 'active',
-    joinDate: '2018/05/10',
-    branch: 'الرياض',
-  },
-  {
-    id: '6',
-    employeeId: 'EMP006',
-    name: 'نورة محمد العتيبي',
-    nameEn: 'Noura Mohammed Alotaibi',
-    avatar: 'ن',
-    email: 'noura.m@company.com',
-    phone: '+966 55 678 9012',
-    department: 'خدمة العملاء',
-    jobTitle: 'مشرف خدمة العملاء',
-    status: 'active',
-    joinDate: '2022/02/15',
-    branch: 'الدمام',
-  },
-  {
-    id: '7',
-    employeeId: 'EMP007',
-    name: 'خالد عبدالله القحطاني',
-    nameEn: 'Khaled Abdullah Alqahtani',
-    avatar: 'خ',
-    email: 'khaled.a@company.com',
-    phone: '+966 54 789 0123',
-    department: 'العمليات',
-    jobTitle: 'مدير العمليات',
-    status: 'suspended',
-    joinDate: '2017/09/01',
-    branch: 'الرياض',
-  },
-  {
-    id: '8',
-    employeeId: 'EMP008',
-    name: 'ريم سعود الدوسري',
-    nameEn: 'Reem Saud Aldosari',
-    avatar: 'ر',
-    email: 'reem.s@company.com',
-    phone: '+966 56 890 1234',
-    department: 'تقنية المعلومات',
-    jobTitle: 'مطور برمجيات',
-    status: 'active',
-    joinDate: '2023/04/20',
-    branch: 'الرياض',
-  },
-]
-
-const getStatusBadge = (status: Employee['status']) => {
+const getStatusBadge = (status: string) => {
   switch (status) {
     case 'active':
       return <span className="badge badge-success">نشط</span>
@@ -158,8 +48,14 @@ const getStatusBadge = (status: Employee['status']) => {
       return <span className="badge badge-warning">فترة تجربة</span>
     case 'suspended':
       return <span className="badge badge-danger">موقوف</span>
+    case 'notice_period':
+      return <span className="badge badge-warning">فترة إشعار</span>
     case 'resigned':
       return <span className="badge bg-gray-100 text-gray-600">مستقيل</span>
+    case 'archived':
+      return <span className="badge bg-gray-100 text-gray-600">مؤرشف</span>
+    default:
+      return <span className="badge bg-gray-100 text-gray-600">{status}</span>
   }
 }
 
@@ -168,6 +64,66 @@ export default function EmployeesPage() {
   const [selectedDepartment, setSelectedDepartment] = useState('all')
   const [selectedStatus, setSelectedStatus] = useState('all')
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table')
+
+  const [employees, setEmployees] = useState<Employee[]>([])
+  const [departments, setDepartments] = useState<ApiDepartment[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  const loadData = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const [emps, branches, depts] = await Promise.all([
+        fetchEmployees(),
+        fetchBranches(),
+        fetchDepartments(),
+      ])
+      const branchById = new Map(branches.map((b) => [b.id, b.name]))
+      const deptById = new Map(depts.map((d) => [d.id, d.name]))
+      setDepartments(depts)
+      setEmployees(
+        emps.map((e) => ({
+          id: e.id,
+          employeeId: e.employeeCode,
+          name: e.fullName,
+          nameEn: e.fullNameEn ?? '',
+          avatar: (e.fullName ?? '').trim().charAt(0) || 'م',
+          email: e.email ?? '',
+          phone: e.phone ?? '',
+          department:
+            e.departmentId != null
+              ? deptById.get(e.departmentId) ?? '—'
+              : '—',
+          jobTitle: e.jobTitle ?? '—',
+          status: e.status,
+          joinDate: e.joinDate
+            ? e.joinDate.slice(0, 10).split('-').join('/')
+            : '—',
+          branch: branchById.get(e.branchId) ?? '—',
+        }))
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تحميل البيانات')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const handleArchive = async (id: number) => {
+    if (!window.confirm('هل تريد أرشفة هذا الموظف؟')) return
+    try {
+      await archiveEmployee(id)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذرت أرشفة الموظف')
+    }
+  }
 
   const filteredEmployees = employees.filter((emp) => {
     const matchesSearch =
@@ -233,13 +189,11 @@ export default function EmployeesPage() {
               className="input w-48"
             >
               <option value="all">كل الأقسام</option>
-              <option value="تقنية المعلومات">تقنية المعلومات</option>
-              <option value="الموارد البشرية">الموارد البشرية</option>
-              <option value="المبيعات">المبيعات</option>
-              <option value="المحاسبة">المحاسبة</option>
-              <option value="التسويق">التسويق</option>
-              <option value="خدمة العملاء">خدمة العملاء</option>
-              <option value="العمليات">العمليات</option>
+              {departments.map((dept) => (
+                <option key={dept.id} value={dept.name}>
+                  {dept.name}
+                </option>
+              ))}
             </select>
 
             {/* Status Filter */}
@@ -252,7 +206,7 @@ export default function EmployeesPage() {
               <option value="active">نشط</option>
               <option value="probation">فترة تجربة</option>
               <option value="suspended">موقوف</option>
-              <option value="resigned">مستقيل</option>
+              <option value="archived">مؤرشف</option>
             </select>
 
             {/* View Mode Toggle */}
@@ -281,6 +235,11 @@ export default function EmployeesPage() {
           </div>
         </div>
 
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
+        )}
+
         {/* Results Count */}
         <div className="flex items-center justify-between">
           <p className="text-sm text-gray-500">
@@ -289,8 +248,13 @@ export default function EmployeesPage() {
           </p>
         </div>
 
-        {/* Table View */}
-        {viewMode === 'table' ? (
+        {/* Loading */}
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : viewMode === 'table' ? (
+          /* Table View */
           <div className="card overflow-hidden p-0">
             <div className="overflow-x-auto">
               <table className="w-full">
@@ -347,7 +311,11 @@ export default function EmployeesPage() {
                           >
                             <Edit size={18} className="text-gray-500" />
                           </Link>
-                          <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                          <button
+                            onClick={() => handleArchive(employee.id)}
+                            title="أرشفة"
+                            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                          >
                             <MoreVertical size={18} className="text-gray-500" />
                           </button>
                         </div>

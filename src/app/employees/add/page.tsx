@@ -1,7 +1,18 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import {
+  fetchBranches,
+  fetchDepartments,
+  fetchTeams,
+  fetchEmployees,
+  createEmployee,
+  ApiBranch,
+  ApiDepartment,
+  ApiTeam,
+  ApiEmployee,
+} from '@/lib/api'
 import {
   User,
   Briefcase,
@@ -124,6 +135,108 @@ export default function AddEmployeePage() {
   const [openingExpiry, setOpeningExpiry] = useState<'end_of_year' | 'custom_date' | 'no_expiry'>('end_of_year')
   const [openingExpiryDate, setOpeningExpiryDate] = useState('')
 
+  // بيانات القوائم من السيرفر
+  const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [departments, setDepartments] = useState<ApiDepartment[]>([])
+  const [teams, setTeams] = useState<ApiTeam[]>([])
+  const [allEmployees, setAllEmployees] = useState<ApiEmployee[]>([])
+  const [error, setError] = useState('')
+  const [submitting, setSubmitting] = useState(false)
+
+  // حقول النموذج المرتبطة بالباك إند
+  const [form, setForm] = useState({
+    firstNameAr: '',
+    fatherNameAr: '',
+    grandNameAr: '',
+    familyNameAr: '',
+    firstNameEn: '',
+    middleNameEn: '',
+    lastNameEn: '',
+    nationalId: '',
+    phone: '',
+    personalEmail: '',
+    employeeCode: '',
+    fingerprintCode: '',
+    joinDate: '',
+    status: 'probation',
+    branchId: '',
+    departmentId: '',
+    teamId: '',
+    managerId: '',
+    jobTitle: '',
+    workEmail: '',
+    basicSalary: '',
+    payMethod: 'transfer',
+    bankName: '',
+    iban: '',
+  })
+
+  const setField = (key: keyof typeof form, value: string) =>
+    setForm((prev) => ({ ...prev, [key]: value }))
+
+  useEffect(() => {
+    Promise.all([fetchBranches(), fetchDepartments(), fetchTeams(), fetchEmployees()])
+      .then(([b, d, t, e]) => {
+        setBranches(b)
+        setDepartments(d)
+        setTeams(t)
+        setAllEmployees(e)
+      })
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : 'تعذر تحميل بيانات القوائم')
+      )
+  }, [])
+
+  const fullNameAr = [form.firstNameAr, form.fatherNameAr, form.grandNameAr, form.familyNameAr]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join(' ')
+  const fullNameEn = [form.firstNameEn, form.middleNameEn, form.lastNameEn]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join(' ')
+
+  const filteredDepartments = form.branchId
+    ? departments.filter((d) => d.branchId === Number(form.branchId))
+    : departments
+  const filteredTeams = form.departmentId
+    ? teams.filter((t) => t.departmentId === Number(form.departmentId))
+    : teams
+
+  const handleSubmit = async () => {
+    setError('')
+    setSubmitting(true)
+    try {
+      const payload: Partial<ApiEmployee> = {
+        employeeCode: (form.employeeCode || form.fingerprintCode).trim(),
+        fullName: fullNameAr,
+        status: form.status,
+        payMethod: form.payMethod,
+      }
+      if (form.branchId) payload.branchId = Number(form.branchId)
+      if (fullNameEn) payload.fullNameEn = fullNameEn
+      const email = (form.workEmail || form.personalEmail).trim()
+      if (email) payload.email = email
+      if (form.phone.trim()) payload.phone = form.phone.trim()
+      if (form.nationalId.trim()) payload.nationalId = form.nationalId.trim()
+      if (form.jobTitle) payload.jobTitle = form.jobTitle
+      if (form.departmentId) payload.departmentId = Number(form.departmentId)
+      if (form.teamId) payload.teamId = Number(form.teamId)
+      if (form.managerId) payload.managerEmployeeId = Number(form.managerId)
+      if (form.joinDate) payload.joinDate = form.joinDate
+      if (form.basicSalary !== '') payload.basicSalary = Number(form.basicSalary)
+      if (form.bankName) payload.bankName = form.bankName
+      const iban = form.iban.replace(/\s+/g, '').toUpperCase()
+      if (iban) payload.iban = iban
+
+      await createEmployee(payload)
+      window.location.href = '/employees'
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر حفظ الموظف')
+      setSubmitting(false)
+    }
+  }
+
   const nextStep = () => {
     if (currentStep < steps.length) {
       setCurrentStep(currentStep + 1)
@@ -217,19 +330,19 @@ export default function AddEmployeePage() {
                   {/* Name Fields - Arabic */}
                   <div>
                     <label className="label">الاسم الأول (عربي) *</label>
-                    <input type="text" className="input" placeholder="أحمد" />
+                    <input type="text" className="input" placeholder="أحمد" value={form.firstNameAr} onChange={(e) => setField('firstNameAr', e.target.value)} />
                   </div>
                   <div>
                     <label className="label">اسم الأب (عربي) *</label>
-                    <input type="text" className="input" placeholder="محمد" />
+                    <input type="text" className="input" placeholder="محمد" value={form.fatherNameAr} onChange={(e) => setField('fatherNameAr', e.target.value)} />
                   </div>
                   <div>
                     <label className="label">اسم الجد (عربي)</label>
-                    <input type="text" className="input" placeholder="علي" />
+                    <input type="text" className="input" placeholder="علي" value={form.grandNameAr} onChange={(e) => setField('grandNameAr', e.target.value)} />
                   </div>
                   <div>
                     <label className="label">اسم العائلة (عربي) *</label>
-                    <input type="text" className="input" placeholder="السعيد" />
+                    <input type="text" className="input" placeholder="السعيد" value={form.familyNameAr} onChange={(e) => setField('familyNameAr', e.target.value)} />
                   </div>
                 </div>
               </div>
@@ -238,22 +351,22 @@ export default function AddEmployeePage() {
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="label">First Name *</label>
-                  <input type="text" className="input" placeholder="Ahmed" dir="ltr" />
+                  <input type="text" className="input" placeholder="Ahmed" dir="ltr" value={form.firstNameEn} onChange={(e) => setField('firstNameEn', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">Middle Name</label>
-                  <input type="text" className="input" placeholder="Mohammed" dir="ltr" />
+                  <input type="text" className="input" placeholder="Mohammed" dir="ltr" value={form.middleNameEn} onChange={(e) => setField('middleNameEn', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">Last Name *</label>
-                  <input type="text" className="input" placeholder="Alsaeed" dir="ltr" />
+                  <input type="text" className="input" placeholder="Alsaeed" dir="ltr" value={form.lastNameEn} onChange={(e) => setField('lastNameEn', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">الاسم الكامل (تلقائي)</label>
                   <input
                     type="text"
                     className="input bg-gray-50"
-                    value="أحمد محمد علي السعيد"
+                    value={fullNameAr}
                     disabled
                   />
                 </div>
@@ -307,7 +420,7 @@ export default function AddEmployeePage() {
                 </div>
                 <div>
                   <label className="label">رقم الهوية / الإقامة *</label>
-                  <input type="text" className="input" placeholder="1234567890" dir="ltr" />
+                  <input type="text" className="input" placeholder="1234567890" dir="ltr" value={form.nationalId} onChange={(e) => setField('nationalId', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">رقم جواز السفر</label>
@@ -327,7 +440,7 @@ export default function AddEmployeePage() {
                 <div>
                   <label className="label">رقم الجوال *</label>
                   <div className="relative">
-                    <input type="tel" className="input pl-10" placeholder="+966 50 123 4567" dir="ltr" />
+                    <input type="tel" className="input pl-10" placeholder="+966 50 123 4567" dir="ltr" value={form.phone} onChange={(e) => setField('phone', e.target.value)} />
                     <Phone size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   </div>
                 </div>
@@ -338,7 +451,7 @@ export default function AddEmployeePage() {
                 <div>
                   <label className="label">البريد الإلكتروني الشخصي</label>
                   <div className="relative">
-                    <input type="email" className="input pl-10" placeholder="email@example.com" dir="ltr" />
+                    <input type="email" className="input pl-10" placeholder="email@example.com" dir="ltr" value={form.personalEmail} onChange={(e) => setField('personalEmail', e.target.value)} />
                     <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   </div>
                 </div>
@@ -414,16 +527,16 @@ export default function AddEmployeePage() {
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="label">الرقم الوظيفي *</label>
-                  <input type="text" className="input" placeholder="EMP001" dir="ltr" />
+                  <input type="text" className="input" placeholder="EMP001" dir="ltr" value={form.employeeCode} onChange={(e) => setField('employeeCode', e.target.value)} />
                   <p className="text-xs text-gray-400 mt-1">اتركه فارغاً للإنشاء التلقائي</p>
                 </div>
                 <div>
                   <label className="label">رقم البصمة</label>
-                  <input type="text" className="input" placeholder="001" dir="ltr" />
+                  <input type="text" className="input" placeholder="001" dir="ltr" value={form.fingerprintCode} onChange={(e) => setField('fingerprintCode', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">تاريخ التعيين *</label>
-                  <input type="date" className="input" />
+                  <input type="date" className="input" value={form.joinDate} onChange={(e) => setField('joinDate', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">تاريخ بداية العمل الفعلي</label>
@@ -446,7 +559,7 @@ export default function AddEmployeePage() {
                 </div>
                 <div>
                   <label className="label">حالة الموظف *</label>
-                  <select className="input">
+                  <select className="input" value={form.status} onChange={(e) => setField('status', e.target.value)}>
                     <option value="probation">فترة تجربة</option>
                     <option value="active">نشط</option>
                   </select>
@@ -481,22 +594,32 @@ export default function AddEmployeePage() {
                 </div>
                 <div>
                   <label className="label">الفرع *</label>
-                  <select className="input">
+                  <select
+                    className="input"
+                    value={form.branchId}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, branchId: e.target.value, departmentId: '', teamId: '' }))
+                    }
+                  >
                     <option value="">اختر</option>
-                    <option value="riyadh">الرياض</option>
-                    <option value="jeddah">جدة</option>
-                    <option value="dammam">الدمام</option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
                   </select>
                 </div>
                 <div>
                   <label className="label">الإدارة/القسم *</label>
-                  <select className="input">
+                  <select
+                    className="input"
+                    value={form.departmentId}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, departmentId: e.target.value, teamId: '' }))
+                    }
+                  >
                     <option value="">اختر</option>
-                    <option value="it">تقنية المعلومات</option>
-                    <option value="hr">الموارد البشرية</option>
-                    <option value="finance">المالية</option>
-                    <option value="sales">المبيعات</option>
-                    <option value="marketing">التسويق</option>
+                    {filteredDepartments.map((d) => (
+                      <option key={d.id} value={d.id}>{d.name}</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -504,23 +627,22 @@ export default function AddEmployeePage() {
               <div className="grid grid-cols-3 gap-4">
                 <div>
                   <label className="label">الفريق</label>
-                  <select className="input">
+                  <select className="input" value={form.teamId} onChange={(e) => setField('teamId', e.target.value)}>
                     <option value="">بدون فريق (تابع للقسم مباشرة)</option>
-                    <option value="it-dev">فريق التطوير</option>
-                    <option value="it-sup">فريق الدعم الفني</option>
-                    <option value="hr-rec">فريق التوظيف</option>
-                    <option value="hr-emp">فريق شؤون الموظفين</option>
+                    {filteredTeams.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
                   </select>
                   <p className="text-xs text-gray-400 mt-1">مدير الفريق سيكون المدير المباشر</p>
                 </div>
                 <div>
                   <label className="label">المسمى الوظيفي *</label>
-                  <select className="input">
+                  <select className="input" value={form.jobTitle} onChange={(e) => setField('jobTitle', e.target.value)}>
                     <option value="">اختر</option>
-                    <option value="developer">مطور برمجيات</option>
-                    <option value="analyst">محلل نظم</option>
-                    <option value="manager">مدير</option>
-                    <option value="specialist">أخصائي</option>
+                    <option value="مطور برمجيات">مطور برمجيات</option>
+                    <option value="محلل نظم">محلل نظم</option>
+                    <option value="مدير">مدير</option>
+                    <option value="أخصائي">أخصائي</option>
                   </select>
                 </div>
                 <div>
@@ -539,10 +661,13 @@ export default function AddEmployeePage() {
               <div className="grid grid-cols-3 gap-4">
                 <div>
                   <label className="label">المدير المباشر</label>
-                  <select className="input">
+                  <select className="input" value={form.managerId} onChange={(e) => setField('managerId', e.target.value)}>
                     <option value="">اختر (أو يتحدد من الفريق)</option>
-                    <option value="team-leader">خالد عبدالله الشمري - قائد فريق التطوير</option>
-                    <option value="dept-manager">أحمد محمد - مدير تقنية المعلومات</option>
+                    {allEmployees.map((emp) => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.fullName}{emp.jobTitle ? ` - ${emp.jobTitle}` : ''}
+                      </option>
+                    ))}
                   </select>
                   <p className="text-xs text-gray-400 mt-1">يتحدد تلقائياً عند اختيار الفريق</p>
                 </div>
@@ -895,7 +1020,7 @@ export default function AddEmployeePage() {
               <div className="grid grid-cols-2 gap-4">
                 <div>
                   <label className="label">البريد الإلكتروني للعمل</label>
-                  <input type="email" className="input" placeholder="ahmed.m@company.com" dir="ltr" />
+                  <input type="email" className="input" placeholder="ahmed.m@company.com" dir="ltr" value={form.workEmail} onChange={(e) => setField('workEmail', e.target.value)} />
                   <p className="text-xs text-gray-400 mt-1">اتركه فارغاً للإنشاء التلقائي</p>
                 </div>
               </div>
@@ -913,7 +1038,7 @@ export default function AddEmployeePage() {
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="label">الراتب الأساسي *</label>
-                  <input type="number" className="input" placeholder="10000" dir="ltr" />
+                  <input type="number" className="input" placeholder="10000" dir="ltr" value={form.basicSalary} onChange={(e) => setField('basicSalary', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">العملة *</label>
@@ -925,9 +1050,9 @@ export default function AddEmployeePage() {
                 </div>
                 <div>
                   <label className="label">طريقة الدفع *</label>
-                  <select className="input">
-                    <option value="bank">تحويل بنكي</option>
-                    <option value="check">شيك</option>
+                  <select className="input" value={form.payMethod} onChange={(e) => setField('payMethod', e.target.value)}>
+                    <option value="transfer">تحويل بنكي</option>
+                    <option value="visa">فيزا</option>
                     <option value="cash">نقدي</option>
                   </select>
                 </div>
@@ -978,13 +1103,13 @@ export default function AddEmployeePage() {
               <div className="grid grid-cols-3 gap-4">
                 <div>
                   <label className="label">اسم البنك *</label>
-                  <select className="input">
+                  <select className="input" value={form.bankName} onChange={(e) => setField('bankName', e.target.value)}>
                     <option value="">اختر</option>
-                    <option value="alrajhi">بنك الراجحي</option>
-                    <option value="alinma">بنك الإنماء</option>
-                    <option value="snb">البنك الأهلي</option>
-                    <option value="riyad">بنك الرياض</option>
-                    <option value="sabb">بنك ساب</option>
+                    <option value="بنك الراجحي">بنك الراجحي</option>
+                    <option value="بنك الإنماء">بنك الإنماء</option>
+                    <option value="البنك الأهلي">البنك الأهلي</option>
+                    <option value="بنك الرياض">بنك الرياض</option>
+                    <option value="بنك ساب">بنك ساب</option>
                   </select>
                 </div>
                 <div>
@@ -993,7 +1118,7 @@ export default function AddEmployeePage() {
                 </div>
                 <div>
                   <label className="label">رقم الحساب (IBAN) *</label>
-                  <input type="text" className="input" placeholder="SA00 0000 0000 0000 0000 0000" dir="ltr" />
+                  <input type="text" className="input" placeholder="SA00 0000 0000 0000 0000 0000" dir="ltr" value={form.iban} onChange={(e) => setField('iban', e.target.value)} />
                 </div>
               </div>
 
@@ -1317,6 +1442,11 @@ export default function AddEmployeePage() {
             </div>
           )}
 
+          {/* Error Banner */}
+          {error && (
+            <div className="bg-red-50 text-red-700 rounded-xl p-4 mt-8">{error}</div>
+          )}
+
           {/* Navigation Buttons */}
           <div className="flex items-center justify-between mt-8 pt-6 border-t border-gray-100">
             <button
@@ -1331,7 +1461,11 @@ export default function AddEmployeePage() {
             <div className="flex items-center gap-3">
               <button className="btn-secondary">حفظ كمسودة</button>
               {currentStep === steps.length ? (
-                <button className="btn-success flex items-center gap-2">
+                <button
+                  onClick={handleSubmit}
+                  disabled={submitting}
+                  className="btn-success flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
                   <Save size={18} />
                   حفظ وإضافة الموظف
                 </button>

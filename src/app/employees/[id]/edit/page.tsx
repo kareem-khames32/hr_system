@@ -1,65 +1,142 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   ArrowRight,
   Save,
   User,
-  Mail,
-  Phone,
-  MapPin,
-  Building2,
-  Calendar,
   Briefcase,
   CreditCard,
   Upload,
-  X,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useParams } from 'next/navigation'
+import {
+  fetchEmployee,
+  updateEmployee,
+  fetchDepartments,
+  fetchEmployees,
+  ApiDepartment,
+  ApiEmployee,
+} from '@/lib/api'
+
+const bankOptions = ['البنك الأهلي', 'بنك الراجحي', 'بنك الرياض', 'البنك السعودي الفرنسي']
 
 export default function EditEmployeePage() {
   const params = useParams()
-  const employeeId = params.id
+  const employeeId = Number(params.id)
 
   const [formData, setFormData] = useState({
     // Personal Info
-    firstName: 'أحمد',
-    lastName: 'محمد علي',
-    email: 'ahmed.m@company.com',
-    phone: '+966 55 123 4567',
-    nationalId: '1234567890',
-    birthDate: '1990-05-15',
+    firstName: '',
+    lastName: '',
+    email: '',
+    phone: '',
+    nationalId: '',
+    birthDate: '',
     gender: 'male',
-    maritalStatus: 'married',
-    nationality: 'سعودي',
-    address: 'الرياض، حي النرجس',
+    maritalStatus: 'single',
+    nationality: '',
+    address: '',
 
     // Employment Info
-    employeeId: 'EMP001',
-    department: 'تقنية المعلومات',
-    position: 'مطور برمجيات أول',
-    manager: 'سالم العتيبي',
-    joinDate: '2022-03-01',
+    employeeId: '',
+    departmentId: '',
+    position: '',
+    managerId: '',
+    joinDate: '',
     contractType: 'permanent',
     workLocation: 'المقر الرئيسي',
 
     // Financial Info
-    bankName: 'البنك الأهلي',
-    iban: 'SA1234567890123456789012',
-    basicSalary: '15000',
-    housingAllowance: '3000',
-    transportAllowance: '1500',
+    bankName: '',
+    iban: '',
+    basicSalary: '',
+    housingAllowance: '',
+    transportAllowance: '',
   })
+
+  const [departments, setDepartments] = useState<ApiDepartment[]>([])
+  const [managers, setManagers] = useState<ApiEmployee[]>([])
+  const [loading, setLoading] = useState(true)
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    if (!employeeId) {
+      setError('رقم الموظف غير صالح')
+      setLoading(false)
+      return
+    }
+    Promise.all([fetchEmployee(employeeId), fetchDepartments(), fetchEmployees()])
+      .then(([emp, depts, emps]) => {
+        setDepartments(depts)
+        setManagers(emps.filter((e) => e.id !== emp.id))
+        const parts = (emp.fullName ?? '').trim().split(/\s+/)
+        setFormData((prev) => ({
+          ...prev,
+          firstName: parts[0] ?? '',
+          lastName: parts.slice(1).join(' '),
+          email: emp.email ?? '',
+          phone: emp.phone ?? '',
+          nationalId: emp.nationalId ?? '',
+          employeeId: emp.employeeCode,
+          departmentId: emp.departmentId != null ? String(emp.departmentId) : '',
+          position: emp.jobTitle ?? '',
+          managerId: emp.managerEmployeeId != null ? String(emp.managerEmployeeId) : '',
+          joinDate: emp.joinDate ? emp.joinDate.slice(0, 10) : '',
+          bankName: emp.bankName ?? '',
+          iban: emp.iban ?? '',
+          basicSalary: emp.basicSalary != null ? String(Number(emp.basicSalary)) : '',
+        }))
+      })
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : 'تعذر تحميل بيانات الموظف')
+      )
+      .finally(() => setLoading(false))
+  }, [employeeId])
 
   const handleChange = (field: string, value: string) => {
     setFormData(prev => ({ ...prev, [field]: value }))
   }
 
-  const handleSubmit = (e: React.FormEvent) => {
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    console.log('Saving:', formData)
+    setError('')
+    setSaving(true)
+    try {
+      const changes: Partial<ApiEmployee> = {}
+      const fullName = `${formData.firstName} ${formData.lastName}`.trim()
+      if (fullName) changes.fullName = fullName
+      if (formData.email.trim()) changes.email = formData.email.trim()
+      if (formData.phone.trim()) changes.phone = formData.phone.trim()
+      if (formData.nationalId.trim()) changes.nationalId = formData.nationalId.trim()
+      if (formData.position.trim()) changes.jobTitle = formData.position.trim()
+      if (formData.departmentId) changes.departmentId = Number(formData.departmentId)
+      if (formData.managerId) changes.managerEmployeeId = Number(formData.managerId)
+      if (formData.joinDate) changes.joinDate = formData.joinDate
+      if (formData.bankName) changes.bankName = formData.bankName
+      const iban = formData.iban.replace(/\s+/g, '').toUpperCase()
+      if (iban) changes.iban = iban
+      if (formData.basicSalary !== '') changes.basicSalary = Number(formData.basicSalary)
+
+      await updateEmployee(employeeId, changes)
+      window.location.href = '/employees'
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر حفظ التغييرات')
+      setSaving(false)
+    }
+  }
+
+  if (loading) {
+    return (
+      <MainLayout>
+        <div className="flex items-center justify-center py-20">
+          <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      </MainLayout>
+    )
   }
 
   return (
@@ -80,19 +157,24 @@ export default function EditEmployeePage() {
             <Link href={`/employees/${employeeId}`} className="btn-secondary">
               إلغاء
             </Link>
-            <button type="submit" className="btn-primary flex items-center gap-2">
+            <button type="submit" disabled={saving} className="btn-primary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed">
               <Save size={18} />
               حفظ التغييرات
             </button>
           </div>
         </div>
 
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
+        )}
+
         {/* Profile Photo */}
         <div className="card">
           <h2 className="text-lg font-bold text-gray-800 mb-4">الصورة الشخصية</h2>
           <div className="flex items-center gap-6">
             <div className="w-24 h-24 bg-gradient-to-br from-primary-500 to-primary-600 rounded-2xl flex items-center justify-center text-white text-3xl font-bold">
-              أ
+              {formData.firstName.trim().charAt(0) || 'م'}
             </div>
             <div>
               <button type="button" className="btn-secondary flex items-center gap-2 mb-2">
@@ -230,14 +312,13 @@ export default function EditEmployeePage() {
               <label className="block text-sm font-medium text-gray-700 mb-2">القسم</label>
               <select
                 className="input w-full"
-                value={formData.department}
-                onChange={(e) => handleChange('department', e.target.value)}
+                value={formData.departmentId}
+                onChange={(e) => handleChange('departmentId', e.target.value)}
               >
-                <option value="تقنية المعلومات">تقنية المعلومات</option>
-                <option value="الموارد البشرية">الموارد البشرية</option>
-                <option value="المبيعات">المبيعات</option>
-                <option value="المالية">المالية</option>
-                <option value="التسويق">التسويق</option>
+                <option value="">بدون قسم</option>
+                {departments.map((dept) => (
+                  <option key={dept.id} value={dept.id}>{dept.name}</option>
+                ))}
               </select>
             </div>
             <div>
@@ -253,12 +334,15 @@ export default function EditEmployeePage() {
               <label className="block text-sm font-medium text-gray-700 mb-2">المدير المباشر</label>
               <select
                 className="input w-full"
-                value={formData.manager}
-                onChange={(e) => handleChange('manager', e.target.value)}
+                value={formData.managerId}
+                onChange={(e) => handleChange('managerId', e.target.value)}
               >
-                <option value="سالم العتيبي">سالم العتيبي</option>
-                <option value="محمد سالم">محمد سالم</option>
-                <option value="خالد محمد">خالد محمد</option>
+                <option value="">بدون مدير مباشر</option>
+                {managers.map((mgr) => (
+                  <option key={mgr.id} value={mgr.id}>
+                    {mgr.fullName}{mgr.jobTitle ? ` - ${mgr.jobTitle}` : ''}
+                  </option>
+                ))}
               </select>
             </div>
             <div>
@@ -312,10 +396,13 @@ export default function EditEmployeePage() {
                 value={formData.bankName}
                 onChange={(e) => handleChange('bankName', e.target.value)}
               >
-                <option value="البنك الأهلي">البنك الأهلي</option>
-                <option value="بنك الراجحي">بنك الراجحي</option>
-                <option value="بنك الرياض">بنك الرياض</option>
-                <option value="البنك السعودي الفرنسي">البنك السعودي الفرنسي</option>
+                <option value="">اختر</option>
+                {formData.bankName && !bankOptions.includes(formData.bankName) && (
+                  <option value={formData.bankName}>{formData.bankName}</option>
+                )}
+                {bankOptions.map((bank) => (
+                  <option key={bank} value={bank}>{bank}</option>
+                ))}
               </select>
             </div>
             <div className="col-span-2">
