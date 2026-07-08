@@ -33,7 +33,45 @@ const ds =
         options: { trustServerCertificate: true, encrypt: false },
       })
 
+// إنشاء القاعدة تلقائياً إن لم تكن موجودة — يوفّر خطوة CREATE DATABASE اليدوية
+async function ensureDatabaseExists() {
+  if (dbType === 'mysql') {
+    // اتصال بدون قاعدة محددة لإنشائها
+    // eslint-disable-next-line @typescript-eslint/no-var-requires
+    const mysql = require('mysql2/promise')
+    const conn = await mysql.createConnection({
+      host: common.host,
+      port: common.port,
+      user: common.username,
+      password: common.password,
+    })
+    await conn.query(
+      `CREATE DATABASE IF NOT EXISTS \`${common.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+    )
+    await conn.end()
+    console.log(`✓ القاعدة ${common.database} جاهزة`)
+  } else {
+    // mssql: اتصال بـ master لإنشائها
+    const master = new DataSource({
+      type: 'mssql',
+      host: common.host,
+      port: common.port,
+      username: common.username,
+      password: common.password,
+      database: 'master',
+      options: { trustServerCertificate: true, encrypt: false },
+    })
+    await master.initialize()
+    await master.query(
+      `IF DB_ID('${common.database}') IS NULL CREATE DATABASE [${common.database}]`
+    )
+    await master.destroy()
+    console.log(`✓ القاعدة ${common.database} جاهزة`)
+  }
+}
+
 async function main() {
+  await ensureDatabaseExists()
   await ds.initialize()
   console.log(`✓ اتصال قاعدة البيانات ناجح (${dbType})`)
 
