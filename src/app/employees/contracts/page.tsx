@@ -1,210 +1,176 @@
-"use client";
+'use client'
 
-import { useState } from "react";
-import { MainLayout } from "@/components/layout";
-import Link from "next/link";
+import { useEffect, useState } from 'react'
+import { MainLayout } from '@/components/layout'
+import Link from 'next/link'
 import {
   FileSignature,
   Search,
   Filter,
   Plus,
   Eye,
-  Edit2,
   Download,
   RefreshCw,
   AlertTriangle,
   CheckCircle,
   Clock,
-  Calendar,
-  User,
-  Building2,
-  Briefcase,
   Bell,
-  MoreVertical,
-  ChevronLeft,
   X,
-} from "lucide-react";
+} from 'lucide-react'
+import {
+  fetchDocuments,
+  fetchEmployees,
+  fetchDepartments,
+  updateDocument,
+} from '@/lib/api'
 
-interface Contract {
-  id: string;
-  employeeId: string;
-  employeeName: string;
-  employeeAvatar: string;
-  department: string;
-  jobTitle: string;
-  contractType: "permanent" | "fixed" | "probation" | "parttime";
-  startDate: string;
-  endDate?: string;
-  status: "active" | "expiring" | "expired" | "renewed";
-  salary: number;
-  renewalCount: number;
-  lastRenewalDate?: string;
-  notes?: string;
+// العقود تُدار كمستندات (docType يحتوي «عقد») في سجل المستندات
+interface ContractRow {
+  id: number
+  employeeId: number
+  employeeName: string
+  employeeAvatar: string
+  department: string
+  jobTitle: string
+  contractType: string
+  startDate: string
+  endDate: string
+  status: 'active' | 'expiring' | 'expired'
+  notes: string
 }
 
-const contractTypes = {
-  permanent: { name: "غير محدد المدة", color: "bg-blue-100 text-blue-700" },
-  fixed: { name: "محدد المدة", color: "bg-purple-100 text-purple-700" },
-  probation: { name: "تحت التجربة", color: "bg-yellow-100 text-yellow-700" },
-  parttime: { name: "دوام جزئي", color: "bg-cyan-100 text-cyan-700" },
-};
-
 const statusConfig = {
-  active: { name: "ساري", color: "bg-green-100 text-green-700", icon: CheckCircle },
-  expiring: { name: "ينتهي قريباً", color: "bg-orange-100 text-orange-700", icon: AlertTriangle },
-  expired: { name: "منتهي", color: "bg-red-100 text-red-700", icon: Clock },
-  renewed: { name: "تم التجديد", color: "bg-blue-100 text-blue-700", icon: RefreshCw },
-};
-
-const mockContracts: Contract[] = [
-  {
-    id: "1",
-    employeeId: "EMP001",
-    employeeName: "أحمد محمد علي",
-    employeeAvatar: "أ",
-    department: "تقنية المعلومات",
-    jobTitle: "مدير تقنية المعلومات",
-    contractType: "permanent",
-    startDate: "2020-03-15",
-    status: "active",
-    salary: 20250,
-    renewalCount: 0,
-  },
-  {
-    id: "2",
-    employeeId: "EMP002",
-    employeeName: "سارة أحمد الخالدي",
-    employeeAvatar: "س",
-    department: "الموارد البشرية",
-    jobTitle: "مدير الموارد البشرية",
-    contractType: "fixed",
-    startDate: "2022-01-01",
-    endDate: "2024-12-31",
-    status: "active",
-    salary: 18000,
-    renewalCount: 1,
-    lastRenewalDate: "2023-01-01",
-  },
-  {
-    id: "3",
-    employeeId: "EMP003",
-    employeeName: "عمر سالم الحربي",
-    employeeAvatar: "ع",
-    department: "المبيعات",
-    jobTitle: "مدير المبيعات",
-    contractType: "fixed",
-    startDate: "2023-06-01",
-    endDate: "2024-02-28",
-    status: "expiring",
-    salary: 16500,
-    renewalCount: 0,
-    notes: "يجب مناقشة التجديد قبل نهاية الشهر",
-  },
-  {
-    id: "4",
-    employeeId: "EMP004",
-    employeeName: "ريم سعود الدوسري",
-    employeeAvatar: "ر",
-    department: "تقنية المعلومات",
-    jobTitle: "مطور برمجيات أول",
-    contractType: "fixed",
-    startDate: "2022-05-15",
-    endDate: "2024-03-15",
-    status: "expiring",
-    salary: 14000,
-    renewalCount: 1,
-    lastRenewalDate: "2023-05-15",
-  },
-  {
-    id: "5",
-    employeeId: "EMP005",
-    employeeName: "محمد خالد السعيد",
-    employeeAvatar: "م",
-    department: "المبيعات",
-    jobTitle: "مندوب مبيعات أول",
-    contractType: "probation",
-    startDate: "2024-01-15",
-    endDate: "2024-04-15",
-    status: "active",
-    salary: 9000,
-    renewalCount: 0,
-    notes: "فترة تجربة 3 أشهر",
-  },
-  {
-    id: "6",
-    employeeId: "EMP006",
-    employeeName: "نورة محمد العتيبي",
-    employeeAvatar: "ن",
-    department: "الموارد البشرية",
-    jobTitle: "أخصائي موارد بشرية",
-    contractType: "fixed",
-    startDate: "2023-01-01",
-    endDate: "2024-01-31",
-    status: "expired",
-    salary: 10500,
-    renewalCount: 0,
-  },
-  {
-    id: "7",
-    employeeId: "EMP007",
-    employeeName: "فهد عبدالله الشمري",
-    employeeAvatar: "ف",
-    department: "تقنية المعلومات",
-    jobTitle: "مطور برمجيات",
-    contractType: "fixed",
-    startDate: "2024-01-01",
-    endDate: "2025-12-31",
-    status: "renewed",
-    salary: 12000,
-    renewalCount: 2,
-    lastRenewalDate: "2024-01-01",
-  },
-  {
-    id: "8",
-    employeeId: "EMP008",
-    employeeName: "هند سالم القحطاني",
-    employeeAvatar: "هـ",
-    department: "المالية",
-    jobTitle: "محاسب",
-    contractType: "parttime",
-    startDate: "2023-06-01",
-    status: "active",
-    salary: 6000,
-    renewalCount: 0,
-  },
-];
+  active: { name: 'ساري', color: 'bg-green-100 text-green-700', icon: CheckCircle },
+  expiring: { name: 'ينتهي قريباً', color: 'bg-orange-100 text-orange-700', icon: AlertTriangle },
+  expired: { name: 'منتهي', color: 'bg-red-100 text-red-700', icon: Clock },
+}
 
 export default function ContractsPage() {
-  const [contracts] = useState<Contract[]>(mockContracts);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filterStatus, setFilterStatus] = useState("all");
-  const [filterType, setFilterType] = useState("all");
-  const [showRenewalModal, setShowRenewalModal] = useState(false);
-  const [selectedContract, setSelectedContract] = useState<Contract | null>(null);
+  const [contracts, setContracts] = useState<ContractRow[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+  const [searchTerm, setSearchTerm] = useState('')
+  const [filterStatus, setFilterStatus] = useState('all')
+  const [filterType, setFilterType] = useState('all')
+  const [showRenewalModal, setShowRenewalModal] = useState(false)
+  const [selectedContract, setSelectedContract] = useState<ContractRow | null>(null)
+  const [renewForm, setRenewForm] = useState({
+    startDate: '',
+    endDate: '',
+    notes: '',
+  })
+
+  const loadData = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const [docs, emps, depts] = await Promise.all([
+        fetchDocuments(),
+        fetchEmployees(),
+        fetchDepartments(),
+      ])
+      const empById = new Map(emps.map((e) => [e.id, e]))
+      const deptById = new Map(depts.map((d) => [d.id, d.name]))
+      const today = new Date().toISOString().slice(0, 10)
+      const soon = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)
+      setContracts(
+        docs
+          .filter((d) => (d.docType ?? '').includes('عقد'))
+          .map((d) => {
+            const emp = empById.get(d.employeeId)
+            const name = d.employeeName ?? emp?.fullName ?? `#${d.employeeId}`
+            const end = d.expiryDate ? String(d.expiryDate).slice(0, 10) : ''
+            const expired = d.expired ?? (!!end && end < today)
+            return {
+              id: d.id,
+              employeeId: d.employeeId,
+              employeeName: name,
+              employeeAvatar: (name ?? '').trim().charAt(0) || 'م',
+              department:
+                emp?.departmentId != null
+                  ? deptById.get(emp.departmentId) ?? '—'
+                  : '—',
+              jobTitle: emp?.jobTitle ?? '—',
+              contractType: d.docType,
+              startDate: d.issueDate ? String(d.issueDate).slice(0, 10) : '',
+              endDate: end,
+              status: expired
+                ? ('expired' as const)
+                : end && end <= soon
+                ? ('expiring' as const)
+                : ('active' as const),
+              notes: d.notes ?? '',
+            }
+          })
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تحميل العقود')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const contractTypes = Array.from(new Set(contracts.map((c) => c.contractType)))
 
   const filteredContracts = contracts.filter((contract) => {
     const matchesSearch =
-      contract.employeeName.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      contract.employeeId.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesStatus = filterStatus === "all" || contract.status === filterStatus;
-    const matchesType = filterType === "all" || contract.contractType === filterType;
-    return matchesSearch && matchesStatus && matchesType;
-  });
+      contract.employeeName.includes(searchTerm) ||
+      contract.contractType.includes(searchTerm)
+    const matchesStatus = filterStatus === 'all' || contract.status === filterStatus
+    const matchesType = filterType === 'all' || contract.contractType === filterType
+    return matchesSearch && matchesStatus && matchesType
+  })
 
   const stats = {
     total: contracts.length,
-    active: contracts.filter((c) => c.status === "active").length,
-    expiring: contracts.filter((c) => c.status === "expiring").length,
-    expired: contracts.filter((c) => c.status === "expired").length,
-  };
+    active: contracts.filter((c) => c.status === 'active').length,
+    expiring: contracts.filter((c) => c.status === 'expiring').length,
+    expired: contracts.filter((c) => c.status === 'expired').length,
+  }
 
   const getDaysUntilExpiry = (endDate?: string) => {
-    if (!endDate) return null;
-    const end = new Date(endDate);
-    const today = new Date();
-    const diff = Math.ceil((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24));
-    return diff;
-  };
+    if (!endDate) return null
+    const end = new Date(endDate)
+    const today = new Date()
+    const diff = Math.ceil((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
+    return diff
+  }
+
+  const openRenewal = (contract: ContractRow) => {
+    setSelectedContract(contract)
+    setRenewForm({
+      startDate: contract.startDate,
+      endDate: contract.endDate,
+      notes: contract.notes,
+    })
+    setShowRenewalModal(true)
+  }
+
+  const handleRenew = async () => {
+    if (!selectedContract) return
+    setSaving(true)
+    setError('')
+    try {
+      await updateDocument(selectedContract.id, {
+        issueDate: renewForm.startDate || undefined,
+        expiryDate: renewForm.endDate || undefined,
+        notes: renewForm.notes || undefined,
+      })
+      setShowRenewalModal(false)
+      setSelectedContract(null)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تجديد العقد')
+    } finally {
+      setSaving(false)
+    }
+  }
 
   return (
     <MainLayout>
@@ -213,19 +179,29 @@ export default function ContractsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-900">إدارة العقود</h1>
-            <p className="text-gray-600 mt-1">متابعة عقود الموظفين وتجديدها</p>
+            <p className="text-gray-600 mt-1">
+              متابعة عقود الموظفين وتجديدها — تُدار عبر سجل المستندات
+            </p>
           </div>
           <div className="flex gap-2">
             <button className="btn-secondary flex items-center gap-2">
               <Download size={18} />
               تصدير
             </button>
-            <button className="btn-primary flex items-center gap-2">
+            <Link
+              href="/employees/documents"
+              className="btn-primary flex items-center gap-2"
+            >
               <Plus size={18} />
               عقد جديد
-            </button>
+            </Link>
           </div>
         </div>
+
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
@@ -288,7 +264,10 @@ export default function ContractsPage() {
                   يوجد {stats.expiring} عقود تنتهي خلال الـ 30 يوم القادمة وتحتاج لمراجعة
                 </p>
               </div>
-              <button className="btn-secondary text-sm">
+              <button
+                onClick={() => setFilterStatus('expiring')}
+                className="btn-secondary text-sm"
+              >
                 عرض التفاصيل
               </button>
             </div>
@@ -302,7 +281,7 @@ export default function ContractsPage() {
               <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
               <input
                 type="text"
-                placeholder="بحث بالاسم أو الرقم الوظيفي..."
+                placeholder="بحث بالاسم أو نوع العقد..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="input pr-10 w-full"
@@ -319,7 +298,6 @@ export default function ContractsPage() {
                 <option value="active">ساري</option>
                 <option value="expiring">ينتهي قريباً</option>
                 <option value="expired">منتهي</option>
-                <option value="renewed">تم التجديد</option>
               </select>
               <select
                 value={filterType}
@@ -327,16 +305,23 @@ export default function ContractsPage() {
                 className="input"
               >
                 <option value="all">جميع الأنواع</option>
-                <option value="permanent">غير محدد المدة</option>
-                <option value="fixed">محدد المدة</option>
-                <option value="probation">تحت التجربة</option>
-                <option value="parttime">دوام جزئي</option>
+                {contractTypes.map((t) => (
+                  <option key={t} value={t}>
+                    {t}
+                  </option>
+                ))}
               </select>
             </div>
           </div>
         </div>
 
-        {/* Contracts Table */}
+        {/* Loading */}
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+        /* Contracts Table */
         <div className="card overflow-hidden">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
@@ -346,14 +331,14 @@ export default function ContractsPage() {
                 <th className="text-right py-3 px-4 font-medium text-gray-700">تاريخ البداية</th>
                 <th className="text-right py-3 px-4 font-medium text-gray-700">تاريخ الانتهاء</th>
                 <th className="text-center py-3 px-4 font-medium text-gray-700">الحالة</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-700">التجديدات</th>
+                <th className="text-right py-3 px-4 font-medium text-gray-700">ملاحظات</th>
                 <th className="text-center py-3 px-4 font-medium text-gray-700">الإجراءات</th>
               </tr>
             </thead>
             <tbody className="divide-y">
               {filteredContracts.map((contract) => {
-                const StatusIcon = statusConfig[contract.status].icon;
-                const daysUntilExpiry = getDaysUntilExpiry(contract.endDate);
+                const StatusIcon = statusConfig[contract.status].icon
+                const daysUntilExpiry = getDaysUntilExpiry(contract.endDate)
 
                 return (
                   <tr key={contract.id} className="hover:bg-gray-50">
@@ -372,18 +357,20 @@ export default function ContractsPage() {
                       </Link>
                     </td>
                     <td className="py-3 px-4">
-                      <span className={`badge ${contractTypes[contract.contractType].color}`}>
-                        {contractTypes[contract.contractType].name}
+                      <span className="badge bg-blue-100 text-blue-700">
+                        {contract.contractType}
                       </span>
                     </td>
                     <td className="py-3 px-4 text-gray-600">
-                      {new Date(contract.startDate).toLocaleDateString("ar-SA")}
+                      {contract.startDate
+                        ? new Date(contract.startDate).toLocaleDateString('ar-SA')
+                        : '-'}
                     </td>
                     <td className="py-3 px-4">
                       {contract.endDate ? (
                         <div>
                           <p className="text-gray-600">
-                            {new Date(contract.endDate).toLocaleDateString("ar-SA")}
+                            {new Date(contract.endDate).toLocaleDateString('ar-SA')}
                           </p>
                           {daysUntilExpiry !== null && daysUntilExpiry > 0 && daysUntilExpiry <= 30 && (
                             <p className="text-xs text-orange-600">
@@ -405,47 +392,36 @@ export default function ContractsPage() {
                       </span>
                     </td>
                     <td className="py-3 px-4">
-                      {contract.renewalCount > 0 ? (
-                        <div className="text-center">
-                          <span className="font-medium text-gray-900">{contract.renewalCount}</span>
-                          <p className="text-xs text-gray-500">
-                            آخر تجديد: {contract.lastRenewalDate && new Date(contract.lastRenewalDate).toLocaleDateString("ar-SA")}
-                          </p>
-                        </div>
+                      {contract.notes ? (
+                        <p className="text-sm text-gray-600 max-w-[200px] truncate">
+                          {contract.notes}
+                        </p>
                       ) : (
                         <span className="text-gray-400 text-center block">-</span>
                       )}
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex items-center justify-center gap-2">
-                        <button
+                        <Link
+                          href={`/employees/${contract.employeeId}`}
                           className="p-2 text-blue-600 hover:bg-blue-50 rounded-lg"
                           title="عرض"
                         >
                           <Eye size={18} />
-                        </button>
-                        {(contract.status === "expiring" || contract.status === "expired") && (
+                        </Link>
+                        {(contract.status === 'expiring' || contract.status === 'expired') && (
                           <button
-                            onClick={() => {
-                              setSelectedContract(contract);
-                              setShowRenewalModal(true);
-                            }}
+                            onClick={() => openRenewal(contract)}
                             className="p-2 text-green-600 hover:bg-green-50 rounded-lg"
                             title="تجديد"
                           >
                             <RefreshCw size={18} />
                           </button>
                         )}
-                        <button
-                          className="p-2 text-gray-600 hover:bg-gray-100 rounded-lg"
-                          title="تعديل"
-                        >
-                          <Edit2 size={18} />
-                        </button>
                       </div>
                     </td>
                   </tr>
-                );
+                )
               })}
             </tbody>
           </table>
@@ -453,10 +429,13 @@ export default function ContractsPage() {
           {filteredContracts.length === 0 && (
             <div className="text-center py-12">
               <FileSignature className="mx-auto text-gray-300 mb-4" size={48} />
-              <p className="text-gray-500">لا توجد عقود</p>
+              <p className="text-gray-500">
+                لا توجد بيانات عقود بعد — تُدار عبر المستندات (نوع مستند يحتوي «عقد»)
+              </p>
             </div>
           )}
         </div>
+        )}
 
         {/* Renewal Modal */}
         {showRenewalModal && selectedContract && (
@@ -482,7 +461,9 @@ export default function ContractsPage() {
                   </div>
                   <div>
                     <p className="font-bold text-gray-900">{selectedContract.employeeName}</p>
-                    <p className="text-sm text-gray-500">{selectedContract.jobTitle} - {selectedContract.department}</p>
+                    <p className="text-sm text-gray-500">
+                      {selectedContract.jobTitle} - {selectedContract.department}
+                    </p>
                   </div>
                 </div>
 
@@ -491,15 +472,17 @@ export default function ContractsPage() {
                   <div>
                     <label className="block text-sm text-gray-500 mb-1">تاريخ البداية الحالي</label>
                     <p className="font-medium text-gray-900">
-                      {new Date(selectedContract.startDate).toLocaleDateString("ar-SA")}
+                      {selectedContract.startDate
+                        ? new Date(selectedContract.startDate).toLocaleDateString('ar-SA')
+                        : '-'}
                     </p>
                   </div>
                   <div>
                     <label className="block text-sm text-gray-500 mb-1">تاريخ الانتهاء الحالي</label>
                     <p className="font-medium text-gray-900">
                       {selectedContract.endDate
-                        ? new Date(selectedContract.endDate).toLocaleDateString("ar-SA")
-                        : "-"}
+                        ? new Date(selectedContract.endDate).toLocaleDateString('ar-SA')
+                        : '-'}
                     </p>
                   </div>
                 </div>
@@ -513,39 +496,27 @@ export default function ContractsPage() {
                       <label className="block text-sm font-medium text-gray-700 mb-1">
                         تاريخ البداية الجديد
                       </label>
-                      <input type="date" className="input w-full" />
+                      <input
+                        type="date"
+                        className="input w-full"
+                        value={renewForm.startDate}
+                        onChange={(e) =>
+                          setRenewForm({ ...renewForm, startDate: e.target.value })
+                        }
+                      />
                     </div>
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-1">
                         تاريخ الانتهاء الجديد
                       </label>
-                      <input type="date" className="input w-full" />
-                    </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      مدة التجديد
-                    </label>
-                    <select className="input w-full">
-                      <option value="1">سنة واحدة</option>
-                      <option value="2">سنتين</option>
-                      <option value="3">3 سنوات</option>
-                      <option value="custom">مدة مخصصة</option>
-                    </select>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      الراتب الجديد
-                    </label>
-                    <div className="flex items-center gap-2">
                       <input
-                        type="number"
-                        className="input flex-1"
-                        defaultValue={selectedContract.salary}
+                        type="date"
+                        className="input w-full"
+                        value={renewForm.endDate}
+                        onChange={(e) =>
+                          setRenewForm({ ...renewForm, endDate: e.target.value })
+                        }
                       />
-                      <span className="text-gray-500">ر.س</span>
                     </div>
                   </div>
 
@@ -557,6 +528,10 @@ export default function ContractsPage() {
                       className="input w-full"
                       rows={3}
                       placeholder="أي ملاحظات إضافية..."
+                      value={renewForm.notes}
+                      onChange={(e) =>
+                        setRenewForm({ ...renewForm, notes: e.target.value })
+                      }
                     />
                   </div>
                 </div>
@@ -569,7 +544,11 @@ export default function ContractsPage() {
                 >
                   إلغاء
                 </button>
-                <button className="btn-primary flex items-center gap-2">
+                <button
+                  onClick={handleRenew}
+                  className="btn-primary flex items-center gap-2"
+                  disabled={saving}
+                >
                   <RefreshCw size={18} />
                   تجديد العقد
                 </button>
@@ -579,5 +558,5 @@ export default function ContractsPage() {
         )}
       </div>
     </MainLayout>
-  );
+  )
 }

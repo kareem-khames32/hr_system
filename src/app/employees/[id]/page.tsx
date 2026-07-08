@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
 import {
@@ -32,84 +32,252 @@ import {
   Check,
   AlertCircle,
 } from 'lucide-react'
+import {
+  fetchEmployeeProfile,
+  fetchBranches,
+  fetchDepartments,
+  fetchTeams,
+  fetchEmployees,
+} from '@/lib/api'
 
-// Mock employee data
-const employee = {
-  id: '1',
-  employeeId: 'EMP001',
-  name: 'أحمد محمد علي السعيد',
-  nameEn: 'Ahmed Mohammed Ali Alsaeed',
-  avatar: 'أ',
-  email: 'ahmed.m@company.com',
-  personalEmail: 'ahmed.personal@gmail.com',
-  phone: '+966 50 123 4567',
-  phoneAlt: '+966 55 987 6543',
-  department: 'تقنية المعلومات',
-  jobTitle: 'مدير تقنية المعلومات',
-  grade: 'Grade 5',
-  status: 'active',
-  joinDate: '2020/03/15',
-  branch: 'الرياض',
-  manager: 'محمد سالم العتيبي',
-  managerTitle: 'المدير العام',
-  nationality: 'سعودي',
-  nationalId: '1234567890',
-  passportNo: 'A12345678',
-  passportExpiry: '2028/05/20',
-  birthDate: '1990/05/15',
-  birthPlace: 'الرياض',
-  gender: 'ذكر',
-  maritalStatus: 'متزوج',
-  children: 2,
-  address: 'حي العليا، شارع الملك فهد، الرياض، المملكة العربية السعودية',
-  contractType: 'غير محدد المدة',
-  contractStart: '2020/03/15',
-  employmentType: 'دوام كامل',
-  basicSalary: 15000,
-  housingAllowance: 3750,
-  transportAllowance: 1500,
-  totalSalary: 20250,
-  bankName: 'بنك الراجحي',
-  bankAccount: 'SA00 0000 0000 0000 0000 0000',
-  gosiNumber: '1234567890',
-  education: [
-    {
-      degree: 'ماجستير',
-      major: 'علوم الحاسب',
-      university: 'جامعة الملك سعود',
-      year: '2015',
-    },
-    {
-      degree: 'بكالوريوس',
-      major: 'هندسة البرمجيات',
-      university: 'جامعة الملك فهد',
-      year: '2012',
-    },
-  ],
-  certifications: [
-    { name: 'PMP', issuer: 'PMI', date: '2021/03', expiry: '2024/03' },
-    { name: 'AWS Solutions Architect', issuer: 'Amazon', date: '2022/06', expiry: '2025/06' },
-  ],
-  skills: [
-    { name: 'إدارة المشاريع', level: 'خبير' },
-    { name: 'Python', level: 'متقدم' },
-    { name: 'AWS', level: 'متقدم' },
-    { name: 'SQL', level: 'متقدم' },
-  ],
-  languages: [
-    { name: 'العربية', level: 'لغة أم' },
-    { name: 'الإنجليزية', level: 'طلق' },
-  ],
-  leaveBalance: {
-    annual: { total: 30, used: 12, remaining: 18 },
-    sick: { total: 30, used: 3, remaining: 27 },
-    emergency: { total: 6, used: 1, remaining: 5 },
-  },
-  assets: [
-    { type: 'لابتوب', name: 'MacBook Pro 16"', assetId: 'LAP-001', date: '2020/03/15' },
-    { type: 'جوال', name: 'iPhone 14 Pro', assetId: 'MOB-023', date: '2023/01/10' },
-    { type: 'بطاقة دخول', name: 'Access Card', assetId: 'ACC-156', date: '2020/03/15' },
-  ],
+// نموذج العرض — يُملأ من الباك إند، والحقول غير المدعومة تظهر «—»
+interface EmployeeVM {
+  id: number
+  employeeId: string
+  name: string
+  nameEn: string
+  avatar: string
+  email: string
+  personalEmail: string
+  phone: string
+  phoneAlt: string
+  department: string
+  jobTitle: string
+  grade: string
+  status: string
+  joinDate: string
+  branch: string
+  manager: string
+  managerTitle: string
+  nationality: string
+  nationalId: string
+  passportNo: string
+  passportExpiry: string
+  birthDate: string
+  birthPlace: string
+  gender: string
+  maritalStatus: string
+  children: string
+  address: string
+  contractType: string
+  contractStart: string
+  employmentType: string
+  basicSalary: number
+  housingAllowance: number
+  transportAllowance: number
+  totalSalary: number
+  payMethod: string
+  bankName: string
+  bankAccount: string
+  gosiNumber: string
+  leaveBalance: { annual: { total: number; used: number; remaining: number } }
+}
+
+interface BalanceView {
+  total: number
+  used: number
+  remaining: number
+  openingDays: number
+  openingTaken: number
+  openingExpiry: string | null
+  openingExpired: boolean
+}
+
+interface LeaveView {
+  id: number
+  typeLabel: string
+  fromDate: string
+  toDate: string
+  days: number
+  status: string
+}
+
+interface CustodyView {
+  id: number
+  assetName: string
+  assetCategory: string
+  status: string
+  assignedAt: string
+  acknowledgedAt: string
+  returnedAt: string
+}
+
+interface HistoryEventView {
+  date: string
+  title: string
+  from: string
+  to: string
+  reason: string
+  requestId?: number
+  color: string
+}
+
+interface DocView {
+  id: number
+  docType: string
+  number: string
+  expiryDate: string
+  expired: boolean
+}
+
+const LEAVE_TYPE_AR: Record<string, string> = {
+  ANNUAL: 'إجازة سنوية',
+  SICK: 'إجازة مرضية',
+  CASUAL: 'إجازة طارئة',
+  UNPAID: 'إجازة بدون راتب',
+  MATERNITY: 'إجازة وضع',
+  PATERNITY: 'إجازة أبوة',
+  HAJJ: 'إجازة حج',
+  MARRIAGE: 'إجازة زواج',
+  BEREAVEMENT: 'إجازة وفاة/عدة',
+  EXAM: 'إجازة امتحانات',
+  COMPENSATORY: 'إجازة تعويضية',
+}
+
+const LEAVE_STATUS_AR: Record<string, string> = {
+  APPROVED: 'معتمدة',
+  UNDER_REVIEW: 'قيد المراجعة',
+  PENDING: 'قيد المراجعة',
+  REJECTED: 'مرفوضة',
+  CANCELLED: 'ملغاة',
+}
+
+const CUSTODY_STATUS_AR: Record<string, { label: string; className: string }> = {
+  PENDING_ACK: { label: 'بانتظار التأكيد', className: 'bg-indigo-100 text-indigo-700' },
+  ACTIVE: { label: 'نشطة', className: 'bg-success-50 text-success-700' },
+  RETURNED: { label: 'مُرجعة', className: 'bg-gray-100 text-gray-600' },
+  RETURN_REQUESTED: { label: 'طلب إرجاع', className: 'bg-blue-100 text-blue-700' },
+  LOST: { label: 'مفقودة', className: 'bg-red-100 text-red-700' },
+  DAMAGED: { label: 'تالفة', className: 'bg-orange-100 text-orange-700' },
+}
+
+const EMP_STATUS_AR: Record<string, string> = {
+  active: 'نشط',
+  probation: 'فترة تجربة',
+  suspended: 'موقوف',
+  notice_period: 'فترة إشعار',
+  resigned: 'مستقيل',
+  archived: 'مؤرشف',
+}
+
+const PAY_METHOD_AR: Record<string, string> = {
+  transfer: 'تحويل بنكي',
+  cash: 'نقدي',
+  visa: 'فيزا',
+}
+
+const statusBadge = (status: string) => {
+  switch (status) {
+    case 'active':
+      return <span className="badge badge-success">نشط</span>
+    case 'probation':
+      return <span className="badge badge-warning">فترة تجربة</span>
+    case 'suspended':
+      return <span className="badge badge-danger">موقوف</span>
+    case 'archived':
+      return <span className="badge bg-gray-100 text-gray-600">مؤرشف</span>
+    default:
+      return (
+        <span className="badge bg-gray-100 text-gray-600">
+          {EMP_STATUS_AR[status] ?? status}
+        </span>
+      )
+  }
+}
+
+const fmtDate = (v?: string | null) => (v ? String(v).slice(0, 10) : '—')
+
+const tenureText = (joinDate?: string | null) => {
+  if (!joinDate) return '—'
+  const start = new Date(joinDate)
+  const now = new Date()
+  let months =
+    (now.getFullYear() - start.getFullYear()) * 12 +
+    (now.getMonth() - start.getMonth())
+  if (months < 0) return '—'
+  const y = Math.floor(months / 12)
+  const m = months % 12
+  if (y === 0) return `${m} شهر`
+  return `${y} سنة و ${m} شهر`
+}
+
+// السجل الوظيفي — تحويل مداخل salary:/team:/title:/iban: إلى عربية مقروءة
+const parseHistoryEntry = (
+  h: { oldStatus?: string; newStatus: string; reason?: string; changedAt: string; requestId?: number },
+  teamNameById: Map<number, string>
+): HistoryEventView => {
+  const split = (v: string): [string | null, string] => {
+    const i = v.indexOf(':')
+    return i > -1 ? [v.slice(0, i), v.slice(i + 1)] : [null, v]
+  }
+  const [kind, toVal] = split(h.newStatus ?? '')
+  const [, fromVal] = split(h.oldStatus ?? '')
+  const base = {
+    date: fmtDate(h.changedAt),
+    reason: h.reason ?? '—',
+    requestId: h.requestId,
+  }
+  switch (kind) {
+    case 'salary':
+      return {
+        ...base,
+        title: 'تغيير راتب',
+        from: `الراتب: ${Number(fromVal || 0).toLocaleString()} ر.س`,
+        to: `${Number(toVal || 0).toLocaleString()} ر.س`,
+        color: 'bg-success-100 text-success-600',
+      }
+    case 'team':
+      return {
+        ...base,
+        title: 'نقل بين فرق',
+        from: `الفريق: ${teamNameById.get(Number(fromVal)) ?? `#${fromVal}`}`,
+        to: teamNameById.get(Number(toVal)) ?? `#${toVal}`,
+        color: 'bg-blue-100 text-blue-600',
+      }
+    case 'title':
+      return {
+        ...base,
+        title: 'ترقية',
+        from: `المسمى: ${fromVal || '—'}`,
+        to: toVal || '—',
+        color: 'bg-indigo-100 text-indigo-600',
+      }
+    case 'iban':
+      return {
+        ...base,
+        title: 'تغيير حساب بنكي',
+        from: `الحساب: ${fromVal || '—'}`,
+        to: toVal || '—',
+        color: 'bg-orange-100 text-orange-600',
+      }
+    default:
+      if ((h.newStatus ?? '') === 'data_update') {
+        return {
+          ...base,
+          title: 'تحديث بيانات',
+          from: '—',
+          to: '—',
+          color: 'bg-teal-100 text-teal-600',
+        }
+      }
+      return {
+        ...base,
+        title: 'تغيير حالة',
+        from: EMP_STATUS_AR[h.oldStatus ?? ''] ?? (h.oldStatus || '—'),
+        to: EMP_STATUS_AR[h.newStatus] ?? h.newStatus,
+        color: 'bg-primary-100 text-primary-600',
+      }
+  }
 }
 
 const tabs = [
@@ -170,7 +338,7 @@ const documentTemplates = [
 ]
 
 // Sample contract with employee data filled
-const generateDocument = (templateId: string, emp: typeof employee) => {
+const generateDocument = (templateId: string, emp: EmployeeVM) => {
   const templates: Record<string, string> = {
     '1': `بسم الله الرحمن الرحيم
 
@@ -337,7 +505,11 @@ _______________
   return templates[templateId] || ''
 }
 
-export default function EmployeeProfilePage() {
+export default function EmployeeProfilePage({
+  params,
+}: {
+  params: { id: string }
+}) {
   const [activeTab, setActiveTab] = useState('personal')
   const [showActionsMenu, setShowActionsMenu] = useState(false)
   const [showDocumentModal, setShowDocumentModal] = useState(false)
@@ -345,7 +517,170 @@ export default function EmployeeProfilePage() {
   const [generatedDocument, setGeneratedDocument] = useState<string>('')
   const [showPreview, setShowPreview] = useState(false)
 
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [employee, setEmployee] = useState<EmployeeVM | null>(null)
+  const [balAnnual, setBalAnnual] = useState<BalanceView | null>(null)
+  const [balSick, setBalSick] = useState<BalanceView | null>(null)
+  const [leaves, setLeaves] = useState<LeaveView[]>([])
+  const [custody, setCustody] = useState<CustodyView[]>([])
+  const [historyEvents, setHistoryEvents] = useState<HistoryEventView[]>([])
+  const [docs, setDocs] = useState<DocView[]>([])
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      setError('')
+      try {
+        const [profile, branches, departments, teams, allEmployees] =
+          await Promise.all([
+            fetchEmployeeProfile(Number(params.id)),
+            fetchBranches(),
+            fetchDepartments(),
+            fetchTeams(),
+            fetchEmployees(),
+          ])
+        const e = profile.employee
+        const branchById = new Map(branches.map((b) => [b.id, b.name]))
+        const deptById = new Map(departments.map((d) => [d.id, d.name]))
+        const teamById = new Map(teams.map((t) => [t.id, t.name]))
+        const empById = new Map(allEmployees.map((x) => [x.id, x]))
+
+        const today = new Date().toISOString().slice(0, 10)
+        const currentYear = String(new Date().getFullYear())
+        const balanceOf = (type: string): BalanceView | null => {
+          const rows = (profile.balances ?? []).filter(
+            (b: any) => b.balanceType === type
+          )
+          if (rows.length === 0) return null
+          const row =
+            rows.find((b: any) => String(b.period) === currentYear) ?? rows[0]
+          const openingExpired =
+            !!row.openingExpiry && String(row.openingExpiry).slice(0, 10) < today
+          const openingAvailable = openingExpired
+            ? 0
+            : Math.max(0, Number(row.openingDays ?? 0) - Number(row.openingTaken ?? 0))
+          return {
+            total: Number(row.entitled ?? 0),
+            used: Number(row.taken ?? 0),
+            remaining:
+              Number(row.entitled ?? 0) - Number(row.taken ?? 0) + openingAvailable,
+            openingDays: Number(row.openingDays ?? 0),
+            openingTaken: Number(row.openingTaken ?? 0),
+            openingExpiry: row.openingExpiry
+              ? String(row.openingExpiry).slice(0, 10)
+              : null,
+            openingExpired,
+          }
+        }
+        const annual = balanceOf('annual')
+        const sick = balanceOf('sick')
+        setBalAnnual(annual)
+        setBalSick(sick)
+
+        const manager = e.managerEmployeeId
+          ? empById.get(e.managerEmployeeId)
+          : undefined
+
+        setEmployee({
+          id: e.id,
+          employeeId: e.employeeCode,
+          name: e.fullName,
+          nameEn: e.fullNameEn ?? '',
+          avatar: (e.fullName ?? '').trim().charAt(0) || 'م',
+          email: e.email ?? '—',
+          personalEmail: '—',
+          phone: e.phone ?? '—',
+          phoneAlt: '—',
+          department:
+            e.departmentId != null ? deptById.get(e.departmentId) ?? '—' : '—',
+          jobTitle: e.jobTitle ?? '—',
+          grade: '—',
+          status: e.status,
+          joinDate: fmtDate(e.joinDate),
+          branch: branchById.get(e.branchId) ?? '—',
+          manager: manager?.fullName ?? '—',
+          managerTitle: manager?.jobTitle ?? '',
+          nationality: '—',
+          nationalId: e.nationalId ?? '—',
+          passportNo: '—',
+          passportExpiry: '—',
+          birthDate: '—',
+          birthPlace: '—',
+          gender: '—',
+          maritalStatus: '—',
+          children: '—',
+          address: '—',
+          contractType: '—',
+          contractStart: fmtDate(e.joinDate),
+          employmentType: '—',
+          basicSalary: Number(e.basicSalary ?? 0),
+          housingAllowance: 0,
+          transportAllowance: 0,
+          totalSalary: Number(e.basicSalary ?? 0),
+          payMethod: PAY_METHOD_AR[e.payMethod] ?? e.payMethod ?? '—',
+          bankName: e.bankName ?? '—',
+          bankAccount: e.iban ?? '—',
+          gosiNumber: '—',
+          leaveBalance: {
+            annual: {
+              total: annual?.total ?? 0,
+              used: annual?.used ?? 0,
+              remaining: annual?.remaining ?? 0,
+            },
+          },
+        })
+
+        setLeaves(
+          (profile.leaves ?? []).map((l: any) => ({
+            id: l.id,
+            typeLabel: LEAVE_TYPE_AR[l.leaveType] ?? l.leaveType,
+            fromDate: fmtDate(l.fromDate),
+            toDate: fmtDate(l.toDate),
+            days: Number(l.days ?? 0),
+            status: LEAVE_STATUS_AR[l.status] ?? l.status,
+          }))
+        )
+
+        setCustody(
+          (profile.custody ?? []).map((c: any) => ({
+            id: c.id,
+            assetName: c.assetName ?? `#${c.assetId}`,
+            assetCategory: c.assetCategory ?? '—',
+            status: c.status,
+            assignedAt: fmtDate(c.assignedAt),
+            acknowledgedAt: c.acknowledgedAt ? fmtDate(c.acknowledgedAt) : '',
+            returnedAt: c.returnedAt ? fmtDate(c.returnedAt) : '',
+          }))
+        )
+
+        setHistoryEvents(
+          (profile.history ?? []).map((h: any) => parseHistoryEntry(h, teamById))
+        )
+
+        setDocs(
+          (profile.documents ?? []).map((d: any) => ({
+            id: d.id,
+            docType: d.docType,
+            number: d.number ?? '—',
+            expiryDate: d.expiryDate ? fmtDate(d.expiryDate) : '—',
+            expired:
+              d.expired ??
+              (!!d.expiryDate && String(d.expiryDate).slice(0, 10) < today),
+          }))
+        )
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'تعذر تحميل ملف الموظف')
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [params.id])
+
   const handleGenerateDocument = (templateId: string) => {
+    if (!employee) return
     setSelectedTemplate(templateId)
     const content = generateDocument(templateId, employee)
     setGeneratedDocument(content)
@@ -388,6 +723,20 @@ export default function EmployeeProfilePage() {
           <span className="text-gray-800">ملف الموظف</span>
         </div>
 
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
+        )}
+
+        {/* Loading */}
+        {loading && (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        )}
+
+        {!loading && employee && (
+          <>
         {/* Profile Header */}
         <div className="card">
           <div className="flex items-start justify-between">
@@ -401,7 +750,7 @@ export default function EmployeeProfilePage() {
               <div>
                 <div className="flex items-center gap-3">
                   <h1 className="text-2xl font-bold text-gray-800">{employee.name}</h1>
-                  <span className="badge badge-success">نشط</span>
+                  {statusBadge(employee.status)}
                 </div>
                 <p className="text-gray-500 mt-1">{employee.nameEn}</p>
                 <p className="text-primary-600 font-mono text-sm mt-1">{employee.employeeId}</p>
@@ -495,7 +844,7 @@ export default function EmployeeProfilePage() {
             <div className="text-center">
               <p className="text-sm text-gray-500">تاريخ التعيين</p>
               <p className="font-bold text-gray-800 mt-1">{employee.joinDate}</p>
-              <p className="text-xs text-gray-400 mt-0.5">5 سنوات و 10 أشهر</p>
+              <p className="text-xs text-gray-400 mt-0.5">{tenureText(employee.joinDate === '—' ? null : employee.joinDate)}</p>
             </div>
             <div className="text-center">
               <p className="text-sm text-gray-500">المدير المباشر</p>
@@ -720,7 +1069,7 @@ export default function EmployeeProfilePage() {
                     </div>
                     <div className="flex items-center justify-between py-2">
                       <span className="text-gray-500">حالة الموظف</span>
-                      <span className="badge badge-success">نشط</span>
+                      {statusBadge(employee.status)}
                     </div>
                   </div>
                 </div>
@@ -743,11 +1092,11 @@ export default function EmployeeProfilePage() {
                 </div>
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">بدل السكن</p>
-                  <p className="font-bold text-gray-800 text-xl mt-1">{employee.housingAllowance.toLocaleString()} ر.س</p>
+                  <p className="font-bold text-gray-800 text-xl mt-1">—</p>
                 </div>
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">بدل المواصلات</p>
-                  <p className="font-bold text-gray-800 text-xl mt-1">{employee.transportAllowance.toLocaleString()} ر.س</p>
+                  <p className="font-bold text-gray-800 text-xl mt-1">—</p>
                 </div>
                 <div className="p-4 bg-primary-50 rounded-xl">
                   <p className="text-sm text-primary-600">إجمالي الراتب</p>
@@ -771,15 +1120,15 @@ export default function EmployeeProfilePage() {
                 </div>
 
                 <div className="space-y-4">
-                  <h3 className="text-md font-bold text-gray-700">التأمينات الاجتماعية</h3>
+                  <h3 className="text-md font-bold text-gray-700">طريقة صرف الراتب</h3>
                   <div className="space-y-3">
                     <div className="flex items-center justify-between py-2 border-b border-gray-100">
-                      <span className="text-gray-500">رقم التأمينات (GOSI)</span>
-                      <span className="font-medium text-gray-800 font-mono">{employee.gosiNumber}</span>
+                      <span className="text-gray-500">طريقة الصرف</span>
+                      <span className="font-medium text-gray-800">{employee.payMethod}</span>
                     </div>
                     <div className="flex items-center justify-between py-2">
-                      <span className="text-gray-500">خاضع للتأمينات</span>
-                      <span className="badge badge-success">نعم</span>
+                      <span className="text-gray-500">رقم التأمينات (GOSI)</span>
+                      <span className="font-medium text-gray-800 font-mono">{employee.gosiNumber}</span>
                     </div>
                   </div>
                 </div>
@@ -794,71 +1143,11 @@ export default function EmployeeProfilePage() {
                 المؤهلات والخبرات
               </h2>
 
-              {/* Education */}
-              <div>
-                <h3 className="text-md font-bold text-gray-700 mb-4">التعليم</h3>
-                <div className="space-y-4">
-                  {employee.education.map((edu, index) => (
-                    <div key={index} className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
-                      <div className="w-12 h-12 bg-primary-100 rounded-xl flex items-center justify-center">
-                        <GraduationCap size={24} className="text-primary-600" />
-                      </div>
-                      <div>
-                        <p className="font-bold text-gray-800">{edu.degree} - {edu.major}</p>
-                        <p className="text-gray-600 mt-1">{edu.university}</p>
-                        <p className="text-sm text-gray-400 mt-1">تخرج: {edu.year}</p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Certifications */}
-              <div>
-                <h3 className="text-md font-bold text-gray-700 mb-4">الشهادات المهنية</h3>
-                <div className="grid grid-cols-2 gap-4">
-                  {employee.certifications.map((cert, index) => (
-                    <div key={index} className="flex items-start gap-4 p-4 bg-gray-50 rounded-xl">
-                      <div className="w-12 h-12 bg-warning-50 rounded-xl flex items-center justify-center">
-                        <Award size={24} className="text-warning-600" />
-                      </div>
-                      <div>
-                        <p className="font-bold text-gray-800">{cert.name}</p>
-                        <p className="text-gray-600 mt-1">{cert.issuer}</p>
-                        <p className="text-sm text-gray-400 mt-1">
-                          حصول: {cert.date} | انتهاء: {cert.expiry}
-                        </p>
-                      </div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Skills */}
-              <div>
-                <h3 className="text-md font-bold text-gray-700 mb-4">المهارات</h3>
-                <div className="flex flex-wrap gap-3">
-                  {employee.skills.map((skill, index) => (
-                    <div key={index} className="px-4 py-2 bg-primary-50 rounded-xl">
-                      <span className="font-medium text-primary-700">{skill.name}</span>
-                      <span className="text-primary-500 text-sm mr-2">({skill.level})</span>
-                    </div>
-                  ))}
-                </div>
-              </div>
-
-              {/* Languages */}
-              <div>
-                <h3 className="text-md font-bold text-gray-700 mb-4">اللغات</h3>
-                <div className="flex flex-wrap gap-3">
-                  {employee.languages.map((lang, index) => (
-                    <div key={index} className="flex items-center gap-2 px-4 py-2 bg-gray-100 rounded-xl">
-                      <Globe size={18} className="text-gray-500" />
-                      <span className="font-medium text-gray-700">{lang.name}</span>
-                      <span className="text-gray-500 text-sm">- {lang.level}</span>
-                    </div>
-                  ))}
-                </div>
+              <div className="py-12 text-center">
+                <GraduationCap size={48} className="mx-auto text-gray-300 mb-4" />
+                <p className="text-gray-500">
+                  لا توجد بيانات مؤهلات مسجلة — هذه البيانات غير مدعومة في النظام حالياً
+                </p>
               </div>
             </div>
           )}
@@ -871,6 +1160,7 @@ export default function EmployeeProfilePage() {
               </h2>
 
               <div className="grid grid-cols-3 gap-6">
+                {balAnnual && (
                 <div className="p-6 bg-primary-50 rounded-2xl">
                   <div className="flex items-center justify-between mb-4">
                     <p className="font-bold text-gray-700">إجازة سنوية</p>
@@ -879,25 +1169,34 @@ export default function EmployeeProfilePage() {
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-500">الإجمالي</span>
-                      <span className="font-medium">{employee.leaveBalance.annual.total} يوم</span>
+                      <span className="font-medium">{balAnnual.total} يوم</span>
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-500">المستخدم</span>
-                      <span className="font-medium text-danger-600">{employee.leaveBalance.annual.used} يوم</span>
+                      <span className="font-medium text-danger-600">{balAnnual.used} يوم</span>
                     </div>
                     <div className="h-2 bg-primary-100 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-primary-500 rounded-full"
-                        style={{ width: `${(employee.leaveBalance.annual.used / employee.leaveBalance.annual.total) * 100}%` }}
+                        style={{ width: `${balAnnual.total ? Math.min(100, (balAnnual.used / balAnnual.total) * 100) : 0}%` }}
                       />
                     </div>
                     <div className="flex justify-between text-sm pt-2 border-t border-primary-100">
                       <span className="font-medium text-gray-700">المتبقي</span>
-                      <span className="font-bold text-primary-600">{employee.leaveBalance.annual.remaining} يوم</span>
+                      <span className="font-bold text-primary-600">{balAnnual.remaining} يوم</span>
                     </div>
+                    {balAnnual.openingDays > 0 && (
+                      <p className="text-xs text-gray-500 pt-1">
+                        رصيد مُرحَّل: {balAnnual.openingDays} يوم (مستخدم {balAnnual.openingTaken})
+                        {balAnnual.openingExpiry &&
+                          ` — ${balAnnual.openingExpired ? 'انتهى في' : 'ينتهي في'} ${balAnnual.openingExpiry}`}
+                      </p>
+                    )}
                   </div>
                 </div>
+                )}
 
+                {balSick && (
                 <div className="p-6 bg-success-50 rounded-2xl">
                   <div className="flex items-center justify-between mb-4">
                     <p className="font-bold text-gray-700">إجازة مرضية</p>
@@ -906,51 +1205,69 @@ export default function EmployeeProfilePage() {
                   <div className="space-y-2">
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-500">الإجمالي</span>
-                      <span className="font-medium">{employee.leaveBalance.sick.total} يوم</span>
+                      <span className="font-medium">{balSick.total} يوم</span>
                     </div>
                     <div className="flex justify-between text-sm">
                       <span className="text-gray-500">المستخدم</span>
-                      <span className="font-medium text-danger-600">{employee.leaveBalance.sick.used} يوم</span>
+                      <span className="font-medium text-danger-600">{balSick.used} يوم</span>
                     </div>
                     <div className="h-2 bg-success-100 rounded-full overflow-hidden">
                       <div
                         className="h-full bg-success-500 rounded-full"
-                        style={{ width: `${(employee.leaveBalance.sick.used / employee.leaveBalance.sick.total) * 100}%` }}
+                        style={{ width: `${balSick.total ? Math.min(100, (balSick.used / balSick.total) * 100) : 0}%` }}
                       />
                     </div>
                     <div className="flex justify-between text-sm pt-2 border-t border-success-100">
                       <span className="font-medium text-gray-700">المتبقي</span>
-                      <span className="font-bold text-success-600">{employee.leaveBalance.sick.remaining} يوم</span>
+                      <span className="font-bold text-success-600">{balSick.remaining} يوم</span>
                     </div>
+                    {balSick.openingDays > 0 && (
+                      <p className="text-xs text-gray-500 pt-1">
+                        رصيد مُرحَّل: {balSick.openingDays} يوم (مستخدم {balSick.openingTaken})
+                        {balSick.openingExpiry &&
+                          ` — ${balSick.openingExpired ? 'انتهى في' : 'ينتهي في'} ${balSick.openingExpiry}`}
+                      </p>
+                    )}
                   </div>
                 </div>
+                )}
 
-                <div className="p-6 bg-warning-50 rounded-2xl">
-                  <div className="flex items-center justify-between mb-4">
-                    <p className="font-bold text-gray-700">إجازة طارئة</p>
-                    <Calendar size={24} className="text-warning-500" />
+                {!balAnnual && !balSick && (
+                  <div className="col-span-3 py-12 text-center">
+                    <Calendar size={48} className="mx-auto text-gray-300 mb-4" />
+                    <p className="text-gray-500">لا توجد أرصدة إجازات مسجلة لهذا الموظف</p>
                   </div>
-                  <div className="space-y-2">
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-500">الإجمالي</span>
-                      <span className="font-medium">{employee.leaveBalance.emergency.total} يوم</span>
-                    </div>
-                    <div className="flex justify-between text-sm">
-                      <span className="text-gray-500">المستخدم</span>
-                      <span className="font-medium text-danger-600">{employee.leaveBalance.emergency.used} يوم</span>
-                    </div>
-                    <div className="h-2 bg-warning-100 rounded-full overflow-hidden">
-                      <div
-                        className="h-full bg-warning-500 rounded-full"
-                        style={{ width: `${(employee.leaveBalance.emergency.used / employee.leaveBalance.emergency.total) * 100}%` }}
-                      />
-                    </div>
-                    <div className="flex justify-between text-sm pt-2 border-t border-warning-100">
-                      <span className="font-medium text-gray-700">المتبقي</span>
-                      <span className="font-bold text-warning-600">{employee.leaveBalance.emergency.remaining} يوم</span>
-                    </div>
+                )}
+              </div>
+
+              {/* سجل الإجازات */}
+              <div className="pt-6 border-t border-gray-100">
+                <h3 className="text-md font-bold text-gray-700 mb-4">سجل الإجازات</h3>
+                {leaves.length === 0 ? (
+                  <p className="text-gray-500 text-sm">لا توجد إجازات مسجلة</p>
+                ) : (
+                  <div className="space-y-4">
+                    {leaves.map((l) => (
+                      <div key={l.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
+                        <div className="flex items-center gap-4">
+                          <div className="w-12 h-12 bg-primary-100 rounded-xl flex items-center justify-center">
+                            <Calendar size={24} className="text-primary-600" />
+                          </div>
+                          <div>
+                            <p className="font-bold text-gray-800">{l.typeLabel}</p>
+                            <p className="text-sm text-gray-500" dir="ltr">
+                              {l.fromDate} ← {l.toDate}
+                            </p>
+                          </div>
+                        </div>
+                        <div className="text-left">
+                          <p className="font-medium text-gray-800">{l.days} يوم</p>
+                          <p className="text-sm text-gray-400">{l.status}</p>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                </div>
+                )}
               </div>
             </div>
           )}
@@ -963,20 +1280,38 @@ export default function EmployeeProfilePage() {
               </h2>
 
               <div className="space-y-4">
-                {employee.assets.map((asset, index) => (
-                  <div key={index} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
+                {custody.length === 0 && (
+                  <div className="py-12 text-center">
+                    <FileText size={48} className="mx-auto text-gray-300 mb-4" />
+                    <p className="text-gray-500">لا توجد عهد مسجلة لهذا الموظف</p>
+                  </div>
+                )}
+                {custody.map((asset) => (
+                  <div key={asset.id} className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 bg-primary-100 rounded-xl flex items-center justify-center">
                         <FileText size={24} className="text-primary-600" />
                       </div>
                       <div>
-                        <p className="font-bold text-gray-800">{asset.name}</p>
-                        <p className="text-sm text-gray-500">{asset.type}</p>
+                        <p className="font-bold text-gray-800">{asset.assetName}</p>
+                        <p className="text-sm text-gray-500">{asset.assetCategory}</p>
                       </div>
                     </div>
                     <div className="text-left">
-                      <p className="font-mono text-primary-600">{asset.assetId}</p>
-                      <p className="text-sm text-gray-400">استلام: {asset.date}</p>
+                      <span
+                        className={`badge text-xs ${
+                          CUSTODY_STATUS_AR[asset.status]?.className ?? 'bg-gray-100 text-gray-600'
+                        }`}
+                      >
+                        {CUSTODY_STATUS_AR[asset.status]?.label ?? asset.status}
+                      </span>
+                      <p className="text-sm text-gray-400 mt-1">استلام: {asset.assignedAt}</p>
+                      {asset.acknowledgedAt && (
+                        <p className="text-xs text-indigo-500">أقرّ بالاستلام: {asset.acknowledgedAt}</p>
+                      )}
+                      {asset.returnedAt && (
+                        <p className="text-xs text-gray-400">أُرجعت: {asset.returnedAt}</p>
+                      )}
                     </div>
                   </div>
                 ))}
@@ -991,59 +1326,14 @@ export default function EmployeeProfilePage() {
                 السجل الوظيفي — كل تغيير مؤرَّخ وموثَّق
               </h2>
 
+              {historyEvents.length === 0 ? (
+                <div className="py-12 text-center">
+                  <Clock size={48} className="mx-auto text-gray-300 mb-4" />
+                  <p className="text-gray-500">لا توجد أحداث في السجل الوظيفي بعد</p>
+                </div>
+              ) : (
               <div className="relative space-y-0">
-                {[
-                  {
-                    date: '2026-04-01',
-                    type: 'salary_change',
-                    title: 'زيادة راتب',
-                    from: '10,500 ر.س',
-                    to: '12,000 ر.س',
-                    reason: 'مراجعة سنوية — تقييم ممتاز (4.8/5)',
-                    approvedBy: 'مدير الموارد البشرية + المدير المالي',
-                    color: 'bg-success-100 text-success-600',
-                  },
-                  {
-                    date: '2025-07-01',
-                    type: 'promotion',
-                    title: 'ترقية',
-                    from: 'مطور برمجيات',
-                    to: 'مطور برمجيات أول',
-                    reason: 'ترقية ضمن دورة الترقيات السنوية',
-                    approvedBy: 'رئيس القسم → HR → المدير العام',
-                    color: 'bg-indigo-100 text-indigo-600',
-                  },
-                  {
-                    date: '2024-09-15',
-                    type: 'transfer',
-                    title: 'نقل بين فرق',
-                    from: 'فريق الدعم الفني',
-                    to: 'فريق التطوير',
-                    reason: 'حاجة المشروع الجديد لخبرته',
-                    approvedBy: 'مدير تقنية المعلومات',
-                    color: 'bg-blue-100 text-blue-600',
-                  },
-                  {
-                    date: '2023-06-15',
-                    type: 'confirmation',
-                    title: 'تثبيت بعد فترة التجربة',
-                    from: 'تحت التجربة',
-                    to: 'مثبَّت',
-                    reason: 'اجتياز فترة التجربة (90 يوم) بتقييم جيد جداً',
-                    approvedBy: 'المدير المباشر → HR',
-                    color: 'bg-teal-100 text-teal-600',
-                  },
-                  {
-                    date: '2023-03-15',
-                    type: 'hire',
-                    title: 'تعيين',
-                    from: '—',
-                    to: 'مطور برمجيات — تقنية المعلومات، الفرع الرئيسي',
-                    reason: 'تعيين جديد (من التوظيف: عرض JOB-2023-014)',
-                    approvedBy: 'مدير الموارد البشرية',
-                    color: 'bg-primary-100 text-primary-600',
-                  },
-                ].map((event, index, arr) => (
+                {historyEvents.map((event, index, arr) => (
                   <div key={index} className="flex gap-4 relative">
                     {/* الخط الزمني */}
                     <div className="flex flex-col items-center">
@@ -1073,14 +1363,17 @@ export default function EmployeeProfilePage() {
                           <span className="font-medium text-gray-800">{event.to}</span>
                         </div>
                         <p className="text-sm text-gray-500">السبب: {event.reason}</p>
-                        <p className="text-xs text-gray-400">
-                          اعتمده: {event.approvedBy}
-                        </p>
+                        {event.requestId && (
+                          <p className="text-xs text-gray-400">
+                            المرجع: طلب رقم #{event.requestId}
+                          </p>
+                        )}
                       </div>
                     </div>
                   </div>
                 ))}
               </div>
+              )}
             </div>
           )}
 
@@ -1098,27 +1391,34 @@ export default function EmployeeProfilePage() {
                 </button>
               </div>
 
-              {/* Uploaded Documents */}
+              {/* Registered Documents */}
               <div>
-                <h3 className="font-medium text-gray-700 mb-4">المستندات المرفوعة</h3>
+                <h3 className="font-medium text-gray-700 mb-4">المستندات المسجلة</h3>
+                {docs.length === 0 ? (
+                  <p className="text-gray-500 text-sm">لا توجد مستندات مسجلة لهذا الموظف</p>
+                ) : (
                 <div className="grid grid-cols-3 gap-4">
-                  {['صورة الهوية', 'جواز السفر', 'عقد العمل', 'شهادة المؤهل', 'السيرة الذاتية'].map((doc, index) => (
-                    <div key={index} className="p-4 border border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
+                  {docs.map((doc) => (
+                    <div key={doc.id} className="p-4 border border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-gray-100 rounded-lg flex items-center justify-center">
                           <FileText size={20} className="text-gray-500" />
                         </div>
                         <div className="flex-1">
-                          <p className="font-medium text-gray-800">{doc}</p>
-                          <p className="text-xs text-gray-400">PDF - 1.2 MB</p>
+                          <p className="font-medium text-gray-800">{doc.docType}</p>
+                          <p className="text-xs text-gray-400" dir="ltr">{doc.number}</p>
+                          <p className="text-xs text-gray-400 mt-0.5">الانتهاء: {doc.expiryDate}</p>
                         </div>
-                        <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
-                          <Download size={18} className="text-gray-500" />
-                        </button>
+                        {doc.expired && (
+                          <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                            منتهي
+                          </span>
+                        )}
                       </div>
                     </div>
                   ))}
                 </div>
+                )}
               </div>
 
               {/* Quick Generate Section */}
@@ -1147,10 +1447,12 @@ export default function EmployeeProfilePage() {
             </div>
           )}
         </div>
+          </>
+        )}
       </div>
 
       {/* Document Template Selection Modal */}
-      {showDocumentModal && (
+      {showDocumentModal && employee && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl w-full max-w-2xl">
             <div className="p-6 border-b flex items-center justify-between">
@@ -1210,7 +1512,7 @@ export default function EmployeeProfilePage() {
       )}
 
       {/* Document Preview Modal */}
-      {showPreview && (
+      {showPreview && employee && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
           <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
             <div className="p-6 border-b flex items-center justify-between">

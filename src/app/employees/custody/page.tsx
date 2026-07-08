@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
 import {
@@ -15,221 +15,193 @@ import {
   X,
   Wallet,
 } from 'lucide-react'
-import { employees } from '@/data/employees'
-import { branches as branchOptions, getBranchName } from '@/data/branches'
+import {
+  fetchCustody,
+  fetchAssets,
+  fetchEmployees,
+  fetchBranches,
+  createAsset,
+  assignCustody,
+  returnCustody,
+  ApiAsset,
+  ApiEmployee,
+  ApiBranch,
+} from '@/lib/api'
 
-type CustodyStatus =
-  | 'pending_approval' // بانتظار اعتماد التسليم
-  | 'pending_ack' // معتمدة — بانتظار تأكيد استلام الموظف (§7.3)
-  | 'assigned' // مسلَّمة (الموظف أقرّ بالاستلام — سجل ملزِم)
-  | 'return_pending' // بانتظار اعتماد الإخلاء
-  | 'returned' // مُخلاة
-  | 'lost' // مفقودة
-  | 'damaged' // تالفة
+// حالات العهدة كما في الباك إند
+const statusLabels: Record<string, string> = {
+  PENDING_ACK: 'بانتظار التأكيد',
+  ACTIVE: 'نشطة',
+  RETURNED: 'مُرجعة',
+  RETURN_REQUESTED: 'طلب إرجاع',
+  LOST: 'مفقودة',
+  DAMAGED: 'تالفة',
+}
 
-interface CustodyRecord {
-  id: string
-  employeeId: string
+const statusStyles: Record<string, string> = {
+  PENDING_ACK: 'bg-indigo-100 text-indigo-700',
+  ACTIVE: 'bg-success-50 text-success-700',
+  RETURNED: 'bg-gray-100 text-gray-600',
+  RETURN_REQUESTED: 'bg-blue-100 text-blue-700',
+  LOST: 'bg-red-100 text-red-700',
+  DAMAGED: 'bg-orange-100 text-orange-700',
+}
+
+interface CustodyRow {
+  id: number
+  employeeId: number
   employeeName: string
-  branchId: string
-  assetType: string
+  employeeCode: string
+  branchId: number | null
+  branchName: string
+  assetName: string
+  assetCategory: string
   serialNumber: string
-  assignedDate: string
-  acknowledgedDate?: string // تاريخ إقرار الموظف بالاستلام — السجل الملزِم قانونياً
-  returnedDate?: string
-  status: CustodyStatus
-  value: number
-  notes?: string
+  assignedAt: string
+  acknowledgedAt: string
+  returnedAt: string
+  condition: string
+  status: string
 }
 
-const statusLabels: Record<CustodyStatus, string> = {
-  pending_approval: 'بانتظار اعتماد التسليم',
-  pending_ack: 'بانتظار تأكيد استلام الموظف',
-  assigned: 'مسلَّمة',
-  return_pending: 'بانتظار اعتماد الإخلاء',
-  returned: 'مُخلاة',
-  lost: 'مفقودة',
-  damaged: 'تالفة',
-}
-
-const statusStyles: Record<CustodyStatus, string> = {
-  pending_approval: 'bg-warning-50 text-warning-700',
-  pending_ack: 'bg-indigo-100 text-indigo-700',
-  assigned: 'bg-success-50 text-success-700',
-  return_pending: 'bg-blue-100 text-blue-700',
-  returned: 'bg-gray-100 text-gray-600',
-  lost: 'bg-red-100 text-red-700',
-  damaged: 'bg-orange-100 text-orange-700',
-}
-
-const assetTypeOptions = ['لابتوب', 'هاتف جوال', 'سيارة شركة', 'بطاقة دخول', 'مفاتيح مكتب']
-
-const initialRecords: CustodyRecord[] = [
-  {
-    id: 'c1',
-    employeeId: 'EMP005',
-    employeeName: 'أحمد محمد علي',
-    branchId: '1',
-    assetType: 'لابتوب',
-    serialNumber: 'LP-2024-001',
-    assignedDate: '2024-03-15',
-    acknowledgedDate: '2024-03-16',
-    status: 'assigned',
-    value: 4500,
-  },
-  {
-    id: 'c2',
-    employeeId: 'EMP005',
-    employeeName: 'أحمد محمد علي',
-    branchId: '1',
-    assetType: 'بطاقة دخول',
-    serialNumber: 'AC-101',
-    assignedDate: '2024-03-15',
-    acknowledgedDate: '2024-03-15',
-    status: 'assigned',
-    value: 100,
-  },
-  {
-    id: 'c7',
-    employeeId: 'EMP012',
-    employeeName: 'محمود سامي رضوان',
-    branchId: '2',
-    assetType: 'لابتوب',
-    serialNumber: 'LP-2026-012',
-    assignedDate: '2026-07-06',
-    status: 'pending_ack',
-    value: 4800,
-    notes: 'اعتمد المدير — لن تُفعَّل العهدة إلا بإقرار الموظف بالاستلام',
-  },
-  {
-    id: 'c3',
-    employeeId: 'EMP008',
-    employeeName: 'نورة سعيد الغامدي',
-    branchId: '2',
-    assetType: 'هاتف جوال',
-    serialNumber: 'PH-2025-021',
-    assignedDate: '2025-01-10',
-    status: 'pending_approval',
-    value: 2000,
-  },
-  {
-    id: 'c4',
-    employeeId: 'EMP009',
-    employeeName: 'عمر ياسر الشهري',
-    branchId: '2',
-    assetType: 'سيارة شركة',
-    serialNumber: 'CAR-2024-003',
-    assignedDate: '2024-06-01',
-    status: 'return_pending',
-    value: 0,
-    notes: 'الموظف في فترة إشعار — إخلاء ضمن تصفية المستحقات',
-  },
-  {
-    id: 'c5',
-    employeeId: 'EMP010',
-    employeeName: 'ليلى حسن العتيبي',
-    branchId: '3',
-    assetType: 'لابتوب',
-    serialNumber: 'LP-2023-044',
-    assignedDate: '2023-09-20',
-    returnedDate: '2026-05-30',
-    status: 'returned',
-    value: 4500,
-  },
-  {
-    id: 'c6',
-    employeeId: 'EMP007',
-    employeeName: 'خالد عبدالعزيز النمر',
-    branchId: '1',
-    assetType: 'هاتف جوال',
-    serialNumber: 'PH-2024-008',
-    assignedDate: '2024-02-01',
-    status: 'lost',
-    value: 2000,
-    notes: 'سيُخصم من الراتب القادم حسب إعداد نوع العهدة',
-  },
-]
+const fmtDate = (v?: string | null) => (v ? String(v).slice(0, 10) : '')
 
 export default function CustodyPage() {
-  const [records, setRecords] = useState(initialRecords)
+  const [records, setRecords] = useState<CustodyRow[]>([])
+  const [assets, setAssets] = useState<ApiAsset[]>([])
+  const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [filterBranch, setFilterBranch] = useState('')
   const [showModal, setShowModal] = useState(false)
-  const [formData, setFormData] = useState({
-    employeeId: '',
-    assetType: '',
+  const [saving, setSaving] = useState(false)
+  const [formData, setFormData] = useState({ employeeId: '', assetId: '' })
+  const [newAsset, setNewAsset] = useState({
+    name: '',
+    category: '',
     serialNumber: '',
-    assignedDate: '',
-    value: 0,
-    requiresApproval: true,
   })
+
+  const loadData = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const [rows, assetRows, emps, brs] = await Promise.all([
+        fetchCustody(),
+        fetchAssets(),
+        fetchEmployees(),
+        fetchBranches(),
+      ])
+      const empById = new Map(emps.map((e) => [e.id, e]))
+      const branchById = new Map(brs.map((b) => [b.id, b.name]))
+      setAssets(assetRows)
+      setEmployees(emps)
+      setBranches(brs)
+      setRecords(
+        rows.map((r) => {
+          const emp = empById.get(r.employeeId)
+          return {
+            id: r.id,
+            employeeId: r.employeeId,
+            employeeName: r.employeeName ?? emp?.fullName ?? `#${r.employeeId}`,
+            employeeCode: r.employeeCode ?? emp?.employeeCode ?? '',
+            branchId: emp?.branchId ?? null,
+            branchName: emp ? branchById.get(emp.branchId) ?? '—' : '—',
+            assetName: r.assetName ?? `#${r.assetId}`,
+            assetCategory: r.assetCategory ?? '',
+            serialNumber: r.serialNumber ?? '—',
+            assignedAt: fmtDate(r.assignedAt),
+            acknowledgedAt: fmtDate(r.acknowledgedAt),
+            returnedAt: fmtDate(r.returnedAt),
+            condition: r.condition ?? '',
+            status: r.status,
+          }
+        })
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تحميل سجل العهد')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const filtered = records.filter(
     (r) =>
       (r.employeeName.includes(searchQuery) ||
-        r.assetType.includes(searchQuery) ||
+        r.assetName.includes(searchQuery) ||
         r.serialNumber.includes(searchQuery)) &&
       (!filterStatus || r.status === filterStatus) &&
-      (!filterBranch || r.branchId === filterBranch)
+      (!filterBranch || String(r.branchId) === filterBranch)
   )
 
   const stats = {
-    assigned: records.filter((r) => r.status === 'assigned').length,
+    active: records.filter((r) => r.status === 'ACTIVE').length,
     pending: records.filter(
-      (r) => r.status === 'pending_approval' || r.status === 'return_pending'
+      (r) => r.status === 'PENDING_ACK' || r.status === 'RETURN_REQUESTED'
     ).length,
-    lostDamaged: records.filter((r) => r.status === 'lost' || r.status === 'damaged').length,
-    deductions: records
-      .filter((r) => r.status === 'lost' || r.status === 'damaged')
-      .reduce((s, r) => s + r.value, 0),
+    lostDamaged: records.filter(
+      (r) => r.status === 'LOST' || r.status === 'DAMAGED'
+    ).length,
+    returned: records.filter((r) => r.status === 'RETURNED').length,
   }
 
-  const handleAssign = () => {
-    const emp = employees.find((e) => e.id === formData.employeeId)
-    if (!emp) return
-    setRecords([
-      {
-        id: 'c' + Date.now(),
-        employeeId: emp.id,
-        employeeName: emp.name,
-        branchId: emp.branchId,
-        assetType: formData.assetType,
-        serialNumber: formData.serialNumber,
-        assignedDate: formData.assignedDate || '2026-07-07',
-        status: formData.requiresApproval ? 'pending_approval' : 'assigned',
-        value: formData.value,
-      },
-      ...records,
-    ])
-    setFormData({
-      employeeId: '',
-      assetType: '',
-      serialNumber: '',
-      assignedDate: '',
-      value: 0,
-      requiresApproval: true,
-    })
-    setShowModal(false)
+  // الأصول غير المسلَّمة حالياً فقط
+  const freeAssets = assets.filter((a) => !a.currentHolderId)
+
+  const handleCreateAsset = async () => {
+    if (!newAsset.name || !newAsset.category) return
+    setSaving(true)
+    setError('')
+    try {
+      const created = await createAsset({
+        name: newAsset.name,
+        category: newAsset.category,
+        serialNumber: newAsset.serialNumber || undefined,
+      })
+      setAssets([...assets, created])
+      setFormData({ ...formData, assetId: String(created.id) })
+      setNewAsset({ name: '', category: '', serialNumber: '' })
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر إنشاء الأصل')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const updateStatus = (id: string, status: CustodyStatus) => {
-    setRecords(
-      records.map((r) =>
-        r.id === id
-          ? {
-              ...r,
-              status,
-              // إقرار الاستلام = السجل الملزِم قانونياً (acknowledged_at)
-              acknowledgedDate:
-                status === 'assigned' && !r.acknowledgedDate
-                  ? '2026-07-07'
-                  : r.acknowledgedDate,
-              returnedDate: status === 'returned' ? '2026-07-07' : r.returnedDate,
-            }
-          : r
-      )
-    )
+  const handleAssign = async () => {
+    if (!formData.employeeId || !formData.assetId) return
+    setSaving(true)
+    setError('')
+    try {
+      await assignCustody(Number(formData.assetId), Number(formData.employeeId))
+      setFormData({ employeeId: '', assetId: '' })
+      setShowModal(false)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تسليم العهدة')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleReturn = async (id: number) => {
+    const condition = window.prompt('حالة العهدة عند الإرجاع؟', 'سليمة')
+    if (condition === null) return
+    setError('')
+    try {
+      await returnCustody(id, condition || undefined)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر إرجاع العهدة')
+    }
   }
 
   return (
@@ -249,7 +221,7 @@ export default function CustodyPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-800">سجل العهد</h1>
             <p className="text-gray-500 mt-1">
-              تسليم وإخلاء عهد الموظفين — بدورة اعتماد حسب نوع العهدة
+              تسليم وإخلاء عهد الموظفين — التفعيل بعد إقرار الموظف بالاستلام
             </p>
           </div>
           <button
@@ -261,6 +233,11 @@ export default function CustodyPage() {
           </button>
         </div>
 
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
+        )}
+
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
           <div className="card p-4 flex items-center gap-3">
@@ -268,8 +245,8 @@ export default function CustodyPage() {
               <Package size={24} className="text-success-500" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">عهد مسلَّمة</p>
-              <p className="text-2xl font-bold text-gray-800">{stats.assigned}</p>
+              <p className="text-sm text-gray-500">عهد نشطة</p>
+              <p className="text-2xl font-bold text-gray-800">{stats.active}</p>
             </div>
           </div>
           <div className="card p-4 flex items-center gap-3">
@@ -277,7 +254,7 @@ export default function CustodyPage() {
               <Clock size={24} className="text-warning-500" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">بانتظار اعتماد</p>
+              <p className="text-sm text-gray-500">بانتظار إجراء</p>
               <p className="text-2xl font-bold text-warning-600">{stats.pending}</p>
             </div>
           </div>
@@ -295,10 +272,8 @@ export default function CustodyPage() {
               <Wallet size={24} className="text-gray-500" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">خصومات مستحقة</p>
-              <p className="text-2xl font-bold text-gray-800">
-                {stats.deductions.toLocaleString()} ر.س
-              </p>
+              <p className="text-sm text-gray-500">عهد مُرجعة</p>
+              <p className="text-2xl font-bold text-gray-800">{stats.returned}</p>
             </div>
           </div>
         </div>
@@ -337,8 +312,8 @@ export default function CustodyPage() {
               className="input w-56"
             >
               <option value="">كل الفروع</option>
-              {branchOptions.map((b) => (
-                <option key={b.id} value={b.id}>
+              {branches.map((b) => (
+                <option key={b.id} value={String(b.id)}>
                   {b.name}
                 </option>
               ))}
@@ -346,7 +321,13 @@ export default function CustodyPage() {
           </div>
         </div>
 
-        {/* Records Table */}
+        {/* Loading */}
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+        /* Records Table */
         <div className="card overflow-hidden">
           <table className="w-full">
             <thead>
@@ -365,79 +346,54 @@ export default function CustodyPage() {
                 <tr key={r.id} className="border-t border-gray-50 hover:bg-gray-50/50">
                   <td className="py-3 px-4">
                     <p className="font-medium text-gray-800 text-sm">{r.employeeName}</p>
-                    <p className="text-xs text-gray-400" dir="ltr">{r.employeeId}</p>
+                    <p className="text-xs text-gray-400" dir="ltr">{r.employeeCode}</p>
                   </td>
                   <td className="py-3 px-4 text-sm text-gray-600">
-                    {getBranchName(r.branchId)}
+                    {r.branchName}
                   </td>
-                  <td className="py-3 px-4 text-sm text-gray-800">{r.assetType}</td>
+                  <td className="py-3 px-4 text-sm text-gray-800">
+                    {r.assetName}
+                    {r.assetCategory && (
+                      <p className="text-xs text-gray-400">{r.assetCategory}</p>
+                    )}
+                  </td>
                   <td className="py-3 px-4 text-sm font-mono text-gray-600" dir="ltr">
                     {r.serialNumber}
                   </td>
                   <td className="py-3 px-4 text-sm text-gray-600" dir="ltr">
-                    {r.assignedDate}
+                    {r.assignedAt}
                   </td>
                   <td className="py-3 px-4">
-                    <span className={`badge text-xs ${statusStyles[r.status]}`}>
-                      {statusLabels[r.status]}
+                    <span className={`badge text-xs ${statusStyles[r.status] ?? 'bg-gray-100 text-gray-600'}`}>
+                      {statusLabels[r.status] ?? r.status}
                     </span>
-                    {r.acknowledgedDate && (
+                    {r.acknowledgedAt && (
                       <p className="text-[10px] text-indigo-500 mt-0.5">
-                        أقرّ بالاستلام: {r.acknowledgedDate}
+                        أقرّ بالاستلام: {r.acknowledgedAt}
                       </p>
                     )}
-                    {r.notes && (
-                      <p className="text-xs text-gray-400 mt-1 max-w-[200px]">{r.notes}</p>
+                    {r.returnedAt && (
+                      <p className="text-xs text-gray-400 mt-1 max-w-[200px]">
+                        أُرجعت: {r.returnedAt}
+                        {r.condition && ` — الحالة: ${r.condition}`}
+                      </p>
                     )}
                   </td>
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-2">
-                      {r.status === 'pending_approval' && (
+                      {['PENDING_ACK', 'ACTIVE', 'RETURN_REQUESTED'].includes(r.status) && (
                         <button
-                          onClick={() => updateStatus(r.id, 'pending_ack')}
-                          className="text-xs px-3 py-1.5 bg-success-50 text-success-700 rounded-lg hover:bg-success-100"
+                          onClick={() => handleReturn(r.id)}
+                          className="text-xs px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 flex items-center gap-1"
                         >
-                          اعتماد التسليم
+                          <RotateCcw size={12} />
+                          إرجاع
                         </button>
                       )}
-                      {r.status === 'pending_ack' && (
-                        <button
-                          onClick={() => updateStatus(r.id, 'assigned')}
-                          className="text-xs px-3 py-1.5 bg-indigo-50 text-indigo-700 rounded-lg hover:bg-indigo-100 font-medium"
-                          title="إقرار: استلمت الصنف بالحالة الموصوفة — سجل ملزِم"
-                        >
-                          ✍️ تأكيد الاستلام (الموظف)
-                        </button>
-                      )}
-                      {r.status === 'assigned' && (
-                        <>
-                          <button
-                            onClick={() => updateStatus(r.id, 'return_pending')}
-                            className="text-xs px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 flex items-center gap-1"
-                          >
-                            <RotateCcw size={12} />
-                            طلب إخلاء
-                          </button>
-                          <button
-                            onClick={() => updateStatus(r.id, 'lost')}
-                            className="text-xs px-3 py-1.5 bg-red-50 text-red-700 rounded-lg hover:bg-red-100"
-                          >
-                            فقد/تلف
-                          </button>
-                        </>
-                      )}
-                      {r.status === 'return_pending' && (
-                        <button
-                          onClick={() => updateStatus(r.id, 'returned')}
-                          className="text-xs px-3 py-1.5 bg-success-50 text-success-700 rounded-lg hover:bg-success-100 flex items-center gap-1"
-                        >
+                      {r.status === 'RETURNED' && (
+                        <span className="text-xs text-gray-400 flex items-center gap-1">
                           <CheckCircle2 size={12} />
-                          اعتماد الإخلاء
-                        </button>
-                      )}
-                      {(r.status === 'lost' || r.status === 'damaged') && r.value > 0 && (
-                        <span className="text-xs text-red-600">
-                          خصم {r.value.toLocaleString()} ر.س
+                          مكتملة
                         </span>
                       )}
                     </div>
@@ -453,6 +409,7 @@ export default function CustodyPage() {
             </div>
           )}
         </div>
+        )}
 
         {/* Assign Modal */}
         {showModal && (
@@ -462,7 +419,7 @@ export default function CustodyPage() {
                 <div>
                   <h2 className="text-xl font-bold text-gray-800">تسليم عهدة لموظف</h2>
                   <p className="text-sm text-gray-500 mt-1">
-                    حسب نوع العهدة قد يمر التسليم بدورة اعتماد قبل التفعيل
+                    تُفعَّل العهدة بعد إقرار الموظف بالاستلام
                   </p>
                 </div>
                 <button
@@ -485,46 +442,84 @@ export default function CustodyPage() {
                     className="input w-full"
                   >
                     <option value="">— اختر الموظف —</option>
-                    {employees.map((emp) => (
-                      <option key={emp.id} value={emp.id}>
-                        {emp.name} — {emp.position}
+                    {employees
+                      .filter((emp) => emp.status !== 'archived')
+                      .map((emp) => (
+                        <option key={emp.id} value={String(emp.id)}>
+                          {emp.fullName} — {emp.jobTitle ?? emp.employeeCode}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    الأصل *
+                  </label>
+                  <select
+                    value={formData.assetId}
+                    onChange={(e) =>
+                      setFormData({ ...formData, assetId: e.target.value })
+                    }
+                    className="input w-full"
+                  >
+                    <option value="">— اختر أصلاً غير مسلَّم —</option>
+                    {freeAssets.map((a) => (
+                      <option key={a.id} value={String(a.id)}>
+                        {a.name} ({a.category})
+                        {a.serialNumber ? ` — ${a.serialNumber}` : ''}
                       </option>
                     ))}
                   </select>
+                  <p className="text-xs text-gray-400 mt-1">
+                    تظهر الأصول غير المسلَّمة لموظف حالياً فقط
+                  </p>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      نوع العهدة *
-                    </label>
-                    <select
-                      value={formData.assetType}
-                      onChange={(e) =>
-                        setFormData({ ...formData, assetType: e.target.value })
-                      }
-                      className="input w-full"
-                    >
-                      <option value="">— اختر النوع —</option>
-                      {assetTypeOptions.map((t) => (
-                        <option key={t} value={t}>
-                          {t}
-                        </option>
-                      ))}
-                    </select>
-                    <p className="text-xs text-gray-400 mt-1">
-                      الأنواع تُدار من إعدادات «أنواع العهد»
-                    </p>
+
+                {/* إنشاء أصل جديد */}
+                <div className="p-4 bg-indigo-50/50 rounded-xl border border-indigo-100 space-y-3">
+                  <p className="text-sm font-medium text-gray-700">
+                    أو أضف أصلاً جديداً للسجل
+                  </p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        اسم الأصل
+                      </label>
+                      <input
+                        type="text"
+                        value={newAsset.name}
+                        onChange={(e) =>
+                          setNewAsset({ ...newAsset, name: e.target.value })
+                        }
+                        className="input w-full"
+                        placeholder="لابتوب Dell Latitude"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        الفئة
+                      </label>
+                      <input
+                        type="text"
+                        value={newAsset.category}
+                        onChange={(e) =>
+                          setNewAsset({ ...newAsset, category: e.target.value })
+                        }
+                        className="input w-full"
+                        placeholder="لابتوب"
+                      />
+                    </div>
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      الرقم التسلسلي *
+                      الرقم التسلسلي
                     </label>
                     <input
                       type="text"
-                      value={formData.serialNumber}
+                      value={newAsset.serialNumber}
                       onChange={(e) =>
-                        setFormData({
-                          ...formData,
+                        setNewAsset({
+                          ...newAsset,
                           serialNumber: e.target.value.toUpperCase(),
                         })
                       }
@@ -533,49 +528,14 @@ export default function CustodyPage() {
                       placeholder="LP-2026-012"
                     />
                   </div>
+                  <button
+                    onClick={handleCreateAsset}
+                    className="btn-secondary"
+                    disabled={saving || !newAsset.name || !newAsset.category}
+                  >
+                    إضافة الأصل
+                  </button>
                 </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      تاريخ التسليم
-                    </label>
-                    <input
-                      type="date"
-                      value={formData.assignedDate}
-                      onChange={(e) =>
-                        setFormData({ ...formData, assignedDate: e.target.value })
-                      }
-                      className="input w-full"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      القيمة (ر.س)
-                    </label>
-                    <input
-                      type="number"
-                      value={formData.value}
-                      onChange={(e) =>
-                        setFormData({ ...formData, value: Number(e.target.value) })
-                      }
-                      className="input w-full"
-                      min="0"
-                    />
-                  </div>
-                </div>
-                <label className="flex items-center justify-between p-4 bg-indigo-50/50 rounded-xl border border-indigo-100">
-                  <span className="text-sm text-gray-700">
-                    التسليم يتطلب اعتماداً (يظهر في صندوق موافقات المدير)
-                  </span>
-                  <input
-                    type="checkbox"
-                    checked={formData.requiresApproval}
-                    onChange={(e) =>
-                      setFormData({ ...formData, requiresApproval: e.target.checked })
-                    }
-                    className="w-4 h-4 rounded border-gray-300 text-primary-600"
-                  />
-                </label>
               </div>
               <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">
                 <button onClick={() => setShowModal(false)} className="btn-secondary">
@@ -584,9 +544,7 @@ export default function CustodyPage() {
                 <button
                   onClick={handleAssign}
                   className="btn-primary"
-                  disabled={
-                    !formData.employeeId || !formData.assetType || !formData.serialNumber
-                  }
+                  disabled={saving || !formData.employeeId || !formData.assetId}
                 >
                   تسليم العهدة
                 </button>

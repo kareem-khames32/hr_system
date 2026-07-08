@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
 import {
@@ -18,7 +18,7 @@ import {
   Package,
   AlertTriangle,
 } from 'lucide-react'
-import { getBranchName } from '@/data/branches'
+import { fetchEmployees, fetchBranches } from '@/lib/api'
 
 type TaskOwner = 'hr' | 'it' | 'manager' | 'finance'
 
@@ -32,12 +32,11 @@ interface OnboardingTask {
 }
 
 interface OnboardingEmployee {
-  id: string
+  id: number
   name: string
   position: string
-  branchId: string
+  branchName: string
   startDate: string
-  buddy: string
   tasks: OnboardingTask[]
 }
 
@@ -55,6 +54,7 @@ const ownerColors: Record<TaskOwner, string> = {
   finance: 'bg-teal-50 text-teal-700',
 }
 
+// قائمة التهيئة القياسية — حالة محلية لكل موظف (لا يوجد باك إند لمهام التهيئة بعد)
 const defaultChecklist = (start: string): OnboardingTask[] => [
   { id: 't1', title: 'استلام المستندات الأصلية والتحقق منها', owner: 'hr', dueDate: start, done: false, icon: FileText },
   { id: 't2', title: 'توقيع العقد وسياسات الشركة', owner: 'hr', dueDate: start, done: false, icon: FileText },
@@ -66,44 +66,54 @@ const defaultChecklist = (start: string): OnboardingTask[] => [
   { id: 't8', title: 'التدريب التعريفي الإلزامي', owner: 'hr', dueDate: start, done: false, icon: GraduationCap },
 ]
 
-const initialOnboarding: OnboardingEmployee[] = [
-  {
-    id: 'EMP011',
-    name: 'ياسمين عادل مصطفى',
-    position: 'محاسبة',
-    branchId: '1',
-    startDate: '2026-07-06',
-    buddy: 'خالد عبدالعزيز النمر',
-    tasks: defaultChecklist('2026-07-06').map((t, i) => ({ ...t, done: i < 5 })),
-  },
-  {
-    id: 'EMP012',
-    name: 'محمود سامي رضوان',
-    position: 'مندوب مبيعات',
-    branchId: '2',
-    startDate: '2026-07-12',
-    buddy: 'عمر ياسر الشهري',
-    tasks: defaultChecklist('2026-07-12').map((t, i) => ({ ...t, done: i < 1 })),
-  },
-  {
-    id: 'EMP013',
-    name: 'هند إبراهيم الشافعي',
-    position: 'أخصائية تسويق رقمي',
-    branchId: '2',
-    startDate: '2026-07-01',
-    buddy: 'نورة سعيد الغامدي',
-    tasks: defaultChecklist('2026-07-01').map((t) => ({ ...t, done: true })),
-  },
-]
-
 export default function OnboardingPage() {
-  const [list, setList] = useState(initialOnboarding)
-  const [expanded, setExpanded] = useState<string | null>('EMP011')
+  const [list, setList] = useState<OnboardingEmployee[]>([])
+  const [expanded, setExpanded] = useState<number | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  const today = new Date().toISOString().slice(0, 10)
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      setError('')
+      try {
+        const [emps, branches] = await Promise.all([
+          fetchEmployees(),
+          fetchBranches(),
+        ])
+        const branchById = new Map(branches.map((b) => [b.id, b.name]))
+        const probation = emps
+          .filter((e) => e.status === 'probation')
+          .map((e) => {
+            const start = e.joinDate
+              ? String(e.joinDate).slice(0, 10)
+              : new Date().toISOString().slice(0, 10)
+            return {
+              id: e.id,
+              name: e.fullName,
+              position: e.jobTitle ?? '—',
+              branchName: branchById.get(e.branchId) ?? '—',
+              startDate: start,
+              tasks: defaultChecklist(start),
+            }
+          })
+        setList(probation)
+        setExpanded(probation.length > 0 ? probation[0].id : null)
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'تعذر تحميل الموظفين الجدد')
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+  }, [])
 
   const progress = (e: OnboardingEmployee) =>
     Math.round((e.tasks.filter((t) => t.done).length / e.tasks.length) * 100)
 
-  const toggleTask = (empId: string, taskId: string) => {
+  const toggleTask = (empId: number, taskId: string) => {
     setList(
       list.map((e) =>
         e.id === empId
@@ -120,9 +130,7 @@ export default function OnboardingPage() {
 
   const inProgress = list.filter((e) => progress(e) < 100).length
   const overdueTasks = list.reduce(
-    (s, e) =>
-      s +
-      e.tasks.filter((t) => !t.done && t.dueDate < '2026-07-07').length,
+    (s, e) => s + e.tasks.filter((t) => !t.done && t.dueDate < today).length,
     0
   )
 
@@ -145,10 +153,15 @@ export default function OnboardingPage() {
               تهيئة الموظفين الجدد (Onboarding)
             </h1>
             <p className="text-gray-500 mt-1">
-              قائمة مهام لكل موظف جديد — موزّعة على HR وتقنية المعلومات والمدير والمالية
+              الموظفون في فترة التجربة — قائمة مهام موزّعة على HR وتقنية المعلومات والمدير والمالية
             </p>
           </div>
         </div>
+
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-3 gap-4">
@@ -183,8 +196,22 @@ export default function OnboardingPage() {
           </div>
         </div>
 
-        {/* Employees */}
+        {/* Loading */}
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+        /* Employees */
         <div className="space-y-4">
+          {list.length === 0 && (
+            <div className="card p-12 text-center">
+              <UserPlus size={48} className="mx-auto text-gray-300 mb-4" />
+              <p className="text-gray-500">
+                لا يوجد موظفون في فترة التجربة قيد التهيئة حالياً
+              </p>
+            </div>
+          )}
           {list.map((emp) => {
             const pct = progress(emp)
             const isOpen = expanded === emp.id
@@ -203,15 +230,14 @@ export default function OnboardingPage() {
                       <div className="flex items-center gap-2">
                         <h3 className="font-bold text-gray-800">{emp.name}</h3>
                         <span className="badge text-xs bg-indigo-100 text-indigo-700">
-                          {getBranchName(emp.branchId)}
+                          {emp.branchName}
                         </span>
                         {pct === 100 && (
                           <span className="badge badge-success text-xs">مكتمل ✓</span>
                         )}
                       </div>
                       <p className="text-sm text-gray-500">
-                        {emp.position} • مباشرة: <span dir="ltr">{emp.startDate}</span> •
-                        المرافق: {emp.buddy}
+                        {emp.position} • مباشرة: <span dir="ltr">{emp.startDate}</span>
                       </p>
                     </div>
                   </div>
@@ -253,7 +279,7 @@ export default function OnboardingPage() {
                     <div className="grid grid-cols-2 gap-3">
                       {emp.tasks.map((task) => {
                         const TaskIcon = task.icon
-                        const overdue = !task.done && task.dueDate < '2026-07-07'
+                        const overdue = !task.done && task.dueDate < today
                         return (
                           <button
                             key={task.id}
@@ -309,6 +335,7 @@ export default function OnboardingPage() {
             )
           })}
         </div>
+        )}
       </div>
     </MainLayout>
   )

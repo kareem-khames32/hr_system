@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
@@ -35,137 +35,31 @@ import {
   ChevronDown,
   Bell,
   Settings,
+  Edit2,
 } from 'lucide-react'
 import Link from 'next/link'
+import {
+  fetchDocuments,
+  fetchEmployees,
+  createDocument,
+  updateDocument,
+  ApiEmployee,
+} from '@/lib/api'
 
-interface Document {
-  id: string
+interface DocumentRow {
+  id: number
   name: string
+  number: string
   type: 'pdf' | 'image' | 'doc' | 'other'
   category: string
   employeeName: string
-  employeeId: string
-  uploadDate: string
-  expiryDate?: string
-  size: string
+  employeeId: number
+  employeeCode: string
+  issueDate: string
+  expiryDate: string
+  notes: string
   status: 'valid' | 'expiring' | 'expired'
-  description?: string
 }
-
-const documents: Document[] = [
-  {
-    id: '1',
-    name: 'عقد العمل - أحمد محمد',
-    type: 'pdf',
-    category: 'عقود',
-    employeeName: 'أحمد محمد علي',
-    employeeId: 'EMP001',
-    uploadDate: '2024-01-15',
-    size: '2.5 MB',
-    status: 'valid',
-    description: 'عقد العمل الأساسي للموظف',
-  },
-  {
-    id: '2',
-    name: 'صورة الهوية الوطنية',
-    type: 'image',
-    category: 'وثائق شخصية',
-    employeeName: 'سارة أحمد الخالدي',
-    employeeId: 'EMP002',
-    uploadDate: '2024-01-10',
-    expiryDate: '2025-06-15',
-    size: '1.2 MB',
-    status: 'valid',
-    description: 'صورة من بطاقة الهوية الوطنية',
-  },
-  {
-    id: '3',
-    name: 'شهادة الخبرة السابقة',
-    type: 'pdf',
-    category: 'شهادات',
-    employeeName: 'عمر سالم الحربي',
-    employeeId: 'EMP003',
-    uploadDate: '2024-01-08',
-    size: '800 KB',
-    status: 'valid',
-    description: 'شهادة خبرة من الوظيفة السابقة',
-  },
-  {
-    id: '4',
-    name: 'رخصة القيادة',
-    type: 'image',
-    category: 'وثائق شخصية',
-    employeeName: 'نورة محمد الدوسري',
-    employeeId: 'EMP004',
-    uploadDate: '2023-12-20',
-    expiryDate: '2024-02-01',
-    size: '1.5 MB',
-    status: 'expiring',
-    description: 'رخصة قيادة خاصة',
-  },
-  {
-    id: '5',
-    name: 'الشهادة الجامعية',
-    type: 'pdf',
-    category: 'شهادات',
-    employeeName: 'فهد عبدالله السعيد',
-    employeeId: 'EMP005',
-    uploadDate: '2024-01-05',
-    size: '3.2 MB',
-    status: 'valid',
-    description: 'شهادة البكالوريوس في الهندسة',
-  },
-  {
-    id: '6',
-    name: 'جواز السفر',
-    type: 'image',
-    category: 'وثائق شخصية',
-    employeeName: 'ريم محمد الشمري',
-    employeeId: 'EMP006',
-    uploadDate: '2023-11-15',
-    expiryDate: '2024-01-20',
-    size: '2.0 MB',
-    status: 'expired',
-    description: 'جواز سفر دولي',
-  },
-  {
-    id: '7',
-    name: 'شهادة تأمين GOSI',
-    type: 'pdf',
-    category: 'تأمينات',
-    employeeName: 'أحمد محمد علي',
-    employeeId: 'EMP001',
-    uploadDate: '2024-01-20',
-    size: '500 KB',
-    status: 'valid',
-    description: 'شهادة اشتراك التأمينات الاجتماعية',
-  },
-  {
-    id: '8',
-    name: 'رخصة مزاولة المهنة',
-    type: 'pdf',
-    category: 'شهادات',
-    employeeName: 'سارة أحمد الخالدي',
-    employeeId: 'EMP002',
-    uploadDate: '2024-01-12',
-    expiryDate: '2025-01-12',
-    size: '1.8 MB',
-    status: 'valid',
-    description: 'رخصة مزاولة مهنة المحاسبة',
-  },
-]
-
-const employees = [
-  { id: 'EMP001', name: 'أحمد محمد علي' },
-  { id: 'EMP002', name: 'سارة أحمد الخالدي' },
-  { id: 'EMP003', name: 'عمر سالم الحربي' },
-  { id: 'EMP004', name: 'نورة محمد الدوسري' },
-  { id: 'EMP005', name: 'فهد عبدالله السعيد' },
-  { id: 'EMP006', name: 'ريم محمد الشمري' },
-]
-
-const categories = ['الكل', 'عقود', 'وثائق شخصية', 'شهادات', 'تأمينات', 'أخرى']
-const documentTypes = ['pdf', 'image', 'doc', 'other']
 
 const typeIcons = {
   pdf: FileText,
@@ -193,34 +87,96 @@ const statusColors = {
   expired: 'bg-red-100 text-red-700',
 }
 
+const EXPIRING_DAYS = 60
+
+const emptyForm = {
+  docType: '',
+  employeeId: '',
+  number: '',
+  issueDate: '',
+  expiryDate: '',
+  notes: '',
+}
+
 export default function DocumentsPage() {
+  const [documents, setDocuments] = useState<DocumentRow[]>([])
+  const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [saving, setSaving] = useState(false)
+
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('الكل')
   const [selectedEmployee, setSelectedEmployee] = useState('')
   const [selectedStatus, setSelectedStatus] = useState<string>('')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list')
-  const [selectedDocs, setSelectedDocs] = useState<string[]>([])
+  const [selectedDocs, setSelectedDocs] = useState<number[]>([])
   const [showUploadModal, setShowUploadModal] = useState(false)
   const [showPreviewModal, setShowPreviewModal] = useState(false)
-  const [previewDoc, setPreviewDoc] = useState<Document | null>(null)
+  const [previewDoc, setPreviewDoc] = useState<DocumentRow | null>(null)
   const [showFilters, setShowFilters] = useState(false)
+  const [editingId, setEditingId] = useState<number | null>(null)
 
-  // Upload form state
-  const [uploadForm, setUploadForm] = useState({
-    name: '',
-    category: 'عقود',
-    employeeId: '',
-    expiryDate: '',
-    description: '',
-  })
+  // نموذج الإضافة/التعديل — يُرسل إلى /documents
+  const [uploadForm, setUploadForm] = useState({ ...emptyForm })
+
+  const loadData = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const [docs, emps] = await Promise.all([fetchDocuments(), fetchEmployees()])
+      setEmployees(emps)
+      const today = new Date().toISOString().slice(0, 10)
+      const expiryLimit = new Date(Date.now() + EXPIRING_DAYS * 86400000)
+        .toISOString()
+        .slice(0, 10)
+      setDocuments(
+        docs.map((d) => {
+          const expiry = d.expiryDate ? String(d.expiryDate).slice(0, 10) : ''
+          const expired = d.expired ?? (!!expiry && expiry < today)
+          return {
+            id: d.id,
+            name: d.docType,
+            number: d.number ?? '',
+            type: 'doc' as const,
+            category: d.docType,
+            employeeName: d.employeeName ?? `#${d.employeeId}`,
+            employeeId: d.employeeId,
+            employeeCode: d.employeeCode ?? '',
+            issueDate: d.issueDate ? String(d.issueDate).slice(0, 10) : '',
+            expiryDate: expiry,
+            notes: d.notes ?? '',
+            status: expired
+              ? ('expired' as const)
+              : expiry && expiry <= expiryLimit
+              ? ('expiring' as const)
+              : ('valid' as const),
+          }
+        })
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تحميل المستندات')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const categories = ['الكل', ...Array.from(new Set(documents.map((d) => d.category)))]
 
   const filteredDocs = documents.filter((doc) => {
     const matchesSearch =
-      doc.name.includes(searchTerm) || doc.employeeName.includes(searchTerm)
+      doc.name.includes(searchTerm) ||
+      doc.number.includes(searchTerm) ||
+      doc.employeeName.includes(searchTerm)
     const matchesCategory =
       selectedCategory === 'الكل' || doc.category === selectedCategory
     const matchesEmployee =
-      !selectedEmployee || doc.employeeId === selectedEmployee
+      !selectedEmployee || String(doc.employeeId) === selectedEmployee
     const matchesStatus = !selectedStatus || doc.status === selectedStatus
     return matchesSearch && matchesCategory && matchesEmployee && matchesStatus
   })
@@ -232,7 +188,7 @@ export default function DocumentsPage() {
     expired: documents.filter((d) => d.status === 'expired').length,
   }
 
-  const toggleSelectDoc = (id: string) => {
+  const toggleSelectDoc = (id: number) => {
     setSelectedDocs((prev) =>
       prev.includes(id) ? prev.filter((d) => d !== id) : [...prev, id]
     )
@@ -246,20 +202,56 @@ export default function DocumentsPage() {
     }
   }
 
-  const handleUpload = () => {
-    // In real app, this would upload the file
-    console.log('Uploading:', uploadForm)
-    setShowUploadModal(false)
-    setUploadForm({
-      name: '',
-      category: 'عقود',
-      employeeId: '',
-      expiryDate: '',
-      description: '',
-    })
+  const openCreate = () => {
+    setEditingId(null)
+    setUploadForm({ ...emptyForm })
+    setShowUploadModal(true)
   }
 
-  const openPreview = (doc: Document) => {
+  const openEdit = (doc: DocumentRow) => {
+    setEditingId(doc.id)
+    setUploadForm({
+      docType: doc.name,
+      employeeId: String(doc.employeeId),
+      number: doc.number,
+      issueDate: doc.issueDate,
+      expiryDate: doc.expiryDate,
+      notes: doc.notes,
+    })
+    setShowPreviewModal(false)
+    setShowUploadModal(true)
+  }
+
+  const handleSave = async () => {
+    if (!uploadForm.docType || !uploadForm.employeeId) return
+    setSaving(true)
+    setError('')
+    try {
+      const payload = {
+        employeeId: Number(uploadForm.employeeId),
+        docType: uploadForm.docType,
+        number: uploadForm.number || undefined,
+        issueDate: uploadForm.issueDate || undefined,
+        expiryDate: uploadForm.expiryDate || undefined,
+        notes: uploadForm.notes || undefined,
+      }
+      if (editingId != null) {
+        await updateDocument(editingId, payload)
+      } else {
+        await createDocument(payload)
+      }
+      setShowUploadModal(false)
+      setEditingId(null)
+      setUploadForm({ ...emptyForm })
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر حفظ المستند')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const openPreview = (doc: DocumentRow) => {
     setPreviewDoc(doc)
     setShowPreviewModal(true)
   }
@@ -282,14 +274,19 @@ export default function DocumentsPage() {
               أنواع المستندات
             </Link>
             <button
-              onClick={() => setShowUploadModal(true)}
+              onClick={openCreate}
               className="btn-primary flex items-center gap-2"
             >
               <Upload size={18} />
-              رفع مستند
+              إضافة مستند
             </button>
           </div>
         </div>
+
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
@@ -331,7 +328,7 @@ export default function DocumentsPage() {
               <Clock size={24} className="text-warning-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">قاربت على الانتهاء</p>
+              <p className="text-sm text-gray-500">تنتهي خلال {EXPIRING_DAYS} يوم</p>
               <p className="text-2xl font-bold text-gray-800">{stats.expiring}</p>
             </div>
           </div>
@@ -372,8 +369,8 @@ export default function DocumentsPage() {
             >
               <option value="">كل الموظفين</option>
               {employees.map((emp) => (
-                <option key={emp.id} value={emp.id}>
-                  {emp.name}
+                <option key={emp.id} value={String(emp.id)}>
+                  {emp.fullName}
                 </option>
               ))}
             </select>
@@ -413,7 +410,7 @@ export default function DocumentsPage() {
               <div className="flex items-center gap-4 flex-wrap">
                 <div>
                   <label className="text-sm text-gray-500 mb-2 block">التصنيف</label>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap">
                     {categories.map((cat) => (
                       <button
                         key={cat}
@@ -458,17 +455,17 @@ export default function DocumentsPage() {
                   <Send size={16} />
                   إرسال بالبريد
                 </button>
-                <button className="px-4 py-2 bg-red-100 text-red-600 rounded-xl hover:bg-red-200 flex items-center gap-2">
-                  <Trash2 size={16} />
-                  حذف
-                </button>
               </div>
             </div>
           </div>
         )}
 
-        {/* Documents */}
-        {viewMode === 'list' ? (
+        {/* Loading */}
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : viewMode === 'list' ? (
           <div className="card overflow-hidden">
             <table className="w-full">
               <thead className="bg-gray-50">
@@ -485,7 +482,7 @@ export default function DocumentsPage() {
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">المستند</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الموظف</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">التصنيف</th>
-                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">تاريخ الرفع</th>
+                  <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">تاريخ الإصدار</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الانتهاء</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الحالة</th>
                   <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">إجراءات</th>
@@ -515,19 +512,21 @@ export default function DocumentsPage() {
                           </div>
                           <div>
                             <p className="font-medium text-gray-800">{doc.name}</p>
-                            <p className="text-sm text-gray-500">{doc.size}</p>
+                            <p className="text-sm text-gray-500" dir="ltr">{doc.number || '—'}</p>
                           </div>
                         </div>
                       </td>
                       <td className="px-4 py-4">
-                        <Link href={`/employees/${doc.employeeId.replace('EMP', '')}`} className="hover:text-primary-600">
+                        <Link href={`/employees/${doc.employeeId}`} className="hover:text-primary-600">
                           <p className="text-gray-800">{doc.employeeName}</p>
-                          <p className="text-sm text-gray-500">{doc.employeeId}</p>
+                          <p className="text-sm text-gray-500">{doc.employeeCode}</p>
                         </Link>
                       </td>
                       <td className="px-4 py-4 text-gray-600">{doc.category}</td>
                       <td className="px-4 py-4 text-gray-600">
-                        {new Date(doc.uploadDate).toLocaleDateString('ar-SA')}
+                        {doc.issueDate
+                          ? new Date(doc.issueDate).toLocaleDateString('ar-SA')
+                          : '-'}
                       </td>
                       <td className="px-4 py-4 text-gray-600">
                         {doc.expiryDate
@@ -548,14 +547,12 @@ export default function DocumentsPage() {
                           >
                             <Eye size={16} className="text-gray-600" />
                           </button>
-                          <button className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200" title="تحميل">
-                            <Download size={16} className="text-gray-600" />
-                          </button>
-                          <button className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200" title="طباعة">
-                            <Printer size={16} className="text-gray-600" />
-                          </button>
-                          <button className="p-2 bg-gray-100 rounded-lg hover:bg-red-100" title="حذف">
-                            <Trash2 size={16} className="text-gray-600 hover:text-red-600" />
+                          <button
+                            onClick={() => openEdit(doc)}
+                            className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200"
+                            title="تعديل"
+                          >
+                            <Edit2 size={16} className="text-gray-600" />
                           </button>
                         </div>
                       </td>
@@ -600,7 +597,7 @@ export default function DocumentsPage() {
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${statusColors[doc.status]}`}>
                       {statusLabels[doc.status]}
                     </span>
-                    <span className="text-xs text-gray-400">{doc.size}</span>
+                    <span className="text-xs text-gray-400" dir="ltr">{doc.number || '—'}</span>
                   </div>
                   <div className="mt-3 pt-3 border-t border-gray-100 flex items-center gap-2">
                     <button
@@ -610,8 +607,11 @@ export default function DocumentsPage() {
                       <Eye size={14} />
                       معاينة
                     </button>
-                    <button className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200">
-                      <Download size={14} />
+                    <button
+                      onClick={() => openEdit(doc)}
+                      className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200"
+                    >
+                      <Edit2 size={14} />
                     </button>
                   </div>
                 </div>
@@ -627,13 +627,15 @@ export default function DocumentsPage() {
           </div>
         )}
 
-        {/* Upload Modal */}
+        {/* Add/Edit Modal */}
         {showUploadModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
             <div className="bg-white rounded-2xl w-full max-w-lg mx-4">
               <div className="p-6 border-b border-gray-100">
                 <div className="flex items-center justify-between">
-                  <h2 className="text-xl font-bold text-gray-800">رفع مستند جديد</h2>
+                  <h2 className="text-xl font-bold text-gray-800">
+                    {editingId != null ? 'تعديل مستند' : 'إضافة مستند جديد'}
+                  </h2>
                   <button
                     onClick={() => setShowUploadModal(false)}
                     className="p-2 hover:bg-gray-100 rounded-lg"
@@ -643,27 +645,20 @@ export default function DocumentsPage() {
                 </div>
               </div>
               <div className="p-6 space-y-4">
-                {/* Upload Area */}
-                <div className="border-2 border-dashed border-gray-200 rounded-xl p-8 text-center hover:border-primary-400 transition-colors cursor-pointer">
-                  <FileUp size={48} className="mx-auto text-gray-300 mb-4" />
-                  <p className="text-gray-600 font-medium">اسحب الملفات هنا أو اضغط للاختيار</p>
-                  <p className="text-sm text-gray-400 mt-2">PDF, JPG, PNG, DOC (حد أقصى 10MB)</p>
-                </div>
-
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">اسم المستند</label>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">نوع المستند *</label>
                   <input
                     type="text"
                     className="input w-full"
-                    placeholder="مثال: عقد العمل"
-                    value={uploadForm.name}
-                    onChange={(e) => setUploadForm({ ...uploadForm, name: e.target.value })}
+                    placeholder="مثال: جواز سفر، عقد عمل، شهادة"
+                    value={uploadForm.docType}
+                    onChange={(e) => setUploadForm({ ...uploadForm, docType: e.target.value })}
                   />
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">الموظف</label>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">الموظف *</label>
                     <select
                       className="input w-full"
                       value={uploadForm.employeeId}
@@ -671,36 +666,44 @@ export default function DocumentsPage() {
                     >
                       <option value="">اختر الموظف</option>
                       {employees.map((emp) => (
-                        <option key={emp.id} value={emp.id}>
-                          {emp.name}
+                        <option key={emp.id} value={String(emp.id)}>
+                          {emp.fullName}
                         </option>
                       ))}
                     </select>
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">التصنيف</label>
-                    <select
+                    <label className="block text-sm font-medium text-gray-700 mb-2">رقم المستند</label>
+                    <input
+                      type="text"
                       className="input w-full"
-                      value={uploadForm.category}
-                      onChange={(e) => setUploadForm({ ...uploadForm, category: e.target.value })}
-                    >
-                      {categories.filter((c) => c !== 'الكل').map((cat) => (
-                        <option key={cat} value={cat}>
-                          {cat}
-                        </option>
-                      ))}
-                    </select>
+                      dir="ltr"
+                      placeholder="P1234567"
+                      value={uploadForm.number}
+                      onChange={(e) => setUploadForm({ ...uploadForm, number: e.target.value })}
+                    />
                   </div>
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">تاريخ الانتهاء (اختياري)</label>
-                  <input
-                    type="date"
-                    className="input w-full"
-                    value={uploadForm.expiryDate}
-                    onChange={(e) => setUploadForm({ ...uploadForm, expiryDate: e.target.value })}
-                  />
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">تاريخ الإصدار</label>
+                    <input
+                      type="date"
+                      className="input w-full"
+                      value={uploadForm.issueDate}
+                      onChange={(e) => setUploadForm({ ...uploadForm, issueDate: e.target.value })}
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">تاريخ الانتهاء</label>
+                    <input
+                      type="date"
+                      className="input w-full"
+                      value={uploadForm.expiryDate}
+                      onChange={(e) => setUploadForm({ ...uploadForm, expiryDate: e.target.value })}
+                    />
+                  </div>
                 </div>
 
                 <div>
@@ -709,8 +712,8 @@ export default function DocumentsPage() {
                     className="input w-full"
                     rows={3}
                     placeholder="ملاحظات إضافية عن المستند..."
-                    value={uploadForm.description}
-                    onChange={(e) => setUploadForm({ ...uploadForm, description: e.target.value })}
+                    value={uploadForm.notes}
+                    onChange={(e) => setUploadForm({ ...uploadForm, notes: e.target.value })}
                   />
                 </div>
               </div>
@@ -721,8 +724,12 @@ export default function DocumentsPage() {
                 >
                   إلغاء
                 </button>
-                <button onClick={handleUpload} className="btn-primary">
-                  رفع المستند
+                <button
+                  onClick={handleSave}
+                  className="btn-primary"
+                  disabled={saving || !uploadForm.docType || !uploadForm.employeeId}
+                >
+                  {editingId != null ? 'حفظ التعديلات' : 'إضافة المستند'}
                 </button>
               </div>
             </div>
@@ -744,19 +751,13 @@ export default function DocumentsPage() {
                     </div>
                     <div>
                       <h2 className="text-xl font-bold text-gray-800">{previewDoc.name}</h2>
-                      <p className="text-sm text-gray-500">{previewDoc.employeeName} • {previewDoc.size}</p>
+                      <p className="text-sm text-gray-500">
+                        {previewDoc.employeeName}
+                        {previewDoc.number ? ` • ${previewDoc.number}` : ''}
+                      </p>
                     </div>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button className="p-2 hover:bg-gray-100 rounded-lg" title="تحميل">
-                      <Download size={20} />
-                    </button>
-                    <button className="p-2 hover:bg-gray-100 rounded-lg" title="طباعة">
-                      <Printer size={20} />
-                    </button>
-                    <button className="p-2 hover:bg-gray-100 rounded-lg" title="مشاركة">
-                      <Link2 size={20} />
-                    </button>
                     <button
                       onClick={() => setShowPreviewModal(false)}
                       className="p-2 hover:bg-gray-100 rounded-lg"
@@ -769,17 +770,10 @@ export default function DocumentsPage() {
               <div className="flex-1 overflow-auto p-6">
                 {/* Preview Content */}
                 <div className="bg-gray-100 rounded-xl h-96 flex items-center justify-center">
-                  {previewDoc.type === 'image' ? (
-                    <div className="text-center">
-                      <Image size={64} className="mx-auto text-gray-400 mb-4" />
-                      <p className="text-gray-500">معاينة الصورة</p>
-                    </div>
-                  ) : (
-                    <div className="text-center">
-                      <FileText size={64} className="mx-auto text-gray-400 mb-4" />
-                      <p className="text-gray-500">معاينة المستند</p>
-                    </div>
-                  )}
+                  <div className="text-center">
+                    <FileText size={64} className="mx-auto text-gray-400 mb-4" />
+                    <p className="text-gray-500">لا يوجد ملف مرفق — سجل بيانات فقط</p>
+                  </div>
                 </div>
 
                 {/* Document Details */}
@@ -788,13 +782,15 @@ export default function DocumentsPage() {
                     <h3 className="font-semibold text-gray-800 mb-3">تفاصيل المستند</h3>
                     <div className="space-y-2">
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-500">التصنيف:</span>
+                        <span className="text-gray-500">النوع:</span>
                         <span className="text-gray-800">{previewDoc.category}</span>
                       </div>
                       <div className="flex justify-between text-sm">
-                        <span className="text-gray-500">تاريخ الرفع:</span>
+                        <span className="text-gray-500">تاريخ الإصدار:</span>
                         <span className="text-gray-800">
-                          {new Date(previewDoc.uploadDate).toLocaleDateString('ar-SA')}
+                          {previewDoc.issueDate
+                            ? new Date(previewDoc.issueDate).toLocaleDateString('ar-SA')
+                            : '—'}
                         </span>
                       </div>
                       {previewDoc.expiryDate && (
@@ -822,25 +818,24 @@ export default function DocumentsPage() {
                       </div>
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-500">الرقم الوظيفي:</span>
-                        <span className="text-gray-800">{previewDoc.employeeId}</span>
+                        <span className="text-gray-800">{previewDoc.employeeCode || '—'}</span>
                       </div>
                     </div>
-                    {previewDoc.description && (
+                    {previewDoc.notes && (
                       <div className="mt-3 pt-3 border-t border-gray-200">
                         <p className="text-sm text-gray-500 mb-1">ملاحظات:</p>
-                        <p className="text-sm text-gray-800">{previewDoc.description}</p>
+                        <p className="text-sm text-gray-800">{previewDoc.notes}</p>
                       </div>
                     )}
                   </div>
                 </div>
               </div>
-              <div className="p-6 border-t border-gray-100 flex justify-between">
-                <button className="px-4 py-2 bg-red-100 text-red-600 rounded-xl hover:bg-red-200 flex items-center gap-2">
-                  <Trash2 size={16} />
-                  حذف المستند
-                </button>
+              <div className="p-6 border-t border-gray-100 flex justify-end">
                 <div className="flex gap-3">
-                  <button className="btn-secondary flex items-center gap-2">
+                  <button
+                    onClick={() => openEdit(previewDoc)}
+                    className="btn-secondary flex items-center gap-2"
+                  >
                     <RefreshCw size={16} />
                     تحديث المستند
                   </button>

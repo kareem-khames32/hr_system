@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
@@ -15,9 +15,15 @@ import {
   FileText,
 } from 'lucide-react'
 import Link from 'next/link'
+import {
+  fetchEmployees,
+  fetchBranches,
+  fetchDepartments,
+  updateEmployee,
+} from '@/lib/api'
 
 interface ArchivedEmployee {
-  id: string
+  id: number
   name: string
   avatar: string
   employeeId: string
@@ -25,84 +31,80 @@ interface ArchivedEmployee {
   position: string
   joinDate: string
   endDate: string
-  reason: 'resignation' | 'termination' | 'retirement' | 'contract_end'
-  yearsOfService: number
+  yearsOfService: string
 }
 
-const archivedEmployees: ArchivedEmployee[] = [
-  {
-    id: '1',
-    name: 'خالد عبدالله المطيري',
-    avatar: 'خ',
-    employeeId: 'EMP045',
-    department: 'المبيعات',
-    position: 'مدير مبيعات',
-    joinDate: '2018-03-15',
-    endDate: '2024-01-15',
-    reason: 'resignation',
-    yearsOfService: 6,
-  },
-  {
-    id: '2',
-    name: 'منى سعيد الغامدي',
-    avatar: 'م',
-    employeeId: 'EMP032',
-    department: 'التسويق',
-    position: 'أخصائي تسويق',
-    joinDate: '2020-06-01',
-    endDate: '2023-12-31',
-    reason: 'contract_end',
-    yearsOfService: 3,
-  },
-  {
-    id: '3',
-    name: 'عبدالرحمن محمد السالم',
-    avatar: 'ع',
-    employeeId: 'EMP012',
-    department: 'المالية',
-    position: 'محاسب أول',
-    joinDate: '2010-01-10',
-    endDate: '2023-11-30',
-    reason: 'retirement',
-    yearsOfService: 13,
-  },
-  {
-    id: '4',
-    name: 'ليلى أحمد العمري',
-    avatar: 'ل',
-    employeeId: 'EMP078',
-    department: 'تقنية المعلومات',
-    position: 'مطور برمجيات',
-    joinDate: '2021-09-01',
-    endDate: '2023-10-15',
-    reason: 'termination',
-    yearsOfService: 2,
-  },
-]
-
-const reasonLabels = {
-  resignation: 'استقالة',
-  termination: 'إنهاء خدمات',
-  retirement: 'تقاعد',
-  contract_end: 'انتهاء العقد',
-}
-
-const reasonColors = {
-  resignation: 'bg-blue-100 text-blue-700',
-  termination: 'bg-red-100 text-red-700',
-  retirement: 'bg-purple-100 text-purple-700',
-  contract_end: 'bg-warning-50 text-warning-700',
+const serviceText = (joinDate?: string | null) => {
+  if (!joinDate) return '—'
+  const start = new Date(joinDate)
+  const now = new Date()
+  const years = Math.floor(
+    (now.getTime() - start.getTime()) / (365.25 * 24 * 3600 * 1000)
+  )
+  if (years < 0) return '—'
+  if (years < 1) return 'أقل من سنة'
+  return `${years} سنوات`
 }
 
 export default function ArchivedEmployeesPage() {
   const [searchTerm, setSearchTerm] = useState('')
-  const [filterReason, setFilterReason] = useState('all')
+  const [archivedEmployees, setArchivedEmployees] = useState<ArchivedEmployee[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  const loadData = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const [emps, branches, depts] = await Promise.all([
+        fetchEmployees(),
+        fetchBranches(),
+        fetchDepartments(),
+      ])
+      const branchById = new Map(branches.map((b) => [b.id, b.name]))
+      const deptById = new Map(depts.map((d) => [d.id, d.name]))
+      setArchivedEmployees(
+        emps
+          .filter((e) => e.status === 'archived')
+          .map((e) => ({
+            id: e.id,
+            name: e.fullName,
+            avatar: (e.fullName ?? '').trim().charAt(0) || 'م',
+            employeeId: e.employeeCode,
+            department:
+              (e.departmentId != null ? deptById.get(e.departmentId) : null) ??
+              branchById.get(e.branchId) ??
+              '—',
+            position: e.jobTitle ?? '—',
+            joinDate: e.joinDate ? String(e.joinDate).slice(0, 10) : '',
+            endDate: '',
+            yearsOfService: serviceText(e.joinDate),
+          }))
+      )
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تحميل الأرشيف')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    loadData()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const handleReactivate = async (id: number) => {
+    if (!window.confirm('هل تريد إعادة تفعيل هذا الموظف؟')) return
+    try {
+      await updateEmployee(id, { status: 'active', isActive: true })
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذرت إعادة التفعيل')
+    }
+  }
 
   const filteredEmployees = archivedEmployees.filter((emp) => {
-    const matchesSearch =
-      emp.name.includes(searchTerm) || emp.employeeId.includes(searchTerm)
-    const matchesReason = filterReason === 'all' || emp.reason === filterReason
-    return matchesSearch && matchesReason
+    return emp.name.includes(searchTerm) || emp.employeeId.includes(searchTerm)
   })
 
   return (
@@ -126,6 +128,11 @@ export default function ArchivedEmployeesPage() {
           </div>
         </div>
 
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
+        )}
+
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
           <div className="card flex items-center gap-4">
@@ -142,10 +149,8 @@ export default function ArchivedEmployeesPage() {
               <FileText size={24} className="text-blue-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">استقالات</p>
-              <p className="text-2xl font-bold text-gray-800">
-                {archivedEmployees.filter((e) => e.reason === 'resignation').length}
-              </p>
+              <p className="text-sm text-gray-500">نتائج البحث</p>
+              <p className="text-2xl font-bold text-gray-800">{filteredEmployees.length}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
@@ -153,9 +158,9 @@ export default function ArchivedEmployeesPage() {
               <Calendar size={24} className="text-purple-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">تقاعد</p>
+              <p className="text-sm text-gray-500">بتاريخ تعيين مسجّل</p>
               <p className="text-2xl font-bold text-gray-800">
-                {archivedEmployees.filter((e) => e.reason === 'retirement').length}
+                {archivedEmployees.filter((e) => e.joinDate).length}
               </p>
             </div>
           </div>
@@ -164,10 +169,8 @@ export default function ArchivedEmployeesPage() {
               <Building2 size={24} className="text-warning-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">انتهاء عقد</p>
-              <p className="text-2xl font-bold text-gray-800">
-                {archivedEmployees.filter((e) => e.reason === 'contract_end').length}
-              </p>
+              <p className="text-sm text-gray-500">قابلون لإعادة التفعيل</p>
+              <p className="text-2xl font-bold text-gray-800">{archivedEmployees.length}</p>
             </div>
           </div>
         </div>
@@ -185,21 +188,16 @@ export default function ArchivedEmployeesPage() {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
-            <select
-              value={filterReason}
-              onChange={(e) => setFilterReason(e.target.value)}
-              className="input w-48"
-            >
-              <option value="all">كل الأسباب</option>
-              <option value="resignation">استقالة</option>
-              <option value="termination">إنهاء خدمات</option>
-              <option value="retirement">تقاعد</option>
-              <option value="contract_end">انتهاء العقد</option>
-            </select>
           </div>
         </div>
 
-        {/* Table */}
+        {/* Loading */}
+        {loading ? (
+          <div className="flex items-center justify-center py-20">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+        /* Table */
         <div className="card overflow-hidden">
           <table className="w-full">
             <thead className="bg-gray-50">
@@ -209,7 +207,7 @@ export default function ArchivedEmployeesPage() {
                 <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">تاريخ الالتحاق</th>
                 <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">تاريخ الانتهاء</th>
                 <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">مدة الخدمة</th>
-                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">السبب</th>
+                <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الحالة</th>
                 <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">إجراءات</th>
               </tr>
             </thead>
@@ -232,27 +230,32 @@ export default function ArchivedEmployeesPage() {
                     <p className="text-sm text-gray-500">{emp.position}</p>
                   </td>
                   <td className="px-4 py-4 text-gray-600">
-                    {new Date(emp.joinDate).toLocaleDateString('ar-SA')}
+                    {emp.joinDate
+                      ? new Date(emp.joinDate).toLocaleDateString('ar-SA')
+                      : '—'}
                   </td>
-                  <td className="px-4 py-4 text-gray-600">
-                    {new Date(emp.endDate).toLocaleDateString('ar-SA')}
-                  </td>
-                  <td className="px-4 py-4 text-gray-600">{emp.yearsOfService} سنوات</td>
+                  <td className="px-4 py-4 text-gray-600">—</td>
+                  <td className="px-4 py-4 text-gray-600">{emp.yearsOfService}</td>
                   <td className="px-4 py-4">
-                    <span className={`px-3 py-1 rounded-full text-xs font-medium ${reasonColors[emp.reason]}`}>
-                      {reasonLabels[emp.reason]}
+                    <span className="px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                      مؤرشف
                     </span>
                   </td>
                   <td className="px-4 py-4">
                     <div className="flex items-center justify-center gap-2">
-                      <button className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200">
+                      <Link
+                        href={`/employees/${emp.id}`}
+                        className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200"
+                        title="عرض الملف"
+                      >
                         <Eye size={16} className="text-gray-600" />
-                      </button>
-                      <button className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200">
-                        <Download size={16} className="text-gray-600" />
-                      </button>
-                      <button className="p-2 bg-gray-100 rounded-lg hover:bg-red-100">
-                        <Trash2 size={16} className="text-gray-600 hover:text-red-600" />
+                      </Link>
+                      <button
+                        onClick={() => handleReactivate(emp.id)}
+                        className="p-2 bg-gray-100 rounded-lg hover:bg-success-50"
+                        title="إعادة تفعيل"
+                      >
+                        <RefreshCw size={16} className="text-gray-600 hover:text-success-600" />
                       </button>
                     </div>
                   </td>
@@ -260,7 +263,15 @@ export default function ArchivedEmployeesPage() {
               ))}
             </tbody>
           </table>
+
+          {filteredEmployees.length === 0 && (
+            <div className="py-12 text-center">
+              <UserX size={48} className="mx-auto text-gray-300 mb-4" />
+              <p className="text-gray-500">لا يوجد موظفون مؤرشفون</p>
+            </div>
+          )}
         </div>
+        )}
       </div>
     </MainLayout>
   )

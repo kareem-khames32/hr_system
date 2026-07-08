@@ -1,10 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
-  Filter,
   Download,
   ZoomIn,
   ZoomOut,
@@ -17,6 +16,13 @@ import {
   Mail,
   Phone,
 } from 'lucide-react'
+import {
+  fetchBranches,
+  fetchDepartments,
+  fetchTeams,
+  fetchEmployees,
+  ApiDepartment,
+} from '@/lib/api'
 
 interface OrgNode {
   id: string
@@ -28,127 +34,6 @@ interface OrgNode {
   phone: string
   children?: OrgNode[]
   expanded?: boolean
-}
-
-const orgData: OrgNode = {
-  id: '1',
-  name: 'محمد سالم العتيبي',
-  title: 'المدير العام',
-  department: 'الإدارة العليا',
-  avatar: 'م',
-  email: 'ceo@company.com',
-  phone: '+966 50 111 1111',
-  expanded: true,
-  children: [
-    {
-      id: '2',
-      name: 'أحمد محمد علي',
-      title: 'مدير تقنية المعلومات',
-      department: 'تقنية المعلومات',
-      avatar: 'أ',
-      email: 'ahmed.m@company.com',
-      phone: '+966 50 123 4567',
-      expanded: true,
-      children: [
-        {
-          id: '5',
-          name: 'ريم سعود الدوسري',
-          title: 'مطور برمجيات أول',
-          department: 'تقنية المعلومات',
-          avatar: 'ر',
-          email: 'reem.s@company.com',
-          phone: '+966 56 890 1234',
-        },
-        {
-          id: '6',
-          name: 'فهد عبدالله',
-          title: 'مطور برمجيات',
-          department: 'تقنية المعلومات',
-          avatar: 'ف',
-          email: 'fahad.a@company.com',
-          phone: '+966 55 123 4567',
-        },
-        {
-          id: '7',
-          name: 'سلمان خالد',
-          title: 'مدير النظام',
-          department: 'تقنية المعلومات',
-          avatar: 'س',
-          email: 'salman.k@company.com',
-          phone: '+966 54 234 5678',
-        },
-      ],
-    },
-    {
-      id: '3',
-      name: 'سارة أحمد الخالدي',
-      title: 'مدير الموارد البشرية',
-      department: 'الموارد البشرية',
-      avatar: 'س',
-      email: 'sara.a@company.com',
-      phone: '+966 55 234 5678',
-      expanded: true,
-      children: [
-        {
-          id: '8',
-          name: 'نورة محمد',
-          title: 'أخصائي موارد بشرية',
-          department: 'الموارد البشرية',
-          avatar: 'ن',
-          email: 'noura.m@company.com',
-          phone: '+966 50 345 6789',
-        },
-        {
-          id: '9',
-          name: 'هند سالم',
-          title: 'أخصائي توظيف',
-          department: 'الموارد البشرية',
-          avatar: 'هـ',
-          email: 'hind.s@company.com',
-          phone: '+966 55 456 7890',
-        },
-      ],
-    },
-    {
-      id: '4',
-      name: 'عمر سالم الحربي',
-      title: 'مدير المبيعات',
-      department: 'المبيعات',
-      avatar: 'ع',
-      email: 'omar.s@company.com',
-      phone: '+966 50 567 8901',
-      expanded: true,
-      children: [
-        {
-          id: '10',
-          name: 'محمد خالد السعيد',
-          title: 'مندوب مبيعات أول',
-          department: 'المبيعات',
-          avatar: 'م',
-          email: 'mohammed.k@company.com',
-          phone: '+966 54 345 6789',
-        },
-        {
-          id: '11',
-          name: 'أحمد علي',
-          title: 'مندوب مبيعات',
-          department: 'المبيعات',
-          avatar: 'أ',
-          email: 'ahmed.a@company.com',
-          phone: '+966 56 567 8901',
-        },
-        {
-          id: '12',
-          name: 'خالد محمد',
-          title: 'مندوب مبيعات',
-          department: 'المبيعات',
-          avatar: 'خ',
-          email: 'khaled.m@company.com',
-          phone: '+966 50 678 9012',
-        },
-      ],
-    },
-  ],
 }
 
 function OrgNodeCard({
@@ -263,9 +148,152 @@ function OrgNodeCard({
 }
 
 export default function OrgChartPage() {
-  const [orgTree, setOrgTree] = useState(orgData)
+  const [orgTrees, setOrgTrees] = useState<OrgNode[]>([])
+  const [departments, setDepartments] = useState<ApiDepartment[]>([])
+  const [stats, setStats] = useState({
+    employees: 0,
+    departments: 0,
+    managers: 0,
+    branches: 0,
+  })
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
   const [zoom, setZoom] = useState(100)
   const [selectedDepartment, setSelectedDepartment] = useState('all')
+  const [searchTerm, setSearchTerm] = useState('')
+
+  useEffect(() => {
+    const load = async () => {
+      setLoading(true)
+      setError('')
+      try {
+        const [branches, depts, teams, employees] = await Promise.all([
+          fetchBranches(),
+          fetchDepartments(),
+          fetchTeams(),
+          fetchEmployees(),
+        ])
+        const active = employees.filter((e) => e.status !== 'archived')
+        const empById = new Map(employees.map((e) => [e.id, e]))
+        const avatarOf = (name: string) => (name ?? '').trim().charAt(0) || 'م'
+
+        const empNode = (e: (typeof active)[number], context: string, isLeader: boolean): OrgNode => ({
+          id: `e${e.id}`,
+          name: e.fullName,
+          title: (e.jobTitle ?? 'موظف') + (isLeader ? ' • قائد الفريق' : ''),
+          department: context,
+          avatar: avatarOf(e.fullName),
+          email: e.email ?? '—',
+          phone: e.phone ?? '—',
+        })
+
+        // الهيكل: فرع ← أقسام ← فرق ← موظفون
+        const trees: OrgNode[] = branches
+          .filter((b) => b.isActive)
+          .map((b) => {
+            const branchManager = b.managerEmployeeId
+              ? empById.get(b.managerEmployeeId)
+              : undefined
+            const branchDepts = depts.filter((d) => d.branchId === b.id)
+            const deptNodes: OrgNode[] = branchDepts.map((d) => {
+              const deptManager = d.managerEmployeeId
+                ? empById.get(d.managerEmployeeId)
+                : undefined
+              const deptTeams = teams.filter((t) => t.departmentId === d.id)
+              const teamNodes: OrgNode[] = deptTeams.map((t) => {
+                const leader = t.leaderEmployeeId
+                  ? empById.get(t.leaderEmployeeId)
+                  : undefined
+                const members = active
+                  .filter((e) => e.teamId === t.id)
+                  .sort((a, bb) =>
+                    a.id === t.leaderEmployeeId ? -1 : bb.id === t.leaderEmployeeId ? 1 : 0
+                  )
+                return {
+                  id: `t${t.id}`,
+                  name: t.name,
+                  title: leader ? `القائد: ${leader.fullName}` : 'فريق',
+                  department: d.name,
+                  avatar: avatarOf(t.name),
+                  email: '—',
+                  phone: '—',
+                  expanded: true,
+                  children: members.map((e) =>
+                    empNode(e, t.name, e.id === t.leaderEmployeeId)
+                  ),
+                }
+              })
+              const noTeamMembers = active.filter(
+                (e) => e.departmentId === d.id && !e.teamId
+              )
+              return {
+                id: `d${d.id}`,
+                name: d.name,
+                title: deptManager ? `المدير: ${deptManager.fullName}` : 'قسم',
+                department: b.name,
+                avatar: avatarOf(d.name),
+                email: '—',
+                phone: '—',
+                expanded: true,
+                children: [
+                  ...teamNodes,
+                  ...noTeamMembers.map((e) => empNode(e, d.name, false)),
+                ],
+              }
+            })
+            const unassigned = active.filter(
+              (e) => e.branchId === b.id && !e.departmentId
+            )
+            return {
+              id: `b${b.id}`,
+              name: b.name,
+              title: branchManager
+                ? `المدير: ${branchManager.fullName}`
+                : b.isHeadquarters
+                ? 'الفرع الرئيسي'
+                : 'فرع',
+              department: b.city ?? 'فرع',
+              avatar: avatarOf(b.name),
+              email: b.email ?? '—',
+              phone: b.phone ?? '—',
+              expanded: true,
+              children: [
+                ...deptNodes,
+                ...unassigned.map((e) => empNode(e, b.name, false)),
+              ],
+            }
+          })
+
+        const managerIds = new Set<number>()
+        for (const e of active) {
+          if (e.managerEmployeeId) managerIds.add(e.managerEmployeeId)
+        }
+        for (const t of teams) {
+          if (t.leaderEmployeeId) managerIds.add(t.leaderEmployeeId)
+        }
+        for (const d of depts) {
+          if (d.managerEmployeeId) managerIds.add(d.managerEmployeeId)
+        }
+        for (const b of branches) {
+          if (b.managerEmployeeId) managerIds.add(b.managerEmployeeId)
+        }
+
+        setDepartments(depts)
+        setOrgTrees(trees)
+        setStats({
+          employees: active.length,
+          departments: depts.length,
+          managers: managerIds.size,
+          branches: branches.length,
+        })
+      } catch (err) {
+        setError(err instanceof Error ? err.message : 'تعذر تحميل الهيكل التنظيمي')
+      } finally {
+        setLoading(false)
+      }
+    }
+    load()
+  }, [])
 
   const toggleNode = (id: string) => {
     const toggleInTree = (node: OrgNode): OrgNode => {
@@ -277,8 +305,34 @@ export default function OrgChartPage() {
       }
       return node
     }
-    setOrgTree(toggleInTree(orgTree))
+    setOrgTrees(orgTrees.map(toggleInTree))
   }
+
+  // فلترة العرض: قسم محدد → عرض شجرة القسم فقط
+  const findDeptNode = (nodes: OrgNode[], deptId: string): OrgNode | null => {
+    for (const n of nodes) {
+      if (n.id === deptId) return n
+      if (n.children) {
+        const found = findDeptNode(n.children, deptId)
+        if (found) return found
+      }
+    }
+    return null
+  }
+
+  const matchesSearch = (node: OrgNode): boolean => {
+    if (!searchTerm) return true
+    if (node.name.includes(searchTerm)) return true
+    return (node.children ?? []).some(matchesSearch)
+  }
+
+  const displayedTrees = (
+    selectedDepartment === 'all'
+      ? orgTrees
+      : ([findDeptNode(orgTrees, `d${selectedDepartment}`)].filter(
+          Boolean
+        ) as OrgNode[])
+  ).filter(matchesSearch)
 
   return (
     <MainLayout>
@@ -297,6 +351,11 @@ export default function OrgChartPage() {
           </div>
         </div>
 
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
+        )}
+
         {/* Controls */}
         <div className="card">
           <div className="flex items-center justify-between">
@@ -308,6 +367,8 @@ export default function OrgChartPage() {
                   type="text"
                   placeholder="بحث عن موظف..."
                   className="input pr-10"
+                  value={searchTerm}
+                  onChange={(e) => setSearchTerm(e.target.value)}
                 />
               </div>
 
@@ -318,9 +379,11 @@ export default function OrgChartPage() {
                 className="input w-48"
               >
                 <option value="all">كل الأقسام</option>
-                <option value="it">تقنية المعلومات</option>
-                <option value="hr">الموارد البشرية</option>
-                <option value="sales">المبيعات</option>
+                {departments.map((d) => (
+                  <option key={d.id} value={String(d.id)}>
+                    {d.name}
+                  </option>
+                ))}
               </select>
             </div>
 
@@ -359,7 +422,7 @@ export default function OrgChartPage() {
             </div>
             <div>
               <p className="text-sm text-gray-500">إجمالي الموظفين</p>
-              <p className="text-2xl font-bold text-gray-800">248</p>
+              <p className="text-2xl font-bold text-gray-800">{stats.employees}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
@@ -368,7 +431,7 @@ export default function OrgChartPage() {
             </div>
             <div>
               <p className="text-sm text-gray-500">الأقسام</p>
-              <p className="text-2xl font-bold text-gray-800">12</p>
+              <p className="text-2xl font-bold text-gray-800">{stats.departments}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
@@ -377,7 +440,7 @@ export default function OrgChartPage() {
             </div>
             <div>
               <p className="text-sm text-gray-500">المدراء</p>
-              <p className="text-2xl font-bold text-gray-800">18</p>
+              <p className="text-2xl font-bold text-gray-800">{stats.managers}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
@@ -386,19 +449,36 @@ export default function OrgChartPage() {
             </div>
             <div>
               <p className="text-sm text-gray-500">الفروع</p>
-              <p className="text-2xl font-bold text-gray-800">3</p>
+              <p className="text-2xl font-bold text-gray-800">{stats.branches}</p>
             </div>
           </div>
         </div>
 
         {/* Org Chart */}
         <div className="card overflow-hidden p-8">
+          {loading ? (
+            <div className="flex items-center justify-center py-20">
+              <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
           <div
             className="overflow-auto min-h-[600px] flex justify-center"
             style={{ transform: `scale(${zoom / 100})`, transformOrigin: 'top center' }}
           >
-            <OrgNodeCard node={orgTree} isRoot onToggle={toggleNode} />
+            {displayedTrees.length === 0 ? (
+              <div className="py-12 text-center self-start">
+                <Users size={48} className="mx-auto text-gray-300 mb-4" />
+                <p className="text-gray-500">لا توجد بيانات مطابقة في الهيكل</p>
+              </div>
+            ) : (
+              <div className="flex gap-16 items-start">
+                {displayedTrees.map((tree) => (
+                  <OrgNodeCard key={tree.id} node={tree} isRoot onToggle={toggleNode} />
+                ))}
+              </div>
+            )}
           </div>
+          )}
         </div>
 
         {/* Legend */}
@@ -407,15 +487,15 @@ export default function OrgChartPage() {
             <span className="text-sm font-medium text-gray-600">دليل الألوان:</span>
             <div className="flex items-center gap-2">
               <div className="w-4 h-4 bg-gradient-to-br from-primary-500 to-primary-600 rounded" />
-              <span className="text-sm text-gray-600">الإدارة العليا</span>
+              <span className="text-sm text-gray-600">الفرع</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-4 h-4 bg-gradient-to-br from-gray-400 to-gray-500 rounded" />
-              <span className="text-sm text-gray-600">الموظفين</span>
+              <span className="text-sm text-gray-600">الأقسام والفرق والموظفون</span>
             </div>
             <div className="flex items-center gap-2">
               <div className="w-4 h-4 bg-primary-500 rounded-full" />
-              <span className="text-sm text-gray-600">عدد المرؤوسين</span>
+              <span className="text-sm text-gray-600">عدد العناصر التابعة</span>
             </div>
           </div>
         </div>
