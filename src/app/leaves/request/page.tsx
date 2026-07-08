@@ -1,31 +1,51 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   ArrowRight,
   Calendar,
-  FileText,
   Upload,
   AlertCircle,
   CheckCircle2,
 } from 'lucide-react'
 import Link from 'next/link'
+import {
+  fetchRequestTypes,
+  fetchMyBalances,
+  createRequest,
+  type ApiRequestType,
+  type ApiBalance,
+} from '@/lib/api'
 
-const leaveTypes = [
-  { id: 'annual', name: 'إجازة سنوية', balance: 21, color: 'bg-blue-500' },
-  { id: 'sick', name: 'إجازة مرضية', balance: 30, color: 'bg-red-500' },
-  { id: 'emergency', name: 'إجازة طارئة', balance: 5, color: 'bg-orange-500' },
-  { id: 'unpaid', name: 'إجازة بدون راتب', balance: null, color: 'bg-gray-500' },
-  { id: 'marriage', name: 'إجازة زواج', balance: 5, color: 'bg-pink-500' },
-  { id: 'maternity', name: 'إجازة أمومة', balance: 70, color: 'bg-purple-500' },
-  { id: 'paternity', name: 'إجازة أبوة', balance: 3, color: 'bg-indigo-500' },
-  { id: 'hajj', name: 'إجازة حج', balance: 15, color: 'bg-green-500' },
-]
+// لون كل نوع حسب كوده (الأنواع نفسها تأتي من كتالوج السيرفر)
+const TYPE_COLORS: Record<string, string> = {
+  LEAVE_ANNUAL: 'bg-blue-500',
+  LEAVE_SICK: 'bg-red-500',
+  LEAVE_CASUAL: 'bg-orange-500',
+  LEAVE_UNPAID: 'bg-gray-500',
+  LEAVE_MARRIAGE: 'bg-pink-500',
+  LEAVE_MATERNITY: 'bg-purple-500',
+  LEAVE_PATERNITY: 'bg-indigo-500',
+  LEAVE_HAJJ: 'bg-green-500',
+  LEAVE_BEREAVEMENT: 'bg-slate-500',
+  LEAVE_EXAM: 'bg-teal-500',
+  LEAVE_COMPENSATORY: 'bg-cyan-500',
+}
+
+// كود مصدر الرصيد من كود نوع الطلب: LEAVE_ANNUAL → ANNUAL
+const balanceSourceOf = (typeCode: string) => typeCode.replace(/^LEAVE_/, '')
 
 export default function LeaveRequestPage() {
+  const [leaveTypes, setLeaveTypes] = useState<ApiRequestType[]>([])
+  const [balances, setBalances] = useState<ApiBalance[]>([])
+  const [loading, setLoading] = useState(true)
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
+
   const [formData, setFormData] = useState({
-    leaveType: '',
+    leaveType: '', // كود نوع الطلب مثل LEAVE_ANNUAL
     startDate: '',
     endDate: '',
     reason: '',
@@ -34,6 +54,26 @@ export default function LeaveRequestPage() {
   })
 
   const [calculatedDays, setCalculatedDays] = useState(0)
+
+  useEffect(() => {
+    Promise.all([
+      fetchRequestTypes(),
+      fetchMyBalances().catch(() => [] as ApiBalance[]),
+    ])
+      .then(([types, bals]) => {
+        setLeaveTypes(types.filter((t) => t.category === 'leaves' && t.isActive))
+        setBalances(bals)
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل أنواع الإجازات'))
+      .finally(() => setLoading(false))
+  }, [])
+
+  // رصيد النوع المحدد إن كان له مصدر رصيد (annual/sick/...)
+  const balanceFor = (typeCode: string): number | null => {
+    const source = balanceSourceOf(typeCode).toLowerCase()
+    const bal = balances.find((b) => b.balanceType.toLowerCase() === source)
+    return bal ? Number(bal.remaining) : null
+  }
 
   const handleChange = (field: string, value: string | File | null) => {
     setFormData(prev => ({ ...prev, [field]: value }))
@@ -51,11 +91,40 @@ export default function LeaveRequestPage() {
     }
   }
 
-  const selectedLeaveType = leaveTypes.find(t => t.id === formData.leaveType)
+  const selectedLeaveType = leaveTypes.find(t => t.code === formData.leaveType)
+  const selectedBalance = selectedLeaveType ? balanceFor(selectedLeaveType.code) : null
 
-  const handleSubmit = (e: React.FormEvent) => {
+  // الإرسال لمحرك الطلبات — الرسائل العربية من السيرفر تُعرض كما هي
+  const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
-    console.log('Submitting:', formData)
+    if (!selectedLeaveType) return
+    setError('')
+    setSuccess('')
+    setSubmitting(true)
+    try {
+      const req = await createRequest(selectedLeaveType.code, {
+        fromDate: formData.startDate,
+        toDate: formData.endDate,
+        days: calculatedDays,
+        leaveType: balanceSourceOf(selectedLeaveType.code),
+        reason: formData.reason,
+        contactNumber: formData.contactNumber,
+      })
+      setSuccess(`تم تقديم الطلب بنجاح — رقم الطلب #${req.id} وهو الآن في مسار الموافقات`)
+      setFormData({
+        leaveType: '',
+        startDate: '',
+        endDate: '',
+        reason: '',
+        contactNumber: '',
+        attachment: null,
+      })
+      setCalculatedDays(0)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تقديم الطلب')
+    } finally {
+      setSubmitting(false)
+    }
   }
 
   return (
@@ -72,29 +141,52 @@ export default function LeaveRequestPage() {
           </div>
         </div>
 
-        {/* Leave Type Selection */}
+        {/* Success / Error Banners */}
+        {success && (
+          <div className="bg-success-50 text-success-700 rounded-xl p-4 flex items-center gap-2">
+            <CheckCircle2 size={20} />
+            {success}
+          </div>
+        )}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
+            <AlertCircle size={20} />
+            {error}
+          </div>
+        )}
+
+        {/* Leave Type Selection — من كتالوج أنواع الطلبات في السيرفر */}
         <div className="card">
           <h2 className="text-lg font-bold text-gray-800 mb-4">نوع الإجازة</h2>
-          <div className="grid grid-cols-4 gap-3">
-            {leaveTypes.map((type) => (
-              <button
-                key={type.id}
-                type="button"
-                onClick={() => handleChange('leaveType', type.id)}
-                className={`p-4 rounded-xl border-2 text-right transition-all ${
-                  formData.leaveType === type.id
-                    ? 'border-primary-500 bg-primary-50'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <div className={`w-3 h-3 rounded-full ${type.color} mb-2`} />
-                <p className="font-medium text-gray-800 text-sm">{type.name}</p>
-                {type.balance !== null && (
-                  <p className="text-xs text-gray-500 mt-1">الرصيد: {type.balance} يوم</p>
-                )}
-              </button>
-            ))}
-          </div>
+          {loading ? (
+            <div className="flex items-center justify-center py-8">
+              <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
+            <div className="grid grid-cols-4 gap-3">
+              {leaveTypes.map((type) => {
+                const remaining = balanceFor(type.code)
+                return (
+                  <button
+                    key={type.code}
+                    type="button"
+                    onClick={() => handleChange('leaveType', type.code)}
+                    className={`p-4 rounded-xl border-2 text-right transition-all ${
+                      formData.leaveType === type.code
+                        ? 'border-primary-500 bg-primary-50'
+                        : 'border-gray-200 hover:border-gray-300'
+                    }`}
+                  >
+                    <div className={`w-3 h-3 rounded-full ${TYPE_COLORS[type.code] ?? 'bg-gray-400'} mb-2`} />
+                    <p className="font-medium text-gray-800 text-sm">{type.nameAr}</p>
+                    {remaining !== null && type.affectsBalance && (
+                      <p className="text-xs text-gray-500 mt-1">الرصيد: {remaining} يوم</p>
+                    )}
+                  </button>
+                )
+              })}
+            </div>
+          )}
         </div>
 
         {/* Date Selection */}
@@ -138,10 +230,10 @@ export default function LeaveRequestPage() {
             </div>
           )}
 
-          {selectedLeaveType && selectedLeaveType.balance !== null && calculatedDays > selectedLeaveType.balance && (
+          {selectedLeaveType && selectedBalance !== null && selectedLeaveType.affectsBalance && calculatedDays > selectedBalance && (
             <div className="mt-4 p-4 bg-red-50 rounded-xl flex items-center gap-2 text-red-700">
               <AlertCircle size={20} />
-              <span>مدة الإجازة المطلوبة تتجاوز الرصيد المتاح ({selectedLeaveType.balance} يوم)</span>
+              <span>مدة الإجازة المطلوبة تتجاوز الرصيد المتاح ({selectedBalance} يوم)</span>
             </div>
           )}
         </div>
@@ -202,7 +294,7 @@ export default function LeaveRequestPage() {
             <div className="space-y-3">
               <div className="flex justify-between">
                 <span className="text-gray-600">نوع الإجازة:</span>
-                <span className="font-medium text-gray-800">{selectedLeaveType?.name}</span>
+                <span className="font-medium text-gray-800">{selectedLeaveType?.nameAr}</span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">من:</span>
@@ -232,10 +324,16 @@ export default function LeaveRequestPage() {
           <button
             type="submit"
             className="btn-primary flex items-center gap-2"
-            disabled={!formData.leaveType || !formData.startDate || !formData.endDate || !formData.reason}
+            disabled={
+              submitting ||
+              !formData.leaveType ||
+              !formData.startDate ||
+              !formData.endDate ||
+              !formData.reason
+            }
           >
             <CheckCircle2 size={18} />
-            تقديم الطلب
+            {submitting ? 'جارٍ التقديم...' : 'تقديم الطلب'}
           </button>
         </div>
       </form>

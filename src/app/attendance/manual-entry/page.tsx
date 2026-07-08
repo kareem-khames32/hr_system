@@ -1,13 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
   Plus,
   Clock,
-  Calendar,
-  Users,
   CheckCircle2,
   AlertCircle,
   Edit2,
@@ -15,6 +13,12 @@ import {
   FileText,
   Save,
 } from 'lucide-react'
+import {
+  ingestPunchesManual,
+  fetchEmployees,
+  getCurrentUser,
+  type ApiEmployee,
+} from '@/lib/api'
 
 interface ManualEntry {
   id: string
@@ -28,65 +32,6 @@ interface ManualEntry {
   submittedBy: string
   submittedAt: string
 }
-
-const manualEntries: ManualEntry[] = [
-  {
-    id: '1',
-    employeeId: 'EMP001',
-    employeeName: 'أحمد محمد علي',
-    date: '2024-01-20',
-    checkIn: '08:00',
-    checkOut: '17:00',
-    reason: 'نسيان البصمة',
-    status: 'approved',
-    submittedBy: 'محمد أحمد',
-    submittedAt: '2024-01-20 09:30',
-  },
-  {
-    id: '2',
-    employeeId: 'EMP003',
-    employeeName: 'عمر سالم الحربي',
-    date: '2024-01-19',
-    checkIn: '07:45',
-    checkOut: '16:30',
-    reason: 'عطل في جهاز البصمة',
-    status: 'approved',
-    submittedBy: 'محمد أحمد',
-    submittedAt: '2024-01-19 17:00',
-  },
-  {
-    id: '3',
-    employeeId: 'EMP005',
-    employeeName: 'فهد عبدالله السعيد',
-    date: '2024-01-21',
-    checkIn: '09:00',
-    checkOut: '18:00',
-    reason: 'عمل من موقع خارجي',
-    status: 'pending',
-    submittedBy: 'محمد أحمد',
-    submittedAt: '2024-01-21 10:15',
-  },
-  {
-    id: '4',
-    employeeId: 'EMP007',
-    employeeName: 'خالد محمد العتيبي',
-    date: '2024-01-18',
-    checkIn: '08:30',
-    checkOut: '16:00',
-    reason: 'اجتماع خارجي',
-    status: 'rejected',
-    submittedBy: 'سارة أحمد',
-    submittedAt: '2024-01-18 16:30',
-  },
-]
-
-const employees = [
-  { id: 'EMP001', name: 'أحمد محمد علي' },
-  { id: 'EMP002', name: 'سارة أحمد الخالدي' },
-  { id: 'EMP003', name: 'عمر سالم الحربي' },
-  { id: 'EMP004', name: 'نورة محمد الدوسري' },
-  { id: 'EMP005', name: 'فهد عبدالله السعيد' },
-]
 
 const statusLabels = {
   pending: 'قيد المراجعة',
@@ -103,6 +48,11 @@ const statusColors = {
 export default function ManualEntryPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [showForm, setShowForm] = useState(false)
+  const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  const [entries, setEntries] = useState<ManualEntry[]>([])
+  const [submitting, setSubmitting] = useState(false)
+  const [error, setError] = useState('')
+  const [success, setSuccess] = useState('')
   const [formData, setFormData] = useState({
     employeeId: '',
     date: '',
@@ -111,17 +61,77 @@ export default function ManualEntryPage() {
     reason: '',
   })
 
-  const filteredEntries = manualEntries.filter(
+  useEffect(() => {
+    fetchEmployees()
+      .then(setEmployees)
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل الموظفين'))
+  }, [])
+
+  // إرسال البصمات اليدوية لمحرك الحضور — timestamp = YYYY-MM-DD HH:mm:ss
+  const handleSubmit = async () => {
+    setError('')
+    setSuccess('')
+    if (!formData.employeeId || !formData.date || !formData.checkIn) {
+      setError('الرجاء اختيار الموظف والتاريخ ووقت الحضور على الأقل')
+      return
+    }
+    const emp = employees.find((e) => String(e.id) === formData.employeeId)
+    if (!emp) {
+      setError('الموظف المحدد غير موجود')
+      return
+    }
+    const punches: Array<{ employeeCode: string; timestamp: string }> = [
+      { employeeCode: emp.employeeCode, timestamp: `${formData.date} ${formData.checkIn}:00` },
+    ]
+    if (formData.checkOut) {
+      punches.push({
+        employeeCode: emp.employeeCode,
+        timestamp: `${formData.date} ${formData.checkOut}:00`,
+      })
+    }
+    setSubmitting(true)
+    try {
+      const result = await ingestPunchesManual(punches)
+      setSuccess(
+        `تم الاستلام: ${result.received} بصمة — تمت مطابقة ${result.matched} مع الموظفين`
+      )
+      const user = getCurrentUser()
+      const now = new Date()
+      setEntries((prev) => [
+        {
+          id: `${now.getTime()}`,
+          employeeId: emp.employeeCode,
+          employeeName: emp.fullName,
+          date: formData.date,
+          checkIn: formData.checkIn,
+          checkOut: formData.checkOut || '-',
+          reason: formData.reason || '-',
+          status: 'approved',
+          submittedBy: user?.displayName ?? '-',
+          submittedAt: `${now.toISOString().slice(0, 10)} ${now.toTimeString().slice(0, 5)}`,
+        },
+        ...prev,
+      ])
+      setFormData({ employeeId: '', date: '', checkIn: '', checkOut: '', reason: '' })
+      setShowForm(false)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر حفظ الإدخال')
+    } finally {
+      setSubmitting(false)
+    }
+  }
+
+  const filteredEntries = entries.filter(
     (entry) =>
       entry.employeeName.includes(searchTerm) ||
       entry.employeeId.includes(searchTerm)
   )
 
   const stats = {
-    total: manualEntries.length,
-    pending: manualEntries.filter((e) => e.status === 'pending').length,
-    approved: manualEntries.filter((e) => e.status === 'approved').length,
-    rejected: manualEntries.filter((e) => e.status === 'rejected').length,
+    total: entries.length,
+    pending: entries.filter((e) => e.status === 'pending').length,
+    approved: entries.filter((e) => e.status === 'approved').length,
+    rejected: entries.filter((e) => e.status === 'rejected').length,
   }
 
   return (
@@ -141,6 +151,20 @@ export default function ManualEntryPage() {
             إدخال جديد
           </button>
         </div>
+
+        {/* Success / Error Banners */}
+        {success && (
+          <div className="bg-success-50 text-success-700 rounded-xl p-4 flex items-center gap-2">
+            <CheckCircle2 size={18} />
+            {success}
+          </div>
+        )}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
+            <AlertCircle size={18} />
+            {error}
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
@@ -199,7 +223,7 @@ export default function ManualEntryPage() {
                   <option value="">اختر الموظف</option>
                   {employees.map((emp) => (
                     <option key={emp.id} value={emp.id}>
-                      {emp.name} ({emp.id})
+                      {emp.fullName} ({emp.employeeCode})
                     </option>
                   ))}
                 </select>
@@ -251,9 +275,13 @@ export default function ManualEntryPage() {
               </div>
             </div>
             <div className="flex items-center gap-3 mt-4">
-              <button className="btn-primary flex items-center gap-2">
+              <button
+                onClick={handleSubmit}
+                disabled={submitting}
+                className={`btn-primary flex items-center gap-2 ${submitting ? 'opacity-50 cursor-not-allowed' : ''}`}
+              >
                 <Save size={18} />
-                حفظ الإدخال
+                {submitting ? 'جارٍ الحفظ...' : 'حفظ الإدخال'}
               </button>
               <button
                 onClick={() => setShowForm(false)}
@@ -295,6 +323,13 @@ export default function ManualEntryPage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
+              {filteredEntries.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="text-center py-10 text-gray-400">
+                    لا توجد إدخالات يدوية في هذه الجلسة — البصمات المُدخلة تظهر مباشرة في سجل الحضور
+                  </td>
+                </tr>
+              )}
               {filteredEntries.map((entry) => (
                 <tr key={entry.id} className="hover:bg-gray-50">
                   <td className="px-4 py-4">
@@ -337,16 +372,6 @@ export default function ManualEntryPage() {
                   </td>
                   <td className="px-4 py-4">
                     <div className="flex items-center justify-center gap-2">
-                      {entry.status === 'pending' && (
-                        <>
-                          <button className="p-2 bg-success-50 text-success-600 rounded-lg hover:bg-success-100">
-                            <CheckCircle2 size={16} />
-                          </button>
-                          <button className="p-2 bg-red-50 text-red-600 rounded-lg hover:bg-red-100">
-                            <AlertCircle size={16} />
-                          </button>
-                        </>
-                      )}
                       <button className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200">
                         <Edit2 size={16} className="text-gray-600" />
                       </button>

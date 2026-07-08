@@ -1,13 +1,11 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
-  Filter,
   Download,
   Calendar,
-  Clock,
   UserCheck,
   UserX,
   AlertTriangle,
@@ -20,15 +18,21 @@ import {
   Timer,
 } from 'lucide-react'
 import {
-  shiftFor,
-  computeAttendance,
-  formatWorkHours,
-  type ShiftTime,
-} from '@/lib/attendance'
+  fetchDailyAttendance,
+  fetchEmployees,
+  fetchDepartments,
+  fetchBranches,
+  type ApiAttendanceDay,
+  type ApiEmployee,
+  type ApiDepartment,
+  type ApiBranch,
+} from '@/lib/api'
 
+// الصف المعروض — كل القيم محسوبة من السيرفر (لا حساب محلي)
 interface AttendanceRecord {
-  id: string
-  employeeId: string
+  id: number
+  employeeId: number
+  employeeCode: string
   employeeName: string
   avatar: string
   department: string
@@ -36,144 +40,26 @@ interface AttendanceRecord {
   checkIn: string | null
   checkOut: string | null
   workHours: string | null
-  status: 'present' | 'absent' | 'late' | 'early_leave' | 'on_leave' | 'holiday'
-  shift: ShiftTime // وردية اليوم من الجدول المؤرَّخ
-  lateMinutes: number // محسوبة — ليست مُدخَلة
+  status: ApiAttendanceDay['status']
+  shiftName: string
+  shiftStart: string
+  shiftEnd: string
+  lateMinutes: number
   location: string
-  verificationMethod: 'face' | 'fingerprint' | 'card' | 'manual'
 }
 
-// ===== البصمات الخام: الحالة والتأخير يُحسبان من المحرّك، لا يُكتبان يدوياً =====
-interface RawPunch {
-  id: string
-  employeeId: string
-  employeeName: string
-  avatar: string
-  department: string
-  date: string // YYYY-MM-DD
-  checkIn: string | null
-  checkOut: string | null
-  location: string
-  verificationMethod: AttendanceRecord['verificationMethod']
-  override?: 'on_leave' | 'holiday' // إجازة/عطلة معتمدة تتجاوز الحساب
+const formatWorkMinutes = (mins: number): string | null => {
+  if (!mins || mins <= 0) return null
+  return `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, '0')}`
 }
 
-const rawPunches: RawPunch[] = [
-  // ديمو حساب التأخير: أحمد — أسبوع وردية 10 → حضر 10:25 = متأخر 25د
-  {
-    id: '1',
-    employeeId: 'EMP001',
-    employeeName: 'أحمد محمد علي',
-    avatar: 'أ',
-    department: 'تقنية المعلومات',
-    date: '2026-07-07',
-    checkIn: '10:25',
-    checkOut: '19:10',
-    location: 'المكتب الرئيسي',
-    verificationMethod: 'fingerprint',
-  },
-  // نفس أحمد — الأسبوع القادم وردية 11 → حضر 10:50 = منضبط (قبل موعده)
-  {
-    id: '2',
-    employeeId: 'EMP001',
-    employeeName: 'أحمد محمد علي',
-    avatar: 'أ',
-    department: 'تقنية المعلومات',
-    date: '2026-07-14',
-    checkIn: '10:50',
-    checkOut: '20:05',
-    location: 'المكتب الرئيسي',
-    verificationMethod: 'fingerprint',
-  },
-  {
-    id: '3',
-    employeeId: 'EMP002',
-    employeeName: 'سارة أحمد الخالدي',
-    avatar: 'س',
-    department: 'الموارد البشرية',
-    date: '2026-07-07',
-    checkIn: '08:45',
-    checkOut: '17:00',
-    location: 'المكتب الرئيسي',
-    verificationMethod: 'face',
-  },
-  {
-    id: '4',
-    employeeId: 'EMP003',
-    employeeName: 'محمد خالد السعيد',
-    avatar: 'م',
-    department: 'المبيعات',
-    date: '2026-07-07',
-    checkIn: null,
-    checkOut: null,
-    location: '-',
-    verificationMethod: 'manual',
-  },
-  {
-    id: '5',
-    employeeId: 'EMP004',
-    employeeName: 'فاطمة علي الزهراني',
-    avatar: 'ف',
-    department: 'المحاسبة',
-    date: '2026-07-07',
-    checkIn: '07:55',
-    checkOut: '15:30',
-    location: 'المكتب الرئيسي',
-    verificationMethod: 'fingerprint',
-  },
-  {
-    id: '6',
-    employeeId: 'EMP005',
-    employeeName: 'عمر سالم الحربي',
-    avatar: 'ع',
-    department: 'التسويق',
-    date: '2026-07-07',
-    checkIn: null,
-    checkOut: null,
-    location: '-',
-    verificationMethod: 'manual',
-    override: 'on_leave',
-  },
-  {
-    id: '7',
-    employeeId: 'EMP006',
-    employeeName: 'نورة محمد العتيبي',
-    avatar: 'ن',
-    department: 'خدمة العملاء',
-    date: '2026-07-07',
-    checkIn: '07:58',
-    checkOut: '17:05',
-    location: 'فرع الدمام',
-    verificationMethod: 'face',
-  },
-  {
-    id: '8',
-    employeeId: 'EMP008',
-    employeeName: 'ريم سعود الدوسري',
-    avatar: 'ر',
-    department: 'تقنية المعلومات',
-    date: '2026-07-07',
-    checkIn: '09:30',
-    checkOut: null,
-    location: 'عن بُعد',
-    verificationMethod: 'face',
-  },
-]
+const todayStr = () => new Date().toISOString().slice(0, 10)
 
-// كل سجل يمر على المحرّك: وردية اليوم من الجدول المؤرَّخ ← حساب التأخير
-const attendanceRecords: AttendanceRecord[] = rawPunches.map((p) => {
-  const shift = shiftFor(p.employeeId, p.date)
-  const computed = p.override
-    ? { status: p.override, lateMinutes: 0, earlyLeaveMinutes: 0 }
-    : computeAttendance(p.checkIn, p.checkOut, shift)
-  return {
-    ...p,
-    shift,
-    status: computed.status,
-    lateMinutes: computed.lateMinutes,
-    workHours: formatWorkHours(p.checkIn, p.checkOut),
-  }
-})
+const shiftDate = (dateStr: string, delta: number): string => {
+  const d = new Date(dateStr + 'T12:00:00')
+  d.setDate(d.getDate() + delta)
+  return d.toISOString().slice(0, 10)
+}
 
 const getStatusBadge = (status: AttendanceRecord['status']) => {
   switch (status) {
@@ -205,49 +91,98 @@ const getStatusBadge = (status: AttendanceRecord['status']) => {
           خروج مبكر
         </span>
       )
-    case 'on_leave':
-      return (
-        <span className="badge badge-primary flex items-center gap-1">
-          <Calendar size={12} />
-          في إجازة
-        </span>
-      )
-    case 'holiday':
-      return (
-        <span className="badge bg-purple-50 text-purple-600 flex items-center gap-1">
-          <Calendar size={12} />
-          عطلة
-        </span>
-      )
-  }
-}
-
-const getVerificationIcon = (method: AttendanceRecord['verificationMethod']) => {
-  switch (method) {
-    case 'face':
-      return <Camera size={16} className="text-primary-500" />
-    case 'fingerprint':
-      return <span className="text-success-500">👆</span>
-    case 'card':
-      return <span className="text-warning-500">💳</span>
-    case 'manual':
-      return <span className="text-gray-400">✏️</span>
   }
 }
 
 export default function AttendancePage() {
-  const [selectedDate, setSelectedDate] = useState('2026-01-29')
+  const [selectedDate, setSelectedDate] = useState(todayStr())
   const [selectedDepartment, setSelectedDepartment] = useState('all')
   const [selectedStatus, setSelectedStatus] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
 
-  // Stats
+  const [days, setDays] = useState<ApiAttendanceDay[]>([])
+  const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  const [departments, setDepartments] = useState<ApiDepartment[]>([])
+  const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [refsLoaded, setRefsLoaded] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  // المراجع (موظفون/أقسام/فروع) — مرة واحدة
+  useEffect(() => {
+    Promise.all([fetchEmployees(), fetchDepartments(), fetchBranches()])
+      .then(([emps, deps, brs]) => {
+        setEmployees(emps)
+        setDepartments(deps)
+        setBranches(brs)
+        setRefsLoaded(true)
+      })
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل البيانات'))
+  }, [])
+
+  // سجل اليوم المحدد — من السيرفر (الحالة والتأخير محسوبان هناك)
+  useEffect(() => {
+    setLoading(true)
+    setError('')
+    fetchDailyAttendance(selectedDate)
+      .then((rows) => setDays(rows))
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل سجل الحضور'))
+      .finally(() => setLoading(false))
+  }, [selectedDate])
+
+  const records: AttendanceRecord[] = useMemo(() => {
+    const empById = new Map(employees.map((e) => [e.id, e]))
+    const depById = new Map(departments.map((d) => [d.id, d]))
+    const branchById = new Map(branches.map((b) => [b.id, b]))
+    return days.map((d) => {
+      const emp = empById.get(d.employeeId)
+      const dep = emp?.departmentId ? depById.get(emp.departmentId) : undefined
+      const branch = d.branchId ? branchById.get(d.branchId) : undefined
+      return {
+        id: d.id,
+        employeeId: d.employeeId,
+        employeeCode: emp?.employeeCode ?? `#${d.employeeId}`,
+        employeeName: emp?.fullName ?? `موظف ${d.employeeId}`,
+        avatar: (emp?.fullName ?? 'م').charAt(0),
+        department: dep?.name ?? '-',
+        date: d.date,
+        checkIn: d.checkIn ?? null,
+        checkOut: d.checkOut ?? null,
+        workHours: formatWorkMinutes(Number(d.workMinutes)),
+        status: d.status,
+        shiftName: d.shiftName,
+        shiftStart: d.shiftStart,
+        shiftEnd: d.shiftEnd,
+        lateMinutes: Number(d.lateMinutes),
+        location: branch?.name ?? '-',
+      }
+    })
+  }, [days, employees, departments, branches])
+
+  // التصفية والبحث — على العميل
+  const filteredRecords = records.filter((r) => {
+    if (
+      searchQuery &&
+      !r.employeeName.includes(searchQuery) &&
+      !r.employeeCode.toLowerCase().includes(searchQuery.toLowerCase())
+    )
+      return false
+    if (selectedDepartment !== 'all' && r.department !== selectedDepartment) return false
+    if (selectedStatus !== 'all' && r.status !== selectedStatus) return false
+    return true
+  })
+
+  const departmentOptions = Array.from(new Set(records.map((r) => r.department))).filter(
+    (d) => d !== '-'
+  )
+
+  // الإحصائيات من صفوف السيرفر
   const stats = {
-    total: 248,
-    present: 215,
-    absent: 5,
-    late: 10,
-    onLeave: 18,
+    total: records.length,
+    present: records.filter((r) => r.status === 'present').length,
+    absent: records.filter((r) => r.status === 'absent').length,
+    late: records.filter((r) => r.status === 'late').length,
+    earlyLeave: records.filter((r) => r.status === 'early_leave').length,
   }
 
   return (
@@ -310,8 +245,8 @@ export default function AttendancePage() {
               <Calendar size={24} className="text-primary-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">في إجازة</p>
-              <p className="text-2xl font-bold text-primary-600">{stats.onLeave}</p>
+              <p className="text-sm text-gray-500">خروج مبكر</p>
+              <p className="text-2xl font-bold text-primary-600">{stats.earlyLeave}</p>
             </div>
           </div>
         </div>
@@ -321,7 +256,10 @@ export default function AttendancePage() {
           <div className="flex flex-wrap items-center gap-4">
             {/* Date Picker */}
             <div className="flex items-center gap-2">
-              <button className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors">
+              <button
+                onClick={() => setSelectedDate(shiftDate(selectedDate, -1))}
+                className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+              >
                 <ChevronRight size={18} />
               </button>
               <div className="relative">
@@ -333,10 +271,15 @@ export default function AttendancePage() {
                   className="input pr-10 w-44"
                 />
               </div>
-              <button className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors">
+              <button
+                onClick={() => setSelectedDate(shiftDate(selectedDate, 1))}
+                className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors"
+              >
                 <ChevronLeft size={18} />
               </button>
-              <button className="btn-secondary text-sm py-2">اليوم</button>
+              <button onClick={() => setSelectedDate(todayStr())} className="btn-secondary text-sm py-2">
+                اليوم
+              </button>
             </div>
 
             {/* Search */}
@@ -360,10 +303,11 @@ export default function AttendancePage() {
               className="input w-44"
             >
               <option value="all">كل الأقسام</option>
-              <option value="it">تقنية المعلومات</option>
-              <option value="hr">الموارد البشرية</option>
-              <option value="sales">المبيعات</option>
-              <option value="finance">المحاسبة</option>
+              {departmentOptions.map((dep) => (
+                <option key={dep} value={dep}>
+                  {dep}
+                </option>
+              ))}
             </select>
 
             {/* Status Filter */}
@@ -376,101 +320,122 @@ export default function AttendancePage() {
               <option value="present">حاضر</option>
               <option value="absent">غائب</option>
               <option value="late">متأخر</option>
-              <option value="on_leave">في إجازة</option>
+              <option value="early_leave">خروج مبكر</option>
             </select>
           </div>
         </div>
 
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
+            <AlertTriangle size={18} />
+            {error}
+          </div>
+        )}
+
         {/* Attendance Table */}
         <div className="card overflow-hidden p-0">
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="table-header">
-                  <th className="text-right px-4 py-4">الموظف</th>
-                  <th className="text-right px-4 py-4">القسم</th>
-                  <th className="text-center px-4 py-4">وردية اليوم</th>
-                  <th className="text-center px-4 py-4">الحضور</th>
-                  <th className="text-center px-4 py-4">الانصراف</th>
-                  <th className="text-center px-4 py-4">ساعات العمل</th>
-                  <th className="text-center px-4 py-4">الحالة</th>
-                  <th className="text-center px-4 py-4">الموقع</th>
-                  <th className="text-center px-4 py-4">التحقق</th>
-                </tr>
-              </thead>
-              <tbody>
-                {attendanceRecords.map((record) => (
-                  <tr key={record.id} className="table-row">
-                    <td className="table-cell">
-                      <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center text-white font-bold">
-                          {record.avatar}
-                        </div>
-                        <div>
-                          <p className="font-medium text-gray-800">{record.employeeName}</p>
-                          <p className="text-sm text-gray-400 font-mono">{record.employeeId}</p>
-                        </div>
-                      </div>
-                    </td>
-                    <td className="table-cell text-gray-600">{record.department}</td>
-                    <td className="table-cell text-center">
-                      <div className="text-sm font-medium text-gray-700">{record.shift.name}</div>
-                      <div className="text-xs text-gray-400 font-mono" dir="ltr">
-                        {record.shift.start} - {record.shift.end}
-                      </div>
-                      <div className="text-[10px] text-gray-400" dir="ltr">{record.date}</div>
-                    </td>
-                    <td className="table-cell text-center">
-                      {record.checkIn ? (
-                        <span className="font-mono text-success-600 font-medium">{record.checkIn}</span>
-                      ) : (
-                        <span className="text-gray-400">-</span>
-                      )}
-                    </td>
-                    <td className="table-cell text-center">
-                      {record.checkOut ? (
-                        <span className="font-mono text-danger-600 font-medium">{record.checkOut}</span>
-                      ) : (
-                        <span className="text-gray-400">-</span>
-                      )}
-                    </td>
-                    <td className="table-cell text-center">
-                      {record.workHours ? (
-                        <span className="font-mono text-gray-700">{record.workHours}</span>
-                      ) : (
-                        <span className="text-gray-400">-</span>
-                      )}
-                    </td>
-                    <td className="table-cell text-center">
-                      {getStatusBadge(record.status)}
-                      {record.lateMinutes > 0 && (
-                        <p className="text-xs text-warning-600 mt-1 font-medium">
-                          متأخر {record.lateMinutes} دقيقة عن {record.shift.name}
-                        </p>
-                      )}
-                    </td>
-                    <td className="table-cell text-center">
-                      <div className="flex items-center justify-center gap-1 text-sm text-gray-600">
-                        <MapPin size={14} className="text-gray-400" />
-                        {record.location}
-                      </div>
-                    </td>
-                    <td className="table-cell text-center">
-                      <div className="flex items-center justify-center">
-                        {getVerificationIcon(record.verificationMethod)}
-                      </div>
-                    </td>
+          {loading || !refsLoaded ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
+            <div className="overflow-x-auto">
+              <table className="w-full">
+                <thead>
+                  <tr className="table-header">
+                    <th className="text-right px-4 py-4">الموظف</th>
+                    <th className="text-right px-4 py-4">القسم</th>
+                    <th className="text-center px-4 py-4">وردية اليوم</th>
+                    <th className="text-center px-4 py-4">الحضور</th>
+                    <th className="text-center px-4 py-4">الانصراف</th>
+                    <th className="text-center px-4 py-4">ساعات العمل</th>
+                    <th className="text-center px-4 py-4">الحالة</th>
+                    <th className="text-center px-4 py-4">الموقع</th>
+                    <th className="text-center px-4 py-4">التحقق</th>
                   </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+                </thead>
+                <tbody>
+                  {filteredRecords.length === 0 && (
+                    <tr>
+                      <td colSpan={9} className="text-center py-10 text-gray-400">
+                        لا توجد سجلات حضور لهذا اليوم
+                      </td>
+                    </tr>
+                  )}
+                  {filteredRecords.map((record) => (
+                    <tr key={record.id} className="table-row">
+                      <td className="table-cell">
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center text-white font-bold">
+                            {record.avatar}
+                          </div>
+                          <div>
+                            <p className="font-medium text-gray-800">{record.employeeName}</p>
+                            <p className="text-sm text-gray-400 font-mono">{record.employeeCode}</p>
+                          </div>
+                        </div>
+                      </td>
+                      <td className="table-cell text-gray-600">{record.department}</td>
+                      <td className="table-cell text-center">
+                        <div className="text-sm font-medium text-gray-700">{record.shiftName}</div>
+                        <div className="text-xs text-gray-400 font-mono" dir="ltr">
+                          {record.shiftStart} - {record.shiftEnd}
+                        </div>
+                        <div className="text-[10px] text-gray-400" dir="ltr">{record.date}</div>
+                      </td>
+                      <td className="table-cell text-center">
+                        {record.checkIn ? (
+                          <span className="font-mono text-success-600 font-medium">{record.checkIn}</span>
+                        ) : (
+                          <span className="text-gray-400">-</span>
+                        )}
+                      </td>
+                      <td className="table-cell text-center">
+                        {record.checkOut ? (
+                          <span className="font-mono text-danger-600 font-medium">{record.checkOut}</span>
+                        ) : (
+                          <span className="text-gray-400">-</span>
+                        )}
+                      </td>
+                      <td className="table-cell text-center">
+                        {record.workHours ? (
+                          <span className="font-mono text-gray-700">{record.workHours}</span>
+                        ) : (
+                          <span className="text-gray-400">-</span>
+                        )}
+                      </td>
+                      <td className="table-cell text-center">
+                        {getStatusBadge(record.status)}
+                        {record.lateMinutes > 0 && (
+                          <p className="text-xs text-warning-600 mt-1 font-medium">
+                            متأخر {record.lateMinutes} دقيقة عن {record.shiftName}
+                          </p>
+                        )}
+                      </td>
+                      <td className="table-cell text-center">
+                        <div className="flex items-center justify-center gap-1 text-sm text-gray-600">
+                          <MapPin size={14} className="text-gray-400" />
+                          {record.location}
+                        </div>
+                      </td>
+                      <td className="table-cell text-center">
+                        <div className="flex items-center justify-center">
+                          <span className="text-success-500">👆</span>
+                        </div>
+                      </td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          )}
 
           {/* Pagination */}
           <div className="flex items-center justify-between px-4 py-4 border-t border-gray-100">
             <p className="text-sm text-gray-500">
-              عرض <span className="font-medium text-gray-700">1-8</span> من{' '}
-              <span className="font-medium text-gray-700">248</span> سجل
+              عرض <span className="font-medium text-gray-700">1-{filteredRecords.length}</span> من{' '}
+              <span className="font-medium text-gray-700">{filteredRecords.length}</span> سجل
             </p>
             <div className="flex items-center gap-2">
               <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50">
@@ -478,12 +443,6 @@ export default function AttendancePage() {
               </button>
               <button className="px-4 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium">
                 1
-              </button>
-              <button className="px-4 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50">
-                2
-              </button>
-              <button className="px-4 py-2 border border-gray-200 rounded-lg text-sm hover:bg-gray-50">
-                3
               </button>
               <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50">
                 <ChevronLeft size={18} />

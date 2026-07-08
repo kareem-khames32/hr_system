@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
@@ -13,20 +13,29 @@ import {
   Settings2,
   AlertTriangle,
 } from 'lucide-react'
+import {
+  fetchPendingOvertime,
+  confirmOvertime,
+  fetchEmployees,
+  fetchDepartments,
+  type ApiEmployee,
+  type ApiDepartment,
+} from '@/lib/api'
 
 // ============================================================
 // الأوفرتايم × البصمة (§7.1 من البريف)
 // المبدأ: البصمة تثبت أن الساعات اشتُغلت، والموافقة تثبت أنها
 // مسموح صرفها. المدفوع = المعتمَد ∩ الفعلي (من البصمة).
 // دورة حياة السطر: DETECTED → SUBMITTED → APPROVED → PAID
+// القائمة هنا من السيرفر: /attendance/overtime/pending
 // ============================================================
 
 type OvertimeSource = 'BIOMETRIC_DETECTED' | 'PRE_REQUESTED'
 type OvertimeStatus = 'DETECTED' | 'SUBMITTED' | 'APPROVED' | 'PAID' | 'REJECTED'
 
 interface OvertimeEntry {
-  id: string
-  employeeId: string
+  id: number
+  employeeId: number
   employeeName: string
   department: string
   date: string
@@ -45,102 +54,75 @@ const sourceLabels: Record<OvertimeSource, string> = {
 }
 
 const statusConfig: Record<OvertimeStatus, { label: string; className: string }> = {
-  DETECTED: { label: 'غير مؤكَّد (بانتظار التقديم)', className: 'bg-gray-100 text-gray-600' },
+  DETECTED: { label: 'غير مؤكَّد (بانتظار التأكيد)', className: 'bg-gray-100 text-gray-600' },
   SUBMITTED: { label: 'مُقدَّم (بانتظار المدير)', className: 'bg-warning-50 text-warning-700' },
   APPROVED: { label: 'معتمَد (بانتظار المسير)', className: 'bg-indigo-100 text-indigo-700' },
   PAID: { label: 'مدفوع ✓', className: 'bg-success-50 text-success-700' },
   REJECTED: { label: 'مرفوض', className: 'bg-red-100 text-red-700' },
 }
 
-const initialEntries: OvertimeEntry[] = [
-  // مسار لاحق: البصمة اكتشفت ساعات زيادة — لسه ما اتقدّمتش كمطالبة
-  {
-    id: 'OT-101',
-    employeeId: 'EMP010',
-    employeeName: 'ليلى حسن العتيبي',
-    department: 'تقنية المعلومات',
-    date: '2026-07-06',
-    source: 'BIOMETRIC_DETECTED',
-    hoursRequested: null,
-    hoursActual: 2.5,
-    payableHours: null,
-    status: 'DETECTED',
-    rate: 1.5,
-    note: 'انصراف 21:30 مقابل نهاية وردية 19:00',
-  },
-  // مسار لاحق: اتقدّمت كمطالبة والبصمة مرفقة كدليل
-  {
-    id: 'OT-100',
-    employeeId: 'EMP005',
-    employeeName: 'أحمد محمد علي',
-    department: 'تقنية المعلومات',
-    date: '2026-07-05',
-    source: 'BIOMETRIC_DETECTED',
-    hoursRequested: 2,
-    hoursActual: 2.25,
-    payableHours: null,
-    status: 'SUBMITTED',
-    rate: 1.5,
-    note: 'إغلاق تسليم العميل — البصمة مرفقة كدليل',
-  },
-  // مسار مسبق: طلب قبل اليوم واعتُمد، والبصمة أكدت أقل من المعتمد
-  {
-    id: 'OT-098',
-    employeeId: 'EMP009',
-    employeeName: 'عمر ياسر الشهري',
-    department: 'المبيعات',
-    date: '2026-07-02',
-    source: 'PRE_REQUESTED',
-    hoursRequested: 4,
-    hoursActual: 3,
-    payableHours: 3, // min(4, 3)
-    status: 'APPROVED',
-    rate: 1.5,
-    note: 'جرد نهاية الشهر — البصمة أكدت 3 من 4 ساعات معتمدة',
-  },
-  // مسار مسبق مكتمل: دخل المسير واتدفع
-  {
-    id: 'OT-095',
-    employeeId: 'EMP007',
-    employeeName: 'خالد عبدالعزيز النمر',
-    department: 'المالية',
-    date: '2026-06-25',
-    source: 'PRE_REQUESTED',
-    hoursRequested: 3,
-    hoursActual: 3.5,
-    payableHours: 3, // min(3, 3.5) — الزيادة عن المعتمد لا تُدفع
-    status: 'PAID',
-    rate: 2.0,
-    note: 'إقفال مسير يونيو — دُفع في مسير 23 يونيو → 22 يوليو',
-  },
-  // مرفوض: بصمة متأخرة بدون تكليف
-  {
-    id: 'OT-097',
-    employeeId: 'EMP006',
-    employeeName: 'سارة أحمد الزهراني',
-    department: 'الموارد البشرية',
-    date: '2026-06-30',
-    source: 'BIOMETRIC_DETECTED',
-    hoursRequested: 1.5,
-    hoursActual: 1.5,
-    payableHours: null,
-    status: 'REJECTED',
-    rate: 1.5,
-    note: 'رفض المدير: لا يوجد تكليف — تواجد شخصي',
-  },
-]
+const KNOWN_STATUSES: OvertimeStatus[] = ['DETECTED', 'SUBMITTED', 'APPROVED', 'PAID', 'REJECTED']
 
 export default function OvertimePage() {
-  const [entries, setEntries] = useState(initialEntries)
+  const [entries, setEntries] = useState<OvertimeEntry[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [actingId, setActingId] = useState<number | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [filterSource, setFilterSource] = useState<'' | OvertimeSource>('')
   const [filterStatus, setFilterStatus] = useState<'' | OvertimeStatus>('')
   // §9: الأوفرتايم المكتشف من البصمة يتطلب تأكيداً قبل الدفع (config)
   const [requireConfirmation, setRequireConfirmation] = useState(true)
 
+  // القائمة الأساسية من السيرفر + أسماء الموظفين بالمطابقة
+  const load = async () => {
+    setLoading(true)
+    setError('')
+    try {
+      const [pending, employees, departments] = await Promise.all([
+        fetchPendingOvertime(),
+        fetchEmployees(),
+        fetchDepartments(),
+      ])
+      const empById = new Map<number, ApiEmployee>(employees.map((e) => [e.id, e]))
+      const depById = new Map<number, ApiDepartment>(departments.map((d) => [d.id, d]))
+      setEntries(
+        pending.map((o: any): OvertimeEntry => {
+          const emp = empById.get(Number(o.employeeId))
+          const dep = emp?.departmentId ? depById.get(emp.departmentId) : undefined
+          const status: OvertimeStatus = KNOWN_STATUSES.includes(o.status)
+            ? o.status
+            : 'DETECTED'
+          return {
+            id: Number(o.id),
+            employeeId: Number(o.employeeId),
+            employeeName: emp?.fullName ?? `موظف ${o.employeeId}`,
+            department: dep?.name ?? '-',
+            date: o.date,
+            source: o.source === 'PRE_REQUESTED' ? 'PRE_REQUESTED' : 'BIOMETRIC_DETECTED',
+            hoursRequested: o.hoursRequested != null ? Number(o.hoursRequested) : null,
+            hoursActual: o.hoursActual != null ? Number(o.hoursActual) : null,
+            payableHours: o.payableHours != null ? Number(o.payableHours) : null,
+            status,
+            rate: o.rate != null ? Number(o.rate) : 1.5,
+            note: o.note ?? undefined,
+          }
+        })
+      )
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر تحميل سجل الأوفرتايم')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+  }, [])
+
   const filtered = entries.filter(
     (e) =>
-      (e.employeeName.includes(searchQuery) || e.id.includes(searchQuery)) &&
+      (e.employeeName.includes(searchQuery) || String(e.id).includes(searchQuery)) &&
       (!filterSource || e.source === filterSource) &&
       (!filterStatus || e.status === filterStatus)
   )
@@ -156,36 +138,18 @@ export default function OvertimePage() {
       .reduce((s, e) => s + (e.payableHours ?? 0), 0),
   }
 
-  // الموظف/المدير يقدّم الساعات المكتشفة كمطالبة
-  const submitDetected = (id: string) => {
-    setEntries(
-      entries.map((e) =>
-        e.id === id
-          ? { ...e, status: 'SUBMITTED', hoursRequested: e.hoursActual }
-          : e
-      )
-    )
-  }
-
-  // المدير يعتمد → المدفوع = min(المعتمد، الفعلي)
-  const approve = (id: string) => {
-    setEntries(
-      entries.map((e) =>
-        e.id === id
-          ? {
-              ...e,
-              status: 'APPROVED',
-              payableHours: Math.min(e.hoursRequested ?? 0, e.hoursActual ?? 0),
-            }
-          : e
-      )
-    )
-  }
-
-  const reject = (id: string) => {
-    setEntries(
-      entries.map((e) => (e.id === id ? { ...e, status: 'REJECTED', payableHours: null } : e))
-    )
+  // تأكيد/رفض السطر عبر السيرفر ثم إعادة التحميل
+  const act = async (id: number, approve: boolean) => {
+    setActingId(id)
+    setError('')
+    try {
+      await confirmOvertime(id, approve)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر تنفيذ الإجراء')
+    } finally {
+      setActingId(null)
+    }
   }
 
   return (
@@ -213,6 +177,14 @@ export default function OvertimePage() {
             />
           </label>
         </div>
+
+        {/* Error Banner */}
+        {error && (
+          <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
+            <AlertTriangle size={18} />
+            {error}
+          </div>
+        )}
 
         {/* Lifecycle strip */}
         <div className="card p-4">
@@ -309,6 +281,11 @@ export default function OvertimePage() {
 
         {/* Entries Table */}
         <div className="card overflow-hidden p-0">
+          {loading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
@@ -325,12 +302,19 @@ export default function OvertimePage() {
                 </tr>
               </thead>
               <tbody>
+                {filtered.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="text-center py-10 text-gray-400">
+                      لا يوجد أوفرتايم مكتشَف بانتظار التأكيد
+                    </td>
+                  </tr>
+                )}
                 {filtered.map((e) => (
                   <tr key={e.id} className="table-row">
                     <td className="table-cell">
                       <p className="font-medium text-gray-800 text-sm">{e.employeeName}</p>
                       <p className="text-[10px] text-gray-400 font-mono" dir="ltr">
-                        {e.id} • {e.employeeId}
+                        OT-{e.id} • {e.department}
                       </p>
                       {e.note && <p className="text-xs text-gray-400 mt-0.5">{e.note}</p>}
                     </td>
@@ -373,26 +357,24 @@ export default function OvertimePage() {
                       </span>
                     </td>
                     <td className="table-cell text-center">
-                      {e.status === 'DETECTED' && (
-                        <button
-                          onClick={() => submitDetected(e.id)}
-                          className="text-xs px-3 py-1.5 bg-warning-50 text-warning-700 rounded-lg hover:bg-warning-100"
-                        >
-                          تقديم كمطالبة
-                        </button>
-                      )}
-                      {e.status === 'SUBMITTED' && (
+                      {(e.status === 'DETECTED' || e.status === 'SUBMITTED') && (
                         <div className="flex items-center justify-center gap-1">
                           <button
-                            onClick={() => approve(e.id)}
-                            className="text-xs px-3 py-1.5 bg-success-50 text-success-700 rounded-lg hover:bg-success-100 flex items-center gap-1"
+                            onClick={() => act(e.id, true)}
+                            disabled={actingId === e.id}
+                            className={`text-xs px-3 py-1.5 bg-success-50 text-success-700 rounded-lg hover:bg-success-100 flex items-center gap-1 ${
+                              actingId === e.id ? 'opacity-50 cursor-not-allowed' : ''
+                            }`}
                           >
                             <CheckCircle2 size={12} />
                             اعتماد
                           </button>
                           <button
-                            onClick={() => reject(e.id)}
-                            className="text-xs px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 flex items-center gap-1"
+                            onClick={() => act(e.id, false)}
+                            disabled={actingId === e.id}
+                            className={`text-xs px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 flex items-center gap-1 ${
+                              actingId === e.id ? 'opacity-50 cursor-not-allowed' : ''
+                            }`}
                           >
                             <XCircle size={12} />
                             رفض
@@ -405,12 +387,16 @@ export default function OvertimePage() {
                       {e.status === 'PAID' && (
                         <span className="text-xs text-success-600">مُقفل ✓</span>
                       )}
+                      {e.status === 'REJECTED' && (
+                        <span className="text-xs text-red-500">مرفوض</span>
+                      )}
                     </td>
                   </tr>
                 ))}
               </tbody>
             </table>
           </div>
+          )}
         </div>
 
         {/* القاعدة */}
@@ -419,8 +405,8 @@ export default function OvertimePage() {
           <p className="text-sm text-amber-800">
             <strong>القاعدة:</strong> البصمة تثبت أن الساعات <strong>اشتُغلت</strong>، والموافقة تثبت
             أنها <strong>مسموح صرفها</strong> — أي واحدة لوحدها لا تكفي. المدفوع دائماً =
-            الأقل بين المعتمَد والفعلي (لاحظ OT-095: اعتُمد 3 والبصمة أظهرت 3.5 → دُفع 3 فقط،
-            وOT-097: بصمة بدون تكليف → رُفضت).
+            الأقل بين المعتمَد والفعلي. الاعتماد/الرفض هنا يؤكد السطور المكتشفة من البصمة قبل
+            دخولها المسير.
           </p>
         </div>
       </div>
