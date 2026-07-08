@@ -128,8 +128,8 @@ export class CatalogsController {
       }
     }
     const time = (field: string, label: string) => {
-      if (b[field] && !/^\d{2}:\d{2}$/.test(String(b[field]))) {
-        throw new BadRequestException(`${label} بصيغة HH:mm`)
+      if (b[field] && !/^([01]\d|2[0-3]):[0-5]\d$/.test(String(b[field]))) {
+        throw new BadRequestException(`${label} بصيغة HH:mm (وقت صحيح)`)
       }
     }
     switch (kind) {
