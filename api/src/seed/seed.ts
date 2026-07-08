@@ -47,6 +47,7 @@ import {
   OffboardingCase,
   SettlementLine,
 } from '../offboarding/offboarding.entities'
+import { StoredFile } from '../files/stored-file.entity'
 import { PayrollItem, PayrollRun } from '../payroll/payroll.entities'
 import {
   AssetType,
@@ -105,6 +106,8 @@ const common = {
     // الرواتب
     PayrollRun,
     PayrollItem,
+    // الملفات المخزنة
+    StoredFile,
     // إنهاء الخدمة
     OffboardingCase,
     ClearanceItem,

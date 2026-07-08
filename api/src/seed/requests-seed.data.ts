@@ -236,6 +236,10 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'salary_increase.executive_threshold_pct', value: '10' },
   { key: 'transfer.execution_mode', value: 'effective_date' },
   { key: 'attendance.grace_minutes', value: '10' },
+  // العطلة الأسبوعية (SUN..SAT مفصولة بفواصل) — تجاوز لكل فرع من شاشة الفروع
+  { key: 'attendance.weekend_days', value: 'FRI,SAT' },
+  // فاصل المزامنة التلقائية لأجهزة البصمة بالدقائق (0 = متوقفة)
+  { key: 'attendance.sync_interval_minutes', value: '0' },
   // مفتاح استقبال بصمات ZKTeco — غيّره في الإنتاج
   { key: 'attendance.device_key', value: 'zk-device-key-change-me' },
   // الإجازات: الترحيل السنوي بالطبقات

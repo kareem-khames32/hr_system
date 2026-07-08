@@ -40,6 +40,10 @@ export class Branch {
   @Column({ length: 50, nullable: true })
   costCenter: string
 
+  // تجاوز العطلة الأسبوعية لهذا الفرع (SUN..SAT بفواصل) — فارغ = إعداد النظام
+  @Column({ length: 30, nullable: true })
+  weekendDays: string
+
   @Column({ default: true })
   isActive: boolean
 

@@ -9,7 +9,9 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Between, In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
+import { PublicHoliday } from '../assets/assets.entities'
 import { Employee } from '../employees/employee.entity'
+import { Branch } from '../org/entities/branch.entity'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
 import { Leave } from '../requests/entities/leave.entities'
 import { Request } from '../requests/entities/request.entity'
@@ -65,8 +67,39 @@ export class AttendanceService {
     @InjectRepository(Leave)
     private readonly leaves: Repository<Leave>,
     @InjectRepository(Request)
-    private readonly requests: Repository<Request>
+    private readonly requests: Repository<Request>,
+    @InjectRepository(PublicHoliday)
+    private readonly holidays: Repository<PublicHoliday>,
+    @InjectRepository(Branch)
+    private readonly branches: Repository<Branch>
   ) {}
+
+  // §2.4: يوم عطلة؟ (ويك إند من الإعدادات/الفرع + العطلات الرسمية)
+  // ممنوع يتحسب تأخير أو غياب فيه حتى لو فيه بصمة
+  private async isNonWorkingDay(
+    date: string,
+    branchId: number
+  ): Promise<boolean> {
+    // الويك إند: أيام مفصولة بفواصل SUN..SAT — إعداد عام + تجاوز لكل فرع
+    const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
+    let weekend = await this.configValue('attendance.weekend_days', 'FRI,SAT')
+    const branch = await this.branches.findOne({ where: { id: branchId } })
+    if ((branch as any)?.weekendDays) weekend = (branch as any).weekendDays
+    const dayName = WEEKDAYS[new Date(`${date}T12:00:00`).getDay()]
+    if (
+      weekend
+        .split(',')
+        .map((d) => d.trim().toUpperCase())
+        .includes(dayName)
+    ) {
+      return true
+    }
+    // عطلة رسمية (مفردة أو ممتدة)
+    const all = await this.holidays.find()
+    return all.some(
+      (h) => h.date <= date && (h.endDate ? h.endDate >= date : h.date === date)
+    )
+  }
 
   private async configValue(key: string, fallback: string): Promise<string> {
     const row = await this.config.findOne({ where: { key } })
@@ -206,8 +239,16 @@ export class AttendanceService {
     let excusedMinutes = 0
     let workMinutes = 0
 
+    const isHoliday = await this.isNonWorkingDay(date, emp.branchId)
+
     if (isLeaveDay) {
       status = 'leave'
+    } else if (isHoliday) {
+      // ويك إند/عطلة رسمية: لا تأخير ولا غياب — الحضور يُسجل كعمل بيوم عطلة
+      status = 'holiday'
+      if (checkIn && checkOut) {
+        workMinutes = Math.max(0, toMinutes(checkOut) - toMinutes(checkIn))
+      }
     } else if (checkIn) {
       const permissions = await this.approvedPermissionWindows(employeeId, date)
 
@@ -260,8 +301,10 @@ export class AttendanceService {
     })
     day = await this.days.save(day)
 
-    // الأوفرتايم × البصمة (لا يُكتشف في يوم إجازة)
-    if (checkOut && !isLeaveDay) await this.detectOvertime(emp, date, shift, checkOut)
+    // الأوفرتايم × البصمة (لا يُكتشف في يوم إجازة أو عطلة)
+    if (checkOut && !isLeaveDay && !isHoliday) {
+      await this.detectOvertime(emp, date, shift, checkOut)
+    }
     return day
   }
 

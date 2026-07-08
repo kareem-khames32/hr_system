@@ -22,6 +22,7 @@ import { Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import { AttendanceService, PunchDto } from './attendance.service'
+import { DeviceSyncService } from './device-sync.service'
 
 class IngestDto {
   @IsArray()
@@ -60,7 +61,10 @@ class ConfirmOvertimeDto {
 
 @Controller('attendance')
 export class AttendanceController {
-  constructor(private readonly service: AttendanceService) {}
+  constructor(
+    private readonly service: AttendanceService,
+    private readonly deviceSync: DeviceSyncService
+  ) {}
 
   // استقبال بصمات ZKTeco — بمفتاح جهاز (x-device-key) بدون JWT
   // الجهاز/الوسيط يبعت دفعات: {punches: [{employeeCode, timestamp, deviceSn}]}
@@ -132,5 +136,20 @@ export class AttendanceController {
   @Post('recompute')
   recompute(@Query('date') date: string) {
     return this.service.recomputeDate(date)
+  }
+
+  // ===== مزامنة أجهزة البصمة (سحب بالـ IP) =====
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.sync')
+  @Post('devices/:id/sync')
+  syncDevice(@Param('id', ParseIntPipe) id: number) {
+    return this.deviceSync.syncDevice(id)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.sync')
+  @Post('devices/sync-all')
+  syncAll() {
+    return this.deviceSync.syncAll()
   }
 }

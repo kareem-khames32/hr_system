@@ -89,7 +89,7 @@ export class Shift {
   isActive: boolean
 }
 
-// أجهزة البصمة المسجلة (Device ↔ الفرع)
+// أجهزة البصمة المسجلة (Device ↔ الفرع) — سحب مباشر عبر TCP/IP
 @Entity('biometric_devices')
 export class BiometricDevice {
   @PrimaryGeneratedColumn()
@@ -104,6 +104,26 @@ export class BiometricDevice {
 
   @Column()
   branchId: number
+
+  // اتصال السحب المباشر — ZKTeco TCP (البورت الافتراضي 4370)
+  @Column({ length: 50, nullable: true })
+  ip: string
+
+  @Column({ default: 4370 })
+  port: number
+
+  @Column({ length: 100, nullable: true })
+  authKey: string
+
+  @Column({ type: 'datetime', nullable: true })
+  lastSyncAt: Date
+
+  // نتيجة آخر مزامنة: OK (n) أو رسالة الخطأ
+  @Column({ length: 300, nullable: true })
+  lastStatus: string
+
+  @Column({ default: 0 })
+  lastSyncCount: number
 
   @Column({ default: true })
   isActive: boolean
