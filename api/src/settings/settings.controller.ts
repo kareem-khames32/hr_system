@@ -13,6 +13,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
 import {
+  IsArray,
   IsBoolean,
   IsIn,
   IsInt,
@@ -20,6 +21,7 @@ import {
   IsString,
   MaxLength,
   MinLength,
+  ValidateNested,
 } from 'class-validator'
 import { Type } from 'class-transformer'
 import { JwtAuthGuard, Roles, RolesGuard } from '../auth/guards'
@@ -125,6 +127,78 @@ class UpdateStepDto {
   thresholdValue?: number
 }
 
+// أدوار الموافقة المسموحة — تُحل ديناميكياً وقت التشغيل
+const APPROVER_ROLES = [
+  'direct_manager_of_requester',
+  'receiving_team_manager',
+  'hr',
+  'finance',
+  'custody_officer',
+  'it',
+  'executive',
+]
+
+class ChainStepDto {
+  @IsIn(APPROVER_ROLES, { message: 'دور الموافقة غير صالح' })
+  approverRole: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(60)
+  thresholdField?: string
+
+  @IsOptional()
+  @IsIn(['>=', '>', '<', '<='], { message: 'معامل العتبة: >= أو > أو < أو <=' })
+  thresholdOp?: string
+
+  @IsOptional()
+  @Type(() => Number)
+  thresholdValue?: number
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  slaDays?: number
+
+  @IsOptional()
+  @IsIn(APPROVER_ROLES, { message: 'دور التصعيد غير صالح' })
+  escalateTo?: string
+}
+
+class CreateChainDto {
+  @IsString({ message: 'كود السلسلة مطلوب' })
+  @MinLength(3)
+  @MaxLength(50)
+  code: string
+
+  @IsString({ message: 'اسم السلسلة مطلوب' })
+  @MinLength(3)
+  @MaxLength(200)
+  nameAr: string
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  branchId?: number
+
+  // بدون الديكوريتر كان whitelist يحذف الخطوات من الجسم كلياً
+  @IsArray({ message: 'الخطوات مطلوبة (مصفوفة، ويمكن أن تكون فارغة للأوتوماتيك)' })
+  @ValidateNested({ each: true })
+  @Type(() => ChainStepDto)
+  steps: ChainStepDto[]
+}
+
+class UpdateChainDto {
+  @IsOptional()
+  @IsString()
+  @MinLength(3)
+  @MaxLength(200)
+  nameAr?: string
+
+  @IsOptional()
+  isActive?: boolean
+}
+
 // إعدادات النظام — كلها للأدمن/HR
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Roles('super_admin', 'hr_manager')
@@ -202,6 +276,109 @@ export class SettingsController {
     if (!step) throw new NotFoundException('الخطوة غير موجودة')
     Object.assign(step, dto)
     return this.steps.save(step)
+  }
+
+  // ===== بانِي السلاسل: إنشاء سلسلة كاملة بخطواتها =====
+  @Post('approval-chains')
+  async createChain(@Body() dto: CreateChainDto) {
+    if (!Array.isArray(dto.steps)) {
+      throw new BadRequestException('الخطوات مطلوبة (مصفوفة، ويمكن أن تكون فارغة للأوتوماتيك)')
+    }
+    // الكود فريد داخل نفس النطاق (عام أو نفس الفرع) —
+    // نفس الكود بفرع مختلف = نسخة فرعية تتقدم على العامة
+    const dup = await this.chains.findOne({
+      where: { code: dto.code, branchId: dto.branchId ?? (null as any) },
+    })
+    if (dup) {
+      throw new BadRequestException(
+        `الكود ${dto.code} مستخدم بالفعل في هذا النطاق`
+      )
+    }
+    for (const s of dto.steps) {
+      if (s.thresholdField && (!s.thresholdOp || s.thresholdValue === undefined)) {
+        throw new BadRequestException(
+          'الخطوة الشرطية تحتاج: حقل + معامل + قيمة عتبة'
+        )
+      }
+    }
+    const chain = await this.chains.save(
+      this.chains.create({
+        code: dto.code,
+        nameAr: dto.nameAr,
+        branchId: dto.branchId,
+      })
+    )
+    let order = 1
+    for (const s of dto.steps) {
+      await this.steps.save(
+        this.steps.create({
+          chainId: chain.id,
+          stepOrder: order++,
+          approverRole: s.approverRole as any,
+          thresholdField: s.thresholdField,
+          thresholdOp: s.thresholdOp as any,
+          thresholdValue: s.thresholdValue,
+          slaDays: s.slaDays,
+          escalateTo: s.escalateTo,
+        })
+      )
+    }
+    const steps = await this.steps.find({
+      where: { chainId: chain.id },
+      order: { stepOrder: 'ASC' },
+    })
+    return { ...chain, steps }
+  }
+
+  @Patch('approval-chains/:id')
+  async updateChain(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateChainDto
+  ) {
+    const chain = await this.chains.findOne({ where: { id } })
+    if (!chain) throw new NotFoundException('السلسلة غير موجودة')
+    Object.assign(chain, dto)
+    return this.chains.save(chain)
+  }
+
+  // استبدال خطوات سلسلة بالكامل — الطلبات الجارية لا تتأثر
+  // (خطواتها محلولة ومخزنة على الطلب نفسه وقت التقديم)
+  @Patch('approval-chains/:id/steps')
+  async replaceChainSteps(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: { steps: ChainStepDto[] }
+  ) {
+    const chain = await this.chains.findOne({ where: { id } })
+    if (!chain) throw new NotFoundException('السلسلة غير موجودة')
+    if (!Array.isArray(dto.steps)) {
+      throw new BadRequestException('الخطوات مطلوبة')
+    }
+    for (const s of dto.steps) {
+      if (!APPROVER_ROLES.includes(s.approverRole)) {
+        throw new BadRequestException(`دور غير صالح: ${s.approverRole}`)
+      }
+    }
+    await this.steps.delete({ chainId: id })
+    let order = 1
+    for (const s of dto.steps) {
+      await this.steps.save(
+        this.steps.create({
+          chainId: id,
+          stepOrder: order++,
+          approverRole: s.approverRole as any,
+          thresholdField: s.thresholdField,
+          thresholdOp: s.thresholdOp as any,
+          thresholdValue: s.thresholdValue,
+          slaDays: s.slaDays,
+          escalateTo: s.escalateTo,
+        })
+      )
+    }
+    const steps = await this.steps.find({
+      where: { chainId: id },
+      order: { stepOrder: 'ASC' },
+    })
+    return { ...chain, steps }
   }
 
   // ===== بانِي الطلبات (الحد الأدنى): كل الأنواع + تفعيل/ربط سلسلة =====

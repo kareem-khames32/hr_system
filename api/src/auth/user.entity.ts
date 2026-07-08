@@ -29,6 +29,11 @@ export class User {
   @Column({ nullable: true })
   employeeId: number
 
+  // صلاحيات إضافية فوق الدور — JSON مثل ["finance","custody_officer"]
+  // تمنح المستخدم قدرات دور آخر في الاعتمادات والمسارات المحمية
+  @Column({ type: 'nvarchar', length: 500, nullable: true })
+  permissions: string
+
   @Column({ default: true })
   isActive: boolean
 

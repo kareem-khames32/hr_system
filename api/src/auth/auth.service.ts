@@ -15,6 +15,8 @@ export interface JwtPayload {
   role: string
   branchId: number | null
   employeeId: number | null
+  // صلاحيات إضافية فوق الدور (أدوار وظيفية ممنوحة)
+  permissions?: string[]
 }
 
 @Injectable()
@@ -39,12 +41,20 @@ export class AuthService {
     user.lastLoginAt = new Date()
     await this.users.save(user)
 
+    let permissions: string[] = []
+    try {
+      permissions = user.permissions ? JSON.parse(user.permissions) : []
+    } catch {
+      permissions = []
+    }
+
     const payload: JwtPayload = {
       sub: user.id,
       email: user.email,
       role: user.role,
       branchId: user.branchId ?? null,
       employeeId: user.employeeId ?? null,
+      permissions,
     }
 
     return {
@@ -56,6 +66,7 @@ export class AuthService {
         role: user.role,
         branchId: user.branchId,
         employeeId: user.employeeId,
+        permissions,
       },
     }
   }

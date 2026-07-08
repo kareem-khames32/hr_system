@@ -33,6 +33,29 @@ import { Employee } from '../employees/employee.entity'
 
 const ROLES: UserRole[] = ['super_admin', 'hr_manager', 'branch_manager', 'employee']
 
+// الصلاحيات الإضافية القابلة للمنح — قدرات أدوار وظيفية فوق الدور الأساسي
+const GRANTABLE_PERMISSIONS = [
+  'hr', // خطوات HR في الاعتمادات + مسارات HR
+  'finance', // خطوات المالية
+  'custody_officer', // أمين العهدة
+  'it', // خطوات IT
+  'executive', // الخطوات التنفيذية
+  'hr_manager', // كامل قدرات مدير HR في المسارات المحمية
+  'branch_manager', // قدرات مدير الفرع
+]
+
+const validatePermissions = (perms?: string[]): string | undefined => {
+  if (perms === undefined) return undefined
+  if (!Array.isArray(perms)) {
+    throw new BadRequestException('الصلاحيات مصفوفة نصوص')
+  }
+  const bad = perms.filter((p) => !GRANTABLE_PERMISSIONS.includes(p))
+  if (bad.length > 0) {
+    throw new BadRequestException(`صلاحيات غير معروفة: ${bad.join('، ')}`)
+  }
+  return JSON.stringify(perms)
+}
+
 class CreateUserDto {
   @IsEmail({}, { message: 'البريد الإلكتروني غير صالح' })
   @MaxLength(200)
@@ -59,6 +82,9 @@ class CreateUserDto {
   @Type(() => Number)
   @IsInt()
   employeeId?: number
+
+  @IsOptional()
+  permissions?: string[]
 }
 
 class UpdateUserDto {
@@ -84,6 +110,9 @@ class UpdateUserDto {
   @Type(() => Number)
   @IsInt()
   employeeId?: number
+
+  @IsOptional()
+  permissions?: string[]
 }
 
 // إدارة حسابات الدخول — منفصلة عن سجل الموظف نفسه
@@ -146,6 +175,7 @@ export class UsersController {
             ? (null as unknown as number)
             : (dto.branchId ?? employee?.branchId ?? (null as unknown as number)),
         employeeId: dto.employeeId,
+        permissions: validatePermissions(dto.permissions),
       })
     )
     const { passwordHash: _ph, ...rest } = saved
@@ -177,6 +207,8 @@ export class UsersController {
     if (dto.isActive !== undefined) user.isActive = dto.isActive
     if (dto.branchId !== undefined) user.branchId = dto.branchId
     if (dto.employeeId !== undefined) user.employeeId = dto.employeeId
+    const perms = validatePermissions(dto.permissions)
+    if (perms !== undefined) user.permissions = perms
     const saved = await this.users.save(user)
     const { passwordHash: _ph, ...rest } = saved
     return rest

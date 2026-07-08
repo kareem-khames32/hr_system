@@ -78,9 +78,11 @@ export class ApproverResolver {
   }
 
   // هل المستخدم الحالي يحق له التصرف في هذه الخطوة؟
+  // الدور الأساسي أو صلاحية إضافية ممنوحة من شاشة المستخدمين
   satisfies(user: JwtPayload, step: ResolvedStep): boolean {
     // super_admin يتصرف في أي خطوة — يفكّ أي انسداد
     if (user.role === 'super_admin') return true
+    const granted = user.permissions ?? []
 
     switch (step.role) {
       case 'direct_manager_of_requester':
@@ -90,14 +92,13 @@ export class ApproverResolver {
           user.employeeId === step.approverEmployeeId
         )
       case 'hr':
-        return user.role === 'hr_manager'
+        return user.role === 'hr_manager' || granted.includes('hr')
       case 'executive':
-        return false // super_admin فقط (مغطى أعلاه) — حتى إضافة دور تنفيذي مستقل
-      // أدوار وظيفية ستُسنَد لاحقاً بجدول أدوار كامل — حالياً بمطابقة الدور نصياً
+        return granted.includes('executive')
       case 'finance':
       case 'it':
       case 'custody_officer':
-        return user.role === step.role
+        return user.role === step.role || granted.includes(step.role)
       default:
         return false
     }

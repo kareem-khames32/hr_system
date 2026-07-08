@@ -17,13 +17,23 @@ import {
   UserCheck,
   ChevronDown,
   ChevronLeft,
+  ChevronUp,
   AlertCircle,
   Zap,
   Copy,
   ToggleRight,
   ToggleLeft,
+  X,
 } from 'lucide-react'
-import { ApiBranch, fetchApprovalChains, fetchBranches } from '@/lib/api'
+import {
+  ApiBranch,
+  ChainStepInput,
+  createApprovalChain,
+  fetchApprovalChains,
+  fetchBranches,
+  replaceChainSteps,
+  updateApprovalChain,
+} from '@/lib/api'
 
 // شكل سلسلة الاعتماد كما يرجعها الباك إند
 interface ApiChainStep {
@@ -75,24 +85,71 @@ const thresholdFieldLabels: Record<string, string> = {
   increase_pct: 'نسبة الزيادة %',
 }
 
-const READONLY_TITLE = 'التعديل في مرحلة لاحقة'
+const thresholdOps = ['>=', '>', '<', '<='] as const
 
-type StepForm = {
-  id: number | string
-  approverRole: string
-  slaDays: number
-  canDelegate: boolean
+// كود السلسلة — نفس قيد الباك إند
+const CODE_RE = /^[A-Za-z0-9_-]{3,50}$/
+
+// تحويل صوتي مبسّط عربي → لاتيني لاقتراح الكود من الاسم
+const AR_TO_EN: Record<string, string> = {
+  ا: 'A', أ: 'A', إ: 'E', آ: 'A', ء: '', ئ: 'Y', ؤ: 'W',
+  ب: 'B', ت: 'T', ث: 'TH', ج: 'J', ح: 'H', خ: 'KH',
+  د: 'D', ذ: 'TH', ر: 'R', ز: 'Z', س: 'S', ش: 'SH',
+  ص: 'S', ض: 'D', ط: 'T', ظ: 'Z', ع: 'A', غ: 'GH',
+  ف: 'F', ق: 'Q', ك: 'K', ل: 'L', م: 'M', ن: 'N',
+  ه: 'H', ة: 'H', و: 'W', ي: 'Y', ى: 'A',
+  '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
+  '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
 }
+
+const suggestCode = (nameAr: string): string =>
+  nameAr
+    .trim()
+    .split('')
+    .map((ch) => {
+      if (/[A-Za-z0-9_-]/.test(ch)) return ch.toUpperCase()
+      if (/\s/.test(ch)) return '_'
+      return AR_TO_EN[ch] ?? ''
+    })
+    .join('')
+    .replace(/_+/g, '_')
+    .replace(/^_+|_+$/g, '')
+    .slice(0, 50)
+
+// نموذج الخطوة داخل البانِي — نصوص خام للحقول الاختيارية
+type StepForm = {
+  key: string
+  approverRole: string
+  slaDays: string
+  escalateTo: string
+  thresholdField: string
+  thresholdOp: string
+  thresholdValue: string
+}
+
+const emptyStep = (): StepForm => ({
+  key: `s-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
+  approverRole: 'direct_manager_of_requester',
+  slaDays: '',
+  escalateTo: '',
+  thresholdField: '',
+  thresholdOp: '',
+  thresholdValue: '',
+})
 
 export default function ApprovalsPage() {
   const [chains, setChains] = useState<ApiChain[]>([])
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [filterBranch, setFilterBranch] = useState('')
   const [showModal, setShowModal] = useState(false)
+  const [modalError, setModalError] = useState<string | null>(null)
+  const [saving, setSaving] = useState(false)
   const [editingChain, setEditingChain] = useState<ApiChain | null>(null)
+  const [codeTouched, setCodeTouched] = useState(false)
   const [activeMenu, setActiveMenu] = useState<number | null>(null)
   const [expandedChain, setExpandedChain] = useState<number | null>(null)
 
@@ -100,15 +157,18 @@ export default function ApprovalsPage() {
     name: string
     code: string
     branchId: string
-    isActive: boolean
     steps: StepForm[]
   }>({
     name: '',
     code: '',
     branchId: 'all',
-    isActive: true,
     steps: [],
   })
+
+  const reloadChains = async () => {
+    const ch = await fetchApprovalChains()
+    setChains(ch as ApiChain[])
+  }
 
   useEffect(() => {
     const load = async () => {
@@ -150,12 +210,14 @@ export default function ApprovalsPage() {
         name: chain.nameAr,
         code: chain.code,
         branchId: chain.branchId === null ? 'all' : String(chain.branchId),
-        isActive: chain.isActive,
         steps: chain.steps.map((s) => ({
-          id: s.id,
+          key: `db-${s.id}`,
           approverRole: s.approverRole,
-          slaDays: s.slaDays ?? 3,
-          canDelegate: s.canDelegate,
+          slaDays: s.slaDays != null ? String(s.slaDays) : '',
+          escalateTo: s.escalateTo ?? '',
+          thresholdField: s.thresholdField ?? '',
+          thresholdOp: s.thresholdOp ?? '',
+          thresholdValue: s.thresholdValue != null ? String(s.thresholdValue) : '',
         })),
       })
     } else {
@@ -164,33 +226,25 @@ export default function ApprovalsPage() {
         name: '',
         code: '',
         branchId: 'all',
-        isActive: true,
-        steps: [
-          {
-            id: 's1',
-            approverRole: 'direct_manager_of_requester',
-            slaDays: 3,
-            canDelegate: true,
-          },
-        ],
+        steps: [emptyStep()],
       })
     }
+    setCodeTouched(false)
+    setModalError(null)
     setShowModal(true)
   }
 
+  // اسم الدورة يقترح الكود تلقائياً ما دام المستخدم لم يلمس حقل الكود
+  const handleNameChange = (value: string) => {
+    if (!editingChain && !codeTouched) {
+      setFormData({ ...formData, name: value, code: suggestCode(value) })
+    } else {
+      setFormData({ ...formData, name: value })
+    }
+  }
+
   const addStep = () => {
-    setFormData({
-      ...formData,
-      steps: [
-        ...formData.steps,
-        {
-          id: `s${formData.steps.length + 1}-${Date.now()}`,
-          approverRole: 'direct_manager_of_requester',
-          slaDays: 3,
-          canDelegate: true,
-        },
-      ],
-    })
+    setFormData({ ...formData, steps: [...formData.steps, emptyStep()] })
   }
 
   const removeStep = (index: number) => {
@@ -200,10 +254,113 @@ export default function ApprovalsPage() {
     })
   }
 
-  const updateStep = (index: number, field: keyof StepForm, value: any) => {
-    const newSteps = [...formData.steps]
-    ;(newSteps[index] as any)[field] = value
-    setFormData({ ...formData, steps: newSteps })
+  const moveStep = (index: number, dir: -1 | 1) => {
+    const target = index + dir
+    if (target < 0 || target >= formData.steps.length) return
+    const steps = [...formData.steps]
+    ;[steps[index], steps[target]] = [steps[target], steps[index]]
+    setFormData({ ...formData, steps })
+  }
+
+  const updateStep = (index: number, field: keyof StepForm, value: string) => {
+    const steps = formData.steps.map((s, i) =>
+      i === index ? { ...s, [field]: value } : s
+    )
+    setFormData({ ...formData, steps })
+  }
+
+  // تحقق محلي يطابق قواعد الباك إند قبل الإرسال
+  const validateForm = (): string | null => {
+    if (formData.name.trim().length < 3) {
+      return 'اسم الدورة مطلوب (3 أحرف على الأقل)'
+    }
+    if (!editingChain && !CODE_RE.test(formData.code.trim())) {
+      return 'كود الدورة: أحرف إنجليزية وأرقام و _ أو - فقط (من 3 إلى 50 خانة)'
+    }
+    for (const s of formData.steps) {
+      const parts = [
+        s.thresholdField.trim() !== '',
+        s.thresholdOp !== '',
+        s.thresholdValue.trim() !== '',
+      ].filter(Boolean).length
+      if (parts !== 0 && parts !== 3) {
+        // نفس رسالة الباك إند حرفياً
+        return 'الخطوة الشرطية تحتاج: حقل + معامل + قيمة عتبة'
+      }
+      if (s.slaDays !== '') {
+        const n = Number(s.slaDays)
+        if (!Number.isInteger(n) || n < 1) return 'مهلة الرد: عدد أيام صحيح (1 فأكثر)'
+      }
+      if (s.thresholdValue.trim() !== '' && Number.isNaN(Number(s.thresholdValue))) {
+        return 'قيمة العتبة يجب أن تكون رقماً'
+      }
+    }
+    return null
+  }
+
+  const buildSteps = (): ChainStepInput[] =>
+    formData.steps.map((s) => ({
+      approverRole: s.approverRole,
+      ...(s.slaDays !== '' ? { slaDays: Number(s.slaDays) } : {}),
+      ...(s.escalateTo ? { escalateTo: s.escalateTo } : {}),
+      ...(s.thresholdField.trim()
+        ? {
+            thresholdField: s.thresholdField.trim(),
+            thresholdOp: s.thresholdOp as ChainStepInput['thresholdOp'],
+            thresholdValue: Number(s.thresholdValue),
+          }
+        : {}),
+    }))
+
+  const handleSave = async () => {
+    const problem = validateForm()
+    if (problem) {
+      setModalError(problem)
+      return
+    }
+    setSaving(true)
+    setModalError(null)
+    try {
+      const name = formData.name.trim()
+      if (editingChain) {
+        await updateApprovalChain(editingChain.id, { nameAr: name })
+        await replaceChainSteps(editingChain.id, buildSteps())
+        setNotice(`تم تحديث دورة «${name}» — الخطوات الجديدة تسري على الطلبات القادمة`)
+      } else {
+        await createApprovalChain({
+          code: formData.code.trim(),
+          nameAr: name,
+          branchId:
+            formData.branchId === 'all' ? undefined : Number(formData.branchId),
+          steps: buildSteps(),
+        })
+        setNotice(`تم إنشاء دورة الاعتماد «${name}» بنجاح`)
+      }
+      await reloadChains()
+      setShowModal(false)
+      setError(null)
+    } catch (err: any) {
+      // رسالة الباك إند العربية كما هي
+      setModalError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const toggleChainActive = async (chain: ApiChain) => {
+    setActiveMenu(null)
+    try {
+      await updateApprovalChain(chain.id, { isActive: !chain.isActive })
+      setNotice(
+        chain.isActive
+          ? `تم تعطيل دورة «${chain.nameAr}»`
+          : `تم تفعيل دورة «${chain.nameAr}»`
+      )
+      await reloadChains()
+      setError(null)
+    } catch (err: any) {
+      setError(err.message)
+    }
   }
 
   const totalChains = chains.length
@@ -233,12 +390,28 @@ export default function ApprovalsPage() {
             className="btn-primary flex items-center gap-2"
           >
             <Plus size={20} />
-            إضافة مسار اعتماد
+            إنشاء دورة اعتماد
           </button>
         </div>
 
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
+        {/* Success Banner */}
+        {notice && (
+          <div className="bg-success-50 text-success-700 rounded-xl p-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-2">
+              <CheckCircle2 size={18} />
+              <span>{notice}</span>
+            </div>
+            <button
+              onClick={() => setNotice(null)}
+              className="p-1 hover:bg-success-100 rounded-lg"
+            >
+              <X size={16} />
+            </button>
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
@@ -420,20 +593,19 @@ export default function ApprovalsPage() {
                                 className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50 text-sm"
                               >
                                 <Edit size={16} />
-                                عرض / تعديل
+                                تعديل
                               </button>
                               <button
                                 disabled
-                                title={READONLY_TITLE}
+                                title="النسخ في مرحلة لاحقة"
                                 className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 opacity-50 cursor-not-allowed text-sm"
                               >
                                 <Copy size={16} />
                                 نسخ
                               </button>
                               <button
-                                disabled
-                                title={READONLY_TITLE}
-                                className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 opacity-50 cursor-not-allowed text-sm"
+                                onClick={() => toggleChainActive(chain)}
+                                className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50 text-sm"
                               >
                                 {chain.isActive ? (
                                   <>
@@ -450,7 +622,7 @@ export default function ApprovalsPage() {
                               <div className="border-t border-gray-100 my-1" />
                               <button
                                 disabled
-                                title={READONLY_TITLE}
+                                title="الحذف غير متاح — استخدم التعطيل بدلاً منه"
                                 className="w-full flex items-center gap-2 px-4 py-2 text-danger-600 opacity-50 cursor-not-allowed text-sm"
                               >
                                 <Trash2 size={16} />
@@ -582,56 +754,74 @@ export default function ApprovalsPage() {
           </div>
         )}
 
-        {/* Modal (عرض فقط — التعديل في مرحلة لاحقة) */}
+        {/* Builder Modal — إنشاء / تعديل دورة اعتماد */}
         {showModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b border-gray-100">
                 <h2 className="text-xl font-bold text-gray-800">
-                  {editingChain ? 'تعديل مسار الاعتماد' : 'إضافة مسار اعتماد جديد'}
+                  {editingChain ? 'تعديل دورة الاعتماد' : 'إنشاء دورة اعتماد جديدة'}
                 </h2>
-                <p className="text-sm text-warning-600 mt-1">
-                  عرض فقط — {READONLY_TITLE}
-                </p>
+                {editingChain && (
+                  <p className="text-sm text-warning-600 mt-2 flex items-center gap-1.5">
+                    <AlertCircle size={15} className="shrink-0" />
+                    تعديل الخطوات يسري على الطلبات الجديدة فقط — الطلبات الجارية تكمل
+                    بخطواتها المحلولة
+                  </p>
+                )}
               </div>
 
               <div className="p-6 space-y-6">
+                {/* Modal Error — رسائل الباك إند العربية كما هي */}
+                {modalError && (
+                  <div className="bg-red-50 text-red-700 rounded-xl p-4 text-sm flex items-start gap-2">
+                    <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                    <span>{modalError}</span>
+                  </div>
+                )}
+
                 {/* Basic Info */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      اسم المسار *
+                      اسم الدورة *
                     </label>
                     <input
                       type="text"
                       value={formData.name}
-                      onChange={(e) =>
-                        setFormData({ ...formData, name: e.target.value })
-                      }
+                      onChange={(e) => handleNameChange(e.target.value)}
                       className="input w-full"
                       placeholder="مثال: اعتماد الإجازات"
                     />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      كود المسار *
+                      كود الدورة *
                     </label>
                     <input
                       type="text"
                       value={formData.code}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        setCodeTouched(true)
                         setFormData({ ...formData, code: e.target.value.toUpperCase() })
-                      }
+                      }}
                       className="input w-full font-mono"
                       placeholder="CHAIN_X"
                       dir="ltr"
+                      disabled={!!editingChain}
+                      title={editingChain ? 'الكود لا يتغير بعد الإنشاء' : undefined}
                     />
+                    {!editingChain && (
+                      <p className="text-xs text-gray-400 mt-1">
+                        يُقترح تلقائياً من الاسم — أحرف إنجليزية وأرقام و _ أو - (من 3 إلى 50)
+                      </p>
+                    )}
                   </div>
                 </div>
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    نطاق الفرع *
+                    نطاق الفرع
                   </label>
                   <select
                     value={formData.branchId}
@@ -639,8 +829,10 @@ export default function ApprovalsPage() {
                       setFormData({ ...formData, branchId: e.target.value })
                     }
                     className="input w-full"
+                    disabled={!!editingChain}
+                    title={editingChain ? 'نطاق الفرع لا يتغير بعد الإنشاء' : undefined}
                   >
-                    <option value="all">كل الفروع (مسار عام)</option>
+                    <option value="all">كل الفروع (دورة عامة)</option>
                     {branches.map((b) => (
                       <option key={b.id} value={b.id}>
                         {b.name} فقط
@@ -648,7 +840,8 @@ export default function ApprovalsPage() {
                     ))}
                   </select>
                   <p className="text-xs text-gray-400 mt-1">
-                    المسار الخاص بفرع يُطبَّق على طلبات موظفي هذا الفرع فقط — كل فرع بدوراته المنفصلة
+                    نسخة بفرع محدد تتقدم على العامة عند التنفيذ — طلبات موظفي الفرع تتبع
+                    دورته الخاصة أولاً
                   </p>
                 </div>
 
@@ -656,21 +849,28 @@ export default function ApprovalsPage() {
                 <div>
                   <div className="flex items-center justify-between mb-4">
                     <label className="text-sm font-medium text-gray-700">
-                      مستويات الاعتماد *
+                      خطوات الاعتماد
                     </label>
                     <button
                       onClick={addStep}
                       className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
                     >
                       <Plus size={16} />
-                      إضافة مستوى
+                      إضافة خطوة
                     </button>
                   </div>
+
+                  {formData.steps.length === 0 && (
+                    <div className="p-4 bg-gray-50 rounded-xl text-sm text-gray-500 flex items-center gap-2">
+                      <Zap size={16} className="text-warning-500" />
+                      بلا خطوات — الطلب يُنفَّذ أوتوماتيكياً فور التقديم
+                    </div>
+                  )}
 
                   <div className="space-y-3">
                     {formData.steps.map((step, index) => (
                       <div
-                        key={step.id}
+                        key={step.key}
                         className="p-4 bg-gray-50 rounded-xl space-y-3"
                       >
                         <div className="flex items-center justify-between">
@@ -679,20 +879,37 @@ export default function ApprovalsPage() {
                               {index + 1}
                             </span>
                             <span className="text-sm font-medium text-gray-700">
-                              المستوى {index + 1}
+                              الخطوة {index + 1}
                             </span>
                           </div>
-                          {formData.steps.length > 1 && (
+                          <div className="flex items-center gap-1">
+                            <button
+                              onClick={() => moveStep(index, -1)}
+                              disabled={index === 0}
+                              title="نقل لأعلى"
+                              className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                            >
+                              <ChevronUp size={16} />
+                            </button>
+                            <button
+                              onClick={() => moveStep(index, 1)}
+                              disabled={index === formData.steps.length - 1}
+                              title="نقل لأسفل"
+                              className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
+                            >
+                              <ChevronDown size={16} />
+                            </button>
                             <button
                               onClick={() => removeStep(index)}
-                              className="text-danger-500 hover:text-danger-600"
+                              title="حذف الخطوة"
+                              className="p-1.5 rounded-lg text-danger-500 hover:bg-danger-50"
                             >
                               <Trash2 size={16} />
                             </button>
-                          )}
+                          </div>
                         </div>
 
-                        <div className="grid grid-cols-2 gap-3">
+                        <div className="grid grid-cols-3 gap-3">
                           <div>
                             <label className="text-xs text-gray-500 mb-1 block">
                               المعتمد
@@ -713,65 +930,111 @@ export default function ApprovalsPage() {
                           </div>
                           <div>
                             <label className="text-xs text-gray-500 mb-1 block">
-                              مهلة الرد (أيام)
+                              مهلة الرد (أيام — اختياري)
                             </label>
                             <input
                               type="number"
                               value={step.slaDays}
                               onChange={(e) =>
-                                updateStep(index, 'slaDays', parseInt(e.target.value) || 1)
+                                updateStep(index, 'slaDays', e.target.value)
                               }
                               className="input w-full text-sm"
                               min={1}
-                              max={30}
+                              placeholder="بلا مهلة"
                             />
+                          </div>
+                          <div>
+                            <label className="text-xs text-gray-500 mb-1 block">
+                              التصعيد إلى (اختياري)
+                            </label>
+                            <select
+                              value={step.escalateTo}
+                              onChange={(e) =>
+                                updateStep(index, 'escalateTo', e.target.value)
+                              }
+                              className="input w-full text-sm"
+                            >
+                              <option value="">بدون تصعيد</option>
+                              {Object.entries(roleLabels).map(([id, name]) => (
+                                <option key={id} value={id}>
+                                  {name}
+                                </option>
+                              ))}
+                            </select>
                           </div>
                         </div>
 
-                        <div className="flex items-center gap-4">
-                          <label className="flex items-center gap-2">
-                            <input
-                              type="checkbox"
-                              checked={step.canDelegate}
-                              onChange={(e) =>
-                                updateStep(index, 'canDelegate', e.target.checked)
-                              }
-                              className="w-4 h-4 rounded border-gray-300 text-primary-600"
-                            />
-                            <span className="text-sm text-gray-600">يمكن التفويض</span>
+                        {/* شرط العتبة — الثلاثة معاً أو لا شيء */}
+                        <div>
+                          <label className="text-xs text-gray-500 mb-1 block">
+                            شرط العتبة (اختياري — الحقل والمعامل والقيمة معاً أو لا شيء)
                           </label>
+                          <div className="grid grid-cols-3 gap-3">
+                            <input
+                              type="text"
+                              value={step.thresholdField}
+                              onChange={(e) =>
+                                updateStep(index, 'thresholdField', e.target.value)
+                              }
+                              className="input w-full text-sm font-mono"
+                              placeholder="amount"
+                              dir="ltr"
+                            />
+                            <select
+                              value={step.thresholdOp}
+                              onChange={(e) =>
+                                updateStep(index, 'thresholdOp', e.target.value)
+                              }
+                              className="input w-full text-sm font-mono"
+                              dir="ltr"
+                            >
+                              <option value="">—</option>
+                              {thresholdOps.map((op) => (
+                                <option key={op} value={op}>
+                                  {op}
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              type="number"
+                              value={step.thresholdValue}
+                              onChange={(e) =>
+                                updateStep(index, 'thresholdValue', e.target.value)
+                              }
+                              className="input w-full text-sm"
+                              placeholder="القيمة"
+                              dir="ltr"
+                            />
+                          </div>
+                          <p className="text-xs text-gray-400 mt-1">
+                            مثال: amount &gt;= 1000 — الخطوة تُطبَّق فقط إذا تحقق الشرط على
+                            بيانات الطلب
+                          </p>
                         </div>
                       </div>
                     ))}
                   </div>
                 </div>
-
-                <label className="flex items-center gap-2">
-                  <input
-                    type="checkbox"
-                    checked={formData.isActive}
-                    onChange={(e) =>
-                      setFormData({ ...formData, isActive: e.target.checked })
-                    }
-                    className="w-4 h-4 rounded border-gray-300 text-primary-600"
-                  />
-                  <span className="text-sm text-gray-700">مسار نشط</span>
-                </label>
               </div>
 
               <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">
                 <button
                   onClick={() => setShowModal(false)}
                   className="btn-secondary"
+                  disabled={saving}
                 >
                   إلغاء
                 </button>
                 <button
-                  disabled
-                  title={READONLY_TITLE}
-                  className="btn-primary opacity-50 cursor-not-allowed"
+                  onClick={handleSave}
+                  disabled={saving}
+                  className="btn-primary disabled:opacity-50"
                 >
-                  {editingChain ? 'حفظ التغييرات' : 'إضافة المسار'}
+                  {saving
+                    ? 'جارٍ الحفظ...'
+                    : editingChain
+                      ? 'حفظ التغييرات'
+                      : 'إنشاء الدورة'}
                 </button>
               </div>
             </div>

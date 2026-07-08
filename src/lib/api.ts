@@ -14,6 +14,8 @@ export interface CurrentUser {
   role: string
   branchId: number | null
   employeeId: number | null
+  // صلاحيات إضافية ممنوحة فوق الدور (hr/finance/custody_officer/it/executive...)
+  permissions?: string[]
 }
 
 export const getToken = (): string | null => {
@@ -269,9 +271,9 @@ export const fetchPayMethodReport = (id: number) =>
 
 // ===== المستخدمون والإعدادات =====
 export const fetchUsers = () => get<ApiUser[]>('/users')
-export const createUser = (u: { email: string; password: string; displayName: string; role: string; branchId?: number; employeeId?: number }) =>
+export const createUser = (u: { email: string; password: string; displayName: string; role: string; branchId?: number; employeeId?: number; permissions?: string[] }) =>
   post<ApiUser>('/users', u)
-export const updateUser = (id: number, u: Partial<{ role: string; isActive: boolean; password: string; branchId: number; employeeId: number }>) =>
+export const updateUser = (id: number, u: Partial<{ role: string; isActive: boolean; password: string; branchId: number; employeeId: number; permissions: string[] }>) =>
   patch<ApiUser>(`/users/${id}`, u)
 export const fetchConfig = () => get<Array<{ key: string; value: string }>>('/settings/config')
 export const updateConfig = (key: string, value: string) => patch('/settings/config', { key, value })
@@ -279,6 +281,22 @@ export const fetchLeaveTypes = () => get<any[]>('/settings/leave-types')
 export const createLeaveType = (lt: Record<string, unknown>) => post('/settings/leave-types', lt)
 export const updateLeaveType = (id: number, lt: Record<string, unknown>) => patch(`/settings/leave-types/${id}`, lt)
 export const fetchApprovalChains = () => get<any[]>('/settings/approval-chains')
+
+// بانِي السلاسل — إنشاء/تعديل/استبدال خطوات
+export interface ChainStepInput {
+  approverRole: string
+  thresholdField?: string
+  thresholdOp?: '>=' | '>' | '<' | '<='
+  thresholdValue?: number
+  slaDays?: number
+  escalateTo?: string
+}
+export const createApprovalChain = (c: { code: string; nameAr: string; branchId?: number; steps: ChainStepInput[] }) =>
+  post<any>('/settings/approval-chains', c)
+export const updateApprovalChain = (id: number, c: { nameAr?: string; isActive?: boolean }) =>
+  patch<any>(`/settings/approval-chains/${id}`, c)
+export const replaceChainSteps = (id: number, steps: ChainStepInput[]) =>
+  patch<any>(`/settings/approval-chains/${id}/steps`, { steps })
 
 // ===== العهدة والأصول =====
 export interface ApiAsset {

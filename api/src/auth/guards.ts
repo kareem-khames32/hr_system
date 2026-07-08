@@ -35,7 +35,10 @@ export class RolesGuard implements CanActivate {
     ])
     if (!required || required.length === 0) return true
     const user: JwtPayload = ctx.switchToHttp().getRequest().user
-    return !!user && required.includes(user.role)
+    if (!user) return false
+    // الدور نفسه أو صلاحية إضافية ممنوحة بنفس الاسم
+    if (required.includes(user.role)) return true
+    return (user.permissions ?? []).some((p) => required.includes(p))
   }
 }
 

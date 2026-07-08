@@ -39,6 +39,36 @@ const roles = [
   { id: 'employee', name: 'موظف' },
 ]
 
+// الصلاحيات الإضافية القابلة للمنح — مرآة GRANTABLE_PERMISSIONS في الباك إند
+const grantablePermissions = [
+  { id: 'hr', label: 'خطوات الموارد البشرية' },
+  { id: 'finance', label: 'المالية' },
+  { id: 'custody_officer', label: 'أمين العهدة' },
+  { id: 'it', label: 'تقنية المعلومات' },
+  { id: 'executive', label: 'التنفيذي' },
+  { id: 'hr_manager', label: 'كامل قدرات مدير HR' },
+  { id: 'branch_manager', label: 'قدرات مدير الفرع' },
+]
+
+const permissionLabels: Record<string, string> = Object.fromEntries(
+  grantablePermissions.map((p) => [p.id, p.label])
+)
+
+// صف المستخدم كما يرجعه السيرفر — permissions تصل كنص JSON أو null
+type UserRow = ApiUser & { permissions?: string | null }
+
+const parsePermissions = (raw?: string | null): string[] => {
+  if (!raw) return []
+  try {
+    const arr = JSON.parse(raw)
+    return Array.isArray(arr)
+      ? arr.filter((p): p is string => typeof p === 'string')
+      : []
+  } catch {
+    return []
+  }
+}
+
 const statusLabels = {
   active: 'نشط',
   inactive: 'غير نشط',
@@ -65,10 +95,11 @@ const emptyForm = {
   employeeId: '',
   password: '',
   isActive: true,
+  permissions: [] as string[],
 }
 
 export default function UsersPage() {
-  const [users, setUsers] = useState<ApiUser[]>([])
+  const [users, setUsers] = useState<UserRow[]>([])
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [loading, setLoading] = useState(true)
@@ -92,7 +123,7 @@ export default function UsersPage() {
         fetchBranches(),
         fetchEmployees(),
       ])
-      setUsers(us)
+      setUsers(us as UserRow[])
       setBranches(brs)
       setEmployees(emps)
       setError(null)
@@ -133,12 +164,12 @@ export default function UsersPage() {
 
   const openAddModal = () => {
     setEditingUser(null)
-    setFormData({ ...emptyForm })
+    setFormData({ ...emptyForm, permissions: [] })
     setModalError(null)
     setShowModal(true)
   }
 
-  const openEditModal = (user: ApiUser) => {
+  const openEditModal = (user: UserRow) => {
     setEditingUser(user)
     setFormData({
       displayName: user.displayName,
@@ -148,19 +179,33 @@ export default function UsersPage() {
       employeeId: user.employeeId ? String(user.employeeId) : '',
       password: '',
       isActive: user.isActive,
+      permissions: parsePermissions(user.permissions),
     })
     setModalError(null)
     setShowModal(true)
   }
 
+  const togglePermission = (id: string, checked: boolean) => {
+    setFormData({
+      ...formData,
+      permissions: checked
+        ? [...formData.permissions, id]
+        : formData.permissions.filter((p) => p !== id),
+    })
+  }
+
   const handleSave = async () => {
     setSaving(true)
     setModalError(null)
+    // مدير النظام يملك كل شيء — لا نخزّن له صلاحيات إضافية
+    const permissions =
+      formData.role === 'super_admin' ? [] : formData.permissions
     try {
       if (editingUser) {
         await updateUser(editingUser.id, {
           role: formData.role,
           isActive: formData.isActive,
+          permissions,
           ...(formData.branchId ? { branchId: Number(formData.branchId) } : {}),
           ...(formData.employeeId ? { employeeId: Number(formData.employeeId) } : {}),
         })
@@ -172,6 +217,7 @@ export default function UsersPage() {
           role: formData.role,
           branchId: formData.branchId ? Number(formData.branchId) : undefined,
           employeeId: formData.employeeId ? Number(formData.employeeId) : undefined,
+          permissions,
         })
       }
       await loadData()
@@ -348,6 +394,19 @@ export default function UsersPage() {
                         <Shield size={16} className="text-primary-500" />
                         <span className="text-gray-700">{roleLabels[user.role] ?? user.role}</span>
                       </div>
+                      {/* شارات الصلاحيات الإضافية الممنوحة */}
+                      {parsePermissions(user.permissions).length > 0 && (
+                        <div className="flex flex-wrap gap-1 mt-1.5">
+                          {parsePermissions(user.permissions).map((p) => (
+                            <span
+                              key={p}
+                              className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full text-xs"
+                            >
+                              {permissionLabels[p] ?? p}
+                            </span>
+                          ))}
+                        </div>
+                      )}
                     </td>
                     <td className="px-4 py-4 text-gray-600">
                       <p>{branchNameOf(user.branchId)}</p>
@@ -524,6 +583,39 @@ export default function UsersPage() {
                     ))}
                   </select>
                 </div>
+
+                {/* صلاحيات إضافية — مخفية لمدير النظام لأنه يملك كل شيء */}
+                {formData.role === 'super_admin' ? (
+                  <div className="bg-gray-50 rounded-xl p-4 text-sm text-gray-500">
+                    مدير النظام يملك كل الصلاحيات تلقائياً — لا حاجة لصلاحيات إضافية
+                  </div>
+                ) : (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      صلاحيات إضافية
+                    </label>
+                    <div className="grid grid-cols-2 gap-1.5">
+                      {grantablePermissions.map((p) => (
+                        <label
+                          key={p.id}
+                          className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-50 cursor-pointer"
+                        >
+                          <input
+                            type="checkbox"
+                            className="w-4 h-4 rounded border-gray-300 text-primary-600"
+                            checked={formData.permissions.includes(p.id)}
+                            onChange={(e) => togglePermission(p.id, e.target.checked)}
+                          />
+                          <span className="text-sm text-gray-700">{p.label}</span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="text-xs text-gray-400 mt-1">
+                      تمنح المستخدم قدرات هذه الأدوار في دورات الاعتماد والمسارات المحمية
+                      فوق دوره الأساسي
+                    </p>
+                  </div>
+                )}
 
                 {!editingUser && (
                   <div>

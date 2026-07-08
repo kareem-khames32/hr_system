@@ -9,6 +9,8 @@ import { Not, Repository } from 'typeorm'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
+import { LeaveBalance } from '../requests/entities/leave.entities'
+import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { Employee } from './employee.entity'
 import { CreateEmployeeDto, UpdateEmployeeDto } from './employees.dto'
 
@@ -22,7 +24,11 @@ export class EmployeesService {
     @InjectRepository(Department)
     private readonly departments: Repository<Department>,
     @InjectRepository(Team)
-    private readonly teams: Repository<Team>
+    private readonly teams: Repository<Team>,
+    @InjectRepository(LeaveBalance)
+    private readonly balances: Repository<LeaveBalance>,
+    @InjectRepository(RequestsConfig)
+    private readonly config: Repository<RequestsConfig>
   ) {}
 
   // العزل بالفرع: branchScope = null → الكل (super_admin فقط)
@@ -125,7 +131,40 @@ export class EmployeesService {
   async create(dto: CreateEmployeeDto) {
     await this.assertUnique(dto)
     await this.assertRelations(dto)
-    return this.employees.save(this.employees.create(dto as Partial<Employee>))
+    const emp = await this.employees.save(
+      this.employees.create(dto as Partial<Employee>)
+    )
+    // رصيد السنة الحالية تلقائياً — الاستحقاق من الإعدادات
+    await this.ensureCurrentYearBalances(emp.id)
+    return emp
+  }
+
+  // ينشئ أرصدة السنة الحالية (سنوي/مرضي) إن لم توجد — يُستدعى عند التعيين
+  private async ensureCurrentYearBalances(employeeId: number) {
+    const period = String(new Date().getFullYear())
+    const annualEntitled = Number(
+      (await this.config.findOne({ where: { key: 'leave.annual_entitled' } }))
+        ?.value ?? '21'
+    )
+    for (const [balanceType, entitled] of [
+      ['annual', annualEntitled],
+      ['sick', 180],
+    ] as const) {
+      const existing = await this.balances.findOne({
+        where: { employeeId, balanceType, period },
+      })
+      if (!existing) {
+        await this.balances.save(
+          this.balances.create({
+            employeeId,
+            balanceType,
+            entitled,
+            taken: 0,
+            period,
+          })
+        )
+      }
+    }
   }
 
   async update(id: number, dto: UpdateEmployeeDto, branchScope: number | null) {
