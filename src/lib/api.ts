@@ -279,3 +279,90 @@ export const fetchLeaveTypes = () => get<any[]>('/settings/leave-types')
 export const createLeaveType = (lt: Record<string, unknown>) => post('/settings/leave-types', lt)
 export const updateLeaveType = (id: number, lt: Record<string, unknown>) => patch(`/settings/leave-types/${id}`, lt)
 export const fetchApprovalChains = () => get<any[]>('/settings/approval-chains')
+
+// ===== العهدة والأصول =====
+export interface ApiAsset {
+  id: number; name: string; category: string; serialNumber?: string
+  currentHolderId?: number; holderName?: string | null
+}
+export interface ApiCustody {
+  id: number; requestId?: number; assetId: number; employeeId: number
+  assignedAt: string; acknowledgedAt?: string; returnedAt?: string
+  condition?: string; status: string
+  employeeName?: string; employeeCode?: string
+  assetName?: string; assetCategory?: string; serialNumber?: string
+}
+export const fetchAssets = () => get<ApiAsset[]>('/assets')
+export const createAsset = (a: Partial<ApiAsset>) => post<ApiAsset>('/assets', a)
+export const fetchCustody = () => get<ApiCustody[]>('/custody')
+export const assignCustody = (assetId: number, employeeId: number) =>
+  post<ApiCustody>('/custody/assign', { assetId, employeeId })
+export const returnCustody = (id: number, condition?: string) =>
+  post<ApiCustody>(`/custody/${id}/return`, { condition })
+export const acknowledgeCustody = (assignmentId: number) =>
+  post<ApiCustody>(`/requests/custody/${assignmentId}/acknowledge`)
+
+// ===== المستندات =====
+export interface ApiDocument {
+  id: number; employeeId: number; docType: string; number?: string
+  issueDate?: string; expiryDate?: string; fileRef?: string; notes?: string
+  employeeName?: string; employeeCode?: string; expired?: boolean
+}
+export const fetchDocuments = (q?: { employeeId?: number; expiringDays?: number }) => {
+  const p = new URLSearchParams()
+  if (q?.employeeId) p.set('employeeId', String(q.employeeId))
+  if (q?.expiringDays) p.set('expiringDays', String(q.expiringDays))
+  const qs = p.toString()
+  return get<ApiDocument[]>(`/documents${qs ? `?${qs}` : ''}`)
+}
+export const createDocument = (d: Partial<ApiDocument>) => post<ApiDocument>('/documents', d)
+export const updateDocument = (id: number, d: Partial<ApiDocument>) => patch<ApiDocument>(`/documents/${id}`, d)
+
+// ===== الكتالوجات (عطلات/ورديات/أجهزة/مسميات/درجات/أنواع أصول) =====
+export type CatalogKind = 'holidays' | 'shifts' | 'devices' | 'job-titles' | 'grades' | 'asset-types'
+export const fetchCatalog = <T = any>(kind: CatalogKind) => get<T[]>(`/catalogs/${kind}`)
+export const createCatalogItem = <T = any>(kind: CatalogKind, item: Record<string, unknown>) =>
+  post<T>(`/catalogs/${kind}`, item)
+export const updateCatalogItem = <T = any>(kind: CatalogKind, id: number, item: Record<string, unknown>) =>
+  patch<T>(`/catalogs/${kind}/${id}`, item)
+
+// ===== المرشحون =====
+export interface ApiCandidate {
+  id: number; fullName: string; email?: string; phone?: string
+  positionTitle: string; branchId?: number; stage: string; notes?: string
+  hiredEmployeeId?: number; createdAt: string
+}
+export const fetchCandidates = () => get<ApiCandidate[]>('/candidates')
+export const createCandidate = (c: Partial<ApiCandidate>) => post<ApiCandidate>('/candidates', c)
+export const updateCandidate = (id: number, c: Partial<ApiCandidate>) => patch<ApiCandidate>(`/candidates/${id}`, c)
+export const hireCandidate = (id: number, h: { employeeCode: string; branchId: number; departmentId?: number; basicSalary?: number; joinDate?: string }) =>
+  post<{ candidate: ApiCandidate; employee: ApiEmployee }>(`/candidates/${id}/hire`, h)
+
+// ===== النقل والملف المجمّع والسلف =====
+export const fetchTransfers = () => get<any[]>('/transfers')
+export const fetchEmployeeProfile = (id: number) =>
+  get<{ employee: ApiEmployee; leaves: ApiLeave[]; balances: any[]; history: any[]; documents: ApiDocument[]; loans: any[]; custody: ApiCustody[] }>(`/employees/${id}/profile`)
+export const fetchEmployeeHistory = (id: number) => get<any[]>(`/employees/${id}/history`)
+export const fetchLoans = () => get<any[]>('/loans')
+
+// ===== التقارير =====
+export const fetchHeadcountReport = () => get<any>('/reports/headcount')
+export const fetchAttendanceReport = (month: string) => get<any[]>(`/reports/attendance?month=${month}`)
+export const fetchLeavesReport = (year: string) => get<any>(`/reports/leaves?year=${year}`)
+export const fetchPayrollReport = () => get<any>('/reports/payroll')
+export const fetchOvertimeReport = (month: string) => get<any[]>(`/reports/overtime?month=${month}`)
+export const fetchRequestsReport = () => get<any>('/reports/requests')
+
+// ===== التقويم والإشعارات =====
+export const fetchCalendar = (month?: string) =>
+  get<{ month: string; holidays: any[]; leaves: ApiLeave[] }>(`/calendar${month ? `?month=${month}` : ''}`)
+export const fetchNotifications = () =>
+  get<Array<{ id: string; kind: string; title: string; body: string; at: string; link: string }>>('/notifications')
+
+// ===== قسيمة الراتب وبانِي الطلبات =====
+export const fetchPayslip = (itemId: number) =>
+  get<{ item: ApiPayrollItem; run: ApiPayrollRun; employee: ApiEmployee }>(`/payroll/items/${itemId}`)
+export const fetchAdminRequestTypes = () => get<ApiRequestType[]>('/settings/request-types')
+export const updateRequestType = (id: number, d: { isActive?: boolean; approvalChainId?: number }) =>
+  patch<ApiRequestType>(`/settings/request-types/${id}`, d)
+export const fetchRoles = () => get<Array<{ role: string; nameAr: string; scope: string; permissions: string[] }>>('/settings/roles')
