@@ -1,4 +1,10 @@
-import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
+import {
+  Column,
+  CreateDateColumn,
+  Entity,
+  Index,
+  PrimaryGeneratedColumn,
+} from 'typeorm'
 
 export type EmployeeStatus =
   | 'active'
@@ -71,6 +77,6 @@ export class Employee {
   @Column({ default: true })
   isActive: boolean
 
-  @Column({ type: 'datetime2', default: () => 'SYSUTCDATETIME()' })
+  @CreateDateColumn()
   createdAt: Date
 }

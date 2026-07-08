@@ -1,6 +1,24 @@
-# HR System API — الباك إند (NestJS + SQL Server)
+# HR System API — الباك إند (NestJS)
 
-## المتطلبات على السيرفر المحلي
+> يدعم قاعدتين: **MySQL** أو **SQL Server** — تختار بمتغير `DB_TYPE` في `.env`
+
+## التشغيل السريع على MySQL (الشغّال عندك حالياً)
+
+```powershell
+cd D:\projects\hr_system\api
+npm install
+Copy-Item .env.example .env
+notepad .env   # DB_TYPE=mysql + حط باسورد الـ root بتاع MySQL
+
+# أنشئ القاعدة (من MySQL Workbench أو سطر الأوامر):
+#   CREATE DATABASE hr_system;
+
+npm run seed
+npm run start:dev
+# http://localhost:4000/api/health
+```
+
+## المتطلبات على السيرفر المحلي (مسار SQL Server)
 1. **Node.js** 18+
 2. **SQL Server** (Express يكفي للبداية) + تفعيل تسجيل الدخول بـ `sa` أو مستخدم مخصص
 3. تأكد أن خدمة SQL Server تسمع على المنفذ **1433** (SQL Server Configuration Manager → TCP/IP → Enabled)

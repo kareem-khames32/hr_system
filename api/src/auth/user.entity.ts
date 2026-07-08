@@ -32,6 +32,6 @@ export class User {
   @Column({ default: true })
   isActive: boolean
 
-  @Column({ type: 'datetime2', nullable: true })
+  @Column({ type: 'datetime', nullable: true })
   lastLoginAt: Date
 }

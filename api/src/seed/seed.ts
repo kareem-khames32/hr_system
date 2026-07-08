@@ -12,24 +12,30 @@ import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { Employee } from '../employees/employee.entity'
 
-const ds = new DataSource({
-  type: 'mssql',
+const dbType = (process.env.DB_TYPE ?? 'mssql') as 'mssql' | 'mysql'
+
+const common = {
   host: process.env.DB_HOST ?? 'localhost',
-  port: parseInt(process.env.DB_PORT ?? '1433', 10),
-  username: process.env.DB_USERNAME ?? 'sa',
+  port: parseInt(process.env.DB_PORT ?? (dbType === 'mysql' ? '3306' : '1433'), 10),
+  username: process.env.DB_USERNAME ?? (dbType === 'mysql' ? 'root' : 'sa'),
   password: process.env.DB_PASSWORD ?? '',
   database: process.env.DB_DATABASE ?? 'hr_system',
   entities: [User, Branch, Department, Team, Employee],
   synchronize: true, // البذر ينشئ الجداول لو مش موجودة
-  options: {
-    trustServerCertificate: true,
-    encrypt: false,
-  },
-})
+}
+
+const ds =
+  dbType === 'mysql'
+    ? new DataSource({ type: 'mysql', ...common })
+    : new DataSource({
+        type: 'mssql',
+        ...common,
+        options: { trustServerCertificate: true, encrypt: false },
+      })
 
 async function main() {
   await ds.initialize()
-  console.log('✓ اتصال SQL Server ناجح')
+  console.log(`✓ اتصال قاعدة البيانات ناجح (${dbType})`)
 
   const users = ds.getRepository(User)
   const branches = ds.getRepository(Branch)
