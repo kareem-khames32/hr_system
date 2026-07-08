@@ -17,9 +17,14 @@ import {
 } from '../auth/guards'
 import type { JwtPayload } from '../auth/auth.service'
 import { OrgService } from './org.service'
-import { Branch } from './entities/branch.entity'
-import { Department } from './entities/department.entity'
-import { Team } from './entities/team.entity'
+import {
+  CreateBranchDto,
+  CreateDepartmentDto,
+  CreateTeamDto,
+  UpdateBranchDto,
+  UpdateDepartmentDto,
+  UpdateTeamDto,
+} from './org.dto'
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
@@ -34,17 +39,17 @@ export class OrgController {
 
   @Post('branches')
   @Roles('super_admin', 'hr_manager')
-  createBranch(@Body() body: Partial<Branch>) {
-    return this.org.createBranch(body)
+  createBranch(@Body() dto: CreateBranchDto) {
+    return this.org.createBranch(dto)
   }
 
   @Patch('branches/:id')
   @Roles('super_admin', 'hr_manager')
   updateBranch(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: Partial<Branch>
+    @Body() dto: UpdateBranchDto
   ) {
-    return this.org.updateBranch(id, body)
+    return this.org.updateBranch(id, dto)
   }
 
   // ===== الأقسام =====
@@ -55,8 +60,17 @@ export class OrgController {
 
   @Post('departments')
   @Roles('super_admin', 'hr_manager')
-  createDepartment(@Body() body: Partial<Department>) {
-    return this.org.createDepartment(body)
+  createDepartment(@Body() dto: CreateDepartmentDto) {
+    return this.org.createDepartment(dto)
+  }
+
+  @Patch('departments/:id')
+  @Roles('super_admin', 'hr_manager')
+  updateDepartment(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateDepartmentDto
+  ) {
+    return this.org.updateDepartment(id, dto)
   }
 
   // ===== الفرق =====
@@ -67,7 +81,16 @@ export class OrgController {
 
   @Post('teams')
   @Roles('super_admin', 'hr_manager')
-  createTeam(@Body() body: Partial<Team>) {
-    return this.org.createTeam(body)
+  createTeam(@Body() dto: CreateTeamDto) {
+    return this.org.createTeam(dto)
+  }
+
+  @Patch('teams/:id')
+  @Roles('super_admin', 'hr_manager')
+  updateTeam(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: UpdateTeamDto
+  ) {
+    return this.org.updateTeam(id, dto)
   }
 }

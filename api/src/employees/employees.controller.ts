@@ -16,7 +16,7 @@ import {
   RolesGuard,
 } from '../auth/guards'
 import type { JwtPayload } from '../auth/auth.service'
-import { Employee } from './employee.entity'
+import { CreateEmployeeDto, UpdateEmployeeDto } from './employees.dto'
 import { EmployeesService } from './employees.service'
 
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -39,20 +39,30 @@ export class EmployeesController {
 
   @Post()
   @Roles('super_admin', 'hr_manager', 'branch_manager')
-  create(@Body() body: Partial<Employee>, @CurrentUser() user: JwtPayload) {
+  create(@Body() dto: CreateEmployeeDto, @CurrentUser() user: JwtPayload) {
     // مدير الفرع يضيف داخل فرعه فقط
     const scope = branchScopeOf(user)
-    if (scope != null) body.branchId = scope
-    return this.employees.create(body)
+    if (scope != null) dto.branchId = scope
+    return this.employees.create(dto)
   }
 
   @Patch(':id')
   @Roles('super_admin', 'hr_manager', 'branch_manager')
   update(
     @Param('id', ParseIntPipe) id: number,
-    @Body() body: Partial<Employee>,
+    @Body() dto: UpdateEmployeeDto,
     @CurrentUser() user: JwtPayload
   ) {
-    return this.employees.update(id, body, branchScopeOf(user))
+    return this.employees.update(id, dto, branchScopeOf(user))
+  }
+
+  // أرشفة بدل حذف — السجل الوظيفي يبقى
+  @Post(':id/archive')
+  @Roles('super_admin', 'hr_manager')
+  archive(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: JwtPayload
+  ) {
+    return this.employees.archive(id, branchScopeOf(user))
   }
 }

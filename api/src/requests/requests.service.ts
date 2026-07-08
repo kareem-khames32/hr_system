@@ -382,6 +382,23 @@ export class RequestsService {
     return row
   }
 
+  // ===== السجل الكامل (كونسول HR) — بنطاق الفرع مع فلاتر =====
+  async listAll(
+    user: JwtPayload,
+    filters: { status?: string; typeCode?: string } = {}
+  ) {
+    const scope = branchScopeOf(user)
+    const where: Record<string, unknown> = {}
+    if (scope !== null) where.branchId = scope
+    if (filters.status) where.status = filters.status
+    if (filters.typeCode) where.typeCode = filters.typeCode
+    return this.requests.find({
+      where: where as any,
+      order: { createdAt: 'DESC' },
+      take: 500,
+    })
+  }
+
   // ===== طلباتي =====
   async mine(user: JwtPayload) {
     if (!user.employeeId) return []

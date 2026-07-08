@@ -5,6 +5,7 @@ import {
   Param,
   ParseIntPipe,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common'
 import {
@@ -83,6 +84,17 @@ export class RequestsController {
   @Get('mine')
   mine(@CurrentUser() user: JwtPayload) {
     return this.service.mine(user)
+  }
+
+  // السجل الكامل — كونسول HR (بنطاق الفرع)
+  @Roles('super_admin', 'hr_manager', 'branch_manager')
+  @Get('all')
+  listAll(
+    @CurrentUser() user: JwtPayload,
+    @Query('status') status?: string,
+    @Query('typeCode') typeCode?: string
+  ) {
+    return this.service.listAll(user, { status, typeCode })
   }
 
   // صندوق الموافقات: المنتظر فعلي حسب دوره

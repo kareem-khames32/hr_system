@@ -9,6 +9,8 @@ import { EmployeesModule } from './employees/employees.module'
 import { RequestsModule } from './requests/requests.module'
 import { AttendanceModule } from './attendance/attendance.module'
 import { PayrollModule } from './payroll/payroll.module'
+import { SettingsModule } from './settings/settings.module'
+import { DashboardController } from './dashboard/dashboard.controller'
 
 @Module({
   imports: [
@@ -58,7 +60,8 @@ import { PayrollModule } from './payroll/payroll.module'
     RequestsModule,
     AttendanceModule,
     PayrollModule,
+    SettingsModule,
   ],
-  controllers: [HealthController],
+  controllers: [HealthController, DashboardController],
 })
 export class AppModule {}
