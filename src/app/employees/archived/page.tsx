@@ -32,6 +32,8 @@ interface ArchivedEmployee {
   joinDate: string
   endDate: string
   yearsOfService: string
+  // مؤرشف يدوياً أو منتهي الخدمة عبر ملف إنهاء خدمة
+  status: string
 }
 
 const serviceText = (joinDate?: string | null) => {
@@ -48,6 +50,7 @@ const serviceText = (joinDate?: string | null) => {
 
 export default function ArchivedEmployeesPage() {
   const [searchTerm, setSearchTerm] = useState('')
+  const [filterStatus, setFilterStatus] = useState('')
   const [archivedEmployees, setArchivedEmployees] = useState<ArchivedEmployee[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -65,7 +68,7 @@ export default function ArchivedEmployeesPage() {
       const deptById = new Map(depts.map((d) => [d.id, d.name]))
       setArchivedEmployees(
         emps
-          .filter((e) => e.status === 'archived')
+          .filter((e) => e.status === 'archived' || e.status === 'terminated')
           .map((e) => ({
             id: e.id,
             name: e.fullName,
@@ -79,6 +82,7 @@ export default function ArchivedEmployeesPage() {
             joinDate: e.joinDate ? String(e.joinDate).slice(0, 10) : '',
             endDate: '',
             yearsOfService: serviceText(e.joinDate),
+            status: e.status,
           }))
       )
     } catch (err) {
@@ -104,8 +108,14 @@ export default function ArchivedEmployeesPage() {
   }
 
   const filteredEmployees = archivedEmployees.filter((emp) => {
-    return emp.name.includes(searchTerm) || emp.employeeId.includes(searchTerm)
+    return (
+      (emp.name.includes(searchTerm) || emp.employeeId.includes(searchTerm)) &&
+      (!filterStatus || emp.status === filterStatus)
+    )
   })
+
+  const archivedCount = archivedEmployees.filter((e) => e.status === 'archived').length
+  const terminatedCount = archivedEmployees.filter((e) => e.status === 'terminated').length
 
   return (
     <MainLayout>
@@ -141,7 +151,7 @@ export default function ArchivedEmployeesPage() {
             </div>
             <div>
               <p className="text-sm text-gray-500">إجمالي المؤرشفين</p>
-              <p className="text-2xl font-bold text-gray-800">{archivedEmployees.length}</p>
+              <p className="text-2xl font-bold text-gray-800">{archivedCount}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
@@ -154,14 +164,12 @@ export default function ArchivedEmployeesPage() {
             </div>
           </div>
           <div className="card flex items-center gap-4">
-            <div className="w-12 h-12 bg-purple-100 rounded-2xl flex items-center justify-center">
-              <Calendar size={24} className="text-purple-600" />
+            <div className="w-12 h-12 bg-red-100 rounded-2xl flex items-center justify-center">
+              <Calendar size={24} className="text-red-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">بتاريخ تعيين مسجّل</p>
-              <p className="text-2xl font-bold text-gray-800">
-                {archivedEmployees.filter((e) => e.joinDate).length}
-              </p>
+              <p className="text-sm text-gray-500">منتهو الخدمة</p>
+              <p className="text-2xl font-bold text-red-600">{terminatedCount}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
@@ -170,7 +178,7 @@ export default function ArchivedEmployeesPage() {
             </div>
             <div>
               <p className="text-sm text-gray-500">قابلون لإعادة التفعيل</p>
-              <p className="text-2xl font-bold text-gray-800">{archivedEmployees.length}</p>
+              <p className="text-2xl font-bold text-gray-800">{archivedCount}</p>
             </div>
           </div>
         </div>
@@ -188,6 +196,15 @@ export default function ArchivedEmployeesPage() {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
+            <select
+              value={filterStatus}
+              onChange={(e) => setFilterStatus(e.target.value)}
+              className="input w-56"
+            >
+              <option value="">كل الحالات</option>
+              <option value="archived">مؤرشف</option>
+              <option value="terminated">منتهي الخدمة</option>
+            </select>
           </div>
         </div>
 
@@ -237,9 +254,15 @@ export default function ArchivedEmployeesPage() {
                   <td className="px-4 py-4 text-gray-600">—</td>
                   <td className="px-4 py-4 text-gray-600">{emp.yearsOfService}</td>
                   <td className="px-4 py-4">
-                    <span className="px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
-                      مؤرشف
-                    </span>
+                    {emp.status === 'terminated' ? (
+                      <span className="px-3 py-1 rounded-full text-xs font-medium bg-red-100 text-red-700">
+                        انتهت الخدمة
+                      </span>
+                    ) : (
+                      <span className="px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
+                        مؤرشف
+                      </span>
+                    )}
                   </td>
                   <td className="px-4 py-4">
                     <div className="flex items-center justify-center gap-2">
@@ -250,13 +273,15 @@ export default function ArchivedEmployeesPage() {
                       >
                         <Eye size={16} className="text-gray-600" />
                       </Link>
-                      <button
-                        onClick={() => handleReactivate(emp.id)}
-                        className="p-2 bg-gray-100 rounded-lg hover:bg-success-50"
-                        title="إعادة تفعيل"
-                      >
-                        <RefreshCw size={16} className="text-gray-600 hover:text-success-600" />
-                      </button>
+                      {emp.status === 'archived' && (
+                        <button
+                          onClick={() => handleReactivate(emp.id)}
+                          className="p-2 bg-gray-100 rounded-lg hover:bg-success-50"
+                          title="إعادة تفعيل"
+                        >
+                          <RefreshCw size={16} className="text-gray-600 hover:text-success-600" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>
@@ -267,7 +292,7 @@ export default function ArchivedEmployeesPage() {
           {filteredEmployees.length === 0 && (
             <div className="py-12 text-center">
               <UserX size={48} className="mx-auto text-gray-300 mb-4" />
-              <p className="text-gray-500">لا يوجد موظفون مؤرشفون</p>
+              <p className="text-gray-500">لا يوجد موظفون مؤرشفون أو منتهو الخدمة مطابقون</p>
             </div>
           )}
         </div>

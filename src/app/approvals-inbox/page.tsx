@@ -26,8 +26,11 @@ import {
   fetchEmployees,
   fetchBranches,
   actOnRequest,
+  fetchCustodyPendingMyConfirm,
+  managerConfirmCustody,
   type ApiRequest,
   type ApiRequestType,
+  type ApiCustody,
 } from '@/lib/api'
 
 // ===== أدوات فك حقول JSON القادمة من الباك =====
@@ -138,6 +141,26 @@ export default function ApprovalsInboxPage() {
   const [history, setHistory] = useState<
     { id: string; title: string; action: string }[]
   >([])
+  // عهد أكّد الموظف استلامها وتنتظر اعتمادي كمدير مباشر
+  const [custodyPending, setCustodyPending] = useState<ApiCustody[]>([])
+  const [custodyConfirming, setCustodyConfirming] = useState<number | null>(null)
+
+  const loadCustodyPending = () =>
+    fetchCustodyPendingMyConfirm()
+      .then(setCustodyPending)
+      .catch(() => setCustodyPending([]))
+
+  const confirmCustody = async (id: number) => {
+    setCustodyConfirming(id)
+    try {
+      await managerConfirmCustody(id)
+      await loadCustodyPending()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر اعتماد العهدة')
+    } finally {
+      setCustodyConfirming(null)
+    }
+  }
 
   const load = async () => {
     try {
@@ -191,6 +214,7 @@ export default function ApprovalsInboxPage() {
 
   useEffect(() => {
     load()
+    loadCustodyPending()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -267,6 +291,50 @@ export default function ApprovalsInboxPage() {
         </div>
 
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
+        {/* عهد بانتظار اعتمادي كمدير مباشر — تختفي عند الخلو */}
+        {custodyPending.length > 0 && (
+          <div className="card p-5">
+            <div className="flex items-center gap-2 mb-4">
+              <Package size={18} className="text-teal-600" />
+              <h3 className="font-bold text-gray-800">عهد بانتظار اعتمادك</h3>
+              <span className="badge text-xs bg-teal-100 text-teal-700">
+                {custodyPending.length}
+              </span>
+            </div>
+            <div className="space-y-3">
+              {custodyPending.map((c) => (
+                <div
+                  key={c.id}
+                  className="flex items-center justify-between gap-4 p-3 bg-gray-50 rounded-xl"
+                >
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-teal-100 rounded-xl flex items-center justify-center shrink-0">
+                      <Package size={18} className="text-teal-600" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-800 text-sm">
+                        {c.assetName ?? `أصل #${c.assetId}`}
+                      </p>
+                      <p className="text-xs text-gray-500">
+                        الموظف: {c.employeeName ?? `#${c.employeeId}`} — تاريخ التسليم:{' '}
+                        <span dir="ltr">{String(c.assignedAt ?? '').slice(0, 10)}</span>
+                      </p>
+                    </div>
+                  </div>
+                  <button
+                    onClick={() => confirmCustody(c.id)}
+                    disabled={custodyConfirming === c.id}
+                    className="flex items-center gap-1.5 px-4 py-2 bg-success-500 text-white rounded-xl text-sm font-medium hover:bg-success-600 shrink-0"
+                  >
+                    <CheckCircle2 size={16} />
+                    {custodyConfirming === c.id ? 'جارٍ الاعتماد...' : 'اعتماد'}
+                  </button>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
 
         {loading ? (
           <div className="flex justify-center py-16">

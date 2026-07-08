@@ -119,6 +119,34 @@ export class AssetsController {
     }))
   }
 
+  // عهد مرؤوسيّ المباشرين بانتظار اعتمادي (بعد تأكيد الموظف)
+  @Get('custody/pending-my-confirm')
+  async pendingMyConfirm(@CurrentUser() user: JwtPayload) {
+    if (!user.employeeId) return []
+    const reports = await this.employees.find({
+      where: { managerEmployeeId: user.employeeId },
+    })
+    if (reports.length === 0) return []
+    const rows = await this.custody.find({
+      where: {
+        employeeId: In(reports.map((r) => r.id)),
+        status: 'PENDING_MANAGER_CONFIRM',
+      },
+      order: { assignedAt: 'DESC' },
+    })
+    const assetIds = [...new Set(rows.map((r) => r.assetId))]
+    const assetRows = assetIds.length
+      ? await this.assets.find({ where: { id: In(assetIds) } })
+      : []
+    const aById = new Map(assetRows.map((a) => [a.id, a]))
+    const eById = new Map(reports.map((e) => [e.id, e]))
+    return rows.map((r) => ({
+      ...r,
+      employeeName: eById.get(r.employeeId)?.fullName ?? `#${r.employeeId}`,
+      assetName: aById.get(r.assetId)?.name ?? `#${r.assetId}`,
+    }))
+  }
+
   // ===== إسنادات العهدة =====
   @Perm('custody.assign')
   @Get('custody')

@@ -18,6 +18,7 @@ const PATH_PERMS: Array<[prefix: string, perm: string | null]> = [
   ['/payroll/payslip/', null], // قسيمة الموظف نفسه — الباك يسمح للمالك
   ['/leaves/request', null], // تقديم إجازة متاح لكل موظف
   ['/employees/custody', 'custody.assign'],
+  ['/offboarding', 'offboarding.manage'],
   ['/employees/documents', 'documents.manage'],
   ['/employees/transfers', 'transfers.view'],
   ['/settings/users', 'users.manage'],

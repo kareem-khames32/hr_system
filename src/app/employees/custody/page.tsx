@@ -23,6 +23,8 @@ import {
   createAsset,
   assignCustody,
   returnCustody,
+  managerConfirmCustody,
+  can,
   ApiAsset,
   ApiEmployee,
   ApiBranch,
@@ -31,6 +33,7 @@ import {
 // حالات العهدة كما في الباك إند
 const statusLabels: Record<string, string> = {
   PENDING_ACK: 'بانتظار التأكيد',
+  PENDING_MANAGER_CONFIRM: 'بانتظار اعتماد المدير',
   ACTIVE: 'نشطة',
   RETURNED: 'مُرجعة',
   RETURN_REQUESTED: 'طلب إرجاع',
@@ -40,6 +43,7 @@ const statusLabels: Record<string, string> = {
 
 const statusStyles: Record<string, string> = {
   PENDING_ACK: 'bg-indigo-100 text-indigo-700',
+  PENDING_MANAGER_CONFIRM: 'bg-purple-100 text-purple-700',
   ACTIVE: 'bg-success-50 text-success-700',
   RETURNED: 'bg-gray-100 text-gray-600',
   RETURN_REQUESTED: 'bg-blue-100 text-blue-700',
@@ -144,8 +148,8 @@ export default function CustodyPage() {
 
   const stats = {
     active: records.filter((r) => r.status === 'ACTIVE').length,
-    pending: records.filter(
-      (r) => r.status === 'PENDING_ACK' || r.status === 'RETURN_REQUESTED'
+    pending: records.filter((r) =>
+      ['PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'RETURN_REQUESTED'].includes(r.status)
     ).length,
     lostDamaged: records.filter(
       (r) => r.status === 'LOST' || r.status === 'DAMAGED'
@@ -189,6 +193,21 @@ export default function CustodyPage() {
       setError(err instanceof Error ? err.message : 'تعذر تسليم العهدة')
     } finally {
       setSaving(false)
+    }
+  }
+
+  // اعتماد المدير للعهدة بعد إقرار الموظف — يفعّلها نهائياً
+  const [confirmingId, setConfirmingId] = useState<number | null>(null)
+  const handleManagerConfirm = async (id: number) => {
+    setConfirmingId(id)
+    setError('')
+    try {
+      await managerConfirmCustody(id)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر اعتماد العهدة')
+    } finally {
+      setConfirmingId(null)
     }
   }
 
@@ -381,6 +400,16 @@ export default function CustodyPage() {
                   </td>
                   <td className="py-3 px-4">
                     <div className="flex items-center gap-2">
+                      {r.status === 'PENDING_MANAGER_CONFIRM' && can('custody.assign') && (
+                        <button
+                          onClick={() => handleManagerConfirm(r.id)}
+                          disabled={confirmingId === r.id}
+                          className="text-xs px-3 py-1.5 bg-purple-50 text-purple-700 rounded-lg hover:bg-purple-100 flex items-center gap-1"
+                        >
+                          <CheckCircle2 size={12} />
+                          {confirmingId === r.id ? 'جارٍ الاعتماد...' : 'اعتماد المدير'}
+                        </button>
+                      )}
                       {['PENDING_ACK', 'ACTIVE', 'RETURN_REQUESTED'].includes(r.status) && (
                         <button
                           onClick={() => handleReturn(r.id)}

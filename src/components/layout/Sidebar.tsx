@@ -30,6 +30,7 @@ import {
   FolderOpen,
   UserCircle,
   Inbox,
+  UserMinus,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -74,6 +75,13 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'لوج النقل', href: '/employees/transfers', perm: 'transfers.view' },
       { label: 'الموظفين المؤرشفين', href: '/employees/archived', perm: 'employees.view' },
     ],
+  },
+  {
+    id: 'offboarding',
+    label: 'إنهاء الخدمة',
+    icon: <UserMinus size={20} />,
+    href: '/offboarding',
+    perm: 'offboarding.manage',
   },
   {
     id: 'attendance',

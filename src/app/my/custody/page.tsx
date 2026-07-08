@@ -13,6 +13,7 @@ import { acknowledgeCustody, fetchMyCustody, type ApiCustody } from '@/lib/api'
 // حالات العهدة من منظور الموظف
 const statusLabels: Record<string, string> = {
   PENDING_ACK: 'بانتظار تأكيدك',
+  PENDING_MANAGER_CONFIRM: 'أكدت الاستلام — بانتظار اعتماد مديرك',
   ACTIVE: 'نشطة',
   RETURNED: 'مُرجعة',
   RETURN_REQUESTED: 'طلب إرجاع',
@@ -22,6 +23,7 @@ const statusLabels: Record<string, string> = {
 
 const statusStyles: Record<string, string> = {
   PENDING_ACK: 'bg-indigo-100 text-indigo-700',
+  PENDING_MANAGER_CONFIRM: 'bg-indigo-100 text-indigo-700',
   ACTIVE: 'bg-success-50 text-success-700',
   RETURNED: 'bg-gray-100 text-gray-600',
   RETURN_REQUESTED: 'bg-blue-100 text-blue-700',
