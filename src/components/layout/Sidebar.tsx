@@ -1,9 +1,15 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { clearSession, getCurrentUser, type CurrentUser } from '@/lib/api'
+import {
+  can,
+  clearSession,
+  fetchInbox,
+  getCurrentUser,
+  type CurrentUser,
+} from '@/lib/api'
 import {
   LayoutDashboard,
   Users,
@@ -20,68 +26,60 @@ import {
   LogOut,
   Bell,
   ClipboardList,
+  Package,
+  FolderOpen,
+  UserCircle,
+  Inbox,
 } from 'lucide-react'
 import clsx from 'clsx'
+
+interface ChildItem {
+  label: string
+  href: string
+  // الصلاحية المطلوبة لظهور العنصر — بدونها العنصر مفتوح
+  perm?: string
+}
 
 interface MenuItem {
   id: string
   label: string
   icon: React.ReactNode
   href?: string
-  children?: { label: string; href: string }[]
+  perm?: string
+  children?: ChildItem[]
+  badge?: number
 }
 
-const menuItems: MenuItem[] = [
-  {
-    id: 'dashboard',
-    label: 'لوحة التحكم',
-    icon: <LayoutDashboard size={20} />,
-    href: '/',
-  },
-  {
-    id: 'my-requests',
-    label: 'طلباتي',
-    icon: <FileText size={20} />,
-    href: '/requests',
-  },
-  {
-    id: 'approvals-inbox',
-    label: 'صندوق الموافقات',
-    icon: <Bell size={20} />,
-    href: '/approvals-inbox',
-  },
+// ===== الشاشات الإدارية — كل عنصر مربوط بصلاحيته من سجل الصلاحيات =====
+const adminMenuDefs: MenuItem[] = [
   {
     id: 'requests-console',
     label: 'لوحة الطلبات (HR)',
     icon: <ClipboardList size={20} />,
     href: '/requests-console',
+    perm: 'requests.view_all',
   },
   {
     id: 'employees',
     label: 'إدارة الموظفين',
     icon: <Users size={20} />,
     children: [
-      { label: 'قائمة الموظفين', href: '/employees' },
-      { label: 'إضافة موظف', href: '/employees/add' },
-      { label: 'تهيئة الموظفين الجدد', href: '/employees/onboarding' },
-      { label: 'الهيكل التنظيمي', href: '/employees/org-chart' },
-      { label: 'إدارة العقود', href: '/employees/contracts' },
-      { label: 'المستندات', href: '/employees/documents' },
-      { label: 'سجل العهد', href: '/employees/custody' },
-      { label: 'لوج النقل', href: '/employees/transfers' },
-      { label: 'الموظفين المؤرشفين', href: '/employees/archived' },
+      { label: 'قائمة الموظفين', href: '/employees', perm: 'employees.view' },
+      { label: 'إضافة موظف', href: '/employees/add', perm: 'employees.view' },
+      { label: 'تهيئة الموظفين الجدد', href: '/employees/onboarding', perm: 'employees.view' },
+      { label: 'الهيكل التنظيمي', href: '/employees/org-chart', perm: 'employees.view' },
+      { label: 'إدارة العقود', href: '/employees/contracts', perm: 'employees.view' },
+      { label: 'المستندات', href: '/employees/documents', perm: 'documents.manage' },
+      { label: 'سجل العهد', href: '/employees/custody', perm: 'custody.assign' },
+      { label: 'لوج النقل', href: '/employees/transfers', perm: 'transfers.view' },
+      { label: 'الموظفين المؤرشفين', href: '/employees/archived', perm: 'employees.view' },
     ],
-  },
-  {
-    id: 'calendar',
-    label: 'التقويم الموحد',
-    icon: <Calendar size={20} />,
-    href: '/calendar',
   },
   {
     id: 'attendance',
     label: 'الحضور والانصراف',
     icon: <Clock size={20} />,
+    perm: 'attendance.view_all',
     children: [
       { label: 'سجل الحضور', href: '/attendance' },
       { label: 'الجدول الأسبوعي', href: '/attendance/weekly-schedule' },
@@ -98,6 +96,7 @@ const menuItems: MenuItem[] = [
     id: 'leaves',
     label: 'الإجازات',
     icon: <Calendar size={20} />,
+    perm: 'leaves.view_all',
     children: [
       { label: 'طلبات الإجازات', href: '/leaves' },
       { label: 'طلب إجازة', href: '/leaves/request' },
@@ -111,6 +110,7 @@ const menuItems: MenuItem[] = [
     id: 'payroll',
     label: 'الرواتب',
     icon: <Wallet size={20} />,
+    perm: 'payroll.view',
     children: [
       { label: 'مسير الرواتب', href: '/payroll' },
       { label: 'المكافآت', href: '/payroll/bonuses' },
@@ -127,6 +127,7 @@ const menuItems: MenuItem[] = [
     id: 'recruitment',
     label: 'التوظيف',
     icon: <UserPlus size={20} />,
+    perm: 'candidates.manage',
     children: [
       { label: 'الوظائف الشاغرة', href: '/recruitment' },
       { label: 'المتقدمين', href: '/recruitment/applicants' },
@@ -139,6 +140,7 @@ const menuItems: MenuItem[] = [
     id: 'performance',
     label: 'إدارة الأداء',
     icon: <Target size={20} />,
+    perm: 'employees.view',
     children: [
       { label: 'التقييمات', href: '/performance' },
       { label: 'تقييم جديد', href: '/performance/new' },
@@ -151,6 +153,7 @@ const menuItems: MenuItem[] = [
     id: 'training',
     label: 'التدريب والتطوير',
     icon: <GraduationCap size={20} />,
+    perm: 'employees.view',
     children: [
       { label: 'الدورات التدريبية', href: '/training' },
       { label: 'دوراتي', href: '/training/my-courses' },
@@ -162,6 +165,7 @@ const menuItems: MenuItem[] = [
     id: 'reports',
     label: 'التقارير',
     icon: <FileText size={20} />,
+    perm: 'reports.view',
     children: [
       { label: 'لوحة التقارير', href: '/reports' },
       { label: 'تقارير مخصصة', href: '/reports/custom' },
@@ -172,21 +176,21 @@ const menuItems: MenuItem[] = [
     label: 'الإعدادات',
     icon: <Settings size={20} />,
     children: [
-      { label: 'الإعدادات العامة', href: '/settings' },
-      { label: 'الفروع', href: '/settings/branches' },
-      { label: 'الأقسام والإدارات', href: '/settings/departments' },
-      { label: 'الفرق', href: '/settings/teams' },
-      { label: 'المسميات الوظيفية', href: '/settings/job-titles' },
-      { label: 'الدرجات الوظيفية', href: '/settings/grades' },
-      { label: 'أيام العمل', href: '/settings/work-days' },
-      { label: 'سياسات الإجازات والأوفرتايم', href: '/settings/policies' },
-      { label: 'الاعتمادات والموافقات', href: '/settings/approvals' },
-      { label: 'بانِي الطلبات', href: '/settings/request-types' },
-      { label: 'أنواع العهد', href: '/settings/asset-types' },
-      { label: 'أنواع المستندات', href: '/settings/documents' },
-      { label: 'قوالب المستندات', href: '/settings/document-templates' },
-      { label: 'المستخدمين', href: '/settings/users' },
-      { label: 'الأدوار والصلاحيات', href: '/settings/roles' },
+      { label: 'الإعدادات العامة', href: '/settings', perm: 'settings.manage' },
+      { label: 'الفروع', href: '/settings/branches', perm: 'org.manage' },
+      { label: 'الأقسام والإدارات', href: '/settings/departments', perm: 'org.manage' },
+      { label: 'الفرق', href: '/settings/teams', perm: 'org.manage' },
+      { label: 'المسميات الوظيفية', href: '/settings/job-titles', perm: 'settings.manage' },
+      { label: 'الدرجات الوظيفية', href: '/settings/grades', perm: 'settings.manage' },
+      { label: 'أيام العمل', href: '/settings/work-days', perm: 'settings.manage' },
+      { label: 'سياسات الإجازات والأوفرتايم', href: '/settings/policies', perm: 'settings.manage' },
+      { label: 'الاعتمادات والموافقات', href: '/settings/approvals', perm: 'approval_chains.manage' },
+      { label: 'بانِي الطلبات', href: '/settings/request-types', perm: 'request_types.manage' },
+      { label: 'أنواع العهد', href: '/settings/asset-types', perm: 'settings.manage' },
+      { label: 'أنواع المستندات', href: '/settings/documents', perm: 'settings.manage' },
+      { label: 'قوالب المستندات', href: '/settings/document-templates', perm: 'settings.manage' },
+      { label: 'المستخدمين', href: '/settings/users', perm: 'users.manage' },
+      { label: 'الأدوار والصلاحيات', href: '/settings/roles', perm: 'roles.manage' },
     ],
   },
 ]
@@ -203,11 +207,77 @@ export default function Sidebar() {
   const pathname = usePathname()
   const [expandedItems, setExpandedItems] = useState<string[]>(['employees'])
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
+  const [inboxCount, setInboxCount] = useState<number>(0)
 
   // يُقرأ بعد الـ mount — الجلسة في التخزين المحلي
   useEffect(() => {
-    setCurrentUser(getCurrentUser())
+    const user = getCurrentUser()
+    setCurrentUser(user)
+    if (user) {
+      // «بانتظار موافقتي» تظهر لغير الموظف دائماً، وللموظف عندما يكون معتمِداً فعلياً
+      fetchInbox()
+        .then((rows) => setInboxCount(rows.length))
+        .catch(() => setInboxCount(0))
+    }
   }, [])
+
+  // القائمة تُبنى من صلاحيات المستخدم الحالي — الفرض الحقيقي في الباك إند
+  const menuItems = useMemo<MenuItem[]>(() => {
+    if (!currentUser) return []
+
+    // العناصر الإدارية المسموحة: المجموعة تظهر إذا بقي فيها عنصر واحد على الأقل
+    const adminItems: MenuItem[] = []
+    for (const item of adminMenuDefs) {
+      if (item.perm && !can(item.perm)) continue
+      if (item.children) {
+        const visibleChildren = item.children.filter((c) => !c.perm || can(c.perm))
+        if (visibleChildren.length === 0) continue
+        adminItems.push({ ...item, children: visibleChildren })
+      } else {
+        adminItems.push(item)
+      }
+    }
+
+    const isPrivileged = adminItems.length > 0
+    const showInbox = currentUser.role !== 'employee' || inboxCount > 0
+
+    // بورتال الموظف — يظهر للجميع (كل مستخدم موظف أيضاً)
+    const portalItems: MenuItem[] = [
+      {
+        id: 'dashboard',
+        label: isPrivileged ? 'لوحة التحكم' : 'لوحتي',
+        icon: <LayoutDashboard size={20} />,
+        href: '/',
+      },
+      {
+        id: 'my-requests',
+        label: 'طلباتي',
+        icon: <FileText size={20} />,
+        href: '/requests',
+      },
+      ...(showInbox
+        ? [
+            {
+              id: 'approvals-inbox',
+              label: 'بانتظار موافقتي',
+              icon: <Inbox size={20} />,
+              href: '/approvals-inbox',
+              badge: inboxCount,
+            } satisfies MenuItem,
+          ]
+        : []),
+      { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
+      { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },
+      { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },
+      { id: 'my-custody', label: 'عهدي', icon: <Package size={20} />, href: '/my/custody' },
+      { id: 'my-documents', label: 'مستنداتي', icon: <FolderOpen size={20} />, href: '/my/documents' },
+      { id: 'profile', label: 'ملفي الشخصي', icon: <UserCircle size={20} />, href: '/profile' },
+      { id: 'notifications', label: 'الإشعارات', icon: <Bell size={20} />, href: '/notifications' },
+      { id: 'calendar', label: 'التقويم', icon: <Calendar size={20} />, href: '/calendar' },
+    ]
+
+    return [...portalItems, ...adminItems]
+  }, [currentUser, inboxCount])
 
   const toggleExpanded = (id: string) => {
     setExpandedItems((prev) =>
@@ -245,6 +315,18 @@ export default function Sidebar() {
               >
                 {item.icon}
                 <span className="font-medium">{item.label}</span>
+                {(item.badge ?? 0) > 0 && (
+                  <span
+                    className={clsx(
+                      'mr-auto text-xs font-bold px-2 py-0.5 rounded-full',
+                      isActive(item.href)
+                        ? 'bg-white/20 text-white'
+                        : 'bg-primary-500 text-white'
+                    )}
+                  >
+                    {item.badge}
+                  </span>
+                )}
               </Link>
             ) : (
               <>

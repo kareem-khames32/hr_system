@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
@@ -13,15 +13,23 @@ import {
   CheckCircle2,
   Clock,
   X,
+  MinusCircle,
+  PlusCircle,
 } from 'lucide-react'
 import {
-  ApiBranch,
-  ApiEmployee,
-  ApiUser,
+  type ApiBranch,
+  type ApiEmployee,
+  type ApiPermission,
+  type ApiRole,
+  type ApiUser,
   createUser,
   fetchBranches,
   fetchEmployees,
+  fetchPermissionsRegistry,
+  fetchRolesFull,
+  fetchUserPermissions,
   fetchUsers,
+  setUserPermissions,
   updateUser,
 } from '@/lib/api'
 
@@ -31,28 +39,6 @@ const roleLabels: Record<string, string> = {
   branch_manager: 'مدير فرع',
   employee: 'موظف',
 }
-
-const roles = [
-  { id: 'super_admin', name: 'مدير النظام' },
-  { id: 'hr_manager', name: 'مدير الموارد البشرية' },
-  { id: 'branch_manager', name: 'مدير فرع' },
-  { id: 'employee', name: 'موظف' },
-]
-
-// الصلاحيات الإضافية القابلة للمنح — مرآة GRANTABLE_PERMISSIONS في الباك إند
-const grantablePermissions = [
-  { id: 'hr', label: 'خطوات الموارد البشرية' },
-  { id: 'finance', label: 'المالية' },
-  { id: 'custody_officer', label: 'أمين العهدة' },
-  { id: 'it', label: 'تقنية المعلومات' },
-  { id: 'executive', label: 'التنفيذي' },
-  { id: 'hr_manager', label: 'كامل قدرات مدير HR' },
-  { id: 'branch_manager', label: 'قدرات مدير الفرع' },
-]
-
-const permissionLabels: Record<string, string> = Object.fromEntries(
-  grantablePermissions.map((p) => [p.id, p.label])
-)
 
 // صف المستخدم كما يرجعه السيرفر — permissions تصل كنص JSON أو null
 type UserRow = ApiUser & { permissions?: string | null }
@@ -95,13 +81,21 @@ const emptyForm = {
   employeeId: '',
   password: '',
   isActive: true,
-  permissions: [] as string[],
+}
+
+// تجاوزات الصلاحيات الدقيقة للمستخدم (فوق حزمة الدور)
+interface Overrides {
+  grants: string[]
+  revokes: string[]
+  effective: string[]
 }
 
 export default function UsersPage() {
   const [users, setUsers] = useState<UserRow[]>([])
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  const [roles, setRoles] = useState<ApiRole[]>([])
+  const [registry, setRegistry] = useState<ApiPermission[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [searchTerm, setSearchTerm] = useState('')
@@ -114,18 +108,26 @@ export default function UsersPage() {
   const [resetUser, setResetUser] = useState<ApiUser | null>(null)
   const [newPassword, setNewPassword] = useState('')
 
+  // الصلاحيات الدقيقة — تُحمَّل عند فتح مودال التعديل
+  const [overrides, setOverrides] = useState<Overrides | null>(null)
+  const [permsLoading, setPermsLoading] = useState(false)
+
   const [formData, setFormData] = useState({ ...emptyForm })
 
   const loadData = async () => {
     try {
-      const [us, brs, emps] = await Promise.all([
+      const [us, brs, emps, rls, reg] = await Promise.all([
         fetchUsers(),
         fetchBranches(),
         fetchEmployees(),
+        fetchRolesFull(),
+        fetchPermissionsRegistry(),
       ])
       setUsers(us as UserRow[])
       setBranches(brs)
       setEmployees(emps)
+      setRoles(rls)
+      setRegistry(reg)
       setError(null)
     } catch (err: any) {
       setError(err.message)
@@ -137,6 +139,25 @@ export default function UsersPage() {
   useEffect(() => {
     loadData()
   }, [])
+
+  // تسمية عربية لأي مفتاح صلاحية — من سجل الصلاحيات
+  const permLabels = useMemo(
+    () => Object.fromEntries(registry.map((p) => [p.key, p.labelAr])),
+    [registry]
+  )
+
+  const roleNameOf = (code: string) =>
+    roles.find((r) => r.code === code)?.nameAr ?? roleLabels[code] ?? code
+
+  // حزمة صلاحيات الدور المختار حالياً في النموذج
+  const roleBundle = useMemo(
+    () => roles.find((r) => r.code === formData.role)?.permissions ?? [],
+    [roles, formData.role]
+  )
+
+  // المنح الإضافي يعرض ما ليس في حزمة الدور — والسحب يعرض ما فيها فقط
+  const grantablePerms = registry.filter((p) => !roleBundle.includes(p.key))
+  const revocablePerms = registry.filter((p) => roleBundle.includes(p.key))
 
   const branchNameOf = (branchId?: number) =>
     branches.find((b) => b.id === branchId)?.name ?? '—'
@@ -164,7 +185,8 @@ export default function UsersPage() {
 
   const openAddModal = () => {
     setEditingUser(null)
-    setFormData({ ...emptyForm, permissions: [] })
+    setFormData({ ...emptyForm })
+    setOverrides(null)
     setModalError(null)
     setShowModal(true)
   }
@@ -179,37 +201,69 @@ export default function UsersPage() {
       employeeId: user.employeeId ? String(user.employeeId) : '',
       password: '',
       isActive: user.isActive,
-      permissions: parsePermissions(user.permissions),
     })
     setModalError(null)
     setShowModal(true)
+    // الصلاحيات الدقيقة — لا تنطبق على مدير النظام
+    setOverrides(null)
+    if (user.role !== 'super_admin') {
+      setPermsLoading(true)
+      fetchUserPermissions(user.id)
+        .then((res) =>
+          setOverrides({
+            grants: res.grants,
+            revokes: res.revokes,
+            effective: res.effective,
+          })
+        )
+        .catch((err: any) => setModalError(err.message))
+        .finally(() => setPermsLoading(false))
+    }
   }
 
-  const togglePermission = (id: string, checked: boolean) => {
-    setFormData({
-      ...formData,
-      permissions: checked
-        ? [...formData.permissions, id]
-        : formData.permissions.filter((p) => p !== id),
-    })
+  const toggleGrant = (key: string, checked: boolean) => {
+    setOverrides((o) =>
+      o
+        ? {
+            ...o,
+            grants: checked ? [...o.grants, key] : o.grants.filter((p) => p !== key),
+          }
+        : o
+    )
+  }
+
+  const toggleRevoke = (key: string, checked: boolean) => {
+    setOverrides((o) =>
+      o
+        ? {
+            ...o,
+            revokes: checked ? [...o.revokes, key] : o.revokes.filter((p) => p !== key),
+          }
+        : o
+    )
   }
 
   const handleSave = async () => {
     setSaving(true)
     setModalError(null)
-    // مدير النظام يملك كل شيء — لا نخزّن له صلاحيات إضافية
-    const permissions =
-      formData.role === 'super_admin' ? [] : formData.permissions
     try {
       if (editingUser) {
         await updateUser(editingUser.id, {
           role: formData.role,
           isActive: formData.isActive,
-          permissions,
           ...(formData.branchId ? { branchId: Number(formData.branchId) } : {}),
           ...(formData.employeeId ? { employeeId: Number(formData.employeeId) } : {}),
         })
+        // حفظ تجاوزات الصلاحيات الدقيقة — السحب مقصور على حزمة الدور
+        if (formData.role !== 'super_admin' && overrides) {
+          await setUserPermissions(
+            editingUser.id,
+            overrides.grants.filter((g) => !roleBundle.includes(g)),
+            overrides.revokes.filter((r) => roleBundle.includes(r))
+          )
+        }
       } else {
+        // الإنشاء بسيط — التجاوزات تُضبط من التعديل بعد الإنشاء
         await createUser({
           email: formData.email,
           password: formData.password,
@@ -217,7 +271,6 @@ export default function UsersPage() {
           role: formData.role,
           branchId: formData.branchId ? Number(formData.branchId) : undefined,
           employeeId: formData.employeeId ? Number(formData.employeeId) : undefined,
-          permissions,
         })
       }
       await loadData()
@@ -336,8 +389,8 @@ export default function UsersPage() {
             >
               <option value="all">كل الأدوار</option>
               {roles.map((role) => (
-                <option key={role.id} value={role.id}>
-                  {role.name}
+                <option key={role.code} value={role.code}>
+                  {role.nameAr}
                 </option>
               ))}
             </select>
@@ -392,9 +445,9 @@ export default function UsersPage() {
                     <td className="px-4 py-4">
                       <div className="flex items-center gap-2">
                         <Shield size={16} className="text-primary-500" />
-                        <span className="text-gray-700">{roleLabels[user.role] ?? user.role}</span>
+                        <span className="text-gray-700">{roleNameOf(user.role)}</span>
                       </div>
-                      {/* شارات الصلاحيات الإضافية الممنوحة */}
+                      {/* شارات الصلاحيات الممنوحة فوق الدور */}
                       {parsePermissions(user.permissions).length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-1.5">
                           {parsePermissions(user.permissions).map((p) => (
@@ -402,7 +455,7 @@ export default function UsersPage() {
                               key={p}
                               className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full text-xs"
                             >
-                              {permissionLabels[p] ?? p}
+                              {permLabels[p] ?? p}
                             </span>
                           ))}
                         </div>
@@ -468,9 +521,9 @@ export default function UsersPage() {
 
         {/* Add / Edit Modal */}
         {showModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-            <div className="bg-white rounded-2xl w-full max-w-lg mx-4">
-              <div className="flex items-center justify-between p-6 border-b border-gray-100">
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between p-6 border-b border-gray-100 sticky top-0 bg-white z-10">
                 <h2 className="text-xl font-bold text-gray-800">
                   {editingUser ? 'تعديل المستخدم' : 'إضافة مستخدم جديد'}
                 </h2>
@@ -536,11 +589,13 @@ export default function UsersPage() {
                       }
                     >
                       <option value="">اختر الدور</option>
-                      {roles.map((role) => (
-                        <option key={role.id} value={role.id}>
-                          {role.name}
-                        </option>
-                      ))}
+                      {roles
+                        .filter((r) => r.isActive || r.code === formData.role)
+                        .map((role) => (
+                          <option key={role.code} value={role.code}>
+                            {role.nameAr}
+                          </option>
+                        ))}
                     </select>
                   </div>
                   <div>
@@ -584,39 +639,6 @@ export default function UsersPage() {
                   </select>
                 </div>
 
-                {/* صلاحيات إضافية — مخفية لمدير النظام لأنه يملك كل شيء */}
-                {formData.role === 'super_admin' ? (
-                  <div className="bg-gray-50 rounded-xl p-4 text-sm text-gray-500">
-                    مدير النظام يملك كل الصلاحيات تلقائياً — لا حاجة لصلاحيات إضافية
-                  </div>
-                ) : (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      صلاحيات إضافية
-                    </label>
-                    <div className="grid grid-cols-2 gap-1.5">
-                      {grantablePermissions.map((p) => (
-                        <label
-                          key={p.id}
-                          className="flex items-center gap-2 p-2 rounded-lg hover:bg-gray-50 cursor-pointer"
-                        >
-                          <input
-                            type="checkbox"
-                            className="w-4 h-4 rounded border-gray-300 text-primary-600"
-                            checked={formData.permissions.includes(p.id)}
-                            onChange={(e) => togglePermission(p.id, e.target.checked)}
-                          />
-                          <span className="text-sm text-gray-700">{p.label}</span>
-                        </label>
-                      ))}
-                    </div>
-                    <p className="text-xs text-gray-400 mt-1">
-                      تمنح المستخدم قدرات هذه الأدوار في دورات الاعتماد والمسارات المحمية
-                      فوق دوره الأساسي
-                    </p>
-                  </div>
-                )}
-
                 {!editingUser && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -632,6 +654,9 @@ export default function UsersPage() {
                       placeholder="8 أحرف على الأقل"
                       dir="ltr"
                     />
+                    <p className="text-xs text-gray-400 mt-1">
+                      الصلاحيات الدقيقة (منح/سحب) تُضبط من شاشة التعديل بعد الإنشاء
+                    </p>
                   </div>
                 )}
 
@@ -650,9 +675,112 @@ export default function UsersPage() {
                     <option value="inactive">غير نشط</option>
                   </select>
                 </div>
+
+                {/* ===== الصلاحيات الدقيقة — منح/سحب فوق حزمة الدور ===== */}
+                {editingUser &&
+                  (formData.role === 'super_admin' ? (
+                    <div className="bg-gray-50 rounded-xl p-4 text-sm text-gray-500">
+                      مدير النظام يملك كل الصلاحيات تلقائياً — لا تنطبق عليه
+                      التجاوزات الدقيقة
+                    </div>
+                  ) : permsLoading ? (
+                    <div className="flex items-center justify-center py-6">
+                      <div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                    </div>
+                  ) : overrides ? (
+                    <div className="space-y-4 border-t border-gray-100 pt-4">
+                      <div>
+                        <label className="block text-sm font-bold text-gray-800 mb-1">
+                          الصلاحيات الدقيقة
+                        </label>
+                        <p className="text-xs text-gray-400">
+                          منح صلاحيات فوق الدور أو سحب صلاحيات منه — الفرض الحقيقي
+                          في الباك إند
+                        </p>
+                      </div>
+
+                      {/* الصلاحيات الفعلية الحالية */}
+                      <div>
+                        <p className="text-sm font-medium text-gray-700 mb-2">
+                          الصلاحيات الفعلية الآن ({overrides.effective.length})
+                        </p>
+                        <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-3 bg-gray-50 rounded-xl">
+                          {overrides.effective.length === 0 && (
+                            <span className="text-xs text-gray-400">لا توجد صلاحيات</span>
+                          )}
+                          {overrides.effective.map((p) => (
+                            <span
+                              key={p}
+                              className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full text-xs"
+                            >
+                              {permLabels[p] ?? p}
+                            </span>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* منح إضافي */}
+                      <div className="p-4 bg-success-50/50 rounded-xl border border-success-100">
+                        <p className="text-sm font-medium text-success-800 mb-2 flex items-center gap-2">
+                          <PlusCircle size={16} />
+                          منح إضافي (GRANT) — صلاحيات ليست في حزمة الدور
+                        </p>
+                        <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto">
+                          {grantablePerms.length === 0 && (
+                            <span className="text-xs text-gray-400 col-span-2">
+                              الدور يشمل كل صلاحيات السجل
+                            </span>
+                          )}
+                          {grantablePerms.map((p) => (
+                            <label
+                              key={p.key}
+                              className="flex items-center gap-2 p-2 rounded-lg hover:bg-white cursor-pointer"
+                            >
+                              <input
+                                type="checkbox"
+                                className="w-4 h-4 rounded border-gray-300 text-success-600"
+                                checked={overrides.grants.includes(p.key)}
+                                onChange={(e) => toggleGrant(p.key, e.target.checked)}
+                              />
+                              <span className="text-sm text-gray-700">{p.labelAr}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* سحب من الدور */}
+                      <div className="p-4 bg-red-50/50 rounded-xl border border-red-100">
+                        <p className="text-sm font-medium text-red-800 mb-2 flex items-center gap-2">
+                          <MinusCircle size={16} />
+                          سحب من الدور (REVOKE) — من صلاحيات الحزمة الحالية فقط
+                        </p>
+                        <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto">
+                          {revocablePerms.length === 0 && (
+                            <span className="text-xs text-gray-400 col-span-2">
+                              حزمة الدور فارغة — لا شيء يُسحب
+                            </span>
+                          )}
+                          {revocablePerms.map((p) => (
+                            <label
+                              key={p.key}
+                              className="flex items-center gap-2 p-2 rounded-lg hover:bg-white cursor-pointer"
+                            >
+                              <input
+                                type="checkbox"
+                                className="w-4 h-4 rounded border-gray-300 text-red-600"
+                                checked={overrides.revokes.includes(p.key)}
+                                onChange={(e) => toggleRevoke(p.key, e.target.checked)}
+                              />
+                              <span className="text-sm text-gray-700">{p.labelAr}</span>
+                            </label>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : null)}
               </div>
 
-              <div className="flex items-center gap-3 p-6 border-t border-gray-100">
+              <div className="flex items-center gap-3 p-6 border-t border-gray-100 sticky bottom-0 bg-white">
                 <button onClick={() => setShowModal(false)} className="flex-1 btn-secondary">
                   إلغاء
                 </button>
