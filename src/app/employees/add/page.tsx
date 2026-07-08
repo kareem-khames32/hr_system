@@ -130,6 +130,9 @@ type EmployeeExtras = {
   housingAllowance?: number
   transportAllowance?: number
   otherAllowance?: number
+  contractType?: string
+  contractStart?: string
+  contractEnd?: string
 }
 
 const steps = [
@@ -195,6 +198,9 @@ export default function AddEmployeePage() {
     payMethod: 'transfer',
     bankName: '',
     iban: '',
+    contractType: '',
+    contractStart: '',
+    contractEnd: '',
   })
 
   const setField = (key: keyof typeof form, value: string) =>
@@ -280,6 +286,10 @@ export default function AddEmployeePage() {
         (Number(form.phoneAllowance) || 0) + (Number(form.workNatureAllowance) || 0)
       if (form.phoneAllowance !== '' || form.workNatureAllowance !== '')
         payload.otherAllowance = otherAllowance
+      // بيانات العقد — تُرسل فقط عند تعبئتها
+      if (form.contractType) payload.contractType = form.contractType
+      if (form.contractStart) payload.contractStart = form.contractStart
+      if (form.contractEnd) payload.contractEnd = form.contractEnd
 
       await createEmployee(payload)
       window.location.href = '/employees'
@@ -743,10 +753,11 @@ export default function AddEmployeePage() {
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="label">نوع العقد *</label>
-                  <select className="input">
+                  <select className="input" value={form.contractType} onChange={(e) => setField('contractType', e.target.value)}>
                     <option value="">اختر</option>
-                    <option value="unlimited">غير محدد المدة</option>
-                    <option value="limited">محدد المدة</option>
+                    <option value="permanent">دائم (غير محدد المدة)</option>
+                    <option value="fixed_term">محدد المدة</option>
+                    <option value="part_time">دوام جزئي</option>
                     <option value="seasonal">موسمي</option>
                   </select>
                 </div>
@@ -756,11 +767,12 @@ export default function AddEmployeePage() {
                 </div>
                 <div>
                   <label className="label">تاريخ بداية العقد *</label>
-                  <input type="date" className="input" />
+                  <input type="date" className="input" value={form.contractStart} onChange={(e) => setField('contractStart', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">تاريخ نهاية العقد</label>
-                  <input type="date" className="input" />
+                  <input type="date" className="input" value={form.contractEnd} onChange={(e) => setField('contractEnd', e.target.value)} />
+                  <p className="text-xs text-gray-400 mt-1">اتركه فارغاً لعقد غير محدد المدة</p>
                 </div>
               </div>
 

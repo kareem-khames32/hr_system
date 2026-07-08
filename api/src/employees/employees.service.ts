@@ -128,9 +128,20 @@ export class EmployeesService {
     }
   }
 
+  // نهاية العقد لا تسبق بدايته
+  private assertContractDates(dto: {
+    contractStart?: string
+    contractEnd?: string
+  }) {
+    if (dto.contractStart && dto.contractEnd && dto.contractEnd < dto.contractStart) {
+      throw new BadRequestException('نهاية العقد قبل بدايته')
+    }
+  }
+
   async create(dto: CreateEmployeeDto) {
     await this.assertUnique(dto)
     await this.assertRelations(dto)
+    this.assertContractDates(dto)
     const emp = await this.employees.save(
       this.employees.create(dto as Partial<Employee>)
     )
@@ -170,6 +181,10 @@ export class EmployeesService {
   async update(id: number, dto: UpdateEmployeeDto, branchScope: number | null) {
     const emp = await this.findOne(id, branchScope)
     await this.assertUnique({ ...dto, excludeId: id })
+    this.assertContractDates({
+      contractStart: dto.contractStart ?? emp.contractStart,
+      contractEnd: dto.contractEnd ?? emp.contractEnd,
+    })
     await this.assertRelations({
       branchId: dto.branchId ?? emp.branchId,
       departmentId: dto.departmentId,

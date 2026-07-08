@@ -35,6 +35,9 @@ type EmployeeExtras = {
   housingAllowance?: number
   transportAllowance?: number
   otherAllowance?: number
+  contractType?: string | null
+  contractStart?: string | null
+  contractEnd?: string | null
 }
 
 export default function EditEmployeePage() {
@@ -62,7 +65,9 @@ export default function EditEmployeePage() {
     position: '',
     managerId: '',
     joinDate: '',
-    contractType: 'permanent',
+    contractType: '',
+    contractStart: '',
+    contractEnd: '',
     workLocation: 'المقر الرئيسي',
 
     // Financial Info
@@ -76,6 +81,8 @@ export default function EditEmployeePage() {
 
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [managers, setManagers] = useState<ApiEmployee[]>([])
+  // نهاية العقد كما وردت من السيرفر — لمعرفة إن كان المستخدم مسحها (=> عقد غير محدد المدة)
+  const [initialContractEnd, setInitialContractEnd] = useState('')
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -111,6 +118,9 @@ export default function EditEmployeePage() {
           position: emp.jobTitle ?? '',
           managerId: emp.managerEmployeeId != null ? String(emp.managerEmployeeId) : '',
           joinDate: emp.joinDate ? emp.joinDate.slice(0, 10) : '',
+          contractType: emp.contractType ?? '',
+          contractStart: emp.contractStart ? String(emp.contractStart).slice(0, 10) : '',
+          contractEnd: emp.contractEnd ? String(emp.contractEnd).slice(0, 10) : '',
           bankName: emp.bankName ?? '',
           iban: emp.iban ?? '',
           basicSalary: emp.basicSalary != null ? String(Number(emp.basicSalary)) : '',
@@ -118,6 +128,7 @@ export default function EditEmployeePage() {
           transportAllowance: emp.transportAllowance != null ? String(Number(emp.transportAllowance)) : '',
           otherAllowance: emp.otherAllowance != null ? String(Number(emp.otherAllowance)) : '',
         }))
+        setInitialContractEnd(emp.contractEnd ? String(emp.contractEnd).slice(0, 10) : '')
       })
       .catch((err) =>
         setError(err instanceof Error ? err.message : 'تعذر تحميل بيانات الموظف')
@@ -153,6 +164,11 @@ export default function EditEmployeePage() {
       if (formData.departmentId) changes.departmentId = Number(formData.departmentId)
       if (formData.managerId) changes.managerEmployeeId = Number(formData.managerId)
       if (formData.joinDate) changes.joinDate = formData.joinDate
+      // بيانات العقد — ومسح نهاية العقد يعني تحويله لغير محدد المدة
+      if (formData.contractType) changes.contractType = formData.contractType
+      if (formData.contractStart) changes.contractStart = formData.contractStart
+      if (formData.contractEnd) changes.contractEnd = formData.contractEnd
+      else if (initialContractEnd) changes.contractEnd = null
       if (formData.bankName) changes.bankName = formData.bankName
       const iban = formData.iban.replace(/\s+/g, '').toUpperCase()
       if (iban) changes.iban = iban
@@ -420,10 +436,31 @@ export default function EditEmployeePage() {
                 value={formData.contractType}
                 onChange={(e) => handleChange('contractType', e.target.value)}
               >
+                <option value="">اختر</option>
                 <option value="permanent">دائم</option>
-                <option value="contract">عقد محدد المدة</option>
-                <option value="probation">فترة تجربة</option>
+                <option value="fixed_term">محدد المدة</option>
+                <option value="part_time">دوام جزئي</option>
+                <option value="seasonal">موسمي</option>
               </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">تاريخ بداية العقد</label>
+              <input
+                type="date"
+                className="input w-full"
+                value={formData.contractStart}
+                onChange={(e) => handleChange('contractStart', e.target.value)}
+              />
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">تاريخ نهاية العقد</label>
+              <input
+                type="date"
+                className="input w-full"
+                value={formData.contractEnd}
+                onChange={(e) => handleChange('contractEnd', e.target.value)}
+              />
+              <p className="text-xs text-gray-400 mt-1">اتركه فارغاً لعقد غير محدد المدة</p>
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">موقع العمل</label>

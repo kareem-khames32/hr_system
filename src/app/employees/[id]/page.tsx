@@ -54,6 +54,9 @@ type EmployeeExtras = {
   housingAllowance?: number
   transportAllowance?: number
   otherAllowance?: number
+  contractType?: string | null
+  contractStart?: string | null
+  contractEnd?: string | null
 }
 
 // نموذج العرض — يُملأ من الباك إند، والحقول غير المدعومة تظهر «—»
@@ -87,6 +90,8 @@ interface EmployeeVM {
   address: string
   contractType: string
   contractStart: string
+  contractEnd: string
+  contractDaysLeft: number | null
   employmentType: string
   basicSalary: number
   housingAllowance: number
@@ -207,6 +212,13 @@ const MARITAL_AR: Record<string, string> = {
   widowed: 'أرمل',
 }
 
+const CONTRACT_TYPE_AR: Record<string, string> = {
+  permanent: 'دائم',
+  fixed_term: 'محدد المدة',
+  part_time: 'دوام جزئي',
+  seasonal: 'موسمي',
+}
+
 const statusBadge = (status: string) => {
   switch (status) {
     case 'active':
@@ -227,6 +239,14 @@ const statusBadge = (status: string) => {
 }
 
 const fmtDate = (v?: string | null) => (v ? String(v).slice(0, 10) : '—')
+
+// عدد الأيام المتبقية حتى تاريخ معيّن (سالب = انتهى)
+const daysUntil = (date?: string | null) => {
+  if (!date) return null
+  const end = new Date(String(date).slice(0, 10))
+  const today = new Date(new Date().toISOString().slice(0, 10))
+  return Math.round((end.getTime() - today.getTime()) / 86400000)
+}
 
 const tenureText = (joinDate?: string | null) => {
   if (!joinDate) return '—'
@@ -649,8 +669,12 @@ export default function EmployeeProfilePage({
             : '—',
           children: '—',
           address: e.address || '—',
-          contractType: '—',
-          contractStart: fmtDate(e.joinDate),
+          contractType: e.contractType
+            ? CONTRACT_TYPE_AR[e.contractType] ?? e.contractType
+            : '—',
+          contractStart: fmtDate(e.contractStart),
+          contractEnd: fmtDate(e.contractEnd),
+          contractDaysLeft: daysUntil(e.contractEnd),
           employmentType: '—',
           basicSalary: Number(e.basicSalary ?? 0),
           housingAllowance: Number(e.housingAllowance ?? 0),
@@ -1138,6 +1162,22 @@ export default function EmployeeProfilePage({
                     <div className="flex items-center justify-between py-2 border-b border-gray-100">
                       <span className="text-gray-500">تاريخ بداية العقد</span>
                       <span className="font-medium text-gray-800">{employee.contractStart}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                      <span className="text-gray-500">تاريخ نهاية العقد</span>
+                      <span className="font-medium text-gray-800">{employee.contractEnd}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                      <span className="text-gray-500">المتبقي على انتهاء العقد</span>
+                      {employee.contractDaysLeft == null ? (
+                        <span className="font-medium text-gray-800">—</span>
+                      ) : employee.contractDaysLeft < 0 ? (
+                        <span className="badge badge-danger">منتهي</span>
+                      ) : employee.contractDaysLeft < 60 ? (
+                        <span className="badge badge-danger">{employee.contractDaysLeft} يوم</span>
+                      ) : (
+                        <span className="font-medium text-gray-800">{employee.contractDaysLeft} يوم</span>
+                      )}
                     </div>
                     <div className="flex items-center justify-between py-2">
                       <span className="text-gray-500">حالة الموظف</span>

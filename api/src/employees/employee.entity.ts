@@ -80,6 +80,16 @@ export class Employee {
   @Column({ type: 'date', nullable: true })
   joinDate: string
 
+  // ===== العقد =====
+  @Column({ length: 30, nullable: true })
+  contractType: string // permanent | fixed_term | part_time | seasonal
+
+  @Column({ type: 'date', nullable: true })
+  contractStart: string
+
+  @Column({ type: 'date', nullable: true })
+  contractEnd: string // NULL = غير محدد المدة
+
   @Column({ length: 20, default: 'active' })
   status: EmployeeStatus
 

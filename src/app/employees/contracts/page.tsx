@@ -18,31 +18,72 @@ import {
   X,
 } from 'lucide-react'
 import {
-  fetchDocuments,
   fetchEmployees,
   fetchDepartments,
-  updateDocument,
+  updateEmployee,
+  ApiEmployee,
 } from '@/lib/api'
 
-// العقود تُدار كمستندات (docType يحتوي «عقد») في سجل المستندات
+// حقول العقد على كيان الموظف (ليست بعد ضمن ApiEmployee)
+type ContractFields = {
+  contractType?: string | null
+  contractStart?: string | null
+  contractEnd?: string | null
+}
+
+const CONTRACT_TYPE_AR: Record<string, string> = {
+  permanent: 'دائم',
+  fixed_term: 'محدد المدة',
+  part_time: 'دوام جزئي',
+  seasonal: 'موسمي',
+}
+
 interface ContractRow {
-  id: number
   employeeId: number
   employeeName: string
+  employeeCode: string
   employeeAvatar: string
   department: string
   jobTitle: string
   contractType: string
   startDate: string
   endDate: string
-  status: 'active' | 'expiring' | 'expired'
-  notes: string
+  daysLeft: number | null
+  status: 'active' | 'expiring' | 'expired' | 'unlimited'
 }
 
 const statusConfig = {
   active: { name: 'ساري', color: 'bg-green-100 text-green-700', icon: CheckCircle },
   expiring: { name: 'ينتهي قريباً', color: 'bg-orange-100 text-orange-700', icon: AlertTriangle },
   expired: { name: 'منتهي', color: 'bg-red-100 text-red-700', icon: Clock },
+  unlimited: { name: 'غير محدد المدة', color: 'bg-blue-100 text-blue-700', icon: FileSignature },
+}
+
+// عدد الأيام المتبقية حتى تاريخ معيّن مقارنةً باليوم (سالب = انتهى)
+const daysUntil = (date?: string) => {
+  if (!date) return null
+  const end = new Date(date)
+  const today = new Date(new Date().toISOString().slice(0, 10))
+  return Math.round((end.getTime() - today.getTime()) / 86400000)
+}
+
+// مدة العقد بين البداية والنهاية بصيغة مقروءة
+const durationText = (start?: string, end?: string) => {
+  if (!end) return 'غير محددة'
+  if (!start) return '—'
+  const s = new Date(start)
+  const e = new Date(end)
+  let months = (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth())
+  if (e.getDate() < s.getDate()) months -= 1
+  if (months <= 0) {
+    const days = Math.max(0, Math.round((e.getTime() - s.getTime()) / 86400000))
+    return `${days} يوم`
+  }
+  const years = Math.floor(months / 12)
+  const rem = months % 12
+  if (years > 0 && rem > 0) return `${years} سنة و${rem} شهر`
+  if (years > 0) return `${years} سنة`
+  return `${months} شهر`
 }
 
 export default function ContractsPage() {
@@ -58,49 +99,46 @@ export default function ContractsPage() {
   const [renewForm, setRenewForm] = useState({
     startDate: '',
     endDate: '',
-    notes: '',
   })
 
   const loadData = async () => {
     setLoading(true)
     setError('')
     try {
-      const [docs, emps, depts] = await Promise.all([
-        fetchDocuments(),
-        fetchEmployees(),
-        fetchDepartments(),
-      ])
-      const empById = new Map(emps.map((e) => [e.id, e]))
+      const [emps, depts] = await Promise.all([fetchEmployees(), fetchDepartments()])
       const deptById = new Map(depts.map((d) => [d.id, d.name]))
-      const today = new Date().toISOString().slice(0, 10)
-      const soon = new Date(Date.now() + 30 * 86400000).toISOString().slice(0, 10)
       setContracts(
-        docs
-          .filter((d) => (d.docType ?? '').includes('عقد'))
-          .map((d) => {
-            const emp = empById.get(d.employeeId)
-            const name = d.employeeName ?? emp?.fullName ?? `#${d.employeeId}`
-            const end = d.expiryDate ? String(d.expiryDate).slice(0, 10) : ''
-            const expired = d.expired ?? (!!end && end < today)
+        (emps as (ApiEmployee & ContractFields)[])
+          .filter((e) => e.contractStart || e.contractEnd)
+          .map((e) => {
+            const start = e.contractStart ? String(e.contractStart).slice(0, 10) : ''
+            const end = e.contractEnd ? String(e.contractEnd).slice(0, 10) : ''
+            const daysLeft = end ? daysUntil(end) : null
+            const status: ContractRow['status'] = !end
+              ? 'unlimited'
+              : (daysLeft as number) < 0
+              ? 'expired'
+              : (daysLeft as number) <= 60
+              ? 'expiring'
+              : 'active'
+            const name = e.fullName ?? `#${e.id}`
             return {
-              id: d.id,
-              employeeId: d.employeeId,
+              employeeId: e.id,
               employeeName: name,
-              employeeAvatar: (name ?? '').trim().charAt(0) || 'م',
+              employeeCode: e.employeeCode,
+              employeeAvatar: name.trim().charAt(0) || 'م',
               department:
-                emp?.departmentId != null
-                  ? deptById.get(emp.departmentId) ?? '—'
+                e.departmentId != null
+                  ? deptById.get(e.departmentId) ?? '—'
                   : '—',
-              jobTitle: emp?.jobTitle ?? '—',
-              contractType: d.docType,
-              startDate: d.issueDate ? String(d.issueDate).slice(0, 10) : '',
+              jobTitle: e.jobTitle ?? '—',
+              contractType: e.contractType
+                ? CONTRACT_TYPE_AR[e.contractType] ?? e.contractType
+                : '—',
+              startDate: start,
               endDate: end,
-              status: expired
-                ? ('expired' as const)
-                : end && end <= soon
-                ? ('expiring' as const)
-                : ('active' as const),
-              notes: d.notes ?? '',
+              daysLeft,
+              status,
             }
           })
       )
@@ -121,6 +159,7 @@ export default function ContractsPage() {
   const filteredContracts = contracts.filter((contract) => {
     const matchesSearch =
       contract.employeeName.includes(searchTerm) ||
+      contract.employeeCode.includes(searchTerm) ||
       contract.contractType.includes(searchTerm)
     const matchesStatus = filterStatus === 'all' || contract.status === filterStatus
     const matchesType = filterType === 'all' || contract.contractType === filterType
@@ -129,17 +168,9 @@ export default function ContractsPage() {
 
   const stats = {
     total: contracts.length,
-    active: contracts.filter((c) => c.status === 'active').length,
+    active: contracts.filter((c) => c.status === 'active' || c.status === 'unlimited').length,
     expiring: contracts.filter((c) => c.status === 'expiring').length,
     expired: contracts.filter((c) => c.status === 'expired').length,
-  }
-
-  const getDaysUntilExpiry = (endDate?: string) => {
-    if (!endDate) return null
-    const end = new Date(endDate)
-    const today = new Date()
-    const diff = Math.ceil((end.getTime() - today.getTime()) / (1000 * 60 * 60 * 24))
-    return diff
   }
 
   const openRenewal = (contract: ContractRow) => {
@@ -147,21 +178,24 @@ export default function ContractsPage() {
     setRenewForm({
       startDate: contract.startDate,
       endDate: contract.endDate,
-      notes: contract.notes,
     })
     setShowRenewalModal(true)
   }
 
   const handleRenew = async () => {
     if (!selectedContract) return
+    if (!renewForm.endDate) {
+      setError('حدد تاريخ الانتهاء الجديد للعقد')
+      return
+    }
     setSaving(true)
     setError('')
     try {
-      await updateDocument(selectedContract.id, {
-        issueDate: renewForm.startDate || undefined,
-        expiryDate: renewForm.endDate || undefined,
-        notes: renewForm.notes || undefined,
-      })
+      const changes: Partial<ApiEmployee> & ContractFields = {
+        contractEnd: renewForm.endDate,
+      }
+      if (renewForm.startDate) changes.contractStart = renewForm.startDate
+      await updateEmployee(selectedContract.employeeId, changes)
       setShowRenewalModal(false)
       setSelectedContract(null)
       await loadData()
@@ -180,7 +214,7 @@ export default function ContractsPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-900">إدارة العقود</h1>
             <p className="text-gray-600 mt-1">
-              متابعة عقود الموظفين وتجديدها — تُدار عبر سجل المستندات
+              متابعة عقود الموظفين وتجديدها من واقع ملفات الموظفين
             </p>
           </div>
           <div className="flex gap-2">
@@ -189,7 +223,7 @@ export default function ContractsPage() {
               تصدير
             </button>
             <Link
-              href="/employees/documents"
+              href="/employees/add"
               className="btn-primary flex items-center gap-2"
             >
               <Plus size={18} />
@@ -261,7 +295,7 @@ export default function ContractsPage() {
               <div className="flex-1">
                 <p className="font-medium text-orange-800">تنبيه: عقود تنتهي قريباً</p>
                 <p className="text-sm text-orange-600">
-                  يوجد {stats.expiring} عقود تنتهي خلال الـ 30 يوم القادمة وتحتاج لمراجعة
+                  يوجد {stats.expiring} عقود تنتهي خلال الـ 60 يوم القادمة وتحتاج لمراجعة
                 </p>
               </div>
               <button
@@ -281,7 +315,7 @@ export default function ContractsPage() {
               <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
               <input
                 type="text"
-                placeholder="بحث بالاسم أو نوع العقد..."
+                placeholder="بحث بالاسم أو الرقم الوظيفي أو نوع العقد..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="input pr-10 w-full"
@@ -298,6 +332,7 @@ export default function ContractsPage() {
                 <option value="active">ساري</option>
                 <option value="expiring">ينتهي قريباً</option>
                 <option value="expired">منتهي</option>
+                <option value="unlimited">غير محدد المدة</option>
               </select>
               <select
                 value={filterType}
@@ -330,18 +365,18 @@ export default function ContractsPage() {
                 <th className="text-right py-3 px-4 font-medium text-gray-700">نوع العقد</th>
                 <th className="text-right py-3 px-4 font-medium text-gray-700">تاريخ البداية</th>
                 <th className="text-right py-3 px-4 font-medium text-gray-700">تاريخ الانتهاء</th>
+                <th className="text-right py-3 px-4 font-medium text-gray-700">المدة</th>
+                <th className="text-right py-3 px-4 font-medium text-gray-700">المتبقي (يوم)</th>
                 <th className="text-center py-3 px-4 font-medium text-gray-700">الحالة</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-700">ملاحظات</th>
                 <th className="text-center py-3 px-4 font-medium text-gray-700">الإجراءات</th>
               </tr>
             </thead>
             <tbody className="divide-y">
               {filteredContracts.map((contract) => {
                 const StatusIcon = statusConfig[contract.status].icon
-                const daysUntilExpiry = getDaysUntilExpiry(contract.endDate)
 
                 return (
-                  <tr key={contract.id} className="hover:bg-gray-50">
+                  <tr key={contract.employeeId} className="hover:bg-gray-50">
                     <td className="py-3 px-4">
                       <Link
                         href={`/employees/${contract.employeeId}`}
@@ -352,7 +387,7 @@ export default function ContractsPage() {
                         </div>
                         <div>
                           <p className="font-medium text-gray-900">{contract.employeeName}</p>
-                          <p className="text-sm text-gray-500">{contract.jobTitle}</p>
+                          <p className="text-sm text-gray-500 font-mono">{contract.employeeCode}</p>
                         </div>
                       </Link>
                     </td>
@@ -362,27 +397,23 @@ export default function ContractsPage() {
                       </span>
                     </td>
                     <td className="py-3 px-4 text-gray-600">
-                      {contract.startDate
-                        ? new Date(contract.startDate).toLocaleDateString('ar-SA')
-                        : '-'}
+                      {contract.startDate || '-'}
+                    </td>
+                    <td className="py-3 px-4 text-gray-600">
+                      {contract.endDate || <span className="text-gray-400">غير محدد المدة</span>}
+                    </td>
+                    <td className="py-3 px-4 text-gray-600">
+                      {durationText(contract.startDate, contract.endDate)}
                     </td>
                     <td className="py-3 px-4">
-                      {contract.endDate ? (
-                        <div>
-                          <p className="text-gray-600">
-                            {new Date(contract.endDate).toLocaleDateString('ar-SA')}
-                          </p>
-                          {daysUntilExpiry !== null && daysUntilExpiry > 0 && daysUntilExpiry <= 30 && (
-                            <p className="text-xs text-orange-600">
-                              متبقي {daysUntilExpiry} يوم
-                            </p>
-                          )}
-                          {daysUntilExpiry !== null && daysUntilExpiry <= 0 && (
-                            <p className="text-xs text-red-600">منتهي</p>
-                          )}
-                        </div>
-                      ) : (
+                      {contract.daysLeft == null ? (
                         <span className="text-gray-400">-</span>
+                      ) : contract.daysLeft < 0 ? (
+                        <span className="text-red-600 font-medium">منتهي</span>
+                      ) : contract.daysLeft <= 60 ? (
+                        <span className="text-orange-600 font-medium">{contract.daysLeft} يوم</span>
+                      ) : (
+                        <span className="text-gray-600">{contract.daysLeft} يوم</span>
                       )}
                     </td>
                     <td className="py-3 px-4 text-center">
@@ -390,15 +421,6 @@ export default function ContractsPage() {
                         <StatusIcon size={14} />
                         {statusConfig[contract.status].name}
                       </span>
-                    </td>
-                    <td className="py-3 px-4">
-                      {contract.notes ? (
-                        <p className="text-sm text-gray-600 max-w-[200px] truncate">
-                          {contract.notes}
-                        </p>
-                      ) : (
-                        <span className="text-gray-400 text-center block">-</span>
-                      )}
                     </td>
                     <td className="py-3 px-4">
                       <div className="flex items-center justify-center gap-2">
@@ -430,7 +452,7 @@ export default function ContractsPage() {
             <div className="text-center py-12">
               <FileSignature className="mx-auto text-gray-300 mb-4" size={48} />
               <p className="text-gray-500">
-                لا توجد بيانات عقود بعد — تُدار عبر المستندات (نوع مستند يحتوي «عقد»)
+                لا توجد عقود بعد — تُسجَّل بيانات العقد من شاشة إضافة أو تعديل الموظف
               </p>
             </div>
           )}
@@ -472,17 +494,13 @@ export default function ContractsPage() {
                   <div>
                     <label className="block text-sm text-gray-500 mb-1">تاريخ البداية الحالي</label>
                     <p className="font-medium text-gray-900">
-                      {selectedContract.startDate
-                        ? new Date(selectedContract.startDate).toLocaleDateString('ar-SA')
-                        : '-'}
+                      {selectedContract.startDate || '-'}
                     </p>
                   </div>
                   <div>
                     <label className="block text-sm text-gray-500 mb-1">تاريخ الانتهاء الحالي</label>
                     <p className="font-medium text-gray-900">
-                      {selectedContract.endDate
-                        ? new Date(selectedContract.endDate).toLocaleDateString('ar-SA')
-                        : '-'}
+                      {selectedContract.endDate || '-'}
                     </p>
                   </div>
                 </div>
@@ -518,21 +536,6 @@ export default function ContractsPage() {
                         }
                       />
                     </div>
-                  </div>
-
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      ملاحظات
-                    </label>
-                    <textarea
-                      className="input w-full"
-                      rows={3}
-                      placeholder="أي ملاحظات إضافية..."
-                      value={renewForm.notes}
-                      onChange={(e) =>
-                        setRenewForm({ ...renewForm, notes: e.target.value })
-                      }
-                    />
                   </div>
                 </div>
               </div>

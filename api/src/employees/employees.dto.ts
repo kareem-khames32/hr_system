@@ -109,6 +109,20 @@ export class CreateEmployeeDto {
   joinDate?: string
 
   @IsOptional()
+  @IsIn(['permanent', 'fixed_term', 'part_time', 'seasonal'], {
+    message: 'نوع العقد: permanent/fixed_term/part_time/seasonal',
+  })
+  contractType?: string
+
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'بداية العقد بصيغة YYYY-MM-DD' })
+  contractStart?: string
+
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'نهاية العقد بصيغة YYYY-MM-DD' })
+  contractEnd?: string
+
+  @IsOptional()
   @IsIn(['active', 'probation', 'notice_period', 'suspended', 'archived'], {
     message: 'حالة الموظف غير صالحة',
   })
@@ -247,6 +261,20 @@ export class UpdateEmployeeDto {
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ التعيين بصيغة YYYY-MM-DD' })
   joinDate?: string
+
+  @IsOptional()
+  @IsIn(['permanent', 'fixed_term', 'part_time', 'seasonal'], {
+    message: 'نوع العقد: permanent/fixed_term/part_time/seasonal',
+  })
+  contractType?: string
+
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'بداية العقد بصيغة YYYY-MM-DD' })
+  contractStart?: string
+
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'نهاية العقد بصيغة YYYY-MM-DD' })
+  contractEnd?: string
 
   @IsOptional()
   @IsIn(['active', 'probation', 'notice_period', 'suspended', 'archived'], {
