@@ -1,8 +1,21 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
-import { branches as branchOptions, getBranchName, getBranchById } from '@/data/branches'
+import {
+  fetchPayrollRuns,
+  fetchPayrollRun,
+  calculatePayroll,
+  approvePayroll,
+  payPayroll,
+  fetchPayMethodReport,
+  fetchBranches,
+  fetchEmployees,
+  type ApiPayrollRun,
+  type ApiPayrollItem,
+  type ApiBranch,
+  type ApiEmployee,
+} from '@/lib/api'
 import {
   Search,
   Filter,
@@ -17,332 +30,194 @@ import {
   FileText,
   Send,
   Lock,
-  ChevronLeft,
-  ChevronRight,
   Eye,
   Printer,
   Calculator,
-  Building2,
   TrendingUp,
   Banknote,
-  Plus,
-  Minus,
-  Edit3,
-  Gift,
-  X,
-  Trash2,
 } from 'lucide-react'
 import Link from 'next/link'
 
-interface PayrollRecord {
-  id: string
-  employeeId: string
-  employeeName: string
-  avatar: string
-  department: string
-  basicSalary: number
-  housingAllowance: number
-  transportAllowance: number
-  otherAllowances: number
-  totalEarnings: number
-  gosiDeduction: number
-  loanDeduction: number
-  absenceDeduction: number
-  otherDeductions: number
-  totalDeductions: number
-  netSalary: number
-  bankName: string
-  branchId: string
-  payMethod: 'transfer' | 'cash' | 'visa'
-  status: 'calculated' | 'approved' | 'paid'
+const payMethodLabels: Record<string, string> = {
+  transfer: 'تحويل بنكي',
+  cash: 'كاش',
+  visa: 'فيزا',
 }
 
-const payMethodLabels = { transfer: 'تحويل بنكي', cash: 'كاش', visa: 'فيزا' }
+// خريطة حالة المسير في الباك إند إلى تسميات الشاشة
+const statusLabels: Record<ApiPayrollRun['status'], string> = {
+  CALCULATED: 'محسوب',
+  APPROVED: 'معتمد',
+  PAID: 'مصروف',
+}
 
-const payrollRecords: PayrollRecord[] = [
-  {
-    id: '1',
-    employeeId: 'EMP001',
-    employeeName: 'أحمد محمد علي',
-    avatar: 'أ',
-    department: 'تقنية المعلومات',
-    basicSalary: 15000,
-    housingAllowance: 3750,
-    transportAllowance: 1500,
-    otherAllowances: 1000,
-    totalEarnings: 21250,
-    gosiDeduction: 1462.50,
-    loanDeduction: 0,
-    absenceDeduction: 0,
-    otherDeductions: 0,
-    totalDeductions: 1462.50,
-    netSalary: 19787.50,
-    bankName: 'الراجحي',
-    branchId: '1',
-    payMethod: 'transfer',
-    status: 'calculated',
-  },
-  {
-    id: '2',
-    employeeId: 'EMP002',
-    employeeName: 'سارة أحمد الخالدي',
-    avatar: 'س',
-    department: 'الموارد البشرية',
-    basicSalary: 12000,
-    housingAllowance: 3000,
-    transportAllowance: 1000,
-    otherAllowances: 500,
-    totalEarnings: 16500,
-    gosiDeduction: 1170,
-    loanDeduction: 1000,
-    absenceDeduction: 0,
-    otherDeductions: 0,
-    totalDeductions: 2170,
-    netSalary: 14330,
-    bankName: 'الأهلي',
-    branchId: '1',
-    payMethod: 'transfer',
-    status: 'calculated',
-  },
-  {
-    id: '3',
-    employeeId: 'EMP003',
-    employeeName: 'محمد خالد السعيد',
-    avatar: 'م',
-    department: 'المبيعات',
-    basicSalary: 10000,
-    housingAllowance: 2500,
-    transportAllowance: 1000,
-    otherAllowances: 2000,
-    totalEarnings: 15500,
-    gosiDeduction: 975,
-    loanDeduction: 0,
-    absenceDeduction: 500,
-    otherDeductions: 0,
-    totalDeductions: 1475,
-    netSalary: 14025,
-    bankName: 'الراجحي',
-    branchId: '2',
-    payMethod: 'cash',
-    status: 'calculated',
-  },
-  {
-    id: '4',
-    employeeId: 'EMP004',
-    employeeName: 'فاطمة علي الزهراني',
-    avatar: 'ف',
-    department: 'المحاسبة',
-    basicSalary: 8000,
-    housingAllowance: 2000,
-    transportAllowance: 800,
-    otherAllowances: 0,
-    totalEarnings: 10800,
-    gosiDeduction: 780,
-    loanDeduction: 0,
-    absenceDeduction: 0,
-    otherDeductions: 0,
-    totalDeductions: 780,
-    netSalary: 10020,
-    bankName: 'الإنماء',
-    branchId: '1',
-    payMethod: 'transfer',
-    status: 'calculated',
-  },
-  {
-    id: '5',
-    employeeId: 'EMP005',
-    employeeName: 'عمر سالم الحربي',
-    avatar: 'ع',
-    department: 'التسويق',
-    basicSalary: 14000,
-    housingAllowance: 3500,
-    transportAllowance: 1200,
-    otherAllowances: 800,
-    totalEarnings: 19500,
-    gosiDeduction: 1365,
-    loanDeduction: 2000,
-    absenceDeduction: 0,
-    otherDeductions: 0,
-    totalDeductions: 3365,
-    netSalary: 16135,
-    bankName: 'ساب',
-    branchId: '2',
-    payMethod: 'visa',
-    status: 'calculated',
-  },
-  {
-    id: '6',
-    employeeId: 'EMP006',
-    employeeName: 'نورة محمد العتيبي',
-    avatar: 'ن',
-    department: 'خدمة العملاء',
-    basicSalary: 9000,
-    housingAllowance: 2250,
-    transportAllowance: 900,
-    otherAllowances: 350,
-    totalEarnings: 12500,
-    gosiDeduction: 877.50,
-    loanDeduction: 0,
-    absenceDeduction: 300,
-    otherDeductions: 0,
-    totalDeductions: 1177.50,
-    netSalary: 11322.50,
-    bankName: 'الراجحي',
-    branchId: '3',
-    payMethod: 'cash',
-    status: 'calculated',
-  },
-]
+// مراحل دورة المسير الفعلية: الحساب ← الاعتماد ← الصرف
+const runStages = ['الحساب', 'الاعتماد', 'الصرف']
+const stageOfStatus: Record<ApiPayrollRun['status'], number> = {
+  CALCULATED: 1,
+  APPROVED: 2,
+  PAID: 3,
+}
 
-const payrollCycles = [
-  { id: '1', month: 'يناير 2026', status: 'current', total: 248, processed: 248 },
-  { id: '2', month: 'ديسمبر 2025', status: 'paid', total: 245, processed: 245 },
-  { id: '3', month: 'نوفمبر 2025', status: 'paid', total: 242, processed: 242 },
-]
+// القيم العشرية قد تصل نصوصاً من قاعدة البيانات
+const n = (v: unknown): number => Number(v ?? 0) || 0
+const fmtDate = (s?: string) => (s ? s.slice(0, 10) : '')
 
 export default function PayrollPage() {
-  const [selectedCycle, setSelectedCycle] = useState('يناير 2026')
+  const [runs, setRuns] = useState<ApiPayrollRun[]>([])
+  const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  const [runDetail, setRunDetail] = useState<ApiPayrollRun | null>(null)
+  const [payMethods, setPayMethods] = useState<Record<string, { count: number; total: number }> | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [actionBusy, setActionBusy] = useState(false)
+  const [error, setError] = useState('')
+
   const [searchQuery, setSearchQuery] = useState('')
-  const [selectedDepartment, setSelectedDepartment] = useState('all')
   const [periodType, setPeriodType] = useState<'monthly' | 'custom'>('monthly')
   const [customPeriod, setCustomPeriod] = useState({ from: '2026-01-01', to: '2026-01-31' })
-  // مسير مستقل لكل فرع
-  const [selectedBranch, setSelectedBranch] = useState('1')
-  // دورة الرواتب: تبدأ يوم X وتنتهي يوم X-1 من الشهر التالي (مثال: 23 → 22)
-  const [cycleStartDay, setCycleStartDay] = useState(23)
-  // سلسلة اعتماد المسير الفعلية حتى الرئيس التنفيذي ثم الصرف
-  const runStages = [
-    'جمع البيانات',
-    'الحساب',
-    'مراجعة HR',
-    'اعتماد مدير HR',
-    'اعتماد المدير المالي',
-    'اعتماد الرئيس التنفيذي',
-    'الصرف',
-  ]
-  const [runStage, setRunStage] = useState(2)
-  const [approvalsLog, setApprovalsLog] = useState<string[]>([
-    'جمع البيانات ✓ — تلقائي من الحضور والإجازات والعهد',
-    'الحساب ✓ — بواسطة النظام (معادلات الرواتب)',
-  ])
-  const advanceStage = () => {
-    if (runStage >= runStages.length - 1) return
-    const next = runStage + 1
-    setApprovalsLog((prev) => [...prev, `${runStages[next]} ✓ — ${['','','','مدير الموارد البشرية','المدير المالي','الرئيس التنفيذي','أمين الصندوق / البنك'][next] || 'النظام'}`])
-    setRunStage(next)
+  // مسير مستقل لكل فرع + فترة الاحتساب (YYYY-MM)
+  const [calcBranchId, setCalcBranchId] = useState<number | null>(null)
+  const [calcPeriod, setCalcPeriod] = useState(() => new Date().toISOString().slice(0, 7))
+
+  const loadDetail = async (id: number) => {
+    setDetailLoading(true)
+    try {
+      const detail = await fetchPayrollRun(id)
+      setRunDetail(detail)
+      try {
+        setPayMethods(await fetchPayMethodReport(id))
+      } catch {
+        setPayMethods(null)
+      }
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر تحميل تفاصيل المسير')
+    } finally {
+      setDetailLoading(false)
+    }
   }
-  // حالة الصرف لكل موظف (بعد اعتماد الرئيس التنفيذي)
-  const [disbursedIds, setDisbursedIds] = useState<string[]>([])
-  const toggleDisbursed = (id: string) =>
-    setDisbursedIds((prev) =>
-      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+
+  useEffect(() => {
+    let cancelled = false
+    Promise.all([fetchPayrollRuns(), fetchBranches(), fetchEmployees()])
+      .then(([runsData, branchesData, employeesData]) => {
+        if (cancelled) return
+        setRuns(runsData)
+        setBranches(branchesData)
+        setEmployees(employeesData)
+        if (branchesData.length > 0) setCalcBranchId(branchesData[0].id)
+        if (runsData.length > 0) loadDetail(runsData[0].id)
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'تعذر تحميل مسيرات الرواتب')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  const refreshRuns = async (selectId?: number) => {
+    const runsData = await fetchPayrollRuns()
+    setRuns(runsData)
+    const id = selectId ?? runDetail?.id
+    if (id != null && runsData.some((r) => r.id === id)) await loadDetail(id)
+  }
+
+  const handleCalculate = async () => {
+    if (calcBranchId == null || !calcPeriod) return
+    setActionBusy(true)
+    setError('')
+    try {
+      const run = await calculatePayroll(calcBranchId, calcPeriod)
+      await refreshRuns(run.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر احتساب المسير')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  const handleApprove = async () => {
+    if (!runDetail) return
+    setActionBusy(true)
+    setError('')
+    try {
+      await approvePayroll(runDetail.id)
+      await refreshRuns(runDetail.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر اعتماد المسير')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  const handlePay = async () => {
+    if (!runDetail) return
+    setActionBusy(true)
+    setError('')
+    try {
+      await payPayroll(runDetail.id)
+      await refreshRuns(runDetail.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر صرف المسير')
+    } finally {
+      setActionBusy(false)
+    }
+  }
+
+  const branchName = (id?: number | null) =>
+    branches.find((b) => b.id === id)?.name ?? (id != null ? `فرع #${id}` : '')
+  const employeeOf = (id: number) => employees.find((e) => e.id === id)
+
+  const runStage = runDetail ? stageOfStatus[runDetail.status] : 0
+  const items: ApiPayrollItem[] = runDetail?.items ?? []
+
+  const filteredItems = items.filter((item) => {
+    if (!searchQuery) return true
+    const emp = employeeOf(item.employeeId)
+    return (
+      (emp?.fullName ?? '').includes(searchQuery) ||
+      (emp?.employeeCode ?? '').includes(searchQuery)
     )
-  const [showAdjustmentModal, setShowAdjustmentModal] = useState(false)
-  const [selectedEmployee, setSelectedEmployee] = useState<PayrollRecord | null>(null)
-  const [adjustmentType, setAdjustmentType] = useState<'bonus' | 'deduction'>('bonus')
-  const [adjustmentAmount, setAdjustmentAmount] = useState('')
-  const [adjustmentReason, setAdjustmentReason] = useState('')
-  const [employeeAdjustments, setEmployeeAdjustments] = useState<Record<string, { bonuses: {amount: number, reason: string}[], removedDeductions: string[] }>>({})
+  })
 
-  const openAdjustmentModal = (employee: PayrollRecord, type: 'bonus' | 'deduction') => {
-    setSelectedEmployee(employee)
-    setAdjustmentType(type)
-    setAdjustmentAmount('')
-    setAdjustmentReason('')
-    setShowAdjustmentModal(true)
-  }
-
-  const addAdjustment = () => {
-    if (!selectedEmployee || !adjustmentAmount) return
-
-    const amount = parseFloat(adjustmentAmount)
-    if (isNaN(amount)) return
-
-    setEmployeeAdjustments(prev => {
-      const empAdj = prev[selectedEmployee.id] || { bonuses: [], removedDeductions: [] }
+  // إجماليات المسير من البنود الفعلية
+  const totals = filteredItems.reduce(
+    (acc, item) => {
+      const gross = n(item.basicSalary) + n(item.overtimeAmount)
+      const deductions =
+        n(item.latenessDeduction) + n(item.unpaidLeaveDeduction) + n(item.loanInstallments)
       return {
-        ...prev,
-        [selectedEmployee.id]: {
-          ...empAdj,
-          bonuses: [...empAdj.bonuses, { amount, reason: adjustmentReason || 'مكافأة' }]
-        }
+        totalEarnings: acc.totalEarnings + gross,
+        totalDeductions: acc.totalDeductions + deductions,
+        netSalary: acc.netSalary + n(item.netPay),
       }
-    })
-    setShowAdjustmentModal(false)
-  }
-
-  const removeDeduction = (employeeId: string, deductionType: string) => {
-    setEmployeeAdjustments(prev => {
-      const empAdj = prev[employeeId] || { bonuses: [], removedDeductions: [] }
-      return {
-        ...prev,
-        [employeeId]: {
-          ...empAdj,
-          removedDeductions: [...empAdj.removedDeductions, deductionType]
-        }
-      }
-    })
-  }
-
-  const getAdjustedRecord = (record: PayrollRecord) => {
-    const adj = employeeAdjustments[record.id]
-    if (!adj) return record
-
-    let adjustedRecord = { ...record }
-
-    // Add bonuses
-    const totalBonuses = adj.bonuses.reduce((sum, b) => sum + b.amount, 0)
-    adjustedRecord.otherAllowances += totalBonuses
-    adjustedRecord.totalEarnings += totalBonuses
-
-    // Remove deductions
-    if (adj.removedDeductions.includes('loan')) {
-      adjustedRecord.totalDeductions -= adjustedRecord.loanDeduction
-      adjustedRecord.loanDeduction = 0
-    }
-    if (adj.removedDeductions.includes('absence')) {
-      adjustedRecord.totalDeductions -= adjustedRecord.absenceDeduction
-      adjustedRecord.absenceDeduction = 0
-    }
-
-    adjustedRecord.netSalary = adjustedRecord.totalEarnings - adjustedRecord.totalDeductions
-    return adjustedRecord
-  }
-
-  // Calculate totals
-  const totals = payrollRecords.reduce(
-    (acc, record) => ({
-      totalEarnings: acc.totalEarnings + record.totalEarnings,
-      totalDeductions: acc.totalDeductions + record.totalDeductions,
-      netSalary: acc.netSalary + record.netSalary,
-    }),
+    },
     { totalEarnings: 0, totalDeductions: 0, netSalary: 0 }
   )
 
-  const filteredRecords = payrollRecords
-    .map(record => getAdjustedRecord(record))
-    .filter((record) => {
-      if (searchQuery && !record.employeeName.includes(searchQuery) && !record.employeeId.includes(searchQuery)) {
-        return false
-      }
-      if (selectedDepartment !== 'all' && record.department !== selectedDepartment) {
-        return false
-      }
-      if (record.branchId !== selectedBranch) {
-        return false
-      }
-      return true
-    })
+  // سجل الاعتمادات الفعلي من طوابع المسير الزمنية
+  const approvalsLog = runDetail
+    ? [
+        `الحساب ✓ — بواسطة النظام في ${fmtDate(runDetail.createdAt)}`,
+        ...(runDetail.approvedAt ? [`الاعتماد ✓ — في ${fmtDate(runDetail.approvedAt)}`] : []),
+        ...(runDetail.paidAt ? [`الصرف ✓ — في ${fmtDate(runDetail.paidAt)}`] : []),
+      ]
+    : []
 
-  // Recalculate totals with adjustments
-  const adjustedTotals = filteredRecords.reduce(
-    (acc, record) => ({
-      totalEarnings: acc.totalEarnings + record.totalEarnings,
-      totalDeductions: acc.totalDeductions + record.totalDeductions,
-      netSalary: acc.netSalary + record.netSalary,
-    }),
-    { totalEarnings: 0, totalDeductions: 0, netSalary: 0 }
-  )
+  if (loading) {
+    return (
+      <MainLayout>
+        <div className="flex items-center justify-center py-24">
+          <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      </MainLayout>
+    )
+  }
 
   return (
     <MainLayout>
@@ -362,12 +237,19 @@ export default function PayrollPage() {
               <Download size={18} />
               تصدير Excel
             </button>
-            <button className="btn-primary flex items-center gap-2">
+            <button
+              onClick={handleCalculate}
+              disabled={actionBusy || calcBranchId == null}
+              className="btn-primary flex items-center gap-2 disabled:opacity-50"
+            >
               <Calculator size={18} />
-              معالجة الرواتب
+              احتساب المسير
             </button>
           </div>
         </div>
+
+        {/* Error Banner */}
+        {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
 
         {/* Payroll Period Selector */}
         <div className="card">
@@ -423,48 +305,58 @@ export default function PayrollPage() {
             {periodType === 'monthly' ? (
               <div className="flex items-center gap-4 flex-wrap">
                 <select
-                  value={selectedCycle}
-                  onChange={(e) => setSelectedCycle(e.target.value)}
-                  className="input w-48"
+                  value={runDetail?.id ?? ''}
+                  onChange={(e) => {
+                    const id = Number(e.target.value)
+                    if (id) loadDetail(id)
+                  }}
+                  className="input w-72"
                 >
-                  {payrollCycles.map((cycle) => (
-                    <option key={cycle.id} value={cycle.month}>
-                      {cycle.month} {cycle.status === 'paid' ? '(مصروف)' : cycle.status === 'current' ? '(جاري)' : ''}
+                  {runs.length === 0 && <option value="">لا توجد مسيرات بعد</option>}
+                  {runs.map((run) => (
+                    <option key={run.id} value={run.id}>
+                      {run.period} — {branchName(run.branchId)} ({statusLabels[run.status]})
                     </option>
                   ))}
                 </select>
-                {/* إعداد دورة الرواتب المخصّصة */}
-                <div className="flex items-center gap-2 p-2 px-4 bg-indigo-50 rounded-xl border border-indigo-100">
-                  <span className="text-sm text-gray-700">دورة الشركة: من يوم</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={28}
-                    value={cycleStartDay}
-                    onChange={(e) => setCycleStartDay(Number(e.target.value) || 1)}
-                    className="input w-16 text-center py-1"
-                  />
-                  <span className="text-sm text-gray-700">
-                    إلى يوم {cycleStartDay - 1 || 28} من الشهر التالي
-                  </span>
-                  <span className="text-xs text-indigo-600 font-medium mr-2">
-                    الفترة الحالية: {cycleStartDay} يونيو ← {cycleStartDay - 1 || 28} يوليو 2026
-                  </span>
-                </div>
-                {/* مسير مستقل لكل فرع */}
+                {/* فترة المسير الفعلية من الباك إند */}
+                {runDetail && (
+                  <div className="flex items-center gap-2 p-2 px-4 bg-indigo-50 rounded-xl border border-indigo-100">
+                    <span className="text-sm text-gray-700">فترة المسير:</span>
+                    <span className="text-xs text-indigo-600 font-medium" dir="ltr">
+                      {fmtDate(runDetail.startDate)} ← {fmtDate(runDetail.endDate)}
+                    </span>
+                  </div>
+                )}
+                {/* مسير مستقل لكل فرع — احتساب مسير جديد */}
                 <div className="flex items-center gap-2 p-2 px-4 bg-primary-50 rounded-xl border border-primary-100">
                   <span className="text-sm font-medium text-gray-700">مسير فرع:</span>
                   <select
-                    value={selectedBranch}
-                    onChange={(e) => setSelectedBranch(e.target.value)}
+                    value={calcBranchId ?? ''}
+                    onChange={(e) => setCalcBranchId(Number(e.target.value))}
                     className="input w-56 py-1"
                   >
-                    {branchOptions.map((b) => (
+                    {branches.map((b) => (
                       <option key={b.id} value={b.id}>
                         {b.name}
                       </option>
                     ))}
                   </select>
+                  <input
+                    type="month"
+                    value={calcPeriod}
+                    onChange={(e) => setCalcPeriod(e.target.value)}
+                    className="input w-40 py-1"
+                    dir="ltr"
+                  />
+                  <button
+                    onClick={handleCalculate}
+                    disabled={actionBusy || calcBranchId == null}
+                    className="btn-primary flex items-center gap-2 text-sm py-1.5 disabled:opacity-50"
+                  >
+                    <Calculator size={16} />
+                    احتساب
+                  </button>
                   <span className="text-xs text-primary-600">كل فرع بمسيره واعتماداته المستقلة</span>
                 </div>
               </div>
@@ -488,13 +380,9 @@ export default function PayrollPage() {
                     className="input w-44"
                   />
                 </div>
-                <button className="btn-primary flex items-center gap-2">
-                  <Calculator size={18} />
-                  حساب الفترة
-                </button>
                 <div className="mr-auto flex items-center gap-2 text-sm text-blue-700">
                   <AlertCircle size={16} />
-                  <span>سيتم حساب الرواتب للفترة المحددة فقط</span>
+                  <span>الاحتساب بفترة مخصصة غير متاح حالياً — الاحتساب شهري حسب دورة الشركة</span>
                 </div>
               </div>
             )}
@@ -507,7 +395,7 @@ export default function PayrollPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-primary-100 text-sm">إجمالي الاستحقاقات</p>
-                <p className="text-3xl font-bold mt-1">{adjustedTotals.totalEarnings.toLocaleString()}</p>
+                <p className="text-3xl font-bold mt-1">{totals.totalEarnings.toLocaleString()}</p>
                 <p className="text-primary-200 text-sm mt-1">ريال سعودي</p>
               </div>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
@@ -520,7 +408,7 @@ export default function PayrollPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-danger-100 text-sm">إجمالي الخصومات</p>
-                <p className="text-3xl font-bold mt-1">{adjustedTotals.totalDeductions.toLocaleString()}</p>
+                <p className="text-3xl font-bold mt-1">{totals.totalDeductions.toLocaleString()}</p>
                 <p className="text-danger-200 text-sm mt-1">ريال سعودي</p>
               </div>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
@@ -533,7 +421,7 @@ export default function PayrollPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-success-100 text-sm">صافي الرواتب</p>
-                <p className="text-3xl font-bold mt-1">{adjustedTotals.netSalary.toLocaleString()}</p>
+                <p className="text-3xl font-bold mt-1">{totals.netSalary.toLocaleString()}</p>
                 <p className="text-success-200 text-sm mt-1">ريال سعودي</p>
               </div>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
@@ -546,7 +434,7 @@ export default function PayrollPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-gray-500 text-sm">عدد الموظفين</p>
-                <p className="text-3xl font-bold text-gray-800 mt-1">{filteredRecords.length}</p>
+                <p className="text-3xl font-bold text-gray-800 mt-1">{filteredItems.length}</p>
                 <p className="text-gray-400 text-sm mt-1">موظف</p>
               </div>
               <div className="w-14 h-14 bg-gray-100 rounded-2xl flex items-center justify-center">
@@ -556,103 +444,110 @@ export default function PayrollPage() {
           </div>
         </div>
 
-        {/* Workflow Steps — سلسلة اعتماد فعلية حتى الرئيس التنفيذي */}
-        <div className="card">
-          <div className="flex items-center justify-between mb-4">
-            <h3 className="font-bold text-gray-800">
-              دورة اعتماد مسير {getBranchName(selectedBranch)}
-            </h3>
-            {runStage < runStages.length - 1 ? (
-              <button onClick={advanceStage} className="btn-primary flex items-center gap-2 text-sm">
-                <CheckCircle size={16} />
-                {runStage < 2 ? 'التالي' : `اعتماد: ${runStages[runStage + 1]}`}
-              </button>
-            ) : (
-              <span className="badge badge-success">المسير مصروف ومقفل ✓</span>
-            )}
-          </div>
-          <div className="flex items-center justify-between">
-            <div className="flex items-center gap-2 flex-1">
-              {runStages.map((stage, i) => (
-                <div key={stage} className="flex items-center flex-1 last:flex-none">
-                  <div className="flex flex-col items-center">
-                    <div
-                      className={`w-11 h-11 rounded-2xl flex items-center justify-center text-white ${
-                        i < runStage
-                          ? 'bg-success-500'
-                          : i === runStage
-                          ? 'bg-warning-500'
-                          : 'bg-gray-200'
-                      }`}
-                    >
-                      {i < runStage ? <CheckCircle size={22} /> : i === runStage ? <Clock size={22} /> : <Lock size={22} className="text-gray-400" />}
+        {/* Workflow Steps — دورة المسير: الحساب ← الاعتماد ← الصرف */}
+        {runDetail && (
+          <div className="card">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-gray-800">
+                دورة اعتماد مسير {branchName(runDetail.branchId)} — {runDetail.period}
+              </h3>
+              {runDetail.status === 'CALCULATED' ? (
+                <button
+                  onClick={handleApprove}
+                  disabled={actionBusy}
+                  className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50"
+                >
+                  <CheckCircle size={16} />
+                  اعتماد المسير
+                </button>
+              ) : runDetail.status === 'APPROVED' ? (
+                <button
+                  onClick={handlePay}
+                  disabled={actionBusy}
+                  className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50"
+                >
+                  <CheckCircle size={16} />
+                  صرف المسير
+                </button>
+              ) : (
+                <span className="badge badge-success">المسير مصروف ومقفل ✓</span>
+              )}
+            </div>
+            <div className="flex items-center justify-between">
+              <div className="flex items-center gap-2 flex-1">
+                {runStages.map((stage, i) => (
+                  <div key={stage} className="flex items-center flex-1 last:flex-none">
+                    <div className="flex flex-col items-center">
+                      <div
+                        className={`w-11 h-11 rounded-2xl flex items-center justify-center text-white ${
+                          i < runStage
+                            ? 'bg-success-500'
+                            : i === runStage
+                            ? 'bg-warning-500'
+                            : 'bg-gray-200'
+                        }`}
+                      >
+                        {i < runStage ? <CheckCircle size={22} /> : i === runStage ? <Clock size={22} /> : <Lock size={22} className="text-gray-400" />}
+                      </div>
+                      <span
+                        className={`text-xs font-medium mt-2 whitespace-nowrap ${
+                          i < runStage ? 'text-success-600' : i === runStage ? 'text-warning-600' : 'text-gray-400'
+                        }`}
+                      >
+                        {i + 1}. {stage}
+                      </span>
                     </div>
-                    <span
-                      className={`text-xs font-medium mt-2 whitespace-nowrap ${
-                        i < runStage ? 'text-success-600' : i === runStage ? 'text-warning-600' : 'text-gray-400'
-                      }`}
-                    >
-                      {i + 1}. {stage}
-                    </span>
+                    {i < runStages.length - 1 && (
+                      <div className={`flex-1 h-1 rounded mx-2 ${i < runStage ? 'bg-success-500' : 'bg-gray-200'}`} />
+                    )}
                   </div>
-                  {i < runStages.length - 1 && (
-                    <div className={`flex-1 h-1 rounded mx-2 ${i < runStage ? 'bg-success-500' : 'bg-gray-200'}`} />
-                  )}
-                </div>
-              ))}
+                ))}
+              </div>
+            </div>
+            {/* سجل الاعتمادات */}
+            <div className="mt-4 pt-4 border-t border-gray-100">
+              <p className="text-xs text-gray-400 mb-2">سجل الاعتمادات:</p>
+              <div className="flex flex-wrap gap-2">
+                {approvalsLog.map((log, i) => (
+                  <span key={i} className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded-lg border border-gray-100">
+                    {log}
+                  </span>
+                ))}
+              </div>
             </div>
           </div>
-          {/* سجل الاعتمادات */}
-          <div className="mt-4 pt-4 border-t border-gray-100">
-            <p className="text-xs text-gray-400 mb-2">سجل الاعتمادات:</p>
-            <div className="flex flex-wrap gap-2">
-              {approvalsLog.map((log, i) => (
-                <span key={i} className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded-lg border border-gray-100">
-                  {log}
-                </span>
-              ))}
-            </div>
-          </div>
-        </div>
+        )}
 
-        {/* مراكز التكلفة — بعد اعتماد الرئيس التنفيذي */}
-        {runStage >= 5 && (
+        {/* ملخص طرق الصرف — من تقرير الباك إند */}
+        {runDetail && payMethods && Object.keys(payMethods).length > 0 && (
           <div className="card border-2 border-teal-200">
             <div className="flex items-center justify-between mb-4">
               <div>
-                <h3 className="font-bold text-gray-800">التحميل على مراكز التكلفة</h3>
+                <h3 className="font-bold text-gray-800">ملخص طرق الصرف</h3>
                 <p className="text-sm text-gray-500 mt-1">
-                  بعد قفل المسير تُحمَّل التكلفة على مركز تكلفة الفرع وتُوزَّع على الأقسام
+                  توزيع صافي المسير على طرق الصرف (تحويل / كاش / فيزا)
                 </p>
               </div>
-              <button className="btn-primary text-sm">اعتماد التحميل</button>
             </div>
             <div className="grid grid-cols-4 gap-4">
               <div className="p-4 bg-teal-50 rounded-xl border border-teal-100">
                 <p className="text-xs text-teal-600">مركز تكلفة الفرع</p>
                 <p className="text-lg font-bold text-teal-800 font-mono" dir="ltr">
-                  {getBranchById(selectedBranch)?.costCenter}
+                  {branches.find((b) => b.id === runDetail.branchId)?.costCenter ?? '—'}
                 </p>
                 <p className="text-sm text-teal-700 mt-1">
-                  {adjustedTotals.netSalary.toLocaleString()} ر.س إجمالي
+                  {n(runDetail.totalNet).toLocaleString()} ر.س إجمالي
                 </p>
               </div>
-              {Array.from(new Set(filteredRecords.map((r) => r.department))).map((dept) => {
-                const deptTotal = filteredRecords
-                  .filter((r) => r.department === dept)
-                  .reduce((s, r) => s + r.netSalary, 0)
-                return (
-                  <div key={dept} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
-                    <p className="text-xs text-gray-500">قسم: {dept}</p>
-                    <p className="text-lg font-bold text-gray-800">
-                      {deptTotal.toLocaleString()} ر.س
-                    </p>
-                    <p className="text-xs text-gray-400 mt-1">
-                      {Math.round((deptTotal / (adjustedTotals.netSalary || 1)) * 100)}% من مسير الفرع
-                    </p>
-                  </div>
-                )
-              })}
+              {Object.entries(payMethods).map(([method, data]) => (
+                <div key={method} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
+                  <p className="text-xs text-gray-500">{payMethodLabels[method] ?? method}</p>
+                  <p className="text-lg font-bold text-gray-800">
+                    {n(data.total).toLocaleString()} ر.س
+                  </p>
+                  <p className="text-xs text-gray-400 mt-1">{n(data.count)} موظف</p>
+                </div>
+              ))}
             </div>
           </div>
         )}
@@ -673,20 +568,6 @@ export default function PayrollPage() {
               </div>
             </div>
 
-            <select
-              value={selectedDepartment}
-              onChange={(e) => setSelectedDepartment(e.target.value)}
-              className="input w-48"
-            >
-              <option value="all">كل الأقسام</option>
-              <option value="تقنية المعلومات">تقنية المعلومات</option>
-              <option value="الموارد البشرية">الموارد البشرية</option>
-              <option value="المبيعات">المبيعات</option>
-              <option value="المحاسبة">المحاسبة</option>
-              <option value="التسويق">التسويق</option>
-              <option value="خدمة العملاء">خدمة العملاء</option>
-            </select>
-
             <button className="btn-secondary flex items-center gap-2">
               <Filter size={18} />
               فلاتر متقدمة
@@ -696,158 +577,131 @@ export default function PayrollPage() {
 
         {/* Payroll Table */}
         <div className="card overflow-hidden p-0">
+          {detailLoading ? (
+            <div className="flex items-center justify-center py-16">
+              <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+            </div>
+          ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
               <thead>
                 <tr className="table-header">
                   <th className="text-right px-4 py-4">الموظف</th>
                   <th className="text-center px-4 py-4">الأساسي</th>
-                  <th className="text-center px-4 py-4">السكن</th>
-                  <th className="text-center px-4 py-4">المواصلات</th>
-                  <th className="text-center px-4 py-4">بدلات/مكافآت</th>
+                  <th className="text-center px-4 py-4">العمل الإضافي</th>
                   <th className="text-center px-4 py-4 bg-success-50">الإجمالي</th>
-                  <th className="text-center px-4 py-4">التأمينات</th>
-                  <th className="text-center px-4 py-4">السلف</th>
-                  <th className="text-center px-4 py-4">خصومات</th>
+                  <th className="text-center px-4 py-4">خصم التأخير</th>
+                  <th className="text-center px-4 py-4">إجازة بدون راتب</th>
+                  <th className="text-center px-4 py-4">أقساط السلف</th>
                   <th className="text-center px-4 py-4 bg-danger-50">إجمالي الخصم</th>
                   <th className="text-center px-4 py-4 bg-primary-50 font-bold">الصافي</th>
                   <th className="text-center px-4 py-4">طريقة الصرف</th>
                   <th className="text-center px-4 py-4">حالة الصرف</th>
-                  <th className="text-center px-4 py-4">تعديلات</th>
                   <th className="text-center px-4 py-4">عرض</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredRecords.map((record) => {
-                  const adj = employeeAdjustments[record.id]
-                  const hasAdjustments = adj && (adj.bonuses.length > 0 || adj.removedDeductions.length > 0)
-                  const originalRecord = payrollRecords.find(r => r.id === record.id)!
+                {filteredItems.length === 0 && (
+                  <tr>
+                    <td colSpan={12} className="px-4 py-10 text-center text-sm text-gray-400">
+                      {runDetail ? 'لا توجد بنود في هذا المسير' : 'اختر مسيراً أو احسب مسيراً جديداً'}
+                    </td>
+                  </tr>
+                )}
+                {filteredItems.map((item) => {
+                  const emp = employeeOf(item.employeeId)
+                  const name = emp?.fullName ?? `موظف #${item.employeeId}`
+                  const gross = n(item.basicSalary) + n(item.overtimeAmount)
+                  const totalDeductions =
+                    n(item.latenessDeduction) + n(item.unpaidLeaveDeduction) + n(item.loanInstallments)
 
                   return (
-                  <tr key={record.id} className={`table-row ${hasAdjustments ? 'bg-yellow-50' : ''}`}>
+                  <tr key={item.id} className="table-row">
                     <td className="table-cell">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center text-white font-bold">
-                          {record.avatar}
+                          {name.charAt(0)}
                         </div>
                         <div>
-                          <div className="flex items-center gap-2">
-                            <p className="font-medium text-gray-800">{record.employeeName}</p>
-                            {hasAdjustments && (
-                              <span className="px-2 py-0.5 bg-yellow-200 text-yellow-800 text-xs rounded-full">معدّل</span>
-                            )}
-                          </div>
-                          <p className="text-sm text-gray-400">{record.department}</p>
+                          <p className="font-medium text-gray-800">{name}</p>
+                          <p className="text-sm text-gray-400">
+                            {emp?.jobTitle ?? emp?.employeeCode ?? ''}
+                          </p>
                         </div>
                       </div>
                     </td>
-                    <td className="table-cell text-center font-mono">{record.basicSalary.toLocaleString()}</td>
-                    <td className="table-cell text-center font-mono">{record.housingAllowance.toLocaleString()}</td>
-                    <td className="table-cell text-center font-mono">{record.transportAllowance.toLocaleString()}</td>
+                    <td className="table-cell text-center font-mono">{n(item.basicSalary).toLocaleString()}</td>
                     <td className="table-cell text-center font-mono">
                       <div className="flex flex-col items-center">
-                        <span className={adj?.bonuses.length ? 'text-success-600 font-bold' : ''}>
-                          {record.otherAllowances.toLocaleString()}
+                        <span className={n(item.overtimeAmount) > 0 ? 'text-success-600 font-bold' : ''}>
+                          {n(item.overtimeAmount).toLocaleString()}
                         </span>
-                        {adj?.bonuses.length > 0 && (
-                          <span className="text-xs text-success-600">+{adj.bonuses.reduce((s,b) => s + b.amount, 0).toLocaleString()}</span>
+                        {n(item.overtimeHours) > 0 && (
+                          <span className="text-xs text-success-600">{n(item.overtimeHours)} ساعة</span>
                         )}
                       </div>
                     </td>
                     <td className="table-cell text-center font-mono font-bold text-success-600 bg-success-50">
-                      {record.totalEarnings.toLocaleString()}
-                    </td>
-                    <td className="table-cell text-center font-mono text-danger-600">{record.gosiDeduction.toLocaleString()}</td>
-                    <td className="table-cell text-center font-mono">
-                      {originalRecord.loanDeduction > 0 ? (
-                        <div className="flex items-center justify-center gap-1">
-                          <span className={adj?.removedDeductions.includes('loan') ? 'line-through text-gray-400' : 'text-danger-600'}>
-                            {originalRecord.loanDeduction.toLocaleString()}
-                          </span>
-                          {!adj?.removedDeductions.includes('loan') && (
-                            <button
-                              onClick={() => removeDeduction(record.id, 'loan')}
-                              className="p-1 hover:bg-danger-100 rounded text-danger-500"
-                              title="إزالة خصم السلفة"
-                            >
-                              <X size={14} />
-                            </button>
-                          )}
-                        </div>
-                      ) : '-'}
+                      {gross.toLocaleString()}
                     </td>
                     <td className="table-cell text-center font-mono">
-                      {originalRecord.absenceDeduction > 0 ? (
-                        <div className="flex items-center justify-center gap-1">
-                          <span className={adj?.removedDeductions.includes('absence') ? 'line-through text-gray-400' : 'text-danger-600'}>
-                            {originalRecord.absenceDeduction.toLocaleString()}
-                          </span>
-                          {!adj?.removedDeductions.includes('absence') && (
-                            <button
-                              onClick={() => removeDeduction(record.id, 'absence')}
-                              className="p-1 hover:bg-danger-100 rounded text-danger-500"
-                              title="إزالة خصم الغياب"
-                            >
-                              <X size={14} />
-                            </button>
-                          )}
-                        </div>
+                      <div className="flex flex-col items-center">
+                        <span className={n(item.latenessDeduction) > 0 ? 'text-danger-600' : ''}>
+                          {n(item.latenessDeduction) > 0 ? n(item.latenessDeduction).toLocaleString() : '-'}
+                        </span>
+                        {n(item.lateMinutes) > 0 && (
+                          <span className="text-xs text-danger-600">{n(item.lateMinutes)} دقيقة</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="table-cell text-center font-mono">
+                      <div className="flex flex-col items-center">
+                        <span className={n(item.unpaidLeaveDeduction) > 0 ? 'text-danger-600' : ''}>
+                          {n(item.unpaidLeaveDeduction) > 0 ? n(item.unpaidLeaveDeduction).toLocaleString() : '-'}
+                        </span>
+                        {n(item.unpaidLeaveDays) > 0 && (
+                          <span className="text-xs text-danger-600">{n(item.unpaidLeaveDays)} يوم</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="table-cell text-center font-mono">
+                      {n(item.loanInstallments) > 0 ? (
+                        <span className="text-danger-600">{n(item.loanInstallments).toLocaleString()}</span>
                       ) : '-'}
                     </td>
                     <td className="table-cell text-center font-mono font-bold text-danger-600 bg-danger-50">
-                      {record.totalDeductions.toLocaleString()}
+                      {totalDeductions.toLocaleString()}
                     </td>
                     <td className="table-cell text-center font-mono font-bold text-primary-600 bg-primary-50 text-lg">
-                      {record.netSalary.toLocaleString()}
+                      {n(item.netPay).toLocaleString()}
                     </td>
                     <td className="table-cell text-center">
                       <span className={`badge text-xs ${
-                        record.payMethod === 'transfer' ? 'bg-blue-50 text-blue-700'
-                        : record.payMethod === 'cash' ? 'bg-amber-50 text-amber-700'
+                        item.payMethod === 'transfer' ? 'bg-blue-50 text-blue-700'
+                        : item.payMethod === 'cash' ? 'bg-amber-50 text-amber-700'
                         : 'bg-purple-50 text-purple-700'
                       }`}>
-                        {payMethodLabels[record.payMethod]}
+                        {payMethodLabels[item.payMethod] ?? item.payMethod}
                       </span>
-                      <p className="text-[10px] text-gray-400 mt-0.5">{record.bankName}</p>
+                      {emp?.bankName && (
+                        <p className="text-[10px] text-gray-400 mt-0.5">{emp.bankName}</p>
+                      )}
                     </td>
                     <td className="table-cell text-center">
-                      {runStage >= 5 ? (
-                        <button
-                          onClick={() => toggleDisbursed(record.id)}
-                          className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${
-                            disbursedIds.includes(record.id)
-                              ? 'bg-success-500 text-white'
-                              : 'bg-gray-100 text-gray-600 hover:bg-success-50'
-                          }`}
-                        >
-                          {disbursedIds.includes(record.id) ? 'صُرف ✓' : 'تسجيل الصرف'}
-                        </button>
+                      {runDetail?.status === 'PAID' ? (
+                        <span className="text-xs px-3 py-1.5 rounded-lg font-medium bg-success-500 text-white">
+                          صُرف ✓
+                        </span>
+                      ) : runDetail?.status === 'APPROVED' ? (
+                        <span className="text-xs text-gray-400">معتمد — بانتظار الصرف</span>
                       ) : (
                         <span className="text-xs text-gray-400">بانتظار الاعتماد</span>
                       )}
                     </td>
                     <td className="table-cell">
                       <div className="flex items-center justify-center gap-1">
-                        <button
-                          onClick={() => openAdjustmentModal(record, 'bonus')}
-                          className="p-2 hover:bg-success-100 rounded-lg transition-colors text-success-600"
-                          title="إضافة مكافأة"
-                        >
-                          <Gift size={18} />
-                        </button>
-                        <button
-                          onClick={() => openAdjustmentModal(record, 'deduction')}
-                          className="p-2 hover:bg-gray-100 rounded-lg transition-colors text-gray-500"
-                          title="تعديل الخصومات"
-                        >
-                          <Edit3 size={18} />
-                        </button>
-                      </div>
-                    </td>
-                    <td className="table-cell">
-                      <div className="flex items-center justify-center gap-1">
                         <Link
-                          href={`/payroll/payslip/${record.employeeId}`}
+                          href={`/payroll/payslip/${item.employeeId}`}
                           className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                         >
                           <Eye size={18} className="text-gray-500" />
@@ -861,44 +715,41 @@ export default function PayrollPage() {
                 )}
                 )}
               </tbody>
+              {filteredItems.length > 0 && (
               <tfoot>
                 <tr className="bg-gray-100">
                   <td className="px-4 py-4 font-bold text-gray-800">الإجمالي</td>
                   <td className="px-4 py-4 text-center font-mono font-bold">
-                    {filteredRecords.reduce((s, r) => s + r.basicSalary, 0).toLocaleString()}
+                    {filteredItems.reduce((s, r) => s + n(r.basicSalary), 0).toLocaleString()}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold">
-                    {filteredRecords.reduce((s, r) => s + r.housingAllowance, 0).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-4 text-center font-mono font-bold">
-                    {filteredRecords.reduce((s, r) => s + r.transportAllowance, 0).toLocaleString()}
-                  </td>
-                  <td className="px-4 py-4 text-center font-mono font-bold">
-                    {filteredRecords.reduce((s, r) => s + r.otherAllowances, 0).toLocaleString()}
+                    {filteredItems.reduce((s, r) => s + n(r.overtimeAmount), 0).toLocaleString()}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-success-600 bg-success-100">
-                    {adjustedTotals.totalEarnings.toLocaleString()}
+                    {totals.totalEarnings.toLocaleString()}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {filteredRecords.reduce((s, r) => s + r.gosiDeduction, 0).toLocaleString()}
+                    {filteredItems.reduce((s, r) => s + n(r.latenessDeduction), 0).toLocaleString()}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {filteredRecords.reduce((s, r) => s + r.loanDeduction, 0).toLocaleString()}
+                    {filteredItems.reduce((s, r) => s + n(r.unpaidLeaveDeduction), 0).toLocaleString()}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {filteredRecords.reduce((s, r) => s + r.absenceDeduction, 0).toLocaleString()}
+                    {filteredItems.reduce((s, r) => s + n(r.loanInstallments), 0).toLocaleString()}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600 bg-danger-100">
-                    {adjustedTotals.totalDeductions.toLocaleString()}
+                    {totals.totalDeductions.toLocaleString()}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-primary-600 bg-primary-100 text-lg">
-                    {adjustedTotals.netSalary.toLocaleString()}
+                    {totals.netSalary.toLocaleString()}
                   </td>
-                  <td className="px-4 py-4" colSpan={2}></td>
+                  <td className="px-4 py-4" colSpan={3}></td>
                 </tr>
               </tfoot>
+              )}
             </table>
           </div>
+          )}
         </div>
 
         {/* Action Buttons */}
@@ -919,208 +770,26 @@ export default function PayrollPage() {
               </button>
             </div>
             <div className="flex items-center gap-4">
-              <button className="btn-success flex items-center gap-2">
+              <button
+                onClick={handleApprove}
+                disabled={actionBusy || !runDetail}
+                className="btn-success flex items-center gap-2 disabled:opacity-50"
+              >
                 <Lock size={18} />
                 اعتماد الرواتب
               </button>
-              <button className="btn-primary flex items-center gap-2">
+              <button
+                onClick={handlePay}
+                disabled={actionBusy || !runDetail}
+                className="btn-primary flex items-center gap-2 disabled:opacity-50"
+              >
                 <Send size={18} />
-                إرسال للبنك
+                إرسال للبنك (صرف)
               </button>
             </div>
           </div>
         </div>
       </div>
-
-      {/* Adjustment Modal */}
-      {showAdjustmentModal && selectedEmployee && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl w-full max-w-lg p-6 shadow-xl">
-            <div className="flex items-center justify-between mb-6">
-              <div className="flex items-center gap-3">
-                <div className={`w-12 h-12 rounded-xl flex items-center justify-center ${
-                  adjustmentType === 'bonus' ? 'bg-success-100' : 'bg-gray-100'
-                }`}>
-                  {adjustmentType === 'bonus' ? (
-                    <Gift size={24} className="text-success-600" />
-                  ) : (
-                    <Edit3 size={24} className="text-gray-600" />
-                  )}
-                </div>
-                <div>
-                  <h3 className="font-bold text-gray-800">
-                    {adjustmentType === 'bonus' ? 'إضافة مكافأة' : 'تعديل الخصومات'}
-                  </h3>
-                  <p className="text-sm text-gray-500">{selectedEmployee.employeeName}</p>
-                </div>
-              </div>
-              <button
-                onClick={() => setShowAdjustmentModal(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg"
-              >
-                <X size={20} className="text-gray-500" />
-              </button>
-            </div>
-
-            {adjustmentType === 'bonus' ? (
-              <div className="space-y-4">
-                <div>
-                  <label className="label">مبلغ المكافأة *</label>
-                  <input
-                    type="number"
-                    value={adjustmentAmount}
-                    onChange={(e) => setAdjustmentAmount(e.target.value)}
-                    className="input"
-                    placeholder="0.00"
-                    dir="ltr"
-                  />
-                </div>
-                <div>
-                  <label className="label">سبب المكافأة</label>
-                  <select
-                    value={adjustmentReason}
-                    onChange={(e) => setAdjustmentReason(e.target.value)}
-                    className="input"
-                  >
-                    <option value="">اختر السبب</option>
-                    <option value="أداء متميز">أداء متميز</option>
-                    <option value="مشروع خاص">إنجاز مشروع خاص</option>
-                    <option value="ساعات إضافية">ساعات إضافية</option>
-                    <option value="ترقية">ترقية</option>
-                    <option value="مكافأة سنوية">مكافأة سنوية</option>
-                    <option value="أخرى">أخرى</option>
-                  </select>
-                </div>
-                {adjustmentReason === 'أخرى' && (
-                  <div>
-                    <label className="label">تفاصيل أخرى</label>
-                    <input
-                      type="text"
-                      className="input"
-                      placeholder="أدخل السبب"
-                    />
-                  </div>
-                )}
-
-                <div className="p-4 bg-success-50 rounded-xl mt-4">
-                  <div className="flex items-center justify-between text-sm">
-                    <span className="text-gray-600">الراتب الحالي:</span>
-                    <span className="font-bold">{selectedEmployee.netSalary.toLocaleString()} ر.س</span>
-                  </div>
-                  {adjustmentAmount && (
-                    <div className="flex items-center justify-between text-sm mt-2 pt-2 border-t border-success-200">
-                      <span className="text-success-700">الراتب بعد المكافأة:</span>
-                      <span className="font-bold text-success-700">
-                        {(selectedEmployee.netSalary + parseFloat(adjustmentAmount || '0')).toLocaleString()} ر.س
-                      </span>
-                    </div>
-                  )}
-                </div>
-
-                <div className="flex items-center gap-3 mt-6">
-                  <button
-                    onClick={addAdjustment}
-                    disabled={!adjustmentAmount}
-                    className="btn-success flex-1 flex items-center justify-center gap-2 disabled:opacity-50"
-                  >
-                    <Plus size={18} />
-                    إضافة المكافأة
-                  </button>
-                  <button
-                    onClick={() => setShowAdjustmentModal(false)}
-                    className="btn-secondary"
-                  >
-                    إلغاء
-                  </button>
-                </div>
-              </div>
-            ) : (
-              <div className="space-y-4">
-                <p className="text-gray-600">الخصومات الحالية للموظف:</p>
-
-                <div className="space-y-3">
-                  <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
-                    <div>
-                      <p className="font-medium text-gray-800">خصم التأمينات (GOSI)</p>
-                      <p className="text-sm text-gray-500">خصم إلزامي - لا يمكن إزالته</p>
-                    </div>
-                    <span className="font-mono text-danger-600">{selectedEmployee.gosiDeduction.toLocaleString()} ر.س</span>
-                  </div>
-
-                  {(() => {
-                    const originalRec = payrollRecords.find(r => r.id === selectedEmployee.id)
-                    if (!originalRec || originalRec.loanDeduction <= 0) return null
-                    return (
-                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
-                      <div>
-                        <p className="font-medium text-gray-800">خصم السلفة</p>
-                        <p className="text-sm text-gray-500">قسط سلفة مستحق</p>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="font-mono text-danger-600">
-                          {originalRec.loanDeduction.toLocaleString()} ر.س
-                        </span>
-                        {!employeeAdjustments[selectedEmployee.id]?.removedDeductions.includes('loan') ? (
-                          <button
-                            onClick={() => {
-                              removeDeduction(selectedEmployee.id, 'loan')
-                              setShowAdjustmentModal(false)
-                            }}
-                            className="btn-danger py-1 px-3 text-sm"
-                          >
-                            إزالة
-                          </button>
-                        ) : (
-                          <span className="text-sm text-success-600">تم الإزالة ✓</span>
-                        )}
-                      </div>
-                    </div>
-                    )
-                  })()}
-
-                  {(() => {
-                    const originalRec = payrollRecords.find(r => r.id === selectedEmployee.id)
-                    if (!originalRec || originalRec.absenceDeduction <= 0) return null
-                    return (
-                    <div className="flex items-center justify-between p-4 bg-gray-50 rounded-xl">
-                      <div>
-                        <p className="font-medium text-gray-800">خصم الغياب</p>
-                        <p className="text-sm text-gray-500">خصم أيام غياب بدون عذر</p>
-                      </div>
-                      <div className="flex items-center gap-3">
-                        <span className="font-mono text-danger-600">
-                          {originalRec.absenceDeduction.toLocaleString()} ر.س
-                        </span>
-                        {!employeeAdjustments[selectedEmployee.id]?.removedDeductions.includes('absence') ? (
-                          <button
-                            onClick={() => {
-                              removeDeduction(selectedEmployee.id, 'absence')
-                              setShowAdjustmentModal(false)
-                            }}
-                            className="btn-danger py-1 px-3 text-sm"
-                          >
-                            إزالة
-                          </button>
-                        ) : (
-                          <span className="text-sm text-success-600">تم الإزالة ✓</span>
-                        )}
-                      </div>
-                    </div>
-                    )
-                  })()}
-                </div>
-
-                <button
-                  onClick={() => setShowAdjustmentModal(false)}
-                  className="btn-secondary w-full mt-4"
-                >
-                  إغلاق
-                </button>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
     </MainLayout>
   )
 }
