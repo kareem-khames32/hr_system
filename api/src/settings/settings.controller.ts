@@ -26,6 +26,7 @@ import { JwtAuthGuard, Roles, RolesGuard } from '../auth/guards'
 import { ApprovalChain } from '../requests/entities/approval-chain.entity'
 import { ApprovalStep } from '../requests/entities/approval-step.entity'
 import { LeaveType } from '../requests/entities/leave.entities'
+import { RequestType } from '../requests/entities/request-type.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 
 class UpsertConfigDto {
@@ -137,7 +138,9 @@ export class SettingsController {
     @InjectRepository(ApprovalChain)
     private readonly chains: Repository<ApprovalChain>,
     @InjectRepository(ApprovalStep)
-    private readonly steps: Repository<ApprovalStep>
+    private readonly steps: Repository<ApprovalStep>,
+    @InjectRepository(RequestType)
+    private readonly requestTypes: Repository<RequestType>
   ) {}
 
   // ===== إعدادات المحرك (مفاتيح/قيم) =====
@@ -199,5 +202,60 @@ export class SettingsController {
     if (!step) throw new NotFoundException('الخطوة غير موجودة')
     Object.assign(step, dto)
     return this.steps.save(step)
+  }
+
+  // ===== بانِي الطلبات (الحد الأدنى): كل الأنواع + تفعيل/ربط سلسلة =====
+  @Get('request-types')
+  listRequestTypes() {
+    return this.requestTypes.find({ order: { category: 'ASC', id: 'ASC' } })
+  }
+
+  @Patch('request-types/:id')
+  async updateRequestType(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: { isActive?: boolean; approvalChainId?: number }
+  ) {
+    const type = await this.requestTypes.findOne({ where: { id } })
+    if (!type) throw new NotFoundException('نوع الطلب غير موجود')
+    if (dto.approvalChainId !== undefined) {
+      const chain = await this.chains.findOne({
+        where: { id: dto.approvalChainId },
+      })
+      if (!chain) throw new BadRequestException('سلسلة الاعتماد غير موجودة')
+      type.approvalChainId = dto.approvalChainId
+    }
+    if (dto.isActive !== undefined) type.isActive = dto.isActive
+    return this.requestTypes.save(type)
+  }
+
+  // ===== مصفوفة الأدوار والصلاحيات (مصدر الحقيقة من الكود) =====
+  @Get('roles')
+  roles() {
+    return [
+      {
+        role: 'super_admin',
+        nameAr: 'مدير النظام',
+        scope: 'كل الفروع',
+        permissions: ['كل الصلاحيات', 'إدارة المستخدمين والأدوار', 'الإعدادات', 'اعتماد أي خطوة'],
+      },
+      {
+        role: 'hr_manager',
+        nameAr: 'مدير الموارد البشرية',
+        scope: 'فرعه (أو الكل لو بلا فرع)',
+        permissions: ['إدارة الموظفين', 'خطوات HR في الاعتمادات', 'الرواتب', 'الإعدادات', 'المستخدمون (دون super_admin)'],
+      },
+      {
+        role: 'branch_manager',
+        nameAr: 'مدير فرع',
+        scope: 'فرعه فقط',
+        permissions: ['موظفو فرعه', 'اعتمادات المدير المباشر', 'حضور الفرع', 'تأكيد الأوفرتايم'],
+      },
+      {
+        role: 'employee',
+        nameAr: 'موظف',
+        scope: 'بياناته فقط',
+        permissions: ['طلباته', 'أرصدته', 'حضوره', 'تأكيد استلام العهدة'],
+      },
+    ]
   }
 }

@@ -259,6 +259,17 @@ export class PayrollService {
     return { ...run, items }
   }
 
+  // قسيمة راتب: البند + المسير + الموظف — لشاشة payslip
+  async payslip(itemId: number) {
+    const item = await this.items.findOne({ where: { id: itemId } })
+    if (!item) throw new NotFoundException('بند المسير غير موجود')
+    const run = await this.runs.findOne({ where: { id: item.runId } })
+    const employee = await this.employees.findOne({
+      where: { id: item.employeeId },
+    })
+    return { item, run, employee }
+  }
+
   // تقرير حالة الصرف: تجميع بطريقة الدفع (كاش/تحويل/فيزا)
   async payMethodReport(runId: number) {
     const { items } = await this.detail(runId)

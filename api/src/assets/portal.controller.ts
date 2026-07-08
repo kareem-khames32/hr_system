@@ -1,0 +1,128 @@
+import { Controller, Get, Query, UseGuards } from '@nestjs/common'
+import { InjectRepository } from '@nestjs/typeorm'
+import { Between, In, Repository } from 'typeorm'
+import type { JwtPayload } from '../auth/auth.service'
+import { branchScopeOf, CurrentUser, JwtAuthGuard } from '../auth/guards'
+import { Employee } from '../employees/employee.entity'
+import { RequestApproval } from '../requests/entities/request-approval.entity'
+import { Request } from '../requests/entities/request.entity'
+import { Leave } from '../requests/entities/leave.entities'
+import { PublicHoliday } from './assets.entities'
+
+// التقويم الموحّد + الإشعارات المشتقة (بلا جدول إشعارات — من الأحداث الفعلية)
+@UseGuards(JwtAuthGuard)
+@Controller()
+export class PortalController {
+  constructor(
+    @InjectRepository(PublicHoliday)
+    private readonly holidays: Repository<PublicHoliday>,
+    @InjectRepository(Leave) private readonly leaves: Repository<Leave>,
+    @InjectRepository(Employee)
+    private readonly employees: Repository<Employee>,
+    @InjectRepository(Request) private readonly requests: Repository<Request>,
+    @InjectRepository(RequestApproval)
+    private readonly approvals: Repository<RequestApproval>
+  ) {}
+
+  // ===== التقويم: عطلات + إجازات معتمدة في الشهر =====
+  @Get('calendar')
+  async calendar(@CurrentUser() user: JwtPayload, @Query('month') month: string) {
+    const m = /^\d{4}-\d{2}$/.test(month ?? '')
+      ? month
+      : new Date().toISOString().slice(0, 7)
+    const scope = branchScopeOf(user)
+    const emps = await this.employees.find({
+      where: scope !== null ? { branchId: scope } : {},
+    })
+    const empById = new Map(emps.map((e) => [e.id, e.fullName]))
+
+    const allHolidays = await this.holidays.find({ order: { date: 'ASC' } })
+    const monthHolidays = allHolidays.filter(
+      (h) => h.date.startsWith(m) || (h.endDate && h.endDate.startsWith(m))
+    )
+    const allLeaves = await this.leaves.find({
+      where:
+        scope !== null
+          ? { status: 'APPROVED', employeeId: In(emps.map((e) => e.id)) }
+          : { status: 'APPROVED' },
+    })
+    const monthLeaves = allLeaves.filter(
+      (l) => l.fromDate.slice(0, 7) <= m && l.toDate.slice(0, 7) >= m
+    )
+    return {
+      month: m,
+      holidays: monthHolidays,
+      leaves: monthLeaves.map((l) => ({
+        ...l,
+        employeeName: empById.get(l.employeeId) ?? `#${l.employeeId}`,
+      })),
+    }
+  }
+
+  // ===== الإشعارات المشتقة للمستخدم الحالي =====
+  @Get('notifications')
+  async notifications(@CurrentUser() user: JwtPayload) {
+    const items: Array<{
+      id: string
+      kind: string
+      title: string
+      body: string
+      at: Date | string
+      link: string
+    }> = []
+
+    // 1) قرارات على طلباتي
+    if (user.employeeId) {
+      const myRequests = await this.requests.find({
+        where: { requesterId: user.employeeId },
+        order: { createdAt: 'DESC' },
+        take: 50,
+      })
+      const reqById = new Map(myRequests.map((r) => [r.id, r]))
+      if (myRequests.length > 0) {
+        const acts = await this.approvals.find({
+          where: { requestId: In(myRequests.map((r) => r.id)) },
+          order: { actedAt: 'DESC' },
+          take: 20,
+        })
+        const actLabel: Record<string, string> = {
+          APPROVED: 'تمت الموافقة على',
+          REJECTED: 'تم رفض',
+          RETURNED_FOR_INFO: 'أُعيد لاستكمال معلومات',
+          ESCALATED: 'تم تصعيد',
+        }
+        for (const a of acts) {
+          const req = reqById.get(a.requestId)
+          items.push({
+            id: `act-${a.id}`,
+            kind: a.action === 'APPROVED' ? 'success' : a.action === 'REJECTED' ? 'error' : 'warning',
+            title: `${actLabel[a.action] ?? a.action} طلبك`,
+            body: `طلب ${req?.typeCode ?? ''} #${a.requestId}${a.comment ? ` — ${a.comment}` : ''}`,
+            at: a.actedAt,
+            link: '/requests',
+          })
+        }
+      }
+    }
+
+    // 2) طلبات بانتظار موافقتي (عدّاد)
+    const scope = branchScopeOf(user)
+    const where: Record<string, unknown> = { status: 'UNDER_REVIEW' }
+    if (scope !== null) where.branchId = scope
+    const pending = await this.requests.count({ where: where as any })
+    if (pending > 0 && user.role !== 'employee') {
+      items.push({
+        id: 'inbox-pending',
+        kind: 'info',
+        title: 'موافقات بانتظارك',
+        body: `${pending} طلب قيد المراجعة في نطاقك`,
+        at: new Date(),
+        link: '/approvals-inbox',
+      })
+    }
+
+    return items
+      .sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+      .slice(0, 15)
+  }
+}

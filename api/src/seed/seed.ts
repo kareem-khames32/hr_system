@@ -41,6 +41,16 @@ import {
   ScheduleEntry,
 } from '../attendance/attendance.entities'
 import { PayrollItem, PayrollRun } from '../payroll/payroll.entities'
+import {
+  AssetType,
+  BiometricDevice,
+  Candidate,
+  EmployeeDocument,
+  Grade,
+  JobTitle,
+  PublicHoliday,
+  Shift,
+} from '../assets/assets.entities'
 import { ensureLeaveBalance, seedRequests } from './seed-requests'
 
 const dbType = (process.env.DB_TYPE ?? 'mssql') as 'mssql' | 'mysql'
@@ -86,6 +96,15 @@ const common = {
     // الرواتب
     PayrollRun,
     PayrollItem,
+    // الملحقات
+    EmployeeDocument,
+    PublicHoliday,
+    Shift,
+    BiometricDevice,
+    JobTitle,
+    Grade,
+    AssetType,
+    Candidate,
   ],
   synchronize: true, // البذر ينشئ الجداول لو مش موجودة
 }
@@ -254,6 +273,62 @@ async function main() {
       })
     )
     console.log('✓ حساب الموظف التجريبي: employee@company.com / Employee@123')
+  }
+
+  // ===== كتالوجات الملحقات: ورديات/عطلات/مسميات/أنواع أصول =====
+  const shiftsRepo = ds.getRepository(Shift)
+  if ((await shiftsRepo.count()) === 0) {
+    await shiftsRepo.save([
+      { name: 'صباحي', startTime: '08:00', endTime: '17:00' },
+      { name: 'وردية 10', startTime: '10:00', endTime: '19:00' },
+      { name: 'وردية 11', startTime: '11:00', endTime: '20:00' },
+      { name: 'مسائي', startTime: '14:00', endTime: '23:00' },
+    ])
+    console.log('✓ كتالوج الورديات')
+  }
+  const holidaysRepo = ds.getRepository(PublicHoliday)
+  if ((await holidaysRepo.count()) === 0) {
+    await holidaysRepo.save([
+      { name: 'عيد الفطر', date: '2026-03-20', endDate: '2026-03-23', country: 'EG' },
+      { name: 'شم النسيم', date: '2026-04-13', country: 'EG' },
+      { name: 'عيد العمال', date: '2026-05-01', country: 'EG' },
+      { name: 'عيد الأضحى', date: '2026-05-26', endDate: '2026-05-30', country: 'EG' },
+      { name: 'ثورة 30 يونيو', date: '2026-06-30', country: 'EG' },
+      { name: 'ثورة 23 يوليو', date: '2026-07-23', country: 'EG' },
+      { name: 'عيد القوات المسلحة', date: '2026-10-06', country: 'EG' },
+    ])
+    console.log('✓ العطلات الرسمية (مصر 2026)')
+  }
+  const jobTitlesRepo = ds.getRepository(JobTitle)
+  if ((await jobTitlesRepo.count()) === 0) {
+    await jobTitlesRepo.save([
+      { title: 'مدير النظام' },
+      { title: 'أخصائي موارد بشرية' },
+      { title: 'محاسب' },
+      { title: 'مهندس برمجيات' },
+      { title: 'مسؤول مبيعات' },
+    ])
+    console.log('✓ المسميات الوظيفية')
+  }
+  const assetTypesRepo = ds.getRepository(AssetType)
+  if ((await assetTypesRepo.count()) === 0) {
+    await assetTypesRepo.save([
+      { name: 'لابتوب' },
+      { name: 'موبايل' },
+      { name: 'سيارة' },
+      { name: 'كارت دخول' },
+      { name: 'أدوات مكتبية' },
+    ])
+    console.log('✓ أنواع الأصول')
+  }
+  const gradesRepo = ds.getRepository(Grade)
+  if ((await gradesRepo.count()) === 0) {
+    await gradesRepo.save([
+      { name: 'الدرجة الأولى', minSalary: 15000, maxSalary: 30000 },
+      { name: 'الدرجة الثانية', minSalary: 9000, maxSalary: 15000 },
+      { name: 'الدرجة الثالثة', minSalary: 5000, maxSalary: 9000 },
+    ])
+    console.log('✓ الدرجات الوظيفية')
   }
 
   // ===== محرك الطلبات: السلاسل + الأنواع + الإجازات + الإعدادات =====

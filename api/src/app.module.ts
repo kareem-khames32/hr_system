@@ -10,7 +10,9 @@ import { RequestsModule } from './requests/requests.module'
 import { AttendanceModule } from './attendance/attendance.module'
 import { PayrollModule } from './payroll/payroll.module'
 import { SettingsModule } from './settings/settings.module'
+import { ExtrasModule } from './assets/extras.module'
 import { DashboardController } from './dashboard/dashboard.controller'
+import { ReportsController } from './reports/reports.controller'
 
 @Module({
   imports: [
@@ -61,7 +63,8 @@ import { DashboardController } from './dashboard/dashboard.controller'
     AttendanceModule,
     PayrollModule,
     SettingsModule,
+    ExtrasModule,
   ],
-  controllers: [HealthController, DashboardController],
+  controllers: [HealthController, DashboardController, ReportsController],
 })
 export class AppModule {}

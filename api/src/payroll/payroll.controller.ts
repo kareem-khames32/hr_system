@@ -63,4 +63,10 @@ export class PayrollController {
   payMethods(@Param('id', ParseIntPipe) id: number) {
     return this.service.payMethodReport(id)
   }
+
+  // قسيمة راتب موظف — بند مسير كامل ببياناته
+  @Get('items/:id')
+  payslip(@Param('id', ParseIntPipe) id: number) {
+    return this.service.payslip(id)
+  }
 }
