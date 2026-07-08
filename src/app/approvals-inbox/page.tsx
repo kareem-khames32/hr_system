@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Inbox,
@@ -16,134 +16,185 @@ import {
   AlertTriangle,
   ChevronLeft,
   X,
+  Users,
+  GraduationCap,
 } from 'lucide-react'
-import { getBranchName } from '@/data/branches'
+import { categoryLabels } from '@/data/requestsCatalog'
+import {
+  fetchInbox,
+  fetchRequestTypes,
+  fetchEmployees,
+  fetchBranches,
+  actOnRequest,
+  type ApiRequest,
+  type ApiRequestType,
+} from '@/lib/api'
 
-type ItemType = 'leave' | 'loan' | 'custody' | 'resignation' | 'data_change' | 'overtime'
+// ===== أدوات فك حقول JSON القادمة من الباك =====
+interface ResolvedStep {
+  stepOrder: number
+  role: string
+  approverEmployeeId?: number | null
+  slaDays?: number | null
+  escalateTo?: string | null
+  dueAt?: string | null
+  actedAt?: string | null
+  action?: string | null
+}
+
+const parseJson = <T,>(raw: string | null | undefined, fallback: T): T => {
+  if (!raw) return fallback
+  try {
+    return JSON.parse(raw) as T
+  } catch {
+    return fallback
+  }
+}
+
+const roleLabels: Record<string, string> = {
+  direct_manager_of_requester: 'المدير المباشر',
+  receiving_team_manager: 'المدير المستقبِل',
+  hr: 'الموارد البشرية',
+  finance: 'المالية',
+  executive: 'الإدارة التنفيذية',
+  custody_officer: 'أمين العهدة',
+  it: 'تقنية المعلومات',
+}
+
+const fieldLabels: Record<string, string> = {
+  date: 'التاريخ',
+  fromDate: 'من تاريخ',
+  toDate: 'إلى تاريخ',
+  effectiveDate: 'تاريخ السريان',
+  from: 'من الساعة',
+  to: 'إلى الساعة',
+  days: 'عدد الأيام',
+  hours: 'عدد الساعات',
+  amount: 'المبلغ',
+  months: 'عدد الأشهر',
+  newSalary: 'الراتب الجديد',
+  increase_pct: 'نسبة الزيادة %',
+  reason: 'السبب',
+  description: 'الوصف',
+  destination: 'جهة الانتداب',
+  iban: 'الآيبان IBAN',
+  name: 'الاسم',
+  phone: 'رقم الهاتف',
+  documentType: 'نوع الوثيقة',
+  courseName: 'اسم الدورة',
+  note: 'ملاحظة',
+}
+
+const payloadSummary = (raw?: string | null): string => {
+  const payload = parseJson<Record<string, unknown>>(raw, {})
+  return Object.entries(payload)
+    .map(([k, v]) => `${fieldLabels[k] ?? k}: ${v}`)
+    .join(' • ')
+}
+
+// إعداد العرض لكل فئة من فئات الكتالوج التسع
+const typeConfig: Record<
+  string,
+  { label: string; icon: typeof Calendar; color: string }
+> = {
+  leaves: { label: categoryLabels.leaves, icon: Calendar, color: 'bg-blue-100 text-blue-600' },
+  time_attendance: { label: categoryLabels.time_attendance, icon: Clock, color: 'bg-orange-100 text-orange-600' },
+  financial: { label: categoryLabels.financial, icon: Wallet, color: 'bg-purple-100 text-purple-600' },
+  employment_status: { label: categoryLabels.employment_status, icon: UserMinus, color: 'bg-red-100 text-red-600' },
+  personal_data: { label: categoryLabels.personal_data, icon: FileText, color: 'bg-gray-100 text-gray-600' },
+  letters: { label: categoryLabels.letters, icon: FileText, color: 'bg-cyan-100 text-cyan-600' },
+  custody_assets: { label: categoryLabels.custody_assets, icon: Package, color: 'bg-teal-100 text-teal-600' },
+  training: { label: categoryLabels.training, icon: GraduationCap, color: 'bg-indigo-100 text-indigo-600' },
+  employee_relations: { label: categoryLabels.employee_relations, icon: Users, color: 'bg-pink-100 text-pink-600' },
+}
+const fallbackConfig = { label: 'طلب', icon: FileText, color: 'bg-gray-100 text-gray-600' }
 
 interface InboxItem {
-  id: string
-  type: ItemType
+  id: number
+  displayId: string
+  category: string
   title: string
   requester: string
-  requesterId: string
-  branchId: string
+  branchName: string
   submittedAt: string
   details: string
   myStepLevel: number
   totalSteps: number
-  slaDaysLeft: number // المتبقي قبل انتهاء مهلة الرد
-  amount?: number
+  slaDaysLeft: number // المتبقي قبل انتهاء مهلة الرد — من dueAt للخطوة الحالية
 }
-
-const typeConfig: Record<
-  ItemType,
-  { label: string; icon: typeof Calendar; color: string }
-> = {
-  leave: { label: 'إجازة', icon: Calendar, color: 'bg-blue-100 text-blue-600' },
-  loan: { label: 'سلفة', icon: Wallet, color: 'bg-purple-100 text-purple-600' },
-  custody: { label: 'عهدة', icon: Package, color: 'bg-teal-100 text-teal-600' },
-  resignation: { label: 'استقالة', icon: UserMinus, color: 'bg-red-100 text-red-600' },
-  data_change: { label: 'تغيير بيانات', icon: FileText, color: 'bg-gray-100 text-gray-600' },
-  overtime: { label: 'عمل إضافي', icon: Clock, color: 'bg-orange-100 text-orange-600' },
-}
-
-const initialItems: InboxItem[] = [
-  {
-    id: 'REQ-1042',
-    type: 'leave',
-    title: 'طلب إجازة سنوية — 5 أيام',
-    requester: 'أحمد محمد علي',
-    requesterId: 'EMP005',
-    branchId: '1',
-    submittedAt: '2026-07-05',
-    details: 'من 12 يوليو إلى 16 يوليو — الرصيد المتبقي بعد الطلب: 8 أيام',
-    myStepLevel: 1,
-    totalSteps: 2,
-    slaDaysLeft: 1,
-  },
-  {
-    id: 'REQ-1044',
-    type: 'resignation',
-    title: 'طلب استقالة',
-    requester: 'عمر ياسر الشهري',
-    requesterId: 'EMP009',
-    branchId: '2',
-    submittedAt: '2026-07-06',
-    details: 'آخر يوم عمل مطلوب: 6 أغسطس — فترة الإشعار 30 يوماً حسب العقد',
-    myStepLevel: 1,
-    totalSteps: 3,
-    slaDaysLeft: 3,
-  },
-  {
-    id: 'CUS-2031',
-    type: 'custody',
-    title: 'اعتماد تسليم عهدة — هاتف جوال',
-    requester: 'نورة سعيد الغامدي',
-    requesterId: 'EMP008',
-    branchId: '2',
-    submittedAt: '2026-07-06',
-    details: 'PH-2025-021 بقيمة 2,000 ر.س — التسليم مشروط باعتمادك',
-    myStepLevel: 1,
-    totalSteps: 1,
-    slaDaysLeft: 2,
-  },
-  {
-    id: 'REQ-1045',
-    type: 'overtime',
-    title: 'عمل إضافي تلقائي — 2.5 ساعة',
-    requester: 'ليلى حسن العتيبي',
-    requesterId: 'EMP010',
-    branchId: '3',
-    submittedAt: '2026-07-07',
-    details: 'تجاوزت نهاية ورديتها أمس — أُرسل تلقائياً حسب إعداد العتبة (> 1 ساعة). عند الاعتماد يُحتسب في مسير الرواتب',
-    myStepLevel: 1,
-    totalSteps: 2,
-    slaDaysLeft: 2,
-    amount: 187,
-  },
-  {
-    id: 'REQ-1038',
-    type: 'loan',
-    title: 'طلب سلفة — 6,000 ر.س',
-    requester: 'خالد عبدالعزيز النمر',
-    requesterId: 'EMP007',
-    branchId: '1',
-    submittedAt: '2026-07-03',
-    details: 'على 6 أقساط شهرية — لا توجد سلف قائمة',
-    myStepLevel: 2,
-    totalSteps: 3,
-    slaDaysLeft: 0,
-    amount: 6000,
-  },
-  {
-    id: 'REQ-1040',
-    type: 'data_change',
-    title: 'تغيير بيانات — الحساب البنكي',
-    requester: 'سارة أحمد الزهراني',
-    requesterId: 'EMP006',
-    branchId: '1',
-    submittedAt: '2026-07-04',
-    details: 'تحديث IBAN — مرفق: خطاب البنك ✓',
-    myStepLevel: 1,
-    totalSteps: 1,
-    slaDaysLeft: 4,
-  },
-]
 
 export default function ApprovalsInboxPage() {
-  const [items, setItems] = useState(initialItems)
-  const [filterType, setFilterType] = useState<'' | ItemType>('')
+  const [items, setItems] = useState<InboxItem[]>([])
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+  const [filterType, setFilterType] = useState('')
   const [actionModal, setActionModal] = useState<{
     item: InboxItem
     action: 'approve' | 'reject' | 'return'
   } | null>(null)
   const [comment, setComment] = useState('')
+  const [acting, setActing] = useState(false)
+  const [actionError, setActionError] = useState<string | null>(null)
   const [history, setHistory] = useState<
     { id: string; title: string; action: string }[]
   >([])
 
-  const filtered = items.filter((i) => !filterType || i.type === filterType)
+  const load = async () => {
+    try {
+      setError(null)
+      const [inbox, typeList, employees, branches] = await Promise.all([
+        fetchInbox(),
+        fetchRequestTypes(),
+        fetchEmployees(),
+        fetchBranches(),
+      ])
+      const typesByCode = new Map<string, ApiRequestType>(typeList.map((t) => [t.code, t]))
+      const employeesById = new Map(employees.map((e) => [e.id, e]))
+      const branchesById = new Map(branches.map((b) => [b.id, b]))
+
+      setItems(
+        inbox.map((r: ApiRequest): InboxItem => {
+          const type = typesByCode.get(r.typeCode)
+          const steps = parseJson<ResolvedStep[]>(r.resolvedSteps, [])
+          const current =
+            steps.find((s) => s.stepOrder === r.currentStep) ??
+            steps.find((s) => !s.actedAt)
+          const slaDaysLeft = current?.dueAt
+            ? Math.ceil(
+                (new Date(current.dueAt).getTime() - Date.now()) / 86_400_000
+              )
+            : current?.slaDays ?? 3
+          const requester = employeesById.get(r.requesterId)
+          return {
+            id: r.id,
+            displayId: `REQ-${r.id}`,
+            category: type?.category ?? '',
+            title: type?.nameAr ?? r.typeCode,
+            requester: requester?.fullName ?? `موظف #${r.requesterId}`,
+            branchName: r.branchId ? branchesById.get(r.branchId)?.name ?? '' : '',
+            submittedAt: (r.submittedAt ?? r.createdAt).slice(0, 10),
+            details: payloadSummary(r.payload) || (type?.nameAr ?? r.typeCode),
+            myStepLevel: r.currentStep ?? current?.stepOrder ?? 1,
+            totalSteps: steps.length || 1,
+            slaDaysLeft,
+          }
+        })
+      )
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : 'تعذّر الاتصال بالخادم — تأكد أن الـ API يعمل'
+      )
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  const filtered = items.filter((i) => !filterType || i.category === filterType)
   const overdue = items.filter((i) => i.slaDaysLeft <= 0).length
 
   const actionLabels = {
@@ -151,25 +202,43 @@ export default function ApprovalsInboxPage() {
     reject: 'رفض',
     return: 'إعادة للمقدّم',
   }
+  const apiActions = {
+    approve: 'APPROVE',
+    reject: 'REJECT',
+    return: 'RETURN',
+  } as const
 
-  const confirmAction = () => {
-    if (!actionModal) return
-    setItems(items.filter((i) => i.id !== actionModal.item.id))
-    setHistory([
-      {
-        id: actionModal.item.id,
-        title: actionModal.item.title,
-        action:
-          actionModal.action === 'approve'
-            ? 'اعتمدت'
-            : actionModal.action === 'reject'
-            ? 'رفضت'
-            : 'أعدت',
-      },
-      ...history,
-    ])
-    setComment('')
-    setActionModal(null)
+  const confirmAction = async () => {
+    if (!actionModal || acting) return
+    setActing(true)
+    setActionError(null)
+    try {
+      await actOnRequest(
+        actionModal.item.id,
+        apiActions[actionModal.action],
+        comment || undefined
+      )
+      setHistory([
+        {
+          id: actionModal.item.displayId,
+          title: actionModal.item.title,
+          action:
+            actionModal.action === 'approve'
+              ? 'اعتمدت'
+              : actionModal.action === 'reject'
+              ? 'رفضت'
+              : 'أعدت',
+        },
+        ...history,
+      ])
+      setComment('')
+      setActionModal(null)
+      await load()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'تعذّر تنفيذ الإجراء')
+    } finally {
+      setActing(false)
+    }
   }
 
   return (
@@ -197,125 +266,137 @@ export default function ApprovalsInboxPage() {
           </div>
         </div>
 
-        {/* Type Filters */}
-        <div className="flex gap-2 flex-wrap">
-          <button
-            onClick={() => setFilterType('')}
-            className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
-              !filterType
-                ? 'bg-primary-500 text-white'
-                : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
-            }`}
-          >
-            الكل ({items.length})
-          </button>
-          {(Object.keys(typeConfig) as ItemType[]).map((t) => {
-            const count = items.filter((i) => i.type === t).length
-            if (!count) return null
-            return (
+        {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
+        {loading ? (
+          <div className="flex justify-center py-16">
+            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+          </div>
+        ) : (
+          <>
+            {/* Type Filters */}
+            <div className="flex gap-2 flex-wrap">
               <button
-                key={t}
-                onClick={() => setFilterType(filterType === t ? '' : t)}
+                onClick={() => setFilterType('')}
                 className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
-                  filterType === t
+                  !filterType
                     ? 'bg-primary-500 text-white'
                     : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                 }`}
               >
-                {typeConfig[t].label} ({count})
+                الكل ({items.length})
               </button>
-            )
-          })}
-        </div>
-
-        {/* Items */}
-        <div className="space-y-4">
-          {filtered.map((item) => {
-            const cfg = typeConfig[item.type]
-            const Icon = cfg.icon
-            return (
-              <div
-                key={item.id}
-                className={`card p-5 ${
-                  item.slaDaysLeft <= 0 ? 'border-2 border-red-200' : ''
-                }`}
-              >
-                <div className="flex items-start justify-between gap-4">
-                  <div className="flex items-start gap-4 flex-1">
-                    <div
-                      className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${cfg.color}`}
-                    >
-                      <Icon size={24} />
-                    </div>
-                    <div className="flex-1 min-w-0">
-                      <div className="flex items-center gap-2 flex-wrap">
-                        <h3 className="font-bold text-gray-800">{item.title}</h3>
-                        <span className={`badge text-xs ${cfg.color}`}>{cfg.label}</span>
-                        <span className="badge text-xs bg-indigo-100 text-indigo-700">
-                          {getBranchName(item.branchId)}
-                        </span>
-                        {item.slaDaysLeft <= 0 ? (
-                          <span className="badge text-xs bg-red-100 text-red-700">
-                            متجاوز للمهلة!
-                          </span>
-                        ) : (
-                          <span className="text-xs text-gray-400">
-                            متبقي {item.slaDaysLeft} يوم للرد
-                          </span>
-                        )}
-                      </div>
-                      <p className="text-sm text-gray-600 mt-1.5">{item.details}</p>
-                      <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
-                        <span>
-                          مقدّم من: <span className="text-gray-600 font-medium">{item.requester}</span>
-                        </span>
-                        <span dir="ltr">{item.id}</span>
-                        <span dir="ltr">{item.submittedAt}</span>
-                        <span className="flex items-center gap-1">
-                          خطوتك: {item.myStepLevel} من {item.totalSteps}
-                          <ChevronLeft size={12} />
-                        </span>
-                      </div>
-                    </div>
-                  </div>
-                  <div className="flex items-center gap-2 shrink-0">
-                    <button
-                      onClick={() => setActionModal({ item, action: 'approve' })}
-                      className="flex items-center gap-1.5 px-4 py-2 bg-success-500 text-white rounded-xl text-sm font-medium hover:bg-success-600"
-                    >
-                      <CheckCircle2 size={16} />
-                      اعتماد
-                    </button>
-                    <button
-                      onClick={() => setActionModal({ item, action: 'reject' })}
-                      className="flex items-center gap-1.5 px-4 py-2 bg-red-50 text-red-600 rounded-xl text-sm font-medium hover:bg-red-100"
-                    >
-                      <XCircle size={16} />
-                      رفض
-                    </button>
-                    <button
-                      onClick={() => setActionModal({ item, action: 'return' })}
-                      className="flex items-center gap-1.5 px-4 py-2 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-200"
-                    >
-                      <RotateCcw size={16} />
-                      إعادة
-                    </button>
-                  </div>
-                </div>
-              </div>
-            )
-          })}
-
-          {filtered.length === 0 && (
-            <div className="card p-12 text-center">
-              <CheckCircle2 size={48} className="mx-auto text-success-300 mb-4" />
-              <h3 className="text-lg font-bold text-gray-800 mb-1">
-                لا يوجد ما ينتظر قرارك 🎉
-              </h3>
-              <p className="text-gray-500">كل الطلبات تمت معالجتها</p>
+              {Object.keys(typeConfig).map((t) => {
+                const count = items.filter((i) => i.category === t).length
+                if (!count) return null
+                return (
+                  <button
+                    key={t}
+                    onClick={() => setFilterType(filterType === t ? '' : t)}
+                    className={`px-4 py-2 rounded-xl text-sm font-medium transition-colors ${
+                      filterType === t
+                        ? 'bg-primary-500 text-white'
+                        : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                    }`}
+                  >
+                    {typeConfig[t].label} ({count})
+                  </button>
+                )
+              })}
             </div>
-          )}
-        </div>
+
+            {/* Items */}
+            <div className="space-y-4">
+              {filtered.map((item) => {
+                const cfg = typeConfig[item.category] ?? fallbackConfig
+                const Icon = cfg.icon
+                return (
+                  <div
+                    key={item.id}
+                    className={`card p-5 ${
+                      item.slaDaysLeft <= 0 ? 'border-2 border-red-200' : ''
+                    }`}
+                  >
+                    <div className="flex items-start justify-between gap-4">
+                      <div className="flex items-start gap-4 flex-1">
+                        <div
+                          className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${cfg.color}`}
+                        >
+                          <Icon size={24} />
+                        </div>
+                        <div className="flex-1 min-w-0">
+                          <div className="flex items-center gap-2 flex-wrap">
+                            <h3 className="font-bold text-gray-800">{item.title}</h3>
+                            <span className={`badge text-xs ${cfg.color}`}>{cfg.label}</span>
+                            {item.branchName && (
+                              <span className="badge text-xs bg-indigo-100 text-indigo-700">
+                                {item.branchName}
+                              </span>
+                            )}
+                            {item.slaDaysLeft <= 0 ? (
+                              <span className="badge text-xs bg-red-100 text-red-700">
+                                متجاوز للمهلة!
+                              </span>
+                            ) : (
+                              <span className="text-xs text-gray-400">
+                                متبقي {item.slaDaysLeft} يوم للرد
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm text-gray-600 mt-1.5">{item.details}</p>
+                          <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
+                            <span>
+                              مقدّم من: <span className="text-gray-600 font-medium">{item.requester}</span>
+                            </span>
+                            <span dir="ltr">{item.displayId}</span>
+                            <span dir="ltr">{item.submittedAt}</span>
+                            <span className="flex items-center gap-1">
+                              خطوتك: {item.myStepLevel} من {item.totalSteps}
+                              <ChevronLeft size={12} />
+                            </span>
+                          </div>
+                        </div>
+                      </div>
+                      <div className="flex items-center gap-2 shrink-0">
+                        <button
+                          onClick={() => setActionModal({ item, action: 'approve' })}
+                          className="flex items-center gap-1.5 px-4 py-2 bg-success-500 text-white rounded-xl text-sm font-medium hover:bg-success-600"
+                        >
+                          <CheckCircle2 size={16} />
+                          اعتماد
+                        </button>
+                        <button
+                          onClick={() => setActionModal({ item, action: 'reject' })}
+                          className="flex items-center gap-1.5 px-4 py-2 bg-red-50 text-red-600 rounded-xl text-sm font-medium hover:bg-red-100"
+                        >
+                          <XCircle size={16} />
+                          رفض
+                        </button>
+                        <button
+                          onClick={() => setActionModal({ item, action: 'return' })}
+                          className="flex items-center gap-1.5 px-4 py-2 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-200"
+                        >
+                          <RotateCcw size={16} />
+                          إعادة
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                )
+              })}
+
+              {filtered.length === 0 && (
+                <div className="card p-12 text-center">
+                  <CheckCircle2 size={48} className="mx-auto text-success-300 mb-4" />
+                  <h3 className="text-lg font-bold text-gray-800 mb-1">
+                    لا يوجد ما ينتظر قرارك 🎉
+                  </h3>
+                  <p className="text-gray-500">كل الطلبات تمت معالجتها</p>
+                </div>
+              )}
+            </div>
+          </>
+        )}
 
         {/* آخر قراراتي */}
         {history.length > 0 && (
@@ -346,16 +427,24 @@ export default function ApprovalsInboxPage() {
                   {actionLabels[actionModal.action]}: {actionModal.item.title}
                 </h2>
                 <button
-                  onClick={() => setActionModal(null)}
+                  onClick={() => {
+                    setActionModal(null)
+                    setActionError(null)
+                  }}
                   className="p-2 hover:bg-gray-100 rounded-lg"
                 >
                   <X size={20} className="text-gray-500" />
                 </button>
               </div>
               <div className="p-6 space-y-4">
+                {actionError && (
+                  <div className="bg-red-50 text-red-700 rounded-xl p-4 text-sm">
+                    {actionError}
+                  </div>
+                )}
                 <p className="text-sm text-gray-600">
-                  مقدّم من {actionModal.item.requester} —{' '}
-                  {getBranchName(actionModal.item.branchId)}
+                  مقدّم من {actionModal.item.requester}
+                  {actionModal.item.branchName ? ` — ${actionModal.item.branchName}` : ''}
                 </p>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -386,7 +475,13 @@ export default function ApprovalsInboxPage() {
                   )}
               </div>
               <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">
-                <button onClick={() => setActionModal(null)} className="btn-secondary">
+                <button
+                  onClick={() => {
+                    setActionModal(null)
+                    setActionError(null)
+                  }}
+                  className="btn-secondary"
+                >
                   إلغاء
                 </button>
                 <button
@@ -398,9 +493,9 @@ export default function ApprovalsInboxPage() {
                       ? 'bg-red-500 hover:bg-red-600'
                       : 'bg-gray-500 hover:bg-gray-600'
                   }`}
-                  disabled={actionModal.action !== 'approve' && !comment}
+                  disabled={acting || (actionModal.action !== 'approve' && !comment)}
                 >
-                  تأكيد {actionLabels[actionModal.action]}
+                  {acting ? 'جارٍ التنفيذ...' : `تأكيد ${actionLabels[actionModal.action]}`}
                 </button>
               </div>
             </div>
