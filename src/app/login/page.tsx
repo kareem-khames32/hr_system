@@ -8,8 +8,9 @@ import {
   Eye,
   EyeOff,
   LogIn,
+  AlertCircle,
 } from 'lucide-react'
-import Link from 'next/link'
+import { login, saveSession, ApiError } from '@/lib/api'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -17,15 +18,24 @@ export default function LoginPage() {
   const [showPassword, setShowPassword] = useState(false)
   const [rememberMe, setRememberMe] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
-    // Simulate login
-    setTimeout(() => {
-      setIsLoading(false)
+    setError(null)
+    try {
+      const { accessToken, user } = await login(email, password)
+      saveSession(accessToken, user, rememberMe)
       window.location.href = '/'
-    }, 1500)
+    } catch (err) {
+      setError(
+        err instanceof ApiError
+          ? err.message
+          : 'تعذّر الاتصال بالخادم — تأكد أن الـ API يعمل'
+      )
+      setIsLoading(false)
+    }
   }
 
   return (
@@ -46,6 +56,14 @@ export default function LoginPage() {
           <p className="text-gray-500 text-center mb-8">قم بتسجيل الدخول للمتابعة</p>
 
           <form onSubmit={handleSubmit} className="space-y-6">
+            {/* خطأ تسجيل الدخول */}
+            {error && (
+              <div className="flex items-center gap-2 bg-red-50 text-red-700 text-sm rounded-xl px-4 py-3">
+                <AlertCircle size={18} className="shrink-0" />
+                <span>{error}</span>
+              </div>
+            )}
+
             {/* Email */}
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
