@@ -1,8 +1,9 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
+import { clearSession, getCurrentUser, type CurrentUser } from '@/lib/api'
 import {
   LayoutDashboard,
   Users,
@@ -190,9 +191,23 @@ const menuItems: MenuItem[] = [
   },
 ]
 
+// أسماء الأدوار للعرض
+const roleLabels: Record<string, string> = {
+  super_admin: 'مدير النظام',
+  hr_manager: 'مدير الموارد البشرية',
+  branch_manager: 'مدير فرع',
+  employee: 'موظف',
+}
+
 export default function Sidebar() {
   const pathname = usePathname()
   const [expandedItems, setExpandedItems] = useState<string[]>(['employees'])
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
+
+  // يُقرأ بعد الـ mount — الجلسة في التخزين المحلي
+  useEffect(() => {
+    setCurrentUser(getCurrentUser())
+  }, [])
 
   const toggleExpanded = (id: string) => {
     setExpandedItems((prev) =>
@@ -276,17 +291,28 @@ export default function Sidebar() {
         ))}
       </nav>
 
-      {/* User Profile */}
+      {/* المستخدم الحالي من الجلسة الحقيقية + خروج فعلي */}
       <div className="p-4 border-t border-gray-100">
         <div className="flex items-center gap-3 p-3 rounded-xl bg-gray-50">
           <div className="w-10 h-10 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center text-white font-bold">
-            أ
+            {currentUser?.displayName?.charAt(0) ?? '؟'}
           </div>
           <div className="flex-1">
-            <p className="font-medium text-gray-800 text-sm">أحمد محمد</p>
-            <p className="text-xs text-gray-400">مدير الموارد البشرية</p>
+            <p className="font-medium text-gray-800 text-sm">
+              {currentUser?.displayName ?? '—'}
+            </p>
+            <p className="text-xs text-gray-400">
+              {roleLabels[currentUser?.role ?? ''] ?? currentUser?.role ?? ''}
+            </p>
           </div>
-          <button className="p-2 hover:bg-gray-200 rounded-lg transition-colors">
+          <button
+            onClick={() => {
+              clearSession()
+              window.location.href = '/login'
+            }}
+            title="تسجيل الخروج"
+            className="p-2 hover:bg-gray-200 rounded-lg transition-colors"
+          >
             <LogOut size={18} className="text-gray-400" />
           </button>
         </div>
