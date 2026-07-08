@@ -59,8 +59,13 @@ async function main() {
   await ds.query(`DELETE FROM employees WHERE employeeCode <> 'EMP001'`)
   // الفرق كلها، والأقسام غير HR، والفروع غير الرئيسي
   await ds.query(`DELETE FROM teams`)
-  await ds.query(`DELETE FROM departments WHERE code <> 'HR'`)
-  await ds.query(`DELETE FROM branches WHERE code <> 'CAI-001'`)
+  // NULL <> 'HR' تساوي UNKNOWN في SQL — لازم شرط صريح للـ NULL
+  await ds.query(
+    `DELETE FROM departments WHERE code IS NULL OR code <> 'HR'`
+  )
+  await ds.query(
+    `DELETE FROM branches WHERE code IS NULL OR code <> 'CAI-001'`
+  )
   // فك أي إسناد مدير قديم على الفرع/القسم المتبقيين
   const [emp] = await ds.query(
     `SELECT id FROM employees WHERE employeeCode = 'EMP001'`
