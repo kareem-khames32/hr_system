@@ -1,10 +1,12 @@
 import { Module } from '@nestjs/common'
 import { ConfigModule, ConfigService } from '@nestjs/config'
+import { ScheduleModule } from '@nestjs/schedule'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { HealthController } from './health/health.controller'
 import { AuthModule } from './auth/auth.module'
 import { OrgModule } from './org/org.module'
 import { EmployeesModule } from './employees/employees.module'
+import { RequestsModule } from './requests/requests.module'
 
 @Module({
   imports: [
@@ -46,9 +48,12 @@ import { EmployeesModule } from './employees/employees.module'
       },
     }),
 
+    ScheduleModule.forRoot(),
+
     AuthModule,
     OrgModule,
     EmployeesModule,
+    RequestsModule,
   ],
   controllers: [HealthController],
 })

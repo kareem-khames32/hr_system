@@ -1,0 +1,65 @@
+import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
+
+// الفئات التسع — مرآة src/data/requestsCatalog.ts في الفرونت
+export type RequestCategory =
+  | 'leaves'
+  | 'time_attendance'
+  | 'financial'
+  | 'employment_status'
+  | 'personal_data'
+  | 'letters'
+  | 'custody_assets'
+  | 'training'
+  | 'employee_relations'
+
+@Entity('request_types')
+export class RequestType {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Index({ unique: true })
+  @Column({ length: 50 })
+  code: string // LEAVE_ANNUAL, OVERTIME...
+
+  @Column({ length: 200 })
+  nameAr: string
+
+  @Column({ length: 50 })
+  category: RequestCategory
+
+  // JSON: تعريف الحقول المطلوبة عند التقديم
+  @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
+  requiredFields: string
+
+  // JSON: المرفقات المطلوبة
+  @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
+  requiredAttachments: string
+
+  @Column({ nullable: true })
+  approvalChainId: number
+
+  // كود الـ handler الذي يكتب في الوجهة (السجل الدائم) بعد الاعتماد
+  @Column({ length: 100 })
+  destinationHandler: string
+
+  @Column({ default: false })
+  affectsBalance: boolean
+
+  // مسار أمني خاص (تغيير الحساب البنكي)
+  @Column({ default: false })
+  isSecurityRoute: boolean
+
+  // سرّي — يتخطى المدير المباشر (الشكاوى/البلاغات)
+  @Column({ default: false })
+  isConfidential: boolean
+
+  // الخطابات — PDF يتولّد أوتوماتيك
+  @Column({ default: false })
+  autoGeneratesPdf: boolean
+
+  @Column({ length: 5, default: 'P1' })
+  phase: 'P1' | 'P2' | 'P3'
+
+  @Column({ default: true })
+  isActive: boolean
+}

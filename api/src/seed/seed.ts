@@ -11,6 +11,31 @@ import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { Employee } from '../employees/employee.entity'
+import { ApprovalChain } from '../requests/entities/approval-chain.entity'
+import { ApprovalStep } from '../requests/entities/approval-step.entity'
+import {
+  AttendanceCorrection,
+  OvertimeEntry,
+} from '../requests/entities/attendance.entities'
+import { Asset, CustodyAssignment } from '../requests/entities/custody.entities'
+import {
+  EmployeeStatusHistory,
+  Promotion,
+  Transfer,
+} from '../requests/entities/employment.entities'
+import { Loan, LoanInstallment } from '../requests/entities/financial.entities'
+import {
+  Leave,
+  LeaveBalance,
+  LeaveType,
+} from '../requests/entities/leave.entities'
+import { LetterRequest } from '../requests/entities/letter.entities'
+import { RequestApproval } from '../requests/entities/request-approval.entity'
+import { RequestAttachment } from '../requests/entities/request-attachment.entity'
+import { RequestType } from '../requests/entities/request-type.entity'
+import { Request } from '../requests/entities/request.entity'
+import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { ensureLeaveBalance, seedRequests } from './seed-requests'
 
 const dbType = (process.env.DB_TYPE ?? 'mssql') as 'mssql' | 'mysql'
 
@@ -20,7 +45,35 @@ const common = {
   username: process.env.DB_USERNAME ?? (dbType === 'mysql' ? 'root' : 'sa'),
   password: process.env.DB_PASSWORD ?? '',
   database: process.env.DB_DATABASE ?? 'hr_system',
-  entities: [User, Branch, Department, Team, Employee],
+  entities: [
+    User,
+    Branch,
+    Department,
+    Team,
+    Employee,
+    // محرك الطلبات
+    RequestType,
+    ApprovalChain,
+    ApprovalStep,
+    Request,
+    RequestApproval,
+    RequestAttachment,
+    RequestsConfig,
+    // الوجهات
+    LeaveType,
+    Leave,
+    LeaveBalance,
+    OvertimeEntry,
+    AttendanceCorrection,
+    Loan,
+    LoanInstallment,
+    Transfer,
+    Promotion,
+    EmployeeStatusHistory,
+    Asset,
+    CustodyAssignment,
+    LetterRequest,
+  ],
   synchronize: true, // البذر ينشئ الجداول لو مش موجودة
 }
 
@@ -156,6 +209,45 @@ async function main() {
   } else {
     console.log('• حساب الأدمن موجود بالفعل')
   }
+
+  // ===== موظف تجريبي (مديره المباشر = الأدمن) لاختبار دورات الاعتماد =====
+  let demoEmp = await employees.findOne({ where: { employeeCode: 'EMP002' } })
+  if (!demoEmp) {
+    demoEmp = await employees.save(
+      employees.create({
+        employeeCode: 'EMP002', // نفسه كود البصمة على ZKTeco
+        fullName: 'موظف تجريبي',
+        email: 'employee@company.com',
+        jobTitle: 'أخصائي موارد بشرية',
+        branchId: mainBranch.id,
+        departmentId: hrDept.id,
+        managerEmployeeId: adminEmp.id,
+        status: 'active',
+        basicSalary: 8000,
+      })
+    )
+    console.log('✓ الموظف التجريبي أُنشئ (EMP002)')
+  }
+  const demoEmail = 'employee@company.com'
+  if (!(await users.findOne({ where: { email: demoEmail } }))) {
+    await users.save(
+      users.create({
+        email: demoEmail,
+        passwordHash: await bcrypt.hash('Employee@123', 10),
+        displayName: 'موظف تجريبي',
+        role: 'employee',
+        branchId: mainBranch.id,
+        employeeId: demoEmp.id,
+      })
+    )
+    console.log('✓ حساب الموظف التجريبي: employee@company.com / Employee@123')
+  }
+
+  // ===== محرك الطلبات: السلاسل + الأنواع + الإجازات + الإعدادات =====
+  await seedRequests(ds)
+  await ensureLeaveBalance(ds, adminEmp.id)
+  await ensureLeaveBalance(ds, demoEmp.id)
+  console.log('✓ أرصدة الإجازات للسنة الحالية')
 
   await ds.destroy()
   console.log('✅ البذر اكتمل')
