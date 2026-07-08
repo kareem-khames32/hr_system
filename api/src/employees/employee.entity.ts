@@ -98,6 +98,13 @@ export class Employee {
   @Column({ length: 20, default: 'active' })
   status: EmployeeStatus
 
+  // توثيق الأرشفة — للفلترة بالسبب والفترة في شاشة الأرشيف
+  @Column({ type: 'datetime', nullable: true })
+  archivedAt: Date
+
+  @Column({ length: 300, nullable: true })
+  archiveReason: string
+
   @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
   basicSalary: number
 

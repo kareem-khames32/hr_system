@@ -63,13 +63,14 @@ export class EmployeesController {
     return this.employees.update(id, dto, branchScopeOf(user))
   }
 
-  // أرشفة بدل حذف — السجل الوظيفي يبقى
+  // أرشفة بدل حذف — السجل الوظيفي يبقى (بسبب موثّق)
   @Perm('employees.archive')
   @Post(':id/archive')
   archive(
     @Param('id', ParseIntPipe) id: number,
-    @CurrentUser() user: JwtPayload
+    @CurrentUser() user: JwtPayload,
+    @Body() body?: { reason?: string }
   ) {
-    return this.employees.archive(id, branchScopeOf(user))
+    return this.employees.archive(id, branchScopeOf(user), body?.reason)
   }
 }

@@ -86,12 +86,31 @@ const fieldLabels: Record<string, string> = {
   documentType: 'نوع الوثيقة',
   courseName: 'اسم الدورة',
   note: 'ملاحظة',
+  permissionType: 'نوع الإذن',
+  period: 'نطاق اليوم',
+  assetIds: 'الأصول المطلوبة',
+  lastWorkingDate: 'آخر يوم عمل',
+  leaveType: 'نوع الإجازة',
+}
+
+const periodLabels: Record<string, string> = {
+  FULL: 'يوم كامل',
+  MORNING: 'النصف الصباحي',
+  EVENING: 'النصف المسائي',
+}
+
+// قيم مقروءة — الأكواد لا تظهر للمستخدم أبداً
+const valueLabel = (k: string, v: unknown): string => {
+  if (k === 'period') return periodLabels[String(v)] ?? String(v)
+  if (Array.isArray(v)) return `${v.length}`
+  return String(v)
 }
 
 const payloadSummary = (raw?: string | null): string => {
   const payload = parseJson<Record<string, unknown>>(raw, {})
   return Object.entries(payload)
-    .map(([k, v]) => `${fieldLabels[k] ?? k}: ${v}`)
+    .filter(([k]) => fieldLabels[k]) // مفاتيح غير معروفة لا تُعرض بكودها الخام
+    .map(([k, v]) => `${fieldLabels[k]}: ${valueLabel(k, v)}`)
     .join(' • ')
 }
 
@@ -192,11 +211,11 @@ export default function ApprovalsInboxPage() {
             id: r.id,
             displayId: `REQ-${r.id}`,
             category: type?.category ?? '',
-            title: type?.nameAr ?? r.typeCode,
+            title: type?.nameAr ?? 'طلب',
             requester: requester?.fullName ?? `موظف #${r.requesterId}`,
             branchName: r.branchId ? branchesById.get(r.branchId)?.name ?? '' : '',
             submittedAt: (r.submittedAt ?? r.createdAt).slice(0, 10),
-            details: payloadSummary(r.payload) || (type?.nameAr ?? r.typeCode),
+            details: payloadSummary(r.payload) || (type?.nameAr ?? 'طلب'),
             myStepLevel: r.currentStep ?? current?.stepOrder ?? 1,
             totalSteps: steps.length || 1,
             slaDaysLeft,

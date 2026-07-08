@@ -19,6 +19,7 @@ import {
   Lock,
   FileCheck2,
   UserMinus,
+  ExternalLink,
 } from 'lucide-react'
 import {
   fetchOffboardingCase,
@@ -414,18 +415,27 @@ export default function OffboardingCasePage({
                         : 'التصفية معتمدة ومقفلة — للقراءة فقط'}
                     </p>
                   </div>
-                  {editable && (
-                    <button
-                      onClick={() => {
-                        setActionError('')
-                        setAddLineModal(true)
-                      }}
-                      className="btn-secondary flex items-center gap-2 text-sm"
+                  <div className="flex items-center gap-2 flex-wrap">
+                    <Link
+                      href={`/employees/${det.employeeId}/settlement?case=${det.id}`}
+                      className="btn-primary flex items-center gap-2 text-sm"
                     >
-                      <Plus size={16} />
-                      إضافة بند
-                    </button>
-                  )}
+                      <ExternalLink size={16} />
+                      فتح شاشة التصفية الكاملة
+                    </Link>
+                    {editable && (
+                      <button
+                        onClick={() => {
+                          setActionError('')
+                          setAddLineModal(true)
+                        }}
+                        className="btn-secondary flex items-center gap-2 text-sm"
+                      >
+                        <Plus size={16} />
+                        إضافة بند
+                      </button>
+                    )}
+                  </div>
                 </div>
                 <table className="w-full">
                   <thead>
@@ -471,20 +481,29 @@ export default function OffboardingCasePage({
                         </td>
                         {editable && (
                           <td className="py-3 px-4">
-                            <button
-                              onClick={() => {
-                                setActionError('')
-                                setEditLineForm({
-                                  label: line.label,
-                                  amount: String(line.amount),
-                                })
-                                setEditLineModal(line)
-                              }}
-                              className="text-xs px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 flex items-center gap-1"
-                            >
-                              <Pencil size={12} />
-                              تعديل
-                            </button>
+                            {line.isAuto ? (
+                              <span
+                                className="text-xs text-gray-400"
+                                title="البنود التلقائية يحسبها النظام ولا تُعدَّل"
+                              >
+                                تلقائي
+                              </span>
+                            ) : (
+                              <button
+                                onClick={() => {
+                                  setActionError('')
+                                  setEditLineForm({
+                                    label: line.label,
+                                    amount: String(line.amount),
+                                  })
+                                  setEditLineModal(line)
+                                }}
+                                className="text-xs px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-gray-200 flex items-center gap-1"
+                              >
+                                <Pencil size={12} />
+                                تعديل
+                              </button>
+                            )}
                           </td>
                         )}
                       </tr>

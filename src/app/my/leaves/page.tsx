@@ -75,7 +75,7 @@ export default function MyLeavesPage() {
   }, [])
 
   const typeNameOf = (code: string) =>
-    types.find((t) => t.code === code)?.nameAr ?? code
+    types.find((t) => t.code === code)?.nameAr ?? 'إجازة'
 
   return (
     <MainLayout>

@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 import { MainLayout } from '@/components/layout'
 import {
@@ -211,8 +212,19 @@ export default function OffboardingPage() {
                             {c.settlementDocRef}
                           </span>
                         )}
-                        {!c.settlementDocRef && c.settlementNet == null && (
-                          <span className="text-xs text-gray-300">—</span>
+                        {!c.settlementDocRef && c.settlementNet == null &&
+                          !['IN_SETTLEMENT', 'SETTLED', 'CLOSED'].includes(c.status) && (
+                            <span className="text-xs text-gray-300">—</span>
+                          )}
+                        {['IN_SETTLEMENT', 'SETTLED', 'CLOSED'].includes(c.status) && (
+                          <Link
+                            href={`/employees/${c.employeeId}/settlement?case=${c.id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="text-xs px-2.5 py-1 bg-primary-50 text-primary-700 rounded-lg hover:bg-primary-100 flex items-center gap-1"
+                          >
+                            <Calculator size={12} />
+                            التصفية
+                          </Link>
                         )}
                       </div>
                     </td>

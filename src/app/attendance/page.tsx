@@ -46,6 +46,7 @@ interface AttendanceRecord {
   shiftEnd: string
   lateMinutes: number
   excusedMinutes: number
+  deductibleMinutes: number
   location: string
 }
 
@@ -104,6 +105,13 @@ const getStatusBadge = (status: AttendanceRecord['status']) => {
         <span className="badge bg-blue-50 text-blue-600 flex items-center gap-1">
           <Calendar size={12} />
           عطلة
+        </span>
+      )
+    case 'partial_leave':
+      return (
+        <span className="badge bg-indigo-100 text-indigo-700 flex items-center gap-1">
+          <Timer size={12} />
+          إجازة جزئية
         </span>
       )
   }
@@ -170,6 +178,7 @@ export default function AttendancePage() {
         shiftEnd: d.shiftEnd,
         lateMinutes: Number(d.lateMinutes),
         excusedMinutes: Number((d as any).excusedMinutes ?? 0),
+        deductibleMinutes: Number(d.deductibleMinutes ?? 0),
         location: branch?.name ?? '-',
       }
     })
@@ -199,6 +208,7 @@ export default function AttendancePage() {
     absent: records.filter((r) => r.status === 'absent').length,
     late: records.filter((r) => r.status === 'late').length,
     earlyLeave: records.filter((r) => r.status === 'early_leave').length,
+    partialLeave: records.filter((r) => r.status === 'partial_leave').length,
   }
 
   return (
@@ -219,7 +229,7 @@ export default function AttendancePage() {
         </div>
 
         {/* Stats Cards */}
-        <div className="grid grid-cols-5 gap-4">
+        <div className="grid grid-cols-6 gap-4">
           <div className="card flex items-center gap-4">
             <div className="w-12 h-12 bg-gray-100 rounded-2xl flex items-center justify-center">
               <UserCheck size={24} className="text-gray-600" />
@@ -263,6 +273,15 @@ export default function AttendancePage() {
             <div>
               <p className="text-sm text-gray-500">خروج مبكر</p>
               <p className="text-2xl font-bold text-primary-600">{stats.earlyLeave}</p>
+            </div>
+          </div>
+          <div className="card flex items-center gap-4">
+            <div className="w-12 h-12 bg-indigo-100 rounded-2xl flex items-center justify-center">
+              <Timer size={24} className="text-indigo-600" />
+            </div>
+            <div>
+              <p className="text-sm text-gray-500">إجازة جزئية</p>
+              <p className="text-2xl font-bold text-indigo-600">{stats.partialLeave}</p>
             </div>
           </div>
         </div>
@@ -338,6 +357,7 @@ export default function AttendancePage() {
               <option value="late">متأخر</option>
               <option value="early_leave">خروج مبكر</option>
               <option value="leave">في إجازة</option>
+              <option value="partial_leave">إجازة جزئية</option>
               <option value="holiday">عطلة</option>
             </select>
           </div>
@@ -433,6 +453,14 @@ export default function AttendancePage() {
                         {record.excusedMinutes > 0 && (
                           <p className="text-xs text-success-600 mt-1 font-medium">
                             معذور بإذن: {record.excusedMinutes} د
+                          </p>
+                        )}
+                        {record.deductibleMinutes > 0 && (
+                          <p
+                            className="text-xs text-amber-600 mt-1 font-medium"
+                            title="دقائق إذن بخصم — تُخصم من الراتب"
+                          >
+                            {record.deductibleMinutes} د بخصم
                           </p>
                         )}
                       </td>

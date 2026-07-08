@@ -23,33 +23,43 @@ import {
   createAsset,
   assignCustody,
   returnCustody,
+  writeOffCustody,
   managerConfirmCustody,
   can,
   ApiAsset,
   ApiEmployee,
   ApiBranch,
 } from '@/lib/api'
+import { useCurrency } from '@/lib/currency'
 
-// حالات العهدة كما في الباك إند
+// حالات العهدة — التسميات الموحّدة في كل النظام
 const statusLabels: Record<string, string> = {
-  PENDING_ACK: 'بانتظار التأكيد',
-  PENDING_MANAGER_CONFIRM: 'بانتظار اعتماد المدير',
-  ACTIVE: 'نشطة',
-  RETURNED: 'مُرجعة',
-  RETURN_REQUESTED: 'طلب إرجاع',
+  PENDING_ACK: 'بانتظار تأكيد الموظف',
+  PENDING_MANAGER_CONFIRM: 'بانتظار اعتماد المدير المباشر',
+  ACTIVE: 'عهدة نشطة',
+  RETURN_REQUESTED: 'سلّمها الموظف — بانتظار تأكيد الاستلام',
+  RETURNED: 'مُرجَعة',
   LOST: 'مفقودة',
   DAMAGED: 'تالفة',
 }
 
 const statusStyles: Record<string, string> = {
-  PENDING_ACK: 'bg-indigo-100 text-indigo-700',
-  PENDING_MANAGER_CONFIRM: 'bg-purple-100 text-purple-700',
+  PENDING_ACK: 'bg-amber-100 text-amber-700',
+  PENDING_MANAGER_CONFIRM: 'bg-amber-100 text-amber-700',
   ACTIVE: 'bg-success-50 text-success-700',
+  RETURN_REQUESTED: 'bg-indigo-100 text-indigo-700',
   RETURNED: 'bg-gray-100 text-gray-600',
-  RETURN_REQUESTED: 'bg-blue-100 text-blue-700',
   LOST: 'bg-red-100 text-red-700',
-  DAMAGED: 'bg-orange-100 text-orange-700',
+  DAMAGED: 'bg-red-100 text-red-700',
 }
+
+// الحالات المفتوحة — يجوز شطبها فقداً أو تلفاً
+const OPEN_STATUSES = [
+  'PENDING_ACK',
+  'PENDING_MANAGER_CONFIRM',
+  'ACTIVE',
+  'RETURN_REQUESTED',
+]
 
 interface CustodyRow {
   id: number
@@ -71,6 +81,7 @@ interface CustodyRow {
 const fmtDate = (v?: string | null) => (v ? String(v).slice(0, 10) : '')
 
 export default function CustodyPage() {
+  const currency = useCurrency()
   const [records, setRecords] = useState<CustodyRow[]>([])
   const [assets, setAssets] = useState<ApiAsset[]>([])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
@@ -223,6 +234,42 @@ export default function CustodyPage() {
     }
   }
 
+  // شطب العهدة (فقد/تلف) — يقفل السجل ويرجّع قيمة الأصل كتلميح خصم للتصفية
+  const [writeOffTarget, setWriteOffTarget] = useState<CustodyRow | null>(null)
+  const [writeOffForm, setWriteOffForm] = useState({ lost: true, condition: '' })
+  const [writingOff, setWritingOff] = useState(false)
+  const [writeOffNotice, setWriteOffNotice] = useState<string | null>(null)
+
+  const openWriteOff = (r: CustodyRow) => {
+    setWriteOffForm({ lost: true, condition: '' })
+    setWriteOffTarget(r)
+  }
+
+  const handleWriteOff = async () => {
+    if (!writeOffTarget) return
+    setWritingOff(true)
+    setError('')
+    try {
+      const res = await writeOffCustody(writeOffTarget.id, {
+        lost: writeOffForm.lost,
+        condition: writeOffForm.condition.trim() || undefined,
+      })
+      if (res.assetValue != null) {
+        setWriteOffNotice(
+          `قيمة الأصل ${Number(res.assetValue).toLocaleString()} ${currency} — سجّلها خصماً في تصفية إنهاء الخدمة`
+        )
+      } else {
+        setWriteOffNotice(null)
+      }
+      setWriteOffTarget(null)
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر شطب العهدة')
+    } finally {
+      setWritingOff(false)
+    }
+  }
+
   return (
     <MainLayout>
       <div className="space-y-6">
@@ -255,6 +302,22 @@ export default function CustodyPage() {
         {/* Error Banner */}
         {error && (
           <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
+        )}
+
+        {/* تلميح خصم التصفية بعد الشطب */}
+        {writeOffNotice && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <AlertTriangle size={20} className="text-amber-500 shrink-0" />
+              <p className="text-sm font-medium">{writeOffNotice}</p>
+            </div>
+            <button
+              onClick={() => setWriteOffNotice(null)}
+              className="p-1.5 hover:bg-amber-100 rounded-lg"
+            >
+              <X size={16} className="text-amber-500" />
+            </button>
+          </div>
         )}
 
         {/* Stats */}
@@ -410,13 +473,32 @@ export default function CustodyPage() {
                           {confirmingId === r.id ? 'جارٍ الاعتماد...' : 'اعتماد المدير'}
                         </button>
                       )}
-                      {['PENDING_ACK', 'ACTIVE', 'RETURN_REQUESTED'].includes(r.status) && (
+                      {r.status === 'RETURN_REQUESTED' ? (
                         <button
                           onClick={() => handleReturn(r.id)}
-                          className="text-xs px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 flex items-center gap-1"
+                          className="text-xs px-3 py-1.5 bg-indigo-600 text-white rounded-lg hover:bg-indigo-700 flex items-center gap-1 shadow-sm"
                         >
-                          <RotateCcw size={12} />
-                          إرجاع
+                          <CheckCircle2 size={12} />
+                          سلّمها الموظف — أكّد الاستلام
+                        </button>
+                      ) : (
+                        ['PENDING_ACK', 'ACTIVE'].includes(r.status) && (
+                          <button
+                            onClick={() => handleReturn(r.id)}
+                            className="text-xs px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100 flex items-center gap-1"
+                          >
+                            <RotateCcw size={12} />
+                            إرجاع
+                          </button>
+                        )
+                      )}
+                      {OPEN_STATUSES.includes(r.status) && can('custody.assign') && (
+                        <button
+                          onClick={() => openWriteOff(r)}
+                          className="text-xs px-3 py-1.5 bg-red-50 text-red-700 rounded-lg hover:bg-red-100 flex items-center gap-1"
+                        >
+                          <AlertTriangle size={12} />
+                          شطب (فقد/تلف)
                         </button>
                       )}
                       {r.status === 'RETURNED' && (
@@ -576,6 +658,92 @@ export default function CustodyPage() {
                   disabled={saving || !formData.employeeId || !formData.assetId}
                 >
                   تسليم العهدة
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Write-off Modal — شطب فقد/تلف */}
+        {writeOffTarget && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+              <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-800">شطب العهدة (فقد/تلف)</h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {writeOffTarget.assetName} — {writeOffTarget.employeeName}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setWriteOffTarget(null)}
+                  className="p-2 hover:bg-gray-100 rounded-lg"
+                >
+                  <X size={20} className="text-gray-500" />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    نوع الشطب *
+                  </label>
+                  <div className="grid grid-cols-2 gap-3">
+                    <button
+                      type="button"
+                      onClick={() => setWriteOffForm({ ...writeOffForm, lost: true })}
+                      className={`p-3 rounded-xl border text-sm font-medium transition-colors ${
+                        writeOffForm.lost
+                          ? 'border-red-400 bg-red-50 text-red-700'
+                          : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      مفقودة
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setWriteOffForm({ ...writeOffForm, lost: false })}
+                      className={`p-3 rounded-xl border text-sm font-medium transition-colors ${
+                        !writeOffForm.lost
+                          ? 'border-red-400 bg-red-50 text-red-700'
+                          : 'border-gray-200 text-gray-600 hover:bg-gray-50'
+                      }`}
+                    >
+                      تالفة
+                    </button>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    وصف الحالة (اختياري)
+                  </label>
+                  <textarea
+                    value={writeOffForm.condition}
+                    onChange={(e) =>
+                      setWriteOffForm({ ...writeOffForm, condition: e.target.value })
+                    }
+                    className="input w-full min-h-[80px]"
+                    placeholder="مثال: كسر في الشاشة بعد سقوط الجهاز"
+                  />
+                </div>
+                <p className="text-xs text-gray-400">
+                  الشطب يقفل سجل العهدة نهائياً — إن كانت للأصل قيمة مسجلة ستظهر كتلميح
+                  خصم لتصفية إنهاء الخدمة
+                </p>
+              </div>
+              <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">
+                <button onClick={() => setWriteOffTarget(null)} className="btn-secondary">
+                  إلغاء
+                </button>
+                <button
+                  onClick={handleWriteOff}
+                  disabled={writingOff}
+                  className="px-4 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 disabled:opacity-50"
+                >
+                  {writingOff
+                    ? 'جارٍ الشطب...'
+                    : writeOffForm.lost
+                      ? 'شطب — مفقودة'
+                      : 'شطب — تالفة'}
                 </button>
               </div>
             </div>

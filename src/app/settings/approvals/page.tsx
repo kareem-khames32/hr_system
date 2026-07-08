@@ -606,9 +606,6 @@ export default function ApprovalsPage() {
                               {branchLabelOf(chain.branchId)}
                             </span>
                           </div>
-                          <p className="text-sm text-gray-500 mt-1 font-mono" dir="ltr">
-                            {chain.code}
-                          </p>
 
                           {/* Conditions */}
                           {thresholdSteps.length > 0 && (

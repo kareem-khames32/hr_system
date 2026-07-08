@@ -117,8 +117,11 @@ export default function EmployeesPage() {
 
   const handleArchive = async (id: number) => {
     if (!window.confirm('هل تريد أرشفة هذا الموظف؟')) return
+    // سبب اختياري — الإلغاء يوقف الأرشفة، والفراغ يُكمل بلا سبب
+    const reason = window.prompt('سبب الأرشفة (اختياري)')
+    if (reason === null) return
     try {
-      await archiveEmployee(id)
+      await archiveEmployee(id, reason.trim() || undefined)
       await loadData()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذرت أرشفة الموظف')

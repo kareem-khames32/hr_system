@@ -20,6 +20,7 @@ import {
   fetchEmployeeProfile,
   fetchMyBalances,
   fetchMyRequests,
+  fetchRequestTypes,
   fetchBranches,
   fetchDepartments,
   ApiError,
@@ -136,6 +137,7 @@ export default function ProfilePage() {
   const [documents, setDocuments] = useState<ApiDocument[]>([])
   const [balances, setBalances] = useState<ApiBalance[]>([])
   const [requests, setRequests] = useState<ApiRequest[]>([])
+  const [typeNames, setTypeNames] = useState<Record<string, string>>({})
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [loading, setLoading] = useState(true)
@@ -163,6 +165,12 @@ export default function ProfilePage() {
           .catch(() => {})
         const myRequests = await fetchMyRequests().catch(() => [] as ApiRequest[])
         setRequests(myRequests.slice(0, 5))
+        // الاسم العربي لنوع الطلب — الكود لا يظهر للمستخدم
+        fetchRequestTypes()
+          .then((ts) =>
+            setTypeNames(Object.fromEntries(ts.map((t) => [t.code, t.nameAr])))
+          )
+          .catch(() => {})
         try {
           const profile = await fetchEmployeeProfile(employeeId)
           setEmployee(profile.employee)
@@ -510,8 +518,10 @@ export default function ProfilePage() {
                             <FileText size={20} className="text-gray-600" />
                             <div>
                               <p className="font-medium text-gray-800">
-                                {typeCodeLabels[request.typeCode] ?? request.typeCode} #
-                                {request.id}
+                                {typeNames[request.typeCode] ??
+                                  typeCodeLabels[request.typeCode] ??
+                                  'طلب'}{' '}
+                                #{request.id}
                               </p>
                               <p className="text-sm text-gray-500">
                                 {formatDate(request.createdAt)}

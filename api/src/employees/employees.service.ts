@@ -199,11 +199,13 @@ export class EmployeesService {
     return this.employees.save(emp)
   }
 
-  // الأرشفة بدل الحذف — التاريخ الوظيفي لا يُمسح
-  async archive(id: number, branchScope: number | null) {
+  // الأرشفة بدل الحذف — التاريخ الوظيفي لا يُمسح (بسبب موثّق)
+  async archive(id: number, branchScope: number | null, reason?: string) {
     const emp = await this.findOne(id, branchScope)
     emp.status = 'archived'
     emp.isActive = false
+    emp.archivedAt = new Date()
+    emp.archiveReason = reason?.trim() || 'أرشفة يدوية'
     return this.employees.save(emp)
   }
 }

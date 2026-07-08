@@ -135,6 +135,10 @@ export interface ApiEmployee {
   branchId: number; departmentId?: number; teamId?: number
   managerEmployeeId?: number; joinDate?: string; status: string
   basicSalary?: number; payMethod: string; bankName?: string; iban?: string
+  housingAllowance?: number; transportAllowance?: number; otherAllowance?: number
+  costCenterId?: number
+  // توثيق الأرشفة — للفلترة في شاشة الأرشيف
+  archivedAt?: string; archiveReason?: string
   isActive: boolean; createdAt: string
 }
 export interface ApiRequestType {
@@ -158,10 +162,12 @@ export interface ApiAttendanceDay {
   id: number; employeeId: number; branchId?: number; date: string
   checkIn?: string; checkOut?: string
   shiftName: string; shiftStart: string; shiftEnd: string
-  status: 'present' | 'late' | 'absent' | 'early_leave' | 'leave' | 'holiday'
+  status: 'present' | 'late' | 'absent' | 'early_leave' | 'leave' | 'holiday' | 'partial_leave'
   lateMinutes: number; earlyLeaveMinutes: number; workMinutes: number
   // دقائق معذورة بإذن معتمد — لا تُخصم
   excusedMinutes: number
+  // دقائق إذن «بخصم» — تدخل خصم المسير
+  deductibleMinutes?: number
 }
 export interface ApiLeave {
   id: number; requestId?: number; employeeId: number; leaveType: string
@@ -218,7 +224,8 @@ export const fetchEmployees = () => get<ApiEmployee[]>('/employees')
 export const fetchEmployee = (id: number) => get<ApiEmployee>(`/employees/${id}`)
 export const createEmployee = (e: Partial<ApiEmployee>) => post<ApiEmployee>('/employees', e)
 export const updateEmployee = (id: number, e: Partial<ApiEmployee>) => patch<ApiEmployee>(`/employees/${id}`, e)
-export const archiveEmployee = (id: number) => post<ApiEmployee>(`/employees/${id}/archive`)
+export const archiveEmployee = (id: number, reason?: string) =>
+  post<ApiEmployee>(`/employees/${id}/archive`, reason ? { reason } : {})
 
 // ===== الطلبات =====
 export const fetchRequestTypes = () => get<ApiRequestType[]>('/requests/types')
@@ -232,8 +239,8 @@ export const fetchAllRequests = (q?: { status?: string; typeCode?: string }) => 
 }
 export const fetchInbox = () => get<ApiRequest[]>('/requests/inbox')
 export const fetchRequest = (id: number) => get<ApiRequest>(`/requests/${id}`)
-export const createRequest = (typeCode: string, payload: Record<string, unknown>, submit = true) =>
-  post<ApiRequest>('/requests', { typeCode, payload, submit })
+export const createRequest = (typeCode: string, payload: Record<string, unknown>, submit = true, onBehalfEmployeeId?: number) =>
+  post<ApiRequest>('/requests', { typeCode, payload, submit, ...(onBehalfEmployeeId ? { onBehalfEmployeeId } : {}) })
 export const actOnRequest = (id: number, action: 'APPROVE' | 'REJECT' | 'RETURN', comment?: string) =>
   post<ApiRequest>(`/requests/${id}/act`, { action, comment })
 export const cancelRequest = (id: number) => post<ApiRequest>(`/requests/${id}/cancel`)
@@ -304,6 +311,9 @@ export const replaceChainSteps = (id: number, steps: ChainStepInput[]) =>
 export interface ApiAsset {
   id: number; name: string; category: string; serialNumber?: string
   currentHolderId?: number; holderName?: string | null
+  // قيمة الأصل (اختيارية) — تُستخدم خصماً عند الفقد/التلف في التصفية
+  value?: number | null
+  status?: 'AVAILABLE' | 'ASSIGNED' | 'RETIRED'
 }
 export interface ApiCustody {
   id: number; requestId?: number; assetId: number; employeeId: number
@@ -314,13 +324,25 @@ export interface ApiCustody {
 }
 export const fetchAssets = () => get<ApiAsset[]>('/assets')
 export const createAsset = (a: Partial<ApiAsset>) => post<ApiAsset>('/assets', a)
+export const updateAsset = (id: number, a: Partial<ApiAsset>) => patch<ApiAsset>(`/assets/${id}`, a)
+// الأصول المتاحة — لنموذج «طلب عهدة» (خدمة ذاتية)
+export const fetchAvailableAssets = () =>
+  get<Array<{ id: number; name: string; category: string; serialNumber?: string }>>('/assets/available')
+export const retireAsset = (id: number) => post<ApiAsset>(`/assets/${id}/retire`)
+export const reactivateAsset = (id: number) => post<ApiAsset>(`/assets/${id}/reactivate`)
 export const fetchCustody = () => get<ApiCustody[]>('/custody')
 export const assignCustody = (assetId: number, employeeId: number) =>
   post<ApiCustody>('/custody/assign', { assetId, employeeId })
 export const returnCustody = (id: number, condition?: string) =>
   post<ApiCustody>(`/custody/${id}/return`, { condition })
+// شطب مفقود/تالف — يرجّع قيمة الأصل كتلميح خصم للتصفية
+export const writeOffCustody = (id: number, opts?: { lost?: boolean; condition?: string }) =>
+  post<ApiCustody & { assetValue?: number | null; note?: string }>(`/custody/${id}/write-off`, opts ?? {})
 export const acknowledgeCustody = (assignmentId: number) =>
   post<ApiCustody>(`/requests/custody/${assignmentId}/acknowledge`)
+// الموظف يعلّم «سلّمت العهدة» → مسؤول العهد يؤكد بالاستلام الفعلي
+export const requestCustodyHandover = (assignmentId: number) =>
+  post<ApiCustody>(`/requests/custody/${assignmentId}/handover`)
 
 // ===== المستندات =====
 export interface ApiDocument {
@@ -339,7 +361,7 @@ export const createDocument = (d: Partial<ApiDocument>) => post<ApiDocument>('/d
 export const updateDocument = (id: number, d: Partial<ApiDocument>) => patch<ApiDocument>(`/documents/${id}`, d)
 
 // ===== الكتالوجات (عطلات/ورديات/أجهزة/مسميات/درجات/أنواع أصول) =====
-export type CatalogKind = 'holidays' | 'shifts' | 'devices' | 'job-titles' | 'grades' | 'asset-types'
+export type CatalogKind = 'holidays' | 'shifts' | 'devices' | 'job-titles' | 'grades' | 'asset-types' | 'permission-types' | 'cost-centers'
 export const fetchCatalog = <T = any>(kind: CatalogKind) => get<T[]>(`/catalogs/${kind}`)
 export const createCatalogItem = <T = any>(kind: CatalogKind, item: Record<string, unknown>) =>
   post<T>(`/catalogs/${kind}`, item)

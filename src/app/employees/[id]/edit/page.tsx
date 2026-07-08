@@ -17,11 +17,20 @@ import {
   updateEmployee,
   fetchDepartments,
   fetchEmployees,
+  fetchCatalog,
   ApiDepartment,
   ApiEmployee,
 } from '@/lib/api'
 
 const bankOptions = ['البنك الأهلي', 'بنك الراجحي', 'بنك الرياض', 'البنك السعودي الفرنسي']
+
+// مركز التكلفة — من كتالوج الإعدادات
+interface CostCenter {
+  id: number
+  code: string
+  name: string
+  isActive: boolean
+}
 
 // الحقول الشخصية والمالية الجديدة المدعومة في الباك إند (ليست بعد ضمن ApiEmployee)
 type EmployeeExtras = {
@@ -77,10 +86,12 @@ export default function EditEmployeePage() {
     housingAllowance: '',
     transportAllowance: '',
     otherAllowance: '',
+    costCenterId: '',
   })
 
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [managers, setManagers] = useState<ApiEmployee[]>([])
+  const [costCenters, setCostCenters] = useState<CostCenter[]>([])
   // نهاية العقد كما وردت من السيرفر — لمعرفة إن كان المستخدم مسحها (=> عقد غير محدد المدة)
   const [initialContractEnd, setInitialContractEnd] = useState('')
   const [loading, setLoading] = useState(true)
@@ -127,6 +138,7 @@ export default function EditEmployeePage() {
           housingAllowance: emp.housingAllowance != null ? String(Number(emp.housingAllowance)) : '',
           transportAllowance: emp.transportAllowance != null ? String(Number(emp.transportAllowance)) : '',
           otherAllowance: emp.otherAllowance != null ? String(Number(emp.otherAllowance)) : '',
+          costCenterId: emp.costCenterId != null ? String(emp.costCenterId) : '',
         }))
         setInitialContractEnd(emp.contractEnd ? String(emp.contractEnd).slice(0, 10) : '')
       })
@@ -134,6 +146,10 @@ export default function EditEmployeePage() {
         setError(err instanceof Error ? err.message : 'تعذر تحميل بيانات الموظف')
       )
       .finally(() => setLoading(false))
+    // مراكز التكلفة اختيارية — فشلها لا يعطّل النموذج
+    fetchCatalog<CostCenter>('cost-centers')
+      .then((cc) => setCostCenters(cc.filter((c) => c.isActive)))
+      .catch(() => setCostCenters([]))
   }, [employeeId])
 
   const handleChange = (field: string, value: string) => {
@@ -176,6 +192,7 @@ export default function EditEmployeePage() {
       if (formData.housingAllowance !== '') changes.housingAllowance = Number(formData.housingAllowance)
       if (formData.transportAllowance !== '') changes.transportAllowance = Number(formData.transportAllowance)
       if (formData.otherAllowance !== '') changes.otherAllowance = Number(formData.otherAllowance)
+      if (formData.costCenterId) changes.costCenterId = Number(formData.costCenterId)
 
       await updateEmployee(employeeId, changes)
       window.location.href = '/employees'
@@ -557,6 +574,21 @@ export default function EditEmployeePage() {
                 />
                 <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-500">ر.س</span>
               </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">مركز التكلفة (اختياري)</label>
+              <select
+                className="input w-full"
+                value={formData.costCenterId}
+                onChange={(e) => handleChange('costCenterId', e.target.value)}
+              >
+                <option value="">بدون مركز تكلفة</option>
+                {costCenters.map((cc) => (
+                  <option key={cc.id} value={String(cc.id)}>
+                    {cc.code} — {cc.name}
+                  </option>
+                ))}
+              </select>
             </div>
           </div>
         </div>

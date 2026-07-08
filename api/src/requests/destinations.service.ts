@@ -365,7 +365,14 @@ export class DestinationsService {
           ? 'archived'
           : String(payload.newStatus ?? emp.status)
     emp.status = newStatus as any
-    if (newStatus === 'archived') emp.isActive = false
+    if (newStatus === 'archived') {
+      emp.isActive = false
+      emp.archivedAt = new Date()
+      emp.archiveReason =
+        type.code === 'RETIREMENT'
+          ? 'تقاعد'
+          : String(payload.reason ?? type.nameAr)
+    }
     await em.getRepository(Employee).save(emp)
     const hist = await em.getRepository(EmployeeStatusHistory).save({
       employeeId: emp.id,

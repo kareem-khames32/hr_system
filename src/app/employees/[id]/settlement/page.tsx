@@ -1,649 +1,807 @@
 'use client'
 
-import { useState } from 'react'
+import { Suspense, useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   DollarSign,
-  Calculator,
-  FileText,
   Printer,
-  Download,
-  CheckCircle,
-  Clock,
-  Calendar,
+  CheckCircle2,
   User,
-  Briefcase,
   ArrowLeft,
   AlertTriangle,
   Plus,
   Minus,
-  Edit3,
-  Save,
+  Pencil,
   X,
-  CreditCard,
   Building2,
   Shield,
   Receipt,
+  ClipboardCheck,
+  Lock,
+  FileCheck2,
+  UserMinus,
 } from 'lucide-react'
 import Link from 'next/link'
-import { useParams } from 'next/navigation'
+import { useSearchParams } from 'next/navigation'
+import {
+  fetchOffboardingCase,
+  fetchOffboardingCases,
+  addSettlementLine,
+  updateSettlementLine,
+  approveSettlement,
+  can,
+  type ApiOffboardingCase,
+  type ApiSettlementLine,
+} from '@/lib/api'
+import { useCurrency } from '@/lib/currency'
 
-// بيانات الموظف
-const employeeData = {
-  id: '1',
-  name: 'أحمد محمد السعيد',
-  nameEn: 'Ahmed Mohammed Alsaeed',
-  position: 'مطور برمجيات أول',
-  department: 'تقنية المعلومات',
-  employeeId: 'EMP001',
-  nationalId: '1234567890',
-  joinDate: '2020-03-15',
-  lastWorkDay: '2026-02-28',
-  terminationReason: 'استقالة',
-  contractType: 'غير محدد المدة',
-  basicSalary: 12000,
-  housingAllowance: 2500,
-  transportAllowance: 1000,
-  totalSalary: 15500,
-  leaveBalance: 18,
-  loanBalance: 5000,
-  bankName: 'بنك الراجحي',
-  iban: 'SA0380000000608010167519',
+// حالات ملف إنهاء الخدمة — تسميات عربية فقط
+const statusLabels: Record<string, string> = {
+  IN_CLEARANCE: 'إخلاء طرف جارٍ',
+  IN_SETTLEMENT: 'تصفية قيد المراجعة',
+  SETTLED: 'معتمدة ومقفولة',
+  CLOSED: 'منتهية',
 }
 
-// عناصر الاستحقاقات
-const defaultEntitlements = [
-  { id: '1', name: 'مكافأة نهاية الخدمة', type: 'credit', amount: 0, calculated: true, description: 'حسب نظام العمل' },
-  { id: '2', name: 'بدل الإجازات المستحقة', type: 'credit', amount: 0, calculated: true, description: 'رصيد الإجازات × الراتب اليومي' },
-  { id: '3', name: 'راتب الشهر الحالي', type: 'credit', amount: 0, calculated: true, description: 'حتى آخر يوم عمل' },
-]
+const statusStyles: Record<string, string> = {
+  IN_CLEARANCE: 'bg-warning-50 text-warning-600',
+  IN_SETTLEMENT: 'bg-blue-100 text-blue-700',
+  SETTLED: 'bg-indigo-100 text-indigo-700',
+  CLOSED: 'bg-gray-100 text-gray-600',
+}
 
-const defaultDeductions = [
-  { id: 'd1', name: 'رصيد السلف', type: 'debit', amount: 5000, calculated: false, description: 'سلف غير مسددة' },
-  { id: 'd2', name: 'التأمينات الاجتماعية', type: 'debit', amount: 0, calculated: true, description: 'حصة الموظف' },
-]
+// طرق الصرف — تسميات عربية
+const payMethodLabels: Record<string, string> = {
+  transfer: 'تحويل بنكي',
+  cash: 'نقدي',
+  visa: 'فيزا',
+}
 
-export default function SettlementPage() {
-  const params = useParams()
-  const [entitlements, setEntitlements] = useState(defaultEntitlements)
-  const [deductions, setDeductions] = useState(defaultDeductions)
-  const [showAddItem, setShowAddItem] = useState<'credit' | 'debit' | null>(null)
-  const [newItem, setNewItem] = useState({ name: '', amount: 0, description: '' })
-  const [isApproved, setIsApproved] = useState(false)
-  const [isPaid, setIsPaid] = useState(false)
-  const [paymentDate, setPaymentDate] = useState('')
-  const [paymentMethod, setPaymentMethod] = useState('bank_transfer')
+const fmtDate = (v?: string | null) => (v ? String(v).slice(0, 10) : '—')
 
-  // حساب سنوات الخدمة
-  const calculateServiceYears = () => {
-    const joinDate = new Date(employeeData.joinDate)
-    const lastDay = new Date(employeeData.lastWorkDay)
-    const years = (lastDay.getTime() - joinDate.getTime()) / (1000 * 60 * 60 * 24 * 365)
-    return Math.floor(years * 10) / 10
-  }
+function Spinner() {
+  return (
+    <div className="flex items-center justify-center py-20">
+      <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+    </div>
+  )
+}
 
-  // حساب مكافأة نهاية الخدمة
-  const calculateEndOfService = () => {
-    const years = calculateServiceYears()
-    const salary = employeeData.basicSalary
+function SettlementContent({ employeeId, backHref }: { employeeId: number; backHref: string }) {
+  const searchParams = useSearchParams()
+  const caseParam = searchParams.get('case')
+  const currency = useCurrency()
 
-    if (years <= 5) {
-      return Math.round((salary / 2) * years)
-    } else {
-      const first5Years = (salary / 2) * 5
-      const remainingYears = (salary) * (years - 5)
-      return Math.round(first5Years + remainingYears)
-    }
-  }
+  const [det, setDet] = useState<ApiOffboardingCase | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [notFound, setNotFound] = useState(false)
+  const [error, setError] = useState('')
+  const [actionError, setActionError] = useState('')
+  const [saving, setSaving] = useState(false)
 
-  // حساب بدل الإجازات
-  const calculateLeaveCompensation = () => {
-    const dailySalary = employeeData.totalSalary / 30
-    return Math.round(dailySalary * employeeData.leaveBalance)
-  }
+  // مودال إضافة بند (استحقاق أو خصم)
+  const [addModal, setAddModal] = useState<'CREDIT' | 'DEBIT' | null>(null)
+  const [addForm, setAddForm] = useState({ label: '', amount: '' })
+  // مودال تعديل بند يدوي
+  const [editModal, setEditModal] = useState<ApiSettlementLine | null>(null)
+  const [editForm, setEditForm] = useState({ label: '', amount: '' })
 
-  // حساب راتب الشهر الحالي
-  const calculateCurrentMonthSalary = () => {
-    const lastDay = new Date(employeeData.lastWorkDay)
-    const daysWorked = lastDay.getDate()
-    const dailySalary = employeeData.totalSalary / 30
-    return Math.round(dailySalary * daysWorked)
-  }
-
-  // حساب التأمينات
-  const calculateGOSI = () => {
-    return Math.round(employeeData.basicSalary * 0.1) // 10% من الراتب الأساسي
-  }
-
-  // تحديث القيم المحسوبة
-  const getCalculatedEntitlements = () => {
-    return entitlements.map(item => {
-      if (item.calculated) {
-        if (item.name === 'مكافأة نهاية الخدمة') {
-          return { ...item, amount: calculateEndOfService() }
+  const load = async () => {
+    try {
+      if (caseParam && Number.isFinite(Number(caseParam))) {
+        setDet(await fetchOffboardingCase(Number(caseParam)))
+        setNotFound(false)
+      } else {
+        // بدون رقم ملف — نبحث عن أحدث ملف إنهاء خدمة لهذا الموظف
+        let cases: ApiOffboardingCase[] = []
+        try {
+          cases = await fetchOffboardingCases()
+        } catch {
+          setNotFound(true)
+          setDet(null)
+          setError('')
+          return
         }
-        if (item.name === 'بدل الإجازات المستحقة') {
-          return { ...item, amount: calculateLeaveCompensation() }
+        const mine = cases
+          .filter((c) => c.employeeId === employeeId)
+          .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
+        if (mine.length === 0) {
+          setNotFound(true)
+          setDet(null)
+          setError('')
+          return
         }
-        if (item.name === 'راتب الشهر الحالي') {
-          return { ...item, amount: calculateCurrentMonthSalary() }
-        }
+        setDet(await fetchOffboardingCase(mine[0].id))
+        setNotFound(false)
       }
-      return item
-    })
+      setError('')
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تحميل ملف التصفية')
+    } finally {
+      setLoading(false)
+    }
   }
 
-  const getCalculatedDeductions = () => {
-    return deductions.map(item => {
-      if (item.calculated && item.name === 'التأمينات الاجتماعية') {
-        return { ...item, amount: calculateGOSI() }
-      }
-      return item
-    })
+  useEffect(() => {
+    if (Number.isFinite(employeeId)) load()
+    else {
+      setError('رقم الموظف غير صالح')
+      setLoading(false)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [employeeId, caseParam])
+
+  const emp = det?.employee
+  const items = det?.items ?? []
+  const lines = det?.lines ?? []
+  const doneCount = items.filter((i) => i.status === 'DONE').length
+
+  const inClearance = det?.status === 'IN_CLEARANCE'
+  // البنود قابلة للتعديل فقط أثناء المراجعة ولمن يملك الصلاحية
+  const isEditable = det?.status === 'IN_SETTLEMENT' && can('settlement.edit')
+  const canApprove = det?.status === 'IN_SETTLEMENT' && can('settlement.approve')
+
+  const entitlements = lines.filter((l) => l.type === 'CREDIT')
+  const deductions = lines.filter((l) => l.type === 'DEBIT')
+  const totalEntitlements = entitlements.reduce((s, l) => s + Number(l.amount), 0)
+  const totalDeductions = deductions.reduce((s, l) => s + Number(l.amount), 0)
+  // الصافي — نفضّل قيمة الباك إند إن وُجدت
+  const net = det?.net ?? det?.settlementNet ?? totalEntitlements - totalDeductions
+
+  // سنوات الخدمة من التعيين حتى آخر يوم عمل (منزلة عشرية واحدة)
+  const serviceYears = (() => {
+    if (!emp?.joinDate || !det?.lastWorkingDay) return null
+    const join = new Date(emp.joinDate)
+    const last = new Date(det.lastWorkingDay)
+    if (isNaN(join.getTime()) || isNaN(last.getTime())) return null
+    const years = (last.getTime() - join.getTime()) / (1000 * 60 * 60 * 24 * 365.25)
+    return Math.max(0, Math.round(years * 10) / 10)
+  })()
+
+  const fmtMoney = (v?: number | null) =>
+    v == null ? '—' : `${Number(v).toLocaleString()} ${currency}`
+
+  const salaryParts = [
+    emp?.basicSalary,
+    emp?.housingAllowance,
+    emp?.transportAllowance,
+    emp?.otherAllowance,
+  ]
+  const hasSalary = salaryParts.some((v) => v != null)
+  const totalSalary = salaryParts.reduce((s: number, v) => s + (Number(v) || 0), 0)
+
+  const handleAddLine = async () => {
+    if (!det || !addModal || saving || !addForm.label || !addForm.amount) return
+    setSaving(true)
+    setActionError('')
+    try {
+      await addSettlementLine(det.id, {
+        label: addForm.label,
+        type: addModal,
+        amount: Number(addForm.amount),
+      })
+      setAddModal(null)
+      setAddForm({ label: '', amount: '' })
+      await load()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'تعذر إضافة البند')
+    } finally {
+      setSaving(false)
+    }
   }
 
-  const calculatedEntitlements = getCalculatedEntitlements()
-  const calculatedDeductions = getCalculatedDeductions()
+  const handleEditLine = async () => {
+    if (!editModal || saving) return
+    setSaving(true)
+    setActionError('')
+    try {
+      await updateSettlementLine(editModal.id, {
+        label: editForm.label || undefined,
+        amount: editForm.amount ? Number(editForm.amount) : undefined,
+      })
+      setEditModal(null)
+      await load()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'تعذر تعديل البند')
+    } finally {
+      setSaving(false)
+    }
+  }
 
-  // إجمالي الاستحقاقات
-  const totalEntitlements = calculatedEntitlements.reduce((sum, item) => sum + item.amount, 0)
-
-  // إجمالي الخصومات
-  const totalDeductions = calculatedDeductions.reduce((sum, item) => sum + item.amount, 0)
-
-  // صافي المستحقات
-  const netAmount = totalEntitlements - totalDeductions
-
-  // إضافة بند جديد
-  const addNewItem = () => {
-    if (!newItem.name || newItem.amount <= 0) {
-      alert('الرجاء إدخال اسم البند والمبلغ')
+  const handleApprove = async () => {
+    if (!det || saving) return
+    if (
+      !window.confirm(
+        'اعتماد التصفية وقفلها؟ بعد الاعتماد تُقفل البنود نهائياً ويصدر سند التصفية.'
+      )
+    )
       return
-    }
-
-    const item = {
-      id: Date.now().toString(),
-      name: newItem.name,
-      type: showAddItem,
-      amount: newItem.amount,
-      calculated: false,
-      description: newItem.description,
-    }
-
-    if (showAddItem === 'credit') {
-      setEntitlements(prev => [...prev, item as typeof prev[0]])
-    } else {
-      setDeductions(prev => [...prev, item as typeof prev[0]])
-    }
-
-    setNewItem({ name: '', amount: 0, description: '' })
-    setShowAddItem(null)
-  }
-
-  // حذف بند
-  const removeItem = (id: string, type: 'credit' | 'debit') => {
-    if (type === 'credit') {
-      setEntitlements(prev => prev.filter(item => item.id !== id || item.calculated))
-    } else {
-      setDeductions(prev => prev.filter(item => item.id !== id || item.calculated))
+    setSaving(true)
+    setActionError('')
+    try {
+      await approveSettlement(det.id)
+      await load()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'تعذر اعتماد التصفية')
+    } finally {
+      setSaving(false)
     }
   }
 
-  // اعتماد التصفية
-  const approveSettlement = () => {
-    setIsApproved(true)
-  }
-
-  // تأكيد الدفع
-  const confirmPayment = () => {
-    if (!paymentDate) {
-      alert('الرجاء تحديد تاريخ الدفع')
-      return
-    }
-    setIsPaid(true)
-    alert('تم تأكيد صرف المستحقات بنجاح')
+  // جدول بنود (استحقاقات أو خصومات) — نفس التصميم للاثنين
+  const renderLinesTable = (
+    rows: ApiSettlementLine[],
+    kind: 'CREDIT' | 'DEBIT',
+    total: number
+  ) => {
+    const isCredit = kind === 'CREDIT'
+    return (
+      <div className="border border-gray-200 rounded-xl overflow-hidden">
+        <table className="w-full">
+          <thead className="bg-gray-50">
+            <tr>
+              <th className="text-right px-4 py-3 text-sm font-medium text-gray-600">البند</th>
+              <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">المبلغ</th>
+              {isEditable && <th className="w-10"></th>}
+            </tr>
+          </thead>
+          <tbody className="divide-y divide-gray-100">
+            {rows.map((line) => (
+              <tr key={line.id} className="hover:bg-gray-50">
+                <td className="px-4 py-3">
+                  <div className="flex items-center gap-2">
+                    <p className="font-medium text-gray-800">{line.label}</p>
+                    {line.isAuto && (
+                      <span className="badge text-xs bg-indigo-100 text-indigo-700">تلقائي</span>
+                    )}
+                  </div>
+                </td>
+                <td className="px-4 py-3 text-left">
+                  <span className={`font-bold ${isCredit ? 'text-success-600' : 'text-red-600'}`}>
+                    {isCredit ? '+' : '-'}
+                    {Number(line.amount).toLocaleString()} {currency}
+                  </span>
+                </td>
+                {isEditable && (
+                  <td className="px-4 py-3">
+                    {!line.isAuto && (
+                      <button
+                        onClick={() => {
+                          setActionError('')
+                          setEditForm({ label: line.label, amount: String(line.amount) })
+                          setEditModal(line)
+                        }}
+                        className="p-1 rounded hover:bg-gray-200 text-gray-500"
+                        title="تعديل البند"
+                      >
+                        <Pencil size={16} />
+                      </button>
+                    )}
+                  </td>
+                )}
+              </tr>
+            ))}
+            {rows.length === 0 && (
+              <tr>
+                <td
+                  colSpan={isEditable ? 3 : 2}
+                  className="px-4 py-8 text-center text-gray-400 text-sm"
+                >
+                  {inClearance
+                    ? 'تُنشأ البنود تلقائياً بعد اكتمال إخلاء الطرف'
+                    : 'لا توجد بنود بعد'}
+                </td>
+              </tr>
+            )}
+          </tbody>
+          <tfoot className={isCredit ? 'bg-success-50' : 'bg-red-50'}>
+            <tr>
+              <td className="px-4 py-3 font-bold text-gray-800">
+                {isCredit ? 'إجمالي الاستحقاقات' : 'إجمالي الخصومات'}
+              </td>
+              <td
+                className={`px-4 py-3 text-left font-bold ${
+                  isCredit ? 'text-success-600' : 'text-red-600'
+                }`}
+                colSpan={isEditable ? 2 : 1}
+              >
+                {isCredit ? '+' : '-'}
+                {total.toLocaleString()} {currency}
+              </td>
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    )
   }
 
   return (
-    <MainLayout>
-      <div className="space-y-6">
-        {/* Header */}
-        <div className="flex items-center justify-between">
-          <div className="flex items-center gap-4">
-            <Link
-              href={`/employees/${params.id}`}
-              className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
-            >
-              <ArrowLeft size={20} className="text-gray-500" />
-            </Link>
-            <div>
-              <h1 className="text-2xl font-bold text-gray-800">تصفية مستحقات نهاية الخدمة</h1>
-              <p className="text-gray-500 mt-1">حساب وصرف المستحقات النهائية للموظف</p>
-            </div>
-          </div>
-          <div className="flex items-center gap-3">
-            <button className="btn-secondary flex items-center gap-2">
-              <Printer size={18} />
-              طباعة
-            </button>
-            <button className="btn-secondary flex items-center gap-2">
-              <Download size={18} />
-              تصدير PDF
-            </button>
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex items-center justify-between">
+        <div className="flex items-center gap-4">
+          <Link
+            href={backHref}
+            className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+          >
+            <ArrowLeft size={20} className="text-gray-500" />
+          </Link>
+          <div>
+            <h1 className="text-2xl font-bold text-gray-800">تصفية مستحقات نهاية الخدمة</h1>
+            <p className="text-gray-500 mt-1">مراجعة واعتماد المستحقات النهائية للموظف</p>
           </div>
         </div>
+        <div className="flex items-center gap-3">
+          <button
+            onClick={() => window.print()}
+            className="btn-secondary flex items-center gap-2"
+          >
+            <Printer size={18} />
+            طباعة
+          </button>
+        </div>
+      </div>
 
-        {/* Status Banner */}
-        {isPaid ? (
-          <div className="bg-success-50 border border-success-200 rounded-xl p-4 flex items-center gap-4">
-            <div className="w-12 h-12 bg-success-100 rounded-xl flex items-center justify-center">
-              <CheckCircle size={24} className="text-success-600" />
-            </div>
-            <div>
-              <h3 className="font-bold text-success-800">تم صرف المستحقات</h3>
-              <p className="text-sm text-success-700">تم صرف المستحقات بتاريخ {paymentDate}</p>
-            </div>
-          </div>
-        ) : isApproved ? (
-          <div className="bg-blue-50 border border-blue-200 rounded-xl p-4 flex items-center gap-4">
-            <div className="w-12 h-12 bg-blue-100 rounded-xl flex items-center justify-center">
-              <Clock size={24} className="text-blue-600" />
-            </div>
-            <div>
-              <h3 className="font-bold text-blue-800">تم اعتماد التصفية</h3>
-              <p className="text-sm text-blue-700">في انتظار صرف المستحقات</p>
-            </div>
-          </div>
-        ) : null}
+      {/* Error Banners */}
+      {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+      {actionError && (
+        <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-3">
+          <AlertTriangle size={20} className="shrink-0 text-red-500" />
+          <span>{actionError}</span>
+        </div>
+      )}
 
-        <div className="grid grid-cols-12 gap-6">
-          {/* Employee Info */}
-          <div className="col-span-4 space-y-6">
-            {/* Employee Card */}
-            <div className="card">
-              <div className="flex items-center gap-4 mb-6">
-                <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center">
-                  <User size={32} className="text-gray-400" />
-                </div>
-                <div>
-                  <h2 className="text-xl font-bold text-gray-800">{employeeData.name}</h2>
-                  <p className="text-gray-500">{employeeData.position}</p>
-                </div>
+      {loading ? (
+        <Spinner />
+      ) : notFound ? (
+        <div className="card p-12 text-center">
+          <UserMinus size={48} className="mx-auto text-gray-300 mb-4" />
+          <p className="text-gray-500 mb-4">لا يوجد ملف إنهاء خدمة لهذا الموظف</p>
+          <Link href={backHref} className="text-primary-600 hover:text-primary-700 font-medium">
+            العودة لملف الموظف
+          </Link>
+        </div>
+      ) : !det ? null : (
+        <>
+          {/* بانر النجاح بعد الاعتماد */}
+          {det.settlementDocRef && (
+            <div className="bg-success-50 border border-success-200 rounded-xl p-4 flex items-center gap-4">
+              <div className="w-12 h-12 bg-success-100 rounded-xl flex items-center justify-center shrink-0">
+                <CheckCircle2 size={24} className="text-success-600" />
               </div>
-
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">الرقم الوظيفي</span>
-                  <span className="font-medium text-gray-800">{employeeData.employeeId}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">رقم الهوية</span>
-                  <span className="font-medium text-gray-800">{employeeData.nationalId}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">القسم</span>
-                  <span className="font-medium text-gray-800">{employeeData.department}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">تاريخ التعيين</span>
-                  <span className="font-medium text-gray-800">{employeeData.joinDate}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">آخر يوم عمل</span>
-                  <span className="font-medium text-gray-800">{employeeData.lastWorkDay}</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">سبب الإنهاء</span>
-                  <span className="px-2 py-1 bg-orange-100 text-orange-700 rounded text-xs font-medium">
-                    {employeeData.terminationReason}
+              <div>
+                <h3 className="font-bold text-success-800">التصفية معتمدة ومقفولة</h3>
+                <p className="text-sm text-success-700">
+                  مستند التصفية:{' '}
+                  <span dir="ltr" className="font-mono">
+                    {det.settlementDocRef}
                   </span>
-                </div>
-                <div className="flex justify-between py-2">
-                  <span className="text-gray-500">سنوات الخدمة</span>
-                  <span className="font-bold text-primary-600">{calculateServiceYears()} سنة</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Salary Details */}
-            <div className="card">
-              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <DollarSign size={18} className="text-primary-500" />
-                تفاصيل الراتب
-              </h3>
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">الراتب الأساسي</span>
-                  <span className="font-medium text-gray-800">{employeeData.basicSalary.toLocaleString()} ر.س</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">بدل السكن</span>
-                  <span className="font-medium text-gray-800">{employeeData.housingAllowance.toLocaleString()} ر.س</span>
-                </div>
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">بدل المواصلات</span>
-                  <span className="font-medium text-gray-800">{employeeData.transportAllowance.toLocaleString()} ر.س</span>
-                </div>
-                <div className="flex justify-between py-2 bg-gray-50 -mx-6 px-6 rounded-lg">
-                  <span className="font-bold text-gray-800">الإجمالي</span>
-                  <span className="font-bold text-primary-600">{employeeData.totalSalary.toLocaleString()} ر.س</span>
-                </div>
-              </div>
-            </div>
-
-            {/* Bank Info */}
-            <div className="card">
-              <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                <Building2 size={18} className="text-primary-500" />
-                معلومات الحساب البنكي
-              </h3>
-              <div className="space-y-3 text-sm">
-                <div className="flex justify-between py-2 border-b border-gray-100">
-                  <span className="text-gray-500">البنك</span>
-                  <span className="font-medium text-gray-800">{employeeData.bankName}</span>
-                </div>
-                <div className="py-2">
-                  <span className="text-gray-500">IBAN</span>
-                  <p className="font-medium text-gray-800 mt-1 font-mono text-xs">{employeeData.iban}</p>
-                </div>
-              </div>
-            </div>
-          </div>
-
-          {/* Settlement Details */}
-          <div className="col-span-8 space-y-6">
-            {/* Entitlements */}
-            <div className="card">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                  <Plus size={18} className="text-success-500" />
-                  الاستحقاقات
-                </h3>
-                {!isApproved && (
-                  <button
-                    onClick={() => setShowAddItem('credit')}
-                    className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
-                  >
-                    <Plus size={16} />
-                    إضافة بند
-                  </button>
+                  {' — '}الصافي: {Number(net).toLocaleString()} {currency}
+                </p>
+                {det.clearanceCertRef && (
+                  <p className="text-sm text-success-700 mt-0.5">
+                    شهادة إخلاء الطرف:{' '}
+                    <span dir="ltr" className="font-mono">
+                      {det.clearanceCertRef}
+                    </span>
+                  </p>
                 )}
               </div>
-
-              <div className="border border-gray-200 rounded-xl overflow-hidden">
-                <table className="w-full">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="text-right px-4 py-3 text-sm font-medium text-gray-600">البند</th>
-                      <th className="text-right px-4 py-3 text-sm font-medium text-gray-600">الوصف</th>
-                      <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">المبلغ</th>
-                      {!isApproved && <th className="w-10"></th>}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {calculatedEntitlements.map(item => (
-                      <tr key={item.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3">
-                          <p className="font-medium text-gray-800">{item.name}</p>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-500">{item.description}</td>
-                        <td className="px-4 py-3 text-left">
-                          <span className="font-bold text-success-600">
-                            +{item.amount.toLocaleString()} ر.س
-                          </span>
-                        </td>
-                        {!isApproved && (
-                          <td className="px-4 py-3">
-                            {!item.calculated && (
-                              <button
-                                onClick={() => removeItem(item.id, 'credit')}
-                                className="p-1 rounded hover:bg-red-100 text-red-500"
-                              >
-                                <X size={16} />
-                              </button>
-                            )}
-                          </td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot className="bg-success-50">
-                    <tr>
-                      <td colSpan={2} className="px-4 py-3 font-bold text-gray-800">
-                        إجمالي الاستحقاقات
-                      </td>
-                      <td className="px-4 py-3 text-left font-bold text-success-600">
-                        +{totalEntitlements.toLocaleString()} ر.س
-                      </td>
-                      {!isApproved && <td></td>}
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
             </div>
+          )}
 
-            {/* Deductions */}
-            <div className="card">
-              <div className="flex items-center justify-between mb-4">
-                <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                  <Minus size={18} className="text-red-500" />
-                  الخصومات
-                </h3>
-                {!isApproved && (
-                  <button
-                    onClick={() => setShowAddItem('debit')}
-                    className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
-                  >
-                    <Plus size={16} />
-                    إضافة خصم
-                  </button>
-                )}
-              </div>
-
-              <div className="border border-gray-200 rounded-xl overflow-hidden">
-                <table className="w-full">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="text-right px-4 py-3 text-sm font-medium text-gray-600">البند</th>
-                      <th className="text-right px-4 py-3 text-sm font-medium text-gray-600">الوصف</th>
-                      <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">المبلغ</th>
-                      {!isApproved && <th className="w-10"></th>}
-                    </tr>
-                  </thead>
-                  <tbody className="divide-y divide-gray-100">
-                    {calculatedDeductions.map(item => (
-                      <tr key={item.id} className="hover:bg-gray-50">
-                        <td className="px-4 py-3">
-                          <p className="font-medium text-gray-800">{item.name}</p>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-500">{item.description}</td>
-                        <td className="px-4 py-3 text-left">
-                          <span className="font-bold text-red-600">
-                            -{item.amount.toLocaleString()} ر.س
-                          </span>
-                        </td>
-                        {!isApproved && (
-                          <td className="px-4 py-3">
-                            {!item.calculated && (
-                              <button
-                                onClick={() => removeItem(item.id, 'debit')}
-                                className="p-1 rounded hover:bg-red-100 text-red-500"
-                              >
-                                <X size={16} />
-                              </button>
-                            )}
-                          </td>
-                        )}
-                      </tr>
-                    ))}
-                  </tbody>
-                  <tfoot className="bg-red-50">
-                    <tr>
-                      <td colSpan={2} className="px-4 py-3 font-bold text-gray-800">
-                        إجمالي الخصومات
-                      </td>
-                      <td className="px-4 py-3 text-left font-bold text-red-600">
-                        -{totalDeductions.toLocaleString()} ر.س
-                      </td>
-                      {!isApproved && <td></td>}
-                    </tr>
-                  </tfoot>
-                </table>
-              </div>
-            </div>
-
-            {/* Net Amount */}
-            <div className="card bg-gradient-to-l from-primary-50 to-white border-2 border-primary-200">
-              <div className="flex items-center justify-between">
-                <div className="flex items-center gap-4">
-                  <div className="w-16 h-16 bg-primary-100 rounded-2xl flex items-center justify-center">
-                    <Receipt size={32} className="text-primary-600" />
+          <div className="grid grid-cols-12 gap-6">
+            {/* Sidebar */}
+            <div className="col-span-4 space-y-6">
+              {/* Employee Card */}
+              <div className="card">
+                <div className="flex items-center gap-4 mb-6">
+                  <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center shrink-0">
+                    <User size={32} className="text-gray-400" />
                   </div>
-                  <div>
-                    <p className="text-gray-600">صافي المستحقات النهائية</p>
-                    <p className="text-xs text-gray-500 mt-1">
-                      {totalEntitlements.toLocaleString()} - {totalDeductions.toLocaleString()} = {netAmount.toLocaleString()}
+                  <div className="min-w-0">
+                    <h2 className="text-xl font-bold text-gray-800">
+                      {emp?.fullName ?? det.employeeName ?? `موظف #${det.employeeId}`}
+                    </h2>
+                    <p className="text-gray-500">{emp?.jobTitle ?? '—'}</p>
+                    <span
+                      className={`badge text-xs mt-1 inline-block ${
+                        statusStyles[det.status] ?? 'bg-gray-100 text-gray-600'
+                      }`}
+                    >
+                      {statusLabels[det.status] ?? 'غير معروفة'}
+                    </span>
+                  </div>
+                </div>
+
+                <div className="space-y-3 text-sm">
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">الرقم الوظيفي</span>
+                    <span className="font-medium text-gray-800" dir="ltr">
+                      {emp?.employeeCode ?? det.employeeCode ?? '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">رقم الهوية</span>
+                    <span className="font-medium text-gray-800" dir="ltr">
+                      {emp?.nationalId ?? '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">تاريخ التعيين</span>
+                    <span className="font-medium text-gray-800" dir="ltr">
+                      {fmtDate(emp?.joinDate)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">آخر يوم عمل</span>
+                    <span className="font-medium text-gray-800" dir="ltr">
+                      {fmtDate(det.lastWorkingDay)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-2">
+                    <span className="text-gray-500">سنوات الخدمة</span>
+                    <span className="font-bold text-primary-600">
+                      {serviceYears != null ? `${serviceYears.toFixed(1)} سنة` : '—'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Salary Details */}
+              <div className="card">
+                <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                  <DollarSign size={18} className="text-primary-500" />
+                  تفاصيل الراتب
+                </h3>
+                <div className="space-y-3 text-sm">
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">الراتب الأساسي</span>
+                    <span className="font-medium text-gray-800">{fmtMoney(emp?.basicSalary)}</span>
+                  </div>
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">بدل السكن</span>
+                    <span className="font-medium text-gray-800">
+                      {fmtMoney(emp?.housingAllowance)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">بدل المواصلات</span>
+                    <span className="font-medium text-gray-800">
+                      {fmtMoney(emp?.transportAllowance)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">بدلات أخرى</span>
+                    <span className="font-medium text-gray-800">
+                      {fmtMoney(emp?.otherAllowance)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-2 bg-gray-50 -mx-6 px-6 rounded-lg">
+                    <span className="font-bold text-gray-800">الإجمالي</span>
+                    <span className="font-bold text-primary-600">
+                      {hasSalary ? `${totalSalary.toLocaleString()} ${currency}` : '—'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bank Info */}
+              <div className="card">
+                <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                  <Building2 size={18} className="text-primary-500" />
+                  معلومات الصرف
+                </h3>
+                <div className="space-y-3 text-sm">
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">طريقة الصرف</span>
+                    <span className="font-medium text-gray-800">
+                      {payMethodLabels[emp?.payMethod ?? ''] ?? '—'}
+                    </span>
+                  </div>
+                  <div className="flex justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">البنك</span>
+                    <span className="font-medium text-gray-800">{emp?.bankName ?? '—'}</span>
+                  </div>
+                  <div className="py-2">
+                    <span className="text-gray-500">IBAN</span>
+                    <p className="font-medium text-gray-800 mt-1 font-mono text-xs" dir="ltr">
+                      {emp?.iban ?? '—'}
                     </p>
                   </div>
                 </div>
-                <div className="text-left">
-                  <p className="text-4xl font-bold text-primary-600">
-                    {netAmount.toLocaleString()}
-                  </p>
-                  <p className="text-gray-500">ريال سعودي</p>
+              </div>
+
+              {/* Clearance Progress */}
+              <div className="card">
+                <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                  <ClipboardCheck size={18} className="text-primary-500" />
+                  إخلاء الطرف
+                </h3>
+                <div className="flex items-center justify-between text-sm mb-2">
+                  <span className="text-gray-500">البنود المكتملة</span>
+                  <span className="font-bold text-gray-800">
+                    {doneCount} من {items.length}
+                  </span>
                 </div>
+                <div className="h-2 bg-gray-100 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-success-500 rounded-full transition-all"
+                    style={{
+                      width: `${items.length ? (doneCount / items.length) * 100 : 0}%`,
+                    }}
+                  />
+                </div>
+                <Link
+                  href={`/offboarding/${det.id}`}
+                  className="text-sm text-primary-600 hover:text-primary-700 font-medium mt-4 inline-block"
+                >
+                  عرض ملف إنهاء الخدمة
+                </Link>
               </div>
             </div>
 
-            {/* Payment Section */}
-            {isApproved && !isPaid && (
+            {/* Settlement Details */}
+            <div className="col-span-8 space-y-6">
+              {/* قفل التصفية أثناء إخلاء الطرف */}
+              {inClearance && (
+                <div className="bg-warning-50 border border-warning-100 text-warning-700 rounded-xl p-4 flex items-center gap-3">
+                  <Lock size={20} className="text-warning-500 shrink-0" />
+                  <p className="text-sm font-medium">
+                    التصفية تُفتح تلقائياً بعد اكتمال إخلاء الطرف
+                  </p>
+                </div>
+              )}
+
+              {/* Entitlements */}
               <div className="card">
-                <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                  <CreditCard size={18} className="text-primary-500" />
-                  تأكيد الصرف
-                </h3>
-
-                <div className="grid grid-cols-2 gap-4 mb-6">
-                  <div>
-                    <label className="label">تاريخ الصرف *</label>
-                    <input
-                      type="date"
-                      value={paymentDate}
-                      onChange={(e) => setPaymentDate(e.target.value)}
-                      className="input w-full"
-                    />
-                  </div>
-                  <div>
-                    <label className="label">طريقة الصرف</label>
-                    <select
-                      value={paymentMethod}
-                      onChange={(e) => setPaymentMethod(e.target.value)}
-                      className="input w-full"
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                    <Plus size={18} className="text-success-500" />
+                    الاستحقاقات
+                  </h3>
+                  {isEditable && (
+                    <button
+                      onClick={() => {
+                        setActionError('')
+                        setAddForm({ label: '', amount: '' })
+                        setAddModal('CREDIT')
+                      }}
+                      className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
                     >
-                      <option value="bank_transfer">تحويل بنكي</option>
-                      <option value="check">شيك</option>
-                      <option value="cash">نقدي</option>
-                    </select>
+                      <Plus size={16} />
+                      إضافة بند
+                    </button>
+                  )}
+                </div>
+                {renderLinesTable(entitlements, 'CREDIT', totalEntitlements)}
+              </div>
+
+              {/* Deductions */}
+              <div className="card">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                    <Minus size={18} className="text-red-500" />
+                    الخصومات
+                  </h3>
+                  {isEditable && (
+                    <button
+                      onClick={() => {
+                        setActionError('')
+                        setAddForm({ label: '', amount: '' })
+                        setAddModal('DEBIT')
+                      }}
+                      className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
+                    >
+                      <Plus size={16} />
+                      إضافة خصم
+                    </button>
+                  )}
+                </div>
+                {renderLinesTable(deductions, 'DEBIT', totalDeductions)}
+              </div>
+
+              {/* Net Amount */}
+              <div className="card bg-gradient-to-l from-primary-50 to-white border-2 border-primary-200">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-4">
+                    <div className="w-16 h-16 bg-primary-100 rounded-2xl flex items-center justify-center">
+                      <Receipt size={32} className="text-primary-600" />
+                    </div>
+                    <div>
+                      <p className="text-gray-600">صافي المستحقات النهائية</p>
+                      <p className="text-xs text-gray-500 mt-1">
+                        {totalEntitlements.toLocaleString()} - {totalDeductions.toLocaleString()}{' '}
+                        = {Number(net).toLocaleString()}
+                      </p>
+                    </div>
+                  </div>
+                  <div className="text-left">
+                    <p
+                      className={`text-4xl font-bold ${
+                        Number(net) >= 0 ? 'text-primary-600' : 'text-red-600'
+                      }`}
+                    >
+                      {Number(net).toLocaleString()}
+                    </p>
+                    <p className="text-gray-500">{currency}</p>
                   </div>
                 </div>
-
-                <button onClick={confirmPayment} className="btn-success w-full flex items-center justify-center gap-2">
-                  <CheckCircle size={18} />
-                  تأكيد صرف المستحقات
-                </button>
               </div>
-            )}
 
-            {/* Actions */}
-            {!isApproved && (
-              <div className="flex items-center justify-between">
-                <div className="p-4 bg-yellow-50 rounded-xl flex items-start gap-3 flex-1 ml-4">
-                  <AlertTriangle size={20} className="text-yellow-600 mt-0.5" />
-                  <div className="text-sm text-yellow-700">
-                    <p className="font-medium">ملاحظة:</p>
-                    <p>بعد الاعتماد لن يمكن تعديل بنود التصفية</p>
+              {/* Approve */}
+              {canApprove && (
+                <div className="flex items-center justify-between">
+                  <div className="p-4 bg-yellow-50 rounded-xl flex items-start gap-3 flex-1 ml-4">
+                    <AlertTriangle size={20} className="text-yellow-600 mt-0.5" />
+                    <div className="text-sm text-yellow-700">
+                      <p className="font-medium">ملاحظة:</p>
+                      <p>بعد الاعتماد لن يمكن تعديل بنود التصفية</p>
+                    </div>
                   </div>
+                  <button
+                    onClick={handleApprove}
+                    disabled={saving}
+                    className="btn-primary flex items-center gap-2"
+                  >
+                    <FileCheck2 size={18} />
+                    {saving ? 'جارٍ الاعتماد...' : 'اعتماد التصفية وقفلها'}
+                  </button>
                 </div>
-                <button onClick={approveSettlement} className="btn-primary flex items-center gap-2">
-                  <Shield size={18} />
-                  اعتماد التصفية
-                </button>
-              </div>
-            )}
+              )}
 
-            {/* Legal Note */}
-            <div className="p-4 bg-blue-50 rounded-xl flex items-start gap-3">
-              <Shield size={20} className="text-blue-500 mt-0.5" />
-              <div className="text-sm text-blue-700">
-                <p className="font-medium">الأساس القانوني:</p>
-                <ul className="mt-2 space-y-1 list-disc list-inside">
-                  <li>مكافأة نهاية الخدمة: نصف راتب عن كل سنة من السنوات الخمس الأولى، وراتب كامل عن كل سنة بعد ذلك (المادة 84 من نظام العمل)</li>
-                  <li>بدل الإجازات: تعويض عن الإجازات غير المستخدمة بالراتب اليومي الكامل (المادة 111)</li>
-                  <li>يجب صرف المستحقات خلال أسبوع من انتهاء العقد (المادة 88)</li>
-                </ul>
+              {/* Info Note */}
+              <div className="p-4 bg-blue-50 rounded-xl flex items-start gap-3">
+                <Shield size={20} className="text-blue-500 mt-0.5" />
+                <div className="text-sm text-blue-700">
+                  <p className="font-medium">كيف تُحسب التصفية؟</p>
+                  <p className="mt-1">
+                    البنود التلقائية (مكافأة نهاية الخدمة، بدل رصيد الإجازات، خصم السلف والعهد
+                    المفقودة) يحسبها النظام تلقائياً عند اكتمال إخلاء الطرف، ويمكن إضافة بنود
+                    يدوية قبل الاعتماد. بعد الاعتماد يُقفل الملف نهائياً.
+                  </p>
+                </div>
               </div>
+            </div>
+          </div>
+        </>
+      )}
+
+      {/* مودال إضافة بند */}
+      {addModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md">
+            <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+              <h2 className="text-xl font-bold text-gray-800">
+                إضافة {addModal === 'CREDIT' ? 'استحقاق' : 'خصم'}
+              </h2>
+              <button
+                onClick={() => setAddModal(null)}
+                className="p-2 rounded-lg hover:bg-gray-100"
+              >
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
+
+            <div className="p-6 space-y-4">
+              {actionError && (
+                <div className="bg-red-50 text-red-700 rounded-xl p-4 text-sm">{actionError}</div>
+              )}
+              <div>
+                <label className="label">اسم البند *</label>
+                <input
+                  type="text"
+                  value={addForm.label}
+                  onChange={(e) => setAddForm((prev) => ({ ...prev, label: e.target.value }))}
+                  placeholder={
+                    addModal === 'CREDIT' ? 'مثال: مكافأة إضافية' : 'مثال: تلفيات معدات'
+                  }
+                  className="input w-full"
+                />
+              </div>
+              <div>
+                <label className="label">المبلغ *</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={addForm.amount}
+                  onChange={(e) => setAddForm((prev) => ({ ...prev, amount: e.target.value }))}
+                  placeholder="0"
+                  className="input w-full"
+                  dir="ltr"
+                />
+              </div>
+            </div>
+
+            <div className="p-6 border-t border-gray-100 flex gap-3">
+              <button
+                onClick={handleAddLine}
+                disabled={saving || !addForm.label || !addForm.amount}
+                className="flex-1 btn-primary"
+              >
+                {saving ? 'جارٍ الإضافة...' : 'إضافة'}
+              </button>
+              <button onClick={() => setAddModal(null)} className="flex-1 btn-secondary">
+                إلغاء
+              </button>
             </div>
           </div>
         </div>
+      )}
 
-        {/* Add Item Modal */}
-        {showAddItem && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl w-full max-w-md">
-              <div className="p-6 border-b border-gray-100 flex items-center justify-between">
-                <h2 className="text-xl font-bold text-gray-800">
-                  إضافة {showAddItem === 'credit' ? 'استحقاق' : 'خصم'}
-                </h2>
-                <button onClick={() => setShowAddItem(null)} className="p-2 rounded-lg hover:bg-gray-100">
-                  <X size={20} className="text-gray-500" />
-                </button>
+      {/* مودال تعديل بند يدوي */}
+      {editModal && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md">
+            <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+              <div>
+                <h2 className="text-xl font-bold text-gray-800">تعديل بند التصفية</h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  تعديل المبلغ هو وسيلة تصحيح البند — لا يوجد حذف
+                </p>
               </div>
+              <button
+                onClick={() => setEditModal(null)}
+                className="p-2 rounded-lg hover:bg-gray-100"
+              >
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
 
-              <div className="p-6 space-y-4">
-                <div>
-                  <label className="label">اسم البند *</label>
-                  <input
-                    type="text"
-                    value={newItem.name}
-                    onChange={(e) => setNewItem(prev => ({ ...prev, name: e.target.value }))}
-                    placeholder={showAddItem === 'credit' ? 'مثال: مكافأة إضافية' : 'مثال: تأمين طبي'}
-                    className="input w-full"
-                  />
-                </div>
-                <div>
-                  <label className="label">المبلغ (ر.س) *</label>
-                  <input
-                    type="number"
-                    value={newItem.amount || ''}
-                    onChange={(e) => setNewItem(prev => ({ ...prev, amount: parseFloat(e.target.value) || 0 }))}
-                    placeholder="0"
-                    className="input w-full"
-                  />
-                </div>
-                <div>
-                  <label className="label">الوصف</label>
-                  <input
-                    type="text"
-                    value={newItem.description}
-                    onChange={(e) => setNewItem(prev => ({ ...prev, description: e.target.value }))}
-                    placeholder="وصف اختياري..."
-                    className="input w-full"
-                  />
-                </div>
+            <div className="p-6 space-y-4">
+              {actionError && (
+                <div className="bg-red-50 text-red-700 rounded-xl p-4 text-sm">{actionError}</div>
+              )}
+              <div>
+                <label className="label">اسم البند</label>
+                <input
+                  type="text"
+                  value={editForm.label}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, label: e.target.value }))}
+                  className="input w-full"
+                />
               </div>
-
-              <div className="p-6 border-t border-gray-100 flex gap-3">
-                <button onClick={addNewItem} className="flex-1 btn-primary">
-                  إضافة
-                </button>
-                <button onClick={() => setShowAddItem(null)} className="flex-1 btn-secondary">
-                  إلغاء
-                </button>
+              <div>
+                <label className="label">المبلغ</label>
+                <input
+                  type="number"
+                  min="0"
+                  value={editForm.amount}
+                  onChange={(e) => setEditForm((prev) => ({ ...prev, amount: e.target.value }))}
+                  className="input w-full"
+                  dir="ltr"
+                />
               </div>
             </div>
+
+            <div className="p-6 border-t border-gray-100 flex gap-3">
+              <button
+                onClick={handleEditLine}
+                disabled={saving}
+                className="flex-1 btn-primary"
+              >
+                {saving ? 'جارٍ الحفظ...' : 'حفظ التعديل'}
+              </button>
+              <button onClick={() => setEditModal(null)} className="flex-1 btn-secondary">
+                إلغاء
+              </button>
+            </div>
           </div>
-        )}
-      </div>
+        </div>
+      )}
+    </div>
+  )
+}
+
+export default function SettlementPage({ params }: { params: { id: string } }) {
+  return (
+    <MainLayout>
+      <Suspense fallback={<Spinner />}>
+        <SettlementContent
+          employeeId={Number(params.id)}
+          backHref={`/employees/${params.id}`}
+        />
+      </Suspense>
     </MainLayout>
   )
 }

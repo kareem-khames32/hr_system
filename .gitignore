@@ -34,3 +34,7 @@ yarn-error.log*
 # TypeScript
 *.tsbuildinfo
 next-env.d.ts
+
+# نسخة مستنسخة منفصلة داخل المجلد + ملفات نسخ احتياطي
+/hr_system/
+*.backup

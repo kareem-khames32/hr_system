@@ -630,9 +630,6 @@ export default function RequestTypesPage() {
                     </div>
                     <div className="flex-1">
                       <h3 className="font-bold text-gray-800 text-lg">{rt.nameAr}</h3>
-                      <p className="text-gray-500 text-sm font-mono" dir="ltr">
-                        {rt.code}
-                      </p>
                       <p className="text-gray-600 text-sm mt-2">
                         {phaseLabels[rt.phase] ?? rt.phase}
                       </p>

@@ -347,6 +347,11 @@ export class OffboardingService {
   ) {
     const line = await this.lines.findOne({ where: { id: lineId } })
     if (!line) throw new NotFoundException('البند غير موجود')
+    if (line.isAuto) {
+      throw new BadRequestException(
+        'البنود التلقائية يحسبها النظام ولا تُعدَّل — أضف بنداً يدوياً للتسوية'
+      )
+    }
     await this.editableCase(line.caseId)
     if (dto.label !== undefined) line.label = dto.label
     if (dto.amount !== undefined) {
@@ -385,6 +390,8 @@ export class OffboardingService {
     const old = emp.status
     emp.status = 'terminated'
     emp.isActive = false
+    emp.archivedAt = new Date()
+    emp.archiveReason = `انتهاء خدمة — آخر يوم عمل ${kase.lastWorkingDay}`
     await this.employees.save(emp)
     await this.history.save({
       employeeId: emp.id,

@@ -28,6 +28,8 @@ const PATH_PERMS: Array<[prefix: string, perm: string | null]> = [
   ['/settings/branches', 'org.manage'],
   ['/settings/departments', 'org.manage'],
   ['/settings/teams', 'org.manage'],
+  ['/settings/cost-centers', 'settings.manage'],
+  ['/settings/permission-types', 'settings.manage'],
   ['/employees', 'employees.view'],
   ['/payroll', 'payroll.view'],
   ['/settings', 'settings.manage'],

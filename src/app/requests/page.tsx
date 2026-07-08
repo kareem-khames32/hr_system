@@ -17,6 +17,8 @@ import {
   Users,
   EyeOff,
   Paperclip,
+  Package,
+  AlertTriangle,
 } from 'lucide-react'
 import {
   getTypeByCode,
@@ -32,8 +34,13 @@ import {
   cancelRequest,
   resubmitRequest,
   uploadFile,
+  fetchAvailableAssets,
+  fetchCatalog,
+  fetchEmployees,
+  can,
   type ApiRequest,
   type ApiRequestType,
+  type ApiEmployee,
   type CustomFieldDef,
 } from '@/lib/api'
 
@@ -100,16 +107,84 @@ const fieldLabels: Record<string, string> = {
   phone: 'رقم الهاتف',
   documentType: 'نوع الوثيقة',
   courseName: 'اسم الدورة',
+  permissionType: 'نوع الإذن',
+  period: 'نطاق اليوم',
+  assetIds: 'الأصول المطلوبة',
+  newStatus: 'الحالة الجديدة',
+  note: 'ملاحظات',
+}
+
+// نطاق اليوم للإجازات — القيم كود، والعرض عربي دائماً
+const periodLabels: Record<string, string> = {
+  FULL: 'يوم كامل',
+  MORNING: 'النصف الصباحي',
+  EVENING: 'النصف المسائي',
+}
+
+// وجهات التنفيذ — للأنواع المبنية من «بانِي الطلبات» (بدون تسريب كود الـ handler)
+const handlerLabels: Record<string, string> = {
+  none: 'الطلب نفسه هو السجل',
+  leave_calendar_balance: 'إجازة تُخصم من الرصيد',
+  leave_calendar_payroll: 'إجازة بلا خصم رصيد',
+  leave_calendar: 'التقويم',
+  leave_calendar_once: 'التقويم (مرة في الخدمة)',
+  leave_balance_restore: 'إرجاع رصيد الإجازة',
+  overtime_entries: 'قيد أوفرتايم',
+  attendance_log: 'سجل الحضور',
+  attendance_corrections: 'تصحيح بصمة',
+  attendance_trips: 'سجل المأموريات',
+  shift_schedule: 'جدول الورديات',
+  loans_installments: 'سلفة بجدول أقساط',
+  salary_update_history: 'تحديث راتب',
+  payroll_bonus: 'مكافأة في المسير',
+  payroll_allowance: 'بدل في المسير',
+  payroll_adjustment: 'تسوية في المسير',
+  transfers_effective_date: 'نقل بتاريخ سريان',
+  employee_update_promotions: 'ترقية',
+  employee_update: 'تحديث بيانات الموظف',
+  employee_record: 'تحديث بيانات الموظف',
+  employee_record_auto: 'تحديث آلي لبيانات الموظف',
+  payroll_bank_secure: 'تغيير حساب بنكي (مسار أمني)',
+  letter_pdf_generator: 'خطاب PDF',
+  custody_assignments_ack: 'عهدة بتأكيد استلام',
+  custody_assignments: 'سجل العهد',
+  custody_finance: 'العهدة والمالية',
+  employee_status: 'تغيير حالة وظيفية',
+  document_vault: 'خزنة الوثائق',
+  expense_register: 'سجل المصروفات',
+  training_register: 'سجل التدريب',
+  training_expense: 'مصروفات التدريب',
 }
 
 const isDateField = (f: string) => f === 'date' || f.includes('Date')
 const isNumberField = (f: string) =>
   /days|hours|amount|months|salary|pct/i.test(f) || /Id$/.test(f)
 
+// مفتاح غير معروف؟ نفكّ الـ camelCase لكلمات مقروءة — لا يظهر مفتاح خام أبداً
+const humanizeKey = (k: string): string =>
+  fieldLabels[k] ??
+  k
+    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
+    .replace(/[_-]+/g, ' ')
+    .toLowerCase()
+
+// قيمة الحقل للعرض — تُترجم الأكواد المعروفة ولا تعرض مراجع خام
+const formatPayloadValue = (k: string, v: unknown): string => {
+  if (k === 'period') return periodLabels[String(v)] ?? 'يوم كامل'
+  if (k === 'assetIds' && Array.isArray(v)) {
+    const n = v.length
+    return n === 1 ? 'أصل واحد' : n === 2 ? 'أصلان' : n <= 10 ? `${n} أصول` : `${n} أصلاً`
+  }
+  if (typeof v === 'boolean') return v ? 'نعم' : 'لا'
+  if (typeof v === 'string' && v.startsWith('file:')) return 'مرفق'
+  return String(v)
+}
+
 const payloadSummary = (raw?: string | null): string => {
   const payload = parseJson<Record<string, unknown>>(raw, {})
   return Object.entries(payload)
-    .map(([k, v]) => `${fieldLabels[k] ?? k}: ${v}`)
+    .filter(([, v]) => v !== '' && v !== null && v !== undefined)
+    .map(([k, v]) => `${humanizeKey(k)}: ${formatPayloadValue(k, v)}`)
     .join(' • ')
 }
 
@@ -135,12 +210,12 @@ const mapRequest = (r: ApiRequest, types: ApiRequestType[]): MyRequestRow => {
     type:
       types.find((t) => t.code === r.typeCode)?.nameAr ??
       getTypeByCode(r.typeCode)?.nameAr ??
-      r.typeCode,
+      'طلب',
     typeCode: r.typeCode,
     submittedAt: (r.submittedAt ?? r.createdAt).slice(0, 10),
     status: r.status as RequestStatus,
     steps: steps.map((s) => ({
-      name: roleLabels[s.role] ?? s.role,
+      name: roleLabels[s.role] ?? 'جهة اعتماد',
       state:
         s.action === 'REJECT'
           ? 'rejected'
@@ -184,6 +259,26 @@ export default function MyRequestsPage() {
   // رفع الملفات لحقول «مرفق» — الحقل الجاري رفعه + أسماء الملفات المرفوعة
   const [uploadingField, setUploadingField] = useState<string | null>(null)
   const [uploadedFiles, setUploadedFiles] = useState<Record<string, string>>({})
+  // طلب العهدة — الأصول المتاحة + الاختيار المتعدد + سبب الطلب
+  const [availableAssets, setAvailableAssets] = useState<
+    Array<{ id: number; name: string; category: string; serialNumber?: string }>
+  >([])
+  const [assetsLoading, setAssetsLoading] = useState(false)
+  const [assetSearch, setAssetSearch] = useState('')
+  const [selectedAssetIds, setSelectedAssetIds] = useState<number[]>([])
+  const [custodyReason, setCustodyReason] = useState('')
+  // نصف اليوم للإجازات
+  const [leavePeriod, setLeavePeriod] = useState<'FULL' | 'MORNING' | 'EVENING'>('FULL')
+  // أنواع الإذن (استئذان) من الكتالوج
+  const [permissionTypes, setPermissionTypes] = useState<
+    Array<{ id: number; nameAr: string; isDeductible: boolean; maxDurationMinutes?: number | null; isActive: boolean }>
+  >([])
+  const [permissionType, setPermissionType] = useState('')
+  // التقديم نيابة عن موظف آخر (بصلاحية)
+  const canOnBehalf = can('requests.create_on_behalf')
+  const [onBehalf, setOnBehalf] = useState(false)
+  const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  const [onBehalfEmployeeId, setOnBehalfEmployeeId] = useState('')
 
   const load = async () => {
     try {
@@ -208,6 +303,51 @@ export default function MyRequestsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
+  // تحميل كسول حسب النوع المختار: أصول العهدة المتاحة / أنواع الإذن
+  useEffect(() => {
+    if (selectedType === 'CUSTODY_REQUEST' && availableAssets.length === 0) {
+      setAssetsLoading(true)
+      fetchAvailableAssets()
+        .then(setAvailableAssets)
+        .catch((err) =>
+          setSubmitError(
+            err instanceof Error ? err.message : 'تعذّر تحميل الأصول المتاحة'
+          )
+        )
+        .finally(() => setAssetsLoading(false))
+    }
+    if (selectedType === 'PERMISSION' && permissionTypes.length === 0) {
+      fetchCatalog<{
+        id: number
+        nameAr: string
+        isDeductible: boolean
+        maxDurationMinutes?: number | null
+        isActive: boolean
+      }>('permission-types')
+        .then(setPermissionTypes)
+        .catch((err) =>
+          setSubmitError(
+            err instanceof Error ? err.message : 'تعذّر تحميل أنواع الإذن'
+          )
+        )
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedType])
+
+  // قائمة الموظفين — فقط لمن يملك صلاحية التقديم نيابة عن غيره
+  useEffect(() => {
+    if (showNewModal && canOnBehalf && employees.length === 0) {
+      fetchEmployees()
+        .then(setEmployees)
+        .catch((err) =>
+          setSubmitError(
+            err instanceof Error ? err.message : 'تعذّر تحميل قائمة الموظفين'
+          )
+        )
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [showNewModal, canOnBehalf])
+
   // الأنواع المتاحة للموظف — من كتالوج السيرفر (المرحلة P1 التي يقدّمها الموظف)
   const availableRequestTypes = types.filter(
     (t) =>
@@ -224,6 +364,58 @@ export default function MyRequestsPage() {
     []
   )
   const hasCustomFields = customFields.length > 0
+
+  // النماذج الخاصة: عهدة (اختيار أصول) / استئذان (نوع الإذن) / إجازات (نطاق اليوم)
+  const isCustodyRequest = selectedTypeDef?.code === 'CUSTODY_REQUEST'
+  const isPermission = selectedTypeDef?.code === 'PERMISSION'
+  const isLeaveCategory = selectedTypeDef?.category === 'leaves'
+  const isHalfDay = isLeaveCategory && leavePeriod !== 'FULL'
+  const selectedPermissionDef = permissionTypes.find(
+    (p) => p.nameAr === permissionType
+  )
+
+  // تغيير نطاق اليوم: نصف يوم ⇒ النهاية = البداية والأيام 0.5 تلقائياً
+  const changeLeavePeriod = (p: 'FULL' | 'MORNING' | 'EVENING') => {
+    setLeavePeriod(p)
+    if (p !== 'FULL') {
+      setFieldValues((prev) => ({
+        ...prev,
+        toDate: prev.fromDate ?? '',
+        days: '0.5',
+      }))
+    } else {
+      setFieldValues((prev) => ({ ...prev, days: '' }))
+    }
+  }
+
+  // تعديل قيمة حقل مع مزامنة نصف اليوم (البداية تسحب النهاية معها)
+  const setFieldValue = (key: string, value: string) => {
+    setFieldValues((prev) => {
+      const next = { ...prev, [key]: value }
+      if (isHalfDay && key === 'fromDate') next.toDate = value
+      return next
+    })
+  }
+
+  // فلترة الأصول بالبحث وتجميعها حسب الفئة
+  const filteredAssets = availableAssets.filter(
+    (a) =>
+      !assetSearch.trim() ||
+      a.name.includes(assetSearch.trim()) ||
+      a.category.includes(assetSearch.trim()) ||
+      (a.serialNumber ?? '').toLowerCase().includes(assetSearch.trim().toLowerCase())
+  )
+  const assetsByCategory = filteredAssets.reduce<
+    Record<string, typeof filteredAssets>
+  >((acc, a) => {
+    ;(acc[a.category] ??= []).push(a)
+    return acc
+  }, {})
+
+  const toggleAsset = (id: number) =>
+    setSelectedAssetIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]
+    )
 
   const filtered = requests.filter(
     (r) =>
@@ -262,7 +454,15 @@ export default function MyRequestsPage() {
   const handleSubmit = async () => {
     if (!selectedTypeDef || submitting) return
     const payload: Record<string, unknown> = {}
-    if (hasCustomFields) {
+    if (isCustodyRequest) {
+      // طلب العهدة: أصول مختارة من المتاح + سبب حر
+      if (selectedAssetIds.length === 0) {
+        setSubmitError('اختر أصلاً واحداً على الأقل من قائمة الأصول المتاحة')
+        return
+      }
+      payload.assetIds = selectedAssetIds
+      if (custodyReason.trim()) payload.reason = custodyReason.trim()
+    } else if (hasCustomFields) {
       // النموذج المبني من تعريف الحقول المخصّصة
       for (const f of customFields) {
         const raw = (fieldValues[f.key] ?? '').trim()
@@ -274,15 +474,46 @@ export default function MyRequestsPage() {
         payload[f] = isNumberField(f) && raw !== '' ? Number(raw) : raw
       }
     }
+    if (isPermission) {
+      if (!permissionType) {
+        setSubmitError('اختر نوع الإذن')
+        return
+      }
+      payload.permissionType = permissionType
+    }
+    if (isLeaveCategory) {
+      payload.period = leavePeriod
+      if (isHalfDay) {
+        // نصف يوم: يوم واحد فقط + 0.5 يوم مهما كان المدخل
+        payload.toDate = (fieldValues.fromDate ?? '').trim()
+        payload.days = 0.5
+      }
+    }
+    if (onBehalf && !onBehalfEmployeeId) {
+      setSubmitError('اختر الموظف الذي تقدّم الطلب نيابة عنه')
+      return
+    }
     if (requestNote.trim()) payload.note = requestNote.trim()
     setSubmitting(true)
     setSubmitError(null)
     try {
-      await createRequest(selectedTypeDef.code, payload)
+      await createRequest(
+        selectedTypeDef.code,
+        payload,
+        true,
+        onBehalf && onBehalfEmployeeId ? Number(onBehalfEmployeeId) : undefined
+      )
       setSelectedType('')
       setFieldValues({})
       setUploadedFiles({})
       setRequestNote('')
+      setSelectedAssetIds([])
+      setAssetSearch('')
+      setCustodyReason('')
+      setLeavePeriod('FULL')
+      setPermissionType('')
+      setOnBehalf(false)
+      setOnBehalfEmployeeId('')
       setShowNewModal(false)
       await load()
     } catch (err) {
@@ -394,15 +625,15 @@ export default function MyRequestsPage() {
                     <div className="flex items-start justify-between">
                       <div className="flex items-start gap-4">
                         <div
-                          className={`w-12 h-12 rounded-2xl flex items-center justify-center ${statusStyles[req.status]}`}
+                          className={`w-12 h-12 rounded-2xl flex items-center justify-center ${statusStyles[req.status] ?? 'bg-gray-100 text-gray-500'}`}
                         >
                           <StatusIcon size={24} />
                         </div>
                         <div>
                           <div className="flex items-center gap-3">
                             <h3 className="font-bold text-gray-800">{req.type}</h3>
-                            <span className={`badge text-xs ${statusStyles[req.status]}`}>
-                              {statusLabels[req.status]}
+                            <span className={`badge text-xs ${statusStyles[req.status] ?? 'bg-gray-100 text-gray-500'}`}>
+                              {statusLabels[req.status] ?? 'قيد المعالجة'}
                             </span>
                           </div>
                           <p className="text-sm text-gray-500 mt-1">{req.details}</p>
@@ -503,6 +734,48 @@ export default function MyRequestsPage() {
                   </div>
                 )}
 
+                {/* التقديم نيابة عن موظف آخر — بصلاحية فقط */}
+                {canOnBehalf && (
+                  <div className="bg-indigo-50/60 border border-indigo-100 rounded-xl p-4 space-y-3">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        className="w-4 h-4 accent-primary-500"
+                        checked={onBehalf}
+                        onChange={(e) => {
+                          setOnBehalf(e.target.checked)
+                          if (!e.target.checked) setOnBehalfEmployeeId('')
+                        }}
+                      />
+                      <span className="text-sm font-medium text-gray-700 flex items-center gap-1.5">
+                        <Users size={14} className="text-indigo-500" />
+                        تقديم نيابة عن موظف آخر
+                      </span>
+                    </label>
+                    {onBehalf && (
+                      <>
+                        <select
+                          className="input w-full"
+                          value={onBehalfEmployeeId}
+                          onChange={(e) => setOnBehalfEmployeeId(e.target.value)}
+                        >
+                          <option value="">— اختر الموظف —</option>
+                          {employees
+                            .filter((emp) => emp.isActive)
+                            .map((emp) => (
+                              <option key={emp.id} value={emp.id}>
+                                {emp.fullName} — {emp.employeeCode}
+                              </option>
+                            ))}
+                        </select>
+                        <p className="text-xs text-gray-500">
+                          سيُسجَّل الطلب باسم الموظف وسيظهر أنك منشئه
+                        </p>
+                      </>
+                    )}
+                  </div>
+                )}
+
                 {/* فئات الكتالوج */}
                 <div className="flex gap-2 flex-wrap">
                   <button
@@ -544,6 +817,11 @@ export default function MyRequestsPage() {
                             setSelectedType(t.code)
                             setFieldValues({})
                             setUploadedFiles({})
+                            setSelectedAssetIds([])
+                            setAssetSearch('')
+                            setCustodyReason('')
+                            setLeavePeriod('FULL')
+                            setPermissionType('')
                             setSubmitError(null)
                           }}
                           className={`p-4 rounded-xl border-2 text-right transition-all flex items-center justify-between ${
@@ -574,21 +852,181 @@ export default function MyRequestsPage() {
                               </p>
                               <p className="text-xs text-gray-500">
                                 السلسلة: {def?.approvalChain ?? '—'} • الوجهة:{' '}
-                                {def?.destination ?? t.destinationHandler}
+                                {def?.destination ??
+                                  handlerLabels[t.destinationHandler] ??
+                                  '—'}
                               </p>
                             </div>
                           </div>
                           <span className="flex items-center gap-1 text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg whitespace-nowrap">
                             <Users size={12} />
-                            {categoryLabels[t.category as keyof typeof categoryLabels] ?? t.category}
+                            {categoryLabels[t.category as keyof typeof categoryLabels] ?? 'أخرى'}
                           </span>
                         </button>
                       )
                     })}
                 </div>
 
+                {/* طلب عهدة: اختيار أصول متعددة من المتاح فقط */}
+                {selectedType && isCustodyRequest && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        الأصول المطلوبة
+                        <span className="text-red-500 mr-1">*</span>
+                      </label>
+                      <div className="relative mb-2">
+                        <Search
+                          size={16}
+                          className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
+                        />
+                        <input
+                          type="text"
+                          className="input pr-9 w-full"
+                          placeholder="ابحث بالاسم أو الفئة أو الرقم التسلسلي..."
+                          value={assetSearch}
+                          onChange={(e) => setAssetSearch(e.target.value)}
+                        />
+                      </div>
+                      {assetsLoading ? (
+                        <div className="flex justify-center py-6">
+                          <div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                        </div>
+                      ) : filteredAssets.length === 0 ? (
+                        <div className="border border-dashed border-gray-200 rounded-xl p-6 text-center">
+                          <Package size={28} className="mx-auto text-gray-300 mb-2" />
+                          <p className="text-sm text-gray-500">
+                            {availableAssets.length === 0
+                              ? 'لا توجد أصول متاحة حالياً'
+                              : 'لا توجد أصول مطابقة للبحث'}
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="border border-gray-100 rounded-xl max-h-64 overflow-y-auto">
+                          {Object.entries(assetsByCategory).map(([cat, assets]) => (
+                            <div key={cat}>
+                              <div className="sticky top-0 bg-gray-50 px-3 py-1.5 text-xs font-medium text-gray-500">
+                                {cat}
+                              </div>
+                              {assets.map((a) => (
+                                <label
+                                  key={a.id}
+                                  className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer border-b border-gray-50 last:border-b-0 transition-colors ${
+                                    selectedAssetIds.includes(a.id)
+                                      ? 'bg-primary-50'
+                                      : 'hover:bg-gray-50'
+                                  }`}
+                                >
+                                  <input
+                                    type="checkbox"
+                                    className="w-4 h-4 accent-primary-500"
+                                    checked={selectedAssetIds.includes(a.id)}
+                                    onChange={() => toggleAsset(a.id)}
+                                  />
+                                  <span className="text-sm text-gray-700 flex-1">
+                                    {a.name}
+                                  </span>
+                                  {a.serialNumber && (
+                                    <span
+                                      className="text-[11px] text-gray-400"
+                                      dir="ltr"
+                                    >
+                                      {a.serialNumber}
+                                    </span>
+                                  )}
+                                </label>
+                              ))}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                      {selectedAssetIds.length > 0 && (
+                        <p className="text-xs text-primary-600 mt-2">
+                          {formatPayloadValue('assetIds', selectedAssetIds)} ضمن
+                          الطلب — يتحقق النظام من توفرها عند الإرسال
+                        </p>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        سبب الطلب
+                      </label>
+                      <input
+                        type="text"
+                        className="input w-full"
+                        placeholder="مثال: عهدة جهاز للعمل الميداني"
+                        value={custodyReason}
+                        onChange={(e) => setCustodyReason(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+
+                {/* استئذان: نوع الإذن من كتالوج الإعدادات */}
+                {selectedType && isPermission && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      نوع الإذن
+                      <span className="text-red-500 mr-1">*</span>
+                    </label>
+                    <select
+                      className="input w-full"
+                      value={permissionType}
+                      onChange={(e) => setPermissionType(e.target.value)}
+                    >
+                      <option value="">— اختر نوع الإذن —</option>
+                      {permissionTypes
+                        .filter((p) => p.isActive)
+                        .map((p) => (
+                          <option key={p.id} value={p.nameAr}>
+                            {p.nameAr}
+                          </option>
+                        ))}
+                    </select>
+                    {selectedPermissionDef?.maxDurationMinutes ? (
+                      <p className="text-xs text-gray-500 mt-1.5">
+                        الحد الأقصى: {selectedPermissionDef.maxDurationMinutes} دقيقة
+                      </p>
+                    ) : null}
+                    {selectedPermissionDef?.isDeductible && (
+                      <p className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-1.5">
+                        <AlertTriangle size={13} className="shrink-0" />
+                        هذا النوع يُخصم من الراتب (الدقائق المتداخلة مع التأخير)
+                      </p>
+                    )}
+                  </div>
+                )}
+
+                {/* الإجازات: نطاق اليوم — كامل أو نصف صباحي/مسائي */}
+                {selectedType && isLeaveCategory && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      نطاق اليوم
+                    </label>
+                    <select
+                      className="input w-full"
+                      value={leavePeriod}
+                      onChange={(e) =>
+                        changeLeavePeriod(
+                          e.target.value as 'FULL' | 'MORNING' | 'EVENING'
+                        )
+                      }
+                    >
+                      <option value="FULL">يوم كامل</option>
+                      <option value="MORNING">النصف الصباحي</option>
+                      <option value="EVENING">النصف المسائي</option>
+                    </select>
+                    {isHalfDay && (
+                      <p className="text-xs text-gray-500 mt-1.5">
+                        إجازة نصف يوم: تاريخ النهاية يُطابق البداية وعدد الأيام 0.5
+                        تلقائياً
+                      </p>
+                    )}
+                  </div>
+                )}
+
                 {/* النموذج من تعريف الحقول المخصّصة — يحل محل الاستنتاج القديم */}
-                {selectedType && hasCustomFields && (
+                {selectedType && hasCustomFields && !isCustodyRequest && (
                   <div className="grid grid-cols-2 gap-3">
                     {customFields.map((f) => (
                       <div key={f.key} className={f.type === 'file' ? 'col-span-2' : ''}>
@@ -600,9 +1038,7 @@ export default function MyRequestsPage() {
                           <select
                             className="input w-full"
                             value={fieldValues[f.key] ?? ''}
-                            onChange={(e) =>
-                              setFieldValues({ ...fieldValues, [f.key]: e.target.value })
-                            }
+                            onChange={(e) => setFieldValue(f.key, e.target.value)}
                           >
                             <option value="">— اختر —</option>
                             {(f.options ?? []).map((o) => (
@@ -656,11 +1092,12 @@ export default function MyRequestsPage() {
                                 ? 'number'
                                 : 'text'
                             }
-                            className="input w-full"
-                            value={fieldValues[f.key] ?? ''}
-                            onChange={(e) =>
-                              setFieldValues({ ...fieldValues, [f.key]: e.target.value })
+                            className="input w-full disabled:bg-gray-50 disabled:text-gray-400"
+                            disabled={
+                              isHalfDay && (f.key === 'toDate' || f.key === 'days')
                             }
+                            value={fieldValues[f.key] ?? ''}
+                            onChange={(e) => setFieldValue(f.key, e.target.value)}
                           />
                         )}
                       </div>
@@ -669,28 +1106,30 @@ export default function MyRequestsPage() {
                 )}
 
                 {/* الاستنتاج القديم — عند غياب الحقول المخصّصة */}
-                {selectedType && !hasCustomFields && requiredFields.length > 0 && (
-                  <div className="grid grid-cols-2 gap-3">
-                    {requiredFields.map((f) => (
-                      <div key={f}>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">
-                          {fieldLabels[f] ?? f}
-                        </label>
-                        <input
-                          type={
-                            isDateField(f) ? 'date' : isNumberField(f) ? 'number' : 'text'
-                          }
-                          className="input w-full"
-                          placeholder={f === 'from' || f === 'to' ? 'HH:MM' : undefined}
-                          value={fieldValues[f] ?? ''}
-                          onChange={(e) =>
-                            setFieldValues({ ...fieldValues, [f]: e.target.value })
-                          }
-                        />
-                      </div>
-                    ))}
-                  </div>
-                )}
+                {selectedType &&
+                  !hasCustomFields &&
+                  !isCustodyRequest &&
+                  requiredFields.length > 0 && (
+                    <div className="grid grid-cols-2 gap-3">
+                      {requiredFields.map((f) => (
+                        <div key={f}>
+                          <label className="block text-sm font-medium text-gray-700 mb-2">
+                            {humanizeKey(f)}
+                          </label>
+                          <input
+                            type={
+                              isDateField(f) ? 'date' : isNumberField(f) ? 'number' : 'text'
+                            }
+                            className="input w-full disabled:bg-gray-50 disabled:text-gray-400"
+                            disabled={isHalfDay && (f === 'toDate' || f === 'days')}
+                            placeholder={f === 'from' || f === 'to' ? 'HH:MM' : undefined}
+                            value={fieldValues[f] ?? ''}
+                            onChange={(e) => setFieldValue(f, e.target.value)}
+                          />
+                        </div>
+                      ))}
+                    </div>
+                  )}
 
                 {selectedType && (
                   <div>

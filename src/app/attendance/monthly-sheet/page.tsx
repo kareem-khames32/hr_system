@@ -44,6 +44,7 @@ const statusConfig: Record<
   absent: { label: 'غائب', className: 'badge-danger', icon: XCircle },
   early_leave: { label: 'خروج مبكر', className: 'bg-orange-50 text-orange-600', icon: Clock },
   leave: { label: 'في إجازة', className: 'bg-indigo-50 text-indigo-600', icon: Calendar },
+  partial_leave: { label: 'إجازة جزئية', className: 'bg-indigo-100 text-indigo-700', icon: Clock },
   holiday: { label: 'عطلة', className: 'bg-blue-50 text-blue-600', icon: Calendar },
 }
 
@@ -133,7 +134,7 @@ export default function MonthlySheetPage() {
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
 
         {/* Summary */}
-        <div className="grid grid-cols-6 gap-4">
+        <div className="grid grid-cols-7 gap-4">
           <div className="card p-4 text-center">
             <p className="text-2xl font-bold text-success-600">{Number(summary.present ?? 0)}</p>
             <p className="text-sm text-gray-500">يوم حضور</p>
@@ -149,6 +150,12 @@ export default function MonthlySheetPage() {
           <div className="card p-4 text-center">
             <p className="text-2xl font-bold text-orange-600">{Number(summary.earlyLeave ?? 0)}</p>
             <p className="text-sm text-gray-500">خروج مبكر</p>
+          </div>
+          <div className="card p-4 text-center">
+            <p className="text-2xl font-bold text-indigo-600">
+              {Number(summary.partialLeave ?? summary.partial_leave ?? 0)}
+            </p>
+            <p className="text-sm text-gray-500">إجازة جزئية</p>
           </div>
           <div className="card p-4 text-center">
             <p className="text-2xl font-bold text-gray-800">{Number(summary.totalLateMinutes ?? 0)}</p>
@@ -196,6 +203,7 @@ export default function MonthlySheetPage() {
                       const StatusIcon = cfg.icon
                       const lateMinutes = Number(row.lateMinutes)
                       const excusedMinutes = Number((row as any).excusedMinutes ?? 0)
+                      const deductibleMinutes = Number(row.deductibleMinutes ?? 0)
                       return (
                         <tr key={row.id} className="table-row">
                           <td className="table-cell font-medium text-gray-700">
@@ -235,6 +243,14 @@ export default function MonthlySheetPage() {
                             {excusedMinutes > 0 && (
                               <p className="text-xs text-success-600 mt-1 font-medium">
                                 معذور بإذن: {excusedMinutes} د
+                              </p>
+                            )}
+                            {deductibleMinutes > 0 && (
+                              <p
+                                className="text-xs text-amber-600 mt-1 font-medium"
+                                title="دقائق إذن بخصم — تُخصم من الراتب"
+                              >
+                                {deductibleMinutes} د بخصم
                               </p>
                             )}
                           </td>

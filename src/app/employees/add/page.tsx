@@ -7,12 +7,21 @@ import {
   fetchDepartments,
   fetchTeams,
   fetchEmployees,
+  fetchCatalog,
   createEmployee,
   ApiBranch,
   ApiDepartment,
   ApiTeam,
   ApiEmployee,
 } from '@/lib/api'
+
+// مركز التكلفة — من كتالوج الإعدادات
+interface CostCenter {
+  id: number
+  code: string
+  name: string
+  isActive: boolean
+}
 import {
   User,
   Briefcase,
@@ -157,6 +166,7 @@ export default function AddEmployeePage() {
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [teams, setTeams] = useState<ApiTeam[]>([])
   const [allEmployees, setAllEmployees] = useState<ApiEmployee[]>([])
+  const [costCenters, setCostCenters] = useState<CostCenter[]>([])
   const [error, setError] = useState('')
   const [submitting, setSubmitting] = useState(false)
 
@@ -196,6 +206,7 @@ export default function AddEmployeePage() {
     phoneAllowance: '',
     workNatureAllowance: '',
     payMethod: 'transfer',
+    costCenterId: '',
     bankName: '',
     iban: '',
     contractType: '',
@@ -217,6 +228,10 @@ export default function AddEmployeePage() {
       .catch((err) =>
         setError(err instanceof Error ? err.message : 'تعذر تحميل بيانات القوائم')
       )
+    // مراكز التكلفة اختيارية — فشلها لا يعطّل النموذج
+    fetchCatalog<CostCenter>('cost-centers')
+      .then((cc) => setCostCenters(cc.filter((c) => c.isActive)))
+      .catch(() => setCostCenters([]))
   }, [])
 
   const fullNameAr = [form.firstNameAr, form.fatherNameAr, form.grandNameAr, form.familyNameAr]
@@ -265,6 +280,7 @@ export default function AddEmployeePage() {
       if (form.managerId) payload.managerEmployeeId = Number(form.managerId)
       if (form.joinDate) payload.joinDate = form.joinDate
       if (form.basicSalary !== '') payload.basicSalary = Number(form.basicSalary)
+      if (form.costCenterId) payload.costCenterId = Number(form.costCenterId)
       if (form.bankName) payload.bankName = form.bankName
       const iban = form.iban.replace(/\s+/g, '').toUpperCase()
       if (iban) payload.iban = iban
@@ -1126,6 +1142,21 @@ export default function AddEmployeePage() {
                     <option value="monthly">شهري</option>
                     <option value="biweekly">نصف شهري</option>
                     <option value="weekly">أسبوعي</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">مركز التكلفة (اختياري)</label>
+                  <select
+                    className="input"
+                    value={form.costCenterId}
+                    onChange={(e) => setField('costCenterId', e.target.value)}
+                  >
+                    <option value="">بدون مركز تكلفة</option>
+                    {costCenters.map((cc) => (
+                      <option key={cc.id} value={String(cc.id)}>
+                        {cc.code} — {cc.name}
+                      </option>
+                    ))}
                   </select>
                 </div>
               </div>

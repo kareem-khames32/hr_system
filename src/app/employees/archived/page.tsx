@@ -20,6 +20,7 @@ import {
   fetchBranches,
   fetchDepartments,
   updateEmployee,
+  type ApiDepartment,
 } from '@/lib/api'
 
 interface ArchivedEmployee {
@@ -28,12 +29,16 @@ interface ArchivedEmployee {
   avatar: string
   employeeId: string
   department: string
+  departmentId: number | null
   position: string
   joinDate: string
   endDate: string
   yearsOfService: string
   // مؤرشف يدوياً أو منتهي الخدمة عبر ملف إنهاء خدمة
   status: string
+  // توثيق الأرشفة — تاريخ (YYYY-MM-DD) وسبب
+  archivedAt: string
+  archiveReason: string
 }
 
 const serviceText = (joinDate?: string | null) => {
@@ -51,6 +56,11 @@ const serviceText = (joinDate?: string | null) => {
 export default function ArchivedEmployeesPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
+  const [filterReason, setFilterReason] = useState('')
+  const [filterDept, setFilterDept] = useState('')
+  const [dateFrom, setDateFrom] = useState('')
+  const [dateTo, setDateTo] = useState('')
+  const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [archivedEmployees, setArchivedEmployees] = useState<ArchivedEmployee[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -66,6 +76,7 @@ export default function ArchivedEmployeesPage() {
       ])
       const branchById = new Map(branches.map((b) => [b.id, b.name]))
       const deptById = new Map(depts.map((d) => [d.id, d.name]))
+      setDepartments(depts)
       setArchivedEmployees(
         emps
           .filter((e) => e.status === 'archived' || e.status === 'terminated')
@@ -78,11 +89,14 @@ export default function ArchivedEmployeesPage() {
               (e.departmentId != null ? deptById.get(e.departmentId) : null) ??
               branchById.get(e.branchId) ??
               '—',
+            departmentId: e.departmentId ?? null,
             position: e.jobTitle ?? '—',
             joinDate: e.joinDate ? String(e.joinDate).slice(0, 10) : '',
-            endDate: '',
+            endDate: e.archivedAt ? String(e.archivedAt).slice(0, 10) : '',
             yearsOfService: serviceText(e.joinDate),
             status: e.status,
+            archivedAt: e.archivedAt ? String(e.archivedAt).slice(0, 10) : '',
+            archiveReason: e.archiveReason ?? '',
           }))
       )
     } catch (err) {
@@ -107,11 +121,28 @@ export default function ArchivedEmployeesPage() {
     }
   }
 
+  // أسباب الأرشفة الموجودة فعلاً في البيانات — بدون تكرار
+  const reasonOptions = Array.from(
+    new Set(archivedEmployees.map((e) => e.archiveReason).filter(Boolean))
+  )
+
   const filteredEmployees = archivedEmployees.filter((emp) => {
-    return (
-      (emp.name.includes(searchTerm) || emp.employeeId.includes(searchTerm)) &&
-      (!filterStatus || emp.status === filterStatus)
-    )
+    const matchesSearch =
+      emp.name.includes(searchTerm) || emp.employeeId.includes(searchTerm)
+    const matchesStatus = !filterStatus || emp.status === filterStatus
+    const matchesReason = !filterReason || emp.archiveReason === filterReason
+    const matchesDept =
+      !filterDept || String(emp.departmentId ?? '') === filterDept
+    // الفترة على تاريخ الأرشفة (مقارنة تاريخ فقط) — بلا تاريخ يُستبعد عند تحديد فترة
+    let matchesDate = true
+    if (dateFrom || dateTo) {
+      if (!emp.archivedAt) matchesDate = false
+      else
+        matchesDate =
+          (!dateFrom || emp.archivedAt >= dateFrom) &&
+          (!dateTo || emp.archivedAt <= dateTo)
+    }
+    return matchesSearch && matchesStatus && matchesReason && matchesDept && matchesDate
   })
 
   const archivedCount = archivedEmployees.filter((e) => e.status === 'archived').length
@@ -185,8 +216,8 @@ export default function ArchivedEmployeesPage() {
 
         {/* Filters */}
         <div className="card">
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1">
+          <div className="flex flex-wrap items-center gap-4">
+            <div className="relative flex-1 min-w-[220px]">
               <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
@@ -199,12 +230,59 @@ export default function ArchivedEmployeesPage() {
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="input w-56"
+              className="input w-44"
             >
               <option value="">كل الحالات</option>
               <option value="archived">مؤرشف</option>
               <option value="terminated">منتهي الخدمة</option>
             </select>
+            {/* سبب الأرشفة — القيم الموجودة فعلاً في البيانات */}
+            <select
+              value={filterReason}
+              onChange={(e) => setFilterReason(e.target.value)}
+              className="input w-56"
+              title="سبب الأرشفة"
+            >
+              <option value="">الكل</option>
+              {reasonOptions.map((reason) => (
+                <option key={reason} value={reason}>
+                  {reason.length > 40 ? `${reason.slice(0, 40)}…` : reason}
+                </option>
+              ))}
+            </select>
+            {/* القسم */}
+            <select
+              value={filterDept}
+              onChange={(e) => setFilterDept(e.target.value)}
+              className="input w-44"
+              title="القسم"
+            >
+              <option value="">كل الأقسام</option>
+              {departments.map((dep) => (
+                <option key={dep.id} value={String(dep.id)}>
+                  {dep.name}
+                </option>
+              ))}
+            </select>
+            {/* فترة الأرشفة: من / إلى */}
+            <div className="flex items-center gap-2">
+              <span className="text-sm text-gray-500 whitespace-nowrap">من</span>
+              <input
+                type="date"
+                value={dateFrom}
+                onChange={(e) => setDateFrom(e.target.value)}
+                className="input w-40"
+                title="بداية فترة الأرشفة"
+              />
+              <span className="text-sm text-gray-500 whitespace-nowrap">إلى</span>
+              <input
+                type="date"
+                value={dateTo}
+                onChange={(e) => setDateTo(e.target.value)}
+                className="input w-40"
+                title="نهاية فترة الأرشفة"
+              />
+            </div>
           </div>
         </div>
 
@@ -251,7 +329,11 @@ export default function ArchivedEmployeesPage() {
                       ? new Date(emp.joinDate).toLocaleDateString('ar-SA')
                       : '—'}
                   </td>
-                  <td className="px-4 py-4 text-gray-600">—</td>
+                  <td className="px-4 py-4 text-gray-600">
+                    {emp.archivedAt
+                      ? new Date(emp.archivedAt).toLocaleDateString('ar-SA')
+                      : '—'}
+                  </td>
                   <td className="px-4 py-4 text-gray-600">{emp.yearsOfService}</td>
                   <td className="px-4 py-4">
                     {emp.status === 'terminated' ? (
@@ -262,6 +344,14 @@ export default function ArchivedEmployeesPage() {
                       <span className="px-3 py-1 rounded-full text-xs font-medium bg-gray-100 text-gray-600">
                         مؤرشف
                       </span>
+                    )}
+                    {emp.archiveReason && (
+                      <p
+                        className="text-xs text-gray-400 mt-1 max-w-[180px] truncate"
+                        title={emp.archiveReason}
+                      >
+                        {emp.archiveReason}
+                      </p>
                     )}
                   </td>
                   <td className="px-4 py-4">

@@ -509,7 +509,7 @@ export default function RequestsConsolePage() {
                 <h2 className="text-lg font-bold text-gray-800">
                   {detailLoading
                     ? 'تفاصيل الطلب'
-                    : detailType?.nameAr ?? detail?.typeCode}
+                    : detailType?.nameAr ?? 'طلب'}
                 </h2>
                 <button
                   onClick={() => setDetail(null)}
@@ -529,7 +529,7 @@ export default function RequestsConsolePage() {
                       {statusLabels[detail.status as RequestStatus] ?? detail.status}
                     </span>
                     <span className="text-xs text-gray-400 font-mono" dir="ltr">
-                      REQ-{detail.id} • {detail.typeCode}
+                      REQ-{detail.id}
                     </span>
                   </div>
 

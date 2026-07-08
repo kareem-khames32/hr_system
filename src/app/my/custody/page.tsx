@@ -7,28 +7,34 @@ import {
   CheckCircle2,
   Clock,
   Package,
+  Undo2,
 } from 'lucide-react'
-import { acknowledgeCustody, fetchMyCustody, type ApiCustody } from '@/lib/api'
+import {
+  acknowledgeCustody,
+  fetchMyCustody,
+  requestCustodyHandover,
+  type ApiCustody,
+} from '@/lib/api'
 
-// حالات العهدة من منظور الموظف
+// حالات العهدة — التسميات الموحّدة في كل النظام
 const statusLabels: Record<string, string> = {
-  PENDING_ACK: 'بانتظار تأكيدك',
-  PENDING_MANAGER_CONFIRM: 'أكدت الاستلام — بانتظار اعتماد مديرك',
-  ACTIVE: 'نشطة',
-  RETURNED: 'مُرجعة',
-  RETURN_REQUESTED: 'طلب إرجاع',
+  PENDING_ACK: 'بانتظار تأكيد الموظف',
+  PENDING_MANAGER_CONFIRM: 'بانتظار اعتماد المدير المباشر',
+  ACTIVE: 'عهدة نشطة',
+  RETURN_REQUESTED: 'سلّمها الموظف — بانتظار تأكيد الاستلام',
+  RETURNED: 'مُرجَعة',
   LOST: 'مفقودة',
   DAMAGED: 'تالفة',
 }
 
 const statusStyles: Record<string, string> = {
-  PENDING_ACK: 'bg-indigo-100 text-indigo-700',
-  PENDING_MANAGER_CONFIRM: 'bg-indigo-100 text-indigo-700',
+  PENDING_ACK: 'bg-amber-100 text-amber-700',
+  PENDING_MANAGER_CONFIRM: 'bg-amber-100 text-amber-700',
   ACTIVE: 'bg-success-50 text-success-700',
+  RETURN_REQUESTED: 'bg-indigo-100 text-indigo-700',
   RETURNED: 'bg-gray-100 text-gray-600',
-  RETURN_REQUESTED: 'bg-blue-100 text-blue-700',
   LOST: 'bg-red-100 text-red-700',
-  DAMAGED: 'bg-orange-100 text-orange-700',
+  DAMAGED: 'bg-red-100 text-red-700',
 }
 
 const fmtDate = (v?: string | null) => (v ? String(v).slice(0, 10) : '—')
@@ -64,6 +70,27 @@ export default function MyCustodyPage() {
       setError(e instanceof Error ? e.message : 'تعذر تأكيد الاستلام')
     } finally {
       setAckingId(null)
+    }
+  }
+
+  // الموظف يعلّم «سلّمت العهدة» — التأكيد النهائي عند مسؤول العهد
+  const [handoverId, setHandoverId] = useState<number | null>(null)
+  const handleHandover = async (id: number) => {
+    if (
+      !window.confirm(
+        'هتعلّم إنك سلّمت العهدة، ومسؤول العهد لازم يؤكد الاستلام. متأكد؟'
+      )
+    )
+      return
+    setHandoverId(id)
+    setError('')
+    try {
+      await requestCustodyHandover(id)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر تسجيل تسليم العهدة')
+    } finally {
+      setHandoverId(null)
     }
   }
 
@@ -215,6 +242,20 @@ export default function MyCustodyPage() {
                                 <CheckCircle2 size={16} />
                                 {ackingId === r.id ? 'جارٍ التأكيد...' : 'تأكيد الاستلام'}
                               </button>
+                            ) : r.status === 'ACTIVE' ? (
+                              <button
+                                onClick={() => handleHandover(r.id)}
+                                disabled={handoverId === r.id}
+                                className="btn-secondary text-sm px-4 py-2 inline-flex items-center gap-2"
+                              >
+                                <Undo2 size={16} />
+                                {handoverId === r.id ? 'جارٍ التسجيل...' : 'تسليم العهدة'}
+                              </button>
+                            ) : r.status === 'RETURN_REQUESTED' ? (
+                              <span className="text-xs text-indigo-600 inline-flex items-center gap-1">
+                                <Clock size={14} />
+                                بانتظار تأكيد مسؤول العهد
+                              </span>
                             ) : (
                               <span className="text-gray-300 text-sm">—</span>
                             )}
