@@ -73,4 +73,14 @@ export class EmployeesController {
   ) {
     return this.employees.archive(id, branchScopeOf(user), body?.reason)
   }
+
+  // العودة على رأس العمل — للمؤرشف والمنتهي خدمته
+  @Perm('employees.archive')
+  @Post(':id/reactivate')
+  reactivate(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: JwtPayload
+  ) {
+    return this.employees.reactivate(id, branchScopeOf(user))
+  }
 }

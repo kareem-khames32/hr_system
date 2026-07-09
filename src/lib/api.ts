@@ -229,6 +229,9 @@ export const createEmployee = (e: Partial<ApiEmployee>) => post<ApiEmployee>('/e
 export const updateEmployee = (id: number, e: Partial<ApiEmployee>) => patch<ApiEmployee>(`/employees/${id}`, e)
 export const archiveEmployee = (id: number, reason?: string) =>
   post<ApiEmployee>(`/employees/${id}/archive`, reason ? { reason } : {})
+// العودة على رأس العمل — للمؤرشف والمنتهي خدمته (توثيق بالسجل الوظيفي)
+export const reactivateEmployee = (id: number) =>
+  post<ApiEmployee>(`/employees/${id}/reactivate`)
 
 // ===== الطلبات =====
 export const fetchRequestTypes = () => get<ApiRequestType[]>('/requests/types')

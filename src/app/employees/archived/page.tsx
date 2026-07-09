@@ -19,7 +19,7 @@ import {
   fetchEmployees,
   fetchBranches,
   fetchDepartments,
-  updateEmployee,
+  reactivateEmployee,
   type ApiDepartment,
 } from '@/lib/api'
 
@@ -111,10 +111,14 @@ export default function ArchivedEmployeesPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const handleReactivate = async (id: number) => {
-    if (!window.confirm('هل تريد إعادة تفعيل هذا الموظف؟')) return
+  const handleReactivate = async (id: number, status: string) => {
+    const msg =
+      status === 'terminated'
+        ? 'الموظف منتهي الخدمة — العودة على رأس العمل هترجعه نشطاً بنفس ملفه وتاريخه الوظيفي. متأكد؟'
+        : 'هل تريد إعادة تفعيل هذا الموظف؟'
+    if (!window.confirm(msg)) return
     try {
-      await updateEmployee(id, { status: 'active', isActive: true })
+      await reactivateEmployee(id)
       await loadData()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذرت إعادة التفعيل')
@@ -363,15 +367,17 @@ export default function ArchivedEmployeesPage() {
                       >
                         <Eye size={16} className="text-gray-600" />
                       </Link>
-                      {emp.status === 'archived' && (
-                        <button
-                          onClick={() => handleReactivate(emp.id)}
-                          className="p-2 bg-gray-100 rounded-lg hover:bg-success-50"
-                          title="إعادة تفعيل"
-                        >
-                          <RefreshCw size={16} className="text-gray-600 hover:text-success-600" />
-                        </button>
-                      )}
+                      <button
+                        onClick={() => handleReactivate(emp.id, emp.status)}
+                        className="p-2 bg-gray-100 rounded-lg hover:bg-success-50"
+                        title={
+                          emp.status === 'terminated'
+                            ? 'عودة على رأس العمل'
+                            : 'إعادة تفعيل'
+                        }
+                      >
+                        <RefreshCw size={16} className="text-gray-600 hover:text-success-600" />
+                      </button>
                     </div>
                   </td>
                 </tr>

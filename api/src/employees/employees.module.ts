@@ -3,6 +3,7 @@ import { TypeOrmModule } from '@nestjs/typeorm'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
+import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { LeaveBalance } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { Employee } from './employee.entity'
@@ -18,6 +19,7 @@ import { EmployeesService } from './employees.service'
       Team,
       LeaveBalance,
       RequestsConfig,
+      EmployeeStatusHistory,
     ]),
   ],
   controllers: [EmployeesController],

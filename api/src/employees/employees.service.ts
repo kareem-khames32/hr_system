@@ -9,6 +9,7 @@ import { Not, Repository } from 'typeorm'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
+import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { LeaveBalance } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { Employee } from './employee.entity'
@@ -28,7 +29,9 @@ export class EmployeesService {
     @InjectRepository(LeaveBalance)
     private readonly balances: Repository<LeaveBalance>,
     @InjectRepository(RequestsConfig)
-    private readonly config: Repository<RequestsConfig>
+    private readonly config: Repository<RequestsConfig>,
+    @InjectRepository(EmployeeStatusHistory)
+    private readonly history: Repository<EmployeeStatusHistory>
   ) {}
 
   // العزل بالفرع: branchScope = null → الكل (super_admin فقط)
@@ -207,5 +210,30 @@ export class EmployeesService {
     emp.archivedAt = new Date()
     emp.archiveReason = reason?.trim() || 'أرشفة يدوية'
     return this.employees.save(emp)
+  }
+
+  // العودة على رأس العمل: مؤرشف أو منتهي الخدمة يرجع نشطاً
+  // بنفس ملفه وتاريخه — والحركة تتوثق في السجل الوظيفي
+  async reactivate(id: number, branchScope: number | null) {
+    const emp = await this.findOne(id, branchScope)
+    if (emp.status !== 'archived' && emp.status !== 'terminated') {
+      throw new BadRequestException('الموظف ليس مؤرشفاً ولا منتهي الخدمة')
+    }
+    const old = emp.status
+    emp.status = 'active'
+    emp.isActive = true
+    emp.archivedAt = null as any
+    emp.archiveReason = null as any
+    await this.employees.save(emp)
+    await this.history.save({
+      employeeId: emp.id,
+      oldStatus: old,
+      newStatus: 'active',
+      reason:
+        old === 'terminated'
+          ? 'عودة على رأس العمل بعد انتهاء خدمة'
+          : 'إعادة تفعيل من الأرشيف',
+    })
+    return emp
   }
 }
