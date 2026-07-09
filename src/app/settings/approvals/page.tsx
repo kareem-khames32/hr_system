@@ -73,6 +73,7 @@ const roleLabels: Record<string, string> = {
   custody_officer: 'أمين العهدة',
   it: 'تقنية المعلومات',
   executive: 'التنفيذي',
+  payroll_officer: 'موظف الرواتب',
   specific_employee: 'موظف بعينه',
 }
 
@@ -86,6 +87,7 @@ const roleDescriptions: Record<string, string> = {
   custody_officer: 'المسؤول عن العُهد',
   it: 'قسم تقنية المعلومات',
   executive: 'الإدارة التنفيذية',
+  payroll_officer: 'موظف الرواتب — يُحل بصلاحية اعتماد خطوات الرواتب',
   specific_employee: 'موظف محدد بالاسم يعتمد الخطوة',
 }
 

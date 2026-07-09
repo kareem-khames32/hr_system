@@ -1,8 +1,9 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Between, In, Repository } from 'typeorm'
+import { Between, In, MoreThanOrEqual, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
+import { AttendanceDay } from '../attendance/attendance.entities'
 import { Employee } from '../employees/employee.entity'
 import { RequestApproval } from '../requests/entities/request-approval.entity'
 import { Request } from '../requests/entities/request.entity'
@@ -24,7 +25,9 @@ export class PortalController {
     @InjectRepository(RequestType)
     private readonly requestTypes: Repository<RequestType>,
     @InjectRepository(RequestApproval)
-    private readonly approvals: Repository<RequestApproval>
+    private readonly approvals: Repository<RequestApproval>,
+    @InjectRepository(AttendanceDay)
+    private readonly attendanceDays: Repository<AttendanceDay>
   ) {}
 
   // ===== التقويم: عطلات + إجازات معتمدة في الشهر =====
@@ -120,8 +123,39 @@ export class PortalController {
       }
     }
 
-    // 2) طلبات بانتظار موافقتي (عدّاد)
+    // 2) تعارض بصمة×إجازة (آخر 7 أيام) — لمن يملك قرار الإلغاء
     const scope = branchScopeOf(user)
+    if (userHasPerm(user, 'leaves.revoke')) {
+      const since = new Date(Date.now() - 7 * 86400000)
+      const sinceStr = `${since.getFullYear()}-${String(since.getMonth() + 1).padStart(2, '0')}-${String(since.getDate()).padStart(2, '0')}`
+      const conflictWhere: Record<string, unknown> = {
+        leaveConflict: true,
+        date: MoreThanOrEqual(sinceStr),
+      }
+      if (scope !== null) conflictWhere.branchId = scope
+      const conflicts = await this.attendanceDays.find({
+        where: conflictWhere as any,
+        order: { date: 'DESC' },
+        take: 10,
+      })
+      if (conflicts.length > 0) {
+        const empIds = [...new Set(conflicts.map((c) => c.employeeId))]
+        const emps = await this.employees.find({ where: { id: In(empIds) } })
+        const nameById = new Map(emps.map((e) => [e.id, e.fullName]))
+        for (const c of conflicts) {
+          items.push({
+            id: `leave-conflict-${c.employeeId}-${c.date}`,
+            kind: 'warning',
+            title: 'موظف بصم يوم إجازته',
+            body: `${nameById.get(c.employeeId) ?? `#${c.employeeId}`} حضر يوم ${c.date} رغم إجازته المعتمدة — القرار: إلغاء الإجازة (يرجع الرصيد ويتحسب دوام) أو إبقاؤها`,
+            at: c.date,
+            link: '/leaves',
+          })
+        }
+      }
+    }
+
+    // 3) طلبات بانتظار موافقتي (عدّاد)
     const where: Record<string, unknown> = { status: 'UNDER_REVIEW' }
     if (scope !== null) where.branchId = scope
     const pending = await this.requests.count({ where: where as any })

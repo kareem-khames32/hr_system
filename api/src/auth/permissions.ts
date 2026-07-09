@@ -24,6 +24,7 @@ export const PERMISSIONS: Record<string, string> = {
   'approve.finance': 'اعتماد خطوات المالية',
   'approve.it': 'اعتماد خطوات تقنية المعلومات',
   'approve.custody': 'اعتماد خطوات أمين العهدة',
+  'approve.payroll': 'اعتماد خطوات موظف الرواتب',
   'approve.executive': 'اعتماد الخطوات التنفيذية',
   // الحضور
   'attendance.view_all': 'عرض حضور النطاق',

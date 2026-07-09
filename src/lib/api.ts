@@ -171,6 +171,8 @@ export interface ApiAttendanceDay {
   excusedMinutes: number
   // دقائق إذن «بخصم» — تدخل خصم المسير
   deductibleMinutes?: number
+  // موظف بصم يوم إجازته الكاملة — تعارض بانتظار قرار HR
+  leaveConflict?: boolean
 }
 export interface ApiLeave {
   id: number; requestId?: number; employeeId: number; leaveType: string
@@ -265,6 +267,10 @@ export const upsertWeekSchedule = (entries: Array<{ weekStart: string; employeeI
   post('/attendance/schedule', { entries })
 export const ingestPunchesManual = (punches: Array<{ employeeCode: string; timestamp: string; deviceSn?: string }>) =>
   post<{ received: number; matched: number }>('/attendance/punches/manual', { punches })
+// أيام العمل الفعلية في مدى — لتلميح نموذج الإجازة (العطلات لا تُخصم)
+export const fetchWorkingDays = (from: string, to: string) =>
+  get<{ total: number; working: number; skipped: string[] }>(
+    `/attendance/working-days?from=${from}&to=${to}`)
 export const fetchPendingOvertime = () => get<any[]>('/attendance/overtime/pending')
 export const confirmOvertime = (id: number, approve: boolean) =>
   post(`/attendance/overtime/${id}/confirm`, { approve })

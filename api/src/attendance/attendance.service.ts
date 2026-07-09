@@ -84,9 +84,34 @@ export class AttendanceService {
     private readonly permissionTypes: Repository<PermissionType>
   ) {}
 
+  // أيام العمل الفعلية في مدى — الويك إند والعطلات الرسمية مستثناة
+  // (للإجازات: المخصوم من الرصيد = أيام العمل فقط)
+  async workingDaysBetween(
+    branchId: number,
+    fromDate: string,
+    toDate: string
+  ): Promise<{ total: number; working: number; skipped: string[] }> {
+    const from = new Date(`${fromDate}T12:00:00`)
+    const to = new Date(`${toDate}T12:00:00`)
+    let total = 0
+    let working = 0
+    const skipped: string[] = []
+    for (
+      let d = new Date(from), i = 0;
+      d <= to && i < 92;
+      d.setDate(d.getDate() + 1), i++
+    ) {
+      const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+      total++
+      if (await this.isNonWorkingDay(date, branchId)) skipped.push(date)
+      else working++
+    }
+    return { total, working, skipped }
+  }
+
   // §2.4: يوم عطلة؟ (ويك إند من الإعدادات/الفرع + العطلات الرسمية)
   // ممنوع يتحسب تأخير أو غياب فيه حتى لو فيه بصمة
-  private async isNonWorkingDay(
+  async isNonWorkingDay(
     date: string,
     branchId: number
   ): Promise<boolean> {
@@ -358,11 +383,15 @@ export class AttendanceService {
     let excusedMinutes = 0
     let deductibleMinutes = 0
     let workMinutes = 0
+    let leaveConflict = false
 
     const isHoliday = await this.isNonWorkingDay(date, emp.branchId)
 
     if (isFullLeaveDay) {
       status = 'leave'
+      // §موظف بصم يوم إجازته الكاملة — تعارض يظهر لـHR للقرار:
+      // إلغاء الإجازة (يرجع الرصيد ويتحسب دوام) أو إبقاؤها
+      leaveConflict = !!checkIn
     } else if (isHoliday) {
       // ويك إند/عطلة رسمية: لا تأخير ولا غياب — الحضور يُسجل كعمل بيوم عطلة
       status = 'holiday'
@@ -434,6 +463,7 @@ export class AttendanceService {
       excusedMinutes,
       deductibleMinutes,
       workMinutes,
+      leaveConflict,
       computedAt: new Date(),
     })
     day = await this.days.save(day)

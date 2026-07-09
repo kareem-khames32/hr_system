@@ -181,6 +181,7 @@ export default function MyAttendancePage() {
                           const lateMinutes = Number(row.lateMinutes)
                           const excusedMinutes = Number(row.excusedMinutes ?? 0)
                           const deductibleMinutes = Number(row.deductibleMinutes ?? 0)
+                          const leaveConflict = row.leaveConflict === true
                           return (
                             <tr key={row.id} className="table-row">
                               <td className="table-cell font-medium text-gray-700">
@@ -232,10 +233,21 @@ export default function MyAttendancePage() {
                                 )}
                               </td>
                               <td className="table-cell text-center">
-                                <span className={`badge text-xs inline-flex items-center gap-1 ${cfg.className}`}>
-                                  <StatusIcon size={12} />
-                                  {cfg.label}
-                                </span>
+                                <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                                  <span className={`badge text-xs inline-flex items-center gap-1 ${cfg.className}`}>
+                                    <StatusIcon size={12} />
+                                    {cfg.label}
+                                  </span>
+                                  {leaveConflict && (
+                                    <span
+                                      className="badge text-xs bg-amber-100 text-amber-700 inline-flex items-center gap-1"
+                                      title="الموظف حضر يوم إجازته المعتمدة — راجع شاشة الإجازات: إلغاء الإجازة يحسبه دواماً ويرجع الرصيد"
+                                    >
+                                      <AlertTriangle size={12} />
+                                      بصم رغم الإجازة
+                                    </span>
+                                  )}
+                                </div>
                               </td>
                             </tr>
                           )

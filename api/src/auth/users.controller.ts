@@ -28,21 +28,24 @@ import {
 import { Type } from 'class-transformer'
 import type { JwtPayload } from './auth.service'
 import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from './guards'
+import { ALL_PERMISSIONS } from './permissions'
 import { User, UserRole } from './user.entity'
 import { Employee } from '../employees/employee.entity'
 
 const ROLES: UserRole[] = ['super_admin', 'hr_manager', 'branch_manager', 'employee']
 
-// الصلاحيات الإضافية القابلة للمنح — قدرات أدوار وظيفية فوق الدور الأساسي
-const GRANTABLE_PERMISSIONS = [
-  'hr', // خطوات HR في الاعتمادات + مسارات HR
-  'finance', // خطوات المالية
-  'custody_officer', // أمين العهدة
-  'it', // خطوات IT
-  'executive', // الخطوات التنفيذية
-  'hr_manager', // كامل قدرات مدير HR في المسارات المحمية
-  'branch_manager', // قدرات مدير الفرع
+// الصلاحيات الإضافية القابلة للمنح = سجل الصلاحيات المركزي كاملاً
+// + أسماء قديمة للتوافق (كانت hardcoded قبل السجل)
+const LEGACY_GRANTS = [
+  'hr',
+  'finance',
+  'custody_officer',
+  'it',
+  'executive',
+  'hr_manager',
+  'branch_manager',
 ]
+const GRANTABLE_PERMISSIONS = [...ALL_PERMISSIONS, ...LEGACY_GRANTS]
 
 const validatePermissions = (perms?: string[]): string | undefined => {
   if (perms === undefined) return undefined

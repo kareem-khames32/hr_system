@@ -147,6 +147,8 @@ export class ApproverResolver {
           granted.includes('approve.custody') ||
           granted.includes('custody_officer')
         )
+      case 'payroll_officer':
+        return granted.includes('approve.payroll')
       default:
         return false
     }

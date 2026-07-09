@@ -137,6 +137,7 @@ const APPROVER_ROLES = [
   'hr',
   'finance',
   'custody_officer',
+  'payroll_officer',
   'it',
   'executive',
   'specific_employee',

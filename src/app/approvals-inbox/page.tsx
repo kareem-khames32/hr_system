@@ -56,13 +56,20 @@ const parseJson = <T,>(raw: string | null | undefined, fallback: T): T => {
 
 const roleLabels: Record<string, string> = {
   direct_manager_of_requester: 'المدير المباشر',
+  department_manager_of_requester: 'مدير القسم',
+  branch_manager_of_requester: 'مدير الفرع',
   receiving_team_manager: 'المدير المستقبِل',
   hr: 'الموارد البشرية',
   finance: 'المالية',
   executive: 'الإدارة التنفيذية',
   custody_officer: 'أمين العهدة',
   it: 'تقنية المعلومات',
+  specific_employee: 'موظف محدد',
+  payroll_officer: 'موظف الرواتب',
 }
+
+// اسم جهة الاعتماد — كود غير معروف لا يظهر خاماً أبداً
+const roleLabelOf = (role: string): string => roleLabels[role] ?? 'جهة اعتماد'
 
 const fieldLabels: Record<string, string> = {
   date: 'التاريخ',
@@ -142,6 +149,7 @@ interface InboxItem {
   details: string
   myStepLevel: number
   totalSteps: number
+  stepRoleLabel: string // صفة المعتمد في الخطوة الحالية — بالعربية دائماً
   slaDaysLeft: number // المتبقي قبل انتهاء مهلة الرد — من dueAt للخطوة الحالية
 }
 
@@ -218,6 +226,7 @@ export default function ApprovalsInboxPage() {
             details: payloadSummary(r.payload) || (type?.nameAr ?? 'طلب'),
             myStepLevel: r.currentStep ?? current?.stepOrder ?? 1,
             totalSteps: steps.length || 1,
+            stepRoleLabel: roleLabelOf(current?.role ?? ''),
             slaDaysLeft,
           }
         })
@@ -441,6 +450,7 @@ export default function ApprovalsInboxPage() {
                               خطوتك: {item.myStepLevel} من {item.totalSteps}
                               <ChevronLeft size={12} />
                             </span>
+                            <span>بصفتك: {item.stepRoleLabel}</span>
                           </div>
                         </div>
                       </div>

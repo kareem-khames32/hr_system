@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import Link from 'next/link'
 import {
   Search,
   Download,
@@ -47,6 +48,7 @@ interface AttendanceRecord {
   lateMinutes: number
   excusedMinutes: number
   deductibleMinutes: number
+  leaveConflict: boolean
   location: string
 }
 
@@ -179,6 +181,7 @@ export default function AttendancePage() {
         lateMinutes: Number(d.lateMinutes),
         excusedMinutes: Number((d as any).excusedMinutes ?? 0),
         deductibleMinutes: Number(d.deductibleMinutes ?? 0),
+        leaveConflict: d.leaveConflict === true,
         location: branch?.name ?? '-',
       }
     })
@@ -444,7 +447,19 @@ export default function AttendancePage() {
                         )}
                       </td>
                       <td className="table-cell text-center">
-                        {getStatusBadge(record.status)}
+                        <div className="flex items-center justify-center gap-1.5 flex-wrap">
+                          {getStatusBadge(record.status)}
+                          {record.leaveConflict && (
+                            <Link
+                              href="/leaves"
+                              className="badge bg-amber-100 text-amber-700 hover:bg-amber-200 flex items-center gap-1"
+                              title="الموظف حضر يوم إجازته المعتمدة — راجع شاشة الإجازات: إلغاء الإجازة يحسبه دواماً ويرجع الرصيد"
+                            >
+                              <AlertTriangle size={12} />
+                              بصم رغم الإجازة
+                            </Link>
+                          )}
+                        </div>
                         {record.lateMinutes > 0 && (
                           <p className="text-xs text-warning-600 mt-1 font-medium">
                             متأخر {record.lateMinutes} دقيقة عن {record.shiftName}

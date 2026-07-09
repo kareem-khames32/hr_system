@@ -289,6 +289,31 @@ export class RequestsService {
           'إجازة نصف اليوم تكون ليوم واحد فقط (تاريخ البداية = النهاية)'
         )
       }
+
+      // المخصوم من الرصيد = أيام العمل الفعلية فقط —
+      // الويك إند والعطلات الرسمية داخل المدى لا تُحسب ولا تُخصم
+      if (p.fromDate && p.toDate && p.fromDate <= p.toDate) {
+        const emp = await this.employees.findOne({
+          where: { id: req.requesterId },
+        })
+        const { working, skipped } = await this.attendance.workingDaysBetween(
+          emp?.branchId ?? 1,
+          String(p.fromDate),
+          String(p.toDate)
+        )
+        if (working === 0) {
+          throw new BadRequestException(
+            'كل الأيام المختارة عطلات (ويك إند/عطلة رسمية) — لا حاجة لطلب إجازة'
+          )
+        }
+        const isHalf = ['MORNING', 'EVENING'].includes(String(p.period))
+        const effectiveDays = isHalf ? 0.5 : working
+        if (Number(p.days) !== effectiveDays) {
+          p.days = effectiveDays
+          p.skippedHolidays = skipped
+          req.payload = JSON.stringify(p)
+        }
+      }
     }
 
     // الإجازات التي تمس الرصيد: تحقق الكفاية بالطبقات قبل دخول الدورة

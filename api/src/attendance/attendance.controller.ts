@@ -118,6 +118,24 @@ export class AttendanceController {
     return this.service.weekDayOverrides(week)
   }
 
+  // أيام العمل الفعلية في مدى (خدمة ذاتية) — لتلميح نموذج الإجازة:
+  // «سيُخصم X يوم فقط — Y يوم عطلة داخل المدى»
+  @UseGuards(JwtAuthGuard)
+  @Get('working-days')
+  workingDays(
+    @CurrentUser() user: JwtPayload,
+    @Query('from') from: string,
+    @Query('to') to: string
+  ) {
+    if (
+      !/^\d{4}-\d{2}-\d{2}$/.test(from ?? '') ||
+      !/^\d{4}-\d{2}-\d{2}$/.test(to ?? '')
+    ) {
+      return { total: 0, working: 0, skipped: [] }
+    }
+    return this.service.workingDaysBetween(user.branchId ?? 1, from, to)
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.view_all')
   @Get('daily')

@@ -17,6 +17,7 @@ export type ApproverRole =
   | 'hr'
   | 'finance'
   | 'custody_officer'
+  | 'payroll_officer'
   | 'it'
   | 'executive'
   | 'specific_employee'

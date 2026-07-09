@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
-import { AttendancePunch, PermissionType } from '../attendance/attendance.entities'
+import { AttendanceDay, AttendancePunch, PermissionType } from '../attendance/attendance.entities'
 import { Employee } from '../employees/employee.entity'
 import { EmployeesModule } from '../employees/employees.module'
 import { Branch } from '../org/entities/branch.entity'
@@ -62,6 +62,7 @@ import { PortalController } from './portal.controller'
       RequestType,
       RequestApproval,
       AttendancePunch,
+      AttendanceDay,
       PermissionType,
     ]),
   ],

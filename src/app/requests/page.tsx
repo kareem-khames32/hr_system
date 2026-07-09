@@ -37,6 +37,9 @@ import {
   fetchAvailableAssets,
   fetchCatalog,
   fetchEmployees,
+  fetchTeams,
+  fetchMyCustody,
+  fetchWorkingDays,
   fetchMyApprovedLeaves,
   fetchMyOffboardingCase,
   withdrawOffboarding,
@@ -44,6 +47,8 @@ import {
   type ApiRequest,
   type ApiRequestType,
   type ApiEmployee,
+  type ApiTeam,
+  type ApiCustody,
   type ApiLeave,
   type CustomFieldDef,
 } from '@/lib/api'
@@ -81,8 +86,9 @@ const roleLabels: Record<string, string> = {
   finance: 'المالية',
   executive: 'الإدارة التنفيذية',
   custody_officer: 'أمين العهدة',
+  payroll_officer: 'موظف الرواتب',
   it: 'تقنية المعلومات',
-  specific_employee: 'موظف بعينه',
+  specific_employee: 'موظف محدد',
 }
 
 const fieldLabels: Record<string, string> = {
@@ -105,10 +111,10 @@ const fieldLabels: Record<string, string> = {
   leaveId: 'رقم الإجازة',
   loanId: 'رقم السلفة',
   withEmployeeId: 'رقم الموظف البديل',
-  toEmployeeId: 'رقم الموظف المستلم',
-  toTeamId: 'رقم الفريق الجديد',
+  toEmployeeId: 'الموظف المستلم',
+  toTeamId: 'الفريق الجديد',
   toTitle: 'المسمى الجديد',
-  assignmentId: 'رقم العهدة',
+  assignmentId: 'العهدة المراد نقلها',
   iban: 'الآيبان IBAN',
   name: 'الاسم',
   phone: 'رقم الهاتف',
@@ -166,6 +172,9 @@ const handlerLabels: Record<string, string> = {
 const isDateField = (f: string) => f === 'date' || f.includes('Date')
 const isNumberField = (f: string) =>
   /days|hours|amount|months|salary|pct/i.test(f) || /Id$/.test(f)
+
+// حقول تُرسم كقوائم اختيار ذكية (بيانات حقيقية بدل إدخال رقم خام)
+const SMART_SELECT_FIELDS: readonly string[] = ['toTeamId', 'toEmployeeId', 'assignmentId']
 
 // مفتاح غير معروف؟ نفكّ الـ camelCase لكلمات مقروءة — لا يظهر مفتاح خام أبداً
 const humanizeKey = (k: string): string =>
@@ -298,6 +307,17 @@ export default function MyRequestsPage() {
   const [onBehalf, setOnBehalf] = useState(false)
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [onBehalfEmployeeId, setOnBehalfEmployeeId] = useState('')
+  // مصادر القوائم الذكية — تُحمَّل كسولاً عند اختيار نوع يحتاجها
+  const [teams, setTeams] = useState<ApiTeam[]>([])
+  const [myCustody, setMyCustody] = useState<ApiCustody[] | null>(null)
+  // أيام العمل الفعلية داخل مدى الإجازة — تلميح الخصم (آخر مدى محسوب)
+  const [workingDaysInfo, setWorkingDaysInfo] = useState<{
+    from: string
+    to: string
+    total: number
+    working: number
+    skipped: string[]
+  } | null>(null)
 
   const load = async () => {
     try {
@@ -381,13 +401,21 @@ export default function MyRequestsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [showNewModal, canOnBehalf])
 
-  // الأنواع المتاحة للموظف — من كتالوج السيرفر (المرحلة P1 التي يقدّمها الموظف)
-  const availableRequestTypes = types.filter(
-    (t) =>
-      t.isActive &&
-      t.phase === 'P1' &&
-      (getTypeByCode(t.code)?.submitter.includes('E') ?? true)
+  // الأنواع المتاحة للموظف — كتالوج السيرفر هو مصدر الحقيقة الوحيد
+  // (الباك يفلتر أصلاً حسب جمهور كل نوع visibleTo وحالة التفعيل)
+  const availableRequestTypes = types.filter((t) => t.isActive)
+
+  // فئات الكتالوج الفعلية — المعروفة بترتيبها ثم أي فئة جديدة من السيرفر آخراً
+  const knownCategoryOrder = Object.keys(categoryLabels)
+  const availableCategories = Array.from(
+    new Set(availableRequestTypes.map((t) => t.category))
+  ).sort(
+    (a, b) =>
+      (knownCategoryOrder.indexOf(a) + 1 || 99) -
+      (knownCategoryOrder.indexOf(b) + 1 || 99)
   )
+  const categoryLabel = (cat: string) =>
+    categoryLabels[cat as keyof typeof categoryLabels] ?? 'أخرى'
 
   const selectedTypeDef = availableRequestTypes.find((t) => t.code === selectedType)
   const requiredFields = parseJson<string[]>(selectedTypeDef?.requiredFields, [])
@@ -397,6 +425,39 @@ export default function MyRequestsPage() {
     []
   )
   const hasCustomFields = customFields.length > 0
+  // أسماء حقول النموذج الحالي — لاكتشاف الحقول الذكية وتحميل مصادرها
+  const formFieldKeys = hasCustomFields ? customFields.map((f) => f.key) : requiredFields
+
+  // تحميل كسول لمصادر القوائم الذكية: الفرق / الموظفون / عهدتي النشطة
+  useEffect(() => {
+    if (!selectedType) return
+    if (formFieldKeys.includes('toTeamId') && teams.length === 0) {
+      fetchTeams()
+        .then(setTeams)
+        .catch((err) =>
+          setSubmitError(
+            err instanceof Error ? err.message : 'تعذّر تحميل قائمة الفرق'
+          )
+        )
+    }
+    if (formFieldKeys.includes('toEmployeeId') && employees.length === 0) {
+      fetchEmployees()
+        .then(setEmployees)
+        .catch((err) =>
+          setSubmitError(
+            err instanceof Error ? err.message : 'تعذّر تحميل قائمة الموظفين'
+          )
+        )
+    }
+    if (formFieldKeys.includes('assignmentId') && myCustody === null) {
+      fetchMyCustody()
+        .then(setMyCustody)
+        .catch((err) =>
+          setSubmitError(err instanceof Error ? err.message : 'تعذّر تحميل عهدتك')
+        )
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [selectedType])
 
   // النماذج الخاصة: عهدة (اختيار أصول) / استئذان (نوع الإذن) / إجازات (نطاق اليوم)
   const isCustodyRequest = selectedTypeDef?.code === 'CUSTODY_REQUEST'
@@ -405,6 +466,127 @@ export default function MyRequestsPage() {
   const isLeaveCancel = selectedTypeDef?.code === 'LEAVE_MODIFY_CANCEL'
   const isLeaveCategory = selectedTypeDef?.category === 'leaves' && !isLeaveCancel
   const isHalfDay = isLeaveCategory && leavePeriod !== 'FULL'
+
+  // إجازة يوم كامل والتاريخان محددان — حقل الأيام يعكس أيام العمل الفعلية (قراءة فقط)
+  const leaveFrom = (fieldValues.fromDate ?? '').trim()
+  const leaveTo = (fieldValues.toDate ?? '').trim()
+  const fullDayLeaveDatesSet = isLeaveCategory && !isHalfDay && !!leaveFrom && !!leaveTo
+
+  // حساب أيام العمل داخل مدى الإجازة (مؤجَّل + كاش لآخر مدى) وضبط حقل الأيام آلياً
+  useEffect(() => {
+    if (!isLeaveCategory || isHalfDay || !leaveFrom || !leaveTo || leaveFrom > leaveTo) {
+      setWorkingDaysInfo(null)
+      return
+    }
+    if (
+      workingDaysInfo &&
+      workingDaysInfo.from === leaveFrom &&
+      workingDaysInfo.to === leaveTo
+    )
+      return
+    const timer = setTimeout(() => {
+      fetchWorkingDays(leaveFrom, leaveTo)
+        .then((res) => {
+          setWorkingDaysInfo({ from: leaveFrom, to: leaveTo, ...res })
+          // ضبط عدد الأيام على أيام العمل الفعلية — فقط إن ظل المدى كما هو
+          setFieldValues((prev) =>
+            (prev.fromDate ?? '').trim() === leaveFrom &&
+            (prev.toDate ?? '').trim() === leaveTo
+              ? { ...prev, days: String(res.working) }
+              : prev
+          )
+        })
+        .catch(() => setWorkingDaysInfo(null))
+    }, 400)
+    return () => clearTimeout(timer)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [leaveFrom, leaveTo, isLeaveCategory, isHalfDay])
+
+  // تلميح الخصم تحت حقل الأيام — كهرماني عند وجود عطلات داخل المدى، أحمر لو كله عطلات
+  const workingDaysHint =
+    fullDayLeaveDatesSet &&
+    workingDaysInfo &&
+    workingDaysInfo.from === leaveFrom &&
+    workingDaysInfo.to === leaveTo ? (
+      workingDaysInfo.working === 0 ? (
+        <p className="flex items-center gap-1.5 text-xs text-red-700 bg-red-50 rounded-lg px-3 py-2 mt-1.5">
+          <AlertTriangle size={13} className="shrink-0" />
+          كل الأيام المختارة عطلات — الطلب سيُرفض
+        </p>
+      ) : workingDaysInfo.skipped.length > 0 ? (
+        <p className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-1.5">
+          <AlertTriangle size={13} className="shrink-0" />
+          سيُخصم {workingDaysInfo.working} يوم فقط — {workingDaysInfo.skipped.length}{' '}
+          يوم عطلة/ويك إند داخل المدى لا يُحسب
+        </p>
+      ) : null
+    ) : null
+
+  // ودجة ذكية بحسب اسم الحقل — قائمة اختيار حقيقية بدل رقم خام (null = حقل عادي)
+  const renderSmartField = (key: string) => {
+    if (key === 'toTeamId')
+      return (
+        <select
+          className="input w-full"
+          value={fieldValues[key] ?? ''}
+          onChange={(e) => setFieldValue(key, e.target.value)}
+        >
+          <option value="">— اختر الفريق —</option>
+          {teams
+            .filter((t) => t.isActive)
+            .map((t) => (
+              <option key={t.id} value={t.id}>
+                {t.name}
+              </option>
+            ))}
+        </select>
+      )
+    if (key === 'toEmployeeId')
+      return (
+        <select
+          className="input w-full"
+          value={fieldValues[key] ?? ''}
+          onChange={(e) => setFieldValue(key, e.target.value)}
+        >
+          <option value="">— اختر الموظف —</option>
+          {employees
+            .filter((emp) => emp.isActive)
+            .map((emp) => (
+              <option key={emp.id} value={emp.id}>
+                {emp.fullName} — {emp.employeeCode}
+              </option>
+            ))}
+        </select>
+      )
+    if (key === 'assignmentId') {
+      const activeCustody = (myCustody ?? []).filter((c) => c.status === 'ACTIVE')
+      if (myCustody !== null && activeCustody.length === 0)
+        return (
+          <div className="border border-dashed border-gray-200 rounded-xl p-4 text-center">
+            <Package size={22} className="mx-auto text-gray-300 mb-1" />
+            <p className="text-xs text-gray-500">لا توجد عهد نشطة باسمك</p>
+          </div>
+        )
+      return (
+        <select
+          className="input w-full"
+          value={fieldValues[key] ?? ''}
+          onChange={(e) => setFieldValue(key, e.target.value)}
+        >
+          <option value="">
+            {myCustody === null ? 'جارٍ تحميل عهدتك...' : '— اختر العهدة —'}
+          </option>
+          {activeCustody.map((c) => (
+            <option key={c.id} value={c.id}>
+              {c.assetName ?? 'أصل'}
+              {c.serialNumber ? ` — ${c.serialNumber}` : ''}
+            </option>
+          ))}
+        </select>
+      )
+    }
+    return null
+  }
 
   // اسم نوع الإجازة بالعربي — من كتالوج الأنواع إن أمكن، وإلا النص كما هو
   const leaveTypeLabel = (code: string): string =>
@@ -517,7 +699,10 @@ export default function MyRequestsPage() {
       // النموذج المبني من تعريف الحقول المخصّصة
       for (const f of customFields) {
         const raw = (fieldValues[f.key] ?? '').trim()
-        payload[f.key] = f.type === 'number' && raw !== '' ? Number(raw) : raw
+        payload[f.key] =
+          (f.type === 'number' || SMART_SELECT_FIELDS.includes(f.key)) && raw !== ''
+            ? Number(raw)
+            : raw
       }
     } else {
       for (const f of requiredFields) {
@@ -878,7 +1063,7 @@ export default function MyRequestsPage() {
                   >
                     الكل
                   </button>
-                  {Object.entries(categoryLabels).map(([catId, catLabel]) => {
+                  {availableCategories.map((catId) => {
                     const count = availableRequestTypes.filter((t) => t.category === catId).length
                     if (!count) return null
                     return (
@@ -891,74 +1076,93 @@ export default function MyRequestsPage() {
                             : 'bg-gray-100 text-gray-600'
                         }`}
                       >
-                        {catLabel} ({count})
+                        {categoryLabel(catId)} ({count})
                       </button>
                     )
                   })}
                 </div>
 
-                <div className="grid grid-cols-1 gap-3 max-h-80 overflow-y-auto">
-                  {availableRequestTypes
-                    .filter((t) => !selectedCategory || t.category === selectedCategory)
-                    .map((t) => {
-                      const def = getTypeByCode(t.code)
-                      return (
-                        <button
-                          key={t.code}
-                          onClick={() => {
-                            setSelectedType(t.code)
-                            setFieldValues({})
-                            setUploadedFiles({})
-                            setSelectedAssetIds([])
-                            setAssetSearch('')
-                            setCustodyReason('')
-                            setLeavePeriod('FULL')
-                            setPermissionType('')
-                            setSelectedLeaveId(null)
-                            setCancelReason('')
-                            setSubmitError(null)
-                          }}
-                          className={`p-4 rounded-xl border-2 text-right transition-all flex items-center justify-between ${
-                            selectedType === t.code
-                              ? 'border-primary-500 bg-primary-50'
-                              : 'border-gray-100 hover:border-gray-200'
-                          }`}
-                        >
-                          <div className="flex items-center gap-3">
-                            <FileText
-                              size={20}
-                              className={
-                                selectedType === t.code ? 'text-primary-600' : 'text-gray-400'
-                              }
-                            />
-                            <div>
-                              <p className="font-bold text-gray-800 text-sm">
-                                {t.nameAr}
-                                {t.autoGeneratesPdf && (
-                                  <span className="mr-2 badge text-[10px] bg-teal-50 text-teal-700">PDF آلي</span>
-                                )}
-                                {t.isConfidential && (
-                                  <span className="mr-2 badge text-[10px] bg-gray-800 text-white">
-                                    <EyeOff size={9} className="inline ml-0.5" />
-                                    سرّي
+                <div className="max-h-80 overflow-y-auto space-y-2 relative">
+                  {availableCategories
+                    .filter((cat) => !selectedCategory || cat === selectedCategory)
+                    .map((cat) => (
+                      <div key={cat}>
+                        <div className="sticky top-0 z-10 bg-white/95 backdrop-blur-sm px-1 py-1.5 text-xs font-bold text-gray-400">
+                          {categoryLabel(cat)}
+                        </div>
+                        <div className="grid grid-cols-1 gap-3">
+                          {availableRequestTypes
+                            .filter((t) => t.category === cat)
+                            .map((t) => {
+                              const def = getTypeByCode(t.code)
+                              return (
+                                <button
+                                  key={t.code}
+                                  onClick={() => {
+                                    setSelectedType(t.code)
+                                    setFieldValues({})
+                                    setUploadedFiles({})
+                                    setSelectedAssetIds([])
+                                    setAssetSearch('')
+                                    setCustodyReason('')
+                                    setLeavePeriod('FULL')
+                                    setPermissionType('')
+                                    setSelectedLeaveId(null)
+                                    setCancelReason('')
+                                    setSubmitError(null)
+                                  }}
+                                  className={`p-4 rounded-xl border-2 text-right transition-all flex items-center justify-between ${
+                                    selectedType === t.code
+                                      ? 'border-primary-500 bg-primary-50'
+                                      : 'border-gray-100 hover:border-gray-200'
+                                  }`}
+                                >
+                                  <div className="flex items-center gap-3">
+                                    <FileText
+                                      size={20}
+                                      className={
+                                        selectedType === t.code ? 'text-primary-600' : 'text-gray-400'
+                                      }
+                                    />
+                                    <div>
+                                      <p className="font-bold text-gray-800 text-sm">
+                                        {t.nameAr}
+                                        {t.autoGeneratesPdf && (
+                                          <span className="mr-2 badge text-[10px] bg-teal-50 text-teal-700">PDF آلي</span>
+                                        )}
+                                        {t.isConfidential && (
+                                          <span className="mr-2 badge text-[10px] bg-gray-800 text-white">
+                                            <EyeOff size={9} className="inline ml-0.5" />
+                                            سرّي
+                                          </span>
+                                        )}
+                                      </p>
+                                      <p className="text-xs text-gray-500">
+                                        السلسلة: {def?.approvalChain ?? '—'} • الوجهة:{' '}
+                                        {def?.destination ??
+                                          handlerLabels[t.destinationHandler] ??
+                                          '—'}
+                                      </p>
+                                    </div>
+                                  </div>
+                                  <span className="flex items-center gap-1 text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg whitespace-nowrap">
+                                    <Users size={12} />
+                                    {categoryLabel(t.category)}
                                   </span>
-                                )}
-                              </p>
-                              <p className="text-xs text-gray-500">
-                                السلسلة: {def?.approvalChain ?? '—'} • الوجهة:{' '}
-                                {def?.destination ??
-                                  handlerLabels[t.destinationHandler] ??
-                                  '—'}
-                              </p>
-                            </div>
-                          </div>
-                          <span className="flex items-center gap-1 text-xs text-indigo-600 bg-indigo-50 px-2 py-1 rounded-lg whitespace-nowrap">
-                            <Users size={12} />
-                            {categoryLabels[t.category as keyof typeof categoryLabels] ?? 'أخرى'}
-                          </span>
-                        </button>
-                      )
-                    })}
+                                </button>
+                              )
+                            })}
+                        </div>
+                      </div>
+                    ))}
+                  {availableRequestTypes.length === 0 && (
+                    <div className="border border-dashed border-gray-200 rounded-xl p-6 text-center">
+                      <ClipboardList size={28} className="mx-auto text-gray-300 mb-2" />
+                      <p className="text-sm text-gray-500">
+                        لا توجد أنواع طلبات متاحة لك حالياً
+                      </p>
+                    </div>
+                  )}
                 </div>
 
                 {/* طلب عهدة: اختيار أصول متعددة من المتاح فقط */}
@@ -1199,7 +1403,8 @@ export default function MyRequestsPage() {
                           {f.label}
                           {f.required && <span className="text-red-500 mr-1">*</span>}
                         </label>
-                        {f.type === 'select' ? (
+                        {renderSmartField(f.key) ??
+                        (f.type === 'select' ? (
                           <select
                             className="input w-full"
                             value={fieldValues[f.key] ?? ''}
@@ -1257,14 +1462,16 @@ export default function MyRequestsPage() {
                                 ? 'number'
                                 : 'text'
                             }
-                            className="input w-full disabled:bg-gray-50 disabled:text-gray-400"
+                            className="input w-full disabled:bg-gray-50 disabled:text-gray-400 read-only:bg-gray-50 read-only:text-gray-500"
                             disabled={
                               isHalfDay && (f.key === 'toDate' || f.key === 'days')
                             }
+                            readOnly={f.key === 'days' && fullDayLeaveDatesSet}
                             value={fieldValues[f.key] ?? ''}
                             onChange={(e) => setFieldValue(f.key, e.target.value)}
                           />
-                        )}
+                        ))}
+                        {f.key === 'days' && workingDaysHint}
                       </div>
                     ))}
                   </div>
@@ -1282,16 +1489,20 @@ export default function MyRequestsPage() {
                           <label className="block text-sm font-medium text-gray-700 mb-2">
                             {humanizeKey(f)}
                           </label>
-                          <input
-                            type={
-                              isDateField(f) ? 'date' : isNumberField(f) ? 'number' : 'text'
-                            }
-                            className="input w-full disabled:bg-gray-50 disabled:text-gray-400"
-                            disabled={isHalfDay && (f === 'toDate' || f === 'days')}
-                            placeholder={f === 'from' || f === 'to' ? 'HH:MM' : undefined}
-                            value={fieldValues[f] ?? ''}
-                            onChange={(e) => setFieldValue(f, e.target.value)}
-                          />
+                          {renderSmartField(f) ?? (
+                            <input
+                              type={
+                                isDateField(f) ? 'date' : isNumberField(f) ? 'number' : 'text'
+                              }
+                              className="input w-full disabled:bg-gray-50 disabled:text-gray-400 read-only:bg-gray-50 read-only:text-gray-500"
+                              disabled={isHalfDay && (f === 'toDate' || f === 'days')}
+                              readOnly={f === 'days' && fullDayLeaveDatesSet}
+                              placeholder={f === 'from' || f === 'to' ? 'HH:MM' : undefined}
+                              value={fieldValues[f] ?? ''}
+                              onChange={(e) => setFieldValue(f, e.target.value)}
+                            />
+                          )}
+                          {f === 'days' && workingDaysHint}
                         </div>
                       ))}
                     </div>

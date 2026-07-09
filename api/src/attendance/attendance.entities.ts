@@ -167,6 +167,11 @@ export class AttendanceDay {
   @Column({ default: 0 })
   workMinutes: number
 
+  // موظف بصم يوم إجازته الكاملة — تعارض بانتظار قرار HR
+  // (إلغاء الإجازة فيرجع الرصيد ويتحسب دواماً، أو إبقاؤها)
+  @Column({ default: false })
+  leaveConflict: boolean
+
   @Column({ type: 'datetime', nullable: true })
   computedAt: Date
 }
