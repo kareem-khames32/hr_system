@@ -36,6 +36,10 @@ const toMinutes = (hhmm: string): number => {
 const hhmmOf = (d: Date): string =>
   `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
 
+// تاريخ محلي YYYY-MM-DD — ممنوع toISOString على «الآن» (قاعدة التوقيت المحلي)
+const localDateOf = (d: Date): string =>
+  `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
+
 // مفتاح الأسبوع = تاريخ الأحد الذي يقع فيه اليوم (الأحد = 0)
 export const weekKeyOf = (dateStr: string): string => {
   const d = new Date(`${dateStr}T12:00:00`)
@@ -522,6 +526,26 @@ export class AttendanceService {
         endTime: e.endTime,
       })
       saved.push(await this.schedule.save(row))
+
+      // أيام الأسبوع المحسوبة بالفعل تُعاد فوراً بالوردية الجديدة —
+      // (الماضي فقط: يوم بلا سجل ولا بصمات لا يُختلق)
+      const today = localDateOf(new Date())
+      for (let i = 0; i < 7; i++) {
+        const d = new Date(`${weekStart}T12:00:00`)
+        d.setDate(d.getDate() + i)
+        const date = localDateOf(d)
+        if (date > today) break
+        const existing = await this.days.findOne({
+          where: { employeeId: e.employeeId, date },
+        })
+        if (existing) {
+          try {
+            await this.computeDay(e.employeeId, date)
+          } catch {
+            /* أفضل جهد — لا نفشل حفظ الجدول بسبب يوم واحد */
+          }
+        }
+      }
     }
     return saved
   }
