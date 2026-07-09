@@ -37,12 +37,19 @@ import {
   fetchAvailableAssets,
   fetchCatalog,
   fetchEmployees,
+  fetchMyApprovedLeaves,
+  fetchMyOffboardingCase,
+  withdrawOffboarding,
   can,
   type ApiRequest,
   type ApiRequestType,
   type ApiEmployee,
+  type ApiLeave,
   type CustomFieldDef,
 } from '@/lib/api'
+
+// الإجازة المعتمدة كما يرجعها الباك — تحمل «نطاق اليوم» فوق نوع ApiLeave
+type ApprovedLeave = ApiLeave & { period?: 'FULL' | 'MORNING' | 'EVENING' }
 
 // ===== أدوات فك حقول JSON القادمة من الباك (payload / resolvedSteps / requiredFields) =====
 interface ResolvedStep {
@@ -269,6 +276,18 @@ export default function MyRequestsPage() {
   const [custodyReason, setCustodyReason] = useState('')
   // نصف اليوم للإجازات
   const [leavePeriod, setLeavePeriod] = useState<'FULL' | 'MORNING' | 'EVENING'>('FULL')
+  // إلغاء/تعديل إجازة — إجازاتي المعتمدة + الاختيار + سبب الإلغاء
+  const [myLeaves, setMyLeaves] = useState<ApprovedLeave[]>([])
+  const [myLeavesLoading, setMyLeavesLoading] = useState(false)
+  const [selectedLeaveId, setSelectedLeaveId] = useState<number | null>(null)
+  const [cancelReason, setCancelReason] = useState('')
+  // ملف الاستقالة النشط — بانر التراجع خلال فترة الإشعار
+  const [offboardingCase, setOffboardingCase] = useState<{
+    id: number
+    status: string
+    lastWorkingDay: string
+  } | null>(null)
+  const [withdrawingResignation, setWithdrawingResignation] = useState(false)
   // أنواع الإذن (استئذان) من الكتالوج
   const [permissionTypes, setPermissionTypes] = useState<
     Array<{ id: number; nameAr: string; isDeductible: boolean; maxDurationMinutes?: number | null; isActive: boolean }>
@@ -283,12 +302,14 @@ export default function MyRequestsPage() {
   const load = async () => {
     try {
       setError(null)
-      const [typeList, mine] = await Promise.all([
+      const [typeList, mine, offCase] = await Promise.all([
         fetchRequestTypes(),
         fetchMyRequests(),
+        fetchMyOffboardingCase().catch(() => null),
       ])
       setTypes(typeList)
       setRequests(mine.map((r) => mapRequest(r, typeList)))
+      setOffboardingCase(offCase)
     } catch (err) {
       setError(
         err instanceof Error ? err.message : 'تعذّر الاتصال بالخادم — تأكد أن الـ API يعمل'
@@ -315,6 +336,18 @@ export default function MyRequestsPage() {
           )
         )
         .finally(() => setAssetsLoading(false))
+    }
+    if (selectedType === 'LEAVE_MODIFY_CANCEL') {
+      // تحميل طازج كل مرة — قائمة الإجازات المعتمدة تتغير مع كل اعتماد/إلغاء
+      setMyLeavesLoading(true)
+      fetchMyApprovedLeaves()
+        .then((leaves) => setMyLeaves(leaves as ApprovedLeave[]))
+        .catch((err) =>
+          setSubmitError(
+            err instanceof Error ? err.message : 'تعذّر تحميل إجازاتك المعتمدة'
+          )
+        )
+        .finally(() => setMyLeavesLoading(false))
     }
     if (selectedType === 'PERMISSION' && permissionTypes.length === 0) {
       fetchCatalog<{
@@ -368,8 +401,18 @@ export default function MyRequestsPage() {
   // النماذج الخاصة: عهدة (اختيار أصول) / استئذان (نوع الإذن) / إجازات (نطاق اليوم)
   const isCustodyRequest = selectedTypeDef?.code === 'CUSTODY_REQUEST'
   const isPermission = selectedTypeDef?.code === 'PERMISSION'
-  const isLeaveCategory = selectedTypeDef?.category === 'leaves'
+  // إلغاء/تعديل إجازة — منتقي الإجازة المعتمدة بدل الحقول العامة ونطاق اليوم
+  const isLeaveCancel = selectedTypeDef?.code === 'LEAVE_MODIFY_CANCEL'
+  const isLeaveCategory = selectedTypeDef?.category === 'leaves' && !isLeaveCancel
   const isHalfDay = isLeaveCategory && leavePeriod !== 'FULL'
+
+  // اسم نوع الإجازة بالعربي — من كتالوج الأنواع إن أمكن، وإلا النص كما هو
+  const leaveTypeLabel = (code: string): string =>
+    types.find((t) => t.code === code)?.nameAr ??
+    types.find((t) => t.code === `LEAVE_${code}`)?.nameAr ??
+    getTypeByCode(code)?.nameAr ??
+    getTypeByCode(`LEAVE_${code}`)?.nameAr ??
+    code
   const selectedPermissionDef = permissionTypes.find(
     (p) => p.nameAr === permissionType
   )
@@ -462,6 +505,14 @@ export default function MyRequestsPage() {
       }
       payload.assetIds = selectedAssetIds
       if (custodyReason.trim()) payload.reason = custodyReason.trim()
+    } else if (isLeaveCancel) {
+      // إلغاء/تعديل إجازة: إجازة معتمدة مختارة + سبب حر
+      if (!selectedLeaveId) {
+        setSubmitError('اختر الإجازة المراد إلغاؤها')
+        return
+      }
+      payload.leaveId = selectedLeaveId
+      if (cancelReason.trim()) payload.reason = cancelReason.trim()
     } else if (hasCustomFields) {
       // النموذج المبني من تعريف الحقول المخصّصة
       for (const f of customFields) {
@@ -512,6 +563,8 @@ export default function MyRequestsPage() {
       setCustodyReason('')
       setLeavePeriod('FULL')
       setPermissionType('')
+      setSelectedLeaveId(null)
+      setCancelReason('')
       setOnBehalf(false)
       setOnBehalfEmployeeId('')
       setShowNewModal(false)
@@ -542,6 +595,22 @@ export default function MyRequestsPage() {
     }
   }
 
+  // التراجع عن الاستقالة خلال فترة الإشعار — يرجع الملف نشطاً ويلغي إنهاء الخدمة
+  const withdrawResignation = async () => {
+    if (!offboardingCase || withdrawingResignation) return
+    if (!confirm('هترجع نشطاً ويتلغى ملف إنهاء الخدمة — متأكد؟')) return
+    setWithdrawingResignation(true)
+    try {
+      await withdrawOffboarding(offboardingCase.id)
+      setOffboardingCase(null)
+      await load()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذّر التراجع عن الاستقالة')
+    } finally {
+      setWithdrawingResignation(false)
+    }
+  }
+
   return (
     <MainLayout>
       <div className="space-y-6">
@@ -561,6 +630,27 @@ export default function MyRequestsPage() {
             طلب جديد
           </button>
         </div>
+
+        {/* بانر الاستقالة السارية — التراجع متاح خلال فترة الإشعار */}
+        {offboardingCase && (
+          <div className="bg-amber-50 border border-amber-200 rounded-xl p-4 flex items-center justify-between gap-4 flex-wrap">
+            <div className="flex items-center gap-3">
+              <AlertTriangle size={20} className="text-amber-500 shrink-0" />
+              <p className="text-sm font-medium text-amber-800">
+                استقالتك سارية — آخر يوم عمل{' '}
+                <span dir="ltr">{String(offboardingCase.lastWorkingDay).slice(0, 10)}</span>. يمكنك
+                التراجع عنها خلال فترة الإشعار.
+              </p>
+            </div>
+            <button
+              onClick={withdrawResignation}
+              disabled={withdrawingResignation}
+              className="px-4 py-2 bg-amber-600 text-white rounded-xl text-sm font-medium hover:bg-amber-700 disabled:opacity-50 whitespace-nowrap"
+            >
+              {withdrawingResignation ? 'جارٍ التراجع...' : 'التراجع عن الاستقالة'}
+            </button>
+          </div>
+        )}
 
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
 
@@ -647,22 +737,24 @@ export default function MyRequestsPage() {
                           </p>
                         </div>
                       </div>
-                      {['DRAFT', 'SUBMITTED', 'UNDER_REVIEW'].includes(req.status) && (
-                        <button
-                          onClick={() => withdraw(req.id)}
-                          className="text-xs px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-red-50 hover:text-red-600"
-                        >
-                          سحب الطلب
-                        </button>
-                      )}
-                      {req.status === 'RETURNED_FOR_INFO' && (
-                        <button
-                          onClick={() => resubmit(req.id)}
-                          className="text-xs px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100"
-                        >
-                          استكمال وإعادة إرسال
-                        </button>
-                      )}
+                      <div className="flex items-center gap-2 shrink-0">
+                        {['DRAFT', 'SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO'].includes(req.status) && (
+                          <button
+                            onClick={() => withdraw(req.id)}
+                            className="text-xs px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-red-50 hover:text-red-600"
+                          >
+                            سحب الطلب
+                          </button>
+                        )}
+                        {req.status === 'RETURNED_FOR_INFO' && (
+                          <button
+                            onClick={() => resubmit(req.id)}
+                            className="text-xs px-3 py-1.5 bg-blue-50 text-blue-700 rounded-lg hover:bg-blue-100"
+                          >
+                            استكمال وإعادة إرسال
+                          </button>
+                        )}
+                      </div>
                     </div>
 
                     {/* سلسلة الاعتماد */}
@@ -822,6 +914,8 @@ export default function MyRequestsPage() {
                             setCustodyReason('')
                             setLeavePeriod('FULL')
                             setPermissionType('')
+                            setSelectedLeaveId(null)
+                            setCancelReason('')
                             setSubmitError(null)
                           }}
                           className={`p-4 rounded-xl border-2 text-right transition-all flex items-center justify-between ${
@@ -962,6 +1056,77 @@ export default function MyRequestsPage() {
                   </div>
                 )}
 
+                {/* إلغاء/تعديل إجازة: اختيار الإجازة المعتمدة المراد إلغاؤها */}
+                {selectedType && isLeaveCancel && (
+                  <div className="space-y-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        الإجازة المراد إلغاؤها
+                        <span className="text-red-500 mr-1">*</span>
+                      </label>
+                      {myLeavesLoading ? (
+                        <div className="flex justify-center py-6">
+                          <div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                        </div>
+                      ) : myLeaves.length === 0 ? (
+                        <div className="border border-dashed border-gray-200 rounded-xl p-6 text-center">
+                          <ClipboardList size={28} className="mx-auto text-gray-300 mb-2" />
+                          <p className="text-sm text-gray-500">
+                            لا توجد إجازات معتمدة قابلة للإلغاء
+                          </p>
+                        </div>
+                      ) : (
+                        <div className="border border-gray-100 rounded-xl max-h-64 overflow-y-auto">
+                          {myLeaves.map((l) => (
+                            <label
+                              key={l.id}
+                              className={`flex items-center gap-3 px-3 py-2.5 cursor-pointer border-b border-gray-50 last:border-b-0 transition-colors ${
+                                selectedLeaveId === l.id
+                                  ? 'bg-primary-50'
+                                  : 'hover:bg-gray-50'
+                              }`}
+                            >
+                              <input
+                                type="radio"
+                                name="leaveToCancel"
+                                className="w-4 h-4 accent-primary-500"
+                                checked={selectedLeaveId === l.id}
+                                onChange={() => setSelectedLeaveId(l.id)}
+                              />
+                              <div className="flex-1">
+                                <p className="text-sm font-medium text-gray-800">
+                                  {leaveTypeLabel(l.leaveType)}
+                                  {(l.period === 'MORNING' || l.period === 'EVENING') && (
+                                    <span className="mr-2 badge text-[10px] bg-amber-50 text-amber-700">
+                                      نصف يوم — {periodLabels[l.period]}
+                                    </span>
+                                  )}
+                                </p>
+                                <p className="text-xs text-gray-500 mt-0.5">
+                                  من {String(l.fromDate).slice(0, 10)} إلى{' '}
+                                  {String(l.toDate).slice(0, 10)} • {Number(l.days)} يوم
+                                </p>
+                              </div>
+                            </label>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        سبب الإلغاء
+                      </label>
+                      <input
+                        type="text"
+                        className="input w-full"
+                        placeholder="مثال: تأجّل السفر ولن أستخدم الإجازة"
+                        value={cancelReason}
+                        onChange={(e) => setCancelReason(e.target.value)}
+                      />
+                    </div>
+                  </div>
+                )}
+
                 {/* استئذان: نوع الإذن من كتالوج الإعدادات */}
                 {selectedType && isPermission && (
                   <div>
@@ -1026,7 +1191,7 @@ export default function MyRequestsPage() {
                 )}
 
                 {/* النموذج من تعريف الحقول المخصّصة — يحل محل الاستنتاج القديم */}
-                {selectedType && hasCustomFields && !isCustodyRequest && (
+                {selectedType && hasCustomFields && !isCustodyRequest && !isLeaveCancel && (
                   <div className="grid grid-cols-2 gap-3">
                     {customFields.map((f) => (
                       <div key={f.key} className={f.type === 'file' ? 'col-span-2' : ''}>
@@ -1109,6 +1274,7 @@ export default function MyRequestsPage() {
                 {selectedType &&
                   !hasCustomFields &&
                   !isCustodyRequest &&
+                  !isLeaveCancel &&
                   requiredFields.length > 0 && (
                     <div className="grid grid-cols-2 gap-3">
                       {requiredFields.map((f) => (

@@ -188,10 +188,30 @@ export class OffboardingService {
     return row?.value ?? fallback
   }
 
+  // إعادة توليد البنود التلقائية (قبل الاعتماد): تحذف الآلية وتبنيها
+  // من الأرقام الحالية — البنود اليدوية لا تُمس
+  async recalcLines(caseId: number) {
+    const kase = await this.editableCase(caseId)
+    await this.lines.delete({ caseId, isAuto: true })
+    await this.buildSettlement(kase, true)
+    return this.detail(caseId)
+  }
+
+  // حذف بند (قبل الاعتماد فقط) — أي بند، والآلي يرجع بإعادة التوليد
+  async deleteLine(lineId: number) {
+    const line = await this.lines.findOne({ where: { id: lineId } })
+    if (!line) throw new NotFoundException('البند غير موجود')
+    await this.editableCase(line.caseId)
+    await this.lines.delete({ id: lineId })
+    return this.detail(line.caseId)
+  }
+
   // ===== §2.8: بناء بنود التصفية آلياً من مالية الموظف الفعلية =====
-  private async buildSettlement(kase: OffboardingCase) {
-    const existing = await this.lines.count({ where: { caseId: kase.id } })
-    if (existing > 0) return // مبنية من قبل
+  private async buildSettlement(kase: OffboardingCase, force = false) {
+    if (!force) {
+      const existing = await this.lines.count({ where: { caseId: kase.id } })
+      if (existing > 0) return // مبنية من قبل
+    }
     const emp = await this.employees.findOne({ where: { id: kase.employeeId } })
     if (!emp) return
 
@@ -254,7 +274,9 @@ export class OffboardingService {
     const unpaidOt = await this.overtime.find({
       where: { employeeId: emp.id, status: 'APPROVED' },
     })
-    const otHours = unpaidOt.reduce((s, o) => s + Number(o.payableHours ?? 0), 0)
+    const otHours = round2(
+      unpaidOt.reduce((s, o) => s + Number(o.payableHours ?? 0), 0)
+    )
     if (otHours > 0) {
       const hourRate = dayRate / Number(await this.cfg('payroll.daily_hours', '8'))
       rows.push({
@@ -347,11 +369,8 @@ export class OffboardingService {
   ) {
     const line = await this.lines.findOne({ where: { id: lineId } })
     if (!line) throw new NotFoundException('البند غير موجود')
-    if (line.isAuto) {
-      throw new BadRequestException(
-        'البنود التلقائية يحسبها النظام ولا تُعدَّل — أضف بنداً يدوياً للتسوية'
-      )
-    }
+    // قبل الاعتماد: أي بند قابل للتعديل — و«إعادة التوليد» ترجّع
+    // البنود التلقائية لأرقام النظام لو حبيت تلغي تعديلك
     await this.editableCase(line.caseId)
     if (dto.label !== undefined) line.label = dto.label
     if (dto.amount !== undefined) {
@@ -403,6 +422,63 @@ export class OffboardingService {
     kase.status = 'CLOSED'
     await this.cases.save(kase)
     this.logger.log(`انتهت خدمة الموظف #${emp.id} — ${kase.settlementDocRef}`)
+  }
+
+  // ===== التراجع عن الاستقالة خلال فترة الإشعار =====
+  // الموظف نفسه أو HR — قبل الإغلاق الفعلي فقط: الملف يتلغى والموظف يرجع نشطاً
+  async withdraw(user: JwtPayload, caseId: number) {
+    const kase = await this.cases.findOne({ where: { id: caseId } })
+    if (!kase) throw new NotFoundException('حالة إنهاء الخدمة غير موجودة')
+    const isOwner = !!user.employeeId && user.employeeId === kase.employeeId
+    if (!isOwner && !userHasPerm(user, 'offboarding.manage')) {
+      throw new ForbiddenException('التراجع للموظف نفسه أو للموارد البشرية')
+    }
+    if (!['IN_CLEARANCE', 'IN_SETTLEMENT', 'SETTLED'].includes(kase.status)) {
+      throw new BadRequestException(
+        kase.status === 'CLOSED'
+          ? 'الخدمة انتهت فعلياً — لا تراجع بعد الإغلاق'
+          : 'الملف ملغي بالفعل'
+      )
+    }
+    const emp = await this.employees.findOne({ where: { id: kase.employeeId } })
+    if (!emp || emp.status === 'terminated') {
+      throw new BadRequestException('الموظف منتهي الخدمة بالفعل')
+    }
+
+    const old = emp.status
+    emp.status = 'active'
+    emp.isActive = true
+    await this.employees.save(emp)
+    kase.status = 'CANCELLED'
+    await this.cases.save(kase)
+    await this.history.save({
+      employeeId: emp.id,
+      oldStatus: old,
+      newStatus: 'active',
+      reason: `تراجع عن الاستقالة خلال فترة الإشعار (آخر يوم عمل كان ${kase.lastWorkingDay})`,
+      requestId: kase.resignationRequestId ?? undefined,
+    })
+    this.logger.log(`تراجع عن الاستقالة — موظف #${emp.id} حالة #${kase.id}`)
+    return this.detail(caseId)
+  }
+
+  // ملفي النشط (خدمة ذاتية) — لزر «التراجع عن الاستقالة» في البورتال
+  async myActiveCase(user: JwtPayload) {
+    if (!user.employeeId) return null
+    const kase = await this.cases.findOne({
+      where: {
+        employeeId: user.employeeId,
+        status: In(['IN_CLEARANCE', 'IN_SETTLEMENT', 'SETTLED']),
+      },
+      order: { createdAt: 'DESC' },
+    })
+    if (!kase) return null
+    return {
+      id: kase.id,
+      status: kase.status,
+      lastWorkingDay: kase.lastWorkingDay,
+      createdAt: kase.createdAt,
+    }
   }
 
   // يومياً 00:30: الحالات المعتمدة اللي حل آخر يوم عمل فيها

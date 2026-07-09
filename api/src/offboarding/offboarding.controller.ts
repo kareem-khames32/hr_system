@@ -1,6 +1,7 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Param,
   ParseIntPipe,
@@ -65,10 +66,25 @@ export class OffboardingController {
     return this.service.list()
   }
 
+  // ملفي النشط (خدمة ذاتية) — قبل :id عشان الراوتر ما يبلعهاش
+  @Get('mine')
+  mine(@CurrentUser() user: JwtPayload) {
+    return this.service.myActiveCase(user)
+  }
+
   // التفاصيل مفتوحة للجهات المشاركة (الفرض الفعلي على الأفعال)
   @Get(':id')
   detail(@Param('id', ParseIntPipe) id: number) {
     return this.service.detail(id)
+  }
+
+  // التراجع عن الاستقالة خلال فترة الإشعار — الموظف نفسه أو HR
+  @Post(':id/withdraw')
+  withdraw(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseIntPipe) id: number
+  ) {
+    return this.service.withdraw(user, id)
   }
 
   // إتمام بند — التفويض بالجهة داخل الخدمة (مدير مباشر/عهدة/IT/مالية/HR)
@@ -98,6 +114,20 @@ export class OffboardingController {
     @Body() dto: UpdateLineDto
   ) {
     return this.service.updateLine(lineId, dto)
+  }
+
+  // حذف بند قبل الاعتماد — الآلي يرجع بإعادة التوليد
+  @Perm('settlement.edit')
+  @Delete('lines/:lineId')
+  deleteLine(@Param('lineId', ParseIntPipe) lineId: number) {
+    return this.service.deleteLine(lineId)
+  }
+
+  // إعادة توليد البنود التلقائية من الأرقام الحالية (اليدوي لا يُمس)
+  @Perm('settlement.edit')
+  @Post(':id/recalc-lines')
+  recalcLines(@Param('id', ParseIntPipe) id: number) {
+    return this.service.recalcLines(id)
   }
 
   // اعتماد التصفية — قفل نهائي

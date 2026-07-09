@@ -20,6 +20,8 @@ import {
   Lock,
   FileCheck2,
   UserMinus,
+  Trash2,
+  RefreshCcw,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useSearchParams } from 'next/navigation'
@@ -28,6 +30,8 @@ import {
   fetchOffboardingCases,
   addSettlementLine,
   updateSettlementLine,
+  deleteSettlementLine,
+  recalcSettlementLines,
   approveSettlement,
   can,
   type ApiOffboardingCase,
@@ -41,6 +45,7 @@ const statusLabels: Record<string, string> = {
   IN_SETTLEMENT: 'تصفية قيد المراجعة',
   SETTLED: 'معتمدة ومقفولة',
   CLOSED: 'منتهية',
+  CANCELLED: 'ملغي — تراجع عن الاستقالة',
 }
 
 const statusStyles: Record<string, string> = {
@@ -48,6 +53,7 @@ const statusStyles: Record<string, string> = {
   IN_SETTLEMENT: 'bg-blue-100 text-blue-700',
   SETTLED: 'bg-indigo-100 text-indigo-700',
   CLOSED: 'bg-gray-100 text-gray-600',
+  CANCELLED: 'bg-gray-100 text-gray-600',
 }
 
 // طرق الصرف — تسميات عربية
@@ -208,6 +214,48 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
     }
   }
 
+  const handleDeleteLine = async (line: ApiSettlementLine) => {
+    if (saving) return
+    if (
+      !window.confirm(
+        `حذف البند «${line.label}»؟ البند التلقائي يرجع بإعادة التوليد`
+      )
+    )
+      return
+    setSaving(true)
+    setActionError('')
+    try {
+      await deleteSettlementLine(line.id)
+      await load()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'تعذر حذف البند')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleRecalc = async () => {
+    if (!det || saving) return
+    if (
+      !window.confirm(
+        'هيرجّع البنود التلقائية لأرقام النظام الحالية ويلغي أي تعديل عليها — البنود اليدوية لن تُمس'
+      )
+    )
+      return
+    setSaving(true)
+    setActionError('')
+    try {
+      await recalcSettlementLines(det.id)
+      await load()
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : 'تعذر إعادة توليد البنود التلقائية'
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const handleApprove = async () => {
     if (!det || saving) return
     if (
@@ -242,7 +290,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
             <tr>
               <th className="text-right px-4 py-3 text-sm font-medium text-gray-600">البند</th>
               <th className="text-left px-4 py-3 text-sm font-medium text-gray-600">المبلغ</th>
-              {isEditable && <th className="w-10"></th>}
+              {isEditable && <th className="w-20"></th>}
             </tr>
           </thead>
           <tbody className="divide-y divide-gray-100">
@@ -264,7 +312,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                 </td>
                 {isEditable && (
                   <td className="px-4 py-3">
-                    {!line.isAuto && (
+                    <div className="flex items-center gap-1 justify-end">
                       <button
                         onClick={() => {
                           setActionError('')
@@ -276,7 +324,15 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                       >
                         <Pencil size={16} />
                       </button>
-                    )}
+                      <button
+                        onClick={() => handleDeleteLine(line)}
+                        disabled={saving}
+                        className="p-1 rounded hover:bg-red-100 text-red-500 disabled:opacity-50"
+                        title="حذف البند"
+                      >
+                        <Trash2 size={16} />
+                      </button>
+                    </div>
                   </td>
                 )}
               </tr>
@@ -332,6 +388,16 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
           </div>
         </div>
         <div className="flex items-center gap-3">
+          {isEditable && (
+            <button
+              onClick={handleRecalc}
+              disabled={saving}
+              className="btn-secondary flex items-center gap-2"
+            >
+              <RefreshCcw size={18} />
+              إعادة توليد البنود التلقائية
+            </button>
+          )}
           <button
             onClick={() => window.print()}
             className="btn-secondary flex items-center gap-2"
@@ -737,7 +803,9 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
               <div>
                 <h2 className="text-xl font-bold text-gray-800">تعديل بند التصفية</h2>
                 <p className="text-sm text-gray-500 mt-1">
-                  تعديل المبلغ هو وسيلة تصحيح البند — لا يوجد حذف
+                  {editModal.isAuto
+                    ? 'بند تلقائي — يرجع لأرقام النظام عند إعادة التوليد'
+                    : 'التعديل متاح قبل اعتماد التصفية'}
                 </p>
               </div>
               <button
@@ -789,6 +857,188 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
           </div>
         </div>
       )}
+
+      {/* نموذج التصفية المطبوع — يظهر فقط عند الطباعة */}
+      {det && (
+        <div className="print-voucher" dir="rtl">
+          <div className="pv-head">
+            <h1>نموذج تصفية مستحقات نهاية الخدمة</h1>
+            <div className="pv-meta">
+              <span>
+                رقم المستند:{' '}
+                <span dir="ltr">{det.settlementDocRef ?? ''}</span>
+                {!det.settlementDocRef && 'مسودة — قيد المراجعة'}
+              </span>
+              <span>
+                تاريخ الطباعة: <span dir="ltr">{new Date().toLocaleDateString('en-CA')}</span>
+              </span>
+            </div>
+          </div>
+
+          <table className="pv-info">
+            <tbody>
+              <tr>
+                <td className="pv-label">الاسم</td>
+                <td>{emp?.fullName ?? det.employeeName ?? `موظف #${det.employeeId}`}</td>
+                <td className="pv-label">الرقم الوظيفي</td>
+                <td dir="ltr">{emp?.employeeCode ?? det.employeeCode ?? '—'}</td>
+              </tr>
+              <tr>
+                <td className="pv-label">المسمى</td>
+                <td>{emp?.jobTitle ?? '—'}</td>
+                <td className="pv-label">تاريخ التعيين</td>
+                <td dir="ltr">{fmtDate(emp?.joinDate)}</td>
+              </tr>
+              <tr>
+                <td className="pv-label">آخر يوم عمل</td>
+                <td dir="ltr">{fmtDate(det.lastWorkingDay)}</td>
+                <td className="pv-label">سنوات الخدمة</td>
+                <td>{serviceYears != null ? `${serviceYears.toFixed(1)} سنة` : '—'}</td>
+              </tr>
+            </tbody>
+          </table>
+
+          <table className="pv-lines">
+            <thead>
+              <tr>
+                <th>البند</th>
+                <th>النوع</th>
+                <th>المبلغ ({currency})</th>
+              </tr>
+            </thead>
+            <tbody>
+              {lines.map((l) => (
+                <tr key={l.id}>
+                  <td>{l.label}</td>
+                  <td>{l.type === 'CREDIT' ? 'استحقاق' : 'خصم'}</td>
+                  <td dir="ltr">{Number(l.amount).toLocaleString()}</td>
+                </tr>
+              ))}
+              {lines.length === 0 && (
+                <tr>
+                  <td colSpan={3}>لا توجد بنود</td>
+                </tr>
+              )}
+            </tbody>
+            <tfoot>
+              <tr>
+                <td colSpan={2}>إجمالي الاستحقاقات</td>
+                <td dir="ltr">{totalEntitlements.toLocaleString()}</td>
+              </tr>
+              <tr>
+                <td colSpan={2}>إجمالي الخصومات</td>
+                <td dir="ltr">{totalDeductions.toLocaleString()}</td>
+              </tr>
+              <tr className="pv-net">
+                <td colSpan={2}>صافي المستحقات</td>
+                <td dir="ltr">{Number(net).toLocaleString()}</td>
+              </tr>
+            </tfoot>
+          </table>
+
+          <p className="pv-ack">
+            أقر أنا الموظف الموضح بياناته أعلاه باستلامي كامل مستحقاتي الموضحة بهذا
+            النموذج، وبأنه لا يحق لي المطالبة بأي مستحقات أخرى بعد التوقيع.
+          </p>
+
+          <div className="pv-signs">
+            {['الموظف', 'الموارد البشرية', 'الإدارة المالية'].map((party) => (
+              <div key={party} className="pv-sign">
+                <p className="pv-sign-title">{party}</p>
+                <p>الاسم: ...........................</p>
+                <p>التوقيع: ...........................</p>
+                <p>التاريخ: ...........................</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <style>{`
+        .print-voucher { display: none; }
+        @media print {
+          @page { size: A4; margin: 12mm; }
+          body * { visibility: hidden; }
+          .print-voucher, .print-voucher * { visibility: visible; }
+          .print-voucher {
+            display: block !important;
+            position: absolute;
+            top: 0;
+            right: 0;
+            left: 0;
+            background: #fff;
+            color: #000;
+            padding: 0;
+            font-size: 12px;
+            line-height: 1.8;
+            box-shadow: none;
+          }
+          .print-voucher .pv-head {
+            text-align: center;
+            border-bottom: 2px solid #000;
+            padding-bottom: 8px;
+            margin-bottom: 14px;
+            page-break-inside: avoid;
+          }
+          .print-voucher .pv-head h1 {
+            font-size: 18px;
+            font-weight: 700;
+            margin: 0 0 8px;
+            color: #000;
+          }
+          .print-voucher .pv-meta {
+            display: flex;
+            justify-content: space-between;
+            font-size: 11px;
+          }
+          .print-voucher table {
+            width: 100%;
+            border-collapse: collapse;
+            margin-bottom: 14px;
+            page-break-inside: avoid;
+          }
+          .print-voucher th,
+          .print-voucher td {
+            border: 1px solid #000;
+            padding: 5px 8px;
+            text-align: right;
+            color: #000;
+          }
+          .print-voucher .pv-label { font-weight: 700; width: 17%; }
+          .print-voucher .pv-lines thead th { font-weight: 700; }
+          .print-voucher .pv-lines tfoot td { font-weight: 700; }
+          .print-voucher .pv-net td {
+            font-weight: 700;
+            font-size: 14px;
+            border-top: 2px solid #000;
+          }
+          .print-voucher .pv-ack {
+            border: 1px solid #000;
+            padding: 10px 12px;
+            margin-bottom: 24px;
+            page-break-inside: avoid;
+          }
+          .print-voucher .pv-signs {
+            display: flex;
+            gap: 12px;
+            page-break-inside: avoid;
+          }
+          .print-voucher .pv-sign {
+            flex: 1;
+            border: 1px solid #000;
+            padding: 10px 12px;
+            min-height: 110px;
+          }
+          .print-voucher .pv-sign-title {
+            font-weight: 700;
+            text-align: center;
+            border-bottom: 1px solid #000;
+            padding-bottom: 4px;
+            margin-bottom: 10px;
+          }
+          .print-voucher .pv-sign p { margin: 8px 0 0; }
+        }
+      `}</style>
     </div>
   )
 }

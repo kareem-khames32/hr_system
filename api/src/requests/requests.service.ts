@@ -15,7 +15,7 @@ import { AttendanceService } from '../attendance/attendance.service'
 import { ApproverResolver, ResolvedStep } from './approver-resolver.service'
 import { DestinationsService } from './destinations.service'
 import { LeaveBalancesService } from './leave-balances.service'
-import { LeaveType } from './entities/leave.entities'
+import { Leave, LeaveType } from './entities/leave.entities'
 import { ApprovalChain } from './entities/approval-chain.entity'
 import { ApprovalStep } from './entities/approval-step.entity'
 import { RequestApproval } from './entities/request-approval.entity'
@@ -524,9 +524,21 @@ export class RequestsService {
       const payload = saved.payload ? JSON.parse(saved.payload) : {}
       const isLeave = saved.typeCode.startsWith('LEAVE_')
       const isPermission = saved.typeCode === 'PERMISSION'
-      if (isLeave && payload.fromDate && payload.toDate) {
-        const from = new Date(`${payload.fromDate}T12:00:00`)
-        const to = new Date(`${payload.toDate}T12:00:00`)
+      // إلغاء إجازة (payload.leaveId): مدى الإجازة الأصلية هو المتأثر
+      let fromDate: string | undefined = payload.fromDate
+      let toDate: string | undefined = payload.toDate
+      if (isLeave && !fromDate && payload.leaveId) {
+        const original = await this.ds
+          .getRepository(Leave)
+          .findOne({ where: { id: Number(payload.leaveId) } })
+        if (original) {
+          fromDate = original.fromDate
+          toDate = original.toDate
+        }
+      }
+      if (isLeave && fromDate && toDate) {
+        const from = new Date(`${fromDate}T12:00:00`)
+        const to = new Date(`${toDate}T12:00:00`)
         for (
           let d = new Date(from), i = 0;
           d <= to && i < 62;
@@ -677,6 +689,16 @@ export class RequestsService {
       where: where as any,
       order: { createdAt: 'DESC' },
       take: 500,
+    })
+  }
+
+  // إجازاتي المعتمدة (خدمة ذاتية) — لمنتقي «إلغاء/تعديل إجازة»
+  async myApprovedLeaves(user: JwtPayload) {
+    if (!user.employeeId) return []
+    return this.ds.getRepository(Leave).find({
+      where: { employeeId: user.employeeId, status: 'APPROVED' },
+      order: { fromDate: 'DESC' },
+      take: 50,
     })
   }
 

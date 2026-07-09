@@ -32,6 +32,7 @@ export const PERMISSIONS: Record<string, string> = {
   'overtime.confirm': 'تأكيد الأوفرتايم المكتشف',
   // الإجازات
   'leaves.view_all': 'سجل إجازات النطاق وأرصدته',
+  'leaves.revoke': 'إلغاء إجازة معتمدة (استرجاع الرصيد وإعادة حساب الحضور)',
   'leave_balances.manage': 'الترحيل السنوي وإدارة الأرصدة',
   // الرواتب
   'payroll.view': 'عرض مسيرات الرواتب',
@@ -82,7 +83,7 @@ export const ROLE_PRESETS: Array<{
       'org.manage', 'users.manage',
       'requests.view_all', 'requests.create_on_behalf', 'approve.hr',
       'attendance.view_all', 'attendance.manage', 'attendance.sync', 'overtime.confirm',
-      'leaves.view_all', 'leave_balances.manage',
+      'leaves.view_all', 'leaves.revoke', 'leave_balances.manage',
       'payroll.view', 'payroll.calculate', 'payroll.approve', 'payroll.pay',
       'custody.assign', 'documents.manage',
       'offboarding.manage', 'settlement.edit', 'settlement.approve',

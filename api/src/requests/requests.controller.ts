@@ -90,6 +90,12 @@ export class RequestsController {
     return this.service.mine(user)
   }
 
+  // إجازاتي المعتمدة — لمنتقي «إلغاء/تعديل إجازة» (خدمة ذاتية)
+  @Get('my-leaves')
+  myLeaves(@CurrentUser() user: JwtPayload) {
+    return this.service.myApprovedLeaves(user)
+  }
+
   // السجل الكامل — كونسول HR (بنطاق الفرع)
   @Perm('requests.view_all')
   @Get('all')

@@ -91,7 +91,9 @@ export async function apiFetch<T>(
     throw new ApiError(res.status, message)
   }
 
-  return res.json() as Promise<T>
+  // ردود فارغة (endpoint يرجّع null) لا تكسر التحليل
+  const text = await res.text()
+  return (text ? JSON.parse(text) : null) as T
 }
 
 // ===== Auth =====
@@ -112,6 +114,7 @@ const post = <T>(path: string, body?: unknown) =>
   apiFetch<T>(path, { method: 'POST', body: body ? JSON.stringify(body) : undefined })
 const patch = <T>(path: string, body: unknown) =>
   apiFetch<T>(path, { method: 'PATCH', body: JSON.stringify(body) })
+const del = <T>(path: string) => apiFetch<T>(path, { method: 'DELETE' })
 
 // ===== أنواع السيرفر الأساسية (مرآة كيانات الباك) =====
 export interface ApiBranch {
@@ -473,8 +476,24 @@ export const addSettlementLine = (caseId: number, d: { label: string; type: 'CRE
   post<ApiOffboardingCase>(`/offboarding/${caseId}/lines`, d)
 export const updateSettlementLine = (lineId: number, d: { label?: string; amount?: number }) =>
   patch<ApiOffboardingCase>(`/offboarding/lines/${lineId}`, d)
+// حذف بند قبل الاعتماد — التلقائي يرجع بإعادة التوليد
+export const deleteSettlementLine = (lineId: number) =>
+  del<ApiOffboardingCase>(`/offboarding/lines/${lineId}`)
+// إعادة توليد البنود التلقائية من أرقام النظام الحالية (اليدوي لا يُمس)
+export const recalcSettlementLines = (caseId: number) =>
+  post<ApiOffboardingCase>(`/offboarding/${caseId}/recalc-lines`)
 export const approveSettlement = (caseId: number) =>
   post<ApiOffboardingCase>(`/offboarding/${caseId}/approve-settlement`)
+// التراجع عن الاستقالة خلال فترة الإشعار — الموظف نفسه أو HR
+export const withdrawOffboarding = (caseId: number) =>
+  post<ApiOffboardingCase>(`/offboarding/${caseId}/withdraw`)
+// ملفي النشط (خدمة ذاتية) — null لو مفيش
+export const fetchMyOffboardingCase = () =>
+  get<{ id: number; status: string; lastWorkingDay: string; createdAt: string } | null>('/offboarding/mine')
+// إلغاء إجازة معتمدة مباشرة (HR بصلاحية leaves.revoke)
+export const revokeLeave = (leaveId: number) => post<ApiLeave>(`/leaves/${leaveId}/revoke`)
+// إجازاتي المعتمدة — لمنتقي «إلغاء/تعديل إجازة»
+export const fetchMyApprovedLeaves = () => get<ApiLeave[]>('/requests/my-leaves')
 
 // ===== مزامنة أجهزة البصمة =====
 export interface ApiSyncResult {

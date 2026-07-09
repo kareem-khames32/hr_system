@@ -21,6 +21,7 @@ const statusLabels: Record<string, string> = {
   IN_SETTLEMENT: 'تصفية قيد المراجعة',
   SETTLED: 'معتمدة بانتظار آخر يوم',
   CLOSED: 'منتهية',
+  CANCELLED: 'تراجع عن الاستقالة',
 }
 
 const statusStyles: Record<string, string> = {
@@ -28,6 +29,7 @@ const statusStyles: Record<string, string> = {
   IN_SETTLEMENT: 'bg-blue-100 text-blue-700',
   SETTLED: 'bg-indigo-100 text-indigo-700',
   CLOSED: 'bg-gray-100 text-gray-600',
+  CANCELLED: 'bg-gray-100 text-gray-600',
 }
 
 const fmtDate = (v?: string | null) => (v ? String(v).slice(0, 10) : '—')

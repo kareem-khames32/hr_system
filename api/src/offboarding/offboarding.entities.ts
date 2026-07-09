@@ -13,6 +13,7 @@ export type OffboardingStatus =
   | 'IN_SETTLEMENT' // البنود اكتملت — التصفية قيد المراجعة
   | 'SETTLED' // التصفية معتمدة ومقفولة — بانتظار آخر يوم عمل
   | 'CLOSED' // انتهت الخدمة فعلياً
+  | 'CANCELLED' // تراجع عن الاستقالة خلال فترة الإشعار — الموظف رجع نشطاً
 
 @Entity('offboarding_cases')
 export class OffboardingCase {

@@ -16,7 +16,7 @@ import {
   AlertTriangle,
 } from 'lucide-react'
 import Link from 'next/link'
-import { fetchLeaves, type ApiLeave } from '@/lib/api'
+import { fetchLeaves, revokeLeave, can, type ApiLeave } from '@/lib/api'
 
 // سجل الإجازات — هذا هو «سجل الوجهة» بعد اكتمال الموافقات في محرك الطلبات.
 // الاعتماد/الرفض يتم في صندوق الموافقات، وليس هنا.
@@ -44,7 +44,7 @@ const getStatusBadge = (status: string) => {
       return (
         <span className="badge badge-success flex items-center gap-1">
           <CheckCircle size={12} />
-          موافق عليه
+          معتمدة
         </span>
       )
     case 'CANCELLED':
@@ -55,9 +55,10 @@ const getStatusBadge = (status: string) => {
         </span>
       )
     default:
+      // حالة غير معروفة — لا تُعرض أكواد خام أبداً
       return (
         <span className="badge bg-gray-100 text-gray-600 flex items-center gap-1">
-          {status}
+          قيد المعالجة
         </span>
       )
   }
@@ -73,14 +74,39 @@ export default function LeavesPage() {
   const [leaves, setLeaves] = useState<ApiLeave[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // إلغاء إجازة معتمدة — بصلاحية leaves.revoke (تُحسم بعد الترطيب لتفادي اختلاف السيرفر)
+  const [canRevoke, setCanRevoke] = useState(false)
+  const [revokingId, setRevokingId] = useState<number | null>(null)
 
-  useEffect(() => {
+  const load = () => {
     setLoading(true)
+    setError('')
     fetchLeaves()
       .then(setLeaves)
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل سجل الإجازات'))
       .finally(() => setLoading(false))
+  }
+
+  useEffect(() => {
+    setCanRevoke(can('leaves.revoke'))
+    load()
   }, [])
+
+  // إلغاء إجازة معتمدة مباشرة: يرجّع الرصيد ويعيد حساب أيام الحضور فوراً
+  const handleRevoke = async (id: number) => {
+    if (revokingId !== null) return
+    if (!confirm('هيرجع الرصيد وتُعاد أيام الحضور فوراً — متأكد؟')) return
+    setRevokingId(id)
+    setError('')
+    try {
+      await revokeLeave(id)
+      load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر إلغاء الإجازة')
+    } finally {
+      setRevokingId(null)
+    }
+  }
 
   const filteredRequests = leaves.filter((req) => {
     if (activeTab !== 'all' && req.status !== activeTab) return false
@@ -158,7 +184,7 @@ export default function LeavesPage() {
                 <CheckCircle size={24} className="text-success-600" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">موافق عليها</p>
+                <p className="text-sm text-gray-500">معتمدة</p>
                 <p className="text-3xl font-bold text-success-600">{stats.approved}</p>
               </div>
             </div>
@@ -324,6 +350,15 @@ export default function LeavesPage() {
                           <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
                             <Eye size={18} className="text-gray-500" />
                           </button>
+                          {canRevoke && request.status === 'APPROVED' && (
+                            <button
+                              onClick={() => handleRevoke(request.id)}
+                              disabled={revokingId !== null}
+                              className="px-3 py-1.5 text-xs font-medium text-red-600 border border-red-200 rounded-lg hover:bg-red-50 disabled:opacity-50 whitespace-nowrap transition-colors"
+                            >
+                              {revokingId === request.id ? 'جارٍ الإلغاء...' : 'إلغاء الإجازة'}
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>

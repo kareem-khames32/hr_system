@@ -20,13 +20,19 @@ import {
   FileCheck2,
   UserMinus,
   ExternalLink,
+  Trash2,
+  RefreshCcw,
+  Undo2,
 } from 'lucide-react'
 import {
   fetchOffboardingCase,
   completeClearanceItem,
   addSettlementLine,
   updateSettlementLine,
+  deleteSettlementLine,
+  recalcSettlementLines,
   approveSettlement,
+  withdrawOffboarding,
   can,
   type ApiOffboardingCase,
   type ApiClearanceItem,
@@ -40,6 +46,7 @@ const statusLabels: Record<string, string> = {
   IN_SETTLEMENT: 'تصفية قيد المراجعة',
   SETTLED: 'معتمدة بانتظار آخر يوم',
   CLOSED: 'منتهية',
+  CANCELLED: 'تراجع عن الاستقالة',
 }
 
 const statusStyles: Record<string, string> = {
@@ -47,6 +54,7 @@ const statusStyles: Record<string, string> = {
   IN_SETTLEMENT: 'bg-blue-100 text-blue-700',
   SETTLED: 'bg-indigo-100 text-indigo-700',
   CLOSED: 'bg-gray-100 text-gray-600',
+  CANCELLED: 'bg-gray-100 text-gray-600',
 }
 
 // أطراف إخلاء الطرف الخمسة — التسميات العربية وأيقوناتها
@@ -174,6 +182,65 @@ export default function OffboardingCasePage({
     }
   }
 
+  const handleDeleteLine = async (line: ApiSettlementLine) => {
+    if (saving) return
+    if (
+      !window.confirm(
+        `حذف البند «${line.label}»؟ البند التلقائي يرجع بإعادة التوليد`
+      )
+    )
+      return
+    setSaving(true)
+    setActionError('')
+    try {
+      await deleteSettlementLine(line.id)
+      await load()
+    } catch (err) {
+      setActionError(err instanceof Error ? err.message : 'تعذر حذف البند')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleRecalc = async () => {
+    if (!det || saving) return
+    if (
+      !window.confirm(
+        'هيرجّع البنود التلقائية لأرقام النظام الحالية ويلغي أي تعديل عليها — البنود اليدوية لن تُمس'
+      )
+    )
+      return
+    setSaving(true)
+    setActionError('')
+    try {
+      await recalcSettlementLines(det.id)
+      await load()
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : 'تعذر إعادة توليد البنود التلقائية'
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  const handleWithdraw = async () => {
+    if (!det || saving) return
+    if (!window.confirm('الموظف هيرجع نشطاً والملف هيتلغى — متأكد؟')) return
+    setSaving(true)
+    setActionError('')
+    try {
+      await withdrawOffboarding(det.id)
+      await load()
+    } catch (err) {
+      setActionError(
+        err instanceof Error ? err.message : 'تعذر التراجع عن الاستقالة'
+      )
+    } finally {
+      setSaving(false)
+    }
+  }
+
   const handleApprove = async () => {
     if (!det || saving) return
     if (
@@ -282,6 +349,17 @@ export default function OffboardingCasePage({
                       {det.clearanceCertRef}
                     </span>
                   )}
+                  {['IN_CLEARANCE', 'IN_SETTLEMENT', 'SETTLED'].includes(det.status) &&
+                    can('offboarding.manage') && (
+                      <button
+                        onClick={handleWithdraw}
+                        disabled={saving}
+                        className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 border border-red-300 rounded-lg hover:bg-red-50 disabled:opacity-50 transition-colors"
+                      >
+                        <Undo2 size={16} />
+                        التراجع عن الاستقالة
+                      </button>
+                    )}
                 </div>
               </div>
             </div>
@@ -424,16 +502,26 @@ export default function OffboardingCasePage({
                       فتح شاشة التصفية الكاملة
                     </Link>
                     {editable && (
-                      <button
-                        onClick={() => {
-                          setActionError('')
-                          setAddLineModal(true)
-                        }}
-                        className="btn-secondary flex items-center gap-2 text-sm"
-                      >
-                        <Plus size={16} />
-                        إضافة بند
-                      </button>
+                      <>
+                        <button
+                          onClick={() => {
+                            setActionError('')
+                            setAddLineModal(true)
+                          }}
+                          className="btn-secondary flex items-center gap-2 text-sm"
+                        >
+                          <Plus size={16} />
+                          إضافة بند
+                        </button>
+                        <button
+                          onClick={handleRecalc}
+                          disabled={saving}
+                          className="btn-secondary flex items-center gap-2 text-sm"
+                        >
+                          <RefreshCcw size={16} />
+                          إعادة توليد البنود التلقائية
+                        </button>
+                      </>
                     )}
                   </div>
                 </div>
@@ -481,14 +569,7 @@ export default function OffboardingCasePage({
                         </td>
                         {editable && (
                           <td className="py-3 px-4">
-                            {line.isAuto ? (
-                              <span
-                                className="text-xs text-gray-400"
-                                title="البنود التلقائية يحسبها النظام ولا تُعدَّل"
-                              >
-                                تلقائي
-                              </span>
-                            ) : (
+                            <div className="flex items-center gap-2">
                               <button
                                 onClick={() => {
                                   setActionError('')
@@ -503,7 +584,16 @@ export default function OffboardingCasePage({
                                 <Pencil size={12} />
                                 تعديل
                               </button>
-                            )}
+                              <button
+                                onClick={() => handleDeleteLine(line)}
+                                disabled={saving}
+                                className="text-xs px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 disabled:opacity-50 flex items-center gap-1"
+                                title="حذف البند"
+                              >
+                                <Trash2 size={12} />
+                                حذف
+                              </button>
+                            </div>
                           </td>
                         )}
                       </tr>
