@@ -339,12 +339,27 @@ export class RequestsService {
       }
     }
 
-    const resolved = await this.resolveChain(type, req)
+    const { steps: resolved, chain } = await this.resolveChain(type, req)
     req.resolvedSteps = JSON.stringify(resolved)
     req.submittedAt = new Date()
 
     if (resolved.length === 0) {
-      // أوتوماتيك — بلا موافقات: اعتماد وتنفيذ فوري
+      // بلا خطوات فعّالة: نقرّر بناءً على السلسلة المستخدمة فعلاً (لا العامة)
+      // 1) بلا سلسلة أصلاً (نوع مخصّص/سلسلة محذوفة) → توقف آمن، ممنوع تنفيذ بلا اعتماد
+      if (!chain) {
+        throw new BadRequestException(
+          `لا توجد سلسلة اعتماد مربوطة بنوع «${type.nameAr}» — ` +
+            `اربطه بسلسلة من «سلاسل الاعتماد» وأضِف المعتمدين ثم أعد التقديم`
+        )
+      }
+      // 2) سلسلة فاضية غير معلّمة «تنفيذ فوري» → توقف لحد ما تُضبط
+      if (!chain.autoApprove) {
+        throw new BadRequestException(
+          `لم تُحدَّد خطوات الاعتماد لنوع «${type.nameAr}» بعد — ` +
+            `افتح «سلاسل الاعتماد» وأضِف المعتمدين لسلسلة «${chain.nameAr}» ثم أعد التقديم`
+        )
+      }
+      // 3) تنفيذ فوري بلا موافقات (اختيار صريح من المالك على هذه السلسلة)
       req.status = 'APPROVED'
       await this.requests.save(req)
       return this.executeDestination(req.id)
@@ -356,15 +371,17 @@ export class RequestsService {
   }
 
   // حل السلسلة: دورة الفرع لو موجودة وإلا العامة + تفعيل الخطوات الشرطية فقط
+  // ترجع السلسلة المستخدمة فعلاً (لقرار autoApprove في submit) — null لو
+  // النوع بلا سلسلة أو سلسلته محذوفة (يُحسم كـ«غير مضبوط» = يتوقف)
   private async resolveChain(
     type: RequestType,
     req: Request
-  ): Promise<ResolvedStep[]> {
-    if (!type.approvalChainId) return []
+  ): Promise<{ steps: ResolvedStep[]; chain: ApprovalChain | null }> {
+    if (!type.approvalChainId) return { steps: [], chain: null }
     const globalChain = await this.chains.findOne({
       where: { id: type.approvalChainId },
     })
-    if (!globalChain) return []
+    if (!globalChain) return { steps: [], chain: null }
 
     // دورة خاصة بالفرع بنفس الكود تتقدم على العامة (فرع المعادي ≠ الرياض)
     let chain = globalChain
@@ -415,7 +432,7 @@ export class RequestsService {
         action: null,
       })
     }
-    return resolved
+    return { steps: resolved, chain }
   }
 
   // الخطوة الشرطية: تُفعَّل فقط عند تحقق الشرط (loan >= 5000 → مالية)

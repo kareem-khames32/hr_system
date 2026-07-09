@@ -217,6 +217,11 @@ class UpdateChainDto {
   // نقل الدورة لفرع (أو null = عامة) — §2.2 تعديل كامل بعد الإنشاء
   @IsOptional()
   branchId?: number | null
+
+  // تنفيذ فوري بلا اعتمادات (لسلسلة فاضية عمداً) — اختيار المالك
+  @IsOptional()
+  @IsBoolean()
+  autoApprove?: boolean
 }
 
 // ===== بانِي أنواع الطلبات: نوع من الصفر بحقول مخصوصة وجمهور =====
@@ -403,9 +408,19 @@ export class SettingsController {
   async listChains() {
     const chains = await this.chains.find({ order: { id: 'ASC' } })
     const allSteps = await this.steps.find({ order: { stepOrder: 'ASC' } })
+    // اسم النوع وفئته من مصدر واحد (مستقل عن فلترة الجمهور) —
+    // شاشة السلاسل لا تعتمد على كتالوج الموظف المفلتر
+    const types = await this.requestTypes.find()
+    const typeByCode = new Map(types.map((t) => [t.code, t]))
     return chains.map((c) => ({
       ...c,
       steps: allSteps.filter((s) => s.chainId === c.id),
+      requestTypeName: c.requestTypeCode
+        ? typeByCode.get(c.requestTypeCode)?.nameAr ?? null
+        : null,
+      requestTypeCategory: c.requestTypeCode
+        ? typeByCode.get(c.requestTypeCode)?.category ?? null
+        : null,
     }))
   }
 
@@ -497,12 +512,14 @@ export class SettingsController {
       })
       if (dup && dup.id !== chain.id) {
         throw new BadRequestException(
-                  )
+          `الكود ${chain.code} مستخدم بالفعل في هذا النطاق`
+        )
       }
       chain.branchId = dto.branchId as any
     }
     if (dto.nameAr !== undefined) chain.nameAr = dto.nameAr
     if (dto.isActive !== undefined) chain.isActive = dto.isActive
+    if (dto.autoApprove !== undefined) chain.autoApprove = dto.autoApprove
     return this.chains.save(chain)
   }
 
@@ -617,6 +634,26 @@ export class SettingsController {
     const requiredKeys = (dto.customFields ?? [])
       .filter((f) => f.required)
       .map((f) => f.key)
+
+    // كل نوع لازم يكون له سلسلته الخاصة — لو المالك ما ربطش واحدة،
+    // نُنشئ سلسلة فاضية مسمّاة باسمه (فاضية = توقف الطلب لحد ما تُضبط)
+    let chainId = dto.approvalChainId
+    if (!chainId) {
+      const chainCode = `CH_${code}`
+      let chain = await this.chains.findOne({ where: { code: chainCode } })
+      if (!chain) {
+        chain = await this.chains.save(
+          this.chains.create({
+            code: chainCode,
+            nameAr: `سلسلة اعتماد ${dto.nameAr}`,
+            requestTypeCode: code,
+            autoApprove: false,
+          })
+        )
+      }
+      chainId = chain.id
+    }
+
     return this.requestTypes.save(
       this.requestTypes.create({
         code,
@@ -628,7 +665,7 @@ export class SettingsController {
           : undefined,
         requiredAttachments: dto.requiredAttachments,
         destinationHandler: handler,
-        approvalChainId: dto.approvalChainId,
+        approvalChainId: chainId,
         visibleTo: this.validateAudience(dto.visibleTo),
         phase: 'P1',
       })

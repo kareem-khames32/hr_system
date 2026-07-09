@@ -28,11 +28,13 @@ import {
 import {
   ApiBranch,
   ApiEmployee,
+  ApiRequestType,
   ChainStepInput,
   createApprovalChain,
   fetchApprovalChains,
   fetchBranches,
   fetchEmployees,
+  fetchRequestTypes,
   replaceChainSteps,
   updateApprovalChain,
 } from '@/lib/api'
@@ -59,6 +61,13 @@ interface ApiChain {
   nameAr: string
   branchId: number | null
   isActive: boolean
+  // نوع الطلب المرتبط بالسلسلة — null للسلاسل المخصّصة (اليدوية)
+  requestTypeCode: string | null
+  // اسم النوع وفئته من الباك (مستقل عن فلترة جمهور الكتالوج)
+  requestTypeName?: string | null
+  requestTypeCategory?: string | null
+  // تنفيذ فوري بلا اعتمادات — يسري فقط حين تكون السلسلة بلا خطوات
+  autoApprove: boolean
   steps: ApiChainStep[]
 }
 
@@ -161,6 +170,7 @@ export default function ApprovalsPage() {
   const [chains, setChains] = useState<ApiChain[]>([])
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  const [requestTypes, setRequestTypes] = useState<ApiRequestType[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -194,14 +204,16 @@ export default function ApprovalsPage() {
   useEffect(() => {
     const load = async () => {
       try {
-        const [ch, brs, emps] = await Promise.all([
+        const [ch, brs, emps, types] = await Promise.all([
           fetchApprovalChains(),
           fetchBranches(),
           fetchEmployees(),
+          fetchRequestTypes(),
         ])
         setChains(ch as ApiChain[])
         setBranches(brs)
         setEmployees(emps)
+        setRequestTypes(types)
         setError(null)
       } catch (err: any) {
         setError(err.message)
@@ -228,17 +240,44 @@ export default function ApprovalsPage() {
       ? `موظف بعينه: ${employeeNameOf(step.specificEmployeeId)}`
       : roleLabels[step.approverRole] ?? step.approverRole
 
-  const filteredChains = chains.filter((chain) => {
-    const matchesSearch =
-      chain.nameAr.includes(searchQuery) ||
-      chain.code.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesBranch =
-      !filterBranch ||
-      (filterBranch === 'all'
-        ? chain.branchId === null
-        : chain.branchId === Number(filterBranch))
-    return matchesSearch && matchesBranch
-  })
+  // اسم/فئة النوع المربوط — نفضّل ما يرسله الباك (مستقل عن فلترة الجمهور)
+  // ونرجع للكتالوج المحلي كخطة بديلة
+  const chainTypeName = (chain: ApiChain): string | null =>
+    chain.requestTypeName ??
+    (chain.requestTypeCode
+      ? requestTypes.find((t) => t.code === chain.requestTypeCode)?.nameAr ??
+        chain.requestTypeCode
+      : null)
+  const chainTypeCategory = (chain: ApiChain): string =>
+    chain.requestTypeCategory ??
+    (chain.requestTypeCode
+      ? requestTypes.find((t) => t.code === chain.requestTypeCode)?.category ??
+        ''
+      : '')
+
+  const filteredChains = chains
+    .filter((chain) => {
+      const boundTypeName = chainTypeName(chain) ?? ''
+      const q = searchQuery.trim().toLowerCase()
+      const matchesSearch =
+        !q ||
+        chain.nameAr.includes(searchQuery) ||
+        chain.code.toLowerCase().includes(q) ||
+        boundTypeName.toLowerCase().includes(q)
+      const matchesBranch =
+        !filterBranch ||
+        (filterBranch === 'all'
+          ? chain.branchId === null
+          : chain.branchId === Number(filterBranch))
+      return matchesSearch && matchesBranch
+    })
+    // ترتيب افتراضي: الفئة ثم الاسم — تتجمّع سلاسل الأنواع المتقاربة معاً
+    .sort((a, b) => {
+      const catA = chainTypeCategory(a)
+      const catB = chainTypeCategory(b)
+      if (catA !== catB) return catA.localeCompare(catB, 'ar')
+      return a.nameAr.localeCompare(b.nameAr, 'ar')
+    })
 
   const handleOpenModal = (chain?: ApiChain) => {
     if (chain) {
@@ -420,6 +459,28 @@ export default function ApprovalsPage() {
     }
   }
 
+  // تبديل «التنفيذ الفوري بلا اعتمادات» — للسلاسل الفاضية فقط
+  const toggleAutoApprove = async (chain: ApiChain) => {
+    setActiveMenu(null)
+    // حارس محلي: لا يُسمح بالتفعيل والسلسلة بها خطوات
+    if (!chain.autoApprove && chain.steps.length > 0) {
+      setError('احذف خطوات السلسلة أولاً قبل تفعيل التنفيذ الفوري')
+      return
+    }
+    try {
+      await updateApprovalChain(chain.id, { autoApprove: !chain.autoApprove })
+      setNotice(
+        chain.autoApprove
+          ? `تم إيقاف التنفيذ الفوري لدورة «${chain.nameAr}» — الطلب يتطلب معتمدين`
+          : `تم تفعيل التنفيذ الفوري لدورة «${chain.nameAr}» — الطلب يُنفَّذ فور تقديمه`
+      )
+      await reloadChains()
+      setError(null)
+    } catch (err: any) {
+      setError(err.message)
+    }
+  }
+
   const totalChains = chains.length
   const activeChains = chains.filter((c) => c.isActive).length
   const totalSteps = chains.reduce((sum, c) => sum + c.steps.length, 0)
@@ -570,6 +631,10 @@ export default function ApprovalsPage() {
               <div>
                 <h3 className="font-bold text-gray-800">سلاسل الاعتماد</h3>
                 <p className="text-sm text-gray-500">{filteredChains.length} مسار اعتماد</p>
+                <p className="text-xs text-gray-400 mt-0.5">
+                  لكل نوع طلب سلسلته الخاصة — أضف المعتمدين والترتيب، والسلسلة الفاضية
+                  توقف الطلب حتى تضبطها
+                </p>
               </div>
             </div>
 
@@ -595,7 +660,7 @@ export default function ApprovalsPage() {
                           />
                         </div>
                         <div>
-                          <div className="flex items-center gap-2">
+                          <div className="flex items-center gap-2 flex-wrap">
                             <h4 className="font-bold text-gray-800">{chain.nameAr}</h4>
                             <span
                               className={`badge text-xs ${
@@ -604,6 +669,16 @@ export default function ApprovalsPage() {
                             >
                               {chain.isActive ? 'نشط' : 'معطل'}
                             </span>
+                            {/* شارة نوع الطلب المرتبط — يوضّح أي طلب تعتمده هذه السلسلة */}
+                            {chain.requestTypeCode ? (
+                              <span className="badge text-xs bg-blue-50 text-blue-700">
+                                الطلب: {chainTypeName(chain)}
+                              </span>
+                            ) : (
+                              <span className="badge text-xs bg-gray-100 text-gray-600">
+                                سلسلة مخصّصة
+                              </span>
+                            )}
                             <span className="badge text-xs bg-indigo-100 text-indigo-700">
                               {branchLabelOf(chain.branchId)}
                             </span>
@@ -638,7 +713,7 @@ export default function ApprovalsPage() {
                               className="fixed inset-0 z-10"
                               onClick={() => setActiveMenu(null)}
                             />
-                            <div className="absolute left-0 top-full mt-1 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+                            <div className="absolute left-0 top-full mt-1 w-56 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
                               <button
                                 onClick={() => {
                                   handleOpenModal(chain)
@@ -673,6 +748,37 @@ export default function ApprovalsPage() {
                                   </>
                                 )}
                               </button>
+                              {/* تنفيذ فوري بلا اعتمادات — للسلاسل الفاضية فقط */}
+                              <button
+                                onClick={() => toggleAutoApprove(chain)}
+                                disabled={chain.steps.length > 0}
+                                title={
+                                  chain.steps.length > 0
+                                    ? 'احذف الخطوات أولاً'
+                                    : chain.autoApprove
+                                      ? 'إيقاف التنفيذ الفوري'
+                                      : 'تفعيل التنفيذ الفوري بلا اعتمادات'
+                                }
+                                className={`w-full flex flex-col items-start gap-0.5 px-4 py-2 text-sm ${
+                                  chain.steps.length > 0
+                                    ? 'text-gray-700 opacity-50 cursor-not-allowed'
+                                    : 'text-gray-700 hover:bg-gray-50'
+                                }`}
+                              >
+                                <span className="flex items-center gap-2">
+                                  {chain.autoApprove ? (
+                                    <Zap size={16} className="text-success-500" />
+                                  ) : (
+                                    <Zap size={16} className="text-gray-400" />
+                                  )}
+                                  {chain.autoApprove
+                                    ? 'إيقاف التنفيذ الفوري'
+                                    : 'تنفيذ فوري بلا اعتمادات'}
+                                </span>
+                                <span className="text-[10px] text-gray-400 pr-6">
+                                  (للسلاسل الفاضية فقط)
+                                </span>
+                              </button>
                               <div className="border-t border-gray-100 my-1" />
                               <button
                                 disabled
@@ -690,14 +796,40 @@ export default function ApprovalsPage() {
 
                     {/* Approval Steps */}
                     <div className="mt-4 pt-4 border-t border-gray-100">
+                      {/* حالة السلسلة الفاضية — نداء واضح حسب وضع التنفيذ الفوري */}
+                      {chain.steps.length === 0 ? (
+                        chain.autoApprove ? (
+                          <div className="flex items-start gap-2 p-3 bg-success-50 rounded-xl">
+                            <Zap size={16} className="text-success-600 shrink-0 mt-0.5" />
+                            <p className="text-sm text-success-700">
+                              تنفيذ فوري — بلا اعتمادات (الطلب يُنفَّذ فور تقديمه)
+                            </p>
+                          </div>
+                        ) : (
+                          <div className="flex items-start justify-between gap-3 p-3 bg-warning-50 rounded-xl">
+                            <div className="flex items-start gap-2">
+                              <AlertCircle
+                                size={16}
+                                className="text-warning-600 shrink-0 mt-0.5"
+                              />
+                              <p className="text-sm text-warning-700">
+                                لم تُضبط بعد — لن يُقبل أي طلب من هذا النوع حتى تضيف
+                                المعتمدين
+                              </p>
+                            </div>
+                            <button
+                              onClick={() => handleOpenModal(chain)}
+                              className="btn-primary shrink-0 flex items-center gap-1 text-sm px-3 py-1.5"
+                            >
+                              <Plus size={15} />
+                              إضافة خطوات
+                            </button>
+                          </div>
+                        )
+                      ) : (
                       <div className="flex items-center gap-3">
                         <span className="text-sm text-gray-500">مستويات الاعتماد:</span>
                         <div className="flex items-center gap-2 flex-wrap">
-                          {chain.steps.length === 0 && (
-                            <span className="text-sm text-gray-400">
-                              بلا موافقات — تنفيذ تلقائي
-                            </span>
-                          )}
                           {chain.steps.map((step, index) => (
                             <div key={step.id} className="flex items-center gap-2">
                               <div className="flex items-center gap-2 px-3 py-1.5 bg-gray-100 rounded-lg">
@@ -732,6 +864,7 @@ export default function ApprovalsPage() {
                           ))}
                         </div>
                       </div>
+                      )}
                     </div>
 
                     {/* Expand for more details */}
@@ -837,11 +970,16 @@ export default function ApprovalsPage() {
                 <h2 className="text-xl font-bold text-gray-800">
                   {editingChain ? 'تعديل دورة الاعتماد' : 'إنشاء دورة اعتماد جديدة'}
                 </h2>
-                {editingChain && (
+                {editingChain ? (
                   <p className="text-sm text-warning-600 mt-2 flex items-center gap-1.5">
                     <AlertCircle size={15} className="shrink-0" />
                     تعديل الخطوات يسري على الطلبات الجديدة فقط — الطلبات الجارية تكمل
                     بخطواتها المحلولة
+                  </p>
+                ) : (
+                  <p className="text-sm text-gray-500 mt-2 flex items-center gap-1.5">
+                    <AlertCircle size={15} className="shrink-0 text-primary-500" />
+                    معظم الأنواع لها سلاسلها تلقائياً — أنشئ سلسلة يدوية فقط لحالة خاصة
                   </p>
                 )}
               </div>

@@ -21,59 +21,75 @@ export async function seedRequests(ds: DataSource) {
   const config = ds.getRepository(RequestsConfig)
   const leaveTypes = ds.getRepository(LeaveType)
 
-  // ===== السلاسل العامة وخطواتها =====
-  const chainIdByCode = new Map<string, number>()
-  for (const c of chainsSeed) {
-    let chain = await chains.findOne({ where: { code: c.code } })
+  // ===== أنواع الطلبات + دورة اعتماد مخصّصة لكل نوع =====
+  // القاعدة: سلسلة اعتماد واحدة لكل نوع طلب، مسمّاة باسمه، فاضية —
+  // المالك يحط المعتمدين والترتيب بنفسه (لا defaults مفروضة).
+  // سلسلة فاضية توقف الطلب برسالة واضحة لحد ما تُضبط.
+  let createdTypes = 0
+  let createdChains = 0
+  for (const t of typesSeed) {
+    // 1) السلسلة المخصّصة لهذا النوع (تُنشأ فاضية — خطواتها من صنع المالك)
+    const chainCode = `CH_${t.code}`
+    let chain = await chains.findOne({ where: { code: chainCode } })
     if (!chain) {
       chain = await chains.save(
-        chains.create({ code: c.code, nameAr: c.nameAr, branchId: undefined })
+        chains.create({
+          code: chainCode,
+          nameAr: `سلسلة اعتماد ${t.nameAr}`,
+          branchId: undefined,
+          requestTypeCode: t.code,
+          autoApprove: false,
+        })
       )
-      let order = 1
-      for (const s of c.steps) {
-        await steps.save(
-          steps.create({
-            chainId: chain.id,
-            stepOrder: order++,
-            approverRole: s.role,
-            thresholdField: s.thresholdField,
-            thresholdOp: s.thresholdOp as any,
-            thresholdValue: s.thresholdValue,
-            slaDays: s.slaDays,
-            escalateTo: s.escalateTo,
-          })
-        )
-      }
+      createdChains++
+    } else if (chain.requestTypeCode !== t.code) {
+      chain.requestTypeCode = t.code
+      await chains.save(chain)
     }
-    chainIdByCode.set(c.code, chain.id)
-  }
-  console.log(`✓ سلاسل الاعتماد: ${chainsSeed.length}`)
 
-  // ===== أنواع الطلبات (55) =====
-  let createdTypes = 0
-  for (const t of typesSeed) {
-    const existing = await types.findOne({ where: { code: t.code } })
-    if (existing) continue
-    await types.save(
-      types.create({
-        code: t.code,
-        nameAr: t.nameAr,
-        category: t.category as any,
-        requiredFields: t.requiredFields
-          ? JSON.stringify(t.requiredFields)
-          : undefined,
-        approvalChainId: t.chain ? chainIdByCode.get(t.chain) : undefined,
-        destinationHandler: t.handler,
-        affectsBalance: t.affectsBalance ?? false,
-        isSecurityRoute: t.securityRoute ?? false,
-        isConfidential: t.confidential ?? false,
-        autoGeneratesPdf: t.autoGeneratesPdf ?? false,
-        phase: t.phase ?? 'P1',
-      })
-    )
-    createdTypes++
+    // 2) النوع مربوط بسلسلته الخاصة
+    let type = await types.findOne({ where: { code: t.code } })
+    if (!type) {
+      await types.save(
+        types.create({
+          code: t.code,
+          nameAr: t.nameAr,
+          category: t.category as any,
+          requiredFields: t.requiredFields
+            ? JSON.stringify(t.requiredFields)
+            : undefined,
+          approvalChainId: chain.id,
+          destinationHandler: t.handler,
+          affectsBalance: t.affectsBalance ?? false,
+          isSecurityRoute: t.securityRoute ?? false,
+          isConfidential: t.confidential ?? false,
+          autoGeneratesPdf: t.autoGeneratesPdf ?? false,
+          phase: t.phase ?? 'P1',
+        })
+      )
+      createdTypes++
+    } else if (type.approvalChainId !== chain.id) {
+      // ترحيل: اربط الأنواع الحالية بسلاسلها المخصّصة الجديدة
+      type.approvalChainId = chain.id
+      await types.save(type)
+    }
   }
-  console.log(`✓ أنواع الطلبات: ${createdTypes} جديد (الإجمالي ${typesSeed.length})`)
+  console.log(
+    `✓ أنواع الطلبات: ${createdTypes} جديد + ${createdChains} سلسلة مخصّصة (الإجمالي ${typesSeed.length})`
+  )
+
+  // ===== تنظيف السلاسل المشتركة القديمة (مرة واحدة — idempotent) =====
+  // بعد ربط كل نوع بسلسلته، السلاسل العامة القديمة لم تعد مرجعية
+  let removedOld = 0
+  for (const c of chainsSeed) {
+    const old = await chains.findOne({ where: { code: c.code } })
+    if (old) {
+      await steps.delete({ chainId: old.id })
+      await chains.delete({ id: old.id })
+      removedOld++
+    }
+  }
+  if (removedOld > 0) console.log(`✓ حُذفت ${removedOld} سلسلة مشتركة قديمة`)
 
   // ===== أنواع الإجازات =====
   for (const lt of leaveTypesSeed) {

@@ -306,16 +306,20 @@ export const fetchApprovalChains = () => get<any[]>('/settings/approval-chains')
 // بانِي السلاسل — إنشاء/تعديل/استبدال خطوات
 export interface ChainStepInput {
   approverRole: string
+  specificEmployeeId?: number
   thresholdField?: string
   thresholdOp?: '>=' | '>' | '<' | '<='
   thresholdValue?: number
   slaDays?: number
   escalateTo?: string
+  isParallel?: boolean
 }
 export const createApprovalChain = (c: { code: string; nameAr: string; branchId?: number; steps: ChainStepInput[] }) =>
   post<any>('/settings/approval-chains', c)
-export const updateApprovalChain = (id: number, c: { nameAr?: string; isActive?: boolean }) =>
-  patch<any>(`/settings/approval-chains/${id}`, c)
+export const updateApprovalChain = (
+  id: number,
+  c: { nameAr?: string; isActive?: boolean; autoApprove?: boolean }
+) => patch<any>(`/settings/approval-chains/${id}`, c)
 export const replaceChainSteps = (id: number, steps: ChainStepInput[]) =>
   patch<any>(`/settings/approval-chains/${id}/steps`, { steps })
 
