@@ -453,7 +453,8 @@ export default function RequestsConsolePage() {
         <div className="card p-5">
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-bold text-gray-800 text-sm">
-              كتالوج الأنواع المُعرَّفة ({requestsCatalog.length} نوعاً في 9 فئات — Data-Driven)
+              كتالوج الأنواع المُعرَّفة (
+              {requestsCatalog.filter((t) => !t.deprecated).length} نوعاً في 9 فئات — Data-Driven)
             </h3>
             <div className="flex items-center gap-2 text-xs text-gray-400">
               <span className="badge text-[10px] bg-primary-50 text-primary-700">P1 أساسي</span>
@@ -463,7 +464,10 @@ export default function RequestsConsolePage() {
           </div>
           <div className="grid grid-cols-3 gap-3">
             {Object.entries(categoryLabels).map(([catId, catLabel]) => {
-              const catTypes = requestsCatalog.filter((t) => t.category === catId)
+              // الأنواع المدموجة (deprecated) مخفية — تُعرض الأنواع الفعّالة فقط
+              const catTypes = requestsCatalog.filter(
+                (t) => t.category === catId && !t.deprecated
+              )
               return (
                 <div key={catId} className="p-3 bg-gray-50 rounded-xl">
                   <p className="text-sm font-bold text-gray-700 mb-2">

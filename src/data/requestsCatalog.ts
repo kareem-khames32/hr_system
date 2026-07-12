@@ -86,22 +86,27 @@ export interface RequestTypeDef {
   confidential?: boolean // سرّي — يتخطى المدير المباشر
   affectsBalance?: boolean
   autoGeneratesPdf?: boolean
+  // مدموج في النوع الموحّد «طلب إجازة» (LEAVE) — يُبقى للتوافق مع الطلبات
+  // التاريخية فقط ولا يظهر في كتالوج الأنواع الفعّالة
+  deprecated?: boolean
 }
 
 // ===== 4) الماستر ليست — 9 فئات =====
 export const requestsCatalog: RequestTypeDef[] = [
-  // ===== الفئة 1: الإجازات (LeaveType قابل للإعداد) =====
-  { code: 'LEAVE_ANNUAL', nameAr: 'إجازة سنوية', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير → HR', destination: 'التقويم + خصم الرصيد', destinationHandler: 'leave_calendar_balance', phase: 'P1', affectsBalance: true },
-  { code: 'LEAVE_SICK', nameAr: 'إجازة مرضية', category: 'leaves', submitter: ['E'], requiredAttachments: 'تقرير طبي (إجباري)', approvalChain: 'مدير → HR', destination: 'التقويم + الرصيد', destinationHandler: 'leave_calendar_balance', phase: 'P1', byLaw: true, affectsBalance: true },
-  { code: 'LEAVE_CASUAL', nameAr: 'إجازة عارضة/طارئة', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P1', affectsBalance: true },
-  { code: 'LEAVE_UNPAID', nameAr: 'إجازة بدون راتب', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير → HR', destination: 'التقويم + أثر على الراتب', destinationHandler: 'leave_calendar_payroll', phase: 'P1' },
-  { code: 'LEAVE_MATERNITY', nameAr: 'إجازة وضع', category: 'leaves', submitter: ['E'], requiredAttachments: 'تقرير طبي', approvalChain: 'HR', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P2', byLaw: true },
-  { code: 'LEAVE_PATERNITY', nameAr: 'إجازة أبوة', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير → HR', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P2', byLaw: true },
-  { code: 'LEAVE_HAJJ', nameAr: 'إجازة حج', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير → HR', destination: 'التقويم (مرة في الخدمة)', destinationHandler: 'leave_calendar_once', phase: 'P2', byLaw: true },
-  { code: 'LEAVE_MARRIAGE', nameAr: 'إجازة زواج', category: 'leaves', submitter: ['E'], requiredAttachments: 'عقد الزواج', approvalChain: 'مدير → HR', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P2', byLaw: true },
-  { code: 'LEAVE_BEREAVEMENT', nameAr: 'إجازة وفاة/عدة', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'HR', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P2', byLaw: true },
-  { code: 'LEAVE_EXAM', nameAr: 'إجازة امتحانات', category: 'leaves', submitter: ['E'], requiredAttachments: 'إثبات قيد', approvalChain: 'مدير → HR', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P3', byLaw: true },
-  { code: 'LEAVE_COMPENSATORY', nameAr: 'إجازة تعويضية/بدل', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P2' },
+  // ===== الفئة 1: الإجازات — نوع موحّد «طلب إجازة» يختار منه الموظف نوع الإجازة =====
+  { code: 'LEAVE', nameAr: 'طلب إجازة', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير → HR', destination: 'التقويم + الرصيد حسب نوع الإجازة', destinationHandler: 'leave_calendar_balance', phase: 'P1', affectsBalance: true },
+  // الأنواع أدناه مدموجة في «طلب إجازة» — تبقى للطلبات التاريخية فقط (deprecated)
+  { code: 'LEAVE_ANNUAL', nameAr: 'إجازة سنوية', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير → HR', destination: 'التقويم + خصم الرصيد', destinationHandler: 'leave_calendar_balance', phase: 'P1', affectsBalance: true, deprecated: true },
+  { code: 'LEAVE_SICK', nameAr: 'إجازة مرضية', category: 'leaves', submitter: ['E'], requiredAttachments: 'تقرير طبي (إجباري)', approvalChain: 'مدير → HR', destination: 'التقويم + الرصيد', destinationHandler: 'leave_calendar_balance', phase: 'P1', byLaw: true, affectsBalance: true, deprecated: true },
+  { code: 'LEAVE_CASUAL', nameAr: 'إجازة عارضة/طارئة', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P1', affectsBalance: true, deprecated: true },
+  { code: 'LEAVE_UNPAID', nameAr: 'إجازة بدون راتب', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير → HR', destination: 'التقويم + أثر على الراتب', destinationHandler: 'leave_calendar_payroll', phase: 'P1', deprecated: true },
+  { code: 'LEAVE_MATERNITY', nameAr: 'إجازة وضع', category: 'leaves', submitter: ['E'], requiredAttachments: 'تقرير طبي', approvalChain: 'HR', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P2', byLaw: true, deprecated: true },
+  { code: 'LEAVE_PATERNITY', nameAr: 'إجازة أبوة', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير → HR', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P2', byLaw: true, deprecated: true },
+  { code: 'LEAVE_HAJJ', nameAr: 'إجازة حج', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير → HR', destination: 'التقويم (مرة في الخدمة)', destinationHandler: 'leave_calendar_once', phase: 'P2', byLaw: true, deprecated: true },
+  { code: 'LEAVE_MARRIAGE', nameAr: 'إجازة زواج', category: 'leaves', submitter: ['E'], requiredAttachments: 'عقد الزواج', approvalChain: 'مدير → HR', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P2', byLaw: true, deprecated: true },
+  { code: 'LEAVE_BEREAVEMENT', nameAr: 'إجازة وفاة/عدة', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'HR', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P2', byLaw: true, deprecated: true },
+  { code: 'LEAVE_EXAM', nameAr: 'إجازة امتحانات', category: 'leaves', submitter: ['E'], requiredAttachments: 'إثبات قيد', approvalChain: 'مدير → HR', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P3', byLaw: true, deprecated: true },
+  { code: 'LEAVE_COMPENSATORY', nameAr: 'إجازة تعويضية/بدل', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير', destination: 'التقويم', destinationHandler: 'leave_calendar', phase: 'P2', deprecated: true },
   { code: 'LEAVE_MODIFY_CANCEL', nameAr: 'إلغاء/تعديل إجازة', category: 'leaves', submitter: ['E'], requiredAttachments: null, approvalChain: 'مدير', destination: 'يرجّع الرصيد', destinationHandler: 'leave_balance_restore', phase: 'P1', affectsBalance: true },
 
   // ===== الفئة 2: الحضور والوقت =====
