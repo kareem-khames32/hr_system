@@ -330,6 +330,7 @@ export default function MyRequestsPage() {
       nameAr: string
       isPaid: boolean
       balanceSource: string
+      requiredAttachment?: string | null
       isActive: boolean
     }>
   >([])
@@ -511,6 +512,11 @@ export default function MyRequestsPage() {
   const isPunchCorrection = selectedTypeDef?.code === 'PUNCH_CORRECTION'
   const isLeaveCategory = selectedTypeDef?.category === 'leaves' && !isLeaveCancel
   const isHalfDay = isLeaveCategory && leavePeriod !== 'FULL'
+  // نوع الإجازة المختار في الطلب الموحّد + المرفق الإجباري إن وُجد
+  const selectedLeaveTypeDef = isLeave
+    ? leaveTypes.find((lt) => lt.code === fieldValues.leaveType)
+    : undefined
+  const leaveAttachmentRequired = (selectedLeaveTypeDef?.requiredAttachment ?? '').trim()
 
   // إجازة يوم كامل والتاريخان محددان — حقل الأيام يعكس أيام العمل الفعلية (قراءة فقط)
   const leaveFrom = (fieldValues.fromDate ?? '').trim()
@@ -829,6 +835,15 @@ export default function MyRequestsPage() {
         payload.toDate = (fieldValues.fromDate ?? '').trim()
         payload.days = 0.5
       }
+      // مرفق إجباري لنوع الإجازة (تقرير طبي/عقد…) — يُرحّل في payload.attachmentUrl
+      const attachRef = (fieldValues.attachmentUrl ?? '').trim()
+      if (leaveAttachmentRequired && !attachRef) {
+        setSubmitError(
+          `«${selectedLeaveTypeDef?.nameAr}» تتطلب إرفاق: ${leaveAttachmentRequired}`
+        )
+        return
+      }
+      if (attachRef) payload.attachmentUrl = attachRef
     }
     if (onBehalf && !onBehalfEmployeeId) {
       setSubmitError('اختر الموظف الذي تقدّم الطلب نيابة عنه')
@@ -1632,6 +1647,56 @@ export default function MyRequestsPage() {
                         تلقائياً
                       </p>
                     )}
+                  </div>
+                )}
+
+                {/* مرفق إجباري لنوع الإجازة المختار (تقرير طبي/عقد زواج…) */}
+                {selectedType && isLeave && leaveAttachmentRequired && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      مرفق مطلوب: {leaveAttachmentRequired}{' '}
+                      <span className="text-red-500">*</span>
+                    </label>
+                    <div className="border-2 border-dashed border-gray-300 rounded-xl p-4 text-center hover:border-primary-500 transition-colors">
+                      {fieldValues.attachmentUrl ? (
+                        <div className="flex items-center justify-center gap-2 text-success-700 text-sm">
+                          <CheckCircle2 size={16} />
+                          <span className="truncate max-w-[200px]">
+                            {uploadedFiles.attachmentUrl ?? 'تم الإرفاق'}
+                          </span>
+                          <button
+                            type="button"
+                            className="text-red-500 text-xs underline"
+                            onClick={() => {
+                              setFieldValue('attachmentUrl', '')
+                              setUploadedFiles((prev) => {
+                                const next = { ...prev }
+                                delete next.attachmentUrl
+                                return next
+                              })
+                            }}
+                          >
+                            إزالة
+                          </button>
+                        </div>
+                      ) : (
+                        <label className="cursor-pointer text-sm text-primary-600 font-medium hover:underline">
+                          <input
+                            type="file"
+                            className="hidden"
+                            onChange={(e) =>
+                              handleFileUpload(
+                                'attachmentUrl',
+                                e.target.files?.[0] ?? null
+                              )
+                            }
+                          />
+                          {uploadingField === 'attachmentUrl'
+                            ? 'جارٍ الرفع...'
+                            : 'اختر ملف للإرفاق'}
+                        </label>
+                      )}
+                    </div>
                   </div>
                 )}
 

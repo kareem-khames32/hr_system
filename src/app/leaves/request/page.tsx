@@ -14,6 +14,7 @@ import {
   fetchLeaveTypes,
   fetchMyBalances,
   createRequest,
+  uploadFile,
   type ApiBalance,
 } from '@/lib/api'
 
@@ -65,10 +66,13 @@ export default function LeaveRequestPage() {
     endDate: '',
     reason: '',
     contactNumber: '',
-    attachment: null as File | null,
   })
 
   const [calculatedDays, setCalculatedDays] = useState(0)
+  // مرجع الملف المرفوع (file:N) + اسمه للعرض + حالة الرفع
+  const [attachmentRef, setAttachmentRef] = useState('')
+  const [attachmentName, setAttachmentName] = useState('')
+  const [uploading, setUploading] = useState(false)
 
   useEffect(() => {
     Promise.all([
@@ -109,6 +113,23 @@ export default function LeaveRequestPage() {
 
   const selectedLeaveType = leaveTypes.find(t => t.code === formData.leaveType)
   const selectedBalance = selectedLeaveType ? balanceFor(selectedLeaveType) : null
+  const attachmentRequired = (selectedLeaveType?.requiredAttachment ?? '').trim()
+
+  // رفع فوري للمرفق — يخزّن مرجع file:N ليُرسل في payload.attachmentUrl
+  const handleAttachment = async (file: File | null) => {
+    if (!file) return
+    setError('')
+    setUploading(true)
+    try {
+      const res = await uploadFile(file, { entityType: 'request' })
+      setAttachmentRef(res.ref)
+      setAttachmentName(res.originalName ?? file.name)
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'فشل رفع الملف')
+    } finally {
+      setUploading(false)
+    }
+  }
 
   // الإرسال لمحرك الطلبات — طلب موحّد «LEAVE» والنوع في payload.leaveType.
   // السيرفر يعيد حساب أيام العمل الفعلية ويصحّح days، والرسائل العربية تُعرض كما هي
@@ -117,6 +138,10 @@ export default function LeaveRequestPage() {
     if (!selectedLeaveType) return
     setError('')
     setSuccess('')
+    if (attachmentRequired && !attachmentRef) {
+      setError(`«${selectedLeaveType.nameAr}» تتطلب إرفاق: ${attachmentRequired}`)
+      return
+    }
     setSubmitting(true)
     try {
       const req = await createRequest('LEAVE', {
@@ -126,6 +151,7 @@ export default function LeaveRequestPage() {
         leaveType: selectedLeaveType.code,
         reason: formData.reason,
         contactNumber: formData.contactNumber,
+        ...(attachmentRef ? { attachmentUrl: attachmentRef } : {}),
       })
       setSuccess(`تم تقديم الطلب بنجاح — رقم الطلب #${req.id} وهو الآن في مسار الموافقات`)
       setFormData({
@@ -134,8 +160,9 @@ export default function LeaveRequestPage() {
         endDate: '',
         reason: '',
         contactNumber: '',
-        attachment: null,
       })
+      setAttachmentRef('')
+      setAttachmentName('')
       setCalculatedDays(0)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر تقديم الطلب')
@@ -296,20 +323,52 @@ export default function LeaveRequestPage() {
             </div>
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
-                مرفقات (اختياري)
+                {attachmentRequired ? (
+                  <>
+                    مرفق مطلوب: {attachmentRequired}{' '}
+                    <span className="text-red-500">*</span>
+                  </>
+                ) : (
+                  'مرفقات (اختياري)'
+                )}
               </label>
-              <div className="border-2 border-dashed border-gray-300 rounded-xl p-6 text-center hover:border-primary-500 transition-colors">
-                <Upload size={32} className="text-gray-400 mx-auto mb-2" />
-                <p className="text-sm text-gray-600">اسحب الملفات هنا أو</p>
-                <label className="text-primary-600 font-medium cursor-pointer hover:underline">
-                  <input
-                    type="file"
-                    className="hidden"
-                    onChange={(e) => handleChange('attachment', e.target.files?.[0] || null)}
-                  />
-                  اختر ملف
-                </label>
-                <p className="text-xs text-gray-400 mt-2">PDF, JPG, PNG (الحد الأقصى 5MB)</p>
+              <div
+                className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${
+                  attachmentRequired && !attachmentRef
+                    ? 'border-red-300 hover:border-red-500'
+                    : 'border-gray-300 hover:border-primary-500'
+                }`}
+              >
+                {attachmentRef ? (
+                  <div className="flex items-center justify-center gap-2 text-success-700">
+                    <CheckCircle2 size={18} />
+                    <span className="text-sm truncate max-w-[240px]">{attachmentName}</span>
+                    <button
+                      type="button"
+                      className="text-red-500 text-xs underline"
+                      onClick={() => {
+                        setAttachmentRef('')
+                        setAttachmentName('')
+                      }}
+                    >
+                      إزالة
+                    </button>
+                  </div>
+                ) : (
+                  <>
+                    <Upload size={32} className="text-gray-400 mx-auto mb-2" />
+                    <p className="text-sm text-gray-600">اسحب الملفات هنا أو</p>
+                    <label className="text-primary-600 font-medium cursor-pointer hover:underline">
+                      <input
+                        type="file"
+                        className="hidden"
+                        onChange={(e) => handleAttachment(e.target.files?.[0] ?? null)}
+                      />
+                      {uploading ? 'جارٍ الرفع...' : 'اختر ملف'}
+                    </label>
+                    <p className="text-xs text-gray-400 mt-2">PDF, JPG, PNG (الحد الأقصى 5MB)</p>
+                  </>
+                )}
               </div>
             </div>
           </div>

@@ -367,6 +367,15 @@ export class RequestsService {
             )
           }
         }
+        // مرفق إجباري (تقرير طبي/عقد زواج…) — يُرحّل مرجعه في payload.attachmentUrl
+        if (
+          leaveTypeDef.requiredAttachment &&
+          !String(p.attachmentUrl ?? '').trim()
+        ) {
+          throw new BadRequestException(
+            `«${leaveTypeDef.nameAr}» تتطلب إرفاق: ${leaveTypeDef.requiredAttachment}`
+          )
+        }
       }
     }
 
