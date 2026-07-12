@@ -161,16 +161,37 @@ export class DestinationsService {
     return { ref: refOf('OT', entry.id), completed: true }
   }
 
+  // اعتماد الأوفرتايم المكتشف بالبصمة (بعد مرور طلبه في السلسلة):
+  // الإدخال الموجود (BIOMETRIC_DETECTED) يُعتمد بالساعات الفعلية
+  private overtimeAutoHandler: Handler = async (em, req, _type, payload) => {
+    const repo = em.getRepository(OvertimeEntry)
+    const entry = await repo.findOne({ where: { requestId: req.id } })
+    if (!entry) {
+      return { ref: refOf('OT', req.id), completed: true, note: 'الإدخال غير موجود' }
+    }
+    const hours = Number(entry.hoursActual ?? payload.hours ?? 0)
+    entry.status = 'APPROVED'
+    entry.payableHours = hours
+    await repo.save(entry)
+    return { ref: refOf('OT', entry.id), completed: true }
+  }
+
   private punchCorrectionHandler: Handler = async (em, req, _t, payload) => {
+    // نوع البصمة (حضور/انصراف) + وقتها — يُطبَّق فعلياً على حساب اليوم
+    const type = String(payload.punchType ?? '').toUpperCase() // IN | OUT
+    const time = String(payload.time ?? payload.in ?? payload.out ?? '').trim()
+    const corrected =
+      type === 'IN'
+        ? { in: time || null, out: null }
+        : type === 'OUT'
+          ? { in: null, out: time || null }
+          : { in: payload.in ?? null, out: payload.out ?? null } // توافق قديم
     const row = await em.getRepository(AttendanceCorrection).save({
       requestId: req.id,
       employeeId: req.requesterId,
       date: String(payload.date),
       reason: String(payload.reason ?? ''),
-      correctedPunch: JSON.stringify({
-        in: payload.in ?? null,
-        out: payload.out ?? null,
-      }),
+      correctedPunch: JSON.stringify(corrected),
     })
     return { ref: refOf('AC', row.id), completed: true }
   }
@@ -566,6 +587,7 @@ export class DestinationsService {
     leave_balance_restore: this.leaveRestoreHandler,
     // حضور
     overtime_entries: this.overtimeHandler,
+    overtime_auto: this.overtimeAutoHandler,
     attendance_corrections: this.punchCorrectionHandler,
     // مالية
     loans_installments: this.loanHandler,

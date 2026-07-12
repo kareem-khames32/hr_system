@@ -149,7 +149,8 @@ export const typesSeed: TypeSeed[] = [
   // ===== 2) الحضور والوقت =====
   { code: 'PERMISSION', nameAr: 'استئذان', category: 'time_attendance', chain: 'CHAIN_MANAGER', handler: 'attendance_log', requiredFields: ['date', 'from', 'to'], phase: 'P1' },
   { code: 'OVERTIME', nameAr: 'عمل إضافي', category: 'time_attendance', chain: 'CHAIN_MANAGER', handler: 'overtime_entries', requiredFields: ['date', 'hours'], phase: 'P1' },
-  { code: 'PUNCH_CORRECTION', nameAr: 'تصحيح بصمة', category: 'time_attendance', chain: 'CHAIN_MANAGER', handler: 'attendance_corrections', requiredFields: ['date', 'reason'], phase: 'P1' },
+  { code: 'OVERTIME_AUTO', nameAr: 'عمل إضافي مكتشف (بصمة)', category: 'time_attendance', chain: 'CHAIN_MANAGER', handler: 'overtime_auto', requiredFields: [], phase: 'P2' },
+  { code: 'PUNCH_CORRECTION', nameAr: 'تصحيح/طلب بصمة', category: 'time_attendance', chain: 'CHAIN_MANAGER', handler: 'attendance_corrections', requiredFields: ['date', 'punchType', 'time', 'reason'], phase: 'P1' },
   { code: 'SHIFT_SWAP', nameAr: 'تبديل وردية', category: 'time_attendance', chain: 'CHAIN_MANAGER', handler: 'shift_schedule', requiredFields: ['date', 'withEmployeeId'], phase: 'P3' },
   { code: 'REMOTE_WORK', nameAr: 'عمل عن بُعد', category: 'time_attendance', chain: 'CHAIN_MANAGER', handler: 'attendance_log', requiredFields: ['fromDate', 'toDate'], phase: 'P2' },
   { code: 'BUSINESS_TRIP', nameAr: 'مأمورية/انتداب', category: 'time_attendance', chain: 'CHAIN_MANAGER_HR', handler: 'attendance_trips', requiredFields: ['fromDate', 'toDate', 'destination'], phase: 'P2' },

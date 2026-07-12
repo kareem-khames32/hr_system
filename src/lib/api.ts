@@ -255,6 +255,9 @@ export const createRequest = (typeCode: string, payload: Record<string, unknown>
 export const actOnRequest = (id: number, action: 'APPROVE' | 'REJECT' | 'RETURN', comment?: string) =>
   post<ApiRequest>(`/requests/${id}/act`, { action, comment })
 export const cancelRequest = (id: number) => post<ApiRequest>(`/requests/${id}/cancel`)
+// توجيه الأوفرتايم المكتشف لسلسلة اعتماده يدوياً (الـ cron يشغّله تلقائياً)
+export const reconcileOvertime = () =>
+  post<{ routed: number }>('/requests/engine/reconcile-overtime')
 export const resubmitRequest = (id: number, payload?: Record<string, unknown>) =>
   post<ApiRequest>(`/requests/${id}/resubmit`, { payload })
 

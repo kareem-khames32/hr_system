@@ -79,6 +79,13 @@ export class Leave {
 
   @Column({ length: 30 })
   status: string // APPROVED | CANCELLED
+
+  // إلغاء مباشر من الموارد البشرية — لاشتقاق إشعار للموظف
+  @Column({ nullable: true })
+  revokedByUserId: number
+
+  @Column({ type: 'datetime', nullable: true })
+  revokedAt: Date
 }
 
 @Entity('leave_balances')

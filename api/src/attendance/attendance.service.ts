@@ -6,13 +6,13 @@ import {
   UnauthorizedException,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Between, In, Repository } from 'typeorm'
+import { Between, In, IsNull, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
 import { PublicHoliday } from '../assets/assets.entities'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
-import { OvertimeEntry } from '../requests/entities/attendance.entities'
+import { AttendanceCorrection, OvertimeEntry } from '../requests/entities/attendance.entities'
 import { Leave } from '../requests/entities/leave.entities'
 import { Request } from '../requests/entities/request.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
@@ -68,6 +68,8 @@ export class AttendanceService {
     private readonly employees: Repository<Employee>,
     @InjectRepository(OvertimeEntry)
     private readonly overtime: Repository<OvertimeEntry>,
+    @InjectRepository(AttendanceCorrection)
+    private readonly corrections: Repository<AttendanceCorrection>,
     @InjectRepository(RequestsConfig)
     private readonly config: Repository<RequestsConfig>,
     @InjectRepository(Leave)
@@ -348,10 +350,28 @@ export class AttendanceService {
     const shift = await this.shiftFor(employeeId, date)
     const grace = Number(await this.configValue('attendance.grace_minutes', '10'))
 
-    const checkIn = punches.length > 0 ? hhmmOf(punches[0].punchTime) : null
-    // بصمة واحدة فقط = دخول بلا انصراف
+    // كل لحظات البصمة لليوم: الفعلية + أي بصمة مطلوبة معتمدة (طلب «تصحيح/طلب
+    // بصمة» — وجودها = معتمدة، تُكتب فقط بعد اكتمال الطلب). الأقدم = حضور،
+    // الأحدث = انصراف — يعالج «نسي بصمة الحضور/الانصراف» بأمان
+    const instants = punches.map((p) => hhmmOf(p.punchTime))
+    const corrections = await this.corrections.find({
+      where: { employeeId, date },
+      order: { id: 'ASC' },
+    })
+    for (const c of corrections) {
+      try {
+        const cp = JSON.parse(c.correctedPunch ?? '{}')
+        if (cp.in) instants.push(String(cp.in).slice(0, 5))
+        if (cp.out) instants.push(String(cp.out).slice(0, 5))
+      } catch {
+        /* تجاهل تصحيحاً تالفاً */
+      }
+    }
+    instants.sort()
+    const checkIn = instants.length > 0 ? instants[0] : null
+    // بصمة/لحظة واحدة فقط = دخول بلا انصراف
     const checkOut =
-      punches.length > 1 ? hhmmOf(punches[punches.length - 1].punchTime) : null
+      instants.length > 1 ? instants[instants.length - 1] : null
 
     // الإجازات المعتمدة المغطية لليوم: يوم كامل ← 'leave'،
     // نصف يوم ← نافذة تغطية (النصف الأول أو الثاني من الوردية)
@@ -482,6 +502,12 @@ export class AttendanceService {
     shift: { end: string },
     checkOut: string
   ) {
+    // كنترول الموارد البشرية: فتح/قفل احتساب الأوفرتايم كلياً
+    // (مقفول → لا يُكتشف ولا يُحتسب مهما فضل الموظف)
+    const otEnabled =
+      (await this.configValue('overtime.enabled', 'true')) === 'true'
+    if (!otEnabled) return
+
     const extraMinutes = toMinutes(checkOut) - toMinutes(shift.end)
     const actualHours = Math.round((extraMinutes / 60) * 100) / 100
     const threshold = Number(
@@ -631,8 +657,9 @@ export class AttendanceService {
 
   // الأوفرتايم المكتشف بانتظار تأكيد المدير
   async pendingOvertime(user: JwtPayload) {
+    // المكتشف بلا طلب فقط — اللي اتوجّه لسلسلة اعتماد (requestId) يُعتمد هناك
     const rows = await this.overtime.find({
-      where: { status: 'DETECTED' },
+      where: { status: 'DETECTED', requestId: IsNull() },
       order: { date: 'DESC' },
     })
     const scope = branchScopeOf(user)

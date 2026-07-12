@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
-import { fetchConfig } from '@/lib/api'
+import { fetchConfig, updateConfig } from '@/lib/api'
 import {
   Calendar,
   Plus,
@@ -30,6 +30,11 @@ import {
   Search,
   User,
 } from 'lucide-react'
+
+// مفاتيح إعدادات العمل الإضافي (الأوفرتايم) — config حقيقي يُدار عبر updateConfig
+const OVERTIME_ENABLED_KEY = 'overtime.enabled'
+const OVERTIME_THRESHOLD_KEY = 'overtime.detection_threshold_hours'
+const OVERTIME_CONFIRM_KEY = 'overtime.biometric_requires_confirmation'
 
 // أيام الأسبوع
 const weekDays = [
@@ -208,12 +213,23 @@ export default function WorkDaysSettingsPage() {
   const [config, setConfig] = useState<Array<{ key: string; value: string }>>([])
   const [configLoading, setConfigLoading] = useState(true)
   const [configError, setConfigError] = useState<string | null>(null)
+  // العمل الإضافي (الأوفرتايم) — قيم config قابلة للتعديل + حالة الحفظ
+  const [otValues, setOtValues] = useState<Record<string, string>>({})
+  const [otSaving, setOtSaving] = useState(false)
+  const [otSaved, setOtSaved] = useState(false)
+  const [otError, setOtError] = useState<string | null>(null)
 
   useEffect(() => {
     const loadConfig = async () => {
       try {
         const cfg = await fetchConfig()
         setConfig(cfg)
+        // تعبئة قيم الأوفرتايم القابلة للتعديل من الخادم
+        const otMap: Record<string, string> = {}
+        for (const k of [OVERTIME_ENABLED_KEY, OVERTIME_THRESHOLD_KEY, OVERTIME_CONFIRM_KEY]) {
+          otMap[k] = cfg.find((c) => c.key === k)?.value ?? ''
+        }
+        setOtValues(otMap)
         setConfigError(null)
       } catch (err: any) {
         setConfigError(err.message)
@@ -225,6 +241,43 @@ export default function WorkDaysSettingsPage() {
   }, [])
 
   const configValue = (key: string) => config.find((c) => c.key === key)?.value
+
+  // تعديل قيمة أوفرتايم محلياً (يمسح شارة «تم الحفظ»)
+  const setOtValue = (key: string, value: string) => {
+    setOtSaved(false)
+    setOtValues((prev) => ({ ...prev, [key]: value }))
+  }
+
+  // حفظ إعدادات الأوفرتايم — نفس نمط updateConfig المعتمد في بقية الإعدادات
+  const saveOvertime = async () => {
+    setOtSaving(true)
+    setOtSaved(false)
+    setOtError(null)
+    try {
+      await updateConfig(OVERTIME_ENABLED_KEY, otValues[OVERTIME_ENABLED_KEY] ?? 'false')
+      await updateConfig(OVERTIME_THRESHOLD_KEY, otValues[OVERTIME_THRESHOLD_KEY] ?? '0')
+      await updateConfig(OVERTIME_CONFIRM_KEY, otValues[OVERTIME_CONFIRM_KEY] ?? 'false')
+      // مزامنة العرض المحلي مع ما حُفِظ
+      setConfig((prev) => {
+        const next = [...prev]
+        for (const k of [OVERTIME_ENABLED_KEY, OVERTIME_THRESHOLD_KEY, OVERTIME_CONFIRM_KEY]) {
+          const i = next.findIndex((c) => c.key === k)
+          const value = otValues[k] ?? ''
+          if (i >= 0) next[i] = { key: k, value }
+          else next.push({ key: k, value })
+        }
+        return next
+      })
+      setOtSaved(true)
+    } catch (err: any) {
+      setOtError(err.message)
+    } finally {
+      setOtSaving(false)
+    }
+  }
+
+  const otEnabled = (otValues[OVERTIME_ENABLED_KEY] ?? '') === 'true'
+  const otConfirm = (otValues[OVERTIME_CONFIRM_KEY] ?? '') === 'true'
   const [showAddSchedule, setShowAddSchedule] = useState(false)
   const [showEditSchedule, setShowEditSchedule] = useState(false)
   const [showAddRule, setShowAddRule] = useState(false)
@@ -469,6 +522,7 @@ export default function WorkDaysSettingsPage() {
           </div>
         ) : (
           !configError && (
+            <>
             <div className="card">
               <div className="flex items-center gap-3 mb-4">
                 <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
@@ -500,6 +554,136 @@ export default function WorkDaysSettingsPage() {
                 </div>
               </div>
             </div>
+
+            {/* العمل الإضافي (الأوفرتايم) — تحكّم HR الفعلي عبر config */}
+            <div className="card">
+              <div className="flex items-center justify-between mb-4">
+                <div className="flex items-center gap-3">
+                  <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
+                    <Clock size={20} className="text-amber-600" />
+                  </div>
+                  <div>
+                    <h2 className="text-lg font-bold text-gray-800">
+                      العمل الإضافي (الأوفرتايم)
+                    </h2>
+                    <p className="text-sm text-gray-500">
+                      تحكّم الموارد البشرية في فتح/إغلاق احتساب الأوفرتايم وشروطه
+                    </p>
+                  </div>
+                </div>
+                <div className="flex items-center gap-3">
+                  {otSaved && (
+                    <span className="flex items-center gap-1 text-sm text-success-600">
+                      <CheckCircle size={16} />
+                      تم الحفظ
+                    </span>
+                  )}
+                  <button
+                    onClick={saveOvertime}
+                    disabled={otSaving}
+                    className="btn-primary flex items-center gap-2 text-sm py-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  >
+                    <Save size={16} />
+                    {otSaving ? 'جارٍ الحفظ...' : 'حفظ'}
+                  </button>
+                </div>
+              </div>
+
+              {otError && (
+                <div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-4">
+                  {otError}
+                </div>
+              )}
+
+              <div className="space-y-4">
+                {/* المفتاح الرئيسي: فتح/إغلاق احتساب الأوفرتايم */}
+                <div className="p-4 bg-gray-50 rounded-xl">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="font-medium text-gray-800">احتساب الأوفرتايم مفعّل</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        المفتاح الرئيسي لفتح أو إغلاق احتساب العمل الإضافي بالكامل
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOtValue(OVERTIME_ENABLED_KEY, otEnabled ? 'false' : 'true')
+                      }
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors shrink-0 ${
+                        otEnabled
+                          ? 'bg-success-50 text-success-600 hover:bg-success-100'
+                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      }`}
+                    >
+                      {otEnabled ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
+                      {otEnabled ? 'مفعّل' : 'مقفول'}
+                    </button>
+                  </div>
+                  {!otEnabled && (
+                    <p className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-3">
+                      <AlertCircle size={14} className="shrink-0" />
+                      الأوفرتايم مقفول — لن يُحتسب أي عمل إضافي مهما بقي الموظف
+                    </p>
+                  )}
+                </div>
+
+                {/* الحد الأدنى للاحتساب بالساعات */}
+                <div className="p-4 bg-gray-50 rounded-xl">
+                  <label className="block font-medium text-gray-800 mb-2">
+                    الحد الأدنى للاحتساب (ساعات)
+                  </label>
+                  <input
+                    type="number"
+                    step="0.25"
+                    min="0"
+                    dir="ltr"
+                    className="input w-40"
+                    value={otValues[OVERTIME_THRESHOLD_KEY] ?? ''}
+                    onChange={(e) => setOtValue(OVERTIME_THRESHOLD_KEY, e.target.value)}
+                  />
+                  <p className="text-xs text-gray-500 mt-2">
+                    لا يُحتسب أوفرتايم إلا بعد تجاوز هذه المدة بعد نهاية الوردية
+                  </p>
+                </div>
+
+                {/* يتطلب تأكيد/اعتماد قبل الاحتساب */}
+                <div className="p-4 bg-gray-50 rounded-xl">
+                  <div className="flex items-center justify-between gap-4">
+                    <div>
+                      <p className="font-medium text-gray-800">يتطلب تأكيد/اعتماد</p>
+                      <p className="text-xs text-gray-500 mt-0.5">
+                        إن كان مفعّلاً: الأوفرتايم المكتشف يمر على اعتماد قبل احتسابه
+                      </p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() =>
+                        setOtValue(OVERTIME_CONFIRM_KEY, otConfirm ? 'false' : 'true')
+                      }
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors shrink-0 ${
+                        otConfirm
+                          ? 'bg-success-50 text-success-600 hover:bg-success-100'
+                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      }`}
+                    >
+                      {otConfirm ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
+                      {otConfirm ? 'مطلوب' : 'غير مطلوب'}
+                    </button>
+                  </div>
+                </div>
+
+                {/* إرشاد سلسلة الاعتماد */}
+                <div className="p-4 bg-blue-50 rounded-xl flex items-start gap-3">
+                  <Info size={18} className="text-blue-500 mt-0.5 shrink-0" />
+                  <p className="text-sm text-blue-700">
+                    لتحديد مَن يعتمد الأوفرتايم المكتشف: افتح «سلاسل الاعتماد» واضبط معتمدي
+                    «عمل إضافي مكتشف (بصمة)».
+                  </p>
+                </div>
+              </div>
+            </div>
+            </>
           )
         )}
 

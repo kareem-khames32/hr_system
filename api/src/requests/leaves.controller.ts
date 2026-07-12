@@ -83,6 +83,8 @@ export class LeavesController {
 
     await this.ds.transaction(async (em) => {
       leave.status = 'CANCELLED'
+      leave.revokedByUserId = user.sub
+      leave.revokedAt = new Date()
       await em.getRepository(Leave).save(leave)
       const lt = await em.getRepository(LeaveType).findOne({
         where: { code: leave.leaveType },

@@ -19,6 +19,7 @@ import {
   Paperclip,
   Package,
   AlertTriangle,
+  Info,
 } from 'lucide-react'
 import {
   getTypeByCode,
@@ -93,6 +94,8 @@ const roleLabels: Record<string, string> = {
 
 const fieldLabels: Record<string, string> = {
   date: 'التاريخ',
+  punchType: 'نوع البصمة',
+  time: 'الوقت',
   fromDate: 'من تاريخ',
   toDate: 'إلى تاريخ',
   effectiveDate: 'تاريخ السريان',
@@ -464,6 +467,8 @@ export default function MyRequestsPage() {
   const isPermission = selectedTypeDef?.code === 'PERMISSION'
   // إلغاء/تعديل إجازة — منتقي الإجازة المعتمدة بدل الحقول العامة ونطاق اليوم
   const isLeaveCancel = selectedTypeDef?.code === 'LEAVE_MODIFY_CANCEL'
+  // تصحيح/طلب بصمة — تلميح تعبئة البصمة الناقصة (النموذج يُبنى بالحقول العامة/المخصّصة)
+  const isPunchCorrection = selectedTypeDef?.code === 'PUNCH_CORRECTION'
   const isLeaveCategory = selectedTypeDef?.category === 'leaves' && !isLeaveCancel
   const isHalfDay = isLeaveCategory && leavePeriod !== 'FULL'
 
@@ -585,6 +590,27 @@ export default function MyRequestsPage() {
         </select>
       )
     }
+    if (key === 'punchType')
+      return (
+        <select
+          className="input w-full"
+          value={fieldValues[key] ?? ''}
+          onChange={(e) => setFieldValue(key, e.target.value)}
+        >
+          <option value="">— اختر نوع البصمة —</option>
+          <option value="IN">بصمة حضور</option>
+          <option value="OUT">بصمة انصراف</option>
+        </select>
+      )
+    if (key === 'time')
+      return (
+        <input
+          type="time"
+          className="input w-full"
+          value={fieldValues[key] ?? ''}
+          onChange={(e) => setFieldValue(key, e.target.value)}
+        />
+      )
     return null
   }
 
@@ -1164,6 +1190,17 @@ export default function MyRequestsPage() {
                     </div>
                   )}
                 </div>
+
+                {/* تصحيح/طلب بصمة: تلميح تعبئة البصمة الناقصة */}
+                {selectedType && isPunchCorrection && (
+                  <div className="flex items-start gap-2 text-xs text-blue-700 bg-blue-50 rounded-xl px-3 py-2.5">
+                    <Info size={14} className="shrink-0 mt-0.5" />
+                    <span>
+                      حدد البصمة الناقصة (حضور أو انصراف) ووقتها — بعد الاعتماد
+                      تُطبَّق على يومك تلقائياً
+                    </span>
+                  </div>
+                )}
 
                 {/* طلب عهدة: اختيار أصول متعددة من المتاح فقط */}
                 {selectedType && isCustodyRequest && (

@@ -225,4 +225,11 @@ export class RequestsController {
   runScheduledTransfers() {
     return this.service.runScheduledTransfers()
   }
+
+  // توجيه الأوفرتايم المكتشف لسلسلته يدوياً (الـ cron يشغّله كل 3 دقائق)
+  @Perm('attendance.manage', 'overtime.confirm')
+  @Post('engine/reconcile-overtime')
+  reconcileOvertime() {
+    return this.service.reconcileAutoOvertime()
+  }
 }

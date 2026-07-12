@@ -1,6 +1,6 @@
 import { Controller, Get, Query, UseGuards } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Between, In, MoreThanOrEqual, Repository } from 'typeorm'
+import { Between, In, IsNull, MoreThanOrEqual, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
 import { AttendanceDay } from '../attendance/attendance.entities'
@@ -120,6 +120,28 @@ export class PortalController {
             link: '/requests',
           })
         }
+      }
+
+      // 1ب) إجازة أُلغيت من الموارد البشرية (إلغاء مباشر — بلا طلب)
+      const revoked = await this.leaves.find({
+        where: {
+          employeeId: user.employeeId,
+          status: 'CANCELLED',
+          revokedByUserId: Not(IsNull()),
+        },
+        order: { revokedAt: 'DESC' },
+        take: 10,
+      })
+      for (const lv of revoked) {
+        if (!lv.revokedAt) continue
+        items.push({
+          id: `leave-revoked-${lv.id}`,
+          kind: 'warning',
+          title: 'أُلغيت إجازتك',
+          body: `تم إلغاء إجازتك (${lv.fromDate} إلى ${lv.toDate}) بمعرفة الموارد البشرية — أُعيد رصيدك`,
+          at: lv.revokedAt,
+          link: '/my/leaves',
+        })
       }
     }
 

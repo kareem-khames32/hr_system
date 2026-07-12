@@ -243,6 +243,7 @@ const AVAILABLE_HANDLERS: Array<{ key: string; labelAr: string }> = [
   { key: 'letter_pdf_generator', labelAr: 'خطاب PDF' },
   { key: 'custody_assignments_ack', labelAr: 'عهدة بتأكيد استلام' },
   { key: 'custody_transfer', labelAr: 'نقل عهدة لموظف آخر' },
+  { key: 'overtime_auto', labelAr: 'اعتماد أوفرتايم مكتشف بالبصمة' },
   { key: 'employee_status', labelAr: 'تغيير حالة وظيفية (استقالة/تقاعد)' },
 ]
 

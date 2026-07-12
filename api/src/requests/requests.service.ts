@@ -5,6 +5,7 @@ import {
   Logger,
   NotFoundException,
 } from '@nestjs/common'
+import { Cron } from '@nestjs/schedule'
 import { InjectRepository } from '@nestjs/typeorm'
 import { DataSource, In, IsNull, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
@@ -12,6 +13,7 @@ import { branchScopeOf } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { PermissionType } from '../attendance/attendance.entities'
 import { AttendanceService } from '../attendance/attendance.service'
+import { OvertimeEntry } from './entities/attendance.entities'
 import { ApproverResolver, ResolvedStep } from './approver-resolver.service'
 import { DestinationsService } from './destinations.service'
 import { LeaveBalancesService } from './leave-balances.service'
@@ -50,7 +52,9 @@ export class RequestsService {
     @InjectRepository(RequestApproval)
     private readonly approvals: Repository<RequestApproval>,
     @InjectRepository(Employee)
-    private readonly employees: Repository<Employee>
+    private readonly employees: Repository<Employee>,
+    @InjectRepository(OvertimeEntry)
+    private readonly overtimeEntries: Repository<OvertimeEntry>
   ) {}
 
   // ===== الكتالوج — مفلتر بجمهور كل نوع (visible_to) =====
@@ -591,6 +595,9 @@ export class RequestsService {
         }
       } else if (isPermission && payload.date) {
         await this.attendance.computeDay(saved.requesterId, String(payload.date))
+      } else if (saved.typeCode === 'PUNCH_CORRECTION' && payload.date) {
+        // تصحيح بصمة معتمد → يُطبَّق على اليوم فوراً
+        await this.attendance.computeDay(saved.requesterId, String(payload.date))
       }
     } catch {
       /* إعادة الحساب best-effort — اليوم يتصحح مع أي بصمة/recompute */
@@ -838,6 +845,82 @@ export class RequestsService {
       order: { actedAt: 'ASC' },
     })
     return { ...req, approvals }
+  }
+
+  // ===== توجيه الأوفرتايم المكتشف بالبصمة لسلسلة اعتماده =====
+  // كل إدخال مكتشف بلا طلب → طلب OVERTIME_AUTO يمشي في السلسلة اللي
+  // ضبطها المالك. لا يُوجَّه إلا لو السلسلة مضبوطة (خطوات/تنفيذ فوري)،
+  // وإلا يبقى DETECTED للتأكيد اليدوي بصلاحية overtime.confirm.
+  @Cron('45 */3 * * * *')
+  async reconcileAutoOvertime() {
+    const type = await this.types.findOne({ where: { code: 'OVERTIME_AUTO' } })
+    if (!type || !type.isActive || !type.approvalChainId) return { routed: 0 }
+    const chain = await this.chains.findOne({
+      where: { id: type.approvalChainId },
+    })
+    if (!chain) return { routed: 0 }
+    const stepCount = await this.steps.count({ where: { chainId: chain.id } })
+    if (stepCount === 0 && !chain.autoApprove) return { routed: 0 }
+
+    const pending = await this.overtimeEntries.find({
+      where: {
+        source: 'BIOMETRIC_DETECTED',
+        status: 'DETECTED',
+        requestId: IsNull(),
+      },
+      take: 100,
+    })
+    let routed = 0
+    for (const entry of pending) {
+      const emp = await this.employees.findOne({
+        where: { id: entry.employeeId },
+      })
+      if (!emp) continue
+      let req = await this.requests.save(
+        this.requests.create({
+          typeCode: 'OVERTIME_AUTO',
+          requesterId: entry.employeeId,
+          branchId: emp.branchId,
+          payload: JSON.stringify({
+            date: entry.date,
+            hours: Number(entry.hoursActual ?? 0),
+            autoDetected: true,
+          }),
+          status: 'DRAFT',
+        })
+      )
+      entry.requestId = req.id
+      entry.status = 'SUBMITTED'
+      await this.overtimeEntries.save(entry)
+
+      const { steps: resolved, chain: usedChain } = await this.resolveChain(
+        type,
+        req
+      )
+      req.resolvedSteps = JSON.stringify(resolved)
+      req.submittedAt = new Date()
+      if (resolved.length === 0) {
+        if (usedChain?.autoApprove) {
+          req.status = 'APPROVED'
+          await this.requests.save(req)
+          await this.executeDestination(req.id)
+        } else {
+          // لا خطوات ولا تنفيذ فوري — رجّع للمعالجة اليدوية
+          entry.requestId = null as any
+          entry.status = 'DETECTED'
+          await this.overtimeEntries.save(entry)
+          await this.requests.remove(req)
+          continue
+        }
+      } else {
+        req.status = 'UNDER_REVIEW'
+        req.currentStep = resolved[0].stepOrder
+        await this.requests.save(req)
+      }
+      routed++
+    }
+    if (routed > 0) this.logger.log(`وُجّه ${routed} أوفرتايم مكتشف للسلسلة`)
+    return { routed }
   }
 
   // ===== محرك التصعيد: خطوة تجاوزت SLA تتصعّد للدور المحدد =====
