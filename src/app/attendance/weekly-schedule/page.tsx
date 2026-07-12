@@ -33,12 +33,16 @@ import {
   upsertWeekSchedule,
   fetchEmployees,
   fetchDepartments,
+  fetchBranches,
+  fetchTeams,
   fetchWeekDayOverrides,
   setDayShiftOverride,
   fetchWorkingDays,
   fetchScheduleRules,
   type ApiEmployee,
   type ApiDepartment,
+  type ApiBranch,
+  type ApiTeam,
   type ApiScheduleRule,
 } from '@/lib/api'
 
@@ -72,6 +76,10 @@ interface EmployeeRow {
   department: string
   avatar: string
   position: string
+  // معرّفات النطاق — للتعيين الجماعي حسب فريق/قسم/فرع
+  departmentId?: number
+  branchId?: number | null
+  teamId?: number
 }
 
 // الورديات المتاحة
@@ -210,6 +218,8 @@ const templates = [
 export default function WeeklySchedulePage() {
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [departmentsList, setDepartmentsList] = useState<ApiDepartment[]>([])
+  const [branchesList, setBranchesList] = useState<ApiBranch[]>([])
+  const [teamsList, setTeamsList] = useState<ApiTeam[]>([])
   // وردية الأسبوع لكل موظف — من weekly_schedule_entries في السيرفر
   const [assignments, setAssignments] = useState<Record<number, Shift>>({})
   // تجاوزات الأيام الخاصة — مفتاحها "employeeId|date"
@@ -243,7 +253,7 @@ export default function WeeklySchedulePage() {
 
   const currentKey = weekKeyOf(currentWeekStart)
 
-  // الموظفون والأقسام — مرة واحدة
+  // الموظفون والأقسام والفروع والفرق — مرة واحدة (للتعيين الجماعي بالنطاق)
   useEffect(() => {
     Promise.all([fetchEmployees(), fetchDepartments()])
       .then(([emps, deps]) => {
@@ -251,6 +261,9 @@ export default function WeeklySchedulePage() {
         setDepartmentsList(deps)
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل الموظفين'))
+    // الفروع والفرق — اختيارية لنطاق التعيين؛ تُتجاهَل بصمت لو فشلت
+    fetchBranches().then(setBranchesList).catch(() => setBranchesList([]))
+    fetchTeams().then(setTeamsList).catch(() => setTeamsList([]))
     // قواعد الاستثناء — اختيارية للتمييز؛ تُتجاهَل بصمت لو فشلت
     fetchScheduleRules()
       .then(setScheduleRules)
@@ -318,6 +331,9 @@ export default function WeeklySchedulePage() {
     department: depName(e.departmentId),
     avatar: e.fullName.charAt(0),
     position: e.jobTitle ?? '-',
+    departmentId: e.departmentId,
+    branchId: e.branchId,
+    teamId: e.teamId,
   }))
 
   // وردية الموظف الفعلية لهذا الأسبوع
@@ -1089,6 +1105,10 @@ export default function WeeklySchedulePage() {
         {showBulkAssign && (
           <BulkAssignModal
             employees={filteredRows}
+            allEmployees={rows}
+            departments={departmentsList}
+            branches={branchesList}
+            teams={teamsList}
             selectedEmployees={selectedEmployees}
             shifts={assignableShifts}
             weekDays={weekDays}
@@ -1281,9 +1301,23 @@ function DayOverrideModal({
   )
 }
 
+// نطاق التعيين الجماعي
+type AssignScope = 'individual' | 'team' | 'department' | 'branch' | 'company'
+const SCOPE_LABELS: { key: AssignScope; label: string }[] = [
+  { key: 'individual', label: 'موظف محدد' },
+  { key: 'team', label: 'فريق' },
+  { key: 'department', label: 'قسم' },
+  { key: 'branch', label: 'فرع' },
+  { key: 'company', label: 'الشركة كلها' },
+]
+
 // Modal التعيين الجماعي
 function BulkAssignModal({
   employees,
+  allEmployees,
+  departments,
+  branches,
+  teams,
   selectedEmployees: initialSelected,
   shifts,
   weekDays,
@@ -1291,6 +1325,10 @@ function BulkAssignModal({
   onAssign,
 }: {
   employees: EmployeeRow[]
+  allEmployees: EmployeeRow[]
+  departments: ApiDepartment[]
+  branches: ApiBranch[]
+  teams: ApiTeam[]
   selectedEmployees: number[]
   shifts: Shift[]
   weekDays: { key: string; name: string }[]
@@ -1300,6 +1338,9 @@ function BulkAssignModal({
   const [selectedEmps, setSelectedEmps] = useState<number[]>(initialSelected)
   const [selectedDays, setSelectedDays] = useState<string[]>([])
   const [selectedShift, setSelectedShift] = useState('')
+  // النطاق: فرد (بالتحديد) أو فريق/قسم/فرع (بمعرّف) أو الشركة كلها
+  const [scope, setScope] = useState<AssignScope>('individual')
+  const [scopeId, setScopeId] = useState<number | ''>('')
 
   const toggleEmployee = (empId: number) => {
     setSelectedEmps(prev =>
@@ -1313,12 +1354,40 @@ function BulkAssignModal({
     )
   }
 
+  // الموظفون المستهدفون فعلياً حسب النطاق المختار (من كل الموظفين لا المفلترين)
+  const targetEmps: number[] =
+    scope === 'individual'
+      ? selectedEmps
+      : scope === 'company'
+        ? allEmployees.map((e) => e.id)
+        : scopeId === ''
+          ? []
+          : allEmployees
+              .filter((e) =>
+                scope === 'team'
+                  ? e.teamId === scopeId
+                  : scope === 'department'
+                    ? e.departmentId === scopeId
+                    : e.branchId === scopeId
+              )
+              .map((e) => e.id)
+
+  // قائمة خيارات القائمة المنسدلة حسب النطاق
+  const scopeOptions =
+    scope === 'team'
+      ? teams.map((t) => ({ id: t.id, name: t.name }))
+      : scope === 'department'
+        ? departments.map((d) => ({ id: d.id, name: d.name }))
+        : scope === 'branch'
+          ? branches.map((b) => ({ id: b.id, name: b.name }))
+          : []
+
   const handleAssign = () => {
-    if (selectedEmps.length === 0 || !selectedShift) {
-      alert('الرجاء اختيار الموظفين والوردية')
+    if (targetEmps.length === 0 || !selectedShift) {
+      alert('اختر النطاق (أو الموظفين) والوردية')
       return
     }
-    onAssign(selectedEmps, selectedDays, selectedShift)
+    onAssign(targetEmps, selectedDays, selectedShift)
   }
 
   return (
@@ -1335,31 +1404,100 @@ function BulkAssignModal({
         </div>
 
         <div className="p-6 space-y-6 overflow-y-auto flex-1">
-          {/* اختيار الموظفين */}
+          {/* نطاق التعيين — موظف / فريق / قسم / فرع / الشركة كلها */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-3">
-              الموظفين ({selectedEmps.length} محدد)
+              نطاق التعيين
             </label>
-            <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-xl p-2 space-y-1">
-              {employees.map(emp => (
-                <label
-                  key={emp.id}
-                  className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors ${
-                    selectedEmps.includes(emp.id) ? 'bg-primary-50' : 'hover:bg-gray-50'
+            <div className="flex gap-2 flex-wrap">
+              {SCOPE_LABELS.map((s) => (
+                <button
+                  key={s.key}
+                  onClick={() => {
+                    setScope(s.key)
+                    setScopeId('')
+                  }}
+                  className={`px-4 py-2 rounded-lg text-sm transition-all ${
+                    scope === s.key
+                      ? 'bg-primary-500 text-white'
+                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                 >
-                  <input
-                    type="checkbox"
-                    checked={selectedEmps.includes(emp.id)}
-                    onChange={() => toggleEmployee(emp.id)}
-                    className="w-4 h-4 rounded border-gray-300"
-                  />
-                  <span className="text-sm text-gray-700">{emp.employeeName}</span>
-                  <span className="text-xs text-gray-400">{emp.department}</span>
-                </label>
+                  {s.label}
+                </button>
               ))}
             </div>
           </div>
+
+          {/* الاختيار حسب النطاق */}
+          {scope === 'individual' ? (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-3">
+                الموظفين ({selectedEmps.length} محدد)
+              </label>
+              <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-xl p-2 space-y-1">
+                {employees.length === 0 && (
+                  <p className="text-sm text-gray-400 text-center py-3">
+                    لا موظفين مطابقين للفلتر الحالي
+                  </p>
+                )}
+                {employees.map(emp => (
+                  <label
+                    key={emp.id}
+                    className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors ${
+                      selectedEmps.includes(emp.id) ? 'bg-primary-50' : 'hover:bg-gray-50'
+                    }`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedEmps.includes(emp.id)}
+                      onChange={() => toggleEmployee(emp.id)}
+                      className="w-4 h-4 rounded border-gray-300"
+                    />
+                    <span className="text-sm text-gray-700">{emp.employeeName}</span>
+                    <span className="text-xs text-gray-400">{emp.department}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+          ) : scope === 'company' ? (
+            <div className="bg-primary-50 border border-primary-100 rounded-xl p-4 text-sm text-primary-800">
+              سيُطبَّق على <span className="font-bold">كل موظفي الشركة</span> —{' '}
+              {targetEmps.length} موظف.
+            </div>
+          ) : (
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-3">
+                {scope === 'team' ? 'اختر الفريق' : scope === 'department' ? 'اختر القسم' : 'اختر الفرع'}
+              </label>
+              <select
+                className="input w-full"
+                value={scopeId === '' ? '' : String(scopeId)}
+                onChange={(e) =>
+                  setScopeId(e.target.value === '' ? '' : Number(e.target.value))
+                }
+              >
+                <option value="">
+                  — {scope === 'team' ? 'الفريق' : scope === 'department' ? 'القسم' : 'الفرع'} —
+                </option>
+                {scopeOptions.map((o) => (
+                  <option key={o.id} value={o.id}>
+                    {o.name}
+                  </option>
+                ))}
+              </select>
+              {scopeOptions.length === 0 && (
+                <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-1.5">
+                  لا توجد عناصر لهذا النطاق
+                </p>
+              )}
+              {scopeId !== '' && (
+                <p className="text-xs text-gray-500 mt-1.5">
+                  ينطبق على {targetEmps.length} موظف
+                </p>
+              )}
+            </div>
+          )}
 
           {/* اختيار الأيام — الوردية تُطبَّق على الأسبوع كاملاً في السيرفر */}
           <div>
@@ -1410,10 +1548,10 @@ function BulkAssignModal({
         <div className="p-4 border-t border-gray-100 flex gap-3">
           <button
             onClick={handleAssign}
-            disabled={selectedEmps.length === 0 || !selectedShift}
+            disabled={targetEmps.length === 0 || !selectedShift}
             className="flex-1 btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            تطبيق ({selectedEmps.length} موظف)
+            تطبيق ({targetEmps.length} موظف)
           </button>
           <button onClick={onClose} className="flex-1 btn-secondary">
             إلغاء
