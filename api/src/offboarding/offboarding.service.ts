@@ -257,8 +257,28 @@ export class OffboardingService {
         0,
         Number(annual.taken) - Number(annual.openingTaken)
       )
-      const remaining =
-        openingAvail + Math.max(0, Number(annual.entitled) - entitledTaken)
+      // الاستحقاق المتراكم لتاريخه (اتساقاً مع الاستحقاق الشهري) —
+      // المستقيل ياخد بدلاً على ما استحقه فعلاً لا السنة كاملة
+      const mode = await this.cfg('leave.accrual_mode', 'monthly')
+      const probation = Number(await this.cfg('leave.probation_months', '0'))
+      let effEntitled = Number(annual.entitled)
+      if (mode === 'monthly' && emp.joinDate) {
+        const pStart = new Date(`${period}-01-01T12:00:00`)
+        const jd = new Date(`${emp.joinDate}T12:00:00`)
+        jd.setMonth(jd.getMonth() + probation)
+        const s = jd > pStart ? jd : pStart
+        const now = new Date(`${today}T12:00:00`)
+        let months =
+          (now.getFullYear() - s.getFullYear()) * 12 +
+          (now.getMonth() - s.getMonth())
+        if (now.getDate() < s.getDate()) months -= 1
+        months = Math.max(0, months)
+        effEntitled = Math.min(
+          Number(annual.entitled),
+          Math.round((months * Number(annual.entitled)) / 12 * 100) / 100
+        )
+      }
+      const remaining = openingAvail + Math.max(0, effEntitled - entitledTaken)
       if (remaining > 0) {
         rows.push({
           caseId: kase.id,

@@ -42,13 +42,59 @@ export class LeaveBalancesService {
     private readonly config: Repository<RequestsConfig>
   ) {}
 
-  private view(bal: LeaveBalance, onDate: string): BalanceView {
+  // الاستحقاق المتراكم لتاريخه: شهري من التعيين (بعد فترة التجربة) بدل السنة
+  // كاملة مقدماً — 21÷12 لكل شهر مكتمل خدمة داخل السنة، بحدّ الاستحقاق السنوي
+  private accruedEntitlement(
+    bal: LeaveBalance,
+    onDate: string,
+    joinDate: string | null,
+    mode: string,
+    probationMonths: number
+  ): number {
+    const entitled = num(bal.entitled)
+    // الأنواع القانونية (مرضي) والوضع «مقدماً» → الاستحقاق كامل
+    if (bal.balanceType !== 'annual' || mode !== 'monthly') return entitled
+
+    const periodStart = new Date(`${bal.period}-01-01T12:00:00`)
+    let start = periodStart
+    if (joinDate) {
+      const jd = new Date(`${joinDate}T12:00:00`)
+      jd.setMonth(jd.getMonth() + probationMonths)
+      if (jd > start) start = jd
+    }
+    const now = new Date(`${onDate}T12:00:00`)
+    if (now < start) return 0
+    // عدد الشهور المكتملة من بداية الاستحقاق حتى اليوم
+    let months =
+      (now.getFullYear() - start.getFullYear()) * 12 +
+      (now.getMonth() - start.getMonth())
+    if (now.getDate() < start.getDate()) months -= 1
+    months = Math.max(0, months)
+    const accrued = Math.round((months * entitled) / 12 * 100) / 100
+    return Math.min(entitled, accrued)
+  }
+
+  private view(
+    bal: LeaveBalance,
+    onDate: string,
+    ctx?: { joinDate: string | null; mode: string; probationMonths: number }
+  ): BalanceView {
     const expired =
       !!bal.openingExpiry && bal.openingExpiry < onDate ? true : false
     const openingAvailable = expired
       ? 0
       : Math.max(0, num(bal.openingDays) - num(bal.openingTaken))
     const entitledTaken = Math.max(0, num(bal.taken) - num(bal.openingTaken))
+    // الاستحقاق الفعّال = المتراكم لتاريخه (شهري) إن توفّر السياق، وإلا الكامل
+    const effectiveEntitled = ctx
+      ? this.accruedEntitlement(
+          bal,
+          onDate,
+          ctx.joinDate,
+          ctx.mode,
+          ctx.probationMonths
+        )
+      : num(bal.entitled)
     return {
       employeeId: bal.employeeId,
       balanceType: bal.balanceType,
@@ -60,10 +106,23 @@ export class LeaveBalancesService {
         expired,
         available: openingAvailable,
       },
-      entitled: num(bal.entitled),
+      entitled: effectiveEntitled,
       entitledTaken,
       totalTaken: num(bal.taken),
-      remaining: openingAvailable + Math.max(0, num(bal.entitled) - entitledTaken),
+      remaining:
+        openingAvailable + Math.max(0, effectiveEntitled - entitledTaken),
+    }
+  }
+
+  // سياق الاستحقاق: تاريخ تعيين الموظف + وضع الاستحقاق + فترة التجربة
+  private async accrualContext(employeeId: number) {
+    const emp = await this.employees.findOne({ where: { id: employeeId } })
+    const cfg = async (k: string, d: string) =>
+      (await this.config.findOne({ where: { key: k } }))?.value ?? d
+    return {
+      joinDate: emp?.joinDate ?? null,
+      mode: await cfg('leave.accrual_mode', 'monthly'),
+      probationMonths: Number(await cfg('leave.probation_months', '0')),
     }
   }
 
@@ -76,7 +135,9 @@ export class LeaveBalancesService {
     const bal = await this.balances.findOne({
       where: { employeeId, balanceType, period },
     })
-    return bal ? this.view(bal, onDate) : null
+    if (!bal) return null
+    const ctx = await this.accrualContext(employeeId)
+    return this.view(bal, onDate, ctx)
   }
 
   async allBalances(employeeId: number) {
@@ -84,7 +145,8 @@ export class LeaveBalancesService {
     const rows = await this.balances.find({
       where: { employeeId, period: onDate.slice(0, 4) },
     })
-    return rows.map((b) => this.view(b, onDate))
+    const ctx = await this.accrualContext(employeeId)
+    return rows.map((b) => this.view(b, onDate, ctx))
   }
 
   // التحقق قبل التقديم — يرمي برسالة واضحة لو الرصيد غير كافٍ
@@ -183,7 +245,8 @@ export class LeaveBalancesService {
         },
       })
       if (existing) continue
-      const view = this.view(bal, endOfYear)
+      const ctx = await this.accrualContext(bal.employeeId)
+      const view = this.view(bal, endOfYear, ctx)
       const carry = Math.min(maxCarry, Math.max(0, view.remaining))
       await this.balances.save(
         this.balances.create({

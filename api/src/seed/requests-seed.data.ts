@@ -245,6 +245,8 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'attendance.device_key', value: 'zk-device-key-change-me' },
   // الإجازات: الترحيل السنوي بالطبقات
   { key: 'leave.annual_entitled', value: '21' },
+  { key: 'leave.accrual_mode', value: 'monthly' },
+  { key: 'leave.probation_months', value: '0' },
   { key: 'leave.carryover_max_days', value: '10' },
   { key: 'leave.carryover_expiry_months', value: '3' },
   // عملة النظام: SAR أو EGP — كل الشاشات تقرأها
