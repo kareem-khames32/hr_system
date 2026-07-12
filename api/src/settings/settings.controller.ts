@@ -371,11 +371,36 @@ export class SettingsController {
     return this.config.find({ order: { key: 'ASC' } })
   }
 
+  // مفاتيح رقمية حرجة للمحرك — قيمة فارغة/غير رقمية/أقل من الحد الأدنى تُفسد
+  // المسير (قسمة على صفر) أو الحساب. نرفضها هنا كشبكة أمان لأي مصدر.
+  private static readonly NUMERIC_MIN: Record<string, number> = {
+    'leave.annual_entitled': 0,
+    'leave.probation_months': 0,
+    'leave.carryover_max_days': 0,
+    'leave.carryover_expiry_months': 0,
+    'attendance.grace_minutes': 0,
+    'overtime.detection_threshold_hours': 0,
+    'eos.months_per_year': 0,
+    'payroll.cycle_start_day': 1,
+    'payroll.monthly_days': 1, // مقسوم عليه — لا يكون صفراً
+    'payroll.daily_hours': 1, // مقسوم عليه — لا يكون صفراً
+  }
+
   @Patch('config')
   async upsertConfig(@Body() dto: UpsertConfigDto) {
     // مفاتيح جديدة غير مسموحة إلا من الكود — نعدّل الموجود فقط
     const row = await this.config.findOne({ where: { key: dto.key } })
     if (!row) throw new NotFoundException(`المفتاح ${dto.key} غير معروف`)
+    // تحقق المفاتيح الرقمية الحرجة: رقم صالح ≥ الحد الأدنى
+    const min = SettingsController.NUMERIC_MIN[dto.key]
+    if (min !== undefined) {
+      const n = Number(dto.value)
+      if (dto.value === '' || !Number.isFinite(n) || n < min) {
+        throw new BadRequestException(
+          `قيمة «${dto.key}» يجب أن تكون رقماً${min > 0 ? ` لا يقل عن ${min}` : ' غير سالب'}`
+        )
+      }
+    }
     row.value = dto.value
     return this.config.save(row)
   }

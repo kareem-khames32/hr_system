@@ -1132,10 +1132,18 @@ export default function WeeklySchedulePage() {
                     endTime: shift.endTime,
                   })
                   await loadOverrides(currentKey)
-                  setError('')
-                  alert(
-                    `تم تطبيق «${shift.name}» كاستثناء على ${res.employees} موظف في ${res.days} يوم`
-                  )
+                  const expected = empIds.length * dates.length
+                  if (res.applied === 0) {
+                    // لم يُطبَّق شيء فعلاً — لا نعرض نجاحاً كاذباً
+                    setError('لم يُطبَّق التجاوز على أي موظف — تحقق من النطاق والوردية')
+                  } else {
+                    setError('')
+                    alert(
+                      res.applied < expected
+                        ? `تم تطبيق «${shift.name}» على ${res.applied} من ${expected} تعيين (تخطّى ${expected - res.applied})`
+                        : `تم تطبيق «${shift.name}» كاستثناء على ${res.employees} موظف في ${res.days} يوم`
+                    )
+                  }
                 } catch (e) {
                   setError(e instanceof Error ? e.message : 'تعذر تطبيق استثناء اليوم')
                 }

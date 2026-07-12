@@ -24,6 +24,7 @@ interface PolicyField {
   type: FieldType
   hint?: string
   unit?: string
+  min?: number // الحد الأدنى للحقول الرقمية (المقسوم عليه ≥ 1)
   options?: { value: string; label: string }[]
 }
 interface PolicyGroup {
@@ -83,10 +84,10 @@ const GROUPS: PolicyGroup[] = [
     iconBg: 'bg-success-50',
     iconColor: 'text-success-500',
     fields: [
-      { key: 'eos.months_per_year', label: 'مكافأة نهاية الخدمة', type: 'number', unit: 'شهر/سنة' },
-      { key: 'payroll.cycle_start_day', label: 'يوم بداية دورة المسير', type: 'number', unit: 'من الشهر' },
-      { key: 'payroll.monthly_days', label: 'أيام الشهر للمسير', type: 'number', unit: 'يوم' },
-      { key: 'payroll.daily_hours', label: 'ساعات العمل اليومية', type: 'number', unit: 'ساعة' },
+      { key: 'eos.months_per_year', label: 'مكافأة نهاية الخدمة', type: 'number', unit: 'شهر/سنة', min: 0 },
+      { key: 'payroll.cycle_start_day', label: 'يوم بداية دورة المسير', type: 'number', unit: 'من الشهر', min: 1 },
+      { key: 'payroll.monthly_days', label: 'أيام الشهر للمسير', type: 'number', unit: 'يوم', min: 1 },
+      { key: 'payroll.daily_hours', label: 'ساعات العمل اليومية', type: 'number', unit: 'ساعة', min: 1 },
     ],
   },
 ]
@@ -126,9 +127,28 @@ export default function PoliciesPage() {
   }
 
   const dirtyKeys = Object.keys(values).filter((k) => values[k] !== original[k])
+  const fieldByKey = new Map(
+    GROUPS.flatMap((g) => g.fields).map((f) => [f.key, f])
+  )
 
   const handleSave = async () => {
     if (dirtyKeys.length === 0) return
+    // تحقق الحقول الرقمية قبل الحفظ — قيمة فارغة/غير رقمية/أقل من الحد تُفسد
+    // المحرك (المسير قسمة على صفر). نمنع الحفظ الجزئي بالتحقق أولاً
+    for (const key of dirtyKeys) {
+      const f = fieldByKey.get(key)
+      if (f?.type === 'number') {
+        const n = Number(values[key])
+        const min = f.min ?? 0
+        if (values[key] === '' || !Number.isFinite(n) || n < min) {
+          setError(
+            `«${f.label}» يجب أن يكون رقماً${min > 0 ? ` لا يقل عن ${min}` : ' غير سالب'}`
+          )
+          setSuccess('')
+          return
+        }
+      }
+    }
     setSaving(true)
     setError('')
     setSuccess('')
@@ -185,6 +205,7 @@ export default function PoliciesPage() {
       <div className="flex items-center gap-2 max-w-xs">
         <input
           type={f.type === 'number' ? 'number' : 'text'}
+          min={f.type === 'number' ? (f.min ?? 0) : undefined}
           className="input w-full"
           value={v}
           onChange={(e) => setVal(f.key, e.target.value)}
