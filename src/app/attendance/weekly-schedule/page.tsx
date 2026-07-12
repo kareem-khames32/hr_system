@@ -37,6 +37,7 @@ import {
   fetchTeams,
   fetchWeekDayOverrides,
   setDayShiftOverride,
+  setDayShiftOverridesBulk,
   fetchWorkingDays,
   fetchScheduleRules,
   type ApiEmployee,
@@ -1113,9 +1114,36 @@ export default function WeeklySchedulePage() {
             shifts={assignableShifts}
             weekDays={weekDays}
             onClose={() => setShowBulkAssign(false)}
-            onAssign={(empIds, _days, shiftId) => {
-              empIds.forEach((id) => changeShift(id, shiftId))
-              setHasChanges(true)
+            onAssign={async (empIds, days, shiftId) => {
+              const shift = assignableShifts.find((s) => s.id === shiftId)
+              if (days.length > 0 && shift) {
+                // أيام محددة → «يوم استثنائي»: الوردية تُطبَّق كتجاوز لتلك
+                // التواريخ فقط (مثلاً السبت) لكل موظفي النطاق، دون تغيير الأسبوع
+                const dates = days
+                  .map((k) => weekDays.findIndex((d) => d.key === k))
+                  .filter((i) => i >= 0)
+                  .map((i) => dateOfDayIndex(currentWeekStart, i))
+                try {
+                  const res = await setDayShiftOverridesBulk({
+                    employeeIds: empIds,
+                    dates,
+                    shiftName: shift.name,
+                    startTime: shift.startTime,
+                    endTime: shift.endTime,
+                  })
+                  await loadOverrides(currentKey)
+                  setError('')
+                  alert(
+                    `تم تطبيق «${shift.name}» كاستثناء على ${res.employees} موظف في ${res.days} يوم`
+                  )
+                } catch (e) {
+                  setError(e instanceof Error ? e.message : 'تعذر تطبيق استثناء اليوم')
+                }
+              } else {
+                // بلا أيام → وردية الأسبوع لكل موظفي النطاق (سلوك أساسي)
+                empIds.forEach((id) => changeShift(id, shiftId))
+                setHasChanges(true)
+              }
               setShowBulkAssign(false)
             }}
           />
@@ -1499,11 +1527,16 @@ function BulkAssignModal({
             </div>
           )}
 
-          {/* اختيار الأيام — الوردية تُطبَّق على الأسبوع كاملاً في السيرفر */}
+          {/* اختيار الأيام: محدَّدة = «يوم استثنائي» (السبت مثلاً بدوام مختلف)؛
+              فارغة = الوردية تُطبَّق على الأسبوع كله */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-3">
-              الأيام (الوردية تُخزَّن لكل الأسبوع)
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              الأيام
             </label>
+            <p className="text-xs text-gray-400 mb-3">
+              اختر أياماً محددة لتطبيق الوردية كـ«استثناء» لتلك الأيام فقط (مثلاً السبت)،
+              أو اترك الكل فارغاً لتطبيقها على الأسبوع كله
+            </p>
             <div className="flex gap-2 flex-wrap">
               {weekDays.map(day => (
                 <button

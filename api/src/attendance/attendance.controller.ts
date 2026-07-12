@@ -114,6 +114,24 @@ export class AttendanceController {
     return this.service.setDayOverride(dto)
   }
 
+  // تجاوز وردية يوم لمجموعة موظفين دفعة واحدة (نطاق: شركة/فرع/قسم)
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.manage')
+  @Post('schedule/day/bulk')
+  setDayOverridesBulk(
+    @Body()
+    dto: {
+      employeeIds: number[]
+      dates: string[]
+      shiftName?: string
+      startTime?: string
+      endTime?: string
+      clear?: boolean
+    }
+  ) {
+    return this.service.setDayOverridesBulk(dto)
+  }
+
   @UseGuards(JwtAuthGuard)
   @Get('schedule/day-overrides')
   weekDayOverrides(@Query('week') week: string) {

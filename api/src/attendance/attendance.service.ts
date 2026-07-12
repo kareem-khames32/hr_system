@@ -505,6 +505,66 @@ export class AttendanceService {
     return { ok: true, date: dto.date, cleared: !!dto.clear }
   }
 
+  // تجاوز وردية يوم بعينه لمجموعة موظفين (نطاق: شركة/فرع/قسم) —
+  // «يوم استثنائي» بدوام مختلف عن باقي الأسبوع دون تغيير وردية الأسبوع
+  async setDayOverridesBulk(dto: {
+    employeeIds: number[]
+    dates: string[]
+    shiftName?: string
+    startTime?: string
+    endTime?: string
+    clear?: boolean
+  }) {
+    const employeeIds = [
+      ...new Set((dto.employeeIds ?? []).map(Number).filter(Boolean)),
+    ]
+    const dates = [
+      ...new Set(
+        (dto.dates ?? []).filter((d) => /^\d{4}-\d{2}-\d{2}$/.test(String(d)))
+      ),
+    ]
+    if (employeeIds.length === 0 || dates.length === 0) {
+      throw new BadRequestException('اختر موظفين وأياماً على الأقل')
+    }
+    // تحقّق مُدخلات الوردية مرة واحدة (لا لكل موظف) — فشل مبكر واضح
+    if (!dto.clear) {
+      const timeRe = /^([01]\d|2[0-3]):[0-5]\d$/
+      if (
+        !dto.shiftName ||
+        !timeRe.test(dto.startTime ?? '') ||
+        !timeRe.test(dto.endTime ?? '')
+      ) {
+        throw new BadRequestException(
+          'تجاوز اليوم يحتاج: اسم الوردية + بداية ونهاية بصيغة HH:mm'
+        )
+      }
+    }
+    let applied = 0
+    for (const employeeId of employeeIds) {
+      for (const date of dates) {
+        try {
+          await this.setDayOverride({
+            employeeId,
+            date,
+            shiftName: dto.shiftName,
+            startTime: dto.startTime,
+            endTime: dto.endTime,
+            clear: dto.clear,
+          })
+          applied++
+        } catch {
+          /* تخطّى موظفاً غير صالح في العملية الجماعية دون إيقاف الباقي */
+        }
+      }
+    }
+    return {
+      ok: true,
+      applied,
+      employees: employeeIds.length,
+      days: dates.length,
+    }
+  }
+
   // تجاوزات أسبوع (لعرضها في شاشة الجدولة)
   async weekDayOverrides(week: string) {
     const start = weekKeyOf(week)

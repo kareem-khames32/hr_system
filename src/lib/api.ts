@@ -576,6 +576,12 @@ export const setDayShiftOverride = (d: {
   employeeId: number; date: string
   shiftName?: string; startTime?: string; endTime?: string; clear?: boolean
 }) => post('/attendance/schedule/day', d)
+// تجاوز وردية يوم لمجموعة موظفين دفعة واحدة (نطاق: شركة/فرع/قسم)
+export const setDayShiftOverridesBulk = (d: {
+  employeeIds: number[]; dates: string[]
+  shiftName?: string; startTime?: string; endTime?: string; clear?: boolean
+}) => post<{ ok: boolean; applied: number; employees: number; days: number }>(
+  '/attendance/schedule/day/bulk', d)
 export const fetchWeekDayOverrides = (week: string) =>
   get<Array<{ id: number; employeeId: number; date: string; shiftName: string; startTime: string; endTime: string }>>(
     `/attendance/schedule/day-overrides?week=${week}`)
