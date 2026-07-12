@@ -10,6 +10,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import {
   AttendanceDay,
   AttendancePunch,
+  OvertimePeriod,
   PermissionType,
   ScheduleDayOverride,
   ScheduleEntry,
@@ -37,6 +38,7 @@ import { DeviceSyncService } from './device-sync.service'
       ScheduleDayOverride,
       PermissionType,
       ScheduleExceptionRule,
+      OvertimePeriod,
     ]),
   ],
   controllers: [AttendanceController],

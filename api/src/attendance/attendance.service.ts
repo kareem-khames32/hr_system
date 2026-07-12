@@ -20,6 +20,7 @@ import {
   AttendanceDay,
   AttendancePunch,
   AttendanceStatus,
+  OvertimePeriod,
   PermissionType,
   ScheduleDayOverride,
   ScheduleEntry,
@@ -85,6 +86,8 @@ export class AttendanceService {
     private readonly dayOverrides: Repository<ScheduleDayOverride>,
     @InjectRepository(ScheduleExceptionRule)
     private readonly scheduleRules: Repository<ScheduleExceptionRule>,
+    @InjectRepository(OvertimePeriod)
+    private readonly overtimePeriods: Repository<OvertimePeriod>,
     @InjectRepository(PermissionType)
     private readonly permissionTypes: Repository<PermissionType>
   ) {}
@@ -277,6 +280,98 @@ export class AttendanceService {
     const rule = await this.scheduleRules.findOne({ where: { id } })
     if (!rule) throw new NotFoundException('القاعدة غير موجودة')
     await this.scheduleRules.delete({ id })
+    return { deleted: true }
+  }
+
+  // ===== فترات فتح/قفل الأوفرتايم بالتواريخ =====
+  // القرار: فترة تغطّي اليوم؟ CLOSED يحسم، وإلا OPEN يفتح، وإلا المفتاح العام
+  async isOvertimeOpen(date: string, branchId: number): Promise<boolean> {
+    const periods = await this.overtimePeriods.find({ where: { isActive: true } })
+    const covering = periods.filter(
+      (p) =>
+        (p.branchId == null || p.branchId === branchId) &&
+        p.fromDate <= date &&
+        p.toDate >= date
+    )
+    if (covering.some((p) => p.effect === 'CLOSED')) return false
+    if (covering.some((p) => p.effect === 'OPEN')) return true
+    return (await this.configValue('overtime.enabled', 'true')) === 'true'
+  }
+
+  listOvertimePeriods() {
+    return this.overtimePeriods.find({ order: { fromDate: 'DESC' } })
+  }
+
+  async createOvertimePeriod(dto: {
+    name: string
+    fromDate: string
+    toDate: string
+    effect: string
+    branchId?: number | null
+  }) {
+    if (!dto.name?.trim()) throw new BadRequestException('اسم الفترة مطلوب')
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/
+    if (!dateRe.test(dto.fromDate) || !dateRe.test(dto.toDate)) {
+      throw new BadRequestException('التواريخ بصيغة YYYY-MM-DD')
+    }
+    if (dto.fromDate > dto.toDate) {
+      throw new BadRequestException('تاريخ البداية بعد النهاية')
+    }
+    if (!['OPEN', 'CLOSED'].includes(dto.effect)) {
+      throw new BadRequestException('الأثر: OPEN أو CLOSED')
+    }
+    return this.overtimePeriods.save(
+      this.overtimePeriods.create({
+        name: dto.name.trim(),
+        fromDate: dto.fromDate,
+        toDate: dto.toDate,
+        effect: dto.effect as any,
+        branchId: dto.branchId ?? undefined,
+        isActive: true,
+      })
+    )
+  }
+
+  async updateOvertimePeriod(
+    id: number,
+    dto: Partial<{
+      name: string
+      fromDate: string
+      toDate: string
+      effect: string
+      branchId: number | null
+      isActive: boolean
+    }>
+  ) {
+    const p = await this.overtimePeriods.findOne({ where: { id } })
+    if (!p) throw new NotFoundException('الفترة غير موجودة')
+    const dateRe = /^\d{4}-\d{2}-\d{2}$/
+    if (dto.fromDate !== undefined && !dateRe.test(dto.fromDate)) {
+      throw new BadRequestException('تاريخ البداية غير صالح')
+    }
+    if (dto.toDate !== undefined && !dateRe.test(dto.toDate)) {
+      throw new BadRequestException('تاريخ النهاية غير صالح')
+    }
+    if (dto.effect !== undefined && !['OPEN', 'CLOSED'].includes(dto.effect)) {
+      throw new BadRequestException('الأثر: OPEN أو CLOSED')
+    }
+    // حقول قابلة للتعديل فقط — ممنوع الجسم يكتب على id
+    if (dto.name !== undefined) p.name = String(dto.name).trim()
+    if (dto.fromDate !== undefined) p.fromDate = dto.fromDate
+    if (dto.toDate !== undefined) p.toDate = dto.toDate
+    if (dto.effect !== undefined) p.effect = dto.effect as any
+    if (dto.branchId !== undefined) p.branchId = dto.branchId ?? (undefined as any)
+    if (dto.isActive !== undefined) p.isActive = !!dto.isActive
+    if (p.fromDate > p.toDate) {
+      throw new BadRequestException('تاريخ البداية بعد النهاية')
+    }
+    return this.overtimePeriods.save(p)
+  }
+
+  async deleteOvertimePeriod(id: number) {
+    const p = await this.overtimePeriods.findOne({ where: { id } })
+    if (!p) throw new NotFoundException('الفترة غير موجودة')
+    await this.overtimePeriods.delete({ id })
     return { deleted: true }
   }
 
@@ -639,11 +734,20 @@ export class AttendanceService {
     shift: { end: string },
     checkOut: string
   ) {
-    // كنترول الموارد البشرية: فتح/قفل احتساب الأوفرتايم كلياً
-    // (مقفول → لا يُكتشف ولا يُحتسب مهما فضل الموظف)
-    const otEnabled =
-      (await this.configValue('overtime.enabled', 'true')) === 'true'
-    if (!otEnabled) return
+    // كنترول الموارد البشرية: فتح/قفل احتساب الأوفرتايم
+    // (فترات بالتواريخ تتقدّم على المفتاح العام؛ مقفول → لا يُكتشف)
+    const otOpen = await this.isOvertimeOpen(date, emp.branchId)
+    if (!otOpen) {
+      // قفل بأثر رجعي: احذف المكتشف غير المعتمد لهذا اليوم
+      // (المعتمد/المدفوع/الموجّه للسلسلة لا يُمس)
+      await this.overtime.delete({
+        employeeId: emp.id,
+        date,
+        source: 'BIOMETRIC_DETECTED',
+        status: 'DETECTED',
+      })
+      return
+    }
 
     const extraMinutes = toMinutes(checkOut) - toMinutes(shift.end)
     const actualHours = Math.round((extraMinutes / 60) * 100) / 100

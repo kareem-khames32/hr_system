@@ -296,6 +296,26 @@ export const updateScheduleRule = (id: number, r: Partial<ApiScheduleRule>) =>
   patch<ApiScheduleRule>(`/attendance/schedule-rules/${id}`, r)
 export const deleteScheduleRule = (id: number) =>
   del<{ deleted: boolean }>(`/attendance/schedule-rules/${id}`)
+
+// ===== فترات فتح/قفل الأوفرتايم بالتواريخ =====
+export interface ApiOvertimePeriod {
+  id: number
+  name: string
+  fromDate: string
+  toDate: string
+  effect: 'OPEN' | 'CLOSED'
+  branchId?: number | null
+  isActive: boolean
+}
+export const fetchOvertimePeriods = () =>
+  get<ApiOvertimePeriod[]>('/attendance/overtime-periods')
+export const createOvertimePeriod = (
+  p: Omit<ApiOvertimePeriod, 'id' | 'isActive'>
+) => post<ApiOvertimePeriod>('/attendance/overtime-periods', p)
+export const updateOvertimePeriod = (id: number, p: Partial<ApiOvertimePeriod>) =>
+  patch<ApiOvertimePeriod>(`/attendance/overtime-periods/${id}`, p)
+export const deleteOvertimePeriod = (id: number) =>
+  del<{ deleted: boolean }>(`/attendance/overtime-periods/${id}`)
 export const fetchPendingOvertime = () => get<any[]>('/attendance/overtime/pending')
 export const confirmOvertime = (id: number, approve: boolean) =>
   post(`/attendance/overtime/${id}/confirm`, { approve })

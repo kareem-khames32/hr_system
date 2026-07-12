@@ -161,6 +161,47 @@ export class AttendanceController {
     return this.service.deleteScheduleRule(id)
   }
 
+  // ===== فترات فتح/قفل الأوفرتايم بالتواريخ =====
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.manage')
+  @Get('overtime-periods')
+  listOvertimePeriods() {
+    return this.service.listOvertimePeriods()
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.manage')
+  @Post('overtime-periods')
+  createOvertimePeriod(
+    @Body()
+    dto: {
+      name: string
+      fromDate: string
+      toDate: string
+      effect: string
+      branchId?: number | null
+    }
+  ) {
+    return this.service.createOvertimePeriod(dto)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.manage')
+  @Patch('overtime-periods/:id')
+  updateOvertimePeriod(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: Record<string, any>
+  ) {
+    return this.service.updateOvertimePeriod(id, dto)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.manage')
+  @Delete('overtime-periods/:id')
+  deleteOvertimePeriod(@Param('id', ParseIntPipe) id: number) {
+    return this.service.deleteOvertimePeriod(id)
+  }
+
   // أيام العمل الفعلية في مدى (خدمة ذاتية) — لتلميح نموذج الإجازة:
   // «سيُخصم X يوم فقط — Y يوم عطلة داخل المدى»
   @UseGuards(JwtAuthGuard)

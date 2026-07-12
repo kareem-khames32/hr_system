@@ -207,3 +207,31 @@ export class ScheduleExceptionRule {
   @Column({ default: true })
   isActive: boolean
 }
+
+// فترات فتح/قفل احتساب الأوفرتايم بالتواريخ — تتقدّم على المفتاح العام
+// «افتح رمضان» (OPEN) أو «اقفل أول أسبوعين» (CLOSED)؛ CLOSED يحسم عند التداخل
+export type OvertimePeriodEffect = 'OPEN' | 'CLOSED'
+
+@Entity('overtime_periods')
+export class OvertimePeriod {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ length: 200 })
+  name: string
+
+  @Column({ type: 'date' })
+  fromDate: string
+
+  @Column({ type: 'date' })
+  toDate: string
+
+  @Column({ length: 10 })
+  effect: OvertimePeriodEffect
+
+  @Column({ nullable: true })
+  branchId: number
+
+  @Column({ default: true })
+  isActive: boolean
+}
