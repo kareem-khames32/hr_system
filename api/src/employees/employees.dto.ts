@@ -176,6 +176,20 @@ export class CreateEmployeeDto {
     message: 'IBAN غير صالح (يبدأ برمز الدولة ثم أرقام/حروف)',
   })
   iban?: string
+
+  // الرصيد الافتتاحي المُرحّل (لموظف قائم انتقل للنظام) — يُطبَّق على رصيد
+  // السنوي عند التعيين كطبقة opening، ليس عموداً على الموظف
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'الرصيد الافتتاحي رقم' })
+  @Min(0, { message: 'الرصيد الافتتاحي لا يكون سالباً' })
+  openingBalanceDays?: number
+
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'صلاحية الرصيد الافتتاحي بصيغة YYYY-MM-DD',
+  })
+  openingBalanceExpiry?: string | null
 }
 
 // التعديل: كل الحقول اختيارية بنفس قواعد التحقق

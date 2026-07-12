@@ -87,8 +87,12 @@ export interface EmployeeFormState {
   photoFileId?: number
 }
 
-// الحمولة المُرسلة للباك إند — كل الحقول موجودة ضمن ApiEmployee
-export type EmployeeFormPayload = Partial<ApiEmployee>
+// الحمولة المُرسلة للباك إند — حقول ApiEmployee + الرصيد الافتتاحي المُرحّل
+// (يُطبَّق على رصيد الإجازة السنوية عند التعيين فقط، ليس عموداً على الموظف)
+export type EmployeeFormPayload = Partial<ApiEmployee> & {
+  openingBalanceDays?: number
+  openingBalanceExpiry?: string | null
+}
 
 interface EmployeeFormProps {
   mode: 'add' | 'edit'
@@ -422,6 +426,17 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.contractEnd) payload.contractEnd = form.contractEnd
     // صورة الموظف
     if (form.photoFileId != null) payload.photoFileId = form.photoFileId
+    // الرصيد الافتتاحي المُرحّل (اختياري) — يُطبَّق على رصيد السنوي عند التعيين
+    const openDays = Number(openingBalance)
+    if (openingBalance !== '' && openDays > 0) {
+      payload.openingBalanceDays = openDays
+      payload.openingBalanceExpiry =
+        openingExpiry === 'end_of_year'
+          ? `${new Date().getFullYear()}-12-31`
+          : openingExpiry === 'custom_date'
+            ? openingExpiryDate || null
+            : null // بدون انتهاء
+    }
     return payload
   }
 

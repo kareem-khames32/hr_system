@@ -145,11 +145,30 @@ export class EmployeesService {
     await this.assertUnique(dto)
     await this.assertRelations(dto)
     this.assertContractDates(dto)
+    // الرصيد الافتتاحي حقلا حمولة فقط (ليسا عمودَي موظف) — يُطبَّقان على الرصيد
+    const { openingBalanceDays, openingBalanceExpiry, ...empDto } =
+      dto as CreateEmployeeDto & {
+        openingBalanceDays?: number
+        openingBalanceExpiry?: string | null
+      }
     const emp = await this.employees.save(
-      this.employees.create(dto as Partial<Employee>)
+      this.employees.create(empDto as Partial<Employee>)
     )
     // رصيد السنة الحالية تلقائياً — الاستحقاق من الإعدادات
     await this.ensureCurrentYearBalances(emp.id)
+    // رصيد افتتاحي مُرحّل (اختياري) — طبقة opening على رصيد السنوي
+    if (openingBalanceDays && Number(openingBalanceDays) > 0) {
+      const period = String(new Date().getFullYear())
+      const annual = await this.balances.findOne({
+        where: { employeeId: emp.id, balanceType: 'annual', period },
+      })
+      if (annual) {
+        annual.openingDays = Number(openingBalanceDays)
+        annual.openingTaken = 0
+        annual.openingExpiry = (openingBalanceExpiry ?? null) as any
+        await this.balances.save(annual)
+      }
+    }
     return emp
   }
 
