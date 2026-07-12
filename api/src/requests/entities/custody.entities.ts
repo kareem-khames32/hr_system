@@ -45,6 +45,7 @@ export type CustodyStatus =
   | 'ACTIVE'
   | 'RETURN_REQUESTED'
   | 'RETURNED'
+  | 'TRANSFERRED' // نُقلت لموظف آخر — عهدة جديدة فُتحت للمستلم
   | 'LOST'
   | 'DAMAGED'
 

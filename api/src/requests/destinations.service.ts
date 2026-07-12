@@ -507,8 +507,52 @@ export class DestinationsService {
     await em.getRepository(CustodyAssignment).save(row)
     await em
       .getRepository(Asset)
-      .update({ id: row.assetId }, { currentHolderId: undefined as any })
+      .update(
+        { id: row.assetId },
+        { currentHolderId: null as any, status: 'AVAILABLE' }
+      )
     return { ref: refOf('CUR', row.id), completed: true }
+  }
+
+  // نقل عهدة لموظف آخر (بعد اعتماد طلب «نقل عهدة») — نقل حقيقي:
+  // تُقفل عهدة الحامل TRANSFERRED وتُفتح عهدة جديدة PENDING_ACK للمستلم
+  private custodyTransferHandler: Handler = async (em, req, _t, payload) => {
+    const row = await em.getRepository(CustodyAssignment).findOne({
+      where: { id: Number(payload.assignmentId) },
+    })
+    const toEmployeeId = Number(payload.toEmployeeId)
+    if (!row || !toEmployeeId) {
+      return {
+        ref: refOf('CUT', req.id),
+        completed: true,
+        note: 'بيانات النقل ناقصة — راجع الطلب',
+      }
+    }
+    row.status = 'TRANSFERRED'
+    row.returnedAt = new Date()
+    row.condition = 'منقولة لموظف آخر'
+    await em.getRepository(CustodyAssignment).save(row)
+    const created = await em.getRepository(CustodyAssignment).save(
+      em.getRepository(CustodyAssignment).create({
+        requestId: req.id,
+        assetId: row.assetId,
+        employeeId: toEmployeeId,
+        assignedBy: req.requesterId,
+        status: 'PENDING_ACK',
+      })
+    )
+    // الأصل قيد النقل: مُسنَد بلا حامل لحد ما يقبل المستلم ويؤكد مديره
+    await em
+      .getRepository(Asset)
+      .update(
+        { id: row.assetId },
+        { currentHolderId: null as any, status: 'ASSIGNED' }
+      )
+    return {
+      ref: refOf('CUT', created.id),
+      completed: false,
+      note: 'بانتظار قبول الموظف المستلم ثم اعتماد مديره',
+    }
   }
 
   // ========== سجل الـ handlers — الأكواد من كتالوج الطلبات ==========
@@ -540,6 +584,7 @@ export class DestinationsService {
     // عهدة
     custody_assignments_ack: this.custodyAssignHandler,
     custody_assignments: this.custodyReturnHandler,
+    custody_transfer: this.custodyTransferHandler,
     // الباقي (تدريب/ER/مصروفات...) يسقط على السجل العام REQ لحين بناء موديولاته
   }
 }

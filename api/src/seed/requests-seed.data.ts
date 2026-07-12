@@ -192,7 +192,7 @@ export const typesSeed: TypeSeed[] = [
   // ===== 7) العهدة والأصول =====
   { code: 'CUSTODY_REQUEST', nameAr: 'طلب عهدة', category: 'custody_assets', chain: 'CHAIN_MANAGER_CUSTODY', handler: 'custody_assignments_ack', phase: 'P1' },
   { code: 'CUSTODY_RETURN', nameAr: 'إرجاع عهدة', category: 'custody_assets', chain: 'CHAIN_CUSTODY', handler: 'custody_assignments', requiredFields: ['assignmentId'], phase: 'P1' },
-  { code: 'CUSTODY_TRANSFER', nameAr: 'نقل عهدة', category: 'custody_assets', chain: 'CHAIN_CUSTODY', handler: 'custody_assignments', requiredFields: ['assignmentId', 'toEmployeeId'], phase: 'P2' },
+  { code: 'CUSTODY_TRANSFER', nameAr: 'نقل عهدة', category: 'custody_assets', chain: 'CHAIN_CUSTODY', handler: 'custody_transfer', requiredFields: ['assignmentId', 'toEmployeeId'], phase: 'P2' },
   { code: 'CUSTODY_LOSS_REPORT', nameAr: 'بلاغ فقد/تلف', category: 'custody_assets', chain: 'CHAIN_MANAGER_CUSTODY', handler: 'custody_finance', requiredFields: ['assignmentId', 'description'], phase: 'P2' },
   { code: 'IT_EQUIPMENT', nameAr: 'طلب أجهزة/برامج IT', category: 'custody_assets', chain: 'CHAIN_MANAGER_IT', handler: 'it_assets', phase: 'P2' },
   { code: 'ACCESS_REQUEST', nameAr: 'طلب صلاحية/وصول', category: 'custody_assets', chain: 'CHAIN_MANAGER_IT', handler: 'access_register', phase: 'P2' },

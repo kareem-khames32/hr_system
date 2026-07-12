@@ -663,6 +663,60 @@ export class RequestsService {
     return this.ds.getRepository(CustodyAssignment).save(row)
   }
 
+  // ===== نقل عهدة نشطة لموظف آخر (أمين العهدة) =====
+  // العهدة الحالية تُقفل TRANSFERRED، وتُفتح عهدة جديدة PENDING_ACK للمستلم
+  // → يقبلها → مديره المباشر يؤكد → تصبح ACTIVE باسمه (نفس دورة التسليم)
+  async transferCustody(
+    user: JwtPayload,
+    assignmentId: number,
+    toEmployeeId: number,
+    note?: string
+  ) {
+    const hasPerm =
+      user.role === 'super_admin' ||
+      (user.permissions ?? []).includes('*') ||
+      (user.permissions ?? []).includes('custody.assign')
+    if (!hasPerm) {
+      throw new ForbiddenException('نقل العهدة لمسؤول العهدة فقط')
+    }
+    const repo = this.ds.getRepository(CustodyAssignment)
+    const row = await repo.findOne({ where: { id: assignmentId } })
+    if (!row) throw new NotFoundException('إسناد العهدة غير موجود')
+    if (row.status !== 'ACTIVE') {
+      throw new BadRequestException('يُنقل فقط ما هو نشط بحوزة الموظف حالياً')
+    }
+    const target = await this.employees.findOne({ where: { id: toEmployeeId } })
+    if (!target || !target.isActive) {
+      throw new BadRequestException('الموظف المستلم غير موجود أو غير نشط')
+    }
+    if (toEmployeeId === row.employeeId) {
+      throw new BadRequestException('الموظف المستلم هو نفسه الحامل الحالي')
+    }
+
+    // 1) اقفل عهدة الحامل الحالي
+    row.status = 'TRANSFERRED'
+    row.returnedAt = new Date()
+    row.condition = note?.trim() || 'منقولة لموظف آخر'
+    await repo.save(row)
+
+    // 2) افتح عهدة جديدة للمستلم بانتظار قبوله
+    const created = await repo.save(
+      repo.create({
+        assetId: row.assetId,
+        employeeId: toEmployeeId,
+        assignedBy: user.employeeId ?? undefined,
+        status: 'PENDING_ACK' as const,
+      })
+    )
+
+    // 3) الأصل «قيد النقل»: يبقى مُسنَداً بلا حامل لحد ما يقبل المستلم ويؤكد مديره
+    await this.ds
+      .getRepository(Asset)
+      .update({ id: row.assetId }, { currentHolderId: null as any, status: 'ASSIGNED' })
+
+    return created
+  }
+
   // ===== اعتماد المدير المباشر → ACTIVE (الملزِم قانونياً) =====
   async managerConfirmCustody(user: JwtPayload, assignmentId: number) {
     const row = await this.ds.getRepository(CustodyAssignment).findOne({

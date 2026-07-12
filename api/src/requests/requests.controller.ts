@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common'
 import {
   IsIn,
+  IsInt,
   IsObject,
   IsOptional,
   IsString,
@@ -50,6 +51,16 @@ class ResubmitDto {
   @IsOptional()
   @IsObject()
   payload?: Record<string, any>
+}
+
+class TransferCustodyDto {
+  @IsInt()
+  toEmployeeId: number
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(300)
+  note?: string
 }
 
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -176,6 +187,21 @@ export class RequestsController {
     @Param('assignmentId', ParseIntPipe) assignmentId: number
   ) {
     return this.service.requestCustodyHandover(user, assignmentId)
+  }
+
+  // نقل عهدة نشطة لموظف آخر (أمين العهدة) → المستلم يقبل ثم مديره يؤكد
+  @Post('custody/:assignmentId/transfer')
+  transfer(
+    @CurrentUser() user: JwtPayload,
+    @Param('assignmentId', ParseIntPipe) assignmentId: number,
+    @Body() dto: TransferCustodyDto
+  ) {
+    return this.service.transferCustody(
+      user,
+      assignmentId,
+      dto.toEmployeeId,
+      dto.note
+    )
   }
 
   // اعتماد المدير المباشر → العهدة ACTIVE (الملزِم قانونياً)

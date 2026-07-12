@@ -359,6 +359,16 @@ export const acknowledgeCustody = (assignmentId: number) =>
 // الموظف يعلّم «سلّمت العهدة» → مسؤول العهد يؤكد بالاستلام الفعلي
 export const requestCustodyHandover = (assignmentId: number) =>
   post<ApiCustody>(`/requests/custody/${assignmentId}/handover`)
+// أمين العهدة ينقل عهدة نشطة لموظف آخر → المستلم يقبل ثم مديره يؤكد
+export const transferCustody = (
+  assignmentId: number,
+  toEmployeeId: number,
+  note?: string
+) =>
+  post<ApiCustody>(`/requests/custody/${assignmentId}/transfer`, {
+    toEmployeeId,
+    ...(note ? { note } : {}),
+  })
 
 // ===== المستندات =====
 export interface ApiDocument {

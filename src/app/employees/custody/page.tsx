@@ -14,6 +14,7 @@ import {
   AlertTriangle,
   X,
   Wallet,
+  ArrowRightLeft,
 } from 'lucide-react'
 import {
   fetchCustody,
@@ -24,6 +25,7 @@ import {
   assignCustody,
   returnCustody,
   writeOffCustody,
+  transferCustody,
   managerConfirmCustody,
   can,
   ApiAsset,
@@ -41,6 +43,7 @@ const statusLabels: Record<string, string> = {
   RETURNED: 'مُرجَعة',
   LOST: 'مفقودة',
   DAMAGED: 'تالفة',
+  TRANSFERRED: 'منقولة لموظف آخر',
 }
 
 const statusStyles: Record<string, string> = {
@@ -51,6 +54,7 @@ const statusStyles: Record<string, string> = {
   RETURNED: 'bg-gray-100 text-gray-600',
   LOST: 'bg-red-100 text-red-700',
   DAMAGED: 'bg-red-100 text-red-700',
+  TRANSFERRED: 'bg-gray-100 text-gray-600',
 }
 
 // الحالات المفتوحة — يجوز شطبها فقداً أو تلفاً
@@ -270,6 +274,39 @@ export default function CustodyPage() {
     }
   }
 
+  // نقل العهدة لموظف آخر — تُقفل الحالية وتُفتح جديدة للمستلم بانتظار قبوله ثم اعتماد مديره
+  const [transferTarget, setTransferTarget] = useState<CustodyRow | null>(null)
+  const [transferForm, setTransferForm] = useState({ toEmployeeId: '', note: '' })
+  const [transferring, setTransferring] = useState(false)
+  const [transferError, setTransferError] = useState('')
+  const [transferNotice, setTransferNotice] = useState<string | null>(null)
+
+  const openTransfer = (r: CustodyRow) => {
+    setTransferForm({ toEmployeeId: '', note: '' })
+    setTransferError('')
+    setTransferTarget(r)
+  }
+
+  const handleTransfer = async () => {
+    if (!transferTarget || !transferForm.toEmployeeId) return
+    setTransferring(true)
+    setTransferError('')
+    try {
+      await transferCustody(
+        transferTarget.id,
+        Number(transferForm.toEmployeeId),
+        transferForm.note.trim() || undefined
+      )
+      setTransferTarget(null)
+      setTransferNotice('تم بدء النقل — بانتظار قبول الموظف المستلم')
+      await loadData()
+    } catch (err) {
+      setTransferError(err instanceof Error ? err.message : 'تعذر نقل العهدة')
+    } finally {
+      setTransferring(false)
+    }
+  }
+
   return (
     <MainLayout>
       <div className="space-y-6">
@@ -316,6 +353,22 @@ export default function CustodyPage() {
               className="p-1.5 hover:bg-amber-100 rounded-lg"
             >
               <X size={16} className="text-amber-500" />
+            </button>
+          </div>
+        )}
+
+        {/* تنبيه بدء النقل الناجح */}
+        {transferNotice && (
+          <div className="bg-indigo-50 border border-indigo-200 text-indigo-800 rounded-xl p-4 flex items-center justify-between gap-3">
+            <div className="flex items-center gap-3">
+              <ArrowRightLeft size={20} className="text-indigo-500 shrink-0" />
+              <p className="text-sm font-medium">{transferNotice}</p>
+            </div>
+            <button
+              onClick={() => setTransferNotice(null)}
+              className="p-1.5 hover:bg-indigo-100 rounded-lg"
+            >
+              <X size={16} className="text-indigo-500" />
             </button>
           </div>
         )}
@@ -491,6 +544,15 @@ export default function CustodyPage() {
                             إرجاع
                           </button>
                         )
+                      )}
+                      {r.status === 'ACTIVE' && can('custody.assign') && (
+                        <button
+                          onClick={() => openTransfer(r)}
+                          className="text-xs px-3 py-1.5 border border-indigo-300 text-indigo-700 rounded-lg hover:bg-indigo-50 flex items-center gap-1"
+                        >
+                          <ArrowRightLeft size={12} />
+                          نقل لموظف آخر
+                        </button>
                       )}
                       {OPEN_STATUSES.includes(r.status) && can('custody.assign') && (
                         <button
@@ -744,6 +806,88 @@ export default function CustodyPage() {
                     : writeOffForm.lost
                       ? 'شطب — مفقودة'
                       : 'شطب — تالفة'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Transfer Modal — نقل العهدة لموظف آخر */}
+        {transferTarget && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl w-full max-w-md max-h-[90vh] overflow-y-auto">
+              <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-800">نقل العهدة لموظف آخر</h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    {transferTarget.assetName} — {transferTarget.employeeName}
+                  </p>
+                </div>
+                <button
+                  onClick={() => setTransferTarget(null)}
+                  className="p-2 hover:bg-gray-100 rounded-lg"
+                >
+                  <X size={20} className="text-gray-500" />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                {transferError && (
+                  <div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">
+                    {transferError}
+                  </div>
+                )}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    الموظف المستلم *
+                  </label>
+                  <select
+                    value={transferForm.toEmployeeId}
+                    onChange={(e) =>
+                      setTransferForm({ ...transferForm, toEmployeeId: e.target.value })
+                    }
+                    className="input w-full"
+                  >
+                    <option value="">— اختر الموظف المستلم —</option>
+                    {employees
+                      .filter(
+                        (emp) => emp.isActive && emp.id !== transferTarget.employeeId
+                      )
+                      .map((emp) => (
+                        <option key={emp.id} value={String(emp.id)}>
+                          {emp.fullName} — {emp.employeeCode}
+                        </option>
+                      ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    ملاحظة (اختياري)
+                  </label>
+                  <input
+                    type="text"
+                    value={transferForm.note}
+                    onChange={(e) =>
+                      setTransferForm({ ...transferForm, note: e.target.value })
+                    }
+                    className="input w-full"
+                    placeholder="سبب النقل أو أي تفاصيل"
+                  />
+                </div>
+                <p className="text-xs text-gray-400">
+                  العهدة الحالية ستُقفل، وتُفتح عهدة جديدة للمستلم بانتظار قبوله ثم اعتماد
+                  مديره المباشر
+                </p>
+              </div>
+              <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">
+                <button onClick={() => setTransferTarget(null)} className="btn-secondary">
+                  إلغاء
+                </button>
+                <button
+                  onClick={handleTransfer}
+                  disabled={transferring || !transferForm.toEmployeeId}
+                  className="px-4 py-2.5 bg-indigo-600 text-white rounded-xl text-sm font-medium hover:bg-indigo-700 disabled:opacity-50"
+                >
+                  {transferring ? 'جارٍ النقل...' : 'نقل العهدة'}
                 </button>
               </div>
             </div>
