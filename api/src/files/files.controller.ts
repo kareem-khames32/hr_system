@@ -129,7 +129,10 @@ export class FilesController {
     const f = await this.files.findOne({ where: { id } })
     if (!f) throw new NotFoundException('الملف غير موجود')
     const isOwner = f.employeeId === user.employeeId || f.uploadedBy === user.sub
-    if (!isOwner && !userHasPerm(user, 'documents.manage')) {
+    // صور الموظفين قابلة للعرض لأي مطّلع على الموظفين (ليست مستنداً حساساً)
+    const isEmployeePhoto = f.entityType === 'employee_photo'
+    const canViewPhoto = isEmployeePhoto && userHasPerm(user, 'employees.view')
+    if (!isOwner && !canViewPhoto && !userHasPerm(user, 'documents.manage')) {
       throw new ForbiddenException('لا تملك صلاحية الاطلاع على هذا الملف')
     }
     const abs = join(UPLOADS_ROOT, f.storedName)

@@ -23,6 +23,7 @@ import {
   fetchRequestTypes,
   fetchBranches,
   fetchDepartments,
+  fetchFileObjectUrl,
   ApiError,
   type CurrentUser,
   type ApiEmployee,
@@ -143,6 +144,7 @@ export default function ProfilePage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [fallbackNote, setFallbackNote] = useState('')
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null)
 
   useEffect(() => {
     const currentUser = getCurrentUser()
@@ -195,6 +197,31 @@ export default function ProfilePage() {
     })()
   }, [])
 
+  // صورة الموظف — رابط blob بالتوكن (يُلغى عند التفريغ)
+  useEffect(() => {
+    const pid = employee?.photoFileId
+    if (pid == null) {
+      setPhotoUrl(null)
+      return
+    }
+    let active = true
+    let created: string | null = null
+    fetchFileObjectUrl(pid).then((url) => {
+      if (!active) {
+        if (url) URL.revokeObjectURL(url)
+        return
+      }
+      if (url) {
+        created = url
+        setPhotoUrl(url)
+      }
+    })
+    return () => {
+      active = false
+      if (created) URL.revokeObjectURL(created)
+    }
+  }, [employee?.photoFileId])
+
   const branchName = (id?: number | null) =>
     branches.find((b) => b.id === id)?.name ?? '—'
   const departmentName = (id?: number | null) =>
@@ -243,8 +270,13 @@ export default function ProfilePage() {
             <div className="card">
               <div className="flex items-start gap-6">
                 <div className="relative">
-                  <div className="w-32 h-32 bg-gradient-to-br from-primary-500 to-primary-600 rounded-3xl flex items-center justify-center text-white text-5xl font-bold shadow-xl">
-                    {avatarChar}
+                  <div className="w-32 h-32 bg-gradient-to-br from-primary-500 to-primary-600 rounded-3xl flex items-center justify-center text-white text-5xl font-bold shadow-xl overflow-hidden">
+                    {photoUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={photoUrl} alt={displayName} className="w-full h-full object-cover" />
+                    ) : (
+                      avatarChar
+                    )}
                   </div>
                   <button className="absolute -bottom-2 -left-2 w-10 h-10 bg-white rounded-xl shadow-lg flex items-center justify-center hover:bg-gray-50 transition-colors">
                     <Camera size={18} className="text-gray-600" />

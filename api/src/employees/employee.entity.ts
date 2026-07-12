@@ -30,6 +30,10 @@ export class Employee {
   @Column({ length: 200, nullable: true })
   fullNameEn: string
 
+  // صورة الموظف — معرّف ملف مرفوع عبر /files/upload
+  @Column({ nullable: true })
+  photoFileId: number
+
   @Column({ length: 200, nullable: true })
   email: string
 

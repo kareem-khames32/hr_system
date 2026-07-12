@@ -38,6 +38,7 @@ import {
   fetchDepartments,
   fetchTeams,
   fetchEmployees,
+  fetchFileObjectUrl,
   type ApiEmployee,
 } from '@/lib/api'
 import { useCurrency, loadCurrency } from '@/lib/currency'
@@ -66,6 +67,7 @@ interface EmployeeVM {
   name: string
   nameEn: string
   avatar: string
+  photoFileId?: number
   email: string
   personalEmail: string
   phone: string
@@ -575,6 +577,7 @@ export default function EmployeeProfilePage({
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [employee, setEmployee] = useState<EmployeeVM | null>(null)
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null)
   const [balAnnual, setBalAnnual] = useState<BalanceView | null>(null)
   const [balSick, setBalSick] = useState<BalanceView | null>(null)
   const [leaves, setLeaves] = useState<LeaveView[]>([])
@@ -644,6 +647,7 @@ export default function EmployeeProfilePage({
           name: e.fullName,
           nameEn: e.fullNameEn ?? '',
           avatar: (e.fullName ?? '').trim().charAt(0) || 'م',
+          photoFileId: e.photoFileId,
           email: e.email ?? '—',
           personalEmail: '—',
           phone: e.phone ?? '—',
@@ -750,6 +754,31 @@ export default function EmployeeProfilePage({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id])
 
+  // صورة الموظف — رابط blob بالتوكن (يُلغى عند التفريغ)
+  useEffect(() => {
+    const pid = employee?.photoFileId
+    if (pid == null) {
+      setPhotoUrl(null)
+      return
+    }
+    let active = true
+    let created: string | null = null
+    fetchFileObjectUrl(pid).then((url) => {
+      if (!active) {
+        if (url) URL.revokeObjectURL(url)
+        return
+      }
+      if (url) {
+        created = url
+        setPhotoUrl(url)
+      }
+    })
+    return () => {
+      active = false
+      if (created) URL.revokeObjectURL(created)
+    }
+  }, [employee?.photoFileId])
+
   const handleGenerateDocument = (templateId: string) => {
     if (!employee) return
     setSelectedTemplate(templateId)
@@ -813,8 +842,13 @@ export default function EmployeeProfilePage({
           <div className="flex items-start justify-between">
             <div className="flex items-start gap-6">
               {/* Avatar */}
-              <div className="w-24 h-24 bg-gradient-to-br from-primary-400 to-primary-600 rounded-3xl flex items-center justify-center text-white font-bold text-3xl shadow-lg shadow-primary-500/30">
-                {employee.avatar}
+              <div className="w-24 h-24 bg-gradient-to-br from-primary-400 to-primary-600 rounded-3xl flex items-center justify-center text-white font-bold text-3xl shadow-lg shadow-primary-500/30 overflow-hidden">
+                {photoUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img src={photoUrl} alt={employee.name} className="w-full h-full object-cover" />
+                ) : (
+                  employee.avatar
+                )}
               </div>
 
               {/* Basic Info */}

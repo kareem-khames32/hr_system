@@ -1,0 +1,1748 @@
+'use client'
+
+import { useEffect, useRef, useState } from 'react'
+import { MainLayout } from '@/components/layout'
+import {
+  fetchBranches,
+  fetchDepartments,
+  fetchTeams,
+  fetchEmployees,
+  fetchCatalog,
+  uploadFile,
+  fetchFileObjectUrl,
+  ApiBranch,
+  ApiDepartment,
+  ApiTeam,
+  ApiEmployee,
+} from '@/lib/api'
+import {
+  User,
+  Briefcase,
+  Wallet,
+  GraduationCap,
+  FileText,
+  ChevronLeft,
+  ChevronRight,
+  Save,
+  X,
+  Upload,
+  Calendar,
+  Phone,
+  Mail,
+  Building2,
+  Clock,
+} from 'lucide-react'
+import Link from 'next/link'
+
+// مركز التكلفة — من كتالوج الإعدادات
+interface CostCenter {
+  id: number
+  code: string
+  name: string
+  isActive: boolean
+}
+
+// حالة النموذج الكاملة — نفس حقول شاشة الإضافة + صورة الموظف
+export interface EmployeeFormState {
+  firstNameAr: string
+  fatherNameAr: string
+  grandNameAr: string
+  familyNameAr: string
+  firstNameEn: string
+  middleNameEn: string
+  lastNameEn: string
+  nationalId: string
+  phone: string
+  personalEmail: string
+  birthDate: string
+  gender: string
+  maritalStatus: string
+  nationality: string
+  addressCity: string
+  addressDistrict: string
+  emergencyName: string
+  emergencyPhone: string
+  employeeCode: string
+  fingerprintCode: string
+  joinDate: string
+  status: string
+  branchId: string
+  departmentId: string
+  teamId: string
+  managerId: string
+  jobTitle: string
+  workEmail: string
+  basicSalary: string
+  housingAllowance: string
+  transportAllowance: string
+  phoneAllowance: string
+  workNatureAllowance: string
+  payMethod: string
+  costCenterId: string
+  bankName: string
+  iban: string
+  contractType: string
+  contractStart: string
+  contractEnd: string
+  photoFileId?: number
+}
+
+// الحمولة المُرسلة للباك إند — كل الحقول موجودة ضمن ApiEmployee
+export type EmployeeFormPayload = Partial<ApiEmployee>
+
+interface EmployeeFormProps {
+  mode: 'add' | 'edit'
+  initial?: Partial<EmployeeFormState>
+  onSubmit: (payload: EmployeeFormPayload) => Promise<void>
+  submitting: boolean
+  error: string
+}
+
+// أيام الأسبوع
+const weekDays = [
+  { key: 'sunday', name: 'الأحد', shortName: 'س' },
+  { key: 'monday', name: 'الاثنين', shortName: 'ن' },
+  { key: 'tuesday', name: 'الثلاثاء', shortName: 'ث' },
+  { key: 'wednesday', name: 'الأربعاء', shortName: 'ر' },
+  { key: 'thursday', name: 'الخميس', shortName: 'خ' },
+  { key: 'friday', name: 'الجمعة', shortName: 'ج' },
+  { key: 'saturday', name: 'السبت', shortName: 'س' },
+]
+
+// جداول العمل المتاحة (يتم جلبها من الإعدادات)
+const workSchedules: Array<{
+  id: string
+  name: string
+  description: string
+  color: string
+  isDefault: boolean
+  workDays: { [key: string]: boolean }
+  workHours: { start: string; end: string }
+  employeeCount: number
+  rulesCount: number
+}> = [
+  {
+    id: '1',
+    name: 'الجدول الأساسي',
+    description: 'جمعة وسبت إجازة',
+    color: 'blue',
+    isDefault: true,
+    workDays: {
+      sunday: true,
+      monday: true,
+      tuesday: true,
+      wednesday: true,
+      thursday: true,
+      friday: false,
+      saturday: false,
+    },
+    workHours: {
+      start: '08:00',
+      end: '17:00',
+    },
+    employeeCount: 45,
+    rulesCount: 1,
+  },
+  {
+    id: '2',
+    name: 'جدول السبت فقط',
+    description: 'السبت فقط إجازة - الجمعة دوام',
+    color: 'green',
+    isDefault: false,
+    workDays: {
+      sunday: true,
+      monday: true,
+      tuesday: true,
+      wednesday: true,
+      thursday: true,
+      friday: true,
+      saturday: false,
+    },
+    workHours: {
+      start: '08:00',
+      end: '16:00',
+    },
+    employeeCount: 23,
+    rulesCount: 0,
+  },
+]
+
+// الألوان المتاحة للجداول
+const scheduleColors: { [key: string]: string } = {
+  blue: 'bg-blue-500',
+  green: 'bg-green-500',
+  purple: 'bg-purple-500',
+  orange: 'bg-orange-500',
+  pink: 'bg-pink-500',
+  teal: 'bg-teal-500',
+  indigo: 'bg-indigo-500',
+  red: 'bg-red-500',
+}
+
+const steps = [
+  { id: 1, title: 'البيانات الشخصية', icon: User },
+  { id: 2, title: 'البيانات الوظيفية', icon: Briefcase },
+  { id: 3, title: 'البيانات المالية', icon: Wallet },
+  { id: 4, title: 'المؤهلات والخبرات', icon: GraduationCap },
+  { id: 5, title: 'المستندات', icon: FileText },
+]
+
+// خيارات ثابتة للقوائم — لحقن القيمة الحالية عند التعديل إن لم تكن ضمنها
+const jobTitleOptions = ['مطور برمجيات', 'محلل نظم', 'مدير', 'أخصائي']
+const nationalityOptions = ['سعودي', 'مصري', 'أردني', 'سوري', 'أخرى']
+const bankOptions = ['بنك الراجحي', 'بنك الإنماء', 'البنك الأهلي', 'بنك الرياض', 'بنك ساب']
+const statusLabels: Record<string, string> = {
+  probation: 'فترة تجربة',
+  active: 'نشط',
+  suspended: 'موقوف',
+  notice_period: 'فترة إشعار',
+  resigned: 'مستقيل',
+  terminated: 'منتهي الخدمة',
+  archived: 'مؤرشف',
+}
+
+const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormState => ({
+  firstNameAr: '',
+  fatherNameAr: '',
+  grandNameAr: '',
+  familyNameAr: '',
+  firstNameEn: '',
+  middleNameEn: '',
+  lastNameEn: '',
+  nationalId: '',
+  phone: '',
+  personalEmail: '',
+  birthDate: '',
+  gender: '',
+  maritalStatus: '',
+  nationality: '',
+  addressCity: '',
+  addressDistrict: '',
+  emergencyName: '',
+  emergencyPhone: '',
+  employeeCode: '',
+  fingerprintCode: '',
+  joinDate: '',
+  status: 'probation',
+  branchId: '',
+  departmentId: '',
+  teamId: '',
+  managerId: '',
+  jobTitle: '',
+  workEmail: '',
+  basicSalary: '',
+  housingAllowance: '',
+  transportAllowance: '',
+  phoneAllowance: '',
+  workNatureAllowance: '',
+  payMethod: 'transfer',
+  costCenterId: '',
+  bankName: '',
+  iban: '',
+  contractType: '',
+  contractStart: '',
+  contractEnd: '',
+  photoFileId: undefined,
+  ...initial,
+})
+
+export default function EmployeeForm({ mode, initial, onSubmit, submitting, error }: EmployeeFormProps) {
+  const [currentStep, setCurrentStep] = useState(1)
+  const [leaveEntitled, setLeaveEntitled] = useState(true)
+  const [selectedSchedule, setSelectedSchedule] = useState('')
+  // الرصيد الافتتاحي المُرحّل من نظام سابق وصلاحيته
+  const [openingBalance, setOpeningBalance] = useState('')
+  const [openingExpiry, setOpeningExpiry] = useState<'end_of_year' | 'custom_date' | 'no_expiry'>('end_of_year')
+  const [openingExpiryDate, setOpeningExpiryDate] = useState('')
+
+  // بيانات القوائم من السيرفر
+  const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [departments, setDepartments] = useState<ApiDepartment[]>([])
+  const [teams, setTeams] = useState<ApiTeam[]>([])
+  const [allEmployees, setAllEmployees] = useState<ApiEmployee[]>([])
+  const [costCenters, setCostCenters] = useState<CostCenter[]>([])
+  const [catalogError, setCatalogError] = useState('')
+
+  // حقول النموذج المرتبطة بالباك إند — تُبذَر من initial
+  const [form, setForm] = useState<EmployeeFormState>(() => makeInitialState(initial))
+
+  const setField = <K extends keyof EmployeeFormState>(key: K, value: EmployeeFormState[K]) =>
+    setForm((prev) => ({ ...prev, [key]: value }))
+
+  // ===== صورة الموظف =====
+  const [photoUrl, setPhotoUrl] = useState<string | null>(null)
+  const [photoUploading, setPhotoUploading] = useState(false)
+  const [photoError, setPhotoError] = useState('')
+  const objectUrlRef = useRef<string | null>(null)
+
+  const replacePhotoUrl = (url: string | null) => {
+    if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+    objectUrlRef.current = url
+    setPhotoUrl(url)
+  }
+
+  // تحميل صورة موجودة (وضع التعديل) عبر رابط blob بالتوكن
+  useEffect(() => {
+    let active = true
+    const pid = initial?.photoFileId
+    if (pid != null) {
+      fetchFileObjectUrl(pid)
+        .then((url) => {
+          if (!active) {
+            if (url) URL.revokeObjectURL(url)
+            return
+          }
+          if (url) replacePhotoUrl(url)
+        })
+        .catch(() => {})
+    }
+    return () => {
+      active = false
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  // تفريغ رابط الـ blob عند إزالة المكوّن
+  useEffect(
+    () => () => {
+      if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
+    },
+    []
+  )
+
+  const handlePhotoPick = async (file: File | null | undefined) => {
+    if (!file) return
+    setPhotoError('')
+    // معاينة فورية محلية قبل اكتمال الرفع
+    replacePhotoUrl(URL.createObjectURL(file))
+    setPhotoUploading(true)
+    try {
+      const res = await uploadFile(file, { entityType: 'employee_photo' })
+      setForm((prev) => ({ ...prev, photoFileId: res.id }))
+    } catch (err) {
+      setPhotoError(err instanceof Error ? err.message : 'فشل رفع الصورة')
+    } finally {
+      setPhotoUploading(false)
+    }
+  }
+
+  const handlePhotoRemove = () => {
+    replacePhotoUrl(null)
+    setForm((prev) => ({ ...prev, photoFileId: undefined }))
+    setPhotoError('')
+  }
+
+  useEffect(() => {
+    Promise.all([fetchBranches(), fetchDepartments(), fetchTeams(), fetchEmployees()])
+      .then(([b, d, t, e]) => {
+        setBranches(b)
+        setDepartments(d)
+        setTeams(t)
+        setAllEmployees(e)
+      })
+      .catch((err) =>
+        setCatalogError(err instanceof Error ? err.message : 'تعذر تحميل بيانات القوائم')
+      )
+    // مراكز التكلفة اختيارية — فشلها لا يعطّل النموذج
+    fetchCatalog<CostCenter>('cost-centers')
+      .then((cc) => setCostCenters(cc.filter((c) => c.isActive)))
+      .catch(() => setCostCenters([]))
+  }, [])
+
+  const fullNameAr = [form.firstNameAr, form.fatherNameAr, form.grandNameAr, form.familyNameAr]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join(' ')
+  const fullNameEn = [form.firstNameEn, form.middleNameEn, form.lastNameEn]
+    .map((s) => s.trim())
+    .filter(Boolean)
+    .join(' ')
+
+  const avatarLetter = (form.firstNameAr.trim() || fullNameAr).charAt(0)
+
+  const filteredDepartments = form.branchId
+    ? departments.filter((d) => d.branchId === Number(form.branchId))
+    : departments
+  const filteredTeams = form.departmentId
+    ? teams.filter((t) => t.departmentId === Number(form.departmentId))
+    : teams
+
+  // إجمالي الراتب الشهري = الأساسي + البدلات الثابتة (يُحدَّث لحظياً في الخطوة المالية)
+  const totalMonthlySalary =
+    (Number(form.basicSalary) || 0) +
+    (Number(form.housingAllowance) || 0) +
+    (Number(form.transportAllowance) || 0) +
+    (Number(form.phoneAllowance) || 0) +
+    (Number(form.workNatureAllowance) || 0)
+
+  const buildPayload = (): EmployeeFormPayload => {
+    const payload: EmployeeFormPayload = {
+      employeeCode: (form.employeeCode || form.fingerprintCode).trim(),
+      fullName: fullNameAr,
+      status: form.status,
+      payMethod: form.payMethod,
+    }
+    if (form.branchId) payload.branchId = Number(form.branchId)
+    if (fullNameEn) payload.fullNameEn = fullNameEn
+    const email = (form.workEmail || form.personalEmail).trim()
+    if (email) payload.email = email
+    if (form.phone.trim()) payload.phone = form.phone.trim()
+    if (form.nationalId.trim()) payload.nationalId = form.nationalId.trim()
+    if (form.jobTitle) payload.jobTitle = form.jobTitle
+    if (form.departmentId) payload.departmentId = Number(form.departmentId)
+    if (form.teamId) payload.teamId = Number(form.teamId)
+    if (form.managerId) payload.managerEmployeeId = Number(form.managerId)
+    if (form.joinDate) payload.joinDate = form.joinDate
+    if (form.basicSalary !== '') payload.basicSalary = Number(form.basicSalary)
+    if (form.costCenterId) payload.costCenterId = Number(form.costCenterId)
+    if (form.bankName) payload.bankName = form.bankName
+    const iban = form.iban.replace(/\s+/g, '').toUpperCase()
+    if (iban) payload.iban = iban
+    // الحقول الشخصية — تُرسل فقط عند تعبئتها
+    if (form.birthDate) payload.birthDate = form.birthDate
+    if (form.gender) payload.gender = form.gender
+    if (form.maritalStatus) payload.maritalStatus = form.maritalStatus
+    if (form.nationality) payload.nationality = form.nationality
+    const address = [form.addressDistrict.trim(), form.addressCity.trim()]
+      .filter(Boolean)
+      .join('، ')
+    if (address) payload.address = address
+    if (form.emergencyName.trim()) payload.emergencyContactName = form.emergencyName.trim()
+    if (form.emergencyPhone.trim()) payload.emergencyContactPhone = form.emergencyPhone.trim()
+    // البدلات الثابتة
+    if (form.housingAllowance !== '') payload.housingAllowance = Number(form.housingAllowance)
+    if (form.transportAllowance !== '') payload.transportAllowance = Number(form.transportAllowance)
+    const otherAllowance =
+      (Number(form.phoneAllowance) || 0) + (Number(form.workNatureAllowance) || 0)
+    if (form.phoneAllowance !== '' || form.workNatureAllowance !== '')
+      payload.otherAllowance = otherAllowance
+    // بيانات العقد — تُرسل فقط عند تعبئتها
+    if (form.contractType) payload.contractType = form.contractType
+    if (form.contractStart) payload.contractStart = form.contractStart
+    if (form.contractEnd) payload.contractEnd = form.contractEnd
+    // صورة الموظف
+    if (form.photoFileId != null) payload.photoFileId = form.photoFileId
+    return payload
+  }
+
+  const handleSubmit = async () => {
+    await onSubmit(buildPayload())
+  }
+
+  const nextStep = () => {
+    if (currentStep < steps.length) {
+      setCurrentStep(currentStep + 1)
+    }
+  }
+
+  const prevStep = () => {
+    if (currentStep > 1) {
+      setCurrentStep(currentStep - 1)
+    }
+  }
+
+  const isEdit = mode === 'edit'
+  const bannerError = error || catalogError
+
+  return (
+    <MainLayout>
+      <div className="space-y-6">
+        {/* Page Header */}
+        <div className="flex items-center justify-between">
+          <div>
+            <h1 className="text-2xl font-bold text-gray-800">
+              {isEdit ? 'تعديل بيانات الموظف' : 'إضافة موظف جديد'}
+            </h1>
+            <p className="text-gray-500 mt-1">
+              {isEdit ? 'تحديث بيانات الموظف في النظام' : 'إدخال بيانات الموظف الجديد في النظام'}
+            </p>
+          </div>
+          <Link href="/employees" className="btn-secondary flex items-center gap-2">
+            <X size={18} />
+            إلغاء
+          </Link>
+        </div>
+
+        {/* Progress Steps */}
+        <div className="card">
+          <div className="flex items-center justify-between">
+            {steps.map((step, index) => (
+              <div key={step.id} className="flex items-center">
+                <div className="flex flex-col items-center">
+                  <button
+                    type="button"
+                    onClick={() => setCurrentStep(step.id)}
+                    className={`w-12 h-12 rounded-2xl flex items-center justify-center transition-all ${
+                      currentStep === step.id
+                        ? 'bg-primary-500 text-white shadow-lg shadow-primary-500/30'
+                        : currentStep > step.id
+                        ? 'bg-success-500 text-white'
+                        : 'bg-gray-100 text-gray-400'
+                    }`}
+                  >
+                    <step.icon size={22} />
+                  </button>
+                  <span
+                    className={`mt-2 text-sm font-medium ${
+                      currentStep === step.id
+                        ? 'text-primary-600'
+                        : currentStep > step.id
+                        ? 'text-success-600'
+                        : 'text-gray-400'
+                    }`}
+                  >
+                    {step.title}
+                  </span>
+                </div>
+                {index < steps.length - 1 && (
+                  <div
+                    className={`w-24 h-1 mx-4 rounded-full transition-all ${
+                      currentStep > step.id ? 'bg-success-500' : 'bg-gray-200'
+                    }`}
+                  />
+                )}
+              </div>
+            ))}
+          </div>
+        </div>
+
+        {/* Form Content */}
+        <div className="card">
+          {/* Step 1: Personal Information */}
+          {currentStep === 1 && (
+            <div className="space-y-8">
+              <h2 className="text-lg font-bold text-gray-800 border-b border-gray-100 pb-4">
+                البيانات الشخصية
+              </h2>
+
+              {/* Photo Upload */}
+              <div className="flex items-start gap-6">
+                <div className="flex flex-col items-center gap-3">
+                  <div className="w-24 h-24 rounded-full overflow-hidden bg-gray-100 border-2 border-dashed border-gray-200 flex items-center justify-center">
+                    {photoUrl ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={photoUrl} alt="صورة الموظف" className="w-full h-full object-cover" />
+                    ) : avatarLetter ? (
+                      <span className="text-3xl font-bold text-gray-300">{avatarLetter}</span>
+                    ) : (
+                      <User size={36} className="text-gray-300" />
+                    )}
+                  </div>
+                  <div className="flex flex-col items-center gap-1.5">
+                    <label className="btn-secondary text-sm py-2 px-4 flex items-center gap-2 cursor-pointer">
+                      <Upload size={16} />
+                      {photoUploading ? 'جارٍ الرفع...' : photoUrl ? 'تغيير الصورة' : 'رفع صورة'}
+                      <input
+                        type="file"
+                        accept="image/*"
+                        className="hidden"
+                        onChange={(e) => handlePhotoPick(e.target.files?.[0])}
+                      />
+                    </label>
+                    {(photoUrl || form.photoFileId != null) && (
+                      <button
+                        type="button"
+                        onClick={handlePhotoRemove}
+                        className="text-xs text-red-500 hover:text-red-600"
+                      >
+                        إزالة
+                      </button>
+                    )}
+                    {photoError && <p className="text-xs text-red-500">{photoError}</p>}
+                  </div>
+                </div>
+
+                <div className="flex-1 grid grid-cols-2 gap-4">
+                  {/* Name Fields - Arabic */}
+                  <div>
+                    <label className="label">الاسم الأول (عربي) *</label>
+                    <input type="text" className="input" placeholder="أحمد" value={form.firstNameAr} onChange={(e) => setField('firstNameAr', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label">اسم الأب (عربي) *</label>
+                    <input type="text" className="input" placeholder="محمد" value={form.fatherNameAr} onChange={(e) => setField('fatherNameAr', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label">اسم الجد (عربي)</label>
+                    <input type="text" className="input" placeholder="علي" value={form.grandNameAr} onChange={(e) => setField('grandNameAr', e.target.value)} />
+                  </div>
+                  <div>
+                    <label className="label">اسم العائلة (عربي) *</label>
+                    <input type="text" className="input" placeholder="السعيد" value={form.familyNameAr} onChange={(e) => setField('familyNameAr', e.target.value)} />
+                  </div>
+                </div>
+              </div>
+
+              {/* Name Fields - English */}
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <label className="label">First Name *</label>
+                  <input type="text" className="input" placeholder="Ahmed" dir="ltr" value={form.firstNameEn} onChange={(e) => setField('firstNameEn', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Middle Name</label>
+                  <input type="text" className="input" placeholder="Mohammed" dir="ltr" value={form.middleNameEn} onChange={(e) => setField('middleNameEn', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">Last Name *</label>
+                  <input type="text" className="input" placeholder="Alsaeed" dir="ltr" value={form.lastNameEn} onChange={(e) => setField('lastNameEn', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">الاسم الكامل (تلقائي)</label>
+                  <input
+                    type="text"
+                    className="input bg-gray-50"
+                    value={fullNameAr}
+                    disabled
+                  />
+                </div>
+              </div>
+
+              {/* Basic Info */}
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <label className="label">تاريخ الميلاد *</label>
+                  <div className="relative">
+                    <input type="date" className="input pl-10" value={form.birthDate} onChange={(e) => setField('birthDate', e.target.value)} />
+                    <Calendar size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  </div>
+                </div>
+                <div>
+                  <label className="label">مكان الميلاد</label>
+                  <input type="text" className="input" placeholder="الرياض" />
+                </div>
+                <div>
+                  <label className="label">الجنس *</label>
+                  <select className="input" value={form.gender} onChange={(e) => setField('gender', e.target.value)}>
+                    <option value="">اختر</option>
+                    <option value="male">ذكر</option>
+                    <option value="female">أنثى</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">الحالة الاجتماعية *</label>
+                  <select className="input" value={form.maritalStatus} onChange={(e) => setField('maritalStatus', e.target.value)}>
+                    <option value="">اختر</option>
+                    <option value="single">أعزب</option>
+                    <option value="married">متزوج</option>
+                    <option value="divorced">مطلق</option>
+                    <option value="widowed">أرمل</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Identity Documents */}
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <label className="label">الجنسية *</label>
+                  <select className="input" value={form.nationality} onChange={(e) => setField('nationality', e.target.value)}>
+                    <option value="">اختر</option>
+                    {form.nationality && !nationalityOptions.includes(form.nationality) && (
+                      <option value={form.nationality}>{form.nationality}</option>
+                    )}
+                    {nationalityOptions.map((n) => (
+                      <option key={n} value={n}>{n}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">رقم الهوية / الإقامة *</label>
+                  <input type="text" className="input" placeholder="1234567890" dir="ltr" value={form.nationalId} onChange={(e) => setField('nationalId', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">رقم جواز السفر</label>
+                  <input type="text" className="input" placeholder="A12345678" dir="ltr" />
+                </div>
+                <div>
+                  <label className="label">تاريخ انتهاء الجواز</label>
+                  <input type="date" className="input" />
+                </div>
+              </div>
+
+              {/* Contact Info */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                معلومات الاتصال
+              </h3>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="label">رقم الجوال *</label>
+                  <div className="relative">
+                    <input type="tel" className="input pl-10" placeholder="+966 50 123 4567" dir="ltr" value={form.phone} onChange={(e) => setField('phone', e.target.value)} />
+                    <Phone size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  </div>
+                </div>
+                <div>
+                  <label className="label">رقم جوال بديل</label>
+                  <input type="tel" className="input" placeholder="+966 55 123 4567" dir="ltr" />
+                </div>
+                <div>
+                  <label className="label">البريد الإلكتروني الشخصي</label>
+                  <div className="relative">
+                    <input type="email" className="input pl-10" placeholder="email@example.com" dir="ltr" value={form.personalEmail} onChange={(e) => setField('personalEmail', e.target.value)} />
+                    <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Address */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                العنوان
+              </h3>
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <label className="label">البلد</label>
+                  <select className="input">
+                    <option value="SA">السعودية</option>
+                    <option value="AE">الإمارات</option>
+                    <option value="EG">مصر</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">المدينة</label>
+                  <input type="text" className="input" placeholder="الرياض" value={form.addressCity} onChange={(e) => setField('addressCity', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">الحي</label>
+                  <input type="text" className="input" placeholder="العليا" value={form.addressDistrict} onChange={(e) => setField('addressDistrict', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">الرمز البريدي</label>
+                  <input type="text" className="input" placeholder="12345" dir="ltr" />
+                </div>
+              </div>
+
+              {/* Emergency Contact */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                جهة اتصال للطوارئ
+              </h3>
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <label className="label">الاسم</label>
+                  <input type="text" className="input" placeholder="اسم جهة الاتصال" value={form.emergencyName} onChange={(e) => setField('emergencyName', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">صلة القرابة</label>
+                  <select className="input">
+                    <option value="">اختر</option>
+                    <option value="spouse">زوج/زوجة</option>
+                    <option value="parent">أب/أم</option>
+                    <option value="sibling">أخ/أخت</option>
+                    <option value="child">ابن/ابنة</option>
+                    <option value="other">أخرى</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">رقم الجوال</label>
+                  <input type="tel" className="input" placeholder="+966 50 123 4567" dir="ltr" value={form.emergencyPhone} onChange={(e) => setField('emergencyPhone', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">رقم بديل</label>
+                  <input type="tel" className="input" placeholder="+966 50 123 4567" dir="ltr" />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Step 2: Employment Information */}
+          {currentStep === 2 && (
+            <div className="space-y-8">
+              <h2 className="text-lg font-bold text-gray-800 border-b border-gray-100 pb-4">
+                البيانات الوظيفية
+              </h2>
+
+              {/* Employee ID */}
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <label className="label">الرقم الوظيفي *</label>
+                  <input type="text" className="input" placeholder="EMP001" dir="ltr" value={form.employeeCode} onChange={(e) => setField('employeeCode', e.target.value)} />
+                  <p className="text-xs text-gray-400 mt-1">اتركه فارغاً للإنشاء التلقائي</p>
+                </div>
+                <div>
+                  <label className="label">رقم البصمة</label>
+                  <input type="text" className="input" placeholder="001" dir="ltr" value={form.fingerprintCode} onChange={(e) => setField('fingerprintCode', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">تاريخ التعيين *</label>
+                  <input type="date" className="input" value={form.joinDate} onChange={(e) => setField('joinDate', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">تاريخ بداية العمل الفعلي</label>
+                  <input type="date" className="input" />
+                </div>
+              </div>
+
+              {/* Employment Type */}
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <label className="label">نوع التوظيف *</label>
+                  <select className="input">
+                    <option value="">اختر</option>
+                    <option value="fulltime">دوام كامل</option>
+                    <option value="parttime">دوام جزئي</option>
+                    <option value="contract">عقد مؤقت</option>
+                    <option value="consultant">استشاري</option>
+                    <option value="intern">متدرب</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">حالة الموظف *</label>
+                  <select className="input" value={form.status} onChange={(e) => setField('status', e.target.value)}>
+                    <option value="probation">فترة تجربة</option>
+                    <option value="active">نشط</option>
+                    {form.status && !['probation', 'active'].includes(form.status) && (
+                      <option value={form.status}>{statusLabels[form.status] ?? form.status}</option>
+                    )}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">تاريخ انتهاء فترة التجربة</label>
+                  <input type="date" className="input" />
+                </div>
+                <div>
+                  <label className="label">مصدر التوظيف</label>
+                  <select className="input">
+                    <option value="">اختر</option>
+                    <option value="jobsite">موقع توظيف</option>
+                    <option value="referral">ترشيح موظف</option>
+                    <option value="agency">وكالة توظيف</option>
+                    <option value="linkedin">LinkedIn</option>
+                    <option value="other">أخرى</option>
+                  </select>
+                </div>
+              </div>
+
+              {/* Organization Position */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                الموقع التنظيمي
+              </h3>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="label">الشركة *</label>
+                  <select className="input">
+                    <option value="main">الشركة الرئيسية</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">الفرع *</label>
+                  <select
+                    className="input"
+                    value={form.branchId}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, branchId: e.target.value, departmentId: '', teamId: '' }))
+                    }
+                  >
+                    <option value="">اختر</option>
+                    {branches.map((b) => (
+                      <option key={b.id} value={b.id}>{b.name}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">الإدارة/القسم *</label>
+                  <select
+                    className="input"
+                    value={form.departmentId}
+                    onChange={(e) =>
+                      setForm((prev) => ({ ...prev, departmentId: e.target.value, teamId: '' }))
+                    }
+                  >
+                    <option value="">اختر</option>
+                    {filteredDepartments.map((d) => (
+                      <option key={d.id} value={d.id}>{d.name}</option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="label">الفريق</label>
+                  <select className="input" value={form.teamId} onChange={(e) => setField('teamId', e.target.value)}>
+                    <option value="">بدون فريق (تابع للقسم مباشرة)</option>
+                    {filteredTeams.map((t) => (
+                      <option key={t.id} value={t.id}>{t.name}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">مدير الفريق سيكون المدير المباشر</p>
+                </div>
+                <div>
+                  <label className="label">المسمى الوظيفي *</label>
+                  <select className="input" value={form.jobTitle} onChange={(e) => setField('jobTitle', e.target.value)}>
+                    <option value="">اختر</option>
+                    {form.jobTitle && !jobTitleOptions.includes(form.jobTitle) && (
+                      <option value={form.jobTitle}>{form.jobTitle}</option>
+                    )}
+                    {jobTitleOptions.map((j) => (
+                      <option key={j} value={j}>{j}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">الدرجة الوظيفية</label>
+                  <select className="input">
+                    <option value="">اختر</option>
+                    <option value="1">Grade 1</option>
+                    <option value="2">Grade 2</option>
+                    <option value="3">Grade 3</option>
+                    <option value="4">Grade 4</option>
+                    <option value="5">Grade 5</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="label">المدير المباشر</label>
+                  <select className="input" value={form.managerId} onChange={(e) => setField('managerId', e.target.value)}>
+                    <option value="">اختر (أو يتحدد من الفريق)</option>
+                    {allEmployees.map((emp) => (
+                      <option key={emp.id} value={emp.id}>
+                        {emp.fullName}{emp.jobTitle ? ` - ${emp.jobTitle}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">يتحدد تلقائياً عند اختيار الفريق</p>
+                </div>
+                <div>
+                  <label className="label">موقع العمل</label>
+                  <input type="text" className="input" placeholder="المكتب الرئيسي" />
+                </div>
+                <div>
+                  <label className="label">مركز التكلفة</label>
+                  <select
+                    className="input"
+                    value={form.costCenterId}
+                    onChange={(e) => setField('costCenterId', e.target.value)}
+                  >
+                    <option value="">بدون مركز تكلفة</option>
+                    {costCenters.map((cc) => (
+                      <option key={cc.id} value={String(cc.id)}>
+                        {cc.code} — {cc.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Contract Info */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                معلومات العقد
+              </h3>
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <label className="label">نوع العقد *</label>
+                  <select className="input" value={form.contractType} onChange={(e) => setField('contractType', e.target.value)}>
+                    <option value="">اختر</option>
+                    <option value="permanent">دائم (غير محدد المدة)</option>
+                    <option value="fixed_term">محدد المدة</option>
+                    <option value="part_time">دوام جزئي</option>
+                    <option value="seasonal">موسمي</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">رقم العقد</label>
+                  <input type="text" className="input" placeholder="C-2026-001" dir="ltr" />
+                </div>
+                <div>
+                  <label className="label">تاريخ بداية العقد *</label>
+                  <input type="date" className="input" value={form.contractStart} onChange={(e) => setField('contractStart', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">تاريخ نهاية العقد</label>
+                  <input type="date" className="input" value={form.contractEnd} onChange={(e) => setField('contractEnd', e.target.value)} />
+                  <p className="text-xs text-gray-400 mt-1">اتركه فارغاً لعقد غير محدد المدة</p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <label className="label">مدة العقد (أشهر)</label>
+                  <input type="number" className="input" placeholder="24" />
+                </div>
+                <div>
+                  <label className="label">فترة الإشعار (أيام)</label>
+                  <input type="number" className="input" placeholder="30" />
+                </div>
+                <div className="col-span-2">
+                  <label className="label">مرفق العقد</label>
+                  <div className="flex items-center gap-2">
+                    <input type="file" className="input flex-1" accept=".pdf" />
+                  </div>
+                </div>
+              </div>
+
+              {/* Work Schedule */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2 flex items-center gap-2">
+                <Clock size={18} className="text-primary-500" />
+                جدول العمل
+              </h3>
+              <p className="text-sm text-gray-500 mb-4">اختر جدول العمل الذي سيتبعه الموظف (يمكن إنشاء جداول جديدة من الإعدادات)</p>
+
+              <div className="grid grid-cols-2 gap-4">
+                {workSchedules.map((schedule) => {
+                  const isSelected = selectedSchedule === schedule.id
+                  const colorClass = scheduleColors[schedule.color] || 'bg-blue-500'
+                  const workDaysCount = Object.values(schedule.workDays).filter(Boolean).length
+
+                  return (
+                    <div
+                      key={schedule.id}
+                      onClick={() => setSelectedSchedule(schedule.id)}
+                      className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                        isSelected
+                          ? 'border-primary-500 bg-primary-50 shadow-lg shadow-primary-500/20'
+                          : 'border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                      }`}
+                    >
+                      <div className="flex items-start gap-3 mb-4">
+                        <div className={`w-10 h-10 ${colorClass} rounded-xl flex items-center justify-center flex-shrink-0`}>
+                          <Calendar size={20} className="text-white" />
+                        </div>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className={`font-bold ${isSelected ? 'text-primary-700' : 'text-gray-800'}`}>
+                              {schedule.name}
+                            </p>
+                            {schedule.isDefault && (
+                              <span className="px-2 py-0.5 bg-primary-100 text-primary-600 rounded-full text-xs font-medium">
+                                افتراضي
+                              </span>
+                            )}
+                          </div>
+                          <p className="text-sm text-gray-500 mt-1">{schedule.description}</p>
+                        </div>
+                      </div>
+
+                      <div className="space-y-3 text-sm">
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500 flex items-center gap-1">
+                            <Clock size={14} />
+                            ساعات العمل:
+                          </span>
+                          <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
+                            {schedule.workHours.start} - {schedule.workHours.end}
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">أيام العمل:</span>
+                          <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
+                            {workDaysCount} أيام في الأسبوع
+                          </span>
+                        </div>
+                        <div className="flex items-center justify-between">
+                          <span className="text-gray-500">عدد الموظفين:</span>
+                          <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
+                            {schedule.employeeCount} موظف
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* أيام العمل */}
+                      <div className="flex gap-1 mt-4 pt-3 border-t border-gray-100">
+                        {weekDays.map(day => (
+                          <div
+                            key={day.key}
+                            className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
+                              schedule.workDays[day.key]
+                                ? `${colorClass} text-white`
+                                : 'bg-gray-100 text-gray-400'
+                            }`}
+                          >
+                            {day.shortName}
+                          </div>
+                        ))}
+                      </div>
+
+                      {schedule.rulesCount > 0 && (
+                        <div className="mt-3 text-xs text-gray-500">
+                          <span className="px-2 py-1 bg-warning-100 text-warning-700 rounded">
+                            {schedule.rulesCount} قاعدة استثنائية
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )
+                })}
+              </div>
+
+              {selectedSchedule && (
+                <div className="mt-4 p-4 bg-blue-50 rounded-xl flex items-start gap-3">
+                  <Clock size={20} className="text-blue-500 mt-0.5" />
+                  <div>
+                    <p className="font-medium text-blue-800">
+                      تم اختيار: {workSchedules.find(s => s.id === selectedSchedule)?.name}
+                    </p>
+                    <p className="text-sm text-blue-700 mt-1">
+                      يمكن تغيير جدول العمل لاحقاً من صفحة الإعدادات أو من ملف الموظف
+                    </p>
+                  </div>
+                </div>
+              )}
+
+              {/* Link to settings */}
+              <div className="mt-4 p-4 bg-gray-50 rounded-xl flex items-center justify-between">
+                <div className="flex items-center gap-3">
+                  <Building2 size={20} className="text-gray-400" />
+                  <p className="text-sm text-gray-600">
+                    لإنشاء جداول عمل جديدة أو تعديل الجداول الحالية
+                  </p>
+                </div>
+                <a href="/settings/work-days" className="text-sm text-primary-600 hover:text-primary-700 font-medium">
+                  الذهاب للإعدادات ←
+                </a>
+              </div>
+
+              {/* Leave Entitlements */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                استحقاقات الإجازات
+              </h3>
+
+              {/* Toggle for leave entitlement */}
+              <div className={`p-4 rounded-xl flex items-center justify-between ${leaveEntitled ? 'bg-green-50' : 'bg-gray-50'}`}>
+                <div className="flex items-center gap-3">
+                  <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${leaveEntitled ? 'bg-green-100' : 'bg-gray-200'}`}>
+                    <Calendar size={20} className={leaveEntitled ? 'text-green-600' : 'text-gray-400'} />
+                  </div>
+                  <div>
+                    <p className="font-medium text-gray-800">يستحق إجازات سنوية</p>
+                    <p className="text-sm text-gray-500">
+                      {leaveEntitled ? 'الموظف يستحق إجازات سنوية' : 'الموظف لا يستحق إجازات سنوية'}
+                    </p>
+                  </div>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setLeaveEntitled(!leaveEntitled)}
+                  className={`px-4 py-2 rounded-xl font-medium transition-all ${
+                    leaveEntitled
+                      ? 'bg-green-500 text-white'
+                      : 'bg-gray-200 text-gray-600'
+                  }`}
+                >
+                  {leaveEntitled ? 'يستحق ✓' : 'لا يستحق'}
+                </button>
+              </div>
+
+              {/* Leave fields - shown only if entitled */}
+              {leaveEntitled && (
+              <div className="space-y-4 mt-4">
+                <div className="grid grid-cols-4 gap-4">
+                  <div>
+                    <label className="label">الإجازة السنوية (يوم/سنة) *</label>
+                    <input type="number" className="input" placeholder="21" defaultValue="21" min="0" />
+                    <p className="text-xs text-gray-400 mt-1">حسب نظام العمل السعودي</p>
+                  </div>
+                  <div>
+                    <label className="label">طريقة الاستحقاق *</label>
+                    <select className="input">
+                      <option value="monthly">شهري (X يوم/شهر)</option>
+                      <option value="yearly">سنوي (دفعة واحدة)</option>
+                      <option value="daily">يومي (تراكمي)</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">بداية الاستحقاق *</label>
+                    <select className="input">
+                      <option value="after_probation">بعد فترة التجربة</option>
+                      <option value="from_joining">من تاريخ التعيين</option>
+                      <option value="after_6months">بعد 6 أشهر</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">فترة التجربة (أشهر)</label>
+                    <input type="number" className="input" placeholder="3" defaultValue="3" />
+                  </div>
+                </div>
+
+              <div className="grid grid-cols-4 gap-4 mt-4">
+                <div>
+                  <label className="label">الإجازة المرضية (يوم/سنة)</label>
+                  <input type="number" className="input" placeholder="30" defaultValue="30" />
+                </div>
+                <div>
+                  <label className="label">الإجازة الطارئة (يوم/سنة)</label>
+                  <input type="number" className="input" placeholder="5" defaultValue="5" />
+                </div>
+                <div>
+                  <label className="label">السماح بالترحيل</label>
+                  <select className="input">
+                    <option value="yes">نعم</option>
+                    <option value="no">لا</option>
+                    <option value="limited">محدود</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">الحد الأقصى للترحيل (يوم)</label>
+                  <input type="number" className="input" placeholder="10" defaultValue="10" />
+                </div>
+              </div>
+
+              {/* الرصيد الافتتاحي (للموظفين الحاليين المنقولين للنظام) */}
+              <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 mt-4">
+                <div className="flex items-start gap-3 mb-4">
+                  <Calendar size={20} className="text-amber-600 mt-0.5" />
+                  <div>
+                    <p className="font-medium text-amber-800">رصيد افتتاحي مُرحّل (اختياري)</p>
+                    <p className="text-sm text-amber-700 mt-0.5">
+                      لموظف قائم لديه رصيد سابق قبل دخوله النظام — الرصيد الجديد
+                      يُحسب تلقائياً من تاريخ التعيين، وهذا الرصيد يبقى صالحاً حتى
+                      التاريخ المحدد
+                    </p>
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="label">الرصيد الافتتاحي (يوم)</label>
+                    <input
+                      type="number"
+                      className="input"
+                      placeholder="مثال: 15"
+                      min="0"
+                      value={openingBalance}
+                      onChange={(e) => setOpeningBalance(e.target.value)}
+                    />
+                  </div>
+                  <div>
+                    <label className="label">صلاحية الرصيد الافتتاحي</label>
+                    <select
+                      className="input"
+                      value={openingExpiry}
+                      onChange={(e) =>
+                        setOpeningExpiry(e.target.value as typeof openingExpiry)
+                      }
+                    >
+                      <option value="end_of_year">حتى نهاية السنة الحالية</option>
+                      <option value="custom_date">حتى تاريخ أحدده</option>
+                      <option value="no_expiry">بدون انتهاء</option>
+                    </select>
+                  </div>
+                  {openingExpiry === 'custom_date' && (
+                    <div>
+                      <label className="label">تاريخ انتهاء الرصيد</label>
+                      <input
+                        type="date"
+                        className="input"
+                        value={openingExpiryDate}
+                        onChange={(e) => setOpeningExpiryDate(e.target.value)}
+                      />
+                    </div>
+                  )}
+                </div>
+                {openingBalance && Number(openingBalance) > 0 && (
+                  <p className="text-xs text-amber-700 mt-3">
+                    ✓ سيبدأ الموظف برصيد {openingBalance} يوم
+                    {openingExpiry === 'end_of_year' && ' صالح حتى 31 ديسمبر'}
+                    {openingExpiry === 'custom_date' && openingExpiryDate && ` صالح حتى ${openingExpiryDate}`}
+                    {openingExpiry === 'no_expiry' && ' بدون تاريخ انتهاء'}
+                    ، بالإضافة إلى الرصيد الجديد المتراكم من تاريخ التعيين
+                  </p>
+                )}
+              </div>
+
+              <div className="p-4 bg-blue-50 rounded-xl mt-4">
+                <div className="flex items-start gap-3">
+                  <Calendar size={20} className="text-blue-500 mt-0.5" />
+                  <div>
+                    <p className="font-medium text-blue-800">ملخص الاستحقاقات السنوية</p>
+                    <div className="grid grid-cols-3 gap-4 mt-2 text-sm text-blue-700">
+                      <div>إجازة سنوية: <strong>21 يوم</strong></div>
+                      <div>إجازة مرضية: <strong>30 يوم</strong></div>
+                      <div>إجازة طارئة: <strong>5 أيام</strong></div>
+                    </div>
+                  </div>
+                </div>
+              </div>
+              </div>
+              )}
+
+              {/* Work Email */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                البريد الإلكتروني للعمل
+              </h3>
+              <div className="grid grid-cols-2 gap-4">
+                <div>
+                  <label className="label">البريد الإلكتروني للعمل</label>
+                  <input type="email" className="input" placeholder="ahmed.m@company.com" dir="ltr" value={form.workEmail} onChange={(e) => setField('workEmail', e.target.value)} />
+                  <p className="text-xs text-gray-400 mt-1">اتركه فارغاً للإنشاء التلقائي</p>
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Step 3: Financial Information */}
+          {currentStep === 3 && (
+            <div className="space-y-8">
+              <h2 className="text-lg font-bold text-gray-800 border-b border-gray-100 pb-4">
+                البيانات المالية
+              </h2>
+
+              {/* Salary */}
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <label className="label">الراتب الأساسي *</label>
+                  <input type="number" className="input" placeholder="10000" dir="ltr" value={form.basicSalary} onChange={(e) => setField('basicSalary', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">العملة *</label>
+                  <select className="input">
+                    <option value="SAR">ريال سعودي (SAR)</option>
+                    <option value="AED">درهم إماراتي (AED)</option>
+                    <option value="EGP">جنيه مصري (EGP)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">طريقة الدفع *</label>
+                  <select className="input" value={form.payMethod} onChange={(e) => setField('payMethod', e.target.value)}>
+                    <option value="transfer">تحويل بنكي</option>
+                    <option value="visa">فيزا</option>
+                    <option value="cash">نقدي</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">دورة الراتب</label>
+                  <select className="input">
+                    <option value="monthly">شهري</option>
+                    <option value="biweekly">نصف شهري</option>
+                    <option value="weekly">أسبوعي</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">مركز التكلفة (اختياري)</label>
+                  <select
+                    className="input"
+                    value={form.costCenterId}
+                    onChange={(e) => setField('costCenterId', e.target.value)}
+                  >
+                    <option value="">بدون مركز تكلفة</option>
+                    {costCenters.map((cc) => (
+                      <option key={cc.id} value={String(cc.id)}>
+                        {cc.code} — {cc.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+
+              {/* Allowances */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                البدلات الثابتة
+              </h3>
+              <div className="grid grid-cols-4 gap-4">
+                <div>
+                  <label className="label">بدل السكن</label>
+                  <input type="number" className="input" placeholder="2500" dir="ltr" value={form.housingAllowance} onChange={(e) => setField('housingAllowance', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">بدل المواصلات</label>
+                  <input type="number" className="input" placeholder="1000" dir="ltr" value={form.transportAllowance} onChange={(e) => setField('transportAllowance', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">بدل الهاتف</label>
+                  <input type="number" className="input" placeholder="500" dir="ltr" value={form.phoneAllowance} onChange={(e) => setField('phoneAllowance', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">بدل طبيعة العمل</label>
+                  <input type="number" className="input" placeholder="0" dir="ltr" value={form.workNatureAllowance} onChange={(e) => setField('workNatureAllowance', e.target.value)} />
+                </div>
+              </div>
+
+              <div className="p-4 bg-primary-50 rounded-xl">
+                <div className="flex items-center justify-between">
+                  <span className="font-medium text-gray-700">إجمالي الراتب الشهري</span>
+                  <span className="text-2xl font-bold text-primary-600">{totalMonthlySalary.toLocaleString()} ر.س</span>
+                </div>
+              </div>
+
+              {/* Bank Details */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                المعلومات البنكية
+              </h3>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="label">اسم البنك *</label>
+                  <select className="input" value={form.bankName} onChange={(e) => setField('bankName', e.target.value)}>
+                    <option value="">اختر</option>
+                    {form.bankName && !bankOptions.includes(form.bankName) && (
+                      <option value={form.bankName}>{form.bankName}</option>
+                    )}
+                    {bankOptions.map((bank) => (
+                      <option key={bank} value={bank}>{bank}</option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="label">اسم الفرع</label>
+                  <input type="text" className="input" placeholder="فرع العليا" />
+                </div>
+                <div>
+                  <label className="label">رقم الحساب (IBAN) *</label>
+                  <input type="text" className="input" placeholder="SA00 0000 0000 0000 0000 0000" dir="ltr" value={form.iban} onChange={(e) => setField('iban', e.target.value)} />
+                </div>
+              </div>
+
+              {/* Insurance */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                التأمينات الاجتماعية
+              </h3>
+              <div className="grid grid-cols-3 gap-4">
+                <div>
+                  <label className="label">رقم التأمينات (GOSI)</label>
+                  <input type="text" className="input" placeholder="1234567890" dir="ltr" />
+                </div>
+                <div>
+                  <label className="label">خاضع للتأمينات</label>
+                  <select className="input">
+                    <option value="yes">نعم</option>
+                    <option value="no">لا</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="label">الراتب الخاضع للتأمينات</label>
+                  <input type="number" className="input" placeholder="12500" dir="ltr" />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Step 4: Qualifications */}
+          {currentStep === 4 && (
+            <div className="space-y-8">
+              <h2 className="text-lg font-bold text-gray-800 border-b border-gray-100 pb-4">
+                المؤهلات والخبرات
+              </h2>
+
+              {/* Education */}
+              <h3 className="text-md font-bold text-gray-700 border-b border-gray-100 pb-2">
+                التعليم
+              </h3>
+              <div className="p-4 bg-gray-50 rounded-xl space-y-4">
+                <div className="grid grid-cols-4 gap-4">
+                  <div>
+                    <label className="label">المؤهل</label>
+                    <select className="input">
+                      <option value="">اختر</option>
+                      <option value="phd">دكتوراه</option>
+                      <option value="master">ماجستير</option>
+                      <option value="bachelor">بكالوريوس</option>
+                      <option value="diploma">دبلوم</option>
+                      <option value="highschool">ثانوي</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">التخصص</label>
+                    <input type="text" className="input" placeholder="علوم الحاسب" />
+                  </div>
+                  <div>
+                    <label className="label">الجامعة/المعهد</label>
+                    <input type="text" className="input" placeholder="جامعة الملك سعود" />
+                  </div>
+                  <div>
+                    <label className="label">سنة التخرج</label>
+                    <input type="number" className="input" placeholder="2020" dir="ltr" />
+                  </div>
+                </div>
+                <button type="button" className="text-sm text-primary-500 hover:text-primary-600 font-medium">
+                  + إضافة مؤهل آخر
+                </button>
+              </div>
+
+              {/* Certifications */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                الشهادات المهنية
+              </h3>
+              <div className="p-4 bg-gray-50 rounded-xl space-y-4">
+                <div className="grid grid-cols-4 gap-4">
+                  <div>
+                    <label className="label">اسم الشهادة</label>
+                    <input type="text" className="input" placeholder="PMP" />
+                  </div>
+                  <div>
+                    <label className="label">الجهة المانحة</label>
+                    <input type="text" className="input" placeholder="PMI" />
+                  </div>
+                  <div>
+                    <label className="label">تاريخ الحصول</label>
+                    <input type="date" className="input" />
+                  </div>
+                  <div>
+                    <label className="label">تاريخ الانتهاء</label>
+                    <input type="date" className="input" />
+                  </div>
+                </div>
+                <button type="button" className="text-sm text-primary-500 hover:text-primary-600 font-medium">
+                  + إضافة شهادة أخرى
+                </button>
+              </div>
+
+              {/* Previous Experience */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                الخبرات السابقة
+              </h3>
+              <div className="p-4 bg-gray-50 rounded-xl space-y-4">
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="label">اسم الشركة</label>
+                    <input type="text" className="input" placeholder="شركة ABC" />
+                  </div>
+                  <div>
+                    <label className="label">المسمى الوظيفي</label>
+                    <input type="text" className="input" placeholder="مطور برمجيات" />
+                  </div>
+                  <div>
+                    <label className="label">البلد</label>
+                    <input type="text" className="input" placeholder="السعودية" />
+                  </div>
+                </div>
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="label">من تاريخ</label>
+                    <input type="date" className="input" />
+                  </div>
+                  <div>
+                    <label className="label">إلى تاريخ</label>
+                    <input type="date" className="input" />
+                  </div>
+                  <div>
+                    <label className="label">سبب الترك</label>
+                    <input type="text" className="input" placeholder="فرصة أفضل" />
+                  </div>
+                </div>
+                <button type="button" className="text-sm text-primary-500 hover:text-primary-600 font-medium">
+                  + إضافة خبرة أخرى
+                </button>
+              </div>
+
+              {/* Skills */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                المهارات
+              </h3>
+              <div className="p-4 bg-gray-50 rounded-xl space-y-4">
+                <div className="grid grid-cols-3 gap-4">
+                  <div>
+                    <label className="label">المهارة</label>
+                    <input type="text" className="input" placeholder="JavaScript" />
+                  </div>
+                  <div>
+                    <label className="label">مستوى الإتقان</label>
+                    <select className="input">
+                      <option value="">اختر</option>
+                      <option value="beginner">مبتدئ</option>
+                      <option value="intermediate">متوسط</option>
+                      <option value="advanced">متقدم</option>
+                      <option value="expert">خبير</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">سنوات الخبرة</label>
+                    <input type="number" className="input" placeholder="5" dir="ltr" />
+                  </div>
+                </div>
+                <button type="button" className="text-sm text-primary-500 hover:text-primary-600 font-medium">
+                  + إضافة مهارة أخرى
+                </button>
+              </div>
+
+              {/* Languages */}
+              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
+                اللغات
+              </h3>
+              <div className="p-4 bg-gray-50 rounded-xl space-y-4">
+                <div className="grid grid-cols-4 gap-4">
+                  <div>
+                    <label className="label">اللغة</label>
+                    <select className="input">
+                      <option value="">اختر</option>
+                      <option value="ar">العربية</option>
+                      <option value="en">الإنجليزية</option>
+                      <option value="fr">الفرنسية</option>
+                      <option value="other">أخرى</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">مستوى التحدث</label>
+                    <select className="input">
+                      <option value="">اختر</option>
+                      <option value="native">لغة أم</option>
+                      <option value="fluent">طلق</option>
+                      <option value="good">جيد</option>
+                      <option value="basic">أساسي</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">مستوى الكتابة</label>
+                    <select className="input">
+                      <option value="">اختر</option>
+                      <option value="excellent">ممتاز</option>
+                      <option value="good">جيد</option>
+                      <option value="basic">أساسي</option>
+                    </select>
+                  </div>
+                  <div>
+                    <label className="label">مستوى القراءة</label>
+                    <select className="input">
+                      <option value="">اختر</option>
+                      <option value="excellent">ممتاز</option>
+                      <option value="good">جيد</option>
+                      <option value="basic">أساسي</option>
+                    </select>
+                  </div>
+                </div>
+                <button type="button" className="text-sm text-primary-500 hover:text-primary-600 font-medium">
+                  + إضافة لغة أخرى
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Step 5: Documents */}
+          {currentStep === 5 && (
+            <div className="space-y-8">
+              <h2 className="text-lg font-bold text-gray-800 border-b border-gray-100 pb-4">
+                المستندات
+              </h2>
+
+              <p className="text-gray-500">
+                يرجى رفع المستندات المطلوبة. المستندات المحددة بـ (*) إلزامية.
+              </p>
+
+              {/* Required Documents */}
+              <div className="grid grid-cols-2 gap-6">
+                <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-primary-50 rounded-lg flex items-center justify-center">
+                        <FileText size={20} className="text-primary-500" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-800">صورة الهوية / الإقامة *</p>
+                        <p className="text-sm text-gray-400">PDF, JPG, PNG - حد أقصى 5MB</p>
+                      </div>
+                    </div>
+                  </div>
+                  <input type="file" className="w-full" accept=".pdf,.jpg,.jpeg,.png" />
+                </div>
+
+                <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-primary-50 rounded-lg flex items-center justify-center">
+                        <FileText size={20} className="text-primary-500" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-800">صورة جواز السفر</p>
+                        <p className="text-sm text-gray-400">PDF, JPG, PNG - حد أقصى 5MB</p>
+                      </div>
+                    </div>
+                  </div>
+                  <input type="file" className="w-full" accept=".pdf,.jpg,.jpeg,.png" />
+                </div>
+
+                <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-primary-50 rounded-lg flex items-center justify-center">
+                        <FileText size={20} className="text-primary-500" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-800">شهادة المؤهل *</p>
+                        <p className="text-sm text-gray-400">PDF - حد أقصى 5MB</p>
+                      </div>
+                    </div>
+                  </div>
+                  <input type="file" className="w-full" accept=".pdf" />
+                </div>
+
+                <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-primary-50 rounded-lg flex items-center justify-center">
+                        <FileText size={20} className="text-primary-500" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-800">السيرة الذاتية</p>
+                        <p className="text-sm text-gray-400">PDF, DOC - حد أقصى 5MB</p>
+                      </div>
+                    </div>
+                  </div>
+                  <input type="file" className="w-full" accept=".pdf,.doc,.docx" />
+                </div>
+
+                <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-primary-50 rounded-lg flex items-center justify-center">
+                        <FileText size={20} className="text-primary-500" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-800">شهادات الخبرة</p>
+                        <p className="text-sm text-gray-400">PDF - حد أقصى 5MB لكل ملف</p>
+                      </div>
+                    </div>
+                  </div>
+                  <input type="file" className="w-full" accept=".pdf" multiple />
+                </div>
+
+                <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
+                  <div className="flex items-center justify-between mb-4">
+                    <div className="flex items-center gap-3">
+                      <div className="w-10 h-10 bg-primary-50 rounded-lg flex items-center justify-center">
+                        <FileText size={20} className="text-primary-500" />
+                      </div>
+                      <div>
+                        <p className="font-medium text-gray-800">صورة شخصية رسمية</p>
+                        <p className="text-sm text-gray-400">JPG, PNG - حد أقصى 2MB</p>
+                      </div>
+                    </div>
+                  </div>
+                  <input type="file" className="w-full" accept=".jpg,.jpeg,.png" />
+                </div>
+              </div>
+            </div>
+          )}
+
+          {/* Error Banner */}
+          {bannerError && (
+            <div className="bg-red-50 text-red-700 rounded-xl p-4 mt-8">{bannerError}</div>
+          )}
+
+          {/* Navigation Buttons */}
+          <div className="flex items-center justify-between mt-8 pt-6 border-t border-gray-100">
+            <button
+              type="button"
+              onClick={prevStep}
+              disabled={currentStep === 1}
+              className="btn-secondary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              <ChevronRight size={18} />
+              السابق
+            </button>
+
+            <div className="flex items-center gap-3">
+              <button type="button" className="btn-secondary">حفظ كمسودة</button>
+              {currentStep === steps.length ? (
+                <button
+                  type="button"
+                  onClick={handleSubmit}
+                  disabled={submitting}
+                  className="btn-success flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  <Save size={18} />
+                  {isEdit ? 'حفظ التغييرات' : 'حفظ وإضافة الموظف'}
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={nextStep}
+                  className="btn-primary flex items-center gap-2"
+                >
+                  التالي
+                  <ChevronLeft size={18} />
+                </button>
+              )}
+            </div>
+          </div>
+        </div>
+      </div>
+    </MainLayout>
+  )
+}

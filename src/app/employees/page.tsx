@@ -22,6 +22,7 @@ import {
   fetchBranches,
   fetchDepartments,
   archiveEmployee,
+  fetchFileObjectUrl,
   ApiDepartment,
 } from '@/lib/api'
 
@@ -31,6 +32,7 @@ interface Employee {
   name: string
   nameEn: string
   avatar: string
+  photoFileId?: number
   email: string
   phone: string
   department: string
@@ -69,6 +71,7 @@ export default function EmployeesPage() {
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({})
 
   const loadData = async () => {
     setLoading(true)
@@ -89,6 +92,7 @@ export default function EmployeesPage() {
           name: e.fullName,
           nameEn: e.fullNameEn ?? '',
           avatar: (e.fullName ?? '').trim().charAt(0) || 'م',
+          photoFileId: e.photoFileId,
           email: e.email ?? '',
           phone: e.phone ?? '',
           department:
@@ -114,6 +118,40 @@ export default function EmployeesPage() {
     loadData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // صور الموظفين — روابط blob بالتوكن، تُلغى عند إعادة التحميل أو التفريغ
+  useEffect(() => {
+    let active = true
+    const created: string[] = []
+    const withPhotos = employees.filter((e) => e.photoFileId != null)
+    if (withPhotos.length === 0) {
+      setPhotoUrls({})
+      return
+    }
+    Promise.all(
+      withPhotos.map(async (e) => {
+        const url = await fetchFileObjectUrl(e.photoFileId as number)
+        return url ? ([e.id, url] as const) : null
+      })
+    ).then((pairs) => {
+      if (!active) {
+        pairs.forEach((p) => p && URL.revokeObjectURL(p[1]))
+        return
+      }
+      const map: Record<number, string> = {}
+      pairs.forEach((p) => {
+        if (p) {
+          map[p[0]] = p[1]
+          created.push(p[1])
+        }
+      })
+      setPhotoUrls(map)
+    })
+    return () => {
+      active = false
+      created.forEach((u) => URL.revokeObjectURL(u))
+    }
+  }, [employees])
 
   const handleArchive = async (id: number) => {
     if (!window.confirm('هل تريد أرشفة هذا الموظف؟')) return
@@ -278,8 +316,13 @@ export default function EmployeesPage() {
                     <tr key={employee.id} className="table-row">
                       <td className="table-cell">
                         <div className="flex items-center gap-3">
-                          <div className="w-10 h-10 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center text-white font-bold">
-                            {employee.avatar}
+                          <div className="w-10 h-10 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center text-white font-bold overflow-hidden">
+                            {photoUrls[employee.id] ? (
+                              // eslint-disable-next-line @next/next/no-img-element
+                              <img src={photoUrls[employee.id]} alt={employee.name} className="w-full h-full object-cover" />
+                            ) : (
+                              employee.avatar
+                            )}
                           </div>
                           <div>
                             <p className="font-medium text-gray-800">{employee.name}</p>
@@ -351,8 +394,13 @@ export default function EmployeesPage() {
             {filteredEmployees.map((employee) => (
               <div key={employee.id} className="card hover:shadow-md transition-shadow">
                 <div className="flex items-start justify-between mb-4">
-                  <div className="w-14 h-14 bg-gradient-to-br from-primary-400 to-primary-600 rounded-2xl flex items-center justify-center text-white font-bold text-xl">
-                    {employee.avatar}
+                  <div className="w-14 h-14 bg-gradient-to-br from-primary-400 to-primary-600 rounded-2xl flex items-center justify-center text-white font-bold text-xl overflow-hidden">
+                    {photoUrls[employee.id] ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={photoUrls[employee.id]} alt={employee.name} className="w-full h-full object-cover" />
+                    ) : (
+                      employee.avatar
+                    )}
                   </div>
                   {getStatusBadge(employee.status)}
                 </div>

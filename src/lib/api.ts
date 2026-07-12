@@ -139,7 +139,10 @@ export interface ApiEmployee {
   managerEmployeeId?: number; joinDate?: string; status: string
   basicSalary?: number; payMethod: string; bankName?: string; iban?: string
   housingAllowance?: number; transportAllowance?: number; otherAllowance?: number
-  costCenterId?: number
+  costCenterId?: number; photoFileId?: number
+  birthDate?: string; gender?: string; maritalStatus?: string; nationality?: string
+  address?: string; emergencyContactName?: string; emergencyContactPhone?: string
+  contractType?: string; contractStart?: string; contractEnd?: string
   // توثيق الأرشفة — للفلترة في شاشة الأرشيف
   archivedAt?: string; archiveReason?: string
   isActive: boolean; createdAt: string
@@ -560,6 +563,22 @@ export const uploadFile = async (
 }
 // رابط معاينة/تحميل ملف مخزّن (يتطلب توكن — استخدمه مع fetch أو افتحه بجلسة)
 export const fileDownloadUrl = (id: number) => `${API_BASE}/files/${id}`
+
+// جلب ملف كـ blob URL بالتوكن — لعرض الصور في <img> (اللي مبيبعتش الهيدر)
+// النتيجة تُلغى بـ URL.revokeObjectURL عند التفريغ
+export const fetchFileObjectUrl = async (id: number): Promise<string | null> => {
+  const token = getToken()
+  try {
+    const res = await fetch(`${API_BASE}/files/${id}`, {
+      headers: token ? { Authorization: `Bearer ${token}` } : {},
+    })
+    if (!res.ok) return null
+    const blob = await res.blob()
+    return URL.createObjectURL(blob)
+  } catch {
+    return null
+  }
+}
 
 // ===== بانِي أنواع الطلبات =====
 export interface CustomFieldDef {
