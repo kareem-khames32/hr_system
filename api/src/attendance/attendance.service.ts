@@ -23,6 +23,7 @@ import {
   PermissionType,
   ScheduleDayOverride,
   ScheduleEntry,
+  ScheduleExceptionRule,
 } from './attendance.entities'
 
 // الوردية الافتراضية عند غياب جدولة الأسبوع — مرآة src/lib/attendance.ts
@@ -82,6 +83,8 @@ export class AttendanceService {
     private readonly branches: Repository<Branch>,
     @InjectRepository(ScheduleDayOverride)
     private readonly dayOverrides: Repository<ScheduleDayOverride>,
+    @InjectRepository(ScheduleExceptionRule)
+    private readonly scheduleRules: Repository<ScheduleExceptionRule>,
     @InjectRepository(PermissionType)
     private readonly permissionTypes: Repository<PermissionType>
   ) {}
@@ -95,6 +98,8 @@ export class AttendanceService {
   ): Promise<{ total: number; working: number; skipped: string[] }> {
     const from = new Date(`${fromDate}T12:00:00`)
     const to = new Date(`${toDate}T12:00:00`)
+    // حمّل السياق مرة واحدة (لا استعلام لكل يوم داخل الحلقة)
+    const ctx = await this.nonWorkingContext(branchId)
     let total = 0
     let working = 0
     const skipped: string[] = []
@@ -105,42 +110,174 @@ export class AttendanceService {
     ) {
       const date = `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`
       total++
-      if (await this.isNonWorkingDay(date, branchId)) skipped.push(date)
+      if (this.evalNonWorking(date, branchId, ctx)) skipped.push(date)
       else working++
     }
     return { total, working, skipped }
   }
 
-  // §2.4: يوم عطلة؟ (ويك إند من الإعدادات/الفرع + العطلات الرسمية)
+  // §2.4: يوم عطلة؟ (ويك إند من الإعدادات/الفرع + العطلات الرسمية + قواعد الاستثناء)
   // ممنوع يتحسب تأخير أو غياب فيه حتى لو فيه بصمة
-  async isNonWorkingDay(
-    date: string,
-    branchId: number
-  ): Promise<boolean> {
-    // الويك إند: أيام مفصولة بفواصل SUN..SAT — إعداد عام + تجاوز لكل فرع
-    const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
+  async isNonWorkingDay(date: string, branchId: number): Promise<boolean> {
+    const ctx = await this.nonWorkingContext(branchId)
+    return this.evalNonWorking(date, branchId, ctx)
+  }
+
+  // يحمّل مصادر «يوم العطلة» مرة واحدة (ويك إند + عطلات + قواعد استثناء)
+  private async nonWorkingContext(branchId: number): Promise<{
+    weekend: string[]
+    holidays: PublicHoliday[]
+    rules: ScheduleExceptionRule[]
+  }> {
     let weekend = await this.configValue('attendance.weekend_days', 'FRI,SAT')
     const branch = await this.branches.findOne({ where: { id: branchId } })
     if ((branch as any)?.weekendDays) weekend = (branch as any).weekendDays
-    const dayName = WEEKDAYS[new Date(`${date}T12:00:00`).getDay()]
-    if (
-      weekend
-        .split(',')
-        .map((d) => d.trim().toUpperCase())
-        .includes(dayName)
-    ) {
-      return true
+    const holidays = await this.holidays.find()
+    const rules = await this.scheduleRules.find({
+      where: { isActive: true },
+      order: { id: 'ASC' },
+    })
+    return {
+      weekend: weekend.split(',').map((d) => d.trim().toUpperCase()),
+      holidays,
+      rules,
     }
-    // عطلة رسمية (مفردة أو ممتدة)
-    const all = await this.holidays.find()
-    return all.some(
+  }
+
+  private evalNonWorking(
+    date: string,
+    branchId: number,
+    ctx: {
+      weekend: string[]
+      holidays: PublicHoliday[]
+      rules: ScheduleExceptionRule[]
+    }
+  ): boolean {
+    const WEEKDAYS = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
+    const dayName = WEEKDAYS[new Date(`${date}T12:00:00`).getDay()]
+    let isWeekend = ctx.weekend.includes(dayName)
+
+    // عطلة رسمية — لا تُبطَل بقواعد الاستثناء
+    const isHoliday = ctx.holidays.some(
       (h) => h.date <= date && (h.endDate ? h.endDate >= date : h.date === date)
     )
+    if (isHoliday) return true
+
+    // قواعد الاستثناء لنفس اليوم: الفرعية تحسم بعد العامة
+    const occ = this.occurrenceOf(date)
+    const applicable = ctx.rules
+      .filter((r) => r.weekday === dayName)
+      .filter((r) => r.branchId == null || r.branchId === branchId)
+      .filter((r) => this.occurrenceMatches(r.occurrence, occ))
+      .sort((a, b) => (a.branchId == null ? 0 : 1) - (b.branchId == null ? 0 : 1))
+    for (const r of applicable) {
+      if (r.effect === 'WORK') isWeekend = false
+      else if (r.effect === 'OFF') isWeekend = true
+    }
+    return isWeekend
+  }
+
+  // ترتيب تكرار اليوم في شهره: {index: 1..5، isLast}
+  private occurrenceOf(date: string): { index: number; isLast: boolean } {
+    const d = new Date(`${date}T12:00:00`)
+    const dom = d.getDate()
+    const index = Math.floor((dom - 1) / 7) + 1
+    const next = new Date(d)
+    next.setDate(dom + 7)
+    return { index, isLast: next.getMonth() !== d.getMonth() }
+  }
+
+  private occurrenceMatches(
+    occ: string,
+    o: { index: number; isLast: boolean }
+  ): boolean {
+    if (occ === 'ALL') return true
+    if (occ === 'LAST') return o.isLast
+    const map: Record<string, number> = { '1ST': 1, '2ND': 2, '3RD': 3, '4TH': 4 }
+    return map[occ] === o.index
   }
 
   private async configValue(key: string, fallback: string): Promise<string> {
     const row = await this.config.findOne({ where: { key } })
     return row?.value ?? fallback
+  }
+
+  // ===== قواعد استثناء أيام العمل — CRUD =====
+  private readonly WEEKDAYS_VALID = [
+    'SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT',
+  ]
+  private readonly OCC_VALID = ['ALL', '1ST', '2ND', '3RD', '4TH', 'LAST']
+
+  listScheduleRules() {
+    return this.scheduleRules.find({ order: { id: 'ASC' } })
+  }
+
+  async createScheduleRule(dto: {
+    name: string
+    weekday: string
+    occurrence: string
+    effect: string
+    branchId?: number | null
+  }) {
+    if (!dto.name?.trim()) throw new BadRequestException('اسم القاعدة مطلوب')
+    if (!this.WEEKDAYS_VALID.includes(dto.weekday)) {
+      throw new BadRequestException('اليوم غير صالح')
+    }
+    if (!this.OCC_VALID.includes(dto.occurrence)) {
+      throw new BadRequestException('التكرار غير صالح')
+    }
+    if (!['WORK', 'OFF'].includes(dto.effect)) {
+      throw new BadRequestException('الأثر: WORK أو OFF')
+    }
+    return this.scheduleRules.save(
+      this.scheduleRules.create({
+        name: dto.name.trim(),
+        weekday: dto.weekday as any,
+        occurrence: dto.occurrence as any,
+        effect: dto.effect as any,
+        branchId: dto.branchId ?? undefined,
+        isActive: true,
+      })
+    )
+  }
+
+  async updateScheduleRule(
+    id: number,
+    dto: Partial<{
+      name: string
+      weekday: string
+      occurrence: string
+      effect: string
+      branchId: number | null
+      isActive: boolean
+    }>
+  ) {
+    const rule = await this.scheduleRules.findOne({ where: { id } })
+    if (!rule) throw new NotFoundException('القاعدة غير موجودة')
+    if (dto.weekday && !this.WEEKDAYS_VALID.includes(dto.weekday)) {
+      throw new BadRequestException('اليوم غير صالح')
+    }
+    if (dto.occurrence && !this.OCC_VALID.includes(dto.occurrence)) {
+      throw new BadRequestException('التكرار غير صالح')
+    }
+    if (dto.effect && !['WORK', 'OFF'].includes(dto.effect)) {
+      throw new BadRequestException('الأثر: WORK أو OFF')
+    }
+    // حقول قابلة للتعديل فقط — ممنوع الجسم يكتب على id أو صف آخر
+    if (dto.name !== undefined) rule.name = String(dto.name).trim()
+    if (dto.weekday !== undefined) rule.weekday = dto.weekday as any
+    if (dto.occurrence !== undefined) rule.occurrence = dto.occurrence as any
+    if (dto.effect !== undefined) rule.effect = dto.effect as any
+    if (dto.branchId !== undefined) rule.branchId = dto.branchId ?? (undefined as any)
+    if (dto.isActive !== undefined) rule.isActive = !!dto.isActive
+    return this.scheduleRules.save(rule)
+  }
+
+  async deleteScheduleRule(id: number) {
+    const rule = await this.scheduleRules.findOne({ where: { id } })
+    if (!rule) throw new NotFoundException('القاعدة غير موجودة')
+    await this.scheduleRules.delete({ id })
+    return { deleted: true }
   }
 
   // ===== استقبال بصمات ZKTeco (دفعة) — مفتاح الجهاز أو JWT =====

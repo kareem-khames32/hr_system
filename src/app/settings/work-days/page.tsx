@@ -2,7 +2,16 @@
 
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
-import { fetchConfig, updateConfig } from '@/lib/api'
+import {
+  fetchConfig,
+  updateConfig,
+  fetchScheduleRules,
+  createScheduleRule,
+  updateScheduleRule,
+  deleteScheduleRule,
+  fetchBranches,
+} from '@/lib/api'
+import type { ApiScheduleRule, ApiBranch } from '@/lib/api'
 import {
   Calendar,
   Plus,
@@ -16,11 +25,8 @@ import {
   Moon,
   ArrowLeftRight,
   Info,
-  Copy,
   ToggleLeft,
   ToggleRight,
-  ChevronDown,
-  ChevronUp,
   Edit3,
   Users,
   Briefcase,
@@ -86,6 +92,61 @@ const availableShifts = [
   { id: 'half_morning', name: 'نصف يوم صباحي', time: '08:00 - 12:00' },
   { id: 'half_evening', name: 'نصف يوم مسائي', time: '13:00 - 17:00' },
 ]
+
+// ===== القواعد الاستثنائية (backend حقيقي عبر /attendance/schedule-rules) =====
+// خيارات النماذج (select) بالعربية
+const RULE_WEEKDAYS: { value: ApiScheduleRule['weekday']; label: string }[] = [
+  { value: 'SUN', label: 'الأحد' },
+  { value: 'MON', label: 'الاثنين' },
+  { value: 'TUE', label: 'الثلاثاء' },
+  { value: 'WED', label: 'الأربعاء' },
+  { value: 'THU', label: 'الخميس' },
+  { value: 'FRI', label: 'الجمعة' },
+  { value: 'SAT', label: 'السبت' },
+]
+const RULE_OCCURRENCES: { value: ApiScheduleRule['occurrence']; label: string }[] = [
+  { value: 'ALL', label: 'كل الأسابيع' },
+  { value: '1ST', label: 'الأسبوع الأول' },
+  { value: '2ND', label: 'الأسبوع الثاني' },
+  { value: '3RD', label: 'الأسبوع الثالث' },
+  { value: '4TH', label: 'الأسبوع الرابع' },
+  { value: 'LAST', label: 'الأسبوع الأخير في الشهر' },
+]
+const RULE_EFFECTS: { value: ApiScheduleRule['effect']; label: string; desc: string }[] = [
+  { value: 'WORK', label: 'دوام رسمي', desc: 'تحويل إجازة إلى دوام رسمي' },
+  { value: 'OFF', label: 'إجازة', desc: 'تحويل دوام إلى إجازة' },
+]
+
+const WEEKDAY_AR: Record<ApiScheduleRule['weekday'], string> = {
+  SUN: 'الأحد',
+  MON: 'الاثنين',
+  TUE: 'الثلاثاء',
+  WED: 'الأربعاء',
+  THU: 'الخميس',
+  FRI: 'الجمعة',
+  SAT: 'السبت',
+}
+const OCCURRENCE_ORDINAL_AR: Record<Exclude<ApiScheduleRule['occurrence'], 'ALL'>, string> = {
+  '1ST': 'الأول',
+  '2ND': 'الثاني',
+  '3RD': 'الثالث',
+  '4TH': 'الرابع',
+  LAST: 'الأخير',
+}
+const EFFECT_AR: Record<ApiScheduleRule['effect'], string> = {
+  WORK: 'تحويل إجازة إلى دوام رسمي',
+  OFF: 'تحويل دوام إلى إجازة',
+}
+
+// يبني جملة عربية مفهومة من القاعدة، مثل: «السبت الأخير من الشهر — تحويل إجازة إلى دوام رسمي»
+function scheduleRuleSentence(rule: Pick<ApiScheduleRule, 'weekday' | 'occurrence' | 'effect'>): string {
+  const day = WEEKDAY_AR[rule.weekday]
+  const when =
+    rule.occurrence === 'ALL'
+      ? `${day} من كل أسبوع`
+      : `${day} ${OCCURRENCE_ORDINAL_AR[rule.occurrence]} من الشهر`
+  return `${when} — ${EFFECT_AR[rule.effect]}`
+}
 
 // نوع القاعدة
 interface WorkRule {
@@ -219,6 +280,79 @@ export default function WorkDaysSettingsPage() {
   const [otSaved, setOtSaved] = useState(false)
   const [otError, setOtError] = useState<string | null>(null)
 
+  // ===== القواعد الاستثنائية (backend حقيقي) =====
+  const [scheduleRules, setScheduleRules] = useState<ApiScheduleRule[]>([])
+  const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [rulesLoading, setRulesLoading] = useState(true)
+  const [rulesError, setRulesError] = useState<string | null>(null)
+  const [showAddScheduleRule, setShowAddScheduleRule] = useState(false)
+  const [ruleBusyId, setRuleBusyId] = useState<number | null>(null)
+
+  // تحميل أولي: القواعد + الفروع
+  useEffect(() => {
+    let active = true
+    ;(async () => {
+      try {
+        const [rules, brs] = await Promise.all([fetchScheduleRules(), fetchBranches()])
+        if (!active) return
+        setScheduleRules(rules)
+        setBranches(brs)
+        setRulesError(null)
+      } catch (err: any) {
+        if (active) setRulesError(err.message)
+      } finally {
+        if (active) setRulesLoading(false)
+      }
+    })()
+    return () => {
+      active = false
+    }
+  }, [])
+
+  // إعادة تحميل القواعد بعد أي تعديل
+  const reloadRules = async () => {
+    try {
+      const rules = await fetchScheduleRules()
+      setScheduleRules(rules)
+      setRulesError(null)
+    } catch (err: any) {
+      setRulesError(err.message)
+    }
+  }
+
+  // تفعيل/تعطيل قاعدة
+  const toggleScheduleRule = async (rule: ApiScheduleRule) => {
+    setRuleBusyId(rule.id)
+    try {
+      await updateScheduleRule(rule.id, { isActive: !rule.isActive })
+      await reloadRules()
+    } catch (err: any) {
+      setRulesError(err.message)
+    } finally {
+      setRuleBusyId(null)
+    }
+  }
+
+  // حذف قاعدة
+  const removeScheduleRule = async (rule: ApiScheduleRule) => {
+    if (!confirm(`هل أنت متأكد من حذف القاعدة «${rule.name}»؟`)) return
+    setRuleBusyId(rule.id)
+    try {
+      await deleteScheduleRule(rule.id)
+      await reloadRules()
+    } catch (err: any) {
+      setRulesError(err.message)
+    } finally {
+      setRuleBusyId(null)
+    }
+  }
+
+  // اسم الفرع (أو «كل الفروع» إن لم يُحدَّد)
+  const branchName = (branchId?: number | null) =>
+    branchId == null
+      ? 'كل الفروع'
+      : branches.find((b) => b.id === branchId)?.name ?? `فرع #${branchId}`
+
   useEffect(() => {
     const loadConfig = async () => {
       try {
@@ -280,9 +414,7 @@ export default function WorkDaysSettingsPage() {
   const otConfirm = (otValues[OVERTIME_CONFIRM_KEY] ?? '') === 'true'
   const [showAddSchedule, setShowAddSchedule] = useState(false)
   const [showEditSchedule, setShowEditSchedule] = useState(false)
-  const [showAddRule, setShowAddRule] = useState(false)
   const [showAssignModal, setShowAssignModal] = useState(false)
-  const [expandedRules, setExpandedRules] = useState<string[]>(['1'])
 
   // تبديل يوم العمل
   const toggleWorkDay = (day: string) => {
@@ -301,79 +433,6 @@ export default function WorkDaysSettingsPage() {
       prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
     )
     setHasChanges(true)
-  }
-
-  // تبديل حالة القاعدة
-  const toggleRuleActive = (ruleId: string) => {
-    if (!selectedSchedule) return
-
-    const updatedRules = selectedSchedule.rules.map(rule =>
-      rule.id === ruleId ? { ...rule, isActive: !rule.isActive } : rule
-    )
-
-    const updatedSchedule = { ...selectedSchedule, rules: updatedRules }
-    setSelectedSchedule(updatedSchedule)
-    setSchedules(prev =>
-      prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
-    )
-    setHasChanges(true)
-  }
-
-  // حذف قاعدة
-  const deleteRule = (ruleId: string) => {
-    if (!selectedSchedule) return
-    if (!confirm('هل أنت متأكد من حذف هذه القاعدة؟')) return
-
-    const updatedRules = selectedSchedule.rules.filter(rule => rule.id !== ruleId)
-    const updatedSchedule = { ...selectedSchedule, rules: updatedRules }
-    setSelectedSchedule(updatedSchedule)
-    setSchedules(prev =>
-      prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
-    )
-    setHasChanges(true)
-  }
-
-  // نسخ قاعدة
-  const duplicateRule = (rule: WorkRule) => {
-    if (!selectedSchedule) return
-
-    const newRule: WorkRule = {
-      ...rule,
-      id: Date.now().toString(),
-      description: rule.description + ' (نسخة)',
-      isActive: false,
-    }
-
-    const updatedSchedule = {
-      ...selectedSchedule,
-      rules: [...selectedSchedule.rules, newRule],
-    }
-    setSelectedSchedule(updatedSchedule)
-    setSchedules(prev =>
-      prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
-    )
-    setHasChanges(true)
-  }
-
-  // إضافة قاعدة جديدة
-  const addRule = (rule: Omit<WorkRule, 'id'>) => {
-    if (!selectedSchedule) return
-
-    const newRule: WorkRule = {
-      ...rule,
-      id: Date.now().toString(),
-    }
-
-    const updatedSchedule = {
-      ...selectedSchedule,
-      rules: [...selectedSchedule.rules, newRule],
-    }
-    setSelectedSchedule(updatedSchedule)
-    setSchedules(prev =>
-      prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
-    )
-    setHasChanges(true)
-    setShowAddRule(false)
   }
 
   // حذف جدول
@@ -414,25 +473,6 @@ export default function WorkDaysSettingsPage() {
     setHasChanges(true)
   }
 
-  // توسيع/طي القاعدة
-  const toggleRuleExpanded = (ruleId: string) => {
-    setExpandedRules(prev =>
-      prev.includes(ruleId)
-        ? prev.filter(id => id !== ruleId)
-        : [...prev, ruleId]
-    )
-  }
-
-  // الحصول على نوع القاعدة
-  const getRuleType = (typeId: string) => {
-    return ruleTypes.find(t => t.id === typeId) || ruleTypes[0]
-  }
-
-  // الحصول على الوردية
-  const getShift = (shiftId: string) => {
-    return availableShifts.find(s => s.id === shiftId) || availableShifts[0]
-  }
-
   // الحصول على لون الجدول
   const getScheduleColor = (colorId: string) => {
     return scheduleColors.find(c => c.id === colorId) || scheduleColors[0]
@@ -440,7 +480,7 @@ export default function WorkDaysSettingsPage() {
 
   // إحصائيات
   const totalEmployees = schedules.reduce((sum, s) => sum + s.employeeCount, 0)
-  const activeRulesCount = selectedSchedule?.rules.filter(r => r.isActive).length || 0
+  const activeRulesCount = scheduleRules.filter(r => r.isActive).length
   const workDaysCount = selectedSchedule
     ? Object.values(selectedSchedule.workDays).filter(Boolean).length
     : 0
@@ -506,7 +546,7 @@ export default function WorkDaysSettingsPage() {
               <Settings size={24} className="text-purple-600" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">قواعد نشطة (الجدول المختار)</p>
+              <p className="text-sm text-gray-500">قواعد استثنائية نشطة (فعّالة)</p>
               <p className="text-2xl font-bold text-purple-600">{activeRulesCount}</p>
             </div>
           </div>
@@ -686,6 +726,21 @@ export default function WorkDaysSettingsPage() {
             </>
           )
         )}
+
+        {/* توضيح: ما هو فعلي وما هو للعرض فقط */}
+        <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3">
+          <Info size={20} className="text-amber-600 mt-0.5 shrink-0" />
+          <div className="text-sm text-amber-800">
+            <p className="font-medium">عرض توضيحي:</p>
+            <p className="mt-1 leading-relaxed">
+              الجداول المسمّاة أدناه («الجدول الأساسي»، «جدول السبت فقط») وأزرار الأيام والمواعيد
+              فيها للتوضيح فقط ولا تؤثر على الحضور. أيام الراحة الأسبوعية ومواعيد الدوام الفعلية
+              تُحدَّد من الورديات (الجدول الأسبوعي لكل موظف). أمّا «القواعد الاستثنائية» بالأسفل فهي
+              <span className="font-medium"> فعّالة </span>
+              وتؤثر على احتساب الحضور فعلاً (مثل: تحويل آخر سبت في الشهر إلى دوام رسمي).
+            </p>
+          </div>
+        </div>
 
         <div className="grid grid-cols-12 gap-6">
           {/* قائمة الجداول */}
@@ -880,7 +935,7 @@ export default function WorkDaysSettingsPage() {
                   </div>
                 </div>
 
-                {/* القواعد الاستثنائية */}
+                {/* القواعد الاستثنائية — backend حقيقي، فعّالة على الحضور */}
                 <div className="card">
                   <div className="flex items-center justify-between mb-6">
                     <div className="flex items-center gap-3">
@@ -888,12 +943,19 @@ export default function WorkDaysSettingsPage() {
                         <Settings size={20} className="text-warning-600" />
                       </div>
                       <div>
-                        <h2 className="text-lg font-bold text-gray-800">القواعد الاستثنائية</h2>
-                        <p className="text-sm text-gray-500">قواعد خاصة تطبق على هذا الجدول</p>
+                        <div className="flex items-center gap-2">
+                          <h2 className="text-lg font-bold text-gray-800">القواعد الاستثنائية</h2>
+                          <span className="px-2 py-0.5 bg-success-100 text-success-700 rounded-full text-xs font-medium">
+                            فعّالة
+                          </span>
+                        </div>
+                        <p className="text-sm text-gray-500">
+                          قواعد حقيقية تؤثر على احتساب الحضور (مثل: السبت الأخير من الشهر دوام رسمي) — مشتركة لكل الجداول
+                        </p>
                       </div>
                     </div>
                     <button
-                      onClick={() => setShowAddRule(true)}
+                      onClick={() => setShowAddScheduleRule(true)}
                       className="btn-primary flex items-center gap-2"
                     >
                       <Plus size={18} />
@@ -901,34 +963,46 @@ export default function WorkDaysSettingsPage() {
                     </button>
                   </div>
 
-                  {/* قائمة القواعد */}
-                  <div className="space-y-4">
-                    {selectedSchedule.rules.map((rule, index) => {
-                      const ruleType = getRuleType(rule.type)
-                      const RuleIcon = ruleType.icon
-                      const isExpanded = expandedRules.includes(rule.id)
+                  {rulesError && (
+                    <div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-4">
+                      {rulesError}
+                    </div>
+                  )}
 
-                      return (
-                        <div
-                          key={rule.id}
-                          className={`border-2 rounded-2xl overflow-hidden transition-all ${
-                            rule.isActive
-                              ? 'border-gray-200 bg-white'
-                              : 'border-gray-100 bg-gray-50 opacity-60'
-                          }`}
-                        >
-                          {/* Header */}
+                  {rulesLoading ? (
+                    <div className="flex items-center justify-center py-12">
+                      <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+                    </div>
+                  ) : scheduleRules.length === 0 ? (
+                    <div className="text-center py-12 text-gray-500">
+                      <Settings size={48} className="mx-auto mb-4 text-gray-300" />
+                      <p>لا توجد قواعد استثنائية</p>
+                      <p className="text-sm mt-1">
+                        أضف قاعدة مثل: السبت الأخير من الشهر دوام رسمي
+                      </p>
+                    </div>
+                  ) : (
+                    <div className="space-y-3">
+                      {scheduleRules.map((rule) => {
+                        const isWork = rule.effect === 'WORK'
+                        const EffectIcon = isWork ? Sun : Moon
+                        const busy = ruleBusyId === rule.id
+                        return (
                           <div
-                            className="p-4 flex items-center justify-between cursor-pointer hover:bg-gray-50"
-                            onClick={() => toggleRuleExpanded(rule.id)}
+                            key={rule.id}
+                            className={`border-2 rounded-2xl p-4 flex items-center justify-between gap-4 transition-all ${
+                              rule.isActive
+                                ? 'border-gray-200 bg-white'
+                                : 'border-gray-100 bg-gray-50 opacity-60'
+                            }`}
                           >
-                            <div className="flex items-center gap-4">
-                              <div className={`w-10 h-10 ${ruleType.color} rounded-xl flex items-center justify-center`}>
-                                <RuleIcon size={20} className="text-white" />
+                            <div className="flex items-center gap-4 min-w-0">
+                              <div className={`w-10 h-10 ${isWork ? 'bg-green-500' : 'bg-red-500'} rounded-xl flex items-center justify-center flex-shrink-0`}>
+                                <EffectIcon size={20} className="text-white" />
                               </div>
-                              <div>
-                                <div className="flex items-center gap-2">
-                                  <span className="text-xs text-gray-400">القاعدة #{index + 1}</span>
+                              <div className="min-w-0">
+                                <div className="flex items-center gap-2 flex-wrap">
+                                  <h3 className="font-bold text-gray-800">{rule.name}</h3>
                                   <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
                                     rule.isActive
                                       ? 'bg-success-100 text-success-600'
@@ -937,145 +1011,48 @@ export default function WorkDaysSettingsPage() {
                                     {rule.isActive ? 'نشطة' : 'معطلة'}
                                   </span>
                                 </div>
-                                <h3 className="font-bold text-gray-800 mt-1">{rule.description}</h3>
+                                <p className="text-sm text-gray-600 mt-1">{scheduleRuleSentence(rule)}</p>
+                                <span className="inline-flex items-center gap-1 mt-2 px-2 py-0.5 bg-gray-100 text-gray-600 rounded-lg text-xs">
+                                  <Building2 size={12} />
+                                  {branchName(rule.branchId)}
+                                </span>
                               </div>
                             </div>
-                            <div className="flex items-center gap-2">
-                              <span className={`px-3 py-1 rounded-lg text-sm ${ruleType.color} bg-opacity-10 ${ruleType.color.replace('bg-', 'text-')}`}>
-                                {ruleType.name}
-                              </span>
-                              {isExpanded ? (
-                                <ChevronUp size={20} className="text-gray-400" />
-                              ) : (
-                                <ChevronDown size={20} className="text-gray-400" />
-                              )}
+                            <div className="flex items-center gap-2 flex-shrink-0">
+                              <button
+                                onClick={() => toggleScheduleRule(rule)}
+                                disabled={busy}
+                                className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors disabled:opacity-50 ${
+                                  rule.isActive
+                                    ? 'bg-success-50 text-success-600 hover:bg-success-100'
+                                    : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                                }`}
+                              >
+                                {rule.isActive ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}
+                                {rule.isActive ? 'تعطيل' : 'تفعيل'}
+                              </button>
+                              <button
+                                onClick={() => removeScheduleRule(rule)}
+                                disabled={busy}
+                                className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 transition-colors disabled:opacity-50"
+                              >
+                                <Trash2 size={18} />
+                                حذف
+                              </button>
                             </div>
                           </div>
+                        )
+                      })}
+                    </div>
+                  )}
 
-                          {/* Content */}
-                          {isExpanded && (
-                            <div className="px-4 pb-4 border-t border-gray-100">
-                              <div className="mt-4 grid grid-cols-2 gap-6">
-                                {/* الشرط */}
-                                <div>
-                                  <h4 className="text-sm font-medium text-gray-600 mb-3">الشرط:</h4>
-                                  <div className="p-4 bg-gray-50 rounded-xl space-y-2">
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-gray-500">اليوم =</span>
-                                      <span className="px-2 py-1 bg-primary-100 text-primary-700 rounded-lg text-sm font-medium">
-                                        {rule.conditions.dayOfWeek.map(d =>
-                                          weekDays.find(w => w.key === d)?.name
-                                        ).join('، ')}
-                                      </span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-gray-400">AND</span>
-                                    </div>
-                                    <div className="flex items-center gap-2">
-                                      <span className="text-gray-500">الموقع =</span>
-                                      <span className="px-2 py-1 bg-warning-100 text-warning-700 rounded-lg text-sm font-medium">
-                                        {dayPositions.find(p => p.id === rule.conditions.position)?.name}
-                                      </span>
-                                      <span className="text-gray-500">في</span>
-                                      <span className="px-2 py-1 bg-purple-100 text-purple-700 rounded-lg text-sm font-medium">
-                                        {timePeriods.find(p => p.id === rule.conditions.period)?.name}
-                                      </span>
-                                    </div>
-                                  </div>
-                                </div>
-
-                                {/* النتيجة */}
-                                <div>
-                                  <h4 className="text-sm font-medium text-gray-600 mb-3">النتيجة:</h4>
-                                  <div className="p-4 bg-gray-50 rounded-xl space-y-3">
-                                    {rule.result.isHoliday ? (
-                                      <div className="flex items-center gap-2">
-                                        <Moon size={18} className="text-red-500" />
-                                        <span className="text-gray-700">إجازة رسمية</span>
-                                        {rule.result.holidayName && (
-                                          <span className="text-gray-500">({rule.result.holidayName})</span>
-                                        )}
-                                      </div>
-                                    ) : (
-                                      <>
-                                        <div className="flex items-center gap-2">
-                                          <Sun size={18} className="text-green-500" />
-                                          <span className="text-gray-700">يوم عمل رسمي</span>
-                                        </div>
-                                        {rule.result.shiftId && (
-                                          <div className="flex items-center gap-2 mt-2">
-                                            <Clock size={16} className="text-gray-400" />
-                                            <span className="text-gray-500">الوردية:</span>
-                                            <span className="px-2 py-1 bg-blue-100 text-blue-700 rounded-lg text-sm font-medium">
-                                              {getShift(rule.result.shiftId).name}
-                                            </span>
-                                            <span className="text-xs text-gray-400">
-                                              ({getShift(rule.result.shiftId).time})
-                                            </span>
-                                          </div>
-                                        )}
-                                      </>
-                                    )}
-                                  </div>
-                                </div>
-                              </div>
-
-                              {/* Actions */}
-                              <div className="mt-4 pt-4 border-t border-gray-100 flex items-center justify-between">
-                                <div className="flex items-center gap-2">
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      toggleRuleActive(rule.id)
-                                    }}
-                                    className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors ${
-                                      rule.isActive
-                                        ? 'bg-success-50 text-success-600 hover:bg-success-100'
-                                        : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                                    }`}
-                                  >
-                                    {rule.isActive ? (
-                                      <ToggleRight size={18} />
-                                    ) : (
-                                      <ToggleLeft size={18} />
-                                    )}
-                                    {rule.isActive ? 'تعطيل' : 'تفعيل'}
-                                  </button>
-                                  <button
-                                    onClick={(e) => {
-                                      e.stopPropagation()
-                                      duplicateRule(rule)
-                                    }}
-                                    className="flex items-center gap-2 px-3 py-2 rounded-lg bg-gray-100 text-gray-600 hover:bg-gray-200 transition-colors"
-                                  >
-                                    <Copy size={18} />
-                                    نسخ
-                                  </button>
-                                </div>
-                                <button
-                                  onClick={(e) => {
-                                    e.stopPropagation()
-                                    deleteRule(rule.id)
-                                  }}
-                                  className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 transition-colors"
-                                >
-                                  <Trash2 size={18} />
-                                  حذف
-                                </button>
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      )
-                    })}
-
-                    {selectedSchedule.rules.length === 0 && (
-                      <div className="text-center py-12 text-gray-500">
-                        <Settings size={48} className="mx-auto mb-4 text-gray-300" />
-                        <p>لا توجد قواعد استثنائية</p>
-                        <p className="text-sm mt-1">أضف قاعدة جديدة لتخصيص أيام العمل</p>
-                      </div>
-                    )}
+                  {/* آلية العمل */}
+                  <div className="mt-6 p-4 bg-blue-50 rounded-xl flex items-start gap-3">
+                    <Info size={18} className="text-blue-500 mt-0.5 shrink-0" />
+                    <p className="text-sm text-blue-700 leading-relaxed">
+                      قاعدة «دوام رسمي» تُحوّل يوم راحة مطابق إلى يوم عمل (مثل آخر سبت في الشهر)، وقاعدة «إجازة»
+                      تُحوّل يوم دوام إلى راحة. لا يتم تجاوز الإجازات الرسمية أبداً.
+                    </p>
                   </div>
                 </div>
 
@@ -1135,11 +1112,12 @@ export default function WorkDaysSettingsPage() {
           />
         )}
 
-        {/* Modal إضافة قاعدة */}
-        {showAddRule && (
-          <AddRuleModal
-            onClose={() => setShowAddRule(false)}
-            onAdd={addRule}
+        {/* Modal إضافة قاعدة استثنائية (backend حقيقي) */}
+        {showAddScheduleRule && (
+          <AddScheduleRuleModal
+            branches={branches}
+            onClose={() => setShowAddScheduleRule(false)}
+            onCreated={reloadRules}
           />
         )}
 
@@ -1506,105 +1484,133 @@ function EditScheduleModal({
   )
 }
 
-// Modal إضافة قاعدة جديدة
-function AddRuleModal({
+// Modal إضافة قاعدة استثنائية (backend حقيقي عبر createScheduleRule)
+function AddScheduleRuleModal({
+  branches,
   onClose,
-  onAdd,
+  onCreated,
 }: {
+  branches: ApiBranch[]
   onClose: () => void
-  onAdd: (rule: Omit<WorkRule, 'id'>) => void
+  onCreated: () => void | Promise<void>
 }) {
-  const [description, setDescription] = useState('')
-  const [ruleType, setRuleType] = useState<WorkRule['type']>('off_to_work')
-  const [selectedDays, setSelectedDays] = useState<string[]>([])
-  const [position, setPosition] = useState('last')
-  const [period, setPeriod] = useState('month')
-  const [shiftId, setShiftId] = useState('default')
-  const [holidayName, setHolidayName] = useState('')
+  const [name, setName] = useState('')
+  const [weekday, setWeekday] = useState<ApiScheduleRule['weekday']>('SAT')
+  const [occurrence, setOccurrence] = useState<ApiScheduleRule['occurrence']>('LAST')
+  const [effect, setEffect] = useState<ApiScheduleRule['effect']>('WORK')
+  const [branchId, setBranchId] = useState<string>('') // '' = كل الفروع
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState<string | null>(null)
 
-  const handleSubmit = () => {
-    if (!description || selectedDays.length === 0) {
-      alert('الرجاء ملء جميع الحقول المطلوبة')
+  // معاينة حيّة للجملة العربية
+  const preview = scheduleRuleSentence({ weekday, occurrence, effect })
+
+  const handleSubmit = async () => {
+    if (!name.trim()) {
+      setError('الرجاء إدخال اسم القاعدة')
       return
     }
-
-    onAdd({
-      description,
-      type: ruleType,
-      isActive: true,
-      conditions: {
-        dayOfWeek: selectedDays,
-        position,
-        period,
-      },
-      result: {
-        shiftId: ruleType !== 'work_to_off' ? shiftId : undefined,
-        isHoliday: ruleType === 'work_to_off',
-        holidayName: ruleType === 'work_to_off' ? holidayName : undefined,
-      },
-      priority: 1,
-    })
-  }
-
-  const toggleDay = (day: string) => {
-    setSelectedDays(prev =>
-      prev.includes(day)
-        ? prev.filter(d => d !== day)
-        : [...prev, day]
-    )
+    setSaving(true)
+    setError(null)
+    try {
+      await createScheduleRule({
+        name: name.trim(),
+        weekday,
+        occurrence,
+        effect,
+        branchId: branchId ? Number(branchId) : undefined,
+      })
+      await onCreated()
+      onClose()
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setSaving(false)
+    }
   }
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
+      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
         <div className="p-6 border-b border-gray-100 flex items-center justify-between">
           <div>
-            <h2 className="text-xl font-bold text-gray-800">إضافة قاعدة جديدة</h2>
-            <p className="text-gray-500 text-sm mt-1">أنشئ قاعدة استثنائية لأيام العمل</p>
+            <h2 className="text-xl font-bold text-gray-800">إضافة قاعدة استثنائية</h2>
+            <p className="text-gray-500 text-sm mt-1">قاعدة فعّالة تؤثر على احتساب الحضور</p>
           </div>
           <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100">
             <X size={20} className="text-gray-500" />
           </button>
         </div>
 
-        <div className="p-6 space-y-6">
-          {/* الوصف */}
+        <div className="p-6 space-y-5">
+          {error && (
+            <div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">{error}</div>
+          )}
+
+          {/* الاسم */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              وصف القاعدة *
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">اسم القاعدة *</label>
             <input
               type="text"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              placeholder="مثال: آخر سبت في الشهر - دوام رسمي"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="مثال: آخر سبت دوام رسمي"
               className="input w-full"
             />
           </div>
 
-          {/* نوع القاعدة */}
+          {/* اليوم والتكرار */}
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">اليوم</label>
+              <select
+                value={weekday}
+                onChange={(e) => setWeekday(e.target.value as ApiScheduleRule['weekday'])}
+                className="input w-full"
+              >
+                {RULE_WEEKDAYS.map((d) => (
+                  <option key={d.value} value={d.value}>{d.label}</option>
+                ))}
+              </select>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-2">التكرار</label>
+              <select
+                value={occurrence}
+                onChange={(e) => setOccurrence(e.target.value as ApiScheduleRule['occurrence'])}
+                className="input w-full"
+              >
+                {RULE_OCCURRENCES.map((o) => (
+                  <option key={o.value} value={o.value}>{o.label}</option>
+                ))}
+              </select>
+            </div>
+          </div>
+
+          {/* التأثير */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              نوع القاعدة *
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-2">التأثير</label>
             <div className="grid grid-cols-2 gap-3">
-              {ruleTypes.map(type => {
-                const Icon = type.icon
+              {RULE_EFFECTS.map((ef) => {
+                const active = effect === ef.value
+                const Icon = ef.value === 'WORK' ? Sun : Moon
                 return (
                   <button
-                    key={type.id}
-                    onClick={() => setRuleType(type.id as WorkRule['type'])}
+                    key={ef.value}
+                    type="button"
+                    onClick={() => setEffect(ef.value)}
                     className={`p-4 rounded-xl border-2 text-right transition-all ${
-                      ruleType === type.id
-                        ? `border-primary-500 bg-primary-50`
-                        : 'border-gray-200 hover:border-gray-300'
+                      active ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300'
                     }`}
                   >
                     <div className="flex items-center gap-3">
-                      <div className={`w-10 h-10 ${type.color} rounded-lg flex items-center justify-center`}>
+                      <div className={`w-10 h-10 ${ef.value === 'WORK' ? 'bg-green-500' : 'bg-red-500'} rounded-lg flex items-center justify-center flex-shrink-0`}>
                         <Icon size={20} className="text-white" />
                       </div>
-                      <span className="font-medium text-gray-800">{type.name}</span>
+                      <div>
+                        <p className="font-medium text-gray-800">{ef.label}</p>
+                        <p className="text-xs text-gray-500 mt-0.5">{ef.desc}</p>
+                      </div>
                     </div>
                   </button>
                 )
@@ -1612,97 +1618,39 @@ function AddRuleModal({
             </div>
           </div>
 
-          {/* الشرط */}
-          <div className="p-4 bg-gray-50 rounded-xl space-y-4">
-            <h3 className="font-medium text-gray-800">الشرط:</h3>
-
-            {/* اختيار الأيام */}
-            <div>
-              <label className="block text-sm text-gray-600 mb-2">اليوم *</label>
-              <div className="flex gap-2 flex-wrap">
-                {weekDays.map(day => (
-                  <button
-                    key={day.key}
-                    onClick={() => toggleDay(day.key)}
-                    className={`px-4 py-2 rounded-lg transition-all ${
-                      selectedDays.includes(day.key)
-                        ? 'bg-primary-500 text-white'
-                        : 'bg-white border border-gray-200 text-gray-600 hover:border-primary-300'
-                    }`}
-                  >
-                    {day.name}
-                  </button>
-                ))}
-              </div>
-            </div>
-
-            {/* الموقع والفترة */}
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-sm text-gray-600 mb-2">الموقع</label>
-                <select
-                  value={position}
-                  onChange={(e) => setPosition(e.target.value)}
-                  className="input w-full"
-                >
-                  {dayPositions.map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </div>
-              <div>
-                <label className="block text-sm text-gray-600 mb-2">في</label>
-                <select
-                  value={period}
-                  onChange={(e) => setPeriod(e.target.value)}
-                  className="input w-full"
-                >
-                  {timePeriods.map(p => (
-                    <option key={p.id} value={p.id}>{p.name}</option>
-                  ))}
-                </select>
-              </div>
-            </div>
+          {/* الفرع */}
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">الفرع</label>
+            <select
+              value={branchId}
+              onChange={(e) => setBranchId(e.target.value)}
+              className="input w-full"
+            >
+              <option value="">كل الفروع</option>
+              {branches.map((b) => (
+                <option key={b.id} value={String(b.id)}>{b.name}</option>
+              ))}
+            </select>
           </div>
 
-          {/* النتيجة */}
-          <div className="p-4 bg-gray-50 rounded-xl space-y-4">
-            <h3 className="font-medium text-gray-800">النتيجة:</h3>
-
-            {ruleType === 'work_to_off' ? (
-              <div>
-                <label className="block text-sm text-gray-600 mb-2">اسم الإجازة (اختياري)</label>
-                <input
-                  type="text"
-                  value={holidayName}
-                  onChange={(e) => setHolidayName(e.target.value)}
-                  placeholder="مثال: إجازة رمضان"
-                  className="input w-full"
-                />
-              </div>
-            ) : (
-              <div>
-                <label className="block text-sm text-gray-600 mb-2">الوردية</label>
-                <select
-                  value={shiftId}
-                  onChange={(e) => setShiftId(e.target.value)}
-                  className="input w-full"
-                >
-                  {availableShifts.map(shift => (
-                    <option key={shift.id} value={shift.id}>
-                      {shift.name} ({shift.time})
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
+          {/* معاينة الجملة */}
+          <div className="p-4 bg-blue-50 rounded-xl flex items-start gap-3">
+            <Info size={18} className="text-blue-500 mt-0.5 shrink-0" />
+            <div className="text-sm text-blue-700">
+              <p className="font-medium">معاينة القاعدة:</p>
+              <p className="mt-1">{preview}</p>
+            </div>
           </div>
         </div>
 
         {/* Actions */}
         <div className="p-6 border-t border-gray-100 flex gap-3">
-          <button onClick={handleSubmit} className="flex-1 btn-primary">
-            إضافة القاعدة
+          <button
+            onClick={handleSubmit}
+            disabled={saving}
+            className="flex-1 btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+          >
+            {saving ? 'جارٍ الحفظ...' : 'إضافة القاعدة'}
           </button>
           <button onClick={onClose} className="flex-1 btn-secondary">
             إلغاء

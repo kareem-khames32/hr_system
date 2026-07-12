@@ -175,3 +175,35 @@ export class AttendanceDay {
   @Column({ type: 'datetime', nullable: true })
   computedAt: Date
 }
+
+// قواعد استثناء أيام العمل — تُبطِل الافتراضي (الويك إند) ليوم بعينه:
+// «آخر سبت في الشهر = دوام رسمي» (WORK) أو «أول خميس = إجازة» (OFF)
+export type RuleWeekday =
+  | 'SUN' | 'MON' | 'TUE' | 'WED' | 'THU' | 'FRI' | 'SAT'
+export type RuleOccurrence = 'ALL' | '1ST' | '2ND' | '3RD' | '4TH' | 'LAST'
+export type RuleEffect = 'WORK' | 'OFF' // تحويل عطلة→دوام | دوام→عطلة
+
+@Entity('schedule_exception_rules')
+export class ScheduleExceptionRule {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Column({ length: 200 })
+  name: string
+
+  @Column({ length: 10 })
+  weekday: RuleWeekday
+
+  @Column({ length: 10, default: 'ALL' })
+  occurrence: RuleOccurrence
+
+  @Column({ length: 10 })
+  effect: RuleEffect
+
+  // NULL = يسري على كل الفروع؛ قيمة = فرع بعينه (يتقدّم على العام)
+  @Column({ nullable: true })
+  branchId: number
+
+  @Column({ default: true })
+  isActive: boolean
+}

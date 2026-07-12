@@ -1,10 +1,12 @@
 import {
   Body,
   Controller,
+  Delete,
   Get,
   Headers,
   Param,
   ParseIntPipe,
+  Patch,
   Post,
   Query,
   UseGuards,
@@ -116,6 +118,47 @@ export class AttendanceController {
   @Get('schedule/day-overrides')
   weekDayOverrides(@Query('week') week: string) {
     return this.service.weekDayOverrides(week)
+  }
+
+  // ===== قواعد استثناء أيام العمل (آخر سبت = دوام رسمي...) =====
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.manage')
+  @Get('schedule-rules')
+  listScheduleRules() {
+    return this.service.listScheduleRules()
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.manage')
+  @Post('schedule-rules')
+  createScheduleRule(
+    @Body()
+    dto: {
+      name: string
+      weekday: string
+      occurrence: string
+      effect: string
+      branchId?: number | null
+    }
+  ) {
+    return this.service.createScheduleRule(dto)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.manage')
+  @Patch('schedule-rules/:id')
+  updateScheduleRule(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: Record<string, any>
+  ) {
+    return this.service.updateScheduleRule(id, dto)
+  }
+
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.manage')
+  @Delete('schedule-rules/:id')
+  deleteScheduleRule(@Param('id', ParseIntPipe) id: number) {
+    return this.service.deleteScheduleRule(id)
   }
 
   // أيام العمل الفعلية في مدى (خدمة ذاتية) — لتلميح نموذج الإجازة:

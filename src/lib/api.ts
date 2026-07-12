@@ -277,6 +277,25 @@ export const ingestPunchesManual = (punches: Array<{ employeeCode: string; times
 export const fetchWorkingDays = (from: string, to: string) =>
   get<{ total: number; working: number; skipped: string[] }>(
     `/attendance/working-days?from=${from}&to=${to}`)
+
+// ===== قواعد استثناء أيام العمل (آخر سبت = دوام رسمي...) =====
+export interface ApiScheduleRule {
+  id: number
+  name: string
+  weekday: 'SUN' | 'MON' | 'TUE' | 'WED' | 'THU' | 'FRI' | 'SAT'
+  occurrence: 'ALL' | '1ST' | '2ND' | '3RD' | '4TH' | 'LAST'
+  effect: 'WORK' | 'OFF'
+  branchId?: number | null
+  isActive: boolean
+}
+export const fetchScheduleRules = () =>
+  get<ApiScheduleRule[]>('/attendance/schedule-rules')
+export const createScheduleRule = (r: Omit<ApiScheduleRule, 'id' | 'isActive'>) =>
+  post<ApiScheduleRule>('/attendance/schedule-rules', r)
+export const updateScheduleRule = (id: number, r: Partial<ApiScheduleRule>) =>
+  patch<ApiScheduleRule>(`/attendance/schedule-rules/${id}`, r)
+export const deleteScheduleRule = (id: number) =>
+  del<{ deleted: boolean }>(`/attendance/schedule-rules/${id}`)
 export const fetchPendingOvertime = () => get<any[]>('/attendance/overtime/pending')
 export const confirmOvertime = (id: number, approve: boolean) =>
   post(`/attendance/overtime/${id}/confirm`, { approve })

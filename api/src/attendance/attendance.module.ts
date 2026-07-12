@@ -13,6 +13,7 @@ import {
   PermissionType,
   ScheduleDayOverride,
   ScheduleEntry,
+  ScheduleExceptionRule,
 } from './attendance.entities'
 import { AttendanceController } from './attendance.controller'
 import { AttendanceService } from './attendance.service'
@@ -35,6 +36,7 @@ import { DeviceSyncService } from './device-sync.service'
       PublicHoliday,
       ScheduleDayOverride,
       PermissionType,
+      ScheduleExceptionRule,
     ]),
   ],
   controllers: [AttendanceController],
