@@ -288,16 +288,17 @@ export class RequestsService {
 
       // النوع الموحّد «طلب إجازة»: نوع الإجازة مطلوب ولازم يكون معروفاً ومفعّلاً —
       // بلا هذا التحقق يُخصم كود مجهول من «السنوي» بصمت (لا default آمن)
+      let leaveTypeDef: LeaveType | null = null
       if (type.code === 'LEAVE' || p.leaveType != null) {
         const ltCode = String(p.leaveType ?? '').trim()
         if (type.code === 'LEAVE' && !ltCode) {
           throw new BadRequestException('اختر نوع الإجازة قبل التقديم')
         }
         if (ltCode) {
-          const lt = await this.ds
+          leaveTypeDef = await this.ds
             .getRepository(LeaveType)
             .findOne({ where: { code: ltCode } })
-          if (!lt || !lt.isActive) {
+          if (!leaveTypeDef || !leaveTypeDef.isActive) {
             throw new BadRequestException(
               `نوع الإجازة «${ltCode}» غير معروف أو معطل — اختر من الأنواع المتاحة`
             )
@@ -336,6 +337,35 @@ export class RequestsService {
           p.days = effectiveDays
           p.skippedHolidays = skipped
           req.payload = JSON.stringify(p)
+        }
+      }
+
+      // قواعد نوع الإجازة من الكتالوج (تُطبَّق بعد تثبيت أيام العمل الفعلية):
+      if (leaveTypeDef) {
+        // حدّ أيام النوع — رفض ما يتجاوزه (مرضية 180، عارضة 7، حج 21…)
+        const effDays = Number(p.days)
+        if (
+          leaveTypeDef.maxDays != null &&
+          effDays > Number(leaveTypeDef.maxDays)
+        ) {
+          throw new BadRequestException(
+            `«${leaveTypeDef.nameAr}» حدّها الأقصى ${leaveTypeDef.maxDays} يوم (أيام عمل) — طلبت ${effDays}`
+          )
+        }
+        // مرة واحدة طوال الخدمة (الحج) — رفض لو للموظف سابقة معتمدة من النوع
+        if (leaveTypeDef.oncePerService) {
+          const prior = await this.ds.getRepository(Leave).count({
+            where: {
+              employeeId: req.requesterId,
+              leaveType: leaveTypeDef.code,
+              status: 'APPROVED',
+            },
+          })
+          if (prior > 0) {
+            throw new BadRequestException(
+              `«${leaveTypeDef.nameAr}» تُمنح مرة واحدة طوال الخدمة — للموظف إجازة سابقة من هذا النوع`
+            )
+          }
         }
       }
     }
