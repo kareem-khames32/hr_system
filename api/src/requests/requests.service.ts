@@ -352,18 +352,53 @@ export class RequestsService {
             `«${leaveTypeDef.nameAr}» حدّها الأقصى ${leaveTypeDef.maxDays} يوم (أيام عمل) — طلبت ${effDays}`
           )
         }
-        // مرة واحدة طوال الخدمة (الحج) — رفض لو للموظف سابقة معتمدة من النوع
+        // مرة واحدة طوال الخدمة (الحج) — رفض لو للموظف سابقة من النوع:
+        // (أ) سجل إجازة معتمد (منفَّذ)، أو (ب) طلب إجازة آخر لا يزال في المسار.
+        // سجل الإجازة يُكتب عند التنفيذ فقط، فلا يكفي فحص السجلات وحدها —
+        // بدونه يمرّ طلبان حج مقدَّمان قبل اعتماد الأول (العدّ = صفر لكليهما)
         if (leaveTypeDef.oncePerService) {
-          const prior = await this.ds.getRepository(Leave).count({
+          const onceCode = leaveTypeDef.code
+          const priorLeaves = await this.ds.getRepository(Leave).count({
             where: {
               employeeId: req.requesterId,
-              leaveType: leaveTypeDef.code,
+              leaveType: onceCode,
               status: 'APPROVED',
             },
           })
-          if (prior > 0) {
+          let inFlight = 0
+          if (priorLeaves === 0) {
+            const live = await this.requests.find({
+              where: {
+                requesterId: req.requesterId,
+                status: In([
+                  'SUBMITTED',
+                  'UNDER_REVIEW',
+                  'IN_EXECUTION',
+                  'APPROVED',
+                  'COMPLETED',
+                ]),
+              },
+            })
+            inFlight = live.filter((r) => {
+              if (r.id === req.id) return false
+              let effCode = ''
+              try {
+                if (r.typeCode === 'LEAVE') {
+                  effCode = String(
+                    JSON.parse(r.payload ?? '{}').leaveType ?? ''
+                  )
+                } else if (r.typeCode.startsWith('LEAVE_')) {
+                  effCode = r.typeCode.replace('LEAVE_', '')
+                }
+              } catch {
+                effCode = ''
+              }
+              return effCode === onceCode
+            }).length
+          }
+          if (priorLeaves > 0 || inFlight > 0) {
             throw new BadRequestException(
-              `«${leaveTypeDef.nameAr}» تُمنح مرة واحدة طوال الخدمة — للموظف إجازة سابقة من هذا النوع`
+              `«${leaveTypeDef.nameAr}» تُمنح مرة واحدة طوال الخدمة — للموظف طلب/إجازة سابقة من هذا النوع`
             )
           }
         }
