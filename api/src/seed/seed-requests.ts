@@ -91,6 +91,27 @@ export async function seedRequests(ds: DataSource) {
   }
   if (removedOld > 0) console.log(`✓ حُذفت ${removedOld} سلسلة مشتركة قديمة`)
 
+  // ===== توحيد الإجازات: «طلب إجازة» واحد بدل الأنواع المنفصلة =====
+  // نعطّل أنواع طلب الإجازة المستقلة (سنوية/مرضية/...) — الموظف يختار
+  // النوع من قائمة داخل «طلب إجازة». نُبقي LEAVE و LEAVE_MODIFY_CANCEL.
+  const standaloneLeaveCodes = [
+    'LEAVE_ANNUAL', 'LEAVE_SICK', 'LEAVE_CASUAL', 'LEAVE_UNPAID',
+    'LEAVE_MATERNITY', 'LEAVE_PATERNITY', 'LEAVE_HAJJ', 'LEAVE_MARRIAGE',
+    'LEAVE_BEREAVEMENT', 'LEAVE_EXAM', 'LEAVE_COMPENSATORY',
+  ]
+  let deactivated = 0
+  for (const code of standaloneLeaveCodes) {
+    const t = await types.findOne({ where: { code } })
+    if (t && t.isActive) {
+      t.isActive = false
+      await types.save(t)
+      deactivated++
+    }
+  }
+  if (deactivated > 0) {
+    console.log(`✓ عُطّل ${deactivated} نوع إجازة مستقل (موحّدة تحت «طلب إجازة»)`)
+  }
+
   // ===== أنواع الإجازات =====
   for (const lt of leaveTypesSeed) {
     const existing = await leaveTypes.findOne({ where: { code: lt.code } })

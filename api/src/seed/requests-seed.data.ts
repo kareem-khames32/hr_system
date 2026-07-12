@@ -133,6 +133,9 @@ const LEAVE_FIELDS = ['fromDate', 'toDate', 'days']
 
 export const typesSeed: TypeSeed[] = [
   // ===== 1) الإجازات =====
+  // نوع موحّد: «طلب إجازة» بقائمة نوع الإجازة — سلسلة واحدة لكل الإجازات.
+  // الأثر (خصم رصيد/مدفوعة) يُقرأ من كتالوج أنواع الإجازات (balanceSource/isPaid)
+  { code: 'LEAVE', nameAr: 'طلب إجازة', category: 'leaves', chain: 'CHAIN_MANAGER_HR', handler: 'leave_calendar_balance', requiredFields: ['leaveType', 'fromDate', 'toDate', 'days'], affectsBalance: true, phase: 'P1' },
   { code: 'LEAVE_ANNUAL', nameAr: 'إجازة سنوية', category: 'leaves', chain: 'CHAIN_MANAGER_HR', handler: 'leave_calendar_balance', requiredFields: LEAVE_FIELDS, affectsBalance: true, phase: 'P1' },
   { code: 'LEAVE_SICK', nameAr: 'إجازة مرضية', category: 'leaves', chain: 'CHAIN_MANAGER_HR', handler: 'leave_calendar_balance', requiredFields: LEAVE_FIELDS, affectsBalance: true, phase: 'P1' },
   { code: 'LEAVE_CASUAL', nameAr: 'إجازة عارضة/طارئة', category: 'leaves', chain: 'CHAIN_MANAGER', handler: 'leave_calendar', requiredFields: LEAVE_FIELDS, affectsBalance: true, phase: 'P1' },

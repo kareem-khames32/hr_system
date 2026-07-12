@@ -285,6 +285,26 @@ export class RequestsService {
     // نصف اليوم: لازم يكون يوماً واحداً
     if (type.category === 'leaves') {
       const p = req.payload ? JSON.parse(req.payload) : {}
+
+      // النوع الموحّد «طلب إجازة»: نوع الإجازة مطلوب ولازم يكون معروفاً ومفعّلاً —
+      // بلا هذا التحقق يُخصم كود مجهول من «السنوي» بصمت (لا default آمن)
+      if (type.code === 'LEAVE' || p.leaveType != null) {
+        const ltCode = String(p.leaveType ?? '').trim()
+        if (type.code === 'LEAVE' && !ltCode) {
+          throw new BadRequestException('اختر نوع الإجازة قبل التقديم')
+        }
+        if (ltCode) {
+          const lt = await this.ds
+            .getRepository(LeaveType)
+            .findOne({ where: { code: ltCode } })
+          if (!lt || !lt.isActive) {
+            throw new BadRequestException(
+              `نوع الإجازة «${ltCode}» غير معروف أو معطل — اختر من الأنواع المتاحة`
+            )
+          }
+        }
+      }
+
       if (
         ['MORNING', 'EVENING'].includes(String(p.period)) &&
         p.fromDate !== p.toDate
@@ -568,7 +588,8 @@ export class RequestsService {
     // (خارج المعاملة — عشان الحساب يشوف السجل الجديد)
     try {
       const payload = saved.payload ? JSON.parse(saved.payload) : {}
-      const isLeave = saved.typeCode.startsWith('LEAVE_')
+      const isLeave =
+        saved.typeCode === 'LEAVE' || saved.typeCode.startsWith('LEAVE_')
       const isPermission = saved.typeCode === 'PERMISSION'
       // إلغاء إجازة (payload.leaveId): مدى الإجازة الأصلية هو المتأثر
       let fromDate: string | undefined = payload.fromDate

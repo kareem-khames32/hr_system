@@ -20,6 +20,9 @@ interface PermissionType {
   nameAr: string
   isDeductible: boolean
   maxDurationMinutes?: number | null
+  monthlyFreeCount?: number | null
+  monthlyFreeMinutes?: number | null
+  deductionPct?: number
   isActive: boolean
 }
 
@@ -27,6 +30,9 @@ const emptyForm = {
   nameAr: '',
   isDeductible: false,
   maxDurationMinutes: '',
+  monthlyFreeCount: '',
+  monthlyFreeMinutes: '',
+  deductionPct: '100',
   isActive: true,
 }
 
@@ -70,6 +76,11 @@ export default function PermissionTypesPage() {
         isDeductible: t.isDeductible,
         maxDurationMinutes:
           t.maxDurationMinutes != null ? String(t.maxDurationMinutes) : '',
+        monthlyFreeCount:
+          t.monthlyFreeCount != null ? String(t.monthlyFreeCount) : '',
+        monthlyFreeMinutes:
+          t.monthlyFreeMinutes != null ? String(t.monthlyFreeMinutes) : '',
+        deductionPct: t.deductionPct != null ? String(t.deductionPct) : '100',
         isActive: t.isActive,
       })
     } else {
@@ -89,6 +100,16 @@ export default function PermissionTypesPage() {
         formData.maxDurationMinutes !== ''
           ? Number(formData.maxDurationMinutes)
           : null,
+      monthlyFreeCount:
+        formData.monthlyFreeCount !== ''
+          ? Number(formData.monthlyFreeCount)
+          : null,
+      monthlyFreeMinutes:
+        formData.monthlyFreeMinutes !== ''
+          ? Number(formData.monthlyFreeMinutes)
+          : null,
+      deductionPct:
+        formData.deductionPct !== '' ? Number(formData.deductionPct) : 100,
       isActive: formData.isActive,
     }
     try {
@@ -233,6 +254,9 @@ export default function PermissionTypesPage() {
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">
                         الحد الأقصى
                       </th>
+                      <th className="py-3 px-4 text-sm font-medium text-gray-500">
+                        الرصيد الشهري
+                      </th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">الحالة</th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">
                         إجراءات
@@ -265,6 +289,30 @@ export default function PermissionTypesPage() {
                           {t.maxDurationMinutes != null
                             ? `${t.maxDurationMinutes} دقيقة`
                             : 'بلا حد'}
+                        </td>
+                        <td className="py-3 px-4">
+                          {t.monthlyFreeCount != null ||
+                          t.monthlyFreeMinutes != null ? (
+                            <div className="flex flex-wrap items-center gap-1">
+                              {t.monthlyFreeCount != null && (
+                                <span className="badge text-xs bg-primary-50 text-primary-700">
+                                  مجاني: {t.monthlyFreeCount} مرة/شهر
+                                </span>
+                              )}
+                              {t.monthlyFreeMinutes != null && (
+                                <span className="badge text-xs bg-primary-50 text-primary-700">
+                                  {t.monthlyFreeMinutes} دقيقة/شهر
+                                </span>
+                              )}
+                              <span className="badge text-xs bg-red-100 text-red-700">
+                                خصم {t.deductionPct ?? 100}%
+                              </span>
+                            </div>
+                          ) : (
+                            <span className="text-xs text-gray-400">
+                              بلا رصيد شهري
+                            </span>
+                          )}
                         </td>
                         <td className="py-3 px-4">
                           <span
@@ -384,6 +432,84 @@ export default function PermissionTypesPage() {
                   <p className="text-xs text-gray-400 mt-1">
                     اتركه فارغاً إذا لم يكن للإذن حد أقصى
                   </p>
+                </div>
+
+                {/* Monthly free balance (only meaningful when NOT deductible) */}
+                <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-4 space-y-4">
+                  <div className="flex items-center justify-between">
+                    <h3 className="text-sm font-semibold text-gray-700">
+                      الرصيد الشهري المجاني
+                    </h3>
+                  </div>
+                  {formData.isDeductible && (
+                    <p className="text-xs text-amber-600 bg-amber-50 rounded-lg p-2">
+                      هذا النوع يُخصم دائماً من الراتب، لذا يتم تجاهل الرصيد
+                      الشهري المجاني.
+                    </p>
+                  )}
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        الرصيد الشهري المجاني (عدد مرات)
+                      </label>
+                      <input
+                        type="number"
+                        value={formData.monthlyFreeCount}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            monthlyFreeCount: e.target.value,
+                          })
+                        }
+                        className="input w-full"
+                        dir="ltr"
+                        min={0}
+                        placeholder="بلا حد"
+                        disabled={formData.isDeductible}
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">
+                        الرصيد الشهري المجاني (دقائق)
+                      </label>
+                      <input
+                        type="number"
+                        value={formData.monthlyFreeMinutes}
+                        onChange={(e) =>
+                          setFormData({
+                            ...formData,
+                            monthlyFreeMinutes: e.target.value,
+                          })
+                        }
+                        className="input w-full"
+                        dir="ltr"
+                        min={0}
+                        placeholder="بلا حد"
+                        disabled={formData.isDeductible}
+                      />
+                    </div>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      نسبة الخصم على الزيادة عن الرصيد (%)
+                    </label>
+                    <input
+                      type="number"
+                      value={formData.deductionPct}
+                      onChange={(e) =>
+                        setFormData({ ...formData, deductionPct: e.target.value })
+                      }
+                      className="input w-full"
+                      dir="ltr"
+                      min={0}
+                      max={100}
+                      placeholder="100"
+                      disabled={formData.isDeductible}
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      الدقائق المتجاوزة للرصيد تُخصم من الراتب بهذه النسبة
+                    </p>
+                  </div>
                 </div>
 
                 <label className="flex items-center gap-2">

@@ -56,6 +56,13 @@ const leaveTypeLabels: Record<string, string> = {
   SICK: 'مرضية',
   CASUAL: 'عارضة',
   UNPAID: 'بدون راتب',
+  MATERNITY: 'وضع',
+  PATERNITY: 'أبوة',
+  HAJJ: 'حج',
+  MARRIAGE: 'زواج',
+  BEREAVEMENT: 'وفاة/عدة',
+  EXAM: 'امتحانات',
+  COMPENSATORY: 'تعويضية',
 }
 
 const leaveStatusLabels: Record<string, string> = {

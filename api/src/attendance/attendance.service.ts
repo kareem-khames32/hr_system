@@ -520,7 +520,10 @@ export class AttendanceService {
   private async approvedPermissionWindows(
     employeeId: number,
     date: string
-  ): Promise<Array<{ from: number; to: number; deductible: boolean }>> {
+  ): Promise<
+    Array<{ from: number; to: number; deductible: boolean; deductRatio: number }>
+  > {
+    const month = date.slice(0, 7)
     const rows = await this.requests.find({
       where: {
         requesterId: employeeId,
@@ -528,27 +531,122 @@ export class AttendanceService {
         status: In(['COMPLETED', 'APPROVED', 'IN_EXECUTION']),
       },
     })
-    const windows: Array<{ from: number; to: number; deductible: boolean }> = []
+    // كل أذونات الشهر المعتمدة (لحساب الرصيد التراكمي)
+    // id = معرّف الطلب — كاسر تعادل ثابت حين يتطابق التاريخ ووقت البداية
+    const monthPerms: Array<{
+      id: number
+      date: string
+      from: number
+      to: number
+      type: string | null
+      dur: number
+    }> = []
     for (const r of rows) {
       try {
         const p = JSON.parse(r.payload ?? '{}')
-        if (p.date === date && p.from && p.to) {
-          let deductible = false
-          if (p.permissionType) {
-            const pt = await this.permissionTypes.findOne({
-              where: { nameAr: String(p.permissionType) },
-            })
-            deductible = !!pt?.isDeductible
-          }
-          windows.push({
-            from: toMinutes(p.from),
-            to: toMinutes(p.to),
-            deductible,
+        if (p.date && String(p.date).startsWith(month) && p.from && p.to) {
+          const from = toMinutes(p.from)
+          const to = toMinutes(p.to)
+          monthPerms.push({
+            id: r.id,
+            date: String(p.date),
+            from,
+            to,
+            type: p.permissionType ? String(p.permissionType) : null,
+            dur: Math.max(0, to - from),
           })
         }
       } catch {
         /* payload تالف — تجاهل */
       }
+    }
+    // ترتيب زمني لحساب «الأسبق أولاً» في الرصيد المجاني —
+    // كسر التعادل بالمعرّف حتى يكون «الأسبق» محدداً بدقة (لا عشوائياً)
+    monthPerms.sort((a, b) =>
+      a.date !== b.date
+        ? a.date < b.date
+          ? -1
+          : 1
+        : a.from !== b.from
+          ? a.from - b.from
+          : a.id - b.id
+    )
+    // كتالوج الأنواع المستخدمة
+    const typeNames = [...new Set(monthPerms.map((p) => p.type).filter(Boolean))]
+    const typeMap = new Map<string, PermissionType>()
+    for (const name of typeNames as string[]) {
+      const pt = await this.permissionTypes.findOne({ where: { nameAr: name } })
+      if (pt) typeMap.set(name, pt)
+    }
+
+    const windows: Array<{
+      from: number
+      to: number
+      deductible: boolean
+      deductRatio: number
+    }> = []
+    for (const perm of monthPerms.filter((p) => p.date === date)) {
+      const pt = perm.type ? typeMap.get(perm.type) : undefined
+      const ratio = Math.max(
+        0,
+        Math.min(1, Number(pt?.deductionPct ?? 100) / 100)
+      )
+
+      // النوع «بخصم» صراحةً (أو بلا نوع) → كامل النافذة بخصم
+      if (!pt || pt.isDeductible) {
+        windows.push({
+          from: perm.from,
+          to: perm.to,
+          deductible: !!pt?.isDeductible,
+          deductRatio: pt?.isDeductible ? ratio : 1,
+        })
+        continue
+      }
+
+      // نوع مجاني: بلا حدّ شهري → معذور مجاناً بالكامل
+      const hasCap =
+        pt.monthlyFreeCount != null || pt.monthlyFreeMinutes != null
+      if (!hasCap) {
+        windows.push({ from: perm.from, to: perm.to, deductible: false, deductRatio: 1 })
+        continue
+      }
+
+      // الأسبق أولاً — الأذونات قبل هذا (بترتيب ثابت: تاريخ ثم بداية ثم معرّف)
+      const priors = monthPerms.filter(
+        (x) =>
+          x.type === perm.type &&
+          (x.date < perm.date ||
+            (x.date === perm.date &&
+              (x.from < perm.from ||
+                (x.from === perm.from && x.id < perm.id))))
+      )
+      const priorCount = priors.length
+      const priorMinutes = priors.reduce((s, x) => s + x.dur, 0)
+
+      // تجاوز حدّ العدد → كامل النافذة بخصم (الإذن كوحدة)
+      if (pt.monthlyFreeCount != null && priorCount >= pt.monthlyFreeCount) {
+        windows.push({ from: perm.from, to: perm.to, deductible: true, deductRatio: ratio })
+        continue
+      }
+
+      // حدّ الدقائق: الجزء ضمن السقف مجاني والباقي بخصم — تقسيم النافذة عند الحد
+      // (بلا تقسيم كان الإذن العابر للحد يُعفى بالكامل ويتجاوز السقف بشبه إذن)
+      if (pt.monthlyFreeMinutes != null) {
+        const freeRemaining = Math.max(0, pt.monthlyFreeMinutes - priorMinutes)
+        if (freeRemaining <= 0) {
+          windows.push({ from: perm.from, to: perm.to, deductible: true, deductRatio: ratio })
+        } else if (freeRemaining >= perm.dur) {
+          windows.push({ from: perm.from, to: perm.to, deductible: false, deductRatio: 1 })
+        } else {
+          const splitAt = perm.from + freeRemaining
+          windows.push({ from: perm.from, to: splitAt, deductible: false, deductRatio: 1 })
+          windows.push({ from: splitAt, to: perm.to, deductible: true, deductRatio: ratio })
+        }
+        continue
+      }
+
+      // حدّ عدد فقط ولم يُتجاوز → مجاني
+      windows.push({ from: perm.from, to: perm.to, deductible: false, deductRatio: 1 })
     }
     return windows
   }
@@ -653,40 +751,74 @@ export class AttendanceService {
     } else if (checkIn || hasHalfLeave) {
       const permissions = await this.approvedPermissionWindows(employeeId, date)
       // كل نوافذ التغطية: إجازات جزئية + أذونات (بنوعيها)
-      const coverage = [...halfLeaveWindows, ...permissions]
+      const coverage = [
+        ...halfLeaveWindows.map((w) => ({ ...w, deductRatio: 1 })),
+        ...permissions,
+      ]
       const freeCoverage = coverage.filter((w) => !w.deductible)
       const paidCoverage = coverage.filter((w) => w.deductible)
+      // المخصوم من الراتب = دقائق [a1,a2] المغطاة بنوافذ «بخصم» كاتحاد بلا تكرار
+      // (كل دقيقة مرة واحدة بأعلى نسبة تغطّيها) — نوافذ متداخلة لا تُحسب مرتين
+      const paidPay = (a1: number, a2: number) => {
+        if (a2 <= a1) return 0
+        const cuts = new Set<number>([a1, a2])
+        for (const w of paidCoverage) {
+          if (w.to > a1 && w.from < a2) {
+            cuts.add(Math.max(a1, w.from))
+            cuts.add(Math.min(a2, w.to))
+          }
+        }
+        const marks = [...cuts].sort((x, y) => x - y)
+        let total = 0
+        for (let i = 0; i < marks.length - 1; i++) {
+          const segFrom = marks[i]
+          const segTo = marks[i + 1]
+          const mid = (segFrom + segTo) / 2
+          let ratio = 0
+          for (const w of paidCoverage) {
+            if (w.from <= mid && mid < w.to) ratio = Math.max(ratio, w.deductRatio ?? 1)
+          }
+          if (ratio > 0) total += (segTo - segFrom) * ratio
+        }
+        return total
+      }
 
       if (!checkIn) {
         // نصف يوم إجازة ومفيش بصمة خالص: النصف الآخر غياب — يبقى جزئية
         status = 'partial_leave'
       } else {
-        // التأخير الخام: المجاني يعذره، و«بخصم» يعذره من الغياب
-        // لكن دقائقه المتداخلة تتسجل للخصم في المسير
+        // التأخير الخام: المجاني والبخصم يعذران الدقائق المغطاة من التأخير
+        // بالكامل، لكن دقائق «بخصم» تُسجَّل للخصم من الراتب (× النسبة)
         const lateRaw = toMinutes(checkIn) - shiftStart
         let excusedLate = 0
-        let deductibleLate = 0
+        let deductibleCoveredLate = 0 // مغطاة بإذن بخصم — تُعفى من التأخير كاملة
+        let deductiblePayLate = 0 // المخصوم من الراتب (× النسبة)
         if (lateRaw > 0) {
           excusedLate = this.overlapMinutes(shiftStart, toMinutes(checkIn), freeCoverage)
-          deductibleLate = this.overlapMinutes(shiftStart, toMinutes(checkIn), paidCoverage)
+          deductibleCoveredLate = this.overlapMinutes(shiftStart, toMinutes(checkIn), paidCoverage)
+          deductiblePayLate = paidPay(shiftStart, toMinutes(checkIn))
         }
-        const effectiveLate = lateRaw - excusedLate - deductibleLate
+        const effectiveLate = lateRaw - excusedLate - deductibleCoveredLate
         lateMinutes = effectiveLate > grace ? effectiveLate : 0
 
         let excusedEarly = 0
-        let deductibleEarly = 0
+        let deductibleCoveredEarly = 0
+        let deductiblePayEarly = 0
         if (checkOut) {
           const earlyRaw = shiftEnd - toMinutes(checkOut)
           if (earlyRaw > 0) {
             excusedEarly = this.overlapMinutes(toMinutes(checkOut), shiftEnd, freeCoverage)
-            deductibleEarly = this.overlapMinutes(toMinutes(checkOut), shiftEnd, paidCoverage)
+            deductibleCoveredEarly = this.overlapMinutes(toMinutes(checkOut), shiftEnd, paidCoverage)
+            deductiblePayEarly = paidPay(toMinutes(checkOut), shiftEnd)
           }
-          const effectiveEarly = earlyRaw - excusedEarly - deductibleEarly
+          const effectiveEarly = earlyRaw - excusedEarly - deductibleCoveredEarly
           earlyLeaveMinutes = effectiveEarly > grace ? effectiveEarly : 0
           workMinutes = Math.max(0, toMinutes(checkOut) - toMinutes(checkIn))
         }
         excusedMinutes = excusedLate + excusedEarly
-        deductibleMinutes = deductibleLate + deductibleEarly
+        // دقائق صحيحة — العمود int؛ الكسر الناتج عن النسبة يُقرَّب لأقرب دقيقة
+        // (فرق أقل من دقيقة/يوم لا أثر مادي له على المسير)
+        deductibleMinutes = Math.round(deductiblePayLate + deductiblePayEarly)
         // العرض الصحيح: إجازة جزئية تظهر «إجازة جزئية» مش «متأخر»
         // طالما الفترة غير المغطاة سليمة
         status =

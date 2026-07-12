@@ -11,33 +11,48 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import {
-  fetchRequestTypes,
+  fetchLeaveTypes,
   fetchMyBalances,
   createRequest,
-  type ApiRequestType,
   type ApiBalance,
 } from '@/lib/api'
 
-// لون كل نوع حسب كوده (الأنواع نفسها تأتي من كتالوج السيرفر)
-const TYPE_COLORS: Record<string, string> = {
-  LEAVE_ANNUAL: 'bg-blue-500',
-  LEAVE_SICK: 'bg-red-500',
-  LEAVE_CASUAL: 'bg-orange-500',
-  LEAVE_UNPAID: 'bg-gray-500',
-  LEAVE_MARRIAGE: 'bg-pink-500',
-  LEAVE_MATERNITY: 'bg-purple-500',
-  LEAVE_PATERNITY: 'bg-indigo-500',
-  LEAVE_HAJJ: 'bg-green-500',
-  LEAVE_BEREAVEMENT: 'bg-slate-500',
-  LEAVE_EXAM: 'bg-teal-500',
-  LEAVE_COMPENSATORY: 'bg-cyan-500',
+// نوع الإجازة من كتالوج السيرفر — النموذج الموحّد: طلب واحد «LEAVE» يحمل النوع
+interface ApiLeaveType {
+  id: number
+  code: string // ANNUAL, SICK, UNPAID...
+  nameAr: string
+  isPaid: boolean
+  balanceSource: string | null // annual | sick | none
+  requiredAttachment: string | null
+  maxDays: number | null
+  oncePerService: boolean
+  isActive: boolean
 }
 
-// كود مصدر الرصيد من كود نوع الطلب: LEAVE_ANNUAL → ANNUAL
-const balanceSourceOf = (typeCode: string) => typeCode.replace(/^LEAVE_/, '')
+// لون كل نوع حسب كوده (الأنواع نفسها تأتي من كتالوج أنواع الإجازة في السيرفر)
+const TYPE_COLORS: Record<string, string> = {
+  ANNUAL: 'bg-blue-500',
+  SICK: 'bg-red-500',
+  CASUAL: 'bg-orange-500',
+  UNPAID: 'bg-gray-500',
+  MARRIAGE: 'bg-pink-500',
+  MATERNITY: 'bg-purple-500',
+  PATERNITY: 'bg-indigo-500',
+  HAJJ: 'bg-green-500',
+  BEREAVEMENT: 'bg-slate-500',
+  EXAM: 'bg-teal-500',
+  COMPENSATORY: 'bg-cyan-500',
+}
+
+// هل النوع يخصم من رصيد (annual/sick...) أم لا (none/بلا مصدر)
+const affectsBalance = (lt: ApiLeaveType) => {
+  const s = (lt.balanceSource ?? '').toLowerCase()
+  return s !== '' && s !== 'none'
+}
 
 export default function LeaveRequestPage() {
-  const [leaveTypes, setLeaveTypes] = useState<ApiRequestType[]>([])
+  const [leaveTypes, setLeaveTypes] = useState<ApiLeaveType[]>([])
   const [balances, setBalances] = useState<ApiBalance[]>([])
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
@@ -45,7 +60,7 @@ export default function LeaveRequestPage() {
   const [success, setSuccess] = useState('')
 
   const [formData, setFormData] = useState({
-    leaveType: '', // كود نوع الطلب مثل LEAVE_ANNUAL
+    leaveType: '', // كود نوع الإجازة مثل ANNUAL — يُرسل في payload.leaveType
     startDate: '',
     endDate: '',
     reason: '',
@@ -57,11 +72,11 @@ export default function LeaveRequestPage() {
 
   useEffect(() => {
     Promise.all([
-      fetchRequestTypes(),
+      fetchLeaveTypes(),
       fetchMyBalances().catch(() => [] as ApiBalance[]),
     ])
       .then(([types, bals]) => {
-        setLeaveTypes(types.filter((t) => t.category === 'leaves' && t.isActive))
+        setLeaveTypes((types as ApiLeaveType[]).filter((t) => t.isActive))
         setBalances(bals)
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل أنواع الإجازات'))
@@ -69,8 +84,9 @@ export default function LeaveRequestPage() {
   }, [])
 
   // رصيد النوع المحدد إن كان له مصدر رصيد (annual/sick/...)
-  const balanceFor = (typeCode: string): number | null => {
-    const source = balanceSourceOf(typeCode).toLowerCase()
+  const balanceFor = (lt: ApiLeaveType): number | null => {
+    const source = (lt.balanceSource ?? '').toLowerCase()
+    if (!source || source === 'none') return null
     const bal = balances.find((b) => b.balanceType.toLowerCase() === source)
     return bal ? Number(bal.remaining) : null
   }
@@ -92,9 +108,10 @@ export default function LeaveRequestPage() {
   }
 
   const selectedLeaveType = leaveTypes.find(t => t.code === formData.leaveType)
-  const selectedBalance = selectedLeaveType ? balanceFor(selectedLeaveType.code) : null
+  const selectedBalance = selectedLeaveType ? balanceFor(selectedLeaveType) : null
 
-  // الإرسال لمحرك الطلبات — الرسائل العربية من السيرفر تُعرض كما هي
+  // الإرسال لمحرك الطلبات — طلب موحّد «LEAVE» والنوع في payload.leaveType.
+  // السيرفر يعيد حساب أيام العمل الفعلية ويصحّح days، والرسائل العربية تُعرض كما هي
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     if (!selectedLeaveType) return
@@ -102,11 +119,11 @@ export default function LeaveRequestPage() {
     setSuccess('')
     setSubmitting(true)
     try {
-      const req = await createRequest(selectedLeaveType.code, {
+      const req = await createRequest('LEAVE', {
         fromDate: formData.startDate,
         toDate: formData.endDate,
         days: calculatedDays,
-        leaveType: balanceSourceOf(selectedLeaveType.code),
+        leaveType: selectedLeaveType.code,
         reason: formData.reason,
         contactNumber: formData.contactNumber,
       })
@@ -155,7 +172,7 @@ export default function LeaveRequestPage() {
           </div>
         )}
 
-        {/* Leave Type Selection — من كتالوج أنواع الطلبات في السيرفر */}
+        {/* Leave Type Selection — من كتالوج أنواع الإجازة في السيرفر */}
         <div className="card">
           <h2 className="text-lg font-bold text-gray-800 mb-4">نوع الإجازة</h2>
           {loading ? (
@@ -165,7 +182,7 @@ export default function LeaveRequestPage() {
           ) : (
             <div className="grid grid-cols-4 gap-3">
               {leaveTypes.map((type) => {
-                const remaining = balanceFor(type.code)
+                const remaining = balanceFor(type)
                 return (
                   <button
                     key={type.code}
@@ -179,8 +196,13 @@ export default function LeaveRequestPage() {
                   >
                     <div className={`w-3 h-3 rounded-full ${TYPE_COLORS[type.code] ?? 'bg-gray-400'} mb-2`} />
                     <p className="font-medium text-gray-800 text-sm">{type.nameAr}</p>
-                    {remaining !== null && type.affectsBalance && (
+                    {remaining !== null && affectsBalance(type) && (
                       <p className="text-xs text-gray-500 mt-1">الرصيد: {remaining} يوم</p>
+                    )}
+                    {!affectsBalance(type) && (
+                      <p className="text-xs text-gray-400 mt-1">
+                        {type.isPaid ? 'لا تُخصم من رصيد' : 'بدون راتب'}
+                      </p>
                     )}
                   </button>
                 )
@@ -224,13 +246,19 @@ export default function LeaveRequestPage() {
             <div className="mt-4 p-4 bg-primary-50 rounded-xl flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Calendar size={20} className="text-primary-600" />
-                <span className="text-primary-800">مدة الإجازة</span>
+                <span className="text-primary-800">مدة الإجازة (المبدئية)</span>
               </div>
               <span className="text-2xl font-bold text-primary-600">{calculatedDays} يوم</span>
             </div>
           )}
 
-          {selectedLeaveType && selectedBalance !== null && selectedLeaveType.affectsBalance && calculatedDays > selectedBalance && (
+          {calculatedDays > 0 && (
+            <p className="text-xs text-gray-400 mt-2">
+              يُعاد حساب الأيام على السيرفر بأيام العمل الفعلية فقط (تُستبعد الويك إند والعطلات الرسمية)
+            </p>
+          )}
+
+          {selectedLeaveType && selectedBalance !== null && affectsBalance(selectedLeaveType) && calculatedDays > selectedBalance && (
             <div className="mt-4 p-4 bg-red-50 rounded-xl flex items-center gap-2 text-red-700">
               <AlertCircle size={20} />
               <span>مدة الإجازة المطلوبة تتجاوز الرصيد المتاح ({selectedBalance} يوم)</span>
@@ -309,7 +337,7 @@ export default function LeaveRequestPage() {
                 </span>
               </div>
               <div className="flex justify-between pt-3 border-t border-gray-200">
-                <span className="text-gray-600">المدة:</span>
+                <span className="text-gray-600">المدة (المبدئية):</span>
                 <span className="font-bold text-primary-600">{calculatedDays} يوم</span>
               </div>
             </div>

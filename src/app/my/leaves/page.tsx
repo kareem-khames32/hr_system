@@ -37,6 +37,21 @@ const balanceTypeConfig: Record<
   unpaid: { label: 'بدون راتب', icon: Wallet, iconBg: 'bg-gray-100', iconColor: 'text-gray-500' },
 }
 
+// أكواد أنواع الإجازة → عربي — طلب الإجازة الموحّد (LEAVE) يحمل النوع في الـ payload
+const leaveTypeLabels: Record<string, string> = {
+  ANNUAL: 'إجازة سنوية',
+  SICK: 'إجازة مرضية',
+  CASUAL: 'إجازة عارضة',
+  UNPAID: 'إجازة بدون راتب',
+  MATERNITY: 'إجازة وضع',
+  PATERNITY: 'إجازة أبوة',
+  HAJJ: 'إجازة حج',
+  MARRIAGE: 'إجازة زواج',
+  BEREAVEMENT: 'إجازة وفاة/عدة',
+  EXAM: 'إجازة امتحانات',
+  COMPENSATORY: 'إجازة تعويضية',
+}
+
 const parseJson = <T,>(raw: string | null | undefined, fallback: T): T => {
   if (!raw) return fallback
   try {
@@ -62,8 +77,10 @@ export default function MyLeavesPage() {
           fetchRequestTypes(),
         ])
         setBalances(bals)
-        // طلبات الإجازة فقط من طلباتي
-        setLeaveRequests(mine.filter((r) => r.typeCode.startsWith('LEAVE_')))
+        // طلبات الإجازة فقط من طلباتي — النوع الموحّد LEAVE + الأنواع القديمة LEAVE_*
+        setLeaveRequests(
+          mine.filter((r) => r.typeCode === 'LEAVE' || r.typeCode.startsWith('LEAVE_'))
+        )
         setTypes(typeList)
       } catch (e) {
         setError(e instanceof Error ? e.message : 'تعذر تحميل أرصدتك')
@@ -210,11 +227,16 @@ export default function MyLeavesPage() {
                       {leaveRequests.map((r) => {
                         const payload = parseJson<Record<string, unknown>>(r.payload, {})
                         const status = r.status as RequestStatus
+                        // النوع الموحّد يحمل نوع الإجازة في الـ payload — نعرضه بدل الاسم العام
+                        const leaveCode =
+                          typeof payload.leaveType === 'string' ? payload.leaveType : ''
+                        const typeName =
+                          leaveTypeLabels[leaveCode] ?? typeNameOf(r.typeCode)
                         return (
                           <tr key={r.id} className="table-row">
                             <td className="table-cell">
                               <p className="font-medium text-gray-800 text-sm">
-                                {typeNameOf(r.typeCode)}
+                                {typeName}
                               </p>
                               <p className="text-xs text-gray-400" dir="ltr">
                                 REQ-{r.id}

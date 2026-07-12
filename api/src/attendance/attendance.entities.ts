@@ -76,6 +76,18 @@ export class PermissionType {
   @Column({ nullable: true })
   maxDurationMinutes: number
 
+  // الرصيد الشهري المجاني — عدد مرات و/أو دقائق (NULL = بلا حد مجاني)
+  // ما يتجاوز الرصيد يصير «بخصم» بنسبة deductionPct
+  @Column({ nullable: true })
+  monthlyFreeCount: number
+
+  @Column({ nullable: true })
+  monthlyFreeMinutes: number
+
+  // نسبة خصم الدقائق المتجاوزة للرصيد (0-100، افتراضي 100 = خصم كامل)
+  @Column({ type: 'decimal', precision: 5, scale: 2, default: 100 })
+  deductionPct: number
+
   @Column({ default: true })
   isActive: boolean
 }

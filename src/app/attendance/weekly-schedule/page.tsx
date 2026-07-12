@@ -35,8 +35,11 @@ import {
   fetchDepartments,
   fetchWeekDayOverrides,
   setDayShiftOverride,
+  fetchWorkingDays,
+  fetchScheduleRules,
   type ApiEmployee,
   type ApiDepartment,
+  type ApiScheduleRule,
 } from '@/lib/api'
 
 // أنواع البيانات
@@ -103,6 +106,56 @@ const weekDays = [
 
 const WEEKEND_DAYS = ['friday', 'saturday']
 
+// ===== قواعد استثناء أيام العمل (آخر سبت = دوام رسمي...) — لتمييز الأيام الاستثنائية =====
+// ترتيب أكواد أيام الأسبوع مطابق لـ Date.getDay() (الأحد = 0)
+const WEEKDAY_CODES: ApiScheduleRule['weekday'][] = [
+  'SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT',
+]
+const WEEKDAY_AR: Record<ApiScheduleRule['weekday'], string> = {
+  SUN: 'الأحد', MON: 'الاثنين', TUE: 'الثلاثاء', WED: 'الأربعاء',
+  THU: 'الخميس', FRI: 'الجمعة', SAT: 'السبت',
+}
+const OCCURRENCE_ORDINAL_AR: Record<Exclude<ApiScheduleRule['occurrence'], 'ALL'>, string> = {
+  '1ST': 'الأول', '2ND': 'الثاني', '3RD': 'الثالث', '4TH': 'الرابع', LAST: 'الأخير',
+}
+const EFFECT_AR: Record<ApiScheduleRule['effect'], string> = {
+  WORK: 'تحويل إجازة إلى دوام رسمي',
+  OFF: 'تحويل دوام إلى إجازة',
+}
+
+// جملة عربية مفهومة من القاعدة، مثل: «السبت الأخير من الشهر — تحويل إجازة إلى دوام رسمي»
+const scheduleRuleSentence = (
+  rule: Pick<ApiScheduleRule, 'weekday' | 'occurrence' | 'effect'>
+): string => {
+  const day = WEEKDAY_AR[rule.weekday]
+  const when =
+    rule.occurrence === 'ALL'
+      ? `${day} من كل أسبوع`
+      : `${day} ${OCCURRENCE_ORDINAL_AR[rule.occurrence]} من الشهر`
+  return `${when} — ${EFFECT_AR[rule.effect]}`
+}
+
+// ترتيب ظهور اليوم داخل الشهر (الأول/الثاني...) وهل هو آخر ظهور لنفس اليوم في الشهر
+const occurrenceOf = (d: Date): { nth: ApiScheduleRule['occurrence']; isLast: boolean } => {
+  const dom = d.getDate()
+  const nthNum = Math.floor((dom - 1) / 7) + 1 // 1..5
+  const nthMap: ApiScheduleRule['occurrence'][] = ['1ST', '2ND', '3RD', '4TH']
+  const nth = nthNum <= 4 ? nthMap[nthNum - 1] : 'LAST'
+  const daysInMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate()
+  const isLast = dom + 7 > daysInMonth
+  return { nth, isLast }
+}
+
+// هل تنطبق القاعدة على تاريخ بعينه (YYYY-MM-DD)؟
+const ruleMatchesDate = (rule: ApiScheduleRule, dateStr: string): boolean => {
+  const d = new Date(`${dateStr}T12:00:00`)
+  if (rule.weekday !== WEEKDAY_CODES[d.getDay()]) return false
+  if (rule.occurrence === 'ALL') return true
+  const { nth, isLast } = occurrenceOf(d)
+  if (rule.occurrence === 'LAST') return isLast
+  return rule.occurrence === nth
+}
+
 // ===== مفتاح الأسبوع = تاريخ الأحد بصيغة YYYY-MM-DD (السيرفر يطبّع لأي تاريخ) =====
 const weekKeyOf = (d: Date) => {
   const x = new Date(d)
@@ -161,6 +214,11 @@ export default function WeeklySchedulePage() {
   const [assignments, setAssignments] = useState<Record<number, Shift>>({})
   // تجاوزات الأيام الخاصة — مفتاحها "employeeId|date"
   const [dayOverrides, setDayOverrides] = useState<Record<string, DayOverride>>({})
+  // الأيام غير العاملة في الأسبوع المعروض (ويك إند/عطلات بعد تطبيق قواعد الاستثناء)
+  // null = لم تُحمَّل أو فشل التحميل → لا تمييز
+  const [skippedSet, setSkippedSet] = useState<Set<string> | null>(null)
+  // قواعد استثناء أيام العمل — لمعرفة القاعدة التي حوّلت اليوم (للتلميح)
+  const [scheduleRules, setScheduleRules] = useState<ApiScheduleRule[]>([])
   const [overrideModal, setOverrideModal] = useState<{
     empId: number
     empName: string
@@ -193,6 +251,10 @@ export default function WeeklySchedulePage() {
         setDepartmentsList(deps)
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل الموظفين'))
+    // قواعد الاستثناء — اختيارية للتمييز؛ تُتجاهَل بصمت لو فشلت
+    fetchScheduleRules()
+      .then(setScheduleRules)
+      .catch(() => setScheduleRules([]))
   }, [])
 
   // جدول الأسبوع المعروض من السيرفر
@@ -227,9 +289,22 @@ export default function WeeklySchedulePage() {
       )
   }
 
+  // الأيام غير العاملة للأسبوع المعروض — لحساب أيام الدوام/الإجازة الاستثنائية
+  const loadExceptions = (weekStart: Date) => {
+    const from = dateOfDayIndex(weekStart, 0)
+    const to = dateOfDayIndex(weekStart, 6)
+    setSkippedSet(null)
+    fetchWorkingDays(from, to)
+      .then((res) =>
+        setSkippedSet(new Set((res.skipped ?? []).map((s) => String(s).slice(0, 10))))
+      )
+      .catch(() => setSkippedSet(null)) // فشل الجلب → تخطّي التمييز بلا خطأ ظاهر
+  }
+
   useEffect(() => {
     loadWeek(currentKey)
     loadOverrides(currentKey)
+    loadExceptions(currentWeekStart)
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [currentKey])
 
@@ -247,6 +322,43 @@ export default function WeeklySchedulePage() {
 
   // وردية الموظف الفعلية لهذا الأسبوع
   const shiftOf = (empId: number): Shift => assignments[empId] ?? DEFAULT_SHIFT
+
+  // القاعدة (WORK/OFF) التي تنطبق على تاريخ — للتلميح
+  const findRuleForDate = (dateStr: string, effect: ApiScheduleRule['effect']) =>
+    scheduleRules.find(
+      (r) => r.isActive && r.effect === effect && ruleMatchesDate(r, dateStr)
+    )
+
+  // نوع الاستثناء ليوم داخل الأسبوع المعروض:
+  //  'work' = يوم ويك إند صار دوام رسمي بقاعدة WORK (مثل آخر سبت)
+  //  'off'  = يوم عمل عادي صار إجازة بقاعدة OFF
+  //  null   = يوم عادي، أو لم تُحمَّل بيانات أيام العمل
+  const getException = (dayIndex: number): 'work' | 'off' | null => {
+    if (!skippedSet) return null
+    const dateStr = dateOfDayIndex(currentWeekStart, dayIndex)
+    const isWeekend = WEEKEND_DAYS.includes(weekDays[dayIndex].key)
+    const inSkipped = skippedSet.has(dateStr)
+    // ويك إند غير مُدرَج ضمن الأيام غير العاملة ⟺ قاعدة WORK حوّلته لدوام
+    if (isWeekend && !inSkipped) return 'work'
+    // يوم عمل صار ضمن غير العاملة بقاعدة OFF (نتحقّق من القاعدة حتى لا نخلط بينه وبين العطلات)
+    if (!isWeekend && inSkipped && findRuleForDate(dateStr, 'OFF')) return 'off'
+    return null
+  }
+
+  const workTooltip = (dateStr: string): string => {
+    const base = 'هذا اليوم دوام رسمي بقاعدة استثنائية — اضبط ورديته'
+    const rule = findRuleForDate(dateStr, 'WORK')
+    return rule ? `${base} (${rule.name || scheduleRuleSentence(rule)})` : base
+  }
+  const offTooltip = (dateStr: string): string => {
+    const base = 'هذا اليوم إجازة بقاعدة استثنائية'
+    const rule = findRuleForDate(dateStr, 'OFF')
+    return rule ? `${base} (${rule.name || scheduleRuleSentence(rule)})` : base
+  }
+
+  // هل يحتوي الأسبوع المعروض على يوم دوام استثنائي؟ (لإظهار البانر)
+  const hasExceptionalWork =
+    !!skippedSet && weekDays.some((_, i) => getException(i) === 'work')
 
   // حساب تاريخ نهاية الأسبوع
   const weekEnd = new Date(currentWeekStart)
@@ -583,6 +695,17 @@ export default function WeeklySchedulePage() {
           </div>
         </div>
 
+        {/* بانر الدوام الاستثنائي — يظهر فقط لو الأسبوع يحتوي يوم دوام استثنائي */}
+        {hasExceptionalWork && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-4 flex items-start gap-3">
+            <Star size={18} className="text-amber-500 fill-amber-400 flex-shrink-0 mt-0.5" />
+            <p className="text-sm">
+              الأيام المميزة بـ«دوام استثنائي» صارت أيام عمل بقاعدة (مثل: آخر سبت في الشهر).
+              اضبط ورديتها من زر تجاوز اليوم.
+            </p>
+          </div>
+        )}
+
         {/* Schedule Table */}
         <div className="card overflow-hidden p-0">
           {loading ? (
@@ -607,12 +730,49 @@ export default function WeeklySchedulePage() {
                   <th className="text-right p-4 font-medium text-gray-600 min-w-[200px] sticky right-0 bg-gray-50 z-10">
                     الموظف
                   </th>
-                  {weekDays.map((day, index) => (
-                    <th key={day.key} className="p-3 font-medium text-gray-600 text-center min-w-[90px]">
-                      <div className="text-sm">{day.name}</div>
-                      <div className="text-xs text-gray-400 font-normal mt-1">{getDayDate(index)}</div>
-                    </th>
-                  ))}
+                  {weekDays.map((day, index) => {
+                    const colException = getException(index)
+                    const colDate = dateOfDayIndex(currentWeekStart, index)
+                    return (
+                      <th
+                        key={day.key}
+                        title={
+                          colException === 'work'
+                            ? workTooltip(colDate)
+                            : colException === 'off'
+                              ? offTooltip(colDate)
+                              : undefined
+                        }
+                        className={`p-3 font-medium text-center min-w-[90px] ${
+                          colException === 'work'
+                            ? 'bg-amber-50 text-amber-800 border-b-2 border-amber-400'
+                            : colException === 'off'
+                              ? 'bg-gray-100 text-gray-500'
+                              : 'text-gray-600'
+                        }`}
+                      >
+                        <div className="text-sm">{day.name}</div>
+                        <div
+                          className={`text-xs font-normal mt-1 ${
+                            colException === 'work' ? 'text-amber-600' : 'text-gray-400'
+                          }`}
+                        >
+                          {getDayDate(index)}
+                        </div>
+                        {colException === 'work' && (
+                          <span className="mt-1 inline-flex items-center gap-0.5 px-1.5 rounded-full bg-amber-400 text-white text-[9px] leading-4 font-bold">
+                            <Star size={8} className="fill-white" />
+                            دوام استثنائي
+                          </span>
+                        )}
+                        {colException === 'off' && (
+                          <span className="mt-1 inline-block px-1.5 rounded-full bg-gray-300 text-gray-700 text-[9px] leading-4 font-bold">
+                            إجازة استثنائية
+                          </span>
+                        )}
+                      </th>
+                    )
+                  })}
                   <th className="p-3 font-medium text-gray-600 text-center w-20 bg-gray-50">
                     الساعات
                   </th>
@@ -647,17 +807,25 @@ export default function WeeklySchedulePage() {
                     {/* Schedule Cells */}
                     {weekDays.map((day, dayIndex) => {
                       const isWeekend = WEEKEND_DAYS.includes(day.key)
-                      const shift = isWeekend ? OFF_SHIFT : shiftOf(employee.id)
-                      const isSelected = selectedCell?.empId === employee.id && selectedCell?.day === day.key
-                      const isLocked = isWeekend
-                      const isUnassigned = !isWeekend && !assignments[employee.id]
                       const dayDate = dateOfDayIndex(currentWeekStart, dayIndex)
-                      const override = isWeekend
-                        ? undefined
-                        : dayOverrides[`${employee.id}|${dayDate}`]
+                      const exception = getException(dayIndex)
+                      const isExceptionalWork = exception === 'work' // ويك إند صار دوام رسمي
+                      const isExceptionalOff = exception === 'off'   // يوم عمل صار إجازة بقاعدة
+                      // يُعامَل كيوم عمل لو كان يوم أسبوع عادي أو ويك إند دوام استثنائي
+                      const isWorkingDay = !isWeekend || isExceptionalWork
+                      const shift = isWorkingDay ? shiftOf(employee.id) : OFF_SHIFT
+                      const isSelected = selectedCell?.empId === employee.id && selectedCell?.day === day.key
+                      const isLocked = !isWorkingDay // مقفول فقط لو إجازة فعلية (ويك إند غير استثنائي)
+                      const isUnassigned = isWorkingDay && !assignments[employee.id]
+                      const override = isWorkingDay
+                        ? dayOverrides[`${employee.id}|${dayDate}`]
+                        : undefined
 
                       return (
-                        <td key={day.key} className="p-1.5 text-center">
+                        <td
+                          key={day.key}
+                          className={`p-1.5 text-center ${isExceptionalWork ? 'bg-amber-50/50' : ''}`}
+                        >
                           <div className="relative group">
                             <button
                               onClick={() => {
@@ -671,16 +839,22 @@ export default function WeeklySchedulePage() {
                                   ? 'py-1 px-1 bg-amber-50 text-amber-800 border-2 border-amber-400'
                                   : `py-2.5 px-1 ${shift.bgColor} ${shift.color}`
                               } ${
+                                isExceptionalWork && !override ? 'ring-2 ring-amber-400 ring-inset' : ''
+                              } ${
                                 viewMode === 'edit' && !isLocked ? 'hover:opacity-80 cursor-pointer' : ''
                               } ${isSelected ? 'ring-2 ring-primary-500 ring-offset-1' : ''} ${
                                 isLocked ? 'opacity-60 cursor-not-allowed' : ''
                               } ${isUnassigned && !override ? 'opacity-50' : ''}`}
                               title={
-                                override
-                                  ? 'يوم خاص — وردية تتقدم على وردية الأسبوع'
-                                  : isUnassigned
-                                    ? 'غير مجدوَل — الوردية الافتراضية'
-                                    : ''
+                                isExceptionalWork
+                                  ? workTooltip(dayDate)
+                                  : isExceptionalOff
+                                    ? offTooltip(dayDate)
+                                    : override
+                                      ? 'يوم خاص — وردية تتقدم على وردية الأسبوع'
+                                      : isUnassigned
+                                        ? 'غير مجدوَل — الوردية الافتراضية'
+                                        : ''
                               }
                             >
                               {override ? (
@@ -695,13 +869,27 @@ export default function WeeklySchedulePage() {
                                     يوم خاص
                                   </span>
                                 </>
+                              ) : isExceptionalWork ? (
+                                <>
+                                  <span className="block truncate">{shift.name}</span>
+                                  <span className="mt-0.5 inline-block px-1.5 rounded-full bg-amber-400 text-white text-[9px] leading-4">
+                                    دوام استثنائي
+                                  </span>
+                                </>
+                              ) : isExceptionalOff ? (
+                                <>
+                                  <span className="block truncate">{shift.name}</span>
+                                  <span className="mt-0.5 inline-block px-1.5 rounded-full bg-gray-300 text-gray-700 text-[9px] leading-4">
+                                    إجازة استثنائية
+                                  </span>
+                                </>
                               ) : (
                                 shift.name
                               )}
                             </button>
 
-                            {/* زر وردية اليوم الخاص — يظهر عند المرور أو عند وجود تجاوز */}
-                            {viewMode === 'edit' && !isWeekend && (
+                            {/* زر وردية اليوم الخاص — يظهر عند المرور أو التجاوز، وبارز دائماً ليوم الدوام الاستثنائي */}
+                            {viewMode === 'edit' && isWorkingDay && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation()
@@ -713,11 +901,15 @@ export default function WeeklySchedulePage() {
                                   })
                                 }}
                                 className={`absolute -top-1.5 -left-1.5 w-5 h-5 rounded-full flex items-center justify-center shadow border z-10 transition-opacity ${
-                                  override
+                                  override || isExceptionalWork
                                     ? 'bg-amber-400 text-white border-amber-500 opacity-100'
                                     : 'bg-white text-gray-400 border-gray-200 opacity-0 group-hover:opacity-100 hover:text-amber-500'
                                 }`}
-                                title="وردية يوم خاص"
+                                title={
+                                  isExceptionalWork
+                                    ? 'اضبط وردية يوم الدوام الاستثنائي'
+                                    : 'وردية يوم خاص'
+                                }
                               >
                                 <Star size={11} />
                               </button>

@@ -42,6 +42,7 @@ import {
   fetchMyCustody,
   fetchWorkingDays,
   fetchMyApprovedLeaves,
+  fetchLeaveTypes,
   fetchMyOffboardingCase,
   withdrawOffboarding,
   can,
@@ -111,6 +112,7 @@ const fieldLabels: Record<string, string> = {
   reason: 'السبب',
   description: 'الوصف',
   destination: 'جهة الانتداب',
+  leaveType: 'نوع الإجازة',
   leaveId: 'رقم الإجازة',
   loanId: 'رقم السلفة',
   withEmployeeId: 'رقم الموظف البديل',
@@ -135,6 +137,21 @@ const periodLabels: Record<string, string> = {
   FULL: 'يوم كامل',
   MORNING: 'النصف الصباحي',
   EVENING: 'النصف المسائي',
+}
+
+// أكواد أنواع الإجازة → عربي — لعرض «نوع الإجازة» في ملخّص الطلب بلا كود خام
+const leaveTypeCodeLabels: Record<string, string> = {
+  ANNUAL: 'سنوية',
+  SICK: 'مرضية',
+  CASUAL: 'عارضة',
+  UNPAID: 'بدون راتب',
+  MATERNITY: 'وضع',
+  PATERNITY: 'أبوة',
+  HAJJ: 'حج',
+  MARRIAGE: 'زواج',
+  BEREAVEMENT: 'وفاة/عدة',
+  EXAM: 'امتحانات',
+  COMPENSATORY: 'تعويضية',
 }
 
 // وجهات التنفيذ — للأنواع المبنية من «بانِي الطلبات» (بدون تسريب كود الـ handler)
@@ -190,6 +207,7 @@ const humanizeKey = (k: string): string =>
 // قيمة الحقل للعرض — تُترجم الأكواد المعروفة ولا تعرض مراجع خام
 const formatPayloadValue = (k: string, v: unknown): string => {
   if (k === 'period') return periodLabels[String(v)] ?? 'يوم كامل'
+  if (k === 'leaveType') return leaveTypeCodeLabels[String(v)] ?? String(v)
   if (k === 'assetIds' && Array.isArray(v)) {
     const n = v.length
     return n === 1 ? 'أصل واحد' : n === 2 ? 'أصلان' : n <= 10 ? `${n} أصول` : `${n} أصلاً`
@@ -305,6 +323,16 @@ export default function MyRequestsPage() {
     Array<{ id: number; nameAr: string; isDeductible: boolean; maxDurationMinutes?: number | null; isActive: boolean }>
   >([])
   const [permissionType, setPermissionType] = useState('')
+  // أنواع الإجازة (السنوية/المرضية/بدون راتب...) — طلب إجازة موحّد يختار منها
+  const [leaveTypes, setLeaveTypes] = useState<
+    Array<{
+      code: string
+      nameAr: string
+      isPaid: boolean
+      balanceSource: string
+      isActive: boolean
+    }>
+  >([])
   // التقديم نيابة عن موظف آخر (بصلاحية)
   const canOnBehalf = can('requests.create_on_behalf')
   const [onBehalf, setOnBehalf] = useState(false)
@@ -459,12 +487,24 @@ export default function MyRequestsPage() {
           setSubmitError(err instanceof Error ? err.message : 'تعذّر تحميل عهدتك')
         )
     }
+    // طلب إجازة موحّد: حمّل أنواع الإجازة مرة عند اختيار نوع فيه حقل نوع الإجازة
+    if (formFieldKeys.includes('leaveType') && leaveTypes.length === 0) {
+      fetchLeaveTypes()
+        .then(setLeaveTypes)
+        .catch((err) =>
+          setSubmitError(
+            err instanceof Error ? err.message : 'تعذّر تحميل أنواع الإجازة'
+          )
+        )
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedType])
 
   // النماذج الخاصة: عهدة (اختيار أصول) / استئذان (نوع الإذن) / إجازات (نطاق اليوم)
   const isCustodyRequest = selectedTypeDef?.code === 'CUSTODY_REQUEST'
   const isPermission = selectedTypeDef?.code === 'PERMISSION'
+  // طلب الإجازة الموحّد — يختار الموظف نوع الإجازة من قائمة (بدل نوع طلب لكل إجازة)
+  const isLeave = selectedTypeDef?.code === 'LEAVE'
   // إلغاء/تعديل إجازة — منتقي الإجازة المعتمدة بدل الحقول العامة ونطاق اليوم
   const isLeaveCancel = selectedTypeDef?.code === 'LEAVE_MODIFY_CANCEL'
   // تصحيح/طلب بصمة — تلميح تعبئة البصمة الناقصة (النموذج يُبنى بالحقول العامة/المخصّصة)
@@ -611,6 +651,45 @@ export default function MyRequestsPage() {
           onChange={(e) => setFieldValue(key, e.target.value)}
         />
       )
+    if (key === 'leaveType') {
+      const selected = leaveTypes.find((lt) => lt.code === fieldValues[key])
+      return (
+        <>
+          <select
+            className="input w-full"
+            value={fieldValues[key] ?? ''}
+            onChange={(e) => setFieldValue(key, e.target.value)}
+          >
+            <option value="">— اختر نوع الإجازة —</option>
+            {leaveTypes
+              .filter((lt) => lt.isActive)
+              .map((lt) => (
+                <option key={lt.code} value={lt.code}>
+                  {lt.nameAr}
+                </option>
+              ))}
+          </select>
+          {selected &&
+            (selected.balanceSource !== 'none' ? (
+              <p className="text-xs text-gray-500 mt-1.5">
+                تُخصم من رصيد{' '}
+                {selected.balanceSource === 'annual'
+                  ? 'الإجازة السنوية'
+                  : 'الإجازة المرضية'}
+              </p>
+            ) : selected.isPaid === false ? (
+              <p className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-1.5">
+                <AlertTriangle size={13} className="shrink-0" />
+                إجازة بدون راتب — تُخصم من الراتب
+              </p>
+            ) : (
+              <p className="text-xs text-gray-500 mt-1.5">
+                إجازة مدفوعة لا تُخصم من الرصيد
+              </p>
+            ))}
+        </>
+      )
+    }
     return null
   }
 
@@ -1202,6 +1281,17 @@ export default function MyRequestsPage() {
                   </div>
                 )}
 
+                {/* طلب إجازة موحّد: اختر نوع الإجازة ثم المدة — النظام يطبّق القاعدة */}
+                {selectedType && isLeave && (
+                  <div className="flex items-start gap-2 text-xs text-blue-700 bg-blue-50 rounded-xl px-3 py-2.5">
+                    <Info size={14} className="shrink-0 mt-0.5" />
+                    <span>
+                      اختر نوع الإجازة ثم المدة ونطاق اليوم — يُطبَّق خصم الرصيد
+                      المناسب تلقائياً بعد الاعتماد
+                    </span>
+                  </div>
+                )}
+
                 {/* طلب عهدة: اختيار أصول متعددة من المتاح فقط */}
                 {selectedType && isCustodyRequest && (
                   <div className="space-y-4">
@@ -1403,34 +1493,6 @@ export default function MyRequestsPage() {
                   </div>
                 )}
 
-                {/* الإجازات: نطاق اليوم — كامل أو نصف صباحي/مسائي */}
-                {selectedType && isLeaveCategory && (
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      نطاق اليوم
-                    </label>
-                    <select
-                      className="input w-full"
-                      value={leavePeriod}
-                      onChange={(e) =>
-                        changeLeavePeriod(
-                          e.target.value as 'FULL' | 'MORNING' | 'EVENING'
-                        )
-                      }
-                    >
-                      <option value="FULL">يوم كامل</option>
-                      <option value="MORNING">النصف الصباحي</option>
-                      <option value="EVENING">النصف المسائي</option>
-                    </select>
-                    {isHalfDay && (
-                      <p className="text-xs text-gray-500 mt-1.5">
-                        إجازة نصف يوم: تاريخ النهاية يُطابق البداية وعدد الأيام 0.5
-                        تلقائياً
-                      </p>
-                    )}
-                  </div>
-                )}
-
                 {/* النموذج من تعريف الحقول المخصّصة — يحل محل الاستنتاج القديم */}
                 {selectedType && hasCustomFields && !isCustodyRequest && !isLeaveCancel && (
                   <div className="grid grid-cols-2 gap-3">
@@ -1544,6 +1606,34 @@ export default function MyRequestsPage() {
                       ))}
                     </div>
                   )}
+
+                {/* الإجازات: نطاق اليوم — كامل أو نصف صباحي/مسائي */}
+                {selectedType && isLeaveCategory && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      نطاق اليوم
+                    </label>
+                    <select
+                      className="input w-full"
+                      value={leavePeriod}
+                      onChange={(e) =>
+                        changeLeavePeriod(
+                          e.target.value as 'FULL' | 'MORNING' | 'EVENING'
+                        )
+                      }
+                    >
+                      <option value="FULL">يوم كامل</option>
+                      <option value="MORNING">النصف الصباحي</option>
+                      <option value="EVENING">النصف المسائي</option>
+                    </select>
+                    {isHalfDay && (
+                      <p className="text-xs text-gray-500 mt-1.5">
+                        إجازة نصف يوم: تاريخ النهاية يُطابق البداية وعدد الأيام 0.5
+                        تلقائياً
+                      </p>
+                    )}
+                  </div>
+                )}
 
                 {selectedType && (
                   <div>
