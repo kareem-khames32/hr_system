@@ -734,28 +734,11 @@ export class AttendanceService {
     shift: { end: string },
     checkOut: string
   ) {
-    // كنترول الموارد البشرية: فتح/قفل احتساب الأوفرتايم
-    // (فترات بالتواريخ تتقدّم على المفتاح العام؛ مقفول → لا يُكتشف)
-    const otOpen = await this.isOvertimeOpen(date, emp.branchId)
-    if (!otOpen) {
-      // قفل بأثر رجعي: احذف المكتشف غير المعتمد لهذا اليوم
-      // (المعتمد/المدفوع/الموجّه للسلسلة لا يُمس)
-      await this.overtime.delete({
-        employeeId: emp.id,
-        date,
-        source: 'BIOMETRIC_DETECTED',
-        status: 'DETECTED',
-      })
-      return
-    }
-
     const extraMinutes = toMinutes(checkOut) - toMinutes(shift.end)
     const actualHours = Math.round((extraMinutes / 60) * 100) / 100
-    const threshold = Number(
-      await this.configValue('overtime.detection_threshold_hours', '0.5')
-    )
 
-    // 1) طلب مسبق معتمد → payable = min(المعتمد، الفعلي)
+    // 1) طلب مسبق معتمد → يُحتسب دائماً (الموافقة الصريحة تغلب القفل):
+    // payable = min(المعتمد، الفعلي) — حتى لو الفترة مقفولة
     const preApproved = await this.overtime.findOne({
       where: { employeeId: emp.id, date, source: 'PRE_REQUESTED' },
     })
@@ -771,7 +754,24 @@ export class AttendanceService {
       return
     }
 
-    // 2) كشف تلقائي: فوق العتبة → قيد DETECTED بانتظار تأكيد المدير المباشر
+    // 2) الكشف التلقائي فقط يخضع للفتح/القفل (فترات + المفتاح العام)
+    const otOpen = await this.isOvertimeOpen(date, emp.branchId)
+    if (!otOpen) {
+      // قفل بأثر رجعي: احذف المكتشف غير المعتمد (المسبق المعتمد لا يُمس)
+      await this.overtime.delete({
+        employeeId: emp.id,
+        date,
+        source: 'BIOMETRIC_DETECTED',
+        status: 'DETECTED',
+      })
+      return
+    }
+
+    const threshold = Number(
+      await this.configValue('overtime.detection_threshold_hours', '0.5')
+    )
+
+    // كشف تلقائي: فوق العتبة → قيد DETECTED بانتظار تأكيد المدير المباشر
     if (actualHours < threshold) return
     const existing = await this.overtime.findOne({
       where: { employeeId: emp.id, date, source: 'BIOMETRIC_DETECTED' },
