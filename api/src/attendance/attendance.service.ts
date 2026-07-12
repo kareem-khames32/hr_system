@@ -581,7 +581,13 @@ export class AttendanceService {
     employeeId: number,
     date: string
   ): Promise<
-    Array<{ from: number; to: number; deductible: boolean; deductRatio: number }>
+    Array<{
+      from: number
+      to: number
+      deductible: boolean
+      deductRatio: number
+      coverage: 'morning' | 'evening' | 'both'
+    }>
   > {
     const month = date.slice(0, 7)
     const rows = await this.requests.find({
@@ -644,6 +650,7 @@ export class AttendanceService {
       to: number
       deductible: boolean
       deductRatio: number
+      coverage: 'morning' | 'evening' | 'both'
     }> = []
     for (const perm of monthPerms.filter((p) => p.date === date)) {
       const pt = perm.type ? typeMap.get(perm.type) : undefined
@@ -651,10 +658,23 @@ export class AttendanceService {
         0,
         Math.min(1, Number(pt?.deductionPct ?? 100) / 100)
       )
+      // اتجاه التغطية من نوع الإذن: صباحي (تأخير) / مسائي (انصراف مبكر) / كلاهما
+      const cover: 'morning' | 'evening' | 'both' =
+        pt?.coverage === 'morning' || pt?.coverage === 'evening'
+          ? pt.coverage
+          : 'both'
+      const addWin = (w: {
+        from: number
+        to: number
+        deductible: boolean
+        deductRatio: number
+      }) => {
+        windows[windows.length] = { ...w, coverage: cover }
+      }
 
       // النوع «بخصم» صراحةً (أو بلا نوع) → كامل النافذة بخصم
       if (!pt || pt.isDeductible) {
-        windows.push({
+        addWin({
           from: perm.from,
           to: perm.to,
           deductible: !!pt?.isDeductible,
@@ -667,7 +687,7 @@ export class AttendanceService {
       const hasCap =
         pt.monthlyFreeCount != null || pt.monthlyFreeMinutes != null
       if (!hasCap) {
-        windows.push({ from: perm.from, to: perm.to, deductible: false, deductRatio: 1 })
+        addWin({ from: perm.from, to: perm.to, deductible: false, deductRatio: 1 })
         continue
       }
 
@@ -685,7 +705,7 @@ export class AttendanceService {
 
       // تجاوز حدّ العدد → كامل النافذة بخصم (الإذن كوحدة)
       if (pt.monthlyFreeCount != null && priorCount >= pt.monthlyFreeCount) {
-        windows.push({ from: perm.from, to: perm.to, deductible: true, deductRatio: ratio })
+        addWin({ from: perm.from, to: perm.to, deductible: true, deductRatio: ratio })
         continue
       }
 
@@ -694,19 +714,19 @@ export class AttendanceService {
       if (pt.monthlyFreeMinutes != null) {
         const freeRemaining = Math.max(0, pt.monthlyFreeMinutes - priorMinutes)
         if (freeRemaining <= 0) {
-          windows.push({ from: perm.from, to: perm.to, deductible: true, deductRatio: ratio })
+          addWin({ from: perm.from, to: perm.to, deductible: true, deductRatio: ratio })
         } else if (freeRemaining >= perm.dur) {
-          windows.push({ from: perm.from, to: perm.to, deductible: false, deductRatio: 1 })
+          addWin({ from: perm.from, to: perm.to, deductible: false, deductRatio: 1 })
         } else {
           const splitAt = perm.from + freeRemaining
-          windows.push({ from: perm.from, to: splitAt, deductible: false, deductRatio: 1 })
-          windows.push({ from: splitAt, to: perm.to, deductible: true, deductRatio: ratio })
+          addWin({ from: perm.from, to: splitAt, deductible: false, deductRatio: 1 })
+          addWin({ from: splitAt, to: perm.to, deductible: true, deductRatio: ratio })
         }
         continue
       }
 
       // حدّ عدد فقط ولم يُتجاوز → مجاني
-      windows.push({ from: perm.from, to: perm.to, deductible: false, deductRatio: 1 })
+      addWin({ from: perm.from, to: perm.to, deductible: false, deductRatio: 1 })
     }
     return windows
   }
@@ -810,19 +830,34 @@ export class AttendanceService {
       }
     } else if (checkIn || hasHalfLeave) {
       const permissions = await this.approvedPermissionWindows(employeeId, date)
-      // كل نوافذ التغطية: إجازات جزئية + أذونات (بنوعيها)
+      // نوافذ التغطية باتجاهها: الإجازة الجزئية «both» (محدودة بوقتها)،
+      // والإذن يحمل اتجاهه (صباحي = يعذر التأخير، مسائي = يعذر الانصراف المبكر)
       const coverage = [
-        ...halfLeaveWindows.map((w) => ({ ...w, deductRatio: 1 })),
+        ...halfLeaveWindows.map((w) => ({
+          ...w,
+          deductRatio: 1,
+          coverage: 'both' as const,
+        })),
         ...permissions,
       ]
-      const freeCoverage = coverage.filter((w) => !w.deductible)
-      const paidCoverage = coverage.filter((w) => w.deductible)
+      // تعذير التأخير (بداية الوردية) بنوافذ صباحي/كلاهما فقط،
+      // وتعذير الانصراف المبكر (نهاية الوردية) بنوافذ مسائي/كلاهما فقط
+      const lateWins = coverage.filter((w) => w.coverage !== 'evening')
+      const earlyWins = coverage.filter((w) => w.coverage !== 'morning')
+      const freeLate = lateWins.filter((w) => !w.deductible)
+      const paidLate = lateWins.filter((w) => w.deductible)
+      const freeEarly = earlyWins.filter((w) => !w.deductible)
+      const paidEarly = earlyWins.filter((w) => w.deductible)
       // المخصوم من الراتب = دقائق [a1,a2] المغطاة بنوافذ «بخصم» كاتحاد بلا تكرار
       // (كل دقيقة مرة واحدة بأعلى نسبة تغطّيها) — نوافذ متداخلة لا تُحسب مرتين
-      const paidPay = (a1: number, a2: number) => {
+      const paidPay = (
+        a1: number,
+        a2: number,
+        paid: Array<{ from: number; to: number; deductRatio: number }>
+      ) => {
         if (a2 <= a1) return 0
         const cuts = new Set<number>([a1, a2])
-        for (const w of paidCoverage) {
+        for (const w of paid) {
           if (w.to > a1 && w.from < a2) {
             cuts.add(Math.max(a1, w.from))
             cuts.add(Math.min(a2, w.to))
@@ -835,7 +870,7 @@ export class AttendanceService {
           const segTo = marks[i + 1]
           const mid = (segFrom + segTo) / 2
           let ratio = 0
-          for (const w of paidCoverage) {
+          for (const w of paid) {
             if (w.from <= mid && mid < w.to) ratio = Math.max(ratio, w.deductRatio ?? 1)
           }
           if (ratio > 0) total += (segTo - segFrom) * ratio
@@ -854,9 +889,9 @@ export class AttendanceService {
         let deductibleCoveredLate = 0 // مغطاة بإذن بخصم — تُعفى من التأخير كاملة
         let deductiblePayLate = 0 // المخصوم من الراتب (× النسبة)
         if (lateRaw > 0) {
-          excusedLate = this.overlapMinutes(shiftStart, toMinutes(checkIn), freeCoverage)
-          deductibleCoveredLate = this.overlapMinutes(shiftStart, toMinutes(checkIn), paidCoverage)
-          deductiblePayLate = paidPay(shiftStart, toMinutes(checkIn))
+          excusedLate = this.overlapMinutes(shiftStart, toMinutes(checkIn), freeLate)
+          deductibleCoveredLate = this.overlapMinutes(shiftStart, toMinutes(checkIn), paidLate)
+          deductiblePayLate = paidPay(shiftStart, toMinutes(checkIn), paidLate)
         }
         const effectiveLate = lateRaw - excusedLate - deductibleCoveredLate
         lateMinutes = effectiveLate > grace ? effectiveLate : 0
@@ -867,9 +902,9 @@ export class AttendanceService {
         if (checkOut) {
           const earlyRaw = shiftEnd - toMinutes(checkOut)
           if (earlyRaw > 0) {
-            excusedEarly = this.overlapMinutes(toMinutes(checkOut), shiftEnd, freeCoverage)
-            deductibleCoveredEarly = this.overlapMinutes(toMinutes(checkOut), shiftEnd, paidCoverage)
-            deductiblePayEarly = paidPay(toMinutes(checkOut), shiftEnd)
+            excusedEarly = this.overlapMinutes(toMinutes(checkOut), shiftEnd, freeEarly)
+            deductibleCoveredEarly = this.overlapMinutes(toMinutes(checkOut), shiftEnd, paidEarly)
+            deductiblePayEarly = paidPay(toMinutes(checkOut), shiftEnd, paidEarly)
           }
           const effectiveEarly = earlyRaw - excusedEarly - deductibleCoveredEarly
           earlyLeaveMinutes = effectiveEarly > grace ? effectiveEarly : 0

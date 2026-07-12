@@ -23,6 +23,7 @@ interface PermissionType {
   monthlyFreeCount?: number | null
   monthlyFreeMinutes?: number | null
   deductionPct?: number
+  coverage?: 'morning' | 'evening' | 'both'
   isActive: boolean
 }
 
@@ -33,6 +34,7 @@ const emptyForm = {
   monthlyFreeCount: '',
   monthlyFreeMinutes: '',
   deductionPct: '100',
+  coverage: 'both' as 'morning' | 'evening' | 'both',
   isActive: true,
 }
 
@@ -81,6 +83,7 @@ export default function PermissionTypesPage() {
         monthlyFreeMinutes:
           t.monthlyFreeMinutes != null ? String(t.monthlyFreeMinutes) : '',
         deductionPct: t.deductionPct != null ? String(t.deductionPct) : '100',
+        coverage: t.coverage ?? 'both',
         isActive: t.isActive,
       })
     } else {
@@ -110,6 +113,7 @@ export default function PermissionTypesPage() {
           : null,
       deductionPct:
         formData.deductionPct !== '' ? Number(formData.deductionPct) : 100,
+      coverage: formData.coverage,
       isActive: formData.isActive,
     }
     try {
@@ -398,6 +402,29 @@ export default function PermissionTypesPage() {
                     className="input w-full"
                     placeholder="مثال: إذن شخصي"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    نطاق التغطية
+                  </label>
+                  <select
+                    value={formData.coverage}
+                    onChange={(e) =>
+                      setFormData({
+                        ...formData,
+                        coverage: e.target.value as 'morning' | 'evening' | 'both',
+                      })
+                    }
+                    className="input w-full"
+                  >
+                    <option value="morning">صباحي — يعذر التأخير (بداية الوردية)</option>
+                    <option value="evening">مسائي — يعذر الانصراف المبكر (نهاية الوردية)</option>
+                    <option value="both">كلاهما — تأخير وانصراف مبكر</option>
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">
+                    إذن التأخير يشيل تأخير الصبح فقط، وإذن الانصراف المبكر يشيل نهاية اليوم فقط
+                  </p>
                 </div>
 
                 <label className="flex items-center gap-2">

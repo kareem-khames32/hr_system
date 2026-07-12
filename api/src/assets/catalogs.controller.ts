@@ -172,6 +172,12 @@ export class CatalogsController {
         break
       case 'permission-types':
         need('nameAr', 'اسم نوع الإذن')
+        if (
+          b.coverage &&
+          !['morning', 'evening', 'both'].includes(String(b.coverage))
+        ) {
+          throw new BadRequestException('نطاق التغطية: morning/evening/both')
+        }
         break
       case 'cost-centers':
         need('name', 'اسم مركز التكلفة')

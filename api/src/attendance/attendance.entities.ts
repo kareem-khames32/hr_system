@@ -88,6 +88,11 @@ export class PermissionType {
   @Column({ type: 'decimal', precision: 5, scale: 2, default: 100 })
   deductionPct: number
 
+  // نطاق التغطية: morning = إذن تأخير (يعذر بداية الوردية فقط)،
+  // evening = إذن انصراف مبكر (يعذر نهاية الوردية فقط)، both = الاثنان
+  @Column({ length: 10, default: 'both' })
+  coverage: 'morning' | 'evening' | 'both'
+
   @Column({ default: true })
   isActive: boolean
 }
