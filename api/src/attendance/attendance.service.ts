@@ -841,8 +841,10 @@ export class AttendanceService {
     // غير كده: الأقدم = دخول والأحدث = خروج (السلوك الافتراضي)
     const inWin = (t: string, from?: string | null, to?: string | null) =>
       !!from && !!to && toMinutes(t) >= toMinutes(from) && toMinutes(t) <= toMinutes(to)
+    // التصنيف بالنوافذ يتطلب النافذتين معاً — نافذة واحدة ناقصة تُسقط الجانب
+    // الآخر بالكامل، فنرجع للسلوك الافتراضي حتى تُضبط النافذتان
     const hasWindows =
-      !!(sc?.checkinFrom && sc?.checkinTo) || !!(sc?.checkoutFrom && sc?.checkoutTo)
+      !!(sc?.checkinFrom && sc?.checkinTo) && !!(sc?.checkoutFrom && sc?.checkoutTo)
     let checkIn: string | null
     let checkOut: string | null
     if (hasWindows && instants.length > 0) {
@@ -968,16 +970,21 @@ export class AttendanceService {
         status = checkOut ? 'present' : 'partial_leave'
       } else if (sc?.shiftMode === 'flexible') {
         // وردية مرنة: لا تأخير بوقت البداية — المهم إكمال الساعات المطلوبة.
-        // العجز عن المطلوب (فوق السماحية) يُحسب تأخيراً/خصماً
+        // المدة الافتراضية تعالج الوردية الليلية (النهاية بعد منتصف الليل)
+        const dur =
+          shiftEnd > shiftStart ? shiftEnd - shiftStart : shiftEnd + 1440 - shiftStart
         const requiredMin =
-          sc.requiredHours != null
-            ? Math.round(Number(sc.requiredHours) * 60)
-            : shiftEnd - shiftStart
+          sc.requiredHours != null ? Math.round(Number(sc.requiredHours) * 60) : dur
+        // الوقت المعذور داخل الوردية (إجازة جزئية/إذن بدون خصم) يُخصم من المطلوب
+        const freeCov = coverage.filter((w) => !w.deductible)
+        const excusedInShift = this.overlapMinutes(shiftStart, shiftEnd, freeCov)
+        excusedMinutes = excusedInShift
         if (checkOut) {
           workMinutes = Math.max(0, toMinutes(checkOut) - toMinutes(checkIn))
-          const deficit = requiredMin - workMinutes
+          const effectiveRequired = Math.max(0, requiredMin - excusedInShift)
+          const deficit = effectiveRequired - workMinutes
           lateMinutes = deficit > grace ? deficit : 0
-          status = lateMinutes > 0 ? 'late' : 'present'
+          status = lateMinutes > 0 ? 'late' : hasHalfLeave ? 'partial_leave' : 'present'
         } else {
           status = 'present' // دخل ولم يخرج بعد
         }
@@ -1048,7 +1055,9 @@ export class AttendanceService {
     day = await this.days.save(day)
 
     // الأوفرتايم × البصمة (لا يُكتشف في يوم إجازة أو عطلة)
-    if (checkOut && !isFullLeaveDay && !isHoliday) {
+    // الأوفرتايم يتطلب دخولاً وخروجاً — بصمة خروج وحيدة (بلا دخول) لا تُنتج
+    // أوفرتايم وهمياً (لم يثبت عمل أصلاً)
+    if (checkIn && checkOut && !isFullLeaveDay && !isHoliday) {
       await this.detectOvertime(emp, date, shift, checkOut)
     }
     return day
