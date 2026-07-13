@@ -182,13 +182,32 @@ export class EmployeesService {
     }
   }
 
-  // ينشئ أرصدة السنة الحالية (سنوي/مرضي) إن لم توجد — يُستدعى عند التعيين
-  private async ensureCurrentYearBalances(employeeId: number) {
-    const period = String(new Date().getFullYear())
-    const annualEntitled = Number(
+  // الاستحقاق السنوي العام من الإعدادات (يوم/سنة)
+  private async configAnnualEntitled(): Promise<number> {
+    return Number(
       (await this.config.findOne({ where: { key: 'leave.annual_entitled' } }))
         ?.value ?? '21'
     )
+  }
+
+  // يزامن استحقاق السنوي على الرصيد: مقفول = 0، مفتوح = القيمة العامة
+  private async applyAnnualEntitlement(employeeId: number, entitled: boolean) {
+    const period = String(new Date().getFullYear())
+    const annual = await this.balances.findOne({
+      where: { employeeId, balanceType: 'annual', period },
+    })
+    if (!annual) return
+    annual.entitled = entitled ? await this.configAnnualEntitled() : 0
+    await this.balances.save(annual)
+  }
+
+  // ينشئ أرصدة السنة الحالية (سنوي/مرضي) إن لم توجد — يُستدعى عند التعيين
+  private async ensureCurrentYearBalances(employeeId: number) {
+    const period = String(new Date().getFullYear())
+    const emp = await this.employees.findOne({ where: { id: employeeId } })
+    // غير مستحق للسنوي → استحقاق 0 (لا يتراكم له رصيد)
+    const annualEntitled =
+      emp?.annualLeaveEntitled === false ? 0 : await this.configAnnualEntitled()
     for (const [balanceType, entitled] of [
       ['annual', annualEntitled],
       ['sick', 180],
@@ -235,6 +254,10 @@ export class EmployeesService {
       }
     Object.assign(emp, empDto)
     const saved = await this.employees.save(emp)
+    // تبديل استحقاق السنوي → مزامنة رصيد السنوي (0 أو القيمة العامة)
+    if (dto.annualLeaveEntitled !== undefined) {
+      await this.applyAnnualEntitlement(id, dto.annualLeaveEntitled)
+    }
     // تعديل رصيد افتتاحي مُرحّل لموظف قائم (انتقل من نظام سابق)
     await this.applyOpeningBalance(id, openingBalanceDays, openingBalanceExpiry)
     return saved

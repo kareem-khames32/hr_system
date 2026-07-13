@@ -1,4 +1,5 @@
 import {
+  IsBoolean,
   IsEmail,
   IsIn,
   IsInt,
@@ -108,6 +109,10 @@ export class CreateEmployeeDto {
   @Type(() => Number)
   @IsInt()
   workScheduleId?: number
+
+  @IsOptional()
+  @IsBoolean()
+  annualLeaveEntitled?: boolean
 
   @IsOptional()
   @Type(() => Number)
@@ -291,6 +296,10 @@ export class UpdateEmployeeDto {
   @Type(() => Number)
   @IsInt()
   workScheduleId?: number
+
+  @IsOptional()
+  @IsBoolean()
+  annualLeaveEntitled?: boolean
 
   @IsOptional()
   @Type(() => Number)

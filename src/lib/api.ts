@@ -150,7 +150,7 @@ export interface ApiEmployee {
   id: number; employeeCode: string; fullName: string; fullNameEn?: string
   email?: string; phone?: string; nationalId?: string; jobTitle?: string
   branchId: number; departmentId?: number; teamId?: number
-  workScheduleId?: number
+  workScheduleId?: number; annualLeaveEntitled?: boolean
   managerEmployeeId?: number; joinDate?: string; status: string
   basicSalary?: number; payMethod: string; bankName?: string; iban?: string
   housingAllowance?: number; transportAllowance?: number; otherAllowance?: number

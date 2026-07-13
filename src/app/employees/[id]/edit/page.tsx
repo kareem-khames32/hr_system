@@ -7,7 +7,7 @@ import EmployeeForm, {
   EmployeeFormPayload,
   EmployeeFormState,
 } from '@/components/EmployeeForm'
-import { fetchEmployee, updateEmployee } from '@/lib/api'
+import { fetchEmployee, fetchEmployeeBalances, updateEmployee } from '@/lib/api'
 
 // تقسيم الاسم العربي إلى أجزائه بحيث تُعيد إعادة التجميع الاسم الأصلي حرفياً
 // إعادة التجميع في المكوّن: [الأول، الأب، الجد، العائلة].filter(Boolean).join(' ')
@@ -57,8 +57,12 @@ export default function EditEmployeePage() {
       setLoading(false)
       return
     }
-    fetchEmployee(employeeId)
-      .then((emp) => {
+    Promise.all([
+      fetchEmployee(employeeId),
+      fetchEmployeeBalances(employeeId).catch(() => []),
+    ])
+      .then(([emp, bals]) => {
+        const annual = (bals as any[]).find((b) => b.balanceType === 'annual')
         const ar = splitArabicName(emp.fullName ?? '')
         const en = splitEnglishName(emp.fullNameEn ?? '')
         const addr = splitAddress(emp.address ?? '')
@@ -103,6 +107,10 @@ export default function EditEmployeePage() {
           payMethod: emp.payMethod ?? 'transfer',
           costCenterId: emp.costCenterId != null ? String(emp.costCenterId) : '',
           workScheduleId: emp.workScheduleId,
+          annualLeaveEntitled: emp.annualLeaveEntitled ?? true,
+          // الرصيد الافتتاحي الحالي — للتعبئة المسبقة (يظهر كام مرحّل حطّه سابقاً)
+          openingBalanceDays: annual ? Number(annual.opening?.days ?? 0) : undefined,
+          openingBalanceExpiry: annual?.opening?.expiry ?? null,
           bankName: emp.bankName ?? '',
           iban: emp.iban ?? '',
           contractType: emp.contractType ?? '',

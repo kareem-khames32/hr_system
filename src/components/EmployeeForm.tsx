@@ -86,6 +86,9 @@ export interface EmployeeFormState {
   contractEnd: string
   photoFileId?: number
   workScheduleId?: number // جدول العمل المعيّن (للتعبئة المسبقة في التعديل)
+  annualLeaveEntitled?: boolean // يستحق سنوي؟ (تعبئة مسبقة في التعديل)
+  openingBalanceDays?: number // الرصيد الافتتاحي الحالي (تعبئة مسبقة في التعديل)
+  openingBalanceExpiry?: string | null // صلاحيته (تاريخ أو null)
 }
 
 // الحمولة المُرسلة للباك إند — حقول ApiEmployee + الرصيد الافتتاحي المُرحّل
@@ -221,15 +224,37 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
 
 export default function EmployeeForm({ mode, initial, onSubmit, submitting, error }: EmployeeFormProps) {
   const [currentStep, setCurrentStep] = useState(1)
-  const [leaveEntitled, setLeaveEntitled] = useState(true)
+  // يستحق سنوي؟ — من بيانات الموظف في التعديل (افتراضي نعم)
+  const [leaveEntitled, setLeaveEntitled] = useState(
+    initial?.annualLeaveEntitled ?? true
+  )
   const [selectedSchedule, setSelectedSchedule] = useState<number | ''>(
     initial?.workScheduleId ?? ''
   )
   const [scheduleList, setScheduleList] = useState<WorkScheduleRow[]>([])
-  // الرصيد الافتتاحي المُرحّل من نظام سابق وصلاحيته
-  const [openingBalance, setOpeningBalance] = useState('')
-  const [openingExpiry, setOpeningExpiry] = useState<'end_of_year' | 'custom_date' | 'no_expiry'>('end_of_year')
-  const [openingExpiryDate, setOpeningExpiryDate] = useState('')
+  // الرصيد الافتتاحي المُرحّل — يُعبَّأ مسبقاً بقيمته الحالية في التعديل
+  const initExpiry = initial?.openingBalanceExpiry
+  const [openingBalance, setOpeningBalance] = useState(
+    initial?.openingBalanceDays && initial.openingBalanceDays > 0
+      ? String(initial.openingBalanceDays)
+      : ''
+  )
+  const [openingExpiry, setOpeningExpiry] = useState<
+    'end_of_year' | 'custom_date' | 'no_expiry'
+  >(
+    initExpiry === null || initExpiry === undefined
+      ? initial?.openingBalanceDays
+        ? 'no_expiry'
+        : 'end_of_year'
+      : String(initExpiry).slice(5) === '12-31'
+        ? 'end_of_year'
+        : 'custom_date'
+  )
+  const [openingExpiryDate, setOpeningExpiryDate] = useState(
+    initExpiry && String(initExpiry).slice(5) !== '12-31'
+      ? String(initExpiry).slice(0, 10)
+      : ''
+  )
 
   // بيانات القوائم من السيرفر
   const [branches, setBranches] = useState<ApiBranch[]>([])
@@ -323,18 +348,10 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     fetchCatalog<CostCenter>('cost-centers')
       .then((cc) => setCostCenters(cc.filter((c) => c.isActive)))
       .catch(() => setCostCenters([]))
-    // جداول العمل الفعلية من الإعدادات
+    // جداول العمل الفعلية من الإعدادات — لا نعيّن جدولاً تلقائياً؛ بلا اختيار
+    // صريح يبقى الموظف على عطلة الفرع/العام (لا نغلبها بجدول لم يختره المستخدم)
     fetchCatalog<WorkScheduleRow>('work-schedules')
-      .then((ws) => {
-        const active = ws.filter((s) => s.isActive)
-        setScheduleList(active)
-        // في الإضافة: اختر الجدول الافتراضي مبدئياً إن لم يُختر شيء
-        if (mode === 'add') {
-          setSelectedSchedule((prev) =>
-            prev !== '' ? prev : (active.find((s) => s.isDefault)?.id ?? '')
-          )
-        }
-      })
+      .then((ws) => setScheduleList(ws.filter((s) => s.isActive)))
       .catch(() => setScheduleList([]))
   }, [])
 
@@ -386,6 +403,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.costCenterId) payload.costCenterId = Number(form.costCenterId)
     // جدول العمل المختار — يعيّن على الموظف فعلياً (يشتقّ منه المحرك)
     if (selectedSchedule !== '') payload.workScheduleId = Number(selectedSchedule)
+    // استحقاق السنوي — يتحكم فعلياً في تراكم الرصيد (مقفول = بلا سنوي)
+    payload.annualLeaveEntitled = leaveEntitled
     if (form.bankName) payload.bankName = form.bankName
     const iban = form.iban.replace(/\s+/g, '').toUpperCase()
     if (iban) payload.iban = iban

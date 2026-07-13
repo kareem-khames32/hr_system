@@ -91,6 +91,10 @@ export class Employee {
   @Column({ nullable: true })
   workScheduleId: number
 
+  // هل يستحق إجازة سنوية؟ مقفول = لا يتراكم له رصيد سنوي (استحقاقه = 0)
+  @Column({ default: true })
+  annualLeaveEntitled: boolean
+
   @Column({ type: 'date', nullable: true })
   joinDate: string
 

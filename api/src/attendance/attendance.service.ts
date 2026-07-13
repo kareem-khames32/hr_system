@@ -101,7 +101,9 @@ export class AttendanceService {
     const ws = await this.workSchedules.findOne({
       where: { id: emp.workScheduleId },
     })
-    return ws?.weekendDays || undefined
+    // جدول محذوف (مرجع معلّق) → السلوك الافتراضي؛ جدول بلا عطلة ('') = دوام
+    // 7 أيام (تجاوز فعلي لا رجوع للفرع)
+    return ws ? (ws.weekendDays ?? '') : undefined
   }
 
   // أيام العمل الفعلية في مدى — الويك إند والعطلات الرسمية مستثناة
@@ -156,7 +158,8 @@ export class AttendanceService {
     let weekend = await this.configValue('attendance.weekend_days', 'FRI,SAT')
     const branch = await this.branches.findOne({ where: { id: branchId } })
     if ((branch as any)?.weekendDays) weekend = (branch as any).weekendDays
-    if (weekendOverride) weekend = weekendOverride // جدول الموظف يغلب
+    // جدول الموظف يغلب — '' تعني دوام 7 أيام (تجاوز صريح لا رجوع للفرع)
+    if (weekendOverride !== undefined) weekend = weekendOverride
     const holidays = await this.holidays.find()
     const rules = await this.scheduleRules.find({
       where: { isActive: true },
