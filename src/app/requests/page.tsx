@@ -648,15 +648,33 @@ export default function MyRequestsPage() {
           <option value="OUT">بصمة انصراف</option>
         </select>
       )
-    if (key === 'time')
+    if (key === 'time') {
+      const tv = fieldValues[key] ?? ''
+      const pt = fieldValues.punchType
+      const hh = /^\d{2}:/.test(tv) ? Number(tv.slice(0, 2)) : null
+      // تحذير غلطة ص/م الشائعة: بصمة حضور بعد الظهر أو انصراف في الصبح الباكر
+      const amPmWarn =
+        hh != null &&
+        ((pt === 'IN' && hh >= 14) || (pt === 'OUT' && hh < 10))
       return (
-        <input
-          type="time"
-          className="input w-full"
-          value={fieldValues[key] ?? ''}
-          onChange={(e) => setFieldValue(key, e.target.value)}
-        />
+        <>
+          <input
+            type="time"
+            className="input w-full"
+            value={tv}
+            onChange={(e) => setFieldValue(key, e.target.value)}
+          />
+          {amPmWarn && (
+            <p className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-1.5">
+              <AlertTriangle size={13} className="shrink-0" />
+              {pt === 'IN'
+                ? `بصمة حضور الساعة ${tv}؟ تأكد من صباحاً/مساءً (ص/م)`
+                : `بصمة انصراف الساعة ${tv}؟ تأكد من صباحاً/مساءً (ص/م)`}
+            </p>
+          )}
+        </>
       )
+    }
     if (key === 'leaveType') {
       const selected = leaveTypes.find((lt) => lt.code === fieldValues[key])
       return (
