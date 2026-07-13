@@ -157,19 +157,29 @@ export class EmployeesService {
     // رصيد السنة الحالية تلقائياً — الاستحقاق من الإعدادات
     await this.ensureCurrentYearBalances(emp.id)
     // رصيد افتتاحي مُرحّل (اختياري) — طبقة opening على رصيد السنوي
-    if (openingBalanceDays && Number(openingBalanceDays) > 0) {
-      const period = String(new Date().getFullYear())
-      const annual = await this.balances.findOne({
-        where: { employeeId: emp.id, balanceType: 'annual', period },
-      })
-      if (annual) {
-        annual.openingDays = Number(openingBalanceDays)
-        annual.openingTaken = 0
-        annual.openingExpiry = (openingBalanceExpiry ?? null) as any
-        await this.balances.save(annual)
-      }
-    }
+    await this.applyOpeningBalance(emp.id, openingBalanceDays, openingBalanceExpiry)
     return emp
+  }
+
+  // يطبّق الرصيد الافتتاحي المُرحّل كطبقة opening على رصيد السنوي للسنة الحالية
+  // (يُستخدم عند التعيين وعند التعديل لموظف قائم انتقل من نظام سابق)
+  private async applyOpeningBalance(
+    employeeId: number,
+    days?: number,
+    expiry?: string | null
+  ) {
+    if (!days || Number(days) <= 0) return
+    await this.ensureCurrentYearBalances(employeeId)
+    const period = String(new Date().getFullYear())
+    const annual = await this.balances.findOne({
+      where: { employeeId, balanceType: 'annual', period },
+    })
+    if (annual) {
+      annual.openingDays = Number(days)
+      annual.openingTaken = 0
+      annual.openingExpiry = (expiry ?? null) as any
+      await this.balances.save(annual)
+    }
   }
 
   // ينشئ أرصدة السنة الحالية (سنوي/مرضي) إن لم توجد — يُستدعى عند التعيين
@@ -217,8 +227,17 @@ export class EmployeesService {
     if (dto.managerEmployeeId === id) {
       throw new BadRequestException('الموظف لا يكون مديراً مباشراً لنفسه')
     }
-    Object.assign(emp, dto)
-    return this.employees.save(emp)
+    // الرصيد الافتتاحي حقلا حمولة فقط — يُطبَّقان على الرصيد لا على الموظف
+    const { openingBalanceDays, openingBalanceExpiry, ...empDto } =
+      dto as UpdateEmployeeDto & {
+        openingBalanceDays?: number
+        openingBalanceExpiry?: string | null
+      }
+    Object.assign(emp, empDto)
+    const saved = await this.employees.save(emp)
+    // تعديل رصيد افتتاحي مُرحّل لموظف قائم (انتقل من نظام سابق)
+    await this.applyOpeningBalance(id, openingBalanceDays, openingBalanceExpiry)
+    return saved
   }
 
   // الأرشفة بدل الحذف — التاريخ الوظيفي لا يُمسح (بسبب موثّق)

@@ -426,10 +426,10 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.contractEnd) payload.contractEnd = form.contractEnd
     // صورة الموظف
     if (form.photoFileId != null) payload.photoFileId = form.photoFileId
-    // الرصيد الافتتاحي المُرحّل (اختياري) — يُطبَّق عند التعيين فقط (create)؛
-    // في التعديل الباك يتجاهله (يُدار من شاشة رصيد الإجازات)، فلا نرسله
+    // الرصيد الافتتاحي المُرحّل (اختياري) — يُطبَّق على رصيد السنوي في
+    // الإنشاء والتعديل (لموظف قائم انتقل من نظام سابق)
     const openDays = Number(openingBalance)
-    if (mode === 'add' && openingBalance !== '' && openDays > 0) {
+    if (openingBalance !== '' && openDays > 0) {
       payload.openingBalanceDays = openDays
       payload.openingBalanceExpiry =
         openingExpiry === 'end_of_year'
@@ -1193,8 +1193,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
               </div>
 
-              {/* الرصيد الافتتاحي — عند التعيين فقط (يُدار لاحقاً من شاشة الأرصدة) */}
-              {mode === 'add' && (
+              {/* الرصيد الافتتاحي المُرحّل — يعمل في الإضافة والتعديل */}
               <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 mt-4">
                 <div className="flex items-start gap-3 mb-4">
                   <Calendar size={20} className="text-amber-600 mt-0.5" />
@@ -1255,7 +1254,6 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   </p>
                 )}
               </div>
-              )}
 
               <div className="p-4 bg-blue-50 rounded-xl mt-4">
                 <div className="flex items-start gap-3">

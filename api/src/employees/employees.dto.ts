@@ -355,6 +355,19 @@ export class UpdateEmployeeDto {
   })
   iban?: string
 
+  // الرصيد الافتتاحي المُرحّل — يُطبَّق على رصيد السنوي (تعديل لموظف قائم)
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'الرصيد الافتتاحي رقم' })
+  @Min(0, { message: 'الرصيد الافتتاحي لا يكون سالباً' })
+  openingBalanceDays?: number
+
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, {
+    message: 'صلاحية الرصيد الافتتاحي بصيغة YYYY-MM-DD',
+  })
+  openingBalanceExpiry?: string | null
+
   @IsOptional()
   isActive?: boolean
 }
