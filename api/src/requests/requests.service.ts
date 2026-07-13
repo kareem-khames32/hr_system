@@ -7,7 +7,7 @@ import {
 } from '@nestjs/common'
 import { Cron } from '@nestjs/schedule'
 import { InjectRepository } from '@nestjs/typeorm'
-import { DataSource, In, IsNull, Repository } from 'typeorm'
+import { DataSource, In, IsNull, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
@@ -254,6 +254,23 @@ export class RequestsService {
         if (!asset || asset.status !== 'AVAILABLE' || asset.currentHolderId) {
           throw new BadRequestException(
             `الأصل «${asset?.name ?? '#' + assetId}» غير متاح — اختر من المتاح فقط`
+          )
+        }
+        // رفض مبكر لو للأصل إسناد مفتوح (يظل AVAILABLE طوال PENDING_ACK)
+        const open = await this.ds.getRepository(CustodyAssignment).count({
+          where: {
+            assetId,
+            status: In([
+              'PENDING_ACK',
+              'PENDING_MANAGER_CONFIRM',
+              'ACTIVE',
+              'RETURN_REQUESTED',
+            ]),
+          },
+        })
+        if (open > 0) {
+          throw new BadRequestException(
+            `الأصل «${asset.name}» له إسناد عهدة مفتوح — لا يُسنَد لموظفين`
           )
         }
       }
@@ -838,6 +855,33 @@ export class RequestsService {
       (user.permissions ?? []).includes('custody.assign')
     if (!isManager && !hasPerm) {
       throw new ForbiddenException('اعتماد العهدة للمدير المباشر أو مسؤول العهدة')
+    }
+    // حارس الدهس: لا تُثبِّت الإسناد لو الأصل مُسنَد فعلاً لموظف آخر أو له إسناد
+    // نشط آخر — يمنع اعتماد إسنادين لنفس الأصل من الكتابة فوق بعضهما
+    const asset = await this.ds
+      .getRepository(Asset)
+      .findOne({ where: { id: row.assetId } })
+    if (
+      asset?.currentHolderId &&
+      asset.currentHolderId !== row.employeeId
+    ) {
+      throw new BadRequestException(
+        'الأصل مُسنَد فعلاً لموظف آخر — لا يُسنَد لموظفين'
+      )
+    }
+    const otherActive = await this.ds
+      .getRepository(CustodyAssignment)
+      .count({
+        where: {
+          assetId: row.assetId,
+          status: 'ACTIVE',
+          id: Not(row.id),
+        },
+      })
+    if (otherActive > 0) {
+      throw new BadRequestException(
+        'للأصل إسناد نشط آخر بالفعل — لا يُسنَد لموظفين'
+      )
     }
     row.status = 'ACTIVE'
     row.managerConfirmAt = new Date()

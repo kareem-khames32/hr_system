@@ -137,12 +137,28 @@ export class AssetsController {
       where: { status: 'AVAILABLE' },
       order: { category: 'ASC', name: 'ASC' },
     })
-    return rows.map((a) => ({
-      id: a.id,
-      name: a.name,
-      category: a.category,
-      serialNumber: a.serialNumber,
-    }))
+    // استبعد الأصول ذات إسناد عهدة مفتوح (تبقى AVAILABLE طوال PENDING_ACK)
+    // حتى لا تُعرض للاختيار في طلب جديد فيُسنَد الأصل لموظفين
+    const open = await this.custody.find({
+      where: {
+        status: In([
+          'PENDING_ACK',
+          'PENDING_MANAGER_CONFIRM',
+          'ACTIVE',
+          'RETURN_REQUESTED',
+        ]),
+      },
+      select: ['assetId'],
+    })
+    const reserved = new Set(open.map((o) => o.assetId))
+    return rows
+      .filter((a) => !reserved.has(a.id))
+      .map((a) => ({
+        id: a.id,
+        name: a.name,
+        category: a.category,
+        serialNumber: a.serialNumber,
+      }))
   }
 
   // عهدي — بورتال الموظف (خدمة ذاتية)

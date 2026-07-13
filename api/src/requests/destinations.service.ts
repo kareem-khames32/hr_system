@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common'
+import { BadRequestException, Injectable, Logger } from '@nestjs/common'
 import { EntityManager, In } from 'typeorm'
 import {
   ClearanceItem,
@@ -490,6 +490,25 @@ export class DestinationsService {
       if (asset.status !== 'AVAILABLE' || asset.currentHolderId) {
         throw new Error(
           `«${asset.name}» لم يعد متاحاً في المخزون — راجع الكتالوج`
+        )
+      }
+      // الحارس الحاسم: يبقى الأصل AVAILABLE طوال PENDING_ACK، فطلبان لنفس
+      // الأصل قد يمرّان معاً وقت التقديم — نمنع الازدواج هنا (وقت التنفيذ) بفحص
+      // وجود إسناد مفتوح، فالطلب الثاني يفشل بدل إنشاء إسناد ثانٍ لنفس الأصل
+      const open = await em.getRepository(CustodyAssignment).findOne({
+        where: {
+          assetId,
+          status: In([
+            'PENDING_ACK',
+            'PENDING_MANAGER_CONFIRM',
+            'ACTIVE',
+            'RETURN_REQUESTED',
+          ]),
+        },
+      })
+      if (open) {
+        throw new BadRequestException(
+          `«${asset.name}» له إسناد عهدة مفتوح بالفعل — لا يُسنَد لموظفين`
         )
       }
       const row = await em.getRepository(CustodyAssignment).save({
