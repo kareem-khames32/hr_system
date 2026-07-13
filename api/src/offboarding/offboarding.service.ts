@@ -293,7 +293,7 @@ export class OffboardingService {
       }
     }
 
-    // (+) أوفرتايم معتمد لم يُصرف
+    // (+) أوفرتايم معتمد لم يُصرف — كل قيد بمُضاعِفه المخزّن (عطلة/عادي)
     const unpaidOt = await this.overtime.find({
       where: { employeeId: emp.id, status: 'APPROVED' },
     })
@@ -302,11 +302,18 @@ export class OffboardingService {
     )
     if (otHours > 0) {
       const hourRate = dayRate / Number(await this.cfg('payroll.daily_hours', '8'))
+      const otAmount = round2(
+        unpaidOt.reduce(
+          (s, o) =>
+            s + Number(o.payableHours ?? 0) * Number(o.rate ?? 1.5) * hourRate,
+          0
+        )
+      )
       rows.push({
         caseId: kase.id,
         label: `أوفرتايم معتمد غير مصروف (${otHours} ساعة)`,
         type: 'CREDIT',
-        amount: round2(otHours * 1.5 * hourRate),
+        amount: otAmount,
         isAuto: true,
       })
     }

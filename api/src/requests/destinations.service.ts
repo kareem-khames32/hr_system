@@ -24,6 +24,7 @@ import {
   Transfer,
 } from './entities/employment.entities'
 import { Asset, CustodyAssignment } from './entities/custody.entities'
+import { RequestsConfig } from './entities/requests-config.entity'
 import { LetterRequest } from './entities/letter.entities'
 import { Employee } from '../employees/employee.entity'
 import { User } from '../auth/user.entity'
@@ -169,6 +170,11 @@ export class DestinationsService {
   // ========== الحضور والأوفرتايم ==========
 
   private overtimeHandler: Handler = async (em, req, _type, payload) => {
+    // مُضاعِف مبدئي (أيام العمل) من الإعداد — يُنقّحه محرك الحضور لنوع اليوم
+    // الفعلي (عطلة/ويك إند) عند مزامنة البصمة
+    const wdMult = await em
+      .getRepository(RequestsConfig)
+      .findOne({ where: { key: 'overtime.multiplier_weekday' } })
     const entry = await em.getRepository(OvertimeEntry).save({
       requestId: req.id,
       employeeId: req.requesterId,
@@ -176,7 +182,9 @@ export class DestinationsService {
       source: 'PRE_REQUESTED',
       hoursRequested: Number(payload.hours),
       // payable = min(المعتمد، الفعلي) — يُحسب عند مزامنة البصمة
-      rate: payload.rate ? Number(payload.rate) : 1.5,
+      rate: payload.rate
+        ? Number(payload.rate)
+        : Number(wdMult?.value ?? '1.5'),
       status: 'APPROVED',
     })
     return { ref: refOf('OT', entry.id), completed: true }

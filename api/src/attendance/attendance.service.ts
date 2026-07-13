@@ -158,6 +158,22 @@ export class AttendanceService {
     return this.evalNonWorking(date, branchId, ctx)
   }
 
+  // تصنيف اليوم لأغراض مُضاعِف الأوفرتايم: يوم عمل / عطلة أسبوعية / عطلة رسمية
+  // (العطلة الرسمية تُميَّز عن الويك إند لأن مُضاعِفها قد يختلف)
+  async dayKind(
+    date: string,
+    branchId: number,
+    weekendOverride?: string
+  ): Promise<'WORKING' | 'WEEKEND' | 'HOLIDAY'> {
+    const ctx = await this.nonWorkingContext(branchId, weekendOverride)
+    const isPublicHoliday = ctx.holidays.some(
+      (h) => h.date <= date && (h.endDate ? h.endDate >= date : h.date === date)
+    )
+    if (isPublicHoliday) return 'HOLIDAY'
+    if (this.evalNonWorking(date, branchId, ctx)) return 'WEEKEND'
+    return 'WORKING'
+  }
+
   // يحمّل مصادر «يوم العطلة» مرة واحدة (ويك إند + عطلات + قواعد استثناء)
   // weekendOverride: عطلة جدول عمل الموظف — تغلب إعداد الفرع/العام إن وُجدت
   private async nonWorkingContext(
@@ -971,6 +987,10 @@ export class AttendanceService {
       emp.branchId,
       empWeekend ?? undefined
     )
+    // نوع اليوم لمُضاعِف الأوفرتايم (يُحسب فقط عند العطلة لتمييز الويك إند/الرسمية)
+    const kind: 'WORKING' | 'WEEKEND' | 'HOLIDAY' = isHoliday
+      ? await this.dayKind(date, emp.branchId, empWeekend ?? undefined)
+      : 'WORKING'
 
     if (isFullLeaveDay) {
       status = 'leave'
@@ -1123,13 +1143,26 @@ export class AttendanceService {
     })
     day = await this.days.save(day)
 
-    // الأوفرتايم × البصمة (لا يُكتشف في يوم إجازة أو عطلة)
-    // الأوفرتايم يتطلب دخولاً وخروجاً — بصمة خروج وحيدة (بلا دخول) لا تُنتج
-    // أوفرتايم وهمياً (لم يثبت عمل أصلاً)
-    if (checkIn && checkOut && !isFullLeaveDay && !isHoliday) {
-      await this.detectOvertime(emp, date, shift, checkOut)
+    // الأوفرتايم × البصمة (يتطلب دخولاً وخروجاً — بصمة خروج وحيدة لا تُنتج
+    // أوفرتايم وهمياً). يُكتشف أيضاً في يوم العطلة/الويك إند (العمل يومها كله
+    // أوفرتايم) — يُميَّز عن «يوم عطلة بلا دوام» بوجود بصمة دخول وخروج
+    if (checkIn && checkOut && !isFullLeaveDay) {
+      await this.detectOvertime(emp, date, shift, checkIn, checkOut, kind)
     }
     return day
+  }
+
+  // مُضاعِف الأوفرتايم بحسب نوع اليوم (weekday/weekend/holiday) — قابل للضبط
+  private async overtimeMultiplier(
+    kind: 'WORKING' | 'WEEKEND' | 'HOLIDAY'
+  ): Promise<number> {
+    const key =
+      kind === 'HOLIDAY'
+        ? 'overtime.multiplier_holiday'
+        : kind === 'WEEKEND'
+          ? 'overtime.multiplier_weekend'
+          : 'overtime.multiplier_weekday'
+    return Number(await this.configValue(key, '1.5'))
   }
 
   // ===== الأوفرتايم: مطابقة المسبق أو كشف تلقائي فوق العتبة =====
@@ -1137,10 +1170,18 @@ export class AttendanceService {
     emp: Employee,
     date: string,
     shift: { name?: string; end: string },
-    checkOut: string
+    checkIn: string,
+    checkOut: string,
+    kind: 'WORKING' | 'WEEKEND' | 'HOLIDAY' = 'WORKING'
   ) {
-    const extraMinutes = toMinutes(checkOut) - toMinutes(shift.end)
+    // يوم العطلة/الويك إند: العمل كله أوفرتايم (لا وردية مرجعية) — يوم العمل
+    // العادي: الأوفرتايم = ما بعد نهاية الوردية فقط
+    const extraMinutes =
+      kind === 'WORKING'
+        ? toMinutes(checkOut) - toMinutes(shift.end)
+        : toMinutes(checkOut) - toMinutes(checkIn)
     const actualHours = Math.round((extraMinutes / 60) * 100) / 100
+    const rate = await this.overtimeMultiplier(kind)
 
     // 1) طلب مسبق معتمد → يُحتسب دائماً (الموافقة الصريحة تغلب القفل):
     // payable = min(المعتمد، الفعلي) — حتى لو الفترة مقفولة
@@ -1149,6 +1190,7 @@ export class AttendanceService {
     })
     if (preApproved) {
       preApproved.hoursActual = Math.max(0, actualHours)
+      preApproved.rate = rate // مُضاعِف اليوم الفعلي (عطلة/عادي)
       if (preApproved.status === 'APPROVED') {
         preApproved.payableHours = Math.min(
           Number(preApproved.hoursRequested ?? 0),
@@ -1186,6 +1228,7 @@ export class AttendanceService {
     })
     if (existing) {
       existing.hoursActual = actualHours
+      existing.rate = rate
       if (existing.status === 'DETECTED') existing.payableHours = null as any
       await this.overtime.save(existing)
       return
@@ -1201,6 +1244,7 @@ export class AttendanceService {
         date,
         source: 'BIOMETRIC_DETECTED',
         hoursActual: actualHours,
+        rate, // مُضاعِف نوع اليوم (weekday/weekend/holiday)
         // بدون تأكيد مطلوب → اعتماد فوري بالفعلي
         status: requiresConfirmation ? 'DETECTED' : 'APPROVED',
         payableHours: requiresConfirmation ? undefined : actualHours,
