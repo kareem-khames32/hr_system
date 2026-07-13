@@ -102,6 +102,7 @@ export default function EditEmployeePage() {
             emp.otherAllowance != null ? String(Number(emp.otherAllowance)) : '',
           payMethod: emp.payMethod ?? 'transfer',
           costCenterId: emp.costCenterId != null ? String(emp.costCenterId) : '',
+          workScheduleId: emp.workScheduleId,
           bankName: emp.bankName ?? '',
           iban: emp.iban ?? '',
           contractType: emp.contractType ?? '',

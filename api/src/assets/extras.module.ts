@@ -25,6 +25,7 @@ import {
   JobTitle,
   PublicHoliday,
   Shift,
+  WorkSchedule,
 } from './assets.entities'
 import { AssetsController } from './assets.controller'
 import { CandidatesController } from './candidates.controller'
@@ -43,6 +44,7 @@ import { PortalController } from './portal.controller'
       EmployeeDocument,
       PublicHoliday,
       Shift,
+      WorkSchedule,
       BiometricDevice,
       JobTitle,
       Grade,

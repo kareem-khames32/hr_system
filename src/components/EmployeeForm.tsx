@@ -85,6 +85,7 @@ export interface EmployeeFormState {
   contractStart: string
   contractEnd: string
   photoFileId?: number
+  workScheduleId?: number // جدول العمل المعيّن (للتعبئة المسبقة في التعديل)
 }
 
 // الحمولة المُرسلة للباك إند — حقول ApiEmployee + الرصيد الافتتاحي المُرحّل
@@ -113,75 +114,43 @@ const weekDays = [
   { key: 'saturday', name: 'السبت', shortName: 'س' },
 ]
 
-// جداول العمل المتاحة (يتم جلبها من الإعدادات)
-const workSchedules: Array<{
-  id: string
+// جدول العمل كما يرجعه السيرفر (كتالوج work-schedules) + عدد الموظفين المُثرى
+interface WorkScheduleRow {
+  id: number
   name: string
-  description: string
-  color: string
+  description?: string
+  weekendDays: string // 'FRI,SAT'
+  startTime: string
+  endTime: string
   isDefault: boolean
-  workDays: { [key: string]: boolean }
-  workHours: { start: string; end: string }
-  employeeCount: number
-  rulesCount: number
-}> = [
-  {
-    id: '1',
-    name: 'الجدول الأساسي',
-    description: 'جمعة وسبت إجازة',
-    color: 'blue',
-    isDefault: true,
-    workDays: {
-      sunday: true,
-      monday: true,
-      tuesday: true,
-      wednesday: true,
-      thursday: true,
-      friday: false,
-      saturday: false,
-    },
-    workHours: {
-      start: '08:00',
-      end: '17:00',
-    },
-    employeeCount: 45,
-    rulesCount: 1,
-  },
-  {
-    id: '2',
-    name: 'جدول السبت فقط',
-    description: 'السبت فقط إجازة - الجمعة دوام',
-    color: 'green',
-    isDefault: false,
-    workDays: {
-      sunday: true,
-      monday: true,
-      tuesday: true,
-      wednesday: true,
-      thursday: true,
-      friday: true,
-      saturday: false,
-    },
-    workHours: {
-      start: '08:00',
-      end: '16:00',
-    },
-    employeeCount: 23,
-    rulesCount: 0,
-  },
-]
+  isActive: boolean
+  employeeCount?: number
+}
+
+// رمز اليوم (3 أحرف) لكل مفتاح — لاشتقاق أيام العمل من أيام نهاية الأسبوع
+const DAY_CODES: Record<string, string> = {
+  sunday: 'SUN', monday: 'MON', tuesday: 'TUE', wednesday: 'WED',
+  thursday: 'THU', friday: 'FRI', saturday: 'SAT',
+}
+// يوم عمل؟ = ليس ضمن أيام نهاية الأسبوع للجدول
+const isWorkingDay = (dayKey: string, weekendDays: string) =>
+  !weekendDays
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .includes(DAY_CODES[dayKey])
 
 // الألوان المتاحة للجداول
-const scheduleColors: { [key: string]: string } = {
-  blue: 'bg-blue-500',
-  green: 'bg-green-500',
-  purple: 'bg-purple-500',
-  orange: 'bg-orange-500',
-  pink: 'bg-pink-500',
-  teal: 'bg-teal-500',
-  indigo: 'bg-indigo-500',
-  red: 'bg-red-500',
-}
+// ألوان الكروت بالفهرس (لا يخزّن السيرفر لوناً — تمييز بصري فقط)
+const scheduleColorList = [
+  'bg-blue-500',
+  'bg-green-500',
+  'bg-purple-500',
+  'bg-orange-500',
+  'bg-pink-500',
+  'bg-teal-500',
+  'bg-indigo-500',
+  'bg-red-500',
+]
 
 const steps = [
   { id: 1, title: 'البيانات الشخصية', icon: User },
@@ -253,7 +222,10 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
 export default function EmployeeForm({ mode, initial, onSubmit, submitting, error }: EmployeeFormProps) {
   const [currentStep, setCurrentStep] = useState(1)
   const [leaveEntitled, setLeaveEntitled] = useState(true)
-  const [selectedSchedule, setSelectedSchedule] = useState('')
+  const [selectedSchedule, setSelectedSchedule] = useState<number | ''>(
+    initial?.workScheduleId ?? ''
+  )
+  const [scheduleList, setScheduleList] = useState<WorkScheduleRow[]>([])
   // الرصيد الافتتاحي المُرحّل من نظام سابق وصلاحيته
   const [openingBalance, setOpeningBalance] = useState('')
   const [openingExpiry, setOpeningExpiry] = useState<'end_of_year' | 'custom_date' | 'no_expiry'>('end_of_year')
@@ -351,6 +323,19 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     fetchCatalog<CostCenter>('cost-centers')
       .then((cc) => setCostCenters(cc.filter((c) => c.isActive)))
       .catch(() => setCostCenters([]))
+    // جداول العمل الفعلية من الإعدادات
+    fetchCatalog<WorkScheduleRow>('work-schedules')
+      .then((ws) => {
+        const active = ws.filter((s) => s.isActive)
+        setScheduleList(active)
+        // في الإضافة: اختر الجدول الافتراضي مبدئياً إن لم يُختر شيء
+        if (mode === 'add') {
+          setSelectedSchedule((prev) =>
+            prev !== '' ? prev : (active.find((s) => s.isDefault)?.id ?? '')
+          )
+        }
+      })
+      .catch(() => setScheduleList([]))
   }, [])
 
   const fullNameAr = [form.firstNameAr, form.fatherNameAr, form.grandNameAr, form.familyNameAr]
@@ -399,6 +384,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.joinDate) payload.joinDate = form.joinDate
     if (form.basicSalary !== '') payload.basicSalary = Number(form.basicSalary)
     if (form.costCenterId) payload.costCenterId = Number(form.costCenterId)
+    // جدول العمل المختار — يعيّن على الموظف فعلياً (يشتقّ منه المحرك)
+    if (selectedSchedule !== '') payload.workScheduleId = Number(selectedSchedule)
     if (form.bankName) payload.bankName = form.bankName
     const iban = form.iban.replace(/\s+/g, '').toUpperCase()
     if (iban) payload.iban = iban
@@ -994,11 +981,19 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               </h3>
               <p className="text-sm text-gray-500 mb-4">اختر جدول العمل الذي سيتبعه الموظف (يمكن إنشاء جداول جديدة من الإعدادات)</p>
 
+              {scheduleList.length === 0 && (
+                <div className="p-4 bg-gray-50 rounded-xl text-sm text-gray-500 text-center">
+                  لا توجد جداول عمل — أنشئ جدولاً من الإعدادات أولاً
+                </div>
+              )}
               <div className="grid grid-cols-2 gap-4">
-                {workSchedules.map((schedule) => {
+                {scheduleList.map((schedule, idx) => {
                   const isSelected = selectedSchedule === schedule.id
-                  const colorClass = scheduleColors[schedule.color] || 'bg-blue-500'
-                  const workDaysCount = Object.values(schedule.workDays).filter(Boolean).length
+                  const colorClass =
+                    scheduleColorList[idx % scheduleColorList.length]
+                  const workDaysCount = weekDays.filter((d) =>
+                    isWorkingDay(d.key, schedule.weekendDays)
+                  ).length
 
                   return (
                     <div
@@ -1025,7 +1020,9 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                               </span>
                             )}
                           </div>
-                          <p className="text-sm text-gray-500 mt-1">{schedule.description}</p>
+                          {schedule.description && (
+                            <p className="text-sm text-gray-500 mt-1">{schedule.description}</p>
+                          )}
                         </div>
                       </div>
 
@@ -1036,7 +1033,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                             ساعات العمل:
                           </span>
                           <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
-                            {schedule.workHours.start} - {schedule.workHours.end}
+                            {schedule.startTime} - {schedule.endTime}
                           </span>
                         </div>
                         <div className="flex items-center justify-between">
@@ -1048,18 +1045,18 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                         <div className="flex items-center justify-between">
                           <span className="text-gray-500">عدد الموظفين:</span>
                           <span className={`font-medium ${isSelected ? 'text-primary-700' : 'text-gray-700'}`}>
-                            {schedule.employeeCount} موظف
+                            {schedule.employeeCount ?? 0} موظف
                           </span>
                         </div>
                       </div>
 
-                      {/* أيام العمل */}
+                      {/* أيام العمل — مشتقّة من أيام نهاية الأسبوع */}
                       <div className="flex gap-1 mt-4 pt-3 border-t border-gray-100">
                         {weekDays.map(day => (
                           <div
                             key={day.key}
                             className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
-                              schedule.workDays[day.key]
+                              isWorkingDay(day.key, schedule.weekendDays)
                                 ? `${colorClass} text-white`
                                 : 'bg-gray-100 text-gray-400'
                             }`}
@@ -1068,28 +1065,20 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                           </div>
                         ))}
                       </div>
-
-                      {schedule.rulesCount > 0 && (
-                        <div className="mt-3 text-xs text-gray-500">
-                          <span className="px-2 py-1 bg-warning-100 text-warning-700 rounded">
-                            {schedule.rulesCount} قاعدة استثنائية
-                          </span>
-                        </div>
-                      )}
                     </div>
                   )
                 })}
               </div>
 
-              {selectedSchedule && (
+              {selectedSchedule !== '' && (
                 <div className="mt-4 p-4 bg-blue-50 rounded-xl flex items-start gap-3">
                   <Clock size={20} className="text-blue-500 mt-0.5" />
                   <div>
                     <p className="font-medium text-blue-800">
-                      تم اختيار: {workSchedules.find(s => s.id === selectedSchedule)?.name}
+                      تم اختيار: {scheduleList.find(s => s.id === selectedSchedule)?.name}
                     </p>
                     <p className="text-sm text-blue-700 mt-1">
-                      يمكن تغيير جدول العمل لاحقاً من صفحة الإعدادات أو من ملف الموظف
+                      المحرك يشتقّ العطلة الأسبوعية والساعات من هذا الجدول لهذا الموظف
                     </p>
                   </div>
                 </div>

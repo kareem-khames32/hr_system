@@ -89,6 +89,37 @@ export class Shift {
   isActive: boolean
 }
 
+// جدول العمل — نمط قابل للإعداد يتبعه الموظف: أيام نهاية الأسبوع + ساعات الدوام.
+// يُختار عند التعيين، والمحرك يشتقّ منه العطلة الأسبوعية والساعات لمن يتبعه.
+@Entity('work_schedules')
+export class WorkSchedule {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Index({ unique: true })
+  @Column({ length: 100 })
+  name: string
+
+  @Column({ length: 200, nullable: true })
+  description: string
+
+  // أيام نهاية الأسبوع (رموز مفصولة بفاصلة، مثل 'FRI,SAT') — تغلب إعداد الفرع
+  @Column({ length: 40, default: 'FRI,SAT' })
+  weekendDays: string
+
+  @Column({ length: 5, default: '08:00' })
+  startTime: string // HH:mm
+
+  @Column({ length: 5, default: '17:00' })
+  endTime: string
+
+  @Column({ default: false })
+  isDefault: boolean
+
+  @Column({ default: true })
+  isActive: boolean
+}
+
 // أجهزة البصمة المسجلة (Device ↔ الفرع) — سحب مباشر عبر TCP/IP
 @Entity('biometric_devices')
 export class BiometricDevice {

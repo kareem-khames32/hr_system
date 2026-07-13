@@ -86,6 +86,11 @@ export class Employee {
   @Column({ nullable: true })
   costCenterId: number
 
+  // جدول العمل الذي يتبعه الموظف (اختياري) — المحرك يشتقّ منه العطلة الأسبوعية
+  // والساعات؛ بلا جدول = إعداد الفرع/العام (السلوك الافتراضي)
+  @Column({ nullable: true })
+  workScheduleId: number
+
   @Column({ type: 'date', nullable: true })
   joinDate: string
 

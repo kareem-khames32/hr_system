@@ -16,6 +16,7 @@ import type { ObjectLiteral } from 'typeorm'
 import { JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { AttendancePunch, PermissionType } from '../attendance/attendance.entities'
 import { Branch } from '../org/entities/branch.entity'
+import { Employee } from '../employees/employee.entity'
 import {
   AssetType,
   BiometricDevice,
@@ -24,6 +25,7 @@ import {
   JobTitle,
   PublicHoliday,
   Shift,
+  WorkSchedule,
 } from './assets.entities'
 
 // كتالوجات الإعدادات: عطلات/ورديات/أجهزة/مسميات/درجات/أنواع أصول
@@ -48,7 +50,11 @@ export class CatalogsController {
     private readonly permissionTypes: Repository<PermissionType>,
     @InjectRepository(AttendancePunch)
     private readonly punches: Repository<AttendancePunch>,
-    @InjectRepository(Branch) private readonly branches: Repository<Branch>
+    @InjectRepository(Branch) private readonly branches: Repository<Branch>,
+    @InjectRepository(WorkSchedule)
+    private readonly workSchedules: Repository<WorkSchedule>,
+    @InjectRepository(Employee)
+    private readonly employees: Repository<Employee>
   ) {}
 
   private repoOf(kind: string): Repository<ObjectLiteral> {
@@ -69,6 +75,8 @@ export class CatalogsController {
         return this.permissionTypes
       case 'cost-centers':
         return this.costCenters
+      case 'work-schedules':
+        return this.workSchedules
       default:
         throw new NotFoundException('كتالوج غير معروف')
     }
@@ -94,6 +102,17 @@ export class CatalogsController {
         })
       }
       return enriched
+    }
+    // جداول العمل: نُثري بعدد الموظفين الفعلي المرتبطين بكل جدول
+    if (kind === 'work-schedules') {
+      const out = []
+      for (const ws of rows as WorkSchedule[]) {
+        const employeeCount = await this.employees.count({
+          where: { workScheduleId: ws.id },
+        })
+        out.push({ ...ws, employeeCount })
+      }
+      return out
     }
     return rows
   }
@@ -182,6 +201,19 @@ export class CatalogsController {
       case 'cost-centers':
         need('name', 'اسم مركز التكلفة')
         need('code', 'كود مركز التكلفة')
+        break
+      case 'work-schedules':
+        need('name', 'اسم جدول العمل')
+        time('startTime', 'بداية الدوام')
+        time('endTime', 'نهاية الدوام')
+        if (
+          b.weekendDays &&
+          !/^([A-Z]{3})(,[A-Z]{3})*$/.test(String(b.weekendDays))
+        ) {
+          throw new BadRequestException(
+            'أيام نهاية الأسبوع رموز مفصولة بفاصلة (مثل FRI,SAT)'
+          )
+        }
         break
     }
   }

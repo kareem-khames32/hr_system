@@ -9,7 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Between, In, IsNull, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
-import { PublicHoliday } from '../assets/assets.entities'
+import { PublicHoliday, WorkSchedule } from '../assets/assets.entities'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { AttendanceCorrection, OvertimeEntry } from '../requests/entities/attendance.entities'
@@ -89,20 +89,33 @@ export class AttendanceService {
     @InjectRepository(OvertimePeriod)
     private readonly overtimePeriods: Repository<OvertimePeriod>,
     @InjectRepository(PermissionType)
-    private readonly permissionTypes: Repository<PermissionType>
+    private readonly permissionTypes: Repository<PermissionType>,
+    @InjectRepository(WorkSchedule)
+    private readonly workSchedules: Repository<WorkSchedule>
   ) {}
+
+  // العطلة الأسبوعية لجدول عمل الموظف (إن وُجد) — تغلب إعداد الفرع/العام
+  private async employeeWeekend(employeeId: number): Promise<string | undefined> {
+    const emp = await this.employees.findOne({ where: { id: employeeId } })
+    if (!emp?.workScheduleId) return undefined
+    const ws = await this.workSchedules.findOne({
+      where: { id: emp.workScheduleId },
+    })
+    return ws?.weekendDays || undefined
+  }
 
   // أيام العمل الفعلية في مدى — الويك إند والعطلات الرسمية مستثناة
   // (للإجازات: المخصوم من الرصيد = أيام العمل فقط)
   async workingDaysBetween(
     branchId: number,
     fromDate: string,
-    toDate: string
+    toDate: string,
+    weekendOverride?: string
   ): Promise<{ total: number; working: number; skipped: string[] }> {
     const from = new Date(`${fromDate}T12:00:00`)
     const to = new Date(`${toDate}T12:00:00`)
     // حمّل السياق مرة واحدة (لا استعلام لكل يوم داخل الحلقة)
-    const ctx = await this.nonWorkingContext(branchId)
+    const ctx = await this.nonWorkingContext(branchId, weekendOverride)
     let total = 0
     let working = 0
     const skipped: string[] = []
@@ -121,13 +134,21 @@ export class AttendanceService {
 
   // §2.4: يوم عطلة؟ (ويك إند من الإعدادات/الفرع + العطلات الرسمية + قواعد الاستثناء)
   // ممنوع يتحسب تأخير أو غياب فيه حتى لو فيه بصمة
-  async isNonWorkingDay(date: string, branchId: number): Promise<boolean> {
-    const ctx = await this.nonWorkingContext(branchId)
+  async isNonWorkingDay(
+    date: string,
+    branchId: number,
+    weekendOverride?: string
+  ): Promise<boolean> {
+    const ctx = await this.nonWorkingContext(branchId, weekendOverride)
     return this.evalNonWorking(date, branchId, ctx)
   }
 
   // يحمّل مصادر «يوم العطلة» مرة واحدة (ويك إند + عطلات + قواعد استثناء)
-  private async nonWorkingContext(branchId: number): Promise<{
+  // weekendOverride: عطلة جدول عمل الموظف — تغلب إعداد الفرع/العام إن وُجدت
+  private async nonWorkingContext(
+    branchId: number,
+    weekendOverride?: string
+  ): Promise<{
     weekend: string[]
     holidays: PublicHoliday[]
     rules: ScheduleExceptionRule[]
@@ -135,6 +156,7 @@ export class AttendanceService {
     let weekend = await this.configValue('attendance.weekend_days', 'FRI,SAT')
     const branch = await this.branches.findOne({ where: { id: branchId } })
     if ((branch as any)?.weekendDays) weekend = (branch as any).weekendDays
+    if (weekendOverride) weekend = weekendOverride // جدول الموظف يغلب
     const holidays = await this.holidays.find()
     const rules = await this.scheduleRules.find({
       where: { isActive: true },
@@ -442,7 +464,22 @@ export class AttendanceService {
     if (entry) {
       return { name: entry.shiftName, start: entry.startTime, end: entry.endTime }
     }
+    // بلا وردية مجدولة: ساعات جدول عمل الموظف إن وُجد، وإلا الافتراضية
+    const emp = await this.employees.findOne({ where: { id: employeeId } })
+    if (emp?.workScheduleId) {
+      const ws = await this.workSchedules.findOne({
+        where: { id: emp.workScheduleId },
+      })
+      if (ws) return { name: ws.name, start: ws.startTime, end: ws.endTime }
+    }
     return DEFAULT_SHIFT
+  }
+
+  // أيام العمل لموظف بعينه — يشتقّ عطلته الأسبوعية من جدول عمله (للإجازات)
+  async workingDaysForEmployee(employeeId: number, fromDate: string, toDate: string) {
+    const emp = await this.employees.findOne({ where: { id: employeeId } })
+    const weekend = await this.employeeWeekend(employeeId)
+    return this.workingDaysBetween(emp?.branchId ?? 1, fromDate, toDate, weekend)
   }
 
   // ===== تجاوز وردية يوم بعينه (أو مسحه) + إعادة حساب اليوم فوراً =====
@@ -815,7 +852,19 @@ export class AttendanceService {
     let workMinutes = 0
     let leaveConflict = false
 
-    const isHoliday = await this.isNonWorkingDay(date, emp.branchId)
+    // عطلة اليوم بحسب جدول عمل الموظف إن وُجد (يغلب الفرع/العام)
+    const empWeekend = emp.workScheduleId
+      ? (
+          await this.workSchedules.findOne({
+            where: { id: emp.workScheduleId },
+          })
+        )?.weekendDays
+      : undefined
+    const isHoliday = await this.isNonWorkingDay(
+      date,
+      emp.branchId,
+      empWeekend ?? undefined
+    )
 
     if (isFullLeaveDay) {
       status = 'leave'

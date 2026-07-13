@@ -321,11 +321,12 @@ export class RequestsService {
         const emp = await this.employees.findOne({
           where: { id: req.requesterId },
         })
-        const { working, skipped } = await this.attendance.workingDaysBetween(
-          emp?.branchId ?? 1,
-          String(p.fromDate),
-          String(p.toDate)
-        )
+        const { working, skipped } =
+          await this.attendance.workingDaysForEmployee(
+            req.requesterId,
+            String(p.fromDate),
+            String(p.toDate)
+          )
         if (working === 0) {
           throw new BadRequestException(
             'كل الأيام المختارة عطلات (ويك إند/عطلة رسمية) — لا حاجة لطلب إجازة'

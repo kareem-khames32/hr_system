@@ -150,6 +150,7 @@ export interface ApiEmployee {
   id: number; employeeCode: string; fullName: string; fullNameEn?: string
   email?: string; phone?: string; nationalId?: string; jobTitle?: string
   branchId: number; departmentId?: number; teamId?: number
+  workScheduleId?: number
   managerEmployeeId?: number; joinDate?: string; status: string
   basicSalary?: number; payMethod: string; bankName?: string; iban?: string
   housingAllowance?: number; transportAllowance?: number; otherAllowance?: number
@@ -446,7 +447,7 @@ export const createDocument = (d: Partial<ApiDocument>) => post<ApiDocument>('/d
 export const updateDocument = (id: number, d: Partial<ApiDocument>) => patch<ApiDocument>(`/documents/${id}`, d)
 
 // ===== الكتالوجات (عطلات/ورديات/أجهزة/مسميات/درجات/أنواع أصول) =====
-export type CatalogKind = 'holidays' | 'shifts' | 'devices' | 'job-titles' | 'grades' | 'asset-types' | 'permission-types' | 'cost-centers'
+export type CatalogKind = 'holidays' | 'shifts' | 'devices' | 'job-titles' | 'grades' | 'asset-types' | 'permission-types' | 'cost-centers' | 'work-schedules'
 export const fetchCatalog = <T = any>(kind: CatalogKind) => get<T[]>(`/catalogs/${kind}`)
 export const createCatalogItem = <T = any>(kind: CatalogKind, item: Record<string, unknown>) =>
   post<T>(`/catalogs/${kind}`, item)

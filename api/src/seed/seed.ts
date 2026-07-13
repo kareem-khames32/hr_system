@@ -60,6 +60,7 @@ import {
   JobTitle,
   PublicHoliday,
   Shift,
+  WorkSchedule,
 } from '../assets/assets.entities'
 import { ensureLeaveBalance, seedRequests } from './seed-requests'
 
@@ -120,6 +121,7 @@ const common = {
     EmployeeDocument,
     PublicHoliday,
     Shift,
+    WorkSchedule,
     BiometricDevice,
     JobTitle,
     Grade,
@@ -305,6 +307,28 @@ async function main() {
       { name: 'مسائي', startTime: '14:00', endTime: '23:00' },
     ])
     console.log('✓ كتالوج الورديات')
+  }
+  const workSchedulesRepo = ds.getRepository(WorkSchedule)
+  if ((await workSchedulesRepo.count()) === 0) {
+    await workSchedulesRepo.save([
+      {
+        name: 'الجدول الأساسي',
+        description: 'جمعة وسبت إجازة',
+        weekendDays: 'FRI,SAT',
+        startTime: '08:00',
+        endTime: '17:00',
+        isDefault: true,
+      },
+      {
+        name: 'جدول السبت فقط',
+        description: 'السبت فقط إجازة — الجمعة دوام',
+        weekendDays: 'SAT',
+        startTime: '08:00',
+        endTime: '16:00',
+        isDefault: false,
+      },
+    ])
+    console.log('✓ جداول العمل')
   }
   const holidaysRepo = ds.getRepository(PublicHoliday)
   if ((await holidaysRepo.count()) === 0) {

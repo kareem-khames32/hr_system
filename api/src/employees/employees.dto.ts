@@ -107,6 +107,11 @@ export class CreateEmployeeDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
+  workScheduleId?: number
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
   photoFileId?: number
 
   @IsOptional()
@@ -281,6 +286,11 @@ export class UpdateEmployeeDto {
   @Type(() => Number)
   @IsInt()
   costCenterId?: number
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  workScheduleId?: number
 
   @IsOptional()
   @Type(() => Number)
