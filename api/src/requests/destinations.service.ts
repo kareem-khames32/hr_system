@@ -21,6 +21,7 @@ import {
 import { Asset, CustodyAssignment } from './entities/custody.entities'
 import { LetterRequest } from './entities/letter.entities'
 import { Employee } from '../employees/employee.entity'
+import { User } from '../auth/user.entity'
 
 // ناتج تنفيذ الوجهة: المرجع الدائم + هل اكتمل فوراً أم ينتظر (سريان/تأكيد استلام)
 export interface DestinationResult {
@@ -393,6 +394,10 @@ export class DestinationsService {
         type.code === 'RETIREMENT'
           ? 'تقاعد'
           : String(payload.reason ?? type.nameAr)
+      // عطّل حساب الدخول المرتبط — المؤرشف لا يسجّل دخولاً بعد الآن
+      await em
+        .getRepository(User)
+        .update({ employeeId: emp.id }, { isActive: false })
     }
     await em.getRepository(Employee).save(emp)
     const hist = await em.getRepository(EmployeeStatusHistory).save({

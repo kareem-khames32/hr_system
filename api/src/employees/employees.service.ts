@@ -6,6 +6,7 @@ import {
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Not, Repository } from 'typeorm'
+import { User } from '../auth/user.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
@@ -31,7 +32,9 @@ export class EmployeesService {
     @InjectRepository(RequestsConfig)
     private readonly config: Repository<RequestsConfig>,
     @InjectRepository(EmployeeStatusHistory)
-    private readonly history: Repository<EmployeeStatusHistory>
+    private readonly history: Repository<EmployeeStatusHistory>,
+    @InjectRepository(User)
+    private readonly users: Repository<User>
   ) {}
 
   // العزل بالفرع: branchScope = null → الكل (super_admin فقط)
@@ -270,7 +273,10 @@ export class EmployeesService {
     emp.isActive = false
     emp.archivedAt = new Date()
     emp.archiveReason = reason?.trim() || 'أرشفة يدوية'
-    return this.employees.save(emp)
+    const saved = await this.employees.save(emp)
+    // عطّل حساب الدخول المرتبط — المؤرشف لا يسجّل دخولاً بعد الآن
+    await this.users.update({ employeeId: emp.id }, { isActive: false })
+    return saved
   }
 
   // العودة على رأس العمل: مؤرشف أو منتهي الخدمة يرجع نشطاً
@@ -286,6 +292,8 @@ export class EmployeesService {
     emp.archivedAt = null as any
     emp.archiveReason = null as any
     await this.employees.save(emp)
+    // أعِد تفعيل حساب الدخول المرتبط — العائد على رأس العمل يسجّل دخولاً
+    await this.users.update({ employeeId: emp.id }, { isActive: true })
     await this.history.save({
       employeeId: emp.id,
       oldStatus: old,

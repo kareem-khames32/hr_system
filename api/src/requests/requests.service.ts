@@ -150,6 +150,13 @@ export class RequestsService {
     const requester = await this.employees.findOne({
       where: { id: requesterId },
     })
+    // الموظف المنتهي/المؤرشف (isActive=false) لا يقدّم طلبات جديدة — حارس على
+    // مستوى الفعل لتوكن قديم صالح (فترة الإشعار notice_period تبقى نشطة فتُقدّم)
+    if (requester && !requester.isActive) {
+      throw new ForbiddenException(
+        'حساب الموظف غير نشط (منتهي/مؤرشف) — لا يقدّم طلبات جديدة'
+      )
+    }
     if (!this.audienceAllows(type, user, requester)) {
       throw new ForbiddenException('هذا النوع من الطلبات غير متاح لك')
     }

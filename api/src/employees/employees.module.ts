@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
+import { User } from '../auth/user.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
@@ -14,6 +15,7 @@ import { EmployeesService } from './employees.service'
   imports: [
     TypeOrmModule.forFeature([
       Employee,
+      User,
       Branch,
       Department,
       Team,

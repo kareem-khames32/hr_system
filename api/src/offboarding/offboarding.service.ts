@@ -10,6 +10,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { userHasPerm } from '../auth/guards'
+import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
 import { ApproverResolver } from '../requests/approver-resolver.service'
 import { CustodyAssignment } from '../requests/entities/custody.entities'
@@ -49,6 +50,8 @@ export class OffboardingService {
     private readonly lines: Repository<SettlementLine>,
     @InjectRepository(Employee)
     private readonly employees: Repository<Employee>,
+    @InjectRepository(User)
+    private readonly users: Repository<User>,
     @InjectRepository(CustodyAssignment)
     private readonly custody: Repository<CustodyAssignment>,
     @InjectRepository(LeaveBalance)
@@ -432,6 +435,8 @@ export class OffboardingService {
     emp.archivedAt = new Date()
     emp.archiveReason = `انتهاء خدمة — آخر يوم عمل ${kase.lastWorkingDay}`
     await this.employees.save(emp)
+    // عطّل حساب الدخول المرتبط — المنتهي لا يسجّل دخولاً ولا يقدّم طلبات
+    await this.users.update({ employeeId: emp.id }, { isActive: false })
     await this.history.save({
       employeeId: emp.id,
       oldStatus: old,

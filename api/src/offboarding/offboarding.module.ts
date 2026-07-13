@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
+import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
@@ -26,6 +27,7 @@ import { OffboardingService } from './offboarding.service'
       ClearanceItem,
       SettlementLine,
       Employee,
+      User,
       CustodyAssignment,
       LeaveBalance,
       OvertimeEntry,
