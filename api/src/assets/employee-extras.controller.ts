@@ -13,6 +13,7 @@ import {
   Transfer,
 } from '../requests/entities/employment.entities'
 import { Leave, LeaveBalance } from '../requests/entities/leave.entities'
+import { LeaveBalancesService } from '../requests/leave-balances.service'
 import { Loan, LoanInstallment } from '../requests/entities/financial.entities'
 import { EmployeeDocument } from './assets.entities'
 
@@ -33,6 +34,7 @@ export class EmployeeExtrasController {
     @InjectRepository(Leave) private readonly leaves: Repository<Leave>,
     @InjectRepository(LeaveBalance)
     private readonly balances: Repository<LeaveBalance>,
+    private readonly leaveBalances: LeaveBalancesService,
     @InjectRepository(EmployeeDocument)
     private readonly docs: Repository<EmployeeDocument>,
     @InjectRepository(Loan) private readonly loans: Repository<Loan>,
@@ -106,14 +108,25 @@ export class EmployeeExtrasController {
       throw new ForbiddenException('لا تملك صلاحية عرض ملفات الموظفين')
     }
     const employee = await this.employeesService.findOne(id, branchScopeOf(user))
-    const [empLeaves, empBalances, empHistory, empDocs, empLoans] =
+    const [empLeaves, viewBalances, empHistory, empDocs, empLoans] =
       await Promise.all([
         this.leaves.find({ where: { employeeId: id }, order: { fromDate: 'DESC' } }),
-        this.balances.find({ where: { employeeId: id } }),
+        // الأرصدة بالاستحقاق الشهري المتراكم (لا الخام) — نفس ما يراه الموظف
+        this.leaveBalances.allBalances(id),
         this.history.find({ where: { employeeId: id }, order: { changedAt: 'DESC' } }),
         this.docs.find({ where: { employeeId: id }, order: { id: 'DESC' } }),
         this.loans.find({ where: { employeeId: id }, order: { id: 'DESC' } }),
       ])
+    // نُبقي شكل الأرصدة كما يتوقعه الفرونت (خام) لكن بقيَم متراكمة صحيحة
+    const empBalances = viewBalances.map((b: any) => ({
+      balanceType: b.balanceType,
+      period: b.period,
+      entitled: b.entitled, // المتراكم حتى اليوم (لا السنة الكاملة)
+      taken: b.totalTaken ?? b.taken ?? 0,
+      openingDays: b.opening?.days ?? 0,
+      openingTaken: b.opening?.taken ?? 0,
+      openingExpiry: b.opening?.expiry ?? null,
+    }))
     const custodyRows = await this.custody.find({
       where: { employeeId: id },
       order: { assignedAt: 'DESC' },

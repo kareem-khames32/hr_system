@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
+import { RequestsModule } from '../requests/requests.module'
 import { AttendanceDay, AttendancePunch, PermissionType } from '../attendance/attendance.entities'
 import { Employee } from '../employees/employee.entity'
 import { EmployeesModule } from '../employees/employees.module'
@@ -38,6 +39,7 @@ import { PortalController } from './portal.controller'
 @Module({
   imports: [
     EmployeesModule,
+    RequestsModule,
     TypeOrmModule.forFeature([
       Asset,
       CustodyAssignment,
