@@ -1,6 +1,6 @@
 'use client'
 
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import {
   Building2,
   Mail,
@@ -9,6 +9,7 @@ import {
   EyeOff,
   LogIn,
   AlertCircle,
+  Clock,
 } from 'lucide-react'
 import { login, saveSession, ApiError } from '@/lib/api'
 
@@ -19,6 +20,17 @@ export default function LoginPage() {
   const [rememberMe, setRememberMe] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  // انتهت الجلسة؟ (وُجّهنا من apiFetch بعد 401 بـ ?expired=1)
+  const [expired, setExpired] = useState(false)
+
+  useEffect(() => {
+    if (
+      typeof window !== 'undefined' &&
+      new URLSearchParams(window.location.search).get('expired')
+    ) {
+      setExpired(true)
+    }
+  }, [])
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -56,6 +68,13 @@ export default function LoginPage() {
           <p className="text-gray-500 text-center mb-8">قم بتسجيل الدخول للمتابعة</p>
 
           <form onSubmit={handleSubmit} className="space-y-6">
+            {/* انتهت الجلسة — تحويل تلقائي من صفحة محمية بعد 401 */}
+            {expired && !error && (
+              <div className="flex items-center gap-2 bg-amber-50 text-amber-700 text-sm rounded-xl px-4 py-3">
+                <Clock size={18} className="shrink-0" />
+                <span>انتهت جلستك — سجّل الدخول من جديد للمتابعة</span>
+              </div>
+            )}
             {/* خطأ تسجيل الدخول */}
             {error && (
               <div className="flex items-center gap-2 bg-red-50 text-red-700 text-sm rounded-xl px-4 py-3">

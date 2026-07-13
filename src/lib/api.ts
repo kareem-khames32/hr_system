@@ -79,6 +79,20 @@ export async function apiFetch<T>(
   })
 
   if (!res.ok) {
+    // انتهاء الجلسة/توكن غير صالح (401 ومعنا توكن): امسح الجلسة ووجّه لصفحة
+    // الدخول بدل تناثر «Unauthorized» في كل ويدجت. نستثني نداء تسجيل الدخول
+    // نفسه (401 هناك = بيانات خاطئة تُعرض كما هي)
+    if (
+      res.status === 401 &&
+      token &&
+      !path.includes('/auth/login') &&
+      typeof window !== 'undefined'
+    ) {
+      clearSession()
+      if (!window.location.pathname.startsWith('/login')) {
+        window.location.href = '/login?expired=1'
+      }
+    }
     let message = `خطأ في الاتصال (${res.status})`
     try {
       const body = await res.json()
