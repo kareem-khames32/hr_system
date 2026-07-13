@@ -247,6 +247,16 @@ export class PayrollService {
             installmentIds: installmentsDue.map((i) => i.id),
             obligationIds: pendingObligations.map((o) => o.id),
             absentDates: absentRows.map((r) => r.date),
+            // تتبّع مصدر الخصم للتدقيق/الاعتراض: صفوف الحضور المخصومة والإجازات
+            attendanceDayIds: attRows
+              .filter(
+                (r) =>
+                  r.lateMinutes > 0 ||
+                  (r.deductibleMinutes ?? 0) > 0 ||
+                  r.status === 'absent'
+              )
+              .map((r) => r.id),
+            unpaidLeaveIds: unpaidLeaves.map((l) => l.id),
           }),
         })
       )
