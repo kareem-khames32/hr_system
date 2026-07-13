@@ -99,16 +99,18 @@ export default function DeductionsPage() {
     Number(i.latenessDeduction) +
     Number(i.absenceDeduction ?? 0) +
     Number(i.unpaidLeaveDeduction) +
-    Number(i.loanInstallments)
+    Number(i.loanInstallments) +
+    Number(i.otherDeductions ?? 0)
 
   const totals = {
     lateness: items.reduce((s, i) => s + Number(i.latenessDeduction), 0),
     absence: items.reduce((s, i) => s + Number(i.absenceDeduction ?? 0), 0),
     unpaidLeave: items.reduce((s, i) => s + Number(i.unpaidLeaveDeduction), 0),
     loans: items.reduce((s, i) => s + Number(i.loanInstallments), 0),
+    other: items.reduce((s, i) => s + Number(i.otherDeductions ?? 0), 0),
   }
   const grandTotal =
-    totals.lateness + totals.absence + totals.unpaidLeave + totals.loans
+    totals.lateness + totals.absence + totals.unpaidLeave + totals.loans + totals.other
   const affectedCount = items.filter((i) => totalOf(i) > 0).length
   const openObjections = objections.filter((o) =>
     ['SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO'].includes(o.status)
@@ -310,6 +312,10 @@ export default function DeductionsPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-danger-100">أقساط السلف:</span>
                   <span className="font-bold">{totals.loans.toLocaleString()} {currency}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-danger-100">خصومات أخرى (عهدة/غرامة):</span>
+                  <span className="font-bold">{totals.other.toLocaleString()} {currency}</span>
                 </div>
                 <div className="border-t border-white/20 pt-3 mt-3">
                   <div className="flex items-center justify-between">

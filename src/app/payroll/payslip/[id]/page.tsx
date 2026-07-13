@@ -119,6 +119,11 @@ export default function PayslipPage({ params }: { params: { id: string } }) {
           nameEn: `Overtime (${Number(item.overtimeHours)} h)`,
           amount: Number(item.overtimeAmount),
         },
+        {
+          name: 'إضافات أخرى (مكافآت/بدلات)',
+          nameEn: 'Other Additions',
+          amount: Number(item.otherAdditions ?? 0),
+        },
       ]
     : []
 
@@ -140,6 +145,11 @@ export default function PayslipPage({ params }: { params: { id: string } }) {
           amount: Number(item.unpaidLeaveDeduction),
         },
         { name: 'أقساط السلف', nameEn: 'Loan Installments', amount: Number(item.loanInstallments) },
+        {
+          name: 'خصومات أخرى (عهدة/غرامة/تسوية)',
+          nameEn: 'Other Deductions',
+          amount: Number(item.otherDeductions ?? 0),
+        },
       ]
     : []
 

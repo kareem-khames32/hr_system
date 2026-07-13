@@ -56,7 +56,8 @@ export default function MyPayslipsPage() {
     Number(i.latenessDeduction) +
     Number(i.absenceDeduction ?? 0) +
     Number(i.unpaidLeaveDeduction) +
-    Number(i.loanInstallments)
+    Number(i.loanInstallments) +
+    Number(i.otherDeductions ?? 0)
 
   return (
     <MainLayout>
