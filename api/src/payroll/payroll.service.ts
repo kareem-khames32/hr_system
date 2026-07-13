@@ -13,6 +13,7 @@ import { AttendanceDay } from '../attendance/attendance.entities'
 import { Employee } from '../employees/employee.entity'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
 import {
+  EmployeeObligation,
   Loan,
   LoanInstallment,
 } from '../requests/entities/financial.entities'
@@ -43,6 +44,8 @@ export class PayrollService {
     private readonly installments: Repository<LoanInstallment>,
     @InjectRepository(Loan)
     private readonly loans: Repository<Loan>,
+    @InjectRepository(EmployeeObligation)
+    private readonly obligations: Repository<EmployeeObligation>,
     @InjectRepository(RequestsConfig)
     private readonly config: Repository<RequestsConfig>,
     private readonly attendanceService: AttendanceService
@@ -188,13 +191,33 @@ export class PayrollService {
         installmentsDue.reduce((s, i) => s + Number(i.amount), 0)
       )
 
+      // 5) دفتر المديونيات: بنود PENDING سرت فترتها (effectiveDate ضمن الفترة
+      // أو فارغة) — DEBIT خصم، CREDIT إضافة. تُقيَّد APPLIED عند الصرف فقط.
+      const pendingObligations = (
+        await this.obligations.find({
+          where: { employeeId: emp.id, status: 'PENDING' },
+        })
+      ).filter((o) => !o.effectiveDate || o.effectiveDate <= endDate)
+      const otherDeductions = round2(
+        pendingObligations
+          .filter((o) => o.type === 'DEBIT')
+          .reduce((s, o) => s + Number(o.amount), 0)
+      )
+      const otherAdditions = round2(
+        pendingObligations
+          .filter((o) => o.type === 'CREDIT')
+          .reduce((s, o) => s + Number(o.amount), 0)
+      )
+
       const netPay = round2(
         gross +
-          otAmount -
+          otAmount +
+          otherAdditions -
           latenessDeduction -
           absenceDeduction -
           unpaidDeduction -
-          loanDeduction
+          loanDeduction -
+          otherDeductions
       )
       totalNet = round2(totalNet + netPay)
 
@@ -213,6 +236,8 @@ export class PayrollService {
           unpaidLeaveDays: unpaidDays,
           unpaidLeaveDeduction: unpaidDeduction,
           loanInstallments: loanDeduction,
+          otherDeductions,
+          otherAdditions,
           netPay,
           payMethod: emp.payMethod ?? 'transfer',
           breakdown: JSON.stringify({
@@ -220,6 +245,7 @@ export class PayrollService {
             hourRate: round2(hourRate),
             overtimeEntryIds: otRows.map((r) => r.id),
             installmentIds: installmentsDue.map((i) => i.id),
+            obligationIds: pendingObligations.map((o) => o.id),
             absentDates: absentRows.map((r) => r.date),
           }),
         })
@@ -268,6 +294,13 @@ export class PayrollService {
         await this.installments.update(
           { id: In(breakdown.installmentIds) },
           { paid: true }
+        )
+      }
+      // بنود دفتر المديونيات → APPLIED (تُستهلك مرة واحدة، لا تتكرر)
+      if (breakdown.obligationIds?.length) {
+        await this.obligations.update(
+          { id: In(breakdown.obligationIds), status: 'PENDING' },
+          { status: 'APPLIED', appliedPayrollRunId: runId, appliedAt: new Date() }
         )
       }
     }

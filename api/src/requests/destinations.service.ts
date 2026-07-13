@@ -17,7 +17,12 @@ import {
   AttendanceCorrection,
   OvertimeEntry,
 } from './entities/attendance.entities'
-import { Loan, LoanInstallment } from './entities/financial.entities'
+import {
+  EmployeeObligation,
+  Loan,
+  LoanInstallment,
+  ObligationType,
+} from './entities/financial.entities'
 import {
   EmployeeStatusHistory,
   Promotion,
@@ -630,6 +635,88 @@ export class DestinationsService {
 
   // ========== سجل الـ handlers — الأكواد من كتالوج الطلبات ==========
 
+  // ========== المالية → دفتر المديونيات ==========
+
+  // بند مالي لمرة واحدة (مكافأة/بدل/مصروفات/تسوية) → قيد PENDING في الدفتر
+  // يستهلكه المسير. payload: amount (>0)، type اختياري لتجاوز الافتراضي.
+  private obligationHandler =
+    (defaultType: ObligationType, category: string, labelPrefix: string): Handler =>
+    async (em, req, _t, payload) => {
+      const amount = Number(payload.amount ?? 0)
+      const type: ObligationType =
+        payload.type === 'DEBIT' || payload.type === 'CREDIT'
+          ? payload.type
+          : defaultType
+      if (amount > 0) {
+        await em.getRepository(EmployeeObligation).save({
+          employeeId: req.requesterId,
+          type,
+          category,
+          amount: Math.round(amount * 100) / 100,
+          label: `${labelPrefix}${payload.reason || payload.description ? ': ' + (payload.reason ?? payload.description) : ''}`,
+          status: 'PENDING',
+          sourceRequestId: req.id,
+          effectiveDate: payload.effectiveDate ?? null,
+        })
+      }
+      return {
+        ref: refOf('REQ', req.id),
+        completed: true,
+        note:
+          amount > 0
+            ? `${type === 'DEBIT' ? 'خصم' : 'إضافة'} ${amount} في دفتر المديونيات`
+            : 'بلا مبلغ — سجل عام',
+      }
+    }
+
+  // بلاغ فقد/تلف العهدة المعتمد: يعلّم الإسناد LOST، يقاعِد الأصل، ويقيّد قيمته
+  // كمديونية DEBIT على حائز العهدة يستهلكها المسير
+  private custodyFinanceHandler: Handler = async (em, req, _t, payload) => {
+    const assignmentId = Number(payload.assignmentId)
+    const row = assignmentId
+      ? await em.getRepository(CustodyAssignment).findOne({ where: { id: assignmentId } })
+      : null
+    if (!row) {
+      return {
+        ref: refOf('REQ', req.id),
+        completed: true,
+        note: 'إسناد العهدة غير محدد',
+      }
+    }
+    const asset = await em.getRepository(Asset).findOne({ where: { id: row.assetId } })
+    if (
+      ['PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'ACTIVE', 'RETURN_REQUESTED'].includes(
+        row.status
+      )
+    ) {
+      row.status = 'LOST'
+      row.returnedAt = new Date()
+      row.condition = String(payload.description ?? 'مفقودة')
+      await em.getRepository(CustodyAssignment).save(row)
+      await em
+        .getRepository(Asset)
+        .update({ id: row.assetId }, { currentHolderId: null as any, status: 'RETIRED' })
+    }
+    const val = Number(asset?.value ?? 0)
+    if (val > 0) {
+      await em.getRepository(EmployeeObligation).save({
+        employeeId: row.employeeId,
+        type: 'DEBIT',
+        category: 'custody_shortfall',
+        amount: Math.round(val * 100) / 100,
+        label: `قيمة عهدة مفقودة/تالفة: ${asset?.name ?? '#' + row.assetId}`,
+        status: 'PENDING',
+        sourceRequestId: req.id,
+        sourceRef: `asset:${row.assetId}`,
+      })
+    }
+    return {
+      ref: refOf('REQ', req.id),
+      completed: true,
+      note: val > 0 ? `قُيّدت ${val} كمديونية عهدة على الموظف` : 'الأصل بلا قيمة مسجلة',
+    }
+  }
+
   private readonly handlers: Record<string, Handler> = {
     // إجازات
     leave_calendar_balance: this.leaveHandler(true),
@@ -659,6 +746,12 @@ export class DestinationsService {
     custody_assignments_ack: this.custodyAssignHandler,
     custody_assignments: this.custodyReturnHandler,
     custody_transfer: this.custodyTransferHandler,
-    // الباقي (تدريب/ER/مصروفات...) يسقط على السجل العام REQ لحين بناء موديولاته
+    custody_finance: this.custodyFinanceHandler,
+    // مالية → دفتر المديونيات (بنود لمرة واحدة يستهلكها المسير)
+    payroll_bonus: this.obligationHandler('CREDIT', 'bonus', 'مكافأة'),
+    payroll_allowance: this.obligationHandler('CREDIT', 'allowance', 'بدل'),
+    expense_register: this.obligationHandler('CREDIT', 'expense', 'مصروفات'),
+    payroll_adjustment: this.obligationHandler('CREDIT', 'adjustment', 'تسوية'),
+    // الباقي (تدريب/ER...) يسقط على السجل العام REQ لحين بناء موديولاته
   }
 }

@@ -100,6 +100,14 @@ export class PayrollItem {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
   loanInstallments: number
 
+  // من دفتر المديونيات: خصومات أخرى (عهدة مفقودة/غرامة/تسوية) وإضافات أخرى
+  // (مكافأة/بدل/مصروفات) لمرة واحدة
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
+  otherDeductions: number
+
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
+  otherAdditions: number
+
   @Column({ type: 'decimal', precision: 18, scale: 2 })
   netPay: number
 
