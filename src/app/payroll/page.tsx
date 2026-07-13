@@ -197,7 +197,10 @@ export default function PayrollPage() {
     (acc, item) => {
       const gross = n(item.basicSalary) + allowancesOf(item) + n(item.overtimeAmount)
       const deductions =
-        n(item.latenessDeduction) + n(item.unpaidLeaveDeduction) + n(item.loanInstallments)
+        n(item.latenessDeduction) +
+        n(item.absenceDeduction) +
+        n(item.unpaidLeaveDeduction) +
+        n(item.loanInstallments)
       return {
         totalEarnings: acc.totalEarnings + gross,
         totalDeductions: acc.totalDeductions + deductions,
@@ -599,6 +602,7 @@ export default function PayrollPage() {
                   <th className="text-center px-4 py-4">العمل الإضافي</th>
                   <th className="text-center px-4 py-4 bg-success-50">الإجمالي</th>
                   <th className="text-center px-4 py-4">خصم التأخير</th>
+                  <th className="text-center px-4 py-4">خصم الغياب</th>
                   <th className="text-center px-4 py-4">إجازة بدون راتب</th>
                   <th className="text-center px-4 py-4">أقساط السلف</th>
                   <th className="text-center px-4 py-4 bg-danger-50">إجمالي الخصم</th>
@@ -621,7 +625,10 @@ export default function PayrollPage() {
                   const name = emp?.fullName ?? `موظف #${item.employeeId}`
                   const gross = n(item.basicSalary) + allowancesOf(item) + n(item.overtimeAmount)
                   const totalDeductions =
-                    n(item.latenessDeduction) + n(item.unpaidLeaveDeduction) + n(item.loanInstallments)
+                    n(item.latenessDeduction) +
+                    n(item.absenceDeduction) +
+                    n(item.unpaidLeaveDeduction) +
+                    n(item.loanInstallments)
 
                   return (
                   <tr key={item.id} className="table-row">
@@ -662,6 +669,16 @@ export default function PayrollPage() {
                         </span>
                         {n(item.lateMinutes) > 0 && (
                           <span className="text-xs text-danger-600">{n(item.lateMinutes)} دقيقة</span>
+                        )}
+                      </div>
+                    </td>
+                    <td className="table-cell text-center font-mono">
+                      <div className="flex flex-col items-center">
+                        <span className={n(item.absenceDeduction) > 0 ? 'text-danger-600' : ''}>
+                          {n(item.absenceDeduction) > 0 ? n(item.absenceDeduction).toLocaleString() : '-'}
+                        </span>
+                        {n(item.absenceDays) > 0 && (
+                          <span className="text-xs text-danger-600">{n(item.absenceDays)} يوم</span>
                         )}
                       </div>
                     </td>
@@ -744,6 +761,9 @@ export default function PayrollPage() {
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
                     {filteredItems.reduce((s, r) => s + n(r.latenessDeduction), 0).toLocaleString()}
+                  </td>
+                  <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
+                    {filteredItems.reduce((s, r) => s + n(r.absenceDeduction), 0).toLocaleString()}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
                     {filteredItems.reduce((s, r) => s + n(r.unpaidLeaveDeduction), 0).toLocaleString()}
