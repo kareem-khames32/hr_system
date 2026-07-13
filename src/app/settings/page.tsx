@@ -66,8 +66,7 @@ const quickLinks = [
 // إعدادات المحرك — مفاتيح حقيقية من الباك إند مجمعة حسب التبويب
 const enginePanels: Record<string, string[]> = {
   attendance: [
-    'attendance.grace_minutes',
-    'overtime.detection_threshold_hours',
+    // السماحية وعتبة الأوفرتايم انتقلتا لكل وردية (شاشة الورديات)
     'overtime.biometric_requires_confirmation',
     'attendance.device_key',
   ],

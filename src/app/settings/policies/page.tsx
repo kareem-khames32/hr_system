@@ -32,6 +32,7 @@ interface PolicyGroup {
   icon: typeof Calendar
   iconBg: string
   iconColor: string
+  note?: string // ملاحظة تُعرض تحت العنوان (مثلاً: يُضبط من شاشة أخرى)
   fields: PolicyField[]
 }
 
@@ -62,8 +63,8 @@ const GROUPS: PolicyGroup[] = [
     icon: Clock,
     iconBg: 'bg-blue-50',
     iconColor: 'text-blue-500',
+    note: 'سماحية التأخير تُضبط لكل وردية على حدة من شاشة «الورديات».',
     fields: [
-      { key: 'attendance.grace_minutes', label: 'سماحية التأخير', type: 'number', unit: 'دقيقة', hint: 'التأخير ضمن هذه المدة لا يُحتسب' },
       { key: 'attendance.weekend_days', label: 'أيام نهاية الأسبوع', type: 'text', hint: 'رموز الأيام مفصولة بفاصلة — SUN,MON,TUE,WED,THU,FRI,SAT' },
       { key: 'payroll.late_deduction_enabled', label: 'خصم التأخير من الراتب', type: 'bool' },
     ],
@@ -73,8 +74,8 @@ const GROUPS: PolicyGroup[] = [
     icon: Timer,
     iconBg: 'bg-warning-50',
     iconColor: 'text-warning-500',
+    note: 'عتبة بدء الأوفرتايم تُضبط لكل وردية من شاشة «الورديات».',
     fields: [
-      { key: 'overtime.detection_threshold_hours', label: 'عتبة اكتشاف الأوفرتايم', type: 'number', unit: 'ساعة', hint: 'أقل من هذه المدة بعد الوردية لا يُكتشف كأوفرتايم' },
       { key: 'overtime.biometric_requires_confirmation', label: 'الأوفرتايم المكتشف يحتاج تأكيد المدير', type: 'bool' },
     ],
   },
@@ -274,6 +275,11 @@ export default function PoliciesPage() {
                     </div>
                     <h2 className="font-bold text-gray-800">{g.title}</h2>
                   </div>
+                  {g.note && (
+                    <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mb-3">
+                      {g.note}
+                    </p>
+                  )}
                   <div className="divide-y divide-gray-100">
                     {fields.map((f) => (
                       <div
