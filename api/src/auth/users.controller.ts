@@ -212,6 +212,15 @@ export class UsersController {
     if (dto.employeeId !== undefined) user.employeeId = dto.employeeId
     const perms = validatePermissions(dto.permissions)
     if (perms !== undefined) user.permissions = perms
+    // تغيير أمني (دور/صلاحيات/تعطيل/كلمة مرور) → أبطِل التوكنات القائمة فوراً
+    if (
+      dto.role !== undefined ||
+      perms !== undefined ||
+      dto.isActive !== undefined ||
+      dto.password
+    ) {
+      user.tokenVersion = (user.tokenVersion ?? 0) + 1
+    }
     const saved = await this.users.save(user)
     const { passwordHash: _ph, ...rest } = saved
     return rest

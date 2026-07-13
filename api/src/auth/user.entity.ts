@@ -37,6 +37,11 @@ export class User {
   @Column({ default: true })
   isActive: boolean
 
+  // إصدار التوكن — يُزاد عند تغيير الدور/الصلاحيات أو التعطيل ليُبطِل فوراً كل
+  // توكن قديم (بدل انتظار انتهاء الصلاحية 8 ساعات)
+  @Column({ default: 0 })
+  tokenVersion: number
+
   @Column({ type: 'datetime', nullable: true })
   lastLoginAt: Date
 }

@@ -194,6 +194,9 @@ export class RolesController {
       ...revokes.map((p) => ({ userId: id, permission: p, effect: 'REVOKE' as const })),
     ]
     if (rows.length > 0) await this.overrides.save(this.overrides.create(rows))
+    // تغيّرت الصلاحيات الفعلية → أبطِل التوكنات القائمة فوراً
+    user.tokenVersion = (user.tokenVersion ?? 0) + 1
+    await this.users.save(user)
     return this.userPermissions(id)
   }
 }

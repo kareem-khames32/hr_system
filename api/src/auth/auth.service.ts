@@ -19,6 +19,8 @@ export interface JwtPayload {
   employeeId: number | null
   // صلاحيات إضافية فوق الدور (أدوار وظيفية ممنوحة)
   permissions?: string[]
+  // إصدار التوكن وقت الإصدار — يُطابَق مع users.tokenVersion لإبطاله فوراً
+  tokenVersion?: number
 }
 
 @Injectable()
@@ -91,6 +93,7 @@ export class AuthService {
       branchId: user.branchId ?? null,
       employeeId: user.employeeId ?? null,
       permissions,
+      tokenVersion: user.tokenVersion ?? 0,
     }
 
     return {
