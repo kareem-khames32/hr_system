@@ -13,7 +13,7 @@ import { userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
 import { ApproverResolver } from '../requests/approver-resolver.service'
-import { CustodyAssignment } from '../requests/entities/custody.entities'
+import { Asset, CustodyAssignment } from '../requests/entities/custody.entities'
 import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
 import { Loan, LoanInstallment } from '../requests/entities/financial.entities'
@@ -54,6 +54,8 @@ export class OffboardingService {
     private readonly users: Repository<User>,
     @InjectRepository(CustodyAssignment)
     private readonly custody: Repository<CustodyAssignment>,
+    @InjectRepository(Asset)
+    private readonly assets: Repository<Asset>,
     @InjectRepository(LeaveBalance)
     private readonly balances: Repository<LeaveBalance>,
     @InjectRepository(OvertimeEntry)
@@ -337,7 +339,32 @@ export class OffboardingService {
       })
     }
 
-    // (−) خصومات موثقة في بنود الإخلاء (عهدة تالفة/مفقودة...)
+    // (−) قيمة العهدة المفقودة/التالفة — تُخصم آلياً من التصفية بقيمة الأصل
+    // (سابقاً كانت قيمة الأصل تضيع: write-off يعلّم LOST/DAMAGED بلا قيد مالي)
+    const lostCustody = await this.custody.find({
+      where: { employeeId: emp.id, status: In(['LOST', 'DAMAGED']) },
+    })
+    let custodyShortfall = 0
+    const lostNames: string[] = []
+    for (const c of lostCustody) {
+      const asset = await this.assets.findOne({ where: { id: c.assetId } })
+      const val = Number(asset?.value ?? 0)
+      if (val > 0) {
+        custodyShortfall += val
+        lostNames.push(asset?.name ?? `#${c.assetId}`)
+      }
+    }
+    if (custodyShortfall > 0) {
+      rows.push({
+        caseId: kase.id,
+        label: `قيمة عهدة مفقودة/تالفة (${lostNames.join('، ')})`,
+        type: 'DEBIT',
+        amount: round2(custodyShortfall),
+        isAuto: true,
+      })
+    }
+
+    // (−) خصومات موثقة يدوياً في بنود الإخلاء
     const blockedAmounts = await this.items.find({
       where: { caseId: kase.id },
     })

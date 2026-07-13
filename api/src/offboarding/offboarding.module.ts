@@ -7,7 +7,7 @@ import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { ApproverResolver } from '../requests/approver-resolver.service'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
-import { CustodyAssignment } from '../requests/entities/custody.entities'
+import { Asset, CustodyAssignment } from '../requests/entities/custody.entities'
 import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { Loan, LoanInstallment } from '../requests/entities/financial.entities'
 import { LeaveBalance } from '../requests/entities/leave.entities'
@@ -29,6 +29,7 @@ import { OffboardingService } from './offboarding.service'
       Employee,
       User,
       CustodyAssignment,
+      Asset,
       LeaveBalance,
       OvertimeEntry,
       Loan,
