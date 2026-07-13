@@ -225,6 +225,7 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
 
 export default function EmployeeForm({ mode, initial, onSubmit, submitting, error }: EmployeeFormProps) {
   const [currentStep, setCurrentStep] = useState(1)
+  const [stepError, setStepError] = useState('') // خطأ تحقق الخطوة
   // يستحق سنوي؟ — من بيانات الموظف في التعديل (افتراضي نعم)
   const [leaveEntitled, setLeaveEntitled] = useState(
     initial?.annualLeaveEntitled ?? true
@@ -462,7 +463,27 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     await onSubmit(buildPayload())
   }
 
+  // تحقق الحقول الإجبارية لكل خطوة قبل السماح بالتالي
+  const stepIssue = (step: number): string | null => {
+    if (step === 1 && !form.firstNameAr.trim()) {
+      return 'الاسم الأول مطلوب قبل المتابعة'
+    }
+    if (step === 2) {
+      if (!(form.employeeCode.trim() || form.fingerprintCode.trim())) {
+        return 'كود الموظف (أو كود البصمة) مطلوب'
+      }
+      if (!form.branchId) return 'اختر الفرع قبل المتابعة'
+    }
+    return null
+  }
+
   const nextStep = () => {
+    const issue = stepIssue(currentStep)
+    if (issue) {
+      setStepError(issue)
+      return
+    }
+    setStepError('')
     if (currentStep < steps.length) {
       setCurrentStep(currentStep + 1)
     }
@@ -475,7 +496,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
   }
 
   const isEdit = mode === 'edit'
-  const bannerError = error || catalogError
+  const bannerError = stepError || error || catalogError
 
   return (
     <MainLayout>
