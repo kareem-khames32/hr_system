@@ -818,43 +818,52 @@ export class AttendanceService {
         ? Number(sc.graceMinutes)
         : Number(await this.configValue('attendance.grace_minutes', '10'))
 
-    // كل لحظات البصمة لليوم: الفعلية + أي بصمة مطلوبة معتمدة (طلب «تصحيح/طلب
-    // بصمة» — وجودها = معتمدة، تُكتب فقط بعد اكتمال الطلب). الأقدم = حضور،
-    // الأحدث = انصراف — يعالج «نسي بصمة الحضور/الانصراف» بأمان
-    const instants = punches.map((p) => hhmmOf(p.punchTime))
+    // البصمات الخام (من الجهاز، بلا اتجاه) تُصنّف بالنوافذ/الافتراضي.
+    // التصحيحات اليدوية تصرّح باتجاهها (IN/OUT) صراحةً → تُحترم كما هي ولا
+    // يُعاد تصنيفها بالنوافذ (المستخدم قال «حضور» فهي حضور مهما كان وقتها)
+    const rawInstants = punches.map((p) => hhmmOf(p.punchTime))
     const corrections = await this.corrections.find({
       where: { employeeId, date },
       order: { id: 'ASC' },
     })
+    const corrIn: string[] = []
+    const corrOut: string[] = []
     for (const c of corrections) {
       try {
         const cp = JSON.parse(c.correctedPunch ?? '{}')
-        if (cp.in) instants.push(String(cp.in).slice(0, 5))
-        if (cp.out) instants.push(String(cp.out).slice(0, 5))
+        if (cp.in) corrIn.push(String(cp.in).slice(0, 5))
+        if (cp.out) corrOut.push(String(cp.out).slice(0, 5))
       } catch {
         /* تجاهل تصحيحاً تالفاً */
       }
     }
-    instants.sort()
-    // تصنيف البصمة: لو الوردية لها نوافذ دخول/خروج → البصمة داخل نافذة الدخول
-    // = حضور، وداخل نافذة الخروج = انصراف (فبصمة مسائية وحيدة = خروج لا دخول).
-    // غير كده: الأقدم = دخول والأحدث = خروج (السلوك الافتراضي)
+    rawInstants.sort()
+    corrIn.sort()
+    corrOut.sort()
     const inWin = (t: string, from?: string | null, to?: string | null) =>
       !!from && !!to && toMinutes(t) >= toMinutes(from) && toMinutes(t) <= toMinutes(to)
     // التصنيف بالنوافذ يتطلب النافذتين معاً — نافذة واحدة ناقصة تُسقط الجانب
     // الآخر بالكامل، فنرجع للسلوك الافتراضي حتى تُضبط النافذتان
     const hasWindows =
       !!(sc?.checkinFrom && sc?.checkinTo) && !!(sc?.checkoutFrom && sc?.checkoutTo)
+    // تصنيف البصمات الخام (دخول/خروج)
+    let rawIn: string | null
+    let rawOut: string | null
+    if (hasWindows && rawInstants.length > 0) {
+      const inHits = rawInstants.filter((t) => inWin(t, sc?.checkinFrom, sc?.checkinTo))
+      const outHits = rawInstants.filter((t) => inWin(t, sc?.checkoutFrom, sc?.checkoutTo))
+      rawIn = inHits.length ? inHits[0] : null
+      rawOut = outHits.length ? outHits[outHits.length - 1] : null
+    } else {
+      rawIn = rawInstants.length > 0 ? rawInstants[0] : null
+      rawOut = rawInstants.length > 1 ? rawInstants[rawInstants.length - 1] : null
+    }
+    // التصحيح اليدوي يغلب باتجاهه المصرَّح، وإلا البصمة الخام المصنَّفة
     let checkIn: string | null
     let checkOut: string | null
-    if (hasWindows && instants.length > 0) {
-      const inHits = instants.filter((t) => inWin(t, sc?.checkinFrom, sc?.checkinTo))
-      const outHits = instants.filter((t) => inWin(t, sc?.checkoutFrom, sc?.checkoutTo))
-      checkIn = inHits.length ? inHits[0] : null
-      checkOut = outHits.length ? outHits[outHits.length - 1] : null
-    } else {
-      checkIn = instants.length > 0 ? instants[0] : null
-      checkOut = instants.length > 1 ? instants[instants.length - 1] : null
+    {
+      checkIn = corrIn.length ? corrIn[0] : rawIn
+      checkOut = corrOut.length ? corrOut[corrOut.length - 1] : rawOut
     }
 
     // الإجازات المعتمدة المغطية لليوم: يوم كامل ← 'leave'،
