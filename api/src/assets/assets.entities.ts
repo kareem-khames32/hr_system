@@ -85,6 +85,37 @@ export class Shift {
   @Column({ length: 5 })
   endTime: string
 
+  // نوع الوردية: fixed = دوام ثابت (تأخير بمقارنة البداية)،
+  // flexible = مرنة (المهم إكمال requiredHours ساعة، والنقص خصم)
+  @Column({ length: 10, default: 'fixed' })
+  shiftMode: 'fixed' | 'flexible'
+
+  // ساعات العمل المطلوبة (للمرنة) — NULL = تُشتق من مدة الوردية
+  @Column({ type: 'decimal', precision: 4, scale: 2, nullable: true })
+  requiredHours: number
+
+  // سماحية التأخير بالدقائق لهذه الوردية — NULL = القيمة العامة
+  @Column({ nullable: true })
+  graceMinutes: number
+
+  // عتبة بدء الأوفرتايم بالساعات بعد نهاية الوردية — NULL = القيمة العامة
+  @Column({ type: 'decimal', precision: 4, scale: 2, nullable: true })
+  overtimeThresholdHours: number
+
+  // نوافذ تصنيف البصمة (اختياري) — بصمة داخل نافذة الدخول = حضور،
+  // وداخل نافذة الخروج = انصراف. NULL = المنطق الافتراضي (الأقدم/الأحدث)
+  @Column({ length: 5, nullable: true })
+  checkinFrom: string
+
+  @Column({ length: 5, nullable: true })
+  checkinTo: string
+
+  @Column({ length: 5, nullable: true })
+  checkoutFrom: string
+
+  @Column({ length: 5, nullable: true })
+  checkoutTo: string
+
   @Column({ default: true })
   isActive: boolean
 }

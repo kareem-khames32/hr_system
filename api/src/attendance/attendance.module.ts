@@ -1,6 +1,6 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
-import { BiometricDevice, PublicHoliday, WorkSchedule } from '../assets/assets.entities'
+import { BiometricDevice, PublicHoliday, Shift, WorkSchedule } from '../assets/assets.entities'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { AttendanceCorrection, OvertimeEntry } from '../requests/entities/attendance.entities'
@@ -40,6 +40,7 @@ import { DeviceSyncService } from './device-sync.service'
       ScheduleExceptionRule,
       OvertimePeriod,
       WorkSchedule,
+      Shift,
     ]),
   ],
   controllers: [AttendanceController],

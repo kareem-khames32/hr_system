@@ -9,7 +9,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Between, In, IsNull, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
-import { PublicHoliday, WorkSchedule } from '../assets/assets.entities'
+import { PublicHoliday, Shift, WorkSchedule } from '../assets/assets.entities'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { AttendanceCorrection, OvertimeEntry } from '../requests/entities/attendance.entities'
@@ -91,8 +91,21 @@ export class AttendanceService {
     @InjectRepository(PermissionType)
     private readonly permissionTypes: Repository<PermissionType>,
     @InjectRepository(WorkSchedule)
-    private readonly workSchedules: Repository<WorkSchedule>
+    private readonly workSchedules: Repository<WorkSchedule>,
+    @InjectRepository(Shift)
+    private readonly shiftsCatalog: Repository<Shift>
   ) {}
+
+  // إعدادات الوردية من الكتالوج (بالاسم) — نوافذ/سماحية/أوفرتايم/نوع
+  private async shiftConfig(name: string): Promise<Shift | null> {
+    if (!name) return null
+    // اسم الوردية قد يحمل لاحقة «(يوم خاص)» — نجرّب المطابقة المجرّدة أيضاً
+    const bare = name.replace(/\s*\(.*\)\s*$/, '').trim()
+    return (
+      (await this.shiftsCatalog.findOne({ where: { name } })) ??
+      (await this.shiftsCatalog.findOne({ where: { name: bare } }))
+    )
+  }
 
   // العطلة الأسبوعية لجدول عمل الموظف (إن وُجد) — تغلب إعداد الفرع/العام
   private async employeeWeekend(employeeId: number): Promise<string | undefined> {
@@ -798,7 +811,12 @@ export class AttendanceService {
     })
 
     const shift = await this.shiftFor(employeeId, date)
-    const grace = Number(await this.configValue('attendance.grace_minutes', '10'))
+    const sc = await this.shiftConfig(shift.name)
+    // السماحية من الوردية إن حُدّدت، وإلا القيمة العامة
+    const grace =
+      sc?.graceMinutes != null
+        ? Number(sc.graceMinutes)
+        : Number(await this.configValue('attendance.grace_minutes', '10'))
 
     // كل لحظات البصمة لليوم: الفعلية + أي بصمة مطلوبة معتمدة (طلب «تصحيح/طلب
     // بصمة» — وجودها = معتمدة، تُكتب فقط بعد اكتمال الطلب). الأقدم = حضور،
@@ -818,10 +836,24 @@ export class AttendanceService {
       }
     }
     instants.sort()
-    const checkIn = instants.length > 0 ? instants[0] : null
-    // بصمة/لحظة واحدة فقط = دخول بلا انصراف
-    const checkOut =
-      instants.length > 1 ? instants[instants.length - 1] : null
+    // تصنيف البصمة: لو الوردية لها نوافذ دخول/خروج → البصمة داخل نافذة الدخول
+    // = حضور، وداخل نافذة الخروج = انصراف (فبصمة مسائية وحيدة = خروج لا دخول).
+    // غير كده: الأقدم = دخول والأحدث = خروج (السلوك الافتراضي)
+    const inWin = (t: string, from?: string | null, to?: string | null) =>
+      !!from && !!to && toMinutes(t) >= toMinutes(from) && toMinutes(t) <= toMinutes(to)
+    const hasWindows =
+      !!(sc?.checkinFrom && sc?.checkinTo) || !!(sc?.checkoutFrom && sc?.checkoutTo)
+    let checkIn: string | null
+    let checkOut: string | null
+    if (hasWindows && instants.length > 0) {
+      const inHits = instants.filter((t) => inWin(t, sc?.checkinFrom, sc?.checkinTo))
+      const outHits = instants.filter((t) => inWin(t, sc?.checkoutFrom, sc?.checkoutTo))
+      checkIn = inHits.length ? inHits[0] : null
+      checkOut = outHits.length ? outHits[outHits.length - 1] : null
+    } else {
+      checkIn = instants.length > 0 ? instants[0] : null
+      checkOut = instants.length > 1 ? instants[instants.length - 1] : null
+    }
 
     // الإجازات المعتمدة المغطية لليوم: يوم كامل ← 'leave'،
     // نصف يوم ← نافذة تغطية (النصف الأول أو الثاني من الوردية)
@@ -880,7 +912,7 @@ export class AttendanceService {
       if (checkIn && checkOut) {
         workMinutes = Math.max(0, toMinutes(checkOut) - toMinutes(checkIn))
       }
-    } else if (checkIn || hasHalfLeave) {
+    } else if (checkIn || checkOut || hasHalfLeave) {
       const permissions = await this.approvedPermissionWindows(employeeId, date)
       // نوافذ التغطية باتجاهها: الإجازة الجزئية «both» (محدودة بوقتها)،
       // والإذن يحمل اتجاهه (صباحي = يعذر التأخير، مسائي = يعذر الانصراف المبكر)
@@ -931,8 +963,24 @@ export class AttendanceService {
       }
 
       if (!checkIn) {
-        // نصف يوم إجازة ومفيش بصمة خالص: النصف الآخر غياب — يبقى جزئية
-        status = 'partial_leave'
+        // بصمة خروج فقط (نسي بصمة الحضور): حاضر بلا حساب تأخير — لا نعاقبه
+        // بحساب البصمة دخولاً (كان يُنتج تأخيراً ضخماً). غير كده = جزئية/غياب
+        status = checkOut ? 'present' : 'partial_leave'
+      } else if (sc?.shiftMode === 'flexible') {
+        // وردية مرنة: لا تأخير بوقت البداية — المهم إكمال الساعات المطلوبة.
+        // العجز عن المطلوب (فوق السماحية) يُحسب تأخيراً/خصماً
+        const requiredMin =
+          sc.requiredHours != null
+            ? Math.round(Number(sc.requiredHours) * 60)
+            : shiftEnd - shiftStart
+        if (checkOut) {
+          workMinutes = Math.max(0, toMinutes(checkOut) - toMinutes(checkIn))
+          const deficit = requiredMin - workMinutes
+          lateMinutes = deficit > grace ? deficit : 0
+          status = lateMinutes > 0 ? 'late' : 'present'
+        } else {
+          status = 'present' // دخل ولم يخرج بعد
+        }
       } else {
         // التأخير الخام: المجاني والبخصم يعذران الدقائق المغطاة من التأخير
         // بالكامل، لكن دقائق «بخصم» تُسجَّل للخصم من الراتب (× النسبة)
@@ -1010,7 +1058,7 @@ export class AttendanceService {
   private async detectOvertime(
     emp: Employee,
     date: string,
-    shift: { end: string },
+    shift: { name?: string; end: string },
     checkOut: string
   ) {
     const extraMinutes = toMinutes(checkOut) - toMinutes(shift.end)
@@ -1046,9 +1094,12 @@ export class AttendanceService {
       return
     }
 
-    const threshold = Number(
-      await this.configValue('overtime.detection_threshold_hours', '0.5')
-    )
+    // عتبة الأوفرتايم من الوردية إن حُدّدت، وإلا القيمة العامة
+    const scOt = await this.shiftConfig(shift.name ?? '')
+    const threshold =
+      scOt?.overtimeThresholdHours != null
+        ? Number(scOt.overtimeThresholdHours)
+        : Number(await this.configValue('overtime.detection_threshold_hours', '0.5'))
 
     // كشف تلقائي: فوق العتبة → قيد DETECTED بانتظار تأكيد المدير المباشر
     if (actualHours < threshold) return

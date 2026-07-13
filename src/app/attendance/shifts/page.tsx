@@ -20,6 +20,14 @@ interface Shift {
   name: string
   startTime: string
   endTime: string
+  shiftMode?: 'fixed' | 'flexible'
+  requiredHours?: number | null
+  graceMinutes?: number | null
+  overtimeThresholdHours?: number | null
+  checkinFrom?: string | null
+  checkinTo?: string | null
+  checkoutFrom?: string | null
+  checkoutTo?: string | null
   isActive: boolean
 }
 
@@ -46,7 +54,14 @@ const workHours = (s: Shift): number => {
   return Math.round((mins / 60) * 10) / 10
 }
 
-const emptyForm = { name: '', startTime: '', endTime: '' }
+const emptyForm = {
+  name: '', startTime: '', endTime: '',
+  shiftMode: 'fixed' as 'fixed' | 'flexible',
+  requiredHours: '',
+  graceMinutes: '',
+  overtimeThresholdHours: '',
+  checkinFrom: '', checkinTo: '', checkoutFrom: '', checkoutTo: '',
+}
 
 export default function ShiftsPage() {
   const [shifts, setShifts] = useState<Shift[]>([])
@@ -83,7 +98,20 @@ export default function ShiftsPage() {
 
   const openEdit = (shift: Shift) => {
     setEditingShift(shift)
-    setFormData({ name: shift.name, startTime: shift.startTime, endTime: shift.endTime })
+    const s = (v: unknown) => (v != null ? String(v) : '')
+    setFormData({
+      name: shift.name,
+      startTime: shift.startTime,
+      endTime: shift.endTime,
+      shiftMode: shift.shiftMode ?? 'fixed',
+      requiredHours: s(shift.requiredHours),
+      graceMinutes: s(shift.graceMinutes),
+      overtimeThresholdHours: s(shift.overtimeThresholdHours),
+      checkinFrom: s(shift.checkinFrom),
+      checkinTo: s(shift.checkinTo),
+      checkoutFrom: s(shift.checkoutFrom),
+      checkoutTo: s(shift.checkoutTo),
+    })
     setModalError('')
     setShowModal(true)
   }
@@ -91,11 +119,27 @@ export default function ShiftsPage() {
   const handleSave = async () => {
     setSaving(true)
     setModalError('')
+    // القيم الاختيارية: فارغ → null (تُشتق من القيمة العامة/الافتراضي)
+    const num = (v: string) => (v !== '' ? Number(v) : null)
+    const txt = (v: string) => (v !== '' ? v : null)
+    const payload = {
+      name: formData.name,
+      startTime: formData.startTime,
+      endTime: formData.endTime,
+      shiftMode: formData.shiftMode,
+      requiredHours: num(formData.requiredHours),
+      graceMinutes: num(formData.graceMinutes),
+      overtimeThresholdHours: num(formData.overtimeThresholdHours),
+      checkinFrom: txt(formData.checkinFrom),
+      checkinTo: txt(formData.checkinTo),
+      checkoutFrom: txt(formData.checkoutFrom),
+      checkoutTo: txt(formData.checkoutTo),
+    }
     try {
       if (editingShift) {
-        await updateCatalogItem('shifts', editingShift.id, { ...formData })
+        await updateCatalogItem('shifts', editingShift.id, payload)
       } else {
-        await createCatalogItem('shifts', { ...formData })
+        await createCatalogItem('shifts', payload)
       }
       setShowModal(false)
       loadShifts()
@@ -385,6 +429,66 @@ export default function ShiftsPage() {
                       dir="ltr"
                     />
                   </div>
+                </div>
+
+                {/* نوع الوردية */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">نوع الوردية</label>
+                  <select
+                    value={formData.shiftMode}
+                    onChange={(e) => setFormData({ ...formData, shiftMode: e.target.value as 'fixed' | 'flexible' })}
+                    className="input w-full"
+                  >
+                    <option value="fixed">ثابتة — تأخير بمقارنة وقت البداية</option>
+                    <option value="flexible">مرنة — المهم إكمال عدد الساعات</option>
+                  </select>
+                </div>
+                {formData.shiftMode === 'flexible' && (
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">ساعات العمل المطلوبة</label>
+                    <input type="number" step="0.5" value={formData.requiredHours}
+                      onChange={(e) => setFormData({ ...formData, requiredHours: e.target.value })}
+                      className="input w-full" placeholder="9" dir="ltr" />
+                    <p className="text-xs text-gray-400 mt-1">النقص عنها (فوق السماحية) يُحسب تأخيراً. اتركه فارغاً لاستخدام مدة الوردية</p>
+                  </div>
+                )}
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">سماحية التأخير (دقيقة)</label>
+                    <input type="number" value={formData.graceMinutes}
+                      onChange={(e) => setFormData({ ...formData, graceMinutes: e.target.value })}
+                      className="input w-full" placeholder="عام" dir="ltr" />
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">عتبة الأوفرتايم (ساعة)</label>
+                    <input type="number" step="0.25" value={formData.overtimeThresholdHours}
+                      onChange={(e) => setFormData({ ...formData, overtimeThresholdHours: e.target.value })}
+                      className="input w-full" placeholder="عام" dir="ltr" />
+                  </div>
+                </div>
+                <p className="text-xs text-gray-500">اتركهما فارغين لاستخدام القيمة العامة من السياسات.</p>
+
+                {/* نوافذ البصمة — تصنيف الدخول/الخروج */}
+                <div className="p-3 bg-gray-50 rounded-xl border border-gray-100">
+                  <p className="text-sm font-medium text-gray-700 mb-2">نوافذ البصمة (اختياري)</p>
+                  <div className="grid grid-cols-2 gap-4">
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">نافذة الدخول (من – إلى)</label>
+                      <div className="flex gap-2">
+                        <input type="text" value={formData.checkinFrom} onChange={(e) => setFormData({ ...formData, checkinFrom: e.target.value })} className="input w-full font-mono" placeholder="07:00" dir="ltr" />
+                        <input type="text" value={formData.checkinTo} onChange={(e) => setFormData({ ...formData, checkinTo: e.target.value })} className="input w-full font-mono" placeholder="11:00" dir="ltr" />
+                      </div>
+                    </div>
+                    <div>
+                      <label className="block text-xs text-gray-500 mb-1">نافذة الخروج (من – إلى)</label>
+                      <div className="flex gap-2">
+                        <input type="text" value={formData.checkoutFrom} onChange={(e) => setFormData({ ...formData, checkoutFrom: e.target.value })} className="input w-full font-mono" placeholder="16:00" dir="ltr" />
+                        <input type="text" value={formData.checkoutTo} onChange={(e) => setFormData({ ...formData, checkoutTo: e.target.value })} className="input w-full font-mono" placeholder="21:00" dir="ltr" />
+                      </div>
+                    </div>
+                  </div>
+                  <p className="text-xs text-gray-400 mt-2">بصمة داخل نافذة الدخول = حضور، وداخل نافذة الخروج = انصراف (فبصمة مسائية وحيدة = خروج لا دخول). فارغة = السلوك الافتراضي.</p>
                 </div>
               </div>
               <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">

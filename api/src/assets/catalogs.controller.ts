@@ -174,6 +174,17 @@ export class CatalogsController {
         need('endTime', 'نهاية الوردية')
         time('startTime', 'بداية الوردية')
         time('endTime', 'نهاية الوردية')
+        // نوافذ البصمة (اختيارية) — بصيغة وقت صحيحة إن وُجدت
+        time('checkinFrom', 'بداية نافذة الدخول')
+        time('checkinTo', 'نهاية نافذة الدخول')
+        time('checkoutFrom', 'بداية نافذة الخروج')
+        time('checkoutTo', 'نهاية نافذة الخروج')
+        if (
+          b.shiftMode &&
+          !['fixed', 'flexible'].includes(String(b.shiftMode))
+        ) {
+          throw new BadRequestException('نوع الوردية: fixed أو flexible')
+        }
         break
       case 'devices':
         need('name', 'اسم الجهاز')
