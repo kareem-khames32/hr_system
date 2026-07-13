@@ -7,7 +7,15 @@ import {
 } from '@nestjs/common'
 import { Cron } from '@nestjs/schedule'
 import { InjectRepository } from '@nestjs/typeorm'
-import { DataSource, In, IsNull, Not, Repository } from 'typeorm'
+import {
+  DataSource,
+  In,
+  IsNull,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+  Not,
+  Repository,
+} from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
@@ -362,6 +370,49 @@ export class RequestsService {
           p.days = effectiveDays
           p.skippedHolidays = skipped
           req.payload = JSON.stringify(p)
+        }
+
+        // منع تداخل الإجازات: لا إجازتان لنفس الموظف على أيام متقاطعة (خصم
+        // مضاعف). سجل الإجازة يُكتب عند التنفيذ فقط، فنفحص: (أ) إجازة معتمدة
+        // متداخلة، و(ب) طلب إجازة آخر لا يزال في المسار على أيام متقاطعة
+        const reqFrom = String(p.fromDate)
+        const reqTo = String(p.toDate)
+        const overlapApproved = await this.ds.getRepository(Leave).findOne({
+          where: {
+            employeeId: req.requesterId,
+            status: 'APPROVED',
+            fromDate: LessThanOrEqual(reqTo),
+            toDate: MoreThanOrEqual(reqFrom),
+          },
+        })
+        if (overlapApproved) {
+          throw new BadRequestException(
+            `للموظف إجازة معتمدة متداخلة مع هذه الفترة (${overlapApproved.fromDate} → ${overlapApproved.toDate})`
+          )
+        }
+        const liveLeaves = await this.requests.find({
+          where: {
+            requesterId: req.requesterId,
+            status: In(['SUBMITTED', 'UNDER_REVIEW', 'IN_EXECUTION']),
+          },
+        })
+        const overlapPending = liveLeaves.some((r) => {
+          if (r.id === req.id) return false
+          if (r.typeCode !== 'LEAVE' && !r.typeCode.startsWith('LEAVE_')) {
+            return false
+          }
+          try {
+            const rp = JSON.parse(r.payload ?? '{}')
+            if (!rp.fromDate || !rp.toDate) return false
+            return String(rp.fromDate) <= reqTo && String(rp.toDate) >= reqFrom
+          } catch {
+            return false
+          }
+        })
+        if (overlapPending) {
+          throw new BadRequestException(
+            'للموظف طلب إجازة آخر قيد المعالجة يتداخل مع هذه الفترة'
+          )
         }
       }
 

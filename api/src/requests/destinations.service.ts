@@ -1,5 +1,10 @@
 import { BadRequestException, Injectable, Logger } from '@nestjs/common'
-import { EntityManager, In } from 'typeorm'
+import {
+  EntityManager,
+  In,
+  LessThanOrEqual,
+  MoreThanOrEqual,
+} from 'typeorm'
 import {
   ClearanceItem,
   OffboardingCase,
@@ -83,6 +88,21 @@ export class DestinationsService {
       const ltDef = await em.getRepository(LeaveType).findOne({
         where: { code: leaveTypeCode },
       })
+      // الحارس الحاسم: امنع خصماً مضاعفاً لو اعتُمدت إجازة متداخلة قبل هذه
+      // (سباق طلبين متداخلين — الثاني عند تنفيذه يجد إجازة الأول المعتمدة)
+      const overlap = await em.getRepository(Leave).findOne({
+        where: {
+          employeeId: req.requesterId,
+          status: 'APPROVED',
+          fromDate: LessThanOrEqual(String(payload.toDate)),
+          toDate: MoreThanOrEqual(String(payload.fromDate)),
+        },
+      })
+      if (overlap) {
+        throw new BadRequestException(
+          `للموظف إجازة معتمدة متداخلة (${overlap.fromDate} → ${overlap.toDate}) — لا خصم مضاعف لنفس الأيام`
+        )
+      }
       const leave = await em.getRepository(Leave).save({
         requestId: req.id,
         employeeId: req.requesterId,
