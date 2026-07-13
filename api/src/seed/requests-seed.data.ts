@@ -240,9 +240,6 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'overtime.multiplier_weekday', value: '1.5' },
   { key: 'overtime.multiplier_weekend', value: '1.5' },
   { key: 'overtime.multiplier_holiday', value: '2' },
-  { key: 'loan.finance_approval_threshold', value: '5000' },
-  { key: 'salary_increase.executive_threshold_pct', value: '10' },
-  { key: 'transfer.execution_mode', value: 'effective_date' },
   { key: 'attendance.grace_minutes', value: '10' },
   // العطلة الأسبوعية (SUN..SAT مفصولة بفواصل) — تجاوز لكل فرع من شاشة الفروع
   { key: 'attendance.weekend_days', value: 'FRI,SAT' },

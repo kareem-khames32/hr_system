@@ -77,8 +77,6 @@ const enginePanels: Record<string, string[]> = {
   ],
   payroll: [
     'payroll.cycle_start_day',
-    'loan.finance_approval_threshold',
-    'salary_increase.executive_threshold_pct',
     'system.currency',
   ],
 }
@@ -92,8 +90,6 @@ const engineLabels: Record<string, string> = {
   'leave.carryover_max_days': 'الحد الأقصى للرصيد المُرحّل (يوم)',
   'leave.carryover_expiry_months': 'صلاحية الرصيد المُرحّل (شهور)',
   'payroll.cycle_start_day': 'يوم بداية دورة الرواتب',
-  'loan.finance_approval_threshold': 'عتبة موافقة المالية على السلف',
-  'salary_increase.executive_threshold_pct': 'عتبة موافقة التنفيذي على الزيادة (%)',
   'system.currency': 'عملة النظام',
 }
 
