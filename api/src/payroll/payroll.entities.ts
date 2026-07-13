@@ -84,6 +84,13 @@ export class PayrollItem {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
   latenessDeduction: number
 
+  // أيام الغياب بلا إذن (يوم عمل مجدول بلا بصمة ولا إجازة) وخصمها بقيمة اليوم
+  @Column({ type: 'decimal', precision: 6, scale: 2, default: 0 })
+  absenceDays: number
+
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
+  absenceDeduction: number
+
   @Column({ type: 'decimal', precision: 6, scale: 2, default: 0 })
   unpaidLeaveDays: number
 

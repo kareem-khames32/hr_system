@@ -1,5 +1,6 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
+import { AttendanceModule } from '../attendance/attendance.module'
 import { AttendanceDay } from '../attendance/attendance.entities'
 import { Employee } from '../employees/employee.entity'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
@@ -12,6 +13,7 @@ import { PayrollService } from './payroll.service'
 
 @Module({
   imports: [
+    AttendanceModule,
     TypeOrmModule.forFeature([
       PayrollRun,
       PayrollItem,

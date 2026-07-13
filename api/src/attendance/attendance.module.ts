@@ -18,6 +18,7 @@ import {
 } from './attendance.entities'
 import { AttendanceController } from './attendance.controller'
 import { AttendanceService } from './attendance.service'
+import { AttendanceScheduler } from './attendance-scheduler.service'
 import { DeviceSyncService } from './device-sync.service'
 
 @Module({
@@ -44,7 +45,7 @@ import { DeviceSyncService } from './device-sync.service'
     ]),
   ],
   controllers: [AttendanceController],
-  providers: [AttendanceService, DeviceSyncService],
+  providers: [AttendanceService, DeviceSyncService, AttendanceScheduler],
   exports: [AttendanceService],
 })
 export class AttendanceModule {}

@@ -8,6 +8,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Between, In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
+import { AttendanceService } from '../attendance/attendance.service'
 import { AttendanceDay } from '../attendance/attendance.entities'
 import { Employee } from '../employees/employee.entity'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
@@ -43,7 +44,8 @@ export class PayrollService {
     @InjectRepository(Loan)
     private readonly loans: Repository<Loan>,
     @InjectRepository(RequestsConfig)
-    private readonly config: Repository<RequestsConfig>
+    private readonly config: Repository<RequestsConfig>,
+    private readonly attendanceService: AttendanceService
   ) {}
 
   private async cfg(key: string, fallback: string): Promise<string> {
@@ -126,6 +128,9 @@ export class PayrollService {
 
       // 2) خصم التأخير: الدقائق غير المعذورة + دقائق الإذن «بخصم»
       // (المعذور بإذن بدون خصم أو إجازة جزئية لا يُخصم)
+      // أولاً: جسّد الغياب — أنشئ صفوف 'absent' لأيام العمل غير الملموسة في
+      // الفترة (بلا بصمة ولا إجازة) قبل القراءة، فتُحتسب في الخصم والتقارير
+      await this.attendanceService.materializeAbsences(emp.id, startDate, endDate)
       const attRows = await this.attendance.find({
         where: { employeeId: emp.id, date: Between(startDate, endDate) },
       })
@@ -136,6 +141,13 @@ export class PayrollService {
       const latenessDeduction = lateEnabled
         ? round2(lateMinutes * minuteRate)
         : 0
+
+      // 2ب) خصم الغياب بلا إذن: يوم عمل مجدول بلا بصمة ولا إجازة (status='absent')
+      // يُخصم بقيمة اليوم الكاملة. (يوم الإجازة يُصنّف 'leave' لا 'absent' فلا
+      // ازدواج مع خصم الإجازة غير المدفوعة)
+      const absentRows = attRows.filter((r) => r.status === 'absent')
+      const absenceDays = absentRows.length
+      const absenceDeduction = round2(absenceDays * dayRate)
 
       // 3) الإجازات غير المدفوعة (isUnpaid من تعريف النوع — أي نوع
       // غير مدفوع يُخصم يوم بيوم، بلا سياسة غياب) المتقاطعة مع الفترة
@@ -177,7 +189,12 @@ export class PayrollService {
       )
 
       const netPay = round2(
-        gross + otAmount - latenessDeduction - unpaidDeduction - loanDeduction
+        gross +
+          otAmount -
+          latenessDeduction -
+          absenceDeduction -
+          unpaidDeduction -
+          loanDeduction
       )
       totalNet = round2(totalNet + netPay)
 
@@ -191,6 +208,8 @@ export class PayrollService {
           overtimeAmount: otAmount,
           lateMinutes,
           latenessDeduction,
+          absenceDays,
+          absenceDeduction,
           unpaidLeaveDays: unpaidDays,
           unpaidLeaveDeduction: unpaidDeduction,
           loanInstallments: loanDeduction,
@@ -201,6 +220,7 @@ export class PayrollService {
             hourRate: round2(hourRate),
             overtimeEntryIds: otRows.map((r) => r.id),
             installmentIds: installmentsDue.map((i) => i.id),
+            absentDates: absentRows.map((r) => r.date),
           }),
         })
       )

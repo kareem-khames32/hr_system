@@ -212,6 +212,7 @@ export interface ApiPayrollItem {
   id: number; runId: number; employeeId: number; basicSalary: number
   overtimeHours: number; overtimeAmount: number; lateMinutes: number
   latenessDeduction: number; unpaidLeaveDays: number; unpaidLeaveDeduction: number
+  absenceDays?: number; absenceDeduction?: number
   loanInstallments: number; netPay: number; payMethod: string; breakdown?: string
 }
 export interface ApiUser {

@@ -96,14 +96,19 @@ export default function DeductionsPage() {
 
   const items: ApiPayrollItem[] = run?.items ?? []
   const totalOf = (i: ApiPayrollItem) =>
-    Number(i.latenessDeduction) + Number(i.unpaidLeaveDeduction) + Number(i.loanInstallments)
+    Number(i.latenessDeduction) +
+    Number(i.absenceDeduction ?? 0) +
+    Number(i.unpaidLeaveDeduction) +
+    Number(i.loanInstallments)
 
   const totals = {
     lateness: items.reduce((s, i) => s + Number(i.latenessDeduction), 0),
+    absence: items.reduce((s, i) => s + Number(i.absenceDeduction ?? 0), 0),
     unpaidLeave: items.reduce((s, i) => s + Number(i.unpaidLeaveDeduction), 0),
     loans: items.reduce((s, i) => s + Number(i.loanInstallments), 0),
   }
-  const grandTotal = totals.lateness + totals.unpaidLeave + totals.loans
+  const grandTotal =
+    totals.lateness + totals.absence + totals.unpaidLeave + totals.loans
   const affectedCount = items.filter((i) => totalOf(i) > 0).length
   const openObjections = objections.filter((o) =>
     ['SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO'].includes(o.status)
@@ -143,8 +148,8 @@ export default function DeductionsPage() {
           <div>
             <p className="font-medium text-warning-800">تنبيه هام</p>
             <p className="text-sm text-warning-700">
-              الخصومات تُحسب آلياً من الحضور (التأخير)، والإجازات بدون راتب، وأقساط السلف المستحقة —
-              ولا تُدخل يدوياً. للاعتراض على خصم يقدَّم طلب «اعتراض على خصم» من محرك الطلبات.
+              الخصومات تُحسب آلياً من الحضور (التأخير والغياب بلا إذن)، والإجازات بدون راتب، وأقساط
+              السلف المستحقة — ولا تُدخل يدوياً. للاعتراض على خصم يقدَّم طلب «اعتراض على خصم» من محرك الطلبات.
             </p>
           </div>
         </div>
@@ -190,6 +195,7 @@ export default function DeductionsPage() {
                     <tr className="table-header">
                       <th className="text-right px-4 py-3">الموظف</th>
                       <th className="text-center px-4 py-3">خصم التأخير</th>
+                      <th className="text-center px-4 py-3">خصم الغياب</th>
                       <th className="text-center px-4 py-3">إجازة بدون راتب</th>
                       <th className="text-center px-4 py-3">أقساط السلف</th>
                       <th className="text-center px-4 py-3 text-danger-600">الإجمالي</th>
@@ -216,6 +222,10 @@ export default function DeductionsPage() {
                           <td className="table-cell text-center font-mono">
                             {Number(item.latenessDeduction).toLocaleString()}
                             <p className="text-xs text-gray-400">{Number(item.lateMinutes)} دقيقة</p>
+                          </td>
+                          <td className="table-cell text-center font-mono">
+                            {Number(item.absenceDeduction ?? 0).toLocaleString()}
+                            <p className="text-xs text-gray-400">{Number(item.absenceDays ?? 0)} يوم</p>
                           </td>
                           <td className="table-cell text-center font-mono">
                             {Number(item.unpaidLeaveDeduction).toLocaleString()}
@@ -288,6 +298,10 @@ export default function DeductionsPage() {
                 <div className="flex items-center justify-between">
                   <span className="text-danger-100">خصم التأخير:</span>
                   <span className="font-bold">{totals.lateness.toLocaleString()} {currency}</span>
+                </div>
+                <div className="flex items-center justify-between">
+                  <span className="text-danger-100">خصم الغياب:</span>
+                  <span className="font-bold">{totals.absence.toLocaleString()} {currency}</span>
                 </div>
                 <div className="flex items-center justify-between">
                   <span className="text-danger-100">إجازات بدون راتب:</span>

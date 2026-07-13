@@ -130,6 +130,11 @@ export default function PayslipPage({ params }: { params: { id: string } }) {
           amount: Number(item.latenessDeduction),
         },
         {
+          name: 'خصم الغياب',
+          nameEn: `Absence (${Number(item.absenceDays ?? 0)} d)`,
+          amount: Number(item.absenceDeduction ?? 0),
+        },
+        {
           name: 'إجازة بدون راتب',
           nameEn: `Unpaid Leave (${Number(item.unpaidLeaveDays)} d)`,
           amount: Number(item.unpaidLeaveDeduction),

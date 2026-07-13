@@ -498,6 +498,66 @@ export class AttendanceService {
     return this.workingDaysBetween(emp?.branchId ?? 1, fromDate, toDate, weekend)
   }
 
+  // ===== تجسيد الغياب (materialization) =====
+  // يُنشئ صفوف الحضور لأيام العمل غير الملموسة (بلا بصمة ولا إجازة ولا تصحيح)
+  // في المدى — يعيد استخدام computeDay نفسه (مصدر التصنيف الوحيد) فيصنّفها
+  // 'absent'. idempotent: لا يلمس أي يوم له صف بالفعل. يحترم تاريخ الالتحاق
+  // والأرشفة (لا غياب قبل التعيين أو بعد الأرشفة). يُرجع عدد أيام الغياب المُنشأة.
+  async materializeAbsences(
+    employeeId: number,
+    fromDate: string,
+    toDate: string
+  ): Promise<number> {
+    const emp = await this.employees.findOne({ where: { id: employeeId } })
+    if (!emp) return 0
+    const ymd = (dt: Date) =>
+      `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
+    // ابدأ من تاريخ الالتحاق إن كان داخل المدى — لا غياب قبل التعيين
+    let start = fromDate
+    if (emp.joinDate && emp.joinDate > start) start = emp.joinDate
+    // لا تتجاوز تاريخ الأرشفة إن وُجد
+    let end = toDate
+    if (emp.archivedAt) {
+      const arch = ymd(new Date(emp.archivedAt))
+      if (arch < end) end = arch
+    }
+    if (start > end) return 0
+
+    const weekend = await this.employeeWeekend(employeeId)
+    const ctx = await this.nonWorkingContext(emp.branchId ?? 1, weekend)
+    let created = 0
+    const from = new Date(`${start}T12:00:00`)
+    const to = new Date(`${end}T12:00:00`)
+    for (
+      let d = new Date(from), i = 0;
+      d <= to && i < 400;
+      d.setDate(d.getDate() + 1), i++
+    ) {
+      const date = ymd(d)
+      // عطلة/ويك إند (بحسب جدول الموظف) → لا غياب
+      if (this.evalNonWorking(date, emp.branchId ?? 1, ctx)) continue
+      // اليوم المستقر (حضور/إجازة/عطلة) لا يُلمس؛ أما صف الغياب فتصنيف مؤقت
+      // قابل للقلب (قد تُعتمد إجازة بأثر رجعي)، وغيابه = لا صف بعد — كلاهما
+      // يُعاد حسابه ليعكس أي إجازة/بصمة استُجدّت
+      const existing = await this.days.findOne({ where: { employeeId, date } })
+      if (existing && existing.status !== 'absent') continue
+      // احسب اليوم (computeDay يصنّفه absent/leave/holiday بدقة)
+      const day = await this.computeDay(employeeId, date)
+      if (day.status === 'absent') created++
+    }
+    return created
+  }
+
+  // تجسيد الغياب لكل الموظفين النشطين في مدى (للمهمة اليومية)
+  async materializeAbsencesAll(fromDate: string, toDate: string): Promise<number> {
+    const emps = await this.employees.find({ where: { isActive: true } })
+    let total = 0
+    for (const emp of emps) {
+      total += await this.materializeAbsences(emp.id, fromDate, toDate)
+    }
+    return total
+  }
+
   // ===== تجاوز وردية يوم بعينه (أو مسحه) + إعادة حساب اليوم فوراً =====
   async setDayOverride(dto: {
     employeeId: number
