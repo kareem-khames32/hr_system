@@ -9,7 +9,11 @@ import { ApproverResolver } from '../requests/approver-resolver.service'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
 import { Asset, CustodyAssignment } from '../requests/entities/custody.entities'
 import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
-import { Loan, LoanInstallment } from '../requests/entities/financial.entities'
+import {
+  EmployeeObligation,
+  Loan,
+  LoanInstallment,
+} from '../requests/entities/financial.entities'
 import { LeaveBalance } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import {
@@ -30,6 +34,7 @@ import { OffboardingService } from './offboarding.service'
       User,
       CustodyAssignment,
       Asset,
+      EmployeeObligation,
       LeaveBalance,
       OvertimeEntry,
       Loan,

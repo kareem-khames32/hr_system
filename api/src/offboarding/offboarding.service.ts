@@ -14,6 +14,7 @@ import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
 import { ApproverResolver } from '../requests/approver-resolver.service'
 import { Asset, CustodyAssignment } from '../requests/entities/custody.entities'
+import { EmployeeObligation } from '../requests/entities/financial.entities'
 import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
 import { Loan, LoanInstallment } from '../requests/entities/financial.entities'
@@ -56,6 +57,8 @@ export class OffboardingService {
     private readonly custody: Repository<CustodyAssignment>,
     @InjectRepository(Asset)
     private readonly assets: Repository<Asset>,
+    @InjectRepository(EmployeeObligation)
+    private readonly obligations: Repository<EmployeeObligation>,
     @InjectRepository(LeaveBalance)
     private readonly balances: Repository<LeaveBalance>,
     @InjectRepository(OvertimeEntry)
@@ -339,14 +342,25 @@ export class OffboardingService {
       })
     }
 
-    // (−) قيمة العهدة المفقودة/التالفة — تُخصم آلياً من التصفية بقيمة الأصل
-    // (سابقاً كانت قيمة الأصل تضيع: write-off يعلّم LOST/DAMAGED بلا قيد مالي)
+    // (−) قيمة العهدة المفقودة/التالفة عبر مسار write-off المباشر (بلا قيد
+    // مديونية). العهدة المبلَّغ عنها بطلب فقد (custody_finance) لها قيد DEBIT في
+    // دفتر المديونيات يستهلكه المسير الشهري وقت الإشعار — نتخطّاها هنا لمنع
+    // الخصم مرتين.
+    const shortfallObl = await this.obligations.find({
+      where: { employeeId: emp.id, category: 'custody_shortfall' },
+    })
+    const obligationAssetIds = new Set(
+      shortfallObl
+        .filter((o) => o.sourceRef?.startsWith('asset:'))
+        .map((o) => Number(o.sourceRef!.slice('asset:'.length)))
+    )
     const lostCustody = await this.custody.find({
       where: { employeeId: emp.id, status: In(['LOST', 'DAMAGED']) },
     })
     let custodyShortfall = 0
     const lostNames: string[] = []
     for (const c of lostCustody) {
+      if (obligationAssetIds.has(c.assetId)) continue // مقيَّد في الدفتر
       const asset = await this.assets.findOne({ where: { id: c.assetId } })
       const val = Number(asset?.value ?? 0)
       if (val > 0) {
