@@ -8,6 +8,7 @@ import {
   fetchTeams,
   fetchEmployees,
   fetchCatalog,
+  fetchConfig,
   uploadFile,
   fetchFileObjectUrl,
   ApiBranch,
@@ -232,6 +233,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     initial?.workScheduleId ?? ''
   )
   const [scheduleList, setScheduleList] = useState<WorkScheduleRow[]>([])
+  // سياسات الإجازة العامة (من الإعدادات) — تُعرض للقراءة فقط في نموذج الموظف
+  const [policyCfg, setPolicyCfg] = useState<Record<string, string>>({})
   // الرصيد الافتتاحي المُرحّل — يُعبَّأ مسبقاً بقيمته الحالية في التعديل
   const initExpiry = initial?.openingBalanceExpiry
   const [openingBalance, setOpeningBalance] = useState(
@@ -353,6 +356,14 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     fetchCatalog<WorkScheduleRow>('work-schedules')
       .then((ws) => setScheduleList(ws.filter((s) => s.isActive)))
       .catch(() => setScheduleList([]))
+    // سياسات الإجازة العامة — للعرض للقراءة فقط (تُدار من صفحة السياسات)
+    fetchConfig()
+      .then((rows) => {
+        const m: Record<string, string> = {}
+        rows.forEach((r) => (m[r.key] = r.value))
+        setPolicyCfg(m)
+      })
+      .catch(() => setPolicyCfg({}))
   }, [])
 
   const fullNameAr = [form.firstNameAr, form.fatherNameAr, form.grandNameAr, form.familyNameAr]
@@ -1150,56 +1161,48 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               {/* Leave fields - shown only if entitled */}
               {leaveEntitled && (
               <div className="space-y-4 mt-4">
-                <div className="grid grid-cols-4 gap-4">
-                  <div>
-                    <label className="label">الإجازة السنوية (يوم/سنة) *</label>
-                    <input type="number" className="input" placeholder="21" defaultValue="21" min="0" />
-                    <p className="text-xs text-gray-400 mt-1">حسب نظام العمل السعودي</p>
+                {/* قيم الاستحقاق العامة — للقراءة فقط، تُدار من صفحة السياسات.
+                    الخاص بالموظف: مفتاح الاستحقاق أعلاه + الرصيد الافتتاحي أدناه */}
+                <div className="p-4 bg-gray-50 rounded-xl border border-gray-100">
+                  <div className="flex items-center justify-between mb-3">
+                    <p className="text-sm font-medium text-gray-700">
+                      قيم الاستحقاق العامة (على الشركة كلها)
+                    </p>
+                    <a
+                      href="/settings/policies"
+                      className="text-xs text-primary-600 hover:underline font-medium"
+                    >
+                      تعدّل من السياسات ←
+                    </a>
                   </div>
-                  <div>
-                    <label className="label">طريقة الاستحقاق *</label>
-                    <select className="input">
-                      <option value="monthly">شهري (X يوم/شهر)</option>
-                      <option value="yearly">سنوي (دفعة واحدة)</option>
-                      <option value="daily">يومي (تراكمي)</option>
-                    </select>
+                  <div className="grid grid-cols-3 gap-4 text-sm">
+                    {[
+                      { l: 'الإجازة السنوية', v: `${policyCfg['leave.annual_entitled'] ?? '21'} يوم/سنة` },
+                      {
+                        l: 'طريقة الاستحقاق',
+                        v:
+                          policyCfg['leave.accrual_mode'] === 'yearly'
+                            ? 'سنوي (دفعة واحدة)'
+                            : policyCfg['leave.accrual_mode'] === 'daily'
+                              ? 'يومي (تراكمي)'
+                              : 'شهري (يتراكم كل شهر)',
+                      },
+                      { l: 'فترة التجربة قبل الاستحقاق', v: `${policyCfg['leave.probation_months'] ?? '0'} شهر` },
+                      { l: 'الإجازة المرضية', v: '180 يوم (نظام العمل)' },
+                      { l: 'الحد الأقصى للترحيل', v: `${policyCfg['leave.carryover_max_days'] ?? '10'} يوم` },
+                      { l: 'صلاحية الرصيد المُرحّل', v: `${policyCfg['leave.carryover_expiry_months'] ?? '3'} شهر` },
+                    ].map((f) => (
+                      <div key={f.l}>
+                        <p className="text-gray-400 text-xs mb-1">{f.l}</p>
+                        <p className="font-bold text-gray-800">{f.v}</p>
+                      </div>
+                    ))}
                   </div>
-                  <div>
-                    <label className="label">بداية الاستحقاق *</label>
-                    <select className="input">
-                      <option value="after_probation">بعد فترة التجربة</option>
-                      <option value="from_joining">من تاريخ التعيين</option>
-                      <option value="after_6months">بعد 6 أشهر</option>
-                    </select>
-                  </div>
-                  <div>
-                    <label className="label">فترة التجربة (أشهر)</label>
-                    <input type="number" className="input" placeholder="3" defaultValue="3" />
-                  </div>
+                  <p className="text-xs text-gray-400 mt-3">
+                    قيم عامة تُطبَّق على كل الموظفين. الخاص بهذا الموظف: مفتاح «يستحق سنوي»
+                    أعلاه + الرصيد الافتتاحي المُرحّل أدناه.
+                  </p>
                 </div>
-
-              <div className="grid grid-cols-4 gap-4 mt-4">
-                <div>
-                  <label className="label">الإجازة المرضية (يوم/سنة)</label>
-                  <input type="number" className="input" placeholder="30" defaultValue="30" />
-                </div>
-                <div>
-                  <label className="label">الإجازة الطارئة (يوم/سنة)</label>
-                  <input type="number" className="input" placeholder="5" defaultValue="5" />
-                </div>
-                <div>
-                  <label className="label">السماح بالترحيل</label>
-                  <select className="input">
-                    <option value="yes">نعم</option>
-                    <option value="no">لا</option>
-                    <option value="limited">محدود</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="label">الحد الأقصى للترحيل (يوم)</label>
-                  <input type="number" className="input" placeholder="10" defaultValue="10" />
-                </div>
-              </div>
 
               {/* الرصيد الافتتاحي المُرحّل — يعمل في الإضافة والتعديل */}
               <div className="p-4 bg-amber-50 rounded-xl border border-amber-200 mt-4">
@@ -1263,19 +1266,6 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 )}
               </div>
 
-              <div className="p-4 bg-blue-50 rounded-xl mt-4">
-                <div className="flex items-start gap-3">
-                  <Calendar size={20} className="text-blue-500 mt-0.5" />
-                  <div>
-                    <p className="font-medium text-blue-800">ملخص الاستحقاقات السنوية</p>
-                    <div className="grid grid-cols-3 gap-4 mt-2 text-sm text-blue-700">
-                      <div>إجازة سنوية: <strong>21 يوم</strong></div>
-                      <div>إجازة مرضية: <strong>30 يوم</strong></div>
-                      <div>إجازة طارئة: <strong>5 أيام</strong></div>
-                    </div>
-                  </div>
-                </div>
-              </div>
               </div>
               )}
 
