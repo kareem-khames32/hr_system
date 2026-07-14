@@ -8,10 +8,18 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common'
-import { IsInt, Matches } from 'class-validator'
+import {
+  IsArray,
+  IsIn,
+  IsInt,
+  IsOptional,
+  IsString,
+  Matches,
+} from 'class-validator'
 import { Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
+import { PayrollScopeType } from './payroll.entities'
 import { PayrollService } from './payroll.service'
 
 class CalculateDto {
@@ -21,6 +29,34 @@ class CalculateDto {
 
   @Matches(/^\d{4}-\d{2}$/)
   period: string
+}
+
+class CalculateDefinedDto {
+  @IsOptional()
+  @IsInt()
+  runId?: number
+
+  @IsOptional()
+  @IsString()
+  name?: string
+
+  @Matches(/^\d{4}-\d{2}$/)
+  period: string
+
+  @IsIn(['COMPANY', 'BRANCH', 'DEPARTMENT', 'TEAM', 'COST_CENTER', 'CUSTOM'])
+  scopeType: PayrollScopeType
+
+  @IsOptional()
+  @IsArray()
+  scopeIds?: number[]
+
+  @IsOptional()
+  @IsArray()
+  employeeIds?: number[]
+
+  @IsOptional()
+  @IsInt()
+  branchId?: number
 }
 
 // المسير محصور بأدوار الإدارة — الدورة الكاملة (محاسب → HR → مالي → تنفيذي) لاحقاً
@@ -46,6 +82,13 @@ export class PayrollController {
   @Post('runs/calculate')
   calculate(@Body() dto: CalculateDto) {
     return this.service.calculate(dto.branchId, dto.period)
+  }
+
+  // مسير قابل للتعريف: اسم + فترة + نطاق (شركة/فرع/قسم/فريق/مركز تكلفة/مخصّص)
+  @Perm('payroll.calculate')
+  @Post('runs/calculate-defined')
+  calculateDefined(@Body() dto: CalculateDefinedDto) {
+    return this.service.calculateDefined(dto)
   }
 
   @Perm('payroll.approve')

@@ -11,7 +11,7 @@ import {
 } from '../requests/entities/financial.entities'
 import { Leave } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
-import { PayrollItem, PayrollRun } from './payroll.entities'
+import { PayrollItem, PayrollRun, PayrollRunMember } from './payroll.entities'
 import { LatenessTier } from './payroll-rules.entities'
 import { PayrollController } from './payroll.controller'
 import { PayrollService } from './payroll.service'
@@ -25,6 +25,7 @@ import { PayrollRulesService } from './payroll-rules.service'
     AttendanceModule,
     TypeOrmModule.forFeature([
       PayrollRun,
+      PayrollRunMember,
       PayrollItem,
       Employee,
       AttendanceDay,

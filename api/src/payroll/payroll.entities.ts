@@ -11,16 +11,44 @@ import {
 // محاسب → HR → مالي → تنفيذي → جهة الصرف)
 export type PayrollRunStatus = 'CALCULATED' | 'APPROVED' | 'PAID'
 
-// مسير مستقل لكل فرع لكل فترة (23 الشهر السابق → 22 الشهر الحالي)
+// نطاق المسير: الشركة كلها / فرع / قسم / فريق / مركز تكلفة / موظفون بعينهم
+export type PayrollScopeType =
+  | 'COMPANY'
+  | 'BRANCH'
+  | 'DEPARTMENT'
+  | 'TEAM'
+  | 'COST_CENTER'
+  | 'CUSTOM'
+
+// مسير قابل للتعريف: اسم + فترة + نطاق (+ سياسة لاحقاً). عدة مسيرات للفترة الواحدة
 @Entity('payroll_runs')
-@Unique(['branchId', 'period'])
 export class PayrollRun {
   @PrimaryGeneratedColumn()
   id: number
 
+  // اسم المسير («مسير فرع جدة – يوليو») — يُشتق افتراضياً لمسير الفرع القديم
+  @Column({ length: 200, nullable: true })
+  name: string
+
+  @Column({ length: 20, default: 'BRANCH' })
+  scopeType: PayrollScopeType
+
+  // معرّفات النطاق (JSON): فروع/أقسام/فرق/مراكز تكلفة — يسمح بنطاق مركّب
+  @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
+  scopeIds: string
+
+  // قائمة موظفي CUSTOM (JSON)
+  @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
+  employeeIds: string
+
+  // صار nullable — يُملأ لمسير BRANCH فقط (توافق مع القديم)
   @Index()
-  @Column()
+  @Column({ nullable: true })
   branchId: number
+
+  // السياسة المطبَّقة (null = المسار المثبّت القديم) — تُفعَّل في مرحلة المحرك
+  @Column({ nullable: true })
+  policyId: number
 
   @Column({ length: 7 })
   period: string // '2026-07'
@@ -48,6 +76,22 @@ export class PayrollRun {
 
   @CreateDateColumn()
   createdAt: Date
+}
+
+// لقطة أعضاء المسير وقت الحساب — تدقيق «من كان في المسير» ومنع الازدواج
+@Entity('payroll_run_members')
+@Unique(['runId', 'employeeId'])
+export class PayrollRunMember {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Index()
+  @Column()
+  runId: number
+
+  @Index()
+  @Column()
+  employeeId: number
 }
 
 // سطر الموظف في المسير — مع حالة صرف لكل موظف (كاش/تحويل/فيزا)

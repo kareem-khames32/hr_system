@@ -19,7 +19,12 @@ import {
 } from '../requests/entities/financial.entities'
 import { Leave } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
-import { PayrollItem, PayrollRun } from './payroll.entities'
+import {
+  PayrollItem,
+  PayrollRun,
+  PayrollRunMember,
+  PayrollScopeType,
+} from './payroll.entities'
 import { LatenessTier } from './payroll-rules.entities'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
@@ -33,6 +38,8 @@ export class PayrollService {
     private readonly runs: Repository<PayrollRun>,
     @InjectRepository(PayrollItem)
     private readonly items: Repository<PayrollItem>,
+    @InjectRepository(PayrollRunMember)
+    private readonly members: Repository<PayrollRunMember>,
     @InjectRepository(Employee)
     private readonly employees: Repository<Employee>,
     @InjectRepository(AttendanceDay)
@@ -93,21 +100,98 @@ export class PayrollService {
     }
   }
 
-  // ===== إنشاء/إعادة حساب مسير فرع لفترة =====
-  async calculate(branchId: number, period: string) {
-    const { startDate, endDate } = await this.periodRange(period)
+  // ===== حلّ نطاق المسير إلى قائمة موظفين نشطين =====
+  async resolveScope(dto: {
+    scopeType: PayrollScopeType
+    scopeIds?: number[]
+    employeeIds?: number[]
+    branchId?: number | null
+  }): Promise<Employee[]> {
+    const where: Record<string, unknown> = { isActive: true }
+    const ids = dto.scopeIds ?? []
+    switch (dto.scopeType) {
+      case 'COMPANY':
+        break
+      case 'BRANCH':
+        where.branchId = In(ids.length ? ids : [dto.branchId])
+        break
+      case 'DEPARTMENT':
+        if (!ids.length) return []
+        where.departmentId = In(ids)
+        break
+      case 'TEAM':
+        if (!ids.length) return []
+        where.teamId = In(ids)
+        break
+      case 'COST_CENTER':
+        if (!ids.length) return []
+        where.costCenterId = In(ids)
+        break
+      case 'CUSTOM':
+        if (!(dto.employeeIds ?? []).length) return []
+        where.id = In(dto.employeeIds!)
+        break
+    }
+    return this.employees.find({ where })
+  }
 
-    let run = await this.runs.findOne({ where: { branchId, period } })
+  // ===== غلاف التوافق: مسير فرع واحد لفترة (المسار القديم) =====
+  async calculate(branchId: number, period: string) {
+    return this.calculateDefined({
+      period,
+      scopeType: 'BRANCH',
+      branchId,
+      scopeIds: [branchId],
+    })
+  }
+
+  // ===== إنشاء/إعادة حساب مسير قابل للتعريف (اسم + فترة + نطاق) =====
+  async calculateDefined(dto: {
+    runId?: number
+    name?: string | null
+    period: string
+    scopeType: PayrollScopeType
+    scopeIds?: number[]
+    employeeIds?: number[]
+    branchId?: number | null
+    policyId?: number | null
+  }) {
+    const { startDate, endDate } = await this.periodRange(dto.period)
+
+    // إيجاد المسير: بالمعرّف، أو مسير الفرع القديم لنفس الفترة، وإلا أنشئ جديداً
+    let run: PayrollRun | null = null
+    if (dto.runId) {
+      run = await this.runs.findOne({ where: { id: dto.runId } })
+      if (!run) throw new NotFoundException('المسير غير موجود')
+    } else if (dto.scopeType === 'BRANCH' && dto.branchId != null) {
+      run = await this.runs.findOne({
+        where: { branchId: dto.branchId, period: dto.period, scopeType: 'BRANCH' },
+      })
+    }
     if (run && run.status !== 'CALCULATED') {
       throw new BadRequestException(
         `المسير ${run.status} — لا يُعاد حسابه بعد الاعتماد`
       )
     }
     if (!run) {
-      run = this.runs.create({ branchId, period, startDate, endDate })
-      run = await this.runs.save(run)
+      run = await this.runs.save(
+        this.runs.create({
+          name: dto.name ?? null,
+          scopeType: dto.scopeType,
+          scopeIds: dto.scopeIds ? JSON.stringify(dto.scopeIds) : (null as any),
+          employeeIds: dto.employeeIds
+            ? JSON.stringify(dto.employeeIds)
+            : (null as any),
+          branchId: dto.scopeType === 'BRANCH' ? (dto.branchId ?? null) : null,
+          policyId: dto.policyId ?? null,
+          period: dto.period,
+          startDate,
+          endDate,
+        })
+      )
     } else {
       await this.items.delete({ runId: run.id })
+      await this.members.delete({ runId: run.id })
     }
 
     const monthlyDays = Number(await this.cfg('payroll.monthly_days', '30'))
@@ -123,9 +207,18 @@ export class PayrollService {
       await this.cfg('attendance.absence_penalty_days', '1')
     )
 
-    const emps = await this.employees.find({
-      where: { branchId, isActive: true },
+    // حلّ النطاق من تعريف المسير المخزّن + تثبيت لقطة الأعضاء
+    const emps = await this.resolveScope({
+      scopeType: run.scopeType,
+      scopeIds: run.scopeIds ? JSON.parse(run.scopeIds) : undefined,
+      employeeIds: run.employeeIds ? JSON.parse(run.employeeIds) : undefined,
+      branchId: run.branchId,
     })
+    if (emps.length) {
+      await this.members.save(
+        emps.map((e) => this.members.create({ runId: run!.id, employeeId: e.id }))
+      )
+    }
 
     let totalNet = 0
     for (const emp of emps) {
