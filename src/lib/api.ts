@@ -360,6 +360,39 @@ export const updateUser = (id: number, u: Partial<{ role: string; isActive: bool
   patch<ApiUser>(`/users/${id}`, u)
 export const fetchConfig = () => get<Array<{ key: string; value: string }>>('/settings/config')
 export const updateConfig = (key: string, value: string) => patch('/settings/config', { key, value })
+
+// معادلات الرواتب: شرائح خصم التأخير
+export interface ApiLatenessTier {
+  id: number
+  fromMinutes: number
+  toMinutes: number | null
+  mode: 'FRACTION' | 'MINUTES'
+  value: number
+  isActive: boolean
+  label?: string | null
+}
+export const fetchLatenessTiers = () =>
+  get<ApiLatenessTier[]>('/payroll/rules/lateness-tiers')
+export const createLatenessTier = (body: {
+  fromMinutes: number
+  toMinutes?: number | null
+  mode: 'FRACTION' | 'MINUTES'
+  value?: number | string
+  label?: string
+}) => post<ApiLatenessTier>('/payroll/rules/lateness-tiers', body)
+export const updateLatenessTier = (
+  id: number,
+  body: Partial<{
+    fromMinutes: number
+    toMinutes: number | null
+    mode: 'FRACTION' | 'MINUTES'
+    value: number | string
+    label: string
+    isActive: boolean
+  }>
+) => patch<ApiLatenessTier>(`/payroll/rules/lateness-tiers/${id}`, body)
+export const deleteLatenessTier = (id: number) =>
+  del<{ ok: boolean }>(`/payroll/rules/lateness-tiers/${id}`)
 export const fetchLeaveTypes = () => get<any[]>('/settings/leave-types')
 export const createLeaveType = (lt: Record<string, unknown>) => post('/settings/leave-types', lt)
 export const updateLeaveType = (id: number, lt: Record<string, unknown>) => patch(`/settings/leave-types/${id}`, lt)
