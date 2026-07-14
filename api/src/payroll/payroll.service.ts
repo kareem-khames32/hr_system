@@ -20,6 +20,7 @@ import {
 import { Leave } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { PayrollItem, PayrollRun } from './payroll.entities'
+import { LatenessTier } from './payroll-rules.entities'
 
 const round2 = (n: number) => Math.round(n * 100) / 100
 
@@ -46,10 +47,31 @@ export class PayrollService {
     private readonly loans: Repository<Loan>,
     @InjectRepository(EmployeeObligation)
     private readonly obligations: Repository<EmployeeObligation>,
+    @InjectRepository(LatenessTier)
+    private readonly latenessTiers: Repository<LatenessTier>,
     @InjectRepository(RequestsConfig)
     private readonly config: Repository<RequestsConfig>,
     private readonly attendanceService: AttendanceService
   ) {}
+
+  // خصم تأخير يوم واحد بحسب شرائح التأخير المُعدّة (إن وُجدت)، وإلا بالدقيقة
+  private latenessForDay(
+    lateMin: number,
+    tiers: LatenessTier[],
+    dayRate: number,
+    minuteRate: number
+  ): number {
+    if (lateMin <= 0) return 0
+    const tier = tiers.find(
+      (t) =>
+        lateMin >= Number(t.fromMinutes) &&
+        (t.toMinutes == null || lateMin <= Number(t.toMinutes))
+    )
+    if (!tier) return lateMin * minuteRate // لا شريحة مطابقة → بالدقيقة (السلوك الافتراضي)
+    return tier.mode === 'FRACTION'
+      ? Number(tier.value) * dayRate
+      : lateMin * minuteRate
+  }
 
   private async cfg(key: string, fallback: string): Promise<string> {
     const row = await this.config.findOne({ where: { key } })
@@ -92,6 +114,14 @@ export class PayrollService {
     const dailyHours = Number(await this.cfg('payroll.daily_hours', '8'))
     const lateEnabled =
       (await this.cfg('payroll.late_deduction_enabled', 'true')) === 'true'
+    // معادلات مرنة: شرائح التأخير + معامل الغياب بلا إذن (يوم × المعامل)
+    const tiers = await this.latenessTiers.find({
+      where: { isActive: true },
+      order: { fromMinutes: 'ASC' },
+    })
+    const absencePenalty = Number(
+      await this.cfg('attendance.absence_penalty_days', '1')
+    )
 
     const emps = await this.employees.find({
       where: { branchId, isActive: true },
@@ -141,16 +171,26 @@ export class PayrollService {
         (s, r) => s + r.lateMinutes + (r.deductibleMinutes ?? 0),
         0
       )
+      // خصم التأخير بالشرائح: كل يوم متأخر على حدة (كسر يوم أو بالدقيقة)، +
+      // دقائق الإذن «بخصم» بالدقيقة. بلا شرائح → بالدقيقة (السلوك الافتراضي)
       const latenessDeduction = lateEnabled
-        ? round2(lateMinutes * minuteRate)
+        ? round2(
+            attRows.reduce(
+              (s, r) =>
+                s +
+                this.latenessForDay(r.lateMinutes, tiers, dayRate, minuteRate) +
+                (r.deductibleMinutes ?? 0) * minuteRate,
+              0
+            )
+          )
         : 0
 
       // 2ب) خصم الغياب بلا إذن: يوم عمل مجدول بلا بصمة ولا إجازة (status='absent')
-      // يُخصم بقيمة اليوم الكاملة. (يوم الإجازة يُصنّف 'leave' لا 'absent' فلا
-      // ازدواج مع خصم الإجازة غير المدفوعة)
+      // يُخصم بقيمة اليوم × معامل عقوبة الغياب (افتراضي 1، يُضبط لـ1.5/2).
+      // (يوم الإجازة يُصنّف 'leave' لا 'absent' فلا ازدواج مع الإجازة غير المدفوعة)
       const absentRows = attRows.filter((r) => r.status === 'absent')
       const absenceDays = absentRows.length
-      const absenceDeduction = round2(absenceDays * dayRate)
+      const absenceDeduction = round2(absenceDays * dayRate * absencePenalty)
 
       // 3) الإجازات غير المدفوعة (isUnpaid من تعريف النوع — أي نوع
       // غير مدفوع يُخصم يوم بيوم، بلا سياسة غياب) المتقاطعة مع الفترة

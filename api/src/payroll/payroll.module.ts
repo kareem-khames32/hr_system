@@ -12,10 +12,13 @@ import {
 import { Leave } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { PayrollItem, PayrollRun } from './payroll.entities'
+import { LatenessTier } from './payroll-rules.entities'
 import { PayrollController } from './payroll.controller'
 import { PayrollService } from './payroll.service'
 import { ObligationsController } from './obligations.controller'
 import { ObligationsService } from './obligations.service'
+import { PayrollRulesController } from './payroll-rules.controller'
+import { PayrollRulesService } from './payroll-rules.service'
 
 @Module({
   imports: [
@@ -30,10 +33,11 @@ import { ObligationsService } from './obligations.service'
       Loan,
       LoanInstallment,
       EmployeeObligation,
+      LatenessTier,
       RequestsConfig,
     ]),
   ],
-  controllers: [PayrollController, ObligationsController],
-  providers: [PayrollService, ObligationsService],
+  controllers: [PayrollController, ObligationsController, PayrollRulesController],
+  providers: [PayrollService, ObligationsService, PayrollRulesService],
 })
 export class PayrollModule {}

@@ -241,6 +241,8 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'overtime.multiplier_weekend', value: '1.5' },
   { key: 'overtime.multiplier_holiday', value: '2' },
   { key: 'attendance.grace_minutes', value: '10' },
+  // معامل عقوبة الغياب بلا إذن (يوم × المعامل) — 1.5 أو 2 حسب السياسة
+  { key: 'attendance.absence_penalty_days', value: '1' },
   // العطلة الأسبوعية (SUN..SAT مفصولة بفواصل) — تجاوز لكل فرع من شاشة الفروع
   { key: 'attendance.weekend_days', value: 'FRI,SAT' },
   // فاصل المزامنة التلقائية لأجهزة البصمة بالدقائق (0 = متوقفة)
