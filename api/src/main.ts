@@ -23,9 +23,11 @@ async function bootstrap() {
   })
 
   const port = config.get<number>('PORT', 4000)
-  await app.listen(port)
+  // محلي افتراضيًا: لا يُفتح المنفذ على الشبكة إلا بضبط API_HOST صراحةً (مثل 0.0.0.0)
+  const host = config.get<string>('API_HOST', '127.0.0.1')
+  await app.listen(port, host)
   // eslint-disable-next-line no-console
-  console.log(`🚀 HR API running on http://localhost:${port}/api`)
+  console.log(`🚀 HR API running on http://${host}:${port}/api`)
 }
 
 bootstrap()

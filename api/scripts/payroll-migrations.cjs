@@ -305,10 +305,14 @@ function classifyMetadataQuery(query, entityMetadatas, newTables = new Set(), ma
     } catch { return { safe: false, reason: originalError.message } }
   }
 }
+// المُحلل الصارم يخص ملفات 001-012 التاريخية فقط؛ الملفات الأحدث (GO/بيانات/.cjs)
+// يطبقها ويتحقق منها المُرحّل المجمّع api/scripts/db-migrate.cjs.
+const legacyStrictLast = '20260914_012_payroll_salary_reference_period.sql'
 function readMigrations(dir = migrationDir) {
   if (!fs.existsSync(dir)) return []
   const versions = []
-  for (const name of fs.readdirSync(dir).filter(name => name.endsWith('.sql')).sort()) {
+  const legacyOnly = path.resolve(dir) === path.resolve(migrationDir)
+  for (const name of fs.readdirSync(dir).filter(name => name.endsWith('.sql') && (!legacyOnly || name <= legacyStrictLast)).sort()) {
     if (!/^\d{8}_\d{3}_[a-z_]+\.sql$/.test(name)) throw new Error('Invalid payroll migration filename: ' + name)
     const file = path.join(dir, name)
     if (!fs.lstatSync(file).isFile() || fs.lstatSync(file).isSymbolicLink()) throw new Error('Migration must be a regular local file')

@@ -2,9 +2,9 @@
 -- Preserve every request_type profile, approval chain, resolved step and audit row.
 -- No default profile or balance classification is guessed.
 IF COL_LENGTH(N'dbo.leaves',N'leaveType') IS NOT NULL AND COL_LENGTH(N'dbo.leaves',N'leaveTypeCode') IS NOT NULL
- THROW 50020,'Both leave type columns exist; review the mapping before migration',1;
+ THROW 50031,'Both leave type columns exist; review the mapping before migration',1;
 IF COL_LENGTH(N'dbo.leave_types',N'balanceSource') IS NOT NULL AND COL_LENGTH(N'dbo.leave_types',N'balanceType') IS NOT NULL
- THROW 50021,'Both balance type columns exist; review the mapping before migration',1;
+ THROW 50032,'Both balance type columns exist; review the mapping before migration',1;
 IF COL_LENGTH(N'dbo.leaves',N'leaveType') IS NOT NULL
  EXEC sys.sp_rename N'dbo.leaves.leaveType',N'leaveTypeCode',N'COLUMN';
 IF COL_LENGTH(N'dbo.leave_types',N'balanceSource') IS NOT NULL

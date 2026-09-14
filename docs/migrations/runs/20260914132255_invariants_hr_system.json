@@ -1,0 +1,386 @@
+{
+  "command": "invariants",
+  "database": "hr_system",
+  "rehearsal": "hr_migrate_rehearsal_20260914132242_0c3b761c",
+  "startedAt": "2026-09-14T13:22:42.725Z",
+  "note": "SHA-256 وأعداد ومعرفات صفوف فقط؛ لا قيم شخصية أو بنكية",
+  "baselineBackup": {
+    "hostPath": "D:/projects/hr_system_backups/pre-payroll-2026-09-14/hr_system_pre_payroll_20260914.bak",
+    "sha256": "ccb5d8ca71238bdd457482ca5ab00b5598b0e2628f87c4f112127263f3a836d7",
+    "backupFinishDate": "2026-09-14T11:27:33.000Z",
+    "verifyOnly": "passed"
+  },
+  "bootWrites": {
+    "requestsConfigKeysAdded": [
+      "attendance.flex.count_early_work_toward_required",
+      "attendance.flex.max_session_minutes",
+      "attendance.flex.missing_checkout_policy",
+      "attendance.flex.prorate_window_on_partial_leave",
+      "attendance.flex.shortfall_grace_minutes",
+      "attendance.flex.unpaid_break_minutes",
+      "attendance.flex.window_supersedes_grace",
+      "loan.insufficient_net_behavior",
+      "overtime.allow_early_overtime",
+      "overtime.leave_conflict_policy",
+      "overtime.max_closed_periods",
+      "overtime.max_hours_per_day",
+      "overtime.max_hours_per_month",
+      "overtime.max_hours_per_week",
+      "overtime.missing_punch_policy",
+      "overtime.request_backdate_days",
+      "overtime.rounding_direction",
+      "overtime.rounding_minutes",
+      "overtime.wage_components",
+      "payroll.attendance_daily_cap_days",
+      "payroll.attendance_overlap_policy",
+      "payroll.exempt_overtime_eligible",
+      "payroll.exempt_unpaid_leave_deductible",
+      "payroll.exemption_reason_min_length",
+      "payroll.policy.base_days_basis",
+      "payroll.policy.carry_over_excess",
+      "payroll.policy.cycle_end_day",
+      "payroll.policy.cycle_end_mode",
+      "payroll.policy.default_period_type",
+      "payroll.policy.division_by_zero_mode",
+      "payroll.policy.max_deduction_pct_of_gross",
+      "payroll.policy.min_net_guarantee",
+      "payroll.policy.net_floor_pct",
+      "payroll.policy.rate_base",
+      "payroll.policy.rounding_mode",
+      "payroll.policy.rounding_scale",
+      "payroll.policy.skip_attendance",
+      "payroll.shortfall_enabled",
+      "payroll.shortfall_mode",
+      "payroll.shortfall_value"
+    ],
+    "requestsConfigKeysRemoved": [],
+    "docTypeCodesAdded": [
+      "contract",
+      "cv",
+      "driver_license",
+      "experience_certificate",
+      "formal_photo",
+      "health_certificate",
+      "iqama",
+      "letter",
+      "national_id",
+      "other",
+      "passport",
+      "qualification_certificate"
+    ],
+    "counts": {
+      "requests_config": {
+        "baseline": 45,
+        "live": 85
+      },
+      "doc_types": {
+        "baseline": 0,
+        "live": 12
+      },
+      "letter_templates": {
+        "baseline": null,
+        "live": 6
+      },
+      "letter_template_revisions": {
+        "baseline": null,
+        "live": 6
+      },
+      "letter_template_bindings": {
+        "baseline": null,
+        "live": 6
+      },
+      "attendance_days": {
+        "baseline": 4405,
+        "live": 4574
+      },
+      "requests": {
+        "baseline": 341,
+        "live": 342
+      },
+      "employees": {
+        "baseline": 180,
+        "live": 180
+      },
+      "hr_issued_documents": {
+        "baseline": null,
+        "live": 0
+      }
+    },
+    "requestsCreatedAfterBaseline": [
+      {
+        "id": 398,
+        "status": "CANCELLED"
+      }
+    ]
+  },
+  "rehearsalApply": {
+    "ok": true,
+    "applied": 22,
+    "failed": null
+  },
+  "hashes": {
+    "before": {
+      "historyIdentityDates": "ba9c412394ea352f0203e2cc6bb59ec3e14cce142332e2ae9c6714f725f0f558",
+      "historyReasons": "02247183ee996818812785367bf063e6e32806298667b527693fc656ff3372eb",
+      "historyBankValues": "afa23e2a835e660226c2685287d6021cacfbcc59883eb8b9ef8e26d7e341586d",
+      "workTypes": "6fb1e524aa681a1e7d43043f8015450dc6289ceecd86ba8fb9e63b985fcb8486",
+      "transfersIdentityValues": "e3c74ab4272eb49aae77b39fb110b8c471d3317518509e5aaaa7b0caef14102d",
+      "custody_assignmentsIdentityValues": "892f24721625aab1be6c026f7b2794866b3e1be597028d93ddad9f8c2124b06a",
+      "offboarding_casesIdentityValues": "e4137a2911bf07cbe60e672645aa3c7896f2751f8257549fe94ec6e1c3de1782",
+      "clearance_itemsIdentityValues": "928aba12c91878a72d209cf516dec6847e5f13c1928d3d60bf0c00ef6f749f6a",
+      "onboarding_tasksIdentityValues": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "requestsPreservedFields": "c68ed56b37baf8e76f4a60465f3b21531426169b955dc260bbd26f638bd10aae",
+      "request_typesPreservedFields": "72be3694af9c42c34e52425ba6e581b61046c872431172f278dd99d1a6a80be0",
+      "approval_chainsPreservedFields": "8ee2f749257dc894f59506027b04e5cf3392c067b213c4467a409386ecb50235",
+      "approval_stepsPreservedFields": "05b05976fa3533225d323b4937cbf2cc2881884dc62985a80d044648280dea4e",
+      "request_approvalsPreservedFields": "b2207458184b13e2252f7579cd7b600aadd6c3369e7ae7ebef3b510fb46364f8"
+    },
+    "afterMigration": {
+      "historyIdentityDates": "ba9c412394ea352f0203e2cc6bb59ec3e14cce142332e2ae9c6714f725f0f558",
+      "historyReasons": "02247183ee996818812785367bf063e6e32806298667b527693fc656ff3372eb",
+      "historyBankValues": "afa23e2a835e660226c2685287d6021cacfbcc59883eb8b9ef8e26d7e341586d",
+      "workTypes": "6fb1e524aa681a1e7d43043f8015450dc6289ceecd86ba8fb9e63b985fcb8486",
+      "transfersIdentityValues": "e3c74ab4272eb49aae77b39fb110b8c471d3317518509e5aaaa7b0caef14102d",
+      "custody_assignmentsIdentityValues": "892f24721625aab1be6c026f7b2794866b3e1be597028d93ddad9f8c2124b06a",
+      "offboarding_casesIdentityValues": "e4137a2911bf07cbe60e672645aa3c7896f2751f8257549fe94ec6e1c3de1782",
+      "clearance_itemsIdentityValues": "928aba12c91878a72d209cf516dec6847e5f13c1928d3d60bf0c00ef6f749f6a",
+      "onboarding_tasksIdentityValues": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "requestsPreservedFields": "c68ed56b37baf8e76f4a60465f3b21531426169b955dc260bbd26f638bd10aae",
+      "request_typesPreservedFields": "72be3694af9c42c34e52425ba6e581b61046c872431172f278dd99d1a6a80be0",
+      "approval_chainsPreservedFields": "8ee2f749257dc894f59506027b04e5cf3392c067b213c4467a409386ecb50235",
+      "approval_stepsPreservedFields": "05b05976fa3533225d323b4937cbf2cc2881884dc62985a80d044648280dea4e",
+      "request_approvalsPreservedFields": "b2207458184b13e2252f7579cd7b600aadd6c3369e7ae7ebef3b510fb46364f8"
+    },
+    "live": {
+      "historyIdentityDates": "ba9c412394ea352f0203e2cc6bb59ec3e14cce142332e2ae9c6714f725f0f558",
+      "historyReasons": "02247183ee996818812785367bf063e6e32806298667b527693fc656ff3372eb",
+      "historyBankValues": "afa23e2a835e660226c2685287d6021cacfbcc59883eb8b9ef8e26d7e341586d",
+      "workTypes": "6fb1e524aa681a1e7d43043f8015450dc6289ceecd86ba8fb9e63b985fcb8486",
+      "transfersIdentityValues": "e3c74ab4272eb49aae77b39fb110b8c471d3317518509e5aaaa7b0caef14102d",
+      "custody_assignmentsIdentityValues": "892f24721625aab1be6c026f7b2794866b3e1be597028d93ddad9f8c2124b06a",
+      "offboarding_casesIdentityValues": "e4137a2911bf07cbe60e672645aa3c7896f2751f8257549fe94ec6e1c3de1782",
+      "clearance_itemsIdentityValues": "928aba12c91878a72d209cf516dec6847e5f13c1928d3d60bf0c00ef6f749f6a",
+      "onboarding_tasksIdentityValues": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "requestsPreservedFields": "c68ed56b37baf8e76f4a60465f3b21531426169b955dc260bbd26f638bd10aae",
+      "request_typesPreservedFields": "72be3694af9c42c34e52425ba6e581b61046c872431172f278dd99d1a6a80be0",
+      "approval_chainsPreservedFields": "8ee2f749257dc894f59506027b04e5cf3392c067b213c4467a409386ecb50235",
+      "approval_stepsPreservedFields": "05b05976fa3533225d323b4937cbf2cc2881884dc62985a80d044648280dea4e",
+      "request_approvalsPreservedFields": "b2207458184b13e2252f7579cd7b600aadd6c3369e7ae7ebef3b510fb46364f8"
+    }
+  },
+  "migrationPreservesData": {
+    "historyIdentityDates": {
+      "passed": true,
+      "rows": 46
+    },
+    "historyReasons": {
+      "passed": true,
+      "rows": 46
+    },
+    "historyBankValues": {
+      "passed": true,
+      "rows": 1
+    },
+    "workTypes": {
+      "passed": true,
+      "rows": 180
+    },
+    "transfersIdentityValues": {
+      "passed": true,
+      "rows": 5
+    },
+    "custody_assignmentsIdentityValues": {
+      "passed": true,
+      "rows": 39
+    },
+    "offboarding_casesIdentityValues": {
+      "passed": true,
+      "rows": 17
+    },
+    "clearance_itemsIdentityValues": {
+      "passed": true,
+      "rows": 85
+    },
+    "onboarding_tasksIdentityValues": {
+      "passed": true,
+      "rows": 0
+    },
+    "requestsPreservedFields": {
+      "passed": true,
+      "rows": 341
+    },
+    "request_typesPreservedFields": {
+      "passed": true,
+      "rows": 65
+    },
+    "approval_chainsPreservedFields": {
+      "passed": true,
+      "rows": 68
+    },
+    "approval_stepsPreservedFields": {
+      "passed": true,
+      "rows": 67
+    },
+    "request_approvalsPreservedFields": {
+      "passed": true,
+      "rows": 300
+    }
+  },
+  "liveMatchesBaseline": {
+    "historyIdentityDates": {
+      "passed": true,
+      "rows": 46
+    },
+    "historyReasons": {
+      "passed": true,
+      "rows": 46
+    },
+    "historyBankValues": {
+      "passed": true,
+      "rows": 1
+    },
+    "workTypes": {
+      "passed": true,
+      "rows": 180
+    },
+    "transfersIdentityValues": {
+      "passed": true,
+      "rows": 5
+    },
+    "custody_assignmentsIdentityValues": {
+      "passed": true,
+      "rows": 39
+    },
+    "offboarding_casesIdentityValues": {
+      "passed": true,
+      "rows": 17
+    },
+    "clearance_itemsIdentityValues": {
+      "passed": true,
+      "rows": 85
+    },
+    "onboarding_tasksIdentityValues": {
+      "passed": true,
+      "rows": 0
+    },
+    "requestsPreservedFields": {
+      "passed": true,
+      "rows": 341
+    },
+    "request_typesPreservedFields": {
+      "passed": true,
+      "rows": 65
+    },
+    "approval_chainsPreservedFields": {
+      "passed": true,
+      "rows": 68
+    },
+    "approval_stepsPreservedFields": {
+      "passed": true,
+      "rows": 67
+    },
+    "request_approvalsPreservedFields": {
+      "passed": true,
+      "rows": 300
+    }
+  },
+  "datedVersionLockProof": {
+    "effectiveFrom": "2026-04-23",
+    "bySource": {
+      "CALENDAR_GLOBAL": {
+        "versions": 1,
+        "equalToBaseline": 1
+      },
+      "CALENDAR_BRANCH": {
+        "versions": 9,
+        "equalToBaseline": 9
+      },
+      "EMPLOYEE_ORG": {
+        "versions": 180,
+        "equalToBaseline": 180
+      }
+    },
+    "differingSources": [],
+    "approvedOrPaidRuns": 0,
+    "settledCasesInsideDatedRange": [
+      {
+        "caseId": 2,
+        "employeeId": 19,
+        "lastWorkingDay": "2026-07-08",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": true
+      },
+      {
+        "caseId": 3,
+        "employeeId": 30,
+        "lastWorkingDay": "2026-08-07",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": true
+      },
+      {
+        "caseId": 4,
+        "employeeId": 32,
+        "lastWorkingDay": "2026-08-07",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": true
+      },
+      {
+        "caseId": 5,
+        "employeeId": 34,
+        "lastWorkingDay": "2026-08-07",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": true
+      },
+      {
+        "caseId": 6,
+        "employeeId": 9,
+        "lastWorkingDay": "2026-07-09",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": true
+      },
+      {
+        "caseId": 11,
+        "employeeId": 42,
+        "lastWorkingDay": "2026-08-08",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": true
+      },
+      {
+        "caseId": 12,
+        "employeeId": 153,
+        "lastWorkingDay": "2026-07-13",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": true
+      },
+      {
+        "caseId": 16,
+        "employeeId": 185,
+        "lastWorkingDay": "2027-01-31",
+        "status": "SETTLED",
+        "employeeOrgVersionEqualsBaseline": true
+      },
+      {
+        "caseId": 17,
+        "employeeId": 186,
+        "lastWorkingDay": "2027-02-28",
+        "status": "SETTLED",
+        "employeeOrgVersionEqualsBaseline": true
+      },
+      {
+        "caseId": 18,
+        "employeeId": 205,
+        "lastWorkingDay": "2026-09-30",
+        "status": "SETTLED",
+        "employeeOrgVersionEqualsBaseline": true
+      }
+    ],
+    "employeesJoiningAfterEffectiveFrom": {
+      "count": 16,
+      "latestJoinDate": "2027-06-01"
+    }
+  },
+  "invariantCount": 14,
+  "passedMigration": true,
+  "passedLive": true,
+  "finishedAt": "2026-09-14T13:22:55.599Z"
+}

@@ -281,8 +281,9 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'attendance.sync_interval_minutes', value: '0' },
   // لحاق تجسيد الغياب: أقصى عدد أيام تُلحق بعد توقف السيرفر (المهمة الليلية)
   { key: 'attendance.absence_catchup_max_days', value: '31' },
-  // مفتاح استقبال بصمات ZKTeco — غيّره في الإنتاج
-  { key: 'attendance.device_key', value: 'zk-device-key-change-me' },
+  // مفتاح استقبال بصمات ZKTeco — فارغ = الاستقبال موقوف حتى يُضبط مفتاح عشوائي ≥24 حرفًا من الإعدادات
+  // (لا قيمة منشورة في الريبو؛ القيمة القديمة 'zk-device-key-change-me' مرفوضة في الاستقبال والحفظ)
+  { key: 'attendance.device_key', value: '' },
   // الإجازات: الترحيل السنوي بالطبقات
   { key: 'leave.annual_entitled', value: '21' },
   // رصيد الإجازة المرضية السنوي (يوم) — كان 180 ثابتاً في الكود

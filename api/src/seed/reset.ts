@@ -7,6 +7,17 @@ import * as dotenv from 'dotenv'
 dotenv.config()
 
 import { DataSource } from 'typeorm'
+import { seedPreflight } from './seed-guard'
+
+// الحارس قبل أي اتصال: التصفير يمسح الجداول، فمسموح لقاعدة اختبار مؤقتة فقط (لا تجاوز لقاعدة الشركة)
+const preflight = (() => {
+  try {
+    return seedPreflight(process.env.DB_DATABASE, process.argv.slice(2), 'reset')
+  } catch (err) {
+    console.error('❌ فشل التصفير:', (err as Error).message)
+    return process.exit(1)
+  }
+})()
 
 const ds = new DataSource({
   type: 'mssql',
@@ -14,7 +25,7 @@ const ds = new DataSource({
   port: parseInt(process.env.DB_PORT ?? '1433', 10),
   username: process.env.DB_USERNAME ?? 'sa',
   password: process.env.DB_PASSWORD ?? '',
-  database: process.env.DB_DATABASE ?? 'hr_system',
+  database: preflight.database,
   options: { trustServerCertificate: true, encrypt: false },
 })
 

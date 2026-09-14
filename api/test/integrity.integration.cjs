@@ -286,6 +286,14 @@ test('production bootstrap rejects automatic schema synchronization and publishe
   assert.equal(validateEnv({NODE_ENV:'production',JWT_SECRET:secret,DB_SYNCHRONIZE:'false'}).DB_SYNCHRONIZE,'false')
 })
 
+test('bootstrap refuses synchronize outside disposable test databases and published secrets outside test',()=>{
+  const {validateEnv}=require('../src/auth/jwt-secret')
+  assert.throws(()=>validateEnv({NODE_ENV:'development',JWT_SECRET:secret,DB_SYNCHRONIZE:'true',DB_DATABASE:'hr_system'}),/DB_SYNCHRONIZE=true مرفوض على قاعدة البيانات "hr_system"/)
+  assert.throws(()=>validateEnv({NODE_ENV:'development',JWT_SECRET:secret,DB_SYNCHRONIZE:'true'}),/"hr_system"/)
+  assert.equal(validateEnv({NODE_ENV:'test',JWT_SECRET:secret,DB_SYNCHRONIZE:'true',DB_DATABASE:database}).DB_DATABASE,database)
+  assert.throws(()=>validateEnv({NODE_ENV:'development',JWT_SECRET:'change-this-to-a-long-random-secret-in-production',DB_SYNCHRONIZE:'false'}),/JWT_SECRET/)
+})
+
 test('non-admin accounts with no branch have an empty scope instead of all employee records',async()=>{
   const unassigned=await repos.User.save({email:'unassigned@test.invalid',displayName:'Unassigned legacy user',passwordHash:'unused',
     role:'employee',branchId:null,permissions:JSON.stringify(['employees.view','employees.edit','settings.manage'])})
@@ -631,7 +639,7 @@ test('LEV-16 SQL migration upgrades a disposable old balance table idempotently 
   try {
     migrationPool=await new sql.ConnectionPool({server:env.DB_HOST||'localhost',port:Number(env.DB_PORT||1433),user:env.DB_USERNAME||'sa',password:env.DB_PASSWORD,database:migrationDatabase,options:{encrypt:false,trustServerCertificate:true}}).connect()
     await migrationPool.request().batch('CREATE TABLE dbo.leave_balances (id int IDENTITY(1,1) PRIMARY KEY, employeeId int, entitled decimal(6,2), taken decimal(6,2)); INSERT INTO dbo.leave_balances (employeeId,entitled,taken) VALUES(123,21,4.5);')
-    const migration=fs.readFileSync(path.resolve(apiRoot,'../docs/migrations/2026-09-11_leave_balance_adjustments.sql'),'utf8')
+    const migration=fs.readFileSync(path.resolve(apiRoot,'../docs/migrations/_superseded/2026-09-11_leave_balance_adjustments.sql'),'utf8')
     await migrationPool.request().batch(migration)
     await migrationPool.request().batch(migration)
     const records=(await migrationPool.request().query('SELECT * FROM dbo.leave_balances')).recordset

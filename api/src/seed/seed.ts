@@ -63,15 +63,26 @@ import {
   WorkSchedule,
 } from '../assets/assets.entities'
 import { ensureLeaveBalance, seedRequests } from './seed-requests'
+import { seedPreflight, seedSchemaDecision } from './seed-guard'
 
 const dbType = (process.env.DB_TYPE ?? 'mssql') as 'mssql' | 'mysql'
+
+// الحارس قبل أي اتصال: قاعدة مؤقتة، أو تثبيت جديد بتصريح --fresh-install (والفحص الفعلي في main)
+const preflight = (() => {
+  try {
+    return seedPreflight(process.env.DB_DATABASE, process.argv.slice(2), 'seed')
+  } catch (err) {
+    console.error('❌ فشل البذر:', (err as Error).message)
+    return process.exit(1)
+  }
+})()
 
 const common = {
   host: process.env.DB_HOST ?? 'localhost',
   port: parseInt(process.env.DB_PORT ?? (dbType === 'mysql' ? '3306' : '1433'), 10),
   username: process.env.DB_USERNAME ?? (dbType === 'mysql' ? 'root' : 'sa'),
   password: process.env.DB_PASSWORD ?? '',
-  database: process.env.DB_DATABASE ?? 'hr_system',
+  database: preflight.database,
   entities: [
     User,
     Role,
@@ -128,20 +139,22 @@ const common = {
     AssetType,
     Candidate,
   ],
-  synchronize: true, // البذر ينشئ الجداول لو مش موجودة
 }
 
-const ds =
+// يُنشأ بعد فحص القاعدة فقط: المزامنة لقاعدة اختبار مؤقتة أو لقاعدة جديدة/فارغة (seedSchemaDecision)
+let ds: DataSource
+const createDataSource = (synchronize: boolean) =>
   dbType === 'mysql'
-    ? new DataSource({ type: 'mysql', ...common })
+    ? new DataSource({ type: 'mysql', ...common, synchronize })
     : new DataSource({
         type: 'mssql',
         ...common,
+        synchronize,
         options: { trustServerCertificate: true, encrypt: false },
       })
 
-// إنشاء القاعدة تلقائياً إن لم تكن موجودة — يوفّر خطوة CREATE DATABASE اليدوية
-async function ensureDatabaseExists() {
+// فحص القاعدة ثم إنشاؤها إن لم تكن موجودة — قاعدة قائمة فيها جداول تُرفض قبل أي مزامنة
+async function prepareDatabase(): Promise<boolean> {
   if (dbType === 'mysql') {
     // اتصال بدون قاعدة محددة لإنشائها
     // eslint-disable-next-line @typescript-eslint/no-var-requires
@@ -152,33 +165,46 @@ async function ensureDatabaseExists() {
       user: common.username,
       password: common.password,
     })
-    await conn.query(
-      `CREATE DATABASE IF NOT EXISTS \`${common.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
-    )
-    await conn.end()
+    try {
+      const [schemas] = await conn.query('SELECT COUNT(*) AS n FROM information_schema.schemata WHERE schema_name = ?', [common.database])
+      const [tables] = await conn.query('SELECT COUNT(*) AS n FROM information_schema.tables WHERE table_schema = ?', [common.database])
+      const decision = seedSchemaDecision(preflight, { exists: Number(schemas[0].n) > 0, userTables: Number(tables[0].n) })
+      await conn.query(
+        `CREATE DATABASE IF NOT EXISTS \`${common.database}\` CHARACTER SET utf8mb4 COLLATE utf8mb4_unicode_ci`
+      )
+      console.log(`✓ القاعدة ${common.database} جاهزة`)
+      return decision.synchronize
+    } finally {
+      await conn.end()
+    }
+  }
+  // mssql: اتصال بـ master لفحصها وإنشائها
+  const master = new DataSource({
+    type: 'mssql',
+    host: common.host,
+    port: common.port,
+    username: common.username,
+    password: common.password,
+    database: 'master',
+    options: { trustServerCertificate: true, encrypt: false },
+  })
+  await master.initialize()
+  try {
+    const [row] = await master.query('SELECT DB_ID(@0) AS id', [common.database])
+    const userTables = row.id
+      ? Number((await master.query(`SELECT COUNT(*) AS n FROM [${common.database}].sys.tables WHERE is_ms_shipped = 0`))[0].n)
+      : 0
+    const decision = seedSchemaDecision(preflight, { exists: !!row.id, userTables })
+    if (!row.id) await master.query(`CREATE DATABASE [${common.database}]`)
     console.log(`✓ القاعدة ${common.database} جاهزة`)
-  } else {
-    // mssql: اتصال بـ master لإنشائها
-    const master = new DataSource({
-      type: 'mssql',
-      host: common.host,
-      port: common.port,
-      username: common.username,
-      password: common.password,
-      database: 'master',
-      options: { trustServerCertificate: true, encrypt: false },
-    })
-    await master.initialize()
-    await master.query(
-      `IF DB_ID('${common.database}') IS NULL CREATE DATABASE [${common.database}]`
-    )
+    return decision.synchronize
+  } finally {
     await master.destroy()
-    console.log(`✓ القاعدة ${common.database} جاهزة`)
   }
 }
 
 async function main() {
-  await ensureDatabaseExists()
+  ds = createDataSource(await prepareDatabase())
   await ds.initialize()
   console.log(`✓ اتصال قاعدة البيانات ناجح (${dbType})`)
 

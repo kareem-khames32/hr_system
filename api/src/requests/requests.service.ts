@@ -1257,11 +1257,12 @@ export class RequestsService {
   // (برمجي/قاعدة بيانات) بيتسجّل ويطلع برسالة عامة — والمعاملة كلها بترجع (REQ-2)
   private executionFailure(requestId: number, e: unknown): never {
     if (e instanceof HttpException) throw e
-    this.logger.error(`تعذّر تنفيذ وجهة الطلب #${requestId}`, (e as Error)?.stack)
-    const reason =
-      e instanceof Error && !(e instanceof QueryFailedError) && /[؀-ۿ]/.test(e.message)
-        ? `: ${e.message}`
-        : ' (خطأ داخلي — راجع سجل الخادم)'
+    // رسالة عربية من المعالج = رفض قاعدة عمل معالج (أصل غير متاح، تداخل…): تحذير بالسبب بلا stack؛
+    // غير ذلك (SQL أو خطأ برمجي) يبقى ERROR كاملًا
+    const businessRule = e instanceof Error && !(e instanceof QueryFailedError) && /[؀-ۿ]/.test(e.message)
+    if (businessRule) this.logger.warn(`تعذّر تنفيذ وجهة الطلب #${requestId}: ${(e as Error).message}`)
+    else this.logger.error(`تعذّر تنفيذ وجهة الطلب #${requestId}`, (e as Error)?.stack)
+    const reason = businessRule ? `: ${(e as Error).message}` : ' (خطأ داخلي — راجع سجل الخادم)'
     throw new BadRequestException(`تعذّر تنفيذ الطلب في وجهته${reason}`)
   }
 
@@ -1846,7 +1847,11 @@ export class RequestsService {
       })
       if (changed) executed++
       } catch (error) {
-        this.logger.error(`تعذّر تنفيذ النقل المجدول #${t.id} — ما زال بانتظار التنفيذ`, (error as Error).stack)
+        // رفض قاعدة عمل (عهدة قائمة، فريق غير صالح…) حالة معالجة وليست عطلًا: تحذير بالسبب العربي بلا stack؛
+        // الأخطاء غير المتوقعة تبقى ERROR كاملة
+        const status = error instanceof HttpException ? error.getStatus() : 500
+        if (status < 500) this.logger.warn(`النقل المجدول #${t.id} ما زال بانتظار التنفيذ: ${(error as Error).message}`)
+        else this.logger.error(`تعذّر تنفيذ النقل المجدول #${t.id} — ما زال بانتظار التنفيذ`, (error as Error).stack)
       }
     }
     const scheduledTypes = await this.types.find({ where: { destinationHandler: In([...SCHEDULED_EMPLOYMENT_HANDLERS, SALARY_CHANGE_HANDLER]) } })

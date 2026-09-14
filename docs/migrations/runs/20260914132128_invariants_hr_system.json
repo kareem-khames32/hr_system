@@ -1,0 +1,577 @@
+{
+  "command": "invariants",
+  "database": "hr_system",
+  "rehearsal": "hr_migrate_rehearsal_20260914132115_ba822da1",
+  "startedAt": "2026-09-14T13:21:15.038Z",
+  "note": "SHA-256 وأعداد ومعرفات صفوف فقط؛ لا قيم شخصية أو بنكية",
+  "baselineBackup": {
+    "hostPath": "D:/projects/hr_system_backups/pre-payroll-2026-09-14/hr_system_pre_payroll_20260914.bak",
+    "sha256": "ccb5d8ca71238bdd457482ca5ab00b5598b0e2628f87c4f112127263f3a836d7",
+    "backupFinishDate": "2026-09-14T11:27:33.000Z",
+    "verifyOnly": "passed"
+  },
+  "bootWrites": {
+    "requestsConfigKeysAdded": [
+      "attendance.flex.count_early_work_toward_required",
+      "attendance.flex.max_session_minutes",
+      "attendance.flex.missing_checkout_policy",
+      "attendance.flex.prorate_window_on_partial_leave",
+      "attendance.flex.shortfall_grace_minutes",
+      "attendance.flex.unpaid_break_minutes",
+      "attendance.flex.window_supersedes_grace",
+      "loan.insufficient_net_behavior",
+      "overtime.allow_early_overtime",
+      "overtime.leave_conflict_policy",
+      "overtime.max_closed_periods",
+      "overtime.max_hours_per_day",
+      "overtime.max_hours_per_month",
+      "overtime.max_hours_per_week",
+      "overtime.missing_punch_policy",
+      "overtime.request_backdate_days",
+      "overtime.rounding_direction",
+      "overtime.rounding_minutes",
+      "overtime.wage_components",
+      "payroll.attendance_daily_cap_days",
+      "payroll.attendance_overlap_policy",
+      "payroll.exempt_overtime_eligible",
+      "payroll.exempt_unpaid_leave_deductible",
+      "payroll.exemption_reason_min_length",
+      "payroll.policy.base_days_basis",
+      "payroll.policy.carry_over_excess",
+      "payroll.policy.cycle_end_day",
+      "payroll.policy.cycle_end_mode",
+      "payroll.policy.default_period_type",
+      "payroll.policy.division_by_zero_mode",
+      "payroll.policy.max_deduction_pct_of_gross",
+      "payroll.policy.min_net_guarantee",
+      "payroll.policy.net_floor_pct",
+      "payroll.policy.rate_base",
+      "payroll.policy.rounding_mode",
+      "payroll.policy.rounding_scale",
+      "payroll.policy.skip_attendance",
+      "payroll.shortfall_enabled",
+      "payroll.shortfall_mode",
+      "payroll.shortfall_value"
+    ],
+    "requestsConfigKeysRemoved": [],
+    "docTypeCodesAdded": [
+      "contract",
+      "cv",
+      "driver_license",
+      "experience_certificate",
+      "formal_photo",
+      "health_certificate",
+      "iqama",
+      "letter",
+      "national_id",
+      "other",
+      "passport",
+      "qualification_certificate"
+    ],
+    "counts": {
+      "requests_config": {
+        "baseline": 45,
+        "live": 85
+      },
+      "doc_types": {
+        "baseline": 0,
+        "live": 12
+      },
+      "letter_templates": {
+        "baseline": null,
+        "live": 6
+      },
+      "letter_template_revisions": {
+        "baseline": null,
+        "live": 6
+      },
+      "letter_template_bindings": {
+        "baseline": null,
+        "live": 6
+      },
+      "attendance_days": {
+        "baseline": 4405,
+        "live": 4574
+      },
+      "requests": {
+        "baseline": 341,
+        "live": 342
+      },
+      "employees": {
+        "baseline": 180,
+        "live": 180
+      },
+      "hr_issued_documents": {
+        "baseline": null,
+        "live": 0
+      }
+    },
+    "requestsCreatedAfterBaseline": [
+      {
+        "id": 398,
+        "status": "CANCELLED"
+      }
+    ]
+  },
+  "rehearsalApply": {
+    "ok": true,
+    "applied": 22,
+    "failed": null
+  },
+  "hashes": {
+    "before": {
+      "historyIdentityDates": "ba9c412394ea352f0203e2cc6bb59ec3e14cce142332e2ae9c6714f725f0f558",
+      "historyReasons": "02247183ee996818812785367bf063e6e32806298667b527693fc656ff3372eb",
+      "historyBankValues": "afa23e2a835e660226c2685287d6021cacfbcc59883eb8b9ef8e26d7e341586d",
+      "workTypes": "6fb1e524aa681a1e7d43043f8015450dc6289ceecd86ba8fb9e63b985fcb8486",
+      "transfersIdentityValues": "e3c74ab4272eb49aae77b39fb110b8c471d3317518509e5aaaa7b0caef14102d",
+      "custody_assignmentsIdentityValues": "892f24721625aab1be6c026f7b2794866b3e1be597028d93ddad9f8c2124b06a",
+      "offboarding_casesIdentityValues": "e4137a2911bf07cbe60e672645aa3c7896f2751f8257549fe94ec6e1c3de1782",
+      "clearance_itemsIdentityValues": "928aba12c91878a72d209cf516dec6847e5f13c1928d3d60bf0c00ef6f749f6a",
+      "onboarding_tasksIdentityValues": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "requestsPreservedFields": "c68ed56b37baf8e76f4a60465f3b21531426169b955dc260bbd26f638bd10aae",
+      "request_typesPreservedFields": "72be3694af9c42c34e52425ba6e581b61046c872431172f278dd99d1a6a80be0",
+      "approval_chainsPreservedFields": "8ee2f749257dc894f59506027b04e5cf3392c067b213c4467a409386ecb50235",
+      "approval_stepsPreservedFields": "05b05976fa3533225d323b4937cbf2cc2881884dc62985a80d044648280dea4e",
+      "request_approvalsPreservedFields": "b2207458184b13e2252f7579cd7b600aadd6c3369e7ae7ebef3b510fb46364f8"
+    },
+    "afterMigration": {
+      "historyIdentityDates": "ba9c412394ea352f0203e2cc6bb59ec3e14cce142332e2ae9c6714f725f0f558",
+      "historyReasons": "02247183ee996818812785367bf063e6e32806298667b527693fc656ff3372eb",
+      "historyBankValues": "afa23e2a835e660226c2685287d6021cacfbcc59883eb8b9ef8e26d7e341586d",
+      "workTypes": "6fb1e524aa681a1e7d43043f8015450dc6289ceecd86ba8fb9e63b985fcb8486",
+      "transfersIdentityValues": "e3c74ab4272eb49aae77b39fb110b8c471d3317518509e5aaaa7b0caef14102d",
+      "custody_assignmentsIdentityValues": "892f24721625aab1be6c026f7b2794866b3e1be597028d93ddad9f8c2124b06a",
+      "offboarding_casesIdentityValues": "e4137a2911bf07cbe60e672645aa3c7896f2751f8257549fe94ec6e1c3de1782",
+      "clearance_itemsIdentityValues": "928aba12c91878a72d209cf516dec6847e5f13c1928d3d60bf0c00ef6f749f6a",
+      "onboarding_tasksIdentityValues": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "requestsPreservedFields": "c68ed56b37baf8e76f4a60465f3b21531426169b955dc260bbd26f638bd10aae",
+      "request_typesPreservedFields": "72be3694af9c42c34e52425ba6e581b61046c872431172f278dd99d1a6a80be0",
+      "approval_chainsPreservedFields": "8ee2f749257dc894f59506027b04e5cf3392c067b213c4467a409386ecb50235",
+      "approval_stepsPreservedFields": "05b05976fa3533225d323b4937cbf2cc2881884dc62985a80d044648280dea4e",
+      "request_approvalsPreservedFields": "b2207458184b13e2252f7579cd7b600aadd6c3369e7ae7ebef3b510fb46364f8"
+    },
+    "live": {
+      "historyIdentityDates": "ba9c412394ea352f0203e2cc6bb59ec3e14cce142332e2ae9c6714f725f0f558",
+      "historyReasons": "02247183ee996818812785367bf063e6e32806298667b527693fc656ff3372eb",
+      "historyBankValues": "afa23e2a835e660226c2685287d6021cacfbcc59883eb8b9ef8e26d7e341586d",
+      "workTypes": "6fb1e524aa681a1e7d43043f8015450dc6289ceecd86ba8fb9e63b985fcb8486",
+      "transfersIdentityValues": "e3c74ab4272eb49aae77b39fb110b8c471d3317518509e5aaaa7b0caef14102d",
+      "custody_assignmentsIdentityValues": "892f24721625aab1be6c026f7b2794866b3e1be597028d93ddad9f8c2124b06a",
+      "offboarding_casesIdentityValues": "e4137a2911bf07cbe60e672645aa3c7896f2751f8257549fe94ec6e1c3de1782",
+      "clearance_itemsIdentityValues": "928aba12c91878a72d209cf516dec6847e5f13c1928d3d60bf0c00ef6f749f6a",
+      "onboarding_tasksIdentityValues": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+      "requestsPreservedFields": "c68ed56b37baf8e76f4a60465f3b21531426169b955dc260bbd26f638bd10aae",
+      "request_typesPreservedFields": "72be3694af9c42c34e52425ba6e581b61046c872431172f278dd99d1a6a80be0",
+      "approval_chainsPreservedFields": "8ee2f749257dc894f59506027b04e5cf3392c067b213c4467a409386ecb50235",
+      "approval_stepsPreservedFields": "05b05976fa3533225d323b4937cbf2cc2881884dc62985a80d044648280dea4e",
+      "request_approvalsPreservedFields": "b2207458184b13e2252f7579cd7b600aadd6c3369e7ae7ebef3b510fb46364f8"
+    }
+  },
+  "migrationPreservesData": {
+    "historyIdentityDates": {
+      "passed": true,
+      "rows": 46
+    },
+    "historyReasons": {
+      "passed": true,
+      "rows": 46
+    },
+    "historyBankValues": {
+      "passed": true,
+      "rows": 1
+    },
+    "workTypes": {
+      "passed": true,
+      "rows": 180
+    },
+    "transfersIdentityValues": {
+      "passed": true,
+      "rows": 5
+    },
+    "custody_assignmentsIdentityValues": {
+      "passed": true,
+      "rows": 39
+    },
+    "offboarding_casesIdentityValues": {
+      "passed": true,
+      "rows": 17
+    },
+    "clearance_itemsIdentityValues": {
+      "passed": true,
+      "rows": 85
+    },
+    "onboarding_tasksIdentityValues": {
+      "passed": true,
+      "rows": 0
+    },
+    "requestsPreservedFields": {
+      "passed": true,
+      "rows": 341
+    },
+    "request_typesPreservedFields": {
+      "passed": true,
+      "rows": 65
+    },
+    "approval_chainsPreservedFields": {
+      "passed": true,
+      "rows": 68
+    },
+    "approval_stepsPreservedFields": {
+      "passed": true,
+      "rows": 67
+    },
+    "request_approvalsPreservedFields": {
+      "passed": true,
+      "rows": 300
+    }
+  },
+  "liveMatchesBaseline": {
+    "historyIdentityDates": {
+      "passed": true,
+      "rows": 46
+    },
+    "historyReasons": {
+      "passed": true,
+      "rows": 46
+    },
+    "historyBankValues": {
+      "passed": true,
+      "rows": 1
+    },
+    "workTypes": {
+      "passed": true,
+      "rows": 180
+    },
+    "transfersIdentityValues": {
+      "passed": true,
+      "rows": 5
+    },
+    "custody_assignmentsIdentityValues": {
+      "passed": true,
+      "rows": 39
+    },
+    "offboarding_casesIdentityValues": {
+      "passed": true,
+      "rows": 17
+    },
+    "clearance_itemsIdentityValues": {
+      "passed": true,
+      "rows": 85
+    },
+    "onboarding_tasksIdentityValues": {
+      "passed": true,
+      "rows": 0
+    },
+    "requestsPreservedFields": {
+      "passed": true,
+      "rows": 341
+    },
+    "request_typesPreservedFields": {
+      "passed": true,
+      "rows": 65
+    },
+    "approval_chainsPreservedFields": {
+      "passed": true,
+      "rows": 68
+    },
+    "approval_stepsPreservedFields": {
+      "passed": true,
+      "rows": 67
+    },
+    "request_approvalsPreservedFields": {
+      "passed": true,
+      "rows": 300
+    }
+  },
+  "datedVersionLockProof": {
+    "effectiveFrom": "2026-04-23",
+    "bySource": {
+      "CALENDAR_GLOBAL": {
+        "versions": 1,
+        "equalToBaseline": 0
+      },
+      "CALENDAR_BRANCH": {
+        "versions": 9,
+        "equalToBaseline": 0
+      },
+      "EMPLOYEE_ORG": {
+        "versions": 180,
+        "equalToBaseline": 0
+      }
+    },
+    "differingSources": [
+      "CALENDAR_GLOBAL:0",
+      "CALENDAR_BRANCH:1",
+      "CALENDAR_BRANCH:4",
+      "CALENDAR_BRANCH:5",
+      "CALENDAR_BRANCH:6",
+      "CALENDAR_BRANCH:7",
+      "CALENDAR_BRANCH:8",
+      "CALENDAR_BRANCH:9",
+      "CALENDAR_BRANCH:10",
+      "CALENDAR_BRANCH:11",
+      "EMPLOYEE_ORG:1",
+      "EMPLOYEE_ORG:9",
+      "EMPLOYEE_ORG:10",
+      "EMPLOYEE_ORG:18",
+      "EMPLOYEE_ORG:19",
+      "EMPLOYEE_ORG:21",
+      "EMPLOYEE_ORG:22",
+      "EMPLOYEE_ORG:23",
+      "EMPLOYEE_ORG:26",
+      "EMPLOYEE_ORG:27",
+      "EMPLOYEE_ORG:28",
+      "EMPLOYEE_ORG:29",
+      "EMPLOYEE_ORG:30",
+      "EMPLOYEE_ORG:31",
+      "EMPLOYEE_ORG:32",
+      "EMPLOYEE_ORG:33",
+      "EMPLOYEE_ORG:34",
+      "EMPLOYEE_ORG:35",
+      "EMPLOYEE_ORG:36",
+      "EMPLOYEE_ORG:37",
+      "EMPLOYEE_ORG:38",
+      "EMPLOYEE_ORG:39",
+      "EMPLOYEE_ORG:40",
+      "EMPLOYEE_ORG:41",
+      "EMPLOYEE_ORG:42",
+      "EMPLOYEE_ORG:43",
+      "EMPLOYEE_ORG:44",
+      "EMPLOYEE_ORG:45",
+      "EMPLOYEE_ORG:46",
+      "EMPLOYEE_ORG:47",
+      "EMPLOYEE_ORG:48",
+      "EMPLOYEE_ORG:49",
+      "EMPLOYEE_ORG:50",
+      "EMPLOYEE_ORG:51",
+      "EMPLOYEE_ORG:52",
+      "EMPLOYEE_ORG:53",
+      "EMPLOYEE_ORG:54",
+      "EMPLOYEE_ORG:55",
+      "EMPLOYEE_ORG:56",
+      "EMPLOYEE_ORG:57",
+      "EMPLOYEE_ORG:58",
+      "EMPLOYEE_ORG:59",
+      "EMPLOYEE_ORG:60",
+      "EMPLOYEE_ORG:61",
+      "EMPLOYEE_ORG:62",
+      "EMPLOYEE_ORG:63",
+      "EMPLOYEE_ORG:64",
+      "EMPLOYEE_ORG:65",
+      "EMPLOYEE_ORG:66",
+      "EMPLOYEE_ORG:67",
+      "EMPLOYEE_ORG:68",
+      "EMPLOYEE_ORG:69",
+      "EMPLOYEE_ORG:70",
+      "EMPLOYEE_ORG:71",
+      "EMPLOYEE_ORG:72",
+      "EMPLOYEE_ORG:73",
+      "EMPLOYEE_ORG:74",
+      "EMPLOYEE_ORG:75",
+      "EMPLOYEE_ORG:76",
+      "EMPLOYEE_ORG:77",
+      "EMPLOYEE_ORG:78",
+      "EMPLOYEE_ORG:79",
+      "EMPLOYEE_ORG:80",
+      "EMPLOYEE_ORG:81",
+      "EMPLOYEE_ORG:82",
+      "EMPLOYEE_ORG:83",
+      "EMPLOYEE_ORG:84",
+      "EMPLOYEE_ORG:85",
+      "EMPLOYEE_ORG:86",
+      "EMPLOYEE_ORG:87",
+      "EMPLOYEE_ORG:88",
+      "EMPLOYEE_ORG:89",
+      "EMPLOYEE_ORG:90",
+      "EMPLOYEE_ORG:91",
+      "EMPLOYEE_ORG:92",
+      "EMPLOYEE_ORG:93",
+      "EMPLOYEE_ORG:94",
+      "EMPLOYEE_ORG:95",
+      "EMPLOYEE_ORG:96",
+      "EMPLOYEE_ORG:97",
+      "EMPLOYEE_ORG:98",
+      "EMPLOYEE_ORG:99",
+      "EMPLOYEE_ORG:100",
+      "EMPLOYEE_ORG:101",
+      "EMPLOYEE_ORG:102",
+      "EMPLOYEE_ORG:103",
+      "EMPLOYEE_ORG:104",
+      "EMPLOYEE_ORG:105",
+      "EMPLOYEE_ORG:106",
+      "EMPLOYEE_ORG:107",
+      "EMPLOYEE_ORG:108",
+      "EMPLOYEE_ORG:109",
+      "EMPLOYEE_ORG:110",
+      "EMPLOYEE_ORG:111",
+      "EMPLOYEE_ORG:112",
+      "EMPLOYEE_ORG:113",
+      "EMPLOYEE_ORG:114",
+      "EMPLOYEE_ORG:115",
+      "EMPLOYEE_ORG:116",
+      "EMPLOYEE_ORG:117",
+      "EMPLOYEE_ORG:118",
+      "EMPLOYEE_ORG:119",
+      "EMPLOYEE_ORG:120",
+      "EMPLOYEE_ORG:121",
+      "EMPLOYEE_ORG:122",
+      "EMPLOYEE_ORG:123",
+      "EMPLOYEE_ORG:124",
+      "EMPLOYEE_ORG:125",
+      "EMPLOYEE_ORG:126",
+      "EMPLOYEE_ORG:127",
+      "EMPLOYEE_ORG:128",
+      "EMPLOYEE_ORG:129",
+      "EMPLOYEE_ORG:130",
+      "EMPLOYEE_ORG:131",
+      "EMPLOYEE_ORG:132",
+      "EMPLOYEE_ORG:133",
+      "EMPLOYEE_ORG:134",
+      "EMPLOYEE_ORG:135",
+      "EMPLOYEE_ORG:136",
+      "EMPLOYEE_ORG:137",
+      "EMPLOYEE_ORG:138",
+      "EMPLOYEE_ORG:139",
+      "EMPLOYEE_ORG:140",
+      "EMPLOYEE_ORG:141",
+      "EMPLOYEE_ORG:142",
+      "EMPLOYEE_ORG:143",
+      "EMPLOYEE_ORG:144",
+      "EMPLOYEE_ORG:145",
+      "EMPLOYEE_ORG:146",
+      "EMPLOYEE_ORG:147",
+      "EMPLOYEE_ORG:148",
+      "EMPLOYEE_ORG:149",
+      "EMPLOYEE_ORG:150",
+      "EMPLOYEE_ORG:151",
+      "EMPLOYEE_ORG:152",
+      "EMPLOYEE_ORG:153",
+      "EMPLOYEE_ORG:154",
+      "EMPLOYEE_ORG:155",
+      "EMPLOYEE_ORG:156",
+      "EMPLOYEE_ORG:157",
+      "EMPLOYEE_ORG:158",
+      "EMPLOYEE_ORG:159",
+      "EMPLOYEE_ORG:160",
+      "EMPLOYEE_ORG:161",
+      "EMPLOYEE_ORG:162",
+      "EMPLOYEE_ORG:163",
+      "EMPLOYEE_ORG:164",
+      "EMPLOYEE_ORG:165",
+      "EMPLOYEE_ORG:166",
+      "EMPLOYEE_ORG:167",
+      "EMPLOYEE_ORG:168",
+      "EMPLOYEE_ORG:169",
+      "EMPLOYEE_ORG:170",
+      "EMPLOYEE_ORG:171",
+      "EMPLOYEE_ORG:172",
+      "EMPLOYEE_ORG:173",
+      "EMPLOYEE_ORG:174",
+      "EMPLOYEE_ORG:175",
+      "EMPLOYEE_ORG:176",
+      "EMPLOYEE_ORG:177",
+      "EMPLOYEE_ORG:178",
+      "EMPLOYEE_ORG:179",
+      "EMPLOYEE_ORG:180",
+      "EMPLOYEE_ORG:181",
+      "EMPLOYEE_ORG:183",
+      "EMPLOYEE_ORG:184",
+      "EMPLOYEE_ORG:185",
+      "EMPLOYEE_ORG:186",
+      "EMPLOYEE_ORG:187",
+      "EMPLOYEE_ORG:188",
+      "EMPLOYEE_ORG:189",
+      "EMPLOYEE_ORG:190",
+      "EMPLOYEE_ORG:191",
+      "EMPLOYEE_ORG:192",
+      "EMPLOYEE_ORG:193",
+      "EMPLOYEE_ORG:194",
+      "EMPLOYEE_ORG:195",
+      "EMPLOYEE_ORG:204",
+      "EMPLOYEE_ORG:205",
+      "EMPLOYEE_ORG:206"
+    ],
+    "approvedOrPaidRuns": 0,
+    "settledCasesInsideDatedRange": [
+      {
+        "caseId": 2,
+        "employeeId": 19,
+        "lastWorkingDay": "2026-07-08",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": false
+      },
+      {
+        "caseId": 3,
+        "employeeId": 30,
+        "lastWorkingDay": "2026-08-07",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": false
+      },
+      {
+        "caseId": 4,
+        "employeeId": 32,
+        "lastWorkingDay": "2026-08-07",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": false
+      },
+      {
+        "caseId": 5,
+        "employeeId": 34,
+        "lastWorkingDay": "2026-08-07",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": false
+      },
+      {
+        "caseId": 6,
+        "employeeId": 9,
+        "lastWorkingDay": "2026-07-09",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": false
+      },
+      {
+        "caseId": 11,
+        "employeeId": 42,
+        "lastWorkingDay": "2026-08-08",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": false
+      },
+      {
+        "caseId": 12,
+        "employeeId": 153,
+        "lastWorkingDay": "2026-07-13",
+        "status": "CLOSED",
+        "employeeOrgVersionEqualsBaseline": false
+      },
+      {
+        "caseId": 16,
+        "employeeId": 185,
+        "lastWorkingDay": "2027-01-31",
+        "status": "SETTLED",
+        "employeeOrgVersionEqualsBaseline": false
+      },
+      {
+        "caseId": 17,
+        "employeeId": 186,
+        "lastWorkingDay": "2027-02-28",
+        "status": "SETTLED",
+        "employeeOrgVersionEqualsBaseline": false
+      },
+      {
+        "caseId": 18,
+        "employeeId": 205,
+        "lastWorkingDay": "2026-09-30",
+        "status": "SETTLED",
+        "employeeOrgVersionEqualsBaseline": false
+      }
+    ],
+    "employeesJoiningAfterEffectiveFrom": {
+      "count": 16,
+      "latestJoinDate": "2027-06-01"
+    }
+  },
+  "invariantCount": 14,
+  "passedMigration": true,
+  "passedLive": true,
+  "finishedAt": "2026-09-14T13:21:28.256Z"
+}

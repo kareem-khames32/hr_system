@@ -5,7 +5,7 @@
   "scripts": {
     "predev": "node scripts/prepare-pdf-viewer.cjs",
     "prebuild": "node scripts/prepare-pdf-viewer.cjs",
-    "dev": "next dev",
+    "dev": "next dev -H 127.0.0.1",
     "build": "next build",
     "start": "next start",
     "lint": "next lint"
