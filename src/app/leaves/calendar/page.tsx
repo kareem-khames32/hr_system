@@ -1,5 +1,7 @@
 'use client'
 
+import { useLeaveCatalog } from '@/lib/leave-catalog'
+
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
@@ -19,22 +21,6 @@ interface CalendarHoliday {
   country?: string | null
 }
 
-const LEAVE_TYPE_META: Record<string, { label: string; color: string }> = {
-  ANNUAL: { label: 'سنوية', color: '#3B82F6' },
-  SICK: { label: 'مرضية', color: '#EF4444' },
-  CASUAL: { label: 'طارئة', color: '#F97316' },
-  UNPAID: { label: 'بدون راتب', color: '#6B7280' },
-  MATERNITY: { label: 'وضع', color: '#A855F7' },
-  PATERNITY: { label: 'أبوة', color: '#6366F1' },
-  HAJJ: { label: 'حج', color: '#22C55E' },
-  MARRIAGE: { label: 'زواج', color: '#EC4899' },
-  BEREAVEMENT: { label: 'وفاة/عدة', color: '#6B7280' },
-  EXAM: { label: 'امتحانات', color: '#14B8A6' },
-  COMPENSATORY: { label: 'تعويضية', color: '#06B6D4' },
-}
-
-const leaveMeta = (code: string) =>
-  LEAVE_TYPE_META[code] ?? { label: code, color: '#6B7280' }
 
 const HOLIDAY_COLOR = '#16A34A'
 
@@ -46,10 +32,13 @@ const monthNames = [
 ]
 
 export default function LeaveCalendarPage() {
+  const leaveCatalog = useLeaveCatalog()
+  const leaveMeta = (code: string) => ({ label: leaveCatalog.label(code), color: leaveCatalog.hex(code) })
   const [currentDate, setCurrentDate] = useState(() => {
     const now = new Date()
     return new Date(now.getFullYear(), now.getMonth(), 1)
   })
+  const [weekendDays, setWeekendDays] = useState<string[]>([])
   const [holidays, setHolidays] = useState<CalendarHoliday[]>([])
   const [leaves, setLeaves] = useState<ApiLeave[]>([])
   const [loading, setLoading] = useState(true)
@@ -66,6 +55,7 @@ export default function LeaveCalendarPage() {
       .then((data) => {
         setHolidays((data.holidays ?? []) as CalendarHoliday[])
         setLeaves(data.leaves ?? [])
+        setWeekendDays(data.weekendDays ?? [])
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل التقويم'))
       .finally(() => setLoading(false))
@@ -108,11 +98,12 @@ export default function LeaveCalendarPage() {
   return (
     <MainLayout>
       <div className="space-y-6">
+        {leaveCatalog.error && <div role="alert" className="bg-amber-50 text-amber-800 rounded-xl p-3 text-sm">تعذر تحميل أنواع الإجازات: {leaveCatalog.error} <button type="button" className="underline" onClick={leaveCatalog.retry}>إعادة المحاولة</button></div>}
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">تقويم الإجازات</h1>
-            <p className="text-gray-500 mt-1">عرض تقويمي لإجازات الموظفين والعطلات الرسمية</p>
+            <p className="text-gray-500 mt-1">الإجازات المعتمدة والعطلات الرسمية؛ الطلبات المعلقة تظهر في صندوق الموافقات</p>
           </div>
         </div>
 
@@ -172,14 +163,15 @@ export default function LeaveCalendarPage() {
                 })),
                 ...dayLeaves.map((l) => ({
                   key: `l-${l.id}`,
-                  label: l.employeeName ?? `موظف #${l.employeeId}`,
+                  // نص اليوم بعلامة ½ عشان مايبانش يوم كامل (LEV-21)
+                  label: `${l.period === 'MORNING' || l.period === 'EVENING' ? '½ ' : ''}${l.employeeName ?? `موظف #${l.employeeId}`}`,
                   color: leaveMeta(l.leaveType).color,
                 })),
               ]
               const isToday = day === new Date().getDate() &&
                               month === new Date().getMonth() &&
                               year === new Date().getFullYear()
-              const isWeekend = index % 7 === 5 || index % 7 === 6
+              const isWeekend = day != null && weekendDays.includes(['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'][new Date(year, month, day).getDay()])
 
               return (
                 <div
@@ -235,22 +227,12 @@ export default function LeaveCalendarPage() {
               <div className="w-4 h-4 rounded" style={{ backgroundColor: HOLIDAY_COLOR }} />
               <span className="text-sm text-gray-600">عطلة رسمية</span>
             </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded" style={{ backgroundColor: '#3B82F6' }} />
-              <span className="text-sm text-gray-600">إجازة سنوية</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded" style={{ backgroundColor: '#EF4444' }} />
-              <span className="text-sm text-gray-600">إجازة مرضية</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded" style={{ backgroundColor: '#F97316' }} />
-              <span className="text-sm text-gray-600">إجازة طارئة</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <div className="w-4 h-4 rounded" style={{ backgroundColor: '#6B7280' }} />
-              <span className="text-sm text-gray-600">إجازة بدون راتب</span>
-            </div>
+            {leaveCatalog.types.map((type) => (
+              <div key={type.code} className="flex items-center gap-2">
+                <div className="w-4 h-4 rounded" style={{ backgroundColor: leaveCatalog.hex(type.code) }} />
+                <span className="text-sm text-gray-600">{type.nameAr}</span>
+              </div>
+            ))}
           </div>
         </div>
 
@@ -301,7 +283,14 @@ export default function LeaveCalendarPage() {
                       <p className="font-medium text-gray-800">
                         {l.employeeName ?? `موظف #${l.employeeId}`}
                       </p>
-                      <p className="text-sm text-gray-500">{meta.label} — {Number(l.days)} يوم</p>
+                      <p className="text-sm text-gray-500">
+                        {meta.label} —{' '}
+                        {l.period === 'MORNING'
+                          ? 'نصف يوم صباحي'
+                          : l.period === 'EVENING'
+                            ? 'نصف يوم مسائي'
+                            : `${Number(l.days)} يوم`}
+                      </p>
                     </div>
                   </div>
                   <div className="text-left">

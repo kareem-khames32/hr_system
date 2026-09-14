@@ -15,6 +15,8 @@ interface StatCard {
   id: string
   title: string
   value: string | number
+  // سطر توضيحي صغير تحت الرقم (اختياري)
+  hint?: string
   icon: React.ReactNode
   iconBg: string
   iconColor: string
@@ -68,7 +70,8 @@ export default function StatsCards() {
     {
       id: 'present',
       title: 'الحاضرون اليوم',
-      value: Number(stats.attendanceToday.present).toLocaleString(),
+      // كل من حضر فعلاً (يشمل المتأخر والمنصرف بدري والعامل يوم العطلة) — لا «في الموعد» فقط
+      value: Number(stats.attendanceToday.attended).toLocaleString(),
       icon: <UserCheck size={24} />,
       iconBg: 'bg-success-50',
       iconColor: 'text-success-600',
@@ -92,7 +95,12 @@ export default function StatsCards() {
     {
       id: 'on-leave',
       title: 'في إجازة',
+      // يوم كامل فقط؛ إجازات نصف اليوم تُعرض منفصلة (صاحبها يعمل النصف الآخر)
       value: Number(stats.onLeaveToday).toLocaleString(),
+      hint:
+        Number(stats.halfDayLeaveToday) > 0
+          ? `+ ${Number(stats.halfDayLeaveToday).toLocaleString()} بإجازة نصف يوم`
+          : undefined,
       icon: <Calendar size={24} />,
       iconBg: 'bg-warning-50',
       iconColor: 'text-warning-600',
@@ -115,6 +123,7 @@ export default function StatsCards() {
             <div>
               <p className="text-sm text-gray-500 mb-1">{stat.title}</p>
               <p className="text-3xl font-bold text-gray-800">{stat.value}</p>
+              {stat.hint && <p className="text-xs text-gray-400 mt-1">{stat.hint}</p>}
             </div>
             <div
               className={`stat-icon ${stat.iconBg} ${stat.iconColor}`}

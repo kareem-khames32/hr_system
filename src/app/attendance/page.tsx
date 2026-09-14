@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import { AttendanceFlexSummary } from '@/components/AttendanceFlexSummary'
 import Link from 'next/link'
 import {
   Search,
@@ -13,24 +14,31 @@ import {
   ChevronLeft,
   ChevronRight,
   MapPin,
-  Camera,
   CheckCircle,
   XCircle,
   Timer,
+  RefreshCw,
+  Briefcase,
+  Laptop,
 } from 'lucide-react'
 import {
   fetchDailyAttendance,
   fetchEmployees,
   fetchDepartments,
   fetchBranches,
+  recomputeAttendanceDay,
+  can,
   type ApiAttendanceDay,
   type ApiEmployee,
   type ApiDepartment,
   type ApiBranch,
 } from '@/lib/api'
+import { localDateStr, localToday } from '@/lib/dates'
+import { downloadCsv } from '@/lib/csv'
 
 // الصف المعروض — كل القيم محسوبة من السيرفر (لا حساب محلي)
 interface AttendanceRecord {
+  flexDay: ApiAttendanceDay
   id: number
   employeeId: number
   employeeCode: string
@@ -42,13 +50,25 @@ interface AttendanceRecord {
   checkOut: string | null
   workHours: string | null
   status: string
+  attendanceExempt: boolean
   shiftName: string
   shiftStart: string
   shiftEnd: string
+  unscheduled: boolean
+  scheduleSource: string | null
   lateMinutes: number
   excusedMinutes: number
   deductibleMinutes: number
   leaveConflict: boolean
+  // بصمات خارج نافذتي الدخول والخروج (HH:mm مفصولة بفاصلة) — لمراجعة HR
+  punchAnomalies: string | null
+  // السماحية التي طُبّقت على اليوم (الوردية تغلب العامة) — null = بلا مرجع تأخير
+  graceUsed: number | null
+  // غياب لحظي لليوم الجاري (لم يبصم بعد بداية ورديته) — غير مخزّن
+  live: boolean
+  // مصدر وقتي اليوم لعمود «التحقق» (جهاز/يدوي/تصحيح معتمد) — من السيرفر
+  punchSource: 'DEVICE' | 'MANUAL' | 'CORRECTION' | null
+  manualReason: string | null
   location: string
 }
 
@@ -57,12 +77,13 @@ const formatWorkMinutes = (mins: number): string | null => {
   return `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, '0')}`
 }
 
-const todayStr = () => new Date().toISOString().slice(0, 10)
+// اليوم بالتوقيت المحلي — toISOString كانت تفتح يوم امبارح بعد منتصف الليل
+const todayStr = () => localToday()
 
 const shiftDate = (dateStr: string, delta: number): string => {
   const d = new Date(dateStr + 'T12:00:00')
   d.setDate(d.getDate() + delta)
-  return d.toISOString().slice(0, 10)
+  return localDateStr(d)
 }
 
 const getStatusBadge = (status: AttendanceRecord['status']) => {
@@ -116,6 +137,38 @@ const getStatusBadge = (status: AttendanceRecord['status']) => {
           إجازة جزئية
         </span>
       )
+    case 'mission':
+      return (
+        <span
+          className="badge bg-teal-50 text-teal-700 flex items-center gap-1"
+          title="مأمورية معتمدة — يوم معذور بلا تأخير ولا غياب"
+        >
+          <Briefcase size={12} />
+          مأمورية
+        </span>
+      )
+    case 'remote':
+      return (
+        <span
+          className="badge bg-cyan-50 text-cyan-700 flex items-center gap-1"
+          title="عمل عن بُعد معتمد — يوم معذور بلا تأخير ولا غياب"
+        >
+          <Laptop size={12} />
+          عمل عن بُعد
+        </span>
+      )
+    case 'exempt':
+      return <span className="badge bg-gray-100 text-gray-600">مستثنى من الحضور</span>
+    case 'missing_punch':
+      return (
+        <span
+          className="badge bg-rose-50 text-rose-700 flex items-center gap-1"
+          title="يوم منقضٍ ببصمة طرف واحد (دخول بلا خروج أو العكس) — لا يُحسب حضوراً حتى تُصحَّح البصمة"
+        >
+          <AlertTriangle size={12} />
+          بصمة ناقصة
+        </span>
+      )
   }
 }
 
@@ -123,6 +176,7 @@ export default function AttendancePage() {
   const [selectedDate, setSelectedDate] = useState(todayStr())
   const [selectedDepartment, setSelectedDepartment] = useState('all')
   const [selectedStatus, setSelectedStatus] = useState('all')
+  const [selectedShift, setSelectedShift] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
 
   const [days, setDays] = useState<ApiAttendanceDay[]>([])
@@ -132,9 +186,16 @@ export default function AttendancePage() {
   const [refsLoaded, setRefsLoaded] = useState(false)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  // زر «إعادة حساب اليوم» لمن يملك إدارة الحضور فقط (الفرض الحقيقي في الباك)
+  const [canManage, setCanManage] = useState(false)
+  const [recomputing, setRecomputing] = useState(false)
+  // يعيد تحميل سجل اليوم بعد إعادة الحساب
+  const [reloadKey, setReloadKey] = useState(0)
 
   // المراجع (موظفون/أقسام/فروع) — مرة واحدة
   useEffect(() => {
+    setCanManage(can('attendance.manage'))
     Promise.all([fetchEmployees(), fetchDepartments(), fetchBranches()])
       .then(([emps, deps, brs]) => {
         setEmployees(emps)
@@ -153,7 +214,30 @@ export default function AttendancePage() {
       .then((rows) => setDays(rows))
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل سجل الحضور'))
       .finally(() => setLoading(false))
-  }, [selectedDate])
+  }, [selectedDate, reloadKey])
+
+  // إعادة حساب اليوم المحدد لكل موظفي النطاق — بعد تصحيح بصمة/تعديل جدول؛
+  // اليوم المنقضي يُسجَّل فيه غياب من لم يبصم (لو فاتته المهمة الليلية)
+  const handleRecompute = async () => {
+    if (recomputing) return
+    if (!confirm(`إعادة حساب حضور يوم ${selectedDate} لكل الموظفين؟`)) return
+    setRecomputing(true)
+    setError('')
+    setNotice('')
+    try {
+      const res = await recomputeAttendanceDay(selectedDate)
+      setNotice(
+        `تمت إعادة حساب ${res.recomputed} سجل` +
+          (res.materialized > 0 ? ` وتسجيل ${res.materialized} يوم غياب` : '') +
+          (res.failed > 0 ? ` — تعذّر ${res.failed}` : '')
+      )
+      setReloadKey((k) => k + 1)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذرت إعادة حساب اليوم')
+    } finally {
+      setRecomputing(false)
+    }
+  }
 
   const records: AttendanceRecord[] = useMemo(() => {
     const empById = new Map(employees.map((e) => [e.id, e]))
@@ -165,6 +249,7 @@ export default function AttendancePage() {
       const branch = d.branchId ? branchById.get(d.branchId) : undefined
       return {
         id: d.id,
+        flexDay: d,
         employeeId: d.employeeId,
         employeeCode: emp?.employeeCode ?? `#${d.employeeId}`,
         employeeName: emp?.fullName ?? `موظف ${d.employeeId}`,
@@ -175,13 +260,21 @@ export default function AttendancePage() {
         checkOut: d.checkOut ?? null,
         workHours: formatWorkMinutes(Number(d.workMinutes)),
         status: d.status,
+        attendanceExempt: d.attendanceExempt === true,
         shiftName: d.shiftName,
         shiftStart: d.shiftStart,
         shiftEnd: d.shiftEnd,
+        unscheduled: d.unscheduled === true,
+        scheduleSource: d.scheduleSource ?? null,
         lateMinutes: Number(d.lateMinutes),
         excusedMinutes: Number((d as any).excusedMinutes ?? 0),
         deductibleMinutes: Number(d.deductibleMinutes ?? 0),
         leaveConflict: d.leaveConflict === true,
+        punchAnomalies: d.punchAnomalies ?? null,
+        graceUsed: d.graceUsed ?? null,
+        live: d.live === true,
+        punchSource: d.punchSource ?? null,
+        manualReason: d.manualReason ?? null,
         location: branch?.name ?? '-',
       }
     })
@@ -196,7 +289,13 @@ export default function AttendancePage() {
     )
       return false
     if (selectedDepartment !== 'all' && r.department !== selectedDepartment) return false
-    if (selectedStatus !== 'all' && r.status !== selectedStatus) return false
+    if (selectedStatus === 'exempt' ? !r.attendanceExempt : selectedStatus !== 'all' && r.status !== selectedStatus) return false
+    // «بلا وردية مُسندة»: جدول العمل الافتراضي مفترَض أو بلا وردية إطلاقاً
+    if (
+      selectedShift === 'unassigned' &&
+      !(r.unscheduled || r.scheduleSource === 'default')
+    )
+      return false
     return true
   })
 
@@ -212,6 +311,8 @@ export default function AttendancePage() {
     late: records.filter((r) => r.status === 'late').length,
     earlyLeave: records.filter((r) => r.status === 'early_leave').length,
     partialLeave: records.filter((r) => r.status === 'partial_leave').length,
+    // بصمة طرف واحد ليوم منقضٍ — خارج عدّ «حاضر» حتى تُصحَّح
+    missingPunch: records.filter((r) => r.status === 'missing_punch').length,
   }
 
   return (
@@ -224,7 +325,18 @@ export default function AttendancePage() {
             <p className="text-gray-500 mt-1">متابعة حضور وانصراف الموظفين</p>
           </div>
           <div className="flex items-center gap-3">
-            <button className="btn-secondary flex items-center gap-2">
+            {canManage && (
+              <button
+                onClick={handleRecompute}
+                disabled={recomputing}
+                title="إعادة حساب حضور اليوم المحدد لكل الموظفين — بعد تصحيح بصمة أو تعديل جدول (واليوم المنقضي يُسجَّل فيه الغياب)"
+                className="btn-secondary flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                <RefreshCw size={18} className={recomputing ? 'animate-spin' : ''} />
+                إعادة حساب اليوم
+              </button>
+            )}
+            <button disabled={loading || !filteredRecords.length} onClick={() => downloadCsv(`attendance-${selectedDate}.csv`, ['الكود', 'الموظف', 'القسم', 'التاريخ', 'الدخول', 'الخروج', 'ساعات العمل', 'الحالة', 'الوردية', 'دقائق التأخير', 'دقائق إذن معذور', 'دقائق إذن بخصم', 'مصدر البصمة', 'سبب التعديل'], filteredRecords.map((r) => [r.employeeCode, r.employeeName, r.department, r.date, r.checkIn, r.checkOut, r.workHours, ({ present: 'حاضر', absent: 'غائب', late: 'متأخر', early_leave: 'خروج مبكر', leave: 'إجازة', holiday: 'عطلة', partial_leave: 'إجازة جزئية', mission: 'مأمورية', remote: 'عمل عن بعد', missing_punch: 'بصمة ناقصة' } as Record<string, string>)[r.status] ?? r.status, r.shiftName, r.lateMinutes, r.excusedMinutes, r.deductibleMinutes, r.punchSource, r.manualReason]))} className="btn-secondary flex items-center gap-2">
               <Download size={18} />
               تصدير
             </button>
@@ -249,6 +361,14 @@ export default function AttendancePage() {
             <div>
               <p className="text-sm text-gray-500">حاضر</p>
               <p className="text-2xl font-bold text-success-600">{stats.present}</p>
+              {stats.missingPunch > 0 && (
+                <p
+                  className="text-xs text-rose-600"
+                  title="أيام منقضية ببصمة طرف واحد — لا تُعدّ حضوراً حتى تُصحَّح البصمة"
+                >
+                  + {stats.missingPunch} بصمة ناقصة (خارج العدّ)
+                </p>
+              )}
             </div>
           </div>
           <div className="card flex items-center gap-4">
@@ -362,6 +482,21 @@ export default function AttendancePage() {
               <option value="leave">في إجازة</option>
               <option value="partial_leave">إجازة جزئية</option>
               <option value="holiday">عطلة</option>
+              <option value="mission">مأمورية</option>
+              <option value="remote">عمل عن بُعد</option>
+              <option value="missing_punch">بصمة ناقصة</option>
+              <option value="exempt">المستثنون من الحضور</option>
+            </select>
+
+            {/* Shift Filter — موظفون بلا وردية مُسندة */}
+            <select
+              value={selectedShift}
+              onChange={(e) => setSelectedShift(e.target.value)}
+              className="input w-44"
+              title="لم تُسند لهم وردية ولا جدول عمل — طُبّق الجدول الافتراضي أو بلا وردية إطلاقاً"
+            >
+              <option value="all">كل الورديات</option>
+              <option value="unassigned">بلا وردية مُسندة</option>
             </select>
           </div>
         </div>
@@ -371,6 +506,12 @@ export default function AttendancePage() {
           <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
             <AlertTriangle size={18} />
             {error}
+          </div>
+        )}
+        {notice && (
+          <div className="bg-success-50 text-success-700 rounded-xl p-4 flex items-center gap-2">
+            <CheckCircle size={18} />
+            {notice}
           </div>
         )}
 
@@ -419,10 +560,37 @@ export default function AttendancePage() {
                       </td>
                       <td className="table-cell text-gray-600">{record.department}</td>
                       <td className="table-cell text-center">
-                        <div className="text-sm font-medium text-gray-700">{record.shiftName}</div>
-                        <div className="text-xs text-gray-400 font-mono" dir="ltr">
-                          {record.shiftStart} - {record.shiftEnd}
-                        </div>
+                        {record.unscheduled ? (
+                          <span
+                            className="badge bg-amber-100 text-amber-700"
+                            title="لا وردية ولا جدول عمل مُسند ولا جدول افتراضي — البصمة بلا حساب تأخير أو أوفرتايم"
+                          >
+                            بلا وردية
+                          </span>
+                        ) : (
+                          <>
+                            <div className="text-sm font-medium text-gray-700">{record.shiftName}</div>
+                            <div className="text-xs text-gray-400 font-mono" dir="ltr">
+                              {record.shiftStart} - {record.shiftEnd}
+                            </div>
+                          </>
+                        )}
+                        {record.scheduleSource === 'default' && (
+                          <div
+                            className="text-[10px] text-amber-600"
+                            title="لم تُسند للموظف وردية ولا جدول عمل — طُبّقت ساعات جدول العمل الافتراضي (العطلة الأسبوعية من إعداد الفرع/السياسات)"
+                          >
+                            جدول افتراضي (مفترَض)
+                          </div>
+                        )}
+                        {record.graceUsed != null && (
+                          <div
+                            className="text-[10px] text-gray-400"
+                            title="السماحية التي طُبّقت على هذا اليوم — سماحية الوردية إن حُدّدت لها، وإلا القيمة العامة"
+                          >
+                            سماحية {record.graceUsed} د
+                          </div>
+                        )}
                         <div className="text-[10px] text-gray-400" dir="ltr">{record.date}</div>
                       </td>
                       <td className="table-cell text-center">
@@ -449,6 +617,7 @@ export default function AttendancePage() {
                       <td className="table-cell text-center">
                         <div className="flex items-center justify-center gap-1.5 flex-wrap">
                           {getStatusBadge(record.status)}
+                          {record.attendanceExempt && record.status !== 'exempt' && <span className="badge bg-gray-100 text-gray-600">مستثنى من الحضور</span>}
                           {record.leaveConflict && (
                             <Link
                               href="/leaves"
@@ -459,10 +628,34 @@ export default function AttendancePage() {
                               بصم رغم الإجازة
                             </Link>
                           )}
+                          {record.punchAnomalies && (
+                            <span
+                              className="badge bg-amber-50 text-amber-700 flex items-center gap-1"
+                              title={`بصمات خارج نافذتي الدخول والخروج: ${record.punchAnomalies.split(',').join('، ')} — لم تُرمَ؛ راجعها أو صحّح البصمة`}
+                            >
+                              <AlertTriangle size={12} />
+                              خارج النافذة: {record.punchAnomalies.split(',').slice(0, 3).join('، ')}
+                              {record.punchAnomalies.split(',').length > 3 ? '…' : ''}
+                            </span>
+                          )}
                         </div>
+                        <AttendanceFlexSummary day={record.flexDay} />
+                        {record.live && (
+                          <p
+                            className="text-xs text-gray-400 mt-1"
+                            title="غياب لحظي: بدأت ورديته ولم يسجّل بصمة — يُثبَّت بعد انتهاء اليوم"
+                          >
+                            لم يسجّل حضوراً حتى الآن
+                          </p>
+                        )}
                         {record.lateMinutes > 0 && (
                           <p className="text-xs text-warning-600 mt-1 font-medium">
                             متأخر {record.lateMinutes} دقيقة عن {record.shiftName}
+                            {record.graceUsed != null && (
+                              <span className="text-gray-400 font-normal">
+                                {' '}(بعد سماح {record.graceUsed} د)
+                              </span>
+                            )}
                           </p>
                         )}
                         {record.excusedMinutes > 0 && (
@@ -486,8 +679,31 @@ export default function AttendancePage() {
                         </div>
                       </td>
                       <td className="table-cell text-center">
+                        {/* مصدر وقتي اليوم — كان 👆 ثابتاً حتى للإدخال اليدوي */}
                         <div className="flex items-center justify-center">
-                          <span className="text-success-500">👆</span>
+                          {record.punchSource === 'MANUAL' ? (
+                            <span
+                              className="badge bg-amber-50 text-amber-700"
+                              title={`إدخال يدوي من HR${record.manualReason ? ` — السبب: ${record.manualReason}` : ''}`}
+                            >
+                              ✏️ يدوي
+                            </span>
+                          ) : record.punchSource === 'CORRECTION' ? (
+                            <span className="badge bg-blue-50 text-blue-700" title="وقت من تصحيح بصمة معتمد">
+                              📝 تصحيح
+                            </span>
+                          ) : record.punchSource === 'DEVICE' ? (
+                            <span className="text-success-500" title="جهاز البصمة">👆</span>
+                          ) : record.checkIn || record.checkOut ? (
+                            <span
+                              className="text-gray-400"
+                              title="مصدر غير محدد — بصمة أقدم من تتبّع المصدر بلا رقم جهاز"
+                            >
+                              ؟
+                            </span>
+                          ) : (
+                            <span className="text-gray-400">-</span>
+                          )}
                         </div>
                       </td>
                     </tr>
@@ -500,42 +716,26 @@ export default function AttendancePage() {
           {/* Pagination */}
           <div className="flex items-center justify-between px-4 py-4 border-t border-gray-100">
             <p className="text-sm text-gray-500">
-              عرض <span className="font-medium text-gray-700">1-{filteredRecords.length}</span> من{' '}
-              <span className="font-medium text-gray-700">{filteredRecords.length}</span> سجل
+              عدد النتائج: <span className="font-medium text-gray-700">{filteredRecords.length}</span> سجل
             </p>
-            <div className="flex items-center gap-2">
-              <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50">
-                <ChevronRight size={18} />
-              </button>
-              <button className="px-4 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium">
-                1
-              </button>
-              <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50">
-                <ChevronLeft size={18} />
-              </button>
-            </div>
           </div>
         </div>
 
         {/* Legend */}
         <div className="card">
           <div className="flex items-center gap-8">
-            <span className="text-sm font-medium text-gray-600">طرق التحقق:</span>
-            <div className="flex items-center gap-2">
-              <Camera size={16} className="text-primary-500" />
-              <span className="text-sm text-gray-600">التعرف على الوجه</span>
-            </div>
+            <span className="text-sm font-medium text-gray-600">مصدر التحقق:</span>
             <div className="flex items-center gap-2">
               <span>👆</span>
-              <span className="text-sm text-gray-600">البصمة</span>
-            </div>
-            <div className="flex items-center gap-2">
-              <span>💳</span>
-              <span className="text-sm text-gray-600">البطاقة</span>
+              <span className="text-sm text-gray-600">جهاز البصمة</span>
             </div>
             <div className="flex items-center gap-2">
               <span>✏️</span>
-              <span className="text-sm text-gray-600">إدخال يدوي</span>
+              <span className="text-sm text-gray-600">إدخال يدوي (HR)</span>
+            </div>
+            <div className="flex items-center gap-2">
+              <span>📝</span>
+              <span className="text-sm text-gray-600">تصحيح بصمة معتمد</span>
             </div>
           </div>
         </div>

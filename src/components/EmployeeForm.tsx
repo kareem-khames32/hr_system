@@ -1,12 +1,24 @@
 'use client'
+import { localToday } from '@/lib/dates'
+
+import { currencyLabel } from '@/lib/currency'
+import { employeeStatusLabels as statusLabels } from '@/lib/status-labels'
+import { loadEmployeeAddDraft, saveEmployeeAddDraft, clearEmployeeAddDraft, type EmployeeAddDraft } from '@/lib/employee-add-draft'
+import { buildEmployeeSalaryChange, employeeSalaryChanged, employeeSalaryEditPayload, employeeSalaryTotal, employeePreviousSalaryCanBeConfirmed, type EmployeeSalaryChangeCommand, type EmployeeSalaryChangeContext } from '@/lib/employee-salary-change-api'
+import { SALARY_HISTORY_FIELDS } from '@/lib/payroll-salary-history-api'
+import { buildCalendarChange, employeeCalendarPayload, type PayrollCalendarChange, type PayrollCalendarContext } from '@/lib/payroll-calendar-api'
+import { CalendarContextSummary } from '@/components/PayrollCalendarChange'
 
 import { useEffect, useRef, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
+  can,
+  getCurrentUser,
   fetchBranches,
   fetchDepartments,
   fetchTeams,
   fetchEmployees,
+  fetchEmployeeDirectory,
   fetchCatalog,
   fetchConfig,
   uploadFile,
@@ -15,6 +27,14 @@ import {
   ApiDepartment,
   ApiTeam,
   ApiEmployee,
+  type ApiQualifications,
+  type Clearable,
+  type EmployeeStatus,
+  deleteEducation,
+  deleteCertification,
+  deleteExperience,
+  deleteSkill,
+  deleteLanguage,
 } from '@/lib/api'
 import {
   User,
@@ -34,6 +54,9 @@ import {
   Clock,
 } from 'lucide-react'
 import Link from 'next/link'
+
+// خيار «المدير المباشر» — من قائمة الموظفين أو الدليل المختصر (بلا employees.view)
+type ManagerOption = Pick<ApiEmployee, 'id' | 'fullName' | 'jobTitle'>
 
 // مركز التكلفة — من كتالوج الإعدادات
 interface CostCenter {
@@ -66,7 +89,7 @@ export interface EmployeeFormState {
   employeeCode: string
   fingerprintCode: string
   joinDate: string
-  status: string
+  status: EmployeeStatus
   branchId: string
   departmentId: string
   teamId: string
@@ -76,6 +99,7 @@ export interface EmployeeFormState {
   basicSalary: string
   housingAllowance: string
   transportAllowance: string
+  otherAllowance: string
   phoneAllowance: string
   workNatureAllowance: string
   payMethod: string
@@ -85,8 +109,35 @@ export interface EmployeeFormState {
   contractType: string
   contractStart: string
   contractEnd: string
+  contractNumber: string
+  contractDurationMonths: string
+  noticePeriodDays: string
+  // حقول قياسية جديدة (الملف الكامل) — كلها string في الحالة، تُحوَّل عند الإرسال
+  birthPlace: string
+  passportNo: string
+  passportExpiry: string
+  phoneAlt: string
+  country: string
+  postalCode: string
+  emergencyRelation: string
+  emergencyPhoneAlt: string
+  actualStartDate: string
+  workType: string
+  probationEndDate: string
+  recruitmentSource: string
+  gradeId: string // كتالوج الدرجة → Number في الحمولة
+  workLocation: string
+  currency: string
+  salaryCycle: string
+  bankBranch: string
+  gosiNumber: string
+  isGosiRegistered: string // 'true' | 'false' | '' → boolean في الحمولة
+  gosiBaseSalary: string
   photoFileId?: number
   workScheduleId?: number // جدول العمل المعيّن (للتعبئة المسبقة في التعديل)
+  flexOverrideMode?: 'INHERIT' | 'ENABLED' | 'DISABLED'
+  attendanceEffectiveFrom?: string
+  attendanceChangeReason?: string
   annualLeaveEntitled?: boolean // يستحق سنوي؟ (تعبئة مسبقة في التعديل)
   openingBalanceDays?: number // الرصيد الافتتاحي الحالي (تعبئة مسبقة في التعديل)
   openingBalanceExpiry?: string | null // صلاحيته (تاريخ أو null)
@@ -94,9 +145,46 @@ export interface EmployeeFormState {
 
 // الحمولة المُرسلة للباك إند — حقول ApiEmployee + الرصيد الافتتاحي المُرحّل
 // (يُطبَّق على رصيد الإجازة السنوية عند التعيين فقط، ليس عموداً على الموظف)
-export type EmployeeFormPayload = Partial<ApiEmployee> & {
+// صف واحد في إحدى قوائم المؤهلات/الخبرات (حقول نصية حرة حسب القائمة)
+export type QualRow = Record<string, string>
+
+// تسميات عربية لعرض الصفوف المضافة
+const DEGREE_LABEL: Record<string, string> = {
+  phd: 'دكتوراه',
+  master: 'ماجستير',
+  bachelor: 'بكالوريوس',
+  diploma: 'دبلوم',
+  high_school: 'ثانوي',
+  other: 'أخرى',
+}
+const SKILL_LEVEL_LABEL: Record<string, string> = {
+  beginner: 'مبتدئ',
+  intermediate: 'متوسط',
+  advanced: 'متقدم',
+  expert: 'خبير',
+}
+const LANG_LEVEL_LABEL: Record<string, string> = {
+  native: 'لغة أم',
+  very_good: 'جيد جداً',
+  good: 'جيد',
+  basic: 'أساسي',
+}
+
+// قوائم المؤهلات الخمس — تُحفظ بعد إنشاء/تعديل الموظف (تحتاج employeeId)
+export interface QualificationsPayload {
+  education: QualRow[]
+  certifications: QualRow[]
+  experiences: QualRow[]
+  skills: QualRow[]
+  languages: QualRow[]
+}
+
+export type EmployeeFormPayload = Clearable<ApiEmployee> & {
+  salaryChange?: EmployeeSalaryChangeCommand
+  calendarChange?: PayrollCalendarChange
   openingBalanceDays?: number
   openingBalanceExpiry?: string | null
+  qualifications?: QualificationsPayload
 }
 
 interface EmployeeFormProps {
@@ -105,11 +193,18 @@ interface EmployeeFormProps {
   onSubmit: (payload: EmployeeFormPayload) => Promise<void>
   submitting: boolean
   error: string
+  // المؤهلات المحفوظة (وضع التعديل) — تُعرض للحذف، والجديد يُضاف بجانبها
+  employeeId?: number
+  savedQualifications?: ApiQualifications | null
+  salaryChangeContext?: EmployeeSalaryChangeContext | null
+  salaryContextError?: string
+  calendarContext?: PayrollCalendarContext | null
+  calendarContextError?: string
 }
 
 // أيام الأسبوع
 const weekDays = [
-  { key: 'sunday', name: 'الأحد', shortName: 'س' },
+  { key: 'sunday', name: 'الأحد', shortName: 'ح' },
   { key: 'monday', name: 'الاثنين', shortName: 'ن' },
   { key: 'tuesday', name: 'الثلاثاء', shortName: 'ث' },
   { key: 'wednesday', name: 'الأربعاء', shortName: 'ر' },
@@ -129,6 +224,9 @@ interface WorkScheduleRow {
   isDefault: boolean
   isActive: boolean
   employeeCount?: number
+  flexEnabled?: boolean | null
+  flexWindowMinutes?: number | null
+  requiredWorkMinutes?: number | null
 }
 
 // رمز اليوم (3 أحرف) لكل مفتاح — لاشتقاق أيام العمل من أيام نهاية الأسبوع
@@ -168,15 +266,6 @@ const steps = [
 const jobTitleOptions = ['مطور برمجيات', 'محلل نظم', 'مدير', 'أخصائي']
 const nationalityOptions = ['سعودي', 'مصري', 'أردني', 'سوري', 'أخرى']
 const bankOptions = ['بنك الراجحي', 'بنك الإنماء', 'البنك الأهلي', 'بنك الرياض', 'بنك ساب']
-const statusLabels: Record<string, string> = {
-  probation: 'فترة تجربة',
-  active: 'نشط',
-  suspended: 'موقوف',
-  notice_period: 'فترة إشعار',
-  resigned: 'مستقيل',
-  terminated: 'منتهي الخدمة',
-  archived: 'مؤرشف',
-}
 
 const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormState => ({
   firstNameAr: '',
@@ -210,6 +299,7 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
   basicSalary: '',
   housingAllowance: '',
   transportAllowance: '',
+  otherAllowance: '',
   phoneAllowance: '',
   workNatureAllowance: '',
   payMethod: 'transfer',
@@ -219,11 +309,37 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
   contractType: '',
   contractStart: '',
   contractEnd: '',
+  contractNumber: '',
+  contractDurationMonths: '',
+  noticePeriodDays: '',
+  birthPlace: '',
+  passportNo: '',
+  passportExpiry: '',
+  phoneAlt: '',
+  country: '',
+  postalCode: '',
+  emergencyRelation: '',
+  emergencyPhoneAlt: '',
+  actualStartDate: '',
+  probationEndDate: '',
+  recruitmentSource: '',
+  gradeId: '',
+  workLocation: '',
+  currency: 'SAR',
+  salaryCycle: '',
+  bankBranch: '',
+  gosiNumber: '',
+  isGosiRegistered: '',
+  gosiBaseSalary: '',
   photoFileId: undefined,
+  flexOverrideMode: 'INHERIT',
+  attendanceEffectiveFrom: '',
+  attendanceChangeReason: '',
   ...initial,
+  workType: initial?.workType === 'fulltime' ? 'full_time' : initial?.workType === 'parttime' ? 'part_time' : initial?.workType ?? '',
 })
 
-export default function EmployeeForm({ mode, initial, onSubmit, submitting, error }: EmployeeFormProps) {
+export default function EmployeeForm({ mode, initial, onSubmit, submitting, error, employeeId, savedQualifications, salaryChangeContext = null, salaryContextError = '', calendarContext = null, calendarContextError = '' }: EmployeeFormProps) {
   const [currentStep, setCurrentStep] = useState(1)
   const [stepError, setStepError] = useState('') // خطأ تحقق الخطوة
   // يستحق سنوي؟ — من بيانات الموظف في التعديل (افتراضي نعم)
@@ -234,6 +350,90 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     initial?.workScheduleId ?? ''
   )
   const [scheduleList, setScheduleList] = useState<WorkScheduleRow[]>([])
+  // ===== المؤهلات والخبرات — خمس قوائم تُحفظ بعد إنشاء الموظف (تحتاج employeeId)
+  // كل قائمة صفوف تُضاف/تُحذف محلياً هنا، ثم تُرسل دفعةً في onSubmit
+  const [eduRows, setEduRows] = useState<QualRow[]>([])
+  const [certRows, setCertRows] = useState<QualRow[]>([])
+  const [expRows, setExpRows] = useState<QualRow[]>([])
+  const [skillRows, setSkillRows] = useState<QualRow[]>([])
+  const [langRows, setLangRows] = useState<QualRow[]>([])
+  // المؤهلات المحفوظة سابقاً (وضع التعديل) — تُعرض للحذف الفوري
+  const [saved, setSaved] = useState<ApiQualifications | null>(savedQualifications ?? null)
+  useEffect(() => setSaved(savedQualifications ?? null), [savedQualifications])
+
+  // حذف صف محفوظ من الباك مباشرة ثم إزالته من العرض
+  const deleteSavedRow = async (
+    kind: keyof ApiQualifications,
+    rowId: number
+  ) => {
+    if (!employeeId) return
+    const fn = {
+      education: deleteEducation,
+      certifications: deleteCertification,
+      experiences: deleteExperience,
+      skills: deleteSkill,
+      languages: deleteLanguage,
+    }[kind]
+    try {
+      await fn(employeeId, rowId)
+      setSaved((prev) =>
+        prev
+          ? { ...prev, [kind]: (prev[kind] as any[]).filter((r) => r.id !== rowId) }
+          : prev
+      )
+    } catch (err) {
+      setStepError(err instanceof Error ? err.message : 'تعذّر الحذف')
+    }
+  }
+
+  // عرض الصفوف المحفوظة لقائمة مع زر حذف فوري (وضع التعديل فقط)
+  const SavedList = ({
+    kind,
+    label,
+  }: {
+    kind: keyof ApiQualifications
+    label: (r: any) => string
+  }) => {
+    const rows = (saved?.[kind] as any[]) ?? []
+    if (rows.length === 0) return null
+    return (
+      <div className="mb-3 rounded-xl border border-gray-200 bg-white p-3">
+        <p className="mb-2 text-xs font-medium text-gray-500">
+          المحفوظ حالياً ({rows.length})
+        </p>
+        <ul className="divide-y divide-gray-100">
+          {rows.map((r) => (
+            <li key={r.id} className="flex items-center justify-between py-2 text-sm">
+              <span className="text-gray-700">{label(r)}</span>
+              <button
+                type="button"
+                className="text-xs font-medium text-red-500 hover:text-red-600"
+                onClick={() => deleteSavedRow(kind, r.id)}
+              >
+                حذف
+              </button>
+            </li>
+          ))}
+        </ul>
+      </div>
+    )
+  }
+
+  // مسودّة الصف الجاري إدخاله لكل قائمة (تُفرَّغ بعد «إضافة»)
+  const [eduDraft, setEduDraft] = useState<QualRow>({})
+  const [certDraft, setCertDraft] = useState<QualRow>({})
+  const [expDraft, setExpDraft] = useState<QualRow>({})
+  const [skillDraft, setSkillDraft] = useState<QualRow>({})
+  const [langDraft, setLangDraft] = useState<QualRow>({})
+
+  // مرفق العقد — يُرفع فورًا ويُخزَّن مرجعه (ref) لإرساله ثم إنشاء مستند «عقد»
+  const [contractFileRef, setContractFileRef] = useState('')
+  const [contractFileName, setContractFileName] = useState('')
+  const [contractUploading, setContractUploading] = useState(false)
+  // المستندات الستة — كل ملف يُرفع فورًا ويُخزَّن {docType, fileRef} لإرساله
+  // ثم إنشاء EmployeeDocument بالباك. docUploading يتتبّع حالة الرفع لكل نوع
+  const [documentRefs, setDocumentRefs] = useState<{ docType: string; fileRef: string }[]>([])
+  const [docUploading, setDocUploading] = useState<Record<string, boolean>>({})
   // سياسات الإجازة العامة (من الإعدادات) — تُعرض للقراءة فقط في نموذج الموظف
   const [policyCfg, setPolicyCfg] = useState<Record<string, string>>({})
   // الرصيد الافتتاحي المُرحّل — يُعبَّأ مسبقاً بقيمته الحالية في التعديل
@@ -264,12 +464,23 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [teams, setTeams] = useState<ApiTeam[]>([])
-  const [allEmployees, setAllEmployees] = useState<ApiEmployee[]>([])
+  // منتقي المدير المباشر — يكفيه id/الاسم/المسمى (القائمة الكاملة أو الدليل المختصر)
+  const [allEmployees, setAllEmployees] = useState<ManagerOption[]>([])
   const [costCenters, setCostCenters] = useState<CostCenter[]>([])
   const [catalogError, setCatalogError] = useState('')
 
   // حقول النموذج المرتبطة بالباك إند — تُبذَر من initial
   const [form, setForm] = useState<EmployeeFormState>(() => makeInitialState(initial))
+  const [salaryEvidence, setSalaryEvidence] = useState({ effectiveDate: '', reason: '', evidenceReference: '', previousEffectiveFrom: '' })
+  const [calendarInitialConfirmation, setCalendarInitialConfirmation] = useState(false)
+  const calendarRequested = mode === 'edit' && (form.branchId !== (initial?.branchId ?? '') || calendarInitialConfirmation)
+  const salaryLocked = mode === 'edit' && !salaryChangeContext
+  const salaryChanged = mode === 'edit' && !!salaryChangeContext && employeeSalaryChanged(salaryChangeContext, form)
+  const [draftUserId, setDraftUserId] = useState<number | null>(null)
+  const [sessionDraft, setSessionDraft] = useState<EmployeeAddDraft | null>(null)
+  const [draftError, setDraftError] = useState('')
+  const [draftNotice, setDraftNotice] = useState('')
+  const [restoreDraftOpen, setRestoreDraftOpen] = useState(false)
 
   const setField = <K extends keyof EmployeeFormState>(key: K, value: EmployeeFormState[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }))
@@ -279,6 +490,60 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
   const [photoUploading, setPhotoUploading] = useState(false)
   const [photoError, setPhotoError] = useState('')
   const objectUrlRef = useRef<string | null>(null)
+  const uploadingAny = photoUploading || contractUploading || Object.values(docUploading).some(Boolean)
+
+  useEffect(() => {
+    if (mode !== 'add') return
+    const userId = getCurrentUser()?.id
+    if (!userId) return
+    setDraftUserId(userId)
+    try { setSessionDraft(loadEmployeeAddDraft(userId, makeInitialState())) }
+    catch (err) { setDraftError(err instanceof Error ? err.message : 'تعذر قراءة مسودة الجلسة.') }
+  }, [mode])
+
+  const persistDraft = () => {
+    if (mode !== 'add' || !draftUserId || submitting || uploadingAny) return
+    const snapshot: EmployeeAddDraft = {
+      schemaVersion: 1, userId: draftUserId, savedAt: new Date().toISOString(), currentStep,
+      form, leaveEntitled, selectedSchedule, openingBalance, openingExpiry, openingExpiryDate,
+      qualifications: { education: eduRows, certifications: certRows, experiences: expRows, skills: skillRows, languages: langRows },
+      qualificationDrafts: { education: eduDraft, certifications: certDraft, experiences: expDraft, skills: skillDraft, languages: langDraft },
+      contractFileRef, contractFileName, documentRefs,
+    }
+    try {
+      saveEmployeeAddDraft(snapshot)
+      setSessionDraft(snapshot); setDraftError('')
+      setDraftNotice('حُفظت مسودة الإضافة في هذا التبويب. لم يُنشأ موظف في النظام.')
+    } catch { setDraftError('تعذر حفظ المسودة في المتصفح. تحقق من إتاحة تخزين الجلسة ثم أعد المحاولة.') }
+  }
+
+  const discardSessionDraft = () => {
+    if (!draftUserId) return
+    try {
+      clearEmployeeAddDraft(draftUserId)
+      setSessionDraft(null); setDraftError(''); setRestoreDraftOpen(false)
+      setDraftNotice('حُذفت المسودة المحفوظة من الجلسة. البيانات المفتوحة في النموذج باقية.')
+    } catch { setDraftError('تعذر حذف مسودة الجلسة من المتصفح.') }
+  }
+
+  const restoreSessionDraft = async () => {
+    if (!sessionDraft || submitting || uploadingAny) return
+    setRestoreDraftOpen(false)
+    setForm(sessionDraft.form); setCurrentStep(sessionDraft.currentStep)
+    setLeaveEntitled(sessionDraft.leaveEntitled); setSelectedSchedule(sessionDraft.selectedSchedule)
+    setOpeningBalance(sessionDraft.openingBalance); setOpeningExpiry(sessionDraft.openingExpiry); setOpeningExpiryDate(sessionDraft.openingExpiryDate)
+    setEduRows(sessionDraft.qualifications.education); setCertRows(sessionDraft.qualifications.certifications); setExpRows(sessionDraft.qualifications.experiences); setSkillRows(sessionDraft.qualifications.skills); setLangRows(sessionDraft.qualifications.languages)
+    setEduDraft(sessionDraft.qualificationDrafts.education); setCertDraft(sessionDraft.qualificationDrafts.certifications); setExpDraft(sessionDraft.qualificationDrafts.experiences); setSkillDraft(sessionDraft.qualificationDrafts.skills); setLangDraft(sessionDraft.qualificationDrafts.languages)
+    setContractFileRef(sessionDraft.contractFileRef); setContractFileName(sessionDraft.contractFileName); setDocumentRefs(sessionDraft.documentRefs)
+    setStepError(''); setDraftError(''); setPhotoError(''); replacePhotoUrl(null)
+    setDraftNotice('استُرجعت المسودة. راجع البيانات والمرفقات ثم أضف الموظف عند اكتمالها.')
+    if (sessionDraft.form.photoFileId) {
+      setPhotoUploading(true)
+      try { replacePhotoUrl(await fetchFileObjectUrl(sessionDraft.form.photoFileId)) }
+      catch { setPhotoError('تعذر عرض الصورة المحفوظة؛ يمكنك إعادة رفعها أو حذفها قبل الإضافة.') }
+      finally { setPhotoUploading(false) }
+    }
+  }
 
   const replacePhotoUrl = (url: string | null) => {
     if (objectUrlRef.current) URL.revokeObjectURL(objectUrlRef.current)
@@ -322,12 +587,74 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     replacePhotoUrl(URL.createObjectURL(file))
     setPhotoUploading(true)
     try {
-      const res = await uploadFile(file, { entityType: 'employee_photo' })
+      const res = await uploadFile(file, { entityType: 'employee_photo', employeeId })
       setForm((prev) => ({ ...prev, photoFileId: res.id }))
     } catch (err) {
       setPhotoError(err instanceof Error ? err.message : 'فشل رفع الصورة')
     } finally {
       setPhotoUploading(false)
+    }
+  }
+
+  // إضافة صف لقائمة مؤهلات: يتحقق من الحقل الإجباري ثم يفرّغ المسودّة
+  const addQualRow = (
+    draft: QualRow,
+    setDraft: (r: QualRow) => void,
+    setRows: React.Dispatch<React.SetStateAction<QualRow[]>>,
+    requiredKey: string,
+    requiredLabel: string
+  ) => {
+    if (!draft[requiredKey]?.trim()) {
+      setStepError(`${requiredLabel} مطلوب قبل الإضافة`)
+      return
+    }
+    setStepError('')
+    setRows((prev) => [...prev, draft])
+    setDraft({})
+  }
+
+  const removeQualRow = (
+    setRows: React.Dispatch<React.SetStateAction<QualRow[]>>,
+    idx: number
+  ) => setRows((prev) => prev.filter((_, i) => i !== idx))
+
+  // رفع مرفق العقد فورًا → مرجع file:N يُرسَل مع الحفظ لإنشاء مستند «عقد»
+  const handleContractPick = async (file: File | null | undefined) => {
+    if (!file) return
+    setStepError('')
+    setContractUploading(true)
+    try {
+      const res = await uploadFile(file, { entityType: 'contract', employeeId })
+      setContractFileRef(res.ref)
+      setContractFileName(res.originalName || file.name)
+    } catch (err) {
+      setStepError(err instanceof Error ? err.message : 'فشل رفع مرفق العقد')
+    } finally {
+      setContractUploading(false)
+    }
+  }
+
+  // رفع مستند عام → uploadFile ثم إضافة/استبدال {docType, fileRef} في documentRefs.
+  // append=true (شهادات الخبرة، multiple) يُلحق بدل الاستبدال لدعم عدة ملفات
+  const handleDocPick = async (
+    docType: string,
+    file: File | null | undefined,
+    append = false
+  ) => {
+    if (!file) return
+    setStepError('')
+    setDocUploading((prev) => ({ ...prev, [docType]: true }))
+    try {
+      const res = await uploadFile(file, { entityType: 'document', employeeId })
+      setDocumentRefs((prev) =>
+        append
+          ? [...prev, { docType, fileRef: res.ref }]
+          : [...prev.filter((d) => d.docType !== docType), { docType, fileRef: res.ref }]
+      )
+    } catch (err) {
+      setStepError(err instanceof Error ? err.message : 'فشل رفع المستند')
+    } finally {
+      setDocUploading((prev) => ({ ...prev, [docType]: false }))
     }
   }
 
@@ -338,23 +665,28 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
   }
 
   useEffect(() => {
-    Promise.all([fetchBranches(), fetchDepartments(), fetchTeams(), fetchEmployees()])
-      .then(([b, d, t, e]) => {
+    Promise.all([fetchBranches(), fetchDepartments(), fetchTeams()])
+      .then(([b, d, t]) => {
         setBranches(b)
         setDepartments(d)
         setTeams(t)
-        setAllEmployees(e)
       })
       .catch((err) =>
         setCatalogError(err instanceof Error ? err.message : 'تعذر تحميل بيانات القوائم')
       )
+    // منتقي المدير: القائمة الكاملة تحتاج employees.view — بدونها (صلاحية الإنشاء
+    // وحدها) الدليل المختصر للنشطين في النطاق، فلا يسقط النموذج بـ403
+    const managers: Promise<ManagerOption[]> = can('employees.view')
+      ? fetchEmployees()
+      : fetchEmployeeDirectory()
+    managers.then(setAllEmployees).catch(() => setAllEmployees([]))
     // مراكز التكلفة اختيارية — فشلها لا يعطّل النموذج
     fetchCatalog<CostCenter>('cost-centers')
       .then((cc) => setCostCenters(cc.filter((c) => c.isActive)))
       .catch(() => setCostCenters([]))
     // جداول العمل الفعلية من الإعدادات — لا نعيّن جدولاً تلقائياً؛ بلا اختيار
     // صريح يبقى الموظف على عطلة الفرع/العام (لا نغلبها بجدول لم يختره المستخدم)
-    fetchCatalog<WorkScheduleRow>('work-schedules')
+    fetchCatalog<WorkScheduleRow>('work-schedules', localToday())
       .then((ws) => setScheduleList(ws.filter((s) => s.isActive)))
       .catch(() => setScheduleList([]))
     // سياسات الإجازة العامة — للعرض للقراءة فقط (تُدار من صفحة السياسات)
@@ -386,12 +718,13 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     : teams
 
   // إجمالي الراتب الشهري = الأساسي + البدلات الثابتة (يُحدَّث لحظياً في الخطوة المالية)
-  const totalMonthlySalary =
+  const totalMonthlySalary = mode === 'add' ?
     (Number(form.basicSalary) || 0) +
     (Number(form.housingAllowance) || 0) +
     (Number(form.transportAllowance) || 0) +
     (Number(form.phoneAllowance) || 0) +
-    (Number(form.workNatureAllowance) || 0)
+    (Number(form.workNatureAllowance) || 0) +
+    (Number(form.otherAllowance) || 0) : 0
 
   const buildPayload = (): EmployeeFormPayload => {
     const payload: EmployeeFormPayload = {
@@ -411,10 +744,16 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.teamId) payload.teamId = Number(form.teamId)
     if (form.managerId) payload.managerEmployeeId = Number(form.managerId)
     if (form.joinDate) payload.joinDate = form.joinDate
-    if (form.basicSalary !== '') payload.basicSalary = Number(form.basicSalary)
+    if (mode === 'add' && form.basicSalary !== '') payload.basicSalary = Number(form.basicSalary)
     if (form.costCenterId) payload.costCenterId = Number(form.costCenterId)
     // جدول العمل المختار — يعيّن على الموظف فعلياً (يشتقّ منه المحرك)
     if (selectedSchedule !== '') payload.workScheduleId = Number(selectedSchedule)
+    if (mode === 'add' || form.flexOverrideMode !== (initial?.flexOverrideMode ?? 'INHERIT') ||
+      (selectedSchedule || null) !== (initial?.workScheduleId ?? null)) {
+      payload.flexOverrideMode = form.flexOverrideMode ?? 'INHERIT'
+      if (form.attendanceEffectiveFrom) payload.attendanceEffectiveFrom = form.attendanceEffectiveFrom
+      if (form.attendanceChangeReason?.trim()) payload.attendanceChangeReason = form.attendanceChangeReason.trim()
+    }
     // استحقاق السنوي — يتحكم فعلياً في تراكم الرصيد (مقفول = بلا سنوي)
     payload.annualLeaveEntitled = leaveEntitled
     if (form.bankName) payload.bankName = form.bankName
@@ -432,16 +771,20 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.emergencyName.trim()) payload.emergencyContactName = form.emergencyName.trim()
     if (form.emergencyPhone.trim()) payload.emergencyContactPhone = form.emergencyPhone.trim()
     // البدلات الثابتة
-    if (form.housingAllowance !== '') payload.housingAllowance = Number(form.housingAllowance)
-    if (form.transportAllowance !== '') payload.transportAllowance = Number(form.transportAllowance)
-    const otherAllowance =
-      (Number(form.phoneAllowance) || 0) + (Number(form.workNatureAllowance) || 0)
-    if (form.phoneAllowance !== '' || form.workNatureAllowance !== '')
-      payload.otherAllowance = otherAllowance
+    if (mode === 'add' && form.housingAllowance !== '') payload.housingAllowance = Number(form.housingAllowance)
+    if (mode === 'add' && form.transportAllowance !== '') payload.transportAllowance = Number(form.transportAllowance)
+    if (mode === 'add' && form.otherAllowance !== '') payload.otherAllowance = Number(form.otherAllowance)
     // بيانات العقد — تُرسل فقط عند تعبئتها
     if (form.contractType) payload.contractType = form.contractType
     if (form.contractStart) payload.contractStart = form.contractStart
     if (form.contractEnd) payload.contractEnd = form.contractEnd
+    if (form.contractNumber.trim()) payload.contractNumber = form.contractNumber.trim()
+    if (form.contractDurationMonths !== '')
+      payload.contractDurationMonths = Number(form.contractDurationMonths)
+    if (form.noticePeriodDays !== '')
+      payload.noticePeriodDays = Number(form.noticePeriodDays)
+    // مرفق العقد (مرجع الملف) — الباك يُنشئ منه مستند «عقد»
+    if (contractFileRef) payload.contractFileRef = contractFileRef
     // صورة الموظف
     if (form.photoFileId != null) payload.photoFileId = form.photoFileId
     // الرصيد الافتتاحي المُرحّل (اختياري) — يُطبَّق على رصيد السنوي في
@@ -456,15 +799,100 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
             ? openingExpiryDate || null
             : null // بدون انتهاء
     }
-    return payload
+    // ===== حقول قياسية جديدة — تُرسل فقط عند وجود قيمة =====
+    if (form.birthPlace.trim()) payload.birthPlace = form.birthPlace.trim()
+    if (form.passportNo.trim()) payload.passportNo = form.passportNo.trim()
+    if (form.passportExpiry) payload.passportExpiry = form.passportExpiry
+    if (form.phoneAlt.trim()) payload.phoneAlt = form.phoneAlt.trim()
+    if (form.country) payload.country = form.country
+    if (form.postalCode.trim()) payload.postalCode = form.postalCode.trim()
+    if (form.emergencyRelation) payload.emergencyRelation = form.emergencyRelation
+    if (form.emergencyPhoneAlt.trim()) payload.emergencyPhoneAlt = form.emergencyPhoneAlt.trim()
+    if (form.actualStartDate) payload.actualStartDate = form.actualStartDate
+    if (form.workType) payload.workType = form.workType
+    if (form.probationEndDate) payload.probationEndDate = form.probationEndDate
+    if (form.recruitmentSource) payload.recruitmentSource = form.recruitmentSource
+    if (form.gradeId) payload.gradeId = Number(form.gradeId)
+    if (form.workLocation.trim()) payload.workLocation = form.workLocation.trim()
+    if (mode === 'add' && form.currency) payload.currency = form.currency
+    if (form.salaryCycle) payload.salaryCycle = form.salaryCycle
+    if (form.bankBranch.trim()) payload.bankBranch = form.bankBranch.trim()
+    if (form.gosiNumber.trim()) payload.gosiNumber = form.gosiNumber.trim()
+    if (form.isGosiRegistered) payload.isGosiRegistered = form.isGosiRegistered === 'true'
+    if (form.gosiBaseSalary !== '') payload.gosiBaseSalary = Number(form.gosiBaseSalary)
+    // ===== إصلاحات ذهاب/عودة — حقول مستقلة (بجانب سلوك الـfallback الحالي) =====
+    if (form.fingerprintCode.trim()) payload.fingerprintCode = form.fingerprintCode.trim()
+    if (form.personalEmail.trim()) payload.personalEmail = form.personalEmail.trim()
+    if (mode === 'add' && form.phoneAllowance !== '') payload.phoneAllowance = Number(form.phoneAllowance)
+    if (mode === 'add' && form.workNatureAllowance !== '')
+      payload.workNatureAllowance = Number(form.workNatureAllowance)
+    // ===== مراجع المستندات — payload فقط، الباك يُنشئ EmployeeDocument لكل عنصر =====
+    if (documentRefs.length > 0) payload.documentRefs = documentRefs
+    // ===== المؤهلات والخبرات — تُحفظ بعد الموظف (تحتاج employeeId) =====
+    if (
+      eduRows.length ||
+      certRows.length ||
+      expRows.length ||
+      skillRows.length ||
+      langRows.length
+    ) {
+      payload.qualifications = {
+        education: eduRows,
+        certifications: certRows,
+        experiences: expRows,
+        skills: skillRows,
+        languages: langRows,
+      }
+    }
+    // A cleared optional field must reach PATCH as null. Only fields that were
+    // actually loaded with a value are cleared; untouched/unavailable data stays.
+    if (mode === 'edit' && initial) {
+      const optionalFields: Array<[keyof EmployeeFormState, keyof ApiEmployee]> = [
+        ['departmentId', 'departmentId'], ['teamId', 'teamId'], ['managerId', 'managerEmployeeId'],
+        ['costCenterId', 'costCenterId'], ['gradeId', 'gradeId'],
+        ['contractEnd', 'contractEnd'], ['contractStart', 'contractStart'], ['contractType', 'contractType'],
+        ['contractNumber', 'contractNumber'], ['contractDurationMonths', 'contractDurationMonths'],
+        ['noticePeriodDays', 'noticePeriodDays'], ['bankName', 'bankName'], ['iban', 'iban'],
+        ['birthDate', 'birthDate'], ['gender', 'gender'], ['maritalStatus', 'maritalStatus'],
+        ['nationality', 'nationality'], ['nationalId', 'nationalId'], ['phone', 'phone'],
+        ['personalEmail', 'personalEmail'], ['fingerprintCode', 'fingerprintCode'],
+        ['emergencyName', 'emergencyContactName'], ['emergencyPhone', 'emergencyContactPhone'],
+        ['birthPlace', 'birthPlace'], ['passportNo', 'passportNo'], ['passportExpiry', 'passportExpiry'],
+        ['phoneAlt', 'phoneAlt'], ['country', 'country'], ['postalCode', 'postalCode'],
+        ['emergencyRelation', 'emergencyRelation'], ['emergencyPhoneAlt', 'emergencyPhoneAlt'],
+        ['actualStartDate', 'actualStartDate'], ['probationEndDate', 'probationEndDate'],
+        ['recruitmentSource', 'recruitmentSource'], ['workLocation', 'workLocation'],
+        ['bankBranch', 'bankBranch'], ['gosiNumber', 'gosiNumber'], ['gosiBaseSalary', 'gosiBaseSalary'],
+        ['housingAllowance', 'housingAllowance'], ['transportAllowance', 'transportAllowance'],
+        ['phoneAllowance', 'phoneAllowance'], ['workNatureAllowance', 'workNatureAllowance'], ['otherAllowance', 'otherAllowance'],
+      ]
+      for (const [field, target] of optionalFields) {
+        if (initial[field] != null && initial[field] !== '' && String(form[field] ?? '').trim() === '') payload[target] = null
+      }
+      if (initial.workScheduleId != null && selectedSchedule === '') payload.workScheduleId = null
+      if (initial.photoFileId != null && form.photoFileId == null) payload.photoFileId = null
+      if ((initial.addressCity || initial.addressDistrict) && !form.addressCity.trim() && !form.addressDistrict.trim()) payload.address = null
+      if (initial.workEmail && !form.workEmail.trim()) payload.email = null
+    }
+    if (mode === 'add') return payload
+    const employeePayload = employeeCalendarPayload(payload, initial?.branchId ?? '', form.branchId, calendarContext, { effectiveFrom: form.attendanceEffectiveFrom ?? '', reason: form.attendanceChangeReason ?? '' }, calendarInitialConfirmation)
+    return employeeSalaryEditPayload(employeePayload, salaryChangeContext, form, salaryEvidence, localToday())
   }
 
   const handleSubmit = async () => {
+    for (const step of [1, 2, 3]) {
+      const issue = stepIssue(step)
+      if (issue) { setStepError(issue); setCurrentStep(step); return }
+    }
     await onSubmit(buildPayload())
   }
 
   // تحقق الحقول الإجبارية لكل خطوة قبل السماح بالتالي
   const stepIssue = (step: number): string | null => {
+    if (step === 3 && salaryChanged && salaryChangeContext) {
+      try { buildEmployeeSalaryChange(salaryChangeContext, form, salaryEvidence, localToday()) }
+      catch (cause) { return cause instanceof Error ? cause.message : 'راجع بيانات تغيير الأجر.' }
+    }
     if (step === 1 && !form.firstNameAr.trim()) {
       return 'الاسم الأول مطلوب قبل المتابعة'
     }
@@ -473,6 +901,17 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
         return 'كود الموظف (أو كود البصمة) مطلوب'
       }
       if (!form.branchId) return 'اختر الفرع قبل المتابعة'
+      if (!form.joinDate) return 'تاريخ التعيين مطلوب'
+      const attendanceChanged = (form.flexOverrideMode ?? 'INHERIT') !== (initial?.flexOverrideMode ?? 'INHERIT') ||
+        (selectedSchedule || null) !== (initial?.workScheduleId ?? null)
+      if (mode === 'edit' && attendanceChanged) {
+        if (!form.attendanceEffectiveFrom) return 'حدد تاريخ سريان تغيير الدوام أو المرونة'
+        if (!form.attendanceChangeReason?.trim()) return 'اكتب سبب تغيير الدوام أو المرونة'
+      }
+      if (calendarRequested) {
+        try { buildCalendarChange(calendarContext, { effectiveFrom: form.attendanceEffectiveFrom ?? '', reason: form.attendanceChangeReason ?? '' }) }
+        catch (cause) { return (cause as Error).message }
+      }
     }
     return null
   }
@@ -502,7 +941,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     <MainLayout>
       <div className="space-y-6">
         {/* Page Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">
               {isEdit ? 'تعديل بيانات الموظف' : 'إضافة موظف جديد'}
@@ -517,11 +956,25 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
           </Link>
         </div>
 
+        {!isEdit && <div className="rounded-xl border border-primary-100 bg-primary-50 p-4 space-y-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div><h2 className="font-semibold text-primary-900">مسودة إضافة الموظف</h2><p className="text-xs text-primary-800 mt-1 leading-6">حفظ يدوي للبيانات ومراجع المرفقات المرفوعة في جلسة هذا التبويب فقط. تُمسح عند إغلاق التبويب أو تسجيل الخروج أو إنشاء الموظف.</p>{sessionDraft && <p className="text-xs text-gray-600 mt-1">آخر حفظ: {new Date(sessionDraft.savedAt).toLocaleString('ar-EG-u-ca-gregory')}</p>}</div>
+            <div className="flex flex-wrap gap-2">
+              {sessionDraft && <button type="button" onClick={() => setRestoreDraftOpen(true)} disabled={submitting || uploadingAny} className="btn-secondary text-sm">استرجاع المسودة</button>}
+              {(sessionDraft || draftError) && <button type="button" onClick={discardSessionDraft} disabled={!draftUserId || submitting || uploadingAny} className="btn-secondary text-sm">حذف المسودة</button>}
+              <button type="button" onClick={persistDraft} disabled={!draftUserId || submitting || uploadingAny} className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50"><Save size={16} />حفظ مسودة الجلسة</button>
+            </div>
+          </div>
+          {draftError && <p role="alert" className="text-sm text-red-700">{draftError}</p>}
+          {draftNotice && <p role="status" className="text-sm text-green-800">{draftNotice}</p>}
+          {uploadingAny && <p className="text-xs text-gray-600">انتظر اكتمال رفع المرفقات قبل حفظ المسودة أو استرجاعها.</p>}
+        </div>}
+
         {/* Progress Steps */}
         <div className="card">
-          <div className="flex items-center justify-between">
+          <div className="flex items-center justify-between overflow-x-auto pb-2">
             {steps.map((step, index) => (
-              <div key={step.id} className="flex items-center">
+              <div key={step.id} className="flex shrink-0 items-center">
                 <div className="flex flex-col items-center">
                   <button
                     type="button"
@@ -550,7 +1003,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 {index < steps.length - 1 && (
                   <div
-                    className={`w-24 h-1 mx-4 rounded-full transition-all ${
+                    className={`w-8 sm:w-24 h-1 mx-2 sm:mx-4 rounded-full transition-all ${
                       currentStep > step.id ? 'bg-success-500' : 'bg-gray-200'
                     }`}
                   />
@@ -613,7 +1066,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                     <input type="text" className="input" placeholder="أحمد" value={form.firstNameAr} onChange={(e) => setField('firstNameAr', e.target.value)} />
                   </div>
                   <div>
-                    <label className="label">اسم الأب (عربي) *</label>
+                    <label className="label">اسم الأب (عربي)</label>
                     <input type="text" className="input" placeholder="محمد" value={form.fatherNameAr} onChange={(e) => setField('fatherNameAr', e.target.value)} />
                   </div>
                   <div>
@@ -621,7 +1074,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                     <input type="text" className="input" placeholder="علي" value={form.grandNameAr} onChange={(e) => setField('grandNameAr', e.target.value)} />
                   </div>
                   <div>
-                    <label className="label">اسم العائلة (عربي) *</label>
+                    <label className="label">اسم العائلة (عربي)</label>
                     <input type="text" className="input" placeholder="السعيد" value={form.familyNameAr} onChange={(e) => setField('familyNameAr', e.target.value)} />
                   </div>
                 </div>
@@ -630,7 +1083,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               {/* Name Fields - English */}
               <div className="grid grid-cols-4 gap-4">
                 <div>
-                  <label className="label">First Name *</label>
+                  <label className="label">First Name</label>
                   <input type="text" className="input" placeholder="Ahmed" dir="ltr" value={form.firstNameEn} onChange={(e) => setField('firstNameEn', e.target.value)} />
                 </div>
                 <div>
@@ -638,7 +1091,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <input type="text" className="input" placeholder="Mohammed" dir="ltr" value={form.middleNameEn} onChange={(e) => setField('middleNameEn', e.target.value)} />
                 </div>
                 <div>
-                  <label className="label">Last Name *</label>
+                  <label className="label">Last Name</label>
                   <input type="text" className="input" placeholder="Alsaeed" dir="ltr" value={form.lastNameEn} onChange={(e) => setField('lastNameEn', e.target.value)} />
                 </div>
                 <div>
@@ -655,7 +1108,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               {/* Basic Info */}
               <div className="grid grid-cols-4 gap-4">
                 <div>
-                  <label className="label">تاريخ الميلاد *</label>
+                  <label className="label">تاريخ الميلاد</label>
                   <div className="relative">
                     <input type="date" className="input pl-10" value={form.birthDate} onChange={(e) => setField('birthDate', e.target.value)} />
                     <Calendar size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -663,10 +1116,10 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div>
                   <label className="label">مكان الميلاد</label>
-                  <input type="text" className="input" placeholder="الرياض" />
+                  <input type="text" className="input" placeholder="الرياض" value={form.birthPlace} onChange={(e) => setField('birthPlace', e.target.value)} />
                 </div>
                 <div>
-                  <label className="label">الجنس *</label>
+                  <label className="label">الجنس</label>
                   <select className="input" value={form.gender} onChange={(e) => setField('gender', e.target.value)}>
                     <option value="">اختر</option>
                     <option value="male">ذكر</option>
@@ -674,7 +1127,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   </select>
                 </div>
                 <div>
-                  <label className="label">الحالة الاجتماعية *</label>
+                  <label className="label">الحالة الاجتماعية</label>
                   <select className="input" value={form.maritalStatus} onChange={(e) => setField('maritalStatus', e.target.value)}>
                     <option value="">اختر</option>
                     <option value="single">أعزب</option>
@@ -688,28 +1141,21 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               {/* Identity Documents */}
               <div className="grid grid-cols-4 gap-4">
                 <div>
-                  <label className="label">الجنسية *</label>
-                  <select className="input" value={form.nationality} onChange={(e) => setField('nationality', e.target.value)}>
-                    <option value="">اختر</option>
-                    {form.nationality && !nationalityOptions.includes(form.nationality) && (
-                      <option value={form.nationality}>{form.nationality}</option>
-                    )}
-                    {nationalityOptions.map((n) => (
-                      <option key={n} value={n}>{n}</option>
-                    ))}
-                  </select>
+                  <label className="label">الجنسية</label>
+                  <input className="input" list="employee-nationality-options" value={form.nationality} onChange={(e) => setField('nationality', e.target.value)} placeholder="اكتب الجنسية" />
+                  <datalist id="employee-nationality-options">{nationalityOptions.map(n => <option key={n} value={n} />)}</datalist>
                 </div>
                 <div>
-                  <label className="label">رقم الهوية / الإقامة *</label>
+                  <label className="label">رقم الهوية / الإقامة</label>
                   <input type="text" className="input" placeholder="1234567890" dir="ltr" value={form.nationalId} onChange={(e) => setField('nationalId', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">رقم جواز السفر</label>
-                  <input type="text" className="input" placeholder="A12345678" dir="ltr" />
+                  <input type="text" className="input" placeholder="A12345678" dir="ltr" value={form.passportNo} onChange={(e) => setField('passportNo', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">تاريخ انتهاء الجواز</label>
-                  <input type="date" className="input" />
+                  <input type="date" className="input" value={form.passportExpiry} onChange={(e) => setField('passportExpiry', e.target.value)} />
                 </div>
               </div>
 
@@ -719,7 +1165,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               </h3>
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="label">رقم الجوال *</label>
+                  <label className="label">رقم الجوال</label>
                   <div className="relative">
                     <input type="tel" className="input pl-10" placeholder="+966 50 123 4567" dir="ltr" value={form.phone} onChange={(e) => setField('phone', e.target.value)} />
                     <Phone size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -727,7 +1173,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div>
                   <label className="label">رقم جوال بديل</label>
-                  <input type="tel" className="input" placeholder="+966 55 123 4567" dir="ltr" />
+                  <input type="tel" className="input" placeholder="+966 55 123 4567" dir="ltr" value={form.phoneAlt} onChange={(e) => setField('phoneAlt', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">البريد الإلكتروني الشخصي</label>
@@ -745,7 +1191,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="label">البلد</label>
-                  <select className="input">
+                  <select className="input" value={form.country} onChange={(e) => setField('country', e.target.value)}>
+                    <option value="">اختر</option>
                     <option value="SA">السعودية</option>
                     <option value="AE">الإمارات</option>
                     <option value="EG">مصر</option>
@@ -761,7 +1208,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div>
                   <label className="label">الرمز البريدي</label>
-                  <input type="text" className="input" placeholder="12345" dir="ltr" />
+                  <input type="text" className="input" placeholder="12345" dir="ltr" value={form.postalCode} onChange={(e) => setField('postalCode', e.target.value)} />
                 </div>
               </div>
 
@@ -776,7 +1223,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div>
                   <label className="label">صلة القرابة</label>
-                  <select className="input">
+                  <select className="input" value={form.emergencyRelation} onChange={(e) => setField('emergencyRelation', e.target.value)}>
                     <option value="">اختر</option>
                     <option value="spouse">زوج/زوجة</option>
                     <option value="parent">أب/أم</option>
@@ -791,7 +1238,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div>
                   <label className="label">رقم بديل</label>
-                  <input type="tel" className="input" placeholder="+966 50 123 4567" dir="ltr" />
+                  <input type="tel" className="input" placeholder="+966 50 123 4567" dir="ltr" value={form.emergencyPhoneAlt} onChange={(e) => setField('emergencyPhoneAlt', e.target.value)} />
                 </div>
               </div>
             </div>
@@ -809,11 +1256,12 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 <div>
                   <label className="label">الرقم الوظيفي *</label>
                   <input type="text" className="input" placeholder="EMP001" dir="ltr" value={form.employeeCode} onChange={(e) => setField('employeeCode', e.target.value)} />
-                  <p className="text-xs text-gray-400 mt-1">اتركه فارغاً للإنشاء التلقائي</p>
+                  <p className="text-xs text-gray-400 mt-1">اكتب الرقم الوظيفي، أو سيُستخدم رقم البصمة عند تركه فارغاً</p>
                 </div>
                 <div>
                   <label className="label">رقم البصمة</label>
-                  <input type="text" className="input" placeholder="001" dir="ltr" value={form.fingerprintCode} onChange={(e) => setField('fingerprintCode', e.target.value)} />
+                  <input type="text" className="input" placeholder="001" dir="ltr" maxLength={20} value={form.fingerprintCode} onChange={(e) => setField('fingerprintCode', e.target.value)} />
+                  <p className="text-xs text-gray-400 mt-1">كوده على جهاز البصمة — تُطابَق به البصمات أولاً ثم بالرقم الوظيفي</p>
                 </div>
                 <div>
                   <label className="label">تاريخ التعيين *</label>
@@ -821,27 +1269,27 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div>
                   <label className="label">تاريخ بداية العمل الفعلي</label>
-                  <input type="date" className="input" />
+                  <input type="date" className="input" value={form.actualStartDate} onChange={(e) => setField('actualStartDate', e.target.value)} />
                 </div>
               </div>
 
               {/* Employment Type */}
               <div className="grid grid-cols-4 gap-4">
                 <div>
-                  <label className="label">نوع التوظيف *</label>
-                  <select className="input">
+                  <label className="label">نوع التوظيف</label>
+                  <select className="input" value={form.workType} onChange={(e) => setField('workType', e.target.value)}>
                     <option value="">اختر</option>
-                    <option value="fulltime">دوام كامل</option>
-                    <option value="parttime">دوام جزئي</option>
+                    <option value="full_time">دوام كامل</option>
+                    <option value="part_time">دوام جزئي</option>
                     <option value="contract">عقد مؤقت</option>
                     <option value="consultant">استشاري</option>
                     <option value="intern">متدرب</option>
                   </select>
                 </div>
                 <div>
-                  <label className="label">حالة الموظف *</label>
-                  <select className="input" value={form.status} onChange={(e) => setField('status', e.target.value)}>
-                    <option value="probation">فترة تجربة</option>
+                  <label className="label">حالة الموظف</label>
+                  <select className="input" value={form.status} onChange={(e) => { const nextStatus = e.target.value; if (nextStatus === 'active' || nextStatus === 'probation') setField('status', nextStatus) }}>
+                    <option value="probation">{statusLabels.probation}</option>
                     <option value="active">نشط</option>
                     {form.status && !['probation', 'active'].includes(form.status) && (
                       <option value={form.status}>{statusLabels[form.status] ?? form.status}</option>
@@ -850,11 +1298,11 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div>
                   <label className="label">تاريخ انتهاء فترة التجربة</label>
-                  <input type="date" className="input" />
+                  <input type="date" className="input" value={form.probationEndDate} onChange={(e) => setField('probationEndDate', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">مصدر التوظيف</label>
-                  <select className="input">
+                  <select className="input" value={form.recruitmentSource} onChange={(e) => setField('recruitmentSource', e.target.value)}>
                     <option value="">اختر</option>
                     <option value="jobsite">موقع توظيف</option>
                     <option value="referral">ترشيح موظف</option>
@@ -870,17 +1318,13 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 الموقع التنظيمي
               </h3>
               <div className="grid grid-cols-3 gap-4">
-                <div>
-                  <label className="label">الشركة *</label>
-                  <select className="input">
-                    <option value="main">الشركة الرئيسية</option>
-                  </select>
-                </div>
+
                 <div>
                   <label className="label">الفرع *</label>
                   <select
                     className="input"
                     value={form.branchId}
+                    disabled={mode === 'edit' && (!calendarContext || calendarContext.currentMatchesHistory === false)}
                     onChange={(e) =>
                       setForm((prev) => ({ ...prev, branchId: e.target.value, departmentId: '', teamId: '' }))
                     }
@@ -892,7 +1336,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   </select>
                 </div>
                 <div>
-                  <label className="label">الإدارة/القسم *</label>
+                  <label className="label">الإدارة/القسم</label>
                   <select
                     className="input"
                     value={form.departmentId}
@@ -917,10 +1361,10 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                       <option key={t.id} value={t.id}>{t.name}</option>
                     ))}
                   </select>
-                  <p className="text-xs text-gray-400 mt-1">مدير الفريق سيكون المدير المباشر</p>
+                  <p className="text-xs text-gray-400 mt-1">قائد الفريق يعتمد كمدير مباشر فقط إن لم يُحدَّد للموظف مدير مباشر</p>
                 </div>
                 <div>
-                  <label className="label">المسمى الوظيفي *</label>
+                  <label className="label">المسمى الوظيفي</label>
                   <select className="input" value={form.jobTitle} onChange={(e) => setField('jobTitle', e.target.value)}>
                     <option value="">اختر</option>
                     {form.jobTitle && !jobTitleOptions.includes(form.jobTitle) && (
@@ -933,7 +1377,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div>
                   <label className="label">الدرجة الوظيفية</label>
-                  <select className="input">
+                  <select className="input" value={form.gradeId} onChange={(e) => setField('gradeId', e.target.value)}>
                     <option value="">اختر</option>
                     <option value="1">Grade 1</option>
                     <option value="2">Grade 2</option>
@@ -959,7 +1403,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div>
                   <label className="label">موقع العمل</label>
-                  <input type="text" className="input" placeholder="المكتب الرئيسي" />
+                  <input type="text" className="input" placeholder="المكتب الرئيسي" value={form.workLocation} onChange={(e) => setField('workLocation', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">مركز التكلفة</label>
@@ -984,7 +1428,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               </h3>
               <div className="grid grid-cols-4 gap-4">
                 <div>
-                  <label className="label">نوع العقد *</label>
+                  <label className="label">نوع العقد</label>
                   <select className="input" value={form.contractType} onChange={(e) => setField('contractType', e.target.value)}>
                     <option value="">اختر</option>
                     <option value="permanent">دائم (غير محدد المدة)</option>
@@ -995,10 +1439,10 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div>
                   <label className="label">رقم العقد</label>
-                  <input type="text" className="input" placeholder="C-2026-001" dir="ltr" />
+                  <input type="text" className="input" placeholder="C-2026-001" dir="ltr" value={form.contractNumber} onChange={(e) => setField('contractNumber', e.target.value)} />
                 </div>
                 <div>
-                  <label className="label">تاريخ بداية العقد *</label>
+                  <label className="label">تاريخ بداية العقد</label>
                   <input type="date" className="input" value={form.contractStart} onChange={(e) => setField('contractStart', e.target.value)} />
                 </div>
                 <div>
@@ -1011,17 +1455,30 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="label">مدة العقد (أشهر)</label>
-                  <input type="number" className="input" placeholder="24" />
+                  <input type="number" min={0} className="input" placeholder="24" value={form.contractDurationMonths} onChange={(e) => setField('contractDurationMonths', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">فترة الإشعار (أيام)</label>
-                  <input type="number" className="input" placeholder="30" />
+                  <input type="number" min={0} className="input" placeholder="30" value={form.noticePeriodDays} onChange={(e) => setField('noticePeriodDays', e.target.value)} />
                 </div>
                 <div className="col-span-2">
                   <label className="label">مرفق العقد</label>
                   <div className="flex items-center gap-2">
-                    <input type="file" className="input flex-1" accept=".pdf" />
+                    <input
+                      type="file"
+                      className="input flex-1"
+                      accept=".pdf"
+                      onChange={(e) => handleContractPick(e.target.files?.[0])}
+                    />
                   </div>
+                  {contractUploading && (
+                    <p className="text-xs text-gray-400 mt-1">جارٍ رفع المرفق…</p>
+                  )}
+                  {!contractUploading && contractFileRef && (
+                    <p className="text-xs text-green-600 mt-1">
+                      ✓ تم رفع المرفق{contractFileName ? ` — ${contractFileName}` : ''} (سيُحفظ كمستند «عقد»)
+                    </p>
+                  )}
                 </div>
               </div>
 
@@ -1134,6 +1591,39 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   </div>
                 </div>
               )}
+
+              <div className="mt-4 space-y-4 rounded-xl border border-blue-100 bg-blue-50/50 p-4">
+                <label className="block text-sm font-medium text-gray-800">
+                  المرونة لهذا الموظف
+                  <select className="input mt-2 w-full" value={form.flexOverrideMode ?? 'INHERIT'}
+                    onChange={event => setField('flexOverrideMode', event.target.value as 'INHERIT' | 'ENABLED' | 'DISABLED')}>
+                    <option value="INHERIT">يتبع إعداد الوردية أو جدول العمل</option>
+                    <option value="ENABLED">مفعلة لهذا الموظف</option>
+                    <option value="DISABLED">موقوفة لهذا الموظف</option>
+                  </select>
+                </label>
+                <p className="text-sm text-gray-600">مدة المرونة والساعات المطلوبة تُؤخذ من دوام اليوم. الاختيار الفردي يحدد التفعيل، والوقت بعد نهاية نافذة المرونة يُحسب تأخيرًا حتى لو استكمل الموظف ساعاته.</p>
+                {form.flexOverrideMode === 'ENABLED' && <p className="text-sm text-amber-800">يلزم تعريف مدة مرونة صحيحة في الوردية أو جدول العمل قبل تفعيلها للموظف.</p>}
+                {mode === 'edit' && <div className="space-y-2">
+                  <CalendarContextSummary context={calendarContext} error={calendarContextError} />
+                  {calendarContext && <label className="flex gap-2 items-start text-sm text-gray-700"><input type="checkbox" checked={calendarInitialConfirmation} disabled={submitting || calendarContext.currentMatchesHistory === false} onChange={event => setCalendarInitialConfirmation(event.target.checked)} />أؤكد سريان الفرع الحالي لهذا الموظف من تاريخ أحدده، حتى دون تغيير الفرع.</label>}
+                  {!calendarContext && <p className="text-xs text-gray-600">تعديل الفرع متوقف، ويمكن حفظ باقي بيانات الموظف. أعد تحميل الصفحة لإعادة قراءة التقويم.</p>}
+                </div>}
+                {(mode === 'add' || calendarRequested || form.flexOverrideMode !== (initial?.flexOverrideMode ?? 'INHERIT') || (selectedSchedule || null) !== (initial?.workScheduleId ?? null)) && (
+                  <div className="grid gap-4 sm:grid-cols-2">
+                    <label className="text-sm text-gray-700">يسري الفرع أو الدوام أو المرونة من
+                      <input type="date" className="input mt-2 w-full" value={form.attendanceEffectiveFrom ?? ''}
+                        onChange={event => setField('attendanceEffectiveFrom', event.target.value)} />
+                    </label>
+                    <label className="text-sm text-gray-700">سبب التغيير
+                      <input type="text" maxLength={500} className="input mt-2 w-full" value={form.attendanceChangeReason ?? ''}
+                        onChange={event => setField('attendanceChangeReason', event.target.value)} placeholder={mode === 'add' ? 'تعيين الموظف على الدوام' : 'سبب تعديل الدوام أو المرونة'} />
+                    </label>
+                    <p className="text-xs text-gray-500 sm:col-span-2">يُحفظ تاريخ التغيير وصاحبه. الفترات المعتمدة تظل محفوظة؛ التعديل يؤثر من تاريخ السريان المحدد.</p>
+                    {mode === 'add' && <p className="text-xs text-gray-500 sm:col-span-2">عند الإنشاء يثبت هذا التاريخ سريان الدوام والفرع معًا. إن تركته فارغًا تبدأ التغطية من تاريخ إنشاء الملف، وليس تاريخ الالتحاق؛ إثبات تاريخ سابق يحتاج إدخاله مع السبب.</p>}
+                  </div>
+                )}
+              </div>
 
               {/* Link to settings */}
               <div className="mt-4 p-4 bg-gray-50 rounded-xl flex items-center justify-between">
@@ -1298,7 +1788,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 <div>
                   <label className="label">البريد الإلكتروني للعمل</label>
                   <input type="email" className="input" placeholder="ahmed.m@company.com" dir="ltr" value={form.workEmail} onChange={(e) => setField('workEmail', e.target.value)} />
-                  <p className="text-xs text-gray-400 mt-1">اتركه فارغاً للإنشاء التلقائي</p>
+                  <p className="text-xs text-gray-400 mt-1">البريد اختياري ولا يُنشأ تلقائياً</p>
                 </div>
               </div>
             </div>
@@ -1312,21 +1802,24 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               </h2>
 
               {/* Salary */}
-              <div className="grid grid-cols-4 gap-4">
+              {salaryLocked && <p role="alert" className="text-sm text-amber-800">{salaryContextError || 'تعذر تحميل الأجر الحالي بدقة.'} تعديل الأجر غير متاح حتى إعادة تحميل الصفحة؛ يمكنك حفظ البيانات غير المالية.</p>}
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
-                  <label className="label">الراتب الأساسي *</label>
-                  <input type="number" className="input" placeholder="10000" dir="ltr" value={form.basicSalary} onChange={(e) => setField('basicSalary', e.target.value)} />
+                  <label className="label">الراتب الأساسي</label>
+                  <input type={mode === 'edit' ? 'text' : 'number'} inputMode="decimal" disabled={salaryLocked} className="input disabled:opacity-50" placeholder="10000" dir="ltr" value={form.basicSalary} onChange={(e) => setField('basicSalary', e.target.value)} />
                 </div>
                 <div>
-                  <label className="label">العملة *</label>
-                  <select className="input">
+                  <label className="label">العملة</label>
+                  <select className="input disabled:opacity-50" disabled={salaryLocked} value={form.currency} onChange={(e) => setField('currency', e.target.value)}>
+                    {mode === 'edit' && <option value="">غير محددة — اختر عند تغيير الأجر</option>}
+                    {mode === 'edit' && form.currency && !['SAR', 'EGP', 'AED'].includes(form.currency) && <option value={form.currency}>{form.currency} — القيمة الحالية</option>}
                     <option value="SAR">ريال سعودي (SAR)</option>
-                    <option value="AED">درهم إماراتي (AED)</option>
+                    {(mode === 'add' || form.currency === 'AED') && <option value="AED">درهم إماراتي (AED)</option>}
                     <option value="EGP">جنيه مصري (EGP)</option>
                   </select>
                 </div>
                 <div>
-                  <label className="label">طريقة الدفع *</label>
+                  <label className="label">طريقة الدفع</label>
                   <select className="input" value={form.payMethod} onChange={(e) => setField('payMethod', e.target.value)}>
                     <option value="transfer">تحويل بنكي</option>
                     <option value="visa">فيزا</option>
@@ -1335,7 +1828,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div>
                   <label className="label">دورة الراتب</label>
-                  <select className="input">
+                  <select className="input" value={form.salaryCycle} onChange={(e) => setField('salaryCycle', e.target.value)}>
                     <option value="monthly">شهري</option>
                     <option value="biweekly">نصف شهري</option>
                     <option value="weekly">أسبوعي</option>
@@ -1362,55 +1855,72 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
                 البدلات الثابتة
               </h3>
-              <div className="grid grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
                   <label className="label">بدل السكن</label>
-                  <input type="number" className="input" placeholder="2500" dir="ltr" value={form.housingAllowance} onChange={(e) => setField('housingAllowance', e.target.value)} />
+                  <input type={mode === 'edit' ? 'text' : 'number'} inputMode="decimal" disabled={salaryLocked} className="input disabled:opacity-50" placeholder="2500" dir="ltr" value={form.housingAllowance} onChange={(e) => setField('housingAllowance', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">بدل المواصلات</label>
-                  <input type="number" className="input" placeholder="1000" dir="ltr" value={form.transportAllowance} onChange={(e) => setField('transportAllowance', e.target.value)} />
+                  <input type={mode === 'edit' ? 'text' : 'number'} inputMode="decimal" disabled={salaryLocked} className="input disabled:opacity-50" placeholder="1000" dir="ltr" value={form.transportAllowance} onChange={(e) => setField('transportAllowance', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">بدل الهاتف</label>
-                  <input type="number" className="input" placeholder="500" dir="ltr" value={form.phoneAllowance} onChange={(e) => setField('phoneAllowance', e.target.value)} />
+                  <input type={mode === 'edit' ? 'text' : 'number'} inputMode="decimal" disabled={salaryLocked} className="input disabled:opacity-50" placeholder="500" dir="ltr" value={form.phoneAllowance} onChange={(e) => setField('phoneAllowance', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">بدل طبيعة العمل</label>
-                  <input type="number" className="input" placeholder="0" dir="ltr" value={form.workNatureAllowance} onChange={(e) => setField('workNatureAllowance', e.target.value)} />
+                  <input type={mode === 'edit' ? 'text' : 'number'} inputMode="decimal" disabled={salaryLocked} className="input disabled:opacity-50" placeholder="0" dir="ltr" value={form.workNatureAllowance} onChange={(e) => setField('workNatureAllowance', e.target.value)} />
+                </div>
+                <div>
+                  <label className="label">بدلات أخرى</label>
+                  <input type={mode === 'edit' ? 'text' : 'number'} inputMode="decimal" disabled={salaryLocked} min="0" className="input disabled:opacity-50" placeholder="0" dir="ltr" value={form.otherAllowance} onChange={(e) => setField('otherAllowance', e.target.value)} />
                 </div>
               </div>
 
               <div className="p-4 bg-primary-50 rounded-xl">
-                <div className="flex items-center justify-between">
+                <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-medium text-gray-700">إجمالي الراتب الشهري</span>
-                  <span className="text-2xl font-bold text-primary-600">{totalMonthlySalary.toLocaleString()} ر.س</span>
+                  <span className="text-2xl font-bold text-primary-600">{mode === 'edit' ? employeeSalaryTotal(form) ?? 'غير مكتمل' : totalMonthlySalary.toLocaleString()} {form.currency ? currencyLabel(form.currency) : ''}</span>
                 </div>
               </div>
+
+              {salaryChanged && <div className="rounded-xl border border-primary-200 bg-primary-50 p-4 space-y-4">
+                <h3 className="font-semibold text-gray-800">موعد تطبيق تعديل الراتب</h3>
+                <div className="grid sm:grid-cols-3 gap-4">
+                  <label className="label">يسري من<input type="date" max={localToday()} className="input mt-1" value={salaryEvidence.effectiveDate} onChange={event => setSalaryEvidence(previous => ({ ...previous, effectiveDate: event.target.value }))} /></label>
+                  <label className="label">سبب التغيير<input className="input mt-1" maxLength={500} value={salaryEvidence.reason} onChange={event => setSalaryEvidence(previous => ({ ...previous, reason: event.target.value }))} /></label>
+                  <label className="label">مرجع العقد أو القرار<input className="input mt-1" maxLength={200} value={salaryEvidence.evidenceReference} onChange={event => setSalaryEvidence(previous => ({ ...previous, evidenceReference: event.target.value }))} /></label>
+                </div>
+                <p className="text-sm text-gray-600">تعديل الملف يقبل تاريخ اليوم أو تاريخًا سابقًا. للزيادة المستقبلية استخدم <Link href="/requests" className="underline text-primary-700">طلب زيادة راتب</Link>؛ الأجر الحالي لا يتغير قبل موعد السريان واعتماد الطلب.</p>
+                {salaryChangeContext?.historyRevision === 0 && <div className="space-y-3 border-t border-primary-200 pt-3">
+                  <p className="text-sm font-medium text-gray-800">القيم السابقة التي ستُوثّق عند تأكيد تاريخ سابق</p>
+                  <dl className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
+                    {Object.entries(SALARY_HISTORY_FIELDS).map(([key, label]) => <div key={key}><dt className="text-gray-600">{label}</dt><dd className="font-medium break-all" dir="ltr">{salaryChangeContext.current[key as keyof typeof SALARY_HISTORY_FIELDS] ?? 'غير محدد'}</dd></div>)}
+                    <div><dt className="text-gray-600">العملة السابقة</dt><dd>{salaryChangeContext.current.currency || 'غير محددة'}</dd></div>
+                  </dl>
+                  <label className="label">أؤكد سريان الأجر الحالي السابق ابتداءً من — اختياري<input type="date" disabled={!employeePreviousSalaryCanBeConfirmed(salaryChangeContext)} className="input mt-1 max-w-xs disabled:opacity-50" value={salaryEvidence.previousEffectiveFrom} onChange={event => setSalaryEvidence(previous => ({ ...previous, previousEffectiveFrom: event.target.value }))} /></label>
+                  {!employeePreviousSalaryCanBeConfirmed(salaryChangeContext) && <p className="text-sm text-amber-800">القيم السابقة غير مكتملة أو غير صالحة؛ لا يمكن إثبات فترة سابقة منها.</p>}
+                  <p className="text-xs text-gray-500">اكتب هذا التاريخ فقط إذا كان المستند يثبت القيم السابقة المعروضة خلال المدة المنتهية قبل التغيير. تركه فارغًا يُبقي الفترة السابقة غير موثقة، ولا يفترض تاريخ التعيين أو مبالغ بديلة.</p>
+                </div>}
+              </div>}
 
               {/* Bank Details */}
               <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
                 المعلومات البنكية
               </h3>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="label">اسم البنك *</label>
-                  <select className="input" value={form.bankName} onChange={(e) => setField('bankName', e.target.value)}>
-                    <option value="">اختر</option>
-                    {form.bankName && !bankOptions.includes(form.bankName) && (
-                      <option value={form.bankName}>{form.bankName}</option>
-                    )}
-                    {bankOptions.map((bank) => (
-                      <option key={bank} value={bank}>{bank}</option>
-                    ))}
-                  </select>
+                  <label className="label">اسم البنك</label>
+                  <input className="input" list="employee-bank-options" value={form.bankName} onChange={(e) => setField('bankName', e.target.value)} placeholder="اكتب اسم البنك" />
+                  <datalist id="employee-bank-options">{bankOptions.map(bank => <option key={bank} value={bank} />)}</datalist>
                 </div>
                 <div>
                   <label className="label">اسم الفرع</label>
-                  <input type="text" className="input" placeholder="فرع العليا" />
+                  <input type="text" className="input" placeholder="فرع العليا" value={form.bankBranch} onChange={(e) => setField('bankBranch', e.target.value)} />
                 </div>
                 <div>
-                  <label className="label">رقم الحساب (IBAN) *</label>
+                  <label className="label">رقم الحساب (IBAN)</label>
                   <input type="text" className="input" placeholder="SA00 0000 0000 0000 0000 0000" dir="ltr" value={form.iban} onChange={(e) => setField('iban', e.target.value)} />
                 </div>
               </div>
@@ -1419,147 +1929,318 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
                 التأمينات الاجتماعية
               </h3>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
                   <label className="label">رقم التأمينات (GOSI)</label>
-                  <input type="text" className="input" placeholder="1234567890" dir="ltr" />
+                  <input type="text" className="input" placeholder="1234567890" dir="ltr" value={form.gosiNumber} onChange={(e) => setField('gosiNumber', e.target.value)} />
                 </div>
                 <div>
                   <label className="label">خاضع للتأمينات</label>
-                  <select className="input">
-                    <option value="yes">نعم</option>
-                    <option value="no">لا</option>
+                  <select className="input" value={form.isGosiRegistered} onChange={(e) => setField('isGosiRegistered', e.target.value)}>
+                    <option value="">اختر</option>
+                    <option value="true">نعم</option>
+                    <option value="false">لا</option>
                   </select>
                 </div>
                 <div>
                   <label className="label">الراتب الخاضع للتأمينات</label>
-                  <input type="number" className="input" placeholder="12500" dir="ltr" />
+                  <input type="number" className="input" placeholder="12500" dir="ltr" value={form.gosiBaseSalary} onChange={(e) => setField('gosiBaseSalary', e.target.value)} />
                 </div>
               </div>
             </div>
           )}
 
-          {/* Step 4: Qualifications */}
+          {/* Step 4: Qualifications — خمس قوائم تُضاف صفوفها وتُحذف قبل الحفظ */}
           {currentStep === 4 && (
             <div className="space-y-8">
               <h2 className="text-lg font-bold text-gray-800 border-b border-gray-100 pb-4">
                 المؤهلات والخبرات
               </h2>
+              <p className="text-sm text-gray-500 -mt-4">
+                أضِف كل عنصر بزر «إضافة» ليظهر في القائمة. تُحفظ كلها مع حفظ الموظف.
+              </p>
 
-              {/* Education */}
+              {/* ===== التعليم ===== */}
               <h3 className="text-md font-bold text-gray-700 border-b border-gray-100 pb-2">
                 التعليم
               </h3>
+              <SavedList kind="education" label={(r) => `${DEGREE_LABEL[r.degree] ?? r.degree}${r.major ? ` — ${r.major}` : ''}${r.institution ? ` · ${r.institution}` : ''}${r.graduationYear ? ` (${r.graduationYear})` : ''}`} />
               <div className="p-4 bg-gray-50 rounded-xl space-y-4">
                 <div className="grid grid-cols-4 gap-4">
                   <div>
                     <label className="label">المؤهل</label>
-                    <select className="input">
+                    <select
+                      className="input"
+                      value={eduDraft.degree ?? ''}
+                      onChange={(e) => setEduDraft({ ...eduDraft, degree: e.target.value })}
+                    >
                       <option value="">اختر</option>
                       <option value="phd">دكتوراه</option>
                       <option value="master">ماجستير</option>
                       <option value="bachelor">بكالوريوس</option>
                       <option value="diploma">دبلوم</option>
-                      <option value="highschool">ثانوي</option>
+                      <option value="high_school">ثانوي</option>
+                      <option value="other">أخرى</option>
                     </select>
                   </div>
                   <div>
                     <label className="label">التخصص</label>
-                    <input type="text" className="input" placeholder="علوم الحاسب" />
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="علوم الحاسب"
+                      value={eduDraft.major ?? ''}
+                      onChange={(e) => setEduDraft({ ...eduDraft, major: e.target.value })}
+                    />
                   </div>
                   <div>
                     <label className="label">الجامعة/المعهد</label>
-                    <input type="text" className="input" placeholder="جامعة الملك سعود" />
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="جامعة الملك سعود"
+                      value={eduDraft.institution ?? ''}
+                      onChange={(e) => setEduDraft({ ...eduDraft, institution: e.target.value })}
+                    />
                   </div>
                   <div>
                     <label className="label">سنة التخرج</label>
-                    <input type="number" className="input" placeholder="2020" dir="ltr" />
+                    <input
+                      type="number"
+                      className="input"
+                      placeholder="2020"
+                      dir="ltr"
+                      value={eduDraft.graduationYear ?? ''}
+                      onChange={(e) => setEduDraft({ ...eduDraft, graduationYear: e.target.value })}
+                    />
                   </div>
                 </div>
-                <button type="button" className="text-sm text-primary-500 hover:text-primary-600 font-medium">
-                  + إضافة مؤهل آخر
+                <button
+                  type="button"
+                  className="text-sm text-primary-500 hover:text-primary-600 font-medium"
+                  onClick={() => addQualRow(eduDraft, setEduDraft, setEduRows, 'degree', 'المؤهل')}
+                >
+                  + إضافة مؤهل
                 </button>
+                {eduRows.length > 0 && (
+                  <ul className="divide-y divide-gray-200 border-t border-gray-200 pt-2">
+                    {eduRows.map((r, i) => (
+                      <li key={i} className="flex items-center justify-between py-2 text-sm">
+                        <span className="text-gray-700">
+                          {DEGREE_LABEL[r.degree] ?? r.degree}
+                          {r.major ? ` — ${r.major}` : ''}
+                          {r.institution ? ` · ${r.institution}` : ''}
+                          {r.graduationYear ? ` (${r.graduationYear})` : ''}
+                        </span>
+                        <button
+                          type="button"
+                          className="text-red-500 hover:text-red-600 text-xs font-medium"
+                          onClick={() => removeQualRow(setEduRows, i)}
+                        >
+                          حذف
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
 
-              {/* Certifications */}
+              {/* ===== الشهادات المهنية ===== */}
               <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
                 الشهادات المهنية
               </h3>
+              <SavedList kind="certifications" label={(r) => `${r.name}${r.issuer ? ` — ${r.issuer}` : ''}${r.expiryDate ? ` · تنتهي ${String(r.expiryDate).slice(0, 10)}` : ''}`} />
               <div className="p-4 bg-gray-50 rounded-xl space-y-4">
                 <div className="grid grid-cols-4 gap-4">
                   <div>
                     <label className="label">اسم الشهادة</label>
-                    <input type="text" className="input" placeholder="PMP" />
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="PMP"
+                      value={certDraft.name ?? ''}
+                      onChange={(e) => setCertDraft({ ...certDraft, name: e.target.value })}
+                    />
                   </div>
                   <div>
                     <label className="label">الجهة المانحة</label>
-                    <input type="text" className="input" placeholder="PMI" />
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="PMI"
+                      value={certDraft.issuer ?? ''}
+                      onChange={(e) => setCertDraft({ ...certDraft, issuer: e.target.value })}
+                    />
                   </div>
                   <div>
                     <label className="label">تاريخ الحصول</label>
-                    <input type="date" className="input" />
+                    <input
+                      type="date"
+                      className="input"
+                      value={certDraft.issueDate ?? ''}
+                      onChange={(e) => setCertDraft({ ...certDraft, issueDate: e.target.value })}
+                    />
                   </div>
                   <div>
                     <label className="label">تاريخ الانتهاء</label>
-                    <input type="date" className="input" />
+                    <input
+                      type="date"
+                      className="input"
+                      value={certDraft.expiryDate ?? ''}
+                      onChange={(e) => setCertDraft({ ...certDraft, expiryDate: e.target.value })}
+                    />
                   </div>
                 </div>
-                <button type="button" className="text-sm text-primary-500 hover:text-primary-600 font-medium">
-                  + إضافة شهادة أخرى
+                <button
+                  type="button"
+                  className="text-sm text-primary-500 hover:text-primary-600 font-medium"
+                  onClick={() => addQualRow(certDraft, setCertDraft, setCertRows, 'name', 'اسم الشهادة')}
+                >
+                  + إضافة شهادة
                 </button>
+                {certRows.length > 0 && (
+                  <ul className="divide-y divide-gray-200 border-t border-gray-200 pt-2">
+                    {certRows.map((r, i) => (
+                      <li key={i} className="flex items-center justify-between py-2 text-sm">
+                        <span className="text-gray-700">
+                          {r.name}
+                          {r.issuer ? ` — ${r.issuer}` : ''}
+                          {r.expiryDate ? ` · تنتهي ${r.expiryDate}` : ''}
+                        </span>
+                        <button
+                          type="button"
+                          className="text-red-500 hover:text-red-600 text-xs font-medium"
+                          onClick={() => removeQualRow(setCertRows, i)}
+                        >
+                          حذف
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
 
-              {/* Previous Experience */}
+              {/* ===== الخبرات السابقة ===== */}
               <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
                 الخبرات السابقة
               </h3>
+              <SavedList kind="experiences" label={(r) => `${r.company}${r.jobTitle ? ` — ${r.jobTitle}` : ''}${r.fromDate ? ` · ${String(r.fromDate).slice(0, 10)} ← ${r.toDate ? String(r.toDate).slice(0, 10) : 'حتى الآن'}` : ''}`} />
               <div className="p-4 bg-gray-50 rounded-xl space-y-4">
                 <div className="grid grid-cols-3 gap-4">
                   <div>
                     <label className="label">اسم الشركة</label>
-                    <input type="text" className="input" placeholder="شركة ABC" />
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="شركة ABC"
+                      value={expDraft.company ?? ''}
+                      onChange={(e) => setExpDraft({ ...expDraft, company: e.target.value })}
+                    />
                   </div>
                   <div>
                     <label className="label">المسمى الوظيفي</label>
-                    <input type="text" className="input" placeholder="مطور برمجيات" />
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="مطور برمجيات"
+                      value={expDraft.jobTitle ?? ''}
+                      onChange={(e) => setExpDraft({ ...expDraft, jobTitle: e.target.value })}
+                    />
                   </div>
                   <div>
                     <label className="label">البلد</label>
-                    <input type="text" className="input" placeholder="السعودية" />
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="السعودية"
+                      value={expDraft.country ?? ''}
+                      onChange={(e) => setExpDraft({ ...expDraft, country: e.target.value })}
+                    />
                   </div>
                 </div>
                 <div className="grid grid-cols-3 gap-4">
                   <div>
                     <label className="label">من تاريخ</label>
-                    <input type="date" className="input" />
+                    <input
+                      type="date"
+                      className="input"
+                      value={expDraft.fromDate ?? ''}
+                      onChange={(e) => setExpDraft({ ...expDraft, fromDate: e.target.value })}
+                    />
                   </div>
                   <div>
                     <label className="label">إلى تاريخ</label>
-                    <input type="date" className="input" />
+                    <input
+                      type="date"
+                      className="input"
+                      value={expDraft.toDate ?? ''}
+                      onChange={(e) => setExpDraft({ ...expDraft, toDate: e.target.value })}
+                    />
                   </div>
                   <div>
                     <label className="label">سبب الترك</label>
-                    <input type="text" className="input" placeholder="فرصة أفضل" />
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="فرصة أفضل"
+                      value={expDraft.leaveReason ?? ''}
+                      onChange={(e) => setExpDraft({ ...expDraft, leaveReason: e.target.value })}
+                    />
                   </div>
                 </div>
-                <button type="button" className="text-sm text-primary-500 hover:text-primary-600 font-medium">
-                  + إضافة خبرة أخرى
+                <button
+                  type="button"
+                  className="text-sm text-primary-500 hover:text-primary-600 font-medium"
+                  onClick={() => addQualRow(expDraft, setExpDraft, setExpRows, 'company', 'اسم الشركة')}
+                >
+                  + إضافة خبرة
                 </button>
+                {expRows.length > 0 && (
+                  <ul className="divide-y divide-gray-200 border-t border-gray-200 pt-2">
+                    {expRows.map((r, i) => (
+                      <li key={i} className="flex items-center justify-between py-2 text-sm">
+                        <span className="text-gray-700">
+                          {r.company}
+                          {r.jobTitle ? ` — ${r.jobTitle}` : ''}
+                          {r.fromDate ? ` · ${r.fromDate} ← ${r.toDate || 'حتى الآن'}` : ''}
+                        </span>
+                        <button
+                          type="button"
+                          className="text-red-500 hover:text-red-600 text-xs font-medium"
+                          onClick={() => removeQualRow(setExpRows, i)}
+                        >
+                          حذف
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
 
-              {/* Skills */}
+              {/* ===== المهارات ===== */}
               <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
                 المهارات
               </h3>
+              <SavedList kind="skills" label={(r) => `${r.name}${r.level ? ` — ${SKILL_LEVEL_LABEL[r.level] ?? r.level}` : ''}${r.yearsExperience ? ` · ${r.yearsExperience} سنة` : ''}`} />
               <div className="p-4 bg-gray-50 rounded-xl space-y-4">
                 <div className="grid grid-cols-3 gap-4">
                   <div>
                     <label className="label">المهارة</label>
-                    <input type="text" className="input" placeholder="JavaScript" />
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="JavaScript"
+                      value={skillDraft.name ?? ''}
+                      onChange={(e) => setSkillDraft({ ...skillDraft, name: e.target.value })}
+                    />
                   </div>
                   <div>
                     <label className="label">مستوى الإتقان</label>
-                    <select className="input">
+                    <select
+                      className="input"
+                      value={skillDraft.level ?? ''}
+                      onChange={(e) => setSkillDraft({ ...skillDraft, level: e.target.value })}
+                    >
                       <option value="">اختر</option>
                       <option value="beginner">مبتدئ</option>
                       <option value="intermediate">متوسط</option>
@@ -1569,62 +2250,135 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   </div>
                   <div>
                     <label className="label">سنوات الخبرة</label>
-                    <input type="number" className="input" placeholder="5" dir="ltr" />
+                    <input
+                      type="number"
+                      className="input"
+                      placeholder="5"
+                      dir="ltr"
+                      value={skillDraft.yearsExperience ?? ''}
+                      onChange={(e) =>
+                        setSkillDraft({ ...skillDraft, yearsExperience: e.target.value })
+                      }
+                    />
                   </div>
                 </div>
-                <button type="button" className="text-sm text-primary-500 hover:text-primary-600 font-medium">
-                  + إضافة مهارة أخرى
+                <button
+                  type="button"
+                  className="text-sm text-primary-500 hover:text-primary-600 font-medium"
+                  onClick={() => addQualRow(skillDraft, setSkillDraft, setSkillRows, 'name', 'المهارة')}
+                >
+                  + إضافة مهارة
                 </button>
+                {skillRows.length > 0 && (
+                  <ul className="divide-y divide-gray-200 border-t border-gray-200 pt-2">
+                    {skillRows.map((r, i) => (
+                      <li key={i} className="flex items-center justify-between py-2 text-sm">
+                        <span className="text-gray-700">
+                          {r.name}
+                          {r.level ? ` — ${SKILL_LEVEL_LABEL[r.level] ?? r.level}` : ''}
+                          {r.yearsExperience ? ` · ${r.yearsExperience} سنة` : ''}
+                        </span>
+                        <button
+                          type="button"
+                          className="text-red-500 hover:text-red-600 text-xs font-medium"
+                          onClick={() => removeQualRow(setSkillRows, i)}
+                        >
+                          حذف
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
 
-              {/* Languages */}
+              {/* ===== اللغات ===== */}
               <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
                 اللغات
               </h3>
+              <SavedList kind="languages" label={(r) => `${r.language}${r.speaking ? ` — تحدث: ${LANG_LEVEL_LABEL[r.speaking] ?? r.speaking}` : ''}${r.reading ? ` · قراءة: ${LANG_LEVEL_LABEL[r.reading] ?? r.reading}` : ''}`} />
               <div className="p-4 bg-gray-50 rounded-xl space-y-4">
                 <div className="grid grid-cols-4 gap-4">
                   <div>
                     <label className="label">اللغة</label>
-                    <select className="input">
-                      <option value="">اختر</option>
-                      <option value="ar">العربية</option>
-                      <option value="en">الإنجليزية</option>
-                      <option value="fr">الفرنسية</option>
-                      <option value="other">أخرى</option>
-                    </select>
+                    <input
+                      type="text"
+                      className="input"
+                      placeholder="الإنجليزية"
+                      value={langDraft.language ?? ''}
+                      onChange={(e) => setLangDraft({ ...langDraft, language: e.target.value })}
+                    />
                   </div>
                   <div>
                     <label className="label">مستوى التحدث</label>
-                    <select className="input">
+                    <select
+                      className="input"
+                      value={langDraft.speaking ?? ''}
+                      onChange={(e) => setLangDraft({ ...langDraft, speaking: e.target.value })}
+                    >
                       <option value="">اختر</option>
                       <option value="native">لغة أم</option>
-                      <option value="fluent">طلق</option>
+                      <option value="very_good">جيد جداً</option>
                       <option value="good">جيد</option>
                       <option value="basic">أساسي</option>
                     </select>
                   </div>
                   <div>
                     <label className="label">مستوى الكتابة</label>
-                    <select className="input">
+                    <select
+                      className="input"
+                      value={langDraft.writing ?? ''}
+                      onChange={(e) => setLangDraft({ ...langDraft, writing: e.target.value })}
+                    >
                       <option value="">اختر</option>
-                      <option value="excellent">ممتاز</option>
+                      <option value="native">لغة أم</option>
+                      <option value="very_good">جيد جداً</option>
                       <option value="good">جيد</option>
                       <option value="basic">أساسي</option>
                     </select>
                   </div>
                   <div>
                     <label className="label">مستوى القراءة</label>
-                    <select className="input">
+                    <select
+                      className="input"
+                      value={langDraft.reading ?? ''}
+                      onChange={(e) => setLangDraft({ ...langDraft, reading: e.target.value })}
+                    >
                       <option value="">اختر</option>
-                      <option value="excellent">ممتاز</option>
+                      <option value="native">لغة أم</option>
+                      <option value="very_good">جيد جداً</option>
                       <option value="good">جيد</option>
                       <option value="basic">أساسي</option>
                     </select>
                   </div>
                 </div>
-                <button type="button" className="text-sm text-primary-500 hover:text-primary-600 font-medium">
-                  + إضافة لغة أخرى
+                <button
+                  type="button"
+                  className="text-sm text-primary-500 hover:text-primary-600 font-medium"
+                  onClick={() => addQualRow(langDraft, setLangDraft, setLangRows, 'language', 'اللغة')}
+                >
+                  + إضافة لغة
                 </button>
+                {langRows.length > 0 && (
+                  <ul className="divide-y divide-gray-200 border-t border-gray-200 pt-2">
+                    {langRows.map((r, i) => (
+                      <li key={i} className="flex items-center justify-between py-2 text-sm">
+                        <span className="text-gray-700">
+                          {r.language}
+                          {r.speaking ? ` — تحدث: ${LANG_LEVEL_LABEL[r.speaking] ?? r.speaking}` : ''}
+                          {r.writing ? ` · كتابة: ${LANG_LEVEL_LABEL[r.writing] ?? r.writing}` : ''}
+                          {r.reading ? ` · قراءة: ${LANG_LEVEL_LABEL[r.reading] ?? r.reading}` : ''}
+                        </span>
+                        <button
+                          type="button"
+                          className="text-red-500 hover:text-red-600 text-xs font-medium"
+                          onClick={() => removeQualRow(setLangRows, i)}
+                        >
+                          حذف
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
               </div>
             </div>
           )}
@@ -1637,7 +2391,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               </h2>
 
               <p className="text-gray-500">
-                يرجى رفع المستندات المطلوبة. المستندات المحددة بـ (*) إلزامية.
+                ارفع المستندات المتاحة لملف الموظف. يمكنك إضافة باقي المستندات لاحقاً.
               </p>
 
               {/* Required Documents */}
@@ -1649,12 +2403,16 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                         <FileText size={20} className="text-primary-500" />
                       </div>
                       <div>
-                        <p className="font-medium text-gray-800">صورة الهوية / الإقامة *</p>
+                        <p className="font-medium text-gray-800">صورة الهوية / الإقامة</p>
                         <p className="text-sm text-gray-400">PDF, JPG, PNG - حد أقصى 5MB</p>
                       </div>
                     </div>
                   </div>
-                  <input type="file" className="w-full" accept=".pdf,.jpg,.jpeg,.png" />
+                  <input type="file" className="w-full" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => handleDocPick('national_id', e.target.files?.[0])} />
+                  {docUploading['national_id'] && <p className="text-xs text-gray-400 mt-2">جارٍ الرفع…</p>}
+                  {!docUploading['national_id'] && documentRefs.some((d) => d.docType === 'national_id') && (
+                    <p className="text-xs text-green-600 mt-2">✓ تم الرفع</p>
+                  )}
                 </div>
 
                 <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
@@ -1669,7 +2427,11 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                       </div>
                     </div>
                   </div>
-                  <input type="file" className="w-full" accept=".pdf,.jpg,.jpeg,.png" />
+                  <input type="file" className="w-full" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => handleDocPick('passport', e.target.files?.[0])} />
+                  {docUploading['passport'] && <p className="text-xs text-gray-400 mt-2">جارٍ الرفع…</p>}
+                  {!docUploading['passport'] && documentRefs.some((d) => d.docType === 'passport') && (
+                    <p className="text-xs text-green-600 mt-2">✓ تم الرفع</p>
+                  )}
                 </div>
 
                 <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
@@ -1679,12 +2441,16 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                         <FileText size={20} className="text-primary-500" />
                       </div>
                       <div>
-                        <p className="font-medium text-gray-800">شهادة المؤهل *</p>
+                        <p className="font-medium text-gray-800">شهادة المؤهل</p>
                         <p className="text-sm text-gray-400">PDF - حد أقصى 5MB</p>
                       </div>
                     </div>
                   </div>
-                  <input type="file" className="w-full" accept=".pdf" />
+                  <input type="file" className="w-full" accept=".pdf" onChange={(e) => handleDocPick('qualification_certificate', e.target.files?.[0])} />
+                  {docUploading['qualification_certificate'] && <p className="text-xs text-gray-400 mt-2">جارٍ الرفع…</p>}
+                  {!docUploading['qualification_certificate'] && documentRefs.some((d) => d.docType === 'qualification_certificate') && (
+                    <p className="text-xs text-green-600 mt-2">✓ تم الرفع</p>
+                  )}
                 </div>
 
                 <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
@@ -1699,7 +2465,11 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                       </div>
                     </div>
                   </div>
-                  <input type="file" className="w-full" accept=".pdf,.doc,.docx" />
+                  <input type="file" className="w-full" accept=".pdf,.doc,.docx" onChange={(e) => handleDocPick('cv', e.target.files?.[0])} />
+                  {docUploading['cv'] && <p className="text-xs text-gray-400 mt-2">جارٍ الرفع…</p>}
+                  {!docUploading['cv'] && documentRefs.some((d) => d.docType === 'cv') && (
+                    <p className="text-xs text-green-600 mt-2">✓ تم الرفع</p>
+                  )}
                 </div>
 
                 <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
@@ -1714,7 +2484,25 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                       </div>
                     </div>
                   </div>
-                  <input type="file" className="w-full" accept=".pdf" multiple />
+                  <input
+                    type="file"
+                    className="w-full"
+                    accept=".pdf"
+                    multiple
+                    onChange={(e) => {
+                      const files = e.target.files
+                      if (files)
+                        Array.from(files).forEach((f) =>
+                          handleDocPick('experience_certificate', f, true)
+                        )
+                    }}
+                  />
+                  {docUploading['experience_certificate'] && <p className="text-xs text-gray-400 mt-2">جارٍ الرفع…</p>}
+                  {documentRefs.filter((d) => d.docType === 'experience_certificate').length > 0 && (
+                    <p className="text-xs text-green-600 mt-2">
+                      ✓ تم رفع {documentRefs.filter((d) => d.docType === 'experience_certificate').length} ملف
+                    </p>
+                  )}
                 </div>
 
                 <div className="p-4 border-2 border-dashed border-gray-200 rounded-xl hover:border-primary-300 transition-colors">
@@ -1729,7 +2517,11 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                       </div>
                     </div>
                   </div>
-                  <input type="file" className="w-full" accept=".jpg,.jpeg,.png" />
+                  <input type="file" className="w-full" accept=".jpg,.jpeg,.png" onChange={(e) => handleDocPick('formal_photo', e.target.files?.[0])} />
+                  {docUploading['formal_photo'] && <p className="text-xs text-gray-400 mt-2">جارٍ الرفع…</p>}
+                  {!docUploading['formal_photo'] && documentRefs.some((d) => d.docType === 'formal_photo') && (
+                    <p className="text-xs text-green-600 mt-2">✓ تم الرفع</p>
+                  )}
                 </div>
               </div>
             </div>
@@ -1753,12 +2545,12 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
             </button>
 
             <div className="flex items-center gap-3">
-              <button type="button" className="btn-secondary">حفظ كمسودة</button>
+              {!isEdit && <button type="button" onClick={persistDraft} disabled={!draftUserId || submitting || uploadingAny} className="btn-secondary flex items-center gap-2 disabled:opacity-50"><Save size={17} />حفظ مسودة الجلسة</button>}
               {currentStep === steps.length ? (
                 <button
                   type="button"
                   onClick={handleSubmit}
-                  disabled={submitting}
+                  disabled={submitting || (!isEdit && uploadingAny)}
                   className="btn-success flex items-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed"
                 >
                   <Save size={18} />
@@ -1777,6 +2569,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
             </div>
           </div>
         </div>
+        {!isEdit && restoreDraftOpen && sessionDraft && <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="restore-employee-draft-title"><div className="bg-white rounded-2xl p-6 max-w-md w-full"><h2 id="restore-employee-draft-title" className="text-lg font-bold">استرجاع مسودة الإضافة</h2><p className="text-sm text-gray-600 mt-3 leading-6">سيستبدل هذا الإجراء البيانات المفتوحة في النموذج بالمسودة المحفوظة بتاريخ {new Date(sessionDraft.savedAt).toLocaleString('ar-EG-u-ca-gregory')}. لم تُرسل المسودة إلى سجل الموظفين.</p><div className="flex justify-end gap-3 mt-6"><button type="button" onClick={() => setRestoreDraftOpen(false)} className="btn-secondary">العودة للنموذج</button><button type="button" onClick={() => void restoreSessionDraft()} className="btn-primary">استرجاع البيانات</button></div></div></div>}
       </div>
     </MainLayout>
   )

@@ -1,4 +1,9 @@
 'use client'
+import { localToday } from '@/lib/dates'
+import { useParams } from 'next/navigation'
+
+import { employeeStatusLabels as EMP_STATUS_AR, CUSTODY_STATUS, payMethodLabels as PAY_METHOD_AR } from '@/lib/status-labels'
+import { leaveTypeLabel } from '@/lib/leave-catalog'
 
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
@@ -31,6 +36,7 @@ import {
   X,
   Check,
   AlertCircle,
+  Save,
 } from 'lucide-react'
 import {
   fetchEmployeeProfile,
@@ -39,9 +45,20 @@ import {
   fetchTeams,
   fetchEmployees,
   fetchFileObjectUrl,
+  fetchQualifications,
+  fetchCatalog,
+  fetchActiveLeaveTypes,
+  fetchCompanyInfo,
+  createDocument,
+  uploadFile,
+  can,
+  getCurrentUser,
   type ApiEmployee,
+  type ApiQualifications,
+  type ApiCompanyInfo,
 } from '@/lib/api'
-import { useCurrency, loadCurrency } from '@/lib/currency'
+import { docTypeLabel } from '@/lib/doc-types'
+import { loadCurrency, currencyLabel, useCurrency } from '@/lib/currency'
 
 // الحقول الشخصية والمالية الجديدة المدعومة في الباك إند (ليست بعد ضمن ApiEmployee)
 type EmployeeExtras = {
@@ -88,31 +105,66 @@ interface EmployeeVM {
   birthPlace: string
   gender: string
   maritalStatus: string
-  children: string
   address: string
+  country: string
+  postalCode: string
   contractType: string
   contractStart: string
   contractEnd: string
   contractDaysLeft: number | null
+  contractNumber: string
+  contractDurationMonths: string
+  noticePeriodDays: string
   employmentType: string
+  fingerprintCode: string
+  actualStartDate: string
+  probationEndDate: string
+  recruitmentSource: string
+  workLocation: string
   basicSalary: number
   housingAllowance: number
   transportAllowance: number
   otherAllowance: number
+  phoneAllowance: number
+  workNatureAllowance: number
   emergencyContactName: string
   emergencyContactPhone: string
+  emergencyRelation: string
+  emergencyPhoneAlt: string
   totalSalary: number
   payMethod: string
+  salaryCycle: string
+  currencyCode: string
   bankName: string
+  bankBranch: string
   bankAccount: string
   gosiNumber: string
+  isGosiRegistered: string
+  gosiBaseSalary: string
   leaveBalance: { annual: { total: number; used: number; remaining: number } }
+  // الفريق ومركز التكلفة وجدول العمل واستحقاق السنوي (كانت لا تظهر في الملف)
+  team: string
+  costCenter: string
+  workSchedule: string // للعرض: اسم الجدول (أو الافتراضي / إعداد الفرع)
+  workScheduleName: string // الاسم الخام لنص العقد — فارغ بلا جدول
+  workScheduleFrom: string
+  workScheduleTo: string
+  workScheduleWeekend: string // عطلة الجدول المعيّن فقط (الافتراضي يتبع الفرع)
+  annualLeaveEntitled: boolean
+  flexOverrideMode: string
+  attendanceRuleEffectiveFrom: string
+  annualEntitlementDays: number | null // استحقاق السنة كاملة من رصيد السنة الجارية
+  // عملة راتب الموظف نفسه (عملة النظام لو غير محددة على ملفه): رمز + اسم للخطابات
+  salaryCurrency: string
+  salaryCurrencyName: string
+  branchCountry: string
 }
 
 interface BalanceView {
   total: number
   used: number
   remaining: number
+  annualEntitlement: number | null
   openingDays: number
   openingTaken: number
   openingExpiry: string | null
@@ -154,21 +206,9 @@ interface DocView {
   number: string
   expiryDate: string
   expired: boolean
+  fileRef: string
 }
 
-const LEAVE_TYPE_AR: Record<string, string> = {
-  ANNUAL: 'إجازة سنوية',
-  SICK: 'إجازة مرضية',
-  CASUAL: 'إجازة طارئة',
-  UNPAID: 'إجازة بدون راتب',
-  MATERNITY: 'إجازة وضع',
-  PATERNITY: 'إجازة أبوة',
-  HAJJ: 'إجازة حج',
-  MARRIAGE: 'إجازة زواج',
-  BEREAVEMENT: 'إجازة وفاة/عدة',
-  EXAM: 'إجازة امتحانات',
-  COMPENSATORY: 'إجازة تعويضية',
-}
 
 const LEAVE_STATUS_AR: Record<string, string> = {
   APPROVED: 'معتمدة',
@@ -178,29 +218,8 @@ const LEAVE_STATUS_AR: Record<string, string> = {
   CANCELLED: 'ملغاة',
 }
 
-const CUSTODY_STATUS_AR: Record<string, { label: string; className: string }> = {
-  PENDING_ACK: { label: 'بانتظار التأكيد', className: 'bg-indigo-100 text-indigo-700' },
-  ACTIVE: { label: 'نشطة', className: 'bg-success-50 text-success-700' },
-  RETURNED: { label: 'مُرجعة', className: 'bg-gray-100 text-gray-600' },
-  RETURN_REQUESTED: { label: 'طلب إرجاع', className: 'bg-blue-100 text-blue-700' },
-  LOST: { label: 'مفقودة', className: 'bg-red-100 text-red-700' },
-  DAMAGED: { label: 'تالفة', className: 'bg-orange-100 text-orange-700' },
-}
 
-const EMP_STATUS_AR: Record<string, string> = {
-  active: 'نشط',
-  probation: 'فترة تجربة',
-  suspended: 'موقوف',
-  notice_period: 'فترة إشعار',
-  resigned: 'مستقيل',
-  archived: 'مؤرشف',
-}
 
-const PAY_METHOD_AR: Record<string, string> = {
-  transfer: 'تحويل بنكي',
-  cash: 'نقدي',
-  visa: 'فيزا',
-}
 
 const GENDER_AR: Record<string, string> = {
   male: 'ذكر',
@@ -219,6 +238,78 @@ const CONTRACT_TYPE_AR: Record<string, string> = {
   fixed_term: 'محدد المدة',
   part_time: 'دوام جزئي',
   seasonal: 'موسمي',
+}
+
+// نوع التوظيف — يقبل صيغتَي الكود (full_time و fulltime) الموجودتين في الفورم
+const WORK_TYPE_AR: Record<string, string> = {
+  full_time: 'دوام كامل',
+  fulltime: 'دوام كامل',
+  part_time: 'جزئي',
+  parttime: 'جزئي',
+  contract: 'عقد',
+  temporary: 'مؤقت',
+  consultant: 'استشاري',
+  intern: 'متدرب',
+}
+
+const SALARY_CYCLE_AR: Record<string, string> = {
+  monthly: 'شهري',
+  weekly: 'أسبوعي',
+  biweekly: 'كل أسبوعين',
+}
+
+const COUNTRY_AR: Record<string, string> = {
+  SA: 'السعودية',
+  AE: 'الإمارات',
+  EG: 'مصر',
+}
+
+const RELATION_AR: Record<string, string> = {
+  spouse: 'زوج/زوجة',
+  parent: 'أب/أم',
+  sibling: 'أخ/أخت',
+  child: 'ابن/ابنة',
+  other: 'أخرى',
+}
+
+const RECRUITMENT_SOURCE_AR: Record<string, string> = {
+  jobsite: 'موقع توظيف',
+  referral: 'ترشيح موظف',
+  agency: 'وكالة توظيف',
+  linkedin: 'LinkedIn',
+  other: 'أخرى',
+}
+
+const CURRENCY_AR: Record<string, string> = {
+  SAR: 'ريال سعودي (SAR)',
+  AED: 'درهم إماراتي (AED)',
+  EGP: 'جنيه مصري (EGP)',
+}
+
+// اسم العملة كاملاً في نصوص الخطابات الرسمية (المبالغ بعملة الموظف نفسه)
+const CURRENCY_NAME_AR: Record<string, string> = {
+  SAR: 'ريال سعودي',
+  AED: 'درهم إماراتي',
+  EGP: 'جنيه مصري',
+  USD: 'دولار أمريكي',
+}
+
+// أيام العطلة الأسبوعية بصيغة جدول العمل (FRI,SAT)
+const WEEKDAY_AR: Record<string, string> = {
+  SUN: 'الأحد',
+  MON: 'الاثنين',
+  TUE: 'الثلاثاء',
+  WED: 'الأربعاء',
+  THU: 'الخميس',
+  FRI: 'الجمعة',
+  SAT: 'السبت',
+}
+
+// النظام الحاكم في نص عقد العمل حسب دولة فرع الموظف — غير محددة = صياغة عامة
+const LABOR_LAW_AR: Record<string, string> = {
+  SA: 'نظام العمل السعودي',
+  EG: 'قانون العمل المصري',
+  AE: 'قانون تنظيم علاقات العمل الإماراتي',
 }
 
 const statusBadge = (status: string) => {
@@ -241,6 +332,14 @@ const statusBadge = (status: string) => {
 }
 
 const fmtDate = (v?: string | null) => (v ? String(v).slice(0, 10) : '—')
+
+// قيمة نصية/رقمية كما هي — و«—» فقط لو غير موجودة فعلاً
+const val = (v?: string | number | null) =>
+  v === null || v === undefined || v === '' ? '—' : String(v)
+
+// قيمة مترجمة من قاموس — والخام لو الكود غير معروف
+const labelOf = (dict: Record<string, string>, v?: string | null) =>
+  !v ? '—' : dict[v] ?? v
 
 // عدد الأيام المتبقية حتى تاريخ معيّن (سالب = انتهى)
 const daysUntil = (date?: string | null) => {
@@ -345,238 +444,27 @@ const tabs = [
   { id: 'documents', label: 'المستندات', icon: FileText },
 ]
 
-// Document templates
+// القوالب التي يدعمها مسار الخطابات: الطلب والاعتماد والحفظ تتم في الخادم.
 const documentTemplates = [
-  {
-    id: '1',
-    name: 'عقد العمل',
-    nameEn: 'Employment Contract',
-    category: 'contracts',
-    icon: FileSignature,
-  },
-  {
-    id: '2',
-    name: 'خطاب تعريف بالراتب',
-    nameEn: 'Salary Certificate',
-    category: 'letters',
-    icon: FileText,
-  },
-  {
-    id: '3',
-    name: 'شهادة خبرة',
-    nameEn: 'Experience Certificate',
-    category: 'certificates',
-    icon: Award,
-  },
-  {
-    id: '4',
-    name: 'خطاب تعريف للبنك',
-    nameEn: 'Bank Letter',
-    category: 'letters',
-    icon: FileText,
-  },
-  {
-    id: '5',
-    name: 'خطاب تعريف للسفارة',
-    nameEn: 'Embassy Letter',
-    category: 'letters',
-    icon: FileText,
-  },
-  {
-    id: '6',
-    name: 'إخلاء طرف',
-    nameEn: 'Clearance Letter',
-    category: 'forms',
-    icon: FileText,
-  },
+  { id: 'LETTER_SALARY', name: 'تعريف راتب', nameEn: 'Salary Certificate', icon: FileText },
+  { id: 'LETTER_EMPLOYMENT', name: 'خطاب توظيف', nameEn: 'Employment Letter', icon: FileSignature },
+  { id: 'LETTER_EXPERIENCE', name: 'شهادة خبرة', nameEn: 'Experience Certificate', icon: Award },
+  { id: 'LETTER_NOC', name: 'خطاب عدم ممانعة', nameEn: 'No Objection Letter', icon: FileText },
+  { id: 'LETTER_EMBASSY', name: 'خطاب سفارة / تأشيرة', nameEn: 'Embassy Letter', icon: FileText },
+  { id: 'LETTER_BANK_LOAN', name: 'خطاب قرض بنكي', nameEn: 'Bank Loan Letter', icon: FileText },
 ]
-
-// Sample contract with employee data filled
-const generateDocument = (templateId: string, emp: EmployeeVM, currency: string) => {
-  const templates: Record<string, string> = {
-    '1': `بسم الله الرحمن الرحيم
-
-عقد عمل
-
-تم بعون الله وتوفيقه في يوم ${new Date().toLocaleDateString('ar-SA')} إبرام هذا العقد بين كل من:
-
-الطرف الأول (صاحب العمل):
-شركة التقنية المتقدمة
-السجل التجاري: 1010123456
-العنوان: الرياض، حي العليا، شارع الملك فهد
-
-الطرف الثاني (الموظف):
-الاسم: ${emp.name}
-رقم الهوية: ${emp.nationalId}
-الجنسية: ${emp.nationality}
-العنوان: ${emp.address}
-
-تمهيد:
-حيث أن الطرف الأول شركة تعمل في مجال التقنية، وحيث أن الطرف الثاني يرغب في العمل لدى الطرف الأول، فقد اتفق الطرفان على الشروط التالية:
-
-المادة الأولى: مدة العقد
-مدة هذا العقد ${emp.contractType} تبدأ من ${emp.contractStart}.
-
-المادة الثانية: طبيعة العمل
-يعمل الطرف الثاني لدى الطرف الأول بمسمى ${emp.jobTitle} في قسم ${emp.department}.
-
-المادة الثالثة: الأجر
-يتقاضى الطرف الثاني راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ${currency} موزعاً كالتالي:
-- الراتب الأساسي: ${emp.basicSalary.toLocaleString()} ${currency}
-- بدل السكن: ${emp.housingAllowance.toLocaleString()} ${currency}
-- بدل النقل: ${emp.transportAllowance.toLocaleString()} ${currency}
-- بدلات أخرى: ${emp.otherAllowance.toLocaleString()} ${currency}
-
-المادة الرابعة: ساعات العمل
-ساعات العمل 8 ساعات يومياً حسب نظام العمل السعودي.
-
-المادة الخامسة: الإجازات
-يستحق الموظف إجازة سنوية مدتها ${emp.leaveBalance.annual.total} يوم.
-
-المادة السادسة: أحكام عامة
-يخضع هذا العقد لأحكام نظام العمل السعودي.
-
-
-الطرف الأول                                         الطرف الثاني
-شركة التقنية المتقدمة                              ${emp.name}
-
-التوقيع: _______________                           التوقيع: _______________`,
-
-    '2': `التاريخ: ${new Date().toLocaleDateString('ar-SA')}
-الموافق: ${new Date().toLocaleDateString('en-GB')}
-
-إلى من يهمه الأمر،
-
-خطاب تعريف بالراتب
-
-تشهد شركة التقنية المتقدمة بأن السيد/ة ${emp.name} حامل الهوية رقم ${emp.nationalId} يعمل لديها بمسمى ${emp.jobTitle} في قسم ${emp.department} منذ تاريخ ${emp.joinDate}.
-
-ويتقاضى راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ${currency} فقط لا غير، موزعاً كالتالي:
-
-- الراتب الأساسي: ${emp.basicSalary.toLocaleString()} ${currency}
-- بدل السكن: ${emp.housingAllowance.toLocaleString()} ${currency}
-- بدل المواصلات: ${emp.transportAllowance.toLocaleString()} ${currency}
-- بدلات أخرى: ${emp.otherAllowance.toLocaleString()} ${currency}
-
-أُعطي هذا الخطاب بناءً على طلبه دون أي مسؤولية على الشركة.
-
-والله الموفق،
-
-شركة التقنية المتقدمة
-إدارة الموارد البشرية
-
-_______________
-التوقيع والختم`,
-
-    '3': `التاريخ: ${new Date().toLocaleDateString('ar-SA')}
-
-شهادة خبرة
-
-تشهد شركة التقنية المتقدمة بأن السيد/ة ${emp.name} حامل الهوية رقم ${emp.nationalId} قد عمل لديها بمسمى ${emp.jobTitle} في قسم ${emp.department} خلال الفترة من ${emp.joinDate} وحتى تاريخه.
-
-وخلال فترة عمله معنا أظهر كفاءة عالية والتزاماً في العمل.
-
-نتمنى له التوفيق في مسيرته المهنية.
-
-شركة التقنية المتقدمة
-إدارة الموارد البشرية`,
-
-    '4': `التاريخ: ${new Date().toLocaleDateString('ar-SA')}
-
-إلى: ${emp.bankName}
-
-الموضوع: خطاب تعريف
-
-السلام عليكم ورحمة الله وبركاته،
-
-نفيدكم بأن السيد/ة ${emp.name} حامل الهوية رقم ${emp.nationalId} يعمل لدى شركة التقنية المتقدمة بمسمى ${emp.jobTitle} منذ تاريخ ${emp.joinDate}.
-
-ويتقاضى راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ${currency} يُحوّل على حسابه البنكي رقم ${emp.bankAccount}.
-
-هذا الخطاب صادر بناءً على طلب الموظف.
-
-وتقبلوا وافر الاحترام والتقدير،
-
-شركة التقنية المتقدمة
-إدارة الموارد البشرية`,
-
-    '5': `التاريخ: ${new Date().toLocaleDateString('ar-SA')}
-
-إلى: السفارة / القنصلية
-
-الموضوع: خطاب تعريف للحصول على تأشيرة
-
-السلام عليكم ورحمة الله وبركاته،
-
-نفيدكم بأن السيد/ة ${emp.name}
-جواز السفر رقم: ${emp.passportNo}
-الجنسية: ${emp.nationality}
-
-يعمل لدى شركة التقنية المتقدمة بمسمى ${emp.jobTitle} منذ تاريخ ${emp.joinDate}.
-
-ويتقاضى راتباً شهرياً إجمالياً قدره ${emp.totalSalary.toLocaleString()} ${currency}.
-
-نتعهد بعودته إلى عمله بعد انتهاء إجازته.
-
-وتقبلوا وافر الاحترام والتقدير،
-
-شركة التقنية المتقدمة
-إدارة الموارد البشرية`,
-
-    '6': `نموذج إخلاء طرف
-
-التاريخ: ${new Date().toLocaleDateString('ar-SA')}
-
-بيانات الموظف:
-الاسم: ${emp.name}
-الرقم الوظيفي: ${emp.employeeId}
-القسم: ${emp.department}
-تاريخ التعيين: ${emp.joinDate}
-
-أولاً: العهد والأصول
-□ تم تسليم جميع العهد والأصول
-□ لابتوب: ____________
-□ جوال: ____________
-□ بطاقة الدخول: ____________
-
-ثانياً: الإدارة المالية
-□ لا يوجد سلف مستحقة
-□ تمت تسوية جميع المستحقات
-
-ثالثاً: تقنية المعلومات
-□ تم إلغاء الصلاحيات
-□ تم حذف الحسابات
-
-رابعاً: الموارد البشرية
-□ تم استلام المستندات
-□ تمت مقابلة الخروج
-
-التوقيعات:
-الموظف: _______________
-المدير المباشر: _______________
-الموارد البشرية: _______________
-الإدارة المالية: _______________
-تقنية المعلومات: _______________`,
-  }
-  return templates[templateId] || ''
-}
-
-export default function EmployeeProfilePage({
-  params,
-}: {
-  params: { id: string }
-}) {
+export default function EmployeeProfilePage() {
+  const params = useParams<{ id: string }>()
   const [activeTab, setActiveTab] = useState('personal')
-  const currency = useCurrency()
+  const systemCurrency = useCurrency()
   const [showActionsMenu, setShowActionsMenu] = useState(false)
   const [showDocumentModal, setShowDocumentModal] = useState(false)
-  const [selectedTemplate, setSelectedTemplate] = useState<string | null>(null)
-  const [generatedDocument, setGeneratedDocument] = useState<string>('')
-  const [showPreview, setShowPreview] = useState(false)
 
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [employee, setEmployee] = useState<EmployeeVM | null>(null)
+  const canViewFinancial = !!employee && (getCurrentUser()?.employeeId === employee.id || can('payroll.view') || can('employees.edit'))
+  const currency = employee?.salaryCurrency || systemCurrency
   const [photoUrl, setPhotoUrl] = useState<string | null>(null)
   const [balAnnual, setBalAnnual] = useState<BalanceView | null>(null)
   const [balSick, setBalSick] = useState<BalanceView | null>(null)
@@ -584,13 +472,15 @@ export default function EmployeeProfilePage({
   const [custody, setCustody] = useState<CustodyView[]>([])
   const [historyEvents, setHistoryEvents] = useState<HistoryEventView[]>([])
   const [docs, setDocs] = useState<DocView[]>([])
+  // المؤهلات والخبرات — خمس قوائم من مسارها الخاص
+  const [quals, setQuals] = useState<ApiQualifications | null>(null)
 
   useEffect(() => {
     const load = async () => {
       setLoading(true)
       setError('')
       try {
-        const [profile, branches, departments, teams, allEmployees, currencyNow] =
+        const [profile, branches, departments, teams, allEmployees, currencyNow, qualifications, grades, workSchedules, costCenters, leaveTypes] =
           await Promise.all([
             fetchEmployeeProfile(Number(params.id)),
             fetchBranches(),
@@ -598,14 +488,25 @@ export default function EmployeeProfilePage({
             fetchTeams(),
             fetchEmployees(),
             loadCurrency(),
+            fetchQualifications(Number(params.id)).catch(() => null),
+            fetchCatalog<{ id: number; name: string }>('grades').catch(
+              () => [] as { id: number; name: string }[]
+            ),
+            fetchCatalog<import('@/lib/api').ApiWorkSchedule>('work-schedules', localToday()),
+            fetchCatalog<{ id: number; code: string; name: string }>('cost-centers'),
+            fetchActiveLeaveTypes(),
           ])
+        setQuals(qualifications)
         const e = profile.employee as ApiEmployee & EmployeeExtras
         const branchById = new Map(branches.map((b) => [b.id, b.name]))
         const deptById = new Map(departments.map((d) => [d.id, d.name]))
         const teamById = new Map(teams.map((t) => [t.id, t.name]))
         const empById = new Map(allEmployees.map((x) => [x.id, x]))
+        const gradeById = new Map(grades.map((g) => [g.id, g.name]))
 
-        const today = new Date().toISOString().slice(0, 10)
+        const schedule = workSchedules.find(s => s.id === e.workScheduleId)
+        const effectiveSchedule = schedule ?? workSchedules.find(s => s.isDefault && s.isActive)
+        const today = new Date().toLocaleDateString('en-CA')
         const currentYear = String(new Date().getFullYear())
         const balanceOf = (type: string): BalanceView | null => {
           const rows = (profile.balances ?? []).filter(
@@ -620,10 +521,11 @@ export default function EmployeeProfilePage({
             ? 0
             : Math.max(0, Number(row.openingDays ?? 0) - Number(row.openingTaken ?? 0))
           return {
-            total: Number(row.entitled ?? 0),
+            annualEntitlement: row.annualEntitlement == null ? null : Number(row.annualEntitlement),
+            total: Number(row.effectiveEntitled ?? row.entitled ?? 0),
             used: Number(row.taken ?? 0),
             remaining:
-              Number(row.entitled ?? 0) - Number(row.taken ?? 0) + openingAvailable,
+              row.remaining != null ? Number(row.remaining) : openingAvailable + Math.max(0, Number(row.effectiveEntitled ?? row.entitled ?? 0) - Math.max(0, Number(row.taken ?? 0) - Number(row.openingTaken ?? 0))),
             openingDays: Number(row.openingDays ?? 0),
             openingTaken: Number(row.openingTaken ?? 0),
             openingExpiry: row.openingExpiry
@@ -649,13 +551,16 @@ export default function EmployeeProfilePage({
           avatar: (e.fullName ?? '').trim().charAt(0) || 'م',
           photoFileId: e.photoFileId,
           email: e.email ?? '—',
-          personalEmail: '—',
+          personalEmail: val(e.personalEmail),
           phone: e.phone ?? '—',
-          phoneAlt: '—',
+          phoneAlt: val(e.phoneAlt),
           department:
             e.departmentId != null ? deptById.get(e.departmentId) ?? '—' : '—',
           jobTitle: e.jobTitle ?? '—',
-          grade: '—',
+          grade:
+            e.gradeId != null
+              ? gradeById.get(e.gradeId) ?? `#${e.gradeId}`
+              : '—',
           status: e.status,
           joinDate: fmtDate(e.joinDate),
           branch: branchById.get(e.branchId) ?? '—',
@@ -663,38 +568,76 @@ export default function EmployeeProfilePage({
           managerTitle: manager?.jobTitle ?? '',
           nationality: e.nationality || '—',
           nationalId: e.nationalId ?? '—',
-          passportNo: '—',
-          passportExpiry: '—',
+          passportNo: val(e.passportNo),
+          passportExpiry: e.passportExpiry ? fmtDate(e.passportExpiry) : '—',
           birthDate: fmtDate(e.birthDate),
-          birthPlace: '—',
+          birthPlace: val(e.birthPlace),
           gender: e.gender ? GENDER_AR[e.gender] ?? e.gender : '—',
           maritalStatus: e.maritalStatus
             ? MARITAL_AR[e.maritalStatus] ?? e.maritalStatus
             : '—',
-          children: '—',
           address: e.address || '—',
+          country: labelOf(COUNTRY_AR, e.country),
+          postalCode: val(e.postalCode),
           contractType: e.contractType
             ? CONTRACT_TYPE_AR[e.contractType] ?? e.contractType
             : '—',
           contractStart: fmtDate(e.contractStart),
           contractEnd: fmtDate(e.contractEnd),
           contractDaysLeft: daysUntil(e.contractEnd),
-          employmentType: '—',
+          contractNumber: val(e.contractNumber),
+          contractDurationMonths: val(e.contractDurationMonths),
+          noticePeriodDays: val(e.noticePeriodDays),
+          employmentType: labelOf(WORK_TYPE_AR, e.workType),
+          fingerprintCode: val(e.fingerprintCode),
+          actualStartDate: e.actualStartDate ? fmtDate(e.actualStartDate) : '—',
+          probationEndDate: e.probationEndDate ? fmtDate(e.probationEndDate) : '—',
+          recruitmentSource: labelOf(RECRUITMENT_SOURCE_AR, e.recruitmentSource),
+          workLocation: val(e.workLocation),
           basicSalary: Number(e.basicSalary ?? 0),
           housingAllowance: Number(e.housingAllowance ?? 0),
           transportAllowance: Number(e.transportAllowance ?? 0),
           otherAllowance: Number(e.otherAllowance ?? 0),
+          phoneAllowance: Number(e.phoneAllowance ?? 0),
+          workNatureAllowance: Number(e.workNatureAllowance ?? 0),
           emergencyContactName: e.emergencyContactName || '—',
           emergencyContactPhone: e.emergencyContactPhone || '—',
+          emergencyRelation: labelOf(RELATION_AR, e.emergencyRelation),
+          emergencyPhoneAlt: val(e.emergencyPhoneAlt),
           totalSalary:
             Number(e.basicSalary ?? 0) +
             Number(e.housingAllowance ?? 0) +
             Number(e.transportAllowance ?? 0) +
-            Number(e.otherAllowance ?? 0),
+            Number(e.otherAllowance ?? 0) +
+            Number(e.phoneAllowance ?? 0) +
+            Number(e.workNatureAllowance ?? 0),
           payMethod: PAY_METHOD_AR[e.payMethod] ?? e.payMethod ?? '—',
+          salaryCycle: labelOf(SALARY_CYCLE_AR, e.salaryCycle),
+          currencyCode: labelOf(CURRENCY_AR, e.currency),
           bankName: e.bankName ?? '—',
+          bankBranch: val(e.bankBranch),
           bankAccount: e.iban ?? '—',
-          gosiNumber: '—',
+          gosiNumber: val(e.gosiNumber),
+          isGosiRegistered:
+            e.isGosiRegistered == null ? '—' : e.isGosiRegistered ? 'نعم' : 'لا',
+          gosiBaseSalary:
+            e.gosiBaseSalary == null
+              ? '—'
+              : Number(e.gosiBaseSalary).toLocaleString(),
+          team: teamById.get(e.teamId ?? 0) ?? '—',
+          costCenter: costCenters.find(c => c.id === e.costCenterId)?.name ?? '—',
+          workSchedule: effectiveSchedule ? effectiveSchedule.name + (schedule ? '' : ' (افتراضي)') : 'بلا جدول',
+          workScheduleName: effectiveSchedule?.name ?? '',
+          workScheduleFrom: effectiveSchedule?.startTime ?? '',
+          workScheduleTo: effectiveSchedule?.endTime ?? '',
+          workScheduleWeekend: schedule?.weekendDays ?? '',
+          annualLeaveEntitled: e.annualLeaveEntitled !== false,
+          flexOverrideMode: ({ INHERIT: 'يتبع الوردية أو جدول العمل', ENABLED: 'مفعلة لهذا الموظف', DISABLED: 'موقوفة لهذا الموظف' } as Record<string, string>)[e.flexOverrideMode ?? 'INHERIT'],
+          attendanceRuleEffectiveFrom: e.attendanceRuleEffectiveFrom ?? 'لا يوجد تاريخ سريان مسجل',
+          annualEntitlementDays: annual?.annualEntitlement ?? null,
+          salaryCurrency: e.currency ? currencyLabel(e.currency) : currencyNow,
+          salaryCurrencyName: e.currency ? (CURRENCY_AR[e.currency] ?? e.currency) : currencyNow,
+          branchCountry: branches.find(b => b.id === e.branchId)?.country ?? '',
           leaveBalance: {
             annual: {
               total: annual?.total ?? 0,
@@ -707,7 +650,7 @@ export default function EmployeeProfilePage({
         setLeaves(
           (profile.leaves ?? []).map((l: any) => ({
             id: l.id,
-            typeLabel: LEAVE_TYPE_AR[l.leaveType] ?? l.leaveType,
+            typeLabel: leaveTypeLabel(l.leaveType, leaveTypes),
             fromDate: fmtDate(l.fromDate),
             toDate: fmtDate(l.toDate),
             days: Number(l.days ?? 0),
@@ -742,6 +685,7 @@ export default function EmployeeProfilePage({
             expired:
               d.expired ??
               (!!d.expiryDate && String(d.expiryDate).slice(0, 10) < today),
+            fileRef: d.fileRef ?? '',
           }))
         )
       } catch (err) {
@@ -779,36 +723,17 @@ export default function EmployeeProfilePage({
     }
   }, [employee?.photoFileId])
 
-  const handleGenerateDocument = (templateId: string) => {
-    if (!employee) return
-    setSelectedTemplate(templateId)
-    const content = generateDocument(templateId, employee, currency)
-    setGeneratedDocument(content)
-    setShowPreview(true)
-  }
-
-  const handlePrint = () => {
-    const printWindow = window.open('', '_blank')
-    if (printWindow) {
-      printWindow.document.write(`
-        <html dir="rtl">
-          <head>
-            <title>طباعة المستند</title>
-            <style>
-              body {
-                font-family: 'Arial', 'Tahoma', sans-serif;
-                padding: 40px;
-                line-height: 1.8;
-                white-space: pre-wrap;
-              }
-            </style>
-          </head>
-          <body>${generatedDocument}</body>
-        </html>
-      `)
-      printWindow.document.close()
-      printWindow.print()
+  // فتح ملف مستند مخزّن — يُجلب بالتوكن كـ blob ثم يُفتح في نافذة جديدة
+  const viewFile = async (fileRef: string) => {
+    const fileId = Number(fileRef.slice(5))
+    if (!Number.isFinite(fileId) || fileId <= 0) return
+    setError('')
+    const url = await fetchFileObjectUrl(fileId)
+    if (!url) {
+      setError('تعذر عرض الملف')
+      return
     }
+    window.open(url)
   }
 
   return (
@@ -901,10 +826,13 @@ export default function EmployeeProfilePage({
                 <Printer size={18} />
                 طباعة
               </button>
-              <Link href={`/employees/${employee.id}/edit`} className="btn-primary flex items-center gap-2">
-                <Edit size={18} />
-                تعديل
-              </Link>
+              {/* التعديل بصلاحيته — الحفظ يحتاج employees.edit */}
+              {can('employees.edit') && (
+                <Link href={`/employees/${employee.id}/edit`} className="btn-primary flex items-center gap-2">
+                  <Edit size={18} />
+                  تعديل
+                </Link>
+              )}
               <div className="relative">
                 <button
                   onClick={() => setShowActionsMenu(!showActionsMenu)}
@@ -928,15 +856,22 @@ export default function EmployeeProfilePage({
                         <Calculator size={18} className="text-primary-500" />
                         <span>تصفية المستحقات</span>
                       </Link>
-                      <div className="border-t border-gray-100 my-1" />
-                      <Link
-                        href={`/employees/${employee.id}/terminate`}
-                        className="flex items-center gap-3 px-4 py-3 text-danger-600 hover:bg-danger-50 transition-colors"
-                        onClick={() => setShowActionsMenu(false)}
-                      >
-                        <UserMinus size={18} />
-                        <span>إنهاء الخدمة</span>
-                      </Link>
+                      {/* EMP-1: الإنهاء لـ HR (offboarding.manage) ولموظف على رأس العمل —
+                          فترة الإشعار معناها ملف مفتوح بالفعل (تصفية المستحقات) */}
+                      {can('offboarding.manage') &&
+                        ['active', 'probation', 'suspended'].includes(employee.status) && (
+                          <>
+                            <div className="border-t border-gray-100 my-1" />
+                            <Link
+                              href={`/employees/${employee.id}/terminate`}
+                              className="flex items-center gap-3 px-4 py-3 text-danger-600 hover:bg-danger-50 transition-colors"
+                              onClick={() => setShowActionsMenu(false)}
+                            >
+                              <UserMinus size={18} />
+                              <span>إنهاء الخدمة</span>
+                            </Link>
+                          </>
+                        )}
                     </div>
                   </>
                 )}
@@ -971,7 +906,7 @@ export default function EmployeeProfilePage({
         {/* Tabs */}
         <div className="card p-2">
           <div className="flex items-center gap-2 overflow-x-auto">
-            {tabs.map((tab) => (
+            {tabs.filter((tab) => tab.id !== 'financial' || canViewFinancial).map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
@@ -1017,10 +952,6 @@ export default function EmployeeProfilePage({
                     <div>
                       <p className="text-sm text-gray-500">الحالة الاجتماعية</p>
                       <p className="font-medium text-gray-800 mt-1">{employee.maritalStatus}</p>
-                    </div>
-                    <div>
-                      <p className="text-sm text-gray-500">عدد الأبناء</p>
-                      <p className="font-medium text-gray-800 mt-1">{employee.children}</p>
                     </div>
                     <div>
                       <p className="text-sm text-gray-500">الجنسية</p>
@@ -1108,6 +1039,26 @@ export default function EmployeeProfilePage({
                     <p className="font-medium text-gray-800 mt-1">{employee.address}</p>
                   </div>
                 </div>
+                <div className="grid grid-cols-2 gap-8 mt-4">
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center">
+                      <Globe size={18} className="text-gray-500" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">البلد</p>
+                      <p className="font-medium text-gray-800">{employee.country}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center">
+                      <Hash size={18} className="text-gray-500" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">الرمز البريدي</p>
+                      <p className="font-medium text-gray-800" dir="ltr">{employee.postalCode}</p>
+                    </div>
+                  </div>
+                </div>
               </div>
 
               {/* Emergency Contact */}
@@ -1125,11 +1076,29 @@ export default function EmployeeProfilePage({
                   </div>
                   <div className="flex items-center gap-3">
                     <div className="w-10 h-10 bg-primary-50 rounded-xl flex items-center justify-center">
+                      <Users size={18} className="text-primary-500" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">صلة القرابة</p>
+                      <p className="font-medium text-gray-800">{employee.emergencyRelation}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-primary-50 rounded-xl flex items-center justify-center">
                       <Phone size={18} className="text-primary-500" />
                     </div>
                     <div>
                       <p className="text-sm text-gray-500">رقم الجوال</p>
                       <p className="font-medium text-gray-800" dir="ltr">{employee.emergencyContactPhone}</p>
+                    </div>
+                  </div>
+                  <div className="flex items-center gap-3">
+                    <div className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center">
+                      <Phone size={18} className="text-gray-500" />
+                    </div>
+                    <div>
+                      <p className="text-sm text-gray-500">هاتف طوارئ بديل</p>
+                      <p className="font-medium text-gray-800" dir="ltr">{employee.emergencyPhoneAlt}</p>
                     </div>
                   </div>
                 </div>
@@ -1144,10 +1113,14 @@ export default function EmployeeProfilePage({
                 البيانات الوظيفية
               </h2>
 
-              <div className="grid grid-cols-3 gap-6">
+              <div className="grid grid-cols-4 gap-6">
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">الرقم الوظيفي</p>
                   <p className="font-bold text-primary-600 text-lg mt-1 font-mono">{employee.employeeId}</p>
+                </div>
+                <div className="p-4 bg-gray-50 rounded-xl">
+                  <p className="text-sm text-gray-500">كود البصمة</p>
+                  <p className="font-bold text-gray-800 text-lg mt-1 font-mono" dir="ltr">{employee.fingerprintCode}</p>
                 </div>
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">تاريخ التعيين</p>
@@ -1156,6 +1129,27 @@ export default function EmployeeProfilePage({
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">نوع التوظيف</p>
                   <p className="font-bold text-gray-800 text-lg mt-1">{employee.employmentType}</p>
+                </div>
+              </div>
+
+              {/* تفاصيل التعيين — بداية العمل الفعلي وفترة التجربة ومصدر التوظيف */}
+              <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-4">
+                <p className="text-sm text-gray-500">المرونة في الحضور</p>
+                <p className="font-bold text-gray-800 mt-1">{employee.flexOverrideMode}</p>
+                <p className="text-sm text-gray-600 mt-1">السريان: {employee.attendanceRuleEffectiveFrom}. مدة المرونة والساعات المطلوبة من تعريف دوام اليوم.</p>
+              </div>
+              <div className="grid grid-cols-3 gap-6">
+                <div className="p-4 bg-gray-50 rounded-xl">
+                  <p className="text-sm text-gray-500">بداية العمل الفعلي</p>
+                  <p className="font-bold text-gray-800 text-lg mt-1">{employee.actualStartDate}</p>
+                </div>
+                <div className="p-4 bg-gray-50 rounded-xl">
+                  <p className="text-sm text-gray-500">انتهاء فترة التجربة</p>
+                  <p className="font-bold text-gray-800 text-lg mt-1">{employee.probationEndDate}</p>
+                </div>
+                <div className="p-4 bg-gray-50 rounded-xl">
+                  <p className="text-sm text-gray-500">مصدر التوظيف</p>
+                  <p className="font-bold text-gray-800 text-lg mt-1">{employee.recruitmentSource}</p>
                 </div>
               </div>
 
@@ -1179,9 +1173,13 @@ export default function EmployeeProfilePage({
                       <span className="text-gray-500">الدرجة الوظيفية</span>
                       <span className="font-medium text-gray-800">{employee.grade}</span>
                     </div>
-                    <div className="flex items-center justify-between py-2">
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100">
                       <span className="text-gray-500">المدير المباشر</span>
                       <span className="font-medium text-gray-800">{employee.manager}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-2">
+                      <span className="text-gray-500">موقع العمل</span>
+                      <span className="font-medium text-gray-800">{employee.workLocation}</span>
                     </div>
                   </div>
                 </div>
@@ -1189,6 +1187,10 @@ export default function EmployeeProfilePage({
                 <div className="space-y-4">
                   <h3 className="text-md font-bold text-gray-700">معلومات العقد</h3>
                   <div className="space-y-3">
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                      <span className="text-gray-500">رقم العقد</span>
+                      <span className="font-medium text-gray-800 font-mono" dir="ltr">{employee.contractNumber}</span>
+                    </div>
                     <div className="flex items-center justify-between py-2 border-b border-gray-100">
                       <span className="text-gray-500">نوع العقد</span>
                       <span className="font-medium text-gray-800">{employee.contractType}</span>
@@ -1200,6 +1202,22 @@ export default function EmployeeProfilePage({
                     <div className="flex items-center justify-between py-2 border-b border-gray-100">
                       <span className="text-gray-500">تاريخ نهاية العقد</span>
                       <span className="font-medium text-gray-800">{employee.contractEnd}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                      <span className="text-gray-500">مدة العقد</span>
+                      <span className="font-medium text-gray-800">
+                        {employee.contractDurationMonths === '—'
+                          ? '—'
+                          : `${employee.contractDurationMonths} شهر`}
+                      </span>
+                    </div>
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                      <span className="text-gray-500">فترة الإشعار</span>
+                      <span className="font-medium text-gray-800">
+                        {employee.noticePeriodDays === '—'
+                          ? '—'
+                          : `${employee.noticePeriodDays} يوم`}
+                      </span>
                     </div>
                     <div className="flex items-center justify-between py-2 border-b border-gray-100">
                       <span className="text-gray-500">المتبقي على انتهاء العقد</span>
@@ -1224,7 +1242,7 @@ export default function EmployeeProfilePage({
           )}
 
           {/* Financial Tab */}
-          {activeTab === 'financial' && (
+          {activeTab === 'financial' && canViewFinancial && (
             <div className="space-y-8">
               <h2 className="text-lg font-bold text-gray-800 border-b border-gray-100 pb-4">
                 البيانات المالية
@@ -1254,6 +1272,21 @@ export default function EmployeeProfilePage({
                 </div>
               </div>
 
+              {/* بدلات إضافية — محفوظة على الموظف وتُعرض مستقلة */}
+              <div className="space-y-4">
+                <h3 className="text-md font-bold text-gray-700">بدلات إضافية</h3>
+                <div className="grid grid-cols-5 gap-4">
+                  <div className="p-4 bg-gray-50 rounded-xl">
+                    <p className="text-sm text-gray-500">بدل الهاتف</p>
+                    <p className="font-bold text-gray-800 text-xl mt-1">{Number(employee.phoneAllowance).toLocaleString()} {currency}</p>
+                  </div>
+                  <div className="p-4 bg-gray-50 rounded-xl">
+                    <p className="text-sm text-gray-500">بدل طبيعة العمل</p>
+                    <p className="font-bold text-gray-800 text-xl mt-1">{Number(employee.workNatureAllowance).toLocaleString()} {currency}</p>
+                  </div>
+                </div>
+              </div>
+
               <div className="grid grid-cols-2 gap-8">
                 <div className="space-y-4">
                   <h3 className="text-md font-bold text-gray-700">المعلومات البنكية</h3>
@@ -1261,6 +1294,10 @@ export default function EmployeeProfilePage({
                     <div className="flex items-center justify-between py-2 border-b border-gray-100">
                       <span className="text-gray-500">اسم البنك</span>
                       <span className="font-medium text-gray-800">{employee.bankName}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                      <span className="text-gray-500">فرع البنك</span>
+                      <span className="font-medium text-gray-800">{employee.bankBranch}</span>
                     </div>
                     <div className="flex items-center justify-between py-2">
                       <span className="text-gray-500">رقم الحساب (IBAN)</span>
@@ -1276,10 +1313,37 @@ export default function EmployeeProfilePage({
                       <span className="text-gray-500">طريقة الصرف</span>
                       <span className="font-medium text-gray-800">{employee.payMethod}</span>
                     </div>
-                    <div className="flex items-center justify-between py-2">
-                      <span className="text-gray-500">رقم التأمينات (GOSI)</span>
-                      <span className="font-medium text-gray-800 font-mono">{employee.gosiNumber}</span>
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                      <span className="text-gray-500">العملة</span>
+                      <span className="font-medium text-gray-800">{employee.currencyCode}</span>
                     </div>
+                    <div className="flex items-center justify-between py-2">
+                      <span className="text-gray-500">دورة الراتب</span>
+                      <span className="font-medium text-gray-800">{employee.salaryCycle}</span>
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              {/* التأمينات الاجتماعية */}
+              <div className="pt-6 border-t border-gray-100 space-y-4">
+                <h3 className="text-md font-bold text-gray-700">التأمينات الاجتماعية</h3>
+                <div className="grid grid-cols-3 gap-6">
+                  <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">رقم التأمينات (GOSI)</span>
+                    <span className="font-medium text-gray-800 font-mono">{employee.gosiNumber}</span>
+                  </div>
+                  <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">خاضع للتأمينات</span>
+                    <span className="font-medium text-gray-800">{employee.isGosiRegistered}</span>
+                  </div>
+                  <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                    <span className="text-gray-500">الراتب الخاضع للتأمينات</span>
+                    <span className="font-medium text-gray-800">
+                      {employee.gosiBaseSalary === '—'
+                        ? '—'
+                        : `${employee.gosiBaseSalary} ${currency}`}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1293,12 +1357,145 @@ export default function EmployeeProfilePage({
                 المؤهلات والخبرات
               </h2>
 
-              <div className="py-12 text-center">
-                <GraduationCap size={48} className="mx-auto text-gray-300 mb-4" />
-                <p className="text-gray-500">
-                  لا توجد بيانات مؤهلات مسجلة — هذه البيانات غير مدعومة في النظام حالياً
-                </p>
-              </div>
+              {(() => {
+                const q = quals
+                const total =
+                  (q?.education?.length ?? 0) +
+                  (q?.certifications?.length ?? 0) +
+                  (q?.experiences?.length ?? 0) +
+                  (q?.skills?.length ?? 0) +
+                  (q?.languages?.length ?? 0)
+                if (!q || total === 0) {
+                  return (
+                    <div className="py-12 text-center">
+                      <GraduationCap size={48} className="mx-auto text-gray-300 mb-4" />
+                      <p className="text-gray-500">
+                        لا توجد بيانات مؤهلات مسجلة — تُضاف من «تعديل الموظف ← المؤهلات والخبرات»
+                      </p>
+                    </div>
+                  )
+                }
+                const Section = ({
+                  title,
+                  rows,
+                  render,
+                }: {
+                  title: string
+                  rows: any[]
+                  render: (r: any) => { main: string; sub?: string }
+                }) =>
+                  rows.length === 0 ? null : (
+                    <div>
+                      <h3 className="text-md font-bold text-gray-700 border-b border-gray-100 pb-2 mb-3">
+                        {title}
+                        <span className="text-xs font-normal text-gray-400 mr-2">
+                          ({rows.length})
+                        </span>
+                      </h3>
+                      <ul className="divide-y divide-gray-100">
+                        {rows.map((r) => {
+                          const v = render(r)
+                          return (
+                            <li key={r.id} className="py-3">
+                              <p className="text-gray-800 font-medium">{v.main}</p>
+                              {v.sub && (
+                                <p className="text-sm text-gray-500 mt-0.5">{v.sub}</p>
+                              )}
+                            </li>
+                          )
+                        })}
+                      </ul>
+                    </div>
+                  )
+                const DEG: Record<string, string> = {
+                  phd: 'دكتوراه',
+                  master: 'ماجستير',
+                  bachelor: 'بكالوريوس',
+                  diploma: 'دبلوم',
+                  high_school: 'ثانوي',
+                  other: 'أخرى',
+                }
+                const LVL: Record<string, string> = {
+                  beginner: 'مبتدئ',
+                  intermediate: 'متوسط',
+                  advanced: 'متقدم',
+                  expert: 'خبير',
+                }
+                const LANG: Record<string, string> = {
+                  native: 'لغة أم',
+                  very_good: 'جيد جداً',
+                  good: 'جيد',
+                  basic: 'أساسي',
+                }
+                const d = (x?: string) => (x ? String(x).slice(0, 10) : '')
+                return (
+                  <div className="space-y-8">
+                    <Section
+                      title="التعليم"
+                      rows={q.education ?? []}
+                      render={(r) => ({
+                        main: `${DEG[r.degree] ?? r.degree}${r.major ? ` — ${r.major}` : ''}`,
+                        sub: [r.institution, r.graduationYear].filter(Boolean).join(' · '),
+                      })}
+                    />
+                    <Section
+                      title="الشهادات المهنية"
+                      rows={q.certifications ?? []}
+                      render={(r) => ({
+                        main: r.name,
+                        sub: [
+                          r.issuer,
+                          d(r.issueDate) && `صدرت ${d(r.issueDate)}`,
+                          d(r.expiryDate) && `تنتهي ${d(r.expiryDate)}`,
+                        ]
+                          .filter(Boolean)
+                          .join(' · '),
+                      })}
+                    />
+                    <Section
+                      title="الخبرات السابقة"
+                      rows={q.experiences ?? []}
+                      render={(r) => ({
+                        main: `${r.company}${r.jobTitle ? ` — ${r.jobTitle}` : ''}`,
+                        sub: [
+                          r.country,
+                          d(r.fromDate) && `${d(r.fromDate)} ← ${d(r.toDate) || 'حتى الآن'}`,
+                          r.leaveReason,
+                        ]
+                          .filter(Boolean)
+                          .join(' · '),
+                      })}
+                    />
+                    <Section
+                      title="المهارات"
+                      rows={q.skills ?? []}
+                      render={(r) => ({
+                        main: r.name,
+                        sub: [
+                          r.level && (LVL[r.level] ?? r.level),
+                          r.yearsExperience && `${r.yearsExperience} سنة خبرة`,
+                        ]
+                          .filter(Boolean)
+                          .join(' · '),
+                      })}
+                    />
+                    <Section
+                      title="اللغات"
+                      rows={q.languages ?? []}
+                      render={(r) => ({
+                        main: r.language,
+                        sub: [
+                          r.speaking && `تحدث: ${LANG[r.speaking] ?? r.speaking}`,
+                          r.writing && `كتابة: ${LANG[r.writing] ?? r.writing}`,
+                          r.reading && `قراءة: ${LANG[r.reading] ?? r.reading}`,
+                        ]
+                          .filter(Boolean)
+                          .join(' · '),
+                      })}
+                    />
+                  </div>
+                )
+              })()}
             </div>
           )}
 
@@ -1450,10 +1647,10 @@ export default function EmployeeProfilePage({
                     <div className="text-left">
                       <span
                         className={`badge text-xs ${
-                          CUSTODY_STATUS_AR[asset.status]?.className ?? 'bg-gray-100 text-gray-600'
+                          (CUSTODY_STATUS as Record<string, { label: string; className: string }>)[asset.status]?.className ?? 'bg-gray-100 text-gray-600'
                         }`}
                       >
-                        {CUSTODY_STATUS_AR[asset.status]?.label ?? asset.status}
+                        {(CUSTODY_STATUS as Record<string, { label: string; className: string }>)[asset.status]?.label ?? asset.status}
                       </span>
                       <p className="text-sm text-gray-400 mt-1">استلام: {asset.assignedAt}</p>
                       {asset.acknowledgedAt && (
@@ -1532,13 +1729,19 @@ export default function EmployeeProfilePage({
             <div className="space-y-8">
               <div className="flex items-center justify-between border-b border-gray-100 pb-4">
                 <h2 className="text-lg font-bold text-gray-800">المستندات</h2>
+                <div className="flex items-center gap-2">
+                {can('documents.manage') && <Link href={`/employees/documents/create?employeeId=${employee.id}`} className="btn-primary flex items-center gap-2">
+                  <FileText size={18} />
+                  إنشاء مستند من قالب
+                </Link>}
                 <button
                   onClick={() => setShowDocumentModal(true)}
-                  className="btn-primary flex items-center gap-2"
+                  className="btn-secondary flex items-center gap-2"
                 >
                   <FileSignature size={18} />
-                  إنشاء مستند
+                  طلب خطاب
                 </button>
+                </div>
               </div>
 
               {/* Registered Documents */}
@@ -1555,7 +1758,7 @@ export default function EmployeeProfilePage({
                           <FileText size={20} className="text-gray-500" />
                         </div>
                         <div className="flex-1">
-                          <p className="font-medium text-gray-800">{doc.docType}</p>
+                          <p className="font-medium text-gray-800">{docTypeLabel(doc.docType)}</p>
                           <p className="text-xs text-gray-400" dir="ltr">{doc.number}</p>
                           <p className="text-xs text-gray-400 mt-0.5">الانتهاء: {doc.expiryDate}</p>
                         </div>
@@ -1565,6 +1768,16 @@ export default function EmployeeProfilePage({
                           </span>
                         )}
                       </div>
+                      {doc.fileRef.startsWith('file:') && (
+                        <button
+                          onClick={() => viewFile(doc.fileRef)}
+                          className="mt-3 w-full flex items-center justify-center gap-2 p-2 bg-primary-50 rounded-lg hover:bg-primary-100 text-sm text-primary-600"
+                          title="عرض الملف"
+                        >
+                          <Eye size={16} />
+                          معاينة الملف
+                        </button>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -1573,12 +1786,13 @@ export default function EmployeeProfilePage({
 
               {/* Quick Generate Section */}
               <div className="pt-6 border-t border-gray-100">
-                <h3 className="font-medium text-gray-700 mb-4">إنشاء مستند سريع</h3>
+                <h3 className="font-medium text-gray-700 mb-2">طلب خطاب للموظف</h3>
+                <p className="text-sm text-gray-500 mb-4">اختر الخطاب لاستكمال الطلب؛ يُنشأ المستند ويُحفظ بعد الاعتماد.</p>
                 <div className="grid grid-cols-3 gap-4">
                   {documentTemplates.map((template) => (
-                    <button
+                    <Link
                       key={template.id}
-                      onClick={() => handleGenerateDocument(template.id)}
+                      href={`/requests?type=${template.id}&employeeId=${employee.id}`}
                       className="p-4 border border-gray-200 rounded-xl hover:border-primary-300 hover:bg-primary-50 transition-all text-right group"
                     >
                       <div className="flex items-center gap-3">
@@ -1590,7 +1804,7 @@ export default function EmployeeProfilePage({
                           <p className="text-xs text-gray-400">{template.nameEn}</p>
                         </div>
                       </div>
-                    </button>
+                    </Link>
                   ))}
                 </div>
               </div>
@@ -1607,8 +1821,8 @@ export default function EmployeeProfilePage({
           <div className="bg-white rounded-xl w-full max-w-2xl">
             <div className="p-6 border-b flex items-center justify-between">
               <div>
-                <h2 className="text-xl font-bold text-gray-900">إنشاء مستند</h2>
-                <p className="text-sm text-gray-500 mt-1">اختر نوع المستند لإنشائه للموظف {employee.name}</p>
+                <h2 className="text-xl font-bold text-gray-900">طلب خطاب</h2>
+                <p className="text-sm text-gray-500 mt-1">اختر الخطاب لاستكمال طلبه للموظف {employee.name}؛ يُحفظ المستند بعد الاعتماد.</p>
               </div>
               <button
                 onClick={() => setShowDocumentModal(false)}
@@ -1621,12 +1835,9 @@ export default function EmployeeProfilePage({
             <div className="p-6">
               <div className="grid grid-cols-2 gap-4">
                 {documentTemplates.map((template) => (
-                  <button
+                  <Link
                     key={template.id}
-                    onClick={() => {
-                      handleGenerateDocument(template.id)
-                      setShowDocumentModal(false)
-                    }}
+                    href={`/requests?type=${template.id}&employeeId=${employee.id}`}
                     className="p-4 border border-gray-200 rounded-xl hover:border-primary-500 hover:bg-primary-50 transition-all text-right group"
                   >
                     <div className="flex items-center gap-4">
@@ -1638,17 +1849,17 @@ export default function EmployeeProfilePage({
                         <p className="text-sm text-gray-500">{template.nameEn}</p>
                       </div>
                     </div>
-                  </button>
+                  </Link>
                 ))}
               </div>
             </div>
 
             <div className="p-4 border-t bg-gray-50 flex justify-between items-center">
               <Link
-                href="/settings/document-templates"
+                href="/settings/letter-templates"
                 className="text-sm text-primary-600 hover:text-primary-700"
               >
-                إدارة قوالب المستندات
+                إدارة قوالب الخطابات
               </Link>
               <button
                 onClick={() => setShowDocumentModal(false)}
@@ -1661,69 +1872,7 @@ export default function EmployeeProfilePage({
         </div>
       )}
 
-      {/* Document Preview Modal */}
-      {showPreview && employee && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl w-full max-w-4xl max-h-[90vh] flex flex-col">
-            <div className="p-6 border-b flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold text-gray-900">
-                  معاينة المستند - {documentTemplates.find(t => t.id === selectedTemplate)?.name}
-                </h2>
-                <p className="text-sm text-gray-500 mt-1">للموظف: {employee.name}</p>
-              </div>
-              <button
-                onClick={() => {
-                  setShowPreview(false)
-                  setGeneratedDocument('')
-                  setSelectedTemplate(null)
-                }}
-                className="p-2 hover:bg-gray-100 rounded-lg"
-              >
-                <X size={20} className="text-gray-500" />
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-8 bg-gray-100">
-              <div className="bg-white rounded-lg shadow-lg p-8 max-w-3xl mx-auto min-h-[600px]">
-                <pre className="whitespace-pre-wrap font-sans text-gray-800 text-sm leading-relaxed" dir="rtl">
-                  {generatedDocument}
-                </pre>
-              </div>
-            </div>
-
-            <div className="p-4 border-t bg-gray-50 flex justify-between items-center">
-              <div className="flex items-center gap-2 text-sm text-green-600">
-                <Check size={18} />
-                تم إنشاء المستند بنجاح
-              </div>
-              <div className="flex gap-2">
-                <button
-                  onClick={() => {
-                    setShowPreview(false)
-                    setGeneratedDocument('')
-                    setSelectedTemplate(null)
-                  }}
-                  className="btn-secondary"
-                >
-                  إغلاق
-                </button>
-                <button className="btn-secondary flex items-center gap-2">
-                  <Download size={16} />
-                  تحميل PDF
-                </button>
-                <button
-                  onClick={handlePrint}
-                  className="btn-primary flex items-center gap-2"
-                >
-                  <Printer size={16} />
-                  طباعة
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
     </MainLayout>
   )
 }
+

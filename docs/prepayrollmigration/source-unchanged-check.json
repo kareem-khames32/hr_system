@@ -1,0 +1,7 @@
+{
+  "checkedAt": "2026-09-11T16:55:39.911Z",
+  "sourceSchemaUnchanged": true,
+  "sourceRowCountsUnchanged": true,
+  "tablesChecked": 62,
+  "note": "Read-only schema and row-count verification; does not prove no other application changed individual values."
+}

@@ -1,0 +1,22 @@
+{
+  "database": "hr_review_pre_payroll_20260911162404_52ee65ac",
+  "applied": [
+    "20260913_005_overtime_workflow"
+  ],
+  "skipped": [
+    "20260912_001_settlement_payroll_boundary",
+    "20260912_002_membership_claims_events",
+    "20260912_003_attendance_exemptions",
+    "20260913_004_attendance_flex_history"
+  ],
+  "schemaMatches": true,
+  "existingColumnsAndCountsPreserved": true,
+  "checkpoint": {
+    "database": "hr_review_pre_payroll_20260911162404_52ee65ac",
+    "backupPath": "/var/opt/mssql/data/hr_payroll_checkpoint_20260913094421_d1b101ea.bak",
+    "copyOnly": true,
+    "checksumVerified": true,
+    "createdAt": "2026-09-13T09:44:21.274Z"
+  },
+  "verifiedAt": "2026-09-13T09:44:22.248Z"
+}

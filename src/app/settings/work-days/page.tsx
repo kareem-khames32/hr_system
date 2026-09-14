@@ -14,8 +14,28 @@ import {
   createOvertimePeriod,
   updateOvertimePeriod,
   deleteOvertimePeriod,
+  fetchCatalog,
+  createCatalogItem,
+  updateCatalogItem,
+  deleteWorkSchedule,
+  assignWorkSchedule,
+  fetchEmployees,
+  fetchDepartments,
+  can,
+  getCurrentUser,
 } from '@/lib/api'
-import type { ApiScheduleRule, ApiBranch, ApiOvertimePeriod } from '@/lib/api'
+import { buildCalendarChange, calendarRuleToggle, calendarScopeWritable, type PayrollCalendarContext, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
+import { CalendarChangeFields, CalendarContextSummary, CalendarMutationDialog, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
+import type {
+  ApiScheduleRule,
+  ApiBranch,
+  ApiOvertimePeriod,
+  ApiWorkSchedule,
+  ApiEmployee,
+  ApiDepartment,
+  ApiAttendanceRuleChange,
+} from '@/lib/api'
+import { GraceOverridesNote } from '@/components/GraceOverridesNote'
 import {
   Calendar,
   Plus,
@@ -27,7 +47,7 @@ import {
   Clock,
   Sun,
   Moon,
-  ArrowLeftRight,
+  RotateCcw,
   Info,
   ToggleLeft,
   ToggleRight,
@@ -44,58 +64,48 @@ import {
 // مفاتيح إعدادات العمل الإضافي (الأوفرتايم) — config حقيقي يُدار عبر updateConfig
 const OVERTIME_ENABLED_KEY = 'overtime.enabled'
 const OVERTIME_THRESHOLD_KEY = 'overtime.detection_threshold_hours'
-const OVERTIME_CONFIRM_KEY = 'overtime.biometric_requires_confirmation'
+const OVERTIME_EARLY_KEY = 'overtime.allow_early_overtime'
+const OVERTIME_NUMBERS = [
+  { key: 'overtime.rounding_minutes', label: 'وحدة التقريب للأسفل', unit: 'دقيقة', min: 1, max: 1440, integer: true, hint: 'مثلًا: كل 15 دقيقة؛ 155 دقيقة تصبح 150 دقيقة.' },
+  { key: 'overtime.request_backdate_days', label: 'حد تقديم الطلب بأثر رجعي', unit: 'يوم', min: 0, max: 2147483647, integer: true, hint: 'صفر يسمح بيوم التقديم فقط للطلبات السابقة.' },
+  { key: 'overtime.max_closed_periods', label: 'أقصى فترات مالية مقفلة', unit: 'فترة', min: 0, max: 2147483647, integer: true, hint: 'صفر يمنع التقديم عن فترة مقفلة. يسري الأشد بين هذا الحد وحد الأيام.' },
+  { key: 'overtime.max_hours_per_day', label: 'سقف الإضافي اليومي', unit: 'ساعة', min: 0, max: 24, integer: false, hint: 'صفر = بلا حد. ما يتجاوز السقف يُخفض مع إظهار المدة الأصلية.' },
+  { key: 'overtime.max_hours_per_week', label: 'سقف الإضافي الأسبوعي', unit: 'ساعة', min: 0, max: 168, integer: false, hint: 'صفر = بلا حد. تجاوز السقف يمنع الاعتماد.' },
+  { key: 'overtime.max_hours_per_month', label: 'سقف الإضافي الشهري', unit: 'ساعة', min: 0, max: 744, integer: false, hint: 'صفر = بلا حد. تجاوز السقف يمنع الاعتماد.' },
+] as const
+const OVERTIME_EDIT_KEYS = [OVERTIME_ENABLED_KEY, OVERTIME_THRESHOLD_KEY,
+  ...OVERTIME_NUMBERS.map(field => field.key), OVERTIME_EARLY_KEY]
+const localToday = () => new Date().toLocaleDateString('en-CA')
+const flexEndTime = (start: string, minutes: number) => {
+  const [hours, mins] = start.split(':').map(Number)
+  const total = hours * 60 + mins + minutes
+  if (!Number.isFinite(total)) return '—'
+  return `${String(Math.floor(total / 60) % 24).padStart(2, '0')}:${String(total % 60).padStart(2, '0')}${total >= 1440 ? ' (+1 يوم)' : ''}`
+}
 
-// أيام الأسبوع
+// أيام الأسبوع — code = رمز اليوم في weekendDays بكتالوج جداول العمل
 const weekDays = [
-  { key: 'sunday', name: 'الأحد', shortName: 'س' },
-  { key: 'monday', name: 'الاثنين', shortName: 'ن' },
-  { key: 'tuesday', name: 'الثلاثاء', shortName: 'ث' },
-  { key: 'wednesday', name: 'الأربعاء', shortName: 'ر' },
-  { key: 'thursday', name: 'الخميس', shortName: 'خ' },
-  { key: 'friday', name: 'الجمعة', shortName: 'ج' },
-  { key: 'saturday', name: 'السبت', shortName: 'س' },
+  { key: 'sunday', code: 'SUN', name: 'الأحد', shortName: 'ح' },
+  { key: 'monday', code: 'MON', name: 'الاثنين', shortName: 'ن' },
+  { key: 'tuesday', code: 'TUE', name: 'الثلاثاء', shortName: 'ث' },
+  { key: 'wednesday', code: 'WED', name: 'الأربعاء', shortName: 'ر' },
+  { key: 'thursday', code: 'THU', name: 'الخميس', shortName: 'خ' },
+  { key: 'friday', code: 'FRI', name: 'الجمعة', shortName: 'ج' },
+  { key: 'saturday', code: 'SAT', name: 'السبت', shortName: 'س' },
 ]
 
-// أنواع القواعد
-const ruleTypes = [
-  { id: 'off_to_work', name: 'تحويل إجازة ← دوام', color: 'bg-green-500', icon: Sun },
-  { id: 'work_to_off', name: 'تحويل دوام ← إجازة', color: 'bg-red-500', icon: Moon },
-  { id: 'change_shift', name: 'تغيير الوردية', color: 'bg-blue-500', icon: ArrowLeftRight },
-  { id: 'half_day', name: 'نصف يوم', color: 'bg-orange-500', icon: Clock },
-]
-
-// مواقع اليوم في الفترة
-const dayPositions = [
-  { id: 'first', name: 'أول' },
-  { id: 'second', name: 'ثاني' },
-  { id: 'third', name: 'ثالث' },
-  { id: 'fourth', name: 'رابع' },
-  { id: 'last', name: 'آخر' },
-  { id: 'every', name: 'كل' },
-]
-
-// الفترات الزمنية
-const timePeriods = [
-  { id: 'week', name: 'الأسبوع' },
-  { id: 'month', name: 'الشهر' },
-  { id: 'quarter', name: 'الربع' },
-  { id: 'year', name: 'السنة' },
-  { id: 'ramadan', name: 'رمضان' },
-  { id: 'hijri_month', name: 'الشهر الهجري' },
-]
-
-// الورديات المتاحة
-const availableShifts = [
-  { id: 'default', name: 'الوردية الافتراضية', time: '08:00 - 17:00' },
-  { id: 'morning', name: 'الوردية الصباحية', time: '07:00 - 15:00' },
-  { id: 'evening', name: 'الوردية المسائية', time: '14:00 - 22:00' },
-  { id: 'night', name: 'الوردية الليلية', time: '22:00 - 06:00' },
-  { id: 'flexible', name: 'الدوام المرن', time: '08:00 - 16:00' },
-  { id: 'ramadan', name: 'وردية رمضان', time: '10:00 - 15:00' },
-  { id: 'half_morning', name: 'نصف يوم صباحي', time: '08:00 - 12:00' },
-  { id: 'half_evening', name: 'نصف يوم مسائي', time: '13:00 - 17:00' },
-]
+// weekendDays ('FRI,SAT') ⇄ رموز أيام الراحة — '' = دوام 7 أيام
+const parseWeekend = (weekendDays?: string | null): string[] =>
+  String(weekendDays ?? '')
+    .split(',')
+    .map((s) => s.trim().toUpperCase())
+    .filter(Boolean)
+// بترتيب الأسبوع (الأحد أولاً) حتى تبقى القيمة ثابتة كما في البذرة ('FRI,SAT')
+const weekendString = (offDays: string[]): string =>
+  weekDays
+    .filter((d) => offDays.includes(d.code))
+    .map((d) => d.code)
+    .join(',')
 
 // ===== القواعد الاستثنائية (backend حقيقي عبر /attendance/schedule-rules) =====
 // خيارات النماذج (select) بالعربية
@@ -184,129 +194,33 @@ function overtimePeriodSentence(
   return `من ${p.fromDate || '—'} إلى ${p.toDate || '—'} — ${OT_EFFECT_VERB_AR[p.effect]} ${branchPhrase}`
 }
 
-// نوع القاعدة
-interface WorkRule {
-  id: string
-  description: string
-  type: 'off_to_work' | 'work_to_off' | 'change_shift' | 'half_day'
-  isActive: boolean
-  conditions: {
-    dayOfWeek: string[]
-    position: string
-    period: string
-    specificDate?: string
-    dateRange?: { from: string; to: string }
-  }
-  result: {
-    shiftId?: string
-    isHoliday?: boolean
-    holidayName?: string
-  }
-  priority: number
-}
-
-// نوع جدول العمل
-interface WorkSchedule {
-  id: string
-  name: string
-  description: string
-  color: string
-  isDefault: boolean
-  workDays: { [key: string]: boolean }
-  workHours: {
-    start: string
-    end: string
-    breakStart: string
-    breakEnd: string
-  }
-  rules: WorkRule[]
-  employeeCount: number
-}
-
-// الألوان المتاحة للجداول
+// ألوان الجداول بالفهرس بين الجداول النشطة — لا يخزّن السيرفر لوناً (تمييز بصري
+// فقط، بنفس ترتيب منتقي الجدول في نموذج الموظف)، والمعطَّل رمادي
 const scheduleColors = [
-  { id: 'blue', name: 'أزرق', class: 'bg-blue-500' },
-  { id: 'green', name: 'أخضر', class: 'bg-green-500' },
-  { id: 'purple', name: 'بنفسجي', class: 'bg-purple-500' },
-  { id: 'orange', name: 'برتقالي', class: 'bg-orange-500' },
-  { id: 'pink', name: 'وردي', class: 'bg-pink-500' },
-  { id: 'teal', name: 'تركوازي', class: 'bg-teal-500' },
-  { id: 'indigo', name: 'نيلي', class: 'bg-indigo-500' },
-  { id: 'red', name: 'أحمر', class: 'bg-red-500' },
-]
-
-// الجداول الافتراضية
-const initialSchedules: WorkSchedule[] = [
-  {
-    id: '1',
-    name: 'الجدول الأساسي',
-    description: 'جمعة وسبت إجازة',
-    color: 'blue',
-    isDefault: true,
-    workDays: {
-      sunday: true,
-      monday: true,
-      tuesday: true,
-      wednesday: true,
-      thursday: true,
-      friday: false,
-      saturday: false,
-    },
-    workHours: {
-      start: '08:00',
-      end: '17:00',
-      breakStart: '12:00',
-      breakEnd: '13:00',
-    },
-    rules: [
-      {
-        id: '1',
-        description: 'آخر سبت في الشهر - دوام رسمي',
-        type: 'off_to_work',
-        isActive: true,
-        conditions: {
-          dayOfWeek: ['saturday'],
-          position: 'last',
-          period: 'month',
-        },
-        result: {
-          shiftId: 'default',
-        },
-        priority: 1,
-      },
-    ],
-    employeeCount: 45,
-  },
-  {
-    id: '2',
-    name: 'جدول السبت فقط',
-    description: 'السبت فقط إجازة - الجمعة دوام',
-    color: 'green',
-    isDefault: false,
-    workDays: {
-      sunday: true,
-      monday: true,
-      tuesday: true,
-      wednesday: true,
-      thursday: true,
-      friday: true,
-      saturday: false,
-    },
-    workHours: {
-      start: '08:00',
-      end: '16:00',
-      breakStart: '12:00',
-      breakEnd: '12:30',
-    },
-    rules: [],
-    employeeCount: 23,
-  },
+  'bg-blue-500',
+  'bg-green-500',
+  'bg-purple-500',
+  'bg-orange-500',
+  'bg-pink-500',
+  'bg-teal-500',
+  'bg-indigo-500',
+  'bg-red-500',
 ]
 
 export default function WorkDaysSettingsPage() {
-  const [schedules, setSchedules] = useState<WorkSchedule[]>(initialSchedules)
-  const [selectedSchedule, setSelectedSchedule] = useState<WorkSchedule | null>(initialSchedules[0])
-  const [hasChanges, setHasChanges] = useState(false)
+  // ===== جداول العمل (كتالوج work-schedules الحقيقي + عدد المُسندين من الخادم) =====
+  const [schedules, setSchedules] = useState<ApiWorkSchedule[]>([])
+  const [schedulesLoading, setSchedulesLoading] = useState(true)
+  const [schedulesError, setSchedulesError] = useState<string | null>(null)
+  const [scheduleNotice, setScheduleNotice] = useState<string | null>(null)
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [scheduleBusy, setScheduleBusy] = useState(false)
+  const [scheduleAction, setScheduleAction] = useState<{ title: string; description: string; run: (change: ApiAttendanceRuleChange) => Promise<void> } | null>(null)
+  // مسودة أيام الراحة للجدول المختار — تُحفظ بزر «حفظ» (الحفظ يعيد احتساب أيام موظفيه)
+  const [draftOff, setDraftOff] = useState<string[] | null>(null)
+  const [daysError, setDaysError] = useState<string | null>(null)
+  // الإسناد تعديل لبيانات الموظفين — يلزمه employees.edit فوق صلاحية الشاشة
+  const canAssign = can('employees.edit')
   const [config, setConfig] = useState<Array<{ key: string; value: string }>>([])
   const [configLoading, setConfigLoading] = useState(true)
   const [configError, setConfigError] = useState<string | null>(null)
@@ -315,9 +229,14 @@ export default function WorkDaysSettingsPage() {
   const [otSaving, setOtSaving] = useState(false)
   const [otSaved, setOtSaved] = useState(false)
   const [otError, setOtError] = useState<string | null>(null)
+  const [canEditOvertime, setCanEditOvertime] = useState(false)
 
   // ===== القواعد الاستثنائية (backend حقيقي) =====
   const [scheduleRules, setScheduleRules] = useState<ApiScheduleRule[]>([])
+  const [calendarRuleAction, setCalendarRuleAction] = useState<{ rule: ApiScheduleRule; remove: boolean } | null>(null)
+  const [calendarScopeId, setCalendarScopeId] = useState('')
+  const [calendarRefresh, setCalendarRefresh] = useState(0)
+  const canEditCalendarRule = (rule: ApiScheduleRule) => can('attendance.manage') && calendarScopeWritable(rule.branchId == null ? 'GLOBAL' : 'BRANCH', rule.branchId ?? 0)
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [rulesLoading, setRulesLoading] = useState(true)
   const [rulesError, setRulesError] = useState<string | null>(null)
@@ -376,27 +295,30 @@ export default function WorkDaysSettingsPage() {
   }
 
   // تفعيل/تعطيل قاعدة
-  const toggleScheduleRule = async (rule: ApiScheduleRule) => {
+  const toggleScheduleRule = async (rule: ApiScheduleRule, calendarChange: PayrollCalendarChange, context: PayrollCalendarContext) => {
     setRuleBusyId(rule.id)
     try {
-      await updateScheduleRule(rule.id, { isActive: !rule.isActive })
+      await updateScheduleRule(rule.id, { ...calendarRuleToggle(context, rule.id, rule.isActive), calendarChange })
       await reloadRules()
+      setCalendarRefresh(value => value + 1)
     } catch (err: any) {
       setRulesError(err.message)
+      throw err
     } finally {
       setRuleBusyId(null)
     }
   }
 
   // حذف قاعدة
-  const removeScheduleRule = async (rule: ApiScheduleRule) => {
-    if (!confirm(`هل أنت متأكد من حذف القاعدة «${rule.name}»؟`)) return
+  const removeScheduleRule = async (rule: ApiScheduleRule, calendarChange: PayrollCalendarChange) => {
     setRuleBusyId(rule.id)
     try {
-      await deleteScheduleRule(rule.id)
+      await deleteScheduleRule(rule.id, calendarChange)
       await reloadRules()
+      setCalendarRefresh(value => value + 1)
     } catch (err: any) {
       setRulesError(err.message)
+      throw err
     } finally {
       setRuleBusyId(null)
     }
@@ -448,12 +370,13 @@ export default function WorkDaysSettingsPage() {
 
   useEffect(() => {
     const loadConfig = async () => {
+      setCanEditOvertime(can('settings.manage'))
       try {
         const cfg = await fetchConfig()
         setConfig(cfg)
         // تعبئة قيم الأوفرتايم القابلة للتعديل من الخادم
         const otMap: Record<string, string> = {}
-        for (const k of [OVERTIME_ENABLED_KEY, OVERTIME_THRESHOLD_KEY, OVERTIME_CONFIRM_KEY]) {
+        for (const k of OVERTIME_EDIT_KEYS) {
           otMap[k] = cfg.find((c) => c.key === k)?.value ?? ''
         }
         setOtValues(otMap)
@@ -477,105 +400,158 @@ export default function WorkDaysSettingsPage() {
 
   // حفظ إعدادات الأوفرتايم — نفس نمط updateConfig المعتمد في بقية الإعدادات
   const saveOvertime = async () => {
+    if (otSaving || !canEditOvertime) return
+    const values = { ...otValues }
+    const fields = [{ key: OVERTIME_THRESHOLD_KEY, label: 'عتبة الإضافي', min: 0, max: 24, integer: false }, ...OVERTIME_NUMBERS]
+    for (const field of fields) {
+      const value = Number(values[field.key])
+      if (!values[field.key]?.trim() || !Number.isFinite(value) || value < field.min || value > field.max ||
+        (field.integer ? !Number.isSafeInteger(value) : Math.abs(value * 60 - Math.round(value * 60)) > 1e-8)) {
+        setOtError(`${field.label}: أدخل ${field.integer ? 'عددًا صحيحًا' : 'عدد ساعات يمثل دقائق صحيحة'} من ${field.min} إلى ${field.max}`)
+        return
+      }
+    }
+    if (![OVERTIME_ENABLED_KEY, OVERTIME_EARLY_KEY].every(key => ['true', 'false'].includes(values[key]))) {
+      setOtError('حالة فتح الإضافي أو احتساب الحضور المبكر غير محملة بصورة صحيحة'); return
+    }
+    const changed = OVERTIME_EDIT_KEYS.filter(key => configValue(key) !== values[key])
+    let savedCount = 0
     setOtSaving(true)
     setOtSaved(false)
     setOtError(null)
     try {
-      await updateConfig(OVERTIME_ENABLED_KEY, otValues[OVERTIME_ENABLED_KEY] ?? 'false')
-      await updateConfig(OVERTIME_THRESHOLD_KEY, otValues[OVERTIME_THRESHOLD_KEY] ?? '0')
-      await updateConfig(OVERTIME_CONFIRM_KEY, otValues[OVERTIME_CONFIRM_KEY] ?? 'false')
-      // مزامنة العرض المحلي مع ما حُفِظ
-      setConfig((prev) => {
-        const next = [...prev]
-        for (const k of [OVERTIME_ENABLED_KEY, OVERTIME_THRESHOLD_KEY, OVERTIME_CONFIRM_KEY]) {
-          const i = next.findIndex((c) => c.key === k)
-          const value = otValues[k] ?? ''
-          if (i >= 0) next[i] = { key: k, value }
-          else next.push({ key: k, value })
-        }
-        return next
-      })
+      // نتحقق من المجموعة قبل الكتابة؛ الواجهة الحالية تحفظ كل مفتاح بنداء مستقل.
+      for (const key of changed) {
+        await updateConfig(key, values[key])
+        savedCount++
+        setConfig(previous => previous.some(row => row.key === key)
+          ? previous.map(row => row.key === key ? { key, value: values[key] } : row)
+          : [...previous, { key, value: values[key] }])
+      }
+      setOtValues(values)
       setOtSaved(true)
     } catch (err: any) {
-      setOtError(err.message)
+      setOtError(`${savedCount ? `حُفظ ${savedCount} من ${changed.length} إعدادات قبل توقف الحفظ. ` : ''}${err.message}`)
     } finally {
       setOtSaving(false)
     }
   }
 
   const otEnabled = (otValues[OVERTIME_ENABLED_KEY] ?? '') === 'true'
-  const otConfirm = (otValues[OVERTIME_CONFIRM_KEY] ?? '') === 'true'
+  const otEarlyEnabled = otValues[OVERTIME_EARLY_KEY] === 'true'
+  const overtimeMonthlyDays = Number(configValue('payroll.monthly_days'))
+  const overtimeDailyHours = Number(configValue('payroll.daily_hours'))
+  const overtimeDivisorsValid = Number.isFinite(overtimeMonthlyDays) && overtimeMonthlyDays > 0 && Number.isFinite(overtimeDailyHours) && overtimeDailyHours > 0
   const [showAddSchedule, setShowAddSchedule] = useState(false)
   const [showEditSchedule, setShowEditSchedule] = useState(false)
   const [showAssignModal, setShowAssignModal] = useState(false)
 
-  // تبديل يوم العمل
-  const toggleWorkDay = (day: string) => {
-    if (!selectedSchedule) return
-
-    const updatedSchedule = {
-      ...selectedSchedule,
-      workDays: {
-        ...selectedSchedule.workDays,
-        [day]: !selectedSchedule.workDays[day],
-      },
+  // تحميل جداول العمل من الكتالوج — keepId: الجدول المراد إبقاؤه مختاراً (null = الافتراضي)
+  const reloadSchedules = async (keepId?: number | null) => {
+    try {
+      const rows = await fetchCatalog<ApiWorkSchedule>('work-schedules')
+      setSchedules(rows)
+      setSchedulesError(null)
+      setSelectedId((prev) => {
+        const want = keepId !== undefined ? keepId : prev
+        if (want != null && rows.some((s) => s.id === want)) return want
+        return (rows.find((s) => s.isDefault) ?? rows[0])?.id ?? null
+      })
+    } catch (err: any) {
+      setSchedulesError(err.message)
+    } finally {
+      setSchedulesLoading(false)
     }
-
-    setSelectedSchedule(updatedSchedule)
-    setSchedules(prev =>
-      prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
-    )
-    setHasChanges(true)
   }
 
-  // حذف جدول
-  const deleteSchedule = (scheduleId: string) => {
-    const schedule = schedules.find(s => s.id === scheduleId)
-    if (!schedule) return
+  useEffect(() => {
+    reloadSchedules()
+  }, [])
 
-    if (schedule.isDefault) {
-      alert('لا يمكن حذف الجدول الافتراضي')
+  const selectedSchedule = schedules.find((s) => s.id === selectedId) ?? null
+  const savedOff = parseWeekend(selectedSchedule?.weekendDays)
+  const offDays = draftOff ?? savedOff
+  const daysDirty = draftOff !== null && weekendString(draftOff) !== weekendString(savedOff)
+
+  // لون الجدول: بترتيبه بين الجداول النشطة (كنموذج الموظف)، والمعطَّل رمادي
+  const colorOf = (s: ApiWorkSchedule) => {
+    if (!s.isActive) return 'bg-gray-400'
+    const idx = schedules.filter((x) => x.isActive).findIndex((x) => x.id === s.id)
+    return scheduleColors[Math.max(idx, 0) % scheduleColors.length]
+  }
+
+  // اختيار جدول — مع تنبيه لو فيه تعديلات أيام غير محفوظة
+  const selectSchedule = (id: number) => {
+    if (id === selectedId) return
+    if (daysDirty && !confirm('لديك تعديلات غير محفوظة على أيام العمل — تجاهلها؟')) return
+    setDraftOff(null)
+    setDaysError(null)
+    setSelectedId(id)
+  }
+
+  // تبديل يوم بين دوام وراحة (مسودة حتى الحفظ)
+  const toggleWorkDay = (code: string) => {
+    if (!selectedSchedule) return
+    const next = offDays.includes(code) ? offDays.filter((c) => c !== code) : [...offDays, code]
+    if (next.length >= weekDays.length) {
+      setDaysError('جدول العمل يحتاج يوم دوام واحداً على الأقل')
       return
     }
-
-    if (schedule.employeeCount > 0) {
-      if (!confirm(`هذا الجدول مرتبط بـ ${schedule.employeeCount} موظف. هل تريد حذفه؟ سيتم نقل الموظفين للجدول الافتراضي.`)) {
-        return
-      }
-    } else {
-      if (!confirm('هل أنت متأكد من حذف هذا الجدول؟')) {
-        return
-      }
-    }
-
-    setSchedules(prev => prev.filter(s => s.id !== scheduleId))
-    if (selectedSchedule?.id === scheduleId) {
-      setSelectedSchedule(schedules.find(s => s.isDefault) || schedules[0])
-    }
-    setHasChanges(true)
+    setDaysError(null)
+    setDraftOff(next)
   }
 
-  // تعيين كافتراضي
-  const setAsDefault = (scheduleId: string) => {
-    setSchedules(prev =>
-      prev.map(s => ({
-        ...s,
-        isDefault: s.id === scheduleId,
-      }))
-    )
-    setHasChanges(true)
+  // يراجع المستخدم التاريخ والسبب قبل حفظ نسخة أيام العمل.
+  const saveWorkDays = () => {
+    if (!selectedSchedule || draftOff === null) return
+    const weekendDays = weekendString(draftOff)
+    setScheduleAction({ title: `حفظ أيام جدول «${selectedSchedule.name}»`,
+      description: `أيام الراحة: ${weekDays.filter(day => draftOff.includes(day.code)).map(day => day.name).join('، ') || 'لا توجد'}. تُحفظ نسخة مؤرخة وتبقى الأيام السابقة بإعداداتها.`,
+      run: async change => {
+        await updateCatalogItem('work-schedules', selectedSchedule.id, { weekendDays, ...change })
+        setDraftOff(null); setDaysError(null)
+        await reloadSchedules(selectedSchedule.id)
+        setScheduleNotice(`حُفظت أيام العمل من ${change.effectiveFrom}`)
+      } })
   }
 
-  // الحصول على لون الجدول
-  const getScheduleColor = (colorId: string) => {
-    return scheduleColors.find(c => c.id === colorId) || scheduleColors[0]
+  // حذف جدول — الافتراضي لا يُحذف، وموظفوه يُنقلون للجدول الافتراضي في نفس العملية
+  const removeSchedule = (schedule: ApiWorkSchedule) => {
+    if (schedule.isDefault) return
+    const count = schedule.employeeCount ?? 0
+    const def = schedules.find((s) => s.isDefault && s.isActive && s.id !== schedule.id)
+    if (count > 0 && !def) {
+      setSchedulesError(
+        'لا يوجد جدول افتراضي نشط يُنقل إليه موظفو الجدول — عيّن جدولاً افتراضياً أولاً'
+      )
+      return
+    }
+    setScheduleAction({ title: `تعطيل جدول «${schedule.name}»`,
+      description: count > 0 && def ? `سيُنقل ${count} موظف إلى «${def.name}» اعتبارًا من التاريخ المحدد. يبقى الجدول وتاريخه محفوظين.` : 'يتوقف استخدام الجدول من تاريخ السريان، ويبقى سجل نسخه وأيامه السابقة محفوظًا.',
+      run: async change => {
+        const result = await deleteWorkSchedule(schedule.id, count > 0 ? def?.id : undefined, change)
+        setDraftOff(null); setDaysError(null)
+        await reloadSchedules(schedule.id)
+        setScheduleNotice(`حُفظ تعطيل «${schedule.name}» من ${change.effectiveFrom}${result.moved ? ` ونقل ${result.moved} موظف` : ''}`)
+      } })
+  }
+
+  // تعيين كافتراضي — الخادم يُسقط العلم عن غيره ويعيد احتساب أيام «الجدول الافتراضي»
+  const makeDefault = (schedule: ApiWorkSchedule) => {
+    setScheduleAction({ title: `تعيين «${schedule.name}» كافتراضي`,
+      description: 'يحدد الدوام لمن ليس لديه جدول خاص أو وردية، اعتبارًا من تاريخ السريان. يُحفظ انتقال الاختيار الافتراضي في تاريخ الجداول.',
+      run: async change => {
+        await updateCatalogItem('work-schedules', schedule.id, { isDefault: true, ...change })
+        await reloadSchedules(schedule.id)
+        setScheduleNotice(`حُفظ الجدول الافتراضي من ${change.effectiveFrom}`)
+      } })
   }
 
   // إحصائيات
-  const totalEmployees = schedules.reduce((sum, s) => sum + s.employeeCount, 0)
+  const assignedTotal = schedules.reduce((sum, s) => sum + (s.employeeCount ?? 0), 0)
   const activeRulesCount = scheduleRules.filter(r => r.isActive).length
   const workDaysCount = selectedSchedule
-    ? Object.values(selectedSchedule.workDays).filter(Boolean).length
+    ? weekDays.filter((d) => !offDays.includes(d.code)).length
     : 0
 
   return (
@@ -588,16 +564,16 @@ export default function WorkDaysSettingsPage() {
             <p className="text-gray-500 mt-1">إدارة جداول العمل المختلفة وتعيينها للموظفين</p>
           </div>
           <div className="flex items-center gap-3">
-            {hasChanges && (
+            {daysDirty && (
               <span className="flex items-center gap-2 text-warning-600 bg-warning-50 px-3 py-2 rounded-lg">
                 <AlertCircle size={18} />
-                أيام العمل تُفعَّل مع محرك الجدولة
+                تعديلات أيام العمل لم تُحفظ
               </span>
             )}
             <button
               disabled
               className="btn-primary flex items-center gap-2 opacity-50 cursor-not-allowed"
-              title="أيام العمل تُفعَّل مع محرك الجدولة — الحفظ في مرحلة لاحقة"
+              title="تعديلات أيام العمل لم تُحفظ — الحفظ في مرحلة لاحقة"
             >
               <Save size={18} />
               حفظ الإعدادات
@@ -622,7 +598,7 @@ export default function WorkDaysSettingsPage() {
             </div>
             <div>
               <p className="text-sm text-gray-500">إجمالي الموظفين</p>
-              <p className="text-2xl font-bold text-success-600">{totalEmployees}</p>
+              <p className="text-2xl font-bold text-success-600">{assignedTotal}</p>
             </div>
           </div>
           <div className="card flex items-center gap-4">
@@ -679,11 +655,13 @@ export default function WorkDaysSettingsPage() {
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <div className="flex items-center gap-2 mb-2">
                     <Clock size={16} className="text-gray-400" />
-                    <span className="text-sm text-gray-600">سماحية التأخير</span>
+                    <span className="text-sm text-gray-600">سماحية التأخير العامة</span>
                   </div>
                   <p className="text-lg font-bold text-gray-800">
                     {configValue('attendance.grace_minutes') ?? '—'} دقيقة
                   </p>
+                  {/* العامة ليست الساري على الجميع: سماحية الوردية تغلبها */}
+                  <GraceOverridesNote globalGrace={configValue('attendance.grace_minutes')} />
                 </div>
               </div>
             </div>
@@ -713,7 +691,7 @@ export default function WorkDaysSettingsPage() {
                   )}
                   <button
                     onClick={saveOvertime}
-                    disabled={otSaving}
+                    disabled={otSaving || !canEditOvertime}
                     className="btn-primary flex items-center gap-2 text-sm py-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     <Save size={16} />
@@ -733,13 +711,14 @@ export default function WorkDaysSettingsPage() {
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <div className="flex items-center justify-between gap-4">
                     <div>
-                      <p className="font-medium text-gray-800">احتساب الأوفرتايم مفعّل</p>
+                      <p className="font-medium text-gray-800">الاكتشاف التلقائي خارج الفترات المحددة</p>
                       <p className="text-xs text-gray-500 mt-0.5">
-                        المفتاح الرئيسي لفتح أو إغلاق احتساب العمل الإضافي بالكامل
+                        يُستخدم عندما لا تغطي اليوم نافذة فتح أو إغلاق محددة
                       </p>
                     </div>
                     <button
                       type="button"
+                      disabled={otSaving || !canEditOvertime}
                       onClick={() =>
                         setOtValue(OVERTIME_ENABLED_KEY, otEnabled ? 'false' : 'true')
                       }
@@ -756,7 +735,7 @@ export default function WorkDaysSettingsPage() {
                   {!otEnabled && (
                     <p className="flex items-center gap-2 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-3">
                       <AlertCircle size={14} className="shrink-0" />
-                      الأوفرتايم مقفول — لن يُحتسب أي عمل إضافي مهما بقي الموظف
+                      الاكتشاف التلقائي متوقف خارج الفترات المفتوحة. يظل طلب الموظف متاحًا بأدلة وسبب ودورة اعتماد.
                     </p>
                   )}
                 </div>
@@ -768,41 +747,60 @@ export default function WorkDaysSettingsPage() {
                   </label>
                   <input
                     type="number"
-                    step="0.25"
+                    step="any"
                     min="0"
+                    max="24"
+                    disabled={otSaving || !canEditOvertime}
                     dir="ltr"
                     className="input w-40"
                     value={otValues[OVERTIME_THRESHOLD_KEY] ?? ''}
                     onChange={(e) => setOtValue(OVERTIME_THRESHOLD_KEY, e.target.value)}
                   />
                   <p className="text-xs text-gray-500 mt-2">
-                    لا يُحتسب أوفرتايم إلا بعد تجاوز هذه المدة بعد نهاية الوردية
+                    يبدأ الاحتساب عند بلوغ العتبة قبل التقريب. أدخل ساعات تمثل دقائق صحيحة، مثل 0.5 ساعة = 30 دقيقة. تُستخدم عتبة دوام الموظف بدلًا منها إن كانت محددة.
                   </p>
                 </div>
 
-                {/* يتطلب تأكيد/اعتماد قبل الاحتساب */}
+                {/* ضوابط التقديم والتقريب والسقوف؛ القيم من إعدادات الخادم */}
+                <fieldset disabled={otSaving || !canEditOvertime} className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {OVERTIME_NUMBERS.map(field => <div key={field.key} className="p-4 bg-gray-50 rounded-xl">
+                    <label htmlFor={field.key} className="block font-medium text-gray-800 mb-2">{field.label} <span className="text-sm text-gray-500">({field.unit})</span></label>
+                    <input id={field.key} type="number" dir="ltr" min={field.min} max={field.max}
+                      step={field.integer ? 1 : 'any'} value={otValues[field.key] ?? ''}
+                      onChange={event => setOtValue(field.key, event.target.value)} className="input w-full disabled:opacity-60" />
+                    <p className="text-xs text-gray-500 mt-2">{field.hint}{!field.integer ? ' تُقبل ساعات تمثل عدد دقائق صحيحًا.' : ''}</p>
+                  </div>)}
+                </fieldset>
+
+                <div className="p-4 bg-gray-50 rounded-xl">
+                  <label className="flex items-start gap-3">
+                    <input type="checkbox" checked={otEarlyEnabled} disabled={otSaving || !canEditOvertime}
+                      onChange={event => setOtValue(OVERTIME_EARLY_KEY, String(event.target.checked))}
+                      className="w-4 h-4 rounded mt-1 text-primary-600" />
+                    <span><span className="block font-medium text-gray-800">احتساب العمل قبل بداية الدوام ضمن الإضافي</span>
+                      <span className="block text-xs text-gray-500 mt-1">عند التفعيل يدخل الوقت المبكر المثبت في حساب الإضافي، مع بقاء العتبة والتقريب والسقوف ودورة الاعتماد.</span></span>
+                  </label>
+                </div>
+
+                <div className="rounded-xl bg-indigo-50 border border-indigo-100 p-4 space-y-2 text-sm">
+                  <p className="font-semibold text-indigo-900">معادلة أجر الساعة</p>
+                  <p className="text-indigo-800">إجمالي الراتب ÷ أيام الشهر ÷ ساعات العمل اليومية المعيارية</p>
+                  <p className="text-gray-700">يُؤخذ إجمالي الراتب تلقائيًا من ملف الموظف، شاملًا الأساسي وجميع البدلات، قبل الخصومات.</p>
+                  {overtimeDivisorsValid ? <p className="text-gray-700">أيام الشهر: {overtimeMonthlyDays} · ساعات اليوم: {overtimeDailyHours} <span className="text-xs text-gray-500">(من إعدادات الرواتب)</span></p>
+                    : <p className="text-amber-800">أيام الشهر أو ساعات اليوم غير محملة؛ راجع إعدادات الرواتب قبل اعتماد الإضافي.</p>}
+                  <p className="text-xs text-gray-600">قيمة الإضافي = أجر الساعة × الساعات المعتمدة × معامل نوع اليوم. تُثبت القيمة عند الاعتماد؛ التعديل لا يعيد تسعير المعتمد سابقًا.</p>
+                </div>
+
+                {/* دورة الاعتماد إلزامية لكل إضافي جديد */}
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <div className="flex items-center justify-between gap-4">
                     <div>
-                      <p className="font-medium text-gray-800">يتطلب تأكيد/اعتماد</p>
-                      <p className="text-xs text-gray-500 mt-0.5">
-                        إن كان مفعّلاً: الأوفرتايم المكتشف يمر على اعتماد قبل احتسابه
-                      </p>
+                      <p className="font-medium text-gray-800">دورة الاعتماد قبل الصرف</p>
+                      <p className="text-xs text-gray-500 mt-0.5">كل إضافي جديد، مكتشف أو مطلوب من الموظف، ينتظر اكتمال خطوات اعتماده.</p>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() =>
-                        setOtValue(OVERTIME_CONFIRM_KEY, otConfirm ? 'false' : 'true')
-                      }
-                      className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors shrink-0 ${
-                        otConfirm
-                          ? 'bg-success-50 text-success-600 hover:bg-success-100'
-                          : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                      }`}
-                    >
-                      {otConfirm ? <ToggleRight size={22} /> : <ToggleLeft size={22} />}
-                      {otConfirm ? 'مطلوب' : 'غير مطلوب'}
-                    </button>
+                    <span className="flex items-center gap-2 px-3 py-2 rounded-lg bg-success-50 text-success-600 shrink-0">
+                      <CheckCircle size={20} /> مطلوبة دائمًا
+                    </span>
                   </div>
                 </div>
 
@@ -950,21 +948,24 @@ export default function WorkDaysSettingsPage() {
           )
         )}
 
-        {/* توضيح: ما هو فعلي وما هو للعرض فقط */}
+        {/* أولوية تعريف دوام اليوم ثم اختيار الموظف الفردي. */}
         <div className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-start gap-3">
           <Info size={20} className="text-amber-600 mt-0.5 shrink-0" />
           <div className="text-sm text-amber-800">
-            <p className="font-medium">عرض توضيحي:</p>
+            <p className="font-medium">إعدادات فعلية مؤرخة:</p>
             <p className="mt-1 leading-relaxed">
-              الجداول المسمّاة أدناه («الجدول الأساسي»، «جدول السبت فقط») وأزرار الأيام والمواعيد
-              فيها للتوضيح فقط ولا تؤثر على الحضور. أيام الراحة الأسبوعية ومواعيد الدوام الفعلية
-              تُحدَّد من الورديات (الجدول الأسبوعي لكل موظف). أمّا «القواعد الاستثنائية» بالأسفل فهي
-              <span className="font-medium"> فعّالة </span>
-              وتؤثر على احتساب الحضور فعلاً (مثل: تحويل آخر سبت في الشهر إلى دوام رسمي).
+              يُحدد دوام اليوم من التجاوز اليومي ثم الوردية الأسبوعية ثم جدول الموظف ثم الجدول الافتراضي.
+              مدة المرونة وساعات العمل من تعريف ذلك الدوام؛ واختيار الموظف يحسم تفعيلها فقط.
+              كل تعديل يحفظ تاريخ سريان وسببًا، وتبقى الفترات المالية المقفلة محمية.
             </p>
           </div>
         </div>
 
+        {schedulesLoading && <p>جارٍ تحميل جداول العمل…</p>}
+        {schedulesError && <p role="alert" className="p-3 bg-red-50 text-red-700">{schedulesError}</p>}
+        {scheduleNotice && <p role="status" className="p-3 bg-green-50 text-green-700">{scheduleNotice}</p>}
+        {daysError && <p role="alert" className="p-3 bg-red-50 text-red-700">{daysError}</p>}
+        {daysDirty && <button disabled={scheduleBusy} onClick={saveWorkDays} className="btn-primary">{scheduleBusy ? 'جارٍ الحفظ…' : 'حفظ أيام العمل'}</button>}
         <div className="grid grid-cols-12 gap-6">
           {/* قائمة الجداول */}
           <div className="col-span-4">
@@ -982,13 +983,13 @@ export default function WorkDaysSettingsPage() {
 
               <div className="space-y-3">
                 {schedules.map(schedule => {
-                  const color = getScheduleColor(schedule.color)
+                  const color = ({ class: colorOf(schedule) })
                   const isSelected = selectedSchedule?.id === schedule.id
 
                   return (
                     <div
                       key={schedule.id}
-                      onClick={() => setSelectedSchedule(schedule)}
+                      onClick={() => selectSchedule(schedule.id)}
                       className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
                         isSelected
                           ? 'border-primary-500 bg-primary-50'
@@ -1016,7 +1017,7 @@ export default function WorkDaysSettingsPage() {
                             </span>
                             <span className="flex items-center gap-1">
                               <Clock size={12} />
-                              {schedule.workHours.start} - {schedule.workHours.end}
+                              {schedule.startTime} - {schedule.endTime}
                             </span>
                           </div>
                         </div>
@@ -1028,7 +1029,7 @@ export default function WorkDaysSettingsPage() {
                           <div
                             key={day.key}
                             className={`w-8 h-8 rounded-lg flex items-center justify-center text-xs font-bold ${
-                              schedule.workDays[day.key]
+                              !parseWeekend(schedule.weekendDays).includes(day.code)
                                 ? `${color.class} text-white`
                                 : 'bg-gray-100 text-gray-400'
                             }`}
@@ -1052,7 +1053,7 @@ export default function WorkDaysSettingsPage() {
                 <div className="card">
                   <div className="flex items-center justify-between mb-6">
                     <div className="flex items-center gap-3">
-                      <div className={`w-12 h-12 ${getScheduleColor(selectedSchedule.color).class} rounded-xl flex items-center justify-center`}>
+                      <div className={`w-12 h-12 ${colorOf(selectedSchedule)} rounded-xl flex items-center justify-center`}>
                         <Calendar size={24} className="text-white" />
                       </div>
                       <div>
@@ -1065,10 +1066,12 @@ export default function WorkDaysSettingsPage() {
                           )}
                         </div>
                         <p className="text-gray-500">{selectedSchedule.description}</p>
+                        {selectedSchedule.attendanceRuleEffectiveFrom && <p className={`text-xs mt-1 ${selectedSchedule.attendanceRuleEffectiveFrom > localToday() ? 'text-amber-700' : 'text-gray-500'}`}>النسخة {selectedSchedule.attendanceRuleVersion} · تسري من {selectedSchedule.attendanceRuleEffectiveFrom}{selectedSchedule.attendanceRuleEffectiveFrom > localToday() ? ' — إعداد مستقبلي' : ''}</p>}
                       </div>
                     </div>
                     <div className="flex items-center gap-2">
                       <button
+                        disabled={!canAssign || scheduleBusy || !selectedSchedule.isActive}
                         onClick={() => setShowAssignModal(true)}
                         className="btn-primary flex items-center gap-2 text-sm py-2"
                       >
@@ -1077,7 +1080,7 @@ export default function WorkDaysSettingsPage() {
                       </button>
                       {!selectedSchedule.isDefault && (
                         <button
-                          onClick={() => setAsDefault(selectedSchedule.id)}
+                          onClick={() => makeDefault(selectedSchedule)}
                           className="btn-secondary text-sm py-2"
                         >
                           تعيين كافتراضي
@@ -1091,7 +1094,7 @@ export default function WorkDaysSettingsPage() {
                       </button>
                       {!selectedSchedule.isDefault && (
                         <button
-                          onClick={() => deleteSchedule(selectedSchedule.id)}
+                          onClick={() => removeSchedule(selectedSchedule)}
                           className="p-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100"
                         >
                           <Trash2 size={18} />
@@ -1108,7 +1111,7 @@ export default function WorkDaysSettingsPage() {
                         <span className="text-sm text-gray-600">ساعات العمل</span>
                       </div>
                       <p className="text-lg font-bold text-gray-800">
-                        {selectedSchedule.workHours.start} - {selectedSchedule.workHours.end}
+                        {selectedSchedule.startTime} - {selectedSchedule.endTime}
                       </p>
                     </div>
                     <div className="p-4 bg-gray-50 rounded-xl">
@@ -1117,36 +1120,40 @@ export default function WorkDaysSettingsPage() {
                         <span className="text-sm text-gray-600">وقت الاستراحة</span>
                       </div>
                       <p className="text-lg font-bold text-gray-800">
-                        {selectedSchedule.workHours.breakStart} - {selectedSchedule.workHours.breakEnd}
+                        تُضبط من سياسة الوردية
                       </p>
                     </div>
                   </div>
 
                   {/* أيام العمل */}
+                  <p className="mb-4 text-sm text-blue-800">
+                    {selectedSchedule.flexEnabled ? `مرونة مفعلة: ${selectedSchedule.startTime}–${flexEndTime(selectedSchedule.startTime, selectedSchedule.flexWindowMinutes ?? 0)}` : 'مرونة الحضور معطلة على الجدول'}
+                    {selectedSchedule.requiredWorkMinutes != null && ` · العمل المطلوب ${selectedSchedule.requiredWorkMinutes} دقيقة`}
+                  </p>
                   <div>
                     <h3 className="text-sm font-medium text-gray-600 mb-3">
                       أيام العمل
                       <span className="text-xs text-gray-400 mr-2">
-                        (عرض تجريبي — أيام العمل تُفعَّل مع محرك الجدولة)
+                        (تُطبق بعد الحفظ على حساب الحضور)
                       </span>
                     </h3>
                     <div className="flex items-center justify-center gap-3">
                       {weekDays.map(day => (
                         <button
                           key={day.key}
-                          onClick={() => toggleWorkDay(day.key)}
+                          onClick={() => toggleWorkDay(day.code)}
                           className={`w-16 h-20 rounded-2xl flex flex-col items-center justify-center gap-1 transition-all ${
-                            selectedSchedule.workDays[day.key]
-                              ? `${getScheduleColor(selectedSchedule.color).class} text-white shadow-lg`
+                            !offDays.includes(day.code)
+                              ? `${colorOf(selectedSchedule)} text-white shadow-lg`
                               : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
                           }`}
                         >
                           <span className="text-xl font-bold">{day.shortName}</span>
                           <span className="text-xs">{day.name}</span>
                           <div className={`w-5 h-5 rounded-full flex items-center justify-center ${
-                            selectedSchedule.workDays[day.key] ? 'bg-white/20' : 'bg-gray-200'
+                            !offDays.includes(day.code) ? 'bg-white/20' : 'bg-gray-200'
                           }`}>
-                            {selectedSchedule.workDays[day.key] ? (
+                            {!offDays.includes(day.code) ? (
                               <CheckCircle size={14} className="text-white" />
                             ) : (
                               <span className="text-gray-400 text-xs">✕</span>
@@ -1179,6 +1186,7 @@ export default function WorkDaysSettingsPage() {
                     </div>
                     <button
                       onClick={() => setShowAddScheduleRule(true)}
+                      disabled={!can('attendance.manage')}
                       className="btn-primary flex items-center gap-2"
                     >
                       <Plus size={18} />
@@ -1191,6 +1199,10 @@ export default function WorkDaysSettingsPage() {
                       {rulesError}
                     </div>
                   )}
+                  <div className="space-y-3 mb-4">
+                    <label className="label">نطاق التقويم<select className="input mt-1 max-w-sm" value={calendarScopeId} onChange={event => setCalendarScopeId(event.target.value)}><option value="">التقويم العام — كل الفروع</option>{branches.map(branch => <option key={branch.id} value={branch.id}>{branch.name}</option>)}</select></label>
+                    <CalendarScopeConfirmation key={`${calendarScopeId}:${calendarRefresh}`} scope={calendarScopeId ? 'BRANCH' : 'GLOBAL'} sourceId={Number(calendarScopeId) || 0} canConfirm={calendarScopeId ? (can('settings.manage') || can('org.manage')) && calendarScopeWritable('BRANCH', Number(calendarScopeId)) : can('settings.manage') && calendarScopeWritable('GLOBAL', 0)} disabled={!!calendarRuleAction || showAddScheduleRule} onConfirmed={reloadRules} />
+                  </div>
 
                   {rulesLoading ? (
                     <div className="flex items-center justify-center py-12">
@@ -1243,8 +1255,8 @@ export default function WorkDaysSettingsPage() {
                             </div>
                             <div className="flex items-center gap-2 flex-shrink-0">
                               <button
-                                onClick={() => toggleScheduleRule(rule)}
-                                disabled={busy}
+                                onClick={() => setCalendarRuleAction({ rule, remove: false })}
+                                disabled={busy || !canEditCalendarRule(rule)}
                                 className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors disabled:opacity-50 ${
                                   rule.isActive
                                     ? 'bg-success-50 text-success-600 hover:bg-success-100'
@@ -1255,12 +1267,12 @@ export default function WorkDaysSettingsPage() {
                                 {rule.isActive ? 'تعطيل' : 'تفعيل'}
                               </button>
                               <button
-                                onClick={() => removeScheduleRule(rule)}
-                                disabled={busy}
+                                onClick={() => setCalendarRuleAction({ rule, remove: true })}
+                                disabled={busy || !canEditCalendarRule(rule)}
                                 className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 transition-colors disabled:opacity-50"
                               >
                                 <Trash2 size={18} />
-                                حذف
+                                إيقاف من تاريخ
                               </button>
                             </div>
                           </div>
@@ -1299,48 +1311,18 @@ export default function WorkDaysSettingsPage() {
           </div>
         </div>
 
-        {/* Modal إضافة جدول */}
-        {showAddSchedule && (
-          <AddScheduleModal
-            onClose={() => setShowAddSchedule(false)}
-            onAdd={(schedule) => {
-              const newSchedule: WorkSchedule = {
-                ...schedule,
-                id: Date.now().toString(),
-                employeeCount: 0,
-                rules: [],
-              }
-              setSchedules(prev => [...prev, newSchedule])
-              setSelectedSchedule(newSchedule)
-              setHasChanges(true)
-              setShowAddSchedule(false)
-            }}
-          />
-        )}
-
-        {/* Modal تعديل جدول */}
-        {showEditSchedule && selectedSchedule && (
-          <EditScheduleModal
-            schedule={selectedSchedule}
-            onClose={() => setShowEditSchedule(false)}
-            onSave={(updated) => {
-              const updatedSchedule = { ...selectedSchedule, ...updated }
-              setSchedules(prev =>
-                prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
-              )
-              setSelectedSchedule(updatedSchedule)
-              setHasChanges(true)
-              setShowEditSchedule(false)
-            }}
-          />
-        )}
+        {showAddSchedule && <ScheduleModal onClose={() => setShowAddSchedule(false)} onSaved={async (id) => { await reloadSchedules(id); setShowAddSchedule(false) }} />}
+        {scheduleAction && <AttendanceRuleChangeModal title={scheduleAction.title} description={scheduleAction.description}
+          onClose={() => setScheduleAction(null)} onSave={async change => { setScheduleBusy(true); try { await scheduleAction.run(change); setScheduleAction(null) } finally { setScheduleBusy(false) } }} />}
+        {showEditSchedule && selectedSchedule && <ScheduleModal schedule={selectedSchedule} onClose={() => setShowEditSchedule(false)} onSaved={async (id) => { setDraftOff(null); await reloadSchedules(id); setShowEditSchedule(false) }} />}
 
         {/* Modal إضافة قاعدة استثنائية (backend حقيقي) */}
+        {calendarRuleAction && <CalendarMutationDialog scope={calendarRuleAction.rule.branchId == null ? 'GLOBAL' : 'BRANCH'} sourceId={calendarRuleAction.rule.branchId ?? 0} title={`${calendarRuleAction.remove ? 'إيقاف' : calendarRuleAction.rule.isActive ? 'تعطيل' : 'تفعيل'} القاعدة «${calendarRuleAction.rule.name}»`} description="يسري القرار من التاريخ المحدد مع بقاء نسخة التقويم السابقة. نطاق القاعدة ثابت؛ النقل إلى فرع آخر يتم بقاعدة جديدة وإيقاف القديمة." onClose={() => setCalendarRuleAction(null)} onSave={(change, context) => calendarRuleAction.remove ? removeScheduleRule(calendarRuleAction.rule, change) : toggleScheduleRule(calendarRuleAction.rule, change, context)} />}
         {showAddScheduleRule && (
           <AddScheduleRuleModal
             branches={branches}
             onClose={() => setShowAddScheduleRule(false)}
-            onCreated={reloadRules}
+            onCreated={async () => { await reloadRules(); setCalendarRefresh(value => value + 1) }}
           />
         )}
 
@@ -1358,16 +1340,8 @@ export default function WorkDaysSettingsPage() {
           <AssignScheduleModal
             schedule={selectedSchedule}
             onClose={() => setShowAssignModal(false)}
-            onAssign={(count) => {
-              // تحديث عدد الموظفين
-              const updatedSchedule = {
-                ...selectedSchedule,
-                employeeCount: selectedSchedule.employeeCount + count,
-              }
-              setSchedules(prev =>
-                prev.map(s => (s.id === updatedSchedule.id ? updatedSchedule : s))
-              )
-              setSelectedSchedule(updatedSchedule)
+            onAssign={async () => {
+              await reloadSchedules(selectedSchedule.id)
               setShowAssignModal(false)
             }}
           />
@@ -1377,343 +1351,103 @@ export default function WorkDaysSettingsPage() {
   )
 }
 
-// Modal إضافة جدول جديد
-function AddScheduleModal({
-  onClose,
-  onAdd,
-}: {
-  onClose: () => void
-  onAdd: (schedule: Omit<WorkSchedule, 'id' | 'employeeCount' | 'rules'>) => void
+// إنشاء وتعديل الجدول في الكتالوج قبل إغلاق النموذج.
+function ScheduleModal({ schedule, onClose, onSaved }: {
+  schedule?: ApiWorkSchedule; onClose: () => void; onSaved: (id: number) => Promise<void>
 }) {
-  const [name, setName] = useState('')
-  const [description, setDescription] = useState('')
-  const [color, setColor] = useState('blue')
-  const [workDays, setWorkDays] = useState<{ [key: string]: boolean }>({
-    sunday: true,
-    monday: true,
-    tuesday: true,
-    wednesday: true,
-    thursday: true,
-    friday: false,
-    saturday: false,
-  })
-  const [workHours, setWorkHours] = useState({
-    start: '08:00',
-    end: '17:00',
-    breakStart: '12:00',
-    breakEnd: '13:00',
-  })
-
-  const handleSubmit = () => {
-    if (!name) {
-      alert('الرجاء إدخال اسم الجدول')
-      return
+  const [name, setName] = useState(schedule?.name ?? '')
+  const [description, setDescription] = useState(schedule?.description ?? '')
+  const [startTime, setStartTime] = useState(schedule?.startTime ?? '08:00')
+  const [endTime, setEndTime] = useState(schedule?.endTime ?? '17:00')
+  const [off, setOff] = useState(parseWeekend(schedule?.weekendDays ?? 'FRI,SAT'))
+  const [isActive, setActive] = useState(schedule?.isActive ?? true)
+  const [flexEnabled, setFlexEnabled] = useState(schedule?.flexEnabled ?? false)
+  const [flexWindowMinutes, setFlexWindowMinutes] = useState(String(schedule?.flexWindowMinutes ?? ''))
+  const [requiredWorkMinutes, setRequiredWorkMinutes] = useState(String(schedule?.requiredWorkMinutes ?? ''))
+  const [change, setChange] = useState<ApiAttendanceRuleChange>({ effectiveFrom: schedule?.attendanceRuleEffectiveFrom && schedule.attendanceRuleEffectiveFrom > localToday() ? schedule.attendanceRuleEffectiveFrom : localToday(), changeReason: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!name.trim() || !startTime || !endTime || startTime === endTime || off.length === 7) {
+      setError('أدخل اسماً وساعات صحيحة ويوم دوام واحداً على الأقل'); return
     }
-
-    onAdd({
-      name,
-      description,
-      color,
-      isDefault: false,
-      workDays,
-      workHours,
-    })
+    if (!change.effectiveFrom || !change.changeReason.trim()) { setError('حدد تاريخ السريان وسبب الحفظ'); return }
+    if (flexEnabled && (!Number(flexWindowMinutes) || !Number(requiredWorkMinutes) || Number(flexWindowMinutes) >= Number(requiredWorkMinutes))) {
+      setError('المرونة تحتاج نافذة موجبة وأقل من دقائق العمل المطلوبة'); return
+    }
+    setBusy(true); setError('')
+    try {
+      const payload = { name: name.trim(), description: description.trim(), startTime, endTime, weekendDays: weekendString(off), isActive,
+        flexEnabled, flexWindowMinutes: flexWindowMinutes === '' ? null : Number(flexWindowMinutes),
+        requiredWorkMinutes: requiredWorkMinutes === '' ? null : Number(requiredWorkMinutes), ...change }
+      const row = schedule
+        ? await updateCatalogItem<ApiWorkSchedule>('work-schedules', schedule.id, payload)
+        : await createCatalogItem<ApiWorkSchedule>('work-schedules', payload)
+      await onSaved(row.id)
+    } catch (err) { setError(err instanceof Error ? err.message : 'تعذر حفظ الجدول') }
+    finally { setBusy(false) }
   }
-
-  const toggleDay = (day: string) => {
-    setWorkDays(prev => ({
-      ...prev,
-      [day]: !prev[day],
-    }))
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-gray-800">إضافة جدول عمل جديد</h2>
-            <p className="text-gray-500 text-sm mt-1">أنشئ جدول عمل جديد للموظفين</p>
-          </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100">
-            <X size={20} className="text-gray-500" />
-          </button>
-        </div>
-
-        <div className="p-6 space-y-6">
-          {/* الاسم والوصف */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                اسم الجدول *
-              </label>
-              <input
-                type="text"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="مثال: جدول الإدارة"
-                className="input w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                الوصف
-              </label>
-              <input
-                type="text"
-                value={description}
-                onChange={(e) => setDescription(e.target.value)}
-                placeholder="مثال: جمعة وسبت إجازة"
-                className="input w-full"
-              />
-            </div>
-          </div>
-
-          {/* اللون */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              اللون
-            </label>
-            <div className="flex gap-3">
-              {scheduleColors.map(c => (
-                <button
-                  key={c.id}
-                  onClick={() => setColor(c.id)}
-                  className={`w-10 h-10 rounded-xl ${c.class} transition-all ${
-                    color === c.id
-                      ? 'ring-4 ring-offset-2 ring-primary-300'
-                      : 'hover:scale-110'
-                  }`}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* أيام العمل */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              أيام العمل
-            </label>
-            <div className="flex gap-2">
-              {weekDays.map(day => (
-                <button
-                  key={day.key}
-                  onClick={() => toggleDay(day.key)}
-                  className={`w-14 h-16 rounded-xl flex flex-col items-center justify-center gap-1 transition-all ${
-                    workDays[day.key]
-                      ? `${scheduleColors.find(c => c.id === color)?.class || 'bg-blue-500'} text-white`
-                      : 'bg-gray-100 text-gray-400 hover:bg-gray-200'
-                  }`}
-                >
-                  <span className="text-lg font-bold">{day.shortName}</span>
-                  <span className="text-xs">{workDays[day.key] ? 'دوام' : 'إجازة'}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          {/* ساعات العمل */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              ساعات العمل
-            </label>
-            <div className="grid grid-cols-4 gap-4">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">بداية الدوام</label>
-                <input
-                  type="time"
-                  value={workHours.start}
-                  onChange={(e) => setWorkHours(prev => ({ ...prev, start: e.target.value }))}
-                  className="input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">نهاية الدوام</label>
-                <input
-                  type="time"
-                  value={workHours.end}
-                  onChange={(e) => setWorkHours(prev => ({ ...prev, end: e.target.value }))}
-                  className="input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">بداية الاستراحة</label>
-                <input
-                  type="time"
-                  value={workHours.breakStart}
-                  onChange={(e) => setWorkHours(prev => ({ ...prev, breakStart: e.target.value }))}
-                  className="input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">نهاية الاستراحة</label>
-                <input
-                  type="time"
-                  value={workHours.breakEnd}
-                  onChange={(e) => setWorkHours(prev => ({ ...prev, breakEnd: e.target.value }))}
-                  className="input w-full"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div className="p-6 border-t border-gray-100 flex gap-3">
-          <button onClick={handleSubmit} className="flex-1 btn-primary">
-            إضافة الجدول
-          </button>
-          <button onClick={onClose} className="flex-1 btn-secondary">
-            إلغاء
-          </button>
-        </div>
+  return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <form onSubmit={save} className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 space-y-4">
+      <h2 className="text-xl font-bold">{schedule ? 'تعديل جدول العمل' : 'جدول عمل جديد'}</h2>
+      {error && <p role="alert" className="text-red-600">{error}</p>}
+      <label className="block">الاسم<input required maxLength={100} className="input w-full" value={name} onChange={e => setName(e.target.value)} /></label>
+      <label className="block">الوصف<input className="input w-full" value={description} onChange={e => setDescription(e.target.value)} /></label>
+      <div className="grid grid-cols-2 gap-3">
+        <label>بداية الدوام<input required type="time" className="input w-full" value={startTime} onChange={e => setStartTime(e.target.value)} /></label>
+        <label>نهاية الدوام<input required type="time" className="input w-full" value={endTime} onChange={e => setEndTime(e.target.value)} /></label>
       </div>
-    </div>
-  )
+      <p className="text-sm text-gray-500">نهاية الدوام قبل بدايته تعني وردية تمتد لليوم التالي.</p>
+      <div className="p-4 rounded-xl bg-blue-50 space-y-3">
+        <label className="flex gap-2 font-medium"><input type="checkbox" checked={flexEnabled} onChange={e => setFlexEnabled(e.target.checked)} />تفعيل نافذة الحضور المرنة</label>
+        <div className="grid grid-cols-2 gap-3">
+          <label className="text-sm">مدة النافذة (دقيقة)<input type="number" min="1" max="1439" step="1" className="input w-full" value={flexWindowMinutes} onChange={e => setFlexWindowMinutes(e.target.value)} /></label>
+          <label className="text-sm">العمل المطلوب (دقيقة)<input type="number" min="1" max="1440" step="1" className="input w-full" value={requiredWorkMinutes} onChange={e => setRequiredWorkMinutes(e.target.value)} /></label>
+        </div>
+        {flexWindowMinutes && <p className="text-sm">الحضور المسموح: {startTime}–{flexEndTime(startTime, Number(flexWindowMinutes))} · المطلوب {Number(requiredWorkMinutes) / 60 || '—'} ساعات.</p>}
+        <p className="text-xs text-blue-800">نقص العمل مستقل عن التأخير. بعد النافذة يُحسب التأخير من بداية الدوام، وإكمال الساعات لا يمنح إضافيًا تلقائيًا.</p>
+      </div>
+      <fieldset><legend>أيام الدوام</legend><div className="flex gap-2 flex-wrap">{weekDays.map(d => <label key={d.code} className="flex gap-1"><input type="checkbox" checked={!off.includes(d.code)} onChange={() => setOff(prev => prev.includes(d.code) ? prev.filter(c => c !== d.code) : [...prev, d.code])} />{d.name}</label>)}</div></fieldset>
+      <label className="flex gap-2"><input type="checkbox" checked={isActive} disabled={schedule?.isDefault} onChange={e => setActive(e.target.checked)} />نشط</label>
+      <AttendanceRuleChangeFields value={change} onChange={setChange} />
+      <div className="flex gap-3"><button type="submit" disabled={busy} className="btn-primary">{busy ? 'جارٍ الحفظ…' : 'حفظ الجدول'}</button><button type="button" disabled={busy} onClick={onClose} className="btn-secondary">إلغاء</button></div>
+    </form>
+  </div>
 }
 
-// Modal تعديل جدول
-function EditScheduleModal({
-  schedule,
-  onClose,
-  onSave,
-}: {
-  schedule: WorkSchedule
-  onClose: () => void
-  onSave: (updated: Partial<WorkSchedule>) => void
+function AttendanceRuleChangeFields({ value, onChange }: {
+  value: ApiAttendanceRuleChange; onChange: (change: ApiAttendanceRuleChange) => void
 }) {
-  const [name, setName] = useState(schedule.name)
-  const [description, setDescription] = useState(schedule.description)
-  const [color, setColor] = useState(schedule.color)
-  const [workHours, setWorkHours] = useState(schedule.workHours)
+  return <div className="space-y-3">
+    <label className="block text-sm">تاريخ السريان<input type="date" required className="input w-full" value={value.effectiveFrom} onChange={e => onChange({ ...value, effectiveFrom: e.target.value })} /></label>
+    <label className="block text-sm">سبب الحفظ<textarea required maxLength={500} className="input w-full" value={value.changeReason} onChange={e => onChange({ ...value, changeReason: e.target.value })} /></label>
+    <p className="text-xs text-gray-500">تُطبق النسخة في تاريخها. تتطلب الفترات المعتمدة أو المصروفة معالجة مستقلة.</p>
+  </div>
+}
 
-  const handleSubmit = () => {
-    if (!name) {
-      alert('الرجاء إدخال اسم الجدول')
-      return
-    }
-
-    onSave({
-      name,
-      description,
-      color,
-      workHours,
-    })
+function AttendanceRuleChangeModal({ title, description, onClose, onSave }: {
+  title: string; description: string; onClose: () => void; onSave: (change: ApiAttendanceRuleChange) => Promise<void>
+}) {
+  const [change, setChange] = useState<ApiAttendanceRuleChange>({ effectiveFrom: localToday(), changeReason: '' })
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const save = async (event: React.FormEvent) => {
+    event.preventDefault()
+    if (!change.effectiveFrom || !change.changeReason.trim()) { setError('حدد تاريخ السريان والسبب'); return }
+    setBusy(true); setError('')
+    try { await onSave({ ...change, changeReason: change.changeReason.trim() }) }
+    catch (error) { setError(error instanceof Error ? error.message : 'تعذر الحفظ') }
+    finally { setBusy(false) }
   }
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-lg">
-        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
-          <h2 className="text-xl font-bold text-gray-800">تعديل الجدول</h2>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100">
-            <X size={20} className="text-gray-500" />
-          </button>
-        </div>
-
-        <div className="p-6 space-y-6">
-          {/* الاسم والوصف */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              اسم الجدول *
-            </label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              className="input w-full"
-            />
-          </div>
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              الوصف
-            </label>
-            <input
-              type="text"
-              value={description}
-              onChange={(e) => setDescription(e.target.value)}
-              className="input w-full"
-            />
-          </div>
-
-          {/* اللون */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              اللون
-            </label>
-            <div className="flex gap-3">
-              {scheduleColors.map(c => (
-                <button
-                  key={c.id}
-                  onClick={() => setColor(c.id)}
-                  className={`w-10 h-10 rounded-xl ${c.class} transition-all ${
-                    color === c.id
-                      ? 'ring-4 ring-offset-2 ring-primary-300'
-                      : 'hover:scale-110'
-                  }`}
-                />
-              ))}
-            </div>
-          </div>
-
-          {/* ساعات العمل */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">
-              ساعات العمل
-            </label>
-            <div className="grid grid-cols-2 gap-4">
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">بداية الدوام</label>
-                <input
-                  type="time"
-                  value={workHours.start}
-                  onChange={(e) => setWorkHours(prev => ({ ...prev, start: e.target.value }))}
-                  className="input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">نهاية الدوام</label>
-                <input
-                  type="time"
-                  value={workHours.end}
-                  onChange={(e) => setWorkHours(prev => ({ ...prev, end: e.target.value }))}
-                  className="input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">بداية الاستراحة</label>
-                <input
-                  type="time"
-                  value={workHours.breakStart}
-                  onChange={(e) => setWorkHours(prev => ({ ...prev, breakStart: e.target.value }))}
-                  className="input w-full"
-                />
-              </div>
-              <div>
-                <label className="block text-xs text-gray-500 mb-1">نهاية الاستراحة</label>
-                <input
-                  type="time"
-                  value={workHours.breakEnd}
-                  onChange={(e) => setWorkHours(prev => ({ ...prev, breakEnd: e.target.value }))}
-                  className="input w-full"
-                />
-              </div>
-            </div>
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div className="p-6 border-t border-gray-100 flex gap-3">
-          <button onClick={handleSubmit} className="flex-1 btn-primary">
-            حفظ التغييرات
-          </button>
-          <button onClick={onClose} className="flex-1 btn-secondary">
-            إلغاء
-          </button>
-        </div>
-      </div>
-    </div>
-  )
+  return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <form onSubmit={save} className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto p-6 space-y-4">
+      <h2 className="text-xl font-bold">{title}</h2><p className="text-sm text-gray-600">{description}</p>
+      {error && <p role="alert" className="text-red-700">{error}</p>}
+      <AttendanceRuleChangeFields value={change} onChange={setChange} />
+      <div className="flex gap-3"><button type="submit" disabled={busy} className="btn-primary">{busy ? 'جارٍ الحفظ…' : 'حفظ التغيير'}</button><button type="button" disabled={busy} className="btn-secondary" onClick={onClose}>إلغاء</button></div>
+    </form>
+  </div>
 }
 
 // Modal إضافة قاعدة استثنائية (backend حقيقي عبر createScheduleRule)
@@ -1730,7 +1464,8 @@ function AddScheduleRuleModal({
   const [weekday, setWeekday] = useState<ApiScheduleRule['weekday']>('SAT')
   const [occurrence, setOccurrence] = useState<ApiScheduleRule['occurrence']>('LAST')
   const [effect, setEffect] = useState<ApiScheduleRule['effect']>('WORK')
-  const [branchId, setBranchId] = useState<string>('') // '' = كل الفروع
+  const [branchId, setBranchId] = useState<string>(() => calendarScopeWritable('GLOBAL', 0) ? '' : String(getCurrentUser()?.branchId ?? ''))
+  const calendar = useCalendarContext(branchId ? 'BRANCH' : 'GLOBAL', Number(branchId) || 0)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -1751,6 +1486,7 @@ function AddScheduleRuleModal({
         occurrence,
         effect,
         branchId: branchId ? Number(branchId) : undefined,
+        calendarChange: buildCalendarChange(calendar.context, calendar.evidence),
       })
       await onCreated()
       onClose()
@@ -1858,14 +1594,16 @@ function AddScheduleRuleModal({
               onChange={(e) => setBranchId(e.target.value)}
               className="input w-full"
             >
-              <option value="">كل الفروع</option>
-              {branches.map((b) => (
+              {calendarScopeWritable('GLOBAL', 0) && <option value="">كل الفروع</option>}
+              {branches.filter(branch => calendarScopeWritable('BRANCH', branch.id)).map((b) => (
                 <option key={b.id} value={String(b.id)}>{b.name}</option>
               ))}
             </select>
           </div>
 
           {/* معاينة الجملة */}
+          <CalendarContextSummary context={calendar.context} loading={calendar.loading} error={calendar.error} />
+          <CalendarChangeFields context={calendar.context} value={calendar.evidence} onChange={calendar.setEvidence} disabled={saving || !calendar.context || calendar.context.currentMatchesHistory === false} />
           <div className="p-4 bg-blue-50 rounded-xl flex items-start gap-3">
             <Info size={18} className="text-blue-500 mt-0.5 shrink-0" />
             <div className="text-sm text-blue-700">
@@ -1879,7 +1617,7 @@ function AddScheduleRuleModal({
         <div className="p-6 border-t border-gray-100 flex gap-3">
           <button
             onClick={handleSubmit}
-            disabled={saving}
+            disabled={saving || !calendar.context || calendar.context.currentMatchesHistory === false}
             className="flex-1 btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {saving ? 'جارٍ الحفظ...' : 'إضافة القاعدة'}
@@ -2081,324 +1819,50 @@ function AddOvertimePeriodModal({
   )
 }
 
-// بيانات الموظفين (للعرض فقط)
-const sampleEmployees = [
-  { id: '1', name: 'أحمد محمد السعيد', department: 'تقنية المعلومات', position: 'مطور برمجيات', scheduleId: '1' },
-  { id: '2', name: 'فاطمة علي الحسن', department: 'الموارد البشرية', position: 'أخصائي موارد بشرية', scheduleId: '1' },
-  { id: '3', name: 'محمد عبدالله الراشد', department: 'المالية', position: 'محاسب', scheduleId: '2' },
-  { id: '4', name: 'نورة سعد العتيبي', department: 'التسويق', position: 'مدير تسويق', scheduleId: '1' },
-  { id: '5', name: 'خالد إبراهيم المطيري', department: 'تقنية المعلومات', position: 'مدير تقنية', scheduleId: '1' },
-  { id: '6', name: 'سارة أحمد الشمري', department: 'المبيعات', position: 'مندوب مبيعات', scheduleId: '2' },
-  { id: '7', name: 'عبدالرحمن فهد القحطاني', department: 'المالية', position: 'مدير مالي', scheduleId: '1' },
-  { id: '8', name: 'مريم حسن الدوسري', department: 'الموارد البشرية', position: 'مدير موارد بشرية', scheduleId: '1' },
-]
-
-const departments = [
-  { id: 'it', name: 'تقنية المعلومات', employeeCount: 12 },
-  { id: 'hr', name: 'الموارد البشرية', employeeCount: 8 },
-  { id: 'finance', name: 'المالية', employeeCount: 10 },
-  { id: 'sales', name: 'المبيعات', employeeCount: 15 },
-  { id: 'marketing', name: 'التسويق', employeeCount: 7 },
-]
-
-// Modal تعيين الجدول للموظفين
-function AssignScheduleModal({
-  schedule,
-  onClose,
-  onAssign,
-}: {
-  schedule: WorkSchedule
-  onClose: () => void
-  onAssign: (count: number) => void
+// الإسناد إلى الموظفين الفعليين داخل نطاق المستخدم.
+function AssignScheduleModal({ schedule, onClose, onAssign }: {
+  schedule: ApiWorkSchedule; onClose: () => void; onAssign: () => Promise<void>
 }) {
-  const [scope, setScope] = useState<'individual' | 'department' | 'company' | 'custom'>('individual')
-  const [selectedDepartment, setSelectedDepartment] = useState('')
-  const [selectedEmployees, setSelectedEmployees] = useState<string[]>([])
-  const [searchQuery, setSearchQuery] = useState('')
-
-  // الموظفين المفلترين
-  const filteredEmployees = sampleEmployees.filter(emp =>
-    emp.name.includes(searchQuery) ||
-    emp.department.includes(searchQuery) ||
-    emp.position.includes(searchQuery)
-  )
-
-  // عدد الموظفين المتأثرين
-  const getAffectedCount = () => {
-    switch (scope) {
-      case 'individual':
-        return selectedEmployees.length
-      case 'department':
-        return departments.find(d => d.id === selectedDepartment)?.employeeCount || 0
-      case 'company':
-        return sampleEmployees.length
-      case 'custom':
-        return selectedEmployees.length
-      default:
-        return 0
+  const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  const [departments, setDepartments] = useState<ApiDepartment[]>([])
+  const [scope, setScope] = useState<'custom' | 'department' | 'all'>('custom')
+  const [departmentId, setDepartmentId] = useState('')
+  const [ids, setIds] = useState<number[]>([])
+  const [search, setSearch] = useState('')
+  const [loading, setLoading] = useState(true)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [change, setChange] = useState<ApiAttendanceRuleChange>({ effectiveFrom: localToday(), changeReason: '' })
+  useEffect(() => {
+    Promise.all([fetchEmployees(), fetchDepartments()]).then(([emps, deps]) => {
+      setEmployees(emps.filter(e => !['archived', 'terminated'].includes(e.status)))
+      setDepartments(deps)
+    }).catch(err => setError(err.message)).finally(() => setLoading(false))
+  }, [])
+  const save = async () => {
+    if (!change.effectiveFrom || !change.changeReason.trim()) { setError('حدد تاريخ سريان الإسناد والسبب'); return }
+    if ((scope === 'custom' && !ids.length) || (scope === 'department' && !departmentId)) {
+      setError('اختر الموظفين أو القسم المطلوب'); return
     }
+    setBusy(true); setError('')
+    try {
+      await assignWorkSchedule(schedule.id, scope === 'all' ? { all: true } : scope === 'department' ? { departmentId: Number(departmentId) } : { employeeIds: ids }, change)
+      await onAssign()
+    } catch (err) { setError(err instanceof Error ? err.message : 'تعذر إسناد الجدول') }
+    finally { setBusy(false) }
   }
-
-  const handleSubmit = () => {
-    const count = getAffectedCount()
-    if (count === 0) {
-      alert('الرجاء اختيار موظف واحد على الأقل')
-      return
-    }
-    onAssign(count)
-  }
-
-  const toggleEmployee = (empId: string) => {
-    setSelectedEmployees(prev =>
-      prev.includes(empId)
-        ? prev.filter(id => id !== empId)
-        : [...prev, empId]
-    )
-  }
-
-  const selectAllEmployees = () => {
-    setSelectedEmployees(filteredEmployees.map(e => e.id))
-  }
-
-  const clearSelection = () => {
-    setSelectedEmployees([])
-  }
-
-  const colorClass = scheduleColors.find(c => c.id === schedule.color)?.class || 'bg-blue-500'
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
-        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className={`w-12 h-12 ${colorClass} rounded-xl flex items-center justify-center`}>
-              <Calendar size={24} className="text-white" />
-            </div>
-            <div>
-              <h2 className="text-xl font-bold text-gray-800">تعيين جدول العمل</h2>
-              <p className="text-gray-500 text-sm mt-1">تعيين "{schedule.name}" للموظفين</p>
-            </div>
-          </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100">
-            <X size={20} className="text-gray-500" />
-          </button>
-        </div>
-
-        <div className="p-6 flex-1 overflow-y-auto space-y-6">
-          {/* نطاق التعيين */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-3">
-              نطاق التعيين
-            </label>
-            <div className="grid grid-cols-4 gap-3">
-              <button
-                onClick={() => { setScope('individual'); setSelectedEmployees([]); }}
-                className={`p-4 rounded-xl border-2 text-center transition-all ${
-                  scope === 'individual'
-                    ? 'border-primary-500 bg-primary-50'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <User size={24} className={`mx-auto mb-2 ${scope === 'individual' ? 'text-primary-600' : 'text-gray-400'}`} />
-                <p className={`font-medium ${scope === 'individual' ? 'text-primary-700' : 'text-gray-700'}`}>
-                  موظف واحد
-                </p>
-              </button>
-
-              <button
-                onClick={() => { setScope('department'); setSelectedEmployees([]); }}
-                className={`p-4 rounded-xl border-2 text-center transition-all ${
-                  scope === 'department'
-                    ? 'border-primary-500 bg-primary-50'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <Briefcase size={24} className={`mx-auto mb-2 ${scope === 'department' ? 'text-primary-600' : 'text-gray-400'}`} />
-                <p className={`font-medium ${scope === 'department' ? 'text-primary-700' : 'text-gray-700'}`}>
-                  قسم كامل
-                </p>
-              </button>
-
-              <button
-                onClick={() => { setScope('company'); setSelectedEmployees([]); }}
-                className={`p-4 rounded-xl border-2 text-center transition-all ${
-                  scope === 'company'
-                    ? 'border-primary-500 bg-primary-50'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <Building2 size={24} className={`mx-auto mb-2 ${scope === 'company' ? 'text-primary-600' : 'text-gray-400'}`} />
-                <p className={`font-medium ${scope === 'company' ? 'text-primary-700' : 'text-gray-700'}`}>
-                  الشركة كلها
-                </p>
-              </button>
-
-              <button
-                onClick={() => { setScope('custom'); setSelectedEmployees([]); }}
-                className={`p-4 rounded-xl border-2 text-center transition-all ${
-                  scope === 'custom'
-                    ? 'border-primary-500 bg-primary-50'
-                    : 'border-gray-200 hover:border-gray-300'
-                }`}
-              >
-                <Users size={24} className={`mx-auto mb-2 ${scope === 'custom' ? 'text-primary-600' : 'text-gray-400'}`} />
-                <p className={`font-medium ${scope === 'custom' ? 'text-primary-700' : 'text-gray-700'}`}>
-                  اختيار متعدد
-                </p>
-              </button>
-            </div>
-          </div>
-
-          {/* اختيار القسم */}
-          {scope === 'department' && (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
-                اختر القسم
-              </label>
-              <div className="grid grid-cols-2 gap-3">
-                {departments.map(dept => (
-                  <button
-                    key={dept.id}
-                    onClick={() => setSelectedDepartment(dept.id)}
-                    className={`p-4 rounded-xl border-2 text-right transition-all ${
-                      selectedDepartment === dept.id
-                        ? 'border-primary-500 bg-primary-50'
-                        : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <div className="flex items-center justify-between">
-                      <div>
-                        <p className={`font-medium ${selectedDepartment === dept.id ? 'text-primary-700' : 'text-gray-800'}`}>
-                          {dept.name}
-                        </p>
-                        <p className="text-sm text-gray-500 mt-1">
-                          {dept.employeeCount} موظف
-                        </p>
-                      </div>
-                      {selectedDepartment === dept.id && (
-                        <CheckCircle size={20} className="text-primary-600" />
-                      )}
-                    </div>
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* رسالة الشركة كلها */}
-          {scope === 'company' && (
-            <div className="p-4 bg-warning-50 rounded-xl flex items-start gap-3">
-              <AlertCircle size={20} className="text-warning-600 mt-0.5" />
-              <div>
-                <p className="font-medium text-warning-800">تنبيه</p>
-                <p className="text-sm text-warning-700 mt-1">
-                  سيتم تعيين هذا الجدول لجميع موظفي الشركة ({sampleEmployees.length} موظف).
-                  سيتم استبدال جداولهم الحالية.
-                </p>
-              </div>
-            </div>
-          )}
-
-          {/* اختيار الموظفين */}
-          {(scope === 'individual' || scope === 'custom') && (
-            <div>
-              <div className="flex items-center justify-between mb-3">
-                <label className="block text-sm font-medium text-gray-700">
-                  {scope === 'individual' ? 'اختر موظف' : 'اختر الموظفين'}
-                </label>
-                {scope === 'custom' && (
-                  <div className="flex gap-2">
-                    <button onClick={selectAllEmployees} className="text-sm text-primary-600 hover:text-primary-700">
-                      تحديد الكل
-                    </button>
-                    <span className="text-gray-300">|</span>
-                    <button onClick={clearSelection} className="text-sm text-gray-500 hover:text-gray-700">
-                      إلغاء التحديد
-                    </button>
-                  </div>
-                )}
-              </div>
-
-              {/* بحث */}
-              <div className="relative mb-3">
-                <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
-                <input
-                  type="text"
-                  value={searchQuery}
-                  onChange={(e) => setSearchQuery(e.target.value)}
-                  placeholder="ابحث بالاسم أو القسم..."
-                  className="input w-full pr-10"
-                />
-              </div>
-
-              {/* قائمة الموظفين */}
-              <div className="border border-gray-200 rounded-xl max-h-64 overflow-y-auto">
-                {filteredEmployees.map(emp => (
-                  <div
-                    key={emp.id}
-                    onClick={() => {
-                      if (scope === 'individual') {
-                        setSelectedEmployees([emp.id])
-                      } else {
-                        toggleEmployee(emp.id)
-                      }
-                    }}
-                    className={`p-3 flex items-center gap-3 cursor-pointer border-b border-gray-100 last:border-0 hover:bg-gray-50 ${
-                      selectedEmployees.includes(emp.id) ? 'bg-primary-50' : ''
-                    }`}
-                  >
-                    <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${
-                      selectedEmployees.includes(emp.id) ? 'bg-primary-500 text-white' : 'bg-gray-100 text-gray-500'
-                    }`}>
-                      {selectedEmployees.includes(emp.id) ? (
-                        <CheckCircle size={20} />
-                      ) : (
-                        <User size={20} />
-                      )}
-                    </div>
-                    <div className="flex-1">
-                      <p className="font-medium text-gray-800">{emp.name}</p>
-                      <p className="text-sm text-gray-500">
-                        {emp.department} • {emp.position}
-                      </p>
-                    </div>
-                    {emp.scheduleId !== schedule.id && (
-                      <span className="text-xs text-gray-400 bg-gray-100 px-2 py-1 rounded">
-                        جدول مختلف
-                      </span>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* ملخص */}
-          <div className="p-4 bg-gray-50 rounded-xl">
-            <div className="flex items-center justify-between">
-              <span className="text-gray-600">عدد الموظفين المتأثرين:</span>
-              <span className="text-2xl font-bold text-primary-600">{getAffectedCount()}</span>
-            </div>
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div className="p-6 border-t border-gray-100 flex gap-3">
-          <button
-            onClick={handleSubmit}
-            disabled={getAffectedCount() === 0}
-            className={`flex-1 btn-primary flex items-center justify-center gap-2 ${
-              getAffectedCount() === 0 ? 'opacity-50 cursor-not-allowed' : ''
-            }`}
-          >
-            <UserPlus size={18} />
-            تعيين الجدول
-          </button>
-          <button onClick={onClose} className="flex-1 btn-secondary">
-            إلغاء
-          </button>
-        </div>
-      </div>
+  return <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+    <div className="bg-white rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto p-6 space-y-4">
+      <h2 className="text-xl font-bold">تعيين جدول «{schedule.name}»</h2>
+      {error && <p role="alert" className="text-red-600">{error}</p>}
+      {loading ? <p>جارٍ تحميل الموظفين…</p> : <>
+        <label className="block">نطاق الإسناد<select className="input w-full" value={scope} onChange={e => setScope(e.target.value as typeof scope)}><option value="custom">موظفون محددون</option><option value="department">قسم</option><option value="all">كل الموظفين النشطين في نطاقك</option></select></label>
+        {scope === 'department' && <select aria-label="القسم" className="input w-full" value={departmentId} onChange={e => setDepartmentId(e.target.value)}><option value="">اختر القسم</option>{departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select>}
+        {scope === 'all' && <p className="text-amber-700">سيتم استبدال الجدول الحالي لكل الموظفين النشطين داخل نطاق صلاحياتك.</p>}
+        {scope === 'custom' && <><input aria-label="بحث الموظفين" className="input w-full" placeholder="بحث بالاسم أو الكود" value={search} onChange={e => setSearch(e.target.value)} /><div className="max-h-64 overflow-auto space-y-2">{employees.filter(e => (e.fullName + e.employeeCode).includes(search)).map(e => <label key={e.id} className="flex gap-2 p-2"><input type="checkbox" checked={ids.includes(e.id)} onChange={() => setIds(prev => prev.includes(e.id) ? prev.filter(id => id !== e.id) : [...prev, e.id])} />{e.fullName} — {e.employeeCode}</label>)}</div><p>{ids.length} موظف محدد</p></>}
+      </>}
+      <AttendanceRuleChangeFields value={change} onChange={setChange} />
+      <div className="flex gap-3"><button disabled={loading || busy} onClick={save} className="btn-primary">{busy ? 'جارٍ الإسناد…' : 'تأكيد الإسناد'}</button><button disabled={busy} onClick={onClose} className="btn-secondary">إلغاء</button></div>
     </div>
-  )
+  </div>
 }

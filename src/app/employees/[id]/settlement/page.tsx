@@ -1,4 +1,5 @@
 'use client'
+import { useParams } from 'next/navigation'
 
 import { Suspense, useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
@@ -34,6 +35,7 @@ import {
   recalcSettlementLines,
   approveSettlement,
   can,
+  ApiError,
   type ApiOffboardingCase,
   type ApiSettlementLine,
 } from '@/lib/api'
@@ -64,6 +66,27 @@ const payMethodLabels: Record<string, string> = {
 }
 
 const fmtDate = (v?: string | null) => (v ? String(v).slice(0, 10) : '—')
+
+// خطأ التحميل لا يُقرأ «لا يوجد ملف»: 403 و5xx وانقطاع الاتصال برسائل واضحة،
+// وباقي الأخطاء (404 مثلاً) برسالة السيرفر كما هي
+const loadErrorMessage = (err: unknown) => {
+  if (err instanceof ApiError) {
+    if (err.status === 403) {
+      // حارس الصلاحيات (RolesGuard) يرد برسالة Nest الافتراضية الإنجليزية
+      return err.message && err.message !== 'Forbidden resource'
+        ? err.message
+        : 'لا تملك صلاحية عرض ملفات إنهاء الخدمة'
+    }
+    if (err.status >= 500) {
+      return `تعذر تحميل ملف التصفية — خطأ في الخادم (${err.status})، حاول مرة أخرى`
+    }
+    return err.message
+  }
+  if (err instanceof TypeError) {
+    return 'تعذر الاتصال بالخادم — تحقق من الاتصال وحاول مرة أخرى'
+  }
+  return err instanceof Error ? err.message : 'تعذر تحميل ملف التصفية'
+}
 
 function Spinner() {
   return (
@@ -98,16 +121,9 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
         setDet(await fetchOffboardingCase(Number(caseParam)))
         setNotFound(false)
       } else {
-        // بدون رقم ملف — نبحث عن أحدث ملف إنهاء خدمة لهذا الموظف
-        let cases: ApiOffboardingCase[] = []
-        try {
-          cases = await fetchOffboardingCases()
-        } catch {
-          setNotFound(true)
-          setDet(null)
-          setError('')
-          return
-        }
+        // بدون رقم ملف — نبحث عن أحدث ملف إنهاء خدمة لهذا الموظف. خطأ القائمة
+        // (403 بلا صلاحية/5xx عطل) يُعرض كخطأ — «لا يوجد ملف» للنتيجة الفارغة فقط
+        const cases = await fetchOffboardingCases()
         const mine = cases
           .filter((c) => c.employeeId === employeeId)
           .sort((a, b) => (b.createdAt ?? '').localeCompare(a.createdAt ?? ''))
@@ -122,7 +138,8 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
       }
       setError('')
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'تعذر تحميل ملف التصفية')
+      setNotFound(false)
+      setError(loadErrorMessage(err))
     } finally {
       setLoading(false)
     }
@@ -146,6 +163,8 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
   // البنود قابلة للتعديل فقط أثناء المراجعة ولمن يملك الصلاحية
   const isEditable = det?.status === 'IN_SETTLEMENT' && can('settlement.edit')
   const canApprove = det?.status === 'IN_SETTLEMENT' && can('settlement.approve')
+  // الراتب والبنك والبنود والصافي لأصحاب التصفية فقط (الباك يحجبها عن غيرهم)
+  const seesMoney = det?.canViewSettlement !== false
 
   const entitlements = lines.filter((l) => l.type === 'CREDIT')
   const deductions = lines.filter((l) => l.type === 'DEBIT')
@@ -171,6 +190,8 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
     emp?.basicSalary,
     emp?.housingAllowance,
     emp?.transportAllowance,
+    emp?.phoneAllowance,
+    emp?.workNatureAllowance,
     emp?.otherAllowance,
   ]
   const hasSalary = salaryParts.some((v) => v != null)
@@ -398,13 +419,16 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
               إعادة توليد البنود التلقائية
             </button>
           )}
-          <button
-            onClick={() => window.print()}
-            className="btn-secondary flex items-center gap-2"
-          >
-            <Printer size={18} />
-            طباعة
-          </button>
+          {/* نموذج التصفية المطبوع بمبالغه — لأصحاب التصفية فقط */}
+          {seesMoney && (
+            <button
+              onClick={() => window.print()}
+              className="btn-secondary flex items-center gap-2"
+            >
+              <Printer size={18} />
+              طباعة
+            </button>
+          )}
         </div>
       </div>
 
@@ -442,7 +466,11 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                   <span dir="ltr" className="font-mono">
                     {det.settlementDocRef}
                   </span>
-                  {' — '}الصافي: {Number(net).toLocaleString()} {currency}
+                  {seesMoney && (
+                    <>
+                      {' — '}الصافي: {Number(net).toLocaleString()} {currency}
+                    </>
+                  )}
                 </p>
                 {det.clearanceCertRef && (
                   <p className="text-sm text-success-700 mt-0.5">
@@ -487,12 +515,14 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                       {emp?.employeeCode ?? det.employeeCode ?? '—'}
                     </span>
                   </div>
-                  <div className="flex justify-between py-2 border-b border-gray-100">
-                    <span className="text-gray-500">رقم الهوية</span>
-                    <span className="font-medium text-gray-800" dir="ltr">
-                      {emp?.nationalId ?? '—'}
-                    </span>
-                  </div>
+                  {seesMoney && (
+                    <div className="flex justify-between py-2 border-b border-gray-100">
+                      <span className="text-gray-500">رقم الهوية</span>
+                      <span className="font-medium text-gray-800" dir="ltr">
+                        {emp?.nationalId ?? '—'}
+                      </span>
+                    </div>
+                  )}
                   <div className="flex justify-between py-2 border-b border-gray-100">
                     <span className="text-gray-500">تاريخ التعيين</span>
                     <span className="font-medium text-gray-800" dir="ltr">
@@ -514,69 +544,86 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                 </div>
               </div>
 
-              {/* Salary Details */}
-              <div className="card">
-                <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                  <DollarSign size={18} className="text-primary-500" />
-                  تفاصيل الراتب
-                </h3>
-                <div className="space-y-3 text-sm">
-                  <div className="flex justify-between py-2 border-b border-gray-100">
-                    <span className="text-gray-500">الراتب الأساسي</span>
-                    <span className="font-medium text-gray-800">{fmtMoney(emp?.basicSalary)}</span>
+              {/* الراتب والبنك لأصحاب التصفية فقط */}
+              {seesMoney && (
+                <>
+                  {/* Salary Details */}
+                  <div className="card">
+                    <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                      <DollarSign size={18} className="text-primary-500" />
+                      تفاصيل الراتب
+                    </h3>
+                    <div className="space-y-3 text-sm">
+                      <div className="flex justify-between py-2 border-b border-gray-100">
+                        <span className="text-gray-500">الراتب الأساسي</span>
+                        <span className="font-medium text-gray-800">{fmtMoney(emp?.basicSalary)}</span>
+                      </div>
+                      <div className="flex justify-between py-2 border-b border-gray-100">
+                        <span className="text-gray-500">بدل السكن</span>
+                        <span className="font-medium text-gray-800">
+                          {fmtMoney(emp?.housingAllowance)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between py-2 border-b border-gray-100">
+                        <span className="text-gray-500">بدل المواصلات</span>
+                        <span className="font-medium text-gray-800">
+                          {fmtMoney(emp?.transportAllowance)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between py-2 border-b border-gray-100">
+                        <span className="text-gray-500">بدل الهاتف</span>
+                        <span className="font-medium text-gray-800">
+                          {fmtMoney(emp?.phoneAllowance)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between py-2 border-b border-gray-100">
+                        <span className="text-gray-500">بدل طبيعة العمل</span>
+                        <span className="font-medium text-gray-800">
+                          {fmtMoney(emp?.workNatureAllowance)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between py-2 border-b border-gray-100">
+                        <span className="text-gray-500">بدلات أخرى</span>
+                        <span className="font-medium text-gray-800">
+                          {fmtMoney(emp?.otherAllowance)}
+                        </span>
+                      </div>
+                      <div className="flex justify-between py-2 bg-gray-50 -mx-6 px-6 rounded-lg">
+                        <span className="font-bold text-gray-800">الإجمالي</span>
+                        <span className="font-bold text-primary-600">
+                          {hasSalary ? `${totalSalary.toLocaleString()} ${currency}` : '—'}
+                        </span>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex justify-between py-2 border-b border-gray-100">
-                    <span className="text-gray-500">بدل السكن</span>
-                    <span className="font-medium text-gray-800">
-                      {fmtMoney(emp?.housingAllowance)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between py-2 border-b border-gray-100">
-                    <span className="text-gray-500">بدل المواصلات</span>
-                    <span className="font-medium text-gray-800">
-                      {fmtMoney(emp?.transportAllowance)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between py-2 border-b border-gray-100">
-                    <span className="text-gray-500">بدلات أخرى</span>
-                    <span className="font-medium text-gray-800">
-                      {fmtMoney(emp?.otherAllowance)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between py-2 bg-gray-50 -mx-6 px-6 rounded-lg">
-                    <span className="font-bold text-gray-800">الإجمالي</span>
-                    <span className="font-bold text-primary-600">
-                      {hasSalary ? `${totalSalary.toLocaleString()} ${currency}` : '—'}
-                    </span>
-                  </div>
-                </div>
-              </div>
 
-              {/* Bank Info */}
-              <div className="card">
-                <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
-                  <Building2 size={18} className="text-primary-500" />
-                  معلومات الصرف
-                </h3>
-                <div className="space-y-3 text-sm">
-                  <div className="flex justify-between py-2 border-b border-gray-100">
-                    <span className="text-gray-500">طريقة الصرف</span>
-                    <span className="font-medium text-gray-800">
-                      {payMethodLabels[emp?.payMethod ?? ''] ?? '—'}
-                    </span>
+                  {/* Bank Info */}
+                  <div className="card">
+                    <h3 className="font-bold text-gray-800 mb-4 flex items-center gap-2">
+                      <Building2 size={18} className="text-primary-500" />
+                      معلومات الصرف
+                    </h3>
+                    <div className="space-y-3 text-sm">
+                      <div className="flex justify-between py-2 border-b border-gray-100">
+                        <span className="text-gray-500">طريقة الصرف</span>
+                        <span className="font-medium text-gray-800">
+                          {payMethodLabels[emp?.payMethod ?? ''] ?? '—'}
+                        </span>
+                      </div>
+                      <div className="flex justify-between py-2 border-b border-gray-100">
+                        <span className="text-gray-500">البنك</span>
+                        <span className="font-medium text-gray-800">{emp?.bankName ?? '—'}</span>
+                      </div>
+                      <div className="py-2">
+                        <span className="text-gray-500">IBAN</span>
+                        <p className="font-medium text-gray-800 mt-1 font-mono text-xs" dir="ltr">
+                          {emp?.iban ?? '—'}
+                        </p>
+                      </div>
+                    </div>
                   </div>
-                  <div className="flex justify-between py-2 border-b border-gray-100">
-                    <span className="text-gray-500">البنك</span>
-                    <span className="font-medium text-gray-800">{emp?.bankName ?? '—'}</span>
-                  </div>
-                  <div className="py-2">
-                    <span className="text-gray-500">IBAN</span>
-                    <p className="font-medium text-gray-800 mt-1 font-mono text-xs" dir="ltr">
-                      {emp?.iban ?? '—'}
-                    </p>
-                  </div>
-                </div>
-              </div>
+                </>
+              )}
 
               {/* Clearance Progress */}
               <div className="card">
@@ -619,81 +666,93 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                 </div>
               )}
 
-              {/* Entitlements */}
-              <div className="card">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                    <Plus size={18} className="text-success-500" />
-                    الاستحقاقات
-                  </h3>
-                  {isEditable && (
-                    <button
-                      onClick={() => {
-                        setActionError('')
-                        setAddForm({ label: '', amount: '' })
-                        setAddModal('CREDIT')
-                      }}
-                      className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
-                    >
-                      <Plus size={16} />
-                      إضافة بند
-                    </button>
-                  )}
-                </div>
-                {renderLinesTable(entitlements, 'CREDIT', totalEntitlements)}
-              </div>
-
-              {/* Deductions */}
-              <div className="card">
-                <div className="flex items-center justify-between mb-4">
-                  <h3 className="font-bold text-gray-800 flex items-center gap-2">
-                    <Minus size={18} className="text-red-500" />
-                    الخصومات
-                  </h3>
-                  {isEditable && (
-                    <button
-                      onClick={() => {
-                        setActionError('')
-                        setAddForm({ label: '', amount: '' })
-                        setAddModal('DEBIT')
-                      }}
-                      className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
-                    >
-                      <Plus size={16} />
-                      إضافة خصم
-                    </button>
-                  )}
-                </div>
-                {renderLinesTable(deductions, 'DEBIT', totalDeductions)}
-              </div>
-
-              {/* Net Amount */}
-              <div className="card bg-gradient-to-l from-primary-50 to-white border-2 border-primary-200">
-                <div className="flex items-center justify-between">
-                  <div className="flex items-center gap-4">
-                    <div className="w-16 h-16 bg-primary-100 rounded-2xl flex items-center justify-center">
-                      <Receipt size={32} className="text-primary-600" />
+              {/* البنود والصافي لأصحاب التصفية — غيرهم (جهة إخلاء بـemployees.view مثلاً)
+                  يرى حالة الملف دون أرقام، مثل صفحة /offboarding/[id] */}
+              {seesMoney ? (
+                <>
+                  {/* Entitlements */}
+                  <div className="card">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                        <Plus size={18} className="text-success-500" />
+                        الاستحقاقات
+                      </h3>
+                      {isEditable && (
+                        <button
+                          onClick={() => {
+                            setActionError('')
+                            setAddForm({ label: '', amount: '' })
+                            setAddModal('CREDIT')
+                          }}
+                          className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
+                        >
+                          <Plus size={16} />
+                          إضافة بند
+                        </button>
+                      )}
                     </div>
-                    <div>
-                      <p className="text-gray-600">صافي المستحقات النهائية</p>
-                      <p className="text-xs text-gray-500 mt-1">
-                        {totalEntitlements.toLocaleString()} - {totalDeductions.toLocaleString()}{' '}
-                        = {Number(net).toLocaleString()}
-                      </p>
+                    {renderLinesTable(entitlements, 'CREDIT', totalEntitlements)}
+                  </div>
+
+                  {/* Deductions */}
+                  <div className="card">
+                    <div className="flex items-center justify-between mb-4">
+                      <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                        <Minus size={18} className="text-red-500" />
+                        الخصومات
+                      </h3>
+                      {isEditable && (
+                        <button
+                          onClick={() => {
+                            setActionError('')
+                            setAddForm({ label: '', amount: '' })
+                            setAddModal('DEBIT')
+                          }}
+                          className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
+                        >
+                          <Plus size={16} />
+                          إضافة خصم
+                        </button>
+                      )}
+                    </div>
+                    {renderLinesTable(deductions, 'DEBIT', totalDeductions)}
+                  </div>
+
+                  {/* Net Amount */}
+                  <div className="card bg-gradient-to-l from-primary-50 to-white border-2 border-primary-200">
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-4">
+                        <div className="w-16 h-16 bg-primary-100 rounded-2xl flex items-center justify-center">
+                          <Receipt size={32} className="text-primary-600" />
+                        </div>
+                        <div>
+                          <p className="text-gray-600">صافي المستحقات النهائية</p>
+                          <p className="text-xs text-gray-500 mt-1">
+                            {totalEntitlements.toLocaleString()} - {totalDeductions.toLocaleString()}{' '}
+                            = {Number(net).toLocaleString()}
+                          </p>
+                        </div>
+                      </div>
+                      <div className="text-left">
+                        <p
+                          className={`text-4xl font-bold ${
+                            Number(net) >= 0 ? 'text-primary-600' : 'text-red-600'
+                          }`}
+                        >
+                          {Number(net).toLocaleString()}
+                        </p>
+                        <p className="text-gray-500">{currency}</p>
+                      </div>
                     </div>
                   </div>
-                  <div className="text-left">
-                    <p
-                      className={`text-4xl font-bold ${
-                        Number(net) >= 0 ? 'text-primary-600' : 'text-red-600'
-                      }`}
-                    >
-                      {Number(net).toLocaleString()}
-                    </p>
-                    <p className="text-gray-500">{currency}</p>
-                  </div>
+                </>
+              ) : (
+                <div className="card flex items-center gap-3 text-sm text-gray-500">
+                  <Lock size={18} className="text-gray-400 shrink-0" />
+                  التصفية المالية لدى الموارد البشرية — بنودها ومبالغها متاحة لمسؤولي
+                  التصفية فقط
                 </div>
-              </div>
+              )}
 
               {/* Approve */}
               {canApprove && (
@@ -858,8 +917,8 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
         </div>
       )}
 
-      {/* نموذج التصفية المطبوع — يظهر فقط عند الطباعة */}
-      {det && (
+      {/* نموذج التصفية المطبوع — يظهر فقط عند الطباعة (لأصحاب التصفية) */}
+      {det && seesMoney && (
         <div className="print-voucher" dir="rtl">
           <div className="pv-head">
             <h1>نموذج تصفية مستحقات نهاية الخدمة</h1>
@@ -1043,7 +1102,8 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
   )
 }
 
-export default function SettlementPage({ params }: { params: { id: string } }) {
+export default function SettlementPage() {
+  const params = useParams<{ id: string }>()
   return (
     <MainLayout>
       <Suspense fallback={<Spinner />}>

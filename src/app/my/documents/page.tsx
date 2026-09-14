@@ -3,7 +3,9 @@
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import { AlertTriangle, FileText, FolderOpen } from 'lucide-react'
-import { fetchDocuments, type ApiDocument } from '@/lib/api'
+import { docTypeLabel } from '@/lib/doc-types'
+import { localToday } from '@/lib/dates'
+import { getCurrentUser, fetchDocuments, type ApiDocument } from '@/lib/api'
 
 // حالة المستند حسب تاريخ الانتهاء
 type DocStatus = 'valid' | 'expiring' | 'expired' | 'none'
@@ -27,7 +29,7 @@ const EXPIRING_DAYS = 60
 const statusOf = (d: ApiDocument): DocStatus => {
   const expiry = d.expiryDate ? String(d.expiryDate).slice(0, 10) : ''
   if (!expiry) return 'none'
-  const today = new Date().toISOString().slice(0, 10)
+  const today = localToday()
   if (d.expired ?? expiry < today) return 'expired'
   const limit = new Date(Date.now() + EXPIRING_DAYS * 86400000).toISOString().slice(0, 10)
   return expiry <= limit ? 'expiring' : 'valid'
@@ -41,8 +43,9 @@ export default function MyDocumentsPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    // الباك إند يقصر النتائج على مستندات الموظف نفسه تلقائياً
-    fetchDocuments()
+    const employeeId = getCurrentUser()?.employeeId
+    if (!employeeId) { setError('الحساب غير مرتبط بموظف؛ لا تتوفر مستندات شخصية.'); setLoading(false); return }
+    fetchDocuments({ employeeId })
       .then(setDocuments)
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل مستنداتك'))
       .finally(() => setLoading(false))
@@ -114,7 +117,7 @@ export default function MyDocumentsPage() {
                               <div className="w-10 h-10 bg-blue-50 rounded-xl flex items-center justify-center">
                                 <FileText size={20} className="text-blue-500" />
                               </div>
-                              <p className="font-medium text-gray-800 text-sm">{d.docType}</p>
+                              <p className="font-medium text-gray-800 text-sm">{docTypeLabel(d.docType)}</p>
                             </div>
                           </td>
                           <td className="table-cell text-sm font-mono text-gray-600" dir="ltr">

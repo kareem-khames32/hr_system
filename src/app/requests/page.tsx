@@ -1,7 +1,14 @@
 'use client'
+import { definitionCodeOf, isLeaveRequest, leaveCodeOf } from '../../../api/src/common/leave-contract'
 
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import LetterDownloadButton from '@/components/LetterDownloadButton'
+import RequestPayload from '@/components/RequestPayload'
+import OvertimePreview from '@/components/OvertimePreview'
+import OvertimeRequestSummary from '@/components/OvertimeRequestSummary'
+import { payloadFieldLabel } from '@/lib/request-payload'
+import { salaryIncreaseRequestFields, salaryIncreaseRequestPayload } from '@/lib/employee-salary-change-api'
 import {
   Plus,
   Search,
@@ -31,28 +38,32 @@ import {
 import {
   fetchRequestTypes,
   fetchMyRequests,
+  fetchRequest,
   createRequest,
   cancelRequest,
   resubmitRequest,
   uploadFile,
   fetchAvailableAssets,
   fetchCatalog,
-  fetchEmployees,
+  fetchEmployeeDirectory,
   fetchTeams,
   fetchMyCustody,
   fetchWorkingDays,
   fetchMyApprovedLeaves,
-  fetchLeaveTypes,
+  fetchActiveLeaveTypes,
   fetchMyOffboardingCase,
+  previewOvertime,
   withdrawOffboarding,
   can,
   type ApiRequest,
   type ApiRequestType,
-  type ApiEmployee,
+  type ApiEmployeeDirectoryEntry,
   type ApiTeam,
   type ApiCustody,
   type ApiLeave,
+  type ApiLeaveTypeOption,
   type CustomFieldDef,
+  type ApiOvertimePreview,
 } from '@/lib/api'
 
 // الإجازة المعتمدة كما يرجعها الباك — تحمل «نطاق اليوم» فوق نوع ApiLeave
@@ -113,6 +124,7 @@ const fieldLabels: Record<string, string> = {
   description: 'الوصف',
   destination: 'جهة الانتداب',
   leaveType: 'نوع الإجازة',
+  leaveTypeCode: 'نوع الإجازة',
   leaveId: 'رقم الإجازة',
   loanId: 'رقم السلفة',
   withEmployeeId: 'رقم الموظف البديل',
@@ -139,6 +151,9 @@ const periodLabels: Record<string, string> = {
   EVENING: 'النصف المسائي',
 }
 
+const optionLabel = (value: string) => ({ single: 'أعزب', married: 'متزوج', divorced: 'مطلق', widowed: 'أرمل',
+  permanent: 'غير محدد المدة', fixed_term: 'محدد المدة', part_time: 'دوام جزئي', seasonal: 'موسمي' } as Record<string, string>)[value] ?? value
+
 // أكواد أنواع الإجازة → عربي — لعرض «نوع الإجازة» في ملخّص الطلب بلا كود خام
 const leaveTypeCodeLabels: Record<string, string> = {
   ANNUAL: 'سنوية',
@@ -159,8 +174,10 @@ const handlerLabels: Record<string, string> = {
   none: 'الطلب نفسه هو السجل',
   leave_calendar_balance: 'إجازة تُخصم من الرصيد',
   leave_calendar_payroll: 'إجازة بلا خصم رصيد',
-  leave_calendar: 'التقويم',
-  leave_calendar_once: 'التقويم (مرة في الخدمة)',
+  leave_calendar: 'إجازة تُخصم من الرصيد',
+  leave_calendar_once: 'إجازة بلا خصم رصيد — التكرار حسب سياسة النوع',
+  leave_deduct_balance: 'إجازة تُخصم من الرصيد',
+  leave_no_balance: 'إجازة بلا خصم رصيد',
   leave_balance_restore: 'إرجاع رصيد الإجازة',
   overtime_entries: 'قيد أوفرتايم',
   attendance_log: 'سجل الحضور',
@@ -178,9 +195,10 @@ const handlerLabels: Record<string, string> = {
   employee_record: 'تحديث بيانات الموظف',
   employee_record_auto: 'تحديث آلي لبيانات الموظف',
   payroll_bank_secure: 'تغيير حساب بنكي (مسار أمني)',
-  letter_pdf_generator: 'خطاب PDF',
+  letter_pdf_generator: 'خطاب PDF قابل للتحميل بعد الاعتماد',
   custody_assignments_ack: 'عهدة بتأكيد استلام',
-  custody_assignments: 'سجل العهد',
+  custody_assignments: 'إرجاع عهدة',
+  custody_return: 'إرجاع عهدة',
   custody_finance: 'العهدة والمالية',
   employee_status: 'تغيير حالة وظيفية',
   document_vault: 'خزنة الوثائق',
@@ -198,16 +216,12 @@ const SMART_SELECT_FIELDS: readonly string[] = ['toTeamId', 'toEmployeeId', 'ass
 
 // مفتاح غير معروف؟ نفكّ الـ camelCase لكلمات مقروءة — لا يظهر مفتاح خام أبداً
 const humanizeKey = (k: string): string =>
-  fieldLabels[k] ??
-  k
-    .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
-    .replace(/[_-]+/g, ' ')
-    .toLowerCase()
+  fieldLabels[k] ?? payloadFieldLabel(k)
 
 // قيمة الحقل للعرض — تُترجم الأكواد المعروفة ولا تعرض مراجع خام
 const formatPayloadValue = (k: string, v: unknown): string => {
   if (k === 'period') return periodLabels[String(v)] ?? 'يوم كامل'
-  if (k === 'leaveType') return leaveTypeCodeLabels[String(v)] ?? String(v)
+  if (k === 'leaveType' || k === 'leaveTypeCode') return leaveTypeCodeLabels[String(v)] ?? String(v)
   if (k === 'assetIds' && Array.isArray(v)) {
     const n = v.length
     return n === 1 ? 'أصل واحد' : n === 2 ? 'أصلان' : n <= 10 ? `${n} أصول` : `${n} أصلاً`
@@ -245,6 +259,7 @@ const mapRequest = (r: ApiRequest, types: ApiRequestType[]): MyRequestRow => {
     id: r.id,
     displayId: `REQ-${r.id}`,
     type:
+      types.flatMap(t => t.leaveProfiles ?? [t]).find(t => (t.definitionCode ?? t.code) === definitionCodeOf(r))?.nameAr ??
       types.find((t) => t.code === r.typeCode)?.nameAr ??
       getTypeByCode(r.typeCode)?.nameAr ??
       'طلب',
@@ -254,9 +269,9 @@ const mapRequest = (r: ApiRequest, types: ApiRequestType[]): MyRequestRow => {
     steps: steps.map((s) => ({
       name: roleLabels[s.role] ?? 'جهة اعتماد',
       state:
-        s.action === 'REJECT'
+        ['REJECT', 'REJECTED'].includes(s.action ?? '')
           ? 'rejected'
-          : s.action === 'APPROVE' || (s.actedAt && s.action !== 'RETURN')
+          : ['APPROVE', 'APPPROVE', 'APPROVED'].includes(s.action ?? '')
           ? 'done'
           : s.stepOrder === r.currentStep
           ? 'current'
@@ -289,10 +304,18 @@ export default function MyRequestsPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [showNewModal, setShowNewModal] = useState(false)
   const [selectedType, setSelectedType] = useState('')
+  const [selectedDefinition, setSelectedDefinition] = useState('')
   const [fieldValues, setFieldValues] = useState<Record<string, string>>({})
   const [requestNote, setRequestNote] = useState('')
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState<string | null>(null)
+  const [editingRequest, setEditingRequest] = useState<ApiRequest | null>(null)
+  const [requestDetail, setRequestDetail] = useState<ApiRequest | null>(null)
+  const [overtimePreview, setOvertimePreview] = useState<ApiOvertimePreview | null>(null)
+  const [overtimePreviewLoading, setOvertimePreviewLoading] = useState(false)
+  const [overtimePreviewError, setOvertimePreviewError] = useState('')
+  const [overtimePreviewRevision, setOvertimePreviewRevision] = useState(0)
+  const [returnComment, setReturnComment] = useState('')
   // رفع الملفات لحقول «مرفق» — الحقل الجاري رفعه + أسماء الملفات المرفوعة
   const [uploadingField, setUploadingField] = useState<string | null>(null)
   const [uploadedFiles, setUploadedFiles] = useState<Record<string, string>>({})
@@ -323,29 +346,23 @@ export default function MyRequestsPage() {
     Array<{ id: number; nameAr: string; isDeductible: boolean; maxDurationMinutes?: number | null; isActive: boolean }>
   >([])
   const [permissionType, setPermissionType] = useState('')
-  // أنواع الإجازة (السنوية/المرضية/بدون راتب...) — طلب إجازة موحّد يختار منها
-  const [leaveTypes, setLeaveTypes] = useState<
-    Array<{
-      code: string
-      nameAr: string
-      isPaid: boolean
-      balanceSource: string
-      requiredAttachment?: string | null
-      isActive: boolean
-    }>
-  >([])
+  // أنواع الإجازة الفعّالة (السنوية/المرضية/بدون راتب...) — طلب إجازة موحّد يختار منها
+  const [leaveTypes, setLeaveTypes] = useState<ApiLeaveTypeOption[]>([])
   // التقديم نيابة عن موظف آخر (بصلاحية)
   const canOnBehalf = can('requests.create_on_behalf')
   const [onBehalf, setOnBehalf] = useState(false)
-  const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  // دليل النطاق المختصر (نشطون فقط، بلا employees.view) — لمنتقيي النيابة ونقل العهدة
+  const [employees, setEmployees] = useState<ApiEmployeeDirectoryEntry[]>([])
   const [onBehalfEmployeeId, setOnBehalfEmployeeId] = useState('')
   // مصادر القوائم الذكية — تُحمَّل كسولاً عند اختيار نوع يحتاجها
   const [teams, setTeams] = useState<ApiTeam[]>([])
   const [myCustody, setMyCustody] = useState<ApiCustody[] | null>(null)
   // أيام العمل الفعلية داخل مدى الإجازة — تلميح الخصم (آخر مدى محسوب)
+  // self = محسوب بجدول الموظف نفسه (تقديم لنفسه) لا بفرع المستخدم (نيابة)
   const [workingDaysInfo, setWorkingDaysInfo] = useState<{
     from: string
     to: string
+    self: boolean
     total: number
     working: number
     skipped: string[]
@@ -375,6 +392,35 @@ export default function MyRequestsPage() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+
+  // فتح نموذج نوع بعينه من رابط (مثلاً «بصمة ناقصة» في كشف الحضور ← طلب تصحيح
+  // بصمة معبّأ بالتاريخ والطرف الناقص): /requests?type=PUNCH_CORRECTION&date=…&punchType=OUT
+  useEffect(() => {
+    if (types.length === 0 || typeof window === 'undefined') return
+    const qs = new URLSearchParams(window.location.search)
+    const code = qs.get('type')
+    const linkedProfile = types.flatMap(t => t.leaveProfiles ?? [t]).find(t => (t.definitionCode ?? t.code) === code && t.isActive)
+    if (!code || (!types.some((t) => t.code === code && t.isActive) && !linkedProfile)) return
+    const prefill: Record<string, string> = {}
+    const date = qs.get('date')
+    if (date && /^\d{4}-\d{2}-\d{2}$/.test(date)) prefill.date = date
+    const punchType = qs.get('punchType')
+    const forEmployee = qs.get('employeeId')
+    if (forEmployee && /^\d+$/.test(forEmployee) && canOnBehalf) {
+      setOnBehalf(true)
+      setOnBehalfEmployeeId(forEmployee)
+    }
+    if (punchType === 'IN' || punchType === 'OUT') prefill.punchType = punchType
+    if (linkedProfile?.definitionCode) {
+      setSelectedDefinition(linkedProfile.definitionCode)
+      if (linkedProfile.leaveTypeCode) prefill.leaveTypeCode = linkedProfile.leaveTypeCode
+    }
+    setSelectedType(linkedProfile?.definitionCode ? 'LEAVE' : code)
+    setFieldValues(prefill)
+    setShowNewModal(true)
+    // الرابط يُستهلك مرة واحدة — لا يُعاد فتح النموذج بعد التقديم/إعادة التحميل
+    window.history.replaceState(null, '', window.location.pathname)
+  }, [types, canOnBehalf])
 
   // تحميل كسول حسب النوع المختار: أصول العهدة المتاحة / أنواع الإذن
   useEffect(() => {
@@ -422,7 +468,7 @@ export default function MyRequestsPage() {
   // قائمة الموظفين — فقط لمن يملك صلاحية التقديم نيابة عن غيره
   useEffect(() => {
     if (showNewModal && canOnBehalf && employees.length === 0) {
-      fetchEmployees()
+      fetchEmployeeDirectory()
         .then(setEmployees)
         .catch((err) =>
           setSubmitError(
@@ -434,8 +480,11 @@ export default function MyRequestsPage() {
   }, [showNewModal, canOnBehalf])
 
   // الأنواع المتاحة للموظف — كتالوج السيرفر هو مصدر الحقيقة الوحيد
-  // (الباك يفلتر أصلاً حسب جمهور كل نوع visibleTo وحالة التفعيل)
-  const availableRequestTypes = types.filter((t) => t.isActive)
+  // (الباك يفلتر أصلاً حسب جمهور كل نوع visibleTo وحالة التفعيل). والنوع اللي
+  // وجهته لسه متبنّتش مابيتقدّمش — مخفي من المنتقي (REQ-3)
+  const availableRequestTypes = types.filter(
+    (t) => t.isActive && t.destinationSupported !== false && (t.code !== 'OVERTIME_AUTO' || editingRequest?.typeCode === 'OVERTIME_AUTO')
+  )
 
   // فئات الكتالوج الفعلية — المعروفة بترتيبها ثم أي فئة جديدة من السيرفر آخراً
   const knownCategoryOrder = Object.keys(categoryLabels)
@@ -449,16 +498,51 @@ export default function MyRequestsPage() {
   const categoryLabel = (cat: string) =>
     categoryLabels[cat as keyof typeof categoryLabels] ?? 'أخرى'
 
-  const selectedTypeDef = availableRequestTypes.find((t) => t.code === selectedType)
-  const requiredFields = parseJson<string[]>(selectedTypeDef?.requiredFields, [])
+  const selectedGroup = availableRequestTypes.find((t) => t.code === selectedType)
+  const leaveProfiles = selectedGroup?.leaveProfiles ?? []
+  const activeProfile = leaveProfiles.find(p => p.definitionCode === selectedDefinition)
+    ?? (leaveProfiles.length === 1 ? leaveProfiles[0] : undefined)
+  const selectedTypeDef = selectedGroup?.leaveProfiles
+    ? activeProfile ? { ...activeProfile, code: 'LEAVE' } : undefined
+    : selectedGroup
+  useEffect(() => {
+    if (selectedType === 'LEAVE' && activeProfile?.leaveTypeCode) {
+      setFieldValues(values => ({ ...values, leaveTypeCode: activeProfile.leaveTypeCode! }))
+    }
+  }, [selectedType, activeProfile?.definitionCode, activeProfile?.leaveTypeCode])
+  const isSalaryIncrease = selectedTypeDef?.code === 'SALARY_INCREASE' || selectedTypeDef?.destinationHandler === 'salary_update_history'
+  const configuredRequiredFields = parseJson<string[]>(selectedTypeDef?.requiredFields, [])
   // الحقول المخصّصة كاملة الوصف — إن وُجدت تحل محل الاستنتاج القديم
-  const customFields = parseJson<CustomFieldDef[]>(
+  const configuredCustomFields = parseJson<CustomFieldDef[]>(
     (selectedTypeDef as any)?.customFields,
     []
   )
+  const customFields = isSalaryIncrease ? salaryIncreaseRequestFields(configuredCustomFields, configuredRequiredFields.map(key => ({ key, label: fieldLabels[key] ?? key, type: isNumberField(key) ? 'number' : key.toLowerCase().includes('date') ? 'date' : 'text', required: true }))) : configuredCustomFields
+  const requiredFields = isSalaryIncrease ? customFields.filter(field => field.required).map(field => field.key) : configuredRequiredFields
   const hasCustomFields = customFields.length > 0
   // أسماء حقول النموذج الحالي — لاكتشاف الحقول الذكية وتحميل مصادرها
   const formFieldKeys = hasCustomFields ? customFields.map((f) => f.key) : requiredFields
+  const isAutomaticOvertime = selectedType === 'OVERTIME_AUTO' && editingRequest?.typeCode === 'OVERTIME_AUTO'
+  const isOvertime = selectedType === 'OVERTIME' || isAutomaticOvertime
+  const overtimeDate = fieldValues.date ?? ''
+  const overtimeEmployeeId = editingRequest?.requesterId ?? (onBehalf && onBehalfEmployeeId ? Number(onBehalfEmployeeId) : undefined)
+  const overtimeResubmitId = editingRequest && parseJson<Record<string, unknown>>(editingRequest.payload, {}).date === overtimeDate ? editingRequest.id : undefined
+  const overtimeHoursRequired = !isAutomaticOvertime && (overtimePreview?.evidenceMode === 'EXEMPT_APPROVAL' || customFields.some(field => field.key === 'hours' && field.required))
+  const overtimePreviewCurrent = overtimePreview?.workDate === overtimeDate &&
+    (overtimeEmployeeId == null || overtimePreview.employeeId === overtimeEmployeeId)
+  useEffect(() => {
+    setOvertimePreview(null)
+    setOvertimePreviewError('')
+    setOvertimePreviewLoading(false)
+    if (!showNewModal || !isOvertime || !/^\d{4}-\d{2}-\d{2}$/.test(overtimeDate) || (onBehalf && !onBehalfEmployeeId)) return
+    let cancelled = false
+    setOvertimePreviewLoading(true)
+    previewOvertime(overtimeDate, overtimeEmployeeId, overtimeResubmitId)
+      .then(value => { if (!cancelled) setOvertimePreview(value) })
+      .catch(err => { if (!cancelled) setOvertimePreviewError(err instanceof Error ? err.message : 'تعذر معاينة سجل اليوم') })
+      .finally(() => { if (!cancelled) setOvertimePreviewLoading(false) })
+    return () => { cancelled = true }
+  }, [showNewModal, isOvertime, overtimeDate, overtimeEmployeeId, overtimeResubmitId, onBehalf, onBehalfEmployeeId, overtimePreviewRevision])
 
   // تحميل كسول لمصادر القوائم الذكية: الفرق / الموظفون / عهدتي النشطة
   useEffect(() => {
@@ -473,7 +557,7 @@ export default function MyRequestsPage() {
         )
     }
     if (formFieldKeys.includes('toEmployeeId') && employees.length === 0) {
-      fetchEmployees()
+      fetchEmployeeDirectory()
         .then(setEmployees)
         .catch((err) =>
           setSubmitError(
@@ -489,8 +573,9 @@ export default function MyRequestsPage() {
         )
     }
     // طلب إجازة موحّد: حمّل أنواع الإجازة مرة عند اختيار نوع فيه حقل نوع الإجازة
-    if (formFieldKeys.includes('leaveType') && leaveTypes.length === 0) {
-      fetchLeaveTypes()
+    // (endpoint الخدمة الذاتية — الإداري /settings/leave-types كان يرجع 403 للموظف)
+    if ((formFieldKeys.includes('leaveTypeCode') || formFieldKeys.includes('leaveType')) && leaveTypes.length === 0) {
+      fetchActiveLeaveTypes()
         .then(setLeaveTypes)
         .catch((err) =>
           setSubmitError(
@@ -499,7 +584,7 @@ export default function MyRequestsPage() {
         )
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedType])
+  }, [selectedType, selectedDefinition])
 
   // النماذج الخاصة: عهدة (اختيار أصول) / استئذان (نوع الإذن) / إجازات (نطاق اليوم)
   const isCustodyRequest = selectedTypeDef?.code === 'CUSTODY_REQUEST'
@@ -514,7 +599,7 @@ export default function MyRequestsPage() {
   const isHalfDay = isLeaveCategory && leavePeriod !== 'FULL'
   // نوع الإجازة المختار في الطلب الموحّد + المرفق الإجباري إن وُجد
   const selectedLeaveTypeDef = isLeave
-    ? leaveTypes.find((lt) => lt.code === fieldValues.leaveType)
+    ? leaveTypes.find((lt) => lt.code === (fieldValues.leaveTypeCode ?? fieldValues.leaveType))
     : undefined
   const leaveAttachmentRequired = (selectedLeaveTypeDef?.requiredAttachment ?? '').trim()
 
@@ -529,16 +614,19 @@ export default function MyRequestsPage() {
       setWorkingDaysInfo(null)
       return
     }
+    // لنفسه: جدول عمله (= خصم السيرفر)؛ نيابةً: فرع المستخدم كما كان
+    const self = !onBehalf
     if (
       workingDaysInfo &&
       workingDaysInfo.from === leaveFrom &&
-      workingDaysInfo.to === leaveTo
+      workingDaysInfo.to === leaveTo &&
+      workingDaysInfo.self === self
     )
       return
     const timer = setTimeout(() => {
-      fetchWorkingDays(leaveFrom, leaveTo)
+      fetchWorkingDays(leaveFrom, leaveTo, { self })
         .then((res) => {
-          setWorkingDaysInfo({ from: leaveFrom, to: leaveTo, ...res })
+          setWorkingDaysInfo({ from: leaveFrom, to: leaveTo, self, ...res })
           // ضبط عدد الأيام على أيام العمل الفعلية — فقط إن ظل المدى كما هو
           setFieldValues((prev) =>
             (prev.fromDate ?? '').trim() === leaveFrom &&
@@ -551,7 +639,7 @@ export default function MyRequestsPage() {
     }, 400)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leaveFrom, leaveTo, isLeaveCategory, isHalfDay])
+  }, [leaveFrom, leaveTo, isLeaveCategory, isHalfDay, onBehalf])
 
   // تلميح الخصم تحت حقل الأيام — كهرماني عند وجود عطلات داخل المدى، أحمر لو كله عطلات
   const workingDaysHint =
@@ -601,7 +689,6 @@ export default function MyRequestsPage() {
         >
           <option value="">— اختر الموظف —</option>
           {employees
-            .filter((emp) => emp.isActive)
             .map((emp) => (
               <option key={emp.id} value={emp.id}>
                 {emp.fullName} — {emp.employeeCode}
@@ -675,29 +762,29 @@ export default function MyRequestsPage() {
         </>
       )
     }
-    if (key === 'leaveType') {
+    if (key === 'leaveType' || key === 'leaveTypeCode') {
       const selected = leaveTypes.find((lt) => lt.code === fieldValues[key])
       return (
         <>
           <select
             className="input w-full"
             value={fieldValues[key] ?? ''}
+            disabled={!!selectedTypeDef?.leaveTypeCode}
             onChange={(e) => setFieldValue(key, e.target.value)}
           >
             <option value="">— اختر نوع الإجازة —</option>
-            {leaveTypes
-              .filter((lt) => lt.isActive)
-              .map((lt) => (
-                <option key={lt.code} value={lt.code}>
-                  {lt.nameAr}
-                </option>
-              ))}
+            {/* السيرفر يرجّع الفعّال فقط */}
+            {leaveTypes.map((lt) => (
+              <option key={lt.code} value={lt.code}>
+                {lt.nameAr}
+              </option>
+            ))}
           </select>
           {selected &&
-            (selected.balanceSource !== 'none' ? (
+            ((selected.balanceType ?? 'none') !== 'none' ? (
               <p className="text-xs text-gray-500 mt-1.5">
                 تُخصم من رصيد{' '}
-                {selected.balanceSource === 'annual'
+                {selected.balanceType === 'annual'
                   ? 'الإجازة السنوية'
                   : 'الإجازة المرضية'}
               </p>
@@ -719,13 +806,11 @@ export default function MyRequestsPage() {
 
   // اسم نوع الإجازة بالعربي — من كتالوج الأنواع إن أمكن، وإلا النص كما هو
   const leaveTypeLabel = (code: string): string =>
-    types.find((t) => t.code === code)?.nameAr ??
-    types.find((t) => t.code === `LEAVE_${code}`)?.nameAr ??
-    getTypeByCode(code)?.nameAr ??
-    getTypeByCode(`LEAVE_${code}`)?.nameAr ??
+    leaveTypes.find((t) => t.code === code)?.nameAr ??
     code
+  // permissionType = معرّف النوع المختار (نصاً) — مرجع ثابت بدل الاسم القابل للتعديل
   const selectedPermissionDef = permissionTypes.find(
-    (p) => p.nameAr === permissionType
+    (p) => String(p.id) === permissionType
   )
 
   // تغيير نطاق اليوم: نصف يوم ⇒ النهاية = البداية والأيام 0.5 تلقائياً
@@ -824,6 +909,10 @@ export default function MyRequestsPage() {
       }
       payload.leaveId = selectedLeaveId
       if (cancelReason.trim()) payload.reason = cancelReason.trim()
+    } else if (isSalaryIncrease) {
+      // النسبة وأساس الاعتماد يشتقهما الخادم؛ لا نعيد إرسال القيم الداخلية من طلب معاد للتصحيح.
+      try { Object.assign(payload, salaryIncreaseRequestPayload(fieldValues, customFields, SMART_SELECT_FIELDS)) }
+      catch (cause) { setSubmitError(cause instanceof Error ? cause.message : 'راجع مبلغ الزيادة وتاريخ سريانها.'); return }
     } else if (hasCustomFields) {
       // النموذج المبني من تعريف الحقول المخصّصة
       for (const f of customFields) {
@@ -844,7 +933,29 @@ export default function MyRequestsPage() {
         setSubmitError('اختر نوع الإذن')
         return
       }
-      payload.permissionType = permissionType
+      // المعرّف مرجع الحساب، والاسم للعرض عند المعتمد (السيرفر يثبّتهما من الكتالوج)
+      payload.permissionTypeId = Number(permissionType)
+      payload.permissionType = selectedPermissionDef?.nameAr ?? ''
+    }
+    if (isOvertime) {
+      if (!overtimePreviewCurrent || !overtimePreview || overtimePreviewLoading || !overtimePreview.canSubmit) {
+        setSubmitError('راجع معاينة اليوم وعالج الملاحظات قبل إرسال طلب الإضافي')
+        return
+      }
+      const hours = isAutomaticOvertime ? '' : (fieldValues.hours ?? '').trim()
+      if ((overtimeHoursRequired && !hours) || (hours && (!Number.isFinite(Number(hours)) || Number(hours) <= 0 || Math.abs(Number(hours) * 60 - Math.round(Number(hours) * 60)) > 0.000001))) {
+        setSubmitError('اكتب ساعات موجبة تعادل عددًا صحيحًا من الدقائق؛ مثال: 2.25 لساعتين وربع')
+        return
+      }
+      const reason = (fieldValues.reason ?? '').trim()
+      if (!overtimePreview.window.open && !reason) { setSubmitError('اكتب سبب طلب الإضافي داخل الفترة المغلقة'); return }
+      payload.date = overtimeDate
+      if (isAutomaticOvertime) delete payload.autoDetected
+      if (hours) payload.hours = Number(hours)
+      else delete payload.hours
+      if (reason) payload.reason = reason
+      else delete payload.reason
+      payload.previewFingerprint = overtimePreview.fingerprint
     }
     if (isLeaveCategory) {
       payload.period = leavePeriod
@@ -871,13 +982,19 @@ export default function MyRequestsPage() {
     setSubmitting(true)
     setSubmitError(null)
     try {
-      await createRequest(
+      if (editingRequest) {
+        await resubmitRequest(editingRequest.id, payload)
+      } else await createRequest(
         selectedTypeDef.code,
         payload,
         true,
-        onBehalf && onBehalfEmployeeId ? Number(onBehalfEmployeeId) : undefined
+        onBehalf && onBehalfEmployeeId ? Number(onBehalfEmployeeId) : undefined,
+        selectedTypeDef.definitionCode
       )
       setSelectedType('')
+      setSelectedDefinition('')
+      setEditingRequest(null)
+      setReturnComment('')
       setFieldValues({})
       setUploadedFiles({})
       setRequestNote('')
@@ -911,8 +1028,26 @@ export default function MyRequestsPage() {
 
   const resubmit = async (id: number) => {
     try {
-      await resubmitRequest(id)
-      await load()
+      const detail = await fetchRequest(id)
+      const payload = parseJson<Record<string, unknown>>(detail.payload, {})
+      if (isLeaveRequest(detail)) payload.leaveTypeCode = leaveCodeOf(payload, definitionCodeOf(detail))
+      setEditingRequest(detail)
+      setSelectedType(isLeaveRequest(detail) ? 'LEAVE' : detail.typeCode)
+      setSelectedDefinition(definitionCodeOf(detail))
+      setFieldValues(Object.fromEntries(Object.entries(payload).map(([k, v]) => [k, typeof v === 'string' ? v : String(v ?? '')])))
+      setUploadedFiles(Object.fromEntries(Object.entries(payload).filter(([, v]) => typeof v === 'string' && v.startsWith('file:')).map(([k]) => [k, 'مرفق محفوظ — يمكن استبداله'])))
+      setRequestNote(String(payload.note ?? ''))
+      setLeavePeriod(['MORNING', 'EVENING'].includes(String(payload.period)) ? payload.period as 'MORNING' | 'EVENING' : 'FULL')
+      setPermissionType(String(payload.permissionTypeId ?? ''))
+      setSelectedAssetIds(Array.isArray(payload.assetIds) ? payload.assetIds.map(Number) : [])
+      setCustodyReason(String(payload.reason ?? ''))
+      setSelectedLeaveId(payload.leaveId ? Number(payload.leaveId) : null)
+      setCancelReason(String(payload.reason ?? ''))
+      setOnBehalf(false)
+      const last = [...(detail.approvals ?? [])].reverse().find(a => ['RETURN', 'RETURNED_FOR_INFO'].includes(a.action))
+      setReturnComment(last?.comment || 'راجع بيانات الطلب وأكمل المطلوب قبل إعادة الإرسال')
+      setSubmitError(null)
+      setShowNewModal(true)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذّر إعادة إرسال الطلب')
     }
@@ -946,7 +1081,7 @@ export default function MyRequestsPage() {
             </p>
           </div>
           <button
-            onClick={() => setShowNewModal(true)}
+            onClick={() => { setEditingRequest(null); setReturnComment(''); setSelectedType(''); setFieldValues({}); setRequestNote(''); setSelectedAssetIds([]); setCustodyReason(''); setUploadedFiles({}); setShowNewModal(true) }}
             className="btn-primary flex items-center gap-2"
           >
             <Plus size={20} />
@@ -1035,8 +1170,8 @@ export default function MyRequestsPage() {
                 const StatusIcon = statusIcons[req.status] ?? Clock
                 return (
                   <div key={req.id} className="card p-5">
-                    <div className="flex items-start justify-between">
-                      <div className="flex items-start gap-4">
+                    <div className="flex items-start justify-between gap-3 flex-wrap">
+                      <div className="flex items-start gap-4 min-w-0 flex-1 basis-64">
                         <div
                           className={`w-12 h-12 rounded-2xl flex items-center justify-center ${statusStyles[req.status] ?? 'bg-gray-100 text-gray-500'}`}
                         >
@@ -1060,7 +1195,9 @@ export default function MyRequestsPage() {
                           </p>
                         </div>
                       </div>
-                      <div className="flex items-center gap-2 shrink-0">
+                      <div className="flex items-center gap-2 flex-wrap">
+                        <button className="text-xs px-3 py-1.5 bg-gray-100 rounded-lg" onClick={async () => { try { setRequestDetail(await fetchRequest(req.id)) } catch (e) { setError(e instanceof Error ? e.message : 'تعذّر تحميل التفاصيل') } }}>التفاصيل والتعليقات</button>
+                        <LetterDownloadButton reference={req.destinationRecord} />
                         {['DRAFT', 'SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO'].includes(req.status) && (
                           <button
                             onClick={() => withdraw(req.id)}
@@ -1124,13 +1261,23 @@ export default function MyRequestsPage() {
           </>
         )}
 
+        {requestDetail && <div className="fixed inset-0 bg-black/50 z-50 flex justify-end" onClick={() => setRequestDetail(null)}>
+          <div className="bg-white w-full max-w-lg h-full overflow-y-auto p-6 space-y-5" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center justify-between"><h2 className="text-xl font-bold">تفاصيل الطلب #{requestDetail.id}</h2><button onClick={() => setRequestDetail(null)} aria-label="إغلاق التفاصيل"><X size={22} /></button></div>
+            <RequestPayload payload={requestDetail.payload} />
+            <OvertimeRequestSummary overtime={requestDetail.overtime ?? undefined} reviewRequired={requestDetail.overtimeReviewRequired} />
+            <LetterDownloadButton reference={requestDetail.destinationRef} />
+            <h3 className="font-bold">تعليقات المعتمدين</h3>
+            {(requestDetail.approvals ?? []).map(a => <div key={a.id} className="p-3 bg-gray-50 rounded-xl"><p className="text-sm font-medium">{({ APPROVE: 'اعتماد', APPROVED: 'اعتماد', REJECT: 'رفض', REJECTED: 'رفض', RETURN: 'إرجاع للاستكمال', RETURNED_FOR_INFO: 'إرجاع للاستكمال', ESCALATED: 'تصعيد', CANCELLED: 'إلغاء' } as Record<string, string>)[a.action] ?? a.action}</p><p className="text-sm whitespace-pre-wrap">{a.comment || 'بدون تعليق'}</p><time className="text-xs text-gray-400">{a.actedAt?.slice(0, 10)}</time></div>)}
+            {!requestDetail.approvals?.length && <p className="text-gray-500 text-sm">لم تُسجّل تعليقات بعد</p>}
+          </div></div>}
         {/* New Request Modal */}
         {showNewModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b border-gray-100 flex items-center justify-between">
                 <div>
-                  <h2 className="text-xl font-bold text-gray-800">تقديم طلب جديد</h2>
+                  <h2 className="text-xl font-bold text-gray-800">{editingRequest ? `استكمال الطلب #${editingRequest.id}` : 'تقديم طلب جديد'}</h2>
                   <p className="text-sm text-gray-500 mt-1">
                     الطلبات الظاهرة لك حسب ما حدده المسؤول في «بانِي الطلبات»
                   </p>
@@ -1143,6 +1290,7 @@ export default function MyRequestsPage() {
                 </button>
               </div>
               <div className="p-6 space-y-4">
+                {editingRequest && <div className="bg-amber-50 border border-amber-200 rounded-xl p-4"><p className="font-bold text-sm">تعليق المعتمد</p><p className="text-sm whitespace-pre-wrap">{returnComment}</p></div>}
                 {submitError && (
                   <div className="bg-red-50 text-red-700 rounded-xl p-4 text-sm">
                     {submitError}
@@ -1150,7 +1298,7 @@ export default function MyRequestsPage() {
                 )}
 
                 {/* التقديم نيابة عن موظف آخر — بصلاحية فقط */}
-                {canOnBehalf && (
+                {canOnBehalf && !editingRequest && (
                   <div className="bg-indigo-50/60 border border-indigo-100 rounded-xl p-4 space-y-3">
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
@@ -1176,7 +1324,6 @@ export default function MyRequestsPage() {
                         >
                           <option value="">— اختر الموظف —</option>
                           {employees
-                            .filter((emp) => emp.isActive)
                             .map((emp) => (
                               <option key={emp.id} value={emp.id}>
                                 {emp.fullName} — {emp.employeeCode}
@@ -1192,6 +1339,7 @@ export default function MyRequestsPage() {
                 )}
 
                 {/* فئات الكتالوج */}
+                {!editingRequest && <>
                 <div className="flex gap-2 flex-wrap">
                   <button
                     onClick={() => setSelectedCategory('')}
@@ -1236,9 +1384,12 @@ export default function MyRequestsPage() {
                               return (
                                 <button
                                   key={t.code}
+                                  disabled={!!editingRequest}
                                   onClick={() => {
                                     setSelectedType(t.code)
-                                    setFieldValues({})
+                                    setSelectedDefinition(t.leaveProfiles?.length === 1 ? t.leaveProfiles[0].definitionCode ?? '' : '')
+                                    setFieldValues(t.leaveProfiles?.length === 1 && t.leaveProfiles[0].leaveTypeCode
+                                      ? { leaveTypeCode: t.leaveProfiles[0].leaveTypeCode } : {})
                                     setUploadedFiles({})
                                     setSelectedAssetIds([])
                                     setAssetSearch('')
@@ -1276,10 +1427,12 @@ export default function MyRequestsPage() {
                                         )}
                                       </p>
                                       <p className="text-xs text-gray-500">
-                                        السلسلة: {def?.approvalChain ?? '—'} • الوجهة:{' '}
-                                        {def?.destination ??
-                                          handlerLabels[t.destinationHandler] ??
-                                          '—'}
+                                        {t.leaveProfiles && t.leaveProfiles.length > 1 ? 'اختر نموذج الإجازة لعرض مسار اعتماده' : <>السلسلة: {t.approvalChainName ?? 'حسب إعدادات نوع الطلب'} • التنفيذ:{' '}
+                                        {/* «سجل فقط» صريح — حتى لو الكتالوج المحلي بيوصف وجهة أخرى (REQ-3) */}
+                                        {t.destinationHandler === 'none'
+                                          ? handlerLabels.none
+                                          : handlerLabels[t.destinationHandler] ??
+                                            '—'}</>}
                                       </p>
                                     </div>
                                   </div>
@@ -1302,6 +1455,24 @@ export default function MyRequestsPage() {
                     </div>
                   )}
                 </div>
+                </>}
+
+                {selectedType === 'LEAVE' && leaveProfiles.length > 1 && (
+                  <div className="space-y-2">
+                    <label htmlFor="leave-request-profile" className="block text-sm font-medium text-gray-700">نموذج الإجازة *</label>
+                    <select id="leave-request-profile" className="input w-full" disabled={!!editingRequest}
+                      value={selectedDefinition} onChange={(e) => {
+                        const profile = leaveProfiles.find(p => p.definitionCode === e.target.value)
+                        setSelectedDefinition(e.target.value)
+                        setFieldValues(profile?.leaveTypeCode ? { leaveTypeCode: profile.leaveTypeCode } : {})
+                        setUploadedFiles({}); setSubmitError(null)
+                      }}>
+                      <option value="">— اختر النموذج —</option>
+                      {leaveProfiles.map(profile => <option key={profile.definitionCode} value={profile.definitionCode}>{profile.nameAr}</option>)}
+                    </select>
+                    {selectedTypeDef && <p className="text-xs text-gray-500">السلسلة: {selectedTypeDef.approvalChainName} • {handlerLabels[selectedTypeDef.destinationHandler] ?? 'إجازة'}</p>}
+                  </div>
+                )}
 
                 {/* تصحيح/طلب بصمة: تلميح تعبئة البصمة الناقصة */}
                 {selectedType && isPunchCorrection && (
@@ -1507,7 +1678,7 @@ export default function MyRequestsPage() {
                       {permissionTypes
                         .filter((p) => p.isActive)
                         .map((p) => (
-                          <option key={p.id} value={p.nameAr}>
+                          <option key={p.id} value={String(p.id)}>
                             {p.nameAr}
                           </option>
                         ))}
@@ -1529,7 +1700,7 @@ export default function MyRequestsPage() {
                 {/* النموذج من تعريف الحقول المخصّصة — يحل محل الاستنتاج القديم */}
                 {selectedType && hasCustomFields && !isCustodyRequest && !isLeaveCancel && (
                   <div className="grid grid-cols-2 gap-3">
-                    {customFields.map((f) => (
+                    {customFields.filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f.key)).map((f) => (
                       <div key={f.key} className={f.type === 'file' ? 'col-span-2' : ''}>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
                           {f.label}
@@ -1545,7 +1716,7 @@ export default function MyRequestsPage() {
                             <option value="">— اختر —</option>
                             {(f.options ?? []).map((o) => (
                               <option key={o} value={o}>
-                                {o}
+                                {optionLabel(o)}
                               </option>
                             ))}
                           </select>
@@ -1595,6 +1766,8 @@ export default function MyRequestsPage() {
                                 : 'text'
                             }
                             className="input w-full disabled:bg-gray-50 disabled:text-gray-400 read-only:bg-gray-50 read-only:text-gray-500"
+                            inputMode={isSalaryIncrease && f.key === 'newSalary' ? 'decimal' : undefined}
+                            maxLength={isSalaryIncrease ? f.key === 'newSalary' ? 19 : f.key === 'reason' ? 500 : undefined : undefined}
                             disabled={
                               isHalfDay && (f.key === 'toDate' || f.key === 'days')
                             }
@@ -1609,6 +1782,7 @@ export default function MyRequestsPage() {
                   </div>
                 )}
 
+                {isSalaryIncrease && <p className="text-sm text-amber-800">زيادة الراتب تُطبّق بعد الاعتماد حسب تاريخ السريان؛ التاريخ المستقبلي لا يغيّر الأجر الحالي قبل موعده. نسبة الزيادة تُحتسب من الأجر المثبت في النظام.</p>}
                 {/* الاستنتاج القديم — عند غياب الحقول المخصّصة */}
                 {selectedType &&
                   !hasCustomFields &&
@@ -1616,7 +1790,7 @@ export default function MyRequestsPage() {
                   !isLeaveCancel &&
                   requiredFields.length > 0 && (
                     <div className="grid grid-cols-2 gap-3">
-                      {requiredFields.map((f) => (
+                      {requiredFields.filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f)).map((f) => (
                         <div key={f}>
                           <label className="block text-sm font-medium text-gray-700 mb-2">
                             {humanizeKey(f)}
@@ -1639,6 +1813,15 @@ export default function MyRequestsPage() {
                       ))}
                     </div>
                   )}
+
+                {isOvertime && <div className="space-y-4">
+                  <div className="grid grid-cols-2 gap-3">
+                    <div><label htmlFor="overtime-date" className="block text-sm font-medium text-gray-700 mb-2">تاريخ العمل <span className="text-red-500">*</span></label><input id="overtime-date" type="date" readOnly={isAutomaticOvertime} className="input w-full read-only:bg-gray-50" value={overtimeDate} onChange={event => setFieldValue('date', event.target.value)} /></div>
+                    {!isAutomaticOvertime && <div><label htmlFor="overtime-hours" className="block text-sm font-medium text-gray-700 mb-2">الساعات المطلوبة {overtimeHoursRequired ? <span className="text-red-500">*</span> : '(اختياري)'}</label><input id="overtime-hours" type="number" min="0" step="any" className="input w-full" placeholder="مثال: 2.25" value={fieldValues.hours ?? ''} onChange={event => setFieldValue('hours', event.target.value)} /><p className="text-xs text-gray-500 mt-1">عند تركها فارغة يُستخدم وقت النظام، إلا للمستثنى من الحضور.</p></div>}
+                  </div>
+                  <OvertimePreview preview={overtimePreviewCurrent ? overtimePreview : null} loading={overtimePreviewLoading} error={overtimePreviewError} onRefresh={() => setOvertimePreviewRevision(value => value + 1)} />
+                  <div><label htmlFor="overtime-reason" className="block text-sm font-medium text-gray-700 mb-2">سبب طلب الإضافي {overtimePreview && !overtimePreview.window.open && <span className="text-red-500">*</span>}</label><textarea id="overtime-reason" rows={3} maxLength={500} className="input w-full" value={fieldValues.reason ?? ''} onChange={event => setFieldValue('reason', event.target.value)} placeholder="اشرح العمل الذي استلزم وقتًا إضافيًا" /></div>
+                </div>}
 
                 {/* الإجازات: نطاق اليوم — كامل أو نصف صباحي/مسائي */}
                 {selectedType && isLeaveCategory && (
@@ -1739,7 +1922,7 @@ export default function MyRequestsPage() {
                 <button
                   onClick={handleSubmit}
                   className="btn-primary flex items-center gap-2"
-                  disabled={!selectedType || submitting || uploadingField !== null}
+                  disabled={!selectedTypeDef || submitting || uploadingField !== null || (isOvertime && (overtimePreviewLoading || !overtimePreviewCurrent || !overtimePreview?.canSubmit))}
                 >
                   <Send size={16} />
                   {submitting ? 'جارٍ الإرسال...' : 'إرسال الطلب'}

@@ -1,0 +1,24 @@
+{
+  "database": "hr_review_pre_payroll_20260911162404_52ee65ac",
+  "mode": "after",
+  "checkedAt": "2026-09-11T16:55:37.199Z",
+  "hashes": {
+    "historyIdentityDates": "81ae95d259ed2745c2815de2b7bc3edd496718f4f0f2e3cf3b883e3bff641dfb",
+    "historyReasons": "847d1660c08a0f2674b6bf635b6ec163f05af47fb3071b3aee649928e953042c",
+    "historyBankValues": "2e96b8fef9c2ff0d932fa42cb934a87d2fd0cb5db7a71995aa9337035226f509",
+    "workTypes": "2ae7047b43be6f5543154579e8842ee3b4b7a2c96177078d5962fce04cda2ac8",
+    "transfersIdentityValues": "5a45fdff458b9cf41d8cf793c2849861980c270d5a6633e37ea612f2c5549d5a",
+    "custody_assignmentsIdentityValues": "3dfc922010b89846c722c6ee1537574cc2dd5766646448cbd6dc850c68430b29",
+    "offboarding_casesIdentityValues": "eda6a32def6b12380a48f0180ff419b1f6c9d78c363b605cde59dc681e11c710",
+    "clearance_itemsIdentityValues": "3927edad2356673f03c99ca1b94b64f15b6b15d64070f83d006a81abff29e1e2",
+    "onboarding_tasksIdentityValues": "4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e11ba873c2f11161202b945",
+    "requestsPreservedFields": "3c5c5e8afeecd7719398bf80b3d3ff0acf48b0ee01245128dd2730fddb9537e2",
+    "request_typesPreservedFields": "360260e836c56ae51d178a58d9e64558868de85b629972e81b394a4d3d017a07",
+    "approval_chainsPreservedFields": "5fccc031ec7834a7a9716529e263187242f1000ba4c11bc316486c6a28b12465",
+    "approval_stepsPreservedFields": "f4e51aa74e76aba4c2f5544a4a5156e449b2f418dd45861f0de6b0ae46675393",
+    "request_approvalsPreservedFields": "d19932a45160b146a095d1501ef3dcbc0b54aa13d9b99a1ceb7f26cab7d60a75"
+  },
+  "note": "SHA-256 only: no individual personal or bank values are stored in this artifact.",
+  "mismatches": [],
+  "passed": true
+}

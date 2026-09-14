@@ -10,20 +10,25 @@ import {
   AlertCircle,
   Info,
   FileText,
-  DollarSign,
   Users,
   Settings,
   Trash2,
   Check,
 } from 'lucide-react'
-import { fetchNotifications } from '@/lib/api'
+import {
+  dismissNotification,
+  fetchNotifications,
+  markNotificationsRead,
+  NOTIFICATIONS_CHANGED,
+} from '@/lib/api'
 
 interface Notification {
   id: string
   title: string
   message: string
   type: 'info' | 'success' | 'warning' | 'alert'
-  category: 'leave' | 'payroll' | 'attendance' | 'training' | 'system' | 'approval'
+  // التصنيف صريح من السيرفر مع كل إشعار (لا يُستنتج من الرابط)
+  category: string
   timestamp: string
   read: boolean
   actionUrl?: string
@@ -43,37 +48,24 @@ const typeColors = {
   alert: 'bg-red-100 text-red-600',
 }
 
-const categoryIcons = {
-  leave: Calendar,
-  payroll: DollarSign,
-  attendance: Clock,
-  training: FileText,
-  system: Settings,
-  approval: Users,
+// تصنيفات السيرفر بترتيب الفلاتر — الفلتر يظهر فقط لو فيه إشعار من تصنيفه
+const CATEGORY_META: Record<string, { label: string; icon: typeof Bell }> = {
+  request: { label: 'طلباتي', icon: FileText },
+  approval: { label: 'الموافقات', icon: Users },
+  leave: { label: 'الإجازات', icon: Calendar },
+  attendance: { label: 'الحضور', icon: Clock },
+  contract: { label: 'العقود', icon: FileText },
+  document: { label: 'المستندات', icon: FileText },
 }
-
-const categoryLabels = {
-  leave: 'الإجازات',
-  payroll: 'الرواتب',
-  attendance: 'الحضور',
-  training: 'التدريب',
-  system: 'النظام',
-  approval: 'الموافقات',
-}
+const CATEGORY_ORDER = Object.keys(CATEGORY_META)
+// تصنيف جديد من السيرفر لم تُعرَّف تسميته هنا بعد
+const categoryMeta = (c: string) => CATEGORY_META[c] ?? { label: 'أخرى', icon: Settings }
 
 const mapKind = (kind: string): Notification['type'] => {
   if (kind === 'success') return 'success'
   if (kind === 'warning') return 'warning'
   if (kind === 'error') return 'alert'
   return 'info'
-}
-
-const mapCategory = (link: string): Notification['category'] => {
-  if (link.includes('request')) return 'approval'
-  if (link.includes('payroll') || link.includes('payslip')) return 'payroll'
-  if (link.includes('attendance')) return 'attendance'
-  if (link.includes('leave') || link.includes('balance')) return 'leave'
-  return 'system'
 }
 
 export default function NotificationsPage() {
@@ -83,7 +75,7 @@ export default function NotificationsPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    fetchNotifications()
+    const reload = () => fetchNotifications()
       .then((items) => {
         setNotificationsList(
           items.map((item) => ({
@@ -91,9 +83,9 @@ export default function NotificationsPage() {
             title: item.title,
             message: item.body,
             type: mapKind(item.kind),
-            category: mapCategory(item.link ?? ''),
+            category: item.category,
             timestamp: item.at,
-            read: false,
+            read: item.read,
             actionUrl: item.link || undefined,
           }))
         )
@@ -102,6 +94,9 @@ export default function NotificationsPage() {
         setError(err instanceof Error ? err.message : 'تعذر تحميل الإشعارات')
       })
       .finally(() => setLoading(false))
+    void reload()
+    window.addEventListener(NOTIFICATIONS_CHANGED, reload)
+    return () => window.removeEventListener(NOTIFICATIONS_CHANGED, reload)
   }, [])
 
   const filteredNotifications = notificationsList.filter((n) => {
@@ -112,25 +107,22 @@ export default function NotificationsPage() {
 
   const unreadCount = notificationsList.filter((n) => !n.read).length
 
-  const markAsRead = (id: string) => {
-    setNotificationsList((prev) =>
-      prev.map((n) => (n.id === id ? { ...n, read: true } : n))
-    )
-  }
-
-  const markAllAsRead = () => {
-    setNotificationsList((prev) => prev.map((n) => ({ ...n, read: true })))
-  }
-
-  const deleteNotification = (id: string) => {
-    setNotificationsList((prev) => prev.filter((n) => n.id !== id))
-  }
-
-  const handleClick = (notification: Notification) => {
-    markAsRead(notification.id)
-    if (notification.actionUrl) {
-      window.location.href = notification.actionUrl
+  const changeNotification = async (action: () => Promise<unknown>) => {
+    try {
+      await action()
+      setError('')
+      return true
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر حفظ الإشعارات')
+      return false
     }
+  }
+  const markAsRead = (id: string) => changeNotification(() => markNotificationsRead([id]))
+  const markAllAsRead = () => changeNotification(() => markNotificationsRead())
+  const deleteNotification = (id: string) => changeNotification(() => dismissNotification(id))
+  const handleClick = async (notification: Notification) => {
+    if (!notification.read && !(await markAsRead(notification.id))) return
+    if (notification.actionUrl) window.location.href = notification.actionUrl
   }
 
   const formatTime = (timestamp: string) => {
@@ -176,12 +168,9 @@ export default function NotificationsPage() {
           {[
             { id: 'all', label: 'الكل' },
             { id: 'unread', label: 'غير مقروء' },
-            { id: 'leave', label: 'الإجازات' },
-            { id: 'payroll', label: 'الرواتب' },
-            { id: 'attendance', label: 'الحضور' },
-            { id: 'training', label: 'التدريب' },
-            { id: 'approval', label: 'الموافقات' },
-            { id: 'system', label: 'النظام' },
+            ...[...new Set([...CATEGORY_ORDER, ...notificationsList.map(n => n.category)])]
+              .filter(c => notificationsList.some(n => n.category === c))
+              .map(c => ({ id: c, label: categoryMeta(c).label })),
           ].map((item) => (
             <button
               key={item.id}
@@ -217,7 +206,7 @@ export default function NotificationsPage() {
             ) : (
               filteredNotifications.map((notification) => {
                 const TypeIcon = typeIcons[notification.type]
-                const CategoryIcon = categoryIcons[notification.category]
+                const CategoryIcon = categoryMeta(notification.category).icon
 
                 return (
                   <div
@@ -240,7 +229,7 @@ export default function NotificationsPage() {
                               </h3>
                               <span className="px-2 py-0.5 bg-gray-100 text-gray-600 text-xs rounded-full flex items-center gap-1">
                                 <CategoryIcon size={12} />
-                                {categoryLabels[notification.category]}
+                                {categoryMeta(notification.category).label}
                               </span>
                             </div>
                             <p className="text-gray-600">{notification.message}</p>

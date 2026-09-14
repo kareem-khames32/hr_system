@@ -19,26 +19,63 @@ import {
   XCircle,
   UserCheck,
   Landmark,
+  Calendar,
 } from 'lucide-react'
 import {
   ApiBranch,
   ApiEmployee,
   createBranch,
   fetchBranches,
+  fetchCatalog,
+  fetchConfig,
   fetchEmployees,
   updateBranch,
+  can,
 } from '@/lib/api'
+import { buildCalendarChange, calendarScopeWritable, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
+import { CalendarChangeFields, CalendarContextSummary, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
+
+// أيام الأسبوع بالرموز التي يقرأها محرك الحضور (branch.weekendDays / attendance.weekend_days)
+const WEEK_DAYS = [
+  { code: 'SUN', name: 'الأحد' },
+  { code: 'MON', name: 'الاثنين' },
+  { code: 'TUE', name: 'الثلاثاء' },
+  { code: 'WED', name: 'الأربعاء' },
+  { code: 'THU', name: 'الخميس' },
+  { code: 'FRI', name: 'الجمعة' },
+  { code: 'SAT', name: 'السبت' },
+]
+const weekendCodesOf = (v?: string | null) =>
+  (v ?? '')
+    .split(',')
+    .map((c) => c.trim().toUpperCase())
+    .filter((c) => WEEK_DAYS.some((d) => d.code === c))
+const weekendLabel = (v?: string | null) =>
+  WEEK_DAYS.filter((d) => weekendCodesOf(v).includes(d.code))
+    .map((d) => d.name)
+    .join('، ')
+
+// عنصر كتالوج مراكز التكلفة (GET /catalogs/cost-centers)
+interface CostCenterOption {
+  id: number
+  code: string
+  name: string
+  isActive: boolean
+}
 
 const emptyForm = {
   name: '',
   nameEn: '',
   code: '',
   city: '',
+  country: '',
   address: '',
   phone: '',
   email: '',
   managerId: '',
   costCenter: '',
+  // رموز العطلة الأسبوعية للفرع — فارغة = إعداد النظام العام
+  weekendDays: [] as string[],
   isActive: true,
   isHeadquarters: false,
 }
@@ -56,6 +93,18 @@ export default function BranchesPage() {
   const [activeMenu, setActiveMenu] = useState<number | null>(null)
 
   const [formData, setFormData] = useState({ ...emptyForm })
+  const calendar = useCalendarContext('BRANCH', editingBranch?.id ?? 0, showModal && !!editingBranch)
+  useEffect(() => {
+    if (!calendar.context) return
+    setFormData(previous => ({ ...previous, country: calendar.context!.current.country as string ?? '', weekendDays: weekendCodesOf(calendar.context!.current.weekendDays as string | null) }))
+  }, [calendar.context])
+  const calendarChanged = !!editingBranch && !!calendar.context && (
+    formData.country.trim().toUpperCase() !== String(calendar.context.current.country ?? '').trim().toUpperCase() ||
+    WEEK_DAYS.filter(day => formData.weekendDays.includes(day.code)).map(day => day.code).join(',') !== WEEK_DAYS.filter(day => weekendCodesOf(calendar.context!.current.weekendDays as string | null).includes(day.code)).map(day => day.code).join(','))
+  // كتالوج مراكز التكلفة وعطلة النظام العامة (للنموذج) — أفضل جهد، كلٌّ بصلاحيته
+  const [costCenters, setCostCenters] = useState<CostCenterOption[]>([])
+  const [costCentersFailed, setCostCentersFailed] = useState(false)
+  const [globalWeekend, setGlobalWeekend] = useState('')
 
   const loadData = async () => {
     try {
@@ -72,6 +121,14 @@ export default function BranchesPage() {
 
   useEffect(() => {
     loadData()
+    fetchCatalog<CostCenterOption>('cost-centers')
+      .then(setCostCenters)
+      .catch(() => setCostCentersFailed(true))
+    fetchConfig()
+      .then((rows) =>
+        setGlobalWeekend(rows.find((r) => r.key === 'attendance.weekend_days')?.value ?? '')
+      )
+      .catch(() => setGlobalWeekend(''))
   }, [])
 
   const managerNameOf = (branch: ApiBranch) =>
@@ -97,11 +154,13 @@ export default function BranchesPage() {
         nameEn: branch.nameEn ?? '',
         code: branch.code,
         city: branch.city ?? '',
+        country: branch.country ?? '',
         address: branch.address ?? '',
         phone: branch.phone ?? '',
         email: branch.email ?? '',
         managerId: branch.managerEmployeeId ? String(branch.managerEmployeeId) : '',
         costCenter: branch.costCenter ?? '',
+        weekendDays: weekendCodesOf(branch.weekendDays),
         isActive: branch.isActive,
         isHeadquarters: branch.isHeadquarters,
       })
@@ -113,6 +172,16 @@ export default function BranchesPage() {
   }
 
   const handleSave = async () => {
+    if (saving) return
+    if (formData.weekendDays.length === WEEK_DAYS.length) {
+      setModalError('العطلة الأسبوعية لا تكون كل أيام الأسبوع — يلزم يوم عمل واحد على الأقل')
+      return
+    }
+    let calendarChange: PayrollCalendarChange | undefined
+    if (calendarChanged) {
+      try { calendarChange = buildCalendarChange(calendar.context, calendar.evidence) }
+      catch (cause) { setModalError((cause as Error).message); return }
+    }
     setSaving(true)
     setModalError(null)
     const payload: Partial<ApiBranch> = {
@@ -120,16 +189,36 @@ export default function BranchesPage() {
       nameEn: formData.nameEn || undefined,
       code: formData.code,
       city: formData.city || undefined,
+      // فارغ عند التعديل = مسح الدولة (كل العطلات تسري على الفرع)
+      country: formData.country.trim()
+        ? formData.country.trim().toUpperCase()
+        : editingBranch
+          ? null
+          : undefined,
       address: formData.address || undefined,
       phone: formData.phone || undefined,
       email: formData.email || undefined,
       managerEmployeeId: formData.managerId ? Number(formData.managerId) : undefined,
-      costCenter: formData.costCenter || undefined,
+      // فارغ عند التعديل = بلا مركز تكلفة
+      costCenter: formData.costCenter || (editingBranch ? null : undefined),
+      // بلا أيام = إعداد النظام العام (null عند التعديل يمسح تجاوز الفرع)
+      weekendDays: formData.weekendDays.length
+        ? WEEK_DAYS.filter((d) => formData.weekendDays.includes(d.code))
+            .map((d) => d.code)
+            .join(',')
+        : editingBranch
+          ? null
+          : undefined,
       isHeadquarters: formData.isHeadquarters,
     }
+    if (editingBranch && !calendarChanged) { delete payload.country; delete payload.weekendDays }
     try {
       if (editingBranch) {
-        await updateBranch(editingBranch.id, { ...payload, isActive: formData.isActive })
+        await updateBranch(editingBranch.id, { ...payload, ...(calendarChange ? { calendarChange } : {}), isActive: formData.isActive,
+          nameEn: formData.nameEn || null, city: formData.city || null,
+          address: formData.address || null, phone: formData.phone || null, email: formData.email || null,
+          managerEmployeeId: formData.managerId ? Number(formData.managerId) : null,
+        })
       } else {
         const created = await createBranch(payload)
         // إنشاء الفرع لا يقبل isActive — نعطّله بعد الإنشاء لو طُلب ذلك
@@ -154,6 +243,14 @@ export default function BranchesPage() {
       setError(err.message)
     }
   }
+
+  const toggleWeekendDay = (code: string) =>
+    setFormData((prev) => ({
+      ...prev,
+      weekendDays: prev.weekendDays.includes(code)
+        ? prev.weekendDays.filter((c) => c !== code)
+        : [...prev.weekendDays, code],
+    }))
 
   const totalEmployees = employees.length
   const activeBranches = branches.filter((b) => b.isActive).length
@@ -393,6 +490,13 @@ export default function BranchesPage() {
                   </span>
                   <span className="text-xs text-gray-400">مركز التكلفة</span>
                 </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <Calendar size={14} className="text-gray-400" />
+                  <span className="text-xs text-gray-500 bg-gray-50 px-2 py-1 rounded-lg">
+                    {weekendLabel(branch.weekendDays) || 'إعداد النظام'}
+                  </span>
+                  <span className="text-xs text-gray-400">العطلة الأسبوعية</span>
+                </div>
               </div>
             ))}
           </div>
@@ -486,6 +590,27 @@ export default function BranchesPage() {
                       placeholder="مثال: الرياض"
                     />
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      الدولة
+                    </label>
+                    <input
+                      type="text"
+                      value={formData.country}
+                      disabled={!!editingBranch && (!calendar.context || calendar.context.currentMatchesHistory === false || !calendarScopeWritable('BRANCH', editingBranch.id))}
+                      onChange={(e) =>
+                        setFormData({ ...formData, country: e.target.value.toUpperCase() })
+                      }
+                      className="input w-full font-mono"
+                      placeholder="مثال: SA"
+                      maxLength={5}
+                      dir="ltr"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      تسري على الفرع العطلات الرسمية لدولته فقط — فارغ = كل العطلات. تغيير
+                      الدولة يتطلب تحديد تاريخ تطبيق القرار وسببه
+                    </p>
+                  </div>
                 </div>
 
                 <div>
@@ -566,23 +691,78 @@ export default function BranchesPage() {
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       مركز التكلفة
                     </label>
-                    <input
-                      type="text"
+                    <select
                       value={formData.costCenter}
                       onChange={(e) =>
-                        setFormData({ ...formData, costCenter: e.target.value.toUpperCase() })
+                        setFormData({ ...formData, costCenter: e.target.value })
                       }
-                      className="input w-full font-mono"
-                      placeholder="مثال: CC-100"
-                      dir="ltr"
-                    />
+                      className="input w-full"
+                    >
+                      <option value="">— بدون مركز تكلفة —</option>
+                      {/* قيمة قائمة خارج الكتالوج (نص حر قديم) تظهر لتُستبدل */}
+                      {formData.costCenter &&
+                        !costCenters.some((c) => c.code === formData.costCenter) && (
+                          <option value={formData.costCenter}>
+                            {formData.costCenter}
+                            {costCentersFailed ? '' : ' (غير موجود في الكتالوج)'}
+                          </option>
+                        )}
+                      {costCenters
+                        .filter((c) => c.isActive || c.code === formData.costCenter)
+                        .map((c) => (
+                          <option key={c.id} value={c.code}>
+                            {c.code} — {c.name}
+                            {c.isActive ? '' : ' (معطّل)'}
+                          </option>
+                        ))}
+                    </select>
                     <p className="text-xs text-gray-400 mt-1">
-                      تُحمَّل عليه رواتب ومصاريف الفرع في التقارير المالية
+                      {costCentersFailed
+                        ? 'تعذر تحميل كتالوج مراكز التكلفة'
+                        : 'من كتالوج «مراكز التكلفة» — تُحمَّل عليه رواتب ومصاريف الفرع في التقارير المالية'}
                     </p>
                   </div>
                 </div>
 
+                {/* Weekend */}
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    العطلة الأسبوعية للفرع
+                  </label>
+                  <div className="flex flex-wrap gap-2">
+                    {WEEK_DAYS.map((d) => {
+                      const on = formData.weekendDays.includes(d.code)
+                      return (
+                        <button
+                          key={d.code}
+                          type="button"
+                          disabled={!!editingBranch && (!calendar.context || calendar.context.currentMatchesHistory === false || !calendarScopeWritable('BRANCH', editingBranch.id))}
+                          onClick={() => toggleWeekendDay(d.code)}
+                          aria-pressed={on}
+                          className={`px-3 py-1.5 rounded-lg text-sm border transition-colors ${
+                            on
+                              ? 'bg-primary-500 border-primary-500 text-white'
+                              : 'bg-white border-gray-200 text-gray-600 hover:bg-gray-50'
+                          }`}
+                        >
+                          {d.name}
+                        </button>
+                      )
+                    })}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">
+                    بدون اختيار = إعداد النظام العام
+                    {globalWeekend ? ` (${weekendLabel(globalWeekend) || globalWeekend})` : ''}. جدول
+                    العمل الخاص بالموظف يغلب عطلة الفرع، والتغيير يسري من التاريخ المحدد.
+                  </p>
+                </div>
+
                 {/* Options */}
+                {editingBranch && <div className="space-y-4">
+                  <CalendarContextSummary context={calendar.context} loading={calendar.loading} error={calendar.error} />
+                  {calendarChanged && <CalendarChangeFields context={calendar.context} value={calendar.evidence} onChange={calendar.setEvidence} disabled={saving} />}
+                  <CalendarScopeConfirmation key={editingBranch.id} scope="BRANCH" sourceId={editingBranch.id} canConfirm={(can('org.manage') || can('settings.manage')) && calendarScopeWritable('BRANCH', editingBranch.id)} disabled={saving || calendarChanged} onConfirmed={calendar.reload} />
+                </div>}
                 <div className="flex items-center gap-6">
                   <label className="flex items-center gap-2">
                     <input

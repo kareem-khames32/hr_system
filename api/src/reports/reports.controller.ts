@@ -57,6 +57,9 @@ export class ReportsController {
               SUM(CASE WHEN a.status = 'late' THEN 1 ELSE 0 END) AS lateDays,
               SUM(CASE WHEN a.status = 'absent' THEN 1 ELSE 0 END) AS absentDays,
               SUM(CASE WHEN a.status = 'early_leave' THEN 1 ELSE 0 END) AS earlyLeaveDays,
+              SUM(CASE WHEN a.status = 'leave' THEN 1 ELSE 0 END) AS leaveDays,
+              SUM(CASE WHEN a.status = 'holiday' THEN 1 ELSE 0 END) AS holidayDays,
+              SUM(CASE WHEN a.status = 'partial_leave' THEN 1 ELSE 0 END) AS partialLeaveDays,
               SUM(a.lateMinutes) AS totalLateMinutes,
               SUM(a.workMinutes) AS totalWorkMinutes
        FROM attendance_days a JOIN employees e ON e.id = a.employeeId
@@ -78,14 +81,14 @@ export class ReportsController {
         ? `AND l.employeeId IN (SELECT id FROM employees WHERE branchId = ${scope})`
         : ''
     const byType = await this.ds.query(
-      `SELECT l.leaveType, COUNT(*) AS requests, SUM(l.days) AS totalDays
+      `SELECT l.leaveTypeCode, l.leaveTypeCode AS leaveType, COUNT(*) AS requests, SUM(l.days) AS totalDays
        FROM leaves l
        WHERE l.status = 'APPROVED' AND l.fromDate LIKE '${year}%' ${empFilter}
-       GROUP BY l.leaveType`
+       GROUP BY l.leaveTypeCode`
     )
     const balances = await this.ds.query(
       `SELECT lb.employeeId, e.fullName, lb.balanceType, lb.entitled, lb.taken,
-              lb.openingDays, lb.openingTaken, lb.openingExpiry
+              lb.openingDays, lb.openingTaken, lb.openingExpiry, lb.adjustmentDays
        FROM leave_balances lb JOIN employees e ON e.id = lb.employeeId
        WHERE lb.period = '${year}'
        ${scope !== null ? `AND e.branchId = ${scope}` : ''}

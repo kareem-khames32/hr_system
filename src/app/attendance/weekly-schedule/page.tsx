@@ -1,6 +1,8 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
+import { downloadCsv } from '@/lib/csv'
 import { MainLayout } from '@/components/layout'
 import {
   ChevronRight,
@@ -13,14 +15,12 @@ import {
   Sun,
   Moon,
   Coffee,
-  Home,
   RotateCcw,
   CheckCircle,
   AlertCircle,
   Printer,
   FileSpreadsheet,
   Settings,
-  RefreshCw,
   Eye,
   Edit3,
   Layers,
@@ -29,8 +29,10 @@ import {
   Star,
 } from 'lucide-react'
 import {
+  fetchCatalog,
   fetchWeekSchedule,
   upsertWeekSchedule,
+  clearWeekSchedule,
   fetchEmployees,
   fetchDepartments,
   fetchBranches,
@@ -45,11 +47,26 @@ import {
   type ApiBranch,
   type ApiTeam,
   type ApiScheduleRule,
+  type ApiWorkSchedule,
 } from '@/lib/api'
 
 // أنواع البيانات
+// صف الوردية كما يرجّعه كتالوج الورديات الحقيقي (/catalogs/shifts)
+interface ApiShift {
+  id: number
+  name: string
+  startTime: string
+  endTime: string
+  graceMinutes?: number | null
+  shiftMode?: 'fixed' | 'flexible'
+  requiredHours?: number | string | null
+  isActive?: boolean
+}
+
+// وردية جاهزة للعرض — مشتقّة من صف الكتالوج (لا كتالوج مكتوب في الكود)
 interface Shift {
-  id: string
+  id: string // مفتاح العرض = معرّف الكتالوج كنص ('off' للراحة)
+  shiftId?: number // المعرّف الحقيقي — يُرسل مع الحفظ ليقرأ السيرفر الأوقات حيّة
   name: string
   code: string
   color: string
@@ -57,6 +74,8 @@ interface Shift {
   startTime: string
   endTime: string
   workHours: number
+  shiftMode?: 'fixed' | 'flexible'
+  graceMinutes?: number | null
 }
 
 // تجاوز وردية يوم بعينه — يتقدم على وردية الأسبوع (من السيرفر)
@@ -64,6 +83,7 @@ interface DayOverride {
   id: number
   employeeId: number
   date: string // YYYY-MM-DD
+  shiftId?: number | null // مرجع الوردية في الكتالوج — به تُقرأ الأوقات الحيّة
   shiftName: string
   startTime: string
   endTime: string
@@ -83,24 +103,88 @@ interface EmployeeRow {
   teamId?: number
 }
 
-// الورديات المتاحة
-const shifts: Shift[] = [
-  { id: 'morning', name: 'صباحي', code: 'ص', color: 'text-blue-700', bgColor: 'bg-blue-100', startTime: '08:00', endTime: '17:00', workHours: 8 },
-  { id: 'ten', name: 'وردية 10', code: '10', color: 'text-sky-700', bgColor: 'bg-sky-100', startTime: '10:00', endTime: '19:00', workHours: 8 },
-  { id: 'eleven', name: 'وردية 11', code: '11', color: 'text-violet-700', bgColor: 'bg-violet-100', startTime: '11:00', endTime: '20:00', workHours: 8 },
-  { id: 'evening', name: 'مسائي', code: 'م', color: 'text-orange-700', bgColor: 'bg-orange-100', startTime: '14:00', endTime: '23:00', workHours: 8 },
-  { id: 'night', name: 'ليلي', code: 'ل', color: 'text-purple-700', bgColor: 'bg-purple-100', startTime: '22:00', endTime: '07:00', workHours: 8 },
-  { id: 'flexible', name: 'مرن', code: 'ر', color: 'text-green-700', bgColor: 'bg-green-100', startTime: '07:00', endTime: '19:00', workHours: 8 },
-  { id: 'remote', name: 'عن بُعد', code: 'ب', color: 'text-cyan-700', bgColor: 'bg-cyan-100', startTime: '09:00', endTime: '18:00', workHours: 8 },
-  { id: 'half_morning', name: 'نصف صباحي', code: 'ن', color: 'text-teal-700', bgColor: 'bg-teal-100', startTime: '08:00', endTime: '12:00', workHours: 4 },
-  { id: 'off', name: 'إجازة', code: 'ج', color: 'text-gray-500', bgColor: 'bg-gray-100', startTime: '-', endTime: '-', workHours: 0 },
+// ===== كتالوج الورديات — يُجلب من الباك (/catalogs/shifts) لا من ثابت هنا =====
+// ألوان العرض تُسنَد بالتناوب حسب ترتيب الوردية في الكتالوج
+const SHIFT_PALETTE = [
+  { color: 'text-blue-700', bgColor: 'bg-blue-100' },
+  { color: 'text-orange-700', bgColor: 'bg-orange-100' },
+  { color: 'text-purple-700', bgColor: 'bg-purple-100' },
+  { color: 'text-green-700', bgColor: 'bg-green-100' },
+  { color: 'text-cyan-700', bgColor: 'bg-cyan-100' },
+  { color: 'text-violet-700', bgColor: 'bg-violet-100' },
+  { color: 'text-sky-700', bgColor: 'bg-sky-100' },
+  { color: 'text-teal-700', bgColor: 'bg-teal-100' },
 ]
 
-const OFF_SHIFT = shifts.find((s) => s.id === 'off')!
-const DEFAULT_SHIFT = shifts[0] // صباحي — للموظف غير المجدوَل بعد
+// رمز مختصر للوردية من اسمها (الرقم إن وُجد، وإلا أول حرف)
+const shiftCode = (name: string): string => {
+  const raw = String(name ?? '')
+  const digits = raw.match(/\d+/)
+  if (digits) return digits[0]
+  return raw.trim().charAt(0) || '؟'
+}
 
-// الورديات القابلة للتعيين (ذات مواعيد فعلية فقط)
-const assignableShifts = shifts.filter((s) => s.startTime !== '-')
+// ساعات الوردية من وقتيها — تتخطى منتصف الليل للورديات الليلية
+const hoursBetween = (start: string, end: string): number => {
+  const [sh, sm] = String(start ?? '').split(':').map(Number)
+  const [eh, em] = String(end ?? '').split(':').map(Number)
+  if ([sh, sm, eh, em].some((n) => Number.isNaN(n))) return 0
+  let mins = eh * 60 + em - (sh * 60 + sm)
+  if (mins <= 0) mins += 24 * 60
+  return Math.round((mins / 60) * 10) / 10
+}
+
+// صف الكتالوج → وردية عرض (الأوقات كما هي من الكتالوج)
+const toShift = (row: ApiShift, index: number): Shift => {
+  const palette = SHIFT_PALETTE[index % SHIFT_PALETTE.length]
+  const startTime = String(row.startTime ?? '').slice(0, 5)
+  const endTime = String(row.endTime ?? '').slice(0, 5)
+  return {
+    id: String(row.id),
+    shiftId: row.id,
+    name: row.name,
+    code: shiftCode(row.name),
+    color: palette.color,
+    bgColor: palette.bgColor,
+    startTime,
+    endTime,
+    workHours: row.shiftMode === 'flexible' && Number(row.requiredHours) > 0 ? Number(row.requiredHours) : hoursBetween(startTime, endTime),
+    shiftMode: row.shiftMode,
+    graceMinutes: row.graceMinutes ?? null,
+  }
+}
+
+// أيقونة الوردية — ليلية (تتجاوز منتصف الليل) / مرنة / مسائية / صباحية
+const shiftIcon = (s: Shift) => {
+  if (s.startTime && s.endTime && s.endTime < s.startTime) return Moon
+  if (s.shiftMode === 'flexible') return Coffee
+  if (s.startTime >= '12:00') return Clock
+  return Sun
+}
+
+// إجازة/راحة — ليست وردية في الكتالوج
+const OFF_SHIFT: Shift = {
+  id: 'off',
+  name: 'إجازة',
+  code: 'ج',
+  color: 'text-gray-500',
+  bgColor: 'bg-gray-100',
+  startTime: '',
+  endTime: '',
+  workHours: 0,
+}
+
+// موظف بلا وردية أسبوع محفوظة — لا نعرض وردية لم تُحفَظ فعلاً
+const UNSCHEDULED_SHIFT: Shift = {
+  id: '',
+  name: 'غير مجدوَل',
+  code: '—',
+  color: 'text-gray-400',
+  bgColor: 'bg-gray-50',
+  startTime: '',
+  endTime: '',
+  workHours: 0,
+}
 
 // أيام الأسبوع
 const weekDays = [
@@ -112,8 +196,6 @@ const weekDays = [
   { key: 'friday', name: 'الجمعة', shortName: 'جمعة' },
   { key: 'saturday', name: 'السبت', shortName: 'سبت' },
 ]
-
-const WEEKEND_DAYS = ['friday', 'saturday']
 
 // ===== قواعد استثناء أيام العمل (آخر سبت = دوام رسمي...) — لتمييز الأيام الاستثنائية =====
 // ترتيب أكواد أيام الأسبوع مطابق لـ Date.getDay() (الأحد = 0)
@@ -187,47 +269,54 @@ const dateOfDayIndex = (weekStart: Date, dayIndex: number) => {
   return x.toISOString().slice(0, 10)
 }
 
-// مطابقة وردية السيرفر مع الكتالوج المحلي (بالاسم ثم بالمواعيد)
-const matchShift = (entry: { shiftName: string; startTime: string; endTime: string }): Shift => {
-  const byName = shifts.find((s) => s.name === entry.shiftName)
+// مطابقة وردية السيرفر مع الكتالوج المجلوب (بالمعرّف ثم الاسم ثم المواعيد).
+// المطابَقة تعني عرض أوقات الوردية الحيّة من الكتالوج بدل اللقطة المخزّنة.
+const matchShiftIn = (
+  catalog: Shift[],
+  entry: { shiftName: string; startTime: string; endTime: string; shiftId?: number | null }
+): Shift => {
+  const byId = entry.shiftId
+    ? catalog.find((s) => s.shiftId === entry.shiftId)
+    : undefined
+  if (byId) return byId
+  const byName = catalog.find((s) => s.name === entry.shiftName)
   if (byName) return byName
-  const byTimes = shifts.find(
+  const byTimes = catalog.find(
     (s) => s.startTime === entry.startTime && s.endTime === entry.endTime
   )
   if (byTimes) return byTimes
+  // وردية محفوظة خارج الكتالوج الحالي (معطّلة/محذوفة) — تُعرض باللقطة المخزّنة كما هي
   return {
-    id: `custom-${entry.shiftName}`,
+    id: `legacy-${entry.shiftName}`,
     name: entry.shiftName,
-    code: entry.shiftName.charAt(0),
+    code: shiftCode(entry.shiftName),
     color: 'text-gray-700',
     bgColor: 'bg-gray-100',
     startTime: entry.startTime,
     endTime: entry.endTime,
-    workHours: 8,
+    workHours: hoursBetween(entry.startTime, entry.endTime),
   }
 }
-
-// القوالب الجاهزة — تعيّن وردية الأسبوع للموظفين المستهدفين
-const templates = [
-  { id: 'standard', name: 'دوام عادي', description: 'أحد-خميس صباحي، الجمعة والسبت إجازة', icon: Sun, shiftId: 'morning' },
-  { id: 'flexible', name: 'دوام مرن', description: 'أحد-خميس مرن، الجمعة والسبت إجازة', icon: Coffee, shiftId: 'flexible' },
-  { id: 'rotating', name: 'دوام متناوب', description: 'صباحي/مسائي بالتبادل', icon: RefreshCw, shiftId: 'evening' },
-  { id: 'remote-hybrid', name: 'دوام هجين', description: '3 أيام حضوري + 2 عن بُعد', icon: Home, shiftId: 'remote' },
-  { id: 'night', name: 'وردية ليلية', description: 'دوام ليلي مع إجازة منتصف الأسبوع', icon: Moon, shiftId: 'night' },
-]
 
 export default function WeeklySchedulePage() {
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [departmentsList, setDepartmentsList] = useState<ApiDepartment[]>([])
   const [branchesList, setBranchesList] = useState<ApiBranch[]>([])
   const [teamsList, setTeamsList] = useState<ApiTeam[]>([])
+  // كتالوج الورديات الحقيقي — النشِطة فقط، من /catalogs/shifts
+  const [shiftCatalog, setShiftCatalog] = useState<Shift[]>([])
+  const [shiftsLoading, setShiftsLoading] = useState(true)
+  const [shiftsError, setShiftsError] = useState('')
   // وردية الأسبوع لكل موظف — من weekly_schedule_entries في السيرفر
   const [assignments, setAssignments] = useState<Record<number, Shift>>({})
   // تجاوزات الأيام الخاصة — مفتاحها "employeeId|date"
   const [dayOverrides, setDayOverrides] = useState<Record<string, DayOverride>>({})
   // الأيام غير العاملة في الأسبوع المعروض (ويك إند/عطلات بعد تطبيق قواعد الاستثناء)
   // null = لم تُحمَّل أو فشل التحميل → لا تمييز
-  const [skippedSet, setSkippedSet] = useState<Set<string> | null>(null)
+  const [calendars, setCalendars] = useState<Record<number, { skipped: Set<string>; weekend: Set<string> }>>({})
+  const [calendarLoading, setCalendarLoading] = useState(true)
+  const [calendarError, setCalendarError] = useState('')
+  const [workSchedules, setWorkSchedules] = useState<ApiWorkSchedule[]>([])
   // قواعد استثناء أيام العمل — لمعرفة القاعدة التي حوّلت اليوم (للتلميح)
   const [scheduleRules, setScheduleRules] = useState<ApiScheduleRule[]>([])
   const [overrideModal, setOverrideModal] = useState<{
@@ -241,6 +330,7 @@ export default function WeeklySchedulePage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
 
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedDepartment, setSelectedDepartment] = useState('all')
@@ -253,6 +343,8 @@ export default function WeeklySchedulePage() {
   const [viewMode, setViewMode] = useState<'edit' | 'view'>('edit')
 
   const currentKey = weekKeyOf(currentWeekStart)
+  const visibleWeek = useRef(currentKey)
+  visibleWeek.current = currentKey
 
   // الموظفون والأقسام والفروع والفرق — مرة واحدة (للتعيين الجماعي بالنطاق)
   useEffect(() => {
@@ -269,28 +361,50 @@ export default function WeeklySchedulePage() {
     fetchScheduleRules()
       .then(setScheduleRules)
       .catch(() => setScheduleRules([]))
+    fetchCatalog<ApiWorkSchedule>('work-schedules')
+      .then(setWorkSchedules)
+      .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل جداول العمل'))
+  }, [])
+
+  // كتالوج الورديات — مصدر الأسماء والأوقات والمعرّفات كلها
+  useEffect(() => {
+    fetchCatalog<ApiShift>('shifts')
+      .then((rows) => {
+        const active = (rows ?? []).filter((r) => r.isActive !== false)
+        setShiftCatalog(active.map(toShift))
+        setShiftsLoading(false)
+      })
+      .catch((e) => {
+        setShiftsError(e instanceof Error ? e.message : 'تعذر تحميل كتالوج الورديات')
+        setShiftCatalog([])
+        setShiftsLoading(false)
+      })
   }, [])
 
   // جدول الأسبوع المعروض من السيرفر
   const loadWeek = (weekKey: string) => {
     setLoading(true)
     setError('')
-    fetchWeekSchedule(weekKey)
+    return fetchWeekSchedule(weekKey)
       .then((entries) => {
+        if (visibleWeek.current !== weekKey) return
         const map: Record<number, Shift> = {}
-        for (const entry of entries) map[entry.employeeId] = matchShift(entry)
+        for (const entry of entries) {
+          map[entry.employeeId] = matchShiftIn(shiftCatalog, entry)
+        }
         setAssignments(map)
         setDirtyIds([])
         setHasChanges(false)
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل الجدول'))
-      .finally(() => setLoading(false))
+      .finally(() => { if (visibleWeek.current === weekKey) setLoading(false) })
   }
 
   // تجاوزات الأيام الخاصة للأسبوع المعروض
   const loadOverrides = (weekKey: string) => {
-    fetchWeekDayOverrides(weekKey)
+    return fetchWeekDayOverrides(weekKey)
       .then((list) => {
+        if (visibleWeek.current !== weekKey) return
         const map: Record<string, DayOverride> = {}
         for (const o of list) {
           const date = String(o.date).slice(0, 10)
@@ -304,23 +418,42 @@ export default function WeeklySchedulePage() {
   }
 
   // الأيام غير العاملة للأسبوع المعروض — لحساب أيام الدوام/الإجازة الاستثنائية
-  const loadExceptions = (weekStart: Date) => {
-    const from = dateOfDayIndex(weekStart, 0)
-    const to = dateOfDayIndex(weekStart, 6)
-    setSkippedSet(null)
-    fetchWorkingDays(from, to)
-      .then((res) =>
-        setSkippedSet(new Set((res.skipped ?? []).map((s) => String(s).slice(0, 10))))
-      )
-      .catch(() => setSkippedSet(null)) // فشل الجلب → تخطّي التمييز بلا خطأ ظاهر
-  }
-
   useEffect(() => {
+    let cancelled = false
+    setCalendars({})
+    setCalendarError('')
+    setCalendarLoading(true)
+    const from = dateOfDayIndex(currentWeekStart, 0)
+    const to = dateOfDayIndex(currentWeekStart, 6)
+    void (async () => {
+      const next: Record<number, { skipped: Set<string>; weekend: Set<string> }> = {}
+      const failed: string[] = []
+      // Limit concurrent calls; each employee uses the same policy engine as attendance.
+      for (let i = 0; i < employees.length && !cancelled; i += 8) {
+        await Promise.all(employees.slice(i, i + 8).map(async (employee) => {
+          try {
+            const result = await fetchWorkingDays(from, to, { employeeId: employee.id })
+            next[employee.id] = { skipped: new Set(result.skipped), weekend: new Set(result.weekendDays ?? []) }
+          } catch (e) { failed.push(`${employee.fullName}: ${e instanceof Error ? e.message : 'تعذر تحميل أيام العمل'}`) }
+        }))
+      }
+      if (cancelled) return
+      setCalendars(next)
+      setCalendarLoading(false)
+      if (failed.length) setCalendarError(`تعذر حساب أيام ${failed.length} موظف. ${failed.slice(0, 3).join('؛ ')}`)
+    })()
+    return () => { cancelled = true }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [currentKey, employees])
+
+  // ننتظر كتالوج الورديات قبل قراءة الأسبوع حتى تُطابَق الورديات
+  // بأوقاتها الحيّة لا باللقطة المخزّنة في صف الجدول
+  useEffect(() => {
+    if (shiftsLoading) return
     loadWeek(currentKey)
     loadOverrides(currentKey)
-    loadExceptions(currentWeekStart)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentKey])
+  }, [currentKey, shiftsLoading])
 
   const depName = (id?: number) =>
     departmentsList.find((d) => d.id === id)?.name ?? '-'
@@ -337,45 +470,58 @@ export default function WeeklySchedulePage() {
     teamId: e.teamId,
   }))
 
-  // وردية الموظف الفعلية لهذا الأسبوع
-  const shiftOf = (empId: number): Shift => assignments[empId] ?? DEFAULT_SHIFT
+  // وردية الموظف الفعلية لهذا الأسبوع — لا افتراض لوردية غير محفوظة
+  const shiftOf = (empId: number): Shift => {
+    if (assignments[empId]) return assignments[empId]
+    const employee = employees.find((e) => e.id === empId)
+    const schedule = workSchedules.find((s) => s.id === employee?.workScheduleId)
+      ?? [...workSchedules].sort((a, b) => a.id - b.id).find((s) => s.isDefault && s.isActive)
+    return schedule ? {
+      ...UNSCHEDULED_SHIFT, id: `work-schedule-${schedule.id}`,
+      name: `${schedule.name} (${employee?.workScheduleId === schedule.id ? 'جدول الموظف' : 'الافتراضي'})`,
+      startTime: schedule.startTime, endTime: schedule.endTime,
+      workHours: hoursBetween(schedule.startTime, schedule.endTime), color: 'text-slate-700', bgColor: 'bg-slate-100',
+    } : UNSCHEDULED_SHIFT
+  }
 
   // القاعدة (WORK/OFF) التي تنطبق على تاريخ — للتلميح
-  const findRuleForDate = (dateStr: string, effect: ApiScheduleRule['effect']) =>
-    scheduleRules.find(
-      (r) => r.isActive && r.effect === effect && ruleMatchesDate(r, dateStr)
-    )
+  const findRuleForDate = (dateStr: string, effect: ApiScheduleRule['effect'], empId: number) => {
+    const branchId = employees.find((e) => e.id === empId)?.branchId
+    return [...scheduleRules].sort((a, b) => Number(b.branchId != null) - Number(a.branchId != null) || b.id - a.id)
+      .find((r) => r.isActive && r.effect === effect && (r.branchId == null || r.branchId === branchId) && ruleMatchesDate(r, dateStr))
+  }
 
   // نوع الاستثناء ليوم داخل الأسبوع المعروض:
   //  'work' = يوم ويك إند صار دوام رسمي بقاعدة WORK (مثل آخر سبت)
   //  'off'  = يوم عمل عادي صار إجازة بقاعدة OFF
   //  null   = يوم عادي، أو لم تُحمَّل بيانات أيام العمل
-  const getException = (dayIndex: number): 'work' | 'off' | null => {
-    if (!skippedSet) return null
+  const getException = (dayIndex: number, empId: number): 'work' | 'off' | null => {
+    const calendar = calendars[empId]
+    if (!calendar) return null
     const dateStr = dateOfDayIndex(currentWeekStart, dayIndex)
-    const isWeekend = WEEKEND_DAYS.includes(weekDays[dayIndex].key)
-    const inSkipped = skippedSet.has(dateStr)
+    const isWeekend = calendar.weekend.has(WEEKDAY_CODES[dayIndex])
+    const inSkipped = calendar.skipped.has(dateStr)
     // ويك إند غير مُدرَج ضمن الأيام غير العاملة ⟺ قاعدة WORK حوّلته لدوام
     if (isWeekend && !inSkipped) return 'work'
     // يوم عمل صار ضمن غير العاملة بقاعدة OFF (نتحقّق من القاعدة حتى لا نخلط بينه وبين العطلات)
-    if (!isWeekend && inSkipped && findRuleForDate(dateStr, 'OFF')) return 'off'
+    if (!isWeekend && inSkipped && findRuleForDate(dateStr, 'OFF', empId)) return 'off'
     return null
   }
 
-  const workTooltip = (dateStr: string): string => {
+  const workTooltip = (dateStr: string, empId: number): string => {
     const base = 'هذا اليوم دوام رسمي بقاعدة استثنائية — اضبط ورديته'
-    const rule = findRuleForDate(dateStr, 'WORK')
+    const rule = findRuleForDate(dateStr, 'WORK', empId)
     return rule ? `${base} (${rule.name || scheduleRuleSentence(rule)})` : base
   }
-  const offTooltip = (dateStr: string): string => {
+  const offTooltip = (dateStr: string, empId: number): string => {
     const base = 'هذا اليوم إجازة بقاعدة استثنائية'
-    const rule = findRuleForDate(dateStr, 'OFF')
+    const rule = findRuleForDate(dateStr, 'OFF', empId)
     return rule ? `${base} (${rule.name || scheduleRuleSentence(rule)})` : base
   }
 
   // هل يحتوي الأسبوع المعروض على يوم دوام استثنائي؟ (لإظهار البانر)
   const hasExceptionalWork =
-    !!skippedSet && weekDays.some((_, i) => getException(i) === 'work')
+    rows.some((r) => weekDays.some((_, i) => getException(i, r.id) === 'work'))
 
   // حساب تاريخ نهاية الأسبوع
   const weekEnd = new Date(currentWeekStart)
@@ -383,11 +529,12 @@ export default function WeeklySchedulePage() {
 
   // تنسيق التاريخ
   const formatDate = (date: Date) => {
-    return date.toLocaleDateString('ar-SA', { day: 'numeric', month: 'long' })
+    return date.toLocaleDateString('ar-EG-u-ca-gregory', { day: 'numeric', month: 'long' })
   }
 
   // الانتقال للأسبوع السابق
   const goToPreviousWeek = () => {
+    if (hasChanges || saving) { setError('احفظ تغييرات الأسبوع قبل الانتقال'); return }
     const newDate = new Date(currentWeekStart)
     newDate.setDate(newDate.getDate() - 7)
     setCurrentWeekStart(newDate)
@@ -395,6 +542,7 @@ export default function WeeklySchedulePage() {
 
   // الانتقال للأسبوع التالي
   const goToNextWeek = () => {
+    if (hasChanges || saving) { setError('احفظ تغييرات الأسبوع قبل الانتقال'); return }
     const newDate = new Date(currentWeekStart)
     newDate.setDate(newDate.getDate() + 7)
     setCurrentWeekStart(newDate)
@@ -402,13 +550,15 @@ export default function WeeklySchedulePage() {
 
   // العودة للأسبوع الحالي
   const goToCurrentWeek = () => {
+    if (hasChanges || saving) { setError('احفظ تغييرات الأسبوع قبل الانتقال'); return }
     setCurrentWeekStart(sundayOf(new Date()))
   }
 
   // تغيير وردية موظف — التعيين للأسبوع كاملاً (نموذج السيرفر: وردية/موظف/أسبوع)
-  const changeShift = (employeeId: number, shiftId: string) => {
-    const shift = shifts.find((s) => s.id === shiftId)
-    if (!shift || shift.startTime === '-') return
+  // shiftKey = معرّف الوردية في الكتالوج المجلوب
+  const changeShift = (employeeId: number, shiftKey: string) => {
+    const shift = shiftCatalog.find((s) => s.id === shiftKey)
+    if (!shift) return
     setAssignments((prev) => ({ ...prev, [employeeId]: shift }))
     setDirtyIds((prev) => (prev.includes(employeeId) ? prev : [...prev, employeeId]))
     setHasChanges(true)
@@ -431,6 +581,8 @@ export default function WeeklySchedulePage() {
 
   // حفظ التغييرات — upsert لكل موظف تغيّرت ورديته ثم إعادة تحميل الأسبوع
   const saveChanges = async () => {
+    // shiftId يُرسل مع الاسم والأوقات — به يقرأ السيرفر أوقات الوردية حيّة
+    // من الكتالوج بدل تثبيت لقطة قديمة في صف الجدول
     const entries = dirtyIds
       .filter((id) => assignments[id])
       .map((id) => ({
@@ -439,6 +591,7 @@ export default function WeeklySchedulePage() {
         shiftName: assignments[id].name,
         startTime: assignments[id].startTime,
         endTime: assignments[id].endTime,
+        ...(assignments[id].shiftId ? { shiftId: assignments[id].shiftId } : {}),
       }))
     if (entries.length === 0) {
       setHasChanges(false)
@@ -447,9 +600,16 @@ export default function WeeklySchedulePage() {
     setSaving(true)
     setError('')
     try {
-      await upsertWeekSchedule(entries)
-      loadWeek(currentKey)
-      loadOverrides(currentKey)
+      const res = await upsertWeekSchedule(entries)
+      await Promise.all([loadWeek(currentKey), loadOverrides(currentKey)])
+      // موظفون تخطّاهم السيرفر (خارج نطاق فرعك أو أنت نفسك) — لا نجاح كاذب
+      if (res?.skipped?.length) {
+        setError(
+          `حُفظ الجدول — وتُخطّي ${res.skipped.length} موظف: ${[
+            ...new Set(res.skipped.map((s) => s.reason)),
+          ].join('، ')}`
+        )
+      } else setNotice(`حُفظت ورديات ${res.saved.length} موظف`)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'تعذر حفظ الجدول')
     } finally {
@@ -466,22 +626,24 @@ export default function WeeklySchedulePage() {
     try {
       const entries = await fetchWeekSchedule(prevKey)
       const map: Record<number, Shift> = {}
-      for (const entry of entries) map[entry.employeeId] = matchShift(entry)
-      setAssignments(map)
-      setDirtyIds(entries.map((e) => e.employeeId))
+      for (const entry of entries) {
+        map[entry.employeeId] = matchShiftIn(shiftCatalog, entry)
+      }
+      setAssignments((previous) => ({ ...previous, ...map }))
+      setDirtyIds((previous) => [...new Set([...previous, ...entries.map((e) => e.employeeId)])])
       setHasChanges(entries.length > 0)
+      setNotice(entries.length ? `نُسخت ${entries.length} وردية؛ اضغط حفظ الجدول لتطبيقها` : 'لا توجد ورديات محفوظة في الأسبوع السابق')
     } catch (e) {
       setError(e instanceof Error ? e.message : 'تعذر نسخ جدول الأسبوع السابق')
     }
     setShowCopyModal(false)
   }
 
-  // تطبيق قالب على موظفين محددين — يعيّن وردية الأسبوع
-  const applyTemplate = (templateId: string) => {
-    const template = templates.find((t) => t.id === templateId)
-    if (!template) return
+  // تطبيق قالب على موظفين محددين — القالب = وردية من الكتالوج تُعيَّن للأسبوع
+  const applyTemplate = (shiftKey: string) => {
+    if (!shiftCatalog.some((s) => s.id === shiftKey)) return
     const targetEmployees = selectedEmployees.length > 0 ? selectedEmployees : rows.map((r) => r.id)
-    targetEmployees.forEach((id) => changeShift(id, template.shiftId))
+    targetEmployees.forEach((id) => changeShift(id, shiftKey))
     setShowTemplates(false)
     setSelectedEmployees([])
     setHasChanges(true)
@@ -494,18 +656,49 @@ export default function WeeklySchedulePage() {
     return date.getDate()
   }
 
-  // حساب إجمالي ساعات العمل للموظف (5 أيام عمل)
-  const calculateTotalHours = (empId: number) => shiftOf(empId).workHours * 5
+  const cellShift = (empId: number, dayIndex: number): Shift | null => {
+    const calendar = calendars[empId]
+    if (!calendar) return null
+    const date = dateOfDayIndex(currentWeekStart, dayIndex)
+    if (calendar.skipped.has(date)) return OFF_SHIFT
+    const override = dayOverrides[`${empId}|${date}`]
+    return override ? matchShiftIn(shiftCatalog, override) : shiftOf(empId)
+  }
 
-  // إحصائيات (خلايا الأيام: 5 أيام عمل × وردية الموظف، وعطلة نهاية الأسبوع يومان)
-  const countCells = (shiftId: string) =>
-    rows.filter((r) => shiftOf(r.id).id === shiftId).length * 5
-  const stats = {
-    morning: countCells('morning'),
-    evening: countCells('evening'),
-    night: countCells('night'),
-    remote: countCells('remote'),
-    off: rows.length * 2,
+  // The totals use the same seven cells shown in the table, including day overrides.
+  const calculateTotalHours = (empId: number): number | null => {
+    const cells = weekDays.map((_, index) => cellShift(empId, index))
+    if (cells.some((cell) => !cell || !cell.id)) return null
+    return Math.round(cells.reduce((sum, cell) => sum + (cell?.workHours ?? 0), 0) * 10) / 10
+  }
+
+  const countCells = (shiftKey: string) =>
+    filteredRows.reduce((sum, row) => sum + weekDays.filter((_, i) => cellShift(row.id, i)?.id === shiftKey).length, 0)
+  const offCells = countCells('off')
+  const exportSchedule = () => downloadCsv(`weekly-schedule-${currentKey}.csv`,
+    ['كود الموظف', 'الموظف', 'القسم', 'التاريخ', 'اليوم', 'الوردية', 'بداية', 'نهاية', 'الساعات', 'مصدر الوردية'],
+    filteredRows.flatMap((employee) => weekDays.map((day, index) => {
+      const date = dateOfDayIndex(currentWeekStart, index)
+      const shift = cellShift(employee.id, index)
+      return [employee.employeeCode, employee.employeeName, employee.department, date, day.name,
+        shift?.name ?? 'تعذر حساب اليوم', shift?.startTime ?? '', shift?.endTime ?? '', shift?.workHours ?? '',
+        shift?.id === 'off' ? 'راحة بحسب التقويم' : dayOverrides[`${employee.id}|${date}`] ? 'تجاوز يوم' : assignments[employee.id] ? 'تعيين أسبوع' : 'جدول العمل']
+    })))
+
+  const clearAssignment = async (employeeId: number) => {
+    setSaving(true)
+    setError('')
+    try {
+      const result = await clearWeekSchedule(currentKey, employeeId)
+      setAssignments((previous) => { const next = { ...previous }; delete next[employeeId]; return next })
+      const remaining = dirtyIds.filter((id) => id !== employeeId)
+      setDirtyIds(remaining)
+      setHasChanges(remaining.length > 0)
+      setSelectedCell(null)
+      setNotice('أُلغي تعيين الأسبوع؛ يُستخدم جدول عمل الموظف أو الافتراضي. تجاوزات الأيام محفوظة.')
+      if (result.failed.length) setError(`أُلغي الإسناد، وتعذرت إعادة حساب الأيام: ${result.failed.join('، ')}`)
+    } catch (e) { setError(e instanceof Error ? e.message : 'تعذر إلغاء إسناد الأسبوع') }
+    finally { setSaving(false) }
   }
 
   // تحديد/إلغاء تحديد موظف
@@ -578,6 +771,19 @@ export default function WeeklySchedulePage() {
           <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
             <AlertCircle size={18} />
             {error}
+          </div>
+        )}
+        {calendarError && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">{calendarError}</div>}
+        {notice && <div role="status" className="bg-green-50 text-green-800 rounded-xl p-4">{notice}</div>}
+        <p className="text-sm text-gray-500">أيام الراحة والعطلات تُحسب لكل موظف حسب جدول عمله وفرعه. الساعات تشمل تجاوزات الأيام في أيام العمل الفعلية.</p>
+
+        {/* كتالوج ورديات فارغ — لا تعيين ممكن قبل إنشاء وردية واحدة على الأقل */}
+        {!shiftsLoading && shiftCatalog.length === 0 && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-4 flex items-center gap-2">
+            <AlertCircle size={18} />
+            {shiftsError
+              ? `تعذر تحميل الورديات: ${shiftsError}`
+              : 'لا توجد ورديات — أنشئها من إعدادات الورديات'}
           </div>
         )}
 
@@ -678,15 +884,15 @@ export default function WeeklySchedulePage() {
                 تعيين جماعي
               </button>
               <div className="h-8 w-px bg-gray-200" />
-              <button className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors" title="طباعة">
+              <button onClick={() => window.print()} className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors" title="طباعة">
                 <Printer size={18} className="text-gray-600" />
               </button>
-              <button className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors" title="تصدير Excel">
+              <button onClick={exportSchedule} disabled={loading || calendarLoading || !!calendarError || hasChanges} className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors disabled:opacity-50" title="تصدير CSV">
                 <FileSpreadsheet size={18} className="text-gray-600" />
               </button>
-              <button className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors" title="الإعدادات">
+              <Link href="/settings/work-days" className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors" title="إعدادات جداول العمل">
                 <Settings size={18} className="text-gray-600" />
-              </button>
+              </Link>
             </div>
           </div>
         </div>
@@ -695,14 +901,27 @@ export default function WeeklySchedulePage() {
         <div className="card">
           <div className="flex items-center gap-4 flex-wrap">
             <span className="text-sm text-gray-500 font-medium">دليل الورديات:</span>
-            {shifts.map(shift => (
-              <div key={shift.id} className="flex items-center gap-2">
-                <div className={`px-2 py-1 ${shift.bgColor} ${shift.color} rounded text-xs font-bold`}>
-                  {shift.code}
+            {shiftsLoading ? (
+              <span className="text-sm text-gray-400">جارٍ تحميل الورديات...</span>
+            ) : shiftCatalog.length === 0 ? (
+              <span className="text-sm text-amber-700">
+                لا توجد ورديات — أنشئها من إعدادات الورديات
+              </span>
+            ) : (
+              [...shiftCatalog, OFF_SHIFT].map(shift => (
+                <div key={shift.id} className="flex items-center gap-2">
+                  <div className={`px-2 py-1 ${shift.bgColor} ${shift.color} rounded text-xs font-bold`}>
+                    {shift.code}
+                  </div>
+                  <span className="text-sm text-gray-600">{shift.name}</span>
+                  {shift.startTime && shift.endTime && (
+                    <span className="text-xs text-gray-400" dir="ltr">
+                      {shift.startTime}–{shift.endTime}
+                    </span>
+                  )}
                 </div>
-                <span className="text-sm text-gray-600">{shift.name}</span>
-              </div>
-            ))}
+              ))
+            )}
           </div>
           <div className="flex items-center gap-2 mt-3 pt-3 border-t border-gray-100">
             <Star size={14} className="text-amber-500 fill-amber-400" />
@@ -725,7 +944,7 @@ export default function WeeklySchedulePage() {
 
         {/* Schedule Table */}
         <div className="card overflow-hidden p-0">
-          {loading ? (
+          {loading || shiftsLoading ? (
             <div className="flex items-center justify-center py-16">
               <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
             </div>
@@ -747,49 +966,12 @@ export default function WeeklySchedulePage() {
                   <th className="text-right p-4 font-medium text-gray-600 min-w-[200px] sticky right-0 bg-gray-50 z-10">
                     الموظف
                   </th>
-                  {weekDays.map((day, index) => {
-                    const colException = getException(index)
-                    const colDate = dateOfDayIndex(currentWeekStart, index)
-                    return (
-                      <th
-                        key={day.key}
-                        title={
-                          colException === 'work'
-                            ? workTooltip(colDate)
-                            : colException === 'off'
-                              ? offTooltip(colDate)
-                              : undefined
-                        }
-                        className={`p-3 font-medium text-center min-w-[90px] ${
-                          colException === 'work'
-                            ? 'bg-amber-50 text-amber-800 border-b-2 border-amber-400'
-                            : colException === 'off'
-                              ? 'bg-gray-100 text-gray-500'
-                              : 'text-gray-600'
-                        }`}
-                      >
-                        <div className="text-sm">{day.name}</div>
-                        <div
-                          className={`text-xs font-normal mt-1 ${
-                            colException === 'work' ? 'text-amber-600' : 'text-gray-400'
-                          }`}
-                        >
-                          {getDayDate(index)}
-                        </div>
-                        {colException === 'work' && (
-                          <span className="mt-1 inline-flex items-center gap-0.5 px-1.5 rounded-full bg-amber-400 text-white text-[9px] leading-4 font-bold">
-                            <Star size={8} className="fill-white" />
-                            دوام استثنائي
-                          </span>
-                        )}
-                        {colException === 'off' && (
-                          <span className="mt-1 inline-block px-1.5 rounded-full bg-gray-300 text-gray-700 text-[9px] leading-4 font-bold">
-                            إجازة استثنائية
-                          </span>
-                        )}
-                      </th>
-                    )
-                  })}
+                  {weekDays.map((day, index) => (
+                    <th key={day.key} className="p-3 font-medium text-center min-w-[90px] text-gray-600">
+                      <div className="text-sm">{day.name}</div>
+                      <div className="text-xs font-normal mt-1 text-gray-400">{getDayDate(index)}</div>
+                    </th>
+                  ))}
                   <th className="p-3 font-medium text-gray-600 text-center w-20 bg-gray-50">
                     الساعات
                   </th>
@@ -817,26 +999,33 @@ export default function WeeklySchedulePage() {
                         <div className="min-w-0">
                           <p className="font-medium text-gray-800 truncate">{employee.employeeName}</p>
                           <p className="text-xs text-gray-500 truncate">{employee.position}</p>
+                          {viewMode === 'edit' && assignments[employee.id] && (
+                            <button disabled={saving} onClick={() => clearAssignment(employee.id)} className="text-xs text-red-600 hover:underline disabled:opacity-50">إلغاء تعيين الأسبوع</button>
+                          )}
                         </div>
                       </div>
                     </td>
 
                     {/* Schedule Cells */}
                     {weekDays.map((day, dayIndex) => {
-                      const isWeekend = WEEKEND_DAYS.includes(day.key)
                       const dayDate = dateOfDayIndex(currentWeekStart, dayIndex)
-                      const exception = getException(dayIndex)
+                      const exception = getException(dayIndex, employee.id)
                       const isExceptionalWork = exception === 'work' // ويك إند صار دوام رسمي
                       const isExceptionalOff = exception === 'off'   // يوم عمل صار إجازة بقاعدة
                       // يُعامَل كيوم عمل لو كان يوم أسبوع عادي أو ويك إند دوام استثنائي
-                      const isWorkingDay = !isWeekend || isExceptionalWork
-                      const shift = isWorkingDay ? shiftOf(employee.id) : OFF_SHIFT
+                      const calendar = calendars[employee.id]
+                      const isWorkingDay = !!calendar && !calendar.skipped.has(dayDate)
+                      const shift = cellShift(employee.id, dayIndex) ?? { ...UNSCHEDULED_SHIFT, name: calendarLoading ? 'جارٍ الحساب…' : 'تعذر حساب اليوم' }
                       const isSelected = selectedCell?.empId === employee.id && selectedCell?.day === day.key
-                      const isLocked = !isWorkingDay // مقفول فقط لو إجازة فعلية (ويك إند غير استثنائي)
-                      const isUnassigned = isWorkingDay && !assignments[employee.id]
+                      const isLocked = !calendar || saving
+                      const isUnassigned = isWorkingDay && !shift.id
                       const override = isWorkingDay
                         ? dayOverrides[`${employee.id}|${dayDate}`]
                         : undefined
+                      // أوقات التجاوز الحيّة من الكتالوج (وإلا اللقطة المخزّنة)
+                      const overrideShift = override
+                        ? matchShiftIn(shiftCatalog, override)
+                        : null
 
                       return (
                         <td
@@ -864,49 +1053,56 @@ export default function WeeklySchedulePage() {
                               } ${isUnassigned && !override ? 'opacity-50' : ''}`}
                               title={
                                 isExceptionalWork
-                                  ? workTooltip(dayDate)
+                                  ? workTooltip(dayDate, employee.id)
                                   : isExceptionalOff
-                                    ? offTooltip(dayDate)
+                                    ? offTooltip(dayDate, employee.id)
                                     : override
                                       ? 'يوم خاص — وردية تتقدم على وردية الأسبوع'
+                                      : !isWorkingDay && calendar
+                                        ? 'راحة بحسب تقويم الموظف — تعيين الوردية لا يغير أيام الراحة'
                                       : isUnassigned
-                                        ? 'غير مجدوَل — الوردية الافتراضية'
+                                        ? 'غير مجدوَل — اختر وردية الأسبوع'
                                         : ''
                               }
                             >
-                              {override ? (
+                              {override && overrideShift ? (
                                 <>
                                   <span className="block truncate text-xs font-bold">
-                                    {override.shiftName}
+                                    {overrideShift.name}
                                   </span>
-                                  <span className="block text-[10px] text-amber-600" dir="ltr">
-                                    {override.startTime}–{override.endTime}
-                                  </span>
+                                  {overrideShift.startTime && overrideShift.endTime && (
+                                    <span className="block text-[10px] text-amber-600" dir="ltr">
+                                      {overrideShift.startTime}–{overrideShift.endTime}
+                                    </span>
+                                  )}
                                   <span className="inline-block px-1.5 rounded-full bg-amber-400 text-white text-[9px] leading-4">
                                     يوم خاص
                                   </span>
                                 </>
-                              ) : isExceptionalWork ? (
-                                <>
-                                  <span className="block truncate">{shift.name}</span>
-                                  <span className="mt-0.5 inline-block px-1.5 rounded-full bg-amber-400 text-white text-[9px] leading-4">
-                                    دوام استثنائي
-                                  </span>
-                                </>
-                              ) : isExceptionalOff ? (
-                                <>
-                                  <span className="block truncate">{shift.name}</span>
-                                  <span className="mt-0.5 inline-block px-1.5 rounded-full bg-gray-300 text-gray-700 text-[9px] leading-4">
-                                    إجازة استثنائية
-                                  </span>
-                                </>
                               ) : (
-                                shift.name
+                                <>
+                                  <span className="block truncate">{shift.name}</span>
+                                  {shift.startTime && shift.endTime && (
+                                    <span className="block text-[10px] opacity-70" dir="ltr">
+                                      {shift.startTime}–{shift.endTime}
+                                    </span>
+                                  )}
+                                  {isExceptionalWork && (
+                                    <span className="mt-0.5 inline-block px-1.5 rounded-full bg-amber-400 text-white text-[9px] leading-4">
+                                      دوام استثنائي
+                                    </span>
+                                  )}
+                                  {isExceptionalOff && (
+                                    <span className="mt-0.5 inline-block px-1.5 rounded-full bg-gray-300 text-gray-700 text-[9px] leading-4">
+                                      إجازة استثنائية
+                                    </span>
+                                  )}
+                                </>
                               )}
                             </button>
 
                             {/* زر وردية اليوم الخاص — يظهر عند المرور أو التجاوز، وبارز دائماً ليوم الدوام الاستثنائي */}
-                            {viewMode === 'edit' && isWorkingDay && (
+                            {viewMode === 'edit' && calendar && (isWorkingDay || dayOverrides[`${employee.id}|${dayDate}`]) && (
                               <button
                                 onClick={(e) => {
                                   e.stopPropagation()
@@ -938,7 +1134,12 @@ export default function WeeklySchedulePage() {
                                 <div className="px-3 py-1.5 text-xs text-gray-500 border-b border-gray-100">
                                   اختر وردية الأسبوع
                                 </div>
-                                {assignableShifts.map(s => (
+                                {shiftCatalog.length === 0 && (
+                                  <p className="px-3 py-3 text-xs text-amber-700">
+                                    لا توجد ورديات — أنشئها من إعدادات الورديات
+                                  </p>
+                                )}
+                                {shiftCatalog.map(s => (
                                   <button
                                     key={s.id}
                                     onClick={() => changeShift(employee.id, s.id)}
@@ -950,11 +1151,17 @@ export default function WeeklySchedulePage() {
                                       {s.code}
                                     </div>
                                     <span className="text-sm text-gray-700">{s.name}</span>
+                                    <span className="text-[10px] text-gray-400" dir="ltr">
+                                      {s.startTime}–{s.endTime}
+                                    </span>
                                     {s.id === shift.id && (
                                       <CheckCircle size={14} className="text-primary-500 mr-auto" />
                                     )}
                                   </button>
                                 ))}
+                                {assignments[employee.id] && (
+                                  <button disabled={saving} onClick={() => clearAssignment(employee.id)} className="w-full px-3 py-2 text-right text-sm text-red-600 hover:bg-red-50">إلغاء تعيين الأسبوع</button>
+                                )}
                               </div>
                             )}
                           </div>
@@ -962,10 +1169,18 @@ export default function WeeklySchedulePage() {
                       )
                     })}
 
-                    {/* Total Hours */}
+                    {/* Total Hours — من ساعات الوردية المحفوظة فعلاً */}
                     <td className="p-3 text-center bg-gray-50/50">
-                      <span className="font-bold text-gray-800">{calculateTotalHours(employee.id)}</span>
-                      <span className="text-gray-400 text-xs block">ساعة</span>
+                      {calculateTotalHours(employee.id) === null ? (
+                        <span className="font-bold text-gray-400">—</span>
+                      ) : (
+                        <>
+                          <span className="font-bold text-gray-800">
+                            {calculateTotalHours(employee.id)}
+                          </span>
+                          <span className="text-gray-400 text-xs block">ساعة</span>
+                        </>
+                      )}
                     </td>
                   </tr>
                 ))}
@@ -975,51 +1190,32 @@ export default function WeeklySchedulePage() {
           )}
         </div>
 
-        {/* Stats */}
-        <div className="grid grid-cols-5 gap-4">
+        {/* Stats — بطاقة لكل وردية في الكتالوج (لا أسماء ثابتة) */}
+        <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-4">
+          {shiftCatalog.map((s) => {
+            const Icon = shiftIcon(s)
+            return (
+              <div key={s.id} className="card flex items-center gap-3 p-4">
+                <div className={`w-10 h-10 ${s.bgColor} rounded-xl flex items-center justify-center flex-shrink-0`}>
+                  <Icon size={20} className={s.color} />
+                </div>
+                <div className="min-w-0">
+                  <p className="text-xs text-gray-500 truncate">{s.name}</p>
+                  <p className="text-xl font-bold text-gray-800">{countCells(s.id)}</p>
+                  <p className="text-[10px] text-gray-400" dir="ltr">
+                    {s.startTime}–{s.endTime}
+                  </p>
+                </div>
+              </div>
+            )
+          })}
           <div className="card flex items-center gap-3 p-4">
-            <div className="w-10 h-10 bg-blue-100 rounded-xl flex items-center justify-center">
-              <Sun size={20} className="text-blue-600" />
-            </div>
-            <div>
-              <p className="text-xs text-gray-500">صباحي</p>
-              <p className="text-xl font-bold text-gray-800">{stats.morning}</p>
-            </div>
-          </div>
-          <div className="card flex items-center gap-3 p-4">
-            <div className="w-10 h-10 bg-orange-100 rounded-xl flex items-center justify-center">
-              <Clock size={20} className="text-orange-600" />
-            </div>
-            <div>
-              <p className="text-xs text-gray-500">مسائي</p>
-              <p className="text-xl font-bold text-gray-800">{stats.evening}</p>
-            </div>
-          </div>
-          <div className="card flex items-center gap-3 p-4">
-            <div className="w-10 h-10 bg-purple-100 rounded-xl flex items-center justify-center">
-              <Moon size={20} className="text-purple-600" />
-            </div>
-            <div>
-              <p className="text-xs text-gray-500">ليلي</p>
-              <p className="text-xl font-bold text-gray-800">{stats.night}</p>
-            </div>
-          </div>
-          <div className="card flex items-center gap-3 p-4">
-            <div className="w-10 h-10 bg-cyan-100 rounded-xl flex items-center justify-center">
-              <Home size={20} className="text-cyan-600" />
-            </div>
-            <div>
-              <p className="text-xs text-gray-500">عن بُعد</p>
-              <p className="text-xl font-bold text-gray-800">{stats.remote}</p>
-            </div>
-          </div>
-          <div className="card flex items-center gap-3 p-4">
-            <div className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center">
+            <div className="w-10 h-10 bg-gray-100 rounded-xl flex items-center justify-center flex-shrink-0">
               <Calendar size={20} className="text-gray-600" />
             </div>
             <div>
               <p className="text-xs text-gray-500">إجازات</p>
-              <p className="text-xl font-bold text-gray-800">{stats.off}</p>
+              <p className="text-xl font-bold text-gray-800">{offCells}</p>
             </div>
           </div>
         </div>
@@ -1030,11 +1226,11 @@ export default function WeeklySchedulePage() {
             <div className="bg-white rounded-2xl w-full max-w-lg">
               <div className="p-6 border-b border-gray-100 flex items-center justify-between">
                 <div>
-                  <h3 className="text-xl font-bold text-gray-800">القوالب الجاهزة</h3>
+                  <h3 className="text-xl font-bold text-gray-800">قوالب الدوام</h3>
                   <p className="text-gray-500 text-sm mt-1">
                     {selectedEmployees.length > 0
-                      ? `سيتم تطبيق القالب على ${selectedEmployees.length} موظف محدد`
-                      : 'سيتم تطبيق القالب على جميع الموظفين'}
+                      ? `تُعيَّن وردية الأسبوع لـ${selectedEmployees.length} موظف محدد`
+                      : 'تُعيَّن وردية الأسبوع لجميع الموظفين'}
                   </p>
                 </div>
                 <button onClick={() => setShowTemplates(false)} className="p-2 hover:bg-gray-100 rounded-lg">
@@ -1042,21 +1238,30 @@ export default function WeeklySchedulePage() {
                 </button>
               </div>
 
-              <div className="p-4 space-y-2">
-                {templates.map(template => {
-                  const Icon = template.icon
+              {/* القوالب = ورديات الكتالوج الحقيقية بأوقاتها */}
+              <div className="p-4 space-y-2 max-h-[50vh] overflow-y-auto">
+                {shiftCatalog.length === 0 && (
+                  <p className="text-sm text-amber-700 bg-amber-50 rounded-xl px-3 py-3 text-center">
+                    لا توجد ورديات — أنشئها من إعدادات الورديات
+                  </p>
+                )}
+                {shiftCatalog.map((s) => {
+                  const Icon = shiftIcon(s)
                   return (
                     <button
-                      key={template.id}
-                      onClick={() => applyTemplate(template.id)}
+                      key={s.id}
+                      onClick={() => applyTemplate(s.id)}
                       className="w-full p-4 bg-gray-50 hover:bg-gray-100 rounded-xl text-right transition-colors flex items-center gap-4"
                     >
-                      <div className="w-12 h-12 bg-white rounded-xl flex items-center justify-center shadow-sm">
-                        <Icon size={24} className="text-primary-600" />
+                      <div className={`w-12 h-12 ${s.bgColor} rounded-xl flex items-center justify-center shadow-sm flex-shrink-0`}>
+                        <Icon size={24} className={s.color} />
                       </div>
-                      <div>
-                        <p className="font-medium text-gray-800">{template.name}</p>
-                        <p className="text-sm text-gray-500">{template.description}</p>
+                      <div className="min-w-0">
+                        <p className="font-medium text-gray-800 truncate">دوام {s.name}</p>
+                        <p className="text-sm text-gray-500">
+                          <span dir="ltr">{s.startTime}–{s.endTime}</span> · {s.workHours} ساعة/يوم
+                          {s.shiftMode === 'flexible' ? ' · وردية مرنة' : ''}
+                        </p>
                       </div>
                     </button>
                   )
@@ -1111,11 +1316,11 @@ export default function WeeklySchedulePage() {
             branches={branchesList}
             teams={teamsList}
             selectedEmployees={selectedEmployees}
-            shifts={assignableShifts}
+            shifts={shiftCatalog}
             weekDays={weekDays}
             onClose={() => setShowBulkAssign(false)}
-            onAssign={async (empIds, days, shiftId) => {
-              const shift = assignableShifts.find((s) => s.id === shiftId)
+            onAssign={async (empIds, days, shiftKey) => {
+              const shift = shiftCatalog.find((s) => s.id === shiftKey)
               if (days.length > 0 && shift) {
                 // أيام محددة → «يوم استثنائي»: الوردية تُطبَّق كتجاوز لتلك
                 // التواريخ فقط (مثلاً السبت) لكل موظفي النطاق، دون تغيير الأسبوع
@@ -1123,24 +1328,42 @@ export default function WeeklySchedulePage() {
                   .map((k) => weekDays.findIndex((d) => d.key === k))
                   .filter((i) => i >= 0)
                   .map((i) => dateOfDayIndex(currentWeekStart, i))
+                // shiftId مع الاسم والأوقات — مرجع الوردية في الكتالوج
+                const payload = {
+                  employeeIds: empIds,
+                  dates,
+                  shiftName: shift.name,
+                  startTime: shift.startTime,
+                  endTime: shift.endTime,
+                  ...(shift.shiftId ? { shiftId: shift.shiftId } : {}),
+                }
                 try {
-                  const res = await setDayShiftOverridesBulk({
-                    employeeIds: empIds,
-                    dates,
-                    shiftName: shift.name,
-                    startTime: shift.startTime,
-                    endTime: shift.endTime,
-                  })
+                  const res = await setDayShiftOverridesBulk(payload)
                   await loadOverrides(currentKey)
                   const expected = empIds.length * dates.length
+                  // سبب فشل كل موظف/يوم من السيرفر — لا «تخطّى N» بلا تفسير
+                  const failed = res.failed ?? []
+                  const reasons = failed.slice(0, 10).map((f) => {
+                    const r = rows.find((x) => x.id === f.employeeId)
+                    return `${r?.employeeName ?? `موظف #${f.employeeId}`} (${f.date}): ${f.error}`
+                  })
+                  if (failed.length > 10) reasons.push(`و${failed.length - 10} أخرى`)
+                  // موظفون استبعدهم السيرفر قبل التطبيق (خارج نطاق فرعك أو أنت نفسك)
+                  if (res.skipped) {
+                    reasons.push(`${res.skipped} موظف مستبعَد: خارج نطاق فرعك أو أنت نفسك`)
+                  }
                   if (res.applied === 0) {
                     // لم يُطبَّق شيء فعلاً — لا نعرض نجاحاً كاذباً
-                    setError('لم يُطبَّق التجاوز على أي موظف — تحقق من النطاق والوردية')
+                    setError(
+                      reasons.length > 0
+                        ? `لم يُطبَّق التجاوز على أي موظف — ${reasons.join('؛ ')}`
+                        : 'لم يُطبَّق التجاوز على أي موظف — تحقق من النطاق والوردية'
+                    )
                   } else {
                     setError('')
-                    alert(
+                    setNotice(
                       res.applied < expected
-                        ? `تم تطبيق «${shift.name}» على ${res.applied} من ${expected} تعيين (تخطّى ${expected - res.applied})`
+                        ? `تم تطبيق «${shift.name}» على ${res.applied} من ${expected} تعيين — تعذّر ${expected - res.applied}:\n${reasons.map((x) => `• ${x}`).join('\n')}`
                         : `تم تطبيق «${shift.name}» كاستثناء على ${res.employees} موظف في ${res.days} يوم`
                     )
                   }
@@ -1149,8 +1372,9 @@ export default function WeeklySchedulePage() {
                 }
               } else {
                 // بلا أيام → وردية الأسبوع لكل موظفي النطاق (سلوك أساسي)
-                empIds.forEach((id) => changeShift(id, shiftId))
+                empIds.forEach((id) => changeShift(id, shiftKey))
                 setHasChanges(true)
+                setNotice(`حُددت ورديات ${empIds.length} موظف؛ اضغط حفظ الجدول لتطبيقها`)
               }
               setShowBulkAssign(false)
             }}
@@ -1165,7 +1389,7 @@ export default function WeeklySchedulePage() {
             date={overrideModal.date}
             dayName={overrideModal.dayName}
             override={dayOverrides[`${overrideModal.empId}|${overrideModal.date}`]}
-            shiftOptions={assignableShifts}
+            shiftOptions={shiftCatalog}
             onClose={() => setOverrideModal(null)}
             onSaved={() => {
               setOverrideModal(null)
@@ -1199,7 +1423,7 @@ function DayOverrideModal({
   onSaved: () => void
 }) {
   // لو التجاوز الحالي باسم خارج الكتالوج نعرضه كخيار إضافي
-  const currentShift = override ? matchShift(override) : null
+  const currentShift = override ? matchShiftIn(shiftOptions, override) : null
   const options =
     currentShift && !shiftOptions.some((s) => s.id === currentShift.id)
       ? [currentShift, ...shiftOptions]
@@ -1216,14 +1440,17 @@ function DayOverrideModal({
     }
     setSaving(true)
     setModalError('')
+    // shiftId مع الاسم والأوقات — مرجع الوردية في الكتالوج
+    const payload = {
+      employeeId: empId,
+      date,
+      shiftName: s.name,
+      startTime: s.startTime,
+      endTime: s.endTime,
+      ...(s.shiftId ? { shiftId: s.shiftId } : {}),
+    }
     try {
-      await setDayShiftOverride({
-        employeeId: empId,
-        date,
-        shiftName: s.name,
-        startTime: s.startTime,
-        endTime: s.endTime,
-      })
+      await setDayShiftOverride(payload)
       onSaved()
     } catch (e) {
       setModalError(e instanceof Error ? e.message : 'تعذر حفظ وردية اليوم')
@@ -1269,17 +1496,24 @@ function DayOverrideModal({
             </div>
           )}
 
-          {override && (
+          {override && currentShift && (
             <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl text-sm text-amber-800">
-              التجاوز الحالي: <b>{override.shiftName}</b>{' '}
-              <span dir="ltr">
-                {override.startTime}–{override.endTime}
-              </span>
+              التجاوز الحالي: <b>{currentShift.name}</b>{' '}
+              {currentShift.startTime && currentShift.endTime && (
+                <span dir="ltr">
+                  {currentShift.startTime}–{currentShift.endTime}
+                </span>
+              )}
             </div>
           )}
 
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-3">الوردية</label>
+            {options.length === 0 && (
+              <p className="text-sm text-amber-700 bg-amber-50 rounded-xl px-3 py-3 text-center">
+                لا توجد ورديات — أنشئها من إعدادات الورديات
+              </p>
+            )}
             <div className="grid grid-cols-3 gap-2">
               {options.map((shift) => (
                 <button
@@ -1369,7 +1603,7 @@ function BulkAssignModal({
   shifts: Shift[]
   weekDays: { key: string; name: string }[]
   onClose: () => void
-  onAssign: (empIds: number[], days: string[], shiftId: string) => void
+  onAssign: (empIds: number[], days: string[], shiftId: string) => Promise<void>
 }) {
   const [selectedEmps, setSelectedEmps] = useState<number[]>(initialSelected)
   const [selectedDays, setSelectedDays] = useState<string[]>([])
@@ -1377,6 +1611,8 @@ function BulkAssignModal({
   // النطاق: فرد (بالتحديد) أو فريق/قسم/فرع (بمعرّف) أو الشركة كلها
   const [scope, setScope] = useState<AssignScope>('individual')
   const [scopeId, setScopeId] = useState<number | ''>('')
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
 
   const toggleEmployee = (empId: number) => {
     setSelectedEmps(prev =>
@@ -1418,12 +1654,17 @@ function BulkAssignModal({
           ? branches.map((b) => ({ id: b.id, name: b.name }))
           : []
 
-  const handleAssign = () => {
+  const handleAssign = async () => {
+    if (busy) return
     if (targetEmps.length === 0 || !selectedShift) {
-      alert('اختر النطاق (أو الموظفين) والوردية')
+      setError('اختر النطاق (أو الموظفين) والوردية')
       return
     }
-    onAssign(targetEmps, selectedDays, selectedShift)
+    setBusy(true)
+    setError('')
+    try { await onAssign(targetEmps, selectedDays, selectedShift) }
+    catch (e) { setError(e instanceof Error ? e.message : 'تعذر تطبيق الوردية') }
+    finally { setBusy(false) }
   }
 
   return (
@@ -1440,6 +1681,7 @@ function BulkAssignModal({
         </div>
 
         <div className="p-6 space-y-6 overflow-y-auto flex-1">
+          {error && <p role="alert" className="text-red-700 bg-red-50 p-3 rounded-lg">{error}</p>}
           {/* نطاق التعيين — موظف / فريق / قسم / فرع / الشركة كلها */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-3">
@@ -1562,9 +1804,14 @@ function BulkAssignModal({
             </div>
           </div>
 
-          {/* اختيار الوردية */}
+          {/* اختيار الوردية — من كتالوج الورديات بأوقاته الحيّة */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-3">الوردية</label>
+            {shifts.length === 0 && (
+              <p className="text-sm text-amber-700 bg-amber-50 rounded-xl px-3 py-3 text-center">
+                لا توجد ورديات — أنشئها من إعدادات الورديات
+              </p>
+            )}
             <div className="grid grid-cols-3 gap-2">
               {shifts.map(shift => (
                 <button
@@ -1580,6 +1827,9 @@ function BulkAssignModal({
                     {shift.code}
                   </div>
                   <p className="text-sm text-gray-700 text-center">{shift.name}</p>
+                  <p className="text-xs text-gray-400 text-center" dir="ltr">
+                    {shift.startTime}–{shift.endTime}
+                  </p>
                 </button>
               ))}
             </div>
@@ -1589,10 +1839,10 @@ function BulkAssignModal({
         <div className="p-4 border-t border-gray-100 flex gap-3">
           <button
             onClick={handleAssign}
-            disabled={targetEmps.length === 0 || !selectedShift}
+            disabled={busy || targetEmps.length === 0 || !selectedShift}
             className="flex-1 btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            تطبيق ({targetEmps.length} موظف)
+            {busy ? 'جارٍ التطبيق…' : `تطبيق (${targetEmps.length} موظف)`}
           </button>
           <button onClick={onClose} className="flex-1 btn-secondary">
             إلغاء

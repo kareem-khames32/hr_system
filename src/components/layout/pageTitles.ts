@@ -1,0 +1,112 @@
+// عنوان الهيدر من المسار الحالي — نفس تسميات القائمة الجانبية.
+// الأكثر تحديداً أولاً: النص بادئة تطابق المسار نفسه أو ما تحته، وRegExp للمسارات الديناميكية
+const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
+  // بورتال الموظف
+  ['/requests-console', 'لوحة الطلبات (HR)'],
+  ['/requests', 'طلباتي'],
+  ['/approvals-inbox', 'بانتظار موافقتي'],
+  ['/my/attendance', 'حضوري'],
+  ['/my/leaves', 'إجازاتي وأرصدتي'],
+  ['/my/payslips', 'قسائم راتبي'],
+  ['/my/custody', 'عهدي'],
+  ['/my/documents', 'مستنداتي'],
+  ['/profile', 'ملفي الشخصي'],
+  ['/notifications', 'الإشعارات'],
+  ['/calendar', 'التقويم'],
+  // الموظفون وإنهاء الخدمة
+  ['/employees/add', 'إضافة موظف'],
+  ['/employees/onboarding', 'تهيئة الموظفين الجدد'],
+  ['/employees/org-chart', 'الهيكل التنظيمي'],
+  ['/employees/contracts', 'إدارة العقود'],
+  ['/employees/documents/create', 'إنشاء مستند'],
+  ['/employees/documents', 'مستندات الموظفين'],
+  ['/employees/custody', 'سجل العهد'],
+  ['/employees/transfers', 'لوج النقل'],
+  ['/employees/archived', 'المؤرشفون ومنتهو الخدمة'],
+  [/^\/employees\/\d+\/edit(\/|$)/, 'تعديل بيانات موظف'],
+  [/^\/employees\/\d+\/terminate(\/|$)/, 'إنهاء خدمة موظف'],
+  [/^\/employees\/\d+\/settlement(\/|$)/, 'تصفية مستحقات نهاية الخدمة'],
+  [/^\/employees\/\d+(\/|$)/, 'ملف الموظف'],
+  ['/employees', 'قائمة الموظفين'],
+  [/^\/offboarding\/\d+(\/|$)/, 'ملف إنهاء الخدمة'],
+  ['/offboarding', 'إنهاء الخدمة'],
+  // الحضور والانصراف
+  ['/attendance/weekly-schedule', 'الجدول الأسبوعي'],
+  ['/attendance/shifts', 'الورديات'],
+  ['/attendance/permissions', 'الأذونات'],
+  ['/attendance/overtime', 'العمل الإضافي'],
+  ['/attendance/manual-entry', 'الإدخال اليدوي'],
+  ['/attendance/devices', 'أجهزة البصمة'],
+  ['/attendance/monthly-sheet', 'الكشف الشهري'],
+  ['/attendance/reports', 'تقارير الحضور'],
+  ['/attendance', 'سجل الحضور'],
+  // الإجازات
+  ['/leaves/request', 'طلب إجازة'],
+  ['/leaves/balance', 'رصيد الإجازات'],
+  ['/leaves/calendar', 'تقويم الإجازات'],
+  ['/leaves/holidays', 'العطلات الرسمية'],
+  ['/leaves/types', 'أنواع الإجازات'],
+  ['/leaves', 'سجل الإجازات المعتمدة'],
+  // الرواتب
+  ['/payroll/policies', 'سياسات الرواتب'],
+  ['/payroll/salary-history', 'سجل الأجر المؤرخ'],
+  ['/payroll/bonuses', 'المكافآت'],
+  ['/payroll/deductions', 'الخصومات'],
+  ['/payroll/payslips', 'قسائم الراتب'],
+  ['/payroll/payslip', 'قسيمة الراتب'],
+  ['/payroll/formulas', 'معادلات الرواتب'],
+  ['/payroll/allowances', 'البدلات'],
+  ['/payroll/loans', 'السلف والقروض'],
+  ['/payroll/gosi', 'التأمينات (GOSI)'],
+  ['/payroll/reports', 'التقارير المالية'],
+  ['/payroll', 'مسير الرواتب'],
+  // التوظيف والأداء والتدريب والتقارير
+  ['/recruitment/applicants', 'المتقدمين'],
+  ['/recruitment/interviews', 'المقابلات'],
+  ['/recruitment/offers', 'عروض العمل'],
+  ['/recruitment/add', 'إضافة وظيفة'],
+  [/^\/recruitment\/[^/]+/, 'تفاصيل الوظيفة'],
+  ['/recruitment', 'الوظائف الشاغرة'],
+  ['/performance/new', 'تقييم جديد'],
+  ['/performance/goals', 'الأهداف'],
+  ['/performance/cycles', 'دورات التقييم'],
+  ['/performance/templates', 'نماذج التقييم'],
+  [/^\/performance\/[^/]+/, 'تقييم الأداء'],
+  ['/performance', 'التقييمات'],
+  ['/training/my-courses', 'دوراتي'],
+  ['/training/add', 'إضافة دورة'],
+  ['/training/certificates', 'الشهادات'],
+  [/^\/training\/[^/]+/, 'تفاصيل الدورة'],
+  ['/training', 'الدورات التدريبية'],
+  ['/reports/custom', 'تقارير مخصصة'],
+  ['/reports', 'لوحة التقارير'],
+  // الإعدادات
+  ['/settings/branches', 'الفروع'],
+  ['/settings/departments', 'الأقسام والإدارات'],
+  ['/settings/teams', 'الفرق'],
+  ['/settings/job-titles', 'المسميات الوظيفية'],
+  ['/settings/grades', 'الدرجات الوظيفية'],
+  ['/settings/cost-centers', 'مراكز التكلفة'],
+  ['/settings/work-days', 'أيام العمل'],
+  ['/settings/permission-types', 'أنواع الأذونات'],
+  ['/settings/policies', 'سياسات الإجازات والأوفرتايم'],
+  ['/settings/approvals', 'الاعتمادات والموافقات'],
+  ['/settings/request-types', 'بانِي الطلبات'],
+  ['/settings/asset-types', 'سجل الأصول'],
+  ['/settings/documents', 'أنواع المستندات'],
+  ['/settings/document-templates', 'قوالب المستندات'],
+  ['/settings/letter-templates', 'قوالب الخطابات'],
+  ['/settings/users', 'المستخدمين'],
+  ['/settings/roles', 'الأدوار والصلاحيات'],
+  ['/settings', 'الإعدادات العامة'],
+]
+
+// عنوان الصفحة للمسار — null لو المسار غير معروف (الهيدر يعرض عنواناً عاماً)
+export const pageTitleFor = (path: string): string | null => {
+  const hit = PAGE_TITLES.find(([prefix]) =>
+    typeof prefix === 'string'
+      ? path === prefix || path.startsWith(`${prefix}/`)
+      : prefix.test(path)
+  )
+  return hit ? hit[1] : null
+}

@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { RequestsModule } from '../requests/requests.module'
+import { AttendanceModule } from '../attendance/attendance.module'
 import { AttendanceDay, AttendancePunch, PermissionType } from '../attendance/attendance.entities'
 import { Employee } from '../employees/employee.entity'
 import { EmployeesModule } from '../employees/employees.module'
@@ -21,6 +22,7 @@ import {
   BiometricDevice,
   CostCenter,
   Candidate,
+  DocType,
   EmployeeDocument,
   Grade,
   JobTitle,
@@ -34,12 +36,15 @@ import { CatalogsController } from './catalogs.controller'
 import { DocsController } from './docs.controller'
 import { EmployeeExtrasController } from './employee-extras.controller'
 import { PortalController } from './portal.controller'
+import { DocTypesDefaultsService } from './doc-types-defaults.service'
+import { NotificationRead } from './notification-read.entity'
 
 // الملحقات: العهدة/المستندات/الكتالوجات/المرشحون/النقل/التقويم/الإشعارات
 @Module({
   imports: [
     EmployeesModule,
     RequestsModule,
+    AttendanceModule, // لإعادة حساب الأيام بعد تعديل وردية في الكتالوج
     TypeOrmModule.forFeature([
       Asset,
       CustodyAssignment,
@@ -51,6 +56,7 @@ import { PortalController } from './portal.controller'
       JobTitle,
       Grade,
       AssetType,
+      DocType,
       CostCenter,
       Candidate,
       Employee,
@@ -68,6 +74,7 @@ import { PortalController } from './portal.controller'
       AttendancePunch,
       AttendanceDay,
       PermissionType,
+      NotificationRead, // حالة الإشعارات لكل مستخدم (مقروء/محذوف)
     ]),
   ],
   controllers: [
@@ -78,5 +85,6 @@ import { PortalController } from './portal.controller'
     EmployeeExtrasController,
     PortalController,
   ],
+  providers: [DocTypesDefaultsService],
 })
 export class ExtrasModule {}

@@ -1,4 +1,5 @@
 'use client'
+import { useParams } from 'next/navigation'
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
@@ -34,6 +35,7 @@ import {
   approveSettlement,
   withdrawOffboarding,
   can,
+  getCurrentUser,
   type ApiOffboardingCase,
   type ApiClearanceItem,
   type ApiSettlementLine,
@@ -46,7 +48,7 @@ const statusLabels: Record<string, string> = {
   IN_SETTLEMENT: 'تصفية قيد المراجعة',
   SETTLED: 'معتمدة بانتظار آخر يوم',
   CLOSED: 'منتهية',
-  CANCELLED: 'تراجع عن الاستقالة',
+  CANCELLED: 'ملف ملغى',
 }
 
 const statusStyles: Record<string, string> = {
@@ -68,11 +70,8 @@ const partyConfig: Record<string, { label: string; icon: typeof UserCheck }> = {
 
 const fmtDate = (v?: string | null) => (v ? String(v).slice(0, 10) : '—')
 
-export default function OffboardingCasePage({
-  params,
-}: {
-  params: { id: string }
-}) {
+export default function OffboardingCasePage() {
+  const params = useParams<{ id: string }>()
   const caseId = Number(params.id)
   const currency = useCurrency()
   const [det, setDet] = useState<ApiOffboardingCase | null>(null)
@@ -234,7 +233,7 @@ export default function OffboardingCasePage({
       await load()
     } catch (err) {
       setActionError(
-        err instanceof Error ? err.message : 'تعذر التراجع عن الاستقالة'
+        err instanceof Error ? err.message : 'تعذر إلغاء ملف إنهاء الخدمة'
       )
     } finally {
       setSaving(false)
@@ -268,9 +267,14 @@ export default function OffboardingCasePage({
       <div className="space-y-6">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-sm text-gray-500">
-          <Link href="/offboarding" className="hover:text-primary-600">
-            إنهاء الخدمة
-          </Link>
+          {/* القائمة لـ HR فقط — الجهات والموظف يفتحون ملفاً بعينه */}
+          {can('offboarding.manage') ? (
+            <Link href="/offboarding" className="hover:text-primary-600">
+              إنهاء الخدمة
+            </Link>
+          ) : (
+            <span>إنهاء الخدمة</span>
+          )}
           <ArrowRight size={16} />
           <span className="text-gray-800">ملف #{params.id}</span>
         </div>
@@ -357,7 +361,7 @@ export default function OffboardingCasePage({
                         className="flex items-center gap-2 px-4 py-2 text-sm font-medium text-red-600 border border-red-300 rounded-lg hover:bg-red-50 disabled:opacity-50 transition-colors"
                       >
                         <Undo2 size={16} />
-                        التراجع عن الاستقالة
+                        إلغاء ملف إنهاء الخدمة
                       </button>
                     )}
                 </div>
@@ -372,12 +376,22 @@ export default function OffboardingCasePage({
                   الموظف لا يزال ماسكاً {det.openCustodyCount} عهدة مفتوحة — يجب
                   إرجاعها قبل إتمام بند العهدة والأصول
                 </p>
-                <Link
-                  href="/employees/custody"
-                  className="text-sm font-medium text-warning-700 underline hover:text-warning-600 shrink-0"
-                >
-                  سجل العهد
-                </Link>
+                {/* سجل العهد لمسؤول العهد (custody.assign)، و«عهدي» للموظف نفسه — غيرهم بلا رابط */}
+                {can('custody.assign') ? (
+                  <Link
+                    href="/employees/custody"
+                    className="text-sm font-medium text-warning-700 underline hover:text-warning-600 shrink-0"
+                  >
+                    سجل العهد
+                  </Link>
+                ) : getCurrentUser()?.employeeId === det.employeeId ? (
+                  <Link
+                    href="/my/custody"
+                    className="text-sm font-medium text-warning-700 underline hover:text-warning-600 shrink-0"
+                  >
+                    عهدي
+                  </Link>
+                ) : null}
               </div>
             )}
 
@@ -454,7 +468,10 @@ export default function OffboardingCasePage({
                           )}
                         </div>
                       </div>
-                      {!done && det.status === 'IN_CLEARANCE' && (
+                      {/* الزر للبنود اللي المستخدم يقدر يتصرف فيها بس (canAct من الباك) */}
+                      {!done &&
+                        det.status === 'IN_CLEARANCE' &&
+                        (item.canAct ?? can('offboarding.manage')) && (
                         <button
                           onClick={() => {
                             setActionError('')
@@ -478,8 +495,17 @@ export default function OffboardingCasePage({
               </div>
             </div>
 
+            {/* المبالغ لأصحاب التصفية فقط — غيرهم يرى حالة الملف دون أرقام */}
+            {showSettlement && det.canViewSettlement === false && (
+              <div className="card p-6 flex items-center gap-3 text-sm text-gray-500">
+                <Lock size={18} className="text-gray-400 shrink-0" />
+                التصفية المالية لدى الموارد البشرية — بنودها ومبالغها متاحة لمسؤولي
+                التصفية فقط
+              </div>
+            )}
+
             {/* Settlement Section */}
-            {showSettlement && (
+            {showSettlement && det.canViewSettlement !== false && (
               <div className="card overflow-hidden">
                 <div className="p-6 border-b border-gray-100 flex items-center justify-between">
                   <div>

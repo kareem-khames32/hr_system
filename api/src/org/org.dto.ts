@@ -7,8 +7,11 @@ import {
   Matches,
   MaxLength,
   MinLength,
+  ValidateNested,
 } from 'class-validator'
 import { Type } from 'class-transformer'
+import { WEEKEND_DAYS_HINT, WEEKEND_DAYS_RE } from '../attendance/weekend-days'
+import { CalendarChangeDto } from '../attendance/attendance-calendar-history'
 
 // ===== الفروع =====
 export class CreateBranchDto {
@@ -57,12 +60,27 @@ export class CreateBranchDto {
   @MaxLength(50)
   costCenter?: string
 
+  // تجاوز العطلة الأسبوعية للفرع (مثل FRI) — غير مُرسل = إعداد النظام attendance.weekend_days
+  @IsOptional()
+  @Matches(WEEKEND_DAYS_RE, { message: `العطلة الأسبوعية للفرع: ${WEEKEND_DAYS_HINT}` })
+  weekendDays?: string
+
   @IsOptional()
   @IsBoolean()
   isHeadquarters?: boolean
+
+  // دولة الفرع — تحدد العطلات الرسمية السارية عليه
+  @IsOptional()
+  @Matches(/^[A-Za-z]{2,5}$/, { message: 'رمز الدولة حروف إنجليزية (مثل EG أو SA)' })
+  country?: string
 }
 
 export class UpdateBranchDto {
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CalendarChangeDto)
+  calendarChange?: CalendarChangeDto
+
   @IsOptional()
   @IsString()
   @MinLength(2)
@@ -107,7 +125,12 @@ export class UpdateBranchDto {
   @IsOptional()
   @IsString()
   @MaxLength(50)
-  costCenter?: string
+  costCenter?: string | null // null = بلا مركز تكلفة
+
+  // null = مسح التجاوز (يعود الفرع لإعداد النظام attendance.weekend_days)
+  @IsOptional()
+  @Matches(WEEKEND_DAYS_RE, { message: `العطلة الأسبوعية للفرع: ${WEEKEND_DAYS_HINT}` })
+  weekendDays?: string | null
 
   @IsOptional()
   @IsBoolean()
@@ -116,6 +139,11 @@ export class UpdateBranchDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean
+
+  // null = مسح الدولة (كل العطلات تسري على الفرع)
+  @IsOptional()
+  @Matches(/^[A-Za-z]{2,5}$/, { message: 'رمز الدولة حروف إنجليزية (مثل EG أو SA)' })
+  country?: string | null
 }
 
 // ===== الأقسام =====
@@ -175,7 +203,7 @@ export class UpdateDepartmentDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
-  parentId?: number
+  parentId?: number | null // null = قسم رئيسي (بلا أب)
 
   @IsOptional()
   @Type(() => Number)

@@ -1,0 +1,216 @@
+{
+  "checkedAt": "2026-09-13T19:39:23.391Z",
+  "database": "hr_review_pre_payroll_20260911162404_52ee65ac",
+  "synchronize": false,
+  "scope": "all entities including payroll",
+  "versions": [
+    {
+      "version": "20260912_001_settlement_payroll_boundary",
+      "checksum": "7bb03d8552178dc54a5f723fbdf5154d99324ef57807bcfed7211a6e1c635495"
+    },
+    {
+      "version": "20260912_002_membership_claims_events",
+      "checksum": "3ade660dc18ef4068582e4794798dbf82f32cc3743882693e73c590e1ac443f4"
+    },
+    {
+      "version": "20260912_003_attendance_exemptions",
+      "checksum": "1697fcf7f0b2bcda7636f4be0df7ff9e1c32cfd6a13a7c54ffa56cc8fb242ad9"
+    },
+    {
+      "version": "20260913_004_attendance_flex_history",
+      "checksum": "6855dc2daa288c590bb83637f97cb3cce2cad1765c01ee97a33359c301b08fbb"
+    },
+    {
+      "version": "20260913_005_overtime_workflow",
+      "checksum": "3a68ff6e6f8bd19c38f0b5cf3dcf9f3d1bf565879b2f25bb9c147ad7fa9f571f"
+    },
+    {
+      "version": "20260913_006_payroll_policy_drafts",
+      "checksum": "0446e0b17d832e8081e464e96a6ac143a7b5d1fae78620cd7f3229eadf2b40e5"
+    },
+    {
+      "version": "20260913_007_payroll_policy_settings",
+      "checksum": "1e983f3b6bc8fb1b8fb6b0f4e22740221ff02f198803de1fbe884f14b4188d7e"
+    },
+    {
+      "version": "20260913_008_payroll_policy_definitions",
+      "checksum": "1d7e0684a7dfe9ac851d89a93278c9116612d653f3c66f9831cb5a52d4782bd3"
+    },
+    {
+      "version": "20260913_009_loan_installment_ledger",
+      "checksum": "5a675b1542f9d148acde7cf42e11c34310466206bd4fb0126efa2122911aa18e"
+    },
+    {
+      "version": "20260913_010_payroll_collection_policy",
+      "checksum": "bd55de179fd7174c75426793424775b17cb02cbcc19cecff7921203432efaccd"
+    },
+    {
+      "version": "20260913_011_payroll_salary_history",
+      "checksum": "cbd5b1c3ee1318f5620dc97735c30f567d31be1cf2f6f2ebb2c00b3ab21ded3f"
+    }
+  ],
+  "unapplied": [
+    "20260913_006_payroll_policy_drafts",
+    "20260913_007_payroll_policy_settings",
+    "20260913_008_payroll_policy_definitions",
+    "20260913_009_loan_installment_ledger",
+    "20260913_010_payroll_collection_policy",
+    "20260913_011_payroll_salary_history"
+  ],
+  "pending": [
+    "CREATE TABLE \"loan_installment_allocations\" (\"id\" int NOT NULL IDENTITY(1,1), \"installmentId\" int NOT NULL, \"employeeId\" int NOT NULL, \"payrollRunId\" int NOT NULL, \"payrollSnapshotVersion\" int NOT NULL, \"sourceRevision\" int NOT NULL, \"deductedAmount\" decimal(18,2) NOT NULL, \"carriedAmount\" decimal(18,2) NOT NULL, \"continuationDueDate\" date, \"outcome\" nvarchar(30) NOT NULL, \"status\" nvarchar(16) NOT NULL, \"sourceSnapshot\" nvarchar(MAX) NOT NULL, \"createdByUserId\" int, \"claimedAt\" datetime2 NOT NULL CONSTRAINT \"DF_84b02785e5b1677e4f401ec8f48\" DEFAULT SYSUTCDATETIME(), \"releasedAt\" datetime2, \"postedAt\" datetime2, CONSTRAINT \"CK_loan_installment_allocation_status\" CHECK ([status] IN ('HELD','POSTED','RELEASED')), CONSTRAINT \"CK_loan_installment_allocation_amounts\" CHECK ([deductedAmount] >= 0 AND [carriedAmount] >= 0), CONSTRAINT \"PK_loan_installment_allocations\" PRIMARY KEY (\"id\"))",
+    "CREATE INDEX \"IDX_loan_installment_allocation_run\" ON \"loan_installment_allocations\" (\"payrollRunId\") ",
+    "CREATE UNIQUE INDEX \"UX_loan_installment_allocation_active\" ON \"loan_installment_allocations\" (\"installmentId\") WHERE [releasedAt] IS NULL",
+    "CREATE TABLE \"loan_installment_events\" (\"id\" int NOT NULL IDENTITY(1,1), \"employeeId\" int NOT NULL, \"loanId\" int NOT NULL, \"installmentId\" int NOT NULL, \"allocationId\" int, \"payrollRunId\" int, \"requestId\" int, \"actorId\" int, \"action\" nvarchar(40) NOT NULL, \"actionKey\" nvarchar(150) NOT NULL, \"reason\" nvarchar(500), \"payload\" nvarchar(MAX) NOT NULL, \"createdAt\" datetime2 NOT NULL CONSTRAINT \"DF_16c296610f3f372996d010ca503\" DEFAULT SYSUTCDATETIME(), CONSTRAINT \"PK_loan_installment_events\" PRIMARY KEY (\"id\"))",
+    "CREATE UNIQUE INDEX \"UX_loan_installment_event_action_key\" ON \"loan_installment_events\" (\"actionKey\") ",
+    "CREATE TABLE \"payroll_policies\" (\"id\" int NOT NULL IDENTITY(1,1), \"code\" nvarchar(40) NOT NULL, \"name\" nvarchar(200) NOT NULL, \"description\" nvarchar(MAX), \"branchId\" int, \"defaultScopeType\" nvarchar(20), \"defaultScopeIds\" ntext, \"isActive\" bit NOT NULL CONSTRAINT \"DF_75e1c0cf09663c2100fb8a23578\" DEFAULT 1, \"revision\" int NOT NULL CONSTRAINT \"DF_07fe6b06305ded6c261c5f93342\" DEFAULT 1, \"createdBy\" int NOT NULL, \"updatedBy\" int NOT NULL, \"createdAt\" datetime2 NOT NULL CONSTRAINT \"DF_8764cd2e7463995c07a20c53a72\" DEFAULT getdate(), \"updatedAt\" datetime2 NOT NULL CONSTRAINT \"DF_4c75e616d871c998c552bdd8f26\" DEFAULT getdate(), CONSTRAINT \"PK_7772b93d94609fbac797e252696\" PRIMARY KEY (\"id\"))",
+    "CREATE INDEX \"IX_payroll_policy_branch\" ON \"payroll_policies\" (\"branchId\") ",
+    "CREATE UNIQUE INDEX \"UX_payroll_policy_code\" ON \"payroll_policies\" (\"code\") ",
+    "CREATE TABLE \"payroll_policy_versions\" (\"id\" int NOT NULL IDENTITY(1,1), \"policyId\" int NOT NULL, \"versionNo\" int NOT NULL, \"sourceVersionId\" int, \"status\" nvarchar(12) NOT NULL CONSTRAINT \"DF_bf342e8f407532d509f08c9da78\" DEFAULT 'DRAFT', \"effectiveFrom\" date NOT NULL, \"effectiveTo\" date, \"contractVersion\" nvarchar(20) NOT NULL CONSTRAINT \"DF_2f4a220017b0022183328b1a150\" DEFAULT 'SRS_V1', \"metadata\" ntext, \"catalogVersion\" nvarchar(40), \"engineVersion\" nvarchar(40), \"definitionWarningAcknowledgements\" ntext, \"collectionPolicy\" nvarchar(MAX), \"defaultPeriodType\" nvarchar(20), \"cycleStartDay\" tinyint, \"cycleEndMode\" nvarchar(12), \"cycleEndDay\" tinyint, \"baseDaysBasis\" nvarchar(12), \"monthlyDays\" decimal(5,2), \"dailyHours\" decimal(5,2), \"rateBase\" nvarchar(12), \"roundingMode\" nvarchar(12), \"roundingScale\" tinyint, \"divisionByZeroMode\" nvarchar(20), \"maxDeductionPctOfGross\" decimal(7,4), \"minNetGuarantee\" decimal(18,2), \"netFloorPct\" decimal(7,4), \"carryOverExcess\" bit, \"skipAttendance\" bit, \"lateDeductionEnabled\" bit, \"currency\" nvarchar(3), \"revision\" int NOT NULL CONSTRAINT \"DF_8e61e2bbda4f10eecd0334d2587\" DEFAULT 1, \"publishedAt\" datetime2, \"publishedBy\" int, \"frozenAt\" datetime2, \"createdBy\" int NOT NULL, \"updatedBy\" int NOT NULL, \"createdAt\" datetime2 NOT NULL CONSTRAINT \"DF_f53b35ca4a109e9de0c1a66a7cc\" DEFAULT getdate(), \"updatedAt\" datetime2 NOT NULL CONSTRAINT \"DF_b60e57f24522b076489d04ecbcc\" DEFAULT getdate(), CONSTRAINT \"PK_3bdd89aa730b0e6ece18b7dbd97\" PRIMARY KEY (\"id\"))",
+    "CREATE UNIQUE INDEX \"UX_payroll_policy_version_number\" ON \"payroll_policy_versions\" (\"policyId\", \"versionNo\") ",
+    "CREATE TABLE \"payroll_policy_events\" (\"id\" int NOT NULL IDENTITY(1,1), \"policyId\" int NOT NULL, \"versionId\" int, \"eventType\" nvarchar(30) NOT NULL, \"actorUserId\" int NOT NULL, \"reason\" nvarchar(500), \"payload\" ntext NOT NULL, \"createdAt\" datetime2 NOT NULL CONSTRAINT \"DF_9c7c0cc8c38d14ae61109de9568\" DEFAULT getdate(), CONSTRAINT \"PK_c96e1a9242999996d6e56ff2f8a\" PRIMARY KEY (\"id\"))",
+    "CREATE INDEX \"IX_payroll_policy_event_policy\" ON \"payroll_policy_events\" (\"policyId\", \"id\") ",
+    "CREATE TABLE \"payroll_tier_sets\" (\"id\" int NOT NULL IDENTITY(1,1), \"versionId\" int NOT NULL, \"code\" nvarchar(40) NOT NULL, \"nameAr\" nvarchar(200) NOT NULL, \"description\" nvarchar(2000), \"inputVar\" nvarchar(40), \"inputFormula\" nvarchar(500), \"inputUnit\" nvarchar(12) NOT NULL, \"applicationBasis\" nvarchar(24) NOT NULL, \"tierApplicationMode\" nvarchar(8) NOT NULL, \"graceMode\" nvarchar(24) NOT NULL, \"graceMinutes\" int NOT NULL, \"graceMaxUsesPerPeriod\" int, \"allowGraceOnFlexibleShift\" bit NOT NULL, \"allowShiftGraceOverride\" bit NOT NULL, \"noMatchBehavior\" nvarchar(16) NOT NULL, \"maxDailyDeductionDayFraction\" decimal(5,4), \"maxPeriodDeductionDayFraction\" decimal(7,4), \"secondsRoundingMode\" nvarchar(8) NOT NULL, \"minutesRoundingMode\" nvarchar(8) NOT NULL, \"roundingUnitMinutes\" tinyint NOT NULL, \"roundingMode\" nvarchar(12), \"roundingScale\" tinyint, \"isActive\" bit NOT NULL, CONSTRAINT \"PK_1c18696afa514619b215b965e8c\" PRIMARY KEY (\"id\"))",
+    "CREATE UNIQUE INDEX \"UX_payroll_tier_set_owner\" ON \"payroll_tier_sets\" (\"versionId\", \"id\") ",
+    "CREATE UNIQUE INDEX \"UX_payroll_tier_set_code\" ON \"payroll_tier_sets\" (\"versionId\", \"code\") ",
+    "CREATE TABLE \"payroll_policy_components\" (\"id\" int NOT NULL IDENTITY(1,1), \"versionId\" int NOT NULL, \"code\" nvarchar(40) NOT NULL, \"nameAr\" nvarchar(200) NOT NULL, \"componentType\" nvarchar(12) NOT NULL, \"stage\" tinyint NOT NULL, \"sequence\" int NOT NULL, \"valueSource\" nvarchar(20) NOT NULL, \"conditionFormula\" nvarchar(500), \"unit\" nvarchar(12) NOT NULL, \"prorationMode\" nvarchar(30) NOT NULL, \"amount\" decimal(18,2), \"fieldPath\" nvarchar(60), \"missingFieldBehavior\" nvarchar(8), \"varCode\" nvarchar(40), \"multiplier\" decimal(18,6), \"percent\" decimal(9,4), \"baseCode\" nvarchar(48), \"tierSetId\" int, \"formula\" nvarchar(500), \"ledgerCategory\" nvarchar(40), \"ledgerDirection\" nvarchar(6), \"ledgerPartialPayment\" nvarchar(16), \"minAmount\" decimal(18,2), \"maxAmount\" decimal(18,2), \"capPctOfBase\" decimal(9,4), \"capBaseCode\" nvarchar(48), \"roundingMode\" nvarchar(12), \"roundingScale\" tinyint, \"deductionPriority\" int, \"carryOverEligible\" bit NOT NULL, \"rollupTo\" nvarchar(40), \"exemptible\" bit NOT NULL, \"showOnPayslip\" bit NOT NULL, \"isActive\" bit NOT NULL, CONSTRAINT \"PK_a7275731c45f76b1aec9d2f7bc7\" PRIMARY KEY (\"id\"))",
+    "CREATE UNIQUE INDEX \"UX_payroll_policy_component_sequence\" ON \"payroll_policy_components\" (\"versionId\", \"stage\", \"sequence\") ",
+    "CREATE UNIQUE INDEX \"UX_payroll_policy_component_code\" ON \"payroll_policy_components\" (\"versionId\", \"code\") ",
+    "CREATE TABLE \"payroll_policy_parameters\" (\"id\" int NOT NULL IDENTITY(1,1), \"versionId\" int NOT NULL, \"code\" nvarchar(40) NOT NULL, \"nameAr\" nvarchar(200) NOT NULL, \"value\" decimal(18,6) NOT NULL, \"unit\" nvarchar(24) NOT NULL, \"isActive\" bit NOT NULL, CONSTRAINT \"PK_ecc2853b9cc1ebbcc3843a109ce\" PRIMARY KEY (\"id\"))",
+    "CREATE UNIQUE INDEX \"UX_payroll_policy_parameter_code\" ON \"payroll_policy_parameters\" (\"versionId\", \"code\") ",
+    "CREATE TABLE \"payroll_policy_tiers\" (\"id\" int NOT NULL IDENTITY(1,1), \"tierSetId\" int NOT NULL, \"sequence\" int NOT NULL, \"fromValue\" decimal(18,6) NOT NULL, \"toValue\" decimal(18,6), \"method\" nvarchar(16) NOT NULL, \"multiplier\" decimal(6,3), \"dayFraction\" decimal(5,4), \"fixedAmount\" decimal(18,2), \"formula\" nvarchar(500), \"label\" nvarchar(200), \"isActive\" bit NOT NULL, CONSTRAINT \"CK_payroll_policy_tier_method\" CHECK (([method] IN ('NONE','RATE_1_1') AND [multiplier] IS NULL AND [dayFraction] IS NULL AND [fixedAmount] IS NULL AND [formula] IS NULL) OR ([method] = 'MULTIPLIER' AND [multiplier] IS NOT NULL AND [multiplier] > 0 AND [dayFraction] IS NULL AND [fixedAmount] IS NULL AND [formula] IS NULL) OR ([method] = 'DAY_FRACTION' AND [dayFraction] IS NOT NULL AND [dayFraction] > 0 AND [dayFraction] <= 1 AND [multiplier] IS NULL AND [fixedAmount] IS NULL AND [formula] IS NULL) OR ([method] = 'FIXED_AMOUNT' AND [fixedAmount] IS NOT NULL AND [fixedAmount] > 0 AND [multiplier] IS NULL AND [dayFraction] IS NULL AND [formula] IS NULL) OR ([method] = 'FORMULA' AND [formula] IS NOT NULL AND [formula] <> N'' AND [multiplier] IS NULL AND [dayFraction] IS NULL AND [fixedAmount] IS NULL)), CONSTRAINT \"CK_payroll_policy_tier_bounds\" CHECK ([sequence] > 0 AND [fromValue] >= 0 AND ([toValue] IS NULL OR [toValue] > [fromValue])), CONSTRAINT \"PK_968da93d89d7b8f6e8359d3ed0d\" PRIMARY KEY (\"id\"))",
+    "CREATE UNIQUE INDEX \"UX_payroll_policy_tier_sequence\" ON \"payroll_policy_tiers\" (\"tierSetId\", \"sequence\") ",
+    "CREATE TABLE \"employee_salary_history_versions\" (\"id\" int NOT NULL IDENTITY(1,1), \"employeeId\" int NOT NULL, \"revision\" int NOT NULL, \"reason\" nvarchar(500) NOT NULL, \"evidenceReference\" nvarchar(200) NOT NULL, \"currentSourceHash\" nvarchar(64) NOT NULL, \"contentHash\" nvarchar(64) NOT NULL, \"createdBy\" int NOT NULL, \"createdAt\" datetime2 NOT NULL CONSTRAINT \"DF_7544540837e04a4e295dda27375\" DEFAULT getdate(), CONSTRAINT \"PK_9232583e0f862892fcadbfcb9fe\" PRIMARY KEY (\"id\"))",
+    "CREATE UNIQUE INDEX \"UX_employee_salary_history_revision\" ON \"employee_salary_history_versions\" (\"employeeId\", \"revision\") ",
+    "CREATE TABLE \"employee_salary_history\" (\"id\" int NOT NULL IDENTITY(1,1), \"versionId\" int NOT NULL, \"sequence\" int NOT NULL, \"effectiveFrom\" date NOT NULL, \"effectiveTo\" date, \"currency\" nvarchar(3) NOT NULL, \"basicSalary\" decimal(18,2) NOT NULL, \"housingAllowance\" decimal(18,2) NOT NULL, \"transportAllowance\" decimal(18,2) NOT NULL, \"phoneAllowance\" decimal(18,2) NOT NULL, \"workNatureAllowance\" decimal(18,2) NOT NULL, \"otherAllowance\" decimal(18,2) NOT NULL, CONSTRAINT \"PK_0d0766845b70e91af5656e03d2f\" PRIMARY KEY (\"id\"))",
+    "CREATE UNIQUE INDEX \"UX_employee_salary_history_sequence\" ON \"employee_salary_history\" (\"versionId\", \"sequence\") ",
+    "ALTER TABLE \"loan_installments\" ADD \"paidAmount\" decimal(18,2)",
+    "ALTER TABLE \"loan_installments\" ADD \"financialStatus\" nvarchar(20)",
+    "ALTER TABLE \"loan_installments\" ADD \"financialRevision\" int",
+    "ALTER TABLE \"loan_installments\" ADD \"parentInstallmentId\" int",
+    "ALTER TABLE \"loan_installments\" ADD \"originalDueDate\" date",
+    "ALTER TABLE \"loan_installments\" ADD \"paidAt\" datetime2",
+    "CREATE UNIQUE INDEX \"UX_loan_installments_parent\" ON \"loan_installments\" (\"parentInstallmentId\") WHERE [parentInstallmentId] IS NOT NULL",
+    "ALTER TABLE \"loan_installment_events\" ADD CONSTRAINT \"FK_loan_installment_event_allocation\" FOREIGN KEY (\"allocationId\") REFERENCES \"loan_installment_allocations\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+    "ALTER TABLE \"payroll_policy_versions\" ADD CONSTRAINT \"FK_payroll_policy_version_policy\" FOREIGN KEY (\"policyId\") REFERENCES \"payroll_policies\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+    "ALTER TABLE \"payroll_policy_versions\" ADD CONSTRAINT \"FK_payroll_policy_version_source\" FOREIGN KEY (\"sourceVersionId\") REFERENCES \"payroll_policy_versions\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+    "ALTER TABLE \"payroll_policy_events\" ADD CONSTRAINT \"FK_payroll_policy_event_policy\" FOREIGN KEY (\"policyId\") REFERENCES \"payroll_policies\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+    "ALTER TABLE \"payroll_policy_events\" ADD CONSTRAINT \"FK_payroll_policy_event_version\" FOREIGN KEY (\"versionId\") REFERENCES \"payroll_policy_versions\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+    "ALTER TABLE \"payroll_tier_sets\" ADD CONSTRAINT \"FK_payroll_tier_set_version\" FOREIGN KEY (\"versionId\") REFERENCES \"payroll_policy_versions\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+    "ALTER TABLE \"payroll_policy_components\" ADD CONSTRAINT \"FK_payroll_policy_component_version\" FOREIGN KEY (\"versionId\") REFERENCES \"payroll_policy_versions\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+    "ALTER TABLE \"payroll_policy_components\" ADD CONSTRAINT \"FK_payroll_policy_component_tier_set\" FOREIGN KEY (\"versionId\", \"tierSetId\") REFERENCES \"payroll_tier_sets\"(\"versionId\",\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+    "ALTER TABLE \"payroll_policy_parameters\" ADD CONSTRAINT \"FK_payroll_policy_parameter_version\" FOREIGN KEY (\"versionId\") REFERENCES \"payroll_policy_versions\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+    "ALTER TABLE \"payroll_policy_tiers\" ADD CONSTRAINT \"FK_payroll_policy_tier_set\" FOREIGN KEY (\"tierSetId\") REFERENCES \"payroll_tier_sets\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+    "ALTER TABLE \"employee_salary_history_versions\" ADD CONSTRAINT \"FK_employee_salary_history_employee\" FOREIGN KEY (\"employeeId\") REFERENCES \"employees\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+    "ALTER TABLE \"employee_salary_history\" ADD CONSTRAINT \"FK_employee_salary_history_version\" FOREIGN KEY (\"versionId\") REFERENCES \"employee_salary_history_versions\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION"
+  ],
+  "unsafeDrift": [],
+  "nullableMetadataEvidence": [
+    {
+      "query": "ALTER TABLE \"loan_installments\" ADD \"paidAmount\" decimal(18,2)",
+      "table": "loan_installments",
+      "column": "paidAmount"
+    },
+    {
+      "query": "ALTER TABLE \"loan_installments\" ADD \"financialStatus\" nvarchar(20)",
+      "table": "loan_installments",
+      "column": "financialStatus"
+    },
+    {
+      "query": "ALTER TABLE \"loan_installments\" ADD \"financialRevision\" int",
+      "table": "loan_installments",
+      "column": "financialRevision"
+    },
+    {
+      "query": "ALTER TABLE \"loan_installments\" ADD \"parentInstallmentId\" int",
+      "table": "loan_installments",
+      "column": "parentInstallmentId"
+    },
+    {
+      "query": "ALTER TABLE \"loan_installments\" ADD \"originalDueDate\" date",
+      "table": "loan_installments",
+      "column": "originalDueDate"
+    },
+    {
+      "query": "ALTER TABLE \"loan_installments\" ADD \"paidAt\" datetime2",
+      "table": "loan_installments",
+      "column": "paidAt"
+    }
+  ],
+  "newTableForeignKeyEvidence": [
+    {
+      "query": "ALTER TABLE \"loan_installment_events\" ADD CONSTRAINT \"FK_loan_installment_event_allocation\" FOREIGN KEY (\"allocationId\") REFERENCES \"loan_installment_allocations\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+      "table": "loan_installment_events",
+      "name": "FK_loan_installment_event_allocation",
+      "referencedTable": "loan_installment_allocations"
+    },
+    {
+      "query": "ALTER TABLE \"payroll_policy_versions\" ADD CONSTRAINT \"FK_payroll_policy_version_policy\" FOREIGN KEY (\"policyId\") REFERENCES \"payroll_policies\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+      "table": "payroll_policy_versions",
+      "name": "FK_payroll_policy_version_policy",
+      "referencedTable": "payroll_policies"
+    },
+    {
+      "query": "ALTER TABLE \"payroll_policy_versions\" ADD CONSTRAINT \"FK_payroll_policy_version_source\" FOREIGN KEY (\"sourceVersionId\") REFERENCES \"payroll_policy_versions\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+      "table": "payroll_policy_versions",
+      "name": "FK_payroll_policy_version_source",
+      "referencedTable": "payroll_policy_versions"
+    },
+    {
+      "query": "ALTER TABLE \"payroll_policy_events\" ADD CONSTRAINT \"FK_payroll_policy_event_policy\" FOREIGN KEY (\"policyId\") REFERENCES \"payroll_policies\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+      "table": "payroll_policy_events",
+      "name": "FK_payroll_policy_event_policy",
+      "referencedTable": "payroll_policies"
+    },
+    {
+      "query": "ALTER TABLE \"payroll_policy_events\" ADD CONSTRAINT \"FK_payroll_policy_event_version\" FOREIGN KEY (\"versionId\") REFERENCES \"payroll_policy_versions\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+      "table": "payroll_policy_events",
+      "name": "FK_payroll_policy_event_version",
+      "referencedTable": "payroll_policy_versions"
+    },
+    {
+      "query": "ALTER TABLE \"payroll_tier_sets\" ADD CONSTRAINT \"FK_payroll_tier_set_version\" FOREIGN KEY (\"versionId\") REFERENCES \"payroll_policy_versions\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+      "table": "payroll_tier_sets",
+      "name": "FK_payroll_tier_set_version",
+      "referencedTable": "payroll_policy_versions"
+    },
+    {
+      "query": "ALTER TABLE \"payroll_policy_components\" ADD CONSTRAINT \"FK_payroll_policy_component_version\" FOREIGN KEY (\"versionId\") REFERENCES \"payroll_policy_versions\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+      "table": "payroll_policy_components",
+      "name": "FK_payroll_policy_component_version",
+      "referencedTable": "payroll_policy_versions"
+    },
+    {
+      "query": "ALTER TABLE \"payroll_policy_components\" ADD CONSTRAINT \"FK_payroll_policy_component_tier_set\" FOREIGN KEY (\"versionId\", \"tierSetId\") REFERENCES \"payroll_tier_sets\"(\"versionId\",\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+      "table": "payroll_policy_components",
+      "name": "FK_payroll_policy_component_tier_set",
+      "referencedTable": "payroll_tier_sets"
+    },
+    {
+      "query": "ALTER TABLE \"payroll_policy_parameters\" ADD CONSTRAINT \"FK_payroll_policy_parameter_version\" FOREIGN KEY (\"versionId\") REFERENCES \"payroll_policy_versions\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+      "table": "payroll_policy_parameters",
+      "name": "FK_payroll_policy_parameter_version",
+      "referencedTable": "payroll_policy_versions"
+    },
+    {
+      "query": "ALTER TABLE \"payroll_policy_tiers\" ADD CONSTRAINT \"FK_payroll_policy_tier_set\" FOREIGN KEY (\"tierSetId\") REFERENCES \"payroll_tier_sets\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+      "table": "payroll_policy_tiers",
+      "name": "FK_payroll_policy_tier_set",
+      "referencedTable": "payroll_tier_sets"
+    },
+    {
+      "query": "ALTER TABLE \"employee_salary_history_versions\" ADD CONSTRAINT \"FK_employee_salary_history_employee\" FOREIGN KEY (\"employeeId\") REFERENCES \"employees\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+      "table": "employee_salary_history_versions",
+      "name": "FK_employee_salary_history_employee",
+      "referencedTable": "employees",
+      "existingEmployeePrimaryKeyEvidence": "dbo.employees.id INT NOT NULL PRIMARY KEY"
+    },
+    {
+      "query": "ALTER TABLE \"employee_salary_history\" ADD CONSTRAINT \"FK_employee_salary_history_version\" FOREIGN KEY (\"versionId\") REFERENCES \"employee_salary_history_versions\"(\"id\") ON DELETE NO ACTION ON UPDATE NO ACTION",
+      "table": "employee_salary_history",
+      "name": "FK_employee_salary_history_version",
+      "referencedTable": "employee_salary_history_versions"
+    }
+  ],
+  "newTableCheckEvidence": []
+}

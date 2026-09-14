@@ -1,10 +1,14 @@
 import {
   Column,
+  CreateDateColumn,
   Entity,
   Index,
   PrimaryGeneratedColumn,
   Unique,
 } from 'typeorm'
+import type { BalanceType, LeavePeriod, LeaveStatus, LeaveTypeCode } from '../../common/domain-status'
+import { leaveView, leaveTypeView } from '../../common/leave-contract'
+export type { LeavePeriod, LeaveStatus } from '../../common/domain-status'
 
 // ============ وجهة الإجازات — LeaveType قابل للإعداد ============
 
@@ -24,8 +28,13 @@ export class LeaveType {
   isPaid: boolean
 
   // بيخصم من رصيد إيه: annual | sick | none
-  @Column({ length: 50, nullable: true })
-  balanceSource: string
+  @Column({ type: String, name: 'balanceType', length: 50, nullable: true })
+  balanceType: BalanceType | null
+
+  /** @deprecated compatibility alias; persistence uses balanceType. */
+  get balanceSource() { return this.balanceType }
+  set balanceSource(value: BalanceType | null) { this.balanceType = value }
+  toJSON() { return leaveTypeView(this) }
 
   @Column({ length: 100, nullable: true })
   requiredAttachment: string
@@ -56,8 +65,13 @@ export class Leave {
   @Column()
   employeeId: number
 
-  @Column({ length: 50 })
-  leaveType: string
+  @Column({ type: String, name: 'leaveTypeCode', length: 50 })
+  leaveTypeCode: LeaveTypeCode
+
+  /** @deprecated compatibility alias; persistence uses leaveTypeCode. */
+  get leaveType() { return this.leaveTypeCode }
+  set leaveType(value: LeaveTypeCode) { this.leaveTypeCode = value }
+  toJSON() { return leaveView(this) }
 
   @Column({ type: 'date' })
   fromDate: string
@@ -70,15 +84,15 @@ export class Leave {
 
   // نصف اليوم: FULL يوم كامل، MORNING النصف الأول من الوردية،
   // EVENING النصف الثاني — الفترة المغطاة لا تأخير فيها
-  @Column({ length: 10, default: 'FULL' })
-  period: 'FULL' | 'MORNING' | 'EVENING'
+  @Column({ type: String, length: 10, default: 'FULL' })
+  period: LeavePeriod
 
   // غير مدفوعة؟ تُخصم يوم بيوم في بيانات المسير (من leave_types.isPaid)
   @Column({ default: false })
   isUnpaid: boolean
 
-  @Column({ length: 30 })
-  status: string // APPROVED | CANCELLED
+  @Column({ type: String, length: 30 })
+  status: LeaveStatus
 
   // إلغاء مباشر من الموارد البشرية — لاشتقاق إشعار للموظف
   @Column({ nullable: true })
@@ -98,8 +112,8 @@ export class LeaveBalance {
   @Column()
   employeeId: number
 
-  @Column({ length: 50 })
-  balanceType: string // annual | sick
+  @Column({ type: String, length: 50 })
+  balanceType: BalanceType
 
   @Column({ type: 'decimal', precision: 6, scale: 2, default: 0 })
   entitled: number
@@ -119,4 +133,53 @@ export class LeaveBalance {
 
   @Column({ type: 'date', nullable: true })
   openingExpiry: string // NULL = بلا انتهاء
+
+  // تعديل إداري مستقل عن السياسة والإجازات المستهلكة، موثق في سجل منفصل.
+  @Column({ type: 'decimal', precision: 8, scale: 2, default: 0 })
+  adjustmentDays: number
 }
+
+@Entity('leave_balance_adjustments')
+@Unique('UQ_leave_adjustment_operation', ['employeeId', 'balanceType', 'period', 'idempotencyKey'])
+export class LeaveBalanceAdjustment {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Index()
+  @Column()
+  employeeId: number
+
+  @Column({ type: String, length: 50 })
+  balanceType: BalanceType
+
+  @Column({ length: 20 })
+  period: string
+
+  @Column({ length: 36 })
+  idempotencyKey: string
+
+  @Column({ type: 'decimal', precision: 8, scale: 2 })
+  delta: number
+
+  @Column({ type: 'decimal', precision: 8, scale: 2 })
+  beforeAdjustment: number
+
+  @Column({ type: 'decimal', precision: 8, scale: 2 })
+  afterAdjustment: number
+
+  @Column({ type: 'decimal', precision: 8, scale: 2 })
+  beforeRemaining: number
+
+  @Column({ type: 'decimal', precision: 8, scale: 2 })
+  afterRemaining: number
+
+  @Column({ length: 500 })
+  reason: string
+
+  @Column()
+  actorUserId: number
+
+  @CreateDateColumn()
+  createdAt: Date
+}
+

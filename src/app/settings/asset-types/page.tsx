@@ -13,13 +13,18 @@ import {
   Archive,
   RotateCcw,
   X,
+  Tags,
 } from 'lucide-react'
 import {
+  can,
   fetchAssets,
   createAsset,
   updateAsset,
   retireAsset,
   reactivateAsset,
+  fetchCatalog,
+  createCatalogItem,
+  updateCatalogItem,
   type ApiAsset,
 } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
@@ -48,11 +53,28 @@ const emptyForm = {
   value: '',
 }
 
-export default function AssetCatalogPage() {
+// تصنيف أصل — كتالوج asset_types (القراءة للجميع، الكتابة settings.manage)
+interface AssetTypeRow {
+  id: number
+  name: string
+  isActive: boolean
+}
+
+export default function AssetRegistryPage() {
   const currency = useCurrency()
   const [assets, setAssets] = useState<ApiAsset[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  // كتالوج التصنيفات — مصدر حقل «الفئة»، وإدارته لمن يملك settings.manage
+  const [assetTypes, setAssetTypes] = useState<AssetTypeRow[]>([])
+  const [typesError, setTypesError] = useState<string | null>(null)
+  const canManageTypes = can('settings.manage')
+  const [showTypesModal, setShowTypesModal] = useState(false)
+  const [newTypeName, setNewTypeName] = useState('')
+  const [editingTypeId, setEditingTypeId] = useState<number | null>(null)
+  const [editingTypeName, setEditingTypeName] = useState('')
+  const [typeBusy, setTypeBusy] = useState(false)
+  const [typeModalError, setTypeModalError] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [filterCategory, setFilterCategory] = useState('')
@@ -75,16 +97,73 @@ export default function AssetCatalogPage() {
     }
   }
 
+  // فشل الكتالوج لا يُسقط السجل — يُعرض تحت حقل الفئة
+  const loadTypes = async () => {
+    try {
+      setAssetTypes(await fetchCatalog<AssetTypeRow>('asset-types'))
+      setTypesError(null)
+    } catch (err: any) {
+      setTypesError(err.message)
+    }
+  }
+
   useEffect(() => {
     loadData()
+    loadTypes()
   }, [])
 
-  // الفئات المتاحة — قيم مميزة من الأصول الموجودة
+  // الفئات المتاحة للفلترة — قيم مميزة من الأصول الموجودة
   const categories = useMemo(
     () =>
       Array.from(new Set(assets.map((a) => a.category).filter(Boolean))).sort(),
     [assets]
   )
+
+  // خيارات «الفئة» في النموذج: التصنيفات المفعّلة من الكتالوج، ومعها فئة الأصل
+  // الحالية عند التعديل لو خارج الكتالوج (بيانات قديمة) كي لا تتغير بصمت
+  const activeTypeNames = assetTypes.filter((t) => t.isActive).map((t) => t.name)
+  const categoryOptions =
+    formData.category && !activeTypeNames.includes(formData.category)
+      ? [...activeTypeNames, formData.category]
+      : activeTypeNames
+
+  // ===== إدارة كتالوج التصنيفات (settings.manage) =====
+  const runTypeAction = async (fn: () => Promise<unknown>) => {
+    setTypeBusy(true)
+    setTypeModalError(null)
+    try {
+      await fn()
+      await loadTypes()
+      return true
+    } catch (err: any) {
+      setTypeModalError(err.message)
+      return false
+    } finally {
+      setTypeBusy(false)
+    }
+  }
+
+  const handleAddType = async () => {
+    const name = newTypeName.trim()
+    if (!name) return
+    if (await runTypeAction(() => createCatalogItem('asset-types', { name, isActive: true }))) {
+      setNewTypeName('')
+    }
+  }
+
+  const handleRenameType = async (t: AssetTypeRow) => {
+    const name = editingTypeName.trim()
+    if (!name || name === t.name) {
+      setEditingTypeId(null)
+      return
+    }
+    if (await runTypeAction(() => updateCatalogItem('asset-types', t.id, { name }))) {
+      setEditingTypeId(null)
+    }
+  }
+
+  const handleToggleType = (t: AssetTypeRow) =>
+    runTypeAction(() => updateCatalogItem('asset-types', t.id, { isActive: !t.isActive }))
 
   const filtered = assets.filter((a) => {
     const st = assetStatus(a)
@@ -180,28 +259,48 @@ export default function AssetCatalogPage() {
       <div className="space-y-6">
         {/* Breadcrumb */}
         <div className="flex items-center gap-2 text-sm text-gray-500">
-          <Link href="/settings" className="hover:text-primary-600">
-            الإعدادات
-          </Link>
+          {/* الإعدادات العامة لمن يملكها فقط — الشاشة نفسها بصلاحية العهد */}
+          {canManageTypes ? (
+            <Link href="/settings" className="hover:text-primary-600">
+              الإعدادات
+            </Link>
+          ) : (
+            <span>الإعدادات</span>
+          )}
           <ArrowRight size={16} />
-          <span className="text-gray-800">كتالوج الأصول</span>
+          <span className="text-gray-800">سجل الأصول</span>
         </div>
 
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">كتالوج الأصول</h1>
+            <h1 className="text-2xl font-bold text-gray-800">سجل الأصول</h1>
             <p className="text-gray-500 mt-1">
               سجل أصول الشركة — الإضافة والتعديل والإحالة للتقاعد
             </p>
           </div>
-          <button
-            onClick={() => handleOpenModal()}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Plus size={20} />
-            إضافة أصل
-          </button>
+          <div className="flex items-center gap-3">
+            {canManageTypes && (
+              <button
+                onClick={() => {
+                  setTypeModalError(null)
+                  setEditingTypeId(null)
+                  setShowTypesModal(true)
+                }}
+                className="btn-secondary flex items-center gap-2"
+              >
+                <Tags size={18} />
+                تصنيفات الأصول
+              </button>
+            )}
+            <button
+              onClick={() => handleOpenModal()}
+              className="btn-primary flex items-center gap-2"
+            >
+              <Plus size={20} />
+              إضافة أصل
+            </button>
+          </div>
         </div>
 
         {/* Error Banner */}
@@ -425,21 +524,34 @@ export default function AssetCatalogPage() {
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       الفئة *
                     </label>
-                    <input
-                      type="text"
+                    {/* الفئة من كتالوج التصنيفات — لا نص حر */}
+                    <select
                       value={formData.category}
                       onChange={(e) =>
                         setFormData({ ...formData, category: e.target.value })
                       }
                       className="input w-full"
-                      placeholder="لابتوب"
-                      list="asset-categories"
-                    />
-                    <datalist id="asset-categories">
-                      {categories.map((c) => (
-                        <option key={c} value={c} />
+                    >
+                      <option value="">— اختر التصنيف —</option>
+                      {categoryOptions.map((c) => (
+                        <option key={c} value={c}>
+                          {activeTypeNames.includes(c) ? c : `${c} (خارج الكتالوج)`}
+                        </option>
                       ))}
-                    </datalist>
+                    </select>
+                    {typesError ? (
+                      <p className="text-xs text-red-600 mt-1">
+                        تعذر تحميل التصنيفات: {typesError}
+                      </p>
+                    ) : (
+                      activeTypeNames.length === 0 && (
+                        <p className="text-xs text-gray-400 mt-1">
+                          {canManageTypes
+                            ? 'لا توجد تصنيفات مفعّلة — أضفها من «تصنيفات الأصول»'
+                            : 'لا توجد تصنيفات مفعّلة — اطلب إضافتها من مسؤول الإعدادات'}
+                        </p>
+                      )
+                    )}
                   </div>
                 </div>
 
@@ -487,6 +599,130 @@ export default function AssetCatalogPage() {
                   disabled={!formData.name.trim() || !formData.category.trim() || saving}
                 >
                   {saving ? 'جارٍ الحفظ...' : editing ? 'حفظ التغييرات' : 'إضافة الأصل'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Modal — كتالوج تصنيفات الأصول (settings.manage) */}
+        {showTypesModal && canManageTypes && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+              <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-800">تصنيفات الأصول</h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    القائمة التي يُختار منها حقل «الفئة» — المعطَّل لا يظهر للأصول الجديدة
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowTypesModal(false)}
+                  className="p-2 hover:bg-gray-100 rounded-lg"
+                >
+                  <X size={20} className="text-gray-500" />
+                </button>
+              </div>
+              <div className="p-6 space-y-4">
+                {typeModalError && (
+                  <div className="bg-red-50 text-red-700 rounded-xl p-4">{typeModalError}</div>
+                )}
+
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    value={newTypeName}
+                    onChange={(e) => setNewTypeName(e.target.value)}
+                    onKeyDown={(e) => e.key === 'Enter' && handleAddType()}
+                    className="input flex-1"
+                    placeholder="اسم تصنيف جديد — مثال: طابعة"
+                    maxLength={100}
+                  />
+                  <button
+                    onClick={handleAddType}
+                    disabled={typeBusy || !newTypeName.trim()}
+                    className="btn-primary flex items-center gap-2"
+                  >
+                    <Plus size={16} />
+                    إضافة
+                  </button>
+                </div>
+
+                <div className="divide-y divide-gray-100 border border-gray-100 rounded-xl">
+                  {assetTypes.length === 0 && (
+                    <p className="p-4 text-sm text-gray-400 text-center">لا توجد تصنيفات بعد</p>
+                  )}
+                  {assetTypes.map((t) => (
+                    <div key={t.id} className="flex items-center gap-2 p-3">
+                      {editingTypeId === t.id ? (
+                        <>
+                          <input
+                            type="text"
+                            value={editingTypeName}
+                            onChange={(e) => setEditingTypeName(e.target.value)}
+                            onKeyDown={(e) => e.key === 'Enter' && handleRenameType(t)}
+                            className="input flex-1 text-sm py-1.5"
+                            maxLength={100}
+                            autoFocus
+                          />
+                          <button
+                            onClick={() => handleRenameType(t)}
+                            disabled={typeBusy || !editingTypeName.trim()}
+                            className="text-xs px-3 py-1.5 bg-primary-500 text-white rounded-lg disabled:opacity-50"
+                          >
+                            حفظ
+                          </button>
+                          <button
+                            onClick={() => setEditingTypeId(null)}
+                            className="text-xs px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg"
+                          >
+                            إلغاء
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <span
+                            className={`flex-1 text-sm ${
+                              t.isActive ? 'text-gray-800' : 'text-gray-400 line-through'
+                            }`}
+                          >
+                            {t.name}
+                          </span>
+                          <button
+                            onClick={() => {
+                              setEditingTypeId(t.id)
+                              setEditingTypeName(t.name)
+                            }}
+                            disabled={typeBusy}
+                            className="text-xs px-3 py-1.5 bg-gray-50 text-gray-700 rounded-lg hover:bg-gray-100 flex items-center gap-1"
+                          >
+                            <Edit size={12} />
+                            تعديل
+                          </button>
+                          <button
+                            onClick={() => handleToggleType(t)}
+                            disabled={typeBusy}
+                            className={`text-xs px-3 py-1.5 rounded-lg ${
+                              t.isActive
+                                ? 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                                : 'bg-success-50 text-success-600 hover:bg-green-100'
+                            }`}
+                          >
+                            {t.isActive ? 'تعطيل' : 'تفعيل'}
+                          </button>
+                        </>
+                      )}
+                    </div>
+                  ))}
+                </div>
+                <p className="text-xs text-gray-400">
+                  تعديل اسم التصنيف لا يغيّر فئة الأصول المسجلة به سابقاً، والحذف غير متاح —
+                  عطّل التصنيف بدلاً منه
+                </p>
+              </div>
+              <div className="p-6 border-t border-gray-100 flex items-center justify-end">
+                <button onClick={() => setShowTypesModal(false)} className="btn-secondary">
+                  إغلاق
                 </button>
               </div>
             </div>

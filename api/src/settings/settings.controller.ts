@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Body,
   Controller,
   Get,
@@ -11,28 +12,49 @@ import {
   UseGuards,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository } from 'typeorm'
+import { In, IsNull, Repository } from 'typeorm'
 import {
   IsArray,
   IsBoolean,
   IsIn,
   IsInt,
+  IsNumber,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
   MinLength,
+  Min,
   ValidateNested,
 } from 'class-validator'
 import { Type } from 'class-transformer'
-import { JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { ApprovalChain } from '../requests/entities/approval-chain.entity'
 import { ApprovalStep } from '../requests/entities/approval-step.entity'
+import { Branch } from '../org/entities/branch.entity'
+import {
+  DestinationsService,
+  ENGINE_RECORD_HANDLERS,
+} from '../requests/destinations.service'
 import { LeaveType } from '../requests/entities/leave.entities'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { DEVICE_KEY_MIN_LENGTH, deviceKeyWeakness } from '../attendance/device-key'
+import { normalizeWeekendDays, weekendDaysError } from '../attendance/weekend-days'
+import { eosConfigError } from '../offboarding/eos'
+import { Employee } from '../employees/employee.entity'
+import type { JwtPayload } from '../auth/auth.service'
+import { captureLegacyAttendanceRuleBaselines, lockAttendanceRuleMutation } from '../attendance/attendance-rule-history'
+import { assertCalendarScope, beginCalendarChange, CalendarChangeDto, finishCalendarChange } from '../attendance/attendance-calendar-history'
+import { overtimeWageComponents } from '../payroll/overtime-financial'
+import { PAYROLL_POLICY_NULLABLE_CONFIG_KEYS, validatePayrollPolicyDefaultConfig } from '../payroll/payroll-policy-settings'
 
 class UpsertConfigDto {
+  @IsOptional()
+  @ValidateNested()
+  @Type(() => CalendarChangeDto)
+  calendarChange?: CalendarChangeDto
+
   @IsString()
   @MaxLength(100)
   key: string
@@ -62,6 +84,10 @@ class CreateLeaveTypeDto {
     message: 'مصدر الرصيد: annual أو sick أو none',
   })
   balanceSource?: string
+
+  @IsOptional()
+  @IsIn(['annual', 'sick', 'none'])
+  balanceType?: string | null
 
   @IsOptional()
   @IsString()
@@ -94,6 +120,10 @@ class UpdateLeaveTypeDto {
   balanceSource?: string
 
   @IsOptional()
+  @IsIn(['annual', 'sick', 'none'])
+  balanceType?: string | null
+
+  @IsOptional()
   @IsString()
   @MaxLength(100)
   requiredAttachment?: string
@@ -116,15 +146,18 @@ class UpdateStepDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
+  @Min(1)
   slaDays?: number
 
   @IsOptional()
   @IsString()
+  @IsIn(['direct_manager_of_requester', 'department_manager_of_requester', 'branch_manager_of_requester', 'receiving_team_manager', 'hr', 'finance', 'custody_officer', 'payroll_officer', 'it', 'executive'])
   @MaxLength(60)
   escalateTo?: string
 
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   thresholdValue?: number
 }
 
@@ -156,6 +189,7 @@ class ChainStepDto {
   @IsOptional()
   @Type(() => Number)
   @IsInt()
+  @Min(1)
   specificEmployeeId?: number
 
   @IsOptional()
@@ -169,16 +203,25 @@ class ChainStepDto {
 
   @IsOptional()
   @Type(() => Number)
+  @IsNumber()
   thresholdValue?: number
 
   @IsOptional()
   @Type(() => Number)
   @IsInt()
+  @Min(1)
   slaDays?: number
 
   @IsOptional()
   @IsIn(APPROVER_ROLES, { message: 'دور التصعيد غير صالح' })
   escalateTo?: string
+}
+
+class ReplaceStepsDto {
+  @IsArray()
+  @ValidateNested({ each: true })
+  @Type(() => ChainStepDto)
+  steps: ChainStepDto[]
 }
 
 class CreateChainDto {
@@ -212,10 +255,14 @@ class UpdateChainDto {
   nameAr?: string
 
   @IsOptional()
+  @IsBoolean()
   isActive?: boolean
 
   // نقل الدورة لفرع (أو null = عامة) — §2.2 تعديل كامل بعد الإنشاء
+  // IsOptional يمرّر null (= عامة)؛ غير ذلك رقم صحيح لفرع موجود (يُتحقق في updateChain)
   @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: 'الفرع غير صالح' })
   branchId?: number | null
 
   // تنفيذ فوري بلا اعتمادات (لسلسلة فاضية عمداً) — اختيار المالك
@@ -227,14 +274,16 @@ class UpdateChainDto {
 // ===== بانِي أنواع الطلبات: نوع من الصفر بحقول مخصوصة وجمهور =====
 const FIELD_TYPES = ['text', 'number', 'date', 'select', 'file']
 const AUDIENCE_MODES = ['all', 'departments', 'roles', 'employees']
-// الوجهات المتاحة للبانِي (المنفذة فعلياً + بدون تنفيذ آلي)
+// تسميات الوجهات للبانِي. المقبول فعلياً = «none» + كل handler مسجّل في
+// DestinationsService (مفتاح منفّذ بلا تسمية هنا يظهر بكوده ولا يُرفض)
 const AVAILABLE_HANDLERS: Array<{ key: string; labelAr: string }> = [
-  { key: 'none', labelAr: 'بدون تنفيذ آلي (الطلب نفسه هو السجل)' },
-  { key: 'leave_calendar_balance', labelAr: 'إجازة تُخصم من الرصيد' },
-  { key: 'leave_calendar_payroll', labelAr: 'إجازة بلا خصم رصيد' },
+  { key: 'none', labelAr: 'سجل فقط — بلا تنفيذ آلي (الطلب نفسه هو السجل)' },
+  { key: 'leave_deduct_balance', labelAr: 'إجازة تُخصم من الرصيد' },
+  { key: 'leave_no_balance', labelAr: 'إجازة بلا خصم رصيد' },
   { key: 'overtime_entries', labelAr: 'قيد أوفرتايم' },
   { key: 'attendance_corrections', labelAr: 'تصحيح بصمة' },
   { key: 'loans_installments', labelAr: 'سلفة بجدول أقساط' },
+  { key: 'loan_installment_defer', labelAr: 'تأجيل قسط سلفة بعد الاعتماد' },
   { key: 'salary_update_history', labelAr: 'تحديث راتب' },
   { key: 'transfers_effective_date', labelAr: 'نقل بتاريخ سريان' },
   { key: 'employee_update_promotions', labelAr: 'ترقية' },
@@ -245,6 +294,16 @@ const AVAILABLE_HANDLERS: Array<{ key: string; labelAr: string }> = [
   { key: 'custody_transfer', labelAr: 'نقل عهدة لموظف آخر' },
   { key: 'overtime_auto', labelAr: 'اعتماد أوفرتايم مكتشف بالبصمة' },
   { key: 'employee_status', labelAr: 'تغيير حالة وظيفية (استقالة/تقاعد)' },
+  { key: 'leave_calendar', labelAr: 'إجازة تُخصم من الرصيد (وجهة قديمة)' },
+  { key: 'leave_calendar_once', labelAr: 'إجازة لمرة واحدة بلا خصم رصيد (حج)' },
+  { key: 'leave_balance_restore', labelAr: 'إلغاء/تعديل إجازة واسترداد الرصيد' },
+  { key: 'employee_record_auto', labelAr: 'تحديث بيانات الموظف (تلقائي)' },
+  { key: 'custody_return', labelAr: 'إرجاع عهدة' },
+  { key: 'custody_finance', labelAr: 'بلاغ فقد/تلف عهدة (مديونية على الموظف)' },
+  { key: 'payroll_bonus', labelAr: 'مكافأة (دفتر المديونيات)' },
+  { key: 'payroll_allowance', labelAr: 'بدل لمرة واحدة (دفتر المديونيات)' },
+  { key: 'expense_register', labelAr: 'صرف مصروفات (دفتر المديونيات)' },
+  { key: 'payroll_adjustment', labelAr: 'تسوية مالية (دفتر المديونيات)' },
 ]
 
 class CustomFieldDto {
@@ -362,7 +421,8 @@ export class SettingsController {
     @InjectRepository(ApprovalStep)
     private readonly steps: Repository<ApprovalStep>,
     @InjectRepository(RequestType)
-    private readonly requestTypes: Repository<RequestType>
+    private readonly requestTypes: Repository<RequestType>,
+    private readonly destinations: DestinationsService
   ) {}
 
   // ===== إعدادات المحرك (مفاتيح/قيم) =====
@@ -371,35 +431,193 @@ export class SettingsController {
     return this.config.find({ order: { key: 'ASC' } })
   }
 
+  // بيانات الشركة لرأس المستندات المولَّدة من ملف الموظف (الاسم/السجل/العنوان/
+  // الشعار) — قراءة لمن يفتح ملفات الموظفين أو يدير المستندات، والتعديل عبر
+  // PATCH config (settings.manage). القيمة الفارغة = غير مضبوط
+  @Perm('settings.manage', 'employees.view', 'documents.manage')
+  @Get('company')
+  async company() {
+    const rows = await this.config.find({
+      where: {
+        key: In([
+          'company.name',
+          'company.name_en',
+          'company.commercial_register',
+          'company.address',
+          'company.phone',
+          'company.logo_file_id',
+        ]),
+      },
+    })
+    const v = (k: string) => (rows.find((r) => r.key === k)?.value ?? '').trim()
+    const logo = Number(v('company.logo_file_id'))
+    return {
+      name: v('company.name'),
+      nameEn: v('company.name_en'),
+      commercialRegister: v('company.commercial_register'),
+      address: v('company.address'),
+      phone: v('company.phone'),
+      logoFileId: Number.isInteger(logo) && logo > 0 ? logo : null,
+    }
+  }
+
   // مفاتيح رقمية حرجة للمحرك — قيمة فارغة/غير رقمية/أقل من الحد الأدنى تُفسد
   // المسير (قسمة على صفر) أو الحساب. نرفضها هنا كشبكة أمان لأي مصدر.
   private static readonly NUMERIC_MIN: Record<string, number> = {
     'leave.annual_entitled': 0,
+    'leave.sick_entitled': 0,
+    'leave.max_backdate_days': 0,
     'leave.probation_months': 0,
     'leave.carryover_max_days': 0,
     'leave.carryover_expiry_months': 0,
     'attendance.grace_minutes': 0,
+    'attendance.flex.shortfall_grace_minutes': 0,
+    'attendance.flex.unpaid_break_minutes': 0,
+    'attendance.flex.max_session_minutes': 1,
+    'payroll.shortfall_value': 0,
+    'payroll.attendance_daily_cap_days': 0,
+    'attendance.absence_catchup_max_days': 1, // لحاق الغياب — يوم على الأقل
+    'onboarding.window_days': 1, // نافذة شاشة التهيئة — يوم على الأقل
     'overtime.detection_threshold_hours': 0,
+    'overtime.rounding_minutes': 1,
+    'overtime.request_backdate_days': 0,
+    'overtime.max_closed_periods': 0,
+    'overtime.max_hours_per_day': 0,
+    'overtime.max_hours_per_week': 0,
+    'overtime.max_hours_per_month': 0,
+    'overtime.multiplier_weekday': 0.01,
+    'overtime.multiplier_weekend': 0.01,
+    'overtime.multiplier_holiday': 0.01,
     'eos.months_per_year': 0,
+    'eos.tier1_years': 0,
+    'eos.months_per_year_after': 0,
     'payroll.cycle_start_day': 1,
     'payroll.monthly_days': 1, // مقسوم عليه — لا يكون صفراً
     'payroll.daily_hours': 1, // مقسوم عليه — لا يكون صفراً
+    'payroll.policy.cycle_end_day': 1,
+    'payroll.policy.rounding_scale': 0,
+    'payroll.policy.max_deduction_pct_of_gross': 0,
+    'payroll.policy.min_net_guarantee': 0,
+    'payroll.policy.net_floor_pct': 0,
+    'payroll.exemption_reason_min_length': 1,
+  }
+
+  // مفاتيح بقائمة قيم مغلقة: leave.accrual_mode — أي قيمة أخرى كان محرك الأرصدة
+  // يعاملها بصمت كـ«سنوي» (الاستحقاق كامل مقدماً)
+  private static readonly ALLOWED_VALUES: Record<string, string[]> = {
+    'loan.insufficient_net_behavior': ['PARTIAL_THEN_CARRY', 'SKIP_AND_EXTEND'],
+    'leave.accrual_mode': ['monthly', 'yearly', 'daily'],
+    'payroll.exempt_overtime_eligible': ['true', 'false'],
+    'payroll.exempt_unpaid_leave_deductible': ['true', 'false'],
+    'attendance.flex.count_early_work_toward_required': ['true', 'false'],
+    'attendance.flex.prorate_window_on_partial_leave': ['true', 'false'],
+    'attendance.flex.window_supersedes_grace': ['true', 'false'],
+    'attendance.flex.missing_checkout_policy': ['MANUAL_ONLY'],
+    'payroll.shortfall_enabled': ['true', 'false'],
+    'payroll.shortfall_mode': ['MINUTES', 'MULTIPLIER', 'FRACTION'],
+    'payroll.attendance_overlap_policy': ['CUMULATIVE', 'MAX_OF_BOTH', 'NET_OF_LATENESS'],
+    'payroll.late_deduction_enabled': ['true', 'false'],
+    'overtime.enabled': ['true', 'false'],
+    // OT-05: لا يسمح مفتاح قديم بتجاوز دورة الاعتماد لأي قيد جديد.
+    'overtime.biometric_requires_confirmation': ['true'],
+    'overtime.rounding_direction': ['DOWN'],
+    'overtime.allow_early_overtime': ['true', 'false'],
+    'overtime.missing_punch_policy': ['BLOCK'],
+    'overtime.leave_conflict_policy': ['BLOCK'],
   }
 
   @Patch('config')
-  async upsertConfig(@Body() dto: UpsertConfigDto) {
+  async upsertConfig(@Body() dto: UpsertConfigDto, @CurrentUser() user: JwtPayload) {
     // مفاتيح جديدة غير مسموحة إلا من الكود — نعدّل الموجود فقط
     const row = await this.config.findOne({ where: { key: dto.key } })
     if (!row) throw new NotFoundException(`المفتاح ${dto.key} غير معروف`)
+    // PL-01: القيم الافتراضية للنسخ الجديدة تشترك في حدود التحقق مع إعدادات النسخة.
+    const policyConfigError = validatePayrollPolicyDefaultConfig(dto.key, dto.value)
+    if (policyConfigError) throw new BadRequestException(policyConfigError)
     // تحقق المفاتيح الرقمية الحرجة: رقم صالح ≥ الحد الأدنى
     const min = SettingsController.NUMERIC_MIN[dto.key]
-    if (min !== undefined) {
+    const nullablePolicyValue = PAYROLL_POLICY_NULLABLE_CONFIG_KEYS.has(dto.key) && dto.value === 'null'
+    if (min !== undefined && !nullablePolicyValue) {
       const n = Number(dto.value)
-      if (dto.value === '' || !Number.isFinite(n) || n < min) {
+      if (dto.value.trim() === '' || !Number.isFinite(n) || n < min) {
         throw new BadRequestException(
           `قيمة «${dto.key}» يجب أن تكون رقماً${min > 0 ? ` لا يقل عن ${min}` : ' غير سالب'}`
         )
       }
+    }
+    if (['attendance.flex.shortfall_grace_minutes', 'attendance.flex.unpaid_break_minutes',
+      'attendance.flex.max_session_minutes'].includes(dto.key)) {
+      const n = Number(dto.value)
+      if (!Number.isInteger(n) || n > 1440) {
+        throw new BadRequestException('دقائق إعدادات الحضور يجب أن تكون عدداً صحيحاً لا يتجاوز 1440')
+      }
+    }
+    if (['overtime.rounding_minutes', 'overtime.request_backdate_days', 'overtime.max_closed_periods'].includes(dto.key) &&
+      (!Number.isSafeInteger(Number(dto.value)) || Number(dto.value) > 2147483647)) {
+      throw new BadRequestException('أيام وحدود وتقريب الإضافي يجب أن تكون أعدادًا صحيحة صالحة')
+    }
+    if (dto.key === 'overtime.rounding_minutes' && Number(dto.value) > 1440) throw new BadRequestException('وحدة تقريب الإضافي لا تتجاوز دقائق اليوم')
+    if (['overtime.multiplier_weekday', 'overtime.multiplier_weekend', 'overtime.multiplier_holiday'].includes(dto.key)) {
+      const n = Number(dto.value)
+      if (n > 99.99 || n !== Number(n.toFixed(2))) throw new BadRequestException('مضاعف الإضافي يقبل منزلتين عشريتين وبحد أقصى 99.99')
+    }
+    const overtimeHourLimits: Record<string, number> = { 'overtime.detection_threshold_hours': 24,
+      'overtime.max_hours_per_day': 24, 'overtime.max_hours_per_week': 168, 'overtime.max_hours_per_month': 744 }
+    if (overtimeHourLimits[dto.key] != null && (Number(dto.value) > overtimeHourLimits[dto.key] ||
+      Math.abs(Number(dto.value) * 60 - Math.round(Number(dto.value) * 60)) > 1e-8)) {
+      throw new BadRequestException('ساعات عتبة وسقوف الإضافي يجب أن تمثل دقائق صحيحة ضمن المدة المحددة')
+    }
+    if (dto.key === 'overtime.wage_components') dto.value = overtimeWageComponents(dto.value).join(',')
+    // مفتاح جهاز البصمة: فارغ (يوقف الاستقبال) أو عشوائي قوي — الافتراضي
+    // المنشور والقصير يفتحان POST /attendance/punches لأي أحد
+    if (dto.key === 'attendance.device_key' && dto.value !== '') {
+      const weak = deviceKeyWeakness(dto.value)
+      if (weak) {
+        throw new BadRequestException(
+          `${weak} — استخدم مفتاحاً عشوائياً لا يقل عن ${DEVICE_KEY_MIN_LENGTH} حرفاً`
+        )
+      }
+    }
+    // SET-15: العطلة الأسبوعية العامة رموز أيام صحيحة — «Fri Sat» كانت تُحفظ فلا تطابق
+    // أي يوم وتصير كل الأيام دواماً بصمت. تُحفظ مطبَّعة (fri, sat ← FRI,SAT)
+    if (dto.key === 'attendance.weekend_days') {
+      const err = weekendDaysError(dto.value)
+      if (err) throw new BadRequestException(err)
+      dto.value = normalizeWeekendDays(dto.value)
+    }
+    // EMP-2: جداول مكافأة نهاية الخدمة «سنوات:معامل» و«سبب:معامل» — التالف كان
+    // هيرجع لافتراضي النظام بصمت، فنرفضه برسالة
+    const eosErr = eosConfigError(dto.key, dto.value)
+    if (eosErr) throw new BadRequestException(eosErr)
+    const allowed = SettingsController.ALLOWED_VALUES[dto.key]
+    if (allowed && !allowed.includes(dto.value)) {
+      throw new BadRequestException(
+        `قيمة «${dto.key}» يجب أن تكون واحدة من: ${allowed.join('، ')}`
+      )
+    }
+    if (dto.key === 'attendance.weekend_days') {
+      return this.config.manager.transaction(async em => {
+        await lockAttendanceRuleMutation(em)
+        await assertCalendarScope(user, 'GLOBAL', 0, em, true)
+        const current = await em.findOneByOrFail(RequestsConfig, { key: dto.key })
+        if (current.value === dto.value && !dto.calendarChange) return current
+        const before = await beginCalendarChange(em, 'GLOBAL', 0, dto.calendarChange, user.sub)
+        current.value = dto.value
+        const saved = await em.save(RequestsConfig, current)
+        await finishCalendarChange(em, before, dto.calendarChange, user.sub)
+        return saved
+      })
+    }
+    if (dto.calendarChange !== undefined) throw new BadRequestException('بيانات سريان التقويم تخص أيام الراحة العامة فقط')
+    if (dto.key.startsWith('attendance.flex.') || dto.key === 'attendance.grace_minutes') {
+      return this.config.manager.transaction(async em => {
+        await lockAttendanceRuleMutation(em)
+        const current = await em.getRepository(RequestsConfig).findOneByOrFail({ key: dto.key })
+        if (current.value === dto.value) return current
+        await captureLegacyAttendanceRuleBaselines(em, user.sub)
+        current.value = dto.value
+        return em.getRepository(RequestsConfig).save(current)
+      })
     }
     row.value = dto.value
     return this.config.save(row)
@@ -415,7 +633,7 @@ export class SettingsController {
   async createLeaveType(@Body() dto: CreateLeaveTypeDto) {
     const dup = await this.leaveTypes.findOne({ where: { code: dto.code } })
     if (dup) throw new BadRequestException(`الكود ${dto.code} مستخدم بالفعل`)
-    return this.leaveTypes.save(this.leaveTypes.create(dto))
+    return this.leaveTypes.save(this.leaveTypes.create(this.leaveTypeInput(dto)))
   }
 
   @Patch('leave-types/:id')
@@ -425,22 +643,37 @@ export class SettingsController {
   ) {
     const row = await this.leaveTypes.findOne({ where: { id } })
     if (!row) throw new NotFoundException('نوع الإجازة غير موجود')
-    Object.assign(row, dto)
+    Object.assign(row, this.leaveTypeInput(dto))
     return this.leaveTypes.save(row)
+  }
+
+  private leaveTypeInput(dto: CreateLeaveTypeDto | UpdateLeaveTypeDto) {
+    if (dto.balanceType !== undefined && dto.balanceSource !== undefined && dto.balanceType !== dto.balanceSource) {
+      throw new BadRequestException('balanceType وbalanceSource يشيران إلى قيمتين مختلفتين')
+    }
+    const { balanceSource, ...input } = dto
+    if (dto.balanceType !== undefined || balanceSource !== undefined) {
+      input.balanceType = dto.balanceType !== undefined ? dto.balanceType : balanceSource
+    }
+    return input
   }
 
   // ===== سلاسل الاعتماد (عرض + تعديل SLA/العتبات) =====
   @Perm('approval_chains.manage')
   @Get('approval-chains')
-  async listChains() {
-    const chains = await this.chains.find({ order: { id: 'ASC' } })
+  async listChains(@CurrentUser() user: JwtPayload) {
+    const scope = branchScopeOf(user)
+    const chains = await this.chains.find({ where: scope === null ? {} : [{ branchId: scope }, { branchId: IsNull() }], order: { id: 'ASC' } })
     const allSteps = await this.steps.find({ order: { stepOrder: 'ASC' } })
     // اسم النوع وفئته من مصدر واحد (مستقل عن فلترة الجمهور) —
     // شاشة السلاسل لا تعتمد على كتالوج الموظف المفلتر
     const types = await this.requestTypes.find()
     const typeByCode = new Map(types.map((t) => [t.code, t]))
+    // الدورة الأساسية لنوع = تُحلّ بالـid لكل الفروع — الشاشة تقفل نقلها لفرع
+    const primaryIds = new Set(types.map((t) => t.approvalChainId).filter(Boolean))
     return chains.map((c) => ({
       ...c,
+      isPrimary: primaryIds.has(c.id),
       steps: allSteps.filter((s) => s.chainId === c.id),
       requestTypeName: c.requestTypeCode
         ? typeByCode.get(c.requestTypeCode)?.nameAr ?? null
@@ -455,10 +688,15 @@ export class SettingsController {
   @Patch('approval-steps/:id')
   async updateStep(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdateStepDto
+    @Body() dto: UpdateStepDto,
+    @CurrentUser() user: JwtPayload
   ) {
     const step = await this.steps.findOne({ where: { id } })
     if (!step) throw new NotFoundException('الخطوة غير موجودة')
+    const merged = { ...step, ...dto }
+    const chain = await this.chains.findOneBy({ id: step.chainId })
+    this.assertChainScope(user, chain?.branchId ?? null)
+    await this.validateChainSteps([merged as ChainStepDto], chain?.branchId ?? null)
     Object.assign(step, dto)
     return this.steps.save(step)
   }
@@ -466,83 +704,75 @@ export class SettingsController {
   // ===== بانِي السلاسل: إنشاء سلسلة كاملة بخطواتها =====
   @Perm('approval_chains.manage')
   @Post('approval-chains')
-  async createChain(@Body() dto: CreateChainDto) {
+  async createChain(@Body() dto: CreateChainDto, @CurrentUser() user: JwtPayload) {
+    this.assertChainScope(user, dto.branchId ?? null)
     if (!Array.isArray(dto.steps)) {
       throw new BadRequestException('الخطوات مطلوبة (مصفوفة، ويمكن أن تكون فارغة للأوتوماتيك)')
     }
     // الكود فريد داخل نفس النطاق (عام أو نفس الفرع) —
     // نفس الكود بفرع مختلف = نسخة فرعية تتقدم على العامة
     const dup = await this.chains.findOne({
-      where: { code: dto.code, branchId: dto.branchId ?? (null as any) },
+      where: { code: dto.code, branchId: dto.branchId ?? IsNull() },
     })
     if (dup) {
       throw new BadRequestException(
         `الكود ${dto.code} مستخدم بالفعل في هذا النطاق`
       )
     }
-    for (const s of dto.steps) {
-      if (s.thresholdField && (!s.thresholdOp || s.thresholdValue === undefined)) {
-        throw new BadRequestException(
-          'الخطوة الشرطية تحتاج: حقل + معامل + قيمة عتبة'
-        )
-      }
-      if (s.approverRole === 'specific_employee' && !s.specificEmployeeId) {
-        throw new BadRequestException(
-          'خطوة «موظف بعينه» تحتاج تحديد الموظف'
-        )
-      }
+    await this.validateChainSteps(dto.steps, dto.branchId ?? null)
+    if (dto.branchId != null && !await this.chains.manager.findOneBy(Branch, { id: dto.branchId })) {
+      throw new BadRequestException('الفرع غير موجود')
     }
-    const chain = await this.chains.save(
-      this.chains.create({
-        code: dto.code,
-        nameAr: dto.nameAr,
-        branchId: dto.branchId,
-      })
-    )
-    let order = 0
-    for (const s of dto.steps) {
-      if (!s.isParallel || order === 0) order++
-      await this.steps.save(
-        this.steps.create({
-          chainId: chain.id,
-          stepOrder: order,
-          approverRole: s.approverRole as any,
-          isParallel: !!s.isParallel,
-          specificEmployeeId: s.specificEmployeeId,
-          thresholdField: s.thresholdField,
-          thresholdOp: s.thresholdOp as any,
-          thresholdValue: s.thresholdValue,
-          slaDays: s.slaDays,
-          escalateTo: s.escalateTo,
-        })
-      )
-    }
-    const steps = await this.steps.find({
-      where: { chainId: chain.id },
-      order: { stepOrder: 'ASC' },
+    return this.chains.manager.transaction(async (em) => {
+      const chain = await em.save(ApprovalChain, em.create(ApprovalChain, {
+        code: dto.code, nameAr: dto.nameAr, branchId: dto.branchId,
+      }))
+      const steps = await this.persistChainSteps(em.getRepository(ApprovalStep), chain.id, dto.steps)
+      return { ...chain, steps }
     })
-    return { ...chain, steps }
   }
 
   @Perm('approval_chains.manage')
   @Patch('approval-chains/:id')
   async updateChain(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdateChainDto
+    @Body() dto: UpdateChainDto,
+    @CurrentUser() user: JwtPayload
   ) {
     const chain = await this.chains.findOne({ where: { id } })
     if (!chain) throw new NotFoundException('السلسلة غير موجودة')
+    this.assertChainScope(user, chain.branchId ?? null)
     // نقل الدورة لفرع آخر: الكود لازم يفضل فريداً داخل النطاق الجديد
     if (dto.branchId !== undefined && dto.branchId !== chain.branchId) {
+      const target = dto.branchId ?? null
+      this.assertChainScope(user, target)
+      if (target !== null) {
+        const branch = await this.chains.manager.findOne(Branch, {
+          where: { id: target },
+        })
+        if (!branch) throw new BadRequestException('الفرع غير موجود')
+        // الدورة الأساسية لنوع تُحلّ بالـid لطلبات كل الفروع (resolveChain)
+        // فنقلها لفرع شكلي فقط — التخصيص الفعلي = نسخة بنفس الكود للفرع
+        const linked = await this.requestTypes.findOne({
+          where: { approvalChainId: chain.id },
+        })
+        if (linked) {
+          throw new BadRequestException(
+            `هذه الدورة الأساسية لنوع «${linked.nameAr}» وتسري على كل الفروع — ` +
+              `لتخصيص فرع أنشئ نسخة بنفس الكود (${chain.code}) لهذا الفرع`
+          )
+        }
+      }
+      // IsNull صراحةً: TypeORM يتجاهل null في where فيطابق الكود بأي فرع
       const dup = await this.chains.findOne({
-        where: { code: chain.code, branchId: (dto.branchId ?? null) as any },
+        where: { code: chain.code, branchId: target === null ? IsNull() : target },
       })
       if (dup && dup.id !== chain.id) {
         throw new BadRequestException(
           `الكود ${chain.code} مستخدم بالفعل في هذا النطاق`
         )
       }
-      chain.branchId = dto.branchId as any
+      chain.branchId = target as any
     }
     if (dto.nameAr !== undefined) chain.nameAr = dto.nameAr
     if (dto.isActive !== undefined) chain.isActive = dto.isActive
@@ -556,56 +786,102 @@ export class SettingsController {
   @Patch('approval-chains/:id/steps')
   async replaceChainSteps(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: { steps: ChainStepDto[] }
+    @Body() dto: ReplaceStepsDto,
+    @CurrentUser() user: JwtPayload
   ) {
     const chain = await this.chains.findOne({ where: { id } })
     if (!chain) throw new NotFoundException('السلسلة غير موجودة')
-    if (!Array.isArray(dto.steps)) {
-      throw new BadRequestException('الخطوات مطلوبة')
+    this.assertChainScope(user, chain.branchId ?? null)
+    await this.validateChainSteps(dto.steps, chain.branchId ?? null)
+    return this.steps.manager.transaction(async (em) => {
+      const repo = em.getRepository(ApprovalStep)
+      await repo.delete({ chainId: id })
+      const steps = await this.persistChainSteps(repo, id, dto.steps)
+      return { ...chain, steps }
+    })
+  }
+
+  private assertChainScope(user: JwtPayload, branchId: number | null) {
+    const scope = branchScopeOf(user)
+    if (scope !== null && branchId !== scope) {
+      throw new ForbiddenException('تعديل السلسلة العامة أو فرع آخر متاح لمدير النظام فقط')
     }
-    for (const s of dto.steps) {
-      if (!APPROVER_ROLES.includes(s.approverRole)) {
-        throw new BadRequestException(`دور غير صالح: ${s.approverRole}`)
+  }
+
+  private async validateChainSteps(steps: ChainStepDto[], branchId: number | null) {
+    if (!Array.isArray(steps)) throw new BadRequestException('الخطوات مطلوبة')
+    for (const step of steps) {
+      if (!APPROVER_ROLES.includes(step.approverRole)) throw new BadRequestException('دور الموافقة غير صالح')
+      const threshold = [step.thresholdField, step.thresholdOp, step.thresholdValue]
+      if (threshold.some(v => v != null) &&
+          (!step.thresholdField?.trim() || !['>=', '>', '<', '<='].includes(step.thresholdOp ?? '') ||
+           typeof step.thresholdValue !== 'number' || !Number.isFinite(step.thresholdValue))) {
+        throw new BadRequestException('الخطوة الشرطية تحتاج: حقل + معامل + قيمة عتبة صالحة')
+      }
+      if (step.escalateTo === 'specific_employee') {
+        throw new BadRequestException('التصعيد إلى موظف محدد يحتاج مساراً يدعم تحديد موظف التصعيد')
+      }
+      if (step.approverRole === 'specific_employee') {
+        if (!step.specificEmployeeId) throw new BadRequestException('خطوة «موظف بعينه» تحتاج تحديد الموظف')
+        const emp = await this.chains.manager.findOneBy(Employee, { id: step.specificEmployeeId })
+        if (!emp || !emp.isActive || (branchId != null && emp.branchId !== branchId)) {
+          throw new BadRequestException('موظف الاعتماد غير موجود أو غير نشط أو خارج فرع السلسلة')
+        }
       }
     }
-    await this.steps.delete({ chainId: id })
+  }
+
+  private async persistChainSteps(repo: Repository<ApprovalStep>, chainId: number, steps: ChainStepDto[]) {
     let order = 0
-    for (const s of dto.steps) {
-      if (!s.isParallel || order === 0) order++
-      await this.steps.save(
-        this.steps.create({
-          chainId: id,
-          stepOrder: order,
-          approverRole: s.approverRole as any,
-          isParallel: !!s.isParallel,
-          specificEmployeeId: s.specificEmployeeId,
-          thresholdField: s.thresholdField,
-          thresholdOp: s.thresholdOp as any,
-          thresholdValue: s.thresholdValue,
-          slaDays: s.slaDays,
-          escalateTo: s.escalateTo,
-        })
-      )
-    }
-    const steps = await this.steps.find({
-      where: { chainId: id },
-      order: { stepOrder: 'ASC' },
+    const rows = steps.map(step => {
+      if (!step.isParallel || order === 0) order++
+      return repo.create({ ...step, chainId, stepOrder: order, isParallel: !!step.isParallel,
+        approverRole: step.approverRole as ApprovalStep['approverRole'],
+        thresholdOp: step.thresholdOp as ApprovalStep['thresholdOp'] })
     })
-    return { ...chain, steps }
+    return rows.length ? repo.save(rows) : []
   }
 
   // ===== بانِي الطلبات: عرض + إنشاء من الصفر + تعديل شامل =====
   @Perm('request_types.manage')
   @Get('request-types')
-  listRequestTypes() {
-    return this.requestTypes.find({ order: { category: 'ASC', id: 'ASC' } })
+  async listRequestTypes() {
+    const types = await this.requestTypes.find({ order: { category: 'ASC', id: 'ASC' } })
+    return types.map((t) => this.withDestinationStatus(t))
+  }
+
+  // destinationSupported: هل للنوع تنفيذ بعد الاعتماد؟ غير المبني لا يُفعَّل ولا يُقدَّم (REQ-3)
+  private withDestinationStatus(t: RequestType) {
+    return { ...t, destinationSupported: this.destinations.supports(t) }
   }
 
   // الوجهات المتاحة — لقائمة اختيار البانِي
   @Perm('request_types.manage')
   @Get('destination-handlers')
   destinationHandlers() {
-    return AVAILABLE_HANDLERS
+    return this.handlerOptions()
+  }
+
+  // الوجهات المقبولة = «بدون تنفيذ آلي» + كل handler مسجّل في محرك الوجهات —
+  // بالترتيب المسمّى أولاً، وأي مفتاح منفّذ بلا تسمية يظهر بكوده. ووجهات محرك
+  // الحضور بـtypeCodes: تُعرض وتُقبل لأنواعها فقط (REQ-3)
+  private handlerOptions(): Array<{ key: string; labelAr: string; typeCodes?: string[] }> {
+    const supported = new Set(['none', ...this.destinations.handlerKeys()])
+    const labeled = AVAILABLE_HANDLERS.filter((h) => supported.has(h.key))
+    const extra = [...supported]
+      .filter((k) => !AVAILABLE_HANDLERS.some((h) => h.key === k))
+      .map((key) => ({ key, labelAr: key }))
+    const engine = Object.entries(ENGINE_RECORD_HANDLERS).map(([key, v]) => ({
+      key,
+      labelAr: v.labelAr,
+      typeCodes: v.typeCodes,
+    }))
+    return [...labeled, ...extra, ...engine]
+  }
+
+  private isKnownHandler(key: string, typeCode?: string): boolean {
+    if (key === 'none' || this.destinations.handlerKeys().includes(key)) return true
+    return !!typeCode && this.destinations.supports({ code: typeCode, destinationHandler: key })
   }
 
   private validateAudience(v?: { mode: string; ids: Array<number | string> }) {
@@ -647,7 +923,7 @@ export class SettingsController {
     const dup = await this.requestTypes.findOne({ where: { code } })
     if (dup) throw new BadRequestException(`الكود ${code} مستخدم بالفعل`)
     const handler = dto.destinationHandler ?? 'none'
-    if (!AVAILABLE_HANDLERS.some((h) => h.key === handler)) {
+    if (!this.isKnownHandler(handler, code)) {
       throw new BadRequestException('الوجهة غير معروفة — اختر من القائمة')
     }
     if (dto.approvalChainId) {
@@ -681,7 +957,7 @@ export class SettingsController {
       chainId = chain.id
     }
 
-    return this.requestTypes.save(
+    const created = await this.requestTypes.save(
       this.requestTypes.create({
         code,
         nameAr: dto.nameAr,
@@ -697,6 +973,7 @@ export class SettingsController {
         phase: 'P1',
       })
     )
+    return this.withDestinationStatus(created)
   }
 
   // تعديل شامل: اسم/تفعيل/سلسلة/حقول/جمهور/وجهة/مرفقات
@@ -715,17 +992,42 @@ export class SettingsController {
       if (!chain) throw new BadRequestException('سلسلة الاعتماد غير موجودة')
       type.approvalChainId = dto.approvalChainId
     }
-    if (dto.destinationHandler !== undefined) {
-      if (!AVAILABLE_HANDLERS.some((h) => h.key === dto.destinationHandler)) {
-        throw new BadRequestException('الوجهة غير معروفة')
+    // الوجهة الحالية مقبولة كما هي (أنواع مبذورة بوجهات قديمة/لم تُبنَ بعد) —
+    // والتغيير لازم يكون لوجهة منفّذة فعلاً في محرك الوجهات
+    if (
+      dto.destinationHandler !== undefined &&
+      dto.destinationHandler !== type.destinationHandler
+    ) {
+      if (!this.isKnownHandler(dto.destinationHandler, type.code)) {
+        throw new BadRequestException('الوجهة غير معروفة — اختر من القائمة')
       }
       type.destinationHandler = dto.destinationHandler
     }
     if (dto.customFields !== undefined) {
-      type.customFields = this.validateCustomFields(dto.customFields) as string
-      const requiredKeys = dto.customFields
-        .filter((f) => f.required)
-        .map((f) => f.key)
+      const customFields = this.validateCustomFields(dto.customFields) as string
+      // المفاتيح القديمة (أسماء فقط — الأنواع المبذورة) ليست حقولاً مخصّصة فتبقى
+      // مطلوبة ما لم يُعرَّف حقل مخصّص بنفس المفتاح؛ وإلا تعديل اسم نوع مبذور من
+      // البانِي يمسحها فتختفي حقول التاريخ/الأيام من نموذج التقديم وتُرفض من الحمولة
+      const jsonArray = (raw?: string | null): any[] => {
+        try {
+          const v = JSON.parse(raw || '[]')
+          return Array.isArray(v) ? v : []
+        } catch {
+          return []
+        }
+      }
+      const customKeys = new Set([
+        ...jsonArray(type.customFields).map((f) => String(f?.key)),
+        ...dto.customFields.map((f) => f.key),
+      ])
+      const legacyKeys = jsonArray(type.requiredFields)
+        .map(String)
+        .filter((k) => !customKeys.has(k))
+      type.customFields = customFields
+      const requiredKeys = [
+        ...legacyKeys,
+        ...dto.customFields.filter((f) => f.required).map((f) => f.key),
+      ]
       type.requiredFields = requiredKeys.length
         ? JSON.stringify(requiredKeys)
         : (null as any)
@@ -738,37 +1040,14 @@ export class SettingsController {
       type.requiredAttachments = dto.requiredAttachments
     }
     if (dto.isActive !== undefined) type.isActive = dto.isActive
-    return this.requestTypes.save(type)
-  }
-
-  // ===== مصفوفة الأدوار والصلاحيات (مصدر الحقيقة من الكود) =====
-  @Get('roles')
-  roles() {
-    return [
-      {
-        role: 'super_admin',
-        nameAr: 'مدير النظام',
-        scope: 'كل الفروع',
-        permissions: ['كل الصلاحيات', 'إدارة المستخدمين والأدوار', 'الإعدادات', 'اعتماد أي خطوة'],
-      },
-      {
-        role: 'hr_manager',
-        nameAr: 'مدير الموارد البشرية',
-        scope: 'فرعه (أو الكل لو بلا فرع)',
-        permissions: ['إدارة الموظفين', 'خطوات HR في الاعتمادات', 'الرواتب', 'الإعدادات', 'المستخدمون (دون super_admin)'],
-      },
-      {
-        role: 'branch_manager',
-        nameAr: 'مدير فرع',
-        scope: 'فرعه فقط',
-        permissions: ['موظفو فرعه', 'اعتمادات المدير المباشر', 'حضور الفرع', 'تأكيد الأوفرتايم'],
-      },
-      {
-        role: 'employee',
-        nameAr: 'موظف',
-        scope: 'بياناته فقط',
-        permissions: ['طلباته', 'أرصدته', 'حضوره', 'تأكيد استلام العهدة'],
-      },
-    ]
+    // مايتفعّلش نوع وجهته لسه متبنّتش (REQ-3): كان يُعتمد ويُقفل «مكتمل» بلا أثر.
+    // التعطيل وتعديل الباقي مسموحين، والتفعيل بعد اختيار وجهة منفّذة أو «سجل فقط»
+    if (dto.isActive === true && !this.destinations.supports(type)) {
+      throw new BadRequestException(
+        `لا يُفعَّل «${type.nameAr}» — وجهته («${type.destinationHandler}») لم تُبنَ بعد. ` +
+          `اختر وجهة منفّذة أو «سجل فقط — بلا تنفيذ آلي» من «تعديل» ثم فعّله`
+      )
+    }
+    return this.withDestinationStatus(await this.requestTypes.save(type))
   }
 }

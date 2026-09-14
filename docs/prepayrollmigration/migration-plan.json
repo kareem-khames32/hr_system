@@ -1,0 +1,59 @@
+{
+  "database": "hr_review_pre_payroll_20260911162404_52ee65ac",
+  "capturedAt": "2026-09-13T10:37:34.887Z",
+  "excludedTables": [
+    "payroll_runs",
+    "payroll_items",
+    "payroll_run_members",
+    "lateness_tiers"
+  ],
+  "versions": [
+    {
+      "version": "20260911_001_pre_payroll_adjustment_layer",
+      "checksum": "cdf24df878b858a35663105fb24e7a1ae56a14f17c295665595c9d68908f28a5"
+    },
+    {
+      "version": "20260911_002_pre_payroll_holiday_country",
+      "checksum": "38dfb37e5ca781fa6fc47834b52166dd92cbe4b667aecbe509f5e30222ad01a1"
+    },
+    {
+      "version": "20260911_003_pre_payroll_letter_templates",
+      "checksum": "6ea901e1fdde0440869ae55336760d8e8fae07a6c1b6c1232ab50dc92c8ad637"
+    },
+    {
+      "version": "20260911_004_pre_payroll_history_actor_schema",
+      "checksum": "ea53a4c1ec07a22bddcded9b71a9fd1a02a4e3f8797ff77e5fd49738da3145e2"
+    },
+    {
+      "version": "20260911_005_pre_payroll_history_work_type_data",
+      "checksum": "5a6794def1a2935540afcdfadbf0cb1205808f5863d2cbc9efb8ce7964047f33"
+    },
+    {
+      "version": "20260911_006_pre_payroll_leave_request_names",
+      "checksum": "14f1739f2cddd1a81a71f7396bdb4a2d443f193731c9d6f95073991d1e95eabd"
+    },
+    {
+      "version": "20260912_007_pre_payroll_hr_document_templates",
+      "checksum": "e4f52a66752f88a057b29f87746acb0dea27ed0c84c3c00c4adb5334bf01b68b"
+    }
+  ],
+  "pending": [],
+  "dataDecisions": [],
+  "dataReview": {
+    "unknownWorkTypes": 0,
+    "legacyWorkTypes": 0,
+    "mismatchedHistoryPrefixes": 0,
+    "legacyBankHistories": 0
+  },
+  "leaveDataReview": {
+    "rowsToReview": 131,
+    "invalidJson": 0,
+    "missingProfiles": 0,
+    "conflictingDefinitions": 0,
+    "conflictingAliases": 0,
+    "profileCodeConflicts": 0,
+    "missingSubmittedCodes": 0,
+    "oversizedCodes": 0
+  },
+  "noUnknownNotNullBackfill": true
+}

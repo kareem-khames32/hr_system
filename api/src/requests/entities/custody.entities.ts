@@ -39,15 +39,8 @@ export class Asset {
 
 // الدورة: PENDING_ACK (بانتظار تأكيد الموظف) → PENDING_MANAGER_CONFIRM
 // (بانتظار اعتماد المدير المباشر) → ACTIVE (ملزِم قانونياً) → RETURNED
-export type CustodyStatus =
-  | 'PENDING_ACK'
-  | 'PENDING_MANAGER_CONFIRM'
-  | 'ACTIVE'
-  | 'RETURN_REQUESTED'
-  | 'RETURNED'
-  | 'TRANSFERRED' // نُقلت لموظف آخر — عهدة جديدة فُتحت للمستلم
-  | 'LOST'
-  | 'DAMAGED'
+import type { CustodyStatus } from '../../common/domain-status'
+export type { CustodyStatus } from '../../common/domain-status'
 
 @Entity('custody_assignments')
 export class CustodyAssignment {
@@ -66,8 +59,10 @@ export class CustodyAssignment {
   employeeId: number
 
   // مين أسند العهدة (employees.id)
-  @Column({ nullable: true })
+  @Column({ name: 'assignedByEmployeeId', nullable: true })
   assignedBy: number
+
+  toJSON() { return { ...this, assignedByEmployeeId: this.assignedBy ?? null } }
 
   @CreateDateColumn()
   assignedAt: Date
@@ -87,6 +82,8 @@ export class CustodyAssignment {
   @Column({ length: 100, nullable: true })
   condition: string
 
-  @Column({ length: 30, default: 'PENDING_ACK' })
+  @Column({ type: String, length: 30, default: 'PENDING_ACK' })
   status: CustodyStatus
 }
+
+

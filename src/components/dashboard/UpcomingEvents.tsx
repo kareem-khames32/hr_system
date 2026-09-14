@@ -1,108 +1,62 @@
 'use client'
 
-import { Calendar, Gift, AlertCircle, FileWarning, Clock } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import Link from 'next/link'
+import { Calendar } from 'lucide-react'
+import { can, fetchCalendar, fetchEmployees, fetchDocuments } from '@/lib/api'
+import { localToday } from '@/lib/dates'
+import { docTypeLabel } from '@/lib/doc-types'
+import { upcomingBirthdays } from '@/lib/upcoming-birthdays'
 
-interface Event {
-  id: string
-  type: 'birthday' | 'holiday' | 'contract' | 'document' | 'anniversary'
-  title: string
-  date: string
-  daysLeft: number
-}
-
-const events: Event[] = [
-  {
-    id: '1',
-    type: 'birthday',
-    title: 'عيد ميلاد أحمد محمد',
-    date: '2026/02/01',
-    daysLeft: 3,
-  },
-  {
-    id: '2',
-    type: 'holiday',
-    title: 'يوم التأسيس',
-    date: '2026/02/22',
-    daysLeft: 24,
-  },
-  {
-    id: '3',
-    type: 'contract',
-    title: 'انتهاء عقد سالم أحمد',
-    date: '2026/02/15',
-    daysLeft: 17,
-  },
-  {
-    id: '4',
-    type: 'document',
-    title: 'انتهاء إقامة محمد علي',
-    date: '2026/02/28',
-    daysLeft: 30,
-  },
-  {
-    id: '5',
-    type: 'anniversary',
-    title: 'ذكرى تعيين فاطمة سالم (5 سنوات)',
-    date: '2026/02/10',
-    daysLeft: 12,
-  },
-]
-
-const getEventIcon = (type: Event['type']) => {
-  switch (type) {
-    case 'birthday':
-      return { icon: <Gift size={18} />, bg: 'bg-pink-50', color: 'text-pink-500' }
-    case 'holiday':
-      return { icon: <Calendar size={18} />, bg: 'bg-success-50', color: 'text-success-600' }
-    case 'contract':
-      return { icon: <FileWarning size={18} />, bg: 'bg-warning-50', color: 'text-warning-600' }
-    case 'document':
-      return { icon: <AlertCircle size={18} />, bg: 'bg-danger-50', color: 'text-danger-600' }
-    case 'anniversary':
-      return { icon: <Clock size={18} />, bg: 'bg-primary-50', color: 'text-primary-600' }
-    default:
-      return { icon: <Calendar size={18} />, bg: 'bg-gray-100', color: 'text-gray-600' }
-  }
-}
-
+type Event = { id: string; title: string; date: string; href: string }
 export default function UpcomingEvents() {
-  return (
-    <div className="card">
-      <div className="flex items-center justify-between mb-6">
-        <h3 className="text-lg font-bold text-gray-800">الأحداث القادمة</h3>
-        <button className="text-sm text-primary-500 hover:text-primary-600 font-medium">
-          عرض التقويم
-        </button>
-      </div>
+  const [events, setEvents] = useState<Event[]>([])
+  const [errors, setErrors] = useState<string[]>([])
+  const [loading, setLoading] = useState(true)
+  const [revision, setRevision] = useState(0)
+  const today = localToday()
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setErrors([])
+    const end = new Date(`${today}T12:00:00`)
+    end.setDate(end.getDate() + 30)
+    const endDate = `${end.getFullYear()}-${String(end.getMonth() + 1).padStart(2, '0')}-${String(end.getDate()).padStart(2, '0')}`
+    const monthKeys = Array.from(new Set([today.slice(0, 7), endDate.slice(0, 7)]))
+    Promise.allSettled([
+      Promise.all(monthKeys.map(month => fetchCalendar(month))),
+      can('employees.view') ? fetchEmployees() : Promise.resolve([]),
+      can('documents.manage') ? fetchDocuments({ expiringDays: 30 }) : Promise.resolve([]),
+    ]).then(([calendarResult, employeeResult, documentResult]) => {
+      if (cancelled) return
+      const rows: Event[] = []
+      const missing: string[] = []
+      if (calendarResult.status === 'fulfilled') {
+        for (const calendar of calendarResult.value) {
+          for (const holiday of calendar.holidays) rows.push({ id: `holiday-${holiday.id}`, title: holiday.name, date: holiday.date, href: '/calendar' })
+          for (const leave of calendar.leaves) rows.push({ id: `leave-${leave.id}`, title: `إجازة ${leave.employeeName ?? `موظف #${leave.employeeId}`}`, date: leave.fromDate, href: '/leaves/calendar' })
+        }
+      } else missing.push('التقويم')
+      if (employeeResult.status === 'fulfilled') {
+        for (const employee of employeeResult.value) {
+          if (employee.contractEnd && !['archived', 'terminated'].includes(employee.status)) rows.push({ id: `contract-${employee.id}`, title: `انتهاء عقد ${employee.fullName}`, date: employee.contractEnd.slice(0, 10), href: `/employees/${employee.id}` })
+        }
+        for (const birthday of upcomingBirthdays(employeeResult.value, today, endDate)) {
+          rows.push({ id: `birthday-${birthday.employeeId}`, title: `عيد ميلاد ${birthday.name}${birthday.observedLeapDay ? ' (مواليد 29 فبراير؛ يُعرض في 28 فبراير هذا العام)' : ''}`, date: birthday.date, href: `/employees/${birthday.employeeId}` })
+        }
+      } else missing.push('العقود وأعياد الميلاد')
+      if (documentResult.status === 'fulfilled') for (const document of documentResult.value) {
+        if (document.expiryDate) rows.push({ id: `document-${document.id}`, title: `انتهاء ${docTypeLabel(document.docType)} — ${document.employeeName ?? `موظف #${document.employeeId}`}`, date: document.expiryDate.slice(0, 10), href: '/employees/documents' })
+      } else missing.push('المستندات')
+      setEvents(Array.from(new Map(rows.filter(row => row.date >= today && row.date <= endDate).map(row => [row.id, row])).values()).sort((a, b) => a.date.localeCompare(b.date)).slice(0, 6))
+      setErrors(missing)
+    }).finally(() => { if (!cancelled) setLoading(false) })
+    return () => { cancelled = true }
+  }, [today, revision])
 
-      <div className="space-y-3">
-        {events.map((event) => {
-          const { icon, bg, color } = getEventIcon(event.type)
-          return (
-            <div
-              key={event.id}
-              className="flex items-center gap-4 p-3 rounded-xl hover:bg-gray-50 transition-colors cursor-pointer"
-            >
-              <div className={`w-10 h-10 rounded-xl ${bg} ${color} flex items-center justify-center flex-shrink-0`}>
-                {icon}
-              </div>
-              <div className="flex-1 min-w-0">
-                <p className="font-medium text-gray-800 text-sm truncate">{event.title}</p>
-                <p className="text-xs text-gray-400 mt-0.5">{event.date}</p>
-              </div>
-              <div className={`px-3 py-1.5 rounded-lg text-xs font-medium ${
-                event.daysLeft <= 7
-                  ? 'bg-danger-50 text-danger-600'
-                  : event.daysLeft <= 14
-                  ? 'bg-warning-50 text-warning-600'
-                  : 'bg-gray-100 text-gray-600'
-              }`}>
-                {event.daysLeft === 0 ? 'اليوم' : `${event.daysLeft} يوم`}
-              </div>
-            </div>
-          )
-        })}
-      </div>
-    </div>
-  )
+  return <div className="card">
+    <div className="flex justify-between items-center mb-6"><h3 className="text-lg font-bold text-gray-800">خلال 30 يومًا</h3><Link href="/calendar" className="text-sm text-primary-600">عرض التقويم</Link></div>
+    {errors.length > 0 && <p role="alert" className="text-xs text-amber-700 mb-3">تعذر تحميل: {errors.join('، ')}. <button onClick={() => setRevision(value => value + 1)} className="underline">إعادة المحاولة</button></p>}
+    {loading ? <p className="text-sm text-gray-500">جارٍ التحميل...</p> : events.length === 0 ? <p className="text-sm text-gray-500">{errors.length ? 'لا تتوفر أحداث من المصادر المحمّلة.' : 'لا توجد أحداث قادمة في المصادر المتاحة.'}</p> : <div className="space-y-3">{events.map(event => <Link key={event.id} href={event.href} className="flex items-center gap-3 p-3 rounded-xl hover:bg-gray-50"><Calendar size={18} className="text-primary-600 shrink-0" /><div className="flex-1 min-w-0"><p className="font-medium text-sm text-gray-800">{event.title}</p><time className="text-xs text-gray-500" dateTime={event.date}>{event.date}</time></div><span className="text-xs text-primary-700">{event.date === today ? 'اليوم' : `${Math.round((Date.parse(`${event.date}T12:00:00`) - Date.parse(`${today}T12:00:00`)) / 86400000)} يوم`}</span></Link>)}</div>}
+  </div>
 }

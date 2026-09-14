@@ -54,7 +54,7 @@ export default function TransfersPage() {
             id: t.id,
             requestId: t.requestId ?? undefined,
             employeeName: t.employeeName ?? `#${t.employeeId}`,
-            fromTeamName: t.fromTeamName ?? `#${t.fromTeam}`,
+            fromTeamName: t.fromTeamName ?? (!t.fromTeam ? 'بدون فريق' : `#${t.fromTeam}`),
             toTeamName: t.toTeamName ?? `#${t.toTeam}`,
             effectiveDate: fmtDate(t.effectiveDate),
             status: t.status,

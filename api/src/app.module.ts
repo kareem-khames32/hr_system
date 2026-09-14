@@ -12,13 +12,17 @@ import { PayrollModule } from './payroll/payroll.module'
 import { SettingsModule } from './settings/settings.module'
 import { ExtrasModule } from './assets/extras.module'
 import { OffboardingModule } from './offboarding/offboarding.module'
+import { OnboardingModule } from './onboarding/onboarding.module'
 import { FilesModule } from './files/files.module'
+import { HrDocumentsModule } from './hr-documents/hr-documents.module'
 import { DashboardController } from './dashboard/dashboard.controller'
 import { ReportsController } from './reports/reports.controller'
+import { validateEnv } from './auth/jwt-secret'
 
 @Module({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true }),
+    // validateEnv: الإقلاع يفشل لو JWT_SECRET ناقص أو قصير (بلا قيمة افتراضية)
+    ConfigModule.forRoot({ isGlobal: true, validate: validateEnv }),
 
     // قاعدة البيانات المحلية — DB_TYPE يحدد النوع: mssql أو mysql
     TypeOrmModule.forRootAsync({
@@ -67,7 +71,9 @@ import { ReportsController } from './reports/reports.controller'
     SettingsModule,
     ExtrasModule,
     OffboardingModule,
+    OnboardingModule,
     FilesModule,
+    HrDocumentsModule,
   ],
   controllers: [HealthController, DashboardController, ReportsController],
 })

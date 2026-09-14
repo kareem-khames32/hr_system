@@ -251,8 +251,18 @@ export default function UsersPage() {
         await updateUser(editingUser.id, {
           role: formData.role,
           isActive: formData.isActive,
-          ...(formData.branchId ? { branchId: Number(formData.branchId) } : {}),
-          ...(formData.employeeId ? { employeeId: Number(formData.employeeId) } : {}),
+          // المُفرَّغ بعد قيمة يُرسَل null (فك ربط الموظف/إزالة الفرع) — كان يُهمل فتبقى
+          // القيمة القديمة. الباك يفحص النطاق (غير مدير النظام لا يترك حساباً بلا فرع)
+          ...(formData.branchId
+            ? { branchId: Number(formData.branchId) }
+            : editingUser.branchId
+              ? { branchId: null }
+              : {}),
+          ...(formData.employeeId
+            ? { employeeId: Number(formData.employeeId) }
+            : editingUser.employeeId
+              ? { employeeId: null }
+              : {}),
         })
         // حفظ تجاوزات الصلاحيات الدقيقة — السحب مقصور على حزمة الدور
         if (formData.role !== 'super_admin' && overrides) {

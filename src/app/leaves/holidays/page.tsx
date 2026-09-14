@@ -10,8 +10,18 @@ import {
   Sun,
   X,
   AlertTriangle,
+  Trash2,
 } from 'lucide-react'
-import { fetchCatalog, createCatalogItem, updateCatalogItem } from '@/lib/api'
+import {
+  can,
+  fetchCatalog,
+  fetchConfig,
+  createCatalogItem,
+  updateCatalogItem,
+  deleteCatalogItem,
+} from '@/lib/api'
+import { buildCalendarChange, calendarScopeWritable, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
+import { CalendarChangeFields, CalendarContextSummary, CalendarMutationDialog, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
 
 interface Holiday {
   id: number
@@ -29,10 +39,46 @@ const daysOf = (h: Holiday): number => {
   return Math.round((end - start) / 86400000) + 1
 }
 
+// أشهر السنة (0-11) اللي يلمسها مدى العطلة — من نص التاريخ (بلا إزاحة توقيت)،
+// فالعطلة الممتدة تظهر في كل شهر من مداها مش في شهر بدايتها بس
+const monthsOf = (h: Holiday): Set<number> => {
+  const start = String(h.date).slice(0, 10)
+  const endRaw = h.endDate ? String(h.endDate).slice(0, 10) : ''
+  const end = endRaw && endRaw >= start ? endRaw : start
+  let y = Number(start.slice(0, 4))
+  let m = Number(start.slice(5, 7))
+  const ey = Number(end.slice(0, 4))
+  const em = Number(end.slice(5, 7))
+  const out = new Set<number>()
+  while ((y < ey || (y === ey && m <= em)) && out.size < 12) {
+    out.add(m - 1)
+    m += 1
+    if (m > 12) {
+      m = 1
+      y += 1
+    }
+  }
+  return out
+}
+
+// مدى العطلة في خانة الشهر: «يوم - يوم»، والممتدة عبر أكثر من شهر «يوم/شهر - يوم/شهر»
+const rangeLabel = (h: Holiday): string => {
+  const start = String(h.date).slice(0, 10)
+  const end = h.endDate ? String(h.endDate).slice(0, 10) : ''
+  const day = (s: string) => Number(s.slice(8, 10))
+  const dayMonth = (s: string) => `${day(s)}/${Number(s.slice(5, 7))}`
+  if (!end || end === start) return String(day(start))
+  return start.slice(0, 7) === end.slice(0, 7)
+    ? `${day(start)} - ${day(end)}`
+    : `${dayMonth(start)} - ${dayMonth(end)}`
+}
+
 export default function HolidaysPage() {
   const [holidays, setHolidays] = useState<Holiday[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // تنبيه الحفظ/الحذف من الباك (مثل: العطلة داخل فترة مسير رواتب قائم)
+  const [notice, setNotice] = useState('')
 
   const [showModal, setShowModal] = useState(false)
   const [editing, setEditing] = useState<Holiday | null>(null)
@@ -42,6 +88,20 @@ export default function HolidaysPage() {
   const [formCountry, setFormCountry] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
+  const [deletingId, setDeletingId] = useState<number | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Holiday | null>(null)
+  const [calendarRefresh, setCalendarRefresh] = useState(0)
+  const calendar = useCalendarContext('GLOBAL', 0, showModal)
+  const currentHoliday = editing && calendar.context ? (calendar.context.current.holidays as Holiday[]).find(row => row.id === editing.id) : null
+  useEffect(() => {
+    if (!editing || !calendar.context) return
+    const row = (calendar.context.current.holidays as Holiday[]).find(item => item.id === editing.id)
+    if (!row) { setSaveError('العطلة غير موجودة في نسخة التقويم الحالية. أغلق النموذج وأعد تحميل القائمة.'); return }
+    setFormName(row.name); setFormDate(row.date); setFormEndDate(row.endDate ?? ''); setFormCountry(row.country ?? '')
+  }, [calendar.context, editing])
+  // الحذف لمن يدير الإعدادات فقط (الباك يفرضها أيضاً)
+  const [canManage, setCanManage] = useState(false)
+  useEffect(() => setCanManage(can('settings.manage') && calendarScopeWritable('GLOBAL', 0)), [])
 
   const load = () => {
     setLoading(true)
@@ -53,15 +113,32 @@ export default function HolidaysPage() {
 
   useEffect(load, [])
 
-  const openAdd = () => {
+  const openAdd = async () => {
+    if (!can('settings.manage') || !calendarScopeWritable('GLOBAL', 0)) return
     setEditing(null)
     setFormName('')
     setFormDate('')
     setFormEndDate('')
     setFormCountry('')
     setSaveError('')
+    try {
+      const config = await fetchConfig()
+      setFormCountry(config.find((row) => row.key === 'system.country')?.value ?? '')
+    } catch (e) {
+      setSaveError(`تعذر تحميل البلد الافتراضي؛ حدد البلد قبل الحفظ: ${e instanceof Error ? e.message : 'خطأ غير معروف'}`)
+    }
     setShowModal(true)
   }
+
+  // «إضافة عطلة» من التقويم الموحّد يفتح النموذج مباشرة: /leaves/holidays?add=1
+  useEffect(() => {
+    if (!can('settings.manage')) return
+    if (new URLSearchParams(window.location.search).get('add') !== '1') return
+    openAdd()
+    // الرابط يُستهلك مرة واحدة — لا يُعاد فتح النموذج بعد الحفظ أو إعادة التحميل
+    window.history.replaceState(null, '', window.location.pathname)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   const openEdit = (h: Holiday) => {
     setEditing(h)
@@ -75,20 +152,31 @@ export default function HolidaysPage() {
 
   const save = async () => {
     setSaveError('')
+    if (!canManage || saving || (editing && !currentHoliday)) return
+    // عطلة ممتدة: النهاية لا تسبق البداية (الباك يرفضها أيضاً)
+    if (formEndDate && formEndDate < formDate) {
+      setSaveError('تاريخ النهاية لا يسبق تاريخ البداية')
+      return
+    }
+    let calendarChange: PayrollCalendarChange
+    try { calendarChange = buildCalendarChange(calendar.context, calendar.evidence) }
+    catch (cause) { setSaveError((cause as Error).message); return }
     setSaving(true)
     const payload: Record<string, unknown> = {
       name: formName,
       date: formDate,
       endDate: formEndDate || null,
-      country: formCountry || null,
+      // الإضافة تبدأ ببلد النظام والتعديل بقيمة العطلة المحمّلة؛ فارغ = كل الدول.
+      country: formCountry.trim(),
+      calendarChange,
     }
     try {
-      if (editing) {
-        await updateCatalogItem('holidays', editing.id, payload)
-      } else {
-        await createCatalogItem('holidays', payload)
-      }
+      const saved: { warning?: string } = editing
+        ? await updateCatalogItem('holidays', editing.id, payload)
+        : await createCatalogItem('holidays', payload)
+      setNotice(saved?.warning ?? '')
       setShowModal(false)
+      setCalendarRefresh(value => value + 1)
       load()
     } catch (e) {
       setSaveError(e instanceof Error ? e.message : 'تعذر حفظ العطلة')
@@ -97,10 +185,29 @@ export default function HolidaysPage() {
     }
   }
 
+  // إيقاف مؤرخ مع بقاء أدلة النسخ السابقة.
+  const remove = async (h: Holiday, calendarChange: PayrollCalendarChange) => {
+    setError('')
+    setDeletingId(h.id)
+    try {
+      const r = await deleteCatalogItem('holidays', h.id, calendarChange)
+      setNotice(r?.warning ?? '')
+      load()
+      setCalendarRefresh(value => value + 1)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر حذف العطلة')
+      throw e
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   const today = new Date().toISOString().slice(0, 10)
   const totalDays = holidays.reduce((sum, h) => sum + daysOf(h), 0)
   const upcoming = holidays.filter((h) => (h.endDate ?? h.date) >= today).length
   const multiDay = holidays.filter((h) => daysOf(h) > 1).length
+  // النهاية قبل البداية (min لا يمنع الكتابة اليدوية) — تنبيه تحت الحقل ومنع الحفظ
+  const endBeforeStart = !!formEndDate && !!formDate && formEndDate < formDate
 
   return (
     <MainLayout>
@@ -108,22 +215,34 @@ export default function HolidaysPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">الإجازات الرسمية</h1>
-            <p className="text-gray-500 mt-1">إدارة العطلات والإجازات الرسمية</p>
+            <h1 className="text-2xl font-bold text-gray-800">العطلات الرسمية</h1>
+            <p className="text-gray-500 mt-1">إدارة العطلات الرسمية وأيامها</p>
           </div>
           <div className="flex items-center gap-3">
-            <button onClick={openAdd} className="btn-primary flex items-center gap-2">
-              <Plus size={18} />
-              إضافة إجازة
-            </button>
+            {canManage && (
+              <button onClick={openAdd} className="btn-primary flex items-center gap-2">
+                <Plus size={18} />
+                إضافة عطلة
+              </button>
+            )}
           </div>
         </div>
 
         {/* Error Banner */}
+        <CalendarScopeConfirmation key={calendarRefresh} scope="GLOBAL" sourceId={0} canConfirm={canManage} disabled={showModal || !!deleteTarget} onConfirmed={() => { load(); calendar.reload() }} />
         {error && (
           <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
             <AlertTriangle size={18} />
             {error}
+          </div>
+        )}
+        {notice && (
+          <div className="bg-amber-50 text-amber-800 rounded-xl p-4 flex items-center gap-2">
+            <AlertTriangle size={18} />
+            <span className="flex-1">{notice}</span>
+            <button onClick={() => setNotice('')} className="p-1 hover:bg-amber-100 rounded-lg">
+              <X size={16} />
+            </button>
           </div>
         )}
 
@@ -182,10 +301,7 @@ export default function HolidaysPage() {
               'مايو', 'يونيو', 'يوليو', 'أغسطس',
               'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر'
             ].map((month, index) => {
-              const monthHolidays = holidays.filter((h) => {
-                const hMonth = new Date(h.date).getMonth()
-                return hMonth === index
-              })
+              const monthHolidays = holidays.filter((h) => monthsOf(h).has(index))
               return (
                 <div key={month} className="p-4 bg-gray-50 rounded-xl">
                   <h3 className="font-medium text-gray-800 mb-2">{month}</h3>
@@ -200,10 +316,7 @@ export default function HolidaysPage() {
                             <Star size={12} />
                             <span className="font-medium">{h.name}</span>
                           </div>
-                          <span className="text-xs opacity-75">
-                            {new Date(h.date).getDate()}
-                            {h.endDate ? ` - ${new Date(h.endDate).getDate()}` : ''}
-                          </span>
+                          <span className="text-xs opacity-75">{rangeLabel(h)}</span>
                         </div>
                       ))}
                     </div>
@@ -239,20 +352,30 @@ export default function HolidaysPage() {
                 </div>
                 <div className="flex items-center gap-4">
                   <div className="text-left">
-                    {holiday.country && (
-                      <span className="px-3 py-1 rounded-full text-xs font-medium bg-primary-100 text-primary-700">
-                        {holiday.country}
-                      </span>
-                    )}
+                    <span className="px-3 py-1 rounded-full text-xs font-medium bg-primary-100 text-primary-700">
+                      {holiday.country || 'كل الدول'}
+                    </span>
                     <p className="text-sm text-gray-500 mt-1">{daysOf(holiday)} يوم</p>
                   </div>
                   <div className="flex items-center gap-2">
-                    <button
-                      onClick={() => openEdit(holiday)}
-                      className="p-2 bg-white rounded-lg hover:bg-gray-200"
-                    >
-                      <Edit2 size={16} className="text-gray-600" />
-                    </button>
+                    {canManage && (
+                      <button
+                        onClick={() => openEdit(holiday)}
+                        className="p-2 bg-white rounded-lg hover:bg-gray-200"
+                      >
+                        <Edit2 size={16} className="text-gray-600" />
+                      </button>
+                    )}
+                    {canManage && (
+                      <button
+                        onClick={() => setDeleteTarget(holiday)}
+                        disabled={deletingId === holiday.id}
+                        className="p-2 bg-white rounded-lg hover:bg-red-50 disabled:opacity-50"
+                        title="إيقاف العطلة من تاريخ"
+                      >
+                        <Trash2 size={16} className="text-red-600" />
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
@@ -266,10 +389,11 @@ export default function HolidaysPage() {
         )}
       </div>
 
+      {deleteTarget && <CalendarMutationDialog scope="GLOBAL" sourceId={0} title={`إيقاف العطلة «${deleteTarget.name}» من تاريخ`} description="يحفظ الإيقاف نسخة للتقويم، وتبقى النسخ السابقة محفوظة. لا يصحح مسيرًا معتمدًا أو مصروفًا." onClose={() => setDeleteTarget(null)} onSave={change => remove(deleteTarget, change)} />}
       {/* Add/Edit Modal */}
       {showModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto p-6 shadow-xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-bold text-gray-800 text-lg">
                 {editing ? 'تعديل العطلة' : 'إضافة عطلة جديدة'}
@@ -289,7 +413,8 @@ export default function HolidaysPage() {
               </div>
             )}
 
-            <div className="space-y-4">
+            <CalendarContextSummary context={calendar.context} loading={calendar.loading} error={calendar.error} />
+            <fieldset disabled={saving || !calendar.context || calendar.context.currentMatchesHistory === false} className="space-y-4 mt-4">
               <div>
                 <label className="label">اسم العطلة *</label>
                 <input
@@ -315,9 +440,15 @@ export default function HolidaysPage() {
                   <input
                     type="date"
                     value={formEndDate}
+                    min={formDate || undefined}
                     onChange={(e) => setFormEndDate(e.target.value)}
                     className="input"
                   />
+                  {endBeforeStart && (
+                    <p className="text-xs text-red-600 mt-1">
+                      تاريخ النهاية لا يسبق تاريخ البداية
+                    </p>
+                  )}
                 </div>
               </div>
               <div>
@@ -325,18 +456,23 @@ export default function HolidaysPage() {
                 <input
                   type="text"
                   value={formCountry}
-                  onChange={(e) => setFormCountry(e.target.value)}
+                  onChange={(e) => setFormCountry(e.target.value.toUpperCase())}
                   className="input"
-                  placeholder="مثال: EG"
+                  placeholder="فارغ = كل الدول"
+                  maxLength={5}
                   dir="ltr"
                 />
+                <p className="text-xs text-gray-400 mt-1">
+                  تسري العطلة على فروع هذه الدولة فقط، وفارغ = كل الدول (الفرع بلا دولة تسري عليه كل العطلات)
+                </p>
               </div>
-            </div>
+            </fieldset>
+            <div className="mt-4"><CalendarChangeFields context={calendar.context} value={calendar.evidence} onChange={calendar.setEvidence} disabled={saving} /></div>
 
             <div className="flex items-center gap-3 mt-6 pt-4 border-t border-gray-100">
               <button
                 onClick={save}
-                disabled={saving || !formName || !formDate}
+                disabled={saving || !calendar.context || calendar.context.currentMatchesHistory === false || !!(editing && !currentHoliday) || !formName || !formDate || endBeforeStart}
                 className="btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {saving ? 'جارٍ الحفظ...' : editing ? 'حفظ التعديلات' : 'إضافة العطلة'}

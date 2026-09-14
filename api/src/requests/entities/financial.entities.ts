@@ -5,6 +5,8 @@ import {
   Index,
   PrimaryGeneratedColumn,
 } from 'typeorm'
+import type { LoanStatus } from '../../common/domain-status'
+export type { LoanStatus } from '../../common/domain-status'
 
 // ============ الوجهات المالية ============
 
@@ -23,14 +25,17 @@ export class Loan {
   @Column({ type: 'decimal', precision: 18, scale: 2 })
   amount: number
 
-  @Column({ length: 30 })
-  status: string // APPROVED | DISBURSED | SETTLED
+  @Column({ type: String, length: 30 })
+  status: LoanStatus
 
   @Column({ type: 'datetime', nullable: true })
   disbursedAt: Date
 }
 
+export type LoanInstallmentFinancialStatus = 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED'
+
 @Entity('loan_installments')
+@Index('UX_loan_installments_parent', ['parentInstallmentId'], { unique: true, where: '[parentInstallmentId] IS NOT NULL' })
 export class LoanInstallment {
   @PrimaryGeneratedColumn()
   id: number
@@ -47,6 +52,26 @@ export class LoanInstallment {
 
   @Column({ default: false })
   paid: boolean
+
+  // NULL تاريخي: تستنتج الخدمة الحالة من paid والمراجعة1 دون تعبئة أو تغيير الصف القديم.
+  // تقرأ الخدمة المبالغ بـCAST إلىnvarchar للحفاظ على دقة DECIMAL(18,2).
+  @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
+  paidAmount: string | null
+
+  @Column({ type: 'nvarchar', length: 20, nullable: true })
+  financialStatus: LoanInstallmentFinancialStatus | null
+
+  @Column({ type: 'int', nullable: true })
+  financialRevision: number | null
+
+  @Column({ type: 'int', nullable: true })
+  parentInstallmentId: number | null
+
+  @Column({ type: 'date', nullable: true })
+  originalDueDate: string | null
+
+  @Column({ type: 'datetime2', nullable: true })
+  paidAt: Date | null
 }
 
 // ============ دفتر المديونيات/المستحقات (Obligations Ledger) ============
@@ -107,3 +132,4 @@ export class EmployeeObligation {
   @CreateDateColumn()
   createdAt: Date
 }
+

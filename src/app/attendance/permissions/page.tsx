@@ -1,6 +1,9 @@
 'use client'
 
+import { requestStatusLabels as statusLabels, requestStatusStyles } from '@/lib/status-labels'
+
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
@@ -15,25 +18,22 @@ import {
   Timer,
   Briefcase,
   Calendar,
+  Paperclip,
 } from 'lucide-react'
 import {
   fetchAllRequests,
-  fetchEmployees,
+  fetchEmployeeDirectory,
+  fetchCatalog,
+  fetchInbox,
   actOnRequest,
   getCurrentUser,
+  fetchFileObjectUrl,
   type ApiRequest,
   type ApiEmployee,
 } from '@/lib/api'
+import { payloadSummary } from '@/lib/request-payload'
 
 // حالات محرك الطلبات — تسميات عربية
-const statusLabels: Record<string, string> = {
-  DRAFT: 'مسودة',
-  UNDER_REVIEW: 'قيد المراجعة',
-  RETURNED: 'معاد للتعديل',
-  COMPLETED: 'مكتمل',
-  REJECTED: 'مرفوض',
-  CANCELLED: 'ملغي',
-}
 
 interface PermissionRow {
   id: number
@@ -46,6 +46,10 @@ interface PermissionRow {
   toTime: string
   hours: number
   reason: string
+  permissionType: string
+  // باقي مفاتيح الحمولة (ملاحظة، أي مفتاح آخر) — لا يُخفى منها شيء عن المعتمد
+  details: string
+  attachmentRef: string
   status: string
 }
 
@@ -58,7 +62,13 @@ const hoursBetween = (from: string, to: string): number => {
   return mins > 0 ? Math.round((mins / 60) * 10) / 10 : 0
 }
 
-const parsePayload = (payload?: string): { date: string; from: string; to: string; reason: string } => {
+// مفاتيح لها أعمدتها في الجدول — وكل ما عداها يظهر في «التفاصيل» تحت السبب:
+// المعتمد يرى الحمولة كاملة، ونوع الإذن هو ما يحدد الخصم من عدمه (SEC-REQ-2)
+const SHOWN_KEYS = ['date', 'from', 'to', 'reason', 'permissionType', 'permissionTypeId']
+
+const parsePayload = (
+  payload?: string
+): { date: string; from: string; to: string; reason: string; permissionType: string; permissionTypeId?: number; attachmentUrl: string } => {
   try {
     const p = JSON.parse(payload ?? '{}')
     return {
@@ -66,44 +76,20 @@ const parsePayload = (payload?: string): { date: string; from: string; to: strin
       from: p.from ?? '—',
       to: p.to ?? '—',
       reason: p.reason ?? '—',
+      permissionType: p.permissionType ? String(p.permissionType) : '',
+      permissionTypeId: Number(p.permissionTypeId) || undefined,
+      attachmentUrl: typeof p.attachmentUrl === 'string' ? p.attachmentUrl : '',
     }
   } catch {
-    return { date: '—', from: '—', to: '—', reason: '—' }
+    return { date: '—', from: '—', to: '—', reason: '—', permissionType: '', attachmentUrl: '' }
   }
 }
 
-const getStatusBadge = (status: string) => {
-  switch (status) {
-    case 'UNDER_REVIEW':
-      return (
-        <span className="badge badge-warning flex items-center gap-1">
-          <AlertCircle size={12} />
-          قيد المراجعة
-        </span>
-      )
-    case 'COMPLETED':
-      return (
-        <span className="badge badge-success flex items-center gap-1">
-          <CheckCircle size={12} />
-          مكتمل
-        </span>
-      )
-    case 'REJECTED':
-      return (
-        <span className="badge badge-danger flex items-center gap-1">
-          <XCircle size={12} />
-          مرفوض
-        </span>
-      )
-    default:
-      return (
-        <span className="badge bg-gray-100 text-gray-600 flex items-center gap-1">
-          <Clock size={12} />
-          {statusLabels[status] ?? status}
-        </span>
-      )
-  }
-}
+const getStatusBadge = (status: string) => (
+  <span className={`badge flex items-center gap-1 ${requestStatusStyles[status] ?? 'bg-gray-100 text-gray-600'}`}>
+    <Clock size={12} />{statusLabels[status] ?? status}
+  </span>
+)
 
 export default function PermissionsPage() {
   const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all')
@@ -111,13 +97,16 @@ export default function PermissionsPage() {
   const [selectedDate, setSelectedDate] = useState('')
 
   const [requests, setRequests] = useState<ApiRequest[]>([])
-  const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  const [employees, setEmployees] = useState<Pick<ApiEmployee, 'id' | 'fullName' | 'employeeCode'>[]>([])
+  const [permissionTypes, setPermissionTypes] = useState<Array<{ id: number; nameAr: string; isDeductible: boolean; maxDurationMinutes?: number | null; isActive: boolean }>>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [actingId, setActingId] = useState<number | null>(null)
 
-  const currentUser = getCurrentUser()
-  const canAct = !!currentUser && currentUser.role !== 'employee'
+  // أزرار الاعتماد/الرفض للطلبات اللي في صندوقي بس — يعني عليّ خطوتها الحالية
+  // (ATT-19). بالدور كانت بتظهر لأي حد مش موظف، والـAPI بيرجّع 403 لغير المعتمد
+  const [actionable, setActionable] = useState<Set<number>>(new Set())
+  const canAct = actionable.size > 0
 
   const loadRequests = () => {
     setLoading(true)
@@ -126,11 +115,21 @@ export default function PermissionsPage() {
       .then((rows) => setRequests(rows))
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل طلبات الاستئذان'))
       .finally(() => setLoading(false))
+    fetchInbox()
+      .then((rows) =>
+        setActionable(
+          new Set(rows.filter((r) => r.typeCode === 'PERMISSION').map((r) => r.id))
+        )
+      )
+      .catch(() => setActionable(new Set()))
   }
 
   useEffect(() => {
     loadRequests()
-    fetchEmployees()
+    fetchCatalog<{ id: number; nameAr: string; isDeductible: boolean; maxDurationMinutes?: number | null; isActive: boolean }>('permission-types')
+      .then(rows => setPermissionTypes(rows.filter(row => row.isActive)))
+      .catch(err => setError(err instanceof Error ? err.message : 'تعذر تحميل أنواع الأذونات'))
+    fetchEmployeeDirectory()
       .then((rows) => setEmployees(rows))
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل الموظفين'))
   }, [])
@@ -148,11 +147,23 @@ export default function PermissionsPage() {
     }
   }
 
+  // فتح مرفق الطلب بالتوكن — بنفس صلاحية /files (صاحب الملف أو documents.manage)
+  const openAttachment = async (ref: string) => {
+    const fileId = Number(ref.slice(5))
+    if (!Number.isFinite(fileId) || fileId <= 0) return
+    setError('')
+    const url = await fetchFileObjectUrl(fileId)
+    if (url) window.open(url)
+    else setError('تعذر فتح المرفق — قد لا تملك صلاحية الاطلاع عليه')
+  }
+
   const empById = new Map(employees.map((e) => [e.id, e]))
 
   const rows: PermissionRow[] = requests.map((req) => {
     const emp = empById.get(req.requesterId)
     const payload = parsePayload(req.payload)
+    // مرجع ملف مخزّن يُفتح بزر؛ أي قيمة أخرى للمرفق تبقى نصاً في التفاصيل
+    const attachmentRef = payload.attachmentUrl.startsWith('file:') ? payload.attachmentUrl : ''
     return {
       id: req.id,
       requesterId: req.requesterId,
@@ -164,21 +175,24 @@ export default function PermissionsPage() {
       toTime: payload.to,
       hours: hoursBetween(payload.from, payload.to),
       reason: payload.reason,
+      permissionType: permissionTypes.find(type => type.id === payload.permissionTypeId)?.nameAr ?? payload.permissionType,
+      details: payloadSummary(req.payload, attachmentRef ? [...SHOWN_KEYS, 'attachmentUrl'] : SHOWN_KEYS),
+      attachmentRef,
       status: req.status,
     }
   })
 
   const stats = {
     all: rows.length,
-    pending: rows.filter((p) => p.status === 'UNDER_REVIEW').length,
-    approved: rows.filter((p) => p.status === 'COMPLETED').length,
+    pending: rows.filter((p) => ['SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO'].includes(p.status)).length,
+    approved: rows.filter((p) => ['APPROVED', 'IN_EXECUTION', 'COMPLETED'].includes(p.status)).length,
     rejected: rows.filter((p) => p.status === 'REJECTED').length,
-    totalHours: rows.filter((p) => p.status === 'COMPLETED').reduce((sum, p) => sum + p.hours, 0),
+    totalHours: rows.filter((p) => ['APPROVED', 'IN_EXECUTION', 'COMPLETED'].includes(p.status)).reduce((sum, p) => sum + p.hours, 0),
   }
 
   const filteredRequests = rows.filter((req) => {
-    if (activeTab === 'pending' && req.status !== 'UNDER_REVIEW') return false
-    if (activeTab === 'approved' && req.status !== 'COMPLETED') return false
+    if (activeTab === 'pending' && !['SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO'].includes(req.status)) return false
+    if (activeTab === 'approved' && !['APPROVED', 'IN_EXECUTION', 'COMPLETED'].includes(req.status)) return false
     if (activeTab === 'rejected' && req.status !== 'REJECTED') return false
     if (selectedDate && req.date !== selectedDate) return false
     if (
@@ -322,7 +336,8 @@ export default function PermissionsPage() {
                     <th className="text-center px-4 py-4">من</th>
                     <th className="text-center px-4 py-4">إلى</th>
                     <th className="text-center px-4 py-4">المدة</th>
-                    <th className="text-right px-4 py-4">السبب</th>
+                    <th className="text-center px-4 py-4">نوع الإذن</th>
+                    <th className="text-right px-4 py-4">السبب والتفاصيل</th>
                     <th className="text-center px-4 py-4">الحالة</th>
                     {canAct && <th className="text-center px-4 py-4">الإجراءات</th>}
                   </tr>
@@ -347,29 +362,33 @@ export default function PermissionsPage() {
                       <td className="table-cell text-center">
                         <span className="font-bold text-primary-600">{request.hours} ساعة</span>
                       </td>
-                      <td className="table-cell text-gray-600 max-w-[200px] truncate">{request.reason}</td>
+                      <td className="table-cell text-center">
+                        {request.permissionType ? (
+                          <span className="badge bg-primary-100 text-primary-600">{request.permissionType}</span>
+                        ) : (
+                          <span className="text-sm text-warning-600">غير محدد</span>
+                        )}
+                      </td>
+                      <td className="table-cell text-gray-600 max-w-[260px]">
+                        <p className="truncate" title={request.reason}>{request.reason}</p>
+                        {request.details && (
+                          <p className="text-xs text-gray-400 mt-1 break-words">{request.details}</p>
+                        )}
+                        {request.attachmentRef && (
+                          <button
+                            onClick={() => openAttachment(request.attachmentRef)}
+                            className="mt-1 inline-flex items-center gap-1 text-xs text-primary-600 hover:underline"
+                          >
+                            <Paperclip size={12} />
+                            المرفق
+                          </button>
+                        )}
+                      </td>
                       <td className="table-cell text-center">{getStatusBadge(request.status)}</td>
                       {canAct && (
                         <td className="table-cell">
                           <div className="flex items-center justify-center gap-1">
-                            {request.status === 'UNDER_REVIEW' && (
-                              <>
-                                <button
-                                  onClick={() => handleAct(request.id, 'APPROVE')}
-                                  disabled={actingId === request.id}
-                                  className="p-2 bg-success-50 hover:bg-success-100 rounded-lg transition-colors"
-                                >
-                                  <CheckCircle size={18} className="text-success-600" />
-                                </button>
-                                <button
-                                  onClick={() => handleAct(request.id, 'REJECT')}
-                                  disabled={actingId === request.id}
-                                  className="p-2 bg-danger-50 hover:bg-danger-100 rounded-lg transition-colors"
-                                >
-                                  <XCircle size={18} className="text-danger-600" />
-                                </button>
-                              </>
-                            )}
+                            {actionable.has(request.id) && <Link href={`/approvals-inbox?request=${request.id}`} className="text-primary-600 text-sm underline">مراجعة الطلب</Link>}
                           </div>
                         </td>
                       )}
@@ -379,57 +398,12 @@ export default function PermissionsPage() {
               </table>
             </div>
 
-            {/* Pagination */}
-            <div className="flex items-center justify-between px-4 py-4 border-t border-gray-100">
-              <p className="text-sm text-gray-500">
-                عرض <span className="font-medium text-gray-700">1-{filteredRequests.length}</span> من{' '}
-                <span className="font-medium text-gray-700">{filteredRequests.length}</span> طلب
-              </p>
-              <div className="flex items-center gap-2">
-                <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50" disabled>
-                  <ChevronRight size={18} />
-                </button>
-                <button className="px-4 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium">
-                  1
-                </button>
-                <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50" disabled>
-                  <ChevronLeft size={18} />
-                </button>
-              </div>
-            </div>
+            <p className="text-sm text-gray-500 p-4 border-t">عدد النتائج: {filteredRequests.length}</p>
           </div>
         )}
 
-        {/* Permission Types Info */}
-        <div className="grid grid-cols-4 gap-4">
-          <div className="card border-r-4 border-orange-500">
-            <div className="flex items-center gap-2 mb-2">
-              <LogOut size={20} className="text-orange-500" />
-              <h3 className="font-bold text-gray-800">خروج مبكر</h3>
-            </div>
-            <p className="text-sm text-gray-500">مغادرة العمل قبل نهاية الدوام الرسمي</p>
-          </div>
-          <div className="card border-r-4 border-warning-500">
-            <div className="flex items-center gap-2 mb-2">
-              <LogIn size={20} className="text-warning-500" />
-              <h3 className="font-bold text-gray-800">دخول متأخر</h3>
-            </div>
-            <p className="text-sm text-gray-500">الحضور بعد بداية الدوام الرسمي</p>
-          </div>
-          <div className="card border-r-4 border-primary-500">
-            <div className="flex items-center gap-2 mb-2">
-              <Timer size={20} className="text-primary-500" />
-              <h3 className="font-bold text-gray-800">خروج أثناء الدوام</h3>
-            </div>
-            <p className="text-sm text-gray-500">مغادرة والعودة أثناء ساعات العمل</p>
-          </div>
-          <div className="card border-r-4 border-success-500">
-            <div className="flex items-center gap-2 mb-2">
-              <Briefcase size={20} className="text-success-500" />
-              <h3 className="font-bold text-gray-800">مهمة عمل</h3>
-            </div>
-            <p className="text-sm text-gray-500">التواجد خارج المكتب لمهمة رسمية</p>
-          </div>
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+          {permissionTypes.map(type => <div key={type.id} className="card border-r-4 border-primary-500"><h3 className="font-bold text-gray-800 mb-2">{type.nameAr}</h3><p className="text-sm text-gray-500">{type.isDeductible ? 'بخصم وفق السياسة' : 'بدون خصم ضمن الحدود المحددة'}</p><p className="text-xs text-gray-500 mt-2">{type.maxDurationMinutes != null ? `أقصى مدة: ${type.maxDurationMinutes} دقيقة` : 'لا يوجد حد أقصى للمدة'}</p></div>)}
         </div>
       </div>
     </MainLayout>

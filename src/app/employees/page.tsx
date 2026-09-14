@@ -1,23 +1,24 @@
 'use client'
 
+import { EMPLOYEE_STATUS, employeeStatusLabels, employeeStatusStyles } from '@/lib/status-labels'
+
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
   Plus,
   Download,
-  Upload,
   MoreVertical,
   Eye,
   Edit,
   Mail,
   Phone,
   Building2,
-  ChevronLeft,
-  ChevronRight,
 } from 'lucide-react'
 import Link from 'next/link'
+import { csvDateStamp, downloadCsv } from '@/lib/csv'
 import {
+  can,
   fetchEmployees,
   fetchBranches,
   fetchDepartments,
@@ -42,29 +43,22 @@ interface Employee {
   branch: string
 }
 
-const getStatusBadge = (status: string) => {
-  switch (status) {
-    case 'active':
-      return <span className="badge badge-success">نشط</span>
-    case 'probation':
-      return <span className="badge badge-warning">فترة تجربة</span>
-    case 'suspended':
-      return <span className="badge badge-danger">موقوف</span>
-    case 'notice_period':
-      return <span className="badge badge-warning">فترة إشعار</span>
-    case 'resigned':
-      return <span className="badge bg-gray-100 text-gray-600">مستقيل</span>
-    case 'archived':
-      return <span className="badge bg-gray-100 text-gray-600">مؤرشف</span>
-    default:
-      return <span className="badge bg-gray-100 text-gray-600">{status}</span>
-  }
-}
+const getStatusBadge = (status: string) => (
+  <span className={`badge ${employeeStatusStyles[status] ?? 'bg-gray-100 text-gray-600'}`}>
+    {employeeStatusLabels[status] ?? status}
+  </span>
+)
+
+// خيارات فلتر الحالة بقيم الباك (EmployeeStatus) — وتسمياتها لعمود الحالة في التصدير
+const STATUS_OPTIONS = Object.entries(EMPLOYEE_STATUS).map(([value, meta]) => ({ value, label: meta.label }))
+// خارج القائمة الافتراضية — يظهرون بفلتر حالتهم أو «كل الحالات»
+const FORMER_STATUSES = ['terminated', 'archived']
 
 export default function EmployeesPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedDepartment, setSelectedDepartment] = useState('all')
-  const [selectedStatus, setSelectedStatus] = useState('all')
+  // الافتراضي «الحاليون»: بدون المنتهية خدمتهم والمؤرشفين
+  const [selectedStatus, setSelectedStatus] = useState('current')
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table')
 
   const [employees, setEmployees] = useState<Employee[]>([])
@@ -72,6 +66,12 @@ export default function EmployeesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({})
+
+  // بحث الهيدر يفتح القائمة بـ ?q= — يُقرأ مرة عند فتح الصفحة
+  useEffect(() => {
+    const q = new URLSearchParams(window.location.search).get('q')
+    if (q) setSearchQuery(q)
+  }, [])
 
   const loadData = async () => {
     setLoading(true)
@@ -176,10 +176,47 @@ export default function EmployeesPage() {
     const matchesDepartment =
       selectedDepartment === 'all' || emp.department === selectedDepartment
 
-    const matchesStatus = selectedStatus === 'all' || emp.status === selectedStatus
+    const matchesStatus =
+      selectedStatus === 'all' ||
+      (selectedStatus === 'current'
+        ? !FORMER_STATUSES.includes(emp.status)
+        : emp.status === selectedStatus)
 
     return matchesSearch && matchesDepartment && matchesStatus
   })
+
+  // تصدير الصفوف المعروضة (بعد البحث والفلاتر) إلى CSV
+  const handleExport = () => {
+    if (filteredEmployees.length === 0) return
+    const statusLabel = new Map(STATUS_OPTIONS.map((s) => [s.value, s.label]))
+    downloadCsv(
+      `employees-${csvDateStamp()}.csv`,
+      [
+        'الرقم الوظيفي',
+        'الاسم',
+        'الاسم بالإنجليزية',
+        'البريد الإلكتروني',
+        'الجوال',
+        'القسم',
+        'المسمى الوظيفي',
+        'الفرع',
+        'تاريخ التعيين',
+        'الحالة',
+      ],
+      filteredEmployees.map((e) => [
+        e.employeeId,
+        e.name,
+        e.nameEn,
+        e.email,
+        e.phone,
+        e.department,
+        e.jobTitle,
+        e.branch,
+        e.joinDate,
+        statusLabel.get(e.status) ?? e.status,
+      ])
+    )
+  }
 
   return (
     <MainLayout>
@@ -191,18 +228,22 @@ export default function EmployeesPage() {
             <p className="text-gray-500 mt-1">إدارة بيانات الموظفين في الشركة</p>
           </div>
           <div className="flex items-center gap-3">
-            <button className="btn-secondary flex items-center gap-2">
-              <Upload size={18} />
-              استيراد
-            </button>
-            <button className="btn-secondary flex items-center gap-2">
+            {/* التصدير من الصفوف المعروضة — الاستيراد الجماعي بلا endpoint فأُزيل زرّه */}
+            <button
+              onClick={handleExport}
+              disabled={loading || filteredEmployees.length === 0}
+              className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+            >
               <Download size={18} />
-              تصدير
+              تصدير CSV
             </button>
-            <Link href="/employees/add" className="btn-primary flex items-center gap-2">
-              <Plus size={18} />
-              إضافة موظف
-            </Link>
+            {/* الإضافة/التعديل/الأرشفة بصلاحياتها في الباك — لا زرار ينتهي بـ403 */}
+            {can('employees.create') && (
+              <Link href="/employees/add" className="btn-primary flex items-center gap-2">
+                <Plus size={18} />
+                إضافة موظف
+              </Link>
+            )}
           </div>
         </div>
 
@@ -241,13 +282,15 @@ export default function EmployeesPage() {
             <select
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value)}
-              className="input w-40"
+              className="input w-44"
             >
+              <option value="current">الموظفون الحاليون</option>
               <option value="all">كل الحالات</option>
-              <option value="active">نشط</option>
-              <option value="probation">فترة تجربة</option>
-              <option value="suspended">موقوف</option>
-              <option value="archived">مؤرشف</option>
+              {STATUS_OPTIONS.map((s) => (
+                <option key={s.value} value={s.value}>
+                  {s.label}
+                </option>
+              ))}
             </select>
 
             {/* View Mode Toggle */}
@@ -351,41 +394,29 @@ export default function EmployeesPage() {
                           >
                             <Eye size={18} className="text-gray-500" />
                           </Link>
-                          <Link
-                            href={`/employees/${employee.id}/edit`}
-                            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                          >
-                            <Edit size={18} className="text-gray-500" />
-                          </Link>
-                          <button
-                            onClick={() => handleArchive(employee.id)}
-                            title="أرشفة"
-                            className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                          >
-                            <MoreVertical size={18} className="text-gray-500" />
-                          </button>
+                          {can('employees.edit') && (
+                            <Link
+                              href={`/employees/${employee.id}/edit`}
+                              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                            >
+                              <Edit size={18} className="text-gray-500" />
+                            </Link>
+                          )}
+                          {can('employees.archive') && (
+                            <button
+                              onClick={() => handleArchive(employee.id)}
+                              title="أرشفة"
+                              className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                            >
+                              <MoreVertical size={18} className="text-gray-500" />
+                            </button>
+                          )}
                         </div>
                       </td>
                     </tr>
                   ))}
                 </tbody>
               </table>
-            </div>
-
-            {/* Pagination */}
-            <div className="flex items-center justify-between px-4 py-4 border-t border-gray-100">
-              <p className="text-sm text-gray-500">صفحة 1 من 1</p>
-              <div className="flex items-center gap-2">
-                <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50" disabled>
-                  <ChevronRight size={18} />
-                </button>
-                <button className="px-4 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium">
-                  1
-                </button>
-                <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-50" disabled>
-                  <ChevronLeft size={18} />
-                </button>
-              </div>
             </div>
           </div>
         ) : (
@@ -430,12 +461,14 @@ export default function EmployeesPage() {
                   >
                     عرض
                   </Link>
-                  <Link
-                    href={`/employees/${employee.id}/edit`}
-                    className="flex-1 btn-primary text-center text-sm py-2"
-                  >
-                    تعديل
-                  </Link>
+                  {can('employees.edit') && (
+                    <Link
+                      href={`/employees/${employee.id}/edit`}
+                      className="flex-1 btn-primary text-center text-sm py-2"
+                    >
+                      تعديل
+                    </Link>
+                  )}
                 </div>
               </div>
             ))}

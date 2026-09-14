@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
-import { getCurrentUser } from '@/lib/api'
+import { can } from '@/lib/api'
 import {
   StatsCards,
   AttendanceChart,
@@ -13,51 +13,63 @@ import {
   DepartmentStats,
 } from '@/components/dashboard'
 import EmployeeHome from '@/components/dashboard/EmployeeHome'
+import MyClearanceItems from '@/components/dashboard/MyClearanceItems'
 import { LayoutDashboard, User } from 'lucide-react'
 
-// اللوحة تختلف حسب الدور — تُهيّأ من دور المستخدم الفعلي، والمبدّل يبقى للمعاينة اليدوية
+// اللوحة تُختار بالصلاحية لا باسم الدور: dashboard.view_all → لوحة الإدارة، وغير ذلك → لوحتي.
+// مبدّل «إدارة/موظف» (معاينة لوحة الموظف) يظهر فقط لمن يملك لوحة الإدارة
 export default function DashboardPage() {
-  const [view, setView] = useState<'admin' | 'employee'>('admin')
+  // null حتى تُقرأ الجلسة بعد التركيب (localStorage غير متاح على السيرفر)
+  const [view, setView] = useState<'admin' | 'employee' | null>(null)
+  const [canAdmin, setCanAdmin] = useState(false)
 
-  // تهيئة العرض من الدور الحقيقي بعد التركيب (localStorage غير متاح على السيرفر)
   useEffect(() => {
-    const role = getCurrentUser()?.role
-    if (role === 'employee') setView('employee')
+    const allowed = can('dashboard.view_all')
+    setCanAdmin(allowed)
+    setView(allowed ? 'admin' : 'employee')
   }, [])
+
+  // قبل تحديد اللوحة لا نعرض شيئاً — لا نداءات إدارية لغير المخوّل ولا وميض
+  if (view === null) return <MainLayout>{null}</MainLayout>
 
   return (
     <MainLayout>
       <div className="space-y-6">
-        {/* مبدّل معاينة اللوحات (أدمن / موظف) */}
+        {/* العنوان + مبدّل معاينة اللوحات (لمن يملك لوحة الإدارة فقط) */}
         <div className="flex items-center justify-between">
           <h1 className="text-2xl font-bold text-gray-800">
             {view === 'admin' ? 'لوحة التحكم' : 'لوحتي'}
           </h1>
-          <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
-            <button
-              onClick={() => setView('admin')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                view === 'admin'
-                  ? 'bg-white text-primary-600 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              <LayoutDashboard size={16} />
-              لوحة الإدارة
-            </button>
-            <button
-              onClick={() => setView('employee')}
-              className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
-                view === 'employee'
-                  ? 'bg-white text-primary-600 shadow-sm'
-                  : 'text-gray-500 hover:text-gray-700'
-              }`}
-            >
-              <User size={16} />
-              لوحة الموظف
-            </button>
-          </div>
+          {canAdmin && (
+            <div className="flex items-center gap-1 bg-gray-100 rounded-xl p-1">
+              <button
+                onClick={() => setView('admin')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  view === 'admin'
+                    ? 'bg-white text-primary-600 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <LayoutDashboard size={16} />
+                لوحة الإدارة
+              </button>
+              <button
+                onClick={() => setView('employee')}
+                className={`flex items-center gap-2 px-4 py-2 rounded-lg text-sm font-medium transition-colors ${
+                  view === 'employee'
+                    ? 'bg-white text-primary-600 shadow-sm'
+                    : 'text-gray-500 hover:text-gray-700'
+                }`}
+              >
+                <User size={16} />
+                لوحة الموظف
+              </button>
+            </div>
+          )}
         </div>
+
+        {/* بنود إخلاء طرف معلّقة على جهتي/كمدير مباشر — تختفي عند الخلو */}
+        <MyClearanceItems />
 
         {view === 'employee' ? (
           <EmployeeHome />

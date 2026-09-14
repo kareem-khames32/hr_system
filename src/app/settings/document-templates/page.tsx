@@ -1,757 +1,193 @@
-"use client";
+'use client'
 
-import { useEffect, useState } from "react";
+import Link from 'next/link'
+import { useCallback, useEffect, useRef, useState } from 'react'
+import { CheckCircle2, Copy, Download, Eye, FileSignature, FileText, Loader2, Plus, RefreshCw, Save, Search, Send, ToggleLeft, ToggleRight, Trash2, X } from 'lucide-react'
+import { MainLayout } from '@/components/layout'
+import PdfPreview from '@/components/PdfPreview'
+import { ApiError, can } from '@/lib/api'
 import {
-  FileText,
-  Plus,
-  Search,
-  Edit2,
-  Eye,
-  Download,
-  FileSignature,
-  Variable,
-  CheckCircle,
-  Filter,
-  Code,
-  Award,
-  FileCheck,
-  Mail,
-  AlertTriangle,
-} from "lucide-react";
-import { ApiDocument, fetchDocuments } from "@/lib/api";
+  createHrDocumentTemplate, fetchHrDocumentTemplateCatalog, HR_DOCUMENT_CATEGORY_LABELS,
+  previewHrDocumentTemplate, publishHrDocumentTemplate, updateHrDocumentTemplate,
+  type HrDocumentCatalog, type HrDocumentCategory, type HrDocumentContent,
+  type HrDocumentCustomField, type HrDocumentTemplate, type HrDocumentVariable,
+} from '@/lib/hr-documents'
+import { EMPTY_HR_DOCUMENT, HR_DOCUMENT_FIELDS, HR_DOCUMENT_STARTERS, hrDocumentEditorIssues, hrEditorVariables, hrVariableKey, transformHrDocument } from '@/lib/hr-document-template-editor'
 
-interface TemplateVariable {
-  key: string;
-  label: string;
-  category: string;
-  example: string;
-}
+type Editor = { name: string; category: HrDocumentCategory; draft: HrDocumentContent; customFields: HrDocumentCustomField[] }
+type Operation = 'load' | 'save' | 'publish' | 'preview' | 'active' | null
+type Navigation = { kind: 'template'; id: number } | { kind: 'new' } | { kind: 'reload' } | { kind: 'starter'; index: number }
+const emptyEditor = (): Editor => ({ name: '', category: 'general', draft: { ...EMPTY_HR_DOCUMENT }, customFields: [] })
+const sameFields = (left: HrDocumentCustomField[], right: HrDocumentCustomField[]) => JSON.stringify(left.map(({ key, label, required }) => [key, label, required])) === JSON.stringify(right.map(({ key, label, required }) => [key, label, required]))
 
-interface DocumentTemplate {
-  id: string;
-  name: string;
-  nameEn: string;
-  category: string;
-  description: string;
-  content: string;
-  variables: string[];
-  isDefault: boolean;
-}
+function TemplatesWorkspace() {
+  const [catalog, setCatalog] = useState<HrDocumentCatalog | null>(null)
+  const [selectedId, setSelectedId] = useState<number | null>(null)
+  const [editor, setEditor] = useState<Editor>(emptyEditor)
+  const [search, setSearch] = useState('')
+  const [operation, setOperation] = useState<Operation>('load')
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [conflict, setConflict] = useState(false)
+  const [pendingNavigation, setPendingNavigation] = useState<Navigation | null>(null)
+  const [publishConfirmation, setPublishConfirmation] = useState(false)
+  const [pdfUrl, setPdfUrl] = useState<string | null>(null)
+  const busy = useRef(false)
+  const inputRefs = useRef<Partial<Record<keyof HrDocumentContent, HTMLTextAreaElement>>>({})
+  const cursor = useRef<{ field: keyof HrDocumentContent; start: number; end: number }>({ field: 'body', start: 0, end: 0 })
+  const builtins = catalog?.variables ?? []
+  const variables = hrEditorVariables(builtins, editor.customFields)
+  const selected = catalog?.templates.find(template => template.id === selectedId)
+  const canonicalDraft = transformHrDocument(editor.draft, variables, 'canonical')
+  const isDirty = selected
+    ? editor.name.trim() !== selected.name || editor.category !== selected.category || !sameFields(editor.customFields, selected.customFields) || HR_DOCUMENT_FIELDS.some(({ key }) => canonicalDraft[key] !== selected.draft[key])
+    : !!editor.name || editor.category !== 'general' || !!editor.customFields.length || Object.values(editor.draft).some(Boolean)
+  const issues = hrDocumentEditorIssues(editor.draft, builtins, editor.customFields)
+  const valid = !!editor.name.trim() && editor.name.trim().length <= 150 && issues.length === 0
+  const sample = transformHrDocument(editor.draft, variables, 'sample')
+  const visibleTemplates = catalog?.templates.filter(template => template.name.includes(search) || template.draft.title.includes(search)) ?? []
+  const published = selected?.publishedRevision
+  const unpublishedChanges = !published || selected?.name !== published.name || selected.category !== published.category || !sameFields(selected.customFields, published.customFields) || HR_DOCUMENT_FIELDS.some(({ key }) => selected.draft[key] !== published.content[key])
 
-const templateCategories = [
-  { id: "contracts", name: "العقود", icon: FileSignature },
-  { id: "letters", name: "الخطابات", icon: Mail },
-  { id: "certificates", name: "الشهادات", icon: Award },
-  { id: "forms", name: "النماذج", icon: FileCheck },
-  { id: "notices", name: "الإشعارات", icon: AlertTriangle },
-];
-
-const availableVariables: TemplateVariable[] = [
-  // Employee Info
-  { key: "{{employee_name}}", label: "اسم الموظف", category: "employee", example: "أحمد محمد علي" },
-  { key: "{{employee_name_en}}", label: "اسم الموظف (إنجليزي)", category: "employee", example: "Ahmed Mohamed Ali" },
-  { key: "{{employee_id}}", label: "الرقم الوظيفي", category: "employee", example: "EMP-001" },
-  { key: "{{national_id}}", label: "رقم الهوية", category: "employee", example: "1234567890" },
-  { key: "{{passport_number}}", label: "رقم الجواز", category: "employee", example: "A12345678" },
-  { key: "{{nationality}}", label: "الجنسية", category: "employee", example: "سعودي" },
-  { key: "{{birth_date}}", label: "تاريخ الميلاد", category: "employee", example: "1990/01/15" },
-  { key: "{{phone}}", label: "رقم الجوال", category: "employee", example: "0501234567" },
-  { key: "{{email}}", label: "البريد الإلكتروني", category: "employee", example: "ahmed@company.com" },
-  { key: "{{address}}", label: "العنوان", category: "employee", example: "الرياض، حي العليا" },
-
-  // Job Info
-  { key: "{{job_title}}", label: "المسمى الوظيفي", category: "job", example: "مهندس برمجيات" },
-  { key: "{{department}}", label: "القسم", category: "job", example: "تقنية المعلومات" },
-  { key: "{{branch}}", label: "الفرع", category: "job", example: "الفرع الرئيسي - الرياض" },
-  { key: "{{manager_name}}", label: "اسم المدير المباشر", category: "job", example: "خالد أحمد" },
-  { key: "{{hire_date}}", label: "تاريخ التعيين", category: "job", example: "2024/01/01" },
-  { key: "{{contract_start}}", label: "تاريخ بداية العقد", category: "job", example: "2024/01/01" },
-  { key: "{{contract_end}}", label: "تاريخ نهاية العقد", category: "job", example: "2026/01/01" },
-  { key: "{{contract_duration}}", label: "مدة العقد", category: "job", example: "سنتين" },
-  { key: "{{probation_period}}", label: "فترة التجربة", category: "job", example: "90 يوم" },
-  { key: "{{work_hours}}", label: "ساعات العمل", category: "job", example: "8 ساعات يومياً" },
-
-  // Salary Info
-  { key: "{{basic_salary}}", label: "الراتب الأساسي", category: "salary", example: "10,000 ريال" },
-  { key: "{{housing_allowance}}", label: "بدل السكن", category: "salary", example: "2,500 ريال" },
-  { key: "{{transport_allowance}}", label: "بدل النقل", category: "salary", example: "1,000 ريال" },
-  { key: "{{total_salary}}", label: "إجمالي الراتب", category: "salary", example: "13,500 ريال" },
-  { key: "{{salary_words}}", label: "الراتب كتابةً", category: "salary", example: "ثلاثة عشر ألف وخمسمائة ريال" },
-
-  // Leave Info
-  { key: "{{annual_leave_days}}", label: "أيام الإجازة السنوية", category: "leave", example: "30 يوم" },
-  { key: "{{leave_balance}}", label: "رصيد الإجازات", category: "leave", example: "15 يوم" },
-
-  // Company Info
-  { key: "{{company_name}}", label: "اسم الشركة", category: "company", example: "شركة التقنية المتقدمة" },
-  { key: "{{company_name_en}}", label: "اسم الشركة (إنجليزي)", category: "company", example: "Advanced Tech Company" },
-  { key: "{{company_address}}", label: "عنوان الشركة", category: "company", example: "الرياض، حي العليا، شارع الملك فهد" },
-  { key: "{{company_phone}}", label: "هاتف الشركة", category: "company", example: "+966 11 123 4567" },
-  { key: "{{commercial_register}}", label: "السجل التجاري", category: "company", example: "1010123456" },
-
-  // Dates
-  { key: "{{today_date}}", label: "تاريخ اليوم", category: "date", example: "2024/02/09" },
-  { key: "{{today_date_hijri}}", label: "تاريخ اليوم (هجري)", category: "date", example: "1445/07/29" },
-
-  // Termination
-  { key: "{{termination_date}}", label: "تاريخ انتهاء الخدمة", category: "termination", example: "2024/03/01" },
-  { key: "{{termination_reason}}", label: "سبب انتهاء الخدمة", category: "termination", example: "استقالة" },
-  { key: "{{service_years}}", label: "سنوات الخدمة", category: "termination", example: "5 سنوات" },
-  { key: "{{end_of_service}}", label: "مكافأة نهاية الخدمة", category: "termination", example: "50,000 ريال" },
-  { key: "{{notice_period}}", label: "فترة الإشعار", category: "termination", example: "30 يوم" },
-];
-
-const variableCategories = [
-  { id: "employee", name: "بيانات الموظف" },
-  { id: "job", name: "بيانات الوظيفة" },
-  { id: "salary", name: "بيانات الراتب" },
-  { id: "leave", name: "بيانات الإجازات" },
-  { id: "company", name: "بيانات الشركة" },
-  { id: "date", name: "التواريخ" },
-  { id: "termination", name: "إنهاء الخدمة" },
-];
-
-const sampleContractTemplate = `بسم الله الرحمن الرحيم
-
-عقد عمل
-
-تم بعون الله وتوفيقه في يوم {{today_date}} الموافق {{today_date_hijri}} إبرام هذا العقد بين كل من:
-
-الطرف الأول (صاحب العمل):
-{{company_name}}
-السجل التجاري: {{commercial_register}}
-العنوان: {{company_address}}
-
-الطرف الثاني (الموظف):
-الاسم: {{employee_name}}
-رقم الهوية: {{national_id}}
-الجنسية: {{nationality}}
-العنوان: {{address}}
-
-تمهيد:
-حيث أن الطرف الأول شركة تعمل في مجال التقنية، وحيث أن الطرف الثاني يرغب في العمل لدى الطرف الأول، فقد اتفق الطرفان على الشروط التالية:
-
-المادة الأولى: مدة العقد
-مدة هذا العقد {{contract_duration}} تبدأ من {{contract_start}} وتنتهي في {{contract_end}}.
-
-المادة الثانية: فترة التجربة
-يخضع الموظف لفترة تجربة مدتها {{probation_period}}.
-
-المادة الثالثة: طبيعة العمل
-يعمل الطرف الثاني لدى الطرف الأول بمسمى {{job_title}} في قسم {{department}}.
-
-المادة الرابعة: الأجر
-يتقاضى الطرف الثاني راتباً شهرياً إجمالياً قدره {{total_salary}} ({{salary_words}}) موزعاً كالتالي:
-- الراتب الأساسي: {{basic_salary}}
-- بدل السكن: {{housing_allowance}}
-- بدل النقل: {{transport_allowance}}
-
-المادة الخامسة: ساعات العمل
-ساعات العمل {{work_hours}} حسب نظام العمل السعودي.
-
-المادة السادسة: الإجازات
-يستحق الموظف إجازة سنوية مدتها {{annual_leave_days}}.
-
-المادة السابعة: أحكام عامة
-يخضع هذا العقد لأحكام نظام العمل السعودي.
-
-الطرف الأول                                         الطرف الثاني
-{{company_name}}                                    {{employee_name}}
-
-التوقيع: _______________                           التوقيع: _______________`;
-
-// قوالب افتراضية مضمّنة في الواجهة — توليد المستندات منها يُفعَّل في مرحلة لاحقة
-const builtInTemplates: DocumentTemplate[] = [
-  {
-    id: "1",
-    name: "عقد العمل الأساسي",
-    nameEn: "Basic Employment Contract",
-    category: "contracts",
-    description: "عقد العمل القياسي للموظفين الجدد",
-    content: sampleContractTemplate,
-    variables: ["employee_name", "national_id", "job_title", "basic_salary", "total_salary", "contract_start", "contract_end"],
-    isDefault: true,
-  },
-  {
-    id: "2",
-    name: "خطاب تعريف بالراتب",
-    nameEn: "Salary Certificate",
-    category: "letters",
-    description: "خطاب رسمي يوضح راتب الموظف",
-    content: `التاريخ: {{today_date}}
-
-إلى من يهمه الأمر،
-
-تشهد {{company_name}} بأن السيد/ة {{employee_name}} يعمل لديها بمسمى {{job_title}} في قسم {{department}} منذ تاريخ {{hire_date}}، ويتقاضى راتباً شهرياً إجمالياً قدره {{total_salary}}.
-
-أُعطي هذا الخطاب بناءً على طلبه دون أي مسؤولية على الشركة.
-
-والله الموفق،
-
-{{company_name}}
-إدارة الموارد البشرية`,
-    variables: ["employee_name", "job_title", "department", "hire_date", "total_salary"],
-    isDefault: true,
-  },
-  {
-    id: "3",
-    name: "شهادة خبرة",
-    nameEn: "Experience Certificate",
-    category: "certificates",
-    description: "شهادة خبرة للموظف المنتهية خدمته",
-    content: `التاريخ: {{today_date}}
-
-شهادة خبرة
-
-تشهد {{company_name}} بأن السيد/ة {{employee_name}} حامل الهوية رقم {{national_id}} قد عمل لديها بمسمى {{job_title}} في قسم {{department}} خلال الفترة من {{hire_date}} إلى {{termination_date}}.
-
-وقد أنهى خدماته لدينا بسبب {{termination_reason}}، وخلال فترة عمله معنا أظهر كفاءة عالية والتزاماً في العمل.
-
-نتمنى له التوفيق في مسيرته المهنية.
-
-{{company_name}}
-إدارة الموارد البشرية`,
-    variables: ["employee_name", "national_id", "job_title", "hire_date", "termination_date", "termination_reason"],
-    isDefault: true,
-  },
-  {
-    id: "4",
-    name: "خطاب إنهاء خدمات",
-    nameEn: "Termination Letter",
-    category: "notices",
-    description: "خطاب رسمي لإنهاء خدمات الموظف",
-    content: `التاريخ: {{today_date}}
-
-السيد/ة {{employee_name}} المحترم/ة
-
-السلام عليكم ورحمة الله وبركاته،
-
-نود إعلامكم بأنه قد تقرر إنهاء خدماتكم لدى {{company_name}} اعتباراً من تاريخ {{termination_date}} وذلك بسبب {{termination_reason}}.
-
-علماً بأن فترة الإشعار هي {{notice_period}} وفقاً لنظام العمل.
-
-سيتم صرف مستحقاتكم المالية شاملة مكافأة نهاية الخدمة والبالغة {{end_of_service}} خلال الفترة النظامية.
-
-نشكركم على خدماتكم خلال فترة عملكم معنا ونتمنى لكم التوفيق.
-
-مع خالص التحية،
-
-{{company_name}}
-إدارة الموارد البشرية`,
-    variables: ["employee_name", "termination_date", "termination_reason", "notice_period", "end_of_service"],
-    isDefault: true,
-  },
-];
-
-export default function DocumentTemplatesPage() {
-  const [documents, setDocuments] = useState<ApiDocument[]>([]);
-  const [loadingDocs, setLoadingDocs] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-  const [searchTerm, setSearchTerm] = useState("");
-  const [filterCategory, setFilterCategory] = useState("all");
-  const [showModal, setShowModal] = useState(false);
-  const [showPreviewModal, setShowPreviewModal] = useState(false);
-  const [showVariablesPanel, setShowVariablesPanel] = useState(false);
-  const [editingTemplate, setEditingTemplate] = useState<DocumentTemplate | null>(null);
-  const [previewTemplate, setPreviewTemplate] = useState<DocumentTemplate | null>(null);
-  const [activeVariableCategory, setActiveVariableCategory] = useState("employee");
-
-  const [formData, setFormData] = useState({
-    name: "",
-    nameEn: "",
-    category: "contracts",
-    description: "",
-    content: "",
-  });
-
+  const adopt = (template: HrDocumentTemplate, vars: HrDocumentVariable[]) => {
+    setSelectedId(template.id)
+    setEditor({ name: template.name, category: template.category, draft: transformHrDocument(template.draft, hrEditorVariables(vars, template.customFields), 'readable'), customFields: template.customFields.map(field => ({ ...field })) })
+    setConflict(false)
+    cursor.current = { field: 'body', start: 0, end: 0 }
+  }
+  const load = useCallback(async (preferredId?: number | null) => {
+    const result = await fetchHrDocumentTemplateCatalog()
+    setCatalog(result)
+    const template = result.templates.find(item => item.id === preferredId) ?? result.templates[0]
+    if (template) adopt(template, result.variables)
+    else { setSelectedId(null); setEditor(emptyEditor()) }
+  }, [])
   useEffect(() => {
-    const loadData = async () => {
-      try {
-        const docs = await fetchDocuments();
-        setDocuments(docs);
-        setError(null);
-      } catch (err: any) {
-        setError(err.message);
-      } finally {
-        setLoadingDocs(false);
+    let active = true
+    load().catch(err => { if (active) setError(err instanceof Error ? err.message : 'تعذر تحميل القوالب') }).finally(() => { if (active) setOperation(null) })
+    return () => { active = false }
+  }, [load])
+  useEffect(() => {
+    if (!isDirty) return
+    const handler = (event: BeforeUnloadEvent) => { event.preventDefault(); event.returnValue = '' }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [isDirty])
+  useEffect(() => () => { if (pdfUrl) URL.revokeObjectURL(pdfUrl) }, [pdfUrl])
+
+  const perform = async (kind: Exclude<Operation, null>, action: () => Promise<void>) => {
+    if (busy.current) return
+    busy.current = true; setOperation(kind); setError(''); setNotice('')
+    try { await action() }
+    catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر إتمام العملية')
+      if (err instanceof ApiError && err.status === 409) setConflict(true)
+    } finally { busy.current = false; setOperation(null) }
+  }
+  const accept = (template: HrDocumentTemplate) => {
+    setCatalog(previous => previous ? { ...previous, templates: previous.templates.some(item => item.id === template.id) ? previous.templates.map(item => item.id === template.id ? template : item) : [...previous.templates, template] } : previous)
+    adopt(template, builtins)
+  }
+  const save = () => perform('save', async () => {
+    if (!valid || conflict) return
+    const input = { name: editor.name.trim(), category: editor.category, draft: canonicalDraft, customFields: editor.customFields.map(field => ({ ...field, label: field.label.trim() })) }
+    accept(selected ? await updateHrDocumentTemplate(selected.id, { ...input, version: selected.version }) : await createHrDocumentTemplate(input))
+    setNotice('حُفظت المسودة. انشر النسخة عندما تصبح جاهزة لإصدار المستندات.')
+  })
+  const publish = () => perform('publish', async () => {
+    setPublishConfirmation(false)
+    if (!selected || isDirty || conflict) return
+    const result = await publishHrDocumentTemplate(selected.id, selected.version)
+    accept(result); setNotice(`نُشرت النسخة ${result.publishedRevision?.revision ?? ''} وأصبحت متاحة في صفحة إصدار المستندات.`)
+  })
+  const toggleActive = () => perform('active', async () => {
+    if (!selected || isDirty || conflict) return
+    const result = await updateHrDocumentTemplate(selected.id, { version: selected.version, isActive: !selected.isActive })
+    accept(result); setNotice(result.isActive ? 'فُعّل القالب.' : 'أُوقف القالب للإصدارات الجديدة. المستندات الصادرة سابقًا تبقى محفوظة.')
+  })
+  const applyNavigation = (navigation: Navigation) => {
+    setPendingNavigation(null); setError(''); setNotice(''); setConflict(false)
+    if (navigation.kind === 'new') { setSelectedId(null); setEditor(emptyEditor()) }
+    else if (navigation.kind === 'starter') {
+      const starter = HR_DOCUMENT_STARTERS[navigation.index]
+      if (!starter) return
+      setSelectedId(null)
+      setEditor({ ...starter, customFields: starter.customFields.map(field => ({ ...field })), draft: transformHrDocument(starter.draft, hrEditorVariables(builtins, starter.customFields), 'readable') })
+      setNotice('حُمّلت بداية قابلة للتعديل. راجع النص والحقول ثم احفظ القالب وانشره؛ لم يُحفظ شيء على الخادم بعد.')
+    }
+    else if (navigation.kind === 'reload') void perform('load', () => load(selectedId))
+    else { const template = catalog?.templates.find(item => item.id === navigation.id); if (template) adopt(template, builtins) }
+  }
+  const navigate = (navigation: Navigation) => { if (operation) return; if (isDirty) setPendingNavigation(navigation); else applyNavigation(navigation) }
+  const duplicate = () => {
+    if (operation || !selected) return
+    setSelectedId(null); setEditor(previous => ({ ...previous, name: `${previous.name} — نسخة` })); setConflict(false); setError('')
+    setNotice('هذه نسخة جديدة غير محفوظة. عدّلها ثم احفظ المسودة وانشرها.')
+  }
+  const insertVariable = (variable: HrDocumentVariable) => {
+    const { field, start, end } = cursor.current; const text = editor.draft[field]; const token = `{{${variable.label}}}`
+    const position = Math.min(start, text.length); const after = position + token.length
+    setEditor(previous => ({ ...previous, draft: { ...previous.draft, [field]: text.slice(0, position) + token + text.slice(Math.max(position, end)) } }))
+    cursor.current = { field, start: after, end: after }
+    requestAnimationFrame(() => { inputRefs.current[field]?.focus(); inputRefs.current[field]?.setSelectionRange(after, after) })
+  }
+  const changeCustomField = (index: number, change: Partial<HrDocumentCustomField>) => {
+    setEditor(previous => {
+      const old = previous.customFields[index]
+      const fields = previous.customFields.map((field, i) => i === index ? { ...field, ...change } : field)
+      let draft = transformHrDocument(previous.draft, hrEditorVariables(builtins, previous.customFields), 'canonical')
+      if (change.key && change.key !== old.key) {
+        const rename = (text: string) => text.split(`{{${old.key}}}`).join(`{{${change.key}}}`)
+        draft = { title: rename(draft.title), greeting: rename(draft.greeting), body: rename(draft.body), closing: rename(draft.closing), footer: rename(draft.footer) }
       }
-    };
-    loadData();
-  }, []);
+      return { ...previous, customFields: fields, draft: transformHrDocument(draft, hrEditorVariables(builtins, fields), 'readable') }
+    })
+  }
+  const removeCustomField = (index: number) => setEditor(previous => {
+    const draft = transformHrDocument(previous.draft, hrEditorVariables(builtins, previous.customFields), 'canonical')
+    const fields = previous.customFields.filter((_, i) => i !== index)
+    return { ...previous, customFields: fields, draft: transformHrDocument(draft, hrEditorVariables(builtins, fields), 'readable') }
+  })
+  const groups = [
+    { name: 'الشركة', prefix: 'company.' }, { name: 'الموظف', prefix: 'employee.' },
+    { name: 'العقد', prefix: 'contract.' }, { name: 'الراتب المسجل', prefix: 'salary.' },
+    { name: 'حقول إضافية', prefix: 'custom.' }, { name: 'بيانات المستند', prefix: '' },
+  ].map(group => ({ ...group, items: variables.filter(variable => group.prefix ? hrVariableKey(variable.key).startsWith(group.prefix) : !['company.', 'employee.', 'contract.', 'salary.', 'custom.'].some(prefix => hrVariableKey(variable.key).startsWith(prefix))) }))
 
-  const templates = builtInTemplates;
-
-  const filteredTemplates = templates.filter((template) => {
-    const matchesSearch =
-      template.name.toLowerCase().includes(searchTerm.toLowerCase()) ||
-      template.nameEn.toLowerCase().includes(searchTerm.toLowerCase());
-    const matchesCategory = filterCategory === "all" || template.category === filterCategory;
-    return matchesSearch && matchesCategory;
-  });
-
-  // أنواع المستندات المستخدَمة فعلياً في النظام
-  const docTypesInUse = [...new Set(documents.map((d) => d.docType))].map((docType) => ({
-    docType,
-    count: documents.filter((d) => d.docType === docType).length,
-  }));
-
-  const resetForm = () => {
-    setShowModal(false);
-    setEditingTemplate(null);
-    setShowVariablesPanel(false);
-    setFormData({
-      name: "",
-      nameEn: "",
-      category: "contracts",
-      description: "",
-      content: "",
-    });
-  };
-
-  const handleEdit = (template: DocumentTemplate) => {
-    setEditingTemplate(template);
-    setFormData({
-      name: template.name,
-      nameEn: template.nameEn,
-      category: template.category,
-      description: template.description,
-      content: template.content,
-    });
-    setShowModal(true);
-  };
-
-  const handlePreview = (template: DocumentTemplate) => {
-    setPreviewTemplate(template);
-    setShowPreviewModal(true);
-  };
-
-  const insertVariable = (variable: string) => {
-    setFormData({
-      ...formData,
-      content: formData.content + variable,
-    });
-  };
-
-  const getPreviewContent = (content: string) => {
-    let previewContent = content;
-    availableVariables.forEach((v) => {
-      previewContent = previewContent.replace(new RegExp(v.key.replace(/[{}]/g, "\\$&"), "g"), v.example);
-    });
-    return previewContent;
-  };
-
-  const getCategoryIcon = (categoryId: string) => {
-    const category = templateCategories.find((c) => c.id === categoryId);
-    return category?.icon || FileText;
-  };
-
-  const getCategoryName = (categoryId: string) => {
-    return templateCategories.find((c) => c.id === categoryId)?.name || categoryId;
-  };
-
-  const stats = {
-    total: templates.length,
-    contracts: templates.filter((t) => t.category === "contracts").length,
-    docTypes: docTypesInUse.length,
-    documents: documents.length,
-  };
-
-  return (
-    <div className="space-y-6">
-      {/* Header */}
-      <div className="flex items-center justify-between">
-        <div>
-          <h1 className="text-2xl font-bold text-gray-900">قوالب المستندات</h1>
-          <p className="text-gray-600 mt-1">قوالب العقود والخطابات والشهادات — توليد المستندات يُفعَّل في مرحلة لاحقة</p>
-        </div>
-        <button
-          onClick={() => setShowModal(true)}
-          className="btn-primary flex items-center gap-2"
-        >
-          <Plus size={18} />
-          إضافة قالب جديد
-        </button>
-      </div>
-
-      {/* Error Banner */}
-      {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
-
-      {/* Stats */}
-      <div className="grid grid-cols-4 gap-4">
-        <div className="card p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-blue-100 rounded-lg flex items-center justify-center">
-              <FileText className="text-blue-600" size={20} />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-gray-900">{stats.total}</p>
-              <p className="text-sm text-gray-600">قوالب افتراضية</p>
-            </div>
-          </div>
-        </div>
-        <div className="card p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-purple-100 rounded-lg flex items-center justify-center">
-              <FileSignature className="text-purple-600" size={20} />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-gray-900">{stats.contracts}</p>
-              <p className="text-sm text-gray-600">قوالب عقود</p>
-            </div>
-          </div>
-        </div>
-        <div className="card p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-green-100 rounded-lg flex items-center justify-center">
-              <CheckCircle className="text-green-600" size={20} />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-gray-900">{stats.docTypes}</p>
-              <p className="text-sm text-gray-600">أنواع مستندات مستخدَمة</p>
-            </div>
-          </div>
-        </div>
-        <div className="card p-4">
-          <div className="flex items-center gap-3">
-            <div className="w-10 h-10 bg-orange-100 rounded-lg flex items-center justify-center">
-              <Download className="text-orange-600" size={20} />
-            </div>
-            <div>
-              <p className="text-2xl font-bold text-gray-900">{stats.documents}</p>
-              <p className="text-sm text-gray-600">مستندات مسجلة</p>
-            </div>
-          </div>
-        </div>
-      </div>
-
-      {/* أنواع المستندات المستخدَمة فعلياً */}
-      <div className="card p-4">
-        <div className="flex items-center justify-between mb-3">
-          <h2 className="font-bold text-gray-900">أنواع المستندات المستخدَمة فعلياً</h2>
-          {loadingDocs && (
-            <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
-          )}
-        </div>
-        <div className="flex flex-wrap gap-2">
-          {docTypesInUse.map((t) => (
-            <span key={t.docType} className="badge badge-secondary">
-              {t.docType} — {t.count} مستند
-            </span>
-          ))}
-          {!loadingDocs && docTypesInUse.length === 0 && (
-            <p className="text-sm text-gray-500">لا توجد مستندات مسجلة بعد</p>
-          )}
-        </div>
-      </div>
-
-      {/* Filters */}
-      <div className="card p-4">
-        <div className="flex items-center gap-4">
-          <div className="flex-1 relative">
-            <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
-            <input
-              type="text"
-              placeholder="بحث في القوالب..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="input pr-10 w-full"
-            />
-          </div>
-          <div className="flex items-center gap-2">
-            <Filter size={18} className="text-gray-400" />
-            <select
-              value={filterCategory}
-              onChange={(e) => setFilterCategory(e.target.value)}
-              className="input"
-            >
-              <option value="all">جميع الفئات</option>
-              {templateCategories.map((cat) => (
-                <option key={cat.id} value={cat.id}>
-                  {cat.name}
-                </option>
-              ))}
-            </select>
-          </div>
-        </div>
-      </div>
-
-      {/* Templates Grid */}
-      <div className="grid grid-cols-2 gap-4">
-        {filteredTemplates.map((template) => {
-          const CategoryIcon = getCategoryIcon(template.category);
-          return (
-            <div
-              key={template.id}
-              className="card p-5 hover:shadow-lg transition-shadow"
-            >
-              <div className="flex items-start justify-between mb-4">
-                <div className="flex items-center gap-3">
-                  <div className="w-12 h-12 bg-primary-100 rounded-xl flex items-center justify-center">
-                    <CategoryIcon className="text-primary-600" size={24} />
-                  </div>
-                  <div>
-                    <h3 className="font-bold text-gray-900">{template.name}</h3>
-                    <p className="text-sm text-gray-500">{template.nameEn}</p>
-                  </div>
-                </div>
-                <div className="flex items-center gap-1">
-                  {template.isDefault && (
-                    <span className="badge badge-primary text-xs">افتراضي</span>
-                  )}
-                </div>
-              </div>
-
-              <p className="text-sm text-gray-600 mb-4">{template.description}</p>
-
-              <div className="flex items-center gap-2 mb-4 flex-wrap">
-                <span className="badge badge-secondary">{getCategoryName(template.category)}</span>
-                <span className="text-xs text-gray-500">
-                  {template.variables.length} متغير
-                </span>
-              </div>
-
-              <div className="flex items-center justify-between pt-4 border-t">
-                <button
-                  onClick={() => handleEdit(template)}
-                  className="btn-secondary text-sm py-1.5 px-3"
-                >
-                  <Edit2 size={14} className="inline ml-1" />
-                  تعديل
-                </button>
-                <button
-                  onClick={() => handlePreview(template)}
-                  className="btn-secondary text-sm py-1.5 px-3"
-                >
-                  <Eye size={14} className="inline ml-1" />
-                  معاينة
-                </button>
-              </div>
-            </div>
-          );
-        })}
-      </div>
-
-      {filteredTemplates.length === 0 && (
-        <div className="card text-center py-12">
-          <FileText className="mx-auto text-gray-300 mb-4" size={48} />
-          <p className="text-gray-500">لا توجد قوالب</p>
-        </div>
-      )}
-
-      {/* Add/Edit Modal (عرض فقط — الحفظ يُفعَّل لاحقاً) */}
-      {showModal && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl w-full max-w-5xl max-h-[90vh] overflow-hidden flex">
-            {/* Main Form */}
-            <div className="flex-1 flex flex-col">
-              <div className="p-6 border-b">
-                <h2 className="text-xl font-bold">
-                  {editingTemplate ? "تعديل القالب" : "إضافة قالب جديد"}
-                </h2>
-              </div>
-
-              <div className="flex-1 overflow-y-auto p-6 space-y-4">
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      اسم القالب (عربي) <span className="text-red-500">*</span>
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.name}
-                      onChange={(e) => setFormData({ ...formData, name: e.target.value })}
-                      className="input w-full"
-                      placeholder="مثال: عقد العمل"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">
-                      اسم القالب (إنجليزي)
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.nameEn}
-                      onChange={(e) => setFormData({ ...formData, nameEn: e.target.value })}
-                      className="input w-full"
-                      placeholder="Example: Employment Contract"
-                    />
-                  </div>
-                </div>
-
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">الفئة</label>
-                    <select
-                      value={formData.category}
-                      onChange={(e) => setFormData({ ...formData, category: e.target.value })}
-                      className="input w-full"
-                    >
-                      {templateCategories.map((cat) => (
-                        <option key={cat.id} value={cat.id}>
-                          {cat.name}
-                        </option>
-                      ))}
-                    </select>
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-1">الوصف</label>
-                    <input
-                      type="text"
-                      value={formData.description}
-                      onChange={(e) => setFormData({ ...formData, description: e.target.value })}
-                      className="input w-full"
-                      placeholder="وصف مختصر للقالب..."
-                    />
-                  </div>
-                </div>
-
-                <div>
-                  <div className="flex items-center justify-between mb-2">
-                    <label className="block text-sm font-medium text-gray-700">
-                      محتوى القالب <span className="text-red-500">*</span>
-                    </label>
-                    <button
-                      type="button"
-                      onClick={() => setShowVariablesPanel(!showVariablesPanel)}
-                      className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
-                    >
-                      <Variable size={16} />
-                      {showVariablesPanel ? "إخفاء المتغيرات" : "إظهار المتغيرات"}
-                    </button>
-                  </div>
-                  <textarea
-                    value={formData.content}
-                    onChange={(e) => setFormData({ ...formData, content: e.target.value })}
-                    className="input w-full font-mono text-sm"
-                    rows={15}
-                    placeholder="اكتب محتوى القالب هنا... استخدم المتغيرات مثل {{employee_name}} لإدراج بيانات الموظف"
-                    dir="rtl"
-                  />
-                  <p className="text-xs text-gray-500 mt-1">
-                    استخدم المتغيرات بين أقواس مزدوجة مثل {"{{employee_name}}"} وسيتم استبدالها ببيانات الموظف عند إنشاء المستند
-                  </p>
-                </div>
-              </div>
-
-              <div className="p-6 border-t bg-gray-50 flex justify-end gap-3">
-                <button onClick={resetForm} className="btn-secondary">
-                  إلغاء
-                </button>
-                <button
-                  className="btn-primary opacity-50 cursor-not-allowed"
-                  disabled
-                  title="التعديل الكامل في مرحلة لاحقة"
-                >
-                  {editingTemplate ? "حفظ التعديلات" : "إضافة القالب"}
-                </button>
-              </div>
-            </div>
-
-            {/* Variables Panel */}
-            {showVariablesPanel && (
-              <div className="w-80 border-r bg-gray-50 flex flex-col">
-                <div className="p-4 border-b bg-white">
-                  <h3 className="font-bold text-gray-900 flex items-center gap-2">
-                    <Code size={18} />
-                    المتغيرات المتاحة
-                  </h3>
-                  <p className="text-xs text-gray-500 mt-1">اضغط على المتغير لإضافته</p>
-                </div>
-
-                <div className="p-2 border-b bg-white">
-                  <div className="flex flex-wrap gap-1">
-                    {variableCategories.map((cat) => (
-                      <button
-                        key={cat.id}
-                        onClick={() => setActiveVariableCategory(cat.id)}
-                        className={`px-2 py-1 rounded text-xs font-medium transition-colors ${
-                          activeVariableCategory === cat.id
-                            ? "bg-primary-500 text-white"
-                            : "bg-gray-100 text-gray-600 hover:bg-gray-200"
-                        }`}
-                      >
-                        {cat.name}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-
-                <div className="flex-1 overflow-y-auto p-2">
-                  <div className="space-y-1">
-                    {availableVariables
-                      .filter((v) => v.category === activeVariableCategory)
-                      .map((variable) => (
-                        <button
-                          key={variable.key}
-                          onClick={() => insertVariable(variable.key)}
-                          className="w-full p-2 text-right rounded-lg hover:bg-white hover:shadow-sm transition-all border border-transparent hover:border-gray-200"
-                        >
-                          <p className="text-sm font-medium text-gray-900">{variable.label}</p>
-                          <p className="text-xs text-primary-600 font-mono">{variable.key}</p>
-                          <p className="text-xs text-gray-400 mt-0.5">مثال: {variable.example}</p>
-                        </button>
-                      ))}
-                  </div>
-                </div>
-              </div>
-            )}
-          </div>
-        </div>
-      )}
-
-      {/* Preview Modal */}
-      {showPreviewModal && previewTemplate && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-          <div className="bg-white rounded-xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col">
-            <div className="p-6 border-b flex items-center justify-between">
-              <div>
-                <h2 className="text-xl font-bold">{previewTemplate.name}</h2>
-                <p className="text-sm text-gray-500">معاينة القالب مع بيانات افتراضية</p>
-              </div>
-              <button
-                onClick={() => setShowPreviewModal(false)}
-                className="p-2 hover:bg-gray-100 rounded-lg"
-              >
-                ✕
-              </button>
-            </div>
-
-            <div className="flex-1 overflow-y-auto p-8 bg-gray-100">
-              <div className="bg-white rounded-lg shadow-lg p-8 max-w-2xl mx-auto">
-                <pre className="whitespace-pre-wrap font-sans text-gray-800 text-sm leading-relaxed" dir="rtl">
-                  {getPreviewContent(previewTemplate.content)}
-                </pre>
-              </div>
-            </div>
-
-            <div className="p-4 border-t bg-gray-50 flex justify-between items-center">
-              <div className="text-sm text-gray-500">
-                المتغيرات المستخدمة: {previewTemplate.variables.length}
-              </div>
-              <div className="flex gap-2">
-                <button
-                  className="btn-secondary flex items-center gap-2 opacity-50 cursor-not-allowed"
-                  disabled
-                  title="توليد PDF يُفعَّل في مرحلة لاحقة"
-                >
-                  <Download size={16} />
-                  تحميل PDF
-                </button>
-                <button
-                  onClick={() => {
-                    setShowPreviewModal(false);
-                    handleEdit(previewTemplate);
-                  }}
-                  className="btn-primary flex items-center gap-2"
-                >
-                  <Edit2 size={16} />
-                  تعديل القالب
-                </button>
-              </div>
-            </div>
-          </div>
-        </div>
-      )}
+  return <div className="space-y-6 pb-10">
+    <div className="flex flex-wrap items-start justify-between gap-4">
+      <div className="flex gap-3"><div className="w-12 h-12 rounded-2xl bg-primary-100 text-primary-700 flex items-center justify-center"><FileSignature size={25} /></div><div><Link href="/settings" className="text-xs text-gray-500 hover:underline">الإعدادات</Link><h1 className="text-2xl font-bold text-gray-900">قوالب المستندات العامة</h1><p className="text-sm text-gray-500 mt-1">جهّز العقود والإقرارات والشهادات ومستندات الموارد البشرية.</p></div></div>
+      <div className="flex flex-wrap gap-2">{can('documents.manage') && <Link href="/employees/documents/create" className="btn-secondary">إصدار مستند</Link>}<button type="button" disabled={!!operation} onClick={() => navigate({ kind: 'reload' })} className="btn-secondary flex gap-2 items-center"><RefreshCw size={16} />تحديث</button><button type="button" disabled={!!operation || !catalog} onClick={() => navigate({ kind: 'new' })} className="btn-primary flex gap-2 items-center"><Plus size={16} />قالب جديد</button></div>
     </div>
-  );
+    <div className="rounded-2xl border border-primary-100 bg-primary-50 p-5 text-sm text-gray-700 leading-7"><p className="font-semibold">اكتب النص ← أضف المتغيرات ← احفظ المسودة وانشرها ← أصدر PDF محفوظًا</p><p>يمكنك لصق نص الشركة هنا وإدراج البيانات المتغيرة. المحرر لا يستورد ملفات Word أو PDF ولا يحفظ تنسيقها الأصلي. الإصدار يستخدم بيانات الشركة الحالية والقالب المنشور.</p><Link href="/settings/letter-templates" className="text-primary-700 underline">قوالب الخطابات الصادرة بعد اعتماد الطلبات</Link></div>
+    {error && <div role="alert" className="rounded-xl bg-red-50 border border-red-100 p-4 text-sm text-red-800">{error}{!catalog && <button type="button" disabled={!!operation} onClick={() => void perform('load', () => load())} className="block underline mt-2">إعادة المحاولة</button>}</div>}
+    {notice && <div role="status" className="flex items-start gap-2 rounded-xl bg-green-50 p-4 text-sm text-green-800"><CheckCircle2 size={18} className="shrink-0" /><p className="flex-1">{notice}</p><button type="button" onClick={() => setNotice('')} aria-label="إخفاء الرسالة"><X size={16} /></button></div>}
+    {conflict && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-900"><p className="font-semibold">يوجد تعارض مع نسخة القالب على الخادم</p><p className="mt-1">احتفظنا بتعديلاتك. يمكنك إنشاء نسخة جديدة منها، أو نسخ النص ثم تحميل أحدث نسخة محفوظة.</p><div className="flex gap-4 mt-3"><button type="button" disabled={!!operation} onClick={duplicate} className="underline">إنشاء قالب جديد من تعديلاتي</button><button type="button" disabled={!!operation} onClick={() => navigate({ kind: 'reload' })} className="underline">تحميل آخر نسخة</button></div></div>}
+    {!catalog && operation === 'load' && <div className="card py-20 text-center text-gray-500"><Loader2 className="animate-spin mx-auto mb-3" />جارٍ تحميل القوالب...</div>}
+    {catalog && <div className="grid grid-cols-1 xl:grid-cols-[220px_minmax(0,1fr)] gap-5 items-start">
+      <aside className="card p-3 space-y-3"><div className="flex items-center justify-between"><h2 className="font-bold">القوالب</h2><span className="text-xs text-gray-500">{catalog.templates.length}</span></div><div className="relative"><Search size={15} className="absolute top-3 right-3 text-gray-400" /><input aria-label="البحث عن قالب" value={search} onChange={event => setSearch(event.target.value)} className="input pr-9 w-full text-sm" placeholder="بحث عن قالب..." /></div><div className="grid sm:grid-cols-2 xl:grid-cols-1 gap-2">{visibleTemplates.map(template => <button type="button" key={template.id} disabled={!!operation} onClick={() => navigate({ kind: 'template', id: template.id })} className={`text-right p-3 rounded-xl border ${template.id === selectedId ? 'bg-primary-50 border-primary-300' : 'border-transparent hover:bg-gray-50'}`}><p className="font-semibold text-sm text-gray-800">{template.name}</p><p className="text-xs text-gray-500 mt-1">{HR_DOCUMENT_CATEGORY_LABELS[template.category]}</p><span className={`inline-block mt-2 text-[10px] rounded-full px-2 py-1 ${!template.isActive ? 'bg-gray-200 text-gray-600' : template.publishedRevision ? 'bg-green-100 text-green-700' : 'bg-amber-100 text-amber-700'}`}>{!template.isActive ? 'متوقف' : template.publishedRevision ? `منشور • نسخة ${template.publishedRevision.revision}` : 'مسودة'}</span></button>)}</div>{!visibleTemplates.length && <p className="text-center text-xs text-gray-500 p-4">{search ? 'لا توجد قوالب مطابقة' : 'ابدأ بإضافة أول قالب'}</p>}</aside>
+      <div className="space-y-5 min-w-0">
+        {!selected && <section className="rounded-2xl border border-primary-100 bg-white p-5 space-y-3"><h2 className="font-bold text-sm">ابدأ من نموذج جاهز</h2><div className="grid grid-cols-2 lg:grid-cols-4 gap-2">{HR_DOCUMENT_STARTERS.map((starter, index) => <button type="button" key={starter.category} disabled={!!operation} onClick={() => navigate({ kind: 'starter', index })} className="rounded-xl border border-gray-200 p-3 text-sm font-semibold text-primary-700 hover:bg-primary-50">{starter.name}</button>)}</div><p className="text-xs text-gray-500 leading-6">البدايات نصوص قابلة للتحرير. في عقد العمل تُكتب بنود شركتك في حقل «بنود العقد» المطلوب؛ لا تُضاف شروط قانونية تلقائيًا. النموذج العام يصلح للإصدار دون موظف.</p></section>}
+        <section className="card p-5 space-y-4"><div className="flex flex-wrap justify-between gap-3"><div><h2 className="font-bold">{selected ? 'تحرير المسودة' : 'قالب جديد'} {isDirty && <span className="mr-2 text-xs font-normal text-amber-700">غير محفوظ</span>}</h2><p className="text-xs text-gray-500 mt-1">المسودة لا تغيّر النسخة المنشورة أو المستندات التي صدرت سابقًا.</p></div><div className="flex gap-2">{selected && <button type="button" disabled={!!operation} onClick={duplicate} className="btn-secondary text-xs flex gap-2 items-center"><Copy size={15} />نسخة جديدة</button>}<button type="button" disabled={!!operation || !valid || !isDirty || conflict} onClick={() => void save()} className="btn-primary text-xs flex gap-2 items-center disabled:opacity-40">{operation === 'save' ? <Loader2 size={15} className="animate-spin" /> : <Save size={15} />}حفظ المسودة</button></div></div>
+          <div className="grid md:grid-cols-2 gap-4"><label className="text-sm font-medium">اسم القالب<input value={editor.name} maxLength={150} disabled={!!operation} onChange={event => setEditor(previous => ({ ...previous, name: event.target.value }))} className="input w-full mt-2" placeholder="مثل: إقرار استلام أدوات العمل" /></label><label className="text-sm font-medium">الفئة<select value={editor.category} disabled={!!operation} onChange={event => setEditor(previous => ({ ...previous, category: event.target.value as HrDocumentCategory }))} className="input w-full mt-2">{Object.entries(HR_DOCUMENT_CATEGORY_LABELS).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label></div>
+        </section>
+        <section className="card p-5 space-y-4"><div className="flex items-center justify-between gap-3"><div><h2 className="font-bold">الحقول الإضافية</h2><p className="text-xs text-gray-500 mt-1">قيم يدخلها مسؤول المستند عند الإصدار، مثل رقم الإقرار أو اسم الجهة.</p></div><button type="button" disabled={!!operation || editor.customFields.length >= 20} onClick={() => setEditor(previous => { let number = previous.customFields.length + 1; while (previous.customFields.some(field => field.key === `custom.field_${number}`)) number++; return { ...previous, customFields: [...previous.customFields, { key: `custom.field_${number}`, label: `حقل ${number}`, required: false }] } })} className="btn-secondary text-xs flex items-center gap-2"><Plus size={15} />إضافة حقل ({editor.customFields.length}/20)</button></div>
+          {editor.customFields.map((field, index) => <div key={index} className="grid grid-cols-1 md:grid-cols-[1fr_1fr_auto_auto] gap-3 items-end rounded-xl bg-gray-50 p-3"><label className="text-xs text-gray-600">اسم الحقل<input value={field.label} maxLength={100} disabled={!!operation} onChange={event => changeCustomField(index, { label: event.target.value })} className="input w-full mt-1" /></label><label className="text-xs text-gray-600">رمز الحقل (حروف إنجليزية)<div dir="ltr" className="flex items-center gap-1 mt-1"><span className="text-gray-400">custom.</span><input value={field.key.replace(/^custom\./, '')} maxLength={50} disabled={!!operation} onChange={event => changeCustomField(index, { key: `custom.${event.target.value}` })} className="input w-full" /></div></label><label className="flex items-center gap-2 text-xs pb-3"><input type="checkbox" checked={field.required} disabled={!!operation} onChange={event => changeCustomField(index, { required: event.target.checked })} />مطلوب</label><button type="button" aria-label={`حذف ${field.label}`} disabled={!!operation} onClick={() => removeCustomField(index)} className="text-red-600 p-3 hover:bg-red-50 rounded-lg"><Trash2 size={17} /></button></div>)}
+          {!editor.customFields.length && <p className="text-xs text-gray-400">لا توجد حقول إضافية. يمكنك استخدام بيانات الشركة والموظف من المتغيرات أدناه.</p>}
+        </section>
+        <div className="grid grid-cols-1 2xl:grid-cols-[minmax(0,1fr)_250px] gap-5 items-start">
+          <section className="card p-5 space-y-5"><h2 className="font-bold">نص القالب</h2>{HR_DOCUMENT_FIELDS.map(field => <label key={field.key} className="block"><span className="text-sm font-medium">{field.label}</span><textarea ref={element => { if (element) inputRefs.current[field.key] = element }} value={editor.draft[field.key]} rows={field.rows} disabled={!!operation} onChange={event => setEditor(previous => ({ ...previous, draft: { ...previous.draft, [field.key]: event.target.value } }))} onSelect={event => { cursor.current = { field: field.key, start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd } }} onFocus={event => { cursor.current = { field: field.key, start: event.currentTarget.selectionStart, end: event.currentTarget.selectionEnd } }} className="input w-full mt-2 leading-7 resize-y" /><span className={`text-[10px] ${canonicalDraft[field.key].length > field.limit ? 'text-red-600' : 'text-gray-400'}`}>{canonicalDraft[field.key].length} / {field.limit} حرف</span></label>)}{isDirty && issues.length > 0 && <div role="status" className="bg-amber-50 rounded-xl p-3 text-xs text-amber-800"><ul className="list-disc mr-4 space-y-1">{issues.map(issue => <li key={issue}>{issue}</li>)}</ul></div>}</section>
+          <div className="space-y-4"><section className="card p-4 space-y-4"><div><h2 className="font-bold text-sm">إدراج بيانات متغيرة</h2><p className="text-xs text-gray-500 mt-1 leading-5">ضع المؤشر داخل النص، ثم اضغط اسم البيانات لإدراجها.</p></div>{groups.filter(group => group.items.length).map(group => <div key={group.name}><h3 className="text-xs font-semibold text-gray-500 mb-2">{group.name}</h3><div className="flex flex-wrap gap-1.5">{group.items.map(variable => <button type="button" key={variable.key} disabled={!!operation} onClick={() => insertVariable(variable)} className="text-xs text-primary-700 bg-primary-50 hover:bg-primary-100 rounded-lg px-2 py-1.5">{variable.label}</button>)}</div></div>)}</section>
+            <section className="card p-4 space-y-3"><h2 className="font-bold text-sm">النشر والإتاحة</h2>{published ? <p className="text-xs text-green-700">النسخة المنشورة {published.revision} • {new Date(published.publishedAt).toLocaleDateString('ar-EG-u-ca-gregory')}</p> : <p className="text-xs text-gray-500">لا توجد نسخة منشورة بعد.</p>}<button type="button" disabled={!!operation || !selected || !selected.isActive || isDirty || !valid || !unpublishedChanges || conflict} onClick={() => setPublishConfirmation(true)} className="btn-primary w-full text-sm flex justify-center items-center gap-2 disabled:opacity-40"><Send size={15} />نشر المسودة</button><p className="text-xs text-gray-500 leading-5">{isDirty ? 'احفظ التعديلات أولًا قبل النشر.' : !unpublishedChanges ? 'المسودة مطابقة للنسخة المنشورة.' : 'تستخدم الإصدارات الجديدة هذه النسخة بعد نشرها.'}</p>{selected && <button type="button" disabled={!!operation || isDirty || conflict} onClick={() => void toggleActive()} className="flex items-center gap-2 text-xs text-gray-600 disabled:opacity-40">{selected.isActive ? <ToggleRight size={20} /> : <ToggleLeft size={20} />}{selected.isActive ? 'إيقاف القالب' : 'تفعيل القالب'}</button>}</section>
+          </div>
+        </div>
+        <section className="card overflow-hidden"><div className="p-4 border-b flex flex-wrap justify-between items-center gap-3"><div><h2 className="font-bold flex items-center gap-2"><Eye size={18} />معاينة النص</h2><p className="text-xs text-amber-700 mt-1">بيانات توضيحية فقط؛ لا يُصدر مستند عند المعاينة.</p></div><button type="button" disabled={!!operation || issues.length > 0} onClick={() => void perform('preview', async () => setPdfUrl(URL.createObjectURL(await previewHrDocumentTemplate(canonicalDraft, editor.customFields))))} className="btn-secondary text-sm flex items-center gap-2 disabled:opacity-40">{operation === 'preview' ? <Loader2 className="animate-spin" size={16} /> : <FileText size={16} />}معاينة PDF</button></div><div className="p-6 md:p-10 bg-white space-y-6 text-sm leading-8 break-words"><h3 className="text-lg font-bold text-center whitespace-pre-wrap">{sample.title || 'عنوان المستند'}</h3><p className="whitespace-pre-wrap">{sample.greeting}</p><p className="whitespace-pre-wrap">{sample.body || 'اكتب النص لتظهر معاينته هنا...'}</p><p className="whitespace-pre-wrap">{sample.closing}</p><p className="whitespace-pre-wrap border-t pt-4 text-xs text-gray-500">{sample.footer}</p></div></section>
+      </div>
+    </div>}
+    {pendingNavigation && <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="discard-title"><div className="bg-white rounded-2xl p-6 max-w-md w-full"><h2 id="discard-title" className="text-lg font-bold">توجد تعديلات غير محفوظة</h2><p className="text-sm text-gray-500 mt-3">احفظ تعديلاتك أولًا أو تجاهلها للمتابعة.</p><div className="flex justify-end gap-3 mt-6"><button type="button" onClick={() => setPendingNavigation(null)} className="btn-secondary">العودة للتحرير</button><button type="button" onClick={() => applyNavigation(pendingNavigation)} className="btn-primary">تجاهل التعديلات والمتابعة</button></div></div></div>}
+    {publishConfirmation && selected && <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="publish-title"><div className="bg-white rounded-2xl p-6 max-w-md w-full"><h2 id="publish-title" className="text-lg font-bold">نشر نسخة جديدة من «{selected.name}»</h2><p className="text-sm text-gray-500 mt-3 leading-6">ستتاح النسخة للإصدار. المستندات الصادرة سابقًا تحتفظ بنصها وملفات PDF الأصلية.</p><div className="flex justify-end gap-3 mt-6"><button type="button" onClick={() => setPublishConfirmation(false)} className="btn-secondary">مراجعة النص</button><button type="button" onClick={() => void publish()} className="btn-primary">تأكيد النشر</button></div></div></div>}
+    {pdfUrl && <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-3 sm:p-6" role="dialog" aria-modal="true" aria-labelledby="pdf-title"><div className="bg-white rounded-2xl w-full max-w-5xl overflow-hidden"><div className="flex items-center justify-between gap-3 p-4 border-b"><div><h2 id="pdf-title" className="font-bold">معاينة PDF</h2><p className="text-xs text-amber-700 mt-1">بيانات توضيحية؛ هذه المعاينة غير صادرة.</p></div><div className="flex items-center gap-3"><a href={pdfUrl} download="hr-document-template-preview.pdf" className="btn-secondary text-xs flex gap-2 items-center"><Download size={15} />تحميل المعاينة</a><button type="button" onClick={() => setPdfUrl(null)} aria-label="إغلاق المعاينة" className="p-2"><X size={20} /></button></div></div><PdfPreview url={pdfUrl} /></div></div>}
+  </div>
 }
+
+export default function DocumentTemplatesPage() { return <MainLayout><TemplatesWorkspace /></MainLayout> }

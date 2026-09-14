@@ -19,29 +19,79 @@ import {
   AlertTriangle,
   X,
 } from 'lucide-react'
-import { fetchLoans, createRequest } from '@/lib/api'
+import { fetchLoans, createRequest, can, getCurrentUser } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
 
+type Money = string | number
+type InstallmentStatus = 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED'
 interface LoanInstallment {
   id: number
   loanId: number
   dueDate: string
-  amount: number
+  amount: Money
   paid: boolean
+  paidAmount: Money
+  remainingAmount: Money
+  financialStatus: InstallmentStatus
+  financialRevision: number
+  parentInstallmentId: number | null
+  originalDueDate: string
+  paidAt: string | null
+  ledgerAvailable: boolean
 }
 
 interface Loan {
   id: number
-  requestId?: number
+  requestId?: number | null
   employeeId: number
-  amount: number
+  amount: Money
   status: string // APPROVED | DISBURSED | SETTLED
   disbursedAt?: string | null
   employeeName?: string
   installments: LoanInstallment[]
   paidCount: number
-  paidAmount: number
-  remainingAmount: number
+  paidAmount: Money
+  remainingAmount: Money
+  ledgerAvailable: boolean
+}
+
+// الجمع والعرض بالقروش الصحيحة، بما فيها المبالغ التي تتجاوز دقة Number.
+const centsOf = (value: Money): bigint => {
+  const text = String(value)
+  if (!/^\d+(?:\.\d{1,2})?$/.test(text)) throw new Error('تعذر عرض مبلغ السلفة بدقة')
+  const [whole, fraction = ''] = text.split('.')
+  return BigInt(whole + fraction.padEnd(2, '0'))
+}
+const formatCents = (value: bigint) => `${String(value / BigInt(100)).replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${String(value % BigInt(100)).padStart(2, '0')}`
+const formatMoney = (value: Money) => formatCents(centsOf(value))
+const isOpenInstallment = (item: LoanInstallment) => item.financialStatus === 'DUE' && centsOf(item.remainingAmount) > BigInt(0)
+const installmentLabels: Record<InstallmentStatus, string> = {
+  DUE: 'مستحق', PAID: 'مسدد', PARTIAL: 'سداد جزئي والباقي مرحّل', DEFERRED: 'مؤجل بالكامل', SETTLED: 'مسوّى',
+}
+const installmentBadge = (status: InstallmentStatus) => ['PAID', 'SETTLED'].includes(status) ? 'badge-success' : status === 'DUE' ? 'badge-warning' : 'badge-primary'
+const progressWidth = (loan: Loan) => {
+  const total = centsOf(loan.amount), paid = centsOf(loan.paidAmount)
+  if (total === BigInt(0)) return '0%'
+  const scaled = paid * BigInt(10000) / total
+  return `${Number(scaled > BigInt(10000) ? BigInt(10000) : scaled) / 100}%`
+}
+const ownField = (value: object, key: string) => Object.prototype.hasOwnProperty.call(value, key)
+function normalizeLoan(value: unknown): Loan {
+  const raw = value as Loan
+  const installments = raw.installments.map(item => {
+    // توافق خدمة العرض القديمة فقط: كانت لا تعرف إلا amount وpaid.
+    const legacy = !ownField(item, 'financialStatus') && !ownField(item, 'paidAmount') && !ownField(item, 'remainingAmount')
+    const row: LoanInstallment = legacy ? { ...item, financialStatus: item.paid ? 'PAID' : 'DUE',
+      paidAmount: item.paid ? item.amount : '0.00', remainingAmount: item.paid ? '0.00' : item.amount,
+      financialRevision: 1, parentInstallmentId: null, originalDueDate: item.dueDate, paidAt: null, ledgerAvailable: false }
+      : { ...item, ledgerAvailable: ['financialStatus', 'paidAmount', 'remainingAmount', 'financialRevision', 'parentInstallmentId', 'originalDueDate'].every(key => ownField(item, key)) }
+    // الرد الجديد الناقص لا يُستكمل بالتخمين؛ الخطأ يظهر في بانر التحميل قبل الرسم.
+    for (const amount of [row.amount, row.paidAmount, row.remainingAmount]) centsOf(amount)
+    if (!Object.prototype.hasOwnProperty.call(installmentLabels, row.financialStatus)) throw new Error('حالة أحد الأقساط غير معروفة؛ راجع خدمة السلف')
+    return row
+  })
+  for (const amount of [raw.amount, raw.paidAmount, raw.remainingAmount]) centsOf(amount)
+  return { ...raw, installments, ledgerAvailable: installments.every(item => item.ledgerAvailable) }
 }
 
 const getStatusBadge = (status: string) => {
@@ -94,11 +144,18 @@ export default function LoansPage() {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
   const [submitSuccess, setSubmitSuccess] = useState('')
+  const [deferral, setDeferral] = useState<{ loan: Loan; installment: LoanInstallment } | null>(null)
+  const [deferPeriod, setDeferPeriod] = useState('')
+  const [deferReason, setDeferReason] = useState('')
+  const [deferBusy, setDeferBusy] = useState(false)
+  const [deferError, setDeferError] = useState('')
+  const [deferSuccess, setDeferSuccess] = useState('')
 
   const loadLoans = () => {
+    setError('')
     setLoading(true)
     fetchLoans()
-      .then((data) => setLoans(data as Loan[]))
+      .then((data) => setLoans(data.map(normalizeLoan)))
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل سجل السلف'))
       .finally(() => setLoading(false))
   }
@@ -111,7 +168,7 @@ export default function LoansPage() {
     setSubmitting(true)
     try {
       await createRequest('LOAN', {
-        amount: Number(loanAmount),
+        amount: loanAmount,
         months: Number(loanMonths),
       })
       setSubmitSuccess('تم إرسال طلب السلفة للاعتماد — سيظهر في السجل بعد اكتمال الموافقات')
@@ -125,21 +182,41 @@ export default function LoansPage() {
     }
   }
 
+  const canDefer = (loan: Loan) => getCurrentUser()?.employeeId === loan.employeeId || can('requests.create_on_behalf')
+  const openDeferral = (loan: Loan, installment: LoanInstallment) => {
+    setDeferral({ loan, installment }); setDeferPeriod(''); setDeferReason(''); setDeferError(''); setDeferSuccess('')
+  }
+  const submitDeferral = async () => {
+    if (!deferral) return
+    setDeferBusy(true); setDeferError('')
+    try {
+      const request = await createRequest('LOAN_INSTALLMENT_DEFER', { loanId: deferral.loan.id, installmentId: deferral.installment.id,
+        toPeriod: deferPeriod, reason: deferReason }, true,
+        getCurrentUser()?.employeeId === deferral.loan.employeeId ? undefined : deferral.loan.employeeId)
+      setDeferSuccess(request.status === 'COMPLETED'
+        ? `اكتمل طلب التأجيل رقم ${request.id} وفق سلسلة السلف المعتمدة`
+        : `أُرسل طلب التأجيل رقم ${request.id} للموافقات؛ يظل موعد القسط الحالي قائمًا حتى الاعتماد`)
+      loadLoans()
+    } catch (e) { setDeferError(e instanceof Error ? e.message : 'تعذر إرسال طلب التأجيل') }
+    finally { setDeferBusy(false) }
+  }
+
   // Calculate stats
-  const openLoans = loans.filter((l) => Number(l.remainingAmount) > 0)
+  const openLoans = loans.filter((l) => centsOf(l.remainingAmount) > BigInt(0))
   const stats = {
-    totalActive: openLoans.reduce((sum, l) => sum + Number(l.remainingAmount), 0),
+    totalActive: openLoans.reduce((sum, l) => sum + centsOf(l.remainingAmount), BigInt(0)),
     disbursedCount: loans.filter((l) => l.status === 'DISBURSED').length,
     activeCount: openLoans.length,
     monthlyDeductions: openLoans.reduce((sum, l) => {
-      const next = l.installments.find((i) => !i.paid)
-      return sum + Number(next?.amount ?? 0)
-    }, 0),
+      const due = l.installments.filter(isOpenInstallment), nextPeriod = due[0]?.dueDate.slice(0, 7)
+      return due.filter(item => item.dueDate.slice(0, 7) === nextPeriod)
+        .reduce((total, item) => total + centsOf(item.remainingAmount), sum)
+    }, BigInt(0)),
   }
 
   const filteredLoans = loans.filter((loan) => {
-    if (activeTab === 'open' && Number(loan.remainingAmount) <= 0) return false
-    if (activeTab === 'settled' && Number(loan.remainingAmount) > 0) return false
+    if (activeTab === 'open' && centsOf(loan.remainingAmount) === BigInt(0)) return false
+    if (activeTab === 'settled' && centsOf(loan.remainingAmount) > BigInt(0)) return false
     if (searchQuery && !(loan.employeeName ?? '').includes(searchQuery)) return false
     return true
   })
@@ -175,6 +252,9 @@ export default function LoansPage() {
             {error}
           </div>
         )}
+        {loans.some(loan => !loan.ledgerAvailable) && <div className="bg-amber-50 text-amber-800 rounded-xl p-4 text-sm">
+          خدمة السلف الحالية تعرض بيانات الجدول القديم؛ التفصيل المالي الجديد والتأجيل غير متاحين لهذه السجلات حتى تحديث الخدمة.
+        </div>}
 
         {/* Stats Cards */}
         <div className="grid grid-cols-4 gap-4">
@@ -185,7 +265,7 @@ export default function LoansPage() {
               </div>
               <div>
                 <p className="text-sm text-gray-500">إجمالي السلف النشطة</p>
-                <p className="text-2xl font-bold text-primary-600">{stats.totalActive.toLocaleString()}</p>
+                <p className="text-2xl font-bold text-primary-600">{formatCents(stats.totalActive)}</p>
                 <p className="text-xs text-gray-400">المتبقي بدون سداد</p>
               </div>
             </div>
@@ -224,8 +304,8 @@ export default function LoansPage() {
               </div>
               <div>
                 <p className="text-sm text-gray-500">القسط القادم (إجمالي)</p>
-                <p className="text-2xl font-bold text-danger-600">{stats.monthlyDeductions.toLocaleString()}</p>
-                <p className="text-xs text-gray-400">يُخصم من المسير</p>
+                <p className="text-2xl font-bold text-danger-600">{formatCents(stats.monthlyDeductions)}</p>
+                <p className="text-xs text-gray-400">الاستحقاق القادم قبل ضوابط الخصم</p>
               </div>
             </div>
           </div>
@@ -292,8 +372,8 @@ export default function LoansPage() {
                 <tr className="table-header">
                   <th className="text-right px-4 py-4">الموظف</th>
                   <th className="text-center px-4 py-4">المبلغ</th>
-                  <th className="text-center px-4 py-4">الأقساط</th>
-                  <th className="text-center px-4 py-4">المسدد منها</th>
+                  <th className="text-center px-4 py-4">قيود الجدول</th>
+                  <th className="text-center px-4 py-4">مسدد بالكامل</th>
                   <th className="text-center px-4 py-4">المسدد</th>
                   <th className="text-center px-4 py-4">المتبقي</th>
                   <th className="text-center px-4 py-4">الحالة</th>
@@ -316,25 +396,25 @@ export default function LoansPage() {
                       </div>
                     </td>
                     <td className="table-cell text-center font-mono font-bold text-gray-800">
-                      {Number(loan.amount).toLocaleString()}
+                      {formatMoney(loan.amount)}
                     </td>
-                    <td className="table-cell text-center">{loan.installments.length} شهر</td>
+                    <td className="table-cell text-center">{loan.installments.length}</td>
                     <td className="table-cell text-center">{loan.paidCount} من {loan.installments.length}</td>
                     <td className="table-cell text-center">
                       <div>
-                        <span className="font-mono text-success-600">{Number(loan.paidAmount).toLocaleString()}</span>
-                        {Number(loan.remainingAmount) > 0 && (
+                        <span className="font-mono text-success-600">{formatMoney(loan.paidAmount)}</span>
+                        {centsOf(loan.remainingAmount) > BigInt(0) && (
                           <div className="w-full h-1.5 bg-gray-100 rounded-full mt-1">
                             <div
                               className="h-full bg-success-500 rounded-full"
-                              style={{ width: `${(Number(loan.paidAmount) / Math.max(Number(loan.amount), 1)) * 100}%` }}
+                              style={{ width: progressWidth(loan) }}
                             />
                           </div>
                         )}
                       </div>
                     </td>
                     <td className="table-cell text-center font-mono font-bold text-primary-600">
-                      {Number(loan.remainingAmount).toLocaleString()}
+                      {formatMoney(loan.remainingAmount)}
                     </td>
                     <td className="table-cell text-center">{getStatusBadge(loan.status)}</td>
                     <td className="table-cell">
@@ -356,34 +436,44 @@ export default function LoansPage() {
                     <tr key={`inst-${loan.id}`}>
                       <td colSpan={8} className="bg-gray-50 px-6 py-4">
                         <p className="font-medium text-gray-700 mb-3">جدول الأقساط</p>
+                        <p className="text-sm text-gray-500 mb-3">{loan.ledgerAvailable ? 'القسط المؤجل أو المسدد جزئيًا يحتفظ بتاريخه ومبلغه؛ يظهر الجزء المتبقي في قسط جديد مرتبط به.' : 'هذا جدول من خدمة العرض القديمة؛ المدفوع والمتبقي معروضان وفق حالة السداد القديمة.'}</p>
                         <div className="overflow-x-auto">
                           <table className="w-full">
                             <thead>
                               <tr className="table-header">
                                 <th className="text-right px-4 py-2">#</th>
                                 <th className="text-center px-4 py-2">تاريخ الاستحقاق</th>
-                                <th className="text-center px-4 py-2">المبلغ</th>
+                                <th className="text-center px-4 py-2">مبلغ القسط</th>
+                                <th className="text-center px-4 py-2">المدفوع فعليًا</th>
+                                <th className="text-center px-4 py-2">الرصيد المفتوح</th>
                                 <th className="text-center px-4 py-2">الحالة</th>
+                                <th className="text-center px-4 py-2">الطلب</th>
                               </tr>
                             </thead>
                             <tbody>
-                              {loan.installments.map((inst, idx) => (
+                              {loan.installments.map((inst) => (
                                 <tr key={inst.id} className="table-row">
-                                  <td className="table-cell">{idx + 1}</td>
-                                  <td className="table-cell text-center font-mono">{inst.dueDate}</td>
-                                  <td className="table-cell text-center font-mono">{Number(inst.amount).toLocaleString()}</td>
+                                  <td className="table-cell">
+                                    <span>#{inst.id}</span>
+                                    {inst.parentInstallmentId !== null && <p className="text-xs text-gray-500">مرحّل من #{inst.parentInstallmentId}</p>}
+                                  </td>
+                                  <td className="table-cell text-center font-mono">
+                                    {inst.dueDate}
+                                    {inst.originalDueDate !== inst.dueDate && <p className="text-xs text-gray-500">الأصلي: {inst.originalDueDate}</p>}
+                                  </td>
+                                  <td className="table-cell text-center font-mono">{formatMoney(inst.amount)}</td>
+                                  <td className="table-cell text-center font-mono text-success-600">{formatMoney(inst.paidAmount)}</td>
+                                  <td className="table-cell text-center font-mono">
+                                    {formatMoney(inst.remainingAmount)}
+                                    {['PARTIAL', 'DEFERRED'].includes(inst.financialStatus) && <p className="text-xs text-gray-500 font-sans">
+                                      المتبقي على القسط #{loan.installments.find(child => child.parentInstallmentId === inst.id)?.id ?? '—'}
+                                    </p>}
+                                  </td>
                                   <td className="table-cell text-center">
-                                    {inst.paid ? (
-                                      <span className="badge badge-success flex items-center gap-1 justify-center w-fit mx-auto">
-                                        <CheckCircle size={12} />
-                                        مسدد
-                                      </span>
-                                    ) : (
-                                      <span className="badge badge-warning flex items-center gap-1 justify-center w-fit mx-auto">
-                                        <Clock size={12} />
-                                        مستحق
-                                      </span>
-                                    )}
+                                    <span className={`badge ${installmentBadge(inst.financialStatus)} w-fit mx-auto`}>{installmentLabels[inst.financialStatus]}</span>
+                                  </td>
+                                  <td className="table-cell text-center">
+                                    {inst.ledgerAvailable && isOpenInstallment(inst) && canDefer(loan) ? <button className="btn-secondary text-sm whitespace-nowrap" onClick={() => openDeferral(loan, inst)}>طلب تأجيل</button> : '—'}
                                   </td>
                                 </tr>
                               ))}
@@ -447,11 +537,38 @@ export default function LoansPage() {
             <h3 className="font-bold text-gray-800 mb-2">السداد</h3>
             <ul className="text-sm text-gray-600 space-y-1">
               <li>• تُخصم الأقساط المستحقة آلياً من مسير الرواتب</li>
-              <li>• تُعلَّم السلفة «مكتملة» بعد سداد آخر قسط</li>
+              <li>• يُثبت المدفوع عند الصرف، والجزء المؤجل يبقى ظاهرًا في الجدول</li>
             </ul>
           </div>
         </div>
       </div>
+
+      {deferral && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl" role="dialog" aria-modal="true" aria-labelledby="deferral-title">
+            <div className="flex items-center justify-between mb-4">
+              <h3 id="deferral-title" className="font-bold text-gray-800 text-lg">طلب تأجيل قسط</h3>
+              <button disabled={deferBusy} onClick={() => setDeferral(null)} className="p-2 hover:bg-gray-100 rounded-lg" aria-label="إغلاق"><X size={20} /></button>
+            </div>
+            <p className="text-sm text-gray-600 mb-4">{deferral.loan.employeeName} — القسط #{deferral.installment.id} برصيد {formatMoney(deferral.installment.remainingAmount)} {currency}، مستحق {deferral.installment.dueDate}.</p>
+            <p className="text-sm text-gray-500 mb-4">يمكن طلب التأجيل حتى مع كفاية الراتب. يمر الطلب بسلسلة موافقات السلف، ويتغير الجدول بعد اكتمال الاعتماد.</p>
+            {deferError && <div className="bg-red-50 text-red-700 rounded-xl p-3 mb-4" role="alert">{deferError}</div>}
+            {deferSuccess && <div className="bg-success-50 text-success-700 rounded-xl p-3 mb-4" role="status">{deferSuccess}</div>}
+            <div className="space-y-4">
+              <div><label className="label" htmlFor="defer-period">شهر التأجيل *</label>
+                <input id="defer-period" type="month" value={deferPeriod} onChange={event => setDeferPeriod(event.target.value)} disabled={deferBusy || !!deferSuccess} className="input" dir="ltr" />
+              </div>
+              <div><label className="label" htmlFor="defer-reason">سبب التأجيل *</label>
+                <textarea id="defer-reason" value={deferReason} onChange={event => setDeferReason(event.target.value)} minLength={3} maxLength={500} disabled={deferBusy || !!deferSuccess} className="input" rows={3} />
+              </div>
+            </div>
+            <div className="flex gap-3 mt-6 pt-4 border-t border-gray-100">
+              <button className="btn-primary flex-1 disabled:opacity-50" onClick={submitDeferral} disabled={deferBusy || !!deferSuccess || !deferPeriod || deferReason.trim().length < 3}>{deferBusy ? 'جارٍ الإرسال...' : 'إرسال للموافقة'}</button>
+              <button className="btn-secondary" disabled={deferBusy} onClick={() => setDeferral(null)}>إغلاق</button>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* New Loan Modal */}
       {showNewLoanModal && (
@@ -489,6 +606,8 @@ export default function LoansPage() {
                 <label className="label">مبلغ السلفة ({currency}) *</label>
                 <input
                   type="number"
+                  min="0.01"
+                  step="0.01"
                   value={loanAmount}
                   onChange={(e) => setLoanAmount(e.target.value)}
                   className="input"

@@ -1,0 +1,26 @@
+{
+  "database": "hr_review_pre_payroll_20260911162404_52ee65ac",
+  "applied": [
+    "20260912_007_pre_payroll_hr_document_templates"
+  ],
+  "skipped": [
+    "20260911_001_pre_payroll_adjustment_layer",
+    "20260911_002_pre_payroll_holiday_country",
+    "20260911_003_pre_payroll_letter_templates",
+    "20260911_004_pre_payroll_history_actor_schema",
+    "20260911_005_pre_payroll_history_work_type_data",
+    "20260911_006_pre_payroll_leave_request_names"
+  ],
+  "schemaMatches": true,
+  "remainingQueries": [],
+  "changedExistingCounts": [],
+  "verifiedAt": "2026-09-11T22:31:28.249Z",
+  "excludedTables": [
+    "payroll_runs",
+    "payroll_items",
+    "payroll_run_members",
+    "lateness_tiers"
+  ],
+  "backupVerified": true,
+  "checkpointBackup": "/var/opt/mssql/data/hr_pre_payroll_checkpoint_20260911223126_e9e9bb41.bak"
+}

@@ -1,6 +1,12 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { employeeStatusLabels as statusLabels, requestStatusLabels, requestStatusStyles as requestStatusColors, custodyStatusLabels, custodyStatusStyles, payMethodLabels } from '@/lib/status-labels'
+import { useLeaveCatalog } from '@/lib/leave-catalog'
+import { currencyLabel, useCurrency } from '@/lib/currency'
+import { docTypeLabel } from '@/lib/doc-types'
+
+import { useEffect, useRef, useState } from 'react'
+import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import {
   User,
@@ -24,6 +30,9 @@ import {
   fetchBranches,
   fetchDepartments,
   fetchFileObjectUrl,
+  uploadFile,
+  updateEmployee,
+  can,
   ApiError,
   type CurrentUser,
   type ApiEmployee,
@@ -36,14 +45,6 @@ import {
   type ApiDepartment,
 } from '@/lib/api'
 
-const statusLabels: Record<string, string> = {
-  active: 'نشط',
-  probation: 'تحت التجربة',
-  suspended: 'موقوف',
-  resigned: 'مستقيل',
-  terminated: 'منتهي الخدمة',
-  archived: 'مؤرشف',
-}
 
 const balanceTypeLabels: Record<string, string> = {
   annual: 'إجازة سنوية',
@@ -51,19 +52,6 @@ const balanceTypeLabels: Record<string, string> = {
   casual: 'إجازة عارضة',
 }
 
-const leaveTypeLabels: Record<string, string> = {
-  ANNUAL: 'سنوية',
-  SICK: 'مرضية',
-  CASUAL: 'عارضة',
-  UNPAID: 'بدون راتب',
-  MATERNITY: 'وضع',
-  PATERNITY: 'أبوة',
-  HAJJ: 'حج',
-  MARRIAGE: 'زواج',
-  BEREAVEMENT: 'وفاة/عدة',
-  EXAM: 'امتحانات',
-  COMPENSATORY: 'تعويضية',
-}
 
 const leaveStatusLabels: Record<string, string> = {
   APPROVED: 'معتمدة',
@@ -72,52 +60,10 @@ const leaveStatusLabels: Record<string, string> = {
   CANCELLED: 'ملغاة',
 }
 
-const requestStatusLabels: Record<string, string> = {
-  DRAFT: 'مسودة',
-  SUBMITTED: 'مُقدَّم',
-  UNDER_REVIEW: 'قيد المراجعة',
-  APPROVED: 'معتمد',
-  COMPLETED: 'مكتمل',
-  REJECTED: 'مرفوض',
-  RETURNED: 'مُعاد',
-  CANCELLED: 'ملغي',
-}
 
-const requestStatusColors: Record<string, string> = {
-  DRAFT: 'bg-gray-100 text-gray-700',
-  SUBMITTED: 'bg-blue-100 text-blue-700',
-  UNDER_REVIEW: 'bg-warning-50 text-warning-700',
-  APPROVED: 'bg-success-50 text-success-700',
-  COMPLETED: 'bg-success-50 text-success-700',
-  REJECTED: 'bg-red-100 text-red-700',
-  RETURNED: 'bg-orange-100 text-orange-700',
-  CANCELLED: 'bg-gray-100 text-gray-700',
-}
 
-const typeCodeLabels: Record<string, string> = {
-  LEAVE_ANNUAL: 'إجازة سنوية',
-  LEAVE_SICK: 'إجازة مرضية',
-  LEAVE_CASUAL: 'إجازة عارضة',
-  LEAVE_UNPAID: 'إجازة بدون راتب',
-  PERMISSION: 'إذن انصراف',
-  LOAN: 'سلفة',
-  OVERTIME: 'عمل إضافي',
-  CUSTODY: 'عهدة',
-  TRANSFER: 'نقل',
-  RESIGNATION: 'استقالة',
-}
 
-const custodyStatusLabels: Record<string, string> = {
-  ASSIGNED: 'مُسندة',
-  ACKNOWLEDGED: 'مستلمة',
-  RETURNED: 'مُعادة',
-}
 
-const payMethodLabels: Record<string, string> = {
-  transfer: 'تحويل بنكي',
-  cash: 'نقدي',
-  cheque: 'شيك',
-}
 
 const serviceDuration = (joinDate?: string) => {
   if (!joinDate) return '—'
@@ -134,9 +80,12 @@ const serviceDuration = (joinDate?: string) => {
 }
 
 const formatDate = (value?: string | null) =>
-  value ? new Date(value).toLocaleDateString('ar-SA') : '—'
+  value ? new Date(value).toLocaleDateString('ar-EG-u-ca-gregory') : '—'
 
 export default function ProfilePage() {
+  const leaveCatalog = useLeaveCatalog()
+  const systemCurrency = useCurrency()
+  const leaveTypeLabels = leaveCatalog.labels
   const [activeTab, setActiveTab] = useState('info')
   const [user, setUser] = useState<CurrentUser | null>(null)
   const [employee, setEmployee] = useState<ApiEmployee | null>(null)
@@ -150,12 +99,21 @@ export default function ProfilePage() {
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [sectionErrors, setSectionErrors] = useState<Record<string, string>>({})
+  const [reloadRevision, setReloadRevision] = useState(0)
   const [fallbackNote, setFallbackNote] = useState('')
   const [photoUrl, setPhotoUrl] = useState<string | null>(null)
+  // تغيير الصورة لمن يملك تعديل ملفات الموظفين (الباك يفرض employees.edit ونطاق الفرع)
+  const [canEditPhoto, setCanEditPhoto] = useState(false)
+  const [photoUploading, setPhotoUploading] = useState(false)
+  const photoInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
+    setSectionErrors({})
+    const sectionError = (section: string, err: unknown) => setSectionErrors((prev) => ({ ...prev, [section]: err instanceof Error ? err.message : 'تعذر التحميل' }))
     const currentUser = getCurrentUser()
     setUser(currentUser)
+    setCanEditPhoto(can('employees.edit'))
     if (!currentUser || !currentUser.employeeId) {
       setLoading(false)
       return
@@ -165,21 +123,21 @@ export default function ProfilePage() {
       try {
         fetchBranches()
           .then(setBranches)
-          .catch(() => {})
+          .catch((err) => sectionError('الفروع', err))
         fetchDepartments()
           .then(setDepartments)
-          .catch(() => {})
+          .catch((err) => sectionError('الأقسام', err))
         fetchMyBalances()
           .then(setBalances)
-          .catch(() => {})
-        const myRequests = await fetchMyRequests().catch(() => [] as ApiRequest[])
+          .catch((err) => sectionError('أرصدة الإجازات', err))
+        const myRequests = await fetchMyRequests().catch((err) => { sectionError('الطلبات', err); return [] as ApiRequest[] })
         setRequests(myRequests.slice(0, 5))
         // الاسم العربي لنوع الطلب — الكود لا يظهر للمستخدم
         fetchRequestTypes()
           .then((ts) =>
             setTypeNames(Object.fromEntries(ts.map((t) => [t.code, t.nameAr])))
           )
-          .catch(() => {})
+          .catch((err) => sectionError('أنواع الطلبات', err))
         try {
           const profile = await fetchEmployeeProfile(employeeId)
           setEmployee(profile.employee)
@@ -202,7 +160,7 @@ export default function ProfilePage() {
         setLoading(false)
       }
     })()
-  }, [])
+  }, [reloadRevision])
 
   // صورة الموظف — رابط blob بالتوكن (يُلغى عند التفريغ)
   useEffect(() => {
@@ -229,6 +187,23 @@ export default function ProfilePage() {
     }
   }, [employee?.photoFileId])
 
+  // رفع صورة جديدة ثم ربطها بملف الموظف — العرض يُعاد تحميله من photoFileId
+  const handlePhotoPick = async (file: File | null | undefined) => {
+    if (!file || !employee) return
+    setError('')
+    setPhotoUploading(true)
+    try {
+      const res = await uploadFile(file, { entityType: 'employee_photo' })
+      await updateEmployee(employee.id, { photoFileId: res.id })
+      setEmployee((prev) => (prev ? { ...prev, photoFileId: res.id } : prev))
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تحديث الصورة')
+    } finally {
+      setPhotoUploading(false)
+      if (photoInputRef.current) photoInputRef.current.value = ''
+    }
+  }
+
   const branchName = (id?: number | null) =>
     branches.find((b) => b.id === id)?.name ?? '—'
   const departmentName = (id?: number | null) =>
@@ -247,8 +222,10 @@ export default function ProfilePage() {
   return (
     <MainLayout>
       <div className="space-y-6">
+        {leaveCatalog.error && <div role="alert" className="bg-amber-50 text-amber-800 rounded-xl p-3 text-sm">تعذر تحميل أنواع الإجازات: {leaveCatalog.error} <button type="button" className="underline" onClick={leaveCatalog.retry}>إعادة المحاولة</button></div>}
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+        {Object.entries(sectionErrors).map(([section, message]) => <div key={section} role="alert" className="bg-amber-50 text-amber-800 rounded-xl p-3 text-sm">تعذر تحميل {section}: {message} <button type="button" onClick={() => setReloadRevision(value => value + 1)} className="underline">إعادة المحاولة</button></div>)}
 
         {loading ? (
           <div className="flex justify-center py-12">
@@ -452,10 +429,14 @@ export default function ProfilePage() {
                       <span className="text-gray-500">الراتب الأساسي</span>
                       <span className="font-medium text-gray-800">
                         {employee?.basicSalary != null
-                          ? Number(employee.basicSalary).toLocaleString()
+                          ? `${Number(employee.basicSalary).toLocaleString()} ${employee.currency ? currencyLabel(employee.currency) : systemCurrency}`
                           : '—'}
                       </span>
                     </div>
+                    {employee && <>
+                      {([['بدل السكن', employee.housingAllowance], ['بدل النقل', employee.transportAllowance], ['بدل الهاتف', employee.phoneAllowance], ['بدل طبيعة العمل', employee.workNatureAllowance], ['بدلات أخرى', employee.otherAllowance]] as const).map(([label, amount]) => <div key={label} className="flex justify-between py-3 border-b border-gray-100"><span className="text-gray-500">{label}</span><span>{Number(amount ?? 0).toLocaleString()} {employee.currency ? currencyLabel(employee.currency) : systemCurrency}</span></div>)}
+                      <div className="flex justify-between py-3 font-bold"><span>إجمالي الراتب</span><span>{[employee.basicSalary, employee.housingAllowance, employee.transportAllowance, employee.phoneAllowance, employee.workNatureAllowance, employee.otherAllowance].reduce<number>((sum, amount) => sum + Number(amount ?? 0), 0).toLocaleString()} {employee.currency ? currencyLabel(employee.currency) : systemCurrency}</span></div>
+                    </>}
                     <div className="flex justify-between py-3">
                       <span className="text-gray-500">طريقة الصرف</span>
                       <span className="font-medium text-gray-800">
@@ -474,7 +455,7 @@ export default function ProfilePage() {
                   </h2>
                   <div className="space-y-3">
                     {balances.length === 0 ? (
-                      <p className="text-gray-500 text-sm">لا توجد أرصدة</p>
+                      <p className="text-gray-500 text-sm">{sectionErrors['أرصدة الإجازات'] ? 'تعذر تحميل الأرصدة' : 'لا توجد أرصدة'}</p>
                     ) : (
                       balances.map((balance) => (
                         <div
@@ -488,7 +469,7 @@ export default function ProfilePage() {
                               {balance.period}
                             </p>
                             <p className="text-sm text-gray-500">
-                              المتبقي {Number(balance.remaining)} من {Number(balance.entitled)}{' '}
+                              المتبقي {Number(balance.remaining)} من {Number(balance.entitled) + (balance.opening?.expired ? 0 : Number(balance.opening?.days ?? 0))}{' '}
                               يوم — المستهلك {Number(balance.totalTaken)}
                             </p>
                           </div>
@@ -518,7 +499,7 @@ export default function ProfilePage() {
                           <Calendar size={20} className="text-gray-600" />
                           <div>
                             <p className="font-medium text-gray-800">
-                              إجازة {leaveTypeLabels[leave.leaveType] ?? leave.leaveType} —{' '}
+                              {leaveCatalog.label(leave.leaveType)} —{' '}
                               {Number(leave.days)} يوم
                             </p>
                             <p className="text-sm text-gray-500">
@@ -545,7 +526,7 @@ export default function ProfilePage() {
                 <div className="card">
                   <h2 className="text-lg font-bold text-gray-800 mb-6">آخر الطلبات</h2>
                   {requests.length === 0 ? (
-                    <p className="text-gray-500 text-sm">لا توجد طلبات</p>
+                    <p className="text-gray-500 text-sm">{sectionErrors['الطلبات'] ? 'تعذر تحميل الطلبات' : 'لا توجد طلبات'}</p>
                   ) : (
                     <div className="space-y-3">
                       {requests.map((request) => (
@@ -557,9 +538,7 @@ export default function ProfilePage() {
                             <FileText size={20} className="text-gray-600" />
                             <div>
                               <p className="font-medium text-gray-800">
-                                {typeNames[request.typeCode] ??
-                                  typeCodeLabels[request.typeCode] ??
-                                  'طلب'}{' '}
+                                {typeNames[request.typeCode] ?? `نوع طلب (${request.typeCode})`}{' '}
                                 #{request.id}
                               </p>
                               <p className="text-sm text-gray-500">
@@ -607,9 +586,7 @@ export default function ProfilePage() {
                           </div>
                           <span
                             className={`px-3 py-1 rounded-full text-xs font-medium ${
-                              item.status === 'RETURNED'
-                                ? 'bg-gray-100 text-gray-700'
-                                : 'bg-success-50 text-success-700'
+                              custodyStatusStyles[item.status] ?? 'bg-gray-100 text-gray-700'
                             }`}
                           >
                             {custodyStatusLabels[item.status] ?? item.status}
@@ -637,7 +614,7 @@ export default function ProfilePage() {
                         className="p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors cursor-pointer"
                       >
                         <FileText size={32} className="text-primary-600 mb-2" />
-                        <p className="font-medium text-gray-800">{doc.docType}</p>
+                        <p className="font-medium text-gray-800">{docTypeLabel(doc.docType)}</p>
                         <p className="text-sm text-gray-500">
                           {doc.number ?? '—'}
                           {doc.expiryDate && ` — ينتهي ${formatDate(doc.expiryDate)}`}

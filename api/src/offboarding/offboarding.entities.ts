@@ -5,6 +5,7 @@ import {
   Index,
   PrimaryGeneratedColumn,
 } from 'typeorm'
+import type { SettlementFinancialSnapshot } from '../payroll/payroll-settlement-boundary'
 
 // دورة إنهاء الخدمة: استقالة معتمدة → إخلاء طرف (5 جهات) → تصفية → إغلاق
 // الموظف يبقى TERMINATED فقط بعد اعتماد التصفية ومرور آخر يوم عمل
@@ -14,6 +15,19 @@ export type OffboardingStatus =
   | 'SETTLED' // التصفية معتمدة ومقفولة — بانتظار آخر يوم عمل
   | 'CLOSED' // انتهت الخدمة فعلياً
   | 'CANCELLED' // تراجع عن الاستقالة خلال فترة الإشعار — الموظف رجع نشطاً
+
+// EMP-2: سبب إنهاء الخدمة — يحدد معامل مكافأة نهاية الخدمة (إعدادات eos.*)
+export const TERMINATION_REASONS = [
+  'resignation', // استقالة (طلب معتمد أو خطاب تسجّله الموارد البشرية)
+  'termination', // إنهاء من صاحب العمل (م84)
+  'dismissal', // فصل تأديبي (م80)
+  'contract_end', // انتهاء مدة العقد
+  'retirement', // تقاعد
+  'death', // وفاة
+  'disability', // عجز صحي
+  'force_majeure', // قوة قاهرة (م87)
+] as const
+export type TerminationReason = (typeof TERMINATION_REASONS)[number]
 
 @Entity('offboarding_cases')
 export class OffboardingCase {
@@ -27,6 +41,28 @@ export class OffboardingCase {
   @Column({ nullable: true })
   resignationRequestId: number
 
+  // EMP-2: سبب الإنهاء — NULL في الملفات القديمة = استقالة (كانت المسار الوحيد)
+  @Column({ type: 'nvarchar', length: 30, nullable: true })
+  terminationReason: TerminationReason
+
+  // EMP-1: الإنهاء من طرف الشركة — تاريخ الإشعار والملاحظات ومقابلة الخروج
+  @Column({ type: 'date', nullable: true })
+  noticeDate: string
+
+  @Column({ length: 1000, nullable: true })
+  notes: string
+
+  @Column({ length: 1000, nullable: true })
+  exitInterviewNotes: string
+
+  // من فتح الملف (users.id) — NULL = فُتح آلياً من طلب استقالة معتمد
+  @Column({ name: 'openedByUserId', nullable: true })
+  openedBy: number
+
+  // إيقاف حساب الدخول عند فتح الملف (وفاة/فصل) — إلغاء الملف يعيده
+  @Column({ type: 'datetime', nullable: true })
+  accessRevokedAt: Date
+
   @Column({ type: 'date' })
   lastWorkingDay: string
 
@@ -37,8 +73,14 @@ export class OffboardingCase {
   @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
   settlementNet: number
 
-  @Column({ nullable: true })
+  // ① / ح٢-ب: NULL للملفات القديمة؛ لا يعاد اختراع مصادر تسويتها بأثر رجعي.
+  @Column({ type: 'simple-json', nullable: true })
+  settlementFinancialSnapshot: SettlementFinancialSnapshot | null
+
+  @Column({ name: 'settlementApprovedByUserId', nullable: true })
   settlementApprovedBy: number // users.id
+
+  toJSON() { return { ...this, openedByUserId: this.openedBy ?? null, settlementApprovedByUserId: this.settlementApprovedBy ?? null } }
 
   @Column({ type: 'datetime', nullable: true })
   settlementApprovedAt: Date
@@ -56,7 +98,7 @@ export class OffboardingCase {
 
 // الجهات الخمس لإخلاء الطرف
 export type ClearanceParty = 'manager' | 'custody' | 'it' | 'finance' | 'hr'
-export type ClearanceStatus = 'PENDING' | 'DONE' | 'BLOCKED'
+export type ClearanceStatus = 'PENDING' | 'DONE'
 
 @Entity('clearance_items')
 export class ClearanceItem {
@@ -83,8 +125,10 @@ export class ClearanceItem {
   @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
   amount: number
 
-  @Column({ nullable: true })
+  @Column({ name: 'doneByUserId', nullable: true })
   doneBy: number // users.id
+
+  toJSON() { return { ...this, doneByUserId: this.doneBy ?? null } }
 
   @Column({ type: 'datetime', nullable: true })
   doneAt: Date

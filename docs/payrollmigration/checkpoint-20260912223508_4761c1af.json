@@ -1,0 +1,7 @@
+{
+  "database": "hr_review_pre_payroll_20260911162404_52ee65ac",
+  "backupPath": "/var/opt/mssql/data/hr_payroll_checkpoint_20260912223508_4761c1af.bak",
+  "copyOnly": true,
+  "checksumVerified": true,
+  "createdAt": "2026-09-12T22:35:08.849Z"
+}

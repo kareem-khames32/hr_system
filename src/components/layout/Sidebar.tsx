@@ -66,14 +66,15 @@ const adminMenuDefs: MenuItem[] = [
     icon: <Users size={20} />,
     children: [
       { label: 'قائمة الموظفين', href: '/employees', perm: 'employees.view' },
-      { label: 'إضافة موظف', href: '/employees/add', perm: 'employees.view' },
+      { label: 'إضافة موظف', href: '/employees/add', perm: 'employees.create' },
       { label: 'تهيئة الموظفين الجدد', href: '/employees/onboarding', perm: 'employees.view' },
       { label: 'الهيكل التنظيمي', href: '/employees/org-chart', perm: 'employees.view' },
       { label: 'إدارة العقود', href: '/employees/contracts', perm: 'employees.view' },
       { label: 'المستندات', href: '/employees/documents', perm: 'documents.manage' },
+      { label: 'إنشاء مستند', href: '/employees/documents/create', perm: 'documents.manage' },
       { label: 'سجل العهد', href: '/employees/custody', perm: 'custody.assign' },
       { label: 'لوج النقل', href: '/employees/transfers', perm: 'transfers.view' },
-      { label: 'الموظفين المؤرشفين', href: '/employees/archived', perm: 'employees.view' },
+      { label: 'المؤرشفون ومنتهو الخدمة', href: '/employees/archived', perm: 'employees.view' },
     ],
   },
   {
@@ -87,31 +88,31 @@ const adminMenuDefs: MenuItem[] = [
     id: 'attendance',
     label: 'الحضور والانصراف',
     icon: <Clock size={20} />,
-    perm: 'attendance.view_all',
+    // الصلاحية لكل عنصر (مطابقة لحارس المسارات): الورديات كتالوج إعدادات والأجهزة للمزامنة
     children: [
-      { label: 'سجل الحضور', href: '/attendance' },
-      { label: 'الجدول الأسبوعي', href: '/attendance/weekly-schedule' },
-      { label: 'الورديات', href: '/attendance/shifts' },
-      { label: 'الأذونات', href: '/attendance/permissions' },
-      { label: 'العمل الإضافي', href: '/attendance/overtime' },
-      { label: 'الإدخال اليدوي', href: '/attendance/manual-entry' },
-      { label: 'أجهزة البصمة', href: '/attendance/devices' },
-      { label: 'الكشف الشهري', href: '/attendance/monthly-sheet' },
-      { label: 'تقارير الحضور', href: '/attendance/reports' },
+      { label: 'سجل الحضور', href: '/attendance', perm: 'attendance.view_all' },
+      { label: 'الجدول الأسبوعي', href: '/attendance/weekly-schedule', perm: 'attendance.view_all' },
+      { label: 'الورديات', href: '/attendance/shifts', perm: 'settings.manage' },
+      { label: 'الأذونات', href: '/attendance/permissions', perm: 'attendance.view_all' },
+      { label: 'العمل الإضافي', href: '/attendance/overtime', perm: 'attendance.view_all' },
+      { label: 'الإدخال اليدوي', href: '/attendance/manual-entry', perm: 'attendance.view_all' },
+      { label: 'أجهزة البصمة', href: '/attendance/devices', perm: 'attendance.sync' },
+      { label: 'الكشف الشهري', href: '/attendance/monthly-sheet', perm: 'attendance.view_all' },
+      { label: 'تقارير الحضور', href: '/attendance/reports', perm: 'attendance.view_all' },
     ],
   },
   {
     id: 'leaves',
     label: 'الإجازات',
     icon: <Calendar size={20} />,
-    perm: 'leaves.view_all',
+    // العطلات وأنواع الإجازات كتالوجات إعدادات (كتابتها وقراءة الأنواع settings.manage)
     children: [
-      { label: 'طلبات الإجازات', href: '/leaves' },
-      { label: 'طلب إجازة', href: '/leaves/request' },
-      { label: 'رصيد الإجازات', href: '/leaves/balance' },
-      { label: 'تقويم الإجازات', href: '/leaves/calendar' },
-      { label: 'الإجازات الرسمية', href: '/leaves/holidays' },
-      { label: 'أنواع الإجازات', href: '/leaves/types' },
+      { label: 'سجل الإجازات المعتمدة', href: '/leaves', perm: 'leaves.view_all' },
+      { label: 'طلب إجازة', href: '/leaves/request', perm: 'leaves.view_all' },
+      { label: 'رصيد الإجازات', href: '/leaves/balance', perm: 'leaves.view_all' },
+      { label: 'تقويم الإجازات', href: '/leaves/calendar', perm: 'leaves.view_all' },
+      { label: 'العطلات الرسمية', href: '/leaves/holidays', perm: 'settings.manage' },
+      { label: 'أنواع الإجازات', href: '/leaves/types', perm: 'settings.manage' },
     ],
   },
   {
@@ -121,6 +122,7 @@ const adminMenuDefs: MenuItem[] = [
     perm: 'payroll.view',
     children: [
       { label: 'مسير الرواتب', href: '/payroll' },
+      { label: 'سياسات الرواتب', href: '/payroll/policies' },
       { label: 'المكافآت', href: '/payroll/bonuses' },
       { label: 'الخصومات', href: '/payroll/deductions' },
       { label: 'قسائم الراتب', href: '/payroll/payslips' },
@@ -196,9 +198,10 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'سياسات الإجازات والأوفرتايم', href: '/settings/policies', perm: 'settings.manage' },
       { label: 'الاعتمادات والموافقات', href: '/settings/approvals', perm: 'approval_chains.manage' },
       { label: 'بانِي الطلبات', href: '/settings/request-types', perm: 'request_types.manage' },
-      { label: 'كتالوج الأصول', href: '/settings/asset-types', perm: 'settings.manage' },
+      { label: 'سجل الأصول', href: '/settings/asset-types', perm: 'custody.assign' },
       { label: 'أنواع المستندات', href: '/settings/documents', perm: 'settings.manage' },
       { label: 'قوالب المستندات', href: '/settings/document-templates', perm: 'settings.manage' },
+      { label: 'قوالب الخطابات', href: '/settings/letter-templates', perm: 'settings.manage' },
       { label: 'المستخدمين', href: '/settings/users', perm: 'users.manage' },
       { label: 'الأدوار والصلاحيات', href: '/settings/roles', perm: 'roles.manage' },
     ],
@@ -217,6 +220,8 @@ export default function Sidebar() {
   const pathname = usePathname()
   const [expandedItems, setExpandedItems] = useState<string[]>(['employees'])
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
+  const [inboxError, setInboxError] = useState(false)
+  const [inboxRevision, setInboxRevision] = useState(0)
   const [inboxCount, setInboxCount] = useState<number>(0)
 
   // يُقرأ بعد الـ mount — الجلسة في التخزين المحلي
@@ -226,10 +231,10 @@ export default function Sidebar() {
     if (user) {
       // «بانتظار موافقتي» تظهر لغير الموظف دائماً، وللموظف عندما يكون معتمِداً فعلياً
       fetchInbox()
-        .then((rows) => setInboxCount(rows.length))
-        .catch(() => setInboxCount(0))
+        .then((rows) => { setInboxCount(rows.length); setInboxError(false) })
+        .catch(() => setInboxError(true))
     }
-  }, [])
+  }, [inboxRevision])
 
   // القائمة تُبنى من صلاحيات المستخدم الحالي — الفرض الحقيقي في الباك إند
   const menuItems = useMemo<MenuItem[]>(() => {
@@ -249,7 +254,7 @@ export default function Sidebar() {
     }
 
     const isPrivileged = adminItems.length > 0
-    const showInbox = currentUser.role !== 'employee' || inboxCount > 0
+    const showInbox = currentUser.role !== 'employee' || inboxCount > 0 || inboxError
 
     // بورتال الموظف — يظهر للجميع (كل مستخدم موظف أيضاً)
     const portalItems: MenuItem[] = [
@@ -287,7 +292,7 @@ export default function Sidebar() {
     ]
 
     return [...portalItems, ...adminItems]
-  }, [currentUser, inboxCount])
+  }, [currentUser, inboxCount, inboxError])
 
   const toggleExpanded = (id: string) => {
     setExpandedItems((prev) =>
@@ -316,6 +321,7 @@ export default function Sidebar() {
 
       {/* Navigation */}
       <nav className="flex-1 overflow-y-auto p-4 space-y-1">
+        {inboxError && <div role="alert" className="text-xs text-amber-700 p-2">تعذر تحديث صندوق الموافقات. <button type="button" className="underline" onClick={() => setInboxRevision(value => value + 1)}>إعادة المحاولة</button></div>}
         {menuItems.map((item) => (
           <div key={item.id}>
             {item.href ? (

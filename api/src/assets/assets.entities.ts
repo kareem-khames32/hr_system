@@ -20,6 +20,25 @@ export class AssetType {
   isActive: boolean
 }
 
+// أنواع مستندات الموظف — كتالوج للإعدادات (/catalogs/doc-types). code يُحفظ في
+// employee_documents.docType وثابت بعد الإنشاء، وnameAr هو ما تعرضه الشاشات
+@Entity('doc_types')
+export class DocType {
+  @PrimaryGeneratedColumn()
+  id: number
+
+  @Index({ unique: true })
+  @Column({ length: 50 })
+  code: string
+
+  @Index({ unique: true })
+  @Column({ length: 200 })
+  nameAr: string
+
+  @Column({ default: true })
+  isActive: boolean
+}
+
 // مستندات الموظف — بصلاحية وتنبيه انتهاء
 @Entity('employee_documents')
 export class EmployeeDocument {
@@ -30,8 +49,9 @@ export class EmployeeDocument {
   @Column()
   employeeId: number
 
+  // كود من كتالوج doc_types (مستندات قديمة قد تحمل نصاً حراً سُجل قبل الكتالوج)
   @Column({ length: 100 })
-  docType: string // هوية | جواز | إقامة | عقد | شهادة ...
+  docType: string
 
   @Column({ length: 100, nullable: true })
   number: string
@@ -65,7 +85,7 @@ export class PublicHoliday {
   @Column({ type: 'date', nullable: true })
   endDate: string // عطلة ممتدة
 
-  @Column({ length: 5, default: 'EG' })
+  @Column({ length: 5 })
   country: string
 }
 
@@ -89,6 +109,16 @@ export class Shift {
   // flexible = مرنة (المهم إكمال requiredHours ساعة، والنقص خصم)
   @Column({ length: 10, default: 'fixed' })
   shiftMode: 'fixed' | 'flexible'
+
+  // NULL يميز تعريفًا قديمًا؛ نافذة المرونة لا تُستنتج من نوافذ تصنيف البصمة.
+  @Column({ type: 'bit', nullable: true })
+  flexEnabled: boolean | null
+
+  @Column({ type: 'int', nullable: true })
+  flexWindowMinutes: number | null
+
+  @Column({ type: 'int', nullable: true })
+  requiredWorkMinutes: number | null
 
   // ساعات العمل المطلوبة (للمرنة) — NULL = تُشتق من مدة الوردية
   @Column({ type: 'decimal', precision: 4, scale: 2, nullable: true })
@@ -144,6 +174,17 @@ export class WorkSchedule {
   @Column({ length: 5, default: '17:00' })
   endTime: string
 
+  @Column({ type: 'bit', nullable: true })
+  flexEnabled: boolean | null
+
+  @Column({ type: 'int', nullable: true })
+  flexWindowMinutes: number | null
+
+  @Column({ type: 'int', nullable: true })
+  requiredWorkMinutes: number | null
+
+  // جدول من لم يُسند له جدول ولا وردية — واحد فقط (الكتالوج يُسقط العلم عن غيره).
+  // يعطيه الساعات فقط؛ عطلته الأسبوعية من الفرع/السياسات لا من weekendDays هنا
   @Column({ default: false })
   isDefault: boolean
 
@@ -174,7 +215,9 @@ export class BiometricDevice {
   @Column({ default: 4370 })
   port: number
 
-  @Column({ length: 100, nullable: true })
+  // سرّ الجهاز — لا يُقرأ افتراضياً (select:false) فلا يظهر في أي قراءة عامة؛
+  // من يحتاجه (المزامنة) يطلبه صراحةً
+  @Column({ length: 100, nullable: true, select: false })
   authKey: string
 
   @Column({ type: 'datetime', nullable: true })

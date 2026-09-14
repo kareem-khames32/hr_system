@@ -181,6 +181,10 @@ export default function RequestTypesPage() {
   const [updatingId, setUpdatingId] = useState<number | null>(null)
   const [empFilter, setEmpFilter] = useState('')
   const [form, setForm] = useState<BuilderForm>(emptyForm())
+  // سلاسل الاعتماد تحتاج approval_chains.manage — بدونها يُخفى اختيار السلسلة فقط
+  const [chainsAvailable, setChainsAvailable] = useState(true)
+  // قوائم الجمهور (الأقسام/الموظفون) بصلاحياتها — فشلها لا يُسقط الشاشة
+  const [audienceNote, setAudienceNote] = useState<string | null>(null)
 
   const reloadTypes = async () => {
     setRequestTypes(await fetchAdminRequestTypes())
@@ -188,25 +192,40 @@ export default function RequestTypesPage() {
 
   useEffect(() => {
     const loadData = async () => {
-      try {
-        const [types, ch, hs, deps, emps] = await Promise.all([
-          fetchAdminRequestTypes(),
-          fetchApprovalChains(),
-          fetchDestinationHandlers(),
-          fetchDepartments(),
-          fetchEmployees(),
-        ])
-        setRequestTypes(types)
-        setChains(ch)
-        setHandlers(hs)
-        setDepartments(deps)
-        setEmployees(emps)
-        setError(null)
-      } catch (err: any) {
-        setError(err.message)
-      } finally {
-        setLoading(false)
-      }
+      // الأنواع والوجهات أساس الشاشة (request_types.manage)؛ الباقي اختياري
+      const [types, hs, ch, deps, emps] = await Promise.allSettled([
+        fetchAdminRequestTypes(),
+        fetchDestinationHandlers(),
+        fetchApprovalChains(),
+        fetchDepartments(),
+        fetchEmployees(),
+      ])
+      if (types.status === 'fulfilled') setRequestTypes(types.value)
+      if (hs.status === 'fulfilled') setHandlers(hs.value)
+      const coreFailure = [types, hs].find(
+        (r): r is PromiseRejectedResult => r.status === 'rejected'
+      )
+      setError(
+        coreFailure
+          ? coreFailure.reason instanceof Error
+            ? coreFailure.reason.message
+            : 'تعذّر تحميل أنواع الطلبات'
+          : null
+      )
+      if (ch.status === 'fulfilled') setChains(ch.value)
+      else setChainsAvailable(false)
+      if (deps.status === 'fulfilled') setDepartments(deps.value)
+      if (emps.status === 'fulfilled') setEmployees(emps.value)
+      const missing = [
+        ...(deps.status === 'rejected' ? ['الأقسام'] : []),
+        ...(emps.status === 'rejected' ? ['الموظفين'] : []),
+      ]
+      setAudienceNote(
+        missing.length
+          ? `تعذّر تحميل قائمة ${missing.join(' و')} (صلاحية غير كافية أو خطأ في الخادم) — اختيار الجمهور بها غير متاح`
+          : null
+      )
+      setLoading(false)
     }
     loadData()
   }, [])
@@ -368,7 +387,10 @@ export default function RequestTypesPage() {
           nameAr: form.nameAr.trim(),
           customFields,
           visibleTo,
-          destinationHandler: form.destinationHandler,
+          // الوجهة تُرسل فقط لو تغيّرت — أنواع مبذورة بوجهات قديمة كانت تُرفض بـ400
+          ...(form.destinationHandler !== (editing.destinationHandler || 'none')
+            ? { destinationHandler: form.destinationHandler }
+            : {}),
           requiredAttachments: form.requiredAttachments.trim() || undefined,
           ...(form.approvalChainId
             ? { approvalChainId: Number(form.approvalChainId) }
@@ -638,28 +660,31 @@ export default function RequestTypesPage() {
 
                   {/* Details */}
                   <div className="mt-5 space-y-2.5">
-                    <div className="flex items-center gap-3 text-sm">
-                      <GitBranch size={16} className="text-gray-400" />
-                      <span className="text-gray-600">دورة الاعتماد:</span>
-                      <select
-                        value={rt.approvalChainId ?? ''}
-                        onChange={(e) => {
-                          const chainId = Number(e.target.value)
-                          if (chainId) assignChain(rt, chainId)
-                        }}
-                        disabled={updatingId === rt.id}
-                        className="input flex-1 py-1.5 text-sm"
-                      >
-                        <option value="" disabled>
-                          {chainNameOf(rt.approvalChainId)}
-                        </option>
-                        {chains.map((c) => (
-                          <option key={c.id} value={c.id}>
-                            {c.nameAr}
+                    {/* اختيار السلسلة يحتاج قائمة السلاسل (approval_chains.manage) */}
+                    {chainsAvailable && (
+                      <div className="flex items-center gap-3 text-sm">
+                        <GitBranch size={16} className="text-gray-400" />
+                        <span className="text-gray-600">دورة الاعتماد:</span>
+                        <select
+                          value={rt.approvalChainId ?? ''}
+                          onChange={(e) => {
+                            const chainId = Number(e.target.value)
+                            if (chainId) assignChain(rt, chainId)
+                          }}
+                          disabled={updatingId === rt.id}
+                          className="input flex-1 py-1.5 text-sm"
+                        >
+                          <option value="" disabled>
+                            {chainNameOf(rt.approvalChainId)}
                           </option>
-                        ))}
-                      </select>
-                    </div>
+                          {chains.map((c) => (
+                            <option key={c.id} value={c.id}>
+                              {c.nameAr}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                     <div className="flex items-center gap-3 text-sm">
                       <FileOutput size={16} className="text-gray-400" />
                       <span className="text-gray-600">الوجهة:</span>
@@ -854,6 +879,13 @@ export default function RequestTypesPage() {
                           {h.labelAr}
                         </option>
                       ))}
+                      {/* وجهة النوع الحالية لو ليست ضمن المنفّذ (مبذورة لموديول لم يُبنَ) — تبقى كما هي */}
+                      {form.destinationHandler &&
+                        !handlers.some((h) => h.key === form.destinationHandler) && (
+                          <option value={form.destinationHandler}>
+                            {form.destinationHandler} — الوجهة المحفوظة حالياً
+                          </option>
+                        )}
                     </select>
                   </div>
                 </div>
@@ -864,6 +896,9 @@ export default function RequestTypesPage() {
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       دورة الاعتماد (اختياري)
                     </label>
+                    {/* بلا approval_chains.manage: لا قائمة سلاسل — يُخفى الاختيار ويبقى الربط كما هو */}
+                    {chainsAvailable ? (
+                    <>
                     <select
                       value={form.approvalChainId}
                       onChange={(e) =>
@@ -881,6 +916,15 @@ export default function RequestTypesPage() {
                     <p className="text-xs text-gray-400 mt-1">
                       تُدار الدورات من «الاعتمادات والموافقات»
                     </p>
+                    </>
+                    ) : (
+                      <p className="text-sm text-gray-500 bg-gray-50 rounded-xl p-3">
+                        اختيار دورة الاعتماد يحتاج صلاحية «إدارة سلاسل الاعتماد» —
+                        {editing
+                          ? ' تبقى الدورة المربوطة كما هي'
+                          : ' يُنشأ للنوع الجديد دورة باسمه تُضبط خطواتها لاحقاً'}
+                      </p>
+                    )}
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1052,6 +1096,12 @@ export default function RequestTypesPage() {
                       </label>
                     ))}
                   </div>
+
+                  {audienceNote && form.audienceMode !== 'all' && (
+                    <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-3">
+                      {audienceNote}
+                    </p>
+                  )}
 
                   {form.audienceMode === 'departments' && (
                     <div className="mt-3 max-h-44 overflow-y-auto border border-gray-100 rounded-xl p-3 space-y-2">

@@ -44,6 +44,11 @@ export class Branch {
   @Column({ length: 30, nullable: true })
   weekendDays: string
 
+  // دولة الفرع (رمز مثل EG/SA) — تسري عليه العطلات الرسمية لدولته فقط؛
+  // فارغ = كل العطلات (السلوك السابق)
+  @Column({ length: 5, nullable: true })
+  country: string
+
   @Column({ default: true })
   isActive: boolean
 

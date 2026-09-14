@@ -44,16 +44,18 @@ import {
   createDocument,
   updateDocument,
   uploadFile,
-  fileDownloadUrl,
-  getToken,
+  fetchFileObjectUrl,
   ApiEmployee,
 } from '@/lib/api'
+import { docTypeLabel, DOC_TYPES } from '@/lib/doc-types'
 
 interface DocumentRow {
   id: number
   name: string
   number: string
   type: 'pdf' | 'image' | 'doc' | 'other'
+  // الكود الخام كما هو محفوظ في الباك — للفلترة والتعديل
+  docTypeCode: string
   category: string
   employeeName: string
   employeeId: number
@@ -109,6 +111,7 @@ export default function DocumentsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [downloading, setDownloading] = useState(false)
 
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('الكل')
@@ -145,10 +148,12 @@ export default function DocumentsPage() {
           const expired = d.expired ?? (!!expiry && expiry < today)
           return {
             id: d.id,
-            name: d.docType,
+            // العرض بالعربي من القاموس المشترك، والكود الخام محفوظ للفلترة/التعديل
+            name: docTypeLabel(d.docType),
             number: d.number ?? '',
             type: 'doc' as const,
-            category: d.docType,
+            docTypeCode: d.docType,
+            category: docTypeLabel(d.docType),
             employeeName: d.employeeName ?? `#${d.employeeId}`,
             employeeId: d.employeeId,
             employeeCode: d.employeeCode ?? '',
@@ -176,15 +181,17 @@ export default function DocumentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const categories = ['الكل', ...Array.from(new Set(documents.map((d) => d.category)))]
+  // التصنيفات بالكود الخام (قيمة الفلتر) وتُعرض بالعربي
+  const categories = ['الكل', ...Array.from(new Set(documents.map((d) => d.docTypeCode)))]
 
   const filteredDocs = documents.filter((doc) => {
     const matchesSearch =
       doc.name.includes(searchTerm) ||
+      doc.docTypeCode.includes(searchTerm) ||
       doc.number.includes(searchTerm) ||
       doc.employeeName.includes(searchTerm)
     const matchesCategory =
-      selectedCategory === 'الكل' || doc.category === selectedCategory
+      selectedCategory === 'الكل' || doc.docTypeCode === selectedCategory
     const matchesEmployee =
       !selectedEmployee || String(doc.employeeId) === selectedEmployee
     const matchesStatus = !selectedStatus || doc.status === selectedStatus
@@ -205,10 +212,10 @@ export default function DocumentsPage() {
   }
 
   const selectAll = () => {
-    if (selectedDocs.length === filteredDocs.length) {
-      setSelectedDocs([])
+    if (filteredDocs.every((doc) => selectedDocs.includes(doc.id))) {
+      setSelectedDocs((prev) => prev.filter((id) => !filteredDocs.some((doc) => doc.id === id)))
     } else {
-      setSelectedDocs(filteredDocs.map((d) => d.id))
+      setSelectedDocs((prev) => [...new Set([...prev, ...filteredDocs.map((doc) => doc.id)])])
     }
   }
 
@@ -223,7 +230,7 @@ export default function DocumentsPage() {
   const openEdit = (doc: DocumentRow) => {
     setEditingId(doc.id)
     setUploadForm({
-      docType: doc.name,
+      docType: doc.docTypeCode,
       employeeId: String(doc.employeeId),
       number: doc.number,
       issueDate: doc.issueDate,
@@ -263,17 +270,50 @@ export default function DocumentsPage() {
     const fileId = Number(fileRef.slice(5))
     if (!Number.isFinite(fileId) || fileId <= 0) return
     setError('')
+    const viewer = window.open('', '_blank')
+    if (viewer) viewer.opener = null
     try {
-      const token = getToken()
-      const res = await fetch(fileDownloadUrl(fileId), {
-        headers: token ? { Authorization: `Bearer ${token}` } : {},
-      })
-      if (!res.ok) throw new Error(`تعذر تحميل الملف (${res.status})`)
-      const blob = await res.blob()
-      window.open(URL.createObjectURL(blob))
+      const url = await fetchFileObjectUrl(fileId)
+      if (!url) throw new Error('تعذر تحميل الملف')
+      if (viewer) viewer.location.href = url
+      else {
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `document-${fileId}`
+        link.click()
+      }
+      window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
     } catch (err) {
+      viewer?.close()
       setError(err instanceof Error ? err.message : 'تعذر عرض الملف')
     }
+  }
+
+  const downloadSelected = async () => {
+    if (downloading) return
+    setDownloading(true)
+    setError('')
+    const failures: string[] = []
+    for (const doc of documents.filter((item) => selectedDocs.includes(item.id))) {
+      const fileId = /^file:(\d+)$/.exec(doc.fileRef)?.[1]
+      if (!fileId) {
+        failures.push(`${doc.name} — ${doc.employeeName}: لا يوجد ملف مرفق`)
+        continue
+      }
+      try {
+        const url = await fetchFileObjectUrl(Number(fileId))
+        if (!url) throw new Error('تعذر تحميل الملف')
+        const link = document.createElement('a')
+        link.href = url
+        link.download = `${doc.employeeCode || doc.employeeId}-${doc.docTypeCode}-${doc.id}`
+        link.click()
+        window.setTimeout(() => URL.revokeObjectURL(url), 60_000)
+      } catch (err) {
+        failures.push(`${doc.name} — ${doc.employeeName}: ${err instanceof Error ? err.message : 'تعذر تحميل الملف'}`)
+      }
+    }
+    if (failures.length) setError(failures.join('؛ '))
+    setDownloading(false)
   }
 
   const handleSave = async () => {
@@ -322,6 +362,10 @@ export default function DocumentsPage() {
             <p className="text-gray-500 mt-1">إدارة وأرشفة مستندات الموظفين</p>
           </div>
           <div className="flex items-center gap-3">
+            <Link href="/employees/documents/create" className="btn-primary flex items-center gap-2">
+              <FileText size={18} />
+              إنشاء مستند من قالب
+            </Link>
             <Link
               href="/settings/documents"
               className="btn-secondary flex items-center gap-2"
@@ -477,7 +521,7 @@ export default function DocumentsPage() {
                             : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                         }`}
                       >
-                        {cat}
+                        {cat === 'الكل' ? cat : docTypeLabel(cat)}
                       </button>
                     ))}
                   </div>
@@ -503,13 +547,9 @@ export default function DocumentsPage() {
                 </button>
               </div>
               <div className="flex items-center gap-2">
-                <button className="btn-secondary flex items-center gap-2">
+                <button onClick={downloadSelected} disabled={downloading} className="btn-secondary flex items-center gap-2">
                   <Download size={16} />
-                  تحميل
-                </button>
-                <button className="btn-secondary flex items-center gap-2">
-                  <Send size={16} />
-                  إرسال بالبريد
+                  {downloading ? 'جارٍ تحميل المرفقات...' : 'تحميل المرفقات المحددة'}
                 </button>
               </div>
             </div>
@@ -726,21 +766,39 @@ export default function DocumentsPage() {
                 )}
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">نوع المستند *</label>
-                  <input
-                    type="text"
+                  <select
                     className="input w-full"
-                    placeholder="مثال: جواز سفر، عقد عمل، شهادة"
                     value={uploadForm.docType}
                     onChange={(e) => setUploadForm({ ...uploadForm, docType: e.target.value })}
-                  />
+                  >
+                    <option value="">اختر نوع المستند</option>
+                    {DOC_TYPES.map((t) => (
+                      <option key={t.code} value={t.code}>
+                        {t.label}
+                      </option>
+                    ))}
+                    {/* نوع قديم كُتب نصاً حراً قبل توحيد القائمة — يظل قابلاً للحفظ كما هو */}
+                    {uploadForm.docType &&
+                      !DOC_TYPES.some((t) => t.code === uploadForm.docType) && (
+                        <option value={uploadForm.docType}>
+                          {docTypeLabel(uploadForm.docType)} (نوع قديم)
+                        </option>
+                      )}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">
+                    اختر «أخرى» للأنواع غير المدرجة واكتب التفاصيل في الملاحظات.
+                  </p>
                 </div>
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">الموظف *</label>
+                    {/* موظف المستند ثابت عند التعديل — لا نقل لموظف آخر */}
                     <select
-                      className="input w-full"
+                      className="input w-full disabled:opacity-60 disabled:cursor-not-allowed"
                       value={uploadForm.employeeId}
+                      disabled={editingId != null}
+                      title={editingId != null ? 'لا يمكن نقل المستند لموظف آخر' : undefined}
                       onChange={(e) => setUploadForm({ ...uploadForm, employeeId: e.target.value })}
                     >
                       <option value="">اختر الموظف</option>

@@ -7,6 +7,9 @@ import {
   Unique,
 } from 'typeorm'
 
+// مصدر البصمة الخام — الجهاز أو إدخال HR اليدوي
+export type PunchSource = 'DEVICE' | 'MANUAL'
+
 // سجل البصمة الخام من أجهزة ZKTeco — كود الموظف على الجهاز = employeeCode
 @Entity('attendance_punches')
 @Index(['employeeId', 'punchTime'])
@@ -28,6 +31,18 @@ export class AttendancePunch {
   @Column({ length: 50, nullable: true })
   deviceSn: string
 
+  // مصدر البصمة: DEVICE = جهاز (دفع بمفتاح الجهاز أو مزامنة)، MANUAL = إدخال يدوي
+  // من HR. NULL = بصمة أقدم من الحقل (لها deviceSn = جهاز، وإلا مصدرها غير محدد)
+  @Column({ length: 10, nullable: true })
+  source: PunchSource
+
+  // البصمة اليدوية: من أدخلها (users.id) ولماذا — NULL لبصمة الجهاز
+  @Column({ nullable: true })
+  createdByUserId: number
+
+  @Column({ length: 500, nullable: true })
+  reason: string
+
   @CreateDateColumn()
   receivedAt: Date
 }
@@ -47,6 +62,11 @@ export class ScheduleEntry {
   @Index()
   @Column()
   employeeId: number
+
+  // مرجع الوردية في الكتالوج — المصدر الحيّ لأوقاتها. الحقول أدناه لقطة
+  // احتياطية فقط (صفوف قديمة/وردية محذوفة)، وتعديل الوردية يسري فوراً
+  @Column({ nullable: true })
+  shiftId: number
 
   @Column({ length: 100 })
   shiftName: string
@@ -112,6 +132,10 @@ export class ScheduleDayOverride {
   @Column({ type: 'date' })
   date: string
 
+  // مرجع الوردية — نفس منطق الجدول الأسبوعي: الأوقات تُقرأ حيّة من الكتالوج
+  @Column({ nullable: true })
+  shiftId: number
+
   @Column({ length: 100 })
   shiftName: string
 
@@ -122,14 +146,13 @@ export class ScheduleDayOverride {
   endTime: string
 }
 
-export type AttendanceStatus =
-  | 'present'
-  | 'late'
-  | 'absent'
-  | 'early_leave'
-  | 'leave' // في إجازة معتمدة (يوم كامل)
-  | 'partial_leave' // إجازة نصف يوم — الفترة المغطاة بلا تأخير
-  | 'holiday' // عطلة رسمية
+import type { AttendanceStatus } from '../common/domain-status'
+import type { AttendanceRuleSnapshot, FlexOutcome } from './attendance-flex-calculator'
+export type { AttendanceStatus } from '../common/domain-status'
+
+// مصدر وردية اليوم المحسوب: تجاوز يوم / وردية الأسبوع / جدول عمل الموظف /
+// جدول العمل الافتراضي (مفترَض) / لا شيء (بلا وردية)
+export type ScheduleSource = 'override' | 'week' | 'employee' | 'default' | 'none'
 
 // اليوم المحسوب: البصمة مقابل وردية اليوم + فترة السماح
 @Entity('attendance_days')
@@ -164,7 +187,21 @@ export class AttendanceDay {
   @Column({ length: 5 })
   shiftEnd: string
 
-  @Column({ length: 20 })
+  // مرجع وردية الكتالوج التي حُسب بها اليوم — NULL = ساعات جدول عمل أو بلا وردية
+  @Column({ nullable: true })
+  shiftId: number
+
+  // مصدر الوردية — 'default' = لم تُسند للموظف وردية ولا جدول فطُبّق جدول العمل
+  // الافتراضي، 'none' = لا جدول إطلاقاً. NULL = صف حُسب قبل هذا الحقل
+  @Column({ length: 20, nullable: true })
+  scheduleSource: ScheduleSource
+
+  // يوم بلا أي وردية أو جدول (ولا جدول افتراضي): البصمة حضور بلا تأخير ولا
+  // انصراف مبكر ولا أوفرتايم يوم عمل — معلَّم لـHR بدل افتراض 08:00-17:00 بصمت
+  @Column({ default: false })
+  unscheduled: boolean
+
+  @Column({ type: String, length: 20 })
   status: AttendanceStatus
 
   @Column({ default: 0 })
@@ -184,10 +221,50 @@ export class AttendanceDay {
   @Column({ default: 0 })
   workMinutes: number
 
+  @Column({ type: 'int', nullable: true })
+  rawLateMinutes: number | null
+
+  // After approved coverage, before grace: payroll's nonduplicated overlap basis.
+  @Column({ type: 'int', nullable: true })
+  unexcusedLateMinutes: number | null
+
+  // After free coverage, before payroll overlap/caps. Unknown with a missing punch.
+  @Column({ type: 'int', nullable: true })
+  shortfallMinutes: number | null
+
+  @Column({ type: 'int', nullable: true })
+  countedWorkMinutes: number | null
+
+  @Column({ type: 'int', nullable: true })
+  earlyArrivalMinutes: number | null
+
+  @Column({ type: 'nvarchar', length: 32, nullable: true })
+  flexOutcome: FlexOutcome | null
+
+  @Column({ type: 'bit', default: false })
+  attendanceReviewRequired: boolean
+
+  @Column({ type: 'nvarchar', length: 500, nullable: true })
+  attendanceReviewReason: string | null
+
+  @Column({ type: 'simple-json', nullable: true })
+  attendanceRuleSnapshot: AttendanceRuleSnapshot | null
+
   // موظف بصم يوم إجازته الكاملة — تعارض بانتظار قرار HR
   // (إلغاء الإجازة فيرجع الرصيد ويتحسب دواماً، أو إبقاؤها)
   @Column({ default: false })
   leaveConflict: boolean
+
+  // بصمات خام خارج نافذتي الدخول والخروج معاً (HH:mm مفصولة بفاصلة) — لا تُرمى
+  // بصمت بل تُعلَّم لمراجعة HR، ومنها ما استُخدم دخولاً/خروجاً احتياطياً. NULL = لا شيء
+  @Column({ length: 200, nullable: true })
+  punchAnomalies: string
+
+  // السماحية المطبَّقة فعلاً على اليوم بالدقائق (سماحية الوردية إن حُدّدت، وإلا
+  // العامة attendance.grace_minutes) — حتى يظهر أيهما سرى. NULL = يوم بلا مرجع
+  // تأخير (إجازة/عطلة/بلا وردية) أو صف حُسب قبل هذا الحقل
+  @Column({ nullable: true })
+  graceUsed: number
 
   @Column({ type: 'datetime', nullable: true })
   computedAt: Date

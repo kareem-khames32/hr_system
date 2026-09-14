@@ -31,7 +31,7 @@ import {
 export class OrgController {
   constructor(private readonly org: OrgService) {}
 
-  // ===== الفروع — القراءة بنطاق المستخدم، والتعديل للأدمن/HR فقط =====
+  // ===== الفروع — القراءة والتعديل كلاهما بنطاق المستخدم، والتعديل للأدمن/HR فقط =====
   @Get('branches')
   branches(@CurrentUser() user: JwtPayload) {
     return this.org.findBranches(branchScopeOf(user))
@@ -39,17 +39,18 @@ export class OrgController {
 
   @Post('branches')
   @Perm('org.manage')
-  createBranch(@Body() dto: CreateBranchDto) {
-    return this.org.createBranch(dto)
+  createBranch(@CurrentUser() user: JwtPayload, @Body() dto: CreateBranchDto) {
+    return this.org.createBranch(dto, branchScopeOf(user), user.sub)
   }
 
   @Patch('branches/:id')
   @Perm('org.manage')
   updateBranch(
+    @CurrentUser() user: JwtPayload,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateBranchDto
   ) {
-    return this.org.updateBranch(id, dto)
+    return this.org.updateBranch(id, dto, branchScopeOf(user), user.sub)
   }
 
   // ===== الأقسام =====
@@ -60,17 +61,21 @@ export class OrgController {
 
   @Post('departments')
   @Perm('org.manage')
-  createDepartment(@Body() dto: CreateDepartmentDto) {
-    return this.org.createDepartment(dto)
+  createDepartment(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: CreateDepartmentDto
+  ) {
+    return this.org.createDepartment(dto, branchScopeOf(user))
   }
 
   @Patch('departments/:id')
   @Perm('org.manage')
   updateDepartment(
+    @CurrentUser() user: JwtPayload,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateDepartmentDto
   ) {
-    return this.org.updateDepartment(id, dto)
+    return this.org.updateDepartment(id, dto, branchScopeOf(user))
   }
 
   // ===== الفرق =====
@@ -81,16 +86,17 @@ export class OrgController {
 
   @Post('teams')
   @Perm('org.manage')
-  createTeam(@Body() dto: CreateTeamDto) {
-    return this.org.createTeam(dto)
+  createTeam(@CurrentUser() user: JwtPayload, @Body() dto: CreateTeamDto) {
+    return this.org.createTeam(dto, branchScopeOf(user))
   }
 
   @Patch('teams/:id')
   @Perm('org.manage')
   updateTeam(
+    @CurrentUser() user: JwtPayload,
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: UpdateTeamDto
   ) {
-    return this.org.updateTeam(id, dto)
+    return this.org.updateTeam(id, dto, branchScopeOf(user))
   }
 }

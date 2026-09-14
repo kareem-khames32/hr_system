@@ -97,6 +97,7 @@ export default function DeductionsPage() {
   const items: ApiPayrollItem[] = run?.items ?? []
   const totalOf = (i: ApiPayrollItem) =>
     Number(i.latenessDeduction) +
+    Number(i.shortfallDeduction ?? 0) +
     Number(i.absenceDeduction ?? 0) +
     Number(i.unpaidLeaveDeduction) +
     Number(i.loanInstallments) +
@@ -104,13 +105,14 @@ export default function DeductionsPage() {
 
   const totals = {
     lateness: items.reduce((s, i) => s + Number(i.latenessDeduction), 0),
+    shortfall: items.reduce((s, i) => s + Number(i.shortfallDeduction ?? 0), 0),
     absence: items.reduce((s, i) => s + Number(i.absenceDeduction ?? 0), 0),
     unpaidLeave: items.reduce((s, i) => s + Number(i.unpaidLeaveDeduction), 0),
     loans: items.reduce((s, i) => s + Number(i.loanInstallments), 0),
     other: items.reduce((s, i) => s + Number(i.otherDeductions ?? 0), 0),
   }
   const grandTotal =
-    totals.lateness + totals.absence + totals.unpaidLeave + totals.loans + totals.other
+    totals.lateness + totals.shortfall + totals.absence + totals.unpaidLeave + totals.loans + totals.other
   const affectedCount = items.filter((i) => totalOf(i) > 0).length
   const openObjections = objections.filter((o) =>
     ['SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO'].includes(o.status)
@@ -197,6 +199,7 @@ export default function DeductionsPage() {
                     <tr className="table-header">
                       <th className="text-right px-4 py-3">الموظف</th>
                       <th className="text-center px-4 py-3">خصم التأخير</th>
+                      <th className="text-center px-4 py-3">نقص ساعات العمل</th>
                       <th className="text-center px-4 py-3">خصم الغياب</th>
                       <th className="text-center px-4 py-3">إجازة بدون راتب</th>
                       <th className="text-center px-4 py-3">أقساط السلف</th>
@@ -226,6 +229,10 @@ export default function DeductionsPage() {
                             <p className="text-xs text-gray-400">{Number(item.lateMinutes)} دقيقة</p>
                           </td>
                           <td className="table-cell text-center font-mono">
+                            {Number(item.shortfallDeduction ?? 0).toLocaleString()}
+                            <p className="text-xs text-gray-400">{Number(item.shortfallMinutes ?? 0)} دقيقة نقص مرصود</p>
+                          </td>
+                          <td className="table-cell text-center font-mono">
                             {Number(item.absenceDeduction ?? 0).toLocaleString()}
                             <p className="text-xs text-gray-400">{Number(item.absenceDays ?? 0)} يوم</p>
                           </td>
@@ -244,7 +251,7 @@ export default function DeductionsPage() {
                     })}
                     {items.length === 0 && (
                       <tr>
-                        <td colSpan={5} className="text-center py-10 text-gray-400">
+                        <td colSpan={7} className="text-center py-10 text-gray-400">
                           لا توجد بنود في هذا المسير
                         </td>
                       </tr>

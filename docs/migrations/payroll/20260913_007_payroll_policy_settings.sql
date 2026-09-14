@@ -1,0 +1,19 @@
+-- PL-01: إعدادات نسخة السياسة أعمدة اختيارية بلا تعبئة رجعية أو تعديل أي قيمة قديمة.
+ALTER TABLE dbo.payroll_policy_versions ADD defaultPeriodType nvarchar(20) NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD cycleStartDay tinyint NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD cycleEndMode nvarchar(12) NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD cycleEndDay tinyint NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD baseDaysBasis nvarchar(12) NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD monthlyDays decimal(5,2) NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD dailyHours decimal(5,2) NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD rateBase nvarchar(12) NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD roundingMode nvarchar(12) NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD roundingScale tinyint NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD divisionByZeroMode nvarchar(20) NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD maxDeductionPctOfGross decimal(7,4) NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD minNetGuarantee decimal(18,2) NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD netFloorPct decimal(7,4) NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD carryOverExcess bit NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD skipAttendance bit NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD lateDeductionEnabled bit NULL;
+ALTER TABLE dbo.payroll_policy_versions ADD currency nvarchar(3) NULL;

@@ -6,13 +6,8 @@ import {
   PrimaryGeneratedColumn,
 } from 'typeorm'
 
-export type EmployeeStatus =
-  | 'active'
-  | 'probation'
-  | 'notice_period' // فترة إشعار (استقالة معتمدة — إخلاء الطرف جارٍ)
-  | 'suspended'
-  | 'terminated' // انتهت الخدمة (بعد التصفية وآخر يوم عمل)
-  | 'archived'
+import type { EmployeeStatus } from '../common/domain-status'
+export type { EmployeeStatus } from '../common/domain-status'
 
 @Entity('employees')
 export class Employee {
@@ -23,6 +18,10 @@ export class Employee {
   @Index({ unique: true })
   @Column({ length: 20 })
   employeeCode: string
+
+  // رقم البصمة المستقل (قد يختلف عن الكود الوظيفي على أجهزة ZKTeco)
+  @Column({ length: 40, nullable: true })
+  fingerprintCode: string
 
   @Column({ length: 200 })
   fullName: string
@@ -37,15 +36,33 @@ export class Employee {
   @Column({ length: 200, nullable: true })
   email: string
 
+  // البريد الشخصي (مستقل عن بريد العمل email)
+  @Column({ length: 160, nullable: true })
+  personalEmail: string
+
   @Column({ length: 50, nullable: true })
   phone: string
+
+  // رقم جوال بديل
+  @Column({ length: 30, nullable: true })
+  phoneAlt: string
 
   @Column({ length: 50, nullable: true })
   nationalId: string
 
+  // جواز السفر
+  @Column({ length: 40, nullable: true })
+  passportNo: string
+
+  @Column({ type: 'date', nullable: true })
+  passportExpiry: string
+
   // ===== البيانات الشخصية =====
   @Column({ type: 'date', nullable: true })
   birthDate: string
+
+  @Column({ length: 120, nullable: true })
+  birthPlace: string
 
   @Column({ length: 10, nullable: true })
   gender: 'male' | 'female'
@@ -59,11 +76,26 @@ export class Employee {
   @Column({ length: 500, nullable: true })
   address: string
 
+  // البلد والرمز البريدي (تفصيل العنوان)
+  @Column({ length: 60, nullable: true })
+  country: string
+
+  @Column({ length: 20, nullable: true })
+  postalCode: string
+
   @Column({ length: 200, nullable: true })
   emergencyContactName: string
 
+  // صلة القرابة لجهة الطوارئ
+  @Column({ length: 60, nullable: true })
+  emergencyRelation: string
+
   @Column({ length: 50, nullable: true })
   emergencyContactPhone: string
+
+  // رقم طوارئ بديل
+  @Column({ length: 30, nullable: true })
+  emergencyPhoneAlt: string
 
   @Column({ length: 100, nullable: true })
   jobTitle: string
@@ -98,6 +130,31 @@ export class Employee {
   @Column({ type: 'date', nullable: true })
   joinDate: string
 
+  // ===== بيانات التوظيف =====
+  // تاريخ بداية العمل الفعلي (قد يختلف عن تاريخ التعيين)
+  @Column({ type: 'date', nullable: true })
+  actualStartDate: string
+
+  // نوع التوظيف (full_time | part_time | contract ...)
+  @Column({ length: 30, nullable: true })
+  workType: string
+
+  // تاريخ انتهاء فترة التجربة
+  @Column({ type: 'date', nullable: true })
+  probationEndDate: string
+
+  // مصدر التوظيف (إعلان | ترشيح | وكالة ...)
+  @Column({ length: 60, nullable: true })
+  recruitmentSource: string
+
+  // الدرجة الوظيفية (مرجع كتالوج الدرجات)
+  @Column({ type: 'int', nullable: true })
+  gradeId: number
+
+  // موقع العمل
+  @Column({ length: 120, nullable: true })
+  workLocation: string
+
   // ===== العقد =====
   @Column({ length: 30, nullable: true })
   contractType: string // permanent | fixed_term | part_time | seasonal
@@ -108,7 +165,19 @@ export class Employee {
   @Column({ type: 'date', nullable: true })
   contractEnd: string // NULL = غير محدد المدة
 
-  @Column({ length: 20, default: 'active' })
+  // رقم العقد المرجعي (اختياري)
+  @Column({ length: 60, nullable: true })
+  contractNumber: string
+
+  // مدة العقد بالأشهر (اختياري — لعقد محدد المدة)
+  @Column({ type: 'int', nullable: true })
+  contractDurationMonths: number
+
+  // فترة الإشعار بالأيام قبل الإنهاء (اختياري)
+  @Column({ type: 'int', nullable: true })
+  noticePeriodDays: number
+
+  @Column({ type: String, length: 20, default: 'active' })
   status: EmployeeStatus
 
   // توثيق الأرشفة — للفلترة بالسبب والفترة في شاشة الأرشيف
@@ -117,6 +186,13 @@ export class Employee {
 
   @Column({ length: 300, nullable: true })
   archiveReason: string
+
+  // العملة ودورة صرف الراتب
+  @Column({ length: 10, nullable: true, default: 'SAR' })
+  currency: string
+
+  @Column({ length: 20, nullable: true })
+  salaryCycle: string
 
   @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
   basicSalary: number
@@ -128,6 +204,13 @@ export class Employee {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
   transportAllowance: number
 
+  // بدل الهاتف وبدل طبيعة العمل مستقلان عن otherAllowance؛ لا يُجمعان داخله.
+  @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
+  phoneAllowance: number
+
+  @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
+  workNatureAllowance: number
+
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
   otherAllowance: number
 
@@ -138,8 +221,22 @@ export class Employee {
   @Column({ length: 100, nullable: true })
   bankName: string
 
+  // اسم فرع البنك
+  @Column({ length: 120, nullable: true })
+  bankBranch: string
+
   @Column({ length: 50, nullable: true })
   iban: string
+
+  // ===== التأمينات الاجتماعية (GOSI) =====
+  @Column({ length: 40, nullable: true })
+  gosiNumber: string
+
+  @Column({ type: 'bit', nullable: true })
+  isGosiRegistered: boolean
+
+  @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
+  gosiBaseSalary: number
 
   @Column({ default: true })
   isActive: boolean
@@ -147,3 +244,5 @@ export class Employee {
   @CreateDateColumn()
   createdAt: Date
 }
+
+

@@ -110,6 +110,21 @@ export default function DepartmentsPage() {
     return teams.filter((t) => t.departmentId === deptId)
   }
 
+  // الأقسام التابعة لقسم (أبناء وأحفاد) — لا تصلح أباً له: الهيكل يصير دائرياً (SET-14)
+  const descendantIdsOf = (deptId: number) => {
+    const out = new Set<number>()
+    const walk = (pid: number) => {
+      for (const d of departments) {
+        if (d.parentId === pid && !out.has(d.id)) {
+          out.add(d.id)
+          walk(d.id)
+        }
+      }
+    }
+    walk(deptId)
+    return out
+  }
+
   const handleOpenModal = (dept?: ApiDepartment) => {
     setModalError(null)
     if (dept) {
@@ -138,12 +153,16 @@ export default function DepartmentsPage() {
       nameEn: formData.nameEn || undefined,
       code: formData.code || undefined,
       branchId: formData.branchId ? Number(formData.branchId) : undefined,
-      parentId: formData.parentId ? Number(formData.parentId) : undefined,
+      // «بدون» عند التعديل = قسم رئيسي (null يمسح الأب — كان يُهمل فيبقى الأب القديم)
+      parentId: formData.parentId ? Number(formData.parentId) : editingDept ? null : undefined,
       managerEmployeeId: formData.managerId ? Number(formData.managerId) : undefined,
     }
     try {
       if (editingDept) {
-        await updateDepartment(editingDept.id, { ...payload, isActive: formData.isActive })
+        await updateDepartment(editingDept.id, { ...payload, isActive: formData.isActive,
+          nameEn: formData.nameEn || null, code: formData.code || null,
+          managerEmployeeId: formData.managerId ? Number(formData.managerId) : null,
+        })
       } else {
         const created = await createDepartment(payload)
         // الإنشاء لا يقبل isActive — نعطّله بعد الإنشاء لو طُلب ذلك
@@ -269,6 +288,7 @@ export default function DepartmentsPage() {
 
   const totalEmployees = employees.length
   const rootDepartments = departments.filter((d) => !d.parentId)
+  const blockedParents = editingDept ? descendantIdsOf(editingDept.id) : new Set<number>()
 
   return (
     <MainLayout>
@@ -606,6 +626,7 @@ export default function DepartmentsPage() {
                         .filter(
                           (d) =>
                             d.id !== editingDept?.id &&
+                            !blockedParents.has(d.id) &&
                             (!formData.branchId ||
                               d.branchId === Number(formData.branchId))
                         )
@@ -616,7 +637,7 @@ export default function DepartmentsPage() {
                         ))}
                     </select>
                     <p className="text-xs text-gray-400 mt-1">
-                      تظهر أقسام الفرع المختار فقط
+                      تظهر أقسام الفرع المختار فقط، عدا الأقسام التابعة لهذا القسم
                     </p>
                   </div>
                 </div>

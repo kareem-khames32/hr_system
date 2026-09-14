@@ -1,4 +1,5 @@
 'use client'
+import { useParams } from 'next/navigation'
 
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
@@ -21,9 +22,31 @@ import {
   type ApiBranch,
 } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
+import { PayrollAttendanceBreakdown } from '@/components/PayrollAttendanceBreakdown'
+import { PayrollOvertimeBreakdown } from '@/components/PayrollOvertimeBreakdown'
+import { PayrollInstallmentBreakdown } from '@/components/PayrollInstallmentBreakdown'
 
-// حقل البدلات الجديد في بند المسير (ليس بعد ضمن ApiPayrollItem)
-type PayrollItemWithAllowances = ApiPayrollItem & { allowances?: number }
+type SavedSalaryComponent = {
+  code: string; nameAr: string; nameEn: string; monthlyAmount: number; earnedAmount: number
+}
+
+function savedSalaryComponents(item: ApiPayrollItem): SavedSalaryComponent[] | null {
+  try {
+    const components = JSON.parse(item.breakdown || '{}').salaryComponents
+    if (!Array.isArray(components) || !components.length || components.some(component =>
+      !component || typeof component.code !== 'string' || typeof component.nameAr !== 'string' ||
+      typeof component.nameEn !== 'string' || typeof component.earnedAmount !== 'number' ||
+      !Number.isFinite(component.earnedAmount) || component.earnedAmount < 0)) return null
+    if (new Set(components.map(component => component.code)).size !== components.length) return null
+    const basic = components.find(component => component.code === 'BASIC')
+    const allowanceCents = components.filter(component => component.code !== 'BASIC')
+      .reduce((sum, component) => sum + Math.round(component.earnedAmount * 100), 0)
+    // AL-11: التفصيل محفوظ وقت الحساب؛ القسيمة القديمة تعرض مجموعها التاريخي دون تخمين.
+    if (!basic || Math.round(basic.earnedAmount * 100) !== Math.round(Number(item.basicSalary) * 100) ||
+      allowanceCents !== Math.round(Number(item.allowances ?? 0) * 100)) return null
+    return components
+  } catch { return null }
+}
 
 const runStatusLabels: Record<string, string> = {
   CALCULATED: 'محسوب',
@@ -84,7 +107,8 @@ function numberToArabicWords(num: number, currency: string): string {
   return result + ' فقط لا غير'
 }
 
-export default function PayslipPage({ params }: { params: { id: string } }) {
+export default function PayslipPage() {
+  const params = useParams<{ id: string }>()
   const currency = useCurrency()
   const [item, setItem] = useState<ApiPayrollItem | null>(null)
   const [run, setRun] = useState<ApiPayrollRun | null>(null)
@@ -106,14 +130,20 @@ export default function PayslipPage({ params }: { params: { id: string } }) {
       .finally(() => setLoading(false))
   }, [params.id])
 
-  const earnings = item
-    ? [
+  const salaryComponents = item ? savedSalaryComponents(item) : null
+  const salaryEarnings = item
+    ? salaryComponents?.map(component => ({ name: component.nameAr, nameEn: component.nameEn, amount: component.earnedAmount })) ?? [
         { name: 'الراتب الأساسي', nameEn: 'Basic Salary', amount: Number(item.basicSalary) },
         {
           name: 'البدلات',
           nameEn: 'Allowances',
-          amount: Number((item as PayrollItemWithAllowances).allowances ?? 0),
+          amount: Number(item.allowances ?? 0),
         },
+      ]
+    : []
+  const earnings = item
+    ? [
+        ...salaryEarnings,
         {
           name: 'العمل الإضافي',
           nameEn: `Overtime (${Number(item.overtimeHours)} h)`,
@@ -133,6 +163,11 @@ export default function PayslipPage({ params }: { params: { id: string } }) {
           name: 'خصم التأخير',
           nameEn: `Lateness (${Number(item.lateMinutes)} min)`,
           amount: Number(item.latenessDeduction),
+        },
+        {
+          name: 'خصم نقص ساعات العمل',
+          nameEn: `Work shortfall (${Number(item.shortfallMinutes ?? 0)} min observed)`,
+          amount: Number(item.shortfallDeduction ?? 0),
         },
         {
           name: 'خصم الغياب',
@@ -156,6 +191,16 @@ export default function PayslipPage({ params }: { params: { id: string } }) {
   const totalEarnings = earnings.reduce((sum, e) => sum + e.amount, 0)
   const totalDeductions = deductions.reduce((sum, d) => sum + d.amount, 0)
   const netSalary = item ? Number(item.netPay) : 0
+  const attendanceNotes = (() => {
+    try {
+      const detail = item?.breakdown ? JSON.parse(item.breakdown) : {}
+      const windows = Array.isArray(detail.attendanceExemptions) ? detail.attendanceExemptions : []
+      const notes = windows.map((window: { id: number; effectiveFrom: string; effectiveTo: string | null }) =>
+        `خصومات الحضور غير مولّدة في أيام الاستثناء #${window.id} من ${window.effectiveFrom} إلى ${window.effectiveTo ?? 'نهاية مفتوحة'}`)
+      if (Number(detail.exemptUnpaidLeaveDays) > 0) notes.push(`إجازة بلا أجر ${detail.exemptUnpaidLeaveDays} يوم — غير مخصومة بقرار الاستثناء`)
+      return notes as string[]
+    } catch { return [] }
+  })()
 
   return (
     <MainLayout>
@@ -342,6 +387,15 @@ export default function PayslipPage({ params }: { params: { id: string } }) {
           </div>
 
           {/* Net Salary */}
+          {item && <PayrollAttendanceBreakdown item={item} currency={currency} />}
+          {item && <PayrollOvertimeBreakdown item={item} currency={currency} />}
+          {item && <PayrollInstallmentBreakdown item={item} currency={currency} />}
+          {attendanceNotes.length > 0 && (
+            <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6 text-sm text-gray-700 space-y-1">
+              {attendanceNotes.map((note, index) => <p key={index}>{note}</p>)}
+              <p>استثناء الحضور لا يلغي أقساط السلف والمديونيات والخصومات الإدارية.</p>
+            </div>
+          )}
           <div className="bg-gradient-to-r from-primary-500 to-primary-600 rounded-2xl p-6 text-white mb-8">
             <div className="flex items-center justify-between">
               <div>

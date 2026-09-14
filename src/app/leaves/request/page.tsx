@@ -11,24 +11,27 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import {
-  fetchLeaveTypes,
+  fetchActiveLeaveTypes,
   fetchMyBalances,
+  fetchWorkingDays,
   createRequest,
   uploadFile,
+  ApiError,
   type ApiBalance,
+  type ApiLeaveTypeOption,
+  type ApiRequest,
 } from '@/lib/api'
+import { statusLabels, type RequestStatus } from '@/data/requestsCatalog'
 
-// نوع الإجازة من كتالوج السيرفر — النموذج الموحّد: طلب واحد «LEAVE» يحمل النوع
-interface ApiLeaveType {
-  id: number
-  code: string // ANNUAL, SICK, UNPAID...
-  nameAr: string
-  isPaid: boolean
-  balanceSource: string | null // annual | sick | none
-  requiredAttachment: string | null
-  maxDays: number | null
-  oncePerService: boolean
-  isActive: boolean
+// نوع الإجازة من كتالوج السيرفر (الفعّال فقط) — النموذج الموحّد: طلب واحد «LEAVE» يحمل النوع
+type ApiLeaveType = ApiLeaveTypeOption
+
+type LeavePeriod = 'FULL' | 'MORNING' | 'EVENING'
+
+const periodLabels: Record<LeavePeriod, string> = {
+  FULL: 'يوم كامل',
+  MORNING: 'النصف الصباحي',
+  EVENING: 'النصف المسائي',
 }
 
 // لون كل نوع حسب كوده (الأنواع نفسها تأتي من كتالوج أنواع الإجازة في السيرفر)
@@ -68,7 +71,24 @@ export default function LeaveRequestPage() {
     contactNumber: '',
   })
 
-  const [calculatedDays, setCalculatedDays] = useState(0)
+  // نطاق اليوم: كامل أو نصف صباحي/مسائي (نصف اليوم = يوم واحد يُحتسب 0.5)
+  const [period, setPeriod] = useState<LeavePeriod>('FULL')
+  // أيام العمل الفعلية داخل المدى من السيرفر (نفس حساب الخصم) — مربوطة بالمدى المحسوب له
+  const [workingDaysInfo, setWorkingDaysInfo] = useState<{
+    from: string
+    to: string
+    total: number
+    working: number
+    skipped: string[]
+  } | null>(null)
+  // تعذّر حساب مدى — مربوط بالمدى نفسه: message = رسالة السيرفر لرفض 4xx (null = تعذّر
+  // مؤقت)، rejected = 400 (المدى نفسه مرفوض، مثلاً أطول من الحد — وسيُرفض عند التقديم أيضاً)
+  const [daysError, setDaysError] = useState<{
+    from: string
+    to: string
+    message: string | null
+    rejected: boolean
+  } | null>(null)
   // مرجع الملف المرفوع (file:N) + اسمه للعرض + حالة الرفع
   const [attachmentRef, setAttachmentRef] = useState('')
   const [attachmentName, setAttachmentName] = useState('')
@@ -76,11 +96,12 @@ export default function LeaveRequestPage() {
 
   useEffect(() => {
     Promise.all([
-      fetchLeaveTypes(),
+      // endpoint الخدمة الذاتية (الفعّال فقط) — لا يحتاج settings.manage
+      fetchActiveLeaveTypes(),
       fetchMyBalances().catch(() => [] as ApiBalance[]),
     ])
       .then(([types, bals]) => {
-        setLeaveTypes((types as ApiLeaveType[]).filter((t) => t.isActive))
+        setLeaveTypes(types)
         setBalances(bals)
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل أنواع الإجازات'))
@@ -95,21 +116,89 @@ export default function LeaveRequestPage() {
     return bal ? Number(bal.remaining) : null
   }
 
-  const handleChange = (field: string, value: string | File | null) => {
-    setFormData(prev => ({ ...prev, [field]: value }))
+  const isHalfDay = period !== 'FULL'
 
-    if (field === 'startDate' || field === 'endDate') {
-      const start = field === 'startDate' ? value : formData.startDate
-      const end = field === 'endDate' ? value : formData.endDate
-      if (start && end) {
-        const startDate = new Date(start as string)
-        const endDate = new Date(end as string)
-        const diffTime = Math.abs(endDate.getTime() - startDate.getTime())
-        const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24)) + 1
-        setCalculatedDays(diffDays)
-      }
-    }
+  const handleChange = (field: keyof typeof formData, value: string) => {
+    setFormData((prev) => {
+      const next = { ...prev, [field]: value }
+      // نصف يوم = يوم واحد: النهاية تتبع البداية
+      if (isHalfDay && field === 'startDate') next.endDate = value
+      return next
+    })
   }
+
+  // تغيير نطاق اليوم: نصف يوم ⇒ النهاية = البداية (السيرفر يرفض غير ذلك)
+  const changePeriod = (p: LeavePeriod) => {
+    setPeriod(p)
+    if (p !== 'FULL') setFormData((prev) => ({ ...prev, endDate: prev.startDate }))
+  }
+
+  // أيام العمل الفعلية من السيرفر لكل مدى (مؤجَّل + كاش لآخر مدى) —
+  // نفس الحساب الذي يُخصم به الطلب (الويك إند والعطلات الرسمية لا تُحسب)
+  useEffect(() => {
+    const from = formData.startDate
+    const to = formData.endDate
+    if (!from || !to || from > to) {
+      setWorkingDaysInfo(null)
+      setDaysError(null)
+      return
+    }
+    if (workingDaysInfo && workingDaysInfo.from === from && workingDaysInfo.to === to) return
+    // ردّ مدى سابق يصل متأخراً (بعد تغيير التواريخ) يُهمل ولا يطغى على المدى الحالي
+    let cancelled = false
+    const timer = setTimeout(() => {
+      // self: حساب الموظف نفسه (فرعه + ويك إند جدول عمله) = ما يُخصم عند التقديم
+      fetchWorkingDays(from, to, { self: true })
+        .then((res) => {
+          if (cancelled) return
+          setWorkingDaysInfo({ from, to, ...res })
+          setDaysError(null)
+        })
+        .catch((err) => {
+          if (cancelled) return
+          setWorkingDaysInfo(null)
+          // 4xx: رسالة السيرفر كما هي؛ غير ذلك تعذّر مؤقت والسيرفر يحسب عند التقديم
+          const status = err instanceof ApiError ? err.status : 0
+          setDaysError({
+            from,
+            to,
+            message: status >= 400 && status < 500 && err instanceof Error ? err.message : null,
+            rejected: status === 400,
+          })
+        })
+    }, 400)
+    return () => {
+      cancelled = true
+      clearTimeout(timer)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [formData.startDate, formData.endDate])
+
+  const rangeSet =
+    !!formData.startDate && !!formData.endDate && formData.startDate <= formData.endDate
+  const daysInfo =
+    rangeSet &&
+    workingDaysInfo &&
+    workingDaysInfo.from === formData.startDate &&
+    workingDaysInfo.to === formData.endDate
+      ? workingDaysInfo
+      : null
+  // خطأ الحساب للمدى الحالي فقط (خطأ مدى سابق لا يُعرض)
+  const rangeError =
+    rangeSet &&
+    daysError &&
+    daysError.from === formData.startDate &&
+    daysError.to === formData.endDate
+      ? daysError
+      : null
+  // المدة المحتسبة كما سيخصمها السيرفر: نصف يوم = 0.5، وإلا أيام العمل (null = لم تُحسب بعد)
+  const effectiveDays: number | null = daysInfo
+    ? daysInfo.working === 0
+      ? 0
+      : isHalfDay
+        ? 0.5
+        : daysInfo.working
+    : null
 
   const selectedLeaveType = leaveTypes.find(t => t.code === formData.leaveType)
   const selectedBalance = selectedLeaveType ? balanceFor(selectedLeaveType) : null
@@ -131,6 +220,26 @@ export default function LeaveRequestPage() {
     }
   }
 
+  // رسالة النجاح من الحالة الفعلية الراجعة (قد يُعتمد فوراً لو سلسلته «تنفيذ فوري»)
+  // ومن الأيام المحتسبة على السيرفر
+  const successMessage = (req: ApiRequest): string => {
+    const label = statusLabels[req.status as RequestStatus] ?? req.status
+    let days: unknown
+    try {
+      days = JSON.parse(req.payload ?? '{}').days
+    } catch {
+      days = undefined
+    }
+    const daysPart = typeof days === 'number' ? ` — المدة المحتسبة ${days} يوم` : ''
+    if (req.status === 'SUBMITTED' || req.status === 'UNDER_REVIEW') {
+      return `تم تقديم الطلب #${req.id} وهو الآن في مسار الموافقات (${label})${daysPart}`
+    }
+    if (['APPROVED', 'IN_EXECUTION', 'COMPLETED'].includes(req.status)) {
+      return `تم تقديم الطلب #${req.id} واعتُمد مباشرة — الحالة: ${label}${daysPart}`
+    }
+    return `تم حفظ الطلب #${req.id} — الحالة: ${label}${daysPart}`
+  }
+
   // الإرسال لمحرك الطلبات — طلب موحّد «LEAVE» والنوع في payload.leaveType.
   // السيرفر يعيد حساب أيام العمل الفعلية ويصحّح days، والرسائل العربية تُعرض كما هي
   const handleSubmit = async (e: React.FormEvent) => {
@@ -146,14 +255,18 @@ export default function LeaveRequestPage() {
     try {
       const req = await createRequest('LEAVE', {
         fromDate: formData.startDate,
-        toDate: formData.endDate,
-        days: calculatedDays,
+        // نصف يوم = يوم واحد (السيرفر يرفض غير ذلك)
+        toDate: isHalfDay ? formData.startDate : formData.endDate,
+        // حقل إلزامي — نفس حساب السيرفر، وهو يعيد الحساب ويصحّحه على أي حال
+        days: effectiveDays ?? (isHalfDay ? 0.5 : 0),
+        // نصف اليوم فقط — اليوم الكامل هو الافتراضي في السيرفر (لا «period: FULL» خام في الملخصات)
+        ...(isHalfDay ? { period } : {}),
         leaveType: selectedLeaveType.code,
         reason: formData.reason,
         contactNumber: formData.contactNumber,
         ...(attachmentRef ? { attachmentUrl: attachmentRef } : {}),
       })
-      setSuccess(`تم تقديم الطلب بنجاح — رقم الطلب #${req.id} وهو الآن في مسار الموافقات`)
+      setSuccess(successMessage(req))
       setFormData({
         leaveType: '',
         startDate: '',
@@ -163,7 +276,8 @@ export default function LeaveRequestPage() {
       })
       setAttachmentRef('')
       setAttachmentName('')
-      setCalculatedDays(0)
+      setPeriod('FULL')
+      setWorkingDaysInfo(null)
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر تقديم الطلب')
     } finally {
@@ -241,6 +355,25 @@ export default function LeaveRequestPage() {
         {/* Date Selection */}
         <div className="card">
           <h2 className="text-lg font-bold text-gray-800 mb-4">تاريخ الإجازة</h2>
+          <div className="mb-4">
+            <label className="block text-sm font-medium text-gray-700 mb-2">نطاق اليوم</label>
+            <select
+              className="input w-full"
+              value={period}
+              onChange={(e) => changePeriod(e.target.value as LeavePeriod)}
+            >
+              {(Object.keys(periodLabels) as LeavePeriod[]).map((p) => (
+                <option key={p} value={p}>
+                  {periodLabels[p]}
+                </option>
+              ))}
+            </select>
+            {isHalfDay && (
+              <p className="text-xs text-gray-500 mt-1.5">
+                إجازة نصف يوم: تاريخ النهاية يطابق البداية ويُحتسب 0.5 يوم
+              </p>
+            )}
+          </div>
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -264,28 +397,52 @@ export default function LeaveRequestPage() {
                 value={formData.endDate}
                 onChange={(e) => handleChange('endDate', e.target.value)}
                 min={formData.startDate}
+                disabled={isHalfDay}
                 required
               />
             </div>
           </div>
 
-          {calculatedDays > 0 && (
+          {rangeSet && (
             <div className="mt-4 p-4 bg-primary-50 rounded-xl flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Calendar size={20} className="text-primary-600" />
-                <span className="text-primary-800">مدة الإجازة (المبدئية)</span>
+                <span className="text-primary-800">المدة المحتسبة (أيام عمل)</span>
               </div>
-              <span className="text-2xl font-bold text-primary-600">{calculatedDays} يوم</span>
+              <span className="text-2xl font-bold text-primary-600">
+                {effectiveDays === null ? (rangeError ? '—' : '…') : `${effectiveDays} يوم`}
+              </span>
             </div>
           )}
 
-          {calculatedDays > 0 && (
-            <p className="text-xs text-gray-400 mt-2">
-              يُعاد حساب الأيام على السيرفر بأيام العمل الفعلية فقط (تُستبعد الويك إند والعطلات الرسمية)
+          {/* تلميحات الحساب من السيرفر: كله عطلات / عطلات داخل المدى / رفض المدى (4xx برسالته) / تعذّر الحساب */}
+          {daysInfo && daysInfo.working === 0 ? (
+            <p className="flex items-center gap-1.5 text-xs text-red-700 bg-red-50 rounded-lg px-3 py-2 mt-2">
+              <AlertCircle size={13} className="shrink-0" />
+              كل الأيام المختارة عطلات (ويك إند/عطلة رسمية) — الطلب سيُرفض
             </p>
-          )}
+          ) : daysInfo && !isHalfDay && daysInfo.skipped.length > 0 ? (
+            <p className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-2">
+              <AlertCircle size={13} className="shrink-0" />
+              سيُخصم {daysInfo.working} يوم فقط — {daysInfo.skipped.length} يوم عطلة/ويك إند
+              داخل المدى لا يُحسب
+            </p>
+          ) : rangeError?.message ? (
+            <p className="flex items-center gap-1.5 text-xs text-red-700 bg-red-50 rounded-lg px-3 py-2 mt-2">
+              <AlertCircle size={13} className="shrink-0" />
+              {rangeError.message}
+            </p>
+          ) : rangeError ? (
+            <p className="text-xs text-gray-500 mt-2">
+              تعذّر حساب أيام العمل الآن — تُحسب على السيرفر عند التقديم
+            </p>
+          ) : rangeSet ? (
+            <p className="text-xs text-gray-400 mt-2">
+              أيام العمل الفعلية فقط (تُستبعد الويك إند والعطلات الرسمية) — نفس ما يُخصم من رصيدك
+            </p>
+          ) : null}
 
-          {selectedLeaveType && selectedBalance !== null && affectsBalance(selectedLeaveType) && calculatedDays > selectedBalance && (
+          {selectedLeaveType && selectedBalance !== null && affectsBalance(selectedLeaveType) && effectiveDays !== null && effectiveDays > selectedBalance && (
             <div className="mt-4 p-4 bg-red-50 rounded-xl flex items-center gap-2 text-red-700">
               <AlertCircle size={20} />
               <span>مدة الإجازة المطلوبة تتجاوز الرصيد المتاح ({selectedBalance} يوم)</span>
@@ -395,9 +552,17 @@ export default function LeaveRequestPage() {
                   {new Date(formData.endDate).toLocaleDateString('ar-SA')}
                 </span>
               </div>
+              {isHalfDay && (
+                <div className="flex justify-between">
+                  <span className="text-gray-600">نطاق اليوم:</span>
+                  <span className="font-medium text-gray-800">نصف يوم — {periodLabels[period]}</span>
+                </div>
+              )}
               <div className="flex justify-between pt-3 border-t border-gray-200">
-                <span className="text-gray-600">المدة (المبدئية):</span>
-                <span className="font-bold text-primary-600">{calculatedDays} يوم</span>
+                <span className="text-gray-600">المدة المحتسبة:</span>
+                <span className="font-bold text-primary-600">
+                  {effectiveDays === null ? (rangeError ? '—' : '…') : `${effectiveDays} يوم`}
+                </span>
               </div>
             </div>
           </div>
@@ -416,7 +581,10 @@ export default function LeaveRequestPage() {
               !formData.leaveType ||
               !formData.startDate ||
               !formData.endDate ||
-              !formData.reason
+              !formData.reason ||
+              // كل الأيام عطلات، أو المدى نفسه مرفوض (400) — السيرفر سيرفض
+              effectiveDays === 0 ||
+              !!rangeError?.rejected
             }
           >
             <CheckCircle2 size={18} />

@@ -20,17 +20,25 @@ import {
   GraduationCap,
 } from 'lucide-react'
 import { categoryLabels } from '@/data/requestsCatalog'
+import MyClearanceItems from '@/components/dashboard/MyClearanceItems'
+import MyApprovalDecisions from '@/components/MyApprovalDecisions'
+// كل مفاتيح الحمولة بتسمياتها — مشترك مع ويدجت لوحة التحكم (SEC-REQ-2)
+import RequestPayload from '@/components/RequestPayload'
+import OvertimeRequestSummary, { overtimeApprovalLimit } from '@/components/OvertimeRequestSummary'
+import { payloadSummary } from '@/lib/request-payload'
 import {
   fetchInbox,
+  fetchRequest,
   fetchRequestTypes,
-  fetchEmployees,
   fetchBranches,
   actOnRequest,
+  can,
   fetchCustodyPendingMyConfirm,
   managerConfirmCustody,
   type ApiRequest,
   type ApiRequestType,
   type ApiCustody,
+  type ApiBranch,
 } from '@/lib/api'
 
 // ===== أدوات فك حقول JSON القادمة من الباك =====
@@ -71,56 +79,6 @@ const roleLabels: Record<string, string> = {
 // اسم جهة الاعتماد — كود غير معروف لا يظهر خاماً أبداً
 const roleLabelOf = (role: string): string => roleLabels[role] ?? 'جهة اعتماد'
 
-const fieldLabels: Record<string, string> = {
-  date: 'التاريخ',
-  fromDate: 'من تاريخ',
-  toDate: 'إلى تاريخ',
-  effectiveDate: 'تاريخ السريان',
-  from: 'من الساعة',
-  to: 'إلى الساعة',
-  days: 'عدد الأيام',
-  hours: 'عدد الساعات',
-  amount: 'المبلغ',
-  months: 'عدد الأشهر',
-  newSalary: 'الراتب الجديد',
-  increase_pct: 'نسبة الزيادة %',
-  reason: 'السبب',
-  description: 'الوصف',
-  destination: 'جهة الانتداب',
-  iban: 'الآيبان IBAN',
-  name: 'الاسم',
-  phone: 'رقم الهاتف',
-  documentType: 'نوع الوثيقة',
-  courseName: 'اسم الدورة',
-  note: 'ملاحظة',
-  permissionType: 'نوع الإذن',
-  period: 'نطاق اليوم',
-  assetIds: 'الأصول المطلوبة',
-  lastWorkingDate: 'آخر يوم عمل',
-  leaveType: 'نوع الإجازة',
-}
-
-const periodLabels: Record<string, string> = {
-  FULL: 'يوم كامل',
-  MORNING: 'النصف الصباحي',
-  EVENING: 'النصف المسائي',
-}
-
-// قيم مقروءة — الأكواد لا تظهر للمستخدم أبداً
-const valueLabel = (k: string, v: unknown): string => {
-  if (k === 'period') return periodLabels[String(v)] ?? String(v)
-  if (Array.isArray(v)) return `${v.length}`
-  return String(v)
-}
-
-const payloadSummary = (raw?: string | null): string => {
-  const payload = parseJson<Record<string, unknown>>(raw, {})
-  return Object.entries(payload)
-    .filter(([k]) => fieldLabels[k]) // مفاتيح غير معروفة لا تُعرض بكودها الخام
-    .map(([k, v]) => `${fieldLabels[k]}: ${valueLabel(k, v)}`)
-    .join(' • ')
-}
-
 // إعداد العرض لكل فئة من فئات الكتالوج التسع
 const typeConfig: Record<
   string,
@@ -150,11 +108,12 @@ interface InboxItem {
   myStepLevel: number
   totalSteps: number
   stepRoleLabel: string // صفة المعتمد في الخطوة الحالية — بالعربية دائماً
-  slaDaysLeft: number // المتبقي قبل انتهاء مهلة الرد — من dueAt للخطوة الحالية
+  slaDaysLeft: number | null // المتبقي قبل انتهاء مهلة الرد — من dueAt للخطوة الحالية
 }
 
 export default function ApprovalsInboxPage() {
   const [items, setItems] = useState<InboxItem[]>([])
+  const [decisionsRevision, setDecisionsRevision] = useState(0)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [filterType, setFilterType] = useState('')
@@ -163,19 +122,50 @@ export default function ApprovalsInboxPage() {
     action: 'approve' | 'reject' | 'return'
   } | null>(null)
   const [comment, setComment] = useState('')
+  const [detail, setDetail] = useState<ApiRequest | null>(null)
+  const [detailId, setDetailId] = useState<number | null>(null)
+  const [detailError, setDetailError] = useState('')
+  const [detailLoading, setDetailLoading] = useState(false)
+  const [detailRevision, setDetailRevision] = useState(0)
+  const [approvedMinutesInput, setApprovedMinutesInput] = useState('')
+  const [canAdjustOvertime, setCanAdjustOvertime] = useState(false)
+  useEffect(() => {
+    setCanAdjustOvertime(can('overtime.adjust'))
+    const requestId = Number(new URLSearchParams(window.location.search).get('request'))
+    if (Number.isSafeInteger(requestId) && requestId > 0) setDetailId(requestId)
+  }, [])
+  useEffect(() => {
+    if (detailId == null) return
+    let cancelled = false
+    setDetail(null)
+    setDetailError('')
+    setDetailLoading(true)
+    fetchRequest(detailId).then((request) => { if (!cancelled) setDetail(request) })
+      .catch((err) => { if (!cancelled) setDetailError(err instanceof Error ? err.message : 'تعذر تحميل تفاصيل الطلب') })
+      .finally(() => { if (!cancelled) setDetailLoading(false) })
+    return () => { cancelled = true }
+  }, [detailId, detailRevision])
+  const openAction = (item: InboxItem, action: 'approve' | 'reject' | 'return') => {
+    setComment('')
+    setActionError(null)
+    setApprovedMinutesInput('')
+    setDetail(null)
+    setDetailLoading(true)
+    setDetailId(item.id)
+    setDetailRevision(value => value + 1)
+    setActionModal({ item, action })
+  }
   const [acting, setActing] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
-  const [history, setHistory] = useState<
-    { id: string; title: string; action: string }[]
-  >([])
   // عهد أكّد الموظف استلامها وتنتظر اعتمادي كمدير مباشر
   const [custodyPending, setCustodyPending] = useState<ApiCustody[]>([])
+  const [custodyError, setCustodyError] = useState('')
   const [custodyConfirming, setCustodyConfirming] = useState<number | null>(null)
 
   const loadCustodyPending = () =>
     fetchCustodyPendingMyConfirm()
-      .then(setCustodyPending)
-      .catch(() => setCustodyPending([]))
+      .then((rows) => { setCustodyPending(rows); setCustodyError('') })
+      .catch((err) => setCustodyError(err instanceof Error ? err.message : 'تعذر تحميل العهد التي تنتظر تأكيدك'))
 
   const confirmCustody = async (id: number) => {
     setCustodyConfirming(id)
@@ -192,14 +182,14 @@ export default function ApprovalsInboxPage() {
   const load = async () => {
     try {
       setError(null)
-      const [inbox, typeList, employees, branches] = await Promise.all([
+      // اسم المقدّم يأتي مع الصندوق من السيرفر — لا GET /employees (403 للمعتمد بدور موظف).
+      // الأنواع والفروع للعرض فقط: فشلها يعرض اسماً احتياطياً ولا يُسقط الصندوق (REQ-17)
+      const [inbox, typeList, branches] = await Promise.all([
         fetchInbox(),
-        fetchRequestTypes(),
-        fetchEmployees(),
-        fetchBranches(),
+        fetchRequestTypes().catch((): ApiRequestType[] => []),
+        fetchBranches().catch((): ApiBranch[] => []),
       ])
       const typesByCode = new Map<string, ApiRequestType>(typeList.map((t) => [t.code, t]))
-      const employeesById = new Map(employees.map((e) => [e.id, e]))
       const branchesById = new Map(branches.map((b) => [b.id, b]))
 
       setItems(
@@ -213,14 +203,13 @@ export default function ApprovalsInboxPage() {
             ? Math.ceil(
                 (new Date(current.dueAt).getTime() - Date.now()) / 86_400_000
               )
-            : current?.slaDays ?? 3
-          const requester = employeesById.get(r.requesterId)
+            : null
           return {
             id: r.id,
             displayId: `REQ-${r.id}`,
             category: type?.category ?? '',
             title: type?.nameAr ?? 'طلب',
-            requester: requester?.fullName ?? `موظف #${r.requesterId}`,
+            requester: r.requesterName ?? `موظف #${r.requesterId}`,
             branchName: r.branchId ? branchesById.get(r.branchId)?.name ?? '' : '',
             submittedAt: (r.submittedAt ?? r.createdAt).slice(0, 10),
             details: payloadSummary(r.payload) || (type?.nameAr ?? 'طلب'),
@@ -247,7 +236,7 @@ export default function ApprovalsInboxPage() {
   }, [])
 
   const filtered = items.filter((i) => !filterType || i.category === filterType)
-  const overdue = items.filter((i) => i.slaDaysLeft <= 0).length
+  const overdue = items.filter((i) => i.slaDaysLeft !== null && i.slaDaysLeft <= 0).length
 
   const actionLabels = {
     approve: 'اعتماد',
@@ -260,31 +249,34 @@ export default function ApprovalsInboxPage() {
     return: 'RETURN',
   } as const
 
+  const isOvertimeDetail = !!detail && (['OVERTIME', 'OVERTIME_AUTO'].includes(detail.typeCode) || !!detail.overtime || detail.overtimeReviewRequired === true)
+  const overtimeLimit = overtimeApprovalLimit(detail?.overtime)
+  const isOvertimeApproval = actionModal?.action === 'approve' && isOvertimeDetail
+  const enteredMinutes = approvedMinutesInput.trim() ? Number(approvedMinutesInput) : overtimeLimit
+  const invalidMinutes = isOvertimeApproval && (overtimeLimit == null || enteredMinutes == null ||
+    !Number.isSafeInteger(enteredMinutes) || enteredMinutes <= 0 || enteredMinutes > overtimeLimit)
+  const reducingMinutes = isOvertimeApproval && enteredMinutes != null && overtimeLimit != null && enteredMinutes < overtimeLimit
+  const overtimeApprovalBlocked = isOvertimeApproval && (detail?.overtimeReviewRequired === true ||
+    !detail?.overtime?.calculationSnapshot?.submission?.evidence || !!detail.overtime.calculationSnapshot.submission.evidence.blockers?.length ||
+    invalidMinutes || (reducingMinutes && (!canAdjustOvertime || !comment.trim())))
+
   const confirmAction = async () => {
-    if (!actionModal || acting) return
+    if (!actionModal || acting || detailLoading || detail?.id !== actionModal.item.id) return
+    if (actionModal.action !== 'approve' && !comment.trim()) { setActionError('اكتب السبب قبل تنفيذ القرار'); return }
+    if (overtimeApprovalBlocked) { setActionError(invalidMinutes ? 'الدقائق يجب أن تكون عددًا صحيحًا موجبًا ضمن الحد المعروض' : reducingMinutes ? 'تخفيض الدقائق يحتاج صلاحية التعديل وسببًا مكتوبًا' : 'أدلة الإضافي تحتاج مراجعة؛ أعد الطلب للمقدّم قبل الموافقة'); return }
     setActing(true)
     setActionError(null)
     try {
       await actOnRequest(
         actionModal.item.id,
         apiActions[actionModal.action],
-        comment || undefined
+        comment.trim() || undefined,
+        reducingMinutes && enteredMinutes != null ? enteredMinutes : undefined
       )
-      setHistory([
-        {
-          id: actionModal.item.displayId,
-          title: actionModal.item.title,
-          action:
-            actionModal.action === 'approve'
-              ? 'اعتمدت'
-              : actionModal.action === 'reject'
-              ? 'رفضت'
-              : 'أعدت',
-        },
-        ...history,
-      ])
+      setDecisionsRevision(value => value + 1)
       setComment('')
       setActionModal(null)
+      setDetailId(null)
       await load()
     } catch (err) {
       setActionError(err instanceof Error ? err.message : 'تعذّر تنفيذ الإجراء')
@@ -296,6 +288,7 @@ export default function ApprovalsInboxPage() {
   return (
     <MainLayout>
       <div className="space-y-6">
+        {custodyError && <div role="alert" className="bg-amber-50 text-amber-800 p-3 rounded-xl">تعذر تحميل عهد المدير: {custodyError} <button onClick={loadCustodyPending} className="underline">إعادة المحاولة</button></div>}
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -318,6 +311,7 @@ export default function ApprovalsInboxPage() {
           </div>
         </div>
 
+        <MyApprovalDecisions onOpen={setDetailId} revision={decisionsRevision} />
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
 
         {/* عهد بانتظار اعتمادي كمدير مباشر — تختفي عند الخلو */}
@@ -363,6 +357,9 @@ export default function ApprovalsInboxPage() {
             </div>
           </div>
         )}
+
+        {/* بنود إخلاء طرف على جهتي — تختفي عند الخلو */}
+        <MyClearanceItems />
 
         {loading ? (
           <div className="flex justify-center py-16">
@@ -410,7 +407,7 @@ export default function ApprovalsInboxPage() {
                   <div
                     key={item.id}
                     className={`card p-5 ${
-                      item.slaDaysLeft <= 0 ? 'border-2 border-red-200' : ''
+                      item.slaDaysLeft !== null && item.slaDaysLeft <= 0 ? 'border-2 border-red-200' : ''
                     }`}
                   >
                     <div className="flex items-start justify-between gap-4">
@@ -429,17 +426,18 @@ export default function ApprovalsInboxPage() {
                                 {item.branchName}
                               </span>
                             )}
-                            {item.slaDaysLeft <= 0 ? (
+                            {item.slaDaysLeft !== null && item.slaDaysLeft <= 0 ? (
                               <span className="badge text-xs bg-red-100 text-red-700">
                                 متجاوز للمهلة!
                               </span>
                             ) : (
                               <span className="text-xs text-gray-400">
-                                متبقي {item.slaDaysLeft} يوم للرد
+                                {item.slaDaysLeft === null ? 'بلا مهلة محددة' : `متبقي ${item.slaDaysLeft} يوم للرد`}
                               </span>
                             )}
                           </div>
                           <p className="text-sm text-gray-600 mt-1.5">{item.details}</p>
+                          <button type="button" onClick={() => setDetailId(item.id)} className="text-primary-600 text-sm underline mt-2">عرض التفاصيل والمرفقات</button>
                           <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
                             <span>
                               مقدّم من: <span className="text-gray-600 font-medium">{item.requester}</span>
@@ -456,21 +454,21 @@ export default function ApprovalsInboxPage() {
                       </div>
                       <div className="flex items-center gap-2 shrink-0">
                         <button
-                          onClick={() => setActionModal({ item, action: 'approve' })}
+                          onClick={() => openAction(item, 'approve')}
                           className="flex items-center gap-1.5 px-4 py-2 bg-success-500 text-white rounded-xl text-sm font-medium hover:bg-success-600"
                         >
                           <CheckCircle2 size={16} />
                           اعتماد
                         </button>
                         <button
-                          onClick={() => setActionModal({ item, action: 'reject' })}
+                          onClick={() => openAction(item, 'reject')}
                           className="flex items-center gap-1.5 px-4 py-2 bg-red-50 text-red-600 rounded-xl text-sm font-medium hover:bg-red-100"
                         >
                           <XCircle size={16} />
                           رفض
                         </button>
                         <button
-                          onClick={() => setActionModal({ item, action: 'return' })}
+                          onClick={() => openAction(item, 'return')}
                           className="flex items-center gap-1.5 px-4 py-2 bg-gray-100 text-gray-600 rounded-xl text-sm font-medium hover:bg-gray-200"
                         >
                           <RotateCcw size={16} />
@@ -495,37 +493,32 @@ export default function ApprovalsInboxPage() {
           </>
         )}
 
-        {/* آخر قراراتي */}
-        {history.length > 0 && (
-          <div className="card p-5">
-            <h3 className="font-bold text-gray-800 mb-3 text-sm">آخر قراراتك في الجلسة</h3>
-            <div className="space-y-2">
-              {history.slice(0, 5).map((h, i) => (
-                <div key={i} className="flex items-center gap-2 text-sm text-gray-500">
-                  <CheckCircle2 size={14} className="text-gray-300" />
-                  <span>
-                    {h.action} «{h.title}»
-                  </span>
-                  <span className="text-xs text-gray-400" dir="ltr">
-                    {h.id}
-                  </span>
-                </div>
-              ))}
+
+
+        {detailId !== null && !actionModal && (
+          <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="تفاصيل الطلب">
+            <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto p-6 space-y-4">
+              <div className="flex justify-between items-center"><h2 className="font-bold text-lg">تفاصيل الطلب #{detailId}</h2><button type="button" aria-label="إغلاق التفاصيل" onClick={() => setDetailId(null)}><X size={20} /></button></div>
+              {detailLoading && <p>جارٍ تحميل تفاصيل الطلب...</p>}
+              {detailError && <p role="alert" className="text-red-700">{detailError}</p>}
+              {detail && <><RequestPayload payload={detail.payload} /><OvertimeRequestSummary overtime={detail.overtime ?? undefined} reviewRequired={detail.overtimeReviewRequired} /></>}
             </div>
           </div>
         )}
 
-        {/* Action Modal */}
+        {/* مراجعة القرار وأدلة الطلب */}
         {actionModal && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl w-full max-w-lg">
+            <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b border-gray-100 flex items-center justify-between">
                 <h2 className="text-lg font-bold text-gray-800">
                   {actionLabels[actionModal.action]}: {actionModal.item.title}
                 </h2>
                 <button
+                  disabled={acting}
                   onClick={() => {
                     setActionModal(null)
+                    setDetailId(null)
                     setActionError(null)
                   }}
                   className="p-2 hover:bg-gray-100 rounded-lg"
@@ -543,18 +536,36 @@ export default function ApprovalsInboxPage() {
                   مقدّم من {actionModal.item.requester}
                   {actionModal.item.branchName ? ` — ${actionModal.item.branchName}` : ''}
                 </p>
+                {detailLoading && <p>جارٍ تحميل تفاصيل الطلب...</p>}
+                {detailError && <p role="alert" className="text-red-700">{detailError}</p>}
+                {detail?.id === actionModal.item.id && <>
+                  <RequestPayload payload={detail.payload} />
+                  <OvertimeRequestSummary overtime={detail.overtime ?? undefined} reviewRequired={detail.overtimeReviewRequired} />
+                </>}
+                {isOvertimeApproval && overtimeLimit != null && canAdjustOvertime && <div className="rounded-xl border border-gray-200 p-4">
+                  <label htmlFor="overtime-approved-minutes" className="block text-sm font-medium text-gray-700 mb-2">الدقائق للاعتماد — يمكن تخفيضها</label>
+                  <input id="overtime-approved-minutes" type="number" min={1} max={overtimeLimit} step={1}
+                    disabled={acting} value={approvedMinutesInput} placeholder={String(overtimeLimit)}
+                    onChange={event => { setApprovedMinutesInput(event.target.value); setActionError(null) }} className="input w-full" />
+                  <p className="text-xs text-gray-500 mt-2">الحد الحالي {overtimeLimit} دقيقة. اترك الحقل فارغًا لاعتماد هذا الحد. كل تخفيض يحتاج سببًا محفوظًا.</p>
+                  {invalidMinutes && <p role="alert" className="text-sm text-red-600 mt-2">أدخل عدد دقائق صحيحًا من 1 إلى {overtimeLimit}.</p>}
+                </div>}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    {actionModal.action === 'approve'
+                  <label htmlFor="approval-decision-comment" className="block text-sm font-medium text-gray-700 mb-2">
+                    {reducingMinutes ? 'سبب تخفيض الساعات *' : actionModal.action === 'approve'
                       ? 'ملاحظة (اختياري)'
                       : 'السبب *'}
                   </label>
                   <textarea
+                    id="approval-decision-comment"
+                    required={actionModal.action !== 'approve' || reducingMinutes}
+                    disabled={acting}
+                    maxLength={1000}
                     value={comment}
                     onChange={(e) => setComment(e.target.value)}
                     className="input w-full h-24 resize-none"
                     placeholder={
-                      actionModal.action === 'approve'
+                      reducingMinutes ? 'وضح سبب تخفيض الدقائق عن الحد المعروض...' : actionModal.action === 'approve'
                         ? 'أي ملاحظة تُسجَّل مع قرارك...'
                         : actionModal.action === 'reject'
                         ? 'اذكر سبب الرفض — يظهر للمقدّم'
@@ -573,8 +584,10 @@ export default function ApprovalsInboxPage() {
               </div>
               <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">
                 <button
+                  disabled={acting}
                   onClick={() => {
                     setActionModal(null)
+                    setDetailId(null)
                     setActionError(null)
                   }}
                   className="btn-secondary"
@@ -590,7 +603,7 @@ export default function ApprovalsInboxPage() {
                       ? 'bg-red-500 hover:bg-red-600'
                       : 'bg-gray-500 hover:bg-gray-600'
                   }`}
-                  disabled={acting || (actionModal.action !== 'approve' && !comment)}
+                  disabled={acting || detailLoading || detail?.id !== actionModal.item.id || overtimeApprovalBlocked || (actionModal.action !== 'approve' && !comment.trim())}
                 >
                   {acting ? 'جارٍ التنفيذ...' : `تأكيد ${actionLabels[actionModal.action]}`}
                 </button>

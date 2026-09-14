@@ -1,16 +1,26 @@
-import { BadRequestException, Injectable, Logger } from '@nestjs/common'
+import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common'
+import { overtimeFinancialValue } from '../payroll/overtime-financial'
+import { deferLoanInstallment, settleLoanEarly } from '../payroll/payroll-installment-ledger'
+import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
+import { LOAN_DEFERRAL_HANDLER, LOAN_DEFERRAL_TYPE, assertLoanReferenceId, loanScheduleAmounts, readStoredLoanDeferralPayload } from './loan-installment-requests'
+import { claimOvertimeDay } from './overtime-day-claims'
 import {
   EntityManager,
   In,
   LessThanOrEqual,
   MoreThanOrEqual,
+  Not,
 } from 'typeorm'
+import { OffboardingCase } from '../offboarding/offboarding.entities'
+import { isValidYmd } from '../offboarding/eos'
 import {
-  ClearanceItem,
-  OffboardingCase,
-} from '../offboarding/offboarding.entities'
+  OPEN_CASE_STATUSES,
+  openOffboardingCase,
+} from '../offboarding/offboarding-open'
 import { LeaveBalancesService } from './leave-balances.service'
+import { leaveCodeOf } from '../common/leave-contract'
 import { Request } from './entities/request.entity'
+import { RequestApproval } from './entities/request-approval.entity'
 import { RequestType } from './entities/request-type.entity'
 import { Leave, LeaveType } from './entities/leave.entities'
 import {
@@ -20,7 +30,6 @@ import {
 import {
   EmployeeObligation,
   Loan,
-  LoanInstallment,
   ObligationType,
 } from './entities/financial.entities'
 import {
@@ -28,11 +37,21 @@ import {
   Promotion,
   Transfer,
 } from './entities/employment.entities'
+import { recordEmployeeChange } from '../employees/employee-change-log'
 import { Asset, CustodyAssignment } from './entities/custody.entities'
 import { RequestsConfig } from './entities/requests-config.entity'
-import { LetterRequest } from './entities/letter.entities'
+import { LettersService } from '../letters/letters.service'
 import { Employee } from '../employees/employee.entity'
 import { User } from '../auth/user.entity'
+import { localDateOf } from '../attendance/attendance.service'
+import {
+  assertEmploymentValues, employmentEffectiveDate, executeContract, executeShiftSwap,
+  recordEmploymentChanges, supportsEmploymentType, validateEmploymentRequest, validateTransfer,
+} from './employment-destinations'
+import { startCustodyTransfer } from './custody-execution'
+import { executeSalaryChangeRequest } from './salary-change-requests'
+import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
+import { appendEmployeeOrgCalendar } from '../attendance/attendance-calendar-history'
 
 // ناتج تنفيذ الوجهة: المرجع الدائم + هل اكتمل فوراً أم ينتظر (سريان/تأكيد استلام)
 export interface DestinationResult {
@@ -51,11 +70,93 @@ type Handler = (
 const refOf = (prefix: string, id: number): string =>
   `${prefix}-${new Date().getFullYear()}-${String(id).padStart(6, '0')}`
 
+// «تحديث بيانات الموظف»: مفتاح الحمولة → عمود الموظف، لكل معالج على حدة (SEC-REQ-2).
+// البنك (bankName/iban) خارجها نهائياً — يتغيّر من المسار الأمني payroll_bank_secure وحده
+export const RECORD_UPDATE_FIELDS: Record<string, Record<string, keyof Employee>> = {
+  employee_record: { phone: 'phone', phoneAlt: 'phoneAlt', address: 'address', maritalStatus: 'maritalStatus' },
+  // جهة اتصال الطوارئ (تنفيذ آلي بلا معتمد): حقول الطوارئ فقط — لا تمس بيانات الموظف نفسه
+  employee_record_auto: {
+    name: 'emergencyContactName',
+    phone: 'emergencyContactPhone',
+    relation: 'emergencyRelation',
+    phoneAlt: 'emergencyPhoneAlt',
+  },
+}
+
+// وجهات «الطلب نفسه هو السجل» يقرؤها محرك الحضور بكود النوع (الاستئذان والعمل عن
+// بُعد والمأمورية): منفّذة لهذه الأنواع وحدها، ولا تُختار لنوع آخر فيكتمل بلا أثر (REQ-3)
+export const ENGINE_RECORD_HANDLERS: Record<string, { labelAr: string; typeCodes: string[] }> = {
+  attendance_log: {
+    labelAr: 'سجل الحضور — يقرؤه محرك الحضور (استئذان/عمل عن بُعد)',
+    typeCodes: ['PERMISSION', 'REMOTE_WORK'],
+  },
+  attendance_trips: {
+    labelAr: 'سجل المأموريات — يقرؤه محرك الحضور',
+    typeCodes: ['BUSINESS_TRIP'],
+  },
+}
+
+// SEC-EMP-2: قيم تُكتب في ملف الموظف وتُطبع في المستندات — تحقق واحد يستخدمه
+// التقديم (requests.service) والتنفيذ (المعالج)، ويعيد القيمة المنظّفة
+export const assertIban = (raw: unknown): string => {
+  // نفس regex الـDTO (employees.dto.ts) — بعد حذف المسافات وتكبير الحروف
+  const iban = String(raw ?? '').replace(/\s+/g, '').toUpperCase()
+  if (!/^[A-Z]{2}[A-Z0-9]{13,32}$/.test(iban)) {
+    throw new BadRequestException('IBAN غير صالح (يبدأ برمز الدولة ثم أرقام/حروف)')
+  }
+  return iban
+}
+// المسمى بطول عمود jobTitle (100) وبلا محارف HTML/تحكم
+export const assertJobTitle = (raw: unknown): string => {
+  const title = String(raw ?? '').trim()
+  if (title.length < 2 || title.length > 100 || /[<>\x00-\x1f]/.test(title)) {
+    throw new BadRequestException(
+      'المسمى الوظيفي الجديد غير صالح — من 2 إلى 100 حرف بدون < أو >'
+    )
+  }
+  return title
+}
+// اسم البنك (اختياري في الطلب) بطول عمود bankName (100) وبلا محارف HTML/تحكم
+export const assertBankName = (raw: unknown): string => {
+  const name = String(raw ?? '').trim()
+  if (name.length < 2 || name.length > 100 || /[<>\x00-\x1f]/.test(name)) {
+    throw new BadRequestException('اسم البنك غير صالح — من 2 إلى 100 حرف بدون < أو >')
+  }
+  return name
+}
+
 @Injectable()
 export class DestinationsService {
   private readonly logger = new Logger(DestinationsService.name)
 
-  constructor(private readonly leaveBalances: LeaveBalancesService) {}
+  constructor(private readonly leaveBalances: LeaveBalancesService, private readonly letters: LettersService) {}
+
+  // مفاتيح الوجهات المنفّذة فعلياً — مصدر قائمة بانِي الطلبات وتحققه (settings)
+  handlerKeys(): string[] {
+    // Keep old persisted keys executable; offer explicit names for new configuration.
+    const legacy = new Set(['leave_calendar_balance', 'leave_calendar', 'leave_calendar_payroll', 'leave_calendar_once', 'custody_assignments'])
+    return Object.keys(this.handlers).filter(key => !legacy.has(key))
+  }
+
+  // هل للنوع تنفيذ فعلي بعد الاعتماد؟ «بدون تنفيذ آلي» اختيار صريح (سجل فقط)؛
+  // الوجهة اللي لسه متبنّتش لا تُفعَّل ولا تُقدَّم ولا تُنفَّذ (REQ-3)
+  supports(type: Pick<RequestType, 'code' | 'destinationHandler'>): boolean {
+    const key = type.destinationHandler
+    if (type.code === LOAN_DEFERRAL_TYPE || key === LOAN_DEFERRAL_HANDLER) return type.code === LOAN_DEFERRAL_TYPE && key === LOAN_DEFERRAL_HANDLER
+    if (!supportsEmploymentType(type)) return false
+    if (key === 'none' || Object.prototype.hasOwnProperty.call(this.handlers, key)) {
+      return true
+    }
+    return ENGINE_RECORD_HANDLERS[key]?.typeCodes?.includes(type.code) ?? false
+  }
+
+  // رسالة واحدة للنوع اللي وجهته غير مبنية — للتقديم والتفعيل والتنفيذ
+  unsupportedMessage(type: Pick<RequestType, 'nameAr' | 'destinationHandler'>): string {
+    return (
+      `نوع «${type.nameAr}» ليس له تنفيذ بعد الاعتماد (الوجهة «${type.destinationHandler}» لم تُبنَ) — ` +
+      `لا يُقبل عليه طلب حتى تختار الموارد البشرية وجهة منفّذة أو «سجل فقط» من «بانِي الطلبات»`
+    )
+  }
 
   // ===== القاعدة الذهبية: كل طلب معتمد يُكتب في سجل دائم =====
   async execute(
@@ -63,20 +164,25 @@ export class DestinationsService {
     req: Request,
     type: RequestType
   ): Promise<DestinationResult> {
+    if ((type.code === LOAN_DEFERRAL_TYPE || type.destinationHandler === LOAN_DEFERRAL_HANDLER) && !this.supports(type)) {
+      throw new BadRequestException('طلب تأجيل القسط يجب أن يستخدم وجهة تأجيل القسط المخصصة')
+    }
     const payload = req.payload ? JSON.parse(req.payload) : {}
-    // «بدون تنفيذ آلي»: الطلب نفسه هو السجل الدائم
+    assertEmploymentValues(type, payload)
+    // «بدون تنفيذ آلي» (سجل فقط): اختيار صريح من المالك — الطلب نفسه هو السجل الدائم
     if (type.destinationHandler === 'none') {
       return { ref: refOf('REQ', req.id), completed: true }
     }
-    const handler = this.handlers[type.destinationHandler]
-    if (!handler) {
-      // handler لسه متبنّاش — الطلب نفسه هو السجل الدائم القابل للفلترة
-      this.logger.warn(
-        `لا يوجد handler لـ ${type.destinationHandler} — سجل عام REQ`
-      )
+    // الطلب نفسه سجل يقرؤه محرك الحضور (لأنواعه فقط) — أيامه يُعاد حسابها بعد التنفيذ
+    if (ENGINE_RECORD_HANDLERS[type.destinationHandler]?.typeCodes?.includes(type.code)) {
       return { ref: refOf('REQ', req.id), completed: true }
     }
-    return handler(em, req, type, payload)
+    // وجهة لسه متبنّتش: ممنوع «مكتمل» بصمت (REQ-3) — الخطأ يرجّع معاملة الاعتماد كلها
+    if (!Object.prototype.hasOwnProperty.call(this.handlers, type.destinationHandler)) {
+      this.logger.warn(`لا يوجد handler لـ ${type.destinationHandler} — رُفض تنفيذ الطلب #${req.id}`)
+      throw new BadRequestException(this.unsupportedMessage(type))
+    }
+    return this.handlers[type.destinationHandler](em, req, type, payload)
   }
 
   // ========== الإجازات ==========
@@ -84,9 +190,7 @@ export class DestinationsService {
   private leaveHandler =
     (deductBalance: boolean): Handler =>
     async (em, req, _type, payload) => {
-      const leaveTypeCode = String(
-        payload.leaveType ?? _type.code.replace('LEAVE_', '')
-      )
+      const leaveTypeCode = leaveCodeOf(payload, _type.code)
       // نصف اليوم: MORNING/EVENING — والدفع من تعريف نوع الإجازة
       const period = ['MORNING', 'EVENING'].includes(String(payload.period))
         ? (String(payload.period) as 'MORNING' | 'EVENING')
@@ -109,13 +213,26 @@ export class DestinationsService {
           `للموظف إجازة معتمدة متداخلة (${overlap.fromDate} → ${overlap.toDate}) — لا خصم مضاعف لنفس الأيام`
         )
       }
+      // الحارس الأخير قبل الكتابة: تواريخ صحيحة وأيام موجبة (LEV-4) — التقديم
+      // بيحسبها على السيرفر، فده بيصد بس طلبات اتقدّمت قبل الإصلاح
+      const leaveDays = Number(payload.days)
+      if (
+        !(leaveDays > 0) ||
+        !payload.fromDate ||
+        !payload.toDate ||
+        String(payload.toDate) < String(payload.fromDate)
+      ) {
+        throw new BadRequestException(
+          'بيانات الإجازة غير صالحة (التواريخ أو عدد الأيام) — ارفض الطلب واطلب تقديمه من جديد'
+        )
+      }
       const leave = await em.getRepository(Leave).save({
         requestId: req.id,
         employeeId: req.requesterId,
-        leaveType: leaveTypeCode,
+        leaveTypeCode,
         fromDate: String(payload.fromDate),
         toDate: String(payload.toDate),
-        days: Number(payload.days),
+        days: leaveDays,
         period,
         isUnpaid: ltDef ? !ltDef.isPaid : false,
         status: 'APPROVED',
@@ -123,28 +240,37 @@ export class DestinationsService {
 
       if (deductBalance) {
         const lt = await em.getRepository(LeaveType).findOne({
-          where: { code: leave.leaveType },
+          where: { code: leave.leaveTypeCode },
         })
-        const balanceType = lt?.balanceSource ?? 'annual'
+        const balanceType = lt?.balanceType ?? 'annual'
         if (balanceType !== 'none') {
-          // خصم بالطبقات: الافتتاحي الساري أولاً ثم استحقاق السنة
-          await this.leaveBalances.deduct(
-            em,
-            req.requesterId,
-            balanceType,
-            Number(leave.days),
-            leave.fromDate
+          // خصم بالطبقات لكل سنة بأيامها (الإجازة اللي بتعدّي السنة — LEV-2):
+          // الافتتاحي الساري أولاً ثم استحقاق السنة
+          const byYear = this.leaveBalances.splitByYear(
+            payload,
+            leave.fromDate,
+            leaveDays
           )
+          for (const [year, d] of Object.entries(byYear)) {
+            await this.leaveBalances.deduct(
+              em,
+              req.requesterId,
+              balanceType,
+              d,
+              year === leave.fromDate.slice(0, 4) ? leave.fromDate : `${year}-01-01`
+            )
+          }
         }
       }
       return { ref: refOf('LV', leave.id), completed: true }
     }
 
-  // إلغاء/تعديل إجازة: يلغي الإجازة الأصلية ويرجّع الرصيد
+  // إلغاء إجازة: يلغي الإجازة الأصلية ويرجّع الرصيد — مرة واحدة بس (LEV-7)
   private leaveRestoreHandler: Handler = async (em, req, _type, payload) => {
     const originalLeaveId = Number(payload.leaveId)
     const leave = await em.getRepository(Leave).findOne({
       where: { id: originalLeaveId, employeeId: req.requesterId },
+      lock: { mode: 'pessimistic_write' },
     })
     if (!leave) {
       return {
@@ -153,21 +279,24 @@ export class DestinationsService {
         note: 'الإجازة الأصلية غير موجودة',
       }
     }
+    // إجازة اتلغت أو اتسحبت قبل كده: رصيدها رجع وقتها — مايرجعش مرتين
+    if (leave.status !== 'APPROVED') {
+      return {
+        ref: refOf('LVX', leave.id),
+        completed: true,
+        note: 'الإجازة ملغاة من قبل — الرصيد رجع وقتها',
+      }
+    }
     leave.status = 'CANCELLED'
     await em.getRepository(Leave).save(leave)
 
     const lt = await em.getRepository(LeaveType).findOne({
-      where: { code: leave.leaveType },
+      where: { code: leave.leaveTypeCode },
     })
-    const balanceType = lt?.balanceSource ?? 'annual'
+    const balanceType = lt?.balanceType ?? 'annual'
     if (balanceType !== 'none') {
-      await this.leaveBalances.restore(
-        em,
-        req.requesterId,
-        balanceType,
-        Number(leave.days),
-        leave.fromDate.slice(0, 4)
-      )
+      // بنفس تقسيم السنين اللي اتخصم بيه
+      await this.leaveBalances.restoreLeave(em, leave, balanceType)
     }
     return { ref: refOf('LVX', leave.id), completed: true }
   }
@@ -175,39 +304,25 @@ export class DestinationsService {
   // ========== الحضور والأوفرتايم ==========
 
   private overtimeHandler: Handler = async (em, req, _type, payload) => {
-    // مُضاعِف مبدئي (أيام العمل) من الإعداد — يُنقّحه محرك الحضور لنوع اليوم
-    // الفعلي (عطلة/ويك إند) عند مزامنة البصمة
-    const wdMult = await em
-      .getRepository(RequestsConfig)
-      .findOne({ where: { key: 'overtime.multiplier_weekday' } })
-    const entry = await em.getRepository(OvertimeEntry).save({
-      requestId: req.id,
-      employeeId: req.requesterId,
-      date: String(payload.date),
-      source: 'PRE_REQUESTED',
-      hoursRequested: Number(payload.hours),
-      // payable = min(المعتمد، الفعلي) — يُحسب عند مزامنة البصمة
-      rate: payload.rate
-        ? Number(payload.rate)
-        : Number(wdMult?.value ?? '1.5'),
-      status: 'APPROVED',
-    })
+    const entries = await em.getRepository(OvertimeEntry).find({ where: { requestId: req.id } })
+    const entry = entries.length === 1 ? entries[0] : null
+    let steps: Array<{ action?: string; actedAt?: string }> = []
+    try { steps = JSON.parse(req.resolvedSteps || '[]') } catch { /* التاريخ التالف لا يُعتمد ضمنياً. */ }
+    if (!entry || entry.employeeId !== req.requesterId || entry.date !== String(payload.date) ||
+      !['APPROVED', 'COMPLETED'].includes(req.status) || entry.status !== 'APPROVED' || !entry.calculationSnapshot?.approval ||
+      !Array.isArray(steps) || !steps.length || steps.some(step => step.action !== 'APPROVED' || !step.actedAt)) {
+      throw new ConflictException('لا يمكن تنفيذ الإضافي دون سجل واحد ولقطة مالية وخطوات اعتماد مكتملة؛ راجع الطلب القديم قبل المتابعة')
+    }
+    // وجهة التنفيذ تؤكد نتيجة نفس السجل فقط؛ التسعير والاعتماد حدثا داخل المعاملة الأخيرة.
+    overtimeFinancialValue(entry, 0)
+    await claimOvertimeDay(em, entry)
     return { ref: refOf('OT', entry.id), completed: true }
   }
 
   // اعتماد الأوفرتايم المكتشف بالبصمة (بعد مرور طلبه في السلسلة):
   // الإدخال الموجود (BIOMETRIC_DETECTED) يُعتمد بالساعات الفعلية
   private overtimeAutoHandler: Handler = async (em, req, _type, payload) => {
-    const repo = em.getRepository(OvertimeEntry)
-    const entry = await repo.findOne({ where: { requestId: req.id } })
-    if (!entry) {
-      return { ref: refOf('OT', req.id), completed: true, note: 'الإدخال غير موجود' }
-    }
-    const hours = Number(entry.hoursActual ?? payload.hours ?? 0)
-    entry.status = 'APPROVED'
-    entry.payableHours = hours
-    await repo.save(entry)
-    return { ref: refOf('OT', entry.id), completed: true }
+    return this.overtimeHandler(em, req, _type, payload)
   }
 
   private punchCorrectionHandler: Handler = async (em, req, _t, payload) => {
@@ -232,66 +347,76 @@ export class DestinationsService {
 
   // ========== المالية ==========
 
+  private async loanRequestActor(em: EntityManager, req: Request): Promise<number | null> {
+    if (!em.queryRunner?.isTransactionActive || req.status !== 'APPROVED') throw new BadRequestException('تنفيذ حركة السلفة يتطلب طلبًا معتمدًا داخل معاملته')
+    // المعتمد من سجل القرار الحقيقي؛ حمولة الطلب لا تحدد هوية المعتمد أو صلاحياته.
+    const decision = await em.getRepository(RequestApproval).findOne({ where: { requestId: req.id, action: 'APPROVED' }, order: { id: 'DESC' } })
+    return decision?.approverId ?? null
+  }
+
+  private loanDeferralHandler: Handler = async (em, req, type, payload) => {
+    if (req.typeCode !== LOAN_DEFERRAL_TYPE || type.code !== LOAN_DEFERRAL_TYPE) throw new BadRequestException('نوع طلب تأجيل القسط غير صحيح')
+    const actorId = await this.loanRequestActor(em, req)
+    const staged = readStoredLoanDeferralPayload(payload, true)
+    const evidence = staged.deferralEvidence!
+    const result = await deferLoanInstallment(em, { employeeId: req.requesterId, loanId: evidence.loanId,
+      installmentId: evidence.installmentId, expectedRevision: evidence.sourceRevision, expectedAmount: evidence.amount, toPeriod: evidence.toPeriod,
+      requestId: req.id, actorId, reason: staged.reason! })
+    return { ref: refOf('LDEFER', result.eventId), completed: true }
+  }
+
   private loanHandler: Handler = async (em, req, _t, payload) => {
-    const amount = Number(payload.amount)
-    const months = Math.max(1, Number(payload.months ?? 1))
-    const loan = await em.getRepository(Loan).save({
-      requestId: req.id,
-      employeeId: req.requesterId,
-      amount,
-      status: 'APPROVED',
-    })
-    // جدول السداد: أقساط شهرية متساوية تبدأ من الشهر القادم
-    const per = Math.round((amount / months) * 100) / 100
-    const rows: Partial<LoanInstallment>[] = []
+    const actorId = await this.loanRequestActor(em, req)
+    if (req.typeCode === 'EARLY_LOAN_SETTLEMENT' || _t.destinationHandler === 'loan_early_settlement') {
+      const loanId = assertLoanReferenceId(payload.loanId)
+      await settleLoanEarly(em, { employeeId: req.requesterId, loanId, requestId: req.id, actorId,
+        reason: String(payload.reason ?? 'سداد سلفة مبكر معتمد').trim() })
+      return { ref: refOf('LN', loanId), completed: true }
+    }
+    // إعادة تنفيذ الطلب لا تعيد تشكيل مبلغ أو جدول سلفة أنشئت بالفعل.
+    const existing = await em.getRepository(Loan).find({ where: { requestId: req.id }, select: { id: true, employeeId: true } })
+    if (existing.length > 1 || existing.some(loan => loan.employeeId !== req.requesterId)) throw new ConflictException('مرجع طلب السلفة مرتبط بسجل مالي غير متسق')
+    if (existing.length) return { ref: refOf('LN', existing[0].id), completed: true }
+    const schedule = loanScheduleAmounts(payload.amount, payload.months ?? 1)
+    const open = (await readLoanInstallmentPositions(em, req.requesterId)).filter(row => row.financialStatus === 'DUE' && row.remainingAmount !== '0.00')
+    if (open.length + schedule.months > 1000) throw new BadRequestException('إجمالي الأقساط المفتوحة بعد السلفة يتجاوز الحد التقني1000؛ قلل المدة أو أغلق الأقساط القائمة أولًا')
+    // CAST للنص يحفظ قروش DECIMAL(18,2) دون تحويل مبلغ SQL إلى Number.
+    const inserted = await em.query('INSERT INTO [loans] ([requestId], [employeeId], [amount], [status]) OUTPUT INSERTED.[id] AS [id] VALUES (@0, @1, CAST(@2 AS decimal(18,2)), @3)', [req.id, req.requesterId, schedule.amount, 'APPROVED'])
+    const loanId = Number(inserted[0]?.id)
+    if (!Number.isInteger(loanId) || loanId <= 0) throw new Error('لم يرجع حفظ السلفة معرفًا صالحًا')
+    const rows: Array<{ dueDate: string; amount: string }> = []
     const start = new Date()
-    for (let i = 1; i <= months; i++) {
-      // تنسيق محلي — toISOString يزحزح اليوم بفارق التوقيت
+    for (let i = 1; i <= schedule.months; i++) {
       const due = new Date(start.getFullYear(), start.getMonth() + i, 1)
       const dueDate = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-01`
-      rows.push({
-        loanId: loan.id,
-        dueDate,
-        // القسط الأخير يمتص فروق التقريب
-        amount: i === months ? amount - per * (months - 1) : per,
-      })
+      rows.push({ dueDate, amount: schedule.amounts[i - 1] })
     }
-    await em.getRepository(LoanInstallment).save(rows)
-    return { ref: refOf('LN', loan.id), completed: true }
+    // دفعات محدودة من معاملات SQL؛ يبدأ كل قسط جديد برصيد واضح ومراجعة أولى.
+    for (let offset = 0; offset < rows.length; offset += 50) {
+      const parameters: unknown[] = [], values = rows.slice(offset, offset + 50).map(row => {
+        const index = parameters.length
+        parameters.push(loanId, row.dueDate, row.amount)
+        return `(@${index}, @${index + 1}, CAST(@${index + 2} AS decimal(18,2)), 0, CAST('0.00' AS decimal(18,2)), N'DUE', 1, NULL, @${index + 1}, NULL)`
+      })
+      await em.query(`INSERT INTO [loan_installments] ([loanId], [dueDate], [amount], [paid], [paidAmount], [financialStatus], [financialRevision], [parentInstallmentId], [originalDueDate], [paidAt]) VALUES ${values.join(', ')}`, parameters)
+    }
+    return { ref: refOf('LN', loanId), completed: true }
   }
 
   private salaryUpdateHandler: Handler = async (em, req, _t, payload) => {
-    const emp = await em.getRepository(Employee).findOne({
-      where: { id: req.requesterId },
-    })
-    if (!emp) return { ref: refOf('SAL', req.id), completed: true }
-    const oldSalary = emp.basicSalary
-    emp.basicSalary = Number(payload.newSalary)
-    await em.getRepository(Employee).save(emp)
-    const hist = await em.getRepository(EmployeeStatusHistory).save({
-      employeeId: emp.id,
-      oldStatus: `salary:${oldSalary ?? 0}`,
-      newStatus: `salary:${emp.basicSalary}`,
-      reason: String(payload.reason ?? 'زيادة راتب معتمدة'),
-      requestId: req.id,
-    })
-    return { ref: refOf('SAL', hist.id), completed: true }
+    return executeSalaryChangeRequest(em, req, payload, localDateOf(new Date()))
   }
 
   // ========== الحالة الوظيفية ==========
 
   private transferHandler: Handler = async (em, req, _t, payload) => {
-    const emp = await em.getRepository(Employee).findOne({
-      where: { id: Number(payload.employeeId ?? req.requesterId) },
-    })
-    if (!emp) return { ref: refOf('TR', req.id), completed: true }
-
+    const { emp } = await validateTransfer(em, req, payload, true)
     const effectiveDate = String(payload.effectiveDate)
-    const today = new Date().toISOString().slice(0, 10)
+    const today = localDateOf(new Date())
     const transfer = await em.getRepository(Transfer).save({
       requestId: req.id,
       employeeId: emp.id,
-      fromTeam: emp.teamId ?? 0,
+      fromTeam: emp.teamId ?? null,
       toTeam: Number(payload.toTeamId),
       effectiveDate,
       status: 'SCHEDULED',
@@ -310,81 +435,106 @@ export class DestinationsService {
     }
   }
 
-  // ينفّذ نقلاً مجدولاً: يحدّث فريق الموظف + يسجّل التاريخ الوظيفي
-  async executeTransfer(em: EntityManager, transferId: number): Promise<void> {
+  // النقل يغير الهيكل كاملاً وحساب الدخول في المعاملة نفسها؛ الفرع الجديد يبطل التوكن القديم.
+  async executeTransfer(em: EntityManager, transferId: number): Promise<boolean> {
+    // قراءة الهوية قبل أي صف مقفل، ثم القفل المالي المشترك مع الحضور ومسير الأجر.
+    const identity = await em.getRepository(Transfer).findOne({ where: { id: transferId }, select: { id: true, employeeId: true, status: true } })
+    if (!identity || identity.status !== 'SCHEDULED') return false
+    await lockPayrollEmployees(em, [identity.employeeId])
     const transfer = await em.getRepository(Transfer).findOne({
       where: { id: transferId },
+      lock: { mode: 'pessimistic_write' },
     })
-    if (!transfer || transfer.status === 'EXECUTED') return
-    const emp = await em.getRepository(Employee).findOne({
-      where: { id: transfer.employeeId },
-    })
-    if (emp) {
-      emp.teamId = transfer.toTeam
-      await em.getRepository(Employee).save(emp)
+    if (!transfer || transfer.status !== 'SCHEDULED' || transfer.effectiveDate > localDateOf(new Date())) return false
+    const original = transfer.requestId && await em.getRepository(Request).findOne({ where: { id: transfer.requestId } })
+    const req = original || Object.assign(new Request(), { id: 0, requesterId: transfer.employeeId })
+    const { emp, team, department, managerId } = await validateTransfer(em, req, {
+      employeeId: transfer.employeeId, toTeamId: transfer.toTeam, effectiveDate: transfer.effectiveDate,
+    }, true, transfer.id)
+    const changes = { teamId: team.id, departmentId: department.id, branchId: department.branchId, managerEmployeeId: managerId as any }
+    let calendarActor: number | null = null
+    if (emp.branchId !== department.branchId) {
+      const decisions = em.getRepository(RequestApproval)
+      const decision = original && await decisions.findOne({ where: { requestId: original.id, action: 'APPROVED' }, order: { id: 'DESC' } })
+      const returned = original && await decisions.findOne({ where: { requestId: original.id, action: 'RETURNED_FOR_INFO' }, order: { id: 'DESC' } })
+      calendarActor = decision && (!returned || decision.id > returned.id) ? decision.approverId : null
+      if (!Number.isInteger(calendarActor) || !calendarActor || calendarActor < 1) throw new ConflictException('لا يوجد قرار اعتماد موثق لهوية منفذ النقل؛ يلزم مراجعة الطلب القديم قبل تغيير فرع الموظف')
+    }
+    await recordEmploymentChanges(em, req, emp, changes, 'نقل معتمد — تنفيذ بتاريخ السريان')
+    await em.getRepository(Employee).update({ id: emp.id }, changes)
+    if (emp.branchId !== department.branchId) {
+      await appendEmployeeOrgCalendar(em, { employeeId: emp.id, beforeBranchId: emp.branchId, branchId: department.branchId,
+        effectiveFrom: transfer.effectiveDate, reason: `نقل معتمد بطلب ${req.id} بتاريخ السريان`, actorUserId: calendarActor! })
+      const users = await em.getRepository(User).find({ where: { employeeId: emp.id } })
+      for (const user of users) {
+        user.branchId = department.branchId
+        user.tokenVersion = (user.tokenVersion || 0) + 1
+        await em.getRepository(User).save(user)
+      }
     }
     transfer.status = 'EXECUTED'
     transfer.executedAt = new Date()
     await em.getRepository(Transfer).save(transfer)
-    await em.getRepository(EmployeeStatusHistory).save({
-      employeeId: transfer.employeeId,
-      oldStatus: `team:${transfer.fromTeam}`,
-      newStatus: `team:${transfer.toTeam}`,
-      reason: 'نقل بين الفرق — تنفيذ بتاريخ السريان',
-      requestId: transfer.requestId,
-    })
+    return true
   }
 
   private promotionHandler: Handler = async (em, req, _t, payload) => {
+    await validateEmploymentRequest(em, req, _t, true)
+    const effectiveDate = employmentEffectiveDate(_t, payload)
+    if (effectiveDate > localDateOf(new Date())) return {
+      ref: refOf(_t.destinationHandler === 'employee_update' ? 'TITLE' : 'PR', req.id), completed: false,
+      note: `مجدول للتنفيذ في ${effectiveDate}`,
+    }
     const emp = await em.getRepository(Employee).findOne({
-      where: { id: Number(payload.employeeId ?? req.requesterId) },
+      where: { id: req.requesterId },
     })
-    if (!emp) return { ref: refOf('PR', req.id), completed: true }
+    if (!emp) throw new BadRequestException('الموظف المستهدف غير موجود')
+    // المسمى يُكتب في ملف الموظف ويُطبع في المستندات (SEC-EMP-2)
+    const toTitle = assertJobTitle(payload.toTitle)
+    if (_t.destinationHandler === 'employee_update') {
+      await recordEmploymentChanges(em, req, emp, { jobTitle: toTitle }, 'تغيير مسمى معتمد')
+      await em.getRepository(Employee).update(emp.id, { jobTitle: toTitle })
+      return { ref: refOf('TITLE', req.id), completed: true }
+    }
     const promo = await em.getRepository(Promotion).save({
       requestId: req.id,
       employeeId: emp.id,
       fromTitle: emp.jobTitle ?? '',
-      toTitle: String(payload.toTitle),
-      effectiveDate: String(
-        payload.effectiveDate ?? new Date().toISOString().slice(0, 10)
-      ),
+      toTitle,
+      effectiveDate,
     })
-    emp.jobTitle = String(payload.toTitle)
+    await recordEmploymentChanges(em, req, emp, { jobTitle: toTitle }, 'ترقية معتمدة')
+    emp.jobTitle = toTitle
     await em.getRepository(Employee).save(emp)
-    await em.getRepository(EmployeeStatusHistory).save({
-      employeeId: emp.id,
-      oldStatus: `title:${promo.fromTitle}`,
-      newStatus: `title:${promo.toTitle}`,
-      reason: 'ترقية معتمدة',
-      requestId: req.id,
-    })
     return { ref: refOf('PR', promo.id), completed: true }
   }
 
-  // تحديث بيانات الموظف (حقول مسموحة فقط) + سجل تدقيق
-  private employeeRecordHandler: Handler = async (em, req, _t, payload) => {
-    const emp = await em.getRepository(Employee).findOne({
-      where: { id: req.requesterId },
-    })
-    if (!emp) return { ref: refOf('EMP', req.id), completed: true }
-    const allowed = ['phone', 'email', 'bankName'] as const
-    const changes: string[] = []
-    for (const f of allowed) {
-      if (payload[f] !== undefined && payload[f] !== (emp as any)[f]) {
-        changes.push(`${f}: ${(emp as any)[f] ?? '—'} → ${payload[f]}`)
-        ;(emp as any)[f] = payload[f]
+  // تحديث بيانات الموظف (حقول معالجه في RECORD_UPDATE_FIELDS فقط) + سجل تدقيق
+  private employeeRecordHandler =
+    (fields: Record<string, keyof Employee>): Handler =>
+    async (em, req, _t, payload) => {
+      const emp = await em.getRepository(Employee).findOne({
+        where: { id: req.requesterId },
+        // Different requests may update this employee concurrently. Read the
+        // committed value under the same lock used through data/audit writes.
+        lock: { mode: 'pessimistic_write' },
+      })
+      if (!emp) throw new BadRequestException('الموظف المطلوب تحديث بياناته غير موجود')
+      const changes: { fieldName: string; oldValue: unknown; newValue: unknown }[] = []
+      for (const [key, col] of Object.entries(fields)) {
+        if (payload[key] !== undefined && payload[key] !== (emp as any)[col]) {
+          changes.push({ fieldName: col, oldValue: (emp as any)[col], newValue: payload[key] })
+          ;(emp as any)[col] = payload[key]
+        }
       }
+      if (!changes.length) throw new BadRequestException('لم تتغير أي بيانات في الطلب')
+      await em.getRepository(Employee).save(emp)
+      let hist!: EmployeeStatusHistory
+      for (const change of changes) hist = await recordEmployeeChange(em, {
+        employeeId: emp.id, ...change, reason: 'تحديث بيانات معتمد', requestId: req.id,
+      })
+      return { ref: refOf('EMP', hist.id), completed: true }
     }
-    await em.getRepository(Employee).save(emp)
-    const hist = await em.getRepository(EmployeeStatusHistory).save({
-      employeeId: emp.id,
-      oldStatus: 'data_update',
-      newStatus: 'data_update',
-      reason: changes.join(' | ') || 'تحديث بيانات',
-      requestId: req.id,
-    })
-    return { ref: refOf('EMP', hist.id), completed: true }
-  }
 
   // المسار الأمني: تغيير الحساب البنكي — بعد الدورة الأمنية فقط
   private bankChangeHandler: Handler = async (em, req, _t, payload) => {
@@ -392,14 +542,15 @@ export class DestinationsService {
       where: { id: req.requesterId },
     })
     if (!emp) return { ref: refOf('BNK', req.id), completed: true }
+    // نفس regex الـDTO — ويُتحقق منه عند التقديم أيضاً (SEC-EMP-2)
+    const iban = assertIban(payload.iban)
     const old = emp.iban
-    emp.iban = String(payload.iban)
-    if (payload.bankName) emp.bankName = String(payload.bankName)
+    emp.iban = iban
+    if (payload.bankName) emp.bankName = assertBankName(payload.bankName)
     await em.getRepository(Employee).save(emp)
-    const hist = await em.getRepository(EmployeeStatusHistory).save({
+    const hist = await recordEmployeeChange(em, {
       employeeId: emp.id,
-      oldStatus: `iban:${old ?? '—'}`,
-      newStatus: `iban:${emp.iban}`,
+      fieldName: 'iban', oldValue: old, newValue: emp.iban,
       reason: 'تغيير حساب بنكي — مسار أمني',
       requestId: req.id,
     })
@@ -412,13 +563,22 @@ export class DestinationsService {
       where: { id: req.requesterId },
     })
     if (!emp) return { ref: refOf('ST', req.id), completed: true }
+    const ending = type.code === 'RESIGNATION' || type.code === 'RETIREMENT'
+    const lastWorkingDay = String(payload.lastWorkingDate ?? payload.effectiveDate ?? '')
+    if (ending) {
+      if (!isValidYmd(lastWorkingDay) || (emp.joinDate && lastWorkingDay < emp.joinDate)) {
+        throw new BadRequestException('آخر يوم عمل مطلوب ولا يسبق تاريخ التعيين')
+      }
+      const existing = await em.getRepository(OffboardingCase).findOne({
+        where: { employeeId: emp.id, status: In(OPEN_CASE_STATUSES) },
+      })
+      if (existing) throw new BadRequestException('يوجد ملف إنهاء خدمة مفتوح بالفعل')
+    }
     const oldStatus = emp.status
     const newStatus =
-      type.code === 'RESIGNATION'
+      ending
         ? 'notice_period'
-        : type.code === 'RETIREMENT'
-          ? 'archived'
-          : String(payload.newStatus ?? emp.status)
+        : String(payload.newStatus ?? emp.status)
     emp.status = newStatus as any
     if (newStatus === 'archived') {
       emp.isActive = false
@@ -433,10 +593,9 @@ export class DestinationsService {
         .update({ employeeId: emp.id }, { isActive: false })
     }
     await em.getRepository(Employee).save(emp)
-    const hist = await em.getRepository(EmployeeStatusHistory).save({
+    const hist = await recordEmployeeChange(em, {
       employeeId: emp.id,
-      oldStatus,
-      newStatus,
+      fieldName: 'status', oldValue: oldStatus, newValue: newStatus,
       reason:
         type.code === 'RESIGNATION'
           ? `استقالة — آخر يوم عمل ${payload.lastWorkingDate ?? '—'}: ${payload.reason ?? ''}`
@@ -444,37 +603,19 @@ export class DestinationsService {
       requestId: req.id,
     })
 
-    // §2.7: الاستقالة المعتمدة تفتح حالة إخلاء طرف بجهاتها الخمس
-    if (type.code === 'RESIGNATION') {
+    // §2.7: الاستقالة المعتمدة تفتح حالة إخلاء طرف بجهاتها الخمس — نفس فاتح ملف
+    // الإنهاء من طرف الشركة (EMP-1)، والسبب «استقالة» يحدد معامل المكافأة (EMP-2)
+    if (ending) {
       const existing = await em.getRepository(OffboardingCase).findOne({
-        where: { employeeId: emp.id, status: In(['IN_CLEARANCE', 'IN_SETTLEMENT', 'SETTLED']) },
+        where: { employeeId: emp.id, status: In(OPEN_CASE_STATUSES) },
       })
       if (!existing) {
-        const kase = await em.getRepository(OffboardingCase).save({
+        const kase = await openOffboardingCase(em, {
           employeeId: emp.id,
           resignationRequestId: req.id,
-          lastWorkingDay: String(
-            payload.lastWorkingDate ?? new Date().toISOString().slice(0, 10)
-          ),
-          status: 'IN_CLEARANCE' as const,
+          terminationReason: type.code === 'RETIREMENT' ? 'retirement' : 'resignation',
+          lastWorkingDay,
         })
-        const openCustody = await em.getRepository(CustodyAssignment).count({
-          where: {
-            employeeId: emp.id,
-            status: In(['PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'ACTIVE', 'RETURN_REQUESTED']),
-          },
-        })
-        await em.getRepository(ClearanceItem).save([
-          { caseId: kase.id, party: 'manager', label: 'تسليم المهام ونقل المعرفة' },
-          {
-            caseId: kase.id,
-            party: 'custody',
-            label: `إرجاع العهد والأصول${openCustody ? ` (${openCustody} عهدة مفتوحة)` : ' (لا عهد مفتوحة)'}`,
-          },
-          { caseId: kase.id, party: 'it', label: 'إلغاء الصلاحيات والأجهزة' },
-          { caseId: kase.id, party: 'finance', label: 'تسوية السلف وحساب المستحقات' },
-          { caseId: kase.id, party: 'hr', label: 'تسليم الوثائق وشهادة الخبرة' },
-        ] as any)
         return {
           ref: refOf('OFB', kase.id),
           completed: true,
@@ -487,18 +628,7 @@ export class DestinationsService {
 
   // ========== الخطابات ==========
 
-  private letterHandler: Handler = async (em, req, type, payload) => {
-    const letter = await em.getRepository(LetterRequest).save({
-      requestId: req.id,
-      employeeId: req.requesterId,
-      letterType: type.code.replace('LETTER_', ''),
-      purpose: String(payload.purpose ?? ''),
-      status: 'GENERATED',
-      // توليد PDF فعلي لاحقاً — المرجع محجوز من الآن
-      generatedPdfRef: `letters/${type.code}/${req.id}.pdf`,
-    })
-    return { ref: refOf('LTR', letter.id), completed: true }
-  }
+  private letterHandler: Handler = (em, req, type, payload) => this.letters.generate(em, req, type, payload)
 
   // ========== العهدة ==========
 
@@ -566,19 +696,22 @@ export class DestinationsService {
 
   // إرجاع عهدة
   private custodyReturnHandler: Handler = async (em, req, _t, payload) => {
+    const assignmentId = Number(payload.assignmentId)
+    if (!Number.isSafeInteger(assignmentId) || assignmentId <= 0) throw new BadRequestException('إسناد العهدة مطلوب')
+    const found = await em.getRepository(CustodyAssignment).findOneBy({ id: assignmentId, employeeId: req.requesterId })
+    if (!found) throw new BadRequestException('إسناد العهدة غير موجود أو ليس باسم صاحب الطلب')
+    const asset = await em.getRepository(Asset).findOne({ where: { id: found.assetId }, lock: { mode: 'pessimistic_write' } })
     const row = await em.getRepository(CustodyAssignment).findOne({
       where: {
-        id: Number(payload.assignmentId),
+        id: assignmentId,
         employeeId: req.requesterId,
       },
     })
-    if (!row) {
-      return {
-        ref: refOf('CUR', req.id),
-        completed: true,
-        note: 'الإسناد غير موجود',
-      }
-    }
+    if (!row || !['ACTIVE', 'RETURN_REQUESTED'].includes(row.status)) throw new BadRequestException('العهدة ليست نشطة أو بانتظار الإرجاع')
+    if (!asset || asset.status === 'RETIRED' || (asset.currentHolderId && asset.currentHolderId !== row.employeeId)) throw new BadRequestException('حالة الأصل لا تطابق العهدة المطلوب إرجاعها')
+    const pending = await em.getRepository(CustodyAssignment).count({ where: { assetId: row.assetId, id: Not(row.id), status: In(['ACTIVE', 'PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'RETURN_REQUESTED']) } })
+    if (pending) throw new BadRequestException('للأصل نقل أو إسناد آخر مفتوح — ألغِ النقل أو أكمله قبل الإرجاع')
+    if (payload.condition != null && (typeof payload.condition !== 'string' || payload.condition.length > 100)) throw new BadRequestException('وصف حالة العهدة بحد أقصى 100 حرف')
     row.status = 'RETURNED'
     row.returnedAt = new Date()
     row.condition = String(payload.condition ?? 'سليمة')
@@ -592,40 +725,9 @@ export class DestinationsService {
     return { ref: refOf('CUR', row.id), completed: true }
   }
 
-  // نقل عهدة لموظف آخر (بعد اعتماد طلب «نقل عهدة») — نقل حقيقي:
-  // تُقفل عهدة الحامل TRANSFERRED وتُفتح عهدة جديدة PENDING_ACK للمستلم
+  // الحامل الحالي يبقى مسؤولاً عن الأصل حتى قبول المستلم واعتماد مديره.
   private custodyTransferHandler: Handler = async (em, req, _t, payload) => {
-    const row = await em.getRepository(CustodyAssignment).findOne({
-      where: { id: Number(payload.assignmentId) },
-    })
-    const toEmployeeId = Number(payload.toEmployeeId)
-    if (!row || !toEmployeeId) {
-      return {
-        ref: refOf('CUT', req.id),
-        completed: true,
-        note: 'بيانات النقل ناقصة — راجع الطلب',
-      }
-    }
-    row.status = 'TRANSFERRED'
-    row.returnedAt = new Date()
-    row.condition = 'منقولة لموظف آخر'
-    await em.getRepository(CustodyAssignment).save(row)
-    const created = await em.getRepository(CustodyAssignment).save(
-      em.getRepository(CustodyAssignment).create({
-        requestId: req.id,
-        assetId: row.assetId,
-        employeeId: toEmployeeId,
-        assignedBy: req.requesterId,
-        status: 'PENDING_ACK',
-      })
-    )
-    // الأصل قيد النقل: مُسنَد بلا حامل لحد ما يقبل المستلم ويؤكد مديره
-    await em
-      .getRepository(Asset)
-      .update(
-        { id: row.assetId },
-        { currentHolderId: null as any, status: 'ASSIGNED' }
-      )
+    const created = await startCustodyTransfer(em, Number(payload.assignmentId), Number(payload.toEmployeeId), req)
     return {
       ref: refOf('CUT', created.id),
       completed: false,
@@ -719,6 +821,8 @@ export class DestinationsService {
 
   private readonly handlers: Record<string, Handler> = {
     // إجازات
+    leave_deduct_balance: this.leaveHandler(true),
+    leave_no_balance: this.leaveHandler(false),
     leave_calendar_balance: this.leaveHandler(true),
     leave_calendar: this.leaveHandler(true),
     leave_calendar_payroll: this.leaveHandler(false),
@@ -730,13 +834,20 @@ export class DestinationsService {
     attendance_corrections: this.punchCorrectionHandler,
     // مالية
     loans_installments: this.loanHandler,
+    loan_early_settlement: this.loanHandler,
+    loan_installment_defer: this.loanDeferralHandler,
     salary_update_history: this.salaryUpdateHandler,
     // حالة وظيفية
     transfers_effective_date: this.transferHandler,
     employee_update_promotions: this.promotionHandler,
+    employee_update: this.promotionHandler,
+    contracts_register: executeContract,
+    shift_schedule: executeShiftSwap,
     // بيانات شخصية
-    employee_record: this.employeeRecordHandler,
-    employee_record_auto: this.employeeRecordHandler,
+    employee_record: this.employeeRecordHandler(RECORD_UPDATE_FIELDS.employee_record),
+    employee_record_auto: this.employeeRecordHandler(
+      RECORD_UPDATE_FIELDS.employee_record_auto
+    ),
     payroll_bank_secure: this.bankChangeHandler,
     // حالة وظيفية (استقالة/تقاعد)
     employee_status: this.employeeStatusHandler,
@@ -745,6 +856,7 @@ export class DestinationsService {
     // عهدة
     custody_assignments_ack: this.custodyAssignHandler,
     custody_assignments: this.custodyReturnHandler,
+    custody_return: this.custodyReturnHandler,
     custody_transfer: this.custodyTransferHandler,
     custody_finance: this.custodyFinanceHandler,
     // مالية → دفتر المديونيات (بنود لمرة واحدة يستهلكها المسير)

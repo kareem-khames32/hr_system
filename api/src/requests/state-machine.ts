@@ -13,7 +13,9 @@ const TRANSITIONS: Record<RequestStatus, RequestStatus[]> = {
   SUBMITTED: ['UNDER_REVIEW', 'CANCELLED'],
   UNDER_REVIEW: ['APPROVED', 'REJECTED', 'RETURNED_FOR_INFO', 'CANCELLED'],
   RETURNED_FOR_INFO: ['SUBMITTED', 'CANCELLED'],
-  APPROVED: ['IN_EXECUTION', 'COMPLETED'],
+  // الاعتماد النهائي والتنفيذ معاملة واحدة (REQ-2)، فـAPPROVED الباقي = تنفيذ تعذّر
+  // قبل الإصلاح: الإدارة تعيد تنفيذه أو تقفله بالرفض
+  APPROVED: ['IN_EXECUTION', 'COMPLETED', 'REJECTED'],
   IN_EXECUTION: ['COMPLETED'],
   COMPLETED: [],
   REJECTED: [],

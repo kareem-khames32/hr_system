@@ -1,0 +1,529 @@
+{
+  "database": "hr_review_pre_payroll_20260911162404_52ee65ac",
+  "createdAt": "2026-09-11T16:24:06.328Z",
+  "sourceDatabase": "hr_system",
+  "backupPath": "/var/opt/mssql/data/hr_pre_payroll_copyonly_20260911162404_52ee65ac.bak",
+  "copyOnly": true,
+  "checksumVerified": true,
+  "restored": true,
+  "sourceSchemaHash": "0c51b089e3476ed11d2dcde79b912fcfa14492349c8cb1e434c7f0d76cef9b12",
+  "sourceRows": [
+    {
+      "table": "approval_chains",
+      "rows": "68"
+    },
+    {
+      "table": "approval_steps",
+      "rows": "67"
+    },
+    {
+      "table": "asset_types",
+      "rows": "6"
+    },
+    {
+      "table": "assets",
+      "rows": "37"
+    },
+    {
+      "table": "attendance_corrections",
+      "rows": "9"
+    },
+    {
+      "table": "attendance_days",
+      "rows": "4405"
+    },
+    {
+      "table": "attendance_punches",
+      "rows": "7779"
+    },
+    {
+      "table": "biometric_devices",
+      "rows": "1"
+    },
+    {
+      "table": "branches",
+      "rows": "9"
+    },
+    {
+      "table": "candidates",
+      "rows": "0"
+    },
+    {
+      "table": "clearance_items",
+      "rows": "85"
+    },
+    {
+      "table": "cost_centers",
+      "rows": "2"
+    },
+    {
+      "table": "custody_assignments",
+      "rows": "39"
+    },
+    {
+      "table": "departments",
+      "rows": "4"
+    },
+    {
+      "table": "doc_types",
+      "rows": "0"
+    },
+    {
+      "table": "employee_certifications",
+      "rows": "0"
+    },
+    {
+      "table": "employee_documents",
+      "rows": "5"
+    },
+    {
+      "table": "employee_education",
+      "rows": "1"
+    },
+    {
+      "table": "employee_experiences",
+      "rows": "0"
+    },
+    {
+      "table": "employee_languages",
+      "rows": "0"
+    },
+    {
+      "table": "employee_obligations",
+      "rows": "5"
+    },
+    {
+      "table": "employee_skills",
+      "rows": "0"
+    },
+    {
+      "table": "employee_status_history",
+      "rows": "46"
+    },
+    {
+      "table": "employees",
+      "rows": "180"
+    },
+    {
+      "table": "grades",
+      "rows": "3"
+    },
+    {
+      "table": "job_titles",
+      "rows": "5"
+    },
+    {
+      "table": "lateness_tiers",
+      "rows": "3"
+    },
+    {
+      "table": "leave_balances",
+      "rows": "360"
+    },
+    {
+      "table": "leave_types",
+      "rows": "11"
+    },
+    {
+      "table": "leaves",
+      "rows": "72"
+    },
+    {
+      "table": "letter_requests",
+      "rows": "12"
+    },
+    {
+      "table": "loan_installments",
+      "rows": "37"
+    },
+    {
+      "table": "loans",
+      "rows": "9"
+    },
+    {
+      "table": "notification_reads",
+      "rows": "0"
+    },
+    {
+      "table": "offboarding_cases",
+      "rows": "17"
+    },
+    {
+      "table": "onboarding_tasks",
+      "rows": "0"
+    },
+    {
+      "table": "onboarding_template_items",
+      "rows": "8"
+    },
+    {
+      "table": "overtime_entries",
+      "rows": "49"
+    },
+    {
+      "table": "overtime_periods",
+      "rows": "1"
+    },
+    {
+      "table": "payroll_items",
+      "rows": "519"
+    },
+    {
+      "table": "payroll_run_members",
+      "rows": "9"
+    },
+    {
+      "table": "payroll_runs",
+      "rows": "16"
+    },
+    {
+      "table": "permission_types",
+      "rows": "19"
+    },
+    {
+      "table": "promotions",
+      "rows": "3"
+    },
+    {
+      "table": "public_holidays",
+      "rows": "8"
+    },
+    {
+      "table": "request_approvals",
+      "rows": "300"
+    },
+    {
+      "table": "request_attachments",
+      "rows": "0"
+    },
+    {
+      "table": "request_types",
+      "rows": "65"
+    },
+    {
+      "table": "requests",
+      "rows": "341"
+    },
+    {
+      "table": "requests_config",
+      "rows": "45"
+    },
+    {
+      "table": "roles",
+      "rows": "6"
+    },
+    {
+      "table": "schedule_day_overrides",
+      "rows": "1406"
+    },
+    {
+      "table": "schedule_exception_rules",
+      "rows": "1"
+    },
+    {
+      "table": "settlement_lines",
+      "rows": "34"
+    },
+    {
+      "table": "shifts",
+      "rows": "26"
+    },
+    {
+      "table": "stored_files",
+      "rows": "18"
+    },
+    {
+      "table": "teams",
+      "rows": "3"
+    },
+    {
+      "table": "transfers",
+      "rows": "5"
+    },
+    {
+      "table": "user_permission_overrides",
+      "rows": "5"
+    },
+    {
+      "table": "users",
+      "rows": "86"
+    },
+    {
+      "table": "weekly_schedule_entries",
+      "rows": "95"
+    },
+    {
+      "table": "work_schedules",
+      "rows": "3"
+    }
+  ],
+  "restoredRows": [
+    {
+      "table": "approval_chains",
+      "rows": "68"
+    },
+    {
+      "table": "approval_steps",
+      "rows": "67"
+    },
+    {
+      "table": "asset_types",
+      "rows": "6"
+    },
+    {
+      "table": "assets",
+      "rows": "37"
+    },
+    {
+      "table": "attendance_corrections",
+      "rows": "9"
+    },
+    {
+      "table": "attendance_days",
+      "rows": "4405"
+    },
+    {
+      "table": "attendance_punches",
+      "rows": "7779"
+    },
+    {
+      "table": "biometric_devices",
+      "rows": "1"
+    },
+    {
+      "table": "branches",
+      "rows": "9"
+    },
+    {
+      "table": "candidates",
+      "rows": "0"
+    },
+    {
+      "table": "clearance_items",
+      "rows": "85"
+    },
+    {
+      "table": "cost_centers",
+      "rows": "2"
+    },
+    {
+      "table": "custody_assignments",
+      "rows": "39"
+    },
+    {
+      "table": "departments",
+      "rows": "4"
+    },
+    {
+      "table": "doc_types",
+      "rows": "0"
+    },
+    {
+      "table": "employee_certifications",
+      "rows": "0"
+    },
+    {
+      "table": "employee_documents",
+      "rows": "5"
+    },
+    {
+      "table": "employee_education",
+      "rows": "1"
+    },
+    {
+      "table": "employee_experiences",
+      "rows": "0"
+    },
+    {
+      "table": "employee_languages",
+      "rows": "0"
+    },
+    {
+      "table": "employee_obligations",
+      "rows": "5"
+    },
+    {
+      "table": "employee_skills",
+      "rows": "0"
+    },
+    {
+      "table": "employee_status_history",
+      "rows": "46"
+    },
+    {
+      "table": "employees",
+      "rows": "180"
+    },
+    {
+      "table": "grades",
+      "rows": "3"
+    },
+    {
+      "table": "job_titles",
+      "rows": "5"
+    },
+    {
+      "table": "lateness_tiers",
+      "rows": "3"
+    },
+    {
+      "table": "leave_balances",
+      "rows": "360"
+    },
+    {
+      "table": "leave_types",
+      "rows": "11"
+    },
+    {
+      "table": "leaves",
+      "rows": "72"
+    },
+    {
+      "table": "letter_requests",
+      "rows": "12"
+    },
+    {
+      "table": "loan_installments",
+      "rows": "37"
+    },
+    {
+      "table": "loans",
+      "rows": "9"
+    },
+    {
+      "table": "notification_reads",
+      "rows": "0"
+    },
+    {
+      "table": "offboarding_cases",
+      "rows": "17"
+    },
+    {
+      "table": "onboarding_tasks",
+      "rows": "0"
+    },
+    {
+      "table": "onboarding_template_items",
+      "rows": "8"
+    },
+    {
+      "table": "overtime_entries",
+      "rows": "49"
+    },
+    {
+      "table": "overtime_periods",
+      "rows": "1"
+    },
+    {
+      "table": "payroll_items",
+      "rows": "519"
+    },
+    {
+      "table": "payroll_run_members",
+      "rows": "9"
+    },
+    {
+      "table": "payroll_runs",
+      "rows": "16"
+    },
+    {
+      "table": "permission_types",
+      "rows": "19"
+    },
+    {
+      "table": "promotions",
+      "rows": "3"
+    },
+    {
+      "table": "public_holidays",
+      "rows": "8"
+    },
+    {
+      "table": "request_approvals",
+      "rows": "300"
+    },
+    {
+      "table": "request_attachments",
+      "rows": "0"
+    },
+    {
+      "table": "request_types",
+      "rows": "65"
+    },
+    {
+      "table": "requests",
+      "rows": "341"
+    },
+    {
+      "table": "requests_config",
+      "rows": "45"
+    },
+    {
+      "table": "roles",
+      "rows": "6"
+    },
+    {
+      "table": "schedule_day_overrides",
+      "rows": "1406"
+    },
+    {
+      "table": "schedule_exception_rules",
+      "rows": "1"
+    },
+    {
+      "table": "settlement_lines",
+      "rows": "34"
+    },
+    {
+      "table": "shifts",
+      "rows": "26"
+    },
+    {
+      "table": "stored_files",
+      "rows": "18"
+    },
+    {
+      "table": "teams",
+      "rows": "3"
+    },
+    {
+      "table": "transfers",
+      "rows": "5"
+    },
+    {
+      "table": "user_permission_overrides",
+      "rows": "5"
+    },
+    {
+      "table": "users",
+      "rows": "86"
+    },
+    {
+      "table": "weekly_schedule_entries",
+      "rows": "95"
+    },
+    {
+      "table": "work_schedules",
+      "rows": "3"
+    }
+  ],
+  "sourceSchemaUnchangedAfterRestore": true,
+  "sourceRowsUnchangedDuringCopy": true,
+  "note": "Contains private copied data. Keep database, backup and uploads local. No passwords are stored here.",
+  "checkpoints": [
+    {
+      "database": "hr_review_pre_payroll_20260911162404_52ee65ac",
+      "backupPath": "/var/opt/mssql/data/hr_pre_payroll_checkpoint_20260911165529_bf86919a.bak",
+      "copyOnly": true,
+      "checksumVerified": true,
+      "createdAt": "2026-09-11T16:55:29.716Z"
+    },
+    {
+      "database": "hr_review_pre_payroll_20260911162404_52ee65ac",
+      "backupPath": "/var/opt/mssql/data/hr_pre_payroll_checkpoint_20260911223126_e9e9bb41.bak",
+      "copyOnly": true,
+      "checksumVerified": true,
+      "createdAt": "2026-09-11T22:31:27.163Z"
+    }
+  ]
+}

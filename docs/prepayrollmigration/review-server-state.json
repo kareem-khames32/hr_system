@@ -1,0 +1,11 @@
+{
+  "database": "hr_review_pre_payroll_20260911162404_52ee65ac",
+  "pid": 5552,
+  "running": true,
+  "apiUrl": "http://localhost:4000/api",
+  "frontendUrl": "http://localhost:3000",
+  "uploads": "C:\\Users\\Kareem\\AppData\\Local\\hr-system-reviews\\hr_review_pre_payroll_20260911162404_52ee65ac\\uploads",
+  "stopFile": "C:\\Users\\Kareem\\AppData\\Local\\hr-system-reviews\\hr_review_pre_payroll_20260911162404_52ee65ac\\stop-e35efffb-bee7-4d2c-bb3c-97c546cfee30",
+  "synchronize": false,
+  "startedAt": "2026-09-13T10:37:35.906Z"
+}

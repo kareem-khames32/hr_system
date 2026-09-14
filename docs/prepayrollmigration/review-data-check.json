@@ -1,0 +1,22 @@
+{
+  "checkedAt": "2026-09-11T16:56:45.399Z",
+  "database": "hr_review_pre_payroll_20260911162404_52ee65ac",
+  "readOnly": true,
+  "counts": {
+    "activeEmployees": 167,
+    "activeEmployeesWithoutJobTitle": 148,
+    "activeEmployeesWithoutJoinDate": 20,
+    "employeesWithMissingBranch": 0,
+    "usersWithMissingEmployee": 0,
+    "requestsWithMissingEmployee": 0,
+    "activeTypesWithoutApprovalChain": 0,
+    "activeLetterTypesWithoutPublishedTemplate": 0,
+    "companyNameConfigured": 0,
+    "storedFiles": 18
+  },
+  "storage": {
+    "missingFiles": 0,
+    "invalidStoragePaths": 0
+  },
+  "interpretation": "Aggregate setup/data checks, not fabricated corrections. Missing employee fields need the owner’s real values; missing files need their original upload/backup. Type approval policies remain an owner setting."
+}

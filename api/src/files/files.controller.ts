@@ -15,18 +15,22 @@ import {
 } from '@nestjs/common'
 import { FileInterceptor } from '@nestjs/platform-express'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository } from 'typeorm'
+import { DataSource, Repository } from 'typeorm'
 import type { Response } from 'express'
 import { diskStorage } from 'multer'
-import { existsSync, mkdirSync } from 'fs'
-import { extname, join } from 'path'
+import { existsSync, mkdirSync, unlinkSync } from 'fs'
+import { extname, join, relative } from 'path'
 import { randomUUID } from 'crypto'
 import type { JwtPayload } from '../auth/auth.service'
-import { CurrentUser, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
 import { StoredFile } from './stored-file.entity'
+import { Employee } from '../employees/employee.entity'
+import { Request } from '../requests/entities/request.entity'
+import { RequestsService } from '../requests/requests.service'
+import { storedPath, uploadsRoot } from './storage'
+import { assertHrDocumentFileAccess } from '../hr-documents/hr-document-access'
 
 // التخزين المحلي المنظم: uploads/YYYY-MM/
-const UPLOADS_ROOT = join(process.cwd(), 'uploads')
 
 const ALLOWED_MIME = [
   'image/jpeg',
@@ -43,7 +47,7 @@ const MAX_SIZE = 10 * 1024 * 1024 // 10MB
 const monthDir = () => {
   const d = new Date()
   const dir = join(
-    UPLOADS_ROOT,
+    uploadsRoot(),
     `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`
   )
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true })
@@ -56,7 +60,9 @@ const monthDir = () => {
 export class FilesController {
   constructor(
     @InjectRepository(StoredFile)
-    private readonly files: Repository<StoredFile>
+    private readonly files: Repository<StoredFile>,
+    private readonly ds: DataSource,
+    private readonly requests: RequestsService
   ) {}
 
   @Post('upload')
@@ -89,11 +95,29 @@ export class FilesController {
     @Query('employeeId') employeeId?: string
   ) {
     if (!file) throw new BadRequestException('لم يصل ملف — أرسل الحقل file')
-    const d = new Date()
-    const rel = join(
-      `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}`,
-      file.filename
-    )
+    try {
+    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract'].includes(entityType)) {
+      throw new BadRequestException('تصنيف الملف غير صالح')
+    }
+    for (const value of [entityId, employeeId]) {
+      if (value !== undefined && (!/^\d+$/.test(value) || !Number.isSafeInteger(Number(value)) || Number(value) < 1)) {
+        throw new BadRequestException('معرّف الملف أو الموظف غير صالح')
+      }
+    }
+    if (entityType === 'company_logo' && (!userHasPerm(user, 'settings.manage') || !file.mimetype.startsWith('image/'))) {
+      throw new ForbiddenException('رفع شعار الشركة يتطلب صلاحية الإعدادات وملف صورة')
+    }
+    const ownerId = employeeId ? Number(employeeId) : user.employeeId
+    if (ownerId && ownerId !== user.employeeId) {
+      const emp = await this.ds.getRepository(Employee).findOneBy({ id: ownerId })
+      const scope = branchScopeOf(user)
+      if (!emp || (scope !== null && emp.branchId !== scope)) throw new NotFoundException('الموظف غير موجود')
+      if (!userHasPerm(user, 'documents.manage') && !userHasPerm(user, 'employees.edit') && !userHasPerm(user, 'requests.create_on_behalf')) {
+        throw new ForbiddenException('لا تملك صلاحية رفع ملفات لهذا الموظف')
+      }
+    }
+    if (entityType === 'employee_photo' && !file.mimetype.startsWith('image/')) throw new BadRequestException('صورة الموظف يجب أن تكون صورة')
+    const rel = relative(uploadsRoot(), file.path)
     const saved = await this.files.save(
       this.files.create({
         originalName: file.originalname,
@@ -117,6 +141,10 @@ export class FilesController {
       // المرجع الذي يوضع في fileRef بالسجلات
       ref: `file:${saved.id}`,
     }
+    } catch (err) {
+      if (existsSync(file.path)) unlinkSync(file.path)
+      throw err
+    }
   }
 
   // التحميل/المعاينة — صاحب الملف أو من يملك documents.manage
@@ -128,16 +156,47 @@ export class FilesController {
   ) {
     const f = await this.files.findOne({ where: { id } })
     if (!f) throw new NotFoundException('الملف غير موجود')
-    const isOwner = f.employeeId === user.employeeId || f.uploadedBy === user.sub
+    if (f.entityType === 'hr_document') {
+      await assertHrDocumentFileAccess(this.ds.manager, user, f)
+    } else {
+    const isOwner = (!!user.employeeId && f.employeeId === user.employeeId) || (!!user.sub && f.uploadedBy === user.sub)
     // صور الموظفين قابلة للعرض لأي مطّلع على الموظفين (ليست مستنداً حساساً)
     const isEmployeePhoto = f.entityType === 'employee_photo'
-    const canViewPhoto = isEmployeePhoto && userHasPerm(user, 'employees.view')
-    if (!isOwner && !canViewPhoto && !userHasPerm(user, 'documents.manage')) {
+    const emp = f.employeeId ? await this.ds.getRepository(Employee).findOneBy({ id: f.employeeId }) : null
+    const photoOwner = isEmployeePhoto ? await this.ds.getRepository(Employee).findOneBy({ photoFileId: f.id }) : null
+    const scope = branchScopeOf(user)
+    const inScope = !!emp && (scope === null || scope === emp.branchId)
+    const canViewPhoto = isEmployeePhoto && !!photoOwner && (scope === null || scope === photoOwner.branchId) && userHasPerm(user, 'employees.view')
+    // شعار الشركة يُطبع في رأس المستندات المولَّدة — ليس مستنداً حساساً
+    const isCompanyLogo = f.entityType === 'company_logo' && f.mime.startsWith('image/')
+    let requestAccess = false
+    if (!isOwner && f.entityType === 'request') {
+      const ref = `file:${f.id}`
+      const candidates = await this.ds.getRepository(Request).createQueryBuilder('r')
+        .where('r.payload LIKE :ref', { ref: `%"${ref}"%` })
+        .andWhere('r.status <> :draft', { draft: 'DRAFT' })
+        .getMany()
+      for (const candidate of candidates) {
+        // A reference in a payload is not authority to re-share a file. In
+        // particular, legacy or unsubmitted drafts may contain guessed ids.
+        if (!(!!f.employeeId && candidate.requesterId === f.employeeId) &&
+            !(!!f.uploadedBy && candidate.createdByUserId === f.uploadedBy)) continue
+        try {
+          const detail = await this.requests.detail(user, candidate.id)
+          if (!(detail as any).confidentialMasked) { requestAccess = true; break }
+        } catch { /* Access must follow the parent request, including confidential masking. */ }
+      }
+    }
+    const canManage = f.entityType !== 'request' && userHasPerm(user, 'documents.manage') && (inScope || user.role === 'super_admin')
+    if (!isOwner && !canViewPhoto && !isCompanyLogo && !requestAccess && !canManage) {
       throw new ForbiddenException('لا تملك صلاحية الاطلاع على هذا الملف')
     }
-    const abs = join(UPLOADS_ROOT, f.storedName)
+    }
+    const abs = storedPath(f.storedName)
     if (!existsSync(abs)) throw new NotFoundException('ملف التخزين مفقود')
     res.setHeader('Content-Type', f.mime)
+    res.setHeader('X-Content-Type-Options', 'nosniff')
+    res.setHeader('Cache-Control', 'private, no-store')
     res.setHeader(
       'Content-Disposition',
       `inline; filename*=UTF-8''${encodeURIComponent(f.originalName)}`

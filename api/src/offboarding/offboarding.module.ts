@@ -16,6 +16,7 @@ import {
 } from '../requests/entities/financial.entities'
 import { LeaveBalance } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { LeaveBalancesService } from '../requests/leave-balances.service'
 import {
   ClearanceItem,
   OffboardingCase,
@@ -48,7 +49,7 @@ import { OffboardingService } from './offboarding.service'
     ]),
   ],
   controllers: [OffboardingController],
-  providers: [OffboardingService, ApproverResolver],
+  providers: [OffboardingService, ApproverResolver, LeaveBalancesService],
   exports: [OffboardingService],
 })
 export class OffboardingModule {}

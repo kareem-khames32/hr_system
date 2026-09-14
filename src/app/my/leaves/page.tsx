@@ -1,5 +1,8 @@
 'use client'
 
+import { useLeaveCatalog } from '@/lib/leave-catalog'
+import { definitionCodeOf, isLeaveRequest, leaveCodeOf } from '../../../../api/src/common/leave-contract'
+
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
@@ -10,6 +13,7 @@ import {
   Plus,
   Stethoscope,
   Wallet,
+  X,
   Zap,
 } from 'lucide-react'
 import {
@@ -18,10 +22,14 @@ import {
   type RequestStatus,
 } from '@/data/requestsCatalog'
 import {
+  cancelRequest,
+  createRequest,
+  fetchMyApprovedLeaves,
   fetchMyBalances,
   fetchMyRequests,
   fetchRequestTypes,
   type ApiBalance,
+  type ApiLeave,
   type ApiRequest,
   type ApiRequestType,
 } from '@/lib/api'
@@ -38,19 +46,6 @@ const balanceTypeConfig: Record<
 }
 
 // أكواد أنواع الإجازة → عربي — طلب الإجازة الموحّد (LEAVE) يحمل النوع في الـ payload
-const leaveTypeLabels: Record<string, string> = {
-  ANNUAL: 'إجازة سنوية',
-  SICK: 'إجازة مرضية',
-  CASUAL: 'إجازة عارضة',
-  UNPAID: 'إجازة بدون راتب',
-  MATERNITY: 'إجازة وضع',
-  PATERNITY: 'إجازة أبوة',
-  HAJJ: 'إجازة حج',
-  MARRIAGE: 'إجازة زواج',
-  BEREAVEMENT: 'إجازة وفاة/عدة',
-  EXAM: 'إجازة امتحانات',
-  COMPENSATORY: 'إجازة تعويضية',
-}
 
 const parseJson = <T,>(raw: string | null | undefined, fallback: T): T => {
   if (!raw) return fallback
@@ -61,42 +56,124 @@ const parseJson = <T,>(raw: string | null | undefined, fallback: T): T => {
   }
 }
 
+// نوع «إلغاء إجازة» — يلغي إجازة معتمدة ويرجّع رصيدها بعد الاعتماد
+const CANCEL_TYPE = 'LEAVE_MODIFY_CANCEL'
+// حالات يقدر صاحب الطلب يسحبه فيها قبل البت (نفس آلة الحالات في الباك)
+const WITHDRAWABLE = ['DRAFT', 'SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO']
+// طلب إلغاء لسه حي على الإجازة — مايتقدّمش طلب تاني لنفس الإجازة (LEV-7)
+const LIVE_CANCEL = [...WITHDRAWABLE, 'APPROVED', 'IN_EXECUTION']
+
 export default function MyLeavesPage() {
+  const leaveCatalog = useLeaveCatalog()
+  const leaveTypeLabels = leaveCatalog.labels
   const [balances, setBalances] = useState<ApiBalance[]>([])
   const [leaveRequests, setLeaveRequests] = useState<ApiRequest[]>([])
   const [types, setTypes] = useState<ApiRequestType[]>([])
+  // إجازاتي المعتمدة (بطلبها الأصل) — مصدر زرار «طلب إلغاء»
+  const [approvedLeaves, setApprovedLeaves] = useState<ApiLeave[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [busyId, setBusyId] = useState<number | null>(null)
+  // طلب إلغاء إجازة معتمدة: الإجازة المختارة + سبب اختياري
+  const [cancelTarget, setCancelTarget] = useState<ApiLeave | null>(null)
+  const [cancelReason, setCancelReason] = useState('')
+  const [cancelError, setCancelError] = useState('')
+  const [submittingCancel, setSubmittingCancel] = useState(false)
+
+  const load = async () => {
+    try {
+      const [bals, mine, typeList, approved] = await Promise.all([
+        fetchMyBalances(),
+        fetchMyRequests(),
+        fetchRequestTypes(),
+        fetchMyApprovedLeaves(),
+      ])
+      setBalances(bals)
+      // طلبات الإجازة فقط من طلباتي — النوع الموحّد LEAVE + الأنواع القديمة LEAVE_*
+      setLeaveRequests(
+        mine.filter((r) => isLeaveRequest(r) || r.typeCode === CANCEL_TYPE)
+      )
+      setTypes(typeList)
+      setApprovedLeaves(approved)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر تحميل أرصدتك')
+    } finally {
+      setLoading(false)
+    }
+  }
 
   useEffect(() => {
-    const load = async () => {
-      try {
-        const [bals, mine, typeList] = await Promise.all([
-          fetchMyBalances(),
-          fetchMyRequests(),
-          fetchRequestTypes(),
-        ])
-        setBalances(bals)
-        // طلبات الإجازة فقط من طلباتي — النوع الموحّد LEAVE + الأنواع القديمة LEAVE_*
-        setLeaveRequests(
-          mine.filter((r) => r.typeCode === 'LEAVE' || r.typeCode.startsWith('LEAVE_'))
-        )
-        setTypes(typeList)
-      } catch (e) {
-        setError(e instanceof Error ? e.message : 'تعذر تحميل أرصدتك')
-      } finally {
-        setLoading(false)
-      }
-    }
     load()
   }, [])
 
   const typeNameOf = (code: string) =>
     types.find((t) => t.code === code)?.nameAr ?? 'إجازة'
 
+  // الإجازة المعتمدة لكل طلب إجازة (Leave.requestId)، وبرقمها لطلبات الإلغاء
+  const approvedByRequest = new Map<number, ApiLeave>()
+  const approvedById = new Map<number, ApiLeave>()
+  for (const l of approvedLeaves) {
+    if (l.requestId != null) approvedByRequest.set(l.requestId, l)
+    approvedById.set(l.id, l)
+  }
+  // إجازات عليها طلب إلغاء حي — الباك يرفض طلب إلغاء تاني لنفس الإجازة
+  const cancelPendingFor = new Set(
+    leaveRequests
+      .filter((r) => r.typeCode === CANCEL_TYPE && LIVE_CANCEL.includes(r.status))
+      .map((r) => Number(parseJson<Record<string, unknown>>(r.payload, {}).leaveId))
+  )
+  // النوع متاح لي (مفعّل وجمهوره يشملني) — الكتالوج مفلتر بالسيرفر
+  const canRequestCancel = types.some((t) => t.code === CANCEL_TYPE)
+
+  // سحب طلب إجازة لسه مابتّش فيه (مسودة/مقدَّم/قيد المراجعة/مُرجَع) — يخرج من صندوق المعتمدين
+  const withdraw = async (r: ApiRequest) => {
+    if (!confirm('سحب الطلب؟ لن يظهر للمعتمدين بعد السحب.')) return
+    setError('')
+    setNotice('')
+    setBusyId(r.id)
+    try {
+      await cancelRequest(r.id)
+      setNotice(`تم سحب الطلب REQ-${r.id}`)
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذّر سحب الطلب')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const openCancel = (leave: ApiLeave) => {
+    setCancelTarget(leave)
+    setCancelReason('')
+    setCancelError('')
+  }
+
+  // طلب إلغاء إجازة معتمدة (LEAVE_MODIFY_CANCEL) — يمر على سلسلة اعتماده، والرصيد
+  // يرجع والإجازة تتلغي بعد الاعتماد النهائي
+  const submitCancel = async () => {
+    if (!cancelTarget) return
+    setCancelError('')
+    setNotice('')
+    setSubmittingCancel(true)
+    try {
+      const payload: Record<string, unknown> = { leaveId: cancelTarget.id }
+      if (cancelReason.trim()) payload.reason = cancelReason.trim()
+      await createRequest(CANCEL_TYPE, payload, true)
+      setCancelTarget(null)
+      setNotice('تم تقديم طلب إلغاء الإجازة — يرجع رصيدها بعد الاعتماد')
+      await load()
+    } catch (e) {
+      setCancelError(e instanceof Error ? e.message : 'تعذّر تقديم طلب الإلغاء')
+    } finally {
+      setSubmittingCancel(false)
+    }
+  }
+
   return (
     <MainLayout>
       <div className="space-y-6">
+        {leaveCatalog.error && <div role="alert" className="bg-amber-50 text-amber-800 rounded-xl p-3 text-sm">تعذر تحميل أنواع الإجازات: {leaveCatalog.error} <button type="button" className="underline" onClick={leaveCatalog.retry}>إعادة المحاولة</button></div>}
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
@@ -112,6 +189,14 @@ export default function MyLeavesPage() {
         </div>
 
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+        {notice && (
+          <div className="bg-green-50 text-green-700 rounded-xl p-4 flex items-center gap-2">
+            <span className="flex-1">{notice}</span>
+            <button onClick={() => setNotice('')} className="p-1 hover:bg-green-100 rounded-lg">
+              <X size={16} />
+            </button>
+          </div>
+        )}
 
         {loading ? (
           <div className="flex items-center justify-center py-20">
@@ -161,8 +246,13 @@ export default function MyLeavesPage() {
 
                     <div className="grid grid-cols-3 gap-3 text-center">
                       <div className="p-3 bg-blue-50 rounded-xl">
-                        <p className="text-lg font-bold text-blue-700">{Number(b.entitled)}</p>
-                        <p className="text-xs text-blue-600">مستحق السنة</p>
+                        <p className="text-lg font-bold text-blue-700">{Number(b.annualEntitlement ?? b.entitled)}</p>
+                        <p className="text-xs text-blue-600">استحقاق السنة</p>
+                        {b.accruedToDate != null && Number(b.accruedToDate) !== Number(b.annualEntitlement) && (
+                          <p className="text-[10px] text-blue-500 mt-0.5">
+                            المتراكم حتى اليوم {Number(b.accruedToDate)}
+                          </p>
+                        )}
                       </div>
                       <div className="p-3 bg-red-50 rounded-xl">
                         <p className="text-lg font-bold text-red-700">{Number(b.totalTaken)}</p>
@@ -221,6 +311,7 @@ export default function MyLeavesPage() {
                         <th className="text-center px-4 py-3">الأيام</th>
                         <th className="text-center px-4 py-3">تاريخ التقديم</th>
                         <th className="text-center px-4 py-3">الحالة</th>
+                        <th className="text-center px-4 py-3">إجراءات</th>
                       </tr>
                     </thead>
                     <tbody>
@@ -228,28 +319,42 @@ export default function MyLeavesPage() {
                         const payload = parseJson<Record<string, unknown>>(r.payload, {})
                         const status = r.status as RequestStatus
                         // النوع الموحّد يحمل نوع الإجازة في الـ payload — نعرضه بدل الاسم العام
-                        const leaveCode =
-                          typeof payload.leaveType === 'string' ? payload.leaveType : ''
+                        const leaveCode = leaveCodeOf(payload, definitionCodeOf(r))
                         const typeName =
                           leaveTypeLabels[leaveCode] ?? typeNameOf(r.typeCode)
+                        const isCancelReq = r.typeCode === CANCEL_TYPE
+                        // طلب الإلغاء بيحمل رقم الإجازة بس — مداها من الإجازة طول ما هي معتمدة
+                        const target = isCancelReq
+                          ? approvedById.get(Number(payload.leaveId))
+                          : undefined
+                        // إجازة هذا الطلب لو معتمدة حالياً — مصدر «طلب إلغاء»
+                        const approvedLeave = isCancelReq ? undefined : approvedByRequest.get(r.id)
+                        const fromDate = payload.fromDate ?? target?.fromDate
+                        const toDate = payload.toDate ?? target?.toDate
+                        const days = payload.days ?? (target ? Number(target.days) : undefined)
                         return (
                           <tr key={r.id} className="table-row">
                             <td className="table-cell">
                               <p className="font-medium text-gray-800 text-sm">
                                 {typeName}
+                                {target && (
+                                  <span className="text-xs font-normal text-gray-500">
+                                    {' '}— {leaveTypeLabels[target.leaveType] ?? target.leaveType}
+                                  </span>
+                                )}
                               </p>
                               <p className="text-xs text-gray-400" dir="ltr">
                                 REQ-{r.id}
                               </p>
                             </td>
                             <td className="table-cell text-center font-mono text-sm text-gray-600" dir="ltr">
-                              {String(payload.fromDate ?? '—')}
+                              {fromDate != null ? String(fromDate).slice(0, 10) : '—'}
                             </td>
                             <td className="table-cell text-center font-mono text-sm text-gray-600" dir="ltr">
-                              {String(payload.toDate ?? '—')}
+                              {toDate != null ? String(toDate).slice(0, 10) : '—'}
                             </td>
                             <td className="table-cell text-center font-bold text-gray-700">
-                              {payload.days != null ? String(payload.days) : '—'}
+                              {days != null ? String(days) : '—'}
                             </td>
                             <td className="table-cell text-center text-sm text-gray-500" dir="ltr">
                               {(r.submittedAt ?? r.createdAt).slice(0, 10)}
@@ -258,6 +363,29 @@ export default function MyLeavesPage() {
                               <span className={`badge text-xs ${statusStyles[status] ?? 'bg-gray-100 text-gray-600'}`}>
                                 {statusLabels[status] ?? r.status}
                               </span>
+                            </td>
+                            {/* سحب المعلّق قبل البت، وطلب إلغاء المعتمد عبر «إلغاء إجازة» */}
+                            <td className="table-cell text-center">
+                              {WITHDRAWABLE.includes(r.status) ? (
+                                <button
+                                  onClick={() => withdraw(r)}
+                                  disabled={busyId === r.id}
+                                  className="text-xs px-3 py-1.5 bg-gray-100 text-gray-600 rounded-lg hover:bg-red-50 hover:text-red-600 disabled:opacity-50"
+                                >
+                                  {busyId === r.id ? 'جارٍ السحب...' : 'سحب'}
+                                </button>
+                              ) : approvedLeave && cancelPendingFor.has(approvedLeave.id) ? (
+                                <span className="text-xs text-warning-600">طلب إلغائها قيد المعالجة</span>
+                              ) : approvedLeave && canRequestCancel ? (
+                                <button
+                                  onClick={() => openCancel(approvedLeave)}
+                                  className="text-xs px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100"
+                                >
+                                  طلب إلغاء
+                                </button>
+                              ) : (
+                                <span className="text-gray-300">—</span>
+                              )}
                             </td>
                           </tr>
                         )
@@ -270,6 +398,66 @@ export default function MyLeavesPage() {
           </>
         )}
       </div>
+
+      {/* طلب إلغاء إجازة معتمدة (LEAVE_MODIFY_CANCEL) */}
+      {cancelTarget && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl">
+            <div className="flex items-center justify-between mb-4">
+              <h3 className="font-bold text-gray-800 text-lg">طلب إلغاء إجازة</h3>
+              <button
+                onClick={() => setCancelTarget(null)}
+                className="p-2 hover:bg-gray-100 rounded-lg"
+              >
+                <X size={20} className="text-gray-500" />
+              </button>
+            </div>
+
+            {cancelError && (
+              <div className="bg-red-50 text-red-700 rounded-xl p-3 mb-4 text-sm">{cancelError}</div>
+            )}
+
+            <div className="p-3 bg-gray-50 rounded-xl mb-4">
+              <p className="text-sm font-medium text-gray-800">
+                {leaveTypeLabels[cancelTarget.leaveType] ?? cancelTarget.leaveType}
+                {(cancelTarget.period === 'MORNING' || cancelTarget.period === 'EVENING') && (
+                  <span className="mr-2 badge text-[10px] bg-amber-50 text-amber-700">نصف يوم</span>
+                )}
+              </p>
+              <p className="text-xs text-gray-500 mt-0.5">
+                من {String(cancelTarget.fromDate).slice(0, 10)} إلى{' '}
+                {String(cancelTarget.toDate).slice(0, 10)} • {Number(cancelTarget.days)} يوم
+              </p>
+            </div>
+
+            <label className="label">سبب الإلغاء (اختياري)</label>
+            <input
+              type="text"
+              className="input w-full"
+              placeholder="مثال: تأجّل السفر ولن أستخدم الإجازة"
+              value={cancelReason}
+              maxLength={300}
+              onChange={(e) => setCancelReason(e.target.value)}
+            />
+            <p className="text-xs text-gray-400 mt-2">
+              الطلب يمر على سلسلة اعتماد «إلغاء إجازة»، والإجازة تتلغي ورصيدها يرجع بعد الاعتماد النهائي.
+            </p>
+
+            <div className="flex items-center gap-3 mt-6 pt-4 border-t border-gray-100">
+              <button
+                onClick={submitCancel}
+                disabled={submittingCancel}
+                className="btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
+              >
+                {submittingCancel ? 'جارٍ الإرسال...' : 'تقديم طلب الإلغاء'}
+              </button>
+              <button onClick={() => setCancelTarget(null)} className="btn-secondary">
+                تراجع
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </MainLayout>
   )
 }

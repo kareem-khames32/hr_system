@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Body,
   Controller,
   Get,
@@ -22,7 +23,8 @@ import {
   MinLength,
 } from 'class-validator'
 import { Type } from 'class-transformer'
-import { JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import type { JwtPayload } from '../auth/auth.service'
 import { EmployeesService } from '../employees/employees.service'
 import { Candidate, CandidateStage } from './assets.entities'
 
@@ -141,10 +143,13 @@ export class CandidatesController {
   @Post(':id/hire')
   async hire(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: HireCandidateDto
+    @Body() dto: HireCandidateDto,
+    @CurrentUser() user: JwtPayload
   ) {
     const c = await this.candidates.findOne({ where: { id } })
-    if (!c) throw new NotFoundException('المرشح غير موجود')
+    const scope = branchScopeOf(user)
+    if (!c || (scope !== null && c.branchId != null && c.branchId !== scope)) throw new NotFoundException('المرشح غير موجود')
+    if (scope !== null && dto.branchId !== scope) throw new ForbiddenException('لا يمكنك تعيين الموظف خارج نطاق فرعك')
     if (c.stage === 'hired') throw new BadRequestException('المرشح مُعيَّن بالفعل')
     if (c.stage === 'rejected') {
       throw new BadRequestException('المرشح مرفوض — أعد فتح مرحلته أولاً')
@@ -160,7 +165,7 @@ export class CandidatesController {
       basicSalary: dto.basicSalary,
       joinDate: dto.joinDate ?? new Date().toISOString().slice(0, 10),
       status: 'probation',
-    } as any)
+    } as any, user.sub)
     c.stage = 'hired'
     c.hiredEmployeeId = employee.id
     await this.candidates.save(c)

@@ -1,5 +1,7 @@
 'use client'
 
+import { useLeaveCatalog } from '@/lib/leave-catalog'
+
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
@@ -16,27 +18,20 @@ import {
   AlertTriangle,
 } from 'lucide-react'
 import Link from 'next/link'
-import { fetchLeaves, revokeLeave, can, type ApiLeave } from '@/lib/api'
+import { downloadCsv } from '@/lib/csv'
+import { fetchLeaves, revokeLeave, can, type ApiLeavePage } from '@/lib/api'
 
 // سجل الإجازات — هذا هو «سجل الوجهة» بعد اكتمال الموافقات في محرك الطلبات.
 // الاعتماد/الرفض يتم في صندوق الموافقات، وليس هنا.
 
-const LEAVE_TYPE_META: Record<string, { label: string; color: string }> = {
-  ANNUAL: { label: 'إجازة سنوية', color: 'bg-primary-500' },
-  SICK: { label: 'إجازة مرضية', color: 'bg-danger-500' },
-  CASUAL: { label: 'إجازة طارئة', color: 'bg-warning-500' },
-  UNPAID: { label: 'إجازة بدون راتب', color: 'bg-gray-500' },
-  MATERNITY: { label: 'إجازة وضع', color: 'bg-purple-500' },
-  PATERNITY: { label: 'إجازة أبوة', color: 'bg-indigo-500' },
-  HAJJ: { label: 'إجازة حج', color: 'bg-green-500' },
-  MARRIAGE: { label: 'إجازة زواج', color: 'bg-pink-500' },
-  BEREAVEMENT: { label: 'إجازة وفاة/عدة', color: 'bg-gray-500' },
-  EXAM: { label: 'إجازة امتحانات', color: 'bg-teal-500' },
-  COMPENSATORY: { label: 'إجازة تعويضية', color: 'bg-cyan-500' },
-}
 
-const leaveTypeMeta = (code: string) =>
-  LEAVE_TYPE_META[code] ?? { label: code, color: 'bg-gray-400' }
+// مدة الإجازة: نص اليوم بفترته بدل «0.5 يوم» (LEV-21)
+const durationLabel = (days: number, period?: string) =>
+  period === 'MORNING'
+    ? 'نصف يوم صباحي'
+    : period === 'EVENING'
+      ? 'نصف يوم مسائي'
+      : `${days} يوم`
 
 const getStatusBadge = (status: string) => {
   switch (status) {
@@ -64,33 +59,76 @@ const getStatusBadge = (status: string) => {
   }
 }
 
+const PAGE_SIZE = 50
+const EMPTY_PAGE: ApiLeavePage = {
+  items: [],
+  total: 0,
+  page: 1,
+  pageSize: PAGE_SIZE,
+  stats: { all: 0, approved: 0, cancelled: 0, approvedDays: 0 },
+}
+
 export default function LeavesPage() {
+  const leaveCatalog = useLeaveCatalog()
+  const leaveTypeMeta = (code: string) => ({ label: leaveCatalog.label(code), color: leaveCatalog.color(code) })
+  const [selectedLeave, setSelectedLeave] = useState<ApiLeavePage['items'][number] | null>(null)
   const [activeTab, setActiveTab] = useState<'all' | 'APPROVED' | 'CANCELLED'>('all')
   const [searchQuery, setSearchQuery] = useState('')
+  // البحث بيتبعت بعد ما الكتابة تقف — طلب واحد مش طلب لكل حرف
+  const [search, setSearch] = useState('')
   const [selectedType, setSelectedType] = useState('all')
   const [fromFilter, setFromFilter] = useState('')
   const [toFilter, setToFilter] = useState('')
+  const [page, setPage] = useState(1)
 
-  const [leaves, setLeaves] = useState<ApiLeave[]>([])
+  const [data, setData] = useState<ApiLeavePage>(EMPTY_PAGE)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   // إلغاء إجازة معتمدة — بصلاحية leaves.revoke (تُحسم بعد الترطيب لتفادي اختلاف السيرفر)
   const [canRevoke, setCanRevoke] = useState(false)
   const [revokingId, setRevokingId] = useState<number | null>(null)
 
+  // الفلترة والترقيم على السيرفر (LEV-22): المدى = الإجازات المتقاطعة معه
   const load = () => {
     setLoading(true)
     setError('')
-    fetchLeaves()
-      .then(setLeaves)
+    fetchLeaves({
+      status: activeTab === 'all' ? undefined : activeTab,
+      leaveType: selectedType === 'all' ? undefined : selectedType,
+      q: search || undefined,
+      from: fromFilter || undefined,
+      to: toFilter || undefined,
+      page,
+      pageSize: PAGE_SIZE,
+    })
+      .then(setData)
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل سجل الإجازات'))
       .finally(() => setLoading(false))
   }
 
   useEffect(() => {
     setCanRevoke(can('leaves.revoke'))
-    load()
   }, [])
+
+  useEffect(() => {
+    const t = setTimeout(() => setSearch(searchQuery.trim()), 300)
+    return () => clearTimeout(t)
+  }, [searchQuery])
+
+  // أي فلتر جديد يرجع لأول صفحة؛ التحميل مرة واحدة بعدها
+  const filtersKey = `${activeTab}|${selectedType}|${search}|${fromFilter}|${toFilter}`
+  const [lastFilters, setLastFilters] = useState(filtersKey)
+  useEffect(() => {
+    if (filtersKey !== lastFilters) {
+      setLastFilters(filtersKey)
+      if (page !== 1) {
+        setPage(1)
+        return
+      }
+    }
+    load()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [filtersKey, page])
 
   // إلغاء إجازة معتمدة مباشرة: يرجّع الرصيد ويعيد حساب أيام الحضور فوراً
   const handleRevoke = async (id: number) => {
@@ -108,44 +146,28 @@ export default function LeavesPage() {
     }
   }
 
-  const filteredRequests = leaves.filter((req) => {
-    if (activeTab !== 'all' && req.status !== activeTab) return false
-    if (
-      searchQuery &&
-      !(req.employeeName ?? '').includes(searchQuery) &&
-      !(req.employeeCode ?? '').toLowerCase().includes(searchQuery.toLowerCase())
-    )
-      return false
-    if (selectedType !== 'all' && req.leaveType !== selectedType) return false
-    if (fromFilter && req.fromDate < fromFilter) return false
-    if (toFilter && req.fromDate > toFilter) return false
-    return true
-  })
-
-  const stats = {
-    all: leaves.length,
-    approved: leaves.filter((r) => r.status === 'APPROVED').length,
-    cancelled: leaves.filter((r) => r.status === 'CANCELLED').length,
-    totalDays: leaves
-      .filter((r) => r.status === 'APPROVED')
-      .reduce((s, r) => s + Number(r.days), 0),
-  }
+  const rows = data.items
+  const stats = data.stats
+  const totalPages = Math.max(1, Math.ceil(data.total / PAGE_SIZE))
+  const firstRow = data.total === 0 ? 0 : (page - 1) * PAGE_SIZE + 1
+  const lastRow = Math.min(page * PAGE_SIZE, data.total)
 
   return (
     <MainLayout>
       <div className="space-y-6">
+        {leaveCatalog.error && <div role="alert" className="bg-amber-50 text-amber-800 rounded-xl p-3 text-sm">تعذر تحميل أنواع الإجازات: {leaveCatalog.error} <button type="button" className="underline" onClick={leaveCatalog.retry}>إعادة المحاولة</button></div>}
         {/* Page Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">سجل الإجازات</h1>
+            <h1 className="text-2xl font-bold text-gray-800">سجل الإجازات المعتمدة</h1>
             <p className="text-gray-500 mt-1">
               الإجازات المعتمدة من محرك الطلبات — الموافقة تتم في صندوق الموافقات
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <button className="btn-secondary flex items-center gap-2">
+            <button onClick={() => downloadCsv(`leaves-page-${page}.csv`, ['الموظف', 'الكود', 'نوع الإجازة', 'من', 'إلى', 'المدة', 'الحالة', 'رقم الطلب'], rows.map(row => [row.employeeName, row.employeeCode, leaveCatalog.label(row.leaveType), row.fromDate, row.toDate, durationLabel(Number(row.days), row.period), row.status === 'APPROVED' ? 'معتمدة' : row.status === 'CANCELLED' ? 'ملغاة' : row.status, row.requestId]))} disabled={loading} className="btn-secondary flex items-center gap-2">
               <Download size={18} />
-              تصدير
+              تصدير الصفحة CSV
             </button>
             <Link href="/leaves/request" className="btn-primary flex items-center gap-2">
               <Plus size={18} />
@@ -214,7 +236,7 @@ export default function LeavesPage() {
               </div>
               <div>
                 <p className="text-sm text-gray-500">أيام معتمدة</p>
-                <p className="text-3xl font-bold text-primary-600">{stats.totalDays}</p>
+                <p className="text-3xl font-bold text-primary-600">{stats.approvedDays}</p>
               </div>
             </div>
           </div>
@@ -244,14 +266,14 @@ export default function LeavesPage() {
               className="input w-48"
             >
               <option value="all">كل أنواع الإجازات</option>
-              {Object.entries(LEAVE_TYPE_META).map(([code, meta]) => (
+              {leaveCatalog.types.map((type) => [type.code, leaveTypeMeta(type.code)] as const).map(([code, meta]) => (
                 <option key={code} value={code}>
                   {meta.label}
                 </option>
               ))}
             </select>
 
-            {/* Date Range */}
+            {/* Date Range — الإجازات المتقاطعة مع المدى */}
             <div className="flex items-center gap-2">
               <input
                 type="date"
@@ -293,21 +315,21 @@ export default function LeavesPage() {
                   <th className="text-right px-4 py-4">نوع الإجازة</th>
                   <th className="text-center px-4 py-4">من</th>
                   <th className="text-center px-4 py-4">إلى</th>
-                  <th className="text-center px-4 py-4">الأيام</th>
+                  <th className="text-center px-4 py-4">المدة</th>
                   <th className="text-center px-4 py-4">رقم الطلب</th>
                   <th className="text-center px-4 py-4">الحالة</th>
                   <th className="text-center px-4 py-4">الإجراءات</th>
                 </tr>
               </thead>
               <tbody>
-                {filteredRequests.length === 0 && (
+                {rows.length === 0 && (
                   <tr>
                     <td colSpan={8} className="text-center py-10 text-gray-400">
                       لا توجد إجازات مسجلة
                     </td>
                   </tr>
                 )}
-                {filteredRequests.map((request) => {
+                {rows.map((request) => {
                   const meta = leaveTypeMeta(request.leaveType)
                   return (
                     <tr key={request.id} className="table-row">
@@ -339,7 +361,9 @@ export default function LeavesPage() {
                         {request.toDate}
                       </td>
                       <td className="table-cell text-center">
-                        <span className="font-bold text-primary-600">{Number(request.days)} يوم</span>
+                        <span className="font-bold text-primary-600">
+                          {durationLabel(Number(request.days), request.period)}
+                        </span>
                       </td>
                       <td className="table-cell text-center text-gray-500 font-mono">
                         {request.requestId ? `#${request.requestId}` : '-'}
@@ -347,7 +371,7 @@ export default function LeavesPage() {
                       <td className="table-cell text-center">{getStatusBadge(request.status)}</td>
                       <td className="table-cell">
                         <div className="flex items-center justify-center gap-1">
-                          <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                          <button onClick={() => setSelectedLeave(request)} aria-label="عرض تفاصيل الإجازة" className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
                             <Eye size={18} className="text-gray-500" />
                           </button>
                           {canRevoke && request.status === 'APPROVED' && (
@@ -369,20 +393,30 @@ export default function LeavesPage() {
           </div>
           )}
 
-          {/* Pagination */}
+          {/* Pagination — من السيرفر */}
           <div className="flex items-center justify-between px-4 py-4 border-t border-gray-100">
             <p className="text-sm text-gray-500">
-              عرض <span className="font-medium text-gray-700">1-{filteredRequests.length}</span> من{' '}
-              <span className="font-medium text-gray-700">{filteredRequests.length}</span> سجل
+              عرض <span className="font-medium text-gray-700">{firstRow}-{lastRow}</span> من{' '}
+              <span className="font-medium text-gray-700">{data.total}</span> سجل
             </p>
             <div className="flex items-center gap-2">
-              <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50" disabled>
+              <button
+                className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40"
+                disabled={page <= 1 || loading}
+                onClick={() => setPage((p) => Math.max(1, p - 1))}
+                title="الصفحة السابقة"
+              >
                 <ChevronRight size={18} />
               </button>
-              <button className="px-4 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium">
-                1
-              </button>
-              <button className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50" disabled>
+              <span className="px-4 py-2 bg-primary-500 text-white rounded-lg text-sm font-medium">
+                {page} / {totalPages}
+              </span>
+              <button
+                className="p-2 border border-gray-200 rounded-lg hover:bg-gray-50 disabled:opacity-40"
+                disabled={page >= totalPages || loading}
+                onClick={() => setPage((p) => Math.min(totalPages, p + 1))}
+                title="الصفحة التالية"
+              >
                 <ChevronLeft size={18} />
               </button>
             </div>
@@ -393,7 +427,7 @@ export default function LeavesPage() {
         <div className="card">
           <h3 className="text-sm font-bold text-gray-700 mb-4">أنواع الإجازات</h3>
           <div className="flex flex-wrap items-center gap-6">
-            {Object.entries(LEAVE_TYPE_META).map(([code, meta]) => (
+            {leaveCatalog.types.map((type) => [type.code, leaveTypeMeta(type.code)] as const).map(([code, meta]) => (
               <div key={code} className="flex items-center gap-2">
                 <div className={`w-4 h-4 rounded-full ${meta.color}`} />
                 <span className="text-sm text-gray-600">{meta.label}</span>
@@ -402,6 +436,7 @@ export default function LeavesPage() {
           </div>
         </div>
       </div>
+      {selectedLeave && <div role="dialog" aria-modal="true" aria-label="تفاصيل الإجازة" className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4"><div className="bg-white rounded-2xl w-full max-w-lg p-6 space-y-4"><h2 className="font-bold text-lg">{leaveCatalog.label(selectedLeave.leaveType)}</h2><p>{selectedLeave.employeeName || `موظف #${selectedLeave.employeeId}`}</p><p>{selectedLeave.fromDate} — {selectedLeave.toDate}</p><p>{durationLabel(Number(selectedLeave.days), selectedLeave.period)}</p>{getStatusBadge(selectedLeave.status)}{selectedLeave.requestId && <p className="text-sm text-gray-500">رقم الطلب: #{selectedLeave.requestId}</p>}<div className="flex justify-end"><button onClick={() => setSelectedLeave(null)} className="btn-secondary">إغلاق</button></div></div></div>}
     </MainLayout>
   )
 }

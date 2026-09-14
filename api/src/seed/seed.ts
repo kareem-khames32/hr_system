@@ -377,7 +377,7 @@ async function main() {
   }
   // ترحيل بيانات: الإجازات القديمة غير المدفوعة تتعلم isUnpaid
   await ds.query(
-    `UPDATE leaves SET isUnpaid = 1 WHERE leaveType = 'UNPAID' AND isUnpaid = 0`
+    `UPDATE leaves SET isUnpaid = 1 WHERE leaveTypeCode = 'UNPAID' AND isUnpaid = 0`
   )
 
   const gradesRepo = ds.getRepository(Grade)

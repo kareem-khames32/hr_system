@@ -21,7 +21,7 @@ const statusLabels: Record<string, string> = {
   IN_SETTLEMENT: 'تصفية قيد المراجعة',
   SETTLED: 'معتمدة بانتظار آخر يوم',
   CLOSED: 'منتهية',
-  CANCELLED: 'تراجع عن الاستقالة',
+  CANCELLED: 'ملف ملغى',
 }
 
 const statusStyles: Record<string, string> = {
@@ -75,7 +75,7 @@ export default function OffboardingPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-800">إنهاء الخدمة</h1>
             <p className="text-gray-500 mt-1">
-              ملفات إخلاء الطرف والتصفية النهائية — تُنشأ تلقائياً عند اعتماد الاستقالة
+              ملفات إخلاء الطرف والتصفية النهائية للاستقالة والتقاعد وأسباب إنهاء الخدمة الأخرى
             </p>
           </div>
         </div>

@@ -75,6 +75,17 @@ export default function GradesPage() {
   const maxSalary =
     grades.length > 0 ? Math.max(...grades.map((g) => Number(g.maxSalary))) : 0
 
+  // SET-18: شريط نطاق الدرجة على مقياس مشترك (0 ← أعلى حد أقصى بين الدرجات): يبدأ عند
+  // الحد الأدنى (يمين، اتجاه الصفحة) ويمتد حتى الأقصى — كان عرضه 100% دائماً
+  const rangeBarStyle = (g: Grade) => {
+    if (!(maxSalary > 0)) return { right: '0%', width: '0%' }
+    const lo = Math.min(Math.max(Number(g.minSalary) || 0, 0), maxSalary)
+    const hi = Math.min(Math.max(Number(g.maxSalary) || 0, lo), maxSalary)
+    const width = Math.max(((hi - lo) / maxSalary) * 100, 2) // النطاق الضيق يظهر
+    const start = Math.min((lo / maxSalary) * 100, 100 - width)
+    return { right: `${start}%`, width: `${width}%` }
+  }
+
   const handleOpenModal = (grade?: Grade) => {
     setModalError(null)
     if (grade) {
@@ -93,6 +104,15 @@ export default function GradesPage() {
   }
 
   const handleSave = async () => {
+    // نطاق صحيح: الحد الأدنى لا يتجاوز الأقصى (الخادم يرفضه أيضاً)
+    if (
+      formData.minSalary !== '' &&
+      formData.maxSalary !== '' &&
+      Number(formData.minSalary) > Number(formData.maxSalary)
+    ) {
+      setModalError('الحد الأدنى للراتب لا يتجاوز الحد الأقصى')
+      return
+    }
     setSaving(true)
     setModalError(null)
     const payload = {
@@ -317,10 +337,13 @@ export default function GradesPage() {
                       <span className="text-gray-500 text-sm mr-1">{currency}</span>
                     </div>
                     <div className="flex-1 mx-4">
-                      <div className="h-2 bg-gray-200 rounded-full">
+                      <div
+                        className="relative h-2 bg-gray-200 rounded-full"
+                        title={`النطاق نسبةً لأعلى حد أقصى بين الدرجات (${maxSalary.toLocaleString()} ${currency})`}
+                      >
                         <div
-                          className="h-full bg-gradient-to-l from-primary-500 to-primary-300 rounded-full"
-                          style={{ width: '100%' }}
+                          className="absolute inset-y-0 bg-gradient-to-l from-primary-500 to-primary-300 rounded-full"
+                          style={rangeBarStyle(grade)}
                         />
                       </div>
                     </div>

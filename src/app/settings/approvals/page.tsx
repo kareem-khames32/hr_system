@@ -66,6 +66,8 @@ interface ApiChain {
   // اسم النوع وفئته من الباك (مستقل عن فلترة جمهور الكتالوج)
   requestTypeName?: string | null
   requestTypeCategory?: string | null
+  // دورة أساسية لنوع طلب (approvalChainId) — تسري على كل الفروع، فلا تُنقل لفرع
+  isPrimary?: boolean
   // تنفيذ فوري بلا اعتمادات — يسري فقط حين تكون السلسلة بلا خطوات
   autoApprove: boolean
   steps: ApiChainStep[]
@@ -419,7 +421,13 @@ export default function ApprovalsPage() {
     try {
       const name = formData.name.trim()
       if (editingChain) {
-        await updateApprovalChain(editingChain.id, { nameAr: name })
+        // نقل النطاق (فرع ↔ عامة) يُرسل فقط لو تغيّر — null = دورة عامة
+        const newBranchId =
+          formData.branchId === 'all' ? null : Number(formData.branchId)
+        await updateApprovalChain(editingChain.id, {
+          nameAr: name,
+          ...(newBranchId !== editingChain.branchId ? { branchId: newBranchId } : {}),
+        })
         await replaceChainSteps(editingChain.id, buildSteps())
         setNotice(`تم تحديث دورة «${name}» — الخطوات الجديدة تسري على الطلبات القادمة`)
       } else {
@@ -445,12 +453,28 @@ export default function ApprovalsPage() {
 
   const toggleChainActive = async (chain: ApiChain) => {
     setActiveMenu(null)
+    // التعطيل بيوقف التقديم الجديد على الدورة (SET-3) — تأكيد للدورة الأساسية لنوع
+    const typeName = chainTypeName(chain)
+    const typeLabel = typeName ? `«${typeName}»` : 'الأنواع المربوطة بها'
+    if (
+      chain.isActive &&
+      chain.isPrimary &&
+      !window.confirm(
+        `تعطيل «${chain.nameAr}» يوقف تقديم طلبات ${typeLabel} الجديدة في كل فرع ليس له نسخة مفعّلة من الدورة، والطلبات الجارية تكمل مسارها. متابعة؟`
+      )
+    ) {
+      return
+    }
     try {
       await updateApprovalChain(chain.id, { isActive: !chain.isActive })
       setNotice(
-        chain.isActive
-          ? `تم تعطيل دورة «${chain.nameAr}»`
-          : `تم تفعيل دورة «${chain.nameAr}»`
+        !chain.isActive
+          ? `تم تفعيل دورة «${chain.nameAr}»`
+          : chain.branchId !== null
+            ? `تم تعطيل دورة «${chain.nameAr}» — طلبات الفرع الجديدة ترجع للدورة العامة`
+            : chain.isPrimary
+              ? `تم تعطيل دورة «${chain.nameAr}» — تقديم طلبات ${typeLabel} الجديدة موقوف لحد ما تتفعّل (الجارية تكمل مسارها)`
+              : `تم تعطيل دورة «${chain.nameAr}»`
       )
       await reloadChains()
       setError(null)
@@ -844,9 +868,6 @@ export default function ApprovalsPage() {
                                     متوازية
                                   </span>
                                 )}
-                                {step.canDelegate && (
-                                  <Zap size={12} className="text-warning-500" />
-                                )}
                               </div>
                               {index < chain.steps.length - 1 &&
                                 (chain.steps[index + 1].isParallel ? (
@@ -932,11 +953,7 @@ export default function ApprovalsPage() {
                                   التصعيد إلى: {roleLabels[step.escalateTo] ?? step.escalateTo}
                                 </span>
                               )}
-                              {step.canDelegate && (
-                                <span className="px-2 py-1 bg-warning-100 text-warning-700 rounded text-xs">
-                                  يمكن التفويض
-                                </span>
-                              )}
+                              {/* لا شارة «يمكن التفويض»: التفويض غير مبني بعد و canDelegate بلا أثر (SET-17) */}
                             </div>
                           </div>
                         ))}
@@ -1042,20 +1059,37 @@ export default function ApprovalsPage() {
                       setFormData({ ...formData, branchId: e.target.value })
                     }
                     className="input w-full"
-                    disabled={!!editingChain}
-                    title={editingChain ? 'نطاق الفرع لا يتغير بعد الإنشاء' : undefined}
+                    // الدورة الأساسية لنوع طلب تُحلّ لكل الفروع — نقلها لفرع شكلي فقط
+                    // (الباك يرفضه)؛ المسموح لها فقط الرجوع لـ«عامة»
+                    disabled={!!editingChain?.isPrimary && editingChain.branchId === null}
+                    title={
+                      editingChain?.isPrimary
+                        ? 'الدورة الأساسية لنوع الطلب تسري على كل الفروع'
+                        : undefined
+                    }
                   >
                     <option value="all">كل الفروع (دورة عامة)</option>
                     {branches.map((b) => (
-                      <option key={b.id} value={b.id}>
+                      <option
+                        key={b.id}
+                        value={b.id}
+                        disabled={!!editingChain?.isPrimary && b.id !== editingChain.branchId}
+                      >
                         {b.name} فقط
                       </option>
                     ))}
                   </select>
-                  <p className="text-xs text-gray-400 mt-1">
-                    نسخة بفرع محدد تتقدم على العامة عند التنفيذ — طلبات موظفي الفرع تتبع
-                    دورته الخاصة أولاً
-                  </p>
+                  {editingChain?.isPrimary ? (
+                    <p className="text-xs text-warning-600 mt-1">
+                      دورة أساسية لنوع طلب وتسري على كل الفروع — لتخصيص فرع أنشئ نسخة
+                      بنفس الكود ({editingChain.code}) لهذا الفرع
+                    </p>
+                  ) : (
+                    <p className="text-xs text-gray-400 mt-1">
+                      نسخة بفرع محدد تتقدم على العامة عند التنفيذ — طلبات موظفي الفرع تتبع
+                      دورته الخاصة أولاً
+                    </p>
+                  )}
                 </div>
 
                 {/* Approval Steps */}

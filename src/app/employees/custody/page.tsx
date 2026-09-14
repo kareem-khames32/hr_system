@@ -22,6 +22,7 @@ import {
   fetchEmployees,
   fetchBranches,
   createAsset,
+  updateAsset,
   assignCustody,
   returnCustody,
   writeOffCustody,
@@ -32,30 +33,11 @@ import {
   ApiEmployee,
   ApiBranch,
 } from '@/lib/api'
+import { custodyStatusLabels as statusLabels, custodyStatusStyles as statusStyles } from '@/lib/status-labels'
 import { useCurrency } from '@/lib/currency'
 
 // حالات العهدة — التسميات الموحّدة في كل النظام
-const statusLabels: Record<string, string> = {
-  PENDING_ACK: 'بانتظار تأكيد الموظف',
-  PENDING_MANAGER_CONFIRM: 'بانتظار اعتماد المدير المباشر',
-  ACTIVE: 'عهدة نشطة',
-  RETURN_REQUESTED: 'سلّمها الموظف — بانتظار تأكيد الاستلام',
-  RETURNED: 'مُرجَعة',
-  LOST: 'مفقودة',
-  DAMAGED: 'تالفة',
-  TRANSFERRED: 'منقولة لموظف آخر',
-}
 
-const statusStyles: Record<string, string> = {
-  PENDING_ACK: 'bg-amber-100 text-amber-700',
-  PENDING_MANAGER_CONFIRM: 'bg-amber-100 text-amber-700',
-  ACTIVE: 'bg-success-50 text-success-700',
-  RETURN_REQUESTED: 'bg-indigo-100 text-indigo-700',
-  RETURNED: 'bg-gray-100 text-gray-600',
-  LOST: 'bg-red-100 text-red-700',
-  DAMAGED: 'bg-red-100 text-red-700',
-  TRANSFERRED: 'bg-gray-100 text-gray-600',
-}
 
 // الحالات المفتوحة — يجوز شطبها فقداً أو تلفاً
 const OPEN_STATUSES = [
@@ -72,6 +54,7 @@ interface CustodyRow {
   employeeCode: string
   branchId: number | null
   branchName: string
+  assetId: number
   assetName: string
   assetCategory: string
   serialNumber: string
@@ -102,6 +85,8 @@ export default function CustodyPage() {
     name: '',
     category: '',
     serialNumber: '',
+    // قيمة الأصل (اختيارية) — تغذي خصم الفقد/التلف في التصفية
+    value: '',
   })
 
   const loadData = async () => {
@@ -129,6 +114,7 @@ export default function CustodyPage() {
             employeeCode: r.employeeCode ?? emp?.employeeCode ?? '',
             branchId: emp?.branchId ?? null,
             branchName: emp ? branchById.get(emp.branchId) ?? '—' : '—',
+            assetId: r.assetId,
             assetName: r.assetName ?? `#${r.assetId}`,
             assetCategory: r.assetCategory ?? '',
             serialNumber: r.serialNumber ?? '—',
@@ -172,11 +158,21 @@ export default function CustodyPage() {
     returned: records.filter((r) => r.status === 'RETURNED').length,
   }
 
-  // الأصول غير المسلَّمة حالياً فقط
-  const freeAssets = assets.filter((a) => !a.currentHolderId)
+  // الأصول المتاحة للتسليم فقط: AVAILABLE (لا المتقاعدة/المُكهّنة ولا المُسنَدة)
+  // وبلا إسناد مفتوح — PENDING_ACK يُبقي الأصل AVAILABLE لحين تأكيد الموظف
+  const reservedAssetIds = new Set(
+    records.filter((r) => OPEN_STATUSES.includes(r.status)).map((r) => r.assetId)
+  )
+  const freeAssets = assets.filter(
+    (a) => a.status === 'AVAILABLE' && !a.currentHolderId && !reservedAssetIds.has(a.id)
+  )
+
+  // قيمة الأصل اختيارية — لو أُدخلت لازم رقم غير سالب
+  const invalidValue = (v: string) => v.trim() !== '' && !(Number(v) >= 0)
+  const newAssetValueInvalid = invalidValue(newAsset.value)
 
   const handleCreateAsset = async () => {
-    if (!newAsset.name || !newAsset.category) return
+    if (!newAsset.name || !newAsset.category || newAssetValueInvalid) return
     setSaving(true)
     setError('')
     try {
@@ -184,10 +180,11 @@ export default function CustodyPage() {
         name: newAsset.name,
         category: newAsset.category,
         serialNumber: newAsset.serialNumber || undefined,
+        value: newAsset.value.trim() !== '' ? Number(newAsset.value) : undefined,
       })
       setAssets([...assets, created])
       setFormData({ ...formData, assetId: String(created.id) })
-      setNewAsset({ name: '', category: '', serialNumber: '' })
+      setNewAsset({ name: '', category: '', serialNumber: '', value: '' })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر إنشاء الأصل')
     } finally {
@@ -240,30 +237,44 @@ export default function CustodyPage() {
 
   // شطب العهدة (فقد/تلف) — يقفل السجل ويرجّع قيمة الأصل كتلميح خصم للتصفية
   const [writeOffTarget, setWriteOffTarget] = useState<CustodyRow | null>(null)
-  const [writeOffForm, setWriteOffForm] = useState({ lost: true, condition: '' })
+  // value: قيمة تُسجَّل للأصل قبل الشطب لو كان بلا قيمة — حتى يُحتسب خصمه في التصفية
+  const [writeOffForm, setWriteOffForm] = useState({ lost: true, condition: '', value: '' })
   const [writingOff, setWritingOff] = useState(false)
   const [writeOffNotice, setWriteOffNotice] = useState<string | null>(null)
 
+  // أصل العهدة المشطوبة — بلا قيمة (فارغة/صفر) يعني خصم صفر في التصفية
+  const writeOffAsset = writeOffTarget
+    ? assets.find((a) => a.id === writeOffTarget.assetId)
+    : undefined
+  const writeOffHasValue = Number(writeOffAsset?.value ?? 0) > 0
+  const writeOffValueInvalid = invalidValue(writeOffForm.value)
+
   const openWriteOff = (r: CustodyRow) => {
-    setWriteOffForm({ lost: true, condition: '' })
+    setWriteOffForm({ lost: true, condition: '', value: '' })
     setWriteOffTarget(r)
   }
 
   const handleWriteOff = async () => {
-    if (!writeOffTarget) return
+    if (!writeOffTarget || writeOffValueInvalid) return
     setWritingOff(true)
     setError('')
     try {
+      const value = Number(writeOffForm.value)
+      if (!writeOffHasValue && writeOffForm.value.trim() !== '' && value > 0) {
+        await updateAsset(writeOffTarget.assetId, { value })
+      }
       const res = await writeOffCustody(writeOffTarget.id, {
         lost: writeOffForm.lost,
         condition: writeOffForm.condition.trim() || undefined,
       })
-      if (res.assetValue != null) {
+      if (Number(res.assetValue ?? 0) > 0) {
         setWriteOffNotice(
-          `قيمة الأصل ${Number(res.assetValue).toLocaleString()} ${currency} — سجّلها خصماً في تصفية إنهاء الخدمة`
+          `قيمة الأصل ${Number(res.assetValue).toLocaleString()} ${currency} — تُحتسب تلقائياً في خصومات تصفية إنهاء الخدمة وفق سياسة الخادم`
         )
       } else {
-        setWriteOffNotice(null)
+        setWriteOffNotice(
+          'الأصل بلا قيمة مسجلة — لن يُحتسب له خصم تلقائي. راجع قيمة الأصل من إعدادات الأصول قبل معاينة التصفية'
+        )
       }
       setWriteOffTarget(null)
       await loadData()
@@ -635,7 +646,7 @@ export default function CustodyPage() {
                     }
                     className="input w-full"
                   >
-                    <option value="">— اختر أصلاً غير مسلَّم —</option>
+                    <option value="">— اختر أصلاً متاحاً —</option>
                     {freeAssets.map((a) => (
                       <option key={a.id} value={String(a.id)}>
                         {a.name} ({a.category})
@@ -644,7 +655,7 @@ export default function CustodyPage() {
                     ))}
                   </select>
                   <p className="text-xs text-gray-400 mt-1">
-                    تظهر الأصول غير المسلَّمة لموظف حالياً فقط
+                    تظهر الأصول المتاحة فقط — لا المسلَّمة ولا المتقاعدة ولا المحجوزة بإسناد مفتوح
                   </p>
                 </div>
 
@@ -701,10 +712,35 @@ export default function CustodyPage() {
                       placeholder="LP-2026-012"
                     />
                   </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      قيمة الأصل ({currency})
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={newAsset.value}
+                      onChange={(e) => setNewAsset({ ...newAsset, value: e.target.value })}
+                      className="input w-full"
+                      dir="ltr"
+                      placeholder="4500"
+                    />
+                    <p
+                      className={`text-xs mt-1 ${
+                        newAssetValueInvalid ? 'text-red-600' : 'text-gray-400'
+                      }`}
+                    >
+                      {newAssetValueInvalid
+                        ? 'القيمة رقم غير سالب'
+                        : 'اختيارية — تُخصم من تصفية إنهاء الخدمة عند الفقد/التلف، وبدونها لا يُحتسب خصم'}
+                    </p>
+                  </div>
                   <button
                     onClick={handleCreateAsset}
                     className="btn-secondary"
-                    disabled={saving || !newAsset.name || !newAsset.category}
+                    disabled={
+                      saving || !newAsset.name || !newAsset.category || newAssetValueInvalid
+                    }
                   >
                     إضافة الأصل
                   </button>
@@ -787,9 +823,43 @@ export default function CustodyPage() {
                     placeholder="مثال: كسر في الشاشة بعد سقوط الجهاز"
                   />
                 </div>
+                {/* تحذير الأصل بلا قيمة — خصمه في التصفية صفر ما لم تُسجَّل قيمته */}
+                {writeOffHasValue ? (
+                  <p className="text-sm text-gray-600">
+                    قيمة الأصل المسجلة:{' '}
+                    <span className="font-medium">
+                      {Number(writeOffAsset?.value).toLocaleString()} {currency}
+                    </span>
+                  </p>
+                ) : (
+                  <div className="p-3 bg-amber-50 border border-amber-200 rounded-xl space-y-2">
+                    <p className="text-sm text-amber-800 flex items-start gap-2">
+                      <AlertTriangle size={16} className="text-amber-500 shrink-0 mt-0.5" />
+                      الأصل بلا قيمة مسجلة — لن يُحتسب له خصم في تصفية إنهاء الخدمة. أدخل
+                      قيمته ليُخصم، أو اتركها فارغة للشطب بلا خصم
+                    </p>
+                    <label className="block text-xs font-medium text-amber-700">
+                      قيمة الأصل ({currency}) — اختياري
+                    </label>
+                    <input
+                      type="number"
+                      min={0}
+                      value={writeOffForm.value}
+                      onChange={(e) =>
+                        setWriteOffForm({ ...writeOffForm, value: e.target.value })
+                      }
+                      className="input w-full"
+                      dir="ltr"
+                      placeholder="4500"
+                    />
+                    {writeOffValueInvalid && (
+                      <p className="text-xs text-red-600">القيمة رقم غير سالب</p>
+                    )}
+                  </div>
+                )}
                 <p className="text-xs text-gray-400">
-                  الشطب يقفل سجل العهدة نهائياً — إن كانت للأصل قيمة مسجلة ستظهر كتلميح
-                  خصم لتصفية إنهاء الخدمة
+                  الشطب يقفل سجل العهدة نهائياً — إن كانت للأصل قيمة مسجلة تُحتسب تلقائياً
+                  في خصومات تصفية إنهاء الخدمة وفق سياسة الخادم
                 </p>
               </div>
               <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">
@@ -798,7 +868,7 @@ export default function CustodyPage() {
                 </button>
                 <button
                   onClick={handleWriteOff}
-                  disabled={writingOff}
+                  disabled={writingOff || writeOffValueInvalid}
                   className="px-4 py-2.5 bg-red-600 text-white rounded-xl text-sm font-medium hover:bg-red-700 disabled:opacity-50"
                 >
                   {writingOff

@@ -71,4 +71,8 @@ export const userHasPerm = (user: JwtPayload, perm: string): boolean =>
 // نطاق الفرع (القاعدة الأساسية للعزل):
 // super_admin يرى كل الفروع — أي دور آخر مقفول على فرعه
 export const branchScopeOf = (user: JwtPayload): number | null =>
-  user.role === 'super_admin' ? null : user.branchId
+  user.role === 'super_admin'
+    ? null
+    : Number.isInteger(user.branchId) && Number(user.branchId) > 0
+      ? Number(user.branchId)
+      : -1 // Unassigned legacy accounts have an empty scope, never global access.

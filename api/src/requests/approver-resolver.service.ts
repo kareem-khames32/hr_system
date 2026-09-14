@@ -7,6 +7,7 @@ import { Department } from '../org/entities/department.entity'
 import { Branch } from '../org/entities/branch.entity'
 import type { JwtPayload } from '../auth/auth.service'
 import { ApproverRole } from './entities/approval-step.entity'
+import type { ApprovalAction } from './entities/request-approval.entity'
 
 // الخطوة بعد حل الأدوار عند التقديم — تُخزَّن JSON على الطلب
 export interface ResolvedStep {
@@ -18,7 +19,7 @@ export interface ResolvedStep {
   escalateTo: string | null
   dueAt: string | null // ISO — يُحسب من slaDays وقت التقديم
   actedAt: string | null
-  action: string | null
+  action: ApprovalAction | null
 }
 
 @Injectable()
@@ -129,21 +130,14 @@ export class ApproverResolver {
         return (
           granted.includes('approve.executive') || granted.includes('executive')
         )
+      // بالصلاحية فقط — كود الدور مش تفويض: أي دور مخصص ممكن ياخد كود زي
+      // 'finance' من شاشة الأدوار (SET-8)
       case 'finance':
-        return (
-          user.role === 'finance' ||
-          granted.includes('approve.finance') ||
-          granted.includes('finance')
-        )
+        return granted.includes('approve.finance') || granted.includes('finance')
       case 'it':
-        return (
-          user.role === 'it' ||
-          granted.includes('approve.it') ||
-          granted.includes('it')
-        )
+        return granted.includes('approve.it') || granted.includes('it')
       case 'custody_officer':
         return (
-          user.role === 'custody_officer' ||
           granted.includes('approve.custody') ||
           granted.includes('custody_officer')
         )

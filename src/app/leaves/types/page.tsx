@@ -10,21 +10,21 @@ import {
   CheckCircle2,
   XCircle,
 } from 'lucide-react'
-import { createLeaveType, fetchLeaveTypes, updateLeaveType } from '@/lib/api'
+import { can, createLeaveType, fetchLeaveTypes, updateLeaveType } from '@/lib/api'
 
 interface LeaveTypeRow {
   id: number
   code: string
   nameAr: string
   isPaid: boolean
-  balanceSource: 'annual' | 'sick' | 'none'
+  balanceType: 'annual' | 'sick' | 'none'
   requiredAttachment: string | null
   maxDays: number | null
   oncePerService: boolean
   isActive: boolean
 }
 
-const balanceSourceLabels: Record<string, string> = {
+const balanceTypeLabels: Record<string, string> = {
   annual: 'الرصيد السنوي',
   sick: 'الرصيد المرضي',
   none: 'بدون رصيد',
@@ -45,7 +45,7 @@ const emptyForm = {
   code: '',
   nameAr: '',
   isPaid: true,
-  balanceSource: 'none',
+  balanceType: 'none',
   requiredAttachment: '',
   maxDays: '',
   oncePerService: false,
@@ -60,6 +60,8 @@ export default function LeaveTypesPage() {
   const [saving, setSaving] = useState(false)
   const [editingType, setEditingType] = useState<LeaveTypeRow | null>(null)
   const [formData, setFormData] = useState({ ...emptyForm })
+  // الإضافة/التعديل/التفعيل = settings.manage في الباك
+  const canManage = can('settings.manage')
 
   const loadData = async () => {
     try {
@@ -85,7 +87,7 @@ export default function LeaveTypesPage() {
         code: type.code,
         nameAr: type.nameAr,
         isPaid: type.isPaid,
-        balanceSource: type.balanceSource ?? 'none',
+        balanceType: type.balanceType ?? 'none',
         requiredAttachment: type.requiredAttachment ?? '',
         maxDays: type.maxDays != null ? String(type.maxDays) : '',
         oncePerService: type.oncePerService,
@@ -103,12 +105,20 @@ export default function LeaveTypesPage() {
     const payload: Record<string, unknown> = {
       nameAr: formData.nameAr,
       isPaid: formData.isPaid,
-      balanceSource: formData.balanceSource,
+      balanceType: formData.balanceType,
       oncePerService: formData.oncePerService,
+      // التعديل: المُفرَّغ بعد قيمة يُرسَل null ليُمسح (كان يُهمل فيبقى «التقرير الطبي»
+      // مطلوباً والحد القديم سارياً)؛ الإضافة: الفارغ لا يُرسل
       ...(formData.requiredAttachment
         ? { requiredAttachment: formData.requiredAttachment }
-        : {}),
-      ...(formData.maxDays !== '' ? { maxDays: Number(formData.maxDays) } : {}),
+        : editingType?.requiredAttachment
+          ? { requiredAttachment: null }
+          : {}),
+      ...(formData.maxDays !== ''
+        ? { maxDays: Number(formData.maxDays) }
+        : editingType?.maxDays != null
+          ? { maxDays: null }
+          : {}),
     }
     try {
       if (editingType) {
@@ -146,10 +156,12 @@ export default function LeaveTypesPage() {
             <h1 className="text-2xl font-bold text-gray-800">أنواع الإجازات</h1>
             <p className="text-gray-500 mt-1">إدارة وتكوين أنواع الإجازات</p>
           </div>
-          <button onClick={() => openModal()} className="btn-primary flex items-center gap-2">
-            <Plus size={18} />
-            إضافة نوع
-          </button>
+          {canManage && (
+            <button onClick={() => openModal()} className="btn-primary flex items-center gap-2">
+              <Plus size={18} />
+              إضافة نوع
+            </button>
+          )}
         </div>
 
         {/* Error Banner */}
@@ -184,29 +196,31 @@ export default function LeaveTypesPage() {
                         </p>
                       </div>
                     </div>
-                    <div className="flex items-center gap-2">
-                      <button
-                        onClick={() => openModal(type)}
-                        title="تعديل"
-                        className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200"
-                      >
-                        <Edit2 size={16} className="text-gray-600" />
-                      </button>
-                      <button
-                        disabled
-                        title="الحذف غير متاح — عطّل النوع بدلاً من ذلك"
-                        className="p-2 bg-gray-100 rounded-lg opacity-50 cursor-not-allowed"
-                      >
-                        <Trash2 size={16} className="text-gray-600" />
-                      </button>
-                    </div>
+                    {canManage && (
+                      <div className="flex items-center gap-2">
+                        <button
+                          onClick={() => openModal(type)}
+                          title="تعديل"
+                          className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200"
+                        >
+                          <Edit2 size={16} className="text-gray-600" />
+                        </button>
+                        <button
+                          disabled
+                          title="الحذف غير متاح — عطّل النوع بدلاً من ذلك"
+                          className="p-2 bg-gray-100 rounded-lg opacity-50 cursor-not-allowed"
+                        >
+                          <Trash2 size={16} className="text-gray-600" />
+                        </button>
+                      </div>
+                    )}
                   </div>
 
                   <div className="grid grid-cols-2 gap-4 mb-4">
                     <div className="p-3 bg-gray-50 rounded-xl">
                       <p className="text-xs text-gray-500">مصدر الرصيد</p>
                       <p className="text-lg font-bold text-gray-800">
-                        {balanceSourceLabels[type.balanceSource] ?? type.balanceSource}
+                        {balanceTypeLabels[type.balanceType] ?? type.balanceType}
                       </p>
                     </div>
                     <div className="p-3 bg-gray-50 rounded-xl">
@@ -253,12 +267,14 @@ export default function LeaveTypesPage() {
                         </>
                       )}
                     </div>
-                    <button
-                      onClick={() => toggleActive(type)}
-                      className="text-primary-600 text-sm font-medium hover:underline"
-                    >
-                      {type.isActive ? 'تعطيل' : 'تفعيل'}
-                    </button>
+                    {canManage && (
+                      <button
+                        onClick={() => toggleActive(type)}
+                        className="text-primary-600 text-sm font-medium hover:underline"
+                      >
+                        {type.isActive ? 'تعطيل' : 'تفعيل'}
+                      </button>
+                    )}
                   </div>
                 </div>
               )
@@ -331,9 +347,9 @@ export default function LeaveTypesPage() {
                       مصدر الرصيد
                     </label>
                     <select
-                      value={formData.balanceSource}
+                      value={formData.balanceType}
                       onChange={(e) =>
-                        setFormData({ ...formData, balanceSource: e.target.value })
+                        setFormData({ ...formData, balanceType: e.target.value })
                       }
                       className="input w-full"
                     >

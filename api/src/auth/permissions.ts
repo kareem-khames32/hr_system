@@ -30,7 +30,12 @@ export const PERMISSIONS: Record<string, string> = {
   'attendance.view_all': 'عرض حضور النطاق',
   'attendance.manage': 'الجدولة والإدخال اليدوي وإعادة الحساب',
   'attendance.sync': 'أجهزة البصمة والمزامنة',
+  'attendance_exemption.view': 'عرض استثناءات الحضور في النطاق',
+  'attendance_exemption.manage': 'إنشاء وإلغاء طلبات استثناء الحضور',
+  'attendance_exemption.approve': 'اعتماد وإنهاء استثناء الحضور للموارد البشرية',
+  'attendance_exemption.approve_executive': 'الاعتماد التنفيذي لاستثناءات القيادات',
   'overtime.confirm': 'تأكيد الأوفرتايم المكتشف',
+  'overtime.adjust': 'تخفيض دقائق الإضافي أثناء الاعتماد بسبب موثق',
   // الإجازات
   'leaves.view_all': 'سجل إجازات النطاق وأرصدته',
   'leaves.revoke': 'إلغاء إجازة معتمدة (استرجاع الرصيد وإعادة حساب الحضور)',
@@ -40,6 +45,8 @@ export const PERMISSIONS: Record<string, string> = {
   'payroll.calculate': 'احتساب المسير',
   'payroll.approve': 'اعتماد المسير',
   'payroll.pay': 'صرف المسير',
+  'payroll.reopen': 'إعادة فتح مسير معتمد للمراجعة بسبب موثق',
+  'payroll.cancel': 'إلغاء مسودة مسير مع الاحتفاظ بأثرها',
   // العهدة والمستندات
   'custody.assign': 'إسناد وإدارة العهد',
   'documents.manage': 'إدارة مستندات الموظفين',
@@ -62,6 +69,26 @@ export type Permission = keyof typeof PERMISSIONS
 
 export const ALL_PERMISSIONS = Object.keys(PERMISSIONS)
 
+// صلاحيات إدارية لا يمنحها إلا مدير النظام — منع التصعيد: من يملك users.manage
+// أو roles.manage لا يصنع لنفسه أو لغيره مدير نظام فعلياً (تجاوز أو دور أو إسناد دور)
+export const SUPER_ADMIN_ONLY_GRANTS = ['users.manage', 'roles.manage', 'settings.manage']
+
+// ما يُضاف حديثاً منها (مقارنة بالسابق) → رسالة الرفض، أو null لو لا منح جديد
+// ('*' المكتسبة حديثاً = كل الصلاحيات ومنها الثلاث — مخالفة أيضاً)
+export const adminGrantViolation = (
+  next: string[],
+  prev: string[]
+): string | null => {
+  const added = next.filter(
+    (p) => [...SUPER_ADMIN_ONLY_GRANTS, '*'].includes(p) && !hasPerm(prev, p)
+  )
+  return added.length > 0
+    ? `منح ${added
+        .map((p) => `«${PERMISSIONS[p] ?? 'كل الصلاحيات'}»`)
+        .join(' و')} متاح لمدير النظام فقط`
+    : null
+}
+
 // ===== الأدوار المدمجة كحزم (presets) — قابلة للتعديل من شاشة الأدوار =====
 export const ROLE_PRESETS: Array<{
   code: string
@@ -83,7 +110,7 @@ export const ROLE_PRESETS: Array<{
       'employees.view', 'employees.create', 'employees.edit', 'employees.archive',
       'org.manage', 'users.manage',
       'requests.view_all', 'requests.create_on_behalf', 'approve.hr',
-      'attendance.view_all', 'attendance.manage', 'attendance.sync', 'overtime.confirm',
+      'attendance.view_all', 'attendance.manage', 'attendance.sync', 'overtime.confirm', 'overtime.adjust',
       'leaves.view_all', 'leaves.revoke', 'leave_balances.manage',
       'payroll.view', 'payroll.calculate', 'payroll.approve', 'payroll.pay',
       'custody.assign', 'documents.manage',

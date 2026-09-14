@@ -13,11 +13,21 @@ interface MainLayoutProps {
 }
 
 // حارس مسارات خفيف (تجربة استخدام فقط — الفرض الحقيقي في الباك إند)
-// الأكثر تحديداً أولاً — null تعني الصفحة مفتوحة رغم وقوعها تحت فرع محمي
-const PATH_PERMS: Array<[prefix: string, perm: string | null]> = [
+// الأكثر تحديداً أولاً — null تعني الصفحة مفتوحة رغم وقوعها تحت فرع محمي.
+// المسار بادئة نصية أو RegExp (للمسارات الديناميكية)، ومصفوفة الصلاحيات = كلها لازمة
+const PATH_PERMS: Array<[prefix: string | RegExp, perm: string | string[] | null]> = [
   ['/payroll/payslip/', null], // قسيمة الموظف نفسه — الباك يسمح للمالك
   ['/leaves/request', null], // تقديم إجازة متاح لكل موظف
   ['/employees/custody', 'custody.assign'],
+  // التهيئة: الباك يعرض لـemployees.view نطاقه كاملاً ولكل جهة (HR/IT/العهدة/المالية/المدير) موظفي مهامها
+  ['/employees/onboarding', null],
+  // نموذج الإضافة يكفيه employees.create (منتقي المدير من الدليل المختصر)
+  ['/employees/add', 'employees.create'],
+  // التعديل يحمّل ملف الموظف (employees.view) ويحفظ بـemployees.edit
+  [/^\/employees\/\d+\/edit(\/|$)/, ['employees.edit', 'employees.view']],
+  // معالج إنهاء الخدمة: يقرأ الملف (employees.view) ويفتح الإنهاء (offboarding.manage)
+  [/^\/employees\/\d+\/terminate(\/|$)/, ['offboarding.manage', 'employees.view']],
+  ['/offboarding/', null], // ملف بعينه — الباك يسمح للموظف ومديره وجهات الإخلاء
   ['/offboarding', 'offboarding.manage'],
   ['/employees/documents', 'documents.manage'],
   ['/employees/transfers', 'transfers.view'],
@@ -30,19 +40,26 @@ const PATH_PERMS: Array<[prefix: string, perm: string | null]> = [
   ['/settings/teams', 'org.manage'],
   ['/settings/cost-centers', 'settings.manage'],
   ['/settings/permission-types', 'settings.manage'],
+  ['/settings/asset-types', 'custody.assign'], // سجل الأصول — نفس صلاحية /assets
   ['/employees', 'employees.view'],
   ['/payroll', 'payroll.view'],
   ['/settings', 'settings.manage'],
   ['/requests-console', 'requests.view_all'],
+  ['/attendance/shifts', 'settings.manage'], // كتالوج الورديات — كتابته settings.manage
+  ['/attendance/devices', 'attendance.sync'],
   ['/attendance', 'attendance.view_all'],
+  ['/leaves/holidays', 'settings.manage'],
+  ['/leaves/types', 'settings.manage'], // GET /settings/leave-types نفسه settings.manage
   ['/leaves', 'leaves.view_all'],
   ['/reports', 'reports.view'],
   ['/recruitment', 'candidates.manage'],
 ]
 
-// الصلاحية المطلوبة للمسار الحالي — null إن كان مفتوحاً
-const requiredPermFor = (path: string): string | null => {
-  const hit = PATH_PERMS.find(([prefix]) => path.startsWith(prefix))
+// الصلاحية/الصلاحيات المطلوبة للمسار الحالي — null إن كان مفتوحاً
+const requiredPermFor = (path: string): string | string[] | null => {
+  const hit = PATH_PERMS.find(([prefix]) =>
+    typeof prefix === 'string' ? path.startsWith(prefix) : prefix.test(path)
+  )
   return hit ? hit[1] : null
 }
 
@@ -70,7 +87,9 @@ export default function MainLayout({ children }: MainLayoutProps) {
 
   // بعد التوثيق (على العميل): تحقق خفيف من صلاحية الشاشة
   const requiredPerm = requiredPermFor(pathname ?? '')
-  const allowed = !requiredPerm || can(requiredPerm)
+  const allowed =
+    !requiredPerm ||
+    (Array.isArray(requiredPerm) ? requiredPerm : [requiredPerm]).every((p) => can(p))
 
   return (
     <div className="min-h-screen bg-gray-50">

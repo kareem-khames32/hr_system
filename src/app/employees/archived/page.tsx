@@ -15,7 +15,9 @@ import {
   FileText,
 } from 'lucide-react'
 import Link from 'next/link'
+import { csvDateStamp, downloadCsv } from '@/lib/csv'
 import {
+  can,
   fetchEmployees,
   fetchBranches,
   fetchDepartments,
@@ -151,6 +153,38 @@ export default function ArchivedEmployeesPage() {
 
   const archivedCount = archivedEmployees.filter((e) => e.status === 'archived').length
   const terminatedCount = archivedEmployees.filter((e) => e.status === 'terminated').length
+  // إعادة التفعيل للمؤرشف والمنتهي خدمته معاً — reactivate في الباك يقبل الحالتين
+  const reactivatableCount = archivedCount + terminatedCount
+
+  // تصدير الصفوف المعروضة (بعد البحث والفلاتر) إلى CSV
+  const handleExport = () => {
+    if (filteredEmployees.length === 0) return
+    downloadCsv(
+      `archived-employees-${csvDateStamp()}.csv`,
+      [
+        'الرقم الوظيفي',
+        'الاسم',
+        'القسم',
+        'المسمى الوظيفي',
+        'تاريخ الالتحاق',
+        'تاريخ الانتهاء',
+        'مدة الخدمة',
+        'الحالة',
+        'سبب الأرشفة',
+      ],
+      filteredEmployees.map((e) => [
+        e.employeeId,
+        e.name,
+        e.department,
+        e.position,
+        e.joinDate,
+        e.archivedAt,
+        e.yearsOfService,
+        e.status === 'terminated' ? 'انتهت الخدمة' : 'مؤرشف',
+        e.archiveReason,
+      ])
+    )
+  }
 
   return (
     <MainLayout>
@@ -158,17 +192,21 @@ export default function ArchivedEmployeesPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">أرشيف الموظفين</h1>
-            <p className="text-gray-500 mt-1">الموظفين المنتهية خدماتهم</p>
+            <h1 className="text-2xl font-bold text-gray-800">المؤرشفون ومنتهو الخدمة</h1>
+            <p className="text-gray-500 mt-1">الموظفون المؤرشفون ومن انتهت خدماتهم</p>
           </div>
           <div className="flex items-center gap-3">
             <Link href="/employees" className="btn-secondary flex items-center gap-2">
               <RefreshCw size={18} />
               الموظفين الحاليين
             </Link>
-            <button className="btn-primary flex items-center gap-2">
+            <button
+              onClick={handleExport}
+              disabled={loading || filteredEmployees.length === 0}
+              className="btn-primary flex items-center gap-2 disabled:opacity-50"
+            >
               <Download size={18} />
-              تصدير
+              تصدير CSV
             </button>
           </div>
         </div>
@@ -213,7 +251,7 @@ export default function ArchivedEmployeesPage() {
             </div>
             <div>
               <p className="text-sm text-gray-500">قابلون لإعادة التفعيل</p>
-              <p className="text-2xl font-bold text-gray-800">{archivedCount}</p>
+              <p className="text-2xl font-bold text-gray-800">{reactivatableCount}</p>
             </div>
           </div>
         </div>
@@ -367,17 +405,20 @@ export default function ArchivedEmployeesPage() {
                       >
                         <Eye size={16} className="text-gray-600" />
                       </Link>
-                      <button
-                        onClick={() => handleReactivate(emp.id, emp.status)}
-                        className="p-2 bg-gray-100 rounded-lg hover:bg-success-50"
-                        title={
-                          emp.status === 'terminated'
-                            ? 'عودة على رأس العمل'
-                            : 'إعادة تفعيل'
-                        }
-                      >
-                        <RefreshCw size={16} className="text-gray-600 hover:text-success-600" />
-                      </button>
+                      {/* إعادة التفعيل بنفس صلاحية الأرشفة في الباك */}
+                      {can('employees.archive') && (
+                        <button
+                          onClick={() => handleReactivate(emp.id, emp.status)}
+                          className="p-2 bg-gray-100 rounded-lg hover:bg-success-50"
+                          title={
+                            emp.status === 'terminated'
+                              ? 'عودة على رأس العمل'
+                              : 'إعادة تفعيل'
+                          }
+                        >
+                          <RefreshCw size={16} className="text-gray-600 hover:text-success-600" />
+                        </button>
+                      )}
                     </div>
                   </td>
                 </tr>

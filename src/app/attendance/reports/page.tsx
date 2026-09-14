@@ -1,5 +1,8 @@
 'use client'
 
+import { overtimeStatusLabels, overtimeStatusStyles } from '@/lib/status-labels'
+import { downloadCsv } from '@/lib/csv'
+
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
@@ -12,6 +15,7 @@ import {
   Printer,
 } from 'lucide-react'
 import { fetchAttendanceReport, fetchOvertimeReport } from '@/lib/api'
+import { localMonth } from '@/lib/dates'
 
 interface AttendanceReportRow {
   employeeId: number
@@ -21,6 +25,9 @@ interface AttendanceReportRow {
   lateDays: number
   absentDays: number
   earlyLeaveDays: number
+  leaveDays: number
+  holidayDays: number
+  partialLeaveDays: number
   totalLateMinutes: number
   totalWorkMinutes: number
 }
@@ -41,14 +48,9 @@ const formatMinutes = (mins: number): string => {
   return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`
 }
 
-const overtimeStatusLabels: Record<string, string> = {
-  PENDING: 'قيد التأكيد',
-  CONFIRMED: 'مؤكد',
-  REJECTED: 'مرفوض',
-  PAID: 'مدفوع',
-}
 
-const currentMonth = () => new Date().toISOString().slice(0, 7)
+// الشهر بالتوقيت المحلي — toISOString كانت تفتح الشهر السابق أول يوم بعد منتصف الليل
+const currentMonth = () => localMonth()
 
 export default function AttendanceReportsPage() {
   const [selectedMonth, setSelectedMonth] = useState(currentMonth())
@@ -95,13 +97,13 @@ export default function AttendanceReportsPage() {
             <p className="text-gray-500 mt-1">تحليل وإحصائيات الحضور والانصراف</p>
           </div>
           <div className="flex items-center gap-3">
-            <button className="btn-secondary flex items-center gap-2">
+            <button onClick={() => window.print()} className="btn-secondary flex items-center gap-2">
               <Printer size={18} />
               طباعة
             </button>
-            <button className="btn-primary flex items-center gap-2">
+            <button onClick={() => downloadCsv(`attendance-${selectedMonth}.csv`, ['كود الموظف', 'الموظف', 'حضور', 'تأخير', 'غياب', 'خروج مبكر', 'إجازة', 'عطلة', 'أيام بها إجازة جزئية', 'دقائق التأخير', 'دقائق العمل'], filteredData.map(row => [row.employeeCode, row.fullName, row.presentDays, row.lateDays, row.absentDays, row.earlyLeaveDays, row.leaveDays, row.holidayDays, row.partialLeaveDays, row.totalLateMinutes, row.totalWorkMinutes]))} disabled={loading} className="btn-primary flex items-center gap-2">
               <Download size={18} />
-              تصدير Excel
+              تصدير CSV
             </button>
           </div>
         </div>
@@ -189,14 +191,14 @@ export default function AttendanceReportsPage() {
                     <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">تأخير</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">غياب</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">خروج مبكر</th>
-                    <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">دقائق التأخير</th>
+                    <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">إجازة</th><th className="px-4 py-3 text-center text-sm font-medium text-gray-600">عطلة</th><th className="px-4 py-3 text-center text-sm font-medium text-gray-600">إجازة جزئية</th><th className="px-4 py-3 text-center text-sm font-medium text-gray-600">دقائق التأخير</th>
                     <th className="px-4 py-3 text-center text-sm font-medium text-gray-600">ساعات العمل</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
                   {filteredData.length === 0 ? (
                     <tr>
-                      <td colSpan={7} className="px-4 py-10 text-center text-gray-400">
+                      <td colSpan={10} className="px-4 py-10 text-center text-gray-400">
                         لا توجد بيانات حضور لهذا الشهر
                       </td>
                     </tr>
@@ -219,7 +221,7 @@ export default function AttendanceReportsPage() {
                         <td className="px-4 py-4 text-center text-orange-600 font-medium">
                           {Number(emp.earlyLeaveDays)}
                         </td>
-                        <td className="px-4 py-4 text-center text-gray-600 font-medium">
+                        <td className="px-4 py-4 text-center">{Number(emp.leaveDays)}</td><td className="px-4 py-4 text-center">{Number(emp.holidayDays)}</td><td className="px-4 py-4 text-center">{Number(emp.partialLeaveDays)}</td><td className="px-4 py-4 text-center text-gray-600 font-medium">
                           {Number(emp.totalLateMinutes)}
                         </td>
                         <td className="px-4 py-4 text-center text-blue-600 font-medium font-mono">
@@ -263,11 +265,7 @@ export default function AttendanceReportsPage() {
                         <td className="px-4 py-4 text-center">
                           <span
                             className={`px-3 py-1 rounded-full text-sm font-medium ${
-                              row.status === 'PAID' || row.status === 'CONFIRMED'
-                                ? 'bg-success-50 text-success-700'
-                                : row.status === 'REJECTED'
-                                ? 'bg-red-100 text-red-700'
-                                : 'bg-warning-50 text-warning-700'
+                              overtimeStatusStyles[row.status] ?? 'bg-gray-100 text-gray-700'
                             }`}
                           >
                             {overtimeStatusLabels[row.status] ?? row.status}

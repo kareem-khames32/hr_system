@@ -12,6 +12,8 @@ export type ApprovalAction =
   | 'RETURNED_FOR_INFO'
   | 'DELEGATED'
   | 'ESCALATED'
+  // إلغاء آلي من النظام (approverId = 0) — مثلاً أوفرتايم مكتشف لم يعد الحساب يبرره
+  | 'CANCELLED'
 
 // سجل تدقيق غير قابل للتعديل — لا UPDATE ولا DELETE عليه
 @Entity('request_approvals')

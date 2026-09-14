@@ -18,11 +18,9 @@ import {
 import {
   type ApiPermission,
   type ApiRole,
-  type ApiUser,
   createRole,
   fetchPermissionsRegistry,
   fetchRolesFull,
-  fetchUsers,
   updateRole,
 } from '@/lib/api'
 
@@ -57,7 +55,6 @@ const emptyForm = { code: '', nameAr: '', permissions: [] as string[] }
 
 export default function RolesPage() {
   const [roles, setRoles] = useState<ApiRole[]>([])
-  const [users, setUsers] = useState<ApiUser[]>([])
   const [registry, setRegistry] = useState<ApiPermission[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -72,13 +69,10 @@ export default function RolesPage() {
 
   const loadData = async () => {
     try {
-      const [r, u, reg] = await Promise.all([
-        fetchRolesFull(),
-        fetchUsers(),
-        fetchPermissionsRegistry(),
-      ])
+      // أعداد المستخدمين تأتي مع الأدوار (userCount) — بلا GET /users (users.manage)
+      // فالشاشة تعمل لمن يملك roles.manage وحدها
+      const [r, reg] = await Promise.all([fetchRolesFull(), fetchPermissionsRegistry()])
       setRoles(r)
-      setUsers(u)
       setRegistry(reg)
       setError(null)
     } catch (err: any) {
@@ -103,7 +97,8 @@ export default function RolesPage() {
     return Array.from(groups.entries())
   }, [registry])
 
-  const usersCountOf = (code: string) => users.filter((u) => u.role === code).length
+  const usersCountOf = (code: string) => roles.find((r) => r.code === code)?.userCount ?? 0
+  const totalUsers = roles.reduce((sum, r) => sum + (r.userCount ?? 0), 0)
 
   const filteredRoles = roles.filter(
     (role) => role.nameAr.includes(searchTerm) || role.code.includes(searchTerm)
@@ -164,7 +159,8 @@ export default function RolesPage() {
   const toggleActive = async (role: ApiRole) => {
     try {
       const updated = await updateRole(role.id, { isActive: !role.isActive })
-      setRoles((prev) => prev.map((r) => (r.id === updated.id ? updated : r)))
+      // رد التعديل بلا userCount — نُبقي العدد المحمّل
+      setRoles((prev) => prev.map((r) => (r.id === updated.id ? { ...r, ...updated } : r)))
       setError(null)
     } catch (err: any) {
       setError(err.message)
@@ -219,7 +215,7 @@ export default function RolesPage() {
             </div>
             <div>
               <p className="text-sm text-gray-500">المستخدمين</p>
-              <p className="text-2xl font-bold text-gray-800">{users.length}</p>
+              <p className="text-2xl font-bold text-gray-800">{totalUsers}</p>
             </div>
           </div>
         </div>
@@ -380,6 +376,7 @@ export default function RolesPage() {
                       className="input w-full font-mono"
                       dir="ltr"
                       value={form.code}
+                      maxLength={30}
                       onChange={(e) => setForm({ ...form, code: e.target.value })}
                       disabled={!!editingRole}
                       title={editingRole ? 'لا يمكن تعديل الكود بعد الإنشاء' : undefined}

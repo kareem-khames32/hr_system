@@ -92,7 +92,8 @@ export default function PayslipsListPage() {
 
   const totalNet = filteredItems.reduce((sum, i) => sum + Number(i.netPay), 0)
   const deductionsOf = (i: ApiPayrollItem) =>
-    Number(i.latenessDeduction) + Number(i.unpaidLeaveDeduction) + Number(i.loanInstallments)
+    Number(i.latenessDeduction) + Number(i.shortfallDeduction ?? 0) + Number(i.absenceDeduction ?? 0) +
+    Number(i.unpaidLeaveDeduction) + Number(i.loanInstallments) + Number(i.otherDeductions ?? 0)
 
   return (
     <MainLayout>

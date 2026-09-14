@@ -23,6 +23,18 @@ import {
   fetchEmployees,
   ApiDepartment,
 } from '@/lib/api'
+import { csvDateStamp, downloadCsv } from '@/lib/csv'
+
+// الهيكل لمن على رأس العمل فقط — المنتهية خدمته والمؤرشف خارجه (أعضاءً ومدراء)
+const ORG_STATUSES = ['active', 'probation', 'notice_period', 'suspended']
+
+// نوع العقدة من بادئة معرّفها — لعمود «النوع» في التصدير
+const NODE_KIND_LABELS: Record<string, string> = {
+  b: 'فرع',
+  d: 'قسم',
+  t: 'فريق',
+  e: 'موظف',
+}
 
 interface OrgNode {
   id: string
@@ -173,8 +185,9 @@ export default function OrgChartPage() {
           fetchTeams(),
           fetchEmployees(),
         ])
-        const active = employees.filter((e) => e.status !== 'archived')
-        const empById = new Map(employees.map((e) => [e.id, e]))
+        const active = employees.filter((e) => ORG_STATUSES.includes(e.status))
+        // المدراء والقادة من نفس المجموعة — من ترك الشركة لا يظهر مديراً ولا قائداً
+        const empById = new Map(active.map((e) => [e.id, e]))
         const avatarOf = (name: string) => (name ?? '').trim().charAt(0) || 'م'
 
         const empNode = (e: (typeof active)[number], context: string, isLeader: boolean): OrgNode => ({
@@ -283,7 +296,8 @@ export default function OrgChartPage() {
         setStats({
           employees: active.length,
           departments: depts.length,
-          managers: managerIds.size,
+          // المدراء على رأس العمل فقط
+          managers: Array.from(managerIds).filter((id) => empById.has(id)).length,
           branches: branches.length,
         })
       } catch (err) {
@@ -334,6 +348,47 @@ export default function OrgChartPage() {
         ) as OrgNode[])
   ).filter(matchesSearch)
 
+  // تصدير الهيكل المعروض (بعد فلتر القسم والبحث) إلى CSV — صف لكل عنصر بتسلسله
+  const handleExport = () => {
+    const clean = (v: string) => (v === '—' ? '' : v)
+    const rows: string[][] = []
+    const walk = (
+      node: OrgNode,
+      ctx: { branch: string; dept: string; team: string }
+    ) => {
+      const kind = node.id.charAt(0)
+      const next = { ...ctx }
+      if (kind === 'b') next.branch = node.name
+      // عقدة القسم تحمل اسم فرعها والفريق اسم قسمه (لو بدأ العرض من قسم)
+      if (kind === 'd') {
+        next.dept = node.name
+        next.branch = next.branch || node.department
+      }
+      if (kind === 't') {
+        next.team = node.name
+        next.dept = next.dept || node.department
+      }
+      rows.push([
+        NODE_KIND_LABELS[kind] ?? '',
+        node.name,
+        node.title,
+        next.branch,
+        next.dept,
+        next.team,
+        clean(node.email),
+        clean(node.phone),
+      ])
+      node.children?.forEach((c) => walk(c, next))
+    }
+    displayedTrees.forEach((t) => walk(t, { branch: '', dept: '', team: '' }))
+    if (rows.length === 0) return
+    downloadCsv(
+      `org-chart-${csvDateStamp()}.csv`,
+      ['النوع', 'الاسم', 'الوصف', 'الفرع', 'القسم', 'الفريق', 'البريد الإلكتروني', 'الجوال'],
+      rows
+    )
+  }
+
   return (
     <MainLayout>
       <div className="space-y-6">
@@ -344,9 +399,14 @@ export default function OrgChartPage() {
             <p className="text-gray-500 mt-1">عرض تفاعلي للهيكل التنظيمي للشركة</p>
           </div>
           <div className="flex items-center gap-3">
-            <button className="btn-secondary flex items-center gap-2">
+            {/* تصدير الهيكل المعروض CSV (بدل زر PDF بلا أثر) */}
+            <button
+              onClick={handleExport}
+              disabled={loading || displayedTrees.length === 0}
+              className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+            >
               <Download size={18} />
-              تصدير PDF
+              تصدير CSV
             </button>
           </div>
         </div>

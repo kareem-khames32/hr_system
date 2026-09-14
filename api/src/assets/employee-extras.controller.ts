@@ -16,6 +16,9 @@ import { Leave, LeaveBalance } from '../requests/entities/leave.entities'
 import { LeaveBalancesService } from '../requests/leave-balances.service'
 import { Loan, LoanInstallment } from '../requests/entities/financial.entities'
 import { EmployeeDocument } from './assets.entities'
+import { canReadEmployeeFinance, projectEmployee, projectEmployeeHistory } from '../employees/employee-projection'
+import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
+import { PayrollDecimal } from '../payroll/payroll-decimal'
 
 // لوج النقل + التاريخ الوظيفي + الملف المجمّع للموظف + السلف
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -59,8 +62,9 @@ export class EmployeeExtrasController {
     })
     return rows.map((t) => ({
       ...t,
+      fromTeamId: t.fromTeam, toTeamId: t.toTeam,
       employeeName: empById.get(t.employeeId)?.fullName ?? `#${t.employeeId}`,
-      fromTeamName: teamById.get(t.fromTeam) ?? `#${t.fromTeam}`,
+      fromTeamName: t.fromTeam ? (teamById.get(t.fromTeam) ?? `#${t.fromTeam}`) : 'بدون فريق',
       toTeamName: teamById.get(t.toTeam) ?? `#${t.toTeam}`,
     }))
   }
@@ -74,25 +78,29 @@ export class EmployeeExtrasController {
       where: scope !== null ? { branchId: scope } : {},
     })
     const empById = new Map(emps.map((e) => [e.id, e]))
-    const rows = await this.loans.find({
-      where: scope !== null ? { employeeId: In(emps.map((e) => e.id)) } : {},
-      order: { id: 'DESC' },
-    })
+    if (scope !== null && !emps.length) return []
+    // المبلغ الأصلي أيضًا يُقرأ كنص؛ أرقام SQL الكبيرة لا تفقد قروشًا في شاشة العرض.
+    const query = this.loans.createQueryBuilder('loan').select('loan.id', 'id')
+      .addSelect('loan.requestId', 'requestId').addSelect('loan.employeeId', 'employeeId')
+      .addSelect('CONVERT(varchar(40), loan.amount)', 'amount').addSelect('loan.status', 'status')
+      .addSelect('loan.disbursedAt', 'disbursedAt').orderBy('loan.id', 'DESC')
+    if (scope !== null) query.where('loan.employeeId IN (:...ids)', { ids: emps.map(employee => employee.id) })
+    const rows = await query.getRawMany<{ id: number; requestId: number | null; employeeId: number; amount: string; status: string; disbursedAt: Date | null }>()
     const result = []
     for (const loan of rows) {
-      const inst = await this.installments.find({
-        where: { loanId: loan.id },
-        order: { dueDate: 'ASC' },
-      })
-      const paid = inst.filter((i) => i.paid)
+      const inst = (await readLoanInstallmentPositions(this.loans.manager, loan.employeeId, loan.id))
+        .sort((left, right) => left.dueDate.localeCompare(right.dueDate) || left.id - right.id)
+      // المسدد الفعلي على جميع أجزاء السلسلة؛ الرصيد المفتوح على DUE فقط.
+      const paidAmount = inst.reduce((sum, item) => sum.add(PayrollDecimal.from(item.paidAmount)), PayrollDecimal.from('0'))
+      const remainingAmount = inst.filter(item => item.financialStatus === 'DUE')
+        .reduce((sum, item) => sum.add(PayrollDecimal.from(item.remainingAmount)), PayrollDecimal.from('0'))
       result.push({
         ...loan,
         employeeName: empById.get(loan.employeeId)?.fullName ?? `#${loan.employeeId}`,
         installments: inst,
-        paidCount: paid.length,
-        paidAmount: paid.reduce((s, i) => s + Number(i.amount), 0),
-        remainingAmount:
-          Number(loan.amount) - paid.reduce((s, i) => s + Number(i.amount), 0),
+        paidCount: inst.filter(item => ['PAID', 'SETTLED'].includes(item.financialStatus)).length,
+        paidAmount: paidAmount.format(2, 'HALF_UP'),
+        remainingAmount: remainingAmount.format(2, 'HALF_UP'),
       })
     }
     return result
@@ -115,16 +123,21 @@ export class EmployeeExtrasController {
         this.leaveBalances.allBalances(id),
         this.history.find({ where: { employeeId: id }, order: { changedAt: 'DESC' } }),
         this.docs.find({ where: { employeeId: id }, order: { id: 'DESC' } }),
-        this.loans.find({ where: { employeeId: id }, order: { id: 'DESC' } }),
+        canReadEmployeeFinance(user, id) ? this.loans.find({ where: { employeeId: id }, order: { id: 'DESC' } }) : Promise.resolve([]),
       ])
     // نُبقي شكل الأرصدة كما يتوقعه الفرونت (خام) لكن بقيَم متراكمة صحيحة
     const empBalances = viewBalances.map((b: any) => ({
       balanceType: b.balanceType,
       period: b.period,
       entitled: b.entitled, // المتراكم حتى اليوم (لا السنة الكاملة)
+      // بتسميتين: استحقاق السنة كاملة والمتراكم لتاريخه + المتبقي كما يحسبه السيرفر
+      annualEntitlement: b.annualEntitlement,
+      accruedToDate: b.accruedToDate,
+      remaining: b.remaining,
       taken: b.totalTaken ?? b.taken ?? 0,
       openingDays: b.opening?.days ?? 0,
       openingTaken: b.opening?.taken ?? 0,
+      adjustmentDays: b.adjustmentDays,
       openingExpiry: b.opening?.expiry ?? null,
     }))
     const custodyRows = await this.custody.find({
@@ -137,14 +150,15 @@ export class EmployeeExtrasController {
       : []
     const assetById = new Map(assetRows.map((a) => [a.id, a]))
     return {
-      employee,
+      employee: projectEmployee(employee, user),
       leaves: empLeaves,
       balances: empBalances,
-      history: empHistory,
+      history: projectEmployeeHistory(empHistory, user, id),
       documents: empDocs,
       loans: empLoans,
       custody: custodyRows.map((c) => ({
         ...c,
+        assignedByEmployeeId: c.assignedBy ?? null,
         assetName: assetById.get(c.assetId)?.name ?? `#${c.assetId}`,
         assetCategory: assetById.get(c.assetId)?.category ?? '',
       })),
@@ -161,9 +175,10 @@ export class EmployeeExtrasController {
       throw new ForbiddenException('لا تملك صلاحية عرض ملفات الموظفين')
     }
     await this.employeesService.findOne(id, branchScopeOf(user))
-    return this.history.find({
+    const rows = await this.history.find({
       where: { employeeId: id },
       order: { changedAt: 'DESC' },
     })
+    return projectEmployeeHistory(rows, user, id)
   }
 }

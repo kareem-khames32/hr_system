@@ -3,6 +3,7 @@
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
+import { csvDateStamp, downloadCsv } from '@/lib/csv'
 import {
   FileSignature,
   Search,
@@ -18,9 +19,11 @@ import {
   X,
 } from 'lucide-react'
 import {
+  can,
   fetchEmployees,
   fetchDepartments,
-  updateEmployee,
+  renewEmployeeContract,
+  uploadFile,
   ApiEmployee,
 } from '@/lib/api'
 
@@ -29,6 +32,9 @@ type ContractFields = {
   contractType?: string | null
   contractStart?: string | null
   contractEnd?: string | null
+  contractNumber?: string | null
+  contractDurationMonths?: number | null
+  noticePeriodDays?: number | null
 }
 
 const CONTRACT_TYPE_AR: Record<string, string> = {
@@ -45,11 +51,17 @@ interface ContractRow {
   employeeAvatar: string
   department: string
   jobTitle: string
+  contractNumber: string
   contractType: string
   startDate: string
   endDate: string
+  // المدة المحفوظة بالأشهر (تُعرض أولاً قبل الاشتقاق من التاريخين)
+  durationMonths: number | null
+  // فترة الإشعار المحفوظة بالأيام
+  noticePeriodDays: number | null
   daysLeft: number | null
   status: 'active' | 'expiring' | 'expired' | 'unlimited'
+  canRenew: boolean
 }
 
 const statusConfig = {
@@ -67,16 +79,26 @@ const daysUntil = (date?: string) => {
   return Math.round((end.getTime() - today.getTime()) / 86400000)
 }
 
-// مدة العقد بين البداية والنهاية بصيغة مقروءة
+// أشهر العقد المكتملة مع احتساب آخر يوم ضمن مدة العقد.
+const monthsBetween = (start?: string, end?: string) => {
+  if (!start || !end) return null
+  const s = new Date(`${start}T12:00:00`)
+  const e = new Date(`${end}T12:00:00`)
+  e.setDate(e.getDate() + 1)
+  let months = (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth())
+  if (e.getDate() < s.getDate()) months -= 1
+  return months
+}
+
+// مدة العقد بين البداية والنهاية بصيغة مقروءة — احتياطي عند غياب المدة المحفوظة
 const durationText = (start?: string, end?: string) => {
   if (!end) return 'غير محددة'
   if (!start) return '—'
   const s = new Date(start)
   const e = new Date(end)
-  let months = (e.getFullYear() - s.getFullYear()) * 12 + (e.getMonth() - s.getMonth())
-  if (e.getDate() < s.getDate()) months -= 1
+  const months = monthsBetween(start, end) as number
   if (months <= 0) {
-    const days = Math.max(0, Math.round((e.getTime() - s.getTime()) / 86400000))
+    const days = Math.max(0, Math.round((e.getTime() - s.getTime()) / 86400000) + 1)
     return `${days} يوم`
   }
   const years = Math.floor(months / 12)
@@ -91,6 +113,10 @@ export default function ContractsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [saving, setSaving] = useState(false)
+  const [notice, setNotice] = useState('')
+  const [renewError, setRenewError] = useState('')
+  const [renewFile, setRenewFile] = useState<File | null>(null)
+  const [renewFileRef, setRenewFileRef] = useState<string | undefined>()
   const [searchTerm, setSearchTerm] = useState('')
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterType, setFilterType] = useState('all')
@@ -99,6 +125,7 @@ export default function ContractsPage() {
   const [renewForm, setRenewForm] = useState({
     startDate: '',
     endDate: '',
+    reason: '',
   })
 
   const loadData = async () => {
@@ -132,13 +159,17 @@ export default function ContractsPage() {
                   ? deptById.get(e.departmentId) ?? '—'
                   : '—',
               jobTitle: e.jobTitle ?? '—',
+              contractNumber: e.contractNumber ? String(e.contractNumber) : '',
               contractType: e.contractType
                 ? CONTRACT_TYPE_AR[e.contractType] ?? e.contractType
                 : '—',
               startDate: start,
               endDate: end,
+              durationMonths: e.contractDurationMonths ?? null,
+              noticePeriodDays: e.noticePeriodDays ?? null,
               daysLeft,
               status,
+              canRenew: e.contractType !== 'permanent' && !['archived', 'terminated', 'resigned', 'retired'].includes(e.status ?? ''),
             }
           })
       )
@@ -160,6 +191,7 @@ export default function ContractsPage() {
     const matchesSearch =
       contract.employeeName.includes(searchTerm) ||
       contract.employeeCode.includes(searchTerm) ||
+      contract.contractNumber.includes(searchTerm) ||
       contract.contractType.includes(searchTerm)
     const matchesStatus = filterStatus === 'all' || contract.status === filterStatus
     const matchesType = filterType === 'all' || contract.contractType === filterType
@@ -173,34 +205,93 @@ export default function ContractsPage() {
     expired: contracts.filter((c) => c.status === 'expired').length,
   }
 
+  // تصدير الصفوف المعروضة (بعد البحث والفلاتر) إلى CSV
+  const handleExport = () => {
+    if (filteredContracts.length === 0) return
+    downloadCsv(
+      `contracts-${csvDateStamp()}.csv`,
+      [
+        'الرقم الوظيفي',
+        'الموظف',
+        'القسم',
+        'المسمى الوظيفي',
+        'رقم العقد',
+        'نوع العقد',
+        'تاريخ البداية',
+        'تاريخ الانتهاء',
+        'المدة',
+        'فترة الإشعار (يوم)',
+        'المتبقي (يوم)',
+        'الحالة',
+      ],
+      filteredContracts.map((c) => [
+        c.employeeCode,
+        c.employeeName,
+        c.department,
+        c.jobTitle,
+        c.contractNumber,
+        c.contractType,
+        c.startDate,
+        c.endDate || 'غير محدد المدة',
+        c.durationMonths != null
+          ? `${c.durationMonths} شهر`
+          : durationText(c.startDate, c.endDate),
+        c.noticePeriodDays ?? '',
+        c.daysLeft ?? '',
+        statusConfig[c.status].name,
+      ])
+    )
+  }
+
   const openRenewal = (contract: ContractRow) => {
     setSelectedContract(contract)
+    const next = contract.endDate ? new Date(`${contract.endDate}T12:00:00Z`) : null
+    if (next) next.setUTCDate(next.getUTCDate() + 1)
     setRenewForm({
-      startDate: contract.startDate,
-      endDate: contract.endDate,
+      startDate: next ? next.toISOString().slice(0, 10) : '',
+      endDate: '',
+      reason: '',
     })
+    setRenewFile(null)
+    setRenewFileRef(undefined)
+    setRenewError('')
     setShowRenewalModal(true)
   }
 
+  // مدة العقد بعد التجديد — تُحفظ مع التجديد كي لا تبقى مدة قديمة معروضة
+  const renewDurationMonths = selectedContract
+    ? monthsBetween(renewForm.startDate || selectedContract.startDate, renewForm.endDate)
+    : null
+
   const handleRenew = async () => {
-    if (!selectedContract) return
-    if (!renewForm.endDate) {
-      setError('حدد تاريخ الانتهاء الجديد للعقد')
+    if (!selectedContract || saving) return
+    if (!renewForm.startDate || !renewForm.endDate || renewForm.reason.trim().length < 3) {
+      setRenewError('حدد بداية ونهاية التجديد وسبباً من 3 أحرف على الأقل')
       return
     }
+    if (renewForm.endDate < renewForm.startDate || (selectedContract.endDate && renewForm.startDate <= selectedContract.endDate)) {
+      setRenewError('يبدأ التجديد بعد نهاية العقد الحالي، وتكون نهايته بعد بدايته')
+      return
+    }
+    if (renewFile && renewFile.size > 10 * 1024 * 1024) { setRenewError('حجم الملف لا يتجاوز 10 ميجابايت'); return }
     setSaving(true)
-    setError('')
+    setRenewError('')
     try {
-      const changes: Partial<ApiEmployee> & ContractFields = {
-        contractEnd: renewForm.endDate,
+      let fileRef = renewFileRef
+      if (renewFile && !fileRef) {
+        fileRef = (await uploadFile(renewFile, { entityType: 'contract' })).ref
+        setRenewFileRef(fileRef)
       }
-      if (renewForm.startDate) changes.contractStart = renewForm.startDate
-      await updateEmployee(selectedContract.employeeId, changes)
+      await renewEmployeeContract(selectedContract.employeeId, {
+        contractStart: renewForm.startDate, contractEnd: renewForm.endDate,
+        reason: renewForm.reason.trim(), ...(fileRef ? { contractFileRef: fileRef } : {}),
+      })
       setShowRenewalModal(false)
       setSelectedContract(null)
       await loadData()
+      setNotice('جُدد العقد وحُفظت التواريخ السابقة والجديدة في السجل الوظيفي' + (fileRef ? ' وأُضيف المستند إلى ملف الموظف' : ''))
     } catch (err) {
-      setError(err instanceof Error ? err.message : 'تعذر تجديد العقد')
+      setRenewError(err instanceof Error ? err.message : 'تعذر تجديد العقد')
     } finally {
       setSaving(false)
     }
@@ -218,17 +309,23 @@ export default function ContractsPage() {
             </p>
           </div>
           <div className="flex gap-2">
-            <button className="btn-secondary flex items-center gap-2">
-              <Download size={18} />
-              تصدير
-            </button>
-            <Link
-              href="/employees/add"
-              className="btn-primary flex items-center gap-2"
+            <button
+              onClick={handleExport}
+              disabled={loading || filteredContracts.length === 0}
+              className="btn-secondary flex items-center gap-2 disabled:opacity-50"
             >
-              <Plus size={18} />
-              عقد جديد
-            </Link>
+              <Download size={18} />
+              تصدير CSV
+            </button>
+            {can('employees.create') && (
+              <Link
+                href="/employees/add"
+                className="btn-primary flex items-center gap-2"
+              >
+                <Plus size={18} />
+                عقد جديد
+              </Link>
+            )}
           </div>
         </div>
 
@@ -236,6 +333,7 @@ export default function ContractsPage() {
         {error && (
           <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
         )}
+        {notice && <div role="status" className="bg-green-50 text-green-800 rounded-xl p-4">{notice}</div>}
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
@@ -315,7 +413,7 @@ export default function ContractsPage() {
               <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
               <input
                 type="text"
-                placeholder="بحث بالاسم أو الرقم الوظيفي أو نوع العقد..."
+                placeholder="بحث بالاسم أو الرقم الوظيفي أو رقم العقد أو نوع العقد..."
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}
                 className="input pr-10 w-full"
@@ -357,16 +455,18 @@ export default function ContractsPage() {
           </div>
         ) : (
         /* Contracts Table */
-        <div className="card overflow-hidden">
+        <div className="card overflow-x-auto">
           <table className="w-full">
             <thead className="bg-gray-50 border-b">
               <tr>
                 <th className="text-right py-3 px-4 font-medium text-gray-700">الموظف</th>
+                <th className="text-right py-3 px-4 font-medium text-gray-700 whitespace-nowrap">رقم العقد</th>
                 <th className="text-right py-3 px-4 font-medium text-gray-700">نوع العقد</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-700">تاريخ البداية</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-700">تاريخ الانتهاء</th>
+                <th className="text-right py-3 px-4 font-medium text-gray-700 whitespace-nowrap">تاريخ البداية</th>
+                <th className="text-right py-3 px-4 font-medium text-gray-700 whitespace-nowrap">تاريخ الانتهاء</th>
                 <th className="text-right py-3 px-4 font-medium text-gray-700">المدة</th>
-                <th className="text-right py-3 px-4 font-medium text-gray-700">المتبقي (يوم)</th>
+                <th className="text-right py-3 px-4 font-medium text-gray-700 whitespace-nowrap">فترة الإشعار</th>
+                <th className="text-right py-3 px-4 font-medium text-gray-700 whitespace-nowrap">المتبقي (يوم)</th>
                 <th className="text-center py-3 px-4 font-medium text-gray-700">الحالة</th>
                 <th className="text-center py-3 px-4 font-medium text-gray-700">الإجراءات</th>
               </tr>
@@ -392,18 +492,35 @@ export default function ContractsPage() {
                       </Link>
                     </td>
                     <td className="py-3 px-4">
+                      {contract.contractNumber ? (
+                        <span className="font-mono text-sm text-gray-700">{contract.contractNumber}</span>
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
+                    </td>
+                    <td className="py-3 px-4">
                       <span className="badge bg-blue-100 text-blue-700">
                         {contract.contractType}
                       </span>
                     </td>
-                    <td className="py-3 px-4 text-gray-600">
-                      {contract.startDate || '-'}
+                    <td className="py-3 px-4 text-gray-600 whitespace-nowrap">
+                      {contract.startDate || <span className="text-gray-400">—</span>}
                     </td>
-                    <td className="py-3 px-4 text-gray-600">
+                    <td className="py-3 px-4 text-gray-600 whitespace-nowrap">
                       {contract.endDate || <span className="text-gray-400">غير محدد المدة</span>}
                     </td>
-                    <td className="py-3 px-4 text-gray-600">
-                      {durationText(contract.startDate, contract.endDate)}
+                    <td className="py-3 px-4 text-gray-600 whitespace-nowrap">
+                      {/* المدة المحفوظة أولاً، والاشتقاق من التاريخين احتياطي */}
+                      {contract.durationMonths != null
+                        ? `${contract.durationMonths} شهر`
+                        : durationText(contract.startDate, contract.endDate)}
+                    </td>
+                    <td className="py-3 px-4 text-gray-600 whitespace-nowrap">
+                      {contract.noticePeriodDays != null ? (
+                        `${contract.noticePeriodDays} يوم`
+                      ) : (
+                        <span className="text-gray-400">—</span>
+                      )}
                     </td>
                     <td className="py-3 px-4">
                       {contract.daysLeft == null ? (
@@ -431,7 +548,9 @@ export default function ContractsPage() {
                         >
                           <Eye size={18} />
                         </Link>
-                        {(contract.status === 'expiring' || contract.status === 'expired') && (
+                        {/* التجديد يحفظ على ملف الموظف (employees.edit) */}
+                        {(contract.status === 'expiring' || contract.status === 'expired') &&
+                          can('employees.edit') && contract.canRenew && (
                           <button
                             onClick={() => openRenewal(contract)}
                             className="p-2 text-green-600 hover:bg-green-50 rounded-lg"
@@ -462,11 +581,12 @@ export default function ContractsPage() {
         {/* Renewal Modal */}
         {showRenewalModal && selectedContract && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl w-full max-w-lg">
+            <div className="bg-white rounded-xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b">
                 <div className="flex items-center justify-between">
                   <h2 className="text-xl font-bold text-gray-900">تجديد العقد</h2>
                   <button
+                    disabled={saving}
                     onClick={() => setShowRenewalModal(false)}
                     className="p-2 hover:bg-gray-100 rounded-lg"
                   >
@@ -476,6 +596,7 @@ export default function ContractsPage() {
               </div>
 
               <div className="p-6 space-y-4">
+                {renewError && <p role="alert" className="rounded-lg bg-red-50 text-red-700 p-3">{renewError}</p>}
                 {/* Employee Info */}
                 <div className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl">
                   <div className="w-12 h-12 bg-primary-100 rounded-xl flex items-center justify-center text-primary-600 font-bold text-lg">
@@ -489,18 +610,46 @@ export default function ContractsPage() {
                   </div>
                 </div>
 
-                {/* Current Contract Info */}
+                {/* Current Contract Info — القيم المحفوظة كما هي */}
                 <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm text-gray-500 mb-1">رقم العقد</label>
+                    <p className="font-medium text-gray-900 font-mono">
+                      {selectedContract.contractNumber || '—'}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-500 mb-1">نوع العقد</label>
+                    <p className="font-medium text-gray-900">
+                      {selectedContract.contractType}
+                    </p>
+                  </div>
                   <div>
                     <label className="block text-sm text-gray-500 mb-1">تاريخ البداية الحالي</label>
                     <p className="font-medium text-gray-900">
-                      {selectedContract.startDate || '-'}
+                      {selectedContract.startDate || '—'}
                     </p>
                   </div>
                   <div>
                     <label className="block text-sm text-gray-500 mb-1">تاريخ الانتهاء الحالي</label>
                     <p className="font-medium text-gray-900">
-                      {selectedContract.endDate || '-'}
+                      {selectedContract.endDate || '—'}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-500 mb-1">المدة الحالية</label>
+                    <p className="font-medium text-gray-900">
+                      {selectedContract.durationMonths != null
+                        ? `${selectedContract.durationMonths} شهر`
+                        : durationText(selectedContract.startDate, selectedContract.endDate)}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm text-gray-500 mb-1">فترة الإشعار</label>
+                    <p className="font-medium text-gray-900">
+                      {selectedContract.noticePeriodDays != null
+                        ? `${selectedContract.noticePeriodDays} يوم`
+                        : '—'}
                     </p>
                   </div>
                 </div>
@@ -511,10 +660,12 @@ export default function ContractsPage() {
 
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <label htmlFor="renew-start" className="block text-sm font-medium text-gray-700 mb-1">
                         تاريخ البداية الجديد
                       </label>
                       <input
+                        id="renew-start"
+                        disabled={saving}
                         type="date"
                         className="input w-full"
                         value={renewForm.startDate}
@@ -524,10 +675,12 @@ export default function ContractsPage() {
                       />
                     </div>
                     <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-1">
+                      <label htmlFor="renew-end" className="block text-sm font-medium text-gray-700 mb-1">
                         تاريخ الانتهاء الجديد
                       </label>
                       <input
+                        id="renew-end"
+                        disabled={saving}
                         type="date"
                         className="input w-full"
                         value={renewForm.endDate}
@@ -537,11 +690,29 @@ export default function ContractsPage() {
                       />
                     </div>
                   </div>
+
+                  <p className="text-xs text-gray-500">
+                    {renewDurationMonths != null && renewDurationMonths >= 0
+                      ? `المدة بين التاريخين: ${renewDurationMonths} شهر؛ تُحفظ التواريخ كما حددتها`
+                      : 'حدّد تاريخي البداية والانتهاء للعقد الجديد'}
+                  </p>
+                  <div>
+                    <label htmlFor="renew-reason" className="block text-sm font-medium text-gray-700 mb-1">سبب التجديد</label>
+                    <textarea id="renew-reason" className="input w-full" maxLength={250} rows={2} disabled={saving}
+                      value={renewForm.reason} onChange={(e) => setRenewForm({ ...renewForm, reason: e.target.value })} />
+                  </div>
+                  <div>
+                    <label htmlFor="renew-document" className="block text-sm font-medium text-gray-700 mb-1">مستند العقد الجديد (اختياري)</label>
+                    <input id="renew-document" type="file" accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" disabled={saving}
+                      onChange={(e) => { setRenewFile(e.target.files?.[0] ?? null); setRenewFileRef(undefined) }} className="w-full text-sm" />
+                    <p className="text-xs text-gray-500 mt-1">حتى 10 ميجابايت. يُحفظ ضمن مستندات الموظف عند نجاح التجديد.</p>
+                  </div>
                 </div>
               </div>
 
               <div className="p-6 border-t bg-gray-50 flex justify-end gap-3">
                 <button
+                  disabled={saving}
                   onClick={() => setShowRenewalModal(false)}
                   className="btn-secondary"
                 >
@@ -553,7 +724,7 @@ export default function ContractsPage() {
                   disabled={saving}
                 >
                   <RefreshCw size={18} />
-                  تجديد العقد
+                  {saving ? 'جارٍ حفظ التجديد…' : 'تجديد العقد'}
                 </button>
               </div>
             </div>

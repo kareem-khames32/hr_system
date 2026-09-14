@@ -15,6 +15,7 @@ import {
   UserCircle,
   CheckCircle,
   XCircle,
+  Info,
 } from 'lucide-react'
 import {
   ApiDepartment,
@@ -84,6 +85,16 @@ export default function TeamsPage() {
   const membersCountOf = (teamId: number) =>
     employees.filter((e) => e.teamId === teamId).length
 
+  // أعضاء لهم مدير مباشر مسجّل غير القائد — المحلِّل يقدّمه على قائد الفريق
+  // (المسجّل ← قائد الفريق ← مدير القسم ← مدير الفرع)، فاعتماداتهم لا تذهب للقائد
+  const membersWithOwnManager = (team: ApiTeam) =>
+    employees.filter(
+      (e) =>
+        e.teamId === team.id &&
+        !!e.managerEmployeeId &&
+        e.managerEmployeeId !== team.leaderEmployeeId
+    ).length
+
   const filteredTeams = teams.filter((team) => {
     const matchesSearch =
       team.name.includes(searchQuery) ||
@@ -135,7 +146,9 @@ export default function TeamsPage() {
     }
     try {
       if (editingTeam) {
-        await updateTeam(editingTeam.id, { ...payload, isActive: formData.isActive })
+        await updateTeam(editingTeam.id, { ...payload, isActive: formData.isActive,
+          code: formData.code || null, leaderEmployeeId: formData.leaderId ? Number(formData.leaderId) : null,
+        })
       } else {
         const created = await createTeam(payload)
         // الإنشاء لا يقبل isActive — نعطّله بعد الإنشاء لو طُلب ذلك
@@ -181,7 +194,8 @@ export default function TeamsPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-800">إدارة الفرق</h1>
             <p className="text-gray-500 mt-1">
-              الفرق داخل الأقسام - مدير الفريق هو المدير المباشر للموظفين
+              الفرق داخل الأقسام — قائد الفريق يعتمد كمدير مباشر لأعضائه الذين لم يُسجَّل لهم
+              مدير مباشر
             </p>
           </div>
           <button
@@ -394,7 +408,7 @@ export default function TeamsPage() {
 
                       {/* Team Leader */}
                       <div className="mt-4 p-3 bg-gray-50 rounded-xl">
-                        <p className="text-xs text-gray-500 mb-1">مدير الفريق (المدير المباشر)</p>
+                        <p className="text-xs text-gray-500 mb-1">قائد الفريق</p>
                         <div className="flex items-center gap-2">
                           <div className="w-8 h-8 bg-primary-100 rounded-lg flex items-center justify-center">
                             <UserCircle size={18} className="text-primary-600" />
@@ -403,6 +417,13 @@ export default function TeamsPage() {
                             {leaderNameOf(team)}
                           </span>
                         </div>
+                        {membersWithOwnManager(team) > 0 && (
+                          <p className="text-xs text-amber-700 mt-2 flex items-start gap-1">
+                            <Info size={12} className="shrink-0 mt-0.5" />
+                            {membersWithOwnManager(team)} من الأعضاء لهم مدير مباشر مسجّل —
+                            اعتماداتهم تذهب إليه لا لقائد الفريق
+                          </p>
+                        )}
                       </div>
 
                       {/* Members Count */}
@@ -520,7 +541,7 @@ export default function TeamsPage() {
 
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
-                    مدير الفريق (المدير المباشر) *
+                    قائد الفريق *
                   </label>
                   <select
                     value={formData.leaderId}
@@ -529,7 +550,7 @@ export default function TeamsPage() {
                     }
                     className="input w-full"
                   >
-                    <option value="">اختر مدير الفريق</option>
+                    <option value="">اختر قائد الفريق</option>
                     {employees
                       .filter(
                         (emp) =>
@@ -544,7 +565,9 @@ export default function TeamsPage() {
                       ))}
                   </select>
                   <p className="text-xs text-gray-500 mt-1">
-                    مدير الفريق سيكون المدير المباشر لجميع أعضاء الفريق — تظهر قائمة موظفي القسم المختار
+                    المدير المباشر في الاعتمادات بالترتيب: المدير المباشر المسجّل على الموظف ← قائد
+                    الفريق ← مدير القسم ← مدير الفرع؛ فالقائد يعتمد لمن ليس له مدير مسجّل فقط — تظهر
+                    قائمة موظفي القسم المختار
                   </p>
                 </div>
 

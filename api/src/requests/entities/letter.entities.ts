@@ -1,4 +1,7 @@
 import { Column, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
+import type { LetterStatus } from '../../common/domain-status'
+import type { IssuedLetterSnapshot } from '../../letters/letter-template.entities'
+export type { LetterStatus } from '../../common/domain-status'
 
 // ============ وجهة الخطابات — PDF يتولّد أوتوماتيك ============
 
@@ -20,10 +23,20 @@ export class LetterRequest {
   @Column({ length: 500, nullable: true })
   purpose: string
 
-  @Column({ length: 30 })
-  status: string // GENERATED | DELIVERED
+  @Column({ type: String, length: 30 })
+  status: LetterStatus
 
-  // مرجع الـ PDF المولّد — توليد فعلي في مرحلة لاحقة
+  // مرجع ملف PDF مولّد ومحفوظ فعلياً في التخزين الخاص
   @Column({ length: 500, nullable: true })
   generatedPdfRef: string
+
+  @Column({ type: 'int', nullable: true })
+  templateId: number | null
+
+  @Column({ type: 'int', nullable: true })
+  templateRevisionId: number | null
+
+  @Column({ type: 'simple-json', nullable: true })
+  contentSnapshot: IssuedLetterSnapshot | null
 }
+

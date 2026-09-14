@@ -1,4 +1,8 @@
 'use client'
+import LetterDownloadButton from '@/components/LetterDownloadButton'
+import RequestPayload from '@/components/RequestPayload'
+import { downloadCsv, csvDateStamp } from '@/lib/csv'
+import { canCancelSalaryIncreaseExecution, cancelSalaryIncreaseExecution } from '@/lib/employee-salary-change-api'
 
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
@@ -15,7 +19,6 @@ import {
   X,
 } from 'lucide-react'
 import {
-  requestsCatalog,
   getTypeByCode,
   statusLabels,
   statusStyles,
@@ -30,6 +33,7 @@ import {
   fetchEmployees,
   fetchDepartments,
   fetchRequest,
+  can,
   type ApiRequest,
   type ApiRequestType,
   type ApiBranch,
@@ -58,20 +62,28 @@ const parseJson = <T,>(raw: string | null | undefined, fallback: T): T => {
 
 const roleLabels: Record<string, string> = {
   direct_manager_of_requester: 'المدير المباشر',
+  department_manager_of_requester: 'مدير القسم',
+  branch_manager_of_requester: 'مدير الفرع',
   receiving_team_manager: 'المدير المستقبِل',
   hr: 'الموارد البشرية',
   finance: 'المالية',
   executive: 'الإدارة التنفيذية',
   custody_officer: 'أمين العهدة',
+  payroll_officer: 'موظف الرواتب',
+  specific_employee: 'موظف محدد',
   it: 'تقنية المعلومات',
 }
 
 // أفعال سجل الاعتمادات كما يخزنها الباك
 const approvalActionLabels: Record<string, string> = {
+  APPROVE: 'اعتمد',
+  REJECT: 'رفض',
+  RETURN: 'أعاد لاستكمال معلومات',
   APPROVED: 'اعتمد',
   REJECTED: 'رفض',
   RETURNED_FOR_INFO: 'أعاد لاستكمال معلومات',
   ESCALATED: 'صُعِّد',
+  CANCELLED: 'ألغاه النظام آلياً',
 }
 
 // ===== سجل طلبات الشركة — صف الشاشة المشتق من ApiRequest =====
@@ -79,6 +91,7 @@ interface CompanyRequestRow {
   id: number
   displayId: string
   typeCode: string
+  definitionCode?: string | null
   requesterName: string // يُخفى في السرّي
   department: string
   branchId: number | null
@@ -89,13 +102,18 @@ interface CompanyRequestRow {
   effectiveDate?: string
 }
 
+const requestDefinition = (types: Map<string, ApiRequestType>, request: { typeCode: string; definitionCode?: string | null }) => {
+  const group = types.get(request.typeCode)
+  return group?.leaveProfiles?.find(profile => profile.definitionCode === request.definitionCode) ?? group
+}
+
 const stepText = (r: ApiRequest, steps: ResolvedStep[]): string => {
   if (r.status === 'COMPLETED') return 'منتهي'
   if (r.status === 'CANCELLED') return 'ألغاه مقدّمه'
   if (r.status === 'DRAFT') return 'مسودة — لم يُقدَّم'
   if (r.status === 'RETURNED_FOR_INFO') return 'مُرجَع لاستكمال معلومات'
   if (r.status === 'REJECTED') {
-    const rejected = steps.find((s) => s.action === 'REJECT')
+    const rejected = steps.find((s) => ['REJECT', 'REJECTED'].includes(s.action ?? ''))
     return rejected
       ? `رُفض عند: ${roleLabels[rejected.role] ?? rejected.role}`
       : 'مرفوض'
@@ -114,12 +132,17 @@ export default function RequestsConsolePage() {
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
+  const [lookupWarning, setLookupWarning] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [filterCategory, setFilterCategory] = useState<'' | RequestCategory>('')
   const [filterStatus, setFilterStatus] = useState<'' | RequestStatus>('')
   const [filterBranch, setFilterBranch] = useState('')
   const [detail, setDetail] = useState<ApiRequest | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
+  const [executionCancelReason, setExecutionCancelReason] = useState('')
+  const [executionCancelError, setExecutionCancelError] = useState('')
+  const [executionCancelling, setExecutionCancelling] = useState(false)
+  const liveCatalog = Array.from(types.values())
 
   useEffect(() => {
     const load = async () => {
@@ -128,9 +151,9 @@ export default function RequestsConsolePage() {
         const [all, typeList, branchList, employees, departments] = await Promise.all([
           fetchAllRequests(),
           fetchRequestTypes(),
-          fetchBranches(),
-          fetchEmployees(),
-          fetchDepartments(),
+          fetchBranches().catch(() => { setLookupWarning('بعض أسماء الفروع أو الموظفين غير متاحة؛ سجل الطلبات المعروض كامل حسب صلاحيتك.'); return [] }),
+          fetchEmployees().catch(() => { setLookupWarning('بعض أسماء الفروع أو الموظفين غير متاحة؛ سجل الطلبات المعروض كامل حسب صلاحيتك.'); return [] }),
+          fetchDepartments().catch(() => { setLookupWarning('بعض أسماء الفروع أو الموظفين غير متاحة؛ سجل الطلبات المعروض كامل حسب صلاحيتك.'); return [] }),
         ])
         const typesByCode = new Map(typeList.map((t) => [t.code, t]))
         const employeesById = new Map(employees.map((e) => [e.id, e]))
@@ -139,22 +162,23 @@ export default function RequestsConsolePage() {
         setBranches(branchList)
         setRequests(
           all.map((r): CompanyRequestRow => {
-            const type = typesByCode.get(r.typeCode)
+            const type = requestDefinition(typesByCode, r)
             const steps = parseJson<ResolvedStep[]>(r.resolvedSteps, [])
             const payload = parseJson<Record<string, unknown>>(r.payload, {})
             const requester = employeesById.get(r.requesterId)
             const department = requester?.departmentId
               ? departmentsById.get(requester.departmentId)?.name ?? ''
               : ''
-            // السرّي: يُخفى المقدّم وإدارته
-            const masked = type?.isConfidential === true
+            // السرّي: يُخفى المقدّم وإدارته (والسيرفر يحجبه أصلاً لغير أطرافه)
+            const masked = type?.isConfidential === true || r.confidentialMasked === true
             return {
               id: r.id,
               displayId: `REQ-${r.id}`,
               typeCode: r.typeCode,
+              definitionCode: r.definitionCode,
               requesterName: masked
                 ? '(سرّي)'
-                : requester?.fullName ?? `موظف #${r.requesterId}`,
+                : r.requesterName ?? requester?.fullName ?? `موظف #${r.requesterId}`,
               department: masked ? '(سرّي)' : department,
               branchId: r.branchId ?? null,
               submittedAt: (r.submittedAt ?? r.createdAt).slice(0, 10),
@@ -181,6 +205,8 @@ export default function RequestsConsolePage() {
 
   const openDetail = async (id: number) => {
     setDetailLoading(true)
+    setExecutionCancelReason('')
+    setExecutionCancelError('')
     try {
       setDetail(await fetchRequest(id))
     } catch (err) {
@@ -191,7 +217,7 @@ export default function RequestsConsolePage() {
   }
 
   const filtered = requests.filter((r) => {
-    const type = types.get(r.typeCode)
+    const type = requestDefinition(types, r)
     return (
       (r.displayId.includes(searchQuery) ||
         r.requesterName.includes(searchQuery) ||
@@ -213,8 +239,22 @@ export default function RequestsConsolePage() {
     completed: requests.filter((r) => r.status === 'COMPLETED').length,
   }
 
-  const detailType = detail ? types.get(detail.typeCode) : undefined
+  const detailType = detail ? requestDefinition(types, detail) : undefined
   const detailSteps = detail ? parseJson<ResolvedStep[]>(detail.resolvedSteps, []) : []
+  const canCancelSalaryExecution = canCancelSalaryIncreaseExecution(detail, detailType?.destinationHandler, can('settings.manage'))
+  const cancelSalaryExecution = async () => {
+    if (!detail || executionCancelling) return
+    const target = detail
+    setExecutionCancelling(true)
+    setExecutionCancelError('')
+    try {
+      const result = await cancelSalaryIncreaseExecution(target, detailType?.destinationHandler, can('settings.manage'), executionCancelReason)
+      setDetail(current => current?.id === target.id ? result : current)
+      setRequests(current => current.map(row => row.id === target.id ? { ...row, status: result.status as RequestStatus, currentStep: stepText(result, parseJson<ResolvedStep[]>(result.resolvedSteps, [])), destinationRecord: result.destinationRef ?? null } : row))
+      setExecutionCancelReason('')
+    } catch (cause) { setExecutionCancelError(cause instanceof Error ? cause.message : 'تعذر إلغاء تنفيذ زيادة الراتب.') }
+    finally { setExecutionCancelling(false) }
+  }
 
   return (
     <MainLayout>
@@ -227,13 +267,18 @@ export default function RequestsConsolePage() {
               الشاشة الأم: كل طلبات الشركة بدورة حياتها الكاملة — وكل طلب معتمَد له وجهة (سجل دائم)
             </p>
           </div>
-          <button className="btn-secondary flex items-center gap-2">
+          <button disabled={loading || filtered.length === 0} onClick={() => downloadCsv(`requests-${csvDateStamp()}.csv`,
+            ['رقم الطلب', 'النوع', 'الموظف', 'القسم', 'الفرع', 'التاريخ', 'الحالة', 'الخطوة', 'مرجع التنفيذ'],
+            filtered.map(r => [r.displayId, requestDefinition(types, r)?.nameAr ?? getTypeByCode(r.typeCode)?.nameAr ?? r.typeCode,
+              r.requesterName, r.department, branches.find(b => b.id === r.branchId)?.name ?? '', r.submittedAt,
+              statusLabels[r.status] ?? r.status, r.currentStep, r.destinationRecord]))} className="btn-secondary flex items-center gap-2 disabled:opacity-50">
             <Download size={18} />
-            تصدير
+            تصدير النتائج CSV
           </button>
         </div>
 
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+        {lookupWarning && <div className="bg-amber-50 text-amber-800 rounded-xl p-3 text-sm">{lookupWarning}</div>}
 
         {loading ? (
           <div className="flex justify-center py-16">
@@ -353,9 +398,8 @@ export default function RequestsConsolePage() {
                   </thead>
                   <tbody>
                     {filtered.map((req) => {
-                      const type = types.get(req.typeCode)
+                      const type = requestDefinition(types, req) ?? { code: req.typeCode, nameAr: getTypeByCode(req.typeCode)?.nameAr ?? `نوع مؤرشف (${req.typeCode})`, category: '', destinationHandler: '', isSecurityRoute: false, isConfidential: false, autoGeneratesPdf: false }
                       const def = getTypeByCode(req.typeCode)
-                      if (!type) return null
                       return (
                         <tr
                           key={req.id}
@@ -454,7 +498,7 @@ export default function RequestsConsolePage() {
           <div className="flex items-center justify-between mb-3">
             <h3 className="font-bold text-gray-800 text-sm">
               كتالوج الأنواع المُعرَّفة (
-              {requestsCatalog.filter((t) => !t.deprecated).length} نوعاً في 9 فئات — Data-Driven)
+              {liveCatalog.length} نوعاً)
             </h3>
             <div className="flex items-center gap-2 text-xs text-gray-400">
               <span className="badge text-[10px] bg-primary-50 text-primary-700">P1 أساسي</span>
@@ -465,9 +509,10 @@ export default function RequestsConsolePage() {
           <div className="grid grid-cols-3 gap-3">
             {Object.entries(categoryLabels).map(([catId, catLabel]) => {
               // الأنواع المدموجة (deprecated) مخفية — تُعرض الأنواع الفعّالة فقط
-              const catTypes = requestsCatalog.filter(
-                (t) => t.category === catId && !t.deprecated
+              const catTypes = liveCatalog.filter(
+                (t) => t.category === catId
               )
+              if (!catTypes.length) return null
               return (
                 <div key={catId} className="p-3 bg-gray-50 rounded-xl">
                   <p className="text-sm font-bold text-gray-700 mb-2">
@@ -484,12 +529,11 @@ export default function RequestsConsolePage() {
                             ? 'bg-warning-50 text-warning-700'
                             : 'bg-gray-100 text-gray-500'
                         }`}
-                        title={`${t.code} → ${t.destination}`}
+                        title={t.approvalChainName || t.nameAr}
                       >
                         {t.nameAr}
-                        {t.byLaw && ' ⚖️'}
-                        {t.securityRoute && ' 🔒'}
-                        {t.confidential && ' 🤫'}
+                        {t.isSecurityRoute && ' 🔒'}
+                        {t.isConfidential && ' 🤫'}
                       </span>
                     ))}
                   </div>
@@ -503,7 +547,7 @@ export default function RequestsConsolePage() {
         {(detail || detailLoading) && (
           <div
             className="fixed inset-0 bg-black/50 z-50 flex justify-end"
-            onClick={() => setDetail(null)}
+            onClick={() => { if (!executionCancelling) setDetail(null) }}
           >
             <div
               className="bg-white w-full max-w-md h-full overflow-y-auto"
@@ -517,6 +561,7 @@ export default function RequestsConsolePage() {
                 </h2>
                 <button
                   onClick={() => setDetail(null)}
+                  disabled={executionCancelling}
                   className="p-2 hover:bg-gray-100 rounded-lg"
                 >
                   <X size={20} className="text-gray-500" />
@@ -537,17 +582,26 @@ export default function RequestsConsolePage() {
                     </span>
                   </div>
 
-                  {/* بيانات الطلب */}
-                  <div className="p-4 bg-gray-50 rounded-xl space-y-1.5">
-                    {Object.entries(
-                      parseJson<Record<string, unknown>>(detail.payload, {})
-                    ).map(([k, v]) => (
-                      <div key={k} className="flex items-center justify-between text-sm">
-                        <span className="text-gray-500">{k}</span>
-                        <span className="text-gray-800 font-medium">{String(v)}</span>
-                      </div>
-                    ))}
-                  </div>
+                  {/* بيانات الطلب — السرّي يحجبه السيرفر لغير المقدّم والمعتمد الفعلي */}
+                  {detail.confidentialMasked && (
+                    <div className="flex items-start gap-1.5 p-3 bg-gray-100 rounded-xl">
+                      <EyeOff size={14} className="text-gray-500 mt-0.5 shrink-0" />
+                      <p className="text-xs text-gray-600">
+                        طلب سرّي — هوية المقدّم ومحتواه وتعليقات المعتمدين تظهر لجهة الاعتماد فقط
+                      </p>
+                    </div>
+                  )}
+                  {!detail.confidentialMasked && (
+                  <RequestPayload payload={detail.payload} />
+                  )}
+
+                  {canCancelSalaryExecution && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3">
+                    <h3 className="text-sm font-semibold text-amber-900">إلغاء تنفيذ زيادة الراتب</h3>
+                    <p className="text-xs text-amber-900">إذا تغير أساس الطلب، يمكنك إلغاء الزيادة التي لم تُنفذ ثم تقديم طلب جديد للمراجعة. يتحقق الخادم من عدم تنفيذها قبل الإلغاء.</p>
+                    <label className="label text-sm">سبب الإلغاء<textarea className="input mt-1" maxLength={900} value={executionCancelReason} disabled={executionCancelling} onChange={event => setExecutionCancelReason(event.target.value)} /></label>
+                    {executionCancelError && <p role="alert" className="text-sm text-red-700">{executionCancelError}</p>}
+                    <button type="button" disabled={executionCancelling || executionCancelReason.trim().length < 3} onClick={cancelSalaryExecution} className="btn-secondary text-red-700 disabled:opacity-50">{executionCancelling ? 'جارٍ إلغاء التنفيذ...' : 'إلغاء تنفيذ زيادة الراتب'}</button>
+                  </div>}
 
                   {detail.destinationRef && (
                     <div className="flex items-start gap-1.5 p-3 bg-success-50 rounded-xl">
@@ -557,6 +611,7 @@ export default function RequestsConsolePage() {
                       </p>
                     </div>
                   )}
+                  <LetterDownloadButton reference={detail.destinationRef} />
 
                   {/* سلسلة الخطوات */}
                   {detailSteps.length > 0 && (
@@ -567,9 +622,9 @@ export default function RequestsConsolePage() {
                           <div
                             key={s.stepOrder}
                             className={`flex items-center justify-between px-3 py-2 rounded-lg text-xs font-medium ${
-                              s.action === 'REJECT'
+                              ['REJECT', 'REJECTED'].includes(s.action ?? '')
                                 ? 'bg-red-100 text-red-700'
-                                : s.actedAt
+                                : ['APPROVE', 'APPPROVE', 'APPROVED'].includes(s.action ?? '')
                                 ? 'bg-success-50 text-success-700'
                                 : s.stepOrder === detail.currentStep
                                 ? 'bg-warning-50 text-warning-700 ring-1 ring-warning-300'

@@ -27,6 +27,11 @@ export class Request {
   @Column({ length: 50 })
   typeCode: string
 
+  // Original request profile remains authoritative for audience, custom fields,
+  // handler and approval chains after a legacy LEAVE_* becomes canonical LEAVE.
+  @Column({ type: String, length: 50, nullable: true })
+  definitionCode: string | null
+
   @Index()
   @Column()
   requesterId: number // employees.id — صاحب الطلب الفعلي

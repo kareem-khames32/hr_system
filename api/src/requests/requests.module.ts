@@ -1,7 +1,9 @@
 import { Module } from '@nestjs/common'
+import { LettersModule } from '../letters/letters.module'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { AttendanceModule } from '../attendance/attendance.module'
 import { Employee } from '../employees/employee.entity'
+import { EmployeesModule } from '../employees/employees.module'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
@@ -12,6 +14,7 @@ import { LeavesController } from './leaves.controller'
 import { ApprovalChain } from './entities/approval-chain.entity'
 import { ApprovalStep } from './entities/approval-step.entity'
 import { AttendanceCorrection, OvertimeEntry } from './entities/attendance.entities'
+import { OvertimeDayClaim, OvertimeEntryEvent } from './entities/overtime-workflow.entities'
 import { Asset, CustodyAssignment } from './entities/custody.entities'
 import {
   EmployeeStatusHistory,
@@ -19,7 +22,7 @@ import {
   Transfer,
 } from './entities/employment.entities'
 import { Loan, LoanInstallment } from './entities/financial.entities'
-import { Leave, LeaveBalance, LeaveType } from './entities/leave.entities'
+import { Leave, LeaveBalance, LeaveBalanceAdjustment, LeaveType } from './entities/leave.entities'
 import { LetterRequest } from './entities/letter.entities'
 import { RequestApproval } from './entities/request-approval.entity'
 import { RequestAttachment } from './entities/request-attachment.entity'
@@ -29,10 +32,14 @@ import { RequestsConfig } from './entities/requests-config.entity'
 import { RequestsScheduler } from './requests-scheduler.service'
 import { RequestsController } from './requests.controller'
 import { RequestsService } from './requests.service'
+import { OvertimeDispatchSubscriber } from './overtime-dispatch.subscriber'
 
 @Module({
   imports: [
+    LettersModule,
     AttendanceModule,
+    // EmployeesService.findOne — فحص نطاق الفرع لأرصدة موظف (SEC-LEV-1)
+    EmployeesModule,
     TypeOrmModule.forFeature([
       // المحرك
       RequestType,
@@ -46,7 +53,10 @@ import { RequestsService } from './requests.service'
       LeaveType,
       Leave,
       LeaveBalance,
+      LeaveBalanceAdjustment,
       OvertimeEntry,
+      OvertimeDayClaim,
+      OvertimeEntryEvent,
       AttendanceCorrection,
       Loan,
       LoanInstallment,
@@ -66,11 +76,12 @@ import { RequestsService } from './requests.service'
   controllers: [RequestsController, LeavesController],
   providers: [
     RequestsService,
+    OvertimeDispatchSubscriber,
     ApproverResolver,
     DestinationsService,
     LeaveBalancesService,
     RequestsScheduler,
   ],
-  exports: [RequestsService, LeaveBalancesService],
+  exports: [RequestsService, LeaveBalancesService, DestinationsService, ApproverResolver],
 })
 export class RequestsModule {}

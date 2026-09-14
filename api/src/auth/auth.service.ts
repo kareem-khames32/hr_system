@@ -34,21 +34,36 @@ export class AuthService {
   ) {}
 
   // الصلاحيات النهائية = حزمة الدور + GRANTs − REVOKEs
-  async resolvePermissions(user: User): Promise<string[]> {
+  // proposed: تجاوزات مقترحة بدل المحفوظة — لحساب أثر التعديل قبل حفظه (منع التصعيد)
+  async resolvePermissions(
+    user: User,
+    proposed?: { grants: string[]; revokes: string[] }
+  ): Promise<string[]> {
     let rolePerms: string[] = []
-    const roleRow = await this.roles.findOne({ where: { code: user.role } })
+    // مطابقة حرفية: الـcollation لا يفرّق حالة الأحرف ولا المسافات الأخيرة →
+    // دور مخزَّن كـ "SUPER_ADMIN" لا يرث حزمة super_admin (الحراس تقارن حرفياً)
+    const found = await this.roles.findOne({ where: { code: user.role } })
+    const roleRow = found && found.code === user.role ? found : null
     if (roleRow) {
-      try {
-        rolePerms = JSON.parse(roleRow.permissions)
-      } catch {
-        rolePerms = []
+      // الدور المعطَّل لا يمنح شيئاً — تبقى تجاوزات المستخدم فقط
+      if (roleRow.isActive) {
+        try {
+          rolePerms = JSON.parse(roleRow.permissions)
+        } catch {
+          rolePerms = []
+        }
       }
     } else {
       // fallback للـ presets لو الجدول لسه ما اتبذرش
       rolePerms =
         ROLE_PRESETS.find((r) => r.code === user.role)?.permissions ?? []
     }
-    const ovr = await this.overrides.find({ where: { userId: user.id } })
+    const ovr: Array<{ permission: string; effect: string }> = proposed
+      ? [
+          ...proposed.grants.map((permission) => ({ permission, effect: 'GRANT' })),
+          ...proposed.revokes.map((permission) => ({ permission, effect: 'REVOKE' })),
+        ]
+      : await this.overrides.find({ where: { userId: user.id } })
     const grants = ovr.filter((o) => o.effect === 'GRANT').map((o) => o.permission)
     const revokes = ovr.filter((o) => o.effect === 'REVOKE').map((o) => o.permission)
 

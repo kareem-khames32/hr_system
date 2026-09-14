@@ -1,33 +1,62 @@
 'use client'
 
-// TODO: ربط بالتقارير — يحتاج endpoint حضور أسبوعي/شهري (إحصائيات اليوم فقط متاحة حالياً في /dashboard/stats)
-import { useState } from 'react'
+// أيام الفترة من السيرفر بنطاق الفرع (GET /dashboard/attendance-trend): «أسبوعي» = آخر
+// 7 أيام و«شهري» = آخر 30 يوماً حتى اليوم. عمود اليوم بتعريفات كروت اليوم نفسها
+import { useEffect, useState } from 'react'
+import { fetchAttendanceTrend, type ApiAttendanceTrend } from '@/lib/api'
 
-interface DayData {
-  day: string
-  present: number
-  absent: number
-  leave: number
-}
+type TrendDay = ApiAttendanceTrend['days'][number]
 
-const weekData: DayData[] = [
-  { day: 'الأحد', present: 220, absent: 8, leave: 12 },
-  { day: 'الإثنين', present: 225, absent: 5, leave: 10 },
-  { day: 'الثلاثاء', present: 218, absent: 10, leave: 12 },
-  { day: 'الأربعاء', present: 222, absent: 6, leave: 12 },
-  { day: 'الخميس', present: 215, absent: 8, leave: 17 },
-  { day: 'الجمعة', present: 0, absent: 0, leave: 0 },
-  { day: 'السبت', present: 0, absent: 0, leave: 0 },
-]
+const weekdayNames = ['الأحد', 'الإثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت']
+const weekdayOf = (date: string) => weekdayNames[new Date(`${date}T12:00:00`).getDay()] ?? ''
+
+// أقصى ارتفاع للعمود بالبكسل (داخل حاوية h-52)
+const BAR_MAX_PX = 200
+
+const totalOf = (d: TrendDay) => d.attended + d.absent + d.onLeave
 
 export default function AttendanceChart() {
   const [period, setPeriod] = useState<'week' | 'month'>('week')
-  const maxValue = Math.max(...weekData.map((d) => d.present + d.absent + d.leave))
+  const [trend, setTrend] = useState<ApiAttendanceTrend | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+
+  useEffect(() => {
+    let cancelled = false
+    setLoading(true)
+    setError('')
+    fetchAttendanceTrend(period)
+      .then((data) => {
+        if (!cancelled) setTrend(data)
+      })
+      .catch((e) => {
+        if (!cancelled) setError(e instanceof Error ? e.message : 'تعذر تحميل إحصائيات الحضور')
+      })
+      .finally(() => {
+        if (!cancelled) setLoading(false)
+      })
+    return () => {
+      cancelled = true
+    }
+  }, [period])
+
+  const days = trend?.days ?? []
+  const maxValue = Math.max(1, ...days.map(totalOf))
+  const hasData = days.some((d) => totalOf(d) > 0)
+  const isMonth = trend?.period === 'month'
+  const px = (v: number) => `${(v / maxValue) * BAR_MAX_PX}px`
 
   return (
     <div className="card">
       <div className="flex items-center justify-between mb-6">
-        <h3 className="text-lg font-bold text-gray-800">إحصائيات الحضور</h3>
+        <div>
+          <h3 className="text-lg font-bold text-gray-800">إحصائيات الحضور</h3>
+          {trend && (
+            <p className="text-xs text-gray-400 mt-1">
+              من <span dir="ltr">{trend.from}</span> إلى <span dir="ltr">{trend.to}</span>
+            </p>
+          )}
+        </div>
         <div className="flex gap-2">
           <button
             onClick={() => setPeriod('week')}
@@ -69,40 +98,60 @@ export default function AttendanceChart() {
       </div>
 
       {/* Chart */}
-      <div className="flex items-end justify-between gap-4 h-64">
-        {weekData.map((day, index) => {
-          const total = day.present + day.absent + day.leave
-          const presentHeight = total > 0 ? (day.present / maxValue) * 100 : 0
-          const leaveHeight = total > 0 ? (day.leave / maxValue) * 100 : 0
-          const absentHeight = total > 0 ? (day.absent / maxValue) * 100 : 0
-
-          return (
-            <div key={index} className="flex-1 flex flex-col items-center gap-2">
-              <div className="w-full flex flex-col-reverse items-center h-52">
-                {total > 0 ? (
-                  <div className="w-full max-w-12 flex flex-col-reverse rounded-t-lg overflow-hidden">
+      {loading ? (
+        <div className="flex items-center justify-center h-64">
+          <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : error ? (
+        <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
+      ) : !hasData ? (
+        <div className="flex items-center justify-center h-64 text-sm text-gray-400">
+          لا توجد سجلات حضور في هذه الفترة
+        </div>
+      ) : (
+        <div className={`flex items-end justify-between h-64 ${isMonth ? 'gap-1' : 'gap-4'}`}>
+          {days.map((day) => {
+            const isToday = day.date === trend?.to
+            return (
+              <div
+                key={day.date}
+                className="flex-1 min-w-0 flex flex-col items-center gap-2"
+                title={`${weekdayOf(day.date)} ${day.date} — حاضر ${day.attended} · إجازة ${day.onLeave} · غائب ${day.absent}`}
+              >
+                <div className="w-full flex flex-col-reverse items-center h-52">
+                  {totalOf(day) > 0 ? (
                     <div
-                      className="bg-primary-500 transition-all duration-500"
-                      style={{ height: `${presentHeight * 2}px` }}
-                    />
-                    <div
-                      className="bg-warning-500 transition-all duration-500"
-                      style={{ height: `${leaveHeight * 2}px` }}
-                    />
-                    <div
-                      className="bg-danger-500 transition-all duration-500"
-                      style={{ height: `${absentHeight * 2}px` }}
-                    />
-                  </div>
-                ) : (
-                  <div className="w-full max-w-12 h-4 bg-gray-200 rounded-t-lg" />
-                )}
+                      className={`w-full ${isMonth ? '' : 'max-w-12'} flex flex-col-reverse rounded-t-lg overflow-hidden`}
+                    >
+                      <div
+                        className="bg-primary-500 transition-all duration-500"
+                        style={{ height: px(day.attended) }}
+                      />
+                      <div
+                        className="bg-warning-500 transition-all duration-500"
+                        style={{ height: px(day.onLeave) }}
+                      />
+                      <div
+                        className="bg-danger-500 transition-all duration-500"
+                        style={{ height: px(day.absent) }}
+                      />
+                    </div>
+                  ) : (
+                    <div className={`w-full ${isMonth ? '' : 'max-w-12'} h-4 bg-gray-200 rounded-t-lg`} />
+                  )}
+                </div>
+                <span
+                  className={`${isMonth ? 'text-[10px]' : 'text-xs'} font-medium ${
+                    isToday ? 'text-primary-600 font-bold' : 'text-gray-500'
+                  }`}
+                >
+                  {isMonth ? Number(day.date.slice(8)) : weekdayOf(day.date)}
+                </span>
               </div>
-              <span className="text-xs text-gray-500 font-medium">{day.day}</span>
-            </div>
-          )
-        })}
-      </div>
+            )
+          })}
+        </div>
+      )}
     </div>
   )
 }

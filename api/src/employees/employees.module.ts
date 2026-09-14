@@ -1,14 +1,24 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
+import { AttendanceModule } from '../attendance/attendance.module'
 import { User } from '../auth/user.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
+import { EmployeeDocument, Grade } from '../assets/assets.entities'
 import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { LeaveBalance } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { Employee } from './employee.entity'
+import {
+  EmployeeCertification,
+  EmployeeEducation,
+  EmployeeExperience,
+  EmployeeLanguage,
+  EmployeeSkill,
+} from './qualifications.entities'
 import { EmployeesController } from './employees.controller'
+import { QualificationsController } from './qualifications.controller'
 import { EmployeesService } from './employees.service'
 
 @Module({
@@ -22,9 +32,17 @@ import { EmployeesService } from './employees.service'
       LeaveBalance,
       RequestsConfig,
       EmployeeStatusHistory,
+      EmployeeDocument,
+      EmployeeEducation,
+      EmployeeCertification,
+      EmployeeExperience,
+      EmployeeSkill,
+      EmployeeLanguage,
     ]),
+    // ربط البصمات اليتيمة بأثر رجعي عند ضبط رقم البصمة/الكود
+    AttendanceModule,
   ],
-  controllers: [EmployeesController],
+  controllers: [EmployeesController, QualificationsController],
   providers: [EmployeesService],
   exports: [EmployeesService],
 })

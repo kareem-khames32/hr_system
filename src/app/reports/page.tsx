@@ -1,5 +1,8 @@
 'use client'
 
+import { employeeStatusLabels as statusLabels, overtimeStatusLabels, payMethodLabels } from '@/lib/status-labels'
+import { useLeaveCatalog } from '@/lib/leave-catalog'
+
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
@@ -21,6 +24,7 @@ import {
   fetchPayrollReport,
   fetchRequestsReport,
 } from '@/lib/api'
+import { localMonth, localToday } from '@/lib/dates'
 import { categoryLabels } from '@/data/requestsCatalog'
 
 interface HeadcountReport {
@@ -88,36 +92,13 @@ const pieColors = [
   'bg-gray-500',
 ]
 
-const statusLabels: Record<string, string> = {
-  active: 'نشط',
-  probation: 'تحت التجربة',
-  archived: 'مؤرشف',
-  resigned: 'مستقيل',
-  terminated: 'منتهي الخدمة',
-}
 
-const leaveTypeLabels: Record<string, string> = {
-  ANNUAL: 'سنوية',
-  SICK: 'مرضية',
-  UNPAID: 'بدون راتب',
-  CASUAL: 'عارضة',
-  EMERGENCY: 'طارئة',
-}
 
-const payMethodLabels: Record<string, string> = {
-  transfer: 'تحويل بنكي',
-  cash: 'نقدي',
-  cheque: 'شيك',
-}
 
-const overtimeStatusLabels: Record<string, string> = {
-  PENDING: 'بانتظار التأكيد',
-  CONFIRMED: 'مؤكد',
-  REJECTED: 'مرفوض',
-  PAID: 'مدفوع',
-}
 
 export default function ReportsPage() {
+  const leaveCatalog = useLeaveCatalog()
+  const leaveTypeLabels = leaveCatalog.labels
   const [headcount, setHeadcount] = useState<HeadcountReport | null>(null)
   const [attendance, setAttendance] = useState<AttendanceRow[]>([])
   const [leaves, setLeaves] = useState<LeavesReport | null>(null)
@@ -128,8 +109,9 @@ export default function ReportsPage() {
   const [error, setError] = useState<string | null>(null)
   const [selectedCategory, setSelectedCategory] = useState('all')
 
-  const currentMonth = new Date().toISOString().slice(0, 7)
-  const currentYear = new Date().toISOString().slice(0, 4)
+  // الشهر/السنة بالتوقيت المحلي — toISOString (UTC) كانت تفتح الشهر السابق من 00:00 لـ03:00
+  const currentMonth = localMonth()
+  const currentYear = localToday().slice(0, 4)
 
   const loadData = async () => {
     setLoading(true)
@@ -275,6 +257,7 @@ export default function ReportsPage() {
   return (
     <MainLayout>
       <div className="space-y-6">
+        {leaveCatalog.error && <div role="alert" className="bg-amber-50 text-amber-800 rounded-xl p-3 text-sm">تعذر تحميل أنواع الإجازات: {leaveCatalog.error} <button type="button" className="underline" onClick={leaveCatalog.retry}>إعادة المحاولة</button></div>}
         {/* Page Header */}
         <div className="flex items-center justify-between">
           <div>
