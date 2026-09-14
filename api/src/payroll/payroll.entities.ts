@@ -3,14 +3,17 @@ import {
   CreateDateColumn,
   Entity,
   Index,
+  JoinColumn,
+  ManyToOne,
   PrimaryGeneratedColumn,
   Unique,
 } from 'typeorm'
 import type { PayrollInclusionSource, PayrollMemberSnapshot, PayrollMembershipStatus } from './payroll-membership.entities'
+import { PayrollPolicyVersion } from './payroll-policy.entities'
 
-// حالة المسير: مسودة محسوبة → معتمدة → مصروفة (الدورة الكاملة لاحقاً:
+// حالة المسير: مسودة تعريف (الخطوة 16) → محسوبة → معتمدة → مصروفة (الدورة الكاملة لاحقاً:
 // محاسب → HR → مالي → تنفيذي → جهة الصرف)
-export type PayrollRunStatus = 'CALCULATED' | 'APPROVED' | 'PAID' | 'CANCELLED'
+export type PayrollRunStatus = 'DRAFT' | 'CALCULATED' | 'APPROVED' | 'PAID' | 'CANCELLED'
 
 // نطاق المسير: الشركة كلها / فرع / قسم / فريق / مركز تكلفة / موظفون بعينهم
 export type PayrollScopeType =
@@ -22,7 +25,9 @@ export type PayrollScopeType =
   | 'CUSTOM'
 
 // مسير قابل للتعريف: اسم + فترة + نطاق (+ سياسة لاحقاً). عدة مسيرات للفترة الواحدة
+// الخطوة 16: اسم المسير فريد داخل شهره لغير الملغى؛ الأسماء الفارغة للمسيرات القديمة خارج القيد.
 @Entity('payroll_runs')
+@Index('UX_payroll_run_period_name', ['period', 'name'], { unique: true, where: "[name] IS NOT NULL AND [status] <> 'CANCELLED'" })
 export class PayrollRun {
   @PrimaryGeneratedColumn()
   id: number
@@ -50,6 +55,18 @@ export class PayrollRun {
   // السياسة المطبَّقة (null = المسار المثبّت القديم) — تُفعَّل في مرحلة المحرك
   @Column({ type: 'int', nullable: true })
   policyId: number | null
+
+  // الخطوة 16: نسخة السياسة المنشورة التي اشتُقت منها فترة المسير (null = مسير قديم بدورة الإعداد العام).
+  @Column({ type: 'int', nullable: true })
+  policyVersionId: number | null
+
+  @ManyToOne(() => PayrollPolicyVersion, { nullable: true, onDelete: 'NO ACTION', onUpdate: 'NO ACTION' })
+  @JoinColumn({ name: 'policyVersionId', foreignKeyConstraintName: 'FK_payroll_run_policy_version' })
+  policyVersion?: PayrollPolicyVersion | null
+
+  // الخطوة 16: تعريف العضوية (JSON) — الفلاتر والقائمة والاستبعادات بأسبابها وتأكيد النطاق الفارغ؛ null = نطاق المسير القديم.
+  @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
+  definition: string | null
 
   @Column({ length: 7 })
   period: string // '2026-07'

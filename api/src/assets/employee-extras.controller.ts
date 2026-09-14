@@ -12,6 +12,7 @@ import {
   EmployeeStatusHistory,
   Transfer,
 } from '../requests/entities/employment.entities'
+import { RequestApproval } from '../requests/entities/request-approval.entity'
 import { Leave, LeaveBalance } from '../requests/entities/leave.entities'
 import { LeaveBalancesService } from '../requests/leave-balances.service'
 import { Loan, LoanInstallment } from '../requests/entities/financial.entities'
@@ -60,8 +61,25 @@ export class EmployeeExtrasController {
       where: scope !== null ? { employeeId: In(emps.map((e) => e.id)) } : {},
       order: { effectiveDate: 'DESC' },
     })
+    // سبب الإلغاء أو آخر تعذّر تنفيذ سجله النظام على طلب النقل (الخطوة 7) — استعلام واحد
+    const systemActs = await this.transfers.manager.getRepository(RequestApproval).createQueryBuilder('a')
+      .where('a.approverId = 0')
+      .andWhere('a.action IN (:...actions)', { actions: ['CANCELLED', 'EXECUTION_FAILED'] })
+      .andWhere('a.requestId IN (SELECT t.requestId FROM transfers t WHERE t.requestId IS NOT NULL)')
+      .orderBy('a.id', 'DESC')
+      .getMany()
+    const latestAct = new Map<string, RequestApproval>()
+    for (const act of systemActs) {
+      const key = `${act.requestId}:${act.action}`
+      if (!latestAct.has(key)) latestAct.set(key, act)
+    }
+    const statusReason = (t: Transfer) => !t.requestId ? null
+      : t.status === 'CANCELLED' ? latestAct.get(`${t.requestId}:CANCELLED`)?.comment ?? null
+      : t.status === 'SCHEDULED' ? latestAct.get(`${t.requestId}:EXECUTION_FAILED`)?.comment ?? null
+      : null
     return rows.map((t) => ({
       ...t,
+      statusReason: statusReason(t),
       fromTeamId: t.fromTeam, toTeamId: t.toTeam,
       employeeName: empById.get(t.employeeId)?.fullName ?? `#${t.employeeId}`,
       fromTeamName: t.fromTeam ? (teamById.get(t.fromTeam) ?? `#${t.fromTeam}`) : 'بدون فريق',

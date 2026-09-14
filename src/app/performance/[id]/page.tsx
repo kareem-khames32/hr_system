@@ -17,7 +17,6 @@ import {
   Award,
   FileText,
   Edit2,
-  Download,
   Building2,
   Briefcase,
 } from 'lucide-react'
@@ -109,10 +108,7 @@ export default function PerformanceDetailsPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <button className="btn-secondary flex items-center gap-2">
-              <Download size={18} />
-              تصدير PDF
-            </button>
+            {/* «تصدير PDF» أُزيل: التقييم ببيانات عرض بلا باك ولا مولّد PDF */}
             <button className="btn-primary flex items-center gap-2">
               <Edit2 size={18} />
               تعديل التقييم

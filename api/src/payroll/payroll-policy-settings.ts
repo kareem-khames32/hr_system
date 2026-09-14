@@ -1,4 +1,5 @@
 import { BadRequestException } from '@nestjs/common'
+import { payrollCycleSettingsIssue, type PayrollCycleSettings } from './payroll-period'
 
 export const PAYROLL_POLICY_PERIOD_TYPES = ['CALENDAR_MONTH', 'CUSTOM_DAY_RANGE', 'SEMI_MONTHLY'] as const
 export const PAYROLL_POLICY_END_MODES = ['DERIVED', 'FIXED_DAY'] as const
@@ -106,7 +107,10 @@ function combinationError(settings: Record<string, unknown>): string | undefined
     return 'الشهر التقويمي ونصف الشهر يتطلبان بداية 1 ونهاية DERIVED دون يوم نهاية ثابت؛ حدود نصف الشهر يحددها محرك الفترات لاحقًا'
   }
   if (settings.cycleEndMode === 'DERIVED' && settings.cycleEndDay !== null) return 'النهاية DERIVED لا تقبل cycleEndDay'
-  if (settings.cycleEndMode === 'FIXED_DAY' && settings.cycleEndDay === null) return 'النهاية FIXED_DAY تتطلب cycleEndDay من 1 إلى 31'
+  if (settings.cycleEndMode === 'FIXED_DAY' && settings.cycleEndDay === null) return `النهاية FIXED_DAY تتطلب cycleEndDay = ${settings.cycleStartDay === 1 ? 31 : Number(settings.cycleStartDay) - 1} (اليوم السابق لبداية الدورة)`
+  // الخطوة 14/15: الفترات متجاورة بلا فجوة ولا تداخل؛ يوم النهاية الثابت يجب أن يطابق ما تشتقه المسيرات فعليًا (payroll-period.ts).
+  const cycleIssue = payrollCycleSettingsIssue(settings as unknown as PayrollCycleSettings)
+  if (cycleIssue) return `cycleEndDay: ${cycleIssue}`
 }
 
 export function payrollPolicySettingsSnapshot(source: Partial<Record<keyof PayrollPolicySettings, unknown>>) {
@@ -164,6 +168,25 @@ export function parsePayrollPolicyConfigValue(field: keyof PayrollPolicySettings
   const error = fieldError(field, value)
   if (error) throw new BadRequestException(error)
   return value as PayrollPolicySettings[keyof PayrollPolicySettings]
+}
+
+const CYCLE_CONFIG_FIELDS = ['defaultPeriodType', 'cycleStartDay', 'cycleEndMode', 'cycleEndDay'] as const
+export const PAYROLL_POLICY_CYCLE_CONFIG_KEYS: string[] = CYCLE_CONFIG_FIELDS.map(field => PAYROLL_POLICY_CONFIG_KEYS[field])
+
+/**
+ * الخطوة 15: افتراضات دورة النسخ الجديدة تُقبل مجتمعة؛ يوم النهاية الثابت يجب أن يبقى اليوم السابق للبداية بعد أي تعديل.
+ * لا يقيّد payroll.cycle_start_day ما دامت النهاية مشتقة (يستخدمه المسير الحالي أيضًا).
+ */
+export function payrollPolicyCycleConfigError(key: string, value: string, current: Map<string, string>): string | undefined {
+  if (!PAYROLL_POLICY_CYCLE_CONFIG_KEYS.includes(key)) return
+  const values = new Map(current); values.set(key, value)
+  let cycle: PayrollCycleSettings
+  try {
+    cycle = Object.fromEntries(CYCLE_CONFIG_FIELDS.map(field => [field, parsePayrollPolicyConfigValue(field, values.get(PAYROLL_POLICY_CONFIG_KEYS[field]))])) as unknown as PayrollCycleSettings
+  } catch { return }
+  if (cycle.defaultPeriodType !== 'CUSTOM_DAY_RANGE' || cycle.cycleEndMode !== 'FIXED_DAY') return
+  const issue = payrollCycleSettingsIssue(cycle)
+  if (issue) return `${key}: ${issue}. اجعل ${PAYROLL_POLICY_CONFIG_KEYS.cycleEndMode} = DERIVED أو اضبط ${PAYROLL_POLICY_CONFIG_KEYS.cycleEndDay} أولًا`
 }
 
 export function validatePayrollPolicyDefaultConfig(key: string, value: string): string | undefined {

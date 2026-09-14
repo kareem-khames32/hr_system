@@ -8,6 +8,7 @@ import EmployeeForm, {
   EmployeeFormState,
 } from '@/components/EmployeeForm'
 import {
+  can,
   fetchEmployee,
   fetchEmployeeBalances,
   fetchQualifications,
@@ -64,6 +65,7 @@ export default function EditEmployeePage() {
   const [error, setError] = useState('')
   const [salaryContext, setSalaryContext] = useState<EmployeeSalaryChangeContext | null>(null)
   const [salaryContextError, setSalaryContextError] = useState('')
+  const [salaryChangeForbidden, setSalaryChangeForbidden] = useState(false)
   const [calendarContext, setCalendarContext] = useState<PayrollCalendarContext | null>(null)
   const [calendarContextError, setCalendarContextError] = useState('')
 
@@ -77,6 +79,9 @@ export default function EditEmployeePage() {
     setCalendarContext(null)
     setCalendarContextError('')
     setError('')
+    // سياق تعديل الأجر يتطلب «اعتماد المسير» في الباك (SEC-06) — بدونها لا طلب ولا فتح للحقول
+    const salaryForbidden = !can('payroll.approve')
+    setSalaryChangeForbidden(salaryForbidden)
     if (!employeeId) {
       setError('رقم الموظف غير صالح')
       setLoading(false)
@@ -86,10 +91,12 @@ export default function EditEmployeePage() {
       fetchEmployee(employeeId),
       fetchEmployeeBalances(employeeId).catch(() => []),
       fetchQualifications(employeeId).catch(() => null),
-      fetchEmployeeSalaryChangeContext(employeeId, controller.signal).catch(cause => {
-        if (!cancelled) setSalaryContextError(cause instanceof Error ? cause.message : 'تعذر إثبات الأجر الحالي بدقة.')
-        return null
-      }),
+      salaryForbidden
+        ? Promise.resolve(null)
+        : fetchEmployeeSalaryChangeContext(employeeId, controller.signal).catch(cause => {
+          if (!cancelled) setSalaryContextError(cause instanceof Error ? cause.message : 'تعذر إثبات الأجر الحالي بدقة.')
+          return null
+        }),
       fetchPayrollCalendarContext('EMPLOYEE', employeeId, controller.signal).catch(cause => {
         if (!cancelled) setCalendarContextError(cause instanceof Error ? cause.message : 'تعذر تحميل تاريخ فرع الموظف.')
         return null
@@ -242,6 +249,7 @@ export default function EditEmployeePage() {
       savedQualifications={savedQuals}
       salaryChangeContext={salaryContext}
       salaryContextError={salaryContextError}
+      salaryChangeForbidden={salaryChangeForbidden}
       calendarContext={calendarContext}
       calendarContextError={calendarContextError}
     />

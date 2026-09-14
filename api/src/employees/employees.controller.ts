@@ -1,11 +1,15 @@
 import {
   Body,
+  CanActivate,
   Controller,
+  ExecutionContext,
   Get,
+  Injectable,
   Param,
   ParseIntPipe,
   Patch,
   Post,
+  Query,
   UseGuards,
 } from '@nestjs/common'
 import { ForbiddenException } from '@nestjs/common'
@@ -21,6 +25,28 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CreateEmployeeDto, RenewEmployeeContractDto, UpdateEmployeeDto } from './employees.dto'
 import { EmployeesService } from './employees.service'
 import { projectEmployee } from './employee-projection'
+
+// تغيير الأجر (أو قراءة سياقه للتغيير) يغيّر صافي المسير → اعتماد المسير شرط إضافي
+// فوق employees.edit — مدير النظام يتخطى (userHasPerm)
+function assertSalaryChangeAuthority(user: JwtPayload) {
+  if (!userHasPerm(user, 'payroll.approve')) {
+    throw new ForbiddenException('تعديل الأجر يتطلب صلاحية «اعتماد المسير» بجانب تعديل بيانات الموظف')
+  }
+}
+
+// حارس PATCH: يعمل قبل التحقق من الجسم (ValidationPipe) فالرفض 403 ثابت مهما كان شكل
+// salaryChange — لا تكشف رسائل التحقق بنية أمر الأجر لمن لا يملك الاعتماد
+@Injectable()
+class SalaryChangeAuthorityGuard implements CanActivate {
+  canActivate(ctx: ExecutionContext): boolean {
+    const request = ctx.switchToHttp().getRequest()
+    const body = request.body
+    if (body && typeof body === 'object' && Object.prototype.hasOwnProperty.call(body, 'salaryChange')) {
+      assertSalaryChangeAuthority(request.user)
+    }
+    return true
+  }
+}
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('employees')
@@ -38,6 +64,14 @@ export class EmployeesController {
   @Get('directory')
   directory(@CurrentUser() user: JwtPayload) {
     return this.employees.directory(branchScopeOf(user))
+  }
+
+  // الخطوة 13: سياق «يسري من راتب شهر» لأجر التعيين في نموذج الإنشاء (الدورة، الشهر الجاري، شهر التعيين، المدى).
+  // قبل ':id' حتى لا يلتقطه؛ لا يقرأ بيانات أي موظف.
+  @Perm('employees.create')
+  @Get('salary-start-context')
+  salaryStartContext(@Query('hireDate') hireDate?: string) {
+    return this.employees.salaryStartContext(hireDate)
   }
 
   // الموظف يشوف سجله هو — غيره يحتاج employees.view
@@ -61,16 +95,22 @@ export class EmployeesController {
     return projectEmployee(await this.employees.create(dto, user.sub), user)
   }
 
+  // سياق تعديل الأجر (الأجر الحالي الدقيق + بصمة المصدر) = بداية تغيير الراتب →
+  // employees.edit وحدها لا تكفي، يلزم payroll.approve أيضاً (SEC-06)
   @Perm('employees.edit')
   @Get(':id/salary-change-context')
   salaryChangeContext(
     @Param('id', ParseIntPipe) id: number,
     @CurrentUser() user: JwtPayload
   ) {
+    assertSalaryChangeAuthority(user)
     return this.employees.salaryChangeContext(id, branchScopeOf(user))
   }
 
+  // تغيير الأجر من ملف الموظف يغيّر المسير → صلاحية اعتماد المسير (SEC-06) عبر
+  // SalaryChangeAuthorityGuard؛ تعديل البيانات غير المالية يبقى بـemployees.edit
   @Perm('employees.edit')
+  @UseGuards(SalaryChangeAuthorityGuard)
   @Patch(':id')
   update(
     @Param('id', ParseIntPipe) id: number,

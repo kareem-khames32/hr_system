@@ -84,6 +84,7 @@ const approvalActionLabels: Record<string, string> = {
   RETURNED_FOR_INFO: 'أعاد لاستكمال معلومات',
   ESCALATED: 'صُعِّد',
   CANCELLED: 'ألغاه النظام آلياً',
+  EXECUTION_FAILED: 'تعذّر تنفيذه المجدول',
 }
 
 // ===== سجل طلبات الشركة — صف الشاشة المشتق من ApiRequest =====
@@ -100,6 +101,7 @@ interface CompanyRequestRow {
   currentStep: string
   destinationRecord: string | null // مرجع السجل الدائم بعد التنفيذ
   effectiveDate?: string
+  effectivePayrollPeriod?: string
 }
 
 const requestDefinition = (types: Map<string, ApiRequestType>, request: { typeCode: string; definitionCode?: string | null }) => {
@@ -188,6 +190,11 @@ export default function RequestsConsolePage() {
               effectiveDate:
                 typeof payload.effectiveDate === 'string'
                   ? payload.effectiveDate
+                  : undefined,
+              // زيادة الراتب تسري من راتب شهر كامل (قاعدة المالك)
+              effectivePayrollPeriod:
+                typeof payload.effectivePayrollPeriod === 'string'
+                  ? payload.effectivePayrollPeriod
                   : undefined,
             }
           })
@@ -458,6 +465,11 @@ export default function RequestsConsolePage() {
                             {req.effectiveDate && (
                               <p className="text-[10px] text-cyan-600 mt-1">
                                 تاريخ السريان: {req.effectiveDate}
+                              </p>
+                            )}
+                            {req.effectivePayrollPeriod && (
+                              <p className="text-[10px] text-cyan-600 mt-1">
+                                يسري من راتب شهر: {req.effectivePayrollPeriod}
                               </p>
                             )}
                           </td>

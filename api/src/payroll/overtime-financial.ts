@@ -9,6 +9,8 @@ import { Request } from '../requests/entities/request.entity'
 import { exemptionPolicyOnDate, loadAttendanceExemptions, type AttendanceExemptionDayPolicy } from '../attendance/attendance-exemption-resolver'
 import { PayrollPeriodClaim } from './payroll-membership.entities'
 import { roundPayrollMoney } from './payroll-money'
+import { payrollPeriodOfDate } from './payroll-period'
+import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, selectPayrollRunSalary } from './payroll-run-salary'
 
 export const OVERTIME_WAGE_COMPONENT_CODES = MONTHLY_SALARY_COMPONENTS.map(component => component.code)
 export const DEFAULT_OVERTIME_WAGE_COMPONENTS = OVERTIME_WAGE_COMPONENT_CODES.join(',')
@@ -242,6 +244,42 @@ async function assertOvertimeCaps(em: EntityManager, entry: OvertimeEntry, evide
   if (maxMonthlyMinutes > 0 && monthMinutes > maxMonthlyMinutes) throw new ConflictException('الاعتماد يتجاوز سقف الإضافي الشهري؛ خفّض الساعات أو راجع السياسة')
 }
 
+const OVERTIME_WAGE_MONTH_CONFIG_KEYS = ['payroll.cycle_start_day', PAYROLL_SALARY_EVIDENCE_MODE_KEY]
+
+/** الخطوة 13 / LOT-15: راتب شهر المسير الذي يقع فيه يوم العمل بنفس اختيار المسير؛ قراءة فقط داخل معاملة نشطة. */
+export async function overtimeWageMonthSalary(em: EntityManager, employee: Employee, workDate: string, config: Map<string, string>) {
+  let wagePayrollPeriod: string
+  try { wagePayrollPeriod = payrollPeriodOfDate(workDate, Number(config.get('payroll.cycle_start_day') ?? '23')) }
+  catch { throw new BadRequestException('يوم بداية دورة الرواتب أو تاريخ الإضافي غير صالح؛ راجع الإعدادات') }
+  const salary = await selectPayrollRunSalary(em, employee, wagePayrollPeriod, parsePayrollSalaryEvidenceMode(config.get(PAYROLL_SALARY_EVIDENCE_MODE_KEY)))
+  return { wagePayrollPeriod, salary }
+}
+
+export interface OvertimeWageEvidence {
+  wagePayrollPeriod: string
+  ready: boolean
+  code: 'OT_SALARY_MONTH_EVIDENCE_REQUIRED' | null
+  reason: string | null
+  message: string | null
+  sourceKind: 'MONTHLY_HISTORY' | 'CURRENT_FILE_UNVERIFIED' | null
+}
+
+/**
+ * جاهزية تسعير إضافي معلق قبل الاعتماد النهائي: شهر الأجر وهل له راتب يثبت بالإعداد الحالي.
+ * تعرضها شاشة الطلب حتى لا يفاجأ المعتمد الأخير بـOT_SALARY_MONTH_EVIDENCE_REQUIRED؛ لا تكشف مبالغ الأجر ولا تكتب شيئًا.
+ */
+export async function overtimeWageEvidence(em: EntityManager, employeeId: number, workDate: string): Promise<OvertimeWageEvidence | null> {
+  if (!em.queryRunner?.isTransactionActive) throw new Error('جاهزية راتب شهر الإضافي تتطلب معاملة قراءة نشطة')
+  const employee = await em.findOneBy(Employee, { id: employeeId })
+  if (!employee) return null
+  const rows = await em.find(RequestsConfig, { where: { key: In(OVERTIME_WAGE_MONTH_CONFIG_KEYS) } })
+  const { wagePayrollPeriod, salary } = await overtimeWageMonthSalary(em, employee, workDate, new Map(rows.map(row => [row.key, row.value])))
+  return salary.ok
+    ? { wagePayrollPeriod, ready: true, code: null, reason: null, message: salary.source.warning, sourceKind: salary.source.kind }
+    : { wagePayrollPeriod, ready: false, code: 'OT_SALARY_MONTH_EVIDENCE_REQUIRED', reason: salary.code,
+      message: `تعذر تسعير الإضافي على راتب شهر ${wagePayrollPeriod}: ${salary.message}`, sourceKind: null }
+}
+
 /** OT-08/11: تُنشأ اللقطة مرة واحدة داخل معاملة آخر موافقة، ثم يحفظها صاحب المعاملة مع القرار. */
 export async function buildOvertimeApprovalSnapshot(em: EntityManager, entry: OvertimeEntry, evidence: OvertimeEvidence,
   decision: { approvedMinutes: number; approverId: number; reason?: string }): Promise<Partial<OvertimeEntry>> {
@@ -264,12 +302,16 @@ export async function buildOvertimeApprovalSnapshot(em: EntityManager, entry: Ov
   await assertOvertimeCaps(em, entry, evidence, decision.approvedMinutes)
   const employee = await em.findOneBy(Employee, { id: entry.employeeId })
   if (!employee) throw new BadRequestException('الموظف غير موجود')
-  const rows = await em.find(RequestsConfig, { where: { key: In(['payroll.monthly_days', 'payroll.daily_hours']) } })
+  const rows = await em.find(RequestsConfig, { where: { key: In(['payroll.monthly_days', 'payroll.daily_hours', ...OVERTIME_WAGE_MONTH_CONFIG_KEYS]) } })
   const config = new Map(rows.map(row => [row.key, row.value]))
-  // قرار المستخدم: الاعتمادات الجديدة على إجمالي راتب الملف، ولو بقي إعداد قديم يستبعد بدلات.
-  // تبقى مكونات اللقطات المعتمدة سابقًا كما حُفظت؛ لا تعيد هذه القاعدة تسعيرها.
+  // الخطوة 13 / LOT-15: سعر الساعة من راتب شهر المسير الذي يقع فيه يوم العمل، لا من راتب الملف وقت آخر اعتماد.
+  // الإضافي على إجمالي المكونات الستة؛ تبقى مكونات اللقطات المعتمدة سابقًا كما حُفظت ولا يُعاد تسعيرها.
+  const { wagePayrollPeriod, salary } = await overtimeWageMonthSalary(em, employee, entry.date, config)
+  if (!salary.ok) {
+    throw new ConflictException({ code: 'OT_SALARY_MONTH_EVIDENCE_REQUIRED', message: `تعذر تسعير الإضافي على راتب شهر ${wagePayrollPeriod}: ${salary.message}` })
+  }
   const wageComponents = MONTHLY_SALARY_COMPONENTS
-    .map(component => ({ code: component.code, amount: Number(employee[component.key] ?? 0) }))
+    .map((component, index) => ({ code: component.code, amount: salary.monthlyComponents[index] }))
   const monthlyDays = Number(config.get('payroll.monthly_days') ?? '30'), dailyHours = Number(config.get('payroll.daily_hours') ?? '8')
   const multiplier = evidence.policy.multiplier
   if (wageComponents.some(component => !finite(component.amount) || component.amount < 0) ||
@@ -285,6 +327,9 @@ export async function buildOvertimeApprovalSnapshot(em: EntityManager, entry: Ov
     approvedAt: new Date().toISOString(), approverId: decision.approverId, reason: decision.reason?.trim() || null,
     approvedMinutes: decision.approvedMinutes, hours, multiplier, hourlyRate, amount,
     wageBase, wageBasis: 'GROSS_MONTHLY_SALARY', wageComponents, monthlyDays, dailyHours, dayKind: evidence.dayKind,
+    wagePayrollPeriod, wageSource: { kind: salary.source.kind, referencePeriod: salary.source.referencePeriod, sourceRef: salary.source.sourceRef,
+      historyRevision: salary.source.historyRevision, historyContentHash: salary.source.historyContentHash,
+      effectivePayrollPeriod: salary.source.effectivePayrollPeriod, warning: salary.source.warning },
     evidenceMode: evidence.evidenceMode, evidenceFingerprint: evidence.fingerprint, evidence,
     formula: 'wageBase / monthlyDays / dailyHours * multiplier * approvedMinutes / 60',
     originalPeriod: closed?.period ?? entry.date.slice(0, 7), deferredFromRunId: closed?.runId ?? null }

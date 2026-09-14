@@ -113,7 +113,15 @@ async function overtime(emp, { source = 'PRE_REQUESTED', hours = 6, requestStatu
   return repo('OvertimeEntry').save({ employeeId: emp.id, requestId: sourceRequest?.id ?? null, date, source,
     hoursRequested: hours, hoursActual: hours, payableHours: hours, rate: 1.5, status: 'APPROVED', payrollRunId: null })
 }
+// الخطوة 18 (B3): الاعتماد يتطلب إقرارًا بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية بنطاق المعتمد.
+async function acknowledgeUnassigned(user, runId) {
+  const report = await request(user, 'GET', `/payroll/runs/${runId}/unassigned`)
+  assert.equal(report.status, 200, JSON.stringify(report.body))
+  const ack = await request(user, 'POST', `/payroll/runs/${runId}/unassigned-ack`, { reportHash: report.body.reportHash })
+  assert.equal(ack.status, 201, JSON.stringify(ack.body))
+}
 async function approveAndPay(run) {
+  await acknowledgeUnassigned(approver, run.id)
   const approved = await request(approver, 'POST', `/payroll/runs/${run.id}/approve`)
   assert.equal(approved.status, 201, JSON.stringify(approved.body))
   const paid = await request(admin, 'POST', `/payroll/runs/${run.id}/pay`)
@@ -143,6 +151,8 @@ before(async () => {
     { key: 'payroll.daily_hours', value: '8' }, { key: 'payroll.late_deduction_enabled', value: 'true' },
     { key: 'attendance.absence_penalty_days', value: '1' }, { key: 'attendance.weekend_days', value: 'FRI,SAT' },
     { key: 'payroll.exempt_overtime_eligible', value: 'false' }, { key: 'payroll.exempt_unpaid_leave_deductible', value: 'true' },
+    // الخطوة 13: موظفو القاعدة المعزولة بلا سجل أجر شهري؛ الوضع الانتقالي الصريح يحسبهم براتب الملف (مثل payroll-coverage).
+    { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' },
     // أمثلة الاستثناء ثابتة في يونيو؛ مهلة الاختبار المعزول لا تغيّر سياسة النظام الفعلية.
     { key: 'overtime.request_backdate_days', value: String(Math.max(30, Math.ceil((Date.now() - Date.parse(startDate)) / 86400000) + 2)) },
   ])

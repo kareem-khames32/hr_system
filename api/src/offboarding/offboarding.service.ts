@@ -29,6 +29,7 @@ import { PayrollItem, PayrollRun } from '../payroll/payroll.entities'
 import { getSettlementFinancialClaims, lockPayrollEmployees, type SettlementFinancialSnapshot } from '../payroll/payroll-settlement-boundary'
 import { legacyInstallmentNumber, readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { assertNoHeldLoanInstallments, isPayrollInstallmentPlan } from '../payroll/payroll-installment-ledger'
+import { recordSettlementLoanRecovery } from '../loans/loan-recovery'
 import { PayrollDecimal } from '../payroll/payroll-decimal'
 import { assertUniqueOvertimeDays, legacyExemptOvertimeSource, overtimeFinancialValue, projectOvertimeFinancialValue, type LegacyExplicitOvertimeRequest, type OvertimeFinancialValue } from '../payroll/overtime-financial'
 import { loadAttendanceExemptions, exemptionPolicyOnDate } from '../attendance/attendance-exemption-resolver'
@@ -92,6 +93,27 @@ const pickFields = (o: Employee, keys: (keyof Employee)[]) => {
   const out: Partial<Record<keyof Employee, unknown>> = {}
   for (const k of keys) out[k] = o[k]
   return out
+}
+
+// HRC-07: بند مكافأة نهاية الخدمة التلقائي (تسميته الحالية والقديمة تبدأ بهذا النص)
+const EOS_LINE_PREFIX = 'مكافأة نهاية الخدمة'
+const isAutoEosLine = (line: Pick<SettlementLine, 'isAuto' | 'type' | 'label'>) =>
+  !!line.isAuto && line.type === 'CREDIT' && String(line.label ?? '').startsWith(EOS_LINE_PREFIX)
+const money = (n: number) => round2(n).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+
+// الاعتماد يرفض لو بند المكافأة التلقائي المحفوظ مختلف عن computeEos بالسياسة الحالية
+// (حالة محسوبة بالطريقة القديمة، أو مبلغ آلي عُدّل يدويًا، أو تسمية آلية غُيّرت فلا يُعرف
+// البند) — الفرق المتفق عليه يُضاف كبند تسوية يدوي بعد إعادة التوليد
+export function assertEosLineMatchesPolicy(stored: Array<Pick<SettlementLine, 'isAuto' | 'type' | 'label' | 'amount'>>, fresh: Array<Partial<SettlementLine>>) {
+  const expected = fresh.filter(row => isAutoEosLine(row as SettlementLine)).reduce((sum, row) => round2(sum + Number(row.amount ?? 0)), 0)
+  const found = stored.filter(isAutoEosLine)
+  const actual = found.reduce((sum, row) => round2(sum + Number(row.amount ?? 0)), 0)
+  if (found.length > 1 || actual !== expected || (expected > 0 && found.length !== 1)) {
+    throw new ConflictException(
+      `مكافأة نهاية الخدمة في التصفية (${found.length ? money(actual) : 'غير موجودة'}) لا تطابق حساب السياسة الحالية (${money(expected)}) — ` +
+      'أعد توليد البنود وراجعها قبل الاعتماد، وأضف أي فرق متفق عليه كبند تسوية يدوي'
+    )
+  }
 }
 
 // صافي التصفية من بنودها الحالية (إضافات − خصومات)
@@ -905,7 +927,10 @@ export class OffboardingService implements OnApplicationBootstrap {
       const current = await tx.editableCase(caseId, user)
       const lines = await tx.lines.find({ where: { caseId } })
       const financial: { snapshot?: SettlementFinancialSnapshot } = {}
-      await tx.buildSettlement(current, true, true, financial)
+      const freshRows = (await tx.buildSettlement(current, true, true, financial)) ?? []
+      // HRC-07: سطر المكافأة التلقائي المحفوظ لازم يطابق computeEos بالسياسة الحالية
+      // قبل القفل — قبل أي فحص آخر حتى يظهر سبب الفرق للمعتمد صريحًا
+      assertEosLineMatchesPolicy(lines, freshRows)
       const fresh = financial.snapshot
       if (!fresh) throw new ConflictException('تعذر التحقق من مصادر التصفية؛ أعد توليد البنود')
       const stored = current.settlementFinancialSnapshot
@@ -936,6 +961,13 @@ export class OffboardingService implements OnApplicationBootstrap {
         }
       }
       current.settlementNet = netOf(lines)
+      // AD-13 (C6): رصيد السلف غير المغطى بالمستحقات يُسجل مدينًا PENDING_RECOVERY ولا يُشطب تلقائيًا.
+      const recoverySnapshot = current.settlementFinancialSnapshot
+      if (recoverySnapshot && recoverySnapshot.installmentAmount > 0) {
+        await recordSettlementLoanRecovery(tx.lines.manager, { caseId: current.id, employeeId: current.employeeId,
+          installmentAmount: recoverySnapshot.installmentAmount, installments: recoverySnapshot.installments,
+          lines: lines.map(line => ({ type: line.type, amount: line.amount, label: line.label })), actorId: user.sub })
+      }
       current.settlementApprovedBy = user.sub
       current.settlementApprovedAt = new Date()
       const year = new Date().getFullYear()

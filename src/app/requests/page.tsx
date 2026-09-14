@@ -111,6 +111,7 @@ const fieldLabels: Record<string, string> = {
   fromDate: 'من تاريخ',
   toDate: 'إلى تاريخ',
   effectiveDate: 'تاريخ السريان',
+  effectivePayrollPeriod: 'يسري من راتب شهر',
   lastWorkingDate: 'آخر يوم عمل',
   from: 'من الساعة',
   to: 'إلى الساعة',
@@ -171,7 +172,7 @@ const leaveTypeCodeLabels: Record<string, string> = {
 
 // وجهات التنفيذ — للأنواع المبنية من «بانِي الطلبات» (بدون تسريب كود الـ handler)
 const handlerLabels: Record<string, string> = {
-  none: 'الطلب نفسه هو السجل',
+  none: 'تسجيل فقط — الطلب المعتمد هو السجل بلا أثر آلي',
   leave_calendar_balance: 'إجازة تُخصم من الرصيد',
   leave_calendar_payroll: 'إجازة بلا خصم رصيد',
   leave_calendar: 'إجازة تُخصم من الرصيد',
@@ -1268,7 +1269,7 @@ export default function MyRequestsPage() {
             <OvertimeRequestSummary overtime={requestDetail.overtime ?? undefined} reviewRequired={requestDetail.overtimeReviewRequired} />
             <LetterDownloadButton reference={requestDetail.destinationRef} />
             <h3 className="font-bold">تعليقات المعتمدين</h3>
-            {(requestDetail.approvals ?? []).map(a => <div key={a.id} className="p-3 bg-gray-50 rounded-xl"><p className="text-sm font-medium">{({ APPROVE: 'اعتماد', APPROVED: 'اعتماد', REJECT: 'رفض', REJECTED: 'رفض', RETURN: 'إرجاع للاستكمال', RETURNED_FOR_INFO: 'إرجاع للاستكمال', ESCALATED: 'تصعيد', CANCELLED: 'إلغاء' } as Record<string, string>)[a.action] ?? a.action}</p><p className="text-sm whitespace-pre-wrap">{a.comment || 'بدون تعليق'}</p><time className="text-xs text-gray-400">{a.actedAt?.slice(0, 10)}</time></div>)}
+            {(requestDetail.approvals ?? []).map(a => <div key={a.id} className="p-3 bg-gray-50 rounded-xl"><p className="text-sm font-medium">{({ APPROVE: 'اعتماد', APPROVED: 'اعتماد', REJECT: 'رفض', REJECTED: 'رفض', RETURN: 'إرجاع للاستكمال', RETURNED_FOR_INFO: 'إرجاع للاستكمال', ESCALATED: 'تصعيد', CANCELLED: 'إلغاء', EXECUTION_FAILED: 'تعذّر التنفيذ المجدول' } as Record<string, string>)[a.action] ?? a.action}</p><p className="text-sm whitespace-pre-wrap">{a.comment || 'بدون تعليق'}</p><time className="text-xs text-gray-400">{a.actedAt?.slice(0, 10)}</time></div>)}
             {!requestDetail.approvals?.length && <p className="text-gray-500 text-sm">لم تُسجّل تعليقات بعد</p>}
           </div></div>}
         {/* New Request Modal */}
@@ -1419,6 +1420,12 @@ export default function MyRequestsPage() {
                                         {t.autoGeneratesPdf && (
                                           <span className="mr-2 badge text-[10px] bg-teal-50 text-teal-700">PDF آلي</span>
                                         )}
+                                        {/* D12: الطلب المعتمد هو السجل — بلا أثر آلي على الملف أو الراتب */}
+                                        {t.executionMode === 'RECORD_ONLY' && (
+                                          <span className="mr-2 badge text-[10px] bg-amber-50 text-amber-700" title="الطلب المعتمد هو السجل — لا يُنفَّذ أثر آلي">
+                                            {t.executionLabel ?? 'تسجيل فقط'}
+                                          </span>
+                                        )}
                                         {t.isConfidential && (
                                           <span className="mr-2 badge text-[10px] bg-gray-800 text-white">
                                             <EyeOff size={9} className="inline ml-0.5" />
@@ -1429,7 +1436,7 @@ export default function MyRequestsPage() {
                                       <p className="text-xs text-gray-500">
                                         {t.leaveProfiles && t.leaveProfiles.length > 1 ? 'اختر نموذج الإجازة لعرض مسار اعتماده' : <>السلسلة: {t.approvalChainName ?? 'حسب إعدادات نوع الطلب'} • التنفيذ:{' '}
                                         {/* «سجل فقط» صريح — حتى لو الكتالوج المحلي بيوصف وجهة أخرى (REQ-3) */}
-                                        {t.destinationHandler === 'none'
+                                        {t.destinationHandler === 'none' || t.executionMode === 'RECORD_ONLY'
                                           ? handlerLabels.none
                                           : handlerLabels[t.destinationHandler] ??
                                             '—'}</>}
@@ -1761,6 +1768,8 @@ export default function MyRequestsPage() {
                             type={
                               f.type === 'date'
                                 ? 'date'
+                                : f.type === 'month'
+                                ? 'month'
                                 : f.type === 'number'
                                 ? 'number'
                                 : 'text'

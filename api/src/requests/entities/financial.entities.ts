@@ -30,6 +30,33 @@ export class Loan {
 
   @Column({ type: 'datetime', nullable: true })
   disbursedAt: Date
+
+  // AD-07/09 (C6): المطلوب والمعتمد متمايزان، ولقطة السقوف وقرار الاستثناء محفوظان. NULL للسلف القديمة.
+  // المبالغ تُقرأ بـCONVERT نصي؛ لا تمر عبر Number.
+  @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
+  requestedAmount: string | null
+
+  @Column({ type: 'bit', nullable: true })
+  isExceptional: boolean | null
+
+  @Column({ type: 'nvarchar', length: 30, nullable: true })
+  exceptionalCategory: string | null
+
+  @Column({ type: 'nvarchar', length: 500, nullable: true })
+  exceptionalReason: string | null
+
+  // شهر أول قسط YYYY-MM كما اختارته الموارد البشرية أو الشهر التالي افتراضيًا
+  @Column({ type: 'nvarchar', length: 7, nullable: true })
+  firstInstallmentPeriod: string | null
+
+  @Column({ type: 'int', nullable: true })
+  installmentMonths: number | null
+
+  @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
+  capSnapshot: string | null
+
+  @Column({ type: 'int', nullable: true })
+  createdByUserId: number | null
 }
 
 export type LoanInstallmentFinancialStatus = 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED'
@@ -79,7 +106,8 @@ export class LoanInstallment {
 // القائمة (تأخير/غياب/إجازة/سلف/أوفرتايم): عهدة مفقودة، مكافأة، بدل، تسوية،
 // مصروفات، غرامة... يستهلكه المسير مرة واحدة (PENDING→APPLIED) ويصله بمصدره.
 export type ObligationType = 'DEBIT' | 'CREDIT' // خصم | إضافة
-export type ObligationStatus = 'PENDING' | 'APPLIED' | 'CANCELLED'
+// SUSPENDED (C2 / DD-11 قاعدة 4): قسط خصم مصنف تجاوز حد مرات الترحيل؛ لا يدخل مسيرًا حتى قرار الموارد البشرية
+export type ObligationStatus = 'PENDING' | 'APPLIED' | 'CANCELLED' | 'SUSPENDED'
 
 @Entity('employee_obligations')
 export class EmployeeObligation {
@@ -131,5 +159,33 @@ export class EmployeeObligation {
 
   @CreateDateColumn()
   createdAt: Date
+
+  // DD-05/07: طلب الخصم المصنّف مصدر القيد، وشهر المسير المستهدف (YYYY-MM)
+  @Index('IX_employee_obligations_deduction_request')
+  @Column({ type: 'int', nullable: true })
+  deductionRequestId: number | null
+
+  @Column({ type: 'nvarchar', length: 7, nullable: true })
+  targetPeriod: string | null
+
+  // DD-09: الحجز عند اعتماد المسير — مسير معتمد واحد فقط يحمل القيد
+  @Index('IX_employee_obligations_reserved_run')
+  @Column({ type: 'int', nullable: true })
+  reservedPayrollRunId: number | null
+
+  @Column({ type: 'datetime2', nullable: true })
+  reservedAt: Date | null
+
+  // DD-11: المحصل فعلًا عند الصرف؛ الباقي بعد حماية الصافي قيد جديد مرتبط بالأصل
+  @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
+  appliedAmount: number | null
+
+  @Column({ type: 'int', nullable: true })
+  carriedFromObligationId: number | null
+
+  // C4 / الخطوة 27 (EX-05): طلب المكافأة مصدر القيد الموجب (أو قيد استردادها المدين بعد الصرف)
+  @Index('IX_employee_obligations_bonus_request')
+  @Column({ type: 'int', nullable: true })
+  bonusRequestId: number | null
 }
 

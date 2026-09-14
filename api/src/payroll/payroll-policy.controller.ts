@@ -1,7 +1,7 @@
 import { Body, Controller, Get, HttpCode, Param, ParseIntPipe, Patch, Post, UseGuards, ValidationPipe } from '@nestjs/common'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
-import { ClonePayrollPolicyVersionDto, CreatePayrollPolicyDto, PayrollPolicyMutationDto, UpdatePayrollPolicyDto, UpdatePayrollPolicyVersionDto } from './payroll-policy.dto'
+import { ClonePayrollPolicyVersionDto, CreatePayrollPolicyDto, PayrollPolicyMutationDto, PublishPayrollPolicyVersionDto, UpdatePayrollPolicyDto, UpdatePayrollPolicyVersionDto } from './payroll-policy.dto'
 import { PayrollPolicyService } from './payroll-policy.service'
 import { PayrollFormulaBodyPipe, TestPayrollFormulaDto, ValidatePayrollComponentOrderDto, ValidatePayrollFormulaDto } from './payroll-formula.dto'
 import { ReplacePayrollPolicyDefinitionDto, ValidatePayrollPolicyDefinitionDto } from './payroll-policy-definition-api.dto'
@@ -22,7 +22,7 @@ export class PayrollPolicyController {
   @Perm('payroll.view') @Get()
   list(@CurrentUser() user: JwtPayload) { return this.service.list(user) }
 
-  @Perm('payroll.calculate') @Post()
+  @Perm('payroll.policy.manage') @Post()
   create(@CurrentUser() user: JwtPayload, @Body(strictBody(CreatePayrollPolicyDto)) body: unknown) {
     return this.service.create(user, body as CreatePayrollPolicyDto)
   }
@@ -69,7 +69,7 @@ export class PayrollPolicyController {
   @Perm('payroll.view') @Get(':id')
   detail(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) { return this.service.detail(user, id) }
 
-  @Perm('payroll.calculate') @Patch(':id')
+  @Perm('payroll.policy.manage') @Patch(':id')
   update(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body(strictBody(UpdatePayrollPolicyDto)) body: unknown) {
     return this.service.update(user, id, body as UpdatePayrollPolicyDto)
   }
@@ -92,7 +92,7 @@ export class PayrollPolicyController {
     return this.service.collectionDetail(user, id, versionId)
   }
 
-  @Perm('payroll.calculate') @Patch(':id/versions/:versionId/collection')
+  @Perm('payroll.policy.manage') @Patch(':id/versions/:versionId/collection')
   updateCollection(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Param('versionId', ParseIntPipe) versionId: number,
     @Body(new PayrollFormulaBodyPipe(50000), strictBody(UpdatePayrollCollectionPolicyDto)) body: unknown) {
     return this.service.updateCollection(user, id, versionId, body as UpdatePayrollCollectionPolicyDto)
@@ -116,25 +116,37 @@ export class PayrollPolicyController {
     return this.service.validateDefinition(user, id, versionId, body as ValidatePayrollPolicyDefinitionDto)
   }
 
-  @Perm('payroll.calculate') @Patch(':id/versions/:versionId/definition')
+  @Perm('payroll.policy.manage') @Patch(':id/versions/:versionId/definition')
   replaceDefinition(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Param('versionId', ParseIntPipe) versionId: number,
     @Body(new PayrollFormulaBodyPipe(30000), strictBody(ReplacePayrollPolicyDefinitionDto)) body: unknown) {
     return this.service.replaceDefinition(user, id, versionId, body as ReplacePayrollPolicyDefinitionDto)
   }
 
-  @Perm('payroll.calculate') @Post(':id/versions')
+  @Perm('payroll.policy.manage') @Post(':id/versions')
   clone(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body(strictBody(ClonePayrollPolicyVersionDto)) body: unknown) {
     return this.service.cloneVersion(user, id, body as ClonePayrollPolicyVersionDto)
   }
 
-  @Perm('payroll.calculate') @Patch(':id/versions/:versionId')
+  @Perm('payroll.policy.manage') @Patch(':id/versions/:versionId')
   updateVersion(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Param('versionId', ParseIntPipe) versionId: number,
     @Body(strictBody(UpdatePayrollPolicyVersionDto)) body: unknown) {
     return this.service.updateVersion(user, id, versionId, body as UpdatePayrollPolicyVersionDto)
   }
 
-  @Perm('payroll.calculate') @Post(':id/archive')
+  @Perm('payroll.policy.manage') @Post(':id/archive')
   archive(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body(strictBody(PayrollPolicyMutationDto)) body: unknown) {
     return this.service.archive(user, id, body as PayrollPolicyMutationDto)
+  }
+
+  // الخطوة 15: مراجعة النشر قراءة فقط (المشكلات المانعة والتحذيرات ومعاينة الفترات والنسخ التي ستُغلق).
+  @Perm('payroll.view') @Get(':id/versions/:versionId/publish-check')
+  publishCheck(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Param('versionId', ParseIntPipe) versionId: number) {
+    return this.service.publishCheck(user, id, versionId)
+  }
+
+  @Perm('payroll.policy.manage') @Post(':id/versions/:versionId/publish') @HttpCode(200)
+  publish(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Param('versionId', ParseIntPipe) versionId: number,
+    @Body(strictBody(PublishPayrollPolicyVersionDto)) body: unknown) {
+    return this.service.publish(user, id, versionId, body as PublishPayrollPolicyVersionDto)
   }
 }

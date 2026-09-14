@@ -70,6 +70,17 @@ class ActDto {
   @IsString()
   @MaxLength(500)
   reductionReason?: string
+
+  // C6 / AD-07: تخفيض مبلغ السلفة عند الاعتماد (نص دقيق يُتحقق منه في الخدمة) أو استثناء موثق لتجاوز السقف
+  @IsOptional()
+  @IsString()
+  @MaxLength(20)
+  approvedAmount?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  capOverrideReason?: string
 }
 
 class ResubmitDto {

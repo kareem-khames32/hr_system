@@ -47,6 +47,23 @@ export const PERMISSIONS: Record<string, string> = {
   'payroll.pay': 'صرف المسير',
   'payroll.reopen': 'إعادة فتح مسير معتمد للمراجعة بسبب موثق',
   'payroll.cancel': 'إلغاء مسودة مسير مع الاحتفاظ بأثرها',
+  // الخطوة 15: مجموعات السياسات (الاسم والنسخ والإعدادات والدورة) ونشرها منفصلة عن الاحتساب
+  'payroll.policy.manage': 'إدارة مجموعات سياسات الرواتب ونشر نسخها',
+  // C6 / الخطوة 29: السلف
+  'loans.policies': 'إدارة سياسات سقوف السلف ونسخها',
+  'loans.exceptional': 'إنشاء سلفة استثنائية لموظف فوق السقف بسبب موثق وشهر أول قسط',
+  'loans.cap_override': 'اعتماد سلفة تجاوزت السقف باستثناء موثق',
+  'loans.repay': 'تسجيل السداد المبكر وتحصيل أرصدة السلف بعد الإنهاء',
+  'loans.write_off': 'شطب رصيد سلفة متبقٍ بعد انتهاء الخدمة بسبب موثق',
+  // C2 / الخطوة 25: الخصومات المصنفة — الإنشاء للمدير الهيكلي بحسب نطاق النوع دون صلاحية نظام
+  'deductions.view': 'عرض الخصومات المصنفة في نطاق الفرع',
+  'deductions.approve': 'اعتماد خطوة الموارد البشرية في الخصومات المصنفة',
+  'deductions.manage': 'إدارة أنواع الخصومات وإنشاء الخصم للموارد البشرية وإلغاؤه بسبب موثق',
+  // C4 / الخطوة 27: المكافآت — الاقتراح للمدير الهيكلي على مرؤوسيه دون صلاحية نظام، والقرار الأخير للموارد البشرية
+  'bonuses.view': 'عرض المكافآت في نطاق الفرع',
+  'bonuses.approve': 'اعتماد خطوة الموارد البشرية في المكافآت',
+  'bonuses.manage': 'إدارة أنواع المكافآت واقتراح المكافأة للموارد البشرية وإلغاؤها أو عكسها بسبب موثق',
+  'bonuses.exceed_cap': 'اقتراح أو اعتماد مكافأة تتجاوز سقف نوعها من الراتب الأساسي',
   // العهدة والمستندات
   'custody.assign': 'إسناد وإدارة العهد',
   'documents.manage': 'إدارة مستندات الموظفين',
@@ -71,7 +88,18 @@ export const ALL_PERMISSIONS = Object.keys(PERMISSIONS)
 
 // صلاحيات إدارية لا يمنحها إلا مدير النظام — منع التصعيد: من يملك users.manage
 // أو roles.manage لا يصنع لنفسه أو لغيره مدير نظام فعلياً (تجاوز أو دور أو إسناد دور)
-export const SUPER_ADMIN_ONLY_GRANTS = ['users.manage', 'roles.manage', 'settings.manage']
+// + الصلاحيات الحساسة التي تغيّر الصافي أو تتخطى الحضور (SEC-05): إعادة فتح المسير
+// وإلغاؤه، واعتماد استثناء الحضور بمستوييه، وتخفيض دقائق الإضافي — مدير الموارد
+// البشرية (users.manage) لا يصنع حساباً أو دوراً أو تجاوزاً يحملها
+export const SUPER_ADMIN_ONLY_GRANTS = [
+  'users.manage', 'roles.manage', 'settings.manage',
+  'attendance_exemption.approve_executive', 'attendance_exemption.approve',
+  'payroll.reopen', 'payroll.cancel', 'overtime.adjust',
+  // C6: تجاوز سقف السلفة وشطب رصيدها يغيّران الدين المستحق
+  'loans.cap_override', 'loans.write_off',
+  // C4: تجاوز سقف المكافأة يرفع المستحق فوق حد النوع
+  'bonuses.exceed_cap',
+]
 
 // ما يُضاف حديثاً منها (مقارنة بالسابق) → رسالة الرفض، أو null لو لا منح جديد
 // ('*' المكتسبة حديثاً = كل الصلاحيات ومنها الثلاث — مخالفة أيضاً)
@@ -112,12 +140,23 @@ export const ROLE_PRESETS: Array<{
       'requests.view_all', 'requests.create_on_behalf', 'approve.hr',
       'attendance.view_all', 'attendance.manage', 'attendance.sync', 'overtime.confirm', 'overtime.adjust',
       'leaves.view_all', 'leaves.revoke', 'leave_balances.manage',
-      'payroll.view', 'payroll.calculate', 'payroll.approve', 'payroll.pay',
+      'payroll.view', 'payroll.calculate', 'payroll.approve', 'payroll.pay', 'payroll.policy.manage',
+      // SEC2 (الخطوة 9): إعادة فتح المسير المعتمد وإلغاء المسودة لنفس دور الاعتماد، بسبب وحدث؛ ولا يمررهما لغيره (SUPER_ADMIN_ONLY_GRANTS)
+      'payroll.reopen', 'payroll.cancel',
+      // C6: الشطب (loans.write_off) لا يُمنح افتراضيًا — صلاحية مستقلة (AD-13)
+      'loans.policies', 'loans.exceptional', 'loans.cap_override', 'loans.repay',
+      // C2: الخصومات المصنفة (ترحيل 20260914_*_c2_typed_deductions يضيفها للدور القائم)
+      'deductions.view', 'deductions.approve', 'deductions.manage',
+      // C4: المكافآت (ترحيل 20260914_026_c4_bonuses يضيفها للدور القائم)؛ تجاوز السقف bonuses.exceed_cap لا يُمنح افتراضيًا
+      'bonuses.view', 'bonuses.approve', 'bonuses.manage',
       'custody.assign', 'documents.manage',
       'offboarding.manage', 'settlement.edit', 'settlement.approve',
       'reports.view', 'dashboard.view_all', 'calendar.view_all',
       'settings.manage', 'request_types.manage', 'approval_chains.manage',
       'candidates.manage', 'transfers.view',
+      // خطة المراجعة 24: طلب استثناء الحضور واعتماده وإنهاؤه — لا يعتمد أحد ما أنشأه (فصل مهام في الخدمة).
+      // الاعتماد التنفيذي approve_executive يبقى لمدير النظام (ترحيل 20260914_*_c1_attendance_exemption_roles)
+      'attendance_exemption.view', 'attendance_exemption.manage', 'attendance_exemption.approve',
     ],
   },
   {
@@ -132,6 +171,12 @@ export const ROLE_PRESETS: Array<{
       'custody.assign',
       'reports.view', 'dashboard.view_all', 'calendar.view_all',
       'transfers.view',
+      // يطلب استثناء الحضور لموظفي فرعه ويتابعه؛ القرار للموارد البشرية
+      'attendance_exemption.view', 'attendance_exemption.manage',
+      // C2: يتابع الخصومات المصنفة لفرعه؛ الإنشاء بعلاقته الهيكلية والقرار للموارد البشرية
+      'deductions.view',
+      // C4: يتابع مكافآت فرعه؛ الاقتراح بعلاقته الهيكلية والقرار للموارد البشرية
+      'bonuses.view',
     ],
   },
   {

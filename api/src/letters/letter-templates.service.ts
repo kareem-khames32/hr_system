@@ -6,6 +6,7 @@ import { DEFAULT_LETTER_TEMPLATES, LETTER_VARIABLES, resolveLetterContent, valid
 import { RequestType } from '../requests/entities/request-type.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { LetterRenderer } from './letter-renderer.service'
+import { withoutDataPlaceholder } from '../common/data-placeholders'
 
 @Injectable()
 export class LetterTemplatesService implements OnApplicationBootstrap {
@@ -38,7 +39,8 @@ export class LetterTemplatesService implements OnApplicationBootstrap {
       bindings: await em.find(LetterTemplateBinding),
       requestTypes: await em.find(RequestType, { where: { destinationHandler: 'letter_pdf_generator' }, select: { code: true, nameAr: true }, order: { id: 'ASC' } }),
       variables: LETTER_VARIABLES,
-      companyNameConfigured: !!(await em.findOneBy(RequestsConfig, { key: 'company.name' }))?.value?.trim(),
+      // القيمة المؤقتة لاسم الشركة ليست اسمًا مضبوطًا؛ يبقى تنبيه «أكمل اسم الشركة» ظاهرًا.
+      companyNameConfigured: !!withoutDataPlaceholder((await em.findOneBy(RequestsConfig, { key: 'company.name' }))?.value),
     }
   }
 

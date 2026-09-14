@@ -11,6 +11,8 @@ export interface AttendanceDeductionPolicy {
   dailyCapDays: number
   dayRate: number
   minuteRate: number
+  // D1: خصم الخروج المبكر على الوردية الثابتة (نقصها بعد طرح التأخير) بسعر الدقيقة؛ غياب الحقل في اللقطات القديمة = مفعّل.
+  earlyLeaveEnabled?: boolean
 }
 
 export interface AttendanceDeductionInput {
@@ -34,14 +36,17 @@ export function attendanceDeductionDay(
     positive(day.attendanceRuleSnapshot?.paidPermissionShortfallCoveredMinutes))
   const shortageAfterPermission = Math.max(0, rawShortfallMinutes - paidPermissionCoveredMinutes)
   const latenessBeforeOverlap = policy.lateEnabled ? positive(tierLatenessAmount) : 0
+  // D1: على الوردية الثابتة يمثل النقص بعد طرح التأخير الخروجَ المبكر؛ إطفاؤه لا يمس المرونة (يحكمها shortfallEnabled).
+  const shortfallApplies = policy.shortfallEnabled && !(day.attendanceRuleSnapshot?.flexEnabled === false && policy.earlyLeaveEnabled === false)
   // التأخير قبل السماح: الدقائق المعفاة لا تعود كخصم نقص ساعات.
-  const overlapMinutes = policy.overlapPolicy === 'NET_OF_LATENESS'
+  // D7: الطرح لا يتم إلا إذا كان خصم التأخير مفعّلًا؛ وإلا تبقى دقائق لم تُشتغل بلا أي خصم.
+  const overlapMinutes = policy.overlapPolicy === 'NET_OF_LATENESS' && policy.lateEnabled
     ? Math.min(shortageAfterPermission, unexcusedLateMinutes) : 0
   const shortfallBeforeGrace = Math.max(0, shortageAfterPermission - overlapMinutes)
   const shortfallGraceMinutes = positive(day.attendanceRuleSnapshot?.shortfallToleranceMinutes)
-  const chargeableShortfallMinutes = policy.shortfallEnabled && shortfallBeforeGrace > shortfallGraceMinutes
+  const chargeableShortfallMinutes = shortfallApplies && shortfallBeforeGrace > shortfallGraceMinutes
     ? shortfallBeforeGrace : 0
-  const shortfallBeforeOverlap = policy.shortfallEnabled && shortageAfterPermission > shortfallGraceMinutes
+  const shortfallBeforeOverlap = shortfallApplies && shortageAfterPermission > shortfallGraceMinutes
     ? (policy.shortfallMode === 'FRACTION' ? policy.shortfallValue * policy.dayRate
       : shortageAfterPermission * policy.minuteRate * (policy.shortfallMode === 'MULTIPLIER' ? policy.shortfallValue : 1)) : 0
   let shortfallAmount = chargeableShortfallMinutes > 0

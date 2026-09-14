@@ -822,7 +822,8 @@ export default function EmployeeProfilePage() {
 
             {/* Actions */}
             <div className="flex items-center gap-2">
-              <button className="btn-secondary flex items-center gap-2">
+              {/* طباعة ملف الموظف المعروض بنافذة طباعة المتصفح (وتتيح الحفظ PDF) — كان زرًا بلا تنفيذ */}
+              <button type="button" onClick={() => window.print()} title="طباعة ملف الموظف أو حفظه PDF" className="btn-secondary flex items-center gap-2">
                 <Printer size={18} />
                 طباعة
               </button>

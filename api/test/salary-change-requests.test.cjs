@@ -12,13 +12,15 @@ const { salaryCurrentSourceHash } = require('../src/payroll/payroll-salary-histo
 const employeeId = 7, requestId = 11, branchId = 2, actorId = 20, today = '2026-09-13'
 const type = { code: 'SALARY_INCREASE', destinationHandler: 'salary_update_history', nameAr: 'زيادة راتب', category: 'financial', requiredFields: '["newSalary","increase_pct"]', customFields: null }
 const salary = extra => ({ basicSalary: '6000.00', housingAllowance: '500.00', transportAllowance: '100.00', phoneAllowance: '50.00', workNatureAllowance: '20.00', otherAllowance: '0.00', currency: 'SAR', ...extra })
-const payload = extra => ({ newSalary: '6600.00', effectiveDate: today, reason: 'قرار زيادة اختبار', ...extra })
+// قاعدة المالك: الزيادة تسري من راتب شهر كامل؛ today=2026-09-13 يقع في شهر مسير 2026-09 بدورة 23 (23/8 → 22/9).
+const payload = extra => ({ newSalary: '6600.00', effectivePayrollPeriod: '2026-09', reason: 'قرار زيادة اختبار', ...extra })
 const req = extra => ({ id: requestId, requesterId: employeeId, branchId, status: 'APPROVED', typeCode: type.code, ...extra })
 function manager(extra = {}) {
-  const data = { salary: salary(), identity: { id: employeeId, branchId, status: 'active', isActive: true }, history: [], decision: { id: 99, approverId: actorId }, ...extra }
+  const data = { salary: salary(), identity: { id: employeeId, branchId, status: 'active', isActive: true }, history: [], decision: { id: 99, approverId: actorId }, cycle: '23', ...extra }
   const calls = []
   return { calls, data, queryRunner: { isTransactionActive: true, data: {} }, async query(sql, args) {
     calls.push({ sql, args }); assert.match(sql, /^SELECT\b/); assert.doesNotMatch(sql, /\b(?:UPDATE|INSERT|DELETE|MERGE|CREATE|DROP)\b/i)
+    if (sql.includes('FROM dbo.requests_config')) return [{ value: data.cycle }]
     if (sql.includes('[status], [isActive]')) return data.identity ? [structuredClone(data.identity)] : []
     if (sql.includes('FROM dbo.employees')) return [{ id: employeeId, employeeCode: 'E007', fullName: 'موظف اختبار', branchId: data.identity?.branchId ?? branchId, ...data.salary }]
     if (sql.includes('FROM dbo.employee_salary_history_versions')) return data.history
@@ -28,11 +30,14 @@ function manager(extra = {}) {
 async function staged(patch, input = payload()) { return lib.stageSalaryChangeRequest(manager(patch), req(), input, 21) }
 const code = expected => error => error.getResponse?.().code === expected
 
-test('client salary values stay exact strings and required date/reason are strict; incomplete drafts remain possible', () => {
+test('client salary values stay exact strings and required payroll month/reason are strict; incomplete drafts remain possible', () => {
   assert.deepEqual(lib.assertSalaryChangeClientPayload({}), {})
   const value = lib.assertSalaryChangeClientPayload(payload({ newSalary: '0006600.1', reason: '  قرار  ' }), true)
-  assert.equal(value.newSalary, '6600.10'); assert.equal(value.reason, 'قرار')
-  for (const patch of [{ newSalary: 6600 }, { newSalary: '6600.001' }, { newSalary: '-1' }, { effectiveDate: '2026-02-30' }, { effectiveDate: '' }, { reason: ' ' }]) assert.throws(() => lib.assertSalaryChangeClientPayload(payload(patch), true))
+  assert.equal(value.newSalary, '6600.10'); assert.equal(value.reason, 'قرار'); assert.equal(value.effectivePayrollPeriod, '2026-09')
+  for (const patch of [{ newSalary: 6600 }, { newSalary: '6600.001' }, { newSalary: '-1' }, { effectivePayrollPeriod: '2026-13' }, { effectivePayrollPeriod: '2026-09-01' }, { effectivePayrollPeriod: '' }, { reason: ' ' }]) assert.throws(() => lib.assertSalaryChangeClientPayload(payload(patch), true))
+  // التاريخ اليومي لم يعد مقبولًا حتى لو صحيحًا: الشهر كامل هو القرار.
+  assert.throws(() => lib.assertSalaryChangeClientPayload(payload({ effectiveDate: '2026-09-01' }), true), code('SALARY_REQUEST_PAYROLL_PERIOD_REQUIRED'))
+  assert.equal(lib.SALARY_CHANGE_BASIS_VERSION, 'SALARY_REQUEST_BASIS_V2_20260914')
 })
 
 test('client cannot forge financial basis or approval even as null; legacy increase_pct is discarded', () => {
@@ -65,16 +70,17 @@ test('missing component/currency and missing/inactive/moved employee stop submis
   const em = manager(); em.queryRunner.isTransactionActive = false; await assert.rejects(lib.stageSalaryChangeRequest(em, req(), payload(), 21), /معاملة نشطة/)
 })
 
-test('stored basis binds request, dates, reason and exact salary; payload edits cannot reuse an approval basis', async () => {
+test('stored basis binds request, payroll month, reason and exact salary; payload edits cannot reuse an approval basis', async () => {
   const original = await staged()
-  for (const patch of [{ newSalary: '6700.00' }, { effectiveDate: '2026-09-14' }, { reason: 'تغيير غير معتمد' }]) assert.throws(() => lib.readStoredSalaryChangePayload({ ...original, ...patch }), code('SALARY_REQUEST_BASIS_INVALID'))
+  for (const patch of [{ newSalary: '6700.00' }, { effectivePayrollPeriod: '2026-10' }, { reason: 'تغيير غير معتمد' }]) assert.throws(() => lib.readStoredSalaryChangePayload({ ...original, ...patch }), code('SALARY_REQUEST_BASIS_INVALID'))
   const changed = structuredClone(original); changed.salaryChangeBasis.salary.phoneAllowance = '51.00'
   assert.throws(() => lib.readStoredSalaryChangePayload(changed), code('SALARY_REQUEST_BASIS_INVALID'))
   const forgedDisplay = { ...original, increase_pct: '-1000' }; assert.equal(lib.readStoredSalaryChangePayload(forgedDisplay).increase_pct, '10.000000')
 })
 
-test('old undated and unstaged pending requests fail409 without inferring today', () => {
-  assert.throws(() => lib.readStoredSalaryChangePayload({ newSalary: 7000, reason: 'قديم' }), code('SALARY_REQUEST_EFFECTIVE_DATE_REQUIRED'))
+test('old undated, daily-dated and unstaged pending requests fail409 without inferring a payroll month', () => {
+  assert.throws(() => lib.readStoredSalaryChangePayload({ newSalary: 7000, reason: 'قديم' }), code('SALARY_REQUEST_PAYROLL_PERIOD_REQUIRED'))
+  assert.throws(() => lib.readStoredSalaryChangePayload({ newSalary: '7000.00', effectiveDate: '2026-09-01', reason: 'قديم بتاريخ يومي' }), code('SALARY_REQUEST_PAYROLL_PERIOD_REQUIRED'))
   assert.throws(() => lib.readStoredSalaryChangePayload(payload()), code('SALARY_REQUEST_BASIS_REQUIRED'))
 })
 
@@ -87,13 +93,17 @@ test('all approval threshold operators compare the exact ratio and reject malfor
   for (const threshold of [null, 'NaN', 'Infinity']) assert.throws(() => lib.salaryIncreaseThresholdMet(result, 'increase_pct', '>=', threshold), code('SALARY_REQUEST_THRESHOLD_INVALID'))
 })
 
-test('future approval records trusted actor on request only; no current salary/history writer is called', async () => {
-  const value = await staged({}, payload({ effectiveDate: '2026-09-14' })), em = manager(), request = req()
+test('future payroll-month approval records trusted actor on request only; no current salary/history writer is called', async () => {
+  const value = await staged({}, payload({ effectivePayrollPeriod: '2026-10' })), em = manager(), request = req()
   const originalWriter = salaryWriter.applyEmployeeSalaryChange; let calls = 0
   salaryWriter.applyEmployeeSalaryChange = async () => { calls++; throw Error('unexpected writer') }
   try {
     const result = await lib.executeSalaryChangeRequest(em, request, value, today)
     assert.equal(result.completed, false); assert.equal(result.ref, `SAL-REQUEST-${requestId}`); assert.equal(calls, 0)
+    assert.match(result.note, /راتب شهر 2026-10/); assert.match(result.note, /2026-09-23/)
+    // يوم بداية دورة أكتوبر (23 سبتمبر) يصبح الطلب مستحق التنفيذ.
+    assert.equal(await lib.salaryChangeExecutionDate(manager(), '2026-10'), '2026-09-23')
+    assert.equal(await lib.salaryChangeExecutionDate(manager({ cycle: '31' }), '2026-03'), '2026-03-01')
     const stored = JSON.parse(request.payload); assert.equal(stored.salaryChangeApproval.actorUserId, actorId); assert.equal(stored.salaryChangeApproval.basisContentHash, value.salaryChangeBasis.contentHash)
     assert.deepEqual(em.data.salary, salary())
   } finally { salaryWriter.applyEmployeeSalaryChange = originalWriter }
@@ -107,6 +117,7 @@ test('due execution calls the shared writer with exact proposed amount, request 
     assert.equal(result.completed, true); assert.equal(inputs.length, 1); assert.equal(inputs[0].actorUserId, actorId)
     assert.equal(inputs[0].requestId, requestId); assert.equal(inputs[0].evidenceReference, `request:${requestId}`)
     assert.deepEqual(inputs[0].salary, salary({ basicSalary: '6600.00' })); assert.equal(inputs[0].expectedRevision, 0)
+    assert.equal(inputs[0].effectivePayrollPeriod, '2026-09'); assert.equal('effectiveDate' in inputs[0], false)
   } finally { salaryWriter.applyEmployeeSalaryChange = originalWriter }
 })
 
@@ -123,7 +134,7 @@ test('execution requires trusted approval and allowed status; actor cannot be ta
 })
 
 test('explicit auto-approval context can schedule future execution and stored actor must match later audited decisions', async () => {
-  const value = await staged({}, payload({ effectiveDate: '2026-09-14' })), em = manager({ decision: null }), request = req()
+  const value = await staged({}, payload({ effectivePayrollPeriod: '2026-10' })), em = manager({ decision: null }), request = req()
   em.queryRunner.data.salaryRequestAutoActors = new Map([[requestId, 77]])
   await lib.executeSalaryChangeRequest(em, request, value, today)
   assert.equal(JSON.parse(request.payload).salaryChangeApproval.actorUserId, 77)
@@ -132,7 +143,7 @@ test('explicit auto-approval context can schedule future execution and stored ac
 })
 
 test('resubmission auto approval uses current transaction actor and ignores approval retained from an older cycle', async () => {
-  const value = await staged({}, payload({ effectiveDate: '2026-09-14' })), data = { decision: { id: 50, approverId: 22 }, returned: { id: 51, approverId: 23 } }
+  const value = await staged({}, payload({ effectivePayrollPeriod: '2026-10' })), data = { decision: { id: 50, approverId: 22 }, returned: { id: 51, approverId: 23 } }
   const em = manager(data), request = req(); em.queryRunner.data.salaryRequestAutoActors = new Map([[requestId, 77]])
   await lib.executeSalaryChangeRequest(em, request, value, today)
   const stored = JSON.parse(request.payload); assert.equal(stored.salaryChangeApproval.actorUserId, 77)
@@ -141,14 +152,14 @@ test('resubmission auto approval uses current transaction actor and ignores appr
   await assert.rejects(lib.executeSalaryChangeRequest(manager(data), req(), value, today), code('SALARY_REQUEST_APPROVER_MISSING'))
 })
 
-test('actual request runtime fields require date/reason and remove derived/private custom inputs without modifying catalog', () => {
+test('actual request runtime fields require payroll month/reason and remove derived/private custom inputs without modifying catalog', () => {
   const service = Object.create(RequestsService.prototype)
   const configured = { ...type, customFields: JSON.stringify([{ key: 'increase_pct', label: 'قديم', type: 'number', required: true }, { key: 'newSalary', label: 'قديم', type: 'number' }]) }
   const before = JSON.stringify(configured), fields = service.executionFormFields(configured)
-  assert.deepEqual(JSON.parse(fields.requiredFields), ['newSalary', 'effectiveDate', 'reason'])
+  assert.deepEqual(JSON.parse(fields.requiredFields), ['newSalary', 'effectivePayrollPeriod', 'reason'])
   assert.equal(JSON.parse(fields.customFields).find(row => row.key === 'newSalary').type, 'text')
   assert.equal(JSON.parse(fields.customFields).some(row => row.key === 'increase_pct'), false); assert.equal(JSON.stringify(configured), before)
-  service.assertSubmitValues(configured, JSON.stringify(payload())); assert.throws(() => service.assertSubmitValues(configured, JSON.stringify(payload({ effectiveDate: '' }))))
+  service.assertSubmitValues(configured, JSON.stringify(payload())); assert.throws(() => service.assertSubmitValues(configured, JSON.stringify(payload({ effectivePayrollPeriod: '' }))))
 })
 
 test('actual configured chain retains managerial route and server-derived executive threshold at exact ten percent', async () => {

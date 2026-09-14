@@ -116,13 +116,18 @@ test('SSR includes inactive rows and a locked loan select; protected tax has no 
   assert.match(html, /سبب التعديل/)
 })
 
-test('SSR respects both branch capability and calculate permission independently', () => {
-  for (const html of [render(fixture({ capabilities: { canEdit: false } })), render(fixture(), { canCalculate: false })]) {
-    assert.match(html, /متاحة للقراءة فقط/)
-    assert.match(html, /id="collection-kind-LATE"[^>]*disabled=""/)
-    assert.match(html, /id="collection-save-reason"[^>]*disabled=""/)
-    assert.equal((html.match(/<button\b[^>]*>/g) ?? []).filter(tag => !/\sdisabled=""/.test(tag)).length, 1, 'only the read reload action remains available')
-  }
+test('SSR editing follows the server capability (payroll.policy.manage + branch scope), not payroll.calculate', () => {
+  const readOnly = render(fixture({ capabilities: { canEdit: false } }))
+  assert.match(readOnly, /متاحة للقراءة فقط/)
+  assert.match(readOnly, /إدارة سياسات الرواتب ونشرها/)
+  assert.match(readOnly, /id="collection-kind-LATE"[^>]*disabled=""/)
+  assert.match(readOnly, /id="collection-save-reason"[^>]*disabled=""/)
+  assert.equal((readOnly.match(/<button\b[^>]*>/g) ?? []).filter(tag => !/\sdisabled=""/.test(tag)).length, 1, 'only the read reload action remains available')
+  // مدير سياسات بلا payroll.calculate: الخادم يسمح بحفظ الترتيب، فالواجهة لا تحجبه (كان هذا يُقفل سابقًا).
+  const manager = render(fixture({ capabilities: { canEdit: true } }), { canCalculate: false })
+  assert.doesNotMatch(manager, /متاحة للقراءة فقط/)
+  assert.doesNotMatch(manager, /id="collection-kind-LATE"[^>]*disabled=""/)
+  assert.doesNotMatch(manager, /id="collection-save-reason"[^>]*disabled=""/)
 })
 
 test('SSR blocks missing/invalid settings or definition and explains actual server issues', () => {

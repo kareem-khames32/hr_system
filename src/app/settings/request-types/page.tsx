@@ -70,8 +70,8 @@ const parseRequiredFields = (raw?: string): string[] => {
   return Array.isArray(parsed) ? parsed.map(String) : []
 }
 
-// أنواع الحقول المخصّصة — مرآة الباك إند
-const fieldTypeLabels: Record<CustomFieldDef['type'], string> = {
+// أنواع الحقول المخصّصة — مرآة الباك إند (FIELD_TYPES). «month» حقل يولده النظام لطلب زيادة الراتب ولا يُنشأ من البانِي.
+const fieldTypeLabels: Record<Exclude<CustomFieldDef['type'], 'month'>, string> = {
   text: 'نص',
   number: 'رقم',
   date: 'تاريخ',
@@ -736,7 +736,7 @@ export default function RequestTypesPage() {
                           >
                             {f.label}
                             <span className="text-primary-400 mr-1">
-                              ({fieldTypeLabels[f.type] ?? f.type})
+                              ({(fieldTypeLabels as Record<string, string>)[f.type] ?? f.type})
                             </span>
                           </span>
                         ))

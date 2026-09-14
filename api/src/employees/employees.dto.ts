@@ -17,6 +17,7 @@ import {
 import { Transform, Type } from 'class-transformer'
 import { EmployeeSalaryChangeDto } from './employee-salary-change.dto'
 import { CalendarChangeDto } from '../attendance/attendance-calendar-history'
+import { IsNotDataPlaceholder } from '../common/data-placeholders'
 
 // أعمدة NOT NULL في التعديل: الغائب = بلا تغيير، وnull يُرفض برسالة (IsOptional كان
 // يمرّره فيسقط الحفظ بخطأ قاعدة بيانات 500). بقية الحقول الاختيارية تقبل null = مسح القيمة
@@ -45,6 +46,18 @@ export class RenewEmployeeContractDto {
 // ============================================================
 
 export class CreateEmployeeDto {
+  // الخطوة 13: أجر التعيين يُوثَّق «يسري من راتب شهر» مع الإنشاء (حقل حمولة لا عمود). الغياب = شهر التعيين
+  // أو شهر المسير الجاري أيهما أحدث؛ المقبول من شهر التعيين حتى ذلك الافتراض.
+  @IsOptional()
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: '«يسري من راتب شهر» بصيغة YYYY-MM' })
+  salaryEffectivePayrollPeriod?: string
+
+  // مرجع مستند أجر التعيين (العقد/القرار)؛ الغياب = رقم العقد إن وُجد وإلا «إنشاء ملف الموظف #id»
+  @IsOptional()
+  @IsString()
+  @MaxLength(200)
+  salaryEvidenceReference?: string
+
   @IsString({ message: 'كود الموظف مطلوب' })
   @Matches(/^[A-Za-z0-9_-]{2,20}$/, {
     message: 'كود الموظف: حروف إنجليزية وأرقام و- _ فقط (2-20 خانة)',
@@ -160,6 +173,7 @@ export class CreateEmployeeDto {
   @IsOptional()
   @IsString()
   @MaxLength(100)
+  @IsNotDataPlaceholder()
   jobTitle?: string
 
   @Type(() => Number)
@@ -522,6 +536,7 @@ export class UpdateEmployeeDto {
   @IsOptional()
   @IsString()
   @MaxLength(100)
+  @IsNotDataPlaceholder()
   jobTitle?: string
 
   @IsOptional()

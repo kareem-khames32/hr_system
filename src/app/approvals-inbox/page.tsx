@@ -26,6 +26,9 @@ import MyApprovalDecisions from '@/components/MyApprovalDecisions'
 import RequestPayload from '@/components/RequestPayload'
 import OvertimeRequestSummary, { overtimeApprovalLimit } from '@/components/OvertimeRequestSummary'
 import { payloadSummary } from '@/lib/request-payload'
+import { useCurrency } from '@/lib/currency'
+import { approveLoanRequest, fetchLoanCapReview, formatLoanMoney, LOAN_APPROVAL_DECISION_LABELS, LOAN_EXCEPTIONAL_CATEGORY_LABELS, type LoanCapReview } from '@/lib/loans-api'
+import { LoanCapSummary } from '@/components/payroll/LoanCapSummary'
 import {
   fetchInbox,
   fetchRequest,
@@ -129,6 +132,12 @@ export default function ApprovalsInboxPage() {
   const [detailRevision, setDetailRevision] = useState(0)
   const [approvedMinutesInput, setApprovedMinutesInput] = useState('')
   const [canAdjustOvertime, setCanAdjustOvertime] = useState(false)
+  // AD-07 (C6): مراجعة سقف السلفة عند كل خطوة — تنبيه تغيّر السياسة، والتخفيض أو الاستثناء الموثق
+  const currency = useCurrency()
+  const [loanReview, setLoanReview] = useState<LoanCapReview | null>(null)
+  const [loanReviewError, setLoanReviewError] = useState('')
+  const [loanApprovedAmount, setLoanApprovedAmount] = useState('')
+  const [loanOverrideReason, setLoanOverrideReason] = useState('')
   useEffect(() => {
     setCanAdjustOvertime(can('overtime.adjust'))
     const requestId = Number(new URLSearchParams(window.location.search).get('request'))
@@ -249,6 +258,15 @@ export default function ApprovalsInboxPage() {
     return: 'RETURN',
   } as const
 
+  const isLoanApproval = actionModal?.action === 'approve' && detail?.id === actionModal?.item.id && detail?.typeCode === 'LOAN'
+  useEffect(() => {
+    setLoanReview(null); setLoanReviewError(''); setLoanApprovedAmount(''); setLoanOverrideReason('')
+    if (!isLoanApproval || !detail) return
+    let cancelled = false
+    fetchLoanCapReview(detail.id).then(review => { if (!cancelled) setLoanReview(review) })
+      .catch(err => { if (!cancelled) setLoanReviewError(err instanceof Error ? err.message : 'تعذر تحميل مراجعة سقف السلفة') })
+    return () => { cancelled = true }
+  }, [isLoanApproval, detail?.id])
   const isOvertimeDetail = !!detail && (['OVERTIME', 'OVERTIME_AUTO'].includes(detail.typeCode) || !!detail.overtime || detail.overtimeReviewRequired === true)
   const overtimeLimit = overtimeApprovalLimit(detail?.overtime)
   const isOvertimeApproval = actionModal?.action === 'approve' && isOvertimeDetail
@@ -267,12 +285,16 @@ export default function ApprovalsInboxPage() {
     setActing(true)
     setActionError(null)
     try {
-      await actOnRequest(
-        actionModal.item.id,
-        apiActions[actionModal.action],
-        comment.trim() || undefined,
-        reducingMinutes && enteredMinutes != null ? enteredMinutes : undefined
-      )
+      if (isLoanApproval && (loanApprovedAmount.trim() || loanOverrideReason.trim())) {
+        await approveLoanRequest(actionModal.item.id, { comment: comment.trim() || undefined, approvedAmount: loanApprovedAmount.trim() || undefined, capOverrideReason: loanOverrideReason.trim() || undefined })
+      } else {
+        await actOnRequest(
+          actionModal.item.id,
+          apiActions[actionModal.action],
+          comment.trim() || undefined,
+          reducingMinutes && enteredMinutes != null ? enteredMinutes : undefined
+        )
+      }
       setDecisionsRevision(value => value + 1)
       setComment('')
       setActionModal(null)
@@ -542,6 +564,25 @@ export default function ApprovalsInboxPage() {
                   <RequestPayload payload={detail.payload} />
                   <OvertimeRequestSummary overtime={detail.overtime ?? undefined} reviewRequired={detail.overtimeReviewRequired} />
                 </>}
+                {isLoanApproval && (
+                  <div className="rounded-xl border border-gray-200 p-4 space-y-3">
+                    <p className="font-medium text-gray-700">مراجعة سقف السلفة</p>
+                    {loanReviewError && <p role="alert" className="text-sm text-red-600">{loanReviewError}</p>}
+                    {loanReview && <>
+                      <p className="text-sm text-gray-600">المطلوب {formatLoanMoney(loanReview.requestedAmount)} — المعروض للاعتماد {formatLoanMoney(loanReview.currentAmount)} {currency} على {loanReview.months} شهر{loanReview.firstInstallmentPeriod ? ` — أول قسط ${loanReview.firstInstallmentPeriod}` : ''}</p>
+                      {loanReview.exceptional && <p className="text-sm bg-amber-50 text-amber-800 rounded-lg p-2">سلفة استثنائية ({LOAN_EXCEPTIONAL_CATEGORY_LABELS[loanReview.exceptionalCategory ?? ''] ?? loanReview.exceptionalCategory}): {loanReview.exceptionalReason}</p>}
+                      {loanReview.policyChanged && <p role="alert" className="text-sm bg-red-50 text-red-700 rounded-lg p-2">تنبيه: تغيّرت سياسة السقف أو قيمته منذ التقديم (السقف عند التقديم {formatLoanMoney(loanReview.submitted?.effectiveCap)}).</p>}
+                      <LoanCapSummary cap={loanReview.current} currency={currency} title="السقف الآن" />
+                      {loanReview.approvals.length > 0 && <ul className="text-xs text-gray-600 space-y-1">{loanReview.approvals.map(row => <li key={`${row.step}-${row.at}`}>خطوة {row.step}: {LOAN_APPROVAL_DECISION_LABELS[row.decision]} — {formatLoanMoney(row.amount)}{row.reason ? ` — ${row.reason}` : ''}</li>)}</ul>}
+                      {!loanReview.exceptional && !loanReview.current.allowed && <>
+                        <div><label htmlFor="loan-approved-amount" className="block text-sm font-medium text-gray-700 mb-1">تخفيض إلى مبلغ (سبب التخفيض في الملاحظة)</label>
+                          <input id="loan-approved-amount" className="input w-full" dir="ltr" inputMode="decimal" disabled={acting} value={loanApprovedAmount} placeholder={loanReview.current.effectiveCap ?? ''} onChange={e => { setLoanApprovedAmount(e.target.value); setActionError(null) }} /></div>
+                        {loanReview.canOverride && <div><label htmlFor="loan-override-reason" className="block text-sm font-medium text-gray-700 mb-1">أو استثناء موثق فوق السقف — السبب</label>
+                          <textarea id="loan-override-reason" className="input w-full h-16 resize-none" maxLength={500} disabled={acting} value={loanOverrideReason} onChange={e => { setLoanOverrideReason(e.target.value); setActionError(null) }} /></div>}
+                      </>}
+                    </>}
+                  </div>
+                )}
                 {isOvertimeApproval && overtimeLimit != null && canAdjustOvertime && <div className="rounded-xl border border-gray-200 p-4">
                   <label htmlFor="overtime-approved-minutes" className="block text-sm font-medium text-gray-700 mb-2">الدقائق للاعتماد — يمكن تخفيضها</label>
                   <input id="overtime-approved-minutes" type="number" min={1} max={overtimeLimit} step={1}

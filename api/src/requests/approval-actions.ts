@@ -5,6 +5,7 @@ const actions: Record<string, ApprovalAction> = {
   REJECT: 'REJECTED', REJECTED: 'REJECTED',
   RETURN: 'RETURNED_FOR_INFO', RETURNED_FOR_INFO: 'RETURNED_FOR_INFO',
   DELEGATED: 'DELEGATED', ESCALATED: 'ESCALATED', CANCELLED: 'CANCELLED',
+  EXECUTION_FAILED: 'EXECUTION_FAILED',
 }
 
 // Compatibility at read boundaries: never rewrite immutable approval audit rows.

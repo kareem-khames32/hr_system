@@ -126,6 +126,8 @@ before(async () => {
   await app.get(require('../src/settings/config-defaults.service').ConfigDefaultsService).onApplicationBootstrap()
   await repo('RequestsConfig').save([
     { key: 'payroll.cycle_start_day', value: '1' }, { key: 'payroll.monthly_days', value: '30' },
+    // الأقساط على راتب الملف؛ اختيار راتب الشهر من السجل مغطى في payroll-run-salary-period.integration.cjs.
+    { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' },
     { key: 'payroll.daily_hours', value: '9' }, { key: 'payroll.policy.default_period_type', value: 'CALENDAR_MONTH' },
     { key: 'payroll.policy.cycle_end_mode', value: 'DERIVED' }, { key: 'payroll.policy.cycle_end_day', value: 'null' },
     { key: 'payroll.policy.min_net_guarantee', value: '500' }, { key: 'payroll.policy.net_floor_pct', value: 'null' },
@@ -237,7 +239,14 @@ async function calc(f, extra = {}, actor = admin) {
 function item(run, f) { const row = run.items.find(row => row.employeeId === f.employee.id); assert.ok(row); return row }
 function plan(run, f) { const value = JSON.parse(item(run, f).breakdown).installmentPlan; assert.equal(value?.version, 'LOAN_ALLOCATION_V1_20260913'); return value }
 async function transition(run, action, body, actor = admin) { return request(actor, 'POST', `/payroll/runs/${run.id}/${action}`, body) }
-async function approve(run, actor = admin) { return expectStatus(await transition(run, 'approve', undefined, actor), 201) }
+// الخطوة 18 (B3): الاعتماد يتطلب إقرارًا بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية بنطاق المعتمد.
+async function acknowledgeUnassigned(user, runId) {
+  const report = await request(user, 'GET', `/payroll/runs/${runId}/unassigned`)
+  assert.equal(report.status, 200, JSON.stringify(report.body))
+  const ack = await request(user, 'POST', `/payroll/runs/${runId}/unassigned-ack`, { reportHash: report.body.reportHash })
+  assert.equal(ack.status, 201, JSON.stringify(ack.body))
+}
+async function approve(run, actor = admin) { await acknowledgeUnassigned(actor, run.id); return expectStatus(await transition(run, 'approve', undefined, actor), 201) }
 async function pay(run, actor = admin) { return expectStatus(await transition(run, 'pay', undefined, actor), 201) }
 async function assertRejected(operation, status = 409) {
   const before = await financialSnapshot(), policies = await policySnapshot()
@@ -363,6 +372,7 @@ test('Installment ledger: repeated draft calculations and cancellation never res
 test('Installment ledger: an amount changed after calculation rejects approval atomically without reserving stale debt', async () => {
   const f = await fixture(), run = await calc(f)
   await repo('LoanInstallment').update(f.installment.id, { amount: 1700 })
+  await acknowledgeUnassigned(admin, run.id)
   await assertRejected(() => transition(run, 'approve'))
   assert.equal((await allocations(f)).length, 0)
 })
@@ -385,6 +395,7 @@ test('Installment ledger: approval and payment use captured options when live de
 
 test('Installment ledger: failure writing the reservation audit rolls back both installment and employee period claims', async () => {
   const f = await fixture(), run = await calc(f)
+  await acknowledgeUnassigned(admin, run.id)
   await eventFailure(f, 'RESERVED', async () => assertRejected(() => transition(run, 'approve'), 500))
   assert.equal((await allocations(f)).length, 0)
   await approve(run)
@@ -402,6 +413,7 @@ test('Installment ledger: failure writing payment audit rolls back parent, child
 test('Installment ledger: planless legacy amounts and tampered saved plans require recalculation before approval or payment', async () => {
   const f = await fixture(), run = await calc(f), row = item(run, f), original = JSON.parse(row.breakdown)
   await repo('PayrollItem').update(row.id, { breakdown: JSON.stringify({ ...original, installmentPlan: null }) })
+  await acknowledgeUnassigned(admin, run.id)
   const error = await assertRejected(() => transition(run, 'approve'))
   assert.equal(error.code, 'LOAN_PLAN_RECALCULATION_REQUIRED')
   await repo('PayrollItem').update(row.id, { breakdown: JSON.stringify(original) })

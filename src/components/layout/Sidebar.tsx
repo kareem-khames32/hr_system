@@ -31,6 +31,7 @@ import {
   UserCircle,
   Inbox,
   UserMinus,
+  Gift,
 } from 'lucide-react'
 import clsx from 'clsx'
 
@@ -94,6 +95,7 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'الجدول الأسبوعي', href: '/attendance/weekly-schedule', perm: 'attendance.view_all' },
       { label: 'الورديات', href: '/attendance/shifts', perm: 'settings.manage' },
       { label: 'الأذونات', href: '/attendance/permissions', perm: 'attendance.view_all' },
+      { label: 'استثناء الحضور', href: '/attendance/exemptions', perm: 'attendance_exemption.view' },
       { label: 'العمل الإضافي', href: '/attendance/overtime', perm: 'attendance.view_all' },
       { label: 'الإدخال اليدوي', href: '/attendance/manual-entry', perm: 'attendance.view_all' },
       { label: 'أجهزة البصمة', href: '/attendance/devices', perm: 'attendance.sync' },
@@ -284,6 +286,11 @@ export default function Sidebar() {
       { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
       { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },
       { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },
+      { id: 'my-loans', label: 'سلفي', icon: <Wallet size={20} />, href: '/my/loans' },
+      // الخطوة 25: الخصومات المصنفة عليّ، ومساحة المدير لإنشاء خصومات فريقه ومتابعة اعتمادها
+      { id: 'my-deductions', label: 'خصوماتي', icon: <ClipboardList size={20} />, href: '/my/deductions' },
+      // الخطوة 27: المكافآت المقترحة لي بحالتها، ومساحة المدير لاقتراح مكافآت مرؤوسيه
+      { id: 'my-bonuses', label: 'مكافآتي', icon: <Gift size={20} />, href: '/my/bonuses' },
       { id: 'my-custody', label: 'عهدي', icon: <Package size={20} />, href: '/my/custody' },
       { id: 'my-documents', label: 'مستنداتي', icon: <FolderOpen size={20} />, href: '/my/documents' },
       { id: 'profile', label: 'ملفي الشخصي', icon: <UserCircle size={20} />, href: '/profile' },

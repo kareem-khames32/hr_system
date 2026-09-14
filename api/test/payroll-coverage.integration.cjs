@@ -90,6 +90,13 @@ function coverageIs(item, expected) {
   for (const [key, value] of Object.entries(expected)) assert.equal(detail[key], value, `breakdown.${key}`)
 }
 
+// الخطوة 18 (B3): الاعتماد يتطلب إقرارًا بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية بنطاق المعتمد.
+async function acknowledgeUnassigned(user, runId) {
+  const report = await request(user, 'GET', `/payroll/runs/${runId}/unassigned`)
+  assert.equal(report.status, 200, JSON.stringify(report.body))
+  const ack = await request(user, 'POST', `/payroll/runs/${runId}/unassigned-ack`, { reportHash: report.body.reportHash })
+  assert.equal(ack.status, 201, JSON.stringify(ack.body))
+}
 before(async () => {
   assert.equal(env.DB_TYPE || 'mssql', 'mssql')
   assert.match(database, /^hr_payroll_coverage_test_[a-f0-9]{16}$/)
@@ -117,6 +124,8 @@ before(async () => {
     { key: 'payroll.cycle_start_day', value: '23' }, { key: 'payroll.monthly_days', value: '30' },
     { key: 'payroll.daily_hours', value: '8' }, { key: 'payroll.late_deduction_enabled', value: 'true' },
     { key: 'attendance.absence_penalty_days', value: '1' }, { key: 'attendance.weekend_days', value: 'FRI,SAT' },
+    // هذه المجموعة تختبر التغطية والتناسب على راتب الملف؛ اختيار راتب الشهر من السجل مغطى في payroll-run-salary-period.integration.cjs.
+    { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' },
   ])
 }, { timeout: 60000 })
 
@@ -307,21 +316,22 @@ test('PR-10: full coverage of a 28-day cycle pays exactly 6000 without deducting
     gross: 6000, grossEarned: 6000, prorataFactor: 1, dayRate: 200 })
 })
 
-test('PR-08: cycle start 1 uses its calendar month and starts 29/30/31 clamp, including February and leap years', async t => {
+test('PR-08 / الخطوة 14: cycle start 1 uses its calendar month; 29/30/31 start the day after the previous period ends (no shared day)', async t => {
   const previous = await repo('RequestsConfig').findOneByOrFail({ key: 'payroll.cycle_start_day' })
   // These dates are explicit acceptance examples, not dates generated with the implementation's helper.
+  // الاختبار القديم كان يؤكد تداخل فبراير ومارس (مارس يبدأ 28/2 وفبراير ينتهي 28/2)؛ الصحيح: مارس = نهاية فبراير + يوم.
   const cases = [
     { cycle: 1, period: '2026-03', startDate: '2026-03-01', endDate: '2026-03-31' },
-    { cycle: 29, period: '2026-03', startDate: '2026-02-28', endDate: '2026-03-28' },
-    { cycle: 30, period: '2026-03', startDate: '2026-02-28', endDate: '2026-03-29' },
-    { cycle: 31, period: '2026-03', startDate: '2026-02-28', endDate: '2026-03-30' },
+    { cycle: 29, period: '2026-03', startDate: '2026-03-01', endDate: '2026-03-28' },
+    { cycle: 30, period: '2026-03', startDate: '2026-03-01', endDate: '2026-03-29' },
+    { cycle: 31, period: '2026-03', startDate: '2026-03-01', endDate: '2026-03-30' },
     { cycle: 29, period: '2026-02', startDate: '2026-01-29', endDate: '2026-02-28' },
     { cycle: 30, period: '2026-02', startDate: '2026-01-30', endDate: '2026-02-28' },
     { cycle: 31, period: '2026-02', startDate: '2026-01-31', endDate: '2026-02-28' },
     { cycle: 29, period: '2024-03', startDate: '2024-02-29', endDate: '2024-03-28' },
-    { cycle: 30, period: '2024-03', startDate: '2024-02-29', endDate: '2024-03-29' },
-    { cycle: 31, period: '2024-03', startDate: '2024-02-29', endDate: '2024-03-30' },
-    { cycle: 31, period: '2026-05', startDate: '2026-04-30', endDate: '2026-05-30' },
+    { cycle: 30, period: '2024-03', startDate: '2024-03-01', endDate: '2024-03-29' },
+    { cycle: 31, period: '2024-03', startDate: '2024-03-01', endDate: '2024-03-30' },
+    { cycle: 31, period: '2026-05', startDate: '2026-05-01', endDate: '2026-05-30' },
     { cycle: 31, period: '2026-01', startDate: '2025-12-31', endDate: '2026-01-30' },
   ]
   try {
@@ -438,6 +448,7 @@ test('PR-01 / PR-02: branch payroll permissions cannot calculate, read, approve,
 
   // Exercise pay in its valid business state, so a status check cannot pass for
   // branch authorization. This approval is by the unrestricted test admin.
+  await acknowledgeUnassigned(admin, foreignRun.id)
   const approved = await request(admin, 'POST', `/payroll/runs/${foreignRun.id}/approve`)
   assert.equal(approved.status, 201, JSON.stringify(approved.body))
   const beforePay = await snapshot()
@@ -510,6 +521,7 @@ test('PR-11: an employee cannot read their calculated draft payslip but can read
   assert.ok(!beforeList.body.some(row => row.item.id === item.id), 'A calculated draft must not leak through the employee list')
   assert.equal((await repo('PayrollRun').findOneByOrFail({ id: run.id })).status, 'CALCULATED')
 
+  await acknowledgeUnassigned(admin, run.id)
   const approved = await request(admin, 'POST', `/payroll/runs/${run.id}/approve`)
   assert.equal(approved.status, 201, JSON.stringify(approved.body))
   const published = await request(owner, 'GET', `/payroll/items/${item.id}`)

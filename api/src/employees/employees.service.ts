@@ -13,7 +13,8 @@ import { OPEN_CASE_STATUSES } from '../offboarding/offboarding-open'
 import { AttendanceService } from '../attendance/attendance.service'
 import { beginCalendarChange, finishCalendarChange, readCalendarSource } from '../attendance/attendance-calendar-history'
 import { attendanceRuleChange, attendanceRuleToday, employeeAttendanceFallback, lockAttendanceRuleMutation,
-  resolveAttendanceRule, saveEmployeeAttendanceRule } from '../attendance/attendance-rule-history'
+  pickAttendanceRule, resolveAttendanceRule, saveEmployeeAttendanceRule } from '../attendance/attendance-rule-history'
+import { AttendanceRuleVersion, EmployeeAttendanceRuleSnapshot } from '../attendance/attendance-rule.entities'
 import { User } from '../auth/user.entity'
 import { EmployeeDocument, Grade } from '../assets/assets.entities'
 import { assertDocTypes } from '../assets/doc-types'
@@ -28,7 +29,9 @@ import { Request } from '../requests/entities/request.entity'
 import { Employee } from './employee.entity'
 import { CreateEmployeeDto, RenewEmployeeContractDto, UpdateEmployeeDto } from './employees.dto'
 import { linkEmployeeFiles } from '../files/link-employee-files'
-import { applyEmployeeSalaryChange } from '../payroll/payroll-salary-change'
+import { applyEmployeeSalaryChange, documentInitialEmployeeSalary, employeeSalaryStartContext, readSalaryCycleStartDay } from '../payroll/payroll-salary-change'
+import { payrollPeriodBounds, payrollPeriodOfDate } from '../payroll/payroll-period'
+import { localDateOf } from '../attendance/attendance.service'
 import { readSalaryHistory, readSalaryHistoryCurrent, SALARY_HISTORY_MONEY_KEYS,
   salaryHistoryMoney, salaryHistorySchemaMissing } from '../payroll/payroll-salary-history'
 
@@ -103,7 +106,22 @@ export class EmployeesService {
       where: branchScope == null ? {} : { branchId: branchScope },
       order: { id: 'ASC' },
     })
-    return Promise.all(rows.map(row => this.attendanceView(row)))
+    // HRC-09: نسخ قواعد حضور موظفي النطاق كلها باستعلام واحد بدل استعلام لكل موظف —
+    // عدد الاستعلامات ثابت مهما زاد الموظفون، والاختيار نفس قاعدة صفحة التفاصيل
+    const versions = this.employees.manager.getRepository(AttendanceRuleVersion).createQueryBuilder('v')
+      .where('v.sourceType = :sourceType', { sourceType: 'EMPLOYEE' })
+    if (branchScope != null) {
+      versions.andWhere('v.sourceId IN (SELECT e.id FROM employees e WHERE e.branchId = :branchId)', { branchId: branchScope })
+    }
+    const byEmployee = new Map<number, AttendanceRuleVersion[]>()
+    for (const version of await versions.getMany()) {
+      const list = byEmployee.get(version.sourceId)
+      if (list) list.push(version)
+      else byEmployee.set(version.sourceId, [version])
+    }
+    const today = attendanceRuleToday()
+    return rows.map(row => this.withAttendanceRule(row,
+      pickAttendanceRule(byEmployee.get(row.id) ?? [], today, employeeAttendanceFallback(row))))
   }
 
   // دليل مختصر للنشطين في النطاق — المعرّف والاسم والكود فقط (بلا راتب/هوية/بنك)
@@ -131,6 +149,10 @@ export class EmployeesService {
   private async attendanceView(employee: Employee) {
     const resolved = await resolveAttendanceRule(this.employees.manager, 'EMPLOYEE', employee.id,
       attendanceRuleToday(), employeeAttendanceFallback(employee))
+    return this.withAttendanceRule(employee, resolved)
+  }
+
+  private withAttendanceRule(employee: Employee, resolved: ReturnType<typeof pickAttendanceRule<EmployeeAttendanceRuleSnapshot>>) {
     return Object.assign(employee, { workScheduleId: resolved.snapshot.workScheduleId,
       flexOverrideMode: resolved.snapshot.flexOverrideMode, attendanceRuleVersion: resolved.version,
       attendanceRuleEffectiveFrom: resolved.effectiveFrom, attendanceRuleLegacy: resolved.legacyBaseline })
@@ -197,7 +219,19 @@ export class EmployeesService {
     departmentId?: number | null
     teamId?: number | null
     managerEmployeeId?: number | null
+    gradeId?: number | null
+    // الدرجة الحالية للتعديل: درجة معطّلة لم تتغير لا تمنع حفظ باقي الملف
+    currentGradeId?: number | null
   }) {
+    // HRC-08: الدرجة الوظيفية مرجع لكتالوج الدرجات — رقم غير موجود يُرفض بـ400
+    // بدل حفظ مرجع يتيم يظهر فارغًا في الملف والتقارير
+    if (data.gradeId != null) {
+      const grade = await this.employees.manager.findOneBy(Grade, { id: data.gradeId })
+      if (!grade) throw new BadRequestException('الدرجة الوظيفية غير موجودة')
+      if (!grade.isActive && data.gradeId !== data.currentGradeId) {
+        throw new BadRequestException(`الدرجة الوظيفية «${grade.name}» معطّلة — اختر درجة فعّالة`)
+      }
+    }
     let branch: Branch | null = null
     if (data.branchId !== undefined) {
       branch = await this.branches.findOne({ where: { id: data.branchId } })
@@ -301,6 +335,8 @@ export class EmployeesService {
       flexOverrideMode,
       attendanceEffectiveFrom,
       attendanceChangeReason,
+      salaryEffectivePayrollPeriod,
+      salaryEvidenceReference,
       ...empDto
     } = dto as CreateEmployeeDto & {
       openingBalanceDays?: number
@@ -325,6 +361,10 @@ export class EmployeesService {
         dto.photoFileId ? `file:${dto.photoFileId}` : undefined], actorId)
       await this.saveContractDocument(result.id, { contractFileRef, contractNumber: dto.contractNumber, contractStart: dto.contractStart, contractEnd: dto.contractEnd }, em)
       await this.saveDocuments(result.id, documentRefs, em)
+      // الخطوة 13: أجر التعيين يُوثَّق «يسري من راتب شهر» في المعاملة نفسها؛ بدونه يُستبعد الموظف الجديد من أول مسير
+      // (NO_SALARY_DEFINED) حتى توثيق منفصل. فشل التوثيق (عملة غير مدعومة، شهر خارج المدى) يرجّع الإنشاء كله.
+      await documentInitialEmployeeSalary(em, { employeeId: result.id, actorUserId: actorId, hireDate: result.actualStartDate || result.joinDate || null,
+        effectivePayrollPeriod: salaryEffectivePayrollPeriod, evidenceReference: salaryEvidenceReference?.trim() || (dto.contractNumber?.trim() ? `عقد ${dto.contractNumber.trim()}` : undefined) })
       return result
     })
     // رصيد السنة الحالية تلقائياً — الاستحقاق من الإعدادات
@@ -427,6 +467,16 @@ export class EmployeesService {
     }
   }
 
+  // الخطوة 13: حدود «يسري من راتب شهر» لأجر التعيين في نموذج الإنشاء (قراءة فقط، بلا بيانات موظف).
+  async salaryStartContext(hireDate?: string) {
+    const value = typeof hireDate === 'string' && hireDate.trim() ? hireDate.trim() : null
+    if (value !== null && !/^\d{4}-\d{2}-\d{2}$/.test(value)) {
+      throw new BadRequestException({ code: 'EMPLOYEE_SALARY_START_DATE_INVALID', message: 'تاريخ التعيين بصيغة YYYY-MM-DD' })
+    }
+    const cycleStartDay = await readSalaryCycleStartDay(this.employees.manager)
+    return employeeSalaryStartContext({ cycleStartDay, today: localDateOf(new Date()), hireDate: value })
+  }
+
   async salaryChangeContext(id: number, branchScope: number | null) {
     try {
       return await this.employees.manager.transaction('SERIALIZABLE', async em => {
@@ -438,8 +488,13 @@ export class EmployeesService {
         const source = await readSalaryHistoryCurrent(em, id)
         if (!source || (branchScope !== null && source.employee.branchId !== branchScope)) throw new NotFoundException('الموظف غير موجود')
         const history = await readSalaryHistory(em, id)
+        // قاعدة المالك: التغيير يسري من راتب شهر؛ الشاشة تعرض شهر المسير الجاري ودورته ولا تقبل شهرًا لاحقًا.
+        const cycleStartDay = await readSalaryCycleStartDay(em)
+        const currentPayrollPeriod = payrollPeriodOfDate(localDateOf(new Date()), cycleStartDay)
         return { employeeId: id, current: source.current, historyRevision: history.revision,
-          currentSourceHash: source.currentSourceHash }
+          currentSourceHash: source.currentSourceHash, cycleStartDay, currentPayrollPeriod,
+          currentPayrollPeriodBounds: payrollPeriodBounds(currentPayrollPeriod, cycleStartDay),
+          historyContract: history.version ? (history.version.contractVersion ? 'MONTHLY' : 'DAILY') : 'NONE' }
       })
     } catch (error) {
       if (salaryHistorySchemaMissing(error)) throw new ConflictException({ code: 'SALARY_HISTORY_SCHEMA_MISSING',
@@ -473,6 +528,8 @@ export class EmployeesService {
       departmentId: dto.departmentId !== undefined ? dto.departmentId : emp.departmentId,
       teamId: dto.teamId !== undefined ? dto.teamId : emp.teamId,
       managerEmployeeId: dto.managerEmployeeId !== undefined ? dto.managerEmployeeId : emp.managerEmployeeId,
+      gradeId: dto.gradeId,
+      currentGradeId: emp.gradeId ?? null,
     })
     // الموظف لا يكون مدير نفسه
     if (dto.managerEmployeeId === id) {
@@ -518,7 +575,7 @@ export class EmployeesService {
           const normalized = key === 'currency' || value === null ? value : salaryHistoryMoney(String(value), true)
           if (!source || normalized !== source.current[key as keyof typeof source.current]) throw new BadRequestException({
             code: 'SALARY_CHANGE_EFFECTIVE_DATE_REQUIRED',
-            message: 'تعديل الأجر يحتاج تاريخ السريان والسبب ومرجع القرار؛ حدّث الشاشة وسجّل التغيير من البيانات المالية',
+            message: 'تعديل الأجر يحتاج «يسري من راتب شهر» والسبب ومرجع القرار؛ حدّث الشاشة وسجّل التغيير من البيانات المالية',
           })
         }
       }

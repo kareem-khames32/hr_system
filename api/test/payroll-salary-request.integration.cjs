@@ -17,7 +17,10 @@ const { RequestsService } = require('../src/requests/requests.service')
 const keys = ['basicSalary', 'housingAllowance', 'transportAllowance', 'phoneAllowance', 'workNatureAllowance', 'otherAllowance']
 const amounts = ['6000.00', '1500.00', '500.00', '300.00', '200.00', '100.00']
 const today = localDateOf(new Date())
-const dayAfter = date => new Date(Date.parse(`${date}T12:00:00Z`) + 86400000).toISOString().slice(0, 10)
+// قاعدة المالك: الزيادة تسري من راتب شهر كامل؛ دورة الشركة المبذورة 23، والطلب المجدول يُنفَّذ عند بداية دورة شهره.
+const { payrollPeriodOfDate, payrollPeriodBounds, shiftPayrollPeriod } = require('../src/payroll/payroll-period')
+const currentMonth = payrollPeriodOfDate(today, 23), nextMonth = shiftPayrollPeriod(currentMonth, 1)
+const nextMonthStart = payrollPeriodBounds(nextMonth, 23).startDate
 let app, master, ds, base, branch, otherBranch, admin, hr, executive, outsider, chain, type, created = false, employeeNumber = 0
 const repo = name => ds.getRepository(name)
 const decode = value => typeof value === 'string' ? JSON.parse(value) : value
@@ -30,7 +33,7 @@ async function request(user, method, url, body) {
   return { status: response.status, body: content ? JSON.parse(content) : null }
 }
 const ok = (response, status = 201) => { assert.equal(response.status, status, JSON.stringify(response.body)); return response.body }
-const payload = extra => ({ newSalary: '6300.00', effectiveDate: today, reason: 'قرار زيادة راتب تجريبي موثق', ...extra })
+const payload = extra => ({ newSalary: '6300.00', effectivePayrollPeriod: currentMonth, reason: 'قرار زيادة راتب تجريبي موثق', ...extra })
 async function employee(extra = {}) {
   return repo('Employee').save({ employeeCode: `SALREQ${String(++employeeNumber).padStart(4, '0')}`, fullName: 'موظف اختبار طلب الأجر',
     branchId: branch.id, joinDate: '2020-01-01', status: 'active', isActive: true, payMethod: 'transfer', currency: 'EGP',
@@ -47,7 +50,7 @@ async function current(emp) {
   return rows[0]
 }
 async function history(emp) {
-  return ds.query(`SELECT v.[revision], v.[createdBy], v.[evidenceReference], CONVERT(varchar(10), h.[effectiveFrom], 23) AS [effectiveFrom],
+  return ds.query(`SELECT v.[revision], v.[createdBy], v.[evidenceReference], v.[contractVersion], h.[effectivePayrollPeriod], h.[effectiveToPayrollPeriod], CONVERT(varchar(10), h.[effectiveFrom], 23) AS [effectiveFrom],
     CONVERT(varchar(10), h.[effectiveTo], 23) AS [effectiveTo], ${keys.map(key => `CAST(h.[${key}] AS nvarchar(80)) AS [${key}]`).join(', ')}
     FROM dbo.employee_salary_history_versions v JOIN dbo.employee_salary_history h ON h.[versionId]=v.[id] WHERE v.[employeeId]=@0 ORDER BY v.[revision],h.[sequence]`, [emp.id])
 }
@@ -114,29 +117,33 @@ test('HTTP catalog upgrades salary fields without changing the stored request ca
   const stored = await repo('RequestType').findOneByOrFail({ id: type.id })
   const catalog = ok(await request(admin, 'GET', '/requests/types'), 200)
   const item = catalog.find(row => row.code === 'SALARY_INCREASE')
-  assert.deepEqual(decode(item.requiredFields), ['newSalary', 'effectiveDate', 'reason'])
+  assert.deepEqual(decode(item.requiredFields), ['newSalary', 'effectivePayrollPeriod', 'reason'])
   const fields = decode(item.customFields); assert.equal(fields.find(row => row.key === 'newSalary').type, 'text')
   assert.equal(fields.some(row => row.key === 'increase_pct'), false)
   assert.deepEqual(await repo('RequestType').findOneByOrFail({ id: type.id }), stored)
 })
 
-test('HTTP salary payload rejects missing dates, numeric money and forged server metadata before creating a draft', async () => {
+test('HTTP salary payload rejects missing or daily-dated payroll months, numeric money and forged server metadata before creating a draft', async () => {
   const emp = await employee(), before = await repo('Request').count(), original = await current(emp)
-  for (const patch of [{ effectiveDate: '' }, { effectiveDate: '2026-02-30' }, { newSalary: 6300 }, { reason: '' }, { salaryChangeBasis: null }, { salaryChangeApproval: { actorUserId: admin.id } }]) {
+  for (const patch of [{ effectivePayrollPeriod: '' }, { effectivePayrollPeriod: '2026-13' }, { effectivePayrollPeriod: today }, { effectiveDate: today },
+    { newSalary: 6300 }, { reason: '' }, { salaryChangeBasis: null }, { salaryChangeApproval: { actorUserId: admin.id } }]) {
     const response = await request(admin, 'POST', '/requests', { typeCode: 'SALARY_INCREASE', onBehalfEmployeeId: emp.id, submit: true, payload: payload(patch) })
     assert.equal(response.status, 400, JSON.stringify(response.body))
   }
   assert.equal(await repo('Request').count(), before); await unchanged(emp, original)
 })
 
-test('HTTP final approval writes one dated salary revision with six exact amounts and actual HR actor', async () => {
+test('HTTP final approval writes one payroll-month salary revision with six exact amounts and actual HR actor', async () => {
   const emp = await employee(), original = await current(emp), req = await submit(emp)
   assert.equal(req.status, 'UNDER_REVIEW'); assert.equal(decode(req.payload).increase_pct, '5.000000')
   const basis = decode(req.payload).salaryChangeBasis; assert.deepEqual(basis.salary, original); assert.equal(basis.stagedByUserId, admin.id)
   await unchanged(emp, original)
   const result = ok(await act(hr, req)); assert.equal(result.status, 'COMPLETED')
   assert.deepEqual(await current(emp), { ...original, basicSalary: '6300.00' })
-  const rows = await history(emp); assert.equal(rows.length, 1); assert.equal(rows[0].effectiveFrom, today); assert.equal(rows[0].effectiveTo, null)
+  const rows = await history(emp); assert.equal(rows.length, 1)
+  assert.equal(rows[0].effectivePayrollPeriod, currentMonth); assert.equal(rows[0].effectiveToPayrollPeriod, null)
+  assert.equal(rows[0].effectiveFrom, payrollPeriodBounds(currentMonth, 23).startDate, 'الزيادة تغطي دورة شهرها كاملة'); assert.equal(rows[0].effectiveTo, null)
+  assert.equal(rows[0].contractVersion, 'SALARY_PAYROLL_PERIOD_HISTORY_V2_20260914')
   assert.equal(rows[0].createdBy, hr.id); assert.equal(rows[0].evidenceReference, `request:${req.id}`)
   for (const key of keys.slice(1)) assert.equal(rows[0][key], original[key])
   const changes = await audit(emp); assert.equal(changes.length, 1); assert.equal(changes[0].changedByUserId, hr.id); assert.equal(changes[0].requestId, req.id)
@@ -155,18 +162,19 @@ test('server-derived ten percent retains executive approval despite forged calle
   assert.equal((await history(emp))[0].createdBy, executive.id); assert.equal((await audit(emp))[0].changedByUserId, executive.id)
 })
 
-test('future approved request leaves salary and history unchanged until scheduled effective date, then runs once', async () => {
-  const emp = await employee(), original = await current(emp), effectiveDate = dayAfter(today), req = await submit(emp, { effectiveDate })
+test('next-month approved request leaves salary and history unchanged until its payroll cycle starts, then runs once', async () => {
+  const emp = await employee(), original = await current(emp), req = await submit(emp, { effectivePayrollPeriod: nextMonth })
   const approved = ok(await act(hr, req)); assert.equal(approved.status, 'IN_EXECUTION'); assert.equal(decode(approved.payload).salaryChangeApproval.actorUserId, hr.id)
   await unchanged(emp, original)
   ok(await request(admin, 'POST', '/requests/engine/run-scheduled-transfers', {})); await unchanged(emp, original)
-  await withDate(effectiveDate, async () => {
+  await withDate(nextMonthStart, async () => {
     const first = ok(await request(admin, 'POST', '/requests/engine/run-scheduled-transfers', {})); assert.equal(first.employmentExecuted, 1)
     const again = ok(await request(admin, 'POST', '/requests/engine/run-scheduled-transfers', {})); assert.equal(again.employmentExecuted, 0)
   })
   const stored = await repo('Request').findOneByOrFail({ id: req.id }); assert.equal(stored.status, 'COMPLETED')
   assert.deepEqual(await current(emp), { ...original, basicSalary: '6300.00' })
-  const rows = await history(emp); assert.equal(rows.length, 1); assert.equal(rows[0].effectiveFrom, effectiveDate); assert.equal(rows[0].createdBy, hr.id)
+  const rows = await history(emp); assert.equal(rows.length, 1); assert.equal(rows[0].effectivePayrollPeriod, nextMonth)
+  assert.equal(rows[0].effectiveFrom, nextMonthStart); assert.equal(rows[0].createdBy, hr.id)
   assert.equal((await audit(emp)).length, 1)
 })
 
@@ -192,30 +200,30 @@ test('employee branch drift and cross-branch submission cannot change financial 
   assert.equal(await repo('RequestApproval').count({ where: { requestId: req.id } }), 0)
 })
 
-test('legacy undated request cannot be approved implicitly and can be returned for explicit dated resubmission', async () => {
+test('legacy request without a payroll month cannot be approved implicitly and can be returned for explicit monthly resubmission', async () => {
   const emp = await employee(), original = await current(emp)
   const req = await repo('Request').save({ typeCode: 'SALARY_INCREASE', requesterId: emp.id, branchId: branch.id, createdByUserId: admin.id,
     status: 'UNDER_REVIEW', currentStep: 1, submittedAt: new Date(), payload: JSON.stringify({ newSalary: 6300, increase_pct: 5 }),
     resolvedSteps: JSON.stringify([{ stepOrder: 1, role: 'hr', approverEmployeeId: null, action: null, actedAt: null, dueAt: null, slaDays: null, escalateTo: null }]) })
-  const failed = await act(hr, req); assert.equal(failed.status, 409, JSON.stringify(failed.body)); assert.equal(failed.body.code, 'SALARY_REQUEST_EFFECTIVE_DATE_REQUIRED')
+  const failed = await act(hr, req); assert.equal(failed.status, 409, JSON.stringify(failed.body)); assert.equal(failed.body.code, 'SALARY_REQUEST_PAYROLL_PERIOD_REQUIRED')
   await unchanged(emp, original); assert.equal(await repo('RequestApproval').count({ where: { requestId: req.id } }), 0)
-  ok(await act(hr, req, 'RETURN', 'مطلوب تاريخ سريان وسبب واضح'))
+  ok(await act(hr, req, 'RETURN', 'مطلوب «يسري من راتب شهر» وسبب واضح'))
   const resubmitted = ok(await request(admin, 'POST', `/requests/${req.id}/resubmit`, { payload: payload() }))
-  assert.equal(decode(resubmitted.payload).effectiveDate, today); assert.equal(decode(resubmitted.payload).salaryChangeBasis.historyRevision, 0)
-  ok(await act(hr, req)); assert.equal((await history(emp))[0].effectiveFrom, today)
+  assert.equal(decode(resubmitted.payload).effectivePayrollPeriod, currentMonth); assert.equal(decode(resubmitted.payload).salaryChangeBasis.historyRevision, 0)
+  ok(await act(hr, req)); assert.equal((await history(emp))[0].effectivePayrollPeriod, currentMonth)
 })
 
 test('resubmission with owner-configured auto approval records the current actor rather than an older approval', async () => {
   const autoChain = await repo('ApprovalChain').save({ code: 'CH_SALARY_AUTO_TEST', nameAr: 'سلسلة اختبار إعادة التقديم', requestTypeCode: 'SALARY_TEST_AUTO' })
   await repo('ApprovalStep').save([{ chainId: autoChain.id, stepOrder: 1, approverRole: 'hr' }, { chainId: autoChain.id, stepOrder: 2, approverRole: 'executive' }])
   await repo('RequestType').save({ code: 'SALARY_TEST_AUTO', nameAr: 'زيادة مخصصة للاختبار', category: 'financial', destinationHandler: 'salary_update_history', approvalChainId: autoChain.id })
-  const emp = await employee(), original = await current(emp), effectiveDate = dayAfter(today), req = await submit(emp, { effectiveDate }, admin, 'SALARY_TEST_AUTO')
+  const emp = await employee(), original = await current(emp), req = await submit(emp, { effectivePayrollPeriod: nextMonth }, admin, 'SALARY_TEST_AUTO')
   ok(await act(hr, req)); ok(await act(executive, req, 'RETURN', 'مراجعة قيم الطلب قبل إعادة التقديم'))
   await repo('ApprovalStep').delete({ chainId: autoChain.id }); await repo('ApprovalChain').update(autoChain.id, { autoApprove: true })
-  const returned = ok(await request(admin, 'POST', `/requests/${req.id}/resubmit`, { payload: payload({ effectiveDate, reason: 'زيادة أعيدت للمراجعة' }) }))
+  const returned = ok(await request(admin, 'POST', `/requests/${req.id}/resubmit`, { payload: payload({ effectivePayrollPeriod: nextMonth, reason: 'زيادة أعيدت للمراجعة' }) }))
   assert.equal(returned.status, 'IN_EXECUTION'); assert.equal(decode(returned.payload).salaryChangeApproval.actorUserId, admin.id)
   await unchanged(emp, original)
-  await withDate(effectiveDate, async () => { ok(await request(admin, 'POST', '/requests/engine/run-scheduled-transfers', {})) })
+  await withDate(nextMonthStart, async () => { ok(await request(admin, 'POST', '/requests/engine/run-scheduled-transfers', {})) })
   assert.equal((await repo('Request').findOneByOrFail({ id: req.id })).status, 'COMPLETED')
   assert.equal((await history(emp))[0].createdBy, admin.id); assert.equal((await audit(emp))[0].changedByUserId, admin.id)
 })
@@ -239,7 +247,7 @@ test('request execution preserves cents above safe integer range in current sala
 })
 
 test('authorized rejection recovers a stale future salary request without reversing money or allowing scheduled execution', async () => {
-  const emp = await employee(), effectiveDate = dayAfter(today), req = await submit(emp, { effectiveDate })
+  const emp = await employee(), req = await submit(emp, { effectivePayrollPeriod: nextMonth })
   ok(await act(hr, req))
   await ds.query('UPDATE dbo.employees SET [phoneAllowance]=CAST(@1 AS decimal(18,2)) WHERE [id]=@0', [emp.id, '355.55'])
   const original = await current(emp), route = `/requests/${req.id}/reject-execution`
@@ -251,7 +259,7 @@ test('authorized rejection recovers a stale future salary request without revers
   assert.equal(result.status, 'REJECTED'); await unchanged(emp, original)
   const decisions = await repo('RequestApproval').find({ where: { requestId: req.id }, order: { id: 'ASC' } })
   assert.equal(decisions.at(-1).action, 'REJECTED'); assert.equal(decisions.at(-1).approverId, admin.id); assert.match(decisions.at(-1).comment, /تغير المصدر/)
-  await withDate(effectiveDate, async () => { const result = ok(await request(admin, 'POST', '/requests/engine/run-scheduled-transfers', {})); assert.equal(result.employmentExecuted, 0) })
+  await withDate(nextMonthStart, async () => { const result = ok(await request(admin, 'POST', '/requests/engine/run-scheduled-transfers', {})); assert.equal(result.employmentExecuted, 0) })
   await unchanged(emp, original)
   const replacement = await submit(emp, { reason: 'قرار جديد بعد إغلاق الطلب السابق' }); ok(await act(hr, replacement))
   assert.equal((await current(emp)).phoneAllowance, '355.55')
@@ -283,7 +291,7 @@ test('rejection guard also refuses legacy APPROVED salary status when its financ
 })
 
 test('administrative rejection cannot use request ownership or wildcard permissions to cross the request branch', async () => {
-  const emp = await employee(), req = await submit(emp, { effectiveDate: dayAfter(today) }); ok(await act(hr, req))
+  const emp = await employee(), req = await submit(emp, { effectivePayrollPeriod: nextMonth }); ok(await act(hr, req))
   const original = await current(emp), before = await repo('RequestApproval').find({ where: { requestId: req.id }, order: { id: 'ASC' } })
   await ds.query('UPDATE dbo.employees SET [branchId]=@1 WHERE [id]=@0', [emp.id, otherBranch.id])
   const owner = await repo('User').save({ email: 'owner-cross-branch@salary-request.invalid', passwordHash: 'test-only', displayName: 'صاحب طلب منقول',

@@ -34,8 +34,9 @@ export class RequestsScheduler implements OnApplicationBootstrap {
   // كل يوم 00:15 — النقل المجدول
   @Cron('15 0 * * *')
   async transfers() {
-    const { executed, employmentExecuted } = await this.requests.runScheduledTransfers()
+    const { executed, employmentExecuted, cancelled } = await this.requests.runScheduledTransfers()
     if (executed || employmentExecuted) this.logger.log(`نُفّذ ${executed} نقل و${employmentExecuted} تغيير وظيفي مجدول`)
+    if (cancelled) this.logger.warn(`أُلغي ${cancelled} نقل مجدول مكرر (يُنفَّذ الأول فقط) — السبب مسجل على كل طلب`)
   }
 
   // كل ساعة — التصعيد

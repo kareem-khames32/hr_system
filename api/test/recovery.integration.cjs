@@ -169,13 +169,18 @@ test('early loan settlement pays existing installments instead of creating anoth
   const loan = await repos.Loan.save({ employeeId: emp.id, amount: 1200, status: 'APPROVED' })
   await repos.LoanInstallment.save([{ loanId: loan.id, dueDate: '2027-01-01', amount: 600 }, { loanId: loan.id, dueDate: '2027-02-01', amount: 600 }])
   const type = { code: 'EARLY_LOAN_SETTLEMENT', destinationHandler: 'loans_installments' }
-  const req = { id: 10000, typeCode: type.code, requesterId: emp.id, payload: JSON.stringify({ loanId: loan.id }) }
+  // الحركة المالية تتطلب طلبًا معتمدًا داخل معاملته؛ إعادة تنفيذ نفس الطلب آمنة (نفس الحركة)، وطلب آخر يُرفض لأن السلفة مسددة.
+  const req = { id: 10000, typeCode: type.code, requesterId: emp.id, status: 'APPROVED', payload: JSON.stringify({ loanId: loan.id }) }
   const before = await repos.Loan.count()
   await ds.transaction(em => destinations.execute(em, req, type))
   assert.equal(await repos.Loan.count(), before)
   assert.equal(await repos.LoanInstallment.countBy({ loanId: loan.id, paid: false }), 0)
   assert.equal((await repos.Loan.findOneBy({ id: loan.id })).status, 'SETTLED')
-  await assert.rejects(ds.transaction(em => destinations.execute(em, req, type)), /مسددة/)
+  const [repayment] = await ds.query("SELECT CONVERT(varchar(40),amount) AS amount,mode,reference,requestId FROM loan_repayments WHERE loanId=@0", [loan.id])
+  assert.deepEqual([repayment.amount, repayment.mode, repayment.reference, repayment.requestId], ['1200.00', 'FULL', 'REQ-10000', 10000])
+  await ds.transaction(em => destinations.execute(em, req, type))
+  assert.equal((await ds.query('SELECT COUNT(*) AS n FROM loan_repayments WHERE loanId=@0', [loan.id]))[0].n, 1)
+  await assert.rejects(ds.transaction(em => destinations.execute(em, { ...req, id: 10002 }, type)), /مسددة/)
 })
 test('invalid loan amounts and fractional installment counts roll back', async () => {
   const destinations = app.get(require('../src/requests/destinations.service').DestinationsService)

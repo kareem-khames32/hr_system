@@ -15,6 +15,7 @@ import { EmployeeStatusHistory, Transfer } from './entities/employment.entities'
 import { recordEmployeeChange } from '../employees/employee-change-log'
 import { CustodyAssignment } from './entities/custody.entities'
 import { Leave } from './entities/leave.entities'
+import { DATA_PLACEHOLDER_REJECTED, isDataPlaceholder } from '../common/data-placeholders'
 
 const openCustodyStatuses = ['PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'ACTIVE', 'RETURN_REQUESTED']
 export const EMPLOYMENT_PAYLOAD_KEYS: Record<string, string[]> = {
@@ -60,6 +61,8 @@ export function assertEmploymentValues(type: Pick<RequestType, 'code' | 'destina
     if (typeof p.toTitle !== 'string' || p.toTitle.trim().length < 2 || p.toTitle.trim().length > 100 || /[<>\x00-\x1f]/.test(p.toTitle)) {
       throw new BadRequestException('المسمى الوظيفي الجديد غير صالح — من 2 إلى 100 حرف بدون < أو >')
     }
+    // الخطوة 9 (مسار R2): القيمة المؤقتة تُرفض عند التقديم لا بعد الاعتماد (كان التنفيذ وحده يرفضها فيعلق الطلب)
+    if (isDataPlaceholder(p.toTitle)) throw new BadRequestException(DATA_PLACEHOLDER_REJECTED)
   }
   if (type.destinationHandler === 'shift_schedule') {
     assertRequestDate(p.date, 'تاريخ الوردية')

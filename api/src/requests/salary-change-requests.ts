@@ -5,12 +5,27 @@ import type { RequestType } from './entities/request-type.entity'
 import { RequestApproval } from './entities/request-approval.entity'
 import { PayrollDecimal } from '../payroll/payroll-decimal'
 import { payrollLiveSourceContent } from '../payroll/payroll-live-source-contract'
-import { applyEmployeeSalaryChange } from '../payroll/payroll-salary-change'
+import { applyEmployeeSalaryChange, readSalaryCycleStartDay } from '../payroll/payroll-salary-change'
 import { readSalaryHistory, readSalaryHistoryCurrent, SALARY_HISTORY_MONEY_KEYS, salaryCurrentSourceHash, salaryHistoryDate, salaryHistoryMoney, salaryHistoryText } from '../payroll/payroll-salary-history'
+import { PayrollPeriodSalaryError, salaryPayrollPeriod } from '../payroll/payroll-period-salary'
+import { payrollPeriodBounds, payrollPeriodOfDate } from '../payroll/payroll-period'
 
 export const SALARY_CHANGE_HANDLER = 'salary_update_history'
-export const SALARY_CHANGE_BASIS_VERSION = 'SALARY_REQUEST_BASIS_V1_20260913'
-export const SALARY_CHANGE_CLIENT_FIELDS = ['newSalary', 'effectiveDate', 'reason'] as const
+// V2: قاعدة المالك — الزيادة تسري من راتب شهر كامل (effectivePayrollPeriod)؛ دليل V1 اليومي يلزمه إعادة تقديم.
+export const SALARY_CHANGE_BASIS_VERSION = 'SALARY_REQUEST_BASIS_V2_20260914'
+export const SALARY_CHANGE_CLIENT_FIELDS = ['newSalary', 'effectivePayrollPeriod', 'reason'] as const
+
+function requestPayrollPeriod(value: unknown): string {
+  try { return salaryPayrollPeriod(value) } catch (error) {
+    if (error instanceof PayrollPeriodSalaryError) throw new BadRequestException({ code: 'SALARY_REQUEST_PAYROLL_PERIOD_INVALID', message: 'اختر «يسري من راتب شهر» بصيغة YYYY-MM صحيحة' })
+    throw error
+  }
+}
+
+/** تاريخ التنفيذ المجدول = بداية دورة شهر السريان وفق الدورة المثبتة؛ الشهر نفسه هو القرار. */
+export async function salaryChangeExecutionDate(em: EntityManager, effectivePayrollPeriod: string): Promise<string> {
+  return payrollPeriodBounds(requestPayrollPeriod(effectivePayrollPeriod), await readSalaryCycleStartDay(em)).startDate
+}
 const reserved = ['salaryChangeBasis', 'salaryChangeApproval']
 type Salary = Record<typeof SALARY_HISTORY_MONEY_KEYS[number], string> & { currency: 'SAR' | 'EGP' }
 type Payload = Record<string, any>
@@ -30,11 +45,14 @@ export const isSalaryChangeType = (type: Pick<RequestType, 'destinationHandler'>
 export function assertSalaryChangeClientPayload(raw: unknown, required = false): Payload {
   if (!object(raw)) throw new BadRequestException('حمولة طلب زيادة الراتب يجب أن تكون حقولًا مسماة')
   if (reserved.some(key => Object.prototype.hasOwnProperty.call(raw, key))) throw new BadRequestException('دليل الأجر وهوية المعتمد يثبتهما الخادم ولا يقبلان من مقدم الطلب')
+  if (Object.prototype.hasOwnProperty.call(raw, 'effectiveDate')) {
+    throw new BadRequestException({ code: 'SALARY_REQUEST_PAYROLL_PERIOD_REQUIRED', message: 'زيادة الراتب تسري من راتب شهر كامل؛ اختر «يسري من راتب شهر» بدل تاريخ السريان' })
+  }
   const result = { ...raw }
   // النسبة القديمة للعرض فقط؛ لا تُقبل كقرار لتخطي خطوة موافقة.
   delete result.increase_pct
   if (required || result.newSalary != null && result.newSalary !== '') result.newSalary = salaryHistoryMoney(result.newSalary)
-  if (required || result.effectiveDate != null && result.effectiveDate !== '') result.effectiveDate = salaryHistoryDate(result.effectiveDate)
+  if (required || result.effectivePayrollPeriod != null && result.effectivePayrollPeriod !== '') result.effectivePayrollPeriod = requestPayrollPeriod(result.effectivePayrollPeriod)
   if (required || result.reason != null && result.reason !== '') result.reason = salaryHistoryText(result.reason, 500, 'سبب زيادة الراتب')
   return result
 }
@@ -54,13 +72,14 @@ function increase(newSalary: string, salary: Salary) {
 }
 
 function basisHash(basis: Omit<SalaryChangeBasis, 'contentHash'>, payload: Payload) {
-  return payrollLiveSourceContent({ basis, newSalary: payload.newSalary, effectiveDate: payload.effectiveDate, reason: payload.reason }).contentHash
+  return payrollLiveSourceContent({ basis, newSalary: payload.newSalary, effectivePayrollPeriod: payload.effectivePayrollPeriod, reason: payload.reason }).contentHash
 }
 
 export function readStoredSalaryChangePayload(raw: unknown, requireBasis = true): Payload & { salaryChangeBasis?: SalaryChangeBasis; salaryChangeApproval?: SalaryChangeApproval } {
   if (!object(raw)) conflict('SALARY_REQUEST_BASIS_INVALID', 'حمولة طلب الأجر المخزنة غير صالحة')
   const payload = raw as Payload
-  if (payload.effectiveDate == null || payload.effectiveDate === '') conflict('SALARY_REQUEST_EFFECTIVE_DATE_REQUIRED', 'طلب الأجر القديم لا يحتوي تاريخ سريان؛ أرجعه لاستكمال المعلومات دون افتراض تاريخ جديد')
+  // الطلب القديم (بلا تاريخ أو بتاريخ يومي) لا يُحوَّل إلى شهر مفترض؛ يُرجع لاختيار «يسري من راتب شهر».
+  if (payload.effectivePayrollPeriod == null || payload.effectivePayrollPeriod === '') conflict('SALARY_REQUEST_PAYROLL_PERIOD_REQUIRED', 'طلب الأجر القديم لا يحدد «يسري من راتب شهر»؛ أرجعه لاستكمال المعلومات دون افتراض شهر')
   const client = assertSalaryChangeClientPayload(Object.fromEntries(Object.entries(payload).filter(([key]) => !reserved.includes(key))), true)
   const rawBasis = payload.salaryChangeBasis
   if (rawBasis == null) {
@@ -142,8 +161,11 @@ export async function executeSalaryChangeRequest(em: EntityManager, req: Request
   stored.salaryChangeApproval ??= { actorUserId: actor, approvedAt: new Date().toISOString(), basisContentHash: basis.contentHash }
   req.payload = JSON.stringify(stored)
   const ref = `SAL-REQUEST-${req.id}`
-  if (stored.effectiveDate > today) return { ref, completed: false, note: `زيادة راتب معتمدة مجدولة للسريان في ${stored.effectiveDate}` }
-  await applyEmployeeSalaryChange(em, { employeeId: req.requesterId, actorUserId: actor, effectiveDate: stored.effectiveDate, reason: stored.reason,
+  const cycleStartDay = await readSalaryCycleStartDay(em)
+  if (stored.effectivePayrollPeriod > payrollPeriodOfDate(today, cycleStartDay)) {
+    return { ref, completed: false, note: `زيادة راتب معتمدة مجدولة: تسري من راتب شهر ${stored.effectivePayrollPeriod} الذي تبدأ دورته ${payrollPeriodBounds(stored.effectivePayrollPeriod, cycleStartDay).startDate}` }
+  }
+  await applyEmployeeSalaryChange(em, { employeeId: req.requesterId, actorUserId: actor, effectivePayrollPeriod: stored.effectivePayrollPeriod, reason: stored.reason,
     evidenceReference: `request:${req.id}`, requestId: req.id, expectedRevision: basis.historyRevision, expectedCurrentSourceHash: basis.currentSourceHash,
     salary: { ...basis.salary, basicSalary: stored.newSalary } })
   return { ref, completed: true }

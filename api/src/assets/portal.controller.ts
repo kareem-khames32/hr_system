@@ -276,6 +276,7 @@ export class PortalController {
           RETURNED_FOR_INFO: 'أُعيد لاستكمال معلومات',
           ESCALATED: 'تم تصعيد',
           CANCELLED: 'ألغى النظام', // إلغاء آلي (approverId = 0)
+          EXECUTION_FAILED: 'تعذّر تنفيذ', // تنفيذ مجدول فشل — السبب في التعليق
         }
         // الاسم العربي للنوع — الكود لا يظهر للمستخدم أبداً
         const typeCodes = [...new Set(myRequests.map((r) => r.definitionCode || r.typeCode))]
@@ -321,6 +322,26 @@ export class PortalController {
           at: lv.revokedAt,
           link: '/my/leaves',
         })
+      }
+
+      // 1ج) الخصومات المصنفة (C2 / DD-08 قاعدة 4): الموظف يُخطر بكل تغيير حالة على خصم عليه
+      const deductionEvents: Array<{ id: number; requestId: number; eventType: string; createdAt: Date; reason: string | null; typeSnapshot: string | null }> =
+        await this.employees.manager.query(`SELECT TOP (20) e.[id], e.[requestId], e.[eventType], e.[createdAt], e.[reason], r.[typeSnapshot]
+          FROM [deduction_request_events] e INNER JOIN [deduction_requests] r ON r.[id]=e.[requestId]
+          WHERE r.[employeeId]=@0 AND e.[eventType] IN ('SUBMITTED','APPROVED','REJECTED','CANCELLED','REVERSED','CARRY_FORWARD','CARRY_SUSPENDED','CARRY_RESUMED','CARRY_DROPPED','OBJECTION_RESPONDED')
+          ORDER BY e.[id] DESC`, [user.employeeId])
+      const deductionTitles: Record<string, [string, NotificationItem['kind']]> = {
+        SUBMITTED: ['خصم مقترح عليك قيد الاعتماد', 'warning'], APPROVED: ['اعتُمد خصم عليك', 'warning'], REJECTED: ['رُفض خصم كان مقترحًا عليك', 'success'],
+        CANCELLED: ['أُلغي خصم عليك', 'success'], REVERSED: ['عُكس خصم عليك بقيد موجب', 'success'], CARRY_FORWARD: ['رُحّل جزء من خصم عليك للمسير التالي', 'info'],
+        CARRY_SUSPENDED: ['عُلّق قسط خصم عليك بانتظار قرار الموارد البشرية', 'info'], CARRY_RESUMED: ['استُؤنف تحصيل قسط خصم عليك', 'warning'],
+        CARRY_DROPPED: ['أُسقط قسط خصم عليك', 'success'], OBJECTION_RESPONDED: ['رُدّ على اعتراضك على خصم', 'info'],
+      }
+      for (const event of deductionEvents) {
+        let typeName = 'خصم مصنف'
+        try { typeName = JSON.parse(event.typeSnapshot ?? '{}').nameAr || typeName } catch { /* لقطة غير صالحة: الاسم العام */ }
+        const [title, kind] = deductionTitles[event.eventType] ?? ['تحديث على خصم عليك', 'info']
+        items.push({ id: `deduction-${event.id}`, category: 'request', kind, title, body: `${typeName} #${event.requestId}${event.reason ? ` — ${event.reason}` : ''}`.slice(0, 300),
+          at: event.createdAt, link: '/my/deductions' })
       }
     }
 
@@ -486,6 +507,20 @@ export class PortalController {
         body: `الطلب #${request.id}${act.comment ? ` — ${act.comment}` : ''}`,
         at: act.actedAt,
         link: '/approvals-inbox',
+      })
+    }
+
+    // 3ج) تنفيذ مجدول تعذّر أو نقل مكرر ألغاه النظام — للموارد البشرية في نطاقها (الخطوة 7)
+    for (const { act, request } of await this.requestsService.scheduledExecutionAlerts(user, weekAgo)) {
+      const cancelled = act.action === 'CANCELLED'
+      items.push({
+        id: `scheduled-execution-${act.id}`,
+        category: 'request',
+        kind: cancelled ? 'warning' : 'error',
+        title: cancelled ? 'ألغى النظام نقلًا مجدولًا مكررًا' : 'تعذّر تنفيذ طلب مجدول',
+        body: `الطلب #${request.id}${act.comment ? ` — ${act.comment}` : ''}`,
+        at: act.actedAt,
+        link: request.typeCode === 'TEAM_TRANSFER' ? '/employees/transfers' : '/requests-console',
       })
     }
 

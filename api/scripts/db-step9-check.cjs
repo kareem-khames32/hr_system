@@ -34,21 +34,55 @@ const CHECKS = [
     r => r.length === 1 && r[0].isActive === false && r[0].users === 0],
   ['deviceKey', 'مفتاح جهاز البصمة ≥24 حرفًا وليس القيمة المنشورة', `SELECT LEN([value]) AS len, CASE WHEN [value] = N'zk-device-key-change-me' THEN 1 ELSE 0 END AS isPlaceholder
     FROM dbo.requests_config WHERE [key] = N'attendance.device_key'`, r => r.length === 1 && r[0].len >= 24 && r[0].isPlaceholder === 0],
-  // بنود قرارها «بلا تغيير حتى بيانات المالك» — الفحص يثبت أن الحالة كما وُثقت (لا قيم مخترعة)
-  ['zeroSalary', 'الموظفان 1 و154 بلا راتب أساسي (بلا تغيير — بيانات المالك)', `SELECT id, status, CASE WHEN basicSalary IS NULL THEN 1 ELSE 0 END AS salaryMissing FROM dbo.employees WHERE id IN (1, 154) ORDER BY id`,
-    r => r.length === 2, 'recorded'],
-  ['companyAndTitles', 'اسم الشركة والمسميات وتاريخ التعيين (بلا تغيير — بيانات المالك)', `SELECT (SELECT LEN(ISNULL([value], '')) FROM dbo.requests_config WHERE [key] = N'company.name') AS companyNameLength,
+  // مسار R2 (ترحيل 20260914_021 + قاعدة الراتب الصفري في payroll-run-salary.ts): البنود التي تركها 015 «بلا تغيير»
+  // الراتب لا يُخترع: الفحص يعرض مكونات الراتب الست والسجل الشهري؛ الاستبعاد NO_SALARY_DEFINED يثبته حساب المسير (اختبار + فحص حي).
+  ['zeroSalary', 'الموظفان 1 و154: بلا راتب معرّف لشهر المسير يُستبعدان بسبب ظاهر (لا يُخترع راتب)', `SELECT e.id, e.status,
+      CASE WHEN ISNULL(e.basicSalary,0) + ISNULL(e.housingAllowance,0) + ISNULL(e.transportAllowance,0) + ISNULL(e.phoneAllowance,0)
+        + ISNULL(e.workNatureAllowance,0) + ISNULL(e.otherAllowance,0) = 0 THEN 1 ELSE 0 END AS fileGrossZero,
+      (SELECT COUNT(*) FROM dbo.employee_salary_history_versions v WHERE v.employeeId = e.id AND v.contractVersion IS NOT NULL) AS monthlyHistoryVersions,
+      (SELECT COUNT(*) FROM dbo.employee_salary_history_versions v WHERE v.employeeId = e.id AND v.contractVersion IS NULL) AS dailyHistoryVersions
+    FROM dbo.employees e WHERE e.id IN (1, 154) ORDER BY e.id`,
+    r => r.length === 2 && r.every(x => x.fileGrossZero === 1 && x.monthlyHistoryVersions === 0)],
+  ['employee1CheckDataRestored', 'الموظف 1: بيانات فحص 13:33 UTC (راتب 19,000 وتعيين وعقد، سبب «0» ومرجع «2») أُعيدت لما قبلها بترحيل 024 بعشرة أسطر تدقيق؛ سجل الأجر اليومي باقٍ ملحقًا', `SELECT
+      (SELECT COUNT(*) FROM dbo.employee_status_history WHERE employeeId = 1 AND reason LIKE N'ترحيل 20260914[_]024%') AS restoreAuditRows,
+      (SELECT CASE WHEN joinDate IS NULL AND contractStart IS NULL AND contractEnd IS NULL AND currency IS NULL THEN 1 ELSE 0 END FROM dbo.employees WHERE id = 1) AS fileRestored,
+      (SELECT [value] FROM dbo.requests_config WHERE [key] = N'payroll.salary_evidence_mode') AS salaryEvidenceMode`,
+    r => r.length === 1 && r[0].restoreAuditRows === 10 && r[0].fileRestored === 1],
+  ['companyAndTitles', 'اسم الشركة والمسميات بيانات المالك: لا قيمة مؤقتة أو مخترعة (024 أعاد الأصل)؛ الخطابات ومستندات HR ترفض الناقص برسالة عربية', `SELECT
+      (SELECT LEN(ISNULL(LTRIM(RTRIM([value])), '')) FROM dbo.requests_config WHERE [key] = N'company.name') AS companyNameLength,
+      (SELECT COUNT(*) FROM dbo.requests_config WHERE [key] LIKE N'company.%' AND LTRIM(RTRIM([value])) IN (N'اسم الشركة غير مُدخل (يُستكمل من الإعدادات)', N'مسمى وظيفي غير مُدخل (يُستكمل)')) AS companyPlaceholders,
       (SELECT COUNT(*) FROM dbo.employees WHERE status = N'active') AS active,
-      (SELECT COUNT(*) FROM dbo.employees WHERE status = N'active' AND (jobTitle IS NULL OR LTRIM(jobTitle) = N'')) AS activeWithoutJobTitle,
-      (SELECT COUNT(*) FROM dbo.employees WHERE status = N'active' AND joinDate IS NULL) AS activeWithoutJoinDate`, r => r.length === 1, 'recorded'],
-  ['contracts', 'بيانات العقود (بلا تغيير — بيانات المالك)', `SELECT COUNT(*) AS activeWithoutContract, (SELECT COUNT(*) FROM dbo.employees WHERE status = N'active') AS active
-    FROM dbo.employees WHERE status = N'active' AND contractType IS NULL AND contractEnd IS NULL`, r => r.length === 1, 'recorded'],
-  ['floorAndCap', 'أرضية الصافي وسقف الخصم (بلا قيمة — قرار المالك/مسار السلف D10)', `SELECT [key], [value] FROM dbo.requests_config
-    WHERE [key] IN (N'payroll.policy.net_floor_pct', N'payroll.policy.max_deduction_pct_of_gross', N'payroll.policy.min_net_guarantee', N'loan.insufficient_net_behavior') ORDER BY [key]`,
-    r => r.length >= 3, 'recorded'],
-  ['roleGrants', 'منح payroll.reopen/cancel وattendance_exemption.* لأدوار (مؤجل لما بعد 8-أ)', `SELECT code, isActive,
-      CASE WHEN permissions LIKE N'%payroll.reopen%' THEN 1 ELSE 0 END AS reopen, CASE WHEN permissions LIKE N'%payroll.cancel%' THEN 1 ELSE 0 END AS cancel,
-      CASE WHEN permissions LIKE N'%attendance_exemption%' THEN 1 ELSE 0 END AS exemption FROM dbo.roles WHERE permissions NOT LIKE N'%"*"%' ORDER BY id`, r => r.length >= 1, 'recorded'],
+      (SELECT COUNT(*) FROM dbo.employees WHERE jobTitle IS NULL OR LTRIM(RTRIM(jobTitle)) = N'') AS withoutJobTitle,
+      (SELECT COUNT(*) FROM dbo.employees WHERE status = N'active' AND (jobTitle IS NULL OR LTRIM(RTRIM(jobTitle)) = N'')) AS activeWithoutJobTitle,
+      (SELECT COUNT(*) FROM dbo.employees WHERE LTRIM(RTRIM(jobTitle)) IN (N'اسم الشركة غير مُدخل (يُستكمل من الإعدادات)', N'مسمى وظيفي غير مُدخل (يُستكمل)')) AS titlePlaceholders,
+      (SELECT COUNT(*) FROM dbo.employee_status_history WHERE changeType = N'TITLE' AND fieldName = N'jobTitle' AND reason LIKE N'ترحيل 20260914[_]024%') AS titleRestoreRows,
+      (SELECT COUNT(*) FROM dbo.employees WHERE status = N'active' AND joinDate IS NULL) AS activeWithoutJoinDate`,
+    r => r.length === 1 && r[0].companyPlaceholders === 0 && r[0].titlePlaceholders === 0],
+  ['contracts', 'بيانات العقود ناقصة ← «تجديد عقد» معطّل حتى تكتمل، و«تغيير نوع العقد» مفعّل لاستكمالها', `SELECT
+      (SELECT COUNT(*) FROM dbo.employees WHERE status = N'active') AS active,
+      (SELECT COUNT(*) FROM dbo.employees WHERE status = N'active' AND (contractType IS NULL OR (contractType IN (N'fixed_term', N'seasonal') AND contractEnd IS NULL))) AS activeIncomplete,
+      (SELECT isActive FROM dbo.request_types WHERE code = N'CONTRACT_RENEWAL') AS renewalActive,
+      (SELECT isActive FROM dbo.request_types WHERE code = N'CONTRACT_TYPE_CHANGE') AS typeChangeActive,
+      (SELECT COUNT(*) FROM dbo.requests WHERE typeCode = N'CONTRACT_RENEWAL' AND status IN (N'DRAFT', N'SUBMITTED', N'UNDER_REVIEW', N'RETURNED_FOR_INFO', N'APPROVED', N'IN_EXECUTION')) AS openRenewalRequests`,
+    r => r.length === 1 && r[0].typeChangeActive === true && (r[0].activeIncomplete === 0 || r[0].renewalActive === false)],
+  ['floorAndCap', 'أرضية الصافي وسقف الخصم: null حتى قرار المالك (لا نسبة مخترعة) — مطابقة للبذرة ولنسخة السياسة المنشورة، والحماية الحالية صافٍ غير سالب', `SELECT c.[key], c.[value],
+      (SELECT COUNT(*) FROM dbo.payroll_policy_versions v WHERE v.status = N'ACTIVE' AND (v.netFloorPct IS NOT NULL OR v.maxDeductionPctOfGross IS NOT NULL)) AS activeVersionsWithFloorOrCap
+    FROM dbo.requests_config c
+    WHERE c.[key] IN (N'payroll.policy.net_floor_pct', N'payroll.policy.max_deduction_pct_of_gross', N'payroll.policy.min_net_guarantee', N'loan.insufficient_net_behavior') ORDER BY c.[key]`,
+    r => ['payroll.policy.net_floor_pct', 'payroll.policy.max_deduction_pct_of_gross', 'payroll.policy.min_net_guarantee'].every(key => r.find(x => x.key === key)?.value === 'null')
+      && r.every(x => x.activeVersionsWithFloorOrCap === 0)],
+  // SEC2: المنح بعد إغلاق 8-أ (ترحيلات 016_c1 و017_b2 و019_sec2) — الدور النشط وحده يمنح؛ '*' خارج الفحص
+  ['roleGrants', 'منح الأدوار بأقل امتياز: hr_manager يعيد فتح المسير ويلغيه وينشر السياسات ويعتمد الاستثناء، مدير الفرع يطلب الاستثناء فقط، والاعتماد التنفيذي لمدير النظام وحده', `SELECT r.code, r.isActive,
+      (SELECT STRING_AGG(CAST(j.[value] AS nvarchar(100)), N',') FROM OPENJSON(r.permissions) j
+        WHERE j.[value] IN (N'payroll.reopen', N'payroll.cancel', N'payroll.policy.manage', N'overtime.adjust', N'attendance_exemption.view',
+          N'attendance_exemption.manage', N'attendance_exemption.approve', N'attendance_exemption.approve_executive')) AS sensitive
+    FROM dbo.roles r WHERE ISJSON(r.permissions) = 1 AND r.permissions NOT LIKE N'%"*"%' ORDER BY r.id`,
+    r => {
+      const held = code => (r.find(x => x.code === code && x.isActive)?.sensitive ?? '').split(',').filter(Boolean).sort().join(',')
+      return held('hr_manager') === 'attendance_exemption.approve,attendance_exemption.manage,attendance_exemption.view,overtime.adjust,payroll.cancel,payroll.policy.manage,payroll.reopen'
+        && held('branch_manager') === 'attendance_exemption.manage,attendance_exemption.view'
+        && r.filter(x => x.isActive && !['hr_manager', 'branch_manager'].includes(x.code)).every(x => !x.sensitive)
+    }],
   ['runsState', 'حالة المسيرات (لا مسير معتمد أو مصروف قبل استكمال المرحلة ب)', `SELECT status, COUNT(*) AS n FROM dbo.payroll_runs GROUP BY status`, r => r.length >= 1, 'recorded'],
   ['overdueInstallments', 'الأقساط المتأخرة غير المدفوعة (معاينة التحصيل — قرار D10)', `SELECT COUNT(*) AS overdue, COUNT(DISTINCT l.employeeId) AS employees, CONVERT(varchar(10), MIN(i.dueDate), 23) AS oldest
     FROM dbo.loan_installments i JOIN dbo.loans l ON l.id = i.loanId WHERE i.paid = 0 AND i.dueDate < CAST(SYSDATETIME() AS date)`, r => r.length === 1, 'recorded'],

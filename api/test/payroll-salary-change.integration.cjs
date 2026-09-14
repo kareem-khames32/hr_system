@@ -13,6 +13,9 @@ const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
 const keys = ['basicSalary', 'housingAllowance', 'transportAllowance', 'phoneAllowance', 'workNatureAllowance', 'otherAllowance']
 const today = require('../src/attendance/attendance.service').localDateOf(new Date())
+// قاعدة المالك: تغيير الراتب يسري من راتب شهر كامل؛ دورة الشركة المبذورة 23.
+const { payrollPeriodOfDate, shiftPayrollPeriod } = require('../src/payroll/payroll-period')
+const currentMonth = payrollPeriodOfDate(today, 23)
 const baseSalary = { basicSalary: '6000.00', housingAllowance: '1500.00', transportAllowance: '500.00',
   phoneAllowance: '300.00', workNatureAllowance: '200.00', otherAllowance: '100.00', currency: 'EGP' }
 let app, ds, master, base, created = false, sequence = 0, branchA, branchB, admin, editor, outsider, viewer
@@ -35,7 +38,7 @@ const context = async (emp, actor = editor) => expect(await request(actor, 'GET'
 async function command(emp, salary = {}, extra = {}, actor = editor) {
   const c = await context(emp, actor)
   return { expectedRevision: c.historyRevision, expectedCurrentSourceHash: c.currentSourceHash,
-    effectiveDate: today, reason: 'قرار تعديل الأجر للاختبار', evidenceReference: 'قرار داخلي اختباري',
+    effectivePayrollPeriod: currentMonth, reason: 'قرار تعديل الأجر للاختبار', evidenceReference: 'قرار داخلي اختباري',
     salary: { ...c.current, ...salary }, ...extra }
 }
 async function patch(emp, salaryChange, other = {}, actor = editor) {
@@ -72,8 +75,9 @@ before(async () => {
   const user = (name, role, branchId, permissions) => repo('User').save({ email: `${name}@salary-change.invalid`, displayName: name,
     passwordHash: 'test-only', role, branchId, permissions: JSON.stringify(permissions) })
   admin = await user('admin', 'super_admin', null, ['*'])
-  editor = await user('editor', 'hr', branchA.id, ['employees.edit'])
-  outsider = await user('other', 'hr', branchB.id, ['employees.edit'])
+  // تغيير الأجر وسياقه = employees.edit + payroll.approve (SEC-06)
+  editor = await user('editor', 'hr', branchA.id, ['employees.edit', 'payroll.approve'])
+  outsider = await user('other', 'hr', branchB.id, ['employees.edit', 'payroll.approve'])
   viewer = await user('viewer', 'hr', branchA.id, ['employees.view', 'payroll.view'])
 })
 after(async t => {
@@ -96,13 +100,17 @@ after(async t => {
   if (errors.length) throw new AggregateError(errors, 'Salary change fixture cleanup failed')
 })
 
-test('salary metadata uses employees.edit authority, branch scope and exact SQL amounts', async () => {
+test('salary metadata uses employees.edit + payroll.approve authority, branch scope and exact SQL amounts', async () => {
+  const editOnly = await repo('User').save({ email: 'editonly@salary-change.invalid', displayName: 'editonly', passwordHash: 'test-only',
+    role: 'hr', branchId: branchA.id, permissions: JSON.stringify(['employees.edit']) })
   const emp = await employee()
   await ds.query("UPDATE employees SET basicSalary=CAST('9007199254740991.23' AS decimal(18,2)), phoneAllowance=NULL, currency=NULL WHERE id=@0", [emp.id])
   const c = await context(emp)
   assert.equal(c.current.basicSalary, '9007199254740991.23'); assert.equal(c.current.phoneAllowance, null)
   assert.equal(c.current.currency, null); assert.equal(c.historyRevision, 0); assert.match(c.currentSourceHash, /^[a-f0-9]{64}$/)
   expect(await request(viewer, 'GET', `/employees/${emp.id}/salary-change-context`), 403)
+  expect(await request(editOnly, 'GET', `/employees/${emp.id}/salary-change-context`), 403)
+  expect(await request(editOnly, 'PATCH', `/employees/${emp.id}`, { salaryChange: await command(emp, { basicSalary: '6100.00' }) }), 403)
   expect(await request(outsider, 'GET', `/employees/${emp.id}/salary-change-context`), 404)
   expect(await request(null, 'GET', `/employees/${emp.id}/salary-change-context`), 401)
 })
@@ -131,26 +139,40 @@ test('profile salary update atomically records all six values, currency, effecti
   expect(await patch(emp, await command(emp, newSalary), { jobTitle: 'وظيفة جديدة' }), 200)
   const c = await context(emp), h = await history(emp)
   assert.deepEqual(c.current, newSalary); assert.equal(c.historyRevision, 1)
-  assert.equal(h.segments.length, 1); assert.deepEqual(h.segments[0], { ...newSalary, effectiveFrom: today, effectiveTo: null })
+  assert.equal(h.segments.length, 1)
+  assert.deepEqual({ ...h.segments[0], effectiveFrom: undefined }, { ...newSalary, effectivePayrollPeriod: currentMonth, effectiveToPayrollPeriod: null, effectiveFrom: undefined, effectiveTo: null })
+  assert.equal(h.version.contractVersion, 'SALARY_PAYROLL_PERIOD_HISTORY_V2_20260914'); assert.equal(h.version.cycleStartDay, 23)
+  assert.equal(c.currentPayrollPeriod, currentMonth); assert.equal(c.cycleStartDay, 23); assert.equal(c.historyContract, 'MONTHLY')
   assert.equal(h.version.createdBy, editor.id); assert.equal(h.version.currentSourceHash, c.currentSourceHash)
   const audit = await repo('EmployeeStatusHistory').findBy({ employeeId: emp.id, changeType: 'SALARY' })
   assert.equal(audit.length, 7)
-  for (const row of audit) { assert.equal(row.changedByUserId, editor.id); assert.equal(row.newValue, newSalary[row.fieldName]); assert.ok(row.reason.includes(today)) }
+  for (const row of audit) { assert.equal(row.changedByUserId, editor.id); assert.equal(row.newValue, newSalary[row.fieldName]); assert.ok(row.reason.includes(`يسري من راتب شهر ${currentMonth}`)) }
   assert.equal(await repo('PayrollRun').count(), 0); assert.equal(await repo('EmployeeObligation').count(), 0)
 })
 
-test('first-change prior salary coverage requires explicit confirmation date and retains the exact old values', async () => {
+test('first-change prior salary coverage requires explicit confirmation month and retains the exact old values', async () => {
   const emp = await employee()
-  expect(await patch(emp, await command(emp, { basicSalary: '6500.00' }, { effectiveDate: '2026-06-16', previousEffectiveFrom: '2026-06-01' })), 200)
+  expect(await patch(emp, await command(emp, { basicSalary: '6500.00' }, { effectivePayrollPeriod: '2026-06', previousEffectivePayrollPeriod: '2026-01' })), 200)
   const h = await history(emp)
   assert.equal(h.segments.length, 2)
-  assert.deepEqual(h.segments[0], { ...baseSalary, effectiveFrom: '2026-06-01', effectiveTo: '2026-06-15' })
-  assert.equal(h.segments[1].effectiveFrom, '2026-06-16'); assert.equal(h.segments[1].basicSalary, '6500.00')
+  assert.deepEqual(h.segments[0], { ...baseSalary, effectivePayrollPeriod: '2026-01', effectiveToPayrollPeriod: '2026-05', effectiveFrom: '2025-12-23', effectiveTo: '2026-05-22' })
+  assert.equal(h.segments[1].effectivePayrollPeriod, '2026-06'); assert.equal(h.segments[1].effectiveFrom, '2026-05-23'); assert.equal(h.segments[1].basicSalary, '6500.00')
 })
 
-test('future profile salary is rejected without changing current salary or history', async () => {
+test('later-month profile salary is rejected without changing current salary or history', async () => {
   const emp = await employee(), before = await snapshot(emp)
-  assert.equal(expect(await patch(emp, await command(emp, { basicSalary: '7000' }, { effectiveDate: '9999-01-01' })), 400).code, 'SALARY_CHANGE_FUTURE_REQUIRES_REQUEST')
+  assert.equal(expect(await patch(emp, await command(emp, { basicSalary: '7000' }, { effectivePayrollPeriod: '9999-01' })), 400).code, 'SALARY_CHANGE_FUTURE_REQUIRES_REQUEST')
+  assert.equal(expect(await patch(emp, await command(emp, { basicSalary: '7000' }, { effectivePayrollPeriod: shiftPayrollPeriod(currentMonth, 1) })), 400).code, 'SALARY_CHANGE_FUTURE_REQUIRES_REQUEST')
+  assert.deepEqual(await snapshot(emp), before)
+})
+
+test('a daily-dated salary history must be converted to payroll months before a profile change', async () => {
+  const emp = await employee(), c = await context(emp)
+  expect(await request(admin, 'POST', `/payroll/employees/${emp.id}/salary-history`, { expectedRevision: 0, expectedCurrentSourceHash: c.currentSourceHash,
+    reason: 'دليل يومي قديم', evidenceReference: 'عقد قديم', segments: [{ ...baseSalary, effectiveFrom: '2026-01-01', effectiveTo: null }] }), 201)
+  assert.equal((await context(emp)).historyContract, 'DAILY')
+  const before = await snapshot(emp)
+  assert.equal(expect(await patch(emp, await command(emp, { basicSalary: '7000.00' })), 409).code, 'SALARY_CHANGE_MONTHLY_HISTORY_REQUIRED')
   assert.deepEqual(await snapshot(emp), before)
 })
 
@@ -158,8 +180,9 @@ test('nested salary DTO rejects missing, numeric, negative and subcent values pl
   const emp = await employee(), valid = await command(emp, { basicSalary: '7000' }), before = await snapshot(emp)
   const invalid = [null, { ...valid, salary: null }, { ...valid, salary: { ...valid.salary, basicSalary: 7000 } },
     { ...valid, salary: { ...valid.salary, basicSalary: '-1' } }, { ...valid, salary: { ...valid.salary, basicSalary: '7000.001' } },
-    { ...valid, salary: { ...valid.salary, currency: null } }, { ...valid, effectiveDate: '2026-02-30' },
-    { ...valid, reason: ' ' }, { ...valid, expectedRevision: '0' }, { ...valid, previousEffectiveFrom: null }]
+    { ...valid, salary: { ...valid.salary, currency: null } }, { ...valid, effectivePayrollPeriod: '2026-13' }, { ...valid, effectivePayrollPeriod: today },
+    { ...valid, effectivePayrollPeriod: undefined, effectiveDate: today },
+    { ...valid, reason: ' ' }, { ...valid, expectedRevision: '0' }, { ...valid, previousEffectivePayrollPeriod: null }]
   for (const value of invalid) expect(await patch(emp, value, { jobTitle: 'ممنوع حفظه' }), 400)
   expect(await patch(emp, valid, { basicSalary: 7000 }), 400)
   assert.deepEqual(await snapshot(emp), before)
@@ -211,36 +234,37 @@ test('approved membership and paid items prevent retrospective salary changes wi
     if (status === 'APPROVED') await repo('PayrollRunMember').save({ runId: run.id, employeeId: emp.id, membershipStatus: 'INCLUDED' })
     else await repo('PayrollItem').save({ runId: run.id, employeeId: emp.id, basicSalary: 6000, netPay: 8600, payMethod: 'transfer' })
     const before = await snapshot(emp), savedRun = await repo('PayrollRun').findOneByOrFail({ id: run.id })
-    assert.equal(expect(await patch(emp, await command(emp, { basicSalary: '7000' }, { effectiveDate: '2026-06-20' })), 409).code, 'SALARY_CHANGE_CLOSED_PERIOD')
+    assert.equal(expect(await patch(emp, await command(emp, { basicSalary: '7000' }, { effectivePayrollPeriod: '2026-06' })), 409).code, 'SALARY_CHANGE_CLOSED_PERIOD')
     assert.deepEqual(await snapshot(emp), before); assert.deepEqual(await repo('PayrollRun').findOneByOrFail({ id: run.id }), savedRun)
-    expect(await patch(emp, await command(emp, { basicSalary: '7000' }, { effectiveDate: '2026-07-01' })), 200)
+    expect(await patch(emp, await command(emp, { basicSalary: '7000' }, { effectivePayrollPeriod: '2026-07' })), 200)
   }
 })
 
 test('excluded member without a payslip does not block an otherwise open salary date', async () => {
   const emp = await employee(), run = await repo('PayrollRun').save({ period: '2026-06', startDate: '2026-06-01', endDate: '2026-06-30', status: 'APPROVED' })
   await repo('PayrollRunMember').save({ runId: run.id, employeeId: emp.id, membershipStatus: 'EXCLUDED' })
-  expect(await patch(emp, await command(emp, { basicSalary: '7000' }, { effectiveDate: '2026-06-20' })), 200)
+  expect(await patch(emp, await command(emp, { basicSalary: '7000' }, { effectivePayrollPeriod: '2026-06' })), 200)
 })
 
 test('settled employment blocks changing the salary of that settled service', async () => {
   const emp = await employee()
   await repo('OffboardingCase').save({ employeeId: emp.id, lastWorkingDay: '2026-07-31', status: 'SETTLED', terminationReason: 'termination' })
   const before = await snapshot(emp)
-  assert.equal(expect(await patch(emp, await command(emp, { basicSalary: '7000' }, { effectiveDate: '2026-06-20' })), 409).code, 'SALARY_CHANGE_CLOSED_PERIOD')
+  assert.equal(expect(await patch(emp, await command(emp, { basicSalary: '7000' }, { effectivePayrollPeriod: '2026-06' })), 409).code, 'SALARY_CHANGE_CLOSED_PERIOD')
   assert.deepEqual(await snapshot(emp), before)
 })
 
-test('editing a historical interval preserves later decisions and the correct current salary', async () => {
+test('editing a historical payroll month preserves later monthly decisions and the correct current salary', async () => {
   const emp = await employee(), c = await context(emp)
-  expect(await request(admin, 'POST', `/payroll/employees/${emp.id}/salary-history`, { expectedRevision: 0,
-    expectedCurrentSourceHash: c.currentSourceHash, reason: 'إثبات التاريخ السابق', evidenceReference: 'عقود اختبار',
-    segments: [{ ...baseSalary, basicSalary: '5000.00', effectiveFrom: '2026-01-01', effectiveTo: '2026-06-30' },
-      { ...baseSalary, effectiveFrom: '2026-07-01', effectiveTo: null }] }), 201)
-  expect(await patch(emp, await command(emp, { basicSalary: '5500.00' }, { effectiveDate: '2026-04-01' })), 200)
+  const monthRow = (extra) => ({ ...baseSalary, effectiveToPayrollPeriod: null, ...extra })
+  expect(await request(admin, 'POST', `/payroll/employees/${emp.id}/salary-history/monthly`, { expectedRevision: 0,
+    expectedCurrentSourceHash: c.currentSourceHash, reason: 'إثبات الشهور السابقة', evidenceReference: 'عقود اختبار',
+    periods: [monthRow({ basicSalary: '5000.00', effectivePayrollPeriod: '2026-01', effectiveToPayrollPeriod: '2026-06' }),
+      monthRow({ effectivePayrollPeriod: '2026-07' })] }), 201)
+  expect(await patch(emp, await command(emp, { basicSalary: '5500.00' }, { effectivePayrollPeriod: '2026-04' })), 200)
   const h = await history(emp)
-  assert.deepEqual(h.segments.map(row => [row.effectiveFrom, row.effectiveTo, row.basicSalary]), [
-    ['2026-01-01', '2026-03-31', '5000.00'], ['2026-04-01', '2026-06-30', '5500.00'], ['2026-07-01', null, '6000.00']])
+  assert.deepEqual(h.segments.map(row => [row.effectivePayrollPeriod, row.effectiveToPayrollPeriod, row.basicSalary]), [
+    ['2026-01', '2026-03', '5000.00'], ['2026-04', '2026-06', '5500.00'], ['2026-07', null, '6000.00']])
   assert.deepEqual((await context(emp)).current, baseSalary)
   assert.equal(await repo('EmployeeStatusHistory').countBy({ employeeId: emp.id, changeType: 'SALARY' }), 0)
 })

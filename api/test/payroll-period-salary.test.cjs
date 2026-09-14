@@ -55,16 +55,22 @@ test('الشهور تقبل حدود السنة وترفض الصيغ الوهم
 })
 test('قص فبراير والسنة الكبيسة وانتقال السنة يحفظ تعريف الدورة', () => {
   assert.deepEqual(bounds('2026-01', 23), { startDate: '2025-12-23', endDate: '2026-01-22' })
-  assert.deepEqual(bounds('2026-03', 31), { startDate: '2026-02-28', endDate: '2026-03-30' })
-  assert.deepEqual(bounds('2028-03', 31), { startDate: '2028-02-29', endDate: '2028-03-30' })
+  // الخطوة 14: بداية مارس = نهاية فبراير + يوم؛ لا يوم مشترك بين الشهرين.
+  assert.deepEqual(bounds('2026-02', 31), { startDate: '2026-01-31', endDate: '2026-02-28' })
+  assert.deepEqual(bounds('2026-03', 31), { startDate: '2026-03-01', endDate: '2026-03-30' })
+  assert.deepEqual(bounds('2028-03', 31), { startDate: '2028-03-01', endDate: '2028-03-30' })
+  // فبراير 2028 كبيس (29 يومًا) ودورة 29 تنتهي في 28 فبراير، فيبدأ مارس في 29 فبراير.
+  assert.deepEqual(bounds('2028-03', 29), { startDate: '2028-02-29', endDate: '2028-03-28' })
   assert.deepEqual(bounds('0001-01', 1), { startDate: '0001-01-01', endDate: '0001-01-31' })
   assert.throws(() => bounds('0001-01', 23), invalid)
   for (const cycle of [null, 0, 32, 1.5, '23']) assert.throws(() => bounds('2026-09', cycle), invalid)
 })
-test('التداخل يحسب بالشهر والتجاور مقبول حتى لو تداخلت تواريخ فبراير المشتقة', () => {
+test('التداخل يحسب بالشهر والتجاور مقبول، وتواريخ فبراير ومارس المشتقة متجاورة بلا يوم مشترك', () => {
   const periods = [row({ effectivePayrollPeriod: '2026-02', effectiveToPayrollPeriod: '2026-02' }), row({ effectivePayrollPeriod: '2026-03' })]
   const rows = normalize(periods, 31)
-  assert.equal(rows[0].effectiveTo, rows[1].effectiveFrom)
+  // الخطوة 14: كان الاختبار يؤكد أن نهاية فبراير = بداية مارس (يوم مشترك)؛ الصحيح أن البداية = النهاية + يوم.
+  assert.equal(rows[0].effectiveTo, '2026-02-28')
+  assert.equal(rows[1].effectiveFrom, '2026-03-01')
   assert.equal(select(history(periods, 31), '2026-03').segment.effectivePayrollPeriod, '2026-03')
   for (const periods of [[row(), row({ effectivePayrollPeriod: '2026-10' })], [row(), row()],
     [row({ effectiveToPayrollPeriod: '2026-10' }), row({ effectivePayrollPeriod: '2026-10' })]]) assert.throws(() => normalize(periods, 23), invalid)

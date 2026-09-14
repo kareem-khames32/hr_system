@@ -20,6 +20,7 @@ import {
   type ApiEmployee,
 } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
+import { downloadCsv, csvDateStamp } from '@/lib/csv'
 
 const runStatusLabels: Record<string, string> = {
   CALCULATED: 'محسوب',
@@ -105,13 +106,21 @@ export default function PayslipsListPage() {
             <p className="text-gray-500 mt-1">عرض وطباعة قسائم رواتب الموظفين حسب المسير</p>
           </div>
           <div className="flex items-center gap-3">
-            <button className="btn-secondary flex items-center gap-2">
-              <Printer size={18} />
-              طباعة الكل
-            </button>
-            <button className="btn-primary flex items-center gap-2">
+            {/* «طباعة الكل» أُخفي (لا طباعة جماعية للقسائم بعد)؛ كل قسيمة تُطبع من صفحتها */}
+            <button
+              type="button"
+              onClick={() => downloadCsv(`payslips-${run?.period ?? 'run'}-${csvDateStamp()}.csv`,
+                ['الرقم الوظيفي', 'الموظف', 'الفترة', 'الراتب الأساسي', 'البدلات', 'العمل الإضافي', 'الخصومات', 'الصافي', 'طريقة الدفع'],
+                filteredItems.map((item) => {
+                  const emp = employees.get(item.employeeId)
+                  return [emp?.employeeCode ?? '', emp?.fullName ?? `موظف #${item.employeeId}`, run?.period ?? '', item.basicSalary,
+                    Number((item as ApiPayrollItem & { allowances?: number }).allowances ?? 0), item.overtimeAmount, deductionsOf(item).toFixed(2), item.netPay, payMethodLabels[item.payMethod] ?? item.payMethod]
+                }))}
+              disabled={loading || filteredItems.length === 0}
+              className="btn-primary flex items-center gap-2 disabled:opacity-50"
+            >
               <Download size={18} />
-              تصدير
+              تصدير CSV
             </button>
           </div>
         </div>

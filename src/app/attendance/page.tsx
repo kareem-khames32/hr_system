@@ -3,6 +3,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import { AttendanceFlexSummary } from '@/components/AttendanceFlexSummary'
+import { NextDayCheckoutHint } from '@/components/NextDayCheckoutHint'
 import Link from 'next/link'
 import {
   Search,
@@ -595,14 +596,14 @@ export default function AttendancePage() {
                       </td>
                       <td className="table-cell text-center">
                         {record.checkIn ? (
-                          <span className="font-mono text-success-600 font-medium">{record.checkIn}</span>
+                          <><span className="font-mono text-success-600 font-medium">{record.checkIn}</span><NextDayCheckoutHint day={record} field="checkIn" /></>
                         ) : (
                           <span className="text-gray-400">-</span>
                         )}
                       </td>
                       <td className="table-cell text-center">
                         {record.checkOut ? (
-                          <span className="font-mono text-danger-600 font-medium">{record.checkOut}</span>
+                          <><span className="font-mono text-danger-600 font-medium">{record.checkOut}</span><NextDayCheckoutHint day={record} /></>
                         ) : (
                           <span className="text-gray-400">-</span>
                         )}

@@ -177,12 +177,152 @@ test('القارئ لا يصدر أي كتابة ويلزم معاملة ويب�
   const f = fixture(), calls = [], tables = ['days', 'punches', 'leaves', 'corrections', 'requests', 'exemptions']
   const em = { queryRunner: { isTransactionActive: true }, query: async (sql, params) => {
     assert.match(sql, /^SELECT /); assert.doesNotMatch(sql, /NOLOCK|READUNCOMMITTED/i); assert.equal(params[0], 3); calls.push(sql)
-    return f.evidence[tables[calls.length - 1]]
+    // بعد أدلة الحضور الست: جدول مؤرخ ليوم الجار (حد ليلة الأمس) — لا موظف في الوهمي فيعود MISSING بلا افتراض وردية
+    return calls.length <= tables.length ? f.evidence[tables[calls.length - 1]] : []
   } }
-  assert.equal((await read(em, 3, date, date, f.schedule, f.employment)).state, 'AVAILABLE'); assert.equal(calls.length, 6)
+  assert.equal((await read(em, 3, date, date, f.schedule, f.employment)).state, 'AVAILABLE')
+  assert.equal(calls.length, 7, 'ست قراءات أدلة ثم قراءة جدول يوم الجار لوجود بصمة في أول يوم من الفترة')
+  assert.match(calls[6], /FROM \[employees\]/)
   await assert.rejects(read({ queryRunner: { isTransactionActive: false } }, 3, date, date, f.schedule, f.employment), /معاملة/)
   const absentSchema = await read({ queryRunner: { isTransactionActive: true }, query: async () => { throw { driverError: { number: 208 } } } }, 3, date, date, f.schedule, f.employment)
   assert.equal(absentSchema.state, 'MISSING'); assert.ok(code(absentSchema, 'ATTENDANCE_EVIDENCE_SCHEMA_MISSING'))
   const lost = new Error('connection lost')
   await assert.rejects(read({ queryRunner: { isTransactionActive: true }, query: async () => { throw lost } }, 3, date, date, f.schedule, f.employment), e => e === lost)
+})
+
+// ===== S28: الوردية الليلية 20:00 ← 01:00 تُنسب كلها ليوم بدايتها (قاعدة المالك) =====
+const D12 = '2026-06-12', D13 = '2026-06-13'
+const nightTiming = { startTime: '20:00', endTime: '01:00', requiredWorkMinutes: 300, flexEnabled: false, flexWindowMinutes: 60 }
+const nightSource = { sourceRef: 'attendance_rule_versions:21', sourceType: 'SHIFT', sourceId: 9, versionId: 21, version: 1,
+  effectiveFrom: '2026-01-01', legacyBaseline: false, state: 'AVAILABLE', snapshot: { state: 'AVAILABLE', value: { ...nightTiming, graceMinutes: 5, flexPolicy: policy } } }
+const nightEmployee = { sourceRef: 'attendance_rule_versions:12', sourceType: 'EMPLOYEE', sourceId: 3, versionId: 12, version: 1,
+  effectiveFrom: '2026-01-01', legacyBaseline: false, state: 'AVAILABLE', snapshot: { state: 'AVAILABLE', value: { workScheduleId: null, flexOverrideMode: 'INHERIT' } } }
+const nightPlan = (day, timing = nightTiming) => ({ date: day, timingState: 'AVAILABLE', calendarState: 'AVAILABLE', scheduled: true, dayKind: 'WORKING', branchId: 2,
+  sourceRefs: ['attendance_rule_versions:21', 'attendance_rule_versions:12'], sourceRule: nightSource, employeeRule: nightEmployee, timing, assignment: { kind: 'OVERRIDE' } })
+const hhmm = v => `${String(v.getHours()).padStart(2, '0')}:${String(v.getMinutes()).padStart(2, '0')}`
+const nightPunch = (id, stamp) => ({ id, employeeId: 3, punchTime: new Date(stamp), receivedAt: new Date(new Date(stamp).getTime() + 1000), source: 'DEVICE', createdByUserId: null, reason: null })
+// صف محرك الحضور لليلة: الدقائق على خط اليوم الممتد (00:50 صباح الغد = 1490) كما يخزنها المحرك
+function nightRow(id, day, first, last, inMinute, outMinute, computedAt) {
+  const values = calculateAttendanceFlex({ startMinute: 1200, endMinute: 1500, checkInMinute: inMinute, checkOutMinute: outMinute,
+    flexEnabled: false, flexWindowMinutes: 60, requiredWorkMinutes: 300, graceMinutes: 5, ...policy, prorateFlexWindowOnPartialLeave: false,
+    shortfallToleranceMinutes: 10, actualWorkMinutes: first && last ? (last - first) / 60000 : null })
+  const snapshot = { schemaVersion: 1, date: day, ...values, sourceType: 'SHIFT', sourceId: 9, sourceVersionId: 21, sourceVersion: 1, sourceEffectiveFrom: '2026-01-01',
+    employeeVersionId: 12, employeeVersion: 1, employeeOverrideMode: 'INHERIT', flexEnabled: false, flexWindowMinutes: 60, countEarlyWorkTowardRequired: false,
+    prorateFlexWindowOnPartialLeave: false, windowSupersedesGrace: true, unpaidBreakMinutes: 0, maxSessionMinutes: 900, shortfallToleranceMinutes: 10,
+    graceMinutes: 5, graceSource: 'SHIFT_OVERRIDE', attendanceExempt: false }
+  const early = last ? Math.max(0, 1500 - outMinute) : 0, earlyLeaveMinutes = early > 5 ? early : 0
+  return { values, row: { id, employeeId: 3, branchId: 2, date: day, status: !first ? 'absent' : values.lateMinutes > 0 ? 'late' : earlyLeaveMinutes > 0 ? 'early_leave' : 'present',
+    checkIn: first ? hhmm(first) : null, checkOut: last ? hhmm(last) : null, shiftStart: '20:00', shiftEnd: '01:00', shiftId: 9, scheduleSource: 'override', unscheduled: false,
+    lateMinutes: values.lateMinutes, earlyLeaveMinutes, excusedMinutes: values.excusedMinutes, deductibleMinutes: values.paidPermissionDeductibleMinutes,
+    workMinutes: values.rawWorkMinutes ?? 0, rawLateMinutes: values.rawLateMinutes, unexcusedLateMinutes: values.unexcusedLateMinutes, shortfallMinutes: values.shortfallMinutes,
+    countedWorkMinutes: values.countedWorkMinutes, earlyArrivalMinutes: values.earlyArrivalMinutes, flexOutcome: values.flexOutcome, attendanceReviewRequired: false,
+    attendanceReviewReason: null, leaveConflict: false, punchAnomalies: null, graceUsed: 5, attendanceRuleSnapshotRaw: JSON.stringify(snapshot), computedAt: new Date(computedAt) } }
+}
+function night({ computed12 = '2026-06-14T12:00:00', absent12 = false } = {}) {
+  const punches = [nightPunch(101, `${D12}T20:10:00`), nightPunch(102, `${D13}T00:50:00`), nightPunch(103, `${D13}T20:00:00`), nightPunch(104, '2026-06-14T01:00:00')]
+  const n12 = absent12 ? nightRow(61, D12, null, null, null, null, computed12) : nightRow(61, D12, punches[0].punchTime, punches[1].punchTime, 1210, 1490, computed12)
+  const n13 = nightRow(62, D13, punches[2].punchTime, punches[3].punchTime, 1200, 1500, '2026-06-14T12:00:00')
+  const section = (start, end, dates) => ({ state: 'AVAILABLE', issues: [], sourceRefs: [], data: { periodStart: start, periodEnd: end, historicalCalendarComplete: true,
+    days: dates.map(d => nightPlan(d)), ruleEvidence: [nightSource, nightEmployee] } })
+  const employment = (from, to, days) => ({ state: 'AVAILABLE', issues: [], sourceRefs: ['employees:3'], data: { coverage: { from, to, days } } })
+  return { n12, n13, punches: absent12 ? punches.slice(2) : punches, section, employment }
+}
+const nightEvidence = (n, days) => ({ days, punches: n.punches, leaves: [], corrections: [], requests: [], exemptions: [] })
+const nightNow = new Date('2026-06-15T12:00:00')
+
+test('S28: ليلة 12 تحمل التأخير والنقص من بصمة 00:50 صباح 13، ويوم 13 يأخذ ليلته فقط', () => {
+  const n = night()
+  assert.equal(n.n12.values.lateMinutes, 10); assert.equal(n.n12.values.shortfallMinutes, 20); assert.equal(n.n12.values.countedWorkMinutes, 280)
+  const r = verify(3, D12, D13, n.section(D12, D13, [D12, D13]), n.employment(D12, D13, 2), nightEvidence(n, [n.n12.row, n.n13.row]), nightNow)
+  assert.equal(r.state, 'AVAILABLE', JSON.stringify(r.issues))
+  assert.ok(!code(r, 'ATTENDANCE_OVERNIGHT_PROOF_UNSUPPORTED'))
+  assert.deepEqual(r.data.tierDays.map(d => [d.date, d.rawLateSeconds]), [[D12, '600'], [D13, '0']])
+  assert.deepEqual(r.data.totals, { absentDays: 0, workedDays: 2, shortfallMinutes: 20, paidPermissionDeductibleMinutes: 0 })
+  assert.deepEqual(r.data.days[0].proof.punchIds, [101, 102]); assert.deepEqual(r.data.days[1].proof.punchIds, [103, 104])
+  assert.equal(r.data.days[0].proof.workdayWindow.overnight, true)
+  assert.equal(new Date(r.data.days[0].proof.workdayWindow.to).getTime(), new Date(`${D13}T10:29:59`).getTime(), 'حد ليلتين متتاليتين = منتصف الفجوة 01:00…20:00')
+  assert.ok(!r.data.days[1].sourceRefs.includes('attendance_punches:102'))
+})
+
+test('S28: ليلة آخر يوم في الفترة تبقى فيها، وأول يوم في الفترة التالية يستبعد انصرافها بدليل جدول الجار', () => {
+  const n = night()
+  const last = verify(3, D12, D12, n.section(D12, D12, [D12]), n.employment(D12, D12, 1), nightEvidence(n, [n.n12.row]), nightNow)
+  assert.equal(last.state, 'AVAILABLE', JSON.stringify(last.issues))
+  assert.deepEqual(last.data.days[0].proof.punchIds, [101, 102]); assert.equal(last.data.totals.shortfallMinutes, 20)
+  const withNeighbor = verify(3, D13, D13, n.section(D13, D13, [D13]), n.employment(D13, D13, 1), nightEvidence(n, [n.n13.row]), nightNow, { before: nightPlan(D12) })
+  assert.equal(withNeighbor.state, 'AVAILABLE', JSON.stringify(withNeighbor.issues))
+  assert.deepEqual(withNeighbor.data.days[0].proof.punchIds, [103, 104]); assert.equal(withNeighbor.data.totals.shortfallMinutes, 0)
+  // بلا دليل جدول ليوم الجار لا يُخمَّن الحد: ثلاث بصمات مرشحة فيُحجب اليوم بدل نسب 00:50 له
+  const unknown = verify(3, D13, D13, n.section(D13, D13, [D13]), n.employment(D13, D13, 1), nightEvidence(n, [n.n13.row]), nightNow)
+  blocked(unknown); assert.ok(code(unknown, 'ATTENDANCE_UNIQUE_PUNCH_PROOF_MISSING'))
+})
+
+test('S28: وردية الغد الصباحية تقدم حد الليلة فتبقى بصمة 06:00 للغد لا لليلة الأمس', () => {
+  const n = night(), dayTiming = { startTime: '08:00', endTime: '17:00', requiredWorkMinutes: 540, flexEnabled: false, flexWindowMinutes: 60 }
+  n.punches = [n.punches[0], n.punches[1], nightPunch(105, `${D13}T06:00:00`)]
+  const input = [3, D12, D12, n.section(D12, D12, [D12]), n.employment(D12, D12, 1), nightEvidence(n, [n.n12.row]), nightNow]
+  const fallback = verify(...input)
+  blocked(fallback); assert.ok(code(fallback, 'ATTENDANCE_UNIQUE_PUNCH_PROOF_MISSING'), 'بلا وردية معروفة للغد يمتد الحد إلى 10:30 فتدخل 06:00')
+  const r = verify(...input, { after: nightPlan(D13, dayTiming) })
+  assert.equal(r.state, 'AVAILABLE', JSON.stringify(r.issues)); assert.deepEqual(r.data.days[0].proof.punchIds, [101, 102])
+  assert.equal(new Date(r.data.days[0].proof.workdayWindow.to).getTime(), new Date(`${D13}T04:29:59`).getTime())
+})
+
+test('S28: الليلة لا تُقفل ولا يثبت غيابها عند منتصف الليل بل عند حد نافذتها صباح الغد', () => {
+  const early = night({ computed12: `${D13}T00:52:00` })
+  early.punches = early.punches.slice(0, 2)
+  const input = [3, D12, D12, early.section(D12, D12, [D12]), early.employment(D12, D12, 1), nightEvidence(early, [early.n12.row])]
+  const open = verify(...input, new Date(`${D13}T00:55:00`))
+  blocked(open); assert.ok(code(open, 'ATTENDANCE_DAY_NOT_CLOSED'), 'تاريخ 12 انقضى تقويميًا لكن ليلته ما زالت مفتوحة')
+  assert.equal(verify(...input, new Date(`${D13}T10:31:00`)).state, 'AVAILABLE')
+  // الغياب: حساب قبل نهاية الوردية (00:59) لا يثبت؛ بعد نهايتها يثبت متى أُقفلت النافذة وخلت من البصمات عند القراءة
+  for (const [computedAt, readAt, available] of [[`${D13}T00:59:59`, nightNow, false], [`${D13}T02:00:00`, nightNow, true], [`${D13}T11:00:00`, nightNow, true],
+    [`${D13}T02:00:00`, new Date(`${D13}T10:29:00`), false]]) {
+    const a = night({ absent12: true, computed12: computedAt })
+    a.punches = [] // فترة يوم 12 وحده: بصمات ليلة 13 خارج نافذته، وقد تكون بعد لحظة القراءة المبكرة
+    const r = verify(3, D12, D12, a.section(D12, D12, [D12]), a.employment(D12, D12, 1), nightEvidence(a, [a.n12.row]), readAt)
+    if (available) { assert.equal(r.state, 'AVAILABLE', JSON.stringify(r.issues)); assert.equal(r.data.totals.absentDays, 1) }
+    else { blocked(r); assert.ok(code(r, 'ATTENDANCE_DAY_NOT_CLOSED'), `غياب محسوب ${computedAt} ومقروء ${readAt.toISOString()} لا يُثبت`) }
+  }
+})
+
+test('S28: توقيت مهمة الغياب الفعلية (01:00) لليلة 20:00 ← 01:00 يُثبت بعد إقفال النافذة دون انتظار لحاق الليلة التالية', () => {
+  require('../node_modules/reflect-metadata')
+  const { AttendanceScheduler } = require('../src/attendance/attendance-scheduler.service')
+  const cron = Reflect.getMetadata('SCHEDULE_CRON_OPTIONS', AttendanceScheduler.prototype.materializeYesterday)
+  assert.equal(cron?.cronTime, '0 1 * * *', 'المهمة اليومية لتجسيد غياب الأمس')
+  const [minuteField, hourField] = cron.cronTime.split(' ').map(Number)
+  // المهمة تكتب صف غياب ليلة 12 بعد لحظة تشغيلها صباح 13 (هنا +5 ثوانٍ زمن التشغيل)
+  const cronRun = new Date(`${D13}T${String(hourField).padStart(2, '0')}:${String(minuteField).padStart(2, '0')}:05`)
+  const a = night({ absent12: true, computed12: cronRun.toISOString() })
+  a.punches = [] // لا بصمة لليلة 12؛ بصمات ليلة 13 لم تحدث بعد عند القراءة صباح 13
+  const read = at => verify(3, D12, D12, a.section(D12, D12, [D12]), a.employment(D12, D12, 1), nightEvidence(a, [a.n12.row]), at)
+  const beforeClose = read(new Date(`${D13}T09:00:00`))
+  blocked(beforeClose); assert.ok(code(beforeClose, 'ATTENDANCE_DAY_NOT_CLOSED'), 'قبل حد النافذة 10:30 لا تزال الليلة مفتوحة لبصمة متأخرة')
+  const afterClose = read(new Date(`${D13}T10:30:00`))
+  assert.equal(afterClose.state, 'AVAILABLE', JSON.stringify(afterClose.issues))
+  assert.deepEqual(afterClose.data.totals, { absentDays: 1, workedDays: 0, shortfallMinutes: 0, paidPermissionDeductibleMinutes: 0 })
+  assert.equal(afterClose.data.days[0].proof.basis, 'EXPLICIT_STORED_ABSENCE_VERIFIED'); assert.equal(afterClose.data.days[0].proof.attendanceInputs.absent, true)
+  // بصمة تصل بعد المهمة داخل النافذة تُكشف عند القراءة فلا يبقى الغياب مثبتًا
+  a.punches = [nightPunch(109, `${D13}T00:20:00`)]
+  const late = read(new Date(`${D13}T10:30:00`)); blocked(late); assert.ok(code(late, 'ATTENDANCE_UNIQUE_PUNCH_PROOF_MISSING'))
+})
+
+test('S28: توقيت يوم الجار غير المثبت لا يحرك حد النافذة ويُعامل «بلا وردية» مع توثيق ذلك في الإثبات', () => {
+  const n = night(), dayTiming = { startTime: '08:00', endTime: '17:00', requiredWorkMinutes: 540, flexEnabled: false, flexWindowMinutes: 60 }
+  n.punches = [n.punches[0], n.punches[1], nightPunch(105, `${D13}T06:00:00`)]
+  const inputOf = () => [3, D12, D12, n.section(D12, D12, [D12]), n.employment(D12, D12, 1), nightEvidence(n, [n.n12.row]), nightNow]
+  const unproven = { ...nightPlan(D13, dayTiming), timingState: 'UNSUPPORTED', scheduled: null }
+  const r = verify(...inputOf(), { after: unproven })
+  blocked(r); assert.ok(code(r, 'ATTENDANCE_UNIQUE_PUNCH_PROOF_MISSING'), 'الوردية الصباحية غير المثبتة لا تقدم الحد إلى 04:30')
+  // بلا بصمة الغد: اليوم يثبت بحد «بلا وردية» (10:30) ويسجل أن الجار غير مثبت
+  n.punches = n.punches.slice(0, 2)
+  const input = inputOf()
+  const kept = verify(...input, { after: unproven })
+  assert.equal(kept.state, 'AVAILABLE', JSON.stringify(kept.issues))
+  assert.equal(new Date(kept.data.days[0].proof.workdayWindow.to).getTime(), new Date(`${D13}T10:29:59`).getTime())
+  assert.deepEqual(kept.data.days[0].proof.workdayWindow.neighborEvidence, { before: 'NOT_READ', after: 'UNPROVEN_TREATED_AS_NO_SHIFT' })
+  const proven = verify(...input, { after: nightPlan(D13, dayTiming) })
+  assert.equal(proven.data.days[0].proof.workdayWindow.neighborEvidence.after, 'PROVEN')
+  assert.equal(new Date(proven.data.days[0].proof.workdayWindow.to).getTime(), new Date(`${D13}T04:29:59`).getTime())
 })

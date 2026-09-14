@@ -51,10 +51,14 @@ class CreateObligationDto {
 export class ObligationsController {
   constructor(private readonly service: ObligationsService) {}
 
+  // القراءة والإنشاء والإلغاء كلها بنطاق فرع الموظف (SEC-04) — داخل الخدمة
   @Perm('payroll.view')
   @Get('employee/:id')
-  listForEmployee(@Param('id', ParseIntPipe) id: number) {
-    return this.service.listByEmployee(id)
+  listForEmployee(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseIntPipe) id: number
+  ) {
+    return this.service.listByEmployee(user, id)
   }
 
   @Perm('payroll.calculate')
@@ -65,7 +69,10 @@ export class ObligationsController {
 
   @Perm('payroll.calculate')
   @Post(':id/cancel')
-  cancel(@Param('id', ParseIntPipe) id: number) {
-    return this.service.cancel(id)
+  cancel(
+    @CurrentUser() user: JwtPayload,
+    @Param('id', ParseIntPipe) id: number
+  ) {
+    return this.service.cancel(user, id)
   }
 }

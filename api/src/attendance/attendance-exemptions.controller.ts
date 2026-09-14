@@ -1,10 +1,10 @@
-import { Body, Controller, Get, Param, ParseIntPipe, Post, UseGuards } from '@nestjs/common'
+import { Body, Controller, Get, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common'
 import { Type } from 'class-transformer'
 import { IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, Min } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { AttendanceExemptionsService } from './attendance-exemptions.service'
-import type { AttendanceExemptionReasonCode } from './attendance-exemption.entities'
+import type { AttendanceExemptionReasonCode, AttendanceExemptionStatus } from './attendance-exemption.entities'
 
 class CreateAttendanceExemptionDto {
   @Type(() => Number) @IsInt() @Min(1) employeeId: number
@@ -22,11 +22,22 @@ class ExemptionReasonDto {
 class TerminateAttendanceExemptionDto extends ExemptionReasonDto {
   @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) effectiveFrom: string
 }
+class ListAttendanceExemptionsQuery {
+  @IsOptional() @IsIn(['PENDING', 'APPROVED', 'REJECTED', 'CANCELLED']) status?: AttendanceExemptionStatus
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) employeeId?: number
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) branchId?: number
+}
 
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('attendance-exemptions')
 export class AttendanceExemptionsController {
   constructor(private readonly service: AttendanceExemptionsService) {}
+
+  // شاشة استثناء الحضور (خطة المراجعة 24): كل الطلبات في نطاق فرع المستخدم مع إجراءاته المسموحة لكل صف.
+  @Get() @Perm('attendance_exemption.view')
+  listScoped(@CurrentUser() user: JwtPayload, @Query() query: ListAttendanceExemptionsQuery) {
+    return this.service.listScoped(user, query)
+  }
 
   @Get('mine')
   mine(@CurrentUser() user: JwtPayload) { return this.service.mine(user) }
@@ -52,6 +63,12 @@ export class AttendanceExemptionsController {
   @Post(':id/cancel') @Perm('attendance_exemption.manage')
   cancel(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: ExemptionReasonDto) {
     return this.service.cancel(user, id, dto.reason)
+  }
+
+  // الرفض قرار في مرحلته: صلاحية اعتماد الموارد البشرية أو التنفيذي تُعاد في الخدمة، ولا يرفض المنشئ طلبه.
+  @Post(':id/reject') @Perm('attendance_exemption.approve', 'attendance_exemption.approve_executive')
+  reject(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: ExemptionReasonDto) {
+    return this.service.reject(user, id, dto.reason)
   }
 
   @Post(':id/terminate') @Perm('attendance_exemption.approve')

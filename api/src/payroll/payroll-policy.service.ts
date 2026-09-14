@@ -12,8 +12,10 @@ import { Team } from '../org/entities/team.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { configSeed } from '../seed/requests-seed.data'
 import type { PayrollScopeType } from './payroll.entities'
-import { ClonePayrollPolicyVersionDto, CreatePayrollPolicyDto, PayrollPolicyMutationDto, PayrollPolicyVersionMetadataDto, UpdatePayrollPolicyDto, UpdatePayrollPolicyVersionDto } from './payroll-policy.dto'
+import { ClonePayrollPolicyVersionDto, CreatePayrollPolicyDto, PayrollPolicyMutationDto, PayrollPolicyVersionMetadataDto, PublishPayrollPolicyVersionDto, UpdatePayrollPolicyDto, UpdatePayrollPolicyVersionDto } from './payroll-policy.dto'
+import { describePayrollPolicyCycle, PAYROLL_POLICY_SEAL_VERSION, payrollPolicyContentHash, payrollPolicyDayBefore, payrollPolicyEffectiveEnds, PayrollPolicyEffectiveEnd, payrollPolicyPeriods, PayrollPolicyCyclePeriod, PayrollPolicyPublishIssue, reviewPayrollPolicyEffectiveRange } from './payroll-policy-publish'
 import { PayrollPolicy, PayrollPolicyEvent, PayrollPolicyVersion, PayrollPolicyVersionMetadata } from './payroll-policy.entities'
+import { PayrollPolicyVersionSeal } from './payroll-policy-seal.entities'
 import { inspectPayrollPolicySettings, parsePayrollPolicyConfigValue, patchPayrollPolicySettings, PAYROLL_POLICY_CONFIG_KEYS, PAYROLL_POLICY_SETTING_FIELDS, PayrollPolicySettings, payrollPolicySettingsSnapshot, validatePayrollPolicySettings } from './payroll-policy-settings'
 import { TestPayrollFormulaDto, ValidatePayrollComponentOrderDto, ValidatePayrollFormulaDto } from './payroll-formula.dto'
 import { payrollFormulaCatalog, testPolicyFormula, validatePolicyComponentOrder, validatePolicyFormula } from './payroll-formula-workbench'
@@ -48,8 +50,11 @@ import { readPayrollLiveAttendance } from './payroll-live-attendance-provider'
 export class PayrollPolicyService {
   constructor(@InjectRepository(PayrollPolicy) private readonly policies: Repository<PayrollPolicy>) {}
 
-  private permitted(user: JwtPayload, write = false) {
-    if (!userHasPerm(user, write ? 'payroll.calculate' : 'payroll.view')) throw new ForbiddenException('لا تملك صلاحية إدارة سياسات الرواتب')
+  // false = قراءة، true = تجربة/معاينة بلا أثر (payroll.calculate)، 'manage' = إنشاء وتعديل ونشر المجموعات (الخطوة 15).
+  private permitted(user: JwtPayload, write: boolean | 'manage' = false) {
+    if (write === 'manage') {
+      if (!userHasPerm(user, 'payroll.policy.manage')) throw new ForbiddenException('إنشاء مجموعات سياسات الرواتب وتعديلها ونشرها يتطلب صلاحية «إدارة سياسات الرواتب ونشرها»')
+    } else if (!userHasPerm(user, write ? 'payroll.calculate' : 'payroll.view')) throw new ForbiddenException('لا تملك صلاحية إدارة سياسات الرواتب')
     if (branchScopeOf(user) === -1) throw new ForbiddenException('حساب المستخدم غير مسند إلى فرع صالح')
   }
 
@@ -63,9 +68,9 @@ export class PayrollPolicyService {
 
   private capabilities(user: JwtPayload, policy: PayrollPolicy) {
     const scope = branchScopeOf(user)
-    const canEdit = policy.isActive && userHasPerm(user, 'payroll.calculate') && (scope === null || (scope > 0 && policy.branchId === scope))
-    // هذه نواة مسودات فقط؛ لا يتيح وجود صف السياسة تغيير المسير أو نشر معادلة لم تتحقق.
-    return { canEdit, canArchive: canEdit, canCloneVersion: canEdit, canPublish: false, canAssign: false, canDelete: false }
+    const canEdit = policy.isActive && userHasPerm(user, 'payroll.policy.manage') && (scope === null || (scope > 0 && policy.branchId === scope))
+    // النشر بصلاحية الإدارة نفسها وبعد مراجعة الخادم (publish-check)؛ الإسناد للمسير مسار مستقل.
+    return { canEdit, canArchive: canEdit, canCloneVersion: canEdit, canPublish: canEdit, canAssign: false, canDelete: false }
   }
 
   private async policy(em: EntityManager, user: JwtPayload, id: number, write = false) {
@@ -269,12 +274,12 @@ export class PayrollPolicyService {
         SELECT @result AS lockResult;`, [`hr:payroll:policy:${policyId}`])
       if (!lock.length || Number(lock[0].lockResult) < 0) throw new ConflictException('تعذر قراءة ترتيب التحصيل أثناء تعديل السياسة')
       const policy = await this.policy(em, user, policyId), version = await this.version(em, policyId, versionId)
-      return { ...await this.definitionView(em, version), version: this.versionView(version), capabilities: this.capabilities(user, policy) }
+      return { ...await this.definitionView(em, version), version: (await this.versionViews(em, [version]))[0], capabilities: this.capabilities(user, policy) }
     })
   }
 
   async updateCollection(user: JwtPayload, policyId: number, versionId: number, dto: UpdatePayrollCollectionPolicyDto) {
-    this.permitted(user, true)
+    this.permitted(user, 'manage')
     const reason = this.text(dto.reason, 'سبب تعديل ترتيب التحصيل', 500)
     return this.policies.manager.transaction(async em => {
       await this.lock(em, String(policyId))
@@ -291,7 +296,7 @@ export class PayrollPolicyService {
       version.collectionPolicy = collection; version.revision += 1; version.updatedBy = user.sub
       await em.getRepository(PayrollPolicyVersion).save(version)
       await this.event(em, user, policyId, versionId, 'COLLECTION_UPDATED', reason, { before, after: this.snapshot(version) })
-      return { ...await this.definitionView(em, version), version: this.versionView(version), editKind: 'UPDATED' as const, capabilities: this.capabilities(user, policy) }
+      return { ...await this.definitionView(em, version), version: (await this.versionViews(em, [version]))[0], editKind: 'UPDATED' as const, capabilities: this.capabilities(user, policy) }
     })
   }
 
@@ -324,7 +329,9 @@ export class PayrollPolicyService {
       const policyIssues: Array<{ code: string; message: string }> = []
       if (version.contractVersion !== 'SRS_V1' || view.definitionStatus !== 'COMPLETE' || view.collectionState !== 'COMPLETE') policyIssues.push({ code: 'LIVE_POLICY_INCOMPLETE', message: 'إعدادات أو تعريف أو ترتيب تحصيل السياسة غير مكتمل' })
       if (!policy.isActive || version.status !== 'ACTIVE') policyIssues.push({ code: 'LIVE_POLICY_NOT_PUBLISHED', message: 'قراءة المصادر متاحة لهذه النسخة، لكن النشر والإسناد لم يعتمدا' })
-      if (version.effectiveFrom > period.startDate || (version.effectiveTo !== null && version.effectiveTo < period.endDate)) policyIssues.push({ code: 'LIVE_POLICY_PERIOD_MISMATCH', message: 'سريان نسخة السياسة لا يغطي الفترة المطلوبة كاملة' })
+      // نهاية السريان الفعلية تشمل إيقاف النسخة بنسخة منشورة لاحقة (الخطوة 15) دون تعديل صفها.
+      const effectiveUntil = (await this.effectiveEnds(em, [policyId])).get(version.id)?.effectiveUntil ?? version.effectiveTo
+      if (version.effectiveFrom > period.startDate || (effectiveUntil !== null && effectiveUntil < period.endDate)) policyIssues.push({ code: 'LIVE_POLICY_PERIOD_MISMATCH', message: 'سريان نسخة السياسة لا يغطي الفترة المطلوبة كاملة' })
       const blockers = [
         ...policyIssues.map(issue => ({ section: 'policy', ...issue })),
         ...Object.entries(sections).flatMap(([section, value]) => value.state === 'AVAILABLE' ? [] : value.issues.map(issue => ({ section, ...issue }))),
@@ -498,7 +505,7 @@ export class PayrollPolicyService {
   }
 
   async replaceDefinition(user: JwtPayload, policyId: number, versionId: number, dto: ReplacePayrollPolicyDefinitionDto) {
-    this.permitted(user, true)
+    this.permitted(user, 'manage')
     const reason = this.text(dto.reason, 'سبب حفظ تعريف السياسة', 500)
     return this.policies.manager.transaction(async em => {
       await this.lock(em, String(policyId))
@@ -521,13 +528,36 @@ export class PayrollPolicyService {
         definitionWarningAcknowledgements: persisted.requiredAcknowledgements, collectionPolicy: collection, revision: version.revision + 1, updatedBy: user.sub })
       await em.getRepository(PayrollPolicyVersion).save(version)
       await this.event(em, user, policyId, versionId, 'DEFINITION_UPDATED', reason, { before, after: { version: this.snapshot(version), definition: checked.definition }, warnings: checked.warnings, acknowledgedWarnings: checked.requiredAcknowledgements })
-      return { ...await this.definitionView(em, version), version: this.versionView(version), editKind: 'UPDATED' as const, capabilities: this.capabilities(user, policy) }
+      return { ...await this.definitionView(em, version), version: (await this.versionViews(em, [version]))[0], editKind: 'UPDATED' as const, capabilities: this.capabilities(user, policy) }
     })
   }
 
-  private versionView(version: PayrollPolicyVersion) {
-    // حالة الإعدادات مشتقة للعرض فقط؛ لا تُحفظ داخل الكيان أو سجل التاريخ.
-    return { ...version, ...inspectPayrollPolicySettings(version) }
+  private versionView(version: PayrollPolicyVersion, extras: { end?: PayrollPolicyEffectiveEnd; seal?: PayrollPolicyVersionSeal | null } = {}) {
+    // حالة الإعدادات ونهاية السريان الفعلية وختم المحتوى مشتقة للعرض فقط؛ لا تُحفظ داخل الكيان أو سجل التاريخ.
+    return { ...version, ...inspectPayrollPolicySettings(version),
+      ...(extras.end ? { effectiveUntil: extras.end.effectiveUntil, supersededByVersionId: extras.end.supersededByVersionId } : {}),
+      ...(extras.seal !== undefined ? { contentHash: extras.seal?.contentHash ?? null, sealedAt: extras.seal?.sealedAt ?? null } : {}) }
+  }
+
+  // الخطوة 15: نهاية السريان الفعلية لكل نسخة من نسخ السياسات المطلوبة (النسخة المنشورة التالية توقف السابقة دون تعديل صفها).
+  private async effectiveEnds(em: EntityManager, policyIds: number[]) {
+    const result = new Map<number, PayrollPolicyEffectiveEnd>()
+    if (!policyIds.length) return result
+    const rows = await em.getRepository(PayrollPolicyVersion).find({ select: { id: true, policyId: true, status: true, effectiveFrom: true, effectiveTo: true }, where: { policyId: In(policyIds) } })
+    for (const policyId of new Set(rows.map(row => row.policyId))) {
+      for (const [id, end] of payrollPolicyEffectiveEnds(rows.filter(row => row.policyId === policyId))) result.set(id, end)
+    }
+    return result
+  }
+
+  private async sealsOf(em: EntityManager, versionIds: number[]) {
+    const rows = versionIds.length ? await em.getRepository(PayrollPolicyVersionSeal).findBy({ versionId: In(versionIds) }) : []
+    return new Map(rows.map(row => [row.versionId, row]))
+  }
+
+  private async versionViews(em: EntityManager, versions: PayrollPolicyVersion[]) {
+    const ends = await this.effectiveEnds(em, [...new Set(versions.map(row => row.policyId))]), seals = await this.sealsOf(em, versions.map(row => row.id))
+    return versions.map(version => this.versionView(version, { end: ends.get(version.id), seal: seals.get(version.id) ?? null }))
   }
 
   private async initialSettings(em: EntityManager, patch: Partial<PayrollPolicySettings> | undefined) {
@@ -550,20 +580,22 @@ export class PayrollPolicyService {
     const scope = branchScopeOf(user)
     const policies = await this.policies.find({ where: scope === null ? {} : [{ branchId: scope }, { branchId: IsNull() }], order: { id: 'DESC' } })
     const versions = policies.length ? await this.policies.manager.getRepository(PayrollPolicyVersion).find({ where: { policyId: In(policies.map(row => row.id)) }, order: { versionNo: 'DESC' } }) : []
-    return policies.map(policy => ({ policy, versions: versions.filter(version => version.policyId === policy.id).map(version => this.versionView(version)), capabilities: this.capabilities(user, policy) }))
+    const views = await this.versionViews(this.policies.manager, versions)
+    return policies.map(policy => ({ policy, versions: views.filter(version => version.policyId === policy.id), capabilities: this.capabilities(user, policy) }))
   }
 
   async detail(user: JwtPayload, id: number) {
     this.permitted(user)
     const policy = await this.policy(this.policies.manager, user, id)
     const versions = await this.policies.manager.getRepository(PayrollPolicyVersion).find({ where: { policyId: id }, order: { versionNo: 'DESC' } })
-    return { policy, versions: versions.map(version => this.versionView(version)), capabilities: this.capabilities(user, policy) }
+    return { policy, versions: await this.versionViews(this.policies.manager, versions), capabilities: this.capabilities(user, policy) }
   }
 
   async versionDetail(user: JwtPayload, policyId: number, versionId: number) {
     this.permitted(user)
     const policy = await this.policy(this.policies.manager, user, policyId)
-    return { policyId, version: this.versionView(await this.version(this.policies.manager, policyId, versionId)), capabilities: this.capabilities(user, policy) }
+    const [version] = await this.versionViews(this.policies.manager, [await this.version(this.policies.manager, policyId, versionId)])
+    return { policyId, version, capabilities: this.capabilities(user, policy) }
   }
 
   formulaCatalog(user: JwtPayload) {
@@ -608,9 +640,10 @@ export class PayrollPolicyService {
   }
 
   async create(user: JwtPayload, dto: CreatePayrollPolicyDto) {
-    this.permitted(user, true)
-    const code = this.text(dto.code, 'كود السياسة', 40).toUpperCase()
-    if (!/^[A-Z0-9][A-Z0-9_-]*$/.test(code)) throw new BadRequestException('كود السياسة يقبل الحروف الإنجليزية والأرقام والشرطة فقط')
+    this.permitted(user, 'manage')
+    // الكود اختياري: الغياب أو النص الفارغ يولّد كودًا فريدًا داخل المعاملة بدل تصادم افتراضي بتاريخ اليوم.
+    const suppliedCode = dto.code == null || (typeof dto.code === 'string' && !dto.code.trim()) ? null : this.text(dto.code, 'كود السياسة', 40).toUpperCase()
+    if (suppliedCode !== null && !/^[A-Z0-9][A-Z0-9_-]*$/.test(suppliedCode)) throw new BadRequestException('كود السياسة يقبل الحروف الإنجليزية والأرقام والشرطة فقط')
     const name = this.text(dto.name, 'اسم السياسة', 200), dates = this.dates(dto.effectiveFrom, dto.effectiveTo)
     const userBranch = branchScopeOf(user)
     const branchId = dto.branchId === undefined ? userBranch : dto.branchId
@@ -618,8 +651,9 @@ export class PayrollPolicyService {
     if (userBranch !== null && branchId !== userBranch) throw new ForbiddenException('إنشاء السياسة متاح داخل فرعك فقط')
     try {
       return await this.policies.manager.transaction(async em => {
+        const code = suppliedCode ?? await this.generatedCode(em)
         await this.lock(em, `code:${code}`)
-        if (await em.getRepository(PayrollPolicy).existsBy({ code })) throw new ConflictException({ code: 'POLICY_CODE_EXISTS', message: 'كود السياسة مستخدم بالفعل' })
+        if (await em.getRepository(PayrollPolicy).existsBy({ code })) throw new ConflictException({ code: 'POLICY_CODE_EXISTS', message: `كود السياسة ${code} مستخدم بالفعل؛ اختر كودًا آخر أو اتركه فارغًا ليُولَّد تلقائيًا` })
         if (branchId !== null && !await em.getRepository(Branch).existsBy({ id: branchId, isActive: true })) throw new BadRequestException('فرع السياسة غير موجود أو معطل')
         const scope = await this.scope(em, branchId, dto.defaultScopeType ?? null, dto.defaultScopeIds ?? null)
         const settings = await this.initialSettings(em, dto.settings)
@@ -632,7 +666,7 @@ export class PayrollPolicyService {
           collectionPolicy: null,
           metadata: this.metadata(dto.metadata), revision: 1, publishedAt: null, publishedBy: null, frozenAt: null, createdBy: user.sub, updatedBy: user.sub }))
         await this.event(em, user, policy.id, version.id, 'CREATED', null, { policy: this.snapshot(policy), version: this.snapshot(version) })
-        return { policy, versions: [this.versionView(version)], capabilities: this.capabilities(user, policy) }
+        return { policy, versions: await this.versionViews(em, [version]), capabilities: this.capabilities(user, policy) }
       })
     } catch (error: any) {
       if (/UX_payroll_policy_code/i.test(String(error?.message)) && [2601, 2627].includes(Number(error?.driverError?.number ?? error?.number))) {
@@ -642,8 +676,22 @@ export class PayrollPolicyService {
     }
   }
 
+  // PS-YYYYMMDD-NN بتاريخ الخادم المحلي؛ القفل على البادئة يمنع إنشاءين متزامنين من اختيار الرقم نفسه.
+  private async generatedCode(em: EntityManager) {
+    const now = new Date(), pad = (value: number) => String(value).padStart(2, '0')
+    const prefix = `PS-${now.getFullYear()}${pad(now.getMonth() + 1)}${pad(now.getDate())}-`
+    await this.lock(em, `code:auto:${prefix}`)
+    const rows: Array<{ code: string }> = await em.query('SELECT [code] FROM [payroll_policies] WITH (UPDLOCK, HOLDLOCK) WHERE [code] LIKE @0', [`${prefix}%`])
+    const used = new Set(rows.map(row => String(row.code).toUpperCase()))
+    for (let sequence = 1; sequence <= 9999; sequence++) {
+      const candidate = `${prefix}${String(sequence).padStart(2, '0')}`
+      if (!used.has(candidate)) return candidate
+    }
+    throw new ConflictException({ code: 'POLICY_CODE_EXHAUSTED', message: 'تعذر توليد كود سياسة لهذا اليوم؛ أدخل كودًا يدويًا' })
+  }
+
   async update(user: JwtPayload, id: number, dto: UpdatePayrollPolicyDto) {
-    this.permitted(user, true)
+    this.permitted(user, 'manage')
     const reason = this.text(dto.reason, 'سبب التعديل', 500)
     return this.policies.manager.transaction(async em => {
       await this.lock(em, String(id))
@@ -685,11 +733,11 @@ export class PayrollPolicyService {
     await this.event(em, user, policy.id, version.id, 'VERSION_CLONED', reason, { source: this.snapshot(source), after: this.snapshot(version), sourceDefinition, definition,
       ...(collectionOverride === undefined ? {} : { collectionReplaced: true }),
       ...(replacement ? { definitionReplaced: true, warnings: replacement.auditWarnings ?? [], acknowledgedWarnings: replacement.auditAcknowledgements ?? replacement.acknowledgedWarnings } : {}) })
-    return { policyId: policy.id, version: this.versionView(version), editKind: 'CLONED' as const, capabilities: this.capabilities(user, policy) }
+    return { policyId: policy.id, version: (await this.versionViews(em, [version]))[0], editKind: 'CLONED' as const, capabilities: this.capabilities(user, policy) }
   }
 
   async updateVersion(user: JwtPayload, policyId: number, versionId: number, dto: UpdatePayrollPolicyVersionDto) {
-    this.permitted(user, true)
+    this.permitted(user, 'manage')
     const reason = this.text(dto.reason, 'سبب تعديل النسخة', 500)
     return this.policies.manager.transaction(async em => {
       await this.lock(em, String(policyId))
@@ -718,12 +766,12 @@ export class PayrollPolicyService {
       if (definitionAcknowledgements !== undefined) version.definitionWarningAcknowledgements = definitionAcknowledgements
       await em.getRepository(PayrollPolicyVersion).save(version)
       await this.event(em, user, policyId, versionId, 'VERSION_UPDATED', reason, { before, after: this.snapshot(version) })
-      return { policyId, version: this.versionView(version), editKind: 'UPDATED' as const, capabilities: this.capabilities(user, policy) }
+      return { policyId, version: (await this.versionViews(em, [version]))[0], editKind: 'UPDATED' as const, capabilities: this.capabilities(user, policy) }
     })
   }
 
   async cloneVersion(user: JwtPayload, policyId: number, dto: ClonePayrollPolicyVersionDto) {
-    this.permitted(user, true)
+    this.permitted(user, 'manage')
     const reason = this.text(dto.reason, 'سبب نسخ السياسة', 500)
     return this.policies.manager.transaction(async em => {
       await this.lock(em, String(policyId))
@@ -734,7 +782,7 @@ export class PayrollPolicyService {
   }
 
   async archive(user: JwtPayload, id: number, dto: PayrollPolicyMutationDto) {
-    this.permitted(user, true)
+    this.permitted(user, 'manage')
     const reason = this.text(dto.reason, 'سبب أرشفة السياسة', 500)
     return this.policies.manager.transaction(async em => {
       await this.lock(em, String(id))
@@ -745,6 +793,135 @@ export class PayrollPolicyService {
       await em.getRepository(PayrollPolicy).save(policy)
       await this.event(em, user, id, null, 'ARCHIVED', reason, { before, after: this.snapshot(policy) })
       return { policy, capabilities: this.capabilities(user, policy) }
+    })
+  }
+
+  // ===== الخطوة 15: نشر النسخة وتجميدها =====
+  // محتوى الختم: كل ما يغيّر معنى النسخة (الإعدادات والدورة والسريان المعلن والبنود والتحصيل)؛ لا الحالة ولا المراجعة.
+  private versionContent(version: PayrollPolicyVersion, definition: PayrollPolicyDefinition) {
+    return { policyId: version.policyId, versionId: version.id, versionNo: version.versionNo,
+      contractVersion: version.contractVersion, catalogVersion: version.catalogVersion, engineVersion: version.engineVersion,
+      effectiveFrom: version.effectiveFrom, effectiveTo: version.effectiveTo, settings: payrollPolicySettingsSnapshot(version), definition,
+      collectionPolicy: version.collectionPolicy, definitionWarningAcknowledgements: version.definitionWarningAcknowledgements }
+  }
+
+  private async integrity(em: EntityManager, version: PayrollPolicyVersion) {
+    if (version.frozenAt === null && version.publishedAt === null) return null
+    const seal = await em.getRepository(PayrollPolicyVersionSeal).findOneBy({ versionId: version.id })
+    const currentContentHash = payrollPolicyContentHash(this.versionContent(version, await readPayrollPolicyDefinition(em, version.id)))
+    return { sealVersion: seal?.sealVersion ?? null, contentHash: seal?.contentHash ?? null, sealedAt: seal?.sealedAt ?? null, sealedBy: seal?.sealedBy ?? null,
+      currentContentHash, matches: !!seal && seal.contentHash === currentContentHash }
+  }
+
+  // المراجعة نفسها تخدم الفحص (قراءة) والنشر (تحت القفل الحصري)؛ لا يُنشر ما لم يُفحص بالقواعد نفسها.
+  private async publishReview(em: EntityManager, policy: PayrollPolicy, version: PayrollPolicyVersion) {
+    const issues: PayrollPolicyPublishIssue[] = [], warnings: PayrollPolicyPublishIssue[] = []
+    if (!policy.isActive) issues.push({ code: 'POLICY_ARCHIVED', message: 'هوية السياسة مؤرشفة؛ لا تُنشر نسخها' })
+    if (version.status !== 'DRAFT' || version.frozenAt !== null || version.publishedAt !== null || version.publishedBy !== null) {
+      issues.push({ code: 'POLICY_VERSION_NOT_DRAFT', message: 'النسخة منشورة أو مجمدة بالفعل؛ أي تعديل عليها ينشئ مسودة جديدة تُراجع وتُنشر' })
+    }
+    const inspected = inspectPayrollPolicySettings(version)
+    let periods: PayrollPolicyCyclePeriod[] = [], cycle: string | null = null
+    if (inspected.settingsStatus !== 'COMPLETE') {
+      issues.push({ code: 'POLICY_SETTINGS_INCOMPLETE', message: `أكمل إعدادات النسخة قبل النشر: ${inspected.settingsIssues.join('؛ ')}` })
+      // دورة محفوظة بأنواع صحيحة لكنها غير متصلة (نسخة تاريخية مثلًا): تُعرض فجواتها وتداخلاتها بتواريخها.
+      const stored = inspected.settings
+      if (typeof stored.defaultPeriodType === 'string' && typeof stored.cycleStartDay === 'number' && typeof stored.cycleEndMode === 'string') {
+        const range = reviewPayrollPolicyEffectiveRange(stored as PayrollPolicySettings, version.effectiveFrom, version.effectiveTo)
+        issues.push(...range.issues.filter(issue => issue.code.startsWith('POLICY_CYCLE_')))
+      }
+    } else {
+      const settings = inspected.settings as PayrollPolicySettings
+      const range = reviewPayrollPolicyEffectiveRange(settings, version.effectiveFrom, version.effectiveTo)
+      issues.push(...range.issues); warnings.push(...range.warnings)
+      periods = payrollPolicyPeriods(settings, version.effectiveFrom, 3); cycle = describePayrollPolicyCycle(settings)
+    }
+    const view = await this.definitionView(em, version)
+    if (view.definitionStatus === 'INVALID') {
+      issues.push({ code: 'POLICY_DEFINITION_INVALID', message: `تعريف بنود النسخة يحتاج مراجعة: ${view.definitionIssues.join('؛ ') || 'تعريف غير صالح'}` })
+    } else if (view.definitionStatus === 'MISSING') {
+      warnings.push({ code: 'POLICY_DEFINITION_MISSING', message: 'النسخة بلا بنود معادلات بعد؛ تُنشر معدلاتها ودورتها، ويبقى المبلغ المصروف من حساب المسير الحالي حتى تُعرّف البنود وتُقارن' })
+    } else if (view.definition.components.some(component => component.componentType === 'DEDUCTION') && view.collectionState !== 'COMPLETE') {
+      issues.push({ code: 'POLICY_COLLECTION_INCOMPLETE', message: 'احفظ تصنيف الخصومات وترتيب تحصيلها قبل النشر' })
+    }
+    // نسخة منشورة سابقة تبدأ قبل هذه وتسري بعدها تتوقف فعليًا في اليوم السابق لبدايتها (نهاية فترة) دون تعديل صفها المجمد؛
+    // أي تداخل آخر يمنع النشر. المقارنة بنهاية السريان الفعلية لكل نسخة (بعد إيقافات سابقة).
+    const supersedes: Array<{ versionId: number; versionNo: number; effectiveFrom: string; effectiveTo: string | null; effectiveUntil: string | null; newEffectiveTo: string }> = []
+    const active = await em.getRepository(PayrollPolicyVersion).find({ where: { policyId: policy.id, status: 'ACTIVE' }, order: { effectiveFrom: 'ASC' } })
+    const others = active.filter(row => row.id !== version.id), otherEnds = payrollPolicyEffectiveEnds(others)
+    for (const other of others) {
+      const otherUntil = otherEnds.get(other.id)?.effectiveUntil ?? other.effectiveTo
+      const overlaps = (version.effectiveTo === null || other.effectiveFrom <= version.effectiveTo) && (otherUntil === null || otherUntil >= version.effectiveFrom)
+      if (!overlaps) continue
+      const closable = other.effectiveFrom < version.effectiveFrom && (version.effectiveTo === null || (otherUntil !== null && otherUntil <= version.effectiveTo))
+      if (closable) supersedes.push({ versionId: other.id, versionNo: other.versionNo, effectiveFrom: other.effectiveFrom, effectiveTo: other.effectiveTo, effectiveUntil: otherUntil, newEffectiveTo: payrollPolicyDayBefore(version.effectiveFrom) })
+      else issues.push({ code: 'POLICY_VERSION_OVERLAP', message: `سريان النسخة يتداخل مع النسخة المنشورة رقم ${other.versionNo} (${other.effectiveFrom} → ${otherUntil ?? 'مفتوح'}) ولا يمكن إيقافها تلقائيًا؛ اجعل البداية بعد بدايتها واترك النهاية مفتوحة` })
+    }
+    // مسير معتمد أو مصروف بهذه السياسة (أو بإحدى نسخها متى رُبطت المسيرات بالنسخة) داخل السريان الجديد يثبت فترته.
+    const versionColumn: Array<{ length: number | null }> = await em.query(`SELECT COL_LENGTH(N'dbo.payroll_runs', N'policyVersionId') AS [length]`)
+    const byVersion = versionColumn[0]?.length != null
+    const lockedRuns: Array<{ id: number; period: string }> = await em.query(`SELECT TOP (5) [id], [period] FROM [payroll_runs]
+      WHERE ([policyId] = @0${byVersion ? ' OR [policyVersionId] IN (SELECT [id] FROM [payroll_policy_versions] WHERE [policyId] = @0)' : ''})
+        AND [status] IN ('APPROVED', 'PAID') AND [endDate] >= @1${version.effectiveTo === null ? '' : ' AND [startDate] <= @2'} ORDER BY [startDate]`,
+    version.effectiveTo === null ? [policy.id, version.effectiveFrom] : [policy.id, version.effectiveFrom, version.effectiveTo])
+    if (lockedRuns.length) issues.push({ code: 'POLICY_PERIOD_LOCKED', message: `مسيرات معتمدة أو مصروفة بهذه السياسة داخل السريان: ${lockedRuns.map(run => `#${run.id} (${run.period})`).join('، ')}؛ اختر بداية بعدها` })
+    return { publishable: issues.length === 0, issues, warnings, cycle, periods, supersedes,
+      definitionStatus: view.definitionStatus, collectionState: view.collectionState }
+  }
+
+  async publishCheck(user: JwtPayload, policyId: number, versionId: number) {
+    this.permitted(user)
+    return this.policies.manager.transaction(async em => {
+      const lock = await em.query(`DECLARE @result int;
+        EXEC @result = sys.sp_getapplock @Resource = @0, @LockMode = 'Shared', @LockOwner = 'Transaction', @LockTimeout = 10000;
+        SELECT @result AS lockResult;`, [`hr:payroll:policy:${policyId}`])
+      if (!lock.length || Number(lock[0].lockResult) < 0) throw new ConflictException('تعذر مراجعة النشر أثناء تعديل جارٍ على السياسة؛ حاول مجددًا')
+      const policy = await this.policy(em, user, policyId), version = await this.version(em, policyId, versionId)
+      const review = await this.publishReview(em, policy, version)
+      const capabilities = this.capabilities(user, policy)
+      // النسخة المنشورة: تُعاد حساب بصمة محتواها الحالي وتُقارن بالختم المحفوظ (أي عبث مباشر بالقاعدة يظهر هنا).
+      const integrity = await this.integrity(em, version)
+      if (integrity && !integrity.matches) {
+        review.warnings.push(integrity.contentHash === null
+          ? { code: 'POLICY_CONTENT_SEAL_MISSING', message: 'النسخة منشورة بلا ختم محتوى محفوظ؛ لا يمكن إثبات أنها لم تتغير منذ النشر' }
+          : { code: 'POLICY_CONTENT_SEAL_MISMATCH', message: 'محتوى النسخة المنشورة لا يطابق الختم المحفوظ عند نشرها؛ راجع سجل الأحداث قبل ربطها بأي مسير' })
+      }
+      const [view] = await this.versionViews(em, [version])
+      return { policyId, versionId, revision: version.revision, status: version.status, ...review, canPublish: capabilities.canPublish && review.publishable,
+        effectiveUntil: view.effectiveUntil ?? null, supersededByVersionId: view.supersededByVersionId ?? null, integrity, capabilities }
+    })
+  }
+
+  async publish(user: JwtPayload, policyId: number, versionId: number, dto: PublishPayrollPolicyVersionDto) {
+    this.permitted(user, 'manage')
+    const reason = this.text(dto.reason, 'سبب نشر النسخة', 500)
+    return this.policies.manager.transaction(async em => {
+      await this.lock(em, String(policyId))
+      const policy = await this.policy(em, user, policyId, true), version = await this.version(em, policyId, versionId)
+      this.expected(version.revision, dto.expectedRevision)
+      const review = await this.publishReview(em, policy, version)
+      if (!review.publishable) {
+        throw new ConflictException({ code: 'POLICY_PUBLISH_BLOCKED', message: `تعذر نشر النسخة: ${review.issues.map(issue => issue.message).join('؛ ')}`, issues: review.issues, warnings: review.warnings })
+      }
+      const now = new Date()
+      // النسخ السابقة لا تُعدّل (صفها وختمها مجمدان): نهاية سريانها الفعلية تُشتق من بداية هذه النسخة، ويُسجل الإيقاف حدثًا عليها.
+      for (const item of review.supersedes) {
+        await this.event(em, user, policyId, item.versionId, 'VERSION_SUPERSEDED', reason, { supersededByVersionId: version.id, effectiveFrom: item.effectiveFrom,
+          declaredEffectiveTo: item.effectiveTo, previousEffectiveUntil: item.effectiveUntil, effectiveUntil: item.newEffectiveTo, versionRowChanged: false })
+      }
+      // البصمة تثبت محتوى النسخة المنشورة كما جُمّد؛ أي تعديل لاحق ينشئ مسودة جديدة ببصمة مختلفة.
+      const contentHash = payrollPolicyContentHash(this.versionContent(version, await readPayrollPolicyDefinition(em, version.id)))
+      const before = this.snapshot(version)
+      Object.assign(version, { status: 'ACTIVE' as const, publishedAt: now, publishedBy: user.sub, frozenAt: now, revision: version.revision + 1, updatedBy: user.sub })
+      await em.getRepository(PayrollPolicyVersion).save(version)
+      const seals = em.getRepository(PayrollPolicyVersionSeal)
+      await seals.insert(seals.create({ versionId, contentHash, sealVersion: PAYROLL_POLICY_SEAL_VERSION, sealedBy: user.sub }))
+      const seal = await seals.findOneByOrFail({ versionId })
+      await this.event(em, user, policyId, versionId, 'PUBLISHED', reason, { before, after: this.snapshot(version), contentHash, sealVersion: PAYROLL_POLICY_SEAL_VERSION,
+        cycle: review.cycle, periods: review.periods, warnings: review.warnings, supersedes: review.supersedes })
+      const ends = await this.effectiveEnds(em, [policyId])
+      return { policyId, version: this.versionView(version, { end: ends.get(version.id), seal }), editKind: 'PUBLISHED' as const, contentHash, cycle: review.cycle, periods: review.periods,
+        warnings: review.warnings, supersedes: review.supersedes, capabilities: this.capabilities(user, policy) }
     })
   }
 }

@@ -4,7 +4,7 @@ import { localToday } from '@/lib/dates'
 import { currencyLabel } from '@/lib/currency'
 import { employeeStatusLabels as statusLabels } from '@/lib/status-labels'
 import { loadEmployeeAddDraft, saveEmployeeAddDraft, clearEmployeeAddDraft, type EmployeeAddDraft } from '@/lib/employee-add-draft'
-import { buildEmployeeSalaryChange, employeeSalaryChanged, employeeSalaryEditPayload, employeeSalaryTotal, employeePreviousSalaryCanBeConfirmed, type EmployeeSalaryChangeCommand, type EmployeeSalaryChangeContext } from '@/lib/employee-salary-change-api'
+import { buildEmployeeSalaryChange, employeeCreateSalaryPeriod, employeeSalaryChanged, employeeSalaryEditPayload, employeeSalaryTotal, employeePreviousSalaryCanBeConfirmed, fetchEmployeeSalaryStartContext, payrollMonthExplanation, type EmployeeSalaryChangeCommand, type EmployeeSalaryChangeContext, type EmployeeSalaryStartContext } from '@/lib/employee-salary-change-api'
 import { SALARY_HISTORY_FIELDS } from '@/lib/payroll-salary-history-api'
 import { buildCalendarChange, employeeCalendarPayload, type PayrollCalendarChange, type PayrollCalendarContext } from '@/lib/payroll-calendar-api'
 import { CalendarContextSummary } from '@/components/PayrollCalendarChange'
@@ -181,6 +181,8 @@ export interface QualificationsPayload {
 
 export type EmployeeFormPayload = Clearable<ApiEmployee> & {
   salaryChange?: EmployeeSalaryChangeCommand
+  // الخطوة 13: «يسري من راتب شهر» لأجر التعيين (الإنشاء فقط)
+  salaryEffectivePayrollPeriod?: string
   calendarChange?: PayrollCalendarChange
   openingBalanceDays?: number
   openingBalanceExpiry?: string | null
@@ -198,6 +200,8 @@ interface EmployeeFormProps {
   savedQualifications?: ApiQualifications | null
   salaryChangeContext?: EmployeeSalaryChangeContext | null
   salaryContextError?: string
+  // لا يملك المستخدم «اعتماد المسير» → تعديل الأجر مقفول برسالة الصلاحية (SEC-06)
+  salaryChangeForbidden?: boolean
   calendarContext?: PayrollCalendarContext | null
   calendarContextError?: string
 }
@@ -339,7 +343,7 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
   workType: initial?.workType === 'fulltime' ? 'full_time' : initial?.workType === 'parttime' ? 'part_time' : initial?.workType ?? '',
 })
 
-export default function EmployeeForm({ mode, initial, onSubmit, submitting, error, employeeId, savedQualifications, salaryChangeContext = null, salaryContextError = '', calendarContext = null, calendarContextError = '' }: EmployeeFormProps) {
+export default function EmployeeForm({ mode, initial, onSubmit, submitting, error, employeeId, savedQualifications, salaryChangeContext = null, salaryContextError = '', salaryChangeForbidden = false, calendarContext = null, calendarContextError = '' }: EmployeeFormProps) {
   const [currentStep, setCurrentStep] = useState(1)
   const [stepError, setStepError] = useState('') // خطأ تحقق الخطوة
   // يستحق سنوي؟ — من بيانات الموظف في التعديل (افتراضي نعم)
@@ -471,7 +475,25 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
 
   // حقول النموذج المرتبطة بالباك إند — تُبذَر من initial
   const [form, setForm] = useState<EmployeeFormState>(() => makeInitialState(initial))
-  const [salaryEvidence, setSalaryEvidence] = useState({ effectiveDate: '', reason: '', evidenceReference: '', previousEffectiveFrom: '' })
+  const [salaryEvidence, setSalaryEvidence] = useState({ effectivePayrollPeriod: '', reason: '', evidenceReference: '', previousEffectivePayrollPeriod: '' })
+  // الخطوة 13: أجر التعيين يُوثَّق «يسري من راتب شهر» مع الإنشاء؛ الحدود من الخادم حسب تاريخ التعيين ودورة الرواتب.
+  const [salaryStart, setSalaryStart] = useState<EmployeeSalaryStartContext | null>(null)
+  const [salaryStartError, setSalaryStartError] = useState('')
+  const [createSalaryPeriod, setCreateSalaryPeriod] = useState('')
+  const salaryStartDate = mode === 'add' ? (form.actualStartDate || form.joinDate || '') : ''
+  useEffect(() => {
+    if (mode !== 'add') return
+    const controller = new AbortController()
+    setSalaryStartError('')
+    fetchEmployeeSalaryStartContext(salaryStartDate, controller.signal)
+      .then(setSalaryStart)
+      .catch(cause => {
+        if (controller.signal.aborted) return
+        setSalaryStart(null)
+        setSalaryStartError(cause instanceof Error ? cause.message : 'تعذر تحديد شهر سريان أجر التعيين.')
+      })
+    return () => controller.abort()
+  }, [mode, salaryStartDate])
   const [calendarInitialConfirmation, setCalendarInitialConfirmation] = useState(false)
   const calendarRequested = mode === 'edit' && (form.branchId !== (initial?.branchId ?? '') || calendarInitialConfirmation)
   const salaryLocked = mode === 'edit' && !salaryChangeContext
@@ -815,6 +837,10 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.gradeId) payload.gradeId = Number(form.gradeId)
     if (form.workLocation.trim()) payload.workLocation = form.workLocation.trim()
     if (mode === 'add' && form.currency) payload.currency = form.currency
+    if (mode === 'add') {
+      const salaryPeriod = employeeCreateSalaryPeriod(salaryStart, createSalaryPeriod, form)
+      if (salaryPeriod) payload.salaryEffectivePayrollPeriod = salaryPeriod
+    }
     if (form.salaryCycle) payload.salaryCycle = form.salaryCycle
     if (form.bankBranch.trim()) payload.bankBranch = form.bankBranch.trim()
     if (form.gosiNumber.trim()) payload.gosiNumber = form.gosiNumber.trim()
@@ -876,7 +902,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     }
     if (mode === 'add') return payload
     const employeePayload = employeeCalendarPayload(payload, initial?.branchId ?? '', form.branchId, calendarContext, { effectiveFrom: form.attendanceEffectiveFrom ?? '', reason: form.attendanceChangeReason ?? '' }, calendarInitialConfirmation)
-    return employeeSalaryEditPayload(employeePayload, salaryChangeContext, form, salaryEvidence, localToday())
+    return employeeSalaryEditPayload(employeePayload, salaryChangeContext, form, salaryEvidence)
   }
 
   const handleSubmit = async () => {
@@ -890,8 +916,12 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
   // تحقق الحقول الإجبارية لكل خطوة قبل السماح بالتالي
   const stepIssue = (step: number): string | null => {
     if (step === 3 && salaryChanged && salaryChangeContext) {
-      try { buildEmployeeSalaryChange(salaryChangeContext, form, salaryEvidence, localToday()) }
+      try { buildEmployeeSalaryChange(salaryChangeContext, form, salaryEvidence) }
       catch (cause) { return cause instanceof Error ? cause.message : 'راجع بيانات تغيير الأجر.' }
+    }
+    if (step === 3 && mode === 'add') {
+      try { employeeCreateSalaryPeriod(salaryStart, createSalaryPeriod, form) }
+      catch (cause) { return cause instanceof Error ? cause.message : 'راجع شهر سريان أجر التعيين.' }
     }
     if (step === 1 && !form.firstNameAr.trim()) {
       return 'الاسم الأول مطلوب قبل المتابعة'
@@ -1802,7 +1832,9 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               </h2>
 
               {/* Salary */}
-              {salaryLocked && <p role="alert" className="text-sm text-amber-800">{salaryContextError || 'تعذر تحميل الأجر الحالي بدقة.'} تعديل الأجر غير متاح حتى إعادة تحميل الصفحة؛ يمكنك حفظ البيانات غير المالية.</p>}
+              {salaryLocked && (salaryChangeForbidden
+                ? <p role="alert" className="text-sm text-amber-800">تعديل الأجر يتطلب صلاحية «اعتماد المسير»؛ الحقول المالية للعرض فقط ويمكنك حفظ البيانات غير المالية.</p>
+                : <p role="alert" className="text-sm text-amber-800">{salaryContextError || 'تعذر تحميل الأجر الحالي بدقة.'} تعديل الأجر غير متاح حتى إعادة تحميل الصفحة؛ يمكنك حفظ البيانات غير المالية.</p>)}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
                   <label className="label">الراتب الأساسي</label>
@@ -1814,7 +1846,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                     {mode === 'edit' && <option value="">غير محددة — اختر عند تغيير الأجر</option>}
                     {mode === 'edit' && form.currency && !['SAR', 'EGP', 'AED'].includes(form.currency) && <option value={form.currency}>{form.currency} — القيمة الحالية</option>}
                     <option value="SAR">ريال سعودي (SAR)</option>
-                    {(mode === 'add' || form.currency === 'AED') && <option value="AED">درهم إماراتي (AED)</option>}
+                    {/* D8: عملات المسير SAR وEGP؛ AED يظهر فقط لقيمة محفوظة سابقًا */}
+                    {form.currency === 'AED' && <option value="AED">درهم إماراتي (AED)</option>}
                     <option value="EGP">جنيه مصري (EGP)</option>
                   </select>
                 </div>
@@ -1885,23 +1918,35 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
               </div>
 
+              {mode === 'add' && <div className="rounded-xl border border-primary-200 bg-primary-50 p-4 space-y-3">
+                <h3 className="font-semibold text-gray-800">توثيق أجر التعيين</h3>
+                <div className="grid sm:grid-cols-3 gap-4">
+                  <label className="label">يسري من راتب شهر<input type="month" className="input mt-1" min={salaryStart?.minPayrollPeriod ?? undefined} max={salaryStart?.maxPayrollPeriod} value={createSalaryPeriod || salaryStart?.defaultPayrollPeriod || ''} onChange={event => setCreateSalaryPeriod(event.target.value)} /></label>
+                </div>
+                <p className="text-sm text-gray-600">يُوثَّق الأجر أعلاه في سجل الأجر الشهري عند الحفظ، فيدخل الموظف أول مسير له دون توثيق منفصل. الراتب يسري على شهر المسير كاملًا بلا تقسيم داخله، وأيام الفترة قبل تاريخ التعيين لا تُحسب غيابًا ولا خصمًا.{salaryStart && (createSalaryPeriod || salaryStart.defaultPayrollPeriod) === salaryStart.defaultPayrollPeriod ? ` — راتب شهر ${salaryStart.defaultPayrollPeriod} = من ${salaryStart.defaultPayrollPeriodBounds.startDate} إلى ${salaryStart.defaultPayrollPeriodBounds.endDate} (الدورة تبدأ يوم ${salaryStart.cycleStartDay})` : ''}</p>
+                {salaryStart?.hirePayrollPeriod && salaryStart.hirePayrollPeriod < salaryStart.defaultPayrollPeriod && <p className="text-sm text-amber-800">تاريخ التعيين يقع في راتب شهر {salaryStart.hirePayrollPeriod}؛ اختره إن كان أجر العقد يسري منه، وإلا تبقى الشهور السابقة لإنشاء الملف غير موثقة.</p>}
+                {salaryStartError && <p role="alert" className="text-sm text-amber-800">{salaryStartError}</p>}
+                <p className="text-xs text-gray-500">أجر بلا مبالغ لا يُوثَّق ويُستبعد الموظف من المسير بسبب ظاهر. الزيادة من شهر لاحق تُقدَّم بطلب زيادة راتب بعد الإنشاء.</p>
+              </div>}
+
               {salaryChanged && <div className="rounded-xl border border-primary-200 bg-primary-50 p-4 space-y-4">
                 <h3 className="font-semibold text-gray-800">موعد تطبيق تعديل الراتب</h3>
                 <div className="grid sm:grid-cols-3 gap-4">
-                  <label className="label">يسري من<input type="date" max={localToday()} className="input mt-1" value={salaryEvidence.effectiveDate} onChange={event => setSalaryEvidence(previous => ({ ...previous, effectiveDate: event.target.value }))} /></label>
+                  <label className="label">يسري من راتب شهر<input type="month" max={salaryChangeContext?.currentPayrollPeriod} className="input mt-1" value={salaryEvidence.effectivePayrollPeriod} onChange={event => setSalaryEvidence(previous => ({ ...previous, effectivePayrollPeriod: event.target.value }))} /></label>
                   <label className="label">سبب التغيير<input className="input mt-1" maxLength={500} value={salaryEvidence.reason} onChange={event => setSalaryEvidence(previous => ({ ...previous, reason: event.target.value }))} /></label>
                   <label className="label">مرجع العقد أو القرار<input className="input mt-1" maxLength={200} value={salaryEvidence.evidenceReference} onChange={event => setSalaryEvidence(previous => ({ ...previous, evidenceReference: event.target.value }))} /></label>
                 </div>
-                <p className="text-sm text-gray-600">تعديل الملف يقبل تاريخ اليوم أو تاريخًا سابقًا. للزيادة المستقبلية استخدم <Link href="/requests" className="underline text-primary-700">طلب زيادة راتب</Link>؛ الأجر الحالي لا يتغير قبل موعد السريان واعتماد الطلب.</p>
+                <p className="text-sm text-gray-600">الراتب الجديد يسري على شهر المسير كاملًا بلا تقسيم داخله{salaryChangeContext ? ` — ${payrollMonthExplanation(salaryChangeContext)}` : ''}. تعديل الملف يقبل شهر المسير الجاري أو شهرًا سابقًا. للزيادة من شهر لاحق استخدم <Link href="/requests" className="underline text-primary-700">طلب زيادة راتب</Link>؛ الأجر الحالي لا يتغير قبل بداية ذلك الشهر واعتماد الطلب.</p>
+                {salaryChangeContext?.historyContract === 'DAILY' && <p className="text-sm text-amber-800">سجل أجر هذا الموظف بتواريخ يومية لا تحدد شهر الراتب؛ حوّله إلى «يسري من راتب شهر» من <Link href="/payroll/salary-history" className="underline">سجل الأجر</Link> قبل تعديل الراتب.</p>}
                 {salaryChangeContext?.historyRevision === 0 && <div className="space-y-3 border-t border-primary-200 pt-3">
-                  <p className="text-sm font-medium text-gray-800">القيم السابقة التي ستُوثّق عند تأكيد تاريخ سابق</p>
+                  <p className="text-sm font-medium text-gray-800">القيم السابقة التي ستُوثّق عند تأكيد شهر سابق</p>
                   <dl className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">
                     {Object.entries(SALARY_HISTORY_FIELDS).map(([key, label]) => <div key={key}><dt className="text-gray-600">{label}</dt><dd className="font-medium break-all" dir="ltr">{salaryChangeContext.current[key as keyof typeof SALARY_HISTORY_FIELDS] ?? 'غير محدد'}</dd></div>)}
                     <div><dt className="text-gray-600">العملة السابقة</dt><dd>{salaryChangeContext.current.currency || 'غير محددة'}</dd></div>
                   </dl>
-                  <label className="label">أؤكد سريان الأجر الحالي السابق ابتداءً من — اختياري<input type="date" disabled={!employeePreviousSalaryCanBeConfirmed(salaryChangeContext)} className="input mt-1 max-w-xs disabled:opacity-50" value={salaryEvidence.previousEffectiveFrom} onChange={event => setSalaryEvidence(previous => ({ ...previous, previousEffectiveFrom: event.target.value }))} /></label>
+                  <label className="label">أؤكد أن الأجر الحالي السابق يسري من راتب شهر — اختياري<input type="month" disabled={!employeePreviousSalaryCanBeConfirmed(salaryChangeContext)} className="input mt-1 max-w-xs disabled:opacity-50" value={salaryEvidence.previousEffectivePayrollPeriod} onChange={event => setSalaryEvidence(previous => ({ ...previous, previousEffectivePayrollPeriod: event.target.value }))} /></label>
                   {!employeePreviousSalaryCanBeConfirmed(salaryChangeContext) && <p className="text-sm text-amber-800">القيم السابقة غير مكتملة أو غير صالحة؛ لا يمكن إثبات فترة سابقة منها.</p>}
-                  <p className="text-xs text-gray-500">اكتب هذا التاريخ فقط إذا كان المستند يثبت القيم السابقة المعروضة خلال المدة المنتهية قبل التغيير. تركه فارغًا يُبقي الفترة السابقة غير موثقة، ولا يفترض تاريخ التعيين أو مبالغ بديلة.</p>
+                  <p className="text-xs text-gray-500">اختر هذا الشهر فقط إذا كان المستند يثبت القيم السابقة المعروضة من ذلك الشهر حتى الشهر السابق للتغيير. تركه فارغًا يُبقي الشهور السابقة غير موثقة، ولا يفترض تاريخ التعيين أو مبالغ بديلة.</p>
                 </div>}
               </div>}
 

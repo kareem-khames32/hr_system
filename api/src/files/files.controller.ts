@@ -29,6 +29,7 @@ import { Request } from '../requests/entities/request.entity'
 import { RequestsService } from '../requests/requests.service'
 import { storedPath, uploadsRoot } from './storage'
 import { assertHrDocumentFileAccess } from '../hr-documents/hr-document-access'
+import { assertLetterFileAccess } from '../letters/letter-access'
 
 // التخزين المحلي المنظم: uploads/YYYY-MM/
 
@@ -158,6 +159,9 @@ export class FilesController {
     if (!f) throw new NotFoundException('الملف غير موجود')
     if (f.entityType === 'hr_document') {
       await assertHrDocumentFileAccess(this.ds.manager, user, f)
+    } else if (f.entityType === 'letter') {
+      // نفس سياسة /letters/:id/download — خطاب الراتب يحتاج قراءة المالية (SEC-07)
+      await assertLetterFileAccess(this.ds.manager, user, f)
     } else {
     const isOwner = (!!user.employeeId && f.employeeId === user.employeeId) || (!!user.sub && f.uploadedBy === user.sub)
     // صور الموظفين قابلة للعرض لأي مطّلع على الموظفين (ليست مستنداً حساساً)

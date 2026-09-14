@@ -5,7 +5,6 @@ import { MainLayout } from '@/components/layout'
 import {
   Search,
   Filter,
-  Download,
   Plus,
   Target,
   TrendingUp,
@@ -292,10 +291,7 @@ export default function PerformancePage() {
               <option value="المبيعات">المبيعات</option>
               <option value="التسويق">التسويق</option>
             </select>
-            <button className="btn-secondary flex items-center gap-2">
-              <Download size={18} />
-              تصدير
-            </button>
+            {/* زر «تصدير» أُزيل: الشاشة ببيانات عرض بلا باك، ولا يبقى زر تصدير لا ينتج ملفًا */}
           </div>
         </div>
 

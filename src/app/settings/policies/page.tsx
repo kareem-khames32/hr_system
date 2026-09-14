@@ -96,12 +96,46 @@ const GROUPS: PolicyGroup[] = [
     ],
   },
   {
+    // قرارات المالك D1 وD5 وD7 (14 سبتمبر): القيم المبذورة هي افتراضات المواصفة، وتعديلها يسري على الحساب اللاحق.
+    title: 'نقص ساعات العمل والمرونة',
+    icon: Clock,
+    iconBg: 'bg-blue-50',
+    iconColor: 'text-blue-500',
+    note: 'تعديل مفاتيح المرونة يُثبت قيمها السابقة في تاريخ تعريف الدوام قبل الحفظ، فلا تتغير أيام سابقة. إذا كان خصم التأخير مقفولًا لا تُطرح دقائقه من النقص (D7).',
+    fields: [
+      { key: 'payroll.early_leave_deduction_enabled', label: 'خصم الخروج المبكر على الوردية الثابتة', type: 'bool', hint: 'D1: يُخصم بسعر الدقيقة بعد طرح التأخير والسماحية. الوردية المرنة يحكمها «خصم نقص ساعات العمل».' },
+      { key: 'payroll.shortfall_enabled', label: 'خصم نقص ساعات العمل', type: 'bool', hint: 'D5: الساعات المطلوبة ناقص ساعات العمل الفعلية بعد السماحية.' },
+      { key: 'payroll.shortfall_mode', label: 'طريقة خصم النقص', type: 'select', options: [
+        { value: 'MINUTES', label: 'بسعر الدقيقة' },
+        { value: 'MULTIPLIER', label: 'بسعر الدقيقة × معامل' },
+        { value: 'FRACTION', label: 'كسر يوم ثابت' },
+      ] },
+      { key: 'payroll.shortfall_value', label: 'قيمة طريقة النقص', type: 'number', min: 0, max: 1000, hint: 'بسعر الدقيقة = 1. في المعامل: المضاعف، وفي كسر اليوم: جزء اليوم (مثل 0.25).' },
+      { key: 'attendance.flex.shortfall_grace_minutes', label: 'سماحية نقص الساعات', type: 'number', unit: 'دقيقة', min: 0, max: 1440, integer: true },
+      { key: 'payroll.attendance_overlap_policy', label: 'التداخل بين التأخير والنقص', type: 'select', options: [
+        { value: 'NET_OF_LATENESS', label: 'يُطرح التأخير من النقص (بلا ازدواج)' },
+        { value: 'MAX_OF_BOTH', label: 'الأكبر منهما فقط' },
+        { value: 'CUMULATIVE', label: 'الاثنان معًا' },
+      ] },
+      { key: 'payroll.attendance_daily_cap_days', label: 'سقف خصم الحضور اليومي', type: 'number', unit: 'يوم', min: 0, max: 31, hint: 'D5: يوم واحد. التأخير أولًا ثم النقص المتبقي داخل السقف.' },
+      { key: 'attendance.flex.window_supersedes_grace', label: 'نافذة المرونة تغني عن سماحية التأخير', type: 'bool' },
+      { key: 'attendance.flex.count_early_work_toward_required', label: 'احتساب الحضور قبل بداية الدوام من الساعات المطلوبة', type: 'bool' },
+      { key: 'attendance.flex.prorate_window_on_partial_leave', label: 'تناسب نافذة المرونة مع الإجازة الجزئية', type: 'bool' },
+      { key: 'attendance.flex.unpaid_break_minutes', label: 'استراحة غير مدفوعة', type: 'number', unit: 'دقيقة', min: 0, max: 1440, integer: true },
+      { key: 'attendance.flex.max_session_minutes', label: 'أقصى مدة جلسة حضور', type: 'number', unit: 'دقيقة', min: 1, max: 1440, integer: true },
+      { key: 'attendance.flex.missing_checkout_policy', label: 'عند نسيان بصمة الانصراف', type: 'select', options: [{ value: 'MANUAL_ONLY', label: 'تصحيح يدوي فقط' }] },
+    ],
+  },
+  {
     title: 'العمل الإضافي (الأوفرتايم)',
     icon: Timer,
     iconBg: 'bg-warning-50',
     iconColor: 'text-warning-500',
     note: 'الإضافي يحتاج اكتمال دورة الاعتماد دائمًا. إعدادات الاحتساب والسقوف تُدار من «أيام العمل والدوام»، وعتبة الوردية من «الورديات».',
-    fields: [],
+    fields: [
+      { key: 'overtime.default_window', label: 'نافذة الإضافي الافتراضية', type: 'select', options: [{ value: 'AFTER_SHIFT_END', label: 'بعد نهاية الوردية' }], hint: 'D11: الكشف القائم يستمر بعد نهاية الوردية.' },
+      { key: 'overtime.outside_window_policy', label: 'العمل خارج نوافذ الإضافي', type: 'select', options: [{ value: 'CLOSED', label: 'لا يُحتسب إضافيًا (SRS LOT-14)' }], hint: 'D11: الحضور المبكر قبل الوردية يحكمه إعداد الإضافي المبكر في «أيام العمل والدوام».' },
+    ],
   },
   {
     title: 'أقساط السلف وحماية الصافي',
@@ -117,6 +151,7 @@ const GROUPS: PolicyGroup[] = [
       { key: 'payroll.policy.min_net_guarantee', label: 'الحد الأدنى للصافي', type: 'number', min: 0, nullable: true, hint: 'اتركه فارغًا إذا لم تحدد حدًا ثابتًا. لا يضيف النظام مبلغًا للراتب إذا كانت الخصومات السابقة تجاوزت الحد.' },
       { key: 'payroll.policy.net_floor_pct', label: 'الحد الأدنى كنسبة من الأجر الثابت المستحق', type: 'number', min: 0, max: 100, nullable: true, unit: '%', hint: 'إذا حددت مبلغًا ثابتًا أيضًا يُستخدم الأكبر منهما. فارغ = لا حد نسبي.' },
       { key: 'payroll.policy.max_deduction_pct_of_gross', label: 'سقف الخصومات من الأجر الثابت المستحق', type: 'number', min: 0, max: 100, nullable: true, unit: '%', hint: 'يحسب النظام ما استهلكته الخصومات السابقة قبل تحديد المتاح للسلف. فارغ = بلا سقف نسبي.' },
+      { key: 'payroll.loan_catchup_max_overdue', label: 'أقصى أقساط متأخرة تُخصم في المسير', type: 'number', unit: 'قسط', min: 0, max: 120, integer: true, hint: 'D10: إضافة إلى أقساط الشهر الحالي؛ الأقدم أولًا، والباقي يبقى مستحقًا للمسيرات التالية. صفر = أقساط الشهر الحالي فقط.' },
     ],
   },
   {
@@ -127,9 +162,19 @@ const GROUPS: PolicyGroup[] = [
     fields: [
       { key: 'system.currency', label: 'عملة النظام', type: 'select', options: [{ value: 'SAR', label: 'ريال سعودي (ر.س)' }, { value: 'EGP', label: 'جنيه مصري (ج.م)' }] },
       { key: 'eos.months_per_year', label: 'مكافأة نهاية الخدمة', type: 'number', unit: 'شهر/سنة', min: 0 },
-      { key: 'payroll.cycle_start_day', label: 'يوم بداية دورة المسير', type: 'number', unit: 'من الشهر', min: 1 },
-      { key: 'payroll.monthly_days', label: 'أيام الشهر للمسير', type: 'number', unit: 'يوم', min: 30, max: 30 },
-      { key: 'payroll.daily_hours', label: 'ساعات العمل اليومية', type: 'number', unit: 'ساعة', min: 1 },
+      { key: 'payroll.cycle_start_day', label: 'يوم بداية دورة المسير', type: 'number', unit: 'من الشهر', min: 1, max: 31, integer: true, hint: 'مسير سبتمبر بدورة 23 = من 23 أغسطس إلى 22 سبتمبر.' },
+      { key: 'payroll.salary_evidence_mode', label: 'مصدر راتب شهر المسير', type: 'select', options: [
+        { value: 'MONTHLY_HISTORY', label: 'السجل الشهري فقط — بلا راتب موثق للشهر يُستبعد الموظف بسبب ظاهر' },
+        { value: 'MONTHLY_HISTORY_OR_CURRENT_FILE', label: 'انتقالي — من لا يملك سجلًا شهريًا يُحسب براتب الملف الحالي ويُوسم «غير موثق»' },
+      ] },
+      { key: 'payroll.monthly_days', label: 'أيام الشهر للمسير', type: 'number', unit: 'يوم', min: 30, max: 30, hint: 'D3: ثابتة على 30 يومًا.' },
+      { key: 'payroll.daily_hours', label: 'ساعات العمل اليومية', type: 'number', unit: 'ساعة', min: 1, max: 24, hint: 'D2: أساس سعر الساعة والدقيقة.' },
+      { key: 'payroll.hourly_rate_basis', label: 'أساس سعر الساعة', type: 'select', options: [{ value: 'DAILY_HOURS', label: 'سعر اليوم ÷ ساعات العمل اليومية' }], hint: 'D2' },
+      { key: 'payroll.day_rate_basis', label: 'أساس سعر اليوم للغياب ونهاية الخدمة', type: 'select', options: [{ value: 'MONTHLY_FIXED_COMPONENTS_30', label: 'الأجر الشهري للمكونات الستة ÷ 30' }], hint: 'D3' },
+      { key: 'payroll.policy.rounding_mode', label: 'تقريب مبالغ الرواتب', type: 'select', options: [
+        { value: 'HALF_UP', label: 'نصف لأعلى' }, { value: 'HALF_EVEN', label: 'نصف للزوجي' }, { value: 'FLOOR', label: 'لأسفل' }, { value: 'CEIL', label: 'لأعلى' },
+      ], hint: 'D4: نصف لأعلى بمنزلتين. يُنسخ إلى نسخ السياسات الجديدة.' },
+      { key: 'payroll.policy.rounding_scale', label: 'منازل التقريب', type: 'number', min: 0, max: 6, integer: true },
     ],
   },
 ]

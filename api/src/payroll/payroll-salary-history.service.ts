@@ -7,7 +7,8 @@ import { EmployeeSalaryHistoryVersion } from './payroll-salary-history.entities'
 import { ReplacePayrollMonthlySalaryHistoryDto, ReplacePayrollSalaryHistoryDto } from './payroll-salary-history.dto'
 import { appendMonthlySalaryHistoryRevision, appendSalaryHistoryRevision, normalizeSalaryHistorySegments, readSalaryHistory, readSalaryHistoryCurrent, salaryHistorySchemaMissing, salaryHistoryText } from './payroll-salary-history'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
-import { PayrollPeriodSalaryError } from './payroll-period-salary'
+import { normalizeMonthlySalaryPeriods, PayrollPeriodSalaryError } from './payroll-period-salary'
+import { assertMonthlySalaryHistoryKeepsClosedPeriods } from './payroll-salary-change'
 
 @Injectable()
 export class PayrollSalaryHistoryService {
@@ -79,8 +80,11 @@ export class PayrollSalaryHistoryService {
         // نثبت إعداد الدورة المقروء داخل المعاملة للحدود المشتقة فقط، ولا نستخدمه لاختيار الراتب.
         const config = await em.query('SELECT [value] FROM dbo.requests_config WHERE [key]=@0', ['payroll.cycle_start_day'])
         if (config.length !== 1 || typeof config[0].value !== 'string' || !/^(?:[1-9]|[12][0-9]|3[01])$/.test(config[0].value)) throw new ConflictException({ code: 'SALARY_PAYROLL_CYCLE_INVALID', message: 'إعداد بداية دورة الرواتب غير مثبت أو غير صالح؛ راجعه قبل إثبات التاريخ الشهري' })
+        const periods = Array.isArray(dto.periods) ? dto.periods.map(row => ({ ...row })) : dto.periods
+        // راتب شهر دخل مسيرًا معتمدًا أو مصروفًا لا يُعدَّل من السجل (قاعدة: لا إعادة حساب لمصروف).
+        await assertMonthlySalaryHistoryKeepsClosedPeriods(em, employeeId, previous, normalizeMonthlySalaryPeriods(periods, Number(config[0].value)))
         const history = await appendMonthlySalaryHistoryRevision(em, { employeeId, reason, evidenceReference, currentSourceHash: current.currentSourceHash,
-          periods: Array.isArray(dto.periods) ? dto.periods.map(row => ({ ...row })) : dto.periods, cycleStartDay: Number(config[0].value), createdBy: user.sub })
+          periods, cycleStartDay: Number(config[0].value), createdBy: user.sub })
         return { ...current, ...history, capabilities: { canEdit: true }, compatibilityDatesDerived: true, payrollChanged: false, retroAdjustmentsCreated: false }
       })
     } catch (error) { this.schema(error) }

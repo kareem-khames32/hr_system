@@ -13,7 +13,6 @@ import {
 interface Props {
   view: PayrollCollectionView
   version: PayrollPolicyVersionSummary
-  canCalculate: boolean
   onSaved: (response: PayrollCollectionSaveResponse) => void
   onReload: () => Promise<void>
   onDirtyChange: (dirty: boolean) => void
@@ -22,7 +21,7 @@ interface Props {
 const stateLabels = { MISSING: 'غير مكتمل', INVALID: 'يحتاج مراجعة', COMPLETE: 'مكتمل' }
 
 // يُعاد تركيب المحرر بعد قراءة ناجحة أو حفظ ناجح فقط؛ فشل الحفظ لا يستبدل المسودة.
-export function PayrollCollectionEditor({ view, version, canCalculate, onSaved, onReload, onDirtyChange, onBusyChange }: Props) {
+export function PayrollCollectionEditor({ view, version, onSaved, onReload, onDirtyChange, onBusyChange }: Props) {
   const initial = useMemo(() => createCollectionDraft(view), [view])
   const [draft, setDraft] = useState(initial)
   const [reason, setReason] = useState('')
@@ -36,7 +35,8 @@ export function PayrollCollectionEditor({ view, version, canCalculate, onSaved, 
   const kinds = new Map(draft.classifications.map(item => [item.componentCode, item.kind]))
   const dirty = JSON.stringify(draft) !== JSON.stringify(initial) || reason.length > 0
   const complete = view.settingsStatus === 'COMPLETE' && view.definitionStatus === 'COMPLETE' && view.contractVersion === 'SRS_V1'
-  const authorized = canCalculate && view.capabilities.canEdit
+  // الخطوة 15: قرار الخادم (payroll.policy.manage + نطاق فرع السياسة النشطة) هو المرجع؛ payroll.calculate لا تمنح التعديل ولا تحجبه.
+  const authorized = view.capabilities.canEdit
   const editable = authorized && complete && !saving && !conflict
   const issues = collectionDraftIssues(draft, view.definition.components)
   const protectedItems = components.filter(component => isProtectedCollectionKind(kinds.get(component.code) ?? ''))
@@ -79,7 +79,7 @@ export function PayrollCollectionEditor({ view, version, canCalculate, onSaved, 
         </span>
       </div>
       <p className="text-sm text-gray-600 leading-7">حدد أي الخصومات تُحصّل أولًا عند عدم كفاية المبلغ المتاح. البنود المحمية تُعالج قبل هذا الترتيب. الحفظ يخص نسخة السياسة، ولا يعيد حساب المسيرات السابقة.</p>
-      {!authorized && <p className="rounded-xl bg-gray-50 p-3 text-sm text-gray-600 flex gap-2"><LockKeyhole size={18} className="shrink-0" />هذه السياسة متاحة للقراءة فقط؛ التعديل يتطلب صلاحية احتساب الرواتب وملكية نطاق السياسة النشطة.</p>}
+      {!authorized && <p className="rounded-xl bg-gray-50 p-3 text-sm text-gray-600 flex gap-2"><LockKeyhole size={18} className="shrink-0" />هذه السياسة متاحة للقراءة فقط؛ التعديل يتطلب صلاحية «إدارة سياسات الرواتب ونشرها» ونطاق فرع السياسة النشطة.</p>}
       {!complete && <div role="status" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900 space-y-2">
         <p className="font-semibold">يلزم استكمال إعدادات النسخة وتعريف بنودها قبل حفظ ترتيب التحصيل.</p>
         <p>الإعدادات: {stateLabels[view.settingsStatus]} · تعريف البنود: {stateLabels[view.definitionStatus]}</p>

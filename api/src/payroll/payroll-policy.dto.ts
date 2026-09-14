@@ -34,8 +34,10 @@ export class PayrollPolicyVersionMetadataDto {
 
 export class CreatePayrollPolicyDto {
   @ValidateIf((_, value) => value !== undefined) @IsObject() @ValidateNested() @Type(() => PayrollPolicySettingsDto) settings?: PayrollPolicySettingsDto
+  // الخطوة 15: الكود اختياري؛ غيابه أو فراغه يولّد PS-YYYYMMDD-NN فريدًا تحت قفل الخادم.
   @Transform(({ value }) => typeof value === 'string' ? value.trim() : value)
-  @IsString() @MinLength(1) @MaxLength(40) @Matches(/^[A-Za-z0-9][A-Za-z0-9_-]*$/) code: string
+  @ValidateIf((_, value) => value !== undefined && value !== null && value !== '')
+  @IsString() @MinLength(1) @MaxLength(40) @Matches(/^[A-Za-z0-9][A-Za-z0-9_-]*$/) code?: string | null
   @IsString() @MinLength(1) @MaxLength(200) name: string
   @IsOptional() @IsString() @MaxLength(8000) description?: string | null
   @IsOptional() @IsInt() @Min(1) branchId?: number | null
@@ -64,6 +66,9 @@ export class UpdatePayrollPolicyVersionDto extends PayrollPolicyMutationDto {
   @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) effectiveTo?: string | null
   @IsOptional() @IsObject() @ValidateNested() @Type(() => PayrollPolicyVersionMetadataDto) metadata?: PayrollPolicyVersionMetadataDto | null
 }
+
+// الخطوة 15: النشر يثبت النسخة (ACTIVE + frozenAt) بعد مراجعة الخادم؛ السبب والمراجعة المتوقعة إلزاميان.
+export class PublishPayrollPolicyVersionDto extends PayrollPolicyMutationDto {}
 
 export class ClonePayrollPolicyVersionDto extends PayrollPolicyMutationDto {
   @IsInt() @Min(1) sourceVersionId: number

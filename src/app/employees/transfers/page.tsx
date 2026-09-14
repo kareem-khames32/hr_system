@@ -28,11 +28,14 @@ interface TransferRow {
   effectiveDate: string
   status: string
   executedAt?: string
+  // سبب الإلغاء (نقل مكرر) أو آخر تعذّر تنفيذ سجله النظام على الطلب
+  statusReason?: string
 }
 
 const statusConfig: Record<string, { label: string; className: string }> = {
   SCHEDULED: { label: 'مجدول', className: 'bg-indigo-100 text-indigo-700' },
   EXECUTED: { label: 'منفّذ', className: 'bg-success-50 text-success-700' },
+  CANCELLED: { label: 'ملغى', className: 'bg-red-50 text-red-700' },
 }
 
 const fmtDate = (v?: string | null) => (v ? String(v).slice(0, 10) : '')
@@ -61,6 +64,7 @@ export default function TransfersPage() {
             executedAt: t.executedAt
               ? String(t.executedAt).slice(0, 16).replace('T', ' ')
               : undefined,
+            statusReason: t.statusReason ?? undefined,
           }))
         )
       } catch (err) {
@@ -225,6 +229,16 @@ export default function TransfersPage() {
                         </span>
                       )}
                     </div>
+                    {t.statusReason && (
+                      <p
+                        className={`text-xs mt-2 rounded-lg px-3 py-2 ${
+                          t.status === 'CANCELLED' ? 'bg-red-50 text-red-700' : 'bg-warning-50 text-warning-700'
+                        }`}
+                      >
+                        {t.status === 'CANCELLED' ? 'سبب الإلغاء: ' : 'آخر تعذّر تنفيذ: '}
+                        {t.statusReason}
+                      </p>
+                    )}
                   </div>
                 </div>
                 {t.status === 'SCHEDULED' && (

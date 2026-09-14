@@ -7,6 +7,18 @@ export type PayrollPolicyVersionStatus = 'DRAFT' | 'ACTIVE' | 'ARCHIVED'
 export type PayrollPolicyContractVersion = 'LEGACY_V1' | 'SRS_V1'
 export interface PayrollPolicyVersionMetadata { title: string | null; notes: string | null }
 
+// الخطوة 15: وقت النشر والتجميد يُخزن بتوقيت UTC مثل createdAt/updatedAt (GETDATE في حاوية SQL) وSYSUTCDATETIME.
+// مشغل mssql في TypeORM يكتب ويقرأ datetime2 بالتوقيت المحلي (useUTC=false)؛ التحويل هنا يحفظ اللحظة نفسها
+// في القاعدة بساعة UTC ويعيدها للـAPI لحظة صحيحة، دون تغيير مخطط العمود.
+export const utcDateTime = {
+  to: (value: unknown) => value instanceof Date
+    ? new Date(value.getUTCFullYear(), value.getUTCMonth(), value.getUTCDate(), value.getUTCHours(), value.getUTCMinutes(), value.getUTCSeconds(), value.getUTCMilliseconds())
+    : value,
+  from: (value: unknown) => value instanceof Date
+    ? new Date(Date.UTC(value.getFullYear(), value.getMonth(), value.getDate(), value.getHours(), value.getMinutes(), value.getSeconds(), value.getMilliseconds()))
+    : value,
+}
+
 @Entity('payroll_policies')
 @Index('UX_payroll_policy_code', ['code'], { unique: true })
 @Index('IX_payroll_policy_branch', ['branchId'])
@@ -85,9 +97,9 @@ export class PayrollPolicyVersion {
   @Column({ type: 'bit', nullable: true }) lateDeductionEnabled: boolean | null
   @Column({ type: 'nvarchar', length: 3, nullable: true }) currency: PayrollPolicySettings['currency'] | null
   @Column({ type: 'int', default: 1 }) revision: number
-  @Column({ type: 'datetime2', nullable: true }) publishedAt: Date | null
+  @Column({ type: 'datetime2', nullable: true, transformer: utcDateTime }) publishedAt: Date | null
   @Column({ type: 'int', nullable: true }) publishedBy: number | null
-  @Column({ type: 'datetime2', nullable: true }) frozenAt: Date | null
+  @Column({ type: 'datetime2', nullable: true, transformer: utcDateTime }) frozenAt: Date | null
   @Column({ type: 'int' }) createdBy: number
   @Column({ type: 'int' }) updatedBy: number
   @CreateDateColumn({ type: 'datetime2' }) createdAt: Date

@@ -20,7 +20,14 @@ import {
   X,
 } from 'lucide-react'
 import { fetchLoans, createRequest, can, getCurrentUser } from '@/lib/api'
+import { downloadCsv, csvDateStamp } from '@/lib/csv'
 import { useCurrency } from '@/lib/currency'
+import { fetchLoanCapPreview, loanMoneyInputValid, type LoanCapEvaluation } from '@/lib/loans-api'
+import { LoanCapSummary } from '@/components/payroll/LoanCapSummary'
+import { LoanCapPoliciesPanel } from '@/components/payroll/LoanCapPoliciesPanel'
+import { LoanExceptionalModal } from '@/components/payroll/LoanExceptionalModal'
+import { LoanRecoveriesPanel } from '@/components/payroll/LoanRecoveriesPanel'
+import { LoanRepaymentModal } from '@/components/payroll/LoanRepaymentModal'
 
 type Money = string | number
 type InstallmentStatus = 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED'
@@ -150,6 +157,21 @@ export default function LoansPage() {
   const [deferBusy, setDeferBusy] = useState(false)
   const [deferError, setDeferError] = useState('')
   const [deferSuccess, setDeferSuccess] = useState('')
+  // C6 / الخطوة 29: السقف قبل التقديم، والسلفة الاستثنائية، والسداد المبكر، ولوحتا السياسات والأرصدة بعد الإنهاء
+  const [section, setSection] = useState<'loans' | 'policies' | 'recoveries'>('loans')
+  const [newLoanCap, setNewLoanCap] = useState<LoanCapEvaluation | null>(null)
+  const [showExceptional, setShowExceptional] = useState(false)
+  const [repaying, setRepaying] = useState<Loan | null>(null)
+  const [loanPerms, setLoanPerms] = useState({ exceptional: false, repay: false, selfLinked: false })
+  useEffect(() => { setLoanPerms({ exceptional: can('loans.exceptional'), repay: can('loans.repay'), selfLinked: !!getCurrentUser()?.employeeId }) }, [])
+  useEffect(() => {
+    if (!showNewLoanModal || !loanPerms.selfLinked) { setNewLoanCap(null); return }
+    const handle = setTimeout(() => {
+      fetchLoanCapPreview({ amount: loanMoneyInputValid(loanAmount) ? loanAmount.trim() : undefined, months: /^[1-9]\d{0,3}$/.test(loanMonths) ? Number(loanMonths) : undefined })
+        .then(setNewLoanCap).catch(() => setNewLoanCap(null))
+    }, 300)
+    return () => clearTimeout(handle)
+  }, [showNewLoanModal, loanAmount, loanMonths, loanPerms.selfLinked])
 
   const loadLoans = () => {
     setError('')
@@ -231,10 +253,24 @@ export default function LoansPage() {
             <p className="text-gray-500 mt-1">سجل السلف المعتمدة من محرك الطلبات وجدول الأقساط</p>
           </div>
           <div className="flex items-center gap-3">
-            <button className="btn-secondary flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => downloadCsv(`loans-${activeTab}-${csvDateStamp()}.csv`,
+                ['رقم السلفة', 'الموظف', 'أصل المبلغ', 'المسدد', 'المتبقي', 'الأقساط المسددة', 'عدد الأقساط', 'تاريخ الصرف', 'الحالة'],
+                filteredLoans.map((loan) => [loan.id, loan.employeeName ?? `موظف #${loan.employeeId}`, String(loan.amount), String(loan.paidAmount),
+                  String(loan.remainingAmount), loan.paidCount, loan.installments.length, loan.disbursedAt ? String(loan.disbursedAt).slice(0, 10) : '', loan.status]))}
+              disabled={loading || filteredLoans.length === 0}
+              className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+            >
               <Download size={18} />
-              تصدير
+              تصدير CSV
             </button>
+            {loanPerms.exceptional && (
+              <button type="button" onClick={() => setShowExceptional(true)} className="btn-secondary flex items-center gap-2">
+                <AlertTriangle size={18} />
+                سلفة استثنائية
+              </button>
+            )}
             <button
               onClick={() => setShowNewLoanModal(true)}
               className="btn-primary flex items-center gap-2"
@@ -256,6 +292,15 @@ export default function LoansPage() {
           خدمة السلف الحالية تعرض بيانات الجدول القديم؛ التفصيل المالي الجديد والتأجيل غير متاحين لهذه السجلات حتى تحديث الخدمة.
         </div>}
 
+        <div className="card p-2 flex items-center gap-2 flex-wrap" role="tablist" aria-label="أقسام السلف">
+          {([['loans', 'السلف والأقساط'], ['policies', 'سياسات السقوف'], ['recoveries', 'أرصدة بعد الإنهاء']] as const).map(([id, label]) => (
+            <button key={id} type="button" role="tab" aria-selected={section === id} onClick={() => setSection(id)}
+              className={`px-4 py-2 rounded-xl text-sm font-medium ${section === id ? 'bg-primary-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>{label}</button>
+          ))}
+        </div>
+        {section === 'policies' && <LoanCapPoliciesPanel currency={currency} />}
+        {section === 'recoveries' && <LoanRecoveriesPanel currency={currency} />}
+        {section === 'loans' && <>
         {/* Stats Cards */}
         <div className="grid grid-cols-4 gap-4">
           <div className="card">
@@ -419,6 +464,9 @@ export default function LoansPage() {
                     <td className="table-cell text-center">{getStatusBadge(loan.status)}</td>
                     <td className="table-cell">
                       <div className="flex items-center justify-center gap-1">
+                        {loanPerms.repay && loan.ledgerAvailable && centsOf(loan.remainingAmount) > BigInt(0) && (
+                          <button type="button" onClick={() => setRepaying(loan)} className="btn-secondary text-sm whitespace-nowrap">سداد مبكر</button>
+                        )}
                         <button
                           onClick={() => setExpandedId(expandedId === loan.id ? null : loan.id)}
                           className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
@@ -541,6 +589,7 @@ export default function LoansPage() {
             </ul>
           </div>
         </div>
+        </>}
       </div>
 
       {deferral && (
@@ -570,6 +619,8 @@ export default function LoansPage() {
         </div>
       )}
 
+      {showExceptional && <LoanExceptionalModal currency={currency} onClose={() => setShowExceptional(false)} onDone={loadLoans} />}
+      {repaying && <LoanRepaymentModal loan={{ id: repaying.id, employeeName: repaying.employeeName, remainingAmount: String(repaying.remainingAmount) }} currency={currency} onClose={() => setRepaying(null)} onDone={loadLoans} />}
       {/* New Loan Modal */}
       {showNewLoanModal && (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
@@ -626,6 +677,7 @@ export default function LoansPage() {
                   dir="ltr"
                 />
               </div>
+              {newLoanCap && <LoanCapSummary cap={newLoanCap} currency={currency} title="السقف المتاح لك الآن" />}
             </div>
 
             <div className="flex items-center gap-3 mt-6 pt-4 border-t border-gray-100">

@@ -82,6 +82,13 @@ async function lockedPayroll(emp, status = 'APPROVED') {
   return run
 }
 
+// الخطوة 18 (B3): الاعتماد يتطلب إقرارًا بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية بنطاق المعتمد.
+async function acknowledgeUnassigned(user, runId) {
+  const report = await request(user, 'GET', `/payroll/runs/${runId}/unassigned`)
+  assert.equal(report.status, 200, JSON.stringify(report.body))
+  const ack = await request(user, 'POST', `/payroll/runs/${runId}/unassigned-ack`, { reportHash: report.body.reportHash })
+  assert.equal(ack.status, 201, JSON.stringify(ack.body))
+}
 before(async () => {
   assert.equal(env.DB_TYPE || 'mssql', 'mssql')
   assertDisposable()
@@ -113,6 +120,8 @@ before(async () => {
     { key: 'payroll.daily_hours', value: '8' }, { key: 'payroll.exemption_reason_min_length', value: '20' },
     { key: 'payroll.exempt_overtime_eligible', value: 'false' },
     { key: 'payroll.exempt_unpaid_leave_deductible', value: 'true' },
+    // الخطوة 13: موظفو هذه القاعدة المعزولة بلا سجل أجر شهري؛ الوضع الانتقالي الصريح يحسبهم براتب الملف (مثل payroll-coverage).
+    { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' },
   ])
 }, { timeout: 60000 })
 after(async t => {
@@ -223,10 +232,25 @@ test('EX-16: executive exemption needs HR then a separately authorized executive
   assert.equal(finalEvents.at(-1).payload.after.status, 'APPROVED')
 })
 
+// طلب معلق مُدرج مباشرة مع حدث إنشائه: بيانات سابقة لحارس التداخل المعلق، أو طلب أُنشئ في دورة سابقة.
+async function legacyPending(emp, extra = {}, createdAt = null) {
+  const row = await repo('AttendanceExemption').save({ employeeId: emp.id, effectiveFrom: today, effectiveTo: null,
+    reasonCode: 'field_role', reason: explanation, status: 'PENDING', createdByUserId: hr.id, requiresCheckinForPresence: false, ...extra })
+  await repo('AttendanceExemptionEvent').save({ exemptionId: row.id, actorUserId: row.createdByUserId, eventType: 'CREATED',
+    reason: explanation, payload: { before: null, after: row } })
+  if (createdAt) await ds.query('UPDATE dbo.attendance_exemptions SET createdAt = @0 WHERE id = @1', [createdAt, row.id])
+  return repo('AttendanceExemption').findOneByOrFail({ id: row.id })
+}
+
 test('EX-09: two overlapping pending approvals race to one approved window and one atomic 409', async () => {
   const emp = await employee()
   const first = await create(emp, { effectiveTo: later })
-  const second = await create(emp, { effectiveFrom: tomorrow })
+  // الإنشاء صار يرفض الطلب المعلق المتداخل؛ الطلب الثاني بيانات سابقة للحارس تُدرج مباشرة،
+  // ليبقى إثبات أن الاعتماد المتزامن ينتج نافذة معتمدة واحدة ورفضًا ذريًا.
+  const duplicate = await request(hr, 'POST', '/attendance-exemptions', input(emp, { effectiveFrom: tomorrow }))
+  assert.equal(duplicate.status, 409, JSON.stringify(duplicate.body))
+  assert.equal(duplicate.body.code, 'EXEMPT-OVERLAP-PENDING')
+  const second = await legacyPending(emp, { effectiveFrom: tomorrow })
   const secondApprover = await user([viewPerm, approvePerm])
   const response = await Promise.all([
     request(approver, 'POST', `${route(first.id)}/approve`, { reason: explanation }),
@@ -338,8 +362,9 @@ test('EX-13/16: invalid dates, earlier cycles, reversed ranges, reasons and over
   assert.deepEqual(await counts(), original)
   const row = await create(emp)
   const preserved = await evidence(row)
-  for (const operation of ['approve', 'cancel']) {
-    assert.equal((await request(hr, 'POST', `${route(row.id)}/${operation}`, { reason: 'قصير' })).status, 400)
+  // الاعتماد من مستخدم غير المنشئ (فصل المهام يسبق فحص السبب)، والإلغاء من المنشئ نفسه.
+  for (const [operation, actor] of [['approve', approver], ['cancel', hr]]) {
+    assert.equal((await request(actor, 'POST', `${route(row.id)}/${operation}`, { reason: 'قصير' })).status, 400)
     assert.deepEqual(await evidence(row), preserved)
   }
 })
@@ -358,6 +383,7 @@ async function calculateCurrentPeriod(emp, options = {}) {
 test('EX-13: a new exemption approved after calculation blocks stale payroll approval without claims/events until explicit recalculation', async () => {
   const emp = await employee()
   const run = await calculateCurrentPeriod(emp)
+  await acknowledgeUnassigned(admin, run.id)
   const originalItems = await repo('PayrollItem').find({ where: { runId: run.id } })
   const originalEvents = await repo('PayrollRunEvent').find({ where: { runId: run.id }, order: { id: 'ASC' } })
   const approvedExemption = await approve(await create(emp))
@@ -372,6 +398,7 @@ test('EX-13: a new exemption approved after calculation blocks stale payroll app
   const refreshed = await calculateCurrentPeriod(emp, { runId: run.id, reason: 'إعادة حساب صريحة بعد اعتماد قرار استثناء الحضور' })
   assert.equal(refreshed.snapshotVersion, run.snapshotVersion + 1)
   assert.ok(JSON.parse(refreshed.items[0].breakdown).attendanceExemptions.some(window => window.id === approvedExemption.id))
+  await acknowledgeUnassigned(admin, run.id)
   const accepted = await request(admin, 'POST', `/payroll/runs/${run.id}/approve`)
   assert.equal(accepted.status, 201, JSON.stringify(accepted.body))
   assert.equal(await repo('PayrollPeriodClaim').count({ where: { runId: run.id } }), 1)
@@ -390,6 +417,7 @@ test('EX-13: termination after coverage and later organization defaults preserve
   await repo('RequestsConfig').update({ key: 'payroll.exempt_overtime_eligible' }, { value: 'true' })
   await repo('RequestsConfig').update({ key: 'payroll.exempt_unpaid_leave_deductible' }, { value: 'false' })
   try {
+    await acknowledgeUnassigned(admin, run.id)
     const accepted = await request(admin, 'POST', `/payroll/runs/${run.id}/approve`)
     assert.equal(accepted.status, 201, JSON.stringify(accepted.body))
     const detail = await request(admin, 'GET', `/payroll/runs/${run.id}`)
@@ -402,4 +430,219 @@ test('EX-13: termination after coverage and later organization defaults preserve
     await repo('RequestsConfig').update({ key: 'payroll.exempt_overtime_eligible' }, { value: 'false' })
     await repo('RequestsConfig').update({ key: 'payroll.exempt_unpaid_leave_deductible' }, { value: 'true' })
   }
+})
+
+// ===== خطة المراجعة 24: فصل المهام، الرفض، التداخل المعلق، بدء دورة جديدة، واجهة الشاشة، والقبول على مسير حقيقي =====
+// بداية الدورة (payroll.cycle_start_day = 23) التي تحتوي التاريخ
+function cycleStartOf(date, startDay = 23) {
+  const base = new Date(`${date}T12:00:00`)
+  return formatDate(new Date(base.getFullYear(), base.getMonth() - (base.getDate() >= startDay ? 0 : 1), startDay, 12))
+}
+
+test('S24 SoD: the creator never approves or rejects its own request, even with approval rights or as super_admin', async () => {
+  const emp = await employee()
+  const row = await create(emp)
+  const before = await evidence(row)
+  for (const operation of ['approve', 'reject']) {
+    const denied = await request(hr, 'POST', `${route(row.id)}/${operation}`, { reason: explanation })
+    assert.equal(denied.status, 403, JSON.stringify(denied.body))
+    assert.equal(denied.body.code, 'EXEMPT-SOD-CREATOR')
+  }
+  assert.deepEqual(await evidence(row), before)
+  const listed = (await request(hr, 'GET', '/attendance-exemptions')).body.rows.find(item => item.id === row.id)
+  assert.equal(listed.actions.approve, false)
+  assert.equal(listed.actions.reject, false)
+  assert.equal(listed.actions.cancel, true)
+  assert.equal(listed.actions.blockedBy, 'CREATOR')
+  assert.equal((await approve(row)).status, 'APPROVED')
+  const adminRow = await create(await employee(), {}, admin)
+  const adminDenied = await request(admin, 'POST', `${route(adminRow.id)}/approve`, { reason: explanation })
+  assert.equal(adminDenied.status, 403, JSON.stringify(adminDenied.body))
+  assert.equal(adminDenied.body.code, 'EXEMPT-SOD-CREATOR')
+  assert.equal((await approve(adminRow, hr)).approvedByUserId, hr.id)
+})
+
+test('S24 SoD: the HR approver of an executive exemption cannot take or reject the executive step; another user completes it', async () => {
+  const emp = await employee()
+  const hrAndExecutive = await user([viewPerm, approvePerm, executivePerm])
+  const row = await create(emp, { reasonCode: 'executive' })
+  assert.equal((await approve(row, hrAndExecutive)).status, 'PENDING')
+  const before = await evidence(row)
+  for (const operation of ['approve-executive', 'reject']) {
+    const denied = await request(hrAndExecutive, 'POST', `${route(row.id)}/${operation}`, { reason: explanation })
+    assert.equal(denied.status, 403, JSON.stringify(denied.body))
+    assert.equal(denied.body.code, 'EXEMPT-SOD-EXECUTIVE')
+  }
+  const listed = (await request(hrAndExecutive, 'GET', '/attendance-exemptions')).body.rows.find(item => item.id === row.id)
+  assert.equal(listed.state, 'PENDING_EXECUTIVE')
+  assert.equal(listed.actions.approveExecutive, false)
+  assert.equal(listed.actions.blockedBy, 'HR_APPROVER')
+  const creatorExecutive = await user([viewPerm, managePerm, executivePerm])
+  const own = await create(await employee(), { reasonCode: 'executive' }, creatorExecutive)
+  await approve(own)
+  const ownDenied = await request(creatorExecutive, 'POST', `${route(own.id)}/approve-executive`, { reason: explanation })
+  assert.equal(ownDenied.status, 403, JSON.stringify(ownDenied.body))
+  assert.equal(ownDenied.body.code, 'EXEMPT-SOD-CREATOR')
+  assert.deepEqual(await evidence(row), before)
+  const completed = await request(executive, 'POST', `${route(row.id)}/approve-executive`, { reason: explanation })
+  assert.equal(completed.status, 201, JSON.stringify(completed.body))
+  assert.equal(completed.body.status, 'APPROVED')
+  assert.equal(new Set([completed.body.createdByUserId, completed.body.approvedByUserId, completed.body.executiveApprovedByUserId]).size, 3)
+})
+
+test('S24 reject: another approver rejects with a reason; the window never activates, stays auditable and cannot be decided again', async () => {
+  const emp = await employee()
+  const row = await create(emp, {}, creator)
+  assert.equal((await request(viewer, 'POST', `${route(row.id)}/reject`, { reason: explanation })).status, 403)
+  assert.equal((await request(approver, 'POST', `${route(row.id)}/reject`, { reason: 'قصير' })).status, 400)
+  const rejected = await request(approver, 'POST', `${route(row.id)}/reject`, { reason: explanation })
+  assert.equal(rejected.status, 201, JSON.stringify(rejected.body))
+  assert.equal(rejected.body.status, 'REJECTED')
+  assert.deepEqual(await loadAttendanceExemptions(ds.manager, emp.id, today, later), [])
+  const history = await events(row)
+  assert.deepEqual(history.map(event => event.eventType), ['CREATED', 'REJECTED'])
+  assert.equal(history.at(-1).actorUserId, approver.id)
+  assert.equal(history.at(-1).actorName, approver.displayName)
+  assert.equal(history.at(-1).reason, explanation)
+  const preserved = await evidence(row)
+  assert.equal((await request(approver, 'POST', `${route(row.id)}/approve`, { reason: explanation })).status, 400)
+  assert.equal((await request(approver, 'POST', `${route(row.id)}/reject`, { reason: explanation })).status, 400)
+  assert.equal((await request(hr, 'POST', `${route(row.id)}/cancel`, { reason: explanation })).status, 400)
+  assert.deepEqual(await evidence(row), preserved)
+  // الطلب المرفوض لا يحجز أيامه: طلب جديد لنفس الفترة مقبول
+  assert.equal((await create(emp, {}, creator)).status, 'PENDING')
+  // الرفض في الخطوة التنفيذية يحتاج صلاحية الاعتماد التنفيذي
+  const executiveRow = await create(await employee(), { reasonCode: 'executive' }, creator)
+  await approve(executiveRow)
+  assert.equal((await request(hr, 'POST', `${route(executiveRow.id)}/reject`, { reason: explanation })).status, 403)
+  const executiveRejected = await request(executive, 'POST', `${route(executiveRow.id)}/reject`, { reason: explanation })
+  assert.equal(executiveRejected.status, 201, JSON.stringify(executiveRejected.body))
+  assert.equal(executiveRejected.body.status, 'REJECTED')
+  assert.equal((await events(executiveRow)).at(-1).eventType, 'EXECUTIVE_REJECTED')
+})
+
+test('S24 overlap: a second overlapping pending request is refused atomically; adjacent, other-employee and post-cancel requests are allowed', async () => {
+  const emp = await employee()
+  const first = await create(emp, { effectiveTo: tomorrow }, creator)
+  const original = await counts()
+  for (const extra of [{}, { effectiveFrom: tomorrow }, { effectiveFrom: tomorrow, effectiveTo: later }, { effectiveTo: today }]) {
+    const response = await request(hr, 'POST', '/attendance-exemptions', input(emp, extra))
+    assert.equal(response.status, 409, JSON.stringify({ extra, response }))
+    assert.equal(response.body.code, 'EXEMPT-OVERLAP-PENDING')
+    assert.equal(response.body.exemptionId, first.id)
+    assert.deepEqual(await counts(), original)
+  }
+  assert.equal((await create(emp, { effectiveFrom: later }, hr)).status, 'PENDING')
+  assert.equal((await create(await employee(), {}, hr)).status, 'PENDING')
+  assert.equal((await request(creator, 'POST', `${route(first.id)}/cancel`, { reason: explanation })).status, 201)
+  assert.equal((await create(emp, { effectiveTo: tomorrow }, hr)).status, 'PENDING')
+})
+
+test('S24 dates: a pending request created in the previous cycle stays approvable after a new cycle starts; a retroactive one stays refused', async () => {
+  const emp = await employee()
+  const currentStart = cycleStartOf(today)
+  const previous = new Date(`${currentStart}T12:00:00`)
+  previous.setMonth(previous.getMonth() - 1)
+  const previousStart = formatDate(previous)
+  const row = await legacyPending(emp, { effectiveFrom: previousStart }, new Date(`${previousStart}T10:00:00`))
+  const accepted = await approve(row)
+  assert.equal(accepted.status, 'APPROVED')
+  assert.equal(accepted.effectiveFrom, previousStart)
+  const other = await employee()
+  const refused = await request(hr, 'POST', '/attendance-exemptions', input(other, { effectiveFrom: previousStart }))
+  assert.equal(refused.status, 400, JSON.stringify(refused.body))
+  const retro = await legacyPending(other, { effectiveFrom: previousStart })
+  const retroBefore = await evidence(retro)
+  assert.equal((await request(approver, 'POST', `${route(retro.id)}/approve`, { reason: explanation })).status, 400)
+  assert.deepEqual(await evidence(retro), retroBefore)
+})
+
+test('S24 screen API: the scoped list returns names, state and per-user actions and honours the branch scope', async () => {
+  const own = await employee(), outside = await employee({ branchId: branchB.id })
+  const row = await create(own, { effectiveTo: later }, creator)
+  const outsideRow = await create(outside, {}, otherHr)
+  assert.equal((await request(null, 'GET', '/attendance-exemptions')).status, 401)
+  assert.equal((await request(nobody, 'GET', '/attendance-exemptions')).status, 403)
+  const asApprover = await request(approver, 'GET', '/attendance-exemptions')
+  assert.equal(asApprover.status, 200, JSON.stringify(asApprover.body))
+  assert.equal(asApprover.body.today, today)
+  assert.equal(asApprover.body.currentPeriodStart, cycleStartOf(today))
+  assert.equal(asApprover.body.reasonMinLength, 20)
+  assert.ok(asApprover.body.rows.length > 0)
+  assert.ok(asApprover.body.rows.every(item => item.employee.branchId === branchA.id))
+  assert.ok(!asApprover.body.rows.some(item => item.id === outsideRow.id))
+  const listed = asApprover.body.rows.find(item => item.id === row.id)
+  assert.equal(listed.employee.fullName, own.fullName)
+  assert.equal(listed.employee.branchName, branchA.name)
+  assert.equal(listed.createdByName, creator.displayName)
+  assert.equal(listed.state, 'PENDING_HR')
+  assert.deepEqual(listed.actions, { approve: true, approveExecutive: false, reject: true, cancel: false, terminate: false, blockedBy: null })
+  const asViewer = (await request(viewer, 'GET', '/attendance-exemptions')).body.rows.find(item => item.id === row.id)
+  assert.deepEqual(asViewer.actions, { approve: false, approveExecutive: false, reject: false, cancel: false, terminate: false, blockedBy: null })
+  assert.ok((await request(admin, 'GET', '/attendance-exemptions')).body.rows.some(item => item.id === outsideRow.id))
+  const filtered = await request(admin, 'GET', `/attendance-exemptions?status=PENDING&employeeId=${own.id}`)
+  assert.deepEqual(filtered.body.rows.map(item => item.id), [row.id])
+  assert.equal((await request(admin, 'GET', '/attendance-exemptions?status=UNKNOWN')).status, 400)
+  await approve(row)
+  const active = (await request(hr, 'GET', `/attendance-exemptions?employeeId=${own.id}`)).body.rows.find(item => item.id === row.id)
+  assert.equal(active.state, 'ACTIVE')
+  assert.equal(active.approvedByName, approver.displayName)
+  assert.equal(active.actions.terminate, true)
+  assert.equal(active.actions.cancel, false)
+})
+
+test('S24 acceptance: an employee without punches has no attendance deduction on a real payroll run after request and approval by two different users', async t => {
+  const currentStart = cycleStartOf(today)
+  // أيام عمل مجدولة ماضية داخل الدورة الحالية بلا أي بصمة (حتى 7 أيام قبل اليوم)
+  const scheduled = []
+  for (let offset = 1; offset <= 7; offset++) if (dateOffset(-offset) >= currentStart) scheduled.push(dateOffset(-offset))
+  if (!scheduled.length) { t.skip('اليوم أول أيام الدورة؛ لا أيام ماضية مجدولة داخلها'); return }
+  const exempt = await employee({ fullName: 'موظف مستثنى بلا بصمة' })
+  const control = await employee({ fullName: 'موظف مقارنة بلا بصمة' })
+  for (const emp of [exempt, control]) for (const date of scheduled) {
+    await repo('ScheduleDayOverride').save({ employeeId: emp.id, date, shiftName: 'وردية اختبار القبول', startTime: '08:00', endTime: '16:00' })
+  }
+  assert.equal(await repo('AttendancePunch').count({ where: [{ employeeId: exempt.id }, { employeeId: control.id }] }), 0)
+  // الطلب من مستخدم والاعتماد من مستخدم آخر؛ المنشئ نفسه مرفوض
+  const requested = await create(exempt, { effectiveFrom: currentStart }, hr)
+  assert.equal((await request(hr, 'POST', `${route(requested.id)}/approve`, { reason: explanation })).status, 403)
+  const approved = await approve(requested, approver)
+  assert.equal(approved.status, 'APPROVED')
+  assert.notEqual(approved.approvedByUserId, approved.createdByUserId)
+  const period = formatDate(new Date(now.getFullYear(), now.getMonth() + (now.getDate() >= 23 ? 1 : 0), 1, 12)).slice(0, 7)
+  const calculated = await request(admin, 'POST', '/payroll/runs/calculate-defined', {
+    period, scopeType: 'CUSTOM', employeeIds: [exempt.id, control.id], name: 'مسير قبول استثناء الحضور' })
+  assert.equal(calculated.status, 201, JSON.stringify(calculated.body))
+  const run = calculated.body
+  const exemptItem = run.items.find(item => item.employeeId === exempt.id)
+  const controlItem = run.items.find(item => item.employeeId === control.id)
+  assert.ok(exemptItem && controlItem, 'both employees are in the run')
+  // المقارنة: نفس الأيام بلا بصمة تُخصم غيابًا على غير المستثنى
+  const controlBreakdown = JSON.parse(controlItem.breakdown)
+  assert.ok(Number(controlItem.absenceDays) >= 1, JSON.stringify(controlItem))
+  assert.ok(Number(controlItem.absenceDeduction) > 0)
+  // الغياب المُجسَّد = أيام عمل ماضية بلا بصمة داخل الدورة (الأيام المجدولة صراحةً ضمنها، والجدول الافتراضي قد يضيف غيرها)
+  assert.ok(scheduled.some(date => controlBreakdown.absentDates.includes(date)), JSON.stringify({ scheduled, absent: controlBreakdown.absentDates }))
+  // اليوم الجاري يُجسَّد غيابًا بعد انتهاء ورديته الافتراضية، فالحد الأعلى شامل لليوم
+  assert.ok(controlBreakdown.absentDates.every(date => date >= currentStart && date <= today), JSON.stringify(controlBreakdown.absentDates))
+  assert.equal(Number(controlItem.absenceDays), controlBreakdown.absentDates.length)
+  // المستثنى: صفر خصم حضور بكل أنواعه (غياب وتأخير ونقص) ويُصرف راتبه الثابت
+  for (const field of ['absenceDays', 'absenceDeduction', 'lateMinutes', 'latenessDeduction']) assert.equal(Number(exemptItem[field]), 0, field)
+  const exemptBreakdown = JSON.parse(exemptItem.breakdown)
+  assert.deepEqual(exemptBreakdown.absentDates, [])
+  assert.equal(Number(exemptBreakdown.shortfallDeduction ?? 0), 0)
+  assert.equal(exemptBreakdown.isAttendanceExempt, true)
+  assert.ok(exemptBreakdown.attendanceExemptions.some(window => window.id === requested.id))
+  const controlAttendance = Number(controlItem.absenceDeduction) + Number(controlItem.latenessDeduction) + Number(controlBreakdown.shortfallDeduction ?? 0)
+  assert.ok(Math.abs(Number(exemptItem.netPay) - Number(controlItem.netPay) - controlAttendance) < 0.005,
+    JSON.stringify({ exempt: exemptItem.netPay, control: controlItem.netPay, controlAttendance }))
+  // مسير حقيقي: الاعتماد يمر لأن لقطة الاستثناء مطابقة، ويحجز الفترة للموظفين
+  const payrollApprover = await user([], null, { role: 'super_admin' })
+  await acknowledgeUnassigned(payrollApprover, run.id)
+  const runApproved = await request(payrollApprover, 'POST', `/payroll/runs/${run.id}/approve`)
+  assert.equal(runApproved.status, 201, JSON.stringify(runApproved.body))
+  assert.equal(await repo('PayrollPeriodClaim').count({ where: { runId: run.id } }), 2)
+  // بعد الاعتماد لا يغيّر إنهاء الاستثناء الفترة المعتمدة
+  const lockedTermination = await request(approver, 'POST', `${route(requested.id)}/terminate`, { effectiveFrom: today, reason: explanation })
+  assert.equal(lockedTermination.status, 409, JSON.stringify(lockedTermination.body))
 })

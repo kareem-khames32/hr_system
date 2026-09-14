@@ -9,6 +9,9 @@ import { LoanInstallmentPosition, readLoanInstallmentPositions } from './payroll
 import { LoanInstallmentAllocation, LoanInstallmentEvent } from './payroll-installment-ledger.entities'
 import { getSettlementFinancialClaims, lockPayrollEmployees } from './payroll-settlement-boundary'
 import { parsePayrollPolicyConfigValue, PAYROLL_POLICY_CONFIG_KEYS, PAYROLL_POLICY_SETTING_FIELDS, PayrollPolicySettings, validatePayrollPolicySettings } from './payroll-policy-settings'
+import { planEarlyRepayment } from '../loans/loan-caps'
+import { LoanRepayment, type LoanRepaymentMethod, type LoanRepaymentMode } from '../loans/loans.entities'
+import { parsePayrollLoanCatchUpLimit, PAYROLL_DECISION_KEYS, PAYROLL_LOAN_CATCH_UP_LIMIT_MAX } from './payroll-decision-settings'
 
 export const PAYROLL_INSTALLMENT_PLAN_VERSION = 'LOAN_ALLOCATION_V1_20260913' as const
 const MODE_KEY = 'loan.insufficient_net_behavior'
@@ -16,10 +19,13 @@ type Mode = 'PARTIAL_THEN_CARRY' | 'SKIP_AND_EXTEND'
 type PositionSnapshot = Omit<LoanInstallmentPosition, 'paidAt' | 'paid' | 'employeeId'>
 export interface PayrollInstallmentPlan {
   version: typeof PAYROLL_INSTALLMENT_PLAN_VERSION
-  policy: { mode: Mode; settings: PayrollPolicySettings }
+  // D10: catchUpMaxOverdue يُثبت مع الخطة؛ الخطط المحفوظة قبل القرار بلا الحقل = بلا حد (لا يتغير حسابها عند إعادة الحساب).
+  policy: { mode: Mode; settings: PayrollPolicySettings; catchUpMaxOverdue?: number }
   context: { period: string; endDate: string; netBeforeLoans: string; earnedFixedGross: string; capConsumed: string }
   sources: PositionSnapshot[]
   excludedClaimedIds: number[]
+  // أقساط متأخرة زادت عن الحد؛ تبقى مستحقة كما هي وتدخل مسيرًا لاحقًا.
+  catchUpDeferredIds?: number[]
   budget: ReturnType<typeof computePayrollInstallmentBudget>
   allocation: PayrollInstallmentAllocationResult
 }
@@ -43,6 +49,11 @@ export function isPayrollInstallmentPlan(value: unknown): value is PayrollInstal
         !plan.context || !/^\d{4}-\d{2}-\d{2}$/.test(plan.context.endDate) || !Array.isArray(plan.sources) || !Array.isArray(plan.excludedClaimedIds) ||
         plan.allocation?.engineVersion !== PAYROLL_INSTALLMENT_ALLOCATION_VERSION || !Array.isArray(plan.allocation.lines) || !plan.budget) return false
     validatePayrollPolicySettings(plan.policy.settings)
+    const limit = plan.policy.catchUpMaxOverdue, deferred = plan.catchUpDeferredIds
+    if ((limit === undefined) !== (deferred === undefined)) return false
+    if (limit !== undefined && (!Number.isInteger(limit) || limit < 0 || limit > PAYROLL_LOAN_CATCH_UP_LIMIT_MAX || !Array.isArray(deferred) ||
+        deferred.some(id => !Number.isInteger(id) || id < 1) || new Set(deferred).size !== deferred.length ||
+        deferred.some(id => plan.sources.some(row => row.id === id)))) return false
     if (plan.sources.length > 1000 || new Set(plan.sources.map(row => row.id)).size !== plan.sources.length ||
         plan.sources.some(row => !Number.isInteger(row.id) || row.id < 1 || !Number.isInteger(row.financialRevision) || row.financialRevision < 1 || row.financialStatus !== 'DUE')) return false
     const lines = plan.allocation.lines
@@ -54,13 +65,17 @@ export function isPayrollInstallmentPlan(value: unknown): value is PayrollInstal
 }
 
 async function configuredPolicy(em: EntityManager): Promise<PayrollInstallmentPlan['policy']> {
-  const keys = [...Object.values(PAYROLL_POLICY_CONFIG_KEYS), MODE_KEY]
+  const keys = [...Object.values(PAYROLL_POLICY_CONFIG_KEYS), MODE_KEY, PAYROLL_DECISION_KEYS.loanCatchUpMaxOverdue]
   const rows = await em.getRepository(RequestsConfig).findBy({ key: In(keys) })
   const settings = Object.fromEntries(PAYROLL_POLICY_SETTING_FIELDS.map(field => [field,
     parsePayrollPolicyConfigValue(field, rows.find(row => row.key === PAYROLL_POLICY_CONFIG_KEYS[field])?.value)]))
   const mode = rows.find(row => row.key === MODE_KEY)?.value
   if (mode !== 'PARTIAL_THEN_CARRY' && mode !== 'SKIP_AND_EXTEND') throw new BadRequestException('اختر سلوك نقص المتاح لأقساط السلف في الإعدادات')
-  return { mode, settings: validatePayrollPolicySettings(settings) }
+  let catchUpMaxOverdue: number
+  // D10: القيمة الناقصة أو الفاسدة لا تتحول بصمت إلى «بلا حد».
+  try { catchUpMaxOverdue = parsePayrollLoanCatchUpLimit(rows.find(row => row.key === PAYROLL_DECISION_KEYS.loanCatchUpMaxOverdue)?.value) }
+  catch { throw new BadRequestException('اضبط حد لحاق الأقساط المتأخرة لكل مسير (payroll.loan_catchup_max_overdue) في الإعدادات بعدد صحيح من 0 إلى 120') }
+  return { mode, settings: validatePayrollPolicySettings(settings), catchUpMaxOverdue }
 }
 
 // حجز المصدر مستقل عن تداخل فترة الموظف، ويشمل التخطي الذي لا يخصم أي مبلغ.
@@ -99,10 +114,20 @@ export async function buildPayrollInstallmentPlan(em: EntityManager, employeeId:
   const policy = options.policy ? plain(options.policy) : await configuredPolicy(em)
   validatePayrollPolicySettings(policy.settings)
   if (!['PARTIAL_THEN_CARRY', 'SKIP_AND_EXTEND'].includes(policy.mode)) throw conflict('اختيار سداد الأقساط المحفوظ غير صالح')
+  if (policy.catchUpMaxOverdue !== undefined && (!Number.isInteger(policy.catchUpMaxOverdue) || policy.catchUpMaxOverdue < 0 || policy.catchUpMaxOverdue > PAYROLL_LOAN_CATCH_UP_LIMIT_MAX)) throw conflict('حد لحاق الأقساط المحفوظ في الخطة غير صالح')
   const claimed = await claimedInstallmentIds(em, employeeId, options.runId)
   const excludedClaimedIds = all.filter(row => row.dueDate <= context.endDate && claimed.has(row.id)).map(row => row.id).sort((a, b) => a - b)
-  const sources = all.filter(row => !excludedClaimedIds.includes(row.id)).map(snapshot)
   const nextPeriod = nextMonth(context.period), mappedPeriod = (date: string) => date > context.endDate && date.slice(0, 7) < nextPeriod ? nextPeriod : date.slice(0, 7)
+  let sources = all.filter(row => !excludedClaimedIds.includes(row.id)).map(snapshot)
+  // D10 / LOT-05: أقساط الشهر الحالي كلها + أقدم N قسط متأخر فقط؛ الباقي يبقى مستحقًا بلا حجز ولا ترحيل ويُلحق في المسيرات التالية.
+  let catchUpDeferredIds: number[] | undefined
+  if (policy.catchUpMaxOverdue !== undefined) {
+    const overdue = sources.filter(source => mappedPeriod(source.dueDate) < context.period)
+      .sort((a, b) => a.dueDate.localeCompare(b.dueDate) || a.id - b.id)
+    const held = new Set(overdue.slice(policy.catchUpMaxOverdue).map(source => source.id))
+    catchUpDeferredIds = [...held].sort((a, b) => a - b)
+    sources = sources.filter(source => !held.has(source.id))
+  }
   const tails = new Map<number, string>()
   for (const source of sources) { const period = mappedPeriod(source.dueDate); if (!tails.has(source.loanId) || tails.get(source.loanId)! < period) tails.set(source.loanId, period) }
   const budget = computePayrollInstallmentBudget(policy.settings, { netBeforeLoans: context.netBeforeLoans, earnedFixedGross: context.earnedFixedGross,
@@ -112,7 +137,8 @@ export async function buildPayrollInstallmentPlan(em: EntityManager, employeeId:
       sourceRevision: source.financialRevision, sequence: source.id, originalDuePeriod: source.originalDueDate.slice(0, 7), duePeriod: mappedPeriod(source.dueDate),
       remainingAmount: source.remainingAmount, priority: 0, insufficientMode: policy.mode,
       extensionPeriod: policy.mode === 'SKIP_AND_EXTEND' ? nextMonth([context.period, tails.get(source.loanId)!].sort().at(-1)!) : null })), manualDeferrals: [] })
-  return { version: PAYROLL_INSTALLMENT_PLAN_VERSION, policy, context: plain(context), sources, excludedClaimedIds, budget, allocation }
+  return { version: PAYROLL_INSTALLMENT_PLAN_VERSION, policy, context: plain(context), sources, excludedClaimedIds,
+    ...(catchUpDeferredIds === undefined ? {} : { catchUpDeferredIds }), budget, allocation }
   } catch (error) {
     if (error instanceof PayrollInstallmentAllocationError || error instanceof PayrollInstallmentBudgetError) {
       throw new ConflictException({ code: error.code, message: `تعذر حساب أقساط الموظف: ${error.message}`, path: error.path })
@@ -243,17 +269,60 @@ export async function deferLoanInstallment(em: EntityManager, input: { employeeI
 }
 
 export async function settleLoanEarly(em: EntityManager, input: { employeeId: number; loanId: number; requestId: number; actorId: number | null; reason: string }) {
+  const result = await repayLoanEarly(em, { ...input, amount: null, reference: `REQ-${input.requestId}`, method: 'OTHER', mode: 'FULL' })
+  return { eventId: result.eventId }
+}
+
+const nextDay = (date: string) => { const value = new Date(`${date}T00:00:00Z`); value.setUTCDate(value.getUTCDate() + 1); return value.toISOString().slice(0, 10) }
+
+/**
+ * AD-14 (C6): سداد مبكر كلي أو جزئي خارج المسير بمبلغ ومرجع (إيصال/تحويل).
+ * الجزئي لا يعيد تشكيل الأقساط المسددة: القسط الذي يُسدد جزئيًا يصبح PARTIAL وابنه يحمل الباقي في اليوم التالي
+ * لنفس موعده (نفس فترة المسير)، والمسدد بالكامل SETTLED. المرجع فريد لكل سلفة ويجعل التكرار آمنًا.
+ */
+export async function repayLoanEarly(em: EntityManager, input: { employeeId: number; loanId: number; amount: string | null; reference: string;
+  method: LoanRepaymentMethod; mode: LoanRepaymentMode; reason?: string | null; requestId: number | null; actorId: number | null }) {
   requireTransaction(em)
   await lockPayrollEmployees(em, [input.employeeId])
-  const prior = await em.getRepository(LoanInstallmentEvent).findOneBy({ actionKey: `request:${input.requestId}:early` })
-  if (prior) { if (prior.employeeId !== input.employeeId || prior.loanId !== input.loanId) throw conflict('مرجع التسوية مستخدم لسلفة أخرى'); return { eventId: prior.id } }
+  const reference = typeof input.reference === 'string' ? input.reference.trim() : ''
+  if (reference.length < 1 || reference.length > 100) throw new BadRequestException('مرجع السداد (رقم الإيصال أو التحويل) مطلوب حتى 100 حرف')
+  const reason = input.reason?.trim() || null
+  if (reason && reason.length > 500) throw new BadRequestException('سبب السداد لا يتجاوز 500 حرف')
+  const amount = input.amount === null ? null : PayrollDecimal.from(input.amount).format(2, 'HALF_UP')
+  if (input.requestId !== null) {
+    const prior = await em.getRepository(LoanInstallmentEvent).findOneBy({ actionKey: `request:${input.requestId}:early` })
+    if (prior) {
+      if (prior.employeeId !== input.employeeId || prior.loanId !== input.loanId) throw conflict('مرجع التسوية مستخدم لسلفة أخرى')
+      const row = await em.getRepository(LoanRepayment).findOneBy({ eventId: prior.id })
+      return { eventId: prior.id, repaymentId: row?.id ?? null, mode: (row?.mode ?? 'FULL') as LoanRepaymentMode, amount: row?.amount ?? null, balanceAfter: row?.balanceAfter ?? null, replayed: true }
+    }
+  }
+  const [existing] = await em.query(`SELECT [id],[employeeId],[requestId],[mode],[eventId],CONVERT(varchar(40),[amount]) AS [amount],CONVERT(varchar(40),[balanceAfter]) AS [balanceAfter]
+    FROM [loan_repayments] WHERE [loanId]=@0 AND [reference]=@1`, [input.loanId, reference])
+  if (existing) {
+    if (existing.employeeId !== input.employeeId || (amount !== null && existing.amount !== amount) || existing.requestId !== input.requestId) {
+      throw conflict('مرجع السداد مستخدم لحركة أخرى على هذه السلفة', 'LOAN_REPAYMENT_REFERENCE_USED')
+    }
+    return { eventId: existing.eventId as number, repaymentId: existing.id as number, mode: existing.mode as LoanRepaymentMode, amount: existing.amount as string, balanceAfter: existing.balanceAfter as string, replayed: true }
+  }
   const sources = (await readLoanInstallmentPositions(em, input.employeeId, input.loanId)).filter(row => row.financialStatus === 'DUE' && row.remainingAmount !== '0.00')
   if (!sources.length) throw new BadRequestException('السلفة مسددة بالفعل أو غير موجودة لهذا الموظف')
   const claims = await claimedInstallmentIds(em, input.employeeId)
   if (sources.some(source => claims.has(source.id))) throw conflict('أحد الأقساط محجوز في مسير أو تصفية؛ راجعه قبل السداد المبكر', 'LOAN_INSTALLMENT_HELD')
-  for (const source of sources) await closePosition(em, source, source.remainingAmount, '0.00', null, true)
-  await em.getRepository(Loan).update({ id: input.loanId, employeeId: input.employeeId }, { status: 'SETTLED' })
-  const recorded = await event(em, { employeeId: input.employeeId, loanId: input.loanId, installmentId: sources[0].id, actorId: input.actorId,
-    action: 'SETTLED_EARLY', actionKey: `request:${input.requestId}:early`, requestId: input.requestId, reason: input.reason || null, payload: { sources: sources.map(snapshot) } })
-  return { eventId: recorded.id }
+  const plan = planEarlyRepayment(sources, amount, input.mode)
+  for (const line of plan.lines) {
+    const source = sources.find(row => row.id === line.installmentId)!
+    if (line.carriedAmount === '0.00') await closePosition(em, source, source.remainingAmount, '0.00', null, true)
+    else await closePosition(em, source, line.paidAmount, line.carriedAmount, nextDay(source.dueDate))
+  }
+  if (plan.mode === 'FULL') await em.getRepository(Loan).update({ id: input.loanId, employeeId: input.employeeId }, { status: 'SETTLED' })
+  const recorded = await event(em, { employeeId: input.employeeId, loanId: input.loanId, installmentId: plan.lines[0].installmentId, actorId: input.actorId,
+    action: plan.mode === 'FULL' ? 'SETTLED_EARLY' : 'EARLY_REPAYMENT',
+    actionKey: input.requestId !== null ? `request:${input.requestId}:early` : `repayment:${input.loanId}:${reference}`,
+    requestId: input.requestId, reason: reason ?? (input.requestId !== null ? 'سداد سلفة مبكر معتمد' : null),
+    payload: { sources: sources.map(snapshot), plan, reference, method: input.method } })
+  const [repayment] = await em.query(`INSERT INTO [loan_repayments] ([loanId],[employeeId],[amount],[method],[mode],[reference],[reason],[requestId],[actorId],[balanceBefore],[balanceAfter],[eventId])
+    OUTPUT INSERTED.[id] VALUES(@0,@1,CAST(@2 AS decimal(18,2)),@3,@4,@5,@6,@7,@8,CAST(@9 AS decimal(18,2)),CAST(@10 AS decimal(18,2)),@11)`,
+    [input.loanId, input.employeeId, plan.amount, input.method, plan.mode, reference, reason, input.requestId, input.actorId, plan.total, plan.balanceAfter, recorded.id])
+  return { eventId: recorded.id, repaymentId: Number(repayment.id), mode: plan.mode, amount: plan.amount, balanceAfter: plan.balanceAfter, replayed: false }
 }

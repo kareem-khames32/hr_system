@@ -5,12 +5,12 @@ require('../node_modules/ts-node').register({project:path.join(__dirname,'..','t
 const ui = require('../../src/lib/employee-salary-change-api')
 const { ApiError } = require('../../src/lib/api')
 const current = () => ({basicSalary:'9000.00',housingAllowance:'1000.00',transportAllowance:'500.00',phoneAllowance:'0.00',workNatureAllowance:'0.00',otherAllowance:'250.00',currency:'EGP'})
-const context = () => ({employeeId:9,current:current(),historyRevision:3,currentSourceHash:'a'.repeat(64)})
-const evidence = () => ({effectiveDate:'2026-09-01',reason:'  قرار زيادة معتمد  ',evidenceReference:'  قرار123  ',previousEffectiveFrom:''})
-const today = '2026-09-13'
+// قاعدة المالك: تغيير الراتب يسري من راتب شهر كامل؛ الخادم يرسل شهر المسير الجاري ودورته (23 → «راتب سبتمبر» = 23/8 → 22/9).
+const context = () => ({employeeId:9,current:current(),historyRevision:3,currentSourceHash:'a'.repeat(64),cycleStartDay:23,currentPayrollPeriod:'2026-09',currentPayrollPeriodBounds:{startDate:'2026-08-23',endDate:'2026-09-22'},historyContract:'MONTHLY'})
+const evidence = () => ({effectivePayrollPeriod:'2026-09',reason:'  قرار زيادة معتمد  ',evidenceReference:'  قرار123  ',previousEffectivePayrollPeriod:''})
 const copy = value => JSON.parse(JSON.stringify(value))
 const root = path.resolve(__dirname, '../..')
-const change = (form = {...current(),basicSalary:'10000'},ctx = context(),meta = evidence()) => ui.buildEmployeeSalaryChange(ctx,form,meta,today)
+const change = (form = {...current(),basicSalary:'10000'},ctx = context(),meta = evidence()) => ui.buildEmployeeSalaryChange(ctx,form,meta)
 async function fetched(response,fn) { const original=global.fetch;let calls=[];global.fetch=async(url,options)=>{calls.push({url,options});return{ok:true,text:async()=>JSON.stringify(response)}};try{return await fn(calls)}finally{global.fetch=original} }
 
 function financialStep(extra = {}) {
@@ -36,7 +36,8 @@ test('context API binds employee and revision/hash while preserving all six exac
  await fetched(response,async calls=>{assert.deepEqual(await ui.fetchEmployeeSalaryChangeContext(9,controller.signal),response);assert.equal(calls.length,1);assert.equal(new URL(calls[0].url).pathname,'/api/employees/9/salary-change-context');assert.equal(calls[0].options.signal,controller.signal)})
 })
 test('foreign employee, bad revision/hash, lossy money and missing current fields cannot initialize an editable salary',async()=>{
- for(const mutate of [r=>r.employeeId=10,r=>r.historyRevision=-1,r=>r.historyRevision=1.5,r=>r.historyRevision=2147483648,r=>r.currentSourceHash='bad',r=>r.current.basicSalary=9000,r=>r.current.phoneAllowance=undefined,r=>r.current.basicSalary='1e3',r=>r.current.currency={},r=>r.current=null]){
+ for(const mutate of [r=>r.employeeId=10,r=>r.historyRevision=-1,r=>r.historyRevision=1.5,r=>r.historyRevision=2147483648,r=>r.currentSourceHash='bad',r=>r.current.basicSalary=9000,r=>r.current.phoneAllowance=undefined,r=>r.current.basicSalary='1e3',r=>r.current.currency={},r=>r.current=null,
+  r=>r.cycleStartDay=0,r=>r.cycleStartDay=32,r=>delete r.cycleStartDay,r=>r.currentPayrollPeriod='2026-09-01',r=>delete r.currentPayrollPeriod]){
   const response=context();mutate(response);await fetched(response,async()=>assert.rejects(ui.fetchEmployeeSalaryChangeContext(9)))
  }
  const response=context();response.current.basicSalary='-1.00';await fetched(response,async()=>assert.deepEqual(await ui.fetchEmployeeSalaryChangeContext(9),response))
@@ -46,9 +47,9 @@ test('invalid employee ID fails before fetch and permission/conflict errors are 
  const previous=global.fetch
  try{for(const status of [403,409,503]){let calls=0;global.fetch=async()=>{calls++;return{ok:false,status,json:async()=>({message:'راجع المصدر'})}};await assert.rejects(ui.fetchEmployeeSalaryChangeContext(9),error=>error instanceof ApiError&&error.status===status);assert.equal(calls,1)}}finally{global.fetch=previous}
 })
-test('formatting-only changes do not require date/evidence or create a salary command',()=>{
+test('formatting-only changes do not require payroll month/evidence or create a salary command',()=>{
  const form={...current(),basicSalary:'09000',housingAllowance:'1000.0',phoneAllowance:'00.00'}
- assert.equal(ui.employeeSalaryChanged(context(),form),false);assert.equal(change(form,context(),{effectiveDate:'',reason:'',evidenceReference:''}),undefined)
+ assert.equal(ui.employeeSalaryChanged(context(),form),false);assert.equal(change(form,context(),{effectivePayrollPeriod:'',reason:'',evidenceReference:''}),undefined)
 })
 test('NULL is not zero and missing currency never becomes SAR on nonfinancial edit',()=>{
  const ctx=context();ctx.current.phoneAllowance=null;ctx.current.currency=null
@@ -56,54 +57,56 @@ test('NULL is not zero and missing currency never becomes SAR on nonfinancial ed
  assert.equal(ui.employeeSalaryChanged(ctx,form),false)
  assert.equal(ui.employeeSalaryChanged(ctx,{...form,phoneAllowance:'0'}),true)
  assert.equal(ui.employeeSalaryChanged(ctx,{...form,currency:'SAR'}),true)
- assert.deepEqual(ui.employeeSalaryEditPayload({phone:'010',currency:'SAR',phoneAllowance:null},ctx,form,evidence(),today),{phone:'010'})
+ assert.deepEqual(ui.employeeSalaryEditPayload({phone:'010',currency:'SAR',phoneAllowance:null},ctx,form,evidence()),{phone:'010'})
 })
 test('a genuine amount change emits only an exact frozen command and preserves all other components',()=>{
  const ctx=context(),form={...current(),basicSalary:'9999999999999999.99'},original=copy({ctx,form})
- assert.deepEqual(change(form,ctx),{expectedRevision:3,expectedCurrentSourceHash:'a'.repeat(64),effectiveDate:'2026-09-01',reason:'قرار زيادة معتمد',evidenceReference:'قرار123',salary:form})
+ assert.deepEqual(change(form,ctx),{expectedRevision:3,expectedCurrentSourceHash:'a'.repeat(64),effectivePayrollPeriod:'2026-09',reason:'قرار زيادة معتمد',evidenceReference:'قرار123',salary:form})
  assert.deepEqual({ctx,form},original)
 })
 test('nonfinancial PATCH drops all monetary fields/currency including stale top-level null or number values',()=>{
  const payload={fullName:'اسم جديد',phone:'010',basicSalary:9000,housingAllowance:null,transportAllowance:500,phoneAllowance:0,workNatureAllowance:0,otherAllowance:250,currency:'EGP',salaryChange:{forged:true}}
  const original=copy(payload)
- assert.deepEqual(ui.employeeSalaryEditPayload(payload,context(),current(),evidence(),today),{fullName:'اسم جديد',phone:'010'})
+ assert.deepEqual(ui.employeeSalaryEditPayload(payload,context(),current(),evidence()),{fullName:'اسم جديد',phone:'010'})
  assert.deepEqual(payload,original)
 })
 test('changed salary PATCH contains nested command only and preserves unrelated bank/contact fields',()=>{
- const result=ui.employeeSalaryEditPayload({phone:'010',bankName:'بنك',basicSalary:1,currency:'SAR'},context(),{...current(),basicSalary:'10000'},evidence(),today)
+ const result=ui.employeeSalaryEditPayload({phone:'010',bankName:'بنك',basicSalary:1,currency:'SAR'},context(),{...current(),basicSalary:'10000'},evidence())
  assert.deepEqual(Object.keys(result).sort(),['bankName','phone','salaryChange']);assert.equal(result.salaryChange.salary.basicSalary,'10000.00')
 })
 test('context failure permits a nonfinancial PATCH but cannot leak partial or rounded salary data',()=>{
- assert.deepEqual(ui.employeeSalaryEditPayload({phone:'010',basicSalary:1e16,currency:'SAR',otherAllowance:null,salaryChange:{}},null,current(),evidence(),today),{phone:'010'})
+ assert.deepEqual(ui.employeeSalaryEditPayload({phone:'010',basicSalary:1e16,currency:'SAR',otherAllowance:null,salaryChange:{}},null,current(),evidence()),{phone:'010'})
 })
 test('all six changed-salary values must be explicit nonnegative cents; no blank/null/fractional-cent defaults',()=>{
  for(const key of ui.EMPLOYEE_SALARY_FIELDS)for(const value of ['',null,'-0.01','0.001','1e3','10000000000000000.00'])assert.throws(()=>change({...current(),basicSalary:'10000',[key]:value}),/مكونات الأجر/)
  for(const currency of ['', 'AED', 'USD'])assert.throws(()=>change({...current(),currency}),/عملة الأجر/)
  const ctx=context();ctx.current.basicSalary='-1.00';assert.equal(change({...current(),basicSalary:'-1.00'},ctx),undefined,'unchanged legacy negative does not block personal edits')
 })
-test('date/reason/reference are required only for real salary changes and future direct edits route to requests',()=>{
- for(const meta of [{effectiveDate:''},{effectiveDate:'2026-02-29'},{effectiveDate:'0000-01-01'},{reason:''},{reason:'س'.repeat(501)},{evidenceReference:''},{evidenceReference:'م'.repeat(201)}])assert.throws(()=>change(undefined,context(),{...evidence(),...meta}))
- assert.throws(()=>change(undefined,context(),{...evidence(),effectiveDate:'2026-09-14'}),/المستقبلي.*طلب زيادة/)
- assert.equal(change(undefined,context(),{...evidence(),effectiveDate:today}).effectiveDate,today)
- assert.equal(change(undefined,context(),{...evidence(),effectiveDate:'2024-02-29'}).effectiveDate,'2024-02-29')
+test('payroll month/reason/reference are required only for real salary changes and later months route to requests',()=>{
+ for(const meta of [{effectivePayrollPeriod:''},{effectivePayrollPeriod:'2026-13'},{effectivePayrollPeriod:'0000-01'},{effectivePayrollPeriod:'2026-09-01'},{reason:''},{reason:'س'.repeat(501)},{evidenceReference:''},{evidenceReference:'م'.repeat(201)}])assert.throws(()=>change(undefined,context(),{...evidence(),...meta}))
+ assert.throws(()=>change(undefined,context(),{...evidence(),effectivePayrollPeriod:'2026-10'}),/شهر لاحق.*طلب زيادة/)
+ assert.equal(change(undefined,context(),{...evidence(),effectivePayrollPeriod:'2026-09'}).effectivePayrollPeriod,'2026-09')
+ assert.equal(change(undefined,context(),{...evidence(),effectivePayrollPeriod:'2024-02'}).effectivePayrollPeriod,'2024-02')
+ assert.equal('effectiveDate' in change(),false)
 })
-test('previous-date confirmation is optional and only legal for first history with a strictly earlier explicit date',()=>{
+test('previous-month confirmation is optional and only legal for first history with a strictly earlier explicit month',()=>{
  const ctx={...context(),historyRevision:0}
- assert.equal(change(undefined,ctx).previousEffectiveFrom,undefined)
- assert.equal(change(undefined,ctx,{...evidence(),previousEffectiveFrom:'2026-01-01'}).previousEffectiveFrom,'2026-01-01')
- for(const previousEffectiveFrom of ['2026-09-01','2026-09-02','2025-02-29'])assert.throws(()=>change(undefined,ctx,{...evidence(),previousEffectiveFrom}))
- assert.throws(()=>change(undefined,context(),{...evidence(),previousEffectiveFrom:'2026-01-01'}))
+ assert.equal(change(undefined,ctx).previousEffectivePayrollPeriod,undefined)
+ assert.equal(change(undefined,ctx,{...evidence(),previousEffectivePayrollPeriod:'2026-01'}).previousEffectivePayrollPeriod,'2026-01')
+ for(const previousEffectivePayrollPeriod of ['2026-09','2026-10','2025-13','2026-01-01'])assert.throws(()=>change(undefined,ctx,{...evidence(),previousEffectivePayrollPeriod}))
+ assert.throws(()=>change(undefined,context(),{...evidence(),previousEffectivePayrollPeriod:'2026-01'}))
+ assert.equal(ui.payrollMonthExplanation(context()),'راتب شهر 2026-09 = من 2026-08-23 إلى 2026-09-22 (الدورة تبدأ يوم 23)')
 })
 test('display total sums exact cents beyond Number without treating absent components as zero',()=>{
  const form=Object.fromEntries(ui.EMPLOYEE_SALARY_FIELDS.map(key=>[key,'0.00']));form.basicSalary='9999999999999999.99';form.housingAllowance='0.01'
  assert.equal(ui.employeeSalaryTotal(form),'10,000,000,000,000,000.00');form.phoneAllowance='';assert.equal(ui.employeeSalaryTotal(form),null)
  form.phoneAllowance='0.00';form.basicSalary='-1.00';assert.equal(ui.employeeSalaryTotal(form),'-0.99')
 })
-test('salary increase/resubmit body strips computed percentage and protected basis while allowing future date as exact text',()=>{
- const input={newSalary:'9999999999999999.99',effectiveDate:'2027-01-01',reason:'  زيادة موثقة  ',increase_pct:'999',salaryChangeBasis:'forged',salaryChangeApproval:'forged',employeeId:'88'}
- assert.deepEqual(ui.salaryIncreaseRequestPayload(input),{newSalary:'9999999999999999.99',effectiveDate:'2027-01-01',reason:'زيادة موثقة'})
+test('salary increase/resubmit body strips computed percentage, protected basis and daily date while allowing a future payroll month',()=>{
+ const input={newSalary:'9999999999999999.99',effectivePayrollPeriod:'2027-01',effectiveDate:'2027-01-01',reason:'  زيادة موثقة  ',increase_pct:'999',salaryChangeBasis:'forged',salaryChangeApproval:'forged',employeeId:'88'}
+ assert.deepEqual(ui.salaryIncreaseRequestPayload(input),{newSalary:'9999999999999999.99',effectivePayrollPeriod:'2027-01',reason:'زيادة موثقة'})
  assert.equal(input.increase_pct,'999')
- for(const extra of [{newSalary:'0.001'},{newSalary:'1e4'},{newSalary:'-1'},{effectiveDate:'2025-02-29'},{reason:''}])assert.throws(()=>ui.salaryIncreaseRequestPayload({...input,...extra}))
+ for(const extra of [{newSalary:'0.001'},{newSalary:'1e4'},{newSalary:'-1'},{effectivePayrollPeriod:'2027-01-01'},{effectivePayrollPeriod:'2027-13'},{effectivePayrollPeriod:''},{reason:''}])assert.throws(()=>ui.salaryIncreaseRequestPayload({...input,...extra}))
 })
 
 test('custom salary workflows retain required attachment and customer fields while core money bypasses numeric conversion',()=>{
@@ -111,24 +114,28 @@ test('custom salary workflows retain required attachment and customer fields whi
   {key:'reviewCount',label:'عدد المراجعات',type:'number'}, {key:'toTeamId',label:'الفريق',type:'select'},
   {key:'newSalary',label:'قديم',type:'number'}, {key:'increase_pct',type:'number'}, {key:'salaryChangeBasis',type:'text'}, {key:'salaryChangeApproval',type:'text'}]
  const fields=ui.salaryIncreaseRequestFields(configured,[{key:'attachmentUrl',label:'مرفق',type:'text'},{key:'requiredOnly',label:'توضيح مطلوب',type:'text'}])
- assert.deepEqual(fields.slice(0,3).map(f=>[f.key,f.type,f.required]),[['newSalary','text',true],['effectiveDate','date',true],['reason','text',true]])
+ assert.deepEqual(fields.slice(0,3).map(f=>[f.key,f.type,f.required]),[['newSalary','text',true],['effectivePayrollPeriod','month',true],['reason','text',true]])
+ assert.equal(fields.find(f=>f.key==='effectivePayrollPeriod').label,'يسري من راتب شهر')
  assert.deepEqual(fields.find(f=>f.key==='attachmentUrl'),{key:'attachmentUrl',label:'قرار الزيادة المرفق',type:'file',required:true})
  assert.equal(fields.find(f=>f.key==='requiredOnly').required,true)
  assert.equal(fields.some(f=>['increase_pct','salaryChangeBasis','salaryChangeApproval'].includes(f.key)),false)
- const values={newSalary:'9999999999999999.99',effectiveDate:'2027-01-01',reason:'زيادة',attachmentUrl:' upload:123 ',justification:' توضيح ',reviewCount:'2',toTeamId:'7',requiredOnly:'مستند إضافي',increase_pct:'forged',salaryChangeBasis:'forged',salaryChangeApproval:'forged'}
- assert.deepEqual(ui.salaryIncreaseRequestPayload(values,fields,['toTeamId']),{newSalary:'9999999999999999.99',effectiveDate:'2027-01-01',reason:'زيادة',attachmentUrl:'upload:123',justification:'توضيح',reviewCount:2,toTeamId:7,requiredOnly:'مستند إضافي'})
+ const values={newSalary:'9999999999999999.99',effectivePayrollPeriod:'2027-01',reason:'زيادة',attachmentUrl:' upload:123 ',justification:' توضيح ',reviewCount:'2',toTeamId:'7',requiredOnly:'مستند إضافي',increase_pct:'forged',salaryChangeBasis:'forged',salaryChangeApproval:'forged'}
+ assert.deepEqual(ui.salaryIncreaseRequestPayload(values,fields,['toTeamId']),{newSalary:'9999999999999999.99',effectivePayrollPeriod:'2027-01',reason:'زيادة',attachmentUrl:'upload:123',justification:'توضيح',reviewCount:2,toTeamId:7,requiredOnly:'مستند إضافي'})
  assert.throws(()=>ui.salaryIncreaseRequestPayload({...values,attachmentUrl:''},fields),/قرار الزيادة المرفق/)
 })
 
-test('real financial-step SSR keeps six exact text fields and initially blank effective dates for genuine change only',()=>{
+test('real financial-step SSR keeps six exact text fields and initially blank payroll months for genuine change only',()=>{
  const html=financialStep()
- assert.match(html,/موعد تطبيق تعديل الراتب/);assert.match(html,/يسري من/);assert.match(html,/value="10000.29"/)
+ assert.match(html,/موعد تطبيق تعديل الراتب/);assert.match(html,/يسري من راتب شهر/);assert.match(html,/value="10000.29"/)
  assert.equal((html.match(/inputMode="decimal"/g)??[]).length,6)
- assert.equal((html.match(/type="date"/g)??[]).length,2)
- for(const input of html.match(/<input[^>]*type="date"[^>]*>/g)??[])assert.match(input,/value=""/)
- assert.match(html,/الأجر الحالي لا يتغير قبل موعد السريان واعتماد الطلب/)
+ assert.equal((html.match(/type="month"/g)??[]).length,2);assert.doesNotMatch(html,/type="date"/)
+ for(const input of html.match(/<input[^>]*type="month"[^>]*>/g)??[])assert.match(input,/value=""/)
+ assert.match(html,/max="2026-09"/)
+ assert.match(html,/يسري على شهر المسير كاملًا بلا تقسيم داخله/);assert.match(html,/راتب شهر 2026-09 = من 2026-08-23 إلى 2026-09-22/)
+ assert.match(html,/الأجر الحالي لا يتغير قبل بداية ذلك الشهر واعتماد الطلب/)
  assert.doesNotMatch(financialStep({initial:current()}),/موعد تطبيق تعديل الراتب/)
- assert.doesNotMatch(financialStep({salaryChangeContext:context()}),/أؤكد سريان الأجر الحالي السابق/)
+ assert.doesNotMatch(financialStep({salaryChangeContext:context()}),/أؤكد أن الأجر الحالي السابق/)
+ assert.match(financialStep({salaryChangeContext:{...context(),historyContract:'DAILY'}}),/بتواريخ يومية لا تحدد شهر الراتب/)
  assert.match(html,/القيم السابقة التي ستُوثّق/);assert.match(html,/9000.00/)
 })
 
@@ -138,9 +145,9 @@ test('previous salary confirmation displays exact old values and rejects incompl
  assert.match(financialStep({salaryChangeContext:ctx}),/9999999999999999.99/)
  for(const mutate of [c=>c.current.phoneAllowance=null,c=>c.current.currency=null,c=>c.current.currency='AED',c=>c.current.basicSalary='-1.00']){
   const invalid=copy(ctx);mutate(invalid);assert.equal(ui.employeePreviousSalaryCanBeConfirmed(invalid),false)
-  assert.throws(()=>change(undefined,invalid,{...evidence(),previousEffectiveFrom:'2026-01-01'}),/الأجر السابق/)
+  assert.throws(()=>change(undefined,invalid,{...evidence(),previousEffectivePayrollPeriod:'2026-01'}),/الأجر السابق/)
   const html=financialStep({salaryChangeContext:invalid})
-  assert.match(html,/لا يمكن إثبات فترة سابقة منها/);assert.match(html,/<input type="date" disabled=""/)
+  assert.match(html,/لا يمكن إثبات فترة سابقة منها/);assert.match(html,/<input type="month" disabled=""/)
  }
 })
 

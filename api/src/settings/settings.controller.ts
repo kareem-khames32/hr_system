@@ -47,7 +47,11 @@ import type { JwtPayload } from '../auth/auth.service'
 import { captureLegacyAttendanceRuleBaselines, lockAttendanceRuleMutation } from '../attendance/attendance-rule-history'
 import { assertCalendarScope, beginCalendarChange, CalendarChangeDto, finishCalendarChange } from '../attendance/attendance-calendar-history'
 import { overtimeWageComponents } from '../payroll/overtime-financial'
-import { PAYROLL_POLICY_NULLABLE_CONFIG_KEYS, validatePayrollPolicyDefaultConfig } from '../payroll/payroll-policy-settings'
+import { PAYROLL_POLICY_CYCLE_CONFIG_KEYS, PAYROLL_POLICY_NULLABLE_CONFIG_KEYS, payrollPolicyCycleConfigError, validatePayrollPolicyDefaultConfig } from '../payroll/payroll-policy-settings'
+import { payrollDecisionConfigError } from '../payroll/payroll-decision-settings'
+import { DATA_PLACEHOLDER_REJECTED, isDataPlaceholder, withoutDataPlaceholder } from '../common/data-placeholders'
+import { deductionSettingError } from '../payroll/typed-deductions'
+import { bonusSettingError } from '../payroll/bonuses'
 
 class UpsertConfigDto {
   @IsOptional()
@@ -452,7 +456,8 @@ export class SettingsController {
     const v = (k: string) => (rows.find((r) => r.key === k)?.value ?? '').trim()
     const logo = Number(v('company.logo_file_id'))
     return {
-      name: v('company.name'),
+      // القيمة المؤقتة (الخطوة 9) = غير مضبوط، لا اسم يُطبع في رأس المستندات
+      name: withoutDataPlaceholder(v('company.name')),
       nameEn: v('company.name_en'),
       commercialRegister: v('company.commercial_register'),
       address: v('company.address'),
@@ -500,12 +505,19 @@ export class SettingsController {
     'payroll.policy.min_net_guarantee': 0,
     'payroll.policy.net_floor_pct': 0,
     'payroll.exemption_reason_min_length': 1,
+    'loan.exceptional_reason_min_length': 1,
+    'loan.first_installment_max_months_ahead': 0,
+    // C2: الخصومات المصنفة
+    'deductions.reason_min_length': 1,
+    'deductions.duplicate_window_hours': 0,
+    'deductions.bulk_max_employees': 1,
   }
 
   // مفاتيح بقائمة قيم مغلقة: leave.accrual_mode — أي قيمة أخرى كان محرك الأرصدة
   // يعاملها بصمت كـ«سنوي» (الاستحقاق كامل مقدماً)
   private static readonly ALLOWED_VALUES: Record<string, string[]> = {
     'loan.insufficient_net_behavior': ['PARTIAL_THEN_CARRY', 'SKIP_AND_EXTEND'],
+    'deductions.manager_creation_enabled': ['true', 'false'],
     'leave.accrual_mode': ['monthly', 'yearly', 'daily'],
     'payroll.exempt_overtime_eligible': ['true', 'false'],
     'payroll.exempt_unpaid_leave_deductible': ['true', 'false'],
@@ -517,6 +529,8 @@ export class SettingsController {
     'payroll.shortfall_mode': ['MINUTES', 'MULTIPLIER', 'FRACTION'],
     'payroll.attendance_overlap_policy': ['CUMULATIVE', 'MAX_OF_BOTH', 'NET_OF_LATENESS'],
     'payroll.late_deduction_enabled': ['true', 'false'],
+    // الخطوة 13: راتب شهر المسير من السجل الشهري؛ الوضع الانتقالي يوسم راتب الملف «غير موثق».
+    'payroll.salary_evidence_mode': ['MONTHLY_HISTORY', 'MONTHLY_HISTORY_OR_CURRENT_FILE'],
     'overtime.enabled': ['true', 'false'],
     // OT-05: لا يسمح مفتاح قديم بتجاوز دورة الاعتماد لأي قيد جديد.
     'overtime.biometric_requires_confirmation': ['true'],
@@ -531,9 +545,26 @@ export class SettingsController {
     // مفاتيح جديدة غير مسموحة إلا من الكود — نعدّل الموجود فقط
     const row = await this.config.findOne({ where: { key: dto.key } })
     if (!row) throw new NotFoundException(`المفتاح ${dto.key} غير معروف`)
+    // الخطوة 9 (مسار R2): القيمة المؤقتة لا تُحفظ كاسم شركة مؤكد
+    if (dto.key.startsWith('company.') && isDataPlaceholder(dto.value)) throw new BadRequestException(DATA_PLACEHOLDER_REJECTED)
     // PL-01: القيم الافتراضية للنسخ الجديدة تشترك في حدود التحقق مع إعدادات النسخة.
     const policyConfigError = validatePayrollPolicyDefaultConfig(dto.key, dto.value)
     if (policyConfigError) throw new BadRequestException(policyConfigError)
+    // الخطوة 15: دورة النسخ الجديدة متصلة؛ يوم النهاية الثابت لا ينفصل عن يوم البداية بتعديل مفتاح واحد.
+    if (PAYROLL_POLICY_CYCLE_CONFIG_KEYS.includes(dto.key)) {
+      const cycleRows = await this.config.find({ where: { key: In(PAYROLL_POLICY_CYCLE_CONFIG_KEYS) } })
+      const cycleError = payrollPolicyCycleConfigError(dto.key, dto.value, new Map(cycleRows.map(item => [item.key, item.value])))
+      if (cycleError) throw new BadRequestException(cycleError)
+    }
+    // الخطوة 12 / D1–D11: أيام الشهر 30 فقط، وحدود الساعة والدورة ولحاق الأقساط والقيم المغلقة للقرارات.
+    const decisionConfigError = payrollDecisionConfigError(dto.key, dto.value)
+    if (decisionConfigError) throw new BadRequestException(decisionConfigError)
+    // C2: مفاتيح deductions.* بحدودها الدنيا والعليا وقيمها المغلقة (نفس ما يقرؤه الخادم)
+    const deductionConfigError = deductionSettingError(dto.key, dto.value)
+    if (deductionConfigError) throw new BadRequestException(deductionConfigError)
+    // C4: مفاتيح bonuses.* بنفس النمط
+    const bonusConfigError = bonusSettingError(dto.key, dto.value)
+    if (bonusConfigError) throw new BadRequestException(bonusConfigError)
     // تحقق المفاتيح الرقمية الحرجة: رقم صالح ≥ الحد الأدنى
     const min = SettingsController.NUMERIC_MIN[dto.key]
     const nullablePolicyValue = PAYROLL_POLICY_NULLABLE_CONFIG_KEYS.has(dto.key) && dto.value === 'null'
@@ -543,6 +574,13 @@ export class SettingsController {
         throw new BadRequestException(
           `قيمة «${dto.key}» يجب أن تكون رقماً${min > 0 ? ` لا يقل عن ${min}` : ' غير سالب'}`
         )
+      }
+    }
+    // C6: إعدادات السلف أعداد صحيحة بحدود يقرؤها الخادم نفسها
+    if (['loan.exceptional_reason_min_length', 'loan.first_installment_max_months_ahead'].includes(dto.key)) {
+      const n = Number(dto.value)
+      if (!Number.isInteger(n) || n > (dto.key === 'loan.exceptional_reason_min_length' ? 500 : 120)) {
+        throw new BadRequestException('إعدادات السلف أعداد صحيحة: طول السبب حتى 500 حرف، وأشهر أول قسط حتى 120')
       }
     }
     if (['attendance.flex.shortfall_grace_minutes', 'attendance.flex.unpaid_break_minutes',
@@ -852,7 +890,9 @@ export class SettingsController {
 
   // destinationSupported: هل للنوع تنفيذ بعد الاعتماد؟ غير المبني لا يُفعَّل ولا يُقدَّم (REQ-3)
   private withDestinationStatus(t: RequestType) {
-    return { ...t, destinationSupported: this.destinations.supports(t) }
+    return { ...t, destinationSupported: this.destinations.supports(t),
+      // D12: نمط التنفيذ الصريح («تسجيل فقط» / تنفيذ فعلي / غير مبني)
+      executionMode: this.destinations.executionModeOf(t), executionLabel: this.destinations.executionLabelOf(t) }
   }
 
   // الوجهات المتاحة — لقائمة اختيار البانِي

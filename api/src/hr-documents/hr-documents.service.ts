@@ -18,6 +18,7 @@ import { localDateOf } from '../attendance/attendance.service'
 import { HrDocumentCategory, HrDocumentSnapshot, HrDocumentTemplate, HrDocumentTemplateRevision, HrIssuedDocument } from './hr-document.entities'
 import { HR_DOCUMENT_VARIABLES, hrContentVariables, resolveHrContent, validateHrContent, validateHrFields, validateHrValues } from './hr-document-content'
 import { assertHrDocumentAccess, assertHrDocumentFileAccess } from './hr-document-access'
+import { withoutDataPlaceholder } from '../common/data-placeholders'
 
 export interface HrDocumentInput { templateId: number; revisionId: number; employeeId?: number | null; values: Record<string, string> }
 export interface HrTemplateInput { name: string; category: HrDocumentCategory; draft: unknown; customFields?: unknown; isActive?: boolean }
@@ -135,13 +136,14 @@ export class HrDocumentsService {
     if (financial && employee && !canReadEmployeeFinance(user, employee.id)) throw new ForbiddenException('هذا القالب يتطلب صلاحية الاطلاع على البيانات المالية للموظف')
     if (!employee && [...tokens].some(key => /^(employee|contract|salary)\./.test(key))) throw new BadRequestException('هذا القالب يستخدم بيانات موظف؛ اختر الموظف أولاً')
     const config = await em.findBy(RequestsConfig, { key: In(['company.name', 'company.name_en', 'company.address', 'company.phone', 'company.commercial_register']) })
-    const company = Object.fromEntries(config.map(item => [item.key, String(item.value ?? '').trim()]))
+    // القيمة المؤقتة (ترحيل الخطوة 9) ليست بيانًا: تُعامل كفارغة فيرفض الرمز المطلوب ولا تُطبع في رأس المستند.
+    const company = Object.fromEntries(config.map(item => [item.key, withoutDataPlaceholder(item.value)]))
     const date = localDateOf(new Date())
     const values: Record<string, string> = { ...custom, date, 'document.ref': reference,
       'company.name': company['company.name'] || '', 'company.nameEn': company['company.name_en'] || '', 'company.address': company['company.address'] || '',
       'company.phone': company['company.phone'] || '', 'company.commercialRegister': company['company.commercial_register'] || '' }
     if (employee) {
-      for (const key of ['fullName', 'employeeCode', 'jobTitle', 'joinDate', 'nationalId', 'nationality', 'email', 'phone', 'address'] as const) values[`employee.${key}`] = String(employee[key] ?? '').trim()
+      for (const key of ['fullName', 'employeeCode', 'jobTitle', 'joinDate', 'nationalId', 'nationality', 'email', 'phone', 'address'] as const) values[`employee.${key}`] = withoutDataPlaceholder(employee[key])
       const typeLabels: Record<string, string> = { permanent: 'غير محدد المدة', fixed_term: 'محدد المدة', part_time: 'دوام جزئي', seasonal: 'موسمي' }
       Object.assign(values, { 'contract.startDate': employee.contractStart || '', 'contract.endDate': employee.contractEnd || '', 'contract.number': employee.contractNumber || '',
         'contract.type': typeLabels[employee.contractType] || employee.contractType || '', 'contract.durationMonths': employee.contractDurationMonths == null ? '' : String(employee.contractDurationMonths) })

@@ -22,6 +22,13 @@ async function request(user, method, route, body) {
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
   return { status: response.status, body: await response.json() }
 }
+// الخطوة 18 (B3): الاعتماد يتطلب إقرارًا بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية بنطاق المعتمد.
+async function acknowledgeUnassigned(user, runId) {
+  const report = await request(user, 'GET', `/payroll/runs/${runId}/unassigned`)
+  assert.equal(report.status, 200, JSON.stringify(report.body))
+  const ack = await request(user, 'POST', `/payroll/runs/${runId}/unassigned-ack`, { reportHash: report.body.reportHash })
+  assert.equal(ack.status, 201, JSON.stringify(ack.body))
+}
 before(async () => {
   assert.match(database, /^hr_attendance_race_test_[a-f0-9]{16}$/)
   assert.notEqual(database, env.DB_DATABASE)
@@ -40,7 +47,7 @@ before(async () => {
   base = `http://127.0.0.1:${app.getHttpServer().address().port}/api`
   const admin = email => repo('User').save({ email, displayName: 'Race test actor', passwordHash: 'test-only', role: 'super_admin', permissions: '["*"]' })
   creator = await admin('creator@attendance-race.invalid'); approver = await admin('approver@attendance-race.invalid')
-  await repo('RequestsConfig').save(Object.entries({ 'payroll.cycle_start_day': '1', 'payroll.monthly_days': '30',
+  await repo('RequestsConfig').save(Object.entries({ 'payroll.cycle_start_day': '1', 'payroll.monthly_days': '30', 'payroll.salary_evidence_mode': 'MONTHLY_HISTORY_OR_CURRENT_FILE',
     'payroll.daily_hours': '8', 'attendance.weekend_days': '', 'attendance.grace_minutes': '0',
     'payroll.late_deduction_enabled': 'true', 'payroll.shortfall_enabled': 'true', 'payroll.shortfall_mode': 'MINUTES',
     'payroll.shortfall_value': '1', 'payroll.attendance_overlap_policy': 'NET_OF_LATENESS',
@@ -85,6 +92,7 @@ test('approval holding employee-finance wins before a waiting recompute; attenda
   const calculated = await request(creator, 'POST', '/payroll/runs/calculate-defined', {
     period: '2026-07', scopeType: 'CUSTOM', employeeIds: [emp.id], name: 'اختبار الاعتماد المتزامن مع الحضور' })
   assert.equal(calculated.status, 201, JSON.stringify(calculated.body))
+  await acknowledgeUnassigned(approver, calculated.body.id)
   const beforeDay = await repo('AttendanceDay').findOneByOrFail({ employeeId: emp.id, date })
   const savedOT = await repo('OvertimeEntry').save({ employeeId: emp.id, date, source: 'PRE_REQUESTED',
     status: 'APPROVED', hoursRequested: 2, hoursActual: 2, payableHours: 2, rate: 1.5 })

@@ -15,7 +15,6 @@ import {
   Send,
   Eye,
   Edit2,
-  Download,
   Mail,
   Phone,
   Briefcase,
@@ -336,10 +335,7 @@ export default function OffersPage() {
                   <Edit2 size={16} />
                   تعديل
                 </button>
-                <button className="btn-secondary flex items-center gap-2">
-                  <Download size={16} />
-                  تحميل PDF
-                </button>
+                {/* «تحميل PDF» أُزيل: عروض التوظيف ببيانات عرض بلا مولّد PDF */}
                 {offer.status === 'draft' && (
                   <button className="btn-primary flex items-center gap-2">
                     <Send size={16} />

@@ -312,11 +312,7 @@ export default function MyCoursesPage() {
                   )}
                 </div>
                 <div className="flex items-center gap-2">
-                  {course.certificate && (
-                    <button className="p-2 bg-warning-50 rounded-lg hover:bg-warning-100" title="تحميل الشهادة">
-                      <Award size={18} className="text-warning-600" />
-                    </button>
-                  )}
+                  {/* زر «تحميل الشهادة» أُزيل: لا ملف شهادة حقيقي بعد (بيانات عرض) */}
                   <Link
                     href={`/training/${course.id}`}
                     className="btn-primary flex items-center gap-2"

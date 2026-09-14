@@ -14,6 +14,8 @@ export type ApprovalAction =
   | 'ESCALATED'
   // إلغاء آلي من النظام (approverId = 0) — مثلاً أوفرتايم مكتشف لم يعد الحساب يبرره
   | 'CANCELLED'
+  // تعذّر تنفيذ مجدول (approverId = 0) — السبب في التعليق، ويُسجَّل مرة لكل سبب جديد
+  | 'EXECUTION_FAILED'
 
 // سجل تدقيق غير قابل للتعديل — لا UPDATE ولا DELETE عليه
 @Entity('request_approvals')

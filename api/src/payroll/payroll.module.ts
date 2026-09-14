@@ -16,6 +16,7 @@ import { Leave } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { PayrollItem, PayrollRun, PayrollRunMember } from './payroll.entities'
 import { PayrollPeriodClaim, PayrollRunEvent } from './payroll-membership.entities'
+import { PayrollRunUnassignedAck } from './payroll-run-definition.entities'
 import { LoanInstallmentAllocation, LoanInstallmentEvent } from './payroll-installment-ledger.entities'
 import { LatenessTier } from './payroll-rules.entities'
 import { PayrollController } from './payroll.controller'
@@ -25,12 +26,20 @@ import { ObligationsService } from './obligations.service'
 import { PayrollRulesController } from './payroll-rules.controller'
 import { PayrollRulesService } from './payroll-rules.service'
 import { PayrollPolicy, PayrollPolicyVersion, PayrollPolicyEvent } from './payroll-policy.entities'
+import { PayrollPolicyVersionSeal } from './payroll-policy-seal.entities'
 import { PayrollPolicyController } from './payroll-policy.controller'
 import { PayrollPolicyService } from './payroll-policy.service'
 import { PayrollPolicyComponent, PayrollPolicyParameter, PayrollPolicyTier, PayrollTierSet } from './payroll-policy-definition.entities'
 import { EmployeeSalaryHistory, EmployeeSalaryHistoryVersion } from './payroll-salary-history.entities'
 import { PayrollSalaryHistoryService } from './payroll-salary-history.service'
 import { PayrollSalaryHistoryController } from './payroll-salary-history.controller'
+import { DeductionBatch, DeductionRequest, DeductionRequestEvent, DeductionType } from './typed-deductions.entities'
+import { TypedDeductionsController } from './typed-deductions.controller'
+import { TypedDeductionsService } from './typed-deductions.service'
+import { TypedDeductionsScheduler } from './typed-deductions-scheduler.service'
+import { BonusBatch, BonusRequest, BonusRequestEvent, BonusType } from './bonuses.entities'
+import { BonusesController } from './bonuses.controller'
+import { BonusesService } from './bonuses.service'
 
 @Module({
   imports: [
@@ -40,6 +49,7 @@ import { PayrollSalaryHistoryController } from './payroll-salary-history.control
       PayrollRunMember,
       PayrollPeriodClaim,
       PayrollRunEvent,
+      PayrollRunUnassignedAck,
       PayrollItem,
       Employee,
       AttendanceDay,
@@ -60,15 +70,25 @@ import { PayrollSalaryHistoryController } from './payroll-salary-history.control
       PayrollPolicy,
       PayrollPolicyVersion,
       PayrollPolicyEvent,
+      PayrollPolicyVersionSeal,
       PayrollPolicyComponent,
       PayrollPolicyParameter,
       PayrollTierSet,
       PayrollPolicyTier,
       EmployeeSalaryHistory,
       EmployeeSalaryHistoryVersion,
+      DeductionType,
+      DeductionRequest,
+      DeductionRequestEvent,
+      DeductionBatch,
+      // C4 / الخطوة 27: المكافآت
+      BonusType,
+      BonusRequest,
+      BonusRequestEvent,
+      BonusBatch,
     ]),
   ],
-  controllers: [PayrollController, ObligationsController, PayrollRulesController, PayrollPolicyController, PayrollSalaryHistoryController],
-  providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService],
+  controllers: [PayrollController, ObligationsController, PayrollRulesController, PayrollPolicyController, PayrollSalaryHistoryController, TypedDeductionsController, BonusesController],
+  providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService],
 })
 export class PayrollModule {}

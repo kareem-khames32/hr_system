@@ -1,11 +1,10 @@
 'use client'
 
-import { useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   fetchPayrollRuns,
   fetchPayrollRun,
-  calculatePayroll,
   approvePayroll,
   payPayroll,
   reopenPayroll,
@@ -14,13 +13,24 @@ import {
   can,
   fetchPayMethodReport,
   fetchBranches,
+  fetchDepartments,
+  fetchTeams,
   fetchEmployees,
   type ApiPayrollRun,
   type ApiPayrollItem,
   type ApiPayrollConflict,
   type ApiBranch,
+  type ApiDepartment,
+  type ApiTeam,
   type ApiEmployee,
 } from '@/lib/api'
+import {
+  calculatePayrollRunDraft, fetchPayrollRunMembershipPreview, MEMBERSHIP_EXCLUSION_LABELS, payrollRunErrorMessage, recalculatePayrollRun,
+  SELECTION_MODE_LABELS, type PayrollMembershipPreview, type PayrollRunWithSelection,
+} from '@/lib/payroll-runs-api'
+import { PayrollRunDefinitionPanel } from '@/components/payroll/PayrollRunDefinitionPanel'
+import { PayrollMembershipPreviewView } from '@/components/payroll/PayrollMembershipPreviewView'
+import { PayrollUnassignedPanel } from '@/components/payroll/PayrollUnassignedPanel'
 import {
   Search,
   Filter,
@@ -43,8 +53,11 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { useCurrency } from '@/lib/currency'
+import { downloadCsv, csvDateStamp } from '@/lib/csv'
 import { PayrollOvertimeBreakdown } from '@/components/PayrollOvertimeBreakdown'
 import { PayrollInstallmentBreakdown } from '@/components/PayrollInstallmentBreakdown'
+import { PayrollObligationBreakdown } from '@/components/PayrollObligationBreakdown'
+import { PayrollShadowAttendanceBreakdown } from '@/components/payroll/PayrollShadowAttendanceBreakdown'
 
 // حقل البدلات الجديد في بند المسير (ليس بعد ضمن ApiPayrollItem)
 type PayrollItemWithAllowances = ApiPayrollItem & { allowances?: number }
@@ -57,6 +70,7 @@ const payMethodLabels: Record<string, string> = {
 
 // خريطة حالة المسير في الباك إند إلى تسميات الشاشة
 const statusLabels: Record<ApiPayrollRun['status'], string> = {
+  DRAFT: 'مسودة',
   CALCULATED: 'محسوب',
   APPROVED: 'معتمد',
   PAID: 'مصروف',
@@ -66,6 +80,7 @@ const statusLabels: Record<ApiPayrollRun['status'], string> = {
 // مراحل دورة المسير الفعلية: الحساب ← الاعتماد ← الصرف
 const runStages = ['الحساب', 'الاعتماد', 'الصرف']
 const stageOfStatus: Record<ApiPayrollRun['status'], number> = {
+  DRAFT: 0,
   CALCULATED: 1,
   APPROVED: 2,
   PAID: 3,
@@ -73,6 +88,8 @@ const stageOfStatus: Record<ApiPayrollRun['status'], number> = {
 }
 
 const exclusionLabels: Record<string, string> = {
+  // الخطوات 16–17: أكواد الانتقال والاستبعاد اليدوي والحجز في مسير آخر ومشاكل البيانات
+  ...MEMBERSHIP_EXCLUSION_LABELS,
   SUSPENDED: 'الموظف موقوف',
   ARCHIVED: 'ملف الموظف مؤرشف',
   EXC_JOINS_AFTER_PERIOD: 'بداية العمل بعد نهاية الفترة',
@@ -80,6 +97,14 @@ const exclusionLabels: Record<string, string> = {
   EXC_NO_ACTIVE_EMPLOYMENT: 'لا توجد مدة عمل مستحقة داخل الفترة',
   MANUAL: 'استبعاد يدوي',
   EXC_MANUAL: 'استبعاد يدوي',
+  // الخطوة 13: راتب شهر المسير من السجل الشهري
+  NO_SALARY_DEFINED: 'لا يوجد راتب موثق لشهر المسير — أثبته «يسري من راتب شهر» من سجل الأجر',
+  SALARY_DAILY_HISTORY_ONLY: 'سجل الأجر بتواريخ يومية لا تحدد شهر الراتب — حوّله إلى شهور',
+  SALARY_PAYROLL_PERIOD_GAP: 'شهر المسير غير موثق في سجل الأجر الشهري',
+  SALARY_PAYROLL_PERIOD_INVALID: 'سجل الأجر الشهري غير صالح لهذا الشهر',
+  SALARY_HISTORY_INVALID: 'سجل الأجر لا يطابق بصمته الموثقة',
+  SALARY_HISTORY_SCHEMA_MISSING: 'ترحيل سجل الأجر غير مطبق',
+  SALARY_COMPONENT_INVALID: 'أحد مكونات راتب الملف غير صالح',
 }
 
 const errorConflicts = (error: unknown): ApiPayrollConflict[] => {
@@ -117,9 +142,16 @@ export default function PayrollPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [periodType, setPeriodType] = useState<'monthly' | 'custom'>('monthly')
   const [customPeriod, setCustomPeriod] = useState({ from: '2026-01-01', to: '2026-01-31' })
-  // مسير مستقل لكل فرع + فترة الاحتساب (YYYY-MM)
-  const [calcBranchId, setCalcBranchId] = useState<number | null>(null)
-  const [calcPeriod, setCalcPeriod] = useState(() => new Date().toISOString().slice(0, 7))
+  // الخطوة 16: «مسير جديد» (تعريف مسودة) منفصل عن «احتساب المسودة» و«إعادة حساب مسير»
+  const [departments, setDepartments] = useState<ApiDepartment[]>([])
+  const [teams, setTeams] = useState<ApiTeam[]>([])
+  const [showDefinition, setShowDefinition] = useState(false)
+  const [editingDraft, setEditingDraft] = useState<PayrollRunWithSelection | null>(null)
+  const [draftPreview, setDraftPreview] = useState<PayrollMembershipPreview | null>(null)
+  const [draftPreviewError, setDraftPreviewError] = useState('')
+  // الخطوة 18: الاعتماد متاح فقط بعد إقرار ساري بتقرير «موظفون بلا مسير»
+  const [unassignedAckCurrent, setUnassignedAckCurrent] = useState(false)
+  const handleAckChange = useCallback((current: boolean) => setUnassignedAckCurrent(current), [])
 
   const loadDetail = async (id: number) => {
     const request = ++detailRequest.current
@@ -155,8 +187,10 @@ export default function PayrollPage() {
         setRuns(runsData)
         setBranches(branchesData)
         setEmployees(employeesData)
-        if (branchesData.length > 0) setCalcBranchId(branchesData[0].id)
-        if (runsData.length > 0) loadDetail(runsData[0].id)
+        // رابط «المسير #…» من المعاينة يفتح المسير المطلوب مباشرة
+        const wanted = typeof window === 'undefined' ? 0 : Number(new URLSearchParams(window.location.search).get('run'))
+        const initial = runsData.find(run => run.id === wanted) ?? runsData[0]
+        if (initial) loadDetail(initial.id)
       })
       .catch((e) => {
         if (!cancelled) setError(e instanceof Error ? e.message : 'تعذر تحميل مسيرات الرواتب')
@@ -170,17 +204,38 @@ export default function PayrollPage() {
     }
   }, [])
 
+  // الفلاتر المترابطة تحتاج الأقسام والفرق؛ غيابها لا يمنع عرض المسيرات
+  useEffect(() => {
+    if (!can('payroll.calculate')) return
+    let cancelled = false
+    Promise.all([fetchDepartments(), fetchTeams()])
+      .then(([departmentRows, teamRows]) => { if (!cancelled) { setDepartments(departmentRows); setTeams(teamRows) } })
+      .catch(() => { /* الفلاتر تعرض الفروع فقط */ })
+    return () => { cancelled = true }
+  }, [])
+
   useEffect(() => {
     setCalculationReason('')
     setAllowDraftConflicts(false)
     setCalculationConflicts([])
-  }, [calcBranchId, calcPeriod])
+    setUnassignedAckCurrent(false)
+  }, [runDetail?.id, runDetail?.snapshotVersion])
 
-  const existingCalculationRun = runs.find(run => run.branchId === calcBranchId && run.period === calcPeriod &&
-    (!run.scopeType || run.scopeType === 'BRANCH') && run.status !== 'CANCELLED')
-  const calculationLocked = !!existingCalculationRun && existingCalculationRun.status !== 'CALCULATED'
-  const calculateDisabled = actionBusy || detailLoading || periodType !== 'monthly' || calcBranchId == null || !calcPeriod || calculationLocked ||
-    (!!existingCalculationRun && !calculationReason.trim())
+  // المسودة: معاينة العضوية المحفوظة (قراءة فقط) قبل «احتساب المسودة»
+  useEffect(() => {
+    setDraftPreview(null)
+    setDraftPreviewError('')
+    if (!runDetail || runDetail.status !== 'DRAFT' || !can('payroll.calculate')) return
+    let cancelled = false
+    fetchPayrollRunMembershipPreview(runDetail.id)
+      .then(preview => { if (!cancelled) setDraftPreview(preview) })
+      .catch(e => { if (!cancelled) setDraftPreviewError(payrollRunErrorMessage(e, 'تعذرت معاينة عضوية المسودة')) })
+    return () => { cancelled = true }
+  }, [runDetail])
+
+  const calculationTarget = runDetail && (runDetail.status === 'DRAFT' || runDetail.status === 'CALCULATED') ? runDetail : null
+  const calculateDisabled = actionBusy || detailLoading || !calculationTarget ||
+    (calculationTarget.status === 'CALCULATED' && !calculationReason.trim())
   const runConflicts = actionConflicts.length ? actionConflicts : runDetail?.conflicts ?? []
   const runBlocked = runDetail?.blocking === true || runConflicts.some(conflict => conflict.blocking)
 
@@ -191,16 +246,15 @@ export default function PayrollPage() {
     if (id != null && runsData.some((r) => r.id === id)) await loadDetail(id)
   }
 
+  // «احتساب المسودة» لأول مرة، أو «إعادة حساب المسير» المحسوب بسبب إلزامي — لا ينشئ أي منهما مسيرًا جديدًا
   const handleCalculate = async () => {
-    if (calculateDisabled || !can('payroll.calculate') || calcBranchId == null) return
+    if (calculateDisabled || !can('payroll.calculate') || !calculationTarget) return
     setActionBusy(true)
     setError('')
     try {
-      const run = await calculatePayroll(calcBranchId, calcPeriod, {
-        reason: calculationReason.trim() || undefined,
-        allowDraftConflicts,
-        refreshInstallmentPolicy,
-      })
+      const run = calculationTarget.status === 'DRAFT'
+        ? await calculatePayrollRunDraft(calculationTarget.id, { allowDraftConflicts })
+        : await recalculatePayrollRun(calculationTarget.id, { reason: calculationReason.trim(), allowDraftConflicts, refreshInstallmentPolicy })
       await refreshRuns(run.id)
       setCalculationReason('')
       setAllowDraftConflicts(false)
@@ -214,7 +268,7 @@ export default function PayrollPage() {
   }
 
   const handleApprove = async () => {
-    if (!runDetail || runDetail.status !== 'CALCULATED' || actionBusy || detailLoading || runBlocked || !can('payroll.approve')) return
+    if (!runDetail || runDetail.status !== 'CALCULATED' || actionBusy || detailLoading || runBlocked || !unassignedAckCurrent || !can('payroll.approve')) return
     setActionBusy(true)
     setError('')
     try {
@@ -245,7 +299,7 @@ export default function PayrollPage() {
 
   const handleRunChange = async (action: 'reopen' | 'cancel') => {
     if (!runDetail || actionBusy || detailLoading || !changeReason.trim() || !can(`payroll.${action}`)) return
-    if (runDetail.status !== (action === 'reopen' ? 'APPROVED' : 'CALCULATED')) return
+    if (action === 'reopen' ? runDetail.status !== 'APPROVED' : !['CALCULATED', 'DRAFT'].includes(runDetail.status)) return
     setActionBusy(true)
     setError('')
     try {
@@ -351,27 +405,42 @@ export default function PayrollPage() {
           <div className="flex items-center gap-3">
             <Link href="/payroll/policies" className="btn-secondary text-sm">سياسات الرواتب</Link>
             <Link href="/payroll/salary-history" className="btn-secondary text-sm">سجل الأجر المؤرخ</Link>
-            <button className="btn-secondary flex items-center gap-2">
-              <Upload size={18} />
-              استيراد
-            </button>
-            <button className="btn-secondary flex items-center gap-2">
+            {/* «استيراد» أُزيل لأنه بلا تنفيذ؛ التصدير ينتج CSV لبنود المسير المعروض بعد البحث (الخطوة 30) */}
+            <button
+              type="button"
+              onClick={() => runDetail && downloadCsv(`payroll-run-${runDetail.id}-${runDetail.period}-${csvDateStamp()}.csv`,
+                ['الرقم الوظيفي', 'الموظف', 'الأساسي', 'البدلات', 'الإضافي', 'إضافات أخرى', 'خصم التأخير', 'نقص الساعات', 'الغياب', 'بدون راتب', 'أقساط السلف', 'خصومات أخرى', 'الصافي', 'طريقة الدفع'],
+                filteredItems.map((item) => [snapshotOf(item.employeeId)?.employeeCode ?? employeeOf(item.employeeId)?.employeeCode ?? '', employeeName(item.employeeId),
+                  item.basicSalary, allowancesOf(item), item.overtimeAmount, item.otherAdditions ?? 0, item.latenessDeduction, item.shortfallDeduction ?? 0,
+                  item.absenceDeduction ?? 0, item.unpaidLeaveDeduction, item.loanInstallments, item.otherDeductions ?? 0, item.netPay,
+                  payMethodLabels[item.payMethod] ?? item.payMethod]))}
+              disabled={!runDetail || filteredItems.length === 0}
+              className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+            >
               <Download size={18} />
-              تصدير Excel
+              تصدير CSV
             </button>
             {can('payroll.calculate') && <button
-              onClick={handleCalculate}
-              disabled={calculateDisabled}
+              onClick={() => { setEditingDraft(null); setShowDefinition(true) }}
+              disabled={actionBusy}
               className="btn-primary flex items-center gap-2 disabled:opacity-50"
             >
               <Calculator size={18} />
-              احتساب المسير
+              مسير جديد
             </button>}
           </div>
         </div>
 
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
+        {/* الخطوة 16: تعريف مسير جديد أو تعديل مسودة — مع معاينة العضوية قبل الحفظ */}
+        {can('payroll.calculate') && (showDefinition || editingDraft) && (
+          <PayrollRunDefinitionPanel key={editingDraft?.id ?? 'new'} branches={branches} departments={departments} teams={teams}
+            employees={employees} currency={currency} draft={editingDraft}
+            onSaved={async run => { setShowDefinition(false); setEditingDraft(null); setError(''); await refreshRuns(run.id) }}
+            onCancel={() => { setShowDefinition(false); setEditingDraft(null) }} />
+        )}
 
         {/* Payroll Period Selector */}
         <div className="card">
@@ -452,39 +521,8 @@ export default function PayrollPage() {
                     </span>
                   </div>
                 )}
-                {/* مسير مستقل لكل فرع — احتساب مسير جديد */}
-                {can('payroll.calculate') && <div className="flex flex-wrap items-center gap-2 p-2 px-4 bg-primary-50 rounded-xl border border-primary-100">
-                  <span className="text-sm font-medium text-gray-700">مسير فرع:</span>
-                  <select
-                    value={calcBranchId ?? ''}
-                    disabled={actionBusy}
-                    onChange={(e) => setCalcBranchId(Number(e.target.value))}
-                    className="input w-56 py-1"
-                  >
-                    {branches.map((b) => (
-                      <option key={b.id} value={b.id}>
-                        {b.name}
-                      </option>
-                    ))}
-                  </select>
-                  <input
-                    type="month"
-                    value={calcPeriod}
-                    disabled={actionBusy}
-                    onChange={(e) => setCalcPeriod(e.target.value)}
-                    className="input w-40 py-1"
-                    dir="ltr"
-                  />
-                  <button
-                    onClick={handleCalculate}
-                    disabled={calculateDisabled}
-                    className="btn-primary flex items-center gap-2 text-sm py-1.5 disabled:opacity-50"
-                  >
-                    <Calculator size={16} />
-                    احتساب
-                  </button>
-                  <span className="text-xs text-primary-600">كل فرع بمسيره واعتماداته المستقلة</span>
-                </div>}
+                {/* الخطوة 16: المسير الجديد يُعرّف من «مسير جديد»؛ لا يُنشأ مسير من زر الحساب */}
+                {can('payroll.calculate') && <span className="text-xs text-primary-700">لإنشاء مسير آخر لنفس الفرع أو الشهر بمجموعة سياسة مختلفة استخدم «مسير جديد».</span>}
               </div>
             ) : (
               <div className="flex items-center gap-4 p-4 bg-blue-50 rounded-xl">
@@ -512,36 +550,38 @@ export default function PayrollPage() {
                 </div>
               </div>
             )}
-            {can('payroll.calculate') && periodType === 'monthly' && (
+            {can('payroll.calculate') && periodType === 'monthly' && calculationTarget && (
               <div className="space-y-3 border-t border-gray-100 pt-4">
-                <div>
+                <p className="text-sm font-bold text-gray-800">
+                  {calculationTarget.status === 'DRAFT' ? `احتساب مسودة المسير #${calculationTarget.id}` : `إعادة حساب المسير #${calculationTarget.id}`}
+                  {calculationTarget.name ? ` «${calculationTarget.name}»` : ''}
+                </p>
+                {calculationTarget.status === 'CALCULATED' && <div>
                   <label htmlFor="payroll-calculation-reason" className="block text-sm font-medium text-gray-700 mb-2">
-                    سبب إعادة الحساب {existingCalculationRun ? '(مطلوب)' : '(عند إعادة حساب مسير موجود)'}
+                    سبب إعادة الحساب (مطلوب)
                   </label>
                   <input id="payroll-calculation-reason" value={calculationReason}
                     onChange={e => setCalculationReason(e.target.value)} maxLength={500}
-                    disabled={actionBusy || calculationLocked} required={!!existingCalculationRun}
+                    disabled={actionBusy} required
                     placeholder="وضّح التعديل المطلوب وسبب إعادة الحساب" className="input w-full" />
-                  {existingCalculationRun && <p className="text-xs text-gray-500 mt-2">
-                    يوجد مسير #{existingCalculationRun.id} لنفس الفرع والفترة — {statusLabels[existingCalculationRun.status]}.
-                    {existingCalculationRun.status === 'APPROVED' ? ' أعد فتح المسير المعتمد أولًا من إجراءات المسير.'
-                      : existingCalculationRun.status === 'PAID' ? ' المسير المصروف مقفل ولا يمكن إعادة حسابه.'
-                      : existingCalculationRun.status === 'CANCELLED' ? ' المسير الملغى لا يقبل إعادة الحساب.'
-                      : ' سيُحفظ السبب مع نسخة الحساب الجديدة.'}
-                  </p>}
-                </div>
+                  <p className="text-xs text-gray-500 mt-2">تُعاد العضوية بالتعريف المحفوظ (مكان الموظف آخر يوم في الفترة)، ويُحفظ السبب مع نسخة الحساب الجديدة ويلزم إقرار جديد بتقرير «بلا مسير».</p>
+                </div>}
                 <label className="flex items-start gap-2 text-sm text-gray-700">
                   <input type="checkbox" checked={allowDraftConflicts}
-                    onChange={e => setAllowDraftConflicts(e.target.checked)} disabled={actionBusy || calculationLocked}
+                    onChange={e => setAllowDraftConflicts(e.target.checked)} disabled={actionBusy}
                     className="mt-1 rounded border-gray-300" />
                   حفظ مسودة للمراجعة رغم تعارضها مع مسودات أخرى
                 </label>
-                <label className="flex items-start gap-2 text-sm text-gray-700">
+                {calculationTarget.status === 'CALCULATED' && <label className="flex items-start gap-2 text-sm text-gray-700">
                   <input type="checkbox" checked={refreshInstallmentPolicy}
-                    onChange={e => setRefreshInstallmentPolicy(e.target.checked)} disabled={actionBusy || calculationLocked}
+                    onChange={e => setRefreshInstallmentPolicy(e.target.checked)} disabled={actionBusy}
                     className="mt-1 rounded border-gray-300" />
                   تطبيق إعدادات الأقساط الحالية عند إعادة الحساب بدل الاختيارات المحفوظة مع المسير
-                </label>
+                </label>}
+                <button onClick={handleCalculate} disabled={calculateDisabled} className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50">
+                  <Calculator size={16} />
+                  {calculationTarget.status === 'DRAFT' ? 'احتساب المسودة' : 'إعادة حساب المسير'}
+                </button>
                 {showConflicts(calculationConflicts, 'تعارضات محاولة الحساب')}
               </div>
             )}
@@ -619,13 +659,15 @@ export default function PayrollPage() {
               {runDetail.status === 'CALCULATED' && can('payroll.approve') && (
                 <button
                   onClick={handleApprove}
-                  disabled={actionBusy || detailLoading || runBlocked}
+                  disabled={actionBusy || detailLoading || runBlocked || !unassignedAckCurrent}
+                  title={unassignedAckCurrent ? undefined : 'أقر أولًا بتقرير «موظفون بلا مسير» أدناه'}
                   className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50"
                 >
                   <CheckCircle size={16} />
                   اعتماد المسير
                 </button>
               )}
+              {runDetail.status === 'DRAFT' && <span className="badge bg-gray-100 text-gray-700">مسودة تعريف — لم تُحتسب بعد</span>}
               {runDetail.status === 'APPROVED' && can('payroll.pay') && (
                 <button
                   onClick={handlePay}
@@ -652,12 +694,21 @@ export default function PayrollPage() {
               </li>)}</ul>
               <button onClick={() => loadDetail(runDetail.id)} disabled={detailLoading || actionBusy} className="text-sm text-primary-700 underline">تحديث حالة الإضافي</button>
             </div>}
+            {!!runDetail.periodContinuity?.length && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 my-4 space-y-2" role="status">
+              <h4 className="font-bold text-amber-900">فترة المسير لا تتجاور مع الشهر السابق أو التالي لنفس الموظفين</h4>
+              <p className="text-sm text-amber-800">بداية كل فترة يجب أن تكون اليوم التالي لنهاية السابقة. الفجوة أيام بلا مسير، والتداخل يوم يُحسب مرتين ويمنع الاعتماد. غالبًا سببه تغيير يوم بداية الدورة بعد حساب مسير سابق.</p>
+              <ul className="text-sm space-y-1">{runDetail.periodContinuity.map((issue, index) => <li key={index} className="border-t border-amber-100 pt-1">
+                {issue.kind === 'GAP' ? 'فجوة' : 'تداخل'} {issue.days} يوم ({issue.from} → {issue.to}) بين {issue.previousPeriod} و{issue.nextPeriod} مع {issue.otherRunId ? `المسير #${issue.otherRunId}` : issue.otherRunName ?? 'مسير آخر'}{issue.otherRunName && issue.otherRunId ? ` «${issue.otherRunName}»` : ''} — {issue.employeeIds.length} موظف
+              </li>)}</ul>
+            </div>}
             {runBlocked && !runConflicts.length && <p role="alert" className="p-3 mb-3 bg-red-50 text-red-700 rounded-xl text-sm">يوجد تعارض حاجب يمنع اعتماد المسير أو صرفه. راجع المسير قبل المتابعة.</p>}
             {(runBlocked || runConflicts.length > 0) && <button
               onClick={() => { setError(''); loadDetail(runDetail.id) }} disabled={actionBusy || detailLoading}
               className="btn-secondary text-sm mt-2 mb-3 disabled:opacity-50">تحديث حالة التعارضات</button>}
+            {runDetail.status === 'CALCULATED' && !unassignedAckCurrent && can('payroll.approve') && <p className="p-3 mb-3 bg-amber-50 text-amber-900 rounded-xl text-sm">
+              الاعتماد متوقف حتى الإقرار بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية (أسفل الصفحة).</p>}
             {((runDetail.status === 'APPROVED' && can('payroll.reopen')) ||
-              (runDetail.status === 'CALCULATED' && can('payroll.cancel'))) && (
+              ((runDetail.status === 'CALCULATED' || runDetail.status === 'DRAFT') && can('payroll.cancel'))) && (
               <div className="space-y-2 my-4 p-4 rounded-xl border border-gray-200 bg-gray-50">
                 <label htmlFor="payroll-change-reason" className="block text-sm font-medium text-gray-700">
                   سبب {runDetail.status === 'APPROVED' ? 'إعادة فتح المسير' : 'إلغاء المسير'} (مطلوب)
@@ -722,13 +773,48 @@ export default function PayrollPage() {
           </div>
         )}
 
+        {/* الخطوة 16/17: مسودة المسير — تعريفها ومعاينة عضويتها قبل «احتساب المسودة» */}
+        {runDetail?.status === 'DRAFT' && (() => {
+          const draft = runDetail as PayrollRunWithSelection
+          return (
+            <div className="card space-y-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <h3 className="font-bold text-gray-800">تعريف مسودة المسير #{draft.id}{draft.name ? ` «${draft.name}»` : ''}</h3>
+                  <p className="text-xs text-gray-500 mt-1">
+                    {draft.selection ? SELECTION_MODE_LABELS[draft.selection.mode] : ''}
+                    {draft.policyVersion && ` • السياسة «${draft.policyVersion.name}» نسخة ${draft.policyVersion.versionNo}`}
+                    {draft.selection && ` • استبعادات: ${draft.selection.exclusions.length}`}
+                    {draft.selection?.emptyScope && ` • نطاق فارغ مؤكد: ${draft.selection.emptyScope.reason}`}
+                  </p>
+                </div>
+                {can('payroll.calculate') && <button onClick={() => { setShowDefinition(false); setEditingDraft(draft) }} disabled={actionBusy} className="btn-secondary text-sm">تعديل التعريف</button>}
+              </div>
+              {draftPreviewError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{draftPreviewError}</p>}
+              {draftPreview ? <PayrollMembershipPreviewView preview={draftPreview} currency={currency} />
+                : !draftPreviewError && can('payroll.calculate') && <p className="text-sm text-gray-400">جارٍ تحميل معاينة العضوية…</p>}
+            </div>
+          )
+        })()}
+
+        {/* الخطوة 18: «موظفون بلا مسير» وإقراره قبل الاعتماد */}
+        {runDetail && ['CALCULATED', 'APPROVED', 'PAID'].includes(runDetail.status) && (
+          <PayrollUnassignedPanel runId={runDetail.id} snapshotVersion={runDetail.snapshotVersion ?? 0} runStatus={runDetail.status}
+            branches={branches} departments={departments} teams={teams} onAckChange={handleAckChange} />
+        )}
+
         {excludedMembers.length > 0 && (
           <div className="card border border-amber-200">
             <h3 className="font-bold text-gray-800 mb-3">المستبعدون من هذه النسخة ({excludedMembers.length})</h3>
             <div className="space-y-2 text-sm">
               {excludedMembers.map(member => <div key={member.employeeId} className="flex flex-wrap items-center justify-between gap-2 bg-amber-50 rounded-lg p-3">
                 <span className="font-medium">{employeeName(member.employeeId)} {member.snapshot?.employeeCode && `(${member.snapshot.employeeCode})`}</span>
-                <span className="text-amber-900">{member.snapshot?.manualReason || exclusionLabels[member.exclusionReason ?? ''] || member.exclusionReason || 'سبب الاستبعاد غير موثق في المسير السابق'}</span>
+                <span className="text-amber-900">
+                  {exclusionLabels[member.exclusionReason ?? ''] || member.exclusionReason || 'سبب الاستبعاد غير موثق في المسير السابق'}
+                  {member.snapshot?.manualReason && ` — ${member.snapshot.manualReason}`}
+                  {member.snapshot?.alreadyInRun && ` — ${member.snapshot.alreadyInRun.otherRunId ? `المسير #${member.snapshot.alreadyInRun.otherRunId}` : member.snapshot.alreadyInRun.name ?? 'مسير آخر'} (${statusLabels[member.snapshot.alreadyInRun.status as ApiPayrollRun['status']] ?? member.snapshot.alreadyInRun.status})`}
+                  {member.snapshot?.transferredOut && ` — آخر يوم في النطاق ${member.snapshot.transferredOut.lastInScopeDate}${member.snapshot.transferredOut.branchName ? `، مكانه آخر يوم: ${member.snapshot.transferredOut.branchName}` : ''}`}
+                </span>
               </div>)}
             </div>
           </div>
@@ -859,6 +945,13 @@ export default function PayrollPage() {
                             {snapshot?.employeeCode ?? emp?.employeeCode ?? ''}
                             {snapshot?.branchName && ` • ${snapshot.branchName}`}
                           </p>
+                          {snapshot?.salarySource && <p className={`text-xs ${snapshot.salarySource.kind === 'MONTHLY_HISTORY' ? 'text-gray-500' : 'text-amber-700'}`}
+                            title={snapshot.salarySource.warning ?? undefined}>
+                            {snapshot.salarySource.kind === 'MONTHLY_HISTORY'
+                              ? `راتب شهر ${snapshot.salarySource.referencePeriod} من السجل (يسري من ${snapshot.salarySource.effectivePayrollPeriod})`
+                              : `راتب الملف الحالي — غير موثق لشهر ${snapshot.salarySource.referencePeriod}`}
+                            {snapshot.coverDays != null && snapshot.prorataFactor != null && snapshot.prorataFactor < 1 && ` • ${snapshot.coverDays} يوم مغطى من ${snapshot.coverFrom}`}
+                          </p>}
                         </div>
                       </div>
                     </td>
@@ -894,6 +987,7 @@ export default function PayrollPage() {
                         {n(item.lateMinutes) > 0 && (
                           <span className="text-xs text-danger-600">{n(item.lateMinutes)} دقيقة</span>
                         )}
+                        <PayrollShadowAttendanceBreakdown item={item} currency={currency} compact />
                       </div>
                     </td>
                     <td className="table-cell text-center font-mono">
@@ -929,6 +1023,8 @@ export default function PayrollPage() {
                       {n(item.otherDeductions) > 0 ? (
                         <span className="text-danger-600">{n(item.otherDeductions).toLocaleString()}</span>
                       ) : '-'}
+                      {/* C2: تتبع قيود الدفتر سطرًا سطرًا (النوع والسبب والطلب وسعر اليوم) */}
+                      <PayrollObligationBreakdown item={item} currency={currency} compact />
                     </td>
                     <td className="table-cell text-center font-mono font-bold text-danger-600 bg-danger-50">
                       {totalDeductions.toLocaleString()}
@@ -969,9 +1065,14 @@ export default function PayrollPage() {
                         >
                           <Eye size={18} className="text-gray-500" />
                         </Link>
-                        <button className="p-2 hover:bg-gray-100 rounded-lg transition-colors">
+                        {/* الطباعة من صفحة القسيمة (زر كان بلا تنفيذ) */}
+                        <Link
+                          href={`/payroll/payslip/${item.id}`}
+                          title="طباعة القسيمة"
+                          className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                        >
                           <Printer size={18} className="text-gray-500" />
-                        </button>
+                        </Link>
                       </div>
                     </td>
                   </tr>
@@ -1034,23 +1135,16 @@ export default function PayrollPage() {
         <div className="card">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-4">
-              <button className="btn-secondary flex items-center gap-2">
+              {/* «ملف WPS» و«ملف GOSI» أُخفيا: لا مولّد لملفات البنك أو التأمينات بعد؛ الملخص يفتح التقارير المالية الفعلية (الخطوة 30) */}
+              <Link href="/payroll/reports" className="btn-secondary flex items-center gap-2">
                 <FileText size={18} />
                 تقرير ملخص
-              </button>
-              <button className="btn-secondary flex items-center gap-2">
-                <Download size={18} />
-                ملف WPS
-              </button>
-              <button className="btn-secondary flex items-center gap-2">
-                <FileText size={18} />
-                ملف GOSI
-              </button>
+              </Link>
             </div>
             <div className="flex items-center gap-4">
               {can('payroll.approve') && <button
                 onClick={handleApprove}
-                disabled={actionBusy || detailLoading || runDetail?.status !== 'CALCULATED' || runBlocked}
+                disabled={actionBusy || detailLoading || runDetail?.status !== 'CALCULATED' || runBlocked || !unassignedAckCurrent}
                 className="btn-success flex items-center gap-2 disabled:opacity-50"
               >
                 <Lock size={18} />

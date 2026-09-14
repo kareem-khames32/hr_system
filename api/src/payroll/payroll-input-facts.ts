@@ -1,6 +1,7 @@
 import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
 import { PayrollDecimal, PayrollDecimalError } from './payroll-decimal'
 import { PAYROLL_POLICY_SETTING_FIELDS, PayrollPolicySettings, validatePayrollPolicySettings } from './payroll-policy-settings'
+import { PayrollPeriodError, payrollPolicyPeriodBounds } from './payroll-period'
 import type { PayrollInputFactsDto } from './payroll-input-facts.dto'
 
 export const PAYROLL_INPUT_FACTS_VERSION = 'SRS_INPUT_FACTS_V2_20260914' as const
@@ -85,31 +86,15 @@ function source(value: unknown, path: string): string {
 }
 const stamp = (value: string) => Date.parse(`${value}T00:00:00.000Z`)
 const days = (from: string, to: string) => (stamp(to) - stamp(from)) / 86400000 + 1
-function lastDay(year: number, month: number): number {
-  return month === 2 ? (year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28)
-    : [4, 6, 9, 11].includes(month) ? 30 : 31
-}
-function cycleDate(year: number, month: number, requestedDay: number): string {
-  if (year < 1 || year > 9999) fail('INPUT_FACTS_PERIOD_CYCLE_MISMATCH', 'حدود الدورة المطلوبة تقع خارج نطاق التاريخ المدعوم', 'periodStart')
-  return `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(Math.min(requestedDay, lastDay(year, month))).padStart(2, '0')}`
-}
 function verifyMonthlyCycle(periodStart: string, periodEnd: string, policy: PayrollPolicySettings): void {
-  // PR-08: الشهر المرجعي هو شهر النهاية، والقص مستقل لكل طرف بعد تحديد شهره.
-  const year = Number(periodEnd.slice(0, 4)), month = Number(periodEnd.slice(5, 7))
-  let expectedStart: string, expectedEnd: string
-  if (policy.defaultPeriodType === 'CALENDAR_MONTH' || (policy.cycleStartDay === 1 && policy.cycleEndMode === 'DERIVED')) {
-    expectedStart = cycleDate(year, month, 1)
-    expectedEnd = cycleDate(year, month, lastDay(year, month))
-  } else {
-    const startDay = policy.cycleStartDay, endDay = policy.cycleEndMode === 'DERIVED' ? startDay - 1 : policy.cycleEndDay!
-    // المقارنة تسبق القص؛ 30→31 داخل فبراير يقص الطرفين، و31→30 يبقى عابرًا للشهر.
-    const crossesMonth = endDay <= startDay
-    const startMonth = crossesMonth ? (month === 1 ? 12 : month - 1) : month
-    const startYear = crossesMonth && month === 1 ? year - 1 : year
-    expectedStart = cycleDate(startYear, startMonth, startDay)
-    expectedEnd = cycleDate(year, month, endDay)
+  // PR-08 + الخطوة 14/15: الشهر المرجعي هو شهر النهاية، والحدود هي ما تشتقه المسيرات نفسها (payroll-period.ts):
+  // بداية الفترة = نهاية السابقة + يوم، فدورات 29/30/31 متجاورة بلا يوم مشترك ولا قص مستقل لكل طرف.
+  let expected: { startDate: string; endDate: string }
+  try { expected = payrollPolicyPeriodBounds(periodEnd.slice(0, 7), policy) } catch (error) {
+    if (!(error instanceof PayrollPeriodError)) throw error
+    fail('INPUT_FACTS_PERIOD_CYCLE_MISMATCH', error.code === 'PAYROLL_CYCLE_INVALID' ? error.message : 'حدود الدورة المطلوبة تقع خارج نطاق التاريخ المدعوم', 'periodStart')
   }
-  if (periodStart !== expectedStart || periodEnd !== expectedEnd) fail('INPUT_FACTS_PERIOD_CYCLE_MISMATCH', `الفترة لا تطابق دورة السياسة الشهرية؛ الفترة المطلوبة ${expectedStart} إلى ${expectedEnd}`, 'periodStart')
+  if (periodStart !== expected.startDate || periodEnd !== expected.endDate) fail('INPUT_FACTS_PERIOD_CYCLE_MISMATCH', `الفترة لا تطابق دورة السياسة الشهرية؛ الفترة المطلوبة ${expected.startDate} إلى ${expected.endDate}`, 'periodStart')
 }
 function freeze<T>(value: T): T {
   if (value !== null && typeof value === 'object') {

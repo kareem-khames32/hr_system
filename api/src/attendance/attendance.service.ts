@@ -1200,9 +1200,11 @@ export class AttendanceService {
     if (!emp) return 0
     const ymd = (dt: Date) =>
       `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
-    // ابدأ من تاريخ الالتحاق إن كان داخل المدى — لا غياب قبل التعيين
+    // ابدأ من تاريخ التعيين إن كان داخل المدى — لا غياب قبل التعيين (قاعدة المالك: تاريخ بدء العمل الفعلي
+    // إن وُجد، وإلا تاريخ الالتحاق؛ نفس أساس تغطية الراتب وattendanceEmploymentDate)
     let start = fromDate
-    if (emp.joinDate && emp.joinDate > start) start = emp.joinDate
+    const hireDate = emp.actualStartDate || emp.joinDate
+    if (hireDate && hireDate > start) start = hireDate
     // لا تتجاوز تاريخ الأرشفة إن وُجد
     let end = toDate
     if (emp.archivedAt) {

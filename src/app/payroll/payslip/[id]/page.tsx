@@ -6,9 +6,7 @@ import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
 import {
   ArrowRight,
-  Download,
   Printer,
-  Mail,
   MapPin,
   CreditCard,
   AlertTriangle,
@@ -25,6 +23,8 @@ import { useCurrency } from '@/lib/currency'
 import { PayrollAttendanceBreakdown } from '@/components/PayrollAttendanceBreakdown'
 import { PayrollOvertimeBreakdown } from '@/components/PayrollOvertimeBreakdown'
 import { PayrollInstallmentBreakdown } from '@/components/PayrollInstallmentBreakdown'
+import { PayrollObligationBreakdown } from '@/components/PayrollObligationBreakdown'
+import type { PayrollObligationDetail } from '@/lib/deductions-api'
 
 type SavedSalaryComponent = {
   code: string; nameAr: string; nameEn: string; monthlyAmount: number; earnedAmount: number
@@ -116,11 +116,14 @@ export default function PayslipPage() {
   const [branch, setBranch] = useState<ApiBranch | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // تتبع كل قيد دفتر (الخصم المصنف بنوعه وسببه وطلبه وسعر اليوم) كما يعيده الخادم مع القسيمة
+  const [obligationDetails, setObligationDetails] = useState<PayrollObligationDetail[] | null>(null)
 
   useEffect(() => {
     setLoading(true)
     Promise.all([fetchPayslip(Number(params.id)), fetchBranches().catch(() => [] as ApiBranch[])])
       .then(([data, branches]) => {
+        setObligationDetails((data as { obligationDetails?: PayrollObligationDetail[] }).obligationDetails ?? [])
         setItem(data.item)
         setRun(data.run)
         setEmployee(data.employee)
@@ -181,8 +184,8 @@ export default function PayslipPage() {
         },
         { name: 'أقساط السلف', nameEn: 'Loan Installments', amount: Number(item.loanInstallments) },
         {
-          name: 'خصومات أخرى (عهدة/غرامة/تسوية)',
-          nameEn: 'Other Deductions',
+          name: 'خصومات الدفتر (مصنفة/عهدة/استرداد) — تفصيلها أدناه',
+          nameEn: 'Ledger deductions (typed/custody/recovery)',
           amount: Number(item.otherDeductions ?? 0),
         },
       ]
@@ -215,17 +218,10 @@ export default function PayslipPage() {
             <span className="text-gray-800">قسيمة الراتب</span>
           </div>
           <div className="flex items-center gap-3">
-            <button className="btn-secondary flex items-center gap-2">
-              <Mail size={18} />
-              إرسال بالبريد
-            </button>
-            <button className="btn-secondary flex items-center gap-2">
-              <Download size={18} />
-              تحميل PDF
-            </button>
-            <button onClick={() => window.print()} className="btn-primary flex items-center gap-2">
+            {/* «إرسال بالبريد» و«تحميل PDF» أُخفيا لأنهما بلا تنفيذ؛ الطباعة تتيح الحفظ PDF من المتصفح (الخطوة 30) */}
+            <button type="button" onClick={() => window.print()} className="btn-primary flex items-center gap-2">
               <Printer size={18} />
-              طباعة
+              طباعة / حفظ PDF
             </button>
           </div>
         </div>
@@ -390,6 +386,7 @@ export default function PayslipPage() {
           {item && <PayrollAttendanceBreakdown item={item} currency={currency} />}
           {item && <PayrollOvertimeBreakdown item={item} currency={currency} />}
           {item && <PayrollInstallmentBreakdown item={item} currency={currency} />}
+          {item && <PayrollObligationBreakdown item={item} currency={currency} details={obligationDetails} />}
           {attendanceNotes.length > 0 && (
             <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6 text-sm text-gray-700 space-y-1">
               {attendanceNotes.map((note, index) => <p key={index}>{note}</p>)}

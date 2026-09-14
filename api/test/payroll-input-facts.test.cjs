@@ -216,12 +216,16 @@ test('frozen settings require complete valid values and stage zero rejects unsup
   rejected(() => build(input({ periodEnd: '2026-10-03' }), settings), 'INPUT_FACTS_PERIOD_UNSUPPORTED')
 })
 
-test('an explicitly configured short 5-to-20 monthly cycle qualifies while arbitrary short periods are rejected', () => {
+test('step 14/15: a fixed 5-to-20 (or 5-to-5) cycle leaves days without payroll and is refused; the contiguous fixed 5-to-4 cycle needs its whole month', () => {
   const short = input({ periodStart: '2026-09-05', periodEnd: '2026-09-20', coverageStart: '2026-09-05', coverageEnd: '2026-09-20', salarySegments: [segment('2026-09-05', '2026-09-20')], scheduledWorkDates: ['2026-09-05'] })
-  const cycle = { ...settings, cycleStartDay: 5, cycleEndMode: 'FIXED_DAY', cycleEndDay: 20 }
-  const result = build(short, cycle)
-  assert.equal(result.coverage.periodDays, 16); equals(result.earnedCalendar30.grossSalary, '9000')
+  // 5→20 يترك 21..4 بلا مسير، و5→5 يكرر اليوم 5 في مسيرين؛ الإعدادات نفسها غير صالحة.
+  for (const cycleEndDay of [20, 5]) rejected(() => build(short, { ...settings, cycleStartDay: 5, cycleEndMode: 'FIXED_DAY', cycleEndDay }), 'INPUT_FACTS_SETTINGS_INVALID')
+  const cycle = { ...settings, cycleStartDay: 5, cycleEndMode: 'FIXED_DAY', cycleEndDay: 4 }
+  const whole = input({ periodStart: '2026-08-05', periodEnd: '2026-09-04', coverageStart: '2026-08-05', coverageEnd: '2026-09-04', salarySegments: [segment('2026-08-05', '2026-09-04')], scheduledWorkDates: ['2026-08-05'] })
+  const result = build(whole, cycle)
+  assert.equal(result.coverage.periodDays, 31); equals(result.earnedCalendar30.grossSalary, '9000')
   assert.equal(result.periodEntitlement, 'FULL_MONTHLY_CYCLE')
+  rejected(() => build(short, cycle), 'INPUT_FACTS_PERIOD_CYCLE_MISMATCH')
   rejected(() => build(short, settings), 'INPUT_FACTS_PERIOD_CYCLE_MISMATCH')
   const single = input({ periodStart: '2026-09-10', periodEnd: '2026-09-10', coverageStart: '2026-09-10', coverageEnd: '2026-09-10', salarySegments: [segment('2026-09-10', '2026-09-10')], scheduledWorkDates: ['2026-09-10'] })
   rejected(() => build(single, settings), 'INPUT_FACTS_PERIOD_CYCLE_MISMATCH')
@@ -247,26 +251,30 @@ test('PR-08 derived and fixed 23-to-22 use end month as reference and reject mat
   }
 })
 
-test('PR-08 start/end clamping is independent for leap February and 30-day source months', () => {
+test('PR-08 + step 14: cycle 31 (derived, or fixed 30) uses payroll-period.ts bounds — no clamped day shared between months', () => {
   for (const mode of ['DERIVED', 'FIXED_DAY']) {
     const cycle = { ...settings, cycleStartDay: 31, cycleEndMode: mode, cycleEndDay: mode === 'DERIVED' ? null : 30 }
-    for (const [from, to] of [['2026-01-31', '2026-02-28'], ['2024-01-31', '2024-02-29'], ['2026-02-28', '2026-03-30'], ['2024-02-29', '2024-03-30'], ['2026-04-30', '2026-05-30']]) {
+    for (const [from, to] of [['2026-01-31', '2026-02-28'], ['2024-01-31', '2024-02-29'], ['2026-03-01', '2026-03-30'], ['2024-03-01', '2024-03-30'], ['2026-03-31', '2026-04-30'], ['2026-05-01', '2026-05-30']]) {
       const result = build(cycleInput(from, to), cycle)
       assert.equal(result.normalizedInput.periodStart, from); assert.equal(result.normalizedInput.periodEnd, to)
       equals(result.earnedCalendar30.grossSalary, '9000')
     }
-    rejected(() => build(cycleInput('2026-02-28', '2026-03-28'), cycle), 'INPUT_FACTS_PERIOD_CYCLE_MISMATCH')
+    // القص المستقل القديم كان يعيد آخر فبراير في مسير مارس (يوم محسوب في مسيرين) و30 أبريل في مسير مايو.
+    for (const [from, to] of [['2026-02-28', '2026-03-30'], ['2024-02-29', '2024-03-30'], ['2026-04-30', '2026-05-30'], ['2026-02-28', '2026-03-28']]) {
+      rejected(() => build(cycleInput(from, to), cycle), 'INPUT_FACTS_PERIOD_CYCLE_MISMATCH')
+    }
   }
 })
 
-test('PR-08 crossing decision uses configured numbers before clamping, including a collapsed in-month February cycle', () => {
+test('step 15: a fixed end day must continue the cycle — 30→31 is refused as settings, 31→30 and 30→29 follow the derived bounds', () => {
   const inMonth = { ...settings, cycleStartDay: 30, cycleEndMode: 'FIXED_DAY', cycleEndDay: 31 }
-  const result = build(cycleInput('2026-02-28', '2026-02-28'), inMonth)
-  assert.equal(result.coverage.periodDays, 1)
-  assert.equal(result.settingsUsed.cycleStartDay, 30); assert.equal(result.settingsUsed.cycleEndDay, 31)
+  rejected(() => build(cycleInput('2026-02-28', '2026-02-28'), inMonth), 'INPUT_FACTS_SETTINGS_INVALID')
   const crossing = { ...settings, cycleStartDay: 31, cycleEndMode: 'FIXED_DAY', cycleEndDay: 30 }
   rejected(() => build(cycleInput('2026-02-28', '2026-02-28'), crossing), 'INPUT_FACTS_PERIOD_CYCLE_MISMATCH')
   assert.equal(build(cycleInput('2026-01-31', '2026-02-28'), crossing).coverage.periodDays, 29)
+  const thirty = { ...settings, cycleStartDay: 30, cycleEndMode: 'FIXED_DAY', cycleEndDay: 29 }
+  assert.equal(build(cycleInput('2026-03-01', '2026-03-29'), thirty).coverage.periodDays, 29)
+  rejected(() => build(cycleInput('2026-02-28', '2026-03-29'), thirty), 'INPUT_FACTS_PERIOD_CYCLE_MISMATCH')
 })
 
 test('PR-08 year crossing follows the end-month reference without changing the calendar entitlement basis', () => {
@@ -290,20 +298,23 @@ test('Gregorian century leap rules generate 2000 February 29 and 2100 February 2
   rejected(() => build(cycleInput('2000-02-01', '2000-02-28', { hireDate: '1990-01-01' }), settings), 'INPUT_FACTS_PERIOD_CYCLE_MISMATCH')
 })
 
-test('الدورة الشاملة تسمح32تاريخًا مع راتب واحد وترفض اليوم33وتعدد قيم الراتب', () => {
+test('الدورة الشاملة 31 يومًا (5→4) تسمح بـ31 تاريخًا مع راتب واحد وترفض التكرار وتجاوز حد القائمة وتعدد قيم الراتب', () => {
+  // الخطوة 15: أطول فترة شهرية متصلة 31 يومًا؛ دورة 5→5 (32 يومًا) تكرر اليوم 5 في مسيرين فتُرفض إعداداتها.
   const date = index => new Date(Date.parse('2026-07-05T00:00:00.000Z') + index * 86400000).toISOString().slice(0, 10)
-  const scheduledWorkDates = Array.from({ length: 32 }, (_, index) => date(index))
-  const salarySegments = [segment('2026-07-05', '2026-08-05', salary('9999999999999999.99'), 'salary:2026-08')]
-  const facts = input({ periodStart: '2026-07-05', periodEnd: '2026-08-05', coverageStart: '2026-07-05', coverageEnd: '2026-08-05', salarySegments, scheduledWorkDates })
-  const cycle = { ...settings, cycleStartDay: 5, cycleEndMode: 'FIXED_DAY', cycleEndDay: 5, dailyHours: .01 }
+  const scheduledWorkDates = Array.from({ length: 31 }, (_, index) => date(index))
+  const salarySegments = [segment('2026-07-05', '2026-08-04', salary('9999999999999999.99'), 'salary:2026-08')]
+  const facts = input({ periodStart: '2026-07-05', periodEnd: '2026-08-04', coverageStart: '2026-07-05', coverageEnd: '2026-08-04', salarySegments, scheduledWorkDates })
+  const cycle = { ...settings, cycleStartDay: 5, cycleEndMode: 'FIXED_DAY', cycleEndDay: 4, dailyHours: .01 }
+  rejected(() => build(facts, { ...cycle, cycleEndDay: 5 }), 'INPUT_FACTS_SETTINGS_INVALID')
   const result = build(facts, cycle)
-  assert.equal(result.coverage.periodDays, 32); assert.equal(result.segments.length, 1); assert.equal(result.coverage.coveredScheduledDays, 32)
+  assert.equal(result.coverage.periodDays, 31); assert.equal(result.segments.length, 1); assert.equal(result.coverage.coveredScheduledDays, 31)
   equals(result.coverage.earnedCalendar30Factor, '1')
   assert.equal(result.rates.minuteRate.exact.denominator.length > 0, true)
   assert.equal(PAYROLL_INPUT_FACTS_LIMITS.salarySegments, 1)
   assert.deepEqual(validateSync(plainToInstance(PayrollInputFactsDto, facts), { whitelist: true, forbidNonWhitelisted: true }), [])
   rejected(() => build({ ...facts, salarySegments: Array(33).fill(salarySegments[0]) }, cycle), 'INPUT_FACTS_MONTHLY_SALARY_REQUIRED')
-  rejected(() => build({ ...facts, scheduledWorkDates: [...scheduledWorkDates, scheduledWorkDates[0]] }, cycle), 'INPUT_FACTS_COLLECTION_LIMIT')
+  rejected(() => build({ ...facts, scheduledWorkDates: [...scheduledWorkDates, scheduledWorkDates[0]] }, cycle), 'INPUT_FACTS_SCHEDULE_INVALID')
+  rejected(() => build({ ...facts, scheduledWorkDates: [...scheduledWorkDates, scheduledWorkDates[0], scheduledWorkDates[1]] }, cycle), 'INPUT_FACTS_COLLECTION_LIMIT')
 })
 
 test('canonical normalization sorts data and equivalent decimals without mutating or borrowing input references', () => {

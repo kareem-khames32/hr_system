@@ -4,7 +4,6 @@ import { useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import {
   Search,
-  Download,
   Eye,
   Award,
   Calendar,
@@ -14,8 +13,6 @@ import {
   Clock,
   Filter,
   FileText,
-  Share2,
-  Printer,
 } from 'lucide-react'
 
 interface Certificate {
@@ -153,10 +150,7 @@ export default function CertificatesPage() {
             <h1 className="text-2xl font-bold text-gray-800">الشهادات</h1>
             <p className="text-gray-500 mt-1">إدارة شهادات إتمام الدورات التدريبية</p>
           </div>
-          <button className="btn-primary flex items-center gap-2">
-            <Download size={18} />
-            تصدير التقرير
-          </button>
+          {/* «تصدير التقرير» أُزيل: الشهادات ببيانات عرض بلا باك ولا ملف حقيقي */}
         </div>
 
         {/* Stats */}
@@ -308,16 +302,7 @@ export default function CertificatesPage() {
                     <Eye size={16} />
                     عرض
                   </button>
-                  <button className="flex-1 btn-secondary flex items-center justify-center gap-2 text-sm py-2">
-                    <Download size={16} />
-                    تحميل
-                  </button>
-                  <button className="p-2 bg-gray-100 rounded-xl hover:bg-gray-200">
-                    <Printer size={18} className="text-gray-600" />
-                  </button>
-                  <button className="p-2 bg-gray-100 rounded-xl hover:bg-gray-200">
-                    <Share2 size={18} className="text-gray-600" />
-                  </button>
+                  {/* تحميل/طباعة/مشاركة الشهادة أُزيلت: لا ملف شهادة حقيقي بعد */}
                 </div>
               </div>
             </div>

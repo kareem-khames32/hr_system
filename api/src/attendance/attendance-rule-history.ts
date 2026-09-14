@@ -45,6 +45,15 @@ export async function resolveAttendanceRule<T extends object>(
 ): Promise<{ snapshot: T; versionId: number | null; version: number | null; effectiveFrom: string | null; legacyBaseline: boolean; unavailable?: boolean }> {
   attendanceRuleDate(date)
   const rows = await em.find(AttendanceRuleVersion, { where: { sourceType, sourceId }, order: { version: 'DESC' } })
+  return pickAttendanceRule(rows, date, fallback)
+}
+
+// اختيار النسخة السارية من صفوف مصدر واحد محمّلة مسبقًا (مرتبة أو لا) — نفس قاعدة
+// resolveAttendanceRule حرفيًا؛ القوائم الجماعية تقرأ الصفوف كلها باستعلام واحد (HRC-09)
+export function pickAttendanceRule<T extends object>(
+  loaded: AttendanceRuleVersion[], date: string, fallback: T
+): { snapshot: T; versionId: number | null; version: number | null; effectiveFrom: string | null; legacyBaseline: boolean; unavailable?: boolean } {
+  const rows = [...loaded].sort((a, b) => b.version - a.version)
   const active = rows.filter(row => row.effectiveFrom !== null && row.effectiveFrom <= date)
     .sort((a, b) => b.effectiveFrom!.localeCompare(a.effectiveFrom!) || b.version - a.version)[0]
   const row = active ?? rows.find(candidate => candidate.legacyBaseline && candidate.effectiveFrom === null)

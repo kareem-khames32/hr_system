@@ -15,6 +15,7 @@ import { OffboardingModule } from './offboarding/offboarding.module'
 import { OnboardingModule } from './onboarding/onboarding.module'
 import { FilesModule } from './files/files.module'
 import { HrDocumentsModule } from './hr-documents/hr-documents.module'
+import { LoansModule } from './loans/loans.module'
 import { DashboardController } from './dashboard/dashboard.controller'
 import { ReportsController } from './reports/reports.controller'
 import { validateEnv } from './auth/jwt-secret'
@@ -74,6 +75,7 @@ import { validateEnv } from './auth/jwt-secret'
     OnboardingModule,
     FilesModule,
     HrDocumentsModule,
+    LoansModule,
   ],
   controllers: [HealthController, DashboardController, ReportsController],
 })

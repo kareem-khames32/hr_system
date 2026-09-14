@@ -1,5 +1,6 @@
 'use client'
 
+import Link from 'next/link'
 import type { ApiOvertimeRequestDetail } from '@/lib/api'
 
 const number = (value: unknown): number | null => value == null || !Number.isFinite(Number(value)) ? null : Number(value)
@@ -78,6 +79,13 @@ export default function OvertimeRequestSummary({ overtime, reviewRequired }: {
         {evidence.flags.includes('DAILY_CAP_TRIMMED') && <p className="text-sm text-amber-800">خُفّضت الساعات المحتسبة إلى السقف اليومي؛ المدة الخام محفوظة أعلاه.</p>}
         {!!evidence.blockers.length && <ul role="alert" className="space-y-1 text-sm text-red-700">{evidence.blockers.map((blocker, index) => <li key={`${blocker.code}-${index}`}>{blocker.message}</li>)}</ul>}
       </>}
+      {overtime?.wageEvidence && !overtime.wageEvidence.ready && <div role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 space-y-1">
+        <p>يُسعَّر الإضافي عند الاعتماد النهائي على راتب شهر <span dir="ltr">{overtime.wageEvidence.wagePayrollPeriod}</span> الذي يقع فيه يوم العمل، ولا يوجد لهذا الشهر راتب موثق؛ الاعتماد النهائي سيُرفض حتى يُثبت راتب الشهر من <Link href="/payroll/salary-history" className="underline">سجل الأجر</Link>.</p>
+        {overtime.wageEvidence.message && <p className="text-xs">{overtime.wageEvidence.message}</p>}
+      </div>}
+      {overtime?.wageEvidence?.ready && overtime.wageEvidence.sourceKind === 'CURRENT_FILE_UNVERIFIED' && <p className="text-xs text-amber-700">
+        سيُسعَّر على راتب الملف غير الموثق لشهر <span dir="ltr">{overtime.wageEvidence.wagePayrollPeriod}</span> (الوضع الانتقالي لمصدر الراتب).
+      </p>}
       {amount != null && <div className="rounded-lg bg-success-50 p-3 text-success-800">
         <p className="text-sm">القيمة المثبتة عند الاعتماد</p><p className="text-lg font-bold">{amount.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
         {approval?.approvedAt && <p className="text-xs mt-1">اعتمدت في {time(approval.approvedAt)}</p>}

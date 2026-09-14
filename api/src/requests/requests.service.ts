@@ -10,6 +10,7 @@ import {
 } from '@nestjs/common'
 import { Cron } from '@nestjs/schedule'
 import { LetterTemplatesService } from '../letters/letter-templates.service'
+import { assertLetterIssuable } from '../letters/letter-issuance'
 import { InjectRepository } from '@nestjs/typeorm'
 import {
   DataSource,
@@ -60,20 +61,26 @@ import { custodyTransferTarget, finishCustodyRequest, startCustodyTransfer } fro
 import { definitionCodeOf, groupLeaveProfiles, isLeaveDefinition, isLeaveRequest, legacyLeaveCode, leaveCodeOf, normalizedLeavePayload } from '../common/leave-contract'
 import { isValidYmd } from '../offboarding/eos'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
-import { buildOvertimeApprovalSnapshot } from '../payroll/overtime-financial'
+import { buildOvertimeApprovalSnapshot, overtimeWageEvidence } from '../payroll/overtime-financial'
 import { appendOvertimeEvent, assertOvertimeSubmission, claimOvertimeDay, releaseOvertimeDayClaim } from './overtime-day-claims'
 import { OvertimeEntryEvent } from './entities/overtime-workflow.entities'
 import { getLoanInstallmentDeferralEvidence } from '../payroll/payroll-installment-ledger'
 import { assertLoanDeferralClientPayload, assertLoanReferenceId, LOAN_DEFERRAL_FIELDS, LOAN_DEFERRAL_HANDLER, LOAN_DEFERRAL_TYPE,
   LoanDeferralPayload, loanAmountThresholdMet, loanScheduleAmounts, readStoredLoanDeferralPayload, stageLoanDeferralPayload } from './loan-installment-requests'
-import { assertSalaryChangeClientPayload, assertSalaryRequestUnexecuted, isSalaryChangeType, readStoredSalaryChangePayload, SALARY_CHANGE_CLIENT_FIELDS, SALARY_CHANGE_HANDLER,
+import { assertSalaryChangeClientPayload, assertSalaryRequestUnexecuted, isSalaryChangeType, readStoredSalaryChangePayload, SALARY_CHANGE_CLIENT_FIELDS, SALARY_CHANGE_HANDLER, salaryChangeExecutionDate,
   salaryIncreaseThresholdMet, stageSalaryChangeRequest } from './salary-change-requests'
+
+import { assertLoanRequestClientPayload, EARLY_SETTLEMENT_FIELDS, isEarlySettlementType, isLoanCapRequestType, LOAN_REQUEST_CLIENT_FIELDS,
+  LOAN_REQUEST_SERVER_FIELDS, readEarlySettlementPayload, reviewLoanRequestApproval, stageLoanRequestSubmission } from '../loans/loan-request-caps'
 
 export interface ActDto {
   action: 'APPROVE' | 'REJECT' | 'RETURN'
   comment?: string
   approvedMinutes?: number
   reductionReason?: string
+  // C6 / AD-07: قرار المعتمد على سلفة تجاوزت السقف الحالي — تخفيض أو استثناء موثق
+  approvedAmount?: string
+  capOverrideReason?: string
 }
 
 // ===== القائمة البيضاء لحمولة كل نوع (SEC-REQ-2) =====
@@ -99,6 +106,8 @@ const TYPE_PAYLOAD_KEYS: Record<string, string[]> = {
   OVERTIME: ['date', 'hours'],
   // توافق شاشة المكافآت (الموظف المختار) — معالج الدفتر لا يقرؤه
   BONUS: ['employeeId'],
+  // C6 / AD-14: السداد المبكر الجزئي بمبلغ ومرجع ووسيلة وطريقة
+  EARLY_LOAN_SETTLEMENT: [...EARLY_SETTLEMENT_FIELDS],
   RETIREMENT: ['effectiveDate', 'lastWorkingDate'],
 }
 const HANDLER_PAYLOAD_KEYS: Record<string, string[]> = {
@@ -109,6 +118,18 @@ const HANDLER_PAYLOAD_KEYS: Record<string, string[]> = {
   // المسار الأمني وحده يغيّر البنك
   payroll_bank_secure: ['iban', 'bankName'],
   salary_update_history: ['newSalary', 'effectiveDate', 'reason', 'increase_pct'],
+  // C6: حقول السلفة من العميل + ما يكتبه الخادم عند التقديم والاعتماد (create/resubmit يرفضان الأخيرة من العميل)
+  loans_installments: [...LOAN_REQUEST_CLIENT_FIELDS, ...LOAN_REQUEST_SERVER_FIELDS],
+  loan_early_settlement: ['loanId', ...EARLY_SETTLEMENT_FIELDS],
+}
+
+// C4 / الخطوة 27: المكافأة لا تُقترح عبر محرك الطلبات (كانت تُقيد لمقدم الطلب لا للمستفيد، وتسمح بمكافأة للنفس، وبلا فترة).
+// أي نوع وجهته payroll_bonus يُوجَّه لموديول المكافآت؛ الطلبات القديمة المعتمدة تبقى كما هي.
+const LEGACY_BONUS_HANDLER = 'payroll_bonus'
+function assertNotLegacyBonusRoute(type: { destinationHandler?: string | null }) {
+  if (type.destinationHandler === LEGACY_BONUS_HANDLER) {
+    throw new BadRequestException({ code: 'BONUS_MODULE_REQUIRED', message: 'المكافأة تُقترح من شاشة المكافآت (الرواتب ← المكافآت) لموظف محدد وشهر مسير مستهدف وتمر بدورة اعتمادها' })
+  }
 }
 
 @Injectable()
@@ -160,6 +181,9 @@ export class RequestsService {
       })(),
       // هل للنوع تنفيذ بعد الاعتماد؟ منتقي التقديم يخفي غير المبني (REQ-3)
       destinationSupported: this.destinations.supports(t) && (t.destinationHandler !== 'letter_pdf_generator' || letterTypes.has(t.code)),
+      // D12: «تسجيل فقط» ظاهر في المنتقي بدل إخفاء النوع — الطلب المعتمد هو السجل بلا أثر آلي
+      executionMode: this.destinations.executionModeOf(t),
+      executionLabel: this.destinations.executionLabelOf(t),
       autoGeneratesPdf: t.destinationHandler === 'letter_pdf_generator'
         ? letterTypes.has(t.code)
         : t.autoGeneratesPdf,
@@ -234,11 +258,13 @@ export class RequestsService {
       if (type.code === 'OVERTIME_AUTO' || type.destinationHandler === 'overtime_auto') throw new BadRequestException('طلب الإضافي المكتشف يُنشأ من محرك الحضور فقط')
       this.assertOvertimeClientPayload(dto.payload ?? {})
     }
+    assertNotLegacyBonusRoute(type)
     // وجهة لسه متبنّتش: لا مسودة ولا تقديم — كان يُعتمد ويُقفل «مكتمل» بلا أثر (REQ-3)
     if (!this.destinations.supports(type)) {
       throw new BadRequestException(this.destinations.unsupportedMessage(type))
     }
     if (type.code === LOAN_DEFERRAL_TYPE) dto = { ...dto, payload: assertLoanDeferralClientPayload(dto.payload ?? {}, !!dto.submit) }
+    if (isLoanCapRequestType(type)) assertLoanRequestClientPayload(dto.payload)
     if (isSalaryChangeType(type)) dto = { ...dto, payload: assertSalaryChangeClientPayload(dto.payload ?? {}, !!dto.submit) }
 
     // Legacy personnel screens sent employeeId inside the payload. Resolve it as
@@ -341,7 +367,11 @@ export class RequestsService {
     this.assertPayloadKeys(type, JSON.stringify(payload))
     // التقديم المباشر: قيم البنك/المسمى قبل الحفظ — لا مسودة يتيمة (SEC-EMP-2)
     if (dto.submit) this.assertSubmitValues(type, JSON.stringify(payload))
-    if (dto.submit && type.destinationHandler === 'letter_pdf_generator') await this.letterTemplates.publishedFor(this.ds.manager, type.code)
+    if (dto.submit && type.destinationHandler === 'letter_pdf_generator') {
+      await this.letterTemplates.publishedFor(this.ds.manager, type.code)
+      // بيانات الخطاب الإلزامية تُفحص عند التقديم لا عند آخر اعتماد (الخطوة 7)
+      await assertLetterIssuable(this.ds.manager, requesterId)
+    }
 
     const emp = requester
 
@@ -390,6 +420,7 @@ export class RequestsService {
       req.definitionCode = definitionCodeOf(req)
       req.typeCode = 'LEAVE'
     }
+    assertNotLegacyBonusRoute(type)
     // وجهة لسه متبنّتش (مسودة قديمة/إعادة تقديم): لا تقديم (REQ-3)
     if (!this.destinations.supports(type)) {
       throw new BadRequestException(this.destinations.unsupportedMessage(type))
@@ -402,7 +433,11 @@ export class RequestsService {
       const payload = JSON.parse(req.payload || '{}')
       await assertExemptionOvertimeAllowed(em, req.requesterId, String(payload.date ?? ''))
     }
-    if (type.destinationHandler === 'letter_pdf_generator') await this.letterTemplates.publishedFor(em, type.code)
+    if (type.destinationHandler === 'letter_pdf_generator') {
+      await this.letterTemplates.publishedFor(em, type.code)
+      // اسم الشركة والمسمى وتاريخ التعيين قبل دخول الطلب مسار الاعتماد (الخطوة 7)
+      await assertLetterIssuable(em, req.requesterId)
+    }
     await this.assertAttachmentOwnership(req, user)
     await validateEmploymentRequest(em, req, type)
     if (type.destinationHandler === 'custody_transfer') {
@@ -767,9 +802,9 @@ export class RequestsService {
       const evidence = await getLoanInstallmentDeferralEvidence(em, { employeeId: req.requesterId, loanId: client.loanId, installmentId: client.installmentId, toPeriod: client.toPeriod })
       req.payload = JSON.stringify(stageLoanDeferralPayload(client, evidence))
     }
-    if (type.destinationHandler === 'loans_installments' && type.code !== 'EARLY_LOAN_SETTLEMENT') {
-      const payload = JSON.parse(req.payload || '{}'), schedule = loanScheduleAmounts(payload.amount, payload.months ?? 1)
-      req.payload = JSON.stringify({ ...payload, amount: schedule.amount, months: schedule.months })
+    if (isLoanCapRequestType(type)) {
+      // AD-05/07/09 (C6): السقف الفعّال ولقطته عند التقديم؛ الاستثنائية للموارد البشرية بسبب وتصنيف وشهر أول قسط.
+      req.payload = JSON.stringify(await stageLoanRequestSubmission(em, { requestId: req.id, requesterId: req.requesterId, actor: user, payload: JSON.parse(req.payload || '{}') }))
     }
     if (isSalaryChangeType(type)) req.payload = JSON.stringify(await stageSalaryChangeRequest(em, req, JSON.parse(req.payload || '{}'), user.sub))
     const { steps: resolved, chain, inactiveChain } = await this.resolveChain(type, req, em)
@@ -879,8 +914,8 @@ export class RequestsService {
     )
     for (const [year, d] of Object.entries(byYear)) {
       // سنة البداية: المتراكم حتى تاريخ البداية؛ السنة اللي بعدها: استحقاق السنة
-      // كلها (المتراكم في أول يناير صفر في الاستحقاق الشهري)
-      const onDate = year === fromDate.slice(0, 4) ? fromDate : `${year}-12-31`
+      // كلها (المتراكم في أول يناير صفر في الاستحقاق الشهري) — نفس تاريخ الخصم عند التنفيذ
+      const onDate = this.leaveBalances.balanceGateDate(year, fromDate)
       await this.leaveBalances.assertSufficient(
         req.requesterId,
         balanceType,
@@ -1043,6 +1078,15 @@ export class RequestsService {
           eventType: dto.action === 'APPROVE' ? 'STEP_APPROVED' : dto.action === 'RETURN' ? 'RETURNED' : 'REJECTED',
           stepOrder: mine.stepOrder, reason: comment, payload: { role: mine.role, approvedMinutes: entry.calculationSnapshot?.review?.approvedMinutes ?? null } })
       } else if (dto.approvedMinutes != null || dto.reductionReason != null) throw new BadRequestException('حقول دقائق الإضافي غير صالحة لهذا النوع من الطلبات')
+      // AD-07 (C6): السقف يُعاد فحصه عند كل خطوة اعتماد تحت القفل المالي؛ التجاوز = رفض أو تخفيض أو استثناء موثق.
+      const loanCapType = dto.action === 'APPROVE' || dto.approvedAmount != null || dto.capOverrideReason != null
+        ? await em.getRepository(RequestType).findOne({ where: { code: definitionCodeOf(req) } }) : null
+      if (dto.action === 'APPROVE' && isLoanCapRequestType(loanCapType)) {
+        req.payload = (await reviewLoanRequestApproval(em, { requestId: req.id, requesterId: req.requesterId, payload: req.payload, actor: user,
+          step: mine.stepOrder, approvedAmount: dto.approvedAmount ?? null, capOverrideReason: dto.capOverrideReason ?? null, comment })).payload
+      } else if (dto.approvedAmount != null || dto.capOverrideReason != null) {
+        throw new BadRequestException('تخفيض المبلغ أو استثناء السقف متاح مع اعتماد طلب سلفة فقط')
+      }
 
       // إعادة فحص الرصيد قبل الاعتماد النهائي (LEV-3): الرصيد ممكن يكون اتسحب من
       // ساعة التقديم. قبل سجل التدقيق عشان الرفض مايسيبش سجل «معتمد» من غير أثر
@@ -1346,6 +1390,7 @@ export class RequestsService {
       }
       if (payload) {
         if (this.isOvertimeRequest(req, em)) this.assertOvertimeClientPayload(payload)
+        if (isLoanCapRequestType(type)) assertLoanRequestClientPayload(payload)
         if (req.typeCode === LOAN_DEFERRAL_TYPE) {
           payload = assertLoanDeferralClientPayload(payload, false)
           const before = readStoredLoanDeferralPayload(JSON.parse(req.payload || '{}'))
@@ -1365,6 +1410,7 @@ export class RequestsService {
       }
       // القائمة البيضاء قبل الحفظ — المرفوض لا يُخزَّن ولا يُسقط المُرجَع لمسودة (SEC-REQ-2)
       if (isLeaveDefinition(type)) req.payload = JSON.stringify(this.leavePayload(type, JSON.parse(req.payload || '{}')))
+      assertNotLegacyBonusRoute(type)
       // وجهة لسه متبنّتش: قبل الحفظ عشان المُرجَع مايقعش لمسودة (REQ-3)
       if (!this.destinations.supports(type)) {
         throw new BadRequestException(this.destinations.unsupportedMessage(type))
@@ -1669,7 +1715,11 @@ export class RequestsService {
     const events = await this.ds.getRepository(OvertimeEntryEvent).find({ where: { entryId: entry.id }, order: { id: 'ASC' } })
     const saved = entry.calculationSnapshot
     const approved = saved?.approval
+    // الخطوة 13: جاهزية راتب شهر يوم العمل قبل الاعتماد النهائي، حتى لا يُفاجأ المعتمد الأخير بـOT_SALARY_MONTH_EVIDENCE_REQUIRED.
+    const wageEvidence = !approved && ['DETECTED', 'SUBMITTED'].includes(entry.status)
+      ? await this.ds.transaction(em => overtimeWageEvidence(em, entry.employeeId, entry.date)).catch(() => null) : null
     return { ...full, overtime: {
+      wageEvidence,
       id: entry.id, requestId: entry.requestId, date: entry.date, status: entry.status, source: entry.source,
       hoursRequested: entry.hoursRequested, hoursActual: entry.hoursActual, approvedMinutes: entry.approvedMinutes,
       amountSnapshot: entry.amountSnapshot, hourlyRateSnapshot: entry.hourlyRateSnapshot, originalPeriod: entry.originalPeriod,
@@ -1821,13 +1871,31 @@ export class RequestsService {
   }
 
   // ===== تنفيذ النقل المجدول بتاريخ السريان (يومي) =====
+  // النقل المكرر لنفس الموظف (أكثر من نقل مجدول — كل واحد كان يوقف الآخر للأبد): الأول
+  // بالترتيب (الأقدم تسجيلًا) وحده يبقى للتنفيذ والباقي يُلغى بسبب ظاهر على طلبه، وأي
+  // تعذّر تنفيذ يُسجَّل على الطلب (مرة لكل سبب) ويصل للموارد البشرية (الخطوة 7)
   async runScheduledTransfers() {
     const today = localDateOf(new Date())
-    const due = await this.ds.getRepository(Transfer).find({
+    const scheduled = await this.ds.getRepository(Transfer).find({
       where: { status: 'SCHEDULED' },
+      order: { id: 'ASC' },
     })
     let executed = 0
-    for (const t of due) {
+    let cancelled = 0
+    const firstByEmployee = new Map<number, Transfer>()
+    for (const t of scheduled) {
+      const first = firstByEmployee.get(t.employeeId)
+      if (!first) {
+        firstByEmployee.set(t.employeeId, t)
+        continue
+      }
+      try {
+        if (await this.ds.transaction(em => this.cancelDuplicateTransfer(em, t.id, first.id))) cancelled++
+      } catch (error) {
+        this.logger.error(`تعذّر إلغاء النقل المجدول المكرر #${t.id}`, (error as Error).stack)
+      }
+    }
+    for (const t of firstByEmployee.values()) {
       if (t.effectiveDate > today) continue
       try {
       const changed = await this.ds.transaction(async (em) => {
@@ -1852,6 +1920,8 @@ export class RequestsService {
         const status = error instanceof HttpException ? error.getStatus() : 500
         if (status < 500) this.logger.warn(`النقل المجدول #${t.id} ما زال بانتظار التنفيذ: ${(error as Error).message}`)
         else this.logger.error(`تعذّر تنفيذ النقل المجدول #${t.id} — ما زال بانتظار التنفيذ`, (error as Error).stack)
+        await this.recordScheduledExecutionFailure(t.requestId, t.employeeId,
+          `تعذّر تنفيذ النقل المجدول #${t.id} بتاريخ ${t.effectiveDate} — ما زال بانتظار التنفيذ: ${this.executionFailureText(error)}`)
       }
     }
     const scheduledTypes = await this.types.find({ where: { destinationHandler: In([...SCHEDULED_EMPLOYMENT_HANDLERS, SALARY_CHANGE_HANDLER]) } })
@@ -1862,15 +1932,107 @@ export class RequestsService {
       for (const req of pending) {
         try {
           const type = byCode.get(req.typeCode)!, payload = JSON.parse(req.payload || '{}')
-          const effectiveDate = isSalaryChangeType(type) ? readStoredSalaryChangePayload(payload).effectiveDate : employmentEffectiveDate(type, payload)
+          // زيادة الراتب تُنفَّذ عند بداية دورة شهر سريانها (قاعدة المالك: الشهر كامل، لا تاريخ يومي).
+          const effectiveDate = isSalaryChangeType(type) ? await salaryChangeExecutionDate(this.requests.manager, readStoredSalaryChangePayload(payload).effectivePayrollPeriod) : employmentEffectiveDate(type, payload)
           if (effectiveDate > today) continue
           if ((await this.executeDestination(req.id)).status === 'COMPLETED') employmentExecuted++
         } catch (error) {
           this.logger.error(`تعذّر تنفيذ التغيير الوظيفي المجدول #${req.id} — ما زال بانتظار التنفيذ`, (error as Error).stack)
+          await this.recordScheduledExecutionFailure(req.id, req.requesterId,
+            `تعذّر تنفيذ التغيير المجدول — ما زال بانتظار التنفيذ: ${this.executionFailureText(error)}`)
         }
       }
     }
-    return { executed, employmentExecuted }
+    return { executed, employmentExecuted, cancelled }
+  }
+
+  // نص الفشل للمستخدم: رسالة قاعدة العمل العربية كما هي، والعطل غير المتوقع بلا تفاصيل داخلية
+  private executionFailureText(error: unknown) {
+    const status = error instanceof HttpException ? error.getStatus() : 500
+    return status < 500 ? String((error as Error).message ?? '') : 'خطأ غير متوقع في الخادم — راجع سجل الخادم'
+  }
+
+  // إلغاء نقل مجدول مكرر: القفل المالي للموظف ثم صف النقل ثم الطلب (نفس ترتيب التنفيذ).
+  // لا يُلغى إلا لو النقل الأول لنفس الموظف ما زال قائمًا (مجدولًا أو منفّذًا)
+  private async cancelDuplicateTransfer(em: EntityManager, transferId: number, keptTransferId: number) {
+    const identity = await em.getRepository(Transfer).findOne({ where: { id: transferId }, select: { id: true, employeeId: true, status: true } })
+    if (!identity || identity.status !== 'SCHEDULED') return false
+    await lockPayrollEmployees(em, [identity.employeeId])
+    const transfer = await em.getRepository(Transfer).findOne({ where: { id: transferId }, lock: { mode: 'pessimistic_write' } })
+    if (!transfer || transfer.status !== 'SCHEDULED') return false
+    const kept = await em.getRepository(Transfer).findOne({ where: { id: keptTransferId } })
+    if (!kept || kept.id === transfer.id || kept.employeeId !== transfer.employeeId || !['SCHEDULED', 'EXECUTED'].includes(kept.status)) return false
+    const reason = `أُلغي آليًا: نقل مجدول مكرر للموظف نفسه — يُنفَّذ النقل الأول #${kept.id}` +
+      `${kept.requestId ? ` (الطلب #${kept.requestId})` : ''} بتاريخ ${kept.effectiveDate} فقط، ولا يُنفَّذ هذا النقل #${transfer.id} بتاريخ ${transfer.effectiveDate}`
+    transfer.status = 'CANCELLED'
+    await em.getRepository(Transfer).save(transfer)
+    if (transfer.requestId) {
+      const req = await em.getRepository(Request).findOne({ where: { id: transfer.requestId }, lock: { mode: 'pessimistic_write' } })
+      if (req) {
+        // سجل تدقيق النظام (approverId = 0) — يظهر في الطلب ولصاحبه وفي تنبيهات الموارد البشرية
+        await em.getRepository(RequestApproval).save({ requestId: req.id, step: 0, approverId: 0, action: 'CANCELLED', comment: reason })
+        if (req.status === 'IN_EXECUTION') {
+          req.status = 'CANCELLED'
+          req.completedAt = new Date()
+          await em.getRepository(Request).save(req)
+        }
+      }
+    }
+    return true
+  }
+
+  // تعذّر تنفيذ مجدول: سطر «EXECUTION_FAILED» على الطلب ما دام بانتظار التنفيذ، مرة لكل سبب
+  // مختلف (التشغيل اليومي لا يكرر نفس السطر). فشل التسجيل نفسه لا يوقف بقية المهام
+  private async recordScheduledExecutionFailure(requestId: number | null | undefined, employeeId: number, reason: string) {
+    if (!requestId || !Number.isSafeInteger(employeeId) || employeeId < 1) return
+    const comment = reason.slice(0, 1000)
+    try {
+      await this.ds.transaction(async em => {
+        await lockPayrollEmployees(em, [employeeId])
+        const req = await em.getRepository(Request).findOne({ where: { id: requestId }, lock: { mode: 'pessimistic_write' } })
+        if (!req || req.status !== 'IN_EXECUTION') return
+        const last = await em.getRepository(RequestApproval).findOne({ where: { requestId, approverId: 0, action: 'EXECUTION_FAILED' }, order: { id: 'DESC' } })
+        if (last?.comment === comment) return
+        await em.getRepository(RequestApproval).save({ requestId, step: 0, approverId: 0, action: 'EXECUTION_FAILED', comment })
+      })
+    } catch (error) {
+      this.logger.error(`تعذّر تسجيل فشل التنفيذ المجدول على الطلب #${requestId}`, (error as Error).stack)
+    }
+  }
+
+  // تنبيهات الموارد البشرية (employees.edit) في نطاق فرعها — الإشعارات مشتقة بلا جدول:
+  // طلب مجدول آخر سجل له «تعذّر التنفيذ» وما زال بانتظار التنفيذ، ونقل مكرر ألغاه النظام منذ since
+  async scheduledExecutionAlerts(user: JwtPayload, since: Date) {
+    if (!userHasPerm(user, 'employees.edit')) return []
+    const acts = await this.approvals.find({
+      where: [
+        { action: 'EXECUTION_FAILED', approverId: 0 },
+        { action: 'CANCELLED', approverId: 0, step: 0, actedAt: MoreThanOrEqual(since) },
+      ],
+      order: { id: 'DESC' },
+      take: 200,
+    })
+    if (acts.length === 0) return []
+    const ids = [...new Set(acts.map(a => a.requestId))]
+    const reqs = await this.requests.find({ where: { id: In(ids) } })
+    const cancelledTransfers = new Set((await this.ds.getRepository(Transfer).find({
+      where: { requestId: In(ids), status: 'CANCELLED' }, select: { id: true, requestId: true },
+    })).map(t => t.requestId))
+    const byId = new Map(reqs.map(r => [r.id, r]))
+    const scope = branchScopeOf(user)
+    const seen = new Set<string>()
+    const out: Array<{ act: RequestApproval; request: Request }> = []
+    for (const act of acts) {
+      const request = byId.get(act.requestId)
+      const key = `${act.requestId}:${act.action}`
+      if (!request || seen.has(key)) continue
+      if (scope !== null && request.branchId !== scope) continue
+      if (act.action === 'EXECUTION_FAILED' && request.status !== 'IN_EXECUTION') continue
+      if (act.action === 'CANCELLED' && !cancelledTransfers.has(request.id)) continue
+      seen.add(key)
+      out.push({ act, request })
+    }
+    return out.slice(0, 20)
   }
 
   // ===== أدوات وصول =====
@@ -2193,7 +2355,8 @@ export class RequestsService {
       ...(HANDLER_PAYLOAD_KEYS[type.destinationHandler] ?? []),
     ])
     // هذان الحقلان يكتبهما التقديم والاعتماد فقط؛ إنشاء العميل وإعادة تقديمه يرفضان تمريرهما.
-    if (isSalaryChangeType(type)) { allowed.add('salaryChangeBasis'); allowed.add('salaryChangeApproval') }
+    // قاعدة المالك: الزيادة تسري من راتب شهر كامل (effectivePayrollPeriod)؛ التاريخ اليومي يرفضه تحقق حمولة الأجر.
+    if (isSalaryChangeType(type)) { allowed.add('salaryChangeBasis'); allowed.add('salaryChangeApproval'); allowed.add('effectivePayrollPeriod') }
     if (this.isOvertimeDefinition(type)) {
       allowed.add('previewFingerprint')
       this.assertOvertimeClientPayload(payload ?? {}, type.code === 'OVERTIME_AUTO')
@@ -2284,7 +2447,8 @@ export class RequestsService {
       else assertSalaryChangeClientPayload(p, true)
     }
     if (type.destinationHandler === 'loans_installments' && type.code !== 'EARLY_LOAN_SETTLEMENT') loanScheduleAmounts(p.amount, p.months ?? 1)
-    if (type.code === 'EARLY_LOAN_SETTLEMENT' || type.destinationHandler === 'loan_early_settlement') assertLoanReferenceId(p.loanId)
+    // AD-14 (C6): المبلغ الفارغ = كلي؛ الجزئي يتطلب مرجعًا وطريقة صالحة
+    if (isEarlySettlementType(type)) { assertLoanReferenceId(p.loanId); readEarlySettlementPayload(p, null) }
     const required = this.requiredRequestFields(type)
     const custom: Array<{ key: string; label: string; required?: boolean; type: string; options?: string[] }> =
       type.customFields ? JSON.parse(type.customFields) : []

@@ -1,5 +1,5 @@
-import { BadRequestException, ForbiddenException, Injectable, NotFoundException } from '@nestjs/common'
-import { DataSource, EntityManager, In } from 'typeorm'
+import { BadRequestException, Injectable, NotFoundException } from '@nestjs/common'
+import { DataSource, EntityManager } from 'typeorm'
 import { mkdir, writeFile, unlink, access } from 'fs/promises'
 import { randomUUID } from 'crypto'
 import { dirname } from 'path'
@@ -9,15 +9,14 @@ import { storedPath } from '../files/storage'
 import { LetterRequest } from '../requests/entities/letter.entities'
 import { Request } from '../requests/entities/request.entity'
 import { RequestType } from '../requests/entities/request-type.entity'
-import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { assertLetterAccess } from './letter-access'
+import { assertLetterIssuable } from './letter-issuance'
 import { LetterTemplatesService } from './letter-templates.service'
 import { LetterRenderer } from './letter-renderer.service'
 import { resolveLetterContent } from './letter-template-content'
 import { IssuedLetterSnapshot } from './letter-template.entities'
 import { localDateOf } from '../attendance/attendance.service'
-import { grossMonthlySalary } from '../employees/compensation'
 
 @Injectable()
 export class LettersService {
@@ -43,12 +42,8 @@ export class LettersService {
     if (existing?.contentSnapshot) snapshot = existing.contentSnapshot
     else {
       const { template, revision } = await this.templates.publishedFor(em, type.code)
-      const config = await em.getRepository(RequestsConfig).findBy({ key: In(['company.name', 'company.name_en', 'company.address', 'company.phone', 'company.commercial_register']) })
-      const company = Object.fromEntries(config.map(c => [c.key, c.value.trim()]))
-      if (!company['company.name']) throw new BadRequestException('أكمل اسم الشركة في الإعدادات قبل إصدار الخطابات')
-      if (!employee.jobTitle || !employee.joinDate) throw new BadRequestException('أكمل المسمى الوظيفي وتاريخ التعيين قبل إصدار الخطاب')
-      const salary = grossMonthlySalary(employee)
-      if (!Number.isFinite(salary) || salary < 0) throw new BadRequestException('بيانات الراتب غير صالحة')
+      // نفس فحص التقديم (letter-issuance) — البيانات قد تتغير بين التقديم وآخر اعتماد
+      const { company, salary } = await assertLetterIssuable(em, employee.id)
       const date = localDateOf(new Date())
       const values: Record<string, string> = {
         'employee.fullName': employee.fullName, 'employee.employeeCode': employee.employeeCode,
@@ -79,10 +74,8 @@ export class LettersService {
   async fileFor(user: JwtPayload, id: number) {
     const letter = await this.ds.getRepository(LetterRequest).findOneBy({ id })
     if (!letter) throw new NotFoundException('الخطاب غير موجود')
-    const employee = await this.ds.getRepository(Employee).findOneBy({ id: letter.employeeId })
-    const owner = !!user.employeeId && user.employeeId === letter.employeeId
-    const scope = branchScopeOf(user)
-    if (!owner && !(userHasPerm(user, 'documents.manage') && employee && (scope === null || scope === employee.branchId))) throw new ForbiddenException('لا تملك صلاحية الاطلاع على هذا الخطاب')
+    // نفس سياسة /files/:id — والخطاب المالي يحتاج قراءة مالية الموظف (SEC-07)
+    await assertLetterAccess(this.ds.manager, user, letter)
     const fileId = Number(letter.generatedPdfRef?.replace(/^file:/, ''))
     const file = fileId ? await this.ds.getRepository(StoredFile).findOneBy({ id: fileId }) : null
     if (!file) throw new NotFoundException('لم يُجهّز ملف الخطاب بعد')

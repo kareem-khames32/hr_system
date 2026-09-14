@@ -84,7 +84,15 @@ async function payrollCounts() {
   for (const name of ['PayrollRun', 'PayrollRunMember', 'PayrollItem', 'PayrollPeriodClaim', 'PayrollRunEvent']) counts[name] = await repo(name).count()
   return counts
 }
+// الخطوة 18 (B3): الاعتماد يتطلب إقرارًا بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية بنطاق المعتمد.
+async function acknowledgeUnassigned(user, runId) {
+  const report = await request(user, 'GET', `/payroll/runs/${runId}/unassigned`)
+  assert.equal(report.status, 200, JSON.stringify(report.body))
+  const ack = await request(user, 'POST', `/payroll/runs/${runId}/unassigned-ack`, { reportHash: report.body.reportHash })
+  assert.equal(ack.status, 201, JSON.stringify(ack.body))
+}
 async function approve(run, user = admin) {
+  await acknowledgeUnassigned(user, run.id)
   const response = await request(user, 'POST', `/payroll/runs/${run.id}/approve`)
   assert.equal(response.status, 201, JSON.stringify(response.body))
   return response.body
@@ -96,6 +104,8 @@ async function competingDrafts(emp) {
   return [first, second]
 }
 async function assertApprovalRace(first, second, emp) {
+  await acknowledgeUnassigned(admin, first.id)
+  await acknowledgeUnassigned(secondAdmin, second.id)
   const results = await Promise.all([
     request(admin, 'POST', `/payroll/runs/${first.id}/approve`),
     request(secondAdmin, 'POST', `/payroll/runs/${second.id}/approve`),
@@ -141,6 +151,8 @@ before(async () => {
   limitedManager = await user('limited@payroll-members.invalid', 'hr_manager', branchA.id, ['payroll.view', 'payroll.calculate', 'payroll.approve'])
   await repo('RequestsConfig').save([
     { key: 'payroll.cycle_start_day', value: '23' }, { key: 'payroll.monthly_days', value: '30' },
+    // العضوية والحجز على راتب الملف؛ اختيار راتب الشهر من السجل مغطى في payroll-run-salary-period.integration.cjs.
+    { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' },
     { key: 'payroll.daily_hours', value: '8' }, { key: 'payroll.late_deduction_enabled', value: 'true' },
     { key: 'attendance.absence_penalty_days', value: '1' }, { key: 'attendance.weekend_days', value: 'FRI,SAT' },
   ])
@@ -264,7 +276,7 @@ test('PR-05: dynamic membership refreshes only on explicit recalculation while C
   assert.deepEqual(dynamicEvent.payload.diff.addedEmployeeIds, [added.id])
 })
 
-test('PR-06: draft conflict needs explicit acknowledgement, creates no claims, and approved/paid conflicts cannot be acknowledged away', async () => {
+test('PR-06: draft conflict needs explicit acknowledgement, creates no claims, and approved/paid conflicts cannot be acknowledged away (step 17: the booked employee is excluded with EXC_ALREADY_IN_RUN)', async () => {
   const emp = await employee()
   const first = await calculate([emp])
   const before = await payrollCounts()
@@ -278,10 +290,14 @@ test('PR-06: draft conflict needs explicit acknowledgement, creates no claims, a
   await approve(first)
   for (const state of ['APPROVED', 'PAID']) {
     if (state === 'PAID') assert.equal((await request(admin, 'POST', `/payroll/runs/${first.id}/pay`)).status, 201)
-    const stable = await payrollCounts()
-    const blocked = await request(admin, 'POST', '/payroll/runs/calculate-defined', definition([emp], { allowDraftConflicts: true }))
-    assert.equal(blocked.status, 409, `${state}: ${JSON.stringify(blocked.body)}`)
-    assert.deepEqual(await payrollCounts(), stable)
+    const stableClaims = await activeClaims(emp.id)
+    // الخطوة 17: الحجز المعتمد/المصروف لا يُتجاوز بخيار المسودة؛ الموظف يُستبعد بكود ورقم المسير الآخر ولا يوقف المسير.
+    const blocked = await calculate([emp], { allowDraftConflicts: true })
+    const row = member(blocked, emp)
+    assert.deepEqual([row.membershipStatus, row.exclusionReason, row.snapshot.alreadyInRun.otherRunId, row.snapshot.alreadyInRun.status],
+      ['EXCLUDED', 'EXC_ALREADY_IN_RUN', first.id, state], state)
+    assert.equal(blocked.items.length, 0, `${state}: the booked employee has no payable item`)
+    assert.deepEqual(await activeClaims(emp.id), stableClaims)
   }
 })
 
@@ -317,6 +333,8 @@ test('PR-06: adjacent non-overlapping intervals may both be approved even with t
   const [first, second] = await competingDrafts(emp)
   await repo('PayrollRun').update(first.id, { startDate: '2026-07-01', endDate: '2026-07-31' })
   await repo('PayrollRun').update(second.id, { startDate: '2026-08-01', endDate: '2026-08-31' })
+  await acknowledgeUnassigned(admin, first.id)
+  await acknowledgeUnassigned(secondAdmin, second.id)
   const result = await Promise.all([
     request(admin, 'POST', `/payroll/runs/${first.id}/approve`),
     request(secondAdmin, 'POST', `/payroll/runs/${second.id}/approve`),
@@ -346,10 +364,12 @@ test('PR-06: legacy approved items without members or claims still prevent a sec
   await repo('PayrollItem').save({ runId: legacy.id, employeeId: emp.id, basicSalary: 6000, allowances: 0, netPay: 6000, payMethod: 'transfer' })
   assert.equal(await repo('PayrollRunMember').count({ where: { runId: legacy.id } }), 0)
   assert.equal((await activeClaims(emp.id)).length, 0)
-  const before = await payrollCounts()
-  const rejected = await request(admin, 'POST', '/payroll/runs/calculate-defined', definition([emp], { allowDraftConflicts: true }))
-  assert.equal(rejected.status, 409, JSON.stringify(rejected.body))
-  assert.deepEqual(await payrollCounts(), before)
+  // الخطوة 17: البند المعتمد القديم (بلا عضوية ولا حجز) يستبعد الموظف بكود EXC_ALREADY_IN_RUN ولا يُدرجه مرة ثانية.
+  const second = await calculate([emp], { allowDraftConflicts: true })
+  const row = member(second, emp)
+  assert.deepEqual([row.membershipStatus, row.exclusionReason, row.snapshot.alreadyInRun.otherRunId], ['EXCLUDED', 'EXC_ALREADY_IN_RUN', legacy.id])
+  assert.equal(second.items.length, 0)
+  assert.equal((await activeClaims(emp.id)).length, 0)
   const read = await detail(legacy)
   assert.equal(read.snapshotVersion, 0)
   assert.ok(read.members.every(row => row.snapshot == null), 'Legacy history must not invent a snapshot from live employee data')
@@ -358,6 +378,7 @@ test('PR-06: legacy approved items without members or claims still prevent a sec
 test('PR-06 / PR-11: a SQL failure during claim insertion rolls back every claim, status and approval event', async () => {
   const first = await employee(), second = await employee()
   const run = await calculate([first, second])
+  await acknowledgeUnassigned(admin, run.id)
   const before = await detail(run)
   const oldEvents = await events(run)
   assert.equal(ds.options.database, database)

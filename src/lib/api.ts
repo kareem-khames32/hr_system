@@ -202,6 +202,9 @@ export interface ApiRequestType {
   autoGeneratesPdf: boolean; phase: string; isActive: boolean
   // false = وجهته لسه متبنّتش: لا يُقدَّم ولا يُفعَّل (REQ-3) — من الكتالوج وبانِي الطلبات
   destinationSupported?: boolean
+  // D12: RECORD_ONLY = «تسجيل فقط» (الطلب المعتمد هو السجل بلا أثر آلي)
+  executionMode?: 'RECORD_ONLY' | 'EXECUTES' | 'UNSUPPORTED'
+  executionLabel?: string | null
   definitionCode?: string
   leaveTypeCode?: LeaveTypeCode | null
   leaveProfiles?: ApiRequestType[]
@@ -228,6 +231,9 @@ export interface ApiOvertimePreview extends OvertimeEvidence {
   existingRecord: { id: number; status: OvertimeStatus; requestId: number | null } | null
 }
 export interface ApiOvertimeRequestDetail {
+  // الخطوة 13: جاهزية راتب شهر يوم العمل قبل الاعتماد النهائي (بلا مبالغ)؛ null بعد الاعتماد أو عند تعذر القراءة.
+  wageEvidence?: { wagePayrollPeriod: string; ready: boolean; code: string | null; reason: string | null; message: string | null;
+    sourceKind: 'MONTHLY_HISTORY' | 'CURRENT_FILE_UNVERIFIED' | null } | null
   id: number; requestId: number; date: string; status: OvertimeStatus; source: string
   hoursRequested: number | null; hoursActual: number | null; approvedMinutes: number | null
   amountSnapshot: number | null; hourlyRateSnapshot: number | null; originalPeriod: string | null; deferredFromRunId: number | null
@@ -336,8 +342,10 @@ export interface ApiBalance {
 }
 export interface ApiPayrollRun {
   id: number; branchId: number | null; period: string; startDate: string; endDate: string
-  status: 'CALCULATED' | 'APPROVED' | 'PAID' | 'CANCELLED'; totalNet: number
+  // الخطوة 16: DRAFT = مسودة تعريف قبل أول حساب (بلا عضوية ولا مبالغ)
+  status: 'DRAFT' | 'CALCULATED' | 'APPROVED' | 'PAID' | 'CANCELLED'; totalNet: number
   name?: string | null
+  policyId?: number | null; policyVersionId?: number | null
   scopeType?: 'COMPANY' | 'BRANCH' | 'DEPARTMENT' | 'TEAM' | 'COST_CENTER' | 'CUSTOM'
   snapshotVersion?: number
   approvedAt?: string; paidAt?: string; createdAt: string
@@ -345,6 +353,9 @@ export interface ApiPayrollRun {
   members?: ApiPayrollRunMember[]
   conflicts?: ApiPayrollConflict[]
   pendingOvertime?: Array<{ id: number; employeeId: number; date: string; status: 'DETECTED' | 'SUBMITTED'; requestId: number | null; detectedMinutes: number | null; requestedMinutes: number | null }>
+  // الخطوة 14: فجوة أو تداخل مع فترة الشهر السابق/التالي لنفس الموظفين
+  periodContinuity?: Array<{ kind: 'GAP' | 'OVERLAP'; previousPeriod: string; nextPeriod: string; from: string; to: string; days: number
+    otherRunId: number | null; otherRunName: string | null; otherStatus: string; employeeIds: number[] }>
   blocking?: boolean
 }
 export interface ApiPayrollMemberSnapshot {
@@ -357,8 +368,16 @@ export interface ApiPayrollMemberSnapshot {
   basicSalary: number | null; allowances: number | null; gross: number | null; grossEarned: number | null
   hireDate?: string | null; leaveDate?: string | null
   monthlyComponents?: number[]; earnedComponents?: number[]; salaryMode?: string | null; manualReason?: string
+  // الخطوتان 16 و17: مكان الموظف آخر يوم في الفترة، والانتقال خارج النطاق، والحجز في مسير آخر
+  orgDate?: string | null
+  transferredOut?: { lastInScopeDate: string; branchName: string | null; departmentName: string | null; teamName: string | null } | null
+  alreadyInRun?: { otherRunId: number | null; name: string | null; status: string; startDate: string; endDate: string; overlapDays: number; kind: string } | null
   salaryComponents?: Array<{ code: string; nameAr: string; nameEn: string; monthlyAmount: number; earnedAmount: number }>
   exemptDays?: number; isAttendanceExempt?: boolean
+  // الخطوة 13: مصدر راتب شهر المسير أو سبب استبعاده
+  salarySource?: { kind: 'MONTHLY_HISTORY' | 'CURRENT_FILE_UNVERIFIED'; referencePeriod: string; currency: string | null
+    effectivePayrollPeriod: string | null; effectiveToPayrollPeriod: string | null; historyRevision: number | null; sourceRef: string | null; warning: string | null } | null
+  salaryIssue?: { code: string; message: string } | null
   attendanceExemptions?: Array<{
     id: number; effectiveFrom: string; effectiveTo: string | null; terminatedFrom: string | null; reasonCode: string
     overtimeEligible: boolean; unpaidLeaveDeductible: boolean; overtimeSource: string; unpaidLeaveSource: string
@@ -942,6 +961,8 @@ export interface ApiTransfer {
   fromTeam: number | null; toTeam: number; effectiveDate: string
   status: TransferStatus; executedAt?: string | null
   employeeName: string; fromTeamName: string; toTeamName: string
+  // سبب الإلغاء (نقل مجدول مكرر) أو آخر تعذّر تنفيذ سجله النظام على الطلب
+  statusReason?: string | null
 }
 export interface ApiLoan {
   id: number; requestId?: number | null; employeeId: number
@@ -1324,7 +1345,7 @@ export const fetchFileObjectUrl = async (id: number): Promise<string | null> => 
 
 // ===== بانِي أنواع الطلبات =====
 export interface CustomFieldDef {
-  key: string; label: string; type: 'text' | 'number' | 'date' | 'select' | 'file'
+  key: string; label: string; type: 'text' | 'number' | 'date' | 'month' | 'select' | 'file'
   required?: boolean; options?: string[]
 }
 export const fetchDestinationHandlers = () =>

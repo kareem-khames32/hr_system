@@ -2,9 +2,10 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ArrowRight, ListOrdered, RefreshCw } from 'lucide-react'
+import { ArrowRight, Info, ListOrdered, Plus, RefreshCw } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { PayrollCollectionEditor } from '@/components/PayrollCollectionEditor'
+import { PayrollPolicyCreateForm, PayrollPolicyVersionPanel } from '@/components/PayrollPolicySetEditor'
 import { PayrollLiveSourcesPanel } from '@/components/PayrollLiveSourcesPanel'
 import { can } from '@/lib/api'
 import {
@@ -12,7 +13,7 @@ import {
   type PayrollCollectionSaveResponse, type PayrollCollectionView, type PayrollPolicySummary,
 } from '@/lib/payroll-policies-api'
 
-const versionLabels = { DRAFT: 'مسودة', ACTIVE: 'نشطة', ARCHIVED: 'مؤرشفة' }
+const versionLabels = { DRAFT: 'مسودة', ACTIVE: 'منشورة', ARCHIVED: 'مؤرشفة' }
 type Selection = { policyId: number; versionId?: number }
 
 function PayrollPoliciesContent() {
@@ -28,6 +29,7 @@ function PayrollPoliciesContent() {
   const [sourcesDirty, setSourcesDirty] = useState(false)
   const [pendingSelection, setPendingSelection] = useState<Selection | null>(null)
   const [editorGeneration, setEditorGeneration] = useState(0)
+  const [creating, setCreating] = useState(false)
   const sequence = useRef(0)
   const mounted = useRef(true)
 
@@ -98,12 +100,29 @@ function PayrollPoliciesContent() {
     }).catch(cause => { if (mounted.current && request === sequence.current) setLoadError(`تم الحفظ، لكن تعذر تحديث قائمة السياسات: ${payrollPoliciesError(cause)}`) })
   }
 
+  // الخطوة 15: بعد إنشاء مجموعة أو حفظ/نسخ/نشر نسخة نعيد قراءة المختارة من الخادم؛ الرسالة تُعرض بعد نجاح القراءة.
+  async function versionChanged(policyId: number, nextVersionId: number, message: string) {
+    await loadSelection({ policyId, versionId: nextVersionId })
+    if (mounted.current) setNotice(message)
+  }
+  async function policyCreated(summary: PayrollPolicySummary) {
+    setCreating(false)
+    setPolicies(current => [summary, ...current.filter(item => item.policy.id !== summary.policy.id)])
+    await versionChanged(summary.policy.id, summary.versions[0]?.id, `أُنشئت «${summary.policy.name}» بنسخة مسودة رقم 1. راجع الإعدادات والدورة ثم انشرها لتتجمد.`)
+  }
+
   const version = view?.version ?? selected?.versions.find(item => item.id === versionId)
+  const canManage = can('payroll.policy.manage')
   return <div className="space-y-6 pb-8">
     <div className="flex flex-wrap items-start justify-between gap-4">
-      <div className="flex items-start gap-3"><span className="rounded-2xl p-3 bg-primary-50 text-primary-600"><ListOrdered size={26} /></span><div><h1 className="text-2xl font-bold text-gray-800">سياسات الرواتب</h1><p className="text-gray-500 mt-1">تصنيف الخصومات وترتيب تحصيلها لكل نسخة سياسة.</p></div></div>
-      <Link href="/payroll" className="btn-secondary flex gap-2 items-center text-sm"><ArrowRight size={17} />مسير الرواتب</Link>
+      <div className="flex items-start gap-3"><span className="rounded-2xl p-3 bg-primary-50 text-primary-600"><ListOrdered size={26} /></span><div><h1 className="text-2xl font-bold text-gray-800">سياسات الرواتب</h1><p className="text-gray-500 mt-1">مجموعات المعدلات بدورتها ونسخها المنشورة، وتصنيف الخصومات وترتيب تحصيلها.</p></div></div>
+      <div className="flex flex-wrap gap-2">
+        {canManage && !creating && <button type="button" className="btn-primary flex gap-2 items-center text-sm" disabled={loading || busy || dirty || sourcesDirty} onClick={() => setCreating(true)}><Plus size={17} />مجموعة سياسة جديدة</button>}
+        <Link href="/payroll" className="btn-secondary flex gap-2 items-center text-sm"><ArrowRight size={17} />مسير الرواتب</Link>
+      </div>
     </div>
+    <p className="flex items-start gap-2 rounded-xl bg-blue-50 p-3 text-sm text-blue-800"><Info size={18} className="shrink-0 mt-0.5" aria-hidden="true" />نشر النسخة يجمّد معدلاتها ودورتها. المبلغ المصروف ما زال من حساب المسير الحالي، ويُحسب محرك السياسة بجانبه للمقارنة حتى يُعتمد التحويل.</p>
+    {creating && <PayrollPolicyCreateForm onCreated={summary => void policyCreated(summary)} onCancel={() => setCreating(false)} />}
 
     {notice && <div role="status" className="rounded-xl bg-green-50 p-4 text-green-800 text-sm">{notice}</div>}
     {loadError && <div role="alert" className="rounded-xl bg-red-50 p-4 text-red-800 space-y-3"><p>{loadError}</p>{!view && <button type="button" className="btn-secondary text-sm flex gap-2 items-center" disabled={loading} onClick={() => void loadList()}><RefreshCw size={16} />إعادة تحميل السياسات</button>}</div>}
@@ -119,10 +138,11 @@ function PayrollPoliciesContent() {
 
     {pendingSelection && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 p-4 space-y-3"><p className="text-sm text-amber-900">لديك تعديلات غير محفوظة. الانتقال يستبدلها بالنسخة المختارة.</p><div className="flex gap-2"><button type="button" className="btn-secondary text-sm" onClick={() => void loadSelection(pendingSelection)}>تجاهل التعديلات والانتقال</button><button type="button" className="px-3 text-sm text-gray-600" onClick={() => setPendingSelection(null)}>البقاء</button></div></div>}
     {loading && <div role="status" className="card py-16 text-center text-gray-500">جارٍ تحميل السياسة ونسختها…</div>}
-    {!loading && !loadError && policies.length === 0 && <div className="card py-12 text-center"><h2 className="font-bold text-gray-700">لا توجد سياسات متاحة لحسابك</h2><p className="text-sm text-gray-500 mt-2">تظهر هنا السياسات الموجودة ضمن نطاق صلاحياتك. يلزم تجهيز سياسة ونسخة ببنودها قبل إدارة ترتيب التحصيل.</p></div>}
+    {!loading && !loadError && policies.length === 0 && <div className="card py-12 text-center"><h2 className="font-bold text-gray-700">لا توجد سياسات متاحة لحسابك</h2><p className="text-sm text-gray-500 mt-2">تظهر هنا السياسات الموجودة ضمن نطاق صلاحياتك. {canManage ? 'ابدأ بـ«مجموعة سياسة جديدة» لتحديد الاسم والدورة والمعدلات ثم انشرها.' : 'إنشاء المجموعات ونشرها يتطلب صلاحية إدارة سياسات الرواتب.'}</p></div>}
     {!loading && selected && !selected.versions.length && <p className="card text-gray-500">لا توجد نسخ لهذه السياسة. يلزم تجهيز نسخة بإعداداتها وبنودها أولًا.</p>}
     {sourcesDirty && <p className="text-sm text-amber-800">احفظ مراجعة الأجر أو تجاهل تعديلاتها من سجل الموظف قبل تغيير السياسة أو ترتيب التحصيل.</p>}
-    {!loading && view && version && <fieldset disabled={sourcesDirty} className="min-w-0"><PayrollCollectionEditor key={`${view.versionId}:${view.revision}:${editorGeneration}`} view={view} version={version} canCalculate={can('payroll.calculate')} onSaved={saved} onReload={reloadCollection} onDirtyChange={setDirty} onBusyChange={setBusy} /></fieldset>}
+    {!loading && selected && version && <PayrollPolicyVersionPanel key={`panel:${version.id}:${version.revision}`} summary={selected} version={version} locked={dirty || busy || sourcesDirty} onChanged={(nextVersionId, message) => versionChanged(selected.policy.id, nextVersionId, message)} />}
+    {!loading && view && version && <fieldset disabled={sourcesDirty} className="min-w-0"><PayrollCollectionEditor key={`${view.versionId}:${view.revision}:${editorGeneration}`} view={view} version={version} onSaved={saved} onReload={reloadCollection} onDirtyChange={setDirty} onBusyChange={setBusy} /></fieldset>}
     {!loading && view && version && <PayrollLiveSourcesPanel key={`sources:${view.versionId}:${view.revision}:${editorGeneration}`} view={view} canCalculate={can('payroll.calculate')} policyDirty={dirty || busy} onHistoryDirtyChange={setSourcesDirty} />}
   </div>
 }

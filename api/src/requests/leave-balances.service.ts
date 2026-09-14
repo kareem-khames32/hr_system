@@ -249,6 +249,18 @@ export class LeaveBalancesService {
     }
   }
 
+  // تاريخ فحص رصيد سنة من إجازة (بوابة الاعتماد والخصم عند التنفيذ بنفس التاريخ):
+  // سنة البداية = المتراكم حتى تاريخ البداية؛ السنة اللي بعدها = استحقاق السنة كلها
+  // (المتراكم في 1 يناير صفر في الاستحقاق الشهري فكان الخصم يفشل بعد نجاح البوابة)
+  balanceGateDate(year: string, fromDate: string): string {
+    return year === String(fromDate).slice(0, 4) ? String(fromDate) : `${year}-12-31`
+  }
+
+  // أول يوم فعلي للإجازة داخل السنة — صلاحية الطبقة الافتتاحية تُقاس عليه لا على البوابة
+  leaveYearStart(year: string, fromDate: string): string {
+    return year === String(fromDate).slice(0, 4) ? String(fromDate) : `${year}-01-01`
+  }
+
   // أيام الإجازة لكل سنة: من تقسيم التقديم (daysByYear) لو الإجازة بتعدّي
   // السنة، وإلا كلها على سنة تاريخ البداية
   splitByYear(payload: unknown, fromDate: string, days: number): Record<string, number> {
@@ -450,10 +462,15 @@ export class LeaveBalancesService {
     employeeId: number,
     balanceType: BalanceType,
     days: number,
-    onDate: string
+    onDate: string,
+    // أول يوم للإجازة في سنة الرصيد: صلاحية الطبقة الافتتاحية تُقاس عليه؛ الافتراضي onDate
+    openingOnDate: string = onDate
   ) {
     if (!Number.isFinite(Number(days)) || !(Number(days) > 0)) {
       throw new BadRequestException('عدد أيام الخصم لازم يكون أكبر من صفر')
+    }
+    if (openingOnDate.slice(0, 4) !== onDate.slice(0, 4)) {
+      throw new BadRequestException('تاريخ الطبقة الافتتاحية يجب أن يكون في سنة الرصيد نفسها')
     }
     const period = onDate.slice(0, 4)
     // Read context before the balance lock: adjustments lock employee then
@@ -468,7 +485,7 @@ export class LeaveBalancesService {
     const bal = await em.getRepository(LeaveBalance).findOneOrFail({ where: { employeeId, balanceType, period }, lock: { mode: 'pessimistic_write' } })
     const available = this.view(bal, onDate, ctx).remaining
     if (available < days) throw new BadRequestException('الرصيد غير كافٍ عند التنفيذ — المتبقي ' + available + ' يوم')
-    const openingValid = !bal.openingExpiry || bal.openingExpiry >= onDate
+    const openingValid = !bal.openingExpiry || bal.openingExpiry >= openingOnDate
     const openingAvailable = openingValid
       ? Math.max(0, num(bal.openingDays) - num(bal.openingTaken))
       : 0

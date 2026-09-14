@@ -132,7 +132,15 @@ async function payroll(f, period = f.day.slice(0, 7), extra = {}) {
   assert.ok(item)
   return { run: response.body, item, breakdown: toObject(item.breakdown) }
 }
+// الخطوة 18 (B3): الاعتماد يتطلب إقرارًا بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية بنطاق المعتمد.
+async function acknowledgeUnassigned(user, runId) {
+  const report = await request(user, 'GET', `/payroll/runs/${runId}/unassigned`)
+  assert.equal(report.status, 200, JSON.stringify(report.body))
+  const ack = await request(user, 'POST', `/payroll/runs/${runId}/unassigned-ack`, { reportHash: report.body.reportHash })
+  assert.equal(ack.status, 201, JSON.stringify(ack.body))
+}
 async function payPayroll(run) {
+  await acknowledgeUnassigned(financeApprover, run.id)
   const approved = await request(financeApprover, 'POST', `/payroll/runs/${run.id}/approve`)
   assert.equal(approved.status, 201, JSON.stringify(approved.body))
   const paid = await request(financeApprover, 'POST', `/payroll/runs/${run.id}/pay`)
@@ -231,6 +239,8 @@ before(async () => {
     { key: 'overtime.missing_punch_policy', value: 'BLOCK' }, { key: 'overtime.leave_conflict_policy', value: 'BLOCK' },
     { key: 'overtime.wage_components', value: 'BASIC,HOUSING,TRANSPORT,PHONE,WORK_NATURE,OTHER' },
     { key: 'payroll.cycle_start_day', value: '1' }, { key: 'payroll.monthly_days', value: '30' },
+    // تسعير الإضافي هنا على راتب الملف؛ تسعيره براتب شهر يوم العمل من السجل مغطى في payroll-run-salary-period.integration.cjs.
+    { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' },
     { key: 'payroll.daily_hours', value: '8' }, { key: 'attendance.weekend_days', value: 'FRI,SAT' },
     { key: 'attendance.grace_minutes', value: '0' }, { key: 'attendance.flex.shortfall_grace_minutes', value: '10' },
     { key: 'payroll.exempt_overtime_eligible', value: 'false' },
@@ -925,6 +935,7 @@ test('EX-11 legacy payroll: an approved explicit request supplies missing legacy
   assert.deepEqual(result.breakdown.overtimeEntryIds, [entry.id])
   assert.deepEqual(await repo('OvertimeEntry').findOneByOrFail({ id: entry.id }), original,
     'Calculation must not silently populate missing legacy payroll evidence')
+  await acknowledgeUnassigned(financeApprover, result.run.id)
   const approved = await request(financeApprover, 'POST', `/payroll/runs/${result.run.id}/approve`)
   assert.equal(approved.status, 201, JSON.stringify(approved.body))
   assert.deepEqual(await repo('OvertimeEntry').findOneByOrFail({ id: entry.id }), original)
@@ -990,6 +1001,7 @@ test('OT-08 corruption: missing payroll trace cannot hide an altered new overtim
   const originalItem = await repo('PayrollItem').findOneByOrFail({ id: result.item.id })
   const originalRun = await repo('PayrollRun').findOneByOrFail({ id: result.run.id })
   const periodClaims = await repo('PayrollPeriodClaim').count({ where: { runId: result.run.id } })
+  await acknowledgeUnassigned(financeApprover, result.run.id)
   try {
     const broken = toObject(originalItem.breakdown)
     delete broken.overtime
@@ -1297,6 +1309,7 @@ test('OT unresolved legacy: calculation rejects an approved non-EX request with 
 test('OT unresolved legacy: approving an older zero payroll rejects an unresolved source with or without its historical trace', async () => {
   for (const hasTrace of [false, true]) {
     const f = await fixture(), { result, old } = await historicalZeroOvertimePayroll(f, hasTrace)
+    await acknowledgeUnassigned(financeApprover, result.run.id)
     const beforeRun = await repo('PayrollRun').findOneByOrFail({ id: result.run.id })
     const beforeItem = await repo('PayrollItem').findOneByOrFail({ id: result.item.id })
     const rejected = await request(financeApprover, 'POST', `/payroll/runs/${result.run.id}/approve`)

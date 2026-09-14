@@ -21,6 +21,8 @@ import {
   type ApiRequest,
 } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
+import { downloadCsv, csvDateStamp } from '@/lib/csv'
+import { TypedDeductionsWorkspace } from '@/components/payroll/TypedDeductionsWorkspace'
 
 const runStatusLabels: Record<string, string> = {
   CALCULATED: 'محسوب',
@@ -61,6 +63,12 @@ export default function DeductionsPage() {
   const [objections, setObjections] = useState<ApiRequest[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // رابط القسيمة/المسير ?request=ID يفتح طلب الخصم المصنف مباشرة
+  const [focusRequestId, setFocusRequestId] = useState<number | null>(null)
+  useEffect(() => {
+    const id = Number(new URLSearchParams(window.location.search).get('request'))
+    if (Number.isSafeInteger(id) && id > 0) setFocusRequestId(id)
+  }, [])
 
   useEffect(() => {
     Promise.all([
@@ -128,9 +136,21 @@ export default function DeductionsPage() {
             <p className="text-gray-500 mt-1">الخصومات الفعلية المحسوبة في مسيرات الرواتب</p>
           </div>
           <div className="flex items-center gap-3">
-            <button className="btn-secondary flex items-center gap-2">
+            <button
+              type="button"
+              onClick={() => downloadCsv(`deductions-${run?.period ?? 'run'}-${csvDateStamp()}.csv`,
+                ['الرقم الوظيفي', 'الموظف', 'خصم التأخير', 'دقائق التأخير', 'نقص الساعات', 'دقائق النقص', 'خصم الغياب', 'أيام الغياب', 'إجازة بدون راتب', 'أيام بدون راتب', 'أقساط السلف', 'خصومات أخرى', 'الإجمالي'],
+                items.map((item) => {
+                  const emp = employees.get(item.employeeId)
+                  return [emp?.employeeCode ?? '', emp?.fullName ?? `موظف #${item.employeeId}`, item.latenessDeduction, item.lateMinutes,
+                    item.shortfallDeduction ?? 0, item.shortfallMinutes ?? 0, item.absenceDeduction ?? 0, item.absenceDays ?? 0,
+                    item.unpaidLeaveDeduction, item.unpaidLeaveDays, item.loanInstallments, item.otherDeductions ?? 0, totalOf(item).toFixed(2)]
+                }))}
+              disabled={loading || items.length === 0}
+              className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+            >
               <Download size={18} />
-              تصدير
+              تصدير CSV
             </button>
             <Link href="/payroll" className="btn-secondary">
               العودة للرواتب
@@ -152,11 +172,15 @@ export default function DeductionsPage() {
           <div>
             <p className="font-medium text-warning-800">تنبيه هام</p>
             <p className="text-sm text-warning-700">
-              الخصومات تُحسب آلياً من الحضور (التأخير والغياب بلا إذن)، والإجازات بدون راتب، وأقساط
-              السلف المستحقة — ولا تُدخل يدوياً. للاعتراض على خصم يقدَّم طلب «اعتراض على خصم» من محرك الطلبات.
+              خصومات الحضور والإجازة بدون راتب وأقساط السلف تُحسب آلياً في المسير. الخصومات المصنفة (جودة، التزام،
+              إداري...) تُنشأ من القسم أدناه بنوعها ونطاق مُنشئها ودورة اعتمادها، ولا تدخل المسير إلا بعد آخر اعتماد وفي
+              شهرها المستهدف مع حماية الصافي؛ إنشاء خصم مباشر في دفتر المديونيات مقفل. للاعتراض يقدَّم طلب «اعتراض على خصم».
             </p>
           </div>
         </div>
+
+        {/* الخطوة 25: الخصومات المصنفة — القائمة والاعتماد والإنشاء الجماعي والكتالوج */}
+        <TypedDeductionsWorkspace currency={currency} mode="admin" focusRequestId={focusRequestId} />
 
         {/* Main Content Grid */}
         <div className="grid grid-cols-3 gap-6">
@@ -203,6 +227,7 @@ export default function DeductionsPage() {
                       <th className="text-center px-4 py-3">خصم الغياب</th>
                       <th className="text-center px-4 py-3">إجازة بدون راتب</th>
                       <th className="text-center px-4 py-3">أقساط السلف</th>
+                      <th className="text-center px-4 py-3">خصومات أخرى</th>
                       <th className="text-center px-4 py-3 text-danger-600">الإجمالي</th>
                     </tr>
                   </thead>
@@ -243,6 +268,10 @@ export default function DeductionsPage() {
                           <td className="table-cell text-center font-mono">
                             {Number(item.loanInstallments).toLocaleString()}
                           </td>
+                          <td className="table-cell text-center font-mono">
+                            {Number(item.otherDeductions ?? 0).toLocaleString()}
+                            <p className="text-xs text-gray-400">مصنفة وعهدة</p>
+                          </td>
                           <td className="table-cell text-center font-mono font-bold text-danger-600">
                             -{totalOf(item).toLocaleString()}
                           </td>
@@ -251,7 +280,7 @@ export default function DeductionsPage() {
                     })}
                     {items.length === 0 && (
                       <tr>
-                        <td colSpan={7} className="text-center py-10 text-gray-400">
+                        <td colSpan={8} className="text-center py-10 text-gray-400">
                           لا توجد بنود في هذا المسير
                         </td>
                       </tr>
@@ -321,7 +350,7 @@ export default function DeductionsPage() {
                   <span className="font-bold">{totals.loans.toLocaleString()} {currency}</span>
                 </div>
                 <div className="flex items-center justify-between">
-                  <span className="text-danger-100">خصومات أخرى (عهدة/غرامة):</span>
+                  <span className="text-danger-100">خصومات الدفتر (مصنفة/عهدة/استرداد):</span>
                   <span className="font-bold">{totals.other.toLocaleString()} {currency}</span>
                 </div>
                 <div className="border-t border-white/20 pt-3 mt-3">

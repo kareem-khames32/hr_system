@@ -39,6 +39,15 @@ export interface PayrollMemberSnapshot {
     overtimeEligible: boolean; unpaidLeaveDeductible: boolean; overtimeSource: string; unpaidLeaveSource: string
   }>
   manualReason?: string
+  // الخطوة 13: مصدر راتب شهر المسير (سجل شهري أو راتب ملف غير موثق في الوضع الانتقالي) أو سبب الاستبعاد.
+  salarySource?: import('./payroll-run-salary').PayrollRunSalarySource | null
+  salaryIssue?: { code: string; message: string } | null
+  // الخطوتان 16 و17: مكان الموظف معتمد بآخر يوم في الفترة؛ من انتقل خارج النطاق أو حُجز في مسير معتمد يُحفظ سببه هنا.
+  orgDate?: string | null
+  orgIssues?: Array<{ code: string; message: string }>
+  transferredOut?: { lastInScopeDate: string; branchId: number | null; branchName: string | null; departmentId: number | null
+    departmentName: string | null; teamId: number | null; teamName: string | null } | null
+  alreadyInRun?: { otherRunId: number | null; name: string | null; status: string; startDate: string; endDate: string; overlapDays: number; kind: string } | null
 }
 
 export type PayrollMembershipStatus = 'INCLUDED' | 'EXCLUDED'

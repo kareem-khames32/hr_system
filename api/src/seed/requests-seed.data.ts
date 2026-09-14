@@ -3,6 +3,9 @@
 
 import type { ApproverRole } from '../requests/entities/approval-step.entity'
 import { PAYROLL_POLICY_DEFAULT_CONFIG_SEED } from '../payroll/payroll-policy-settings'
+import { PAYROLL_DECISION_CONFIG_SEED } from '../payroll/payroll-decision-settings'
+import { DEDUCTION_CONFIG_SEED } from '../payroll/typed-deductions'
+import { BONUS_CONFIG_SEED } from '../payroll/bonuses'
 
 // ===== سلاسل الاعتماد الافتراضية (العامة — branchId NULL) =====
 // أي فرع يقدر يعمل نسخة خاصة بنفس الكود لاحقاً وتتقدم على العامة
@@ -178,7 +181,8 @@ export const typesSeed: TypeSeed[] = [
   { code: 'TITLE_CHANGE', nameAr: 'تغيير مسمى', category: 'employment_status', chain: 'CHAIN_MANAGER_HR', handler: 'employee_update', requiredFields: ['toTitle'], phase: 'P3' },
   { code: 'CONTRACT_RENEWAL', nameAr: 'تجديد عقد', category: 'employment_status', chain: 'CHAIN_HR_EXEC', handler: 'contracts_register', phase: 'P2' },
   { code: 'CONTRACT_TYPE_CHANGE', nameAr: 'تغيير نوع العقد', category: 'employment_status', chain: 'CHAIN_MANAGER_HR', handler: 'contracts_register', phase: 'P3' },
-  { code: 'SECONDMENT', nameAr: 'إعارة/انتداب لجهة أخرى', category: 'employment_status', chain: 'CHAIN_HR_EXEC', handler: 'assignments_register', phase: 'P3' },
+  // D12: الأنواع بلا معالج حقيقي «تسجيل فقط» (none) — القرار والوجهة القديمة في RECORD_ONLY_REQUEST_TYPES
+  { code: 'SECONDMENT', nameAr: 'إعارة/انتداب لجهة أخرى', category: 'employment_status', chain: 'CHAIN_HR_EXEC', handler: 'none', phase: 'P3' },
   { code: 'RETIREMENT', nameAr: 'تقاعد', category: 'employment_status', chain: 'CHAIN_HR', handler: 'employee_status', phase: 'P3' },
   // الاستقالة: مدير → HR → تنفيذي، والاعتماد يدخل الموظف فترة الإشعار
   { code: 'RESIGNATION', nameAr: 'استقالة', category: 'employment_status', chain: 'CHAIN_MANAGER_HR_EXEC', handler: 'employee_status', requiredFields: ['lastWorkingDate', 'reason'], phase: 'P1' },
@@ -186,9 +190,9 @@ export const typesSeed: TypeSeed[] = [
   // ===== 5) البيانات الشخصية =====
   { code: 'PERSONAL_DATA_UPDATE', nameAr: 'تحديث بيانات شخصية', category: 'personal_data', chain: 'CHAIN_HR', handler: 'employee_record', phase: 'P1' },
   { code: 'BANK_ACCOUNT_CHANGE', nameAr: 'تغيير الحساب البنكي', category: 'personal_data', chain: 'CHAIN_SECURITY_BANK', handler: 'payroll_bank_secure', requiredFields: ['iban'], securityRoute: true, phase: 'P1' },
-  { code: 'DEPENDENTS_UPDATE', nameAr: 'تحديث المعالين', category: 'personal_data', chain: 'CHAIN_HR', handler: 'employee_dependents', phase: 'P2' },
+  { code: 'DEPENDENTS_UPDATE', nameAr: 'تحديث المعالين', category: 'personal_data', chain: 'CHAIN_HR', handler: 'none', phase: 'P2' },
   { code: 'EMERGENCY_CONTACT', nameAr: 'جهة اتصال الطوارئ', category: 'personal_data', chain: 'CHAIN_AUTO', handler: 'employee_record_auto', requiredFields: ['name', 'phone'], phase: 'P1' },
-  { code: 'DOCUMENT_RENEWAL', nameAr: 'رفع/تجديد وثائق', category: 'personal_data', chain: 'CHAIN_HR', handler: 'document_vault', requiredFields: ['documentType'], phase: 'P1' },
+  { code: 'DOCUMENT_RENEWAL', nameAr: 'رفع/تجديد وثائق', category: 'personal_data', chain: 'CHAIN_HR', handler: 'none', requiredFields: ['documentType'], phase: 'P1' },
 
   // ===== 6) الخطابات (PDF أوتوماتيك) =====
   { code: 'LETTER_SALARY', nameAr: 'تعريف راتب', category: 'letters', chain: 'CHAIN_HR', handler: 'letter_pdf_generator', autoGeneratesPdf: true, phase: 'P1' },
@@ -203,23 +207,23 @@ export const typesSeed: TypeSeed[] = [
   { code: 'CUSTODY_RETURN', nameAr: 'إرجاع عهدة', category: 'custody_assets', chain: 'CHAIN_CUSTODY', handler: 'custody_return', requiredFields: ['assignmentId'], phase: 'P1' },
   { code: 'CUSTODY_TRANSFER', nameAr: 'نقل عهدة', category: 'custody_assets', chain: 'CHAIN_CUSTODY', handler: 'custody_transfer', requiredFields: ['assignmentId', 'toEmployeeId'], phase: 'P2' },
   { code: 'CUSTODY_LOSS_REPORT', nameAr: 'بلاغ فقد/تلف', category: 'custody_assets', chain: 'CHAIN_MANAGER_CUSTODY', handler: 'custody_finance', requiredFields: ['assignmentId', 'description'], phase: 'P2' },
-  { code: 'IT_EQUIPMENT', nameAr: 'طلب أجهزة/برامج IT', category: 'custody_assets', chain: 'CHAIN_MANAGER_IT', handler: 'it_assets', phase: 'P2' },
-  { code: 'ACCESS_REQUEST', nameAr: 'طلب صلاحية/وصول', category: 'custody_assets', chain: 'CHAIN_MANAGER_IT', handler: 'access_register', phase: 'P2' },
-  { code: 'FACILITY_CARD', nameAr: 'كارت دخول/موقف', category: 'custody_assets', chain: 'CHAIN_HR', handler: 'facilities_register', phase: 'P3' },
+  { code: 'IT_EQUIPMENT', nameAr: 'طلب أجهزة/برامج IT', category: 'custody_assets', chain: 'CHAIN_MANAGER_IT', handler: 'none', phase: 'P2' },
+  { code: 'ACCESS_REQUEST', nameAr: 'طلب صلاحية/وصول', category: 'custody_assets', chain: 'CHAIN_MANAGER_IT', handler: 'none', phase: 'P2' },
+  { code: 'FACILITY_CARD', nameAr: 'كارت دخول/موقف', category: 'custody_assets', chain: 'CHAIN_HR', handler: 'none', phase: 'P3' },
 
-  // ===== 8) التدريب والتطوير =====
-  { code: 'TRAINING_REQUEST', nameAr: 'طلب تدريب/دورة', category: 'training', chain: 'CHAIN_MANAGER_HR', handler: 'training_register', requiredFields: ['courseName'], phase: 'P3' },
-  { code: 'CERT_REIMBURSEMENT', nameAr: 'استرداد تكلفة شهادة', category: 'training', chain: 'CHAIN_MANAGER_FINANCE', handler: 'training_expense', requiredFields: ['amount'], phase: 'P3' },
-  { code: 'CONFERENCE', nameAr: 'حضور مؤتمر', category: 'training', chain: 'CHAIN_MANAGER_HR', handler: 'training_register', phase: 'P3' },
-  { code: 'EDUCATION_ASSISTANCE', nameAr: 'مساعدة دراسية', category: 'training', chain: 'CHAIN_MANAGER_HR', handler: 'training_register', phase: 'P3' },
+  // ===== 8) التدريب والتطوير (D12: تسجيل فقط — لا موديول تدريب ولا صرف آلي) =====
+  { code: 'TRAINING_REQUEST', nameAr: 'طلب تدريب/دورة', category: 'training', chain: 'CHAIN_MANAGER_HR', handler: 'none', requiredFields: ['courseName'], phase: 'P3' },
+  { code: 'CERT_REIMBURSEMENT', nameAr: 'استرداد تكلفة شهادة', category: 'training', chain: 'CHAIN_MANAGER_FINANCE', handler: 'none', requiredFields: ['amount'], phase: 'P3' },
+  { code: 'CONFERENCE', nameAr: 'حضور مؤتمر', category: 'training', chain: 'CHAIN_MANAGER_HR', handler: 'none', phase: 'P3' },
+  { code: 'EDUCATION_ASSISTANCE', nameAr: 'مساعدة دراسية', category: 'training', chain: 'CHAIN_MANAGER_HR', handler: 'none', phase: 'P3' },
 
-  // ===== 9) علاقات الموظفين (سرّي — يتخطى المدير) =====
-  { code: 'GRIEVANCE', nameAr: 'تظلم/شكوى', category: 'employee_relations', chain: 'CHAIN_HR', handler: 'er_case', requiredFields: ['description'], confidential: true, phase: 'P2' },
-  { code: 'WHISTLEBLOWING', nameAr: 'بلاغ عن مخالفة', category: 'employee_relations', chain: 'CHAIN_HR', handler: 'er_case_anonymous', requiredFields: ['description'], confidential: true, phase: 'P2' },
-  { code: 'PENALTY_OBJECTION', nameAr: 'اعتراض على جزاء', category: 'employee_relations', chain: 'CHAIN_HR_EXEC', handler: 'er_case', requiredFields: ['reason'], confidential: true, phase: 'P2' },
-  { code: 'APPRAISAL_OBJECTION', nameAr: 'اعتراض على تقييم أداء', category: 'employee_relations', chain: 'CHAIN_MANAGER_HR', handler: 'appraisal_register', requiredFields: ['reason'], phase: 'P2' },
-  { code: 'SUGGESTION', nameAr: 'اقتراح/ملاحظة', category: 'employee_relations', chain: 'CHAIN_HR', handler: 'suggestions_register', requiredFields: ['description'], phase: 'P3' },
-  { code: 'HR_MEETING', nameAr: 'طلب اجتماع مع HR', category: 'employee_relations', chain: 'CHAIN_HR', handler: 'meetings_register', phase: 'P3' },
+  // ===== 9) علاقات الموظفين (سرّي — يتخطى المدير؛ D12: تسجيل فقط) =====
+  { code: 'GRIEVANCE', nameAr: 'تظلم/شكوى', category: 'employee_relations', chain: 'CHAIN_HR', handler: 'none', requiredFields: ['description'], confidential: true, phase: 'P2' },
+  { code: 'WHISTLEBLOWING', nameAr: 'بلاغ عن مخالفة', category: 'employee_relations', chain: 'CHAIN_HR', handler: 'none', requiredFields: ['description'], confidential: true, phase: 'P2' },
+  { code: 'PENALTY_OBJECTION', nameAr: 'اعتراض على جزاء', category: 'employee_relations', chain: 'CHAIN_HR_EXEC', handler: 'none', requiredFields: ['reason'], confidential: true, phase: 'P2' },
+  { code: 'APPRAISAL_OBJECTION', nameAr: 'اعتراض على تقييم أداء', category: 'employee_relations', chain: 'CHAIN_MANAGER_HR', handler: 'none', requiredFields: ['reason'], phase: 'P2' },
+  { code: 'SUGGESTION', nameAr: 'اقتراح/ملاحظة', category: 'employee_relations', chain: 'CHAIN_HR', handler: 'none', requiredFields: ['description'], phase: 'P3' },
+  { code: 'HR_MEETING', nameAr: 'طلب اجتماع مع HR', category: 'employee_relations', chain: 'CHAIN_HR', handler: 'none', phase: 'P3' },
 ]
 
 // ===== أنواع الإجازات (قابلة للإعداد) =====
@@ -325,12 +329,28 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'payroll.monthly_days', value: '30' },
   { key: 'payroll.daily_hours', value: '8' },
   { key: 'payroll.late_deduction_enabled', value: 'true' },
+  // الخطوة 13 وقاعدة المالك: راتب المسير = راتب شهر المسير من السجل الشهري؛ بلا دليل يُستبعد الموظف بسبب ظاهر.
+  // MONTHLY_HISTORY_OR_CURRENT_FILE وضع انتقالي صريح يوسم راتب الملف الحالي «غير موثق» في لقطة العضو.
+  { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY' },
   // قرار نقص المتاح: خصم المتاح وترحيل الباقي، أو تأجيل القسط كاملًا وتمديد الجدول.
   { key: 'loan.insufficient_net_behavior', value: 'PARTIAL_THEN_CARRY' },
+  // C6 / AD-07/09: أقل طول لسبب السلفة الاستثنائية واستثناء تجاوز السقف، وأبعد شهر تختاره الموارد البشرية لأول قسط.
+  { key: 'loan.exceptional_reason_min_length', value: '10' },
+  { key: 'loan.first_installment_max_months_ahead', value: '12' },
   // PL-01: افتراضات تُنسخ إلى السياسة الجديدة فقط؛ لا تعيد تسعير أي مسير قائم.
   ...PAYROLL_POLICY_DEFAULT_CONFIG_SEED,
+  // قرارات المالك D1/D2/D3/D10/D11 (14 سبتمبر) — PAYROLL_DECISIONS_2026-09-14.md
+  ...PAYROLL_DECISION_CONFIG_SEED,
   // ⑨ / EX-11 وEX-12: الاستثناء يوقف جزاءات الحضور، ولا يُسقط الدين أو الإجازة بلا أجر.
   { key: 'payroll.exempt_overtime_eligible', value: 'false' },
   { key: 'payroll.exempt_unpaid_leave_deductible', value: 'true' },
   { key: 'payroll.exemption_reason_min_length', value: '20' },
+  // C2 / الخطوة 25 (DD-03/05): الخصومات المصنفة — أقل طول للسبب، نافذة كشف التكرار بالساعات،
+  // إنشاء المدير الهيكلي (مباشر/فريق/قسم/فرع) بحسب نطاق النوع، وحد الإنشاء الجماعي في الدفعة.
+  // إعادة العمل: + بديل المعتمِد المفقود، مهلة الخطوة وسلوك انتهائها، مهلة الاعتراض ومنعه للاعتماد،
+  // أقصى ترحيلات للقسط قبل تعليقه، وحد وسم تكرار الخصومات — الحدود في DEDUCTION_NUMERIC_SETTINGS/ENUM_SETTINGS.
+  ...DEDUCTION_CONFIG_SEED,
+  // C4 / الخطوة 27 (EX-05): المكافآت — أقل طول للسبب، نافذة كشف التكرار، حد الدفعة الجماعية، اقتراح المدير الهيكلي،
+  // وبديل المعتمِد المفقود — الحدود في BONUS_NUMERIC_SETTINGS/ENUM_SETTINGS.
+  ...BONUS_CONFIG_SEED,
 ]

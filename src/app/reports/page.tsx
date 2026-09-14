@@ -4,6 +4,7 @@ import { employeeStatusLabels as statusLabels, overtimeStatusLabels, payMethodLa
 import { useLeaveCatalog } from '@/lib/leave-catalog'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import {
   Download,
@@ -11,7 +12,6 @@ import {
   Users,
   DollarSign,
   Eye,
-  Printer,
   RefreshCw,
   UserCheck,
   UserMinus,
@@ -24,6 +24,7 @@ import {
   fetchPayrollReport,
   fetchRequestsReport,
 } from '@/lib/api'
+import { downloadCsv, csvDateStamp } from '@/lib/csv'
 import { localMonth, localToday } from '@/lib/dates'
 import { categoryLabels } from '@/data/requestsCatalog'
 
@@ -51,12 +52,15 @@ interface LeavesReport {
 }
 
 interface PayrollReport {
+  // المسير بلا فرع (قسم/فريق/مخصّص) يأتي branchName = null ويُعرض بوصف نطاقه
   runs: Array<{
     id: number
+    name: string | null
     period: string
     status: string
-    totalNet: number
-    branchName: string
+    totalNet: number | string
+    branchName: string | null
+    scopeLabel: string
     employees: number
   }>
   byMethod: Array<{ payMethod: string; count: number; total: number }>
@@ -76,6 +80,8 @@ interface OvertimeRow {
   entries: number
   actualHours: number
   payableHours: number
+  // قيمة لقطة الاعتماد — تصل فقط لمن يملك صلاحية عرض الرواتب
+  approvedAmount?: string | null
 }
 
 interface RequestsReport {
@@ -204,6 +210,7 @@ export default function ReportsPage() {
       description: 'توزيع الموظفين حسب الفروع والأقسام والحالة',
       category: 'الموارد البشرية',
       icon: '👥',
+      href: '/employees',
       stat: `${totalEmployees} موظف في ${headcount?.byBranch.length ?? 0} فرع`,
     },
     {
@@ -212,6 +219,7 @@ export default function ReportsPage() {
       description: 'ملخص الحضور والتأخير والغياب للموظفين',
       category: 'الحضور',
       icon: '⏰',
+      href: '/attendance/reports',
       stat: `${attendance.length} موظف متابع هذا الشهر`,
     },
     {
@@ -220,6 +228,7 @@ export default function ReportsPage() {
       description: 'مسيرات الرواتب وطرق الدفع والخصومات',
       category: 'الرواتب',
       icon: '💰',
+      href: '/payroll/reports',
       stat: `${payroll?.runs.length ?? 0} مسير رواتب`,
     },
     {
@@ -228,6 +237,7 @@ export default function ReportsPage() {
       description: 'طلبات الإجازات وأرصدة الموظفين لهذا العام',
       category: 'الإجازات',
       icon: '🏖️',
+      href: '/leaves/balance',
       stat: `${leaves?.byType.length ?? 0} نوع إجازة • ${leaves?.balances.length ?? 0} سجل رصيد`,
     },
     {
@@ -236,6 +246,7 @@ export default function ReportsPage() {
       description: 'ساعات الأوفرتايم الفعلية والمستحقة هذا الشهر',
       category: 'الحضور',
       icon: '⏱️',
+      href: '/payroll/reports?tab=overtime',
       stat: `${overtime.length} موظف لديه عمل إضافي`,
     },
     {
@@ -244,9 +255,42 @@ export default function ReportsPage() {
       description: 'الطلبات حسب الفئة والحالة في دورات الاعتماد',
       category: 'الطلبات',
       icon: '📋',
+      href: '/requests-console',
       stat: `${totalRequests} طلب`,
     },
   ]
+
+  // تصدير CSV حقيقي لكل بطاقة من البيانات المحمّلة نفسها (الخطوة 30: لا زر تصدير بلا ملف)
+  const exportReport = (id: string) => {
+    const stamp = csvDateStamp()
+    switch (id) {
+      case 'headcount':
+        return downloadCsv(`headcount-${stamp}.csv`, ['النوع', 'الاسم/الحالة', 'الإجمالي', 'النشطون'], [
+          ...(headcount?.byBranch ?? []).map((b) => ['فرع', b.branchName, b.total, b.active]),
+          ...(headcount?.byDepartment ?? []).map((d) => ['قسم', d.departmentName, d.total, '']),
+          ...(headcount?.byStatus ?? []).map((s) => ['حالة', statusLabels[s.status] ?? s.status, s.total, '']),
+        ])
+      case 'attendance':
+        return downloadCsv(`attendance-${currentMonth}-${stamp}.csv`,
+          ['الرقم الوظيفي', 'الموظف', 'أيام الحضور', 'أيام التأخير', 'أيام الغياب', 'انصراف مبكر', 'دقائق التأخير', 'دقائق العمل'],
+          attendance.map((a) => [a.employeeCode, a.fullName, a.presentDays, a.lateDays, a.absentDays, a.earlyLeaveDays, a.totalLateMinutes, a.totalWorkMinutes]))
+      case 'payroll':
+        return downloadCsv(`payroll-runs-${stamp}.csv`, ['رقم المسير', 'الاسم', 'الفترة', 'النطاق', 'الحالة', 'الموظفون', 'الصافي'],
+          (payroll?.runs ?? []).map((r) => [r.id, r.name ?? '', r.period, r.branchName ?? r.scopeLabel, r.status, r.employees, r.totalNet]))
+      case 'leaves':
+        return downloadCsv(`leaves-${currentYear}-${stamp}.csv`, ['نوع الإجازة', 'عدد الطلبات', 'إجمالي الأيام'],
+          (leaves?.byType ?? []).map((t) => [leaveTypeLabels[t.leaveType] ?? t.leaveType, t.requests, t.totalDays]))
+      case 'overtime':
+        return downloadCsv(`overtime-${currentMonth}-${stamp}.csv`, ['الموظف', 'الحالة', 'عدد السجلات', 'الساعات الفعلية', 'الساعات المستحقة', 'قيمة المعتمد'],
+          overtime.map((o) => [o.fullName, overtimeStatusLabels[o.status] ?? o.status, o.entries, o.actualHours, o.payableHours, o.approvedAmount ?? '']))
+      case 'requests':
+        return exportRequests()
+    }
+  }
+  const exportRequests = () =>
+    downloadCsv(`requests-by-category-${csvDateStamp()}.csv`, ['الفئة', 'مكتملة', 'قيد المراجعة', 'مرفوضة', 'أخرى', 'الإجمالي'],
+      requestCategories.map((category) => [categoryLabelOf(category), requestCell(category, ['COMPLETED']), requestCell(category, ['UNDER_REVIEW']),
+        requestCell(category, ['REJECTED']), requestOther(category), requestCategoryTotal(category)]))
 
   const categories = [...new Set(reportCards.map((r) => r.category))]
   const filteredReports =
@@ -272,10 +316,7 @@ export default function ReportsPage() {
               <RefreshCw size={18} />
               تحديث
             </button>
-            <button className="btn-primary flex items-center gap-2">
-              <Download size={18} />
-              تصدير الكل
-            </button>
+            {/* «تصدير الكل» أُزيل (بلا تنفيذ)؛ لكل تقرير زر CSV خاص به في بطاقته */}
           </div>
         </div>
 
@@ -597,7 +638,7 @@ export default function ReportsPage() {
                 <div className="flex justify-between text-xs text-gray-500 mt-2">
                   {payroll?.runs.map((r) => (
                     <span key={r.id}>
-                      {r.period} — {r.branchName} ({Number(r.totalNet).toLocaleString()})
+                      {r.period} — {r.branchName ?? r.scopeLabel} ({Number(r.totalNet).toLocaleString()})
                     </span>
                   ))}
                 </div>
@@ -753,15 +794,18 @@ export default function ReportsPage() {
                     </div>
                     <div className="flex items-center justify-between text-sm">
                       <span className="text-gray-500">{report.stat}</span>
-                      <div className="flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <button className="p-1.5 bg-white rounded-lg hover:bg-primary-50 transition-colors">
+                      <div className="flex items-center gap-2">
+                        {/* عرض يفتح شاشة التقرير التفصيلية، والتنزيل ينتج CSV من بيانات البطاقة المحمّلة؛ زر الطباعة الشكلي أُزيل */}
+                        <Link href={report.href} title="عرض التقرير" className="p-1.5 bg-white rounded-lg hover:bg-primary-50 transition-colors">
                           <Eye size={16} className="text-gray-600" />
-                        </button>
-                        <button className="p-1.5 bg-white rounded-lg hover:bg-primary-50 transition-colors">
+                        </Link>
+                        <button
+                          type="button"
+                          title="تصدير CSV"
+                          onClick={() => exportReport(report.id)}
+                          className="p-1.5 bg-white rounded-lg hover:bg-primary-50 transition-colors"
+                        >
                           <Download size={16} className="text-gray-600" />
-                        </button>
-                        <button className="p-1.5 bg-white rounded-lg hover:bg-primary-50 transition-colors">
-                          <Printer size={16} className="text-gray-600" />
                         </button>
                       </div>
                     </div>
@@ -776,9 +820,14 @@ export default function ReportsPage() {
                 <h2 className="text-lg font-bold text-gray-800">
                   ملخص الطلبات حسب الفئة
                 </h2>
-                <button className="btn-secondary flex items-center gap-2">
+                <button
+                  type="button"
+                  onClick={exportRequests}
+                  disabled={requestCategories.length === 0}
+                  className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+                >
                   <Download size={18} />
-                  تصدير Excel
+                  تصدير CSV
                 </button>
               </div>
               <table className="w-full">

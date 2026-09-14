@@ -136,7 +136,7 @@ before(async () => {
   const user = (label, role, branchId = null, permissions = []) => repo('User').save({ email: `${label}@policy-test.invalid`,
     displayName: label, passwordHash: 'test-only', role, branchId, permissions: JSON.stringify(permissions) })
   admin = await user('admin', 'super_admin')
-  const permissions = ['payroll.view', 'payroll.calculate']
+  const permissions = ['payroll.view', 'payroll.calculate', 'payroll.policy.manage']
   managerA = await user('manager-a', 'hr_manager', branchA.id, permissions)
   managerB = await user('manager-b', 'hr_manager', branchB.id, permissions)
   starA = await user('star-a', 'hr_manager', branchA.id, ['*'])
@@ -532,11 +532,16 @@ test('PL-01: event insert failure rolls back creation, draft update, clone and a
   assert.equal(accepted.policy.revision, 2)
 })
 
-test('PL-01: draft APIs have no publish or assignment routes and leave the paid financial canary unchanged', async () => {
-  const initial = await create(), id = initial.policy.id
-  for (const route of [`${endpoint}/${id}/publish`, `${endpoint}/${id}/assign`, `${endpoint}/${id}/versions/${initial.versions[0].id}/publish`]) {
+test('PL-01: assignment routes stay absent, version publishing (step 15) needs manage permission and a validated body, and the paid financial canary is unchanged', async () => {
+  const initial = await create(), id = initial.policy.id, versionId = initial.versions[0].id
+  for (const route of [`${endpoint}/${id}/publish`, `${endpoint}/${id}/assign`, `${endpoint}/${id}/versions/${versionId}/assign`]) {
     expectStatus(await request(admin, 'POST', route, {}), 404)
   }
+  // الخطوة 15 أضافت نشر النسخة: بلا صلاحية payroll.policy.manage يُرفض، وبجسم ناقص يُرفض قبل أي كتابة.
+  const policiesBefore = await policySnapshot()
+  expectStatus(await request(viewerA, 'POST', `${endpoint}/${id}/versions/${versionId}/publish`, { expectedRevision: 1, reason: 'بلا صلاحية' }), 403)
+  expectStatus(await request(admin, 'POST', `${endpoint}/${id}/versions/${versionId}/publish`, {}), 400)
+  assert.deepEqual(await policySnapshot(), policiesBefore)
   assert.deepEqual(await financialSnapshot(), canary)
   assert.equal(canary.PayrollRun[0].status, 'PAID')
   assert.equal(canary.PayrollItem[0].netPay, 9084.38)

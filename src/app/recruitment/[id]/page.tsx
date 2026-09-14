@@ -12,7 +12,6 @@ import {
   DollarSign,
   Users,
   Calendar,
-  Share2,
   Edit2,
   Trash2,
   Eye,
@@ -114,10 +113,7 @@ export default function JobDetailsPage() {
             </div>
           </div>
           <div className="flex items-center gap-3">
-            <button className="btn-secondary flex items-center gap-2">
-              <Share2 size={18} />
-              مشاركة
-            </button>
+            {/* «مشاركة» أُزيل: الوظيفة ببيانات عرض بلا رابط عام قابل للمشاركة */}
             <button className="btn-secondary flex items-center gap-2">
               <Edit2 size={18} />
               تعديل

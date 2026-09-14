@@ -12,7 +12,6 @@ import {
   BarChart3,
   PieChart,
   TrendingUp,
-  Download,
   Play,
   Save,
   Settings,
@@ -276,14 +275,7 @@ export default function CustomReportsPage() {
                   <Save size={18} />
                   حفظ التقرير
                 </button>
-                <button className="btn-secondary flex items-center gap-2">
-                  <Download size={18} />
-                  تصدير Excel
-                </button>
-                <button className="btn-secondary flex items-center gap-2">
-                  <Download size={18} />
-                  تصدير PDF
-                </button>
+                {/* أزرار تصدير Excel/PDF أُزيلت: منشئ التقارير المخصصة لا يولّد بيانات بعد (الخطوة 30) */}
               </div>
             )}
           </div>

@@ -1,5 +1,6 @@
 import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
 import type { SalaryHistoryRead, SalaryHistorySegment } from './payroll-salary-history'
+import { payrollPeriodBounds, PayrollPeriodError } from './payroll-period'
 
 export const PAYROLL_MONTHLY_SALARY_HISTORY_VERSION = 'SALARY_PAYROLL_PERIOD_HISTORY_V2_20260914' as const
 export type MonthlySalaryPeriod = Omit<SalaryHistorySegment, 'effectiveFrom' | 'effectiveTo'> & {
@@ -16,18 +17,16 @@ export function salaryPayrollPeriod(value: unknown): string {
   if (typeof value !== 'string' || !/^\d{4}-(0[1-9]|1[0-2])$/.test(value) || value.startsWith('0000-')) fail('SALARY_PAYROLL_PERIOD_INVALID', 'شهر سريان الراتب مطلوب بصيغة YYYY-MM صحيحة')
   return value as string
 }
-const lastDay = (year: number, month: number) => [31, year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0) ? 29 : 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31][month - 1]
-const formattedDate = (year: number, month: number, day: number) => `${String(year).padStart(4, '0')}-${String(month).padStart(2, '0')}-${String(Math.min(day, lastDay(year, month))).padStart(2, '0')}`
-
 /** هذه حدود تشغيل مشتقة للدورة؛ لا تُستخدم لاختيار راتب المسير ولا لإثبات تاريخ قرار يومي. */
 export function salaryPayrollPeriodBounds(referencePeriod: string, cycleStartDay: number) {
   const period = salaryPayrollPeriod(referencePeriod)
   if (!Number.isInteger(cycleStartDay) || cycleStartDay < 1 || cycleStartDay > 31) fail('SALARY_PAYROLL_CYCLE_INVALID', 'يوم بداية دورة الرواتب غير صالح')
-  const year = Number(period.slice(0, 4)), month = Number(period.slice(5, 7))
-  if (cycleStartDay === 1) return { startDate: formattedDate(year, month, 1), endDate: formattedDate(year, month, lastDay(year, month)) }
-  const previousYear = month === 1 ? year - 1 : year, previousMonth = month === 1 ? 12 : month - 1
-  if (previousYear < 1) fail('SALARY_PAYROLL_CYCLE_INVALID', 'بداية الدورة تقع خارج نطاق التاريخ المدعوم')
-  return { startDate: formattedDate(previousYear, previousMonth, cycleStartDay), endDate: formattedDate(year, month, cycleStartDay - 1) }
+  // الخطوة 14: نفس اشتقاق المسير الفعلي؛ الشهور المتتالية متجاورة بلا يوم مشترك ولا فجوة.
+  try { return payrollPeriodBounds(period, cycleStartDay) }
+  catch (error) {
+    if (error instanceof PayrollPeriodError) fail('SALARY_PAYROLL_CYCLE_INVALID', 'بداية الدورة تقع خارج نطاق التاريخ المدعوم')
+    throw error
+  }
 }
 
 /** كل صف دليل شهري كامل؛ الفجوات مسموحة وتبقى ناقصة، والنهاية شاملة لشهرها. */

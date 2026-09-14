@@ -1,6 +1,9 @@
 import { BadRequestException, ConflictException, Injectable, Logger } from '@nestjs/common'
 import { overtimeFinancialValue } from '../payroll/overtime-financial'
-import { deferLoanInstallment, settleLoanEarly } from '../payroll/payroll-installment-ledger'
+import { payrollPeriodOfDate } from '../payroll/payroll-period'
+import { salaryPayrollPeriodBounds } from '../payroll/payroll-period-salary'
+import { deferLoanInstallment, repayLoanEarly } from '../payroll/payroll-installment-ledger'
+import { readApprovedLoanRequest, readEarlySettlementPayload } from '../loans/loan-request-caps'
 import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { LOAN_DEFERRAL_HANDLER, LOAN_DEFERRAL_TYPE, assertLoanReferenceId, loanScheduleAmounts, readStoredLoanDeferralPayload } from './loan-installment-requests'
 import { claimOvertimeDay } from './overtime-day-claims'
@@ -52,6 +55,7 @@ import { startCustodyTransfer } from './custody-execution'
 import { executeSalaryChangeRequest } from './salary-change-requests'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 import { appendEmployeeOrgCalendar } from '../attendance/attendance-calendar-history'
+import { DATA_PLACEHOLDER_REJECTED, isDataPlaceholder } from '../common/data-placeholders'
 
 // ناتج تنفيذ الوجهة: المرجع الدائم + هل اكتمل فوراً أم ينتظر (سريان/تأكيد استلام)
 export interface DestinationResult {
@@ -96,6 +100,40 @@ export const ENGINE_RECORD_HANDLERS: Record<string, { labelAr: string; typeCodes
   },
 }
 
+// ===== D12 (قرار 14 سبتمبر): الأنواع الستة عشر التي لا معالج حقيقي لها =====
+// القرار لكل نوع: «تسجيل فقط» — الطلب المعتمد نفسه هو السجل الدائم، بلا أثر آلي على
+// الملف أو الراتب أو العهدة (الإجراء الفعلي يتم يدويًا أو بطلب منفصل مذكور في الملاحظة).
+// لا نوع منها معطّل. التظلم والإبلاغ والاعتراض على جزاء تسجيل سري (isConfidential).
+// ترحيل 20260914_016_r1 يحوّل وجهاتها القديمة غير المبنية إلى «none» في البيانات؛ الخريطة
+// هنا تُبقي القاعدة غير المرحّلة (وجهة قديمة) تعمل بنفس القرار بدل أن تختفي الأنواع (REQ-3).
+export type RequestTypeDecision = 'RECORD_ONLY' | 'DISABLED'
+export const RECORD_ONLY_LABEL = 'تسجيل فقط'
+export const RECORD_ONLY_REQUEST_TYPES: Record<string, { legacyHandler: string; decision: RequestTypeDecision; confidential: boolean; noteAr: string }> = {
+  ACCESS_REQUEST: { legacyHandler: 'access_register', decision: 'RECORD_ONLY', confidential: false, noteAr: 'تمنح تقنية المعلومات الصلاحية يدويًا بعد الاعتماد' },
+  APPRAISAL_OBJECTION: { legacyHandler: 'appraisal_register', decision: 'RECORD_ONLY', confidential: false, noteAr: 'لا يوجد موديول تقييم أداء — الاعتراض سجل للمراجعة' },
+  CERT_REIMBURSEMENT: { legacyHandler: 'training_expense', decision: 'RECORD_ONLY', confidential: false, noteAr: 'لا صرف آلي — أي مبلغ يُصرف بقيد مالي منفصل بعد الاعتماد' },
+  CONFERENCE: { legacyHandler: 'training_register', decision: 'RECORD_ONLY', confidential: false, noteAr: 'سجل حضور مؤتمر للمتابعة — لا موديول تدريب' },
+  DEPENDENTS_UPDATE: { legacyHandler: 'employee_dependents', decision: 'RECORD_ONLY', confidential: false, noteAr: 'لا جدول معالين — تحدّث الموارد البشرية الملف يدويًا' },
+  DOCUMENT_RENEWAL: { legacyHandler: 'document_vault', decision: 'RECORD_ONLY', confidential: false, noteAr: 'المستند يُرفع ويُربط من ملف الموظف بعد الاعتماد' },
+  EDUCATION_ASSISTANCE: { legacyHandler: 'training_register', decision: 'RECORD_ONLY', confidential: false, noteAr: 'لا صرف آلي — أي مبلغ يُصرف بقيد مالي منفصل' },
+  FACILITY_CARD: { legacyHandler: 'facilities_register', decision: 'RECORD_ONLY', confidential: false, noteAr: 'تصدر الإدارة الكارت يدويًا بعد الاعتماد' },
+  GRIEVANCE: { legacyHandler: 'er_case', decision: 'RECORD_ONLY', confidential: true, noteAr: 'تسجيل سري — لا يطّلع عليه غير أطرافه' },
+  HR_MEETING: { legacyHandler: 'meetings_register', decision: 'RECORD_ONLY', confidential: false, noteAr: 'يُحدَّد الموعد مع الموارد البشرية خارج النظام' },
+  IT_EQUIPMENT: { legacyHandler: 'it_assets', decision: 'RECORD_ONLY', confidential: false, noteAr: 'الجهاز يُسلَّم بطلب عهدة منفصل' },
+  PENALTY_OBJECTION: { legacyHandler: 'er_case', decision: 'RECORD_ONLY', confidential: true, noteAr: 'تسجيل سري للمراجعة — لا يلغي الجزاء آليًا' },
+  SECONDMENT: { legacyHandler: 'assignments_register', decision: 'RECORD_ONLY', confidential: false, noteAr: 'لا تغيير آلي على الفرع أو الفريق — النقل بطلب نقل منفصل' },
+  SUGGESTION: { legacyHandler: 'suggestions_register', decision: 'RECORD_ONLY', confidential: false, noteAr: 'سجل اقتراحات للمتابعة' },
+  TRAINING_REQUEST: { legacyHandler: 'training_register', decision: 'RECORD_ONLY', confidential: false, noteAr: 'سجل تدريب — لا موديول تدريب' },
+  WHISTLEBLOWING: { legacyHandler: 'er_case_anonymous', decision: 'RECORD_ONLY', confidential: true, noteAr: 'تسجيل سري — لا يطّلع عليه غير أطرافه' },
+}
+
+// نمط تنفيذ النوع للواجهة: تسجيل فقط (none أو قرار D12) / تنفيذ فعلي / وجهة غير مبنية
+export type RequestExecutionMode = 'RECORD_ONLY' | 'EXECUTES' | 'UNSUPPORTED'
+const isLegacyRecordOnly = (type: Pick<RequestType, 'code' | 'destinationHandler'>) => {
+  const decision = RECORD_ONLY_REQUEST_TYPES[type.code]
+  return !!decision && decision.decision === 'RECORD_ONLY' && decision.legacyHandler === type.destinationHandler
+}
+
 // SEC-EMP-2: قيم تُكتب في ملف الموظف وتُطبع في المستندات — تحقق واحد يستخدمه
 // التقديم (requests.service) والتنفيذ (المعالج)، ويعيد القيمة المنظّفة
 export const assertIban = (raw: unknown): string => {
@@ -114,6 +152,8 @@ export const assertJobTitle = (raw: unknown): string => {
       'المسمى الوظيفي الجديد غير صالح — من 2 إلى 100 حرف بدون < أو >'
     )
   }
+  // الخطوة 9 (مسار R2): القيمة المؤقتة ليست مسمى حقيقيًا
+  if (isDataPlaceholder(title)) throw new BadRequestException(DATA_PLACEHOLDER_REJECTED)
   return title
 }
 // اسم البنك (اختياري في الطلب) بطول عمود bankName (100) وبلا محارف HTML/تحكم
@@ -147,7 +187,19 @@ export class DestinationsService {
     if (key === 'none' || Object.prototype.hasOwnProperty.call(this.handlers, key)) {
       return true
     }
+    // D12: وجهة قديمة غير مبنية لنوع قراره «تسجيل فقط» (قاعدة لم تُرحَّل بعد)
+    if (isLegacyRecordOnly(type)) return true
     return ENGINE_RECORD_HANDLERS[key]?.typeCodes?.includes(type.code) ?? false
+  }
+
+  // نمط التنفيذ للكتالوج وبانِي الطلبات: «تسجيل فقط» صريح بدل إخفاء النوع (D12)
+  executionModeOf(type: Pick<RequestType, 'code' | 'destinationHandler'>): RequestExecutionMode {
+    if (!this.supports(type)) return 'UNSUPPORTED'
+    return type.destinationHandler === 'none' || isLegacyRecordOnly(type) ? 'RECORD_ONLY' : 'EXECUTES'
+  }
+
+  executionLabelOf(type: Pick<RequestType, 'code' | 'destinationHandler'>): string | null {
+    return this.executionModeOf(type) === 'RECORD_ONLY' ? RECORD_ONLY_LABEL : null
   }
 
   // رسالة واحدة للنوع اللي وجهته غير مبنية — للتقديم والتفعيل والتنفيذ
@@ -169,8 +221,9 @@ export class DestinationsService {
     }
     const payload = req.payload ? JSON.parse(req.payload) : {}
     assertEmploymentValues(type, payload)
-    // «بدون تنفيذ آلي» (سجل فقط): اختيار صريح من المالك — الطلب نفسه هو السجل الدائم
-    if (type.destinationHandler === 'none') {
+    // «بدون تنفيذ آلي» (سجل فقط): اختيار صريح من المالك — الطلب نفسه هو السجل الدائم.
+    // وقرار D12 لوجهة قديمة غير مبنية (قاعدة لم تُرحَّل) له نفس الأثر
+    if (type.destinationHandler === 'none' || isLegacyRecordOnly(type)) {
       return { ref: refOf('REQ', req.id), completed: true }
     }
     // الطلب نفسه سجل يقرؤه محرك الحضور (لأنواعه فقط) — أيامه يُعاد حسابها بعد التنفيذ
@@ -252,12 +305,15 @@ export class DestinationsService {
             leaveDays
           )
           for (const [year, d] of Object.entries(byYear)) {
+            // نفس تاريخ بوابة الاعتماد (assertLeaveBalance) — وإلا نصيب السنة الجاية
+            // يُفحص على 01-01 برصيد متراكم صفر ويفشل التنفيذ بعد نجاح البوابة
             await this.leaveBalances.deduct(
               em,
               req.requesterId,
               balanceType,
               d,
-              year === leave.fromDate.slice(0, 4) ? leave.fromDate : `${year}-01-01`
+              this.leaveBalances.balanceGateDate(year, leave.fromDate),
+              this.leaveBalances.leaveYearStart(year, leave.fromDate)
             )
           }
         }
@@ -368,28 +424,40 @@ export class DestinationsService {
   private loanHandler: Handler = async (em, req, _t, payload) => {
     const actorId = await this.loanRequestActor(em, req)
     if (req.typeCode === 'EARLY_LOAN_SETTLEMENT' || _t.destinationHandler === 'loan_early_settlement') {
-      const loanId = assertLoanReferenceId(payload.loanId)
-      await settleLoanEarly(em, { employeeId: req.requesterId, loanId, requestId: req.id, actorId,
-        reason: String(payload.reason ?? 'سداد سلفة مبكر معتمد').trim() })
-      return { ref: refOf('LN', loanId), completed: true }
+      // AD-14 (C6): المبلغ الفارغ = سداد كلي؛ الجزئي بمبلغ ومرجع وطريقة (تقصير المدة أو تخفيض القسط).
+      const early = readEarlySettlementPayload(payload, req.id)
+      await repayLoanEarly(em, { employeeId: req.requesterId, loanId: early.loanId, amount: early.amount, reference: early.reference!,
+        method: early.method, mode: early.mode, requestId: req.id, actorId, reason: String(payload.reason ?? 'سداد سلفة مبكر معتمد').trim() })
+      return { ref: refOf('LN', early.loanId), completed: true }
     }
     // إعادة تنفيذ الطلب لا تعيد تشكيل مبلغ أو جدول سلفة أنشئت بالفعل.
     const existing = await em.getRepository(Loan).find({ where: { requestId: req.id }, select: { id: true, employeeId: true } })
     if (existing.length > 1 || existing.some(loan => loan.employeeId !== req.requesterId)) throw new ConflictException('مرجع طلب السلفة مرتبط بسجل مالي غير متسق')
     if (existing.length) return { ref: refOf('LN', existing[0].id), completed: true }
-    const schedule = loanScheduleAmounts(payload.amount, payload.months ?? 1)
+    // AD-07/09 (C6): المبلغ المعتمد (قد يكون مخفّضًا عن المطلوب) وشهر أول قسط ولقطة السقوف والاستثناء.
+    const schedule = readApprovedLoanRequest(payload)
     const open = (await readLoanInstallmentPositions(em, req.requesterId)).filter(row => row.financialStatus === 'DUE' && row.remainingAmount !== '0.00')
     if (open.length + schedule.months > 1000) throw new BadRequestException('إجمالي الأقساط المفتوحة بعد السلفة يتجاوز الحد التقني1000؛ قلل المدة أو أغلق الأقساط القائمة أولًا')
+    const start = new Date()
+    // الافتراضي كما كان: أول قسط في الشهر التالي للاعتماد؛ الموارد البشرية تحدد شهرًا آخر.
+    const [firstYear, firstMonth] = schedule.firstInstallmentPeriod
+      ? [Number(schedule.firstInstallmentPeriod.slice(0, 4)), Number(schedule.firstInstallmentPeriod.slice(5, 7)) - 1]
+      : [start.getFullYear(), start.getMonth() + 1]
+    const firstDue = new Date(firstYear, firstMonth, 1)
+    const firstInstallmentPeriod = `${firstDue.getFullYear()}-${String(firstDue.getMonth() + 1).padStart(2, '0')}`
     // CAST للنص يحفظ قروش DECIMAL(18,2) دون تحويل مبلغ SQL إلى Number.
-    const inserted = await em.query('INSERT INTO [loans] ([requestId], [employeeId], [amount], [status]) OUTPUT INSERTED.[id] AS [id] VALUES (@0, @1, CAST(@2 AS decimal(18,2)), @3)', [req.id, req.requesterId, schedule.amount, 'APPROVED'])
+    const inserted = await em.query(`INSERT INTO [loans] ([requestId], [employeeId], [amount], [status], [requestedAmount], [isExceptional], [exceptionalCategory],
+      [exceptionalReason], [firstInstallmentPeriod], [installmentMonths], [capSnapshot], [createdByUserId])
+      OUTPUT INSERTED.[id] AS [id] VALUES (@0, @1, CAST(@2 AS decimal(18,2)), @3, CAST(@4 AS decimal(18,2)), @5, @6, @7, @8, @9, @10, @11)`,
+    [req.id, req.requesterId, schedule.amount, 'APPROVED', schedule.requestedAmount, schedule.exceptional, schedule.exceptionalCategory,
+      schedule.exceptionalReason, firstInstallmentPeriod, schedule.months, schedule.capSnapshot, req.createdByUserId ?? null])
     const loanId = Number(inserted[0]?.id)
     if (!Number.isInteger(loanId) || loanId <= 0) throw new Error('لم يرجع حفظ السلفة معرفًا صالحًا')
     const rows: Array<{ dueDate: string; amount: string }> = []
-    const start = new Date()
-    for (let i = 1; i <= schedule.months; i++) {
-      const due = new Date(start.getFullYear(), start.getMonth() + i, 1)
+    for (let i = 0; i < schedule.months; i++) {
+      const due = new Date(firstYear, firstMonth + i, 1)
       const dueDate = `${due.getFullYear()}-${String(due.getMonth() + 1).padStart(2, '0')}-01`
-      rows.push({ dueDate, amount: schedule.amounts[i - 1] })
+      rows.push({ dueDate, amount: schedule.amounts[i] })
     }
     // دفعات محدودة من معاملات SQL؛ يبدأ كل قسط جديد برصيد واضح ومراجعة أولى.
     for (let offset = 0; offset < rows.length; offset += 50) {
@@ -745,10 +813,9 @@ export class DestinationsService {
     (defaultType: ObligationType, category: string, labelPrefix: string): Handler =>
     async (em, req, _t, payload) => {
       const amount = Number(payload.amount ?? 0)
-      const type: ObligationType =
-        payload.type === 'DEBIT' || payload.type === 'CREDIT'
-          ? payload.type
-          : defaultType
+      // SEC ٤-أ بند 6 / الخطوة 25: نوع القيد من تعريف الوجهة فقط — payload.type من العميل
+      // كان يحوّل مكافأة/بدل/مصروفات معتمدة إلى خصم DEBIT؛ الخصم يمر من الخصومات المصنفة
+      const type: ObligationType = defaultType
       if (amount > 0) {
         await em.getRepository(EmployeeObligation).save({
           employeeId: req.requesterId,
@@ -770,6 +837,37 @@ export class DestinationsService {
             : 'بلا مبلغ — سجل عام',
       }
     }
+
+  // C4 / الخطوة 27 (مراجعة ⑧): اعتماد طلب BONUS قديم من محرك الطلبات. القيد للموظف المختار في الحمولة (لا لمقدم الطلب)
+  // إن كان موظفًا موجودًا، وبشهر مسير يوم الاعتماد وبداية دورته حتى لا يدخل مسودة شهر سابق. النوع CREDIT دائمًا.
+  private legacyBonusHandler: Handler = async (em, req, _t, payload) => {
+    const amount = Number(payload.amount ?? 0)
+    const chosen = Number(payload.employeeId)
+    const exists = Number.isSafeInteger(chosen) && chosen > 0 && (await em.getRepository(Employee).count({ where: { id: chosen } })) === 1
+    const employeeId = exists ? chosen : req.requesterId
+    if (amount > 0) {
+      const cycleRow = await em.getRepository(RequestsConfig).findOne({ where: { key: 'payroll.cycle_start_day' } })
+      const cycle = Number(cycleRow?.value ?? '23')
+      const cycleStartDay = Number.isInteger(cycle) && cycle >= 1 && cycle <= 31 ? cycle : 23
+      const targetPeriod = payrollPeriodOfDate(new Date().toLocaleDateString('en-CA'), cycleStartDay)
+      await em.getRepository(EmployeeObligation).save({
+        employeeId,
+        type: 'CREDIT',
+        category: 'bonus',
+        amount: Math.round(amount * 100) / 100,
+        label: `مكافأة${payload.reason ? ': ' + payload.reason : ''}`.slice(0, 300),
+        status: 'PENDING',
+        sourceRequestId: req.id,
+        effectiveDate: salaryPayrollPeriodBounds(targetPeriod, cycleStartDay).startDate,
+        targetPeriod,
+      })
+    }
+    return {
+      ref: refOf('REQ', req.id),
+      completed: true,
+      note: amount > 0 ? `إضافة مكافأة ${amount} للموظف #${employeeId} في دفتر المديونيات` : 'بلا مبلغ — سجل عام',
+    }
+  }
 
   // بلاغ فقد/تلف العهدة المعتمد: يعلّم الإسناد LOST، يقاعِد الأصل، ويقيّد قيمته
   // كمديونية DEBIT على حائز العهدة يستهلكها المسير
@@ -860,7 +958,8 @@ export class DestinationsService {
     custody_transfer: this.custodyTransferHandler,
     custody_finance: this.custodyFinanceHandler,
     // مالية → دفتر المديونيات (بنود لمرة واحدة يستهلكها المسير)
-    payroll_bonus: this.obligationHandler('CREDIT', 'bonus', 'مكافأة'),
+    // C4 / الخطوة 27: الطلبات القديمة فقط (الإنشاء الجديد مقفول ويمر من موديول المكافآت)
+    payroll_bonus: this.legacyBonusHandler,
     payroll_allowance: this.obligationHandler('CREDIT', 'allowance', 'بدل'),
     expense_register: this.obligationHandler('CREDIT', 'expense', 'مصروفات'),
     payroll_adjustment: this.obligationHandler('CREDIT', 'adjustment', 'تسوية'),

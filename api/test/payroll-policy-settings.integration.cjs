@@ -186,7 +186,7 @@ before(async () => {
   const user = (label, role, branchId = null, permissions = []) => repo('User').save({ email: `${label}@policy-test.invalid`,
     displayName: label, passwordHash: 'test-only', role, branchId, permissions: JSON.stringify(permissions) })
   admin = await user('admin', 'super_admin')
-  const permissions = ['payroll.view', 'payroll.calculate']
+  const permissions = ['payroll.view', 'payroll.calculate', 'payroll.policy.manage']
   managerA = await user('manager-a', 'hr_manager', branchA.id, permissions)
   managerB = await user('manager-b', 'hr_manager', branchB.id, permissions)
   starA = await user('star-a', 'hr_manager', branchA.id, ['*'])
@@ -364,6 +364,8 @@ test('PL-01 settings: contradictory period and cycle states reject atomically wh
     { cycleEndMode: 'DERIVED' }, { cycleEndMode: 'FIXED_DAY', cycleEndDay: null },
     { defaultPeriodType: 'CALENDAR_MONTH', cycleStartDay: 1, cycleEndMode: 'FIXED_DAY', cycleEndDay: 31 },
     { defaultPeriodType: 'SEMI_MONTHLY', cycleStartDay: 2, cycleEndMode: 'DERIVED', cycleEndDay: null },
+    // الخطوة 15: يوم نهاية ثابت لا يصنع فترات متصلة (تداخل 23→23، فجوة 23→25 و1→15، و30 مع 31).
+    { cycleEndDay: 23 }, { cycleEndDay: 25 }, { cycleStartDay: 1, cycleEndDay: 15 }, { cycleStartDay: 30, cycleEndDay: 31 },
   ]) expectStatus(await patchVersion(policyId, versionId, { settings }), 400)
   assert.deepEqual(await policySnapshot(), before)
   for (const defaultPeriodType of ['CALENDAR_MONTH', 'SEMI_MONTHLY']) {

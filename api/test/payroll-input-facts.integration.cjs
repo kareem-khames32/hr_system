@@ -174,7 +174,7 @@ before(async () => {
   const user = (label, role, branchId = null, permissions = []) => repo('User').save({ email: `${label}@policy-test.invalid`,
     displayName: label, passwordHash: 'test-only', role, branchId, permissions: JSON.stringify(permissions) })
   admin = await user('admin', 'super_admin')
-  const permissions = ['payroll.view', 'payroll.calculate']
+  const permissions = ['payroll.view', 'payroll.calculate', 'payroll.policy.manage']
   managerA = await user('manager-a', 'hr_manager', branchA.id, permissions)
   managerB = await user('manager-b', 'hr_manager', branchB.id, permissions)
   starA = await user('star-a', 'hr_manager', branchA.id, ['*'])
@@ -590,26 +590,34 @@ test('Input facts API: configured twenty-three-to-twenty-two cycle is a full mon
   assert.equal(error.code, 'INPUT_FACTS_PERIOD_CYCLE_MISMATCH')
 })
 
-test('Input facts API: a short fifth-to-twentieth cycle earns a full month only when that entire short cycle is configured', async () => {
-  const fixture = await factsFixture({ cycleStartDay: 5, cycleEndMode: 'FIXED_DAY', cycleEndDay: 20 })
-  const result = await previewResult(fixture, completeCycleFacts('2026-06-05', '2026-06-20'))
-  assert.equal(result.coverage.periodDays, 16)
+test('Input facts API: a fixed fifth-to-twentieth (or fifth-to-fifth) cycle is refused at creation; the contiguous fifth-to-fourth cycle earns a full month only for its whole period', async () => {
+  // الخطوة 14/15: 5→20 يترك 21..4 بلا مسير و5→5 يكرر اليوم 5 في مسيرين؛ لا يُنشأ صف سياسة بأي منهما.
+  const before = await policySnapshot()
+  for (const cycleEndDay of [20, 5]) {
+    const refused = expectStatus(await request(admin, 'POST', endpoint, definition({ settings: { dailyHours: 9, monthlyDays: 30, roundingMode: 'HALF_UP', roundingScale: 2,
+      cycleStartDay: 5, cycleEndMode: 'FIXED_DAY', cycleEndDay, rateBase: 'GROSS', lateDeductionEnabled: true, skipAttendance: false } })), 400)
+    assert.match(JSON.stringify(refused), /cycleEndDay/)
+  }
+  assert.deepEqual(await policySnapshot(), before)
+  const fixture = await factsFixture({ cycleStartDay: 5, cycleEndMode: 'FIXED_DAY', cycleEndDay: 4 })
+  const result = await previewResult(fixture, completeCycleFacts('2026-05-05', '2026-06-04'))
+  assert.equal(result.coverage.periodDays, 31)
   assert.equal(result.coverage.fullCoverage, true)
   expectExact(result.earnedCalendar30.grossSalary, '9000')
   expectExact(result.coverage.earnedCalendar30Factor, '1')
-  const error = expectStatus(await preview(fixture, completeCycleFacts('2026-06-05', '2026-06-19')), 400)
+  const error = expectStatus(await preview(fixture, completeCycleFacts('2026-06-05', '2026-06-20')), 400)
   assert.equal(error.code, 'INPUT_FACTS_PERIOD_CYCLE_MISMATCH')
 })
 
-test('Input facts API: inclusive32day cycle accepts32scheduled dates with one monthly salary only', async () => {
-  const fixture = await factsFixture({ cycleStartDay: 5, cycleEndMode: 'FIXED_DAY', cycleEndDay: 5 })
-  const dates = Array.from({ length: 32 }, (_, index) => new Date(Date.UTC(2026, 6, index + 5)).toISOString().slice(0, 10))
-  const input = completeCycleFacts('2026-07-05', '2026-08-05')
+test('Input facts API: inclusive 31-day cycle (fifth-to-fourth) accepts 31 scheduled dates with one monthly salary only', async () => {
+  const fixture = await factsFixture({ cycleStartDay: 5, cycleEndMode: 'FIXED_DAY', cycleEndDay: 4 })
+  const dates = Array.from({ length: 31 }, (_, index) => new Date(Date.UTC(2026, 6, index + 5)).toISOString().slice(0, 10))
+  const input = completeCycleFacts('2026-07-05', '2026-08-04')
   input.scheduledWorkDates = dates
   const result = await previewResult(fixture, input)
-  assert.equal(result.coverage.periodDays, 32)
-  assert.equal(result.coverage.coveredDays, 32)
-  assert.equal(result.coverage.periodScheduledDays, 32)
+  assert.equal(result.coverage.periodDays, 31)
+  assert.equal(result.coverage.coveredDays, 31)
+  assert.equal(result.coverage.periodScheduledDays, 31)
   assert.equal(result.segments.length, 1)
   expectExact(result.earnedCalendar30.grossSalary, '9000')
   expectExact(result.coverage.earnedCalendar30Factor, '1')

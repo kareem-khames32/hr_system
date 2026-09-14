@@ -52,7 +52,8 @@ async function fixture({ kind = 'shifts', rule = {}, employee = {}, day = date }
     payMethod: 'cash', ...(kind === 'work-schedules' ? { workScheduleId: source.id } : {}), ...employee }
   let emp
   if (kind === 'work-schedules') {
-    const savedEmployee = await request(admin, 'POST', '/employees', { ...employeeInput,
+    // الخطوة 13: الإنشاء يوثّق أجر التعيين؛ تاريخ التعيين قديم فيُختار صراحةً شهر مسير هذا الاختبار (2026-07).
+    const savedEmployee = await request(admin, 'POST', '/employees', { ...employeeInput, salaryEffectivePayrollPeriod: '2026-07',
       attendanceEffectiveFrom: '2026-07-01', attendanceChangeReason: 'إسناد جدول العمل بنسخة منذ إنشاء موظف الاختبار' })
     assert.equal(savedEmployee.status, 201, JSON.stringify(savedEmployee.body))
     emp = await repo('Employee').findOneByOrFail({ id: savedEmployee.body.id })
@@ -149,6 +150,13 @@ async function withTier(value, action) {
   try { return await action() } finally { await repo('LatenessTier').delete(tier.id) }
 }
 
+// الخطوة 18 (B3): الاعتماد يتطلب إقرارًا بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية بنطاق المعتمد.
+async function acknowledgeUnassigned(user, runId) {
+  const report = await request(user, 'GET', `/payroll/runs/${runId}/unassigned`)
+  assert.equal(report.status, 200, JSON.stringify(report.body))
+  const ack = await request(user, 'POST', `/payroll/runs/${runId}/unassigned-ack`, { reportHash: report.body.reportHash })
+  assert.equal(ack.status, 201, JSON.stringify(ack.body))
+}
 before(async () => {
   assert.equal(env.DB_TYPE || 'mssql', 'mssql')
   assert.match(database, /^hr_payroll_flex_test_[a-f0-9]{16}$/); assert.notEqual(database, env.DB_DATABASE)
@@ -169,6 +177,8 @@ before(async () => {
   admin = await makeAdmin('admin@payroll-flex.invalid'); approver = await makeAdmin('approver@payroll-flex.invalid')
   await repo('RequestsConfig').save([
     { key: 'payroll.cycle_start_day', value: '1' }, { key: 'payroll.monthly_days', value: '30' },
+    // المرونة على راتب الملف؛ اختيار راتب الشهر من السجل مغطى في payroll-run-salary-period.integration.cjs.
+    { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' },
     { key: 'payroll.daily_hours', value: '8' }, { key: 'payroll.late_deduction_enabled', value: 'true' },
     { key: 'attendance.absence_penalty_days', value: '1' }, { key: 'attendance.weekend_days', value: 'FRI,SAT' },
     { key: 'attendance.grace_minutes', value: '0' },
@@ -498,6 +508,7 @@ test('FX-08.4: missing checkout keeps known lateness, leaves shortfall unknown a
   const { run, item } = await payroll(f)
   assert.equal(number(item.shortfallDeduction), 0, 'Missing work duration must never invent a zero-work/full-day penalty')
   assert.equal(number(item.latenessDeduction), 40.63)
+  await acknowledgeUnassigned(approver, run.id)
   const claimsBefore = await repo('PayrollPeriodClaim').count()
   const before = await repo('PayrollRun').findOneByOrFail({ id: run.id })
   const approval = await request(approver, 'POST', `/payroll/runs/${run.id}/approve`)
@@ -511,6 +522,7 @@ test('FX-09: approved payroll protects its original attendance and source versio
   const f = await fixture()
   await punches(f, '09:30', '18:30')
   const { run, item } = await payroll(f)
+  await acknowledgeUnassigned(approver, run.id)
   const approval = await request(approver, 'POST', `/payroll/runs/${run.id}/approve`)
   assert.equal(approval.status, 201, JSON.stringify(approval.body))
   const oldDay = await dayOf(f)

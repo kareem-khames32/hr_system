@@ -109,22 +109,31 @@ function deductionsAreZero(item) {
     assert.equal(number(item[key]), 0, key)
   }
 }
-async function patchEmployee(emp, change) {
+// قاعدة المالك: تغيير الراتب يسري من راتب شهر كامل. الافتراضي شهر مسير هذه المجموعة حتى تقرأه إعادة الحساب؛
+// التعديل بعد اعتماد المسير يسري من شهر المسير الجاري فلا يمس الشهر المعتمد.
+const currentPayrollMonth = require('../src/payroll/payroll-period').payrollPeriodOfDate(require('../src/attendance/attendance.service').localDateOf(new Date()), 23)
+async function patchEmployee(emp, change, effectivePayrollPeriod = period) {
   const metadata = await request(admin, 'GET', `/employees/${emp.id}/salary-change-context`)
   assert.equal(metadata.status, 200, JSON.stringify(metadata.body))
   const c = metadata.body, fields = { ...change }, salary = { ...c.current }
   for (const key of [...keys, 'currency']) if (Object.hasOwn(fields, key)) {
     salary[key] = String(fields[key]); delete fields[key]
   }
-  const effectiveDate = require('../src/attendance/attendance.service').localDateOf(new Date())
   const response = await request(admin, 'PATCH', `/employees/${emp.id}`, { ...fields, salaryChange: {
-    expectedRevision: c.historyRevision, expectedCurrentSourceHash: c.currentSourceHash, effectiveDate,
+    expectedRevision: c.historyRevision, expectedCurrentSourceHash: c.currentSourceHash, effectivePayrollPeriod,
     reason: 'تعديل مكونات الأجر بعد فترة الاختبار', evidenceReference: 'اختبار مكونات الأجر', salary,
   } })
   assert.equal(response.status, 200, JSON.stringify(response.body))
   return repo('Employee').findOneByOrFail({ id: emp.id })
 }
 
+// الخطوة 18 (B3): الاعتماد يتطلب إقرارًا بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية بنطاق المعتمد.
+async function acknowledgeUnassigned(user, runId) {
+  const report = await request(user, 'GET', `/payroll/runs/${runId}/unassigned`)
+  assert.equal(report.status, 200, JSON.stringify(report.body))
+  const ack = await request(user, 'POST', `/payroll/runs/${runId}/unassigned-ack`, { reportHash: report.body.reportHash })
+  assert.equal(ack.status, 201, JSON.stringify(ack.body))
+}
 before(async () => {
   assert.equal(env.DB_TYPE || 'mssql', 'mssql')
   assert.match(database, /^hr_payroll_comp_test_[a-f0-9]{16}$/)
@@ -151,6 +160,8 @@ before(async () => {
   approver = await makeAdmin('approver@payroll-compensation.invalid')
   await repo('RequestsConfig').save([
     { key: 'payroll.cycle_start_day', value: '23' }, { key: 'payroll.monthly_days', value: '30' },
+    // هذه المجموعة تختبر مكونات راتب الملف؛ اختيار راتب الشهر من السجل مغطى في payroll-run-salary-period.integration.cjs.
+    { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' },
     { key: 'payroll.daily_hours', value: '8' }, { key: 'payroll.late_deduction_enabled', value: 'true' },
     { key: 'attendance.absence_penalty_days', value: '1' }, { key: 'attendance.weekend_days', value: 'FRI,SAT' },
   ])
@@ -201,7 +212,9 @@ test('SPEC⑥: all six independent components appear once in the full salary, SQ
 })
 
 test('SPEC⑥ F1: HTTP employee creation accepts phone and work nature without manufacturing otherAllowance', async () => {
-  const input = employeeData()
+  // الخطوة 13: الإنشاء يوثّق أجر التعيين «يسري من راتب شهر»؛ تاريخ التعيين قديم (2020) فالافتراض الشهر الجاري،
+  // ومسير هذا الاختبار لشهر سابق فيُختار شهره صراحةً (من له سجل شهري لا يرجع لراتب الملف).
+  const input = { ...employeeData(), salaryEffectivePayrollPeriod: period }
   delete input.otherAllowance
   const createdEmployee = await request(admin, 'POST', '/employees', input)
   assert.equal(createdEmployee.status, 201, JSON.stringify(createdEmployee.body))
@@ -346,6 +359,7 @@ test('SPEC⑥: approved member snapshot and employee payslip keep original compo
   const owner = await repo('User').save({ email: `owner-${emp.id}@payroll-compensation.invalid`, displayName: 'Fixture employee',
     passwordHash: 'test-only', role: 'employee', branchId: branch.id, employeeId: emp.id, permissions: '[]' })
   const run = await calculate([emp]), item = itemFor(run, emp)
+  await acknowledgeUnassigned(approver, run.id)
   const approved = await request(approver, 'POST', `/payroll/runs/${run.id}/approve`)
   assert.equal(approved.status, 201, JSON.stringify(approved.body))
   const beforeRun = await request(admin, 'GET', `/payroll/runs/${run.id}`)
@@ -353,7 +367,7 @@ test('SPEC⑥: approved member snapshot and employee payslip keep original compo
   assert.equal(beforeSlip.status, 200, JSON.stringify(beforeSlip.body))
   const beforeMember = await repo('PayrollRunMember').findOneByOrFail({ runId: run.id, employeeId: emp.id })
   const beforeItem = await repo('PayrollItem').findOneByOrFail({ id: item.id })
-  await patchEmployee(emp, { fullName: 'اسم الموظف بعد اعتماد المسير', phoneAllowance: 999, workNatureAllowance: 888, otherAllowance: 777 })
+  await patchEmployee(emp, { fullName: 'اسم الموظف بعد اعتماد المسير', phoneAllowance: 999, workNatureAllowance: 888, otherAllowance: 777 }, currentPayrollMonth)
   assert.deepEqual((await request(admin, 'GET', `/payroll/runs/${run.id}`)).body, beforeRun.body)
   const afterSlip = await request(owner, 'GET', `/payroll/items/${item.id}`)
   assert.equal(afterSlip.status, 200); assert.deepEqual(afterSlip.body, beforeSlip.body)

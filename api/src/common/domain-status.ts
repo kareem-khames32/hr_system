@@ -10,5 +10,6 @@ export type LeaveTypeCode = string
 // Catalog defaults are annual/sick/none; configured ledger codes remain valid.
 export type BalanceType = 'annual' | 'sick' | 'none' | (string & {})
 export type LoanStatus = 'APPROVED' | 'DISBURSED' | 'SETTLED'
-export type TransferStatus = 'SCHEDULED' | 'EXECUTED'
+// CANCELLED: ألغاه النظام (نقل مجدول مكرر لنفس الموظف — يُنفّذ الأول فقط) بسبب مسجل على طلبه
+export type TransferStatus = 'SCHEDULED' | 'EXECUTED' | 'CANCELLED'
 export type LetterStatus = 'GENERATED'

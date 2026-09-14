@@ -14,6 +14,7 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import { fetchConfig, updateConfig, uploadFile, fetchFileObjectUrl } from '@/lib/api'
+import { COMPANY_NAME_PLACEHOLDER, isDataPlaceholder } from '@/lib/data-placeholders'
 
 // بيانات الشركة — تُطبع في رأس المستندات المولَّدة من ملف الموظف وفي نصوصها
 // (خطاب تعريف بالراتب، شهادة خبرة، خطابات البنك والسفارة، عقد العمل).
@@ -151,6 +152,8 @@ export default function CompanySettingsPage() {
   }
 
   const name = (values['company.name'] ?? '').trim()
+  // قيمة مؤقتة كتبها ترحيل الخطوة 9 — تُعامل كاسم غير مضبوط
+  const namePlaceholder = isDataPlaceholder(name)
 
   return (
     <MainLayout>
@@ -183,6 +186,16 @@ export default function CompanySettingsPage() {
           <div className="bg-amber-50 text-amber-800 rounded-xl p-4 text-sm">
             بعض مفاتيح بيانات الشركة غير موجودة على الخادم بعد — أعد تشغيل الخادم لتُضاف
             فارغة ثم أعد تحميل الصفحة
+          </div>
+        )}
+
+        {!loading && namePlaceholder && (
+          <div className="bg-amber-50 text-amber-800 rounded-xl p-4 text-sm flex items-start gap-2">
+            <AlertCircle size={18} className="mt-0.5 shrink-0" />
+            <span>
+              اسم الشركة الحالي قيمة مؤقتة كتبها ترحيل تنظيف البيانات («{COMPANY_NAME_PLACEHOLDER}»).
+              أدخل الاسم الرسمي واحفظ — الخطابات الرسمية لا تُصدر بالاسم المؤقت.
+            </span>
           </div>
         )}
 
@@ -287,8 +300,8 @@ export default function CompanySettingsPage() {
                     // eslint-disable-next-line @next/next/no-img-element
                     <img src={logoUrl} alt="" className="h-14 mx-auto mb-2 object-contain" />
                   )}
-                  <p className={`font-bold ${name ? 'text-gray-800' : 'text-gray-400'}`}>
-                    {name || 'اسم الشركة غير مضبوط'}
+                  <p className={`font-bold ${name && !namePlaceholder ? 'text-gray-800' : 'text-gray-400'}`}>
+                    {name && !namePlaceholder ? name : 'اسم الشركة غير مضبوط'}
                   </p>
                   {values['company.name_en']?.trim() && (
                     <p className="text-sm text-gray-500" dir="ltr">

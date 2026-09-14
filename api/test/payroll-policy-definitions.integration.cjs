@@ -251,7 +251,7 @@ before(async () => {
   const user = (label, role, branchId = null, permissions = []) => repo('User').save({ email: `${label}@policy-test.invalid`,
     displayName: label, passwordHash: 'test-only', role, branchId, permissions: JSON.stringify(permissions) })
   admin = await user('admin', 'super_admin')
-  const permissions = ['payroll.view', 'payroll.calculate']
+  const permissions = ['payroll.view', 'payroll.calculate', 'payroll.policy.manage']
   managerA = await user('manager-a', 'hr_manager', branchA.id, permissions)
   managerB = await user('manager-b', 'hr_manager', branchB.id, permissions)
   starA = await user('star-a', 'hr_manager', branchA.id, ['*'])

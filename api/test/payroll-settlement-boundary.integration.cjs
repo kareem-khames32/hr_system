@@ -66,7 +66,9 @@ before(async () => {
   admin = await repo('User').save({ email: 'admin@settlement-boundary.invalid', displayName: 'Fixture admin', passwordHash: 'test-only', role: 'super_admin', permissions: '["*"]' })
   hr = await repo('User').save({ email: 'hr@settlement-boundary.invalid', displayName: 'Fixture HR', passwordHash: 'test-only', role: 'hr', branchId: branch.id, permissions: '["offboarding.manage"]' })
   outsider = await repo('User').save({ email: 'outside@settlement-boundary.invalid', displayName: 'Fixture outside', passwordHash: 'test-only', role: 'hr', branchId: otherBranch.id, permissions: '["settlement.edit","settlement.approve"]' })
-  await repo('RequestsConfig').save([{ key: 'payroll.monthly_days', value: '30' }, { key: 'payroll.daily_hours', value: '8' }, { key: 'payroll.cycle_start_day', value: '23' }])
+  await repo('RequestsConfig').save([{ key: 'payroll.monthly_days', value: '30' }, { key: 'payroll.daily_hours', value: '8' }, { key: 'payroll.cycle_start_day', value: '23' },
+    // حدود التصفية على راتب الملف؛ اختيار راتب الشهر من السجل مغطى في payroll-run-salary-period.integration.cjs.
+    { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' }])
 }, { timeout: 60000 })
 after(async t => {
   if (app) await app.close()

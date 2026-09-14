@@ -59,6 +59,8 @@ before(async () => {
     'overtime.request_backdate_days': '30', 'overtime.max_closed_periods': '1', 'overtime.allow_early_overtime': 'false',
     'overtime.missing_punch_policy': 'BLOCK', 'overtime.leave_conflict_policy': 'BLOCK',
     'payroll.monthly_days': '30', 'payroll.daily_hours': '8', 'payroll.exempt_overtime_eligible': 'false',
+    // تسعير الإضافي على راتب الملف؛ راتب شهر يوم العمل من السجل مغطى في payroll-run-salary-period.integration.cjs.
+    'payroll.salary_evidence_mode': 'MONTHLY_HISTORY_OR_CURRENT_FILE',
     'attendance.weekend_days': 'FRI,SAT', 'attendance.grace_minutes': '0', 'attendance.flex.shortfall_grace_minutes': '10',
   }).map(([key, value]) => ({ key, value })))
 }, { timeout: 60000 })
