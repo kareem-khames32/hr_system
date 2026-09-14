@@ -8,6 +8,8 @@ coverage
 
 # Next.js
 .next/
+.next-recovery/
+.next-review/
 out/
 build
 
@@ -38,3 +40,6 @@ next-env.d.ts
 # نسخة مستنسخة منفصلة داخل المجلد + ملفات نسخ احتياطي
 /hr_system/
 *.backup
+.next-preview/
+api/test/.preview-state.json
+public/vendor/pdfjs/

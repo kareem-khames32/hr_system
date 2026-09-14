@@ -1,0 +1,12 @@
+'use strict'
+const fs = require('node:fs')
+const path = require('node:path')
+const packagePath = require.resolve('pdfjs-dist/package.json')
+const source = path.dirname(packagePath)
+const { version } = JSON.parse(fs.readFileSync(packagePath, 'utf8'))
+const target = path.resolve(__dirname, '../public/vendor/pdfjs', version)
+fs.mkdirSync(target, { recursive: true })
+fs.copyFileSync(path.join(source, 'build/pdf.worker.min.mjs'), path.join(target, 'pdf.worker.min.mjs'))
+fs.copyFileSync(path.join(source, 'LICENSE'), path.join(target, 'LICENSE'))
+for (const folder of ['wasm', 'cmaps', 'standard_fonts']) fs.cpSync(path.join(source, folder), path.join(target, folder), { recursive: true })
+console.log('Local PDF viewer assets ready (' + version + ')')
