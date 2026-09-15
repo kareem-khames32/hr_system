@@ -8,6 +8,7 @@ import { buildEmployeeSalaryChange, employeeCreateSalaryPeriod, employeeSalaryCh
 import { SALARY_HISTORY_FIELDS } from '@/lib/payroll-salary-history-api'
 import { buildCalendarChange, employeeCalendarPayload, type PayrollCalendarChange, type PayrollCalendarContext } from '@/lib/payroll-calendar-api'
 import { CalendarContextSummary } from '@/components/PayrollCalendarChange'
+import { DEFAULT_SALARY_CYCLE, SALARY_CYCLE_OPTIONS, clearedEmployeeFields, employeeFullNameAr, employeeFullNameEn, employeeWorkEmailPayload, gradeSelectOptions, initialOpeningBalance, joinEmployeeAddress, jobTitleSelectOptions, openingBalanceIssue, openingBalancePayload, savedDocumentsOf, settleQualificationDrafts, type SavedEmployeeDocument } from '@/lib/employee-form-fields'
 
 import { useEffect, useRef, useState } from 'react'
 import { MainLayout } from '@/components/layout'
@@ -141,6 +142,9 @@ export interface EmployeeFormState {
   annualLeaveEntitled?: boolean // يستحق سنوي؟ (تعبئة مسبقة في التعديل)
   openingBalanceDays?: number // الرصيد الافتتاحي الحالي (تعبئة مسبقة في التعديل)
   openingBalanceExpiry?: string | null // صلاحيته (تاريخ أو null)
+  // الاسم محفوظ نصاً واحداً؛ حين يكون تقسيمه مبهماً (التعديل) يُعرض ويُحرَّر في خانة واحدة
+  nameArFull?: string
+  nameEnFull?: string
 }
 
 // الحمولة المُرسلة للباك إند — حقول ApiEmployee + الرصيد الافتتاحي المُرحّل
@@ -204,6 +208,8 @@ interface EmployeeFormProps {
   salaryChangeForbidden?: boolean
   calendarContext?: PayrollCalendarContext | null
   calendarContextError?: string
+  // مستندات الموظف المحفوظة (التعديل) — تُعرض بجانب خانات الرفع
+  savedDocuments?: SavedEmployeeDocument[] | null
 }
 
 // أيام الأسبوع
@@ -267,7 +273,6 @@ const steps = [
 ]
 
 // خيارات ثابتة للقوائم — لحقن القيمة الحالية عند التعديل إن لم تكن ضمنها
-const jobTitleOptions = ['مطور برمجيات', 'محلل نظم', 'مدير', 'أخصائي']
 const nationalityOptions = ['سعودي', 'مصري', 'أردني', 'سوري', 'أخرى']
 const bankOptions = ['بنك الراجحي', 'بنك الإنماء', 'البنك الأهلي', 'بنك الرياض', 'بنك ساب']
 
@@ -330,7 +335,8 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
   gradeId: '',
   workLocation: '',
   currency: 'SAR',
-  salaryCycle: '',
+  // القيمة الظاهرة «شهري» هي المحفوظة (كانت '' فلا تُرسل ويبقى العمود NULL)
+  salaryCycle: DEFAULT_SALARY_CYCLE,
   bankBranch: '',
   gosiNumber: '',
   isGosiRegistered: '',
@@ -343,7 +349,7 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
   workType: initial?.workType === 'fulltime' ? 'full_time' : initial?.workType === 'parttime' ? 'part_time' : initial?.workType ?? '',
 })
 
-export default function EmployeeForm({ mode, initial, onSubmit, submitting, error, employeeId, savedQualifications, salaryChangeContext = null, salaryContextError = '', salaryChangeForbidden = false, calendarContext = null, calendarContextError = '' }: EmployeeFormProps) {
+export default function EmployeeForm({ mode, initial, onSubmit, submitting, error, employeeId, savedQualifications, salaryChangeContext = null, salaryContextError = '', salaryChangeForbidden = false, calendarContext = null, calendarContextError = '', savedDocuments = null }: EmployeeFormProps) {
   const [currentStep, setCurrentStep] = useState(1)
   const [stepError, setStepError] = useState('') // خطأ تحقق الخطوة
   // يستحق سنوي؟ — من بيانات الموظف في التعديل (افتراضي نعم)
@@ -440,29 +446,14 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
   const [docUploading, setDocUploading] = useState<Record<string, boolean>>({})
   // سياسات الإجازة العامة (من الإعدادات) — تُعرض للقراءة فقط في نموذج الموظف
   const [policyCfg, setPolicyCfg] = useState<Record<string, string>>({})
-  // الرصيد الافتتاحي المُرحّل — يُعبَّأ مسبقاً بقيمته الحالية في التعديل
-  const initExpiry = initial?.openingBalanceExpiry
-  const [openingBalance, setOpeningBalance] = useState(
-    initial?.openingBalanceDays && initial.openingBalanceDays > 0
-      ? String(initial.openingBalanceDays)
-      : ''
-  )
+  // الرصيد الافتتاحي المُرحّل — يُعبَّأ مسبقاً بقيمته الحالية في التعديل؛ القيم المحمّلة
+  // أساس «هل غيّره المستخدم؟» فلا يُعاد إرساله مع كل حفظ (كان يُصفّر المستخدم منه)
+  const [initialOpening] = useState(() => initialOpeningBalance(initial))
+  const [openingBalance, setOpeningBalance] = useState(initialOpening.days)
   const [openingExpiry, setOpeningExpiry] = useState<
     'end_of_year' | 'custom_date' | 'no_expiry'
-  >(
-    initExpiry === null || initExpiry === undefined
-      ? initial?.openingBalanceDays
-        ? 'no_expiry'
-        : 'end_of_year'
-      : String(initExpiry).slice(5) === '12-31'
-        ? 'end_of_year'
-        : 'custom_date'
-  )
-  const [openingExpiryDate, setOpeningExpiryDate] = useState(
-    initExpiry && String(initExpiry).slice(5) !== '12-31'
-      ? String(initExpiry).slice(0, 10)
-      : ''
-  )
+  >(initialOpening.expiryMode)
+  const [openingExpiryDate, setOpeningExpiryDate] = useState(initialOpening.expiryDate)
 
   // بيانات القوائم من السيرفر
   const [branches, setBranches] = useState<ApiBranch[]>([])
@@ -471,6 +462,9 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
   // منتقي المدير المباشر — يكفيه id/الاسم/المسمى (القائمة الكاملة أو الدليل المختصر)
   const [allEmployees, setAllEmployees] = useState<ManagerOption[]>([])
   const [costCenters, setCostCenters] = useState<CostCenter[]>([])
+  // الدرجات والمسميات من كتالوجات الإعدادات — نفس ما يتحقق منه الخادم
+  const [grades, setGrades] = useState<Array<{ id: number; name: string; isActive: boolean }>>([])
+  const [jobTitles, setJobTitles] = useState<Array<{ id: number; title: string; isActive: boolean }>>([])
   const [catalogError, setCatalogError] = useState('')
 
   // حقول النموذج المرتبطة بالباك إند — تُبذَر من initial
@@ -706,6 +700,14 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     fetchCatalog<CostCenter>('cost-centers')
       .then((cc) => setCostCenters(cc.filter((c) => c.isActive)))
       .catch(() => setCostCenters([]))
+    // الدرجة الوظيفية مرجع لكتالوج الدرجات (الخادم يرفض رقماً غير موجود) — لا قائمة ثابتة
+    fetchCatalog<{ id: number; name: string; isActive: boolean }>('grades')
+      .then(setGrades)
+      .catch(() => setGrades([]))
+    // المسمى الوظيفي من كتالوج المسميات (/settings/job-titles)
+    fetchCatalog<{ id: number; title: string; isActive: boolean }>('job-titles')
+      .then(setJobTitles)
+      .catch(() => setJobTitles([]))
     // جداول العمل الفعلية من الإعدادات — لا نعيّن جدولاً تلقائياً؛ بلا اختيار
     // صريح يبقى الموظف على عطلة الفرع/العام (لا نغلبها بجدول لم يختره المستخدم)
     fetchCatalog<WorkScheduleRow>('work-schedules', localToday())
@@ -721,16 +723,13 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
       .catch(() => setPolicyCfg({}))
   }, [])
 
-  const fullNameAr = [form.firstNameAr, form.fatherNameAr, form.grandNameAr, form.familyNameAr]
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .join(' ')
-  const fullNameEn = [form.firstNameEn, form.middleNameEn, form.lastNameEn]
-    .map((s) => s.trim())
-    .filter(Boolean)
-    .join(' ')
+  const fullNameAr = employeeFullNameAr(form)
+  const fullNameEn = employeeFullNameEn(form)
+  // اسم محفوظ تقسيمه مبهم → خانة «الاسم الكامل» بدل أجزاء قد تُعرض في غير مكانها
+  const arNameAsWhole = form.nameArFull !== undefined
+  const enNameAsWhole = form.nameEnFull !== undefined
 
-  const avatarLetter = (form.firstNameAr.trim() || fullNameAr).charAt(0)
+  const avatarLetter = ((arNameAsWhole ? '' : form.firstNameAr.trim()) || fullNameAr).charAt(0)
 
   const filteredDepartments = form.branchId
     ? departments.filter((d) => d.branchId === Number(form.branchId))
@@ -748,7 +747,9 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     (Number(form.workNatureAllowance) || 0) +
     (Number(form.otherAllowance) || 0) : 0
 
-  const buildPayload = (): EmployeeFormPayload => {
+  const buildPayload = (
+    qualifications: QualificationsPayload = { education: eduRows, certifications: certRows, experiences: expRows, skills: skillRows, languages: langRows }
+  ): EmployeeFormPayload => {
     const payload: EmployeeFormPayload = {
       employeeCode: (form.employeeCode || form.fingerprintCode).trim(),
       fullName: fullNameAr,
@@ -757,8 +758,9 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     }
     if (form.branchId) payload.branchId = Number(form.branchId)
     if (fullNameEn) payload.fullNameEn = fullNameEn
-    const email = (form.workEmail || form.personalEmail).trim()
-    if (email) payload.email = email
+    // بريد العمل وحده في عمود email (البريد الشخصي يُرسل في personalEmail) — في التعديل الإفراغ = null
+    const workEmail = employeeWorkEmailPayload(mode, form.workEmail, initial?.workEmail)
+    if (workEmail !== undefined) payload.email = workEmail
     if (form.phone.trim()) payload.phone = form.phone.trim()
     if (form.nationalId.trim()) payload.nationalId = form.nationalId.trim()
     if (form.jobTitle) payload.jobTitle = form.jobTitle
@@ -786,9 +788,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.gender) payload.gender = form.gender
     if (form.maritalStatus) payload.maritalStatus = form.maritalStatus
     if (form.nationality) payload.nationality = form.nationality
-    const address = [form.addressDistrict.trim(), form.addressCity.trim()]
-      .filter(Boolean)
-      .join('، ')
+    // «الحي، المدينة» — مدينة بلا حي تُحفظ «، المدينة» كي تعود في خانة المدينة
+    const address = joinEmployeeAddress(form.addressDistrict, form.addressCity)
     if (address) payload.address = address
     if (form.emergencyName.trim()) payload.emergencyContactName = form.emergencyName.trim()
     if (form.emergencyPhone.trim()) payload.emergencyContactPhone = form.emergencyPhone.trim()
@@ -809,18 +810,12 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (contractFileRef) payload.contractFileRef = contractFileRef
     // صورة الموظف
     if (form.photoFileId != null) payload.photoFileId = form.photoFileId
-    // الرصيد الافتتاحي المُرحّل (اختياري) — يُطبَّق على رصيد السنوي في
-    // الإنشاء والتعديل (لموظف قائم انتقل من نظام سابق)
-    const openDays = Number(openingBalance)
-    if (openingBalance !== '' && openDays > 0) {
-      payload.openingBalanceDays = openDays
-      payload.openingBalanceExpiry =
-        openingExpiry === 'end_of_year'
-          ? `${new Date().getFullYear()}-12-31`
-          : openingExpiry === 'custom_date'
-            ? openingExpiryDate || null
-            : null // بدون انتهاء
-    }
+    // الرصيد الافتتاحي المُرحّل (اختياري) — يُطبَّق على رصيد السنوي في الإنشاء والتعديل
+    // لموظف يستحق السنوي فقط، وفي التعديل فقط إن غيّر المستخدم الأيام أو الصلاحية
+    Object.assign(payload, openingBalancePayload({
+      mode, leaveEntitled, year: new Date().getFullYear(), initial: initialOpening,
+      state: { days: openingBalance, expiryMode: openingExpiry, expiryDate: openingExpiryDate },
+    }))
     // ===== حقول قياسية جديدة — تُرسل فقط عند وجود قيمة =====
     if (form.birthPlace.trim()) payload.birthPlace = form.birthPlace.trim()
     if (form.passportNo.trim()) payload.passportNo = form.passportNo.trim()
@@ -841,7 +836,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
       const salaryPeriod = employeeCreateSalaryPeriod(salaryStart, createSalaryPeriod, form)
       if (salaryPeriod) payload.salaryEffectivePayrollPeriod = salaryPeriod
     }
-    if (form.salaryCycle) payload.salaryCycle = form.salaryCycle
+    // القيمة الظاهرة في القائمة هي المرسلة (NULL المحفوظ يظهر «شهري» ويُحفظ monthly)
+    payload.salaryCycle = form.salaryCycle || DEFAULT_SALARY_CYCLE
     if (form.bankBranch.trim()) payload.bankBranch = form.bankBranch.trim()
     if (form.gosiNumber.trim()) payload.gosiNumber = form.gosiNumber.trim()
     if (form.isGosiRegistered) payload.isGosiRegistered = form.isGosiRegistered === 'true'
@@ -855,50 +851,17 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     // ===== مراجع المستندات — payload فقط، الباك يُنشئ EmployeeDocument لكل عنصر =====
     if (documentRefs.length > 0) payload.documentRefs = documentRefs
     // ===== المؤهلات والخبرات — تُحفظ بعد الموظف (تحتاج employeeId) =====
-    if (
-      eduRows.length ||
-      certRows.length ||
-      expRows.length ||
-      skillRows.length ||
-      langRows.length
-    ) {
-      payload.qualifications = {
-        education: eduRows,
-        certifications: certRows,
-        experiences: expRows,
-        skills: skillRows,
-        languages: langRows,
-      }
+    if (Object.values(qualifications).some((rows) => rows.length > 0)) {
+      payload.qualifications = qualifications
     }
     // A cleared optional field must reach PATCH as null. Only fields that were
     // actually loaded with a value are cleared; untouched/unavailable data stays.
     if (mode === 'edit' && initial) {
-      const optionalFields: Array<[keyof EmployeeFormState, keyof ApiEmployee]> = [
-        ['departmentId', 'departmentId'], ['teamId', 'teamId'], ['managerId', 'managerEmployeeId'],
-        ['costCenterId', 'costCenterId'], ['gradeId', 'gradeId'],
-        ['contractEnd', 'contractEnd'], ['contractStart', 'contractStart'], ['contractType', 'contractType'],
-        ['contractNumber', 'contractNumber'], ['contractDurationMonths', 'contractDurationMonths'],
-        ['noticePeriodDays', 'noticePeriodDays'], ['bankName', 'bankName'], ['iban', 'iban'],
-        ['birthDate', 'birthDate'], ['gender', 'gender'], ['maritalStatus', 'maritalStatus'],
-        ['nationality', 'nationality'], ['nationalId', 'nationalId'], ['phone', 'phone'],
-        ['personalEmail', 'personalEmail'], ['fingerprintCode', 'fingerprintCode'],
-        ['emergencyName', 'emergencyContactName'], ['emergencyPhone', 'emergencyContactPhone'],
-        ['birthPlace', 'birthPlace'], ['passportNo', 'passportNo'], ['passportExpiry', 'passportExpiry'],
-        ['phoneAlt', 'phoneAlt'], ['country', 'country'], ['postalCode', 'postalCode'],
-        ['emergencyRelation', 'emergencyRelation'], ['emergencyPhoneAlt', 'emergencyPhoneAlt'],
-        ['actualStartDate', 'actualStartDate'], ['probationEndDate', 'probationEndDate'],
-        ['recruitmentSource', 'recruitmentSource'], ['workLocation', 'workLocation'],
-        ['bankBranch', 'bankBranch'], ['gosiNumber', 'gosiNumber'], ['gosiBaseSalary', 'gosiBaseSalary'],
-        ['housingAllowance', 'housingAllowance'], ['transportAllowance', 'transportAllowance'],
-        ['phoneAllowance', 'phoneAllowance'], ['workNatureAllowance', 'workNatureAllowance'], ['otherAllowance', 'otherAllowance'],
-      ]
-      for (const [field, target] of optionalFields) {
-        if (initial[field] != null && initial[field] !== '' && String(form[field] ?? '').trim() === '') payload[target] = null
-      }
+      // يشمل المسمى ونوع التوظيف و«خاضع للتأمينات» والاسم الإنجليزي (كانت لا تُمسح بصمت)
+      Object.assign(payload, clearedEmployeeFields(initial, form))
       if (initial.workScheduleId != null && selectedSchedule === '') payload.workScheduleId = null
       if (initial.photoFileId != null && form.photoFileId == null) payload.photoFileId = null
       if ((initial.addressCity || initial.addressDistrict) && !form.addressCity.trim() && !form.addressDistrict.trim()) payload.address = null
-      if (initial.workEmail && !form.workEmail.trim()) payload.email = null
     }
     if (mode === 'add') return payload
     const employeePayload = employeeCalendarPayload(payload, initial?.branchId ?? '', form.branchId, calendarContext, { effectiveFrom: form.attendanceEffectiveFrom ?? '', reason: form.attendanceChangeReason ?? '' }, calendarInitialConfirmation)
@@ -910,7 +873,22 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
       const issue = stepIssue(step)
       if (issue) { setStepError(issue); setCurrentStep(step); return }
     }
-    await onSubmit(buildPayload())
+    // صف مؤهل/خبرة مكتوب بلا «+ إضافة»: يُضاف تلقائياً إن اكتمل حقله الإجباري، وإلا يتوقف الحفظ برسالة
+    const settled = settleQualificationDrafts(
+      { education: eduRows, certifications: certRows, experiences: expRows, skills: skillRows, languages: langRows },
+      { education: eduDraft, certifications: certDraft, experiences: expDraft, skills: skillDraft, languages: langDraft }
+    )
+    if (settled.issue) { setStepError(settled.issue); setCurrentStep(4); return }
+    if (settled.added.length) {
+      setEduRows(settled.rows.education); setCertRows(settled.rows.certifications); setExpRows(settled.rows.experiences)
+      setSkillRows(settled.rows.skills); setLangRows(settled.rows.languages)
+      if (settled.added.includes('education')) setEduDraft({})
+      if (settled.added.includes('certifications')) setCertDraft({})
+      if (settled.added.includes('experiences')) setExpDraft({})
+      if (settled.added.includes('skills')) setSkillDraft({})
+      if (settled.added.includes('languages')) setLangDraft({})
+    }
+    await onSubmit(buildPayload(settled.rows))
   }
 
   // تحقق الحقول الإجبارية لكل خطوة قبل السماح بالتالي
@@ -923,8 +901,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
       try { employeeCreateSalaryPeriod(salaryStart, createSalaryPeriod, form) }
       catch (cause) { return cause instanceof Error ? cause.message : 'راجع شهر سريان أجر التعيين.' }
     }
-    if (step === 1 && !form.firstNameAr.trim()) {
-      return 'الاسم الأول مطلوب قبل المتابعة'
+    if (step === 1 && !(arNameAsWhole ? fullNameAr : form.firstNameAr.trim())) {
+      return arNameAsWhole ? 'الاسم الكامل (عربي) مطلوب قبل المتابعة' : 'الاسم الأول مطلوب قبل المتابعة'
     }
     if (step === 2) {
       if (!(form.employeeCode.trim() || form.fingerprintCode.trim())) {
@@ -932,6 +910,12 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
       }
       if (!form.branchId) return 'اختر الفرع قبل المتابعة'
       if (!form.joinDate) return 'تاريخ التعيين مطلوب'
+      // «حتى تاريخ أحدده» بلا تاريخ كان يُحفظ «بدون انتهاء» بصمت
+      const openingIssue = openingBalanceIssue({
+        mode, leaveEntitled, initial: initialOpening, today: localToday(),
+        state: { days: openingBalance, expiryMode: openingExpiry, expiryDate: openingExpiryDate },
+      })
+      if (openingIssue) return openingIssue
       const attendanceChanged = (form.flexOverrideMode ?? 'INHERIT') !== (initial?.flexOverrideMode ?? 'INHERIT') ||
         (selectedSchedule || null) !== (initial?.workScheduleId ?? null)
       if (mode === 'edit' && attendanceChanged) {
@@ -966,6 +950,32 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
 
   const isEdit = mode === 'edit'
   const bannerError = stepError || error || catalogError
+
+  // المستندات المحفوظة من هذا النوع (التعديل): الرفع هنا يضيف نسخة جديدة ولا يستبدل المحفوظ
+  const savedDocumentsNote = (docType: string) => {
+    if (!isEdit) return null
+    const rows = savedDocuments ? savedDocumentsOf(savedDocuments, docType) : null
+    return (
+      <div className="mb-2 space-y-1">
+        {rows && (
+          <p className="text-xs text-gray-600">
+            {rows.length === 0
+              ? 'لا يوجد ملف محفوظ من هذا النوع'
+              : `المحفوظ حالياً: ${rows.length} ${rows.length === 1 ? 'ملف' : 'ملفات'}`}
+            {rows.length > 0 && (
+              <>
+                {' — '}
+                <Link href="/employees/documents" className="text-primary-600 hover:underline">
+                  عرضها أو تعديلها أو حذفها من المستندات
+                </Link>
+              </>
+            )}
+          </p>
+        )}
+        <p className="text-xs font-medium text-gray-700">إضافة نسخة جديدة</p>
+      </div>
+    )
+  }
 
   return (
     <MainLayout>
@@ -1091,6 +1101,13 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
 
                 <div className="flex-1 grid grid-cols-2 gap-4">
                   {/* Name Fields - Arabic */}
+                  {arNameAsWhole ? (
+                  <div className="col-span-2">
+                    <label className="label">الاسم الكامل (عربي) *</label>
+                    <input type="text" className="input" value={form.nameArFull ?? ''} onChange={(e) => setField('nameArFull', e.target.value)} />
+                    <p className="text-xs text-gray-400 mt-1">الاسم محفوظ كاملاً بلا أجزاء منفصلة، وتقسيمه بعدد الكلمات غير مؤكد؛ عدّله هنا كما يُكتب.</p>
+                  </div>
+                  ) : (<>
                   <div>
                     <label className="label">الاسم الأول (عربي) *</label>
                     <input type="text" className="input" placeholder="أحمد" value={form.firstNameAr} onChange={(e) => setField('firstNameAr', e.target.value)} />
@@ -1107,11 +1124,19 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                     <label className="label">اسم العائلة (عربي)</label>
                     <input type="text" className="input" placeholder="السعيد" value={form.familyNameAr} onChange={(e) => setField('familyNameAr', e.target.value)} />
                   </div>
+                  </>)}
                 </div>
               </div>
 
               {/* Name Fields - English */}
               <div className="grid grid-cols-4 gap-4">
+                {enNameAsWhole ? (
+                <div className="col-span-3">
+                  <label className="label">Full Name (English)</label>
+                  <input type="text" className="input" dir="ltr" value={form.nameEnFull ?? ''} onChange={(e) => setField('nameEnFull', e.target.value)} />
+                  <p className="text-xs text-gray-400 mt-1">الاسم الإنجليزي محفوظ كاملاً؛ عدّله هنا كما يُكتب.</p>
+                </div>
+                ) : (<>
                 <div>
                   <label className="label">First Name</label>
                   <input type="text" className="input" placeholder="Ahmed" dir="ltr" value={form.firstNameEn} onChange={(e) => setField('firstNameEn', e.target.value)} />
@@ -1124,6 +1149,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <label className="label">Last Name</label>
                   <input type="text" className="input" placeholder="Alsaeed" dir="ltr" value={form.lastNameEn} onChange={(e) => setField('lastNameEn', e.target.value)} />
                 </div>
+                </>)}
                 <div>
                   <label className="label">الاسم الكامل (تلقائي)</label>
                   <input
@@ -1397,11 +1423,9 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <label className="label">المسمى الوظيفي</label>
                   <select className="input" value={form.jobTitle} onChange={(e) => setField('jobTitle', e.target.value)}>
                     <option value="">اختر</option>
-                    {form.jobTitle && !jobTitleOptions.includes(form.jobTitle) && (
-                      <option value={form.jobTitle}>{form.jobTitle}</option>
-                    )}
-                    {jobTitleOptions.map((j) => (
-                      <option key={j} value={j}>{j}</option>
+                    {/* المسميات الفعّالة من كتالوج المسميات؛ المحفوظ خارجه يبقى أول خيار */}
+                    {jobTitleSelectOptions(jobTitles, form.jobTitle).map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
                   </select>
                 </div>
@@ -1409,11 +1433,10 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <label className="label">الدرجة الوظيفية</label>
                   <select className="input" value={form.gradeId} onChange={(e) => setField('gradeId', e.target.value)}>
                     <option value="">اختر</option>
-                    <option value="1">Grade 1</option>
-                    <option value="2">Grade 2</option>
-                    <option value="3">Grade 3</option>
-                    <option value="4">Grade 4</option>
-                    <option value="5">Grade 5</option>
+                    {/* الدرجات الفعّالة من كتالوج الدرجات بأسمائها؛ الدرجة المحفوظة المعطّلة تبقى خياراً */}
+                    {gradeSelectOptions(grades, form.gradeId).map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
+                    ))}
                   </select>
                 </div>
               </div>
@@ -1493,6 +1516,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div className="col-span-2">
                   <label className="label">مرفق العقد</label>
+                  {savedDocumentsNote('contract')}
                   <div className="flex items-center gap-2">
                     <input
                       type="file"
@@ -1525,6 +1549,29 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
               )}
               <div className="grid grid-cols-2 gap-4">
+                {/* بلا جدول خاص — اختيار صريح يمسح جدولاً معيّناً (يتبع عطلة الفرع أو الإعداد العام) */}
+                <div
+                  onClick={() => setSelectedSchedule('')}
+                  className={`p-4 rounded-xl border-2 cursor-pointer transition-all ${
+                    selectedSchedule === ''
+                      ? 'border-primary-500 bg-primary-50 shadow-lg shadow-primary-500/20'
+                      : 'border-dashed border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="w-10 h-10 bg-gray-400 rounded-xl flex items-center justify-center flex-shrink-0">
+                      <Building2 size={20} className="text-white" />
+                    </div>
+                    <div className="flex-1">
+                      <p className={`font-bold ${selectedSchedule === '' ? 'text-primary-700' : 'text-gray-800'}`}>
+                        بدون جدول (يتبع الفرع)
+                      </p>
+                      <p className="text-sm text-gray-500 mt-1">
+                        لا يُسند جدول خاص لهذا الموظف؛ تُطبَّق عطلة الفرع أو الإعداد العام
+                      </p>
+                    </div>
+                  </div>
+                </div>
                 {scheduleList.map((schedule, idx) => {
                   const isSelected = selectedSchedule === schedule.id
                   const colorClass =
@@ -1861,25 +1908,13 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div>
                   <label className="label">دورة الراتب</label>
-                  <select className="input" value={form.salaryCycle} onChange={(e) => setField('salaryCycle', e.target.value)}>
-                    <option value="monthly">شهري</option>
-                    <option value="biweekly">نصف شهري</option>
-                    <option value="weekly">أسبوعي</option>
-                  </select>
-                </div>
-                <div>
-                  <label className="label">مركز التكلفة (اختياري)</label>
-                  <select
-                    className="input"
-                    value={form.costCenterId}
-                    onChange={(e) => setField('costCenterId', e.target.value)}
-                  >
-                    <option value="">بدون مركز تكلفة</option>
-                    {costCenters.map((cc) => (
-                      <option key={cc.id} value={String(cc.id)}>
-                        {cc.code} — {cc.name}
-                      </option>
+                  <select className="input" value={form.salaryCycle || DEFAULT_SALARY_CYCLE} onChange={(e) => setField('salaryCycle', e.target.value)}>
+                    {SALARY_CYCLE_OPTIONS.map((option) => (
+                      <option key={option.value} value={option.value}>{option.label}</option>
                     ))}
+                    {form.salaryCycle && !SALARY_CYCLE_OPTIONS.some((option) => option.value === form.salaryCycle) && (
+                      <option value={form.salaryCycle}>{form.salaryCycle}</option>
+                    )}
                   </select>
                 </div>
               </div>
@@ -2453,6 +2488,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                       </div>
                     </div>
                   </div>
+                  {savedDocumentsNote('national_id')}
                   <input type="file" className="w-full" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => handleDocPick('national_id', e.target.files?.[0])} />
                   {docUploading['national_id'] && <p className="text-xs text-gray-400 mt-2">جارٍ الرفع…</p>}
                   {!docUploading['national_id'] && documentRefs.some((d) => d.docType === 'national_id') && (
@@ -2472,6 +2508,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                       </div>
                     </div>
                   </div>
+                  {savedDocumentsNote('passport')}
                   <input type="file" className="w-full" accept=".pdf,.jpg,.jpeg,.png" onChange={(e) => handleDocPick('passport', e.target.files?.[0])} />
                   {docUploading['passport'] && <p className="text-xs text-gray-400 mt-2">جارٍ الرفع…</p>}
                   {!docUploading['passport'] && documentRefs.some((d) => d.docType === 'passport') && (
@@ -2491,6 +2528,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                       </div>
                     </div>
                   </div>
+                  {savedDocumentsNote('qualification_certificate')}
                   <input type="file" className="w-full" accept=".pdf" onChange={(e) => handleDocPick('qualification_certificate', e.target.files?.[0])} />
                   {docUploading['qualification_certificate'] && <p className="text-xs text-gray-400 mt-2">جارٍ الرفع…</p>}
                   {!docUploading['qualification_certificate'] && documentRefs.some((d) => d.docType === 'qualification_certificate') && (
@@ -2510,6 +2548,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                       </div>
                     </div>
                   </div>
+                  {savedDocumentsNote('cv')}
                   <input type="file" className="w-full" accept=".pdf,.doc,.docx" onChange={(e) => handleDocPick('cv', e.target.files?.[0])} />
                   {docUploading['cv'] && <p className="text-xs text-gray-400 mt-2">جارٍ الرفع…</p>}
                   {!docUploading['cv'] && documentRefs.some((d) => d.docType === 'cv') && (
@@ -2529,6 +2568,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                       </div>
                     </div>
                   </div>
+                  {savedDocumentsNote('experience_certificate')}
                   <input
                     type="file"
                     className="w-full"
@@ -2562,6 +2602,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                       </div>
                     </div>
                   </div>
+                  {savedDocumentsNote('formal_photo')}
                   <input type="file" className="w-full" accept=".jpg,.jpeg,.png" onChange={(e) => handleDocPick('formal_photo', e.target.files?.[0])} />
                   {docUploading['formal_photo'] && <p className="text-xs text-gray-400 mt-2">جارٍ الرفع…</p>}
                   {!docUploading['formal_photo'] && documentRefs.some((d) => d.docType === 'formal_photo') && (

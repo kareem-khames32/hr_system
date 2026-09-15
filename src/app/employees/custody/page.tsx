@@ -35,6 +35,7 @@ import {
 } from '@/lib/api'
 import { custodyStatusLabels as statusLabels, custodyStatusStyles as statusStyles } from '@/lib/status-labels'
 import { useCurrency } from '@/lib/currency'
+import { CUSTODY_TEXT_MAX, custodyTextIssue } from '@/lib/input-limits'
 
 // حالات العهدة — التسميات الموحّدة في كل النظام
 
@@ -224,11 +225,17 @@ export default function CustodyPage() {
   }
 
   const handleReturn = async (id: number) => {
-    const condition = window.prompt('حالة العهدة عند الإرجاع؟', 'سليمة')
+    const condition = window.prompt(`حالة العهدة عند الإرجاع؟ (حتى ${CUSTODY_TEXT_MAX} حرف)`, 'سليمة')
     if (condition === null) return
+    // الحالة تُحفظ في عمود بحد 100 حرف — الأطول يُرفض هنا برسالة عربية قبل الإرسال
+    const conditionIssue = custodyTextIssue('حالة العهدة عند الإرجاع', condition)
+    if (conditionIssue) {
+      setError(conditionIssue)
+      return
+    }
     setError('')
     try {
-      await returnCustody(id, condition || undefined)
+      await returnCustody(id, condition.trim() || undefined)
       await loadData()
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر إرجاع العهدة')
@@ -821,7 +828,11 @@ export default function CustodyPage() {
                     }
                     className="input w-full min-h-[80px]"
                     placeholder="مثال: كسر في الشاشة بعد سقوط الجهاز"
+                    maxLength={CUSTODY_TEXT_MAX}
                   />
+                  <p className="text-xs text-gray-400 mt-1">
+                    {writeOffForm.condition.length}/{CUSTODY_TEXT_MAX} حرف
+                  </p>
                 </div>
                 {/* تحذير الأصل بلا قيمة — خصمه في التصفية صفر ما لم تُسجَّل قيمته */}
                 {writeOffHasValue ? (
@@ -941,7 +952,11 @@ export default function CustodyPage() {
                     }
                     className="input w-full"
                     placeholder="سبب النقل أو أي تفاصيل"
+                    maxLength={CUSTODY_TEXT_MAX}
                   />
+                  <p className="text-xs text-gray-400 mt-1">
+                    {transferForm.note.length}/{CUSTODY_TEXT_MAX} حرف
+                  </p>
                 </div>
                 <p className="text-xs text-gray-400">
                   العهدة الحالية ستُقفل، وتُفتح عهدة جديدة للمستلم بانتظار قبوله ثم اعتماد

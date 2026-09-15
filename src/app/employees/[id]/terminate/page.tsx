@@ -12,11 +12,8 @@ import {
 import { currencyLabel, useCurrency } from '@/lib/currency'
 import { employeeStatusLabels, custodyStatusLabels } from '@/lib/status-labels'
 import { localToday } from '@/lib/dates'
-
-const reasons: Record<TerminationReason, string> = {
-  resignation: 'استقالة موثقة', termination: 'إنهاء من صاحب العمل', dismissal: 'فصل تأديبي',
-  contract_end: 'انتهاء مدة العقد', retirement: 'تقاعد', death: 'وفاة', disability: 'عجز صحي', force_majeure: 'قوة قاهرة',
-}
+// نفس التسميات تظهر لاحقاً في «تفاصيل القرار» بصفحة ملف إنهاء الخدمة
+import { TERMINATION_REASON_LABELS as reasons } from '@/lib/termination-reasons'
 
 export default function TerminateEmployeePage() {
   const params = useParams<{ id: string }>()

@@ -49,6 +49,7 @@ import {
   fetchCatalog,
   fetchActiveLeaveTypes,
   fetchCompanyInfo,
+  fetchAttendanceRuleHistory,
   createDocument,
   uploadFile,
   can,
@@ -56,8 +57,11 @@ import {
   type ApiEmployee,
   type ApiQualifications,
   type ApiCompanyInfo,
+  type ApiAttendanceRuleVersion,
 } from '@/lib/api'
 import { docTypeLabel } from '@/lib/doc-types'
+import { describeEmployeeHistory, type EmployeeHistoryView } from '@/lib/employee-history'
+import { displayEmployeeAddress } from '@/lib/employee-form-fields'
 import { loadCurrency, currencyLabel, useCurrency } from '@/lib/currency'
 
 // الحقول الشخصية والمالية الجديدة المدعومة في الباك إند (ليست بعد ضمن ApiEmployee)
@@ -190,14 +194,16 @@ interface CustodyView {
   returnedAt: string
 }
 
-interface HistoryEventView {
-  date: string
-  title: string
-  from: string
-  to: string
+type HistoryEventView = EmployeeHistoryView
+
+// سطر في «سجل الدوام» — نسخة من قاعدة حضور الموظف (جدول/مرونة) بسريانها وسببها
+interface AttendanceRuleRowView {
+  id: number
+  effectiveFrom: string
+  schedule: string
+  flex: string
   reason: string
-  requestId?: number
-  color: string
+  actor: string
 }
 
 interface DocView {
@@ -363,76 +369,6 @@ const tenureText = (joinDate?: string | null) => {
   return `${y} سنة و ${m} شهر`
 }
 
-// السجل الوظيفي — تحويل مداخل salary:/team:/title:/iban: إلى عربية مقروءة
-const parseHistoryEntry = (
-  h: { oldStatus?: string; newStatus: string; reason?: string; changedAt: string; requestId?: number },
-  teamNameById: Map<number, string>,
-  currency: string
-): HistoryEventView => {
-  const split = (v: string): [string | null, string] => {
-    const i = v.indexOf(':')
-    return i > -1 ? [v.slice(0, i), v.slice(i + 1)] : [null, v]
-  }
-  const [kind, toVal] = split(h.newStatus ?? '')
-  const [, fromVal] = split(h.oldStatus ?? '')
-  const base = {
-    date: fmtDate(h.changedAt),
-    reason: h.reason ?? '—',
-    requestId: h.requestId,
-  }
-  switch (kind) {
-    case 'salary':
-      return {
-        ...base,
-        title: 'تغيير راتب',
-        from: `الراتب: ${Number(fromVal || 0).toLocaleString()} ${currency}`,
-        to: `${Number(toVal || 0).toLocaleString()} ${currency}`,
-        color: 'bg-success-100 text-success-600',
-      }
-    case 'team':
-      return {
-        ...base,
-        title: 'نقل بين فرق',
-        from: `الفريق: ${teamNameById.get(Number(fromVal)) ?? `#${fromVal}`}`,
-        to: teamNameById.get(Number(toVal)) ?? `#${toVal}`,
-        color: 'bg-blue-100 text-blue-600',
-      }
-    case 'title':
-      return {
-        ...base,
-        title: 'ترقية',
-        from: `المسمى: ${fromVal || '—'}`,
-        to: toVal || '—',
-        color: 'bg-indigo-100 text-indigo-600',
-      }
-    case 'iban':
-      return {
-        ...base,
-        title: 'تغيير حساب بنكي',
-        from: `الحساب: ${fromVal || '—'}`,
-        to: toVal || '—',
-        color: 'bg-orange-100 text-orange-600',
-      }
-    default:
-      if ((h.newStatus ?? '') === 'data_update') {
-        return {
-          ...base,
-          title: 'تحديث بيانات',
-          from: '—',
-          to: '—',
-          color: 'bg-teal-100 text-teal-600',
-        }
-      }
-      return {
-        ...base,
-        title: 'تغيير حالة',
-        from: EMP_STATUS_AR[h.oldStatus ?? ''] ?? (h.oldStatus || '—'),
-        to: EMP_STATUS_AR[h.newStatus] ?? h.newStatus,
-        color: 'bg-primary-100 text-primary-600',
-      }
-  }
-}
-
 const tabs = [
   { id: 'personal', label: 'البيانات الشخصية', icon: User },
   { id: 'employment', label: 'البيانات الوظيفية', icon: Briefcase },
@@ -472,6 +408,7 @@ export default function EmployeeProfilePage() {
   const [custody, setCustody] = useState<CustodyView[]>([])
   const [historyEvents, setHistoryEvents] = useState<HistoryEventView[]>([])
   const [docs, setDocs] = useState<DocView[]>([])
+  const [ruleHistory, setRuleHistory] = useState<AttendanceRuleRowView[]>([])
   // المؤهلات والخبرات — خمس قوائم من مسارها الخاص
   const [quals, setQuals] = useState<ApiQualifications | null>(null)
 
@@ -480,7 +417,7 @@ export default function EmployeeProfilePage() {
       setLoading(true)
       setError('')
       try {
-        const [profile, branches, departments, teams, allEmployees, currencyNow, qualifications, grades, workSchedules, costCenters, leaveTypes] =
+        const [profile, branches, departments, teams, allEmployees, currencyNow, qualifications, grades, workSchedules, costCenters, leaveTypes, attendanceRules] =
           await Promise.all([
             fetchEmployeeProfile(Number(params.id)),
             fetchBranches(),
@@ -495,6 +432,8 @@ export default function EmployeeProfilePage() {
             fetchCatalog<import('@/lib/api').ApiWorkSchedule>('work-schedules', localToday()),
             fetchCatalog<{ id: number; code: string; name: string }>('cost-centers'),
             fetchActiveLeaveTypes(),
+            // سجل الدوام (سبب تغيير الجدول/المرونة) — اختياري: فشله لا يعطل الملف
+            fetchAttendanceRuleHistory('EMPLOYEE', Number(params.id)).catch(() => [] as ApiAttendanceRuleVersion[]),
           ])
         setQuals(qualifications)
         const e = profile.employee as ApiEmployee & EmployeeExtras
@@ -576,7 +515,7 @@ export default function EmployeeProfilePage() {
           maritalStatus: e.maritalStatus
             ? MARITAL_AR[e.maritalStatus] ?? e.maritalStatus
             : '—',
-          address: e.address || '—',
+          address: displayEmployeeAddress(e.address) || '—',
           country: labelOf(COUNTRY_AR, e.country),
           postalCode: val(e.postalCode),
           contractType: e.contractType
@@ -670,10 +609,40 @@ export default function EmployeeProfilePage() {
           }))
         )
 
+        // السجل الوظيفي: عنوان عربي لكل حقل وأسماء الفريق/القسم/الفرع/المدير بدل «teamId:3»
+        const employeeCurrency = e.currency ? currencyLabel(e.currency) : currencyNow
         setHistoryEvents(
           (profile.history ?? []).map((h: any) =>
-            parseHistoryEntry(h, teamById, currencyNow)
+            describeEmployeeHistory(h, {
+              teams: teamById,
+              departments: deptById,
+              branches: branchById,
+              grades: gradeById,
+              employees: new Map(allEmployees.map((x) => [x.id, x.fullName])),
+              costCenters: new Map(costCenters.map((c) => [c.id, c.name])),
+              currency: employeeCurrency,
+              statusLabels: EMP_STATUS_AR,
+              payMethodLabels: PAY_METHOD_AR,
+            })
           )
+        )
+
+        // سجل الدوام: كل نسخة قاعدة حضور للموظف بتاريخ سريانها وسببها ومن سجّلها
+        const scheduleNameById = new Map(workSchedules.map((s) => [s.id, s.name]))
+        const flexLabels: Record<string, string> = { INHERIT: 'يتبع الوردية أو جدول العمل', ENABLED: 'مفعلة', DISABLED: 'موقوفة' }
+        setRuleHistory(
+          attendanceRules.map((v) => {
+            const scheduleId = v.snapshot?.workScheduleId as number | null | undefined
+            const flexMode = String(v.snapshot?.flexOverrideMode ?? 'INHERIT')
+            return {
+              id: v.id,
+              effectiveFrom: v.effectiveFrom ? String(v.effectiveFrom).slice(0, 10) : v.legacyBaseline ? 'قبل بدء السجل' : '—',
+              schedule: scheduleId == null ? 'بدون جدول (يتبع الفرع)' : scheduleNameById.get(scheduleId) ?? `#${scheduleId}`,
+              flex: flexLabels[flexMode] ?? flexMode,
+              reason: v.reason?.trim() || '—',
+              actor: `${v.actorUserId ? `المستخدم #${v.actorUserId}` : 'النظام'} · ${fmtDate(v.createdAt)}`,
+            }
+          })
         )
 
         setDocs(
@@ -1167,6 +1136,10 @@ export default function EmployeeProfilePage() {
                       <span className="font-medium text-gray-800">{employee.department}</span>
                     </div>
                     <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                      <span className="text-gray-500">الفريق</span>
+                      <span className="font-medium text-gray-800">{employee.team}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100">
                       <span className="text-gray-500">المسمى الوظيفي</span>
                       <span className="font-medium text-gray-800">{employee.jobTitle}</span>
                     </div>
@@ -1178,9 +1151,22 @@ export default function EmployeeProfilePage() {
                       <span className="text-gray-500">المدير المباشر</span>
                       <span className="font-medium text-gray-800">{employee.manager}</span>
                     </div>
-                    <div className="flex items-center justify-between py-2">
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100">
                       <span className="text-gray-500">موقع العمل</span>
                       <span className="font-medium text-gray-800">{employee.workLocation}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                      <span className="text-gray-500">مركز التكلفة</span>
+                      <span className="font-medium text-gray-800">{employee.costCenter}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-2">
+                      <span className="text-gray-500">جدول العمل</span>
+                      <span className="font-medium text-gray-800">
+                        {employee.workSchedule}
+                        {employee.workScheduleFrom && employee.workScheduleTo
+                          ? ` (${employee.workScheduleFrom} - ${employee.workScheduleTo})`
+                          : ''}
+                      </span>
                     </div>
                   </div>
                 </div>
@@ -1238,6 +1224,39 @@ export default function EmployeeProfilePage() {
                     </div>
                   </div>
                 </div>
+              </div>
+
+              {/* سجل الدوام — تاريخ السريان والسبب ومن سجّل تغيير الجدول أو المرونة */}
+              <div className="pt-6 border-t border-gray-100">
+                <h3 className="text-md font-bold text-gray-700 mb-4">سجل الدوام</h3>
+                {ruleHistory.length === 0 ? (
+                  <p className="text-sm text-gray-500">لا توجد تغييرات دوام مسجلة لهذا الموظف</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="text-gray-500 border-b border-gray-100">
+                          <th className="py-2 text-right font-medium">يسري من</th>
+                          <th className="py-2 text-right font-medium">جدول العمل</th>
+                          <th className="py-2 text-right font-medium">المرونة</th>
+                          <th className="py-2 text-right font-medium">السبب</th>
+                          <th className="py-2 text-right font-medium">سجّله</th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {ruleHistory.map((row) => (
+                          <tr key={row.id} className="border-b border-gray-50 align-top">
+                            <td className="py-2 whitespace-nowrap" dir="ltr">{row.effectiveFrom}</td>
+                            <td className="py-2">{row.schedule}</td>
+                            <td className="py-2">{row.flex}</td>
+                            <td className="py-2 whitespace-pre-wrap break-words">{row.reason}</td>
+                            <td className="py-2 whitespace-nowrap">{row.actor}</td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
               </div>
             </div>
           )}
@@ -1506,6 +1525,17 @@ export default function EmployeeProfilePage() {
               <h2 className="text-lg font-bold text-gray-800 border-b border-gray-100 pb-4">
                 رصيد الإجازات
               </h2>
+
+              {/* استحقاق السنوي المحفوظ على الموظف (مفتاح «يستحق إجازات سنوية» في النموذج) */}
+              <div className={`p-4 rounded-xl flex items-center justify-between ${employee.annualLeaveEntitled ? 'bg-green-50' : 'bg-gray-50'}`}>
+                <span className="text-gray-600">يستحق إجازة سنوية</span>
+                <span className="font-bold text-gray-800">
+                  {employee.annualLeaveEntitled ? 'نعم' : 'لا'}
+                  {employee.annualLeaveEntitled && employee.annualEntitlementDays != null
+                    ? ` — ${employee.annualEntitlementDays} يوم/سنة`
+                    : ''}
+                </span>
+              </div>
 
               <div className="grid grid-cols-3 gap-6">
                 {balAnnual && (

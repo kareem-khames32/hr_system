@@ -41,6 +41,7 @@ import {
   type ApiSettlementLine,
 } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
+import { terminationReasonLabel } from '@/lib/termination-reasons'
 
 // حالات الملف
 const statusLabels: Record<string, string> = {
@@ -69,6 +70,8 @@ const partyConfig: Record<string, { label: string; icon: typeof UserCheck }> = {
 }
 
 const fmtDate = (v?: string | null) => (v ? String(v).slice(0, 10) : '—')
+const fmtDateTime = (v?: string | null) =>
+  v ? new Date(v).toLocaleString('ar-EG-u-ca-gregory', { dateStyle: 'medium', timeStyle: 'short' }) : '—'
 
 export default function OffboardingCasePage() {
   const params = useParams<{ id: string }>()
@@ -366,6 +369,45 @@ export default function OffboardingCasePage() {
                     )}
                 </div>
               </div>
+            </div>
+
+            {/* تفاصيل القرار — ما أُدخل في نموذج إنهاء الخدمة ويرجعه ملف الحالة */}
+            <div className="card p-6">
+              <h2 className="text-lg font-bold text-gray-800 mb-4">تفاصيل القرار</h2>
+              <dl className="grid grid-cols-1 sm:grid-cols-3 gap-4 text-sm">
+                <div>
+                  <dt className="text-gray-500">سبب الإنهاء</dt>
+                  <dd className="font-medium text-gray-800 mt-1">
+                    {terminationReasonLabel(det.terminationReason)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-gray-500">تاريخ الإشعار</dt>
+                  <dd className="font-medium text-gray-800 mt-1" dir="ltr">
+                    {fmtDate(det.noticeDate)}
+                  </dd>
+                </div>
+                <div>
+                  <dt className="text-gray-500">إيقاف حساب الدخول</dt>
+                  <dd className="font-medium text-gray-800 mt-1">
+                    {det.accessRevokedAt
+                      ? `أُوقف في ${fmtDateTime(det.accessRevokedAt)}`
+                      : 'لم يُوقف عند فتح الملف'}
+                  </dd>
+                </div>
+                <div className="sm:col-span-3">
+                  <dt className="text-gray-500">ملاحظات القرار</dt>
+                  <dd className="text-gray-800 mt-1 whitespace-pre-wrap break-words">
+                    {det.notes?.trim() || '—'}
+                  </dd>
+                </div>
+                <div className="sm:col-span-3">
+                  <dt className="text-gray-500">ملاحظات مقابلة الخروج</dt>
+                  <dd className="text-gray-800 mt-1 whitespace-pre-wrap break-words">
+                    {det.exitInterviewNotes?.trim() || '—'}
+                  </dd>
+                </div>
+              </dl>
             </div>
 
             {/* تحذير العهد المفتوحة */}

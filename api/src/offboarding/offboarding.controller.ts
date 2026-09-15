@@ -26,6 +26,8 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { TERMINATION_REASONS, type TerminationReason } from './offboarding.entities'
 import { OffboardingService } from './offboarding.service'
+// بنود التصفية اليدوية — رسائل تحقق عربية بدل رسائل class-validator الإنجليزية الخام
+import { AddLineDto, UpdateLineDto } from './settlement-line.dto'
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/
 
@@ -83,33 +85,6 @@ class CompleteItemDto {
   @IsOptional()
   @Type(() => Number)
   @IsNumber()
-  amount?: number
-}
-
-class AddLineDto {
-  @IsString({ message: 'وصف البند مطلوب' })
-  @MinLength(2)
-  @MaxLength(200)
-  label: string
-
-  @IsIn(['CREDIT', 'DEBIT'], { message: 'النوع: CREDIT أو DEBIT' })
-  type: 'CREDIT' | 'DEBIT'
-
-  @Type(() => Number)
-  @IsNumber({}, { message: 'المبلغ رقم' })
-  amount: number
-}
-
-class UpdateLineDto {
-  @IsOptional()
-  @IsString()
-  @MinLength(2)
-  @MaxLength(200)
-  label?: string
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsNumber({}, { message: 'المبلغ رقم' })
   amount?: number
 }
 

@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { csvDateStamp, downloadCsv } from '@/lib/csv'
+import { ARCHIVE_REASON_MAX, archiveReasonIssue } from '@/lib/input-limits'
 import {
   can,
   fetchEmployees,
@@ -156,8 +157,14 @@ export default function EmployeesPage() {
   const handleArchive = async (id: number) => {
     if (!window.confirm('هل تريد أرشفة هذا الموظف؟')) return
     // سبب اختياري — الإلغاء يوقف الأرشفة، والفراغ يُكمل بلا سبب
-    const reason = window.prompt('سبب الأرشفة (اختياري)')
+    const reason = window.prompt(`سبب الأرشفة (اختياري، حتى ${ARCHIVE_REASON_MAX} حرف)`)
     if (reason === null) return
+    // عمود السبب بحد 300 حرف — الأطول يُرفض هنا برسالة واضحة بدل خطأ خادم عام
+    const reasonIssue = archiveReasonIssue(reason)
+    if (reasonIssue) {
+      setError(reasonIssue)
+      return
+    }
     try {
       await archiveEmployee(id, reason.trim() || undefined)
       await loadData()

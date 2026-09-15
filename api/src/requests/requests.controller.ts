@@ -31,6 +31,8 @@ import { LeaveType } from './entities/leave.entities'
 import { LeaveBalancesService } from './leave-balances.service'
 import { RequestsService } from './requests.service'
 import { leaveTypeView } from '../common/leave-contract'
+// ملاحظة النقل تُحفظ في custody_assignments.condition nvarchar(100) — الحد نفسه في الـDTO والخدمة
+import { TransferCustodyDto } from '../assets/custody.dto'
 
 class CreateRequestDto {
   @IsString()
@@ -87,16 +89,6 @@ class ResubmitDto {
   @IsOptional()
   @IsObject()
   payload?: Record<string, any>
-}
-
-class TransferCustodyDto {
-  @IsInt()
-  toEmployeeId: number
-
-  @IsOptional()
-  @IsString()
-  @MaxLength(300)
-  note?: string
 }
 
 // إغلاق طلب معتمد تعذّر تنفيذه بالرفض — السبب إلزامي ويُكتب في سجل التدقيق

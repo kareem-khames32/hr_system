@@ -12,8 +12,10 @@ import {
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, In, Not, Repository } from 'typeorm'
-import { IsBoolean, IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator'
+import { IsInt, IsNumber, IsOptional, IsString, MaxLength, Min, MinLength } from 'class-validator'
 import { Type } from 'class-transformer'
+// وصف الشطب وحالة الإرجاع بحد عمود custody_assignments.condition ورسائل عربية
+import { ReturnCustodyDto, WriteOffCustodyDto } from './custody.dto'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
@@ -53,12 +55,6 @@ class UpdateAssetDto {
   @IsOptional() @Type(() => Number) @IsNumber() @Min(0)
   value?: number
 }
-class WriteOffCustodyDto {
-  @IsOptional() @IsString() @MaxLength(100)
-  condition?: string
-  @IsOptional() @IsBoolean()
-  lost?: boolean
-}
 const OPEN_CUSTODY = ['PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'ACTIVE', 'RETURN_REQUESTED']
 
 class AssignCustodyDto {
@@ -71,12 +67,6 @@ class AssignCustodyDto {
   employeeId: number
 }
 
-class ReturnCustodyDto {
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  condition?: string
-}
 
 // إدارة العهدة والأصول (مسار HR المباشر — بجانب مسار الطلبات)
 @UseGuards(JwtAuthGuard, RolesGuard)

@@ -47,7 +47,7 @@ import {
   fetchFileObjectUrl,
   ApiEmployee,
 } from '@/lib/api'
-import { docTypeLabel, DOC_TYPES } from '@/lib/doc-types'
+import { docTypeLabel, docTypeSelectOptions, loadDocTypes, type ApiDocType } from '@/lib/doc-types'
 
 interface DocumentRow {
   id: number
@@ -131,6 +131,9 @@ export default function DocumentsPage() {
   const [uploadingFile, setUploadingFile] = useState(false)
   const [uploadedName, setUploadedName] = useState('')
   const [modalError, setModalError] = useState('')
+  // أنواع المستندات من كتالوج الإعدادات — نفس ما يتحقق منه الخادم عند الحفظ
+  const [docTypes, setDocTypes] = useState<ApiDocType[]>([])
+  const [docTypesError, setDocTypesError] = useState('')
 
   const loadData = async () => {
     setLoading(true)
@@ -178,6 +181,14 @@ export default function DocumentsPage() {
 
   useEffect(() => {
     loadData()
+    loadDocTypes()
+      .then((rows) => {
+        setDocTypes(rows)
+        setDocTypesError('')
+      })
+      .catch((err) =>
+        setDocTypesError(err instanceof Error ? err.message : 'تعذر تحميل أنواع المستندات')
+      )
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
@@ -772,19 +783,16 @@ export default function DocumentsPage() {
                     onChange={(e) => setUploadForm({ ...uploadForm, docType: e.target.value })}
                   >
                     <option value="">اختر نوع المستند</option>
-                    {DOC_TYPES.map((t) => (
-                      <option key={t.code} value={t.code}>
+                    {/* الأنواع الفعّالة من الكتالوج؛ نوع محفوظ خارجها يظهر «(نوع قديم)» ويبقى كما هو */}
+                    {docTypeSelectOptions(docTypes, uploadForm.docType).map((t) => (
+                      <option key={t.value} value={t.value}>
                         {t.label}
                       </option>
                     ))}
-                    {/* نوع قديم كُتب نصاً حراً قبل توحيد القائمة — يظل قابلاً للحفظ كما هو */}
-                    {uploadForm.docType &&
-                      !DOC_TYPES.some((t) => t.code === uploadForm.docType) && (
-                        <option value={uploadForm.docType}>
-                          {docTypeLabel(uploadForm.docType)} (نوع قديم)
-                        </option>
-                      )}
                   </select>
+                  {docTypesError && (
+                    <p className="text-xs text-red-600 mt-1">{docTypesError}</p>
+                  )}
                   <p className="text-xs text-gray-400 mt-1">
                     اختر «أخرى» للأنواع غير المدرجة واكتب التفاصيل في الملاحظات.
                   </p>

@@ -40,6 +40,7 @@ import {
   type ApiSettlementLine,
 } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
+import { SETTLEMENT_LABEL_MAX, settlementLabelIssue } from '@/lib/input-limits'
 
 // حالات ملف إنهاء الخدمة — تسميات عربية فقط
 const statusLabels: Record<string, string> = {
@@ -198,12 +199,13 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
   const totalSalary = salaryParts.reduce((s: number, v) => s + (Number(v) || 0), 0)
 
   const handleAddLine = async () => {
-    if (!det || !addModal || saving || !addForm.label || !addForm.amount) return
+    // اسم البند حرفان على الأقل (AddLineDto) — لا يُرسل أقصر فتظهر رسالة الخادم الإنجليزية
+    if (!det || !addModal || saving || settlementLabelIssue(addForm.label) || !addForm.amount) return
     setSaving(true)
     setActionError('')
     try {
       await addSettlementLine(det.id, {
-        label: addForm.label,
+        label: addForm.label.trim(),
         type: addModal,
         amount: Number(addForm.amount),
       })
@@ -218,12 +220,12 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
   }
 
   const handleEditLine = async () => {
-    if (!editModal || saving) return
+    if (!editModal || saving || (editForm.label.trim() && settlementLabelIssue(editForm.label))) return
     setSaving(true)
     setActionError('')
     try {
       await updateSettlementLine(editModal.id, {
-        label: editForm.label || undefined,
+        label: editForm.label.trim() || undefined,
         amount: editForm.amount ? Number(editForm.amount) : undefined,
       })
       setEditModal(null)
@@ -822,7 +824,11 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                     addModal === 'CREDIT' ? 'مثال: مكافأة إضافية' : 'مثال: تلفيات معدات'
                   }
                   className="input w-full"
+                  maxLength={SETTLEMENT_LABEL_MAX}
                 />
+                {addForm.label !== '' && settlementLabelIssue(addForm.label) && (
+                  <p className="text-xs text-amber-700 mt-1">{settlementLabelIssue(addForm.label)}</p>
+                )}
               </div>
               <div>
                 <label className="label">المبلغ *</label>
@@ -841,7 +847,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
             <div className="p-6 border-t border-gray-100 flex gap-3">
               <button
                 onClick={handleAddLine}
-                disabled={saving || !addForm.label || !addForm.amount}
+                disabled={saving || !!settlementLabelIssue(addForm.label) || !addForm.amount}
                 className="flex-1 btn-primary"
               >
                 {saving ? 'جارٍ الإضافة...' : 'إضافة'}
@@ -886,7 +892,11 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                   value={editForm.label}
                   onChange={(e) => setEditForm((prev) => ({ ...prev, label: e.target.value }))}
                   className="input w-full"
+                  maxLength={SETTLEMENT_LABEL_MAX}
                 />
+                {editForm.label.trim() !== '' && settlementLabelIssue(editForm.label) && (
+                  <p className="text-xs text-amber-700 mt-1">{settlementLabelIssue(editForm.label)}</p>
+                )}
               </div>
               <div>
                 <label className="label">المبلغ</label>
@@ -904,7 +914,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
             <div className="p-6 border-t border-gray-100 flex gap-3">
               <button
                 onClick={handleEditLine}
-                disabled={saving}
+                disabled={saving || (editForm.label.trim() !== '' && !!settlementLabelIssue(editForm.label))}
                 className="flex-1 btn-primary"
               >
                 {saving ? 'جارٍ الحفظ...' : 'حفظ التعديل'}

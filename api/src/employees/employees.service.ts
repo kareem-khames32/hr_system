@@ -23,6 +23,7 @@ import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { recordEmployeeChange } from './employee-change-log'
+import { assertArchiveReason, nextOpeningBalance } from './employee-input-rules'
 import { LeaveBalance } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { Request } from '../requests/entities/request.entity'
@@ -369,8 +370,10 @@ export class EmployeesService {
     })
     // رصيد السنة الحالية تلقائياً — الاستحقاق من الإعدادات
     await this.ensureCurrentYearBalances(emp.id)
-    // رصيد افتتاحي مُرحّل (اختياري) — طبقة opening على رصيد السنوي
-    await this.applyOpeningBalance(emp.id, openingBalanceDays, openingBalanceExpiry)
+    // رصيد افتتاحي مُرحّل (اختياري) — طبقة opening على رصيد السنوي، لموظف يستحق السنوي فقط
+    if (dto.annualLeaveEntitled !== false) {
+      await this.applyOpeningBalance(emp.id, openingBalanceDays, openingBalanceExpiry)
+    }
     // بصمات وصلت بكوده/رقم بصمته قبل تسجيله تُربط به
     await this.relinkPunches(emp)
     return this.attendanceView(emp)
@@ -403,9 +406,13 @@ export class EmployeesService {
       where: { employeeId, balanceType: 'annual', period },
     })
     if (annual) {
-      annual.openingDays = Number(days)
-      annual.openingTaken = 0
-      annual.openingExpiry = (expiry ?? null) as any
+      // نفس الأيام والصلاحية = لا تغيير؛ والمستخدم من الطبقة يبقى (محدودًا بالأيام الجديدة)
+      // بدل تصفيره، وإلا عادت أيام مستهلكة للرصيد وحُمّلت على الاستحقاق بعد انتهاء الطبقة
+      const next = nextOpeningBalance(annual, Number(days), expiry)
+      if (!next) return
+      annual.openingDays = next.openingDays
+      annual.openingTaken = next.openingTaken
+      annual.openingExpiry = next.openingExpiry as any
       await this.balances.save(annual)
     }
   }
@@ -637,22 +644,23 @@ export class EmployeesService {
     if (dto.annualLeaveEntitled !== undefined) {
       await this.applyAnnualEntitlement(id, dto.annualLeaveEntitled)
     }
-    // تعديل رصيد افتتاحي مُرحّل لموظف قائم (انتقل من نظام سابق)
-    await this.applyOpeningBalance(id, openingBalanceDays, openingBalanceExpiry)
+    // تعديل رصيد افتتاحي مُرحّل لموظف قائم (انتقل من نظام سابق) — لا يُطبَّق مع «لا يستحق»
+    if (dto.annualLeaveEntitled !== false) {
+      await this.applyOpeningBalance(id, openingBalanceDays, openingBalanceExpiry)
+    }
     return this.attendanceView(saved)
   }
 
   // الأرشفة بدل الحذف — التاريخ الوظيفي لا يُمسح (بسبب موثّق)
   async archive(id: number, branchScope: number | null, reason?: string, actorId?: number) {
+    // حد عمود archiveReason (300) قبل أي قراءة أو كتابة — كان 450 فيفشل الحفظ بـ500
+    assertArchiveReason(reason)
     await this.findOne(id, branchScope)
     return this.employees.manager.transaction(async em => {
       const emp = await em.findOneOrFail(Employee, { where: { id }, lock: { mode: 'pessimistic_write' } })
       if (emp.status === 'archived') throw new BadRequestException('الموظف مؤرشف بالفعل')
       if (await em.findOneBy(OffboardingCase, { employeeId: id, status: In(OPEN_CASE_STATUSES) })) {
         throw new BadRequestException('أكمل أو ألغ ملف إنهاء الخدمة قبل الأرشفة')
-      }
-      if (reason !== undefined && (typeof reason !== 'string' || reason.length > 450)) {
-        throw new BadRequestException('سبب الأرشفة نص لا يتجاوز 450 حرفاً')
       }
       const oldStatus = emp.status
       emp.status = 'archived'

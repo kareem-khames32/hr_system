@@ -11,6 +11,7 @@ import {
   can,
   fetchEmployee,
   fetchEmployeeBalances,
+  fetchEmployeeProfile,
   fetchQualifications,
   updateEmployee,
   type ApiQualifications,
@@ -19,38 +20,16 @@ import { saveQualifications } from '@/lib/save-qualifications'
 import { fetchEmployeeSalaryChangeContext, type EmployeeSalaryChangeContext } from '@/lib/employee-salary-change-api'
 import { fetchPayrollCalendarContext, type PayrollCalendarContext } from '@/lib/payroll-calendar-api'
 
-// تقسيم الاسم العربي إلى أجزائه بحيث تُعيد إعادة التجميع الاسم الأصلي حرفياً
-// إعادة التجميع في المكوّن: [الأول، الأب، الجد، العائلة].filter(Boolean).join(' ')
-function splitArabicName(full: string) {
-  const w = (full ?? '').trim().split(/\s+/).filter(Boolean)
-  const n = w.length
-  return {
-    first: n >= 1 ? w[0] : '',
-    father: n >= 3 ? w[1] : '',
-    grand: n >= 4 ? w.slice(2, n - 1).join(' ') : '',
-    family: n >= 2 ? w[n - 1] : '',
-  }
-}
-
-// تقسيم الاسم الإنجليزي (الأول/الأوسط/الأخير) بشكل عكوس تماماً
-function splitEnglishName(full: string) {
-  const w = (full ?? '').trim().split(/\s+/).filter(Boolean)
-  const n = w.length
-  return {
-    first: n >= 1 ? w[0] : '',
-    middle: n >= 3 ? w.slice(1, n - 1).join(' ') : '',
-    last: n >= 2 ? w[n - 1] : '',
-  }
-}
-
-// تقسيم العنوان «الحي، المدينة» — إعادة التجميع: [الحي، المدينة].join('، ')
-function splitAddress(addr: string) {
-  const a = (addr ?? '').trim()
-  if (!a) return { district: '', city: '' }
-  const i = a.indexOf('،')
-  if (i === -1) return { district: a, city: '' }
-  return { district: a.slice(0, i).trim(), city: a.slice(i + 1).trim() }
-}
+// تقسيم الاسم والعنوان ودورة الراتب من مصدر واحد مع حفظ النموذج (employee-form-fields)
+import {
+  arabicNameNeedsFullField,
+  englishNameNeedsFullField,
+  salaryCycleValue,
+  splitArabicName,
+  splitEmployeeAddress,
+  splitEnglishName,
+  type SavedEmployeeDocument,
+} from '@/lib/employee-form-fields'
 
 export default function EditEmployeePage() {
   const params = useParams()
@@ -60,6 +39,8 @@ export default function EditEmployeePage() {
   const [loadedEmployeeId, setLoadedEmployeeId] = useState<number | null>(null)
   // المؤهلات المحفوظة — تُعرض في الفورم للحذف، والجديد يُضاف بجانبها
   const [savedQuals, setSavedQuals] = useState<ApiQualifications | null>(null)
+  // المستندات المحفوظة — تُعرض بجانب خانات الرفع (الرفع يضيف نسخة جديدة)
+  const [savedDocuments, setSavedDocuments] = useState<SavedEmployeeDocument[] | null>(null)
   const [loading, setLoading] = useState(true)
   const [submitting, setSubmitting] = useState(false)
   const [error, setError] = useState('')
@@ -101,19 +82,26 @@ export default function EditEmployeePage() {
         if (!cancelled) setCalendarContextError(cause instanceof Error ? cause.message : 'تعذر تحميل تاريخ فرع الموظف.')
         return null
       }),
+      fetchEmployeeProfile(employeeId).then((profile) => profile.documents ?? []).catch(() => null),
     ])
-      .then(([emp, bals, quals, salary, calendar]) => {
+      .then(([emp, bals, quals, salary, calendar, documents]) => {
         if (cancelled) return
         setLoadedEmployeeId(employeeId)
         setSalaryContext(salary)
         setCalendarContext(calendar)
         if (salary) setSalaryContextError('')
         setSavedQuals(quals)
+        setSavedDocuments(documents)
         const annual = (bals as any[]).find((b) => b.balanceType === 'annual')
-        const ar = splitArabicName(emp.fullName ?? '')
-        const en = splitEnglishName(emp.fullNameEn ?? '')
-        const addr = splitAddress(emp.address ?? '')
+        // الاسم محفوظ نصاً واحداً؛ تقسيم مبهم (عدد كلمات غير معتاد أو «عبد …») يُعرض في خانة الاسم الكامل
+        const arWhole = arabicNameNeedsFullField(emp.fullName)
+        const enWhole = englishNameNeedsFullField(emp.fullNameEn)
+        const ar = splitArabicName(arWhole ? '' : emp.fullName)
+        const en = splitEnglishName(enWhole ? '' : emp.fullNameEn)
+        const addr = splitEmployeeAddress(emp.address)
         setInitial({
+          ...(arWhole ? { nameArFull: emp.fullName ?? '' } : {}),
+          ...(enWhole ? { nameEnFull: emp.fullNameEn ?? '' } : {}),
           firstNameAr: ar.first,
           fatherNameAr: ar.father,
           grandNameAr: ar.grand,
@@ -182,7 +170,8 @@ export default function EditEmployeePage() {
           gradeId: emp.gradeId != null ? String(emp.gradeId) : '',
           workLocation: emp.workLocation ?? '',
           currency: salary?.current.currency ?? '',
-          salaryCycle: emp.salaryCycle ?? '',
+          // NULL المحفوظ يظهر «شهري» ويُحفظ monthly — نفس ما يعرضه الملف بعد الحفظ
+          salaryCycle: salaryCycleValue(emp.salaryCycle),
           bankBranch: emp.bankBranch ?? '',
           gosiNumber: emp.gosiNumber ?? '',
           isGosiRegistered:
@@ -252,6 +241,7 @@ export default function EditEmployeePage() {
       salaryChangeForbidden={salaryChangeForbidden}
       calendarContext={calendarContext}
       calendarContextError={calendarContextError}
+      savedDocuments={savedDocuments}
     />
   )
 }
