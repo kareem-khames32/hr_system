@@ -13,6 +13,9 @@ export const PAYROLL_RUN_EVENT_LABELS: Record<string, string> = {
   DRAFT_CREATED: 'أنشأ مسودة المسير', DRAFT_UPDATED: 'عدّل تعريف المسودة', CREATED: 'أنشأ المسير واحتسبه', CALCULATED: 'احتسب المسودة',
   RECALCULATED: 'أعاد حساب المسير', UNASSIGNED_ACKNOWLEDGED: 'أقر بتقرير «موظفون بلا مسير»', PARITY_EXPLAINED: 'كتب أسباب فروق التكافؤ',
   ENGINE_MODE_CHANGED: 'غيّر وضع محرك الحساب', PARITY_COUNTING_CHANGED: 'غيّر احتساب المسير في فترة التكافؤ', APPROVED: 'اعتمد المسير ووقّع تقرير التكافؤ', PAID: 'صرف المسير', REOPENED: 'أعاد فتح المسير', CANCELLED: 'ألغى المسير',
+  // C8 / الخطوة 31: مسار العكس والمسير التكميلي بعد الصرف
+  REVERSAL_CREATED: 'أنشأ مسير عكس صرف مربوطًا', REVERSAL_POSTED: 'نفّذ عكس صرف بنود من هذا المسير', REVERSAL_CANCELLED: 'ألغى مسير عكس قبل تنفيذه',
+  SUPPLEMENTARY_CREATED: 'أنشأ مسيرًا تكميليًا مربوطًا بهذا المسير',
 }
 const SNAPSHOT_MODES: Record<string, string> = { FIRST_CALCULATION: 'التقاط أول', STORED: 'من اللقطة المحفوظة', REFRESHED: 'تحديث صريح للقطة' }
 
@@ -53,6 +56,20 @@ export function payrollRunEventDetails(event: Pick<PayrollRunEventView, 'eventTy
     if (typeof payload.channel === 'string') details.push(`القناة: ${PAY_CHANNEL_LABELS[payload.channel as PayrollPayChannel] ?? payload.channel}`)
     if (typeof payload.reference === 'string') details.push(`المرجع: ${payload.reference}`)
   }
+  // C8 / الخطوة 31: روابط العكس والتكميلي وما أعاده التنفيذ
+  if (event.eventType === 'DRAFT_CREATED' && payload.runType === 'SUPPLEMENTARY' && typeof payload.parentRunId === 'number') details.push(`مسير تكميلي مربوط بالمسير المصروف #${payload.parentRunId}`)
+  if (['REVERSAL_CREATED', 'REVERSAL_POSTED', 'REVERSAL_CANCELLED'].includes(event.eventType)) {
+    if (typeof payload.reversalRunId === 'number') details.push(`مسير العكس #${payload.reversalRunId}`)
+    if (typeof payload.parentRunId === 'number') details.push(`المسير المصروف #${payload.parentRunId}`)
+    if (Array.isArray(payload.employeeIds)) details.push(`${payload.employeeIds.length} موظف`)
+    if (typeof payload.totalNet === 'number') details.push(`صافي العكس ${formatMoney(payload.totalNet)}`)
+  }
+  if (event.eventType === 'SUPPLEMENTARY_CREATED') {
+    if (typeof payload.supplementaryRunId === 'number') details.push(`المسير التكميلي #${payload.supplementaryRunId}`)
+    if (Array.isArray(payload.employeeIds)) details.push(`${payload.employeeIds.length} موظف`)
+  }
+  const effects = record(payload.effects)
+  if (effects) details.push(`أعاد التنفيذ: إضافي ${effects.overtime ?? 0} • أقساط ${effects.installments ?? 0} • قيود دفتر ${effects.obligations ?? 0} • حجوزات فترة ${effects.releasedClaims ?? 0}`)
   return details
 }
 

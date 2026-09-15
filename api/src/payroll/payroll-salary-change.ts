@@ -4,6 +4,8 @@ import { localDateOf } from '../attendance/attendance.service'
 import { recordEmployeeChange } from '../employees/employee-change-log'
 import { payrollLiveSourceContent } from './payroll-live-source-contract'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
+// C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُقفل شهر الأجر (يُصحح الأجر ثم يُصرف بمسير تكميلي)
+import { payrollLineNotReversedSql } from './payroll-reversal-sql'
 import { appendMonthlySalaryHistoryRevision, readSalaryHistory, readSalaryHistoryCurrent,
   SALARY_HISTORY_MONEY_KEYS, salaryCurrentSourceHash, salaryHistorySchemaMissing,
   salaryHistoryText, type SalaryHistoryCurrent, type SalaryHistoryRead, type SalaryHistorySegment } from './payroll-salary-history'
@@ -98,7 +100,8 @@ export async function assertSalaryChangePeriodOpen(em: EntityManager, employeeId
   const from = month(fromPeriod), to = toPeriod === null ? null : month(toPeriod)
   const runs = await em.query(`SELECT TOP (1) r.[id] FROM dbo.payroll_runs r WHERE r.[status] IN ('APPROVED','PAID') AND r.[period]>=@0 AND (@1 IS NULL OR r.[period]<=@1) AND (
     EXISTS (SELECT 1 FROM dbo.payroll_items i WHERE i.[runId]=r.[id] AND i.[employeeId]=@2)
-    OR EXISTS (SELECT 1 FROM dbo.payroll_run_members m WHERE m.[runId]=r.[id] AND m.[employeeId]=@2 AND (m.[membershipStatus] IS NULL OR m.[membershipStatus]='INCLUDED')))`, [from, to, employeeId])
+    OR EXISTS (SELECT 1 FROM dbo.payroll_run_members m WHERE m.[runId]=r.[id] AND m.[employeeId]=@2 AND (m.[membershipStatus] IS NULL OR m.[membershipStatus]='INCLUDED')))
+    AND ${payrollLineNotReversedSql('r.[id]', '@2')}`, [from, to, employeeId])
   if (runs.length) conflict('SALARY_CHANGE_CLOSED_PERIOD', 'شهر تغيير الأجر يشمل مسيرًا معتمدًا أو مصروفًا للموظف؛ يلزم مسار فروقات الفترات السابقة بدل تعديل الأجر مباشرة')
   const settlements = await em.query(`SELECT TOP (1) [id] FROM dbo.offboarding_cases WHERE [employeeId]=@0 AND [status] IN ('SETTLED','CLOSED') AND [lastWorkingDay]>=@1`, [employeeId, payrollPeriodBounds(from, cycleStartDay).startDate])
   if (settlements.length) conflict('SALARY_CHANGE_CLOSED_PERIOD', 'شهر تغيير الأجر يمس خدمة لها تصفية معتمدة؛ يلزم مراجعة فروقات التصفية أولًا')
@@ -113,7 +116,8 @@ export async function assertMonthlySalaryHistoryKeepsClosedPeriods(em: EntityMan
   const rows: Array<{ id: number; period: string; snapshot: string | null }> = await em.query(`SELECT r.[id], r.[period], m.[snapshot] FROM dbo.payroll_runs r
     LEFT JOIN dbo.payroll_run_members m ON m.[runId]=r.[id] AND m.[employeeId]=@0
     WHERE r.[status] IN ('APPROVED','PAID') AND (EXISTS (SELECT 1 FROM dbo.payroll_items i WHERE i.[runId]=r.[id] AND i.[employeeId]=@0)
-      OR (m.[id] IS NOT NULL AND (m.[membershipStatus] IS NULL OR m.[membershipStatus]='INCLUDED')))`, [employeeId])
+      OR (m.[id] IS NOT NULL AND (m.[membershipStatus] IS NULL OR m.[membershipStatus]='INCLUDED')))
+      AND ${payrollLineNotReversedSql('r.[id]', '@0')}`, [employeeId])
   const pick = (periods: MonthlySalaryPeriod[], period: string) => periods.find(row => row.effectivePayrollPeriod <= period && (row.effectiveToPayrollPeriod === null || row.effectiveToPayrollPeriod >= period)) ?? null
   const amounts = (row: Partial<Record<string, string | null>> | null, withCurrency: boolean) => row ? JSON.stringify([...(withCurrency ? [row.currency] : []), ...SALARY_HISTORY_MONEY_KEYS.map(key => row[key])]) : null
   const monthlyPrevious = previous.version?.contractVersion === PAYROLL_MONTHLY_SALARY_HISTORY_VERSION ? previous.segments.map(periodOnly) : null

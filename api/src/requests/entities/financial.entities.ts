@@ -59,7 +59,8 @@ export class Loan {
   createdByUserId: number | null
 }
 
-export type LoanInstallmentFinancialStatus = 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED'
+// REVERSED (C8 / الخطوة 31): قسط ترحيل أنشأه صرف مسير ثم عُكس الصرف فعاد أصله مستحقًا — مُلغى بلا رصيد، ويُعاد تفعيله لو رُحّل الأصل مجددًا
+export type LoanInstallmentFinancialStatus = 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED' | 'REVERSED'
 
 @Entity('loan_installments')
 @Index('UX_loan_installments_parent', ['parentInstallmentId'], { unique: true, where: '[parentInstallmentId] IS NOT NULL' })
@@ -107,7 +108,8 @@ export class LoanInstallment {
 // مصروفات، غرامة... يستهلكه المسير مرة واحدة (PENDING→APPLIED) ويصله بمصدره.
 export type ObligationType = 'DEBIT' | 'CREDIT' // خصم | إضافة
 // SUSPENDED (C2 / DD-11 قاعدة 4): قسط خصم مصنف تجاوز حد مرات الترحيل؛ لا يدخل مسيرًا حتى قرار الموارد البشرية
-export type ObligationStatus = 'PENDING' | 'APPLIED' | 'CANCELLED' | 'SUSPENDED'
+// EXEMPTED / DEFERRED (الخطوة 26 / EX-08): أُسقط نهائيًا أو أُجّل بقرار إعفاء مالي عند صرف المسير (المؤجَّل ينشئ قسطًا PENDING للشهر التالي)
+export type ObligationStatus = 'PENDING' | 'APPLIED' | 'CANCELLED' | 'SUSPENDED' | 'EXEMPTED' | 'DEFERRED'
 
 @Entity('employee_obligations')
 export class EmployeeObligation {
@@ -187,5 +189,20 @@ export class EmployeeObligation {
   @Index('IX_employee_obligations_bonus_request')
   @Column({ type: 'int', nullable: true })
   bonusRequestId: number | null
+
+  // الخطوة 26 (EX-08): قرار الإعفاء المالي الذي أسقط القيد أو أجّله، ومرجعه على القسط المؤجَّل الجديد
+  @Index('IX_employee_obligations_financial_exemption')
+  @Column({ type: 'int', nullable: true })
+  financialExemptionId: number | null
+
+  // C8 / الخطوة 31: على القيد المستهلك — مسير العكس الذي عكس صرفه (القيد يبقى APPLIED تاريخيًا ولا يُحتسب محصلًا بعد العكس)
+  @Index('IX_employee_obligations_payroll_reversal_run')
+  @Column({ type: 'int', nullable: true })
+  payrollReversalRunId: number | null
+
+  // وعلى قيد الإعادة (REVERSAL) الجديد PENDING: القيد الأصلي الذي أعاده عكس الصرف ليُستهلك في المسير التكميلي أو التالي
+  @Index('IX_employee_obligations_payroll_reversal_of')
+  @Column({ type: 'int', nullable: true })
+  payrollReversalOfObligationId: number | null
 }
 

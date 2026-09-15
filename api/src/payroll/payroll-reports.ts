@@ -5,6 +5,7 @@ import { OvertimeEntry } from '../requests/entities/attendance.entities'
 import { overtimeFinancialValue } from './overtime-financial'
 import { payrollEmploymentCoverage } from './payroll-employment'
 import { readLoanInstallmentPositions, type LoanInstallmentPosition } from './payroll-installment-balances'
+import { PAYROLL_REVERSAL_LINES_TABLE, payrollLineNotReversedSql } from './payroll-reversal-sql'
 
 // تقارير الرواتب (الخطوة 30 / RP-07, RP-08, RP-10, RP-12, PR-07): قراءة فقط، بلا أي كتابة.
 // النطاق: null = كل الشركة، رقم موجب = فرع المستخدم، وأي قيمة أخرى = نطاق فارغ.
@@ -88,6 +89,8 @@ export const UNASSIGNED_REASON_LABELS = {
   NO_RUN_IN_PERIOD: 'لا يوجد أي مسير منشأ لهذه الفترة',
   OUT_OF_ALL_RUN_SCOPES: 'خارج نطاق كل المسيرات المنشأة للفترة',
   SUSPENDED: 'موقوف بلا أجر (غير مستحق في الفترة)',
+  // C8 / الخطوة 31: بنده في مسير الفترة عُكس صرفه بسطر منفذ ولم يُصرف بمسير تكميلي بعد
+  REVERSED_IN_RUN: 'عُكس صرف بنده في مسير للفترة ولم يُصرف بمسير تكميلي بعد',
 } as const
 export type UnassignedReasonCode = keyof typeof UNASSIGNED_REASON_LABELS
 export const UNASSIGNED_REASON_CODES = Object.keys(UNASSIGNED_REASON_LABELS) as UnassignedReasonCode[]
@@ -103,11 +106,14 @@ async function loadOrgNames(em: EntityManager): Promise<OrgNames> {
 interface RunRow {
   id: number; name: string | null; period: string; status: string; scopeType: string; scopeIds: string | null
   employeeIds: string | null; branchId: number | null; startDate: string; endDate: string; totalNet: string; createdAt: Date
+  runType: string | null; parentRunId: number | null
 }
 
 const RUN_COLUMNS = `r.[id], r.[name], r.[period], r.[status], r.[scopeType], r.[scopeIds], r.[employeeIds], r.[branchId],
   CONVERT(varchar(10), r.[startDate], 23) AS [startDate], CONVERT(varchar(10), r.[endDate], 23) AS [endDate],
-  CONVERT(varchar(40), r.[totalNet]) AS [totalNet], r.[createdAt]`
+  CONVERT(varchar(40), r.[totalNet]) AS [totalNet], r.[createdAt], r.[runType], r.[parentRunId]`
+
+const runTypeOf = (run: Pick<RunRow, 'runType'>) => run.runType === 'REVERSAL' || run.runType === 'SUPPLEMENTARY' ? run.runType : 'REGULAR'
 
 export function payrollRunScopeLabel(run: Pick<RunRow, 'scopeType' | 'scopeIds' | 'employeeIds' | 'branchId'>, names: OrgNames) {
   const ids = run.scopeIds ? parseIds(run.scopeIds) : run.branchId ? [run.branchId] : []
@@ -145,6 +151,17 @@ const MEMBER_SELECT = `SELECT m.[runId], m.[employeeId], m.[membershipStatus], m
 
 const memberKey = (runId: number, employeeId: number) => `${runId}:${employeeId}`
 
+// C8 / الخطوة 31: سطور عكس الصرف. بند الموظف الذي نُفّذ عكسه (POSTED) لم يعد صرفًا فعليًا: لا يدخل مجاميع الفترة ولا طرق الصرف ولا الفروق ولا تتبع الإضافي،
+// وصرفه الفعلي هو بند المسير التكميلي المربوط. مسير العكس نفسه بلا بنود ويُعرض بسطوره سالبة.
+interface ReversalLineRow { reversalRunId: number; originalRunId: number; employeeId: number; status: string; netPay: string }
+async function loadReversalLines(em: EntityManager, originalRunIds?: number[]): Promise<ReversalLineRow[]> {
+  if (originalRunIds && !originalRunIds.length) return []
+  const filter = originalRunIds ? ` WHERE [originalRunId] IN (${originalRunIds.map(id => Number(id)).filter(Number.isSafeInteger).join(', ')})` : ''
+  return em.query(`SELECT [reversalRunId], [originalRunId], [employeeId], [status], CONVERT(varchar(40), [netPay]) AS [netPay] FROM [${PAYROLL_REVERSAL_LINES_TABLE}]${filter}`)
+}
+const postedReversalKeys = (lines: ReversalLineRow[]) =>
+  new Set(lines.filter(line => line.status === 'POSTED').map(line => memberKey(Number(line.originalRunId), Number(line.employeeId))))
+
 function effectiveBranch(run: RunRow, member: MemberRow | undefined) {
   if (member && Number(member.hasSnapshot) === 1) return toNumberOrNull(member.snapshotBranchId)
   return legacyBranchOf(run)
@@ -173,10 +190,34 @@ export async function payrollRunsReport(em: EntityManager, scope: PayrollReportS
   const memberByKey = new Map(members.map(row => [memberKey(Number(row.runId), Number(row.employeeId)), row]))
   const itemsByRun = groupBy(items, row => Number(row.runId))
   const membersByRun = groupBy(members, row => Number(row.runId))
+  const reversalLines = await loadReversalLines(em)
+  const reversedKeys = postedReversalKeys(reversalLines)
+  const linesByReversalRun = groupBy(reversalLines, row => Number(row.reversalRunId))
+  const runById = new Map(runs.map(run => [Number(run.id), run]))
 
   const resultRuns = []
   const activeItems: Array<{ run: RunRow; item: ItemRow }> = []
   for (const run of runs) {
+    const runType = runTypeOf(run)
+    const base = {
+      id: Number(run.id), name: run.name, period: run.period, status: run.status, scopeType: run.scopeType,
+      scopeLabel: payrollRunScopeLabel(run, names), runType, parentRunId: run.parentRunId === null ? null : Number(run.parentRunId),
+      branchId: run.branchId === null ? null : Number(run.branchId),
+      branchName: run.branchId === null ? null : names.branches.get(Number(run.branchId)) ?? null,
+      startDate: run.startDate, endDate: run.endDate,
+      storedTotalNet: scope === null ? reportMoney(reportCents(run.totalNet)) : null,
+    }
+    if (runType === 'REVERSAL') {
+      // مسير العكس: بلا بنود؛ موظفوه سطور عكسه وصافيه سالب مجموعها، ونطاق الفرع من لقطة العضو في المسير الأصلي
+      const runLines = linesByReversalRun.get(Number(run.id)) ?? []
+      const parent = runById.get(Number(run.parentRunId))
+      const visibleLines = runLines.filter(line => scope === null ||
+        (!!parent && effectiveBranch(parent, memberByKey.get(memberKey(Number(line.originalRunId), Number(line.employeeId)))) === scope))
+      if (scope !== null && !visibleLines.length) continue
+      resultRuns.push({ ...base, employees: visibleLines.length, excluded: 0, totalNet: reportMoney(-sumCents(visibleLines.map(line => line.netPay))),
+        reversedEmployees: 0, reversedNet: '0.00', partial: scope !== null && visibleLines.length < runLines.length })
+      continue
+    }
     const runItems = itemsByRun.get(Number(run.id)) ?? []
     const runMembers = membersByRun.get(Number(run.id)) ?? []
     const inScope = (employeeId: number) => scope === null || effectiveBranch(run, memberByKey.get(memberKey(run.id, employeeId))) === scope
@@ -185,17 +226,16 @@ export async function payrollRunsReport(em: EntityManager, scope: PayrollReportS
     const visible = scope === null || visibleItems.length > 0 || visibleMembers.length > 0 ||
       (!runItems.length && !runMembers.length && legacyBranchOf(run) === scope)
     if (!visible) continue
-    if (run.status !== 'CANCELLED') for (const item of visibleItems) activeItems.push({ run, item })
+    const reversed = (item: ItemRow) => reversedKeys.has(memberKey(Number(run.id), Number(item.employeeId)))
+    const reversedItems = visibleItems.filter(reversed)
+    if (run.status !== 'CANCELLED') for (const item of visibleItems) if (!reversed(item)) activeItems.push({ run, item })
     resultRuns.push({
-      id: Number(run.id), name: run.name, period: run.period, status: run.status, scopeType: run.scopeType,
-      scopeLabel: payrollRunScopeLabel(run, names),
-      branchId: run.branchId === null ? null : Number(run.branchId),
-      branchName: run.branchId === null ? null : names.branches.get(Number(run.branchId)) ?? null,
-      startDate: run.startDate, endDate: run.endDate,
+      ...base,
       employees: visibleItems.length,
       excluded: visibleMembers.filter(member => member.membershipStatus === 'EXCLUDED').length,
       totalNet: reportMoney(sumCents(visibleItems.map(item => item.netPay))),
-      storedTotalNet: scope === null ? reportMoney(reportCents(run.totalNet)) : null,
+      // بنود هذا المسير التي نُفّذ عكس صرفها (يقابلها سطر سالب في مسير العكس المربوط)
+      reversedEmployees: reversedItems.length, reversedNet: reportMoney(sumCents(reversedItems.map(item => item.netPay))),
       partial: scope !== null && visibleItems.length < runItems.length,
     })
   }
@@ -296,6 +336,7 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
   const items: Array<{ runId: number; employeeId: number }> = runIds.length ? await em.query(`SELECT [runId], [employeeId] FROM [payroll_items] WHERE [runId] ${inRuns}`) : []
   const membersByEmployee = groupBy(members, row => Number(row.employeeId))
   const itemsByEmployee = groupBy(items, row => Number(row.employeeId))
+  const reversedKeys = postedReversalKeys(await loadReversalLines(em, runIds))
   // آخر حساب للمسير بساعة قاعدة البيانات نفسها التي تكتب employees.createdAt — لا نقارن بساعة Node في capturedAt:
   // وقت إنشاء المسير أو أحدث حدث حساب/إعادة حساب مسجل عليه (كل ما عدا الاعتماد والصرف وإعادة الفتح والإلغاء).
   const snapshotAt = new Map<number, number>()
@@ -312,7 +353,7 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
       SELECT i.[employeeId], r.[id] AS [runId], r.[period], r.[name], r.[status], r.[scopeType], r.[scopeIds], r.[branchId],
         CONVERT(varchar(10), r.[startDate], 23) AS [startDate], CONVERT(varchar(10), r.[endDate], 23) AS [endDate],
         ROW_NUMBER() OVER (PARTITION BY i.[employeeId] ORDER BY r.[endDate] DESC, r.[id] DESC) AS [rn]
-      FROM [payroll_items] i INNER JOIN [payroll_runs] r ON r.[id] = i.[runId] WHERE r.[status] <> 'CANCELLED') x WHERE x.[rn] = 1`))
+      FROM [payroll_items] i INNER JOIN [payroll_runs] r ON r.[id] = i.[runId] WHERE r.[status] <> 'CANCELLED' AND ${payrollLineNotReversedSql('r.[id]', 'i.[employeeId]')}) x WHERE x.[rn] = 1`))
     .map((row: any) => [Number(row.employeeId), row]))
   const pendingInstallments = new Map<number, any>((await em.query(`SELECT l.[employeeId], COUNT(*) AS [count],
       CONVERT(varchar(40), SUM(i.[amount] - ISNULL(i.[paidAmount], 0))) AS [amount]
@@ -347,10 +388,15 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
     if (!coverage && !dataIssue && !suspended) continue // ليس على رأس العمل في الفترة
 
     const employeeMembers = membersByEmployee.get(employeeId) ?? []
-    const employeeItems = itemsByEmployee.get(employeeId) ?? []
-    for (const row of [...employeeMembers, ...employeeItems]) visibleRunIds.add(Number(row.runId))
+    const rawItems = itemsByEmployee.get(employeeId) ?? []
+    for (const row of [...employeeMembers, ...rawItems]) visibleRunIds.add(Number(row.runId))
+    // C8: البند المعكوس صرفه بسطر منفذ لا يغطي الموظف في الفترة (يغطيه المسير التكميلي المربوط إن صُرف)
+    const reversedIn = (runId: number) => reversedKeys.has(memberKey(runId, employeeId))
+    const reversedRunIds = new Set<number>([...employeeMembers.filter(member => member.membershipStatus !== 'EXCLUDED'), ...rawItems]
+      .map(row => Number(row.runId)).filter(reversedIn))
+    const employeeItems = rawItems.filter(item => !reversedIn(Number(item.runId)))
     const includedRunIds = new Set<number>([
-      ...employeeMembers.filter(member => member.membershipStatus !== 'EXCLUDED').map(member => Number(member.runId)),
+      ...employeeMembers.filter(member => member.membershipStatus !== 'EXCLUDED' && !reversedIn(Number(member.runId))).map(member => Number(member.runId)),
       ...employeeItems.map(item => Number(item.runId)),
     ])
     const includedActive = activeRuns.filter(run => includedRunIds.has(Number(run.id)))
@@ -377,11 +423,15 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
         reason('EXCLUDED_IN_RUN', PAYROLL_EXCLUSION_LABELS[code] ?? 'سبب استبعاد غير معروف — راجع المسير', run)
       }
     }
+    for (const runId of reversedRunIds) {
+      const run = runById.get(runId)
+      if (run && run.status !== 'CANCELLED') reason('REVERSED_IN_RUN', 'نُفّذ عكس صرف بنده؛ اصرفه بمسير تكميلي مربوط بالمسير', run)
+    }
     // أُضيف ملفه للنظام بعد آخر لقطة للمسير الذي يشمل نطاقه ⇒ «التحق بعد التجميد»، وإلا تغيّر تنظيمه بعد الحساب
     const addedAt = new Date(emp.createdAt).getTime()
     const joinedAfter: RunRow[] = [], notRecalculated: RunRow[] = []
     for (const run of activeRuns) {
-      if (includedRunIds.has(Number(run.id)) || employeeMembers.some(member => Number(member.runId) === Number(run.id))) continue
+      if (includedRunIds.has(Number(run.id)) || reversedRunIds.has(Number(run.id)) || employeeMembers.some(member => Number(member.runId) === Number(run.id))) continue
       if (!employeeInRunScope(run, employee)) continue
       if (Number.isFinite(addedAt) && addedAt > (snapshotAt.get(Number(run.id)) ?? 0)) joinedAfter.push(run)
       else notRecalculated.push(run)
@@ -392,7 +442,7 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
     for (const run of cancelledOnly) reason('ONLY_CANCELLED_RUN', null, run)
     const gross = sumCents(MONTHLY_SALARY_COMPONENTS.map(component => emp[component.key]))
     if (gross <= 0n) reason('NO_SALARY_DEFINED', 'مكونات الراتب الست كلها صفر')
-    if (!reasons.some(row => ['EXCLUDED_IN_RUN', 'JOINED_AFTER_SNAPSHOT', 'IN_SCOPE_NOT_RECALCULATED', 'ONLY_CANCELLED_RUN'].includes(row.code))) {
+    if (!reasons.some(row => ['EXCLUDED_IN_RUN', 'REVERSED_IN_RUN', 'JOINED_AFTER_SNAPSHOT', 'IN_SCOPE_NOT_RECALCULATED', 'ONLY_CANCELLED_RUN'].includes(row.code))) {
       if (!activeRuns.length) reason('NO_RUN_IN_PERIOD')
       else reason('OUT_OF_ALL_RUN_SCOPES')
     }
@@ -498,7 +548,8 @@ export async function payrollOvertimeReport(em: EntityManager, scope: PayrollRep
     const rows: any[] = await em.query(`SELECT i.[runId], i.[employeeId], i.[breakdown], CONVERT(varchar(40), i.[overtimeAmount]) AS [itemOvertimeAmount],
       CONVERT(varchar(40), i.[overtimeHours]) AS [itemOvertimeHours], ${RUN_COLUMNS}
       FROM [payroll_items] i INNER JOIN [payroll_runs] r ON r.[id] = i.[runId]
-      WHERE r.[status] <> 'CANCELLED' AND r.[endDate] >= CONVERT(date, @0, 23) AND i.[employeeId] IN (${chunk.map((_, index) => `@${index + 1}`).join(', ')})`,
+      WHERE r.[status] <> 'CANCELLED' AND r.[endDate] >= CONVERT(date, @0, 23) AND i.[employeeId] IN (${chunk.map((_, index) => `@${index + 1}`).join(', ')})
+        AND ${payrollLineNotReversedSql('r.[id]', 'i.[employeeId]')}`,
     [from, ...chunk])
     for (const row of rows) {
       runRows.set(Number(row.runId), row)
@@ -635,7 +686,7 @@ export async function payrollOvertimeReport(em: EntityManager, scope: PayrollRep
   const column = await em.query(`SELECT CONVERT(varchar(40), ISNULL(SUM(i.[overtimeAmount]), 0)) AS [total]
     FROM [payroll_items] i INNER JOIN [payroll_runs] r ON r.[id] = i.[runId] INNER JOIN [employees] e ON e.[id] = i.[employeeId]
     ${filter.sql ? `${filter.sql} AND` : 'WHERE'} r.[status] <> 'CANCELLED' AND r.[startDate] <= CONVERT(date, @${filter.params.length + 1}, 23)
-      AND r.[endDate] >= CONVERT(date, @${filter.params.length}, 23)`, [...filter.params, from, to])
+      AND r.[endDate] >= CONVERT(date, @${filter.params.length}, 23) AND ${payrollLineNotReversedSql('r.[id]', 'i.[employeeId]')}`, [...filter.params, from, to])
   return {
     from, to, rows,
     summary: {
@@ -655,7 +706,7 @@ export async function payrollOvertimeReport(em: EntityManager, scope: PayrollRep
 // ===== ٤) السلف والأرصدة وجدول الأقساط (RP-08) =====
 export interface PayrollLoansReportOptions extends PayrollReportEmployeeFilters { status?: 'open' | 'settled' | 'all'; today: string; from?: string; to?: string }
 
-export const INSTALLMENT_STATUS_LABELS: Record<string, string> = { DUE: 'مستحق', PARTIAL: 'سداد جزئي', DEFERRED: 'مؤجل', PAID: 'مسدد', SETTLED: 'مسوّى' }
+export const INSTALLMENT_STATUS_LABELS: Record<string, string> = { DUE: 'مستحق', PARTIAL: 'سداد جزئي', DEFERRED: 'مؤجل', PAID: 'مسدد', SETTLED: 'مسوّى', REVERSED: 'مُلغى بعكس صرف مسير' }
 
 export async function payrollLoansReport(em: EntityManager, scope: PayrollReportScope, options: PayrollLoansReportOptions) {
   assertDate(options.today, 'تاريخ اليوم')
@@ -694,7 +745,8 @@ export async function payrollLoansReport(em: EntityManager, scope: PayrollReport
       continue
     }
     const own = positions.filter(row => Number(row.loanId) === Number(loan.id))
-    const children = new Map(own.filter(row => row.parentInstallmentId !== null).map(row => [Number(row.parentInstallmentId), row]))
+    // C8: ابن الترحيل المُلغى بعكس صرف مسير ليس جزءًا حيًا من السلسلة
+    const children = new Map(own.filter(row => row.parentInstallmentId !== null && row.financialStatus !== 'REVERSED').map(row => [Number(row.parentInstallmentId), row]))
     const roots = own.filter(row => row.parentInstallmentId === null).sort((a, b) => a.originalDueDate.localeCompare(b.originalDueDate) || a.id - b.id)
     const chainOf = (root: LoanInstallmentPosition) => {
       const chain = [root]
@@ -736,7 +788,9 @@ export async function payrollLoansReport(em: EntityManager, scope: PayrollReport
   let period: any = null
   if (options.from && options.to) {
     const params = [...filter.params, options.from, options.to]
-    const runFilter = `${filter.sql ? `${filter.sql} AND` : 'WHERE'} r.[status] <> 'CANCELLED' AND r.[startDate] <= CONVERT(date, @${filter.params.length + 1}, 23) AND r.[endDate] >= CONVERT(date, @${filter.params.length}, 23)`
+    // C8: بند الموظف المعكوس صرفه وحجز أقساطه المعكوس لا يُحتسبان مرة ثانية بجوار المسير التكميلي
+    const runFilter = `${filter.sql ? `${filter.sql} AND` : 'WHERE'} r.[status] <> 'CANCELLED' AND r.[startDate] <= CONVERT(date, @${filter.params.length + 1}, 23) AND r.[endDate] >= CONVERT(date, @${filter.params.length}, 23)
+      AND ${payrollLineNotReversedSql('r.[id]', 'e.[id]')}`
     const column = await em.query(`SELECT CONVERT(varchar(40), ISNULL(SUM(i.[loanInstallments]), 0)) AS [total] FROM [payroll_items] i
       INNER JOIN [payroll_runs] r ON r.[id] = i.[runId] INNER JOIN [employees] e ON e.[id] = i.[employeeId] ${runFilter}`, params)
     const allocations = await em.query(`SELECT CONVERT(varchar(40), ISNULL(SUM(a.[deductedAmount]), 0)) AS [total] FROM [loan_installment_allocations] a
@@ -795,7 +849,8 @@ export async function payrollVarianceReport(em: EntityManager, scope: PayrollRep
   const runById = new Map(runs.map(run => [Number(run.id), run]))
   const runIds = [...runById.keys()]
   const inRuns = runIds.length ? `IN (${runIds.join(', ')})` : 'IN (NULL)'
-  const items: ItemRow[] = runIds.length ? await em.query(`${ITEM_SELECT} WHERE i.[runId] ${inRuns}`) : []
+  // C8: البند المعكوس صرفه لا يدخل الفروق؛ صرفه الفعلي بند المسير التكميلي
+  const items: ItemRow[] = runIds.length ? await em.query(`${ITEM_SELECT} WHERE i.[runId] ${inRuns} AND ${payrollLineNotReversedSql('i.[runId]', 'i.[employeeId]')}`) : []
   const members: MemberRow[] = runIds.length ? await em.query(`${MEMBER_SELECT} WHERE m.[runId] ${inRuns}`) : []
   const memberByKey = new Map(members.map(row => [memberKey(Number(row.runId), Number(row.employeeId)), row]))
   const identities = new Map<number, any>((await em.query(`SELECT [id], [employeeCode], [fullName] FROM [employees]`)).map((row: any) => [Number(row.id), row]))

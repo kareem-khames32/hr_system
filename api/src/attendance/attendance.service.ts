@@ -1,3 +1,5 @@
+// C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُقفل حضور الموظف في فترته (يُصحح ثم يُصرف بمسير تكميلي)
+import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
 import {
   BadRequestException,
   ConflictException,
@@ -224,7 +226,8 @@ export class AttendanceService {
       WHERE r.status IN ('APPROVED','PAID') AND r.startDate<=@0 AND r.endDate>=@0
       AND (EXISTS (SELECT 1 FROM dbo.payroll_items i WHERE i.runId=r.id AND i.employeeId=@1)
         OR EXISTS (SELECT 1 FROM dbo.payroll_run_members m WHERE m.runId=r.id AND m.employeeId=@1
-          AND (m.membershipStatus IS NULL OR m.membershipStatus='INCLUDED')))`, [date, employeeId])
+          AND (m.membershipStatus IS NULL OR m.membershipStatus='INCLUDED')))
+      AND ${payrollLineNotReversedSql('r.id', '@1')}`, [date, employeeId])
     return rows.length > 0
   }
 

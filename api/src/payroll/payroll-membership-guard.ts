@@ -1,5 +1,7 @@
 import { BadRequestException, ConflictException } from '@nestjs/common'
 import { EntityManager } from 'typeorm'
+// C8 / الخطوة 31: بند المسير المعكوس صرفه (سطر عكس منفذ) لا يحجز الموظف؛ حجز فترته يُحرر عند التنفيذ فيُصرف بمسير تكميلي
+import { payrollLineNotReversedSql } from './payroll-reversal-sql'
 
 export interface PayrollConflictRun {
   id?: number
@@ -119,7 +121,8 @@ export async function findPayrollConflicts(
       WHERE r.[id] <> @2
         AND r.[status] IN ('CALCULATED', 'IN_REVIEW', 'APPROVED', 'PAID')
         AND r.[startDate] <= CONVERT(date, @1, 23)
-        AND r.[endDate] >= CONVERT(date, @0, 23)`, params)
+        AND r.[endDate] >= CONVERT(date, @0, 23)
+        AND ${payrollLineNotReversedSql('r.[id]', 'member.[employeeId]')}`, params)
     for (const row of rows) add(row, false)
 
     const claims: ConflictRow[] = await em.query(`

@@ -25,7 +25,12 @@ import { PayrollOvertimeBreakdown } from '@/components/PayrollOvertimeBreakdown'
 import { PayrollInstallmentBreakdown } from '@/components/PayrollInstallmentBreakdown'
 import { PayrollObligationBreakdown } from '@/components/PayrollObligationBreakdown'
 import { PayrollLatenessTierBreakdown } from '@/components/payroll/PayrollLatenessTierBreakdown'
+// الخطوة 26 (EX-04): الإعفاء المالي في القسيمة — الأصل والمُعفى وبعد الإعفاء ورقم القرار وسببه
+import { PayrollExemptionPayslipSection } from '@/components/payroll/PayrollExemptionPayslipSection'
+import { savedFinancialExemptions, type ExemptionComponent, type PayslipExemption } from '@/lib/financial-exemptions-api'
 import type { PayrollObligationDetail } from '@/lib/deductions-api'
+// C8 / الخطوة 31: القسيمة المعكوسة تبقى كما صُرفت وتُوسم بعكسها وسببه وبقسيمة المسير التكميلي المربوطة
+import type { PayslipReversalInfo } from '@/lib/payroll-corrections-api'
 // الخطوة 22 (B5): منسّق المبالغ الموحد (نفس جدول المسير)، والتغطية والمعامل، وقيد الصرف
 import { formatMoney, formatMoneyOrDash, sumMoney } from '@/lib/money'
 import { payrollCoverageText, payrollItemCoverage } from '@/lib/payroll-item-totals'
@@ -123,12 +128,16 @@ export default function PayslipPage() {
   const [error, setError] = useState('')
   // تتبع كل قيد دفتر (الخصم المصنف بنوعه وسببه وطلبه وسعر اليوم) كما يعيده الخادم مع القسيمة
   const [obligationDetails, setObligationDetails] = useState<PayrollObligationDetail[] | null>(null)
+  const [financialExemptions, setFinancialExemptions] = useState<PayslipExemption[] | null>(null)
+  const [reversal, setReversal] = useState<PayslipReversalInfo | null>(null)
 
   useEffect(() => {
     setLoading(true)
     Promise.all([fetchPayslip(Number(params.id)), fetchBranches().catch(() => [] as ApiBranch[])])
       .then(([data, branches]) => {
         setObligationDetails((data as { obligationDetails?: PayrollObligationDetail[] }).obligationDetails ?? [])
+        setFinancialExemptions((data as { financialExemptions?: PayslipExemption[] }).financialExemptions ?? [])
+        setReversal((data as { reversal?: PayslipReversalInfo | null }).reversal ?? null)
         setItem(data.item)
         setRun(data.run)
         setEmployee(data.employee)
@@ -165,36 +174,49 @@ export default function PayslipPage() {
       ]
     : []
 
-  const deductions = item
+  const deductions: Array<{ name: string; nameEn: string; amount: number; component?: ExemptionComponent }> = item
     ? [
         {
           name: 'خصم التأخير',
           nameEn: `Lateness (${Number(item.lateMinutes)} min)`,
           amount: Number(item.latenessDeduction),
+          component: 'LATENESS',
         },
         {
           name: 'خصم نقص ساعات العمل',
           nameEn: `Work shortfall (${Number(item.shortfallMinutes ?? 0)} min observed)`,
           amount: Number(item.shortfallDeduction ?? 0),
+          component: 'SHORTFALL',
         },
         {
           name: 'خصم الغياب',
           nameEn: `Absence (${Number(item.absenceDays ?? 0)} d)`,
           amount: Number(item.absenceDeduction ?? 0),
+          component: 'ABSENCE',
         },
         {
           name: 'إجازة بدون راتب',
           nameEn: `Unpaid Leave (${Number(item.unpaidLeaveDays)} d)`,
           amount: Number(item.unpaidLeaveDeduction),
         },
-        { name: 'أقساط السلف', nameEn: 'Loan Installments', amount: Number(item.loanInstallments) },
+        { name: 'أقساط السلف', nameEn: 'Loan Installments', amount: Number(item.loanInstallments), component: 'LOAN' },
         {
           name: 'خصومات الدفتر (مصنفة/عهدة/استرداد) — تفصيلها أدناه',
           nameEn: 'Ledger deductions (typed/custody/recovery)',
           amount: Number(item.otherDeductions ?? 0),
+          component: 'TYPED',
         },
       ]
     : []
+  // الخطوة 26 (EX-04 قاعدة 5): البند المُعفى في موضعه الطبيعي بين الخصومات — المُعفى ورقم الإعفاء، والأصل قبل الإعفاء لخصومات الحضور
+  const savedExemptions = item ? savedFinancialExemptions(item) : null
+  const exemptionNote = (component?: ExemptionComponent) => {
+    const total = component ? savedExemptions?.totals.byComponent[component] : undefined
+    if (!component || !savedExemptions || !total) return null
+    const ids = [...new Set(savedExemptions.lines.filter(line => line.component === component).map(line => line.exemptionId))]
+    const requested = component === 'LATENESS' ? savedExemptions.requested.lateness : component === 'SHORTFALL' ? savedExemptions.requested.shortfall : component === 'ABSENCE' ? savedExemptions.requested.absence : null
+    return `${requested ? `الأصل قبل الإعفاء ${formatMoney(requested)} — ` : ''}مُعفى ${formatMoney(total.exempted)} (إعفاء ${ids.map(id => `#${id}`).join('، ')})`
+  }
 
   const totalEarnings = sumMoney(earnings.map(e => e.amount))
   const totalDeductions = sumMoney(deductions.map(d => d.amount))
@@ -271,6 +293,34 @@ export default function PayslipPage() {
               <p className="text-lg font-bold text-gray-800 mt-2">{run.period}</p>
             </div>
           </div>
+
+          {/* C8 / الخطوة 31: عكس صرف هذه القسيمة بمسير العكس وسببه، وقسيمة المسير التكميلي المربوطة — القسيمة نفسها تبقى كما صُرفت */}
+          {reversal?.line && (
+            <div role="status" className={`rounded-xl p-4 mb-6 text-sm ${reversal.line.status === 'POSTED' ? 'bg-red-50 text-red-800' : 'bg-amber-50 text-amber-900'}`}>
+              <p className="font-bold">
+                {reversal.line.status === 'POSTED' ? 'عُكس صرف هذه القسيمة' : 'عكس صرف هذه القسيمة بانتظار التنفيذ'} — مسير العكس #{reversal.line.reversalRunId}
+                {reversal.line.reversalRunName ? ` «${reversal.line.reversalRunName}»` : ''}
+              </p>
+              <p>الصافي المعكوس {formatMoney(reversal.line.netPay)} {currency}{reversal.line.postedAt ? ` • نُفّذ ${reversal.line.postedAt.slice(0, 10)}` : ''}</p>
+              {reversal.line.reason && <p>السبب: {reversal.line.reason}</p>}
+            </div>
+          )}
+          {reversal && reversal.supplementary.length > 0 && (
+            <div className="rounded-xl bg-blue-50 p-4 mb-6 text-sm text-blue-900">
+              <p className="font-bold">صُرف تصحيحها بالمسير التكميلي المربوط</p>
+              {reversal.supplementary.map(row => (
+                <p key={row.itemId}>
+                  <Link href={`/payroll/payslip/${row.itemId}`} className="underline">قسيمة المسير التكميلي #{row.runId}{row.name ? ` «${row.name}»` : ''}</Link>
+                  {' '}— الصافي {formatMoney(row.netPay)} {currency}
+                </p>
+              ))}
+            </div>
+          )}
+          {run.runType === 'SUPPLEMENTARY' && (
+            <div className="rounded-xl bg-blue-50 p-4 mb-6 text-sm text-blue-900">
+              قسيمة مسير تكميلي مربوط بالمسير المصروف #{run.parentRunId}{run.correctionReason ? ` — سبب التصحيح: ${run.correctionReason}` : ''}
+            </div>
+          )}
 
           {/* Employee Info */}
           <div className="grid grid-cols-2 gap-8 mb-8">
@@ -376,6 +426,7 @@ export default function PayslipPage() {
                           <div>
                             <p className="text-gray-800">{deduction.name}</p>
                             <p className="text-gray-400 text-xs">{deduction.nameEn}</p>
+                            {exemptionNote(deduction.component) && <p className="text-success-700 text-xs">{exemptionNote(deduction.component)}</p>}
                           </div>
                         </td>
                         <td className="px-4 py-3 text-left font-mono font-medium text-danger-600">
@@ -404,6 +455,7 @@ export default function PayslipPage() {
           {item && <PayrollOvertimeBreakdown item={item} currency={currency} />}
           {item && <PayrollInstallmentBreakdown item={item} currency={currency} />}
           {item && <PayrollObligationBreakdown item={item} currency={currency} details={obligationDetails} />}
+          {item && <PayrollExemptionPayslipSection item={item} currency={currency} details={financialExemptions} />}
           {attendanceNotes.length > 0 && (
             <div className="bg-gray-50 border border-gray-200 rounded-xl p-4 mb-6 text-sm text-gray-700 space-y-1">
               {attendanceNotes.map((note, index) => <p key={index}>{note}</p>)}

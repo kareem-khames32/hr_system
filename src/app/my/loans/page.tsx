@@ -15,8 +15,11 @@ import { LoanCapSummary } from '@/components/payroll/LoanCapSummary'
 // AD-15: دفتر الموظف لسلفه هو فقط (GET /loans/mine) — أصل المبلغ والمسدد والمتبقي وحالة كل قسط والسداد المبكر.
 const installmentLabels: Record<LoanInstallmentStatus, string> = {
   DUE: 'مستحق', PAID: 'مخصوم من المسير', PARTIAL: 'سداد جزئي والباقي مرحّل', DEFERRED: 'مؤجل بالكامل', SETTLED: 'مسوّى مبكرًا',
+  // C8: قسط ترحيل أُلغي بعكس صرف مسير (بلا رصيد)
+  REVERSED: 'مُلغى بعكس صرف مسير',
 }
-const statusBadge = (status: LoanInstallmentStatus) => ['PAID', 'SETTLED'].includes(status) ? 'badge-success' : status === 'DUE' ? 'badge-warning' : 'badge-primary'
+const statusBadge = (status: LoanInstallmentStatus) => ['PAID', 'SETTLED'].includes(status) ? 'badge-success' : status === 'DUE' ? 'badge-warning'
+  : status === 'REVERSED' ? 'bg-gray-100 text-gray-600' : 'badge-primary'
 
 export default function MyLoansPage() {
   const currency = useCurrency()

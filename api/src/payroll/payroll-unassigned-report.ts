@@ -6,6 +6,7 @@ import { OffboardingCase } from '../offboarding/offboarding.entities'
 import { payrollEmploymentCoverage } from './payroll-employment'
 import { loadPayrollOrgHistory, payrollDepartmentSet, payrollOrgAt, payrollRunDefinitionOf, payrollRunFilterMatches } from './payroll-run-definition'
 import type { PayrollScopeType } from './payroll.entities'
+import { PAYROLL_REVERSAL_LINES_TABLE } from './payroll-reversal-sql'
 
 /**
  * الخطوة 18 / PR-07 / RP-12: «موظفون بلا مسير في الفترة» — كل من له علاقة عمل في يوم واحد على الأقل من الفترة
@@ -45,6 +46,8 @@ export const PAYROLL_EXCLUSION_LABELS: Record<string, string> = {
   SALARY_HISTORY_INVALID: 'سجل الأجر لا يطابق بصمته الموثقة',
   SALARY_HISTORY_SCHEMA_MISSING: 'ترحيل سجل الأجر غير مطبق',
   SALARY_COMPONENT_INVALID: 'أحد مكونات راتب الملف غير صالح',
+  // C8 / الخطوة 31: عضو المسير المصروف الذي نُفّذ عكس صرف بنده — بلا مسير في الفترة حتى يُصرف بمسير تكميلي
+  PAYROLL_REVERSED: 'عُكس صرف بنده في هذا المسير ولم يُصرف بمسير تكميلي بعد',
 }
 
 export interface PayrollUnassignedRunRef {
@@ -109,14 +112,19 @@ export async function buildPayrollUnassignedReport(em: EntityManager, input: {
     const members: Array<Record<string, any>> = await em.query(`SELECT [runId], [employeeId], [membershipStatus], [exclusionReason]
       FROM [payroll_run_members] WHERE [runId] IN (${list})`, chunk)
     const items: Array<Record<string, any>> = await em.query(`SELECT [runId], [employeeId] FROM [payroll_items] WHERE [runId] IN (${list})`, chunk)
+    // C8 / الخطوة 31: البند المعكوس صرفه بسطر منفذ لا يُحتسب إدراجًا في المسير
+    const reversed = new Set((await em.query(`SELECT [originalRunId], [employeeId] FROM [${PAYROLL_REVERSAL_LINES_TABLE}] WHERE [status] = 'POSTED' AND [originalRunId] IN (${list})`, chunk) as Array<Record<string, any>>)
+      .map(row => `${Number(row.originalRunId)}:${Number(row.employeeId)}`))
     for (const row of members) {
       const run = runs.find(candidate => candidate.id === Number(row.runId))!
-      push(Number(row.employeeId), { run, included: row.membershipStatus !== 'EXCLUDED', exclusionReason: row.exclusionReason ?? null })
+      const wasReversed = reversed.has(`${run.id}:${Number(row.employeeId)}`)
+      push(Number(row.employeeId), { run, included: row.membershipStatus !== 'EXCLUDED' && !wasReversed, exclusionReason: wasReversed ? 'PAYROLL_REVERSED' : row.exclusionReason ?? null })
     }
     for (const row of items) {
       const run = runs.find(candidate => candidate.id === Number(row.runId))!
       const known = memberships.get(Number(row.employeeId))?.some(entry => entry.run.id === run.id)
-      if (!known) push(Number(row.employeeId), { run, included: true, exclusionReason: null })
+      const wasReversed = reversed.has(`${run.id}:${Number(row.employeeId)}`)
+      if (!known) push(Number(row.employeeId), { run, included: !wasReversed, exclusionReason: wasReversed ? 'PAYROLL_REVERSED' : null })
     }
   }
   const definitions = new Map(runs.map(run => {

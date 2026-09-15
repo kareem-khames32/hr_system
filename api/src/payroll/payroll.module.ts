@@ -41,6 +41,12 @@ import { TypedDeductionsScheduler } from './typed-deductions-scheduler.service'
 import { BonusBatch, BonusRequest, BonusRequestEvent, BonusType } from './bonuses.entities'
 import { BonusesController } from './bonuses.controller'
 import { BonusesService } from './bonuses.service'
+import { PayrollFinancialExemption, PayrollFinancialExemptionEvent } from './financial-exemptions.entities'
+import { FinancialExemptionsController } from './financial-exemptions.controller'
+import { FinancialExemptionsService } from './financial-exemptions.service'
+import { PayrollRunReversalLine } from './payroll-corrections.entities'
+import { PayrollCorrectionsController } from './payroll-corrections.controller'
+import { PayrollCorrectionsService } from './payroll-corrections.service'
 
 @Module({
   imports: [
@@ -91,9 +97,16 @@ import { BonusesService } from './bonuses.service'
       BonusRequest,
       BonusRequestEvent,
       BonusBatch,
+      // الخطوة 26 (EX-01..08): الإعفاء المالي في مسير وسجل انتقالاته
+      PayrollFinancialExemption,
+      PayrollFinancialExemptionEvent,
+      // C8 / الخطوة 31: سطور عكس صرف المسير
+      PayrollRunReversalLine,
     ]),
   ],
-  controllers: [PayrollController, ObligationsController, PayrollRulesController, PayrollPolicyController, PayrollSalaryHistoryController, TypedDeductionsController, BonusesController],
-  providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService],
+  controllers: [PayrollController, ObligationsController, PayrollRulesController, PayrollPolicyController, PayrollSalaryHistoryController, TypedDeductionsController, BonusesController,
+    FinancialExemptionsController, PayrollCorrectionsController],
+  providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService,
+    FinancialExemptionsService, PayrollCorrectionsService],
 })
 export class PayrollModule {}

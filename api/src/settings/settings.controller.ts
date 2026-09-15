@@ -53,6 +53,7 @@ import { PAYROLL_SELF_APPROVAL_LICENCE_PERMISSION, payrollSelfApprovalLicenceIss
 import { DATA_PLACEHOLDER_REJECTED, isDataPlaceholder, withoutDataPlaceholder } from '../common/data-placeholders'
 import { deductionSettingError } from '../payroll/typed-deductions'
 import { bonusSettingError } from '../payroll/bonuses'
+import { exemptionSettingError } from '../payroll/financial-exemptions'
 
 class UpsertConfigDto {
   @IsOptional()
@@ -569,6 +570,9 @@ export class SettingsController {
     // C4: مفاتيح bonuses.* بنفس النمط
     const bonusConfigError = bonusSettingError(dto.key, dto.value)
     if (bonusConfigError) throw new BadRequestException(bonusConfigError)
+    // C3: مفاتيح financial_exemptions.* بنفس النمط
+    const exemptionConfigError = exemptionSettingError(dto.key, dto.value)
+    if (exemptionConfigError) throw new BadRequestException(exemptionConfigError)
     // تحقق المفاتيح الرقمية الحرجة: رقم صالح ≥ الحد الأدنى
     const min = SettingsController.NUMERIC_MIN[dto.key]
     const nullablePolicyValue = PAYROLL_POLICY_NULLABLE_CONFIG_KEYS.has(dto.key) && dto.value === 'null'

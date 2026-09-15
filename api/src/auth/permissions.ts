@@ -47,6 +47,8 @@ export const PERMISSIONS: Record<string, string> = {
   'payroll.pay': 'صرف المسير',
   'payroll.reopen': 'إعادة فتح مسير معتمد للمراجعة بسبب موثق',
   'payroll.cancel': 'إلغاء مسودة مسير مع الاحتفاظ بأثرها',
+  // C8 / الخطوة 31: عكس صرف مسير مصروف بمسير عكس مربوط (يعيد الإضافي والأقساط والقيود لحالتها قبل الصرف) — اعتماده وتنفيذه بصلاحيتي الاعتماد والصرف
+  'payroll.reverse': 'عكس صرف مسير مصروف بمسير عكس مربوط بسبب موثق',
   // الخطوة 22 (B5، تصحيح المراجعة): رخصة الشركة الصغيرة تفك فصل المهام في الاعتماد — مستقلة عن settings.manage ولا يمنحها إلا مدير النظام
   'payroll.self_approval_licence': 'تفعيل أو إيقاف رخصة الشركة الصغيرة (يعتمد المسير من احتسبه)',
   // الخطوة 15: مجموعات السياسات (الاسم والنسخ والإعدادات والدورة) ونشرها منفصلة عن الاحتساب
@@ -66,6 +68,11 @@ export const PERMISSIONS: Record<string, string> = {
   'bonuses.approve': 'اعتماد خطوة الموارد البشرية في المكافآت',
   'bonuses.manage': 'إدارة أنواع المكافآت واقتراح المكافأة للموارد البشرية وإلغاؤها أو عكسها بسبب موثق',
   'bonuses.exceed_cap': 'اقتراح أو اعتماد مكافأة تتجاوز سقف نوعها من الراتب الأساسي',
+  // الخطوة 26 (EX-01..08): الإعفاء المالي في مسير — منفصل عن استثناء الحضور
+  'financial_exemption.view': 'عرض الإعفاءات المالية في المسيرات وتقرير حوكمتها في نطاق الفرع',
+  'financial_exemption.grant': 'منح إعفاء مالي من خصم أو نوع خصم أو كل الخصومات القابلة لموظف في مسير محسوب',
+  'financial_exemption.approve': 'اعتماد أو رفض الإعفاء المالي المحوّل للموارد البشرية (غير المانح)',
+  'financial_exemption.override_limits': 'تجاوز حدود الإعفاء المالي بتبرير إضافي موثق (عدد إعفاءات الموظف، فترة التهدئة، إعادة الإعفاء)',
   // العهدة والمستندات
   'custody.assign': 'إسناد وإدارة العهد',
   'documents.manage': 'إدارة مستندات الموظفين',
@@ -97,10 +104,14 @@ export const SUPER_ADMIN_ONLY_GRANTS = [
   'users.manage', 'roles.manage', 'settings.manage',
   'attendance_exemption.approve_executive', 'attendance_exemption.approve',
   'payroll.reopen', 'payroll.cancel', 'overtime.adjust',
+  // C8: عكس صرف مسير مصروف يعيد مستحقات وديونًا مالية — يحملها دور الموارد البشرية ولا يمنحها لغيره
+  'payroll.reverse',
   // C6: تجاوز سقف السلفة وشطب رصيدها يغيّران الدين المستحق
   'loans.cap_override', 'loans.write_off',
   // C4: تجاوز سقف المكافأة يرفع المستحق فوق حد النوع
   'bonuses.exceed_cap',
+  // C3 / الخطوة 26: تجاوز حدود الإعفاء المالي يُسقط خصومًا فوق الضوابط — يحملها دور الموارد البشرية ولا يمنحها لغيره
+  'financial_exemption.override_limits',
   // B5: من يملك الرخصة مع الاحتساب والاعتماد يعتمد ما احتسبه — لا يُمنح لدور أو تجاوز إلا من مدير النظام
   'payroll.self_approval_licence',
 ]
@@ -147,12 +158,16 @@ export const ROLE_PRESETS: Array<{
       'payroll.view', 'payroll.calculate', 'payroll.approve', 'payroll.pay', 'payroll.policy.manage',
       // SEC2 (الخطوة 9): إعادة فتح المسير المعتمد وإلغاء المسودة لنفس دور الاعتماد، بسبب وحدث؛ ولا يمررهما لغيره (SUPER_ADMIN_ONLY_GRANTS)
       'payroll.reopen', 'payroll.cancel',
+      // C8 / الخطوة 31: إنشاء مسير عكس لمسير مصروف (ترحيل 20260915_032_c8 يضيفها للدور القائم)؛ من ينشئه لا يعتمده (فصل مهام)
+      'payroll.reverse',
       // C6: الشطب (loans.write_off) لا يُمنح افتراضيًا — صلاحية مستقلة (AD-13)
       'loans.policies', 'loans.exceptional', 'loans.cap_override', 'loans.repay',
       // C2: الخصومات المصنفة (ترحيل 20260914_*_c2_typed_deductions يضيفها للدور القائم)
       'deductions.view', 'deductions.approve', 'deductions.manage',
       // C4: المكافآت (ترحيل 20260914_026_c4_bonuses يضيفها للدور القائم)؛ تجاوز السقف bonuses.exceed_cap لا يُمنح افتراضيًا
       'bonuses.view', 'bonuses.approve', 'bonuses.manage',
+      // C3 / الخطوة 26: الإعفاء المالي (ترحيل 20260915_031_c3_financial_exemptions يضيفها للدور القائم)؛ المانح لا يعتمد ما منحه (فصل مهام في الخدمة)
+      'financial_exemption.view', 'financial_exemption.grant', 'financial_exemption.approve', 'financial_exemption.override_limits',
       'custody.assign', 'documents.manage',
       'offboarding.manage', 'settlement.edit', 'settlement.approve',
       'reports.view', 'dashboard.view_all', 'calendar.view_all',
@@ -181,6 +196,8 @@ export const ROLE_PRESETS: Array<{
       'deductions.view',
       // C4: يتابع مكافآت فرعه؛ الاقتراح بعلاقته الهيكلية والقرار للموارد البشرية
       'bonuses.view',
+      // C3: يتابع الإعفاءات المالية لفرعه؛ منحه كمدير قسم هيكلي باعتماد الموارد البشرية
+      'financial_exemption.view',
     ],
   },
   {

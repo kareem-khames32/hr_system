@@ -343,6 +343,20 @@ export class PortalController {
         items.push({ id: `deduction-${event.id}`, category: 'request', kind, title, body: `${typeName} #${event.requestId}${event.reason ? ` — ${event.reason}` : ''}`.slice(0, 300),
           at: event.createdAt, link: '/my/deductions' })
       }
+      // 1د) الإعفاء المالي (الخطوة 26 / EX-03 قاعدة 5): الموظف يُخطر بكل إعفاء عليه — المنح والاعتماد والتطبيق في المسير والإلغاء
+      const exemptionEvents: Array<{ id: number; exemptionId: number; eventType: string; createdAt: Date; period: string }> =
+        await this.employees.manager.query(`SELECT TOP (20) e.[id], e.[exemptionId], e.[eventType], e.[createdAt], x.[period]
+          FROM [payroll_financial_exemption_events] e INNER JOIN [payroll_financial_exemptions] x ON x.[id]=e.[exemptionId]
+          WHERE e.[employeeId]=@0 AND e.[eventType] IN ('GRANTED','APPROVED','APPLIED','REVOKED','REJECTED')
+          ORDER BY e.[id] DESC`, [user.employeeId])
+      const exemptionTitles: Record<string, [string, NotificationItem['kind']]> = {
+        GRANTED: ['مُنح لك إعفاء مالي من خصم', 'success'], APPROVED: ['اعتُمد إعفاء مالي لك', 'success'], APPLIED: ['طُبق إعفاء مالي لك في مسير معتمد', 'success'],
+        REVOKED: ['أُلغي إعفاء مالي كان لك قبل اعتماد المسير', 'warning'], REJECTED: ['رُفض إعفاء مالي كان مقترحًا لك', 'info'],
+      }
+      for (const event of exemptionEvents) {
+        const [title, kind] = exemptionTitles[event.eventType] ?? ['تحديث على إعفاء مالي لك', 'info']
+        items.push({ id: `exemption-${event.id}`, category: 'request', kind, title, body: `الإعفاء #${event.exemptionId} — مسير ${event.period}`, at: event.createdAt, link: '/my/exemptions' })
+      }
     }
 
     // 2) تعارض بصمة×إجازة (آخر 7 أيام) — لمن يملك قرار الإلغاء

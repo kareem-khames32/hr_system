@@ -27,6 +27,8 @@ import { LeaveBalance } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { PayrollItem, PayrollRun } from '../payroll/payroll.entities'
 import { getSettlementFinancialClaims, lockPayrollEmployees, type SettlementFinancialSnapshot } from '../payroll/payroll-settlement-boundary'
+// C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يحجز مصادر إضافيه وأقساطه عن التصفية
+import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
 import { legacyInstallmentNumber, readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { assertNoHeldLoanInstallments, isPayrollInstallmentPlan } from '../payroll/payroll-installment-ledger'
 import { recordSettlementLoanRecovery } from '../loans/loan-recovery'
@@ -187,6 +189,7 @@ export class OffboardingService implements OnApplicationBootstrap {
       .innerJoin(PayrollRun, 'run', 'run.id = item.runId')
       .where('item.employeeId = :employeeId', { employeeId })
       .andWhere('run.status IN (:...statuses)', { statuses: ['CALCULATED', 'IN_REVIEW', 'APPROVED', 'PAID'] })
+      .andWhere(payrollLineNotReversedSql('item.runId', 'item.employeeId'))
       .getMany()
     const overtime = new Set<number>(), installments = new Set<number>()
     for (const row of rows) {

@@ -3,6 +3,8 @@ import { PayrollDecimal } from './payroll-decimal'
 import { readLoanInstallmentPositions } from './payroll-installment-balances'
 import { isPayrollInstallmentPlan } from './payroll-installment-ledger'
 import { PAYROLL_LIVE_SOURCE_ROW_LIMIT, PayrollLiveSourceIssue, PayrollLiveSourceSection, payrollLiveSourcePeriod } from './payroll-live-source-contract'
+// C8 / الخطوة 31: بند مسير سابق عُكس صرفه بسطر منفذ لا يُعد مطالبة بأقساطه أو قيوده (عادت مستحقة)
+import { payrollLineNotReversedSql } from './payroll-reversal-sql'
 
 type Row = Record<string, any>
 type Read = { rows: Row[]; issues: PayrollLiveSourceIssue[]; missing: boolean }
@@ -89,7 +91,7 @@ export async function readPayrollLiveLedger(em: EntityManager, employeeId: numbe
     CAST(i.[loanInstallments] AS nvarchar(40)) AS [loanInstallments],CAST(i.[otherAdditions] AS nvarchar(40)) AS [otherAdditions],
     CAST(i.[otherDeductions] AS nvarchar(40)) AS [otherDeductions]
     FROM [payroll_items] i INNER JOIN [payroll_runs] r ON r.[id]=i.[runId]
-    WHERE i.[employeeId]=@0 AND r.[status] IN ('APPROVED','PAID') ORDER BY i.[id]`, [employeeId], 'payroll_items'))
+    WHERE i.[employeeId]=@0 AND r.[status] IN ('APPROVED','PAID') AND ${payrollLineNotReversedSql('r.[id]', 'i.[employeeId]')} ORDER BY i.[id]`, [employeeId], 'payroll_items'))
   const settlements = await capture('offboarding_cases', () => rows(em, `SELECT TOP (5001) c.[id],c.[status],c.[settlementFinancialSnapshot],
     (SELECT COUNT(*) FROM [settlement_lines] l WHERE l.[caseId]=c.[id] AND l.[isAuto]=1) AS [autoLineCount]
     FROM [offboarding_cases] c WHERE c.[employeeId]=@0 AND c.[status] IN ('SETTLED','CLOSED') ORDER BY c.[id]`, [employeeId], 'offboarding_cases'))

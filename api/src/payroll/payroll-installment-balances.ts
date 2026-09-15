@@ -5,7 +5,8 @@ import { PayrollDecimal } from './payroll-decimal'
 export interface LoanInstallmentPosition {
   id: number; loanId: number; employeeId: number; dueDate: string; originalDueDate: string
   amount: string; paidAmount: string; remainingAmount: string
-  financialStatus: 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED'
+  // REVERSED (C8): قسط ترحيل أُلغي بعكس صرف المسير الذي أنشأه — بلا رصيد ولا يُحتسب ابنًا حيًا لأصله
+  financialStatus: 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED' | 'REVERSED'
   financialRevision: number; paid: boolean; parentInstallmentId: number | null; paidAt: Date | null
 }
 const invalid = () => new ConflictException({ code: 'LOAN_BALANCE_INVALID', message: 'رصيد أحد الأقساط أو سلسلة ترحيله غير متسق؛ راجعه ماليًا قبل المتابعة' })
@@ -35,9 +36,10 @@ export async function readLoanInstallmentPositions(em: EntityManager, employeeId
   const result: LoanInstallmentPosition[] = rows.map((row: any) => {
     const amount = money(row.amount), paidAmount = money(row.paidAmount ?? (row.paid ? row.amount : '0.00'))
     const financialStatus = row.financialStatus ?? (row.paid ? 'PAID' : 'DUE'), revision = row.financialRevision ?? 1
-    if (!['DUE', 'PARTIAL', 'DEFERRED', 'PAID', 'SETTLED'].includes(financialStatus) ||
+    if (!['DUE', 'PARTIAL', 'DEFERRED', 'PAID', 'SETTLED', 'REVERSED'].includes(financialStatus) ||
         !Number.isSafeInteger(revision) || revision < 1 || paidAmount.compare(amount) > 0 ||
-        (financialStatus === 'DUE' && (row.paid || !paidAmount.isZero())) ||
+        (['DUE', 'REVERSED'].includes(financialStatus) && (row.paid || !paidAmount.isZero())) ||
+        (financialStatus === 'REVERSED' && row.parentInstallmentId == null) ||
         (['PAID', 'SETTLED'].includes(financialStatus) && (!row.paid || paidAmount.compare(amount) !== 0)) ||
         (['PARTIAL', 'DEFERRED'].includes(financialStatus) && (row.paid || paidAmount.compare(amount) >= 0)) ||
         (financialStatus === 'DEFERRED' && !paidAmount.isZero()) ||
@@ -53,6 +55,8 @@ export async function readLoanInstallmentPositions(em: EntityManager, employeeId
     const parent = byId.get(row.parentInstallmentId)
     // الهوية المتزايدة تمنع الحلقات وتربط الجزء بنفس الموظف والسلفة دون استنتاج دين جديد.
     if (!parent || parent.id >= row.id || parent.loanId !== row.loanId || parent.originalDueDate !== row.originalDueDate || row.dueDate <= parent.dueDate) throw invalid()
+    // C8: ابن الترحيل المُلغى بعكس الصرف يبقى مرتبطًا بأصله للتاريخ، ولا يُحتسب ابنًا حيًا يحمل رصيدًا
+    if (row.financialStatus === 'REVERSED') continue
     children.set(parent.id, [...(children.get(parent.id) ?? []), row])
   }
   for (const row of result) {

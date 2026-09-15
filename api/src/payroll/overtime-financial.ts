@@ -11,6 +11,8 @@ import { PayrollPeriodClaim } from './payroll-membership.entities'
 import { roundPayrollMoney } from './payroll-money'
 import { payrollPeriodOfDate } from './payroll-period'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, selectPayrollRunSalary } from './payroll-run-salary'
+// C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُغلق فترة الإضافي ولا يحجز سجلاته (عادت معتمدة بلا مسير)
+import { payrollLineNotReversedSql } from './payroll-reversal-sql'
 
 export const OVERTIME_WAGE_COMPONENT_CODES = MONTHLY_SALARY_COMPONENTS.map(component => component.code)
 export const DEFAULT_OVERTIME_WAGE_COMPONENTS = OVERTIME_WAGE_COMPONENT_CODES.join(',')
@@ -122,6 +124,7 @@ export async function closedOvertimePeriod(em: EntityManager, employeeId: number
     FROM dbo.payroll_items i WITH (READUNCOMMITTED)
     INNER JOIN dbo.payroll_runs r WITH (READUNCOMMITTED) ON r.id=i.runId
     WHERE i.employeeId=@0 AND r.status IN ('APPROVED','PAID') AND r.startDate<=@1 AND r.endDate>=@1
+      AND ${payrollLineNotReversedSql('r.id', 'i.employeeId')}
     ORDER BY r.id DESC`, [employeeId, date])
   return rows.length ? { runId: Number(rows[0].runId), period: String(rows[0].period) } : null
 }
@@ -131,7 +134,8 @@ export async function approvedPayrollOvertimeClaims(em: EntityManager, employeeI
   const rows = await em.query(`SELECT i.id, i.runId, i.breakdown, i.overtimeAmount
     FROM dbo.payroll_items i WITH (READUNCOMMITTED)
     INNER JOIN dbo.payroll_runs r WITH (READUNCOMMITTED) ON r.id=i.runId
-    WHERE i.employeeId=@0 AND r.status IN ('APPROVED','PAID') AND (@1 IS NULL OR r.id<>@1)`,
+    WHERE i.employeeId=@0 AND r.status IN ('APPROVED','PAID') AND (@1 IS NULL OR r.id<>@1)
+      AND ${payrollLineNotReversedSql('r.id', 'i.employeeId')}`,
   [employeeId, excludeRunId ?? null])
   const result = new Map<number, number>()
   for (const row of rows) {

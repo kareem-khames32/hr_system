@@ -127,6 +127,8 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'سياسات الرواتب', href: '/payroll/policies' },
       { label: 'المكافآت', href: '/payroll/bonuses' },
       { label: 'الخصومات', href: '/payroll/deductions' },
+      // الخطوة 26: الإعفاءات المالية (قائمة واعتماد وتقرير حوكمة)
+      { label: 'الإعفاءات المالية', href: '/payroll/exemptions' },
       { label: 'قسائم الراتب', href: '/payroll/payslips' },
       { label: 'معادلات الرواتب', href: '/payroll/formulas' },
       { label: 'البدلات', href: '/payroll/allowances' },
@@ -291,6 +293,8 @@ export default function Sidebar() {
       { id: 'my-deductions', label: 'خصوماتي', icon: <ClipboardList size={20} />, href: '/my/deductions' },
       // الخطوة 27: المكافآت المقترحة لي بحالتها، ومساحة المدير لاقتراح مكافآت مرؤوسيه
       { id: 'my-bonuses', label: 'مكافآتي', icon: <Gift size={20} />, href: '/my/bonuses' },
+      // الخطوة 26: الإعفاءات المالية عليّ بسببها، ومساحة مدير القسم لمنح إعفاء خصومات حضور قسمه
+      { id: 'my-exemptions', label: 'إعفاءاتي', icon: <ClipboardList size={20} />, href: '/my/exemptions' },
       { id: 'my-custody', label: 'عهدي', icon: <Package size={20} />, href: '/my/custody' },
       { id: 'my-documents', label: 'مستنداتي', icon: <FolderOpen size={20} />, href: '/my/documents' },
       { id: 'profile', label: 'ملفي الشخصي', icon: <UserCircle size={20} />, href: '/profile' },

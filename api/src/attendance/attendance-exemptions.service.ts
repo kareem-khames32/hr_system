@@ -8,6 +8,8 @@ import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
+// C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُقفل الفترة أمام قرار الاستثناء
+import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
 import { payrollPeriodBounds, payrollPeriodOfDate } from '../payroll/payroll-period'
 import { AttendanceExemption, AttendanceExemptionEvent, AttendanceExemptionReasonCode, AttendanceExemptionStatus } from './attendance-exemption.entities'
 import { loadAttendanceExemptions } from './attendance-exemption-resolver'
@@ -75,7 +77,8 @@ export class AttendanceExemptionsService {
     // اللقطة المعتمدة لا تتغير بقرار لاحق؛ معالجة الماضي تكون بتسوية مستقلة.
     const locked = await em.query(`SELECT TOP (1) r.id FROM dbo.payroll_runs r
       INNER JOIN dbo.payroll_items i ON i.runId=r.id
-      WHERE i.employeeId=@0 AND r.status IN ('APPROVED','PAID') AND r.startDate<=@1 AND r.endDate>=@2`,
+      WHERE i.employeeId=@0 AND r.status IN ('APPROVED','PAID') AND r.startDate<=@1 AND r.endDate>=@2
+        AND ${payrollLineNotReversedSql('r.id', 'i.employeeId')}`,
     [employee.id, to ?? '9999-12-31', from])
     if (locked.length) throw new ConflictException('تتداخل الفترة مع مسير معتمد أو مصروف؛ راجع التسوية المالية أولًا')
   }

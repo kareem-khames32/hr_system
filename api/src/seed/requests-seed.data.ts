@@ -6,6 +6,7 @@ import { PAYROLL_POLICY_DEFAULT_CONFIG_SEED } from '../payroll/payroll-policy-se
 import { PAYROLL_DECISION_CONFIG_SEED } from '../payroll/payroll-decision-settings'
 import { DEDUCTION_CONFIG_SEED } from '../payroll/typed-deductions'
 import { BONUS_CONFIG_SEED } from '../payroll/bonuses'
+import { EXEMPTION_CONFIG_SEED } from '../payroll/financial-exemptions'
 
 // ===== سلاسل الاعتماد الافتراضية (العامة — branchId NULL) =====
 // أي فرع يقدر يعمل نسخة خاصة بنفس الكود لاحقاً وتتقدم على العامة
@@ -353,4 +354,7 @@ export const configSeed: Array<{ key: string; value: string }> = [
   // C4 / الخطوة 27 (EX-05): المكافآت — أقل طول للسبب، نافذة كشف التكرار، حد الدفعة الجماعية، اقتراح المدير الهيكلي،
   // وبديل المعتمِد المفقود — الحدود في BONUS_NUMERIC_SETTINGS/ENUM_SETTINGS.
   ...BONUS_CONFIG_SEED,
+  // C3 / الخطوة 26 (EX-03/06/07): الإعفاء المالي — أقل طول للسبب، حد المرفق بأيام الراتب، عدد إعفاءات الموظف في 12 شهرًا، نسبة المانح،
+  // فترة التهدئة، عتبات تنبيه التقرير، ومنح مدير القسم — الحدود في EXEMPTION_NUMERIC_SETTINGS/ENUM_SETTINGS.
+  ...EXEMPTION_CONFIG_SEED,
 ]

@@ -10,6 +10,7 @@ import {
   type ApiPayrollRun,
 } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
+import type { PayslipReversalInfo } from '@/lib/payroll-corrections-api'
 // FE-06 (B5): المنسّق الواحد ونظام الأرقام الواحد، والخصومات من أعمدة البند نفسها كجدول المسير (ومنها نقص الساعات)
 import { formatMoney } from '@/lib/money'
 import { payrollItemDeductions } from '@/lib/payroll-item-totals'
@@ -36,6 +37,8 @@ const payMethodLabels: Record<string, string> = {
 interface PayslipRow {
   item: ApiPayrollItem
   run: ApiPayrollRun
+  // C8 / الخطوة 31: القسيمة التي عُكس صرفها تبقى في السجل موسومة بعكسها
+  reversal?: PayslipReversalInfo | null
 }
 
 export default function MyPayslipsPage() {
@@ -121,7 +124,7 @@ export default function MyPayslipsPage() {
                       </tr>
                     </thead>
                     <tbody>
-                      {sorted.map(({ item, run }) => (
+                      {sorted.map(({ item, run, reversal }) => (
                         <tr key={item.id} className="table-row">
                           <td className="table-cell">
                             <p className="font-bold text-gray-800" dir="ltr">
@@ -137,6 +140,12 @@ export default function MyPayslipsPage() {
                             >
                               {runStatusLabels[run.status] ?? run.status}
                             </span>
+                            {run.runType === 'SUPPLEMENTARY' && <span className="badge text-xs bg-blue-50 text-blue-700 mr-1">تكميلي</span>}
+                            {reversal?.line && (
+                              <span className={`badge text-xs mr-1 ${reversal.line.status === 'POSTED' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800'}`}>
+                                {reversal.line.status === 'POSTED' ? 'عُكس صرفها' : 'عكس بانتظار التنفيذ'}
+                              </span>
+                            )}
                           </td>
                           <td className="table-cell text-center text-gray-600">
                             {formatMoney(item.basicSalary)}

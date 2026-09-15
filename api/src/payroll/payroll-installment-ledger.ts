@@ -12,6 +12,7 @@ import { parsePayrollPolicyConfigValue, PAYROLL_POLICY_CONFIG_KEYS, PAYROLL_POLI
 import { planEarlyRepayment } from '../loans/loan-caps'
 import { LoanRepayment, type LoanRepaymentMethod, type LoanRepaymentMode } from '../loans/loans.entities'
 import { parsePayrollLoanCatchUpLimit, PAYROLL_DECISION_KEYS, PAYROLL_LOAN_CATCH_UP_LIMIT_MAX } from './payroll-decision-settings'
+import { payrollLineNotReversedSql } from './payroll-reversal-sql'
 
 export const PAYROLL_INSTALLMENT_PLAN_VERSION = 'LOAN_ALLOCATION_V1_20260913' as const
 const MODE_KEY = 'loan.insufficient_net_behavior'
@@ -26,6 +27,10 @@ export interface PayrollInstallmentPlan {
   excludedClaimedIds: number[]
   // أقساط متأخرة زادت عن الحد؛ تبقى مستحقة كما هي وتدخل مسيرًا لاحقًا.
   catchUpDeferredIds?: number[]
+  // الخطوة 26 (EX-02 قاعدة 4): نطاق الإعفاء المالي على الأقساط، والأقساط المستحقة في هذا المسير التي يؤجلها (لا تُخصم ولا تُسقط)؛
+  // تُؤجل عند الصرف بقسط جديد للشهر التالي بمرجع الإعفاء. الخطط بلا إعفاء لا تحمل الحقلين (حسابها كما كان).
+  exemptions?: { allExemptionId: number | null; entries: Array<{ installmentId: number; exemptionId: number }> }
+  exemptionDeferred?: Array<{ installmentId: number; loanId: number; exemptionId: number; dueDate: string; remainingAmount: string; financialRevision: number }>
   budget: ReturnType<typeof computePayrollInstallmentBudget>
   allocation: PayrollInstallmentAllocationResult
 }
@@ -54,6 +59,13 @@ export function isPayrollInstallmentPlan(value: unknown): value is PayrollInstal
     if (limit !== undefined && (!Number.isInteger(limit) || limit < 0 || limit > PAYROLL_LOAN_CATCH_UP_LIMIT_MAX || !Array.isArray(deferred) ||
         deferred.some(id => !Number.isInteger(id) || id < 1) || new Set(deferred).size !== deferred.length ||
         deferred.some(id => plan.sources.some(row => row.id === id)))) return false
+    const exemptions = plan.exemptions, exempted = plan.exemptionDeferred
+    if ((exemptions === undefined) !== (exempted === undefined)) return false
+    if (exemptions !== undefined && (!exemptions || !(exemptions.allExemptionId === null || (Number.isSafeInteger(exemptions.allExemptionId) && exemptions.allExemptionId > 0)) ||
+        !Array.isArray(exemptions.entries) || exemptions.entries.some(entry => !Number.isSafeInteger(entry?.installmentId) || entry.installmentId < 1 || !Number.isSafeInteger(entry?.exemptionId) || entry.exemptionId < 1) ||
+        !Array.isArray(exempted) || new Set(exempted.map(row => row?.installmentId)).size !== exempted.length ||
+        exempted.some(row => !row || !Number.isSafeInteger(row.installmentId) || !Number.isSafeInteger(row.exemptionId) || typeof row.remainingAmount !== 'string' ||
+          plan.sources.some(source => source.id === row.installmentId) || (deferred ?? []).includes(row.installmentId)))) return false
     if (plan.sources.length > 1000 || new Set(plan.sources.map(row => row.id)).size !== plan.sources.length ||
         plan.sources.some(row => !Number.isInteger(row.id) || row.id < 1 || !Number.isInteger(row.financialRevision) || row.financialRevision < 1 || row.financialStatus !== 'DUE')) return false
     const lines = plan.allocation.lines
@@ -85,7 +97,7 @@ async function claimedInstallmentIds(em: EntityManager, employeeId: number, excl
     WHERE [employeeId]=@0 AND [status]='HELD' AND [releasedAt] IS NULL AND [payrollRunId]<>@1`, [employeeId, excludeRunId])
   for (const row of rows) claimed.add(row.installmentId)
   const old = await em.query(`SELECT i.[breakdown],i.[loanInstallments] FROM [payroll_items] i INNER JOIN [payroll_runs] r ON r.[id]=i.[runId]
-    WHERE i.[employeeId]=@0 AND r.[id]<>@1 AND r.[status] IN ('APPROVED','PAID')`, [employeeId, excludeRunId])
+    WHERE i.[employeeId]=@0 AND r.[id]<>@1 AND r.[status] IN ('APPROVED','PAID') AND ${payrollLineNotReversedSql('r.[id]', 'i.[employeeId]')}`, [employeeId, excludeRunId])
   for (const row of old) {
     let data: any
     try { data = row.breakdown ? JSON.parse(row.breakdown) : {} } catch { throw conflict('تفصيل أقساط مسير سابق غير صالح') }
@@ -107,7 +119,7 @@ export async function assertNoHeldLoanInstallments(em: EntityManager, employeeId
 }
 
 export async function buildPayrollInstallmentPlan(em: EntityManager, employeeId: number, context: PayrollInstallmentPlan['context'],
-  options: { runId?: number; policy?: PayrollInstallmentPlan['policy'] } = {}): Promise<PayrollInstallmentPlan | null> {
+  options: { runId?: number; policy?: PayrollInstallmentPlan['policy']; exemptions?: PayrollInstallmentPlan['exemptions'] } = {}): Promise<PayrollInstallmentPlan | null> {
   try {
   const all = (await readLoanInstallmentPositions(em, employeeId)).filter(row => row.financialStatus === 'DUE' && row.remainingAmount !== '0.00')
   if (!all.length && !options.policy) return null
@@ -128,6 +140,18 @@ export async function buildPayrollInstallmentPlan(em: EntityManager, employeeId:
     catchUpDeferredIds = [...held].sort((a, b) => a - b)
     sources = sources.filter(source => !held.has(source.id))
   }
+  // الخطوة 26: الأقساط المستحقة في هذا المسير المشمولة بإعفاء مالي تخرج من التخصيص وتُثبت للتأجيل عند الصرف (السلفة دين لا تُسقط)
+  const exemptionScope = options.exemptions && (options.exemptions.allExemptionId !== null || options.exemptions.entries.length)
+    ? { allExemptionId: options.exemptions.allExemptionId, entries: [...options.exemptions.entries].sort((a, b) => a.installmentId - b.installmentId) } : undefined
+  let exemptionDeferred: PayrollInstallmentPlan['exemptionDeferred']
+  if (exemptionScope) {
+    const byInstallment = new Map(exemptionScope.entries.map(entry => [entry.installmentId, entry.exemptionId]))
+    const covered = sources.filter(source => mappedPeriod(source.dueDate) <= context.period && (byInstallment.has(source.id) || exemptionScope.allExemptionId !== null))
+    exemptionDeferred = covered.map(source => ({ installmentId: source.id, loanId: source.loanId, exemptionId: byInstallment.get(source.id) ?? exemptionScope.allExemptionId!,
+      dueDate: source.dueDate, remainingAmount: source.remainingAmount, financialRevision: source.financialRevision })).sort((a, b) => a.installmentId - b.installmentId)
+    const coveredIds = new Set(covered.map(source => source.id))
+    sources = sources.filter(source => !coveredIds.has(source.id))
+  }
   const tails = new Map<number, string>()
   for (const source of sources) { const period = mappedPeriod(source.dueDate); if (!tails.has(source.loanId) || tails.get(source.loanId)! < period) tails.set(source.loanId, period) }
   const budget = computePayrollInstallmentBudget(policy.settings, { netBeforeLoans: context.netBeforeLoans, earnedFixedGross: context.earnedFixedGross,
@@ -138,7 +162,8 @@ export async function buildPayrollInstallmentPlan(em: EntityManager, employeeId:
       remainingAmount: source.remainingAmount, priority: 0, insufficientMode: policy.mode,
       extensionPeriod: policy.mode === 'SKIP_AND_EXTEND' ? nextMonth([context.period, tails.get(source.loanId)!].sort().at(-1)!) : null })), manualDeferrals: [] })
   return { version: PAYROLL_INSTALLMENT_PLAN_VERSION, policy, context: plain(context), sources, excludedClaimedIds,
-    ...(catchUpDeferredIds === undefined ? {} : { catchUpDeferredIds }), budget, allocation }
+    ...(catchUpDeferredIds === undefined ? {} : { catchUpDeferredIds }),
+    ...(exemptionScope === undefined ? {} : { exemptions: exemptionScope, exemptionDeferred: exemptionDeferred ?? [] }), budget, allocation }
   } catch (error) {
     if (error instanceof PayrollInstallmentAllocationError || error instanceof PayrollInstallmentBudgetError) {
       throw new ConflictException({ code: error.code, message: `تعذر حساب أقساط الموظف: ${error.message}`, path: error.path })
@@ -149,7 +174,7 @@ export async function buildPayrollInstallmentPlan(em: EntityManager, employeeId:
 
 async function freshPlan(em: EntityManager, employeeId: number, runId: number, value: unknown) {
   if (!isPayrollInstallmentPlan(value)) throw conflict('خطة أقساط المسير غير مكتملة؛ أعد حساب المسودة', 'LOAN_PLAN_INVALID')
-  const current = await buildPayrollInstallmentPlan(em, employeeId, value.context, { runId, policy: value.policy })
+  const current = await buildPayrollInstallmentPlan(em, employeeId, value.context, { runId, policy: value.policy, exemptions: value.exemptions })
   if (!same(current, value)) throw conflict('رصيد أو جدول أو حجز أحد الأقساط تغيّر بعد الحساب؛ أعد حساب المسودة')
   return value
 }
@@ -188,6 +213,15 @@ async function closePosition(em: EntityManager, source: LoanInstallmentPosition,
   if (updated.length !== 1) throw conflict('القسط تغير أثناء تثبيت الحركة')
   if (!continued) return null
   if (!date || date <= source.dueDate) throw conflict('موعد القسط المرحّل يجب أن يلي موعد الأصل')
+  // C8 / الخطوة 31: الأصل له ابن ترحيل أُلغي بعكس صرف سابق (REVERSED) — يُعاد تفعيله بالمبلغ والموعد الجديدين بدل ابن ثانٍ (ابن واحد لكل أصل)
+  const [reversedChild] = await em.query(`SELECT [id] FROM [loan_installments] WHERE [parentInstallmentId]=@0 AND [financialStatus]='REVERSED'`, [source.id])
+  if (reversedChild) {
+    const revived = await em.query(`UPDATE [loan_installments] SET [dueDate]=@0,[amount]=CAST(@1 AS decimal(18,2)),[paid]=0,[paidAmount]=CAST('0.00' AS decimal(18,2)),
+      [financialStatus]='DUE',[financialRevision]=COALESCE([financialRevision],1)+1,[paidAt]=NULL,[originalDueDate]=@2
+      OUTPUT INSERTED.[id] WHERE [id]=@3 AND [loanId]=@4 AND [financialStatus]='REVERSED'`, [date, carry, source.originalDueDate, reversedChild.id, source.loanId])
+    if (revived.length !== 1) throw conflict('قسط الترحيل المُلغى بعكس الصرف تغيّر أثناء إعادة تفعيله')
+    return Number(reversedChild.id)
+  }
   const [child] = await em.query(`INSERT INTO [loan_installments]
     ([loanId],[dueDate],[amount],[paid],[paidAmount],[financialStatus],[financialRevision],[parentInstallmentId],[originalDueDate])
     OUTPUT INSERTED.[id] VALUES(@0,@1,CAST(@2 AS decimal(18,2)),0,CAST('0.00' AS decimal(18,2)),'DUE',1,@3,@4)`,
@@ -198,6 +232,9 @@ async function closePosition(em: EntityManager, source: LoanInstallmentPosition,
 export async function postPayrollInstallments(em: EntityManager, employeeId: number, runId: number, snapshotVersion: number, actorId: number, value: unknown) {
   requireTransaction(em)
   const plan = await freshPlan(em, employeeId, runId, value), positions = await readLoanInstallmentPositions(em, employeeId)
+  // C8 / الخطوة 31: حالة السلفة قبل الصرف تُحفظ في حركة الصرف فيعيدها عكس المسير كما كانت (APPROVED أو DISBURSED) إن سددها هذا الصرف
+  const loanStatusBefore = new Map<number, string>((await em.query(`SELECT [id],[status] FROM [loans] WHERE [employeeId]=@0`, [employeeId]) as Array<{ id: number; status: string }>)
+    .map(row => [Number(row.id), row.status]))
   const allocations = await em.query(`SELECT *,CONVERT(varchar(40),[deductedAmount]) AS [deductedExact],
     CONVERT(varchar(40),[carriedAmount]) AS [carriedExact],CONVERT(varchar(10),[continuationDueDate],23) AS [dueExact]
     FROM [loan_installment_allocations] WHERE [payrollRunId]=@0 AND [employeeId]=@1 AND [status]='HELD' AND [releasedAt] IS NULL`, [runId, employeeId])
@@ -212,7 +249,20 @@ export async function postPayrollInstallments(em: EntityManager, employeeId: num
     const continuationId = await closePosition(em, source, allocation.deductedExact, allocation.carriedExact, allocation.dueExact)
     await em.getRepository(LoanInstallmentAllocation).update(allocation.id, { status: 'POSTED', postedAt: new Date() })
     await event(em, { employeeId, loanId: source.loanId, installmentId: source.id, actorId, action: 'PAYROLL_POSTED', actionKey: `posted:${allocation.id}`,
-      allocationId: allocation.id, payrollRunId: runId, payload: { before: snapshot(source), deductedAmount: line.deductedAmount, carriedAmount: line.remainingAmount, continuationId } })
+      allocationId: allocation.id, payrollRunId: runId, payload: { before: snapshot(source), deductedAmount: line.deductedAmount, carriedAmount: line.remainingAmount, continuationId,
+        loanStatusBefore: loanStatusBefore.get(source.loanId) ?? null } })
+  }
+  // الخطوة 26 (EX-08 قاعدة 2): القسط المُعفى يُعلَّم مؤجلًا (DEFERRED) ويُنشأ قسط جديد مستحق أول الشهر التالي بمرجع الإعفاء؛ الدين لا يُسقط
+  const toPeriod = nextMonth(plan.context.period)
+  for (const row of plan.exemptionDeferred ?? []) {
+    const source = positions.find(position => position.id === row.installmentId)
+    if (!source || source.financialStatus !== 'DUE' || source.financialRevision !== row.financialRevision || source.remainingAmount !== row.remainingAmount) {
+      throw conflict('القسط المؤجل بقرار الإعفاء تغيّر بعد الاعتماد؛ أعد فتح المسير وحسابه')
+    }
+    const continuationId = await closePosition(em, source, '0.00', source.remainingAmount, `${toPeriod}-01`)
+    await event(em, { employeeId, loanId: source.loanId, installmentId: source.id, actorId, action: 'DEFERRED_BY_EXEMPTION',
+      actionKey: `exemption:${row.exemptionId}:run:${runId}:installment:${source.id}`, payrollRunId: runId,
+      reason: `تأجيل القسط إلى ${toPeriod} بقرار الإعفاء المالي #${row.exemptionId}`, payload: { before: snapshot(source), exemptionId: row.exemptionId, toPeriod, continuationId } })
   }
   const remaining = await readLoanInstallmentPositions(em, employeeId)
   for (const loanId of new Set(lines.map(line => Number(line.loanRef)))) {

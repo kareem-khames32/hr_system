@@ -3,6 +3,8 @@ import type { OvertimeEntry } from '../requests/entities/attendance.entities'
 import { overtimeFinancialValue } from './overtime-financial'
 import { PayrollDecimal } from './payroll-decimal'
 import { PAYROLL_LIVE_SOURCE_ROW_LIMIT, type PayrollLiveSourceSection } from './payroll-live-source-contract'
+// C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُعد مطالبة بسجلات إضافيه ولا فترة مقفلة لها
+import { payrollLineNotReversedSql } from './payroll-reversal-sql'
 
 const LIMIT = PAYROLL_LIVE_SOURCE_ROW_LIMIT
 const statuses = ['DETECTED', 'SUBMITTED', 'APPROVED', 'PAID', 'REJECTED', 'CANCELLED']
@@ -74,7 +76,8 @@ export async function readPayrollLiveOvertime(em: EntityManager, employeeId: num
     FROM dbo.overtime_entries o WHERE o.employeeId=@0 AND o.[date]<=@2 AND (o.[date]>=@1 OR o.status='APPROVED') ORDER BY o.[date],o.id`, [employeeId, periodStart, periodEnd])
   const payrolls: any[] = await em.query(`SELECT TOP (5001) i.id,i.runId,i.breakdown,CONVERT(varchar(40),i.overtimeAmount) AS overtimeAmount,
     r.status,r.period,CONVERT(varchar(10),r.startDate,23) AS startDate,CONVERT(varchar(10),r.endDate,23) AS endDate
-    FROM dbo.payroll_items i INNER JOIN dbo.payroll_runs r ON r.id=i.runId WHERE i.employeeId=@0 AND r.status IN ('APPROVED','PAID') ORDER BY r.id DESC,i.id`, [employeeId])
+    FROM dbo.payroll_items i INNER JOIN dbo.payroll_runs r ON r.id=i.runId WHERE i.employeeId=@0 AND r.status IN ('APPROVED','PAID')
+      AND ${payrollLineNotReversedSql('r.id', 'i.employeeId')} ORDER BY r.id DESC,i.id`, [employeeId])
   const periods: any[] = await em.query(`SELECT TOP (5001) c.id,c.runId,c.periodKey AS period,CONVERT(varchar(10),c.startDate,23) AS startDate,
     CONVERT(varchar(10),c.endDate,23) AS endDate FROM dbo.payroll_period_claims c INNER JOIN dbo.payroll_runs r ON r.id=c.runId
     WHERE c.employeeId=@0 AND c.releasedAt IS NULL AND r.status IN ('APPROVED','PAID') ORDER BY c.id DESC`, [employeeId])

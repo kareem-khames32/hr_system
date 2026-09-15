@@ -18,6 +18,8 @@ import { Team } from '../org/entities/team.entity'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { PayrollDecimal } from './payroll-decimal'
+// C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُغلق شهر الموظف أمام المكافأة (تُصرف بالمسير التكميلي)
+import { payrollLineNotReversedSql } from './payroll-reversal-sql'
 import { payrollPeriodOfDate } from './payroll-period'
 import { salaryPayrollPeriodBounds } from './payroll-period-salary'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, type PayrollSalaryEvidenceMode, selectPayrollRunSalary } from './payroll-run-salary'
@@ -218,7 +220,7 @@ export class BonusesService {
 
   private async closedRun(em: EntityManager, employeeId: number, period: string): Promise<number | null> {
     const rows = await em.query(`SELECT TOP (1) r.[id] FROM [payroll_runs] r INNER JOIN [payroll_items] i ON i.[runId]=r.[id]
-      WHERE i.[employeeId]=@0 AND r.[period]=@1 AND r.[status] IN ('APPROVED','PAID') ORDER BY r.[id]`, [employeeId, period])
+      WHERE i.[employeeId]=@0 AND r.[period]=@1 AND r.[status] IN ('APPROVED','PAID') AND ${payrollLineNotReversedSql('r.[id]', 'i.[employeeId]')} ORDER BY r.[id]`, [employeeId, period])
     return rows.length ? Number(rows[0].id) : null
   }
 
@@ -564,8 +566,12 @@ export class BonusesService {
 
   /** حالة المكافأة للعرض: «معتمد — بانتظار الصرف» حتى يستهلك مسير مصروف قيدها، ثم «مصروف في مسير الشهر». */
   private payout(row: BonusRequest, obligations: EmployeeObligation[], runs: Map<number, string>) {
-    const credit = obligations.find(item => item.bonusRequestId === row.id && item.type === 'CREDIT' && item.category === BONUS_OBLIGATION_CATEGORY) ?? null
-    const reversals = obligations.filter(item => item.bonusRequestId === row.id && item.type === 'DEBIT' && item.category === BONUS_REVERSAL_OBLIGATION_CATEGORY && item.status !== 'CANCELLED')
+    // C8 / الخطوة 31: قيد المكافأة الذي عُكس صرفه بمسير عكس لا يُعد مصروفًا؛ قيد إعادته (PENDING) هو الساري حتى يُصرف
+    const credits = obligations.filter(item => item.bonusRequestId === row.id && item.type === 'CREDIT' && item.category === BONUS_OBLIGATION_CATEGORY)
+    const liveCredits = credits.filter(item => item.payrollReversalRunId == null)
+    const credit = liveCredits[liveCredits.length - 1] ?? credits[credits.length - 1] ?? null
+    // قيد الاسترداد اليدوي المستهلك في مسير عُكس صرفه يمثله قيد إعادته (نفس المبلغ) فلا يُحتسب مرتين
+    const reversals = obligations.filter(item => item.bonusRequestId === row.id && item.type === 'DEBIT' && item.category === BONUS_REVERSAL_OBLIGATION_CATEGORY && item.status !== 'CANCELLED' && item.payrollReversalRunId == null)
     const state: BonusPayoutState | null = row.status === 'APPROVED' ? bonusPayoutState(credit) : null
     const period = credit?.appliedPayrollRunId ? runs.get(credit.appliedPayrollRunId) ?? null : null
     const statusLabel = row.status !== 'APPROVED' ? BONUS_LABELS.statuses[row.status] ?? row.status
@@ -806,7 +812,7 @@ export class BonusesService {
       let cancelledObligationIds: number[] = []
       if (row.status === 'APPROVED') {
         const credits = (await em.getRepository(EmployeeObligation).findBy({ bonusRequestId: row.id })).filter(item => item.type === 'CREDIT')
-        if (credits.some(item => item.status === 'APPLIED')) throw new ConflictException({ code: 'BONUS_CONSUMED', message: 'المكافأة صُرفت في مسير مصروف؛ استخدم «عكس المكافأة» بقيد استرداد في المسير التالي' })
+        if (credits.some(item => item.status === 'APPLIED' && item.payrollReversalRunId == null)) throw new ConflictException({ code: 'BONUS_CONSUMED', message: 'المكافأة صُرفت في مسير مصروف؛ استخدم «عكس المكافأة» بقيد استرداد في المسير التالي' })
         const reserved = credits.find(item => item.status === 'PENDING' && item.reservedPayrollRunId != null)
         if (reserved) throw new ConflictException({ code: 'BONUS_RESERVED', message: `قيد المكافأة محجوز في مسير معتمد (#${reserved.reservedPayrollRunId})؛ أعد فتح المسير أولًا` })
         const pending = credits.filter(item => item.status === 'PENDING')

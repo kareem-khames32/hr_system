@@ -40,7 +40,9 @@ export const DEDUCTION_LABELS = {
   calcMethods: { FIXED_AMOUNT: 'مبلغ ثابت', DAYS_OF_SALARY: 'أيام من الراتب', HOURS_OF_SALARY: 'ساعات من الراتب', PERCENT_OF_BASE: 'نسبة من الأساسي', PERCENT_OF_GROSS: 'نسبة من إجمالي الراتب' } as Record<DeductionCalcMethod, string>,
   roles: { DIRECT_MANAGER: 'المدير المباشر', TEAM_LEADER: 'قائد الفريق', DEPARTMENT_MANAGER: 'مدير القسم', BRANCH_MANAGER: 'مدير الفرع', FUNCTION_OWNER: 'مدير الجهة المالكة', HR: 'الموارد البشرية', EXECUTIVE: 'الإدارة التنفيذية' } as Record<DeductionApprovalRole | DeductionCreatorBasis, string>,
   statuses: { IN_APPROVAL: 'قيد الاعتماد', APPROVED: 'معتمد — بانتظار المسير', REJECTED: 'مرفوض', WITHDRAWN: 'مسحوب', CANCELLED: 'ملغى' } as Record<string, string>,
-  obligationStatuses: { PENDING: 'بانتظار المسير', APPLIED: 'مستهلك في مسير مصروف', CANCELLED: 'ملغى', SUSPENDED: 'معلق — بانتظار قرار الموارد البشرية' } as Record<string, string>,
+  obligationStatuses: { PENDING: 'بانتظار المسير', APPLIED: 'مستهلك في مسير مصروف', CANCELLED: 'ملغى', SUSPENDED: 'معلق — بانتظار قرار الموارد البشرية',
+    // الخطوة 26 (EX-08): مصير القسط بقرار إعفاء مالي عند صرف المسير
+    EXEMPTED: 'مُعفى — أُسقط بقرار إعفاء مالي', DEFERRED: 'مؤجَّل بقرار إعفاء — قسط جديد للشهر التالي' } as Record<string, string>,
 }
 
 const fail = (code: string, message: string, details: Record<string, unknown> = {}): never => {

@@ -7,6 +7,8 @@ export interface PayrollRunsReportRun {
   id: number; name: string | null; period: string; status: string; scopeType: string; scopeLabel: string
   branchId: number | null; branchName: string | null; startDate: string; endDate: string
   employees: number; excluded: number; totalNet: Money; storedTotalNet: Money | null; partial: boolean
+  // C8 / الخطوة 31: نوع المسير وربطه، وبنوده التي نُفّذ عكس صرفها (لا تدخل مجاميع الفترة؛ مسير العكس يُعرض بسطوره سالبة)
+  runType?: 'REGULAR' | 'REVERSAL' | 'SUPPLEMENTARY'; parentRunId?: number | null; reversedEmployees?: number; reversedNet?: Money
 }
 export interface PayrollRunsReport {
   runs: PayrollRunsReportRun[]
@@ -126,6 +128,7 @@ export const UNASSIGNED_REASON_OPTIONS: Array<{ code: string; label: string }> =
   { code: 'NO_RUN_IN_PERIOD', label: 'لا يوجد مسير للفترة' },
   { code: 'OUT_OF_ALL_RUN_SCOPES', label: 'خارج نطاق كل المسيرات' },
   { code: 'SUSPENDED', label: 'موقوف بلا أجر' },
+  { code: 'REVERSED_IN_RUN', label: 'عُكس صرف بنده ولم يُصرف بمسير تكميلي' },
 ]
 
 const label = (map: Record<string, string>, code: string | null | undefined) =>

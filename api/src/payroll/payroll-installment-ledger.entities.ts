@@ -27,6 +27,9 @@ export class LoanInstallmentAllocation {
   // الحجز المنشور يبقى مانعًا لإعادة التحصيل ما دام releasedAt=null.
   @Column({ type: 'datetime2', nullable: true }) releasedAt: Date | null
   @Column({ type: 'datetime2', nullable: true }) postedAt: Date | null
+  // C8 / الخطوة 31: الحجز المنشور الذي عُكس بمسير عكس — يبقى POSTED تاريخيًا ويُحرر (releasedAt) فيُعاد تحصيل القسط في مسير لاحق
+  @Column({ type: 'int', nullable: true }) reversalRunId: number | null
+  @Column({ type: 'datetime2', nullable: true }) reversedAt: Date | null
 }
 
 @Entity('loan_installment_events')

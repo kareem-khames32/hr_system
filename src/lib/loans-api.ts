@@ -5,7 +5,8 @@ import { formatMoney, isMoneyText } from './money'
 export type LoanCapScopeType = 'COMPANY' | 'BRANCH' | 'DEPARTMENT' | 'TEAM' | 'EMPLOYEES'
 export type LoanRepaymentMode = 'FULL' | 'SHORTEN_TERM' | 'REDUCE_INSTALLMENT'
 export type LoanRepaymentMethod = 'CASH' | 'BANK_TRANSFER' | 'OTHER'
-export type LoanInstallmentStatus = 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED'
+// REVERSED: قسط ترحيل أُلغي بعكس صرف مسير (C8) — بلا رصيد، ويُعاد تفعيله إن رُحّل القسط الأصلي من جديد
+export type LoanInstallmentStatus = 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED' | 'REVERSED'
 
 export interface LoanCapPolicy {
   id: number; policyKey: string; version: number; name: string; scopeType: LoanCapScopeType; scopeIds: number[] | null
@@ -74,7 +75,14 @@ export const LOAN_APPROVAL_DECISION_LABELS: Record<LoanCapApproval['decision'], 
 }
 export const LOAN_EVENT_LABELS: Record<string, string> = {
   PAYROLL_POSTED: 'خصم من المسير', DEFERRED: 'تأجيل قسط', SETTLED_EARLY: 'سداد مبكر كلي', EARLY_REPAYMENT: 'سداد مبكر جزئي',
+  // الخطوة 26: القسط المؤجل بقرار إعفاء مالي عند صرف المسير (الدين باقٍ بقسط جديد للشهر التالي)
+  DEFERRED_BY_EXEMPTION: 'تأجيل قسط بقرار إعفاء مالي',
   RESERVED: 'حجز في مسير معتمد', RELEASED: 'تحرير حجز',
+  // C8 / الخطوة 31: عكس صرف المسير أعاد القسط مستحقًا بمبلغه المخصوم سابقًا
+  REVERSAL: 'عكس خصم المسير — عاد القسط مستحقًا',
+}
+export const LOAN_INSTALLMENT_STATUS_LABELS: Record<LoanInstallmentStatus, string> = {
+  DUE: 'مستحق', PAID: 'مخصوم من المسير', PARTIAL: 'سداد جزئي والباقي مرحّل', DEFERRED: 'مؤجل بالكامل', SETTLED: 'مسوّى مبكرًا', REVERSED: 'مُلغى بعكس صرف مسير',
 }
 
 const json = (body: unknown) => ({ method: 'POST', body: JSON.stringify(body) })

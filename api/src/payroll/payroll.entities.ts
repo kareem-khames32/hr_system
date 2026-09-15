@@ -140,6 +140,19 @@ export class PayrollRun {
   // الخطوة 20: تقرير التكافؤ لكل موظف ولكل بند لنسخة الحساب الحالية (JSON)
   @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
   parityReport: string | null
+
+  // C8 / الخطوة 31 (SRS PR-06 قاعدة 4، PR-11): REGULAR | REVERSAL | SUPPLEMENTARY — null = مسير أصلي سابق لهذا المسار.
+  // مسير العكس والتكميلي مربوطان بالمسير المصروف عبر parentRunId، وصفوف الأصل لا تُعدَّل.
+  @Column({ type: 'nvarchar', length: 20, nullable: true })
+  runType: 'REGULAR' | 'REVERSAL' | 'SUPPLEMENTARY' | null
+
+  @Index('IX_payroll_runs_parent')
+  @Column({ type: 'int', nullable: true })
+  parentRunId: number | null
+
+  // سبب التصحيح المكتوب (عكس أو تكميلي)؛ يظهر في شاشة المسير وتقرير التسويات والقسيمة المعكوسة
+  @Column({ type: 'nvarchar', length: 1000, nullable: true })
+  correctionReason: string | null
 }
 
 // لقطة أعضاء المسير وقت الحساب — تدقيق «من كان في المسير» ومنع الازدواج

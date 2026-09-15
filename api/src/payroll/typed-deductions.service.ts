@@ -21,6 +21,8 @@ import { PayrollDecimal } from './payroll-decimal'
 import { salaryPayrollPeriodBounds } from './payroll-period-salary'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, PayrollSalaryEvidenceMode, selectPayrollRunSalary } from './payroll-run-salary'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
+// C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُغلق شهر الموظف ولا يُعد آخر مسير له
+import { payrollLineNotReversedSql } from './payroll-reversal-sql'
 import { PayrollItem, PayrollRun } from './payroll.entities'
 import {
   addPayrollMonths,
@@ -363,7 +365,7 @@ export class TypedDeductionsService {
 
   private async closedRun(em: EntityManager, employeeId: number, period: string): Promise<number | null> {
     const rows = await em.query(`SELECT TOP (1) r.[id] FROM [payroll_runs] r INNER JOIN [payroll_items] i ON i.[runId]=r.[id]
-      WHERE i.[employeeId]=@0 AND r.[period]=@1 AND r.[status] IN ('APPROVED','PAID') ORDER BY r.[id]`, [employeeId, period])
+      WHERE i.[employeeId]=@0 AND r.[period]=@1 AND r.[status] IN ('APPROVED','PAID') AND ${payrollLineNotReversedSql('r.[id]', 'i.[employeeId]')} ORDER BY r.[id]`, [employeeId, period])
     return rows.length ? Number(rows[0].id) : null
   }
 
@@ -753,8 +755,10 @@ export class TypedDeductionsService {
 
   private ledgerTotals(items: EmployeeObligation[]) {
     const debits = items.filter(item => item.type === 'DEBIT')
-    const collected = sumMoney(debits.filter(item => item.status === 'APPLIED').map(item => item.appliedAmount ?? item.amount))
-    const reversed = sumMoney(items.filter(item => item.type === 'CREDIT' && item.category === DEDUCTION_REVERSAL_OBLIGATION_CATEGORY && item.status !== 'CANCELLED').map(item => item.amount))
+    // C8 / الخطوة 31: المستهلك في مسير عُكس صرفه لا يُحتسب محصلًا؛ قيد إعادته يُحتسب حين يُستهلك
+    const collected = sumMoney(debits.filter(item => item.status === 'APPLIED' && item.payrollReversalRunId == null).map(item => item.appliedAmount ?? item.amount))
+    // وقيد العكس اليدوي المستهلك في مسير عُكس صرفه يمثله قيد إعادته (نفس المبلغ) فلا يُحتسب مرتين
+    const reversed = sumMoney(items.filter(item => item.type === 'CREDIT' && item.category === DEDUCTION_REVERSAL_OBLIGATION_CATEGORY && item.status !== 'CANCELLED' && item.payrollReversalRunId == null).map(item => item.amount))
     return { collected, reversed, suspended: debits.filter(item => item.status === 'SUSPENDED').length }
   }
 
@@ -1238,9 +1242,10 @@ export class TypedDeductionsService {
         due: [] as unknown[], collected: [] as unknown[], reversed: [] as unknown[] }
       if (item.type === 'DEBIT') {
         group.requestIds.add(row.id)
-        if (item.carriedFromObligationId == null) group.due.push(item.amount)
-        if (item.status === 'APPLIED') group.collected.push(item.appliedAmount ?? item.amount)
-      } else if (item.category === DEDUCTION_REVERSAL_OBLIGATION_CATEGORY) group.reversed.push(item.amount)
+        // C8: قيد الإعادة بعد عكس صرف المسير ليس استحقاقًا جديدًا، والمستهلك المعكوس ليس محصلًا
+        if (item.carriedFromObligationId == null && item.payrollReversalOfObligationId == null) group.due.push(item.amount)
+        if (item.status === 'APPLIED' && item.payrollReversalRunId == null) group.collected.push(item.appliedAmount ?? item.amount)
+      } else if (item.category === DEDUCTION_REVERSAL_OBLIGATION_CATEGORY && item.payrollReversalRunId == null) group.reversed.push(item.amount)
       groups.set(key, group)
     }
     const byType = [...groups.values()].sort((a, b) => a.period.localeCompare(b.period) || (a.typeCode ?? '').localeCompare(b.typeCode ?? '') || a.basis.localeCompare(b.basis))
@@ -1276,7 +1281,8 @@ export class TypedDeductionsService {
     const lastRuns = new Map<number, string>()
     for (const chunk of employeeIds.length ? await this.inChunks(employeeIds, async part => [part]) : []) {
       const rows = await em.query(`SELECT i.[employeeId], MAX(r.[period]) AS [lastPeriod] FROM [payroll_items] i INNER JOIN [payroll_runs] r ON r.[id]=i.[runId]
-        WHERE r.[status] IN ('APPROVED','PAID') AND i.[employeeId] IN (${chunk.map((_, index) => `@${index}`).join(',')}) GROUP BY i.[employeeId]`, chunk)
+        WHERE r.[status] IN ('APPROVED','PAID') AND i.[employeeId] IN (${chunk.map((_, index) => `@${index}`).join(',')})
+          AND ${payrollLineNotReversedSql('r.[id]', 'i.[employeeId]')} GROUP BY i.[employeeId]`, chunk)
       for (const row of rows) lastRuns.set(Number(row.employeeId), String(row.lastPeriod))
     }
     const ledgerRow = (item: EmployeeObligation, reason: string | null = null) => {

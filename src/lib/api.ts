@@ -357,6 +357,10 @@ export interface ApiPayrollRun {
   periodContinuity?: Array<{ kind: 'GAP' | 'OVERLAP'; previousPeriod: string; nextPeriod: string; from: string; to: string; days: number
     otherRunId: number | null; otherRunName: string | null; otherStatus: string; employeeIds: number[] }>
   blocking?: boolean
+  // C8 / الخطوة 31: مسير عكس صرف أو تكميلي مربوط بمسير مصروف (null = أصلي)، وسبب التصحيح المكتوب
+  runType?: 'REGULAR' | 'REVERSAL' | 'SUPPLEMENTARY' | null
+  parentRunId?: number | null
+  correctionReason?: string | null
 }
 export interface ApiPayrollMemberSnapshot {
   version: number; capturedAt: string; fullName: string; employeeCode: string

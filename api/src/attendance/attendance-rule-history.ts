@@ -3,6 +3,8 @@ import { EntityManager, In } from 'typeorm'
 import { Shift, WorkSchedule } from '../assets/assets.entities'
 import { Employee } from '../employees/employee.entity'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
+// C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُقفل دوام الموظف في فترته
+import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { AttendanceDay, ScheduleDayOverride, ScheduleEntry } from './attendance.entities'
 import { AttendanceRuleSourceType, AttendanceRuleVersion, EmployeeAttendanceRuleSnapshot } from './attendance-rule.entities'
@@ -174,7 +176,8 @@ export async function assertAttendanceRulePeriodOpen(em: EntityManager, employee
     const locked = await em.query(`SELECT TOP (1) r.id FROM dbo.payroll_runs r
       WHERE r.status IN ('APPROVED','PAID') AND r.startDate<=@0 AND r.endDate>=@1
       AND (EXISTS (SELECT 1 FROM dbo.payroll_items i WHERE i.runId=r.id AND i.employeeId=@2)
-        OR EXISTS (SELECT 1 FROM dbo.payroll_run_members m WHERE m.runId=r.id AND m.employeeId=@2 AND (m.membershipStatus IS NULL OR m.membershipStatus='INCLUDED')))`,
+        OR EXISTS (SELECT 1 FROM dbo.payroll_run_members m WHERE m.runId=r.id AND m.employeeId=@2 AND (m.membershipStatus IS NULL OR m.membershipStatus='INCLUDED')))
+      AND ${payrollLineNotReversedSql('r.id', '@2')}`,
     [to, from, employeeId])
     if (locked.length) throw new ConflictException('سريان الدوام أو إسناده يتداخل مع مسير معتمد أو مصروف؛ يلزم تصحيح بتسوية لاحقة')
   }

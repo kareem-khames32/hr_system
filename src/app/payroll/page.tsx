@@ -33,6 +33,9 @@ import { PayrollUnassignedPanel } from '@/components/payroll/PayrollUnassignedPa
 // B4 / الخطوتان 19 و20: لقطة السياسة ومحرك الحساب وتقرير التكافؤ
 import { PayrollPolicySnapshotPanel, type PolicySnapshotRefreshChoice } from '@/components/payroll/PayrollPolicySnapshotPanel'
 import { PayrollRunEnginePanel } from '@/components/payroll/PayrollRunEnginePanel'
+import { PayrollFinancialExemptionsPanel } from '@/components/payroll/PayrollFinancialExemptionsPanel'
+// C8 / الخطوة 31: تصحيح المسير المصروف — مسير عكس صرف ومسير تكميلي مربوطان وتقرير تسوياتهما
+import { PayrollRunCorrectionsPanel } from '@/components/payroll/PayrollRunCorrectionsPanel'
 // B5 / الخطوة 22: منسّق المبالغ الموحد، ومجاميع البنود بالقروش، والتغطية، وسجل المسير، وقيد الصرف، وحل التعارضات، وترتيب التحصيل
 import { formatMoney, formatMoneyOrDash } from '@/lib/money'
 import { payrollCoverageText, payrollItemCoverage, payrollItemDeductions, payrollItemEarnings, payrollRunTotals } from '@/lib/payroll-item-totals'
@@ -259,6 +262,8 @@ export default function PayrollPage() {
   const screen = runDetail as (ApiPayrollRun & PayrollRunScreenFields) | null
   const negativeNetCount = (runDetail?.items ?? []).filter(item => n(item.netPay) < 0).length
   const approvalBlocked = !!screen?.approvalGuard?.blocked || negativeNetCount > 0
+  // C8 / الخطوة 31: مسير العكس لا يُحتسب ولا يُقر له تقرير «بلا مسير» ولا لقطة سياسة أو تكافؤ؛ اعتماده بفصل المهام وتنفيذه بقيد الاسترداد
+  const isReversalRun = runDetail?.runType === 'REVERSAL'
 
   const refreshRuns = async (selectId?: number) => {
     const runsData = await fetchPayrollRuns()
@@ -291,7 +296,7 @@ export default function PayrollPage() {
   }
 
   const handleApprove = async () => {
-    if (!runDetail || runDetail.status !== 'CALCULATED' || actionBusy || detailLoading || runBlocked || !unassignedAckCurrent || approvalBlocked || !can('payroll.approve')) return
+    if (!runDetail || runDetail.status !== 'CALCULATED' || actionBusy || detailLoading || runBlocked || (!unassignedAckCurrent && !isReversalRun) || approvalBlocked || !can('payroll.approve')) return
     setActionBusy(true)
     setError('')
     try {
@@ -650,8 +655,8 @@ export default function PayrollPage() {
               {runDetail.status === 'CALCULATED' && can('payroll.approve') && (
                 <button
                   onClick={handleApprove}
-                  disabled={actionBusy || detailLoading || runBlocked || !unassignedAckCurrent || approvalBlocked}
-                  title={approvalBlocked ? screen?.approvalGuard?.blocked?.message ?? 'صافي سالب يمنع الاعتماد' : unassignedAckCurrent ? undefined : 'أقر أولًا بتقرير «موظفون بلا مسير» أدناه'}
+                  disabled={actionBusy || detailLoading || runBlocked || (!unassignedAckCurrent && !isReversalRun) || approvalBlocked}
+                  title={approvalBlocked ? screen?.approvalGuard?.blocked?.message ?? 'صافي سالب يمنع الاعتماد' : unassignedAckCurrent || isReversalRun ? undefined : 'أقر أولًا بتقرير «موظفون بلا مسير» أدناه'}
                   className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50"
                 >
                   <CheckCircle size={16} />
@@ -692,7 +697,7 @@ export default function PayrollPage() {
             {(runBlocked || runConflicts.length > 0) && <button
               onClick={() => { setError(''); loadDetail(runDetail.id) }} disabled={actionBusy || detailLoading}
               className="btn-secondary text-sm mt-2 mb-3 disabled:opacity-50">تحديث حالة التعارضات</button>}
-            {runDetail.status === 'CALCULATED' && !unassignedAckCurrent && can('payroll.approve') && <p className="p-3 mb-3 bg-amber-50 text-amber-900 rounded-xl text-sm">
+            {runDetail.status === 'CALCULATED' && !unassignedAckCurrent && !isReversalRun && can('payroll.approve') && <p className="p-3 mb-3 bg-amber-50 text-amber-900 rounded-xl text-sm">
               الاعتماد متوقف حتى الإقرار بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية (أسفل الصفحة).</p>}
             {runDetail.status === 'CALCULATED' && screen?.approvalGuard?.blocked && can('payroll.approve') && <p role="alert" className="p-3 mb-3 bg-amber-50 text-amber-900 rounded-xl text-sm">
               {screen.approvalGuard.blocked.message}</p>}
@@ -755,6 +760,11 @@ export default function PayrollPage() {
           </div>
         )}
 
+        {/* C8 / الخطوة 31: المسير المصروف يُصحح بمسير عكس ومسير تكميلي مربوطين دون تعديل صفوفه؛ ومسير العكس أو التكميلي يعرض ربطه وسطوره وتسوياته */}
+        {runDetail && can('payroll.view') && (runDetail.status === 'PAID' || (runDetail.runType != null && runDetail.runType !== 'REGULAR')) && (
+          <PayrollRunCorrectionsPanel run={runDetail} employeeName={employeeName} onOpenRun={id => refreshRuns(id)} />
+        )}
+
         {/* الخطوة 16/17: مسودة المسير — تعريفها ومعاينة عضويتها قبل «احتساب المسودة» */}
         {runDetail?.status === 'DRAFT' && (() => {
           const draft = runDetail as PayrollRunWithSelection
@@ -781,17 +791,23 @@ export default function PayrollPage() {
         })()}
 
         {/* الخطوة 19: لقطة السياسة على المسير وفروقها عن الإعدادات الحالية (التحديث اختيار صريح عند إعادة الحساب) */}
-        {runDetail && ['DRAFT', 'CALCULATED', 'APPROVED', 'PAID'].includes(runDetail.status) && can('payroll.view') && (
+        {runDetail && !isReversalRun && ['DRAFT', 'CALCULATED', 'APPROVED', 'PAID'].includes(runDetail.status) && can('payroll.view') && (
           <PayrollPolicySnapshotPanel runId={runDetail.id} runStatus={runDetail.status} snapshotVersion={runDetail.snapshotVersion ?? 0} onRefreshChoice={handlePolicyRefreshChoice} />
         )}
 
         {/* الخطوة 20 / D13: وضع محرك الحساب وتقرير التكافؤ لكل موظف */}
-        {runDetail && runDetail.status !== 'CANCELLED' && (
+        {runDetail && !isReversalRun && runDetail.status !== 'CANCELLED' && (
           <PayrollRunEnginePanel run={runDetail} employeeName={employeeName} onChanged={() => refreshRuns(runDetail.id)} />
         )}
 
+        {/* الخطوة 26: الإعفاء المالي في المسير (منفصل عن استثناء الحضور) — منح بمعاينة واعتماد وإلغاء، ثم إعادة الحساب */}
+        {runDetail && !isReversalRun && ['CALCULATED', 'APPROVED', 'PAID'].includes(runDetail.status) &&
+          (can('financial_exemption.view') || can('financial_exemption.grant') || can('financial_exemption.approve')) && (
+          <PayrollFinancialExemptionsPanel runId={runDetail.id} runStatus={runDetail.status} snapshotVersion={runDetail.snapshotVersion ?? 0} onChanged={() => refreshRuns(runDetail.id)} />
+        )}
+
         {/* الخطوة 18: «موظفون بلا مسير» وإقراره قبل الاعتماد */}
-        {runDetail && ['CALCULATED', 'APPROVED', 'PAID'].includes(runDetail.status) && (
+        {runDetail && !isReversalRun && ['CALCULATED', 'APPROVED', 'PAID'].includes(runDetail.status) && (
           <PayrollUnassignedPanel runId={runDetail.id} snapshotVersion={runDetail.snapshotVersion ?? 0} runStatus={runDetail.status}
             branches={branches} departments={departments} teams={teams} onAckChange={handleAckChange} />
         )}

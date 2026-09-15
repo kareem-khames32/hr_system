@@ -30,7 +30,8 @@ import { LoanRecoveriesPanel } from '@/components/payroll/LoanRecoveriesPanel'
 import { LoanRepaymentModal } from '@/components/payroll/LoanRepaymentModal'
 
 type Money = string | number
-type InstallmentStatus = 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED'
+// REVERSED (C8): قسط ترحيل أُلغي بعكس صرف مسير — بلا رصيد
+type InstallmentStatus = 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED' | 'REVERSED'
 interface LoanInstallment {
   id: number
   loanId: number
@@ -73,9 +74,10 @@ const formatCents = (value: bigint) => `${String(value / BigInt(100)).replace(/\
 const formatMoney = (value: Money) => formatCents(centsOf(value))
 const isOpenInstallment = (item: LoanInstallment) => item.financialStatus === 'DUE' && centsOf(item.remainingAmount) > BigInt(0)
 const installmentLabels: Record<InstallmentStatus, string> = {
-  DUE: 'مستحق', PAID: 'مسدد', PARTIAL: 'سداد جزئي والباقي مرحّل', DEFERRED: 'مؤجل بالكامل', SETTLED: 'مسوّى',
+  DUE: 'مستحق', PAID: 'مسدد', PARTIAL: 'سداد جزئي والباقي مرحّل', DEFERRED: 'مؤجل بالكامل', SETTLED: 'مسوّى', REVERSED: 'مُلغى بعكس صرف مسير',
 }
-const installmentBadge = (status: InstallmentStatus) => ['PAID', 'SETTLED'].includes(status) ? 'badge-success' : status === 'DUE' ? 'badge-warning' : 'badge-primary'
+const installmentBadge = (status: InstallmentStatus) => ['PAID', 'SETTLED'].includes(status) ? 'badge-success' : status === 'DUE' ? 'badge-warning'
+  : status === 'REVERSED' ? 'bg-gray-100 text-gray-600' : 'badge-primary'
 const progressWidth = (loan: Loan) => {
   const total = centsOf(loan.amount), paid = centsOf(loan.paidAmount)
   if (total === BigInt(0)) return '0%'

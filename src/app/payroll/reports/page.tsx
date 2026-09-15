@@ -183,7 +183,8 @@ function RunsTab() {
             <Stat label={`صافي المسيرات غير الملغاة (${currency})`} value={formatReportMoney(totalNet)} />
             <Stat label="عدد المسيرات" value={runs.length} />
             <Stat label="مسيرات بلا فرع" value={runs.filter((run) => run.branchId === null).length} />
-            <Stat label="بنود الموظفين (غير الملغاة)" value={active.reduce((sum, run) => sum + run.employees, 0)} />
+            {/* C8: البند المعكوس صرفه لا يُعد، ومسير العكس بلا بنود (سطوره تظهر في صفه سالبة) */}
+            <Stat label="بنود الموظفين الفعلية (غير الملغاة وغير المعكوسة)" value={active.filter((run) => run.runType !== 'REVERSAL').reduce((sum, run) => sum + run.employees - (run.reversedEmployees ?? 0), 0)} />
           </div>
           <div className="card overflow-x-auto">
             <h2 className="text-lg font-bold text-gray-800 mb-4">مسيرات الرواتب</h2>
@@ -195,7 +196,11 @@ function RunsTab() {
                 {runs.map((run) => (
                   <tr key={run.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 text-gray-500" dir="ltr">#{run.id}</td>
-                    <td className="px-4 py-3 font-medium text-gray-800">{run.name ?? `مسير ${run.period}`}</td>
+                    <td className="px-4 py-3 font-medium text-gray-800">
+                      {run.name ?? `مسير ${run.period}`}
+                      {run.runType === 'REVERSAL' && <p className="text-xs text-red-700">مسير عكس صرف{run.parentRunId ? ` للمسير #${run.parentRunId}` : ''}</p>}
+                      {run.runType === 'SUPPLEMENTARY' && <p className="text-xs text-primary-700">مسير تكميلي{run.parentRunId ? ` للمسير #${run.parentRunId}` : ''}</p>}
+                    </td>
                     <td className="px-4 py-3 text-gray-600">
                       {run.period}
                       <p className="text-xs text-gray-400" dir="ltr">{run.startDate} → {run.endDate}</p>
@@ -205,9 +210,15 @@ function RunsTab() {
                       {run.partial && <p className="text-xs text-warning-700">يظهر جزء فرعك فقط</p>}
                     </td>
                     <td className="px-4 py-3 text-center"><span className={runStatusBadge[run.status] ?? 'badge bg-gray-100 text-gray-600'}>{runStatusLabel(run.status)}</span></td>
-                    <td className="px-4 py-3 text-center text-gray-600">{run.employees}</td>
+                    <td className="px-4 py-3 text-center text-gray-600">
+                      {run.employees}
+                      {(run.reversedEmployees ?? 0) > 0 && <p className="text-xs text-red-700">منهم {run.reversedEmployees} عُكس صرفه</p>}
+                    </td>
                     <td className="px-4 py-3 text-center text-gray-600">{run.excluded}</td>
-                    <td className="px-4 py-3 text-center font-bold text-gray-800" dir="ltr">{formatReportMoney(run.totalNet)}</td>
+                    <td className="px-4 py-3 text-center font-bold text-gray-800" dir="ltr">
+                      {formatReportMoney(run.totalNet)}
+                      {(run.reversedEmployees ?? 0) > 0 && run.reversedNet && <p className="text-xs font-normal text-red-700">معكوس: {formatReportMoney(run.reversedNet)}</p>}
+                    </td>
                   </tr>
                 ))}
                 {runs.length === 0 && <EmptyRow colSpan={8} text="لا توجد مسيرات رواتب بعد" />}

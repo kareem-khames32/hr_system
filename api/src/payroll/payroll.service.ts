@@ -72,6 +72,15 @@ import { readPayrollRunCollectionOrder, type PayrollRunCollectionOrder } from '.
 import { PAYROLL_CALCULATION_EVENT_TYPES, PAYROLL_PAY_CHANNEL_LABELS, PAYROLL_SELF_APPROVAL_KEY, payrollPayRecordIssue, payrollPayRecordOf, payrollRunStateIssue,
   payrollSelfApprovalAllowed, payrollSelfApprovalIssue, type PayrollPayChannel } from './payroll-run-approval'
 import { summarizePayrollParityOperations } from './payroll-parity-operations'
+// الخطوة 26 (C3): الإعفاء المالي في مسير — التطبيق عند الحساب، والتحقق والتثبيت عند الاعتماد، والإسقاط أو التأجيل عند الصرف
+import { applyFinancialExemptions, exemptionLoanLines, exemptPolicyShadowTotals, summarizeFinancialExemptions } from './financial-exemptions'
+import { assertRunExemptionsForApproval, describePayslipExemptions, markRunExemptionsApplied, postExemptedObligations, readActiveRunExemptions,
+  readExemptionObligationFacts, releaseRunExemptions, reserveExemptedObligations } from './payroll-financial-exemption-ledger'
+// C8 / الخطوة 31: مسار العكس والمسير التكميلي بعد الصرف — اعتماد مسير العكس وتنفيذه وإلغاؤه من نقاط المسير نفسها
+import { payrollRunTypeOf } from './payroll-corrections'
+import { PayrollRunReversalLine } from './payroll-corrections.entities'
+import { cancelPayrollReversalLines, carryReversedRunExemptions, describePayrollItemReversal, describePayrollRunCorrection, lockPayrollRunForCorrection, planPayrollItemReversal,
+  postPayrollReversalLine, type PayrollReversalBlocker } from './payroll-reversal-ledger'
 
 // الخطوة 16: مدخلات تعريف المسير من الشاشة (تُتحقق هنا ضد القاعدة؛ الـDTO يتحقق من الشكل فقط).
 export interface PayrollRunDefinitionInput {
@@ -184,9 +193,15 @@ export class PayrollService {
     }
   }
 
-  private async assertRunAccess(user: JwtPayload, run: PayrollRun, em = this.runs.manager) {
+  // C8: عامة لمسار التصحيح (payroll-corrections.service)؛ مسير العكس بلا عضوية ولا بنود يُحكم بنطاق مسيره الأصلي
+  async assertRunAccess(user: JwtPayload, run: PayrollRun, em = this.runs.manager): Promise<void> {
     const branch = branchScopeOf(user)
     if (branch === null) return
+    if (run.runType === 'REVERSAL' && run.parentRunId) {
+      const parent = await em.getRepository(PayrollRun).findOneBy({ id: run.parentRunId })
+      if (!parent || parent.id === run.id) throw new ForbiddenException('تعذر التحقق من نطاق المسير الأصلي لمسير العكس')
+      return this.assertRunAccess(user, parent, em)
+    }
     if (branch < 1 || run.scopeType === 'COMPANY') throw new ForbiddenException('نطاق المسير خارج الفرع المسموح لك')
     const members = await em.getRepository(PayrollRunMember).find({ where: { runId: run.id } })
     const items = await em.getRepository(PayrollItem).find({ where: { runId: run.id } })
@@ -468,6 +483,10 @@ export class PayrollService {
         await this.lockRun(em, run.id)
         run = await runs.findOneByOrFail({ id: run.id })
         await this.assertRunAccess(user, run, em)
+        // C8 / الخطوة 31: مسير العكس لا يُحتسب ولا يُعاد حسابه ولا يُستبعد منه موظف؛ سطوره لقطة بنود المسير الأصلي
+        if (payrollRunTypeOf(run) === 'REVERSAL') {
+          throw new ConflictException({ code: 'PAYRUN-REVERSAL-NO-CALCULATION', message: 'مسير العكس لا يُحتسب ولا يُعاد حسابه؛ ألغه وأنشئ عكسًا جديدًا من المسير المصروف لو تغيّر المطلوب' })
+        }
         const sameIds = (proposed: number[] | undefined, stored: number[]) => proposed === undefined ||
           JSON.stringify([...new Set(proposed)].sort((a, b) => a - b)) === JSON.stringify([...new Set(stored)].sort((a, b) => a - b))
         const storedScopeIds = run.scopeIds ? JSON.parse(run.scopeIds) : run.scopeType === 'BRANCH' ? [run.branchId] : []
@@ -790,11 +809,23 @@ export class PayrollService {
       const typedObligationFacts = await readTypedObligationFacts(em, pendingObligations)
       const obligationEntry = (o: EmployeeObligation) => ({ id: o.id, amount: round2(Number(o.amount)), category: o.category,
         deductionRequestId: o.deductionRequestId ?? null, effectiveDate: o.effectiveDate ?? null, ...typedObligationFacts.get(o.id) })
+      // الخطوة 26 (EX-01..08): الإعفاء المالي النشط لهذا الموظف في هذا المسير على المبالغ المطلوبة قبل حماية الصافي — الحضور المُعفى صفر
+      // (أو ما بقي بعد يوم مُعفى)، والقيود المصنفة المُعفاة تخرج من الخصم وتبقى في الدفتر حتى الصرف، والأقساط المُعفاة تُؤجل في خطة الأقساط.
+      // النظامي والقضائي وغير القابل للإعفاء والاستردادات غير المصنفة والإجازة بلا أجر تبقى. بلا إعفاء نشط تمر المبالغ كما هي.
+      const exemptionRules = await readActiveRunExemptions(em, run.id, emp.id)
+      const exemptionFacts = exemptionRules.length ? await readExemptionObligationFacts(em, pendingObligations) : new Map()
+      const exemption = applyFinancialExemptions({ rules: exemptionRules,
+        attendance: { days: attendanceDeductionDays.map(day => ({ date: day.date, lateness: day.latenessAmount + day.permissionAmount, shortfall: day.shortfallAmount })),
+          absentDates: absentRows.map(row => row.date), absenceDayAmount: dayRate * absencePenalty,
+          requested: { lateness: latenessRequested, shortfall: shortfallRequested, absence: absenceRequested } },
+        debits: pendingObligations.filter((o) => o.type === 'DEBIT').map(o => ({ ...obligationEntry(o), ...exemptionFacts.get(o.id), label: o.label })),
+        unpaidLeave: unpaidDeduction })
+      const exemptedDebits = exemption.debits.map(({ deductionTypeId: _typeId, isExemptable: _exemptable, typeName: _typeName, label: _label, creatorUserId: _creator, ...entry }) => entry)
       const protectionInput = {
         earnedFixedGross: grossEarned, overtime: otAmount, unpaidLeave: unpaidDeduction,
-        attendance: { lateness: latenessRequested, shortfall: shortfallRequested, absence: absenceRequested },
+        attendance: exemption.attendance,
         credits: pendingObligations.filter((o) => o.type === 'CREDIT').map(obligationEntry),
-        debits: pendingObligations.filter((o) => o.type === 'DEBIT').map(obligationEntry),
+        debits: exemptedDebits,
         // الخطوة 19: أرضية الصافي وسقف الخصم من لقطة السياسة (النسخة المنشورة أولًا ثم الإعداد العام وقت الالتقاط).
         settings: protectionSettings,
         // الخطوة 22 (B5): ترتيب تحصيل المالك من نسخة السياسة؛ null = الترتيب الافتراضي كما هو
@@ -809,7 +840,7 @@ export class PayrollService {
       const installmentPlan = await buildPayrollInstallmentPlan(em, emp.id, {
         period: run.period, endDate, netBeforeLoans: loanSlot.netBeforeLoans.toFixed(2), earnedFixedGross: grossEarned.toFixed(2),
         capConsumed: loanSlot.capConsumed.toFixed(2),
-      }, { runId: run.id, policy: !dto.refreshInstallmentPolicy && previousPlan ? previousPlan.policy : undefined })
+      }, { runId: run.id, policy: !dto.refreshInstallmentPolicy && previousPlan ? previousPlan.policy : undefined, exemptions: exemption.loanScope })
       const loanDeduction = installmentPlan ? legacyInstallmentNumber(installmentPlan.allocation.totals.deductedAmount) : 0
       // السلف قبل فئات أخرى بترتيب المالك: تُعاد الحماية بالأقساط المحصلة في موضعها فتتقلص الفئات التالية لها.
       if (collection.loanBeforeOthers && loanDeduction > 0) netProtection = protectPayrollObligations({ ...protectionInput, loanCollected: loanDeduction })
@@ -840,9 +871,11 @@ export class PayrollService {
         const engineFacts: PayrollPolicyEngineFacts = { employeeId: emp.id, period: run.period, periodStart: startDate, periodEnd: endDate, monthlyComponents,
           coverDays, periodDays: Math.round((Date.parse(`${endDate}T12:00:00Z`) - Date.parse(`${startDate}T12:00:00Z`)) / 86400000) + 1, fullCoverage,
           dailyHours, monthlyDays, lateDeductionEnabled: lateEnabled, currency: policyValues.currency, overtimeAmount: otAmount, unpaidLeaveDays: unpaidDays,
-          credits: pendingObligations.filter(o => o.type === 'CREDIT').map(obligationEntry), debits: pendingObligations.filter(o => o.type === 'DEBIT').map(obligationEntry),
+          credits: pendingObligations.filter(o => o.type === 'CREDIT').map(obligationEntry), debits: exemptedDebits,
+          // الخطوة 26: نفس قرار الإعفاء على مجاميع ظل الحضور، فيقيس التكافؤ الحساب لا الإعفاء
           protectionSettings, attendance: { status: policyShadow?.status ?? 'UNAVAILABLE',
-            totals: shadowTotals ? { lateness: shadowTotals.lateness, shortfall: shadowTotals.shortfall, absence: shadowTotals.absence } : null,
+            totals: shadowTotals ? exemptPolicyShadowTotals({ lateness: shadowTotals.lateness, shortfall: shadowTotals.shortfall, absence: shadowTotals.absence },
+              (policyShadow as { days?: Array<{ date?: unknown; policy?: { lateness?: unknown; shortfall?: unknown; absence?: unknown } | null }> } | null)?.days, exemptionRules) : null,
             message: policyShadow?.message ?? 'لم يُحسب ظل الحضور' },
           // الخطوة 22 (B5): ترتيب التحصيل نفسه للمحركين، فيقيس التكافؤ الحساب لا اختلاف الترتيب
           collectionOrder: collection.order }
@@ -854,7 +887,7 @@ export class PayrollService {
           if (policySlot.netBeforeLoans.toFixed(2) !== loanSlot.netBeforeLoans.toFixed(2) || preNet.grossEarned.toFixed(2) !== grossEarned.toFixed(2) || policySlot.capConsumed.toFixed(2) !== loanSlot.capConsumed.toFixed(2)) {
             policyPlan = await buildPayrollInstallmentPlan(em, emp.id, { period: run.period, endDate, netBeforeLoans: policySlot.netBeforeLoans.toFixed(2),
               earnedFixedGross: preNet.grossEarned.toFixed(2), capConsumed: policySlot.capConsumed.toFixed(2) },
-            { runId: run.id, policy: !dto.refreshInstallmentPolicy && previousPlan ? previousPlan.policy : undefined })
+            { runId: run.id, policy: !dto.refreshInstallmentPolicy && previousPlan ? previousPlan.policy : undefined, exemptions: exemption.loanScope })
           }
           policyLoans = policyPlan ? legacyInstallmentNumber(policyPlan.allocation.totals.deductedAmount) : 0
           if (collection.loanBeforeOthers) policyFinal = payrollPolicyEngineWithLoans(preNet, engineFacts, policyLoans)
@@ -863,7 +896,7 @@ export class PayrollService {
         const parity = payrollParityEmployeeRow({ employeeId: emp.id,
           legacy: { basicSalary: earnedComponents[0], allowances: round2(earnedComponents.slice(1).reduce((sum, amount) => sum + amount, 0)), overtimeAmount: otAmount, otherAdditions,
             latenessDeduction, shortfallDeduction, absenceDeduction, unpaidLeaveDeduction: unpaidDeduction, otherDeductions, loanInstallments: loanDeduction, netPay },
-          legacyAttendanceRequested: { lateness: latenessRequested, shortfall: shortfallRequested, absence: absenceRequested },
+          legacyAttendanceRequested: exemption.attendance,
           policy: { ...policyFinal.amounts, loanInstallments: policyLoans, netPay: policyNet }, preNet: policyFinal, attendanceShadowStatus: policyShadow?.status ?? 'SKIPPED',
           // خطة المصادر: رموز مشاكل مصادر الظل التي غابت بسببها قيم المحرك
           sourceIssueCodes: payrollShadowSourceIssueCodes(policyShadow) })
@@ -948,6 +981,11 @@ export class PayrollService {
             obligationIds: paid.netProtection.consumedObligationIds,
             obligationLines: paid.netProtection.lines,
             netProtection: paid.netProtection.trace,
+            // الخطوة 26: الإعفاءات المطبقة ونسخها، وسطورها (الأصل والمُعفى وبعد الإعفاء)، والقيود والأقساط المؤجلة، والمحمي الباقي — فقط حين يوجد إعفاء نشط
+            ...(exemptionRules.length ? { financialExemptions: summarizeFinancialExemptions({ rules: exemptionRules,
+              lines: [...exemption.lines, ...exemptionLoanLines(paid.installmentPlan?.exemptionDeferred)], exemptedObligations: exemption.exemptedObligations,
+              protectedItems: exemption.protectedItems, deferredInstallments: paid.installmentPlan?.exemptionDeferred ?? [],
+              requested: { lateness: latenessRequested, shortfall: shortfallRequested, absence: absenceRequested } }) } : {}),
             absentDates: absentRows.map((r) => r.date),
             // تتبّع مصدر الخصم للتدقيق/الاعتراض: صفوف الحضور المخصومة والإجازات
             attendanceDayIds: attRows
@@ -1080,6 +1118,17 @@ export class PayrollService {
       const selfApprovalAllowed = payrollSelfApprovalAllowed(await this.cfg(PAYROLL_SELF_APPROVAL_KEY, 'false'))
       const selfApproval = payrollSelfApprovalIssue({ calculatedBy, approverId: user.sub, selfApprovalAllowed })
       if (selfApproval) throw new ForbiddenException(selfApproval)
+      // C8 / الخطوة 31: مسير العكس — فصل المهام أعلاه (من أنشأ العكس لا يعتمده)، ثم إعادة التحقق من كل سطر؛ لا حجز ولا دفاتر قبل التنفيذ
+      if (payrollRunTypeOf(run) === 'REVERSAL') {
+        const ready = await this.reversalLinesReady(em, run)
+        run.status = 'APPROVED'
+        run.approvedBy = user.sub
+        run.approvedAt = new Date()
+        await runs.save(run)
+        await this.event(em, user, run.id, 'APPROVED', null, { runType: 'REVERSAL', parentRunId: ready.parent.id, employeeIds: ready.employeeIds, totalNet: Number(run.totalNet),
+          lineIds: ready.pairs.map(pair => pair.line.id), calculatedBy, smallCompanyException: calculatedBy === user.sub, selfApprovalSetting: selfApprovalAllowed })
+        return run
+      }
       // الخطوة 19: لا اعتماد بلا لقطة سياسة سليمة (بصمتها ومحتواها وشهرها)؛ اللقطة المعدلة خارج الشاشة ترفض بـPAYRUN-POLICY-SNAPSHOT-INVALID.
       const policySnapshot = parsePayrollRunPolicySnapshot(run)
       if (!policySnapshot) {
@@ -1097,6 +1146,8 @@ export class PayrollService {
       await this.assertAttendanceRuleSnapshot(em, run, items)
       await this.assertSalarySourceSnapshot(em, run, items)
       await this.assertSettlementBoundary(em, items)
+      // الخطوة 26 (EX-01 قاعدة 4): لا إعفاء بانتظار الاعتماد، والحساب طبّق الإعفاءات النشطة الحالية نفسها، وحد المرفق على المبلغ المُسقط فعلًا
+      await assertRunExemptionsForApproval(em, run, items)
       // DD-11: الرصيد السالب (المحمي يتجاوز الاستحقاق) يمنع القبول المالي
       const negativeNet = items.filter(item => Number(item.netPay) < 0).map(item => item.employeeId)
       if (negativeNet.length) throw new ConflictException({ code: 'PAYRUN-NET-NEGATIVE', message: 'صافي بعض الموظفين سالب؛ عالج الإجازة بلا أجر أو الاستحقاق ثم أعد الحساب قبل الاعتماد', employeeIds: negativeNet })
@@ -1106,7 +1157,11 @@ export class PayrollService {
         if (plan) await reservePayrollInstallments(em, item.employeeId, run.id, run.snapshotVersion, user.sub, plan)
         // DD-09 (C2): حجز قيود الدفتر باسم المسير المعتمد — مسير معتمد واحد فقط يحملها
         await reservePayrollObligations(em, item.employeeId, run.id, item.breakdown ? JSON.parse(item.breakdown) : {})
+        // الخطوة 26: القيود المُعفاة تُحجز باسم المسير أيضًا حتى الصرف
+        await reserveExemptedObligations(em, item.employeeId, run.id, item.breakdown ? JSON.parse(item.breakdown) : {})
       }
+      // الخطوة 26 (EX-08): الإعفاء النشط لعضو ← APPLIED بالمبلغ المُسقط؛ لموظف خارج البنود ← EXPIRED
+      await markRunExemptionsApplied(em, run, items, user.sub)
       run.status = 'APPROVED'
       run.approvedBy = user.sub
       run.approvedAt = new Date()
@@ -1136,6 +1191,28 @@ export class PayrollService {
       const payIssue = payrollPayRecordIssue(dto)
       if (payIssue) throw new BadRequestException(payIssue)
       const payRecord = payrollPayRecordOf(dto)
+      // C8 / الخطوة 31: تنفيذ مسير العكس — الإضافي والأقساط تعود لحالتها قبل الصرف، وقيود REVERSAL وقيود الإعادة في الدفاتر، وتحرير حجز الفترة؛
+      // قيد الصرف هنا قيد الاسترداد (القناة والمرجع). صفوف المسير الأصلي لا تُعدَّل.
+      if (payrollRunTypeOf(run) === 'REVERSAL') {
+        if (run.parentRunId) await lockPayrollRunForCorrection(em, run.parentRunId)
+        const ready = await this.reversalLinesReady(em, run)
+        const effects = []
+        for (const pair of ready.pairs) effects.push(await postPayrollReversalLine(em, { reversalRun: run, parentRun: ready.parent, line: pair.line, item: pair.item, actorUserId: user.sub }))
+        run.status = 'PAID'
+        run.paidAt = new Date()
+        run.paidBy = user.sub
+        run.payChannel = payRecord.channel
+        run.payReference = payRecord.reference
+        await runs.save(run)
+        const summary = { overtime: effects.reduce((sum, row) => sum + row.overtime.length, 0), installments: effects.reduce((sum, row) => sum + row.installments.length, 0),
+          obligations: effects.reduce((sum, row) => sum + row.obligations.length, 0), reopenedLoans: effects.reduce((sum, row) => sum + row.reopenedLoans.length, 0),
+          releasedClaims: effects.reduce((sum, row) => sum + row.releasedClaimIds.length, 0) }
+        await this.event(em, user, run.id, 'PAID', null, { runType: 'REVERSAL', parentRunId: ready.parent.id, totalNet: Number(run.totalNet), employeeIds: ready.employeeIds,
+          paidBy: user.sub, channel: payRecord.channel, channelLabel: PAYROLL_PAY_CHANNEL_LABELS[payRecord.channel], reference: payRecord.reference, effects: summary })
+        await this.event(em, user, ready.parent.id, 'REVERSAL_POSTED', run.correctionReason ? run.correctionReason.slice(0, 500) : null,
+          { reversalRunId: run.id, employeeIds: ready.employeeIds, totalNet: Number(run.totalNet), effects: summary })
+        return run
+      }
       const items = await em.getRepository(PayrollItem).find({ where: { runId } })
       const employeeIds = await this.validateRunMembers(em, run, items)
       await lockPayrollEmployees(em, employeeIds)
@@ -1160,6 +1237,8 @@ export class PayrollService {
         if (installmentPlan) await postPayrollInstallments(em, item.employeeId, run.id, run.snapshotVersion, user.sub, installmentPlan)
         // بنود دفتر المديونيات → APPLIED بالمبلغ المحصل (مرة واحدة)، والباقي بعد حماية الصافي قيد مرحّل (C2: DD-09/11)
         await postPayrollObligations(em, item.employeeId, run, breakdown, user.sub)
+        // الخطوة 26 (EX-08): القيد المصنف المُعفى ← EXEMPTED (إسقاط) أو DEFERRED مع قسط للشهر التالي بمرجع الإعفاء
+        await postExemptedObligations(em, item.employeeId, run, breakdown, user.sub)
       }
       run.status = 'PAID'
       run.paidAt = new Date()
@@ -1248,9 +1327,36 @@ export class PayrollService {
       if (!(error instanceof ConflictException)) throw error
       collection = { source: 'INVALID', message: (error.getResponse() as { message?: string }).message ?? 'ترتيب التحصيل في نسخة السياسة غير صالح' }
     }
+    // C8 / الخطوة 31: نوع المسير والمسير المرتبط والمسيرات التابعة وسطور العكس أو البنود المعكوسة
+    const correction = await describePayrollRunCorrection(em, run)
     return { ...this.lightRun(run), items, members: await this.visibleMembers(user, members, em), conflicts, pendingOvertime, periodContinuity, selection, policyVersion, engine,
-      actors, approvalGuard, payRecord, collection }
+      actors, approvalGuard, payRecord, collection, correction }
     })
+  }
+
+  // C8 / الخطوة 31: سطور مسير العكس المعلقة جاهزة للاعتماد أو التنفيذ — المسير الأصلي ما زال مصروفًا، والبند بلقطته، ولا مانع لاحق (الموظفون مقفولون)
+  private async reversalLinesReady(em: EntityManager, run: PayrollRun) {
+    const parent = run.parentRunId ? await em.getRepository(PayrollRun).findOneBy({ id: run.parentRunId }) : null
+    if (!parent || parent.status !== 'PAID' || payrollRunTypeOf(parent) === 'REVERSAL') {
+      throw new ConflictException({ code: 'PAYRUN-REVERSAL-PARENT', message: 'المسير الأصلي لمسير العكس غير موجود أو لم يعد مصروفًا' })
+    }
+    const lines = await em.getRepository(PayrollRunReversalLine).find({ where: { reversalRunId: run.id, status: 'PENDING' }, order: { employeeId: 'ASC', id: 'ASC' } })
+    if (!lines.length) throw new ConflictException({ code: 'PAYRUN-REVERSAL-EMPTY', message: 'مسير العكس بلا سطور معلقة للتنفيذ' })
+    const employeeIds = [...new Set(lines.map(line => line.employeeId))]
+    await lockPayrollEmployees(em, employeeIds)
+    const items = await em.getRepository(PayrollItem).find({ where: { runId: parent.id, id: In(lines.map(line => line.originalItemId)) } })
+    const blockers: PayrollReversalBlocker[] = []
+    const pairs: Array<{ line: PayrollRunReversalLine; item: PayrollItem }> = []
+    for (const line of lines) {
+      const item = items.find(row => row.id === line.originalItemId && row.employeeId === line.employeeId)
+      if (!item) throw new ConflictException({ code: 'PAYRUN-REVERSAL-ITEM-CHANGED', message: `بند الموظف #${line.employeeId} في المسير الأصلي لم يعد موجودًا` })
+      const plan = await planPayrollItemReversal(em, parent, item, { ownReversalRunId: run.id })
+      if (plan.hash !== line.itemHash) throw new ConflictException({ code: 'PAYRUN-REVERSAL-ITEM-CHANGED', message: `بند الموظف #${line.employeeId} في المسير الأصلي لا يطابق لقطته وقت إنشاء العكس` })
+      blockers.push(...plan.blockers)
+      pairs.push({ line, item })
+    }
+    if (blockers.length) throw new ConflictException({ code: 'PAYRUN-REVERSAL-BLOCKED', message: `تعذر المتابعة في مسير العكس: ${blockers[0].message}`, blockers })
+    return { parent, pairs, employeeIds }
   }
 
   async reopen(user: JwtPayload, runId: number, reason: string) {
@@ -1281,6 +1387,13 @@ export class PayrollService {
       await releasePayrollClaims(em, runId)
       await releasePayrollInstallments(em, runId, user.sub, reason)
       await releasePayrollObligations(em, runId)
+      // الخطوة 26: إعادة الفتح تعيد الإعفاء المطبق نشطًا، والإلغاء ينهي الحي
+      await releaseRunExemptions(em, runId, status, user.sub, reason)
+      // C8 / الخطوة 31: إلغاء مسير العكس قبل تنفيذه يلغي سطوره المعلقة ويُسجل على المسير الأصلي؛ إعادة فتحه المعتمد لا أثر مالي لها
+      if (payrollRunTypeOf(run) === 'REVERSAL' && status === 'CANCELLED') {
+        const cancelledLineIds = await cancelPayrollReversalLines(em, runId)
+        if (run.parentRunId) await this.event(em, user, run.parentRunId, 'REVERSAL_CANCELLED', reason, { reversalRunId: runId, lineIds: cancelledLineIds })
+      }
       run.status = status
       if (status === 'CALCULATED') { run.approvedBy = null; run.approvedAt = null }
       await runs.save(run)
@@ -1338,7 +1451,8 @@ export class PayrollService {
       const published = await this.readRun(item.runId, async (em, run) => {
         if (!['APPROVED', 'PAID'].includes(run.status)) return null
         const currentItem = await em.getRepository(PayrollItem).findOneBy({ id: item.id, employeeId })
-        return currentItem ? { item: currentItem, run } : null
+        // C8: القسيمة المعكوسة تبقى في سجل الموظف موسومة بعكسها وبقسيمة المسير التكميلي إن وُجدت
+        return currentItem ? { item: currentItem, run, reversal: await describePayrollItemReversal(em, currentItem) } : null
       })
       if (published) result.push(published)
     }
@@ -1370,7 +1484,11 @@ export class PayrollService {
     let savedBreakdown: unknown = {}
     try { savedBreakdown = item.breakdown ? JSON.parse(item.breakdown) : {} } catch { savedBreakdown = {} }
     const obligationDetails = await describePayrollObligationLines(em, savedBreakdown)
-    return { item, run: this.lightRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY', obligationDetails }
+    // الخطوة 26 (EX-04): الإعفاءات المطبقة على البند برقمها وسببها والمانح بالدور
+    const financialExemptions = await describePayslipExemptions(em, savedBreakdown)
+    // C8 / الخطوة 31: هل عُكس صرف هذا البند (بأي مسير وسبب) وقسيمة المسير التكميلي المربوطة
+    const reversal = await describePayrollItemReversal(em, item)
+    return { item, run: this.lightRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY', obligationDetails, financialExemptions, reversal }
     })
   }
 
@@ -1750,11 +1868,22 @@ export class PayrollService {
   }
 
   // «مسير جديد»: مسودة باسم ونسخة سياسة وفترة من دورتها وفلاتر واستبعادات؛ لا عضوية ولا مبالغ قبل «احتساب المسودة».
-  async createRunDraft(user: JwtPayload, dto: PayrollRunDefinitionInput) {
+  // C8 / الخطوة 31: correction = مسير تكميلي مربوط بمسير مصروف (من payroll-corrections.service بعد فحص الأهلية)
+  async createRunDraft(user: JwtPayload, dto: PayrollRunDefinitionInput,
+    correction?: { runType: 'SUPPLEMENTARY'; parentRunId: number; correctionReason: string; startDate: string; endDate: string; employeeIds: number[] }) {
     const runId = await this.runs.manager.transaction(async em => {
       await this.calculationLock(em)
       const name = this.runName(dto.name)
       const context = await this.runPolicyPeriod(em, user, dto.policyVersionId, dto.period)
+      if (correction) {
+        const parent = await em.getRepository(PayrollRun).findOneBy({ id: correction.parentRunId })
+        if (!parent || parent.status !== 'PAID' || payrollRunTypeOf(parent) === 'REVERSAL') {
+          throw new ConflictException({ code: 'PAYRUN-SUPPLEMENTARY-PARENT', message: 'المسير الأصلي للمسير التكميلي غير موجود أو لم يعد مصروفًا' })
+        }
+        if (context.startDate !== correction.startDate || context.endDate !== correction.endDate) {
+          throw new ConflictException({ code: 'PAYRUN-SUPPLEMENTARY-PERIOD', message: 'فترة نسخة السياسة لهذا الشهر لا تطابق فترة المسير الأصلي؛ لا يُنشأ مسير تكميلي بفترة مختلفة' })
+        }
+      }
       const definition = await this.normalizeRunDefinition(em, user, dto, null)
       await this.assertPolicyBranchScope(em, context.policy, definition)
       await this.assertRunNameAvailable(em, name, context.period, null)
@@ -1763,9 +1892,18 @@ export class PayrollService {
       this.assertNonEmptyScope(preview.totals.candidates, definition)
       const saved = await this.saveRunRow(em, em.getRepository(PayrollRun).create({ name, ...payrollRunDefinitionColumns(definition),
         policyId: context.policy.id, policyVersionId: context.version.id, period: context.period, startDate: context.startDate, endDate: context.endDate,
-        status: 'DRAFT', totalNet: 0, snapshotVersion: 0 }))
-      await this.event(em, user, saved.id, 'DRAFT_CREATED', null, { name, definition, policy: this.policyViewOf(context),
-        period: { period: context.period, startDate: context.startDate, endDate: context.endDate }, previewTotals: preview.totals, previewHash: preview.previewHash })
+        status: 'DRAFT', totalNet: 0, snapshotVersion: 0,
+        ...(correction ? { runType: 'SUPPLEMENTARY' as const, parentRunId: correction.parentRunId, correctionReason: correction.correctionReason } : {}) }))
+      await this.event(em, user, saved.id, 'DRAFT_CREATED', correction ? correction.correctionReason.slice(0, 500) : null, { name, definition, policy: this.policyViewOf(context),
+        period: { period: context.period, startDate: context.startDate, endDate: context.endDate }, previewTotals: preview.totals, previewHash: preview.previewHash,
+        ...(correction ? { runType: 'SUPPLEMENTARY', parentRunId: correction.parentRunId } : {}) })
+      if (correction) {
+        // C3 × C8: إعفاء خصومات الحضور المطبق على البنود المعكوسة يُنقل للتكميلي بقراره الأصلي (لا يُعاد منحه ولا يُحتسب في الحدود)
+        const carriedExemptions = await carryReversedRunExemptions(em, { parentRun: { id: correction.parentRunId, period: context.period }, supplementaryRun: saved,
+          employeeIds: correction.employeeIds, actorUserId: user.sub })
+        await this.event(em, user, correction.parentRunId, 'SUPPLEMENTARY_CREATED', correction.correctionReason.slice(0, 500),
+          { supplementaryRunId: saved.id, employeeIds: correction.employeeIds, name, carriedExemptions })
+      }
       return saved.id
     })
     return this.detail(user, runId)
@@ -1780,6 +1918,16 @@ export class PayrollService {
       await this.assertRunAccess(user, run, em)
       if (run.status !== 'DRAFT') throw this.stateError('تعديل تعريف المسير', run.status)
       const before = payrollRunDefinitionOf(run)
+      // C8 / الخطوة 31: مسودة المسير التكميلي تبقى على نسخة سياسة الأصل وفترته وقائمة موظفيه المؤهلين (تُحذف منها أسماء ولا تُضاف)
+      if (payrollRunTypeOf(run) === 'SUPPLEMENTARY') {
+        const nextIds = dto.filters?.employeeIds ?? before.filters.employeeIds
+        const orgFilters = !!dto.filters && (!!dto.filters.allEmployees || !!dto.filters.branchIds?.length || !!dto.filters.departmentIds?.length || !!dto.filters.teamIds?.length)
+        if ((dto.policyVersionId !== undefined && dto.policyVersionId !== run.policyVersionId) || (dto.period !== undefined && dto.period !== run.period) || orgFilters ||
+          !nextIds.length || nextIds.some(id => !before.filters.employeeIds.includes(id))) {
+          throw new ConflictException({ code: 'PAYRUN-SUPPLEMENTARY-DEFINITION',
+            message: 'مسودة المسير التكميلي مقيدة بنسخة سياسة المسير الأصلي وفترته وقائمة موظفيه؛ احذف أسماء فقط أو أنشئ مسيرًا تكميليًا جديدًا' })
+        }
+      }
       const name = this.runName(dto.name ?? run.name)
       const context = await this.runPolicyPeriod(em, user, dto.policyVersionId ?? run.policyVersionId, dto.period ?? run.period)
       const definition = await this.normalizeRunDefinition(em, user, {
@@ -1964,6 +2112,10 @@ export class PayrollService {
     if (!PAYROLL_ENGINE_MODES.includes(dto.mode)) this.bad('PAYRUN-ENGINE-MODE-INVALID', 'وضع المحرك LEGACY أو SHADOW أو POLICY')
     await this.runs.manager.transaction(async em => {
       const run = await this.lockedEngineRun(em, user, runId)
+      // C8 / الخطوة 31: مسير العكس لا يُحتسب؛ سطوره لقطة بنود المسير الأصلي فلا وضع محرك يتغير عليه
+      if (payrollRunTypeOf(run) === 'REVERSAL') {
+        throw new ConflictException({ code: 'PAYRUN-REVERSAL-NO-CALCULATION', message: 'مسير العكس لا يُحتسب؛ وضع محرك الحساب لا يتغير عليه' })
+      }
       if (!['DRAFT', 'CALCULATED'].includes(run.status)) throw this.stateError('تغيير وضع محرك الحساب', run.status)
       const from = run.engineMode ?? null
       if (from === dto.mode) this.bad('PAYRUN-ENGINE-MODE-UNCHANGED', `المسير بالفعل بوضع ${dto.mode}`)
@@ -2116,9 +2268,11 @@ export class PayrollService {
     const visible = await this.runVisibility(user, em)
     const runs = await this.runs.find({ where: { status: In(['DRAFT', 'CALCULATED', 'APPROVED', 'PAID']) }, order: { period: 'ASC', id: 'ASC' },
       select: { id: true, name: true, period: true, status: true, engineMode: true, approvedAt: true, approvedBy: true, paidAt: true,
-        parityExcludedReason: true, parityExcludedBy: true, parityExcludedAt: true } })
+        parityExcludedReason: true, parityExcludedBy: true, parityExcludedAt: true, runType: true } })
     const rows = []
     for (const run of runs) {
+      // C8: مسير العكس لا يحتسب رواتب ولا تقرير تكافؤ له؛ لا يُحتسب في فترة التكافؤ ولا يحجبها
+      if (payrollRunTypeOf(run) === 'REVERSAL') continue
       if (!(await visible(run.id))) continue
       const approved = ['APPROVED', 'PAID'].includes(run.status)
         ? await em.getRepository(PayrollRunEvent).findOne({ where: { runId: run.id, eventType: 'APPROVED' }, order: { id: 'DESC' } }) : null

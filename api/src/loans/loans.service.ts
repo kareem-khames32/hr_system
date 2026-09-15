@@ -14,7 +14,9 @@ import type { LoanCapPolicyDto, LoanRepaymentDto } from './loans.dto'
 
 const blank = (value: unknown) => value === undefined || value === null || (typeof value === 'string' && value.trim() === '')
 // ما يراه الموظف من حركات دفتره: الخصم الفعلي والتأجيل والسداد، لا حجوزات المسير الداخلية.
-const EMPLOYEE_EVENT_ACTIONS = ['PAYROLL_POSTED', 'DEFERRED', 'SETTLED_EARLY', 'EARLY_REPAYMENT']
+// DEFERRED_BY_EXEMPTION (الخطوة 26): تأجيل القسط بقرار إعفاء مالي عند صرف المسير — يراه الموظف في دفتر سلفه
+// REVERSAL (C8 / الخطوة 31): عكس خصم القسط بعكس صرف المسير — عاد القسط مستحقًا
+const EMPLOYEE_EVENT_ACTIONS = ['PAYROLL_POSTED', 'DEFERRED', 'SETTLED_EARLY', 'EARLY_REPAYMENT', 'DEFERRED_BY_EXEMPTION', 'REVERSAL']
 
 @Injectable()
 export class LoansService {

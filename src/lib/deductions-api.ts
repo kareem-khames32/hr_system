@@ -9,7 +9,8 @@ export type DeductionCreatorBasis = 'DIRECT_MANAGER' | 'TEAM_LEADER' | 'DEPARTME
 export type DeductionApprovalRole = Exclude<DeductionCreatorBasis, 'FUNCTION_OWNER'> | 'EXECUTIVE'
 export type DeductionStatus = 'IN_APPROVAL' | 'APPROVED' | 'REJECTED' | 'WITHDRAWN' | 'CANCELLED'
 export type DeductionSelectionMode = 'EMPLOYEES' | 'TEAM' | 'DEPARTMENT' | 'BRANCH'
-export type DeductionObligationStatus = 'PENDING' | 'APPLIED' | 'CANCELLED' | 'SUSPENDED'
+// EXEMPTED / DEFERRED (الخطوة 26): مصير القسط بقرار إعفاء مالي عند صرف المسير
+export type DeductionObligationStatus = 'PENDING' | 'APPLIED' | 'CANCELLED' | 'SUSPENDED' | 'EXEMPTED' | 'DEFERRED'
 
 export const DEDUCTION_CATEGORY_LABELS: Record<DeductionCategory, string> = { DISCIPLINARY: 'تأديبي', PERFORMANCE: 'أداء وجودة', ADMINISTRATIVE: 'إداري', STATUTORY: 'نظامي', COURT_ORDER: 'حكم قضائي' }
 export const DEDUCTION_METHOD_LABELS: Record<DeductionCalcMethod, string> = { FIXED_AMOUNT: 'مبلغ ثابت', DAYS_OF_SALARY: 'أيام من الراتب', HOURS_OF_SALARY: 'ساعات من الراتب', PERCENT_OF_BASE: 'نسبة من الأساسي', PERCENT_OF_GROSS: 'نسبة من إجمالي الراتب' }
@@ -21,7 +22,8 @@ export const DEDUCTION_STATUS_META: Record<DeductionStatus, { label: string; cla
   WITHDRAWN: { label: 'مسحوب', className: 'bg-gray-100 text-gray-600' },
   CANCELLED: { label: 'ملغى', className: 'bg-gray-100 text-gray-600' },
 }
-export const DEDUCTION_OBLIGATION_STATUS_LABELS: Record<DeductionObligationStatus, string> = { PENDING: 'بانتظار المسير', APPLIED: 'مستهلك في مسير مصروف', CANCELLED: 'ملغى', SUSPENDED: 'معلق — بانتظار قرار الموارد البشرية' }
+export const DEDUCTION_OBLIGATION_STATUS_LABELS: Record<DeductionObligationStatus, string> = { PENDING: 'بانتظار المسير', APPLIED: 'مستهلك في مسير مصروف', CANCELLED: 'ملغى', SUSPENDED: 'معلق — بانتظار قرار الموارد البشرية',
+  EXEMPTED: 'مُعفى — أُسقط بقرار إعفاء مالي', DEFERRED: 'مؤجَّل بقرار إعفاء — قسط جديد للشهر التالي' }
 export const DEDUCTION_METHOD_UNIT: Record<DeductionCalcMethod, string> = { FIXED_AMOUNT: 'المبلغ', DAYS_OF_SALARY: 'عدد الأيام', HOURS_OF_SALARY: 'عدد الساعات', PERCENT_OF_BASE: 'النسبة %', PERCENT_OF_GROSS: 'النسبة %' }
 
 export interface DeductionFunctionalScope { departmentIds: number[]; teamIds: number[]; employeeIds: number[] }
