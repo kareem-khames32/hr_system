@@ -19,6 +19,7 @@ import { PayrollPeriodClaim, PayrollRunEvent } from './payroll-membership.entiti
 import { PayrollRunUnassignedAck } from './payroll-run-definition.entities'
 import { LoanInstallmentAllocation, LoanInstallmentEvent } from './payroll-installment-ledger.entities'
 import { LatenessTier } from './payroll-rules.entities'
+import { PayrollLatenessTierSet, PayrollLatenessTierSetTier, PayrollRunParityExplanation } from './payroll-lateness-tier-sets.entities'
 import { PayrollController } from './payroll.controller'
 import { PayrollService } from './payroll.service'
 import { ObligationsController } from './obligations.controller'
@@ -66,6 +67,10 @@ import { BonusesService } from './bonuses.service'
       LoanInstallmentEvent,
       EmployeeObligation,
       LatenessTier,
+      // B4 / الخطوات 19–21: مجموعات شرائح التأخير المؤرخة وأسباب فروق التكافؤ
+      PayrollLatenessTierSet,
+      PayrollLatenessTierSetTier,
+      PayrollRunParityExplanation,
       RequestsConfig,
       PayrollPolicy,
       PayrollPolicyVersion,

@@ -29,7 +29,10 @@ function token(user) {
     employeeId: user.employeeId ?? null, tokenVersion: user.tokenVersion ?? 0,
     permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
 }
+// الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ (هذه المجموعة لا تختبر التكافؤ نفسه)
+const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
 async function request(user, method, url, body) {
+  await writeParityReasonsBeforeApproval(request, user, method, url)
   const response = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token(user)}` },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
   const text = await response.text()
@@ -123,9 +126,11 @@ async function counts(f) {
     approvals: await repo('RequestApproval').count(), claims: await repo('OvertimeDayClaim').count(), events: await repo('OvertimeEntryEvent').count() }
 }
 const claimsFor = f => repo('OvertimeDayClaim').find({ where: { employeeId: f.emp.id, workDate: f.day }, order: { id: 'ASC' } })
+// الخطوة 16 (B3): اسم المسير فريد داخل الشهر لغير الملغى؛ كل مسير جديد يأخذ رقمًا تسلسليًا.
+let overtimeRunNumber = 0
 async function payroll(f, period = f.day.slice(0, 7), extra = {}) {
   const response = await request(admin, 'POST', '/payroll/runs/calculate-defined', {
-    period, scopeType: 'CUSTOM', employeeIds: [f.emp.id], name: 'مسير قبول مصادر الإضافي', ...extra,
+    period, scopeType: 'CUSTOM', employeeIds: [f.emp.id], name: `مسير قبول مصادر الإضافي ${++overtimeRunNumber}`, ...extra,
   })
   assert.equal(response.status, 201, JSON.stringify(response.body))
   const item = response.body.items.find(row => row.employeeId === f.emp.id)
@@ -143,7 +148,8 @@ async function payPayroll(run) {
   await acknowledgeUnassigned(financeApprover, run.id)
   const approved = await request(financeApprover, 'POST', `/payroll/runs/${run.id}/approve`)
   assert.equal(approved.status, 201, JSON.stringify(approved.body))
-  const paid = await request(financeApprover, 'POST', `/payroll/runs/${run.id}/pay`)
+  // الخطوة 22 (B5): الصرف يسجل قناته ومرجعه
+  const paid = await request(financeApprover, 'POST', `/payroll/runs/${run.id}/pay`, { channel: 'BANK_TRANSFER', reference: `OT-TEST-${run.id}` })
   assert.equal(paid.status, 201, JSON.stringify(paid.body))
   return paid.body
 }
@@ -939,7 +945,7 @@ test('EX-11 legacy payroll: an approved explicit request supplies missing legacy
   const approved = await request(financeApprover, 'POST', `/payroll/runs/${result.run.id}/approve`)
   assert.equal(approved.status, 201, JSON.stringify(approved.body))
   assert.deepEqual(await repo('OvertimeEntry').findOneByOrFail({ id: entry.id }), original)
-  const paid = await request(financeApprover, 'POST', `/payroll/runs/${result.run.id}/pay`)
+  const paid = await request(financeApprover, 'POST', `/payroll/runs/${result.run.id}/pay`, { channel: 'BANK_TRANSFER', reference: `OT-TEST-${result.run.id}` })
   assert.equal(paid.status, 201, JSON.stringify(paid.body))
   assert.deepEqual({ ...await repo('OvertimeEntry').findOneByOrFail({ id: entry.id }) }, { ...original, status: 'PAID', payrollRunId: result.run.id })
   assert.equal(await repo('AttendancePunch').count({ where: { employeeId: f.emp.id } }), 0)
@@ -1330,7 +1336,8 @@ test('OT unresolved legacy: paying an older approved zero payroll cannot mark un
     await repo('PayrollRun').update(result.run.id, { status: 'APPROVED', approvedBy: financeApprover.id, approvedAt: new Date() })
     const beforeRun = await repo('PayrollRun').findOneByOrFail({ id: result.run.id })
     const beforeItem = await repo('PayrollItem').findOneByOrFail({ id: result.item.id })
-    const rejected = await request(financeApprover, 'POST', `/payroll/runs/${result.run.id}/pay`)
+    // قيد الصرف صالح حتى يصل الرفض إلى حد التصفية نفسه (B5 يتحقق من القناة والمرجع قبله)
+    const rejected = await request(financeApprover, 'POST', `/payroll/runs/${result.run.id}/pay`, { channel: 'BANK_TRANSFER', reference: `OT-TEST-${result.run.id}` })
     assert.equal(rejected.status, 409, JSON.stringify(rejected.body))
     assert.equal(rejected.body.code, 'OT_LEGACY_HOURS_UNRESOLVED')
     assert.deepEqual(await repo('PayrollRun').findOneByOrFail({ id: result.run.id }), beforeRun)

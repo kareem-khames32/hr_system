@@ -1,4 +1,6 @@
 import type { ApiPayrollItem } from '@/lib/api'
+// الخطوة 22 (B5): منسّق المبالغ الموحد (أرقام لاتينية بفواصل الآلاف) بدل الأرقام المخلوطة
+import { formatMoney, formatRate } from '../lib/money'
 
 interface SavedOvertime {
   id: number; date: string; approvedMinutes: number; hours: number; multiplier: number; hourlyRate: number; amount: number
@@ -31,8 +33,8 @@ export function PayrollOvertimeBreakdown({ item, currency, compact = false }: { 
         <td className="p-2 whitespace-nowrap">{row.date}{row.retroactive && <p className="text-xs text-amber-700">بأثر رجعي عن {row.originalPeriod}</p>}</td>
         <td className="p-2">{row.dayKind ? dayNames[row.dayKind] ?? 'غير موثق' : 'غير موثق تاريخيًا'}</td>
         <td className="p-2">{Math.floor(row.approvedMinutes / 60)} س {row.approvedMinutes % 60} د</td>
-        <td className="p-2">{row.hourlyRate.toLocaleString('ar-EG', { maximumFractionDigits: 6 })}</td>
-        <td className="p-2">×{row.multiplier}</td><td className="p-2 font-semibold text-success-700">{row.amount.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</td>
+        <td className="p-2">{formatRate(row.hourlyRate)}</td>
+        <td className="p-2">×{row.multiplier}</td><td className="p-2 font-semibold text-success-700">{formatMoney(row.amount)}</td>
       </tr>)}</tbody>
     </table>
     <p className="text-xs text-gray-500 mt-2">{rows.some(row => row.provenance === 'LEGACY') ? 'يتضمن سجلات سابقة محفوظة وقت حساب المسير.' : 'الساعات وأجر الساعة والمضاعف والقيمة مثبّتة عند اكتمال اعتماد الإضافي.'}</p>

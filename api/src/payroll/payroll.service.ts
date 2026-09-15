@@ -2,6 +2,7 @@ import {
   BadRequestException,
   ConflictException,
   ForbiddenException,
+  GoneException,
   Injectable,
   Logger,
   NotFoundException,
@@ -55,10 +56,22 @@ import { createHash } from 'node:crypto'
 import { localDateOf } from '../attendance/attendance.service'
 import { PayrollPolicy, PayrollPolicyVersion } from './payroll-policy.entities'
 import { payrollPolicyEffectiveEnds } from './payroll-policy-publish'
-import { PayrollRunDefinition, payrollRunDefinitionColumns, payrollRunDefinitionOf, payrollRunHasOrgFilters, payrollRunSelectionMode, PayrollRunExclusion, PayrollRunFilters } from './payroll-run-definition'
+import { PayrollRunDefinition, payrollRunDefinitionColumns, payrollRunDefinitionOf, payrollRunHasOrgFilters, payrollRunSelectionMode, PayrollRunExclusion, PayrollRunFilters, payrollLegacyCalculateAllowed } from './payroll-run-definition'
 import { PayrollMembershipRow, resolvePayrollRunMembership } from './payroll-run-membership'
 import { buildPayrollUnassignedReport, PAYROLL_EXCLUSION_LABELS, PayrollUnassignedReport } from './payroll-unassigned-report'
 import { PayrollRunUnassignedAck } from './payroll-run-definition.entities'
+// B4 / الخطوات 19–21: لقطة السياسة على المسير، ومحرك السياسة خلف engine_mode، والشرائح المؤرخة.
+import { capturePayrollRunPolicySnapshot, diffPayrollRunPolicySnapshots, parsePayrollRunPolicySnapshot, type PayrollRunPolicySnapshot } from './payroll-policy-snapshot'
+import { payrollLatenessTierDeduction } from './payroll-lateness-tiers'
+import { computePayrollPolicyEnginePreNet, parsePayrollEngineParityReport, PAYROLL_DEFAULT_ENGINE_MODE, PAYROLL_ENGINE_MODE_LABELS, PAYROLL_ENGINE_MODES, PAYROLL_PARITY_COMPONENTS,
+  payrollParityDifferenceKey, payrollParityEmployeeRow, payrollPolicySwitchIssues, summarizePayrollEngineParity, type PayrollEngineMode, type PayrollParityEmployeeRow,
+  payrollApprovalParityIssues, payrollParityPendingGroups, payrollShadowSourceIssueCodes, payrollPolicyEngineWithLoans, type PayrollPolicyEngineFacts } from './payroll-policy-engine-run'
+import { PayrollRunParityExplanation } from './payroll-lateness-tier-sets.entities'
+// B5 / الخطوات 22 و23: ترتيب تحصيل المالك، وانتقالات الحالة وفصل المهام وقيد الصرف، وفترة التكافؤ التشغيلية.
+import { readPayrollRunCollectionOrder, type PayrollRunCollectionOrder } from './payroll-collection-order'
+import { PAYROLL_CALCULATION_EVENT_TYPES, PAYROLL_PAY_CHANNEL_LABELS, PAYROLL_SELF_APPROVAL_KEY, payrollPayRecordIssue, payrollPayRecordOf, payrollRunStateIssue,
+  payrollSelfApprovalAllowed, payrollSelfApprovalIssue, type PayrollPayChannel } from './payroll-run-approval'
+import { summarizePayrollParityOperations } from './payroll-parity-operations'
 
 // الخطوة 16: مدخلات تعريف المسير من الشاشة (تُتحقق هنا ضد القاعدة؛ الـDTO يتحقق من الشكل فقط).
 export interface PayrollRunDefinitionInput {
@@ -102,25 +115,6 @@ export class PayrollService {
     private readonly config: Repository<RequestsConfig>,
     private readonly attendanceService: AttendanceService
   ) {}
-
-  // خصم تأخير يوم واحد بحسب شرائح التأخير المُعدّة (إن وُجدت)، وإلا بالدقيقة
-  private latenessForDay(
-    lateMin: number,
-    tiers: LatenessTier[],
-    dayRate: number,
-    minuteRate: number
-  ): number {
-    if (lateMin <= 0) return 0
-    const tier = tiers.find(
-      (t) =>
-        lateMin >= Number(t.fromMinutes) &&
-        (t.toMinutes == null || lateMin <= Number(t.toMinutes))
-    )
-    if (!tier) return lateMin * minuteRate // لا شريحة مطابقة → بالدقيقة (السلوك الافتراضي)
-    return tier.mode === 'FRACTION'
-      ? Number(tier.value) * dayRate
-      : lateMin * minuteRate
-  }
 
   private async cfg(key: string, fallback: string): Promise<string> {
     const row = await this.config.findOne({ where: { key } })
@@ -212,7 +206,8 @@ export class PayrollService {
     }
   }
 
-  private requireReason(reason?: string) {
+  // يقبل أي قيمة من الطلب (نص ناقص أو غير نصي) ويرد بكود عربي موحد بدل رسالة class-validator.
+  private requireReason(reason?: unknown) {
     if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > 500) {
       throw new BadRequestException({ code: 'PAYRUN-REASON-001', message: 'اكتب سببًا واضحًا للعملية، بحد أقصى 500 حرف' })
     }
@@ -440,6 +435,11 @@ export class PayrollService {
     refreshInstallmentPolicy?: boolean
     confirmEmptyScope?: boolean
     emptyScopeReason?: string | null
+    // الخطوة 19: تحديث لقطة السياسة بطلب صريح وبصمة الإعدادات الحالية التي عُرضت فروقها
+    refreshPolicySnapshot?: boolean
+    expectedPolicySnapshotHash?: string | null
+    // الخطوة 22 (B5): استبعاد موظف من مسير محسوب لحل تعارض — يُكتب في التعريف وتُعاد العضوية والمبالغ في المعاملة نفسها
+    addExclusions?: Array<{ employeeId: number; reason: string }>
   }) {
     const proposedRange = await this.periodRange(dto.period)
     const runId = await this.runs.manager.transaction(async em => {
@@ -484,9 +484,31 @@ export class PayrollService {
         throw this.stateError('إعادة الحساب', run.status)
       }
       if (run && !isDraft) this.requireReason(dto.reason)
+      // الخطوة 16 (مراجعة): المسير المرتبط بنسخة سياسة يُتحقق منه تحت قفل الحساب — المسودة لا تُحتسب إلا ونسختها منشورة
+      // وسارية على الفترة كاملة بالتواريخ نفسها، وأي مسير مرتبط بسياسة مملوكة لفرع يبقى داخل ذلك الفرع.
+      if (run?.policyVersionId) await this.assertRunPolicyAtCalculation(em, user, run, isDraft)
       if (!run && dto.name) await this.assertRunNameAvailable(em, dto.name, dto.period, null)
       const previousMembers = run ? await members.find({ where: { runId: run.id }, order: { employeeId: 'ASC' } }) : []
       const previousItems = run ? await items.find({ where: { runId: run.id }, order: { employeeId: 'ASC' } }) : []
+      // الخطوة 22 (B5): «استبعاد الموظف من هذا المسير» من شاشة التعارضات — لمسير محسوب له تعريف، والموظف داخل نسخة الحساب الحالية.
+      // الاستبعاد يُكتب في التعريف بسببه ومن استبعده، وإعادة الحساب نفسها (بسبب إلزامي ونسخة جديدة) تعيد العضوية والمبالغ.
+      let exclusionsAdded: PayrollRunExclusion[] = []
+      if (dto.addExclusions?.length) {
+        if (!run || isDraft || !run.definition) this.bad('PAYRUN-EXCLUSION-RUN', 'الاستبعاد مع إعادة الحساب متاح لمسير محسوب له تعريف؛ المسودة تُعدل من تعريفها')
+        const current = payrollRunDefinitionOf(run)
+        for (const row of dto.addExclusions) {
+          if (current.exclusions.some(item => item.employeeId === row.employeeId)) this.bad('PAYRUN-EXCLUSION-DUPLICATE', `الموظف رقم ${row.employeeId} مستبعد بالفعل من هذا المسير`)
+          if (!previousMembers.some(member => member.employeeId === row.employeeId && member.membershipStatus !== 'EXCLUDED')) {
+            this.bad('PAYRUN-EXCLUSION-NOT-MEMBER', `الموظف رقم ${row.employeeId} ليس داخل نسخة الحساب الحالية لهذا المسير`, { employeeId: row.employeeId })
+          }
+        }
+        const next = await this.normalizeRunDefinition(em, user, { filters: current.filters, exclusions: [...current.exclusions, ...dto.addExclusions],
+          confirmEmptyScope: !!current.emptyScope, emptyScopeReason: current.emptyScope?.reason ?? null }, current)
+        Object.assign(run, payrollRunDefinitionColumns(next))
+        exclusionsAdded = next.exclusions.filter(item => dto.addExclusions!.some(row => row.employeeId === item.employeeId))
+      }
+      // الخطوة 22 (B5): ترتيب تحصيل المالك من نسخة السياسة المجمدة (أو الترتيب الافتراضي)، للحساب القديم ومحرك السياسة معًا
+      const collection: PayrollRunCollectionOrder = await readPayrollRunCollectionOrder(em, run?.policyVersionId ?? null)
       const before = run ? { snapshotVersion: run.snapshotVersion ?? 0, totalNet: Number(run.totalNet), members: previousMembers, items: previousItems } : null
       const { startDate, endDate } = run ?? proposedRange
       const existing = Boolean(run) && !isDraft
@@ -506,41 +528,33 @@ export class PayrollService {
           })
       }
 
-      const monthlyDays = Number(await this.cfg('payroll.monthly_days', '30'))
-      const dailyHours = Number(await this.cfg('payroll.daily_hours', '8'))
-      if (!Number.isFinite(monthlyDays) || monthlyDays <= 0 || !Number.isFinite(dailyHours) || dailyHours <= 0) {
-        throw new BadRequestException('أساس أيام الشهر وساعات اليوم يجب أن يكونا أكبر من صفر')
-      }
-      const lateEnabled =
-        (await this.cfg('payroll.late_deduction_enabled', 'true')) === 'true'
-      const shortfallEnabledValue = await this.cfg('payroll.shortfall_enabled', 'true')
-      const shortfallMode = await this.cfg('payroll.shortfall_mode', 'MINUTES')
-      const shortfallValue = Number(await this.cfg('payroll.shortfall_value', '1'))
-      const overlapPolicy = await this.cfg('payroll.attendance_overlap_policy', 'NET_OF_LATENESS')
-      const dailyCapDays = Number(await this.cfg('payroll.attendance_daily_cap_days', '1'))
-      // D1: خصم الخروج المبكر على الوردية الثابتة (افتراضي مفعّل = السلوك القائم).
-      const earlyLeaveValue = await this.cfg('payroll.early_leave_deduction_enabled', 'true')
-      if (!['true', 'false'].includes(earlyLeaveValue)) throw new BadRequestException('إعداد خصم الخروج المبكر على الوردية الثابتة غير صالح')
-      if (!['true', 'false'].includes(shortfallEnabledValue) || !['MINUTES', 'MULTIPLIER', 'FRACTION'].includes(shortfallMode)
-        || !['CUMULATIVE', 'MAX_OF_BOTH', 'NET_OF_LATENESS'].includes(overlapPolicy)
-        || ![shortfallValue, dailyCapDays].every(value => Number.isFinite(value) && value >= 0)) {
-        throw new BadRequestException('سياسة نقص ساعات العمل أو التداخل أو السقف اليومي غير صالحة')
-      }
-      const exemptOvertime = await this.cfg('payroll.exempt_overtime_eligible', 'false')
-      const exemptUnpaid = await this.cfg('payroll.exempt_unpaid_leave_deductible', 'true')
-      if (![exemptOvertime, exemptUnpaid].every(value => ['true', 'false'].includes(value))) {
-        throw new BadRequestException('إعداد استحقاق المستثنى للإضافي أو خصم الإجازة بلا أجر غير صالح')
-      }
-      const exemptionDefaults = { overtimeEligible: exemptOvertime === 'true', unpaidLeaveDeductible: exemptUnpaid === 'true' }
+      // الخطوة 19: لقطة السياسة — أول حساب يلتقطها (نسخة السياسة والإعدادات والشرائح المؤرخة وأساس الأيام والبصمة)، وإعادة الحساب
+      // تقرأ منها لا من الإعدادات الحية، والتحديث بطلب صريح ببصمة الإعدادات الحالية التي عُرضت فروقها.
+      const snapshotStep = await this.policySnapshotForCalculation(em, user, run, { existing, refresh: dto.refreshPolicySnapshot === true,
+        expectedHash: dto.expectedPolicySnapshotHash ?? null })
+      const policySnapshot = snapshotStep.snapshot, policyValues = policySnapshot.values
+      const monthlyDays = policyValues.monthlyDays
+      const dailyHours = policyValues.dailyHours
+      const lateEnabled = policyValues.lateDeductionEnabled
+      const shortfallEnabledValue = String(policyValues.shortfallEnabled)
+      const shortfallMode = policyValues.shortfallMode
+      const shortfallValue = policyValues.shortfallValue
+      const overlapPolicy = policyValues.overlapPolicy
+      const dailyCapDays = policyValues.dailyCapDays
+      // D1: خصم الخروج المبكر على الوردية الثابتة (من اللقطة).
+      const earlyLeaveValue = String(policyValues.earlyLeaveDeductionEnabled)
+      const exemptionDefaults = { overtimeEligible: policyValues.exemptOvertimeEligible, unpaidLeaveDeductible: policyValues.exemptUnpaidLeaveDeductible }
+      // وضع دليل الراتب قاعدة إثبات بيانات يُعاد فحصها عند الاعتماد (الخطوة 13)، لا معدل حساب؛ يبقى من الإعداد الحالي.
       const salaryEvidenceMode = parsePayrollSalaryEvidenceMode(await this.cfg(PAYROLL_SALARY_EVIDENCE_MODE_KEY, 'MONTHLY_HISTORY'))
-      // معادلات مرنة: شرائح التأخير + معامل الغياب بلا إذن (يوم × المعامل)
-      const tiers = await this.latenessTiers.find({
-        where: { isActive: true },
-        order: { fromMinutes: 'ASC' },
-    })
-    const absencePenalty = Number(
-      await this.cfg('attendance.absence_penalty_days', '1')
-    )
+      // الخطوة 21: شرائح التأخير من المجموعة المؤرخة المحفوظة في اللقطة + معامل الغياب بلا إذن (يوم × المعامل)
+      const tiers = policySnapshot.latenessTiers.tiers
+      const absencePenalty = policyValues.absencePenaltyDays
+      // الخطوة 20 / D13: وضع المحرك للمسير (الجديد SHADOW)؛ POLICY يصرف نتيجة المحرك بشرط تكافؤ مفسر.
+      const engineMode: PayrollEngineMode = run.engineMode && PAYROLL_ENGINE_MODES.includes(run.engineMode) ? run.engineMode : PAYROLL_DEFAULT_ENGINE_MODE
+      const explainedKeys = new Set(run.id ? (await em.getRepository(PayrollRunParityExplanation).find({ where: { runId: run.id }, select: { differenceKey: true } })).map(row => row.differenceKey) : [])
+      const parityRows: PayrollParityEmployeeRow[] = []
+      const policyBlocked: Array<{ employeeId: number; component: string; legacy: string; policy: string | null; reason: string }> = []
+      const protectionSettings = { minNetGuarantee: policyValues.minNetGuarantee, netFloorPct: policyValues.netFloorPct, maxDeductionPctOfGross: policyValues.maxDeductionPctOfGross }
 
     // الخطوتان 16 و17: الأعضاء بالدالة نفسها التي تعرضها المعاينة — المكان في آخر يوم من الفترة، والاستبعاد اليدوي بسببه،
     // وراتب الشهر، والمحجوز في مسير معتمد/مصروف يُستبعد بكود EXC_ALREADY_IN_RUN ورقم المسير الآخر بدل إيقاف المسير كله.
@@ -555,8 +569,12 @@ export class PayrollService {
     })
     if (!membership.rows.length) this.assertScopeAccess(user, definition, [])
     // تحقق الجميع قبل تجسيد الحضور أو استبدال أي بند مالي.
-    const dataProblem = membership.rows.find(row => row.dataProblem)
-    if (dataProblem) throw new BadRequestException(dataProblem.dataProblem!.message)
+    const dataProblems = membership.rows.filter(row => row.dataProblem)
+    if (dataProblems.length) {
+      // كل الموظفين أصحاب المشكلة في رسالة واحدة، مع الطريق من الشاشة: صحح البيانات أو استبعده بسبب مكتوب من تعريف المسودة.
+      throw new BadRequestException({ code: 'PAYRUN-DATA-PROBLEM', employeeIds: dataProblems.map(row => row.employee.id),
+        message: `${dataProblems.map(row => row.dataProblem!.message).join('؛ ')} — صحح بيانات الخدمة أو استبعد الموظف بسبب مكتوب من تعريف المسودة ثم احتسبها` })
+    }
     this.assertNonEmptyScope(membership.candidateCount, definition, dto)
     const covered = []
     const capturedAt = new Date().toISOString()
@@ -710,8 +728,11 @@ export class PayrollService {
         shortfallMode: shortfallMode as AttendanceDeductionPolicy['shortfallMode'], shortfallValue,
         overlapPolicy: overlapPolicy as AttendanceDeductionPolicy['overlapPolicy'], dailyCapDays, dayRate, minuteRate,
         earlyLeaveEnabled: earlyLeaveValue === 'true' }
-      const attendanceDeductionDays = attRows.map(row => attendanceDeductionDay(row, attendancePolicy,
-        this.latenessForDay(row.lateMinutes, tiers, dayRate, minuteRate)))
+      // الخطوة 21: أثر الشريحة لكل يوم (المدى والطريقة والمضاعف والمعادلة) محفوظ مع اليوم ويظهر في القسيمة.
+      const attendanceDeductionDays = attRows.map(row => {
+        const tier = payrollLatenessTierDeduction(row.lateMinutes, tiers, dayRate, minuteRate)
+        return { ...attendanceDeductionDay(row, attendancePolicy, tier.amount), latenessTier: tier.trace }
+      })
       // المجموع التاريخي يشمل الأذونات المدفوعة؛ تفصيل اليوم يميز مبلغها صراحةً.
       const latenessRequested = round2(attendanceDeductionDays.reduce((sum, day) => sum + day.latenessAmount + day.permissionAmount, 0))
       const shortfallMinutes = attRows.reduce((sum, day) => sum + Number(day.shortfallMinutes ?? 0), 0)
@@ -725,7 +746,8 @@ export class PayrollService {
       const absenceRequested = round2(absenceDays * dayRate * absencePenalty)
       // D13/الخطوة 28: محرك السياسة بوضع SHADOW بجانب الحساب القديم لنفس الموظف والفترة (المصروف = القديم دائمًا):
       // مزودات المصادر الحية (ومنها نسب الوردية الليلية ليوم بدايتها) ← منفذ البنود ← تكافؤ يومي. قراءة فقط ولا يغير أي مبلغ.
-      const policyShadow = await readPayrollShadowAttendance(em, { employeeId: emp.id, periodStart: startDate, periodEnd: endDate, monthlyComponents,
+      // الخطوة 20: وضع LEGACY لا يحسب الظل؛ SHADOW وPOLICY يحسبانه على نفس اللقطة (الشرائح والمعاملات المجمدة).
+      const policyShadow = engineMode === 'LEGACY' ? null : await readPayrollShadowAttendance(em, { employeeId: emp.id, periodStart: startDate, periodEnd: endDate, monthlyComponents,
         rules: { monthlyDays, dailyHours, lateEnabled, shortfallEnabled: shortfallEnabledValue === 'true', shortfallMode, shortfallValue, overlapPolicy,
           dailyCapDays, earlyLeaveEnabled: earlyLeaveValue === 'true', absencePenalty, latenessTiers: tiers },
         legacy: { days: attendanceDeductionDays.map(day => ({ date: day.date, lateness: day.latenessAmount + day.permissionAmount, shortfall: day.shortfallAmount })),
@@ -768,13 +790,29 @@ export class PayrollService {
       const typedObligationFacts = await readTypedObligationFacts(em, pendingObligations)
       const obligationEntry = (o: EmployeeObligation) => ({ id: o.id, amount: round2(Number(o.amount)), category: o.category,
         deductionRequestId: o.deductionRequestId ?? null, effectiveDate: o.effectiveDate ?? null, ...typedObligationFacts.get(o.id) })
-      const netProtection = protectPayrollObligations({
+      const protectionInput = {
         earnedFixedGross: grossEarned, overtime: otAmount, unpaidLeave: unpaidDeduction,
         attendance: { lateness: latenessRequested, shortfall: shortfallRequested, absence: absenceRequested },
         credits: pendingObligations.filter((o) => o.type === 'CREDIT').map(obligationEntry),
         debits: pendingObligations.filter((o) => o.type === 'DEBIT').map(obligationEntry),
-        settings: await readPayrollNetProtectionSettings(em),
-      })
+        // الخطوة 19: أرضية الصافي وسقف الخصم من لقطة السياسة (النسخة المنشورة أولًا ثم الإعداد العام وقت الالتقاط).
+        settings: protectionSettings,
+        // الخطوة 22 (B5): ترتيب تحصيل المالك من نسخة السياسة؛ null = الترتيب الافتراضي كما هو
+        collectionOrder: collection.order,
+      }
+      let netProtection = protectPayrollObligations(protectionInput)
+      // خطة الأقساط على رصيد موضع السلف في ترتيب التحصيل؛ الافتراضي (السلف آخرًا) = الصافي قبل الأقساط وما استهلكته الخصومات كما كان.
+      const loanSlot = netProtection.loanSlot
+      const previousBreakdown = previousItems.find(row => row.employeeId === emp.id)?.breakdown
+      const previousPlan = previousBreakdown ? JSON.parse(previousBreakdown).installmentPlan : null
+      if (previousPlan != null && !isPayrollInstallmentPlan(previousPlan)) throw new ConflictException('خطة أقساط المسير السابقة غير صالحة')
+      const installmentPlan = await buildPayrollInstallmentPlan(em, emp.id, {
+        period: run.period, endDate, netBeforeLoans: loanSlot.netBeforeLoans.toFixed(2), earnedFixedGross: grossEarned.toFixed(2),
+        capConsumed: loanSlot.capConsumed.toFixed(2),
+      }, { runId: run.id, policy: !dto.refreshInstallmentPolicy && previousPlan ? previousPlan.policy : undefined })
+      const loanDeduction = installmentPlan ? legacyInstallmentNumber(installmentPlan.allocation.totals.deductedAmount) : 0
+      // السلف قبل فئات أخرى بترتيب المالك: تُعاد الحماية بالأقساط المحصلة في موضعها فتتقلص الفئات التالية لها.
+      if (collection.loanBeforeOthers && loanDeduction > 0) netProtection = protectPayrollObligations({ ...protectionInput, loanCollected: loanDeduction })
       const latenessDeduction = netProtection.attendance.lateness
       const shortfallDeduction = netProtection.attendance.shortfall
       const absenceDeduction = netProtection.attendance.absence
@@ -791,56 +829,109 @@ export class PayrollService {
           unpaidDeduction -
           otherDeductions
       )
-      const previousBreakdown = previousItems.find(row => row.employeeId === emp.id)?.breakdown
-      const previousPlan = previousBreakdown ? JSON.parse(previousBreakdown).installmentPlan : null
-      if (previousPlan != null && !isPayrollInstallmentPlan(previousPlan)) throw new ConflictException('خطة أقساط المسير السابقة غير صالحة')
-      const installmentPlan = await buildPayrollInstallmentPlan(em, emp.id, {
-        period: run.period, endDate, netBeforeLoans: netBeforeLoans.toFixed(2), earnedFixedGross: grossEarned.toFixed(2),
-        capConsumed: round2(latenessDeduction + shortfallDeduction + absenceDeduction + otherDeductions).toFixed(2),
-      }, { runId: run.id, policy: !dto.refreshInstallmentPolicy && previousPlan ? previousPlan.policy : undefined })
-      const loanDeduction = installmentPlan ? legacyInstallmentNumber(installmentPlan.allocation.totals.deductedAmount) : 0
       const netPay = round2(netBeforeLoans - loanDeduction)
-      totalNet = round2(totalNet + netPay)
+      // الخطوة 20 / D13: محرك السياسة على نفس الموظف ونفس المدخلات المجمدة (راتب شهر المسير، التغطية، الإضافي المعتمد، الإجازة بلا أجر،
+      // قيود الدفتر، خصومات الحضور من منفذ الأيام) بسياسة افتراضية تقلّد القديم، ثم تقرير تكافؤ لكل بند. POLICY يصرف نتيجته.
+      let paid = { earnedComponents, salaryComponents, grossEarned, latenessDeduction, shortfallDeduction, absenceDeduction, otherDeductions, otherAdditions,
+        unpaidDeduction, installmentPlan, loanDeduction, netPay, netProtection, loanSlot }
+      let engineTrace: Record<string, unknown> = { mode: engineMode, paidResult: 'LEGACY', parityStatus: null }
+      if (engineMode !== 'LEGACY') {
+        const shadowTotals = policyShadow && 'totals' in policyShadow && policyShadow.totals?.policy && ['MATCHED', 'DIFFERENT'].includes(policyShadow.status) ? policyShadow.totals.policy : null
+        const engineFacts: PayrollPolicyEngineFacts = { employeeId: emp.id, period: run.period, periodStart: startDate, periodEnd: endDate, monthlyComponents,
+          coverDays, periodDays: Math.round((Date.parse(`${endDate}T12:00:00Z`) - Date.parse(`${startDate}T12:00:00Z`)) / 86400000) + 1, fullCoverage,
+          dailyHours, monthlyDays, lateDeductionEnabled: lateEnabled, currency: policyValues.currency, overtimeAmount: otAmount, unpaidLeaveDays: unpaidDays,
+          credits: pendingObligations.filter(o => o.type === 'CREDIT').map(obligationEntry), debits: pendingObligations.filter(o => o.type === 'DEBIT').map(obligationEntry),
+          protectionSettings, attendance: { status: policyShadow?.status ?? 'UNAVAILABLE',
+            totals: shadowTotals ? { lateness: shadowTotals.lateness, shortfall: shadowTotals.shortfall, absence: shadowTotals.absence } : null,
+            message: policyShadow?.message ?? 'لم يُحسب ظل الحضور' },
+          // الخطوة 22 (B5): ترتيب التحصيل نفسه للمحركين، فيقيس التكافؤ الحساب لا اختلاف الترتيب
+          collectionOrder: collection.order }
+        const preNet = computePayrollPolicyEnginePreNet(engineFacts)
+        let policyPlan = installmentPlan, policyLoans: number | null = null, policyFinal = preNet
+        if (preNet.netBeforeLoans !== null && preNet.grossEarned !== null && preNet.capConsumed !== null && preNet.protection) {
+          // الأقساط تتبع رصيد موضعها في ترتيب التحصيل: نفس السياق = نفس الخطة، وإلا تُبنى خطة من أرقام المحرك بسياسة الأقساط نفسها.
+          const policySlot = preNet.protection.loanSlot
+          if (policySlot.netBeforeLoans.toFixed(2) !== loanSlot.netBeforeLoans.toFixed(2) || preNet.grossEarned.toFixed(2) !== grossEarned.toFixed(2) || policySlot.capConsumed.toFixed(2) !== loanSlot.capConsumed.toFixed(2)) {
+            policyPlan = await buildPayrollInstallmentPlan(em, emp.id, { period: run.period, endDate, netBeforeLoans: policySlot.netBeforeLoans.toFixed(2),
+              earnedFixedGross: preNet.grossEarned.toFixed(2), capConsumed: policySlot.capConsumed.toFixed(2) },
+            { runId: run.id, policy: !dto.refreshInstallmentPolicy && previousPlan ? previousPlan.policy : undefined })
+          }
+          policyLoans = policyPlan ? legacyInstallmentNumber(policyPlan.allocation.totals.deductedAmount) : 0
+          if (collection.loanBeforeOthers) policyFinal = payrollPolicyEngineWithLoans(preNet, engineFacts, policyLoans)
+        }
+        const policyNet = policyFinal.netBeforeLoans === null || policyLoans === null ? null : round2(policyFinal.netBeforeLoans - policyLoans)
+        const parity = payrollParityEmployeeRow({ employeeId: emp.id,
+          legacy: { basicSalary: earnedComponents[0], allowances: round2(earnedComponents.slice(1).reduce((sum, amount) => sum + amount, 0)), overtimeAmount: otAmount, otherAdditions,
+            latenessDeduction, shortfallDeduction, absenceDeduction, unpaidLeaveDeduction: unpaidDeduction, otherDeductions, loanInstallments: loanDeduction, netPay },
+          legacyAttendanceRequested: { lateness: latenessRequested, shortfall: shortfallRequested, absence: absenceRequested },
+          policy: { ...policyFinal.amounts, loanInstallments: policyLoans, netPay: policyNet }, preNet: policyFinal, attendanceShadowStatus: policyShadow?.status ?? 'SKIPPED',
+          // خطة المصادر: رموز مشاكل مصادر الظل التي غابت بسببها قيم المحرك
+          sourceIssueCodes: payrollShadowSourceIssueCodes(policyShadow) })
+        parityRows.push(parity)
+        engineTrace = { mode: engineMode, paidResult: 'LEGACY', parityStatus: parity.status, differences: parity.components.filter(row => row.differenceKey).length, execution: preNet.execution }
+        if (engineMode === 'POLICY') {
+          for (const row of parity.components) if (row.differenceKey && (row.policy === null || !explainedKeys.has(row.differenceKey))) {
+            policyBlocked.push({ employeeId: emp.id, component: row.code, legacy: row.legacy, policy: row.policy, reason: row.policy === null ? row.reason ?? 'قيمة غائبة' : 'فرق بلا سبب مكتوب' })
+          }
+          if (policyFinal.earnedComponents && policyFinal.protection && policyFinal.grossEarned !== null && policyNet !== null && policyLoans !== null) {
+            const policyEarned = policyFinal.earnedComponents
+            paid = { earnedComponents: policyEarned, grossEarned: policyFinal.grossEarned,
+              salaryComponents: MONTHLY_SALARY_COMPONENTS.map((component, index) => ({ code: component.code, nameAr: component.nameAr, nameEn: component.nameEn,
+                monthlyAmount: monthlyCents[index] / 100, earnedAmount: policyEarned[index] })),
+              latenessDeduction: policyFinal.protection.attendance.lateness, shortfallDeduction: policyFinal.protection.attendance.shortfall, absenceDeduction: policyFinal.protection.attendance.absence,
+              otherDeductions: policyFinal.protection.otherDeductions, otherAdditions: policyFinal.protection.otherAdditions, unpaidDeduction: policyFinal.amounts.unpaidLeaveDeduction ?? 0,
+              installmentPlan: policyPlan, loanDeduction: policyLoans, netPay: policyNet, netProtection: policyFinal.protection, loanSlot: policyFinal.protection.loanSlot }
+            engineTrace = { ...engineTrace, paidResult: 'POLICY', legacyResult: parity.components.map(row => ({ code: row.code, legacy: row.legacy, policy: row.policy })) }
+            Object.assign(member.snapshot!, { grossEarned: paid.grossEarned, earnedComponents: paid.earnedComponents, salaryComponents: paid.salaryComponents })
+          }
+        }
+      }
+      totalNet = round2(totalNet + paid.netPay)
 
       prepared.push(
         items.create({
           employeeId: emp.id,
-          basicSalary: earnedComponents[0],
-          allowances: round2(earnedComponents.slice(1).reduce((sum, amount) => sum + amount, 0)),
+          // الخطوة 20: المصروف = القديم (LEGACY/SHADOW) أو نتيجة المحرك (POLICY) — paid يحمل المصدر المختار
+          basicSalary: paid.earnedComponents[0],
+          allowances: round2(paid.earnedComponents.slice(1).reduce((sum, amount) => sum + amount, 0)),
           overtimeHours: otHours,
           overtimeAmount: otAmount,
           lateMinutes,
-          latenessDeduction,
+          latenessDeduction: paid.latenessDeduction,
           shortfallMinutes,
-          shortfallDeduction,
+          shortfallDeduction: paid.shortfallDeduction,
           absenceDays,
-          absenceDeduction,
+          absenceDeduction: paid.absenceDeduction,
           unpaidLeaveDays: unpaidDays,
-          unpaidLeaveDeduction: unpaidDeduction,
-          loanInstallments: loanDeduction,
-          otherDeductions,
-          otherAdditions,
-          netPay,
+          unpaidLeaveDeduction: paid.unpaidDeduction,
+          loanInstallments: paid.loanDeduction,
+          otherDeductions: paid.otherDeductions,
+          otherAdditions: paid.otherAdditions,
+          netPay: paid.netPay,
           payMethod: emp.payMethod ?? 'transfer',
           breakdown: JSON.stringify({
             ...coverage,
             monthlyDays,
             dailyHours,
             gross,
-            grossEarned,
+            grossEarned: paid.grossEarned,
             monthlyBasicSalary: basic,
             monthlyAllowances: allowances,
             monthlyComponents,
-            earnedComponents,
-            salaryComponents,
+            earnedComponents: paid.earnedComponents,
+            salaryComponents: paid.salaryComponents,
             salarySource: salary.source,
             prorataFactor: Math.round(prorataFactor * 1e6) / 1e6,
             prorationBasis: 'MONTHLY_DAYS',
             attendanceExemptions,
             attendanceDeductions: { policy: attendancePolicy, days: attendanceDeductionDays,
-              totals: { lateMinutes, shortfallMinutes, latenessDeduction, shortfallDeduction } },
+              totals: { lateMinutes, shortfallMinutes, latenessDeduction: paid.latenessDeduction, shortfallDeduction: paid.shortfallDeduction },
+              // الخطوة 21: مجموعة الشرائح المؤرخة المطبقة (من لقطة السياسة)
+              latenessTierSet: { setId: policySnapshot.latenessTiers.setId, effectivePeriod: policySnapshot.latenessTiers.effectivePeriod, contentHash: policySnapshot.latenessTiers.contentHash } },
             attendanceRules: attRows.map(row => this.attendanceRuleTrace(row)),
             policyShadow,
+            policyEngine: engineTrace,
+            policySnapshotHash: policySnapshot.fingerprint,
             exemptDays,
             isAttendanceExempt,
             exemptUnpaidLeaveDays,
@@ -849,11 +940,14 @@ export class PayrollService {
             hourRate: round2(hourRate),
             overtimeEntryIds: otRows.map((r) => r.id),
             overtime: overtimeDetails,
-            installmentPlan,
-            installmentIds: installmentPlan?.allocation.lines.filter(line => line.eligible).map(line => Number(line.installmentRef)) ?? [],
-            obligationIds: netProtection.consumedObligationIds,
-            obligationLines: netProtection.lines,
-            netProtection: netProtection.trace,
+            // الخطوة 22 (B5): ترتيب التحصيل المطبق ومصدره، ورصيد موضع السلف حين تسبق فئات أخرى (يتحقق منه الاعتماد مع خطة الأقساط)
+            collection: { source: collection.source, versionId: collection.versionId, order: collection.effectiveOrder, ownerOrder: collection.order !== null,
+              loanSlot: collection.loanBeforeOthers ? paid.loanSlot : null },
+            installmentPlan: paid.installmentPlan,
+            installmentIds: paid.installmentPlan?.allocation.lines.filter(line => line.eligible).map(line => Number(line.installmentRef)) ?? [],
+            obligationIds: paid.netProtection.consumedObligationIds,
+            obligationLines: paid.netProtection.lines,
+            netProtection: paid.netProtection.trace,
             absentDates: absentRows.map((r) => r.date),
             // تتبّع مصدر الخصم للتدقيق/الاعتراض: صفوف الحضور المخصومة والإجازات
             attendanceDayIds: attRows
@@ -871,9 +965,24 @@ export class PayrollService {
       )
     }
 
+    // الخطوة 20: POLICY لا يصرف نتيجة فيها قيمة غائبة أو فرق بلا سبب مكتوب؛ تُرجع المعاملة كلها.
+    if (policyBlocked.length) {
+      throw new ConflictException({ code: 'PAYRUN-POLICY-PARITY-UNEXPLAINED',
+        message: `وضع POLICY يصرف نتيجة محرك السياسة، ويوجد ${policyBlocked.length} فرقًا بلا سبب مكتوب أو بقيمة غائبة؛ اكتب سبب كل فرق من «محرك الحساب» أو أعد المسير إلى SHADOW`,
+        issues: policyBlocked.slice(0, 100) })
+    }
     run.totalNet = totalNet
     run.status = 'CALCULATED'
     run.snapshotVersion = (run.snapshotVersion ?? 0) + 1
+    // الخطوة 22 (B5): من احتسب هذه النسخة ومتى — فصل المهام عند الاعتماد (PAYRUN-STATE-003)
+    run.calculatedBy = user.sub
+    run.calculatedAt = new Date()
+    // الخطوتان 19 و20: اللقطة ووضع المحرك وتقرير التكافؤ لنسخة الحساب نفسها
+    run.engineMode = engineMode
+    run.policySnapshot = JSON.stringify(policySnapshot)
+    run.policySnapshotHash = policySnapshot.fingerprint
+    const parityReport = summarizePayrollEngineParity({ engineMode, snapshotVersion: run.snapshotVersion, policySnapshotHash: policySnapshot.fingerprint, rows: parityRows })
+    run.parityReport = JSON.stringify(parityReport)
     run = await runs.save(run)
     if (existing) {
       await items.delete({ runId: run.id })
@@ -912,7 +1021,13 @@ export class PayrollService {
     await this.event(em, user, run.id, existing ? 'RECALCULATED' : isDraft ? 'CALCULATED' : 'CREATED', existing ? this.requireReason(dto.reason) : null,
       { before, after, diff, refreshInstallmentPolicy: dto.refreshInstallmentPolicy === true,
         allowDraftConflicts: dto.allowDraftConflicts === true, conflictRunIds: [...new Set(conflicts.map(row => row.otherRunId))],
-        periodContinuity: periodContinuity.map(({ otherRunId: _otherRunId, otherRunName: _otherRunName, ...issue }) => issue) })
+        periodContinuity: periodContinuity.map(({ otherRunId: _otherRunId, otherRunName: _otherRunName, ...issue }) => issue),
+        // الخطوة 19: مصدر اللقطة (أول حساب / محفوظة / محدّثة بطلب صريح) وفروق التحديث؛ الخطوة 20: الوضع وبصمة تقرير التكافؤ
+        policySnapshot: { mode: snapshotStep.mode, hash: policySnapshot.fingerprint, previousHash: snapshotStep.previousHash, differences: snapshotStep.differences },
+        engine: { mode: engineMode, parityReportHash: parityReport.reportHash, totals: parityReport.totals },
+        // الخطوة 22 (B5): ترتيب التحصيل المطبق، والاستبعاد المضاف لحل تعارض (بسببه ومن استبعده)
+        collection: { source: collection.source, order: collection.effectiveOrder, versionId: collection.versionId },
+        ...(exclusionsAdded.length ? { exclusionsAdded } : {}) })
     return run.id
     })
     return this.detail(user, runId)
@@ -935,8 +1050,14 @@ export class PayrollService {
     const netBefore = round2(earned + Number(item.overtimeAmount) + Number(item.otherAdditions) - consumed - Number(item.unpaidLeaveDeduction))
     const deducted = legacyInstallmentNumber(plan.allocation.totals.deductedAmount)
     const ids = plan.allocation.lines.filter(line => line.eligible).map(line => Number(line.installmentRef)).sort((a, b) => a - b)
+    // الخطوة 22 (B5): لو سبقت السلف فئات أخرى بترتيب المالك فخطة الأقساط على رصيد موضعها المحفوظ، لا على الصافي بعد كل الخصومات.
+    const slot = breakdown.collection?.loanSlot ?? null
+    if (slot !== null && (typeof slot !== 'object' || !Number.isFinite(Number(slot.netBeforeLoans)) || !Number.isFinite(Number(slot.capConsumed)))) {
+      throw new ConflictException('رصيد موضع السلف المحفوظ في تفصيل المسير غير صالح؛ أعد حساب المسودة')
+    }
+    const planNet = slot ? Number(slot.netBeforeLoans).toFixed(2) : netBefore.toFixed(2), planCap = slot ? Number(slot.capConsumed).toFixed(2) : consumed.toFixed(2)
     if (plan.context.period !== run.period || plan.context.endDate !== run.endDate || plan.context.earnedFixedGross !== earned.toFixed(2) ||
-        plan.context.capConsumed !== consumed.toFixed(2) || plan.context.netBeforeLoans !== netBefore.toFixed(2) ||
+        plan.context.capConsumed !== planCap || plan.context.netBeforeLoans !== planNet ||
         Number(item.loanInstallments) !== deducted || Number(item.netPay) !== round2(netBefore - deducted) ||
         !Array.isArray(breakdown.installmentIds) || JSON.stringify([...breakdown.installmentIds].sort((a, b) => a - b)) !== JSON.stringify(ids)) {
       throw new ConflictException('مبالغ المسير أو مصادره لا تطابق خطة الأقساط المحفوظة؛ أعد حساب المسودة')
@@ -952,9 +1073,21 @@ export class PayrollService {
       const run = await runs.findOne({ where: { id: runId } })
       if (!run) throw new NotFoundException('المسير غير موجود')
       await this.assertRunAccess(user, run, em)
-      if (run.status !== 'CALCULATED') {
-        throw new BadRequestException('المسير ليس بحالة محسوبة')
+      // الخطوة 22 (B5): خطأ الحالة برمز PAYRUN-STATE-001 والحالة الحالية والحالات المتاحة (SRS PR-11)
+      if (run.status !== 'CALCULATED') throw new BadRequestException(payrollRunStateIssue('اعتماد المسير', run.status, ['CALCULATED']))
+      // فصل المهام: لا يعتمد المسير من احتسب نسخته الحالية، إلا برخصة الشركة الصغيرة المفعّلة صراحةً (تُسجل في حدث الاعتماد).
+      const calculatedBy = await this.runCalculator(em, run)
+      const selfApprovalAllowed = payrollSelfApprovalAllowed(await this.cfg(PAYROLL_SELF_APPROVAL_KEY, 'false'))
+      const selfApproval = payrollSelfApprovalIssue({ calculatedBy, approverId: user.sub, selfApprovalAllowed })
+      if (selfApproval) throw new ForbiddenException(selfApproval)
+      // الخطوة 19: لا اعتماد بلا لقطة سياسة سليمة (بصمتها ومحتواها وشهرها)؛ اللقطة المعدلة خارج الشاشة ترفض بـPAYRUN-POLICY-SNAPSHOT-INVALID.
+      const policySnapshot = parsePayrollRunPolicySnapshot(run)
+      if (!policySnapshot) {
+        throw new ConflictException({ code: 'PAYRUN-POLICY-SNAPSHOT-MISSING',
+          message: 'المسير محسوب قبل حفظ لقطة السياسة (الخطوة 19)؛ لا يُعتمد قبل إعادة حسابه مع «تحديث اللقطة» بعد مراجعة فروقها' })
       }
+      // الخطوة 20: تقرير تكافؤ SHADOW/POLICY لنسخة الحساب نفسها يغطي كل بنود المسير، وكل فرق أو قيمة غائبة له سبب مكتوب.
+      const parity = await this.assertApprovalParity(em, run, policySnapshot.fingerprint)
       // الخطوة 18 / PR-07: لا اعتماد قبل إقرار موثق بتقرير «موظفون بلا مسير» لنسخة الحساب نفسها وببصمة التقرير الحالية.
       const unassignedAck = await this.assertUnassignedAcknowledged(em, user, run)
       const items = await em.getRepository(PayrollItem).find({ where: { runId } })
@@ -979,22 +1112,30 @@ export class PayrollService {
       run.approvedAt = new Date()
       await runs.save(run)
       await this.event(em, user, run.id, 'APPROVED', null, { snapshotVersion: run.snapshotVersion, employeeIds, totalNet: Number(run.totalNet),
-        unassignedAckId: unassignedAck.id, unassignedReportHash: unassignedAck.reportHash })
+        unassignedAckId: unassignedAck.id, unassignedReportHash: unassignedAck.reportHash,
+        // الخطوتان 19 و20: بصمة لقطة السياسة المتحقق منها ووضع المحرك وتقرير التكافؤ المرفق بالمسير المعتمد وأسبابه المكتوبة
+        policySnapshotHash: policySnapshot.fingerprint, engineMode: run.engineMode,
+        parityReportHash: parity.report.reportHash, parityTotals: parity.report.totals, parityExplanationIds: parity.explanationIds,
+        parityExplained: parity.explained,
+        // الخطوة 22 (B5): من احتسب، واستخدام رخصة الشركة الصغيرة (المعتمِد هو المحتسِب) إن وقع
+        calculatedBy, smallCompanyException: calculatedBy === user.sub, selfApprovalSetting: selfApprovalAllowed })
       return run
     })
   }
 
   // ===== الصرف: يقفل الأوفرتايم والأقساط المرتبطة =====
-  async pay(user: JwtPayload, runId: number) {
+  async pay(user: JwtPayload, runId: number, dto: { channel?: unknown; reference?: unknown } = {}) {
     return this.runs.manager.transaction(async em => {
       await this.lockRun(em, runId)
       const runs = em.getRepository(PayrollRun)
       const run = await runs.findOne({ where: { id: runId } })
       if (!run) throw new NotFoundException('المسير غير موجود')
       await this.assertRunAccess(user, run, em)
-      if (run.status !== 'APPROVED') {
-        throw new BadRequestException('المسير غير معتمد')
-      }
+      // الخطوة 22 (B5): الصرف من «معتمد» فقط (PAYRUN-STATE-001)، ثم قيد الصرف (القناة والمرجع) قبل أي كتابة
+      if (run.status !== 'APPROVED') throw new BadRequestException(payrollRunStateIssue('صرف المسير', run.status, ['APPROVED']))
+      const payIssue = payrollPayRecordIssue(dto)
+      if (payIssue) throw new BadRequestException(payIssue)
+      const payRecord = payrollPayRecordOf(dto)
       const items = await em.getRepository(PayrollItem).find({ where: { runId } })
       const employeeIds = await this.validateRunMembers(em, run, items)
       await lockPayrollEmployees(em, employeeIds)
@@ -1022,25 +1163,36 @@ export class PayrollService {
       }
       run.status = 'PAID'
       run.paidAt = new Date()
+      // قيد الصرف: من صرف وقناته ومرجعه على المسير وفي حدث الصرف
+      run.paidBy = user.sub
+      run.payChannel = payRecord.channel
+      run.payReference = payRecord.reference
       await runs.save(run)
-      await this.event(em, user, run.id, 'PAID', null, { snapshotVersion: run.snapshotVersion, totalNet: Number(run.totalNet), employeeIds })
+      await this.event(em, user, run.id, 'PAID', null, { snapshotVersion: run.snapshotVersion, totalNet: Number(run.totalNet), employeeIds,
+        paidBy: user.sub, channel: payRecord.channel, channelLabel: PAYROLL_PAY_CHANNEL_LABELS[payRecord.channel], reference: payRecord.reference })
       return run
     })
   }
 
   // ===== الاستعلام (بنطاق الفرع) =====
   async list(user: JwtPayload) {
-    const runs = await this.runs.find({ order: { period: 'DESC', id: 'DESC' } })
+    const runs = (await this.runs.find({ order: { period: 'DESC', id: 'DESC' } })).map(run => this.lightRun(run))
     if (branchScopeOf(user) === null) return runs
     const result: PayrollRun[] = []
     for (const run of runs) {
       try { result.push(await this.readRun(run.id, async (em, current) => {
         await this.assertRunAccess(user, current, em)
-        return current
+        return this.lightRun(current)
       })) }
       catch (error) { if (!(error instanceof ForbiddenException)) throw error }
     }
     return result
+  }
+
+  // الخطوتان 19 و20: نص اللقطة والتقرير الخام لا يُعاد في القوائم والقسيمة؛ التفاصيل عبر engine وpolicy-snapshot.
+  private lightRun(run: PayrollRun): PayrollRun {
+    const { policySnapshot: _snapshot, parityReport: _report, ...rest } = run
+    return rest as PayrollRun
   }
 
   async detail(user: JwtPayload, runId: number) {
@@ -1078,7 +1230,26 @@ export class PayrollService {
     // الخطوة 16: التعريف (فلاتر/قائمة/استبعادات) ونسخة السياسة، وإخفاء رقم مسير الحجز خارج النطاق في عضوية EXC_ALREADY_IN_RUN.
     const selection = payrollRunDefinitionOf(run)
     const policyVersion = await this.runPolicyView(em, run)
-    return { ...run, items, members: await this.visibleMembers(user, members, em), conflicts, pendingOvertime, periodContinuity, selection, policyVersion }
+    // الخطوة 20: وضع المحرك وتقرير التكافؤ وأسبابه وشروط التحويل إلى POLICY (النص الخام للقطة والتقرير لا يُعاد مرتين)
+    const engine = await this.engineView(em, run)
+    // الخطوة 22 (B5): من احتسب ومن اعتمد ومن صرف بأسمائهم، وفصل المهام للمستخدم الحالي، وقيد الصرف، وترتيب التحصيل المطبق
+    const calculatedBy = await this.runCalculator(em, run)
+    const names = await this.userNames(em, [calculatedBy, run.approvedBy, run.paidBy])
+    const actor = (id: number | null | undefined, at: Date | null | undefined) => id == null ? null : { id, name: names.get(id) ?? null, at: at ?? null }
+    const selfApprovalAllowed = payrollSelfApprovalAllowed(await this.cfg(PAYROLL_SELF_APPROVAL_KEY, 'false'))
+    const actors = { calculated: actor(calculatedBy, run.calculatedAt), approved: actor(run.approvedBy, run.approvedAt), paid: actor(run.paidBy, run.paidAt) }
+    const approvalGuard = run.status === 'CALCULATED'
+      ? { calculatedBy, selfApprovalAllowed, blocked: payrollSelfApprovalIssue({ calculatedBy, approverId: user.sub, selfApprovalAllowed }) } : null
+    const payRecord = run.status === 'PAID' ? { paidBy: actors.paid, channel: run.payChannel,
+      channelLabel: run.payChannel ? PAYROLL_PAY_CHANNEL_LABELS[run.payChannel as PayrollPayChannel] ?? run.payChannel : null, reference: run.payReference } : null
+    let collection: PayrollRunCollectionOrder | { source: 'INVALID'; message: string }
+    try { collection = await readPayrollRunCollectionOrder(em, run.policyVersionId ?? null) }
+    catch (error) {
+      if (!(error instanceof ConflictException)) throw error
+      collection = { source: 'INVALID', message: (error.getResponse() as { message?: string }).message ?? 'ترتيب التحصيل في نسخة السياسة غير صالح' }
+    }
+    return { ...this.lightRun(run), items, members: await this.visibleMembers(user, members, em), conflicts, pendingOvertime, periodContinuity, selection, policyVersion, engine,
+      actors, approvalGuard, payRecord, collection }
     })
   }
 
@@ -1150,7 +1321,9 @@ export class PayrollService {
       }
       }
     }
-    return events
+    // الخطوة 22 (B5): اسم من فعل كل حدث للوحة «سجل المسير»
+    const names = await this.userNames(em, events.map(event => event.actorUserId))
+    return events.map(event => ({ ...event, actorName: names.get(event.actorUserId) ?? null }))
     })
   }
 
@@ -1197,7 +1370,7 @@ export class PayrollService {
     let savedBreakdown: unknown = {}
     try { savedBreakdown = item.breakdown ? JSON.parse(item.breakdown) : {} } catch { savedBreakdown = {} }
     const obligationDetails = await describePayrollObligationLines(em, savedBreakdown)
-    return { item, run, employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY', obligationDetails }
+    return { item, run: this.lightRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY', obligationDetails }
     })
   }
 
@@ -1353,6 +1526,45 @@ export class PayrollService {
     return { policy, version, period, startDate: bounds.startDate, endDate: bounds.endDate, effectiveUntil }
   }
 
+  // سياسة مملوكة لفرع لا تُستخدم للشركة كلها ولا لفرع آخر (مثل رفض وحدة السياسات لنطاق مقترح خارج فرعها):
+  // التعريف يُحصر بفلتر فرع واحد هو فرع السياسة، فكل عضو داخله بمكانه آخر يوم في الفترة.
+  private async assertPolicyBranchScope(em: EntityManager, policy: PayrollPolicy, definition: PayrollRunDefinition) {
+    if (policy.branchId === null) return
+    const { filters } = definition
+    if (!filters.allEmployees && filters.branchIds.length === 1 && filters.branchIds[0] === policy.branchId) return
+    const branch = await em.getRepository(Branch).findOne({ select: { id: true, name: true }, where: { id: policy.branchId } })
+    this.bad('PAYRUN-POLICY-BRANCH', `سياسة «${policy.name}» مملوكة لفرع «${branch?.name ?? policy.branchId}»؛ المسير المرتبط بها يُحصر بهذا الفرع وحده — اختره في فلتر الفروع، ولا تستخدمها للشركة كلها أو لفرع آخر`,
+      { policyBranchId: policy.branchId })
+  }
+
+  // تحت قفل الحساب: المسودة تُعاد مراجعة نسختها (منشورة، سارية على الفترة كاملة، بنفس تواريخ الدورة)؛
+  // وإعادة حساب المسير المحسوب تقرأ نسخته كما حُفظت (لقطة السياسة للخطوة 19) مع إبقاء حصر فرع السياسة.
+  private async assertRunPolicyAtCalculation(em: EntityManager, user: JwtPayload, run: PayrollRun, isDraft: boolean) {
+    const definition = payrollRunDefinitionOf(run)
+    if (isDraft) {
+      const context = await this.runPolicyPeriod(em, user, run.policyVersionId, run.period)
+      if (context.startDate !== run.startDate || context.endDate !== run.endDate) {
+        this.bad('PAYRUN-POLICY-PERIOD-CHANGED', `تواريخ دورة نسخة السياسة لشهر ${run.period} (${context.startDate} → ${context.endDate}) لا تطابق تواريخ المسودة (${run.startDate} → ${run.endDate})؛ عدّل المسودة قبل احتسابها`)
+      }
+      await this.assertPolicyBranchScope(em, context.policy, definition)
+      return
+    }
+    const version = await em.getRepository(PayrollPolicyVersion).findOneBy({ id: Number(run.policyVersionId) })
+    const policy = version ? await em.getRepository(PayrollPolicy).findOneBy({ id: version.policyId }) : null
+    if (!version || !policy) throw new NotFoundException({ code: 'PAYRUN-POLICY-NOT-FOUND', message: 'نسخة سياسة الرواتب المرتبطة بالمسير غير موجودة' })
+    const scope = branchScopeOf(user)
+    if (scope !== null && (scope < 1 || (policy.branchId !== null && policy.branchId !== scope))) throw new ForbiddenException('سياسة الرواتب خارج نطاق الفرع المسموح لك')
+    await this.assertPolicyBranchScope(em, policy, definition)
+  }
+
+  // نقطتا الحساب القديمتان مغلقتان على قاعدة الشركة؛ المسير الجديد مسودة من «مسير جديد» ثم احتساب منفصل عن إعادة الحساب.
+  assertLegacyCalculateEndpoint() {
+    const database = (this.runs.manager.connection.options as { database?: unknown }).database
+    if (payrollLegacyCalculateAllowed(database)) return
+    throw new GoneException({ code: 'PAYRUN-LEGACY-ENDPOINT',
+      message: 'نقطة الحساب القديمة مغلقة: أنشئ «مسير جديد» كمسودة (POST /payroll/runs) باسم ونسخة سياسة منشورة، ثم «احتساب المسودة» (POST /payroll/runs/:id/calculate) أو «إعادة حساب المسير» بسبب (POST /payroll/runs/:id/recalculate)' })
+  }
+
   // التحقق من الفلاتر المترابطة والقائمة والاستبعادات ضد القاعدة؛ الرقم غير الموجود يُرفض برقمه ولا يسقط صامتًا.
   private async normalizeRunDefinition(em: EntityManager, user: JwtPayload, input: PayrollRunDefinitionInput, previous: PayrollRunDefinition | null): Promise<PayrollRunDefinition> {
     const raw = input.filters ?? {}
@@ -1374,19 +1586,33 @@ export class PayrollService {
     if (!filters.allEmployees && !filters.employeeIds.length && !payrollRunHasOrgFilters(filters)) {
       this.bad('PAYRUN-SCOPE-REQUIRED', 'حدد نطاق المسير: فرعًا أو قسمًا أو فريقًا أو قائمة موظفين')
     }
-    const absent = async (entity: typeof Branch | typeof Department | typeof Team | typeof Employee, ids: number[], label: string, key: string) => {
+    // مستخدم الفرع لا يعرف وجود معرّفات فرع آخر: القسم أو الفريق أو الموظف خارج فرعه يُرد بالرد نفسه لغير الموجود.
+    // الموظف «ضمن الفرع» لو ملفه الحالي فيه أو له نسخة فرع مؤرخة (EMPLOYEE_ORG) فيه، فمن انتقل خلال الفترة لا يسقط.
+    const knownIds = async (kind: 'branch' | 'department' | 'team' | 'employee', chunk: number[]): Promise<number[]> => {
+      const list = chunk.map((_, index) => `@${index}`).join(', ')
+      const scoped = scope !== null && kind !== 'branch'
+      const own = `@${chunk.length}`
+      const snapshot = `CAST(v.[snapshot] AS nvarchar(max))`
+      const query = kind === 'branch' ? `SELECT [id] FROM [branches] WHERE [id] IN (${list})`
+        : kind === 'department' ? `SELECT [id] FROM [departments] WHERE [id] IN (${list})${scoped ? ` AND [branchId] = ${own}` : ''}`
+          : kind === 'team' ? `SELECT t.[id] FROM [teams] t LEFT JOIN [departments] d ON d.[id] = t.[departmentId] WHERE t.[id] IN (${list})${scoped ? ` AND d.[branchId] = ${own}` : ''}`
+            : `SELECT e.[id] FROM [employees] e WHERE e.[id] IN (${list})${scoped ? ` AND (e.[branchId] = ${own} OR EXISTS (SELECT 1 FROM [attendance_rule_versions] v
+                WHERE v.[sourceType] = 'EMPLOYEE_ORG' AND v.[sourceId] = e.[id] AND ISJSON(${snapshot}) = 1
+                  AND TRY_CONVERT(int, COALESCE(JSON_VALUE(${snapshot}, '$.data.branchId'), JSON_VALUE(${snapshot}, '$.branchId'))) = ${own}))` : ''}`
+      const rows: Array<{ id: number }> = await em.query(query, scoped ? [...chunk, scope] : chunk)
+      return rows.map(row => Number(row.id))
+    }
+    const absent = async (kind: 'branch' | 'department' | 'team' | 'employee', ids: number[], label: string, key: string) => {
       if (!ids.length) return
       const found = new Set<number>()
-      for (let offset = 0; offset < ids.length; offset += 500) {
-        for (const row of await em.getRepository(entity as typeof Branch).find({ select: { id: true }, where: { id: In(ids.slice(offset, offset + 500)) } })) found.add(row.id)
-      }
+      for (let offset = 0; offset < ids.length; offset += 500) for (const id of await knownIds(kind, ids.slice(offset, offset + 500))) found.add(id)
       const missing = ids.filter(id => !found.has(id))
-      if (missing.length) this.bad('PAYRUN-SCOPE-UNKNOWN-IDS', `${label} غير موجود: ${missing.join('، ')}`, { [key]: missing })
+      if (missing.length) this.bad('PAYRUN-SCOPE-UNKNOWN-IDS', `${label} غير موجود${scope !== null ? ' أو خارج فرعك' : ''}: ${missing.join('، ')}`, { [key]: missing })
     }
-    await absent(Branch, filters.branchIds, 'رقم الفرع', 'branchIds')
-    await absent(Department, filters.departmentIds, 'رقم القسم', 'departmentIds')
-    await absent(Team, filters.teamIds, 'رقم الفريق', 'teamIds')
-    await absent(Employee, filters.employeeIds, 'رقم الموظف', 'employeeIds')
+    await absent('branch', filters.branchIds, 'رقم الفرع', 'branchIds')
+    await absent('department', filters.departmentIds, 'رقم القسم', 'departmentIds')
+    await absent('team', filters.teamIds, 'رقم الفريق', 'teamIds')
+    await absent('employee', filters.employeeIds, 'رقم الموظف', 'employeeIds')
     if (filters.departmentIds.length || filters.teamIds.length) {
       const departments = await em.getRepository(Department).find({ select: { id: true, branchId: true, parentId: true, name: true } })
       const byId = new Map(departments.map(row => [row.id, row]))
@@ -1417,7 +1643,7 @@ export class PayrollService {
       const prior = previous?.exclusions.find(item => item.employeeId === employeeId && item.reason === reason)
       exclusions.push({ employeeId, reason, byUserId: prior?.byUserId ?? user.sub, at: prior?.at ?? new Date().toISOString() })
     }
-    await absent(Employee, exclusions.map(row => row.employeeId), 'رقم الموظف المستبعد', 'employeeIds')
+    await absent('employee', exclusions.map(row => row.employeeId), 'رقم الموظف المستبعد', 'employeeIds')
     let emptyScope: PayrollRunDefinition['emptyScope'] = null
     if (input.confirmEmptyScope === true) {
       const reason = typeof input.emptyScopeReason === 'string' ? input.emptyScopeReason.trim() : ''
@@ -1505,6 +1731,7 @@ export class PayrollService {
     }
     const context = await this.runPolicyPeriod(em, user, dto.policyVersionId, dto.period)
     const definition = await this.normalizeRunDefinition(em, user, dto, previous ? payrollRunDefinitionOf(previous) : null)
+    await this.assertPolicyBranchScope(em, context.policy, definition)
     const name = typeof dto.name === 'string' && dto.name.trim() ? dto.name.trim() : null
     const preview = await this.membershipPreview(em, user, { id: previous?.id ?? null, name, period: context.period, startDate: context.startDate, endDate: context.endDate },
       definition, [], this.policyViewOf(context))
@@ -1529,6 +1756,7 @@ export class PayrollService {
       const name = this.runName(dto.name)
       const context = await this.runPolicyPeriod(em, user, dto.policyVersionId, dto.period)
       const definition = await this.normalizeRunDefinition(em, user, dto, null)
+      await this.assertPolicyBranchScope(em, context.policy, definition)
       await this.assertRunNameAvailable(em, name, context.period, null)
       const preview = await this.membershipPreview(em, user, { id: null, name, period: context.period, startDate: context.startDate, endDate: context.endDate },
         definition, [], this.policyViewOf(context))
@@ -1543,7 +1771,7 @@ export class PayrollService {
     return this.detail(user, runId)
   }
 
-  async updateRunDraft(user: JwtPayload, runId: number, dto: PayrollRunDefinitionInput) {
+  async updateRunDraft(user: JwtPayload, runId: number, dto: PayrollRunDefinitionInput & { appendExclusions?: Array<{ employeeId: number; reason: string }> }) {
     await this.runs.manager.transaction(async em => {
       await this.calculationLock(em)
       await this.lockRun(em, runId)
@@ -1555,9 +1783,11 @@ export class PayrollService {
       const name = this.runName(dto.name ?? run.name)
       const context = await this.runPolicyPeriod(em, user, dto.policyVersionId ?? run.policyVersionId, dto.period ?? run.period)
       const definition = await this.normalizeRunDefinition(em, user, {
-        filters: dto.filters ?? before.filters, exclusions: dto.exclusions ?? before.exclusions,
+        // الخطوة 22 (B5): الاستبعاد من شاشة التعارضات يُلحق بالاستبعادات القائمة تحت القفل نفسه (لا يستبدلها)
+        filters: dto.filters ?? before.filters, exclusions: dto.exclusions ?? [...before.exclusions, ...(dto.appendExclusions ?? [])],
         confirmEmptyScope: dto.confirmEmptyScope ?? !!before.emptyScope, emptyScopeReason: dto.emptyScopeReason ?? before.emptyScope?.reason ?? null,
       }, before)
+      await this.assertPolicyBranchScope(em, context.policy, definition)
       await this.assertRunNameAvailable(em, name, context.period, run.id)
       const preview = await this.membershipPreview(em, user, { id: run.id, name, period: context.period, startDate: context.startDate, endDate: context.endDate },
         definition, [], this.policyViewOf(context))
@@ -1582,12 +1812,180 @@ export class PayrollService {
       allowDraftConflicts: dto.allowDraftConflicts, refreshInstallmentPolicy: dto.refreshInstallmentPolicy })
   }
 
-  async recalculateRun(user: JwtPayload, runId: number, dto: { reason: string; allowDraftConflicts?: boolean; refreshInstallmentPolicy?: boolean }) {
+  async recalculateRun(user: JwtPayload, runId: number, dto: { reason?: unknown; allowDraftConflicts?: boolean; refreshInstallmentPolicy?: boolean
+    refreshPolicySnapshot?: boolean; expectedPolicySnapshotHash?: string }) {
     const run = await this.runs.findOneBy({ id: runId })
     if (!run) throw new NotFoundException('المسير غير موجود')
     if (run.status !== 'CALCULATED') throw this.stateError('إعادة حساب المسير', run.status)
     return this.calculateDefined(user, { runId, period: run.period, scopeType: run.scopeType, reason: this.requireReason(dto.reason),
-      allowDraftConflicts: dto.allowDraftConflicts, refreshInstallmentPolicy: dto.refreshInstallmentPolicy })
+      allowDraftConflicts: dto.allowDraftConflicts, refreshInstallmentPolicy: dto.refreshInstallmentPolicy,
+      refreshPolicySnapshot: dto.refreshPolicySnapshot, expectedPolicySnapshotHash: dto.expectedPolicySnapshotHash })
+  }
+
+  // ===== الخطوة 19: لقطة السياسة على المسير =====
+  // أول حساب (مسودة أو مسير جديد) يلتقط؛ إعادة الحساب تقرأ المحفوظ؛ التحديث بطلب صريح ببصمة الإعدادات الحالية المعروضة فروقها.
+  private async policySnapshotForCalculation(em: EntityManager, user: JwtPayload, run: PayrollRun, options: { existing: boolean; refresh: boolean; expectedHash: string | null }) {
+    const stored = options.existing ? parsePayrollRunPolicySnapshot(run) : null
+    if (stored && !options.refresh) return { snapshot: stored, mode: 'STORED' as const, previousHash: stored.fingerprint, differences: [] as ReturnType<typeof diffPayrollRunPolicySnapshots> }
+    const current = await capturePayrollRunPolicySnapshot(em, { period: run.period, policyVersionId: run.policyVersionId ?? null }, user.sub)
+    if (!options.existing) return { snapshot: current, mode: 'FIRST_CALCULATION' as const, previousHash: null, differences: [] as ReturnType<typeof diffPayrollRunPolicySnapshots> }
+    const differences = diffPayrollRunPolicySnapshots(stored, current)
+    // بصمة الحالي لا تُعاد في الرفض: مصدرها الوحيد GET policy-snapshot الذي يعرض الفروق، فلا يُحدَّث دون عرضها.
+    if (!options.refresh) {
+      throw new ConflictException({ code: 'PAYRUN-POLICY-SNAPSHOT-MISSING', differences,
+        message: 'المسير محسوب قبل حفظ لقطة السياسة (الخطوة 19)؛ اعرض «لقطة السياسة» وراجع القيم الحالية ثم أعد الحساب مع «تحديث اللقطة»' })
+    }
+    if (!options.expectedHash || options.expectedHash !== current.fingerprint) {
+      throw new ConflictException({ code: 'PAYRUN-POLICY-SNAPSHOT-STALE', differences,
+        message: 'تحديث لقطة السياسة يتطلب بصمة الإعدادات الحالية التي عُرضت فروقها؛ تغيّرت الإعدادات منذ العرض أو لم تُعرض الفروق — اعرضها مجددًا ثم أعد المحاولة' })
+    }
+    return { snapshot: current, mode: 'REFRESHED' as const, previousHash: stored?.fingerprint ?? null, differences }
+  }
+
+  async policySnapshotView(user: JwtPayload, runId: number) {
+    return this.readRun(runId, async (em, run) => {
+      await this.assertRunAccess(user, run, em)
+      const stored = parsePayrollRunPolicySnapshot(run)
+      const current = await capturePayrollRunPolicySnapshot(em, { period: run.period, policyVersionId: run.policyVersionId ?? null }, user.sub)
+      const differences = diffPayrollRunPolicySnapshots(run.status === 'DRAFT' ? null : stored, current)
+      return { runId: run.id, status: run.status, stored, storedHash: stored?.fingerprint ?? null, current, currentHash: current.fingerprint,
+        differences,
+        refreshRequired: !!stored && stored.fingerprint !== current.fingerprint,
+        canRefresh: run.status === 'CALCULATED' && userHasPerm(user, 'payroll.calculate') && (!stored || stored.fingerprint !== current.fingerprint) }
+    })
+  }
+
+  // ===== الخطوة 20 / D13: وضع المحرك وتقرير التكافؤ =====
+  /**
+   * شرط الاعتماد: تقرير تكافؤ SHADOW أو POLICY لنسخة الحساب الحالية وبصمة لقطتها، يغطي كل موظف له بند، وكل فرق أو قيمة غائبة
+   * له سبب مكتوب من حامل payroll.approve. مسير بلا وضع محرك (قبل D13) أو LEGACY بلا ظل لا يُعتمد.
+   */
+  private async assertApprovalParity(em: EntityManager, run: PayrollRun, snapshotFingerprint: string) {
+    const report = parsePayrollEngineParityReport(run.parityReport)
+    const explanations = await em.getRepository(PayrollRunParityExplanation).find({ where: { runId: run.id }, select: { id: true, differenceKey: true } })
+    const itemEmployeeIds = (await em.getRepository(PayrollItem).find({ where: { runId: run.id }, select: { employeeId: true } })).map(row => row.employeeId)
+    const issues = payrollApprovalParityIssues(report, { engineMode: run.engineMode ?? null, snapshotVersion: run.snapshotVersion, policySnapshotHash: snapshotFingerprint },
+      new Set(explanations.map(row => row.differenceKey)), itemEmployeeIds)
+    const general = issues.find(issue => issue.employeeId === null)
+    if (general) {
+      throw new ConflictException({ code: general.issue === 'STALE_REPORT' ? 'PAYRUN-ENGINE-RECALC-REQUIRED' : general.issue === 'INVALID_REPORT' ? 'PAYRUN-PARITY-REPORT-INVALID'
+        : 'PAYRUN-ENGINE-PARITY-REPORT-REQUIRED', issue: general.issue, message: general.reason })
+    }
+    if (issues.some(issue => issue.issue === 'MISSING_EMPLOYEE')) {
+      throw new ConflictException({ code: 'PAYRUN-ENGINE-RECALC-REQUIRED', issues: issues.filter(issue => issue.issue === 'MISSING_EMPLOYEE').slice(0, 100),
+        message: 'تقرير التكافؤ لا يغطي كل بنود المسير؛ أعد حساب المسير قبل الاعتماد' })
+    }
+    if (issues.length) {
+      throw new ConflictException({ code: 'PAYRUN-APPROVAL-PARITY-UNEXPLAINED', count: issues.length, groups: payrollParityPendingGroups(issues), issues: issues.slice(0, 100),
+        message: `لا يُعتمد المسير قبل أن يكون تقرير التكافؤ صفرًا أو لكل فرق أو قيمة غائبة سبب مكتوب: ${issues.length} بندًا بلا سبب (اكتب الأسباب من «محرك الحساب»، فرديًا أو لكل رمز سبب)` })
+    }
+    const reportKeys = new Set(report!.rows.flatMap(row => row.components.flatMap(item => item.differenceKey ? [item.differenceKey] : [])))
+    const unavailableKeys = new Set(report!.rows.flatMap(row => row.components.flatMap(item => item.differenceKey && item.policy === null ? [item.differenceKey] : [])))
+    const used = explanations.filter(row => reportKeys.has(row.differenceKey))
+    return { report: report!, explanationIds: used.map(row => row.id),
+      explained: { differences: used.filter(row => !unavailableKeys.has(row.differenceKey)).length, unavailable: used.filter(row => unavailableKeys.has(row.differenceKey)).length } }
+  }
+
+  private async engineView(em: EntityManager, run: PayrollRun) {
+    const report = parsePayrollEngineParityReport(run.parityReport)
+    const explanations = await em.getRepository(PayrollRunParityExplanation).find({ where: { runId: run.id }, order: { id: 'ASC' } })
+    const keys = new Set(explanations.map(row => row.differenceKey))
+    const mode = run.engineMode ?? null
+    // شروط الاعتماد نفسها التي يفحصها approve (قراءة فقط) — تظهر في اللوحة قبل الضغط على «اعتماد»
+    const itemEmployeeIds = run.status === 'CALCULATED' ? (await em.getRepository(PayrollItem).find({ where: { runId: run.id }, select: { employeeId: true } })).map(row => row.employeeId) : []
+    const approvalIssues = run.status === 'CALCULATED' ? payrollApprovalParityIssues(report, { engineMode: mode, snapshotVersion: run.snapshotVersion,
+      policySnapshotHash: run.policySnapshotHash ?? null }, keys, itemEmployeeIds) : []
+    return { mode, modeLabel: mode ? PAYROLL_ENGINE_MODE_LABELS[mode] : 'مسير قبل D13 (بلا وضع محرك)', report, explanations,
+      switchIssues: payrollPolicySwitchIssues(report, { snapshotVersion: run.snapshotVersion, policySnapshotHash: run.policySnapshotHash ?? null }, keys),
+      approvalIssues: approvalIssues.slice(0, 200), approvalIssueCount: approvalIssues.length, approvalPendingGroups: payrollParityPendingGroups(approvalIssues),
+      recalcRequired: !!mode && run.status === 'CALCULATED' && (!report || report.engineMode !== mode || report.snapshotVersion !== run.snapshotVersion),
+      policySnapshotHash: run.policySnapshotHash ?? null }
+  }
+
+  /**
+   * يسجل أسبابًا مكتوبة (إلحاقي) لفروق أو قيم غائبة موجودة فعلًا في تقرير نسخة الحساب الحالية: فرديًا (موظف + بند) أو لمجموعة برمز سبب النظام.
+   * سبب القيمة الغائبة يكفي للاعتماد (المصروف هو القديم) ولا يرفع منع التحويل إلى POLICY.
+   */
+  private async recordParityExplanations(em: EntityManager, user: JwtPayload, run: PayrollRun, input: Array<{ employeeId?: number; component?: string; reasonCode?: string; reason?: unknown }>) {
+    const report = parsePayrollEngineParityReport(run.parityReport)
+    if (!report || report.engineMode === 'LEGACY' || report.snapshotVersion !== run.snapshotVersion) {
+      this.bad('PAYRUN-PARITY-REPORT-MISSING', 'لا يوجد تقرير تكافؤ SHADOW لنسخة الحساب الحالية؛ أعد حساب المسير بوضع SHADOW أولًا')
+    }
+    const repo = em.getRepository(PayrollRunParityExplanation)
+    const existing = new Set((await repo.find({ where: { runId: run.id }, select: { differenceKey: true } })).map(row => row.differenceKey))
+    const pending: PayrollRunParityExplanation[] = []
+    for (const entry of input) {
+      const group = typeof entry.reasonCode === 'string' && entry.reasonCode.length > 0
+      if (group === (entry.employeeId != null || entry.component != null) || (!group && (entry.employeeId == null || entry.component == null))) {
+        this.bad('PAYRUN-PARITY-TARGET', 'حدد الفرق بموظف وبند، أو مجموعة فروق برمز سبب النظام وحده')
+      }
+      const target = group ? `مجموعة الرمز ${entry.reasonCode}` : `الموظف #${entry.employeeId} في البند ${entry.component}`
+      const reason = typeof entry.reason === 'string' ? entry.reason.trim() : ''
+      if (reason.length < 3 || reason.length > 500) this.bad('PAYRUN-PARITY-REASON', `سبب ${target} مطلوب من 3 إلى 500 حرف`)
+      const targets = report!.rows.flatMap(row => row.components.filter(item => item.differenceKey !== null &&
+        (group ? item.reasonCode === entry.reasonCode : row.employeeId === entry.employeeId && item.code === entry.component)).map(item => ({ employeeId: row.employeeId, item })))
+      if (!targets.length) this.bad('PAYRUN-PARITY-DIFFERENCE-NOT-FOUND', `لا يوجد فرق أو قيمة غائبة لـ${target} ضمن تقرير نسخة الحساب الحالية`)
+      for (const { employeeId, item } of targets) {
+        if (existing.has(item.differenceKey!)) continue
+        existing.add(item.differenceKey!)
+        pending.push(repo.create({ runId: run.id, snapshotVersion: run.snapshotVersion, employeeId, component: item.code, legacyAmount: item.legacy,
+          policyAmount: item.policy, differenceKey: item.differenceKey!, reason, explainedBy: user.sub }))
+      }
+    }
+    // دفعات صغيرة: حد معاملات SQL Server لكل استعلام
+    return pending.length ? repo.save(pending, { chunk: 100 }) : []
+  }
+
+  private async lockedEngineRun(em: EntityManager, user: JwtPayload, runId: number) {
+    await this.lockRun(em, runId)
+    const run = await em.getRepository(PayrollRun).findOneBy({ id: runId })
+    if (!run) throw new NotFoundException('المسير غير موجود')
+    await this.assertRunAccess(user, run, em)
+    if (!userHasPerm(user, 'payroll.approve')) throw new ForbiddenException('أسباب فروق التكافؤ وتحويل وضع المحرك لحامل صلاحية اعتماد المسير')
+    return run
+  }
+
+  async explainParityDifferences(user: JwtPayload, runId: number, input: Array<{ employeeId?: number; component?: string; reasonCode?: string; reason?: unknown }>) {
+    await this.runs.manager.transaction(async em => {
+      const run = await this.lockedEngineRun(em, user, runId)
+      if (run.status !== 'CALCULATED') throw this.stateError('تسجيل أسباب فروق التكافؤ', run.status)
+      const saved = await this.recordParityExplanations(em, user, run, input)
+      // الصفوف نفسها سجل إلحاقي بمن كتب ومتى؛ الحدث يحمل التفصيل حتى 100 سبب وإلا ملخصًا لكل رمز مع المعرفات
+      if (saved.length) await this.event(em, user, run.id, 'PARITY_EXPLAINED', null, { snapshotVersion: run.snapshotVersion, count: saved.length, explanationIds: saved.map(row => row.id),
+        ...(saved.length <= 100
+          ? { explanations: saved.map(row => ({ id: row.id, employeeId: row.employeeId, component: row.component, legacy: row.legacyAmount, policy: row.policyAmount, reason: row.reason })) }
+          : { groups: input.filter(entry => entry.reasonCode).map(entry => ({ reasonCode: entry.reasonCode, reason: typeof entry.reason === 'string' ? entry.reason.trim() : '' })) }) })
+    })
+    return this.readRun(runId, async (em, run) => this.engineView(em, run))
+  }
+
+  async setEngineMode(user: JwtPayload, runId: number, dto: { mode: PayrollEngineMode; reason?: unknown; explanations?: Array<{ employeeId?: number; component?: string; reasonCode?: string; reason?: unknown }> }) {
+    const reason = this.requireReason(dto.reason)
+    if (!PAYROLL_ENGINE_MODES.includes(dto.mode)) this.bad('PAYRUN-ENGINE-MODE-INVALID', 'وضع المحرك LEGACY أو SHADOW أو POLICY')
+    await this.runs.manager.transaction(async em => {
+      const run = await this.lockedEngineRun(em, user, runId)
+      if (!['DRAFT', 'CALCULATED'].includes(run.status)) throw this.stateError('تغيير وضع محرك الحساب', run.status)
+      const from = run.engineMode ?? null
+      if (from === dto.mode) this.bad('PAYRUN-ENGINE-MODE-UNCHANGED', `المسير بالفعل بوضع ${dto.mode}`)
+      let issues: ReturnType<typeof payrollPolicySwitchIssues> = []
+      const saved = dto.mode === 'POLICY' && dto.explanations?.length ? await this.recordParityExplanations(em, user, run, dto.explanations) : []
+      const report = parsePayrollEngineParityReport(run.parityReport)
+      if (dto.mode === 'POLICY') {
+        if (run.status !== 'CALCULATED') this.bad('PAYRUN-ENGINE-POLICY-NEEDS-REPORT', 'التحويل إلى POLICY بعد حساب المسير بوضع SHADOW وظهور تقرير التكافؤ')
+        const keys = new Set((await em.getRepository(PayrollRunParityExplanation).find({ where: { runId: run.id }, select: { differenceKey: true } })).map(row => row.differenceKey))
+        issues = payrollPolicySwitchIssues(report, { snapshotVersion: run.snapshotVersion, policySnapshotHash: run.policySnapshotHash ?? null }, keys)
+        if (issues.length) {
+          throw new ConflictException({ code: 'PAYRUN-ENGINE-PARITY-REQUIRED', issues: issues.slice(0, 100),
+            message: `لا يُحوّل المسير إلى POLICY قبل أن يكون تقرير التكافؤ صفرًا أو لكل فرق سبب مكتوب: ${issues.length} شرطًا غير مستوفى (${issues[0].reason})` })
+        }
+      }
+      run.engineMode = dto.mode
+      await this.saveRunRow(em, run)
+      await this.event(em, user, run.id, 'ENGINE_MODE_CHANGED', reason, { from, to: dto.mode, snapshotVersion: run.snapshotVersion,
+        parityReportHash: report?.reportHash ?? null, parityTotals: report?.totals ?? null, explanationIds: saved.map(row => row.id),
+        recalculationRequired: run.status === 'CALCULATED' })
+    })
+    return this.readRun(runId, async (em, run) => this.engineView(em, run))
   }
 
   private reportScope(user: JwtPayload) {
@@ -1678,6 +2076,83 @@ export class PayrollService {
         rowCount: report.rows.length, scopeBranchId: scope, byReason: report.totals.byReason })
     })
     return this.runUnassignedReport(user, runId)
+  }
+
+  // ===== الخطوتان 22 و23 (B5): أسماء المنفذين، ومن احتسب، وحل التعارض من الشاشة، وفترة التكافؤ التشغيلية =====
+  private async userNames(em: EntityManager, ids: Array<number | null | undefined>) {
+    const unique = [...new Set(ids.filter((id): id is number => Number.isSafeInteger(id) && Number(id) > 0))]
+    if (!unique.length) return new Map<number, string>()
+    const rows: Array<{ id: number; displayName: string | null }> = await em.query(
+      `SELECT [id], [displayName] FROM [users] WHERE [id] IN (${unique.map((_, index) => `@${index}`).join(', ')})`, unique)
+    return new Map(rows.map(row => [Number(row.id), row.displayName || `مستخدم #${row.id}`]))
+  }
+
+  // من احتسب نسخة الحساب الحالية: العمود المحفوظ، وللمسيرات السابقة له آخر حدث حساب مسجل.
+  private async runCalculator(em: EntityManager, run: PayrollRun): Promise<number | null> {
+    if (run.calculatedBy != null) return run.calculatedBy
+    if (run.status === 'DRAFT') return null
+    const event = await em.getRepository(PayrollRunEvent).findOne({ where: { runId: run.id, eventType: In([...PAYROLL_CALCULATION_EVENT_TYPES]) }, order: { id: 'DESC' } })
+    return event?.actorUserId ?? null
+  }
+
+  // «استبعاد الموظف من هذا المسير» من شاشة التعارضات: المسودة يُلحق الاستبعاد بتعريفها، والمحسوب يُعاد حسابه بالاستبعاد وسبب إلزامي.
+  async excludeRunMember(user: JwtPayload, runId: number, dto: { employeeId: number; reason?: unknown; allowDraftConflicts?: boolean }) {
+    // تصحيح المراجعة: الوجود ← النطاق ← الحالة ← السبب؛ مسير خارج فرع المستخدم يُرفض 403 دون كشف حالته أو التحقق من مدخلاته.
+    const run = await this.runs.findOneBy({ id: runId })
+    if (!run) throw new NotFoundException('المسير غير موجود')
+    await this.assertRunAccess(user, run)
+    if (run.status !== 'DRAFT' && run.status !== 'CALCULATED') throw new BadRequestException(payrollRunStateIssue('استبعاد موظف من المسير', run.status, ['DRAFT', 'CALCULATED']))
+    const reason = typeof dto.reason === 'string' ? dto.reason.trim() : ''
+    if (reason.length < 3 || reason.length > 400) this.bad('PAYRUN-EXCLUSION-REASON', `اكتب سبب استبعاد الموظف رقم ${dto.employeeId} (من 3 إلى 400 حرف)`, { employeeId: dto.employeeId })
+    if (run.status === 'DRAFT') return this.updateRunDraft(user, runId, { appendExclusions: [{ employeeId: dto.employeeId, reason }] })
+    return this.calculateDefined(user, { runId, period: run.period, scopeType: run.scopeType, reason: `استبعاد الموظف رقم ${dto.employeeId} من المسير: ${reason}`,
+      allowDraftConflicts: dto.allowDraftConflicts, addExclusions: [{ employeeId: dto.employeeId, reason }] })
+  }
+
+  // الخطوة 23: فترة التكافؤ التشغيلية من المسيرات الحقيقية (قراءة فقط، بنطاق الفرع). تصحيح المراجعة: كل المسيرات غير الملغاة تُقرأ،
+  // فالشهر لا يُحتسب لو فيه مسير آخر LEGACY أو غير مصروف، والمسير المعلّم تجريبيًا لا يُحتسب ولا يحجب.
+  async parityHistory(user: JwtPayload) {
+    const em = this.runs.manager
+    const visible = await this.runVisibility(user, em)
+    const runs = await this.runs.find({ where: { status: In(['DRAFT', 'CALCULATED', 'APPROVED', 'PAID']) }, order: { period: 'ASC', id: 'ASC' },
+      select: { id: true, name: true, period: true, status: true, engineMode: true, approvedAt: true, approvedBy: true, paidAt: true,
+        parityExcludedReason: true, parityExcludedBy: true, parityExcludedAt: true } })
+    const rows = []
+    for (const run of runs) {
+      if (!(await visible(run.id))) continue
+      const approved = ['APPROVED', 'PAID'].includes(run.status)
+        ? await em.getRepository(PayrollRunEvent).findOne({ where: { runId: run.id, eventType: 'APPROVED' }, order: { id: 'DESC' } }) : null
+      rows.push({ runId: run.id, name: run.name, period: run.period, status: run.status, engineMode: run.engineMode ?? null, approvedAt: run.approvedAt,
+        approvedBy: run.approvedBy, paidAt: run.paidAt ?? null, approvedEvent: (approved?.payload ?? null) as Record<string, unknown> | null,
+        parityExcludedReason: run.parityExcludedReason ?? null, parityExcludedBy: run.parityExcludedBy ?? null, parityExcludedAt: run.parityExcludedAt ?? null })
+    }
+    const names = await this.userNames(em, rows.flatMap(row => [row.approvedBy, row.parityExcludedBy]))
+    const nameOf = (id: number | null) => id == null ? null : names.get(id) ?? null
+    return summarizePayrollParityOperations(rows.map(row => ({ ...row, approvedByName: nameOf(row.approvedBy), parityExcludedByName: nameOf(row.parityExcludedBy) })),
+      { scope: branchScopeOf(user) === null ? 'COMPANY' : 'BRANCH' })
+  }
+
+  // الخطوة 23 (تصحيح المراجعة): تعليم مسير تجريبي «لا يُحتسب» في فترة التكافؤ أو إعادته للاحتساب — حامل الاعتماد، بنطاق الفرع، بسبب مكتوب وحدث.
+  async setParityCounting(user: JwtPayload, runId: number, dto: { counts: boolean; reason?: unknown }) {
+    await this.runs.manager.transaction(async em => {
+      await this.lockRun(em, runId)
+      const run = await em.getRepository(PayrollRun).findOneBy({ id: runId })
+      if (!run) throw new NotFoundException('المسير غير موجود')
+      await this.assertRunAccess(user, run, em)
+      if (run.status === 'CANCELLED') throw new BadRequestException(payrollRunStateIssue('تغيير احتساب المسير في فترة التكافؤ', run.status, ['DRAFT', 'CALCULATED', 'APPROVED', 'PAID']))
+      const reason = typeof dto.reason === 'string' ? dto.reason.trim() : ''
+      if (reason.length < 3 || reason.length > 400) this.bad('PAYRUN-PARITY-COUNTING-REASON', 'اكتب سبب تغيير احتساب المسير في فترة التكافؤ (من 3 إلى 400 حرف)')
+      const excluded = run.parityExcludedReason != null
+      if (excluded !== dto.counts) {
+        this.bad('PAYRUN-PARITY-COUNTING-UNCHANGED', dto.counts ? 'المسير يُحتسب بالفعل في فترة التكافؤ' : 'المسير معلّم بالفعل «لا يُحتسب» في فترة التكافؤ')
+      }
+      const before = { parityExcludedReason: run.parityExcludedReason, parityExcludedBy: run.parityExcludedBy, parityExcludedAt: run.parityExcludedAt }
+      await em.getRepository(PayrollRun).update({ id: run.id }, dto.counts
+        ? { parityExcludedReason: null, parityExcludedBy: null, parityExcludedAt: null }
+        : { parityExcludedReason: reason, parityExcludedBy: user.sub, parityExcludedAt: new Date() })
+      await this.event(em, user, run.id, 'PARITY_COUNTING_CHANGED', reason, { counts: dto.counts, before })
+    })
+    return this.parityHistory(user)
   }
 
   // تقرير حالة الصرف: تجميع بطريقة الدفع (كاش/تحويل/فيزا)

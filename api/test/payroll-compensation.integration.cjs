@@ -30,7 +30,10 @@ function token(user) {
     employeeId: user.employeeId ?? null, tokenVersion: user.tokenVersion ?? 0,
     permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
 }
+// الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ (هذه المجموعة لا تختبر التكافؤ نفسه)
+const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
 async function request(user, method, url, body) {
+  await writeParityReasonsBeforeApproval(request, user, method, url)
   const response = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json',
     ...(user ? { Authorization: `Bearer ${token(user)}` } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
@@ -62,9 +65,11 @@ async function attendance(emp, from = startDate, to = endDate, absentDates = [])
     await repo('ScheduleDayOverride').save({ employeeId: emp.id, date, shiftName: 'وردية مكونات الأجر', startTime: '08:00', endTime: '16:00' })
   }
 }
+// الخطوة 16 (B3): اسم المسير فريد داخل الشهر لغير الملغى؛ كل مسير جديد في الاختبار يأخذ رقمًا تسلسليًا.
+let compensationRunNumber = 0
 async function calculate(employees, extra = {}, range = { startDate, endDate }) {
   const response = await request(admin, 'POST', '/payroll/runs/calculate-defined', {
-    period, scopeType: 'CUSTOM', employeeIds: employees.map(emp => emp.id), name: 'اختبار مكونات الأجر — قاعدة مؤقتة', ...extra,
+    period, scopeType: 'CUSTOM', employeeIds: employees.map(emp => emp.id), name: `اختبار مكونات الأجر — قاعدة مؤقتة ${++compensationRunNumber}`, ...extra,
   })
   assert.equal(response.status, 201, JSON.stringify(response.body))
   assert.equal(response.body.startDate, range.startDate)

@@ -30,7 +30,10 @@ function token(user) {
   return jwt.sign({ sub: user.id, email: user.email, role: user.role, branchId: user.branchId ?? null, employeeId: null,
     tokenVersion: user.tokenVersion ?? 0, permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
 }
+// الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ (هذه المجموعة لا تختبر التكافؤ نفسه)
+const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
 async function request(user, method, route, body) {
+  await writeParityReasonsBeforeApproval(request, user, method, route)
   const response = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', ...(user ? { Authorization: `Bearer ${token(user)}` } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
   const text = await response.text()
@@ -70,8 +73,8 @@ async function employee(unit, overrides = {}) {
   if (rows.length) await repo('AttendanceDay').save(rows)
   return emp
 }
-async function publishedPolicy(name) {
-  const created = expectStatus(await request(admin, 'POST', '/payroll/policies', { name, effectiveFrom: startDate, settings: cycle23 }), 201)
+async function publishedPolicy(name, extra = {}) {
+  const created = expectStatus(await request(admin, 'POST', '/payroll/policies', { name, effectiveFrom: startDate, settings: cycle23, ...extra }), 201)
   const [version] = created.versions
   const published = expectStatus(await request(admin, 'POST', `/payroll/policies/${created.policy.id}/versions/${version.id}/publish`,
     { expectedRevision: version.revision, reason: `نشر ${name} لاختبار تعريف المسير` }), 200)
@@ -121,6 +124,8 @@ before(async () => {
     { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' }, { key: 'payroll.late_deduction_enabled', value: 'true' },
     { key: 'attendance.absence_penalty_days', value: '1' }, { key: 'attendance.weekend_days', value: 'FRI,SAT' },
   ])
+  // الخطوة 22 (B5): المستخدم نفسه يحتسب ويعتمد في هذه المجموعة — رخصة الشركة الصغيرة الموثقة (فصل المهام مختبر في payroll-run-screen)
+  await require('./fixtures/payroll-small-company-approval.cjs').allowSmallCompanyApproval(repo)
   policyOne = await publishedPolicy('مجموعة القاهرة')
   policyTwo = await publishedPolicy('مجموعة الإدارة العليا')
   unpublishedVersionId = expectStatus(await request(admin, 'POST', '/payroll/policies', { name: 'مسودة سياسة غير منشورة', effectiveFrom: startDate, settings: cycle23 }), 201).versions[0].id
@@ -343,6 +348,8 @@ test('Step 18 acceptance: approval is refused until someone acknowledges the una
   assert.equal(report.totals.employed, report.totals.assigned + report.totals.unassigned)
   assert.deepEqual([report.acknowledgement.required, report.acknowledgement.current, report.acknowledgement.canAcknowledge], [true, null, true])
 
+  // الخطوة 20 (B4): أسباب تقرير التكافؤ تُكتب صراحة قبل لقطة العدّ، فالاعتماد المرفوض بعدها يبقى لا يكتب شيئًا
+  await writeParityReasonsBeforeApproval(request, admin, 'POST', `/payroll/runs/${run.id}/approve`)
   const counts = await tableCounts()
   assert.equal(expectStatus(await request(admin, 'POST', `/payroll/runs/${run.id}/approve`), 409).code, 'PAYRUN-UNASSIGNED-ACK-REQUIRED')
   expectStatus(await request(viewer, 'POST', `/payroll/runs/${run.id}/unassigned-ack`, { reportHash: report.reportHash }), 403)
@@ -377,4 +384,87 @@ test('Step 18 acceptance: approval is refused until someone acknowledges the una
   assert.equal(expectStatus(await request(hrA, 'POST', `/payroll/runs/${branchRun.id}/approve`), 409).code, 'PAYRUN-UNASSIGNED-ACK-REQUIRED')
   await acknowledge(branchRun, hrA)
   assert.equal(expectStatus(await request(hrA, 'POST', `/payroll/runs/${branchRun.id}/approve`), 201).status, 'APPROVED')
+})
+
+test('Review fixes: a branch-owned policy stays inside its branch; a branch user cannot probe ids of another branch; the recalculation reason has an Arabic code; a draft re-checks its policy when calculated', async () => {
+  const unitA = await org(branchA), unitB = await org(branchB)
+  const inA = await employee(unitA), inB = await employee(unitB)
+  const branchPolicy = await publishedPolicy('مجموعة فرع القاهرة فقط', { branchId: branchA.id })
+  const owned = { policyVersionId: branchPolicy.versionId, period }
+  const counts = await tableCounts()
+  const outside = expectStatus(await request(admin, 'POST', '/payroll/runs/membership-preview', { ...owned, filters: { branchIds: [branchB.id] } }), 400)
+  assert.equal(outside.code, 'PAYRUN-POLICY-BRANCH'); assert.match(outside.message, /فرع القاهرة/)
+  for (const filters of [{ allEmployees: true }, { branchIds: [branchA.id, branchB.id] }, { departmentIds: [unitB.department.id] }, { employeeIds: [inB.id] }]) {
+    assert.equal(expectStatus(await request(admin, 'POST', '/payroll/runs/membership-preview', { ...owned, filters }), 400).code, 'PAYRUN-POLICY-BRANCH', JSON.stringify(filters))
+  }
+  assert.equal(expectStatus(await request(admin, 'POST', '/payroll/runs', { ...owned, name: 'سياسة فرع على فرع آخر', filters: { branchIds: [branchB.id] } }), 400).code, 'PAYRUN-POLICY-BRANCH')
+  assert.deepEqual(await tableCounts(), counts, 'refused branch-policy definitions write nothing')
+  const inside = expectStatus(await request(admin, 'POST', '/payroll/runs/membership-preview', { ...owned, filters: { branchIds: [branchA.id], departmentIds: [unitA.department.id] } }), 201)
+  assert.deepEqual(inside.included.map(row => row.employeeId), [inA.id])
+  const ownDraft = await createDraft({ ...owned, name: 'مسودة سياسة فرع القاهرة', filters: { branchIds: [branchA.id], departmentIds: [unitA.department.id] } })
+  expectStatus(await request(admin, 'PATCH', `/payroll/runs/${ownDraft.id}`, { filters: { branchIds: [branchB.id] } }), 400)
+
+  // مستخدم فرع القاهرة: معرّف من فرع الجيزة يُرد مثل المعرّف غير الموجود (لا 201 بنطاق فارغ، ولا اسم قسم في الرسالة).
+  const probe = { policyVersionId: policyOne.versionId, period }
+  const missing = expectStatus(await request(officerA, 'POST', '/payroll/runs/membership-preview', { ...probe, filters: { employeeIds: [987650] } }), 400)
+  const foreign = expectStatus(await request(officerA, 'POST', '/payroll/runs/membership-preview', { ...probe, filters: { employeeIds: [inB.id] } }), 400)
+  assert.deepEqual([missing.code, foreign.code], ['PAYRUN-SCOPE-UNKNOWN-IDS', 'PAYRUN-SCOPE-UNKNOWN-IDS'])
+  assert.equal(foreign.message.replace(String(inB.id), '#'), missing.message.replace('987650', '#'), 'another branch employee gets exactly the missing-id answer')
+  assert.deepEqual(foreign.employeeIds, [inB.id])
+  const foreignDepartment = expectStatus(await request(officerA, 'POST', '/payroll/runs', { ...probe, name: 'قسم فرع آخر', filters: { departmentIds: [unitB.department.id] } }), 400)
+  assert.equal(foreignDepartment.code, 'PAYRUN-SCOPE-UNKNOWN-IDS'); assert.ok(!foreignDepartment.message.includes(unitB.department.name), foreignDepartment.message)
+  const foreignTeam = expectStatus(await request(officerA, 'POST', '/payroll/runs/membership-preview', { ...probe, filters: { teamIds: [unitB.team.id] } }), 400)
+  assert.equal(foreignTeam.code, 'PAYRUN-SCOPE-UNKNOWN-IDS'); assert.ok(!foreignTeam.message.includes(unitB.team.name), foreignTeam.message)
+  assert.equal(expectStatus(await request(officerA, 'POST', '/payroll/runs/membership-preview', { ...probe, filters: { departmentIds: [unitA.department.id] },
+    exclusions: [{ employeeId: inB.id, reason: 'استبعاد موظف من فرع آخر' }] }), 400).code, 'PAYRUN-SCOPE-UNKNOWN-IDS')
+  assert.ok(expectStatus(await request(officerA, 'POST', '/payroll/runs/membership-preview', { ...probe, filters: { employeeIds: [inA.id] } }), 201).included.some(row => row.employeeId === inA.id))
+  expectStatus(await request(admin, 'POST', '/payroll/runs/membership-preview', { ...probe, filters: { employeeIds: [inB.id] } }), 201)
+  // من له نسخة فرع مؤرخة في فرع القاهرة (انتقل منه) معروف لمستخدم الفرع.
+  const { appendEmployeeOrgCalendar } = require('../src/attendance/attendance-calendar-history')
+  const leaver = await employee(unitB)
+  await ds.transaction(async em => appendEmployeeOrgCalendar(em, { employeeId: leaver.id, beforeBranchId: branchA.id, branchId: branchB.id, effectiveFrom: '2026-08-15',
+    reason: 'انتقال سابق من فرع القاهرة', actorUserId: admin.id }))
+  const leaverPreview = expectStatus(await request(officerA, 'POST', '/payroll/runs/membership-preview', { ...probe, filters: { employeeIds: [leaver.id] } }), 201)
+  const leaverRow = leaverPreview.excluded.find(row => row.employeeId === leaver.id)
+  assert.deepEqual([leaverRow?.code, leaverRow?.transferredOut?.lastInScopeDate], ['TRANSFERRED_OUT', '2026-08-14'], JSON.stringify(leaverPreview.excluded))
+
+  // إعادة الحساب بلا سبب أو بسبب غير نصي: كود عربي موحد، لا رسالة class-validator.
+  const run = await calculateDraft(await createDraft({ name: 'مسير سبب إعادة الحساب', ...probe, filters: { branchIds: [branchA.id], departmentIds: [unitA.department.id] } }))
+  for (const body of [{}, { reason: 5 }, { reason: '   ' }]) {
+    const refused = expectStatus(await request(admin, 'POST', `/payroll/runs/${run.id}/recalculate`, body), 400)
+    assert.equal(refused.code, 'PAYRUN-REASON-001', JSON.stringify(body)); assert.match(refused.message, /سبب/); assert.doesNotMatch(String(refused.message), /must be/)
+  }
+
+  // المسودة تُراجع نسختها عند الاحتساب: أرشفة السياسة بعد حفظ المسودة تمنع احتسابها بلا أي كتابة.
+  const policyDetail = expectStatus(await request(admin, 'GET', `/payroll/policies/${branchPolicy.policyId}`), 200)
+  expectStatus(await request(admin, 'POST', `/payroll/policies/${branchPolicy.policyId}/archive`, { expectedRevision: policyDetail.policy.revision, reason: 'أرشفة بعد حفظ مسودة مرتبطة' }), 201)
+  const beforeCalculate = await tableCounts()
+  assert.equal(expectStatus(await request(admin, 'POST', `/payroll/runs/${ownDraft.id}/calculate`, {}), 400).code, 'PAYRUN-POLICY-NOT-PUBLISHED')
+  assert.deepEqual(await tableCounts(), beforeCalculate, 'a refused draft calculation writes nothing')
+  assert.equal((await repo('PayrollRun').findOneByOrFail({ id: ownDraft.id })).status, 'DRAFT')
+})
+
+test('Review fixes: a department/team edit from the employee file (no transfer) does not move the employee in past periods', async () => {
+  const oldUnit = await org(branchA), newUnit = await org(branchA)
+  const editor = await employee(oldUnit)
+  expectStatus(await request(admin, 'PATCH', `/employees/${editor.id}`, { departmentId: newUnit.department.id, teamId: newUnit.team.id }), 200)
+  const logged = await repo('EmployeeStatusHistory').find({ where: { employeeId: editor.id } })
+  assert.deepEqual(logged.filter(row => ['departmentId', 'teamId'].includes(row.fieldName)).map(row => row.fieldName).sort(), ['departmentId', 'teamId'])
+  const base = { policyVersionId: policyOne.versionId }
+  // أغسطس انتهى قبل التعديل: عضويته بالقسم القديم.
+  const august = expectStatus(await request(admin, 'POST', '/payroll/runs/membership-preview', { ...base, period, filters: { branchIds: [branchA.id], departmentIds: [oldUnit.department.id] } }), 201)
+  const kept = august.included.find(row => row.employeeId === editor.id)
+  assert.ok(kept, JSON.stringify(august.excluded))
+  assert.deepEqual([kept.departmentId, kept.teamId], [oldUnit.department.id, oldUnit.team.id])
+  const augustNew = expectStatus(await request(admin, 'POST', '/payroll/runs/membership-preview', { ...base, period, filters: { branchIds: [branchA.id], departmentIds: [newUnit.department.id] } }), 201)
+  assert.ok(![...augustNew.included, ...augustNew.excluded].some(row => row.employeeId === editor.id), 'the new department does not claim him for a past period')
+  // الشهر الذي فيه يوم التعديل (نهايته بعده): عضويته بالقسم الجديد.
+  const today = new Date()
+  const localToday = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, '0')}-${String(today.getDate()).padStart(2, '0')}`
+  const current = localToday.slice(8) >= '23' ? new Date(today.getFullYear(), today.getMonth() + 1, 1) : today
+  const currentPeriod = `${current.getFullYear()}-${String(current.getMonth() + 1).padStart(2, '0')}`
+  const now = expectStatus(await request(admin, 'POST', '/payroll/runs/membership-preview', { ...base, period: currentPeriod, filters: { branchIds: [branchA.id], departmentIds: [newUnit.department.id] } }), 201)
+  const moved = [...now.included, ...now.excluded].find(row => row.employeeId === editor.id)
+  assert.ok(moved, JSON.stringify(now.totals))
+  assert.equal(moved.departmentId, newUnit.department.id)
 })

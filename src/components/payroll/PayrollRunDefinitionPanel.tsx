@@ -2,13 +2,15 @@
 
 // الخطوة 16: «مسير جديد» — اسم ونسخة سياسة منشورة وشهر (الفترة من دورتها)، وفلاتر فرع ← قسم ← فريق أو قائمة،
 // واستبعادات بسبب إجباري، ومعاينة عضوية حقيقية قبل الحفظ. الحفظ ينشئ مسودة فقط؛ الحساب زر منفصل.
-import { useEffect, useMemo, useState } from 'react'
+// الاستبعاد متاح لأي موظف تعرضه المعاينة داخل النطاق — ومنهم أصحاب مشاكل البيانات التي تمنع «احتساب المسودة».
+import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ApiBranch, ApiDepartment, ApiEmployee, ApiTeam } from '../../lib/api'
 import { fetchPayrollPolicies } from '../../lib/payroll-policies-api'
 import {
-  createPayrollRunDraft, emptyRunFilters, linkedFilterOptions, payrollRunErrorCode, payrollRunErrorMessage, previewPayrollRunDefinition,
+  createPayrollRunDraft, emptyRunFilters, linkedFilterOptions, payrollExclusionCandidates, payrollRunErrorCode, payrollRunErrorMessage, previewPayrollRunDefinition,
   pruneLinkedFilters, publishedPolicyVersions, updatePayrollRunDraft,
-  type PayrollMembershipPreview, type PayrollRunExclusionInput, type PayrollRunFiltersInput, type PayrollRunWithSelection, type PublishedPolicyVersionOption,
+  type PayrollExclusionCandidate, type PayrollMembershipPreview, type PayrollRunExclusionInput, type PayrollRunFiltersInput, type PayrollRunWithSelection,
+  type PublishedPolicyVersionOption,
 } from '../../lib/payroll-runs-api'
 import { PayrollMembershipPreviewView } from './PayrollMembershipPreviewView'
 
@@ -55,6 +57,9 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
   const [confirmEmpty, setConfirmEmpty] = useState(!!draft?.selection?.emptyScope)
   const [emptyReason, setEmptyReason] = useState(draft?.selection?.emptyScope?.reason ?? '')
   const [preview, setPreview] = useState<PayrollMembershipPreview | null>(null)
+  // مرشحو الاستبعاد من آخر معاينة لنفس النطاق: يبقون بعد إضافة استبعاد (فتسقط المعاينة) ويُمسحون عند تغيير النطاق.
+  const [candidates, setCandidates] = useState<PayrollExclusionCandidate[]>([])
+  const reasonRef = useRef<HTMLInputElement>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [needsEmptyConfirmation, setNeedsEmptyConfirmation] = useState(false)
@@ -68,6 +73,7 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
 
   // أي تغيير في التعريف يُسقط المعاينة السابقة حتى لا يُحفظ تعريف بمعاينة قديمة.
   useEffect(() => { setPreview(null) }, [policyVersionId, period, mode, filters, exclusions, confirmEmpty, emptyReason])
+  useEffect(() => { setCandidates([]) }, [policyVersionId, period, mode, filters])
 
   const options = useMemo(() => linkedFilterOptions(branches, departments, teams, filters), [branches, departments, teams, filters])
   const selectedFilters: PayrollRunFiltersInput = mode === 'LIST'
@@ -79,8 +85,9 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
   } : null
   const listCandidates = employees.filter(emp => (!filters.branchIds.length || filters.branchIds.includes(emp.branchId)) &&
     (!search.trim() || emp.fullName.includes(search.trim()) || emp.employeeCode.includes(search.trim()))).slice(0, 60)
-  const employeeName = (id: number) => employees.find(emp => emp.id === id)?.fullName ?? `موظف #${id}`
+  const employeeName = (id: number) => employees.find(emp => emp.id === id)?.fullName ?? candidates.find(row => row.employeeId === id)?.label ?? `موظف #${id}`
   const policy = policies.find(row => row.versionId === policyVersionId)
+  const excludedIds = exclusions.map(row => row.employeeId)
 
   const setLinked = (next: PayrollRunFiltersInput) => setFilters(pruneLinkedFilters(branches, departments, teams, next))
   const runPreview = async () => {
@@ -89,6 +96,7 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
     try {
       const result = await previewPayrollRunDefinition({ ...input, ...(draft ? { runId: draft.id } : {}) })
       setPreview(result)
+      setCandidates(payrollExclusionCandidates(result))
       setNeedsEmptyConfirmation(result.emptyScopeRequiresConfirmation)
     } catch (e) {
       setPreview(null); setError(payrollRunErrorMessage(e, 'تعذرت معاينة العضوية'))
@@ -110,8 +118,14 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
     setExclusions([...exclusions.filter(row => row.employeeId !== exclusionEmployee), { employeeId: exclusionEmployee, reason: exclusionReason.trim() }])
     setExclusionEmployee(''); setExclusionReason('')
   }
-  const exclusionOptions = preview ? [...preview.included.map(row => ({ id: row.employeeId, label: `${row.fullName} (${row.employeeCode})` }))]
-    : (mode === 'LIST' ? filters.employeeIds.map(id => ({ id, label: employeeName(id) })) : [])
+  const chooseExclusion = (candidate: PayrollExclusionCandidate) => {
+    setExclusionEmployee(candidate.employeeId)
+    reasonRef.current?.focus()
+  }
+  const exclusionOptions = candidates.length
+    ? candidates.filter(row => !excludedIds.includes(row.employeeId)).map(row => ({ id: row.employeeId, label: row.label }))
+    : (mode === 'LIST' ? filters.employeeIds.filter(id => !excludedIds.includes(id)).map(id => ({ id, label: employeeName(id) })) : [])
+  const blockingProblems = candidates.filter(row => row.dataProblem && !excludedIds.includes(row.employeeId))
 
   return (
     <div className="card border-2 border-primary-100 space-y-4" data-testid="payroll-run-definition">
@@ -170,15 +184,18 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
         </div>}
       </div>
 
-      <div className="space-y-2 rounded-xl border border-gray-100 p-3">
+      <div className="space-y-2 rounded-xl border border-gray-100 p-3" data-testid="payroll-run-exclusions">
         <p className="text-sm font-medium text-gray-700">الاستبعادات ({exclusions.length}) — السبب إجباري</p>
+        {blockingProblems.length > 0 && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
+          {blockingProblems.length} موظف بمشكلة بيانات تمنع «احتساب المسودة»: صحح بياناتهم أو استبعدهم هنا بسبب مكتوب.</p>}
         <div className="flex flex-wrap gap-2">
-          <select value={exclusionEmployee} onChange={e => setExclusionEmployee(e.target.value ? Number(e.target.value) : '')} disabled={busy || !exclusionOptions.length} className="input w-64">
-            <option value="">{exclusionOptions.length ? 'اختر موظفًا من الداخلين' : 'اعرض المعاينة لاختيار موظف'}</option>
+          <select value={exclusionEmployee} onChange={e => setExclusionEmployee(e.target.value ? Number(e.target.value) : '')} disabled={busy || !exclusionOptions.length} className="input w-72"
+            aria-label="الموظف المستبعد">
+            <option value="">{exclusionOptions.length ? 'اختر موظفًا من المعاينة (داخلون أو مستبعدون تلقائيًا)' : 'اعرض المعاينة لاختيار موظف'}</option>
             {exclusionOptions.map(row => <option key={row.id} value={row.id}>{row.label}</option>)}
           </select>
-          <input value={exclusionReason} onChange={e => setExclusionReason(e.target.value)} maxLength={500} disabled={busy} className="input flex-1 min-w-48"
-            placeholder="سبب الاستبعاد (مثل: يُصرف في مسير الإدارة العليا)" />
+          <input ref={reasonRef} value={exclusionReason} onChange={e => setExclusionReason(e.target.value)} maxLength={500} disabled={busy} className="input flex-1 min-w-48"
+            aria-label="سبب الاستبعاد" placeholder="سبب الاستبعاد (مثل: يُصرف في مسير الإدارة العليا)" />
           <button type="button" onClick={addExclusion} disabled={busy || exclusionEmployee === '' || exclusionReason.trim().length < 3} className="btn-secondary text-sm disabled:opacity-50">إضافة استبعاد</button>
         </div>
         {exclusions.map(row => <div key={row.employeeId} className="flex items-center justify-between gap-2 rounded-lg bg-amber-50 px-3 py-2 text-sm">
@@ -202,7 +219,7 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
           {draft ? 'حفظ تعديل المسودة' : 'حفظ كمسودة'}</button>
         {preview?.nameTaken && <span className="text-sm text-red-700">الاسم مستخدم لمسير آخر في هذا الشهر</span>}
       </div>
-      {preview && <PayrollMembershipPreviewView preview={preview} currency={currency} />}
+      {preview && <PayrollMembershipPreviewView preview={preview} currency={currency} onExclude={chooseExclusion} excludedIds={excludedIds} disabled={busy} />}
     </div>
   )
 }

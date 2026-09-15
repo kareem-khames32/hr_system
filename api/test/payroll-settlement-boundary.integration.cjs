@@ -37,8 +37,10 @@ async function fixture() {
   ])
   return { employee, kase, overtime, loan, installments }
 }
+// الخطوة 16 (B3): اسم المسير فريد داخل الشهر لغير الملغى (فهرس UX_payroll_run_period_name)؛ كل مسير اصطناعي يأخذ رقمًا تسلسليًا.
+let syntheticClaimNumber = 0
 async function claim(f, status = 'CALCULATED', overrides = {}) {
-  const run = await repo('PayrollRun').save({ name: 'Synthetic existing claim', scopeType: 'CUSTOM', employeeIds: JSON.stringify([f.employee.id]), period: '2026-07', startDate: '2026-06-23', endDate: '2026-07-22', status })
+  const run = await repo('PayrollRun').save({ name: `Synthetic existing claim ${++syntheticClaimNumber}`, scopeType: 'CUSTOM', employeeIds: JSON.stringify([f.employee.id]), period: '2026-07', startDate: '2026-06-23', endDate: '2026-07-22', status })
   const item = await repo('PayrollItem').save({ runId: run.id, employeeId: f.employee.id, basicSalary: 2400, overtimeHours: 2, overtimeAmount: 20,
     loanInstallments: 1000, netPay: 1420, payMethod: 'cash', breakdown: JSON.stringify({ overtimeEntryIds: [f.overtime[0].id], installmentIds: [f.installments[0].id] }), ...overrides })
   return { run, item }
@@ -165,8 +167,10 @@ test('SPEC①/ح٢-ب: legacy financial settlement without snapshot requires exp
   assert.equal(list.status, 200); assert.equal(JSON.stringify(list.body).includes('settlementFinancialSnapshot'), false)
 })
 
+// الخطوة 16 (B3): اسم المسير فريد داخل الشهر لغير الملغى؛ كل مسير جديد يأخذ رقمًا تسلسليًا.
+let settlementRunNumber = 0
 const calculate = f => request(admin, 'POST', '/payroll/runs/calculate-defined', {
-  period: '2026-07', scopeType: 'CUSTOM', employeeIds: [f.employee.id], name: 'اختبار حدود التصفية والمسير',
+  period: '2026-07', scopeType: 'CUSTOM', employeeIds: [f.employee.id], name: `اختبار حدود التصفية والمسير ${++settlementRunNumber}`,
 })
 test('SPEC①/ح٢-ب: payroll after settlement excludes frozen claims and legacy ambiguity is refused', async () => {
   const f = await fixture(); await recalc(f)

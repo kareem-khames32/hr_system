@@ -39,7 +39,10 @@ function token(user) {
     employeeId: user.employeeId ?? null, tokenVersion: user.tokenVersion ?? 0,
     permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
 }
+// الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ (هذه المجموعة لا تختبر التكافؤ نفسه)
+const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
 async function request(user, method, route, body) {
+  await writeParityReasonsBeforeApproval(request, user, method, route)
   const response = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json',
     ...(user ? { Authorization: `Bearer ${token(user)}` } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
@@ -134,6 +137,8 @@ before(async () => {
     { key: 'payroll.policy.max_deduction_pct_of_gross', value: 'null' },
     { key: 'loan.insufficient_net_behavior', value: 'PARTIAL_THEN_CARRY' },
   ])
+  // الخطوة 22 (B5): المستخدم نفسه يحتسب ويعتمد في هذه المجموعة — رخصة الشركة الصغيرة الموثقة (فصل المهام مختبر في payroll-run-screen)
+  await require('./fixtures/payroll-small-company-approval.cjs').allowSmallCompanyApproval(repo)
   branchA = await repo('Branch').save({ code: 'POLICY_A', name: 'فرع السياسات الأول' })
   branchB = await repo('Branch').save({ code: 'POLICY_B', name: 'فرع السياسات الثاني' })
   departmentA = await repo('Department').save({ branchId: branchA.id, name: 'قسم الفرع الأول', code: 'POLICY_DA' })
@@ -234,11 +239,17 @@ async function calc(f, extra = {}, actor = admin) {
     employeeIds: [f.employee.id], name: `مسير اختبار الأقساط ${sequence}`, ...extra }), 201)
   const read = expectStatus(await request(actor, 'GET', `/payroll/runs/${run.id}`), 200)
   assert.deepEqual(read, run)
-  return run
+  // الخطوة 20 (B4): أسباب تقرير التكافؤ تُكتب بعد الحساب مباشرة، فالانتقالات المرفوضة لاحقًا (assertRejected) تبقى لا تكتب شيئًا
+  await writeParityReasonsBeforeApproval(request, actor, 'POST', `/payroll/runs/${run.id}/approve`)
+  return expectStatus(await request(actor, 'GET', `/payroll/runs/${run.id}`), 200)
 }
 function item(run, f) { const row = run.items.find(row => row.employeeId === f.employee.id); assert.ok(row); return row }
 function plan(run, f) { const value = JSON.parse(item(run, f).breakdown).installmentPlan; assert.equal(value?.version, 'LOAN_ALLOCATION_V1_20260913'); return value }
-async function transition(run, action, body, actor = admin) { return request(actor, 'POST', `/payroll/runs/${run.id}/${action}`, body) }
+// الخطوة 22 (B5): الصرف يسجل قناته ومرجعه؛ القيد الصالح يُرسل دائمًا حتى يأتي أي رفض صرف مختبر هنا من سببه الحقيقي
+async function transition(run, action, body, actor = admin) {
+  const payload = action === 'pay' && body === undefined ? { channel: 'BANK_TRANSFER', reference: `LOAN-TEST-${run.id}` } : body
+  return request(actor, 'POST', `/payroll/runs/${run.id}/${action}`, payload)
+}
 // الخطوة 18 (B3): الاعتماد يتطلب إقرارًا بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية بنطاق المعتمد.
 async function acknowledgeUnassigned(user, runId) {
   const report = await request(user, 'GET', `/payroll/runs/${runId}/unassigned`)
@@ -530,6 +541,9 @@ test('Installment ledger: real JWT permissions and branch scope protect run tran
 
 test('Installment ledger: concurrent approvals in different payroll periods cannot reserve the same overdue parent twice', async t => {
   const f = await fixture(), september = await calc(f), october = await calc(f, { period: '2026-10' })
+  // الخطوة 18 (B3): الإقرار بتقرير «بلا مسير» يسبق الاعتماد؛ يُسجل للمسيرين قبل الحاجز حتى يصل الاعتماد فعلًا إلى قفل مالية الموظف.
+  await acknowledgeUnassigned(admin, september.id)
+  await acknowledgeUnassigned(admin, october.id)
   const runner = ds.createQueryRunner(); await runner.connect(); await runner.startTransaction()
   let requests = [], lockReleased = false
   try {

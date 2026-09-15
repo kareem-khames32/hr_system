@@ -34,6 +34,7 @@ interface PolicyField {
   nullable?: boolean
   options?: { value: string; label: string }[]
   wide?: boolean // حقل نصي عريض بأكواد لاتينية (جداول «مفتاح:قيمة»)
+  perm?: string // صلاحية إضافية لتغيير الحقل فوق settings.manage (الخادم يرفض بدونها)
 }
 interface PolicyGroup {
   title: string
@@ -163,6 +164,8 @@ const GROUPS: PolicyGroup[] = [
       { key: 'system.currency', label: 'عملة النظام', type: 'select', options: [{ value: 'SAR', label: 'ريال سعودي (ر.س)' }, { value: 'EGP', label: 'جنيه مصري (ج.م)' }] },
       { key: 'eos.months_per_year', label: 'مكافأة نهاية الخدمة', type: 'number', unit: 'شهر/سنة', min: 0 },
       { key: 'payroll.cycle_start_day', label: 'يوم بداية دورة المسير', type: 'number', unit: 'من الشهر', min: 1, max: 31, integer: true, hint: 'مسير سبتمبر بدورة 23 = من 23 أغسطس إلى 22 سبتمبر.' },
+      // الخطوة 22 / SRS PR-11 (B5): رخصة الشركة الصغيرة لفصل المهام
+      { key: 'payroll.approval_self_approval_allowed', label: 'رخصة الشركة الصغيرة: يعتمد المسير من احتسبه', type: 'bool', perm: 'payroll.self_approval_licence', hint: 'الأصل مقفل: من احتسب نسخة المسير لا يعتمدها (PAYRUN-STATE-003). فعّلها فقط لو لا يوجد مستخدم ثانٍ يحمل صلاحية الاعتماد. تغييرها يتطلب صلاحية «رخصة الشركة الصغيرة» التي يمنحها مدير النظام فقط (صلاحية الإعدادات وحدها لا تكفي)، وكل اعتماد بها يُسجل في سجل المسير.' },
       { key: 'payroll.salary_evidence_mode', label: 'مصدر راتب شهر المسير', type: 'select', options: [
         { value: 'MONTHLY_HISTORY', label: 'السجل الشهري فقط — بلا راتب موثق للشهر يُستبعد الموظف بسبب ظاهر' },
         { value: 'MONTHLY_HISTORY_OR_CURRENT_FILE', label: 'انتقالي — من لا يملك سجلًا شهريًا يُحسب براتب الملف الحالي ويُوسم «غير موثق»' },
@@ -309,13 +312,17 @@ export default function PoliciesPage() {
     }
     if (f.type === 'bool') {
       const on = v === 'true'
+      // حقل بصلاحية إضافية (رخصة الشركة الصغيرة): معروض للقراءة ومقفل لمن لا يحملها
+      const locked = !!f.perm && !can(f.perm)
       return (
         <button
           type="button"
-          onClick={() => setVal(f.key, on ? 'false' : 'true')}
+          onClick={() => { if (!locked) setVal(f.key, on ? 'false' : 'true') }}
+          disabled={locked}
+          title={locked ? 'يتطلب صلاحية مستقلة يمنحها مدير النظام فقط' : undefined}
           className={`relative w-12 h-6 rounded-full transition-colors ${
             on ? 'bg-primary-500' : 'bg-gray-300'
-          }`}
+          }${locked ? ' opacity-50 cursor-not-allowed' : ''}`}
           aria-pressed={on}
         >
           <span

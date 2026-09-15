@@ -73,7 +73,10 @@ export function legacyLatenessTierSet(rules: PayrollShadowAttendanceRules) {
     const from: number = Math.max(tier.from, cursor), end = tier.to === null ? null : tier.to + 1
     if (end !== null && end <= from) continue
     if (from > cursor) push(cursor, from, 'RATE_1_1', 'بلا شريحة مطابقة: دقائق التأخير × سعر الدقيقة')
-    if (tier.mode === 'FRACTION') {
+    // الخطوة 21: مجموعة الشرائح المؤرخة تضيف المضاعف (الدقائق × المضاعف × سعر الدقيقة) وشريحة بلا خصم.
+    if (tier.mode === 'MULTIPLIER') push(from, end, 'MULTIPLIER', `الدقائق × ${tier.value}`, { multiplier: decimalText(tier.value, 3, 'SHADOW_LEGACY_TIER_INVALID') })
+    else if (tier.mode === 'NONE') push(from, end, 'NONE', 'شريحة بلا خصم')
+    else if (tier.mode === 'FRACTION') {
       if (tier.value === 0) push(from, end, 'NONE', 'شريحة قديمة بقيمة صفر')
       else if (tier.value <= 1) push(from, end, 'DAY_FRACTION', `كسر يوم ${tier.value}`, { dayFraction: decimalText(tier.value, 4, 'SHADOW_LEGACY_TIER_INVALID') })
       else push(from, end, 'FORMULA', `${tier.value} يوم`, { formula: `DAY_RATE * ${decimalText(tier.value, 3, 'SHADOW_LEGACY_TIER_INVALID')}` })

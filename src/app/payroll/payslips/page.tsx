@@ -21,6 +21,8 @@ import {
 } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
 import { downloadCsv, csvDateStamp } from '@/lib/csv'
+// الخطوة 22 (B5): منسّق المبالغ الموحد في شاشات الرواتب والقسيمة
+import { formatMoney } from '@/lib/money'
 
 const runStatusLabels: Record<string, string> = {
   CALCULATED: 'محسوب',
@@ -138,7 +140,7 @@ export default function PayslipsListPage() {
           <div className="flex items-center justify-between">
             <div>
               <p className="text-primary-100">إجمالي صافي الرواتب</p>
-              <p className="text-4xl font-bold mt-1">{totalNet.toLocaleString()} {currency}</p>
+              <p className="text-4xl font-bold mt-1">{formatMoney(totalNet)} {currency}</p>
               <p className="text-primary-100 mt-2">
                 {filteredItems.length} قسيمة راتب
                 {run ? ` — فترة ${run.period}` : ''}
@@ -209,16 +211,16 @@ export default function PayslipsListPage() {
                   </td>
                   <td className="px-4 py-4 text-gray-600">{run?.period}</td>
                   <td className="px-4 py-4 text-center text-gray-600">
-                    {Number(item.basicSalary).toLocaleString()}
+                    {formatMoney(item.basicSalary)}
                   </td>
                   <td className="px-4 py-4 text-center text-success-600 font-medium">
-                    +{Number(item.overtimeAmount).toLocaleString()}
+                    +{formatMoney(item.overtimeAmount)}
                   </td>
                   <td className="px-4 py-4 text-center text-red-600 font-medium">
-                    -{deductionsOf(item).toLocaleString()}
+                    -{formatMoney(deductionsOf(item))}
                   </td>
                   <td className="px-4 py-4 text-center font-bold text-gray-800">
-                    {Number(item.netPay).toLocaleString()}
+                    {formatMoney(item.netPay)}
                   </td>
                   <td className="px-4 py-4 text-center">
                     <span className={`px-3 py-1 rounded-full text-xs font-medium ${runStatusColors[run?.status ?? ''] ?? 'bg-gray-100 text-gray-600'}`}>

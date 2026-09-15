@@ -84,7 +84,9 @@ export const updatePayrollRunDraft = (runId: number, input: Partial<PayrollRunDe
 export const fetchPayrollRunMembershipPreview = (runId: number) => apiFetch<PayrollMembershipPreview>(`/payroll/runs/${runId}/membership-preview`)
 export const calculatePayrollRunDraft = (runId: number, options: { allowDraftConflicts?: boolean; refreshInstallmentPolicy?: boolean } = {}) =>
   send<PayrollRunWithSelection>(`/payroll/runs/${runId}/calculate`, 'POST', options)
-export const recalculatePayrollRun = (runId: number, options: { reason: string; allowDraftConflicts?: boolean; refreshInstallmentPolicy?: boolean }) =>
+export const recalculatePayrollRun = (runId: number, options: { reason: string; allowDraftConflicts?: boolean; refreshInstallmentPolicy?: boolean
+  // الخطوة 19 (B4): تحديث لقطة السياسة صراحةً ببصمة الإعدادات الحالية المعروضة
+  refreshPolicySnapshot?: boolean; expectedPolicySnapshotHash?: string }) =>
   send<PayrollRunWithSelection>(`/payroll/runs/${runId}/recalculate`, 'POST', options)
 export const fetchPayrollRunUnassigned = (runId: number) => apiFetch<PayrollRunUnassignedReport>(`/payroll/runs/${runId}/unassigned`)
 export const acknowledgePayrollRunUnassigned = (runId: number, reportHash: string, note?: string) =>
@@ -113,6 +115,23 @@ export const MEMBERSHIP_EXCLUSION_LABELS: Record<string, string> = {
 }
 
 export const emptyRunFilters = (): PayrollRunFiltersInput => ({ branchIds: [], departmentIds: [], teamIds: [], employeeIds: [] })
+
+// أكواد لا يُكتب لها استبعاد: خارج النطاق آخر يوم (الاستبعاد لا ينطبق)، أو مستبعد يدويًا بالفعل.
+const NOT_EXCLUDABLE = new Set(['TRANSFERRED_OUT', 'EXC_OUT_OF_SCOPE', 'EXC_MANUAL_EXCLUSION'])
+export interface PayrollExclusionCandidate { employeeId: number; label: string; dataProblem: boolean; code: string | null }
+/**
+ * من يمكن استبعاده بسبب مكتوب من المعاينة: الداخلون، والمستبعدون تلقائيًا داخل النطاق (مشكلة بيانات، بلا راتب، في مسير آخر…).
+ * أصحاب مشاكل البيانات أولًا لأنهم يمنعون «احتساب المسودة» حتى يُصححوا أو يُستبعدوا.
+ */
+export function payrollExclusionCandidates(preview: Pick<PayrollMembershipPreview, 'included' | 'excluded'>, alreadyExcluded: number[] = []): PayrollExclusionCandidate[] {
+  const skip = new Set(alreadyExcluded)
+  const rows: PayrollExclusionCandidate[] = [
+    ...preview.excluded.filter(row => !NOT_EXCLUDABLE.has(row.code ?? '')).map(row => ({ employeeId: row.employeeId, code: row.code, dataProblem: !!row.dataProblem,
+      label: `${row.fullName} (${row.employeeCode})${row.dataProblem ? ' — مشكلة بيانات تمنع الحساب' : ` — ${MEMBERSHIP_EXCLUSION_LABELS[row.code ?? ''] ?? row.code ?? 'مستبعد'}`}` })),
+    ...preview.included.map(row => ({ employeeId: row.employeeId, code: null, dataProblem: false, label: `${row.fullName} (${row.employeeCode})` })),
+  ]
+  return rows.filter(row => !skip.has(row.employeeId)).sort((a, b) => Number(b.dataProblem) - Number(a.dataProblem))
+}
 
 /** الفلاتر المترابطة: الأقسام داخل الفروع المختارة (وفروعها)، والفرق داخل الأقسام المختارة أو فروعها. */
 export function linkedFilterOptions(branches: ApiBranch[], departments: ApiDepartment[], teams: ApiTeam[], filters: PayrollRunFiltersInput) {
@@ -157,3 +176,61 @@ export function payrollRunErrorMessage(error: unknown, fallback = 'تعذر تن
   return error instanceof Error ? error.message : fallback
 }
 export const payrollRunErrorCode = (error: unknown) => error instanceof ApiError && typeof error.details?.code === 'string' ? error.details.code : null
+
+// ===== الخطوتان 22 و23 (B5): سجل المسير، وقيد الصرف، وحل التعارضات، وترتيب التحصيل، وفترة التكافؤ التشغيلية =====
+export type PayrollPayChannel = 'BANK_TRANSFER' | 'CASH' | 'CHEQUE' | 'MIXED'
+export const PAY_CHANNEL_LABELS: Record<PayrollPayChannel, string> = {
+  BANK_TRANSFER: 'تحويل بنكي', CASH: 'نقدًا', CHEQUE: 'شيك', MIXED: 'مختلط حسب طريقة صرف كل موظف',
+}
+export type PayrollCollectionClass = 'ATTENDANCE' | 'RECOVERY' | 'TYPED' | 'ADMINISTRATIVE' | 'LOAN'
+export const COLLECTION_CLASS_LABELS: Record<PayrollCollectionClass, string> = {
+  ATTENDANCE: 'خصومات الحضور', RECOVERY: 'الاستردادات والعهد', TYPED: 'الخصومات المصنفة', ADMINISTRATIVE: 'الخصومات الإدارية', LOAN: 'أقساط السلف',
+}
+export interface PayrollRunActor { id: number; name: string | null; at: string | null }
+export type PayrollRunCollectionView =
+  | { source: 'POLICY_VERSION' | 'DEFAULT'; versionId: number | null; order: PayrollCollectionClass[] | null; effectiveOrder: PayrollCollectionClass[]
+      loanBeforeOthers: boolean; componentOrder: string[] | null; message: string }
+  | { source: 'INVALID'; message: string }
+export interface PayrollRunScreenFields {
+  calculatedBy?: number | null; calculatedAt?: string | null; paidBy?: number | null; payChannel?: string | null; payReference?: string | null
+  actors?: { calculated: PayrollRunActor | null; approved: PayrollRunActor | null; paid: PayrollRunActor | null }
+  approvalGuard?: { calculatedBy: number | null; selfApprovalAllowed: boolean; blocked: { code: string; message: string } | null } | null
+  payRecord?: { paidBy: PayrollRunActor | null; channel: string | null; channelLabel: string | null; reference: string | null } | null
+  collection?: PayrollRunCollectionView
+}
+export interface PayrollRunEventView {
+  id: number; runId: number; eventType: string; actorUserId: number; actorName: string | null; reason: string | null; createdAt: string
+  payload: Record<string, unknown> | null
+}
+export interface PayrollParityOperationsRun {
+  runId: number; name: string | null; period: string; status: string; engineMode: string | null; approvedAt: string | null; approvedBy: number | null
+  approvedByName: string | null; paidAt: string | null; parityReportHash: string | null; parityTotals: Record<string, unknown> | null
+  parityExplained: Record<string, unknown> | null; counted: boolean; notCountedReason: string | null
+  // الخطوة 23 (تصحيح المراجعة): مسير تجريبي معلّم «لا يُحتسب» بسبب ومن علّمه ومتى
+  excluded?: { reason: string; by: number | null; byName: string | null; at: string | null } | null
+}
+/** شهر رواتب: يُحتسب فقط لو كل مسيراته الحية (غير الملغاة وغير التجريبية) SHADOW معتمدة ومصروفة بتقرير موقّع. */
+export interface PayrollParityOperationsPeriod { period: string; counted: boolean; runIds: number[]; blockers: Array<{ runId: number; reason: string }> }
+export interface PayrollParityOperations {
+  plan: { baselineMonths: number; extensionMonths: number; totalMonths: number; counts: string; signer: string; decision: string; decisionOwner?: string; delegate?: string | null }
+  months: number; countedPeriods: string[]; stage: 'BASELINE' | 'EXTENSION' | 'DECISION_DUE'; message: string; runs: PayrollParityOperationsRun[]
+  scope?: 'COMPANY' | 'BRANCH'; periods?: PayrollParityOperationsPeriod[]; excludedRuns?: number
+}
+
+export const fetchPayrollRunEventsView = (runId: number) => apiFetch<PayrollRunEventView[]>(`/payroll/runs/${runId}/events`)
+export const payPayrollRun = (runId: number, record: { channel: PayrollPayChannel; reference: string }) =>
+  send<ApiPayrollRun & PayrollRunScreenFields>(`/payroll/runs/${runId}/pay`, 'POST', record)
+export const excludePayrollRunMember = (runId: number, input: { employeeId: number; reason: string; allowDraftConflicts?: boolean }) =>
+  send<PayrollRunWithSelection>(`/payroll/runs/${runId}/member-exclusions`, 'POST', input)
+export const fetchPayrollParityHistory = () => apiFetch<PayrollParityOperations>('/payroll/parity-history')
+// الخطوة 23 (تصحيح المراجعة): تعليم مسير تجريبي «لا يُحتسب» (counts=false) أو إعادته (counts=true) بسبب مكتوب
+export const setPayrollRunParityCounting = (runId: number, input: { counts: boolean; reason: string }) =>
+  send<PayrollParityOperations>(`/payroll/runs/${runId}/parity-counting`, 'POST', input)
+
+/** سطر ترتيب التحصيل المطبق على المسير (من نسخة السياسة أو الافتراضي). */
+export function collectionOrderText(collection: PayrollRunCollectionView | undefined | null): string | null {
+  if (!collection) return null
+  if (collection.source === 'INVALID') return collection.message
+  const order = collection.effectiveOrder.map(kind => COLLECTION_CLASS_LABELS[kind] ?? kind).join(' ← ')
+  return collection.source === 'POLICY_VERSION' ? `ترتيب التحصيل من نسخة السياسة: ${order}` : `ترتيب التحصيل الافتراضي (النسخة بلا ترتيب محفوظ): ${order}`
+}

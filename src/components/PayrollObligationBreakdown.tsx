@@ -4,11 +4,13 @@ import { useState } from 'react'
 import Link from 'next/link'
 import { can, type ApiPayrollItem } from '@/lib/api'
 import { fetchPayslipObligations, formatDeductionMoney, type PayrollObligationDetail } from '@/lib/deductions-api'
+import { formatMoney, roundMoney } from '@/lib/money'
 
 // تتبع «الخصومات الأخرى» سطرًا سطرًا (قرار المالك: الخصم يُتتبع في الطلب والمسير والقسيمة):
 // لكل قيد دفتر محفوظ مع المسير نوعه وسببه ورقم طلبه وسعر اليوم/الساعة المستخدم، والمحصل والمرحّل بعد حماية الصافي.
 type Line = { id: number; type: 'DEBIT' | 'CREDIT'; amount: number; collected: number; carried: number; typed: boolean }
-const two = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? value.toFixed(2) : typeof value === 'string' ? value : null
+// FE-06: التقريب الواحد (roundMoney) قبل النص؛ toFixed وحده ثنائي (1.005 ← 1.00)
+const two = (value: unknown) => typeof value === 'number' && Number.isFinite(value) ? roundMoney(value).toFixed(2) : typeof value === 'string' ? value : null
 
 function savedLines(item: ApiPayrollItem): { lines: Line[]; protection: Record<string, any> | null } | null {
   try {
@@ -35,7 +37,7 @@ export function PayrollObligationBreakdown({ item, currency, details, compact = 
       <p className="text-xs text-gray-600 mb-3">
         حماية الصافي (DD-11): الأرضية {formatDeductionMoney(two(Number(protection.floor)))}
         {protection.cap ? ` · السقف ${protection.settings?.maxDeductionPctOfGross ?? '—'}% = ${formatDeductionMoney(two(Number(protection.cap)))}` : ' · بلا سقف نسبي'}
-        {' '}· سعة القيود {formatDeductionMoney(protection.debitCapacity)} · المرحّل {formatDeductionMoney((carriedTotal / 100).toFixed(2))} {currency}
+        {' '}· سعة القيود {formatDeductionMoney(protection.debitCapacity)} · المرحّل {formatMoney(carriedTotal / 100)} {currency}
       </p>
     )}
     {!rows ? (

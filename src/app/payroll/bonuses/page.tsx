@@ -7,7 +7,7 @@ import { AlertTriangle, Download, History } from 'lucide-react'
 import { fetchAllRequests, fetchEmployees, type ApiEmployee, type ApiRequest } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
 import { downloadCsv, csvDateStamp } from '@/lib/csv'
-import { formatBonusMoney } from '@/lib/bonuses-api'
+import { formatMoney } from '@/lib/money'
 import { BonusesWorkspace } from '@/components/payroll/BonusesWorkspace'
 
 // C4 / الخطوة 27: شاشة المكافآت على موديول المكافآت (EX-05) — الاقتراح للموظف المختار نفسه، لا مكافأة للنفس،
@@ -30,7 +30,8 @@ const parsePayload = (raw?: string): { amount?: number; reason?: string; employe
   if (!raw) return {}
   try { return JSON.parse(raw) } catch { return {} }
 }
-const amountText = (value: unknown) => Number.isFinite(Number(value)) ? formatBonusMoney(Number(value).toFixed(2)) : '—'
+// FE-06: المنسّق الواحد بتقريبه (لا toFixed الثنائي الذي يعطي 1.005 ← 1.00)
+const amountText = (value: unknown) => value !== null && value !== '' && Number.isFinite(Number(value)) ? formatMoney(value) : '—'
 
 export default function BonusesPage() {
   const currency = useCurrency()

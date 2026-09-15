@@ -1,11 +1,13 @@
 import type { ApiPayrollItem } from '@/lib/api'
+import { formatMoney } from '../lib/money'
 
 type Line = { installmentRef: string; loanRef: string; originalDuePeriod: string; eligible: boolean;
   dueAmount: string; deductedAmount: string; remainingAmount: string; outcome: string;
   continuation: { duePeriod: string } | null }
 const labels: Record<string, string> = { DEDUCTED: 'خصم كامل', PARTIAL: 'خصم جزئي', CARRIED_NO_CAPACITY: 'ترحيل لعدم وجود متاح',
   SKIPPED_AND_EXTENDED: 'تأجيل كامل ومد الجدول', DEFERRED_MANUAL: 'تأجيل بطلب معتمد' }
-const money = (value: string) => { const [whole, cents] = value.split('.'); return `${BigInt(whole).toLocaleString('ar-EG')}.${cents}` }
+// الخطوة 22 (B5): منسّق المبالغ الموحد — كان يطلع أرقامًا مخلوطة مثل ١٬٥٠٠.50
+const money = (value: string) => formatMoney(value)
 
 export function PayrollInstallmentBreakdown({ item, currency, compact = false }: { item: ApiPayrollItem; currency: string; compact?: boolean }) {
   let plan: any

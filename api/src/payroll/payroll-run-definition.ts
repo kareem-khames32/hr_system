@@ -1,4 +1,5 @@
 import type { EntityManager } from 'typeorm'
+import { isDisposableTestDatabase } from '../auth/jwt-secret'
 import type { PayrollScopeType } from './payroll.entities'
 
 /**
@@ -115,17 +116,39 @@ export interface PayrollOrgAt extends PayrollOrgRef { date: string; issues: Payr
 export interface PayrollOrgEmployee { id: number; branchId?: number | null; departmentId?: number | null; teamId?: number | null; costCenterId?: number | null }
 
 interface OrgVersionRow { version: number; effectiveFrom: string | null; legacyBaseline: boolean; branchId: number | null; valid: boolean }
-interface TransferRow { id: number; employeeId: number; fromTeamId: number | null; toTeamId: number | null; effectiveDate: string; status: string }
+interface TransferRow { id: number; employeeId: number; fromTeamId: number | null; toTeamId: number | null; effectiveDate: string; status: string; requestId?: number | null; executedDate?: string | null }
+/**
+ * تغيير قسم أو فريق مسجل في سجل تغييرات الموظف (employee_status_history).
+ * date = اليوم المحلي للتسجيل؛ القيمة الجديدة تسري منه. transferId لما يكون التغيير جزءًا من تنفيذ نقل،
+ * فيسري بتاريخ سريان النقل لا بتاريخ تسجيله.
+ */
+export interface OrgFieldChangeRow {
+  id: number; employeeId: number; field: 'departmentId' | 'teamId'; oldValue: number | null; newValue: number | null
+  date: string; requestId: number | null; transferId: number | null; valid: boolean
+}
 export interface PayrollOrgHistory {
   today: string
   versions: Map<number, OrgVersionRow[]>
   transfers: Map<number, TransferRow[]>
+  // تعديل القسم أو الفريق من ملف الموظف بلا حركة نقل له تاريخ؛ الأيام السابقة للتعديل تقرأ القيمة القديمة.
+  fieldChanges?: Map<number, OrgFieldChangeRow[]>
   teamDepartment: Map<number, number | null>
   departmentBranch: Map<number, number | null>
   departmentParent: Map<number, number | null>
 }
 
 const dateText = (value: unknown) => typeof value === 'string' ? value.slice(0, 10) : value instanceof Date ? value.toISOString().slice(0, 10) : null
+const localDay = (time: number) => { const d = new Date(time); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+
+/** قيمة معرّف من simple-json في سجل التغييرات: null مقبول، والرقم الموجب مقبول، وغيرهما غير صالح. */
+function changeLogId(text: unknown): { ok: boolean; value: number | null } {
+  if (text === null || text === undefined || text === '' || text === 'null') return { ok: true, value: null }
+  let parsed: unknown
+  try { parsed = JSON.parse(String(text)) } catch { return { ok: false, value: null } }
+  if (parsed === null) return { ok: true, value: null }
+  const value = Number(parsed)
+  return Number.isSafeInteger(value) && value > 0 && value <= 2_147_483_647 ? { ok: true, value } : { ok: false, value: null }
+}
 
 /** قراءة فقط: نسخ فرع الموظف المؤرخة (EMPLOYEE_ORG) وحركات النقل والهيكل. */
 export async function loadPayrollOrgHistory(em: EntityManager, today: string): Promise<PayrollOrgHistory> {
@@ -145,12 +168,15 @@ export async function loadPayrollOrgHistory(em: EntityManager, today: string): P
     list.push({ version: Number(row.version), effectiveFrom: row.effectiveFrom ?? null, legacyBaseline: row.legacyBaseline === true || row.legacyBaseline === 1, branchId, valid })
     history.versions.set(Number(row.sourceId), list)
   }
-  const transfers: Array<Record<string, any>> = await em.query(`SELECT [id], [employeeId], [fromTeamId], [toTeamId],
-    CONVERT(varchar(10), [effectiveDate], 23) AS [effectiveDate], [status] FROM [transfers] WHERE [status] IN ('EXECUTED', 'SCHEDULED')`)
+  // executedAt يكتبه التطبيق بالتوقيت المحلي (useUTC=false)، فتاريخه المحلي هو نص العمود.
+  const transfers: Array<Record<string, any>> = await em.query(`SELECT [id], [employeeId], [fromTeamId], [toTeamId], [requestId],
+    CONVERT(varchar(10), [effectiveDate], 23) AS [effectiveDate], CONVERT(varchar(10), [executedAt], 23) AS [executedDate], [status]
+    FROM [transfers] WHERE [status] IN ('EXECUTED', 'SCHEDULED')`)
   for (const row of transfers) {
     const list = history.transfers.get(Number(row.employeeId)) ?? []
     list.push({ id: Number(row.id), employeeId: Number(row.employeeId), fromTeamId: row.fromTeamId == null ? null : Number(row.fromTeamId),
-      toTeamId: row.toTeamId == null ? null : Number(row.toTeamId), effectiveDate: String(dateText(row.effectiveDate)), status: String(row.status) })
+      toTeamId: row.toTeamId == null ? null : Number(row.toTeamId), effectiveDate: String(dateText(row.effectiveDate)), status: String(row.status),
+      requestId: row.requestId == null ? null : Number(row.requestId), executedDate: row.executedDate ?? null })
     history.transfers.set(Number(row.employeeId), list)
   }
   for (const row of await em.query(`SELECT [id], [departmentId] FROM [teams]`) as Array<Record<string, any>>) {
@@ -160,7 +186,37 @@ export async function loadPayrollOrgHistory(em: EntityManager, today: string): P
     history.departmentBranch.set(Number(row.id), row.branchId == null ? null : Number(row.branchId))
     history.departmentParent.set(Number(row.id), row.parentId == null ? null : Number(row.parentId))
   }
+  // سجل تغييرات القسم/الفريق: changedAt افتراضيه GETDATE() بساعة خادم SQL، فيُحوّل إلى UTC ثم إلى اليوم المحلي للتطبيق.
+  history.fieldChanges = new Map()
+  const changes: Array<Record<string, any>> = await em.query(`SELECT [id], [employeeId], [fieldName], [requestId],
+    CAST([oldValue] AS nvarchar(200)) AS [oldValue], CAST([newValue] AS nvarchar(200)) AS [newValue],
+    CONVERT(varchar(19), DATEADD(minute, DATEDIFF(minute, GETDATE(), GETUTCDATE()), [changedAt]), 126) AS [changedAtUtc]
+    FROM [employee_status_history] WHERE [fieldName] IN (N'departmentId', N'teamId')`)
+  for (const row of changes) {
+    const oldValue = changeLogId(row.oldValue), newValue = changeLogId(row.newValue)
+    const time = Date.parse(`${row.changedAtUtc}Z`)
+    const list = history.fieldChanges.get(Number(row.employeeId)) ?? []
+    list.push({ id: Number(row.id), employeeId: Number(row.employeeId), field: row.fieldName === 'teamId' ? 'teamId' : 'departmentId',
+      oldValue: oldValue.value, newValue: newValue.value, date: Number.isFinite(time) ? localDay(time) : '', requestId: row.requestId == null ? null : Number(row.requestId),
+      transferId: null, valid: oldValue.ok && newValue.ok && Number.isFinite(time) })
+    history.fieldChanges.set(Number(row.employeeId), list)
+  }
+  attachTransferChanges(history)
   return history
+}
+
+/** يربط صفوف السجل التي كتبها تنفيذ نقل بحركتها: بنفس الطلب، أو (نقل بلا طلب) بيوم التنفيذ والوجهة نفسيهما. */
+export function attachTransferChanges(history: PayrollOrgHistory) {
+  for (const [employeeId, rows] of history.fieldChanges ?? []) {
+    const executed = (history.transfers.get(employeeId) ?? []).filter(row => row.status === 'EXECUTED')
+    for (const row of rows) {
+      const target = (transfer: TransferRow) => row.field === 'teamId' ? transfer.toTeamId
+        : transfer.toTeamId === null ? null : history.teamDepartment.get(transfer.toTeamId) ?? null
+      const owner = executed.find(transfer => transfer.requestId != null && row.requestId === transfer.requestId)
+        ?? executed.find(transfer => transfer.requestId == null && row.requestId == null && transfer.executedDate === row.date && row.newValue === target(transfer))
+      row.transferId = owner?.id ?? null
+    }
+  }
 }
 
 const positiveOrNull = (value: unknown) => Number.isSafeInteger(Number(value)) && Number(value) > 0 ? Number(value) : null
@@ -168,7 +224,8 @@ const positiveOrNull = (value: unknown) => Number.isSafeInteger(Number(value)) &
 /**
  * مكان الموظف في يوم معين:
  * - الفرع من أحدث نسخة EMPLOYEE_ORG مؤرخة حتى اليوم، ثم النسخة الأساسية القديمة، ثم الملف لمن لا تاريخ له.
- * - الفريق والقسم من الملف، مع التراجع عن نقل نُفذ بعد اليوم، وتطبيق نقل مجدول مستقبلي يسري حتى اليوم.
+ * - الفريق والقسم من الملف، مع التراجع (من الأحدث للأقدم) عن كل نقل نُفذ بسريان بعد اليوم وكل تعديل ملف سُجل بعد اليوم،
+ *   وتطبيق نقل مجدول مستقبلي يسري حتى اليوم.
  */
 export function payrollOrgAt(history: PayrollOrgHistory, employee: PayrollOrgEmployee, date: string): PayrollOrgAt {
   const issues: PayrollOrgIssue[] = []
@@ -189,15 +246,28 @@ export function payrollOrgAt(history: PayrollOrgHistory, employee: PayrollOrgEmp
   } else branchId = positiveOrNull(employee.branchId)
 
   let teamId = positiveOrNull(employee.teamId), departmentId = positiveOrNull(employee.departmentId)
-  let moved = false, scheduledApplied = false
   const transfers = history.transfers.get(employee.id) ?? []
-  const executedAfter = transfers.filter(row => row.status === 'EXECUTED' && row.effectiveDate > date)
-    .sort((a, b) => b.effectiveDate.localeCompare(a.effectiveDate) || b.id - a.id)
-  for (const row of executedAfter) {
-    moved = true
-    teamId = positiveOrNull(row.fromTeamId)
-    if (teamId === null) issues.push({ code: 'ORG_TEAM_BEFORE_TRANSFER_UNKNOWN', message: `فريق الموظف قبل النقل المنفذ في ${row.effectiveDate} غير مسجل` })
+  const changes = history.fieldChanges?.get(employee.id) ?? []
+  if (changes.some(row => !row.valid)) issues.push({ code: 'ORG_CHANGE_LOG_INVALID', message: 'قيمة قسم أو فريق غير صالحة في سجل تغييرات الموظف؛ تُجوهل ذلك الصف' })
+  // من الملف الحالي رجوعًا إلى اليوم المطلوب: كل تغيير سرى بعد اليوم يُعكس، الأحدث أولًا.
+  const reverts: Array<{ date: string; order: number; apply: () => void }> = []
+  for (const row of transfers.filter(item => item.status === 'EXECUTED' && item.effectiveDate > date)) {
+    const own = changes.filter(change => change.valid && change.transferId === row.id)
+    const ownTeam = own.find(change => change.field === 'teamId'), ownDepartment = own.find(change => change.field === 'departmentId')
+    reverts.push({ date: row.effectiveDate, order: row.id, apply: () => {
+      teamId = ownTeam ? ownTeam.oldValue : positiveOrNull(row.fromTeamId)
+      if (teamId === null) issues.push({ code: 'ORG_TEAM_BEFORE_TRANSFER_UNKNOWN', message: `فريق الموظف قبل النقل المنفذ في ${row.effectiveDate} غير مسجل` })
+      departmentId = ownDepartment ? ownDepartment.oldValue : teamId === null ? null : history.teamDepartment.get(teamId) ?? null
+    } })
   }
+  // تعديل القسم/الفريق من ملف الموظف (بلا نقل) يسري من يوم تسجيله؛ الفترات السابقة لا تتأثر به.
+  for (const change of changes.filter(item => item.valid && item.transferId === null && item.date > date)) {
+    reverts.push({ date: change.date, order: change.id, apply: () => { if (change.field === 'teamId') teamId = change.oldValue; else departmentId = change.oldValue } })
+  }
+  reverts.sort((a, b) => b.date.localeCompare(a.date) || b.order - a.order)
+  for (const revert of reverts) revert.apply()
+
+  let scheduledApplied = false
   const scheduled = transfers.filter(row => row.status === 'SCHEDULED' && row.effectiveDate <= date)
     .sort((a, b) => a.effectiveDate.localeCompare(b.effectiveDate) || a.id - b.id)
   for (const row of scheduled) {
@@ -205,21 +275,20 @@ export function payrollOrgAt(history: PayrollOrgHistory, employee: PayrollOrgEmp
       issues.push({ code: 'ORG_TRANSFER_PENDING', message: `نقل مجدول بتاريخ ${row.effectiveDate} لم يُنفذ بعد؛ حُسب الموظف على مكانه الحالي` })
       continue
     }
-    moved = true; scheduledApplied = true
+    scheduledApplied = true
     teamId = positiveOrNull(row.toTeamId)
-  }
-  if (moved) {
     departmentId = teamId === null ? null : history.teamDepartment.get(teamId) ?? null
-    if (scheduledApplied && departmentId !== null) branchId = history.departmentBranch.get(departmentId) ?? branchId
   }
+  if (scheduledApplied && departmentId !== null) branchId = history.departmentBranch.get(departmentId) ?? branchId
   return { date, branchId, departmentId, teamId, costCenterId: positiveOrNull(employee.costCenterId), issues }
 }
 
-/** أيام تغير مكان الموظف داخل (from, to]: سريان نسخ الفرع والنقل. */
+/** أيام تغير مكان الموظف داخل (from, to]: سريان نسخ الفرع والنقل وتعديلات القسم/الفريق من الملف. */
 export function payrollOrgChangeDates(history: PayrollOrgHistory, employeeId: number, from: string, to: string): string[] {
   const dates = new Set<string>()
   for (const row of history.versions.get(employeeId) ?? []) if (row.effectiveFrom && row.effectiveFrom > from && row.effectiveFrom <= to) dates.add(row.effectiveFrom)
   for (const row of history.transfers.get(employeeId) ?? []) if (row.effectiveDate > from && row.effectiveDate <= to) dates.add(row.effectiveDate)
+  for (const row of history.fieldChanges?.get(employeeId) ?? []) if (row.valid && row.transferId === null && row.date > from && row.date <= to) dates.add(row.date)
   return [...dates].sort()
 }
 
@@ -263,4 +332,13 @@ export function payrollRunLastInScope(history: PayrollOrgHistory, filters: Payro
     if (payrollRunFilterMatches(filters, employee.id, org, departments)) last = org
   }
   return last
+}
+
+/**
+ * الخطوة 16 (مراجعة): نقطتا الحساب القديمتان (POST /payroll/runs/calculate و/runs/calculate-defined) تنشئان أو تعيدان
+ * الحساب في نداء واحد بلا نسخة سياسة ولا مسودة. على قاعدة الشركة (وأي قاعدة غير مؤقتة) مغلقتان؛ «مسير جديد» = POST /payroll/runs
+ * ثم «احتساب المسودة» و«إعادة حساب المسير» كنقطتين منفصلتين. تبقيان فقط لقواعد الاختبار المؤقتة التي تبنيها اختبارات المحرك القديمة.
+ */
+export function payrollLegacyCalculateAllowed(database: unknown): boolean {
+  return isDisposableTestDatabase(database)
 }

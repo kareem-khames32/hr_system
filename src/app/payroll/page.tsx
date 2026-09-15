@@ -6,7 +6,6 @@ import {
   fetchPayrollRuns,
   fetchPayrollRun,
   approvePayroll,
-  payPayroll,
   reopenPayroll,
   cancelPayroll,
   ApiError,
@@ -29,8 +28,18 @@ import {
   SELECTION_MODE_LABELS, type PayrollMembershipPreview, type PayrollRunWithSelection,
 } from '@/lib/payroll-runs-api'
 import { PayrollRunDefinitionPanel } from '@/components/payroll/PayrollRunDefinitionPanel'
-import { PayrollMembershipPreviewView } from '@/components/payroll/PayrollMembershipPreviewView'
+import { PayrollDraftMembership } from '@/components/payroll/PayrollDraftMembership'
 import { PayrollUnassignedPanel } from '@/components/payroll/PayrollUnassignedPanel'
+// B4 / الخطوتان 19 و20: لقطة السياسة ومحرك الحساب وتقرير التكافؤ
+import { PayrollPolicySnapshotPanel, type PolicySnapshotRefreshChoice } from '@/components/payroll/PayrollPolicySnapshotPanel'
+import { PayrollRunEnginePanel } from '@/components/payroll/PayrollRunEnginePanel'
+// B5 / الخطوة 22: منسّق المبالغ الموحد، ومجاميع البنود بالقروش، والتغطية، وسجل المسير، وقيد الصرف، وحل التعارضات، وترتيب التحصيل
+import { formatMoney, formatMoneyOrDash } from '@/lib/money'
+import { payrollCoverageText, payrollItemCoverage, payrollItemDeductions, payrollItemEarnings, payrollRunTotals } from '@/lib/payroll-item-totals'
+import { collectionOrderText, payPayrollRun, type PayrollPayChannel, type PayrollRunScreenFields } from '@/lib/payroll-runs-api'
+import { PayrollRunEventsPanel } from '@/components/payroll/PayrollRunEventsPanel'
+import { PayrollConflictResolution } from '@/components/payroll/PayrollConflictResolution'
+import { PayrollPayRecordForm, PayrollPayRecordSummary, payRecordReady, type PayRecordDraft } from '@/components/payroll/PayrollPayRecordForm'
 import {
   Search,
   Filter,
@@ -138,6 +147,9 @@ export default function PayrollPage() {
   const [refreshInstallmentPolicy, setRefreshInstallmentPolicy] = useState(false)
   const [calculationConflicts, setCalculationConflicts] = useState<ApiPayrollConflict[]>([])
   const [actionConflicts, setActionConflicts] = useState<ApiPayrollConflict[]>([])
+  // الخطوة 22 (B5): قيد الصرف (القناة والمرجع) وعدّاد تحميل التفاصيل لتحديث سجل المسير
+  const [payRecord, setPayRecord] = useState<PayRecordDraft>({ channel: '', reference: '' })
+  const [detailStamp, setDetailStamp] = useState(0)
 
   const [searchQuery, setSearchQuery] = useState('')
   const [periodType, setPeriodType] = useState<'monthly' | 'custom'>('monthly')
@@ -152,6 +164,9 @@ export default function PayrollPage() {
   // الخطوة 18: الاعتماد متاح فقط بعد إقرار ساري بتقرير «موظفون بلا مسير»
   const [unassignedAckCurrent, setUnassignedAckCurrent] = useState(false)
   const handleAckChange = useCallback((current: boolean) => setUnassignedAckCurrent(current), [])
+  // الخطوة 19: اختيار «تحديث لقطة السياسة» من لوحة اللقطة (مع بصمة الإعدادات المعروضة)
+  const [policyRefresh, setPolicyRefresh] = useState<PolicySnapshotRefreshChoice>({ refresh: false, expectedHash: null })
+  const handlePolicyRefreshChoice = useCallback((choice: PolicySnapshotRefreshChoice) => setPolicyRefresh(choice), [])
 
   const loadDetail = async (id: number) => {
     const request = ++detailRequest.current
@@ -163,6 +178,7 @@ export default function PayrollPage() {
       const detail = await fetchPayrollRun(id)
       if (request !== detailRequest.current) return
       setRunDetail(detail)
+      setDetailStamp(stamp => stamp + 1)
       try {
         const report = await fetchPayMethodReport(id)
         if (request === detailRequest.current) setPayMethods(report)
@@ -219,6 +235,7 @@ export default function PayrollPage() {
     setAllowDraftConflicts(false)
     setCalculationConflicts([])
     setUnassignedAckCurrent(false)
+    setPayRecord({ channel: '', reference: '' })
   }, [runDetail?.id, runDetail?.snapshotVersion])
 
   // المسودة: معاينة العضوية المحفوظة (قراءة فقط) قبل «احتساب المسودة»
@@ -238,6 +255,10 @@ export default function PayrollPage() {
     (calculationTarget.status === 'CALCULATED' && !calculationReason.trim())
   const runConflicts = actionConflicts.length ? actionConflicts : runDetail?.conflicts ?? []
   const runBlocked = runDetail?.blocking === true || runConflicts.some(conflict => conflict.blocking)
+  // الخطوة 22 (B5): حقول شاشة المسير (المنفذون، فصل المهام، قيد الصرف، ترتيب التحصيل)؛ فصل المهام والصافي السالب يمنعان الاعتماد
+  const screen = runDetail as (ApiPayrollRun & PayrollRunScreenFields) | null
+  const negativeNetCount = (runDetail?.items ?? []).filter(item => n(item.netPay) < 0).length
+  const approvalBlocked = !!screen?.approvalGuard?.blocked || negativeNetCount > 0
 
   const refreshRuns = async (selectId?: number) => {
     const runsData = await fetchPayrollRuns()
@@ -254,7 +275,9 @@ export default function PayrollPage() {
     try {
       const run = calculationTarget.status === 'DRAFT'
         ? await calculatePayrollRunDraft(calculationTarget.id, { allowDraftConflicts })
-        : await recalculatePayrollRun(calculationTarget.id, { reason: calculationReason.trim(), allowDraftConflicts, refreshInstallmentPolicy })
+        : await recalculatePayrollRun(calculationTarget.id, { reason: calculationReason.trim(), allowDraftConflicts, refreshInstallmentPolicy,
+          // الخطوة 19: إعادة الحساب تقرأ لقطة السياسة؛ التحديث فقط باختيار صريح بعد عرض الفروق
+          ...(policyRefresh.refresh && policyRefresh.expectedHash ? { refreshPolicySnapshot: true, expectedPolicySnapshotHash: policyRefresh.expectedHash } : {}) })
       await refreshRuns(run.id)
       setCalculationReason('')
       setAllowDraftConflicts(false)
@@ -268,7 +291,7 @@ export default function PayrollPage() {
   }
 
   const handleApprove = async () => {
-    if (!runDetail || runDetail.status !== 'CALCULATED' || actionBusy || detailLoading || runBlocked || !unassignedAckCurrent || !can('payroll.approve')) return
+    if (!runDetail || runDetail.status !== 'CALCULATED' || actionBusy || detailLoading || runBlocked || !unassignedAckCurrent || approvalBlocked || !can('payroll.approve')) return
     setActionBusy(true)
     setError('')
     try {
@@ -283,11 +306,12 @@ export default function PayrollPage() {
   }
 
   const handlePay = async () => {
-    if (!runDetail || runDetail.status !== 'APPROVED' || actionBusy || detailLoading || runBlocked || !can('payroll.pay')) return
+    if (!runDetail || runDetail.status !== 'APPROVED' || actionBusy || detailLoading || runBlocked || !can('payroll.pay') || !payRecordReady(payRecord)) return
     setActionBusy(true)
     setError('')
     try {
-      await payPayroll(runDetail.id)
+      // الخطوة 22 (B5): الصرف يسجل القناة والمرجع ومن صرف
+      await payPayrollRun(runDetail.id, { channel: payRecord.channel as PayrollPayChannel, reference: payRecord.reference.trim() })
       await refreshRuns(runDetail.id)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'تعذر صرف المسير')
@@ -319,23 +343,12 @@ export default function PayrollPage() {
   const snapshotOf = (id: number) => runDetail?.members?.find(member => member.employeeId === id)?.snapshot
   const employeeName = (id: number) => snapshotOf(id)?.fullName ?? employeeOf(id)?.fullName ?? `موظف #${id}`
   const excludedMembers = runDetail?.members?.filter(member => member.membershipStatus === 'EXCLUDED') ?? []
-  const showConflicts = (conflicts: ApiPayrollConflict[], title: string) => conflicts.length > 0 && (
-    <div role="alert" className={`rounded-xl border p-4 space-y-2 ${conflicts.some(row => row.blocking) ? 'bg-red-50 border-red-200 text-red-800' : 'bg-amber-50 border-amber-200 text-amber-900'}`}>
-      <p className="font-bold flex items-center gap-2"><AlertCircle size={18} />{title}</p>
-      <p className="text-sm">{conflicts.some(row => row.blocking)
-        ? 'تعارض حاجب: لا يمكن تجاوزه بخيار حفظ المسودة. عالج حجز الموظف في المسير الآخر قبل المتابعة.'
-        : 'تعارض مع مسودات أخرى. الحفظ للمراجعة يتطلب اختيارك الصريح، ويُعاد فحص التعارضات عند الاعتماد.'}</p>
-      <ul className="space-y-1 text-sm">
-        {conflicts.map((conflict, index) => (
-          <li key={`${conflict.employeeId}-${conflict.otherRunId}-${index}`}>
-            {employeeName(conflict.employeeId)} — {conflict.name || (conflict.otherRunId != null ? `مسير #${conflict.otherRunId}` : 'مسير خارج نطاق الصلاحية')}
-            {' '}({statusLabels[conflict.status as ApiPayrollRun['status']] ?? conflict.status}) — {conflict.overlapDays} يوم متداخل
-            {' '}<span dir="ltr">{fmtDate(conflict.startDate)} / {fmtDate(conflict.endDate)}</span>
-            {conflict.blocking && <strong> — حاجب</strong>}
-          </li>
-        ))}
-      </ul>
-    </div>
+  // الخطوة 22 (B5): شاشة التعارضات بإجراءات حل — استبعاد الموظف من هذا المسير بسبب، أو فتح المسير الآخر
+  const showConflicts = (conflicts: ApiPayrollConflict[], title: string) => (
+    <PayrollConflictResolution title={title} conflicts={conflicts} employeeName={employeeName} canExclude={can('payroll.calculate')}
+      run={calculationTarget ?? (runDetail ? { id: runDetail.id, status: runDetail.status } : null)} allowDraftConflicts={allowDraftConflicts}
+      onOpenRun={id => { setError(''); loadDetail(id) }}
+      onResolved={async () => { setError(''); setCalculationConflicts([]); setActionConflicts([]); if (runDetail) await refreshRuns(runDetail.id) }} />
   )
 
   const runStage = runDetail ? stageOfStatus[runDetail.status] : 0
@@ -350,38 +363,9 @@ export default function PayrollPage() {
     )
   })
 
-  // إجماليات المسير من البنود الفعلية
-  const totals = filteredItems.reduce(
-    (acc, item) => {
-      const gross =
-        n(item.basicSalary) +
-        allowancesOf(item) +
-        n(item.overtimeAmount) +
-        n(item.otherAdditions)
-      const deductions =
-        n(item.latenessDeduction) +
-        n(item.shortfallDeduction) +
-        n(item.absenceDeduction) +
-        n(item.unpaidLeaveDeduction) +
-        n(item.loanInstallments) +
-        n(item.otherDeductions)
-      return {
-        totalEarnings: acc.totalEarnings + gross,
-        totalDeductions: acc.totalDeductions + deductions,
-        netSalary: acc.netSalary + n(item.netPay),
-      }
-    },
-    { totalEarnings: 0, totalDeductions: 0, netSalary: 0 }
-  )
-
-  // سجل الاعتمادات الفعلي من طوابع المسير الزمنية
-  const approvalsLog = runDetail
-    ? [
-        `الحساب ✓ — بواسطة النظام في ${fmtDate(runDetail.createdAt)}`,
-        ...(runDetail.approvedAt ? [`الاعتماد ✓ — في ${fmtDate(runDetail.approvedAt)}`] : []),
-        ...(runDetail.paidAt ? [`الصرف ✓ — في ${fmtDate(runDetail.paidAt)}`] : []),
-      ]
-    : []
+  // إجماليات المسير من البنود الفعلية بالقروش الصحيحة (مجموع كل عمود = مجموع الصفوف، ولا تراكم كسور)
+  const runTotals = payrollRunTotals(filteredItems)
+  const totals = { totalEarnings: runTotals.earnings, totalDeductions: runTotals.deductions, netSalary: runTotals.net }
 
   if (loading) {
     return (
@@ -594,7 +578,7 @@ export default function PayrollPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-primary-100 text-sm">إجمالي الاستحقاقات</p>
-                <p className="text-3xl font-bold mt-1">{totals.totalEarnings.toLocaleString()}</p>
+                <p className="text-3xl font-bold mt-1">{formatMoney(totals.totalEarnings)}</p>
                 <p className="text-primary-200 text-sm mt-1">{currency}</p>
               </div>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
@@ -607,7 +591,7 @@ export default function PayrollPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-danger-100 text-sm">إجمالي الخصومات</p>
-                <p className="text-3xl font-bold mt-1">{totals.totalDeductions.toLocaleString()}</p>
+                <p className="text-3xl font-bold mt-1">{formatMoney(totals.totalDeductions)}</p>
                 <p className="text-danger-200 text-sm mt-1">{currency}</p>
               </div>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
@@ -620,7 +604,7 @@ export default function PayrollPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-success-100 text-sm">صافي الرواتب</p>
-                <p className="text-3xl font-bold mt-1">{totals.netSalary.toLocaleString()}</p>
+                <p className="text-3xl font-bold mt-1">{formatMoney(totals.netSalary)}</p>
                 <p className="text-success-200 text-sm mt-1">{currency}</p>
               </div>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
@@ -655,12 +639,19 @@ export default function PayrollPage() {
                   {runDetail.snapshotVersion ? `نسخة الحساب: ${runDetail.snapshotVersion}` : 'مسير سابق — لا توجد نسخة موثقة للعضوية'}
                   {' '}• الحالة: {statusLabels[runDetail.status]}
                 </p>
+                {/* الخطوة 22 (B5): من احتسب ومن اعتمد ومن صرف، وترتيب التحصيل المطبق على المسير */}
+                {screen?.actors && <p className="text-xs text-gray-600 mt-1">
+                  {screen.actors.calculated ? `احتسبه: ${screen.actors.calculated.name ?? `مستخدم #${screen.actors.calculated.id}`}` : 'لم يُحتسب بعد'}
+                  {screen.actors.approved && ` • اعتمده: ${screen.actors.approved.name ?? `مستخدم #${screen.actors.approved.id}`}`}
+                  {screen.actors.paid && ` • صرفه: ${screen.actors.paid.name ?? `مستخدم #${screen.actors.paid.id}`}`}
+                </p>}
+                {collectionOrderText(screen?.collection) && <p className="text-xs text-primary-700 mt-1">{collectionOrderText(screen?.collection)}</p>}
               </div>
               {runDetail.status === 'CALCULATED' && can('payroll.approve') && (
                 <button
                   onClick={handleApprove}
-                  disabled={actionBusy || detailLoading || runBlocked || !unassignedAckCurrent}
-                  title={unassignedAckCurrent ? undefined : 'أقر أولًا بتقرير «موظفون بلا مسير» أدناه'}
+                  disabled={actionBusy || detailLoading || runBlocked || !unassignedAckCurrent || approvalBlocked}
+                  title={approvalBlocked ? screen?.approvalGuard?.blocked?.message ?? 'صافي سالب يمنع الاعتماد' : unassignedAckCurrent ? undefined : 'أقر أولًا بتقرير «موظفون بلا مسير» أدناه'}
                   className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50"
                 >
                   <CheckCircle size={16} />
@@ -669,17 +660,13 @@ export default function PayrollPage() {
               )}
               {runDetail.status === 'DRAFT' && <span className="badge bg-gray-100 text-gray-700">مسودة تعريف — لم تُحتسب بعد</span>}
               {runDetail.status === 'APPROVED' && can('payroll.pay') && (
-                <button
-                  onClick={handlePay}
-                  disabled={actionBusy || detailLoading || runBlocked}
-                  className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50"
-                >
-                  <CheckCircle size={16} />
-                  صرف المسير
-                </button>
+                <PayrollPayRecordForm draft={payRecord} onChange={setPayRecord} disabled={actionBusy || detailLoading || runBlocked || negativeNetCount > 0} onPay={handlePay} />
               )}
               {runDetail.status === 'PAID' && (
-                <span className="badge badge-success">المسير مصروف ومقفل ✓</span>
+                <div className="flex flex-col items-end gap-1">
+                  <span className="badge badge-success">المسير مصروف ومقفل ✓</span>
+                  <PayrollPayRecordSummary run={screen ?? {}} />
+                </div>
               )}
               {runDetail.status === 'CANCELLED' && <span className="badge bg-gray-100 text-gray-600">المسير ملغى ومقفل</span>}
             </div>
@@ -707,6 +694,10 @@ export default function PayrollPage() {
               className="btn-secondary text-sm mt-2 mb-3 disabled:opacity-50">تحديث حالة التعارضات</button>}
             {runDetail.status === 'CALCULATED' && !unassignedAckCurrent && can('payroll.approve') && <p className="p-3 mb-3 bg-amber-50 text-amber-900 rounded-xl text-sm">
               الاعتماد متوقف حتى الإقرار بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية (أسفل الصفحة).</p>}
+            {runDetail.status === 'CALCULATED' && screen?.approvalGuard?.blocked && can('payroll.approve') && <p role="alert" className="p-3 mb-3 bg-amber-50 text-amber-900 rounded-xl text-sm">
+              {screen.approvalGuard.blocked.message}</p>}
+            {negativeNetCount > 0 && ['CALCULATED', 'APPROVED'].includes(runDetail.status) && <p role="alert" className="p-3 mb-3 bg-red-50 text-red-700 rounded-xl text-sm">
+              صافي {negativeNetCount} موظف سالب (مظلل في الجدول)؛ الاعتماد والصرف ممنوعان حتى معالجة الإجازة بلا أجر أو الاستحقاق ثم إعادة الحساب.</p>}
             {((runDetail.status === 'APPROVED' && can('payroll.reopen')) ||
               ((runDetail.status === 'CALCULATED' || runDetail.status === 'DRAFT') && can('payroll.cancel'))) && (
               <div className="space-y-2 my-4 p-4 rounded-xl border border-gray-200 bg-gray-50">
@@ -759,17 +750,8 @@ export default function PayrollPage() {
                 ))}
               </div>
             </div>
-            {/* سجل الاعتمادات */}
-            <div className="mt-4 pt-4 border-t border-gray-100">
-              <p className="text-xs text-gray-400 mb-2">سجل الاعتمادات:</p>
-              <div className="flex flex-wrap gap-2">
-                {approvalsLog.map((log, i) => (
-                  <span key={i} className="text-xs bg-gray-50 text-gray-600 px-3 py-1.5 rounded-lg border border-gray-100">
-                    {log}
-                  </span>
-                ))}
-              </div>
-            </div>
+            {/* الخطوة 22 (B5): سجل المسير الفعلي بمن فعل ماذا ومتى (بدل سطر مبني من التواريخ) */}
+            <PayrollRunEventsPanel runId={runDetail.id} refreshKey={String(detailStamp)} />
           </div>
         )}
 
@@ -791,11 +773,22 @@ export default function PayrollPage() {
                 {can('payroll.calculate') && <button onClick={() => { setShowDefinition(false); setEditingDraft(draft) }} disabled={actionBusy} className="btn-secondary text-sm">تعديل التعريف</button>}
               </div>
               {draftPreviewError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{draftPreviewError}</p>}
-              {draftPreview ? <PayrollMembershipPreviewView preview={draftPreview} currency={currency} />
+              {draftPreview ? <PayrollDraftMembership draft={draft} preview={draftPreview} currency={currency} canEdit={can('payroll.calculate')}
+                  onUpdated={() => refreshRuns(draft.id)} />
                 : !draftPreviewError && can('payroll.calculate') && <p className="text-sm text-gray-400">جارٍ تحميل معاينة العضوية…</p>}
             </div>
           )
         })()}
+
+        {/* الخطوة 19: لقطة السياسة على المسير وفروقها عن الإعدادات الحالية (التحديث اختيار صريح عند إعادة الحساب) */}
+        {runDetail && ['DRAFT', 'CALCULATED', 'APPROVED', 'PAID'].includes(runDetail.status) && can('payroll.view') && (
+          <PayrollPolicySnapshotPanel runId={runDetail.id} runStatus={runDetail.status} snapshotVersion={runDetail.snapshotVersion ?? 0} onRefreshChoice={handlePolicyRefreshChoice} />
+        )}
+
+        {/* الخطوة 20 / D13: وضع محرك الحساب وتقرير التكافؤ لكل موظف */}
+        {runDetail && runDetail.status !== 'CANCELLED' && (
+          <PayrollRunEnginePanel run={runDetail} employeeName={employeeName} onChanged={() => refreshRuns(runDetail.id)} />
+        )}
 
         {/* الخطوة 18: «موظفون بلا مسير» وإقراره قبل الاعتماد */}
         {runDetail && ['CALCULATED', 'APPROVED', 'PAID'].includes(runDetail.status) && (
@@ -838,14 +831,14 @@ export default function PayrollPage() {
                   {branches.find((b) => b.id === runDetail.branchId)?.costCenter ?? '—'}
                 </p>
                 <p className="text-sm text-teal-700 mt-1">
-                  {n(runDetail.totalNet).toLocaleString()} {currency} إجمالي
+                  {formatMoney(runDetail.totalNet)} {currency} إجمالي
                 </p>
               </div>
               {Object.entries(payMethods).map(([method, data]) => (
                 <div key={method} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
                   <p className="text-xs text-gray-500">{payMethodLabels[method] ?? method}</p>
                   <p className="text-lg font-bold text-gray-800">
-                    {n(data.total).toLocaleString()} {currency}
+                    {formatMoney(data.total)} {currency}
                   </p>
                   <p className="text-xs text-gray-400 mt-1">{n(data.count)} موظف</p>
                 </div>
@@ -919,21 +912,14 @@ export default function PayrollPage() {
                   const emp = employeeOf(item.employeeId)
                   const snapshot = snapshotOf(item.employeeId)
                   const name = employeeName(item.employeeId)
-                  const gross =
-                    n(item.basicSalary) +
-                    allowancesOf(item) +
-                    n(item.overtimeAmount) +
-                    n(item.otherAdditions)
-                  const totalDeductions =
-                    n(item.latenessDeduction) +
-                    n(item.shortfallDeduction) +
-                    n(item.absenceDeduction) +
-                    n(item.unpaidLeaveDeduction) +
-                    n(item.loanInstallments) +
-                    n(item.otherDeductions)
+                  // الخطوة 22 (B5): الإجمالي والخصومات بالقروش من الأعمدة نفسها، والتغطية والمعامل من تفصيل البند المحفوظ
+                  const gross = payrollItemEarnings(item)
+                  const totalDeductions = payrollItemDeductions(item)
+                  const coverage = payrollCoverageText(payrollItemCoverage(item))
+                  const negativeNet = n(item.netPay) < 0
 
                   return (
-                  <tr key={item.id} className="table-row">
+                  <tr key={item.id} className={`table-row ${negativeNet ? 'bg-red-50' : ''}`}>
                     <td className="table-cell">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center text-white font-bold">
@@ -950,19 +936,19 @@ export default function PayrollPage() {
                             {snapshot.salarySource.kind === 'MONTHLY_HISTORY'
                               ? `راتب شهر ${snapshot.salarySource.referencePeriod} من السجل (يسري من ${snapshot.salarySource.effectivePayrollPeriod})`
                               : `راتب الملف الحالي — غير موثق لشهر ${snapshot.salarySource.referencePeriod}`}
-                            {snapshot.coverDays != null && snapshot.prorataFactor != null && snapshot.prorataFactor < 1 && ` • ${snapshot.coverDays} يوم مغطى من ${snapshot.coverFrom}`}
                           </p>}
+                          {coverage && <p className="text-xs text-gray-500">التغطية: {coverage}</p>}
                         </div>
                       </div>
                     </td>
-                    <td className="table-cell text-center font-mono">{n(item.basicSalary).toLocaleString()}</td>
+                    <td className="table-cell text-center font-mono">{formatMoney(item.basicSalary)}</td>
                     <td className="table-cell text-center font-mono">
-                      {allowancesOf(item) > 0 ? allowancesOf(item).toLocaleString() : '-'}
+                      {formatMoneyOrDash(allowancesOf(item))}
                     </td>
                     <td className="table-cell text-center font-mono">
                       <div className="flex flex-col items-center">
                         <span className={n(item.overtimeAmount) > 0 ? 'text-success-600 font-bold' : ''}>
-                          {n(item.overtimeAmount).toLocaleString()}
+                          {formatMoney(item.overtimeAmount)}
                         </span>
                         {n(item.overtimeHours) > 0 && (
                           <span className="text-xs text-success-600">{n(item.overtimeHours)} ساعة</span>
@@ -973,16 +959,16 @@ export default function PayrollPage() {
                     </td>
                     <td className="table-cell text-center font-mono">
                       <span className={n(item.otherAdditions) > 0 ? 'text-success-600' : ''}>
-                        {n(item.otherAdditions) > 0 ? n(item.otherAdditions).toLocaleString() : '-'}
+                        {formatMoneyOrDash(item.otherAdditions)}
                       </span>
                     </td>
                     <td className="table-cell text-center font-mono font-bold text-success-600 bg-success-50">
-                      {gross.toLocaleString()}
+                      {formatMoney(gross)}
                     </td>
                     <td className="table-cell text-center font-mono">
                       <div className="flex flex-col items-center">
                         <span className={n(item.latenessDeduction) > 0 ? 'text-danger-600' : ''}>
-                          {n(item.latenessDeduction) > 0 ? n(item.latenessDeduction).toLocaleString() : '-'}
+                          {formatMoneyOrDash(item.latenessDeduction)}
                         </span>
                         {n(item.lateMinutes) > 0 && (
                           <span className="text-xs text-danger-600">{n(item.lateMinutes)} دقيقة</span>
@@ -991,13 +977,13 @@ export default function PayrollPage() {
                       </div>
                     </td>
                     <td className="table-cell text-center font-mono">
-                      <span className={n(item.shortfallDeduction) > 0 ? 'text-danger-600' : ''}>{n(item.shortfallDeduction).toLocaleString()}</span>
+                      <span className={n(item.shortfallDeduction) > 0 ? 'text-danger-600' : ''}>{formatMoney(item.shortfallDeduction)}</span>
                       {n(item.shortfallMinutes) > 0 && <p className="text-xs text-gray-500">{n(item.shortfallMinutes)} دقيقة نقص مرصود</p>}
                     </td>
                     <td className="table-cell text-center font-mono">
                       <div className="flex flex-col items-center">
                         <span className={n(item.absenceDeduction) > 0 ? 'text-danger-600' : ''}>
-                          {n(item.absenceDeduction) > 0 ? n(item.absenceDeduction).toLocaleString() : '-'}
+                          {formatMoneyOrDash(item.absenceDeduction)}
                         </span>
                         {n(item.absenceDays) > 0 && (
                           <span className="text-xs text-danger-600">{n(item.absenceDays)} يوم</span>
@@ -1007,7 +993,7 @@ export default function PayrollPage() {
                     <td className="table-cell text-center font-mono">
                       <div className="flex flex-col items-center">
                         <span className={n(item.unpaidLeaveDeduction) > 0 ? 'text-danger-600' : ''}>
-                          {n(item.unpaidLeaveDeduction) > 0 ? n(item.unpaidLeaveDeduction).toLocaleString() : '-'}
+                          {formatMoneyOrDash(item.unpaidLeaveDeduction)}
                         </span>
                         {n(item.unpaidLeaveDays) > 0 && (
                           <span className="text-xs text-danger-600">{n(item.unpaidLeaveDays)} يوم</span>
@@ -1016,21 +1002,22 @@ export default function PayrollPage() {
                     </td>
                     <td className="table-cell text-center font-mono">
                       {n(item.loanInstallments) > 0 ? (
-                        <span className="text-danger-600">{n(item.loanInstallments).toLocaleString()}</span>
+                        <span className="text-danger-600">{formatMoney(item.loanInstallments)}</span>
                       ) : '-'}
                     </td>
                     <td className="table-cell text-center font-mono">
                       {n(item.otherDeductions) > 0 ? (
-                        <span className="text-danger-600">{n(item.otherDeductions).toLocaleString()}</span>
+                        <span className="text-danger-600">{formatMoney(item.otherDeductions)}</span>
                       ) : '-'}
                       {/* C2: تتبع قيود الدفتر سطرًا سطرًا (النوع والسبب والطلب وسعر اليوم) */}
                       <PayrollObligationBreakdown item={item} currency={currency} compact />
                     </td>
                     <td className="table-cell text-center font-mono font-bold text-danger-600 bg-danger-50">
-                      {totalDeductions.toLocaleString()}
+                      {formatMoney(totalDeductions)}
                     </td>
-                    <td className="table-cell text-center font-mono font-bold text-primary-600 bg-primary-50 text-lg">
-                      {n(item.netPay).toLocaleString()}
+                    <td className={`table-cell text-center font-mono font-bold bg-primary-50 text-lg ${negativeNet ? 'text-red-700' : 'text-primary-600'}`}>
+                      {formatMoney(item.netPay)}
+                      {negativeNet && <p className="text-xs font-sans">صافي سالب — يمنع الاعتماد</p>}
                     </td>
                     <td className="table-cell text-center">
                       <span className={`badge text-xs ${
@@ -1084,43 +1071,43 @@ export default function PayrollPage() {
                 <tr className="bg-gray-100">
                   <td className="px-4 py-4 font-bold text-gray-800">الإجمالي</td>
                   <td className="px-4 py-4 text-center font-mono font-bold">
-                    {filteredItems.reduce((s, r) => s + n(r.basicSalary), 0).toLocaleString()}
+                    {formatMoney(runTotals.column('basicSalary'))}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold">
-                    {filteredItems.reduce((s, r) => s + allowancesOf(r), 0).toLocaleString()}
+                    {formatMoney(runTotals.column('allowances'))}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold">
-                    {filteredItems.reduce((s, r) => s + n(r.overtimeAmount), 0).toLocaleString()}
+                    {formatMoney(runTotals.column('overtimeAmount'))}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-success-600">
-                    {filteredItems.reduce((s, r) => s + n(r.otherAdditions), 0).toLocaleString()}
+                    {formatMoney(runTotals.column('otherAdditions'))}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-success-600 bg-success-100">
-                    {totals.totalEarnings.toLocaleString()}
+                    {formatMoney(totals.totalEarnings)}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {filteredItems.reduce((s, r) => s + n(r.latenessDeduction), 0).toLocaleString()}
+                    {formatMoney(runTotals.column('latenessDeduction'))}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {filteredItems.reduce((s, r) => s + n(r.shortfallDeduction), 0).toLocaleString()}
+                    {formatMoney(runTotals.column('shortfallDeduction'))}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {filteredItems.reduce((s, r) => s + n(r.absenceDeduction), 0).toLocaleString()}
+                    {formatMoney(runTotals.column('absenceDeduction'))}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {filteredItems.reduce((s, r) => s + n(r.unpaidLeaveDeduction), 0).toLocaleString()}
+                    {formatMoney(runTotals.column('unpaidLeaveDeduction'))}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {filteredItems.reduce((s, r) => s + n(r.loanInstallments), 0).toLocaleString()}
+                    {formatMoney(runTotals.column('loanInstallments'))}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {filteredItems.reduce((s, r) => s + n(r.otherDeductions), 0).toLocaleString()}
+                    {formatMoney(runTotals.column('otherDeductions'))}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600 bg-danger-100">
-                    {totals.totalDeductions.toLocaleString()}
+                    {formatMoney(totals.totalDeductions)}
                   </td>
                   <td className="px-4 py-4 text-center font-mono font-bold text-primary-600 bg-primary-100 text-lg">
-                    {totals.netSalary.toLocaleString()}
+                    {formatMoney(totals.netSalary)}
                   </td>
                   <td className="px-4 py-4" colSpan={3}></td>
                 </tr>
@@ -1144,7 +1131,7 @@ export default function PayrollPage() {
             <div className="flex items-center gap-4">
               {can('payroll.approve') && <button
                 onClick={handleApprove}
-                disabled={actionBusy || detailLoading || runDetail?.status !== 'CALCULATED' || runBlocked || !unassignedAckCurrent}
+                disabled={actionBusy || detailLoading || runDetail?.status !== 'CALCULATED' || runBlocked || !unassignedAckCurrent || approvalBlocked}
                 className="btn-success flex items-center gap-2 disabled:opacity-50"
               >
                 <Lock size={18} />
@@ -1152,11 +1139,12 @@ export default function PayrollPage() {
               </button>}
               {can('payroll.pay') && <button
                 onClick={handlePay}
-                disabled={actionBusy || detailLoading || runDetail?.status !== 'APPROVED' || runBlocked}
+                disabled={actionBusy || detailLoading || runDetail?.status !== 'APPROVED' || runBlocked || negativeNetCount > 0 || !payRecordReady(payRecord)}
+                title={payRecordReady(payRecord) ? undefined : 'اختر قناة الصرف واكتب مرجعه في دورة الاعتماد أعلاه'}
                 className="btn-primary flex items-center gap-2 disabled:opacity-50"
               >
                 <Send size={18} />
-                إرسال للبنك (صرف)
+                صرف بالقناة والمرجع
               </button>}
             </div>
           </div>

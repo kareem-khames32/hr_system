@@ -1,4 +1,5 @@
 import { apiFetch } from './api'
+import { formatMoney, isMoneyText } from './money'
 
 // C6 / الخطوة 29: نداءات السلف — السقوف والاستثناء والسداد المبكر والرصيد بعد الإنهاء ودفتر الموظف.
 export type LoanCapScopeType = 'COMPANY' | 'BRANCH' | 'DEPARTMENT' | 'TEAM' | 'EMPLOYEES'
@@ -100,12 +101,10 @@ export const fetchLoanRecoveries = () => apiFetch<LoanRecovery[]>('/loans/recove
 export const collectLoanRecovery = (id: number, input: { amount: string; reference: string; reason?: string }) => apiFetch<LoanRecovery>(`/loans/recoveries/${id}/collect`, json(input))
 export const writeOffLoanRecovery = (id: number, reason: string) => apiFetch<LoanRecovery>(`/loans/recoveries/${id}/write-off`, json({ reason }))
 
-// عرض المبالغ النصية بالقروش دون Number
+// المنسّق الواحد (FE-06، src/lib/money): النص العشري يُقرّب نصيًا بلا Number، والرقم بـroundMoney؛ القاعدة نفسها في المسير والقسيمة.
 export function formatLoanMoney(value: string | number | null | undefined): string {
   if (value === null || value === undefined || value === '') return '—'
-  const text = String(value)
-  if (!/^-?\d+(?:\.\d{1,4})?$/.test(text)) return text
-  const negative = text.startsWith('-'), [whole, fraction = ''] = (negative ? text.slice(1) : text).split('.')
-  return `${negative ? '-' : ''}${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${fraction.padEnd(2, '0').slice(0, 2)}`
+  if (typeof value === 'number') return Number.isFinite(value) ? formatMoney(value) : '—'
+  return isMoneyText(value) ? formatMoney(value) : value
 }
 export const loanMoneyInputValid = (value: string) => /^\d{1,16}(?:\.\d{1,2})?$/.test(value.trim()) && Number(value) > 0

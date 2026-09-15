@@ -23,7 +23,10 @@ function token(user) {
     employeeId: user.employeeId ?? null, tokenVersion: user.tokenVersion ?? 0,
     permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
 }
+// الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ (هذه المجموعة لا تختبر التكافؤ نفسه)
+const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
 async function request(user, method, endpoint, body) {
+  await writeParityReasonsBeforeApproval(request, user, method, endpoint)
   const response = await fetch(base + endpoint, { method, headers: { 'Content-Type': 'application/json',
     ...(user ? { Authorization: `Bearer ${token(user)}` } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
@@ -124,7 +127,8 @@ async function approveAndPay(run) {
   await acknowledgeUnassigned(approver, run.id)
   const approved = await request(approver, 'POST', `/payroll/runs/${run.id}/approve`)
   assert.equal(approved.status, 201, JSON.stringify(approved.body))
-  const paid = await request(admin, 'POST', `/payroll/runs/${run.id}/pay`)
+  // الخطوة 22 (B5): الصرف يسجل قناته ومرجعه
+  const paid = await request(admin, 'POST', `/payroll/runs/${run.id}/pay`, { channel: 'BANK_TRANSFER', reference: `EX-TEST-${run.id}` })
   assert.equal(paid.status, 201, JSON.stringify(paid.body))
 }
 
@@ -189,9 +193,14 @@ test('EX-10: full-month exemption defeats stale absence/95-minute lateness and n
   ])
   const punches = await repo('AttendancePunch').find({ where: { employeeId: emp.id }, order: { id: 'ASC' } })
   await obligation(emp, 500)
-  const strictTier = await repo('LatenessTier').save({ fromMinutes: 1, toMinutes: null, mode: 'FRACTION', value: 3, isActive: true })
+  // الخطوة 21 (B4): شريحة صارمة في مجموعة شرائح مؤرخة (الحساب لا يقرأ الجدول القديم)، تُوقف بعد الحساب.
+  const { payrollLatenessTierSetHash } = require('../src/payroll/payroll-lateness-tiers')
+  const strictTiers = [{ sequence: 1, fromMinutes: 1, toMinutes: null, mode: 'FRACTION', value: '3.000', label: null }]
+  const strictSet = await repo('PayrollLatenessTierSet').save({ effectivePeriod: '2000-01', contentHash: payrollLatenessTierSetHash('2000-01', strictTiers), source: 'EDITOR',
+    reason: 'شريحة صارمة لاختبار الاستثناء', isActive: true, createdBy: null })
+  await repo('PayrollLatenessTierSetTier').save(strictTiers.map(tier => ({ ...tier, setId: strictSet.id })))
   let run
-  try { run = await calculate([emp]) } finally { await repo('LatenessTier').delete(strictTier.id) }
+  try { run = await calculate([emp]) } finally { await repo('PayrollLatenessTierSet').update({ id: strictSet.id }, { isActive: false }) }
   const result = item(run, emp)
   assertNoAttendanceDeductions(result)
   assert.equal(Number(result.otherDeductions), 500)

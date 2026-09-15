@@ -1,13 +1,15 @@
 'use client'
 
 import type { ApiPayrollItem } from '@/lib/api'
+import { formatMoney } from '../lib/money'
 
 interface DayTrace {
   date: string; rawShortfallMinutes: number; unexcusedLateMinutes: number
   paidPermissionCoveredMinutes: number; overlapMinutes: number; chargeableShortfallMinutes: number
   latenessAmount: number; shortfallAmount: number; permissionAmount: number; cappedAmount: number; totalAmount: number
 }
-const money = (amount: number) => Number(amount).toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+// الخطوة 22 (B5): منسّق المبالغ الموحد في شاشات الرواتب والقسيمة
+const money = (amount: number) => formatMoney(amount)
 const overlapLabels: Record<string, string> = { NET_OF_LATENESS: 'طرح دقائق التأخير من النقص لمنع تكرار الخصم',
   CUMULATIVE: 'جمع خصمي التأخير والنقص', MAX_OF_BOTH: 'خصم الأكبر من التأخير أو النقص' }
 

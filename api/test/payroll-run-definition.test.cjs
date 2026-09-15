@@ -48,6 +48,60 @@ test('org at date: a future scheduled transfer applies at period end; a past-due
   assert.equal(pending.issues[0].code, 'ORG_TRANSFER_PENDING')
 })
 
+test('org at date: a department/team edit from the employee file (no transfer) applies from the day it was recorded; earlier days keep the old values', () => {
+  const change = (id, field, oldValue, newValue, date, extra = {}) => ({ id, employeeId: 11, field, oldValue, newValue, date, requestId: null, transferId: null, valid: true, ...extra })
+  const h = history({ fieldChanges: new Map([[11, [change(1, 'departmentId', 10, 20, '2026-09-14'), change(2, 'teamId', 100, 200, '2026-09-14')]]]) })
+  const employee = { id: 11, branchId: 1, departmentId: 20, teamId: 200 }
+  assert.deepEqual(def.payrollOrgAt(h, employee, '2026-08-22'), { date: '2026-08-22', branchId: 1, departmentId: 10, teamId: 100, costCenterId: null, issues: [] })
+  assert.deepEqual([def.payrollOrgAt(h, employee, '2026-09-13').departmentId, def.payrollOrgAt(h, employee, '2026-09-13').teamId], [10, 100])
+  assert.deepEqual([def.payrollOrgAt(h, employee, '2026-09-14').departmentId, def.payrollOrgAt(h, employee, '2026-09-14').teamId], [20, 200])
+  assert.deepEqual(def.payrollOrgChangeDates(h, 11, '2026-08-22', '2026-09-22'), ['2026-09-14'])
+  // عضوية فلتر القسم لشهر أغسطس تتبع القسم القديم، لا الملف الحالي.
+  const august = def.payrollOrgAt(h, employee, '2026-08-22')
+  assert.equal(def.payrollRunFilterMatches(filters({ departmentIds: [10] }), 11, august, new Set([10])), true)
+  assert.equal(def.payrollRunFilterMatches(filters({ departmentIds: [20] }), 11, august, new Set([20])), false)
+  // تعديلان متتاليان: الرجوع من الأحدث للأقدم.
+  const twice = history({ fieldChanges: new Map([[11, [change(3, 'teamId', 100, 110, '2026-08-01'), change(4, 'teamId', 110, 200, '2026-09-01')]]]) })
+  assert.deepEqual(['2026-07-31', '2026-08-15', '2026-09-02'].map(date => def.payrollOrgAt(twice, { ...employee, departmentId: 10 }, date).teamId), [100, 110, 200])
+  // صف تالف لا يُطبق ويظهر كمشكلة.
+  const broken = history({ fieldChanges: new Map([[11, [change(5, 'teamId', null, null, '2026-09-01', { valid: false })]]]) })
+  const withIssue = def.payrollOrgAt(broken, employee, '2026-08-22')
+  assert.deepEqual([withIssue.teamId, withIssue.issues.map(issue => issue.code)], [200, ['ORG_CHANGE_LOG_INVALID']])
+})
+
+test('org at date: change-log rows written by a transfer execution follow the transfer effective date, not the day they were recorded', () => {
+  const h = history({
+    transfers: new Map([[12, [{ id: 7, employeeId: 12, fromTeamId: null, toTeamId: 200, effectiveDate: '2026-08-10', status: 'EXECUTED', requestId: 55, executedDate: '2026-09-10' }]]]),
+    fieldChanges: new Map([[12, [
+      { id: 8, employeeId: 12, field: 'teamId', oldValue: 110, newValue: 200, date: '2026-09-10', requestId: 55, transferId: null, valid: true },
+      { id: 9, employeeId: 12, field: 'departmentId', oldValue: 11, newValue: 20, date: '2026-09-10', requestId: 55, transferId: null, valid: true },
+    ]]]),
+  })
+  def.attachTransferChanges(h)
+  assert.deepEqual(h.fieldChanges.get(12).map(row => row.transferId), [7, 7])
+  const employee = { id: 12, branchId: 2, departmentId: 20, teamId: 200 }
+  const before = def.payrollOrgAt(h, employee, '2026-08-09')
+  assert.deepEqual([before.departmentId, before.teamId, before.issues], [11, 110, []], 'the transfer revert uses the recorded old values')
+  const after = def.payrollOrgAt(h, employee, '2026-08-15')
+  assert.deepEqual([after.departmentId, after.teamId], [20, 200], 'rows of a back-dated transfer do not revert at their recording day')
+  assert.deepEqual(def.payrollOrgChangeDates(h, 12, '2026-07-23', '2026-09-22'), ['2026-08-10'])
+  // نقل بلا طلب: يُربط بيوم التنفيذ والوجهة.
+  const noRequest = history({
+    transfers: new Map([[13, [{ id: 9, employeeId: 13, fromTeamId: 100, toTeamId: 200, effectiveDate: '2026-08-10', status: 'EXECUTED', requestId: null, executedDate: '2026-08-12' }]]]),
+    fieldChanges: new Map([[13, [{ id: 10, employeeId: 13, field: 'teamId', oldValue: 100, newValue: 200, date: '2026-08-12', requestId: null, transferId: null, valid: true },
+      { id: 11, employeeId: 13, field: 'teamId', oldValue: 200, newValue: 110, date: '2026-08-12', requestId: null, transferId: null, valid: true }]]]),
+  })
+  def.attachTransferChanges(noRequest)
+  assert.deepEqual(noRequest.fieldChanges.get(13).map(row => row.transferId), [9, null])
+})
+
+test('legacy calculate endpoints are allowed only on disposable test databases, never on the company database', () => {
+  assert.equal(def.payrollLegacyCalculateAllowed('hr_system'), false)
+  assert.equal(def.payrollLegacyCalculateAllowed('hr_review_pre_payroll_20260911162404_52ee65ac'), false)
+  assert.equal(def.payrollLegacyCalculateAllowed(undefined), false)
+  assert.equal(def.payrollLegacyCalculateAllowed('hr_run_definition_test_0123456789abcdef'), true)
+})
+
 test('filters: OR inside one type, AND between types; sub-departments follow the chosen department; a list alone keeps moved employees', () => {
   const h = history()
   const at = (branchId, departmentId, teamId) => ({ branchId, departmentId, teamId, costCenterId: null })

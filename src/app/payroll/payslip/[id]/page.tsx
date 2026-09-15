@@ -24,7 +24,12 @@ import { PayrollAttendanceBreakdown } from '@/components/PayrollAttendanceBreakd
 import { PayrollOvertimeBreakdown } from '@/components/PayrollOvertimeBreakdown'
 import { PayrollInstallmentBreakdown } from '@/components/PayrollInstallmentBreakdown'
 import { PayrollObligationBreakdown } from '@/components/PayrollObligationBreakdown'
+import { PayrollLatenessTierBreakdown } from '@/components/payroll/PayrollLatenessTierBreakdown'
 import type { PayrollObligationDetail } from '@/lib/deductions-api'
+// الخطوة 22 (B5): منسّق المبالغ الموحد (نفس جدول المسير)، والتغطية والمعامل، وقيد الصرف
+import { formatMoney, formatMoneyOrDash, sumMoney } from '@/lib/money'
+import { payrollCoverageText, payrollItemCoverage } from '@/lib/payroll-item-totals'
+import { PAY_CHANNEL_LABELS, type PayrollPayChannel, type PayrollRunScreenFields } from '@/lib/payroll-runs-api'
 
 type SavedSalaryComponent = {
   code: string; nameAr: string; nameEn: string; monthlyAmount: number; earnedAmount: number
@@ -191,8 +196,9 @@ export default function PayslipPage() {
       ]
     : []
 
-  const totalEarnings = earnings.reduce((sum, e) => sum + e.amount, 0)
-  const totalDeductions = deductions.reduce((sum, d) => sum + d.amount, 0)
+  const totalEarnings = sumMoney(earnings.map(e => e.amount))
+  const totalDeductions = sumMoney(deductions.map(d => d.amount))
+  const paidRun = run as (ApiPayrollRun & PayrollRunScreenFields) | null
   const netSalary = item ? Number(item.netPay) : 0
   const attendanceNotes = (() => {
     try {
@@ -299,6 +305,15 @@ export default function PayslipPage() {
                 <span className="text-gray-500">حالة المسير:</span>
                 <span className="font-medium text-gray-800">{runStatusLabels[run.status] ?? run.status}</span>
 
+                {/* الخطوة 22 (B5): التغطية والمعامل وأساس الأيام من تفصيل البند المحفوظ */}
+                <span className="text-gray-500">التغطية:</span>
+                <span className="font-medium text-gray-800">{payrollCoverageText(payrollItemCoverage(item)) ?? '—'}</span>
+
+                {run.status === 'PAID' && paidRun?.payReference && <>
+                  <span className="text-gray-500">مرجع الصرف:</span>
+                  <span className="font-medium text-gray-800">{PAY_CHANNEL_LABELS[paidRun.payChannel as PayrollPayChannel] ?? ''} {paidRun.payReference}</span>
+                </>}
+
                 <span className="text-gray-500">طريقة الدفع:</span>
                 <span className="font-medium text-gray-800">{payMethodLabels[item.payMethod] ?? item.payMethod}</span>
 
@@ -330,7 +345,7 @@ export default function PayslipPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3 text-left font-mono font-medium text-success-600">
-                          {earning.amount > 0 ? earning.amount.toLocaleString() : '-'}
+                          {formatMoneyOrDash(earning.amount)}
                         </td>
                       </tr>
                     ))}
@@ -339,7 +354,7 @@ export default function PayslipPage() {
                     <tr className="bg-success-100">
                       <td className="px-4 py-3 font-bold text-success-800">إجمالي الاستحقاقات</td>
                       <td className="px-4 py-3 text-left font-mono font-bold text-success-800 text-lg">
-                        {totalEarnings.toLocaleString()}
+                        {formatMoney(totalEarnings)}
                       </td>
                     </tr>
                   </tfoot>
@@ -364,7 +379,7 @@ export default function PayslipPage() {
                           </div>
                         </td>
                         <td className="px-4 py-3 text-left font-mono font-medium text-danger-600">
-                          {deduction.amount > 0 ? deduction.amount.toLocaleString() : '-'}
+                          {formatMoneyOrDash(deduction.amount)}
                         </td>
                       </tr>
                     ))}
@@ -373,7 +388,7 @@ export default function PayslipPage() {
                     <tr className="bg-danger-100">
                       <td className="px-4 py-3 font-bold text-danger-800">إجمالي الخصومات</td>
                       <td className="px-4 py-3 text-left font-mono font-bold text-danger-800 text-lg">
-                        {totalDeductions.toLocaleString()}
+                        {formatMoney(totalDeductions)}
                       </td>
                     </tr>
                   </tfoot>
@@ -384,6 +399,8 @@ export default function PayslipPage() {
 
           {/* Net Salary */}
           {item && <PayrollAttendanceBreakdown item={item} currency={currency} />}
+          {/* الخطوة 21: أثر شريحة التأخير لكل يوم (المدى والطريقة والمضاعف والمعادلة) */}
+          {item && <PayrollLatenessTierBreakdown item={item} currency={currency} />}
           {item && <PayrollOvertimeBreakdown item={item} currency={currency} />}
           {item && <PayrollInstallmentBreakdown item={item} currency={currency} />}
           {item && <PayrollObligationBreakdown item={item} currency={currency} details={obligationDetails} />}
@@ -397,7 +414,7 @@ export default function PayslipPage() {
             <div className="flex items-center justify-between">
               <div>
                 <p className="text-primary-100">صافي الراتب (Net Salary)</p>
-                <p className="text-4xl font-bold mt-1">{netSalary.toLocaleString()} {currency}</p>
+                <p className="text-4xl font-bold mt-1">{formatMoney(netSalary)} {currency}</p>
                 <p className="text-primary-200 text-sm mt-2">{numberToArabicWords(netSalary, currency)}</p>
               </div>
               <div className="w-20 h-20 bg-white/20 rounded-2xl flex items-center justify-center">

@@ -93,6 +93,8 @@ test('approval holding employee-finance wins before a waiting recompute; attenda
     period: '2026-07', scopeType: 'CUSTOM', employeeIds: [emp.id], name: 'اختبار الاعتماد المتزامن مع الحضور' })
   assert.equal(calculated.status, 201, JSON.stringify(calculated.body))
   await acknowledgeUnassigned(approver, calculated.body.id)
+  // الخطوة 20 (B4): أسباب تقرير التكافؤ تُكتب قبل بدء السباق (هذه المجموعة لا تختبر التكافؤ نفسه)، فتوقيت الاعتماد والقفل كما هو
+  await require('./fixtures/payroll-parity-reasons.cjs').writeParityReasonsBeforeApproval(request, approver, 'POST', `/payroll/runs/${calculated.body.id}/approve`)
   const beforeDay = await repo('AttendanceDay').findOneByOrFail({ employeeId: emp.id, date })
   const savedOT = await repo('OvertimeEntry').save({ employeeId: emp.id, date, source: 'PRE_REQUESTED',
     status: 'APPROVED', hoursRequested: 2, hoursActual: 2, payableHours: 2, rate: 1.5 })

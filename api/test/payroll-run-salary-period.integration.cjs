@@ -21,7 +21,10 @@ function token(user) {
     employeeId: user.employeeId ?? null, tokenVersion: user.tokenVersion ?? 0,
     permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
 }
+// الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ (هذه المجموعة لا تختبر التكافؤ نفسه)
+const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
 async function request(user, method, url, body) {
+  await writeParityReasonsBeforeApproval(request, user, method, url)
   const response = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json', ...(user ? { Authorization: `Bearer ${token(user)}` } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
   const text = await response.text()

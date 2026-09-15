@@ -28,7 +28,7 @@ import {
   ValidateNested,
 } from 'class-validator'
 import { Type } from 'class-transformer'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import { ApprovalChain } from '../requests/entities/approval-chain.entity'
 import { ApprovalStep } from '../requests/entities/approval-step.entity'
 import { Branch } from '../org/entities/branch.entity'
@@ -49,6 +49,7 @@ import { assertCalendarScope, beginCalendarChange, CalendarChangeDto, finishCale
 import { overtimeWageComponents } from '../payroll/overtime-financial'
 import { PAYROLL_POLICY_CYCLE_CONFIG_KEYS, PAYROLL_POLICY_NULLABLE_CONFIG_KEYS, payrollPolicyCycleConfigError, validatePayrollPolicyDefaultConfig } from '../payroll/payroll-policy-settings'
 import { payrollDecisionConfigError } from '../payroll/payroll-decision-settings'
+import { PAYROLL_SELF_APPROVAL_LICENCE_PERMISSION, payrollSelfApprovalLicenceIssue } from '../payroll/payroll-run-approval'
 import { DATA_PLACEHOLDER_REJECTED, isDataPlaceholder, withoutDataPlaceholder } from '../common/data-placeholders'
 import { deductionSettingError } from '../payroll/typed-deductions'
 import { bonusSettingError } from '../payroll/bonuses'
@@ -545,6 +546,9 @@ export class SettingsController {
     // مفاتيح جديدة غير مسموحة إلا من الكود — نعدّل الموجود فقط
     const row = await this.config.findOne({ where: { key: dto.key } })
     if (!row) throw new NotFoundException(`المفتاح ${dto.key} غير معروف`)
+    // الخطوة 22 (B5، تصحيح المراجعة): رخصة الشركة الصغيرة تفك فصل المهام في اعتماد المسير — صلاحية مستقلة يمنحها مدير النظام فقط، لا settings.manage وحدها
+    const licenceIssue = payrollSelfApprovalLicenceIssue({ key: dto.key, canManageLicence: userHasPerm(user, PAYROLL_SELF_APPROVAL_LICENCE_PERMISSION) })
+    if (licenceIssue) throw new ForbiddenException(licenceIssue)
     // الخطوة 9 (مسار R2): القيمة المؤقتة لا تُحفظ كاسم شركة مؤكد
     if (dto.key.startsWith('company.') && isDataPlaceholder(dto.value)) throw new BadRequestException(DATA_PLACEHOLDER_REJECTED)
     // PL-01: القيم الافتراضية للنسخ الجديدة تشترك في حدود التحقق مع إعدادات النسخة.

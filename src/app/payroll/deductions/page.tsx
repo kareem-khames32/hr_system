@@ -23,6 +23,9 @@ import {
 import { useCurrency } from '@/lib/currency'
 import { downloadCsv, csvDateStamp } from '@/lib/csv'
 import { TypedDeductionsWorkspace } from '@/components/payroll/TypedDeductionsWorkspace'
+// الخطوة 7 / ALDD-12 (B5): منسّق المبالغ الموحد وملخص الخصومات بالقروش من أعمدة الجدول نفسها
+import { formatMoney } from '@/lib/money'
+import { payrollDeductionSummary, payrollItemDeductions } from '@/lib/payroll-item-totals'
 
 const runStatusLabels: Record<string, string> = {
   CALCULATED: 'محسوب',
@@ -103,25 +106,11 @@ export default function DeductionsPage() {
   }, [selectedRunId])
 
   const items: ApiPayrollItem[] = run?.items ?? []
-  const totalOf = (i: ApiPayrollItem) =>
-    Number(i.latenessDeduction) +
-    Number(i.shortfallDeduction ?? 0) +
-    Number(i.absenceDeduction ?? 0) +
-    Number(i.unpaidLeaveDeduction) +
-    Number(i.loanInstallments) +
-    Number(i.otherDeductions ?? 0)
-
-  const totals = {
-    lateness: items.reduce((s, i) => s + Number(i.latenessDeduction), 0),
-    shortfall: items.reduce((s, i) => s + Number(i.shortfallDeduction ?? 0), 0),
-    absence: items.reduce((s, i) => s + Number(i.absenceDeduction ?? 0), 0),
-    unpaidLeave: items.reduce((s, i) => s + Number(i.unpaidLeaveDeduction), 0),
-    loans: items.reduce((s, i) => s + Number(i.loanInstallments), 0),
-    other: items.reduce((s, i) => s + Number(i.otherDeductions ?? 0), 0),
-  }
-  const grandTotal =
-    totals.lateness + totals.shortfall + totals.absence + totals.unpaidLeave + totals.loans + totals.other
-  const affectedCount = items.filter((i) => totalOf(i) > 0).length
+  // مجموع أعمدة الصف = إجمالي الصف، ومجموع سطور الملخص (ومنها نقص الساعات والخصومات الأخرى) = الإجمالي الكبير — بالقروش الصحيحة
+  const totalOf = (i: ApiPayrollItem) => payrollItemDeductions(i)
+  const summary = payrollDeductionSummary(items)
+  const grandTotal = summary.grandTotal
+  const affectedCount = summary.affected
   const openObjections = objections.filter((o) =>
     ['SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO'].includes(o.status)
   ).length
@@ -250,30 +239,30 @@ export default function DeductionsPage() {
                             </div>
                           </td>
                           <td className="table-cell text-center font-mono">
-                            {Number(item.latenessDeduction).toLocaleString()}
+                            {formatMoney(item.latenessDeduction)}
                             <p className="text-xs text-gray-400">{Number(item.lateMinutes)} دقيقة</p>
                           </td>
                           <td className="table-cell text-center font-mono">
-                            {Number(item.shortfallDeduction ?? 0).toLocaleString()}
+                            {formatMoney(item.shortfallDeduction)}
                             <p className="text-xs text-gray-400">{Number(item.shortfallMinutes ?? 0)} دقيقة نقص مرصود</p>
                           </td>
                           <td className="table-cell text-center font-mono">
-                            {Number(item.absenceDeduction ?? 0).toLocaleString()}
+                            {formatMoney(item.absenceDeduction)}
                             <p className="text-xs text-gray-400">{Number(item.absenceDays ?? 0)} يوم</p>
                           </td>
                           <td className="table-cell text-center font-mono">
-                            {Number(item.unpaidLeaveDeduction).toLocaleString()}
+                            {formatMoney(item.unpaidLeaveDeduction)}
                             <p className="text-xs text-gray-400">{Number(item.unpaidLeaveDays)} يوم</p>
                           </td>
                           <td className="table-cell text-center font-mono">
-                            {Number(item.loanInstallments).toLocaleString()}
+                            {formatMoney(item.loanInstallments)}
                           </td>
                           <td className="table-cell text-center font-mono">
-                            {Number(item.otherDeductions ?? 0).toLocaleString()}
+                            {formatMoney(item.otherDeductions)}
                             <p className="text-xs text-gray-400">مصنفة وعهدة</p>
                           </td>
                           <td className="table-cell text-center font-mono font-bold text-danger-600">
-                            -{totalOf(item).toLocaleString()}
+                            -{formatMoney(totalOf(item))}
                           </td>
                         </tr>
                       )
@@ -333,30 +322,17 @@ export default function DeductionsPage() {
                 ملخص خصومات المسير
               </h3>
               <div className="space-y-3">
-                <div className="flex items-center justify-between">
-                  <span className="text-danger-100">خصم التأخير:</span>
-                  <span className="font-bold">{totals.lateness.toLocaleString()} {currency}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-danger-100">خصم الغياب:</span>
-                  <span className="font-bold">{totals.absence.toLocaleString()} {currency}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-danger-100">إجازات بدون راتب:</span>
-                  <span className="font-bold">{totals.unpaidLeave.toLocaleString()} {currency}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-danger-100">أقساط السلف:</span>
-                  <span className="font-bold">{totals.loans.toLocaleString()} {currency}</span>
-                </div>
-                <div className="flex items-center justify-between">
-                  <span className="text-danger-100">خصومات الدفتر (مصنفة/عهدة/استرداد):</span>
-                  <span className="font-bold">{totals.other.toLocaleString()} {currency}</span>
-                </div>
+                {/* سطر لكل عمود في الجدول (التأخير، نقص الساعات، الغياب، بدون راتب، السلف، الخصومات الأخرى) — مجموعها = الإجمالي */}
+                {summary.lines.map(line => (
+                  <div key={line.field} className="flex items-center justify-between">
+                    <span className="text-danger-100">{line.label}:</span>
+                    <span className="font-bold">{formatMoney(line.total)} {currency}</span>
+                  </div>
+                ))}
                 <div className="border-t border-white/20 pt-3 mt-3">
                   <div className="flex items-center justify-between">
                     <span className="text-danger-100">الإجمالي:</span>
-                    <span className="font-bold text-2xl">{grandTotal.toLocaleString()} {currency}</span>
+                    <span className="font-bold text-2xl">{formatMoney(grandTotal)} {currency}</span>
                   </div>
                 </div>
               </div>

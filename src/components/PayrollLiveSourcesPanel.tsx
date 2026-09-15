@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Database, Search } from 'lucide-react'
 import { can, fetchEmployeeDirectory, type ApiEmployeeDirectoryEntry } from '../lib/api'
 import { PayrollSalaryHistoryEditor } from './PayrollSalaryHistoryEditor'
+import { localDateStr } from '../lib/dates'
 import { payrollPoliciesError, type PayrollCollectionView } from '../lib/payroll-policies-api'
 import { LIVE_SOURCE_LABELS, liveSourceAmount, liveSourceDate, liveSourceDayKind, liveSourceProofLabel, liveSourceMessage, liveSourceMinutes, liveSourcePeriodError, liveSourceRecord, liveSourceRows, liveSourceRowReasons, liveSourceRowStatus, liveSourceStateLabel, readPayrollLiveSources, type PayrollLiveSources, type LiveSourceSection } from '../lib/payroll-live-sources-api'
 
@@ -53,10 +54,16 @@ export function PayrollLiveSourceDetails({ name, section }: { name: string; sect
   </div>
 }
 
+// الخطوة 22 (B5): وقت القراءة بنظام الأرقام الموحد في شاشات الرواتب (أرقام لاتينية كبقية المبالغ)
+const readAtText = (value: string) => {
+  const date = new Date(value)
+  return Number.isNaN(date.getTime()) ? value : `${localDateStr(date)} ${String(date.getHours()).padStart(2, '0')}:${String(date.getMinutes()).padStart(2, '0')}`
+}
+
 export function PayrollLiveSourcesResult({ result }: { result: PayrollLiveSources }) {
   return <div className="space-y-4">
-    <div className="rounded-xl bg-blue-50 p-4 text-sm text-blue-900 space-y-1"><p className="font-bold">{result.snapshot.employee.fullName} · {result.snapshot.employee.employeeCode}</p><p>{result.snapshot.period.startDate} إلى {result.snapshot.period.endDate} · مراجعة السياسة {result.snapshot.policy.revision}</p><p className="text-xs">وقت القراءة: {new Date(result.capturedAt).toLocaleString('ar-EG')}</p></div>
-    <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">الفحص يوضح المصادر المتاحة وما يحتاج استكمالًا. حساب المسير بهذه المصادر لم يُفعّل بعد.</p>
+    <div className="rounded-xl bg-blue-50 p-4 text-sm text-blue-900 space-y-1"><p className="font-bold">{result.snapshot.employee.fullName} · {result.snapshot.employee.employeeCode}</p><p>{result.snapshot.period.startDate} إلى {result.snapshot.period.endDate} · مراجعة السياسة {result.snapshot.policy.revision}</p><p className="text-xs">وقت القراءة: <span dir="ltr">{readAtText(result.capturedAt)}</span></p></div>
+    <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">الفحص يوضح المصادر المتاحة وما يحتاج استكمالًا. المبلغ المصروف في المسير (وضع SHADOW) ما زال من الحساب القديم؛ هذه المصادر يقرؤها محرك السياسة بجانبه للمقارنة في تقرير التكافؤ، ولا تغيّر الصرف قبل التحويل إلى POLICY.</p>
     {Object.entries(result.snapshot.sections).map(([name, section]) => <details key={name} className="rounded-xl border border-gray-200 p-4" open={section.state !== 'AVAILABLE'}><summary className="cursor-pointer font-semibold text-gray-800"><span>{Object.prototype.hasOwnProperty.call(LIVE_SOURCE_LABELS, name) ? LIVE_SOURCE_LABELS[name] : 'مصدر إضافي'}</span><span className={`text-xs mr-3 rounded-full px-2 py-1 ${section.state === 'AVAILABLE' ? 'bg-green-50 text-green-700' : 'bg-amber-50 text-amber-800'}`}>{liveSourceStateLabel(section.state)}</span></summary><div className="mt-4 space-y-3"><PayrollLiveSourceDetails name={name} section={section} />{section.issues.length > 0 && <ul className="space-y-1 text-sm text-amber-900 list-disc pr-5">{section.issues.map((issue, index) => <li key={index}>{liveSourceMessage(issue.message)}</li>)}</ul>}</div></details>)}
     {result.snapshot.blockers.some(row => row.section === 'policy') && <div className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900"><p className="font-bold mb-2">مراجعة السياسة</p>{result.snapshot.blockers.filter(row => row.section === 'policy').map((row, index) => <p key={index}>{liveSourceMessage(row.message)}</p>)}</div>}
   </div>

@@ -22,6 +22,14 @@ export interface PayrollObligationProtectionEntry {
   typedCategory?: string | null
   carryPriority?: number | null
 }
+// B5 / الخطوة 22: فئات التحصيل بعد المحمي. ترتيب المالك (من نسخة السياسة) يقدّم فئة على أخرى عند عدم كفاية المتاح؛
+// غيابه = الترتيب الافتراضي أعلاه حرفيًا (المصنفة والإدارية مجموعة واحدة بأولوية الترحيل ثم الإدارية آخرًا).
+export const PAYROLL_COLLECTION_CLASSES = ['ATTENDANCE', 'RECOVERY', 'TYPED', 'ADMINISTRATIVE', 'LOAN'] as const
+export type PayrollCollectionClass = typeof PAYROLL_COLLECTION_CLASSES[number]
+export const PAYROLL_DEFAULT_COLLECTION_ORDER: readonly PayrollCollectionClass[] = PAYROLL_COLLECTION_CLASSES
+export const isPayrollCollectionOrder = (value: unknown): value is PayrollCollectionClass[] => Array.isArray(value) &&
+  value.length === PAYROLL_COLLECTION_CLASSES.length && new Set(value).size === value.length && value.every(item => (PAYROLL_COLLECTION_CLASSES as readonly unknown[]).includes(item))
+
 export interface PayrollObligationProtectionInput {
   earnedFixedGross: number
   overtime: number
@@ -30,6 +38,10 @@ export interface PayrollObligationProtectionInput {
   credits: PayrollObligationProtectionEntry[]
   debits: PayrollObligationProtectionEntry[]
   settings: PayrollObligationProtectionSettings
+  // ترتيب المالك للفئات الخمس؛ null/غياب = الترتيب الافتراضي
+  collectionOrder?: readonly PayrollCollectionClass[] | null
+  // الأقساط المحصلة فعلًا في موضع LOAN (من خطة الأقساط المبنية على loanSlot)؛ تستهلك المتاح قبل الفئات التالية لها
+  loanCollected?: number
 }
 export interface PayrollObligationLine {
   id: number
@@ -53,7 +65,7 @@ const byAge = (a: PayrollObligationProtectionEntry, b: PayrollObligationProtecti
 export function protectPayrollObligations(input: PayrollObligationProtectionInput) {
   const zero = decimal('0'), hundred = decimal('100')
   for (const value of [input.earnedFixedGross, input.overtime, input.unpaidLeave, input.attendance.lateness, input.attendance.shortfall, input.attendance.absence,
-    ...input.credits.map(row => row.amount), ...input.debits.map(row => row.amount)]) {
+    ...input.credits.map(row => row.amount), ...input.debits.map(row => row.amount), input.loanCollected ?? 0]) {
     if (!Number.isFinite(value) || value < 0) throw new Error('مدخلات حماية الصافي يجب أن تكون مبالغ غير سالبة')
   }
   const gross = decimal(input.earnedFixedGross)
@@ -71,33 +83,66 @@ export function protectPayrollObligations(input: PayrollObligationProtectionInpu
     return { id: row.id, type: 'DEBIT', amount: amount(due), collected: amount(collected), carried: amount(due.subtract(collected)), typed: true }
   })
   const statutoryCollected = statutoryLines.reduce((sum, line) => sum.add(decimal(line.collected)), zero)
-  const roomAfterStatutory = max(zero, room.subtract(statutoryCollected))
-  const capAfterStatutory = cap === null ? null : max(zero, cap.subtract(statutoryCollected))
-  const attendanceCapacity = (capAfterStatutory === null ? roomAfterStatutory : min(roomAfterStatutory, capAfterStatutory)).round(2, 'FLOOR')
+  // 2) الفئات بترتيب التحصيل: كل فئة تأخذ من المتاح الباقي فوق الأرضية وتحت السقف بعد ما استهلكته الفئات قبلها.
+  const order = input.collectionOrder ?? null
+  if (order !== null && !isPayrollCollectionOrder(order)) throw new Error('ترتيب التحصيل يجب أن يشمل الحضور والاستردادات والمصنفة والإدارية والسلف مرة واحدة لكل منها')
+  const loanCollected = decimal(input.loanCollected ?? 0)
+  let consumed = statutoryCollected
+  const capacityNow = () => {
+    const roomNow = max(zero, balance.subtract(floor).subtract(consumed))
+    return (cap === null ? roomNow : min(roomNow, max(zero, cap.subtract(consumed)))).round(2, 'FLOOR')
+  }
   const attendance = { lateness: decimal(input.attendance.lateness), shortfall: decimal(input.attendance.shortfall), absence: decimal(input.attendance.absence) }
   const requestedAttendance = attendance.lateness.add(attendance.shortfall).add(attendance.absence)
-  let excess = max(zero, requestedAttendance.subtract(attendanceCapacity))
   const dropped = { shortfall: zero, lateness: zero, absence: zero }
-  // النقص أولًا ثم التأخير ثم الغياب: الأخف أثرًا على سجل الموظف يسقط قبل الأشد
-  for (const key of ['shortfall', 'lateness', 'absence'] as const) {
-    const take = min(excess, attendance[key])
-    attendance[key] = attendance[key].subtract(take)
-    dropped[key] = take
-    excess = excess.subtract(take)
+  let attendanceCapacity = zero
+  let initialDebitCapacity: PayrollDecimal | null = null, debitCapacityRemaining: PayrollDecimal | null = null
+  let loanSlot = { netBeforeLoans: balance.subtract(consumed), capConsumed: consumed }
+  const nonStatutory = input.debits.filter(row => !statutory(row))
+  const byPriority = (a: PayrollObligationProtectionEntry, b: PayrollObligationProtectionEntry) => (b.carryPriority ?? DEFAULT_CARRY_PRIORITY) - (a.carryPriority ?? DEFAULT_CARRY_PRIORITY)
+  type Group = { kind: 'ATTENDANCE' } | { kind: 'LOAN' } | { kind: 'DEBITS'; rows: PayrollObligationProtectionEntry[] }
+  const groups: Group[] = []
+  for (const kind of order ?? PAYROLL_DEFAULT_COLLECTION_ORDER) {
+    if (kind === 'ATTENDANCE') groups.push({ kind: 'ATTENDANCE' })
+    else if (kind === 'LOAN') groups.push({ kind: 'LOAN' })
+    // الاستردادات غير المصنفة بالأقدم
+    else if (kind === 'RECOVERY') groups.push({ kind: 'DEBITS', rows: nonStatutory.filter(row => row.deductionRequestId == null).sort(byAge) })
+    // الافتراضي: المصنفة والإدارية معًا بأولوية ترحيل أعلى أولًا ثم الإدارية آخرًا ثم الأقدم (V2 كما هو)
+    else if (order === null) {
+      if (kind === 'TYPED') groups.push({ kind: 'DEBITS', rows: nonStatutory.filter(row => row.deductionRequestId != null)
+        .sort((a, b) => byPriority(a, b) || Number(a.typedCategory === 'ADMINISTRATIVE') - Number(b.typedCategory === 'ADMINISTRATIVE') || byAge(a, b)) })
+    }
+    // ترتيب المالك يفصل المصنفة عن الإدارية كفئتين
+    else groups.push({ kind: 'DEBITS', rows: nonStatutory.filter(row => row.deductionRequestId != null && (row.typedCategory === 'ADMINISTRATIVE') === (kind === 'ADMINISTRATIVE'))
+      .sort((a, b) => byPriority(a, b) || byAge(a, b)) })
   }
-  const attendanceCollected = attendance.lateness.add(attendance.shortfall).add(attendance.absence)
-  const debitRoom = max(zero, balance.subtract(statutoryCollected).subtract(attendanceCollected).subtract(floor))
-  let capacity = (cap === null ? debitRoom : min(debitRoom, max(zero, cap.subtract(statutoryCollected).subtract(attendanceCollected)))).round(2, 'FLOOR')
-  const initialDebitCapacity = capacity
-  // 2) ترتيب الخصم (عكس ترتيب الترحيل): الاستردادات غير المصنفة ← المصنفة بأولوية ترحيل أعلى أولًا ← الإدارية آخرًا ← الأقدم
-  const ordered = input.debits.filter(row => !statutory(row)).sort((a, b) => Number(a.deductionRequestId != null) - Number(b.deductionRequestId != null) ||
-    (b.carryPriority ?? DEFAULT_CARRY_PRIORITY) - (a.carryPriority ?? DEFAULT_CARRY_PRIORITY) ||
-    Number(a.typedCategory === 'ADMINISTRATIVE') - Number(b.typedCategory === 'ADMINISTRATIVE') || byAge(a, b))
-  const debitLines: PayrollObligationLine[] = [...statutoryLines, ...ordered.map(row => {
-    const due = decimal(row.amount), collected = min(due, capacity)
-    capacity = capacity.subtract(collected)
-    return { id: row.id, type: 'DEBIT' as const, amount: amount(due), collected: amount(collected), carried: amount(due.subtract(collected)), typed: row.deductionRequestId != null }
-  })]
+  const debitLines: PayrollObligationLine[] = [...statutoryLines]
+  for (const group of groups) {
+    if (group.kind === 'ATTENDANCE') {
+      attendanceCapacity = capacityNow()
+      let excess = max(zero, requestedAttendance.subtract(attendanceCapacity))
+      // النقص أولًا ثم التأخير ثم الغياب: الأخف أثرًا على سجل الموظف يسقط قبل الأشد
+      for (const key of ['shortfall', 'lateness', 'absence'] as const) {
+        const take = min(excess, attendance[key])
+        attendance[key] = attendance[key].subtract(take)
+        dropped[key] = take
+        excess = excess.subtract(take)
+      }
+      consumed = consumed.add(attendance.lateness.add(attendance.shortfall).add(attendance.absence))
+    } else if (group.kind === 'LOAN') {
+      // رصيد موضع السلف: خطة الأقساط تُبنى عليه (الافتراضي آخر فئة = الصافي قبل الأقساط)
+      loanSlot = { netBeforeLoans: balance.subtract(consumed), capConsumed: consumed }
+      consumed = consumed.add(loanCollected)
+    } else {
+      if (initialDebitCapacity === null) initialDebitCapacity = capacityNow()
+      for (const row of group.rows) {
+        const due = decimal(row.amount), collected = min(due, capacityNow())
+        consumed = consumed.add(collected)
+        debitLines.push({ id: row.id, type: 'DEBIT', amount: amount(due), collected: amount(collected), carried: amount(due.subtract(collected)), typed: row.deductionRequestId != null })
+      }
+      debitCapacityRemaining = capacityNow()
+    }
+  }
   const creditLines: PayrollObligationLine[] = input.credits.map(row => ({ id: row.id, type: 'CREDIT', amount: row.amount, collected: row.amount, carried: 0, typed: false }))
   const otherDeductions = debitLines.reduce((sum, line) => sum.add(decimal(line.collected)), zero)
   const warnings: Array<{ code: string; message: string }> = []
@@ -115,6 +160,8 @@ export function protectPayrollObligations(input: PayrollObligationProtectionInpu
     otherAdditions: amount(credits),
     lines,
     consumedObligationIds: lines.filter(line => line.collected > 0).map(line => line.id).sort((a, b) => a - b),
+    // رصيد موضع السلف في ترتيب التحصيل (مدخل خطة الأقساط)
+    loanSlot: { netBeforeLoans: amount(loanSlot.netBeforeLoans), capConsumed: amount(loanSlot.capConsumed) },
     trace: {
       version: PAYROLL_OBLIGATION_PROTECTION_VERSION,
       settings: { minNetGuarantee: minNet?.canonical() ?? null, netFloorPct: floorPct?.canonical() ?? null, maxDeductionPctOfGross: capPct?.canonical() ?? null },
@@ -122,7 +169,9 @@ export function protectPayrollObligations(input: PayrollObligationProtectionInpu
       statutoryCollected: statutoryCollected.format(2, 'HALF_UP'),
       attendanceRequested: requestedAttendance.format(2, 'HALF_UP'), attendanceCapacity: attendanceCapacity.format(2, 'HALF_UP'),
       attendanceDropped: { shortfall: dropped.shortfall.format(2, 'HALF_UP'), lateness: dropped.lateness.format(2, 'HALF_UP'), absence: dropped.absence.format(2, 'HALF_UP') },
-      debitCapacity: initialDebitCapacity.format(2, 'HALF_UP'), debitCapacityRemaining: capacity.format(2, 'HALF_UP'),
+      debitCapacity: (initialDebitCapacity ?? capacityNow()).format(2, 'HALF_UP'), debitCapacityRemaining: (debitCapacityRemaining ?? capacityNow()).format(2, 'HALF_UP'),
+      // ترتيب المالك المطبق وأقساط موضع السلف؛ الترتيب الافتراضي لا يضيف حقلًا (التتبع السابق كما هو)
+      ...(order === null ? {} : { collectionOrder: [...order], loanCollected: loanCollected.format(2, 'HALF_UP') }),
       warnings,
     },
   }

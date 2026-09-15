@@ -2,14 +2,30 @@
 
 // الخطوة 17: عرض معاينة العضوية (قراءة فقط) — الداخلون بالتغطية والمعامل وأساس الأيام، والمستبعدون بأكوادهم.
 import Link from 'next/link'
-import { MEMBERSHIP_EXCLUSION_LABELS, SELECTION_MODE_LABELS, type PayrollMembershipPreview } from '../../lib/payroll-runs-api'
+import {
+  MEMBERSHIP_EXCLUSION_LABELS, payrollExclusionCandidates, SELECTION_MODE_LABELS, type PayrollExclusionCandidate, type PayrollMembershipPreview,
+} from '../../lib/payroll-runs-api'
+import { formatMoney } from '../../lib/money'
 
-const money = (value: number) => Number(value ?? 0).toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
+// الخطوة 22 (B5): منسّق المبالغ الموحد
+const money = (value: number) => formatMoney(value)
 const salaryKind = { MONTHLY_HISTORY: 'سجل الأجر الشهري', CURRENT_FILE_UNVERIFIED: 'راتب الملف — غير موثق' } as const
 const statusText: Record<string, string> = { DRAFT: 'مسودة', CALCULATED: 'محسوب', IN_REVIEW: 'مراجعة', APPROVED: 'معتمد', PAID: 'مصروف', CANCELLED: 'ملغى' }
 
-export function PayrollMembershipPreviewView({ preview, currency }: { preview: PayrollMembershipPreview; currency: string }) {
+export function PayrollMembershipPreviewView({ preview, currency, onExclude, excludedIds = [], disabled }: {
+  preview: PayrollMembershipPreview; currency: string
+  // اختياري: زر «استبعاد بسبب» للداخلين والمستبعدين تلقائيًا داخل النطاق (مشكلة بيانات أولًا) — المعاينة نفسها لا تكتب شيئًا.
+  onExclude?: (candidate: PayrollExclusionCandidate) => void
+  excludedIds?: number[]
+  disabled?: boolean
+}) {
   const { totals } = preview
+  const candidates = new Map(onExclude ? payrollExclusionCandidates(preview, excludedIds).map(row => [row.employeeId, row]) : [])
+  const excludeButton = (employeeId: number, tone: string) => {
+    const candidate = candidates.get(employeeId)
+    return candidate && onExclude ? <button type="button" disabled={disabled} onClick={() => onExclude(candidate)}
+      className={`mt-1 text-xs underline disabled:opacity-50 ${tone}`} data-exclude-employee={employeeId}>استبعاد بسبب مكتوب</button> : null
+  }
   const chips: Array<[string, number | string, string]> = [
     ['داخل نطاق آخر يوم', totals.candidates, 'bg-gray-100 text-gray-700'],
     ['الداخلون', totals.included, 'bg-success-50 text-success-700'],
@@ -61,6 +77,7 @@ export function PayrollMembershipPreviewView({ preview, currency }: { preview: P
                 <td className="table-cell">
                   <p className="font-medium text-gray-800">{row.fullName}</p>
                   <p className="text-xs text-gray-400">{row.employeeCode}{row.inclusionSource === 'MANUAL_INCLUDE' ? ' • من القائمة' : ''}</p>
+                  {excludeButton(row.employeeId, 'text-amber-700')}
                   {row.draftConflicts.length > 0 && <p className="text-xs text-amber-700">
                     تعارض مع مسودة: {row.draftConflicts.map(conflict => conflict.otherRunId ? `#${conflict.otherRunId}` : conflict.name).join('، ')} — يُعاد الفحص عند الاعتماد</p>}
                   {row.orgIssues.map(issue => <p key={issue.code} className="text-xs text-amber-700">{issue.message}</p>)}
@@ -97,6 +114,8 @@ export function PayrollMembershipPreviewView({ preview, currency }: { preview: P
                 <td className="table-cell">
                   <p className="font-medium text-gray-800">{row.fullName}</p>
                   <p className="text-xs text-gray-400">{row.employeeCode} • {[row.branchName, row.departmentName, row.teamName].filter(Boolean).join(' / ')}</p>
+                  {row.dataProblem && <p className="text-xs text-red-700">يمنع «احتساب المسودة» حتى تُصحح بياناته أو يُستبعد بسبب مكتوب</p>}
+                  {excludeButton(row.employeeId, row.dataProblem ? 'text-red-700 font-medium' : 'text-amber-700')}
                 </td>
                 <td className="table-cell font-mono text-xs" dir="ltr">{row.code}</td>
                 <td className="table-cell text-xs text-amber-900">{MEMBERSHIP_EXCLUSION_LABELS[row.code ?? ''] ?? row.label ?? row.code}</td>

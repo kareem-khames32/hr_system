@@ -33,7 +33,10 @@ function token(user) {
     employeeId: user.employeeId ?? null, tokenVersion: user.tokenVersion ?? 0,
     permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
 }
+// الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ (هذه المجموعة لا تختبر التكافؤ نفسه)
+const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
 async function request(user, method, endpoint, body) {
+  await writeParityReasonsBeforeApproval(request, user, method, endpoint)
   const response = await fetch(base + endpoint, { method, headers: { 'Content-Type': 'application/json',
     ...(user ? { Authorization: `Bearer ${token(user)}` } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
@@ -75,7 +78,8 @@ async function counts() {
   return { windows: await repo('AttendanceExemption').count(), events: await repo('AttendanceExemptionEvent').count() }
 }
 async function lockedPayroll(emp, status = 'APPROVED') {
-  const run = await repo('PayrollRun').save({ name: 'مسير اختبار معتمد لحماية قرار الاستثناء', period: today.slice(0, 7),
+  // الخطوة 16 (B3): اسم المسير فريد داخل الشهر لغير الملغى (فهرس UX_payroll_run_period_name)؛ الاسم يحمل رقم الموظف.
+  const run = await repo('PayrollRun').save({ name: `مسير اختبار معتمد لحماية قرار الاستثناء #${emp.id}`, period: today.slice(0, 7),
     scopeType: 'BRANCH', branchId: emp.branchId, scopeIds: JSON.stringify([emp.branchId]), startDate: today, endDate: later,
     status, approvedBy: admin.id, approvedAt: new Date(), paidAt: status === 'PAID' ? new Date() : null, totalNet: 6000 })
   await repo('PayrollItem').save({ runId: run.id, employeeId: emp.id, basicSalary: 6000, allowances: 0, netPay: 6000, payMethod: 'cash' })
@@ -123,6 +127,8 @@ before(async () => {
     // الخطوة 13: موظفو هذه القاعدة المعزولة بلا سجل أجر شهري؛ الوضع الانتقالي الصريح يحسبهم براتب الملف (مثل payroll-coverage).
     { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' },
   ])
+  // الخطوة 22 (B5): المستخدم نفسه يحتسب ويعتمد في هذه المجموعة — رخصة الشركة الصغيرة الموثقة (فصل المهام مختبر في payroll-run-screen)
+  await require('./fixtures/payroll-small-company-approval.cjs').allowSmallCompanyApproval(repo)
 }, { timeout: 60000 })
 after(async t => {
   const errors = []
@@ -373,7 +379,7 @@ async function calculateCurrentPeriod(emp, options = {}) {
   // The cycle ending in a month is labelled by that month, including after the 23rd.
   const period = formatDate(new Date(now.getFullYear(), now.getMonth() + (now.getDate() >= 23 ? 1 : 0), 1, 12)).slice(0, 7)
   const response = await request(admin, 'POST', '/payroll/runs/calculate-defined', {
-    period, scopeType: 'CUSTOM', employeeIds: [emp.id], name: 'مسير اختبار اتساق قرار الاستثناء', ...options,
+    period, scopeType: 'CUSTOM', employeeIds: [emp.id], name: `مسير اختبار اتساق قرار الاستثناء #${emp.id}`, ...options,
   })
   assert.equal(response.status, 201, JSON.stringify(response.body))
   assert.ok(response.body.startDate <= today && response.body.endDate >= today)
@@ -384,6 +390,8 @@ test('EX-13: a new exemption approved after calculation blocks stale payroll app
   const emp = await employee()
   const run = await calculateCurrentPeriod(emp)
   await acknowledgeUnassigned(admin, run.id)
+  // الخطوة 20 (B4): أسباب تقرير التكافؤ تُكتب صراحة قبل لقطة البنود والأحداث، فالاعتماد المرفوض بعدها يبقى لا يكتب شيئًا
+  await writeParityReasonsBeforeApproval(request, admin, 'POST', `/payroll/runs/${run.id}/approve`)
   const originalItems = await repo('PayrollItem').find({ where: { runId: run.id } })
   const originalEvents = await repo('PayrollRunEvent').find({ where: { runId: run.id }, order: { id: 'ASC' } })
   const approvedExemption = await approve(await create(emp))

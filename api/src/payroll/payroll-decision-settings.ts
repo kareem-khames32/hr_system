@@ -14,6 +14,9 @@ export const PAYROLL_DECISION_KEYS = {
   // D11: نافذة الإضافي الافتراضية وسياسة ما خارج النوافذ (SRS LOT-14 مغلق).
   overtimeDefaultWindow: 'overtime.default_window',
   overtimeOutsideWindowPolicy: 'overtime.outside_window_policy',
+  // الخطوة 22 / SRS PR-11 (B5): رخصة الشركة الصغيرة — الأصل أن معتمد المسير غير من احتسبه (PAYRUN-STATE-003)؛
+  // true يسمح لنفس المستخدم بالاعتماد ويُسجل استخدامها في حدث الاعتماد. الافتراضي مقفل.
+  selfApprovalAllowed: 'payroll.approval_self_approval_allowed',
 } as const
 
 export const PAYROLL_DECISION_CONFIG_SEED: Array<{ key: string; value: string }> = [
@@ -23,6 +26,7 @@ export const PAYROLL_DECISION_CONFIG_SEED: Array<{ key: string; value: string }>
   { key: PAYROLL_DECISION_KEYS.loanCatchUpMaxOverdue, value: '1' },
   { key: PAYROLL_DECISION_KEYS.overtimeDefaultWindow, value: 'AFTER_SHIFT_END' },
   { key: PAYROLL_DECISION_KEYS.overtimeOutsideWindowPolicy, value: 'CLOSED' },
+  { key: PAYROLL_DECISION_KEYS.selfApprovalAllowed, value: 'false' },
 ]
 
 // D5: قيم المواصفة المختارة للمفاتيح المبذورة سابقًا في configSeed (للتوثيق والاختبار؛ لا تُكتب فوق قيمة قائمة).
@@ -45,6 +49,7 @@ const CLOSED_VALUES: Readonly<Record<string, readonly string[]>> = {
   [PAYROLL_DECISION_KEYS.dayRateBasis]: ['MONTHLY_FIXED_COMPONENTS_30'],
   [PAYROLL_DECISION_KEYS.overtimeDefaultWindow]: ['AFTER_SHIFT_END'],
   [PAYROLL_DECISION_KEYS.overtimeOutsideWindowPolicy]: ['CLOSED'],
+  [PAYROLL_DECISION_KEYS.selfApprovalAllowed]: ['true', 'false'],
   'system.currency': ['SAR', 'EGP'],
 }
 

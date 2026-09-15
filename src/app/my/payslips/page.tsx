@@ -10,6 +10,9 @@ import {
   type ApiPayrollRun,
 } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
+// FE-06 (B5): المنسّق الواحد ونظام الأرقام الواحد، والخصومات من أعمدة البند نفسها كجدول المسير (ومنها نقص الساعات)
+import { formatMoney } from '@/lib/money'
+import { payrollItemDeductions } from '@/lib/payroll-item-totals'
 
 // حالة مسير الفرع كما تظهر للموظف
 const runStatusLabels: Record<string, string> = {
@@ -52,13 +55,6 @@ export default function MyPayslipsPage() {
   const sorted = [...rows].sort((a, b) => b.run.period.localeCompare(a.run.period))
   const latest = sorted[0]
 
-  const deductionsOf = (i: ApiPayrollItem) =>
-    Number(i.latenessDeduction) +
-    Number(i.absenceDeduction ?? 0) +
-    Number(i.unpaidLeaveDeduction) +
-    Number(i.loanInstallments) +
-    Number(i.otherDeductions ?? 0)
-
   return (
     <MainLayout>
       <div className="space-y-6">
@@ -87,7 +83,7 @@ export default function MyPayslipsPage() {
                   <div>
                     <p className="text-primary-100">صافي آخر راتب — فترة {latest.run.period}</p>
                     <p className="text-4xl font-bold mt-1">
-                      {Number(latest.item.netPay).toLocaleString()} {currency}
+                      {formatMoney(latest.item.netPay)} {currency}
                     </p>
                     <p className="text-primary-100 mt-2">
                       {sorted.length} قسيمة راتب في سجلك
@@ -143,16 +139,16 @@ export default function MyPayslipsPage() {
                             </span>
                           </td>
                           <td className="table-cell text-center text-gray-600">
-                            {Number(item.basicSalary).toLocaleString()}
+                            {formatMoney(item.basicSalary)}
                           </td>
                           <td className="table-cell text-center text-success-600 font-medium">
-                            +{Number(item.overtimeAmount).toLocaleString()}
+                            +{formatMoney(item.overtimeAmount)}
                           </td>
                           <td className="table-cell text-center text-red-600 font-medium">
-                            -{deductionsOf(item).toLocaleString()}
+                            -{formatMoney(payrollItemDeductions(item))}
                           </td>
                           <td className="table-cell text-center font-bold text-gray-800">
-                            {Number(item.netPay).toLocaleString()} {currency}
+                            {formatMoney(item.netPay)} {currency}
                           </td>
                           <td className="table-cell text-center text-sm text-gray-600">
                             {payMethodLabels[item.payMethod] ?? item.payMethod}

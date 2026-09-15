@@ -61,6 +61,8 @@ export function PolicySettingsFields({ value, onChange, disabled }: { value: Set
 
     <fieldset disabled={disabled} className="grid md:grid-cols-3 gap-3 min-w-0">
       <legend className="text-sm font-bold text-gray-800 mb-2">معدلات الحساب</legend>
+      {/* الخطوة 7 / FE-02 (B5): تنبيه على الحقول التي ما زال المسير لا يقرؤها فقط */}
+      <p className="md:col-span-3 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">المسير يقرأ من النسخة: الدورة، وساعات العمل اليومية، والعملة، وخصم التأخير، وأرضية الصافي وسقف الخصم. «أساس المعدل» و«التقريب» و«القسمة على صفر» تُحفظ مع النسخة ولا يقرؤها حساب المسير بعد (المسير بتقريب منزلتين نصف لأعلى وأساس الأجر الثابت ÷ 30).</p>
       <div><span className={labelClass}>أيام الشهر</span><p className="input bg-gray-50 text-gray-600">30 يومًا (أساس ثابت)</p></div>
       <label><span className={labelClass}>ساعات العمل اليومية</span>
         <input className="input w-full" type="number" min={0.01} max={24} step={0.01} value={value.dailyHours} onChange={event => set('dailyHours', Number(event.target.value))} /></label>
@@ -86,6 +88,7 @@ export function PolicySettingsFields({ value, onChange, disabled }: { value: Set
 
     <fieldset disabled={disabled} className="grid md:grid-cols-3 gap-3 min-w-0">
       <legend className="text-sm font-bold text-gray-800 mb-2">الحضور وحماية الصافي</legend>
+      <p className="md:col-span-3 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">«راتب ثابت بلا أثر للحضور» و«ترحيل الخصم الزائد» لا يقرؤهما حساب المسير بعد: الإعفاء من خصم الحضور يُمنح من «استثناء الحضور»، وزيادة قيود الدفتر تُرحّل دائمًا وزيادة الحضور تسقط (DD-11).</p>
       <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={value.lateDeductionEnabled} onChange={event => set('lateDeductionEnabled', event.target.checked)} />خصم التأخير</label>
       <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={value.skipAttendance} onChange={event => set('skipAttendance', event.target.checked)} />راتب ثابت بلا أثر للحضور</label>
       <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={value.carryOverExcess} onChange={event => set('carryOverExcess', event.target.checked)} />ترحيل الخصم الزائد للشهر التالي</label>

@@ -1,0 +1,231 @@
+// B5 — الخطوتان 22 و7 في الواجهة، والخطوة 23: منسّق واحد ونظام أرقام واحد، ومجاميع الخصومات، والبدلات، والتنبيهات الدقيقة (FE-02)،
+// ولوحة أحداث المسير، والتعارضات بإجراءات حل، وقيد الصرف، وفترة التكافؤ التشغيلية. منطق الواجهة وReact SSR وفحص نصي للربط؛ لا SQL ولا خدمة.
+const { test } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs')
+const path = require('node:path')
+require('../node_modules/ts-node').register({ project: path.join(__dirname, '..', 'tsconfig.json'), transpileOnly: true,
+  compilerOptions: { jsx: 'react-jsx', module: 'commonjs', moduleResolution: 'node' } })
+const React = require('../../node_modules/react')
+const { renderToStaticMarkup } = require('../../node_modules/react-dom/server')
+const money = require('../../src/lib/money')
+const totals = require('../../src/lib/payroll-item-totals')
+const runsApi = require('../../src/lib/payroll-runs-api')
+const { roundPayrollMoney } = require('../src/payroll/payroll-money')
+const { PayrollRunEventsList } = require('../../src/components/payroll/PayrollRunEventsPanel')
+const { PayrollConflictResolution } = require('../../src/components/payroll/PayrollConflictResolution')
+const { PayrollPayRecordForm, PayrollPayRecordSummary, payRecordReady } = require('../../src/components/payroll/PayrollPayRecordForm')
+const { PayrollParityOperationsSummary, PARITY_OPERATIONS_PLAN_TEXT } = require('../../src/components/payroll/PayrollParityOperationsNote')
+const { PayrollInstallmentBreakdown } = require('../../src/components/PayrollInstallmentBreakdown')
+const { PayrollOvertimeBreakdown } = require('../../src/components/PayrollOvertimeBreakdown')
+const root = path.resolve(__dirname, '..', '..')
+const read = file => fs.readFileSync(path.join(root, file), 'utf8')
+const render = (component, props) => renderToStaticMarkup(React.createElement(component, props))
+
+test('one money formatter (FE-06): Latin digits, thousands separators and two decimals; rounding identical to the server kernel', () => {
+  assert.equal(money.formatMoney(1500.5), '1,500.50')
+  assert.equal(money.formatMoney('1500.50'), '1,500.50')
+  assert.equal(money.formatMoney(-0.004), '0.00')
+  assert.equal(money.formatMoney(-2500), '-2,500.00')
+  assert.equal(money.formatMoneyOrDash(0), '-'); assert.equal(money.formatMoneyOrDash('12.3'), '12.30')
+  assert.equal(money.formatRate(0.451389), '0.451389')
+  assert.equal(money.sumMoney([0.1, 0.2]), 0.3)
+  for (let thousandths = 0; thousandths <= 20000; thousandths++) {
+    const value = thousandths / 1000
+    assert.equal(money.roundMoney(value), roundPayrollMoney(value), `rounding of ${value}`)
+  }
+  assert.equal(money.roundMoney(1.005), 1.01)
+})
+
+test('no direct toLocaleString(\'ar-EG\') in payroll screens; the run table, the payslip, the deductions and the payslips pages format money with formatMoney only', () => {
+  const files = [
+    ...fs.readdirSync(path.join(root, 'src/components/payroll')).map(name => `src/components/payroll/${name}`),
+    ...fs.readdirSync(path.join(root, 'src/components')).filter(name => /^Payroll.*\.tsx$/.test(name)).map(name => `src/components/${name}`),
+  ]
+  const walk = dir => fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(`${dir}/${entry.name}`) : [`${dir}/${entry.name}`])
+  files.push(...walk('src/app/payroll'))
+  for (const file of files.filter(name => /\.tsx?$/.test(name))) assert.doesNotMatch(read(file), /toLocaleString\(\s*['"]ar-EG['"]/, file)
+  for (const file of ['src/app/payroll/page.tsx', 'src/app/payroll/payslip/[id]/page.tsx', 'src/app/payroll/deductions/page.tsx', 'src/app/payroll/payslips/page.tsx']) {
+    const source = read(file)
+    assert.doesNotMatch(source, /\.toLocaleString\(/, `${file} must use the shared formatter`)
+    assert.match(source, /from '@\/lib\/money'/, file)
+  }
+  assert.match(read('src/app/payroll/page.tsx'), /\{formatMoney\(item\.netPay\)\}/)
+  assert.match(read('src/app/payroll/payslip/[id]/page.tsx'), /\{formatMoney\(netSalary\)\} \{currency\}/)
+  // 1500.50 بالشكل نفسه في تفصيل الأقساط والإضافي داخل الجدول والقسيمة
+  const plan = { version: 'LOAN_ALLOCATION_V1_20260913', policy: { mode: 'PARTIAL_THEN_CARRY' }, budget: { availableBudget: '1500.50' }, excludedClaimedIds: [],
+    allocation: { lines: [{ installmentRef: '7', loanRef: '3', originalDuePeriod: '2026-09', eligible: true, dueAmount: '1500.50', deductedAmount: '1500.50',
+      remainingAmount: '0.00', outcome: 'DEDUCTED', continuation: null }] } }
+  const installments = render(PayrollInstallmentBreakdown, { item: { breakdown: JSON.stringify({ installmentPlan: plan }), loanInstallments: 1500.5 }, currency: 'ر.س' })
+  assert.match(installments, /1,500\.50/); assert.doesNotMatch(installments, /[٠-٩]/)
+  const overtime = render(PayrollOvertimeBreakdown, { item: { overtimeAmount: 1500.5, breakdown: JSON.stringify({ overtime: [{ id: 1, date: '2026-09-01', approvedMinutes: 600,
+    hours: 10, multiplier: 1.5, hourlyRate: 100.033333, amount: 1500.5, provenance: 'APPROVAL_SNAPSHOT', dayKind: 'WEEKDAY', originalPeriod: '2026-09', retroactive: false }] }) }, currency: 'ر.س' })
+  assert.match(overtime, /1,500\.50/); assert.match(overtime, /100\.033333/); assert.doesNotMatch(overtime, /[٠-٩]/)
+})
+
+test('one formatter with one rounding on every payroll money screen (review fix): deduction, bonus and loan formatters delegate to formatMoney, and the employee payslips page uses it', () => {
+  const deductionsUi = require('../../src/lib/deductions-api')
+  const bonusesUi = require('../../src/lib/bonuses-api')
+  const loansUi = require('../../src/lib/loans-api')
+  for (const [text, expected] of [['100.0050', '100.01'], ['100.0049', '100.00'], ['1500.5', '1,500.50'], ['-0.004', '0.00'], ['-0.005', '-0.01'], ['-2.675', '-2.68'],
+    ['0.995', '1.00'], ['999999.995', '1,000,000.00'], ['1234567890123456.785', '1,234,567,890,123,456.79']]) {
+    assert.equal(money.formatMoney(text), expected, text)
+    assert.equal(deductionsUi.formatDeductionMoney(text), expected, `deductions ${text}`)
+    assert.equal(bonusesUi.formatBonusMoney(text), expected, `bonuses ${text}`)
+    assert.equal(loansUi.formatLoanMoney(text), expected, `loans ${text}`)
+  }
+  assert.equal(money.formatMoney(100.005), '100.01')
+  // مسار النص ومسار الرقم يتطابقان على كل قيمة من -20.000 إلى 20.000 (وroundMoney = roundPayrollMoney في الاختبار الأول)
+  for (let thousandths = -20000; thousandths <= 20000; thousandths++) {
+    const value = thousandths / 1000
+    assert.equal(money.formatMoney(value.toFixed(3)), money.formatMoney(value), `text and number paths agree on ${value}`)
+    assert.equal(loansUi.formatLoanMoney(value), money.formatMoney(value), `loan number path ${value}`)
+  }
+  assert.deepEqual([deductionsUi.formatDeductionMoney(null), deductionsUi.formatDeductionMoney('abc'), loansUi.formatLoanMoney(null), loansUi.formatLoanMoney('abc')], ['—', '—', '—', 'abc'])
+  for (const file of ['src/lib/deductions-api.ts', 'src/lib/loans-api.ts']) assert.doesNotMatch(read(file), /slice\(0, 2\)/, `${file} no longer truncates extra decimals`)
+  for (const file of ['src/app/my/payslips/page.tsx', 'src/app/my/loans/page.tsx', 'src/app/my/deductions/page.tsx', 'src/app/my/bonuses/page.tsx', 'src/app/payroll/bonuses/page.tsx', 'src/components/PayrollObligationBreakdown.tsx']) {
+    const source = read(file)
+    assert.doesNotMatch(source, /\.toLocaleString\(/, `${file} must use the shared formatter`)
+    assert.doesNotMatch(source, /toFixed\(2\)\)/, `${file} must not hand binary-rounded text to a formatter`)
+  }
+  const payslips = read('src/app/my/payslips/page.tsx')
+  assert.match(payslips, /from '@\/lib\/money'/)
+  for (const text of ['{formatMoney(latest.item.netPay)} {currency}', '{formatMoney(item.basicSalary)}', '+{formatMoney(item.overtimeAmount)}', '-{formatMoney(payrollItemDeductions(item))}', '{formatMoney(item.netPay)} {currency}']) {
+    assert.ok(payslips.includes(text), text)
+  }
+})
+
+test('deductions (ALDD-12): every column including shortfall and other deductions has a summary line, row totals = columns, summary lines = grand total (in cents)', () => {
+  const items = [
+    { latenessDeduction: 0.1, shortfallDeduction: 0.2, absenceDeduction: 100.05, unpaidLeaveDeduction: 0, loanInstallments: 250, otherDeductions: 33.35 },
+    { latenessDeduction: '12.50', shortfallDeduction: '7.10', absenceDeduction: 0, unpaidLeaveDeduction: '200.00', loanInstallments: 0, otherDeductions: '0.15' },
+    { latenessDeduction: 0, shortfallDeduction: 0, absenceDeduction: 0, unpaidLeaveDeduction: 0, loanInstallments: 0, otherDeductions: 0 },
+  ]
+  const summary = totals.payrollDeductionSummary(items)
+  assert.deepEqual(summary.lines.map(line => line.field), ['latenessDeduction', 'shortfallDeduction', 'absenceDeduction', 'unpaidLeaveDeduction', 'loanInstallments', 'otherDeductions'])
+  assert.equal(summary.lines.find(line => line.field === 'shortfallDeduction').label, 'نقص ساعات العمل')
+  assert.equal(money.sumMoney(summary.lines.map(line => line.total)), summary.grandTotal)
+  assert.equal(summary.grandTotal, money.sumMoney(items.map(totals.payrollItemDeductions)))
+  assert.deepEqual([summary.grandTotal, summary.affected], [603.45, 2])
+  for (const item of items) assert.equal(totals.payrollItemDeductions(item), money.sumMoney(totals.PAYROLL_DEDUCTION_FIELDS.map(field => item[field])))
+  const page = read('src/app/payroll/deductions/page.tsx')
+  assert.match(page, /payrollDeductionSummary\(items\)/); assert.match(page, /summary\.lines\.map/)
+  assert.doesNotMatch(page, /totals\.lateness/, 'the hand-written summary without the shortfall line is gone')
+  assert.match(page, /<th className="text-center px-4 py-3">خصومات أخرى<\/th>/)
+})
+
+test('run table per employee: gross, deductions and net from the same columns, with coverage, factor and the 30-day basis from the saved breakdown', () => {
+  const item = { basicSalary: 5000, allowances: 1000, overtimeAmount: 0.1, otherAdditions: 0.2, latenessDeduction: 12.5, shortfallDeduction: 0, absenceDeduction: 0,
+    unpaidLeaveDeduction: 0, loanInstallments: 0, otherDeductions: 0, netPay: 5987.8,
+    breakdown: JSON.stringify({ coverFrom: '2026-09-01', coverTo: '2026-09-22', coverDays: 22, prorataFactor: 0.733333, monthlyDays: 30 }) }
+  assert.equal(totals.payrollItemEarnings(item), 6000.3)
+  assert.equal(totals.payrollRunTotals([item]).net, 5987.8)
+  assert.equal(totals.payrollRunTotals([item, { ...item, netPay: -5 }]).negativeNet, 1)
+  assert.equal(totals.payrollCoverageText(totals.payrollItemCoverage(item)), '22 يوم مغطى من 2026-09-01 إلى 2026-09-22 • المعامل 0.7333 • أساس 30 يومًا')
+  assert.equal(totals.payrollItemCoverage({ breakdown: '{bad' }), null)
+  const page = read('src/app/payroll/page.tsx')
+  for (const text of ['payrollItemCoverage(item)', 'payrollItemEarnings(item)', 'payrollItemDeductions(item)', 'صافي سالب — يمنع الاعتماد', 'collectionOrderText(screen?.collection)',
+    '<PayrollRunEventsPanel', '<PayrollConflictResolution', '<PayrollPayRecordForm', 'payPayrollRun(runDetail.id', '|| approvalBlocked']) assert.ok(page.includes(text), text)
+  assert.doesNotMatch(page, /بواسطة النظام/, 'the approvals log built from dates is replaced by the real events panel')
+  assert.doesNotMatch(read('src/lib/api.ts'), /export const payPayroll\b/, 'no client can pay without a channel and reference')
+  assert.equal(runsApi.collectionOrderText({ source: 'DEFAULT', versionId: null, order: null, effectiveOrder: ['ATTENDANCE', 'RECOVERY', 'TYPED', 'ADMINISTRATIVE', 'LOAN'],
+    loanBeforeOthers: false, componentOrder: null, message: '' }), 'ترتيب التحصيل الافتراضي (النسخة بلا ترتيب محفوظ): خصومات الحضور ← الاستردادات والعهد ← الخصومات المصنفة ← الخصومات الإدارية ← أقساط السلف')
+})
+
+test('allowances page (ALDD-11) shows the allowances the run really computes, and banners (FE-02) remain only on data the run does not read', () => {
+  const allowances = read('src/app/payroll/allowances/page.tsx')
+  assert.doesNotMatch(allowances, /تُفعَّل في مرحلة لاحقة|يعتمد حساب المسير الحالي على الراتب الأساسي والعمل الإضافي/)
+  for (const text of ['salaryComponents', 'سجل الأجر المؤرخ', 'بدل السكن', 'أساس 30 يومًا', 'fetchPayrollRun(']) assert.ok(allowances.includes(text), text)
+  assert.doesNotMatch(allowances, /^export function/m, 'a Next page file exports only the page')
+  const collection = read('src/components/PayrollCollectionEditor.tsx')
+  assert.match(collection, /المسير المرتبط بهذه النسخة يطبقه عند الحساب/); assert.doesNotMatch(collection, /ولا يعيد حساب المسيرات السابقة\./)
+  const settings = read('src/components/PayrollPolicySetEditor.tsx')
+  assert.match(settings, /«أساس المعدل» و«التقريب» و«القسمة على صفر» تُحفظ مع النسخة ولا يقرؤها حساب المسير بعد/)
+  assert.match(settings, /«راتب ثابت بلا أثر للحضور» و«ترحيل الخصم الزائد» لا يقرؤهما حساب المسير بعد/)
+  const sources = read('src/components/PayrollLiveSourcesPanel.tsx')
+  assert.match(sources, /يقرؤها محرك السياسة بجانبه للمقارنة/); assert.doesNotMatch(sources, /حساب المسير بهذه المصادر لم يُفعّل بعد/)
+  assert.doesNotMatch(read('src/app/payroll/salary-history/page.tsx'), /لا يستخدم|لا يقرأ/, 'the run reads the monthly salary history; no «unused» banner')
+  assert.match(read('src/app/settings/policies/page.tsx'), /key: 'payroll\.approval_self_approval_allowed'/)
+})
+
+test('events panel: who did what and when, with the reason, the signed parity report, the small-company licence and the pay record', () => {
+  const events = [
+    { id: 1, runId: 5, eventType: 'CALCULATED', actorUserId: 12, actorName: 'هالة مصطفى', reason: null, createdAt: '2026-09-15T08:00:00Z',
+      payload: { after: { snapshotVersion: 1, totalNet: 1500.5 }, collection: { source: 'DEFAULT', order: ['ATTENDANCE', 'RECOVERY', 'TYPED', 'ADMINISTRATIVE', 'LOAN'] } } },
+    { id: 2, runId: 5, eventType: 'APPROVED', actorUserId: 1, actorName: 'مدير النظام', reason: null, createdAt: '2026-09-15T09:00:00Z',
+      payload: { snapshotVersion: 1, totalNet: 1500.5, engineMode: 'SHADOW', parityReportHash: 'a'.repeat(64), parityExplained: { differences: 0, unavailable: 6 }, smallCompanyException: true } },
+    { id: 3, runId: 5, eventType: 'PAID', actorUserId: 7, actorName: null, reason: null, createdAt: '2026-09-15T10:00:00Z',
+      payload: { channel: 'BANK_TRANSFER', reference: 'TRX-2026-0915' } },
+    { id: 4, runId: 5, eventType: 'RECALCULATED', actorUserId: 12, actorName: 'هالة مصطفى', reason: 'استبعاد الموظف رقم 9 من المسير: في مسير الجيزة', createdAt: '2026-09-15T07:00:00Z',
+      payload: { diff: { addedEmployeeIds: [], removedEmployeeIds: [9], changedEmployeeIds: [] }, exclusionsAdded: [{ employeeId: 9, reason: 'في مسير الجيزة' }] } },
+  ]
+  const html = render(PayrollRunEventsList, { events })
+  for (const text of ['هالة مصطفى — احتسب المسودة', 'صافي المسير 1,500.50', 'ترتيب التحصيل الافتراضي', 'مدير النظام — اعتمد المسير ووقّع تقرير التكافؤ',
+    'بصمة تقرير التكافؤ aaaaaaaaaaaa', 'أسباب مكتوبة: فروق 0 • قيم غائبة 6', 'بترخيص الشركة الصغيرة: المعتمِد هو من احتسب', 'مستخدم #7 — صرف المسير',
+    'القناة: تحويل بنكي', 'المرجع: TRX-2026-0915', 'السبب: استبعاد الموظف رقم 9 من المسير: في مسير الجيزة', 'حذف 1', 'استبعاد الموظف رقم 9: في مسير الجيزة']) {
+    assert.ok(html.includes(text), text)
+  }
+  assert.ok(html.indexOf('TRX-2026-0915') < html.indexOf('احتسب المسودة'), 'newest first')
+  assert.match(render(PayrollRunEventsList, { events: [] }), /لا توجد أحداث مسجلة/)
+})
+
+test('conflicts screen: resolve by excluding the employee from this run with a reason, or open the other run; a run outside the scope is neither named nor opened', () => {
+  const conflicts = [
+    { employeeId: 3, otherRunId: 9, name: 'مسير الجيزة', status: 'CALCULATED', startDate: '2026-09-23', endDate: '2026-10-22', overlapDays: 30, blocking: false, kind: 'EXACT' },
+    { employeeId: 4, otherRunId: null, name: 'مسير خارج نطاق صلاحيتك — راجع مسؤول الرواتب', status: 'APPROVED', startDate: '2026-09-23', endDate: '2026-10-22', overlapDays: 30, blocking: true, kind: 'EXACT' },
+  ]
+  const props = { title: 'تعارضات المسير الحالي', conflicts, run: { id: 5, status: 'CALCULATED' }, employeeName: id => `موظف ${id}`, canExclude: true, onOpenRun: () => {}, onResolved: () => {} }
+  const html = render(PayrollConflictResolution, props)
+  assert.equal(html.split('فتح المسير الآخر #').length - 1, 1); assert.match(html, /فتح المسير الآخر #9/)
+  assert.equal(html.split('استبعاد من هذا المسير وإعادة حسابه').length - 1, 2)
+  assert.match(html, /تعارض حاجب/)
+  assert.doesNotMatch(render(PayrollConflictResolution, { ...props, canExclude: false }), /استبعاد من هذا المسير/)
+  assert.match(render(PayrollConflictResolution, { ...props, run: { id: 5, status: 'DRAFT' } }), />استبعاد من هذا المسير</)
+  assert.equal(render(PayrollConflictResolution, { ...props, conflicts: [] }), '')
+})
+
+test('pay record form: channel and reference are required before paying; the summary shows who paid, the channel and the reference', () => {
+  assert.deepEqual([{ channel: '', reference: 'TRX-1' }, { channel: 'CASH', reference: 'ab' }, { channel: 'CASH', reference: ' محضر 7 ' }].map(payRecordReady), [false, false, true])
+  const blocked = render(PayrollPayRecordForm, { draft: { channel: '', reference: '' }, onChange: () => {}, disabled: false, onPay: () => {} })
+  assert.match(blocked, /disabled=""[^>]*title="اختر قناة الصرف واكتب مرجعه أولًا"/)
+  for (const label of ['تحويل بنكي', 'نقدًا', 'شيك', 'مختلط حسب طريقة صرف كل موظف']) assert.ok(blocked.includes(label), label)
+  const summary = render(PayrollPayRecordSummary, { run: { payRecord: { paidBy: { id: 12, name: 'هالة مصطفى', at: null }, channel: 'BANK_TRANSFER', channelLabel: 'تحويل بنكي', reference: 'TRX-9' } } })
+  assert.match(summary, /صرفه هالة مصطفى • القناة: تحويل بنكي • المرجع: TRX-9/)
+})
+
+test('operational parity period (step 23) is documented on the engine panel with the real month count', () => {
+  for (const text of ['أول 3 مسيرات شهرية', 'SHADOW', 'شهران آخران', 'المالك أو مفوض مكتوب اسمه', 'D13', 'يُسجل القرار في سجل المسير']) assert.ok(PARITY_OPERATIONS_PLAN_TEXT.includes(text), text)
+  const html = render(PayrollParityOperationsSummary, { operations: { plan: {}, months: 1, countedPeriods: ['2026-10'], stage: 'BASELINE',
+    message: 'مرحلة خط الأساس: 1 من 3 أشهر مصروفة بوضع SHADOW بتقرير تكافؤ موقّع',
+    runs: [{ runId: 8, period: '2026-11', counted: false, notCountedReason: 'معتمد ولم يُصرف بعد' }] } })
+  assert.match(html, /1 من 3 أشهر/); assert.match(html, /2026-10/); assert.match(html, /المسير #8 \(2026-11\) لا يُحتسب: معتمد ولم يُصرف بعد/)
+  assert.match(read('src/components/payroll/PayrollRunEnginePanel.tsx'), /<PayrollParityOperationsNote \/>/)
+})
+
+test('parity period (review fix): a month with an unpaid run is shown as incomplete, test runs are counted apart, the decision owner is named, and an approver can mark a test run', () => {
+  assert.ok(PARITY_OPERATIONS_PLAN_TEXT.includes('الشهر يُحتسب فقط لو كل مسيراته الحية كذلك'))
+  const html = render(PayrollParityOperationsSummary, { operations: { plan: { decisionOwner: 'المالك (كريم)', delegate: null }, months: 0, countedPeriods: [], stage: 'BASELINE',
+    message: 'مرحلة خط الأساس: 0 من 3 أشهر مصروفة بوضع SHADOW بتقرير تكافؤ موقّع', excludedRuns: 24,
+    periods: [{ period: '2026-08', counted: false, runIds: [1, 2], blockers: [{ runId: 2, reason: 'معتمد ولم يُصرف بعد' }] }],
+    runs: [{ runId: 1, period: '2026-08', counted: false, notCountedReason: 'الشهر 2026-08 غير مكتمل: المسير #2 معتمد ولم يُصرف بعد', excluded: null },
+      { runId: 32, period: '2026-12', counted: false, notCountedReason: 'مسير تجريبي لا يُحتسب: بيانات اختبار', excluded: { reason: 'بيانات اختبار', by: null, byName: null, at: null } }] } })
+  assert.match(html, /الشهر <span dir="ltr">2026-08<\/span> غير مكتمل: المسير #2 معتمد ولم يُصرف بعد/)
+  assert.match(html, /24 مسيرًا معلّمًا تجريبيًا بسبب مكتوب: لا يُحتسب ولا يحجب شهره/)
+  assert.doesNotMatch(html, /المسير #32/, 'test runs are summarised, not listed as blockers')
+  assert.match(html, /صاحب قرار التحويل العام: المالك \(كريم\) • لا مفوض مسمى في ملف التسليم/)
+  const { PayrollParityCountingControl } = require('../../src/components/payroll/PayrollParityCountingControl')
+  const marked = render(PayrollParityCountingControl, { run: { id: 32, status: 'PAID', parityExcludedReason: 'بيانات اختبار' }, onChanged: () => {}, canChange: true })
+  assert.match(marked, /معلّم تجريبيًا ولا يُحتسب في فترة التكافؤ: بيانات اختبار/); assert.match(marked, /إعادته للاحتساب في فترة التكافؤ/)
+  assert.match(marked, /disabled=""/, 'no change without a written reason')
+  const viewer = render(PayrollParityCountingControl, { run: { id: 5, status: 'APPROVED', parityExcludedReason: null }, onChanged: () => {}, canChange: false })
+  assert.match(viewer, /يُحتسب في فترة التكافؤ متى كان SHADOW/); assert.doesNotMatch(viewer, /<button/)
+  assert.equal(render(PayrollParityCountingControl, { run: { id: 5, status: 'CANCELLED' }, onChanged: () => {}, canChange: true }), '')
+  assert.match(read('src/components/payroll/PayrollRunEnginePanel.tsx'), /<PayrollParityCountingControl run=\{run as PayrollParityCountingRun\} onChanged=\{onChanged\} \/>/)
+  const event = render(PayrollRunEventsList, { events: [{ id: 9, runId: 5, eventType: 'PARITY_COUNTING_CHANGED', actorUserId: 1, actorName: 'مدير النظام', reason: 'تشغيل تجريبي',
+    createdAt: '2026-09-15T10:00:00Z', payload: { counts: false } }] })
+  assert.ok(event.includes('مدير النظام — غيّر احتساب المسير في فترة التكافؤ')); assert.ok(event.includes('مسير تجريبي: لا يُحتسب في فترة التكافؤ'))
+  // الرخصة مقفلة في الإعدادات لمن لا يحمل صلاحيتها المستقلة
+  const policies = read('src/app/settings/policies/page.tsx')
+  assert.match(policies, /key: 'payroll\.approval_self_approval_allowed'[^\n]*perm: 'payroll\.self_approval_licence'/)
+  assert.match(policies, /const locked = !!f\.perm && !can\(f\.perm\)/)
+})

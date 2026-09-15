@@ -1,4 +1,5 @@
 import { Column, CreateDateColumn, Entity, Index, PrimaryGeneratedColumn } from 'typeorm'
+import { utcDateTime } from './payroll-policy.entities'
 
 // SPEC①: لقطة محددة للعرض والمراجعة؛ لا ننسخ سجل الموظف أو بيانات البنك والهوية.
 export interface PayrollMemberSnapshot {
@@ -106,6 +107,8 @@ export class PayrollRunEvent {
   @Column({ type: 'simple-json', nullable: true })
   payload: Record<string, unknown> | null
 
-  @CreateDateColumn({ type: 'datetime2' })
+  // B5 (تصحيح المراجعة): الافتراضي GETDATE في حاوية SQL = ساعة UTC، ومشغل mssql يقرأ datetime2 بالتوقيت المحلي (useUTC=false)؛
+  // المحوّل يعيد اللحظة الصحيحة فيطابق وقت الحدث في لوحة الأحداث وقت «احتسبه» (calculatedAt) للإجراء نفسه، دون تغيير مخطط العمود.
+  @CreateDateColumn({ type: 'datetime2', transformer: utcDateTime })
   createdAt: Date
 }

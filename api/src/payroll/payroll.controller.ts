@@ -22,6 +22,7 @@ import {
   ArrayMaxSize,
   IsBoolean,
   ValidateNested,
+  Allow,
 } from 'class-validator'
 import { Transform, Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
@@ -50,9 +51,16 @@ class CalculateDto {
   @IsOptional()
   @IsBoolean()
   allowDraftConflicts?: boolean
+
+  // الخطوة 19: تحديث لقطة السياسة صراحةً ببصمة الإعدادات الحالية
+  @IsOptional() @IsBoolean() refreshPolicySnapshot?: boolean
+  @IsOptional() @Matches(/^[a-f0-9]{64}$/) expectedPolicySnapshotHash?: string
 }
 
 class CalculateDefinedDto {
+  @IsOptional() @IsBoolean() refreshPolicySnapshot?: boolean
+  @IsOptional() @Matches(/^[a-f0-9]{64}$/) expectedPolicySnapshotHash?: string
+
   @IsOptional()
   @IsBoolean()
   refreshInstallmentPolicy?: boolean
@@ -158,7 +166,28 @@ class PayrollRunCalculateDraftDto {
 }
 
 class PayrollRunRecalculateDto extends PayrollRunCalculateDraftDto {
-  @IsString() @MaxLength(500) reason: string
+  // السبب يُتحقق في الخدمة (PAYRUN-REASON-001 برسالة عربية)، لا بنص class-validator الإنجليزي.
+  @IsOptional() @Allow() reason?: unknown
+  // الخطوة 19: «تحديث لقطة السياسة» صريح ومعه بصمة الإعدادات الحالية التي عُرضت فروقها
+  @IsOptional() @IsBoolean() refreshPolicySnapshot?: boolean
+  @IsOptional() @Matches(/^[a-f0-9]{64}$/, { message: 'اعرض فروق لقطة السياسة أولًا ثم أعد المحاولة' }) expectedPolicySnapshotHash?: string
+}
+
+// ===== الخطوة 20 / D13: وضع محرك الحساب وأسباب فروق التكافؤ =====
+class PayrollParityExplanationDto {
+  // فرق واحد: موظف + بند؛ أو مجموعة: رمز سبب النظام وحده (كل فرق أو قيمة غائبة بنفس الرمز في تقرير النسخة الحالية) — الخدمة ترفض الخلط
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) employeeId?: number
+  @IsOptional() @IsString() @MaxLength(30) component?: string
+  @IsOptional() @Matches(/^[A-Z][A-Z0-9_]{2,79}$/, { message: 'رمز سبب النظام غير صالح' }) reasonCode?: string
+  @Allow() reason?: unknown
+}
+class PayrollParityExplanationsDto {
+  @IsArray() @ArrayMaxSize(2000) @ValidateNested({ each: true }) @Type(() => PayrollParityExplanationDto) explanations: PayrollParityExplanationDto[]
+}
+class PayrollEngineModeDto {
+  @IsIn(['LEGACY', 'SHADOW', 'POLICY']) mode: 'LEGACY' | 'SHADOW' | 'POLICY'
+  @Allow() reason?: unknown
+  @IsOptional() @IsArray() @ArrayMaxSize(2000) @ValidateNested({ each: true }) @Type(() => PayrollParityExplanationDto) explanations?: PayrollParityExplanationDto[]
 }
 
 // ===== الخطوة 18: تقرير «موظفون بلا مسير» وإقراره =====
@@ -181,6 +210,25 @@ class PayrollReasonDto {
   reason: string
 }
 
+// ===== الخطوة 22 (B5): قيد الصرف واستبعاد موظف لحل تعارض =====
+// القناة والمرجع يُتحقق منهما في الخدمة بعد الصلاحية والحالة (PAYRUN-STATE قبل أي رسالة حقول)، برسائل عربية.
+class PayrollPayDto {
+  @IsOptional() @Allow() channel?: unknown
+  @IsOptional() @Allow() reference?: unknown
+}
+
+class PayrollMemberExclusionDto {
+  @Type(() => Number) @IsInt() @Min(1) employeeId: number
+  @Allow() reason?: unknown
+  @IsOptional() @IsBoolean() allowDraftConflicts?: boolean
+}
+
+// الخطوة 23 (B5، تصحيح المراجعة): مسير تجريبي لا يُحتسب في فترة التكافؤ — القرار والسبب (يُتحقق من السبب في الخدمة برمز عربي)
+class PayrollParityCountingDto {
+  @IsBoolean() counts: boolean
+  @Allow() reason?: unknown
+}
+
 // المسير محصور بأدوار الإدارة — الدورة الكاملة (محاسب → HR → مالي → تنفيذي) لاحقاً
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll')
@@ -199,17 +247,20 @@ export class PayrollController {
     return this.service.detail(user, id)
   }
 
-  // إنشاء/إعادة حساب مسير فرع لفترة (23 → 22)
+  // المسار القديم: إنشاء/إعادة حساب مسير فرع لفترة في نداء واحد — مغلق على قاعدة الشركة (410 PAYRUN-LEGACY-ENDPOINT)،
+  // ويبقى لقواعد الاختبار المؤقتة فقط؛ «مسير جديد» = POST runs ثم runs/:id/calculate أو runs/:id/recalculate.
   @Perm('payroll.calculate')
   @Post('runs/calculate')
   calculate(@CurrentUser() user: JwtPayload, @Body() dto: CalculateDto) {
+    this.service.assertLegacyCalculateEndpoint()
     return this.service.calculate(user, dto.branchId, dto.period, dto)
   }
 
-  // مسير قابل للتعريف: اسم + فترة + نطاق (شركة/فرع/قسم/فريق/مركز تكلفة/مخصّص)
+  // المسار القديم: مسير بنطاق (شركة/فرع/قسم/فريق/مركز تكلفة/مخصّص) بلا مسودة ولا نسخة سياسة — مغلق على قاعدة الشركة كذلك.
   @Perm('payroll.calculate')
   @Post('runs/calculate-defined')
   calculateDefined(@CurrentUser() user: JwtPayload, @Body() dto: CalculateDefinedDto) {
+    this.service.assertLegacyCalculateEndpoint()
     return this.service.calculateDefined(user, dto)
   }
 
@@ -253,6 +304,26 @@ export class PayrollController {
     return this.service.recalculateRun(user, id, dto)
   }
 
+  // الخطوة 19: لقطة السياسة المحفوظة على المسير مقابل الإعدادات الحالية وفروقهما (قراءة فقط)
+  @Perm('payroll.view')
+  @Get('runs/:id/policy-snapshot')
+  policySnapshot(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.service.policySnapshotView(user, id)
+  }
+
+  // الخطوة 20 / D13: أسباب مكتوبة لفروق التكافؤ ثم تحويل وضع المحرك — حامل payroll.approve
+  @Perm('payroll.approve')
+  @Post('runs/:id/parity-explanations')
+  explainParity(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PayrollParityExplanationsDto) {
+    return this.service.explainParityDifferences(user, id, dto.explanations)
+  }
+
+  @Perm('payroll.approve')
+  @Post('runs/:id/engine-mode')
+  engineMode(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PayrollEngineModeDto) {
+    return this.service.setEngineMode(user, id, dto)
+  }
+
   // الخطوة 18: «موظفون بلا مسير» لفترة المسير، مع حالة الإقرار
   @Perm('payroll.view')
   @Get('runs/:id/unassigned')
@@ -282,10 +353,32 @@ export class PayrollController {
     return this.service.approve(user, id)
   }
 
+  // الخطوة 22 (B5): الصرف يسجل من صرف وقناة الصرف ومرجعه؛ صرف مسير غير معتمد ← PAYRUN-STATE-001
   @Perm('payroll.pay')
   @Post('runs/:id/pay')
-  pay(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
-    return this.service.pay(user, id)
+  pay(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PayrollPayDto) {
+    return this.service.pay(user, id, dto)
+  }
+
+  // الخطوة 22 (B5): حل تعارض من الشاشة — استبعاد الموظف من هذا المسير بسبب (المسودة: في تعريفها؛ المحسوب: بإعادة حساب)
+  @Perm('payroll.calculate')
+  @Post('runs/:id/member-exclusions')
+  excludeMember(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PayrollMemberExclusionDto) {
+    return this.service.excludeRunMember(user, id, dto)
+  }
+
+  // الخطوة 23 (B5): فترة التكافؤ التشغيلية (خمسة أشهر) من المسيرات المعتمدة والمصروفة — قراءة فقط
+  @Perm('payroll.view')
+  @Get('parity-history')
+  parityHistory(@CurrentUser() user: JwtPayload) {
+    return this.service.parityHistory(user)
+  }
+
+  // الخطوة 23 (تصحيح المراجعة): تعليم مسير تجريبي «لا يُحتسب» في فترة التكافؤ أو إعادته — حامل الاعتماد بنطاق الفرع، بسبب وحدث
+  @Perm('payroll.approve')
+  @Post('runs/:id/parity-counting')
+  parityCounting(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PayrollParityCountingDto) {
+    return this.service.setParityCounting(user, id, dto)
   }
 
   @Perm('payroll.reopen')

@@ -739,10 +739,7 @@ export const deleteLanguage = (employeeId: number, rowId: number) =>
 // ===== الرواتب =====
 export const fetchPayrollRuns = () => get<ApiPayrollRun[]>('/payroll/runs')
 export const fetchPayrollRun = (id: number) => get<ApiPayrollRun>(`/payroll/runs/${id}`)
-export const calculatePayroll = (branchId: number, period: string, options: { reason?: string; allowDraftConflicts?: boolean; refreshInstallmentPolicy?: boolean } = {}) =>
-  post<ApiPayrollRun>('/payroll/runs/calculate', { branchId, period, ...options })
 export const approvePayroll = (id: number) => post<ApiPayrollRun>(`/payroll/runs/${id}/approve`)
-export const payPayroll = (id: number) => post<ApiPayrollRun>(`/payroll/runs/${id}/pay`)
 export const reopenPayroll = (id: number, reason: string) => post<ApiPayrollRun>(`/payroll/runs/${id}/reopen`, { reason })
 export const cancelPayroll = (id: number, reason: string) => post<ApiPayrollRun>(`/payroll/runs/${id}/cancel`, { reason })
 export const fetchPayrollRunEvents = (id: number) => get<ApiPayrollRunEvent[]>(`/payroll/runs/${id}/events`)
@@ -774,28 +771,9 @@ export interface ApiLatenessTier {
   isActive: boolean
   label?: string | null
 }
+// الخطوة 21: الجدول القديم أرشيف للقراءة فقط؛ الكتابة عبر مجموعات الشرائح المؤرخة (src/lib/payroll-engine-api.ts)
 export const fetchLatenessTiers = () =>
   get<ApiLatenessTier[]>('/payroll/rules/lateness-tiers')
-export const createLatenessTier = (body: {
-  fromMinutes: number
-  toMinutes?: number | null
-  mode: 'FRACTION' | 'MINUTES'
-  value?: number | string
-  label?: string
-}) => post<ApiLatenessTier>('/payroll/rules/lateness-tiers', body)
-export const updateLatenessTier = (
-  id: number,
-  body: Partial<{
-    fromMinutes: number
-    toMinutes: number | null
-    mode: 'FRACTION' | 'MINUTES'
-    value: number | string
-    label: string
-    isActive: boolean
-  }>
-) => patch<ApiLatenessTier>(`/payroll/rules/lateness-tiers/${id}`, body)
-export const deleteLatenessTier = (id: number) =>
-  del<{ ok: boolean }>(`/payroll/rules/lateness-tiers/${id}`)
 export const fetchLeaveTypes = () => get<any[]>('/settings/leave-types')
 // أنواع الإجازة الفعّالة لشاشات التقديم (خدمة ذاتية — بلا settings.manage)
 export interface ApiLeaveTypeOption {

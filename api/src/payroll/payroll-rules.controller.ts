@@ -9,11 +9,22 @@ import {
   Post,
   UseGuards,
 } from '@nestjs/common'
-import { IsIn, IsInt, IsNumberString, IsOptional, IsString, Min } from 'class-validator'
+import { Allow, IsIn, IsInt, IsNumberString, IsOptional, IsString, Min } from 'class-validator'
 import { Type } from 'class-transformer'
-import { JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import type { JwtPayload } from '../auth/auth.service'
+import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { LatenessTierMode } from './payroll-rules.entities'
 import { PayrollRulesService } from './payroll-rules.service'
+
+// الخطوة 21: الشكل والقيم يُتحقق منهما في الخدمة برسائل عربية (validatePayrollLatenessTiers)
+class TierSetDto {
+  @Allow() effectivePeriod?: unknown
+  @Allow() tiers?: unknown
+  @IsOptional() @Allow() reason?: unknown
+}
+class TierSetReasonDto {
+  @Allow() reason?: unknown
+}
 
 class TierDto {
   @Type(() => Number)
@@ -50,21 +61,48 @@ export class PayrollRulesController {
     return this.service.listTiers()
   }
 
+  // الخطوة 21: الجدول القديم أرشيف للقراءة فقط (410 LATE-TIERS-LEGACY-READONLY)
   @Perm('payroll.calculate')
   @Post('lateness-tiers')
-  create(@Body() dto: TierDto) {
-    return this.service.createTier(dto)
+  create(@Body() _dto: TierDto) {
+    return this.service.legacyTierWritesClosed()
   }
 
   @Perm('payroll.calculate')
   @Patch('lateness-tiers/:id')
-  update(@Param('id', ParseIntPipe) id: number, @Body() dto: Partial<TierDto> & { isActive?: boolean }) {
-    return this.service.updateTier(id, dto as any)
+  update(@Param('id', ParseIntPipe) _id: number) {
+    return this.service.legacyTierWritesClosed()
   }
 
   @Perm('payroll.calculate')
   @Delete('lateness-tiers/:id')
-  remove(@Param('id', ParseIntPipe) id: number) {
-    return this.service.deleteTier(id)
+  remove(@Param('id', ParseIntPipe) _id: number) {
+    return this.service.legacyTierWritesClosed()
+  }
+
+  // ===== الخطوة 21: مجموعات شرائح التأخير المؤرخة =====
+  @Perm('payroll.view')
+  @Get('lateness-tier-sets')
+  listTierSets() {
+    return this.service.listTierSets()
+  }
+
+  // معاينة بلا حفظ: التطبيع ورفض التداخل والفجوات والبصمة
+  @Perm('payroll.view')
+  @Post('lateness-tier-sets/preview')
+  previewTierSet(@Body() dto: TierSetDto) {
+    return this.service.previewTierSet(dto)
+  }
+
+  @Perm('payroll.policy.manage')
+  @Post('lateness-tier-sets')
+  createTierSet(@CurrentUser() user: JwtPayload, @Body() dto: TierSetDto) {
+    return this.service.createTierSet(user, dto)
+  }
+
+  @Perm('payroll.policy.manage')
+  @Post('lateness-tier-sets/:id/deactivate')
+  deactivateTierSet(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: TierSetReasonDto) {
+    return this.service.deactivateTierSet(user, id, dto)
   }
 }

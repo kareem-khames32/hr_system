@@ -26,7 +26,10 @@ function token(user) {
     employeeId: user.employeeId ?? null, tokenVersion: user.tokenVersion ?? 0,
     permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
 }
+// الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ (هذه المجموعة لا تختبر التكافؤ نفسه)
+const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
 async function request(user, method, endpoint, body) {
+  await writeParityReasonsBeforeApproval(request, user, method, endpoint)
   const response = await fetch(base + endpoint, { method, headers: { 'Content-Type': 'application/json',
     ...(user ? { Authorization: `Bearer ${token(user)}` } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
@@ -156,6 +159,8 @@ before(async () => {
     { key: 'payroll.daily_hours', value: '8' }, { key: 'payroll.late_deduction_enabled', value: 'true' },
     { key: 'attendance.absence_penalty_days', value: '1' }, { key: 'attendance.weekend_days', value: 'FRI,SAT' },
   ])
+  // الخطوة 22 (B5): المستخدم نفسه يحتسب ويعتمد في هذه المجموعة — رخصة الشركة الصغيرة الموثقة (فصل المهام مختبر في payroll-run-screen)
+  await require('./fixtures/payroll-small-company-approval.cjs').allowSmallCompanyApproval(repo)
 }, { timeout: 60000 })
 after(async t => {
   const errors = []
@@ -289,7 +294,8 @@ test('PR-06: draft conflict needs explicit acknowledgement, creates no claims, a
   assert.equal((await activeClaims(emp.id)).length, 0)
   await approve(first)
   for (const state of ['APPROVED', 'PAID']) {
-    if (state === 'PAID') assert.equal((await request(admin, 'POST', `/payroll/runs/${first.id}/pay`)).status, 201)
+    // الخطوة 22 (B5): الصرف يسجل قناته ومرجعه
+    if (state === 'PAID') assert.equal((await request(admin, 'POST', `/payroll/runs/${first.id}/pay`, { channel: 'BANK_TRANSFER', reference: `MEM-TEST-${first.id}` })).status, 201)
     const stableClaims = await activeClaims(emp.id)
     // الخطوة 17: الحجز المعتمد/المصروف لا يُتجاوز بخيار المسودة؛ الموظف يُستبعد بكود ورقم المسير الآخر ولا يوقف المسير.
     const blocked = await calculate([emp], { allowDraftConflicts: true })
@@ -379,6 +385,8 @@ test('PR-06 / PR-11: a SQL failure during claim insertion rolls back every claim
   const first = await employee(), second = await employee()
   const run = await calculate([first, second])
   await acknowledgeUnassigned(admin, run.id)
+  // الخطوة 20 (B4): أسباب تقرير التكافؤ تُكتب صراحة قبل لقطة المسير وأحداثه، فالاعتماد الفاشل بعدها يُقارن بلقطة لا يكتب فيها شيئًا
+  await writeParityReasonsBeforeApproval(request, admin, 'POST', `/payroll/runs/${run.id}/approve`)
   const before = await detail(run)
   const oldEvents = await events(run)
   assert.equal(ds.options.database, database)
@@ -432,7 +440,7 @@ test('PR-11: a paid run cannot reopen and retains its active reservation and fro
   const emp = await employee()
   const run = await calculate([emp])
   await approve(run)
-  assert.equal((await request(admin, 'POST', `/payroll/runs/${run.id}/pay`)).status, 201)
+  assert.equal((await request(admin, 'POST', `/payroll/runs/${run.id}/pay`, { channel: 'BANK_TRANSFER', reference: `MEM-TEST-${run.id}` })).status, 201)
   const before = await detail(run)
   const oldEvents = await events(run)
   const claims = await activeClaims(emp.id)

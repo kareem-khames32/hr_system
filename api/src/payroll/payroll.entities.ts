@@ -92,12 +92,54 @@ export class PayrollRun {
   @Column({ type: 'datetime', nullable: true })
   paidAt: Date
 
+  // الخطوة 22 / SRS PR-11 (B5): قيد الصرف — من صرف وقناة الصرف ومرجعه؛ null للمسيرات المصروفة قبل هذا القيد.
+  @Column({ type: 'int', nullable: true })
+  paidBy: number | null
+
+  @Column({ type: 'nvarchar', length: 20, nullable: true })
+  payChannel: string | null
+
+  @Column({ type: 'nvarchar', length: 100, nullable: true })
+  payReference: string | null
+
+  // فصل المهام (PAYRUN-STATE-003): من احتسب آخر نسخة ومتى.
+  @Column({ type: 'int', nullable: true })
+  calculatedBy: number | null
+
+  @Column({ type: 'datetime', nullable: true })
+  calculatedAt: Date | null
+
+  // الخطوة 23 (B5، تصحيح المراجعة): مسير تجريبي لا يُحتسب في فترة التكافؤ التشغيلية — السبب المكتوب ومن علّمه ومتى؛ null = يُحتسب متى استوفى الشروط.
+  @Column({ type: 'nvarchar', length: 400, nullable: true })
+  parityExcludedReason: string | null
+
+  @Column({ type: 'int', nullable: true })
+  parityExcludedBy: number | null
+
+  @Column({ type: 'datetime', nullable: true })
+  parityExcludedAt: Date | null
+
   @CreateDateColumn()
   createdAt: Date
 
   // صفر يعني أن المسير القديم لم يثبت نسخة عضوية؛ لا ننسب إليه لقطة لم تُحفظ وقتها.
   @Column({ type: 'int', default: 0 })
   snapshotVersion: number
+
+  // الخطوة 19: لقطة السياسة (JSON: النسخة والإعدادات والشرائح وأساس الأيام) وبصمتها؛ null = مسير محسوب قبل اللقطة.
+  @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
+  policySnapshot: string | null
+
+  @Column({ type: 'nvarchar', length: 64, nullable: true })
+  policySnapshotHash: string | null
+
+  // الخطوة 20 / D13: LEGACY | SHADOW | POLICY — الجديد SHADOW افتراضيًا؛ null = مسير قبل D13.
+  @Column({ type: 'nvarchar', length: 10, nullable: true, default: 'SHADOW' })
+  engineMode: 'LEGACY' | 'SHADOW' | 'POLICY' | null
+
+  // الخطوة 20: تقرير التكافؤ لكل موظف ولكل بند لنسخة الحساب الحالية (JSON)
+  @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
+  parityReport: string | null
 }
 
 // لقطة أعضاء المسير وقت الحساب — تدقيق «من كان في المسير» ومنع الازدواج

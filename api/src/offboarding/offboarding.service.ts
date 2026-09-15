@@ -61,7 +61,8 @@ const localToday = () => {
   return [now.getFullYear(), String(now.getMonth() + 1).padStart(2, '0'), String(now.getDate()).padStart(2, '0')].join('-')
 }
 
-const round2 = (n: number) => Math.round(n * 100) / 100
+// D4 / CQ-04 (الخطوة 22): تقريب التصفية هو تقريب المسير ونهاية الخدمة نفسه (roundPayrollMoney).
+import { roundPayrollMoney as round2 } from '../payroll/payroll-money'
 
 // صلاحية كل جهة في الـ checklist
 const PARTY_PERMS: Record<ClearanceParty, string[]> = {

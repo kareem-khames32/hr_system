@@ -1,4 +1,5 @@
 import { apiFetch } from './api'
+import { formatMoney, isMoneyText } from './money'
 
 // الخصومات المصنفة (الخطوة 25): الكتالوج بالجهة المالكة والنطاق الوظيفي ومصفوفة التصعيد، الإنشاء الفردي والجماعي بمعاينة
 // واستبعاد، دورة الاعتماد مع البديل والمهلة والاعتراض، العكس بعد الصرف، قرارات الأقساط المعلقة، والتقارير
@@ -130,11 +131,9 @@ export interface PayrollObligationDetail {
   bonus?: null | { requestId: number; typeName: string | null; calcMethodLabel: string; inputValue: string; reason: string; formula: string | null; reversal: boolean }
 }
 
-/** عرض المبلغ النصي الدقيق كما هو بمنزلتين وفواصل آلاف (بلا تحويل ثنائي ولا toLocaleString). */
+/** المبلغ النصي بالمنسّق الواحد (FE-06، src/lib/money): منزلتان بتقريب نصف لأعلى مطابق لـroundPayrollMoney وفواصل آلاف، بلا تحويل ثنائي؛ غير الصالح «—». */
 export function formatDeductionMoney(value: string | null | undefined): string {
-  if (value === null || value === undefined || !/^-?\d+(\.\d+)?$/.test(value)) return '—'
-  const negative = value.startsWith('-'), [whole, fraction = ''] = value.replace('-', '').split('.')
-  return `${negative ? '-' : ''}${whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')}.${fraction.padEnd(2, '0').slice(0, 2)}`
+  return isMoneyText(value) ? formatMoney(value) : '—'
 }
 
 const post = <T>(path: string, body: unknown) => apiFetch<T>(path, { method: 'POST', body: JSON.stringify(body) })

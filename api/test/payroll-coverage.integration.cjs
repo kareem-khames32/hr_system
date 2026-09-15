@@ -27,7 +27,10 @@ function token(user) {
     employeeId: user.employeeId ?? null, tokenVersion: user.tokenVersion ?? 0,
     permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
 }
+// الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ (هذه المجموعة لا تختبر التكافؤ نفسه)
+const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
 async function request(user, method, url, body) {
+  await writeParityReasonsBeforeApproval(request, user, method, url)
   const response = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json',
     ...(user ? { Authorization: `Bearer ${token(user)}` } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
@@ -63,9 +66,11 @@ async function attendance(emp, from, to, absentDates = []) {
     await repo('ScheduleDayOverride').save({ employeeId: emp.id, date, shiftName: 'وردية اختبار', startTime: '08:00', endTime: '16:00' })
   }
 }
+// الخطوة 16 (B3): اسم المسير فريد داخل الشهر لغير الملغى؛ كل مسير جديد في الاختبار يأخذ رقمًا تسلسليًا.
+let coverageRunNumber = 0
 async function calculate(employees, extra = {}, expectedRange = { startDate, endDate }) {
   const response = await request(admin, 'POST', '/payroll/runs/calculate-defined', {
-    period, scopeType: 'CUSTOM', employeeIds: employees.map(emp => emp.id), name: 'اختبار التغطية — قاعدة مؤقتة', ...extra,
+    period, scopeType: 'CUSTOM', employeeIds: employees.map(emp => emp.id), name: `اختبار التغطية — قاعدة مؤقتة ${++coverageRunNumber}`, ...extra,
   })
   assert.equal(response.status, 201, JSON.stringify(response.body))
   assert.equal(response.body.startDate, expectedRange.startDate)
@@ -127,6 +132,8 @@ before(async () => {
     // هذه المجموعة تختبر التغطية والتناسب على راتب الملف؛ اختيار راتب الشهر من السجل مغطى في payroll-run-salary-period.integration.cjs.
     { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' },
   ])
+  // الخطوة 22 (B5): المستخدم نفسه يحتسب ويعتمد في هذه المجموعة — رخصة الشركة الصغيرة الموثقة (فصل المهام مختبر في payroll-run-screen)
+  await require('./fixtures/payroll-small-company-approval.cjs').allowSmallCompanyApproval(repo)
 }, { timeout: 60000 })
 
 after(async t => {

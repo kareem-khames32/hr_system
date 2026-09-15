@@ -25,7 +25,10 @@ function token(user) {
     employeeId: user.employeeId ?? null, tokenVersion: user.tokenVersion ?? 0,
     permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
 }
+// الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ (هذه المجموعة لا تختبر التكافؤ نفسه)
+const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
 async function request(user, method, url, body) {
+  await writeParityReasonsBeforeApproval(request, user, method, url)
   const response = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json',
     ...(user ? { Authorization: `Bearer ${token(user)}` } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
@@ -130,8 +133,9 @@ async function payroll(f, expected = { gross: 9000, grossEarned: 300, dayRate: 3
   // a month of attendance. Monthly gross 9000 still determines rates: 300/day, .625/min.
   await repo('Employee').update(f.emp.id, { joinDate: f.day, status: 'terminated', isActive: false })
   await repo('OffboardingCase').save({ employeeId: f.emp.id, lastWorkingDay: f.day, status: 'CLOSED', terminationReason: 'termination' })
+  // الخطوة 16 (B3): اسم المسير فريد داخل الشهر لغير الملغى؛ كل مسير جديد يأخذ رقم الموظف.
   const result = await request(admin, 'POST', '/payroll/runs/calculate-defined', {
-    period: '2026-07', scopeType: 'CUSTOM', employeeIds: [f.emp.id], name: 'تقييم مالي ليوم مرونة — قاعدة اختبار',
+    period: '2026-07', scopeType: 'CUSTOM', employeeIds: [f.emp.id], name: `تقييم مالي ليوم مرونة — قاعدة اختبار #${f.emp.id}`,
   })
   assert.equal(result.status, 201, JSON.stringify(result.body))
   const run = result.body, item = run.items.find(row => row.employeeId === f.emp.id)
@@ -144,10 +148,14 @@ async function payroll(f, expected = { gross: 9000, grossEarned: 300, dayRate: 3
   assert.ok(trace, 'Each evaluated flexible day needs a persisted financial explanation')
   return { run, item, details, trace }
 }
+// الخطوة 21 (B4): الحساب يقرأ مجموعة الشرائح المؤرخة (الجدول القديم أرشيف)؛ مجموعة الاختبار تسري من 2000-01 وتُوقف بعد الإجراء.
 async function withTier(value, action) {
-  const tier = await repo('LatenessTier').save({ fromMinutes: 1, toMinutes: null, mode: 'FRACTION', value, isActive: true,
-    label: 'شريحة عقابية واضحة لاختبار استقلال النقص' })
-  try { return await action() } finally { await repo('LatenessTier').delete(tier.id) }
+  const { payrollLatenessTierSetHash } = require('../src/payroll/payroll-lateness-tiers')
+  const tiers = [{ sequence: 1, fromMinutes: 1, toMinutes: null, mode: 'FRACTION', value: Number(value).toFixed(3), label: 'شريحة عقابية واضحة لاختبار استقلال النقص' }]
+  const set = await repo('PayrollLatenessTierSet').save({ effectivePeriod: '2000-01', contentHash: payrollLatenessTierSetHash('2000-01', tiers), source: 'EDITOR',
+    reason: 'مجموعة شرائح اختبار المرونة', isActive: true, createdBy: null })
+  await repo('PayrollLatenessTierSetTier').save(tiers.map(tier => ({ ...tier, setId: set.id })))
+  try { return await action() } finally { await repo('PayrollLatenessTierSet').update({ id: set.id }, { isActive: false }) }
 }
 
 // الخطوة 18 (B3): الاعتماد يتطلب إقرارًا بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية بنطاق المعتمد.

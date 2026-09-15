@@ -116,7 +116,8 @@ test('result explains preview limits and source blockers with Arabic labels only
   response.snapshot.sections = { compensation: section(null, { state: 'MISSING', issues: [{ code: 'MISSING_CODE', message: 'الأجر غير مكتمل' }] }), PRIVATE_SOURCE: section({ raw: 'PRIVATE_DATA' }, { state: 'UNKNOWN', issues: [{ code: 'INTERNAL_CODE', message: 'RAW_UNKNOWN' }] }) }
   response.snapshot.blockers = [{ section: 'policy', code: 'POLICY_NOT_PUBLISHED', message: 'النسخة لم تُنشر بعد' }]
   const html = render(PayrollLiveSourcesResult, { result: response })
-  for (const text of ['موظف اختبار', 'مراجعة السياسة 3', 'حساب المسير بهذه المصادر لم يُفعّل بعد', 'الأجر غير مكتمل', 'النسخة لم تُنشر بعد', 'حالة تحتاج مراجعة']) assert.ok(html.includes(text))
+  // B5 / FE-02: نص التنبيه القديم («لم يُفعّل بعد») كان غير دقيق بعد D13 — محرك السياسة يقرأ هذه المصادر بجانب الحساب القديم في SHADOW
+  for (const text of ['موظف اختبار', 'مراجعة السياسة 3', 'يقرؤها محرك السياسة بجانبه للمقارنة في تقرير التكافؤ', 'الأجر غير مكتمل', 'النسخة لم تُنشر بعد', 'حالة تحتاج مراجعة']) assert.ok(html.includes(text), text)
   assert.doesNotMatch(html, /MISSING_CODE|PRIVATE_SOURCE|PRIVATE_DATA|RAW_UNKNOWN|INTERNAL_CODE|POLICY_NOT_PUBLISHED/)
 })
 

@@ -32,7 +32,10 @@ function token(user) {
   return jwt.sign({ sub: user.id, email: user.email, role: user.role, branchId: user.branchId ?? null, employeeId: user.employeeId ?? null,
     tokenVersion: user.tokenVersion ?? 0, permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
 }
+// الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ (هذه المجموعة لا تختبر التكافؤ نفسه)
+const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
 async function request(user, method, route, body) {
+  await writeParityReasonsBeforeApproval(request, user, method, route)
   const response = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', ...(user ? { Authorization: `Bearer ${token(user)}` } : {}) },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
   const text = await response.text()
@@ -60,7 +63,9 @@ async function calc(period, emps) {
     name: `مسير اختبار المكافآت ${++sequence}` }), 201)
 }
 const itemOf = (run, emp) => { const row = run.items.find(item => item.employeeId === emp.id); assert.ok(row, `item for ${emp.employeeCode}`); return row }
-const transition = (run, action, body, actor = users.admin) => request(actor, 'POST', `/payroll/runs/${run.id}/${action}`, body)
+// الخطوة 22 (B5): الصرف يسجل قناته ومرجعه
+const transition = (run, action, body, actor = users.admin) => request(actor, 'POST', `/payroll/runs/${run.id}/${action}`,
+  action === 'pay' && body === undefined ? { channel: 'BANK_TRANSFER', reference: `BN-TEST-${run.id}` } : body)
 // الخطوة 18 (B3): الاعتماد يتطلب إقرارًا بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية
 async function approveRun(run, actor = users.admin) {
   const report = expectStatus(await request(actor, 'GET', `/payroll/runs/${run.id}/unassigned`), 200)
@@ -93,6 +98,8 @@ before(async () => {
     // وضع انتقالي صريح للقاعدة المؤقتة: الموظف بلا سجل شهري يُحسب براتب الملف (موسوم غير موثق)
     { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' },
   ])
+  // الخطوة 22 (B5): المستخدم نفسه يحتسب ويعتمد في هذه المجموعة — رخصة الشركة الصغيرة الموثقة (فصل المهام مختبر في payroll-run-screen)
+  await require('./fixtures/payroll-small-company-approval.cjs').allowSmallCompanyApproval(repo)
   org.branchA = await repo('Branch').save({ code: 'BN_A', name: 'فرع المكافآت الأول' })
   org.branchB = await repo('Branch').save({ code: 'BN_B', name: 'فرع المكافآت الثاني' })
   org.departmentA = await repo('Department').save({ branchId: org.branchA.id, name: 'قسم العمليات', code: 'BN_DA' })

@@ -9,7 +9,8 @@ import { TERMINATION_REASONS, type TerminationReason } from './offboarding.entit
 // الإنهاء من صاحب العمل وانتهاء العقد والتقاعد والوفاة والعجز والقوة القاهرة = كاملة.
 // ============================================================
 
-const round2 = (n: number) => Math.round(n * 100) / 100
+// D4 / CQ-04 (الخطوة 22): تقريب واحد مشترك مع المسير والتصفية (منزلتان، نصف لأعلى، بمعالجة خطأ التمثيل الثنائي: 1.005 ← 1.01).
+import { roundPayrollMoney as round2 } from '../payroll/payroll-money'
 
 export const TERMINATION_REASON_LABELS: Record<TerminationReason, string> = {
   resignation: 'استقالة',

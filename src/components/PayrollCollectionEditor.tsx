@@ -78,7 +78,7 @@ export function PayrollCollectionEditor({ view, version, onSaved, onReload, onDi
           ترتيب التحصيل: {stateLabels[view.collectionState]}
         </span>
       </div>
-      <p className="text-sm text-gray-600 leading-7">حدد أي الخصومات تُحصّل أولًا عند عدم كفاية المبلغ المتاح. البنود المحمية تُعالج قبل هذا الترتيب. الحفظ يخص نسخة السياسة، ولا يعيد حساب المسيرات السابقة.</p>
+      <p className="text-sm text-gray-600 leading-7">حدد أي الخصومات تُحصّل أولًا عند عدم كفاية المبلغ المتاح. البنود المحمية تُعالج قبل هذا الترتيب. المسير المرتبط بهذه النسخة يطبقه عند الحساب على فئات التحصيل (الحضور، والاستردادات، والمصنفة، والإدارية، وأقساط السلف) حسب تصنيف كل بند؛ المسيرات المحسوبة لا تتغير إلا بإعادة حسابها، والنسخة المنشورة لا تُعدل (التعديل ينشئ نسخة جديدة).</p>
       {!authorized && <p className="rounded-xl bg-gray-50 p-3 text-sm text-gray-600 flex gap-2"><LockKeyhole size={18} className="shrink-0" />هذه السياسة متاحة للقراءة فقط؛ التعديل يتطلب صلاحية «إدارة سياسات الرواتب ونشرها» ونطاق فرع السياسة النشطة.</p>}
       {!complete && <div role="status" className="rounded-xl bg-amber-50 p-4 text-sm text-amber-900 space-y-2">
         <p className="font-semibold">يلزم استكمال إعدادات النسخة وتعريف بنودها قبل حفظ ترتيب التحصيل.</p>
