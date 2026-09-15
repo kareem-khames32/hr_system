@@ -5,18 +5,13 @@ import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import {
   AlertTriangle,
-  BarChart3,
-  Clock,
   CreditCard,
   Download,
   FileText,
   Printer,
   RefreshCw,
-  TrendingUp,
-  UserMinus,
-  Wallet,
 } from 'lucide-react'
-import { can, fetchBranches, fetchDepartments, type ApiBranch, type ApiDepartment } from '@/lib/api'
+import type { ApiBranch, ApiDepartment } from '@/lib/api'
 import { downloadCsv } from '@/lib/csv'
 import { useCurrency } from '@/lib/currency'
 import {
@@ -52,18 +47,16 @@ import {
 
 type Tab = 'runs' | 'unassigned' | 'overtime' | 'loans' | 'variance'
 
+// تبسيط الرواتب (2026-09-15): «تقرير الرواتب» يعرض تبويب المسيرات وحده، وأي ?tab في الرابط يفتح المسيرات.
+// تبويبات «موظفون بلا مسير» و«العمل الإضافي» و«السلف» و«الفروق بين شهرين» باقية أدناه غير معروضة، والـAPI باقٍ.
 const TABS: Array<{ id: Tab; label: string; icon: typeof FileText; payroll: boolean }> = [
   { id: 'runs', label: 'المسيرات', icon: FileText, payroll: false },
-  { id: 'unassigned', label: 'موظفون بلا مسير', icon: UserMinus, payroll: true },
-  { id: 'overtime', label: 'العمل الإضافي', icon: Clock, payroll: true },
-  { id: 'loans', label: 'السلف', icon: Wallet, payroll: true },
-  { id: 'variance', label: 'الفروق بين شهرين', icon: TrendingUp, payroll: true },
 ]
 
 const runStatusBadge: Record<string, string> = {
   CALCULATED: 'badge badge-primary', IN_REVIEW: 'badge badge-warning', APPROVED: 'badge badge-warning', PAID: 'badge badge-success', CANCELLED: 'badge bg-gray-100 text-gray-600',
 }
-const lookup = (map: Record<string, string>, code: string | null | undefined) => (code && map[code]) || code || '—'
+const lookup = (map: Record<string, string>, code: string | null | undefined) => (code && map[code]) || (code ? 'غير معروف' : '—')
 
 const previousMonth = (month: string) => {
   const [year, value] = month.split('-').map(Number)
@@ -88,6 +81,7 @@ function ErrorBanner({ message }: { message: string }) {
 }
 
 // زر التصدير ينتج ملف CSV فعليًا من الصفوف المعروضة، ويتعطل حين لا توجد صفوف
+// تبسيط الرواتب (2026-09-15): نص الزر عربي بلا «CSV»
 function ExportButton({ table, file }: { table: CsvTable | null; file: string }) {
   const empty = !table || table.rows.length === 0
   return (
@@ -95,11 +89,11 @@ function ExportButton({ table, file }: { table: CsvTable | null; file: string })
       type="button"
       onClick={() => table && downloadCsv(file, table.header, table.rows)}
       disabled={empty}
-      title={empty ? 'لا توجد صفوف للتصدير' : 'تصدير الصفوف المعروضة إلى CSV'}
+      title={empty ? 'لا توجد صفوف للتصدير' : 'تصدير الصفوف المعروضة إلى ملف'}
       className="btn-secondary flex items-center gap-2 disabled:opacity-50"
     >
       <Download size={18} />
-      تصدير CSV
+      تصدير ملف
     </button>
   )
 }
@@ -164,7 +158,8 @@ function RunsTab() {
       .finally(() => setLoading(false))
   }
   useEffect(load, [])
-  const runs = report?.runs ?? []
+  // تبسيط الرواتب (2026-09-15): مسيرات عكس الصرف والتكميلي لا تظهر في التقرير ولا تدخل مجاميعه ولا ملف التصدير
+  const runs = (report?.runs ?? []).filter((run) => run.runType !== 'REVERSAL' && run.runType !== 'SUPPLEMENTARY')
   const active = runs.filter((run) => run.status !== 'CANCELLED')
   const totalNet = sumReportMoney(active.map((run) => run.totalNet))
   return (
@@ -173,52 +168,35 @@ function RunsTab() {
         <p className="text-sm text-gray-500">كل المسيرات بما فيها مسيرات القسم والفريق والقائمة المخصّصة التي لا ترتبط بفرع. الملغى يظهر ولا يدخل المجاميع.</p>
         <div className="flex items-center gap-2">
           <button type="button" onClick={load} className="btn-secondary flex items-center gap-2"><RefreshCw size={18} />تحديث</button>
-          <ExportButton table={report ? runsReportCsv(report) : null} file={reportFileName('runs')} />
+          <ExportButton table={report ? runsReportCsv({ ...report, runs }) : null} file={reportFileName('runs')} />
         </div>
       </div>
       {error && <ErrorBanner message={error} />}
       {loading ? <Spinner /> : report && (
         <>
-          <div className="grid grid-cols-4 gap-4">
+          <div className="grid grid-cols-2 gap-4">
             <Stat label={`صافي المسيرات غير الملغاة (${currency})`} value={formatReportMoney(totalNet)} />
             <Stat label="عدد المسيرات" value={runs.length} />
-            <Stat label="مسيرات بلا فرع" value={runs.filter((run) => run.branchId === null).length} />
-            {/* C8: البند المعكوس صرفه لا يُعد، ومسير العكس بلا بنود (سطوره تظهر في صفه سالبة) */}
-            <Stat label="بنود الموظفين الفعلية (غير الملغاة وغير المعكوسة)" value={active.filter((run) => run.runType !== 'REVERSAL').reduce((sum, run) => sum + run.employees - (run.reversedEmployees ?? 0), 0)} />
           </div>
           <div className="card overflow-x-auto">
             <h2 className="text-lg font-bold text-gray-800 mb-4">مسيرات الرواتب</h2>
             <table className="w-full">
               <thead className="bg-gray-50">
-                <tr><Th>رقم</Th><Th>الاسم</Th><Th>الفترة</Th><Th>النطاق</Th><Th center>الحالة</Th><Th center>الموظفون</Th><Th center>المستبعدون</Th><Th center>صافي الإجمالي</Th></tr>
+                <tr><Th>الاسم</Th><Th>الفترة</Th><Th>النطاق</Th><Th center>الحالة</Th><Th center>الموظفون</Th><Th center>المستبعدون</Th><Th center>صافي الإجمالي</Th></tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
                 {runs.map((run) => (
                   <tr key={run.id} className="hover:bg-gray-50">
-                    <td className="px-4 py-3 text-gray-500" dir="ltr">#{run.id}</td>
-                    <td className="px-4 py-3 font-medium text-gray-800">
-                      {run.name ?? `مسير ${run.period}`}
-                      {run.runType === 'REVERSAL' && <p className="text-xs text-red-700">مسير عكس صرف{run.parentRunId ? ` للمسير #${run.parentRunId}` : ''}</p>}
-                      {run.runType === 'SUPPLEMENTARY' && <p className="text-xs text-primary-700">مسير تكميلي{run.parentRunId ? ` للمسير #${run.parentRunId}` : ''}</p>}
-                    </td>
+                    <td className="px-4 py-3 font-medium text-gray-800">{run.name ?? `مسير ${run.period}`}</td>
                     <td className="px-4 py-3 text-gray-600">
                       {run.period}
                       <p className="text-xs text-gray-400" dir="ltr">{run.startDate} → {run.endDate}</p>
                     </td>
-                    <td className="px-4 py-3 text-gray-600">
-                      {run.scopeLabel}
-                      {run.partial && <p className="text-xs text-warning-700">يظهر جزء فرعك فقط</p>}
-                    </td>
+                    <td className="px-4 py-3 text-gray-600">{run.scopeLabel}</td>
                     <td className="px-4 py-3 text-center"><span className={runStatusBadge[run.status] ?? 'badge bg-gray-100 text-gray-600'}>{runStatusLabel(run.status)}</span></td>
-                    <td className="px-4 py-3 text-center text-gray-600">
-                      {run.employees}
-                      {(run.reversedEmployees ?? 0) > 0 && <p className="text-xs text-red-700">منهم {run.reversedEmployees} عُكس صرفه</p>}
-                    </td>
+                    <td className="px-4 py-3 text-center text-gray-600">{run.employees}</td>
                     <td className="px-4 py-3 text-center text-gray-600">{run.excluded}</td>
-                    <td className="px-4 py-3 text-center font-bold text-gray-800" dir="ltr">
-                      {formatReportMoney(run.totalNet)}
-                      {(run.reversedEmployees ?? 0) > 0 && run.reversedNet && <p className="text-xs font-normal text-red-700">معكوس: {formatReportMoney(run.reversedNet)}</p>}
-                    </td>
+                    <td className="px-4 py-3 text-center font-bold text-gray-800" dir="ltr">{formatReportMoney(run.totalNet)}</td>
                   </tr>
                 ))}
                 {runs.length === 0 && <EmptyRow colSpan={8} text="لا توجد مسيرات رواتب بعد" />}
@@ -729,31 +707,16 @@ function VarianceTab() {
 }
 
 export default function PayrollReportsPage() {
+  // تبسيط الرواتب (2026-09-15): تبويب المسيرات وحده، وأي ?tab في الرابط يفتح المسيرات.
+  // الوصف تحت العنوان كان يعدّد التبويبات المخفية فأُخفي معها.
   const [tab, setTab] = useState<Tab>('runs')
-  const [canPayroll, setCanPayroll] = useState(false)
-  const [branches, setBranches] = useState<ApiBranch[]>([])
-  const [departments, setDepartments] = useState<ApiDepartment[]>([])
-
-  useEffect(() => {
-    const allowed = can('payroll.view')
-    setCanPayroll(allowed)
-    const requested = new URLSearchParams(window.location.search).get('tab')
-    if (allowed && TABS.some((item) => item.id === requested)) setTab(requested as Tab)
-    if (allowed) {
-      fetchBranches().then(setBranches).catch(() => setBranches([]))
-      fetchDepartments().then(setDepartments).catch(() => setDepartments([]))
-    }
-  }, [])
-
-  const visibleTabs = TABS.filter((item) => !item.payroll || canPayroll)
 
   return (
     <MainLayout>
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">التقارير المالية</h1>
-            <p className="text-gray-500 mt-1">المسيرات، والموظفون بلا مسير، والعمل الإضافي بالمبالغ، والسلف، والفروق بين الشهور</p>
+            <h1 className="text-2xl font-bold text-gray-800">تقرير الرواتب</h1>
           </div>
           <button type="button" onClick={() => window.print()} className="btn-secondary flex items-center gap-2">
             <Printer size={18} />
@@ -763,7 +726,7 @@ export default function PayrollReportsPage() {
 
         <div className="card p-2">
           <div className="flex flex-wrap items-center gap-2">
-            {visibleTabs.map((item) => {
+            {TABS.map((item) => {
               const Icon = item.icon
               return (
                 <button
@@ -777,20 +740,10 @@ export default function PayrollReportsPage() {
                 </button>
               )
             })}
-            {!canPayroll && (
-              <span className="text-xs text-gray-500 flex items-center gap-1 px-2">
-                <BarChart3 size={14} />
-                تقارير بلا مسير والإضافي والسلف والفروق تتطلب صلاحية عرض الرواتب
-              </span>
-            )}
           </div>
         </div>
 
         {tab === 'runs' && <RunsTab />}
-        {tab === 'unassigned' && canPayroll && <UnassignedTab branches={branches} departments={departments} />}
-        {tab === 'overtime' && canPayroll && <OvertimeTab branches={branches} departments={departments} />}
-        {tab === 'loans' && canPayroll && <LoansTab branches={branches} departments={departments} />}
-        {tab === 'variance' && canPayroll && <VarianceTab />}
       </div>
     </MainLayout>
   )

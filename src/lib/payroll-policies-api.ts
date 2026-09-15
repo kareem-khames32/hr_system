@@ -29,8 +29,14 @@ export interface PayrollPolicyVersionSummary extends StoredPolicySettings {
   settingsStatus?: CompletionState; settingsIssues?: string[]
 }
 export interface PayrollPolicyCapabilities { canEdit: boolean; canCloneVersion?: boolean; canArchive?: boolean; canPublish?: boolean }
+// طريقة الخصم لكل مجموعة معادلات (ترحيل 033): null = «زي الإعدادات العامة».
+export type PayrollShortfallMode = 'MINUTES' | 'MULTIPLIER' | 'FRACTION'
+export interface PayrollPolicyChargeRules {
+  lateDeductionEnabled: boolean | null; latenessTierSetId: number | null; earlyLeaveDeductionEnabled: boolean | null
+  shortfallEnabled: boolean | null; shortfallMode: PayrollShortfallMode | null; shortfallValue: number | null; absencePenaltyDays: number | null
+}
 export interface PayrollPolicySummary {
-  policy: { id: number; code: string; name: string; branchId: number | null; isActive: boolean }
+  policy: { id: number; code: string; name: string; branchId: number | null; isActive: boolean; revision?: number } & Partial<PayrollPolicyChargeRules>
   versions: PayrollPolicyVersionSummary[]; capabilities: PayrollPolicyCapabilities
 }
 export interface CollectionComponent {
@@ -103,6 +109,53 @@ export const fetchPayrollPolicyPublishCheck = (policyId: number, versionId: numb
 export const publishPayrollPolicyVersion = (policyId: number, versionId: number, expectedRevision: number, reason: string) =>
   apiFetch<PayrollPolicyVersionEditResponse & { contentHash: string; periods: PayrollPolicyPeriodPreview[] }>(`${policyPath(policyId, versionId)}/publish`, { method: 'POST', body: JSON.stringify({ expectedRevision, reason: reason.trim() }) })
 
+// ===== شاشة «معادلات الرواتب»: سبب جاهز وطريقة الخصم للمجموعة =====
+export const POLICY_SCREEN_REASON = 'تعديل من شاشة معادلات الرواتب'
+export const SHORTFALL_MODE_LABELS: Record<PayrollShortfallMode, string> = {
+  MINUTES: 'بالدقيقة', MULTIPLIER: 'بالدقيقة × مضاعف', FRACTION: 'جزء من اليوم',
+}
+export function chargeRulesOf(policy: PayrollPolicySummary['policy']): PayrollPolicyChargeRules {
+  const num = (value: unknown) => value == null ? null : Number(value)
+  return {
+    lateDeductionEnabled: policy.lateDeductionEnabled ?? null, latenessTierSetId: num(policy.latenessTierSetId),
+    earlyLeaveDeductionEnabled: policy.earlyLeaveDeductionEnabled ?? null, shortfallEnabled: policy.shortfallEnabled ?? null,
+    shortfallMode: policy.shortfallMode ?? null, shortfallValue: num(policy.shortfallValue), absencePenaltyDays: num(policy.absencePenaltyDays),
+  }
+}
+export const updatePayrollPolicyChargeRules = (policyId: number, expectedRevision: number, rules: PayrollPolicyChargeRules, reason = POLICY_SCREEN_REASON) =>
+  apiFetch<{ policy: PayrollPolicySummary['policy']; capabilities: PayrollPolicyCapabilities }>(policyPath(policyId), { method: 'PATCH', body: JSON.stringify({ expectedRevision, reason, ...rules }) })
+
+// مرآة PAYROLL_POLICY_CONFIG_KEYS في الخادم: قيم «سياسات النظام» تبدأ بها المجموعة الجديدة، والناقص فقط يأخذ الافتراضي.
+const POLICY_SETTING_CONFIG_KEYS: Record<keyof PayrollPolicySettingsInput, string> = {
+  defaultPeriodType: 'payroll.policy.default_period_type', cycleStartDay: 'payroll.cycle_start_day', cycleEndMode: 'payroll.policy.cycle_end_mode',
+  cycleEndDay: 'payroll.policy.cycle_end_day', baseDaysBasis: 'payroll.policy.base_days_basis', monthlyDays: 'payroll.monthly_days', dailyHours: 'payroll.daily_hours',
+  rateBase: 'payroll.policy.rate_base', roundingMode: 'payroll.policy.rounding_mode', roundingScale: 'payroll.policy.rounding_scale',
+  divisionByZeroMode: 'payroll.policy.division_by_zero_mode', maxDeductionPctOfGross: 'payroll.policy.max_deduction_pct_of_gross',
+  minNetGuarantee: 'payroll.policy.min_net_guarantee', netFloorPct: 'payroll.policy.net_floor_pct', carryOverExcess: 'payroll.policy.carry_over_excess',
+  skipAttendance: 'payroll.policy.skip_attendance', lateDeductionEnabled: 'payroll.late_deduction_enabled', currency: 'system.currency',
+}
+export function policySettingsFromConfig(rows: Array<{ key: string; value: string }>): PayrollPolicySettingsInput {
+  const values = new Map(rows.map(row => [row.key, row.value]))
+  const result = { ...DEFAULT_POLICY_SETTINGS } as Record<keyof PayrollPolicySettingsInput, unknown>
+  for (const field of Object.keys(POLICY_SETTING_CONFIG_KEYS) as (keyof PayrollPolicySettingsInput)[]) {
+    const text = values.get(POLICY_SETTING_CONFIG_KEYS[field])
+    if (text === undefined) continue
+    const fallback = DEFAULT_POLICY_SETTINGS[field]
+    if (text === 'null') { if (['cycleEndDay', 'maxDeductionPctOfGross', 'minNetGuarantee', 'netFloorPct'].includes(field)) result[field] = null; continue }
+    if (typeof fallback === 'boolean') { if (text === 'true' || text === 'false') result[field] = text === 'true'; continue }
+    if (typeof fallback === 'number' || fallback === null) { const parsed = Number(text); if (text.trim() !== '' && Number.isFinite(parsed)) result[field] = parsed; continue }
+    result[field] = text
+  }
+  if (!['SAR', 'EGP'].includes(String(result.currency))) result.currency = DEFAULT_POLICY_SETTINGS.currency
+  return result as unknown as PayrollPolicySettingsInput
+}
+
+/** النسخة التي تفتحها الشاشة: أحدث مسودة إن وُجدت، وإلا أحدث نسخة منشورة، وإلا أحدث نسخة. */
+export function currentPolicyVersion(versions: PayrollPolicyVersionSummary[]): PayrollPolicyVersionSummary | null {
+  const sorted = [...versions].sort((a, b) => b.versionNo - a.versionNo)
+  return sorted.find(version => version.status === 'DRAFT') ?? sorted.find(version => version.status === 'ACTIVE') ?? sorted[0] ?? null
+}
+
 /** إعدادات نسخة محفوظة كاملة أو null لو ناقصة (نسخة تاريخية تحتاج إرسال الحقول كلها). */
 export function storedPolicySettings(version: PayrollPolicyVersionSummary): PayrollPolicySettingsInput | null {
   const keys = Object.keys(DEFAULT_POLICY_SETTINGS) as (keyof PayrollPolicySettingsInput)[]
@@ -138,11 +191,11 @@ export function describePolicyCycle(settings: CycleInput): string {
   return end <= settings.cycleStartDay ? `من يوم ${settings.cycleStartDay} إلى يوم ${end} من الشهر التالي` : `من يوم ${settings.cycleStartDay} إلى يوم ${end} من الشهر نفسه`
 }
 
-/** اقتراح بداية سريان = بداية أقرب فترة تبدأ اليوم أو بعده (مسير شهر كامل). */
-export function suggestPolicyEffectiveFrom(settings: Pick<PayrollPolicySettingsInput, 'defaultPeriodType' | 'cycleStartDay' | 'cycleEndMode' | 'cycleEndDay'>, today: string): string {
-  const year = Number(today.slice(0, 4)), month = Number(today.slice(5, 7)), day = Number(today.slice(8, 10))
+/** اقتراح بداية سريان = بداية فترة المسير التي يقع فيها اليوم، فالمعادلات المنشأة اليوم تصلح لمسير هذا الشهر (قاعدة الخادم كما هي). */
+export function suggestPolicyEffectiveFrom(settings: CycleInput, today: string): string {
+  const year = Number(today.slice(0, 4)), month = Number(today.slice(5, 7))
   const candidates: string[] = []
-  for (let delta = 0; delta <= 2; delta++) {
+  for (let delta = -2; delta <= 2; delta++) {
     const total = year * 12 + (month - 1) + delta, y = Math.floor(total / 12), m = (total % 12) + 1
     if (settings.defaultPeriodType === 'SEMI_MONTHLY') candidates.push(isoDate(y, m, 1), isoDate(y, m, 16))
     else if (settings.defaultPeriodType === 'CALENDAR_MONTH' || settings.cycleStartDay === 1) candidates.push(isoDate(y, m, 1))
@@ -152,13 +205,13 @@ export function suggestPolicyEffectiveFrom(settings: Pick<PayrollPolicySettingsI
       candidates.push(end === lastDayOf(y, m) ? isoDate(m === 12 ? y + 1 : y, m === 12 ? 1 : m + 1, 1) : isoDate(y, m, end + 1))
     }
   }
-  const todayIso = isoDate(year, month, day)
-  return candidates.sort().find(value => value >= todayIso) ?? candidates.sort()[candidates.length - 1]
+  candidates.sort()
+  return [...candidates].reverse().find(value => value <= today) ?? candidates[0]
 }
 
 export function payrollPoliciesError(error: unknown): string {
-  if (error instanceof ApiError && error.status === 404) return 'تعذر العثور على واجهة سياسات الرواتب أو النسخة المطلوبة. حدّث خدمة النظام إن لم يكن هذا القسم متاحًا، ثم أعد تحميل السياسات.'
-  return error instanceof Error ? error.message : 'تعذر تحميل سياسات الرواتب. حاول مجددًا.'
+  if (error instanceof ApiError && error.status === 404) return 'تعذر العثور على معادلات الرواتب المطلوبة. حدّث خدمة النظام إن لم يكن هذا القسم متاحًا، ثم أعد تحميل الصفحة.'
+  return error instanceof Error ? error.message : 'تعذر تحميل معادلات الرواتب. حاول مجددًا.'
 }
 export const isLoanCollectionComponent = (component: CollectionComponent) => component.valueSource === 'LEDGER' && component.ledgerDirection === 'DEBIT'
 export const collectionDeductions = (components: CollectionComponent[]) => components.filter(component => component.componentType === 'DEDUCTION')

@@ -35,6 +35,7 @@ interface PolicyField {
   options?: { value: string; label: string }[]
   wide?: boolean // حقل نصي عريض بأكواد لاتينية (جداول «مفتاح:قيمة»)
   perm?: string // صلاحية إضافية لتغيير الحقل فوق settings.manage (الخادم يرفض بدونها)
+  readOnly?: boolean // قيمة ثابتة في المحرك: تُعرض للقراءة فقط
 }
 interface PolicyGroup {
   title: string
@@ -51,6 +52,7 @@ const WEEKEND_KEY = 'attendance.weekend_days'
 const DEVICE_KEY = 'attendance.device_key'
 const deviceKeyWeak = (value: string) => !!value.trim() && (value.trim() === 'zk-device-key-change-me' || value.trim().length < 24)
 const WEEK_CODES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
+const WEEK_DAY_NAMES: Record<string, string> = { SUN: 'الأحد', MON: 'الاثنين', TUE: 'الثلاثاء', WED: 'الأربعاء', THU: 'الخميس', FRI: 'الجمعة', SAT: 'السبت' }
 const normalizeWeekend = (v: string): string | null => {
   const parts = v.toUpperCase().split(',').map((p) => p.trim())
   if (!parts.every((p) => WEEK_CODES.includes(p))) return null
@@ -90,7 +92,7 @@ const GROUPS: PolicyGroup[] = [
     iconColor: 'text-blue-500',
     note: 'سماحية التأخير تُضبط لكل وردية على حدة من شاشة «الورديات».',
     fields: [
-      { key: 'attendance.weekend_days', label: 'أيام نهاية الأسبوع', type: 'text', hint: 'رموز الأيام مفصولة بفاصلة — SUN,MON,TUE,WED,THU,FRI,SAT. يتجاوزها الفرع من شاشة «الفروع»' },
+      { key: 'attendance.weekend_days', label: 'أيام نهاية الأسبوع', type: 'text', hint: 'اختر يوم الإجازة الأسبوعية أو أكثر (لا تُختار كل الأيام). يتجاوزها الفرع من شاشة «الفروع»' },
       { key: 'attendance.absence_catchup_max_days', label: 'حد استدراك تسجيل الغياب', type: 'number', unit: 'يوم', min: 1, max: 366, integer: true, hint: 'أقصى عدد أيام تُراجع بعد توقف الخادم، من 1 إلى 366 يوماً.' },
       { key: DEVICE_KEY, label: 'مفتاح استقبال البصمات', type: 'secret', hint: 'يُستخدم في إعداد الجهاز أو الوسيط. اتركه فارغاً لإيقاف استقبال البصمات.' },
       { key: 'payroll.late_deduction_enabled', label: 'خصم التأخير من الراتب', type: 'bool' },
@@ -102,10 +104,10 @@ const GROUPS: PolicyGroup[] = [
     icon: Clock,
     iconBg: 'bg-blue-50',
     iconColor: 'text-blue-500',
-    note: 'تعديل مفاتيح المرونة يُثبت قيمها السابقة في تاريخ تعريف الدوام قبل الحفظ، فلا تتغير أيام سابقة. إذا كان خصم التأخير مقفولًا لا تُطرح دقائقه من النقص (D7).',
+    note: 'تعديل مفاتيح المرونة يُثبت قيمها السابقة في تاريخ تعريف الدوام قبل الحفظ، فلا تتغير أيام سابقة. إذا كان خصم التأخير مقفولًا لا تُطرح دقائقه من النقص.',
     fields: [
-      { key: 'payroll.early_leave_deduction_enabled', label: 'خصم الخروج المبكر على الوردية الثابتة', type: 'bool', hint: 'D1: يُخصم بسعر الدقيقة بعد طرح التأخير والسماحية. الوردية المرنة يحكمها «خصم نقص ساعات العمل».' },
-      { key: 'payroll.shortfall_enabled', label: 'خصم نقص ساعات العمل', type: 'bool', hint: 'D5: الساعات المطلوبة ناقص ساعات العمل الفعلية بعد السماحية.' },
+      { key: 'payroll.early_leave_deduction_enabled', label: 'خصم الخروج المبكر على الوردية الثابتة', type: 'bool', hint: 'يُخصم بسعر الدقيقة بعد طرح التأخير والسماحية. الوردية المرنة يحكمها «خصم نقص ساعات العمل».' },
+      { key: 'payroll.shortfall_enabled', label: 'خصم نقص ساعات العمل', type: 'bool', hint: 'الساعات المطلوبة ناقص ساعات العمل الفعلية بعد السماحية.' },
       { key: 'payroll.shortfall_mode', label: 'طريقة خصم النقص', type: 'select', options: [
         { value: 'MINUTES', label: 'بسعر الدقيقة' },
         { value: 'MULTIPLIER', label: 'بسعر الدقيقة × معامل' },
@@ -118,7 +120,7 @@ const GROUPS: PolicyGroup[] = [
         { value: 'MAX_OF_BOTH', label: 'الأكبر منهما فقط' },
         { value: 'CUMULATIVE', label: 'الاثنان معًا' },
       ] },
-      { key: 'payroll.attendance_daily_cap_days', label: 'سقف خصم الحضور اليومي', type: 'number', unit: 'يوم', min: 0, max: 31, hint: 'D5: يوم واحد. التأخير أولًا ثم النقص المتبقي داخل السقف.' },
+      { key: 'payroll.attendance_daily_cap_days', label: 'سقف خصم الحضور اليومي', type: 'number', unit: 'يوم', min: 0, max: 31, hint: 'يوم واحد. التأخير أولًا ثم النقص المتبقي داخل السقف.' },
       { key: 'attendance.flex.window_supersedes_grace', label: 'نافذة المرونة تغني عن سماحية التأخير', type: 'bool' },
       { key: 'attendance.flex.count_early_work_toward_required', label: 'احتساب الحضور قبل بداية الدوام من الساعات المطلوبة', type: 'bool' },
       { key: 'attendance.flex.prorate_window_on_partial_leave', label: 'تناسب نافذة المرونة مع الإجازة الجزئية', type: 'bool' },
@@ -134,8 +136,8 @@ const GROUPS: PolicyGroup[] = [
     iconColor: 'text-warning-500',
     note: 'الإضافي يحتاج اكتمال دورة الاعتماد دائمًا. إعدادات الاحتساب والسقوف تُدار من «أيام العمل والدوام»، وعتبة الوردية من «الورديات».',
     fields: [
-      { key: 'overtime.default_window', label: 'نافذة الإضافي الافتراضية', type: 'select', options: [{ value: 'AFTER_SHIFT_END', label: 'بعد نهاية الوردية' }], hint: 'D11: الكشف القائم يستمر بعد نهاية الوردية.' },
-      { key: 'overtime.outside_window_policy', label: 'العمل خارج نوافذ الإضافي', type: 'select', options: [{ value: 'CLOSED', label: 'لا يُحتسب إضافيًا (SRS LOT-14)' }], hint: 'D11: الحضور المبكر قبل الوردية يحكمه إعداد الإضافي المبكر في «أيام العمل والدوام».' },
+      { key: 'overtime.default_window', label: 'نافذة الإضافي الافتراضية', type: 'select', options: [{ value: 'AFTER_SHIFT_END', label: 'بعد نهاية الوردية' }], hint: 'الكشف القائم يستمر بعد نهاية الوردية.' },
+      { key: 'overtime.outside_window_policy', label: 'العمل خارج نوافذ الإضافي', type: 'select', options: [{ value: 'CLOSED', label: 'لا يُحتسب إضافيًا' }], hint: 'الحضور المبكر قبل الوردية يحكمه إعداد الإضافي المبكر في «أيام العمل والدوام».' },
     ],
   },
   {
@@ -143,16 +145,19 @@ const GROUPS: PolicyGroup[] = [
     icon: Wallet,
     iconBg: 'bg-blue-50',
     iconColor: 'text-blue-500',
-    note: 'تُحفظ هذه الاختيارات مع حساب المسير. إعادة الحساب تحتفظ بها، إلا عند اختيار تحديث سياسة الأقساط. يمكن طلب تأجيل قسط بعينه من شاشة السلف حتى لو الراتب يكفي.',
+    note: 'تُحفظ هذه الاختيارات مع حساب المسير. إعادة الحساب تحتفظ بها، إلا عند اختيار تحديث سياسة الأقساط.',
     fields: [
       { key: 'loan.insufficient_net_behavior', label: 'عندما لا يكفي المتاح للقسط', type: 'select', options: [
         { value: 'PARTIAL_THEN_CARRY', label: 'خصم المتاح وترحيل الباقي للشهر التالي' },
         { value: 'SKIP_AND_EXTEND', label: 'تأجيل القسط بالكامل ومد الجدول' },
       ] },
+      // أيام طلب السلفة من الشهر؛ لو يوم البداية بعد يوم النهاية تمتد الفترة فوق نهاية الشهر
+      { key: 'loan.request_from_day', label: 'طلب السلفة من يوم', type: 'number', unit: 'من الشهر', min: 1, max: 31, integer: true },
+      { key: 'loan.request_to_day', label: 'إلى يوم', type: 'number', unit: 'من الشهر', min: 1, max: 31, integer: true, hint: 'لو يوم البداية بعد يوم النهاية (مثل 25 إلى 5) تمتد الفترة لأول الشهر التالي.' },
       { key: 'payroll.policy.min_net_guarantee', label: 'الحد الأدنى للصافي', type: 'number', min: 0, nullable: true, hint: 'اتركه فارغًا إذا لم تحدد حدًا ثابتًا. لا يضيف النظام مبلغًا للراتب إذا كانت الخصومات السابقة تجاوزت الحد.' },
       { key: 'payroll.policy.net_floor_pct', label: 'الحد الأدنى كنسبة من الأجر الثابت المستحق', type: 'number', min: 0, max: 100, nullable: true, unit: '%', hint: 'إذا حددت مبلغًا ثابتًا أيضًا يُستخدم الأكبر منهما. فارغ = لا حد نسبي.' },
       { key: 'payroll.policy.max_deduction_pct_of_gross', label: 'سقف الخصومات من الأجر الثابت المستحق', type: 'number', min: 0, max: 100, nullable: true, unit: '%', hint: 'يحسب النظام ما استهلكته الخصومات السابقة قبل تحديد المتاح للسلف. فارغ = بلا سقف نسبي.' },
-      { key: 'payroll.loan_catchup_max_overdue', label: 'أقصى أقساط متأخرة تُخصم في المسير', type: 'number', unit: 'قسط', min: 0, max: 120, integer: true, hint: 'D10: إضافة إلى أقساط الشهر الحالي؛ الأقدم أولًا، والباقي يبقى مستحقًا للمسيرات التالية. صفر = أقساط الشهر الحالي فقط.' },
+      { key: 'payroll.loan_catchup_max_overdue', label: 'أقصى أقساط متأخرة تُخصم في المسير', type: 'number', unit: 'قسط', min: 0, max: 120, integer: true, hint: 'إضافة إلى أقساط الشهر الحالي؛ الأقدم أولًا، والباقي يبقى مستحقًا للمسيرات التالية. صفر = أقساط الشهر الحالي فقط.' },
     ],
   },
   {
@@ -165,18 +170,18 @@ const GROUPS: PolicyGroup[] = [
       { key: 'eos.months_per_year', label: 'مكافأة نهاية الخدمة', type: 'number', unit: 'شهر/سنة', min: 0 },
       { key: 'payroll.cycle_start_day', label: 'يوم بداية دورة المسير', type: 'number', unit: 'من الشهر', min: 1, max: 31, integer: true, hint: 'مسير سبتمبر بدورة 23 = من 23 أغسطس إلى 22 سبتمبر.' },
       // الخطوة 22 / SRS PR-11 (B5): رخصة الشركة الصغيرة لفصل المهام
-      { key: 'payroll.approval_self_approval_allowed', label: 'رخصة الشركة الصغيرة: يعتمد المسير من احتسبه', type: 'bool', perm: 'payroll.self_approval_licence', hint: 'الأصل مقفل: من احتسب نسخة المسير لا يعتمدها (PAYRUN-STATE-003). فعّلها فقط لو لا يوجد مستخدم ثانٍ يحمل صلاحية الاعتماد. تغييرها يتطلب صلاحية «رخصة الشركة الصغيرة» التي يمنحها مدير النظام فقط (صلاحية الإعدادات وحدها لا تكفي)، وكل اعتماد بها يُسجل في سجل المسير.' },
+      { key: 'payroll.approval_self_approval_allowed', label: 'رخصة الشركة الصغيرة: يعتمد المسير من احتسبه', type: 'bool', perm: 'payroll.self_approval_licence', hint: 'الأصل مقفل: من احتسب نسخة المسير لا يعتمدها. فعّلها فقط لو لا يوجد مستخدم ثانٍ يحمل صلاحية الاعتماد. تغييرها يتطلب صلاحية «رخصة الشركة الصغيرة» التي يمنحها مدير النظام فقط (صلاحية الإعدادات وحدها لا تكفي)، وكل اعتماد بها يُسجل في سجل المسير.' },
       { key: 'payroll.salary_evidence_mode', label: 'مصدر راتب شهر المسير', type: 'select', options: [
         { value: 'MONTHLY_HISTORY', label: 'السجل الشهري فقط — بلا راتب موثق للشهر يُستبعد الموظف بسبب ظاهر' },
         { value: 'MONTHLY_HISTORY_OR_CURRENT_FILE', label: 'انتقالي — من لا يملك سجلًا شهريًا يُحسب براتب الملف الحالي ويُوسم «غير موثق»' },
       ] },
-      { key: 'payroll.monthly_days', label: 'أيام الشهر للمسير', type: 'number', unit: 'يوم', min: 30, max: 30, hint: 'D3: ثابتة على 30 يومًا.' },
-      { key: 'payroll.daily_hours', label: 'ساعات العمل اليومية', type: 'number', unit: 'ساعة', min: 1, max: 24, hint: 'D2: أساس سعر الساعة والدقيقة.' },
-      { key: 'payroll.hourly_rate_basis', label: 'أساس سعر الساعة', type: 'select', options: [{ value: 'DAILY_HOURS', label: 'سعر اليوم ÷ ساعات العمل اليومية' }], hint: 'D2' },
-      { key: 'payroll.day_rate_basis', label: 'أساس سعر اليوم للغياب ونهاية الخدمة', type: 'select', options: [{ value: 'MONTHLY_FIXED_COMPONENTS_30', label: 'الأجر الشهري للمكونات الستة ÷ 30' }], hint: 'D3' },
+      { key: 'payroll.monthly_days', label: 'أيام الشهر للمسير', type: 'number', unit: 'يوم', min: 30, max: 30, readOnly: true, hint: 'ثابتة على 30 يومًا.' },
+      { key: 'payroll.daily_hours', label: 'ساعات العمل اليومية', type: 'number', unit: 'ساعة', min: 1, max: 24, hint: 'أساس سعر الساعة والدقيقة.' },
+      { key: 'payroll.hourly_rate_basis', label: 'أساس سعر الساعة', type: 'select', options: [{ value: 'DAILY_HOURS', label: 'سعر اليوم ÷ ساعات العمل اليومية' }], readOnly: true },
+      { key: 'payroll.day_rate_basis', label: 'أساس سعر اليوم للغياب ونهاية الخدمة', type: 'select', options: [{ value: 'MONTHLY_FIXED_COMPONENTS_30', label: 'الأجر الشهري للمكونات الستة ÷ 30' }], readOnly: true },
       { key: 'payroll.policy.rounding_mode', label: 'تقريب مبالغ الرواتب', type: 'select', options: [
         { value: 'HALF_UP', label: 'نصف لأعلى' }, { value: 'HALF_EVEN', label: 'نصف للزوجي' }, { value: 'FLOOR', label: 'لأسفل' }, { value: 'CEIL', label: 'لأعلى' },
-      ], hint: 'D4: نصف لأعلى بمنزلتين. يُنسخ إلى نسخ السياسات الجديدة.' },
+      ], hint: 'نصف لأعلى بمنزلتين. يُنسخ إلى نسخ السياسات الجديدة.' },
       { key: 'payroll.policy.rounding_scale', label: 'منازل التقريب', type: 'number', min: 0, max: 6, integer: true },
     ],
   },
@@ -306,7 +311,7 @@ export default function PoliciesPage() {
             }}>توليد مفتاح</button>
           </div>
           {deviceKeyWeak(v) && <p className="text-xs text-red-600">القيمة ضعيفة ولا يمكن حفظها. وجود مفتاح محفوظ ضعيف يوقف استقبال البصمات حتى تغييره.</p>}
-          <p className="text-xs text-gray-500">انسخ المفتاح لإعداد الجهاز أو الوسيط قبل الحفظ. يُرسل في ترويسة x-device-key.</p>
+          <p className="text-xs text-gray-500">انسخ المفتاح وضعه في إعداد جهاز البصمة أو الوسيط قبل الحفظ.</p>
         </div>
       )
     }
@@ -338,6 +343,7 @@ export default function PoliciesPage() {
         <select
           aria-label={f.label}
           className="input w-full max-w-xs"
+          disabled={f.readOnly}
           value={v}
           onChange={(e) => setVal(f.key, e.target.value)}
         >
@@ -349,11 +355,30 @@ export default function PoliciesPage() {
         </select>
       )
     }
+    if (f.key === WEEKEND_KEY) {
+      // أيام نهاية الأسبوع بأسمائها العربية؛ القيمة المحفوظة تبقى رموز الأيام مطبَّعة كما يقرؤها الخادم
+      const chosen = new Set(v.toUpperCase().split(',').map((p) => p.trim()).filter(Boolean))
+      const locked = !!f.readOnly || !calendar.context || calendar.context.currentMatchesHistory === false || !calendarScopeWritable('GLOBAL', 0)
+      return (
+        <div className="flex flex-wrap gap-2" role="group" aria-label={f.label}>
+          {WEEK_CODES.map((code) => (
+            <label key={code} className={`flex items-center gap-1 rounded-lg border px-2 py-1 text-sm ${chosen.has(code) ? 'border-primary-300 bg-primary-50 text-primary-700' : 'border-gray-200 text-gray-600'}`}>
+              <input type="checkbox" disabled={locked} checked={chosen.has(code)} onChange={() => {
+                const next = new Set(chosen)
+                if (next.has(code)) next.delete(code); else next.add(code)
+                setVal(f.key, WEEK_CODES.filter((day) => next.has(day)).join(','))
+              }} />
+              {WEEK_DAY_NAMES[code]}
+            </label>
+          ))}
+        </div>
+      )
+    }
     return (
       <div className="flex items-center gap-2 max-w-xs">
         <input
           type={f.type === 'number' ? 'number' : 'text'}
-          disabled={f.key === WEEKEND_KEY && (!calendar.context || calendar.context.currentMatchesHistory === false || !calendarScopeWritable('GLOBAL', 0))}
+          disabled={!!f.readOnly}
           min={f.type === 'number' ? (f.min ?? 0) : undefined}
           className="input w-full"
           aria-label={f.label}

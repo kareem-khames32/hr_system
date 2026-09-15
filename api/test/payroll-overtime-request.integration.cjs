@@ -51,9 +51,20 @@ async function configDuring(values, action) {
     }
   }
 }
+// قاعدة المالك (الخطوة 13): تغيير الأجر يسري من راتب شهر كامل عبر salaryChange بسياق التعديل المقروء، لا بمفاتيح الملف العامة
+async function changeSalary(f, basicSalary) {
+  const context = await request(admin, 'GET', `/employees/${f.emp.id}/salary-change-context`)
+  assert.equal(context.status, 200, JSON.stringify(context.body))
+  return request(admin, 'PATCH', `/employees/${f.emp.id}`, { salaryChange: { expectedRevision: context.body.historyRevision,
+    expectedCurrentSourceHash: context.body.currentSourceHash, effectivePayrollPeriod: context.body.currentPayrollPeriod,
+    reason: 'تغيير أجر بعد اعتماد الإضافي للاختبار', evidenceReference: `fixture:${f.emp.id}:salary`, salary: { ...context.body.current, basicSalary } } })
+}
+// كود دولة فريد لكل تركيب بحروف لاتينية كبيرة فقط (2–5) كما يشترط فحص لقطة التقويم؛ «T1» كان يُرفض فتتوقف المجموعة قبل منطق الإضافي
+const fixtureCountry = n => { let letters = ''; for (let rest = n; rest > 0; rest = Math.floor((rest - 1) / 26)) letters = String.fromCharCode(65 + ((rest - 1) % 26)) + letters; return `T${letters}` }
 async function fixture({ day = workDate, shift = {}, employee = {} } = {}) {
   const n = ++sequence
-  const branch = await repo('Branch').save({ code: `OT${n}`, name: `فرع اختبار إضافي ${n}`, country: `T${n}`, weekendDays: 'FRI,SAT' })
+  assert.ok(n <= 475254, 'fixture country code stays within five letters')
+  const branch = await repo('Branch').save({ code: `OT${n}`, name: `فرع اختبار إضافي ${n}`, country: fixtureCountry(n), weekendDays: 'FRI,SAT' })
   const department = await repo('Department').save({ branchId: branch.id, code: `OTDEPT${n}`, name: `قسم اختبار إضافي ${n}` })
   const person = (suffix, extra = {}) => repo('Employee').save({ employeeCode: `OT${n}${suffix}`, fullName: `موظف إضافي ${n} ${suffix}`,
     branchId: branch.id, departmentId: department.id, joinDate: '2020-01-01', basicSalary: 0,
@@ -513,7 +524,7 @@ test('OT-08 request: approved price, evidence and day kind remain frozen after s
   assert.equal(pending.status, 201, JSON.stringify(pending.body))
   const entry = await complete(f, pending.body)
   assert.equal(numeric(entry.amountSnapshot), 140.63); assert.equal(numeric(entry.hourlyRateSnapshot), 37.5)
-  const salaryEdit = await request(admin, 'PATCH', `/employees/${f.emp.id}`, { basicSalary: 18000 })
+  const salaryEdit = await changeSalary(f, '18000.00')
   assert.equal(salaryEdit.status, 200, JSON.stringify(salaryEdit.body))
   const holiday = await repo('PublicHoliday').save({ name: 'تعديل تقويم لاحق لاعتماد الإضافي', date: f.day, country: f.branch.country })
   try {
@@ -816,7 +827,7 @@ test('OT-05 payroll: pending approval contributes zero and recalculation after c
   assert.equal(afterDetail.status, 200, JSON.stringify(afterDetail.body)); assert.deepEqual(afterDetail.body.pendingOvertime, [])
   assert.equal(numeric(afterDetail.body.items.find(item => item.employeeId === f.emp.id).overtimeAmount), 0,
     'The pending list is live guidance and must not change the saved payroll calculation')
-  const changed = await request(admin, 'PATCH', `/employees/${f.emp.id}`, { basicSalary: 18000 })
+  const changed = await changeSalary(f, '18000.00')
   assert.equal(changed.status, 200, JSON.stringify(changed.body))
   const after = await payroll(f, f.day.slice(0, 7), { runId: before.run.id, reason: 'إعادة المسير بعد اكتمال اعتماد الإضافي' })
   assert.equal(numeric(after.item.overtimeHours), 2.25); assert.equal(numeric(after.item.overtimeAmount), 126.56)
@@ -875,7 +886,7 @@ test('OT-05 settlement boundary: settled overtime retains its approval price and
   const pending = await submit(f)
   assert.equal(pending.status, 201, JSON.stringify(pending.body))
   const entry = await complete(f, pending.body)
-  const salary = await request(admin, 'PATCH', `/employees/${f.emp.id}`, { basicSalary: 18000 })
+  const salary = await changeSalary(f, '18000.00')
   assert.equal(salary.status, 200, JSON.stringify(salary.body))
   const kase = await repo('OffboardingCase').save({ employeeId: f.emp.id, lastWorkingDay: f.day,
     status: 'IN_SETTLEMENT', terminationReason: 'termination' })

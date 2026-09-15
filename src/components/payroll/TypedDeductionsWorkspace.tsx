@@ -1,7 +1,7 @@
 'use client'
 
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, BarChart3, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Download, Plus, RefreshCw, Settings2, Users, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Download, Plus, RefreshCw, Settings2, Users, X } from 'lucide-react'
 import { ApiError, can, fetchDepartments, fetchEmployees, fetchTeams, type ApiDepartment, type ApiEmployee, type ApiTeam } from '@/lib/api'
 import { csvDateStamp, downloadCsv } from '@/lib/csv'
 import {
@@ -74,7 +74,6 @@ export function TypedDeductionsWorkspace({ currency, mode, focusRequestId = null
           <button type="button" className={tab === 'list' ? 'btn-primary' : 'btn-secondary'} onClick={() => setTab('list')}>القائمة والاعتماد</button>
           {canCreate && <button type="button" className={tab === 'create' ? 'btn-primary' : 'btn-secondary'} onClick={() => setTab('create')}><span className="flex items-center gap-1"><Plus size={16} />إنشاء خصم</span></button>}
           {canManage && <button type="button" className={tab === 'types' ? 'btn-primary' : 'btn-secondary'} onClick={() => setTab('types')}><span className="flex items-center gap-1"><Settings2 size={16} />أنواع الخصومات</span></button>}
-          <button type="button" className={tab === 'reports' ? 'btn-primary' : 'btn-secondary'} onClick={() => setTab('reports')}><span className="flex items-center gap-1"><BarChart3 size={16} />التقارير</span></button>
         </div>
       </div>
       {loadError && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm flex items-center gap-2"><AlertTriangle size={16} />{loadError}</div>}
@@ -82,7 +81,6 @@ export function TypedDeductionsWorkspace({ currency, mode, focusRequestId = null
         reasonMinLength={creatable?.reasonMinLength ?? 20} currentPeriod={creatable?.currentPeriod ?? ''} focusRequestId={focusRequestId} />}
       {tab === 'create' && creatable && <DeductionCreator creatable={creatable} currency={currency} onCreated={() => { setFilters(value => ({ ...value, view: 'created' })); setTab('list'); loadRows() }} />}
       {tab === 'types' && canManage && <DeductionTypesPanel onChanged={() => fetchDeductionCreatable().then(setCreatable).catch(() => undefined)} />}
-      {tab === 'reports' && <DeductionReportsPanel currency={currency} />}
     </div>
   )
 }
@@ -471,8 +469,6 @@ function DeductionCreator({ creatable, currency, onCreated }: { creatable: Deduc
         حدود النوع: الحد الأدنى {formatDeductionMoney(type.minAmount)}، الحد الأعلى {type.maxAmount ? formatDeductionMoney(type.maxAmount) : 'بلا'}،
         أقصى {type.maxPctOfGross ?? '—'}% من إجمالي الراتب للخصم الواحد
         {type.valueStep ? `، خطوة المدخل ${type.valueStep}` : ''}
-        {type.escalationDays ? `، التصعيد إلى ${DEDUCTION_ROLE_LABELS[type.escalationStep ?? 'DEPARTMENT_MANAGER']} فوق ${type.escalationDays} يوم راتب` : ''}
-        {Object.keys(type.basisEscalationDays ?? {}).length ? ` (حد خاص لدور: ${Object.entries(type.basisEscalationDays).map(([basis, days]) => `${DEDUCTION_ROLE_LABELS[basis as DeductionCreatorBasis]} ${days === null ? 'بلا تصعيد' : `${days} يوم`}`).join('، ')})` : ''}
         ، عمر الواقعة حتى {type.maxIncidentAgeDays} يومًا. السلسلة: {type.approvalSteps.map(role => DEDUCTION_ROLE_LABELS[role]).join(' ← ')}.
       </div>
       <label className="block text-sm text-gray-600">سبب الخصم ({creatable.reasonMinLength} حرفًا على الأقل — {form.reason.trim().length})
@@ -599,7 +595,7 @@ const CHAIN_ROLES: DeductionApprovalRole[] = ['DIRECT_MANAGER', 'TEAM_LEADER', '
 const emptyScope = () => ({ departmentIds: [] as number[], teamIds: [] as number[], employeeIds: [] as number[] })
 const emptyType = (): DeductionTypeInput => ({ code: '', nameAr: '', nameEn: '', category: 'DISCIPLINARY', calcMethod: 'DAYS_OF_SALARY', defaultValue: '', valueStep: '0.25', minAmount: '1',
   maxAmount: '', maxPctOfGross: '25', isExemptable: true, installmentAllowed: false, maxInstallments: 1, requiresAttachment: false,
-  creatorScopes: ['DIRECT_MANAGER', 'TEAM_LEADER', 'DEPARTMENT_MANAGER', 'HR'], approvalSteps: ['HR'], escalationDays: '1', escalationStep: 'DEPARTMENT_MANAGER',
+  creatorScopes: ['DIRECT_MANAGER', 'TEAM_LEADER', 'DEPARTMENT_MANAGER', 'HR'], approvalSteps: ['HR'], escalationDays: '', escalationStep: 'DEPARTMENT_MANAGER',
   maxIncidentAgeDays: 90, carryForwardPriority: 3, isActive: true, ownerDepartmentId: null, functionalScope: null, basisEscalationDays: {} })
 const blank = (value: unknown) => value === '' || value === undefined ? null : value
 
@@ -673,23 +669,20 @@ function DeductionTypesPanel({ onChanged }: { onChanged: () => void }) {
           <table className="w-full">
             <thead>
               <tr className="table-header">
-                <th className="text-right px-3 py-2">الكود</th><th className="text-right px-3 py-2">الاسم</th><th className="text-right px-3 py-2">الفئة والطريقة</th>
+                <th className="text-right px-3 py-2">الاسم</th><th className="text-right px-3 py-2">الفئة والطريقة</th>
                 <th className="text-right px-3 py-2">الحدود</th><th className="text-right px-3 py-2">المُنشئ والجهة</th><th className="text-right px-3 py-2">السلسلة</th>
-                <th className="text-center px-3 py-2">النسخة</th><th className="text-center px-3 py-2">الحالة</th><th className="text-center px-3 py-2"></th>
+                <th className="text-center px-3 py-2">الحالة</th><th className="text-center px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
               {types.map(row => (
                 <tr key={row.id} className="table-row">
-                  <td className="table-cell font-mono text-xs" dir="ltr">{row.code}</td>
                   <td className="table-cell text-sm">{row.nameAr}</td>
                   <td className="table-cell text-xs">{row.categoryLabel}<span className="block text-gray-400">{row.calcMethodLabel}{row.valueStep ? ` (خطوة ${row.valueStep})` : ''}</span></td>
                   <td className="table-cell text-xs">أدنى {formatDeductionMoney(row.minAmount)} · أعلى {row.maxAmount ? formatDeductionMoney(row.maxAmount) : 'بلا'} · {row.maxPctOfGross ?? '—'}%{row.installmentAllowed ? ` · حتى ${row.maxInstallments} أقساط` : ''}{row.isExemptable ? '' : ' · غير قابل للإعفاء'}</td>
                   <td className="table-cell text-xs">{row.creatorScopes.map(item => DEDUCTION_ROLE_LABELS[item]).join('، ')}
                     {row.ownerDepartmentId ? <span className="block text-gray-500">الجهة المالكة: {departmentName(row.ownerDepartmentId)}{row.functionalScope ? ` — نطاق وظيفي: ${row.functionalScope.departmentIds.length} قسم، ${row.functionalScope.teamIds.length} فريق، ${row.functionalScope.employeeIds.length} موظف` : ''}</span> : null}</td>
-                  <td className="table-cell text-xs">{row.approvalSteps.map(role => DEDUCTION_ROLE_LABELS[role]).join(' ← ')}{row.escalationDays ? <span className="block text-gray-400">تصعيد فوق {row.escalationDays} يوم إلى {DEDUCTION_ROLE_LABELS[row.escalationStep ?? 'DEPARTMENT_MANAGER']}</span> : null}
-                    {Object.keys(row.basisEscalationDays ?? {}).length ? <span className="block text-gray-400">{Object.entries(row.basisEscalationDays).map(([basis, days]) => `${DEDUCTION_ROLE_LABELS[basis as DeductionCreatorBasis]}: ${days === null ? 'بلا تصعيد' : `${days} يوم`}`).join('، ')}</span> : null}</td>
-                  <td className="table-cell text-center text-xs">{row.version}</td>
+                  <td className="table-cell text-xs">{row.approvalSteps.map(role => DEDUCTION_ROLE_LABELS[role]).join(' ← ')}</td>
                   <td className="table-cell text-center"><Badge className={row.isActive ? 'bg-success-100 text-success-700' : 'bg-gray-100 text-gray-500'}>{row.isActive ? 'مفعل' : 'معطل'}</Badge></td>
                   <td className="table-cell text-center"><button type="button" className="btn-secondary text-xs px-2 py-1" onClick={() => open(row)}>تعديل</button></td>
                 </tr>
@@ -702,13 +695,11 @@ function DeductionTypesPanel({ onChanged }: { onChanged: () => void }) {
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" role="dialog" aria-modal="true">
           <div className="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto space-y-3">
             <div className="flex items-center justify-between">
-              <h4 className="font-bold text-gray-800">{editing === 'new' ? 'نوع خصم جديد' : `تعديل ${editing.nameAr} (النسخة ${editing.version})`}</h4>
+              <h4 className="font-bold text-gray-800">{editing === 'new' ? 'نوع خصم جديد' : `تعديل ${editing.nameAr}`}</h4>
               <button type="button" aria-label="إغلاق" onClick={() => setEditing(null)}><X size={18} /></button>
             </div>
             <div className="grid md:grid-cols-3 gap-3 text-sm">
-              <label className="text-gray-600">الكود<input className="input mt-1" dir="ltr" value={form.code ?? ''} disabled={editing !== 'new'} onChange={event => setForm(value => ({ ...value, code: event.target.value.toUpperCase() }))} /></label>
               <label className="text-gray-600">الاسم العربي<input className="input mt-1" value={form.nameAr ?? ''} onChange={event => setForm(value => ({ ...value, nameAr: event.target.value }))} /></label>
-              <label className="text-gray-600">الاسم الإنجليزي<input className="input mt-1" dir="ltr" value={form.nameEn ?? ''} onChange={event => setForm(value => ({ ...value, nameEn: event.target.value }))} /></label>
               <label className="text-gray-600">الفئة
                 <select className="input mt-1" value={form.category} disabled={editing !== 'new' && (editing.category === 'STATUTORY' || editing.category === 'COURT_ORDER')}
                   onChange={event => setForm(value => ({ ...value, category: event.target.value as DeductionCategory }))}>
@@ -725,21 +716,6 @@ function DeductionTypesPanel({ onChanged }: { onChanged: () => void }) {
               <label className="text-gray-600">الحد الأدنى للمبلغ<input className="input mt-1" dir="ltr" value={form.minAmount ?? ''} onChange={event => setForm(value => ({ ...value, minAmount: event.target.value }))} /></label>
               <label className="text-gray-600">الحد الأعلى للمبلغ (فارغ = بلا)<input className="input mt-1" dir="ltr" value={form.maxAmount ?? ''} onChange={event => setForm(value => ({ ...value, maxAmount: event.target.value }))} /></label>
               <label className="text-gray-600">أقصى % من إجمالي الراتب<input className="input mt-1" dir="ltr" value={form.maxPctOfGross ?? ''} onChange={event => setForm(value => ({ ...value, maxPctOfGross: event.target.value }))} /></label>
-              <label className="text-gray-600">حد التصعيد بأيام الراتب (فارغ = بلا)<input className="input mt-1" dir="ltr" value={form.escalationDays ?? ''} onChange={event => setForm(value => ({ ...value, escalationDays: event.target.value }))} /></label>
-              <label className="text-gray-600">خطوة التصعيد
-                <select className="input mt-1" value={form.escalationStep ?? 'DEPARTMENT_MANAGER'} onChange={event => setForm(value => ({ ...value, escalationStep: event.target.value as DeductionApprovalRole }))}>
-                  {(['DEPARTMENT_MANAGER', 'BRANCH_MANAGER', 'EXECUTIVE'] as DeductionApprovalRole[]).map(role => <option key={role} value={role}>{DEDUCTION_ROLE_LABELS[role]}</option>)}
-                </select>
-              </label>
-              <label className="text-gray-600">أقصى عمر للواقعة (يوم)<input type="number" className="input mt-1" min={0} value={form.maxIncidentAgeDays ?? 90} onChange={event => setForm(value => ({ ...value, maxIncidentAgeDays: Number(event.target.value) }))} /></label>
-              <label className="text-gray-600">أولوية الترحيل (الأعلى يُحصَّل أولًا)<input type="number" className="input mt-1" min={1} max={99} value={form.carryForwardPriority ?? 3} onChange={event => setForm(value => ({ ...value, carryForwardPriority: Number(event.target.value) }))} /></label>
-              <label className="text-gray-600">الجهة المالكة (DD-01)
-                <select className="input mt-1" value={form.ownerDepartmentId ?? ''} onChange={event => setForm(value => ({ ...value, ownerDepartmentId: event.target.value ? Number(event.target.value) : null,
-                  ...(event.target.value ? {} : { functionalScope: null, creatorScopes: (value.creatorScopes ?? []).filter(item => item !== 'FUNCTION_OWNER') }) }))}>
-                  <option value="">بلا جهة مالكة</option>
-                  {org.departments.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}
-                </select>
-              </label>
             </div>
             <div className="flex flex-wrap gap-4 text-sm">
               <label className="flex items-center gap-1"><input type="checkbox" checked={protectedCategory ? false : !!form.isExemptable} disabled={protectedCategory} onChange={event => setForm(value => ({ ...value, isExemptable: event.target.checked }))} />يقبل الإعفاء المالي{protectedCategory ? ' (ممنوع للنظامي والحكم القضائي، والفئة ثابتة)' : ''}</label>
@@ -749,31 +725,63 @@ function DeductionTypesPanel({ onChanged }: { onChanged: () => void }) {
               <label className="flex items-center gap-1"><input type="checkbox" checked={!!form.isActive} onChange={event => setForm(value => ({ ...value, isActive: event.target.checked }))} />مفعل</label>
             </div>
             <fieldset className="text-sm">
-              <legend className="text-gray-700 font-medium mb-1">من يُنشئ هذا النوع (بعلاقته بالموظف) وحد التصعيد الخاص بكل دور (DD-03)</legend>
+              <legend className="text-gray-700 font-medium mb-1">من يُنشئ هذا النوع (بعلاقته بالموظف)</legend>
               <div className="flex flex-wrap gap-3">{CREATOR_BASES.map(basis => (
                 <label key={basis} className={`flex items-center gap-1 ${basis === 'FUNCTION_OWNER' && !form.ownerDepartmentId ? 'text-gray-400' : ''}`}>
                   <input type="checkbox" disabled={basis === 'FUNCTION_OWNER' && !form.ownerDepartmentId} checked={(form.creatorScopes ?? []).includes(basis)}
                     onChange={() => setForm(value => ({ ...value, creatorScopes: toggleList(value.creatorScopes, basis) }))} />{DEDUCTION_ROLE_LABELS[basis]}
                 </label>
               ))}</div>
-              {form.ownerDepartmentId ? <p className="text-xs text-gray-500 mt-1">النوع مملوك لجهة: الأدوار الهيكلية لا تُنشئه إلا لمن ينتمي لتلك الجهة؛ «مدير الجهة المالكة» يُنشئه على نطاقه الوظيفي أدناه.</p> : null}
-              <div className="grid md:grid-cols-2 gap-2 mt-2">
-                {(form.creatorScopes ?? []).map(basis => (
-                  <div key={basis} className="flex items-center gap-2 text-xs">
-                    <span className="w-28 text-gray-600">{DEDUCTION_ROLE_LABELS[basis]}</span>
-                    <select className="input py-1" value={matrixMode(basis)} onChange={event => setMatrix(basis, event.target.value as 'inherit' | 'never' | 'custom', form.escalationDays || '1')}>
-                      <option value="inherit">حد النوع ({form.escalationDays || 'بلا'})</option>
-                      <option value="custom">حد خاص بالأيام</option>
-                      <option value="never">بلا تصعيد</option>
-                    </select>
-                    {matrixMode(basis) === 'custom' && <input className="input py-1 w-20" dir="ltr" value={String(form.basisEscalationDays?.[basis] ?? '')} onChange={event => setMatrix(basis, 'custom', event.target.value)} />}
-                  </div>
-                ))}
-              </div>
             </fieldset>
+            <fieldset className="text-sm">
+              <legend className="text-gray-700 font-medium mb-1">خطوات الاعتماد قبل الموارد البشرية (بترتيب الاختيار؛ خطوة الموارد البشرية الأخيرة ثابتة)</legend>
+              <div className="flex flex-wrap gap-3">{CHAIN_ROLES.map(role => <label key={role} className="flex items-center gap-1"><input type="checkbox" checked={(form.approvalSteps ?? []).includes(role)} onChange={() => setForm(value => ({ ...value, approvalSteps: toggleList(value.approvalSteps, role) }))} />{DEDUCTION_ROLE_LABELS[role]}</label>)}</div>
+              <p className="text-xs text-gray-400 mt-1">السلسلة: {[...(form.approvalSteps ?? []).filter(role => role !== 'HR'), 'HR'].map(role => DEDUCTION_ROLE_LABELS[role as DeductionApprovalRole]).join(' ← ')}. الدور الهيكلي بلا معتمِد يصعد لمستوى أعلى (إعداد «بديل المعتمِد المفقود»).</p>
+            </fieldset>
+            <details className="text-sm border border-gray-100 rounded-xl p-3">
+              <summary className="cursor-pointer text-gray-700 font-medium">خيارات إضافية</summary>
+              <div className="space-y-3 mt-3">
+                <div className="grid md:grid-cols-3 gap-3">
+                  <label className="text-gray-600">الكود<input className="input mt-1" dir="ltr" value={form.code ?? ''} disabled={editing !== 'new'} onChange={event => setForm(value => ({ ...value, code: event.target.value.toUpperCase() }))} /></label>
+                  <label className="text-gray-600">الاسم الإنجليزي<input className="input mt-1" dir="ltr" value={form.nameEn ?? ''} onChange={event => setForm(value => ({ ...value, nameEn: event.target.value }))} /></label>
+                  <label className="text-gray-600">حد التصعيد بأيام الراتب (فارغ = بلا)<input className="input mt-1" dir="ltr" value={form.escalationDays ?? ''} onChange={event => setForm(value => ({ ...value, escalationDays: event.target.value }))} /></label>
+                  <label className="text-gray-600">خطوة التصعيد
+                    <select className="input mt-1" value={form.escalationStep ?? 'DEPARTMENT_MANAGER'} onChange={event => setForm(value => ({ ...value, escalationStep: event.target.value as DeductionApprovalRole }))}>
+                      {(['DEPARTMENT_MANAGER', 'BRANCH_MANAGER', 'EXECUTIVE'] as DeductionApprovalRole[]).map(role => <option key={role} value={role}>{DEDUCTION_ROLE_LABELS[role]}</option>)}
+                    </select>
+                  </label>
+                  <label className="text-gray-600">أقصى عمر للواقعة (يوم)<input type="number" className="input mt-1" min={0} value={form.maxIncidentAgeDays ?? 90} onChange={event => setForm(value => ({ ...value, maxIncidentAgeDays: Number(event.target.value) }))} /></label>
+                  <label className="text-gray-600">أولوية الترحيل (الأعلى يُحصَّل أولًا)<input type="number" className="input mt-1" min={1} max={99} value={form.carryForwardPriority ?? 3} onChange={event => setForm(value => ({ ...value, carryForwardPriority: Number(event.target.value) }))} /></label>
+                  <label className="text-gray-600">الجهة المالكة
+                    <select className="input mt-1" value={form.ownerDepartmentId ?? ''} onChange={event => setForm(value => ({ ...value, ownerDepartmentId: event.target.value ? Number(event.target.value) : null,
+                      ...(event.target.value ? {} : { functionalScope: null, creatorScopes: (value.creatorScopes ?? []).filter(item => item !== 'FUNCTION_OWNER') }) }))}>
+                      <option value="">بلا جهة مالكة</option>
+                      {org.departments.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}
+                    </select>
+                  </label>
+                </div>
+                {form.ownerDepartmentId ? <p className="text-xs text-gray-500">النوع مملوك لجهة: الأدوار الهيكلية لا تُنشئه إلا لمن ينتمي لتلك الجهة؛ «مدير الجهة المالكة» يُنشئه على نطاقه الوظيفي أدناه.</p> : null}
+                {(form.creatorScopes ?? []).length > 0 && (
+                  <div>
+                    <p className="text-gray-700 font-medium mb-1">حد التصعيد الخاص بكل دور</p>
+                    <div className="grid md:grid-cols-2 gap-2">
+                      {(form.creatorScopes ?? []).map(basis => (
+                        <div key={basis} className="flex items-center gap-2 text-xs">
+                          <span className="w-28 text-gray-600">{DEDUCTION_ROLE_LABELS[basis]}</span>
+                          <select className="input py-1" value={matrixMode(basis)} onChange={event => setMatrix(basis, event.target.value as 'inherit' | 'never' | 'custom', form.escalationDays || '1')}>
+                            <option value="inherit">حد النوع ({form.escalationDays || 'بلا'})</option>
+                            <option value="custom">حد خاص بالأيام</option>
+                            <option value="never">بلا تصعيد</option>
+                          </select>
+                          {matrixMode(basis) === 'custom' && <input className="input py-1 w-20" dir="ltr" value={String(form.basisEscalationDays?.[basis] ?? '')} onChange={event => setMatrix(basis, 'custom', event.target.value)} />}
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
             {form.ownerDepartmentId ? (
               <fieldset className="text-sm border border-gray-100 rounded-xl p-3">
-                <legend className="text-gray-700 font-medium px-1">النطاق الوظيفي للجهة المالكة (DD-04) — فارغ = أقسام الجهة نفسها</legend>
+                <legend className="text-gray-700 font-medium px-1">النطاق الوظيفي للجهة المالكة — فارغ = أقسام الجهة نفسها</legend>
                 <p className="text-xs text-gray-500 mb-1">الأقسام (مع فروعها)</p>
                 <div className="flex flex-wrap gap-3">{org.departments.map(row => <label key={row.id} className="flex items-center gap-1"><input type="checkbox" checked={scope.departmentIds.includes(row.id)} onChange={() => toggleScope('departmentIds', row.id)} />{row.name}</label>)}</div>
                 <p className="text-xs text-gray-500 mt-2 mb-1">الفرق</p>
@@ -789,11 +797,8 @@ function DeductionTypesPanel({ onChanged }: { onChanged: () => void }) {
                 ))}</div>}
               </fieldset>
             ) : null}
-            <fieldset className="text-sm">
-              <legend className="text-gray-700 font-medium mb-1">خطوات الاعتماد قبل الموارد البشرية (بترتيب الاختيار؛ خطوة الموارد البشرية الأخيرة ثابتة)</legend>
-              <div className="flex flex-wrap gap-3">{CHAIN_ROLES.map(role => <label key={role} className="flex items-center gap-1"><input type="checkbox" checked={(form.approvalSteps ?? []).includes(role)} onChange={() => setForm(value => ({ ...value, approvalSteps: toggleList(value.approvalSteps, role) }))} />{DEDUCTION_ROLE_LABELS[role]}</label>)}</div>
-              <p className="text-xs text-gray-400 mt-1">السلسلة: {[...(form.approvalSteps ?? []).filter(role => role !== 'HR'), 'HR'].map(role => DEDUCTION_ROLE_LABELS[role as DeductionApprovalRole]).join(' ← ')}. الدور الهيكلي بلا معتمِد يصعد لمستوى أعلى (إعداد «بديل المعتمِد المفقود»).</p>
-            </fieldset>
+              </div>
+            </details>
             {formError && <p role="alert" className="text-sm text-red-600">{formError}</p>}
             <div className="flex justify-end gap-2">
               <button type="button" className="btn-secondary" onClick={() => setEditing(null)} disabled={busy}>رجوع</button>
@@ -855,7 +860,7 @@ function DeductionReportsPanel({ currency }: { currency: string }) {
         <ReportSection title="المطابقة: سطور الخصم المصنف في المسيرات = قيود الدفتر" file="reconciliation" empty="لا مسيرات معتمدة أو مصروفة بخصومات مصنفة في الفترة (أو لا تملك صلاحية عرض الخصومات)."
           note="أي فرق غير صفري استثناء يُراجع قبل الصرف."
           headers={['المسير', 'الاسم', 'الشهر', 'الحالة', 'السطور', `من المسير (${currency})`, `من الدفتر (${currency})`, 'الفرق']}
-          rows={report.reconciliation.map(row => [row.runId, row.runName ?? '', row.period, row.status === 'PAID' ? 'مصروف' : 'معتمد', row.lines, m(row.breakdownTyped), m(row.ledgerTyped), row.difference === '0.00' ? '0.00' : `⚠ ${m(row.difference)}`])} />
+          rows={report.reconciliation.map(row => [row.runId, row.runName ?? '', row.period, row.status === 'PAID' ? 'مصروف' : 'معتمد', row.lines, m(row.breakdownTyped), m(row.ledgerTyped), row.difference === '0.00' ? '0.00' : `فرق ${m(row.difference)}`])} />
         <ReportSection title="الخصومات بحسب النوع والجهة المُنزِلة" file="by-type" empty="لا قيود في الفترة."
           headers={['الشهر', 'النوع', 'الفئة', 'الجهة المُنزِلة', 'الطلبات', `المستحق (${currency})`, `المحصل (${currency})`, `المعكوس (${currency})`]}
           rows={report.byType.map(row => [row.period, row.typeName ?? row.typeCode ?? '', row.categoryLabel ?? '', row.basisLabel, row.requests, m(row.due), m(row.collected), m(row.reversed)])} />

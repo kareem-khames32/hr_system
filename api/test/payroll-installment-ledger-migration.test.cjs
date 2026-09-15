@@ -56,6 +56,14 @@ before(async () => {
   master = await pool('master'); await master.request().query(`CREATE DATABASE [${database}]`); created = true
   connection = await pool(database)
   ds = await runner.openDataSource(database, [LoanInstallment, LoanInstallmentAllocation, LoanInstallmentEvent, ...Object.values(policyEntities), ...Object.values(definitionEntities)])
+  // هذا الاختبار يثبت عقد009 (ومعه010)؛ عمودا عكس المسير في032 (C8) يُختبران مستقلًا ولا يُنسبان إلى009،
+  // وأعمدة «طريقة الخصم» السبعة على payroll_policies في033 يطبقها المُرحّل المجمّع (db-migrate.cjs).
+  const charge033 = ['lateDeductionEnabled', 'latenessTierSetId', 'earlyLeaveDeductionEnabled', 'shortfallEnabled', 'shortfallMode', 'shortfallValue', 'absencePenaltyDays']
+  for (const metadata of ds.entityMetadatas) {
+    const later = metadata.tableName === 'loan_installment_allocations' ? ['reversalRunId', 'reversedAt'] : metadata.tableName === 'payroll_policies' ? charge033 : []
+    metadata.columns = metadata.columns.filter(column => !later.includes(column.databaseName))
+    metadata.ownColumns = metadata.ownColumns.filter(column => !later.includes(column.databaseName))
+  }
   const n = ds.namingStrategy
   await connection.request().batch(`CREATE TABLE dbo.loan_installments(
     id int NOT NULL IDENTITY(1,1),loanId int NOT NULL,dueDate date NOT NULL,amount decimal(18,2) NOT NULL,

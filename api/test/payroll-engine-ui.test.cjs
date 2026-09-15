@@ -23,7 +23,8 @@ test('payslip: the lateness tier effect row shows minutes, range, multiplier and
   const effects = ui.latenessTierEffects(breakdown)
   assert.equal(effects.rows.length, 1); assert.equal(effects.set.setId, 7)
   const html = renderToStaticMarkup(React.createElement(PayrollLatenessTierBreakdown, { item: { breakdown }, currency: 'SAR' }))
-  assert.match(html, /أثر شرائح التأخير/); assert.match(html, /مجموعة الشرائح #7 السارية من شهر 2026-08/)
+  // تبسيط الرواتب: بلا رقم مجموعة الشرائح ولا شهر سريانها ولا «لقطة سياسة المسير»
+  assert.match(html, /أثر شرائح التأخير/); assert.match(html, /شرائح التأخير المطبّقة على شهر المسير/); assert.doesNotMatch(html, /#7|السارية من شهر|لقطة سياسة المسير/)
   assert.match(html, /61–120 \(ساعة ونصف\)/); assert.match(html, /× 1\.5/); assert.match(html, /61 دقيقة × 1\.5 × سعر الدقيقة 0\.625000/)
   assert.equal(renderToStaticMarkup(React.createElement(PayrollLatenessTierBreakdown, { item: { breakdown: '{}' }, currency: 'SAR' })), '')
   assert.equal(ui.latenessTierEffects('{bad'), null)
@@ -86,10 +87,11 @@ test('engine panel: approval readiness from the server check, the source plan wi
   assert.match(panel, /LEGACY بلا ظل \(لا يُعتمد\)/)
 })
 
-test('screens are wired: snapshot and engine panels on the run page, explicit refresh passed to recalculation, dated editor on formulas, tier effect on the payslip; legacy tier writes removed', () => {
+test('screens are wired (payroll simplification): the run page no longer shows the snapshot and engine panels, recalculation always refreshes to the current formula with the shown fingerprint, dated editor on formulas, tier effect on the payslip; legacy tier writes removed', () => {
   const page = read('src/app/payroll/page.tsx')
-  assert.match(page, /<PayrollPolicySnapshotPanel /); assert.match(page, /<PayrollRunEnginePanel /)
-  assert.match(page, /refreshPolicySnapshot: true, expectedPolicySnapshotHash: policyRefresh\.expectedHash/)
+  assert.doesNotMatch(page, /<PayrollPolicySnapshotPanel |<PayrollRunEnginePanel /)
+  assert.match(page, /recalculatePayrollRunWithCurrentFormula\(/)
+  assert.match(read('src/lib/payroll-runs-api.ts'), /refreshPolicySnapshot: true, expectedPolicySnapshotHash: snapshot\.currentHash/)
   const formulas = read('src/app/payroll/formulas/page.tsx')
   assert.match(formulas, /<LatenessTierSetsEditor \/>/); assert.doesNotMatch(formulas, /createLatenessTier|deleteLatenessTier|updateLatenessTier/)
   assert.match(read('src/app/payroll/payslip/[id]/page.tsx'), /<PayrollLatenessTierBreakdown item=\{item\}/)

@@ -88,7 +88,10 @@ const labelOf = (k: string): string =>
 
 export const payloadFieldLabel = labelOf
 
-// كل المفاتيح بلا حد أقصى ولا فلترة نوع — «مفتاح: قيمة • مفتاح: قيمة»
+// حقول يكتبها الخادم للتدقيق (فحص سقف السلفة وقراراته) — تعرضها الشاشة ملخصًا عربيًا مستقلًا، ولا تظهر خامًا في حمولة الطلب.
+export const SERVER_PAYLOAD_KEYS: readonly string[] = ['capCheck', 'capApprovals', 'exceptionalBy']
+
+// كل مفاتيح المستخدم بلا حد أقصى ولا فلترة نوع — «مفتاح: قيمة • مفتاح: قيمة»
 // omit: مفاتيح تعرضها الشاشة في أعمدتها الخاصة فقط (لا تُكرَّر) — الباقي كله يظهر
 export const payloadSummary = (raw?: string | null, omit: string[] = []): string => {
   let payload: Record<string, unknown> = {}
@@ -99,7 +102,7 @@ export const payloadSummary = (raw?: string | null, omit: string[] = []): string
     /* حمولة تالفة — ملخّص فارغ */
   }
   return Object.entries(payload)
-    .filter(([k]) => !omit.includes(k))
+    .filter(([k]) => !omit.includes(k) && !SERVER_PAYLOAD_KEYS.includes(k))
     .map(([k, v]) => `${labelOf(k)}: ${payloadValueLabel(k, v)}`)
     .join(' • ')
 }

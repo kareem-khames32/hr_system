@@ -25,12 +25,10 @@ import { PayrollOvertimeBreakdown } from '@/components/PayrollOvertimeBreakdown'
 import { PayrollInstallmentBreakdown } from '@/components/PayrollInstallmentBreakdown'
 import { PayrollObligationBreakdown } from '@/components/PayrollObligationBreakdown'
 import { PayrollLatenessTierBreakdown } from '@/components/payroll/PayrollLatenessTierBreakdown'
-// الخطوة 26 (EX-04): الإعفاء المالي في القسيمة — الأصل والمُعفى وبعد الإعفاء ورقم القرار وسببه
+// تبسيط الرواتب (2026-09-15): الخصم الملغى يظهر سطرًا واحدًا «أُلغي خصم كذا بمبلغ كذا» بلا رقم القرار
 import { PayrollExemptionPayslipSection } from '@/components/payroll/PayrollExemptionPayslipSection'
 import { savedFinancialExemptions, type ExemptionComponent, type PayslipExemption } from '@/lib/financial-exemptions-api'
 import type { PayrollObligationDetail } from '@/lib/deductions-api'
-// C8 / الخطوة 31: القسيمة المعكوسة تبقى كما صُرفت وتُوسم بعكسها وسببه وبقسيمة المسير التكميلي المربوطة
-import type { PayslipReversalInfo } from '@/lib/payroll-corrections-api'
 // الخطوة 22 (B5): منسّق المبالغ الموحد (نفس جدول المسير)، والتغطية والمعامل، وقيد الصرف
 import { formatMoney, formatMoneyOrDash, sumMoney } from '@/lib/money'
 import { payrollCoverageText, payrollItemCoverage } from '@/lib/payroll-item-totals'
@@ -68,6 +66,7 @@ const payMethodLabels: Record<string, string> = {
   transfer: 'تحويل بنكي',
   cash: 'نقداً',
   cheque: 'شيك',
+  visa: 'فيزا',
 }
 
 function numberToArabicWords(num: number, currency: string): string {
@@ -129,7 +128,6 @@ export default function PayslipPage() {
   // تتبع كل قيد دفتر (الخصم المصنف بنوعه وسببه وطلبه وسعر اليوم) كما يعيده الخادم مع القسيمة
   const [obligationDetails, setObligationDetails] = useState<PayrollObligationDetail[] | null>(null)
   const [financialExemptions, setFinancialExemptions] = useState<PayslipExemption[] | null>(null)
-  const [reversal, setReversal] = useState<PayslipReversalInfo | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -137,7 +135,6 @@ export default function PayslipPage() {
       .then(([data, branches]) => {
         setObligationDetails((data as { obligationDetails?: PayrollObligationDetail[] }).obligationDetails ?? [])
         setFinancialExemptions((data as { financialExemptions?: PayslipExemption[] }).financialExemptions ?? [])
-        setReversal((data as { reversal?: PayslipReversalInfo | null }).reversal ?? null)
         setItem(data.item)
         setRun(data.run)
         setEmployee(data.employee)
@@ -147,13 +144,13 @@ export default function PayslipPage() {
       .finally(() => setLoading(false))
   }, [params.id])
 
+  // تبسيط الرواتب (2026-09-15): السطور الإنجليزية تحت أسماء البنود أُزيلت
   const salaryComponents = item ? savedSalaryComponents(item) : null
   const salaryEarnings = item
-    ? salaryComponents?.map(component => ({ name: component.nameAr, nameEn: component.nameEn, amount: component.earnedAmount })) ?? [
-        { name: 'الراتب الأساسي', nameEn: 'Basic Salary', amount: Number(item.basicSalary) },
+    ? salaryComponents?.map(component => ({ name: component.nameAr, amount: component.earnedAmount })) ?? [
+        { name: 'الراتب الأساسي', amount: Number(item.basicSalary) },
         {
           name: 'البدلات',
-          nameEn: 'Allowances',
           amount: Number(item.allowances ?? 0),
         },
       ]
@@ -163,59 +160,52 @@ export default function PayslipPage() {
         ...salaryEarnings,
         {
           name: 'العمل الإضافي',
-          nameEn: `Overtime (${Number(item.overtimeHours)} h)`,
           amount: Number(item.overtimeAmount),
         },
         {
           name: 'إضافات أخرى (مكافآت/بدلات)',
-          nameEn: 'Other Additions',
           amount: Number(item.otherAdditions ?? 0),
         },
       ]
     : []
 
-  const deductions: Array<{ name: string; nameEn: string; amount: number; component?: ExemptionComponent }> = item
+  const deductions: Array<{ name: string; amount: number; component?: ExemptionComponent }> = item
     ? [
         {
           name: 'خصم التأخير',
-          nameEn: `Lateness (${Number(item.lateMinutes)} min)`,
           amount: Number(item.latenessDeduction),
           component: 'LATENESS',
         },
         {
           name: 'خصم نقص ساعات العمل',
-          nameEn: `Work shortfall (${Number(item.shortfallMinutes ?? 0)} min observed)`,
           amount: Number(item.shortfallDeduction ?? 0),
           component: 'SHORTFALL',
         },
         {
           name: 'خصم الغياب',
-          nameEn: `Absence (${Number(item.absenceDays ?? 0)} d)`,
           amount: Number(item.absenceDeduction ?? 0),
           component: 'ABSENCE',
         },
         {
           name: 'إجازة بدون راتب',
-          nameEn: `Unpaid Leave (${Number(item.unpaidLeaveDays)} d)`,
           amount: Number(item.unpaidLeaveDeduction),
         },
-        { name: 'أقساط السلف', nameEn: 'Loan Installments', amount: Number(item.loanInstallments), component: 'LOAN' },
+        { name: 'أقساط السلف', amount: Number(item.loanInstallments), component: 'LOAN' },
         {
           name: 'خصومات الدفتر (مصنفة/عهدة/استرداد) — تفصيلها أدناه',
-          nameEn: 'Ledger deductions (typed/custody/recovery)',
           amount: Number(item.otherDeductions ?? 0),
           component: 'TYPED',
         },
       ]
     : []
-  // الخطوة 26 (EX-04 قاعدة 5): البند المُعفى في موضعه الطبيعي بين الخصومات — المُعفى ورقم الإعفاء، والأصل قبل الإعفاء لخصومات الحضور
+  // الخطوة 26 (EX-04 قاعدة 5): البند المُعفى في موضعه الطبيعي بين الخصومات — المُعفى، والأصل قبل الإعفاء لخصومات الحضور
+  // تبسيط الرواتب (2026-09-15): رقم الإعفاء لا يظهر في الملاحظة
   const savedExemptions = item ? savedFinancialExemptions(item) : null
   const exemptionNote = (component?: ExemptionComponent) => {
     const total = component ? savedExemptions?.totals.byComponent[component] : undefined
     if (!component || !savedExemptions || !total) return null
-    const ids = [...new Set(savedExemptions.lines.filter(line => line.component === component).map(line => line.exemptionId))]
     const requested = component === 'LATENESS' ? savedExemptions.requested.lateness : component === 'SHORTFALL' ? savedExemptions.requested.shortfall : component === 'ABSENCE' ? savedExemptions.requested.absence : null
-    return `${requested ? `الأصل قبل الإعفاء ${formatMoney(requested)} — ` : ''}مُعفى ${formatMoney(total.exempted)} (إعفاء ${ids.map(id => `#${id}`).join('، ')})`
+    return `${requested ? `الأصل قبل الإعفاء ${formatMoney(requested)} — ` : ''}مُعفى ${formatMoney(total.exempted)}`
   }
 
   const totalEarnings = sumMoney(earnings.map(e => e.amount))
@@ -226,8 +216,8 @@ export default function PayslipPage() {
     try {
       const detail = item?.breakdown ? JSON.parse(item.breakdown) : {}
       const windows = Array.isArray(detail.attendanceExemptions) ? detail.attendanceExemptions : []
-      const notes = windows.map((window: { id: number; effectiveFrom: string; effectiveTo: string | null }) =>
-        `خصومات الحضور غير مولّدة في أيام الاستثناء #${window.id} من ${window.effectiveFrom} إلى ${window.effectiveTo ?? 'نهاية مفتوحة'}`)
+      const notes = windows.map((window: { effectiveFrom: string; effectiveTo: string | null }) =>
+        `خصومات الحضور غير مولّدة في أيام استثناء الحضور من ${window.effectiveFrom} إلى ${window.effectiveTo ?? 'نهاية مفتوحة'}`)
       if (Number(detail.exemptUnpaidLeaveDays) > 0) notes.push(`إجازة بلا أجر ${detail.exemptUnpaidLeaveDays} يوم — غير مخصومة بقرار الاستثناء`)
       return notes as string[]
     } catch { return [] }
@@ -249,7 +239,7 @@ export default function PayslipPage() {
             {/* «إرسال بالبريد» و«تحميل PDF» أُخفيا لأنهما بلا تنفيذ؛ الطباعة تتيح الحفظ PDF من المتصفح (الخطوة 30) */}
             <button type="button" onClick={() => window.print()} className="btn-primary flex items-center gap-2">
               <Printer size={18} />
-              طباعة / حفظ PDF
+              طباعة / حفظ
             </button>
           </div>
         </div>
@@ -270,13 +260,10 @@ export default function PayslipPage() {
         <div className="card max-w-4xl mx-auto" id="payslip">
           {/* Header */}
           <div className="flex items-start justify-between border-b border-gray-200 pb-6 mb-6">
+            {/* تبسيط الرواتب (2026-09-15): مربع الشعار بحرفي «HR» اللاتينيين أُخفي؛ اسم الفرع يبقى عنوانًا للقسيمة */}
             <div className="flex items-center gap-4">
-              <div className="w-20 h-20 bg-gradient-to-br from-primary-500 to-primary-600 rounded-2xl flex items-center justify-center text-white font-bold text-2xl">
-                HR
-              </div>
               <div>
                 <h1 className="text-xl font-bold text-gray-800">{branch?.name ?? 'نظام الموارد البشرية'}</h1>
-                <p className="text-gray-500">{branch?.nameEn ?? ''}</p>
                 <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
                   {branch?.city && (
                     <span className="flex items-center gap-1">
@@ -289,38 +276,11 @@ export default function PayslipPage() {
             </div>
             <div className="text-left">
               <h2 className="text-2xl font-bold text-primary-600">قسيمة الراتب</h2>
-              <p className="text-gray-500">Payslip</p>
               <p className="text-lg font-bold text-gray-800 mt-2">{run.period}</p>
             </div>
           </div>
 
-          {/* C8 / الخطوة 31: عكس صرف هذه القسيمة بمسير العكس وسببه، وقسيمة المسير التكميلي المربوطة — القسيمة نفسها تبقى كما صُرفت */}
-          {reversal?.line && (
-            <div role="status" className={`rounded-xl p-4 mb-6 text-sm ${reversal.line.status === 'POSTED' ? 'bg-red-50 text-red-800' : 'bg-amber-50 text-amber-900'}`}>
-              <p className="font-bold">
-                {reversal.line.status === 'POSTED' ? 'عُكس صرف هذه القسيمة' : 'عكس صرف هذه القسيمة بانتظار التنفيذ'} — مسير العكس #{reversal.line.reversalRunId}
-                {reversal.line.reversalRunName ? ` «${reversal.line.reversalRunName}»` : ''}
-              </p>
-              <p>الصافي المعكوس {formatMoney(reversal.line.netPay)} {currency}{reversal.line.postedAt ? ` • نُفّذ ${reversal.line.postedAt.slice(0, 10)}` : ''}</p>
-              {reversal.line.reason && <p>السبب: {reversal.line.reason}</p>}
-            </div>
-          )}
-          {reversal && reversal.supplementary.length > 0 && (
-            <div className="rounded-xl bg-blue-50 p-4 mb-6 text-sm text-blue-900">
-              <p className="font-bold">صُرف تصحيحها بالمسير التكميلي المربوط</p>
-              {reversal.supplementary.map(row => (
-                <p key={row.itemId}>
-                  <Link href={`/payroll/payslip/${row.itemId}`} className="underline">قسيمة المسير التكميلي #{row.runId}{row.name ? ` «${row.name}»` : ''}</Link>
-                  {' '}— الصافي {formatMoney(row.netPay)} {currency}
-                </p>
-              ))}
-            </div>
-          )}
-          {run.runType === 'SUPPLEMENTARY' && (
-            <div className="rounded-xl bg-blue-50 p-4 mb-6 text-sm text-blue-900">
-              قسيمة مسير تكميلي مربوط بالمسير المصروف #{run.parentRunId}{run.correctionReason ? ` — سبب التصحيح: ${run.correctionReason}` : ''}
-            </div>
-          )}
+          {/* تبسيط الرواتب (2026-09-15): شريطا عكس الصرف والمسير التكميلي أُخفيا من القسيمة */}
 
           {/* Employee Info */}
           <div className="grid grid-cols-2 gap-8 mb-8">
@@ -353,7 +313,7 @@ export default function PayslipPage() {
                 </span>
 
                 <span className="text-gray-500">حالة المسير:</span>
-                <span className="font-medium text-gray-800">{runStatusLabels[run.status] ?? run.status}</span>
+                <span className="font-medium text-gray-800">{runStatusLabels[run.status] ?? 'غير معروف'}</span>
 
                 {/* الخطوة 22 (B5): التغطية والمعامل وأساس الأيام من تفصيل البند المحفوظ */}
                 <span className="text-gray-500">التغطية:</span>
@@ -365,12 +325,12 @@ export default function PayslipPage() {
                 </>}
 
                 <span className="text-gray-500">طريقة الدفع:</span>
-                <span className="font-medium text-gray-800">{payMethodLabels[item.payMethod] ?? item.payMethod}</span>
+                <span className="font-medium text-gray-800">{payMethodLabels[item.payMethod] ?? 'غير معروف'}</span>
 
                 <span className="text-gray-500">البنك:</span>
                 <span className="font-medium text-gray-800">{employee.bankName ?? '—'}</span>
 
-                <span className="text-gray-500">رقم الحساب (IBAN):</span>
+                <span className="text-gray-500">رقم الحساب البنكي الدولي:</span>
                 <span className="font-medium text-gray-800 font-mono text-xs">{employee.iban ?? '—'}</span>
               </div>
             </div>
@@ -381,7 +341,7 @@ export default function PayslipPage() {
             {/* Earnings */}
             <div>
               <h3 className="font-bold text-success-700 bg-success-50 px-4 py-2 rounded-t-xl">
-                الاستحقاقات (Earnings)
+                الاستحقاقات
               </h3>
               <div className="border border-gray-200 border-t-0 rounded-b-xl overflow-hidden">
                 <table className="w-full">
@@ -391,7 +351,6 @@ export default function PayslipPage() {
                         <td className="px-4 py-3 text-sm">
                           <div>
                             <p className="text-gray-800">{earning.name}</p>
-                            <p className="text-gray-400 text-xs">{earning.nameEn}</p>
                           </div>
                         </td>
                         <td className="px-4 py-3 text-left font-mono font-medium text-success-600">
@@ -415,7 +374,7 @@ export default function PayslipPage() {
             {/* Deductions */}
             <div>
               <h3 className="font-bold text-danger-700 bg-danger-50 px-4 py-2 rounded-t-xl">
-                الخصومات (Deductions)
+                الخصومات
               </h3>
               <div className="border border-gray-200 border-t-0 rounded-b-xl overflow-hidden">
                 <table className="w-full">
@@ -425,7 +384,6 @@ export default function PayslipPage() {
                         <td className="px-4 py-3 text-sm">
                           <div>
                             <p className="text-gray-800">{deduction.name}</p>
-                            <p className="text-gray-400 text-xs">{deduction.nameEn}</p>
                             {exemptionNote(deduction.component) && <p className="text-success-700 text-xs">{exemptionNote(deduction.component)}</p>}
                           </div>
                         </td>
@@ -465,7 +423,7 @@ export default function PayslipPage() {
           <div className="bg-gradient-to-r from-primary-500 to-primary-600 rounded-2xl p-6 text-white mb-8">
             <div className="flex items-center justify-between">
               <div>
-                <p className="text-primary-100">صافي الراتب (Net Salary)</p>
+                <p className="text-primary-100">صافي الراتب</p>
                 <p className="text-4xl font-bold mt-1">{formatMoney(netSalary)} {currency}</p>
                 <p className="text-primary-200 text-sm mt-2">{numberToArabicWords(netSalary, currency)}</p>
               </div>
@@ -480,14 +438,6 @@ export default function PayslipPage() {
             <p className="text-xs text-gray-400">
               هذه القسيمة صادرة إلكترونياً ولا تحتاج إلى توقيع
             </p>
-            <p className="text-xs text-gray-400 mt-1">
-              This payslip is electronically generated and does not require a signature
-            </p>
-            <div className="mt-4 flex items-center justify-center gap-2">
-              <div className="w-24 h-24 bg-gray-100 rounded-xl flex items-center justify-center">
-                <span className="text-xs text-gray-400">QR Code</span>
-              </div>
-            </div>
           </div>
         </div>
         ) : null}

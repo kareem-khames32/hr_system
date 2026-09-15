@@ -269,6 +269,11 @@ before(async () => {
   await repo('LatenessTier').save({ fromMinutes: 1, toMinutes: null, mode: 'MINUTES', value: 0, isActive: true, label: 'شريحة قديمة لا يغيرها تخزين التعريف الجديد' })
   // لحاق الإقلاع الحقيقي مؤجل 30 ثانية؛ ننتظر إتمامه قبل تثبيت canary كي لا يُنسب أثره لمعاينة قراءة فقط.
   await app.get(require('../src/requests/requests-scheduler.service').RequestsScheduler).catchUp()
+  // استدراك الحضور له مؤقت مستقل بعد 60 ثانية؛ ننفذ الخدمة الحقيقية ونثبت إنجازها قبل المقارنة
+  // (كان يكتب أيام غياب أثناء الاختبارات حين تتجاوز المجموعة دقيقة فتُنسب خطأً لمعاينة قراءة فقط).
+  await app.get(require('../src/attendance/attendance-scheduler.service').AttendanceScheduler).catchUpIfBehind()
+  const materialized = await repo('RequestsConfig').findOneByOrFail({ key: 'attendance.absences_materialized_through' })
+  assert.match(materialized.value, /^\d{4}-\d{2}-\d{2}$/)
   canary = await financialSnapshot()
 }, { timeout: 60000 })
 

@@ -25,7 +25,8 @@ test('query builder drops empty filters and encodes values', () => {
 })
 
 test('run reference hides masked runs and labels status in Arabic', () => {
-  assert.equal(ui.runRefLabel({ id: 18, name: 'قسم1', period: '2026-05', status: 'CALCULATED', startDate: '2026-04-23', endDate: '2026-05-22' }), '#18 قسم1 (محسوب)')
+  // تبسيط الرواتب: رقم المسير الداخلي لا يظهر
+  assert.equal(ui.runRefLabel({ id: 18, name: 'قسم1', period: '2026-05', status: 'CALCULATED', startDate: '2026-04-23', endDate: '2026-05-22' }), 'قسم1 (محسوب)')
   assert.equal(ui.runRefLabel({ id: null, name: 'مسير خارج نطاق صلاحيتك', period: '2026-05', status: 'APPROVED', startDate: '', endDate: '' }), 'مسير خارج نطاق صلاحيتك (معتمد)')
   assert.equal(ui.runRefLabel(null), '—')
 })
@@ -51,7 +52,8 @@ test('every report CSV builder produces one row per displayed row with matching 
     lastRun: null, pending: { installments: 1, installmentsAmount: '250.00', approvedOvertime: 0, obligations: 2 } }] })
   assertTable(unassigned, 1)
   assert.equal(unassigned.rows[0][8], 'مستبعد في مسير للفترة')
-  assert.match(unassigned.rows[0][10], /#30 فرع القاهرة/)
+  // تبسيط الرواتب: المسير باسمه وحالته بلا رقمه الداخلي
+  assert.match(unassigned.rows[0][10], /فرع القاهرة \(محسوب\)/); assert.doesNotMatch(unassigned.rows[0][10], /#30/)
 
   const overtime = ui.overtimeReportCsv({ period: '2026-09', from: '', to: '', summary: {}, rows: [{ id: 1, employeeId: 5, employeeCode: 'E5', fullName: 'موظف', departmentName: null,
     date: '2026-09-02', source: 'BIOMETRIC_DETECTED', status: 'REJECTED', dayKind: 'WEEKDAY', detectedMinutes: 90, requestedMinutes: 90, approvedMinutes: null,
@@ -176,11 +178,13 @@ test('unassigned and overtime tabs default to the API payroll month (cycle start
   assert.equal(ui.reportQuery({ period: '', branchId: '' }), '', 'الفترة الفارغة لا تُرسل فيطبق الـAPI دورة payroll.cycle_start_day')
 })
 
-test('payroll reports page offers every step-30 report and each tab exports from its own builder', () => {
+test('payroll reports page (payroll simplification) shows the runs tab only, exported from its own builder, without internal run numbers; the other report endpoints stay in the API file', () => {
   const source = fs.readFileSync(path.join(repoRoot, 'src', 'app', 'payroll', 'reports', 'page.tsx'), 'utf8')
-  for (const builder of ['runsReportCsv', 'unassignedReportCsv', 'overtimeReportCsv', 'loansReportCsv', 'varianceReportCsv']) {
-    assert.match(source, new RegExp(`<ExportButton table=\\{report \\? ${builder}\\(report\\)`), `${builder} مربوط بزر تصدير`)
-  }
+  assert.match(source, /<ExportButton table=\{report \? runsReportCsv\(\{ \.\.\.report, runs \}\)/, 'runsReportCsv مربوط بزر تصدير')
+  const tabs = /const TABS[^=]*= \[([\s\S]*?)\n\]/.exec(source)
+  assert.ok(tabs, 'TABS')
+  assert.deepEqual([...tabs[1].matchAll(/id: '(\w+)'/g)].map(match => match[1]), ['runs'])
+  assert.doesNotMatch(source, /#\{run\.id\}/, 'no internal run number column')
   for (const endpoint of ['/reports/payroll', '/reports/payroll/unassigned', '/reports/payroll/overtime', '/reports/payroll/loans', '/reports/payroll/variance']) {
     assert.ok(fs.readFileSync(path.join(repoRoot, 'src', 'lib', 'payroll-reports-api.ts'), 'utf8').includes(`'${endpoint}`) ||
       fs.readFileSync(path.join(repoRoot, 'src', 'lib', 'payroll-reports-api.ts'), 'utf8').includes(`\`${endpoint}`), endpoint)

@@ -27,7 +27,6 @@ export function LoanCapPoliciesPanel({ currency }: { currency: string }) {
   const [formError, setFormError] = useState('')
   const [deactivating, setDeactivating] = useState<LoanCapPolicy | null>(null)
   const [deactivateReason, setDeactivateReason] = useState('')
-  const [showHistory, setShowHistory] = useState(false)
 
   const load = () => { setLoading(true); setError(''); fetchLoanCapPolicies().then(setPolicies).catch(e => setError(e instanceof Error ? e.message : 'تعذر تحميل السياسات')).finally(() => setLoading(false)) }
   useEffect(() => {
@@ -70,11 +69,12 @@ export function LoanCapPoliciesPanel({ currency }: { currency: string }) {
     catch (e) { setFormError(e instanceof Error ? e.message : 'تعذر إيقاف السياسة') } finally { setBusy(false) }
   }
 
+  // آخر نسخة من كل سياسة فقط
   const latestByKey = new Map<string, LoanCapPolicy>()
   for (const row of policies) if (!latestByKey.has(row.policyKey) || latestByKey.get(row.policyKey)!.version < row.version) latestByKey.set(row.policyKey, row)
-  const visible = showHistory ? policies : [...latestByKey.values()]
+  const visible = [...latestByKey.values()]
   const scopeText = (row: LoanCapPolicy) => row.scopeType === 'COMPANY' ? LOAN_SCOPE_LABELS.COMPANY
-    : `${LOAN_SCOPE_LABELS[row.scopeType]}: ${(row.scopeIds ?? []).map(id => options[row.scopeType as Exclude<LoanCapScopeType, 'COMPANY'>].find(option => option.id === id)?.label ?? `#${id}`).join('، ')}`
+    : `${LOAN_SCOPE_LABELS[row.scopeType]}: ${(row.scopeIds ?? []).map(id => options[row.scopeType as Exclude<LoanCapScopeType, 'COMPANY'>].find(option => option.id === id)?.label ?? 'غير معروف').join('، ')}`
   const set = (patch: Partial<LoanCapPolicyInput>) => setForm(current => ({ ...current, ...patch }))
 
   return (
@@ -82,12 +82,9 @@ export function LoanCapPoliciesPanel({ currency }: { currency: string }) {
       <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3 flex-wrap">
         <div>
           <h3 className="font-bold text-gray-800">سياسات سقوف السلف</h3>
-          <p className="text-sm text-gray-500">الأخص نطاقًا يحكم ثم الأولوية؛ الأدنى بين النسبة والمقطوع والشهري والمديونية هو السقف الفعّال. بلا سياسة سارية لا يُطبق سقف.</p>
+          <p className="text-sm text-gray-500">الأخص نطاقًا يحكم؛ الأدنى بين النسبة والمقطوع والشهري والمديونية هو السقف الفعّال. بلا سياسة سارية لا يُطبق سقف.</p>
         </div>
-        <div className="flex items-center gap-2">
-          <label className="text-sm flex items-center gap-1"><input type="checkbox" checked={showHistory} onChange={e => setShowHistory(e.target.checked)} /> كل النسخ</label>
-          {canManage && <button className="btn-primary flex items-center gap-2" onClick={openCreate}><Plus size={16} /> سياسة جديدة</button>}
-        </div>
+        {canManage && <button className="btn-primary flex items-center gap-2" onClick={openCreate}><Plus size={16} /> سياسة جديدة</button>}
       </div>
       {error && <div role="alert" className="bg-red-50 text-red-700 p-3 flex items-center gap-2"><AlertTriangle size={16} />{error}</div>}
       {loading ? <div className="py-10 text-center text-gray-400">جارٍ التحميل...</div> : (
@@ -99,8 +96,6 @@ export function LoanCapPoliciesPanel({ currency }: { currency: string }) {
                 <th className="text-right px-4 py-3">النطاق</th>
                 <th className="text-center px-4 py-3">النسبة</th>
                 <th className="text-center px-4 py-3">المقطوع</th>
-                <th className="text-center px-4 py-3">الشهري (عدد/قيمة)</th>
-                <th className="text-center px-4 py-3">المديونية</th>
                 <th className="text-center px-4 py-3">السريان</th>
                 <th className="text-center px-4 py-3">الحالة</th>
                 {canManage && <th className="text-center px-4 py-3">إجراء</th>}
@@ -109,12 +104,10 @@ export function LoanCapPoliciesPanel({ currency }: { currency: string }) {
             <tbody>
               {visible.map(row => (
                 <tr key={row.id} className="table-row">
-                  <td className="table-cell"><p className="font-medium text-gray-800">{row.name}</p><p className="text-xs text-gray-500">نسخة {row.version} — أولوية {row.priority}{row.reason ? ` — ${row.reason}` : ''}</p></td>
+                  <td className="table-cell"><p className="font-medium text-gray-800">{row.name}</p><p className="text-xs text-gray-500">نسخة {row.version}{row.reason ? ` — ${row.reason}` : ''}</p></td>
                   <td className="table-cell text-sm">{scopeText(row)}</td>
                   <td className="table-cell text-center">{row.percentOfSalary ? `${Number(row.percentOfSalary)}% ${row.salaryBase === 'BASIC' ? 'أساسي' : 'إجمالي'}` : '—'}</td>
                   <td className="table-cell text-center font-mono">{row.flatCapAmount ? formatLoanMoney(row.flatCapAmount) : '—'}</td>
-                  <td className="table-cell text-center">{row.maxRequestsPerMonth ?? '—'} / {row.maxAmountPerMonth ? formatLoanMoney(row.maxAmountPerMonth) : '—'}<p className="text-xs text-gray-500">{row.monthDefinition === 'CALENDAR' ? 'شهر تقويمي' : 'فترة المسير'}</p></td>
-                  <td className="table-cell text-center font-mono">{row.maxOutstandingBalance ? formatLoanMoney(row.maxOutstandingBalance) : '—'}{row.maxInstallmentMonths ? <p className="text-xs text-gray-500 font-sans">حتى {row.maxInstallmentMonths} شهر</p> : null}</td>
                   <td className="table-cell text-center font-mono text-sm">{row.effectiveFrom} ← {row.effectiveTo ?? 'مفتوح'}</td>
                   <td className="table-cell text-center">
                     <span className={`badge ${row.currentlyEffective ? 'badge-success' : row.isActive ? 'badge-primary' : 'bg-gray-100 text-gray-600'}`}>{row.currentlyEffective ? 'سارية اليوم' : row.isActive ? 'مجدولة/منتهية' : 'موقوفة'}</span>
@@ -132,7 +125,7 @@ export function LoanCapPoliciesPanel({ currency }: { currency: string }) {
                   )}
                 </tr>
               ))}
-              {visible.length === 0 && <tr><td colSpan={canManage ? 9 : 8} className="text-center py-8 text-gray-400">لا توجد سياسات سقوف — لا يُطبق سقف على طلبات السلف</td></tr>}
+              {visible.length === 0 && <tr><td colSpan={canManage ? 7 : 6} className="text-center py-8 text-gray-400">لا توجد سياسات سقوف — لا يُطبق سقف على طلبات السلف</td></tr>}
             </tbody>
           </table>
         </div>
@@ -149,11 +142,10 @@ export function LoanCapPoliciesPanel({ currency }: { currency: string }) {
             {formError && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 mb-3">{formError}</div>}
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <div className="md:col-span-2"><label className="label" htmlFor="cap-name">الاسم *</label><input id="cap-name" className="input" maxLength={150} value={form.name} onChange={e => set({ name: e.target.value })} /></div>
-              <div><label className="label" htmlFor="cap-scope">النطاق *</label>
+              <div className="md:col-span-2"><label className="label" htmlFor="cap-scope">النطاق *</label>
                 <select id="cap-scope" className="input" value={form.scopeType} onChange={e => set({ scopeType: e.target.value as LoanCapScopeType, scopeIds: [] })}>
                   {(Object.keys(LOAN_SCOPE_LABELS) as LoanCapScopeType[]).map(key => <option key={key} value={key}>{LOAN_SCOPE_LABELS[key]}</option>)}
                 </select></div>
-              <div><label className="label" htmlFor="cap-priority">الأولوية (الأعلى يرجح عند التساوي)</label><input id="cap-priority" className="input" dir="ltr" inputMode="numeric" value={String(form.priority ?? '')} onChange={e => set({ priority: e.target.value })} /></div>
               {form.scopeType !== 'COMPANY' && (
                 <div className="md:col-span-2"><label className="label" htmlFor="cap-scope-ids">عناصر النطاق *</label>
                   <select id="cap-scope-ids" multiple className="input h-32" value={(form.scopeIds ?? []).map(String)}
@@ -166,17 +158,22 @@ export function LoanCapPoliciesPanel({ currency }: { currency: string }) {
                 <select id="cap-base" className="input" value={form.salaryBase ?? ''} onChange={e => set({ salaryBase: (e.target.value || null) as LoanCapPolicyInput['salaryBase'] })}>
                   <option value="">—</option><option value="BASIC">الراتب الأساسي</option><option value="GROSS">إجمالي الراتب (المكونات الست)</option>
                 </select></div>
-              <div><label className="label" htmlFor="cap-flat">سقف مقطوع للطلب ({currency})</label><input id="cap-flat" className="input" dir="ltr" inputMode="decimal" value={form.flatCapAmount ?? ''} onChange={e => set({ flatCapAmount: e.target.value })} /></div>
-              <div><label className="label" htmlFor="cap-outstanding">سقف المديونية القائمة ({currency})</label><input id="cap-outstanding" className="input" dir="ltr" inputMode="decimal" value={form.maxOutstandingBalance ?? ''} onChange={e => set({ maxOutstandingBalance: e.target.value })} /></div>
-              <div><label className="label" htmlFor="cap-month-count">أقصى عدد طلبات في الشهر</label><input id="cap-month-count" className="input" dir="ltr" inputMode="numeric" value={String(form.maxRequestsPerMonth ?? '')} onChange={e => set({ maxRequestsPerMonth: e.target.value })} /></div>
-              <div><label className="label" htmlFor="cap-month-amount">أقصى قيمة في الشهر ({currency})</label><input id="cap-month-amount" className="input" dir="ltr" inputMode="decimal" value={form.maxAmountPerMonth ?? ''} onChange={e => set({ maxAmountPerMonth: e.target.value })} /></div>
-              <div><label className="label" htmlFor="cap-month-def">تعريف الشهر</label>
-                <select id="cap-month-def" className="input" value={form.monthDefinition} onChange={e => set({ monthDefinition: e.target.value as 'PAYROLL_PERIOD' | 'CALENDAR' })}>
-                  <option value="PAYROLL_PERIOD">فترة المسير</option><option value="CALENDAR">الشهر التقويمي</option>
-                </select></div>
-              <div><label className="label" htmlFor="cap-max-months">أقصى أشهر للتقسيط</label><input id="cap-max-months" className="input" dir="ltr" inputMode="numeric" value={String(form.maxInstallmentMonths ?? '')} onChange={e => set({ maxInstallmentMonths: e.target.value })} /></div>
+              <div className="md:col-span-2"><label className="label" htmlFor="cap-flat">سقف مقطوع للطلب ({currency})</label><input id="cap-flat" className="input" dir="ltr" inputMode="decimal" value={form.flatCapAmount ?? ''} onChange={e => set({ flatCapAmount: e.target.value })} /></div>
               <div><label className="label" htmlFor="cap-from">يسري من *</label><input id="cap-from" type="date" className="input" dir="ltr" value={form.effectiveFrom} onChange={e => set({ effectiveFrom: e.target.value })} /></div>
               <div><label className="label" htmlFor="cap-to">حتى (اختياري)</label><input id="cap-to" type="date" className="input" dir="ltr" value={form.effectiveTo ?? ''} onChange={e => set({ effectiveTo: e.target.value })} /></div>
+              <details className="md:col-span-2 border border-gray-100 rounded-xl p-3">
+                <summary className="cursor-pointer text-sm font-medium text-gray-700">خيارات إضافية</summary>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mt-3">
+                  <div><label className="label" htmlFor="cap-month-count">أقصى عدد طلبات في الشهر</label><input id="cap-month-count" className="input" dir="ltr" inputMode="numeric" value={String(form.maxRequestsPerMonth ?? '')} onChange={e => set({ maxRequestsPerMonth: e.target.value })} /></div>
+                  <div><label className="label" htmlFor="cap-month-amount">أقصى قيمة في الشهر ({currency})</label><input id="cap-month-amount" className="input" dir="ltr" inputMode="decimal" value={form.maxAmountPerMonth ?? ''} onChange={e => set({ maxAmountPerMonth: e.target.value })} /></div>
+                  <div><label className="label" htmlFor="cap-month-def">تعريف الشهر</label>
+                    <select id="cap-month-def" className="input" value={form.monthDefinition} onChange={e => set({ monthDefinition: e.target.value as 'PAYROLL_PERIOD' | 'CALENDAR' })}>
+                      <option value="PAYROLL_PERIOD">فترة المسير</option><option value="CALENDAR">الشهر التقويمي</option>
+                    </select></div>
+                  <div><label className="label" htmlFor="cap-outstanding">سقف المديونية القائمة ({currency})</label><input id="cap-outstanding" className="input" dir="ltr" inputMode="decimal" value={form.maxOutstandingBalance ?? ''} onChange={e => set({ maxOutstandingBalance: e.target.value })} /></div>
+                  <div><label className="label" htmlFor="cap-max-months">أقصى أشهر للتقسيط</label><input id="cap-max-months" className="input" dir="ltr" inputMode="numeric" value={String(form.maxInstallmentMonths ?? '')} onChange={e => set({ maxInstallmentMonths: e.target.value })} /></div>
+                </div>
+              </details>
               <div className="md:col-span-2"><label className="label" htmlFor="cap-reason">{editing.base ? 'سبب التعديل *' : 'ملاحظة'}</label><textarea id="cap-reason" className="input" rows={2} maxLength={500} value={form.reason ?? ''} onChange={e => set({ reason: e.target.value })} /></div>
             </div>
             <div className="flex gap-3 mt-6 pt-4 border-t border-gray-100">

@@ -48,7 +48,9 @@ const fromCents = (value: number) => (value / 100).toFixed(2)
 // ===== الإعدادات (EX-03/06/07): حدود واحدة يقرؤها الخادم ويتحقق بها PATCH /settings/config =====
 export const EXEMPTION_NUMERIC_SETTINGS: Record<string, { min: number; max: number; fallback: number; label: string }> = {
   'financial_exemptions.reason_min_length': { min: 1, max: 1000, fallback: 20, label: 'أقل طول لسبب الإعفاء المالي' },
-  'financial_exemptions.attachment_threshold_days': { min: 0, max: 31, fallback: 1, label: 'سقف المبلغ المُعفى بلا مرفق بأيام الراتب (0 = المرفق إلزامي دائمًا)' },
+  // تبسيط الرواتب (2026-09-15): الحد الأعلى 366 بدل 31 — خصم الغياب بمعامل عقوبة (1.5 أو 2 يوم) قد يتجاوز راتب شهر،
+  // فكان «إلغاء خصم» من شاشة المسير يُرفض بطلب مرفق حتى مع أعلى قيمة. الإعداد نفسه وقيمته الافتراضية بلا تغيير.
+  'financial_exemptions.attachment_threshold_days': { min: 0, max: 366, fallback: 1, label: 'سقف المبلغ المُعفى بلا مرفق بأيام الراتب (0 = المرفق إلزامي دائمًا)' },
   'financial_exemptions.max_per_employee_year': { min: 0, max: 100, fallback: 4, label: 'أقصى إعفاءات للموظف خلال 12 شهرًا قبل طلب تجاوز موثق (0 = بلا حد)' },
   'financial_exemptions.max_pct_per_grantor': { min: 0, max: 100, fallback: 20, label: 'نسبة المُعفى للمانح من خصومات المسير قبل تحويل الإعفاء لاعتماد (0 = بلا حد)' },
   'financial_exemptions.cooldown_hours': { min: 0, max: 720, fallback: 24, label: 'فترة التهدئة بعد اعتماد الخصم المصنف بالساعات (0 = بلا تهدئة)' },

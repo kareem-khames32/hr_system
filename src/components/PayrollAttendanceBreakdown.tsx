@@ -23,7 +23,7 @@ export function PayrollAttendanceBreakdown({ item, currency }: { item: ApiPayrol
   const review = Array.isArray(detail.attendanceRules) ? detail.attendanceRules.filter(day => day.reviewRequired) : []
   return <section className="rounded-xl border border-gray-200 p-4 space-y-3">
     <h3 className="font-bold text-gray-800">مراجعة خصومات الحضور</h3>
-    <p className="text-sm text-gray-600">{overlapLabels[detail.attendanceDeductions?.policy?.overlapPolicy ?? ''] ?? 'سياسة المسير المحفوظة'}. المبالغ بالـ{currency} من نسخة الحساب المعروضة.</p>
+    <p className="text-sm text-gray-600">{overlapLabels[detail.attendanceDeductions?.policy?.overlapPolicy ?? ''] ?? 'سياسة المسير المحفوظة'}. المبالغ بالـ{currency}.</p>
     {review.length > 0 && <div className="rounded-lg bg-amber-50 p-3 text-sm text-amber-900">
       <p className="font-bold">مراجعة مطلوبة قبل اعتماد المسير</p>
       {review.map(day => <p key={day.date}>{day.date}: {day.reviewReason}</p>)}

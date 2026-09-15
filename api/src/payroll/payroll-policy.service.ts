@@ -13,6 +13,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { configSeed } from '../seed/requests-seed.data'
 import type { PayrollScopeType } from './payroll.entities'
 import { ClonePayrollPolicyVersionDto, CreatePayrollPolicyDto, PayrollPolicyMutationDto, PayrollPolicyVersionMetadataDto, PublishPayrollPolicyVersionDto, UpdatePayrollPolicyDto, UpdatePayrollPolicyVersionDto } from './payroll-policy.dto'
+import { PayrollLatenessTierSet } from './payroll-lateness-tier-sets.entities'
 import { describePayrollPolicyCycle, PAYROLL_POLICY_SEAL_VERSION, payrollPolicyContentHash, payrollPolicyDayBefore, payrollPolicyEffectiveEnds, PayrollPolicyEffectiveEnd, payrollPolicyPeriods, PayrollPolicyCyclePeriod, PayrollPolicyPublishIssue, reviewPayrollPolicyEffectiveRange } from './payroll-policy-publish'
 import { PayrollPolicy, PayrollPolicyEvent, PayrollPolicyVersion, PayrollPolicyVersionMetadata } from './payroll-policy.entities'
 import { PayrollPolicyVersionSeal } from './payroll-policy-seal.entities'
@@ -705,11 +706,31 @@ export class PayrollPolicyService {
           dto.defaultScopeType === undefined ? policy.defaultScopeType : dto.defaultScopeType,
           dto.defaultScopeIds === undefined ? policy.defaultScopeIds : dto.defaultScopeIds))
       }
+      await this.applyChargeRules(em, policy, dto)
       policy.revision += 1; policy.updatedBy = user.sub
       await em.getRepository(PayrollPolicy).save(policy)
       await this.event(em, user, id, null, 'IDENTITY_UPDATED', reason, { before, after: this.snapshot(policy) })
       return { policy, capabilities: this.capabilities(user, policy) }
     })
+  }
+
+  // ترحيل 033 — طريقة الخصم للمجموعة: كل حقل مُرسل يُطبّق (null = «زي الإعدادات العامة»)، والحدث IDENTITY_UPDATED يسجل القيم قبل وبعد.
+  // أنواع القيم ونطاقاتها يتحقق منها UpdatePayrollPolicyDto برسائل عربية.
+  private async applyChargeRules(em: EntityManager, policy: PayrollPolicy, dto: UpdatePayrollPolicyDto) {
+    if (dto.lateDeductionEnabled !== undefined) policy.lateDeductionEnabled = dto.lateDeductionEnabled
+    if (dto.earlyLeaveDeductionEnabled !== undefined) policy.earlyLeaveDeductionEnabled = dto.earlyLeaveDeductionEnabled
+    if (dto.shortfallEnabled !== undefined) policy.shortfallEnabled = dto.shortfallEnabled
+    if (dto.shortfallMode !== undefined) policy.shortfallMode = dto.shortfallMode
+    if (dto.shortfallValue !== undefined) policy.shortfallValue = dto.shortfallValue
+    if (dto.absencePenaltyDays !== undefined) policy.absencePenaltyDays = dto.absencePenaltyDays
+    if (dto.latenessTierSetId !== undefined) {
+      const setId = dto.latenessTierSetId
+      // المجموعة المختارة يجب أن تكون موجودة ومفعّلة وقت الاختيار؛ إعادة حفظ نفس الاختيار لا تُرفض لو أُوقفت لاحقًا.
+      if (setId !== null && setId !== policy.latenessTierSetId && !await em.getRepository(PayrollLatenessTierSet).existsBy({ id: setId, isActive: true })) {
+        throw new BadRequestException({ code: 'POLICY_TIER_SET_UNAVAILABLE', message: 'مجموعة شرائح التأخير المختارة غير موجودة أو موقوفة' })
+      }
+      policy.latenessTierSetId = setId
+    }
   }
 
   private async clone(em: EntityManager, user: JwtPayload, policy: PayrollPolicy, source: PayrollPolicyVersion,

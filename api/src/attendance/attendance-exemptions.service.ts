@@ -10,7 +10,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 // C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُقفل الفترة أمام قرار الاستثناء
 import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
-import { payrollPeriodBounds, payrollPeriodOfDate } from '../payroll/payroll-period'
+import { payrollPeriodBounds, payrollPeriodOfDate, shiftPayrollPeriod } from '../payroll/payroll-period'
 import { AttendanceExemption, AttendanceExemptionEvent, AttendanceExemptionReasonCode, AttendanceExemptionStatus } from './attendance-exemption.entities'
 import { loadAttendanceExemptions } from './attendance-exemption-resolver'
 
@@ -68,12 +68,25 @@ export class AttendanceExemptionsService {
     return payrollPeriodBounds(payrollPeriodOfDate(today, startDay), startDay).startDate
   }
 
-  private async validateRange(em: EntityManager, employee: Employee, from: string, to: string | null, asOf?: Date) {
+  // تبسيط الرواتب (2026-09-15): مسير الشهر يُصرف بعد انتهاء فترته (مسير أغسطس في سبتمبر)، فالاستثناء يبدأ من أول الفترة السابقة
+  // ما دام مسيرها للموظف لم يُعتمد (حاجز المسير المعتمد/المصروف أدناه باقٍ). ما قبل الفترة السابقة يحتاج تسوية مالية.
+  private async earliestStart(em: EntityManager, asOf: Date = new Date()) {
+    const startDay = Number(await this.config(em, 'payroll.cycle_start_day', '23'))
+    const current = await this.currentPeriodStart(em, asOf)
+    return payrollPeriodBounds(shiftPayrollPeriod(payrollPeriodOfDate(current, startDay), -1), startDay).startDate
+  }
+
+  private async validateRange(em: EntityManager, employee: Employee, from: string, to: string | null, asOf?: Date, allowPreviousPeriod = false) {
     this.date(from)
     if (to) this.date(to)
     if (to && from > to) throw new BadRequestException('نهاية الاستثناء تسبق بدايته')
     if (from < (employee.actualStartDate || employee.joinDate || '1900-01-01')) throw new BadRequestException('الاستثناء لا يسبق بداية العمل')
-    if (from < await this.currentPeriodStart(em, asOf)) throw new BadRequestException('الاستثناء بأثر رجعي قبل الفترة الحالية يحتاج تسوية مالية موثقة؛ لا يمكن تغيير الفترة السابقة من هنا')
+    const earliest = allowPreviousPeriod ? await this.earliestStart(em, asOf) : await this.currentPeriodStart(em, asOf)
+    if (from < earliest) {
+      throw new BadRequestException(allowPreviousPeriod
+        ? `الاستثناء لا يبدأ قبل بداية فترة الرواتب السابقة (${earliest})؛ ما قبلها يحتاج تسوية مالية موثقة`
+        : 'الاستثناء بأثر رجعي قبل الفترة الحالية يحتاج تسوية مالية موثقة؛ لا يمكن تغيير الفترة السابقة من هنا')
+    }
     // اللقطة المعتمدة لا تتغير بقرار لاحق؛ معالجة الماضي تكون بتسوية مستقلة.
     const locked = await em.query(`SELECT TOP (1) r.id FROM dbo.payroll_runs r
       INNER JOIN dbo.payroll_items i ON i.runId=r.id
@@ -161,7 +174,7 @@ export class AttendanceExemptionsService {
       await lockPayrollEmployees(em, [dto.employeeId])
       const employee = await this.employee(user, dto.employeeId, em)
       const reason = await this.reason(em, dto.reason)
-      await this.validateRange(em, employee, dto.effectiveFrom, dto.effectiveTo ?? null)
+      await this.validateRange(em, employee, dto.effectiveFrom, dto.effectiveTo ?? null, undefined, true)
       await this.noOverlap(em, employee.id, dto.effectiveFrom, dto.effectiveTo ?? null)
       await this.noPendingOverlap(em, employee.id, dto.effectiveFrom, dto.effectiveTo ?? null)
       const row = await em.getRepository(AttendanceExemption).save({ ...dto, effectiveTo: dto.effectiveTo ?? null,
@@ -190,7 +203,7 @@ export class AttendanceExemptionsService {
       this.separation(user, row, executive)
       const reason = await this.reason(em, note)
       // الفترة المرجعية = وقت إنشاء الطلب (⑨): الطلب المعلق لا يسقط ببدء دورة جديدة، والمسير المعتمد يبقى حاجزًا.
-      await this.validateRange(em, employee, row.effectiveFrom, row.effectiveTo, row.createdAt)
+      await this.validateRange(em, employee, row.effectiveFrom, row.effectiveTo, row.createdAt, true)
       await this.noOverlap(em, row.employeeId, row.effectiveFrom, row.effectiveTo, row.id)
       const before = { ...row }
       if (executive) {
@@ -306,6 +319,7 @@ export class AttendanceExemptionsService {
       }),
       today,
       currentPeriodStart: await this.currentPeriodStart(em),
+      earliestStart: await this.earliestStart(em),
       reasonMinLength: Number(await this.config(em, 'payroll.exemption_reason_min_length', '20')),
       limit,
       truncated: found.length > limit,

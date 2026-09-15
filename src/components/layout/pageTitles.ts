@@ -60,7 +60,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/payroll/allowances', 'البدلات'],
   ['/payroll/loans', 'السلف والقروض'],
   ['/payroll/gosi', 'التأمينات (GOSI)'],
-  ['/payroll/reports', 'التقارير المالية'],
+  ['/payroll/reports', 'تقرير الرواتب'],
   ['/payroll', 'مسير الرواتب'],
   // التوظيف والأداء والتدريب والتقارير
   ['/recruitment/applicants', 'المتقدمين'],

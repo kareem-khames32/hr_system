@@ -2,7 +2,8 @@ import { BadRequestException, ConflictException } from '@nestjs/common'
 import { createHash } from 'node:crypto'
 import { In, type EntityManager } from 'typeorm'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
-import { readPayrollLatenessTierSetForPeriod, type PayrollLatenessTierSetSnapshot, PAYROLL_LATENESS_TIER_MODE_LABELS } from './payroll-lateness-tiers'
+import { readPayrollLatenessTierSetById, readPayrollLatenessTierSetForPeriod, type PayrollLatenessTierSetSnapshot, PAYROLL_LATENESS_TIER_MODE_LABELS } from './payroll-lateness-tiers'
+import { PayrollLatenessTierSet } from './payroll-lateness-tier-sets.entities'
 import { PayrollPolicy, PayrollPolicyVersion } from './payroll-policy.entities'
 import { PayrollPolicyVersionSeal } from './payroll-policy-seal.entities'
 import { inspectPayrollPolicySettings, PAYROLL_POLICY_CONFIG_KEYS, parsePayrollPolicyConfigValue } from './payroll-policy-settings'
@@ -143,6 +144,7 @@ export async function capturePayrollRunPolicySnapshot(em: EntityManager, run: { 
   }
 
   let policy: PayrollRunPolicySnapshot['policy'] = null
+  let ownerTierSetId: number | null = null
   if (run.policyVersionId) {
     const version = await em.getRepository(PayrollPolicyVersion).findOneBy({ id: run.policyVersionId })
     const owner = version ? await em.getRepository(PayrollPolicy).findOneBy({ id: version.policyId }) : null
@@ -172,8 +174,23 @@ export async function capturePayrollRunPolicySnapshot(em: EntityManager, run: { 
       fromVersion('netFloorPct', s.netFloorPct === null ? null : String(s.netFloorPct), 'payroll_policy_versions.netFloorPct')
       fromVersion('maxDeductionPctOfGross', s.maxDeductionPctOfGross === null ? null : String(s.maxDeductionPctOfGross), 'payroll_policy_versions.maxDeductionPctOfGross')
     }
+    // ترحيل 033 — طريقة الخصم على مجموعة المعادلات تتقدم على النسخة المنشورة والإعداد العام؛ الحقل الفارغ (null) لا يغيّر شيئًا،
+    // فلقطات المجموعات التي لم تُملأ حقولها (وكل المسيرات السابقة) تبقى بنفس محتواها وبصمتها.
+    const fromSet = <K extends PayrollRunPolicyValueKey>(field: K, value: PayrollRunPolicyValues[K]) => { values[field] = value; sources[field] = { kind: 'POLICY_VERSION', key: `payroll_policies.${field}` } }
+    if (owner.lateDeductionEnabled != null) fromSet('lateDeductionEnabled', Boolean(owner.lateDeductionEnabled))
+    if (owner.earlyLeaveDeductionEnabled != null) fromSet('earlyLeaveDeductionEnabled', Boolean(owner.earlyLeaveDeductionEnabled))
+    if (owner.shortfallEnabled != null) fromSet('shortfallEnabled', Boolean(owner.shortfallEnabled))
+    if (owner.shortfallMode != null) fromSet('shortfallMode', owner.shortfallMode)
+    if (owner.shortfallValue != null) fromSet('shortfallValue', Number(owner.shortfallValue))
+    if (owner.absencePenaltyDays != null) fromSet('absencePenaltyDays', Number(owner.absencePenaltyDays))
+    ownerTierSetId = owner.latenessTierSetId ?? null
   }
-  const latenessTiers = await readPayrollLatenessTierSetForPeriod(em, run.period)
+  let latenessTiers: PayrollLatenessTierSetSnapshot
+  // جدول الشرائح المختار للمجموعة يُستخدم ما دام مفعّلًا؛ إيقافه من «القيم العامة للخصومات» يرجع المجموعة لشرائح الشهر السارية.
+  if (ownerTierSetId !== null && await em.getRepository(PayrollLatenessTierSet).existsBy({ id: ownerTierSetId, isActive: true })) {
+    const { row: _row, ...snapshot } = await readPayrollLatenessTierSetById(em, ownerTierSetId)
+    latenessTiers = snapshot
+  } else latenessTiers = await readPayrollLatenessTierSetForPeriod(em, run.period)
   const content = { schemaVersion: PAYROLL_RUN_POLICY_SNAPSHOT_SCHEMA, capturedAt: new Date().toISOString(), capturedBy, period: run.period,
     dayBasis: values.monthlyDays === 30 ? 'FIXED_30' : `FIXED_${values.monthlyDays}`, policy, values, sources, latenessTiers }
   return { ...content, fingerprint: payrollRunPolicySnapshotFingerprint(content as PayrollRunPolicySnapshot) }

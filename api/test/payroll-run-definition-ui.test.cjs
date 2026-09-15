@@ -33,7 +33,7 @@ test('linked filters: departments follow chosen branches, teams follow chosen de
   assert.deepEqual([pruned.departmentIds, pruned.teamIds], [[20], [200]])
 })
 
-test('only published policy versions are offered for a run, with their effective range', () => {
+test('only published policy versions are offered for a run, labelled by the set name (dates only when one set has two)', () => {
   const policies = [{ policy: { id: 1, code: 'CAIRO', name: 'مجموعة القاهرة', branchId: null, isActive: true }, capabilities: { canEdit: false },
     versions: [{ id: 5, versionNo: 2, revision: 1, status: 'DRAFT', effectiveFrom: '2026-10-23', effectiveTo: null },
       { id: 4, versionNo: 1, revision: 2, status: 'ACTIVE', effectiveFrom: '2026-09-23', effectiveTo: null, effectiveUntil: '2026-10-22', cycleStartDay: 23 }] },
@@ -41,10 +41,13 @@ test('only published policy versions are offered for a run, with their effective
     versions: [{ id: 9, versionNo: 1, revision: 1, status: 'ACTIVE', effectiveFrom: '2026-01-23', effectiveTo: null }] }]
   const options = ui.publishedPolicyVersions(policies)
   assert.deepEqual(options.map(row => [row.versionId, row.effectiveUntil, row.cycleStartDay]), [[4, '2026-10-22', 23]])
-  assert.match(options[0].label, /مجموعة القاهرة — نسخة 1/)
+  assert.equal(options[0].label, 'مجموعة القاهرة')
+  const two = ui.publishedPolicyVersions([{ ...policies[0], versions: [...policies[0].versions, { id: 6, versionNo: 3, revision: 1, status: 'ACTIVE', effectiveFrom: '2026-10-23', effectiveTo: null }] }])
+  assert.deepEqual(two.map(row => row.label), ['مجموعة القاهرة (من 2026-09-23 إلى 2026-10-22)', 'مجموعة القاهرة (من 2026-10-23)'])
+  assert.ok(options.every(row => !/نسخة|CAIRO/.test(row.label)), 'no version number or code in the label')
 })
 
-test('membership preview view shows read-only notice, 30-day basis, coverage and factor, and exclusion codes with the other run id', () => {
+test('membership preview view shows the read-only notice, coverage, the formula set name and plain Arabic exclusion reasons, without codes, day basis, factor or the other run number', () => {
   const preview = { readOnly: true, previewHash: 'a'.repeat(64), basis: { monthlyDays: 30, dayBasis: 'FIXED_30' },
     run: { id: null, name: 'مسير القاهرة', period: '2026-08', startDate: '2026-07-23', endDate: '2026-08-22',
       policy: { policyId: 1, code: 'CAIRO', name: 'مجموعة القاهرة', versionId: 4, versionNo: 1, status: 'ACTIVE', cycleStartDay: 23, defaultPeriodType: 'CUSTOM_DAY_RANGE' } },
@@ -64,11 +67,12 @@ test('membership preview view shows read-only notice, 30-day basis, coverage and
         transferredOut: { lastInScopeDate: '2026-08-09', branchName: 'الجيزة', departmentName: null, teamName: null } },
     ], unusedExclusions: [] }
   const html = renderToStaticMarkup(React.createElement(PayrollMembershipPreviewView, { preview, currency: 'SAR' }))
-  for (const text of ['معاينة للقراءة فقط', 'أساس الأيام 30 يومًا', 'FIXED_30', '2026-08-08 → 2026-08-22', '0.500000', '3,000.00', 'EXC_ALREADY_IN_RUN',
-    'المسير #42', 'مسير الإدارة العليا', 'TRANSFERRED_OUT', 'آخر يوم داخل النطاق 2026-08-09', 'الجيزة', 'في مسير معتمد آخر: 1']) {
-    assert.ok(html.includes(text), text)
+  const text = html.replace(/<!-- -->/g, '')
+  for (const value of ['معاينة للقراءة فقط', 'معادلات الرواتب «مجموعة القاهرة»', '2026-08-08 → 2026-08-22', '3,000.00', 'مدرج في مسير آخر معتمد أو مصروف لنفس الفترة',
+    'مسير الإدارة العليا (معتمد)', 'انتقل خارج نطاق المسير قبل نهاية الفترة', 'آخر يوم داخل النطاق 2026-08-09', 'الجيزة', 'في مسير معتمد آخر: 1']) {
+    assert.ok(text.includes(value), value)
   }
-  assert.ok(html.includes('href="/payroll?run=42"'))
+  for (const value of ['FIXED_30', 'أساس الأيام', '0.500000', 'EXC_ALREADY_IN_RUN', 'TRANSFERRED_OUT', 'المسير #42', 'href="/payroll?run=42"', 'CAIRO']) assert.ok(!text.includes(value), value)
   assert.ok(!html.includes('استبعاد بسبب مكتوب'), 'without onExclude the preview offers no action')
   previewFixture = preview
 })
@@ -88,7 +92,7 @@ test('exclusion candidates: employees the preview already excludes (data problem
   const preview = withDataProblem()
   const rows = ui.payrollExclusionCandidates(preview)
   assert.deepEqual(rows.map(row => row.employeeId), [32, 8, 7], 'data problem first, then the other in-scope exclusion, then the included')
-  assert.equal(rows[0].dataProblem, true); assert.match(rows[0].label, /مشكلة بيانات تمنع الحساب/)
+  assert.equal(rows[0].dataProblem, true); assert.match(rows[0].label, /بيانات الخدمة غير مكتملة/)
   assert.ok(!rows.some(row => [9, 33].includes(row.employeeId)), 'TRANSFERRED_OUT and EXC_MANUAL_EXCLUSION are not offered')
   assert.deepEqual(ui.payrollExclusionCandidates(preview, [32]).map(row => row.employeeId), [8, 7], 'an employee already in the exclusion list is not offered again')
 
@@ -96,47 +100,52 @@ test('exclusion candidates: employees the preview already excludes (data problem
   const html = renderToStaticMarkup(React.createElement(PayrollMembershipPreviewView, { preview, currency: 'SAR', onExclude: row => chosen.push(row) }))
   for (const id of [7, 8, 32]) assert.ok(html.includes(`data-exclude-employee="${id}"`), `exclude action for ${id}`)
   for (const id of [9, 33]) assert.ok(!html.includes(`data-exclude-employee="${id}"`), `no exclude action for ${id}`)
-  assert.ok(html.includes('يمنع «احتساب المسودة» حتى تُصحح بياناته أو يُستبعد بسبب مكتوب'))
+  // تبسيط الرواتب: بيانات الخدمة الناقصة لا توقف الحساب؛ السبب يظهر بالعربي
+  const text = html.replace(/<!-- -->/g, '')
+  assert.ok(text.includes('بيانات الخدمة غير مكتملة — صحّحها ثم أعد الحساب')); assert.ok(text.includes('بيانات خدمة غير مكتملة: 1'))
+  assert.ok(!text.includes('يمنع «احتساب المسودة»'))
 })
 
-test('stored draft: the membership card warns that data problems block calculation and offers the written exclusion on those rows', () => {
+test('stored draft: the membership card says an employee with incomplete employment data is left out of the calculation, and offers the written exclusion on those rows', () => {
   const { PayrollDraftMembership } = require('../../src/components/payroll/PayrollDraftMembership')
   const draft = { id: 51, name: 'مسير فرع القاهرة — ديسمبر', status: 'DRAFT', period: '2026-12',
     selection: { mode: 'FILTERS', source: 'DEFINITION', filters: { ...ui.emptyRunFilters(), branchIds: [1], costCenterIds: [], includeSubDepartments: true, allEmployees: false },
       exclusions: [{ employeeId: 33, reason: 'مسير آخر', byUserId: 1, at: '2026-09-14T00:00:00.000Z' }], emptyScope: null } }
   const html = renderToStaticMarkup(React.createElement(PayrollDraftMembership, { draft, preview: withDataProblem(), currency: 'SAR', canEdit: true, onUpdated() {} }))
-  assert.ok(html.includes('1 موظف بمشكلة بيانات يمنعون «احتساب المسودة»'))
+  assert.ok(html.replace(/<!-- -->/g, '').includes('1 موظف بيانات خدمته غير مكتملة — سيُستبعد من الحساب حتى تُصحح بياناته ثم يُعاد الحساب.'))
   assert.ok(html.includes('data-exclude-employee="32"'))
   const readOnly = renderToStaticMarkup(React.createElement(PayrollDraftMembership, { draft, preview: withDataProblem(), currency: 'SAR', canEdit: false, onUpdated() {} }))
   assert.ok(!readOnly.includes('data-exclude-employee'), 'without payroll.calculate there is no exclude action')
   const source = read('src/components/payroll/PayrollDraftMembership.tsx')
   for (const text of ['updatePayrollRunDraft(draft.id, { exclusions:', 'حفظ الاستبعاد', '<PayrollMembershipPreviewView']) assert.ok(source.includes(text), text)
   const panel = read('src/components/payroll/PayrollRunDefinitionPanel.tsx')
-  for (const text of ['payrollExclusionCandidates(result)', 'onExclude={chooseExclusion}', 'مشكلة بيانات تمنع «احتساب المسودة»']) assert.ok(panel.includes(text), text)
+  for (const text of ['payrollExclusionCandidates(result)', 'onExclude={chooseExclusion}', 'موظف بيانات خدمته غير مكتملة: سيُستبعد من الحساب حتى تُصحح بياناته.']) assert.ok(panel.includes(text), text)
 })
 
-test('definition panel: name, published policy, month, linked filters or list, exclusions with a reason, preview and save as draft', () => {
-  const html = renderToStaticMarkup(React.createElement(PayrollRunDefinitionPanel, { branches, departments, teams, employees: [], currency: 'SAR', onSaved() {}, onCancel() {} }))
-  for (const text of ['مسير جديد', 'اسم المسير (فريد داخل الشهر)', 'نسخة السياسة المنشورة', 'شهر الراتب', 'فلاتر: فرع ← قسم ← فريق', 'قائمة موظفين محددة',
-    'الاستبعادات (0) — السبب إجباري', 'معاينة العضوية', 'حفظ كمسودة', 'مكان الموظف في التنظيم آخر يوم في الفترة']) {
+test('definition panel: name, formula set, month, linked filters or list, exclusions with a reason, preview and save as draft', () => {
+  const html = renderToStaticMarkup(React.createElement(PayrollRunDefinitionPanel, { branches, departments, teams, employees: [], currency: 'SAR', onSaved() {}, onCancel() {} })).replace(/<!-- -->/g, '')
+  for (const text of ['مسير جديد', 'اسم المسير (فريد داخل الشهر)', 'معادلات الرواتب', 'شهر الراتب', 'فلاتر: فرع ← قسم ← فريق', 'قائمة موظفين محددة',
+    'الاستبعادات (0) — السبب إجباري', 'معاينة العضوية', 'حفظ كمسودة']) {
     assert.ok(html.includes(text), text)
   }
+  for (const text of ['SHADOW', 'نسخة السياسة المنشورة']) assert.ok(!html.includes(text), text)
 })
 
-test('payroll page: «مسير جديد» is separate from «احتساب المسودة» / «إعادة حساب المسير», and approval waits for the unassigned acknowledgement', () => {
+test('payroll page: «مسير جديد» is separate from «احتساب المسودة» / «إعادة حساب المسير», and approval no longer waits for an unassigned acknowledgement', () => {
   const page = read('src/app/payroll/page.tsx')
   assert.doesNotMatch(page, /calculatePayroll\b/, 'the page must not merge new-run and recalculation in one button')
   // معاينة المسودة المحفوظة تُعرض عبر PayrollDraftMembership (يغلف PayrollMembershipPreviewView ويضيف الاستبعاد بسبب).
-  for (const text of ['مسير جديد', 'احتساب المسودة', 'إعادة حساب المسير', '<PayrollRunDefinitionPanel', '<PayrollUnassignedPanel', '<PayrollDraftMembership',
-    'recalculatePayrollRun', 'calculatePayrollRunDraft', '|| !unassignedAckCurrent']) {
+  for (const text of ['مسير جديد', 'احتساب المسودة', 'إعادة حساب المسير', '<PayrollRunDefinitionPanel', '<PayrollDraftMembership',
+    'recalculatePayrollRunWithCurrentFormula', 'calculatePayrollRunDraft']) {
     assert.ok(page.includes(text), text)
   }
+  // تبسيط الرواتب: لوحة «موظفون بلا مسير» لا تُعرض والاعتماد لا يشترط إقرارها (المكون والـAPI باقيان)
+  assert.doesNotMatch(page, /<PayrollUnassignedPanel|unassignedAckCurrent/)
   // نقطتا الحساب القديمتان لا يستدعيهما أي عميل في الواجهة.
   for (const file of ['src/lib/api.ts', 'src/lib/payroll-runs-api.ts', 'src/app/payroll/page.tsx']) {
     assert.doesNotMatch(read(file), /\/payroll\/runs\/calculate(-defined)?['"`]/, `${file} must not call the legacy calculate endpoints`)
   }
-  const panel = read('src/components/payroll/PayrollUnassignedPanel.tsx')
-  for (const text of ['موظفون بلا مسير في الفترة', 'أقر بالاطلاع على التقرير', 'acknowledgePayrollRunUnassigned', 'الاعتماد مرفوض حتى الإقرار']) assert.ok(panel.includes(text), text)
+  assert.ok(fs.existsSync(path.join(root, 'src/components/payroll/PayrollUnassignedPanel.tsx')), 'the hidden panel file stays')
   const lib = read('src/lib/payroll-runs-api.ts')
   assert.doesNotMatch(lib, /fetch\(/, 'API calls go through apiFetch only')
 })

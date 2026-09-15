@@ -34,8 +34,9 @@ before(async () => {
   base = `http://127.0.0.1:${app.getHttpServer().address().port}/api`
   ds = app.get(require('../node_modules/typeorm').DataSource)
   const branches = ds.getRepository(require('../src/org/entities/branch.entity').Branch)
-  branch = await branches.save({ name: 'Device test A', code: 'DEV_A', weekendDays: '' })
-  otherBranch = await branches.save({ name: 'Device test B', code: 'DEV_B', weekendDays: '' })
+  // weekendDays=null = إعداد النظام؛ النص الفارغ يرفضه فحص لقطة التقويم كما يرفضه API الفروع
+  branch = await branches.save({ name: 'Device test A', code: 'DEV_A', weekendDays: null })
+  otherBranch = await branches.save({ name: 'Device test B', code: 'DEV_B', weekendDays: null })
   const users = ds.getRepository(require('../src/auth/user.entity').User)
   admin = await users.save({ email: 'device-admin@test.invalid', displayName: 'Admin', role: 'super_admin', permissions: '["*"]', passwordHash: 'unused' })
   hr = await users.save({ email: 'device-hr@test.invalid', displayName: 'HR', role: 'hr_manager', branchId: branch.id,

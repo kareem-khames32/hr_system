@@ -37,8 +37,9 @@ before(async () => {
     ApprovalStep: 'requests/entities/approval-step.entity', Leave: 'requests/entities/leave.entities',
     LeaveType: 'requests/entities/leave.entities', LeaveBalance: 'requests/entities/leave.entities', Asset: 'requests/entities/custody.entities',
     CustodyAssignment: 'requests/entities/custody.entities' })) repos[name] = ds.getRepository(require('../src/' + file)[name])
-  branch = await repos.Branch.save({ name: 'Leave A', code: 'LEAVE_A', weekendDays: '' })
-  otherBranch = await repos.Branch.save({ name: 'Leave B', code: 'LEAVE_B', weekendDays: '' })
+  // weekendDays=null = إعداد النظام؛ النص الفارغ يرفضه فحص لقطة التقويم كما يرفضه API الفروع
+  branch = await repos.Branch.save({ name: 'Leave A', code: 'LEAVE_A', weekendDays: null })
+  otherBranch = await repos.Branch.save({ name: 'Leave B', code: 'LEAVE_B', weekendDays: null })
   const person = async (name, branchId) => {
     const e = await repos.Employee.save({ employeeCode: name, fullName: name, branchId, joinDate: '2020-01-01', status: 'active' })
     return repos.User.save({ email: name+'@test.invalid', displayName: name, role: 'employee', employeeId: e.id, branchId, passwordHash: 'unused' })

@@ -338,6 +338,9 @@ export const configSeed: Array<{ key: string; value: string }> = [
   // C6 / AD-07/09: أقل طول لسبب السلفة الاستثنائية واستثناء تجاوز السقف، وأبعد شهر تختاره الموارد البشرية لأول قسط.
   { key: 'loan.exceptional_reason_min_length', value: '10' },
   { key: 'loan.first_installment_max_months_ahead', value: '12' },
+  // أيام طلب السلفة من الشهر (من يوم إلى يوم) — الأصل مفتوح طول الشهر
+  { key: 'loan.request_from_day', value: '1' },
+  { key: 'loan.request_to_day', value: '31' },
   // PL-01: افتراضات تُنسخ إلى السياسة الجديدة فقط؛ لا تعيد تسعير أي مسير قائم.
   ...PAYROLL_POLICY_DEFAULT_CONFIG_SEED,
   // قرارات المالك D1/D2/D3/D10/D11 (14 سبتمبر) — PAYROLL_DECISIONS_2026-09-14.md

@@ -1,7 +1,7 @@
 'use client'
 
-// الخطوة 16 (مراجعة): مسودة محفوظة — معاينة عضويتها مع «استبعاد بسبب مكتوب» لأي موظف داخل النطاق، ومنهم أصحاب مشاكل البيانات
-// التي تمنع «احتساب المسودة». الحفظ تعديل لتعريف المسودة نفسها (PATCH)؛ المعاينة تبقى قراءة فقط.
+// الخطوة 16 (مراجعة): مسودة محفوظة — معاينة عضويتها مع «استبعاد بسبب مكتوب» لأي موظف داخل النطاق.
+// بيانات الخدمة الناقصة لا توقف الحساب: صاحبها يُستبعد تلقائيًا حتى تُصحح. الحفظ تعديل لتعريف المسودة نفسها (PATCH)؛ المعاينة تبقى قراءة فقط.
 import { useState } from 'react'
 import {
   payrollRunErrorMessage, updatePayrollRunDraft,
@@ -38,13 +38,13 @@ export function PayrollDraftMembership({ draft, preview, currency, canEdit, onUp
 
   return (
     <div className="space-y-3" data-testid="payroll-draft-membership">
-      {problems > 0 && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">
-        {problems} موظف بمشكلة بيانات يمنعون «احتساب المسودة»{canEdit ? ' — صحح بياناتهم، أو اضغط «استبعاد بسبب مكتوب» على صفوفهم أدناه' : ''}.</p>}
+      {problems > 0 && <p role="status" className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
+        {problems} موظف بيانات خدمته غير مكتملة — سيُستبعد من الحساب حتى تُصحح بياناته ثم يُعاد الحساب.</p>}
       {target && <div className="rounded-xl border border-amber-200 bg-amber-50 p-3 space-y-2" data-testid="payroll-draft-exclusion-form">
-        <p className="text-sm font-medium text-amber-900">استبعاد {target.label} من المسودة #{draft.id} — السبب إجباري ويُحفظ على تعريف المسير</p>
+        <p className="text-sm font-medium text-amber-900">استبعاد {target.label} من المسودة — السبب إجباري ويُحفظ على تعريف المسير</p>
         <div className="flex flex-wrap gap-2">
           <input autoFocus value={reason} onChange={e => setReason(e.target.value)} maxLength={500} disabled={busy} className="input flex-1 min-w-48"
-            aria-label="سبب الاستبعاد" placeholder="سبب الاستبعاد (مثل: تاريخ آخر يوم عمل ناقص — يُصرف في مسير تكميلي)" />
+            aria-label="سبب الاستبعاد" placeholder="سبب الاستبعاد (مثل: يُصرف في مسير آخر)" />
           <button type="button" onClick={save} disabled={busy || reason.trim().length < 3} className="btn-primary text-sm disabled:opacity-50">حفظ الاستبعاد</button>
           <button type="button" onClick={() => { setTarget(null); setReason(''); setError('') }} disabled={busy} className="btn-secondary text-sm">إلغاء</button>
         </div>

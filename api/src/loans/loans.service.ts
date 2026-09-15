@@ -8,7 +8,7 @@ import { readLoanInstallmentPositions } from '../payroll/payroll-installment-bal
 import { repayLoanEarly } from '../payroll/payroll-installment-ledger'
 import { loanScheduleAmounts } from '../requests/loan-installment-requests'
 import { addDays, LoanCapPolicyValues, loanMoney, normalizeLoanCapPolicyInput } from './loan-caps'
-import { evaluateEmployeeLoanCap, isLoanCapRequestType, LOAN_CAP_POLICY_COLUMNS, localDate, parseLoanCapPolicyRow } from './loan-request-caps'
+import { evaluateEmployeeLoanCap, isLoanCapRequestType, LOAN_CAP_POLICY_COLUMNS, loanRequestDayWindow, localDate, parseLoanCapPolicyRow } from './loan-request-caps'
 import { collectLoanRecovery, LOAN_RECOVERY_COLUMNS, openRecoveryAmount, writeOffLoanRecovery } from './loan-recovery'
 import type { LoanCapPolicyDto, LoanRepaymentDto } from './loans.dto'
 
@@ -117,7 +117,9 @@ export class LoansService {
         await this.employeeInScope(em, user, target)
       }
       const amount = blank(query.amount) ? '0.00' : loanMoney(query.amount, 'المبلغ', true)
-      return evaluateEmployeeLoanCap(em, { employeeId: target, amount, months: query.months ? Number(query.months) : 1, asOf: localDate() })
+      const evaluation = await evaluateEmployeeLoanCap(em, { employeeId: target, amount, months: query.months ? Number(query.months) : 1, asOf: localDate() })
+      // أيام طلب السلفة من الشهر تظهر في نافذة الطلب قبل التقديم (لا تُحفظ في لقطة السقف)
+      return { ...evaluation, requestWindow: await loanRequestDayWindow(em, localDate()) }
     })
   }
 

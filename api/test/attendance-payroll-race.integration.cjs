@@ -48,7 +48,8 @@ before(async () => {
   const admin = email => repo('User').save({ email, displayName: 'Race test actor', passwordHash: 'test-only', role: 'super_admin', permissions: '["*"]' })
   creator = await admin('creator@attendance-race.invalid'); approver = await admin('approver@attendance-race.invalid')
   await repo('RequestsConfig').save(Object.entries({ 'payroll.cycle_start_day': '1', 'payroll.monthly_days': '30', 'payroll.salary_evidence_mode': 'MONTHLY_HISTORY_OR_CURRENT_FILE',
-    'payroll.daily_hours': '8', 'attendance.weekend_days': '', 'attendance.grace_minutes': '0',
+    // إعداد العطلة العامة لازم رموز أيام صالحة (الإعدادات ترفض الفارغ)؛ يوم الاختبار 2026-07-08 أربعاء فيبقى يوم عمل
+    'payroll.daily_hours': '8', 'attendance.weekend_days': 'FRI,SAT', 'attendance.grace_minutes': '0',
     'payroll.late_deduction_enabled': 'true', 'payroll.shortfall_enabled': 'true', 'payroll.shortfall_mode': 'MINUTES',
     'payroll.shortfall_value': '1', 'payroll.attendance_overlap_policy': 'NET_OF_LATENESS',
     'payroll.attendance_daily_cap_days': '1' }).map(([key, value]) => ({ key, value })))
@@ -75,7 +76,8 @@ after(async t => {
 })
 
 test('approval holding employee-finance wins before a waiting recompute; attendance snapshot and approved OT stay immutable', { timeout: 60000 }, async () => {
-  const branch = await repo('Branch').save({ name: 'Attendance race fixture', code: 'ATRACE', weekendDays: '' })
+  // weekendDays=null = إعداد النظام (فحص لقطة التقويم يرفض النص الفارغ كما يرفضه API الفروع)
+  const branch = await repo('Branch').save({ name: 'Attendance race fixture', code: 'ATRACE', weekendDays: null })
   const emp = await repo('Employee').save({ employeeCode: 'ATRACE', fullName: 'Attendance race fixture', branchId: branch.id,
     joinDate: '2020-01-01', basicSalary: 9000, status: 'active', isActive: true, payMethod: 'cash' })
   const source = await request(creator, 'POST', '/catalogs/shifts', { name: 'Race flex', startTime: '09:00', endTime: '18:00',

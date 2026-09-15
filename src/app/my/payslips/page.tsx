@@ -32,6 +32,7 @@ const payMethodLabels: Record<string, string> = {
   transfer: 'تحويل بنكي',
   cash: 'نقداً',
   cheque: 'شيك',
+  visa: 'فيزا',
 }
 
 interface PayslipRow {
@@ -138,13 +139,11 @@ export default function MyPayslipsPage() {
                             <span
                               className={`badge text-xs ${runStatusColors[run.status] ?? 'bg-gray-100 text-gray-600'}`}
                             >
-                              {runStatusLabels[run.status] ?? run.status}
+                              {runStatusLabels[run.status] ?? 'غير معروف'}
                             </span>
-                            {run.runType === 'SUPPLEMENTARY' && <span className="badge text-xs bg-blue-50 text-blue-700 mr-1">تكميلي</span>}
-                            {reversal?.line && (
-                              <span className={`badge text-xs mr-1 ${reversal.line.status === 'POSTED' ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-800'}`}>
-                                {reversal.line.status === 'POSTED' ? 'عُكس صرفها' : 'عكس بانتظار التنفيذ'}
-                              </span>
+                            {/* تبسيط الرواتب (2026-09-15): علامتا «تكميلي» و«عُكس صرفها» أُخفيتا */}
+                            {reversal?.line && reversal.line.status !== 'POSTED' && (
+                              <span className="badge text-xs mr-1 bg-amber-50 text-amber-800">عكس بانتظار التنفيذ</span>
                             )}
                           </td>
                           <td className="table-cell text-center text-gray-600">
@@ -160,7 +159,7 @@ export default function MyPayslipsPage() {
                             {formatMoney(item.netPay)} {currency}
                           </td>
                           <td className="table-cell text-center text-sm text-gray-600">
-                            {payMethodLabels[item.payMethod] ?? item.payMethod}
+                            {payMethodLabels[item.payMethod] ?? 'غير معروف'}
                           </td>
                           <td className="table-cell">
                             <div className="flex items-center justify-center gap-2">

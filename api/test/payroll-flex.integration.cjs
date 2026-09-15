@@ -37,7 +37,8 @@ async function request(user, method, url, body) {
 }
 async function fixture({ kind = 'shifts', rule = {}, employee = {}, day = date } = {}) {
   const n = ++sequence
-  const branch = await repo('Branch').save({ code: `FLEX${n}`, name: `Flex fixture branch ${n}`, weekendDays: '' })
+  // weekendDays=null للفرع = إعداد النظام؛ النص الفارغ يرفضه فحص لقطة التقويم (أما '' لجدول العمل فمعناه دوام 7 أيام وهو صالح)
+  const branch = await repo('Branch').save({ code: `FLEX${n}`, name: `Flex fixture branch ${n}`, weekendDays: null })
   const actor = await repo('User').save({ email: `manager-${n}@payroll-flex.invalid`, displayName: 'Flex branch fixture manager',
     passwordHash: 'test-only', role: 'hr_manager', branchId: branch.id,
     permissions: JSON.stringify(['attendance.manage', 'attendance.view_all', 'employees.edit', 'employees.view', 'settings.manage', 'payroll.view']) })
@@ -606,12 +607,22 @@ test('FX policy validation: invalid settings are rejected over HTTP and a corrup
   }
   const before = await request(admin, 'GET', `/payroll/runs/${run.id}`)
   assert.equal(before.status, 200)
+  assert.match(before.body.policySnapshotHash, /^[a-f0-9]{64}$/)
   await configDuring({ 'payroll.shortfall_mode': 'INVALID_FIXTURE_VALUE' }, async () => {
+    // الخطوة 19: إعادة الحساب تقرأ لقطة السياسة المجمدة على المسير؛ الإعداد الحي التالف لا يُقرأ إلا عند «تحديث اللقطة» الصريح، فيُرفض ولا يستبدل المسير
     const failed = await request(admin, 'POST', '/payroll/runs/calculate-defined', {
       period: '2026-07', scopeType: 'CUSTOM', employeeIds: [f.emp.id], runId: run.id, reason: 'اختبار سلامة السياسة قبل استبدال المسير',
+      refreshPolicySnapshot: true, expectedPolicySnapshotHash: before.body.policySnapshotHash,
     })
     assert.equal(failed.status, 400, JSON.stringify(failed.body))
     assert.deepEqual((await request(admin, 'GET', `/payroll/runs/${run.id}`)).body, before.body)
+    // بلا تحديث: الحساب من اللقطة المجمدة نفسها، فلا تصل القيمة التالفة إلى النتيجة
+    const frozen = await request(admin, 'POST', '/payroll/runs/calculate-defined', {
+      period: '2026-07', scopeType: 'CUSTOM', employeeIds: [f.emp.id], runId: run.id, reason: 'إعادة حساب من لقطة السياسة المجمدة',
+    })
+    assert.equal(frozen.status, 201, JSON.stringify(frozen.body))
+    assert.equal(frozen.body.policySnapshotHash, before.body.policySnapshotHash)
+    assert.equal(number(frozen.body.items.find(row => row.employeeId === f.emp.id).shortfallDeduction), number(before.body.items.find(row => row.employeeId === f.emp.id).shortfallDeduction))
   })
 })
 

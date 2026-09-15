@@ -58,8 +58,9 @@ before(async () => {
     ClearanceItem: 'offboarding/offboarding.entities' })) {
     repos[name] = ds.getRepository(require(`../src/${file}`)[name])
   }
-  branch = await repos.Branch.save({ name: 'Test A', code: 'TEST_A', weekendDays: '' })
-  otherBranch = await repos.Branch.save({ name: 'Test B', code: 'TEST_B', weekendDays: '' })
+  // weekendDays=null = إعداد النظام؛ النص الفارغ يرفضه فحص لقطة التقويم كما يرفضه API الفروع
+  branch = await repos.Branch.save({ name: 'Test A', code: 'TEST_A', weekendDays: null })
+  otherBranch = await repos.Branch.save({ name: 'Test B', code: 'TEST_B', weekendDays: null })
   emp = await repos.Employee.save({ employeeCode: 'TEST001', fullName: 'Recovery employee', branchId: branch.id,
     joinDate: '2020-01-01', basicSalary: 6000, status: 'active' })
   otherEmp = await repos.Employee.save({ employeeCode: 'TEST002', fullName: 'Other branch', branchId: otherBranch.id,
@@ -124,9 +125,21 @@ test('chain writes cannot escape the actor branch and global duplicate lookup do
 })
 
 test('SET-13/14 branch configuration and department tree reject malformed references and cycles', async () => {
-  assert.equal((await request(admin, 'PATCH', `/branches/${branch.id}`, { weekendDays: 'Fri Sat' })).status, 400)
+  // عطلة الفرع جزء من تقويمه المؤرخ: التعديل الصالح يلزمه calendarChange (السريان والسبب ونسخة المصدر المقروءة)
+  const branchCalendarChange = async () => {
+    const context = await request(admin, 'GET', `/attendance/calendar-context?scope=BRANCH&sourceId=${branch.id}`)
+    assert.equal(context.status, 200, JSON.stringify(context.body))
+    return { effectiveFrom: '2026-06-01', reason: 'تصحيح عطلة الفرع وفق قرار الاختبار', expectedRevision: context.body.revision, expectedCurrentSourceHash: context.body.currentSourceHash }
+  }
+  // الصيغة الخاطئة تُرفض لذاتها حتى مع اعتماد تغيير صالح
+  const malformed = await request(admin, 'PATCH', `/branches/${branch.id}`, { weekendDays: 'Fri Sat', calendarChange: await branchCalendarChange() })
+  assert.equal(malformed.status, 400, JSON.stringify(malformed.body))
+  assert.doesNotMatch(JSON.stringify(malformed.body), /CALENDAR_CHANGE_REQUIRED/)
   assert.equal((await request(admin, 'PATCH', `/branches/${branch.id}`, { costCenter: 'NOT_REAL' })).status, 400)
-  const normalized = await request(admin, 'PATCH', `/branches/${branch.id}`, { weekendDays: 'fri,sat' })
+  const unconfirmed = await request(admin, 'PATCH', `/branches/${branch.id}`, { weekendDays: 'fri,sat' })
+  assert.equal(unconfirmed.status, 400, JSON.stringify(unconfirmed.body)); assert.equal(unconfirmed.body.code, 'CALENDAR_CHANGE_REQUIRED')
+  assert.equal((await repos.Branch.findOneByOrFail({ id: branch.id })).weekendDays, null, 'unconfirmed calendar change leaves the branch unchanged')
+  const normalized = await request(admin, 'PATCH', `/branches/${branch.id}`, { weekendDays: 'fri,sat', calendarChange: await branchCalendarChange() })
   assert.equal(normalized.status, 200, JSON.stringify(normalized.body))
   assert.equal(normalized.body.weekendDays, 'FRI,SAT')
   const deptRepo = entity('org/entities/department.entity', 'Department')
@@ -141,10 +154,14 @@ test('SET-13/14 branch configuration and department tree reject malformed refere
 })
 
 test('SET-15/18/23 policy and salary ranges validate and obsolete hardcoded roles route is absent', async () => {
+  // القيمة المؤقتة '0' ليست رموز أيام؛ صف العطلة العامة يُعاد لحالته قبل الاختبار حتى لا يُفسد تقويم GLOBAL لاختبارات العطلات بعده
+  const originalWeekend = await repos.RequestsConfig.findOneBy({ key: 'attendance.weekend_days' })
   for (const [key, value] of [['attendance.weekend_days','Fri Sat'], ['leave.accrual_mode','fortnightly'], ['attendance.grace_minutes','   ']]) {
     await repos.RequestsConfig.save({ key, value: '0' })
     assert.equal((await request(admin, 'PATCH', '/settings/config', { key, value })).status, 400)
   }
+  if (originalWeekend) await repos.RequestsConfig.save(originalWeekend)
+  else await repos.RequestsConfig.delete({ key: 'attendance.weekend_days' })
   const grade = await request(admin, 'POST', '/catalogs/grades', { name: 'Integrity grade', minSalary: 1000, maxSalary: 2000 })
   assert.equal(grade.status, 201)
   assert.equal((await request(admin, 'PATCH', `/catalogs/grades/${grade.body.id}`, { minSalary: 3000 })).status, 400)
@@ -423,17 +440,30 @@ test('NAM-14 bare employee readers cannot retrieve finance through list detail p
 })
 
 test('NAM-14 structured changes mask bank audit at rest, preserve actors and legacy API contracts, and roll back atomically',async()=>{
-  const target=await employeeFixture({iban:'SA0311111111111111111111',basicSalary:6000,contractType:'fixed_term',contractStart:'2025-01-01',contractEnd:'2025-12-31'})
+  // مكونات الأجر الستة صريحة (صفر) كملف موظف حقيقي؛ أمر الأجر المنظم يرسل كل مكون نصًا دقيقًا
+  const target=await employeeFixture({iban:'SA0311111111111111111111',basicSalary:6000,phoneAllowance:0,workNatureAllowance:0,contractType:'fixed_term',contractStart:'2025-01-01',contractEnd:'2025-12-31'})
   const hist=entity('requests/entities/employment.entities','EmployeeStatusHistory')
   const nextIban='SA0322222222222222222222'
-  const changed=await request(hr,'PATCH',`/employees/${target.id}`,{iban:nextIban,basicSalary:6200,workType:'parttime'})
+  // عقد الخطوة 13: الأجر لا يُعدل بمفاتيح الملف العامة؛ الطلب القديم يُرفض ذريًا فلا يمس الحساب البنكي ولا السجل
+  const legacy=await request(hr,'PATCH',`/employees/${target.id}`,{iban:nextIban,basicSalary:6200,workType:'parttime'})
+  assert.equal(legacy.status,400,JSON.stringify(legacy.body)); assert.equal(legacy.body.code,'SALARY_CHANGE_EFFECTIVE_DATE_REQUIRED')
+  assert.equal((await repos.Employee.findOneByOrFail({id:target.id})).iban,target.iban,'rejected legacy salary keys roll back the bank change')
+  assert.equal(await hist.countBy({employeeId:target.id}),0,'rejected legacy salary keys leave no audit rows')
+  const changed=await request(hr,'PATCH',`/employees/${target.id}`,{iban:nextIban,workType:'parttime'})
   assert.equal(changed.status,200,JSON.stringify(changed.body))
+  // تغيير الأجر المنظم يسري من راتب شهر كامل ويلزمه payroll.approve (SEC-06)، فينفذه المدير العام بسياق التعديل المقروء
+  const salaryContext=await request(admin,'GET',`/employees/${target.id}/salary-change-context`)
+  assert.equal(salaryContext.status,200,JSON.stringify(salaryContext.body))
+  const salaryChanged=await request(admin,'PATCH',`/employees/${target.id}`,{salaryChange:{expectedRevision:salaryContext.body.historyRevision,
+    expectedCurrentSourceHash:salaryContext.body.currentSourceHash,effectivePayrollPeriod:salaryContext.body.currentPayrollPeriod,
+    reason:'قرار زيادة أجر للاختبار',evidenceReference:'مرجع NAM-14',salary:{...salaryContext.body.current,basicSalary:'6200.00'}}})
+  assert.equal(salaryChanged.status,200,JSON.stringify(salaryChanged.body))
   const bank=await hist.findOneBy({employeeId:target.id,changeType:'BANK',fieldName:'iban'})
   assert.ok(bank); assert.equal(bank.oldValue,'****1111'); assert.equal(bank.newValue,'****2222')
   assert.equal(bank.changedByUserId,hr.id); assert.equal(bank.oldStatus,null); assert.equal(bank.newStatus,'change')
   assert.equal((await repos.Employee.findOneByOrFail({id:target.id})).iban,nextIban,'employee account stays complete')
   assert.equal((await repos.Employee.findOneByOrFail({id:target.id})).workType,'part_time')
-  const salary=await hist.findOneBy({employeeId:target.id,changeType:'SALARY'})
+  const salary=await hist.findOneBy({employeeId:target.id,changeType:'SALARY',fieldName:'basicSalary'})
   assert.equal(Number(salary.oldValue),6000); assert.equal(Number(salary.newValue),6200)
   assert.equal(JSON.stringify(await hist.findBy({employeeId:target.id})).includes(nextIban),false)
   const reader=await repos.User.save({email:'structured-audit-reader@test.invalid',displayName:'Reader',passwordHash:'unused',role:'employee',branchId:branch.id,permissions:JSON.stringify(['employees.view'])})
@@ -441,7 +471,8 @@ test('NAM-14 structured changes mask bank audit at rest, preserve actors and leg
     const permitted=await request(hr,'GET',`/employees/${target.id}${suffix}`)
     const allowed=suffix==='/history'?permitted.body:permitted.body.history
     assert.equal(allowed.some(r=>r.newStatus==='iban:****2222'),true)
-    assert.equal(allowed.some(r=>r.newStatus==='basicSalary:6200'),true)
+    // كاتب الأجر المنظم يحفظ القيمة بدقتها المالية النصية
+    assert.equal(allowed.some(r=>r.newStatus==='basicSalary:6200.00'),true)
     const denied=await request(reader,'GET',`/employees/${target.id}${suffix}`)
     const rows=suffix==='/history'?denied.body:denied.body.history
     for(const row of rows.filter(r=>['BANK','SALARY'].includes(r.changeType))){assert.equal(row.oldValue,null);assert.equal(row.newValue,null)}
@@ -510,16 +541,25 @@ test('NAM-34 holiday creation uses configured country and preserves explicit all
   const config=await repos.RequestsConfig.findOneBy({key:'system.country'})
   try {
     await repos.RequestsConfig.save({...config,key:'system.country',value:'SA'})
-    const configured=await request(admin,'POST','/catalogs/holidays',{name:'Country from config',date:'2035-02-05'})
+    // العطلات الرسمية جزء من تقويم GLOBAL المؤرخ: كل إنشاء أو تعديل يلزمه calendarChange بنسخة المصدر المقروءة قبله
+    const globalCalendarChange=async()=>{
+      const context=await request(admin,'GET','/attendance/calendar-context?scope=GLOBAL&sourceId=0')
+      assert.equal(context.status,200,JSON.stringify(context.body))
+      return {effectiveFrom:'2035-02-01',reason:'اعتماد عطلة رسمية في بيئة الاختبار',expectedRevision:context.body.revision,expectedCurrentSourceHash:context.body.currentSourceHash}
+    }
+    const unconfirmed=await request(admin,'POST','/catalogs/holidays',{name:'Needs calendar evidence',date:'2035-02-04'})
+    assert.equal(unconfirmed.status,400,JSON.stringify(unconfirmed.body)); assert.equal(unconfirmed.body.code,'CALENDAR_CHANGE_REQUIRED')
+    const configured=await request(admin,'POST','/catalogs/holidays',{name:'Country from config',date:'2035-02-05',calendarChange:await globalCalendarChange()})
     assert.equal(configured.status,201,JSON.stringify(configured.body))
     assert.equal(configured.body.country,'SA')
-    const all=await request(admin,'POST','/catalogs/holidays',{name:'Explicit all countries',date:'2035-02-06',country:''})
+    const all=await request(admin,'POST','/catalogs/holidays',{name:'Explicit all countries',date:'2035-02-06',country:'',calendarChange:await globalCalendarChange()})
     assert.equal(all.status,201,JSON.stringify(all.body))
     assert.equal(all.body.country,'')
-    const explicit=await request(admin,'POST','/catalogs/holidays',{name:'Explicit override',date:'2035-02-07',country:'eg'})
+    const explicit=await request(admin,'POST','/catalogs/holidays',{name:'Explicit override',date:'2035-02-07',country:'eg',calendarChange:await globalCalendarChange()})
     assert.equal(explicit.status,201,JSON.stringify(explicit.body))
     assert.equal(explicit.body.country,'EG')
-    await request(admin,'PATCH',`/catalogs/holidays/${configured.body.id}`,{name:'Country stays unchanged'})
+    const renamed=await request(admin,'PATCH',`/catalogs/holidays/${configured.body.id}`,{name:'Country stays unchanged',calendarChange:await globalCalendarChange()})
+    assert.equal(renamed.status,200,JSON.stringify(renamed.body))
     assert.equal((await entity('assets/assets.entities','PublicHoliday').findOneByOrFail({id:configured.body.id})).country,'SA')
   } finally {
     if(config)await repos.RequestsConfig.save(config)

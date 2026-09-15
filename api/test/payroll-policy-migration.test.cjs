@@ -10,6 +10,7 @@ const runner = require('../scripts/payroll-migrations.cjs')
 const { EntitySchema } = require('../node_modules/typeorm')
 const entities = require('../src/payroll/payroll-policy.entities.ts')
 const definitionEntities = require('../src/payroll/payroll-policy-definition.entities.ts')
+const CHARGE_RULE_COLUMNS_033 = ['lateDeductionEnabled', 'latenessTierSetId', 'earlyLeaveDeductionEnabled', 'shortfallEnabled', 'shortfallMode', 'shortfallValue', 'absencePenaltyDays']
 const database = 'hr_payroll_migration_test_' + crypto.randomBytes(8).toString('hex')
 const canary = new EntitySchema({ name: 'PolicyMigrationCanary', tableName: 'policy_migration_canary', columns: {
   id: { type: 'int', primary: true }, originalBytes: { type: 'varbinary', length: 'MAX' }, amount: { type: 'decimal', precision: 18, scale: 2 },
@@ -36,6 +37,12 @@ before(async () => {
   master = await pool('master'); await master.request().query(`CREATE DATABASE [${database}]`); created = true
   connection = await pool(database)
   ds = await runner.openDataSource(database, [canary, ...Object.values(entities), ...Object.values(definitionEntities)])
+  // هذا الاختبار يثبت عقد006–010؛ أعمدة «طريقة الخصم» السبعة على payroll_policies في033 يطبقها المُرحّل المجمّع (db-migrate.cjs) ولا تُنسب إلى هذه السلسلة.
+  for (const metadata of ds.entityMetadatas) {
+    const later = metadata.tableName === 'payroll_policies' ? CHARGE_RULE_COLUMNS_033 : []
+    metadata.columns = metadata.columns.filter(column => !later.includes(column.databaseName))
+    metadata.ownColumns = metadata.ownColumns.filter(column => !later.includes(column.databaseName))
+  }
   const key = ds.namingStrategy.primaryKeyName('policy_migration_canary', ['id'])
   await connection.request().batch(`CREATE TABLE dbo.policy_migration_canary(id int NOT NULL,originalBytes varbinary(max) NOT NULL,amount decimal(18,2) NOT NULL,CONSTRAINT [${key}] PRIMARY KEY(id)); INSERT dbo.policy_migration_canary VALUES(71,0x00FF102ABC,12500.17)`)
   original = await bytes(); diff = await runner.schemaDiff(ds)

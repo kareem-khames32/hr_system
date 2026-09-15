@@ -106,7 +106,7 @@ export const MEMBERSHIP_EXCLUSION_LABELS: Record<string, string> = {
   EXC_NO_ACTIVE_EMPLOYMENT: 'لا توجد مدة عمل مستحقة داخل الفترة',
   EXC_MANUAL_EXCLUSION: 'استبعاد يدوي بسبب مكتوب', MANUAL: 'استبعاد يدوي', EXC_MANUAL: 'استبعاد يدوي',
   TRANSFERRED_OUT: 'انتقل خارج نطاق المسير قبل نهاية الفترة', EXC_OUT_OF_SCOPE: 'خارج نطاق المسير في آخر يوم من الفترة',
-  EXC_ALREADY_IN_RUN: 'مدرج في مسير آخر معتمد أو مصروف لنفس الفترة', EXC_EMPLOYMENT_DATA_INVALID: 'بيانات الخدمة غير مكتملة أو متعارضة — صححها أو استبعده بسبب',
+  EXC_ALREADY_IN_RUN: 'مدرج في مسير آخر معتمد أو مصروف لنفس الفترة', EXC_EMPLOYMENT_DATA_INVALID: 'بيانات الخدمة غير مكتملة — صحّحها ثم أعد الحساب',
   NO_SALARY_DEFINED: 'لا يوجد راتب موثق لشهر المسير — أثبته «يسري من راتب شهر» من سجل الأجر',
   SALARY_DAILY_HISTORY_ONLY: 'سجل الأجر بتواريخ يومية لا تحدد شهر الراتب — حوّله إلى شهور',
   SALARY_PAYROLL_PERIOD_GAP: 'شهر المسير غير موثق في سجل الأجر الشهري', SALARY_PAYROLL_PERIOD_INVALID: 'سجل الأجر الشهري غير صالح لهذا الشهر',
@@ -127,7 +127,7 @@ export function payrollExclusionCandidates(preview: Pick<PayrollMembershipPrevie
   const skip = new Set(alreadyExcluded)
   const rows: PayrollExclusionCandidate[] = [
     ...preview.excluded.filter(row => !NOT_EXCLUDABLE.has(row.code ?? '')).map(row => ({ employeeId: row.employeeId, code: row.code, dataProblem: !!row.dataProblem,
-      label: `${row.fullName} (${row.employeeCode})${row.dataProblem ? ' — مشكلة بيانات تمنع الحساب' : ` — ${MEMBERSHIP_EXCLUSION_LABELS[row.code ?? ''] ?? row.code ?? 'مستبعد'}`}` })),
+      label: `${row.fullName} (${row.employeeCode})${row.dataProblem ? ' — بيانات الخدمة غير مكتملة' : ` — ${MEMBERSHIP_EXCLUSION_LABELS[row.code ?? ''] ?? 'مستبعد'}`}` })),
     ...preview.included.map(row => ({ employeeId: row.employeeId, code: null, dataProblem: false, label: `${row.fullName} (${row.employeeCode})` })),
   ]
   return rows.filter(row => !skip.has(row.employeeId)).sort((a, b) => Number(b.dataProblem) - Number(a.dataProblem))
@@ -158,13 +158,35 @@ export interface PublishedPolicyVersionOption {
   policyId: number; policyName: string; code: string; versionId: number; versionNo: number
   effectiveFrom: string; effectiveUntil: string | null; cycleStartDay: number | null; label: string
 }
-/** النسخ المنشورة فقط تصلح لربط مسير؛ الفترة تُشتق من دورتها في الخادم. */
+/** النسخ المنشورة فقط تصلح لربط مسير؛ الفترة تُشتق من دورتها في الخادم. الاسم وحده، والتواريخ فقط لو للمعادلة أكثر من نسخة منشورة. */
 export function publishedPolicyVersions(policies: PayrollPolicySummary[]): PublishedPolicyVersionOption[] {
-  return policies.filter(summary => summary.policy.isActive).flatMap(summary => summary.versions.filter(version => version.status === 'ACTIVE').map(version => ({
-    policyId: summary.policy.id, policyName: summary.policy.name, code: summary.policy.code, versionId: version.id, versionNo: version.versionNo,
-    effectiveFrom: version.effectiveFrom, effectiveUntil: version.effectiveUntil ?? version.effectiveTo ?? null, cycleStartDay: version.cycleStartDay ?? null,
-    label: `${summary.policy.name} — نسخة ${version.versionNo} (من ${version.effectiveFrom}${version.effectiveUntil ? ` إلى ${version.effectiveUntil}` : ''})`,
-  })))
+  return policies.filter(summary => summary.policy.isActive).flatMap(summary => {
+    const published = summary.versions.filter(version => version.status === 'ACTIVE')
+    return published.map(version => {
+      const effectiveUntil = version.effectiveUntil ?? version.effectiveTo ?? null
+      return {
+        policyId: summary.policy.id, policyName: summary.policy.name, code: summary.policy.code, versionId: version.id, versionNo: version.versionNo,
+        effectiveFrom: version.effectiveFrom, effectiveUntil, cycleStartDay: version.cycleStartDay ?? null,
+        label: published.length > 1 ? `${summary.policy.name} (من ${version.effectiveFrom}${effectiveUntil ? ` إلى ${effectiveUntil}` : ''})` : summary.policy.name,
+      }
+    })
+  })
+}
+
+/** الشهر التالي لشهر مسير بصيغة YYYY-MM. */
+export function nextPayrollPeriod(period: string): string {
+  const [year, month] = period.split('-').map(Number)
+  return month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, '0')}`
+}
+
+/**
+ * إعادة حساب مسير محسوب بسبب جاهز، وبآخر قيم المعادلات دائمًا: لو تغيّرت المعادلة منذ الحساب تُحدَّث لقطة السياسة ببصمة القيم الحالية.
+ * المسير المعتمد أو المصروف لا يُعاد حسابه (الخادم يرفض).
+ */
+export async function recalculatePayrollRunWithCurrentFormula(runId: number, options: { allowDraftConflicts?: boolean } = {}) {
+  const snapshot = await apiFetch<{ canRefresh: boolean; currentHash: string }>(`/payroll/runs/${runId}/policy-snapshot`)
+  return recalculatePayrollRun(runId, { reason: 'إعادة حساب', ...options,
+    ...(snapshot.canRefresh && snapshot.currentHash ? { refreshPolicySnapshot: true, expectedPolicySnapshotHash: snapshot.currentHash } : {}) })
 }
 
 export function payrollRunErrorMessage(error: unknown, fallback = 'تعذر تنفيذ العملية على المسير'): string {

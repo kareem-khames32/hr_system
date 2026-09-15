@@ -576,7 +576,7 @@ export class BonusesService {
     const period = credit?.appliedPayrollRunId ? runs.get(credit.appliedPayrollRunId) ?? null : null
     const statusLabel = row.status !== 'APPROVED' ? BONUS_LABELS.statuses[row.status] ?? row.status
       : state === 'PAID' ? `مصروف في مسير ${period ?? `#${credit?.appliedPayrollRunId}`}`
-        : state === 'RESERVED' ? `${BONUS_LABELS.payout.RESERVED} (#${credit?.reservedPayrollRunId})` : BONUS_LABELS.statuses.APPROVED
+        : state === 'RESERVED' ? BONUS_LABELS.payout.RESERVED : BONUS_LABELS.statuses.APPROVED
     const paidAmount = credit?.status === 'APPLIED' ? money(credit.appliedAmount ?? credit.amount)! : '0.00'
     return { credit, state, statusLabel, paidAmount, reversedAmount: sumMoney(reversals.map(item => item.amount)),
       view: state ? { state, label: BONUS_LABELS.payout[state], runId: credit?.appliedPayrollRunId ?? credit?.reservedPayrollRunId ?? null, period } : null }

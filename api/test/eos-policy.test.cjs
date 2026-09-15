@@ -127,16 +127,20 @@ function serviceFixture(raw = EOS_DEFAULTS) {
     'eos.months_per_year_after': raw.laterMonths, 'eos.resignation_factors': raw.resignationFactors,
     'eos.reason_factors': raw.reasonFactors }
   const empty = { find: async () => [], findOne: async () => null }
+  // حارس الأقساط المحجوزة في مسير معتمد (assertNoHeldLoanInstallments) يقرأ عبر manager مستودع البنود قبل بناء التسوية؛
+  // البديل يسجل الاستعلام ولا يعيد صفوفًا محجوزة، فيبقى الحساب نفسه هو المختبر هنا
+  const guardQueries = []
   const lines = { count: async () => persisted.length,
     create: rows => rows.map(row => ({ ...row })),
-    save: async rows => { persisted.push(...rows.map(row => ({ ...row }))); return rows } }
+    save: async rows => { persisted.push(...rows.map(row => ({ ...row }))); return rows },
+    manager: { query: async (text, params) => { guardQueries.push({ text, params }); return [] } } }
   const employee = { id: 1, employeeCode: 'EOS_TEST', fullName: 'Synthetic EOS employee',
     branchId: 1, status: 'active', isActive: true, joinDate: '2020-01-01', basicSalary: 12000 }
   const employees = { findOne: async () => employee }
   const config = { findOne: async ({ where }) => keys[where.key] === undefined ? null : { key: where.key, value: keys[where.key] } }
   const service = new OffboardingService(empty, empty, lines, employees, empty, empty, empty, empty,
     empty, empty, empty, empty, empty, config, {}, { balanceOf: async () => null })
-  return { service, persisted }
+  return { service, persisted, guardQueries }
 }
 const actor = { sub: 99, role: 'super_admin', branchId: null, permissions: ['*'] }
 
@@ -145,13 +149,16 @@ test('service preview and persisted EOS lines match independent expected amounts
     ['2021-12-31', 4000, 12000], ['2024-12-31', 20000, 30000], ['2029-12-31', 90000, 90000],
   ]) {
     for (const [reason, expected] of [['resignation', resignation], ['termination', termination]]) {
-      const { service, persisted } = serviceFixture()
+      const { service, persisted, guardQueries } = serviceFixture()
       const preview = await service.preview(actor, { employeeId: 1, reason, lastWorkingDay })
       assert.equal(preview.blockReason, null)
       assert.equal(persisted.length, 0, 'preview has no line writes')
       assert.equal(preview.lines.length, 1)
       assert.equal(preview.lines[0].amount, expected, `${reason} at ${lastWorkingDay}`)
+      guardQueries.length = 0
       await service.buildSettlement({ id: 71, employeeId: 1, terminationReason: reason, lastWorkingDay }, true)
+      assert.ok(guardQueries.some(({ text, params }) => /\[loan_installment_allocations\]/.test(text) && /'HELD'/.test(text) && params[0] === 1),
+        'settlement checks held payroll installments of this employee before building lines')
       assert.equal(persisted.length, 1)
       assert.equal(persisted[0].caseId, 71)
       assert.equal(persisted[0].isAuto, true)

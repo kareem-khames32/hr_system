@@ -25,7 +25,11 @@ test('PL-04 catalog includes every SRS scalar plus immutable approved OT amount,
   }
   assert.equal(Object.isFrozen(catalog.PAYROLL_SRS_VARIABLES), true)
   assert.match(catalog.PAYROLL_SRS_VARIABLES.find(variable => variable.code === 'OT_AMOUNT').description, /لا تعيد السياسة تسعيره/)
-  assert.match(catalog.PAYROLL_SRS_VARIABLES.find(variable => variable.code === 'BASE_SALARY').description, /تاريخ رواتب مؤرخًا/)
+  // قاعدة المالك (الخطوة 13): الراتب يسري لشهر مسير كامل ولا يقسم ولا يُستنتج من الراتب الحالي
+  const baseSalary = catalog.PAYROLL_SRS_VARIABLES.find(variable => variable.code === 'BASE_SALARY').description
+  assert.match(baseSalary, /لشهر المسير كله/)
+  assert.match(baseSalary, /لا يقسم بين أيام بالراتب القديم والجديد/)
+  assert.match(baseSalary, /لا يُستنتج من الراتب الحالي/)
   assert.match(catalog.PAYROLL_SRS_VARIABLES.find(variable => variable.code === 'BASE_DAYS_BASIS').description, /30/)
 })
 

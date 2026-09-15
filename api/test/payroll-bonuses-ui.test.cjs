@@ -58,11 +58,17 @@ test('workspace: single employee, a selection, a team, a department or a branch;
   assert.doesNotMatch(workspace, /Number\([^)]*\)\s*\*/, 'no amount arithmetic in the screen')
 })
 
-test('pages: /payroll/bonuses inside MainLayout with the admin workspace and legacy BONUS requests read-only (COMPLETED is not «مصروف»); /my/bonuses shows the employee his bonuses plus the manager workspace', () => {
+test('pages: /payroll/bonuses inside MainLayout with the admin workspace, opened prefilled from the run («مكافأة»), without the legacy BONUS requests table; /my/bonuses shows the employee his bonuses plus the manager workspace', () => {
   const admin = read('src/app/payroll/bonuses/page.tsx')
-  for (const text of ['<MainLayout>', '<BonusesWorkspace currency={currency} mode="admin"', "COMPLETED: { label: 'معتمد — قُيّد في الدفتر بانتظار الصرف'", 'للاطلاع فقط']) {
+  for (const text of ['<MainLayout>', '<BonusesWorkspace currency={currency} mode="admin"', "params.get('tab') === 'create'",
+    'initialTab={initial.tab ?? undefined} initialEmployeeId={initial.employeeId} initialPeriod={initial.period}']) {
     assert.ok(admin.includes(text), text)
   }
+  // تبسيط الرواتب: جدول طلبات المكافآت القديمة من محرك الطلبات لا يُعرض (الطلبات القديمة باقية في قاعدة البيانات)
+  assert.doesNotMatch(admin, /طلبات المكافآت القديمة|COMPLETED:/)
+  // تغيير نوع المكافأة لا يُسقط الموظف القادم من رابط المسير: يُعاد اختياره متى كان داخل نطاق النوع الجديد
+  const workspace = read('src/components/payroll/BonusesWorkspace.tsx')
+  assert.ok(workspace.includes('if (singleId) setPendingEmployeeId(singleId)'), 'changing the bonus type keeps the chosen employee')
   assert.doesNotMatch(admin, /label: 'مصروف'/, 'a legacy approved bonus is recorded in the ledger, not paid')
   assert.doesNotMatch(admin, /createRequest|submitRequest/, 'no new bonus through the generic requests engine')
   const mine = read('src/app/my/bonuses/page.tsx')

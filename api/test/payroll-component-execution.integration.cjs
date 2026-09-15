@@ -1129,12 +1129,20 @@ const salaryRoute = id => `/payroll/employees/${id}/salary-history`
 const salarySegment = (extra = {}) => ({ effectiveFrom: '2026-06-01', effectiveTo: null, currency: 'SAR', basicSalary: '9000.00', housingAllowance: '0.00', transportAllowance: '0.00', phoneAllowance: '0.00', workNatureAllowance: '0.00', otherAllowance: '0.00', ...extra })
 async function salaryView(id = employeeA.id, actor = admin) { return expectStatus(await request(actor, 'GET', salaryRoute(id)), 200) }
 function salaryBody(view, segments = [salarySegment()]) { return { expectedRevision: view.revision, expectedCurrentSourceHash: view.currentSourceHash, reason: 'إثبات راتب حسب قرار الاختبار', evidenceReference: 'TEST-CONTRACT-001', segments } }
+// قاعدة المالك (الخطوة 13): راتب المسير يثبت بشهر المسير كاملًا عبر المسار الشهري؛ التاريخ اليومي لا يثبت استحقاق الشهر
+const monthlySalaryRoute = id => `${salaryRoute(id)}/monthly`
+const salaryMonth = (extra = {}) => ({ effectivePayrollPeriod: '2026-06', effectiveToPayrollPeriod: null, currency: 'SAR', basicSalary: '9000.00', housingAllowance: '0.00', transportAllowance: '0.00', phoneAllowance: '0.00', workNatureAllowance: '0.00', otherAllowance: '0.00', ...extra })
+function monthlySalaryBody(view, periods = [salaryMonth()]) { return { expectedRevision: view.revision, expectedCurrentSourceHash: view.currentSourceHash, reason: 'إثبات راتب شهر المسير حسب قرار الاختبار', evidenceReference: 'TEST-CONTRACT-001', periods } }
 async function salaryFixture(action) {
   assertDisposable()
+  // المسار الشهري يشتق حدود الشهور من payroll.cycle_start_day المحفوظ؛ يُضاف مؤقتًا إن غاب ويُحذف بعد الاختبار
+  const cycle = await repo('RequestsConfig').findOneBy({ key: 'payroll.cycle_start_day' })
+  if (!cycle) await repo('RequestsConfig').save({ key: 'payroll.cycle_start_day', value: '1' })
   try { await action() } finally {
     await ds.query('DELETE FROM employee_salary_history WHERE versionId IN (SELECT id FROM employee_salary_history_versions WHERE employeeId IN (@0,@1))', [employeeA.id, employeeB.id])
     await ds.query('DELETE FROM employee_salary_history_versions WHERE employeeId IN (@0,@1)', [employeeA.id, employeeB.id])
     assert.equal((await ds.query('SELECT COUNT(*) AS n FROM employee_salary_history_versions WHERE employeeId IN (@0,@1)', [employeeA.id, employeeB.id]))[0].n, 0)
+    if (!cycle) await repo('RequestsConfig').delete({ key: 'payroll.cycle_start_day' })
   }
 }
 test('Salary history HTTP: empty read is explicit and does not backfill employee values or dates', async () => {
@@ -1160,14 +1168,16 @@ test('Salary history HTTP: authority, wildcard branch scope, raw strict DTO and 
   const saved = expectStatus(await request(starA, 'POST', salaryRoute(employeeA.id), body), 201)
   assert.equal(saved.revision, 1)
 }))
-test('Salary history HTTP: immutable exact decimal revision feeds real source segments and day-weighted salary facts', async () => salaryFixture(async () => {
+test('Salary history HTTP: immutable exact decimal monthly revision feeds one payroll-month salary without day weighting', async () => salaryFixture(async () => {
   const stored = await withCollection(), view = await salaryView()
-  const segments = [salarySegment({ effectiveTo: '2026-06-15', basicSalary: '6000.00' }), salarySegment({ effectiveFrom: '2026-06-16', basicSalary: '9000.00' })]
-  const saved = expectStatus(await request(admin, 'POST', salaryRoute(employeeA.id), salaryBody(view, segments)), 201)
+  // مايو 6000 ويونيو 9000: مسير يونيو يأخذ راتب شهره كاملًا ولا يقسم بين الراتب القديم والجديد
+  const periods = [salaryMonth({ effectivePayrollPeriod: '2026-05', effectiveToPayrollPeriod: '2026-05', basicSalary: '6000.00' }), salaryMonth({ effectivePayrollPeriod: '2026-06', basicSalary: '9000.00' })]
+  const saved = expectStatus(await request(admin, 'POST', monthlySalaryRoute(employeeA.id), monthlySalaryBody(view, periods)), 201)
   assert.equal(saved.payrollChanged, false); assert.equal(saved.retroAdjustmentsCreated, false)
   const sources = expectStatus(await readLive(stored, {}, admin), 200).snapshot.sections
   assert.equal(sources.compensation.state, 'AVAILABLE', JSON.stringify(sources.compensation.issues))
-  assert.deepEqual(sources.compensation.data.datedSegments.map(row => [row.from, row.to, row.salary.basicSalary]), [['2026-06-01', '2026-06-15', '6000.00'], ['2026-06-16', '2026-06-30', '9000.00']])
+  assert.equal(sources.compensation.data.referencePeriod, '2026-06'); assert.equal(sources.compensation.data.selectedSalary.effectivePayrollPeriod, '2026-06')
+  assert.deepEqual(sources.compensation.data.datedSegments.map(row => [row.from, row.to, row.salary.basicSalary]), [['2026-06-01', '2026-06-30', '9000.00']])
   const { buildPayrollInputFacts } = require('../src/payroll/payroll-input-facts')
   const settings = { ...stored.settings, defaultPeriodType: 'CUSTOM_DAY_RANGE', cycleStartDay: 1, cycleEndMode: 'DERIVED', cycleEndDay: null,
     baseDaysBasis: 'FIXED_30', monthlyDays: 30, dailyHours: 9, rateBase: 'GROSS', roundingMode: 'HALF_UP', roundingScale: 2, divisionByZeroMode: 'FAIL_ROW',
@@ -1176,32 +1186,41 @@ test('Salary history HTTP: immutable exact decimal revision feeds real source se
   const facts = buildPayrollInputFacts({ periodStart: '2026-06-01', periodEnd: '2026-06-30', hireDate: '2020-01-01', coverageStart: '2026-06-01', coverageEnd: '2026-06-30', coverageSourceRef: 'test:coverage',
     salarySegments: sources.compensation.data.datedSegments.map(({ currency, ...row }) => row), scheduledWorkDates: ['2026-06-01'], scheduleSourceRef: 'test:explicit-schedule' }, settings)
   const { PayrollDecimal } = require('../src/payroll/payroll-decimal')
-  assert.equal(new PayrollDecimal(BigInt(facts.monthlyEquivalent.components.basicSalary.exact.numerator), BigInt(facts.monthlyEquivalent.components.basicSalary.exact.denominator)).canonical(), '7500')
-  const second = expectStatus(await request(admin, 'POST', salaryRoute(employeeA.id), salaryBody(saved, [salarySegment({ basicSalary: '9999999999999999.99', phoneAllowance: '0.29' })])), 201)
-  assert.equal(second.segments[0].basicSalary, '9999999999999999.99'); assert.equal(second.segments[0].phoneAllowance, '0.29')
+  // راتب الشهر كاملًا (9000) لا متوسط أيام 6000/9000
+  assert.equal(new PayrollDecimal(BigInt(facts.monthlyEquivalent.components.basicSalary.exact.numerator), BigInt(facts.monthlyEquivalent.components.basicSalary.exact.denominator)).canonical(), '9000')
+  // شهر 2026-07 دخل مسيرًا مصروفًا في تهيئة الملف: تغيير راتبه من السجل مرفوض، والمراجعة الكاملة تبقيه كما هو ولا تعدل إلا يونيو
+  const touchesPaidMonth = await request(admin, 'POST', monthlySalaryRoute(employeeA.id), monthlySalaryBody(saved, [periods[0], salaryMonth({ basicSalary: '9999999999999999.99', phoneAllowance: '0.29' })]))
+  assert.equal(expectStatus(touchesPaidMonth, 409).code, 'SALARY_HISTORY_CLOSED_PERIOD')
+  const second = expectStatus(await request(admin, 'POST', monthlySalaryRoute(employeeA.id), monthlySalaryBody(saved, [periods[0],
+    salaryMonth({ effectivePayrollPeriod: '2026-06', effectiveToPayrollPeriod: '2026-06', basicSalary: '9999999999999999.99', phoneAllowance: '0.29' }),
+    salaryMonth({ effectivePayrollPeriod: '2026-07', basicSalary: '9000.00' })])), 201)
+  const june = second.segments.find(row => row.effectivePayrollPeriod === '2026-06')
+  assert.equal(june.basicSalary, '9999999999999999.99'); assert.equal(june.phoneAllowance, '0.29')
   const current = expectStatus(await readLive(stored, {}, admin), 200).snapshot.sections.compensation
   assert.equal(current.data.datedSegments[0].salary.basicSalary, '9999999999999999.99')
   assert.equal((await ds.query('SELECT CAST(basicSalary AS nvarchar(80)) AS amount FROM employee_salary_history WHERE versionId=@0 AND sequence=1', [saved.version.id]))[0].amount, '6000.00')
 }))
 test('Salary history HTTP: full revisions retain gaps instead of inheriting prior wages or generating retro payments', async () => salaryFixture(async () => {
-  const stored = await withCollection(), first = expectStatus(await request(admin, 'POST', salaryRoute(employeeA.id), salaryBody(await salaryView())), 201)
+  const stored = await withCollection(), first = expectStatus(await request(admin, 'POST', monthlySalaryRoute(employeeA.id), monthlySalaryBody(await salaryView())), 201)
   const original = (await ds.query('SELECT (SELECT * FROM employee_salary_history_versions WHERE id=@0 FOR JSON PATH) AS text', [first.version.id]))[0].text
-  const second = expectStatus(await request(admin, 'POST', salaryRoute(employeeA.id), salaryBody(first, [salarySegment({ effectiveFrom: '2026-06-16' })])), 201)
+  // المراجعة الثانية كاملة تبدأ من يوليو: شهر يونيو يبقى فجوة ولا يرث راتب المراجعة السابقة
+  const second = expectStatus(await request(admin, 'POST', monthlySalaryRoute(employeeA.id), monthlySalaryBody(first, [salaryMonth({ effectivePayrollPeriod: '2026-07' })])), 201)
   assert.equal(second.revision, 2)
   const section = expectStatus(await readLive(stored, {}, admin), 200).snapshot.sections.compensation
-  assert.equal(section.state, 'MISSING'); assert.equal(section.data.missingDates.length, 15); assert.equal(section.data.datedSegments, null)
+  assert.equal(section.state, 'MISSING'); assert.deepEqual(section.data.missingPayrollPeriods, ['2026-06']); assert.equal(section.data.datedSegments, null)
+  assert.ok(section.issues.some(row => row.code === 'SALARY_PAYROLL_PERIOD_GAP'), JSON.stringify(section.issues))
   assert.equal((await ds.query('SELECT (SELECT * FROM employee_salary_history_versions WHERE id=@0 FOR JSON PATH) AS text', [first.version.id]))[0].text, original)
   // قيد رجعي موثق يمكن قراءته، لكن المسير المصروف السابق لم يتغير ولم ينشأ قيد فروقات.
   assert.equal(second.payrollChanged, false); assert.equal(second.retroAdjustmentsCreated, false)
 }))
 test('Salary history HTTP: salary and currency drift invalidate old evidence and reject stale confirmation', async () => salaryFixture(async () => {
   const stored = await withCollection(), view = await salaryView()
-  const saved = expectStatus(await request(admin, 'POST', salaryRoute(employeeA.id), salaryBody(view)), 201)
+  const saved = expectStatus(await request(admin, 'POST', monthlySalaryRoute(employeeA.id), monthlySalaryBody(view)), 201)
   try {
     await ds.query('UPDATE employees SET basicSalary=9100.01 WHERE id=@0', [employeeA.id])
     let section = expectStatus(await readLive(stored, {}, admin), 200).snapshot.sections.compensation
     assert.equal(section.state, 'UNSUPPORTED'); assert.equal(section.data.datedSegments, null); assert.ok(section.issues.some(row => row.code === 'COMPENSATION_CURRENT_SOURCE_CHANGED'))
-    expectStatus(await request(admin, 'POST', salaryRoute(employeeA.id), salaryBody(saved)), 409)
+    expectStatus(await request(admin, 'POST', monthlySalaryRoute(employeeA.id), monthlySalaryBody(saved)), 409)
     await ds.query('UPDATE employees SET basicSalary=9000.00,currency=@1 WHERE id=@0', [employeeA.id, view.current.currency === 'SAR' ? 'EGP' : 'SAR'])
     section = expectStatus(await readLive(stored, {}, admin), 200).snapshot.sections.compensation
     assert.ok(section.issues.some(row => row.code === 'COMPENSATION_CURRENT_SOURCE_CHANGED'))
@@ -1223,7 +1242,7 @@ test('Salary history HTTP: corrupted persisted amount fails hash validation and 
 }))
 test('Salary history HTTP: policy currency mismatch does not convert currencies or expose executable segments', async () => salaryFixture(async () => {
   const stored = await withCollection()
-  expectStatus(await request(admin, 'POST', salaryRoute(employeeA.id), salaryBody(await salaryView(), [salarySegment({ currency: 'EGP' })])), 201)
+  expectStatus(await request(admin, 'POST', monthlySalaryRoute(employeeA.id), monthlySalaryBody(await salaryView(), [salaryMonth({ currency: 'EGP' })])), 201)
   const section = expectStatus(await readLive(stored, {}, admin), 200).snapshot.sections.compensation
   assert.equal(section.state, 'UNSUPPORTED'); assert.equal(section.data.datedSegments, null)
   assert.ok(section.issues.some(row => row.code === 'COMPENSATION_POLICY_CURRENCY_MISMATCH'))
@@ -1242,7 +1261,9 @@ test('Schedule source HTTP: explicit dated rule versions and day override surviv
     await save('ScheduleDayOverride', { employeeId: employeeA.id, date: '2026-06-16', shiftId: override.id, shiftName: override.name, startTime: '06:00', endTime: '15:00' })
     const privateRule = await save('ScheduleExceptionRule', { name: 'PRIVATE_OTHER_BRANCH_EXCEPTION', branchId: branchB.id, weekday: 'MON', occurrence: 'ALL', effect: 'OFF', isActive: true })
     const section = expectStatus(await readLive(stored, { periodStart: '2026-06-15', periodEnd: '2026-06-20' }, managerA), 200).snapshot.sections.schedule
-    assert.equal(section.state, 'UNSUPPORTED', JSON.stringify(section.issues))
+    // قاعدة الدوام مؤرخة لكن التقويم بلا نسخة مؤرخة لفرع الموظف في أيام الفترة: الحالة MISSING ولا تُستنتج أيام عمل من الجداول الحالية
+    assert.equal(section.state, 'MISSING', JSON.stringify(section.issues))
+    assert.ok(section.data.days.every(row => row.calendarState === 'MISSING' && row.issues.some(issue => issue.code === 'CALENDAR_VERSION_MISSING')), JSON.stringify(section.issues))
     assert.equal(section.data.scheduledWorkDates, null); assert.equal(section.data.historicalCalendarComplete, false)
     assert.equal(section.data.days[0].timingState, 'AVAILABLE'); assert.equal(section.data.days[0].sourceRule.versionId, old.id)
     assert.equal(section.data.days[0].timing.startTime, '09:00'); assert.equal(section.data.days[0].timing.flexWindowMinutes, 60)

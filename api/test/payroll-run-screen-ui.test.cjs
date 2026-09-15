@@ -14,7 +14,7 @@ const runsApi = require('../../src/lib/payroll-runs-api')
 const { roundPayrollMoney } = require('../src/payroll/payroll-money')
 const { PayrollRunEventsList } = require('../../src/components/payroll/PayrollRunEventsPanel')
 const { PayrollConflictResolution } = require('../../src/components/payroll/PayrollConflictResolution')
-const { PayrollPayRecordForm, PayrollPayRecordSummary, payRecordReady } = require('../../src/components/payroll/PayrollPayRecordForm')
+const { defaultPayRecord, PayrollPayRecordForm, PayrollPayRecordSummary, payRecordReady } = require('../../src/components/payroll/PayrollPayRecordForm')
 const { PayrollParityOperationsSummary, PARITY_OPERATIONS_PLAN_TEXT } = require('../../src/components/payroll/PayrollParityOperationsNote')
 const { PayrollInstallmentBreakdown } = require('../../src/components/PayrollInstallmentBreakdown')
 const { PayrollOvertimeBreakdown } = require('../../src/components/PayrollOvertimeBreakdown')
@@ -37,7 +37,7 @@ test('one money formatter (FE-06): Latin digits, thousands separators and two de
   assert.equal(money.roundMoney(1.005), 1.01)
 })
 
-test('no direct toLocaleString(\'ar-EG\') in payroll screens; the run table, the payslip, the deductions and the payslips pages format money with formatMoney only', () => {
+test('no direct toLocaleString(\'ar-EG\') in payroll screens; the run table and the payslip format money with formatMoney only (the deductions page and the hidden payslips page show no run amounts)', () => {
   const files = [
     ...fs.readdirSync(path.join(root, 'src/components/payroll')).map(name => `src/components/payroll/${name}`),
     ...fs.readdirSync(path.join(root, 'src/components')).filter(name => /^Payroll.*\.tsx$/.test(name)).map(name => `src/components/${name}`),
@@ -45,11 +45,12 @@ test('no direct toLocaleString(\'ar-EG\') in payroll screens; the run table, the
   const walk = dir => fs.readdirSync(path.join(root, dir), { withFileTypes: true }).flatMap(entry => entry.isDirectory() ? walk(`${dir}/${entry.name}`) : [`${dir}/${entry.name}`])
   files.push(...walk('src/app/payroll'))
   for (const file of files.filter(name => /\.tsx?$/.test(name))) assert.doesNotMatch(read(file), /toLocaleString\(\s*['"]ar-EG['"]/, file)
-  for (const file of ['src/app/payroll/page.tsx', 'src/app/payroll/payslip/[id]/page.tsx', 'src/app/payroll/deductions/page.tsx', 'src/app/payroll/payslips/page.tsx']) {
+  for (const file of ['src/app/payroll/page.tsx', 'src/app/payroll/payslip/[id]/page.tsx']) {
     const source = read(file)
     assert.doesNotMatch(source, /\.toLocaleString\(/, `${file} must use the shared formatter`)
     assert.match(source, /from '@\/lib\/money'/, file)
   }
+  for (const file of ['src/app/payroll/deductions/page.tsx', 'src/app/payroll/payslips/page.tsx']) assert.doesNotMatch(read(file), /\.toLocaleString\(/, file)
   assert.match(read('src/app/payroll/page.tsx'), /\{formatMoney\(item\.netPay\)\}/)
   assert.match(read('src/app/payroll/payslip/[id]/page.tsx'), /\{formatMoney\(netSalary\)\} \{currency\}/)
   // 1500.50 بالشكل نفسه في تفصيل الأقساط والإضافي داخل الجدول والقسيمة
@@ -108,10 +109,11 @@ test('deductions (ALDD-12): every column including shortfall and other deduction
   assert.equal(summary.grandTotal, money.sumMoney(items.map(totals.payrollItemDeductions)))
   assert.deepEqual([summary.grandTotal, summary.affected], [603.45, 2])
   for (const item of items) assert.equal(totals.payrollItemDeductions(item), money.sumMoney(totals.PAYROLL_DEDUCTION_FIELDS.map(field => item[field])))
+  // تبسيط الرواتب: صفحة «الخصومات» صارت طلبات الخصم وأنواعها فقط؛ خصومات كل موظف تظهر في جدول المسير نفسه
   const page = read('src/app/payroll/deductions/page.tsx')
-  assert.match(page, /payrollDeductionSummary\(items\)/); assert.match(page, /summary\.lines\.map/)
-  assert.doesNotMatch(page, /totals\.lateness/, 'the hand-written summary without the shortfall line is gone')
-  assert.match(page, /<th className="text-center px-4 py-3">خصومات أخرى<\/th>/)
+  assert.match(page, /<TypedDeductionsWorkspace currency=\{currency\} mode="admin"/)
+  assert.doesNotMatch(page, /payrollDeductionSummary|totals\.lateness|fetchPayrollRun/, 'no run grid on the deductions page')
+  assert.match(read('src/app/payroll/page.tsx'), /payrollItemDeductions\(item\)/)
 })
 
 test('run table per employee: gross, deductions and net from the same columns, with coverage, factor and the 30-day basis from the saved breakdown', () => {
@@ -124,24 +126,26 @@ test('run table per employee: gross, deductions and net from the same columns, w
   assert.equal(totals.payrollCoverageText(totals.payrollItemCoverage(item)), '22 يوم مغطى من 2026-09-01 إلى 2026-09-22 • المعامل 0.7333 • أساس 30 يومًا')
   assert.equal(totals.payrollItemCoverage({ breakdown: '{bad' }), null)
   const page = read('src/app/payroll/page.tsx')
-  for (const text of ['payrollItemCoverage(item)', 'payrollItemEarnings(item)', 'payrollItemDeductions(item)', 'صافي سالب — يمنع الاعتماد', 'collectionOrderText(screen?.collection)',
-    '<PayrollRunEventsPanel', '<PayrollConflictResolution', '<PayrollPayRecordForm', 'payPayrollRun(runDetail.id', '|| approvalBlocked']) assert.ok(page.includes(text), text)
-  assert.doesNotMatch(page, /بواسطة النظام/, 'the approvals log built from dates is replaced by the real events panel')
+  for (const text of ['payrollItemCoverage(item)', 'payrollItemEarnings(item)', 'payrollItemDeductions(item)', 'صافي سالب — يمنع الاعتماد',
+    '<PayrollConflictResolution', '<PayrollPayRecordForm', 'payPayrollRun(runDetail.id', '|| approvalBlocked']) assert.ok(page.includes(text), text)
+  // تبسيط الرواتب: سجل الأحداث وسطر ترتيب التحصيل لا يُعرضان؛ سطر «احتسبه • اعتمده • صرفه» باقٍ
+  assert.doesNotMatch(page, /<PayrollRunEventsPanel|collectionOrderText\(/)
+  assert.ok(page.includes('احتسبه: ${actorName(screen.actors.calculated)}'))
+  assert.doesNotMatch(page, /بواسطة النظام/, 'no approvals log built from dates')
   assert.doesNotMatch(read('src/lib/api.ts'), /export const payPayroll\b/, 'no client can pay without a channel and reference')
   assert.equal(runsApi.collectionOrderText({ source: 'DEFAULT', versionId: null, order: null, effectiveOrder: ['ATTENDANCE', 'RECOVERY', 'TYPED', 'ADMINISTRATIVE', 'LOAN'],
     loanBeforeOthers: false, componentOrder: null, message: '' }), 'ترتيب التحصيل الافتراضي (النسخة بلا ترتيب محفوظ): خصومات الحضور ← الاستردادات والعهد ← الخصومات المصنفة ← الخصومات الإدارية ← أقساط السلف')
 })
 
-test('allowances page (ALDD-11) shows the allowances the run really computes, and banners (FE-02) remain only on data the run does not read', () => {
+test('allowances page (ALDD-11) is hidden and redirects to the run screen, the formula editor no longer shows settings the run does not read, and banners (FE-02) remain only on data the run does not read', () => {
   const allowances = read('src/app/payroll/allowances/page.tsx')
-  assert.doesNotMatch(allowances, /تُفعَّل في مرحلة لاحقة|يعتمد حساب المسير الحالي على الراتب الأساسي والعمل الإضافي/)
-  for (const text of ['salaryComponents', 'سجل الأجر المؤرخ', 'بدل السكن', 'أساس 30 يومًا', 'fetchPayrollRun(']) assert.ok(allowances.includes(text), text)
+  assert.ok(allowances.includes("router.replace('/payroll')"), 'the old link lands on the run screen')
   assert.doesNotMatch(allowances, /^export function/m, 'a Next page file exports only the page')
   const collection = read('src/components/PayrollCollectionEditor.tsx')
   assert.match(collection, /المسير المرتبط بهذه النسخة يطبقه عند الحساب/); assert.doesNotMatch(collection, /ولا يعيد حساب المسيرات السابقة\./)
+  // تبسيط الرواتب: خانات لا يقرؤها الحساب (أساس المعدل، القسمة على صفر، راتب ثابت، ترحيل الخصم الزائد) لا تظهر في المحرر؛ تبقى محفوظة مع النسخة
   const settings = read('src/components/PayrollPolicySetEditor.tsx')
-  assert.match(settings, /«أساس المعدل» و«التقريب» و«القسمة على صفر» تُحفظ مع النسخة ولا يقرؤها حساب المسير بعد/)
-  assert.match(settings, /«راتب ثابت بلا أثر للحضور» و«ترحيل الخصم الزائد» لا يقرؤهما حساب المسير بعد/)
+  assert.doesNotMatch(settings, /أساس المعدل|القسمة على صفر|راتب ثابت بلا أثر للحضور|ترحيل الخصم الزائد/)
   const sources = read('src/components/PayrollLiveSourcesPanel.tsx')
   assert.match(sources, /يقرؤها محرك السياسة بجانبه للمقارنة/); assert.doesNotMatch(sources, /حساب المسير بهذه المصادر لم يُفعّل بعد/)
   assert.doesNotMatch(read('src/app/payroll/salary-history/page.tsx'), /لا يستخدم|لا يقرأ/, 'the run reads the monthly salary history; no «unused» banner')
@@ -169,25 +173,32 @@ test('events panel: who did what and when, with the reason, the signed parity re
   assert.match(render(PayrollRunEventsList, { events: [] }), /لا توجد أحداث مسجلة/)
 })
 
-test('conflicts screen: resolve by excluding the employee from this run with a reason, or open the other run; a run outside the scope is neither named nor opened', () => {
+test('conflicts screen (payroll simplification): one line per employee «مدرج في مسير آخر لنفس الأيام» with «استبعاد من هذا المسير»; the other run is neither numbered, dated nor opened', () => {
   const conflicts = [
     { employeeId: 3, otherRunId: 9, name: 'مسير الجيزة', status: 'CALCULATED', startDate: '2026-09-23', endDate: '2026-10-22', overlapDays: 30, blocking: false, kind: 'EXACT' },
+    { employeeId: 3, otherRunId: 11, name: 'مسير الجيزة 2', status: 'DRAFT', startDate: '2026-09-23', endDate: '2026-10-22', overlapDays: 30, blocking: false, kind: 'EXACT' },
     { employeeId: 4, otherRunId: null, name: 'مسير خارج نطاق صلاحيتك — راجع مسؤول الرواتب', status: 'APPROVED', startDate: '2026-09-23', endDate: '2026-10-22', overlapDays: 30, blocking: true, kind: 'EXACT' },
   ]
-  const props = { title: 'تعارضات المسير الحالي', conflicts, run: { id: 5, status: 'CALCULATED' }, employeeName: id => `موظف ${id}`, canExclude: true, onOpenRun: () => {}, onResolved: () => {} }
+  const props = { title: 'تعارضات المسير الحالي', conflicts, run: { id: 5, status: 'CALCULATED' }, employeeName: id => `موظف ${id}`, canExclude: true, onResolved: () => {} }
   const html = render(PayrollConflictResolution, props)
-  assert.equal(html.split('فتح المسير الآخر #').length - 1, 1); assert.match(html, /فتح المسير الآخر #9/)
-  assert.equal(html.split('استبعاد من هذا المسير وإعادة حسابه').length - 1, 2)
-  assert.match(html, /تعارض حاجب/)
+  assert.equal(html.split('مدرج في مسير آخر لنفس الأيام').length - 1, 2, 'one line per employee')
+  assert.equal(html.split('>استبعاد من هذا المسير</button>').length - 1, 2)
+  assert.doesNotMatch(html, /فتح المسير الآخر|#9|#11|مسير الجيزة|خارج نطاق صلاحيتك|2026-09-23/)
   assert.doesNotMatch(render(PayrollConflictResolution, { ...props, canExclude: false }), /استبعاد من هذا المسير/)
   assert.match(render(PayrollConflictResolution, { ...props, run: { id: 5, status: 'DRAFT' } }), />استبعاد من هذا المسير</)
+  assert.doesNotMatch(render(PayrollConflictResolution, { ...props, run: { id: 5, status: 'APPROVED' } }), /استبعاد من هذا المسير/)
   assert.equal(render(PayrollConflictResolution, { ...props, conflicts: [] }), '')
 })
 
-test('pay record form: channel and reference are required before paying; the summary shows who paid, the channel and the reference', () => {
+test('pay record form: the channel and the reference come prefilled (mixed channel, «run name + month»); paying still needs both; the summary shows who paid, the channel and the reference', () => {
   assert.deepEqual([{ channel: '', reference: 'TRX-1' }, { channel: 'CASH', reference: 'ab' }, { channel: 'CASH', reference: ' محضر 7 ' }].map(payRecordReady), [false, false, true])
-  const blocked = render(PayrollPayRecordForm, { draft: { channel: '', reference: '' }, onChange: () => {}, disabled: false, onPay: () => {} })
-  assert.match(blocked, /disabled=""[^>]*title="اختر قناة الصرف واكتب مرجعه أولًا"/)
+  const prefilled = defaultPayRecord({ name: 'مسير فرع المعادي', period: '2026-08' })
+  assert.deepEqual(prefilled, { channel: 'MIXED', reference: 'مسير فرع المعادي 2026-08' }); assert.equal(payRecordReady(prefilled), true)
+  const long = defaultPayRecord({ name: 'م'.repeat(120), period: '2026-08' })
+  assert.ok(long.reference.length <= 100 && long.reference.endsWith(' 2026-08'), 'the reference fits the 100-character limit and keeps the month')
+  assert.match(render(PayrollPayRecordForm, { draft: prefilled, onChange: () => {}, disabled: false, onPay: () => {} }), /<button type="button" class=/, 'the prefilled form can pay')
+  const blocked = render(PayrollPayRecordForm, { draft: { channel: 'MIXED', reference: '' }, onChange: () => {}, disabled: false, onPay: () => {} })
+  assert.match(blocked, /disabled=""[^>]*title="اكتب مرجع الصرف أولًا"/)
   for (const label of ['تحويل بنكي', 'نقدًا', 'شيك', 'مختلط حسب طريقة صرف كل موظف']) assert.ok(blocked.includes(label), label)
   const summary = render(PayrollPayRecordSummary, { run: { payRecord: { paidBy: { id: 12, name: 'هالة مصطفى', at: null }, channel: 'BANK_TRANSFER', channelLabel: 'تحويل بنكي', reference: 'TRX-9' } } })
   assert.match(summary, /صرفه هالة مصطفى • القناة: تحويل بنكي • المرجع: TRX-9/)

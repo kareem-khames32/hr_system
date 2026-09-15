@@ -32,6 +32,134 @@ import { formatMoney } from '@/lib/money'
 type Decision = { id: number; action: 'approve' | 'reject' | 'revoke' | 'attach'; text: string; revision: number }
 const ACTION_LABELS: Record<Decision['action'], string> = { approve: 'اعتماد', reject: 'رفض', revoke: 'إلغاء الإعفاء', attach: 'إضافة مرجع المرفق' }
 
+// ===== تبسيط الرواتب (2026-09-15): «إلغاء خصم» من صف الموظف في جدول المسير =====
+// يعرض خصومات الموظف بمبالغها كما في صفه؛ الاختيار = معاينة ثم منح إعفاء «إسقاط نهائي» بسبب جاهز، ثم إعادة حساب المسير (من الصفحة).
+// الخصم الملغى الذي لم يُطبق بعد يظهر «أُلغي» ولا يُمنح مرتين؛ وإن تعذرت إعادة الحساب بعد الإلغاء فالمتاح «إعادة حساب المسير» وحدها.
+// أقساط السلف (تُؤجل ولا تُسقط) والإجازة بلا راتب والمحمي لا تُلغى من هنا. اللوحة القديمة أدناه لم تعد تُعرض على شاشة المسير.
+const REMOVE_DEDUCTION_REASON = 'إلغاء خصم من شاشة المسير بقرار الموارد البشرية'
+const LIVE_EXEMPTION_STATUSES: ExemptionView['status'][] = ['ACTIVE', 'PENDING_APPROVAL']
+type RemovalOption = { key: string; label: string; disabled: boolean; removed: boolean; input: Omit<ExemptionInput, 'runId' | 'employeeId' | 'reason'> }
+/** مبالغ خصومات الحضور كما تظهر في صف الموظف (المخصوم فعلًا بعد حماية الصافي). */
+export interface RemovableAttendanceAmounts { lateness: number; shortfall: number; absence: number }
+
+/** رفض الخادم بعربي مبسط: بلا رموز تقنية بين قوسين ولا أرقام داخلية. */
+function plainRefusal(error: unknown, fallback: string) {
+  const raw = error instanceof Error ? error.message : ''
+  const text = raw.replace(/\s*\([A-Z]{2,}[A-Z0-9_-]*(?:\s*[/،,]\s*[A-Z]{2,}[A-Z0-9_-]*)*\)/g, '').replace(/\s*#\d+/g, '').trim()
+  return /[؀-ۿ]/.test(text) ? text : fallback
+}
+
+export function PayrollRemoveDeductionModal({ runId, employeeId, employeeName, amounts, onClose, onGranted }: {
+  runId: number; employeeId: number; employeeName: string; amounts: RemovableAttendanceAmounts; onClose: () => void; onGranted: () => Promise<void> | void
+}) {
+  const [entries, setEntries] = useState<ExemptionEmployeeEntries | null>(null)
+  const [reloadKey, setReloadKey] = useState(0)
+  const [error, setError] = useState('')
+  const [note, setNote] = useState('')
+  const [recalcFailed, setRecalcFailed] = useState(false)
+  const [busyKey, setBusyKey] = useState<string | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    fetchExemptionEntries(runId, employeeId).then(value => { if (!cancelled) setEntries(value) })
+      .catch(e => { if (!cancelled) setError(plainRefusal(e, 'تعذر تحميل خصومات الموظف')) })
+    return () => { cancelled = true }
+  }, [runId, employeeId, reloadKey])
+
+  // إلغاء حي (نشط أو بانتظار الاعتماد) على الخصم نفسه أو نوعه أو كل الخصومات
+  const live = (entries?.exemptions ?? []).filter(row => LIVE_EXEMPTION_STATUSES.includes(row.status))
+  const removedType = (key: string) => live.some(row => row.scopeKind === 'ALL_DEDUCTIONS' || (row.scopeKind === 'DEDUCTION_TYPE' && row.targetKind === key))
+  const removedObligation = (obligationId: number, deductionTypeId: number | null) => live.some(row => row.scopeKind === 'ALL_DEDUCTIONS' ||
+    (row.scopeKind === 'SINGLE_ENTRY' && row.targetKind === 'OBLIGATION' && row.targetRef === String(obligationId)) ||
+    (row.scopeKind === 'DEDUCTION_TYPE' && row.targetKind === 'TYPED' && deductionTypeId !== null && row.deductionTypeId === deductionTypeId))
+  const attendance = (key: 'LATENESS' | 'SHORTFALL' | 'ABSENCE', label: string, amount: number): RemovalOption[] => {
+    const removed = removedType(key)
+    return amount > 0 ? [{ key, removed, disabled: removed, label: `${label} — ${formatMoney(amount)}`, input: { scopeKind: 'DEDUCTION_TYPE', targetKind: key } }] : []
+  }
+  const options: RemovalOption[] = entries ? [
+    ...attendance('LATENESS', 'خصم التأخير', amounts.lateness),
+    ...attendance('SHORTFALL', 'خصم نقص ساعات العمل', amounts.shortfall),
+    ...attendance('ABSENCE', 'خصم الغياب', amounts.absence),
+    ...entries.typedObligations.map(row => {
+      const removed = removedObligation(row.obligationId, row.deductionTypeId)
+      return {
+        key: `OBLIGATION:${row.obligationId}`, removed, disabled: removed || !row.exemptable,
+        label: `${row.typeName ?? 'خصم'}${row.targetPeriod ? ` (شهر ${row.targetPeriod})` : ''} — ${formatMoney(row.amount)}${row.exemptable || removed ? '' : ' — لا يمكن إلغاؤه'}`,
+        input: { scopeKind: 'SINGLE_ENTRY' as const, targetKind: 'OBLIGATION', targetRef: String(row.obligationId), disposition: 'DROP' as const },
+      }
+    }),
+  ] : []
+  // خصم حضور عليه إلغاء نشط وما زال مبلغه في الصف = الإلغاء لم يدخل الحساب بعد (الإلغاء بانتظار الاعتماد لا يُطبق بإعادة الحساب)
+  const attendanceAmount = { LATENESS: amounts.lateness, SHORTFALL: amounts.shortfall, ABSENCE: amounts.absence } as const
+  const awaitingRecalc = recalcFailed || (Object.keys(attendanceAmount) as Array<keyof typeof attendanceAmount>).some(key => attendanceAmount[key] > 0 &&
+    live.some(row => row.status === 'ACTIVE' && (row.scopeKind === 'ALL_DEDUCTIONS' || (row.scopeKind === 'DEDUCTION_TYPE' && row.targetKind === key))))
+
+  const recalculate = async () => {
+    setBusyKey('RECALC'); setError('')
+    try {
+      await onGranted()
+      onClose()
+    } catch (e) {
+      setRecalcFailed(true)
+      setError(`أُلغي الخصم، لكن تعذرت إعادة حساب المسير: ${plainRefusal(e, 'حاول مرة أخرى')}`)
+      setReloadKey(key => key + 1)
+    } finally { setBusyKey(null) }
+  }
+
+  const remove = async (option: RemovalOption) => {
+    if (busyKey || option.disabled) return
+    setBusyKey(option.key); setError(''); setNote('')
+    const input: ExemptionInput = { runId, employeeId, reason: REMOVE_DEDUCTION_REASON, ...option.input }
+    let granted: ExemptionView
+    try {
+      const preview = await previewExemption(input)
+      granted = await grantExemption({ ...input, previewHash: preview.previewHash })
+    } catch (e) {
+      setError(plainRefusal(e, 'تعذر إلغاء الخصم'))
+      setBusyKey(null)
+      return
+    }
+    if (granted.status === 'PENDING_APPROVAL') {
+      setNote('سُجل إلغاء الخصم وينتظر موافقة الموارد البشرية قبل أن يُطبق.')
+      setReloadKey(key => key + 1)
+      setBusyKey(null)
+      return
+    }
+    await recalculate()
+  }
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label={`إلغاء خصم — ${employeeName}`}>
+      <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl space-y-3 text-right" data-testid="payroll-remove-deduction">
+        <div className="flex items-center justify-between gap-2">
+          <h3 className="font-bold text-gray-800 flex items-center gap-2"><ShieldOff size={18} /> إلغاء خصم — {employeeName}</h3>
+          <button type="button" onClick={onClose} disabled={busyKey !== null} className="text-sm text-gray-500 disabled:opacity-50">إغلاق</button>
+        </div>
+        <p className="text-xs text-gray-500">اختر الخصم الذي يُلغى عن الموظف في هذا المسير، ويُعاد حساب المسير تلقائيًا. أقساط السلف والإجازة بدون راتب لا تُلغى من هنا.</p>
+        {error && <p role="alert" className="p-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</p>}
+        {note && <p role="status" className="p-2 bg-amber-50 text-amber-900 rounded-lg text-sm">{note}</p>}
+        {!entries && !error && <p className="text-sm text-gray-400">جارٍ تحميل خصومات الموظف…</p>}
+        {entries && options.length === 0 && <p className="text-sm text-gray-500">لا توجد خصومات يمكن إلغاؤها لهذا الموظف في هذا المسير.</p>}
+        <ul className="space-y-2">
+          {options.map(option => (
+            <li key={option.key} className="flex items-center justify-between gap-2 rounded-xl border border-gray-100 p-3 text-sm">
+              <span className={option.disabled && !option.removed ? 'text-gray-400' : 'text-gray-800'}>{option.label}</span>
+              <button type="button" className="btn-secondary text-xs whitespace-nowrap disabled:opacity-50" disabled={option.disabled || busyKey !== null} onClick={() => remove(option)}>
+                {busyKey === option.key ? 'جارٍ الإلغاء…' : option.removed ? 'أُلغي' : 'إلغاء هذا الخصم'}
+              </button>
+            </li>
+          ))}
+        </ul>
+        {awaitingRecalc && <div className="flex items-center justify-between gap-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-900" data-testid="payroll-remove-deduction-recalc">
+          <span>الإلغاء لا يظهر في صافي الموظف قبل إعادة حساب المسير.</span>
+          <button type="button" onClick={recalculate} disabled={busyKey !== null} className="btn-primary text-xs whitespace-nowrap disabled:opacity-50">
+            {busyKey === 'RECALC' ? 'جارٍ الحساب…' : 'إعادة حساب المسير'}
+          </button>
+        </div>}
+      </div>
+    </div>
+  )
+}
+
 export function PayrollFinancialExemptionsPanel({ runId, runStatus, snapshotVersion, onChanged }: {
   runId: number; runStatus: string; snapshotVersion: number; onChanged?: () => Promise<void> | void
 }) {

@@ -43,33 +43,30 @@ test('اللوحة: الإنشاء يرسل بصمة المعاينة، ومعط
   for (const text of ['تقرير التسويات للسلسلة', 'فرق التسوية', 'الصافي الفعلي', 'لا أثر مالي قبل اعتماد مسير العكس', 'row.warning']) assert.ok(panel.includes(text), text)
 })
 
-test('شاشة المسير: اللوحة للمصروف ولمسيري العكس والتكميلي، ومسير العكس بلا إقرار «بلا مسير» ولا لقطة ولا محرك ولا إعفاء', () => {
-  const page = read(files.runPage)
-  assert.ok(page.includes("import { PayrollRunCorrectionsPanel } from '@/components/payroll/PayrollRunCorrectionsPanel'"))
-  assert.ok(page.includes("can('payroll.view') && (runDetail.status === 'PAID' || (runDetail.runType != null && runDetail.runType !== 'REGULAR'))"))
-  assert.ok(page.includes("const isReversalRun = runDetail?.runType === 'REVERSAL'"))
-  assert.equal((page.match(/\(!unassignedAckCurrent && !isReversalRun\)/g) ?? []).length, 2, 'الاعتماد وزره لا يشترطان الإقرار لمسير العكس')
-  for (const panel of ['PayrollPolicySnapshotPanel', 'PayrollRunEnginePanel', 'PayrollUnassignedPanel']) {
-    assert.match(page, new RegExp(`runDetail && !isReversalRun[^\\n]*\\n\\s*<${panel}`), `${panel} مخفية لمسير العكس`)
+test('شاشة المسير (تبسيط الرواتب): لوحات العكس والتكميلي ولقطة السياسة ومحرك الحساب و«بلا مسير» والإعفاء المالي لا تُعرض، وملفاتها وأنواع الـAPI باقية', () => {
+  const page = code(read(files.runPage))
+  for (const panel of ['PayrollRunCorrectionsPanel', 'PayrollPolicySnapshotPanel', 'PayrollRunEnginePanel', 'PayrollUnassignedPanel', 'PayrollFinancialExemptionsPanel']) {
+    assert.doesNotMatch(page, new RegExp(`<${panel}\\b`), `${panel} لا تُعرض`)
+    assert.ok(fs.existsSync(path.join(root, 'src/components/payroll', `${panel}.tsx`)), `${panel}.tsx باقٍ`)
   }
-  assert.match(page, /runDetail && !isReversalRun && \['CALCULATED', 'APPROVED', 'PAID'\]\.includes\(runDetail\.status\) &&\n\s*\(can\('financial_exemption\.view'\)/)
+  assert.doesNotMatch(page, /unassignedAckCurrent/, 'الاعتماد لا يشترط إقرار «بلا مسير»')
   const shared = read(files.sharedApi)
   assert.ok(shared.includes("runType?: 'REGULAR' | 'REVERSAL' | 'SUPPLEMENTARY' | null") && shared.includes('parentRunId?: number | null'))
 })
 
-test('القسيمة وقسائمي: الوسم بعكس الصرف وسببه وقسيمة التكميلي، وسجل المسير يسمي أحداث التصحيح', () => {
-  const payslip = read(files.payslip)
-  for (const text of ['عُكس صرف هذه القسيمة', 'عكس صرف هذه القسيمة بانتظار التنفيذ', 'السبب: {reversal.line.reason}', 'قسيمة المسير التكميلي #', 'قسيمة مسير تكميلي مربوط بالمسير المصروف']) {
-    assert.ok(payslip.includes(text), text)
+test('القسيمة وقسائمي (تبسيط الرواتب): بلا شريط عكس الصرف ولا قسيمة التكميلي ولا علامتيهما، وسجل المسير (غير المعروض) يبقى يسمي أحداث التصحيح', () => {
+  const payslip = code(read(files.payslip))
+  for (const text of ['عُكس صرف هذه القسيمة', 'السبب: {reversal.line.reason}', 'قسيمة المسير التكميلي #', 'قسيمة مسير تكميلي مربوط بالمسير المصروف']) {
+    assert.ok(!payslip.includes(text), text)
   }
-  const mine = read(files.myPayslips)
-  assert.ok(mine.includes('عُكس صرفها') && mine.includes("run.runType === 'SUPPLEMENTARY'"))
+  const mine = code(read(files.myPayslips))
+  assert.ok(!mine.includes('عُكس صرفها') && !mine.includes("run.runType === 'SUPPLEMENTARY'"))
   const events = read(files.events)
   for (const type of ['REVERSAL_CREATED', 'REVERSAL_POSTED', 'REVERSAL_CANCELLED', 'SUPPLEMENTARY_CREATED']) assert.ok(events.includes(`${type}:`), type)
   assert.ok(events.includes('أعاد التنفيذ: إضافي'))
 })
 
-test('السلف وتقارير الرواتب: القسط المُلغى بعكس الصرف وحركة REVERSAL بتسميات عربية، وتقرير المسيرات يسمي مسير العكس والتكميلي والبنود المعكوسة', () => {
+test('السلف وتقارير الرواتب: القسط المُلغى بعكس الصرف وحركة REVERSAL بتسميات عربية، وتقرير المسيرات (تبسيط الرواتب) بلا مسيرات العكس والتكميلي وسطورها، والـAPI يبقى يسميها', () => {
   const loansApi = code(read('src/lib/loans-api.ts'))
   assert.ok(loansApi.includes("export type LoanInstallmentStatus = 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED' | 'REVERSED'"))
   assert.match(loansApi, /REVERSAL: 'عكس خصم المسير — عاد القسط مستحقًا'/)
@@ -80,7 +77,8 @@ test('السلف وتقارير الرواتب: القسط المُلغى بعك
     assert.match(page, /status === 'REVERSED' \? 'bg-gray-100 text-gray-600'/, file)
   }
   const reportsPage = code(read('src/app/payroll/reports/page.tsx'))
-  for (const text of ["run.runType === 'REVERSAL'", "run.runType === 'SUPPLEMENTARY'", 'run.reversedEmployees', "active.filter((run) => run.runType !== 'REVERSAL')"]) assert.ok(reportsPage.includes(text), text)
+  assert.ok(reportsPage.includes("const runs = (report?.runs ?? []).filter((run) => run.runType !== 'REVERSAL' && run.runType !== 'SUPPLEMENTARY')"), 'التقرير يعرض المسيرات العادية فقط')
+  for (const text of ["run.runType === 'REVERSAL'", "run.runType === 'SUPPLEMENTARY'", 'run.reversedEmployees']) assert.ok(!reportsPage.includes(text), text)
   const reportsApi = read('src/lib/payroll-reports-api.ts')
   assert.ok(reportsApi.includes("code: 'REVERSED_IN_RUN'") && reportsApi.includes('reversedEmployees?: number'))
   assert.ok(read(files.api).includes('carriedExemptionIds?: number[]'))

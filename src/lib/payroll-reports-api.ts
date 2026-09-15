@@ -160,7 +160,7 @@ export function sumReportMoney(values: Array<Money | null | undefined>): Money {
 }
 
 export const runRefLabel = (run: ReportRunRef | null) =>
-  run ? `${run.id ? `#${run.id} ` : ''}${run.name ?? `مسير ${run.period}`} (${runStatusLabel(run.status)})` : '—'
+  run ? `${run.name ?? `مسير ${run.period}`} (${runStatusLabel(run.status)})` : '—'
 
 export const minutesLabel = (minutes: number | null) => (minutes == null ? '—' : String(minutes))
 
@@ -169,9 +169,10 @@ export interface CsvTable { header: string[]; rows: unknown[][] }
 
 export function runsReportCsv(report: PayrollRunsReport): CsvTable {
   return {
-    header: ['رقم المسير', 'الاسم', 'الفترة', 'من', 'إلى', 'النطاق', 'الفرع', 'الحالة', 'الموظفون', 'المستبعدون', 'صافي الإجمالي', 'جزئي لنطاقك'],
+    // تبسيط الرواتب (2026-09-15): عمود «جزئي لنطاقك» أُخفي من الملف كما أُخفيت ملاحظته من الصفحة
+    header: ['رقم المسير', 'الاسم', 'الفترة', 'من', 'إلى', 'النطاق', 'الفرع', 'الحالة', 'الموظفون', 'المستبعدون', 'صافي الإجمالي'],
     rows: report.runs.map(run => [run.id, run.name ?? '', run.period, run.startDate, run.endDate, run.scopeLabel, run.branchName ?? '',
-      runStatusLabel(run.status), run.employees, run.excluded, run.totalNet, run.partial ? 'نعم' : 'لا']),
+      runStatusLabel(run.status), run.employees, run.excluded, run.totalNet]),
   }
 }
 

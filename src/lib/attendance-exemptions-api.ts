@@ -31,6 +31,8 @@ export interface AttendanceExemptionList {
   rows: AttendanceExemptionRow[]
   today: string
   currentPeriodStart: string
+  /** أول تاريخ بداية مسموح لطلب جديد: بداية فترة الرواتب السابقة (مسيرها يُصرف بعد انتهائها). */
+  earliestStart?: string
   reasonMinLength: number
   limit: number
   truncated: boolean
@@ -127,10 +129,10 @@ export function exemptionReasonError(reason: string, minLength: number): string 
   return null
 }
 
-export function exemptionCreateFormError(form: ExemptionCreateForm, minLength: number, currentPeriodStart: string): string | null {
+export function exemptionCreateFormError(form: ExemptionCreateForm, minLength: number, earliestStart: string): string | null {
   if (!form.employeeId) return 'اختر الموظف.'
   if (!validDate(form.effectiveFrom)) return 'حدد تاريخ بداية صحيحًا.'
-  if (currentPeriodStart && form.effectiveFrom < currentPeriodStart) return `لا يبدأ الاستثناء قبل بداية فترة الرواتب الحالية (${currentPeriodStart})؛ الماضي يُعالج بتسوية مالية.`
+  if (earliestStart && form.effectiveFrom < earliestStart) return `لا يبدأ الاستثناء قبل ${earliestStart} (بداية فترة الرواتب السابقة)؛ ما قبلها يُعالج بتسوية مالية.`
   if (form.effectiveTo && !validDate(form.effectiveTo)) return 'تاريخ النهاية غير صحيح.'
   if (form.effectiveTo && form.effectiveTo < form.effectiveFrom) return 'تاريخ النهاية يسبق البداية.'
   if (!form.reasonCode) return 'اختر تصنيف السبب.'

@@ -7,6 +7,7 @@ const { pool, env } = require('../scripts/migrations-lib.cjs')
 const runner = require('../scripts/payroll-migrations.cjs')
 const policyEntities = require('../src/payroll/payroll-policy.entities.ts')
 const definitionEntities = require('../src/payroll/payroll-policy-definition.entities.ts')
+const CHARGE_RULE_COLUMNS_033 = ['lateDeductionEnabled', 'latenessTierSetId', 'earlyLeaveDeductionEnabled', 'shortfallEnabled', 'shortfallMode', 'shortfallValue', 'absencePenaltyDays']
 const database = 'hr_payroll_migration_test_' + crypto.randomBytes(8).toString('hex')
 const allVersions = runner.readMigrations()
 const versions = allVersions.filter(item => ['20260913_006_payroll_policy_drafts', '20260913_007_payroll_policy_settings', '20260913_008_payroll_policy_definitions', '20260913_010_payroll_collection_policy'].includes(item.version))
@@ -36,6 +37,12 @@ before(async () => {
   master = await pool('master'); await master.request().query(`CREATE DATABASE [${database}]`); created = true
   connection = await pool(database)
   ds = await runner.openDataSource(database, [...Object.values(policyEntities), ...Object.values(definitionEntities)])
+  // هذا الاختبار يثبت عقد008 فوق007 (ومعه010)؛ أعمدة «طريقة الخصم» السبعة على payroll_policies في033 يطبقها المُرحّل المجمّع (db-migrate.cjs) ولا تُنسب إلى هذه السلسلة.
+  for (const metadata of ds.entityMetadatas) {
+    const later = metadata.tableName === 'payroll_policies' ? CHARGE_RULE_COLUMNS_033 : []
+    metadata.columns = metadata.columns.filter(column => !later.includes(column.databaseName))
+    metadata.ownColumns = metadata.ownColumns.filter(column => !later.includes(column.databaseName))
+  }
   for (const version of [baseline, settings]) for (const operation of version.operations) await ds.query(operation.sql)
   await ds.query('CREATE TABLE dbo.payroll_schema_migrations(version nvarchar(150) NOT NULL PRIMARY KEY,checksum char(64) NOT NULL,appliedAt datetime2 NOT NULL DEFAULT SYSDATETIME())')
   for (const version of [baseline, settings]) await ds.query('INSERT dbo.payroll_schema_migrations(version,checksum) VALUES(@0,@1)', [version.version, version.checksum])

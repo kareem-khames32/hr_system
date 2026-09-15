@@ -42,6 +42,20 @@ async function intConfig(em: EntityManager, key: string, fallback: number, min: 
 }
 export async function loanReasonMinLength(em: EntityManager) { return intConfig(em, 'loan.exceptional_reason_min_length', 10, 1, 500) }
 
+/** أيام طلب السلفة من الشهر (من يوم إلى يوم، والتفاف فوق نهاية الشهر لو البداية بعد النهاية). الأصل 1..31 = مفتوح طول الشهر. */
+export async function loanRequestDayWindow(em: EntityManager, today: string) {
+  const from = await intConfig(em, 'loan.request_from_day', 1, 1, 31), to = await intConfig(em, 'loan.request_to_day', 31, 1, 31)
+  const [year, month, day] = today.split('-').map(Number)
+  const lastDay = new Date(year, month, 0).getDate()
+  const start = Math.min(from, lastDay), end = Math.min(to, lastDay)
+  const open = start <= end ? day >= start && day <= end : day >= start || day <= end
+  return { fromDay: from, toDay: to, open, message: `طلب السلفة متاح من يوم ${from} إلى يوم ${to} من الشهر` }
+}
+async function assertLoanRequestDayWindow(em: EntityManager, today: string) {
+  const dayWindow = await loanRequestDayWindow(em, today)
+  if (!dayWindow.open) throw new BadRequestException({ code: 'LOAN_REQUEST_DAY_WINDOW', message: dayWindow.message })
+}
+
 /** العميل لا يكتب لقطة السقف ولا المبلغ المعتمد ولا هوية منشئ الاستثناء. */
 export function assertLoanRequestClientPayload(payload: Record<string, unknown> | null | undefined) {
   for (const key of LOAN_REQUEST_SERVER_FIELDS) {
@@ -124,8 +138,9 @@ export async function evaluateEmployeeLoanCap(em: EntityManager, input: { employ
 export async function stageLoanRequestSubmission(em: EntityManager, input: { requestId: number; requesterId: number; actor: JwtPayload; payload: Record<string, unknown>; today?: string }) {
   const today = input.today ?? localDate()
   const { capCheck: _capCheck, capApprovals: _capApprovals, approvedAmount: _approved, exceptionalBy: _by, ...client } = input.payload
-  const schedule = loanScheduleAmounts(client.amount, client.months ?? 1)
   const exceptional = parseFlag(client.exceptional)
+  if (!exceptional) await assertLoanRequestDayWindow(em, today)
+  const schedule = loanScheduleAmounts(client.amount, client.months ?? 1)
   await lockPayrollEmployees(em, [input.requesterId])
   const canExceptional = userHasPerm(input.actor, 'loans.exceptional')
   const cycleStartDay = await intConfig(em, 'payroll.cycle_start_day', 23, 1, 31)

@@ -313,6 +313,9 @@ export class PayrollService {
   }
 
   private async assertAttendanceRuleSnapshot(em: EntityManager, run: PayrollRun, items: PayrollItem[]) {
+    // تبسيط الرواتب (2026-09-15): الحساب يجدد أيام الحضور حتى اليوم فقط (materializeAbsences لا تتجاوز اليوم، وcomputeDay لا يحفظ يومًا لم يأتِ)،
+    // ويقرأ صفوف الأيام اللاحقة كما هي مخزنة. فاليوم اللاحق يُقارن بصفه المخزن لا بإعادة حسابه، وإلا لا تطابق فترة مفتوحة لقطتها أبدًا.
+    const today = localDateOf(new Date())
     for (const item of items) {
       const saved = item.breakdown ? JSON.parse(item.breakdown) : {}
       // المسيرات القديمة تسبق هذا الدليل؛ لا نصنع لها لقطة من الإعدادات الحالية.
@@ -328,7 +331,7 @@ export class PayrollService {
       const fresh: ReturnType<PayrollService['attendanceRuleTrace']>[] = []
       for (const day of rows) {
         if (exemptionPolicyOnDate(exemptions, day.date, { overtimeEligible: false, unpaidLeaveDeductible: true }).isExempt) continue
-        fresh.push(this.attendanceRuleTrace(await this.attendanceService.computeDay(item.employeeId, day.date, false, true, em)))
+        fresh.push(this.attendanceRuleTrace(day.date > today ? day : await this.attendanceService.computeDay(item.employeeId, day.date, false, true, em)))
       }
       if (comparable(fresh) !== comparable(saved.attendanceRules)) {
         throw new ConflictException({ code: 'PAYRUN-ATTENDANCE-CHANGED',
@@ -587,13 +590,8 @@ export class PayrollService {
       },
     })
     if (!membership.rows.length) this.assertScopeAccess(user, definition, [])
-    // تحقق الجميع قبل تجسيد الحضور أو استبدال أي بند مالي.
-    const dataProblems = membership.rows.filter(row => row.dataProblem)
-    if (dataProblems.length) {
-      // كل الموظفين أصحاب المشكلة في رسالة واحدة، مع الطريق من الشاشة: صحح البيانات أو استبعده بسبب مكتوب من تعريف المسودة.
-      throw new BadRequestException({ code: 'PAYRUN-DATA-PROBLEM', employeeIds: dataProblems.map(row => row.employee.id),
-        message: `${dataProblems.map(row => row.dataProblem!.message).join('؛ ')} — صحح بيانات الخدمة أو استبعد الموظف بسبب مكتوب من تعريف المسودة ثم احتسبها` })
-    }
+    // تبسيط الرواتب (2026-09-15): مشكلة بيانات الخدمة لا توقف الحساب؛ صف الموظف مستبعد أصلًا بـEXC_EMPLOYMENT_DATA_INVALID
+    // (بلا بند مالي) ويظهر في «المستبعدون» بسببه حتى تُصحح بياناته ويُعاد الحساب.
     this.assertNonEmptyScope(membership.candidateCount, definition, dto)
     const covered = []
     const capturedAt = new Date().toISOString()
@@ -1133,12 +1131,14 @@ export class PayrollService {
       const policySnapshot = parsePayrollRunPolicySnapshot(run)
       if (!policySnapshot) {
         throw new ConflictException({ code: 'PAYRUN-POLICY-SNAPSHOT-MISSING',
-          message: 'المسير محسوب قبل حفظ لقطة السياسة (الخطوة 19)؛ لا يُعتمد قبل إعادة حسابه مع «تحديث اللقطة» بعد مراجعة فروقها' })
+          message: 'هذا المسير محسوب بإصدار سابق من النظام؛ اضغط «إعادة حساب المسير» ثم اعتمده' })
       }
-      // الخطوة 20: تقرير تكافؤ SHADOW/POLICY لنسخة الحساب نفسها يغطي كل بنود المسير، وكل فرق أو قيمة غائبة له سبب مكتوب.
-      const parity = await this.assertApprovalParity(em, run, policySnapshot.fingerprint)
-      // الخطوة 18 / PR-07: لا اعتماد قبل إقرار موثق بتقرير «موظفون بلا مسير» لنسخة الحساب نفسها وببصمة التقرير الحالية.
-      const unassignedAck = await this.assertUnassignedAcknowledged(em, user, run)
+      // تبسيط الرواتب (2026-09-15): شرط التكافؤ لا يوقف الاعتماد إلا لمسير يصرف نتيجة محرك السياسة (POLICY)؛
+      // SHADOW/LEGACY يصرف الحساب القائم فتقرير الفروق معلومة فقط: يُرفق بالاعتماد متى كان سليمًا ومفسَّرًا (لسجل فترة التكافؤ)، وإلا null بلا منع.
+      // وإقرار «موظفون بلا مسير» لم يعد شرطًا للاعتماد (التقرير متاح للقراءة).
+      const parity = run.engineMode === 'POLICY'
+        ? await this.assertApprovalParity(em, run, policySnapshot.fingerprint)
+        : await this.assertApprovalParity(em, run, policySnapshot.fingerprint).catch(error => { if (error instanceof ConflictException) return null; throw error })
       const items = await em.getRepository(PayrollItem).find({ where: { runId } })
       const employeeIds = await this.validateRunMembers(em, run, items)
       await lockPayrollEmployees(em, employeeIds)
@@ -1167,11 +1167,11 @@ export class PayrollService {
       run.approvedAt = new Date()
       await runs.save(run)
       await this.event(em, user, run.id, 'APPROVED', null, { snapshotVersion: run.snapshotVersion, employeeIds, totalNet: Number(run.totalNet),
-        unassignedAckId: unassignedAck.id, unassignedReportHash: unassignedAck.reportHash,
-        // الخطوتان 19 و20: بصمة لقطة السياسة المتحقق منها ووضع المحرك وتقرير التكافؤ المرفق بالمسير المعتمد وأسبابه المكتوبة
+        unassignedAckId: null, unassignedReportHash: null,
+        // الخطوتان 19 و20: بصمة لقطة السياسة المتحقق منها ووضع المحرك؛ تقرير التكافؤ وأسبابه لمسير POLICY فقط (null لغيره)
         policySnapshotHash: policySnapshot.fingerprint, engineMode: run.engineMode,
-        parityReportHash: parity.report.reportHash, parityTotals: parity.report.totals, parityExplanationIds: parity.explanationIds,
-        parityExplained: parity.explained,
+        parityReportHash: parity?.report.reportHash ?? null, parityTotals: parity?.report.totals ?? null, parityExplanationIds: parity?.explanationIds ?? null,
+        parityExplained: parity?.explained ?? null,
         // الخطوة 22 (B5): من احتسب، واستخدام رخصة الشركة الصغيرة (المعتمِد هو المحتسِب) إن وقع
         calculatedBy, smallCompanyException: calculatedBy === user.sub, selfApprovalSetting: selfApprovalAllowed })
       return run
@@ -1981,7 +1981,7 @@ export class PayrollService {
     // بصمة الحالي لا تُعاد في الرفض: مصدرها الوحيد GET policy-snapshot الذي يعرض الفروق، فلا يُحدَّث دون عرضها.
     if (!options.refresh) {
       throw new ConflictException({ code: 'PAYRUN-POLICY-SNAPSHOT-MISSING', differences,
-        message: 'المسير محسوب قبل حفظ لقطة السياسة (الخطوة 19)؛ اعرض «لقطة السياسة» وراجع القيم الحالية ثم أعد الحساب مع «تحديث اللقطة»' })
+        message: 'هذا المسير محسوب بإصدار سابق من النظام؛ أعد حسابه من «إعادة حساب المسير» في شاشة المسير لتطبيق معادلات الرواتب الحالية' })
     }
     if (!options.expectedHash || options.expectedHash !== current.fingerprint) {
       throw new ConflictException({ code: 'PAYRUN-POLICY-SNAPSHOT-STALE', differences,

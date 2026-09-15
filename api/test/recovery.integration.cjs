@@ -59,8 +59,9 @@ before(async () => {
     ClearanceItem: 'offboarding/offboarding.entities' })) {
     repos[name] = ds.getRepository(require(`../src/${file}`)[name])
   }
-  branch = await repos.Branch.save({ name: 'Test A', code: 'TEST_A', weekendDays: '' })
-  otherBranch = await repos.Branch.save({ name: 'Test B', code: 'TEST_B', weekendDays: '' })
+  // weekendDays=null للفرع = إعداد النظام؛ النص الفارغ يرفضه فحص لقطة التقويم كما يرفضه API الفروع
+  branch = await repos.Branch.save({ name: 'Test A', code: 'TEST_A', weekendDays: null })
+  otherBranch = await repos.Branch.save({ name: 'Test B', code: 'TEST_B', weekendDays: null })
   emp = await repos.Employee.save({ employeeCode: 'TEST001', fullName: 'Recovery employee', branchId: branch.id,
     joinDate: '2020-01-01', basicSalary: 6000, status: 'active' })
   otherEmp = await repos.Employee.save({ employeeCode: 'TEST002', fullName: 'Other branch', branchId: otherBranch.id,

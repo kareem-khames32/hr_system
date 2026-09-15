@@ -21,6 +21,16 @@ before(async () => {
   assert.match(database, /^hr_payroll_migration_test_[a-f0-9]{16}$/); assert.notEqual(database, env.DB_DATABASE)
   master = await pool('master'); await master.request().query(`CREATE DATABASE [${database}]`); created = true
   connection = await pool(database)
+  // هذا الاختبار يثبت عقد002 التاريخي؛ ما أضافته025–032 إلى payroll_runs (نسخة السياسة وتعريف المسير واللقطة ووضع المحرك والصرف والتكافؤ والتصحيح) يُختبر مستقلًا ولا يُنسب إلى002.
+  // علاقة policyVersion تمنع بناء metadata دون كيانات السياسة، فتُنزع مع الأعمدة والفهارس اللاحقة من سجل decorators في عملية هذا الملف وحدها.
+  const laterRunColumns = ['policyVersionId', 'definition', 'paidBy', 'payChannel', 'payReference', 'calculatedBy', 'calculatedAt', 'parityExcludedReason', 'parityExcludedBy', 'parityExcludedAt',
+    'policySnapshot', 'policySnapshotHash', 'engineMode', 'parityReport', 'runType', 'parentRunId', 'correctionReason']
+  const storage = require('../node_modules/typeorm').getMetadataArgsStorage()
+  const prune = (list, drop) => { for (let index = list.length - 1; index >= 0; index--) if (drop(list[index])) list.splice(index, 1) }
+  prune(storage.columns, row => row.target === PayrollRun && laterRunColumns.includes(row.propertyName))
+  prune(storage.relations, row => row.target === PayrollRun && row.propertyName === 'policyVersion')
+  prune(storage.joinColumns, row => row.target === PayrollRun && row.propertyName === 'policyVersion')
+  prune(storage.indices, row => row.target === PayrollRun && ['UX_payroll_run_period_name', 'IX_payroll_runs_parent'].includes(row.name))
   ds = await runner.openDataSource(database, [PayrollRun, PayrollRunMember, PayrollPeriodClaim, PayrollRunEvent])
   const n = ds.namingStrategy
   await connection.request().batch(`

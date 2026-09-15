@@ -1,14 +1,14 @@
 'use client'
 
-// الخطوة 16: «مسير جديد» — اسم ونسخة سياسة منشورة وشهر (الفترة من دورتها)، وفلاتر فرع ← قسم ← فريق أو قائمة،
+// الخطوة 16: «مسير جديد» — اسم ومعادلات رواتب وشهر (الفترة من دورتها)، وفلاتر فرع ← قسم ← فريق أو قائمة،
 // واستبعادات بسبب إجباري، ومعاينة عضوية حقيقية قبل الحفظ. الحفظ ينشئ مسودة فقط؛ الحساب زر منفصل.
-// الاستبعاد متاح لأي موظف تعرضه المعاينة داخل النطاق — ومنهم أصحاب مشاكل البيانات التي تمنع «احتساب المسودة».
+// تبسيط الرواتب: «مسير الشهر التالي» يفتح اللوحة نفسها معبأة من مسير سابق (initial) ويحفظ بـcreatePayrollRunDraft نفسه.
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ApiBranch, ApiDepartment, ApiEmployee, ApiTeam } from '../../lib/api'
 import { fetchPayrollPolicies } from '../../lib/payroll-policies-api'
 import {
-  createPayrollRunDraft, emptyRunFilters, linkedFilterOptions, payrollExclusionCandidates, payrollRunErrorCode, payrollRunErrorMessage, previewPayrollRunDefinition,
-  pruneLinkedFilters, publishedPolicyVersions, updatePayrollRunDraft,
+  createPayrollRunDraft, emptyRunFilters, linkedFilterOptions, payrollExclusionCandidates, payrollRunErrorCode, payrollRunErrorMessage,
+  previewPayrollRunDefinition, pruneLinkedFilters, publishedPolicyVersions, updatePayrollRunDraft,
   type PayrollExclusionCandidate, type PayrollMembershipPreview, type PayrollRunExclusionInput, type PayrollRunFiltersInput, type PayrollRunWithSelection,
   type PublishedPolicyVersionOption,
 } from '../../lib/payroll-runs-api'
@@ -16,12 +16,37 @@ import { PayrollMembershipPreviewView } from './PayrollMembershipPreviewView'
 
 type Mode = 'FILTERS' | 'LIST'
 
+/** تعبئة مسبقة لمسير جديد (مسير الشهر التالي): الاسم والشهر والمعادلة (المجموعة) والفلاتر والاستبعادات بأسبابها. */
+export interface PayrollRunDefinitionInitial {
+  name: string; period: string; policyId: number | null
+  filters: PayrollRunFiltersInput; exclusions: PayrollRunExclusionInput[]
+}
+
+// نسخة المعادلة لمسير الشهر التالي: الأحدث أولًا، ويُسأل الخادم بمعاينة التعريف نفسه (هو وحده يحسب فترة الشهر وسريان النسخة)؛
+// رفض سريان النسخة أو دورتها يعني تجربة الأقدم، وأي رد آخر يعني أن النسخة صالحة للشهر.
+const POLICY_VERSION_UNUSABLE = new Set(['PAYRUN-POLICY-PERIOD', 'PAYRUN-POLICY-CYCLE-MISSING', 'PAYRUN-POLICY-CYCLE-INVALID', 'PAYRUN-POLICY-NOT-PUBLISHED', 'PAYRUN-POLICY-NOT-FOUND'])
+async function seedPolicyVersion(options: PublishedPolicyVersionOption[], seed: PayrollRunDefinitionInitial): Promise<PublishedPolicyVersionOption | null> {
+  if (seed.policyId == null || !/^\d{4}-\d{2}$/.test(seed.period)) return null
+  const filters: PayrollRunFiltersInput = seed.filters.employeeIds.length
+    ? { branchIds: seed.filters.branchIds, departmentIds: [], teamIds: [], employeeIds: seed.filters.employeeIds }
+    : { ...seed.filters, employeeIds: [] }
+  for (const option of options.filter(row => row.policyId === seed.policyId).sort((a, b) => b.versionNo - a.versionNo)) {
+    try {
+      await previewPayrollRunDefinition({ policyVersionId: option.versionId, period: seed.period, filters, exclusions: seed.exclusions })
+      return option
+    } catch (e) {
+      if (!POLICY_VERSION_UNUSABLE.has(payrollRunErrorCode(e) ?? '')) return option
+    }
+  }
+  return null
+}
+
 function ToggleList<T extends { id: number; name: string }>({ label, rows, selected, disabled, onChange, empty }: {
   label: string; rows: T[]; selected: number[]; disabled?: boolean; onChange: (ids: number[]) => void; empty: string
 }) {
   return (
     <div className="space-y-1">
-      <p className="text-sm font-medium text-gray-700">{label} <span className="text-xs text-gray-400">(أي منها)</span></p>
+      <p className="text-sm font-medium text-gray-700">{label}</p>
       <div className="flex flex-wrap gap-1 max-h-32 overflow-y-auto rounded-xl border border-gray-100 p-2">
         {rows.length === 0 && <span className="text-xs text-gray-400">{empty}</span>}
         {rows.map(row => {
@@ -35,22 +60,28 @@ function ToggleList<T extends { id: number; name: string }>({ label, rows, selec
   )
 }
 
-export function PayrollRunDefinitionPanel({ branches, departments, teams, employees, currency, draft, onSaved, onCancel }: {
+export function PayrollRunDefinitionPanel({ branches, departments, teams, employees, currency, draft, initial, onSaved, onCancel }: {
   branches: ApiBranch[]; departments: ApiDepartment[]; teams: ApiTeam[]; employees: ApiEmployee[]; currency: string
   draft?: PayrollRunWithSelection | null
+  initial?: PayrollRunDefinitionInitial | null
   onSaved: (run: PayrollRunWithSelection) => void
   onCancel: () => void
 }) {
+  const seed = draft ? null : initial ?? null
   const [policies, setPolicies] = useState<PublishedPolicyVersionOption[]>([])
   const [policiesError, setPoliciesError] = useState('')
-  const [name, setName] = useState(draft?.name ?? '')
+  const [policyMissingForSeed, setPolicyMissingForSeed] = useState(false)
+  const [name, setName] = useState(draft?.name ?? seed?.name ?? '')
   const [policyVersionId, setPolicyVersionId] = useState<number | null>(draft?.policyVersionId ?? null)
-  const [period, setPeriod] = useState(draft?.period ?? '')
-  const [mode, setMode] = useState<Mode>(draft?.selection?.filters.employeeIds.length ? 'LIST' : 'FILTERS')
+  const [period, setPeriod] = useState(draft?.period ?? seed?.period ?? '')
+  const [mode, setMode] = useState<Mode>((draft?.selection?.filters.employeeIds.length ?? seed?.filters.employeeIds.length) ? 'LIST' : 'FILTERS')
   const [filters, setFilters] = useState<PayrollRunFiltersInput>(() => draft?.selection ? {
     branchIds: draft.selection.filters.branchIds, departmentIds: draft.selection.filters.departmentIds,
-    teamIds: draft.selection.filters.teamIds, employeeIds: draft.selection.filters.employeeIds } : emptyRunFilters())
-  const [exclusions, setExclusions] = useState<PayrollRunExclusionInput[]>(draft?.selection?.exclusions.map(row => ({ employeeId: row.employeeId, reason: row.reason })) ?? [])
+    teamIds: draft.selection.filters.teamIds, employeeIds: draft.selection.filters.employeeIds }
+    : seed ? { branchIds: seed.filters.branchIds, departmentIds: seed.filters.departmentIds, teamIds: seed.filters.teamIds, employeeIds: seed.filters.employeeIds }
+    : emptyRunFilters())
+  const [exclusions, setExclusions] = useState<PayrollRunExclusionInput[]>(draft?.selection?.exclusions.map(row => ({ employeeId: row.employeeId, reason: row.reason }))
+    ?? seed?.exclusions.map(row => ({ employeeId: row.employeeId, reason: row.reason })) ?? [])
   const [exclusionEmployee, setExclusionEmployee] = useState<number | ''>('')
   const [exclusionReason, setExclusionReason] = useState('')
   const [search, setSearch] = useState('')
@@ -66,9 +97,21 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
 
   useEffect(() => {
     let cancelled = false
-    fetchPayrollPolicies().then(rows => { if (!cancelled) setPolicies(publishedPolicyVersions(rows)) })
-      .catch(e => { if (!cancelled) setPoliciesError(payrollRunErrorMessage(e, 'تعذر تحميل سياسات الرواتب المنشورة')) })
+    fetchPayrollPolicies().then(async rows => {
+      if (cancelled) return
+      const options = publishedPolicyVersions(rows)
+      setPolicies(options)
+      // مسير الشهر التالي: أحدث نسخة منشورة من المعادلة نفسها يقبلها الخادم لهذا الشهر، وإلا يُترك الاختيار فارغًا.
+      if (seed) {
+        const match = await seedPolicyVersion(options, seed)
+        if (cancelled) return
+        setPolicyVersionId(match?.versionId ?? null)
+        setPolicyMissingForSeed(!match)
+      }
+    }).catch(e => { if (!cancelled) setPoliciesError(payrollRunErrorMessage(e, 'تعذر تحميل معادلات الرواتب')) })
     return () => { cancelled = true }
+    // التعبئة المسبقة تُقرأ مرة واحدة عند فتح اللوحة
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   // أي تغيير في التعريف يُسقط المعاينة السابقة حتى لا يُحفظ تعريف بمعاينة قديمة.
@@ -85,7 +128,7 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
   } : null
   const listCandidates = employees.filter(emp => (!filters.branchIds.length || filters.branchIds.includes(emp.branchId)) &&
     (!search.trim() || emp.fullName.includes(search.trim()) || emp.employeeCode.includes(search.trim()))).slice(0, 60)
-  const employeeName = (id: number) => employees.find(emp => emp.id === id)?.fullName ?? candidates.find(row => row.employeeId === id)?.label ?? `موظف #${id}`
+  const employeeName = (id: number) => employees.find(emp => emp.id === id)?.fullName ?? candidates.find(row => row.employeeId === id)?.label ?? 'موظف غير معروف'
   const policy = policies.find(row => row.versionId === policyVersionId)
   const excludedIds = exclusions.map(row => row.employeeId)
 
@@ -125,14 +168,16 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
   const exclusionOptions = candidates.length
     ? candidates.filter(row => !excludedIds.includes(row.employeeId)).map(row => ({ id: row.employeeId, label: row.label }))
     : (mode === 'LIST' ? filters.employeeIds.filter(id => !excludedIds.includes(id)).map(id => ({ id, label: employeeName(id) })) : [])
-  const blockingProblems = candidates.filter(row => row.dataProblem && !excludedIds.includes(row.employeeId))
+  const dataProblems = candidates.filter(row => row.dataProblem && !excludedIds.includes(row.employeeId))
 
   return (
     <div className="card border-2 border-primary-100 space-y-4" data-testid="payroll-run-definition">
       <div className="flex flex-wrap items-center justify-between gap-2">
         <div>
-          <h3 className="font-bold text-gray-800">{draft ? `تعديل مسودة المسير #${draft.id}` : 'مسير جديد'}</h3>
-          <p className="text-xs text-gray-500">الحفظ ينشئ مسودة بلا مبالغ؛ «احتساب المسودة» خطوة منفصلة عن «إعادة حساب مسير». تُحفظ نسخة السياسة ودورتها على المسير، والمبالغ تُحسب حاليًا بالمسار القائم (وضع SHADOW).</p>
+          <h3 className="font-bold text-gray-800">{draft ? 'تعديل مسودة المسير' : seed ? 'مسير الشهر التالي' : 'مسير جديد'}</h3>
+          <p className="text-xs text-gray-500">{seed
+            ? 'نفس الاسم والموظفين والمستبعدين للشهر التالي؛ راجعها ثم احفظها كمسودة واحسبها.'
+            : 'الحفظ ينشئ مسودة بلا مبالغ، ثم «احتساب المسودة» يحسب الرواتب.'}</p>
         </div>
         <button type="button" onClick={onCancel} disabled={busy} className="btn-secondary text-sm">إغلاق</button>
       </div>
@@ -140,20 +185,21 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
       <div className="grid gap-3 md:grid-cols-3">
         <label className="text-sm text-gray-700 space-y-1">
           <span className="font-medium">اسم المسير (فريد داخل الشهر)</span>
-          <input value={name} onChange={e => setName(e.target.value)} maxLength={200} disabled={busy} className="input w-full" placeholder="مثل: مسير فرع القاهرة — أكتوبر" />
+          <input value={name} onChange={e => setName(e.target.value)} maxLength={200} disabled={busy} className="input w-full" placeholder="مثل: مسير فرع المعادي" />
         </label>
         <label className="text-sm text-gray-700 space-y-1">
-          <span className="font-medium">نسخة السياسة المنشورة</span>
-          <select value={policyVersionId ?? ''} onChange={e => setPolicyVersionId(e.target.value ? Number(e.target.value) : null)} disabled={busy} className="input w-full">
-            <option value="">اختر مجموعة السياسة ونسختها</option>
+          <span className="font-medium">معادلات الرواتب</span>
+          <select value={policyVersionId ?? ''} onChange={e => { setPolicyVersionId(e.target.value ? Number(e.target.value) : null); setPolicyMissingForSeed(false) }} disabled={busy} className="input w-full">
+            <option value="">اختر المعادلات</option>
             {policies.map(row => <option key={row.versionId} value={row.versionId}>{row.label}</option>)}
           </select>
-          {policies.length === 0 && !policiesError && <span className="text-xs text-amber-700">لا توجد نسخة منشورة؛ انشر نسخة من «سياسات الرواتب» أولًا.</span>}
+          {policies.length === 0 && !policiesError && <span className="text-xs text-amber-700">لا توجد معادلات مفعّلة؛ فعّل معادلة من «معادلات الرواتب» أولًا.</span>}
+          {policyMissingForSeed && !policyVersionId && policies.length > 0 && <span className="text-xs text-amber-700">لا توجد معادلة من نفس المجموعة سارية على الشهر الجديد؛ اختر المعادلات.</span>}
         </label>
         <label className="text-sm text-gray-700 space-y-1">
           <span className="font-medium">شهر الراتب</span>
           <input type="month" value={period} onChange={e => setPeriod(e.target.value)} disabled={busy} className="input w-full" dir="ltr" />
-          {policy && <span className="text-xs text-gray-500">الفترة من دورة السياسة (بداية يوم {policy.cycleStartDay ?? '—'})؛ تظهر التواريخ الدقيقة في المعاينة.</span>}
+          {policy && <span className="text-xs text-gray-500">الفترة تبدأ يوم {policy.cycleStartDay ?? '—'}؛ التواريخ الدقيقة تظهر في المعاينة.</span>}
         </label>
       </div>
 
@@ -162,7 +208,6 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
           className={`px-4 py-1.5 rounded-lg text-sm font-medium ${mode === value ? 'bg-white text-primary-600 shadow-sm' : 'text-gray-600'}`}>
           {value === 'FILTERS' ? 'فلاتر: فرع ← قسم ← فريق' : 'قائمة موظفين محددة'}</button>)}
       </div>
-      <p className="text-xs text-gray-500">داخل النوع الواحد الاختيار «أو»، وبين الأنواع «و». العضوية بمكان الموظف في التنظيم آخر يوم في الفترة؛ القائمة الثابتة تبقى كما هي حتى لو انتقل الموظف.</p>
       <div className="grid gap-3 md:grid-cols-3">
         <ToggleList label="الفروع" rows={options.branches} selected={filters.branchIds} disabled={busy} empty="لا توجد فروع"
           onChange={branchIds => setLinked({ ...filters, branchIds })} />
@@ -186,12 +231,12 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
 
       <div className="space-y-2 rounded-xl border border-gray-100 p-3" data-testid="payroll-run-exclusions">
         <p className="text-sm font-medium text-gray-700">الاستبعادات ({exclusions.length}) — السبب إجباري</p>
-        {blockingProblems.length > 0 && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-xs text-red-700">
-          {blockingProblems.length} موظف بمشكلة بيانات تمنع «احتساب المسودة»: صحح بياناتهم أو استبعدهم هنا بسبب مكتوب.</p>}
+        {dataProblems.length > 0 && <p role="status" className="rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-900">
+          {dataProblems.length} موظف بيانات خدمته غير مكتملة: سيُستبعد من الحساب حتى تُصحح بياناته.</p>}
         <div className="flex flex-wrap gap-2">
           <select value={exclusionEmployee} onChange={e => setExclusionEmployee(e.target.value ? Number(e.target.value) : '')} disabled={busy || !exclusionOptions.length} className="input w-72"
             aria-label="الموظف المستبعد">
-            <option value="">{exclusionOptions.length ? 'اختر موظفًا من المعاينة (داخلون أو مستبعدون تلقائيًا)' : 'اعرض المعاينة لاختيار موظف'}</option>
+            <option value="">{exclusionOptions.length ? 'اختر موظفًا من المعاينة' : 'اعرض المعاينة لاختيار موظف'}</option>
             {exclusionOptions.map(row => <option key={row.id} value={row.id}>{row.label}</option>)}
           </select>
           <input ref={reasonRef} value={exclusionReason} onChange={e => setExclusionReason(e.target.value)} maxLength={500} disabled={busy} className="input flex-1 min-w-48"

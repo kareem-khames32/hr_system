@@ -139,7 +139,7 @@ function ExemptionsContent() {
 
   const submitCreate = async () => {
     if (!data || saving) return
-    const problem = exemptionCreateFormError(form, minLength, data.currentPeriodStart)
+    const problem = exemptionCreateFormError(form, minLength, data.earliestStart ?? data.currentPeriodStart)
     if (problem) { setFormError(problem); return }
     setSaving(true)
     setFormError('')
@@ -238,7 +238,7 @@ function ExemptionsContent() {
       <section className="card space-y-2 text-sm text-gray-600" aria-label="مسار استثناء الحضور">
         <p><strong className="text-gray-800">المسار:</strong> طلب ← اعتماد الموارد البشرية من مستخدم غير منشئ الطلب ← للمناصب القيادية اعتماد تنفيذي من مستخدم آخر ← نافذة سارية بتاريخ ← إنهاء بتاريخ عند الحاجة.</p>
         <p>الاستثناء لا يرفع خصومات الجودة أو الالتزام أو أقساط السلف؛ رفعها يكون بالإعفاء المالي. الإجازة بلا أجر تُخصم وفق الإعداد العام ما لم يحدد الطلب غير ذلك.</p>
-        {data && <p className="text-xs text-gray-500">بداية فترة الرواتب الحالية: {data.currentPeriodStart}. لا يبدأ طلب جديد قبلها، ولا يغيّر الاستثناء فترة في مسير معتمد أو مصروف.</p>}
+        {data && <p className="text-xs text-gray-500">يبدأ الطلب الجديد من بداية فترة الرواتب السابقة ({data.earliestStart ?? data.currentPeriodStart}) أو بعدها، ولا يغيّر الاستثناء فترة في مسير معتمد أو مصروف.</p>}
       </section>
 
       {notice && (
@@ -361,11 +361,11 @@ function ExemptionsContent() {
               </div>
               <div>
                 <label htmlFor="exemption-from" className="label">يبدأ من</label>
-                <input id="exemption-from" type="date" className="input" min={data.currentPeriodStart} value={form.effectiveFrom} onChange={event => setForm({ ...form, effectiveFrom: event.target.value })} />
+                <input id="exemption-from" type="date" className="input" min={data.earliestStart ?? data.currentPeriodStart} value={form.effectiveFrom} onChange={event => setForm({ ...form, effectiveFrom: event.target.value })} />
               </div>
               <div>
                 <label htmlFor="exemption-to" className="label">ينتهي في (اختياري)</label>
-                <input id="exemption-to" type="date" className="input" min={form.effectiveFrom || data.currentPeriodStart} value={form.effectiveTo} onChange={event => setForm({ ...form, effectiveTo: event.target.value })} />
+                <input id="exemption-to" type="date" className="input" min={form.effectiveFrom || data.earliestStart || data.currentPeriodStart} value={form.effectiveTo} onChange={event => setForm({ ...form, effectiveTo: event.target.value })} />
                 <p className="text-xs text-gray-500 mt-1">اتركه فارغًا لنافذة مفتوحة تُنهى لاحقًا بتاريخ.</p>
               </div>
               <div className="sm:col-span-2">

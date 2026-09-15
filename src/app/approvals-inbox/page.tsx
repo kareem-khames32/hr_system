@@ -29,6 +29,9 @@ import { payloadSummary } from '@/lib/request-payload'
 import { useCurrency } from '@/lib/currency'
 import { approveLoanRequest, fetchLoanCapReview, formatLoanMoney, LOAN_APPROVAL_DECISION_LABELS, LOAN_EXCEPTIONAL_CATEGORY_LABELS, type LoanCapReview } from '@/lib/loans-api'
 import { LoanCapSummary } from '@/components/payroll/LoanCapSummary'
+import Link from 'next/link'
+import { fetchDeductions } from '@/lib/deductions-api'
+import { fetchBonuses } from '@/lib/bonuses-api'
 import {
   fetchInbox,
   fetchRequest,
@@ -170,6 +173,18 @@ export default function ApprovalsInboxPage() {
   const [custodyPending, setCustodyPending] = useState<ApiCustody[]>([])
   const [custodyError, setCustodyError] = useState('')
   const [custodyConfirming, setCustodyConfirming] = useState<number | null>(null)
+  // خصومات ومكافآت بانتظار موافقتي — للعرض والانتقال فقط؛ الاعتماد من شاشاتها. العدد الذي يرفضه الخادم يُخفى وحده
+  const [payrollPending, setPayrollPending] = useState<{ deductions: number; bonuses: number; admin: boolean } | null>(null)
+  useEffect(() => {
+    let cancelled = false
+    Promise.allSettled([fetchDeductions({ view: 'pending_me' }), fetchBonuses({ view: 'pending_me' })])
+      .then(([deductions, bonuses]) => {
+        if (cancelled) return
+        setPayrollPending({ deductions: deductions.status === 'fulfilled' ? deductions.value.length : 0,
+          bonuses: bonuses.status === 'fulfilled' ? bonuses.value.length : 0, admin: can('payroll.view') })
+      })
+    return () => { cancelled = true }
+  }, [])
 
   const loadCustodyPending = () =>
     fetchCustodyPendingMyConfirm()
@@ -335,6 +350,31 @@ export default function ApprovalsInboxPage() {
 
         <MyApprovalDecisions onOpen={setDetailId} revision={decisionsRevision} />
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
+        {payrollPending && (payrollPending.deductions > 0 || payrollPending.bonuses > 0) && (
+          <div className="card p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <Wallet size={18} className="text-purple-600" />
+              <h3 className="font-bold text-gray-800">خصومات ومكافآت بانتظار موافقتك</h3>
+            </div>
+            <div className="flex flex-wrap gap-3">
+              {payrollPending.deductions > 0 && (
+                <Link href={payrollPending.admin ? '/payroll/deductions' : '/my/deductions'} className="flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-100">
+                  خصومات بانتظار موافقتك
+                  <span className="badge text-xs bg-red-100 text-red-700">{payrollPending.deductions}</span>
+                  <ChevronLeft size={14} />
+                </Link>
+              )}
+              {payrollPending.bonuses > 0 && (
+                <Link href={payrollPending.admin ? '/payroll/bonuses' : '/my/bonuses'} className="flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-100">
+                  مكافآت بانتظار موافقتك
+                  <span className="badge text-xs bg-success-100 text-success-700">{payrollPending.bonuses}</span>
+                  <ChevronLeft size={14} />
+                </Link>
+              )}
+            </div>
+          </div>
+        )}
 
         {/* عهد بانتظار اعتمادي كمدير مباشر — تختفي عند الخلو */}
         {custodyPending.length > 0 && (

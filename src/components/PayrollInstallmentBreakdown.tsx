@@ -27,10 +27,10 @@ export function PayrollInstallmentBreakdown({ item, currency, compact = false }:
       {' '}{plan.policy?.mode === 'SKIP_AND_EXTEND' ? 'عند النقص: تأجيل القسط كاملًا ومد الجدول.' : 'عند النقص: خصم المتاح وترحيل الباقي للشهر التالي.'}</p>
     {excluded > 0 && <p className="text-xs text-amber-700 mb-3">استُبعد {excluded} قسطًا لوجود حجز سابق في مسير معتمد أو تصفية.</p>}
     {rows.length > 0 && <div className="overflow-x-auto"><table className="w-full text-sm text-right">
-      <thead><tr className="bg-gray-50 text-gray-600"><th className="p-2">السلفة / القسط</th><th className="p-2">أصل الاستحقاق</th>
+      <thead><tr className="bg-gray-50 text-gray-600"><th className="p-2">القسط</th><th className="p-2">أصل الاستحقاق</th>
         <th className="p-2">المستحق</th><th className="p-2">خصم المسير</th><th className="p-2">المرحّل</th><th className="p-2">الإجراء</th></tr></thead>
       <tbody>{rows.map(row => <tr key={row.installmentRef} className="border-t border-gray-100 align-top">
-        <td className="p-2">#{row.loanRef} / #{row.installmentRef}</td><td className="p-2">{row.originalDuePeriod}</td>
+        <td className="p-2">قسط سلفة</td><td className="p-2">{row.originalDuePeriod}</td>
         <td className="p-2">{money(row.dueAmount)}</td><td className="p-2 font-semibold">{money(row.deductedAmount)}</td>
         <td className="p-2">{money(row.remainingAmount)}{row.continuation && <p className="text-xs text-gray-500">إلى {row.continuation.duePeriod}</p>}</td>
         <td className="p-2">{labels[row.outcome] ?? 'يحتاج مراجعة'}</td>

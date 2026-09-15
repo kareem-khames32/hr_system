@@ -58,8 +58,9 @@ before(async () => {
     ClearanceItem: 'offboarding/offboarding.entities' })) {
     repos[name] = ds.getRepository(require(`../src/${file}`)[name])
   }
-  branch = await repos.Branch.save({ name: 'Test A', code: 'TEST_A', weekendDays: '' })
-  otherBranch = await repos.Branch.save({ name: 'Test B', code: 'TEST_B', weekendDays: '' })
+  // weekendDays=null للفرع = إعداد النظام؛ النص الفارغ يرفضه فحص لقطة التقويم كما يرفضه API الفروع
+  branch = await repos.Branch.save({ name: 'Test A', code: 'TEST_A', weekendDays: null })
+  otherBranch = await repos.Branch.save({ name: 'Test B', code: 'TEST_B', weekendDays: null })
   emp = await repos.Employee.save({ employeeCode: 'TEST001', fullName: 'Recovery employee', branchId: branch.id,
     joinDate: '2020-01-01', basicSalary: 6000, status: 'active' })
   otherEmp = await repos.Employee.save({ employeeCode: 'TEST002', fullName: 'Other branch', branchId: otherBranch.id,
@@ -744,7 +745,8 @@ test('EMP-12 cleared optional fields persist as null across branch, department, 
   const leaveType = await repo('LeaveType', 'requests/entities/leave.entities').save({ code: 'CLEAR_OPTIONALS', nameAr: 'Clear optional limits',
     requiredAttachment: 'medical_report', maxDays: 7, balanceSource: 'none' })
   const cases = [
-    { url: `/branches/${branchRow.id}`, list: '/branches', id: branchRow.id,
+    // مسح دولة الفرع وعطلته يمس تقويمه المؤرخ فيلزمه calendarChange بنسخة المصدر المقروءة قبل الحفظ مباشرة
+    { url: `/branches/${branchRow.id}`, list: '/branches', id: branchRow.id, calendarScope: 'BRANCH',
       clear: { nameEn: null, city: null, address: null, phone: null, email: null, managerEmployeeId: null, costCenter: null, country: null, weekendDays: null } },
     { url: `/departments/${department.id}`, list: '/departments', id: department.id,
       clear: { nameEn: null, code: null, parentId: null, managerEmployeeId: null } },
@@ -753,7 +755,14 @@ test('EMP-12 cleared optional fields persist as null across branch, department, 
     { url: `/settings/leave-types/${leaveType.id}`, list: '/settings/leave-types', id: leaveType.id, clear: { requiredAttachment: null, maxDays: null } },
   ]
   for (const c of cases) {
-    const result = await request(admin, 'PATCH', c.url, c.clear)
+    let body = c.clear
+    if (c.calendarScope) {
+      const context = await request(admin, 'GET', `/attendance/calendar-context?scope=${c.calendarScope}&sourceId=${c.id}`)
+      assert.equal(context.status, 200, JSON.stringify(context.body))
+      body = { ...c.clear, calendarChange: { effectiveFrom: '2026-06-01', reason: 'مسح دولة الفرع وعطلته وفق قرار الاختبار',
+        expectedRevision: context.body.revision, expectedCurrentSourceHash: context.body.currentSourceHash } }
+    }
+    const result = await request(admin, 'PATCH', c.url, body)
     assert.equal(result.status, 200, `${c.url}: ${JSON.stringify(result.body)}`)
     const reloaded = await request(admin, 'GET', c.list)
     assert.equal(reloaded.status, 200, `${c.list}: ${JSON.stringify(reloaded.body)}`)

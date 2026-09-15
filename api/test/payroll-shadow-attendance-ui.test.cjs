@@ -40,5 +40,6 @@ test('الفروق والأيام غير المثبتة تظهر بالعربي�
     assert.equal(payrollShadowAttendance({ breakdown }), null); assert.equal(render({ item: { breakdown } }), '')
   }
   const source = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'app', 'payroll', 'page.tsx'), 'utf8')
-  assert.match(source, /<PayrollShadowAttendanceBreakdown item=\{item\} currency=\{currency\} compact \/>/)
+  // تبسيط الرواتب: تفصيل «ظل السياسة» لا يُعرض في خانة التأخير بجدول المسير (المكون باقٍ)
+  assert.doesNotMatch(source, /<PayrollShadowAttendanceBreakdown /)
 })

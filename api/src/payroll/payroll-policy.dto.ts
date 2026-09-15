@@ -53,11 +53,23 @@ export class PayrollPolicyMutationDto {
   @IsString() @MinLength(1) @MaxLength(500) reason: string
 }
 
+export const PAYROLL_POLICY_SHORTFALL_MODES = ['MINUTES', 'MULTIPLIER', 'FRACTION'] as const
+
 export class UpdatePayrollPolicyDto extends PayrollPolicyMutationDto {
   @IsOptional() @IsString() @MinLength(1) @MaxLength(200) name?: string
   @IsOptional() @IsString() @MaxLength(8000) description?: string | null
   @IsOptional() @IsIn(SCOPES) defaultScopeType?: PayrollScopeType | null
   @IsOptional() @IsArray() @ArrayUnique() @ArrayMaxSize(1000) @IsInt({ each: true }) @Min(1, { each: true }) defaultScopeIds?: number[] | null
+  // ترحيل 033 — طريقة الخصم للمجموعة: null = «زي الإعدادات العامة».
+  @IsOptional() @IsBoolean({ message: 'خصم التأخير: يُخصم أو لا يُخصم أو «زي الإعدادات العامة»' }) lateDeductionEnabled?: boolean | null
+  @IsOptional() @IsInt({ message: 'اختر جدول شرائح تأخير صحيحًا' }) @Min(1, { message: 'اختر جدول شرائح تأخير صحيحًا' }) latenessTierSetId?: number | null
+  @IsOptional() @IsBoolean({ message: 'خصم الخروج المبكر: يُخصم أو لا يُخصم أو «زي الإعدادات العامة»' }) earlyLeaveDeductionEnabled?: boolean | null
+  @IsOptional() @IsBoolean({ message: 'خصم نقص ساعات العمل: يُخصم أو لا يُخصم أو «زي الإعدادات العامة»' }) shortfallEnabled?: boolean | null
+  @IsOptional() @IsIn(PAYROLL_POLICY_SHORTFALL_MODES, { message: 'طريقة خصم نقص الساعات: بالدقيقة أو بالدقيقة × مضاعف أو جزء من اليوم' }) shortfallMode?: typeof PAYROLL_POLICY_SHORTFALL_MODES[number] | null
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 4 }, { message: 'قيمة خصم نقص الساعات رقم بحد أقصى 4 منازل عشرية' })
+  @Min(0, { message: 'قيمة خصم نقص الساعات لا تكون سالبة' }) @Max(99999, { message: 'قيمة خصم نقص الساعات أكبر من المسموح (99999)' }) shortfallValue?: number | null
+  @IsOptional() @IsNumber({ maxDecimalPlaces: 2 }, { message: 'معامل الغياب بلا إذن رقم بحد أقصى منزلتين عشريتين' })
+  @Min(0, { message: 'معامل الغياب بلا إذن لا يكون سالبًا' }) @Max(9999, { message: 'معامل الغياب بلا إذن أكبر من المسموح (9999)' }) absencePenaltyDays?: number | null
 }
 
 export class UpdatePayrollPolicyVersionDto extends PayrollPolicyMutationDto {

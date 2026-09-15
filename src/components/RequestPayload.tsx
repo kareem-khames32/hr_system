@@ -4,9 +4,9 @@ import { useEffect, useState } from 'react'
 import { fetchEmployeeDirectory, fetchTeams, fetchFileObjectUrl } from '@/lib/api'
 import { useLeaveCatalog } from '@/lib/leave-catalog'
 import { employeeStatusLabels } from '@/lib/status-labels'
-import { payloadFieldLabel, payloadValueLabel } from '@/lib/request-payload'
+import { payloadFieldLabel, payloadValueLabel, SERVER_PAYLOAD_KEYS } from '@/lib/request-payload'
 
-/** Full request payload for review: every field, array member and attachment remains visible. */
+/** Full request payload for review: every field, array member and attachment remains visible (server audit fields such as the loan cap check have their own Arabic summary). */
 export default function RequestPayload({ payload }: { payload?: string | null }) {
   const catalog = useLeaveCatalog()
   const [employees, setEmployees] = useState<Record<number, string>>({})
@@ -17,7 +17,7 @@ export default function RequestPayload({ payload }: { payload?: string | null })
   let invalid = false
   try {
     const parsed: unknown = JSON.parse(payload || '{}')
-    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) data = parsed as Record<string, unknown>
+    if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) data = Object.fromEntries(Object.entries(parsed).filter(([key]) => !SERVER_PAYLOAD_KEYS.includes(key)))
     else invalid = true
   } catch { invalid = true }
 

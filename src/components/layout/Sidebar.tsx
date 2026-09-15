@@ -122,19 +122,15 @@ const adminMenuDefs: MenuItem[] = [
     label: 'الرواتب',
     icon: <Wallet size={20} />,
     perm: 'payroll.view',
+    // تبسيط الرواتب (2026-09-15): الإعفاءات المالية وقسائم الراتب والبدلات والتأمينات أُخفيت وروابطها تتحول لـ«مسير الرواتب»؛
+    // «القيم العامة للخصومات» (/payroll/formulas) تُفتح من داخل «معادلات الرواتب»
     children: [
       { label: 'مسير الرواتب', href: '/payroll' },
-      { label: 'سياسات الرواتب', href: '/payroll/policies' },
+      { label: 'معادلات الرواتب', href: '/payroll/policies' },
       { label: 'المكافآت', href: '/payroll/bonuses' },
       { label: 'الخصومات', href: '/payroll/deductions' },
-      // الخطوة 26: الإعفاءات المالية (قائمة واعتماد وتقرير حوكمة)
-      { label: 'الإعفاءات المالية', href: '/payroll/exemptions' },
-      { label: 'قسائم الراتب', href: '/payroll/payslips' },
-      { label: 'معادلات الرواتب', href: '/payroll/formulas' },
-      { label: 'البدلات', href: '/payroll/allowances' },
       { label: 'السلف والقروض', href: '/payroll/loans' },
-      { label: 'التأمينات (GOSI)', href: '/payroll/gosi' },
-      { label: 'التقارير المالية', href: '/payroll/reports' },
+      { label: 'تقرير الرواتب', href: '/payroll/reports' },
     ],
   },
   {
@@ -293,8 +289,7 @@ export default function Sidebar() {
       { id: 'my-deductions', label: 'خصوماتي', icon: <ClipboardList size={20} />, href: '/my/deductions' },
       // الخطوة 27: المكافآت المقترحة لي بحالتها، ومساحة المدير لاقتراح مكافآت مرؤوسيه
       { id: 'my-bonuses', label: 'مكافآتي', icon: <Gift size={20} />, href: '/my/bonuses' },
-      // الخطوة 26: الإعفاءات المالية عليّ بسببها، ومساحة مدير القسم لمنح إعفاء خصومات حضور قسمه
-      { id: 'my-exemptions', label: 'إعفاءاتي', icon: <ClipboardList size={20} />, href: '/my/exemptions' },
+      // «إعفاءاتي» أُخفيت (تبسيط الرواتب 2026-09-15): الرابط يتحول لـ«قسائم راتبي» والخصم الملغى يظهر سطرًا في القسيمة
       { id: 'my-custody', label: 'عهدي', icon: <Package size={20} />, href: '/my/custody' },
       { id: 'my-documents', label: 'مستنداتي', icon: <FolderOpen size={20} />, href: '/my/documents' },
       { id: 'profile', label: 'ملفي الشخصي', icon: <UserCircle size={20} />, href: '/profile' },

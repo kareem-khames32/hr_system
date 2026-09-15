@@ -275,7 +275,7 @@ test('step 20: a run with differences cannot switch to POLICY until every differ
   expect(await request('POST', `/payroll/runs/${run.id}/cancel`, { reason: 'تنظيف مسير اختبار الفروق' }), 201)
 })
 
-test('steps 19–20 at approval: a tampered/missing snapshot, a pre-D13 or LEGACY run, a tampered or incomplete report and unexplained unavailable values are refused before any write; reasons (single or per system code) let a SHADOW run be approved with its report attached', async () => {
+test('steps 19–20 at approval (payroll simplification): a tampered or missing snapshot is still refused before any write; for SHADOW and LEGACY runs the parity report and its written reasons are information only (POLICY still needs them), so approval attaches null parity fields', async () => {
   const proven = await employee(), legacySource = await employee()
   await punch(proven, ['2026-08-22T09:00:00', '2026-08-22T17:00:00'])
   // بصمتان قديمتان بلا مصدر ولا مُدخِل (مثل بصمات hr_system قبل حقل المصدر): الحساب القديم يقرؤهما، وظل الحضور يرفضهما دليلًا فتغيب قيمه
@@ -297,14 +297,13 @@ test('steps 19–20 at approval: a tampered/missing snapshot, a pre-D13 or LEGAC
   const events = async () => expect(await request('GET', `/payroll/runs/${created.id}/events`), 200)
   const eventsBefore = (await events()).length
 
-  // 1) قيم غائبة بلا سبب مكتوب: الاعتماد يُرفض قبل الإقرار وقبل أي كتابة
-  const unexplained = expect(await request('POST', `/payroll/runs/${created.id}/approve`), 409)
-  assert.deepEqual([unexplained.code, unexplained.count], ['PAYRUN-APPROVAL-PARITY-UNEXPLAINED', unavailable.length])
-  assert.ok(unexplained.issues.every(issue => issue.issue === 'UNEXPLAINED_UNAVAILABLE' && issue.employeeId === legacySource.id), JSON.stringify(unexplained.issues))
-  assert.deepEqual(unexplained.groups.map(group => [group.reasonCode, group.count, group.employees]), [[unavailable[0].reasonCode, unavailable.length, 1]])
+  // 1) قيم غائبة بلا سبب مكتوب: معلومة ظاهرة في تفاصيل المسير (عددها ومجموعتها) بلا أي كتابة؛ لا توقف اعتماد مسير SHADOW (الخطوة 5)
+  const detail = expect(await request('GET', `/payroll/runs/${created.id}`), 200)
+  assert.equal(detail.engine.approvalIssueCount, unavailable.length)
+  assert.deepEqual(detail.engine.approvalPendingGroups.map(group => [group.reasonCode, group.count, group.employees]), [[unavailable[0].reasonCode, unavailable.length, 1]])
   assert.deepEqual([(await runRow()).status, (await events()).length], ['CALCULATED', eventsBefore])
 
-  // 2) سبب فردي لقيمة غائبة مقبول للاعتماد، ولا يرفع منع POLICY؛ الهدف المختلط أو الرمز غير الموجود 400
+  // 2) سبب فردي لقيمة غائبة يُسجل، ولا يرفع منع POLICY؛ الهدف المختلط أو الرمز غير الموجود 400
   const one = expect(await request('POST', `/payroll/runs/${created.id}/parity-explanations`, { explanations: [{ employeeId: legacySource.id, component: 'LATENESS',
     reason: 'بصمات قديمة بلا مصدر؛ المصروف هو الحساب القديم' }] }), 201)
   assert.equal(one.approvalIssueCount, unavailable.length - 1)
@@ -334,36 +333,18 @@ test('steps 19–20 at approval: a tampered/missing snapshot, a pre-D13 or LEGAC
   const stale = expect(await request('POST', `/payroll/runs/${created.id}/recalculate`, { reason: 'تحديث بلا بصمة', refreshPolicySnapshot: true }), 409)
   assert.deepEqual([stale.code, stale.currentHash], ['PAYRUN-POLICY-SNAPSHOT-STALE', undefined])
 
-  // 5) مسير قبل D13 (بلا وضع محرك) لا يُعتمد
-  await repo('PayrollRun').update({ id: created.id }, { engineMode: null })
-  const noMode = expect(await request('POST', `/payroll/runs/${created.id}/approve`), 409)
-  assert.deepEqual([noMode.code, noMode.issue], ['PAYRUN-ENGINE-PARITY-REPORT-REQUIRED', 'NO_ENGINE_MODE'])
-  await repo('PayrollRun').update({ id: created.id }, { engineMode: 'SHADOW' })
-
-  // 6) تقرير معدل (كل الصفوف «مطابق») أو ناقص موظفًا ببصمة معاد حسابها
+  // 5) تقرير التكافؤ المحفوظ لا يُقرأ عند اعتماد مسير SHADOW (المصروف هو الحساب القائم): حتى المعدل منه لا يوقف الاعتماد، وبلا إقرار «بلا مسير».
+  // الاعتماد يرفق بصمة اللقطة ووضع المحرك، وحقول التكافؤ والإقرار null.
   const storedReport = JSON.parse(original.parityReport)
   await repo('PayrollRun').update({ id: created.id }, { parityReport: JSON.stringify({ ...storedReport, rows: storedReport.rows.map(row => ({ ...row, status: 'MATCHED' })) }) })
-  assert.equal(expect(await request('POST', `/payroll/runs/${created.id}/approve`), 409).code, 'PAYRUN-PARITY-REPORT-INVALID')
-  const partial = { ...storedReport, rows: storedReport.rows.filter(row => row.employeeId === proven.id) }
-  partial.reportHash = crypto.createHash('sha256').update(JSON.stringify({ engineMode: partial.engineMode, snapshotVersion: partial.snapshotVersion,
-    policySnapshotHash: partial.policySnapshotHash, rows: partial.rows }), 'utf8').digest('hex')
-  await repo('PayrollRun').update({ id: created.id }, { parityReport: JSON.stringify(partial) })
-  const incomplete = expect(await request('POST', `/payroll/runs/${created.id}/approve`), 409)
-  assert.equal(incomplete.code, 'PAYRUN-ENGINE-RECALC-REQUIRED')
-  assert.deepEqual(incomplete.issues.map(issue => [issue.employeeId, issue.issue]), [[legacySource.id, 'MISSING_EMPLOYEE']])
-  await repo('PayrollRun').update({ id: created.id }, { parityReport: original.parityReport })
   assert.equal((await runRow()).status, 'CALCULATED')
-
-  // 7) كل الشروط مستوفاة: إقرار «بلا مسير» ثم اعتماد يرفق التقرير وبصمته وبصمة اللقطة والأسباب المكتوبة
-  await acknowledge(created.id)
   assert.equal(expect(await request('POST', `/payroll/runs/${created.id}/approve`), 201).status, 'APPROVED')
   const approval = (await events()).find(row => row.eventType === 'APPROVED')
-  assert.deepEqual([approval.payload.engineMode, approval.payload.parityReportHash, approval.payload.policySnapshotHash], ['SHADOW', report.reportHash, created.policySnapshotHash])
-  assert.deepEqual(approval.payload.parityExplained, { differences: 0, unavailable: unavailable.length })
-  assert.equal(approval.payload.parityExplanationIds.length, unavailable.length)
-  assert.deepEqual(approval.payload.parityTotals, report.totals)
+  assert.deepEqual([approval.payload.engineMode, approval.payload.policySnapshotHash], ['SHADOW', created.policySnapshotHash])
+  assert.deepEqual([approval.payload.parityReportHash, approval.payload.parityTotals, approval.payload.parityExplanationIds, approval.payload.parityExplained,
+    approval.payload.unassignedAckId, approval.payload.unassignedReportHash], [null, null, null, null, null, null])
 
-  // 8) مصدر قيمة تغيّر بلا تغير القيمة (افتراضي ← إعداد مكتوب بنفس القيمة): «التحديث مطلوب» مع فرق مسمى؛ ثم LEGACY بلا ظل لا يُعتمد
+  // 6) مصدر قيمة تغيّر بلا تغير القيمة (افتراضي ← إعداد مكتوب بنفس القيمة): «التحديث مطلوب» مع فرق مسمى؛ ثم LEGACY بلا ظل يُعتمد بلا تقرير تكافؤ
   const other = await employee()
   await punch(other, ['2026-08-22T09:00:00', '2026-08-22T17:00:00'])
   expect(await request('POST', '/attendance/recompute?date=2026-08-22'), 201)
@@ -379,8 +360,7 @@ test('steps 19–20 at approval: a tampered/missing snapshot, a pre-D13 or LEGAC
   const legacyCalc = expect(await request('POST', `/payroll/runs/${legacyRun.id}/recalculate`, { reason: 'إعادة حساب LEGACY بعد عرض الفرق', refreshPolicySnapshot: true,
     expectedPolicySnapshotHash: view.currentHash }), 201)
   assert.equal(legacyCalc.engine.report.engineMode, 'LEGACY')
-  await acknowledge(legacyRun.id)
-  const legacyRefused = expect(await request('POST', `/payroll/runs/${legacyRun.id}/approve`), 409)
-  assert.deepEqual([legacyRefused.code, legacyRefused.issue], ['PAYRUN-ENGINE-PARITY-REPORT-REQUIRED', 'NO_SHADOW_REPORT'])
-  expect(await request('POST', `/payroll/runs/${legacyRun.id}/cancel`, { reason: 'تنظيف مسير LEGACY' }), 201)
+  assert.equal(expect(await request('POST', `/payroll/runs/${legacyRun.id}/approve`), 201).status, 'APPROVED')
+  const legacyApproval = expect(await request('GET', `/payroll/runs/${legacyRun.id}/events`), 200).find(row => row.eventType === 'APPROVED')
+  assert.deepEqual([legacyApproval.payload.engineMode, legacyApproval.payload.parityReportHash], ['LEGACY', null])
 })

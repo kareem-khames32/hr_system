@@ -1,19 +1,21 @@
 'use client'
 
 import { useEffect, useState, type FormEvent } from 'react'
-import { AlertTriangle, CalendarRange, CheckCircle2, Copy, LockKeyhole, Pencil, Plus, Save, Send, X } from 'lucide-react'
-import { ApiError } from '../lib/api'
+import { AlertTriangle, CalendarRange, CheckCircle2, Plus, Save, X } from 'lucide-react'
+import { ApiError, fetchConfig } from '../lib/api'
+import { fetchLatenessTierSets, type LatenessTierSet } from '../lib/payroll-engine-api'
 import {
-  clonePayrollPolicyVersion, createPayrollPolicy, DEFAULT_POLICY_SETTINGS, describePolicyCycle, expectedPolicyCycleEndDay, fetchPayrollPolicyPublishCheck,
-  payrollPoliciesError, policyCycleIssue, POLICY_PERIOD_TYPE_LABELS, POLICY_STATUS_LABELS, publishPayrollPolicyVersion, storedPolicySettings,
-  suggestPolicyEffectiveFrom, updatePayrollPolicyVersion,
-  type PayrollPolicyPublishCheck, type PayrollPolicySettingsInput, type PayrollPolicySummary, type PayrollPolicyVersionSummary,
+  chargeRulesOf, createPayrollPolicy, DEFAULT_POLICY_SETTINGS, describePolicyCycle, expectedPolicyCycleEndDay,
+  payrollPoliciesError, policyCycleIssue, POLICY_PERIOD_TYPE_LABELS, POLICY_SCREEN_REASON, publishPayrollPolicyVersion,
+  SHORTFALL_MODE_LABELS, storedPolicySettings, suggestPolicyEffectiveFrom, updatePayrollPolicyChargeRules, updatePayrollPolicyVersion,
+  type PayrollPolicyChargeRules, type PayrollPolicySettingsInput, type PayrollPolicySummary, type PayrollPolicyVersionSummary, type PayrollShortfallMode,
 } from '../lib/payroll-policies-api'
 
 type Settings = PayrollPolicySettingsInput
 const pad = (value: number) => String(value).padStart(2, '0')
 const todayIso = () => { const now = new Date(); return `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())}` }
 const numberOrNull = (text: string) => text.trim() === '' ? null : Number(text)
+const isDate = (text: string) => /^\d{4}-\d{2}-\d{2}$/.test(text)
 
 // رسالة الخادم أولًا، ثم أسباب منع النشر كما أرسلها (بلا ترجمة من الواجهة).
 function errorText(cause: unknown): string {
@@ -23,7 +25,9 @@ function errorText(cause: unknown): string {
 }
 
 const labelClass = 'block text-sm font-medium text-gray-700 mb-1'
+const CURRENCY_LABELS: Record<Settings['currency'], string> = { SAR: 'ريال سعودي', EGP: 'جنيه مصري' }
 
+// الحقول الظاهرة فقط: الدورة وساعات اليوم والعملة وحماية الصافي. بقية إعدادات النسخة تبقى كما هي وتُرسل مع الحفظ.
 export function PolicySettingsFields({ value, onChange, disabled }: { value: Settings; onChange: (next: Settings) => void; disabled?: boolean }) {
   const set = <K extends keyof Settings>(key: K, next: Settings[K]) => onChange({ ...value, [key]: next })
   const custom = value.defaultPeriodType === 'CUSTOM_DAY_RANGE'
@@ -60,38 +64,17 @@ export function PolicySettingsFields({ value, onChange, disabled }: { value: Set
     </fieldset>
 
     <fieldset disabled={disabled} className="grid md:grid-cols-3 gap-3 min-w-0">
-      <legend className="text-sm font-bold text-gray-800 mb-2">معدلات الحساب</legend>
-      {/* الخطوة 7 / FE-02 (B5): تنبيه على الحقول التي ما زال المسير لا يقرؤها فقط */}
-      <p className="md:col-span-3 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">المسير يقرأ من النسخة: الدورة، وساعات العمل اليومية، والعملة، وخصم التأخير، وأرضية الصافي وسقف الخصم. «أساس المعدل» و«التقريب» و«القسمة على صفر» تُحفظ مع النسخة ولا يقرؤها حساب المسير بعد (المسير بتقريب منزلتين نصف لأعلى وأساس الأجر الثابت ÷ 30).</p>
-      <div><span className={labelClass}>أيام الشهر</span><p className="input bg-gray-50 text-gray-600">30 يومًا (أساس ثابت)</p></div>
+      <legend className="text-sm font-bold text-gray-800 mb-2">ساعات العمل والعملة</legend>
       <label><span className={labelClass}>ساعات العمل اليومية</span>
         <input className="input w-full" type="number" min={0.01} max={24} step={0.01} value={value.dailyHours} onChange={event => set('dailyHours', Number(event.target.value))} /></label>
-      <label><span className={labelClass}>أساس معدل اليوم والساعة</span>
-        <select className="input w-full" value={value.rateBase} onChange={event => set('rateBase', event.target.value as Settings['rateBase'])}>
-          <option value="GROSS">إجمالي الأجر الثابت</option><option value="BASIC">الراتب الأساسي</option>
-        </select></label>
       <label><span className={labelClass}>العملة</span>
         <select className="input w-full" value={value.currency} onChange={event => set('currency', event.target.value as Settings['currency'])}>
-          <option value="SAR">ريال سعودي</option><option value="EGP">جنيه مصري</option>
-        </select></label>
-      <label><span className={labelClass}>طريقة التقريب</span>
-        <select className="input w-full" value={value.roundingMode} onChange={event => set('roundingMode', event.target.value as Settings['roundingMode'])}>
-          <option value="HALF_UP">نصف لأعلى</option><option value="HALF_EVEN">نصف للزوجي</option><option value="FLOOR">لأسفل</option><option value="CEIL">لأعلى</option>
-        </select></label>
-      <label><span className={labelClass}>منازل التقريب</span>
-        <input className="input w-full" type="number" min={0} max={6} step={1} value={value.roundingScale} onChange={event => set('roundingScale', Number(event.target.value))} /></label>
-      <label><span className={labelClass}>عند القسمة على صفر</span>
-        <select className="input w-full" value={value.divisionByZeroMode} onChange={event => set('divisionByZeroMode', event.target.value as Settings['divisionByZeroMode'])}>
-          <option value="ZERO_WITH_WARNING">صفر مع تحذير</option><option value="FAIL_ROW">إيقاف صف الموظف</option>
+          {(Object.keys(CURRENCY_LABELS) as Settings['currency'][]).map(code => <option key={code} value={code}>{CURRENCY_LABELS[code]}</option>)}
         </select></label>
     </fieldset>
 
     <fieldset disabled={disabled} className="grid md:grid-cols-3 gap-3 min-w-0">
-      <legend className="text-sm font-bold text-gray-800 mb-2">الحضور وحماية الصافي</legend>
-      <p className="md:col-span-3 rounded-lg bg-amber-50 p-2 text-xs text-amber-900">«راتب ثابت بلا أثر للحضور» و«ترحيل الخصم الزائد» لا يقرؤهما حساب المسير بعد: الإعفاء من خصم الحضور يُمنح من «استثناء الحضور»، وزيادة قيود الدفتر تُرحّل دائمًا وزيادة الحضور تسقط (DD-11).</p>
-      <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={value.lateDeductionEnabled} onChange={event => set('lateDeductionEnabled', event.target.checked)} />خصم التأخير</label>
-      <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={value.skipAttendance} onChange={event => set('skipAttendance', event.target.checked)} />راتب ثابت بلا أثر للحضور</label>
-      <label className="flex items-center gap-2 text-sm text-gray-700"><input type="checkbox" checked={value.carryOverExcess} onChange={event => set('carryOverExcess', event.target.checked)} />ترحيل الخصم الزائد للشهر التالي</label>
+      <legend className="text-sm font-bold text-gray-800 mb-2">حماية الصافي</legend>
       <label><span className={labelClass}>الحد الأدنى للصافي (مبلغ)</span>
         <input className="input w-full" type="number" min={0} step={0.01} value={value.minNetGuarantee ?? ''} placeholder="بلا حد" onChange={event => set('minNetGuarantee', numberOrNull(event.target.value))} /></label>
       <label><span className={labelClass}>الحد الأدنى للصافي (% من الأجر المستحق)</span>
@@ -102,174 +85,221 @@ export function PolicySettingsFields({ value, onChange, disabled }: { value: Set
   </div>
 }
 
+// القيم الابتدائية للمعادلات الجديدة من «سياسات النظام» (الدورة وساعات اليوم والعملة وحماية الصافي وخصم التأخير)؛ المفتاح الناقص يبقى على الافتراضي.
+const CREATE_DEFAULT_KEYS: Partial<Record<keyof Settings, string>> = {
+  defaultPeriodType: 'payroll.policy.default_period_type', cycleStartDay: 'payroll.cycle_start_day', cycleEndMode: 'payroll.policy.cycle_end_mode',
+  cycleEndDay: 'payroll.policy.cycle_end_day', dailyHours: 'payroll.daily_hours', currency: 'system.currency', lateDeductionEnabled: 'payroll.late_deduction_enabled',
+  minNetGuarantee: 'payroll.policy.min_net_guarantee', netFloorPct: 'payroll.policy.net_floor_pct', maxDeductionPctOfGross: 'payroll.policy.max_deduction_pct_of_gross',
+}
+function createDefaults(rows: Array<{ key: string; value: string }>): Settings {
+  const values = new Map(rows.map(row => [row.key, row.value]))
+  const next: Record<string, unknown> = { ...DEFAULT_POLICY_SETTINGS }
+  for (const [field, key] of Object.entries(CREATE_DEFAULT_KEYS)) {
+    const text = key ? values.get(key) : undefined, fallback = DEFAULT_POLICY_SETTINGS[field as keyof Settings]
+    if (text === undefined) continue
+    if (text === 'null') { if (fallback === null) next[field] = null }
+    else if (typeof fallback === 'boolean') { if (text === 'true' || text === 'false') next[field] = text === 'true' }
+    else if (typeof fallback === 'number' || fallback === null) { if (text.trim() !== '' && Number.isFinite(Number(text))) next[field] = Number(text) }
+    else if (field !== 'currency' || text in CURRENCY_LABELS) next[field] = text
+  }
+  return next as unknown as Settings
+}
+
 export function PayrollPolicyCreateForm({ onCreated, onCancel }: { onCreated: (summary: PayrollPolicySummary) => void; onCancel: () => void }) {
   const [name, setName] = useState('')
-  // فارغ افتراضيًا: الخادم يولّد PS-YYYYMMDD-NN فريدًا فلا يتصادم إنشاء مجموعتين في اليوم نفسه.
-  const [code, setCode] = useState('')
-  const [description, setDescription] = useState('')
   const [settings, setSettings] = useState<Settings>(DEFAULT_POLICY_SETTINGS)
-  const [effectiveFrom, setEffectiveFrom] = useState(() => suggestPolicyEffectiveFrom(DEFAULT_POLICY_SETTINGS, todayIso()))
-  const [fromTouched, setFromTouched] = useState(false)
+  const [loadingDefaults, setLoadingDefaults] = useState(true)
+  const [from, setFrom] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
+  useEffect(() => {
+    let cancelled = false
+    fetchConfig().then(rows => { if (!cancelled) setSettings(createDefaults(rows)) })
+      .catch(() => { /* تعذر قراءة الإعدادات: تبقى القيم الافتراضية ظاهرة للتعديل */ })
+      .finally(() => { if (!cancelled) setLoadingDefaults(false) })
+    return () => { cancelled = true }
+  }, [])
   const suggested = suggestPolicyEffectiveFrom(settings, todayIso())
-  useEffect(() => { if (!fromTouched) setEffectiveFrom(suggested) }, [suggested, fromTouched])
-  const codeValid = code.trim() === '' || /^[A-Za-z0-9][A-Za-z0-9_-]{0,39}$/.test(code.trim())
-  const ready = name.trim().length > 0 && codeValid && /^\d{4}-\d{2}-\d{2}$/.test(effectiveFrom) && !policyCycleIssue(settings) && !saving
+  const effectiveFrom = from ?? suggested
+  const ready = name.trim().length > 0 && isDate(effectiveFrom) && !policyCycleIssue(settings) && !saving && !loadingDefaults
 
   async function submit(event: FormEvent) {
     event.preventDefault()
     if (!ready) return
     setSaving(true); setError('')
     try {
-      onCreated(await createPayrollPolicy({ code, name, description: description.trim() || null, effectiveFrom, settings,
-        metadata: { title: 'النسخة الأولى', notes: null } }))
+      onCreated(await createPayrollPolicy({ code: '', name, description: null, effectiveFrom, settings, metadata: { title: 'النسخة الأولى', notes: null } }))
     } catch (cause) { setError(errorText(cause)) } finally { setSaving(false) }
   }
 
-  return <form className="card space-y-5" aria-label="إنشاء مجموعة سياسة رواتب" onSubmit={submit}>
+  return <form className="card space-y-5" aria-label="إنشاء معادلات رواتب" onSubmit={submit}>
     <div className="flex items-start justify-between gap-3">
-      <div><h2 className="text-lg font-bold text-gray-800">مجموعة سياسة جديدة</h2><p className="text-sm text-gray-500 mt-1">تُنشأ النسخة الأولى مسودة بمعدلاتها ودورتها. راجعها ثم انشرها لتتجمد.</p></div>
+      <div><h2 className="text-lg font-bold text-gray-800">معادلات رواتب جديدة</h2><p className="text-sm text-gray-500 mt-1">القيم تبدأ من «سياسات النظام». بعد الحفظ راجعها واضغط «حفظ وتفعيل» لتُستخدم في المسيرات.</p></div>
       <button type="button" className="text-gray-400 hover:text-gray-600" aria-label="إغلاق النموذج" onClick={onCancel}><X size={20} /></button>
     </div>
     <div className="grid md:grid-cols-3 gap-3">
-      <label><span className={labelClass}>اسم المجموعة</span><input className="input w-full" value={name} maxLength={200} placeholder="مثل: مجموعة القاهرة" onChange={event => setName(event.target.value)} required /></label>
-      <label><span className={labelClass}>الكود (اختياري)</span><input className="input w-full font-mono" dir="ltr" value={code} maxLength={40} placeholder={`PS-${todayIso().replace(/-/g, '')}-01`} onChange={event => setCode(event.target.value)} />
-        {codeValid ? <span className="text-xs text-gray-500">اتركه فارغًا ليُولَّد كود فريد تلقائيًا.</span> : <span className="text-xs text-red-600">حروف إنجليزية وأرقام وشرطة فقط، ويبدأ بحرف أو رقم.</span>}</label>
-      <label><span className={labelClass}>بداية السريان</span><input className="input w-full" type="date" value={effectiveFrom} onChange={event => { setFromTouched(true); setEffectiveFrom(event.target.value) }} required />
-        <span className="text-xs text-gray-500">تبدأ النسخة مع بداية فترة مسير كاملة. المقترح: {suggested}{fromTouched && effectiveFrom !== suggested && <button type="button" className="text-primary-600 mr-1" onClick={() => { setFromTouched(false); setEffectiveFrom(suggested) }}>استخدام المقترح</button>}</span></label>
-      <label className="md:col-span-3"><span className={labelClass}>الوصف (اختياري)</span><textarea className="input w-full" rows={2} maxLength={8000} value={description} onChange={event => setDescription(event.target.value)} /></label>
+      <label className="md:col-span-2"><span className={labelClass}>الاسم</span><input className="input w-full" value={name} maxLength={200} placeholder="مثل: معادلات رواتب فرع المعادي" onChange={event => setName(event.target.value)} required /></label>
+      <label><span className={labelClass}>تُطبّق من</span><input className="input w-full" type="date" value={effectiveFrom} onChange={event => setFrom(event.target.value)} required />
+        <span className="text-xs text-gray-500">بداية فترة مسير. المقترح: {suggested}{from !== null && from !== suggested && <button type="button" className="text-primary-600 mr-1" onClick={() => setFrom(null)}>استخدام المقترح</button>}</span></label>
     </div>
-    <PolicySettingsFields value={settings} onChange={setSettings} disabled={saving} />
+    <PolicySettingsFields value={settings} onChange={setSettings} disabled={saving || loadingDefaults} />
     {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error}</p>}
     <div className="flex flex-wrap gap-2">
-      <button type="submit" className="btn-primary flex items-center gap-2" disabled={!ready}><Plus size={17} />{saving ? 'جارٍ الإنشاء…' : 'إنشاء المسودة'}</button>
+      <button type="submit" className="btn-primary flex items-center gap-2" disabled={!ready}><Plus size={17} />{saving ? 'جارٍ الحفظ…' : 'حفظ'}</button>
       <button type="button" className="btn-secondary" onClick={onCancel} disabled={saving}>إلغاء</button>
     </div>
   </form>
 }
 
-const statusBadge: Record<PayrollPolicyVersionSummary['status'], string> = { DRAFT: 'badge badge-warning', ACTIVE: 'badge badge-success', ARCHIVED: 'badge' }
-const yesNo = (value: unknown) => value ? 'نعم' : 'لا'
+const addDay = (date: string) => { const day = new Date(`${date}T00:00:00Z`); day.setUTCDate(day.getUTCDate() + 1); return day.toISOString().slice(0, 10) }
+/** أول بداية فترة مسير بعد تاريخ؛ تعديل معادلات مفعّلة يبدأ من الفترة التالية فلا يمس مسير الفترة الجارية. */
+function periodStartAfter(settings: Settings, date: string) {
+  let day = date, start = date
+  for (let step = 0; step < 400 && start <= date; step++) { day = addDay(day); start = suggestPolicyEffectiveFrom(settings, day) }
+  return start
+}
 
 interface PanelProps {
   summary: PayrollPolicySummary
   version: PayrollPolicyVersionSummary
-  locked: boolean
-  onChanged: (versionId: number, notice: string) => void | Promise<void>
+  onChanged: (notice: string) => void | Promise<void>
 }
 
 // يُعاد تركيب اللوحة بمفتاح النسخة ومراجعتها؛ فشل الحفظ لا يمسح ما كتبه المستخدم.
-export function PayrollPolicyVersionPanel({ summary, version, locked, onChanged }: PanelProps) {
+export function PayrollPolicyVersionPanel({ summary, version, onChanged }: PanelProps) {
   const stored = storedPolicySettings(version)
-  const canEdit = summary.capabilities.canEdit && summary.policy.isActive
-  const canPublish = !!summary.capabilities.canPublish && summary.policy.isActive
-  const frozen = version.status !== 'DRAFT' || !!version.frozenAt || !!version.publishedAt || version.publishedBy != null
-  const [mode, setMode] = useState<'view' | 'edit' | 'publish' | 'clone'>('view')
+  const canEdit = summary.capabilities.canEdit && !!summary.capabilities.canPublish && summary.policy.isActive
+  const pending = version.status === 'DRAFT' && !version.frozenAt && !version.publishedAt
   const [draft, setDraft] = useState<Settings>(stored ?? DEFAULT_POLICY_SETTINGS)
-  const [from, setFrom] = useState(version.effectiveFrom)
-  const [to, setTo] = useState(version.effectiveTo ?? '')
-  const [reason, setReason] = useState('')
+  const [from, setFrom] = useState<string | null>(null)
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
-  const [check, setCheck] = useState<PayrollPolicyPublishCheck | null>(null)
-  const disabled = locked || busy
+  const dirty = JSON.stringify(draft) !== JSON.stringify(stored)
+  const until = version.effectiveUntil !== undefined ? version.effectiveUntil : version.effectiveTo
+  // غير المفعّلة تحتفظ بتاريخها؛ تعديل المفعّلة يُقترح من فترة المسير التالية (بعد اليوم وبعد بدايتها)، والتاريخ قابل للتغيير.
+  const versionFrom = String(version.effectiveFrom).slice(0, 10), today = todayIso()
+  const suggested = pending ? versionFrom : periodStartAfter(draft, versionFrom > today ? versionFrom : today)
+  const effectiveFrom = from ?? suggested
 
-  function reset(next: typeof mode) { setMode(next); setReason(''); setError(''); setCheck(null); setDraft(stored ?? DEFAULT_POLICY_SETTINGS); setFrom(version.effectiveFrom); setTo(version.effectiveTo ?? '') }
-
-  async function run(action: () => Promise<void>) {
+  async function saveAndActivate() {
     setBusy(true); setError('')
-    try { await action() } catch (cause) { setError(errorText(cause)) } finally { setBusy(false) }
+    let saved: PayrollPolicyVersionSummary
+    try {
+      // الخادم يحفظ غير المفعّلة كما هي، أو ينشئ من المفعّلة نسخة جديدة ويترك المفعّلة بلا تغيير.
+      saved = (await updatePayrollPolicyVersion(summary.policy.id, version.id, { expectedRevision: version.revision, reason: POLICY_SCREEN_REASON, settings: draft, effectiveFrom, effectiveTo: null })).version
+    } catch (cause) { setError(errorText(cause)); setBusy(false); return }
+    try { await publishPayrollPolicyVersion(summary.policy.id, saved.id, saved.revision, POLICY_SCREEN_REASON) }
+    catch (cause) {
+      setBusy(false)
+      await onChanged(`حُفظت التعديلات لكن لم تُفعّل بعد: ${errorText(cause)}`)
+      return
+    }
+    setBusy(false)
+    await onChanged(`حُفظت «${summary.policy.name}» وفُعّلت على مسيرات الفترة التي تبدأ ${effectiveFrom} وما بعدها.`)
   }
-  const saveEdit = () => run(async () => {
-    const response = await updatePayrollPolicyVersion(summary.policy.id, version.id, { expectedRevision: version.revision, reason, settings: draft, effectiveFrom: from, effectiveTo: to || null })
-    await onChanged(response.version.id, response.editKind === 'CLONED'
-      ? `حُفظت التعديلات في مسودة جديدة رقم ${response.version.versionNo}؛ النسخة المنشورة رقم ${version.versionNo} بقيت مجمدة كما هي.`
-      : 'حُفظت إعدادات المسودة ودورتها.')
-  })
-  const openPublish = () => { reset('publish'); void run(async () => setCheck(await fetchPayrollPolicyPublishCheck(summary.policy.id, version.id))) }
-  const publish = () => run(async () => {
-    const response = await publishPayrollPolicyVersion(summary.policy.id, version.id, version.revision, reason)
-    await onChanged(response.version.id, `نُشرت النسخة رقم ${response.version.versionNo} وتجمدت؛ أي تعديل لاحق يُحفظ في مسودة جديدة.`)
-  })
-  const clone = () => run(async () => {
-    const response = await clonePayrollPolicyVersion(summary.policy.id, version.id, version.revision, reason)
-    await onChanged(response.version.id, `أُنشئت مسودة جديدة رقم ${response.version.versionNo} من النسخة رقم ${version.versionNo}.`)
-  })
 
-  return <section className="card space-y-4" aria-label="إعدادات نسخة السياسة ودورتها">
-    <div className="flex flex-wrap items-center justify-between gap-3">
-      <div className="flex flex-wrap items-center gap-2">
-        <h2 className="text-lg font-bold text-gray-800">{summary.policy.name} · نسخة {version.versionNo}</h2>
-        <span className={statusBadge[version.status]}>{POLICY_STATUS_LABELS[version.status]}</span>
-        <span className="text-sm text-gray-500">السريان من {version.effectiveFrom} إلى {(version.effectiveUntil !== undefined ? version.effectiveUntil : version.effectiveTo) ?? 'مفتوح'}</span>
-        {version.supersededByVersionId != null && <span className="text-xs text-blue-700 bg-blue-50 rounded px-2 py-0.5">تتوقف عند بداية نسخة منشورة أحدث</span>}
-      </div>
-      {mode === 'view' && <div className="flex flex-wrap gap-2">
-        {canEdit && <button type="button" className="btn-secondary text-sm flex items-center gap-1" disabled={disabled} onClick={() => reset('edit')}><Pencil size={15} />تعديل الإعدادات والدورة</button>}
-        {canEdit && <button type="button" className="btn-secondary text-sm flex items-center gap-1" disabled={disabled} onClick={() => reset('clone')}><Copy size={15} />مسودة جديدة منها</button>}
-        {canPublish && !frozen && <button type="button" className="btn-primary text-sm flex items-center gap-1" disabled={disabled} onClick={openPublish}><Send size={15} />مراجعة ونشر</button>}
-      </div>}
+  return <section className="card space-y-4" aria-label="دورة المسير وساعات العمل">
+    <div className="flex flex-wrap items-center gap-2">
+      <h2 className="text-lg font-bold text-gray-800">{summary.policy.name}</h2>
+      <span className={pending ? 'badge badge-warning' : version.status === 'ACTIVE' ? 'badge badge-success' : 'badge'}>{pending ? 'غير مفعّلة بعد' : version.status === 'ACTIVE' ? 'مفعّلة' : 'موقوفة'}</span>
+      <span className="text-sm text-gray-500">تُطبّق من {versionFrom}{until ? ` إلى ${until}` : ''}</span>
     </div>
-    {frozen && <p className="flex items-center gap-2 text-sm text-gray-700 bg-gray-50 rounded-lg px-3 py-2"><LockKeyhole size={16} aria-hidden="true" />النسخة منشورة ومجمدة{version.publishedAt ? ` منذ ${String(version.publishedAt).slice(0, 10)}` : ''}. التعديل يُحفظ في مسودة جديدة ولا يغير هذه النسخة.{version.contentHash ? <span className="font-mono text-xs text-gray-500 mr-1" dir="ltr" title={version.contentHash}>ختم المحتوى {version.contentHash.slice(0, 12)}…</span> : null}</p>}
-    {!canEdit && <p className="text-xs text-gray-500">إنشاء المجموعات وتعديل نسخها ونشرها يتطلب صلاحية «إدارة مجموعات سياسات الرواتب ونشر نسخها».</p>}
-    {version.settingsStatus && version.settingsStatus !== 'COMPLETE' && <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">إعدادات النسخة غير مكتملة: {(version.settingsIssues ?? []).join('؛ ')}</p>}
-
-    {mode === 'view' && stored && <dl className="grid sm:grid-cols-2 lg:grid-cols-4 gap-3 text-sm">
-      {[
-        ['الدورة', describePolicyCycle(stored)], ['نوع الفترة', POLICY_PERIOD_TYPE_LABELS[stored.defaultPeriodType]],
-        ['أيام الشهر / ساعات اليوم', `${stored.monthlyDays} / ${stored.dailyHours}`], ['أساس المعدل', stored.rateBase === 'GROSS' ? 'إجمالي الأجر الثابت' : 'الأساسي'],
-        ['التقريب', `${stored.roundingMode} · ${stored.roundingScale} منزلة`], ['العملة', stored.currency],
-        ['خصم التأخير', yesNo(stored.lateDeductionEnabled)], ['راتب ثابت بلا حضور', yesNo(stored.skipAttendance)],
-        ['الحد الأدنى للصافي', stored.minNetGuarantee ?? 'بلا حد'], ['أدنى صافي %', stored.netFloorPct ?? 'بلا حد'],
-        ['سقف الخصومات %', stored.maxDeductionPctOfGross ?? 'بلا سقف'], ['ترحيل الخصم الزائد', yesNo(stored.carryOverExcess)],
-      ].map(([label, value]) => <div key={String(label)} className="rounded-lg bg-gray-50 px-3 py-2"><dt className="text-xs text-gray-500">{label}</dt><dd className="font-medium text-gray-800">{String(value)}</dd></div>)}
-    </dl>}
-
-    {mode === 'edit' && <div className="space-y-4">
-      {frozen && <p className="rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-800">سيُنشئ الحفظ مسودة جديدة بهذه القيم؛ النسخة المنشورة لا تتغير.</p>}
-      <div className="grid md:grid-cols-3 gap-3">
-        <label><span className={labelClass}>بداية السريان</span><input className="input w-full" type="date" value={from} onChange={event => setFrom(event.target.value)} disabled={disabled} /></label>
-        <label><span className={labelClass}>نهاية السريان (اختياري)</span><input className="input w-full" type="date" value={to} onChange={event => setTo(event.target.value)} disabled={disabled} /></label>
-      </div>
-      <PolicySettingsFields value={draft} onChange={setDraft} disabled={disabled} />
-      <label className="block"><span className={labelClass}>سبب التعديل</span><input className="input w-full" value={reason} maxLength={500} onChange={event => setReason(event.target.value)} disabled={disabled} /></label>
-      <div className="flex gap-2">
-        <button type="button" className="btn-primary flex items-center gap-2" disabled={disabled || !reason.trim() || !!policyCycleIssue(draft)} onClick={() => void saveEdit()}><Save size={16} />{busy ? 'جارٍ الحفظ…' : 'حفظ'}</button>
-        <button type="button" className="btn-secondary" disabled={busy} onClick={() => reset('view')}>إلغاء</button>
-      </div>
+    {!canEdit && <p className="text-xs text-gray-500">تعديل المعادلات يتطلب صلاحية إدارة معادلات الرواتب.</p>}
+    {version.settingsStatus && version.settingsStatus !== 'COMPLETE' && <p className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900">بعض إعدادات هذه المعادلات ناقصة؛ راجعها ثم «حفظ وتفعيل».</p>}
+    <PolicySettingsFields value={draft} onChange={setDraft} disabled={busy || !canEdit} />
+    {canEdit && <div className="flex flex-wrap items-end gap-3">
+      <label><span className={labelClass}>{pending ? 'تُطبّق من' : 'التعديل يُطبّق من'}</span>
+        <input className="input" type="date" value={effectiveFrom} disabled={busy} onChange={event => setFrom(event.target.value)} />
+        <span className="block text-xs text-gray-500">بداية فترة مسير؛ المسيرات قبلها تبقى على القيم الحالية.</span></label>
+      <button type="button" className="btn-primary flex items-center gap-2" disabled={busy || (!dirty && !pending) || !!policyCycleIssue(draft) || !isDate(effectiveFrom)} onClick={() => void saveAndActivate()}><CheckCircle2 size={16} />{busy ? 'جارٍ الحفظ…' : 'حفظ وتفعيل'}</button>
     </div>}
+    {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error}</p>}
+  </section>
+}
 
-    {mode === 'clone' && <div className="space-y-3">
-      <p className="text-sm text-gray-600">تُنسخ إعدادات النسخة رقم {version.versionNo} وبنودها وترتيب تحصيلها إلى مسودة جديدة قابلة للتعديل.</p>
-      <label className="block"><span className={labelClass}>سبب إنشاء المسودة</span><input className="input w-full" value={reason} maxLength={500} onChange={event => setReason(event.target.value)} disabled={disabled} /></label>
-      <div className="flex gap-2">
-        <button type="button" className="btn-primary flex items-center gap-2" disabled={disabled || !reason.trim()} onClick={() => void clone()}><Copy size={16} />إنشاء المسودة</button>
-        <button type="button" className="btn-secondary" disabled={busy} onClick={() => reset('view')}>إلغاء</button>
-      </div>
+// ===== طريقة الخصم على المجموعة (ترحيل 033): كل حقل «زي الإعدادات العامة» أو قيمة خاصة بهذه المعادلات =====
+type Choice = '' | 'true' | 'false'
+const choiceOf = (value: boolean | null): Choice => value === null ? '' : value ? 'true' : 'false'
+const boolOf = (value: string): boolean | null => value === '' ? null : value === 'true'
+const textOf = (value: number | null) => value == null ? '' : String(value)
+const tierSetLabel = (set: LatenessTierSet) => set.source === 'LEGACY_CONVERSION' ? 'الشرائح الأصلية' : `شرائح شهر ${set.effectivePeriod}`
+
+export function PayrollPolicyChargeRulesPanel({ summary, version, onSaved }: { summary: PayrollPolicySummary; version: PayrollPolicyVersionSummary | null; onSaved: (notice: string) => void | Promise<void> }) {
+  const initial = chargeRulesOf(summary.policy)
+  const [rules, setRules] = useState<PayrollPolicyChargeRules>(initial)
+  const [shortfallValueText, setShortfallValueText] = useState(textOf(initial.shortfallValue))
+  const [absenceText, setAbsenceText] = useState(textOf(initial.absencePenaltyDays))
+  const [tierSets, setTierSets] = useState<LatenessTierSet[]>([])
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const canEdit = summary.capabilities.canEdit && summary.policy.isActive
+
+  useEffect(() => {
+    let cancelled = false
+    fetchLatenessTierSets().then(data => { if (!cancelled) setTierSets(data.sets.filter(set => set.isActive)) }).catch(() => { /* القائمة تبقى «زي الإعدادات العامة» فقط */ })
+    return () => { cancelled = true }
+  }, [])
+
+  const set = <K extends keyof PayrollPolicyChargeRules>(key: K, value: PayrollPolicyChargeRules[K]) => setRules(current => ({ ...current, [key]: value }))
+  // خصم التأخير محفوظ أيضًا في إعدادات المعادلات المكتملة، وهي التي تُطبّق حين يُترك الحقل فارغًا (لا الإعداد العام)؛
+  // فالقائمة تعرض القيمة المطبّقة فعلًا، واختيار نفس قيمة الإعدادات يُحفظ فارغًا.
+  const versionLate = version?.settingsStatus === 'COMPLETE' && typeof version.lateDeductionEnabled === 'boolean' ? version.lateDeductionEnabled : null
+  const valueLabel = rules.shortfallMode === 'MULTIPLIER' ? 'مضاعف خصم النقص' : rules.shortfallMode === 'FRACTION' ? 'جزء اليوم لخصم النقص (مثل 0.25)' : 'قيمة خصم النقص'
+  const dirty = JSON.stringify({ ...rules, shortfallValue: shortfallValueText.trim(), absencePenaltyDays: absenceText.trim() })
+    !== JSON.stringify({ ...initial, shortfallValue: textOf(initial.shortfallValue), absencePenaltyDays: textOf(initial.absencePenaltyDays) })
+
+  async function save() {
+    setBusy(true); setError('')
+    try {
+      await updatePayrollPolicyChargeRules(summary.policy.id, summary.policy.revision ?? 1, { ...rules, shortfallValue: numberOrNull(shortfallValueText), absencePenaltyDays: numberOrNull(absenceText) })
+      setBusy(false)
+      await onSaved(`حُفظت طريقة الخصم في «${summary.policy.name}»؛ تُطبّق على أي مسير لم يُعتمد عند إعادة حسابه.`)
+    } catch (cause) { setError(errorText(cause)); setBusy(false) }
+  }
+
+  return <section className="card space-y-4" aria-label="طريقة الخصم">
+    <div>
+      <h2 className="text-lg font-bold text-gray-800">طريقة الخصم</h2>
+      <p className="text-sm text-gray-500 mt-1">«زي الإعدادات العامة» يأخذ القيمة من «القيم العامة للخصومات» و«سياسات النظام». التعديل يُطبّق على أي مسير لم يُعتمد عند إعادة حسابه.</p>
+    </div>
+    <fieldset disabled={!canEdit || busy} className="grid md:grid-cols-2 lg:grid-cols-3 gap-3 min-w-0">
+      <label className="min-w-0"><span className={labelClass}>خصم التأخير</span>
+        {versionLate === null
+          ? <select className="input w-full" value={choiceOf(rules.lateDeductionEnabled)} onChange={event => set('lateDeductionEnabled', boolOf(event.target.value))}>
+            <option value="">زي الإعدادات العامة</option><option value="true">يُخصم</option><option value="false">لا يُخصم</option>
+          </select>
+          : <select className="input w-full" value={String(rules.lateDeductionEnabled ?? versionLate)} onChange={event => { const value = event.target.value === 'true'; set('lateDeductionEnabled', value === versionLate ? null : value) }}>
+            <option value="true">يُخصم</option><option value="false">لا يُخصم</option>
+          </select>}
+      </label>
+      <label className="min-w-0 lg:col-span-2"><span className={labelClass}>شرائح التأخير</span>
+        <select className="input w-full" value={rules.latenessTierSetId ?? ''} onChange={event => set('latenessTierSetId', event.target.value ? Number(event.target.value) : null)}>
+          <option value="">زي الإعدادات العامة</option>
+          {rules.latenessTierSetId != null && !tierSets.some(row => row.id === rules.latenessTierSetId) && <option value={rules.latenessTierSetId}>شرائح موقوفة — تُطبَّق شرائح الشهر السارية</option>}
+          {tierSets.map(row => <option key={row.id} value={row.id}>{tierSetLabel(row)}</option>)}
+        </select></label>
+      <label className="min-w-0"><span className={labelClass}>خصم الخروج المبكر (الوردية الثابتة)</span>
+        <select className="input w-full" value={choiceOf(rules.earlyLeaveDeductionEnabled)} onChange={event => set('earlyLeaveDeductionEnabled', boolOf(event.target.value))}>
+          <option value="">زي الإعدادات العامة</option><option value="true">يُخصم</option><option value="false">لا يُخصم</option>
+        </select></label>
+      <label className="min-w-0"><span className={labelClass}>خصم نقص ساعات العمل</span>
+        <select className="input w-full" value={choiceOf(rules.shortfallEnabled)} onChange={event => set('shortfallEnabled', boolOf(event.target.value))}>
+          <option value="">زي الإعدادات العامة</option><option value="true">يُخصم</option><option value="false">لا يُخصم</option>
+        </select></label>
+      <label className="min-w-0"><span className={labelClass}>طريقة خصم النقص</span>
+        <select className="input w-full" value={rules.shortfallMode ?? ''} onChange={event => set('shortfallMode', (event.target.value || null) as PayrollShortfallMode | null)}>
+          <option value="">زي الإعدادات العامة</option>
+          {(Object.keys(SHORTFALL_MODE_LABELS) as PayrollShortfallMode[]).map(key => <option key={key} value={key}>{SHORTFALL_MODE_LABELS[key]}</option>)}
+        </select></label>
+      <label className="min-w-0"><span className={labelClass}>{valueLabel}</span>
+        <input className="input w-full" type="number" min={0} step={0.01} value={shortfallValueText} placeholder="زي الإعدادات العامة" onChange={event => setShortfallValueText(event.target.value)} /></label>
+      <label className="min-w-0"><span className={labelClass}>معامل الغياب بلا إذن (أيام)</span>
+        <input className="input w-full" type="number" min={0} step={0.5} value={absenceText} placeholder="زي الإعدادات العامة" onChange={event => setAbsenceText(event.target.value)} />
+        <span className="text-xs text-gray-500">اليوم الغائب بلا إذن يُخصم = قيمة اليوم × المعامل. اتركه فارغًا للقيمة العامة.</span></label>
+    </fieldset>
+    {canEdit && <div className="flex flex-wrap gap-2">
+      <button type="button" className="btn-primary flex items-center gap-2" disabled={busy || !dirty} onClick={() => void save()}><Save size={16} />{busy ? 'جارٍ الحفظ…' : 'حفظ طريقة الخصم'}</button>
     </div>}
-
-    {mode === 'publish' && <div className="space-y-3">
-      {!check && busy && <p role="status" className="text-sm text-gray-500">جارٍ مراجعة النسخة قبل النشر…</p>}
-      {check && <>
-        {check.cycle && <p className="flex items-center gap-2 text-sm text-primary-700"><CalendarRange size={16} aria-hidden="true" />{check.cycle}</p>}
-        {check.issues.length > 0 && <div role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800 space-y-1"><p className="font-bold flex items-center gap-1"><AlertTriangle size={16} />لا يمكن النشر قبل معالجة:</p>
-          <ul className="list-disc pr-5 space-y-1">{check.issues.map(issue => <li key={issue.code}>{issue.message}{issue.suggestion ? ` — المقترح: ${issue.suggestion}` : ''}</li>)}</ul></div>}
-        {check.warnings.length > 0 && <ul className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900 list-disc pr-8 space-y-1">{check.warnings.map(warning => <li key={warning.code}>{warning.message}</li>)}</ul>}
-        {check.supersedes.length > 0 && <p className="rounded-lg bg-blue-50 px-3 py-2 text-sm text-blue-800">{check.supersedes.map(item => `النسخة المنشورة رقم ${item.versionNo} تتوقف فعليًا في ${item.newEffectiveTo}`).join('؛ ')}. تبقى بياناتها وختمها كما نُشرت دون تعديل.</p>}
-        {check.integrity && !check.integrity.matches && <p role="alert" className="rounded-lg bg-red-50 px-3 py-2 text-sm text-red-800">محتوى هذه النسخة المنشورة لا يطابق ختمها المحفوظ؛ لا تربطها بمسير قبل مراجعة سجل الأحداث.</p>}
-        {check.periods.length > 0 && <div className="overflow-x-auto"><table className="w-full text-sm"><caption className="text-right text-gray-600 mb-1">أول فترات المسير بهذه النسخة</caption>
-          <thead><tr className="text-gray-500 border-b"><th className="text-right py-1">شهر المسير</th><th className="text-right py-1">من</th><th className="text-right py-1">إلى</th></tr></thead>
-          <tbody>{check.periods.map(period => <tr key={period.startDate} className="border-b border-gray-100"><td className="py-1">{period.reference}</td><td>{period.startDate}</td><td>{period.endDate}</td></tr>)}</tbody></table></div>}
-        {check.publishable && <p className="flex items-center gap-2 text-sm text-green-700"><CheckCircle2 size={16} />النسخة جاهزة للنشر. بعد النشر تتجمد ولا تتغير.</p>}
-        {check.canPublish && <label className="block"><span className={labelClass}>سبب النشر</span><input className="input w-full" value={reason} maxLength={500} onChange={event => setReason(event.target.value)} disabled={disabled} /></label>}
-      </>}
-      <div className="flex gap-2">
-        {check?.canPublish && <button type="button" className="btn-primary flex items-center gap-2" disabled={disabled || !reason.trim()} onClick={() => void publish()}><Send size={16} />{busy ? 'جارٍ النشر…' : 'نشر النسخة'}</button>}
-        <button type="button" className="btn-secondary" disabled={busy} onClick={() => reset('view')}>إغلاق</button>
-      </div>
-    </div>}
-
     {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error}</p>}
   </section>
 }

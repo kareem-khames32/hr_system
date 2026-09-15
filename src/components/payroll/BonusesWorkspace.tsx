@@ -35,7 +35,11 @@ function Badge({ className, children }: { className: string; children: React.Rea
 const stepLabel = (step: Pick<DeductionStepView, 'roleLabel' | 'fallbackFrom' | 'fallbackFromLabel'>) =>
   `${step.roleLabel}${step.fallbackFrom ? ` (بديل عن ${step.fallbackFromLabel ?? BONUS_ROLE_LABELS[step.fallbackFrom]})` : ''}`
 
-export function BonusesWorkspace({ currency, mode, focusRequestId = null }: { currency: string; mode: 'admin' | 'manager'; focusRequestId?: number | null }) {
+export function BonusesWorkspace({ currency, mode, focusRequestId = null, initialTab, initialEmployeeId = null, initialPeriod = null }: {
+  currency: string; mode: 'admin' | 'manager'; focusRequestId?: number | null
+  // رابط «مكافأة» من جدول المسير: يفتح الاقتراح لموظف واحد بالموظف وشهر المسير جاهزين
+  initialTab?: 'create'; initialEmployeeId?: number | null; initialPeriod?: string | null
+}) {
   const [tab, setTab] = useState<Tab>('list')
   const [creatable, setCreatable] = useState<BonusCreatable | null>(null)
   const [loadError, setLoadError] = useState('')
@@ -52,7 +56,9 @@ export function BonusesWorkspace({ currency, mode, focusRequestId = null }: { cu
   }
   useEffect(() => {
     setCanManage(can('bonuses.manage'))
-    fetchBonusCreatable().then(setCreatable).catch(error => setLoadError(errorText(error, 'تعذر تحميل أنواع المكافآت المسموحة'))).finally(() => setReady(true))
+    fetchBonusCreatable().then(value => { setCreatable(value); if (initialTab === 'create' && value.types.length > 0) setTab('create') })
+      .catch(error => setLoadError(errorText(error, 'تعذر تحميل أنواع المكافآت المسموحة'))).finally(() => setReady(true))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
   useEffect(loadRows, [filters.view, filters.status, filters.targetPeriod])
   useEffect(() => { if (focusRequestId) { setTab('list'); setFilters(value => ({ ...value, view: 'all' })) } }, [focusRequestId])
@@ -74,7 +80,7 @@ export function BonusesWorkspace({ currency, mode, focusRequestId = null }: { cu
       {loadError && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm flex items-center gap-2"><AlertTriangle size={16} />{loadError}</div>}
       {tab === 'list' && <BonusList rows={rows} loading={loadingRows} filters={filters} setFilters={setFilters} reload={loadRows} currency={currency}
         reasonMinLength={creatable?.reasonMinLength ?? 20} focusRequestId={focusRequestId} />}
-      {tab === 'create' && creatable && <BonusCreator creatable={creatable} currency={currency} onCreated={() => { setFilters(value => ({ ...value, view: 'created' })); setTab('list'); loadRows() }} />}
+      {tab === 'create' && creatable && <BonusCreator creatable={creatable} currency={currency} initialEmployeeId={initialEmployeeId} initialPeriod={initialPeriod} onCreated={() => { setFilters(value => ({ ...value, view: 'created' })); setTab('list'); loadRows() }} />}
       {tab === 'types' && canManage && <BonusTypesPanel onChanged={() => fetchBonusCreatable().then(setCreatable).catch(() => undefined)} />}
     </div>
   )
@@ -210,15 +216,12 @@ function BonusList({ rows, loading, filters, setFilters, reload, currency, reaso
                       <tr>
                         <td colSpan={8} className="bg-gray-50 p-4">
                           {!detail ? <p className="text-sm text-gray-400">جارٍ تحميل التفاصيل…</p> : (
-                            <div className="grid md:grid-cols-3 gap-4 text-sm">
+                            <div className="grid md:grid-cols-2 gap-4 text-sm">
                               <div>
                                 <p className="font-medium text-gray-700 mb-1">السبب والحساب</p>
                                 <p className="text-gray-600 whitespace-pre-wrap">{detail.reason}</p>
                                 {detail.attachmentRef && <p className="text-gray-500">المرجع: {detail.attachmentRef}</p>}
                                 {detail.amountTrace?.creation?.formula && <p className="text-xs text-gray-500 mt-1" dir="ltr">{detail.amountTrace.creation.formula}</p>}
-                                {detail.amountTrace?.creation?.capLimit && <p className="text-xs text-gray-500">سقف النوع من الأساسي: {formatBonusMoney(detail.amountTrace.creation.capLimit)}</p>}
-                                {detail.amountTrace?.creation?.escalationThreshold && <p className="text-xs text-gray-500">حد التصعيد: {formatBonusMoney(detail.amountTrace.creation.escalationThreshold)}</p>}
-                                <p className="text-xs text-gray-500">{detail.type.isTaxable ? 'خاضعة للضريبة' : 'غير خاضعة للضريبة'} · {detail.type.isInsurable ? 'خاضعة للتأمين' : 'غير خاضعة للتأمين'}</p>
                                 {detail.decisionReason && <p className="text-gray-500 mt-1">سبب القرار: {detail.decisionReason}</p>}
                               </div>
                               <div>
@@ -234,21 +237,6 @@ function BonusList({ rows, loading, filters, setFilters, reload, currency, reaso
                                     </li>
                                   ))}
                                 </ol>
-                              </div>
-                              <div>
-                                <p className="font-medium text-gray-700 mb-1">قيد الدفتر والصرف</p>
-                                {detail.obligations.length === 0 ? <p className="text-gray-400">لا يُنشأ قيد قبل آخر اعتماد</p> : (
-                                  <ul className="space-y-1">
-                                    {detail.obligations.map(item => (
-                                      <li key={item.id} className={item.reversal ? 'text-red-700' : 'text-gray-600'}>
-                                        {item.reversal ? 'استرداد ' : 'إضافة '}<span dir="ltr" className="font-mono">{item.targetPeriod}</span>: {formatBonusMoney(item.amount)} — {item.statusLabel}
-                                        {item.reservedPayrollRunId && item.status === 'PENDING' ? ` (محجوز لمسير #${item.reservedPayrollRunId})` : ''}
-                                        {item.appliedPayrollRunId ? ` (مسير ${item.appliedPeriod ?? `#${item.appliedPayrollRunId}`})` : ''}
-                                      </li>
-                                    ))}
-                                  </ul>
-                                )}
-                                <p className="text-xs text-gray-500 mt-1">المصروف {formatBonusMoney(detail.paidAmount)} · المسترد {formatBonusMoney(detail.reversedAmount)}</p>
                               </div>
                             </div>
                           )}
@@ -298,7 +286,9 @@ function BonusList({ rows, loading, filters, setFilters, reload, currency, reaso
   )
 }
 
-function BonusCreator({ creatable, currency, onCreated }: { creatable: BonusCreatable; currency: string; onCreated: () => void }) {
+function BonusCreator({ creatable, currency, onCreated, initialEmployeeId = null, initialPeriod = null }: {
+  creatable: BonusCreatable; currency: string; onCreated: () => void; initialEmployeeId?: number | null; initialPeriod?: string | null
+}) {
   const [typeId, setTypeId] = useState<number>(creatable.types[0]?.id ?? 0)
   const type = creatable.types.find(row => row.id === typeId) ?? null
   const [candidates, setCandidates] = useState<BonusCandidate[]>([])
@@ -311,7 +301,9 @@ function BonusCreator({ creatable, currency, onCreated }: { creatable: BonusCrea
   const [singleId, setSingleId] = useState<number | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [excluded, setExcluded] = useState<Set<number>>(new Set())
-  const [form, setForm] = useState({ inputValue: '', reason: '', targetPeriod: creatable.currentPeriod, attachmentRef: '', confirmNotDuplicate: false })
+  const [form, setForm] = useState({ inputValue: '', reason: '', targetPeriod: initialPeriod ?? creatable.currentPeriod, attachmentRef: '', confirmNotDuplicate: false })
+  // الموظف القادم من رابط المسير يُختار مرة واحدة بعد تحميل الموظفين في النطاق
+  const [pendingEmployeeId, setPendingEmployeeId] = useState<number | null>(initialEmployeeId)
   const [preview, setPreview] = useState<BonusPreview | null>(null)
   const [previewKey, setPreviewKey] = useState('')
   const [busy, setBusy] = useState(false)
@@ -323,10 +315,17 @@ function BonusCreator({ creatable, currency, onCreated }: { creatable: BonusCrea
     setCandidateError('')
     fetchBonusCandidates(typeId).then(setCandidates).catch(err => setCandidateError(errorText(err, 'تعذر تحميل الموظفين في نطاقك')))
     setForm(value => ({ ...value, inputValue: type?.defaultValue ?? '' }))
-    // تغيير النوع يغيّر النطاق والحدود: المعاينة والاختيار السابقان لا يصلحان
+    // تغيير النوع يغيّر النطاق والحدود: المعاينة والاختيار السابقان لا يصلحان. الموظف المختار (أو القادم من رابط المسير)
+    // يُعاد اختياره تلقائيًا متى كان داخل نطاق النوع الجديد بعد تحميل موظفيه.
+    if (singleId) setPendingEmployeeId(singleId)
+    setCandidates([])
     setPreview(null); setSingleId(null); setSelected(new Set()); setExcluded(new Set())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [typeId])
+  useEffect(() => {
+    if (!pendingEmployeeId || !candidates.some(row => row.id === pendingEmployeeId)) return
+    setSelectionMode('SINGLE'); setSingleId(pendingEmployeeId); setPendingEmployeeId(null)
+  }, [candidates, pendingEmployeeId])
 
   // القسم مع فروعه: نفس حل الخادم (مسار القسم صعودًا يضم القسم المختار)
   const inDepartment = (row: BonusCandidate, id: number) => row.departmentPath?.length ? row.departmentPath.some(item => item.id === id) : row.departmentId === id
@@ -430,8 +429,7 @@ function BonusCreator({ creatable, currency, onCreated }: { creatable: BonusCrea
       <div className="text-xs text-gray-500 bg-gray-50 rounded-xl p-3">
         حدود النوع: الحد الأدنى {formatBonusMoney(type.minAmount)}، الحد الأعلى {type.maxAmount ? formatBonusMoney(type.maxAmount) : 'بلا'}،
         سقف المكافأة الواحدة {type.maxPctOfBase ? `${type.maxPctOfBase}% من الأساسي${creatable.canExceedCap ? ' (تملك صلاحية تجاوزه)' : ''}` : 'بلا'}
-        {type.valueStep ? `، خطوة المدخل ${type.valueStep}` : ''}
-        {type.escalationDays ? `، التصعيد إلى ${BONUS_ROLE_LABELS[type.escalationStep ?? 'DEPARTMENT_MANAGER']} فوق ${type.escalationDays} يوم راتب` : ''}.
+        {type.valueStep ? `، خطوة المدخل ${type.valueStep}` : ''}.
         السلسلة: {type.approvalSteps.map(role => BONUS_ROLE_LABELS[role]).join(' ← ')}.
       </div>
 
@@ -556,7 +554,7 @@ const CREATOR_BASES: BonusCreatorBasis[] = ['DIRECT_MANAGER', 'TEAM_LEADER', 'DE
 const CHAIN_ROLES: DeductionApprovalRole[] = ['DIRECT_MANAGER', 'TEAM_LEADER', 'DEPARTMENT_MANAGER', 'BRANCH_MANAGER', 'EXECUTIVE']
 const ESCALATION_ROLES: DeductionApprovalRole[] = ['DEPARTMENT_MANAGER', 'BRANCH_MANAGER', 'EXECUTIVE']
 const emptyType = (): BonusTypeInput => ({ code: '', nameAr: '', nameEn: '', calcMethod: 'FIXED_AMOUNT', defaultValue: '', valueStep: '', minAmount: '1', maxAmount: '', maxPctOfBase: '100',
-  isTaxable: true, isInsurable: false, creatorScopes: [...CREATOR_BASES], approvalSteps: ['HR'], escalationDays: '1', escalationStep: 'DEPARTMENT_MANAGER', isActive: true })
+  isTaxable: true, isInsurable: false, creatorScopes: [...CREATOR_BASES], approvalSteps: ['HR'], escalationDays: '', escalationStep: 'DEPARTMENT_MANAGER', isActive: true })
 const blank = (value: unknown) => value === '' || value === undefined ? null : value
 const toggleList = <T,>(items: T[] | undefined, item: T) => (items ?? []).includes(item) ? (items ?? []).filter(value => value !== item) : [...(items ?? []), item]
 
@@ -606,19 +604,17 @@ function BonusTypesPanel({ onChanged }: { onChanged: () => void }) {
           <table className="w-full">
             <thead>
               <tr className="table-header">
-                <th className="text-right px-3 py-2">الكود</th><th className="text-right px-3 py-2">الاسم</th><th className="text-right px-3 py-2">الحساب</th>
-                <th className="text-center px-3 py-2">السقف</th><th className="text-right px-3 py-2">النطاق والسلسلة</th><th className="text-center px-3 py-2">النسخة</th><th className="text-center px-3 py-2"></th>
+                <th className="text-right px-3 py-2">الاسم</th><th className="text-right px-3 py-2">الحساب</th>
+                <th className="text-center px-3 py-2">السقف</th><th className="text-right px-3 py-2">النطاق والسلسلة</th><th className="text-center px-3 py-2"></th>
               </tr>
             </thead>
             <tbody>
               {types.map(row => (
                 <tr key={row.id} className="table-row">
-                  <td className="table-cell font-mono text-xs">{row.code}</td>
                   <td className="table-cell text-sm">{row.nameAr}{!row.isActive && <Badge className="bg-gray-100 text-gray-500">معطل</Badge>}</td>
                   <td className="table-cell text-sm">{row.calcMethodLabel}{row.defaultValue ? ` (افتراضي ${row.defaultValue})` : ''}</td>
                   <td className="table-cell text-center text-sm">{row.maxPctOfBase ? `${row.maxPctOfBase}% من الأساسي` : 'بلا'}</td>
-                  <td className="table-cell text-xs text-gray-600">{row.creatorScopes.map(role => BONUS_ROLE_LABELS[role]).join('، ')}<span className="block">{row.approvalSteps.map(role => BONUS_ROLE_LABELS[role]).join(' ← ')}{row.escalationDays ? ` · تصعيد فوق ${row.escalationDays} يوم إلى ${BONUS_ROLE_LABELS[row.escalationStep ?? 'DEPARTMENT_MANAGER']}` : ''}</span></td>
-                  <td className="table-cell text-center font-mono text-xs">{row.version}</td>
+                  <td className="table-cell text-xs text-gray-600">{row.creatorScopes.map(role => BONUS_ROLE_LABELS[role]).join('، ')}<span className="block">{row.approvalSteps.map(role => BONUS_ROLE_LABELS[role]).join(' ← ')}</span></td>
                   <td className="table-cell text-center"><button type="button" className="btn-secondary text-xs px-2 py-1" onClick={() => open(row)}>تعديل</button></td>
                 </tr>
               ))}
@@ -634,9 +630,7 @@ function BonusTypesPanel({ onChanged }: { onChanged: () => void }) {
               <button type="button" aria-label="إغلاق" onClick={() => setEditing(null)}><X size={18} /></button>
             </div>
             <div className="grid md:grid-cols-3 gap-3 text-sm">
-              <label className="text-gray-600">الكود<input className="input mt-1" dir="ltr" value={form.code ?? ''} disabled={editing !== 'new'} onChange={event => setForm(value => ({ ...value, code: event.target.value.toUpperCase() }))} /></label>
               <label className="text-gray-600">الاسم العربي<input className="input mt-1" value={form.nameAr ?? ''} onChange={event => setForm(value => ({ ...value, nameAr: event.target.value }))} /></label>
-              <label className="text-gray-600">الاسم الإنجليزي<input className="input mt-1" dir="ltr" value={form.nameEn ?? ''} onChange={event => setForm(value => ({ ...value, nameEn: event.target.value }))} /></label>
               <label className="text-gray-600">طريقة الحساب
                 <select className="input mt-1" value={form.calcMethod} onChange={event => setForm(value => ({ ...value, calcMethod: event.target.value as BonusCalcMethod }))}>
                   {(Object.keys(BONUS_METHOD_LABELS) as BonusCalcMethod[]).map(method => <option key={method} value={method}>{BONUS_METHOD_LABELS[method]}</option>)}
@@ -647,17 +641,7 @@ function BonusTypesPanel({ onChanged }: { onChanged: () => void }) {
               <label className="text-gray-600">الحد الأدنى<input className="input mt-1" dir="ltr" value={form.minAmount ?? ''} onChange={event => setForm(value => ({ ...value, minAmount: event.target.value }))} /></label>
               <label className="text-gray-600">الحد الأعلى (فارغ = بلا)<input className="input mt-1" dir="ltr" value={form.maxAmount ?? ''} onChange={event => setForm(value => ({ ...value, maxAmount: event.target.value }))} /></label>
               <label className="text-gray-600">السقف % من الأساسي (فارغ = بلا)<input className="input mt-1" dir="ltr" value={form.maxPctOfBase ?? ''} onChange={event => setForm(value => ({ ...value, maxPctOfBase: event.target.value }))} /></label>
-              <label className="text-gray-600">حد التصعيد بأيام الراتب (فارغ = بلا)<input className="input mt-1" dir="ltr" value={form.escalationDays ?? ''} onChange={event => setForm(value => ({ ...value, escalationDays: event.target.value }))} /></label>
-              <label className="text-gray-600">خطوة التصعيد (المدير الأعلى)
-                <select className="input mt-1" value={form.escalationStep ?? 'DEPARTMENT_MANAGER'} disabled={!form.escalationDays} onChange={event => setForm(value => ({ ...value, escalationStep: event.target.value as DeductionApprovalRole }))}>
-                  {ESCALATION_ROLES.map(role => <option key={role} value={role}>{BONUS_ROLE_LABELS[role]}</option>)}
-                </select>
-              </label>
-              <div className="flex flex-col gap-1 text-gray-600">
-                <label className="flex items-center gap-2"><input type="checkbox" checked={!!form.isTaxable} onChange={event => setForm(value => ({ ...value, isTaxable: event.target.checked }))} />خاضعة للضريبة</label>
-                <label className="flex items-center gap-2"><input type="checkbox" checked={!!form.isInsurable} onChange={event => setForm(value => ({ ...value, isInsurable: event.target.checked }))} />خاضعة للتأمين</label>
-                <label className="flex items-center gap-2"><input type="checkbox" checked={!!form.isActive} onChange={event => setForm(value => ({ ...value, isActive: event.target.checked }))} />مفعل</label>
-              </div>
+              <label className="flex items-center gap-2 text-gray-600 self-end pb-2"><input type="checkbox" checked={!!form.isActive} onChange={event => setForm(value => ({ ...value, isActive: event.target.checked }))} />مفعل</label>
             </div>
             <div className="text-sm text-gray-600">
               <p className="font-medium">من يقترح</p>
@@ -667,6 +651,23 @@ function BonusTypesPanel({ onChanged }: { onChanged: () => void }) {
               <p className="font-medium">خطوات قبل الموارد البشرية (الموارد البشرية آخر خطوة دائمًا)</p>
               <div className="flex flex-wrap gap-3 mt-1">{CHAIN_ROLES.map(role => <label key={role} className="flex items-center gap-1"><input type="checkbox" checked={(form.approvalSteps ?? []).includes(role)} onChange={() => setForm(value => ({ ...value, approvalSteps: [...toggleList((value.approvalSteps ?? []).filter(item => item !== 'HR'), role), 'HR'] }))} />{BONUS_ROLE_LABELS[role]}</label>)}</div>
             </div>
+            <details className="text-sm border border-gray-100 rounded-xl p-3">
+              <summary className="cursor-pointer text-gray-700 font-medium">خيارات إضافية</summary>
+              <div className="grid md:grid-cols-3 gap-3 mt-3">
+                <label className="text-gray-600">الكود<input className="input mt-1" dir="ltr" value={form.code ?? ''} disabled={editing !== 'new'} onChange={event => setForm(value => ({ ...value, code: event.target.value.toUpperCase() }))} /></label>
+                <label className="text-gray-600">الاسم الإنجليزي<input className="input mt-1" dir="ltr" value={form.nameEn ?? ''} onChange={event => setForm(value => ({ ...value, nameEn: event.target.value }))} /></label>
+                <label className="text-gray-600">حد التصعيد بأيام الراتب (فارغ = بلا)<input className="input mt-1" dir="ltr" value={form.escalationDays ?? ''} onChange={event => setForm(value => ({ ...value, escalationDays: event.target.value }))} /></label>
+                <label className="text-gray-600">خطوة التصعيد (المدير الأعلى)
+                  <select className="input mt-1" value={form.escalationStep ?? 'DEPARTMENT_MANAGER'} disabled={!form.escalationDays} onChange={event => setForm(value => ({ ...value, escalationStep: event.target.value as DeductionApprovalRole }))}>
+                    {ESCALATION_ROLES.map(role => <option key={role} value={role}>{BONUS_ROLE_LABELS[role]}</option>)}
+                  </select>
+                </label>
+                <div className="flex flex-col gap-1 text-gray-600">
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={!!form.isTaxable} onChange={event => setForm(value => ({ ...value, isTaxable: event.target.checked }))} />خاضعة للضريبة</label>
+                  <label className="flex items-center gap-2"><input type="checkbox" checked={!!form.isInsurable} onChange={event => setForm(value => ({ ...value, isInsurable: event.target.checked }))} />خاضعة للتأمين</label>
+                </div>
+              </div>
+            </details>
             {formError && <p role="alert" className="text-sm text-red-600">{formError}</p>}
             <div className="flex justify-end gap-2">
               <button type="button" className="btn-secondary" onClick={() => setEditing(null)} disabled={busy}>رجوع</button>

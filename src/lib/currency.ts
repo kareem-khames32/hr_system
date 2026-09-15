@@ -3,7 +3,7 @@
 // عملة النظام — تُقرأ مرة من إعدادات السيرفر (system.currency) وتُخزّن للجلسة
 // الاستخدام: const c = useCurrency() ثم `${amount.toLocaleString()} ${c}`
 import { useEffect, useState } from 'react'
-import { fetchConfig } from './api'
+import { can, fetchConfig } from './api'
 
 const LABELS: Record<string, string> = {
   SAR: 'ر.س',
@@ -27,6 +27,8 @@ export async function loadCurrency(): Promise<string> {
     cached = stored
     return stored
   }
+  // الإعدادات لمن يملك settings.manage فقط؛ غيره يأخذ الافتراضي بلا طلب يرفضه الخادم
+  if (!can('settings.manage')) return 'ر.س'
   try {
     const config = await fetchConfig()
     const code = config.find((c) => c.key === 'system.currency')?.value ?? 'SAR'

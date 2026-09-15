@@ -509,6 +509,8 @@ export class SettingsController {
     'payroll.exemption_reason_min_length': 1,
     'loan.exceptional_reason_min_length': 1,
     'loan.first_installment_max_months_ahead': 0,
+    'loan.request_from_day': 1,
+    'loan.request_to_day': 1,
     // C2: الخصومات المصنفة
     'deductions.reason_min_length': 1,
     'deductions.duplicate_window_hours': 0,
@@ -590,6 +592,10 @@ export class SettingsController {
       if (!Number.isInteger(n) || n > (dto.key === 'loan.exceptional_reason_min_length' ? 500 : 120)) {
         throw new BadRequestException('إعدادات السلف أعداد صحيحة: طول السبب حتى 500 حرف، وأشهر أول قسط حتى 120')
       }
+    }
+    if (['loan.request_from_day', 'loan.request_to_day'].includes(dto.key)) {
+      const n = Number(dto.value)
+      if (!Number.isInteger(n) || n > 31) throw new BadRequestException('أيام طلب السلفة أعداد صحيحة من 1 إلى 31')
     }
     if (['attendance.flex.shortfall_grace_minutes', 'attendance.flex.unpaid_break_minutes',
       'attendance.flex.max_session_minutes'].includes(dto.key)) {

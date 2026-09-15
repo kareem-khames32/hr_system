@@ -33,6 +33,14 @@ export class PayrollPolicy {
   @Column({ type: 'simple-json', nullable: true }) defaultScopeIds: number[] | null
   @Column({ type: 'bit', default: true }) isActive: boolean
   @Column({ type: 'int', default: 1 }) revision: number
+  // ترحيل 033 — طريقة الخصم لكل مجموعة معادلات: null = القيمة من نسخة السياسة المنشورة ثم الإعدادات العامة.
+  @Column({ type: 'bit', nullable: true }) lateDeductionEnabled: boolean | null
+  @Column({ type: 'int', nullable: true }) latenessTierSetId: number | null
+  @Column({ type: 'bit', nullable: true }) earlyLeaveDeductionEnabled: boolean | null
+  @Column({ type: 'bit', nullable: true }) shortfallEnabled: boolean | null
+  @Column({ type: 'nvarchar', length: 12, nullable: true }) shortfallMode: 'MINUTES' | 'MULTIPLIER' | 'FRACTION' | null
+  @Column({ type: 'decimal', precision: 9, scale: 4, nullable: true }) shortfallValue: number | null
+  @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true }) absencePenaltyDays: number | null
   @Column({ type: 'int' }) createdBy: number
   @Column({ type: 'int' }) updatedBy: number
   @CreateDateColumn({ type: 'datetime2' }) createdAt: Date

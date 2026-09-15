@@ -276,7 +276,7 @@ test('Step 16 acceptance: an empty scope is refused unless confirmed with a reas
   assert.equal(expectStatus(await request(officerA, 'PATCH', `/payroll/runs/${officerDraft.id}`, { name: 'اسم بعد الحساب' }), 400).code, 'PAYRUN-STATE-001')
 })
 
-test('Step 17 acceptance: the membership preview is read-only with codes, coverage, factor and the 30-day basis; an employee in an approved run is excluded instead of stopping the run', async () => {
+test('Step 17 acceptance: the membership preview is read-only with codes, coverage, factor and the 30-day basis; an employee in an approved run or with invalid employment data is excluded instead of stopping the run', async () => {
   const unit = await org(branchA)
   const regular = await employee(unit)
   const joiner = await employee(unit, { joinDate: '2026-08-08' })
@@ -313,12 +313,16 @@ test('Step 17 acceptance: the membership preview is read-only with codes, covera
   assert.ok(preview.excluded.every(row => row.code), 'every excluded row carries a code')
   assert.ok(report.rows.some(row => row.employeeId === broken.id && row.reasonCode === 'DATA_PROBLEM'))
 
-  // مشكلة بيانات تمنع الحساب برسالة فيها رقم الموظف حتى تُصحح أو يُستبعد بسبب مكتوب.
+  // تبسيط الرواتب: مشكلة بيانات الخدمة لا توقف الحساب؛ صاحبها يُستبعد تلقائيًا برمزه بلا بند مسير حتى تُصحح بياناته.
   const draft = await createDraft({ ...definition, name: 'مسودة فيها مشكلة بيانات' })
-  const blockedCounts = await tableCounts()
-  assert.match(expectStatus(await request(admin, 'POST', `/payroll/runs/${draft.id}/calculate`, {}), 400).message, new RegExp(broken.employeeCode))
-  assert.deepEqual(await tableCounts(), blockedCounts)
-  const fixed = expectStatus(await request(admin, 'PATCH', `/payroll/runs/${draft.id}`, { exclusions: [{ employeeId: broken.id, reason: 'تاريخ آخر يوم عمل ناقص — يُصحح ويُصرف في مسير تكميلي' }] }), 200)
+  const withProblem = await calculateDraft(draft)
+  assert.deepEqual([memberOf(withProblem, broken).membershipStatus, memberOf(withProblem, broken).exclusionReason], ['EXCLUDED', 'EXC_EMPLOYMENT_DATA_INVALID'])
+  assert.ok(!withProblem.items.some(item => item.employeeId === broken.id), 'no payroll item for the employee with invalid employment data')
+  assert.deepEqual(withProblem.items.map(item => item.employeeId).sort((a, b) => a - b), [regular.id, joiner.id].sort((a, b) => a - b))
+  assert.equal(expectStatus(await request(admin, 'POST', `/payroll/runs/${draft.id}/cancel`, { reason: 'إلغاء مسودة الاختبار بعد إثبات الاستبعاد التلقائي' }), 201).status, 'CANCELLED')
+  // الاستبعاد اليدوي بسبب مكتوب يبقى متاحًا على مسودة جديدة بالتعريف نفسه.
+  const manualDraft = await createDraft({ ...definition, name: 'مسودة باستبعاد مكتوب' })
+  const fixed = expectStatus(await request(admin, 'PATCH', `/payroll/runs/${manualDraft.id}`, { exclusions: [{ employeeId: broken.id, reason: 'تاريخ آخر يوم عمل ناقص — يُصحح ويُصرف في مسير تكميلي' }] }), 200)
   const storedCounts = await tableCounts()
   const stored = expectStatus(await request(admin, 'GET', `/payroll/runs/${fixed.id}/membership-preview`), 200)
   assert.deepEqual(await tableCounts(), storedCounts)
@@ -333,7 +337,7 @@ test('Step 17 acceptance: the membership preview is read-only with codes, covera
   assert.deepEqual(claims.map(row => row.runId), [approvedRun.id], 'the approved run keeps the only claim')
 })
 
-test('Step 18 acceptance: approval is refused until someone acknowledges the unassigned report; every employee without a run appears with a reason', async () => {
+test('Step 18 acceptance (payroll simplification): every employee without a run appears in the unassigned report with a reason; acknowledging it stays available as information and never blocks approval', async () => {
   const unit = await org(branchB), outside = await org(branchB)
   const paid = await employee(unit), skipped = await employee(unit), forgotten = await employee(outside)
   const run = await calculateDraft(await createDraft({ name: 'مسير فرع الجيزة — أغسطس', policyVersionId: policyOne.versionId, period,
@@ -348,41 +352,34 @@ test('Step 18 acceptance: approval is refused until someone acknowledges the una
   assert.equal(report.totals.employed, report.totals.assigned + report.totals.unassigned)
   assert.deepEqual([report.acknowledgement.required, report.acknowledgement.current, report.acknowledgement.canAcknowledge], [true, null, true])
 
-  // الخطوة 20 (B4): أسباب تقرير التكافؤ تُكتب صراحة قبل لقطة العدّ، فالاعتماد المرفوض بعدها يبقى لا يكتب شيئًا
+  // الخطوة 20 (B4): أسباب تقرير التكافؤ تُكتب صراحة قبل لقطة العدّ، فالإقرار المرفوض بعدها لا يكتب شيئًا
   await writeParityReasonsBeforeApproval(request, admin, 'POST', `/payroll/runs/${run.id}/approve`)
   const counts = await tableCounts()
-  assert.equal(expectStatus(await request(admin, 'POST', `/payroll/runs/${run.id}/approve`), 409).code, 'PAYRUN-UNASSIGNED-ACK-REQUIRED')
   expectStatus(await request(viewer, 'POST', `/payroll/runs/${run.id}/unassigned-ack`, { reportHash: report.reportHash }), 403)
   expectStatus(await request(hrA, 'POST', `/payroll/runs/${run.id}/unassigned-ack`, { reportHash: report.reportHash }), 403)
   assert.equal(expectStatus(await request(admin, 'POST', `/payroll/runs/${run.id}/unassigned-ack`, { reportHash: '0'.repeat(64) }), 409).code, 'PAYRUN-UNASSIGNED-STALE')
-  assert.deepEqual(await tableCounts(), counts, 'refused approvals and acknowledgements write nothing')
+  assert.deepEqual(await tableCounts(), counts, 'refused acknowledgements write nothing')
   assert.equal((await repo('PayrollRun').findOneByOrFail({ id: run.id })).status, 'CALCULATED')
 
   report = expectStatus(await request(admin, 'POST', `/payroll/runs/${run.id}/unassigned-ack`, { reportHash: report.reportHash, note: 'الموظف المنسي يُضاف لمسير تكميلي' }), 201)
   assert.equal(report.acknowledgement.current.note, 'الموظف المنسي يُضاف لمسير تكميلي')
-  // موظف جديد على رأس العمل بلا مسير بعد الإقرار يُسقطه.
+  // موظف جديد على رأس العمل بلا مسير بعد الإقرار يجعل الإقرار قديمًا في التقرير، ولا يوقف الاعتماد.
   const late = await employee(outside)
-  assert.equal(expectStatus(await request(admin, 'POST', `/payroll/runs/${run.id}/approve`), 409).code, 'PAYRUN-UNASSIGNED-ACK-STALE')
   report = expectStatus(await request(admin, 'GET', `/payroll/runs/${run.id}/unassigned`), 200)
   assert.equal(report.acknowledgement.stale, true)
   assert.ok(report.rows.some(item => item.employeeId === late.id && item.reasonCode === 'OUT_OF_ALL_RUNS'))
-  await acknowledge(run)
   assert.equal(expectStatus(await request(admin, 'POST', `/payroll/runs/${run.id}/approve`), 201).status, 'APPROVED')
   const events = expectStatus(await request(admin, 'GET', `/payroll/runs/${run.id}/events`), 200)
   const acks = await repo('PayrollRunUnassignedAck').find({ where: { runId: run.id }, order: { id: 'ASC' } })
-  assert.equal(acks.length, 2)
-  assert.equal(events.find(item => item.eventType === 'APPROVED').payload.unassignedAckId, acks[1].id)
-  assert.equal(events.filter(item => item.eventType === 'UNASSIGNED_ACKNOWLEDGED').length, 2)
+  assert.equal(acks.length, 1)
+  assert.deepEqual([events.find(item => item.eventType === 'APPROVED').payload.unassignedAckId, events.find(item => item.eventType === 'APPROVED').payload.unassignedReportHash], [null, null])
+  assert.equal(events.filter(item => item.eventType === 'UNASSIGNED_ACKNOWLEDGED').length, 1)
 
-  // إقرار مستخدم فرع لا يغطي معتمدًا على مستوى الشركة، وإعادة الحساب تُسقط الإقرار.
+  // مسير قسم فرعي بلا أي إقرار، وبعد إعادة حسابه، يُعتمد مباشرة.
   const own = await org(branchA)
   await employee(own)
   const branchRun = await calculateDraft(await createDraft({ name: 'مسير قسم فرعي — أغسطس', policyVersionId: policyOne.versionId, period, filters: { departmentIds: [own.department.id] } }, hrA), hrA)
-  await acknowledge(branchRun, hrA)
-  assert.equal(expectStatus(await request(admin, 'POST', `/payroll/runs/${branchRun.id}/approve`), 409).code, 'PAYRUN-UNASSIGNED-ACK-REQUIRED')
-  expectStatus(await request(hrA, 'POST', `/payroll/runs/${branchRun.id}/recalculate`, { reason: 'إعادة حساب بعد الإقرار' }), 201)
-  assert.equal(expectStatus(await request(hrA, 'POST', `/payroll/runs/${branchRun.id}/approve`), 409).code, 'PAYRUN-UNASSIGNED-ACK-REQUIRED')
-  await acknowledge(branchRun, hrA)
+  expectStatus(await request(hrA, 'POST', `/payroll/runs/${branchRun.id}/recalculate`, { reason: 'إعادة حساب قبل الاعتماد' }), 201)
   assert.equal(expectStatus(await request(hrA, 'POST', `/payroll/runs/${branchRun.id}/approve`), 201).status, 'APPROVED')
 })
 

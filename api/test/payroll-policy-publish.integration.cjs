@@ -218,8 +218,8 @@ test('Publishing checks cycle alignment, closes the previous published version a
   const locked = expectStatus(await request(hrManager, 'GET', versionRoute(giza.policy.id, giza.versions[0].id, '/publish-check')), 200)
   assert.equal(locked.publishable, false); assert.ok(locked.issues.some(issue => issue.code === 'POLICY_PERIOD_LOCKED'), JSON.stringify(locked.issues))
 
-  // متى رُبطت المسيرات بنسخة السياسة (عمود policyVersionId من الخطوة 16/19) يشمل القفل مسيرًا مربوطًا بالنسخة وحدها.
-  await ds.query('ALTER TABLE [payroll_runs] ADD [policyVersionId] int NULL')
+  // المسيرات مربوطة بنسخة السياسة (عمود policyVersionId صار جزءًا من المخطط منذ الخطوة 18/B3 وترحيل025)؛ القفل يشمل مسيرًا مربوطًا بالنسخة وحدها.
+  assert.equal((await ds.query("SELECT COL_LENGTH('dbo.payroll_runs','policyVersionId') AS len"))[0].len !== null, true, 'policyVersionId belongs to the payroll_runs schema')
   const aswan = expectStatus(await request(hrManager, 'POST', endpoint, { code: 'ASWAN', name: 'مجموعة أسوان', effectiveFrom: '2026-09-23', settings: cycle23 }), 201)
   const versionRun = await repo('PayrollRun').save({ name: 'مسير مصروف بنسخة أسوان', branchId: branchA.id, scopeType: 'BRANCH', scopeIds: JSON.stringify([branchA.id]),
     employeeIds: JSON.stringify([]), policyId: null, period: '2026-11', startDate: '2026-10-23', endDate: '2026-11-22', status: 'PAID',

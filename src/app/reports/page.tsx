@@ -246,7 +246,7 @@ export default function ReportsPage() {
       description: 'ساعات الأوفرتايم الفعلية والمستحقة هذا الشهر',
       category: 'الحضور',
       icon: '⏱️',
-      href: '/payroll/reports?tab=overtime',
+      href: '/attendance/overtime',
       stat: `${overtime.length} موظف لديه عمل إضافي`,
     },
     {

@@ -228,11 +228,19 @@ test('SPEC①/ح٢-ب: historical automatic EOS with no pending financial source
   const f = await fixture()
   await repo('OvertimeEntry').update({ employeeId: f.employee.id }, { status: 'PAID' })
   await repo('LoanInstallment').update({ loanId: f.loan.id }, { paid: true })
-  await repo('SettlementLine').save({ caseId: f.kase.id, label: 'مكافأة نهاية خدمة مراجعة سابقًا', type: 'CREDIT', amount: 1000, isAuto: true })
+  // HRC-07 (مختبر كاملًا في r1-daily-regressions): بند المكافأة الآلي التاريخي يُعرف ببادئة تسميته ويجب أن يطابق حساب السياسة الحالية؛
+  // المختلف يُرفض، والمطابق لا يمنعه غياب مصادر مالية معلقة
+  const historical = await repo('SettlementLine').save({ caseId: f.kase.id, label: 'مكافأة نهاية الخدمة (مراجعة سابقة)', type: 'CREDIT', amount: 1000, isAuto: true })
+  const eos = require('../src/offboarding/eos'), service = app.get(require('../src/offboarding/offboarding.service').OffboardingService)
+  const expected = eos.computeEos(2400, eos.serviceYears('2020-01-01', f.kase.lastWorkingDay), 'termination', await service.eosPolicy()).amount
+  assert.ok(expected > 0); assert.notEqual(expected, 1000)
+  const stale = await request(admin, 'POST', `/offboarding/${f.kase.id}/approve-settlement`)
+  assert.equal(stale.status, 409, JSON.stringify(stale.body)); assert.match(stale.body.message, /مكافأة نهاية الخدمة/)
+  await repo('SettlementLine').update(historical.id, { amount: expected })
   const approved = await request(admin, 'POST', `/offboarding/${f.kase.id}/approve-settlement`)
   assert.equal(approved.status, 201, JSON.stringify(approved.body))
   const current = await repo('OffboardingCase').findOneByOrFail({ id: f.kase.id })
-  assert.equal(Number(current.settlementNet), 1000)
+  assert.equal(Number(current.settlementNet), expected)
   assert.deepEqual(current.settlementFinancialSnapshot.overtime, []); assert.deepEqual(current.settlementFinancialSnapshot.installments, [])
 })
 test('SPEC①/ح٢-ب: simultaneous payroll calculation and settlement approval cannot claim the same sources', async () => {

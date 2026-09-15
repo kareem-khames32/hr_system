@@ -46,7 +46,7 @@ export function LatenessTierSetsEditor() {
     try {
       const saved = await createLatenessTierSet(period, rows, reason)
       setData(saved); setRows([emptyRow()]); setReason(''); setPreview(null)
-      setMessage({ kind: 'ok', text: `حُفظت المجموعة #${saved.savedId} لشهر ${period}` })
+      setMessage({ kind: 'ok', text: `حُفظت المجموعة لشهر ${period}` })
     } catch (error) { setMessage({ kind: 'error', text: errorText(error, 'تعذر حفظ المجموعة') }) }
     finally { setBusy(false) }
   }
@@ -79,16 +79,16 @@ export function LatenessTierSetsEditor() {
         {!data?.sets.length && <p className="text-sm text-gray-500">لا مجموعات بعد — المسير يخصم التأخير بالدقيقة.</p>}
         {data?.sets.map(set => <div key={set.id} className={`rounded-xl border p-3 ${set.isActive ? 'border-gray-200' : 'border-gray-100 bg-gray-50 opacity-80'}`}>
           <div className="flex flex-wrap items-center justify-between gap-2">
-            <p className="font-medium text-gray-800">المجموعة #{set.id} — تسري من شهر <span dir="ltr">{set.effectivePeriod}</span>
+            <p className="font-medium text-gray-800">شرائح تسري من شهر <span dir="ltr">{set.effectivePeriod}</span>
               {' '}<span className={`badge ${set.isActive ? 'badge-success' : 'bg-gray-100 text-gray-600'}`}>{set.isActive ? 'مفعّلة' : 'موقوفة'}</span>
-              {set.source === 'LEGACY_CONVERSION' && <span className="badge bg-blue-50 text-blue-700 mr-1">محوّلة من الشرائح القديمة</span>}
               {set.integrity === 'HASH_MISMATCH' && <span className="badge badge-danger mr-1">المحتوى لا يطابق البصمة</span>}</p>
             <div className="flex gap-2">
               {canManage && <button type="button" onClick={() => copyFrom(set)} className="btn-secondary text-xs">نسخ كبداية لمجموعة جديدة</button>}
               {canManage && set.isActive && <button type="button" onClick={() => setDeactivating({ id: set.id, reason: '' })} className="btn-secondary text-xs">إيقاف</button>}
             </div>
           </div>
-          <p className="text-xs text-gray-500 mt-1">{set.reason}{set.deactivationReason ? ` — أُوقفت: ${set.deactivationReason}` : ''} • بصمة <span className="font-mono" dir="ltr">{set.contentHash.slice(0, 12)}</span></p>
+          {/* سبب التحويل الآلي من الجدول القديم نص تقني؛ يظهر سبب الجداول المحفوظة من الشاشة فقط */}
+          {(set.source !== 'LEGACY_CONVERSION' || set.deactivationReason) && <p className="text-xs text-gray-500 mt-1">{set.source !== 'LEGACY_CONVERSION' ? set.reason : ''}{set.deactivationReason ? `${set.source !== 'LEGACY_CONVERSION' ? ' — ' : ''}أُوقفت: ${set.deactivationReason}` : ''}</p>}
           <div className="overflow-x-auto mt-2"><table className="w-full text-sm">
             <thead><tr className="table-header"><th className="p-2 text-center">#</th><th className="p-2 text-center">من دقيقة</th><th className="p-2 text-center">إلى دقيقة</th><th className="p-2 text-center">الخصم</th><th className="p-2 text-center">الوصف</th></tr></thead>
             <tbody>{set.tiers.map(tier => <tr key={tier.sequence} className="border-t border-gray-100">
@@ -109,7 +109,7 @@ export function LatenessTierSetsEditor() {
         <div className="flex flex-wrap items-end gap-3">
           <div><label className="text-xs text-gray-500" htmlFor="tier-set-period">تسري من شهر الرواتب</label>
             <input id="tier-set-period" type="month" value={period} onChange={e => { setPeriod(e.target.value); setPreview(null) }} className="input-field" /></div>
-          <p className="text-xs text-gray-500 pb-2">{current ? `الساري لهذا الشهر الآن: المجموعة #${current.id} (من ${current.effectivePeriod}). الحفظ لنفس الشهر يوقف المجموعة المفعّلة له.` : 'لا مجموعة سارية لهذا الشهر الآن.'}</p>
+          <p className="text-xs text-gray-500 pb-2">{current ? `الساري لهذا الشهر الآن: شرائح من ${current.effectivePeriod}. الحفظ لنفس الشهر يوقف الشرائح المفعّلة له.` : 'لا شرائح سارية لهذا الشهر الآن.'}</p>
         </div>
         {rows.map((row, index) => <div key={index} className="grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
           <div><label className="text-xs text-gray-500">من دقيقة</label><input type="number" min={0} value={row.fromMinutes} onChange={e => edit(index, { fromMinutes: e.target.value })} className="input-field" placeholder="61" /></div>
@@ -128,7 +128,7 @@ export function LatenessTierSetsEditor() {
           <button type="button" onClick={runPreview} disabled={busy} className="btn-secondary text-sm flex items-center gap-1 disabled:opacity-50"><Eye size={16} />معاينة وتحقق</button>
         </div>
         {preview && <div className="rounded-xl bg-gray-50 p-3 text-sm space-y-2">
-          <p className="font-medium text-gray-800">الشرائح بعد الترتيب ({preview.tiers.length}) — بصمة <span className="font-mono" dir="ltr">{preview.contentHash.slice(0, 12)}</span></p>
+          <p className="font-medium text-gray-800">الشرائح بعد الترتيب ({preview.tiers.length})</p>
           <ul className="list-disc pr-5">{preview.tiers.map(tier => <li key={tier.sequence}>{tier.fromMinutes}–{tier.toMinutes ?? '∞'}: {describeTier(tier)}</li>)}</ul>
           {preview.gaps.length > 0 && <ul className="text-amber-800 list-disc pr-5">{preview.gaps.map((gap, index) => <li key={index}>{gap.message}</li>)}</ul>}
           <p className="text-xs text-gray-600">أمثلة: {preview.examples.map(example => `${example.minutes} د ← ${example.effect}`).join(' • ')}</p>

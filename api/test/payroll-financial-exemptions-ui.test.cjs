@@ -1,5 +1,6 @@
-// C3 / الخطوة 26: شاشات الإعفاء المالي — النداءات عبر src/lib/financial-exemptions-api.ts فقط، بوابات can() على شاشة المسير وصفحة الإعفاءات،
-// القسيمة تعرض الأصل والمُعفى وبعد الإعفاء والسبب وتذييل الإجمالي بلا خيار إخفاء، ومنسّق المبالغ الموحد، والمداخل في القائمة الجانبية.
+// C3 / الخطوة 26: شاشات الإعفاء المالي — النداءات عبر src/lib/financial-exemptions-api.ts فقط، ومنسّق المبالغ الموحد.
+// تبسيط الرواتب (2026-09-15): «إلغاء خصم» زر على صف الموظف في جدول المسير بمعاينة إلزامية وسبب جاهز وإعادة حساب تلقائية،
+// والقسيمة تعرض سطرًا واحدًا لكل خصم ملغى، وصفحتا «الإعفاءات المالية» و«إعفاءاتي» تتحولان بلا مداخل جانبية (الـAPI باقٍ).
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -18,12 +19,12 @@ const files = {
   sidebar: 'src/components/layout/Sidebar.tsx',
 }
 
-test('النداءات عبر ملف API واحد، ولا fetch مباشر ولا أرقام عربية في شاشات الإعفاء', () => {
+test('النداءات عبر ملف API واحد، ولا fetch مباشر ولا أرقام عربية في مكونات الإعفاء', () => {
   const api = read(files.api)
   for (const route of ['/payroll/exemptions/preview', '/payroll/exemptions/runs/', '/approve', '/reject', '/revoke', '/attachment', '/payroll/exemptions/mine', '/payroll/exemptions/report', '/payroll/exemptions/grantable-runs']) {
     assert.ok(api.includes(route), route)
   }
-  for (const file of [files.panel, files.payslipSection, files.exemptionsPage, files.myPage]) {
+  for (const file of [files.panel, files.payslipSection]) {
     const text = read(file)
     assert.ok(!/\bfetch\(/.test(text), `${file}: fetch مباشر`)
     assert.ok(!/toLocaleString\(\s*['"]ar/.test(text), `${file}: أرقام عربية`)
@@ -32,37 +33,37 @@ test('النداءات عبر ملف API واحد، ولا fetch مباشر ول
   }
 })
 
-test('شاشة المسير: اللوحة بعد محرك الحساب ببوابة صلاحيات الإعفاء، والمنح بمعاينة إلزامية وبصمتها، وتنبيه إعادة الحساب وتأجيل القسط', () => {
+test('شاشة المسير: «إلغاء خصم» على صف الموظف ببوابة صلاحية المنح، بمعاينة إلزامية وبصمتها وسبب جاهز، ثم إعادة حساب تلقائية بآخر معادلة', () => {
   const page = read(files.runPage)
-  assert.ok(page.includes("import { PayrollFinancialExemptionsPanel } from '@/components/payroll/PayrollFinancialExemptionsPanel'"))
-  assert.match(page, /can\('financial_exemption\.view'\) \|\| can\('financial_exemption\.grant'\) \|\| can\('financial_exemption\.approve'\)/)
+  assert.ok(page.includes("import { PayrollRemoveDeductionModal, type RemovableAttendanceAmounts } from '@/components/payroll/PayrollFinancialExemptionsPanel'"))
+  assert.ok(page.includes("const canRemoveDeduction = runDetail?.status === 'CALCULATED' && can('financial_exemption.grant')"))
+  assert.ok(page.includes('onGranted={recalculateAfterRemoval}'))
+  assert.ok(page.includes('recalculatePayrollRunWithCurrentFormula(runDetail.id, { allowDraftConflicts: true })'))
+  assert.doesNotMatch(page, /<PayrollFinancialExemptionsPanel\b/, 'اللوحة القديمة لا تُعرض')
   const panel = read(files.panel)
-  assert.ok(panel.includes('previewHash: preview.previewHash'), 'الحفظ يرسل بصمة المعاينة')
-  assert.match(panel, /disabled=\{busy \|\| !preview\}/, 'الحفظ معطل قبل المعاينة')
-  assert.ok(panel.includes('أعد حساب المسير ليُطبقها'), 'تنبيه إعادة الحساب')
-  assert.ok(panel.includes('سيُؤجَّل القسط لا يُسقط'), 'تنبيه تأجيل القسط')
-  assert.ok(panel.includes('المانح وتاريخ المنح يُسجلان من الخادم'), 'المانح والتاريخ ليسا حقلي إدخال')
+  assert.ok(panel.includes('granted = await grantExemption({ ...input, previewHash: preview.previewHash })'), 'المنح يرسل بصمة المعاينة')
+  assert.ok(panel.includes("const REMOVE_DEDUCTION_REASON = 'إلغاء خصم من شاشة المسير بقرار الموارد البشرية'"), 'سبب جاهز بلا كتابة')
+  assert.ok(panel.includes("disposition: 'DROP' as const"), 'الخصم المصنف يُلغى لا يُؤجَّل')
   assert.ok(!/grantedBy(UserId)?\s*[:=]\s*[a-zA-Z]/.test(panel.split('grantExemption(')[1]?.split(')')[0] ?? ''), 'لا يُرسل المانح من الواجهة')
 })
 
-test('القسيمة: الأصل والمُعفى وبعد الإعفاء ورقم القرار والسبب والمانح بالدور وتذييل الإجمالي، والبند في موضعه بين الخصومات', () => {
+test('القسيمة: كل خصم ملغى سطر واحد «أُلغي خصم <البند> بمبلغ <المبلغ>» بلا رقم الإعفاء ولا المانح، والبند في موضعه بين الخصومات', () => {
   const section = read(files.payslipSection)
-  for (const text of ['المبلغ الأصلي', 'المُعفى', 'بعد الإعفاء', 'مُعفى (إعفاء #', 'السبب:', 'المانح:', 'إجمالي المبالغ المُعفاة في هذا المسير']) assert.ok(section.includes(text), text)
-  // الفحص على الكود لا على التعليقات (التعليق نفسه يوثق أن لا خيار للإخفاء)
+  assert.ok(section.includes('أُلغي خصم {itemName(line)} بمبلغ {formatMoney(line.exemptedAmount)} {currency}'))
+  assert.ok(section.includes("line.disposition === 'DROP'"), 'الإسقاط فقط لا التأجيل')
   const sectionCode = section.split('\n').filter(line => !line.trim().startsWith('//')).join('\n')
-  assert.ok(!/hide|hidden|إخفاء/i.test(sectionCode), 'لا خيار لإخفاء البند المُعفى')
+  for (const text of ['إعفاء #', 'المانح:', 'المبلغ الأصلي']) assert.ok(!sectionCode.includes(text), text)
   const payslip = read(files.payslip)
   assert.ok(payslip.includes('<PayrollExemptionPayslipSection item={item} currency={currency} details={financialExemptions} />'))
   assert.ok(payslip.includes('exemptionNote(deduction.component)'), 'ملاحظة الإعفاء في سطر الخصم نفسه')
   assert.ok(payslip.includes('الأصل قبل الإعفاء'))
 })
 
-test('صفحة الإعفاءات وتقرير الحوكمة وإعفاءاتي والمداخل الجانبية', () => {
-  const page = read(files.exemptionsPage)
-  assert.ok(page.includes("can('financial_exemption.view')"))
-  for (const text of ['بحسب المانح', 'بحسب الموظف', 'بحسب نوع الخصم', 'بحسب المسير', 'التنبيهات', 'المطابقة مع بنود المسير']) assert.ok(page.includes(text), text)
-  const mine = read(files.myPage)
-  assert.ok(mine.includes('fetchMyExemptions') && mine.includes('fetchGrantableExemptionRuns'))
+test('صفحتا «الإعفاءات المالية» و«إعفاءاتي» تتحولان بلا مداخل جانبية، والـAPI باقٍ', () => {
+  assert.ok(read(files.exemptionsPage).includes("router.replace('/payroll')"))
+  assert.ok(read(files.myPage).includes("router.replace('/my/payslips')"))
   const sidebar = read(files.sidebar)
-  assert.ok(sidebar.includes("href: '/payroll/exemptions'") && sidebar.includes("href: '/my/exemptions'"))
+  assert.ok(!sidebar.includes("href: '/payroll/exemptions'") && !sidebar.includes("href: '/my/exemptions'"))
+  const api = read(files.api)
+  assert.ok(api.includes('fetchMyExemptions') && api.includes('fetchGrantableExemptionRuns'))
 })

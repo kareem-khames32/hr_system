@@ -8,6 +8,7 @@ import { LatenessTierSetsEditor } from '@/components/payroll/LatenessTierSetsEdi
 
 const ABSENCE_KEY = 'attendance.absence_penalty_days'
 
+// «القيم العامة للخصومات»: تُستخدم في كل معادلات رواتب تترك الحقل على «زي الإعدادات العامة».
 export default function PayrollFormulasPage() {
   const [absence, setAbsence] = useState('1')
   const [absenceSaved, setAbsenceSaved] = useState('1')
@@ -39,13 +40,13 @@ export default function PayrollFormulasPage() {
       <div className="space-y-6">
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">معادلات الرواتب</h1>
-            <p className="text-gray-500 mt-1">أنت تحدد قواعد الخصم — النظام يحسب المسير بناءً عليها</p>
+            <h1 className="text-2xl font-bold text-gray-800">القيم العامة للخصومات</h1>
+            <p className="text-gray-500 mt-1">القيم التي تأخذها معادلات الرواتب حين تترك الحقل على «زي الإعدادات العامة».</p>
           </div>
           {msg && <span className="px-4 py-2 rounded-lg bg-primary-50 text-primary-700 text-sm font-medium">{msg}</span>}
         </div>
 
-        {/* الخطوة 21: شرائح خصم التأخير — مجموعات مؤرخة متحقق منها (الجدول القديم أرشيف للقراءة فقط) */}
+        {/* شرائح خصم التأخير — مجموعات مؤرخة متحقق منها */}
         <LatenessTierSetsEditor />
 
         {/* معامل الغياب */}
@@ -78,7 +79,7 @@ export default function PayrollFormulasPage() {
               <ul className="text-sm text-blue-700 space-y-1">
                 <li>• كل يوم متأخر يُخصم حسب الشريحة اللي بيقع فيها تأخيره.</li>
                 <li>• لو مفيش شرائح مفعّلة → الخصم بالدقيقة (السلوك الافتراضي).</li>
-                <li>• التغييرات تُطبَّق عند إعادة احتساب المسير.</li>
+                <li>• هذه القيم تُطبَّق على معادلات الرواتب التي تترك الحقل فارغًا («زي الإعدادات العامة»)، عند إعادة حساب أي مسير لم يُعتمد بعد.</li>
               </ul>
             </div>
           </div>
