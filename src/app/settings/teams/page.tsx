@@ -192,7 +192,7 @@ export default function TeamsPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">إدارة الفرق</h1>
+            <h1 className="text-2xl font-bold text-gray-800">الفرق</h1>
             <p className="text-gray-500 mt-1">
               الفرق داخل الأقسام — قائد الفريق يعتمد كمدير مباشر لأعضائه الذين لم يُسجَّل لهم
               مدير مباشر

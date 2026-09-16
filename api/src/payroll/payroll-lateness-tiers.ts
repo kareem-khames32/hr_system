@@ -116,8 +116,6 @@ export function payrollLatenessTierDeduction(lateMinutes: number, tiers: readonl
     value: tier.value, label: tier.label, amount, formula } }
 }
 
-type TierSetRow = { id: number; effectivePeriod: string; contentHash: string; source: string }
-
 async function tiersOf(em: EntityManager, setId: number): Promise<PayrollLatenessTierRow[]> {
   const rows = await em.getRepository(PayrollLatenessTierSetTier).createQueryBuilder('tier')
     .select(['tier.sequence AS sequence', 'tier.fromMinutes AS fromMinutes', 'tier.toMinutes AS toMinutes', 'tier.mode AS mode', 'tier.label AS label'])
@@ -136,15 +134,4 @@ export async function readPayrollLatenessTierSetById(em: EntityManager, setId: n
     throw new ConflictException({ code: 'LATE-TIERS-HASH-MISMATCH', message: `محتوى مجموعة شرائح التأخير #${row.id} لا يطابق بصمتها المحفوظة؛ عُدّلت خارج الشاشة. أنشئ مجموعة جديدة صحيحة قبل الحساب` })
   }
   return { row, setId: row.id, effectivePeriod: row.effectivePeriod, contentHash: row.contentHash, source: row.source as PayrollLatenessTierSetSnapshot['source'], tiers }
-}
-
-/** مجموعة شهر المسير: أحدث مجموعة مفعّلة يسري شهرها في شهر المسير أو قبله؛ بلا مجموعة = بلا شرائح (الخصم بالدقيقة). */
-export async function readPayrollLatenessTierSetForPeriod(em: EntityManager, period: string): Promise<PayrollLatenessTierSetSnapshot> {
-  const found = await em.getRepository(PayrollLatenessTierSet).createQueryBuilder('tierSet')
-    .select(['tierSet.id AS id', 'tierSet.effectivePeriod AS effectivePeriod', 'tierSet.contentHash AS contentHash', 'tierSet.source AS source'])
-    .where('tierSet.isActive = :active AND tierSet.effectivePeriod <= :period', { active: true, period })
-    .orderBy('tierSet.effectivePeriod', 'DESC').addOrderBy('tierSet.id', 'DESC').limit(1).getRawOne<TierSetRow>()
-  if (!found) return { setId: null, effectivePeriod: null, contentHash: null, source: 'NONE', tiers: [] }
-  const { row: _row, ...snapshot } = await readPayrollLatenessTierSetById(em, Number(found.id))
-  return snapshot
 }

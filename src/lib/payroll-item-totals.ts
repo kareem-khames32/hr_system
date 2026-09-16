@@ -41,9 +41,24 @@ export function payrollItemCoverage(item: Pick<ApiPayrollItem, 'breakdown'>): Pa
   } catch { return null }
 }
 
+/** أيام «بصمة ناقصة» من تفصيل البند المحفوظ: تُعرض على صف الموظف وقت الحساب لا عند رفض الاعتماد. */
+export function payrollItemMissingPunchDates(item: Pick<ApiPayrollItem, 'breakdown'>): string[] {
+  try {
+    const detail = JSON.parse(item.breakdown || '{}')
+    return Array.isArray(detail.missingPunchDates)
+      ? detail.missingPunchDates.filter((value: unknown): value is string => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value))
+      : []
+  } catch { return [] }
+}
+
+export function payrollMissingPunchText(dates: readonly string[]): string | null {
+  if (!dates.length) return null
+  const shown = dates.slice(0, 3).join('، ')
+  return `بصمة ناقصة في ${dates.length} يوم (${shown}${dates.length > 3 ? '…' : ''}) — سوِّها قبل الاعتماد`
+}
+
 export function payrollCoverageText(coverage: PayrollItemCoverage | null): string | null {
   if (!coverage) return null
   const range = coverage.coverFrom && coverage.coverTo ? ` من ${coverage.coverFrom} إلى ${coverage.coverTo}` : ''
-  const factor = coverage.prorataFactor === null ? '' : ` • المعامل ${coverage.prorataFactor === 1 ? '1' : coverage.prorataFactor.toFixed(4)}`
-  return `${coverage.coverDays ?? '—'} يوم مغطى${range}${factor} • أساس ${coverage.monthlyDays ?? 30} يومًا`
+  return `${coverage.coverDays ?? '—'} يوم مغطى${range}`
 }

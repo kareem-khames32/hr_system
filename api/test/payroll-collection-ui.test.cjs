@@ -193,7 +193,7 @@ test('HTTP conflict is surfaced without retry or mutation; 404 tells the user to
 })
 
 test('payroll policy route has its own Arabic title before generic payroll prefix', () => {
-  assert.equal(pageTitleFor('/payroll/policies'), 'سياسات الرواتب')
-  assert.equal(pageTitleFor('/payroll/policies/7'), 'سياسات الرواتب')
+  assert.equal(pageTitleFor('/payroll/policies'), 'معادلات الرواتب')
+  assert.equal(pageTitleFor('/payroll/policies/7'), 'معادلات الرواتب')
   assert.equal(pageTitleFor('/payroll'), 'مسير الرواتب')
 })

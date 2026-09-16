@@ -30,13 +30,8 @@ test('payslip: the lateness tier effect row shows minutes, range, multiplier and
   assert.equal(ui.latenessTierEffects('{bad'), null)
 })
 
-test('dated tier sets: the applicable set for a payroll month is the newest active set effective in or before it', () => {
-  const sets = [{ id: 1, effectivePeriod: '2000-01', isActive: true }, { id: 2, effectivePeriod: '2026-10', isActive: true }, { id: 3, effectivePeriod: '2026-10', isActive: false },
-    { id: 4, effectivePeriod: '2026-12', isActive: true }]
-  assert.equal(ui.applicableTierSet(sets, '2026-09').id, 1)
-  assert.equal(ui.applicableTierSet(sets, '2026-11').id, 2)
-  assert.equal(ui.applicableTierSet(sets, '2027-01').id, 4)
-  assert.equal(ui.applicableTierSet(sets, '1999-12'), null)
+test('أ1: اختيار الشرائح بالشهر أُلغي من الواجهة — لا دالة «المجموعة السارية لشهر»', () => {
+  assert.equal(ui.applicableTierSet, undefined, 'الشرائح صارت داخل معادلة الرواتب، فلا اختيار شهري في الواجهة')
 })
 
 function engineRun(extra = {}) {
@@ -92,13 +87,18 @@ test('screens are wired (payroll simplification): the run page no longer shows t
   assert.doesNotMatch(page, /<PayrollPolicySnapshotPanel |<PayrollRunEnginePanel /)
   assert.match(page, /recalculatePayrollRunWithCurrentFormula\(/)
   assert.match(read('src/lib/payroll-runs-api.ts'), /refreshPolicySnapshot: true, expectedPolicySnapshotHash: snapshot\.currentHash/)
+  // أ1: شاشة «القيم العامة للخصومات» أُوقفت واللينك القديم يوديك لـ«معادلات الرواتب»، ومحرر المجموعات المؤرخة حُذف
   const formulas = read('src/app/payroll/formulas/page.tsx')
-  assert.match(formulas, /<LatenessTierSetsEditor \/>/); assert.doesNotMatch(formulas, /createLatenessTier|deleteLatenessTier|updateLatenessTier/)
+  assert.match(formulas, /redirect\('\/payroll\/policies'\)/)
+  assert.doesNotMatch(formulas, /createLatenessTier|deleteLatenessTier|updateLatenessTier|LatenessTierSetsEditor/)
+  assert.equal(fs.existsSync(path.join(root, 'src/components/payroll/LatenessTierSetsEditor.tsx')), false)
   assert.match(read('src/app/payroll/payslip/[id]/page.tsx'), /<PayrollLatenessTierBreakdown item=\{item\}/)
   assert.doesNotMatch(read('src/lib/api.ts'), /export const (createLatenessTier|updateLatenessTier|deleteLatenessTier)/)
   const panel = read('src/components/payroll/PayrollPolicySnapshotPanel.tsx')
   assert.match(panel, /expectedHash: checked && view \? view\.currentHash : null/, 'the refresh sends the fingerprint of the differences shown')
-  const editor = read('src/components/payroll/LatenessTierSetsEditor.tsx')
-  assert.match(editor, /disabled=\{busy \|\| !preview \|\| reason\.trim\(\)\.length < 3\}/, 'saving requires a validated preview and a reason')
-  assert.match(editor, /can\('payroll\.policy\.manage'\)/)
+  // الشرائح تُحرَّر داخل المعادلة نفسها، وشهر السريان يُختم داخليًا بلا مدخل للمستخدم، وبلا أي مدخل لسعر الإضافي (أ5)
+  const rules = read('src/components/PayrollPolicySetEditor.tsx')
+  assert.match(rules, /شرائح خصم التأخير/); assert.match(rules, /stampPeriod\(\)/)
+  assert.doesNotMatch(rules, /تسري من شهر الرواتب|type="month"/)
+  assert.doesNotMatch(rules, /سعر الإضافي|overtime\.multiplier/)
 })

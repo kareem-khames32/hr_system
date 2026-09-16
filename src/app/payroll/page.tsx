@@ -35,7 +35,7 @@ import { PayrollDraftMembership } from '@/components/payroll/PayrollDraftMembers
 import { PayrollRemoveDeductionModal, type RemovableAttendanceAmounts } from '@/components/payroll/PayrollFinancialExemptionsPanel'
 // B5 / الخطوة 22: منسّق المبالغ الموحد، ومجاميع البنود بالقروش، وقيد الصرف، وحل التعارضات
 import { formatMoney, formatMoneyOrDash } from '@/lib/money'
-import { payrollItemCoverage, payrollItemDeductions, payrollItemEarnings, payrollRunTotals } from '@/lib/payroll-item-totals'
+import { payrollItemCoverage, payrollItemDeductions, payrollItemEarnings, payrollItemMissingPunchDates, payrollMissingPunchText, payrollRunTotals } from '@/lib/payroll-item-totals'
 import { PayrollConflictResolution } from '@/components/payroll/PayrollConflictResolution'
 import { defaultPayRecord, PayrollPayRecordForm, PayrollPayRecordSummary, payRecordReady, type PayRecordDraft } from '@/components/payroll/PayrollPayRecordForm'
 import {
@@ -116,6 +116,11 @@ const exclusionLabels: Record<string, string> = {
 const SELF_APPROVAL_MESSAGE = 'من احتسب المسير لا يعتمده — فعّل رخصة الشركة الصغيرة من سياسات النظام'
 // مسير قديم بلا لقطة معادلات الرواتب: نص الخادم نفسه عند رفض اعتماده، و«إعادة حساب المسير» تحدّثه
 const SNAPSHOT_MISSING_MESSAGE = 'هذا المسير محسوب بإصدار سابق من النظام؛ اضغط «إعادة حساب المسير» ثم اعتمده'
+
+// قائمة المسيرات: المسيرات الشهرية العادية غير الملغاة فقط — مسيرات العكس والتكميلي تصحيح لمسير مصروف،
+// والملغى محفوظ للمراجعة. الرابط «?run=ID» يظل يفتح أي مسير قديم ويبقيه معروضًا في القائمة.
+const isListedRun = (run: Pick<ApiPayrollRun, 'status' | 'runType'>) =>
+  (run.runType ?? 'REGULAR') === 'REGULAR' && run.status !== 'CANCELLED'
 
 const errorConflicts = (error: unknown): ApiPayrollConflict[] => {
   const conflicts = error instanceof ApiError ? error.details?.conflicts : undefined
@@ -203,9 +208,13 @@ export default function PayrollPage() {
         setRuns(runsData)
         setBranches(branchesData)
         setEmployees(employeesData)
-        // رابط «?run=…» يفتح المسير المطلوب مباشرة
+        // رابط «?run=…» يفتح المسير المطلوب مباشرة، وبدونه يُفتح أحدث مسير عادي غير ملغى
         const wanted = typeof window === 'undefined' ? 0 : Number(new URLSearchParams(window.location.search).get('run'))
-        const initial = runsData.find(run => run.id === wanted) ?? runsData[0]
+        // بلا رابط: أحدث مسير عادي غير ملغى لم يتجاوز شهر اليوم — لا يُفتح على مسير شهر مستقبلي محفوظ من تجربة
+        const now = new Date()
+        const currentMonth = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
+        const listed = runsData.filter(isListedRun)
+        const initial = runsData.find(run => run.id === wanted) ?? listed.find(run => run.period <= currentMonth) ?? listed[0] ?? runsData[0]
         if (initial) loadDetail(initial.id)
       })
       .catch((e) => {
@@ -391,6 +400,8 @@ export default function PayrollPage() {
   )
 
   const runStage = runDetail ? stageOfStatus[runDetail.status] : 0
+  // المعروض في المنتقي، مع إبقاء المسير المفتوح حاليًا ولو جاء من رابط قديم
+  const listedRuns = runs.filter(run => isListedRun(run) || run.id === runDetail?.id)
   const items: ApiPayrollItem[] = runDetail?.items ?? []
 
   const filteredItems = items.filter((item) => {
@@ -487,8 +498,8 @@ export default function PayrollPage() {
                 }}
                 className="input w-72"
               >
-                {runs.length === 0 && <option value="">لا توجد مسيرات بعد</option>}
-                {runs.map((run) => (
+                {listedRuns.length === 0 && <option value="">لا توجد مسيرات بعد</option>}
+                {listedRuns.map((run) => (
                   <option key={run.id} value={run.id}>
                     {run.period} — {run.name || branchName(run.branchId) || 'مسير متعدد النطاقات'} ({statusLabel(run.status)})
                   </option>
@@ -504,7 +515,7 @@ export default function PayrollPage() {
                 </div>
               )}
               {/* الخطوة 16: المسير الجديد يُعرّف من «مسير جديد»؛ لا يُنشأ مسير من زر الحساب */}
-              {can('payroll.calculate') && <span className="text-xs text-primary-700">لإنشاء مسير آخر لنفس الفرع أو الشهر بمجموعة سياسة مختلفة استخدم «مسير جديد».</span>}
+              {can('payroll.calculate') && <span className="text-xs text-primary-700">لعمل مسير آخر لنفس الفرع أو الشهر بمعادلة رواتب أخرى استخدم «مسير جديد».</span>}
             </div>
             {can('payroll.calculate') && calculationTarget && (
               <div className="space-y-3 border-t border-gray-100 pt-4">
@@ -843,6 +854,8 @@ export default function PayrollPage() {
                   const gross = payrollItemEarnings(item)
                   const totalDeductions = payrollItemDeductions(item)
                   const coverage = coverageLine(item)
+                  // د: أيام البصمة الناقصة تُقال وقت الحساب على صف الموظف، لا عند رفض الاعتماد
+                  const missingPunch = payrollMissingPunchText(payrollItemMissingPunchDates(item))
                   const negativeNet = n(item.netPay) < 0
 
                   return (
@@ -862,6 +875,7 @@ export default function PayrollPage() {
                             راتب شهر {snapshot.salarySource.referencePeriod} من السجل (يسري من {snapshot.salarySource.effectivePayrollPeriod})
                           </p>}
                           {coverage && <p className="text-xs text-gray-500">التغطية: {coverage}</p>}
+                          {missingPunch && <p className="text-xs text-warning-600">{missingPunch}</p>}
                         </div>
                       </div>
                     </td>

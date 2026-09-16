@@ -269,14 +269,14 @@ export default function RequestsConsolePage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">لوحة الطلبات — Requests Console</h1>
+            <h1 className="text-2xl font-bold text-gray-800">لوحة الطلبات</h1>
             <p className="text-gray-500 mt-1">
               الشاشة الأم: كل طلبات الشركة بدورة حياتها الكاملة — وكل طلب معتمَد له وجهة (سجل دائم)
             </p>
           </div>
           <button disabled={loading || filtered.length === 0} onClick={() => downloadCsv(`requests-${csvDateStamp()}.csv`,
             ['رقم الطلب', 'النوع', 'الموظف', 'القسم', 'الفرع', 'التاريخ', 'الحالة', 'الخطوة', 'مرجع التنفيذ'],
-            filtered.map(r => [r.displayId, requestDefinition(types, r)?.nameAr ?? getTypeByCode(r.typeCode)?.nameAr ?? r.typeCode,
+            filtered.map(r => [r.displayId, requestDefinition(types, r)?.nameAr ?? getTypeByCode(r.typeCode)?.nameAr ?? 'نوع مؤرشف',
               r.requesterName, r.department, branches.find(b => b.id === r.branchId)?.name ?? '', r.submittedAt,
               statusLabels[r.status] ?? r.status, r.currentStep, r.destinationRecord]))} className="btn-secondary flex items-center gap-2 disabled:opacity-50">
             <Download size={18} />
@@ -405,7 +405,7 @@ export default function RequestsConsolePage() {
                   </thead>
                   <tbody>
                     {filtered.map((req) => {
-                      const type = requestDefinition(types, req) ?? { code: req.typeCode, nameAr: getTypeByCode(req.typeCode)?.nameAr ?? `نوع مؤرشف (${req.typeCode})`, category: '', destinationHandler: '', isSecurityRoute: false, isConfidential: false, autoGeneratesPdf: false }
+                      const type = requestDefinition(types, req) ?? { code: req.typeCode, nameAr: getTypeByCode(req.typeCode)?.nameAr ?? 'نوع مؤرشف', category: '', destinationHandler: '', isSecurityRoute: false, isConfidential: false, autoGeneratesPdf: false }
                       const def = getTypeByCode(req.typeCode)
                       return (
                         <tr
@@ -436,7 +436,7 @@ export default function RequestsConsolePage() {
                               )}
                             </div>
                             <p className="text-[10px] text-gray-400 font-mono mt-0.5" dir="ltr">
-                              {req.displayId} • {type.code}
+                              {req.displayId}
                             </p>
                             <span className="text-[10px] text-indigo-500">
                               {categoryLabels[type.category as RequestCategory] ?? type.category}

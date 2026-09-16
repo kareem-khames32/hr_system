@@ -232,6 +232,11 @@ export class CreateEmployeeDto {
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ التعيين بصيغة YYYY-MM-DD' })
   joinDate?: string
 
+  // بداية استحقاق الراتب — الفارغ يعني من تاريخ التعيين (أو بدء العمل الفعلي)
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'بداية استحقاق الراتب بصيغة YYYY-MM-DD' })
+  salaryEntitlementStart?: string | null
+
   // ===== بيانات التوظيف =====
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'بداية العمل الفعلي بصيغة YYYY-MM-DD' })
@@ -595,6 +600,11 @@ export class UpdateEmployeeDto {
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ التعيين بصيغة YYYY-MM-DD' })
   joinDate?: string
+
+  // بداية استحقاق الراتب — الفارغ يعني من تاريخ التعيين (أو بدء العمل الفعلي)
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'بداية استحقاق الراتب بصيغة YYYY-MM-DD' })
+  salaryEntitlementStart?: string | null
 
   // ===== بيانات التوظيف =====
   @IsOptional()

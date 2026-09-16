@@ -26,6 +26,7 @@ import {
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
+import { User } from '../auth/user.entity'
 import { StoredFile } from '../files/stored-file.entity'
 import { PermissionType } from '../attendance/attendance.entities'
 import {
@@ -35,6 +36,7 @@ import {
 } from '../attendance/attendance.service'
 import { OvertimeEntry } from './entities/attendance.entities'
 import { ApproverResolver, ResolvedStep } from './approver-resolver.service'
+import { audienceSubjectOf, requestAudienceAllows } from './request-audience'
 import {
   assertBankName,
   assertIban,
@@ -126,10 +128,18 @@ const HANDLER_PAYLOAD_KEYS: Record<string, string[]> = {
 // C4 / الخطوة 27: المكافأة لا تُقترح عبر محرك الطلبات (كانت تُقيد لمقدم الطلب لا للمستفيد، وتسمح بمكافأة للنفس، وبلا فترة).
 // أي نوع وجهته payroll_bonus يُوجَّه لموديول المكافآت؛ الطلبات القديمة المعتمدة تبقى كما هي.
 const LEGACY_BONUS_HANDLER = 'payroll_bonus'
-function assertNotLegacyBonusRoute(type: { destinationHandler?: string | null }) {
+// B3 (خط الفلوس): «خصم» و«مكافأة» كارتان في المجموعة المالية، وبابهما يفتح مساحتهما القائمة
+// بدفترها وسلسلتها — لا فورم عام ولا محرك ثانٍ. الكتالوج يعرضهما، والإنشاء يبقى في موديوليهما.
+const MONEY_WORKSPACE_TYPES: Record<string, string> = {
+  PAYROLL_DEDUCTION: 'الخصم يُرفع من شاشة الخصومات: اختر الموظف أو المجموعة والمبلغ وشهر المسير، ثم يمشي في اعتماده المعتاد',
+  PAYROLL_BONUS: 'المكافأة تُرفع من شاشة المكافآت: اختر الموظف أو المجموعة والمبلغ وشهر المسير، ثم تمشي في اعتمادها المعتاد',
+}
+function assertNotLegacyBonusRoute(type: { code?: string; destinationHandler?: string | null }) {
   if (type.destinationHandler === LEGACY_BONUS_HANDLER) {
     throw new BadRequestException({ code: 'BONUS_MODULE_REQUIRED', message: 'المكافأة تُقترح من شاشة المكافآت (الرواتب ← المكافآت) لموظف محدد وشهر مسير مستهدف وتمر بدورة اعتمادها' })
   }
+  const workspace = type.code ? MONEY_WORKSPACE_TYPES[type.code] : undefined
+  if (workspace) throw new BadRequestException({ code: 'MONEY_WORKSPACE_REQUIRED', message: workspace })
 }
 
 @Injectable()
@@ -199,40 +209,11 @@ export class RequestsService {
     return groupLeaveProfiles(all.filter((t) => this.audienceAllows(t, user, emp)))
   }
 
-  // هل النوع متاح للمستخدم ده؟ (الأدمن/HR يشوفون الكل)
-  private audienceAllows(
-    type: RequestType,
-    user: JwtPayload,
-    emp: Employee | null
-  ): boolean {
-    if (
-      user.role === 'super_admin' ||
-      (user.permissions ?? []).includes('*') ||
-      (user.permissions ?? []).includes('request_types.manage')
-    ) {
-      return true
-    }
-    if (!type.visibleTo) return true
-    try {
-      const v = JSON.parse(type.visibleTo) as {
-        mode: string
-        ids: Array<number | string>
-      }
-      switch (v.mode) {
-        case 'all':
-          return true
-        case 'departments':
-          return !!emp?.departmentId && v.ids.map(Number).includes(emp.departmentId)
-        case 'roles':
-          return v.ids.map(String).includes(user.role)
-        case 'employees':
-          return !!user.employeeId && v.ids.map(Number).includes(user.employeeId)
-        default:
-          return true
-      }
-    } catch {
-      return true
-    }
+  // هل النوع متاح للمستخدم ده؟ (ب4)
+  // المقيّم واحد مشترك مع شاشتي «خصم» و«مكافأة» (request-audience.ts): إخفاء النوع عن جهة
+  // معناه منعها من تقديمه فعلاً، والعرض في الكتالوج والتقديم يقرآن نفس الإجابة.
+  private audienceAllows(type: RequestType, user: JwtPayload, emp: Employee | null, purpose: 'catalog' | 'submit' = 'catalog'): boolean {
+    return requestAudienceAllows(type.visibleTo, audienceSubjectOf(user, emp), purpose)
   }
 
   // ===== الإنشاء — لنفسي أو نيابة عن موظف آخر (بصلاحية) =====
@@ -278,6 +259,7 @@ export class RequestsService {
     }
 
     // نيابة عن الغير: صلاحية requests.create_on_behalf إجبارية
+    const actorEmployeeId = user.employeeId
     let requesterId = user.employeeId
     if (
       dto.onBehalfEmployeeId &&
@@ -318,7 +300,9 @@ export class RequestsService {
         'حساب الموظف غير نشط (منتهي/مؤرشف) — لا يقدّم طلبات جديدة'
       )
     }
-    if (!this.audienceAllows(type, user, requester)) {
+    // جمهور النوع يحكم التقديم لا العرض فقط (ب4). التقديم نيابةً عن موظف آخر يمر:
+    // الموارد البشرية تدفع الشغل ولا يوقفها جمهور النوع (القرار ج1).
+    if (requesterId === actorEmployeeId && !this.audienceAllows(type, user, requester, 'submit')) {
       throw new ForbiddenException('هذا النوع من الطلبات غير متاح لك')
     }
 
@@ -516,6 +500,39 @@ export class RequestsService {
             )
           }
         }
+        // «كام مرة في الشهر» حدّ فعلي يُرفض تجاوزه عند التقديم (C3). العدّ بنفس مرجع
+        // محرك الحضور: المعرّف للطلبات الجديدة والاسم للقديمة، ويشمل الطلبات الحيّة
+        // في المسار حتى لا يمرّ التجاوز بتقديمين متتاليين قبل الاعتماد
+        // 0 (وكذلك الفارغ) = بلا حدّ على العدد — يبقى معناه في محرك الحضور
+        // (بلا مرات مجانية: كل إذن يُحسب بخصمه)، والرفض لِما جاوز عدداً محدداً
+        if (pt.monthlyFreeCount != null && pt.monthlyFreeCount > 0 && /^\d{4}-\d{2}-\d{2}$/.test(String(p.date ?? ''))) {
+          const month = String(p.date).slice(0, 7)
+          const siblings = await em.getRepository(Request).find({
+            where: {
+              requesterId: req.requesterId,
+              typeCode: 'PERMISSION',
+              status: In(['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'IN_EXECUTION', 'COMPLETED']),
+            },
+          })
+          const used = siblings.filter((other) => {
+            if (other.id === req.id) return false
+            try {
+              const op = JSON.parse(other.payload ?? '{}')
+              if (!String(op.date ?? '').startsWith(month)) return false
+              const otherTypeId = Number(op.permissionTypeId)
+              return Number.isInteger(otherTypeId) && otherTypeId > 0
+                ? otherTypeId === pt.id
+                : String(op.permissionType ?? '') === pt.nameAr
+            } catch {
+              return false
+            }
+          }).length
+          if (used >= pt.monthlyFreeCount) {
+            throw new BadRequestException(
+              `«${pt.nameAr}» مسموح ${pt.monthlyFreeCount} مرة في الشهر، وللموظف ${used} إذن من هذا النوع في شهر ${month}`
+            )
+          }
+        }
       }
     }
 
@@ -633,28 +650,33 @@ export class RequestsService {
         )
       }
 
-      // المخصوم من الرصيد = أيام العمل الفعلية فقط —
-      // الويك إند والعطلات الرسمية داخل المدى لا تُحسب ولا تُخصم
+      // المدفوعة: المخصوم من الرصيد = أيام العمل الفعلية فقط (الويك إند والعطلات
+      // الرسمية داخل المدى لا تُحسب ولا تُخصم).
+      // غير المدفوعة (A3): أيام التقويم كاملة — نفس ما يخصمه المسير يوماً بيوم،
+      // فالطلب والرصيد والخصم رقم واحد
       if (p.fromDate && p.toDate && p.fromDate <= p.toDate) {
         const emp = await this.employees.findOne({
           where: { id: req.requesterId },
         })
-        const { working, skipped } =
+        const unpaidLeave = leaveTypeDef ? leaveTypeDef.isPaid === false : false
+        const { total, working, skipped } =
           await this.attendance.workingDaysForEmployee(
             req.requesterId,
             String(p.fromDate),
             String(p.toDate)
           )
-        if (working === 0) {
+        if (!unpaidLeave && working === 0) {
           throw new BadRequestException(
             'كل الأيام المختارة عطلات (ويك إند/عطلة رسمية) — لا حاجة لطلب إجازة'
           )
         }
         const isHalf = ['MORNING', 'EVENING'].includes(String(p.period))
-        const effectiveDays = isHalf ? 0.5 : working
+        const countedDays = unpaidLeave ? total : working
+        const effectiveDays = isHalf ? 0.5 : countedDays
         // الأيام دايماً من السيرفر — رقم العميل مابيتاخدش (LEV-4)
         p.days = effectiveDays
-        p.skippedHolidays = skipped
+        // غير المدفوعة لا تستبعد يوماً: كل أيام المدى محسوبة ومخصومة
+        p.skippedHolidays = unpaidLeave ? [] : skipped
         // إجازة بتعدّي السنة: أيامها بتتقسم على رصيد كل سنة (LEV-2)
         const y1 = Number(String(p.fromDate).slice(0, 4))
         const y2 = Number(String(p.toDate).slice(0, 4))
@@ -666,7 +688,8 @@ export class RequestsService {
               y === y1 ? String(p.fromDate) : `${y}-01-01`,
               y === y2 ? String(p.toDate) : `${y}-12-31`
             )
-            if (seg.working > 0) byYear[String(y)] = seg.working
+            const segDays = unpaidLeave ? seg.total : seg.working
+            if (segDays > 0) byYear[String(y)] = segDays
           }
           p.daysByYear = byYear
         } else {
@@ -727,7 +750,8 @@ export class RequestsService {
           effDays > Number(leaveTypeDef.maxDays)
         ) {
           throw new BadRequestException(
-            `«${leaveTypeDef.nameAr}» حدّها الأقصى ${leaveTypeDef.maxDays} يوم (أيام عمل) — طلبت ${effDays}`
+            `«${leaveTypeDef.nameAr}» حدّها الأقصى ${leaveTypeDef.maxDays} يوم ` +
+              `(${leaveTypeDef.isPaid === false ? 'أيام تقويم' : 'أيام عمل'}) — طلبت ${effDays}`
           )
         }
         // مرة واحدة طوال الخدمة (الحج) — رفض لو للموظف سابقة من النوع:
@@ -822,6 +846,38 @@ export class RequestsService {
     }
     req.resolvedSteps = JSON.stringify(resolved)
     req.submittedAt = new Date()
+
+    // C1 — طلب تقدّمه الموارد البشرية نيابة عن موظف: يُعتمد فوراً وتُنفَّذ وجهته،
+    // وسجل التدقيق يحمل صفاً لكل خطوة محلولة باسم الفاعل وسببه. بلا مسار تنفيذ
+    // ثانٍ: نفس executeDestinationLocked ونفس جدول الاعتمادات.
+    // الإضافي مستثنى: اعتماده يحمل دقائق ومبلغاً يُراجَعان في خطوة صريحة، وهو
+    // أصلاً ممنوع من التنفيذ بلا معتمدين — الموارد البشرية تعتمده من صندوقها
+    if (
+      resolved.length > 0 &&
+      this.skipsCycleOnBehalf(type) &&
+      userHasPerm(user, 'requests.create_on_behalf') &&
+      this.resolver.hasHrOverride(user) &&
+      !(await this.actorIsRequester(em, user, req))
+    ) {
+      const actedAt = new Date().toISOString()
+      for (const step of resolved) {
+        await em.getRepository(RequestApproval).save({
+          requestId: req.id,
+          step: step.stepOrder,
+          approverId: user.sub,
+          action: 'APPROVED',
+          comment: 'اعتماد فوري — قدّمته الموارد البشرية نيابة عن الموظف',
+        })
+        step.actedAt = actedAt
+        step.action = 'APPROVED'
+      }
+      req.resolvedSteps = JSON.stringify(resolved)
+      req.status = 'APPROVED'
+      req.currentStep = null as unknown as number
+      if (isSalaryChangeType(type)) (em.queryRunner!.data.salaryRequestAutoActors ??= new Map<number, number>()).set(req.id, user.sub)
+      await em.getRepository(Request).save(req)
+      return this.executeDestinationLocked(em, req)
+    }
 
     if (resolved.length === 0) {
       // بلا خطوات فعّالة: نقرّر بناءً على السلسلة المستخدمة فعلاً (لا العامة)
@@ -1057,9 +1113,13 @@ export class RequestsService {
       const group = resolved.filter((s) => s.stepOrder === req.currentStep)
       if (group.length === 0) throw new BadRequestException('لا توجد خطوة حالية')
 
-      // عضو المجموعة الذي لم يتصرف بعد ويطابق المستخدم
+      // عضو المجموعة الذي لم يتصرف بعد ويطابق المستخدم.
+      // مخرج الموارد البشرية (C1) لدفع شغل الآخرين وحده: لا يعتمد به أحد طلبه
+      // هو، ولا طلباً أنشأه بنفسه نيابةً — فالمال وتغيير العقد يلزمهما شخص ثانٍ
+      const hrUnblock =
+        req.requesterId !== user.employeeId && req.createdByUserId !== user.sub
       const mine = group.find(
-        (s) => !s.actedAt && this.resolver.satisfies(user, s)
+        (s) => !s.actedAt && this.resolver.satisfies(user, s, { hrUnblock })
       )
       if (!mine) {
         throw new ForbiddenException(
@@ -1615,13 +1675,36 @@ export class RequestsService {
   }
 
   // ===== طلباتي =====
-  async mine(user: JwtPayload) {
-    if (!user.employeeId) return []
-    return (await this.requests.find({
-      where: { requesterId: user.employeeId },
+  // الافتراضي: طلبات صاحب الحساب وحدها (الشاشات الشخصية تعتمد عليه كما كان).
+  // includeOnBehalf: شاشة «طلباتي» تطلب معها ما قدّمه نيابةً عن غيره موسوماً —
+  // كانت فاضية لمن قدّم بالنيابة. وكل صف هنا لصاحبه أو لمنشئه، وكلاهما طرف
+  // يرى محتوى النوع السرّي (نفس قاعدة الطرفين في detail() — SEC-REQ-3)
+  async mine(user: JwtPayload, options: { includeOnBehalf?: boolean } = {}) {
+    if (!user.employeeId && !options.includeOnBehalf) return []
+    const where: Array<Record<string, unknown>> = []
+    if (user.employeeId) where.push({ requesterId: user.employeeId })
+    if (options.includeOnBehalf) where.push({ createdByUserId: user.sub })
+    const rows = await this.requests.find({
+      where: where as any,
       order: { createdAt: 'DESC' },
       take: 200,
-    })).map(r => this.withCanonicalStepActions(r))
+    })
+    const onBehalfIds = [
+      ...new Set(rows.filter((r) => r.requesterId !== user.employeeId).map((r) => r.requesterId)),
+    ]
+    const names = onBehalfIds.length
+      ? await this.employees.find({ where: { id: In(onBehalfIds) }, select: ['id', 'fullName'] })
+      : []
+    const nameById = new Map(names.map((e) => [e.id, e.fullName]))
+    return rows.map((r) => {
+      const row = this.withCanonicalStepActions(r)
+      if (r.requesterId === user.employeeId) return row
+      return {
+        ...row,
+        submittedOnBehalf: true,
+        onBehalfOfName: nameById.get(r.requesterId) ?? `موظف #${r.requesterId}`,
+      }
+    })
   }
 
   // Personal audit history: only decisions actually recorded by this account, across role changes.
@@ -1647,6 +1730,44 @@ export class RequestsService {
     }), nextCursor: found.length > 50 ? String(page[page.length - 1].id) : null }
   }
 
+  // الطلب «واقف»: كل خطوة لم يُتصرَّف فيها في مجموعته الحالية مسمّاة بموظف
+  // غادر أو حسابه معطّل — فلا أحد يعتمدها بالقاعدة العادية. خطوات الأدوار
+  // الوظيفية (hr/مالية/تنفيذي…) لها حاملوها فلا تُعدّ واقفة في الصندوق
+  private async stuckRequestIds(candidates: Request[]): Promise<Set<number>> {
+    const waitingByRequest = new Map<number, ResolvedStep[]>()
+    for (const req of candidates) {
+      const waiting = this.parseSteps(req.resolvedSteps).filter(
+        (s) => s.stepOrder === req.currentStep && !s.actedAt
+      )
+      if (waiting.length > 0 && waiting.every((s) => s.approverEmployeeId != null)) {
+        waitingByRequest.set(req.id, waiting)
+      }
+    }
+    const ids = [
+      ...new Set(
+        [...waitingByRequest.values()].flatMap((steps) =>
+          steps.map((s) => Number(s.approverEmployeeId))
+        )
+      ),
+    ]
+    if (ids.length === 0) return new Set<number>()
+    const [approvers, accounts] = await Promise.all([
+      this.employees.find({ where: { id: In(ids) }, select: ['id', 'isActive'] }),
+      this.ds.getRepository(User).find({
+        where: { employeeId: In(ids), isActive: true },
+        select: { id: true, employeeId: true },
+      }),
+    ])
+    const active = new Set(approvers.filter((e) => e.isActive).map((e) => e.id))
+    const hasAccount = new Set(accounts.map((u) => u.employeeId))
+    const alive = (employeeId: number) => active.has(employeeId) && hasAccount.has(employeeId)
+    return new Set(
+      [...waitingByRequest]
+        .filter(([, steps]) => steps.every((s) => !alive(Number(s.approverEmployeeId))))
+        .map(([id]) => id)
+    )
+  }
+
   // ===== صندوق الموافقات: الطلبات المنتظرة فعلي =====
   async inbox(user: JwtPayload) {
     const scope = branchScopeOf(user)
@@ -1657,14 +1778,23 @@ export class RequestsService {
       order: { submittedAt: 'ASC' },
       take: 500,
     })
+    // C1: صندوق الموارد البشرية يكسب الطلب الواقف فعلاً (معتمده المسمّى غادر أو
+    // حسابه معطّل) — لا كل طلبات الشركة؛ الباقي يبقى في صندوق أصحابه
+    const stuck = this.resolver.hasHrOverride(user)
+      ? await this.stuckRequestIds(candidates)
+      : new Set<number>()
     const pending = candidates.filter((req) => {
       const resolved = this.parseSteps(req.resolvedSteps)
+      const hrUnblock =
+        stuck.has(req.id) &&
+        req.requesterId !== user.employeeId &&
+        req.createdByUserId !== user.sub
       // المجموعة الحالية: أي عضو لم يتصرف ويطابق المستخدم
       return resolved.some(
         (s) =>
           s.stepOrder === req.currentStep &&
           !s.actedAt &&
-          this.resolver.satisfies(user, s)
+          this.resolver.satisfies(user, s, { hrUnblock })
       )
     })
     // اسم مقدّم الطلب ضمن الحمولة — المعتمد يعرضه بلا حاجة لصلاحية employees.view
@@ -1713,6 +1843,12 @@ export class RequestsService {
     const entry = entries.length === 1 ? entries[0] : null
     if (!entry) return { ...full, overtime: null, overtimeReviewRequired: true }
     const events = await this.ds.getRepository(OvertimeEntryEvent).find({ where: { entryId: entry.id }, order: { id: 'ASC' } })
+    // اسم من قام بالإجراء بدل رقم المستخدم في سجل المراجعة (خط labels-cleanup)
+    const actorIds = [...new Set(events.map(event => event.actorUserId).filter((value): value is number => Number.isSafeInteger(value) && Number(value) > 0))]
+    const actorNames = new Map<number, string>(actorIds.length
+      ? ((await this.ds.query(`SELECT [id],[displayName] FROM [users] WHERE [id] IN (${actorIds.map((_, index) => `@${index}`).join(', ')})`, actorIds)) as Array<{ id: number; displayName: string | null }>)
+        .map(row => [Number(row.id), row.displayName || ''] as [number, string])
+      : [])
     const saved = entry.calculationSnapshot
     const approved = saved?.approval
     // الخطوة 13: جاهزية راتب شهر يوم العمل قبل الاعتماد النهائي، حتى لا يُفاجأ المعتمد الأخير بـOT_SALARY_MONTH_EVIDENCE_REQUIRED.
@@ -1729,6 +1865,7 @@ export class RequestsService {
         approval: approved ? { approvedMinutes: approved.approvedMinutes, hourlyRate: approved.hourlyRate, multiplier: approved.multiplier,
           amount: approved.amount, dayKind: approved.dayKind, approvedAt: approved.approvedAt, approverId: approved.approverId } : null } : null,
       events: events.map(event => ({ id: event.id, eventType: event.eventType, actorUserId: event.actorUserId,
+        actorName: event.actorUserId ? actorNames.get(event.actorUserId) || null : null,
         stepOrder: event.stepOrder, reason: event.reason, createdAt: event.createdAt,
         beforeMinutes: event.payload?.beforeMinutes ?? null, approvedMinutes: event.payload?.approvedMinutes ?? null })),
     } }
@@ -2212,6 +2349,30 @@ export class RequestsService {
     return req
   }
 
+  // ما الذي يُعتمد فوراً حين تقدّمه الموارد البشرية نيابةً (C1)؟ كل شيء إلا ما
+  // يحتاج شخصاً ثانياً بطبيعته: الإضافي (دقائقه ومبلغه يُراجعان في خطوة صريحة)،
+  // والمال (سلفة/زيادة راتب/مصروفات…)، وما يغيّر العقد (نقل/ترقية/استقالة/إنهاء).
+  // هذه تبقى بدورتها، والموارد البشرية تدفعها من صندوقها بضغطة
+  private skipsCycleOnBehalf(type: RequestType): boolean {
+    return (
+      !this.isOvertimeDefinition(type) &&
+      !isSalaryChangeType(type) &&
+      !isLoanCapRequestType(type) &&
+      type.category !== 'financial' &&
+      type.category !== 'employment_status'
+    )
+  }
+
+  // هل الفاعل هو صاحب الطلب نفسه؟ يُقرأ من سجل المستخدم لا من التوكن، لأن
+  // create() بيحوّل user.employeeId لصاحب الطلب قبل التقديم نيابةً عنه
+  private async actorIsRequester(em: EntityManager, user: JwtPayload, req: Request): Promise<boolean> {
+    const actor = await em.getRepository(User).findOne({
+      where: { id: user.sub },
+      select: { id: true, employeeId: true },
+    })
+    return !!actor?.employeeId && actor.employeeId === req.requesterId
+  }
+
   // صاحب الطلب أو منشئه أو معتمد فعلي عليه: تصرّف فيه، أو تنطبق عليه خطوة من
   // سلسلته (حالية/سابقة/لاحقة) — المسمّاة باسمه تكفي بذاتها، والوظيفية (hr/مالية…)
   // بنطاق الفرع مثل الصندوق والفعل
@@ -2229,6 +2390,8 @@ export class RequestsService {
       (s) =>
         (inScope ||
           (s.approverEmployeeId != null && s.approverEmployeeId === user.employeeId)) &&
+        // بلا مخرج الموارد البشرية: فكّ الانسداد حقّ تصرّف لا إذن اطلاع —
+        // المحتوى السرّي يبقى لأطرافه وحدهم كما كان
         this.resolver.satisfies(user, s)
     )
   }

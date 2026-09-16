@@ -267,7 +267,8 @@ export default function MyAttendancePage() {
                                     جدول افتراضي (مفترَض)
                                   </span>
                                 )}
-                                {row.graceUsed != null && (
+                                {/* الوردية المرنة لا تُطبَّق فيها السماحية — نافذة الحضور تغنيها */}
+                                {row.graceUsed != null && !(row.attendanceRuleSnapshot?.flexEnabled && (row.attendanceRuleSnapshot.windowSupersedesGrace ?? true)) && (
                                   <span
                                     className="block text-[10px] text-gray-400"
                                     title="سماحية التأخير التي طُبّقت على هذا اليوم — سماحية ورديتك إن حُدّدت لها، وإلا القيمة العامة"

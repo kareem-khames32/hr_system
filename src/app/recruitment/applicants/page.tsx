@@ -148,7 +148,7 @@ export default function ApplicantsPage() {
         {/* Page Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">المتقدمين للوظائف</h1>
+            <h1 className="text-2xl font-bold text-gray-800">المتقدمين</h1>
             <p className="text-gray-500 mt-1">إدارة ومتابعة طلبات التوظيف</p>
           </div>
         </div>

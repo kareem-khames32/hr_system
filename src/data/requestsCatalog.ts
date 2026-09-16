@@ -128,7 +128,7 @@ export const requestsCatalog: RequestTypeDef[] = [
 
   // ===== الفئة 4: الحالة الوظيفية =====
   { code: 'PROMOTION', nameAr: 'ترقية', category: 'employment_status', submitter: ['E', 'MANAGER'], requiredAttachments: null, approvalChain: 'مدير → HR → (تنفيذي)', destination: 'تحديث الموظف + سجل الترقيات', destinationHandler: 'employee_update_promotions', phase: 'P2' },
-  { code: 'TEAM_TRANSFER', nameAr: 'نقل بين الفرق', category: 'employment_status', submitter: ['E', 'MANAGER'], requiredAttachments: null, approvalChain: 'المدير الحالي → المدير المستقبِل → HR', destination: 'تحديث الفريق + لوج النقل (بتاريخ سريان)', destinationHandler: 'transfers_effective_date', phase: 'P2' },
+  { code: 'TEAM_TRANSFER', nameAr: 'نقل بين الفرق', category: 'employment_status', submitter: ['E', 'MANAGER'], requiredAttachments: null, approvalChain: 'المدير الحالي → المدير المستقبِل → HR', destination: 'تحديث الفريق + سجل النقل (بتاريخ سريان)', destinationHandler: 'transfers_effective_date', phase: 'P2' },
   { code: 'TITLE_CHANGE', nameAr: 'تغيير مسمى', category: 'employment_status', submitter: ['HR'], requiredAttachments: null, approvalChain: 'مدير → HR', destination: 'تحديث الموظف', destinationHandler: 'employee_update', phase: 'P3' },
   { code: 'CONTRACT_RENEWAL', nameAr: 'تجديد عقد', category: 'employment_status', submitter: ['HR'], requiredAttachments: null, approvalChain: 'HR → تنفيذي', destination: 'سجل العقود', destinationHandler: 'contracts_register', phase: 'P2' },
   { code: 'CONTRACT_TYPE_CHANGE', nameAr: 'تغيير نوع العقد', category: 'employment_status', submitter: ['E', 'HR'], requiredAttachments: null, approvalChain: 'مدير → HR', destination: 'سجل العقود', destinationHandler: 'contracts_register', phase: 'P3' },

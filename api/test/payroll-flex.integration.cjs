@@ -129,9 +129,11 @@ async function permission(f, { from = '09:00', to = '10:00', paid = false, day =
   return repo('Request').save({ requesterId: f.emp.id, typeCode: 'PERMISSION', status: 'APPROVED',
     payload: JSON.stringify({ date: day, from, to, permissionTypeId: type.id }) })
 }
-async function payroll(f, expected = { gross: 9000, grossEarned: 300, dayRate: 300, hourRate: 37.5 }) {
+async function payroll(f, expected = { gross: 9000, grossEarned: 290.32, dayRate: 300, hourRate: 37.5 }) {
   // A single day of covered service isolates this day's money without fabricating
   // a month of attendance. Monthly gross 9000 still determines rates: 300/day, .625/min.
+  // أ2 (16 سبتمبر): الأجر المستحق يتناسب مع أيام الفترة الفعلية — يوليو 31 يومًا، فيوم واحد = 9000 × 1/31 = 290.32،
+  // بينما سعر اليوم للخصومات يبقى على أساس الشهر (9000 / 30 = 300).
   await repo('Employee').update(f.emp.id, { joinDate: f.day, status: 'terminated', isActive: false })
   await repo('OffboardingCase').save({ employeeId: f.emp.id, lastWorkingDay: f.day, status: 'CLOSED', terminationReason: 'termination' })
   // الخطوة 16 (B3): اسم المسير فريد داخل الشهر لغير الملغى؛ كل مسير جديد يأخذ رقم الموظف.
@@ -149,15 +151,8 @@ async function payroll(f, expected = { gross: 9000, grossEarned: 300, dayRate: 3
   assert.ok(trace, 'Each evaluated flexible day needs a persisted financial explanation')
   return { run, item, details, trace }
 }
-// الخطوة 21 (B4): الحساب يقرأ مجموعة الشرائح المؤرخة (الجدول القديم أرشيف)؛ مجموعة الاختبار تسري من 2000-01 وتُوقف بعد الإجراء.
-async function withTier(value, action) {
-  const { payrollLatenessTierSetHash } = require('../src/payroll/payroll-lateness-tiers')
-  const tiers = [{ sequence: 1, fromMinutes: 1, toMinutes: null, mode: 'FRACTION', value: Number(value).toFixed(3), label: 'شريحة عقابية واضحة لاختبار استقلال النقص' }]
-  const set = await repo('PayrollLatenessTierSet').save({ effectivePeriod: '2000-01', contentHash: payrollLatenessTierSetHash('2000-01', tiers), source: 'EDITOR',
-    reason: 'مجموعة شرائح اختبار المرونة', isActive: true, createdBy: null })
-  await repo('PayrollLatenessTierSetTier').save(tiers.map(tier => ({ ...tier, setId: set.id })))
-  try { return await action() } finally { await repo('PayrollLatenessTierSet').update({ id: set.id }, { isActive: false }) }
-}
+// أ1 (16 سبتمبر): شرائح التأخير صارت داخل معادلة الرواتب (payroll_policies.latenessTierSetId) ولم يعد لها اختيار بالشهر،
+// ومسيرات هذه المجموعة بلا معادلة، فخصم التأخير فيها بالدقيقة. أثر الشرائح على مسير بمعادلة مُختبر في payroll-policy-snapshot-engine.
 
 // الخطوة 18 (B3): الاعتماد يتطلب إقرارًا بتقرير «موظفون بلا مسير» لنسخة الحساب الحالية بنطاق المعتمد.
 async function acknowledgeUnassigned(user, runId) {
@@ -440,41 +435,37 @@ test('FX-04: independent shortfall tolerance forgives ten minutes but charges al
       assert.equal(trace.rawShortfallMinutes, rawShortfall)
       assert.equal(trace.chargeableShortfallMinutes, chargeable)
       assert.equal(number(item.shortfallDeduction), chargeable * 0.625)
-      assert.equal(number(item.netPay), 300 - chargeable * 0.625)
+      assert.equal(number(item.netPay), 290.32 - chargeable * 0.625)
     }
   })
 })
 
-test('FX-04 financial: 75 minutes inside the window are recovered at .625 each and never enter a punitive lateness tier', async t => {
-  await withTier(1, async () => {
-    const f = await fixture()
-    await punches(f, '09:45', '17:30')
-    const { item, trace } = await payroll(f)
-    assert.equal(number(item.shortfallMinutes), 75)
-    assert.equal(number(item.shortfallDeduction), 46.88)
-    assert.equal(number(item.latenessDeduction), 0)
-    assert.equal(number(item.netPay), 253.12)
-    assert.equal(trace.rawShortfallMinutes, 75); assert.equal(trace.chargeableShortfallMinutes, 75)
-    assert.equal(trace.latenessAmount, 0)
-    assert.equal(trace.shortfallAmount, 46.875, 'Daily trace retains precision; the final item rounds the aggregate to 46.88')
-  })
-  t.diagnostic('Manual: one covered service day = 9000/30 = 300; shortfall 75 × 0.625 = 46.88; net253.12, even with a whole-day lateness tier.')
+test('FX-04 financial: 75 minutes inside the window are recovered at .625 each with no lateness at all', async t => {
+  const f = await fixture()
+  await punches(f, '09:45', '17:30')
+  const { item, trace } = await payroll(f)
+  assert.equal(number(item.shortfallMinutes), 75)
+  assert.equal(number(item.shortfallDeduction), 46.88)
+  assert.equal(number(item.latenessDeduction), 0)
+  assert.equal(number(item.netPay), 243.44)
+  assert.equal(trace.rawShortfallMinutes, 75); assert.equal(trace.chargeableShortfallMinutes, 75)
+  assert.equal(trace.latenessAmount, 0)
+  assert.equal(trace.shortfallAmount, 46.875, 'Daily trace retains precision; the final item rounds the aggregate to 46.88')
+  t.diagnostic('أ2: يوم مغطى = 9000 × 1/31 = 290.32؛ والنقص 75 × 0.625 = 46.88 بسعر يوم 300؛ الصافي 243.44.')
 })
 
-test('FX-07 financial: NET_OF_LATENESS preserves raw 130-minute shortfall while charging only the independent 60 minutes', async t => {
-  await withTier(0.25, async () => {
-    const f = await fixture()
-    measured(await punches(f, '10:10', '17:00'), { rawLateMinutes: 70, unexcusedLateMinutes: 70, lateMinutes: 70, shortfallMinutes: 130 })
-    const { item, trace } = await payroll(f)
-    assert.equal(number(item.shortfallMinutes), 130)
-    assert.equal(number(item.latenessDeduction), 75)
-    assert.equal(number(item.shortfallDeduction), 37.5)
-    assert.equal(number(item.netPay), 187.5)
-    assert.equal(trace.rawShortfallMinutes, 130); assert.equal(trace.unexcusedLateMinutes, 70)
-    assert.equal(trace.overlapMinutes, 70); assert.equal(trace.chargeableShortfallMinutes, 60)
-    assert.equal(trace.totalAmount, 112.5)
-  })
-  t.diagnostic('Manual: late70 enters quarter-day tier=75; rawshort130−unexcusedlate70=60; 60×.625=37.50; net300−75−37.50=187.50.')
+test('أ4 financial: the whole 130-minute shortfall is charged beside the 70 late minutes — no overlap subtraction', async t => {
+  const f = await fixture()
+  measured(await punches(f, '10:10', '17:00'), { rawLateMinutes: 70, unexcusedLateMinutes: 70, lateMinutes: 70, shortfallMinutes: 130 })
+  const { item, trace } = await payroll(f)
+  assert.equal(number(item.shortfallMinutes), 130)
+  assert.equal(number(item.latenessDeduction), 43.75)
+  assert.equal(number(item.shortfallDeduction), 81.25)
+  assert.equal(number(item.netPay), 165.32)
+  assert.equal(trace.rawShortfallMinutes, 130); assert.equal(trace.unexcusedLateMinutes, 70)
+  assert.equal(trace.overlapMinutes, 0); assert.equal(trace.chargeableShortfallMinutes, 130)
+  assert.equal(trace.totalAmount, 125)
+  t.diagnostic('أ4: كل خصم يُحتسب كما جاء — تأخير 70×.625=43.75 ونقص 130×.625=81.25؛ الصافي 290.32−125=165.32.')
 })
 
 test('FX-07 financial: free and paid permission coverage is counted once and raw lateness cannot erase a real later shortfall', async t => {
@@ -486,26 +477,27 @@ test('FX-07 financial: free and paid permission coverage is counted once and raw
     const { item, trace } = await payroll(f)
     assert.equal(trace.rawShortfallMinutes, paid ? 150 : 90)
     assert.equal(trace.unexcusedLateMinutes, 30)
-    assert.equal(trace.chargeableShortfallMinutes, 60, 'The genuine hour after excused arrival must remain payable as shortfall')
+    // أ4: الإذن المدفوع وحده يغطي دقائقه؛ ما بقي من النقص يُخصم كاملًا بلا طرح دقائق التأخير
+    assert.equal(trace.chargeableShortfallMinutes, 90)
     assert.equal(trace.latenessAmount, 18.75)
     assert.equal(trace.permissionAmount, paid ? 37.5 : 0)
-    assert.equal(trace.shortfallAmount, 37.5)
-    assert.equal(number(item.shortfallDeduction), 37.5)
-    assert.equal(number(item.netPay), paid ? 206.25 : 243.75)
+    assert.equal(trace.shortfallAmount, 56.25)
+    assert.equal(number(item.shortfallDeduction), 56.25)
+    assert.equal(number(item.netPay), paid ? 177.82 : 215.32)
   }
-  t.diagnostic('Manual: free permission ⇒ 300−18.75−37.50=243.75; paid permission also costs60×.625=37.50, net206.25. No minute is charged twice.')
+  t.diagnostic('أ4: الإذن الحر ⇒ 290.32−18.75−56.25=215.32؛ والمدفوع يضيف 60×.625=37.50 فالصافي 177.82. الإذن المدفوع لا يُحتسب مرتين.')
 })
 
-test('FX-07 financial: overlap subtracts unexcused lateness before grace even when the grace setting forgives its charge', async () => {
+test('أ4 financial: forgiven lateness no longer shrinks the shortfall — the unworked 90 minutes are charged in full', async () => {
   await configDuring({ 'attendance.flex.window_supersedes_grace': false }, async () => {
     const f = await fixture({ rule: { graceMinutes: 60 } })
     await permission(f)
     measured(await punches(f, '10:30', '17:00'), { rawLateMinutes: 90, unexcusedLateMinutes: 30, lateMinutes: 0, shortfallMinutes: 90 })
     const { item, trace } = await payroll(f)
-    assert.equal(trace.unexcusedLateMinutes, 30); assert.equal(trace.overlapMinutes, 30)
-    assert.equal(trace.chargeableShortfallMinutes, 60)
-    assert.equal(number(item.latenessDeduction), 0); assert.equal(number(item.shortfallDeduction), 37.5)
-    assert.equal(number(item.netPay), 262.5)
+    assert.equal(trace.unexcusedLateMinutes, 30); assert.equal(trace.overlapMinutes, 0)
+    assert.equal(trace.chargeableShortfallMinutes, 90)
+    assert.equal(number(item.latenessDeduction), 0); assert.equal(number(item.shortfallDeduction), 56.25)
+    assert.equal(number(item.netPay), 234.07)
   })
 })
 
@@ -556,16 +548,17 @@ test('FX-09: approved payroll protects its original attendance and source versio
   assert.deepEqual(await repo('PayrollItem').findOneByOrFail({ id: item.id }), oldItem)
 })
 
-test('FX-07 financial: lateness and independent shortfall together cannot exceed the configured one-day cap', async () => {
-  await withTier(2, async () => {
-    const f = await fixture()
-    await punches(f, '13:00', '14:00')
-    const { item, trace } = await payroll(f)
-    assert.equal(trace.dailyCapAmount, 300)
-    assert.equal(trace.totalAmount, 300)
-    assert.equal(number(item.netPay), 0)
-    assert.equal(number(item.latenessDeduction) + number(item.shortfallDeduction), 300)
-  })
+test('أ4 financial: no daily cap — lateness and shortfall are each charged in full, and only net protection stops the day going negative', async () => {
+  const f = await fixture()
+  await punches(f, '13:00', '14:00')
+  const { item, trace } = await payroll(f)
+  // 240 دقيقة تأخير × .625 = 150، و480 دقيقة نقص × .625 = 300: الطلب 450 بلا أي اقتطاع سقف
+  assert.equal(trace.dailyCapAmount, 0); assert.equal(trace.cappedAmount, 0)
+  assert.equal(trace.latenessAmount, 150); assert.equal(trace.shortfallAmount, 300)
+  assert.equal(trace.totalAmount, 450)
+  // حماية الصافي وحدها تمنع السالب: المصروف لا يتجاوز الأجر المستحق لليوم المغطى (290.32)
+  assert.equal(number(item.latenessDeduction) + number(item.shortfallDeduction), 290.32)
+  assert.equal(number(item.netPay), 0)
 })
 
 test('FX-05 financial: approved overtime remains a separate source and cannot cancel after-window lateness', async () => {
@@ -584,7 +577,7 @@ test('FX-05 financial: approved overtime remains a separate source and cannot ca
   assert.equal(number(item.overtimeAmount), 56.25)
   assert.equal(number(item.latenessDeduction), 38.13)
   assert.equal(number(item.shortfallDeduction), 0)
-  assert.equal(number(item.netPay), 318.12)
+  assert.equal(number(item.netPay), 308.44)
   assert.deepEqual(details.overtimeEntryIds, [ot.id])
   assert.equal((await repo('OvertimeEntry').findOneByOrFail({ id: ot.id })).status, 'APPROVED')
 })
@@ -629,13 +622,13 @@ test('FX policy validation: invalid settings are rejected over HTTP and a corrup
 test('FX regression: final aggregate rounds an exact half-cent upward despite binary floating-point loss', async t => {
   const f = await fixture({ employee: { basicSalary: 1000.08 } })
   measured(await punches(f, '09:30', '16:50'), { lateMinutes: 0, shortfallMinutes: 100 })
-  const { item, trace } = await payroll(f, { gross: 1000.08, grossEarned: 33.34, dayRate: 33.34, hourRate: 4.17 })
+  const { item, trace } = await payroll(f, { gross: 1000.08, grossEarned: 32.26, dayRate: 33.34, hourRate: 4.17 })
   assert.equal(number(item.shortfallMinutes), 100)
   assert.ok(Math.abs(trace.shortfallAmount - 6.945) < 1e-12, 'The trace must preserve full intermediate precision')
   assert.equal(number(item.shortfallDeduction), 6.95, 'Exact 6.945 rounds up to 6.95 rather than down to 6.94')
   assert.equal(trace.totalAmount, 6.95)
-  assert.equal(number(item.netPay), 26.39)
-  t.diagnostic('Manual: monthly1000.08 /30 /8 /60 ×100min = 6.945 → 6.95; one service day earns33.34; net26.39.')
+  assert.equal(number(item.netPay), 25.31)
+  t.diagnostic('Manual: monthly1000.08 /30 /8 /60 ×100min = 6.945 → 6.95؛ ويوم مغطى واحد يستحق 1000.08 × 1/31 = 32.26؛ الصافي 25.31.')
 })
 
 test('FX / OT-08 regression: fixed-shift attendance materialization preserves a legacy approved overtime source', async t => {
@@ -654,7 +647,7 @@ test('FX / OT-08 regression: fixed-shift attendance materialization preserves a 
   assert.equal(number(latest.payableHours), 2)
   assert.equal(number(item.overtimeHours), 2)
   assert.equal(number(item.overtimeAmount), 112.5)
-  assert.equal(number(item.netPay), 412.5)
+  assert.equal(number(item.netPay), 402.82)
   assert.deepEqual(details.overtimeEntryIds, [overtime.id])
   t.diagnostic('Legacy approval remains2h: 2 ×(9000/30/8) ×1.5 =112.50; payroll cannot change an existing approval to1h by rereading attendance.')
 })

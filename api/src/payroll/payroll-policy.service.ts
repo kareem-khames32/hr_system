@@ -658,8 +658,12 @@ export class PayrollPolicyService {
         if (branchId !== null && !await em.getRepository(Branch).existsBy({ id: branchId, isActive: true })) throw new BadRequestException('فرع السياسة غير موجود أو معطل')
         const scope = await this.scope(em, branchId, dto.defaultScopeType ?? null, dto.defaultScopeIds ?? null)
         const settings = await this.initialSettings(em, dto.settings)
+        // أ1: الفارغ صار معناه «بلا شرائح: الخصم بالدقيقة»، فالمعادلة الجديدة تبدأ بشرائح التأخير المعمول بها
+        // (أحدث مجموعة مفعّلة) لا بلا شرائح؛ تُعدَّل أو تُفرَّغ بعدها من لوحة «طريقة الخصم».
+        const currentTierSet = await em.getRepository(PayrollLatenessTierSet).findOne({ where: { isActive: true }, order: { id: 'DESC' } })
         const policy = await em.getRepository(PayrollPolicy).save(em.getRepository(PayrollPolicy).create({ code, name,
           description: this.optionalText(dto.description, 'وصف السياسة', 8000), branchId, ...scope,
+          latenessTierSetId: currentTierSet?.id ?? null,
           isActive: true, revision: 1, createdBy: user.sub, updatedBy: user.sub }))
         const version = await em.getRepository(PayrollPolicyVersion).save(em.getRepository(PayrollPolicyVersion).create({ policyId: policy.id,
           versionNo: 1, sourceVersionId: null, status: 'DRAFT', contractVersion: 'SRS_V1', ...dates, ...settings,

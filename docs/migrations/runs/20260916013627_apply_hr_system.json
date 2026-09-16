@@ -1,0 +1,604 @@
+{
+  "command": "apply",
+  "database": "hr_system",
+  "mode": "company",
+  "startedAt": "2026-09-16T01:36:23.184Z",
+  "files": 47,
+  "baselineBackup": {
+    "hostPath": "D:/projects/hr_system_backups/pre-payroll-2026-09-14/hr_system_pre_payroll_20260914.bak",
+    "sizeBytes": 20045824,
+    "sha256": "ccb5d8ca71238bdd457482ca5ab00b5598b0e2628f87c4f112127263f3a836d7",
+    "sqlPath": "/var/opt/mssql/data/hr_system_pre_payroll_20260914.bak",
+    "staged": false,
+    "databaseName": "hr_system",
+    "backupStartDate": "2026-09-14T11:27:33.000Z",
+    "backupFinishDate": "2026-09-14T11:27:33.000Z",
+    "copyOnly": true,
+    "checksums": true,
+    "verifyOnly": "passed"
+  },
+  "backup": {
+    "hostPath": "D:/projects/hr_system_backups/freeze/hr_system_freeze_20260916013623_5d61d4ab.bak",
+    "sizeBytes": 62054400,
+    "sha256": "930661a8b4c0bafe3cd65528372624a110dbed4c56bda43e43192235aec34d0e",
+    "sqlPath": "/var/opt/mssql/data/hr_system_freeze_20260916013623_5d61d4ab.bak",
+    "staged": false,
+    "databaseName": "hr_system",
+    "backupStartDate": "2026-09-16T01:36:23.000Z",
+    "backupFinishDate": "2026-09-16T01:36:23.000Z",
+    "copyOnly": true,
+    "checksums": true,
+    "verifyOnly": "passed",
+    "taken": "20260916013623",
+    "label": "freeze"
+  },
+  "backupFreshness": {
+    "serverStartedAt": "2026-09-15T06:19:40.903Z",
+    "lastUserUpdate": null,
+    "ledgerLastAppliedAt": "2026-09-16T00:25:46.116Z",
+    "problems": []
+  },
+  "pendingBefore": [
+    "docs/migrations/payroll/20260916_039_money_request_audience_and_exemption_threshold.sql",
+    "docs/migrations/payroll/20260916_040_lateness_tier_sets_remaining_policies.sql"
+  ],
+  "trial": {
+    "passed": true,
+    "files": 2,
+    "ms": 637
+  },
+  "applied": [
+    {
+      "file": "docs/migrations/payroll/20260916_039_money_request_audience_and_exemption_threshold.sql",
+      "scope": "payroll",
+      "checksum": "f07a6589d473fb412cf68c75595b338f88034569196e0da79df7d4328cebe4ef",
+      "ms": 232,
+      "batches": 4,
+      "guard": {
+        "tables": 108,
+        "keyRowsChecked": 21511,
+        "renamedColumns": [],
+        "widenedColumns": [],
+        "nullabilityChanges": []
+      }
+    },
+    {
+      "file": "docs/migrations/payroll/20260916_040_lateness_tier_sets_remaining_policies.sql",
+      "scope": "payroll",
+      "checksum": "88e48a3b4753eb07fbda4d0ff3f8aa0cc20207ec59195630edf38414ec082954",
+      "ms": 223,
+      "batches": 3,
+      "guard": {
+        "tables": 108,
+        "keyRowsChecked": 21512,
+        "renamedColumns": [],
+        "widenedColumns": [],
+        "nullabilityChanges": []
+      }
+    }
+  ],
+  "skipped": [],
+  "ledger": [
+    {
+      "version": "20260911_001_pre_payroll_adjustment_layer",
+      "scope": "pre-payroll",
+      "checksum": "cdf24df878b858a35663105fb24e7a1ae56a14f17c295665595c9d68908f28a5",
+      "appliedAt": "2026-09-14T12:19:47.8950925"
+    },
+    {
+      "version": "20260911_002_pre_payroll_holiday_country",
+      "scope": "pre-payroll",
+      "checksum": "38dfb37e5ca781fa6fc47834b52166dd92cbe4b667aecbe509f5e30222ad01a1",
+      "appliedAt": "2026-09-14T12:19:47.9278966"
+    },
+    {
+      "version": "20260911_003_pre_payroll_letter_templates",
+      "scope": "pre-payroll",
+      "checksum": "6ea901e1fdde0440869ae55336760d8e8fae07a6c1b6c1232ab50dc92c8ad637",
+      "appliedAt": "2026-09-14T12:19:47.9814584"
+    },
+    {
+      "version": "20260911_004_pre_payroll_history_actor_schema",
+      "scope": "pre-payroll",
+      "checksum": "ea53a4c1ec07a22bddcded9b71a9fd1a02a4e3f8797ff77e5fd49738da3145e2",
+      "appliedAt": "2026-09-14T12:19:48.0881178"
+    },
+    {
+      "version": "20260911_005_pre_payroll_history_work_type_data",
+      "scope": "pre-payroll",
+      "checksum": "5a6794def1a2935540afcdfadbf0cb1205808f5863d2cbc9efb8ce7964047f33",
+      "appliedAt": "2026-09-14T12:19:48.1621783"
+    },
+    {
+      "version": "20260911_006_pre_payroll_leave_request_names",
+      "scope": "pre-payroll",
+      "checksum": "267044aa3d6fd3e507935a29c5d44156ee49ac1e3813a0e11f88219d09b8c284",
+      "appliedAt": "2026-09-14T12:19:48.2487413"
+    },
+    {
+      "version": "20260912_007_pre_payroll_hr_document_templates",
+      "scope": "pre-payroll",
+      "checksum": "e4f52a66752f88a057b29f87746acb0dea27ed0c84c3c00c4adb5334bf01b68b",
+      "appliedAt": "2026-09-14T12:19:48.3022560"
+    },
+    {
+      "version": "20260912_001_settlement_payroll_boundary",
+      "scope": "payroll",
+      "checksum": "7bb03d8552178dc54a5f723fbdf5154d99324ef57807bcfed7211a6e1c635495",
+      "appliedAt": "2026-09-14T12:19:48.3104011"
+    },
+    {
+      "version": "20260912_002_membership_claims_events",
+      "scope": "payroll",
+      "checksum": "3ade660dc18ef4068582e4794798dbf82f32cc3743882693e73c590e1ac443f4",
+      "appliedAt": "2026-09-14T12:19:48.3267336"
+    },
+    {
+      "version": "20260912_003_attendance_exemptions",
+      "scope": "payroll",
+      "checksum": "1697fcf7f0b2bcda7636f4be0df7ff9e1c32cfd6a13a7c54ffa56cc8fb242ad9",
+      "appliedAt": "2026-09-14T12:19:48.3389629"
+    },
+    {
+      "version": "20260913_004_attendance_flex_history",
+      "scope": "payroll",
+      "checksum": "6855dc2daa288c590bb83637f97cb3cce2cad1765c01ee97a33359c301b08fbb",
+      "appliedAt": "2026-09-14T12:19:48.3717569"
+    },
+    {
+      "version": "20260913_005_overtime_workflow",
+      "scope": "payroll",
+      "checksum": "3a68ff6e6f8bd19c38f0b5cf3dcf9f3d1bf565879b2f25bb9c147ad7fa9f571f",
+      "appliedAt": "2026-09-14T12:19:48.3880613"
+    },
+    {
+      "version": "20260913_006_payroll_policy_drafts",
+      "scope": "payroll",
+      "checksum": "0446e0b17d832e8081e464e96a6ac143a7b5d1fae78620cd7f3229eadf2b40e5",
+      "appliedAt": "2026-09-14T12:19:48.4043720"
+    },
+    {
+      "version": "20260913_007_payroll_policy_settings",
+      "scope": "payroll",
+      "checksum": "1e983f3b6bc8fb1b8fb6b0f4e22740221ff02f198803de1fbe884f14b4188d7e",
+      "appliedAt": "2026-09-14T12:19:48.4206735"
+    },
+    {
+      "version": "20260913_008_payroll_policy_definitions",
+      "scope": "payroll",
+      "checksum": "1d7e0684a7dfe9ac851d89a93278c9116612d653f3c66f9831cb5a52d4782bd3",
+      "appliedAt": "2026-09-14T12:19:48.4410370"
+    },
+    {
+      "version": "20260913_009_loan_installment_ledger",
+      "scope": "payroll",
+      "checksum": "5a675b1542f9d148acde7cf42e11c34310466206bd4fb0126efa2122911aa18e",
+      "appliedAt": "2026-09-14T12:19:48.4573315"
+    },
+    {
+      "version": "20260913_010_payroll_collection_policy",
+      "scope": "payroll",
+      "checksum": "bd55de179fd7174c75426793424775b17cb02cbcc19cecff7921203432efaccd",
+      "appliedAt": "2026-09-14T12:19:48.4654941"
+    },
+    {
+      "version": "20260913_011_payroll_salary_history",
+      "scope": "payroll",
+      "checksum": "cbd5b1c3ee1318f5620dc97735c30f567d31be1cf2f6f2ebb2c00b3ab21ded3f",
+      "appliedAt": "2026-09-14T12:19:48.4736480"
+    },
+    {
+      "version": "20260914_012_payroll_salary_reference_period",
+      "scope": "payroll",
+      "checksum": "fac25cf8b2e4fadff68983c981eb500b4bd0f20aaa4b294ac34a20924e71c4d3",
+      "appliedAt": "2026-09-14T12:19:48.4858891"
+    },
+    {
+      "version": "20260914_013_db_dated_calendar_versions",
+      "scope": "payroll",
+      "checksum": "70304a7bc1457eef635004f25fa8971f6e90f0e582e30b044afd38016ec65757",
+      "appliedAt": "2026-09-14T12:19:51.4373043"
+    },
+    {
+      "version": "20260914_014_db_device_key_rotation",
+      "scope": "payroll",
+      "checksum": "e16cded437f1a0feeff8f64dee011a332bf541c3417b54be8019e522415e0c6c",
+      "appliedAt": "2026-09-14T13:24:40.5045062"
+    },
+    {
+      "version": "20260914_015_db_step9_data_decisions",
+      "scope": "payroll",
+      "checksum": "6bdc83e87afb09b6601587c9e1e1a89ea3bbe3a4f141c5074f71257fc0ee2420",
+      "appliedAt": "2026-09-14T13:24:40.7719338"
+    },
+    {
+      "version": "20260914_016_c1_attendance_exemption_roles",
+      "scope": "payroll",
+      "checksum": "383b6eec022edc8eeaab396d0b0bda3bb2427ba56058a3336952376b2bde4ffd",
+      "appliedAt": "2026-09-14T14:13:51.5957718"
+    },
+    {
+      "version": "20260914_016_r1_record_only_request_types",
+      "scope": "payroll",
+      "checksum": "1bc3c3b09577314f9932b3e2ebcf30515cac20b0f6adbb201c1d75af35fd4a42",
+      "appliedAt": "2026-09-14T14:13:51.8019516"
+    },
+    {
+      "version": "20260914_017_b2_policy_manage_decision_settings",
+      "scope": "payroll",
+      "checksum": "dd619d2be1dfd6ba7363192ae56c8878fe6bb6cf68de8a12366fa7a4f3b8ab40",
+      "appliedAt": "2026-09-14T14:13:52.0609350"
+    },
+    {
+      "version": "20260914_018_c6_loan_caps_recovery",
+      "scope": "payroll",
+      "checksum": "7a78d8b274eb0d4e04e8cb216f806852331dde9822aa60941b6ae03cc809f65e",
+      "appliedAt": "2026-09-14T14:26:15.5806574"
+    },
+    {
+      "version": "20260914_019_sec2_payroll_state_role_grants",
+      "scope": "payroll",
+      "checksum": "4a6b8f78a87c5b2ce23270a50e7a99cefff07a96e134a0f8ff0300fdb76e7551",
+      "appliedAt": "2026-09-14T14:26:16.0286827"
+    },
+    {
+      "version": "20260914_020_c2_typed_deductions",
+      "scope": "payroll",
+      "checksum": "17209b2a44ec8e264edaa5520a5dad181fbf9056649fd962b70efbf0965fb723",
+      "appliedAt": "2026-09-14T14:26:16.4101993"
+    },
+    {
+      "version": "20260914_021_r2_step9_data_completion",
+      "scope": "payroll",
+      "checksum": "5a67bd6d59c7bfbaf8159dea3a983883507a1a62c2d1bf91f1fcb0451cb4150e",
+      "appliedAt": "2026-09-14T14:48:45.9007838"
+    },
+    {
+      "version": "20260914_022_b2_policy_seal_freeze",
+      "scope": "payroll",
+      "checksum": "adfb8a78509574264c76a5c639413a1a13b048a08ca1e9c62a19eb800b474504",
+      "appliedAt": "2026-09-14T15:18:02.0863604"
+    },
+    {
+      "version": "20260914_023_c2r_deduction_type_ownership",
+      "scope": "payroll",
+      "checksum": "fdbdf531215ee15301a2c7c1c8f30bb476d13a67e750d28cd701291b458f106a",
+      "appliedAt": "2026-09-14T15:18:02.4149971"
+    },
+    {
+      "version": "20260914_024_r2b_step9_placeholder_restore",
+      "scope": "payroll",
+      "checksum": "df84b7a5f32f06bcf8362b8575eb52ba986c52a485440791746d6d642ac97292",
+      "appliedAt": "2026-09-14T15:39:47.1514704"
+    },
+    {
+      "version": "20260914_025_b3_run_definition_unassigned",
+      "scope": "payroll",
+      "checksum": "1a4d079e1710dd7637b8652d66f828af29455a2e11828ea1bf8d0be4db9ef06f",
+      "appliedAt": "2026-09-14T15:54:26.4968105"
+    },
+    {
+      "version": "20260914_026_c4_bonuses",
+      "scope": "payroll",
+      "checksum": "e6b0385933f1f258e580d8443bf2eabda881a4643ace71a17d2c14cd098cbf7b",
+      "appliedAt": "2026-09-14T16:30:51.7608223"
+    },
+    {
+      "version": "20260914_027_b4_policy_snapshot_engine_tiers",
+      "scope": "payroll",
+      "checksum": "b6b2ac0bb45b49afd8d2a778634eca7818e1bae56d6936afc5fdbc02500380a3",
+      "appliedAt": "2026-09-14T20:38:00.8308741"
+    },
+    {
+      "version": "20260914_028_b4_legacy_lateness_tier_conversion",
+      "scope": "payroll",
+      "checksum": "bd9fd1e78ae824e1d6f39be8468d5f6bcc3c3e1ba849fab5ff9cc8ea691673f9",
+      "appliedAt": "2026-09-14T20:38:01.2177504"
+    },
+    {
+      "version": "20260915_029_b5_run_approval_payment_record",
+      "scope": "payroll",
+      "checksum": "ff968a02bb86a7fe778ac4a52dff8b30b71396b8c29d5ecfa88924fbf65a1818",
+      "appliedAt": "2026-09-14T23:42:11.4072948"
+    },
+    {
+      "version": "20260915_030_b5r_parity_test_runs_calculated_at_tz",
+      "scope": "payroll",
+      "checksum": "bbe71112ba116c433e81d4e406c5498bf79c5ddfc8d3394297d88278f8c20630",
+      "appliedAt": "2026-09-15T00:28:54.6319819"
+    },
+    {
+      "version": "20260915_031_c3_financial_exemptions",
+      "scope": "payroll",
+      "checksum": "ba5eaa5bb430861557b0766679ff474cc3328579bc127396d95c90c59131de24",
+      "appliedAt": "2026-09-15T01:45:04.7843865"
+    },
+    {
+      "version": "20260915_032_c8_payroll_reversal_supplementary",
+      "scope": "payroll",
+      "checksum": "e628d24bb5dd80ded95f702326e98bf790df2ea59afb470bad7cc5d3de0dd255",
+      "appliedAt": "2026-09-15T02:44:13.3223159"
+    },
+    {
+      "version": "20260915_033_payroll_policy_charge_rules",
+      "scope": "payroll",
+      "checksum": "cdaff9e316ceec69d45eee0c48eba3f6add7b6019bb09e7eaade8677b4310a6d",
+      "appliedAt": "2026-09-15T10:13:44.2404256"
+    },
+    {
+      "version": "20260916_034_lateness_tier_sets_into_policies",
+      "scope": "payroll",
+      "checksum": "5d7b42445c7b6b9b6fa50beb4b355155787c98970947a8ff6c5923ca2eb58717",
+      "appliedAt": "2026-09-15T23:56:24.9358170"
+    },
+    {
+      "version": "20260916_035_employee_salary_entitlement_start",
+      "scope": "payroll",
+      "checksum": "d3c6bbc19a598375b9c95021bf396fab3e137f32bca7c73dda5e9b977ae6d54b",
+      "appliedAt": "2026-09-15T23:56:25.2860063"
+    },
+    {
+      "version": "20260916_036_money_requests_and_loan_window",
+      "scope": "payroll",
+      "checksum": "d2a799fbd0f74b66c4b757518089d1c26d117b3d88f142a36424aa82d956691b",
+      "appliedAt": "2026-09-15T23:56:25.5498753"
+    },
+    {
+      "version": "20260916_038_exempt_unpaid_leave_default",
+      "scope": "payroll",
+      "checksum": "80575b0a052552825d6162c967691b6407737faaaee905211a3e5117d70213b5",
+      "appliedAt": "2026-09-16T00:25:46.1167374"
+    },
+    {
+      "version": "20260916_039_money_request_audience_and_exemption_threshold",
+      "scope": "payroll",
+      "checksum": "f07a6589d473fb412cf68c75595b338f88034569196e0da79df7d4328cebe4ef",
+      "appliedAt": "2026-09-16T01:36:26.3655744"
+    },
+    {
+      "version": "20260916_040_lateness_tier_sets_remaining_policies",
+      "scope": "payroll",
+      "checksum": "88e48a3b4753eb07fbda4d0ff3f8aa0cc20207ec59195630edf38414ec082954",
+      "appliedAt": "2026-09-16T01:36:26.5917590"
+    }
+  ],
+  "ledgerComplete": true,
+  "rowCounts": {
+    "before": {
+      "app_schema_migrations": 45,
+      "approval_chains": 68,
+      "approval_steps": 67,
+      "asset_types": 6,
+      "assets": 39,
+      "attendance_corrections": 9,
+      "attendance_days": 5872,
+      "attendance_exemption_events": 15,
+      "attendance_exemptions": 7,
+      "attendance_punches": 8630,
+      "attendance_rule_versions": 873,
+      "biometric_devices": 1,
+      "bonus_batches": 1,
+      "bonus_request_events": 27,
+      "bonus_requests": 8,
+      "bonus_types": 4,
+      "branches": 9,
+      "candidates": 0,
+      "clearance_items": 90,
+      "cost_centers": 2,
+      "custody_assignments": 42,
+      "deduction_batches": 7,
+      "deduction_request_events": 48,
+      "deduction_requests": 15,
+      "deduction_types": 5,
+      "departments": 4,
+      "doc_types": 12,
+      "employee_certifications": 4,
+      "employee_documents": 40,
+      "employee_education": 6,
+      "employee_experiences": 4,
+      "employee_languages": 5,
+      "employee_obligations": 24,
+      "employee_salary_history": 48,
+      "employee_salary_history_versions": 40,
+      "employee_skills": 5,
+      "employee_status_history": 429,
+      "employees": 208,
+      "grades": 3,
+      "hr_document_template_revisions": 2,
+      "hr_document_templates": 2,
+      "hr_issued_documents": 2,
+      "job_titles": 5,
+      "lateness_tiers": 3,
+      "leave_balance_adjustments": 0,
+      "leave_balances": 416,
+      "leave_types": 11,
+      "leaves": 78,
+      "letter_requests": 12,
+      "letter_template_bindings": 6,
+      "letter_template_revisions": 6,
+      "letter_templates": 6,
+      "loan_cap_policies": 4,
+      "loan_installment_allocations": 0,
+      "loan_installment_events": 0,
+      "loan_installments": 42,
+      "loan_recovery_balances": 0,
+      "loan_recovery_events": 0,
+      "loan_repayments": 0,
+      "loans": 11,
+      "notification_reads": 0,
+      "offboarding_cases": 18,
+      "onboarding_tasks": 169,
+      "onboarding_template_items": 8,
+      "overtime_day_claims": 4,
+      "overtime_entries": 53,
+      "overtime_entry_events": 25,
+      "overtime_periods": 3,
+      "payroll_financial_exemption_events": 23,
+      "payroll_financial_exemptions": 8,
+      "payroll_items": 572,
+      "payroll_lateness_tier_set_tiers": 10,
+      "payroll_lateness_tier_sets": 6,
+      "payroll_period_claims": 17,
+      "payroll_policies": 14,
+      "payroll_policy_components": 0,
+      "payroll_policy_events": 63,
+      "payroll_policy_parameters": 0,
+      "payroll_policy_tiers": 0,
+      "payroll_policy_version_seals": 16,
+      "payroll_policy_versions": 16,
+      "payroll_run_events": 171,
+      "payroll_run_members": 235,
+      "payroll_run_parity_explanations": 18,
+      "payroll_run_reversal_lines": 1,
+      "payroll_run_unassigned_acks": 3,
+      "payroll_runs": 65,
+      "payroll_tier_sets": 0,
+      "permission_types": 19,
+      "promotions": 3,
+      "public_holidays": 8,
+      "request_approvals": 324,
+      "request_attachments": 0,
+      "request_types": 67,
+      "requests": 366,
+      "requests_config": 122,
+      "roles": 6,
+      "schedule_day_overrides": 1413,
+      "schedule_exception_rules": 1,
+      "settlement_lines": 34,
+      "shifts": 32,
+      "stored_files": 63,
+      "teams": 5,
+      "transfers": 5,
+      "user_permission_overrides": 5,
+      "users": 86,
+      "weekly_schedule_entries": 103,
+      "work_schedules": 3
+    },
+    "after": {
+      "app_schema_migrations": 47,
+      "approval_chains": 68,
+      "approval_steps": 67,
+      "asset_types": 6,
+      "assets": 39,
+      "attendance_corrections": 9,
+      "attendance_days": 5872,
+      "attendance_exemption_events": 15,
+      "attendance_exemptions": 7,
+      "attendance_punches": 8630,
+      "attendance_rule_versions": 873,
+      "biometric_devices": 1,
+      "bonus_batches": 1,
+      "bonus_request_events": 27,
+      "bonus_requests": 8,
+      "bonus_types": 4,
+      "branches": 9,
+      "candidates": 0,
+      "clearance_items": 90,
+      "cost_centers": 2,
+      "custody_assignments": 42,
+      "deduction_batches": 7,
+      "deduction_request_events": 48,
+      "deduction_requests": 15,
+      "deduction_types": 5,
+      "departments": 4,
+      "doc_types": 12,
+      "employee_certifications": 4,
+      "employee_documents": 40,
+      "employee_education": 6,
+      "employee_experiences": 4,
+      "employee_languages": 5,
+      "employee_obligations": 24,
+      "employee_salary_history": 48,
+      "employee_salary_history_versions": 40,
+      "employee_skills": 5,
+      "employee_status_history": 429,
+      "employees": 208,
+      "grades": 3,
+      "hr_document_template_revisions": 2,
+      "hr_document_templates": 2,
+      "hr_issued_documents": 2,
+      "job_titles": 5,
+      "lateness_tiers": 3,
+      "leave_balance_adjustments": 0,
+      "leave_balances": 416,
+      "leave_types": 11,
+      "leaves": 78,
+      "letter_requests": 12,
+      "letter_template_bindings": 6,
+      "letter_template_revisions": 6,
+      "letter_templates": 6,
+      "loan_cap_policies": 4,
+      "loan_installment_allocations": 0,
+      "loan_installment_events": 0,
+      "loan_installments": 42,
+      "loan_recovery_balances": 0,
+      "loan_recovery_events": 0,
+      "loan_repayments": 0,
+      "loans": 11,
+      "notification_reads": 0,
+      "offboarding_cases": 18,
+      "onboarding_tasks": 169,
+      "onboarding_template_items": 8,
+      "overtime_day_claims": 4,
+      "overtime_entries": 53,
+      "overtime_entry_events": 25,
+      "overtime_periods": 3,
+      "payroll_financial_exemption_events": 23,
+      "payroll_financial_exemptions": 8,
+      "payroll_items": 572,
+      "payroll_lateness_tier_set_tiers": 10,
+      "payroll_lateness_tier_sets": 6,
+      "payroll_period_claims": 17,
+      "payroll_policies": 14,
+      "payroll_policy_components": 0,
+      "payroll_policy_events": 63,
+      "payroll_policy_parameters": 0,
+      "payroll_policy_tiers": 0,
+      "payroll_policy_version_seals": 16,
+      "payroll_policy_versions": 16,
+      "payroll_run_events": 171,
+      "payroll_run_members": 235,
+      "payroll_run_parity_explanations": 18,
+      "payroll_run_reversal_lines": 1,
+      "payroll_run_unassigned_acks": 3,
+      "payroll_runs": 65,
+      "payroll_tier_sets": 0,
+      "permission_types": 19,
+      "promotions": 3,
+      "public_holidays": 8,
+      "request_approvals": 324,
+      "request_attachments": 0,
+      "request_types": 67,
+      "requests": 366,
+      "requests_config": 122,
+      "roles": 6,
+      "schedule_day_overrides": 1413,
+      "schedule_exception_rules": 1,
+      "settlement_lines": 34,
+      "shifts": 32,
+      "stored_files": 63,
+      "teams": 5,
+      "transfers": 5,
+      "user_permission_overrides": 5,
+      "users": 86,
+      "weekly_schedule_entries": 103,
+      "work_schedules": 3
+    },
+    "differences": [
+      {
+        "table": "app_schema_migrations",
+        "before": 45,
+        "after": 47,
+        "kind": "row-count-changed"
+      }
+    ]
+  },
+  "columns": {
+    "added": [],
+    "removedOrRenamed": []
+  },
+  "schemaDiffCount": 0,
+  "schemaDiff": [],
+  "finishedAt": "2026-09-16T01:36:27.502Z",
+  "ok": true
+}

@@ -1,4 +1,4 @@
-// ملخّص حمولة الطلب للمعتمد — مشترك بين صندوق الموافقات وويدجت «طلبات في الانتظار».
+// ملخّص حمولة الطلب للمعتمد — مشترك بين صندوق الموافقات و«طلباتي» وويدجت «طلبات في الانتظار».
 // كل مفاتيح الحمولة تُعرض للمعتمد — المفتاح المخفي كان يمرّ تغييره بلا علمه (SEC-REQ-2)
 
 const fieldLabels: Record<string, string> = {
@@ -6,13 +6,16 @@ const fieldLabels: Record<string, string> = {
   fromDate: 'من تاريخ',
   toDate: 'إلى تاريخ',
   effectiveDate: 'تاريخ السريان',
+  effectivePayrollPeriod: 'يسري من راتب شهر',
   from: 'من الساعة',
   to: 'إلى الساعة',
   days: 'عدد الأيام',
+  daysByYear: 'الأيام على السنوات',
   hours: 'عدد الساعات',
   previewFingerprint: 'معاينة الحضور',
   amount: 'المبلغ',
   months: 'عدد الأشهر',
+  firstInstallmentPeriod: 'شهر أول قسط',
   newSalary: 'الراتب الجديد',
   increase_pct: 'نسبة الزيادة %',
   reason: 'السبب',
@@ -31,6 +34,8 @@ const fieldLabels: Record<string, string> = {
   courseName: 'اسم الدورة',
   note: 'ملاحظة',
   permissionType: 'نوع الإذن',
+  permissionTypeId: 'نوع الإذن',
+  autoDetected: 'مصدر الطلب',
   period: 'نطاق اليوم',
   assetIds: 'الأصول المطلوبة',
   lastWorkingDate: 'آخر يوم عمل',
@@ -49,6 +54,8 @@ const fieldLabels: Record<string, string> = {
   assignmentId: 'العهدة',
   leaveId: 'رقم الإجازة',
   loanId: 'رقم السلفة',
+  installmentId: 'رقم القسط',
+  toPeriod: 'يؤجَّل إلى شهر',
   withEmployeeId: 'الموظف البديل',
   employeeId: 'الموظف',
   punchType: 'نوع البصمة',
@@ -64,17 +71,44 @@ const periodLabels: Record<string, string> = {
   EVENING: 'النصف المسائي',
 }
 
+// أكواد أنواع الإجازة → عربي — الكود لا يظهر للمستخدم في أي شاشة
+export const leaveTypeCodeLabels: Record<string, string> = {
+  ANNUAL: 'سنوية',
+  SICK: 'مرضية',
+  CASUAL: 'عارضة',
+  UNPAID: 'بدون راتب',
+  MATERNITY: 'وضع',
+  PATERNITY: 'أبوة',
+  HAJJ: 'حج',
+  MARRIAGE: 'زواج',
+  BEREAVEMENT: 'وفاة/عدة',
+  EXAM: 'امتحانات',
+  COMPENSATORY: 'تعويضية',
+}
+
+// عدد الأصول بصيغة عربية — بدل سرد معرّفاتها الخام
+const assetCountLabel = (n: number): string =>
+  n === 1 ? 'أصل واحد' : n === 2 ? 'أصلان' : n <= 10 ? `${n} أصول` : `${n} أصلاً`
+
 // قيم مقروءة — الأكواد لا تظهر للمستخدم أبداً
 export const payloadValueLabel = (k: string, v: unknown): string => {
   if (k === 'previewFingerprint' && typeof v === 'string' && /^[a-f0-9]{64}$/.test(v)) return 'تمت معاينة سجل اليوم قبل التقديم'
   if (k === 'period') return periodLabels[String(v)] ?? String(v)
+  if (k === 'leaveType' || k === 'leaveTypeCode') return leaveTypeCodeLabels[String(v)] ?? String(v)
+  if (k === 'autoDetected') return v ? 'اكتشفه محرك الحضور' : 'قدّمه الموظف'
   if (k === 'maritalStatus' && v) return ({ single: 'أعزب', married: 'متزوج', divorced: 'مطلق', widowed: 'أرمل' } as Record<string, string>)[String(v)] ?? String(v)
   if (k === 'contractType' && v) return ({ fixed_term: 'محدد المدة', indefinite: 'غير محدد المدة', part_time: 'دوام جزئي', temporary: 'مؤقت' } as Record<string, string>)[String(v)] ?? String(v)
+  if (k === 'assetIds' && Array.isArray(v)) return assetCountLabel(v.length)
   if (Array.isArray(v)) return v.map((item) => payloadValueLabel(k, item)).join('، ') || '(قائمة فارغة)'
   if (v === null || v === '') return '(فارغ)'
   if (typeof v === 'boolean') return v ? 'نعم' : 'لا'
   if (typeof v === 'string' && v.startsWith('file:')) return 'مرفق'
-  if (typeof v === 'object') return JSON.stringify(v)
+  // كائن داخل الحمولة (أيام الإجازة على السنوات مثلاً) يُقرأ «مفتاح: قيمة» —
+  // لا JSON ولا String(v) الذي كان يطبع [object Object]
+  if (typeof v === 'object') {
+    const rows = Object.entries(v as Record<string, unknown>).map(([child, item]) => `${labelOf(child)}: ${payloadValueLabel(child, item)}`)
+    return rows.length ? rows.join('، ') : '(فارغ)'
+  }
   return String(v)
 }
 

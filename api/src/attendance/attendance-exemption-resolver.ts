@@ -21,9 +21,10 @@ export interface AttendanceExemptionDayPolicy {
   unpaidLeaveSource: 'DEFAULT' | 'OVERRIDE' | 'NOT_EXEMPT'
 }
 
+// أ7 (قرار المالك 16 سبتمبر): المستثنى من البصمة بلا خصومات إطلاقًا وبلا إضافي.
 export const DEFAULT_ATTENDANCE_EXEMPTION_POLICY: Readonly<AttendanceExemptionDefaults> = Object.freeze({
   overtimeEligible: false,
-  unpaidLeaveDeductible: true,
+  unpaidLeaveDeductible: false,
 })
 
 function dateOnly(date: string): string {

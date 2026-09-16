@@ -180,6 +180,8 @@ export interface ApiEmployee {
   birthPlace?: string; passportNo?: string; passportExpiry?: string
   phoneAlt?: string; country?: string; postalCode?: string
   emergencyRelation?: string; emergencyPhoneAlt?: string
+  // بداية استحقاق الراتب — الفارغ = من تاريخ بدء العمل الفعلي وإلا تاريخ التعيين
+  salaryEntitlementStart?: string
   actualStartDate?: string; workType?: string; probationEndDate?: string
   recruitmentSource?: string; gradeId?: number; workLocation?: string
   currency?: string; salaryCycle?: string; bankBranch?: string
@@ -242,7 +244,7 @@ export interface ApiOvertimeRequestDetail {
     review: { approvedMinutes: number; reductionReason?: string; actorUserId?: number } | null;
     approval: { approvedMinutes: number; hourlyRate: number; multiplier: number; amount: number; dayKind: string; approvedAt: string; approverId: number } | null;
   } | null
-  events: { id: number; eventType: string; actorUserId: number | null; stepOrder: number | null;
+  events: { id: number; eventType: string; actorUserId: number | null; actorName?: string | null; stepOrder: number | null;
     reason: string | null; createdAt: string; beforeMinutes: number | null; approvedMinutes: number | null }[]
 }
 export interface ApiApproval {
@@ -270,7 +272,10 @@ export interface ApiAttendanceDay {
   provenance?: 'LEGACY_STORED'
   attendanceRuleSnapshot?: { flexEnabled: boolean; flexWindowMinutes: number | null; requiredWorkMinutes: number
     effectiveRequiredWorkMinutes: number; expectedEndMinute: number | null; employeeOverrideMode: string
-    sourceVersion?: number | null; employeeVersion?: number | null; shortfallToleranceMinutes: number } | null
+    sourceVersion?: number | null; employeeVersion?: number | null; shortfallToleranceMinutes: number
+    // نافذة المرونة تغني عن السماحية — false يعني أن السماحية تُطبَّق على اليوم المرن
+    // أيضاً (attendance.flex.window_supersedes_grace). غيابها في صف قديم = true
+    windowSupersedesGrace?: boolean } | null
   // دقائق معذورة بإذن معتمد — لا تُخصم
   excusedMinutes: number
   // دقائق إذن «بخصم» — تدخل خصم المسير
@@ -303,7 +308,7 @@ export interface ApiAttendanceExemption {
 export const fetchMyAttendanceExemptions = () => get<ApiAttendanceExemption[]>('/attendance-exemptions/mine')
 export const fetchEmployeeAttendanceExemptions = (employeeId: number) => get<ApiAttendanceExemption[]>(`/attendance-exemptions/employee/${employeeId}`)
 export const createAttendanceExemption = (body: Pick<ApiAttendanceExemption, 'employeeId' | 'effectiveFrom' | 'reasonCode' | 'reason'> &
-  Partial<Pick<ApiAttendanceExemption, 'effectiveTo' | 'overtimeEligibleOverride' | 'unpaidLeaveDeductibleOverride' | 'requiresCheckinForPresence'>>) => post<ApiAttendanceExemption>('/attendance-exemptions', body)
+  Partial<Pick<ApiAttendanceExemption, 'effectiveTo' | 'requiresCheckinForPresence'>>) => post<ApiAttendanceExemption>('/attendance-exemptions', body)
 export const approveAttendanceExemption = (id: number, reason: string, executive = false) =>
   post<ApiAttendanceExemption>(`/attendance-exemptions/${id}/${executive ? 'approve-executive' : 'approve'}`, { reason })
 export const cancelAttendanceExemption = (id: number, reason: string) => post<ApiAttendanceExemption>(`/attendance-exemptions/${id}/cancel`, { reason })

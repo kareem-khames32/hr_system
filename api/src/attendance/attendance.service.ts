@@ -3142,6 +3142,12 @@ export class AttendanceService {
     const [yy, mm] = month.split('-').map(Number)
     if (mm < 1 || mm > 12) throw new BadRequestException('صيغة الشهر YYYY-MM')
     const lastDay = String(new Date(yy, mm, 0).getDate()).padStart(2, '0')
+    // غياب أقدم من نافذة اللحاق الليلية لا يجسّده أحد، فيظهر الشهر «بلا غياب» حتى
+    // يُحسب المسير — يُجسَّد هنا لهذا الموظف وحده (أفضل جهد) لمن يملك إدارة الحضور
+    // وحده: عرض الكشف لا يكتب صفوفاً تدخل حساب الراتب بيد من لا يملك الصلاحية
+    if (userHasPerm(user, 'attendance.manage')) {
+      await this.catchUpEmployeeAbsences(employeeId, `${month}-01`, `${month}-${lastDay}`)
+    }
     const monthRows = await this.withDerivedSource(
       await this.projectExemptionDays(await this.days.find({
         where: {
@@ -3189,6 +3195,52 @@ export class AttendanceService {
         shortfallDays: monthRows.filter(row => Number(row.shortfallMinutes) > 0).length,
         attendanceReviewDays: monthRows.filter(row => row.attendanceReviewRequired).length,
       },
+    }
+  }
+
+  private addDays(ymd: string, days: number) {
+    const date = new Date(`${ymd}T12:00:00`)
+    date.setDate(date.getDate() + days)
+    return localDateOf(date)
+  }
+
+  // تجسيد غياب موظف واحد لمدى أقدم من نافذة اللحاق الليلية
+  // (attendance.absence_catchup_max_days) — ما يقع داخل النافذة تتكفل به المهمة
+  // الليلية فلا يُكرَّر هنا. الأيام التي لها صف محفوظ لا تُلمس: العرض يملأ الفجوات
+  // وحدها، فالشهر المكتمل لا يُعاد حسابه يوماً يوماً في كل فتح (كان فتح شهر قديم
+  // يكلّف ثوانيَ طويلة في كل مرة). idempotent، ومحدود بتاريخ التعيين وبأمس داخل
+  // materializeAbsences نفسها. فشله لا يُسقط شاشة الكشف.
+  private async catchUpEmployeeAbsences(employeeId: number, from: string, to: string): Promise<number> {
+    try {
+      const yesterday = this.addDays(localDateOf(new Date()), -1)
+      if (from > yesterday) return 0
+      const maxRaw = Number(await this.configValue('attendance.absence_catchup_max_days', '31'))
+      const maxDays = Number.isFinite(maxRaw) && maxRaw >= 1 ? Math.min(MAX_RANGE_DAYS, Math.floor(maxRaw)) : 31
+      if (from >= this.addDays(yesterday, -(maxDays - 1))) return 0
+      const end = to > yesterday ? yesterday : to
+      const stored = new Set(
+        (await this.days.find({ where: { employeeId, date: Between(from, end) } as any, select: { date: true } }))
+          .map(row => String(row.date).slice(0, 10))
+      )
+      let created = 0
+      let gapFrom: string | null = null
+      for (let date = from, i = 0; date <= end && i <= MAX_RANGE_DAYS; date = this.addDays(date, 1), i++) {
+        if (!stored.has(date)) {
+          gapFrom = gapFrom ?? date
+          continue
+        }
+        if (gapFrom) {
+          created += await this.materializeAbsences(employeeId, gapFrom, this.addDays(date, -1))
+          gapFrom = null
+        }
+      }
+      if (gapFrom) created += await this.materializeAbsences(employeeId, gapFrom, end)
+      return created
+    } catch (e) {
+      this.logger.warn(
+        `تعذر تجسيد غياب الموظف ${employeeId} (${from} → ${to}): ${(e as Error).message}`
+      )
+      return 0
     }
   }
 

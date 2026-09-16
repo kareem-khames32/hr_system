@@ -103,11 +103,28 @@ export class ApproverResolver {
     }
   }
 
+  // من يدفع الشغل الواقف: الموارد البشرية (دور hr_manager أو صلاحية approve.hr).
+  // قرار المالك C1 — وهو حقّ تصرّف في شغل الآخرين وحده: لا يعتمد به أحد طلب
+  // نفسه، ولا يفتح محتوى نوع سرّي، ولا يملأ الصندوق بكل طلبات الشركة. لذلك
+  // لا يُفعَّل إلا حين يطلبه النداء صراحة (hrUnblock: true)
+  hasHrOverride(user: JwtPayload): boolean {
+    const granted = user.permissions ?? []
+    return (
+      user.role === 'hr_manager' ||
+      granted.includes('*') ||
+      granted.includes('approve.hr') ||
+      granted.includes('hr') // توافق قديم
+    )
+  }
+
   // هل المستخدم الحالي يحق له التصرف في هذه الخطوة؟
   // الدور الأساسي أو صلاحية إضافية ممنوحة من شاشة المستخدمين
-  satisfies(user: JwtPayload, step: ResolvedStep): boolean {
+  // hrUnblock: true = يُسمح بمخرج الموارد البشرية في هذا النداء (خطوة واقفة،
+  // وطلب ليس لصاحب الفعل) — والافتراضي بلا مخرج
+  satisfies(user: JwtPayload, step: ResolvedStep, options: { hrUnblock?: boolean } = {}): boolean {
     // super_admin يتصرف في أي خطوة — يفكّ أي انسداد
     if (user.role === 'super_admin') return true
+    if (options.hrUnblock === true && this.hasHrOverride(user)) return true
     const granted = user.permissions ?? []
 
     switch (step.role) {

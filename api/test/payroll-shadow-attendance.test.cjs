@@ -90,12 +90,12 @@ test('SHADOW: ليلة 12 (20:10 ← 00:30) تُحسب بمحرك السياسة
   assert.equal(d12.date, D12); assert.equal(d12.overnight, true); assert.deepEqual(d12.punchIds, [101, 102])
   assert.equal(new Date(d12.lastOut).getTime(), new Date(`${D13}T00:30:00`).getTime(), 'انصراف صباح 13 داخل يوم 12')
   assert.equal(d12.inputs.rawLateSeconds, '600'); assert.equal(d12.inputs.shortfallMinutes, 40)
-  // 9000/30 = 300 لليوم؛ 0.625 للدقيقة: تأخير 10 = 6.25؛ نقص 40 صافيًا من التأخير 30 > سماح 10 = 18.75
-  assert.deepEqual(d12.policy, { lateness: '6.250000', shortfall: '18.750000', absence: '0.000000', total: '25.000000' })
+  // 9000/30 = 300 لليوم؛ 0.625 للدقيقة: تأخير 10 = 6.25؛ أ4: النقص 40 كاملًا (بلا طرح تداخل) > سماح 10 = 25.00
+  assert.deepEqual(d12.policy, { lateness: '6.250000', shortfall: '25.000000', absence: '0.000000', total: '31.250000' })
   assert.deepEqual(d12.legacy, d12.policy); assert.equal(d12.matches, true)
   assert.equal(d13.date, D13); assert.equal(d13.overnight, true); assert.deepEqual(d13.punchIds, [103, 104])
   assert.deepEqual(d13.policy, { lateness: '0.000000', shortfall: '0.000000', absence: '0.000000', total: '0.000000' }, 'يوم 13 لا يرث شيئًا من ليلة 12')
-  assert.deepEqual(result.totals.policy, { lateness: '6.25', shortfall: '18.75', absence: '0.00', total: '25.00' })
+  assert.deepEqual(result.totals.policy, { lateness: '6.25', shortfall: '25.00', absence: '0.00', total: '31.25' })
   assert.deepEqual(result.totals.legacy, result.totals.policy)
   assert.deepEqual(result.sources.attendance, { state: 'AVAILABLE', issueCodes: [] })
   assert.doesNotMatch(JSON.stringify(result), /computedAt/, 'نتيجة الظل ثابتة بين إعادات الحساب المتطابقة')
@@ -123,11 +123,12 @@ test('SHADOW: السياسة الافتراضية تعريف صالح لمحرك
   }
 })
 
-test('SHADOW: شرائح كسر اليوم والسقف اليومي (التأخير أولًا ثم النقص من المتبقي) تطابق المسير القديم', () => {
+test('SHADOW: شرائح كسر اليوم تطابق المسير القديم، وأ4 أسقطت السقف اليومي فيُخصم كسر اليوم كاملًا', () => {
   for (const latenessTiers of [[{ fromMinutes: 1, toMinutes: null, mode: 'FRACTION', value: '0.250' }], [{ fromMinutes: 1, toMinutes: null, mode: 'FRACTION', value: '1.500' }]]) {
     const r = rules({ latenessTiers }), result = compute(night(), r)
     assert.equal(result.status, 'MATCHED', JSON.stringify(result.differences))
-    const expected = latenessTiers[0].value === '0.250' ? { lateness: '75.000000', shortfall: '18.750000' } : { lateness: '300.000000', shortfall: '0.000000' }
+    // أ4: لا سقف يوم واحد — 1.5 يوم تأخير تُخصم 450 كاملة، والنقص يبقى 25 مستقلًا عنها
+    const expected = latenessTiers[0].value === '0.250' ? { lateness: '75.000000', shortfall: '25.000000' } : { lateness: '450.000000', shortfall: '25.000000' }
     assert.equal(result.days[0].policy.lateness, expected.lateness); assert.equal(result.days[0].policy.shortfall, expected.shortfall)
   }
   for (const extra of [{ shortfallMode: 'MULTIPLIER', shortfallValue: 1.5 }, { shortfallMode: 'FRACTION', shortfallValue: 0.5 }, { overlapPolicy: 'CUMULATIVE' },
@@ -164,8 +165,9 @@ test('SHADOW: ليلة لم تُقفل بعد تجعل التكافؤ جزئيً
   assert.equal(partial.days.find(d => d.date === D12)?.policy.lateness, '6.250000', 'ليلة 12 المقفلة تبقى محسوبة ليوم البداية')
   const unavailable = compute(night({ employmentState: 'UNSUPPORTED' }))
   assert.equal(unavailable.status, 'UNAVAILABLE'); assert.equal(unavailable.totals.policy, null)
-  const unsupported = compute(night(), rules({ overlapPolicy: 'MAX_OF_BOTH' }))
-  assert.equal(unsupported.status, 'UNSUPPORTED_POLICY'); assert.equal(unsupported.policyIssue.code, 'SHADOW_OVERLAP_POLICY_UNSUPPORTED')
+  // أ4 أسقطت ترتيب التداخل، فلم تعد سياسته تمنع الظل؛ الإعداد غير المدعوم الباقي هو طريقة خصم النقص
+  const unsupported = compute(night(), rules({ shortfallMode: 'UNKNOWN_MODE' }))
+  assert.equal(unsupported.status, 'UNSUPPORTED_POLICY'); assert.equal(unsupported.policyIssue.code, 'SHADOW_SHORTFALL_MODE_UNSUPPORTED')
 })
 
 test('SHADOW: فشل قراءة المصادر يُسجل ERROR ولا يرمي، فلا يوقف المسير القديم', async () => {

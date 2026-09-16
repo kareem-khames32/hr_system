@@ -90,7 +90,7 @@ export function PayrollUnassignedPanel({ runId, snapshotVersion, runStatus, bran
           </table>
         </div> : <p className="rounded-xl bg-success-50 p-3 text-sm text-success-700">لا يوجد موظف على رأس العمل خارج مسيرات هذه الفترة.</p>}
         {ack?.current ? <p className="rounded-xl bg-success-50 p-3 text-sm text-success-700">
-          تم الإقرار بهذه النسخة من التقرير (إقرار #{ack.current.id} بواسطة المستخدم #{ack.current.acknowledgedBy} في {String(ack.current.acknowledgedAt).slice(0, 16).replace('T', ' ')}){ack.current.note ? ` — ${ack.current.note}` : ''}.
+          أقرّ {ack.current.acknowledgedByName || 'أحد المستخدمين'} بالاطلاع على هذه النسخة من التقرير في {String(ack.current.acknowledgedAt).slice(0, 16).replace('T', ' ')}{ack.current.note ? ` — ${ack.current.note}` : ''}.
         </p> : <div className="space-y-2">
           <p className={`rounded-xl p-3 text-sm ${ack?.stale ? 'bg-red-50 text-red-700' : 'bg-amber-50 text-amber-900'}`}>
             {runStatus === 'DRAFT' ? 'احسب المسودة أولًا؛ الإقرار يخص نسخة حساب محددة.'

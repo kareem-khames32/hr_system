@@ -6,7 +6,7 @@ import { can, type ApiPayrollItem } from '@/lib/api'
 import { fetchPayslipObligations, formatDeductionMoney, type PayrollObligationDetail } from '@/lib/deductions-api'
 
 // تتبع «الخصومات الأخرى» سطرًا سطرًا (قرار المالك: الخصم يُتتبع في الطلب والمسير والقسيمة):
-// لكل بند محفوظ مع المسير نوعه وسببه وطلبه وسعر اليوم/الساعة المستخدم، والمحصل والمرحّل بعد حماية الصافي.
+// لكل بند محفوظ مع المسير نوعه وسببه وطلبه وسعر اليوم/الساعة المستخدم، والمخصوم هذا الشهر والمتبقي للشهر التالي.
 type Line = { id: number; type: 'DEBIT' | 'CREDIT'; amount: number; collected: number; carried: number; typed: boolean }
 
 function savedLines(item: ApiPayrollItem): { lines: Line[] } | null {
@@ -33,17 +33,19 @@ export function PayrollObligationBreakdown({ item, currency, details, compact = 
       <div className="overflow-x-auto">
         <table className="w-full text-sm text-right">
           <thead><tr className="bg-gray-50 text-gray-600">
-            <th className="p-2">البند</th><th className="p-2">النوع والسبب</th><th className="p-2">الحساب</th>
-            <th className="p-2">المستحق</th><th className="p-2">المحصل</th><th className="p-2">المرحّل</th>
+            <th className="p-2">البند</th><th className="p-2">السبب</th><th className="p-2">طريقة الحساب</th>
+            <th className="p-2">المبلغ</th><th className="p-2">خُصم هذا الشهر</th><th className="p-2">يُخصم الشهر القادم</th>
           </tr></thead>
           <tbody>
             {rows.map(row => (
               <tr key={row.obligationId} className="border-t border-gray-100 align-top">
-                <td className="p-2 whitespace-nowrap">{row.type === 'CREDIT' ? 'إضافة' : 'خصم'}<p className="text-xs text-gray-500">{row.categoryLabel}</p>
-                  {row.carriedFromObligationId ? <p className="text-xs text-gray-400">مرحّل من شهر سابق</p> : null}</td>
+                <td className="p-2 whitespace-nowrap">{row.type === 'CREDIT' ? 'إضافة' : 'خصم'}
+                  {/* اسم البند يكفي؛ لا نكرر التصنيف فوقه (كان يظهر «خصم / خصم مصنف / خصم إداري») */}
+                  {!row.deduction && !row.bonus ? <p className="text-xs text-gray-500">{row.categoryLabel}</p> : null}
+                  {row.carriedFromObligationId ? <p className="text-xs text-gray-400">متبقٍ من شهر سابق</p> : null}</td>
                 <td className="p-2">
                   {row.deduction ? <>
-                    <p className="font-medium text-gray-800">{row.deduction.reversal ? 'عكس ' : ''}{row.deduction.typeName ?? 'خصم مصنف'}
+                    <p className="font-medium text-gray-800">{row.deduction.reversal ? 'عكس ' : ''}{row.deduction.typeName ?? 'خصم'}
                       {row.deduction.installmentNo ? <span className="text-xs text-gray-500"> (قسط {row.deduction.installmentNo}/{row.deduction.installments})</span> : null}</p>
                     <p className="text-xs text-gray-600 whitespace-pre-wrap">{row.deduction.reason}</p>
                     <Link href={requestLink(row.deduction.requestId)} className="text-xs text-primary-700 underline">طلب الخصم</Link>
@@ -66,7 +68,7 @@ export function PayrollObligationBreakdown({ item, currency, details, compact = 
         </table>
       </div>
     )}
-    <p className="text-xs text-gray-500 mt-2">الخصومات والإضافات تُحجز عند اعتماد المسير وتُستهلك عند الصرف؛ المرحّل ينتقل للمسير التالي عند الصرف.</p>
+    <p className="text-xs text-gray-500 mt-2">تظهر هذه البنود في المسير بعد اعتماده، وما لم يُخصم منها هذا الشهر يُخصم في الشهر التالي.</p>
   </>
   if (compact) {
     return (

@@ -62,7 +62,8 @@ export class PayrollRulesService {
     return { effectivePeriod, tiers, gaps, examples, contentHash: payrollLatenessTierSetHash(effectivePeriod, tiers) }
   }
 
-  /** حفظ مجموعة جديدة؛ المجموعة المفعّلة لنفس شهر السريان تُوقف بسبب واضح (المحتوى لا يُعدّل في مكانه). */
+  /** حفظ مجموعة جديدة؛ المحتوى لا يُعدّل في مكانه، ومجموعة مطابقة مفعّلة تُعاد كما هي بدل نسخة زائدة.
+   *  أ1: المجموعة صارت ملك المعادلة التي تشير إليها، فحفظ شرائح معادلة لا يوقف مجموعة معادلة أخرى. */
   async createTierSet(user: JwtPayload, dto: { effectivePeriod?: unknown; tiers?: unknown; reason?: unknown }) {
     this.assertManage(user)
     const preview = this.previewTierSet(dto)
@@ -70,18 +71,14 @@ export class PayrollRulesService {
     const savedId = await this.tierSets.manager.transaction(async em => {
       const lock = await em.query(`DECLARE @result int; EXEC @result = sys.sp_getapplock @Resource = 'hr:payroll:lateness-tier-sets', @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000; SELECT @result AS lockResult;`)
       if (!lock.length || Number(lock[0].lockResult) < 0) throw new ConflictException('مجموعات الشرائح قيد التحديث؛ حاول مجددًا')
-      const sameMonth = await em.getRepository(PayrollLatenessTierSet).find({ where: { effectivePeriod: preview.effectivePeriod, isActive: true } })
-      if (sameMonth.some(set => set.contentHash === preview.contentHash)) {
-        throw new ConflictException({ code: 'LATE-TIERS-UNCHANGED', message: `مجموعة مطابقة مفعّلة بالفعل لشهر ${preview.effectivePeriod}؛ لا حاجة لنسخة جديدة` })
-      }
+      // مجموعة مفعّلة بنفس الشهر والمحتوى: تُعاد بعينها (تشترك فيها معادلات كثيرة)، فلا نسخة زائدة ولا رسالة خطأ.
+      const identical = await em.getRepository(PayrollLatenessTierSet).findOne({
+        where: { effectivePeriod: preview.effectivePeriod, contentHash: preview.contentHash, isActive: true }, order: { id: 'ASC' } })
+      if (identical) return identical.id
       const saved = await em.getRepository(PayrollLatenessTierSet).save(em.getRepository(PayrollLatenessTierSet).create({ effectivePeriod: preview.effectivePeriod,
-        contentHash: preview.contentHash, source: 'EDITOR', reason, isActive: true, createdBy: user.sub, supersedesSetId: sameMonth[0]?.id ?? null }))
+        contentHash: preview.contentHash, source: 'EDITOR', reason, isActive: true, createdBy: user.sub, supersedesSetId: null }))
       await em.getRepository(PayrollLatenessTierSetTier).save(preview.tiers.map(tier => ({ setId: saved.id, sequence: tier.sequence, fromMinutes: tier.fromMinutes,
         toMinutes: tier.toMinutes, mode: tier.mode, value: tier.value, label: tier.label })))
-      for (const old of sameMonth) {
-        await em.getRepository(PayrollLatenessTierSet).update({ id: old.id, isActive: true }, { isActive: false, deactivatedBy: user.sub, deactivatedAt: new Date(),
-          deactivationReason: `استُبدلت بالمجموعة #${saved.id}: ${reason}`.slice(0, 500) })
-      }
       // تحقق بعد الكتابة: المحتوى المقروء يطابق البصمة المحفوظة.
       await readPayrollLatenessTierSetById(em, saved.id)
       return saved.id

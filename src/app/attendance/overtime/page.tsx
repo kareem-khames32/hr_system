@@ -23,7 +23,7 @@ import {
   type ApiOvertimeEntry,
   type ApiDepartment,
 } from '@/lib/api'
-import { localMonth } from '@/lib/dates'
+import { localMonth, localToday } from '@/lib/dates'
 import { statusLabels as requestStatusLabels, type RequestStatus } from '@/data/requestsCatalog'
 
 // ============================================================
@@ -59,6 +59,29 @@ interface OvertimeEntry {
   amountSnapshot: number | null
   dayKind: 'WEEKDAY' | 'WEEKEND' | 'HOLIDAY' | null
   explicitHours: boolean
+  // لماذا لم يصل «المكتشف» إلى دورة الاعتماد (نافذة مقفولة، أو يوم أقدم من حد الأثر الرجعي)
+  windowOpen: boolean | null
+  windowReason: string | null
+  backdateDays: number | null
+  blockers: string[]
+}
+
+// عمر اليوم بالأيام حتى اليوم المحلي — نفس حساب الخادم لحد الأثر الرجعي
+const dayAge = (date: string) =>
+  Math.round((Date.parse(`${localToday()}T00:00:00Z`) - Date.parse(`${date}T00:00:00Z`)) / 86400000)
+
+// سبب بقاء السطر «مكتشفًا» بلا طلب اعتماد — يُعرض بدل الصمت
+const routingBlock = (entry: OvertimeEntry): string | null => {
+  if (entry.status !== 'DETECTED' || entry.requestId != null) return null
+  if (entry.windowOpen === false) {
+    return `نافذة الإضافي مقفولة على هذا اليوم${entry.windowReason ? ` — ${entry.windowReason}` : ''}`
+  }
+  const age = dayAge(entry.date)
+  if (entry.backdateDays != null && Number.isFinite(age) && age > entry.backdateDays) {
+    return `مضى على اليوم ${age} يومًا وحد الأثر الرجعي ${entry.backdateDays} يومًا — لم يعد يُقبل في دورة الاعتماد`
+  }
+  if (entry.blockers.length) return entry.blockers.join('؛ ')
+  return null
 }
 
 const sourceLabels: Record<OvertimeSource, string> = {
@@ -140,6 +163,10 @@ export default function OvertimePage() {
       amountSnapshot: o.amountSnapshot != null ? Number(o.amountSnapshot) : null,
       dayKind: o.evidence?.dayKind ?? null,
       explicitHours: o.evidence?.evidenceMode === 'EXEMPT_APPROVAL',
+      windowOpen: o.evidence?.window?.open ?? null,
+      windowReason: o.evidence?.window?.reason ?? null,
+      backdateDays: o.evidence?.policy?.backdateDays ?? null,
+      blockers: (o.evidence?.blockers ?? []).map((blocker) => blocker.message),
     }))
   }, [rows, departments])
 
@@ -193,7 +220,7 @@ export default function OvertimePage() {
         {/* عنوان الشاشة */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">سجل العمل الإضافي</h1>
+            <h1 className="text-2xl font-bold text-gray-800">العمل الإضافي</h1>
             <p className="text-gray-500 mt-1">
               راجع دليل الساعات وتابع الطلب المرتبط حتى اكتمال اعتماده
             </p>
@@ -424,7 +451,13 @@ export default function OvertimePage() {
                       )}
                       {e.status === 'DETECTED' && !e.requestId && (
                         <div className="space-y-2">
-                          <p className="text-xs text-gray-400">بانتظار التوجيه إلى دورة الاعتماد</p>
+                          {routingBlock(e) ? (
+                            <p className="text-xs text-amber-700 font-medium" title="لن يصل هذا السطر إلى دورة الاعتماد بوضعه الحالي">
+                              {routingBlock(e)}
+                            </p>
+                          ) : (
+                            <p className="text-xs text-gray-400">بانتظار التوجيه إلى دورة الاعتماد</p>
+                          )}
                           {e.canReject && <button type="button"
                             onClick={() => { setRejectEntry(e); setRejectReason(''); setRejectError('') }}
                             disabled={actingId !== null}

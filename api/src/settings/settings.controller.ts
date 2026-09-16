@@ -521,6 +521,8 @@ export class SettingsController {
   // يعاملها بصمت كـ«سنوي» (الاستحقاق كامل مقدماً)
   private static readonly ALLOWED_VALUES: Record<string, string[]> = {
     'loan.insufficient_net_behavior': ['PARTIAL_THEN_CARRY', 'SKIP_AND_EXTEND'],
+    // القرار ب2: «اقفل طلب السلفة الآن» — مفتاح واحد يعلو أيام الطلب من الشهر
+    'loan.request_open': ['true', 'false'],
     'deductions.manager_creation_enabled': ['true', 'false'],
     'leave.accrual_mode': ['monthly', 'yearly', 'daily'],
     'payroll.exempt_overtime_eligible': ['true', 'false'],

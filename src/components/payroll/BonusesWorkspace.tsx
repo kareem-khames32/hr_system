@@ -6,7 +6,7 @@ import { ApiError, can } from '@/lib/api'
 import { csvDateStamp, downloadCsv } from '@/lib/csv'
 import type { DeductionApprovalRole, DeductionStepView } from '@/lib/deductions-api'
 import {
-  approveBonus, BONUS_METHOD_LABELS, BONUS_METHOD_UNIT, BONUS_ROLE_LABELS, BONUS_STATUS_META, bonusBadgeClass, bonusInputError, cancelBonus, createBonus,
+  approveBonus, BONUS_METHOD_LABELS, BONUS_METHOD_UNIT, BONUS_ROLE_LABELS, BONUS_STATUS_META, bonusBadgeClass, bonusInputError, cancelBonus,
   createBonusType, fetchBonus, fetchBonusCandidates, fetchBonusCreatable, fetchBonuses, fetchBonusTypes, formatBonusMoney, previewBonuses, rejectBonus,
   reverseBonus, submitBonusBatch, updateBonusType, withdrawBonus, type BonusCalcMethod, type BonusCandidate, type BonusCreatable, type BonusCreatorBasis,
   type BonusInput, type BonusPreview, type BonusSelection, type BonusSelectionMode, type BonusStatus, type BonusTypeInput, type BonusTypeView, type BonusView,
@@ -18,14 +18,15 @@ import {
 type Tab = 'list' | 'create' | 'types'
 type ActionKind = 'approve' | 'reject' | 'withdraw' | 'cancel' | 'reverse'
 type ListFilters = { view: 'all' | 'pending_me' | 'created'; status: string; targetPeriod: string }
-type CreatorMode = 'SINGLE' | BonusSelectionMode
+type CreatorMode = BonusSelectionMode
 const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
 const moneyPattern = /^\d+(\.\d{1,2})?$/
 const STEP_STATUS: Record<string, { label: string; className: string }> = {
   PENDING: { label: 'بانتظار', className: 'bg-warning-100 text-warning-700' }, APPROVED: { label: 'معتمد', className: 'bg-success-100 text-success-700' },
   REJECTED: { label: 'مرفوض', className: 'bg-red-100 text-red-700' }, SKIPPED: { label: 'متخطّى', className: 'bg-gray-100 text-gray-500' },
 }
-const SELECTION_LABELS: Record<CreatorMode, string> = { SINGLE: 'مكافأة فردية (موظف واحد)', EMPLOYEES: 'مجموعة مختارة', TEAM: 'فريق', DEPARTMENT: 'قسم (مع أقسامه الفرعية)', BRANCH: 'فرع' }
+// القرار هـ: «مكافأة فردية» و«مجموعة مختارة» صارا اختيارًا واحدًا — موظف واحد هو مجموعة من واحد
+const SELECTION_LABELS: Record<CreatorMode, string> = { EMPLOYEES: 'موظف أو مجموعة مختارة', TEAM: 'فريق', DEPARTMENT: 'قسم (مع أقسامه الفرعية)', BRANCH: 'فرع' }
 const PREVIEW_STATUS: Record<string, string> = { READY: 'جاهز', EXCLUDED: 'مستبعد' }
 const ACTION_TITLES: Record<ActionKind, string> = { approve: 'اعتماد المكافأة', reject: 'رفض المكافأة', withdraw: 'سحب المكافأة', cancel: 'إلغاء المكافأة', reverse: 'عكس المكافأة المصروفة' }
 
@@ -34,6 +35,9 @@ function Badge({ className, children }: { className: string; children: React.Rea
 }
 const stepLabel = (step: Pick<DeductionStepView, 'roleLabel' | 'fallbackFrom' | 'fallbackFromLabel'>) =>
   `${step.roleLabel}${step.fallbackFrom ? ` (بديل عن ${step.fallbackFromLabel ?? BONUS_ROLE_LABELS[step.fallbackFrom]})` : ''}`
+
+// رابط «بانتظار موافقتي» في صندوق الموافقات وكارت «مكافأة» في «طلب جديد» يفتحان الشاشة على العرض والتبويب المطلوبين
+const urlParam = (key: string) => typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get(key)
 
 export function BonusesWorkspace({ currency, mode, focusRequestId = null, initialTab, initialEmployeeId = null, initialPeriod = null }: {
   currency: string; mode: 'admin' | 'manager'; focusRequestId?: number | null
@@ -48,6 +52,10 @@ export function BonusesWorkspace({ currency, mode, focusRequestId = null, initia
   const [filters, setFilters] = useState<ListFilters>({ view: mode === 'manager' || focusRequestId ? 'all' : 'pending_me', status: '', targetPeriod: '' })
   const [canManage, setCanManage] = useState(false)
   const [ready, setReady] = useState(false)
+  useEffect(() => {
+    const view = urlParam('view')
+    if (view === 'pending_me' || view === 'created' || view === 'all') setFilters(value => ({ ...value, view }))
+  }, [])
 
   const loadRows = () => {
     setLoadingRows(true)
@@ -56,7 +64,7 @@ export function BonusesWorkspace({ currency, mode, focusRequestId = null, initia
   }
   useEffect(() => {
     setCanManage(can('bonuses.manage'))
-    fetchBonusCreatable().then(value => { setCreatable(value); if (initialTab === 'create' && value.types.length > 0) setTab('create') })
+    fetchBonusCreatable().then(value => { setCreatable(value); if ((initialTab === 'create' || urlParam('tab') === 'create') && value.types.length > 0) setTab('create') })
       .catch(error => setLoadError(errorText(error, 'تعذر تحميل أنواع المكافآت المسموحة'))).finally(() => setReady(true))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -293,12 +301,11 @@ function BonusCreator({ creatable, currency, onCreated, initialEmployeeId = null
   const type = creatable.types.find(row => row.id === typeId) ?? null
   const [candidates, setCandidates] = useState<BonusCandidate[]>([])
   const [candidateError, setCandidateError] = useState('')
-  const [selectionMode, setSelectionMode] = useState<CreatorMode>('SINGLE')
+  const [selectionMode, setSelectionMode] = useState<CreatorMode>('EMPLOYEES')
   const [branchId, setBranchId] = useState<number | ''>('')
   const [departmentId, setDepartmentId] = useState<number | ''>('')
   const [teamId, setTeamId] = useState<number | ''>('')
   const [search, setSearch] = useState('')
-  const [singleId, setSingleId] = useState<number | null>(null)
   const [selected, setSelected] = useState<Set<number>>(new Set())
   const [excluded, setExcluded] = useState<Set<number>>(new Set())
   const [form, setForm] = useState({ inputValue: '', reason: '', targetPeriod: initialPeriod ?? creatable.currentPeriod, attachmentRef: '', confirmNotDuplicate: false })
@@ -317,14 +324,14 @@ function BonusCreator({ creatable, currency, onCreated, initialEmployeeId = null
     setForm(value => ({ ...value, inputValue: type?.defaultValue ?? '' }))
     // تغيير النوع يغيّر النطاق والحدود: المعاينة والاختيار السابقان لا يصلحان. الموظف المختار (أو القادم من رابط المسير)
     // يُعاد اختياره تلقائيًا متى كان داخل نطاق النوع الجديد بعد تحميل موظفيه.
-    if (singleId) setPendingEmployeeId(singleId)
+    if (selected.size === 1) setPendingEmployeeId([...selected][0])
     setCandidates([])
-    setPreview(null); setSingleId(null); setSelected(new Set()); setExcluded(new Set())
+    setPreview(null); setSelected(new Set()); setExcluded(new Set())
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [typeId])
   useEffect(() => {
     if (!pendingEmployeeId || !candidates.some(row => row.id === pendingEmployeeId)) return
-    setSelectionMode('SINGLE'); setSingleId(pendingEmployeeId); setPendingEmployeeId(null)
+    setSelectionMode('EMPLOYEES'); setSelected(new Set([pendingEmployeeId])); setPendingEmployeeId(null)
   }, [candidates, pendingEmployeeId])
 
   // القسم مع فروعه: نفس حل الخادم (مسار القسم صعودًا يضم القسم المختار)
@@ -358,10 +365,10 @@ function BonusCreator({ creatable, currency, onCreated, initialEmployeeId = null
 
   const input: BonusInput = { bonusTypeId: typeId, inputValue: form.inputValue.trim(), reason: form.reason, targetPeriod: form.targetPeriod,
     ...(form.attachmentRef.trim() ? { attachmentRef: form.attachmentRef.trim() } : {}), confirmNotDuplicate: form.confirmNotDuplicate }
-  const selection: BonusSelection = selectionMode === 'SINGLE' ? { mode: 'EMPLOYEES', ids: singleId ? [singleId] : [], excludeEmployeeIds: [] }
-    : selectionMode === 'EMPLOYEES' ? { mode: 'EMPLOYEES', ids: [...selected].sort((a, b) => a - b), excludeEmployeeIds: [] }
-      : { mode: selectionMode, ids: unitId ? [unitId as number] : [], excludeEmployeeIds: [...excluded].sort((a, b) => a - b) }
-  const currentKey = JSON.stringify({ input, selection, single: selectionMode === 'SINGLE' })
+  const selection: BonusSelection = selectionMode === 'EMPLOYEES'
+    ? { mode: 'EMPLOYEES', ids: [...selected].sort((a, b) => a - b), excludeEmployeeIds: [] }
+    : { mode: selectionMode, ids: unitId ? [unitId as number] : [], excludeEmployeeIds: [...excluded].sort((a, b) => a - b) }
+  const currentKey = JSON.stringify({ input, selection })
   const stale = !!preview && previewKey !== currentKey
   const hiddenSelected = selectionMode === 'EMPLOYEES' ? [...selected].filter(id => !visible.some(row => row.id === id)).length : 0
 
@@ -371,27 +378,20 @@ function BonusCreator({ creatable, currency, onCreated, initialEmployeeId = null
     if (value === 'DEPARTMENT') setTeamId('')
   }
   const toggleSet = (set: Set<number>, id: number, apply: (next: Set<number>) => void) => { const next = new Set(set); if (next.has(id)) next.delete(id); else next.add(id); apply(next) }
-  const runPreview = async () => {
+  // القرار هـ: «إرسال» يعاين داخليًا ثم يرسل ببصمة تلك المعاينة — بلا خطوة ثانية على المستخدم
+  const submit = async () => {
     const problem = bonusInputError(input, creatable.reasonMinLength, type)
     if (problem) { setError(problem); return }
-    if (!selection.ids.length) { setError(selectionMode === 'SINGLE' ? 'اختر الموظف المستفيد.' : selectionMode === 'EMPLOYEES' ? 'اختر موظفًا واحدًا على الأقل.' : `اختر ${SELECTION_LABELS[selectionMode]} من الفلاتر.`); return }
+    if (!selection.ids.length) { setError(selectionMode === 'EMPLOYEES' ? 'اختر موظفًا واحدًا على الأقل.' : `اختر ${SELECTION_LABELS[selectionMode]} من الفلاتر.`); return }
     setBusy(true); setError(''); setResult('')
-    try { const next = await previewBonuses(input, selection); setPreview(next); setPreviewKey(currentKey) }
-    catch (err) { setError(errorText(err, 'تعذرت المعاينة')) } finally { setBusy(false) }
-  }
-  const submit = async () => {
-    if (!preview || stale) { setError('أعد المعاينة بعد آخر تعديل قبل الإرسال.'); return }
-    setBusy(true); setError('')
+    let fresh: BonusPreview
+    try { fresh = preview && !stale ? preview : await previewBonuses(input, selection); setPreview(fresh); setPreviewKey(currentKey) }
+    catch (err) { setError(errorText(err, 'تعذرت المعاينة')); setBusy(false); return }
+    if (!fresh.totals.ready) { setError('لا يوجد موظف جاهز للإرسال؛ راجع الأسباب بالجدول.'); setBusy(false); return }
     try {
-      if (selectionMode === 'SINGLE' && singleId) {
-        const created = await createBonus({ ...input, employeeId: singleId })
-        setResult(`أُرسلت المكافأة #${created.id} للاعتماد (${formatBonusMoney(created.estimatedAmount)} ${currency} لشهر ${created.targetPeriod}).`)
-        setSingleId(null)
-      } else {
-        const created = await submitBonusBatch(input, selection, preview.previewHash)
-        setResult(`أُرسلت ${created.created.length} مكافأة للاعتماد (دفعة #${created.batchId})${created.skipped.length ? `، وتُخطّي ${created.skipped.length} بسبب ظاهر في المعاينة` : ''}.`)
-        setSelected(new Set()); setExcluded(new Set())
-      }
+      const created = await submitBonusBatch(input, selection, fresh.previewHash)
+      setResult(`أُرسلت ${created.created.length} مكافأة للاعتماد${created.skipped.length ? `، وتُخطّي ${created.skipped.length} بسبب ظاهر في الجدول` : ''}.`)
+      setSelected(new Set()); setExcluded(new Set())
       setPreview(null); setForm(value => ({ ...value, reason: '', confirmNotDuplicate: false }))
       onCreated()
     } catch (err) {
@@ -464,11 +464,11 @@ function BonusCreator({ creatable, currency, onCreated, initialEmployeeId = null
         {unitMode && !unitId && <p className="text-xs text-warning-700">اختر {SELECTION_LABELS[selectionMode]} من الفلاتر أعلاه؛ الموظفون خارج نطاقك لا يُحسبون ولا يُعرضون.</p>}
         <div className="max-h-56 overflow-y-auto divide-y divide-gray-50">
           {visible.length === 0 ? <p className="text-sm text-gray-400 p-2">لا يوجد موظفون في نطاقك بهذه الفلاتر</p> : visible.map(row => {
-            const checked = selectionMode === 'SINGLE' ? singleId === row.id : selectionMode === 'EMPLOYEES' ? selected.has(row.id) : !excluded.has(row.id)
+            const checked = selectionMode === 'EMPLOYEES' ? selected.has(row.id) : !excluded.has(row.id)
             return (
               <label key={row.id} className="flex items-center gap-2 p-2 text-sm">
-                <input type={selectionMode === 'SINGLE' ? 'radio' : 'checkbox'} name={selectionMode === 'SINGLE' ? 'bonus-single' : undefined} checked={checked}
-                  onChange={() => selectionMode === 'SINGLE' ? setSingleId(row.id) : selectionMode === 'EMPLOYEES' ? toggleSet(selected, row.id, setSelected) : toggleSet(excluded, row.id, setExcluded)} />
+                <input type="checkbox" checked={checked}
+                  onChange={() => selectionMode === 'EMPLOYEES' ? toggleSet(selected, row.id, setSelected) : toggleSet(excluded, row.id, setExcluded)} />
                 <span className="font-medium text-gray-800">{row.fullName}</span>
                 <span className="text-xs text-gray-400">{row.employeeCode} — {[row.branchName, row.departmentName, row.teamName].filter(Boolean).join(' / ')} — {row.basisLabels.join('، ')}</span>
                 {unitMode && excluded.has(row.id) && <Badge className="bg-gray-100 text-gray-600">مستبعد</Badge>}
@@ -477,29 +477,24 @@ function BonusCreator({ creatable, currency, onCreated, initialEmployeeId = null
           })}
         </div>
         <p className="text-xs text-gray-400">
-          {selectionMode === 'SINGLE' ? (singleId ? `المستفيد: ${candidates.find(row => row.id === singleId)?.fullName ?? `#${singleId}`}` : 'لم يُختر مستفيد')
-            : selectionMode === 'EMPLOYEES' ? `محدد ${selected.size}${hiddenSelected ? ` (منهم ${hiddenSelected} خارج الفلاتر الحالية ويبقون مختارين)` : ''}`
-              : `المشمولون ${members.length}، المستبعدون ${excluded.size}${visible.length !== members.length ? ` — يُعرض ${visible.length} بالبحث؛ البحث لا يغيّر من يُكافأ` : ''}. إلغاء التحديد يستبعد الموظف.`}
+          {selectionMode === 'EMPLOYEES' ? `محدد ${selected.size}${hiddenSelected ? ` (منهم ${hiddenSelected} خارج الفلاتر الحالية ويبقون مختارين)` : ''}`
+            : `المشمولون ${members.length}، المستبعدون ${excluded.size}${visible.length !== members.length ? ` — يُعرض ${visible.length} بالبحث؛ البحث لا يغيّر من يُكافأ` : ''}. إلغاء التحديد يستبعد الموظف.`}
         </p>
       </div>
 
       {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">{error}</div>}
       {result && <div role="status" className="bg-success-50 text-success-700 rounded-xl p-3 text-sm flex items-center gap-2"><CheckCircle2 size={16} />{result}</div>}
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="btn-secondary" onClick={runPreview} disabled={busy}>{busy ? 'جارٍ…' : 'معاينة الأرقام'}</button>
-        <button type="button" className="btn-primary" onClick={submit} disabled={busy || !preview || stale || preview.totals.ready === 0}>إرسال للاعتماد</button>
-        {stale && <span className="text-xs text-warning-700 self-center">تغيّرت المدخلات أو الاستبعاد بعد المعاينة؛ أعد المعاينة.</span>}
+        <button type="button" className="btn-primary" onClick={submit} disabled={busy}>{busy ? 'جارٍ…' : 'إرسال للاعتماد'}</button>
       </div>
 
-      {preview && (
+      {preview && (preview.totals.failed > 0 || preview.totals.excluded > 0) && (
         <div className="space-y-2">
           <div className="flex flex-wrap gap-3 text-sm">
             <Badge className="bg-success-100 text-success-700">جاهز {preview.totals.ready}</Badge>
             <Badge className="bg-gray-100 text-gray-600">مستبعد {preview.totals.excluded}</Badge>
             <Badge className="bg-red-100 text-red-700">مرفوض {preview.totals.failed}</Badge>
-            {preview.totals.escalated > 0 && <Badge className="bg-warning-100 text-warning-700">مصعّد {preview.totals.escalated}</Badge>}
-            {preview.totals.capExceeded > 0 && <Badge className="bg-orange-100 text-orange-700">فوق السقف {preview.totals.capExceeded}</Badge>}
-            <span className="font-medium">الإجمالي: {formatBonusMoney(preview.totals.totalAmount)} {currency}</span>
+            <span className="font-medium">إجمالي المجموعة ({preview.totals.ready} موظف): {formatBonusMoney(preview.totals.totalAmount)} {currency}</span>
           </div>
           {hasDuplicates && (
             <label className="text-sm flex items-center gap-2 text-warning-700">

@@ -83,7 +83,7 @@ export default function NewPerformanceReviewPage() {
               <ArrowRight size={20} className="text-gray-600" />
             </Link>
             <div>
-              <h1 className="text-2xl font-bold text-gray-800">تقييم أداء جديد</h1>
+              <h1 className="text-2xl font-bold text-gray-800">تقييم جديد</h1>
               <p className="text-gray-500">إنشاء تقييم أداء جديد لموظف</p>
             </div>
           </div>

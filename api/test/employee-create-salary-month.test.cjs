@@ -23,8 +23,10 @@ test('حدود أجر التعيين بدورة 23: شهر التعيين الج
     defaultPayrollPeriodBounds: { startDate: '2026-08-23', endDate: '2026-09-22' } })
   // 23 أغسطس بداية «راتب سبتمبر» (قاعدة المالك)؛ 22 أغسطس آخر يوم في «راتب أغسطس».
   assert.equal(start({ cycleStartDay: 23, today, hireDate: '2026-08-23' }).hirePayrollPeriod, '2026-09')
+  // تعيين الشهر السابق مباشرة: الافتراض شهر التعيين نفسه، فيدخل الموظف الجديد مسير شهر تعيينه
   const late = start({ cycleStartDay: 23, today, hireDate: '2026-08-22' })
-  assert.deepEqual([late.minPayrollPeriod, late.defaultPayrollPeriod, late.maxPayrollPeriod], ['2026-08', '2026-09', '2026-09'])
+  assert.deepEqual([late.minPayrollPeriod, late.defaultPayrollPeriod, late.maxPayrollPeriod], ['2026-08', '2026-08', '2026-09'])
+  assert.deepEqual(late.defaultPayrollPeriodBounds, { startDate: '2026-07-23', endDate: '2026-08-22' })
   const future = start({ cycleStartDay: 23, today, hireDate: '2026-09-25' })
   assert.deepEqual([future.minPayrollPeriod, future.defaultPayrollPeriod, future.maxPayrollPeriod], ['2026-10', '2026-10', '2026-10'])
   assert.deepEqual(future.defaultPayrollPeriodBounds, { startDate: '2026-09-23', endDate: '2026-10-22' })

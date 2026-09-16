@@ -191,16 +191,19 @@ export default function LeaveRequestPage() {
     daysError.to === formData.endDate
       ? daysError
       : null
-  // المدة المحتسبة كما سيخصمها السيرفر: نصف يوم = 0.5، وإلا أيام العمل (null = لم تُحسب بعد)
-  const effectiveDays: number | null = daysInfo
-    ? daysInfo.working === 0
-      ? 0
-      : isHalfDay
-        ? 0.5
-        : daysInfo.working
-    : null
-
   const selectedLeaveType = leaveTypes.find(t => t.code === formData.leaveType)
+  // الإجازة بدون مرتب تُحسب بأيام التقويم كاملة — نفس ما يخصمه المسير، فالطلب
+  // والرصيد والخصم رقم واحد. المدفوعة تبقى بأيام العمل
+  const countsCalendarDays = !!selectedLeaveType && selectedLeaveType.isPaid === false
+  const countedDays: number | null = daysInfo
+    ? countsCalendarDays
+      ? daysInfo.total
+      : daysInfo.working
+    : null
+  // المدة المحتسبة كما سيخصمها السيرفر: نصف يوم = 0.5 (null = لم تُحسب بعد)
+  const effectiveDays: number | null =
+    countedDays === null ? null : countedDays === 0 ? 0 : isHalfDay ? 0.5 : countedDays
+
   const selectedBalance = selectedLeaveType ? balanceFor(selectedLeaveType) : null
   const attachmentRequired = (selectedLeaveType?.requiredAttachment ?? '').trim()
 
@@ -294,7 +297,7 @@ export default function LeaveRequestPage() {
             <ArrowRight size={20} className="text-gray-600" />
           </Link>
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">طلب إجازة جديد</h1>
+            <h1 className="text-2xl font-bold text-gray-800">طلب إجازة</h1>
             <p className="text-gray-500 mt-1">قم بتعبئة النموذج لتقديم طلب الإجازة</p>
           </div>
         </div>
@@ -407,7 +410,9 @@ export default function LeaveRequestPage() {
             <div className="mt-4 p-4 bg-primary-50 rounded-xl flex items-center justify-between">
               <div className="flex items-center gap-2">
                 <Calendar size={20} className="text-primary-600" />
-                <span className="text-primary-800">المدة المحتسبة (أيام عمل)</span>
+                <span className="text-primary-800">
+                  المدة المحتسبة ({countsCalendarDays ? 'أيام تقويم' : 'أيام عمل'})
+                </span>
               </div>
               <span className="text-2xl font-bold text-primary-600">
                 {effectiveDays === null ? (rangeError ? '—' : '…') : `${effectiveDays} يوم`}
@@ -416,10 +421,15 @@ export default function LeaveRequestPage() {
           )}
 
           {/* تلميحات الحساب من السيرفر: كله عطلات / عطلات داخل المدى / رفض المدى (4xx برسالته) / تعذّر الحساب */}
-          {daysInfo && daysInfo.working === 0 ? (
+          {daysInfo && effectiveDays === 0 ? (
             <p className="flex items-center gap-1.5 text-xs text-red-700 bg-red-50 rounded-lg px-3 py-2 mt-2">
               <AlertCircle size={13} className="shrink-0" />
               كل الأيام المختارة عطلات (ويك إند/عطلة رسمية) — الطلب سيُرفض
+            </p>
+          ) : daysInfo && countsCalendarDays ? (
+            <p className="flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 mt-2">
+              <AlertCircle size={13} className="shrink-0" />
+              الإجازة بدون مرتب تُحسب بأيام التقويم — العطلات والويك إند داخل المدى تُحسب وتُخصم
             </p>
           ) : daysInfo && !isHalfDay && daysInfo.skipped.length > 0 ? (
             <p className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-2">
@@ -438,7 +448,9 @@ export default function LeaveRequestPage() {
             </p>
           ) : rangeSet ? (
             <p className="text-xs text-gray-400 mt-2">
-              أيام العمل الفعلية فقط (تُستبعد الويك إند والعطلات الرسمية) — نفس ما يُخصم من رصيدك
+              {countsCalendarDays
+                ? 'كل أيام المدى تُحسب — نفس ما يُخصم من راتبك'
+                : 'أيام العمل الفعلية فقط (تُستبعد الويك إند والعطلات الرسمية) — نفس ما يُخصم من رصيدك'}
             </p>
           ) : null}
 

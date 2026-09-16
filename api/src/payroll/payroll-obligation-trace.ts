@@ -9,9 +9,10 @@ import { BonusRequest } from './bonuses.entities'
 // تتبع قيود الدفتر في القسيمة والمسير (قرار المالك: الخصم يُتتبع في الطلب والمسير والقسيمة):
 // لكل سطر محفوظ في breakdown.obligationLines: القيد ونوعه وتصنيفه، وللخصم المصنف نوعه وسببه ورقم طلبه
 // ووحدات القسط وسعر اليوم/الساعة المستخدم. قراءة فقط؛ المبالغ المعروضة هي المحفوظة مع المسير.
+// كلام عادي على الشاشة (قرار المالك: بلا مصطلحات محاسبية) — «خصم مصنف» و«قيد» كانا يظهران في القسيمة
 export const PAYROLL_OBLIGATION_CATEGORY_LABELS: Record<string, string> = {
-  typed_deduction: 'خصم مصنف', deduction_reversal: 'عكس خصم مصنف', custody_shortfall: 'عجز عهدة', fine: 'غرامة', adjustment: 'تسوية',
-  expense: 'مصروف مسترد', manual: 'قيد يدوي', bonus: 'مكافأة', allowance: 'بدل', bonus_reversal: 'استرداد مكافأة',
+  typed_deduction: 'خصم', deduction_reversal: 'إلغاء خصم', custody_shortfall: 'عجز عهدة', fine: 'غرامة', adjustment: 'تسوية',
+  expense: 'مصروف مسترد', manual: 'بند يدوي', bonus: 'مكافأة', allowance: 'بدل', bonus_reversal: 'استرداد مكافأة',
 }
 
 export interface PayrollObligationDetail {
@@ -114,7 +115,7 @@ export async function describePayrollObligationLines(em: EntityManager, breakdow
     const amount = line.amount ?? row.amount
     return {
       obligationId: row.id, type: (line.type ?? row.type ?? null) as PayrollObligationDetail['type'], category: row.category ?? null,
-      categoryLabel: PAYROLL_OBLIGATION_CATEGORY_LABELS[row.category] ?? row.category ?? 'قيد', label: row.label ?? null,
+      categoryLabel: PAYROLL_OBLIGATION_CATEGORY_LABELS[row.category] ?? row.category ?? 'بند', label: row.label ?? null,
       amount: moneyText(amount), collected: moneyText(line.collected ?? amount), carried: moneyText(line.carried ?? 0),
       targetPeriod: row.targetPeriod ?? null, status: row.status ?? null, carriedFromObligationId: row.carriedFromObligationId ?? null, deduction, bonus,
     }

@@ -55,6 +55,9 @@ const STATUS_OPTIONS = Object.entries(EMPLOYEE_STATUS).map(([value, meta]) => ({
 // خارج القائمة الافتراضية — يظهرون بفلتر حالتهم أو «كل الحالات»
 const FORMER_STATUSES = ['terminated', 'archived']
 
+// معرّفات صور لم يعد لها ملف (404) — تُحفظ للجلسة فلا تُطلب مع كل فتح للقائمة
+const missingPhotoFileIds = new Set<number>()
+
 export default function EmployeesPage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [selectedDepartment, setSelectedDepartment] = useState('all')
@@ -124,14 +127,19 @@ export default function EmployeesPage() {
   useEffect(() => {
     let active = true
     const created: string[] = []
-    const withPhotos = employees.filter((e) => e.photoFileId != null)
+    const withPhotos = employees.filter(
+      (e) => e.photoFileId != null && !missingPhotoFileIds.has(e.photoFileId)
+    )
     if (withPhotos.length === 0) {
       setPhotoUrls({})
       return
     }
     Promise.all(
       withPhotos.map(async (e) => {
-        const url = await fetchFileObjectUrl(e.photoFileId as number)
+        const fileId = e.photoFileId as number
+        const url = await fetchFileObjectUrl(fileId)
+        // ملف محذوف يرجع 404 في كل مرة — نتذكره فلا نعيد طلبه في هذه الجلسة
+        if (!url) missingPhotoFileIds.add(fileId)
         return url ? ([e.id, url] as const) : null
       })
     ).then((pairs) => {

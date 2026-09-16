@@ -452,7 +452,7 @@ export default function OnboardingPage() {
         <div className="flex items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">
-              تهيئة الموظفين الجدد (Onboarding)
+              تهيئة الموظفين الجدد
             </h1>
             <p className="text-gray-500 mt-1">
               الملتحقون خلال آخر {windowDays ?? '…'} يوم والمنتظر التحاقهم — قائمة مهام

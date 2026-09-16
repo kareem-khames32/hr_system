@@ -161,8 +161,13 @@ export function employeeSalaryStartContext(input: { cycleStartDay: number; today
     hirePayrollPeriod = hireDate === null ? null : payrollPeriodOfDate(hireDate, input.cycleStartDay)
   } catch { return bad('EMPLOYEE_SALARY_START_DATE_INVALID', 'تاريخ التعيين أو دورة الرواتب غير صالحين لتحديد «يسري من راتب شهر»') }
   const latest = hirePayrollPeriod !== null && hirePayrollPeriod > currentPayrollPeriod ? hirePayrollPeriod : currentPayrollPeriod
+  // التعيين القريب (شهر المسير الجاري أو الذي قبله مباشرة) يُوثَّق افتراضيًا من شهر تعيينه، فيدخل الموظف
+  // الجديد مسير شهر تعيينه بدل أن يُستبعد بـ«لا يوجد راتب موثق لهذا الشهر». الملف المنقول من نظام سابق
+  // (تعيين أقدم من ذلك) يبقى افتراضه الشهر الجاري: لا يُنسب أجر الملف لشهور سبقت إنشاءه.
+  const monthIndex = (period: string) => Number(period.slice(0, 4)) * 12 + Number(period.slice(5, 7))
+  const defaultPayrollPeriod = hirePayrollPeriod !== null && monthIndex(latest) - monthIndex(hirePayrollPeriod) <= 1 ? hirePayrollPeriod : latest
   return { cycleStartDay: input.cycleStartDay, currentPayrollPeriod, hireDate, hirePayrollPeriod, minPayrollPeriod: hirePayrollPeriod,
-    maxPayrollPeriod: latest, defaultPayrollPeriod: latest, defaultPayrollPeriodBounds: payrollPeriodBounds(latest, input.cycleStartDay) }
+    maxPayrollPeriod: latest, defaultPayrollPeriod, defaultPayrollPeriodBounds: payrollPeriodBounds(defaultPayrollPeriod, input.cycleStartDay) }
 }
 
 /**

@@ -222,7 +222,8 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
             {listCandidates.map(emp => {
               const on = filters.employeeIds.includes(emp.id)
               return <button key={emp.id} type="button" aria-pressed={on} disabled={busy}
-                onClick={() => setFilters({ ...filters, employeeIds: on ? filters.employeeIds.filter(id => id !== emp.id) : [...filters.employeeIds, emp.id] })}
+                onClick={() => setFilters(previous => ({ ...previous, employeeIds: previous.employeeIds.includes(emp.id)
+                  ? previous.employeeIds.filter(id => id !== emp.id) : [...previous.employeeIds, emp.id] }))}
                 className={`px-2 py-1 rounded-lg text-xs border ${on ? 'bg-primary-600 text-white border-primary-600' : 'bg-white text-gray-700 border-gray-200'}`}>{emp.fullName} ({emp.employeeCode})</button>
             })}
           </div>

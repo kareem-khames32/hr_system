@@ -185,7 +185,7 @@ export default function ManualEntryPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">الإدخال اليدوي للحضور</h1>
+            <h1 className="text-2xl font-bold text-gray-800">الإدخال اليدوي</h1>
             <p className="text-gray-500 mt-1">
               إدخال بصمات الحضور والانصراف يدوياً — تُطبَّق فوراً على يوم الحضور ويُسجَّل من أدخلها وسببها
             </p>

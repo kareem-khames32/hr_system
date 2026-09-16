@@ -34,7 +34,6 @@ import {
   type ExemptionDecisionKind,
   type ExemptionReasonCode,
   type ExemptionState,
-  type OverrideChoice,
 } from '@/lib/attendance-exemptions-api'
 
 type StatusFilter = 'ALL' | 'PENDING' | 'APPROVED' | 'CLOSED'
@@ -56,8 +55,6 @@ const periodText = (row: AttendanceExemptionRow) => {
   const end = row.terminatedFrom ? `وأُنهي من ${row.terminatedFrom}` : row.effectiveTo ? `إلى ${row.effectiveTo}` : '— مفتوح'
   return `من ${row.effectiveFrom} ${end}`
 }
-
-const overrideText = (value: boolean | null, yes: string, no: string) => (value === null ? 'حسب الإعداد العام' : value ? yes : no)
 
 const latestDate = (...dates: Array<string | null | undefined>) =>
   dates.filter((date): date is string => !!date).sort().at(-1) ?? ''
@@ -237,7 +234,7 @@ function ExemptionsContent() {
 
       <section className="card space-y-2 text-sm text-gray-600" aria-label="مسار استثناء الحضور">
         <p><strong className="text-gray-800">المسار:</strong> طلب ← اعتماد الموارد البشرية من مستخدم غير منشئ الطلب ← للمناصب القيادية اعتماد تنفيذي من مستخدم آخر ← نافذة سارية بتاريخ ← إنهاء بتاريخ عند الحاجة.</p>
-        <p>الاستثناء لا يرفع خصومات الجودة أو الالتزام أو أقساط السلف؛ رفعها يكون بالإعفاء المالي. الإجازة بلا أجر تُخصم وفق الإعداد العام ما لم يحدد الطلب غير ذلك.</p>
+        <p>الموظف المستثنى بلا خصومات حضور وبلا عمل إضافي. والاستثناء لا يرفع خصومات الجودة أو الالتزام أو أقساط السلف؛ رفعها يكون بالإعفاء المالي.</p>
         {data && <p className="text-xs text-gray-500">يبدأ الطلب الجديد من بداية فترة الرواتب السابقة ({data.earliestStart ?? data.currentPeriodStart}) أو بعدها، ولا يغيّر الاستثناء فترة في مسير معتمد أو مصروف.</p>}
       </section>
 
@@ -311,7 +308,6 @@ function ExemptionsContent() {
                   <td className="table-cell max-w-xs">
                     <div className="font-medium">{EXEMPTION_REASON_LABELS[row.reasonCode] ?? row.reasonCode}</div>
                     <div className="text-xs text-gray-500 line-clamp-2" title={row.reason}>{row.reason}</div>
-                    <div className="text-xs text-gray-400 mt-1">الإضافي: {overrideText(row.overtimeEligibleOverride, 'مستحق', 'غير مستحق')} · الإجازة بلا أجر: {overrideText(row.unpaidLeaveDeductibleOverride, 'تُخصم', 'لا تُخصم')}</div>
                   </td>
                   <td className="table-cell"><span className={EXEMPTION_STATE_LABELS[row.state].className}>{EXEMPTION_STATE_LABELS[row.state].label}</span></td>
                   <td className="table-cell text-xs text-gray-600 space-y-0.5">
@@ -321,6 +317,9 @@ function ExemptionsContent() {
                     {row.terminatedByUserId && <div>أنهاه: {row.terminatedByName ?? `#${row.terminatedByUserId}`}</div>}
                     {row.actions.blockedBy === 'CREATOR' && <div className="text-warning-600">أنشأته أنت؛ القرار لمستخدم آخر.</div>}
                     {row.actions.blockedBy === 'HR_APPROVER' && <div className="text-warning-600">اعتمدتَ خطوة الموارد البشرية؛ القرار التنفيذي لمستخدم آخر.</div>}
+                    {row.state === 'PENDING_EXECUTIVE' && !row.actions.approveExecutive && <div className="text-warning-600">
+                      ينتظر اعتمادًا تنفيذيًا من مستخدم ثالث يحمل صلاحية الاعتماد التنفيذي: غير منشئ الطلب وغير من اعتمد خطوة الموارد البشرية. وإلا فألغِه وأعد تقديمه بتصنيف آخر.
+                    </div>}
                   </td>
                   <td className="table-cell">
                     <div className="flex flex-wrap gap-2">
@@ -374,28 +373,12 @@ function ExemptionsContent() {
                   <option value="">اختر التصنيف</option>
                   {(Object.keys(EXEMPTION_REASON_LABELS) as ExemptionReasonCode[]).map(code => <option key={code} value={code}>{EXEMPTION_REASON_LABELS[code]}</option>)}
                 </select>
-                {form.reasonCode === 'executive' && <p className="text-xs text-warning-600 mt-1">الاستثناء القيادي يحتاج بعد اعتماد الموارد البشرية اعتمادًا تنفيذيًا من مستخدم آخر.</p>}
+                {form.reasonCode === 'executive' && <p className="text-xs text-warning-600 mt-1">الاستثناء القيادي يمر بثلاثة أشخاص مختلفين: من يقدّمه، ومن يعتمده في الموارد البشرية، ومن يعتمده تنفيذيًا. اختر تصنيفًا آخر إن لم يتوفر ثلاثة مستخدمين.</p>}
               </div>
               <div className="sm:col-span-2">
                 <label htmlFor="exemption-reason" className="label">السبب الموثق</label>
                 <textarea id="exemption-reason" rows={3} maxLength={500} className="input" value={form.reason} onChange={event => setForm({ ...form, reason: event.target.value })} />
                 <p className="text-xs text-gray-500 mt-1">{form.reason.trim().length} من 500 حرف — الحد الأدنى {minLength} حرفًا.</p>
-              </div>
-              <div>
-                <label htmlFor="exemption-overtime" className="label">استحقاق العمل الإضافي</label>
-                <select id="exemption-overtime" className="input" value={form.overtime} onChange={event => setForm({ ...form, overtime: event.target.value as OverrideChoice })}>
-                  <option value="inherit">حسب الإعداد العام</option>
-                  <option value="yes">مستحق</option>
-                  <option value="no">غير مستحق</option>
-                </select>
-              </div>
-              <div>
-                <label htmlFor="exemption-unpaid" className="label">الإجازة بلا أجر</label>
-                <select id="exemption-unpaid" className="input" value={form.unpaidLeave} onChange={event => setForm({ ...form, unpaidLeave: event.target.value as OverrideChoice })}>
-                  <option value="inherit">حسب الإعداد العام</option>
-                  <option value="yes">تُخصم</option>
-                  <option value="no">لا تُخصم</option>
-                </select>
               </div>
               <label className="sm:col-span-2 flex items-center gap-2 text-sm text-gray-700">
                 <input type="checkbox" checked={form.requiresCheckinForPresence} onChange={event => setForm({ ...form, requiresCheckinForPresence: event.target.checked })} />

@@ -123,12 +123,6 @@ export const createLatenessTierSet = (effectivePeriod: string, rows: LatenessTie
   post<LatenessTierSetsResponse>('/payroll/rules/lateness-tier-sets', { effectivePeriod, tiers: tierBody(rows), reason })
 export const deactivateLatenessTierSet = (id: number, reason: string) => post<LatenessTierSetsResponse>(`/payroll/rules/lateness-tier-sets/${id}/deactivate`, { reason })
 
-/** المجموعة السارية لشهر رواتب: أحدث مجموعة مفعّلة يسري شهرها فيه أو قبله (نفس قاعدة الخادم). */
-export function applicableTierSet(sets: LatenessTierSet[], period: string): LatenessTierSet | null {
-  return sets.filter(set => set.isActive && set.effectivePeriod <= period)
-    .sort((a, b) => b.effectivePeriod.localeCompare(a.effectivePeriod) || b.id - a.id)[0] ?? null
-}
-
 export interface LatenessTierTrace {
   minutes: number; matched: boolean; sequence: number | null; fromMinutes: number | null; toMinutes: number | null
   mode: LatenessTierMode | 'NO_MATCH_PER_MINUTE'; value: string | null; label: string | null; dayRate: number; minuteRate: number; amount: number; formula: string

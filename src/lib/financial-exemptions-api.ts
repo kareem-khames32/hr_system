@@ -19,10 +19,10 @@ export const EXEMPTION_STATUS_META: Record<ExemptionStatus, { label: string; cla
   SUPERSEDED: { label: 'محتوى في إعفاء أشمل', className: 'bg-gray-100 text-gray-600' },
 }
 export const EXEMPTION_TYPE_TARGET_LABELS: Record<ExemptionTypeTarget, string> = {
-  LATENESS: 'كل خصم التأخير', SHORTFALL: 'كل خصم نقص ساعات العمل', ABSENCE: 'كل خصم الغياب', ADVANCE_INSTALLMENT: 'كل أقساط السلف (تأجيل)', TYPED: 'نوع خصم مصنف',
+  LATENESS: 'كل خصم التأخير', SHORTFALL: 'كل خصم نقص ساعات العمل', ABSENCE: 'كل خصم الغياب', ADVANCE_INSTALLMENT: 'كل أقساط السلف (تأجيل)', TYPED: 'نوع خصم',
 }
 export const EXEMPTION_COMPONENT_LABELS: Record<ExemptionComponent, string> = {
-  LATENESS: 'خصم التأخير', SHORTFALL: 'خصم نقص ساعات العمل', ABSENCE: 'خصم الغياب', TYPED: 'خصم مصنف', LOAN: 'قسط سلفة',
+  LATENESS: 'خصم التأخير', SHORTFALL: 'خصم نقص ساعات العمل', ABSENCE: 'خصم الغياب', TYPED: 'خصم', LOAN: 'قسط سلفة',
 }
 export const EXEMPTION_DISPOSITION_LABELS: Record<ExemptionDisposition, string> = { DROP: 'إسقاط نهائي', DEFER_ONE_PERIOD: 'تأجيل للشهر التالي' }
 

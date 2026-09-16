@@ -132,7 +132,7 @@ const WRITABLE: Record<string, Record<string, FieldSpec>> = {
     nameAr: fld('str', 'اسم نوع الإذن', { max: 100 }),
     isDeductible: fld('bool', 'نوع الخصم'),
     maxDurationMinutes: fld('int', 'أقصى مدة للإذن', { nullable: true }),
-    monthlyFreeCount: fld('int', 'عدد المرات المجانية', { nullable: true }),
+    monthlyFreeCount: fld('int', 'كام مرة في الشهر', { nullable: true }),
     monthlyFreeMinutes: fld('int', 'الدقائق المجانية', { nullable: true }),
     deductionPct: fld('num', 'نسبة الخصم'),
     coverage: fld('str', 'نطاق التغطية', { max: 10 }),
@@ -851,7 +851,7 @@ export class CatalogsController {
           throw new BadRequestException('نطاق التغطية: morning/evening/both')
         }
         range('maxDurationMinutes', 'أقصى مدة للإذن (دقيقة)', 1, 1440)
-        range('monthlyFreeCount', 'عدد المرات المجانية شهرياً', 0, 1000)
+        range('monthlyFreeCount', 'كام مرة في الشهر', 0, 1000)
         range('monthlyFreeMinutes', 'الدقائق المجانية شهرياً', 0, 100000)
         range('deductionPct', 'نسبة الخصم', 0, 100)
         break

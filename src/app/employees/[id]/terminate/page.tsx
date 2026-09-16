@@ -73,7 +73,7 @@ export default function TerminateEmployeePage() {
   }
 
   return <MainLayout><div className="max-w-5xl mx-auto space-y-6">
-    <div className="flex items-center gap-4"><Link href={`/employees/${employeeId}`} className="btn-secondary" aria-label="العودة لملف الموظف"><ArrowRight size={20} /></Link><div><h1 className="text-2xl font-bold text-gray-800">فتح ملف إنهاء خدمة</h1><p className="text-sm text-gray-500 mt-1">إشعار ثم إخلاء طرف وتصفية؛ الإغلاق النهائي يتبع اعتماد التصفية وآخر يوم عمل.</p></div></div>
+    <div className="flex items-center gap-4"><Link href={`/employees/${employeeId}`} className="btn-secondary" aria-label="العودة لملف الموظف"><ArrowRight size={20} /></Link><div><h1 className="text-2xl font-bold text-gray-800">إنهاء خدمة موظف</h1><p className="text-sm text-gray-500 mt-1">إشعار ثم إخلاء طرف وتصفية؛ الإغلاق النهائي يتبع اعتماد التصفية وآخر يوم عمل.</p></div></div>
     {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
     {createdId && <div role="status" className="bg-success-50 text-success-700 rounded-xl p-4">تم فتح ملف إنهاء الخدمة #{createdId}. <Link href={`/offboarding/${createdId}`} className="underline">متابعة الإخلاء والتصفية</Link></div>}
     {loading ? <div className="card text-center p-10">جارٍ تحميل بيانات الموظف...</div> : !employee ? <div className="card text-gray-500">لا تتوفر بيانات موظف صالحة لفتح الملف.</div> : <>

@@ -15,7 +15,7 @@ import {
   X,
   AlertTriangle,
 } from 'lucide-react'
-import { can, fetchCatalog, createCatalogItem, updateCatalogItem } from '@/lib/api'
+import { can, fetchCatalog, createCatalogItem, updateCatalogItem, getCurrentUser } from '@/lib/api'
 
 interface Shift {
   id: number
@@ -102,8 +102,17 @@ export default function ShiftsPage() {
   const [pendingToggle, setPendingToggle] = useState<Shift | null>(null)
   const [toggleChange, setToggleChange] = useState({ effectiveFrom: '', changeReason: '' })
   const [toggleError, setToggleError] = useState('')
-  // الإضافة/التعديل/التفعيل = كتابة كتالوج (settings.manage في الباك)
-  const canManage = can('settings.manage')
+  // الإضافة/التعديل/التفعيل = كتابة كتالوج (settings.manage في الباك). وتعريف الدوام
+  // مشترك بين الفروع فيحتاج نطاق إدارة عام — مستخدم الفرع يرى الشاشة للقراءة فقط
+  // ويعرف السبب قبل أن يملأ الفورم (كان الحفظ يُرفض بعد تعبئته كله)
+  const [canManage, setCanManage] = useState(false)
+  const [branchScopedNotice, setBranchScopedNotice] = useState(false)
+  useEffect(() => {
+    const allowed = can('settings.manage')
+    const branchScoped = (getCurrentUser()?.role ?? '') !== 'super_admin'
+    setCanManage(allowed && !branchScoped)
+    setBranchScopedNotice(allowed && branchScoped)
+  }, [])
 
   const loadShifts = () => {
     setLoading(true)
@@ -220,7 +229,7 @@ export default function ShiftsPage() {
         {/* Page Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">إدارة الورديات</h1>
+            <h1 className="text-2xl font-bold text-gray-800">الورديات</h1>
             <p className="text-gray-500 mt-1">تعريف وإدارة ورديات العمل</p>
           </div>
           {canManage && (
@@ -232,6 +241,16 @@ export default function ShiftsPage() {
         </div>
 
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
+        {branchScopedNotice && (
+          <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 flex items-start gap-2">
+            <AlertTriangle size={18} className="mt-0.5 shrink-0" />
+            <span>
+              تعريف الورديات مشترك بين كل الفروع، فإضافته أو تعديله يحتاج نطاق إدارة عام.
+              الشاشة هنا للعرض فقط — اطلب التعديل من مدير النظام.
+            </span>
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">

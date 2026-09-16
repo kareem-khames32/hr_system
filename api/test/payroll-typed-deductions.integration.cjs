@@ -506,11 +506,11 @@ test('Review S25 DD-12/DD-11/DD-13 and payslip: the payslip traces each ledger l
   assert.equal(payslip.obligationDetails.length, 1)
   const [line] = payslip.obligationDetails
   assert.deepEqual([line.categoryLabel, line.collected, line.carried, line.deduction.typeName, line.deduction.units, line.deduction.rate, line.deduction.formula, line.deduction.reason],
-    ['خصم مصنف', '300.00', '0.00', 'خصم التزام', '1', '300.00', '1 يوم × 300.00 = 300.00', REASON])
+    ['خصم', '300.00', '0.00', 'خصم التزام', '1', '300.00', '1 يوم × 300.00 = 300.00', REASON])
   const octoberRun = await repo('PayrollRun').findOneOrFail({ where: { period: '2026-10', status: 'PAID' } })
   const octoberItem = await repo('PayrollItem').findOneByOrFail({ runId: octoberRun.id, employeeId: people.low.id })
   const octoberLines = expectStatus(await request(users.hr, 'GET', `/payroll/items/${octoberItem.id}`), 200).obligationDetails
-  assert.deepEqual(octoberLines.map(row => [row.categoryLabel, row.collected, row.carried, row.deduction?.typeName ?? null]), [['عجز عهدة', '900.00', '0.00', null], ['خصم مصنف', '100.00', '150.00', 'خصم إداري']])
+  assert.deepEqual(octoberLines.map(row => [row.categoryLabel, row.collected, row.carried, row.deduction?.typeName ?? null]), [['عجز عهدة', '900.00', '0.00', null], ['خصم', '100.00', '150.00', 'خصم إداري']])
 
   // DD-12: عكس جزئي لخصم مستهلك في مسير مصروف بقيد موجب؛ المسير المصروف لا يتغير
   const typedRow = await repo('DeductionRequest').findOneOrFail({ where: { employeeId: people.low.id, status: 'APPROVED' } })

@@ -130,6 +130,11 @@ export class Employee {
   @Column({ type: 'date', nullable: true })
   joinDate: string
 
+  // بداية استحقاق الراتب — أرضية تغطية المسير لهذا الموظف. الفارغ = تاريخ بدء
+  // العمل الفعلي وإلا تاريخ التعيين (سلوك ما قبل الحقل، فلا يتغير أي مسير قائم)
+  @Column({ type: 'date', nullable: true })
+  salaryEntitlementStart: string
+
   // ===== بيانات التوظيف =====
   // تاريخ بداية العمل الفعلي (قد يختلف عن تاريخ التعيين)
   @Column({ type: 'date', nullable: true })

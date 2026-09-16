@@ -7,7 +7,7 @@ import LetterDownloadButton from '@/components/LetterDownloadButton'
 import RequestPayload from '@/components/RequestPayload'
 import OvertimePreview from '@/components/OvertimePreview'
 import OvertimeRequestSummary from '@/components/OvertimeRequestSummary'
-import { payloadFieldLabel } from '@/lib/request-payload'
+import { payloadFieldLabel, payloadSummary, payloadValueLabel } from '@/lib/request-payload'
 import { salaryIncreaseRequestFields, salaryIncreaseRequestPayload } from '@/lib/employee-salary-change-api'
 import {
   Plus,
@@ -37,7 +37,7 @@ import {
 } from '@/data/requestsCatalog'
 import {
   fetchRequestTypes,
-  fetchMyRequests,
+  apiFetch,
   fetchRequest,
   createRequest,
   cancelRequest,
@@ -79,6 +79,14 @@ interface ResolvedStep {
   dueAt?: string | null
   actedAt?: string | null
   action?: string | null
+}
+
+// القرار ب3 (خط الفلوس): كارتا «خصم» و«مكافأة» في المجموعة المالية يفتحان مساحة الخصومات أو المكافآت
+// جاهزة على تبويب الإنشاء — الطلب نفسه يُرفع هناك بدفتره وسلسلته، بلا فورم عام ولا محرك ثانٍ.
+const moneyWorkspaceRoute = (code: string): string | null => {
+  if (code === 'PAYROLL_DEDUCTION') return can('deductions.manage') ? '/payroll/deductions?tab=create' : '/my/deductions?tab=create'
+  if (code === 'PAYROLL_BONUS') return can('bonuses.manage') ? '/payroll/bonuses?tab=create' : '/my/bonuses?tab=create'
+  return null
 }
 
 const parseJson = <T,>(raw: string | null | undefined, fallback: T): T => {
@@ -155,21 +163,6 @@ const periodLabels: Record<string, string> = {
 const optionLabel = (value: string) => ({ single: 'أعزب', married: 'متزوج', divorced: 'مطلق', widowed: 'أرمل',
   permanent: 'غير محدد المدة', fixed_term: 'محدد المدة', part_time: 'دوام جزئي', seasonal: 'موسمي' } as Record<string, string>)[value] ?? value
 
-// أكواد أنواع الإجازة → عربي — لعرض «نوع الإجازة» في ملخّص الطلب بلا كود خام
-const leaveTypeCodeLabels: Record<string, string> = {
-  ANNUAL: 'سنوية',
-  SICK: 'مرضية',
-  CASUAL: 'عارضة',
-  UNPAID: 'بدون راتب',
-  MATERNITY: 'وضع',
-  PATERNITY: 'أبوة',
-  HAJJ: 'حج',
-  MARRIAGE: 'زواج',
-  BEREAVEMENT: 'وفاة/عدة',
-  EXAM: 'امتحانات',
-  COMPENSATORY: 'تعويضية',
-}
-
 // وجهات التنفيذ — للأنواع المبنية من «بانِي الطلبات» (بدون تسريب كود الـ handler)
 const handlerLabels: Record<string, string> = {
   none: 'تسجيل فقط — الطلب المعتمد هو السجل بلا أثر آلي',
@@ -219,27 +212,6 @@ const SMART_SELECT_FIELDS: readonly string[] = ['toTeamId', 'toEmployeeId', 'ass
 const humanizeKey = (k: string): string =>
   fieldLabels[k] ?? payloadFieldLabel(k)
 
-// قيمة الحقل للعرض — تُترجم الأكواد المعروفة ولا تعرض مراجع خام
-const formatPayloadValue = (k: string, v: unknown): string => {
-  if (k === 'period') return periodLabels[String(v)] ?? 'يوم كامل'
-  if (k === 'leaveType' || k === 'leaveTypeCode') return leaveTypeCodeLabels[String(v)] ?? String(v)
-  if (k === 'assetIds' && Array.isArray(v)) {
-    const n = v.length
-    return n === 1 ? 'أصل واحد' : n === 2 ? 'أصلان' : n <= 10 ? `${n} أصول` : `${n} أصلاً`
-  }
-  if (typeof v === 'boolean') return v ? 'نعم' : 'لا'
-  if (typeof v === 'string' && v.startsWith('file:')) return 'مرفق'
-  return String(v)
-}
-
-const payloadSummary = (raw?: string | null): string => {
-  const payload = parseJson<Record<string, unknown>>(raw, {})
-  return Object.entries(payload)
-    .filter(([, v]) => v !== '' && v !== null && v !== undefined)
-    .map(([k, v]) => `${humanizeKey(k)}: ${formatPayloadValue(k, v)}`)
-    .join(' • ')
-}
-
 // شكل الصف في الشاشة — مشتق من ApiRequest
 interface MyRequestRow {
   id: number
@@ -252,6 +224,8 @@ interface MyRequestRow {
   steps: { name: string; state: 'done' | 'current' | 'waiting' | 'rejected' }[]
   details: string
   destinationRecord?: string // مرجع الوجهة بعد الاكتمال
+  // طلب قدّمته نيابة عن موظف آخر — اسمه من السيرفر
+  onBehalfOfName?: string
 }
 
 const mapRequest = (r: ApiRequest, types: ApiRequestType[]): MyRequestRow => {
@@ -280,6 +254,7 @@ const mapRequest = (r: ApiRequest, types: ApiRequestType[]): MyRequestRow => {
     })),
     details: payloadSummary(r.payload),
     destinationRecord: r.destinationRef ?? undefined,
+    onBehalfOfName: (r as { onBehalfOfName?: string }).onBehalfOfName,
   }
 }
 
@@ -374,7 +349,8 @@ export default function MyRequestsPage() {
       setError(null)
       const [typeList, mine, offCase] = await Promise.all([
         fetchRequestTypes(),
-        fetchMyRequests(),
+        // «طلباتي» وحدها تعرض معها ما قدّمه المستخدم نيابةً عن غيره، موسوماً باسمه
+        apiFetch<ApiRequest[]>('/requests/mine?includeOnBehalf=1'),
         fetchMyOffboardingCase().catch(() => null),
       ])
       setTypes(typeList)
@@ -603,6 +579,8 @@ export default function MyRequestsPage() {
     ? leaveTypes.find((lt) => lt.code === (fieldValues.leaveTypeCode ?? fieldValues.leaveType))
     : undefined
   const leaveAttachmentRequired = (selectedLeaveTypeDef?.requiredAttachment ?? '').trim()
+  // الإجازة بدون مرتب تُحسب بأيام التقويم كاملة (نفس ما يخصمه المسير)؛ المدفوعة بأيام العمل
+  const leaveCountsCalendarDays = selectedLeaveTypeDef?.isPaid === false
 
   // إجازة يوم كامل والتاريخان محددان — حقل الأيام يعكس أيام العمل الفعلية (قراءة فقط)
   const leaveFrom = (fieldValues.fromDate ?? '').trim()
@@ -628,11 +606,11 @@ export default function MyRequestsPage() {
       fetchWorkingDays(leaveFrom, leaveTo, { self })
         .then((res) => {
           setWorkingDaysInfo({ from: leaveFrom, to: leaveTo, self, ...res })
-          // ضبط عدد الأيام على أيام العمل الفعلية — فقط إن ظل المدى كما هو
+          // ضبط عدد الأيام كما يحسبها السيرفر — فقط إن ظل المدى كما هو
           setFieldValues((prev) =>
             (prev.fromDate ?? '').trim() === leaveFrom &&
             (prev.toDate ?? '').trim() === leaveTo
-              ? { ...prev, days: String(res.working) }
+              ? { ...prev, days: String(leaveCountsCalendarDays ? res.total : res.working) }
               : prev
           )
         })
@@ -640,7 +618,7 @@ export default function MyRequestsPage() {
     }, 400)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leaveFrom, leaveTo, isLeaveCategory, isHalfDay, onBehalf])
+  }, [leaveFrom, leaveTo, isLeaveCategory, isHalfDay, onBehalf, leaveCountsCalendarDays])
 
   // تلميح الخصم تحت حقل الأيام — كهرماني عند وجود عطلات داخل المدى، أحمر لو كله عطلات
   const workingDaysHint =
@@ -648,7 +626,12 @@ export default function MyRequestsPage() {
     workingDaysInfo &&
     workingDaysInfo.from === leaveFrom &&
     workingDaysInfo.to === leaveTo ? (
-      workingDaysInfo.working === 0 ? (
+      leaveCountsCalendarDays ? (
+        <p className="flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 mt-1.5">
+          <AlertTriangle size={13} className="shrink-0" />
+          الإجازة بدون مرتب تُحسب بأيام التقويم — العطلات والويك إند داخل المدى تُحسب وتُخصم
+        </p>
+      ) : workingDaysInfo.working === 0 ? (
         <p className="flex items-center gap-1.5 text-xs text-red-700 bg-red-50 rounded-lg px-3 py-2 mt-1.5">
           <AlertTriangle size={13} className="shrink-0" />
           كل الأيام المختارة عطلات — الطلب سيُرفض
@@ -1179,11 +1162,16 @@ export default function MyRequestsPage() {
                           <StatusIcon size={24} />
                         </div>
                         <div>
-                          <div className="flex items-center gap-3">
+                          <div className="flex items-center gap-3 flex-wrap">
                             <h3 className="font-bold text-gray-800">{req.type}</h3>
                             <span className={`badge text-xs ${statusStyles[req.status] ?? 'bg-gray-100 text-gray-500'}`}>
                               {statusLabels[req.status] ?? 'قيد المعالجة'}
                             </span>
+                            {req.onBehalfOfName && (
+                              <span className="badge text-xs bg-indigo-50 text-indigo-700">
+                                نيابة عن {req.onBehalfOfName}
+                              </span>
+                            )}
                           </div>
                           <p className="text-sm text-gray-500 mt-1">{req.details}</p>
                           {req.destinationRecord && (
@@ -1387,6 +1375,9 @@ export default function MyRequestsPage() {
                                   key={t.code}
                                   disabled={!!editingRequest}
                                   onClick={() => {
+                                    // القرار ب3 (خط الفلوس): «خصم» و«مكافأة» يفتحان مساحتهما الجاهزة بدل فورم عام
+                                    const workspace = moneyWorkspaceRoute(t.code)
+                                    if (workspace) { window.location.assign(workspace); return }
                                     setSelectedType(t.code)
                                     setSelectedDefinition(t.leaveProfiles?.length === 1 ? t.leaveProfiles[0].definitionCode ?? '' : '')
                                     setFieldValues(t.leaveProfiles?.length === 1 && t.leaveProfiles[0].leaveTypeCode
@@ -1578,7 +1569,7 @@ export default function MyRequestsPage() {
                       )}
                       {selectedAssetIds.length > 0 && (
                         <p className="text-xs text-primary-600 mt-2">
-                          {formatPayloadValue('assetIds', selectedAssetIds)} ضمن
+                          {payloadValueLabel('assetIds', selectedAssetIds)} ضمن
                           الطلب — يتحقق النظام من توفرها عند الإرسال
                         </p>
                       )}

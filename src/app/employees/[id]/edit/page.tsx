@@ -123,6 +123,7 @@ export default function EditEmployeePage() {
           employeeCode: emp.employeeCode ?? '',
           fingerprintCode: emp.fingerprintCode ?? '',
           joinDate: emp.joinDate ? String(emp.joinDate).slice(0, 10) : '',
+          salaryEntitlementStart: emp.salaryEntitlementStart ? String(emp.salaryEntitlementStart).slice(0, 10) : '',
           status: emp.status ?? 'probation',
           branchId: calendar ? calendar.current.branchId == null ? '' : String(calendar.current.branchId) : emp.branchId != null ? String(emp.branchId) : '',
           departmentId: emp.departmentId != null ? String(emp.departmentId) : '',

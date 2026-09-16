@@ -322,7 +322,7 @@ export default function AttendancePage() {
         {/* Page Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">سجل الحضور والانصراف</h1>
+            <h1 className="text-2xl font-bold text-gray-800">سجل الحضور</h1>
             <p className="text-gray-500 mt-1">متابعة حضور وانصراف الموظفين</p>
           </div>
           <div className="flex items-center gap-3">
@@ -584,7 +584,8 @@ export default function AttendancePage() {
                             جدول افتراضي (مفترَض)
                           </div>
                         )}
-                        {record.graceUsed != null && (
+                        {/* الوردية المرنة لا تُطبَّق فيها السماحية — نافذة الحضور تغنيها */}
+                        {record.graceUsed != null && !(record.flexDay.attendanceRuleSnapshot?.flexEnabled && (record.flexDay.attendanceRuleSnapshot.windowSupersedesGrace ?? true)) && (
                           <div
                             className="text-[10px] text-gray-400"
                             title="السماحية التي طُبّقت على هذا اليوم — سماحية الوردية إن حُدّدت لها، وإلا القيمة العامة"
@@ -652,7 +653,7 @@ export default function AttendancePage() {
                         {record.lateMinutes > 0 && (
                           <p className="text-xs text-warning-600 mt-1 font-medium">
                             متأخر {record.lateMinutes} دقيقة عن {record.shiftName}
-                            {record.graceUsed != null && (
+                            {record.graceUsed != null && !(record.flexDay.attendanceRuleSnapshot?.flexEnabled && (record.flexDay.attendanceRuleSnapshot.windowSupersedesGrace ?? true)) && (
                               <span className="text-gray-400 font-normal">
                                 {' '}(بعد سماح {record.graceUsed} د)
                               </span>

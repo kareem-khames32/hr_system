@@ -2,8 +2,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common'
 import { createHash } from 'node:crypto'
 import { In, type EntityManager } from 'typeorm'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
-import { readPayrollLatenessTierSetById, readPayrollLatenessTierSetForPeriod, type PayrollLatenessTierSetSnapshot, PAYROLL_LATENESS_TIER_MODE_LABELS } from './payroll-lateness-tiers'
-import { PayrollLatenessTierSet } from './payroll-lateness-tier-sets.entities'
+import { readPayrollLatenessTierSetById, type PayrollLatenessTierSetSnapshot, PAYROLL_LATENESS_TIER_MODE_LABELS } from './payroll-lateness-tiers'
 import { PayrollPolicy, PayrollPolicyVersion } from './payroll-policy.entities'
 import { PayrollPolicyVersionSeal } from './payroll-policy-seal.entities'
 import { inspectPayrollPolicySettings, PAYROLL_POLICY_CONFIG_KEYS, parsePayrollPolicyConfigValue } from './payroll-policy-settings'
@@ -67,7 +66,8 @@ const CONFIG: Record<PayrollRunPolicyValueKey, { key: string; fallback: string |
   earlyLeaveDeductionEnabled: { key: 'payroll.early_leave_deduction_enabled', fallback: 'true' },
   absencePenaltyDays: { key: 'attendance.absence_penalty_days', fallback: '1' },
   exemptOvertimeEligible: { key: 'payroll.exempt_overtime_eligible', fallback: 'false' },
-  exemptUnpaidLeaveDeductible: { key: 'payroll.exempt_unpaid_leave_deductible', fallback: 'true' },
+  // أ7: المستثنى من البصمة بلا خصومات إطلاقًا — الإجازة بلا أجر لا تُخصم له ما لم يُفعّل الإعداد صراحةً.
+  exemptUnpaidLeaveDeductible: { key: 'payroll.exempt_unpaid_leave_deductible', fallback: 'false' },
   currency: { key: PAYROLL_POLICY_CONFIG_KEYS.currency, fallback: null },
   minNetGuarantee: { key: PAYROLL_POLICY_CONFIG_KEYS.minNetGuarantee, fallback: null },
   netFloorPct: { key: PAYROLL_POLICY_CONFIG_KEYS.netFloorPct, fallback: null },
@@ -186,11 +186,12 @@ export async function capturePayrollRunPolicySnapshot(em: EntityManager, run: { 
     ownerTierSetId = owner.latenessTierSetId ?? null
   }
   let latenessTiers: PayrollLatenessTierSetSnapshot
-  // جدول الشرائح المختار للمجموعة يُستخدم ما دام مفعّلًا؛ إيقافه من «القيم العامة للخصومات» يرجع المجموعة لشرائح الشهر السارية.
-  if (ownerTierSetId !== null && await em.getRepository(PayrollLatenessTierSet).existsBy({ id: ownerTierSetId, isActive: true })) {
+  // أ1 (قرار المالك 16 سبتمبر): شرائح التأخير تعيش داخل معادلة الرواتب وحدها — لا اختيار بالشهر.
+  // المعادلة بلا شرائح (أو مسير بلا معادلة) = بلا شرائح: الخصم بالدقيقة، وهو سلوك «بلا مجموعة» القائم.
+  if (ownerTierSetId !== null) {
     const { row: _row, ...snapshot } = await readPayrollLatenessTierSetById(em, ownerTierSetId)
     latenessTiers = snapshot
-  } else latenessTiers = await readPayrollLatenessTierSetForPeriod(em, run.period)
+  } else latenessTiers = { setId: null, effectivePeriod: null, contentHash: null, source: 'NONE', tiers: [] }
   const content = { schemaVersion: PAYROLL_RUN_POLICY_SNAPSHOT_SCHEMA, capturedAt: new Date().toISOString(), capturedBy, period: run.period,
     dayBasis: values.monthlyDays === 30 ? 'FIXED_30' : `FIXED_${values.monthlyDays}`, policy, values, sources, latenessTiers }
   return { ...content, fingerprint: payrollRunPolicySnapshotFingerprint(content as PayrollRunPolicySnapshot) }

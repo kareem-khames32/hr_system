@@ -234,9 +234,13 @@ export class RequestsController {
     return this.balances.rollover(fromPeriod)
   }
 
+  // «طلباتي»: طلبات صاحب الحساب. شاشة «طلباتي» وحدها تطلب معها ما قدّمه نيابةً
+  // عن غيره (includeOnBehalf=1) — الشاشات الشخصية الأخرى تبقى على طلباته هو
   @Get('requests/mine')
-  mine(@CurrentUser() user: JwtPayload) {
-    return this.service.mine(user)
+  mine(@CurrentUser() user: JwtPayload, @Query('includeOnBehalf') includeOnBehalf?: string) {
+    return this.service.mine(user, {
+      includeOnBehalf: includeOnBehalf === '1' || includeOnBehalf === 'true',
+    })
   }
 
   // إجازاتي المعتمدة — لمنتقي «إلغاء/تعديل إجازة» (خدمة ذاتية)

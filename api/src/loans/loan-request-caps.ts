@@ -41,15 +41,22 @@ async function intConfig(em: EntityManager, key: string, fallback: number, min: 
   return value
 }
 export async function loanReasonMinLength(em: EntityManager) { return intConfig(em, 'loan.exceptional_reason_min_length', 10, 1, 500) }
+async function boolConfig(em: EntityManager, key: string, fallback: boolean) {
+  const raw = (await configValue(em, key, fallback ? 'true' : 'false')).trim()
+  return raw === 'true' ? true : raw === 'false' ? false : fallback
+}
 
-/** أيام طلب السلفة من الشهر (من يوم إلى يوم، والتفاف فوق نهاية الشهر لو البداية بعد النهاية). الأصل 1..31 = مفتوح طول الشهر. */
+/** أيام طلب السلفة من الشهر (من يوم إلى يوم، والتفاف فوق نهاية الشهر لو البداية بعد النهاية). الأصل 1..31 = مفتوح طول الشهر.
+ *  والقرار ب2: مفتاح «اقفل طلب السلفة الآن» يعلو الأيام — مقفول يعني مقفول أيًّا كان اليوم. */
 export async function loanRequestDayWindow(em: EntityManager, today: string) {
   const from = await intConfig(em, 'loan.request_from_day', 1, 1, 31), to = await intConfig(em, 'loan.request_to_day', 31, 1, 31)
+  const enabled = await boolConfig(em, 'loan.request_open', true)
   const [year, month, day] = today.split('-').map(Number)
   const lastDay = new Date(year, month, 0).getDate()
   const start = Math.min(from, lastDay), end = Math.min(to, lastDay)
-  const open = start <= end ? day >= start && day <= end : day >= start || day <= end
-  return { fromDay: from, toDay: to, open, message: `طلب السلفة متاح من يوم ${from} إلى يوم ${to} من الشهر` }
+  const insideDays = start <= end ? day >= start && day <= end : day >= start || day <= end
+  return { fromDay: from, toDay: to, enabled, open: enabled && insideDays,
+    message: enabled ? `طلب السلفة متاح من يوم ${from} إلى يوم ${to} من الشهر` : 'طلب السلفة مقفول حاليًا' }
 }
 async function assertLoanRequestDayWindow(em: EntityManager, today: string) {
   const dayWindow = await loanRequestDayWindow(em, today)
@@ -173,6 +180,9 @@ export async function stageLoanRequestSubmission(em: EntityManager, input: { req
     }
     if (firstInstallmentPeriod) staged.firstInstallmentPeriod = firstInstallmentPeriod
   }
+  // شهر أول قسط يُختم مرة واحدة عند التقديم فيراه الموظف والمعتمد قبل الاعتماد (القرار د)؛
+  // الافتراضي هو افتراضي المعالج نفسه: أول الشهر التالي.
+  if (!firstInstallmentPeriod) staged.firstInstallmentPeriod = addMonths(today.slice(0, 7), 1)
   staged.capCheck = { stage: 'SUBMIT', checkedAt: new Date().toISOString(), actorUserId: input.actor.sub, evaluation }
   return staged
 }

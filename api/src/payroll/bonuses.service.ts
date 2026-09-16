@@ -406,6 +406,7 @@ export class BonusesService {
   // ===== الاقتراح الفردي =====
   async create(user: JwtPayload, dto: CreateBonusDto) {
     const id = await this.manager.transaction(async em => {
+      await this.org.assertMoneyRequestVisible(em, user, 'PAYROLL_BONUS', 'المكافأة')
       const ctx = await this.context(em, user, dto)
       const employee = await em.getRepository(Employee).findOneBy({ id: dto.employeeId })
       if (!employee) {
@@ -490,6 +491,7 @@ export class BonusesService {
 
   async bulkSubmit(user: JwtPayload, dto: BonusBulkSubmitDto) {
     const result = await this.manager.transaction(async em => {
+      await this.org.assertMoneyRequestVisible(em, user, 'PAYROLL_BONUS', 'المكافأة')
       const { ctx, evaluations, response, ignoredOutOfScope } = await this.buildPreview(em, user, dto, true)
       if (response.previewHash !== dto.previewHash) return { stale: response }
       if (!evaluations.length) bad('BONUS_BULK_EMPTY', 'لا يوجد موظف جاهز للإرسال في المعاينة')

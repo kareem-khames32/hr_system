@@ -56,7 +56,7 @@ interface MenuItem {
 const adminMenuDefs: MenuItem[] = [
   {
     id: 'requests-console',
-    label: 'لوحة الطلبات (HR)',
+    label: 'لوحة الطلبات',
     icon: <ClipboardList size={20} />,
     href: '/requests-console',
     perm: 'requests.view_all',
@@ -71,10 +71,10 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'تهيئة الموظفين الجدد', href: '/employees/onboarding', perm: 'employees.view' },
       { label: 'الهيكل التنظيمي', href: '/employees/org-chart', perm: 'employees.view' },
       { label: 'إدارة العقود', href: '/employees/contracts', perm: 'employees.view' },
-      { label: 'المستندات', href: '/employees/documents', perm: 'documents.manage' },
-      { label: 'إنشاء مستند', href: '/employees/documents/create', perm: 'documents.manage' },
+      { label: 'مستندات الموظفين', href: '/employees/documents', perm: 'documents.manage' },
+      { label: 'إصدار مستند', href: '/employees/documents/create', perm: 'documents.manage' },
       { label: 'سجل العهد', href: '/employees/custody', perm: 'custody.assign' },
-      { label: 'لوج النقل', href: '/employees/transfers', perm: 'transfers.view' },
+      { label: 'سجل النقل', href: '/employees/transfers', perm: 'transfers.view' },
       { label: 'المؤرشفون ومنتهو الخدمة', href: '/employees/archived', perm: 'employees.view' },
     ],
   },
@@ -123,7 +123,7 @@ const adminMenuDefs: MenuItem[] = [
     icon: <Wallet size={20} />,
     perm: 'payroll.view',
     // تبسيط الرواتب (2026-09-15): الإعفاءات المالية وقسائم الراتب والبدلات والتأمينات أُخفيت وروابطها تتحول لـ«مسير الرواتب»؛
-    // «القيم العامة للخصومات» (/payroll/formulas) تُفتح من داخل «معادلات الرواتب»
+    // و«القيم العامة للخصومات» (/payroll/formulas) أُوقفت وصارت داخل «معادلات الرواتب» نفسها — رابطها القديم يحوّل إليها
     children: [
       { label: 'مسير الرواتب', href: '/payroll' },
       { label: 'معادلات الرواتب', href: '/payroll/policies' },
@@ -156,7 +156,7 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'تقييم جديد', href: '/performance/new' },
       { label: 'الأهداف', href: '/performance/goals' },
       { label: 'دورات التقييم', href: '/performance/cycles' },
-      { label: 'النماذج', href: '/performance/templates' },
+      { label: 'نماذج التقييم', href: '/performance/templates' },
     ],
   },
   {
@@ -195,7 +195,7 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'مراكز التكلفة', href: '/settings/cost-centers', perm: 'settings.manage' },
       { label: 'أيام العمل', href: '/settings/work-days', perm: 'settings.manage' },
       { label: 'أنواع الأذونات', href: '/settings/permission-types', perm: 'settings.manage' },
-      { label: 'سياسات الإجازات والأوفرتايم', href: '/settings/policies', perm: 'settings.manage' },
+      { label: 'سياسات النظام', href: '/settings/policies', perm: 'settings.manage' },
       { label: 'الاعتمادات والموافقات', href: '/settings/approvals', perm: 'approval_chains.manage' },
       { label: 'بانِي الطلبات', href: '/settings/request-types', perm: 'request_types.manage' },
       { label: 'سجل الأصول', href: '/settings/asset-types', perm: 'custody.assign' },
@@ -319,7 +319,7 @@ export default function Sidebar() {
             <Building2 className="w-7 h-7 text-white" />
           </div>
           <div>
-            <h1 className="font-bold text-gray-800 text-lg">نظام HR</h1>
+            <h1 className="font-bold text-gray-800 text-lg">نظام الموارد البشرية</h1>
             <p className="text-xs text-gray-400">إدارة الموارد البشرية</p>
           </div>
         </div>

@@ -171,41 +171,22 @@ export default function PayslipPage() {
 
   const deductions: Array<{ name: string; amount: number; component?: ExemptionComponent }> = item
     ? [
-        {
-          name: 'خصم التأخير',
-          amount: Number(item.latenessDeduction),
-          component: 'LATENESS',
-        },
-        {
-          name: 'خصم نقص ساعات العمل',
-          amount: Number(item.shortfallDeduction ?? 0),
-          component: 'SHORTFALL',
-        },
-        {
-          name: 'خصم الغياب',
-          amount: Number(item.absenceDeduction ?? 0),
-          component: 'ABSENCE',
-        },
-        {
-          name: 'إجازة بدون راتب',
-          amount: Number(item.unpaidLeaveDeduction),
-        },
+        { name: 'خصم التأخير', amount: Number(item.latenessDeduction), component: 'LATENESS' },
+        { name: 'خصم نقص ساعات العمل', amount: Number(item.shortfallDeduction ?? 0), component: 'SHORTFALL' },
+        { name: 'خصم الغياب', amount: Number(item.absenceDeduction ?? 0), component: 'ABSENCE' },
+        { name: 'إجازة بدون راتب', amount: Number(item.unpaidLeaveDeduction) },
         { name: 'أقساط السلف', amount: Number(item.loanInstallments), component: 'LOAN' },
-        {
-          name: 'خصومات الدفتر (مصنفة/عهدة/استرداد) — تفصيلها أدناه',
-          amount: Number(item.otherDeductions ?? 0),
-          component: 'TYPED',
-        },
+        { name: 'خصومات أخرى — تفصيلها أدناه', amount: Number(item.otherDeductions ?? 0), component: 'TYPED' },
       ]
     : []
-  // الخطوة 26 (EX-04 قاعدة 5): البند المُعفى في موضعه الطبيعي بين الخصومات — المُعفى، والأصل قبل الإعفاء لخصومات الحضور
-  // تبسيط الرواتب (2026-09-15): رقم الإعفاء لا يظهر في الملاحظة
+  // القرار د: سطر الخصم نفسه يقول إنه أُلغي — المبلغ الملغى (والأصل قبله لخصومات الحضور) بجانب البند،
+  // والسطر المختصر أسفل القسيمة يبقى كما هو. بلا رقم قرار ولا مصطلحات.
   const savedExemptions = item ? savedFinancialExemptions(item) : null
   const exemptionNote = (component?: ExemptionComponent) => {
     const total = component ? savedExemptions?.totals.byComponent[component] : undefined
     if (!component || !savedExemptions || !total) return null
     const requested = component === 'LATENESS' ? savedExemptions.requested.lateness : component === 'SHORTFALL' ? savedExemptions.requested.shortfall : component === 'ABSENCE' ? savedExemptions.requested.absence : null
-    return `${requested ? `الأصل قبل الإعفاء ${formatMoney(requested)} — ` : ''}مُعفى ${formatMoney(total.exempted)}`
+    return `${requested ? `الأصل قبل الإلغاء ${formatMoney(requested)} — ` : ''}أُلغي منه ${formatMoney(total.exempted)}`
   }
 
   const totalEarnings = sumMoney(earnings.map(e => e.amount))

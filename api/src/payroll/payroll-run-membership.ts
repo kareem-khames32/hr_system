@@ -62,8 +62,9 @@ export interface PayrollMembershipInput {
 const ID_CHUNK = 500
 
 function coverageExclusion(emp: Employee, cases: OffboardingCase[], startDate: string, endDate: string): PayrollMembershipCode {
+  // أ2: أرضية الاستحقاق نفسها التي تستعملها payrollEmploymentCoverage، فسبب الاستبعاد يطابق سبب غياب التغطية.
   return emp.status === 'suspended' ? 'SUSPENDED' : emp.status === 'archived' ? 'ARCHIVED' :
-    (emp.actualStartDate || emp.joinDate || '') > endDate ? 'EXC_JOINS_AFTER_PERIOD' :
+    (emp.salaryEntitlementStart || emp.actualStartDate || emp.joinDate || '') > endDate ? 'EXC_JOINS_AFTER_PERIOD' :
       cases.some(kase => kase.status !== 'CANCELLED' && kase.lastWorkingDay < startDate) ? 'EXC_TERMINATED_BEFORE_PERIOD' : 'EXC_NO_ACTIVE_EMPLOYMENT'
 }
 

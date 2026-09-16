@@ -1,7 +1,10 @@
 // C2 / الخطوة 25: قواعد الخصومات المصنفة النقية (DD-01/02/03/06/10) وحماية الصافي (DD-11) بلا قاعدة بيانات.
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
+const repoRoot = path.resolve(__dirname, '..', '..')
+const readSource = file => fs.readFileSync(path.join(repoRoot, file), 'utf8')
 const apiRoot = path.resolve(__dirname, '..')
 require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
 require('../node_modules/reflect-metadata')
@@ -136,6 +139,31 @@ test('DD-11: SRS cap example — 50% of 11,750 with 750 attendance leaves 5,125 
   const floored = protectPayrollObligations({ earnedFixedGross: 10000, overtime: 0, unpaidLeave: 0, attendance: { lateness: 0, shortfall: 0, absence: 0 },
     credits: [], debits: [debit(2, 9000)], settings: { minNetGuarantee: '2000', netFloorPct: '30', maxDeductionPctOfGross: null } })
   assert.equal(floored.otherDeductions, 7000, 'the 30% floor (3000) beats the 2000 guarantee')
+})
+
+test('deduction form (money-requests lane): incident date, document reference, installments, the limits box and the dead reports panel are gone; «إرسال» previews internally', () => {
+  const workspace = readSource('src/components/payroll/TypedDeductionsWorkspace.tsx')
+  // ومعها كلام الدفتر التقني، ومسار الاعتراض حين لا اعتراض أصلاً (الإعداد objection_blocks_approval = false)
+  for (const gone of ['تاريخ الواقعة\n', 'عدد الأقساط (حتى', 'حدود النوع:', 'DeductionReportsPanel', 'ReportSection', 'fetchDeductionReports', 'معاينة الأرقام',
+    'قيود الدفتر', 'لا يُنشأ قيد قبل آخر اعتماد', 'مرحّل من قيد', 'لا اعتراض', 'لا يمنع الاعتماد', 'يمنع الاعتماد حتى الرد']) {
+    assert.ok(!workspace.includes(gone), gone)
+  }
+  for (const text of ['fresh = preview && !stale ? preview : await previewDeductions(input, selection)',
+    'submitDeductionBatch(input, selection, fresh.previewHash)',
+    '{preview && (preview.totals.failed > 0 || preview.totals.excluded > 0) && (',
+    'إجمالي المجموعة ({preview.totals.ready} موظف)',
+    'مرجع المستند (إلزامي لهذا النوع)',
+    "if (view === 'pending_me' || view === 'created' || view === 'all') setFilters(value => ({ ...value, view }))",
+    "if (urlParam('tab') === 'create' && value.types.length > 0) setTab('create')",
+    'الخصم على الشهور (بعد الاعتماد)',
+    'مؤجل من شهر سابق',
+    '{detail.objections.length > 0 && (']) {
+    assert.ok(workspace.includes(text), text)
+  }
+  // «بانتظار موافقتي» في صندوق الموافقات يفتح العرض نفسه لا «الكل»
+  const inbox = readSource('src/app/approvals-inbox/page.tsx')
+  assert.ok(inbox.includes("'/payroll/deductions?view=pending_me' : '/my/deductions?view=pending_me'"))
+  assert.ok(inbox.includes("'/payroll/bonuses?view=pending_me' : '/my/bonuses?view=pending_me'"))
 })
 
 // ===== إعادة العمل (مراجعة S25) =====

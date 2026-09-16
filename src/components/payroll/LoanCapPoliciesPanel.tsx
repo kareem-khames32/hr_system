@@ -73,8 +73,15 @@ export function LoanCapPoliciesPanel({ currency }: { currency: string }) {
   const latestByKey = new Map<string, LoanCapPolicy>()
   for (const row of policies) if (!latestByKey.has(row.policyKey) || latestByKey.get(row.policyKey)!.version < row.version) latestByKey.set(row.policyKey, row)
   const visible = [...latestByKey.values()]
-  const scopeText = (row: LoanCapPolicy) => row.scopeType === 'COMPANY' ? LOAN_SCOPE_LABELS.COMPANY
-    : `${LOAN_SCOPE_LABELS[row.scopeType]}: ${(row.scopeIds ?? []).map(id => options[row.scopeType as Exclude<LoanCapScopeType, 'COMPANY'>].find(option => option.id === id)?.label ?? 'غير معروف').join('، ')}`
+  // العنصر خارج نطاق قارئ الشاشة لا يُعرض باسم «غير معروف» مكررًا؛ يُذكر عدده فقط
+  const scopeText = (row: LoanCapPolicy) => {
+    if (row.scopeType === 'COMPANY') return LOAN_SCOPE_LABELS.COMPANY
+    const list = options[row.scopeType as Exclude<LoanCapScopeType, 'COMPANY'>]
+    const named = (row.scopeIds ?? []).map(id => list.find(option => option.id === id)?.label).filter((label): label is string => !!label)
+    const hidden = (row.scopeIds ?? []).length - named.length
+    const parts = [...named, ...(hidden > 0 ? [`و${hidden} خارج نطاقك`] : [])]
+    return `${LOAN_SCOPE_LABELS[row.scopeType]}: ${parts.length ? parts.join('، ') : 'خارج نطاقك'}`
+  }
   const set = (patch: Partial<LoanCapPolicyInput>) => setForm(current => ({ ...current, ...patch }))
 
   return (

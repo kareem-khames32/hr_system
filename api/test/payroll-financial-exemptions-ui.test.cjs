@@ -44,6 +44,17 @@ test('شاشة المسير: «إلغاء خصم» على صف الموظف بب
   assert.ok(panel.includes('granted = await grantExemption({ ...input, previewHash: preview.previewHash })'), 'المنح يرسل بصمة المعاينة')
   assert.ok(panel.includes("const REMOVE_DEDUCTION_REASON = 'إلغاء خصم من شاشة المسير بقرار الموارد البشرية'"), 'سبب جاهز بلا كتابة')
   assert.ok(panel.includes("disposition: 'DROP' as const"), 'الخصم المصنف يُلغى لا يُؤجَّل')
+  // القرار ب5: تأكيد واحد داخل النافذة نفسها (اسم الخصم ومبلغه) وخانة سبب اختيارية تُرسل بدل النص الجاهز
+  assert.ok(panel.includes('data-testid="payroll-remove-deduction-confirm"'), 'سطر تأكيد داخل النافذة')
+  assert.ok(panel.includes('تأكيد الإلغاء'))
+  assert.ok(panel.includes("const removalReason = (note: string) => note.trim().length >= 3 ? note.trim() : REMOVE_DEDUCTION_REASON"))
+  assert.ok(panel.includes('reason: removalReason(reason)'), 'السبب المكتوب يُرسل بدل النص الجاهز')
+  // فصل المهام يُقال على الصف قبل الضغط بدل رفض 403 بعد التأكيد: من أنزل الخصم لا يلغيه
+  assert.ok(panel.includes("` — ${row.protectedReason ?? 'لا يمكن إلغاؤه'}`"), 'سبب المنع مكتوب على صف الخصم')
+  assert.ok(read('api/src/payroll/financial-exemptions.service.ts').includes("ownCreator(row) ? 'أنت من أنزل هذا الخصم؛ يلغيه مستخدم آخر' : null"))
+  assert.ok(panel.includes('سبب الإلغاء (اختياري)'))
+  // الصف يبقى موسومًا «أُلغي» لا يختفي
+  assert.ok(panel.includes("option.removed ? 'أُلغي' : 'إلغاء هذا الخصم'"))
   assert.ok(!/grantedBy(UserId)?\s*[:=]\s*[a-zA-Z]/.test(panel.split('grantExemption(')[1]?.split(')')[0] ?? ''), 'لا يُرسل المانح من الواجهة')
 })
 
@@ -55,8 +66,24 @@ test('القسيمة: كل خصم ملغى سطر واحد «أُلغي خصم <
   for (const text of ['إعفاء #', 'المانح:', 'المبلغ الأصلي']) assert.ok(!sectionCode.includes(text), text)
   const payslip = read(files.payslip)
   assert.ok(payslip.includes('<PayrollExemptionPayslipSection item={item} currency={currency} details={financialExemptions} />'))
-  assert.ok(payslip.includes('exemptionNote(deduction.component)'), 'ملاحظة الإعفاء في سطر الخصم نفسه')
-  assert.ok(payslip.includes('الأصل قبل الإعفاء'))
+  // القرار ب5 + القرار د: لغة «الإعفاء» لم تعد تظهر في القسيمة إطلاقًا — لا «الأصل قبل الإعفاء» ولا «مُعفى».
+  // ملاحظة سطر الخصم نفسه أعاد خط «العناوين والكلام التقني» صياغتها عربيًا («الأصل قبل الإلغاء … أُلغي منه …»)
+  // بدل حذفها؛ تُقبل هنا لأنها تقول للموظف إن الخصم أُلغي بلغة عادية، والسطر المختصر أسفل القسيمة باقٍ كما هو.
+  assert.ok(!payslip.includes('الأصل قبل الإعفاء'), 'لا لغة إعفاء في سطر الخصم')
+  assert.ok(!/مُعفى/.test(payslip), 'لا كلمة «مُعفى» في القسيمة')
+})
+
+// لا قرار في هذه الموجة يطلب اشتراط مرفق جديدًا: حد المبلغ المُعفى بلا مرفق يعود إلى ما كان عليه
+// قبل الموجة (366 يوم راتب = لا مرفق عمليًا)، فيبقى «إلغاء خصم» ضغطة واحدة بلا مدخل إضافي.
+test('حد مرفق الإعفاء المالي يرجع كما كان — الموجة لا تضيف اشتراطًا', () => {
+  const migration = read('docs/migrations/payroll/20260916_039_money_request_audience_and_exemption_threshold.sql')
+  assert.ok(migration.includes("SET [value] = N'366'"), 'الترحيل يرجّع القيمة القديمة')
+  assert.ok(migration.includes("[value] = N'90'"), 'مشروط بالقيمة التي كتبتها الموجة بالضبط')
+  const statements = migration.split('\n').filter(line => !line.trim().startsWith('--')).join('\n')
+  assert.ok(!/\b(DROP|DELETE|TRUNCATE)\b/.test(statements), 'إضافي فقط')
+  // الترحيل السابق (036) هو من خفّضها؛ الشرط عليه بالضبط فلا يُلمس ضبط المالك لو غيّرها بنفسه
+  const previous = read('docs/migrations/payroll/20260916_036_money_requests_and_loan_window.sql')
+  assert.ok(previous.includes("SET [value] = N'90'"), 'القيمة المخفّضة جاءت من ترحيل هذه الموجة')
 })
 
 test('صفحتا «الإعفاءات المالية» و«إعفاءاتي» تتحولان بلا مداخل جانبية، والـAPI باقٍ', () => {

@@ -166,7 +166,7 @@ export default function CalendarPage() {
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">التقويم الموحد</h1>
+            <h1 className="text-2xl font-bold text-gray-900">التقويم</h1>
             <p className="text-gray-600 mt-1">عرض العطلات الرسمية وإجازات الموظفين في مكان واحد</p>
           </div>
           <div className="flex gap-2">

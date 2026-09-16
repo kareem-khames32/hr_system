@@ -305,7 +305,7 @@ export default function DepartmentsPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">إدارة الأقسام والإدارات</h1>
+            <h1 className="text-2xl font-bold text-gray-800">الأقسام والإدارات</h1>
             <p className="text-gray-500 mt-1">الهيكل التنظيمي للشركة</p>
           </div>
           <button

@@ -10,6 +10,7 @@ const env = require('../node_modules/dotenv').parse(fs.readFileSync(path.join(ap
 const database = `hr_recovery_test_${crypto.randomBytes(8).toString('hex')}`, secret = crypto.randomBytes(48).toString('hex')
 const migration = fs.readFileSync(path.join(apiRoot, '../docs/migrations/20260911_006_pre_payroll_leave_request_names.sql'), 'utf8')
 let master, app, ds, base, created = false, admin, hr, alice, bob, outsider, branch, otherBranch, legacyA, legacyB
+let hrAgent, permissionType, permissionTypeZero, ghost
 const repos = {}
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
 async function request(user, method, url, body) {
@@ -36,9 +37,11 @@ before(async () => {
     RequestApproval: 'requests/entities/request-approval.entity', ApprovalChain: 'requests/entities/approval-chain.entity',
     ApprovalStep: 'requests/entities/approval-step.entity', Leave: 'requests/entities/leave.entities',
     LeaveType: 'requests/entities/leave.entities', LeaveBalance: 'requests/entities/leave.entities', Asset: 'requests/entities/custody.entities',
+    PermissionType: 'attendance/attendance.entities',
     CustodyAssignment: 'requests/entities/custody.entities' })) repos[name] = ds.getRepository(require('../src/' + file)[name])
   // weekendDays=null = إعداد النظام؛ النص الفارغ يرفضه فحص لقطة التقويم كما يرفضه API الفروع
-  branch = await repos.Branch.save({ name: 'Leave A', code: 'LEAVE_A', weekendDays: null })
+  // عطلة أسبوعية صريحة: أيام التقويم مقابل أيام العمل تُقاس بلا اعتماد على إعداد عام
+  branch = await repos.Branch.save({ name: 'Leave A', code: 'LEAVE_A', weekendDays: 'FRI,SAT' })
   otherBranch = await repos.Branch.save({ name: 'Leave B', code: 'LEAVE_B', weekendDays: null })
   const person = async (name, branchId) => {
     const e = await repos.Employee.save({ employeeCode: name, fullName: name, branchId, joinDate: '2020-01-01', status: 'active' })
@@ -48,6 +51,7 @@ before(async () => {
   admin = await repos.User.save({ email: 'admin@test.invalid', displayName: 'Admin', role: 'super_admin', permissions: '["*"]', passwordHash: 'unused' })
   hr = await repos.User.save({ email: 'hr@test.invalid', displayName: 'HR', role: 'hr_manager', branchId: branch.id, permissions: '["leaves.view_all","employees.view","leave_balances.manage","requests.view_all"]', passwordHash: 'unused' })
   await repos.LeaveType.save([{ code: 'ANNUAL', nameAr: 'Annual', balanceType: 'annual', isPaid: true },
+    { code: 'CASUAL', nameAr: 'Casual', balanceType: 'none', isPaid: true },
     { code: 'UNPAID', nameAr: 'Unpaid', balanceType: 'none', isPaid: false }])
   const chainA = await repos.ApprovalChain.save({ code: 'PROFILE_A', nameAr: 'Profile A global', autoApprove: false })
   const branchA = await repos.ApprovalChain.save({ code: 'PROFILE_A', nameAr: 'Profile A branch', branchId: branch.id, autoApprove: false })
@@ -60,6 +64,31 @@ before(async () => {
     customFields: JSON.stringify([{ key: field, label: field, type: 'text', required: true }]), isConfidential: code === 'LEAVE_UNPAID', isActive: true })
   await profile('LEAVE_ANNUAL', chainA.id, 'leave_calendar_balance', alice.employeeId, 'annualReason')
   await profile('LEAVE_UNPAID', chainB.id, 'leave_calendar_payroll', bob.employeeId, 'unpaidReason')
+  // نوع مدفوع بلا خصم رصيد — للمقارنة مع «بدون مرتب» على نفس شكل المدى
+  await profile('LEAVE_CASUAL', chainA.id, 'leave_calendar_payroll', bob.employeeId, 'casualReason')
+  // موارد بشرية بلا نطاق فرع: تقدّم نيابةً وتتصرف في الخطوات الواقفة
+  const hrEmployee = await repos.Employee.save({ employeeCode: 'HRAGENT', fullName: 'HRAGENT', branchId: branch.id, joinDate: '2020-01-01', status: 'active' })
+  hrAgent = await repos.User.save({ email: 'hragent@test.invalid', displayName: 'HR Agent', role: 'hr_manager', employeeId: hrEmployee.id, branchId: branch.id,
+    permissions: '["requests.create_on_behalf","request_types.manage","requests.view_all","employees.view"]', passwordHash: 'unused' })
+  const permissionChain = await repos.ApprovalChain.save({ code: 'PROFILE_PERM', nameAr: 'Permission chain', autoApprove: false })
+  await repos.ApprovalStep.save({ chainId: permissionChain.id, stepOrder: 1, approverRole: 'executive' })
+  await repos.RequestType.save({ code: 'PERMISSION', nameAr: 'استئذان', category: 'time_attendance', destinationHandler: 'attendance_log',
+    approvalChainId: permissionChain.id, requiredFields: '["date","from","to"]', isActive: true })
+  permissionType = await repos.PermissionType.save({ nameAr: 'إذن شهري للاختبار', isDeductible: false, monthlyFreeCount: 2, isActive: true })
+  // 0 = بلا حدّ على العدد (معناه في محرك الحضور: بلا مرات مجانية) — لا يرفض تقديماً
+  permissionTypeZero = await repos.PermissionType.save({ nameAr: 'إذن بلا حدّ عدد', isDeductible: true, monthlyFreeCount: 0, isActive: true })
+  // خطوة واقفة فعلاً: معتمد مسمّى غادر (موظف بلا حساب) — مقابل خطوة معتمدها حاضر
+  ghost = await repos.Employee.save({ employeeCode: 'GHOST', fullName: 'GHOST', branchId: branch.id, joinDate: '2020-01-01', status: 'active' })
+  const stuckChain = await repos.ApprovalChain.save({ code: 'PROFILE_STUCK', nameAr: 'Stuck chain', autoApprove: false })
+  await repos.ApprovalStep.save({ chainId: stuckChain.id, stepOrder: 1, approverRole: 'specific_employee', specificEmployeeId: ghost.id })
+  const liveChain = await repos.ApprovalChain.save({ code: 'PROFILE_LIVE', nameAr: 'Live chain', autoApprove: false })
+  await repos.ApprovalStep.save({ chainId: liveChain.id, stepOrder: 1, approverRole: 'specific_employee', specificEmployeeId: alice.employeeId })
+  const note = (code, nameAr, category, chainId, visibleTo) => repos.RequestType.save({ code, nameAr, category, destinationHandler: 'none',
+    approvalChainId: chainId, requiredFields: '["reason"]', isActive: true, ...(visibleTo ? { visibleTo: JSON.stringify(visibleTo) } : {}) })
+  await note('STUCK_NOTE', 'طلب على معتمد غائب', 'employee_relations', stuckChain.id, { mode: 'employees', ids: [bob.employeeId] })
+  await note('LIVE_NOTE', 'طلب على معتمد حاضر', 'employee_relations', liveChain.id, { mode: 'employees', ids: [bob.employeeId] })
+  await note('MONEY_NOTE', 'طلب مالي', 'financial', chainB.id, null)
+  await note('HR_SELF_NOTE', 'طلب للموارد البشرية نفسها', 'employee_relations', chainB.id, null)
   legacyA = await repos.Request.save({ typeCode: 'LEAVE_ANNUAL', requesterId: alice.employeeId, createdByUserId: alice.id, branchId: branch.id,
     status: 'DRAFT', payload: JSON.stringify({ fromDate: '2026-09-15', toDate: '2026-09-15', days: 1, annualReason: 'Annual custom data' }) })
   legacyB = await repos.Request.save({ typeCode: 'LEAVE_UNPAID', requesterId: bob.employeeId, createdByUserId: bob.id, branchId: branch.id,
@@ -129,7 +158,7 @@ test('NAM16 catalog has one LEAVE key and preserves all permitted profiles witho
   assert.equal(all.status, 200); assert.equal(all.body.filter(t => t.code === 'LEAVE').length, 1)
   assert.equal(new Set(all.body.map(t => t.code)).size, all.body.length, 'safe unique keys for UI Map/selection')
   const group = all.body.find(t => t.code === 'LEAVE')
-  assert.deepEqual(group.leaveProfiles.map(p => p.definitionCode).sort(), ['LEAVE_ANNUAL', 'LEAVE_UNPAID'])
+  assert.deepEqual(group.leaveProfiles.map(p => p.definitionCode).sort(), ['LEAVE_ANNUAL', 'LEAVE_CASUAL', 'LEAVE_UNPAID'])
   assert.equal(group.requiresDefinitionSelection, true)
   assert.ok(group.leaveProfiles.find(p => p.definitionCode === 'LEAVE_UNPAID').customFields.includes('unpaidReason'))
   assert.deepEqual(personal.body.find(t => t.code === 'LEAVE').leaveProfiles.map(p => p.definitionCode), ['LEAVE_ANNUAL'])
@@ -171,6 +200,128 @@ test('NAM26/29 canonical resource routes retain old aliases, columns and permiss
     const b = await request(admin, 'POST', `/requests/custody/99999/${action}`, input)
     assert.equal(a.status, b.status); assert.deepEqual(a.body, b.body)
   }
+})
+
+test('A3 unpaid leave is counted in calendar days while paid leave keeps working days', async () => {
+  const unpaid = await request(bob, 'POST', '/requests', { typeCode: 'LEAVE_UNPAID', submit: true,
+    payload: { fromDate: '2026-09-17', toDate: '2026-09-20', days: 1, unpaidReason: 'بدون مرتب' } })
+  assert.equal(unpaid.status, 201, JSON.stringify(unpaid.body))
+  const unpaidPayload = JSON.parse(unpaid.body.payload)
+  assert.equal(unpaidPayload.days, 4, 'الخميس → الأحد = 4 أيام تقويم يخصمها المسير')
+  assert.deepEqual(unpaidPayload.skippedHolidays, [], 'لا يوم مستبعد في الإجازة بدون مرتب')
+  const paid = await request(bob, 'POST', '/requests', { typeCode: 'LEAVE_CASUAL', submit: true,
+    payload: { fromDate: '2026-09-24', toDate: '2026-09-27', days: 1, casualReason: 'مدفوعة' } })
+  assert.equal(paid.status, 201, JSON.stringify(paid.body))
+  const paidPayload = JSON.parse(paid.body.payload)
+  assert.equal(paidPayload.days, 2, 'المدفوعة تبقى بأيام العمل فلا يفرط خصم الرصيد')
+  assert.equal(paidPayload.skippedHolidays.length, 2)
+})
+
+test('C1 a request HR files on behalf is approved and executed at once, with an audit row per step and a tagged row in «طلباتي»', async () => {
+  const made = await request(hrAgent, 'POST', '/requests', { typeCode: 'LEAVE_CASUAL', submit: true, onBehalfEmployeeId: bob.employeeId,
+    payload: { fromDate: '2026-11-09', toDate: '2026-11-10', days: 2, casualReason: 'نيابة عن الموظف' } })
+  assert.equal(made.status, 201, `${JSON.stringify(made.body)} :: ${JSON.stringify({ hrBranch: hrAgent.branchId, hrEmp: hrAgent.employeeId, bobEmp: bob.employeeId, branch: branch.id })}`)
+  assert.equal(made.body.status, 'COMPLETED', 'الوجهة تُنفَّذ في نفس معاملة التقديم')
+  const leave = await repos.Leave.findOneBy({ requestId: made.body.id })
+  assert.equal(leave.fromDate, '2026-11-09')
+  const steps = JSON.parse(made.body.resolvedSteps)
+  assert.ok(steps.length > 0 && steps.every(step => step.action === 'APPROVED' && step.actedAt))
+  const audit = await repos.RequestApproval.find({ where: { requestId: made.body.id } })
+  assert.equal(audit.length, steps.length, 'صف تدقيق لكل خطوة محلولة')
+  assert.ok(audit.every(row => row.approverId === hrAgent.id && row.action === 'APPROVED' && row.comment))
+  // الافتراضي يبقى «طلبات صاحب الحساب» (الشاشات الشخصية كما كانت)، وشاشة «طلباتي» وحدها تطلب صفوف النيابة
+  const hrDefault = await request(hrAgent, 'GET', '/requests/mine')
+  assert.ok(!hrDefault.body.some(row => row.id === made.body.id), 'صف النيابة لا يظهر في العقد الافتراضي')
+  const hrMine = await request(hrAgent, 'GET', '/requests/mine?includeOnBehalf=1')
+  const tagged = hrMine.body.find(row => row.id === made.body.id)
+  assert.ok(tagged, '«طلباتي» كانت فارغة لمن قدّم بالنيابة')
+  assert.equal(tagged.submittedOnBehalf, true)
+  assert.equal(tagged.onBehalfOfName, 'BOB')
+  const ownerMine = await request(bob, 'GET', '/requests/mine')
+  const own = ownerMine.body.find(row => row.id === made.body.id)
+  assert.ok(own && !own.submittedOnBehalf, 'صاحب الطلب يراه في طلباته بلا وسم نيابة')
+})
+
+test('C1 HR acts on any stuck step, but its inbox only gains the truly stuck one — not every request under review', async () => {
+  const stuck = await request(bob, 'POST', '/requests', { typeCode: 'STUCK_NOTE', submit: true, payload: { reason: 'معتمده غادر' } })
+  const live = await request(bob, 'POST', '/requests', { typeCode: 'LIVE_NOTE', submit: true, payload: { reason: 'معتمده حاضر' } })
+  for (const made of [stuck, live]) {
+    assert.equal(made.status, 201, JSON.stringify(made.body))
+    assert.equal(made.body.status, 'UNDER_REVIEW')
+  }
+  assert.equal((await request(alice, 'POST', `/requests/${stuck.body.id}/act`, { action: 'APPROVE' })).status, 403, 'زميل بلا دور لا يتصرف')
+  const inbox = await request(hrAgent, 'GET', '/requests/inbox')
+  const ids = inbox.body.map(row => row.id)
+  assert.ok(ids.includes(stuck.body.id), `الطلب الواقف يظهر في صندوق الموارد البشرية — الصندوق: ${JSON.stringify(ids)}`)
+  assert.ok(!ids.includes(live.body.id), 'وطلب معتمده حاضر يبقى في صندوق معتمده وحده — الصندوق ليس «كل ما هو قيد المراجعة»')
+  assert.ok((await request(alice, 'GET', '/requests/inbox')).body.some(row => row.id === live.body.id), 'صاحب الخطوة يراه')
+  const acted = await request(hrAgent, 'POST', `/requests/${stuck.body.id}/act`, { action: 'APPROVE' })
+  assert.equal(acted.status, 201, JSON.stringify(acted.body))
+  assert.equal(acted.body.status, 'COMPLETED')
+  // ودفع الشغل يبقى ممكناً بالفعل حتى على خطوة معتمدها حاضر (قرار المالك C1)
+  assert.equal((await request(hrAgent, 'POST', `/requests/${live.body.id}/act`, { action: 'APPROVE' })).status, 201)
+  // فكّ الانسداد حقّ تصرّف لا إذن اطلاع: محتوى النوع السرّي يبقى محجوباً عمّن ليس طرفاً
+  const confidential = await request(hr, 'GET', '/requests/all')
+  assert.equal(confidential.body.find(row => row.id === legacyB.id).confidentialMasked, true)
+})
+
+test('C1 the HR override pushes other people work only: no one approves his own request, and money keeps its cycle', async () => {
+  // طلب الموارد البشرية لنفسها: لا اعتماد فوري ولا اعتماد ذاتي بمخرج الموارد البشرية
+  const own = await request(hrAgent, 'POST', '/requests', { typeCode: 'HR_SELF_NOTE', submit: true, payload: { reason: 'طلب شخصي' } })
+  assert.equal(own.status, 201, JSON.stringify(own.body))
+  assert.equal(own.body.status, 'UNDER_REVIEW', 'طلب النفس لا يُعتمد فوراً')
+  const self = await request(hrAgent, 'POST', `/requests/${own.body.id}/act`, { action: 'APPROVE' })
+  assert.equal(self.status, 403, JSON.stringify(self.body))
+  assert.ok(!(await request(hrAgent, 'GET', '/requests/inbox')).body.some(row => row.id === own.body.id), 'ولا يظهر في صندوقه')
+  assert.equal((await request(admin, 'POST', `/requests/${own.body.id}/act`, { action: 'APPROVE' })).status, 201, 'شخص ثانٍ يعتمده')
+  // المال (وكذلك ما يغيّر العقد) لا يُعتمد بنداء التقديم نفسه ولا بمن قدّمه نيابةً
+  const money = await request(hrAgent, 'POST', '/requests', { typeCode: 'MONEY_NOTE', submit: true, onBehalfEmployeeId: bob.employeeId,
+    payload: { reason: 'مبلغ للموظف' } })
+  assert.equal(money.status, 201, JSON.stringify(money.body))
+  assert.equal(money.body.status, 'UNDER_REVIEW', 'الطلب المالي يبقى بدورته')
+  assert.equal(await repos.RequestApproval.countBy({ requestId: money.body.id }), 0, 'بلا صفوف اعتماد فوري')
+  assert.equal((await request(hrAgent, 'POST', `/requests/${money.body.id}/act`, { action: 'APPROVE' })).status, 403,
+    'ومن أنشأه نيابةً لا يعتمده بنفسه — يلزمه شخص ثانٍ')
+  assert.equal((await request(admin, 'POST', `/requests/${money.body.id}/act`, { action: 'APPROVE' })).status, 201)
+})
+
+test('«طلباتي» shows the rows filed on behalf to their creator, and a confidential type stays with its parties', async () => {
+  const secret = await request(hrAgent, 'POST', '/requests', { typeCode: 'LEAVE_UNPAID', submit: true, onBehalfEmployeeId: bob.employeeId,
+    payload: { fromDate: '2026-12-21', toDate: '2026-12-22', days: 2, unpaidReason: 'نيابة على نوع سرّي' } })
+  assert.equal(secret.status, 201, JSON.stringify(secret.body))
+  const creator = (await request(hrAgent, 'GET', '/requests/mine?includeOnBehalf=1')).body.find(row => row.id === secret.body.id)
+  assert.ok(creator && creator.payload, 'منشئ الطلب طرف فيه فيرى حمولته')
+  assert.equal(creator.submittedOnBehalf, true)
+  assert.ok(!(await request(alice, 'GET', '/requests/mine?includeOnBehalf=1')).body.some(row => row.id === secret.body.id),
+    'ومن ليس طرفاً لا يراه في «طلباتي» أصلاً')
+  assert.equal((await request(hr, 'GET', '/requests/all')).body.find(row => row.id === secret.body.id).confidentialMasked, true,
+    'وصاحب requests.view_all وليس طرفاً يراه محجوباً')
+})
+
+test('C3 a permission type with a monthly limit rejects the request that exceeds it, and the next month starts over', async () => {
+  const send = (date) => request(alice, 'POST', '/requests', { typeCode: 'PERMISSION', submit: true,
+    payload: { date, from: '09:00', to: '10:00', permissionTypeId: permissionType.id } })
+  assert.equal((await send('2026-12-01')).status, 201)
+  assert.equal((await send('2026-12-02')).status, 201)
+  const third = await send('2026-12-03')
+  assert.equal(third.status, 400, JSON.stringify(third.body))
+  assert.match(third.body.message, /مرة في الشهر/)
+  assert.equal((await send('2027-01-05')).status, 201, 'الشهر التالي يبدأ من جديد')
+  // 0 = بلا حدّ على العدد: معناه في محرك الحضور «بلا مرات مجانية» فلا يُرفض تقديمه
+  const free = (date) => request(alice, 'POST', '/requests', { typeCode: 'PERMISSION', submit: true,
+    payload: { date, from: '11:00', to: '12:00', permissionTypeId: permissionTypeZero.id } })
+  for (const day of ['2027-03-01', '2027-03-02', '2027-03-03']) {
+    assert.equal((await free(day)).status, 201, `النوع بلا حدّ عدد يقبل ${day}`)
+  }
+})
+
+test('B4 the audience of a request type is enforced at submission even for a catalog manager', async () => {
+  const blocked = await request(hrAgent, 'POST', '/requests', { typeCode: 'LEAVE_CASUAL', submit: true,
+    payload: { fromDate: '2026-12-07', toDate: '2026-12-08', days: 2, casualReason: 'خارج جمهور النوع' } })
+  assert.equal(blocked.status, 403, JSON.stringify(blocked.body))
+  const catalog = await request(hrAgent, 'GET', '/requests/types')
+  const group = catalog.body.find(type => type.code === 'LEAVE')
+  assert.ok(group.leaveProfiles.some(p => p.definitionCode === 'LEAVE_CASUAL'), 'يبقى ظاهراً في بانِي الطلبات')
 })
 
 test('NAM16 migration refuses conflicting payloads and orphan profiles without partial updates', async () => {

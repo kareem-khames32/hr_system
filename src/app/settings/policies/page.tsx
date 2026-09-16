@@ -15,7 +15,11 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import { can, fetchConfig, updateConfig } from '@/lib/api'
-import { invalidateCurrency } from '@/lib/currency'
+import { invalidateCurrency, useCurrency } from '@/lib/currency'
+import {
+  createLoanCapPolicy, createLoanCapPolicyVersion, fetchLoanCapPolicies, formatLoanMoney,
+  type LoanCapPolicy, type LoanCapPolicyInput,
+} from '@/lib/loans-api'
 import { GraceOverridesNote } from '@/components/GraceOverridesNote'
 import { buildCalendarChange, calendarScopeWritable, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
 import { CalendarChangeFields, CalendarContextSummary, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
@@ -115,12 +119,7 @@ const GROUPS: PolicyGroup[] = [
       ] },
       { key: 'payroll.shortfall_value', label: 'قيمة طريقة النقص', type: 'number', min: 0, max: 1000, hint: 'بسعر الدقيقة = 1. في المعامل: المضاعف، وفي كسر اليوم: جزء اليوم (مثل 0.25).' },
       { key: 'attendance.flex.shortfall_grace_minutes', label: 'سماحية نقص الساعات', type: 'number', unit: 'دقيقة', min: 0, max: 1440, integer: true },
-      { key: 'payroll.attendance_overlap_policy', label: 'التداخل بين التأخير والنقص', type: 'select', options: [
-        { value: 'NET_OF_LATENESS', label: 'يُطرح التأخير من النقص (بلا ازدواج)' },
-        { value: 'MAX_OF_BOTH', label: 'الأكبر منهما فقط' },
-        { value: 'CUMULATIVE', label: 'الاثنان معًا' },
-      ] },
-      { key: 'payroll.attendance_daily_cap_days', label: 'سقف خصم الحضور اليومي', type: 'number', unit: 'يوم', min: 0, max: 31, hint: 'يوم واحد. التأخير أولًا ثم النقص المتبقي داخل السقف.' },
+      // القرار أ4 (نيابة عن خط الحساب): لا سقف يومي للخصم ولا ترتيب تداخل — كل خصم يُخصم كما هو
       { key: 'attendance.flex.window_supersedes_grace', label: 'نافذة المرونة تغني عن سماحية التأخير', type: 'bool' },
       { key: 'attendance.flex.count_early_work_toward_required', label: 'احتساب الحضور قبل بداية الدوام من الساعات المطلوبة', type: 'bool' },
       { key: 'attendance.flex.prorate_window_on_partial_leave', label: 'تناسب نافذة المرونة مع الإجازة الجزئية', type: 'bool' },
@@ -154,6 +153,8 @@ const GROUPS: PolicyGroup[] = [
       // أيام طلب السلفة من الشهر؛ لو يوم البداية بعد يوم النهاية تمتد الفترة فوق نهاية الشهر
       { key: 'loan.request_from_day', label: 'طلب السلفة من يوم', type: 'number', unit: 'من الشهر', min: 1, max: 31, integer: true },
       { key: 'loan.request_to_day', label: 'إلى يوم', type: 'number', unit: 'من الشهر', min: 1, max: 31, integer: true, hint: 'لو يوم البداية بعد يوم النهاية (مثل 25 إلى 5) تمتد الفترة لأول الشهر التالي.' },
+      // القرار ب2: مفتاح واحد يعلو الأيام — يقفل طلب السلفة الآن ويفتحه فورًا
+      { key: 'loan.request_open', label: 'طلب السلفة مفتوح للموظفين', type: 'bool', hint: 'اقفله ليتوقف استقبال طلبات السلفة فورًا مهما كانت الأيام، وافتحه ليعمل بالأيام أعلاه.' },
       { key: 'payroll.policy.min_net_guarantee', label: 'الحد الأدنى للصافي', type: 'number', min: 0, nullable: true, hint: 'اتركه فارغًا إذا لم تحدد حدًا ثابتًا. لا يضيف النظام مبلغًا للراتب إذا كانت الخصومات السابقة تجاوزت الحد.' },
       { key: 'payroll.policy.net_floor_pct', label: 'الحد الأدنى كنسبة من الأجر الثابت المستحق', type: 'number', min: 0, max: 100, nullable: true, unit: '%', hint: 'إذا حددت مبلغًا ثابتًا أيضًا يُستخدم الأكبر منهما. فارغ = لا حد نسبي.' },
       { key: 'payroll.policy.max_deduction_pct_of_gross', label: 'سقف الخصومات من الأجر الثابت المستحق', type: 'number', min: 0, max: 100, nullable: true, unit: '%', hint: 'يحسب النظام ما استهلكته الخصومات السابقة قبل تحديد المتاح للسلف. فارغ = بلا سقف نسبي.' },
@@ -186,6 +187,120 @@ const GROUPS: PolicyGroup[] = [
     ],
   },
 ]
+
+// ===== القرار ب1: سقف السلفة في «سياسات النظام» =====
+// ثلاثة مدخلات فقط: كام مرة في الشهر، والحد الأقصى (مبلغ ثابت أو نسبة من الراتب) وأساسه.
+// النطاق دائمًا «الشركة كاملة» والتواريخ والنسخ والأولوية وسبب التعديل تُملأ تلقائيًا ولا تُعرض،
+// والتخزين والمحرك وفحص السقف كما هما (نفس نقاط النهاية والجدول والنسخ المؤرخة).
+const todayText = () => { const d = new Date(); return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}` }
+
+function LoanAdvanceCapBlock({ onSaveConfig, pendingConfigCount }: { onSaveConfig: () => Promise<void>; pendingConfigCount: number }) {
+  const currency = useCurrency()
+  const [policy, setPolicy] = useState<LoanCapPolicy | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [times, setTimes] = useState('')
+  const [capKind, setCapKind] = useState<'FLAT' | 'PERCENT'>('FLAT')
+  const [capValue, setCapValue] = useState('')
+  const [salaryBase, setSalaryBase] = useState<'BASIC' | 'GROSS'>('GROSS')
+  const canManage = can('loans.policies')
+
+  const load = () => {
+    setLoading(true); setError('')
+    fetchLoanCapPolicies()
+      .then(rows => {
+        // سياسة الشركة السارية (أحدث نسخة نشطة بنطاق الشركة) — سياسات الفروع القديمة الموقوفة لا تُعرض ولا تُمس
+        const company = rows.filter(row => row.scopeType === 'COMPANY' && row.isActive)
+          .sort((a, b) => b.version - a.version || b.id - a.id)[0] ?? null
+        setPolicy(company)
+        setTimes(company?.maxRequestsPerMonth != null ? String(company.maxRequestsPerMonth) : '')
+        const percent = company?.percentOfSalary ? Number(company.percentOfSalary) : null
+        setCapKind(percent ? 'PERCENT' : 'FLAT')
+        setCapValue(percent ? String(percent) : company?.flatCapAmount ?? '')
+        setSalaryBase((company?.salaryBase as 'BASIC' | 'GROSS') ?? 'GROSS')
+      })
+      .catch(e => setError(e instanceof Error ? e.message : 'تعذر تحميل سقف السلفة'))
+      .finally(() => setLoading(false))
+  }
+  useEffect(load, [])
+
+  const save = async () => {
+    if (!canManage || busy) return
+    const value = capValue.trim()
+    if (value && !/^\d+(\.\d{1,4})?$/.test(value)) { setError('الحد الأقصى رقم موجب.'); return }
+    if (times.trim() && !/^\d{1,4}$/.test(times.trim())) { setError('عدد المرات في الشهر عدد صحيح.'); return }
+    if (!value && !times.trim()) { setError('اكتب حدًّا أقصى أو عدد مرات على الأقل.'); return }
+    setBusy(true); setError(''); setSaved('')
+    const input: LoanCapPolicyInput = {
+      name: policy?.name ?? 'سقف السلفة',
+      scopeType: 'COMPANY', scopeIds: null,
+      percentOfSalary: capKind === 'PERCENT' ? value || null : null,
+      salaryBase: capKind === 'PERCENT' && value ? salaryBase : null,
+      flatCapAmount: capKind === 'FLAT' ? value || null : null,
+      maxRequestsPerMonth: times.trim() || null,
+      // المعروض هو الحاكم: سقوف المبالغ المخفية (سقف الشهر والرصيد القائم) تُمسح مع الحفظ،
+      // فلا يبقى قيد لا يراه المالك يقضم الحد الذي كتبه. عدد شهور القسط شأن القرض لا السلفة فيبقى.
+      maxAmountPerMonth: null,
+      maxOutstandingBalance: null,
+      maxInstallmentMonths: policy?.maxInstallmentMonths ?? null,
+      monthDefinition: policy?.monthDefinition ?? 'PAYROLL_PERIOD',
+      effectiveFrom: policy && policy.effectiveFrom > todayText() ? policy.effectiveFrom : todayText(),
+      effectiveTo: null, priority: policy?.priority ?? 0,
+      reason: 'تعديل سقف السلفة من سياسات النظام',
+    }
+    try {
+      if (policy) await createLoanCapPolicyVersion(policy.id, input)
+      else await createLoanCapPolicy(input)
+      // زر واحد يحفظ كل ما غُيّر في الشاشة (ومنه مفتاح «طلب السلفة مفتوح») فلا يضيع تغيير
+      // لأن المستخدم ضغط الزر الأقرب إليه بدل شريط الحفظ السفلي.
+      if (pendingConfigCount > 0) await onSaveConfig()
+      setSaved(pendingConfigCount > 0 ? `تم حفظ سقف السلفة و${pendingConfigCount} إعداد` : 'تم حفظ سقف السلفة')
+      load()
+    } catch (e) { setError(e instanceof Error ? e.message : 'تعذر حفظ سقف السلفة') } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-100 space-y-3" data-testid="loan-advance-cap">
+      <p className="text-sm font-medium text-gray-800">سقف السلفة للموظف</p>
+      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+      {saved && <p role="status" className="text-sm text-success-700">{saved}</p>}
+      {loading ? <p className="text-sm text-gray-400">جارٍ التحميل…</p> : (
+        <div className="flex flex-wrap items-end gap-4">
+          <label className="text-sm text-gray-700">كام مرة في الشهر
+            <input className="input mt-1 w-32" dir="ltr" inputMode="numeric" disabled={!canManage} value={times}
+              placeholder="بلا حد" onChange={e => { setTimes(e.target.value); setSaved('') }} />
+          </label>
+          <label className="text-sm text-gray-700">الحد الأقصى
+            <select className="input mt-1 w-44" disabled={!canManage} value={capKind} onChange={e => { setCapKind(e.target.value as 'FLAT' | 'PERCENT'); setSaved('') }}>
+              <option value="FLAT">مبلغ ثابت ({currency})</option>
+              <option value="PERCENT">نسبة من الراتب %</option>
+            </select>
+          </label>
+          <label className="text-sm text-gray-700">القيمة
+            <input className="input mt-1 w-36" dir="ltr" inputMode="decimal" disabled={!canManage} value={capValue}
+              placeholder="بلا حد" onChange={e => { setCapValue(e.target.value); setSaved('') }} />
+          </label>
+          {capKind === 'PERCENT' && (
+            <label className="text-sm text-gray-700">النسبة من
+              <select className="input mt-1 w-40" disabled={!canManage} value={salaryBase} onChange={e => { setSalaryBase(e.target.value as 'BASIC' | 'GROSS'); setSaved('') }}>
+                <option value="GROSS">إجمالي الراتب</option>
+                <option value="BASIC">الراتب الأساسي</option>
+              </select>
+            </label>
+          )}
+          {canManage && <button type="button" className="btn-secondary" disabled={busy} onClick={save}>
+            {busy ? 'جارٍ الحفظ...' : pendingConfigCount > 0 ? `حفظ سقف السلفة و${pendingConfigCount} إعداد` : 'حفظ سقف السلفة'}</button>}
+        </div>
+      )}
+      <p className="text-xs text-gray-400">
+        {policy ? `الساري الآن: ${policy.percentOfSalary ? `${Number(policy.percentOfSalary)}% من ${policy.salaryBase === 'BASIC' ? 'الراتب الأساسي' : 'إجمالي الراتب'}` : policy.flatCapAmount ? `${formatLoanMoney(policy.flatCapAmount)} ${currency}` : 'بلا حد مبلغ'}`
+          : 'لا يوجد سقف سلفة الآن — أي مبلغ يمر في الاعتماد.'}
+      </p>
+    </div>
+  )
+}
 
 export default function PoliciesPage() {
   const [values, setValues] = useState<Record<string, string>>({})
@@ -407,9 +522,9 @@ export default function PoliciesPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">سياسات الموارد البشرية</h1>
+            <h1 className="text-2xl font-bold text-gray-800">سياسات النظام</h1>
             <p className="text-gray-500 mt-1">
-              القيم الفعلية لمحرك النظام — الإجازات والحضور والعمل الإضافي والمسير
+              إعدادات الإجازات والحضور والعمل الإضافي والمسير
             </p>
           </div>
         </div>
@@ -475,6 +590,7 @@ export default function PoliciesPage() {
                       </div>
                     ))}
                   </div>
+                  {g.title === 'أقساط السلف وحماية الصافي' && <LoanAdvanceCapBlock onSaveConfig={handleSave} pendingConfigCount={dirtyKeys.length} />}
                 </div>
               )
             })}

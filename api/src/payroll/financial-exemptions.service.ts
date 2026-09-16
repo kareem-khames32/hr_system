@@ -638,6 +638,7 @@ export class FinancialExemptionsService {
       const absent = new Set(entries.attendance.absentDates)
       const dates = [...new Set([...entries.attendance.days.filter(day => day.lateness > 0 || day.shortfall > 0).map(day => day.date), ...absent])].sort()
       const protectedCategory = (category: string | null | undefined) => EXEMPTION_PROTECTED_TYPED_CATEGORIES.includes(category ?? '')
+      const ownCreator = (row: { creatorUserId: number | null }) => row.creatorUserId !== null && row.creatorUserId === user.sub
       const typed = entries.debits.filter(row => row.deductionRequestId != null)
       const typeGroups = new Map<number, { deductionTypeId: number; typeName: string | null; exemptable: boolean; amount: number }>()
       for (const row of typed) {
@@ -656,8 +657,11 @@ export class FinancialExemptionsService {
           return { date, lateness: money(day?.lateness ?? 0), shortfall: money(day?.shortfall ?? 0), absence: money(absent.has(date) ? entries.attendance.absenceDayAmount : 0) }
         }),
         typedObligations: typed.map(row => ({ obligationId: row.id, amount: money(row.amount), deductionTypeId: row.deductionTypeId, typeName: row.typeName, typedCategory: row.typedCategory,
-          targetPeriod: row.targetPeriod, label: row.label, exemptable: !(protectedCategory(row.typedCategory) || row.isExemptable === false),
-          protectedReason: protectedCategory(row.typedCategory) ? 'استقطاع نظامي أو حكم قضائي: غير قابل للإعفاء إطلاقًا' : row.isExemptable === false ? 'نوع الخصم معرّف غير قابل للإعفاء' : null })),
+          targetPeriod: row.targetPeriod, label: row.label, exemptable: !(protectedCategory(row.typedCategory) || row.isExemptable === false || ownCreator(row)),
+          // فصل المهام (EX-03 قاعدة 2): من أنزل الخصم لا يلغيه. يُقال على الشاشة قبل الضغط بدل رفض 403 بعده.
+          protectedReason: protectedCategory(row.typedCategory) ? 'استقطاع نظامي أو حكم قضائي: غير قابل للإعفاء إطلاقًا'
+            : row.isExemptable === false ? 'نوع الخصم معرّف غير قابل للإعفاء'
+            : ownCreator(row) ? 'أنت من أنزل هذا الخصم؛ يلغيه مستخدم آخر' : null })),
         typedTypes: [...typeGroups.values()].map(group => ({ ...group, amount: money(group.amount) })),
         recoveries: entries.debits.filter(row => row.deductionRequestId == null).map(row => ({ obligationId: row.id, amount: money(row.amount), label: row.label, category: row.category,
           protectedReason: 'استرداد غير مصنف لا يقبل الإعفاء المالي؛ يُعالج من مصدره' })),

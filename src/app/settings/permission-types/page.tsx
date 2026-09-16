@@ -256,10 +256,10 @@ export default function PermissionTypesPage() {
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">الاسم</th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">الخصم</th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">
-                        الحد الأقصى
+                        أطول إذن
                       </th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">
-                        الرصيد الشهري
+                        كام مرة في الشهر
                       </th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">الحالة</th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">
@@ -294,29 +294,8 @@ export default function PermissionTypesPage() {
                             ? `${t.maxDurationMinutes} دقيقة`
                             : 'بلا حد'}
                         </td>
-                        <td className="py-3 px-4">
-                          {t.monthlyFreeCount != null ||
-                          t.monthlyFreeMinutes != null ? (
-                            <div className="flex flex-wrap items-center gap-1">
-                              {t.monthlyFreeCount != null && (
-                                <span className="badge text-xs bg-primary-50 text-primary-700">
-                                  مجاني: {t.monthlyFreeCount} مرة/شهر
-                                </span>
-                              )}
-                              {t.monthlyFreeMinutes != null && (
-                                <span className="badge text-xs bg-primary-50 text-primary-700">
-                                  {t.monthlyFreeMinutes} دقيقة/شهر
-                                </span>
-                              )}
-                              <span className="badge text-xs bg-red-100 text-red-700">
-                                خصم {t.deductionPct ?? 100}%
-                              </span>
-                            </div>
-                          ) : (
-                            <span className="text-xs text-gray-400">
-                              بلا رصيد شهري
-                            </span>
-                          )}
+                        <td className="py-3 px-4 text-sm text-gray-600">
+                          {t.monthlyFreeCount ? `${t.monthlyFreeCount} مرة` : 'بلا حد'}
                         </td>
                         <td className="py-3 px-4">
                           <span
@@ -404,27 +383,47 @@ export default function PermissionTypesPage() {
                   />
                 </div>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    نطاق التغطية
-                  </label>
-                  <select
-                    value={formData.coverage}
-                    onChange={(e) =>
-                      setFormData({
-                        ...formData,
-                        coverage: e.target.value as 'morning' | 'evening' | 'both',
-                      })
-                    }
-                    className="input w-full"
-                  >
-                    <option value="morning">صباحي — يعذر التأخير (بداية الوردية)</option>
-                    <option value="evening">مسائي — يعذر الانصراف المبكر (نهاية الوردية)</option>
-                    <option value="both">كلاهما — تأخير وانصراف مبكر</option>
-                  </select>
-                  <p className="text-xs text-gray-400 mt-1">
-                    إذن التأخير يشيل تأخير الصبح فقط، وإذن الانصراف المبكر يشيل نهاية اليوم فقط
-                  </p>
+                {/* الرقمان اللذان يحكمان النوع: كام مرة في الشهر، وأطول إذن */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      كام مرة في الشهر
+                    </label>
+                    <input
+                      type="number"
+                      value={formData.monthlyFreeCount}
+                      onChange={(e) =>
+                        setFormData({ ...formData, monthlyFreeCount: e.target.value })
+                      }
+                      className="input w-full"
+                      dir="ltr"
+                      min={0}
+                      placeholder="بلا حد"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      عدد مرات استخدام هذا الإذن في الشهر — ما زاد عنه يُرفض عند
+                      الإرسال. اتركه فارغاً لبلا حد
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      أطول إذن (دقيقة)
+                    </label>
+                    <input
+                      type="number"
+                      value={formData.maxDurationMinutes}
+                      onChange={(e) =>
+                        setFormData({ ...formData, maxDurationMinutes: e.target.value })
+                      }
+                      className="input w-full"
+                      dir="ltr"
+                      min={0}
+                      placeholder="بلا حد"
+                    />
+                    <p className="text-xs text-gray-400 mt-1">
+                      أطول مدة للإذن الواحد — اتركه فارغاً لبلا حد
+                    </p>
+                  </div>
                 </div>
 
                 <label className="flex items-center gap-2">
@@ -436,108 +435,80 @@ export default function PermissionTypesPage() {
                     }
                     className="w-4 h-4 rounded border-gray-300 text-primary-600"
                   />
-                  <span className="text-sm text-gray-700">
-                    يُخصم من الراتب (الدقائق المتداخلة مع التأخير فقط)
-                  </span>
+                  <span className="text-sm text-gray-700">يُخصم من الراتب</span>
                 </label>
 
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    الحد الأقصى بالدقائق (اختياري)
-                  </label>
-                  <input
-                    type="number"
-                    value={formData.maxDurationMinutes}
-                    onChange={(e) =>
-                      setFormData({ ...formData, maxDurationMinutes: e.target.value })
-                    }
-                    className="input w-full"
-                    dir="ltr"
-                    min={0}
-                    placeholder="120"
-                  />
-                  <p className="text-xs text-gray-400 mt-1">
-                    اتركه فارغاً إذا لم يكن للإذن حد أقصى
-                  </p>
-                </div>
-
-                {/* Monthly free balance (only meaningful when NOT deductible) */}
-                <div className="rounded-xl border border-gray-100 bg-gray-50/50 p-4 space-y-4">
-                  <div className="flex items-center justify-between">
-                    <h3 className="text-sm font-semibold text-gray-700">
-                      الرصيد الشهري المجاني
-                    </h3>
-                  </div>
-                  {formData.isDeductible && (
-                    <p className="text-xs text-amber-600 bg-amber-50 rounded-lg p-2">
-                      هذا النوع يُخصم دائماً من الراتب، لذا يتم تجاهل الرصيد
-                      الشهري المجاني.
-                    </p>
-                  )}
-                  <div className="grid grid-cols-2 gap-4">
+                <details className="rounded-xl border border-gray-100 bg-gray-50/50 p-4">
+                  <summary className="cursor-pointer text-sm font-semibold text-gray-700">
+                    خيارات إضافية
+                  </summary>
+                  <div className="mt-4 space-y-4">
                     <div>
                       <label className="block text-sm font-medium text-gray-700 mb-2">
-                        الرصيد الشهري المجاني (عدد مرات)
+                        نطاق التغطية
                       </label>
-                      <input
-                        type="number"
-                        value={formData.monthlyFreeCount}
+                      <select
+                        value={formData.coverage}
                         onChange={(e) =>
                           setFormData({
                             ...formData,
-                            monthlyFreeCount: e.target.value,
+                            coverage: e.target.value as 'morning' | 'evening' | 'both',
                           })
                         }
                         className="input w-full"
-                        dir="ltr"
-                        min={0}
-                        placeholder="بلا حد"
-                        disabled={formData.isDeductible}
-                      />
+                      >
+                        <option value="morning">صباحي — يعذر التأخير (بداية الوردية)</option>
+                        <option value="evening">مسائي — يعذر الانصراف المبكر (نهاية الوردية)</option>
+                        <option value="both">كلاهما — تأخير وانصراف مبكر</option>
+                      </select>
+                      <p className="text-xs text-gray-400 mt-1">
+                        إذن التأخير يشيل تأخير الصبح فقط، وإذن الانصراف المبكر يشيل نهاية اليوم فقط
+                      </p>
                     </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        الرصيد الشهري المجاني (دقائق)
-                      </label>
-                      <input
-                        type="number"
-                        value={formData.monthlyFreeMinutes}
-                        onChange={(e) =>
-                          setFormData({
-                            ...formData,
-                            monthlyFreeMinutes: e.target.value,
-                          })
-                        }
-                        className="input w-full"
-                        dir="ltr"
-                        min={0}
-                        placeholder="بلا حد"
-                        disabled={formData.isDeductible}
-                      />
+                    <div className="grid grid-cols-2 gap-4">
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          دقائق مجانية في الشهر
+                        </label>
+                        <input
+                          type="number"
+                          value={formData.monthlyFreeMinutes}
+                          onChange={(e) =>
+                            setFormData({ ...formData, monthlyFreeMinutes: e.target.value })
+                          }
+                          className="input w-full"
+                          dir="ltr"
+                          min={0}
+                          placeholder="بلا حد"
+                          disabled={formData.isDeductible}
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                          نسبة الخصم على الزيادة (%)
+                        </label>
+                        <input
+                          type="number"
+                          value={formData.deductionPct}
+                          onChange={(e) =>
+                            setFormData({ ...formData, deductionPct: e.target.value })
+                          }
+                          className="input w-full"
+                          dir="ltr"
+                          min={0}
+                          max={100}
+                          placeholder="100"
+                          disabled={formData.isDeductible}
+                        />
+                      </div>
                     </div>
+                    {formData.isDeductible && (
+                      <p className="text-xs text-amber-600 bg-amber-50 rounded-lg p-2">
+                        هذا النوع يُخصم دائماً من الراتب، فلا أثر للدقائق المجانية ولا لنسبة الخصم.
+                      </p>
+                    )}
                   </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      نسبة الخصم على الزيادة عن الرصيد (%)
-                    </label>
-                    <input
-                      type="number"
-                      value={formData.deductionPct}
-                      onChange={(e) =>
-                        setFormData({ ...formData, deductionPct: e.target.value })
-                      }
-                      className="input w-full"
-                      dir="ltr"
-                      min={0}
-                      max={100}
-                      placeholder="100"
-                      disabled={formData.isDeductible}
-                    />
-                    <p className="text-xs text-gray-400 mt-1">
-                      الدقائق المتجاوزة للرصيد تُخصم من الراتب بهذه النسبة
-                    </p>
-                  </div>
-                </div>
+                </details>
 
                 <label className="flex items-center gap-2">
                   <input

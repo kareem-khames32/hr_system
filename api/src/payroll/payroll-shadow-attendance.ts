@@ -96,33 +96,30 @@ const component = (code: string, extra: Row): Row => ({ code, nameAr: code, comp
 /** سياسة افتراضية تقلّد المسير القديم ليوم واحد (السماح وسماح النقص من لقطة اليوم المثبتة). منازل 6 لكل يوم ثم تقريب واحد للفترة (D4). */
 export function legacyEquivalentShadowDefinition(rules: PayrollShadowAttendanceRules, day: { graceMinutes: number; windowSupersedesGrace: boolean; shortfallToleranceMinutes: number; flexEnabled: boolean }) {
   if (rules.monthlyDays !== 30) throw new ShadowPolicyUnsupported('SHADOW_MONTHLY_DAYS_UNSUPPORTED', 'محرك السياسة يعمل على أساس 30 يومًا فقط (D3)')
-  if (!['NET_OF_LATENESS', 'CUMULATIVE'].includes(rules.overlapPolicy)) throw new ShadowPolicyUnsupported('SHADOW_OVERLAP_POLICY_UNSUPPORTED', 'سياسة تداخل التأخير والنقص غير مدعومة في سياسة الظل الافتراضية')
   if (!['MINUTES', 'MULTIPLIER', 'FRACTION'].includes(rules.shortfallMode)) throw new ShadowPolicyUnsupported('SHADOW_SHORTFALL_MODE_UNSUPPORTED', 'طريقة خصم النقص غير مدعومة')
   const grace = Number.isSafeInteger(day.graceMinutes) && day.graceMinutes > 0 ? day.graceMinutes : 0
   const shortfallApplies = rules.shortfallEnabled && !(day.flexEnabled === false && rules.earlyLeaveEnabled === false)
-  const base = rules.overlapPolicy === 'NET_OF_LATENESS' ? 'MAX(0, SHORT_MINUTES - LATE_MINUTES)' : 'SHORT_MINUTES'
+  // أ4: لا طرح تداخل ولا سقف يومي — النقص يُحتسب كما جاء بعد عتبة السماح وحدها (نفس attendanceDeductionDay).
+  const base = 'SHORT_MINUTES'
   const chargeable = `IF(${base} > PARAM[SHORT_GRACE], ${base}, 0)`
   const raw = rules.shortfallMode === 'FRACTION' ? `IF(${chargeable} > 0, PARAM[SHORT_VALUE] * DAY_RATE, 0)`
     : rules.shortfallMode === 'MULTIPLIER' ? `${chargeable} * MINUTE_RATE * PARAM[SHORT_VALUE]` : `${chargeable} * MINUTE_RATE`
-  // سقف اليوم: التأخير أولًا (سقف الطقم) ثم النقص من المتبقي — نفس ترتيب attendanceDeductionDay
-  const capFraction = rules.dailyCapDays < 10 ? decimalText(rules.dailyCapDays, 4, 'SHADOW_DAILY_CAP_INVALID') : null
   return {
     parameters: [
       { code: 'SHORT_GRACE', nameAr: 'سماح نقص ساعات اليوم', value: decimalText(day.shortfallToleranceMinutes, 0, 'SHADOW_SHORTFALL_GRACE_INVALID'), unit: 'MINUTES', isActive: true },
       { code: 'SHORT_VALUE', nameAr: 'قيمة خصم النقص', value: decimalText(rules.shortfallValue, 6, 'SHADOW_SHORTFALL_VALUE_INVALID'), unit: 'SCALAR', isActive: true },
       { code: 'SHORT_APPLIES', nameAr: 'خصم النقص منطبق على اليوم', value: shortfallApplies ? '1' : '0', unit: 'FLAG', isActive: true },
-      { code: 'DAILY_CAP', nameAr: 'سقف خصم الحضور اليومي بالأيام', value: decimalText(rules.dailyCapDays, 6, 'SHADOW_DAILY_CAP_INVALID'), unit: 'DAYS', isActive: true },
       { code: 'ABSENCE_PENALTY', nameAr: 'معامل عقوبة الغياب', value: decimalText(rules.absencePenalty, 6, 'SHADOW_ABSENCE_PENALTY_INVALID'), unit: 'SCALAR', isActive: true },
     ],
     tierSets: [{ code: 'LEGACY_LATENESS', nameAr: 'شرائح التأخير الحالية', description: 'مشتقة من شرائح المسير القديم لحساب الظل', inputVar: 'LATE_MINUTES', inputFormula: null,
       inputUnit: 'MINUTES', applicationBasis: 'PER_DAY', tierApplicationMode: 'WHOLE', graceMode: grace > 0 ? 'WAIVE_ALL_OR_NOTHING' : 'NONE', graceMinutes: grace,
       graceMaxUsesPerPeriod: null, allowGraceOnFlexibleShift: grace > 0 && !day.windowSupersedesGrace, allowShiftGraceOverride: false, noMatchBehavior: 'FALLBACK_1_1',
-      maxDailyDeductionDayFraction: capFraction, maxPeriodDeductionDayFraction: null, secondsRoundingMode: 'FLOOR', minutesRoundingMode: 'FLOOR', roundingUnitMinutes: 1,
+      maxDailyDeductionDayFraction: null, maxPeriodDeductionDayFraction: null, secondsRoundingMode: 'FLOOR', minutesRoundingMode: 'FLOOR', roundingUnitMinutes: 1,
       roundingMode: 'HALF_UP', roundingScale: 6, isActive: true, tiers: legacyLatenessTierSet(rules) }],
     components: [
       component(COMPONENTS.lateness, { nameAr: 'خصم التأخير', sequence: 1, valueSource: 'TIERED', tierSetCode: 'LEGACY_LATENESS', rollupTo: 'latenessDeduction', deductionPriority: 1 }),
       component(COMPONENTS.shortfall, { nameAr: 'خصم نقص ساعات العمل', sequence: 2, deductionPriority: 2, rollupTo: 'shortfallDeduction',
-        formula: `IF(PARAM[SHORT_APPLIES] > 0, MIN(${raw}, MAX(0, DAY_RATE * PARAM[DAILY_CAP] - COMP[${COMPONENTS.lateness}])), 0)` }),
+        formula: `IF(PARAM[SHORT_APPLIES] > 0, ${raw}, 0)` }),
       component(COMPONENTS.absence, { nameAr: 'خصم الغياب بلا إذن', sequence: 3, deductionPriority: 3, rollupTo: 'absenceDeduction', formula: 'ABSENCE_DAYS * DAY_RATE * PARAM[ABSENCE_PENALTY]' }),
       component('NET', { nameAr: 'الصافي', componentType: 'INFO', stage: 6, valueSource: 'SYS_NET', roundingMode: null, roundingScale: null, deductionPriority: null, exemptible: false }),
     ],

@@ -131,7 +131,8 @@ export function computePayrollPolicyEnginePreNet(facts: PayrollPolicyEngineFacts
   const dayRate = gross.divide(d('30')), hourRate = dayRate.divide(d(String(facts.dailyHours))), minuteRate = hourRate.divide(d('60'))
   const salaryRef = `payroll-run-salary:employee:${facts.employeeId}:period:${facts.period}`
   const coverageRef = `payroll-employment-coverage:employee:${facts.employeeId}:${facts.periodStart}:${facts.periodEnd}`
-  const factor = facts.fullCoverage ? d('1') : (() => { const value = new PayrollDecimal(BigInt(facts.coverDays), 30n); return value.compare(d('1')) > 0 ? d('1') : value })()
+  // أ2: مقام التناسب هو طول الفترة الفعلي (نفس الحساب القديم)، وسعر اليوم يبقى على أساس 30.
+  const factor = facts.fullCoverage ? d('1') : (() => { const value = new PayrollDecimal(BigInt(facts.coverDays), BigInt(facts.periodDays)); return value.compare(d('1')) > 0 ? d('1') : value })()
   const attendance = facts.attendance.totals
   if (!attendance) unavailable.push({ components: ['LATENESS', 'SHORTFALL', 'ABSENCE', 'OTHER_DEDUCTIONS', 'LOANS', 'NET'], code: `ATTENDANCE_SHADOW_${facts.attendance.status}`, message: facts.attendance.message })
   const credits = facts.credits.reduce((sum, row) => sum + cents(row.amount), 0)

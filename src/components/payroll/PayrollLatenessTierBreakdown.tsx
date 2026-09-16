@@ -15,7 +15,7 @@ export function PayrollLatenessTierBreakdown({ item, currency }: { item: Pick<Ap
     <h3 className="font-bold text-gray-800">أثر شرائح التأخير</h3>
     <p className="text-sm text-gray-600">
       {effects.set?.setId ? 'شرائح التأخير المطبّقة على شهر المسير' : 'لا شرائح تأخير لشهر المسير: التأخير يُخصم بالدقيقة'}.
-      {' '}المبالغ بالـ{currency} قبل السقف اليومي وحماية الصافي.
+      {' '}المبالغ بالـ{currency} قبل الحد الأدنى للصافي.
     </p>
     <div className="overflow-x-auto"><table className="w-full text-sm whitespace-nowrap">
       <thead><tr className="table-header">

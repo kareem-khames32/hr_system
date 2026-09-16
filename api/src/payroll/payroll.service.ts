@@ -623,6 +623,8 @@ export class PayrollService {
     // الخطوة 14: فجوة أو تداخل مع فترة الشهر السابق/التالي لنفس الموظفين (قراءة فقط، تظهر على المسير وسجل الحدث).
     const periodContinuity = await findPayrollPeriodContinuity(em, { id: run.id ?? null, period: run.period, startDate, endDate }, covered.map(({ emp }) => emp.id))
     const prepared: PayrollItem[] = []
+    // أ2 (قرار المالك 16 سبتمبر): طول الفترة الفعلي شاملًا طرفيه — مقام تناسب أيام الخدمة.
+    const periodDays = Math.round((Date.parse(`${endDate}T12:00:00Z`) - Date.parse(`${startDate}T12:00:00Z`)) / 86400000) + 1
 
     let totalNet = 0
     for (const { emp, coverage, member, claims, salary } of covered) {
@@ -637,10 +639,11 @@ export class PayrollService {
       const basic = monthlyCents[0] / 100
       const allowances = monthlyCents.slice(1).reduce((sum, amount) => sum + amount, 0) / 100
       const gross = grossCents / 100
-      // ② / PR-10 وقرار المستخدم: الجزء على أساس 30؛ الدورة الكاملة تستحق شهرًا كاملًا.
+      // أ2: الجزء على أيام الفترة الفعلية (لا على 30)؛ الدورة الكاملة تستحق شهرًا كاملًا.
+      // سعر اليوم أدناه يبقى على أساس الشهر حتى لا تتحرك مبالغ الغياب والتأخير في هذه الموجة.
       const fullCoverage = coverFrom === startDate && coverTo === endDate
-      const prorataFactor = fullCoverage ? 1 : Math.min(coverDays / monthlyDays, 1)
-      const prorateCents = (cents: number) => fullCoverage ? cents : Math.min(cents, Math.round(cents * coverDays / monthlyDays))
+      const prorataFactor = fullCoverage ? 1 : Math.min(coverDays / periodDays, 1)
+      const prorateCents = (cents: number) => fullCoverage ? cents : Math.min(cents, Math.round(cents * coverDays / periodDays))
       const grossEarnedCents = prorateCents(grossCents)
       const grossEarned = grossEarnedCents / 100
       const earnedCents = monthlyCents.map(prorateCents)
@@ -867,7 +870,7 @@ export class PayrollService {
       if (engineMode !== 'LEGACY') {
         const shadowTotals = policyShadow && 'totals' in policyShadow && policyShadow.totals?.policy && ['MATCHED', 'DIFFERENT'].includes(policyShadow.status) ? policyShadow.totals.policy : null
         const engineFacts: PayrollPolicyEngineFacts = { employeeId: emp.id, period: run.period, periodStart: startDate, periodEnd: endDate, monthlyComponents,
-          coverDays, periodDays: Math.round((Date.parse(`${endDate}T12:00:00Z`) - Date.parse(`${startDate}T12:00:00Z`)) / 86400000) + 1, fullCoverage,
+          coverDays, periodDays, fullCoverage,
           dailyHours, monthlyDays, lateDeductionEnabled: lateEnabled, currency: policyValues.currency, overtimeAmount: otAmount, unpaidLeaveDays: unpaidDays,
           credits: pendingObligations.filter(o => o.type === 'CREDIT').map(obligationEntry), debits: exemptedDebits,
           // الخطوة 26: نفس قرار الإعفاء على مجاميع ظل الحضور، فيقيس التكافؤ الحساب لا الإعفاء
@@ -943,6 +946,7 @@ export class PayrollService {
           breakdown: JSON.stringify({
             ...coverage,
             monthlyDays,
+            periodDays,
             dailyHours,
             gross,
             grossEarned: paid.grossEarned,
@@ -953,7 +957,7 @@ export class PayrollService {
             salaryComponents: paid.salaryComponents,
             salarySource: salary.source,
             prorataFactor: Math.round(prorataFactor * 1e6) / 1e6,
-            prorationBasis: 'MONTHLY_DAYS',
+            prorationBasis: 'PERIOD_DAYS',
             attendanceExemptions,
             attendanceDeductions: { policy: attendancePolicy, days: attendanceDeductionDays,
               totals: { lateMinutes, shortfallMinutes, latenessDeduction: paid.latenessDeduction, shortfallDeduction: paid.shortfallDeduction },
@@ -985,6 +989,9 @@ export class PayrollService {
               protectedItems: exemption.protectedItems, deferredInstallments: paid.installmentPlan?.exemptionDeferred ?? [],
               requested: { lateness: latenessRequested, shortfall: shortfallRequested, absence: absenceRequested } }) } : {}),
             absentDates: absentRows.map((r) => r.date),
+            // د (تقرير 15 سبتمبر): يوم ببصمة ناقصة لا يُخصم ولا يُرى، والمشكلة كانت تظهر عند رفض الاعتماد.
+            // يُكتب هنا وقت الحساب فتعرضه شاشة المسير على صف الموظف قبل الاعتماد.
+            missingPunchDates: attRows.filter((r) => r.status === 'missing_punch').map((r) => r.date),
             // تتبّع مصدر الخصم للتدقيق/الاعتراض: صفوف الحضور المخصومة والإجازات
             attendanceDayIds: attRows
               .filter(
@@ -1254,18 +1261,51 @@ export class PayrollService {
   }
 
   // ===== الاستعلام (بنطاق الفرع) =====
+  /** المسير الذي يُحكم به النطاق: مسير العكس يُحكم بمسيره الأصلي (نفس تسلسل assertRunAccess). */
+  private scopeOwnerRun(run: PayrollRun, byId: Map<number, PayrollRun>, seen = new Set<number>()): PayrollRun | null {
+    if (run.runType !== 'REVERSAL' || !run.parentRunId) return run
+    const parent = byId.get(run.parentRunId)
+    if (!parent || parent.id === run.id || seen.has(run.id)) return null
+    seen.add(run.id)
+    return this.scopeOwnerRun(parent, byId, seen)
+  }
+
+  /** نفس شرط assertRunAccess بالضبط، محسوبًا على صفوف محمّلة دفعة واحدة بدل معاملة وقفل لكل مسير. */
+  private runInBranchScope(run: PayrollRun, branch: number, byId: Map<number, PayrollRun>,
+    membersOf: Map<number, Array<{ employeeId: number; snapshot: PayrollMemberSnapshot | null }>>,
+    itemsOf: Map<number, Array<{ employeeId: number }>>): boolean {
+    const owner = this.scopeOwnerRun(run, byId)
+    if (!owner || owner.scopeType === 'COMPANY') return false
+    const branchIds = owner.scopeIds ? JSON.parse(owner.scopeIds) as number[] : [owner.branchId]
+    const definition = owner.definition ? payrollRunDefinitionOf(owner) : null
+    const definitionBranches = definition ? definition.filters.branchIds : null
+    if (definitionBranches?.some(id => id !== branch) || definition?.filters.allEmployees) return false
+    const legacyBranch = definitionBranches ? (definitionBranches.length === 1 ? definitionBranches[0] : null)
+      : owner.scopeType === 'BRANCH' && branchIds.length === 1 ? branchIds[0] : null
+    if (!owner.definition && owner.scopeType === 'BRANCH' && branchIds.some(id => id !== branch)) return false
+    const members = membersOf.get(owner.id) ?? [], items = itemsOf.get(owner.id) ?? []
+    const ids = [...new Set([...members, ...items].map(row => row.employeeId))]
+    if (!ids.length) return legacyBranch === branch
+    return ids.every(id => {
+      const member = members.find(row => row.employeeId === id)
+      return (member?.snapshot ? member.snapshot.branchId : legacyBranch) === branch
+    })
+  }
+
   async list(user: JwtPayload) {
-    const runs = (await this.runs.find({ order: { period: 'DESC', id: 'DESC' } })).map(run => this.lightRun(run))
-    if (branchScopeOf(user) === null) return runs
-    const result: PayrollRun[] = []
-    for (const run of runs) {
-      try { result.push(await this.readRun(run.id, async (em, current) => {
-        await this.assertRunAccess(user, current, em)
-        return this.lightRun(current)
-      })) }
-      catch (error) { if (!(error instanceof ForbiddenException)) throw error }
-    }
-    return result
+    const rows = await this.runs.find({ order: { period: 'DESC', id: 'DESC' } })
+    const branch = branchScopeOf(user)
+    if (branch === null) return rows.map(run => this.lightRun(run))
+    // نطاق الفرع: ثلاثة استعلامات مرتبة بدل قراءة كل مسير في معاملته المستقلة بقفلها (كانت ثوانٍ لمسؤول الفرع).
+    if (branch < 1) return []
+    const byId = new Map(rows.map(run => [run.id, run]))
+    const members = await this.members.find({ select: { runId: true, employeeId: true, snapshot: true } })
+    const items = await this.items.find({ select: { runId: true, employeeId: true } })
+    const membersOf = new Map<number, Array<{ employeeId: number; snapshot: PayrollMemberSnapshot | null }>>()
+    const itemsOf = new Map<number, Array<{ employeeId: number }>>()
+    for (const member of members) membersOf.set(member.runId, [...(membersOf.get(member.runId) ?? []), member])
+    for (const item of items) itemsOf.set(item.runId, [...(itemsOf.get(item.runId) ?? []), item])
+    return rows.filter(run => this.runInBranchScope(run, branch, byId, membersOf, itemsOf)).map(run => this.lightRun(run))
   }
 
   // الخطوتان 19 و20: نص اللقطة والتقرير الخام لا يُعاد في القوائم والقسيمة؛ التفاصيل عبر engine وpolicy-snapshot.
@@ -1476,10 +1516,14 @@ export class PayrollService {
     if (!ownPublished && scope !== null && savedBranch !== scope) throw new ForbiddenException('القسيمة خارج الفرع المسموح لك أو بلا نطاق تاريخي موثّق')
     // القسيمة القديمة لا تمتلك لقطة هوية أو بنك؛ لا ننسب بيانات الموظف الحالية إلى تاريخها.
     const legacyIdentity = snapshot ? null : await em.getRepository(Employee).findOne({ where: { id: item.employeeId }, select: ['id', 'fullName', 'employeeCode'] })
+    // الهوية والبنك والآيبان على القسيمة: قراءة فقط من ملف الموظف، محكومة بنفس صلاحية القسيمة أعلاه.
+    // ليست لقطة تاريخية (اللقطة لا تحملها)، فهي بيانات صرف حالية يحتاجها من يقرأ القسيمة.
+    const payee = await em.getRepository(Employee).findOne({ where: { id: item.employeeId }, select: ['id', 'nationalId', 'bankName', 'iban'] })
+    const identity = { nationalId: payee?.nationalId ?? null, bankName: payee?.bankName ?? null, iban: payee?.iban ?? null }
     const employee = snapshot ? { id: item.employeeId, fullName: snapshot.fullName, employeeCode: snapshot.employeeCode,
       jobTitle: snapshot.jobTitle, joinDate: snapshot.hireDate, branchId: snapshot.branchId, departmentId: snapshot.departmentId,
-      teamId: snapshot.teamId, costCenterId: snapshot.costCenterId, basicSalary: snapshot.basicSalary } :
-      legacyIdentity ? { ...legacyIdentity, branchId: savedBranch, basicSalary: Number(item.basicSalary) } : null
+      teamId: snapshot.teamId, costCenterId: snapshot.costCenterId, basicSalary: snapshot.basicSalary, ...identity } :
+      legacyIdentity ? { ...legacyIdentity, branchId: savedBranch, basicSalary: Number(item.basicSalary), ...identity } : null
     // C2: تتبع كل قيد دفتر في القسيمة (نوع الخصم وسببه وطلبه وسعر اليوم المستخدم)
     let savedBreakdown: unknown = {}
     try { savedBreakdown = item.breakdown ? JSON.parse(item.breakdown) : {} } catch { savedBreakdown = {} }
@@ -1787,6 +1831,8 @@ export class PayrollService {
         startDate: conflict.startDate, endDate: conflict.endDate, overlapDays: conflict.overlapDays, kind: conflict.kind, blocking: conflict.blocking }
     }
     const dayBasis = monthlyDays === 30 ? 'FIXED_30' : `FIXED_${monthlyDays}`
+    // أ2: المعاينة تقسم على أيام الفترة نفسها التي يقسم عليها الحساب، فما يُعرض هو ما يُحسب.
+    const periodDays = Math.round((Date.parse(`${run.endDate}T12:00:00Z`) - Date.parse(`${run.startDate}T12:00:00Z`)) / 86400000) + 1
     const included = [], excluded = []
     let monthlyCents = 0, earnedCents = 0
     for (const row of resolution.rows) {
@@ -1798,10 +1844,10 @@ export class PayrollService {
         const coverage = row.coverage
         const grossCents = row.salary.monthlyComponents.reduce((sum, amount) => sum + Math.round(amount * 100), 0)
         const fullCoverage = coverage.coverFrom === run.startDate && coverage.coverTo === run.endDate
-        const earned = fullCoverage ? grossCents : Math.min(grossCents, Math.round(grossCents * coverage.coverDays / monthlyDays))
+        const earned = fullCoverage ? grossCents : Math.min(grossCents, Math.round(grossCents * coverage.coverDays / periodDays))
         monthlyCents += grossCents; earnedCents += earned
         included.push({ ...common, hireDate: coverage.hireDate, leaveDate: coverage.leaveDate, coverFrom: coverage.coverFrom, coverTo: coverage.coverTo,
-          coverDays: coverage.coverDays, partial: !fullCoverage, prorataFactor: fullCoverage ? 1 : Math.round(Math.min(coverage.coverDays / monthlyDays, 1) * 1e6) / 1e6,
+          coverDays: coverage.coverDays, partial: !fullCoverage, prorataFactor: fullCoverage ? 1 : Math.round(Math.min(coverage.coverDays / periodDays, 1) * 1e6) / 1e6,
           monthlyDays, dayBasis, monthlyGross: grossCents / 100, earnedGross: earned / 100,
           salarySource: { kind: row.salary.source.kind, referencePeriod: row.salary.source.referencePeriod, effectivePayrollPeriod: row.salary.source.effectivePayrollPeriod,
             currency: row.salary.source.currency, warning: row.salary.source.warning },
@@ -2167,9 +2213,10 @@ export class PayrollService {
     return this.visibleReport(user, report, em)
   }
 
-  private ackView(ack: PayrollRunUnassignedAck) {
+  // اسم من أقرّ بالتقرير يظهر على الشاشة بدل رقم المستخدم
+  private ackView(ack: PayrollRunUnassignedAck, names: Map<number, string>) {
     return { id: ack.id, snapshotVersion: ack.snapshotVersion, scopeBranchId: ack.scopeBranchId, reportHash: ack.reportHash, rowCount: ack.reportRowCount,
-      note: ack.note, acknowledgedBy: ack.acknowledgedBy, acknowledgedAt: ack.acknowledgedAt }
+      note: ack.note, acknowledgedBy: ack.acknowledgedBy, acknowledgedByName: names.get(ack.acknowledgedBy) ?? null, acknowledgedAt: ack.acknowledgedAt }
   }
 
   // الإقرار الساري: لنسخة الحساب نفسها، ونطاقه يغطي نطاق المستخدم (الشركة، أو فرعه)، وبصمة تقريره تطابق التقرير الآن.
@@ -2202,8 +2249,9 @@ export class PayrollService {
         branchScope: this.reportScope(user), today: localDateOf(new Date()) })
       const { ack, acks } = run.status === 'DRAFT' ? { ack: null, acks: [] as PayrollRunUnassignedAck[] } : await this.currentUnassignedAck(em, user, run)
       const latest = acks[0] ?? await em.getRepository(PayrollRunUnassignedAck).findOne({ where: { runId }, order: { id: 'DESC' } })
+      const ackNames = await this.userNames(em, [ack?.acknowledgedBy, latest?.acknowledgedBy])
       return { ...(await this.visibleReport(user, report, em)), runId: run.id, runStatus: run.status, snapshotVersion: run.snapshotVersion,
-        acknowledgement: { required: true, current: ack ? this.ackView(ack) : null, latest: latest ? this.ackView(latest) : null,
+        acknowledgement: { required: true, current: ack ? this.ackView(ack, ackNames) : null, latest: latest ? this.ackView(latest, ackNames) : null,
           stale: !ack && !!latest, canAcknowledge: run.status === 'CALCULATED' && (userHasPerm(user, 'payroll.approve') || userHasPerm(user, 'payroll.calculate')) } }
     })
   }

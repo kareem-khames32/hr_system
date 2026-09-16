@@ -17,12 +17,11 @@ import {
   AlertTriangle,
   X,
 } from 'lucide-react'
-import { fetchLoans, createRequest, getCurrentUser } from '@/lib/api'
+import { can, fetchEmployeeDirectory, fetchLoans, createRequest, getCurrentUser, type ApiEmployeeDirectoryEntry } from '@/lib/api'
 import { downloadCsv, csvDateStamp } from '@/lib/csv'
 import { useCurrency } from '@/lib/currency'
 import { fetchLoanCapPreview, loanMoneyInputValid, type LoanCapEvaluation } from '@/lib/loans-api'
 import { LoanCapSummary } from '@/components/payroll/LoanCapSummary'
-import { LoanCapPoliciesPanel } from '@/components/payroll/LoanCapPoliciesPanel'
 
 type Money = string | number
 // REVERSED (C8): قسط ترحيل أُلغي بعكس صرف مسير — بلا رصيد
@@ -156,19 +155,30 @@ export default function LoansPage() {
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
   const [submitSuccess, setSubmitSuccess] = useState('')
-  // C6 / الخطوة 29: السقف قبل التقديم، ولوحة سياسات السقوف
-  const [section, setSection] = useState<'loans' | 'policies'>('loans')
+  // القرار ب1: السلفة تُقيَّد باسم الموظف المختار وبسقفه هو — لا باسم من يرفعها ولا بسقفه
   const [newLoanCap, setNewLoanCap] = useState<CapPreview | null>(null)
-  const [loanPerms, setLoanPerms] = useState({ selfLinked: false })
-  useEffect(() => { setLoanPerms({ selfLinked: !!getCurrentUser()?.employeeId }) }, [])
+  const [canOnBehalf, setCanOnBehalf] = useState(false)
+  const [selfEmployeeId, setSelfEmployeeId] = useState<number | null>(null)
+  const [directory, setDirectory] = useState<ApiEmployeeDirectoryEntry[]>([])
+  const [forEmployeeId, setForEmployeeId] = useState<number | ''>('')
   useEffect(() => {
-    if (!showNewLoanModal || !loanPerms.selfLinked) { setNewLoanCap(null); return }
+    setCanOnBehalf(can('requests.create_on_behalf'))
+    setSelfEmployeeId(getCurrentUser()?.employeeId ?? null)
+  }, [])
+  useEffect(() => {
+    if (!showNewLoanModal || !canOnBehalf || directory.length) return
+    fetchEmployeeDirectory().then(setDirectory).catch(() => setDirectory([]))
+  }, [showNewLoanModal, canOnBehalf, directory.length])
+  const targetEmployeeId = canOnBehalf ? (forEmployeeId === '' ? null : Number(forEmployeeId)) : selfEmployeeId
+  useEffect(() => {
+    if (!showNewLoanModal || !targetEmployeeId) { setNewLoanCap(null); return }
     const handle = setTimeout(() => {
-      fetchLoanCapPreview({ amount: loanMoneyInputValid(loanAmount) ? loanAmount.trim() : undefined, months: /^[1-9]\d{0,3}$/.test(loanMonths) ? Number(loanMonths) : undefined })
+      fetchLoanCapPreview({ employeeId: targetEmployeeId, amount: loanMoneyInputValid(loanAmount) ? loanAmount.trim() : undefined,
+        months: /^[1-9]\d{0,3}$/.test(loanMonths) ? Number(loanMonths) : undefined })
         .then(setNewLoanCap).catch(() => setNewLoanCap(null))
     }, 300)
     return () => clearTimeout(handle)
-  }, [showNewLoanModal, loanAmount, loanMonths, loanPerms.selfLinked])
+  }, [showNewLoanModal, loanAmount, loanMonths, targetEmployeeId])
 
   const loadLoans = () => {
     setError('')
@@ -189,7 +199,7 @@ export default function LoansPage() {
       await createRequest('LOAN', {
         amount: loanAmount,
         months: Number(loanMonths),
-      })
+      }, true, targetEmployeeId && targetEmployeeId !== selfEmployeeId ? targetEmployeeId : undefined)
       setSubmitSuccess('تم إرسال طلب السلفة للاعتماد — سيظهر في السجل بعد اكتمال الموافقات')
       setLoanAmount('')
       setLoanMonths('')
@@ -260,14 +270,7 @@ export default function LoansPage() {
             {error}
           </div>
         )}
-        <div className="card p-2 flex items-center gap-2 flex-wrap" role="tablist" aria-label="أقسام السلف">
-          {([['loans', 'السلف والأقساط'], ['policies', 'سياسات السقوف']] as const).map(([id, label]) => (
-            <button key={id} type="button" role="tab" aria-selected={section === id} onClick={() => setSection(id)}
-              className={`px-4 py-2 rounded-xl text-sm font-medium ${section === id ? 'bg-primary-500 text-white' : 'text-gray-600 hover:bg-gray-100'}`}>{label}</button>
-          ))}
-        </div>
-        {section === 'policies' && <LoanCapPoliciesPanel currency={currency} />}
-        {section === 'loans' && <>
+        {/* القرار ب1: سقف السلفة صار في «سياسات النظام» — لا تبويب سياسات هنا */}
         {/* Stats Cards */}
         <div className="grid grid-cols-4 gap-4">
           <div className="card">
@@ -529,7 +532,6 @@ export default function LoansPage() {
             </ul>
           </div>
         </div>
-        </>}
       </div>
 
       {/* New Loan Modal */}
@@ -564,6 +566,16 @@ export default function LoansPage() {
             )}
 
             <div className="space-y-4">
+              {canOnBehalf && (
+                <div>
+                  <label className="label" htmlFor="loan-for-employee">الموظف صاحب السلفة *</label>
+                  <select id="loan-for-employee" className="input" value={forEmployeeId} onChange={(e) => setForEmployeeId(e.target.value ? Number(e.target.value) : '')}>
+                    <option value="">— اختر الموظف —</option>
+                    {directory.map((row) => <option key={row.id} value={row.id}>{row.fullName} — {row.employeeCode}</option>)}
+                  </select>
+                  <p className="text-xs text-gray-500 mt-1">السلفة تُقيَّد باسمه ويُفحص سقفه هو.</p>
+                </div>
+              )}
               <div>
                 <label className="label">مبلغ السلفة ({currency}) *</label>
                 <input
@@ -588,8 +600,8 @@ export default function LoansPage() {
                   dir="ltr"
                 />
               </div>
-              {newLoanCap && <LoanCapSummary cap={newLoanCap} currency={currency} title="السقف المتاح لك الآن" />}
-              {newLoanCap?.requestWindow && (newLoanCap.requestWindow.fromDay !== 1 || newLoanCap.requestWindow.toDay !== 31) && (
+              {newLoanCap && <LoanCapSummary cap={newLoanCap} currency={currency} title="المتاح لهذا الموظف الآن" />}
+              {newLoanCap?.requestWindow && (!newLoanCap.requestWindow.open || newLoanCap.requestWindow.fromDay !== 1 || newLoanCap.requestWindow.toDay !== 31) && (
                 <p className={`text-sm rounded-xl p-3 ${newLoanCap.requestWindow.open ? 'bg-gray-50 text-gray-600' : 'bg-amber-50 text-amber-800'}`}>{newLoanCap.requestWindow.message}</p>
               )}
             </div>
@@ -597,7 +609,7 @@ export default function LoansPage() {
             <div className="flex items-center gap-3 mt-6 pt-4 border-t border-gray-100">
               <button
                 onClick={submitNewLoan}
-                disabled={submitting || !loanAmount || !loanMonths || newLoanCap?.requestWindow?.open === false}
+                disabled={submitting || !loanAmount || !loanMonths || !targetEmployeeId || newLoanCap?.requestWindow?.open === false || (newLoanCap !== null && !newLoanCap.allowed)}
                 className="btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {submitting ? 'جارٍ الإرسال...' : 'إرسال الطلب'}

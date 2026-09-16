@@ -63,7 +63,8 @@ export interface PayrollUnassignedRow {
   runs: Array<{ runId: number | null; name: string | null; status: string; period: string; startDate: string; endDate: string; exclusionReason: string | null }>
 }
 export interface PayrollUnassignedAck {
-  id: number; snapshotVersion: number; scopeBranchId: number | null; reportHash: string; rowCount: number; note: string | null; acknowledgedBy: number; acknowledgedAt: string
+  id: number; snapshotVersion: number; scopeBranchId: number | null; reportHash: string; rowCount: number; note: string | null
+  acknowledgedBy: number; acknowledgedByName: string | null; acknowledgedAt: string
 }
 export interface PayrollUnassignedReport {
   period: string; startDate: string; endDate: string; scopeBranchId: number | null; reportHash: string

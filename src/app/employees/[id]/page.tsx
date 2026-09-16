@@ -50,6 +50,7 @@ import {
   fetchActiveLeaveTypes,
   fetchCompanyInfo,
   fetchAttendanceRuleHistory,
+  fetchUsers,
   createDocument,
   uploadFile,
   can,
@@ -417,7 +418,7 @@ export default function EmployeeProfilePage() {
       setLoading(true)
       setError('')
       try {
-        const [profile, branches, departments, teams, allEmployees, currencyNow, qualifications, grades, workSchedules, costCenters, leaveTypes, attendanceRules] =
+        const [profile, branches, departments, teams, allEmployees, currencyNow, qualifications, grades, workSchedules, costCenters, leaveTypes, attendanceRules, systemUsers] =
           await Promise.all([
             fetchEmployeeProfile(Number(params.id)),
             fetchBranches(),
@@ -434,6 +435,8 @@ export default function EmployeeProfilePage() {
             fetchActiveLeaveTypes(),
             // سجل الدوام (سبب تغيير الجدول/المرونة) — اختياري: فشله لا يعطل الملف
             fetchAttendanceRuleHistory('EMPLOYEE', Number(params.id)).catch(() => [] as ApiAttendanceRuleVersion[]),
+            // أسماء المستخدمين لعرض اسم من سجّل التغيير بدل «المستخدم #12» — اختياري
+            fetchUsers().catch(() => [] as Array<{ id: number; displayName: string; email: string }>),
           ])
         setQuals(qualifications)
         const e = profile.employee as ApiEmployee & EmployeeExtras
@@ -628,6 +631,11 @@ export default function EmployeeProfilePage() {
         )
 
         // سجل الدوام: كل نسخة قاعدة حضور للموظف بتاريخ سريانها وسببها ومن سجّلها
+        const userNameById = new Map(
+          (systemUsers ?? []).map((u) => [u.id, (u.displayName || u.email || '').trim()])
+        )
+        // بلا صلاحية قراءة المستخدمين: «أحد المستخدمين» — لا رقم مستخدم خام على أي شاشة
+        const actorName = (userId: number) => userNameById.get(userId)?.trim() || 'أحد المستخدمين'
         const scheduleNameById = new Map(workSchedules.map((s) => [s.id, s.name]))
         const flexLabels: Record<string, string> = { INHERIT: 'يتبع الوردية أو جدول العمل', ENABLED: 'مفعلة', DISABLED: 'موقوفة' }
         setRuleHistory(
@@ -640,7 +648,7 @@ export default function EmployeeProfilePage() {
               schedule: scheduleId == null ? 'بدون جدول (يتبع الفرع)' : scheduleNameById.get(scheduleId) ?? `#${scheduleId}`,
               flex: flexLabels[flexMode] ?? flexMode,
               reason: v.reason?.trim() || '—',
-              actor: `${v.actorUserId ? `المستخدم #${v.actorUserId}` : 'النظام'} · ${fmtDate(v.createdAt)}`,
+              actor: `${v.actorUserId ? actorName(v.actorUserId) : 'النظام'} · ${fmtDate(v.createdAt)}`,
             }
           })
         )

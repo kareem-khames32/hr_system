@@ -12,8 +12,7 @@ class CreateAttendanceExemptionDto {
   @IsOptional() @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) effectiveTo?: string | null
   @IsIn(['executive', 'field_role', 'remote', 'contractual', 'medical', 'other']) reasonCode: AttendanceExemptionReasonCode
   @IsString() @MaxLength(500) reason: string
-  @IsOptional() @IsBoolean() overtimeEligibleOverride?: boolean | null
-  @IsOptional() @IsBoolean() unpaidLeaveDeductibleOverride?: boolean | null
+  // أ7: المستثنى من البصمة بلا خصومات إطلاقًا وبلا إضافي؛ فلا تجاوز فرديًا للنافذة يعيد الخصم لموظف مستثنى.
   @IsOptional() @IsBoolean() requiresCheckinForPresence?: boolean
 }
 class ExemptionReasonDto {

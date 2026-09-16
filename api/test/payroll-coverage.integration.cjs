@@ -286,17 +286,20 @@ test('PR-10: the first and last days of the cycle each count as one covered day'
   assert.equal(amount(run.totalNet), 800)
 })
 
-test('PR-09 / PR-10: 18 covered days in a 31-day cycle earn 3600 from 6000 on the selected 30-day basis', async t => {
+test('أ2: 18 يومًا مغطى في دورة 31 يومًا تستحق 3483.87 — التناسب على أيام الفترة الفعلية لا على 30', async t => {
   const emp = await employee({ joinDate: '2026-08-05', basicSalary: 6000 })
   await attendance(emp, '2026-08-05', '2026-08-22')
   const run = await calculate([emp], { period: '2026-08' }, { startDate: '2026-07-23', endDate: '2026-08-22' })
   const item = itemFor(run, emp)
-  assert.equal(amount(item.netPay), 3600)
-  assert.equal(amount(run.totalNet), 3600)
+  assert.equal(amount(item.netPay), 3483.87)
+  assert.equal(amount(run.totalNet), 3483.87)
   deductionsAreZero(item)
-  coverageIs(item, { coverFrom: '2026-08-05', coverTo: '2026-08-22', coverDays: 18,
-    gross: 6000, grossEarned: 3600, prorataFactor: 0.6, dayRate: 200 })
-  t.diagnostic('Owner decision: monthly basis = 30. Manual: 6000 × 18 / 30 = 3600, even though the cycle spans 31 days.')
+  const detail = JSON.parse(item.breakdown)
+  assert.equal(detail.periodDays, 31); assert.equal(detail.prorationBasis, 'PERIOD_DAYS')
+  // سعر اليوم للغياب والتأخير يبقى على أساس الشهر (6000 / 30 = 200) بقرار المالك في هذه الموجة
+  coverageIs(item, { coverFrom: '2026-08-05', coverTo: '2026-08-22', coverDays: 18, gross: 6000, grossEarned: 3483.87, dayRate: 200 })
+  assert.ok(Math.abs(detail.prorataFactor - 18 / 31) <= 0.000001)
+  t.diagnostic('أ2 (16 سبتمبر): 6000 × 18 / 31 = 3483.87؛ الدورة 31 يومًا فالمقام 31 لا 30.')
 })
 
 test('PR-10: full coverage of a 31-day cycle pays exactly 6000, with factor one and no extra day', async () => {

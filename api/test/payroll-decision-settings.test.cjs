@@ -50,15 +50,32 @@ const policy = (overrides = {}) => ({ schemaVersion: 1, lateEnabled: true, short
   overlapPolicy: 'NET_OF_LATENESS', dailyCapDays: 1, dayRate: 480, minuteRate: 1, ...overrides })
 const snapshot = (flexEnabled, extra = {}) => ({ flexEnabled, shortfallToleranceMinutes: 10, paidPermissionShortfallCoveredMinutes: 0, ...extra })
 
-test('D7: NET_OF_LATENESS subtracts lateness from shortfall only while lateness deduction is enabled', () => {
+test('أ4: لا ترتيب تداخل بين التأخير والنقص — كل خصم يُحتسب كما جاء، مهما كانت سياسة التداخل المحفوظة', () => {
   const day = { date: '2026-09-01', lateMinutes: 30, unexcusedLateMinutes: 30, shortfallMinutes: 50, deductibleMinutes: 0, attendanceRuleSnapshot: snapshot(true) }
   const enabled = attendanceDeductionDay(day, policy(), 30)
-  assert.equal(enabled.overlapMinutes, 30); assert.equal(enabled.chargeableShortfallMinutes, 20)
-  assert.equal(enabled.latenessAmount, 30); assert.equal(enabled.shortfallAmount, 20); assert.equal(enabled.totalAmount, 50)
+  assert.equal(enabled.overlapMinutes, 0, 'لا تُطرح دقائق التأخير من النقص')
+  assert.equal(enabled.chargeableShortfallMinutes, 50)
+  assert.equal(enabled.latenessAmount, 30); assert.equal(enabled.shortfallAmount, 50); assert.equal(enabled.totalAmount, 80)
+  // إطفاء خصم التأخير يُسقط عقوبته وحدها؛ الدقائق التي لم تُشتغل تبقى نقص ساعات كاملًا
   const disabled = attendanceDeductionDay(day, policy({ lateEnabled: false }), 30)
   assert.equal(disabled.overlapMinutes, 0); assert.equal(disabled.latenessAmount, 0)
-  assert.equal(disabled.chargeableShortfallMinutes, 50, 'the 30 late minutes stay deductible as unworked minutes')
-  assert.equal(disabled.shortfallAmount, 50); assert.equal(disabled.totalAmount, 50)
+  assert.equal(disabled.chargeableShortfallMinutes, 50); assert.equal(disabled.shortfallAmount, 50); assert.equal(disabled.totalAmount, 50)
+  // سياسة التداخل المحفوظة في لقطة المسير لم تعد تغيّر شيئًا
+  for (const overlapPolicy of ['CUMULATIVE', 'MAX_OF_BOTH', 'NET_OF_LATENESS']) {
+    const row = attendanceDeductionDay(day, policy({ overlapPolicy }), 30)
+    assert.equal(row.totalAmount, 80, overlapPolicy)
+  }
+})
+
+test('أ4: لا سقف يومي لخصم الحضور — التأخير والنقص يتجاوزان قيمة اليوم ولا يُقتطع منهما شيء', () => {
+  const day = { date: '2026-09-02', lateMinutes: 240, unexcusedLateMinutes: 240, shortfallMinutes: 480, deductibleMinutes: 0, attendanceRuleSnapshot: snapshot(true) }
+  // سعر اليوم 480 والدقيقة 1: عقوبة تأخير 240 + نقص 480 = 720 > يوم كامل
+  for (const dailyCapDays of [0.05, 1, 31]) {
+    const row = attendanceDeductionDay(day, policy({ dailyCapDays }), 240)
+    assert.equal(row.latenessAmount, 240); assert.equal(row.shortfallAmount, 480)
+    assert.equal(row.totalAmount, 720, `dailyCapDays=${dailyCapDays}`)
+    assert.equal(row.dailyCapAmount, 0); assert.equal(row.cappedAmount, 0)
+  }
 })
 
 test('D1: early leave on a fixed shift is deducted at the minute rate unless the setting is off; flex shifts keep the shortfall rule', () => {

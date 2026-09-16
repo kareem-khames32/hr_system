@@ -90,6 +90,8 @@ export interface EmployeeFormState {
   employeeCode: string
   fingerprintCode: string
   joinDate: string
+  // بداية استحقاق الراتب — فارغ = من تاريخ التعيين (أو بدء العمل الفعلي)
+  salaryEntitlementStart: string
   status: EmployeeStatus
   branchId: string
   departmentId: string
@@ -298,6 +300,7 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
   employeeCode: '',
   fingerprintCode: '',
   joinDate: '',
+  salaryEntitlementStart: '',
   status: 'probation',
   branchId: '',
   departmentId: '',
@@ -377,6 +380,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     rowId: number
   ) => {
     if (!employeeId) return
+    // الحذف فوري من ملف الموظف — تأكيد واحد قبله (كان يمسح الصف المحفوظ بلا سؤال)
+    if (typeof window !== 'undefined' && !window.confirm('حذف هذا العنصر المحفوظ من ملف الموظف؟ لا يمكن التراجع.')) return
     const fn = {
       education: deleteEducation,
       certifications: deleteCertification,
@@ -500,6 +505,15 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
 
   const setField = <K extends keyof EmployeeFormState>(key: K, value: EmployeeFormState[K]) =>
     setForm((prev) => ({ ...prev, [key]: value }))
+
+  // بداية استحقاق الراتب افتراضها تاريخ التعيين (أو بدء العمل الفعلي إن حُدّد) —
+  // تتبعه في شاشة الإضافة حتى يغيّرها المستخدم بنفسه
+  const entitlementEdited = useRef(false)
+  useEffect(() => {
+    if (mode !== 'add' || entitlementEdited.current) return
+    const hireDate = form.actualStartDate || form.joinDate
+    setForm((prev) => (prev.salaryEntitlementStart === hireDate ? prev : { ...prev, salaryEntitlementStart: hireDate }))
+  }, [mode, form.joinDate, form.actualStartDate])
 
   // ===== صورة الموظف =====
   const [photoUrl, setPhotoUrl] = useState<string | null>(null)
@@ -768,12 +782,15 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.teamId) payload.teamId = Number(form.teamId)
     if (form.managerId) payload.managerEmployeeId = Number(form.managerId)
     if (form.joinDate) payload.joinDate = form.joinDate
+    // فارغ = يبدأ الاستحقاق من تاريخ التعيين (لا يُرسل شيء فيبقى العمود NULL)
+    if (form.salaryEntitlementStart) payload.salaryEntitlementStart = form.salaryEntitlementStart
     if (mode === 'add' && form.basicSalary !== '') payload.basicSalary = Number(form.basicSalary)
     if (form.costCenterId) payload.costCenterId = Number(form.costCenterId)
     // جدول العمل المختار — يعيّن على الموظف فعلياً (يشتقّ منه المحرك)
     if (selectedSchedule !== '') payload.workScheduleId = Number(selectedSchedule)
-    if (mode === 'add' || form.flexOverrideMode !== (initial?.flexOverrideMode ?? 'INHERIT') ||
-      (selectedSchedule || null) !== (initial?.workScheduleId ?? null)) {
+    // المرونة تتبع الوردية أو جدول العمل — لا مدخل فردي في الشاشة. القيمة المحفوظة
+    // لا تُلمس في التعديل، والإنشاء وحده يثبّت «يتبع» مع أول نسخة قاعدة حضور.
+    if (mode === 'add' || (selectedSchedule || null) !== (initial?.workScheduleId ?? null)) {
       payload.flexOverrideMode = form.flexOverrideMode ?? 'INHERIT'
       if (form.attendanceEffectiveFrom) payload.attendanceEffectiveFrom = form.attendanceEffectiveFrom
       if (form.attendanceChangeReason?.trim()) payload.attendanceChangeReason = form.attendanceChangeReason.trim()
@@ -916,11 +933,10 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
         state: { days: openingBalance, expiryMode: openingExpiry, expiryDate: openingExpiryDate },
       })
       if (openingIssue) return openingIssue
-      const attendanceChanged = (form.flexOverrideMode ?? 'INHERIT') !== (initial?.flexOverrideMode ?? 'INHERIT') ||
-        (selectedSchedule || null) !== (initial?.workScheduleId ?? null)
+      const attendanceChanged = (selectedSchedule || null) !== (initial?.workScheduleId ?? null)
       if (mode === 'edit' && attendanceChanged) {
-        if (!form.attendanceEffectiveFrom) return 'حدد تاريخ سريان تغيير الدوام أو المرونة'
-        if (!form.attendanceChangeReason?.trim()) return 'اكتب سبب تغيير الدوام أو المرونة'
+        if (!form.attendanceEffectiveFrom) return 'حدد تاريخ سريان تغيير جدول العمل'
+        if (!form.attendanceChangeReason?.trim()) return 'اكتب سبب تغيير جدول العمل'
       }
       if (calendarRequested) {
         try { buildCalendarChange(calendarContext, { effectiveFrom: form.attendanceEffectiveFrom ?? '', reason: form.attendanceChangeReason ?? '' }) }
@@ -1132,21 +1148,21 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               <div className="grid grid-cols-4 gap-4">
                 {enNameAsWhole ? (
                 <div className="col-span-3">
-                  <label className="label">Full Name (English)</label>
+                  <label className="label">الاسم الكامل (بالإنجليزية)</label>
                   <input type="text" className="input" dir="ltr" value={form.nameEnFull ?? ''} onChange={(e) => setField('nameEnFull', e.target.value)} />
                   <p className="text-xs text-gray-400 mt-1">الاسم الإنجليزي محفوظ كاملاً؛ عدّله هنا كما يُكتب.</p>
                 </div>
                 ) : (<>
                 <div>
-                  <label className="label">First Name</label>
+                  <label className="label">الاسم الأول (بالإنجليزية)</label>
                   <input type="text" className="input" placeholder="Ahmed" dir="ltr" value={form.firstNameEn} onChange={(e) => setField('firstNameEn', e.target.value)} />
                 </div>
                 <div>
-                  <label className="label">Middle Name</label>
+                  <label className="label">الاسم الأوسط (بالإنجليزية)</label>
                   <input type="text" className="input" placeholder="Mohammed" dir="ltr" value={form.middleNameEn} onChange={(e) => setField('middleNameEn', e.target.value)} />
                 </div>
                 <div>
-                  <label className="label">Last Name</label>
+                  <label className="label">اسم العائلة (بالإنجليزية)</label>
                   <input type="text" className="input" placeholder="Alsaeed" dir="ltr" value={form.lastNameEn} onChange={(e) => setField('lastNameEn', e.target.value)} />
                 </div>
                 </>)}
@@ -1327,6 +1343,11 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <label className="label">تاريخ بداية العمل الفعلي</label>
                   <input type="date" className="input" value={form.actualStartDate} onChange={(e) => setField('actualStartDate', e.target.value)} />
                 </div>
+                <div>
+                  <label className="label">بداية استحقاق الراتب</label>
+                  <input type="date" className="input" value={form.salaryEntitlementStart} onChange={(e) => { entitlementEdited.current = true; setField('salaryEntitlementStart', e.target.value) }} />
+                  <p className="text-xs text-gray-400 mt-1">أول يوم يُحسب له راتب — الافتراضي تاريخ التعيين، والأيام قبله لا تُدفع ولا تُخصم.</p>
+                </div>
               </div>
 
               {/* Employment Type */}
@@ -1452,7 +1473,6 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                       </option>
                     ))}
                   </select>
-                  <p className="text-xs text-gray-400 mt-1">يتحدد تلقائياً عند اختيار الفريق</p>
                 </div>
                 <div>
                   <label className="label">موقع العمل</label>
@@ -1670,25 +1690,15 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               )}
 
               <div className="mt-4 space-y-4 rounded-xl border border-blue-100 bg-blue-50/50 p-4">
-                <label className="block text-sm font-medium text-gray-800">
-                  المرونة لهذا الموظف
-                  <select className="input mt-2 w-full" value={form.flexOverrideMode ?? 'INHERIT'}
-                    onChange={event => setField('flexOverrideMode', event.target.value as 'INHERIT' | 'ENABLED' | 'DISABLED')}>
-                    <option value="INHERIT">يتبع إعداد الوردية أو جدول العمل</option>
-                    <option value="ENABLED">مفعلة لهذا الموظف</option>
-                    <option value="DISABLED">موقوفة لهذا الموظف</option>
-                  </select>
-                </label>
-                <p className="text-sm text-gray-600">مدة المرونة والساعات المطلوبة تُؤخذ من دوام اليوم. الاختيار الفردي يحدد التفعيل، والوقت بعد نهاية نافذة المرونة يُحسب تأخيرًا حتى لو استكمل الموظف ساعاته.</p>
-                {form.flexOverrideMode === 'ENABLED' && <p className="text-sm text-amber-800">يلزم تعريف مدة مرونة صحيحة في الوردية أو جدول العمل قبل تفعيلها للموظف.</p>}
+                <p className="text-sm text-gray-600">المرونة تتبع الوردية أو جدول العمل: الموظف مرن لأن ورديته مرنة، ومدة المرونة والساعات المطلوبة من دوام يومه.</p>
                 {mode === 'edit' && <div className="space-y-2">
                   <CalendarContextSummary context={calendarContext} error={calendarContextError} />
                   {calendarContext && <label className="flex gap-2 items-start text-sm text-gray-700"><input type="checkbox" checked={calendarInitialConfirmation} disabled={submitting || calendarContext.currentMatchesHistory === false} onChange={event => setCalendarInitialConfirmation(event.target.checked)} />أؤكد سريان الفرع الحالي لهذا الموظف من تاريخ أحدده، حتى دون تغيير الفرع.</label>}
                   {!calendarContext && <p className="text-xs text-gray-600">تعديل الفرع متوقف، ويمكن حفظ باقي بيانات الموظف. أعد تحميل الصفحة لإعادة قراءة التقويم.</p>}
                 </div>}
-                {(mode === 'add' || calendarRequested || form.flexOverrideMode !== (initial?.flexOverrideMode ?? 'INHERIT') || (selectedSchedule || null) !== (initial?.workScheduleId ?? null)) && (
+                {(mode === 'add' || calendarRequested || (selectedSchedule || null) !== (initial?.workScheduleId ?? null)) && (
                   <div className="grid gap-4 sm:grid-cols-2">
-                    <label className="text-sm text-gray-700">يسري الفرع أو الدوام أو المرونة من
+                    <label className="text-sm text-gray-700">يسري الفرع أو جدول العمل من
                       <input type="date" className="input mt-2 w-full" value={form.attendanceEffectiveFrom ?? ''}
                         onChange={event => setField('attendanceEffectiveFrom', event.target.value)} />
                     </label>

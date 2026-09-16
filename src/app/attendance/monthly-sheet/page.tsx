@@ -146,7 +146,7 @@ export default function MonthlySheetPage() {
       row.attendanceRuleSnapshot?.flexEnabled ? `مفعلة — نافذة ${row.attendanceRuleSnapshot.flexWindowMinutes} دقيقة` : '',
       row.attendanceReviewReason ?? '',
       Number(row.earlyLeaveMinutes) || 0,
-      row.graceUsed ?? '',
+      row.attendanceRuleSnapshot?.flexEnabled && (row.attendanceRuleSnapshot.windowSupersedesGrace ?? true) ? '' : row.graceUsed ?? '',
       (statusConfig[row.status] ?? statusConfig.present).label,
     ])
     const csv =
@@ -345,7 +345,8 @@ export default function MonthlySheetPage() {
                                 جدول افتراضي (مفترَض)
                               </span>
                             )}
-                            {row.graceUsed != null && (
+                            {/* الوردية المرنة لا تُطبَّق فيها السماحية — نافذة الحضور تغنيها */}
+                            {row.graceUsed != null && !(row.attendanceRuleSnapshot?.flexEnabled && (row.attendanceRuleSnapshot.windowSupersedesGrace ?? true)) && (
                               <span
                                 className="block text-[10px] text-gray-400"
                                 title="السماحية التي طُبّقت على هذا اليوم — سماحية الوردية إن حُدّدت لها، وإلا القيمة العامة"

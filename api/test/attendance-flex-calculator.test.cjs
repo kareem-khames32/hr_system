@@ -102,3 +102,46 @@ for (const value of [null, 0, -1, 60.5, 540]) test(`invalid enabled window ${val
 test('interval union does not sum overlapping approval windows', () => {
   assert.equal(attendanceIntervalMinutes(0, 60, [{ from: 0, to: 40 }, { from: 20, to: 50 }]), 50)
 })
+
+// السماحية لا تُطبَّق في الوردية المرنة إلا إذا أُطفئ window_supersedes_grace —
+// فالشاشة تُخفيها بنفس شرط المحرك تماماً، لا بالمرونة وحدها
+test('«سماحية N د» تظهر في شاشات الحضور حيث تُطبَّق فعلاً (بنفس شرط المحرك)', () => {
+  const fs = require('node:fs')
+  const engine = fs.readFileSync(path.join(__dirname, '..', 'src', 'attendance', 'attendance-flex-calculator.ts'), 'utf8')
+  assert.match(engine, /input\.flexEnabled && \(input\.windowSupersedesGrace \?\? true\) \? 0 : input\.graceMinutes/)
+  for (const page of ['attendance/page.tsx', 'attendance/monthly-sheet/page.tsx', 'my/attendance/page.tsx']) {
+    const text = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'app', page), 'utf8')
+    const conditions = text.match(/graceUsed != null[^\n]*/g) ?? []
+    assert.ok(conditions.length > 0, page)
+    for (const condition of conditions) {
+      assert.match(condition, /attendanceRuleSnapshot\?\.flexEnabled/, `${page}: ${condition}`)
+      assert.match(condition, /windowSupersedesGrace \?\? true/, `${page}: ${condition}`)
+    }
+  }
+  // عمود «السماحية المطبَّقة» في تصدير الكشف الشهري بنفس الشرط
+  const sheet = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'app', 'attendance', 'monthly-sheet', 'page.tsx'), 'utf8')
+  assert.match(sheet, /flexEnabled && \(row\.attendanceRuleSnapshot\.windowSupersedesGrace \?\? true\) \? '' : row\.graceUsed/)
+  // الحقل يصل الشاشة من اللقطة المخزنة
+  assert.match(fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'lib', 'api.ts'), 'utf8'), /windowSupersedesGrace\?: boolean/)
+})
+
+// زر إعادة حساب واحد في النظام (اليومي بنطاق المستخدم)، وعرض الكشف لا يكتب صفوفاً
+// إلا لمن يملك إدارة الحضور، وللفجوات وحدها (اليوم المحفوظ لا يُعاد حسابه من قراءة)
+test('لا مسار ولا زر إعادة حساب ثانٍ، وتجسيد غياب الكشف بصلاحية الإدارة وللفجوات وحدها', () => {
+  const fs = require('node:fs')
+  const root = path.join(__dirname, '..', '..')
+  const read = relative => fs.readFileSync(path.join(root, relative), 'utf8')
+  const controller = read('api/src/attendance/attendance.controller.ts')
+  const service = read('api/src/attendance/attendance.service.ts')
+  assert.doesNotMatch(controller, /monthly\/recompute/)
+  assert.doesNotMatch(service, /recomputeEmployeeMonth/)
+  assert.doesNotMatch(read('src/lib/api.ts'), /recomputeEmployeeMonth/)
+  const sheet = read('src/app/attendance/monthly-sheet/page.tsx')
+  assert.doesNotMatch(sheet, /إعادة حساب/)
+  // التجسيد من العرض: بصلاحية الإدارة وحدها، وبفجوات الأيام بلا صف
+  assert.match(service, /if \(userHasPerm\(user, 'attendance\.manage'\)\) \{\s*\n\s*await this\.catchUpEmployeeAbsences/)
+  assert.match(service, /if \(!stored\.has\(date\)\)/)
+  // زر إعادة الحساب الوحيد الباقي: يوم الحضور اليومي بنطاق المستخدم
+  assert.match(read('src/app/attendance/page.tsx'), /recomputeAttendanceDay\(selectedDate\)/)
+  assert.match(controller, /@Post\('recompute'\)/)
+})

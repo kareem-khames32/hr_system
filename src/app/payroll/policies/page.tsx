@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
-import { ArrowRight, ListOrdered, Plus, RefreshCw, SlidersHorizontal } from 'lucide-react'
+import { ArrowRight, ListOrdered, Plus, RefreshCw } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { PayrollPolicyChargeRulesPanel, PayrollPolicyCreateForm, PayrollPolicyVersionPanel } from '@/components/PayrollPolicySetEditor'
 import { can } from '@/lib/api'
@@ -68,7 +68,6 @@ function PayrollPoliciesContent() {
       <div className="flex items-start gap-3"><span className="rounded-2xl p-3 bg-primary-50 text-primary-600"><ListOrdered size={26} /></span><div><h1 className="text-2xl font-bold text-gray-800">معادلات الرواتب</h1><p className="text-gray-500 mt-1">كل مجموعة معادلات تحدد دورة المسير وساعات اليوم وطريقة خصم التأخير والخروج المبكر ونقص الساعات والغياب لموظفيها.</p></div></div>
       <div className="flex flex-wrap gap-2">
         {canManage && !creating && <button type="button" className="btn-primary flex gap-2 items-center text-sm" disabled={loading} onClick={() => setCreating(true)}><Plus size={17} />معادلات جديدة</button>}
-        <Link href="/payroll/formulas" className="btn-secondary flex gap-2 items-center text-sm"><SlidersHorizontal size={17} />القيم العامة وجداول شرائح التأخير</Link>
         <Link href="/payroll" className="btn-secondary flex gap-2 items-center text-sm"><ArrowRight size={17} />مسير الرواتب</Link>
       </div>
     </div>

@@ -329,7 +329,7 @@ export default function ApprovalsInboxPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">صندوق الموافقات</h1>
+            <h1 className="text-2xl font-bold text-gray-800">بانتظار موافقتي</h1>
             <p className="text-gray-500 mt-1">
               كل ما ينتظر قرارك من كل أنواع الطلبات — في مكان واحد
             </p>
@@ -359,14 +359,14 @@ export default function ApprovalsInboxPage() {
             </div>
             <div className="flex flex-wrap gap-3">
               {payrollPending.deductions > 0 && (
-                <Link href={payrollPending.admin ? '/payroll/deductions' : '/my/deductions'} className="flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-100">
+                <Link href={payrollPending.admin ? '/payroll/deductions?view=pending_me' : '/my/deductions?view=pending_me'} className="flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-100">
                   خصومات بانتظار موافقتك
                   <span className="badge text-xs bg-red-100 text-red-700">{payrollPending.deductions}</span>
                   <ChevronLeft size={14} />
                 </Link>
               )}
               {payrollPending.bonuses > 0 && (
-                <Link href={payrollPending.admin ? '/payroll/bonuses' : '/my/bonuses'} className="flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-100">
+                <Link href={payrollPending.admin ? '/payroll/bonuses?view=pending_me' : '/my/bonuses?view=pending_me'} className="flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-100">
                   مكافآت بانتظار موافقتك
                   <span className="badge text-xs bg-success-100 text-success-700">{payrollPending.bonuses}</span>
                   <ChevronLeft size={14} />

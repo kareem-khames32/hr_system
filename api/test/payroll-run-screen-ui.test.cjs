@@ -123,7 +123,8 @@ test('run table per employee: gross, deductions and net from the same columns, w
   assert.equal(totals.payrollItemEarnings(item), 6000.3)
   assert.equal(totals.payrollRunTotals([item]).net, 5987.8)
   assert.equal(totals.payrollRunTotals([item, { ...item, netPay: -5 }]).negativeNet, 1)
-  assert.equal(totals.payrollCoverageText(totals.payrollItemCoverage(item)), '22 يوم مغطى من 2026-09-01 إلى 2026-09-22 • المعامل 0.7333 • أساس 30 يومًا')
+  // القرار أ2 (خط الحساب): سطر التغطية بالأيام والتواريخ فقط — «المعامل» و«أساس 30 يومًا» لم يعودا يُعرضان
+  assert.equal(totals.payrollCoverageText(totals.payrollItemCoverage(item)), '22 يوم مغطى من 2026-09-01 إلى 2026-09-22')
   assert.equal(totals.payrollItemCoverage({ breakdown: '{bad' }), null)
   const page = read('src/app/payroll/page.tsx')
   for (const text of ['payrollItemCoverage(item)', 'payrollItemEarnings(item)', 'payrollItemDeductions(item)', 'صافي سالب — يمنع الاعتماد',
@@ -150,6 +151,62 @@ test('allowances page (ALDD-11) is hidden and redirects to the run screen, the f
   assert.match(sources, /يقرؤها محرك السياسة بجانبه للمقارنة/); assert.doesNotMatch(sources, /حساب المسير بهذه المصادر لم يُفعّل بعد/)
   assert.doesNotMatch(read('src/app/payroll/salary-history/page.tsx'), /لا يستخدم|لا يقرأ/, 'the run reads the monthly salary history; no «unused» banner')
   assert.match(read('src/app/settings/policies/page.tsx'), /key: 'payroll\.approval_self_approval_allowed'/)
+})
+
+test('run picker (money-requests lane): only regular, non-cancelled runs are listed and opened by default; «?run=ID» still opens any older run and keeps it visible', () => {
+  const page = read('src/app/payroll/page.tsx')
+  assert.ok(page.includes("const isListedRun = (run: Pick<ApiPayrollRun, 'status' | 'runType'>) =>\n  (run.runType ?? 'REGULAR') === 'REGULAR' && run.status !== 'CANCELLED'"))
+  assert.ok(page.includes('const listedRuns = runs.filter(run => isListedRun(run) || run.id === runDetail?.id)'), 'the open run stays in the picker')
+  // الافتتاح على مسير حقيقي: أحدث مسير مدرج شهره لم يتجاوز شهر اليوم (لا مسير ديسمبر محفوظ من تجربة)
+  assert.ok(page.includes('const listed = runsData.filter(isListedRun)'))
+  assert.ok(page.includes('runsData.find(run => run.id === wanted) ?? listed.find(run => run.period <= currentMonth) ?? listed[0] ?? runsData[0]'))
+  assert.ok(page.includes('{listedRuns.map((run) => ('))
+  // د: البصمة الناقصة تُقال وقت الحساب على صف الموظف، لا عند رفض الاعتماد
+  assert.ok(page.includes('const missingPunch = payrollMissingPunchText(payrollItemMissingPunchDates(item))'))
+  assert.ok(page.includes('{missingPunch && <p className="text-xs text-warning-600">{missingPunch}</p>}'))
+  assert.ok(read('src/lib/payroll-item-totals.ts').includes('export function payrollItemMissingPunchDates'))
+  assert.ok(read('api/src/payroll/payroll.service.ts').includes("missingPunchDates: attRows.filter((r) => r.status === 'missing_punch').map((r) => r.date)"))
+  assert.doesNotMatch(page, /بمجموعة سياسة مختلفة/, 'no engine wording on the run screen')
+})
+
+test('settings (A4 + B1 + B2): the daily cap and the overlap order are gone, the loan request switch is there, and the advance cap is three inputs on one company version', () => {
+  const policies = read('src/app/settings/policies/page.tsx')
+  for (const gone of ['payroll.attendance_daily_cap_days', 'payroll.attendance_overlap_policy', 'سقف خصم الحضور اليومي', 'التداخل بين التأخير والنقص']) {
+    assert.ok(!policies.includes(gone), gone)
+  }
+  assert.ok(policies.includes("{ key: 'loan.request_open', label: 'طلب السلفة مفتوح للموظفين', type: 'bool'"))
+  for (const text of ['function LoanAdvanceCapBlock(', 'كام مرة في الشهر', 'الحد الأقصى', 'مبلغ ثابت (', 'نسبة من الراتب %',
+    "scopeType: 'COMPANY', scopeIds: null", "reason: 'تعديل سقف السلفة من سياسات النظام'", 'createLoanCapPolicyVersion(policy.id, input)',
+    "{g.title === 'أقساط السلف وحماية الصافي' && <LoanAdvanceCapBlock onSaveConfig={handleSave} pendingConfigCount={dirtyKeys.length} />}",
+    // المعروض هو الحاكم: لا سقف مبلغ مخفي يقضم الحد المكتوب، وزر الكتلة يحفظ معه مفتاح فتح الطلب
+    'maxAmountPerMonth: null', 'maxOutstandingBalance: null', 'if (pendingConfigCount > 0) await onSaveConfig()']) {
+    assert.ok(policies.includes(text), text)
+  }
+  // النطاق والنسخ والتواريخ والأولوية وسبب التعديل لا يكتبها المالك
+  assert.ok(!policies.includes('نسخة جديدة من'), 'no version wording in the settings block')
+  // المفتاح المنطقي مسجّل في المتحكم حتى يقبله PATCH /settings/config
+  assert.ok(read('api/src/settings/settings.controller.ts').includes("'loan.request_open': ['true', 'false']"))
+  assert.ok(read('api/src/loans/loan-request-caps.ts').includes("const enabled = await boolConfig(em, 'loan.request_open', true)"))
+})
+
+test('loans screen (B1/D): no caps tab, a mandatory employee picker behind requests.create_on_behalf, that employee’s cap, and a send button locked on the refusal', () => {
+  const page = read('src/app/payroll/loans/page.tsx')
+  assert.ok(!page.includes('LoanCapPoliciesPanel'), 'the caps tab moved to system policies')
+  assert.ok(!page.includes('سياسات السقوف'))
+  for (const text of ["setCanOnBehalf(can('requests.create_on_behalf'))", 'الموظف صاحب السلفة *', 'fetchLoanCapPreview({ employeeId: targetEmployeeId',
+    'targetEmployeeId && targetEmployeeId !== selfEmployeeId ? targetEmployeeId : undefined',
+    '!targetEmployeeId || newLoanCap?.requestWindow?.open === false || (newLoanCap !== null && !newLoanCap.allowed)']) {
+    assert.ok(page.includes(text), text)
+  }
+  // رسالة النافذة تظهر أيضًا حين يكون الطلب مقفولًا بالمفتاح لا بالأيام
+  for (const file of ['src/app/payroll/loans/page.tsx', 'src/app/my/loans/page.tsx']) {
+    assert.match(read(file), /!\w+\.requestWindow\.open \|\| \w+\.requestWindow\.fromDay !== 1/, file)
+  }
+  // السقف سطر واحد: لا جدول قيود ولا رقم نسخة
+  const summary = read('src/components/payroll/LoanCapSummary.tsx')
+  assert.ok(summary.includes('المتاح لك الآن'))
+  for (const gone of ['نسخة {cap.policy.version}', 'المستهلك', 'القيد الحاكم:']) assert.ok(!summary.includes(gone), gone)
+  assert.ok(summary.includes('السبب: {cap.governingLabel}'))
 })
 
 test('events panel: who did what and when, with the reason, the signed parity report, the small-company licence and the pay record', () => {

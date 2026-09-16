@@ -58,7 +58,7 @@ export default function LoginPage() {
           <div className="w-20 h-20 bg-white rounded-3xl flex items-center justify-center mx-auto shadow-2xl shadow-primary-900/30">
             <Building2 className="w-10 h-10 text-primary-600" />
           </div>
-          <h1 className="text-3xl font-bold text-white mt-4">نظام HR</h1>
+          <h1 className="text-3xl font-bold text-white mt-4">نظام الموارد البشرية</h1>
           <p className="text-primary-100 mt-2">إدارة الموارد البشرية</p>
         </div>
 
@@ -167,7 +167,7 @@ export default function LoginPage() {
 
         {/* Footer */}
         <p className="text-center text-primary-100 mt-8 text-sm">
-          © {new Date().getFullYear()} نظام HR - جميع الحقوق محفوظة
+          © {new Date().getFullYear()} نظام الموارد البشرية — جميع الحقوق محفوظة
         </p>
       </div>
     </div>

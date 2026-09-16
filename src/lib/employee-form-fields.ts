@@ -16,14 +16,21 @@ export type OpeningExpiryMode = 'end_of_year' | 'custom_date' | 'no_expiry'
 export interface OpeningBalanceState { days: string; expiryMode: OpeningExpiryMode; expiryDate: string }
 
 // حالة الحقول كما تُعبّأ من الرصيد المحفوظ — نفسها أساس المقارنة «هل تغيّر شيء؟»
-export function initialOpeningBalance(initial?: { openingBalanceDays?: number; openingBalanceExpiry?: string | null }): OpeningBalanceState {
+// «حتى نهاية السنة» لا تُقرأ إلا من 31/12 السنة الجارية؛ 31/12 من سنة ماضية تاريخ
+// محدد يبقى كما هو، وإلا كان تعديل عدد الأيام وحده يمدّ رصيدًا منتهيًا لسنة جديدة.
+export function initialOpeningBalance(
+  initial?: { openingBalanceDays?: number; openingBalanceExpiry?: string | null },
+  currentYear: number = new Date().getFullYear()
+): OpeningBalanceState {
   const days = initial?.openingBalanceDays && initial.openingBalanceDays > 0 ? String(initial.openingBalanceDays) : ''
   const expiry = initial?.openingBalanceExpiry
   if (expiry === null || expiry === undefined || expiry === '') {
     return { days, expiryMode: initial?.openingBalanceDays ? 'no_expiry' : 'end_of_year', expiryDate: '' }
   }
   const date = String(expiry).slice(0, 10)
-  return date.slice(5) === '12-31' ? { days, expiryMode: 'end_of_year', expiryDate: '' } : { days, expiryMode: 'custom_date', expiryDate: date }
+  return date.slice(5) === '12-31' && date.slice(0, 4) === String(currentYear)
+    ? { days, expiryMode: 'end_of_year', expiryDate: '' }
+    : { days, expiryMode: 'custom_date', expiryDate: date }
 }
 
 const openingDays = (text: string) => {
@@ -179,6 +186,7 @@ export const EMPLOYEE_CLEARABLE_FIELDS: Array<[keyof EmployeeFormState, keyof Ap
   ['phoneAlt', 'phoneAlt'], ['country', 'country'], ['postalCode', 'postalCode'],
   ['emergencyRelation', 'emergencyRelation'], ['emergencyPhoneAlt', 'emergencyPhoneAlt'],
   ['actualStartDate', 'actualStartDate'], ['probationEndDate', 'probationEndDate'],
+  ['salaryEntitlementStart', 'salaryEntitlementStart'],
   ['recruitmentSource', 'recruitmentSource'], ['workLocation', 'workLocation'],
   ['bankBranch', 'bankBranch'], ['gosiNumber', 'gosiNumber'], ['gosiBaseSalary', 'gosiBaseSalary'],
   ['housingAllowance', 'housingAllowance'], ['transportAllowance', 'transportAllowance'],

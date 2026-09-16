@@ -650,7 +650,7 @@ export default function AddJobPage() {
         {/* Page Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">إضافة وظيفة جديدة</h1>
+            <h1 className="text-2xl font-bold text-gray-800">إضافة وظيفة</h1>
             <p className="text-gray-500 mt-1">أنشئ إعلان وظيفي جديد</p>
           </div>
           <Link href="/recruitment" className="btn-secondary flex items-center gap-2">

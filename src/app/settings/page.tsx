@@ -75,7 +75,7 @@ function SettingsDirectory() {
           <Settings2 size={25} aria-hidden="true" />
         </div>
         <div>
-          <h1 className="text-2xl font-bold text-gray-800">الإعدادات</h1>
+          <h1 className="text-2xl font-bold text-gray-800">الإعدادات العامة</h1>
           <p className="text-gray-500 mt-1">اختر القسم المطلوب. تظهر الأقسام المتاحة لصلاحيات حسابك، وتُحفظ التغييرات من داخل كل قسم.</p>
         </div>
       </div>

@@ -37,6 +37,8 @@ const ACTION_LABELS: Record<Decision['action'], string> = { approve: 'اعتما
 // الخصم الملغى الذي لم يُطبق بعد يظهر «أُلغي» ولا يُمنح مرتين؛ وإن تعذرت إعادة الحساب بعد الإلغاء فالمتاح «إعادة حساب المسير» وحدها.
 // أقساط السلف (تُؤجل ولا تُسقط) والإجازة بلا راتب والمحمي لا تُلغى من هنا. اللوحة القديمة أدناه لم تعد تُعرض على شاشة المسير.
 const REMOVE_DEDUCTION_REASON = 'إلغاء خصم من شاشة المسير بقرار الموارد البشرية'
+// القرار ب5: السبب خانة اختيارية تُرسل بدل النص الجاهز متى كُتبت — بلا نافذة تأكيد ثانية
+const removalReason = (note: string) => note.trim().length >= 3 ? note.trim() : REMOVE_DEDUCTION_REASON
 const LIVE_EXEMPTION_STATUSES: ExemptionView['status'][] = ['ACTIVE', 'PENDING_APPROVAL']
 type RemovalOption = { key: string; label: string; disabled: boolean; removed: boolean; input: Omit<ExemptionInput, 'runId' | 'employeeId' | 'reason'> }
 /** مبالغ خصومات الحضور كما تظهر في صف الموظف (المخصوم فعلًا بعد حماية الصافي). */
@@ -56,6 +58,9 @@ export function PayrollRemoveDeductionModal({ runId, employeeId, employeeName, a
   const [reloadKey, setReloadKey] = useState(0)
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
+  const [reason, setReason] = useState('')
+  // سطر التأكيد داخل النافذة نفسها: اسم الخصم ومبلغه وزر «تأكيد الإلغاء» — ضغطة واحدة بتأكيد واحد
+  const [confirming, setConfirming] = useState<RemovalOption | null>(null)
   const [recalcFailed, setRecalcFailed] = useState(false)
   const [busyKey, setBusyKey] = useState<string | null>(null)
   useEffect(() => {
@@ -83,7 +88,7 @@ export function PayrollRemoveDeductionModal({ runId, employeeId, employeeName, a
       const removed = removedObligation(row.obligationId, row.deductionTypeId)
       return {
         key: `OBLIGATION:${row.obligationId}`, removed, disabled: removed || !row.exemptable,
-        label: `${row.typeName ?? 'خصم'}${row.targetPeriod ? ` (شهر ${row.targetPeriod})` : ''} — ${formatMoney(row.amount)}${row.exemptable || removed ? '' : ' — لا يمكن إلغاؤه'}`,
+        label: `${row.typeName ?? 'خصم'}${row.targetPeriod ? ` (شهر ${row.targetPeriod})` : ''} — ${formatMoney(row.amount)}${row.exemptable || removed ? '' : ` — ${row.protectedReason ?? 'لا يمكن إلغاؤه'}`}`,
         input: { scopeKind: 'SINGLE_ENTRY' as const, targetKind: 'OBLIGATION', targetRef: String(row.obligationId), disposition: 'DROP' as const },
       }
     }),
@@ -107,8 +112,8 @@ export function PayrollRemoveDeductionModal({ runId, employeeId, employeeName, a
 
   const remove = async (option: RemovalOption) => {
     if (busyKey || option.disabled) return
-    setBusyKey(option.key); setError(''); setNote('')
-    const input: ExemptionInput = { runId, employeeId, reason: REMOVE_DEDUCTION_REASON, ...option.input }
+    setBusyKey(option.key); setError(''); setNote(''); setConfirming(null)
+    const input: ExemptionInput = { runId, employeeId, reason: removalReason(reason), ...option.input }
     let granted: ExemptionView
     try {
       const preview = await previewExemption(input)
@@ -143,12 +148,27 @@ export function PayrollRemoveDeductionModal({ runId, employeeId, employeeName, a
           {options.map(option => (
             <li key={option.key} className="flex items-center justify-between gap-2 rounded-xl border border-gray-100 p-3 text-sm">
               <span className={option.disabled && !option.removed ? 'text-gray-400' : 'text-gray-800'}>{option.label}</span>
-              <button type="button" className="btn-secondary text-xs whitespace-nowrap disabled:opacity-50" disabled={option.disabled || busyKey !== null} onClick={() => remove(option)}>
+              <button type="button" className="btn-secondary text-xs whitespace-nowrap disabled:opacity-50" disabled={option.disabled || busyKey !== null}
+                onClick={() => { setConfirming(option); setError(''); setNote('') }}>
                 {busyKey === option.key ? 'جارٍ الإلغاء…' : option.removed ? 'أُلغي' : 'إلغاء هذا الخصم'}
               </button>
             </li>
           ))}
         </ul>
+        {confirming && (
+          <div className="rounded-xl border border-red-200 bg-red-50 p-3 space-y-2 text-sm" data-testid="payroll-remove-deduction-confirm">
+            <p className="text-red-800">تأكيد إلغاء: {confirming.label}</p>
+            <label className="block text-xs text-gray-600">سبب الإلغاء (اختياري)
+              <input className="input w-full mt-1" value={reason} maxLength={300} placeholder={REMOVE_DEDUCTION_REASON} onChange={event => setReason(event.target.value)} />
+            </label>
+            <div className="flex gap-2">
+              <button type="button" className="btn-primary text-xs disabled:opacity-50" disabled={busyKey !== null} onClick={() => remove(confirming)}>
+                {busyKey === confirming.key ? 'جارٍ الإلغاء…' : 'تأكيد الإلغاء'}
+              </button>
+              <button type="button" className="btn-secondary text-xs" disabled={busyKey !== null} onClick={() => setConfirming(null)}>تراجع</button>
+            </div>
+          </div>
+        )}
         {awaitingRecalc && <div className="flex items-center justify-between gap-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-900" data-testid="payroll-remove-deduction-recalc">
           <span>الإلغاء لا يظهر في صافي الموظف قبل إعادة حساب المسير.</span>
           <button type="button" onClick={recalculate} disabled={busyKey !== null} className="btn-primary text-xs whitespace-nowrap disabled:opacity-50">
@@ -249,7 +269,7 @@ export function PayrollFinancialExemptionsPanel({ runId, runStatus, snapshotVers
     ...(Number(entries.requested.shortfall) > 0 ? [{ value: 'SHORTFALL', label: `${EXEMPTION_TYPE_TARGET_LABELS.SHORTFALL} — ${formatMoney(entries.requested.shortfall)}` }] : []),
     ...(Number(entries.requested.absence) > 0 ? [{ value: 'ABSENCE', label: `${EXEMPTION_TYPE_TARGET_LABELS.ABSENCE} — ${formatMoney(entries.requested.absence)}` }] : []),
     ...(entries.installments.length ? [{ value: 'ADVANCE_INSTALLMENT', label: EXEMPTION_TYPE_TARGET_LABELS.ADVANCE_INSTALLMENT }] : []),
-    ...entries.typedTypes.map(type => ({ value: `TYPED:${type.deductionTypeId}`, label: `${type.typeName ?? 'خصم مصنف'} — ${formatMoney(type.amount)}${type.exemptable ? '' : ' (غير قابل للإعفاء)'}`, disabled: !type.exemptable })),
+    ...entries.typedTypes.map(type => ({ value: `TYPED:${type.deductionTypeId}`, label: `${type.typeName ?? 'خصم'} — ${formatMoney(type.amount)}${type.exemptable ? '' : ' (غير قابل للإعفاء)'}`, disabled: !type.exemptable })),
   ] : []
   const entryOptions = entries ? [
     ...entries.attendanceDays.flatMap(day => [
@@ -257,7 +277,7 @@ export function PayrollFinancialExemptionsPanel({ runId, runStatus, snapshotVers
       ...(Number(day.shortfall) > 0 ? [{ value: `SHORTFALL_DAY:${day.date}`, label: `نقص ساعات يوم ${day.date} — ${formatMoney(day.shortfall)}` }] : []),
       ...(Number(day.absence) > 0 ? [{ value: `ABSENCE_DAY:${day.date}`, label: `غياب يوم ${day.date} — ${formatMoney(day.absence)}` }] : []),
     ]),
-    ...entries.typedObligations.map(row => ({ value: `OBLIGATION:${row.obligationId}`, label: `${row.typeName ?? 'خصم مصنف'} — قيد #${row.obligationId} — ${formatMoney(row.amount)}${row.exemptable ? '' : ` (${row.protectedReason})`}`, disabled: !row.exemptable })),
+    ...entries.typedObligations.map(row => ({ value: `OBLIGATION:${row.obligationId}`, label: `${row.typeName ?? 'خصم'} — بند #${row.obligationId} — ${formatMoney(row.amount)}${row.exemptable ? '' : ` (${row.protectedReason})`}`, disabled: !row.exemptable })),
     ...entries.installments.map(row => ({ value: `LOAN_INSTALLMENT:${row.installmentId}`, label: `قسط سلفة #${row.loanId} (استحقاق ${row.dueDate}) — ${formatMoney(row.amount)} — تأجيل` })),
   ] : []
 
@@ -352,7 +372,7 @@ export function PayrollFinancialExemptionsPanel({ runId, runStatus, snapshotVers
             {loanTarget && entries.installments.length > 0 && <p className="p-2 bg-amber-50 text-amber-900 rounded-lg text-sm">سيُؤجَّل القسط لا يُسقط: عند صرف المسير يُنشأ قسط جديد مستحق في الشهر التالي بمرجع الإعفاء.</p>}
             {(entries.recoveries.length > 0 || entries.typedObligations.some(row => !row.exemptable) || Number(entries.unpaidLeave) > 0) && (
               <div className="text-xs text-gray-600"><p className="font-medium">بنود غير قابلة للإعفاء تبقى:</p><ul className="list-disc pr-5">
-                {entries.typedObligations.filter(row => !row.exemptable).map(row => <li key={row.obligationId}>{row.typeName ?? 'خصم مصنف'} #{row.obligationId} — {formatMoney(row.amount)}: {row.protectedReason}</li>)}
+                {entries.typedObligations.filter(row => !row.exemptable).map(row => <li key={row.obligationId}>{row.typeName ?? 'خصم'} #{row.obligationId} — {formatMoney(row.amount)}: {row.protectedReason}</li>)}
                 {entries.recoveries.map(row => <li key={row.obligationId}>{row.label} #{row.obligationId} — {formatMoney(row.amount)}: {row.protectedReason}</li>)}
                 {Number(entries.unpaidLeave) > 0 && <li>إجازة بدون راتب — {formatMoney(entries.unpaidLeave)}: عدم استحقاق لا خصم</li>}
               </ul></div>

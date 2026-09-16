@@ -277,6 +277,14 @@ export class EmployeesService {
     }
   }
 
+  // بداية استحقاق الراتب لا تسبق بدء العمل — الأيام قبل التعيين لا تُدفع أصلاً
+  private assertSalaryEntitlementStart(value?: string | null, hireDate?: string | null) {
+    if (!value || !hireDate) return
+    if (String(value).slice(0, 10) < String(hireDate).slice(0, 10)) {
+      throw new BadRequestException('بداية استحقاق الراتب لا تسبق تاريخ التعيين')
+    }
+  }
+
   async renewContract(id: number, dto: RenewEmployeeContractDto, branchScope: number | null, actorId: number) {
     const validDate = (value: string) => {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(value ?? '')) return false
@@ -324,6 +332,7 @@ export class EmployeesService {
     await this.assertUnique(dto)
     await this.assertRelations(dto)
     this.assertContractDates(dto)
+    this.assertSalaryEntitlementStart(dto.salaryEntitlementStart, dto.actualStartDate || dto.joinDate)
     // أنواع مرفقات الملف من كتالوج أنواع المستندات (لا نص حر) — قبل أي حفظ
     await assertDocTypes(this.docs.manager, (dto.documentRefs ?? []).map((r) => r?.docType))
     // الرصيد الافتتاحي حقلا حمولة فقط (ليسا عمودَي موظف) — يُطبَّقان على الرصيد
@@ -530,6 +539,14 @@ export class EmployeesService {
       contractStart: dto.contractStart !== undefined ? dto.contractStart : emp.contractStart,
       contractEnd: dto.contractEnd !== undefined ? dto.contractEnd : emp.contractEnd,
     })
+    // تُراجَع مع كل تعديل يمسّ الاستحقاق أو تاريخ التعيين — تأخير تاريخ التعيين وحده
+    // كان يترك استحقاقاً أقدم محفوظاً فيُدفع للموظف قبل مباشرته
+    if (dto.salaryEntitlementStart !== undefined || dto.actualStartDate !== undefined || dto.joinDate !== undefined) {
+      this.assertSalaryEntitlementStart(
+        dto.salaryEntitlementStart !== undefined ? dto.salaryEntitlementStart : emp.salaryEntitlementStart,
+        (dto.actualStartDate !== undefined ? dto.actualStartDate : emp.actualStartDate) ||
+        (dto.joinDate !== undefined ? dto.joinDate : emp.joinDate))
+    }
     await this.assertRelations({
       branchId: dto.branchId ?? emp.branchId,
       departmentId: dto.departmentId !== undefined ? dto.departmentId : emp.departmentId,

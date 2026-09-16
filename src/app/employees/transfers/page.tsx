@@ -14,7 +14,7 @@ import {
 import { fetchTransfers } from '@/lib/api'
 
 // ============================================================
-// لوج النقل بين الفرق (§7.2)
+// سجل النقل بين الفرق (§7.2)
 // الموافقات تتم في محرك الطلبات — هنا سجل الجدولة والتنفيذ الآلي
 // SCHEDULED = معتمد ومجدول لتاريخ السريان | EXECUTED = نُفِّذ آلياً
 // ============================================================
@@ -68,7 +68,7 @@ export default function TransfersPage() {
           }))
         )
       } catch (err) {
-        setError(err instanceof Error ? err.message : 'تعذر تحميل لوج النقل')
+        setError(err instanceof Error ? err.message : 'تعذر تحميل سجل النقل')
       } finally {
         setLoading(false)
       }
@@ -99,13 +99,13 @@ export default function TransfersPage() {
             إدارة الموظفين
           </Link>
           <ArrowRight size={16} />
-          <span className="text-gray-800">لوج النقل</span>
+          <span className="text-gray-800">سجل النقل</span>
         </div>
 
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">لوج النقل بين الفرق</h1>
+            <h1 className="text-2xl font-bold text-gray-800">سجل النقل</h1>
             <p className="text-gray-500 mt-1">
               الموافقات تتم في محرك الطلبات — والتنفيذ آلي بتاريخ السريان
             </p>

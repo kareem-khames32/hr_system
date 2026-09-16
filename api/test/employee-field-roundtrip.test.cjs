@@ -44,8 +44,13 @@ test('الرصيد الافتتاحي: حفظ تعديل بلا تغيير لا 
   assert.deepEqual(edit({ ...initial, days: '10' }), { openingBalanceDays: 10, openingBalanceExpiry: null })
   assert.deepEqual(edit({ ...initial, expiryMode: 'end_of_year' }), { openingBalanceDays: 9, openingBalanceExpiry: '2026-12-31' })
   // صلاحية «نهاية سنة» سابقة محمّلة ولم تُلمس لا تتحول بصمت إلى نهاية السنة الجارية
-  const lastYear = f.initialOpeningBalance({ openingBalanceDays: 5, openingBalanceExpiry: '2025-12-31' })
+  const lastYear = f.initialOpeningBalance({ openingBalanceDays: 5, openingBalanceExpiry: '2025-12-31' }, 2026)
   assert.deepEqual(f.openingBalancePayload({ mode: 'edit', leaveEntitled: true, state: lastYear, initial: lastYear, year: 2026 }), {})
+  // 31/12 من سنة ماضية تاريخ محدد لا «نهاية السنة الحالية»، وتعديل الأيام وحده لا يمدّ رصيدًا منتهيًا
+  assert.deepEqual(lastYear, { days: '5', expiryMode: 'custom_date', expiryDate: '2025-12-31' })
+  assert.deepEqual(f.openingBalancePayload({ mode: 'edit', leaveEntitled: true, state: { ...lastYear, days: '6' }, initial: lastYear, year: 2026 }),
+    { openingBalanceDays: 6, openingBalanceExpiry: '2025-12-31' })
+  assert.deepEqual(f.initialOpeningBalance({ openingBalanceDays: 5, openingBalanceExpiry: '2026-12-31' }, 2026), { days: '5', expiryMode: 'end_of_year', expiryDate: '' })
   assert.deepEqual(f.initialOpeningBalance({ openingBalanceDays: 5, openingBalanceExpiry: '2026-12-15' }), { days: '5', expiryMode: 'custom_date', expiryDate: '2026-12-15' })
   assert.deepEqual(f.initialOpeningBalance(undefined), { days: '', expiryMode: 'end_of_year', expiryDate: '' })
   const add = (state, leaveEntitled = true) => f.openingBalancePayload({ mode: 'add', leaveEntitled, state, year: 2026 })
@@ -291,7 +296,7 @@ test('SSR الإضافة: خطوة 2 فيها «بدون جدول (يتبع ال
 test('SSR التعديل: الاسم المبهم في خانة واحدة، والمستندات المحفوظة بجانب كل خانة رفع مع «إضافة نسخة جديدة»', () => {
   const step1 = renderForm(1, { mode: 'edit', employeeId: 231, initial: { nameArFull: 'محمد عبد الله علي', nameEnFull: 'First Middle', status: 'active' } })
   assert.match(step1, /الاسم الكامل \(عربي\) \*/); assert.match(step1, /value="محمد عبد الله علي"/)
-  assert.match(step1, /Full Name \(English\)/); assert.match(step1, /value="First Middle"/)
+  assert.match(step1, /الاسم الكامل \(بالإنجليزية\)/); assert.match(step1, /value="First Middle"/)
   assert.doesNotMatch(step1, /الاسم الأول \(عربي\)|اسم العائلة \(عربي\)|Last Name/)
   const parts = renderForm(1, { mode: 'edit', employeeId: 231, initial: { firstNameAr: 'سبر', fatherNameAr: 'التجريبي', grandNameAr: 'مجالات', familyNameAr: 'ثاني', status: 'active' } })
   assert.match(parts, /الاسم الأول \(عربي\) \*/); assert.doesNotMatch(parts, /الاسم الكامل \(عربي\) \*/)
@@ -314,4 +319,44 @@ test('الملف يعرض الفريق ومركز التكلفة وجدول ال
   assert.match(form, /onClick=\{\(\) => setSelectedSchedule\(''\)\}/)
   assert.match(form, /openingBalancePayload\(\{\s*mode, leaveEntitled, year: new Date\(\)\.getFullYear\(\), initial: initialOpening/)
   assert.match(form, /settleQualificationDrafts\(/)
+})
+
+// ===== 19) بداية استحقاق الراتب (قرار المالك أ2) =====
+test('بداية استحقاق الراتب: حقل يوم اختياري يُرسل ويُمسح، ولا يسبق تاريخ التعيين، وله مدخل واحد في الشاشة', () => {
+  const dto = require('../src/employees/employees.dto')
+  assert.deepEqual(messages(dto.CreateEmployeeDto, { employeeCode: 'SES-01', fullName: 'موظف تجربة', branchId: 1, salaryEntitlementStart: '2026-09-15' }), [])
+  assert.deepEqual(messages(dto.UpdateEmployeeDto, { salaryEntitlementStart: '2026-09-15' }), [])
+  assert.deepEqual(messages(dto.UpdateEmployeeDto, { salaryEntitlementStart: '15-09-2026' }), ['بداية استحقاق الراتب بصيغة YYYY-MM-DD'])
+  assert.ok(f.EMPLOYEE_CLEARABLE_FIELDS.some(([field, target]) => field === 'salaryEntitlementStart' && target === 'salaryEntitlementStart'))
+  assert.deepEqual(f.clearedEmployeeFields({ salaryEntitlementStart: '2026-09-15' }, { salaryEntitlementStart: '' }), { salaryEntitlementStart: null })
+  const { EmployeesService } = require('../src/employees/employees.service')
+  const service = new EmployeesService({}, {}, {}, {}, {}, {}, {}, {}, {}, {})
+  assert.throws(() => service.assertSalaryEntitlementStart('2026-03-01', '2026-04-01'), error => /لا تسبق تاريخ التعيين/.test(error.message))
+  assert.doesNotThrow(() => service.assertSalaryEntitlementStart('2026-04-01', '2026-04-01'))
+  assert.doesNotThrow(() => service.assertSalaryEntitlementStart(undefined, '2026-04-01'))
+  assert.throws(() => service.assertSalaryEntitlementStart('2026-03-01T00:00:00.000Z', '2026-04-01T00:00:00.000Z'), error => /لا تسبق تاريخ التعيين/.test(error.message))
+  const step2 = renderForm(2, { mode: 'add' })
+  assert.match(step2, /بداية استحقاق الراتب/)
+  assert.match(step2, /الافتراضي تاريخ التعيين/)
+  // الخانة تتبع تاريخ التعيين افتراضياً في الإضافة حتى يغيّرها المستخدم بنفسه
+  const form = source('src/components/EmployeeForm.tsx')
+  assert.match(form, /entitlementEdited\.current = true/)
+  assert.match(form, /const hireDate = form\.actualStartDate \|\| form\.joinDate/)
+  // تأخير تاريخ التعيين وحده يُعيد التحقق من استحقاق محفوظ أقدم (لا دفع قبل المباشرة)
+  const employees = source('api/src/employees/employees.service.ts')
+  assert.match(employees, /if \(dto\.salaryEntitlementStart !== undefined \|\| dto\.actualStartDate !== undefined \|\| dto\.joinDate !== undefined\)/)
+  assert.match(employees, /dto\.salaryEntitlementStart !== undefined \? dto\.salaryEntitlementStart : emp\.salaryEntitlementStart/)
+})
+
+// ===== 20) الشاشة بعد التبسيط: المرونة للوردية، والأسماء بالعربي، وتأكيد حذف المؤهل =====
+test('شاشة الموظف: بلا مدخل مرونة، وعناوين عربية لأجزاء الاسم الإنجليزي، وبلا ملاحظة الفريق، وحذف المؤهل بتأكيد', () => {
+  const step1 = renderForm(1, { mode: 'add' })
+  assert.doesNotMatch(step1, /First Name|Middle Name|Last Name|Full Name \(English\)/)
+  assert.match(step1, /الاسم الأول \(بالإنجليزية\)/)
+  const step2 = renderForm(2, { mode: 'edit', employeeId: 231, initial: { status: 'active' } })
+  assert.doesNotMatch(step2, /المرونة لهذا الموظف|مفعلة لهذا الموظف|موقوفة لهذا الموظف/)
+  assert.doesNotMatch(step2, /يتحدد تلقائياً عند اختيار الفريق/)
+  const form = source('src/components/EmployeeForm.tsx')
+  assert.doesNotMatch(form, /setField\('flexOverrideMode'/)
+  assert.match(form, /window\.confirm\('حذف هذا العنصر المحفوظ/)
 })

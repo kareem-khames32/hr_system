@@ -100,28 +100,22 @@ export const rejectAttendanceExemption = (id: number, reason: string) =>
 export const fetchAttendanceExemptionEvents = (id: number) =>
   apiFetch<AttendanceExemptionEventRow[]>(`/attendance-exemptions/${id}/events`)
 
-export type OverrideChoice = 'inherit' | 'yes' | 'no'
-
+// أ7: المستثنى من البصمة بلا خصومات وبلا إضافي — فلا خياري تجاوز في النموذج.
 export interface ExemptionCreateForm {
   employeeId: string
   effectiveFrom: string
   effectiveTo: string
   reasonCode: ExemptionReasonCode | ''
   reason: string
-  overtime: OverrideChoice
-  unpaidLeave: OverrideChoice
   requiresCheckinForPresence: boolean
 }
 
 export const emptyExemptionForm = (effectiveFrom = ''): ExemptionCreateForm => ({
-  employeeId: '', effectiveFrom, effectiveTo: '', reasonCode: '', reason: '',
-  overtime: 'inherit', unpaidLeave: 'inherit', requiresCheckinForPresence: false,
+  employeeId: '', effectiveFrom, effectiveTo: '', reasonCode: '', reason: '', requiresCheckinForPresence: false,
 })
 
 const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value) &&
   Number.isFinite(Date.parse(`${value}T00:00:00Z`)) && new Date(`${value}T00:00:00Z`).toISOString().slice(0, 10) === value
-
-const overrideValue = (choice: OverrideChoice): boolean | null => choice === 'inherit' ? null : choice === 'yes'
 
 export function exemptionReasonError(reason: string, minLength: number): string | null {
   const length = reason.trim().length
@@ -146,8 +140,6 @@ export function exemptionCreateBody(form: ExemptionCreateForm) {
     effectiveTo: form.effectiveTo || null,
     reasonCode: form.reasonCode as ExemptionReasonCode,
     reason: form.reason.trim(),
-    overtimeEligibleOverride: overrideValue(form.overtime),
-    unpaidLeaveDeductibleOverride: overrideValue(form.unpaidLeave),
     requiresCheckinForPresence: form.requiresCheckinForPresence,
   }
 }

@@ -1,10 +1,45 @@
 // C6 / الخطوة 29: سقوف السلف (AD-01..06) وخطة السداد المبكر (AD-14) ورصيد ما بعد الإنهاء (AD-13) — اختبارات نقية بلا قاعدة بيانات.
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
+const fs = require('node:fs')
 const path = require('node:path')
 require('../node_modules/ts-node').register({ project: path.join(__dirname, '..', 'tsconfig.json'), transpileOnly: true })
 const { BadRequestException } = require('@nestjs/common')
 const caps = require('../src/loans/loan-caps')
+const requestCaps = require('../src/loans/loan-request-caps')
+
+// القرار ب2: «اقفل طلب السلفة الآن» مفتاح واحد يعلو أيام الطلب من الشهر — بلا قاعدة بيانات،
+// قارئ إعدادات مزيف يعيد قيمة كل مفتاح كما لو كانت محفوظة.
+const fakeConfig = values => ({ query: async (_sql, params) => { const key = params[0]; return key in values ? [{ value: values[key] }] : [] } })
+
+test('B2: the loan request window closes with one switch whatever the days, and reopens at once', async () => {
+  const open = await requestCaps.loanRequestDayWindow(fakeConfig({}), '2026-09-16')
+  assert.deepEqual([open.fromDay, open.toDay, open.enabled, open.open], [1, 31, true, true])
+  assert.equal(open.message, 'طلب السلفة متاح من يوم 1 إلى يوم 31 من الشهر')
+  const closed = await requestCaps.loanRequestDayWindow(fakeConfig({ 'loan.request_open': 'false' }), '2026-09-16')
+  assert.deepEqual([closed.enabled, closed.open, closed.message], [false, false, 'طلب السلفة مقفول حاليًا'])
+  // القفل يعلو الأيام: يوم داخل النافذة يبقى مرفوضًا
+  const closedInsideDays = await requestCaps.loanRequestDayWindow(fakeConfig({ 'loan.request_open': 'false', 'loan.request_from_day': '1', 'loan.request_to_day': '20' }), '2026-09-10')
+  assert.equal(closedInsideDays.open, false)
+  // الأيام وحدها ما زالت تعمل حين يكون المفتاح مفتوحًا
+  const outsideDays = await requestCaps.loanRequestDayWindow(fakeConfig({ 'loan.request_from_day': '1', 'loan.request_to_day': '5' }), '2026-09-16')
+  assert.deepEqual([outsideDays.enabled, outsideDays.open], [true, false])
+  // قيمة تالفة لا تقفل الباب صامتة
+  const broken = await requestCaps.loanRequestDayWindow(fakeConfig({ 'loan.request_open': 'maybe' }), '2026-09-16')
+  assert.equal(broken.open, true)
+})
+
+// القرار د: شهر أول قسط يُختم مرة واحدة عند التقديم فيراه الموظف والمعتمد — بلا علم خادم جديد
+// على الحمولة وبلا إعادة ختم مع كل خطوة اعتماد (ما كان القرار يطلبه).
+test('D: the first-installment month is stamped once at submission — no server-only flag, no re-stamp at each approval step', () => {
+  assert.ok(!requestCaps.LOAN_REQUEST_SERVER_FIELDS.includes('firstInstallmentByHr'))
+  const source = fs.readFileSync(path.join(__dirname, '..', 'src', 'loans', 'loan-request-caps.ts'), 'utf8')
+  assert.ok(!source.includes('firstInstallmentByHr'), 'no server-only flag rides on the loan payload')
+  assert.ok(source.includes('if (!firstInstallmentPeriod) staged.firstInstallmentPeriod = addMonths(today.slice(0, 7), 1)'), 'stamped once at submission')
+  assert.ok(!/next\.firstInstallmentPeriod/.test(source), 'the approval review does not re-stamp the month')
+  // حمولة العميل ما زالت مرفوضة لحقول الخادم الباقية
+  assert.throws(() => requestCaps.assertLoanRequestClientPayload({ capCheck: {} }), error => error instanceof BadRequestException)
+})
 
 const bad = (action, code) => assert.throws(action, error => error instanceof BadRequestException && (!code || error.getResponse().code === code))
 const cents = text => BigInt(text.replace('.', ''))

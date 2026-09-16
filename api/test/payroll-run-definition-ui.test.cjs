@@ -129,6 +129,10 @@ test('definition panel: name, formula set, month, linked filters or list, exclus
     assert.ok(html.includes(text), text)
   }
   for (const text of ['SHADOW', 'نسخة السياسة المنشورة']) assert.ok(!html.includes(text), text)
+  // اختيار موظفين متتاليين لا يفقد السابق: التبديل يقرأ الحالة السابقة لا نسخة الإغلاق (كان يحفظ الأخير وحده)
+  const panel = read('src/components/payroll/PayrollRunDefinitionPanel.tsx')
+  assert.ok(panel.includes('onClick={() => setFilters(previous => ({ ...previous, employeeIds: previous.employeeIds.includes(emp.id)'), 'functional state update')
+  assert.ok(!panel.includes('setFilters({ ...filters, employeeIds:'), 'no stale-closure toggle left')
 })
 
 test('payroll page: «مسير جديد» is separate from «احتساب المسودة» / «إعادة حساب المسير», and approval no longer waits for an unassigned acknowledgement', () => {

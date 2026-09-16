@@ -68,6 +68,23 @@ async function acknowledge(runId) {
 async function tierSet(effectivePeriod, tiers, reason = 'لائحة جزاءات اختبار') {
   return expect(await request('POST', '/payroll/rules/lateness-tier-sets', { effectivePeriod, tiers, reason }), 201)
 }
+// أ1 (16 سبتمبر): شرائح التأخير تعيش داخل معادلة الرواتب وحدها، فكل مسير هنا يُنشأ بمعادلة منشورة تحمل مجموعتها.
+const cycle23 = { defaultPeriodType: 'CUSTOM_DAY_RANGE', cycleStartDay: 23, cycleEndMode: 'DERIVED', cycleEndDay: null }
+async function publishedPolicy(name, latenessTierSetId = null) {
+  const created = expect(await request('POST', '/payroll/policies', { name, effectiveFrom: '2026-07-23', settings: cycle23 }), 201)
+  const [version] = created.versions
+  const published = expect(await request('POST', `/payroll/policies/${created.policy.id}/versions/${version.id}/publish`,
+    { expectedRevision: version.revision, reason: `نشر ${name} لاختبار لقطة السياسة` }), 200)
+  if (latenessTierSetId !== null) {
+    expect(await request('PATCH', `/payroll/policies/${created.policy.id}`,
+      { expectedRevision: created.policy.revision ?? 1, reason: 'ربط شرائح التأخير بالمعادلة', latenessTierSetId }), 200)
+  }
+  return { policyId: created.policy.id, versionId: published.version.id }
+}
+async function runWith(policy, name, employeeIds) {
+  const draft = expect(await request('POST', '/payroll/runs', { name, policyVersionId: policy.versionId, period: '2026-08', filters: { employeeIds } }), 201)
+  return expect(await request('POST', `/payroll/runs/${draft.id}/calculate`, {}), 201)
+}
 
 before(async () => {
   assert.equal(env.DB_TYPE || 'mssql', 'mssql'); assert.match(database, /^hr_policy_engine_test_[a-f0-9]{16}$/); assert.notEqual(database, env.DB_DATABASE)
@@ -142,6 +159,24 @@ test('step 21: overlapping tiers are refused on save (nothing written), the lega
   assert.deepEqual(preview.gaps.map(gap => [gap.fromMinutes, gap.toMinutes]), [[121, null]])
 })
 
+// أ1 (إصلاح المراجعة): المجموعة ملك المعادلة التي تشير إليها — حفظ شرائح معادلة لا يوقف مجموعة معادلة أخرى،
+// ومجموعة مطابقة مفعّلة تُعاد بعينها بدل نسخة زائدة، والمعادلة الجديدة تبدأ بالشرائح المعمول بها لا بلا شرائح.
+test('step 21 (أ1): saving one set never deactivates another set, an identical active set is reused, and a new policy inherits the current set', async () => {
+  const rows = [{ fromMinutes: 1, toMinutes: 30, mode: 'FRACTION', value: '0.5' }]
+  const first = await tierSet('2026-10', rows, 'شرائح معادلة أ')
+  const again = await tierSet('2026-10', rows, 'نفس المحتوى من معادلة ب')
+  assert.equal(again.savedId, first.savedId, 'مجموعة مطابقة مفعّلة تُعاد بعينها بلا نسخة زائدة')
+  assert.equal(again.sets.filter(row => row.effectivePeriod === '2026-10').length, 1)
+  const other = await tierSet('2026-10', [{ fromMinutes: 1, toMinutes: null, mode: 'MINUTES', value: '0' }], 'شرائح معادلة ج لنفس الشهر')
+  assert.notEqual(other.savedId, first.savedId)
+  const setOf = (response, id) => response.sets.find(row => row.id === id)
+  assert.equal(setOf(other, first.savedId).isActive, true, 'مجموعة المعادلة الأخرى لنفس الشهر تبقى مفعّلة')
+  assert.equal(setOf(other, first.savedId).deactivationReason, null)
+  assert.equal(setOf(other, other.savedId).supersedesSetId, null)
+  const created = expect(await request('POST', '/payroll/policies', { name: 'معادلة ترث شرائح الشركة', effectiveFrom: '2026-07-23', settings: cycle23 }), 201)
+  assert.equal(created.policy.latenessTierSetId, other.savedId, 'المعادلة الجديدة ترث أحدث مجموعة مفعّلة')
+})
+
 test('steps 19–21 on a real run: 61 minutes × 1.5 on the payslip, SHADOW parity per employee, snapshot keeps absence_penalty_days until an explicit refresh with the shown fingerprint', async () => {
   const saved = await tierSet('2026-08', [{ fromMinutes: 1, toMinutes: 60, mode: 'FRACTION', value: '0.25' }, { fromMinutes: 61, toMinutes: 120, mode: 'MULTIPLIER', value: '1.5', label: 'ساعة ونصف' }])
   const set = saved.sets.find(row => row.id === saved.savedId)
@@ -154,7 +189,8 @@ test('steps 19–21 on a real run: 61 minutes × 1.5 on the payslip, SHADOW pari
   assert.equal((await repo('AttendanceDay').findOneByOrFail({ employeeId: late.id, date: '2026-08-22' })).lateMinutes, 61)
   assert.equal((await repo('AttendanceDay').findOneByOrFail({ employeeId: absent.id, date: '2026-08-22' })).status, 'absent')
 
-  const run = expect(await request('POST', '/payroll/runs/calculate-defined', { period: '2026-08', scopeType: 'CUSTOM', employeeIds: [late.id, absent.id], name: 'مسير B4 — لقطة ومحرك وشرائح' }), 201)
+  const policy = await publishedPolicy('معادلات لقطة السياسة والشرائح', saved.savedId)
+  const run = await runWith(policy, 'مسير B4 — لقطة ومحرك وشرائح', [late.id, absent.id])
   assert.equal(run.engineMode, 'SHADOW', 'a new run is SHADOW by default (D13)')
   assert.match(run.policySnapshotHash, /^[a-f0-9]{64}$/)
   assert.equal(run.policySnapshot, undefined, 'the raw snapshot text is not returned twice')
@@ -187,29 +223,24 @@ test('steps 19–21 on a real run: 61 minutes × 1.5 on the payslip, SHADOW pari
   const kept = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إعادة حساب بعد تعديل معامل الغياب' }), 201)
   assert.equal(number(itemOf(kept, absent).absenceDeduction), 300, 'the recalculation reads the stored snapshot, not the live setting')
   assert.equal(kept.policySnapshotHash, run.policySnapshotHash)
-  // تغيير الشرائح بمجموعة أحدث لنفس الشهر لا يغير إعادة الحساب أيضًا
-  await tierSet('2026-08', [{ fromMinutes: 1, toMinutes: null, mode: 'FRACTION', value: '1' }], 'مجموعة صارمة لاحقة')
+  // أ1: مجموعة شرائح أحدث «لنفس الشهر» لم تعد تمس أي مسير — الشرائح تتبع المعادلة وحدها، لا شهر المسير
+  await tierSet('2026-08', [{ fromMinutes: 1, toMinutes: null, mode: 'FRACTION', value: '1' }], 'مجموعة صارمة لا تتبعها أي معادلة')
   const keptTiers = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إعادة حساب بعد مجموعة شرائح أحدث' }), 201)
   assert.equal(number(itemOf(keptTiers, late).latenessDeduction), 57.19)
   const view = expect(await request('GET', `/payroll/runs/${run.id}/policy-snapshot`), 200)
   assert.equal(view.storedHash, run.policySnapshotHash); assert.equal(view.refreshRequired, true); assert.equal(view.canRefresh, true)
   const penalty = view.differences.find(row => row.key === 'values.absencePenaltyDays')
   assert.ok(penalty, JSON.stringify(view.differences)); assert.match(penalty.stored, /^1/); assert.match(penalty.current, /^2/)
-  assert.ok(view.differences.some(row => row.key === 'latenessTiers'))
+  assert.deepEqual(view.differences.map(row => row.key), ['values.absencePenaltyDays'],
+    'الفرق الوحيد هو معامل الغياب: شرائح المعادلة لم تتغير رغم مجموعة الشهر الأحدث')
   // التحديث صريح وببصمة الإعدادات المعروضة؛ بدونها أو ببصمة قديمة يرفض ولا يكتب
   expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'تحديث بلا بصمة', refreshPolicySnapshot: true }), 409)
   const stale = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'تحديث ببصمة قديمة', refreshPolicySnapshot: true, expectedPolicySnapshotHash: run.policySnapshotHash }), 409)
   // الرفض لا يسلّم بصمة الإعدادات الحالية: مصدرها الوحيد GET policy-snapshot الذي يعرض الفروق
   assert.equal(stale.code, 'PAYRUN-POLICY-SNAPSHOT-STALE'); assert.equal(stale.currentHash, undefined)
-  // إعادة المجموعة الأولى للشهر قبل التحديث (لقياس أثر معامل الغياب وحده)
-  const current = expect(await request('GET', '/payroll/rules/lateness-tier-sets'), 200).sets.find(row => row.isActive && row.effectivePeriod === '2026-08')
-  expect(await request('POST', `/payroll/rules/lateness-tier-sets/${current.id}/deactivate`, { reason: 'إيقاف المجموعة الصارمة بعد القياس' }), 201)
-  await repo('PayrollLatenessTierSet').update({ id: saved.savedId }, { isActive: true })
-  const shown = expect(await request('GET', `/payroll/runs/${run.id}/policy-snapshot`), 200)
-  assert.deepEqual(shown.differences.map(row => row.key), ['values.absencePenaltyDays'])
-  const refreshed = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'تحديث لقطة السياسة بعد مراجعة الفرق', refreshPolicySnapshot: true, expectedPolicySnapshotHash: shown.currentHash }), 201)
+  const refreshed = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'تحديث لقطة السياسة بعد مراجعة الفرق', refreshPolicySnapshot: true, expectedPolicySnapshotHash: view.currentHash }), 201)
   assert.equal(number(itemOf(refreshed, absent).absenceDeduction), 600, 'after an explicit refresh the new penalty applies')
-  assert.equal(refreshed.policySnapshotHash, shown.currentHash)
+  assert.equal(refreshed.policySnapshotHash, view.currentHash)
   const events = expect(await request('GET', `/payroll/runs/${run.id}/events`), 200)
   const last = events[events.length - 1]
   assert.equal(last.eventType, 'RECALCULATED'); assert.equal(last.payload.policySnapshot.mode, 'REFRESHED')
@@ -235,17 +266,18 @@ test('steps 19–21 on a real run: 61 minutes × 1.5 on the payslip, SHADOW pari
 })
 
 test('step 20: a run with differences cannot switch to POLICY until every difference has a written reason; POLICY then pays the engine result', async () => {
-  // مكونات بقروش فردية ويوم مغطى واحد: الحساب القديم يضيف فرق التقريب لأكبر مكوّن (33.34) والمحرك يقرّب كل مكوّن (33.33)
-  const odd = await employee({ basicSalary: 1000.01, housingAllowance: 1000.01, transportAllowance: 1000.01 })
+  // مكونات متساوية ويوم مغطى واحد في فترة 31 يومًا: الحساب القديم يوزّع فرق التقريب على أكبر مكوّن (32.25)
+  // والمحرك يقرّب كل مكوّن على حدة (32.26) — فرق قرش مقصود يختبر منع التحويل إلى POLICY بلا سبب مكتوب.
+  const odd = await employee({ basicSalary: 1000, housingAllowance: 1000, transportAllowance: 1000 })
   await punch(odd, ['2026-08-22T09:00:00', '2026-08-22T17:00:00'])
   expect(await request('POST', '/attendance/recompute?date=2026-08-22'), 201)
-  const run = expect(await request('POST', '/payroll/runs/calculate-defined', { period: '2026-08', scopeType: 'CUSTOM', employeeIds: [odd.id], name: 'مسير B4 — فروق التكافؤ' }), 201)
+  const run = await runWith(await publishedPolicy('معادلات فروق التكافؤ'), 'مسير B4 — فروق التكافؤ', [odd.id])
   const row = run.engine.report.rows[0]
   assert.equal(row.status, 'DIFFERENT', JSON.stringify(row))
   const basic = row.components.find(item => item.code === 'BASIC'), net = row.components.find(item => item.code === 'NET')
-  assert.deepEqual([basic.legacy, basic.policy, basic.reasonCode], ['33.34', '33.33', 'SALARY_ROUNDING_DISTRIBUTION'])
-  assert.deepEqual([net.legacy, net.policy, net.reasonCode], ['100.00', '99.99', 'FOLLOWS_UPSTREAM_DIFFERENCE'])
-  assert.equal(number(itemOf(run, odd).netPay), 100, 'SHADOW pays the legacy result')
+  assert.deepEqual([basic.legacy, basic.policy, basic.reasonCode], ['32.25', '32.26', 'SALARY_ROUNDING_DISTRIBUTION'])
+  assert.deepEqual([net.legacy, net.policy, net.reasonCode], ['96.77', '96.78', 'FOLLOWS_UPSTREAM_DIFFERENCE'])
+  assert.equal(number(itemOf(run, odd).netPay), 96.77, 'SHADOW pays the legacy result')
 
   const refused = expect(await request('POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'POLICY', reason: 'محاولة بلا أسباب' }), 409)
   assert.equal(refused.code, 'PAYRUN-ENGINE-PARITY-REQUIRED')
@@ -260,17 +292,17 @@ test('step 20: a run with differences cannot switch to POLICY until every differ
   assert.deepEqual([switched.mode, switched.switchIssues.length, switched.explanations.length], ['POLICY', 0, 2])
   const policyRun = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إعادة الحساب بوضع POLICY بعد تفسير الفروق' }), 201)
   const item = itemOf(policyRun, odd)
-  assert.deepEqual([number(item.basicSalary), number(item.allowances), number(item.netPay)], [33.33, 66.66, 99.99], 'POLICY pays the engine result')
+  assert.deepEqual([number(item.basicSalary), number(item.allowances), number(item.netPay)], [32.26, 64.52, 96.78], 'POLICY pays the engine result')
   assert.equal(detailsOf(item).policyEngine.paidResult, 'POLICY')
-  assert.deepEqual(detailsOf(item).salaryComponents.map(component => component.earnedAmount).slice(0, 3), [33.33, 33.33, 33.33])
+  assert.deepEqual(detailsOf(item).salaryComponents.map(component => component.earnedAmount).slice(0, 3), [32.26, 32.26, 32.26])
   const events = expect(await request('GET', `/payroll/runs/${run.id}/events`), 200).map(row => row.eventType)
   assert.ok(events.includes('PARITY_EXPLAINED') && events.includes('ENGINE_MODE_CHANGED'), JSON.stringify(events))
   // تغيّر الفرق (مبلغ مختلف) يحتاج سببًا جديدًا: POLICY يرفض الحساب بدل صرف فرق غير مفسر
-  // إضافة دفتر 5.00 بعد التحويل: الصافي القديم 105.00 والمحرك 104.99 — فرق بمبلغ جديد لم يُكتب له سبب
+  // إضافة دفتر 5.00 بعد التحويل: الصافي القديم 101.77 والمحرك 101.78 — فرق بمبلغ جديد لم يُكتب له سبب
   await repo('EmployeeObligation').save({ employeeId: odd.id, type: 'CREDIT', category: 'bonus', amount: 5, label: 'مكافأة اختبار بعد التحويل', status: 'PENDING' })
   const blocked = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إضافة دفتر بعد التحويل' }), 409)
   assert.equal(blocked.code, 'PAYRUN-POLICY-PARITY-UNEXPLAINED')
-  assert.equal(number((await repo('PayrollItem').findOneByOrFail({ runId: run.id, employeeId: odd.id })).netPay), 99.99, 'the refused recalculation writes nothing')
+  assert.equal(number((await repo('PayrollItem').findOneByOrFail({ runId: run.id, employeeId: odd.id })).netPay), 96.78, 'the refused recalculation writes nothing')
   expect(await request('POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'SHADOW', reason: 'العودة للظل حتى تُفسر الفروق الجديدة' }), 201)
   expect(await request('POST', `/payroll/runs/${run.id}/cancel`, { reason: 'تنظيف مسير اختبار الفروق' }), 201)
 })
@@ -282,7 +314,7 @@ test('steps 19–20 at approval (payroll simplification): a tampered or missing 
   await repo('AttendancePunch').save(['2026-08-22T09:00:00', '2026-08-22T17:00:00'].map(stamp => ({ employeeCode: legacySource.employeeCode, employeeId: legacySource.id,
     punchTime: new Date(stamp), deviceSn: null, source: null, createdByUserId: null, reason: null })))
   expect(await request('POST', '/attendance/recompute?date=2026-08-22'), 201)
-  const created = expect(await request('POST', '/payroll/runs/calculate-defined', { period: '2026-08', scopeType: 'CUSTOM', employeeIds: [proven.id, legacySource.id], name: 'مسير B4 — شروط الاعتماد' }), 201)
+  const created = await runWith(await publishedPolicy('معادلات شروط الاعتماد'), 'مسير B4 — شروط الاعتماد', [proven.id, legacySource.id])
   const report = created.engine.report
   const rowOf = emp => report.rows.find(row => row.employeeId === emp.id)
   assert.equal(rowOf(proven).status, 'MATCHED', JSON.stringify(rowOf(proven)))
@@ -348,7 +380,7 @@ test('steps 19–20 at approval (payroll simplification): a tampered or missing 
   const other = await employee()
   await punch(other, ['2026-08-22T09:00:00', '2026-08-22T17:00:00'])
   expect(await request('POST', '/attendance/recompute?date=2026-08-22'), 201)
-  const legacyRun = expect(await request('POST', '/payroll/runs/calculate-defined', { period: '2026-08', scopeType: 'CUSTOM', employeeIds: [other.id], name: 'مسير B4 — LEGACY بلا ظل' }), 201)
+  const legacyRun = await runWith(await publishedPolicy('معادلات LEGACY بلا ظل'), 'مسير B4 — LEGACY بلا ظل', [other.id])
   // الإعداد مكتوب من بذر الإعدادات بقيمة تساوي القيمة الافتراضية في الكود؛ حذفه (في قاعدة الاختبار) يغيّر المصدر وحده: إعداد ← قيمة افتراضية
   const seeded = await repo('RequestsConfig').findOneByOrFail({ key: 'payroll.exempt_overtime_eligible' })
   assert.equal(seeded.value, 'false')

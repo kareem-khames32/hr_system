@@ -364,7 +364,7 @@ test('الخطوة 14: دورة 31 — اعتماد فبراير لا يمنع �
   t.diagnostic('فبراير 31/1→28/2 معتمد، مارس 1/3→30/3 محسوب ومعتمد بلا تعارض، وفجوة 31 مارس ظاهرة على مسير أبريل')
 })
 
-test('قاعدة المالك: ملتحق في اليوم العاشر من الدورة — التغطية من تاريخ التعيين، لا غياب ولا خصم قبله، والتناسب 22/30', async t => {
+test('قاعدة المالك: ملتحق في اليوم العاشر من الدورة — التغطية من تاريخ التعيين، لا غياب ولا خصم قبله، والتناسب 22/31 (أيام الفترة الفعلية)', async t => {
   // دورة 23: «راتب أغسطس» = 23 يوليو → 22 أغسطس؛ اليوم العاشر = 1 أغسطس.
   const joiner = await employee({ joinDate: '2026-08-01' })
   const delayed = await employee({ joinDate: '2026-07-25', actualStartDate: '2026-08-01' })
@@ -381,9 +381,10 @@ test('قاعدة المالك: ملتحق في اليوم العاشر من ال
   for (const emp of [joiner, delayed]) {
     const item = itemFor(run, emp), detail = JSON.parse(item.breakdown), member = memberFor(run, emp)
     assert.equal(detail.coverFrom, '2026-08-01'); assert.equal(detail.coverTo, '2026-08-22'); assert.equal(detail.coverDays, 22)
-    assert.equal(detail.prorataFactor, 0.733333); assert.equal(detail.gross, 9000); assert.equal(detail.grossEarned, 6600)
+    // القرار أ2: التناسب على أيام الفترة الفعلية (23 يوليو → 22 أغسطس = 31 يومًا) لا على 30 ثابتة
+    assert.equal(detail.prorataFactor, 0.709677); assert.equal(detail.gross, 9000); assert.equal(detail.grossEarned, 6387.1)
     assert.equal(detail.dayRate, 300, 'سعر اليوم من الأجر الشهري الكامل ÷ 30')
-    assert.equal(amount(item.basicSalary), 6600)
+    assert.equal(amount(item.basicSalary), 6387.1)
     assert.deepEqual(detail.absentDates, ['2026-08-11'], 'الغياب داخل التغطية فقط')
     assert.equal(amount(item.absenceDays), 1); assert.equal(amount(item.absenceDeduction), 300)
     assert.ok(detail.attendanceRules.every(day => day.date >= '2026-08-01'))
@@ -394,9 +395,10 @@ test('قاعدة المالك: ملتحق في اليوم العاشر من ال
   const joinerItem = itemFor(run, joiner)
   assert.equal(amount(joinerItem.unpaidLeaveDays), 3, 'أيام الإجازة بلا أجر قبل التعيين لا تُخصم (1–3 أغسطس فقط)')
   assert.equal(amount(joinerItem.unpaidLeaveDeduction), 900)
-  assert.equal(amount(joinerItem.netPay), 6600 - 300 - 900)
-  assert.equal(amount(itemFor(run, delayed).netPay), 6600 - 300)
-  t.diagnostic('ملتحق 1 أغسطس (اليوم العاشر): 9000×22/30=6600، غياب 11 أغسطس فقط، لا صفوف قبل التعيين حتى مع بداية فعلية بعد تاريخ الالتحاق')
+  // 6387.10 ناقص يوم غياب 300 وثلاثة أيام إجازة بلا أجر 900 (سعر اليوم يبقى الأجر ÷ 30)
+  assert.equal(amount(joinerItem.netPay), 5187.1)
+  assert.equal(amount(itemFor(run, delayed).netPay), 6087.1)
+  t.diagnostic('ملتحق 1 أغسطس (اليوم العاشر): 9000×22/31=6387.10 بأيام الفترة الفعلية (أ2)، غياب 11 أغسطس فقط، لا صفوف قبل التعيين حتى مع بداية فعلية بعد تاريخ الالتحاق')
 })
 
 test('الخطوة 9 (مسار R2): راتب صفري — من السجل الشهري أو من الملف في الوضع الانتقالي — يُستبعد NO_SALARY_DEFINED ولا يدخل بصافي صفر', async t => {

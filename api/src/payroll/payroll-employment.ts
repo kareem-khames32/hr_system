@@ -2,6 +2,8 @@ import { BadRequestException } from '@nestjs/common'
 import { localDateOf } from '../attendance/attendance.service'
 
 export interface PayrollEmploymentInput {
+  /** أ2: بداية استحقاق الراتب — الأيام قبلها لا تُدفع ولا تُخصم. فارغة = تاريخ المباشرة ثم تاريخ التعيين. */
+  salaryEntitlementStart?: string | null
   actualStartDate?: string | null
   joinDate?: string | null
   archivedAt?: Date | string | null
@@ -34,7 +36,8 @@ export function payrollEmploymentCoverage(
 ): PayrollEmploymentCoverage | null {
   dateOnly(startDate); dateOnly(endDate)
   if (endDate < startDate) throw new BadRequestException('نهاية فترة الرواتب قبل بدايتها')
-  const hireDate = dateOnly(employee.actualStartDate || employee.joinDate || '1900-01-01')
+  // أ2: أرضية التغطية واحدة للحضور والغياب والنقص والإضافي والتناسب — بداية الاستحقاق إن وُجدت، وإلا المباشرة ثم التعيين.
+  const hireDate = dateOnly(employee.salaryEntitlementStart || employee.actualStartDate || employee.joinDate || '1900-01-01')
   // الإيقاف المؤقت ليس إنهاء خدمة، وتظل سياسة استحقاقه الحالية كما هي لحين بند الاستثناءات.
   if (employee.status === 'suspended' && !employee.isActive) return null
   // الملفات الملغاة لا تنهي الخدمة، وملف انتهى قبل التعيين الحالي لا ينهي إعادة التعيين.

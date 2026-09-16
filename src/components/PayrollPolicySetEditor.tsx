@@ -2,8 +2,11 @@
 
 import { useEffect, useState, type FormEvent } from 'react'
 import { AlertTriangle, CalendarRange, CheckCircle2, Plus, Save, X } from 'lucide-react'
-import { ApiError, fetchConfig } from '../lib/api'
-import { fetchLatenessTierSets, type LatenessTierSet } from '../lib/payroll-engine-api'
+import { ApiError, fetchConfig, updateConfig } from '../lib/api'
+import {
+  createLatenessTierSet, fetchLatenessTierSets, LATENESS_TIER_MODE_LABELS,
+  type LatenessTierDraftRow, type LatenessTierMode, type LatenessTierSet,
+} from '../lib/payroll-engine-api'
 import {
   chargeRulesOf, createPayrollPolicy, DEFAULT_POLICY_SETTINGS, describePolicyCycle, expectedPolicyCycleEndDay,
   payrollPoliciesError, policyCycleIssue, POLICY_PERIOD_TYPE_LABELS, POLICY_SCREEN_REASON, publishPayrollPolicyVersion,
@@ -222,36 +225,73 @@ type Choice = '' | 'true' | 'false'
 const choiceOf = (value: boolean | null): Choice => value === null ? '' : value ? 'true' : 'false'
 const boolOf = (value: string): boolean | null => value === '' ? null : value === 'true'
 const textOf = (value: number | null) => value == null ? '' : String(value)
-const tierSetLabel = (set: LatenessTierSet) => set.source === 'LEGACY_CONVERSION' ? 'الشرائح الأصلية' : `شرائح شهر ${set.effectivePeriod}`
+// أ1: شرائح التأخير صارت داخل المعادلة نفسها — لا جدول شهري ولا اختيار بالشهر.
+const ABSENCE_KEY = 'attendance.absence_penalty_days'
+const emptyTier = (): LatenessTierDraftRow => ({ fromMinutes: '', toMinutes: '', mode: 'FRACTION', value: '0.25', label: '' })
+const tierRowsOf = (set: LatenessTierSet | undefined): LatenessTierDraftRow[] => (set?.tiers ?? []).map(tier => ({
+  fromMinutes: String(tier.fromMinutes), toMinutes: tier.toMinutes === null ? '' : String(tier.toMinutes), mode: tier.mode,
+  value: ['FRACTION', 'MULTIPLIER'].includes(tier.mode) ? String(Number(tier.value)) : '0', label: tier.label ?? '' }))
+// شهر سريان المجموعة يُختم داخليًا (الشهر الجاري) ولا يكتبه المستخدم؛ المعادلة تشير للمجموعة برقمها فتبقى مقروءة دائمًا.
+const stampPeriod = () => { const now = new Date(); return `${now.getFullYear()}-${pad(now.getMonth() + 1)}` }
 
 export function PayrollPolicyChargeRulesPanel({ summary, version, onSaved }: { summary: PayrollPolicySummary; version: PayrollPolicyVersionSummary | null; onSaved: (notice: string) => void | Promise<void> }) {
   const initial = chargeRulesOf(summary.policy)
   const [rules, setRules] = useState<PayrollPolicyChargeRules>(initial)
   const [shortfallValueText, setShortfallValueText] = useState(textOf(initial.shortfallValue))
   const [absenceText, setAbsenceText] = useState(textOf(initial.absencePenaltyDays))
-  const [tierSets, setTierSets] = useState<LatenessTierSet[]>([])
+  const [tierRows, setTierRows] = useState<LatenessTierDraftRow[]>([])
+  const [savedTierRows, setSavedTierRows] = useState<LatenessTierDraftRow[]>([])
+  const [generalAbsence, setGeneralAbsence] = useState('')
+  const [savedGeneralAbsence, setSavedGeneralAbsence] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const canEdit = summary.capabilities.canEdit && summary.policy.isActive
 
   useEffect(() => {
     let cancelled = false
-    fetchLatenessTierSets().then(data => { if (!cancelled) setTierSets(data.sets.filter(set => set.isActive)) }).catch(() => { /* القائمة تبقى «زي الإعدادات العامة» فقط */ })
+    // كل المجموعات (ولو موقوفة): المعادلة تشير لمجموعتها برقمها، فنعرض شرائحها كما هي للتحرير.
+    fetchLatenessTierSets().then(data => {
+      if (cancelled) return
+      const rows = tierRowsOf(data.sets.find(set => set.id === initial.latenessTierSetId))
+      setTierRows(rows); setSavedTierRows(rows)
+    }).catch(() => { /* تبقى الشرائح فارغة: الخصم بالدقيقة */ })
+    fetchConfig().then(rows => {
+      if (cancelled) return
+      const value = rows.find(row => row.key === ABSENCE_KEY)?.value ?? '1'
+      setGeneralAbsence(value); setSavedGeneralAbsence(value)
+    }).catch(() => { /* تبقى القيمة العامة غير معروضة */ })
     return () => { cancelled = true }
-  }, [])
+  }, [initial.latenessTierSetId])
+
+  const editTier = (index: number, patch: Partial<LatenessTierDraftRow>) =>
+    setTierRows(current => current.map((row, i) => i === index ? { ...row, ...patch } : row))
 
   const set = <K extends keyof PayrollPolicyChargeRules>(key: K, value: PayrollPolicyChargeRules[K]) => setRules(current => ({ ...current, [key]: value }))
   // خصم التأخير محفوظ أيضًا في إعدادات المعادلات المكتملة، وهي التي تُطبّق حين يُترك الحقل فارغًا (لا الإعداد العام)؛
   // فالقائمة تعرض القيمة المطبّقة فعلًا، واختيار نفس قيمة الإعدادات يُحفظ فارغًا.
   const versionLate = version?.settingsStatus === 'COMPLETE' && typeof version.lateDeductionEnabled === 'boolean' ? version.lateDeductionEnabled : null
   const valueLabel = rules.shortfallMode === 'MULTIPLIER' ? 'مضاعف خصم النقص' : rules.shortfallMode === 'FRACTION' ? 'جزء اليوم لخصم النقص (مثل 0.25)' : 'قيمة خصم النقص'
-  const dirty = JSON.stringify({ ...rules, shortfallValue: shortfallValueText.trim(), absencePenaltyDays: absenceText.trim() })
+  const tiersDirty = JSON.stringify(tierRows) !== JSON.stringify(savedTierRows)
+  const dirty = tiersDirty || generalAbsence.trim() !== savedGeneralAbsence.trim() ||
+    JSON.stringify({ ...rules, shortfallValue: shortfallValueText.trim(), absencePenaltyDays: absenceText.trim() })
     !== JSON.stringify({ ...initial, shortfallValue: textOf(initial.shortfallValue), absencePenaltyDays: textOf(initial.absencePenaltyDays) })
 
   async function save() {
     setBusy(true); setError('')
     try {
-      await updatePayrollPolicyChargeRules(summary.policy.id, summary.policy.revision ?? 1, { ...rules, shortfallValue: numberOrNull(shortfallValueText), absencePenaltyDays: numberOrNull(absenceText) })
+      // الشرائح تُحفظ كمجموعة جديدة (المحتوى لا يُعدّل في مكانه) ثم تُربط بالمعادلة في نفس الإجراء؛
+      // الخادم يعيد مجموعة مطابقة مفعّلة بعينها بدل نسخة زائدة، ولا يمس مجموعة معادلة أخرى. لا شرائح = الخصم بالدقيقة.
+      let latenessTierSetId = rules.latenessTierSetId
+      if (tiersDirty) {
+        latenessTierSetId = !tierRows.length ? null
+          : (await createLatenessTierSet(stampPeriod(), tierRows, `شرائح التأخير من معادلات «${summary.policy.name}»`)).savedId ?? null
+      }
+      await updatePayrollPolicyChargeRules(summary.policy.id, summary.policy.revision ?? 1,
+        { ...rules, latenessTierSetId, shortfallValue: numberOrNull(shortfallValueText), absencePenaltyDays: numberOrNull(absenceText) })
+      if (generalAbsence.trim() !== savedGeneralAbsence.trim()) {
+        if (!(Number(generalAbsence) >= 0)) throw new Error('معامل الغياب العام رقم غير سالب')
+        await updateConfig(ABSENCE_KEY, String(Number(generalAbsence)))
+      }
       setBusy(false)
       await onSaved(`حُفظت طريقة الخصم في «${summary.policy.name}»؛ تُطبّق على أي مسير لم يُعتمد عند إعادة حسابه.`)
     } catch (cause) { setError(errorText(cause)); setBusy(false) }
@@ -272,12 +312,6 @@ export function PayrollPolicyChargeRulesPanel({ summary, version, onSaved }: { s
             <option value="true">يُخصم</option><option value="false">لا يُخصم</option>
           </select>}
       </label>
-      <label className="min-w-0 lg:col-span-2"><span className={labelClass}>شرائح التأخير</span>
-        <select className="input w-full" value={rules.latenessTierSetId ?? ''} onChange={event => set('latenessTierSetId', event.target.value ? Number(event.target.value) : null)}>
-          <option value="">زي الإعدادات العامة</option>
-          {rules.latenessTierSetId != null && !tierSets.some(row => row.id === rules.latenessTierSetId) && <option value={rules.latenessTierSetId}>شرائح موقوفة — تُطبَّق شرائح الشهر السارية</option>}
-          {tierSets.map(row => <option key={row.id} value={row.id}>{tierSetLabel(row)}</option>)}
-        </select></label>
       <label className="min-w-0"><span className={labelClass}>خصم الخروج المبكر (الوردية الثابتة)</span>
         <select className="input w-full" value={choiceOf(rules.earlyLeaveDeductionEnabled)} onChange={event => set('earlyLeaveDeductionEnabled', boolOf(event.target.value))}>
           <option value="">زي الإعدادات العامة</option><option value="true">يُخصم</option><option value="false">لا يُخصم</option>
@@ -296,6 +330,34 @@ export function PayrollPolicyChargeRulesPanel({ summary, version, onSaved }: { s
       <label className="min-w-0"><span className={labelClass}>معامل الغياب بلا إذن (أيام)</span>
         <input className="input w-full" type="number" min={0} step={0.5} value={absenceText} placeholder="زي الإعدادات العامة" onChange={event => setAbsenceText(event.target.value)} />
         <span className="text-xs text-gray-500">اليوم الغائب بلا إذن يُخصم = قيمة اليوم × المعامل. اتركه فارغًا للقيمة العامة.</span></label>
+      <label className="min-w-0"><span className={labelClass}>معامل الغياب العام (لكل المعادلات)</span>
+        <input className="input w-full" type="number" min={0} step={0.5} value={generalAbsence} onChange={event => setGeneralAbsence(event.target.value)} />
+        <span className="text-xs text-gray-500">القيمة التي تأخذها أي معادلة تركت الخانة السابقة فارغة.</span></label>
+    </fieldset>
+
+    <fieldset disabled={!canEdit || busy} className="space-y-3">
+      <legend className="text-sm font-bold text-gray-800">شرائح خصم التأخير</legend>
+      <p className="text-sm text-gray-500">كل يوم متأخر يُخصم حسب الشريحة التي يقع فيها تأخيره. الحدود شاملة (من ≤ الدقائق ≤ إلى) ولا يُقبل تداخل، والدقائق بلا شريحة تُخصم بالدقيقة. اتركها فارغة ليكون الخصم بالدقيقة دائمًا.</p>
+      {!tierRows.length && <p className="rounded-xl bg-amber-50 p-3 text-sm text-amber-900">لا توجد شرائح الآن: كل دقيقة تأخير تُخصم بسعر الدقيقة.</p>}
+      {tierRows.map((row, index) => <div key={index} className="grid grid-cols-1 md:grid-cols-6 gap-2 items-end">
+        <label className="min-w-0"><span className="text-xs text-gray-500">من دقيقة</span>
+          <input className="input w-full" type="number" min={0} value={row.fromMinutes} placeholder="1" onChange={event => editTier(index, { fromMinutes: event.target.value })} /></label>
+        <label className="min-w-0"><span className="text-xs text-gray-500">إلى دقيقة (فارغ = بلا نهاية)</span>
+          <input className="input w-full" type="number" min={0} value={row.toMinutes} placeholder="60" onChange={event => editTier(index, { toMinutes: event.target.value })} /></label>
+        <label className="min-w-0"><span className="text-xs text-gray-500">طريقة الخصم</span>
+          <select className="input w-full" value={row.mode} onChange={event => editTier(index, { mode: event.target.value as LatenessTierMode,
+            value: event.target.value === 'MULTIPLIER' ? '1.5' : event.target.value === 'FRACTION' ? '0.25' : '0' })}>
+            {(Object.keys(LATENESS_TIER_MODE_LABELS) as LatenessTierMode[]).map(mode => <option key={mode} value={mode}>{LATENESS_TIER_MODE_LABELS[mode]}</option>)}
+          </select></label>
+        <label className="min-w-0"><span className="text-xs text-gray-500">{row.mode === 'MULTIPLIER' ? 'المضاعف' : 'كسر اليوم'}</span>
+          <input className="input w-full disabled:bg-gray-100" type="number" min={0} step={0.05} value={row.value}
+            disabled={!['FRACTION', 'MULTIPLIER'].includes(row.mode)} onChange={event => editTier(index, { value: event.target.value })} /></label>
+        <label className="min-w-0"><span className="text-xs text-gray-500">وصف (اختياري)</span>
+          <input className="input w-full" maxLength={200} value={row.label} onChange={event => editTier(index, { label: event.target.value })} /></label>
+        <button type="button" className="text-danger-500 hover:text-danger-700 justify-self-start pb-2" aria-label="حذف الشريحة"
+          onClick={() => setTierRows(current => current.filter((_, i) => i !== index))}><X size={16} /></button>
+      </div>)}
+      <button type="button" className="btn-secondary text-sm flex items-center gap-1" onClick={() => setTierRows(current => [...current, emptyTier()])}><Plus size={16} />شريحة</button>
     </fieldset>
     {canEdit && <div className="flex flex-wrap gap-2">
       <button type="button" className="btn-primary flex items-center gap-2" disabled={busy || !dirty} onClick={() => void save()}><Save size={16} />{busy ? 'جارٍ الحفظ…' : 'حفظ طريقة الخصم'}</button>

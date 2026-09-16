@@ -16,7 +16,7 @@ import { loadAttendanceExemptions } from './attendance-exemption-resolver'
 
 type ExemptionInput = {
   employeeId: number; effectiveFrom: string; effectiveTo?: string | null; reasonCode: AttendanceExemptionReasonCode; reason: string
-  overtimeEligibleOverride?: boolean | null; unpaidLeaveDeductibleOverride?: boolean | null; requiresCheckinForPresence?: boolean
+  requiresCheckinForPresence?: boolean
 }
 
 // ⑨ / EX-09، EX-13: نافذة معتمدة واحدة هي مصدر الاستثناء، دون علم دائم يغير التاريخ.
@@ -177,8 +177,9 @@ export class AttendanceExemptionsService {
       await this.validateRange(em, employee, dto.effectiveFrom, dto.effectiveTo ?? null, undefined, true)
       await this.noOverlap(em, employee.id, dto.effectiveFrom, dto.effectiveTo ?? null)
       await this.noPendingOverlap(em, employee.id, dto.effectiveFrom, dto.effectiveTo ?? null)
+      // أ7: النافذة بلا تجاوز فردي — الإضافي والإجازة بلا أجر للمستثنى يتبعان قرار الشركة الواحد.
       const row = await em.getRepository(AttendanceExemption).save({ ...dto, effectiveTo: dto.effectiveTo ?? null,
-        overtimeEligibleOverride: dto.overtimeEligibleOverride ?? null, unpaidLeaveDeductibleOverride: dto.unpaidLeaveDeductibleOverride ?? null,
+        overtimeEligibleOverride: null, unpaidLeaveDeductibleOverride: null,
         reason, status: 'PENDING', createdByUserId: user.sub, requiresCheckinForPresence: dto.requiresCheckinForPresence ?? false })
       await this.record(em, user, row, 'CREATED', reason, null)
       return row

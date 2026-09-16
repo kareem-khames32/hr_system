@@ -530,7 +530,7 @@ function LoansTab({ branches, departments }: { branches: ApiBranch[]; department
           {summary.period && (
             <div className="rounded-xl p-3 text-sm bg-gray-50 text-gray-700">
               مطابقة <span dir="ltr">{summary.period.from} → {summary.period.to}</span>: أقساط مستحقة في الفترة {formatReportMoney(summary.period.dueInPeriod)} —
-              عمود السلف في المسيرات {formatReportMoney(summary.period.payrollColumnTotal)} — المحجوز/المرحّل من الدفتر {formatReportMoney(summary.period.allocatedInRuns)}
+              عمود السلف في المسيرات {formatReportMoney(summary.period.payrollColumnTotal)} — المحتسب في المسيرات {formatReportMoney(summary.period.allocatedInRuns)}
             </div>
           )}
           <div className="card overflow-x-auto">

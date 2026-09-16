@@ -189,7 +189,7 @@ export default function MyLoansPage() {
                 <input id="my-loan-months" className="input" dir="ltr" inputMode="numeric" value={months} onChange={e => setMonths(e.target.value)} placeholder="1" /></div>
               {previewError && <p role="alert" className="text-sm text-red-600">{previewError}</p>}
               {preview && <LoanCapSummary cap={preview} currency={currency} title="السقف المتاح لك الآن" />}
-              {preview?.requestWindow && (preview.requestWindow.fromDay !== 1 || preview.requestWindow.toDay !== 31) && (
+              {preview?.requestWindow && (!preview.requestWindow.open || preview.requestWindow.fromDay !== 1 || preview.requestWindow.toDay !== 31) && (
                 <p className={`text-sm rounded-xl p-3 ${preview.requestWindow.open ? 'bg-gray-50 text-gray-600' : 'bg-amber-50 text-amber-800'}`}>{preview.requestWindow.message}</p>
               )}
             </div>

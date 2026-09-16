@@ -80,6 +80,31 @@ export async function seedRequests(ds: DataSource) {
       createdTypes += created.type; createdChains += created.chain
       continue
     }
+    // ب3: باب دخول بلا دورة اعتماد خاصة («خصم» و«مكافأة») — الإنشاء يبقى في شاشتيهما بدفترهما
+    // وسلسلتهما، فلا تُنشأ لهما سلسلة فارغة ولا يُربطان بواحدة، تمامًا كالقاعدة الحية.
+    if (t.chain === null) {
+      if (!(await types.findOne({ where: { code: t.code } }))) {
+        await types.save(
+          types.create({
+            code: t.code,
+            nameAr: t.nameAr,
+            category: t.category as any,
+            requiredFields: JSON.stringify(t.requiredFields ?? []),
+            approvalChainId: null as unknown as number,
+            destinationHandler: t.handler,
+            visibleTo: t.visibleTo,
+            affectsBalance: t.affectsBalance ?? false,
+            isSecurityRoute: t.securityRoute ?? false,
+            isConfidential: t.confidential ?? false,
+            autoGeneratesPdf: t.autoGeneratesPdf ?? false,
+            phase: t.phase ?? 'P1',
+          })
+        )
+        createdTypes++
+      }
+      continue
+    }
+
     // 1) السلسلة المخصّصة لهذا النوع (تُنشأ فاضية — خطواتها من صنع المالك)
     const chainCode = `CH_${t.code}`
     let chain = await chains.findOne({ where: { code: chainCode } })

@@ -1,22 +1,21 @@
 'use client'
 
 import { Fragment, useEffect, useMemo, useState } from 'react'
-import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Download, Plus, RefreshCw, Settings2, Users, X } from 'lucide-react'
+import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Plus, RefreshCw, Settings2, Users, X } from 'lucide-react'
 import { ApiError, can, fetchDepartments, fetchEmployees, fetchTeams, type ApiDepartment, type ApiEmployee, type ApiTeam } from '@/lib/api'
-import { csvDateStamp, downloadCsv } from '@/lib/csv'
 import {
   approveDeduction, cancelDeduction, createDeductionType, decideSuspendedObligation, DEDUCTION_CATEGORY_LABELS, DEDUCTION_METHOD_LABELS, DEDUCTION_METHOD_UNIT,
-  DEDUCTION_ROLE_LABELS, DEDUCTION_STATUS_META, deductionInputError, fetchDeduction, fetchDeductionCandidates, fetchDeductionCreatable, fetchDeductionReports,
+  DEDUCTION_ROLE_LABELS, DEDUCTION_STATUS_META, deductionInputError, fetchDeduction, fetchDeductionCandidates, fetchDeductionCreatable,
   fetchDeductions, fetchDeductionTypes, formatDeductionMoney, previewDeductions, rejectDeduction, respondDeductionObjection, reverseDeduction, submitDeductionBatch,
   updateDeductionType, withdrawDeduction, type DeductionApprovalRole, type DeductionCalcMethod, type DeductionCandidate, type DeductionCategory, type DeductionCreatable,
-  type DeductionCreatorBasis, type DeductionInput, type DeductionPreview, type DeductionReport, type DeductionSelectionMode, type DeductionStatus, type DeductionStepView,
+  type DeductionCreatorBasis, type DeductionInput, type DeductionPreview, type DeductionSelectionMode, type DeductionStatus, type DeductionStepView,
   type DeductionTypeInput, type DeductionTypeView, type DeductionView,
 } from '@/lib/deductions-api'
 
 // الخطوة 25: مساحة الخصومات المصنفة — القائمة والاعتماد (مع الاعتراض والعكس وقرارات الأقساط المعلقة)، والإنشاء لموظف أو
 // اختيار أو فريق أو قسم أو فرع بمعاينة واستبعاد، وكتالوج الأنواع، والتقارير. الخادم يعيد فحص النطاق والحدود والتكرار
 // والاعتماد في كل خطوة؛ هذه الشاشة لا تقرر شيئًا ماليًا بنفسها.
-type Tab = 'list' | 'create' | 'types' | 'reports'
+type Tab = 'list' | 'create' | 'types'
 type ActionKind = 'approve' | 'reject' | 'withdraw' | 'cancel' | 'reverse' | 'respond' | 'resume' | 'drop'
 const errorText = (error: unknown, fallback: string) => error instanceof Error ? error.message : fallback
 const localToday = () => new Date().toLocaleDateString('en-CA')
@@ -37,6 +36,9 @@ function Badge({ className, children }: { className: string; children: React.Rea
 const stepLabel = (step: Pick<DeductionStepView, 'roleLabel' | 'fallbackFrom' | 'fallbackFromLabel'>) =>
   `${step.roleLabel}${step.fallbackFrom ? ` (بديل عن ${step.fallbackFromLabel ?? DEDUCTION_ROLE_LABELS[step.fallbackFrom]})` : ''}`
 
+// رابط «بانتظار موافقتي» في صندوق الموافقات وكارت «خصم» في «طلب جديد» يفتحان الشاشة على العرض والتبويب المطلوبين
+const urlParam = (key: string) => typeof window === 'undefined' ? null : new URLSearchParams(window.location.search).get(key)
+
 export function TypedDeductionsWorkspace({ currency, mode, focusRequestId = null }: { currency: string; mode: 'admin' | 'manager'; focusRequestId?: number | null }) {
   const [tab, setTab] = useState<Tab>('list')
   const [creatable, setCreatable] = useState<DeductionCreatable | null>(null)
@@ -46,6 +48,10 @@ export function TypedDeductionsWorkspace({ currency, mode, focusRequestId = null
   const [filters, setFilters] = useState<ListFilters>({ view: mode === 'manager' || focusRequestId ? 'all' : 'pending_me', status: '', targetPeriod: '' })
   const [canManage, setCanManage] = useState(false)
   const [ready, setReady] = useState(false)
+  useEffect(() => {
+    const view = urlParam('view')
+    if (view === 'pending_me' || view === 'created' || view === 'all') setFilters(value => ({ ...value, view }))
+  }, [])
 
   const loadRows = () => {
     setLoadingRows(true)
@@ -54,7 +60,8 @@ export function TypedDeductionsWorkspace({ currency, mode, focusRequestId = null
   }
   useEffect(() => {
     setCanManage(can('deductions.manage'))
-    fetchDeductionCreatable().then(setCreatable).catch(error => setLoadError(errorText(error, 'تعذر تحميل أنواع الخصومات المسموحة'))).finally(() => setReady(true))
+    fetchDeductionCreatable().then(value => { setCreatable(value); if (urlParam('tab') === 'create' && value.types.length > 0) setTab('create') })
+      .catch(error => setLoadError(errorText(error, 'تعذر تحميل أنواع الخصومات المسموحة'))).finally(() => setReady(true))
   }, [])
   useEffect(loadRows, [filters.view, filters.status, filters.targetPeriod])
   useEffect(() => { if (focusRequestId) { setTab('list'); setFilters(value => ({ ...value, view: 'all' })) } }, [focusRequestId])
@@ -251,8 +258,8 @@ function DeductionList({ rows, loading, filters, setFilters, reload, currency, r
                                 </ol>
                               </div>
                               <div>
-                                <p className="font-medium text-gray-700 mb-1">قيود الدفتر (بعد الاعتماد)</p>
-                                {detail.obligations.length === 0 ? <p className="text-gray-400">لا يُنشأ قيد قبل آخر اعتماد</p> : (
+                                <p className="font-medium text-gray-700 mb-1">الخصم على الشهور (بعد الاعتماد)</p>
+                                {detail.obligations.length === 0 ? <p className="text-gray-400">لا شيء قبل آخر اعتماد</p> : (
                                   <ul className="space-y-1">
                                     {detail.obligations.map(item => (
                                       <li key={item.id} className="text-gray-600">
@@ -260,7 +267,7 @@ function DeductionList({ rows, loading, filters, setFilters, reload, currency, r
                                         <span dir="ltr" className="font-mono">{item.targetPeriod}</span>: {formatDeductionMoney(item.amount)} — {item.statusLabel}
                                         {item.reservedPayrollRunId && item.status === 'PENDING' ? ` (محجوز لمسير #${item.reservedPayrollRunId})` : ''}
                                         {item.appliedPayrollRunId ? ` (مسير #${item.appliedPayrollRunId}، المحصل ${formatDeductionMoney(item.appliedAmount)})` : ''}
-                                        {item.carriedFromObligationId ? ` — مرحّل من قيد #${item.carriedFromObligationId}` : ''}
+                                        {item.carriedFromObligationId ? ' — مؤجل من شهر سابق' : ''}
                                         {item.status === 'SUSPENDED' && detail.capabilities.canDecideSuspended && (
                                           <span className="flex gap-1 mt-1">
                                             <button type="button" className="btn-primary text-xs px-2 py-0.5" onClick={() => open('resume', detail, item.id)}>استئناف</button>
@@ -273,19 +280,20 @@ function DeductionList({ rows, loading, filters, setFilters, reload, currency, r
                                 )}
                                 <p className="text-xs text-gray-500 mt-1">المحصل {formatDeductionMoney(detail.collectedAmount)} · المعكوس {formatDeductionMoney(detail.reversedAmount)}</p>
                               </div>
-                              <div>
-                                <p className="font-medium text-gray-700 mb-1">اعتراض الموظف</p>
-                                {detail.objections.length === 0 ? <p className="text-gray-400">لا اعتراض</p> : (
+                              {/* مسار الاعتراض لا يظهر إلا حين يعترض الموظف فعلاً — بلا خانة فارغة ولا شرح تقني */}
+                              {detail.objections.length > 0 && (
+                                <div>
+                                  <p className="font-medium text-gray-700 mb-1">اعتراض الموظف</p>
                                   <ul className="space-y-2">
                                     {detail.objections.map(item => (
                                       <li key={item.id} className="text-gray-600">
                                         <p className="whitespace-pre-wrap">«{item.text}»</p>
-                                        {item.response ? <p className="text-xs text-success-700 whitespace-pre-wrap">الرد: {item.response.text}</p> : <p className="text-xs text-red-700">بلا رد — {detail.capabilities.blockedByObjection ? 'يمنع الاعتماد حتى الرد' : 'لا يمنع الاعتماد'}</p>}
+                                        {item.response ? <p className="text-xs text-success-700 whitespace-pre-wrap">الرد: {item.response.text}</p> : <p className="text-xs text-red-700">بانتظار الرد</p>}
                                       </li>
                                     ))}
                                   </ul>
-                                )}
-                              </div>
+                                </div>
+                              )}
                             </div>
                           )}
                         </td>
@@ -411,19 +419,18 @@ function DeductionCreator({ creatable, currency, onCreated }: { creatable: Deduc
     if (value === 'BRANCH') { setDepartmentId(''); setTeamId('') }
     if (value === 'DEPARTMENT') setTeamId('')
   }
-  const runPreview = async () => {
+  // القرار هـ: «إرسال» يعاين داخليًا ثم يرسل ببصمة تلك المعاينة — بلا خطوة ثانية على المستخدم
+  const submit = async () => {
     const problem = deductionInputError(input, creatable.reasonMinLength, type)
     if (problem) { setError(problem); return }
     if (!selection.ids.length) { setError(selectionMode === 'EMPLOYEES' ? 'اختر موظفًا واحدًا على الأقل.' : `اختر ${SELECTION_LABELS[selectionMode]} من الفلاتر.`); return }
     setBusy(true); setError(''); setResult('')
-    try { const next = await previewDeductions(input, selection); setPreview(next); setPreviewKey(currentKey) }
-    catch (err) { setError(errorText(err, 'تعذرت المعاينة')) } finally { setBusy(false) }
-  }
-  const submit = async () => {
-    if (!preview || stale) { setError('أعد المعاينة بعد آخر تعديل قبل الإرسال.'); return }
-    setBusy(true); setError('')
+    let fresh: DeductionPreview
+    try { fresh = preview && !stale ? preview : await previewDeductions(input, selection); setPreview(fresh); setPreviewKey(currentKey) }
+    catch (err) { setError(errorText(err, 'تعذرت المعاينة')); setBusy(false); return }
+    if (!fresh.totals.ready) { setError('لا يوجد موظف جاهز للإرسال؛ راجع الأسباب بالجدول.'); setBusy(false); return }
     try {
-      const created = await submitDeductionBatch(input, selection, preview.previewHash)
+      const created = await submitDeductionBatch(input, selection, fresh.previewHash)
       setResult(`أُرسل ${created.created.length} خصمًا للاعتماد (دفعة #${created.batchId})${created.skipped.length ? `، وتُخطّي ${created.skipped.length} بسبب ظاهر في المعاينة` : ''}.`)
       setPreview(null); setSelected(new Set()); setExcluded(new Set()); setForm(value => ({ ...value, reason: '', confirmNotDuplicate: false }))
       onCreated()
@@ -453,23 +460,12 @@ function DeductionCreator({ creatable, currency, onCreated }: { creatable: Deduc
           <input type="month" className="input mt-1" dir="ltr" value={form.targetPeriod} onChange={event => setForm(value => ({ ...value, targetPeriod: event.target.value }))} />
           <span className="text-xs text-gray-400">الشهر الحالي للمسير: {creatable.currentPeriod} (الدورة تبدأ يوم {creatable.cycleStartDay})</span>
         </label>
-        <label className="text-sm text-gray-600">تاريخ الواقعة
-          <input type="date" className="input mt-1" dir="ltr" max={creatable.today} value={form.incidentDate} onChange={event => setForm(value => ({ ...value, incidentDate: event.target.value }))} />
-        </label>
-        {type.installmentAllowed && (
-          <label className="text-sm text-gray-600">عدد الأقساط (حتى {type.maxInstallments}){type.calcMethod === 'DAYS_OF_SALARY' || type.calcMethod === 'HOURS_OF_SALARY' ? ' — تُقسم الوحدات ويُسعَّر كل قسط بشهره' : ''}
-            <input type="number" className="input mt-1" min={1} max={type.maxInstallments} value={form.installments} onChange={event => setForm(value => ({ ...value, installments: Math.max(1, Math.min(type.maxInstallments, Number(event.target.value) || 1)) }))} />
+        {/* القرار هـ: تاريخ الواقعة اليوم، وقسط واحد، ولا مرجع مستند إلا حيث يشترطه النوع، ولا صندوق حدود */}
+        {type.requiresAttachment && (
+          <label className="text-sm text-gray-600">مرجع المستند (إلزامي لهذا النوع)
+            <input className="input mt-1" value={form.attachmentRef} maxLength={300} onChange={event => setForm(value => ({ ...value, attachmentRef: event.target.value }))} />
           </label>
         )}
-        <label className="text-sm text-gray-600">مرجع المستند{type.requiresAttachment ? ' (إلزامي)' : ' (اختياري)'}
-          <input className="input mt-1" value={form.attachmentRef} maxLength={300} onChange={event => setForm(value => ({ ...value, attachmentRef: event.target.value }))} />
-        </label>
-      </div>
-      <div className="text-xs text-gray-500 bg-gray-50 rounded-xl p-3">
-        حدود النوع: الحد الأدنى {formatDeductionMoney(type.minAmount)}، الحد الأعلى {type.maxAmount ? formatDeductionMoney(type.maxAmount) : 'بلا'}،
-        أقصى {type.maxPctOfGross ?? '—'}% من إجمالي الراتب للخصم الواحد
-        {type.valueStep ? `، خطوة المدخل ${type.valueStep}` : ''}
-        ، عمر الواقعة حتى {type.maxIncidentAgeDays} يومًا. السلسلة: {type.approvalSteps.map(role => DEDUCTION_ROLE_LABELS[role]).join(' ← ')}.
       </div>
       <label className="block text-sm text-gray-600">سبب الخصم ({creatable.reasonMinLength} حرفًا على الأقل — {form.reason.trim().length})
         <textarea className="input mt-1 min-h-[70px]" maxLength={1000} value={form.reason} onChange={event => setForm(value => ({ ...value, reason: event.target.value }))} />
@@ -527,19 +523,16 @@ function DeductionCreator({ creatable, currency, onCreated }: { creatable: Deduc
       {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">{error}</div>}
       {result && <div role="status" className="bg-success-50 text-success-700 rounded-xl p-3 text-sm flex items-center gap-2"><CheckCircle2 size={16} />{result}</div>}
       <div className="flex flex-wrap gap-2">
-        <button type="button" className="btn-secondary" onClick={runPreview} disabled={busy}>{busy ? 'جارٍ…' : 'معاينة الأرقام'}</button>
-        <button type="button" className="btn-primary" onClick={submit} disabled={busy || !preview || stale || preview.totals.ready === 0}>إرسال للاعتماد</button>
-        {stale && <span className="text-xs text-warning-700 self-center">تغيّرت المدخلات أو الاستبعاد بعد المعاينة؛ أعد المعاينة.</span>}
+        <button type="button" className="btn-primary" onClick={submit} disabled={busy}>{busy ? 'جارٍ…' : 'إرسال للاعتماد'}</button>
       </div>
 
-      {preview && (
+      {preview && (preview.totals.failed > 0 || preview.totals.excluded > 0) && (
         <div className="space-y-2">
           <div className="flex flex-wrap gap-3 text-sm">
             <Badge className="bg-success-100 text-success-700">جاهز {preview.totals.ready}</Badge>
             <Badge className="bg-gray-100 text-gray-600">مستبعد {preview.totals.excluded}</Badge>
             <Badge className="bg-red-100 text-red-700">مرفوض {preview.totals.failed}</Badge>
-            {preview.totals.escalated > 0 && <Badge className="bg-warning-100 text-warning-700">مصعّد {preview.totals.escalated}</Badge>}
-            <span className="font-medium">الإجمالي: {formatDeductionMoney(preview.totals.totalAmount)} {currency}</span>
+            <span className="font-medium">إجمالي المجموعة ({preview.totals.ready} موظف): {formatDeductionMoney(preview.totals.totalAmount)} {currency}</span>
           </div>
           {hasDuplicates && (
             <label className="text-sm flex items-center gap-2 text-warning-700">
@@ -807,77 +800,6 @@ function DeductionTypesPanel({ onChanged }: { onChanged: () => void }) {
           </div>
         </div>
       )}
-    </div>
-  )
-}
-
-// ===== DD-13: التقارير بنطاق المستخدم مع تصدير جدولي بنفس الأعمدة المعروضة =====
-function ReportSection({ title, note, headers, rows, file, empty }: { title: string; note?: string; headers: string[]; rows: Array<Array<string | number>>; file: string; empty: string }) {
-  return (
-    <section className="border border-gray-100 rounded-xl p-3 space-y-2">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <h4 className="font-medium text-gray-800">{title}</h4>
-        <button type="button" className="btn-secondary text-xs px-2 py-1 flex items-center gap-1" disabled={!rows.length} onClick={() => downloadCsv(`deductions-${file}-${csvDateStamp()}.csv`, headers, rows)}><Download size={14} />تصدير</button>
-      </div>
-      {note && <p className="text-xs text-gray-500">{note}</p>}
-      {rows.length === 0 ? <p className="text-sm text-gray-400">{empty}</p> : (
-        <div className="overflow-x-auto">
-          <table className="w-full text-sm">
-            <thead><tr className="table-header">{headers.map(header => <th key={header} className="text-right px-3 py-2 whitespace-nowrap">{header}</th>)}</tr></thead>
-            <tbody>{rows.map((row, index) => <tr key={index} className="table-row">{row.map((cell, cellIndex) => <td key={cellIndex} className="table-cell text-xs">{cell}</td>)}</tr>)}</tbody>
-          </table>
-        </div>
-      )}
-    </section>
-  )
-}
-
-function DeductionReportsPanel({ currency }: { currency: string }) {
-  const [filters, setFilters] = useState({ fromPeriod: '', toPeriod: '' })
-  const [report, setReport] = useState<DeductionReport | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [error, setError] = useState('')
-  const load = () => {
-    setLoading(true); setError('')
-    fetchDeductionReports({ fromPeriod: filters.fromPeriod || undefined, toPeriod: filters.toPeriod || undefined })
-      .then(setReport).catch(err => setError(errorText(err, 'تعذر تحميل تقارير الخصومات'))).finally(() => setLoading(false))
-  }
-  // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(load, [])
-  const m = (value: string) => formatDeductionMoney(value)
-  const ledgerRows = (rows: DeductionReport['ledger']['carried']) => rows.map(row => [row.obligationId, row.requestId ?? '—', row.fullName, row.employeeCode ?? '', row.typeName ?? '', m(row.amount), row.targetPeriod ?? '', row.statusLabel, row.carryDepth, row.reason ?? ''])
-  const ledgerHeaders = ['القيد', 'الطلب', 'الموظف', 'الكود', 'النوع', `المبلغ (${currency})`, 'الشهر', 'الحالة', 'مرات الترحيل', 'الملاحظة']
-  return (
-    <div className="space-y-3">
-      <div className="flex flex-wrap items-end gap-3">
-        <label className="text-sm text-gray-600">من شهر<input type="month" className="input mt-1" dir="ltr" value={filters.fromPeriod} onChange={event => setFilters(value => ({ ...value, fromPeriod: event.target.value }))} /></label>
-        <label className="text-sm text-gray-600">إلى شهر<input type="month" className="input mt-1" dir="ltr" value={filters.toPeriod} onChange={event => setFilters(value => ({ ...value, toPeriod: event.target.value }))} /></label>
-        <button type="button" className="btn-secondary flex items-center gap-1" onClick={load} disabled={loading}><RefreshCw size={16} />{loading ? 'جارٍ…' : 'عرض'}</button>
-        {report && <span className="text-xs text-gray-500">الفترة {report.fromPeriod} ← {report.toPeriod} · تُقرأ من دفتر المديونيات ولقطات المسيرات بنطاقك</span>}
-      </div>
-      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
-      {report && <>
-        <ReportSection title="المطابقة: سطور الخصم المصنف في المسيرات = قيود الدفتر" file="reconciliation" empty="لا مسيرات معتمدة أو مصروفة بخصومات مصنفة في الفترة (أو لا تملك صلاحية عرض الخصومات)."
-          note="أي فرق غير صفري استثناء يُراجع قبل الصرف."
-          headers={['المسير', 'الاسم', 'الشهر', 'الحالة', 'السطور', `من المسير (${currency})`, `من الدفتر (${currency})`, 'الفرق']}
-          rows={report.reconciliation.map(row => [row.runId, row.runName ?? '', row.period, row.status === 'PAID' ? 'مصروف' : 'معتمد', row.lines, m(row.breakdownTyped), m(row.ledgerTyped), row.difference === '0.00' ? '0.00' : `فرق ${m(row.difference)}`])} />
-        <ReportSection title="الخصومات بحسب النوع والجهة المُنزِلة" file="by-type" empty="لا قيود في الفترة."
-          headers={['الشهر', 'النوع', 'الفئة', 'الجهة المُنزِلة', 'الطلبات', `المستحق (${currency})`, `المحصل (${currency})`, `المعكوس (${currency})`]}
-          rows={report.byType.map(row => [row.period, row.typeName ?? row.typeCode ?? '', row.categoryLabel ?? '', row.basisLabel, row.requests, m(row.due), m(row.collected), m(row.reversed)])} />
-        <ReportSection title="الخصومات بحسب الموظف" file="by-employee" empty="لا خصومات قائمة خلال 12 شهرًا."
-          note={`يُوسم من تجاوز ${report.repeatThreshold} خصومات خلال 90 يومًا.`}
-          headers={['الموظف', 'الكود', '3 أشهر (عدد)', `3 أشهر (${currency})`, '6 أشهر (عدد)', `6 أشهر (${currency})`, '12 شهرًا (عدد)', `12 شهرًا (${currency})`, 'خلال 90 يومًا', 'الأنواع', 'تكرار']}
-          rows={report.byEmployee.map(row => [row.fullName, row.employeeCode ?? '', row.last3.count, m(row.last3.total), row.last6.count, m(row.last6.total), row.last12.count, m(row.last12.total), row.last90Count, row.types.join('، '), row.repeatFlag ? 'متكرر' : ''])} />
-        <ReportSection title="المرحّل بسبب حماية الصافي" file="carried" empty="لا أقساط مرحّلة مفتوحة." headers={ledgerHeaders} rows={ledgerRows(report.ledger.carried)} />
-        <ReportSection title="المعلّق بانتظار قرار الموارد البشرية" file="suspended" empty="لا أقساط معلقة." headers={ledgerHeaders} rows={ledgerRows(report.ledger.suspended)} />
-        <ReportSection title="قيود بلا مسير" file="without-run" empty="لا قيود متأخرة بلا مسير." headers={ledgerHeaders} rows={ledgerRows(report.ledger.withoutRun)} />
-        <ReportSection title="زمن دورة الاعتماد" file="cycle-time" empty="لا قرارات اعتماد مسجلة."
-          note={`الطلبات ${report.escalation.total} · المصعّدة بالمبلغ ${report.escalation.escalated} (${report.escalation.ratePct}%) · المصعّدة بانتهاء المهلة ${report.escalation.slaEscalations}`}
-          headers={['الدور', 'عدد القرارات', 'متوسط الساعات', 'أقصى الساعات']} rows={report.cycleTime.map(row => [row.roleLabel, row.acted, row.avgHours, row.maxHours])} />
-        <ReportSection title="اعتراضات الموظفين" file="objections" empty="لا اعتراضات."
-          headers={['الطلب', 'الموظف', 'النوع', 'الاعتراض', 'الرد', 'حالة الطلب']}
-          rows={report.objections.map(row => [row.requestId, row.fullName, row.typeName ?? '', row.text ?? '', row.response ?? 'بلا رد', DEDUCTION_STATUS_META[row.requestStatus as DeductionStatus]?.label ?? row.requestStatus])} />
-      </>}
     </div>
   )
 }

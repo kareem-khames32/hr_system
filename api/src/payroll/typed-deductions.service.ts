@@ -16,6 +16,8 @@ import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
+import { RequestType } from '../requests/entities/request-type.entity'
+import { audienceSubjectOf, parseRequestAudience, requestAudienceAllows } from '../requests/request-audience'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { PayrollDecimal } from './payroll-decimal'
 import { salaryPayrollPeriodBounds } from './payroll-period-salary'
@@ -315,6 +317,23 @@ export class TypedDeductionsService {
     return !!employee && (scope === null || scope === employee.branchId)
   }
 
+  // ===== B4 (قرار المالك): جمهور نوع الطلب المالي يحكم القدرة فعلًا =====
+  // «خصم» و«مكافأة» كارتان في المجموعة المالية؛ من يخفيه عنه visibleTo لا يراه في «طلب جديد»
+  // ولا يُنشئ منه ولو أرسل مباشرةً إلى /deductions أو /bonuses.
+  // المقيّم واحد مشترك مع محرك الطلبات (requests/request-audience.ts) — إعداد واحد وإجابة واحدة.
+  async assertMoneyRequestVisible(em: EntityManager, user: JwtPayload, typeCode: string, label: string) {
+    const type = await em.getRepository(RequestType).findOne({ where: { code: typeCode } })
+    if (!type) return
+    const audience = parseRequestAudience(type.visibleTo)
+    // قسم المستخدم لا يُقرأ إلا لجمهور «أقسام»
+    const self = audience?.mode === 'departments' && user.employeeId
+      ? await em.getRepository(Employee).findOne({ where: { id: user.employeeId }, select: { id: true, departmentId: true } })
+      : null
+    if (!requestAudienceAllows(type.visibleTo, audienceSubjectOf(user, self), 'submit')) {
+      throw new ForbiddenException({ code: 'MONEY_REQUEST_NOT_VISIBLE', message: `طلب ${label} غير متاح لك` })
+    }
+  }
+
   private async orgNames(em: EntityManager): Promise<OrgNames> {
     return {
       branches: new Map((await em.getRepository(Branch).find({ select: { id: true, name: true } })).map(row => [row.id, row.name])),
@@ -585,6 +604,7 @@ export class TypedDeductionsService {
   // ===== الإنشاء الفردي (DD-05) =====
   async create(user: JwtPayload, dto: CreateDeductionDto) {
     const id = await this.manager.transaction(async em => {
+      await this.assertMoneyRequestVisible(em, user, 'PAYROLL_DEDUCTION', 'الخصم')
       const ctx = await this.context(em, user, dto)
       const employee = await em.getRepository(Employee).findOneBy({ id: dto.employeeId })
       if (!employee) {
@@ -670,6 +690,7 @@ export class TypedDeductionsService {
 
   async bulkSubmit(user: JwtPayload, dto: DeductionBulkSubmitDto) {
     const result = await this.manager.transaction(async em => {
+      await this.assertMoneyRequestVisible(em, user, 'PAYROLL_DEDUCTION', 'الخصم')
       const { ctx, evaluations, response, ignoredOutOfScope } = await this.buildPreview(em, user, dto, true)
       if (response.previewHash !== dto.previewHash) {
         return { stale: response }

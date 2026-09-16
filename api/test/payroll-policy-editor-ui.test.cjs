@@ -82,6 +82,8 @@ test('an active set is edited in place: one «حفظ وتفعيل» applies the 
 
 test('«طريقة الخصم»: every charge rule of the set offers «زي الإعدادات العامة» (empty = the general value), with the absence factor', () => {
   const html = plain(renderToStaticMarkup(React.createElement(PayrollPolicyChargeRulesPanel, { summary: summary({ canEdit: true, canPublish: true }), version: version(), onSaved() {} })))
-  for (const text of ['طريقة الخصم', 'خصم التأخير', 'شرائح التأخير', 'خصم الخروج المبكر (الوردية الثابتة)', 'خصم نقص ساعات العمل', 'طريقة خصم النقص',
-    'معامل الغياب بلا إذن (أيام)', 'زي الإعدادات العامة', 'حفظ طريقة الخصم']) assert.ok(html.includes(text), text)
+  for (const text of ['طريقة الخصم', 'خصم التأخير', 'شرائح خصم التأخير', 'خصم الخروج المبكر (الوردية الثابتة)', 'خصم نقص ساعات العمل', 'طريقة خصم النقص',
+    'معامل الغياب بلا إذن (أيام)', 'زي الإعدادات العامة', 'حفظ طريقة الخصم',
+    // أ1: معادلة بلا مجموعة شرائح تقول ذلك صراحةً بدل أن يتحول خصم التأخير إلى الدقيقة صامتًا
+    'لا توجد شرائح الآن: كل دقيقة تأخير تُخصم بسعر الدقيقة.']) assert.ok(html.includes(text), text)
 })

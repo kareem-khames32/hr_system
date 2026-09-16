@@ -53,9 +53,10 @@ test('EX-09: overlapping approved windows fail closed, but consecutive windows c
   assert.equal(exemptionOnDate(dayAfterEnd, '2026-06-20').id, 2)
 })
 
-test('EX-11/12: defaults preserve unpaid deductions and disable overtime; false overrides are explicit decisions', () => {
+test('أ7: المستثنى من البصمة بلا خصومات إطلاقًا وبلا إضافي بالقيم الافتراضية؛ والتجاوز الفردي قرار صريح', () => {
+  // أ7 (16 سبتمبر): الافتراضي صار «لا يُخصم ولا يستحق إضافيًا» — لا خصم إجازة بلا أجر للمستثنى ما لم يُفعَّل الإعداد صراحةً.
   assert.deepEqual(exemptionPolicyOnDate([window()], '2026-06-17'), {
-    isExempt: true, exemptionId: 1, overtimeEligible: false, unpaidLeaveDeductible: true,
+    isExempt: true, exemptionId: 1, overtimeEligible: false, unpaidLeaveDeductible: false,
     requiresCheckinForPresence: false, overtimeSource: 'DEFAULT', unpaidLeaveSource: 'DEFAULT',
   })
   const overridden = exemptionPolicyOnDate([window({ overtimeEligibleOverride: true, unpaidLeaveDeductibleOverride: false,

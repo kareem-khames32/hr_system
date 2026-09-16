@@ -194,7 +194,7 @@ export default function TrainingPage() {
         {/* Page Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">التدريب والتطوير</h1>
+            <h1 className="text-2xl font-bold text-gray-800">الدورات التدريبية</h1>
             <p className="text-gray-500 mt-1">منصة التعلم الإلكتروني للموظفين</p>
           </div>
           <div className="flex items-center gap-3">

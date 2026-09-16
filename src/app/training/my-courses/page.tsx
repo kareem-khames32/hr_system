@@ -137,7 +137,7 @@ export default function MyCoursesPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">دوراتي التدريبية</h1>
+            <h1 className="text-2xl font-bold text-gray-800">دوراتي</h1>
             <p className="text-gray-500 mt-1">متابعة تقدمك في الدورات المسجلة</p>
           </div>
           <Link href="/training" className="btn-primary flex items-center gap-2">

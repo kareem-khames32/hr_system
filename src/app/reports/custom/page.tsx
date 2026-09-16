@@ -99,7 +99,7 @@ export default function CustomReportsPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">منشئ التقارير المخصصة</h1>
+            <h1 className="text-2xl font-bold text-gray-800">تقارير مخصصة</h1>
             <p className="text-gray-500 mt-1">إنشاء تقارير مخصصة حسب احتياجاتك</p>
           </div>
         </div>

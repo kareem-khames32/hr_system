@@ -122,12 +122,17 @@ export const chainsSeed: ChainSeed[] = [
 
 // ===== أنواع الطلبات (55) — chain بالكود، والحقول المطلوبة للتقديم =====
 
+// ب4: جمهور «خصم» و«مكافأة» الافتراضي — من يتعامل مع مال غيره؛ المالك يوسّعه من «بانِي أنواع الطلبات»
+export const MONEY_REQUEST_AUDIENCE = '{"mode":"roles","ids":["super_admin","hr_manager","branch_manager"]}'
+
 export interface TypeSeed {
   code: string
   nameAr: string
   category: string
   chain: string | null
   handler: string
+  // JSON جمهور النوع (ب4) — من يقدر يقدّمه؛ الفارغ = متاح للجميع
+  visibleTo?: string
   requiredFields?: string[]
   affectsBalance?: boolean
   securityRoute?: boolean
@@ -175,6 +180,12 @@ export const typesSeed: TypeSeed[] = [
   { code: 'PER_DIEM', nameAr: 'بدل سفر/انتداب', category: 'financial', chain: 'CHAIN_MANAGER_FINANCE', handler: 'payroll_allowance', requiredFields: ['amount'], phase: 'P3' },
   { code: 'EARLY_LOAN_SETTLEMENT', nameAr: 'سداد سلفة مبكر', category: 'financial', chain: 'CHAIN_FINANCE', handler: 'loans_installments', requiredFields: ['loanId'], phase: 'P3' },
   { code: 'DEDUCTION_OBJECTION', nameAr: 'اعتراض على خصم', category: 'financial', chain: 'CHAIN_HR_FINANCE', handler: 'payroll_adjustment', requiredFields: ['reason'], phase: 'P2' },
+  // ب3/ب4 (قرار المالك 16 سبتمبر): «خصم» و«مكافأة» كارتان في المجموعة المالية — بابا دخول لا أكثر:
+  // اختيار الكارت يفتح مساحة الخصومات أو المكافآت جاهزة، والإنشاء يبقى فيهما بدفترهما وسلسلتهما
+  // (المحرك العام يرفضهما برسالة تدل على الشاشة)، فلا دورة اعتماد خاصة بهما هنا: chain = null.
+  // الجمهور يطابق ترحيل 20260916_039 حتى تتطابق القاعدة المبذورة الجديدة مع القاعدة الحية.
+  { code: 'PAYROLL_DEDUCTION', nameAr: 'خصم', category: 'financial', chain: null, handler: 'none', phase: 'P1', visibleTo: MONEY_REQUEST_AUDIENCE },
+  { code: 'PAYROLL_BONUS', nameAr: 'مكافأة', category: 'financial', chain: null, handler: 'none', phase: 'P1', visibleTo: MONEY_REQUEST_AUDIENCE },
 
   // ===== 4) الحالة الوظيفية =====
   { code: 'PROMOTION', nameAr: 'ترقية', category: 'employment_status', chain: 'CHAIN_MANAGER_HR_EXEC', handler: 'employee_update_promotions', requiredFields: ['toTitle'], phase: 'P2' },
@@ -341,13 +352,16 @@ export const configSeed: Array<{ key: string; value: string }> = [
   // أيام طلب السلفة من الشهر (من يوم إلى يوم) — الأصل مفتوح طول الشهر
   { key: 'loan.request_from_day', value: '1' },
   { key: 'loan.request_to_day', value: '31' },
+  // ب2: مفتاح «اقفل طلب السلفة دلوقتي» — الأصل مفتوح، ويُقفل من «سياسات النظام» بلا تغيير أيام النافذة
+  { key: 'loan.request_open', value: 'true' },
   // PL-01: افتراضات تُنسخ إلى السياسة الجديدة فقط؛ لا تعيد تسعير أي مسير قائم.
   ...PAYROLL_POLICY_DEFAULT_CONFIG_SEED,
   // قرارات المالك D1/D2/D3/D10/D11 (14 سبتمبر) — PAYROLL_DECISIONS_2026-09-14.md
   ...PAYROLL_DECISION_CONFIG_SEED,
   // ⑨ / EX-11 وEX-12: الاستثناء يوقف جزاءات الحضور، ولا يُسقط الدين أو الإجازة بلا أجر.
   { key: 'payroll.exempt_overtime_eligible', value: 'false' },
-  { key: 'payroll.exempt_unpaid_leave_deductible', value: 'true' },
+  // أ7 (16 سبتمبر): المستثنى من البصمة بلا خصومات إطلاقًا — الإجازة بلا أجر لا تُخصم له إلا بتفعيل صريح.
+  { key: 'payroll.exempt_unpaid_leave_deductible', value: 'false' },
   { key: 'payroll.exemption_reason_min_length', value: '20' },
   // C2 / الخطوة 25 (DD-03/05): الخصومات المصنفة — أقل طول للسبب، نافذة كشف التكرار بالساعات،
   // إنشاء المدير الهيكلي (مباشر/فريق/قسم/فرع) بحسب نطاق النوع، وحد الإنشاء الجماعي في الدفعة.

@@ -112,4 +112,7 @@ node api/scripts/env-check.cjs --launch
 
 ## الحالة على hr_system
 
+تغييرات البيانات التي يمنعها الحارسان (حذف صف بقرار موثق) تُسجَّل هنا كملف `.md` بجانب الترحيلات — المُرحّل لا يكتشف إلا `.sql` و`.cjs`:
+`payroll/20260916_037_onboarding_task_145_cleanup.md` (حذف مهمة التهيئة 145 وحدها بحارس مركّب، بإثبات قبل/بعد).
+
 آخر تطبيق وتحقق: انظر أحدث `docs/migrations/runs/*_apply_hr_system.json` وناتج `node api/scripts/db-migrate.cjs verify`. نقاط الرجوع: نقطة الأساس قبل الرواتب (قبل 001–013) ونسخ `D:/projects/hr_system_backups/freeze/` (كل واحدة قبل التطبيق الذي أخذها).

@@ -96,7 +96,7 @@ export default function OvertimeRequestSummary({ overtime, reviewRequired }: {
         <ol className="space-y-2">
           {overtime.events.map(event => <li key={event.id} className="rounded-lg bg-white p-3 text-sm">
             <div className="flex justify-between gap-2 flex-wrap"><p className="font-medium">{eventLabels[event.eventType] ?? 'تحديث سجل الإضافي'}{event.stepOrder != null ? ` · الخطوة ${event.stepOrder}` : ''}</p><span className="text-xs text-gray-500">{time(event.createdAt)}</span></div>
-            <p className="text-xs text-gray-500 mt-1">{event.actorUserId ? `بواسطة المستخدم #${event.actorUserId}` : 'بواسطة النظام'}</p>
+            <p className="text-xs text-gray-500 mt-1">{event.actorUserId ? `بواسطة ${event.actorName || 'أحد المستخدمين'}` : 'بواسطة النظام'}</p>
             {event.beforeMinutes != null && event.approvedMinutes != null && <p className="mt-1">من {duration(event.beforeMinutes)} إلى {duration(event.approvedMinutes)}</p>}
             {event.reason && <p className="text-gray-700 mt-1 whitespace-pre-wrap">{event.reason}</p>}
           </li>)}

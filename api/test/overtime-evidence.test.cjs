@@ -66,3 +66,14 @@ test('بصمة الأدلة ثابتة حتى قراءة جديدة وتتغير
   assert.equal(overtimeEvidenceFingerprint(value), overtimeEvidenceFingerprint(JSON.parse(JSON.stringify(value))))
   assert.notEqual(overtimeEvidenceFingerprint(value), overtimeEvidenceFingerprint({ ...value, rawMinutes: 160 }))
 })
+
+// «مكتشف» لا يصل لدورة الاعتماد: الشاشة تقول السبب بدل أن يبقى صامتًا
+test('سجل العمل الإضافي يعرض سبب النافذة المقفولة وحد الأثر الرجعي', () => {
+  const fs = require('node:fs')
+  const page = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'app', 'attendance', 'overtime', 'page.tsx'), 'utf8')
+  assert.match(page, /نافذة الإضافي مقفولة/)
+  assert.match(page, /حد الأثر الرجعي/)
+  assert.match(page, /policy\?\.backdateDays/)
+  assert.match(page, /window\?\.open/)
+  assert.match(page, /routingBlock\(e\)/)
+})

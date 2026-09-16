@@ -45,17 +45,71 @@ test('API client: every call goes through apiFetch, bulk submits the preview has
   }
 })
 
-test('workspace: single employee, a selection, a team, a department or a branch; real-number preview with exclude/return; stale preview blocks sending; catalog behind bonuses.manage', () => {
+test('workspace (money-requests simplification): one selection list (an employee is a group of one), a team, a department or a branch; «إرسال» previews internally and sends that preview hash; the table appears only when somebody is excluded or refused; catalog behind bonuses.manage', () => {
   const workspace = read('src/components/payroll/BonusesWorkspace.tsx')
-  for (const text of ["SINGLE: 'مكافأة فردية (موظف واحد)'", "EMPLOYEES: 'مجموعة مختارة'", "TEAM: 'فريق'", "DEPARTMENT: 'قسم (مع أقسامه الفرعية)'", "BRANCH: 'فرع'",
-    'معاينة الأرقام', 'إرسال للاعتماد', "'استبعاد' : 'إرجاع'", 'excludeEmployeeIds: [...excluded]', 'أعد المعاينة بعد آخر تعديل قبل الإرسال.',
-    'disabled={busy || !preview || stale || preview.totals.ready === 0}', "setCanManage(can('bonuses.manage'))", '{canManage && <button', 'لا مكافأة لنفسك ولا لمن يعلوك',
-    'شهر المسير المستهدف', 'createBonus({ ...input, employeeId: singleId })', 'submitBonusBatch(input, selection, preview.previewHash)', 'err.details?.preview']) {
+  for (const text of ["EMPLOYEES: 'موظف أو مجموعة مختارة'", "TEAM: 'فريق'", "DEPARTMENT: 'قسم (مع أقسامه الفرعية)'", "BRANCH: 'فرع'",
+    'إرسال للاعتماد', "'استبعاد' : 'إرجاع'", 'excludeEmployeeIds: [...excluded]', "setCanManage(can('bonuses.manage'))", '{canManage && <button',
+    'لا مكافأة لنفسك ولا لمن يعلوك', 'شهر المسير المستهدف', 'submitBonusBatch(input, selection, fresh.previewHash)', 'err.details?.preview',
+    'fresh = preview && !stale ? preview : await previewBonuses(input, selection)',
+    '{preview && (preview.totals.failed > 0 || preview.totals.excluded > 0) && (',
+    'إجمالي المجموعة ({preview.totals.ready} موظف)']) {
     assert.ok(workspace.includes(text), text)
   }
+  // «مكافأة فردية» المنفصلة و«معاينة الأرقام» كخطوة ثانية لم يعودا
+  for (const gone of ['SINGLE', 'معاينة الأرقام', 'singleId', 'أعد المعاينة بعد آخر تعديل قبل الإرسال.']) {
+    assert.ok(!workspace.includes(gone), gone)
+  }
+  // رابط «بانتظار موافقتي» من صندوق الموافقات يفتح الشاشة على العرض المطلوب
+  assert.ok(workspace.includes("if (view === 'pending_me' || view === 'created' || view === 'all') setFilters(value => ({ ...value, view }))"))
   // الشاشة لا تقرر شيئًا ماليًا: لا تنسيق أرقام محلي مباشر ولا حساب مبلغ في الواجهة
   assert.doesNotMatch(workspace, /toLocaleString\(/)
   assert.doesNotMatch(workspace, /Number\([^)]*\)\s*\*/, 'no amount arithmetic in the screen')
+})
+
+test('money requests (B3/B4): the financial catalog cards open the existing workspaces, the generic engine refuses them, and the audience gates creating', () => {
+  const requests = read('src/app/requests/page.tsx')
+  assert.ok(requests.includes("if (code === 'PAYROLL_DEDUCTION') return can('deductions.manage') ? '/payroll/deductions?tab=create' : '/my/deductions?tab=create'"))
+  assert.ok(requests.includes("if (code === 'PAYROLL_BONUS') return can('bonuses.manage') ? '/payroll/bonuses?tab=create' : '/my/bonuses?tab=create'"))
+  assert.ok(requests.includes('const workspace = moneyWorkspaceRoute(t.code)'), 'the card routes instead of opening a generic form')
+  const engine = read('api/src/requests/requests.service.ts')
+  assert.ok(engine.includes("PAYROLL_DEDUCTION: 'الخصم يُرفع من شاشة الخصومات"), 'the generic engine refuses with a message that names the screen')
+  assert.ok(engine.includes("PAYROLL_BONUS: 'المكافأة تُرفع من شاشة المكافآت"))
+  // كلا الكارتين يفتح تبويب الإنشاء فعلاً: كل مساحة تقرأ ?tab=create بنفسها،
+  // فرابط /my/bonuses?tab=create يعمل مثل /my/deductions?tab=create بلا تمرير prop من الصفحة.
+  assert.ok(read('src/components/payroll/BonusesWorkspace.tsx').includes("(initialTab === 'create' || urlParam('tab') === 'create') && value.types.length > 0"))
+  assert.ok(read('src/components/payroll/TypedDeductionsWorkspace.tsx').includes("urlParam('tab') === 'create' && value.types.length > 0"))
+  // مقيّم جمهور واحد لا اثنين: محرك الطلبات وشاشتا المال يسألون نفس الدالة بنفس الاستثناءات
+  const audience = read('api/src/requests/request-audience.ts')
+  assert.ok(audience.includes('export function requestAudienceAllows('))
+  // ب4: المالك وحده خارج القيد في البابين؛ بانِي الأنواع يرى الكتالوج كله ولا يقدّم نوعًا يستثنيه جمهوره
+  assert.ok(audience.includes("if (subject.role === 'super_admin' || permissions.includes('*')) return true"), 'owner bypass at both doors')
+  assert.ok(audience.includes("if (purpose === 'catalog' && permissions.includes('request_types.manage')) return true"), 'the type builder bypass is catalog-only')
+  assert.ok(engine.includes("this.audienceAllows(type, user, requester, 'submit')"), 'submission asks with the submit purpose')
+  assert.ok(engine.includes('requestAudienceAllows(type.visibleTo, audienceSubjectOf(user, emp), purpose)'), 'the engine delegates to the shared evaluator')
+  // ج1: التقديم نيابةً عن موظف آخر لا يوقفه جمهور النوع
+  assert.ok(engine.includes("if (requesterId === actorEmployeeId && !this.audienceAllows(type, user, requester, 'submit'))"))
+  const deductions = read('api/src/payroll/typed-deductions.service.ts')
+  assert.ok(deductions.includes("from '../requests/request-audience'"), 'the money screens reuse the engine evaluator')
+  assert.ok(deductions.includes("audienceSubjectOf(user, self), 'submit'"), 'the money screens enforce the audience at submission too')
+  assert.ok(deductions.includes('async assertMoneyRequestVisible(em: EntityManager, user: JwtPayload, typeCode: string, label: string)'), 'one shared audience helper')
+  assert.ok(deductions.includes("await this.assertMoneyRequestVisible(em, user, 'PAYROLL_DEDUCTION', 'الخصم')"))
+  assert.ok(read('api/src/payroll/bonuses.service.ts').includes("await this.org.assertMoneyRequestVisible(em, user, 'PAYROLL_BONUS', 'المكافأة')"))
+})
+
+test('B4: the seeded money types match the live rows — one row each, no approval chain, and an audience limited to the people the owner picks', () => {
+  const { typesSeed, MONEY_REQUEST_AUDIENCE } = require('../src/seed/requests-seed.data')
+  for (const code of ['PAYROLL_DEDUCTION', 'PAYROLL_BONUS']) {
+    const rows = typesSeed.filter(row => row.code === code)
+    assert.equal(rows.length, 1, `${code}: صف واحد لا اثنان`)
+    assert.equal(rows[0].chain, null, `${code}: بلا سلسلة اعتماد — الإنشاء في شاشته`)
+    assert.equal(rows[0].visibleTo, MONEY_REQUEST_AUDIENCE, code)
+  }
+  assert.deepEqual(JSON.parse(MONEY_REQUEST_AUDIENCE), { mode: 'roles', ids: ['super_admin', 'hr_manager', 'branch_manager'] })
+  assert.ok(read('api/src/seed/seed-requests.ts').includes('if (t.chain === null) {'), 'the seeder creates no empty chain for them')
+  const migration = read('docs/migrations/payroll/20260916_039_money_request_audience_and_exemption_threshold.sql')
+  assert.ok(migration.includes('{"mode":"roles","ids":["super_admin","hr_manager","branch_manager"]}'), 'the migration ships the same audience')
+  const statements = migration.split('\n').filter(line => !line.trim().startsWith('--')).join('\n')
+  assert.ok(!/\b(DROP|DELETE|TRUNCATE)\b/.test(statements), 'الترحيل إضافي فقط')
 })
 
 test('pages: /payroll/bonuses inside MainLayout with the admin workspace, opened prefilled from the run («مكافأة»), without the legacy BONUS requests table; /my/bonuses shows the employee his bonuses plus the manager workspace', () => {
@@ -68,7 +122,8 @@ test('pages: /payroll/bonuses inside MainLayout with the admin workspace, opened
   assert.doesNotMatch(admin, /طلبات المكافآت القديمة|COMPLETED:/)
   // تغيير نوع المكافأة لا يُسقط الموظف القادم من رابط المسير: يُعاد اختياره متى كان داخل نطاق النوع الجديد
   const workspace = read('src/components/payroll/BonusesWorkspace.tsx')
-  assert.ok(workspace.includes('if (singleId) setPendingEmployeeId(singleId)'), 'changing the bonus type keeps the chosen employee')
+  assert.ok(workspace.includes('if (selected.size === 1) setPendingEmployeeId([...selected][0])'), 'changing the bonus type keeps the chosen employee')
+  assert.ok(workspace.includes("setSelectionMode('EMPLOYEES'); setSelected(new Set([pendingEmployeeId]))"))
   assert.doesNotMatch(admin, /label: 'مصروف'/, 'a legacy approved bonus is recorded in the ledger, not paid')
   assert.doesNotMatch(admin, /createRequest|submitRequest/, 'no new bonus through the generic requests engine')
   const mine = read('src/app/my/bonuses/page.tsx')

@@ -175,9 +175,9 @@ test('EX-09: the HTTP whitelist blocks mass assignment of approval, actor and te
     terminationReason: explanation, overtimeEligibleOverride: true, unpaidLeaveDeductibleOverride: false }, creator)
   assert.equal(row.status, 'PENDING')
   assert.equal(row.createdByUserId, creator.id)
-  for (const field of ['approvedByUserId', 'approvedAt', 'executiveApprovedByUserId', 'executiveApprovedAt', 'terminatedFrom', 'terminatedByUserId', 'terminationReason']) assert.equal(row[field], null, field)
-  assert.equal(row.overtimeEligibleOverride, true)
-  assert.equal(row.unpaidLeaveDeductibleOverride, false)
+  // أ7 (16 سبتمبر): التجاوز الفردي للإضافي والإجازة بلا أجر لم يعد يُقبل — المرسل يُهمل وتبقى النافذة على قرار الشركة.
+  for (const field of ['approvedByUserId', 'approvedAt', 'executiveApprovedByUserId', 'executiveApprovedAt', 'terminatedFrom', 'terminatedByUserId', 'terminationReason',
+    'overtimeEligibleOverride', 'unpaidLeaveDeductibleOverride']) assert.equal(row[field], null, field)
   assert.deepEqual(await loadAttendanceExemptions(ds.manager, emp.id, today, later), [])
   const history = await events(row)
   assert.equal(history.length, 1)
@@ -349,14 +349,14 @@ test('EX-13: a payroll approved after draft creation blocks exemption approval a
   assert.deepEqual(await evidence(active), activeBefore)
 })
 
-test('EX-13/16: invalid dates, earlier cycles, reversed ranges, reasons and override types leave no records', async () => {
+test('EX-13/16: invalid dates, earlier cycles, reversed ranges and reasons leave no records', async () => {
   const emp = await employee()
   const original = await counts()
   const invalid = [
     { effectiveFrom: '2026-02-30' }, { effectiveFrom: `${today}T00:00:00Z` },
     { effectiveTo: '2026-09-31' }, { effectiveFrom: beforeOpenPeriod }, { effectiveFrom: tomorrow, effectiveTo: today },
     { reason: '' }, { reason: '   ' }, { reason: 'سبب قصير' }, { reason: 'x'.repeat(501) },
-    { reasonCode: 'unknown' }, { overtimeEligibleOverride: 'false' }, { unpaidLeaveDeductibleOverride: 0 },
+    { reasonCode: 'unknown' },
   ]
   for (const extra of invalid) {
     const response = await request(hr, 'POST', '/attendance-exemptions', input(emp, extra))

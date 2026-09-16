@@ -38,36 +38,28 @@ export function attendanceDeductionDay(
   const latenessBeforeOverlap = policy.lateEnabled ? positive(tierLatenessAmount) : 0
   // D1: على الوردية الثابتة يمثل النقص بعد طرح التأخير الخروجَ المبكر؛ إطفاؤه لا يمس المرونة (يحكمها shortfallEnabled).
   const shortfallApplies = policy.shortfallEnabled && !(day.attendanceRuleSnapshot?.flexEnabled === false && policy.earlyLeaveEnabled === false)
-  // التأخير قبل السماح: الدقائق المعفاة لا تعود كخصم نقص ساعات.
-  // D7: الطرح لا يتم إلا إذا كان خصم التأخير مفعّلًا؛ وإلا تبقى دقائق لم تُشتغل بلا أي خصم.
-  const overlapMinutes = policy.overlapPolicy === 'NET_OF_LATENESS' && policy.lateEnabled
-    ? Math.min(shortageAfterPermission, unexcusedLateMinutes) : 0
-  const shortfallBeforeGrace = Math.max(0, shortageAfterPermission - overlapMinutes)
+  // أ4 (قرار المالك 16 سبتمبر): لا ترتيب تداخل بين التأخير والنقص ولا سقف يومي — كل خصم يُحتسب كما جاء.
+  // المفاتيح overlapPolicy و dailyCapDays تبقى في لقطة المسير بلا أثر، والحقول أدناه تبقى بصفر حتى لا يتغير شكل اللقطات المخزنة.
+  const overlapMinutes = 0
+  const shortfallBeforeGrace = shortageAfterPermission
   const shortfallGraceMinutes = positive(day.attendanceRuleSnapshot?.shortfallToleranceMinutes)
+  // أ6: السماحية عتبة لا خصم — نقص 11 دقيقة مع سماح 10 يُخصم كاملًا.
   const chargeableShortfallMinutes = shortfallApplies && shortfallBeforeGrace > shortfallGraceMinutes
     ? shortfallBeforeGrace : 0
   const shortfallBeforeOverlap = shortfallApplies && shortageAfterPermission > shortfallGraceMinutes
     ? (policy.shortfallMode === 'FRACTION' ? policy.shortfallValue * policy.dayRate
       : shortageAfterPermission * policy.minuteRate * (policy.shortfallMode === 'MULTIPLIER' ? policy.shortfallValue : 1)) : 0
-  let shortfallAmount = chargeableShortfallMinutes > 0
+  const shortfallAmount = chargeableShortfallMinutes > 0
     ? (policy.shortfallMode === 'FRACTION' ? policy.shortfallValue * policy.dayRate
       : chargeableShortfallMinutes * policy.minuteRate * (policy.shortfallMode === 'MULTIPLIER' ? policy.shortfallValue : 1)) : 0
-  let latenessAmount = latenessBeforeOverlap
-  if (policy.overlapPolicy === 'MAX_OF_BOTH') {
-    if (latenessAmount >= shortfallAmount) shortfallAmount = 0
-    else latenessAmount = 0
-  }
+  const latenessAmount = latenessBeforeOverlap
   const latenessBeforeCap = latenessAmount, shortfallBeforeCap = shortfallAmount
-  const dailyCapAmount = policy.dailyCapDays * policy.dayRate
-  // أولوية السقف لعقوبة التأخير ثم النقص المتبقي؛ نحفظ توزيع المبلغ في اللقطة.
-  latenessAmount = Math.min(latenessAmount, dailyCapAmount)
-  shortfallAmount = Math.min(shortfallAmount, Math.max(0, dailyCapAmount - latenessAmount))
   // الإذن المدفوع صراحة مستقل عن تفعيل عقوبة التأخير.
   const permissionAmount = positive(day.deductibleMinutes) * policy.minuteRate
   return { date: day.date, rawShortfallMinutes, unexcusedLateMinutes, paidPermissionCoveredMinutes,
     overlapMinutes, shortfallGraceMinutes, chargeableShortfallMinutes,
     latenessBeforeOverlap, shortfallBeforeOverlap, latenessBeforeCap, shortfallBeforeCap,
-    latenessAmount, shortfallAmount, permissionAmount, dailyCapAmount,
-    cappedAmount: round2(latenessBeforeCap + shortfallBeforeCap - latenessAmount - shortfallAmount),
+    latenessAmount, shortfallAmount, permissionAmount, dailyCapAmount: 0,
+    cappedAmount: 0,
     totalAmount: round2(latenessAmount + shortfallAmount + permissionAmount) }
 }
