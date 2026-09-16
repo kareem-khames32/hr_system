@@ -7,7 +7,6 @@ import { loadEmployeeAddDraft, saveEmployeeAddDraft, clearEmployeeAddDraft, type
 import { buildEmployeeSalaryChange, employeeCreateSalaryPeriod, employeeSalaryChanged, employeeSalaryEditPayload, employeeSalaryTotal, employeePreviousSalaryCanBeConfirmed, fetchEmployeeSalaryStartContext, payrollMonthExplanation, type EmployeeSalaryChangeCommand, type EmployeeSalaryChangeContext, type EmployeeSalaryStartContext } from '@/lib/employee-salary-change-api'
 import { SALARY_HISTORY_FIELDS } from '@/lib/payroll-salary-history-api'
 import { buildCalendarChange, employeeCalendarPayload, type PayrollCalendarChange, type PayrollCalendarContext } from '@/lib/payroll-calendar-api'
-import { CalendarContextSummary } from '@/components/PayrollCalendarChange'
 import { DEFAULT_SALARY_CYCLE, SALARY_CYCLE_OPTIONS, clearedEmployeeFields, employeeFullNameAr, employeeFullNameEn, employeeWorkEmailPayload, gradeSelectOptions, initialOpeningBalance, joinEmployeeAddress, jobTitleSelectOptions, openingBalanceIssue, openingBalancePayload, savedDocumentsOf, settleQualificationDrafts, type SavedEmployeeDocument } from '@/lib/employee-form-fields'
 
 import { useEffect, useRef, useState } from 'react'
@@ -495,6 +494,13 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
   }, [mode, salaryStartDate])
   const [calendarInitialConfirmation, setCalendarInitialConfirmation] = useState(false)
   const calendarRequested = mode === 'edit' && (form.branchId !== (initial?.branchId ?? '') || calendarInitialConfirmation)
+  const scheduleChanged = mode === 'edit' && (selectedSchedule || null) !== (initial?.workScheduleId ?? null)
+  const orgChanged = calendarRequested || scheduleChanged
+  // تاريخ وسبب تغيير الفرع/جدول العمل في التعديل: التاريخ افتراضيًا النهارده، والسبب اختياري بنص افتراضي
+  const orgChangeEvidence = () => ({
+    effectiveFrom: form.attendanceEffectiveFrom || localToday(),
+    reason: form.attendanceChangeReason?.trim() || 'تغيير الفرع أو جدول العمل',
+  })
   const salaryLocked = mode === 'edit' && !salaryChangeContext
   const salaryChanged = mode === 'edit' && !!salaryChangeContext && employeeSalaryChanged(salaryChangeContext, form)
   const [draftUserId, setDraftUserId] = useState<number | null>(null)
@@ -792,8 +798,12 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     // لا تُلمس في التعديل، والإنشاء وحده يثبّت «يتبع» مع أول نسخة قاعدة حضور.
     if (mode === 'add' || (selectedSchedule || null) !== (initial?.workScheduleId ?? null)) {
       payload.flexOverrideMode = form.flexOverrideMode ?? 'INHERIT'
-      if (form.attendanceEffectiveFrom) payload.attendanceEffectiveFrom = form.attendanceEffectiveFrom
-      if (form.attendanceChangeReason?.trim()) payload.attendanceChangeReason = form.attendanceChangeReason.trim()
+      // الإنشاء بلا تاريخ: الخادم يسجّل من يوم إنشاء الملف (لا استنتاج من تاريخ التعيين حتى لا تُفتح أيام قديمة)
+      if (mode === 'edit') {
+        const evidence = orgChangeEvidence()
+        payload.attendanceEffectiveFrom = evidence.effectiveFrom
+        payload.attendanceChangeReason = evidence.reason
+      }
     }
     // استحقاق السنوي — يتحكم فعلياً في تراكم الرصيد (مقفول = بلا سنوي)
     payload.annualLeaveEntitled = leaveEntitled
@@ -881,7 +891,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
       if ((initial.addressCity || initial.addressDistrict) && !form.addressCity.trim() && !form.addressDistrict.trim()) payload.address = null
     }
     if (mode === 'add') return payload
-    const employeePayload = employeeCalendarPayload(payload, initial?.branchId ?? '', form.branchId, calendarContext, { effectiveFrom: form.attendanceEffectiveFrom ?? '', reason: form.attendanceChangeReason ?? '' }, calendarInitialConfirmation)
+    const employeePayload = employeeCalendarPayload(payload, initial?.branchId ?? '', form.branchId, calendarContext, orgChangeEvidence(), calendarInitialConfirmation)
     return employeeSalaryEditPayload(employeePayload, salaryChangeContext, form, salaryEvidence)
   }
 
@@ -933,13 +943,9 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
         state: { days: openingBalance, expiryMode: openingExpiry, expiryDate: openingExpiryDate },
       })
       if (openingIssue) return openingIssue
-      const attendanceChanged = (selectedSchedule || null) !== (initial?.workScheduleId ?? null)
-      if (mode === 'edit' && attendanceChanged) {
-        if (!form.attendanceEffectiveFrom) return 'حدد تاريخ سريان تغيير جدول العمل'
-        if (!form.attendanceChangeReason?.trim()) return 'اكتب سبب تغيير جدول العمل'
-      }
+      // تاريخ التغيير افتراضيًا النهارده والسبب اختياري، فمفيش خانة مطلوبة هنا
       if (calendarRequested) {
-        try { buildCalendarChange(calendarContext, { effectiveFrom: form.attendanceEffectiveFrom ?? '', reason: form.attendanceChangeReason ?? '' }) }
+        try { buildCalendarChange(calendarContext, orgChangeEvidence()) }
         catch (cause) { return (cause as Error).message }
       }
     }
@@ -1689,27 +1695,22 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
               )}
 
-              <div className="mt-4 space-y-4 rounded-xl border border-blue-100 bg-blue-50/50 p-4">
-                {mode === 'edit' && <div className="space-y-2">
-                  <CalendarContextSummary context={calendarContext} error={calendarContextError} />
-                  {calendarContext && <label className="flex gap-2 items-start text-sm text-gray-700"><input type="checkbox" checked={calendarInitialConfirmation} disabled={submitting || calendarContext.currentMatchesHistory === false} onChange={event => setCalendarInitialConfirmation(event.target.checked)} />أؤكد سريان الفرع الحالي لهذا الموظف من تاريخ أحدده، حتى دون تغيير الفرع.</label>}
-                  {!calendarContext && <p className="text-xs text-gray-600">تعديل الفرع متوقف، ويمكن حفظ باقي بيانات الموظف. أعد تحميل الصفحة لإعادة قراءة التقويم.</p>}
-                </div>}
-                {(mode === 'add' || calendarRequested || (selectedSchedule || null) !== (initial?.workScheduleId ?? null)) && (
-                  <div className="grid gap-4 sm:grid-cols-2">
-                    <label className="text-sm text-gray-700">يسري الفرع أو جدول العمل من
-                      <input type="date" className="input mt-2 w-full" value={form.attendanceEffectiveFrom ?? ''}
-                        onChange={event => setField('attendanceEffectiveFrom', event.target.value)} />
-                    </label>
-                    <label className="text-sm text-gray-700">سبب التغيير
-                      <input type="text" maxLength={500} className="input mt-2 w-full" value={form.attendanceChangeReason ?? ''}
-                        onChange={event => setField('attendanceChangeReason', event.target.value)} placeholder={mode === 'add' ? 'تعيين الموظف على الدوام' : 'سبب تعديل الدوام أو الفرع'} />
-                    </label>
-                    <p className="text-xs text-gray-500 sm:col-span-2">يُحفظ تاريخ التغيير وصاحبه. الفترات المعتمدة تظل محفوظة؛ التعديل يؤثر من تاريخ السريان المحدد.</p>
-                    {mode === 'add' && <p className="text-xs text-gray-500 sm:col-span-2">عند الإنشاء يثبت هذا التاريخ سريان الدوام والفرع معًا. إن تركته فارغًا تبدأ التغطية من تاريخ إنشاء الملف، وليس تاريخ الالتحاق؛ إثبات تاريخ سابق يحتاج إدخاله مع السبب.</p>}
-                  </div>
-                )}
-              </div>
+              {/* تغيير الفرع أو جدول العمل: يظهر بس لما يتغيّر فعلًا — سطر واحد، التاريخ افتراضيًا النهارده والسبب اختياري.
+                  الإنشاء يسجّل الفرع والجدول من تاريخ التعيين تلقائيًا بلا أي خانة. */}
+              {mode === 'edit' && orgChanged && (
+                <div className="mt-4 grid gap-4 sm:grid-cols-2 rounded-xl border border-blue-100 bg-blue-50/50 p-4">
+                  <label className="text-sm text-gray-700">التغيير يبدأ من
+                    <input type="date" className="input mt-2 w-full" value={form.attendanceEffectiveFrom || localToday()}
+                      onChange={event => setField('attendanceEffectiveFrom', event.target.value)} />
+                  </label>
+                  <label className="text-sm text-gray-700">السبب (اختياري)
+                    <input type="text" maxLength={500} className="input mt-2 w-full" value={form.attendanceChangeReason ?? ''}
+                      onChange={event => setField('attendanceChangeReason', event.target.value)} placeholder="مثال: نقل لفرع مصر" />
+                  </label>
+                  <p className="text-xs text-gray-500 sm:col-span-2">الأيام اللي قبل التاريخ ده بتتحسب بالفرع وجدول العمل القديمين.</p>
+                  {calendarRequested && !calendarContext && <p className="text-xs text-red-600 sm:col-span-2">تعذّر تحميل تاريخ فرع الموظف، فتغيير الفرع مش متاح دلوقتي. باقي البيانات تتحفظ عادي؛ أعد تحميل الصفحة.</p>}
+                </div>
+              )}
 
               {/* Link to settings */}
               <div className="mt-4 p-4 bg-gray-50 rounded-xl flex items-center justify-between">

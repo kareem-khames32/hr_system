@@ -74,12 +74,18 @@ test('actual calendar summary displays counts/undated status and drift without f
 test('whole-scope confirmation summary exposes every holiday range and inactive exceptional rule for review',()=>{
  const ctx=context();ctx.current.holidays.push({id:5,name:'عطلة ممتدة',date:'2026-10-03',endDate:'2026-10-05',country:'EG'});ctx.current.exceptions[0].isActive=false;const html=render(components.CalendarContextSummary,{context:ctx});for(const text of['مراجعة جميع قيم التقويم','عطلة اختبار','عطلة ممتدة','2026-10-03','2026-10-05','أول سبت','السبت','الأول','معطلة'])assert.ok(html.includes(text));assert.match(html,/<details/);assert.doesNotMatch(html,/\[object Object\]|undefined/)
 })
-test('actual employee edit step exposes existing shared date fields only on an explicit branch confirmation',()=>{
- const ctx=context('EMPLOYEE',9),html=employmentStep({mode:'edit',employeeId:9,initial:{branchId:'5'},calendarContext:ctx});assert.match(html,/أؤكد سريان الفرع الحالي/);assert.match(html,/الفرع المسجل: 5/);assert.doesNotMatch(html,/value="1900-/)
- const missing=employmentStep({mode:'edit',employeeId:9,initial:{branchId:'5'},calendarContext:null,calendarContextError:'تعذر تحميل السياق'});assert.match(missing,/تعديل الفرع متوقف، ويمكن حفظ باقي بيانات الموظف/);assert.doesNotMatch(missing,/أؤكد سريان الفرع الحالي/)
+test('employee edit shows the branch/schedule change line only when branch or schedule actually changes (no version text, no confirmation box)',()=>{
+ const ctx=context('EMPLOYEE',9),html=employmentStep({mode:'edit',employeeId:9,initial:{branchId:'5'},calendarContext:ctx});assert.doesNotMatch(html,/أؤكد سريان الفرع الحالي|الفرع المسجل|التغيير يبدأ من/);assert.doesNotMatch(html,/value="1900-/)
+ const missing=employmentStep({mode:'edit',employeeId:9,initial:{branchId:'5'},calendarContext:null,calendarContextError:'تعذر تحميل السياق'});assert.doesNotMatch(missing,/أؤكد سريان الفرع الحالي|التغيير يبدأ من/)
+ const source=require('fs').readFileSync(require('path').join(__dirname,'..','..','src','components','EmployeeForm.tsx'),'utf8')
+ assert.ok(source.includes("{mode === 'edit' && orgChanged && ("),'the line appears only on a real change')
+ assert.ok(source.includes("effectiveFrom: form.attendanceEffectiveFrom || localToday()"),'date defaults to today')
+ assert.ok(source.includes("reason: form.attendanceChangeReason?.trim() || 'تغيير الفرع أو جدول العمل'"),'reason is optional with a default')
 })
-test('employee creation explains explicit shared branch/schedule date and server creation fallback without joinDate inference',()=>{
- const html=employmentStep({mode:'add',initial:{branchId:'5'}});assert.match(html,/سريان الدوام والفرع معًا/);assert.match(html,/تاريخ إنشاء الملف، وليس تاريخ الالتحاق/);assert.match(html,/type="date"[^>]*value=""/)
+test('employee creation shows no branch/schedule date box and keeps the server creation fallback without joinDate inference',()=>{
+ const html=employmentStep({mode:'add',initial:{branchId:'5'}});assert.doesNotMatch(html,/سريان الدوام والفرع معًا|التغيير يبدأ من/)
+ const source=require('fs').readFileSync(require('path').join(__dirname,'..','..','src','components','EmployeeForm.tsx'),'utf8')
+ assert.ok(source.includes('الإنشاء بلا تاريخ: الخادم يسجّل من يوم إنشاء الملف'),'creation sends no effective date')
 })
 test('schedule separates dated calendar classification from timing and shows daily blocker/source reference',()=>{
  const html=detail('schedule',{days:[{date:'2026-09-01',calendarState:'AVAILABLE',dayKind:'HOLIDAY',timingState:'MISSING',timing:null,sourceRefs:['calendar:global:1'],issues:[]},{date:'2026-09-02',calendarState:'MISSING',dayKind:'WORKING',timingState:'AVAILABLE',timing:{startTime:'09:00',endTime:'18:00',requiredWorkMinutes:540,flexEnabled:false},sourceRefs:[],issues:[{message:'لم يثبت تقويم الفرع لهذا اليوم'}]}]});for(const text of['عطلة رسمية','نوع اليوم غير مثبت','لم يثبت تقويم الفرع لهذا اليوم','calendar:global:1','540'])assert.ok(html.includes(text));assert.doesNotMatch(html,/undefined|\[object Object\]/)
