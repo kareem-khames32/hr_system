@@ -14,7 +14,7 @@ export class Employee {
   @PrimaryGeneratedColumn()
   id: number
 
-  // الكود الوظيفي — يولّده النظام عند الإضافة (EMP0001…) ولا يُعدّل؛ ربط البصمات برقم البصمة وحده
+  // الكود الوظيفي — يولّده النظام عند الإضافة (EMP-0001…) ولا يُعدّل؛ ربط البصمات برقم البصمة وحده
   @Index({ unique: true })
   @Column({ length: 20 })
   employeeCode: string

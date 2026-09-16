@@ -58,11 +58,13 @@ test('كشف البنوك: مبلغ البنك والنقدي لكل موظف، 
   assert.equal(sheet.rows.find(row => row.employeeId === 2).payMethodLabel, 'نقدي + بنك')
 })
 
-test('كود الموظف: EMP + 4 أرقام، والتالي = أكبر EMP#### + 1 مع تجاهل الأكواد الأخرى', () => {
-  assert.equal(formatEmployeeCode(1), 'EMP0001')
-  assert.equal(formatEmployeeCode(12345), 'EMP12345')
-  assert.equal(nextEmployeeCodeFrom([]), 'EMP0001')
-  assert.equal(nextEmployeeCodeFrom(['EMP001', 'EMP0009', 'WAVE-02', 'EMP-77', 'EMP12A', null]), 'EMP0010')
+test('كود الموظف: EMP- + 4 أرقام (شكل النظام القديم)، والتالي = أكبر EMP-#### أو EMP#### + 1 مع تجاهل الأكواد الأخرى', () => {
+  assert.equal(formatEmployeeCode(1), 'EMP-0001')
+  assert.equal(formatEmployeeCode(12345), 'EMP-12345')
+  assert.equal(nextEmployeeCodeFrom([]), 'EMP-0001')
+  assert.equal(nextEmployeeCodeFrom(['EMP001', 'EMP0009', 'WAVE-02', 'EMP12A', null]), 'EMP-0010')
+  // الأكواد المنقولة من النظام القديم بالشرطة بتكمل التسلسل
+  assert.equal(nextEmployeeCodeFrom(['EMP-0397', 'EMP-0478', 'EMP0009', 'EMP-12A']), 'EMP-0479')
   assert.throws(() => formatEmployeeCode(0))
 })
 

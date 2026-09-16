@@ -1369,8 +1369,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="label">الرقم الوظيفي</label>
-                  <input type="text" className="input bg-gray-50" dir="ltr" readOnly tabIndex={-1} value={mode === 'edit' ? form.employeeCode : ''} placeholder="EMP0001" />
-                  <p className="text-xs text-gray-400 mt-1">{mode === 'edit' ? 'بيولّده النظام ومش بيتعدل' : 'النظام بيولّده تلقائي عند الحفظ (EMP0001، EMP0002…)'}</p>
+                  <input type="text" className="input bg-gray-50" dir="ltr" readOnly tabIndex={-1} value={mode === 'edit' ? form.employeeCode : ''} placeholder="EMP-0001" />
+                  <p className="text-xs text-gray-400 mt-1">{mode === 'edit' ? 'بيولّده النظام ومش بيتعدل' : 'النظام بيولّده تلقائي عند الحفظ (EMP-0001، EMP0002…)'}</p>
                 </div>
                 <div>
                   <label className="label">رقم البصمة *</label>

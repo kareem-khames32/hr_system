@@ -1,20 +1,20 @@
 import { ConflictException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
 
-// كود الموظف يولّده النظام عند الإضافة (قرار المالك): EMP0001، EMP0002… — الرقم التالي = أكبر EMP#### موجود + 1.
-// لا يُدخل ولا يُعدّل من أحد، والأكواد القديمة تبقى كما هي. رقم البصمة وحده مفتاح ربط البصمات.
-export const EMPLOYEE_CODE_PREFIX = 'EMP'
+// كود الموظف يولّده النظام عند الإضافة (قرار المالك): EMP-0001، EMP-0002… بنفس شكل النظام القديم عشان الأكواد المنقولة تكمل —
+// الرقم التالي = أكبر EMP-#### موجود + 1. لا يُدخل ولا يُعدّل من أحد. رقم البصمة وحده مفتاح ربط البصمات.
+export const EMPLOYEE_CODE_PREFIX = 'EMP-'
 
 export function formatEmployeeCode(number: number): string {
   if (!Number.isSafeInteger(number) || number < 1) throw new Error('رقم كود الموظف غير صالح')
   return `${EMPLOYEE_CODE_PREFIX}${String(number).padStart(4, '0')}`
 }
 
-/** أكبر رقم في أكواد EMP متبوعة بأرقام فقط (EMP001 = 1، EMP0042 = 42)؛ غير ذلك يتجاهل. */
+/** أكبر رقم في أكواد EMP بشرطة أو من غيرها متبوعة بأرقام فقط (EMP-0042 = 42، EMP0042 = 42)؛ غير ذلك يتجاهل. */
 export function nextEmployeeCodeFrom(codes: Array<string | null | undefined>): string {
   let max = 0
   for (const code of codes) {
-    const match = /^EMP(\d{1,15})$/.exec((code ?? '').trim())
+    const match = /^EMP-?(\d{1,15})$/.exec((code ?? '').trim())
     if (match) max = Math.max(max, Number(match[1]))
   }
   return formatEmployeeCode(max + 1)
@@ -31,9 +31,10 @@ export async function generateEmployeeCode(em: EntityManager): Promise<string> {
       @LockOwner = 'Transaction', @LockTimeout = 10000;
     SELECT @result AS lockResult;`)
   if (!locked.length || Number(locked[0].lockResult) < 0) throw new ConflictException('توجد إضافة موظف جارية؛ حاول مجددًا')
-  const rows: Array<{ maxNumber: string | number | null }> = await em.query(`SELECT MAX(TRY_CAST(SUBSTRING([employeeCode], 4, 15) AS bigint)) AS [maxNumber]
+  const rows: Array<{ maxNumber: string | number | null }> = await em.query(`SELECT MAX(TRY_CAST(REPLACE(SUBSTRING([employeeCode], 4, 20), '-', '') AS bigint)) AS [maxNumber]
     FROM [employees] WITH (UPDLOCK, HOLDLOCK)
-    WHERE [employeeCode] LIKE 'EMP[0-9]%' AND SUBSTRING([employeeCode], 4, 20) NOT LIKE '%[^0-9]%'`)
+    WHERE ([employeeCode] LIKE 'EMP[0-9]%' OR [employeeCode] LIKE 'EMP-[0-9]%')
+      AND REPLACE(SUBSTRING([employeeCode], 4, 20), '-', '') NOT LIKE '%[^0-9]%'`)
   const max = Number(rows[0]?.maxNumber ?? 0)
   return formatEmployeeCode((Number.isSafeInteger(max) && max > 0 ? max : 0) + 1)
 }

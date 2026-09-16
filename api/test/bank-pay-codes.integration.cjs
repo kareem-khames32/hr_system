@@ -97,12 +97,12 @@ test('كود الموظف من النظام: أكبر EMP#### + 1 حتى مع إ
   await seeded(branchA, { employeeCode: 'EMP12X' })
   const [one, two] = await Promise.all([request(admin, 'POST', '/employees', complete()), request(admin, 'POST', '/employees', complete())])
   const codes = [expectStatus(one, 201).employeeCode, expectStatus(two, 201).employeeCode].sort()
-  assert.deepEqual(codes, ['EMP0008', 'EMP0009'])
+  assert.deepEqual(codes, ['EMP-0008', 'EMP-0009'])
   const third = expectStatus(await request(admin, 'POST', '/employees', complete({ employeeCode: 'EMP9999' })), 201)
-  assert.equal(third.employeeCode, 'EMP0010')
+  assert.equal(third.employeeCode, 'EMP-0010')
   const patched = expectStatus(await request(admin, 'PATCH', `/employees/${third.id}`, { employeeCode: 'HACKED', phone: '0501234568' }), 200)
-  assert.equal(patched.employeeCode, 'EMP0010'); assert.equal(patched.phone, '0501234568')
-  assert.equal((await repo('Employee').findOneByOrFail({ id: third.id })).employeeCode, 'EMP0010')
+  assert.equal(patched.employeeCode, 'EMP-0010'); assert.equal(patched.phone, '0501234568')
+  assert.equal((await repo('Employee').findOneByOrFail({ id: third.id })).employeeCode, 'EMP-0010')
 })
 
 test('البصمات برقم البصمة وحده: كود الموظف مبيربطش بصمة، ورقم البصمة بيربط', async () => {
