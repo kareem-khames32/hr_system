@@ -56,7 +56,7 @@ async function fixture(employee) {
   const branch = await repo('Branch').save({ code: `OTWM${n}`, name: `فرع راتب شهر الإضافي ${n}`, country: 'SA', weekendDays: 'FRI,SAT' })
   await confirm('BRANCH', branch.id, dateAfter(workDate, -60))
   const department = await repo('Department').save({ branchId: branch.id, code: `OTWMD${n}`, name: `قسم راتب شهر الإضافي ${n}` })
-  const person = (suffix, extra = {}) => repo('Employee').save({ employeeCode: `OTWM${n}${suffix}`, fullName: `موظف راتب شهر الإضافي ${n} ${suffix}`,
+  const person = (suffix, extra = {}) => repo('Employee').save({ employeeCode: `OTWM${n}${suffix}`, fingerprintCode: `OTWM${n}${suffix}`, fullName: `موظف راتب شهر الإضافي ${n} ${suffix}`,
     branchId: branch.id, departmentId: department.id, joinDate: '2020-01-01', basicSalary: 0, housingAllowance: 0, transportAllowance: 0,
     phoneAllowance: 0, workNatureAllowance: 0, otherAllowance: 0, currency: 'SAR', status: 'active', isActive: true, annualLeaveEntitled: false, payMethod: 'cash', ...extra })
   const managerEmployee = await person('M'), headEmployee = await person('D'), hrEmployee = await person('H')

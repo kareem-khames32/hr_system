@@ -49,6 +49,21 @@ test('who + where: «department managers in branch 2 only» needs both the posit
   assert.deepEqual(audience.audienceWhereOf({ where: { mode: 'branches', ids: ['2', 'x', 0] } }), { mode: 'branches', ids: [2] })
 })
 
+test('where = specific teams: only members of the chosen teams, combined with who; old shapes untouched', () => {
+  const inTeams = json({ mode: 'all', ids: [], where: { mode: 'teams', ids: [40, 41] } })
+  assert.equal(allows(inTeams, employee({ teamId: 41 })), true)
+  assert.equal(allows(inTeams, employee({ teamId: 42 })), false)
+  assert.equal(allows(inTeams, employee()), false, 'no team = not inside')
+  const leaders = json({ mode: 'positions', ids: ['TEAM_LEADERS'], where: { mode: 'teams', ids: [40] } })
+  assert.equal(allows(leaders, employee({ teamId: 40, positions: { teamLeader: true } })), true)
+  assert.equal(allows(leaders, employee({ teamId: 40 })), false, 'right team, not a leader')
+  assert.equal(allows(json({ mode: 'all', ids: [], where: { mode: 'teams', ids: [] } }), employee()), true, 'empty teams = whole company')
+  assert.deepEqual(audience.audienceWhereOf({ where: { mode: 'teams', ids: ['40', 'y'] } }), { mode: 'teams', ids: [40] })
+  assert.equal(audience.audienceNeedsEmployee(inTeams), true)
+  assert.deepEqual([...audience.AUDIENCE_WHERE_MODES], ['company', 'branches', 'departments', 'teams'])
+  assert.equal(audience.audienceSubjectOf({ sub: 1, role: 'employee', permissions: [], employeeId: 7 }, { departmentId: 3, teamId: 40, branchId: 1 }).teamId, 40)
+})
+
 test('owner bypass at both doors; the type builder sees every type in the catalog but submits under the audience', () => {
   const visibleTo = json({ mode: 'roles', ids: ['hr_manager'], where: { mode: 'branches', ids: [9] } })
   assert.equal(allows(visibleTo, employee({ role: 'super_admin' })), true)
@@ -61,7 +76,7 @@ test('owner bypass at both doors; the type builder sees every type in the catalo
 test('the subject carries branch and department: the employee record first, then the account branch', () => {
   const user = { sub: 12, role: 'hr_manager', permissions: [], employeeId: 21, branchId: 1 }
   assert.deepEqual(audience.audienceSubjectOf(user, { departmentId: 4, branchId: 11 }),
-    { role: 'hr_manager', permissions: [], employeeId: 21, departmentId: 4, branchId: 11 })
+    { role: 'hr_manager', permissions: [], employeeId: 21, departmentId: 4, teamId: null, branchId: 11 })
   assert.equal(audience.audienceSubjectOf(user, null).branchId, 1)
   assert.equal(audience.audienceNeedsEmployee(json({ mode: 'all', ids: [] })), false)
   assert.equal(audience.audienceNeedsEmployee(json({ mode: 'departments', ids: [1] })), true)
@@ -141,6 +156,8 @@ test('wiring: every door asks the same helpers (settings, request catalog + subm
   assert.ok(read('api/src/requests/requests.controller.ts').includes("definitionBranchWhere<LeaveType>(user, { isActive: true }, definitionBranchQuery(branchIdRaw))"))
   const money = read('api/src/payroll/typed-deductions.service.ts')
   assert.ok(money.includes('audienceNeedsEmployee(type.visibleTo) || type.branchId != null'))
+  assert.ok(money.includes('select: { id: true, departmentId: true, teamId: true, branchId: true }'), 'money screens read the team for «فرق محددة»')
+  assert.ok(settings.includes("if (whereMode === 'teams') {") && settings.includes('الطلب ده خاص بفرع واحد، فاختار فرق من نفس الفرع'), 'teams validated and kept inside the type branch')
   assert.ok(money.includes('requestTypeInBranch(type, self?.branchId ?? user.branchId, owner)'))
   const catalogs = read('api/src/assets/catalogs.controller.ts')
   for (const text of ['definitionBranchWhere<ObjectLiteral>(user, {}, definitionBranchQuery(branchIdRaw))', 'assertDefinitionWritable(user, row)',
@@ -173,7 +190,8 @@ test('migration 043: additive, re-runnable, nullable branch column on the four d
 
 test('screens: «يظهر لـ…» on every request type card, a clear who/where section, and «متاح في» on the four definition screens', () => {
   const builder = read('src/app/settings/request-types/page.tsx')
-  for (const text of ['يظهر لـ: {typeAudienceText(rt)}', 'مين يشوف الطلب ده ويقدّمه؟', '>مين؟<', '>فين؟<', "['branches', 'فروع محددة']", 'النتيجة: ',
+  for (const text of ['يظهر لـ: {typeAudienceText(rt)}', 'مين يشوف الطلب ده ويقدّمه؟', '>مين؟<', '>فين؟<', "['branches', 'فروع محددة']", "['teams', 'فرق محددة']",
+    "form.whereMode === 'teams' ? form.teamIds : form.deptIds", 'النتيجة: ',
     'audienceOfForm(form, audienceIds())', '<DefinitionBranchField']) {
     assert.ok(builder.includes(text), text)
   }

@@ -7,6 +7,7 @@ import { PAYROLL_DECISION_CONFIG_SEED } from '../payroll/payroll-decision-settin
 import { DEDUCTION_CONFIG_SEED } from '../payroll/typed-deductions'
 import { BONUS_CONFIG_SEED } from '../payroll/bonuses'
 import { EXEMPTION_CONFIG_SEED } from '../payroll/financial-exemptions'
+import { COMPANY_PROFILE_NEW_KEYS } from '../settings/company-profile'
 
 // ===== سلاسل الاعتماد الافتراضية (العامة — branchId NULL) =====
 // أي فرع يقدر يعمل نسخة خاصة بنفس الكود لاحقاً وتتقدم على العامة
@@ -325,6 +326,8 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'company.address', value: '' },
   { key: 'company.phone', value: '' },
   { key: 'company.logo_file_id', value: '' },
+  // ملف الشركة الكامل (ترحيل 051): السجل وانتهاؤه، الضريبي، الموحد، التأمينات، قوى، العنوان الوطني، التواصل، بنك الرواتب
+  ...COMPANY_PROFILE_NEW_KEYS.map(key => ({ key, value: '' })),
   // مكافأة نهاية الخدمة (EMP-2) بالشرائح — نظام العمل السعودي م84: الشريحة الأولى
   // eos.months_per_year شهر/سنة لأول eos.tier1_years سنة، وبعدها eos.months_per_year_after
   { key: 'eos.months_per_year', value: '0.5' },

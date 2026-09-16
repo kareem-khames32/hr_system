@@ -15,7 +15,7 @@ export function projectEmployee(employee: Employee, user: JwtPayload): Partial<E
   const safe: Partial<Employee> = { ...employee }
   const financialFields: (keyof Employee)[] = [
     'currency', 'salaryCycle', 'basicSalary', 'housingAllowance', 'transportAllowance',
-    'phoneAllowance', 'workNatureAllowance', 'otherAllowance', 'payMethod',
+    'phoneAllowance', 'workNatureAllowance', 'otherAllowance', 'payMethod', 'bankTransferAmount',
     'bankName', 'bankBranch', 'iban', 'gosiNumber', 'isGosiRegistered', 'gosiBaseSalary',
   ]
   for (const field of financialFields) delete safe[field]

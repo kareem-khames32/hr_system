@@ -21,6 +21,7 @@ import { LoanInstallmentAllocation, LoanInstallmentEvent } from './payroll-insta
 import { LatenessTier } from './payroll-rules.entities'
 import { PayrollLatenessTierSet, PayrollLatenessTierSetTier, PayrollRunParityExplanation } from './payroll-lateness-tier-sets.entities'
 import { PayrollController } from './payroll.controller'
+import { PayrollBankSheetController } from './bank-sheet.controller'
 import { PayrollService } from './payroll.service'
 import { ObligationsController } from './obligations.controller'
 import { ObligationsService } from './obligations.service'
@@ -47,6 +48,12 @@ import { FinancialExemptionsService } from './financial-exemptions.service'
 import { PayrollRunReversalLine } from './payroll-corrections.entities'
 import { PayrollCorrectionsController } from './payroll-corrections.controller'
 import { PayrollCorrectionsService } from './payroll-corrections.service'
+import { SocialInsuranceController } from './social-insurance.controller'
+import { SocialInsuranceService } from './social-insurance.service'
+// تبويبات شاشة المسير و«شيل خصم»
+import { PayrollDeductionWaiver } from './payroll-deduction-waivers.entities'
+import { PayrollOverviewController } from './payroll-overview.controller'
+import { PayrollOverviewService } from './payroll-overview.service'
 
 @Module({
   imports: [
@@ -102,11 +109,12 @@ import { PayrollCorrectionsService } from './payroll-corrections.service'
       PayrollFinancialExemptionEvent,
       // C8 / الخطوة 31: سطور عكس صرف المسير
       PayrollRunReversalLine,
+      PayrollDeductionWaiver,
     ]),
   ],
   controllers: [PayrollController, ObligationsController, PayrollRulesController, PayrollPolicyController, PayrollSalaryHistoryController, TypedDeductionsController, BonusesController,
-    FinancialExemptionsController, PayrollCorrectionsController],
+    FinancialExemptionsController, PayrollCorrectionsController, SocialInsuranceController, PayrollBankSheetController, PayrollOverviewController],
   providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService,
-    FinancialExemptionsService, PayrollCorrectionsService],
+    FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService],
 })
 export class PayrollModule {}

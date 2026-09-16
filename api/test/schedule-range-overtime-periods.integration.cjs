@@ -68,7 +68,7 @@ before(async () => {
   branchB = await repo('Branch').save({ code: 'RNGB', name: 'فرع المدى ب', weekendDays: 'FRI,SAT' })
   deptA1 = await repo('Department').save({ branchId: branchA.id, code: 'RNGA1', name: 'قسم أ1' })
   deptA2 = await repo('Department').save({ branchId: branchA.id, code: 'RNGA2', name: 'قسم أ2' })
-  const person = (code, branch, department) => repo('Employee').save({ employeeCode: code, fullName: `موظف ${code}`,
+  const person = (code, branch, department) => repo('Employee').save({ employeeCode: code, fingerprintCode: code, fullName: `موظف ${code}`,
     branchId: branch.id, departmentId: department?.id, joinDate: '2020-01-01', basicSalary: 9000, housingAllowance: 0,
     transportAllowance: 0, phoneAllowance: 0, workNatureAllowance: 0, otherAllowance: 0, status: 'active', isActive: true,
     annualLeaveEntitled: false, payMethod: 'cash' })
@@ -265,4 +265,34 @@ test('فترات الإضافي: المقفولة توقف الحساب والم
   const renamed = await http(hr, 'PATCH', `/attendance/overtime-periods/${open.body.id}`, { name: 'فتح رمضان ٢' })
   assert.equal(renamed.status, 200); assert.equal(renamed.body.recompute.recomputed, 0)
   await repo('RequestsConfig').update({ key: 'overtime.enabled' }, { value: 'true' })
+})
+
+test('إسناد لمدة بالفرق: أعضاء الفريق الشغالين بس، وحساب الفرع مايوصلش لفريق فرع تاني', { timeout: 60000 }, async () => {
+  const teamA = await repo('Team').save({ name: 'فريق المدى أ', code: 'RNGTA', departmentId: deptA2.id })
+  const deptB = await repo('Department').save({ branchId: branchB.id, code: 'RNGB1', name: 'قسم ب1' })
+  const teamB = await repo('Team').save({ name: 'فريق المدى ب', code: 'RNGTB', departmentId: deptB.id })
+  await repo('Employee').update(a2.id, { teamId: teamA.id })
+  await repo('Employee').update(b1.id, { teamId: teamB.id })
+  const gone = await repo('Employee').save({ employeeCode: 'RNGGONE', fullName: 'موظف ساب', branchId: branchA.id, departmentId: deptA2.id,
+    teamId: teamA.id, joinDate: '2020-01-01', basicSalary: 9000, housingAllowance: 0, transportAllowance: 0, phoneAllowance: 0,
+    workNatureAllowance: 0, otherAllowance: 0, status: 'terminated', isActive: false, annualLeaveEntitled: false, payMethod: 'cash' })
+  const from = `${futureYear}-11-01`, to = `${futureYear}-11-03`
+  const res = await range(hr, { teamIds: [teamA.id], from, to, shiftId: evening.id })
+  assert.equal(res.status, 201, JSON.stringify(res.body))
+  assert.equal(res.body.applied, 1)
+  assert.deepEqual(res.body.skipped, [])
+  for (const date of daysBetween(from, to)) assert.equal((await attendance.shiftFor(a2.id, date)).shiftId, evening.id, date)
+  assert.equal(await repo('ScheduleDayOverride').count({ where: { employeeId: gone.id } }), 0)
+  // فريق فرع تاني: حساب الفرع مايشوفش أعضاءه أصلًا
+  const bBefore = await repo('ScheduleDayOverride').count({ where: { employeeId: b1.id } })
+  const other = await range(hr, { teamIds: [teamB.id], from, to, shiftId: evening.id })
+  assert.equal(other.status, 400, JSON.stringify(other.body))
+  assert.equal(await repo('ScheduleDayOverride').count({ where: { employeeId: b1.id } }), bBefore)
+  // المالك: فريق + موظف بالاسم مع بعض من غير تكرار
+  const both = await range(admin, { teamIds: [teamA.id], employeeIds: [a2.id, a1.id], from, to, shiftId: evening.id })
+  assert.equal(both.status, 201, JSON.stringify(both.body))
+  assert.equal(both.body.applied, 2)
+  // من غير موظفين ولا فرق = 400، وفرق غلط = 400
+  assert.equal((await range(admin, { from, to, shiftId: evening.id })).status, 400)
+  assert.equal((await range(admin, { teamIds: ['x'], from, to, shiftId: evening.id })).status, 400)
 })

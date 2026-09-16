@@ -328,7 +328,7 @@ export class TypedDeductionsService {
     const audience = parseRequestAudience(type.visibleTo)
     // قسم المستخدم وفرعه لا يُقرآن إلا لجمهور محصور في أقسام/فروع أو لنوع خاص بفرع (قرار المالك 16 سبتمبر)
     const self = (audienceNeedsEmployee(type.visibleTo) || type.branchId != null) && user.employeeId
-      ? await em.getRepository(Employee).findOne({ where: { id: user.employeeId }, select: { id: true, departmentId: true, branchId: true } })
+      ? await em.getRepository(Employee).findOne({ where: { id: user.employeeId }, select: { id: true, departmentId: true, teamId: true, branchId: true } })
       : null
     // «حسب المنصب»: مدير قسم / قائد فريق / مدير فرع يُعرفون من الهيكل لا من الدور
     const positions = audience?.mode === 'positions' ? await orgPositionsOf(em, user.employeeId) : null

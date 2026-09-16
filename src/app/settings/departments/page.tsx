@@ -29,6 +29,7 @@ import {
   fetchTeams,
   updateDepartment,
 } from '@/lib/api'
+import { useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 
 const emptyForm = {
   name: '',
@@ -38,6 +39,9 @@ const emptyForm = {
   managerId: '',
   branchId: '',
   isActive: true,
+  // الهيكل التنظيمي: «الإدارة التنفيذية» (مديرها = الرئيس التنفيذي) والسكرتير التنفيذي — لكل الشركة
+  isExecutive: false,
+  secretaryId: '',
 }
 
 export default function DepartmentsPage() {
@@ -57,6 +61,7 @@ export default function DepartmentsPage() {
   const [expandedDepts, setExpandedDepts] = useState<number[]>([])
 
   const [formData, setFormData] = useState({ ...emptyForm })
+  const { canWrite: companyWide } = useCompanyWideWrite()
 
   const loadData = async () => {
     try {
@@ -137,6 +142,8 @@ export default function DepartmentsPage() {
         managerId: dept.managerEmployeeId ? String(dept.managerEmployeeId) : '',
         branchId: String(dept.branchId),
         isActive: dept.isActive,
+        isExecutive: !!dept.isExecutive,
+        secretaryId: dept.executiveSecretaryEmployeeId ? String(dept.executiveSecretaryEmployeeId) : '',
       })
     } else {
       setEditingDept(null)
@@ -156,6 +163,13 @@ export default function DepartmentsPage() {
       // «بدون» عند التعديل = قسم رئيسي (null يمسح الأب — كان يُهمل فيبقى الأب القديم)
       parentId: formData.parentId ? Number(formData.parentId) : editingDept ? null : undefined,
       managerEmployeeId: formData.managerId ? Number(formData.managerId) : undefined,
+      // الإدارة التنفيذية تتبعت من حساب على مستوى الشركة بس (الخادم بيرفض تغييرها من حساب فرع)
+      ...(companyWide && (editingDept || formData.isExecutive)
+        ? {
+            isExecutive: formData.isExecutive,
+            executiveSecretaryEmployeeId: formData.isExecutive && formData.secretaryId ? Number(formData.secretaryId) : null,
+          }
+        : {}),
     }
     try {
       if (editingDept) {
@@ -221,6 +235,9 @@ export default function DepartmentsPage() {
             <div className="flex items-center gap-2">
               <span className="font-medium text-gray-800">{dept.name}</span>
               <span className="text-xs text-gray-400 font-mono">({dept.code || '—'})</span>
+              {dept.isExecutive && (
+                <span className="text-xs bg-primary-50 text-primary-700 px-2 py-0.5 rounded-full">الإدارة التنفيذية</span>
+              )}
             </div>
             <p className="text-sm text-gray-500">{managerNameOf(dept.managerEmployeeId)}</p>
           </div>
@@ -707,6 +724,65 @@ export default function DepartmentsPage() {
                   />
                   <span className="text-sm text-gray-700">قسم نشط</span>
                 </label>
+
+                {/* الهيكل التنظيمي: الإدارة التنفيذية والسكرتير التنفيذي (لكل الشركة) */}
+                {companyWide ? (
+                  <div className="rounded-xl border border-gray-200 p-4 space-y-3">
+                    <label className="flex items-start gap-2">
+                      <input
+                        type="checkbox"
+                        checked={formData.isExecutive}
+                        onChange={(e) =>
+                          setFormData({ ...formData, isExecutive: e.target.checked, secretaryId: e.target.checked ? formData.secretaryId : '' })
+                        }
+                        className="w-4 h-4 mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      />
+                      <span>
+                        <span className="block text-sm font-medium text-gray-700">الإدارة التنفيذية</span>
+                        <span className="block text-xs text-gray-400">
+                          بتظهر فوق الهيكل التنظيمي، ومدير القسم ده هو الرئيس التنفيذي. قسم واحد بس في الشركة.
+                        </span>
+                      </span>
+                    </label>
+                    {formData.isExecutive &&
+                      departments
+                        .filter((d) => d.isExecutive && d.id !== editingDept?.id)
+                        .map((d) => (
+                          <p key={d.id} className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                            «{d.name}» متعلّم إدارة تنفيذية دلوقتي — هيتشال منه التعليم والسكرتير بعد الحفظ
+                          </p>
+                        ))}
+                    {formData.isExecutive && (
+                      <div>
+                        <label className="block text-sm font-medium text-gray-700 mb-2">السكرتير التنفيذي</label>
+                        <select
+                          value={formData.secretaryId}
+                          onChange={(e) => setFormData({ ...formData, secretaryId: e.target.value })}
+                          className="input w-full"
+                        >
+                          <option value="">— بدون —</option>
+                          {employees
+                            .filter((emp) => String(emp.id) !== formData.managerId)
+                            .map((emp) => (
+                              <option key={emp.id} value={emp.id}>
+                                {emp.fullName}
+                                {emp.jobTitle ? ` — ${emp.jobTitle}` : ''}
+                              </option>
+                            ))}
+                        </select>
+                        <p className="text-xs text-gray-400 mt-1">
+                          بيظهر جنب الرئيس التنفيذي بس في الهيكل، ومش مدير لحد
+                        </p>
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  editingDept?.isExecutive && (
+                    <p className="text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2">
+                      القسم ده «الإدارة التنفيذية» — تغييرها والسكرتير التنفيذي من حساب على مستوى الشركة
+                    </p>
+                  )
+                )}
               </div>
 
               <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">

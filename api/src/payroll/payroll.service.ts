@@ -46,8 +46,11 @@ import { CostCenter } from '../assets/assets.entities'
 import { loadAttendanceExemptions, exemptionPolicyOnDate } from '../attendance/attendance-exemption-resolver'
 import { Request } from '../requests/entities/request.entity'
 import { attendanceDeductionDay, AttendanceDeductionPolicy } from './attendance-deductions'
+import { computeSocialInsurance } from './social-insurance'
+import { readSocialInsuranceContext } from './social-insurance.service'
 import { readPayrollShadowAttendance } from './payroll-shadow-attendance'
 import { roundPayrollMoney as round2 } from './payroll-money'
+import { payrollPaySplit } from './pay-split'
 import { buildPayrollInstallmentPlan, isPayrollInstallmentPlan, PayrollInstallmentPlan, postPayrollInstallments, releasePayrollInstallments, reservePayrollInstallments } from './payroll-installment-ledger'
 import { legacyInstallmentNumber, readLoanInstallmentPositions } from './payroll-installment-balances'
 import { protectPayrollObligations } from './payroll-obligation-protection'
@@ -67,6 +70,8 @@ import { PayrollRunUnassignedAck } from './payroll-run-definition.entities'
 // B4 / الخطوات 19–21: لقطة السياسة على المسير، ومحرك السياسة خلف engine_mode، والشرائح المؤرخة.
 import { capturePayrollRunPolicySnapshot, diffPayrollRunPolicySnapshots, parsePayrollRunPolicySnapshot, type PayrollRunPolicySnapshot } from './payroll-policy-snapshot'
 import { payrollLatenessTierDeduction } from './payroll-lateness-tiers'
+// «شيل خصم» لشهر على شركة/فرع/أقسام/فرق/موظفين — يتطبق على المسودة والمحسوب بس عند الحساب
+import { readActiveDeductionWaivers, waiveAttendanceDeductionDay, waivedDeductionKinds, waivePolicyShadowTotals, withoutWaivedObligations } from './payroll-deduction-waivers'
 import { computePayrollPolicyEnginePreNet, parsePayrollEngineParityReport, PAYROLL_DEFAULT_ENGINE_MODE, PAYROLL_ENGINE_MODE_LABELS, PAYROLL_ENGINE_MODES, PAYROLL_PARITY_COMPONENTS,
   payrollParityDifferenceKey, payrollParityEmployeeRow, payrollPolicySwitchIssues, summarizePayrollEngineParity, type PayrollEngineMode, type PayrollParityEmployeeRow,
   payrollApprovalParityIssues, payrollParityPendingGroups, payrollShadowSourceIssueCodes, payrollPolicyEngineWithLoans, type PayrollPolicyEngineFacts } from './payroll-policy-engine-run'
@@ -627,7 +632,7 @@ export class PayrollService {
       const member = members.create({ employeeId: emp.id, snapshot, membershipStatus: row.status, inclusionSource: row.inclusionSource,
         exclusionReason: row.status === 'INCLUDED' ? null : row.code })
       newMembers.push(member)
-      if (row.status === 'INCLUDED' && coverage && salary?.ok) covered.push({ emp, coverage, member, salary, claims: await getSettlementFinancialClaims(em, emp.id) })
+      if (row.status === 'INCLUDED' && coverage && salary?.ok) covered.push({ emp, coverage, member, salary, org: row.org, claims: await getSettlementFinancialClaims(em, emp.id) })
     }
     const conflicts = [...membership.draftConflicts, ...membership.blockingConflicts]
     if (membership.draftConflicts.length && !dto.allowDraftConflicts) {
@@ -642,11 +647,16 @@ export class PayrollService {
     const periodDays = Math.round((Date.parse(`${endDate}T12:00:00Z`) - Date.parse(`${startDate}T12:00:00Z`)) / 86400000) + 1
 
     let totalNet = 0
+    // التأمينات الاجتماعية: نسب وحدود النظامين ونظام كل فرع، تُقرأ مرة للمسير
+    const socialInsuranceContext = await readSocialInsuranceContext(em)
     // الإجازة المرضية بأجر متدرج (قرار المالك 16 سبتمبر): شرائح كل نوع من فئة SICK، تُقرأ مرة للمسير
     const sickTiersByCode = new Map<string, SickPayTier[]>((await em.getRepository(LeaveType).find({ where: { category: 'SICK' } }))
       .map(type => [type.code, parseSickPayTiers(type.sickPayTiers)]))
-    for (const { emp, coverage, member, claims, salary } of covered) {
+    // «شيل خصم»: قواعد الشهر السارية، تُقرأ مرة للمسير وتتطابق على مكان الموظف في آخر يوم من الفترة
+    const deductionWaivers = await readActiveDeductionWaivers(em, run.period)
+    for (const { emp, coverage, member, claims, salary, org } of covered) {
       const { coverFrom, coverTo, coverDays } = coverage
+      const waived = waivedDeductionKinds(deductionWaivers, { employeeId: emp.id, branchId: org.branchId, departmentId: org.departmentId, teamId: org.teamId })
       // الحضور قد يصحح ساعات مصدر الإضافي؛ نقرأ الاستحقاق بعد إتمام التصحيح داخل المعاملة.
       await this.attendanceService.materializeAbsences(emp.id, coverFrom, coverTo, em)
       // راتب شهر المسير كاملًا (لا تقسيم ولا متوسط داخل الشهر)؛ التناسب أدناه لأيام الخدمة فقط.
@@ -777,7 +787,9 @@ export class PayrollService {
       // الخطوة 21: أثر الشريحة لكل يوم (المدى والطريقة والمضاعف والمعادلة) محفوظ مع اليوم ويظهر في القسيمة.
       const attendanceDeductionDays = attRows.map(row => {
         const tier = payrollLatenessTierDeduction(row.lateMinutes, tiers, dayRate, minuteRate)
-        return { ...attendanceDeductionDay(row, attendancePolicy, tier.amount), latenessTier: tier.trace }
+        // «شيل خصم»: التأخير، والخروج المبكر (نقص الوردية الثابتة) أو نقص الساعات (المرنة) بصفر لليوم
+        return waiveAttendanceDeductionDay({ ...attendanceDeductionDay(row, attendancePolicy, tier.amount), latenessTier: tier.trace }, waived,
+          row.attendanceRuleSnapshot?.flexEnabled === false)
       })
       // المجموع التاريخي يشمل الأذونات المدفوعة؛ تفصيل اليوم يميز مبلغها صراحةً.
       const latenessRequested = round2(attendanceDeductionDays.reduce((sum, day) => sum + day.latenessAmount + day.permissionAmount, 0))
@@ -789,7 +801,8 @@ export class PayrollService {
       // (يوم الإجازة يُصنّف 'leave' لا 'absent' فلا ازدواج مع الإجازة غير المدفوعة)
       const absentRows = attRows.filter((r) => r.status === 'absent')
       const absenceDays = absentRows.length
-      const absenceRequested = round2(absenceDays * dayRate * absencePenalty)
+      const absenceDayAmount = waived.has('ABSENCE') ? 0 : dayRate * absencePenalty
+      const absenceRequested = round2(absenceDays * absenceDayAmount)
       // D13/الخطوة 28: محرك السياسة بوضع SHADOW بجانب الحساب القديم لنفس الموظف والفترة (المصروف = القديم دائمًا):
       // مزودات المصادر الحية (ومنها نسب الوردية الليلية ليوم بدايتها) ← منفذ البنود ← تكافؤ يومي. قراءة فقط ولا يغير أي مبلغ.
       // الخطوة 20: وضع LEGACY لا يحسب الظل؛ SHADOW وPOLICY يحسبانه على نفس اللقطة (الشرائح والمعاملات المجمدة).
@@ -798,7 +811,7 @@ export class PayrollService {
           dailyCapDays, earlyLeaveEnabled: earlyLeaveValue === 'true', absencePenalty, latenessTiers: tiers },
         suspendedDates: suspension.dates,
         legacy: { days: attendanceDeductionDays.map(day => ({ date: day.date, lateness: day.latenessAmount + day.permissionAmount, shortfall: day.shortfallAmount })),
-          absentDates: absentRows.map(row => row.date), absenceDayAmount: dayRate * absencePenalty,
+          absentDates: absentRows.map(row => row.date), absenceDayAmount,
           totals: { lateness: latenessRequested, shortfall: shortfallRequested, absence: absenceRequested } } })
 
       // 3) الإجازات غير المدفوعة (isUnpaid من تعريف النوع — أي نوع
@@ -817,6 +830,7 @@ export class PayrollService {
           }
         }
       }
+      if (waived.has('UNPAID_LEAVE')) unpaidDays = 0
       // 3أ) الإجازة المرضية بأجر متدرج: ترتيب كل يوم بين أيام المرض المعتمدة في سنته (شاملًا ما قبل الفترة)، ونسبة أجره من شرائح نوعه؛
       // الخصم = سعر اليوم × (100 − النسبة)/100. اليوم المسجل بدون راتب يُعدّ في الترتيب ولا يُخصم مرتين (يخصمه بند 3).
       // المبلغ يدخل عمود الإجازة بلا أجر (عدم استحقاق لا خصم) بدقة محرك السياسة، ويظهر سطرًا مستقلًا في التفصيل والقسيمة.
@@ -824,10 +838,10 @@ export class PayrollService {
       const sickLeaves = sickTiersByCode.size ? await em.getRepository(Leave).find({ where: { employeeId: emp.id, status: 'APPROVED',
         leaveTypeCode: In([...sickTiersByCode.keys()]), fromDate: LessThanOrEqual(coverTo), toDate: MoreThanOrEqual(`${coverFrom.slice(0, 4)}-01-01`) } }) : []
       const sick = sickLeaveDeduction(sickLeaveDaysInCover({ leaves: sickLeaves, tiersByCode: sickTiersByCode, coverFrom, coverTo,
-        deductible: date => policyOnDate(date).unpaidLeaveDeductible && !suspension.dates.includes(date) }), grossCents, monthlyDays)
+        deductible: date => !waived.has('SICK_LEAVE') && policyOnDate(date).unpaidLeaveDeductible && !suspension.dates.includes(date) }), grossCents, monthlyDays)
       // 3ب) أيام الإيقاف عن العمل (قرار المالك 16 سبتمبر): مش غياب، وتُخصم يومًا بيوم مع الإجازة بدون راتب بلا ازدواج في نفس اليوم.
       // سقفها أيام الراتب المستحق ناقص اللي اتخصم فعلًا (بدون راتب + المرضية): دورة 31 يوم موقوفة كلها = صافي صفر مش سالب
-      suspension.days = payrollSuspensionDaysWithinCap(suspension.days, fullCoverage ? monthlyDays : Math.min(coverDays, monthlyDays), unpaidDays, sick.equivalentDays)
+      suspension.days = waived.has('SUSPENSION') ? 0 : payrollSuspensionDaysWithinCap(suspension.days, fullCoverage ? monthlyDays : Math.min(coverDays, monthlyDays), unpaidDays, sick.equivalentDays)
       unpaidDays += suspension.days
       const unpaidOnlyDeduction = round2(unpaidDays * dayRate)
       const unpaidDeduction = sick.equivalentDays === '0' ? unpaidOnlyDeduction
@@ -839,12 +853,13 @@ export class PayrollService {
       // CREDIT إضافة. تُحجز عند الاعتماد وتُستهلك عند الصرف. DD-11 (C2): حماية الصافي لكل الخصومات:
       // فائض الحضور يسقط، وفائض القيود يُرحّل عند الصرف، والأقساط بعدها من الباقي.
       const obligationRunId = run.id, obligationRunPeriod = run.period
-      const pendingObligations = (
+      // «شيل خصم»: القيد المشال (مسجل/تأمينات/أخرى) ما يدخلش المسير ده ويفضل في الدفتر؛ الإضافات ما بتتشالش
+      const pendingObligations = withoutWaivedObligations((
         await em.getRepository(EmployeeObligation).find({
           where: { employeeId: emp.id, status: 'PENDING' },
         })
       ).filter((o) => (!o.effectiveDate || o.effectiveDate <= endDate) && (!o.targetPeriod || o.targetPeriod <= obligationRunPeriod) &&
-        (o.reservedPayrollRunId == null || o.reservedPayrollRunId === obligationRunId))
+        (o.reservedPayrollRunId == null || o.reservedPayrollRunId === obligationRunId)), waived)
       // C2 / DD-11: فئة نوع الخصم المصنف وأولوية ترحيله (النظامي أولًا، الإداري آخر المصنفة)
       const typedObligationFacts = await readTypedObligationFacts(em, pendingObligations)
       const obligationEntry = (o: EmployeeObligation) => ({ id: o.id, amount: round2(Number(o.amount)), category: o.category,
@@ -856,8 +871,8 @@ export class PayrollService {
       const exemptionFacts = exemptionRules.length ? await readExemptionObligationFacts(em, pendingObligations) : new Map()
       const exemption = applyFinancialExemptions({ rules: exemptionRules,
         attendance: { days: attendanceDeductionDays.map(day => ({ date: day.date, lateness: day.latenessAmount + day.permissionAmount, shortfall: day.shortfallAmount })),
-          absentDates: absentRows.map(row => row.date), absenceDayAmount: dayRate * absencePenalty,
-          requested: { lateness: latenessRequested, shortfall: shortfallRequested, absence: absenceRequested } },
+          absentDates: absentRows.map(row => row.date), absenceDayAmount,
+          requested:{ lateness: latenessRequested, shortfall: shortfallRequested, absence: absenceRequested } },
         debits: pendingObligations.filter((o) => o.type === 'DEBIT').map(o => ({ ...obligationEntry(o), ...exemptionFacts.get(o.id), label: o.label })),
         unpaidLeave: unpaidDeduction })
       const exemptedDebits = exemption.debits.map(({ deductionTypeId: _typeId, isExemptable: _exemptable, typeName: _typeName, label: _label, creatorUserId: _creator, ...entry }) => entry)
@@ -874,13 +889,21 @@ export class PayrollService {
       let netProtection = protectPayrollObligations(protectionInput)
       // خطة الأقساط على رصيد موضع السلف في ترتيب التحصيل؛ الافتراضي (السلف آخرًا) = الصافي قبل الأقساط وما استهلكته الخصومات كما كان.
       const loanSlot = netProtection.loanSlot
+      // التأمينات الاجتماعية (حصة الموظف): خصم نظامي شهري بنظام فرع الموظف في آخر يوم من الفترة، يسبق الأقساط
+      // (الأقساط تُبنى على الصافي بعده) ويظهر سطرًا مستقلًا بنوع SOCIAL_INSURANCE — إعفاءات الخصومات لا تلمسه.
+      const socialInsurance = computeSocialInsurance({
+        system: socialInsuranceContext.systemOf((member.snapshot as { branchId?: number | null } | null)?.branchId ?? emp.branchId),
+        registered: emp.isGosiRegistered, declaredSalary: emp.gosiBaseSalary, fallbackSalary: basic, nationality: emp.nationality,
+      }, socialInsuranceContext.settings)
+      // «شيل خصم» التأمينات للشهر: حصة الموظف صفر في المسير ده
+      const socialInsuranceDeduction = waived.has('SOCIAL_INSURANCE') ? 0 : socialInsurance.employeeShare
       const previousBreakdown = previousItems.find(row => row.employeeId === emp.id)?.breakdown
       const previousPlan = previousBreakdown ? JSON.parse(previousBreakdown).installmentPlan : null
       if (previousPlan != null && !isPayrollInstallmentPlan(previousPlan)) throw new ConflictException('خطة أقساط المسير السابقة غير صالحة')
       const installmentPlan = await buildPayrollInstallmentPlan(em, emp.id, {
-        period: run.period, endDate, netBeforeLoans: loanSlot.netBeforeLoans.toFixed(2), earnedFixedGross: grossEarned.toFixed(2),
+        period: run.period, endDate, netBeforeLoans: round2(loanSlot.netBeforeLoans - socialInsuranceDeduction).toFixed(2), earnedFixedGross: grossEarned.toFixed(2),
         capConsumed: loanSlot.capConsumed.toFixed(2),
-      }, { runId: run.id, policy: !dto.refreshInstallmentPolicy && previousPlan ? previousPlan.policy : undefined, exemptions: exemption.loanScope })
+      }, { runId: run.id, policy: !dto.refreshInstallmentPolicy && previousPlan ? previousPlan.policy : undefined, exemptions: exemption.loanScope, waived: waived.has('LOAN') })
       const loanDeduction = installmentPlan ? legacyInstallmentNumber(installmentPlan.allocation.totals.deductedAmount) : 0
       // السلف قبل فئات أخرى بترتيب المالك: تُعاد الحماية بالأقساط المحصلة في موضعها فتتقلص الفئات التالية لها.
       if (collection.loanBeforeOthers && loanDeduction > 0) netProtection = protectPayrollObligations({ ...protectionInput, loanCollected: loanDeduction })
@@ -900,7 +923,7 @@ export class PayrollService {
           unpaidDeduction -
           otherDeductions
       )
-      const netPay = round2(netBeforeLoans - loanDeduction)
+      const netPay = round2(netBeforeLoans - socialInsuranceDeduction - loanDeduction)
       // الخطوة 20 / D13: محرك السياسة على نفس الموظف ونفس المدخلات المجمدة (راتب شهر المسير، التغطية، الإضافي المعتمد، الإجازة بلا أجر،
       // قيود الدفتر، خصومات الحضور من منفذ الأيام) بسياسة افتراضية تقلّد القديم، ثم تقرير تكافؤ لكل بند. POLICY يصرف نتيجته.
       let paid = { earnedComponents, salaryComponents, grossEarned, latenessDeduction, shortfallDeduction, absenceDeduction, otherDeductions, otherAdditions,
@@ -914,8 +937,8 @@ export class PayrollService {
           credits: pendingObligations.filter(o => o.type === 'CREDIT').map(obligationEntry), debits: exemptedDebits,
           // الخطوة 26: نفس قرار الإعفاء على مجاميع ظل الحضور، فيقيس التكافؤ الحساب لا الإعفاء
           protectionSettings, attendance: { status: policyShadow?.status ?? 'UNAVAILABLE',
-            totals: shadowTotals ? exemptPolicyShadowTotals({ lateness: shadowTotals.lateness, shortfall: shadowTotals.shortfall, absence: shadowTotals.absence },
-              (policyShadow as { days?: Array<{ date?: unknown; policy?: { lateness?: unknown; shortfall?: unknown; absence?: unknown } | null }> } | null)?.days, exemptionRules) : null,
+            totals: shadowTotals ? waivePolicyShadowTotals(exemptPolicyShadowTotals({ lateness: shadowTotals.lateness, shortfall: shadowTotals.shortfall, absence: shadowTotals.absence },
+              (policyShadow as { days?: Array<{ date?: unknown; policy?: { lateness?: unknown; shortfall?: unknown; absence?: unknown } | null }> } | null)?.days, exemptionRules), waived) : null,
             message: policyShadow?.message ?? 'لم يُحسب ظل الحضور' },
           // الخطوة 22 (B5): ترتيب التحصيل نفسه للمحركين، فيقيس التكافؤ الحساب لا اختلاف الترتيب
           collectionOrder: collection.order }
@@ -925,14 +948,14 @@ export class PayrollService {
           // الأقساط تتبع رصيد موضعها في ترتيب التحصيل: نفس السياق = نفس الخطة، وإلا تُبنى خطة من أرقام المحرك بسياسة الأقساط نفسها.
           const policySlot = preNet.protection.loanSlot
           if (policySlot.netBeforeLoans.toFixed(2) !== loanSlot.netBeforeLoans.toFixed(2) || preNet.grossEarned.toFixed(2) !== grossEarned.toFixed(2) || policySlot.capConsumed.toFixed(2) !== loanSlot.capConsumed.toFixed(2)) {
-            policyPlan = await buildPayrollInstallmentPlan(em, emp.id, { period: run.period, endDate, netBeforeLoans: policySlot.netBeforeLoans.toFixed(2),
+            policyPlan = await buildPayrollInstallmentPlan(em, emp.id, { period: run.period, endDate, netBeforeLoans: round2(policySlot.netBeforeLoans - socialInsuranceDeduction).toFixed(2),
               earnedFixedGross: preNet.grossEarned.toFixed(2), capConsumed: policySlot.capConsumed.toFixed(2) },
-            { runId: run.id, policy: !dto.refreshInstallmentPolicy && previousPlan ? previousPlan.policy : undefined, exemptions: exemption.loanScope })
+            { runId: run.id, policy: !dto.refreshInstallmentPolicy && previousPlan ? previousPlan.policy : undefined, exemptions: exemption.loanScope, waived: waived.has('LOAN') })
           }
           policyLoans = policyPlan ? legacyInstallmentNumber(policyPlan.allocation.totals.deductedAmount) : 0
           if (collection.loanBeforeOthers) policyFinal = payrollPolicyEngineWithLoans(preNet, engineFacts, policyLoans)
         }
-        const policyNet = policyFinal.netBeforeLoans === null || policyLoans === null ? null : round2(policyFinal.netBeforeLoans - policyLoans)
+        const policyNet = policyFinal.netBeforeLoans === null || policyLoans === null ? null : round2(policyFinal.netBeforeLoans - socialInsuranceDeduction - policyLoans)
         const parity = payrollParityEmployeeRow({ employeeId: emp.id,
           legacy: { basicSalary: earnedComponents[0], allowances: round2(earnedComponents.slice(1).reduce((sum, amount) => sum + amount, 0)), overtimeAmount: otAmount, otherAdditions,
             latenessDeduction, shortfallDeduction, absenceDeduction, unpaidLeaveDeduction: unpaidDeduction, otherDeductions, loanInstallments: loanDeduction, netPay },
@@ -982,6 +1005,7 @@ export class PayrollService {
           loanInstallments: paid.loanDeduction,
           otherDeductions: paid.otherDeductions,
           otherAdditions: paid.otherAdditions,
+          socialInsuranceDeduction,
           netPay: paid.netPay,
           payMethod: emp.payMethod ?? 'transfer',
           breakdown: JSON.stringify({
@@ -1050,6 +1074,8 @@ export class PayrollService {
               leaveIds: [...new Set(sick.days.map(day => day.leaveId))] } } : {}),
             // سطور عمود الإجازة بلا أجر كما تظهر في القسيمة: بدون راتب + خصم المرضية لكل نسبة أجر (مجموعها = العمود)
             leaveDeductionLines: leaveLines.lines,
+            // التأمينات الاجتماعية: النظام والفئة والأجر التأميني بعد الحدود والنسب وحصتا الموظف وصاحب العمل (kind = SOCIAL_INSURANCE)
+            socialInsurance,
           }),
         })
       )
@@ -1137,7 +1163,9 @@ export class PayrollService {
     if (!isPayrollInstallmentPlan(plan)) throw new ConflictException('خطة أقساط المسير غير صالحة؛ أعد حساب المسودة')
     const earned = round2(Number(item.basicSalary) + Number(item.allowances))
     const consumed = round2(Number(item.latenessDeduction) + Number(item.shortfallDeduction) + Number(item.absenceDeduction) + Number(item.otherDeductions))
-    const netBefore = round2(earned + Number(item.overtimeAmount) + Number(item.otherAdditions) - consumed - Number(item.unpaidLeaveDeduction))
+    // التأمينات الاجتماعية (حصة الموظف) تسبق الأقساط: الخطة مبنية على الصافي بعدها
+    const socialInsurance = Number(item.socialInsuranceDeduction ?? 0)
+    const netBefore = round2(earned + Number(item.overtimeAmount) + Number(item.otherAdditions) - consumed - Number(item.unpaidLeaveDeduction) - socialInsurance)
     const deducted = legacyInstallmentNumber(plan.allocation.totals.deductedAmount)
     const ids = plan.allocation.lines.filter(line => line.eligible).map(line => Number(line.installmentRef)).sort((a, b) => a - b)
     // الخطوة 22 (B5): لو سبقت السلف فئات أخرى بترتيب المالك فخطة الأقساط على رصيد موضعها المحفوظ، لا على الصافي بعد كل الخصومات.
@@ -1145,7 +1173,7 @@ export class PayrollService {
     if (slot !== null && (typeof slot !== 'object' || !Number.isFinite(Number(slot.netBeforeLoans)) || !Number.isFinite(Number(slot.capConsumed)))) {
       throw new ConflictException('رصيد موضع السلف المحفوظ في تفصيل المسير غير صالح؛ أعد حساب المسودة')
     }
-    const planNet = slot ? Number(slot.netBeforeLoans).toFixed(2) : netBefore.toFixed(2), planCap = slot ? Number(slot.capConsumed).toFixed(2) : consumed.toFixed(2)
+    const planNet = slot ? round2(Number(slot.netBeforeLoans) - socialInsurance).toFixed(2) : netBefore.toFixed(2), planCap = slot ? Number(slot.capConsumed).toFixed(2) : consumed.toFixed(2)
     if (plan.context.period !== run.period || plan.context.endDate !== run.endDate || plan.context.earnedFixedGross !== earned.toFixed(2) ||
         plan.context.capConsumed !== planCap || plan.context.netBeforeLoans !== planNet ||
         Number(item.loanInstallments) !== deducted || Number(item.netPay) !== round2(netBefore - deducted) ||
@@ -1565,8 +1593,11 @@ export class PayrollService {
     const legacyIdentity = snapshot ? null : await em.getRepository(Employee).findOne({ where: { id: item.employeeId }, select: ['id', 'fullName', 'employeeCode'] })
     // الهوية والبنك والآيبان على القسيمة: قراءة فقط من ملف الموظف، محكومة بنفس صلاحية القسيمة أعلاه.
     // ليست لقطة تاريخية (اللقطة لا تحملها)، فهي بيانات صرف حالية يحتاجها من يقرأ القسيمة.
-    const payee = await em.getRepository(Employee).findOne({ where: { id: item.employeeId }, select: ['id', 'nationalId', 'bankName', 'iban'] })
-    const identity = { nationalId: payee?.nationalId ?? null, bankName: payee?.bankName ?? null, iban: payee?.iban ?? null }
+    const payee = await em.getRepository(Employee).findOne({ where: { id: item.employeeId }, select: ['id', 'nationalId', 'bankName', 'iban', 'payMethod', 'bankTransferAmount'] })
+    // طريقة الصرف وتقسيم الصافي «تحويل بنكي X — نقدي Y» من بيانات الصرف الحالية (نفس كشف البنوك)
+    const payMethod = payee?.payMethod ?? item.payMethod ?? 'transfer'
+    const identity = { nationalId: payee?.nationalId ?? null, bankName: payee?.bankName ?? null, iban: payee?.iban ?? null,
+      payMethod, bankTransferAmount: payee?.bankTransferAmount ?? null, paySplit: payrollPaySplit(item.netPay, payMethod, payee?.bankTransferAmount) }
     const employee = snapshot ? { id: item.employeeId, fullName: snapshot.fullName, employeeCode: snapshot.employeeCode,
       jobTitle: snapshot.jobTitle, joinDate: snapshot.hireDate, branchId: snapshot.branchId, departmentId: snapshot.departmentId,
       teamId: snapshot.teamId, costCenterId: snapshot.costCenterId, basicSalary: snapshot.basicSalary, ...identity } :

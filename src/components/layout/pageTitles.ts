@@ -60,8 +60,9 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/payroll/payslip', 'قسيمة الراتب'],
   ['/payroll/allowances', 'البدلات'],
   ['/payroll/loans', 'السلف والقروض'],
-  ['/payroll/gosi', 'التأمينات (GOSI)'],
+  ['/payroll/gosi', 'التأمينات'],
   ['/payroll/reports', 'تقرير الرواتب'],
+  ['/payroll/bank-sheet', 'كشف البنوك'],
   ['/payroll', 'مسير الرواتب'],
   // التوظيف والأداء والتدريب والتقارير
   ['/recruitment/applicants', 'المتقدمين'],
@@ -82,6 +83,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   [/^\/training\/[^/]+/, 'تفاصيل الدورة'],
   ['/training', 'الدورات التدريبية'],
   ['/reports/custom', 'تقارير مخصصة'],
+  ['/reports/cost-centers', 'تقرير مراكز التكلفة'],
   ['/reports', 'لوحة التقارير'],
   // الإعدادات
   ['/settings/branches', 'الفروع'],

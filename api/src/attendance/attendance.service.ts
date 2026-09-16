@@ -699,25 +699,19 @@ export class AttendanceService {
       )
     }
 
-    // المطابقة برقم البصمة (fingerprintCode) أولاً ثم الكود الوظيفي —
+    // المطابقة برقم البصمة (fingerprintCode) وحده — الكود الوظيفي يولّده النظام ومش مفتاح بصمة.
     // دفعات من الأكواد (حد معاملات SQL Server)
     const codes = [...new Set(items.map((i) => i.code))]
     const emps: Employee[] = []
     for (let i = 0; i < codes.length; i += 500) {
       const chunk = codes.slice(i, i + 500)
-      emps.push(
-        ...(await this.employees.find({
-          where: [{ fingerprintCode: In(chunk) }, { employeeCode: In(chunk) }],
-        }))
-      )
+      emps.push(...(await this.employees.find({ where: { fingerprintCode: In(chunk) } })))
     }
     const byFingerprint = new Map<string, Employee>()
-    const byCode = new Map<string, Employee>()
     for (const e of emps) {
       if (e.fingerprintCode) byFingerprint.set(e.fingerprintCode, e)
-      byCode.set(e.employeeCode, e)
     }
-    const resolve = (code: string) => byFingerprint.get(code) ?? byCode.get(code)
+    const resolve = (code: string) => byFingerprint.get(code)
 
     // الإدخال اليدوي: لموظف مسجّل داخل نطاق فرع المُدخِل، ولا لنفسه
     if (!fromDevice && user) {
@@ -926,9 +920,10 @@ export class AttendanceService {
   async relinkUnmatchedPunches(
     emp: Pick<Employee, 'id' | 'employeeCode' | 'fingerprintCode' | 'joinDate'>
   ): Promise<{ relinked: number; days: number }> {
+    // رقم البصمة وحده مفتاح الربط (الكود الوظيفي مش مفتاح بصمة)
     const codes = [
       ...new Set(
-        [emp.fingerprintCode, emp.employeeCode]
+        [emp.fingerprintCode]
           .map((c) => (c ?? '').trim())
           .filter((c) => c && c.length <= PUNCH_CODE_MAX)
       ),
@@ -1735,7 +1730,8 @@ export class AttendanceService {
   // كل موظف في معاملة لوحده بنفس الأقفال وحماية المسيرات المعتمدة، وأيامه اللي
   // فاتت (والجار الليلي) بتتحسب تاني زي إسناد اليوم الواحد
   async assignScheduleRange(dto: {
-    employeeIds: number[]
+    employeeIds?: number[]
+    teamIds?: number[]
     from: string
     to: string
     weekdays?: number[]
@@ -1772,6 +1768,18 @@ export class AttendanceService {
     for (const date of dayDates) dayShift.set(date, await this.scheduleShift({ shiftId }, [date]))
 
     let employeeIds = [...new Set((dto.employeeIds ?? []).map(Number))].filter(id => Number.isInteger(id) && id > 0)
+    // فرق (الاستهداف: شركة ← فرع ← أقسام ← فرق ← موظفين): أعضاء الفريق الشغالين بس،
+    // وحساب الفرع بيشوف أعضاء فرعه بس — فريق فرع تاني يطلع فاضي
+    const teamIds = [...new Set((dto.teamIds ?? []).map(Number))].filter(id => Number.isInteger(id) && id > 0)
+    if (teamIds.length) {
+      const scope = user ? branchScopeOf(user) : null
+      const members = (await this.employees.find({
+        where: { teamId: In(teamIds), ...(scope !== null ? { branchId: scope } : {}) },
+      })).filter(e => !['terminated', 'archived'].includes(String(e.status)))
+      if (!members.length && !employeeIds.length) throw new BadRequestException('مفيش موظفين شغالين في الفرق المختارة')
+      employeeIds = [...new Set([...employeeIds, ...members.map(e => e.id)])]
+      if (employeeIds.length > 500) throw new BadRequestException('الدفعة الواحدة لا تزيد عن 500 موظف — قسّم الفرق على أكتر من مرة')
+    }
     if (!employeeIds.length) throw new BadRequestException('اختار موظف واحد على الأقل')
     const emps = await this.employees.find({ where: { id: In(employeeIds) } })
     const byId = new Map(emps.map(e => [e.id, e]))

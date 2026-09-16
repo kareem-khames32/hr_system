@@ -191,13 +191,22 @@ class DayOverridesBulkDto {
 // إسناد وردية لمدة (شهر أو أي مدى) لمجموعة موظفين مرة واحدة — التحقق التقويمي
 // وسريان الوردية في كل يوم ونطاق الفرع في الخدمة
 class ScheduleRangeDto {
+  // موظفين بالاسم و/أو فرق (teamIds) — الخدمة بتجيب أعضاء الفرق؛ لازم واحد منهم على الأقل
+  @IsOptional()
   @IsArray({ message: 'الموظفون (employeeIds) قائمة أرقام' })
-  @ArrayNotEmpty({ message: 'اختر موظف واحد على الأقل' })
   @ArrayMaxSize(500, { message: 'الدفعة الواحدة لا تزيد عن 500 موظف' })
   @Type(() => Number)
   @IsInt({ each: true, message: 'الموظفون (employeeIds) أرقام صحيحة' })
   @Min(1, { each: true, message: 'الموظفون (employeeIds) أرقام صحيحة' })
-  employeeIds: number[]
+  employeeIds?: number[]
+
+  @IsOptional()
+  @IsArray({ message: 'الفرق (teamIds) قائمة أرقام' })
+  @ArrayMaxSize(100, { message: 'الدفعة الواحدة لا تزيد عن 100 فريق' })
+  @Type(() => Number)
+  @IsInt({ each: true, message: 'الفرق (teamIds) أرقام صحيحة' })
+  @Min(1, { each: true, message: 'الفرق (teamIds) أرقام صحيحة' })
+  teamIds?: number[]
 
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'من تاريخ (from) بصيغة YYYY-MM-DD' })
   from: string

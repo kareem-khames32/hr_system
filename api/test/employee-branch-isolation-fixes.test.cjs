@@ -25,7 +25,8 @@ test('تكرار الهوية/البصمة/الكود: الاسم يظهر لم�
   assert.equal(await conflict({ nationalId: '1012345678' }, 4), 'رقم الهوية / الإقامة 1012345678 مسجل لموظف آخر (سارة من فرع أربعة)')
   assert.equal(await conflict({ nationalId: '1012345678' }, null), 'رقم الهوية / الإقامة 1012345678 مسجل لموظف آخر (سارة من فرع أربعة)')
   assert.doesNotMatch(await conflict({ fingerprintCode: '777' }, 1), /سارة/)
-  assert.doesNotMatch(await conflict({ employeeCode: 'EMP777' }, 1), /سارة/)
+  // كود الموظف بقى من النظام (قرار المالك 16 سبتمبر) — مش مدخل فمش بيتفحص تكراره هنا
+  await service.assertUnique({ employeeCode: 'EMP777' }, 1)
   assert.match(await conflict({ fingerprintCode: '777' }, null), /سارة/)
   // المسارات بتمرر نطاق المستخدم
   const service_ = source('src/employees/employees.service.ts'), controller = source('src/employees/employees.controller.ts')

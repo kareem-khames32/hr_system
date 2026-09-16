@@ -1,6 +1,7 @@
 import {
   IsBoolean,
   IsEmail,
+  IsIn,
   IsInt,
   IsOptional,
   IsString,
@@ -73,6 +74,11 @@ export class CreateBranchDto {
   @IsOptional()
   @Matches(/^[A-Za-z]{2,5}$/, { message: 'رمز الدولة حروف إنجليزية (مثل EG أو SA)' })
   country?: string
+
+  // نظام التأمينات الاجتماعية للفرع — غير مُرسل = بدون تأمينات
+  @IsOptional()
+  @IsIn(['NONE', 'SAUDI', 'EGYPTIAN'], { message: 'نظام التأمينات: بدون أو السعودية أو المصرية' })
+  insuranceSystem?: string
 }
 
 export class UpdateBranchDto {
@@ -144,6 +150,11 @@ export class UpdateBranchDto {
   @IsOptional()
   @Matches(/^[A-Za-z]{2,5}$/, { message: 'رمز الدولة حروف إنجليزية (مثل EG أو SA)' })
   country?: string | null
+
+  // نظام التأمينات الاجتماعية للفرع (بيأثر على المسير) — يغيّره حساب على مستوى الشركة فقط
+  @IsOptional()
+  @IsIn(['NONE', 'SAUDI', 'EGYPTIAN'], { message: 'نظام التأمينات: بدون أو السعودية أو المصرية' })
+  insuranceSystem?: string
 }
 
 // ===== الأقسام =====
@@ -176,6 +187,16 @@ export class CreateDepartmentDto {
   @Type(() => Number)
   @IsInt()
   managerEmployeeId?: number
+
+  // الهيكل التنظيمي — حساب على مستوى الشركة بس
+  @IsOptional()
+  @IsBoolean()
+  isExecutive?: boolean
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  executiveSecretaryEmployeeId?: number | null
 }
 
 export class UpdateDepartmentDto {
@@ -213,6 +234,16 @@ export class UpdateDepartmentDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean
+
+  // الهيكل التنظيمي: «الإدارة التنفيذية» والسكرتير التنفيذي — حساب على مستوى الشركة بس
+  @IsOptional()
+  @IsBoolean()
+  isExecutive?: boolean
+
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt()
+  executiveSecretaryEmployeeId?: number | null // null = بدون سكرتير
 }
 
 // ===== الفرق =====

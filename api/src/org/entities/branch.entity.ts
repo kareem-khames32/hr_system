@@ -49,6 +49,10 @@ export class Branch {
   @Column({ length: 5, nullable: true })
   country: string
 
+  // نظام التأمينات الاجتماعية للفرع: NONE (بدون) / SAUDI (التأمينات السعودية) / EGYPTIAN (التأمينات المصرية)
+  @Column({ length: 20, default: 'NONE' })
+  insuranceSystem: string
+
   @Column({ default: true })
   isActive: boolean
 

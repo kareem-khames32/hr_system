@@ -68,7 +68,7 @@ test('يوم الإيقاف ما يتخصمش تأخير أو نقص أو غيا
   assert.match(source, /suspendedDates: suspension\.dates,/, 'الظل بياخد أيام الإيقاف')
   assert.match(source, /suspended\.has\(day\.date\) \|\| exemptionPolicyOnDate\(exemptions, day\.date/, 'مقارنة الحضور عند الاعتماد بتتخطى يوم الإيقاف')
   const sickAt = source.indexOf('const sick = sickLeaveDeduction(')
-  const capAt = source.indexOf('suspension.days = payrollSuspensionDaysWithinCap(suspension.days')
+  const capAt = source.indexOf('payrollSuspensionDaysWithinCap(suspension.days')
   assert.ok(sickAt > 0 && capAt > sickAt, 'المرضية قبل السقف')
   assert.match(source, /!overtimeTraceMatchesStoredTotals\(breakdown\.overtime, Number\(item\.overtimeAmount\), Number\(item\.overtimeHours\)\)/)
 })

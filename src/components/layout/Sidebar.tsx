@@ -122,7 +122,7 @@ const adminMenuDefs: MenuItem[] = [
     label: 'الرواتب',
     icon: <Wallet size={20} />,
     perm: 'payroll.view',
-    // تبسيط الرواتب (2026-09-15): الإعفاءات المالية وقسائم الراتب والبدلات والتأمينات أُخفيت وروابطها تتحول لـ«مسير الرواتب»؛
+    // تبسيط الرواتب (2026-09-15): الإعفاءات المالية وقسائم الراتب والبدلات أُخفيت (والتأمينات رجعت 16 سبتمبر بإعدادات وتقرير) وروابطها تتحول لـ«مسير الرواتب»؛
     // و«القيم العامة للخصومات» (/payroll/formulas) أُوقفت وصارت داخل «معادلات الرواتب» نفسها — رابطها القديم يحوّل إليها
     children: [
       { label: 'مسير الرواتب', href: '/payroll' },
@@ -130,7 +130,9 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'المكافآت', href: '/payroll/bonuses' },
       { label: 'الخصومات', href: '/payroll/deductions' },
       { label: 'السلف والقروض', href: '/payroll/loans' },
+      { label: 'التأمينات', href: '/payroll/gosi' },
       { label: 'تقرير الرواتب', href: '/payroll/reports' },
+      { label: 'كشف البنوك', href: '/payroll/bank-sheet' },
     ],
   },
   {
@@ -179,6 +181,7 @@ const adminMenuDefs: MenuItem[] = [
     children: [
       { label: 'لوحة التقارير', href: '/reports' },
       { label: 'تقارير مخصصة', href: '/reports/custom' },
+      { label: 'تقرير مراكز التكلفة', href: '/reports/cost-centers', perm: 'payroll.view' },
     ],
   },
   {

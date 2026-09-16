@@ -97,11 +97,7 @@ export class CreateEmployeeDto {
   @MaxLength(200)
   salaryEvidenceReference?: string
 
-  @IsString({ message: 'كود الموظف مطلوب' })
-  @Matches(/^[A-Za-z0-9_-]{2,20}$/, {
-    message: 'كود الموظف: حروف إنجليزية وأرقام و- _ فقط (2-20 خانة)',
-  })
-  employeeCode: string
+  // كود الموظف ليس مدخلًا: النظام يولّده (EMP0001…) والحقل المرسل يُتجاهل (whitelist)
 
   // يُطابَق بكود البصمة القادم من الجهاز (عمود 20 خانة) — الأطول لا يطابق أبداً. إجباري عند الإضافة (قرار المالك)
   @RequiredText('رقم البصمة', 20)
@@ -386,8 +382,15 @@ export class CreateEmployeeDto {
   otherAllowance?: number
 
   @IsOptional()
-  @IsIn(['transfer', 'cash', 'visa'], { message: 'طريقة الصرف: transfer/cash/visa' })
+  @IsIn(['transfer', 'cash', 'mixed', 'visa'], { message: 'طريقة الصرف: نقدي أو تحويل بنكي أو نقدي + بنك' })
   payMethod?: string
+
+  // «نقدي + بنك»: مبلغ التحويل البنكي من صافي الراتب (الباقي نقدي)
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: 'مبلغ التحويل البنكي رقم بمنزلتين على الأكثر' })
+  @Min(0.01, { message: 'مبلغ التحويل البنكي أكبر من صفر' })
+  bankTransferAmount?: number | null
 
   @IsOptional()
   @IsString()
@@ -453,11 +456,7 @@ export class UpdateEmployeeDto {
   @ValidateNested() @Type(() => EmployeeSalaryChangeDto)
   salaryChange?: EmployeeSalaryChangeDto
 
-  @IsOptional()
-  @Matches(/^[A-Za-z0-9_-]{2,20}$/, {
-    message: 'كود الموظف: حروف إنجليزية وأرقام و- _ فقط (2-20 خانة)',
-  })
-  employeeCode?: string
+  // كود الموظف لا يُعدّل من أحد — الحقل المرسل يُتجاهل (whitelist)
 
   // يُطابَق بكود البصمة القادم من الجهاز (عمود 20 خانة) — الأطول لا يطابق أبداً
   @IsOptional()
@@ -755,8 +754,15 @@ export class UpdateEmployeeDto {
   otherAllowance?: number
 
   @IsOptional()
-  @IsIn(['transfer', 'cash', 'visa'], { message: 'طريقة الصرف: transfer/cash/visa' })
+  @IsIn(['transfer', 'cash', 'mixed', 'visa'], { message: 'طريقة الصرف: نقدي أو تحويل بنكي أو نقدي + بنك' })
   payMethod?: string
+
+  // «نقدي + بنك»: مبلغ التحويل البنكي من صافي الراتب (الباقي نقدي)
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({ maxDecimalPlaces: 2 }, { message: 'مبلغ التحويل البنكي رقم بمنزلتين على الأكثر' })
+  @Min(0.01, { message: 'مبلغ التحويل البنكي أكبر من صفر' })
+  bankTransferAmount?: number | null
 
   @IsOptional()
   @IsString()

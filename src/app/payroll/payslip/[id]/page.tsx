@@ -64,7 +64,8 @@ const runStatusLabels: Record<string, string> = {
 
 const payMethodLabels: Record<string, string> = {
   transfer: 'تحويل بنكي',
-  cash: 'نقداً',
+  cash: 'نقدي',
+  mixed: 'نقدي + بنك',
   cheque: 'شيك',
   visa: 'فيزا',
 }
@@ -182,6 +183,7 @@ export default function PayslipPage() {
           : [{ name: 'إجازة بدون راتب', amount: Number(item.unpaidLeaveDeduction) }]),
         { name: 'أقساط السلف', amount: Number(item.loanInstallments), component: 'LOAN' },
         { name: 'خصومات أخرى — تفصيلها أدناه', amount: Number(item.otherDeductions ?? 0), component: 'TYPED' },
+        ...(Number(item.socialInsuranceDeduction ?? 0) > 0 ? [{ name: 'التأمينات الاجتماعية (حصة الموظف)', amount: Number(item.socialInsuranceDeduction) }] : []),
       ]
     : []
   // القرار د: سطر الخصم نفسه يقول إنه أُلغي — المبلغ الملغى (والأصل قبله لخصومات الحضور) بجانب البند،
@@ -311,7 +313,12 @@ export default function PayslipPage() {
                 </>}
 
                 <span className="text-gray-500">طريقة الدفع:</span>
-                <span className="font-medium text-gray-800">{payMethodLabels[item.payMethod] ?? 'غير معروف'}</span>
+                <span className="font-medium text-gray-800">{payMethodLabels[employee.payMethod ?? item.payMethod] ?? 'غير معروف'}</span>
+
+                {employee.paySplit && <>
+                  <span className="text-gray-500">الصرف:</span>
+                  <span className="font-medium text-gray-800">تحويل بنكي {formatMoney(employee.paySplit.bank)} — نقدي {formatMoney(employee.paySplit.cash)}</span>
+                </>}
 
                 <span className="text-gray-500">البنك:</span>
                 <span className="font-medium text-gray-800">{employee.bankName ?? '—'}</span>

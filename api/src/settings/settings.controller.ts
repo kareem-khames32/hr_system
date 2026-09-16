@@ -54,9 +54,11 @@ import { DATA_PLACEHOLDER_REJECTED, isDataPlaceholder, withoutDataPlaceholder } 
 import { deductionSettingError } from '../payroll/typed-deductions'
 import { bonusSettingError } from '../payroll/bonuses'
 import { exemptionSettingError } from '../payroll/financial-exemptions'
+import { companyProfileConfigError } from './company-profile'
 import { assertDefinitionBranchUnchanged, assertDefinitionWritable, definitionBranchForCreate, definitionBranchWhere, definitionInBranch } from '../common/definition-branch'
 import { AUDIENCE_POSITION_KEYS, AUDIENCE_WHERE_MODES, AUDIENCE_WHO_MODES } from '../requests/request-audience'
 import { Department } from '../org/entities/department.entity'
+import { Team } from '../org/entities/team.entity'
 
 class UpsertConfigDto {
   @IsOptional()
@@ -648,6 +650,9 @@ export class SettingsController {
     if (licenceIssue) throw new ForbiddenException(licenceIssue)
     // الخطوة 9 (مسار R2): القيمة المؤقتة لا تُحفظ كاسم شركة مؤكد
     if (dto.key.startsWith('company.') && isDataPlaceholder(dto.value)) throw new BadRequestException(DATA_PLACEHOLDER_REJECTED)
+    // ملف الشركة: صيغ خفيفة (آيبان SA/EG، بريد، رقم موحد، تاريخ انتهاء السجل...)
+    const companyProfileError = companyProfileConfigError(dto.key, dto.value)
+    if (companyProfileError) throw new BadRequestException(companyProfileError)
     // PL-01: القيم الافتراضية للنسخ الجديدة تشترك في حدود التحقق مع إعدادات النسخة.
     const policyConfigError = validatePayrollPolicyDefaultConfig(dto.key, dto.value)
     if (policyConfigError) throw new BadRequestException(policyConfigError)
@@ -1125,15 +1130,22 @@ export class SettingsController {
     }
     const whereMode = v.where?.mode ?? 'company'
     if (!(AUDIENCE_WHERE_MODES as readonly string[]).includes(whereMode)) {
-      throw new BadRequestException('اختار فين: كل الشركة أو فروع محددة أو أقسام محددة')
+      throw new BadRequestException('اختار فين: كل الشركة أو فروع محددة أو أقسام محددة أو فرق محددة')
     }
     if (whereMode === 'company') return JSON.stringify({ mode: v.mode, ids })
     const whereIds = [...new Set((Array.isArray(v.where?.ids) ? v.where!.ids : []).map(Number))]
     if (!whereIds.length || whereIds.some((id) => !Number.isInteger(id) || id < 1)) {
-      throw new BadRequestException(whereMode === 'branches' ? 'اختار فرع واحد على الأقل' : 'اختار قسم واحد على الأقل')
+      throw new BadRequestException(whereMode === 'branches' ? 'اختار فرع واحد على الأقل' : whereMode === 'teams' ? 'اختار فريق واحد على الأقل' : 'اختار قسم واحد على الأقل')
     }
     const em = this.requestTypes.manager
-    if (whereMode === 'branches') {
+    if (whereMode === 'teams') {
+      // فرع الفريق = فرع قسمه
+      const found = await em.getRepository(Team).find({ where: { id: In(whereIds) }, relations: { department: true } })
+      if (found.length !== whereIds.length) throw new BadRequestException('فريق من الفرق المختارة غير موجود')
+      if (typeBranchId !== null && found.some((t) => t.department?.branchId !== typeBranchId)) {
+        throw new BadRequestException('الطلب ده خاص بفرع واحد، فاختار فرق من نفس الفرع')
+      }
+    } else if (whereMode === 'branches') {
       const found = await em.getRepository(Branch).find({ where: { id: In(whereIds) }, select: { id: true } })
       if (found.length !== whereIds.length) throw new BadRequestException('فرع من الفروع المختارة غير موجود')
       if (typeBranchId !== null && whereIds.some((id) => id !== typeBranchId)) {

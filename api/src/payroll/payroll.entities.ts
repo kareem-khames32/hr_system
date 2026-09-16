@@ -249,6 +249,10 @@ export class PayrollItem {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
   otherAdditions: number
 
+  // التأمينات الاجتماعية (حصة الموظف) — سطر خصم مستقل، تفصيله في breakdown.socialInsurance
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
+  socialInsuranceDeduction: number
+
   @Column({ type: 'decimal', precision: 18, scale: 2 })
   netPay: number
 

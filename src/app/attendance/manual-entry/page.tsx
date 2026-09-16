@@ -109,12 +109,18 @@ export default function ManualEntryPage() {
       setError('لا يمكن إدخال بصمة بتاريخ أو وقت في المستقبل')
       return
     }
+    // البصمة تُربط برقم البصمة وحده (الكود الوظيفي يولّده النظام ومش مفتاح بصمة)
+    const punchCode = (emp.fingerprintCode ?? '').trim()
+    if (!punchCode) {
+      setError('الموظف ده مالوش رقم بصمة — سجّل رقم البصمة في ملفه الأول')
+      return
+    }
     const batch: Array<{ employeeCode: string; timestamp: string }> = [
-      { employeeCode: emp.employeeCode, timestamp: `${formData.date} ${formData.checkIn}:00` },
+      { employeeCode: punchCode, timestamp: `${formData.date} ${formData.checkIn}:00` },
     ]
     if (formData.checkOut) {
       batch.push({
-        employeeCode: emp.employeeCode,
+        employeeCode: punchCode,
         timestamp: `${formData.date} ${formData.checkOut}:00`,
       })
     }

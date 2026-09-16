@@ -48,5 +48,5 @@ export const overtimeStatusStyles = stylesOf(OVERTIME_STATUS)
 export const requestStatusLabels: Record<string, string> = statusLabels
 export const requestStatusStyles: Record<string, string> = statusStyles
 export const payMethodLabels: Record<string, string> = {
-  transfer: 'تحويل بنكي', cash: 'نقدي', visa: 'بطاقة راتب', cheque: 'شيك',
+  transfer: 'تحويل بنكي', cash: 'نقدي', mixed: 'نقدي + بنك', visa: 'بطاقة راتب', cheque: 'شيك',
 }

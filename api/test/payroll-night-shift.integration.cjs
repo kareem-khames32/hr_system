@@ -53,7 +53,7 @@ async function assignNight(emp, dates) {
   for (const date of dates) expect(await request('POST', '/attendance/schedule/day', { employeeId: emp.id, date, shiftId: shift.id }), 201)
 }
 async function punch(emp, stamps) {
-  const punches = stamps.map(stamp => ({ employeeCode: emp.employeeCode, timestamp: new Date(stamp).toISOString() }))
+  const punches = stamps.map(stamp => ({ employeeCode: emp.fingerprintCode, timestamp: new Date(stamp).toISOString() }))
   expect(await request('POST', '/attendance/punches/manual', { punches, reason: 'بصمات اختبار الوردية الليلية' }), 201)
   const rows = await repo('AttendancePunch').find({ where: { employeeId: emp.id }, order: { punchTime: 'ASC' } })
   return Object.fromEntries(rows.map(row => [new Date(row.punchTime).toISOString(), row.id]))

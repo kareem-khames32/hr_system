@@ -37,6 +37,8 @@ import { PayrollRemoveDeductionModal, type RemovableAttendanceAmounts } from '@/
 import { formatMoney, formatMoneyOrDash } from '@/lib/money'
 import { payrollItemCoverage, payrollItemDeductions, payrollItemEarnings, payrollItemMissingPunchDates, payrollMissingPunchText, payrollRunTotals } from '@/lib/payroll-item-totals'
 import { PayrollConflictResolution } from '@/components/payroll/PayrollConflictResolution'
+// تبويبات الشاشة بعد «المسيرات»: المدرجين، بلا مسير، التضارب، الاستقطاعات («شيل خصم»)
+import { PayrollOverviewTabs, type PayrollOverviewTab } from '@/components/payroll/PayrollOverviewTabs'
 import { defaultPayRecord, PayrollPayRecordForm, PayrollPayRecordSummary, payRecordReady, type PayRecordDraft } from '@/components/payroll/PayrollPayRecordForm'
 import {
   Search,
@@ -119,6 +121,14 @@ const SNAPSHOT_MISSING_MESSAGE = 'هذا المسير محسوب بإصدار س
 
 // قائمة المسيرات: المسيرات الشهرية العادية غير الملغاة فقط — مسيرات العكس والتكميلي تصحيح لمسير مصروف،
 // والملغى محفوظ للمراجعة. الرابط «?run=ID» يظل يفتح أي مسير قديم ويبقيه معروضًا في القائمة.
+const PAYROLL_PAGE_TABS: Array<['runs' | PayrollOverviewTab, string]> = [
+  ['runs', 'المسيرات'],
+  ['included', 'المدرجين بالمسير'],
+  ['unassigned', 'موظفين ليس لديهم مسير'],
+  ['conflicts', 'التضارب'],
+  ['deductions', 'الاستقطاعات'],
+]
+
 const isListedRun = (run: Pick<ApiPayrollRun, 'status' | 'runType'>) =>
   (run.runType ?? 'REGULAR') === 'REGULAR' && run.status !== 'CANCELLED'
 
@@ -161,6 +171,7 @@ export default function PayrollPage() {
   const [actionConflicts, setActionConflicts] = useState<ApiPayrollConflict[]>([])
   // الخطوة 22 (B5): قيد الصرف (القناة والمرجع) — متعبّأ جاهزًا باسم المسير وشهره
   const [payRecord, setPayRecord] = useState<PayRecordDraft>({ channel: 'MIXED', reference: '' })
+  const [tab, setTab] = useState<'runs' | PayrollOverviewTab>('runs')
 
   const [searchQuery, setSearchQuery] = useState('')
   // الخطوة 16: «مسير جديد» (تعريف مسودة) منفصل عن «احتساب المسودة» و«إعادة حساب مسير»
@@ -468,6 +479,17 @@ export default function PayrollPage() {
           </div>
         </div>
 
+        {/* تبويبات الشاشة: المسيرات أولًا، وبعدها المدرجين وبلا مسير والتضارب والاستقطاعات لشهر */}
+        <div className="flex flex-wrap items-center bg-gray-100 rounded-xl p-1 w-fit gap-1" role="tablist" data-payroll-tabs>
+          {PAYROLL_PAGE_TABS.map(([value, label]) => (
+            <button key={value} type="button" role="tab" aria-selected={tab === value} onClick={() => setTab(value)}
+              className={`px-4 py-1.5 rounded-lg text-sm font-medium ${tab === value ? 'bg-white text-primary-600 shadow-sm' : 'text-gray-600'}`}>
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {tab === 'runs' ? (<>
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
 
@@ -1071,6 +1093,10 @@ export default function PayrollPage() {
           </div>
           )}
         </div>
+        </>) : (
+          <PayrollOverviewTabs tab={tab} branches={branches} departments={departments} teams={teams} employees={employees}
+            onOpenRun={(id) => { setTab('runs'); loadDetail(id) }} />
+        )}
       </div>
 
       {removeDeductionFor && runDetail && (

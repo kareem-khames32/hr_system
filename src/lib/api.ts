@@ -179,10 +179,14 @@ export interface ApiBranch {
   weekendDays?: string | null
   // دولة الفرع (EG/SA...) — تسري عليه عطلات دولته فقط؛ فارغ = كل العطلات
   country?: string | null
+  // نظام التأمينات الاجتماعية للفرع
+  insuranceSystem?: 'NONE' | 'SAUDI' | 'EGYPTIAN'
 }
 export interface ApiDepartment {
   id: number; name: string; nameEn?: string; code?: string
   branchId: number; parentId?: number | null; managerEmployeeId?: number; isActive: boolean
+  // الهيكل التنظيمي: «الإدارة التنفيذية» (مديرها الرئيس التنفيذي) والسكرتير التنفيذي — لكل الشركة
+  isExecutive?: boolean; executiveSecretaryEmployeeId?: number | null
 }
 export interface ApiTeam {
   id: number; name: string; code?: string; departmentId: number
@@ -199,6 +203,10 @@ export interface ApiEmployee {
   attendanceEffectiveFrom?: string; attendanceChangeReason?: string
   managerEmployeeId?: number; joinDate?: string; status: EmployeeStatus
   basicSalary?: number; payMethod: string; bankName?: string; iban?: string
+  // «نقدي + بنك» (payMethod = mixed): مبلغ التحويل البنكي والباقي نقدي
+  bankTransferAmount?: number | string | null
+  // على القسيمة: تقسيم الصافي بين البنك والنقدي
+  paySplit?: { bank: number; cash: number }
   housingAllowance?: number; transportAllowance?: number; otherAllowance?: number
   costCenterId?: number; photoFileId?: number
   birthDate?: string; gender?: string; maritalStatus?: string; nationality?: string
@@ -464,6 +472,8 @@ export interface ApiPayrollItem {
   shortfallMinutes?: number; shortfallDeduction?: number
   absenceDays?: number; absenceDeduction?: number
   otherDeductions?: number; otherAdditions?: number
+  // التأمينات الاجتماعية (حصة الموظف) — سطر خصم مستقل
+  socialInsuranceDeduction?: number
   loanInstallments: number; netPay: number; payMethod: string; breakdown?: string
 }
 export interface ApiUser {
@@ -792,6 +802,18 @@ export const cancelPayroll = (id: number, reason: string) => post<ApiPayrollRun>
 export const fetchPayrollRunEvents = (id: number) => get<ApiPayrollRunEvent[]>(`/payroll/runs/${id}/events`)
 export const fetchPayMethodReport = (id: number) =>
   get<Record<string, { count: number; total: number }>>(`/payroll/runs/${id}/pay-methods`)
+// كشف البنوك لمسير — مبلغ البنك والنقدي لكل موظف وإجمالي كل بنك (حساب الفرع: موظفي فرعه بس)
+export interface ApiBankSheetRow {
+  employeeId: number; employeeCode: string; fullName: string; payMethod: string; payMethodLabel: string
+  bankName: string | null; iban: string | null; netPay: number; bankAmount: number; cashAmount: number
+}
+export interface ApiBankSheet {
+  run: { id: number; name: string | null; period: string; status: string; startDate: string; endDate: string }
+  rows: ApiBankSheetRow[]
+  banks: { bankName: string; employees: number; total: number }[]
+  totals: { employees: number; bank: number; cash: number; net: number }
+}
+export const fetchBankSheet = (runId: number) => get<ApiBankSheet>(`/payroll/runs/${runId}/bank-sheet`)
 
 // ===== المستخدمون والإعدادات =====
 export const fetchUsers = () => get<ApiUser[]>('/users')
@@ -1341,8 +1363,9 @@ export interface ApiScheduleRangeResult {
   failed: Array<{ employeeId: number; error: string }>
   skipped: Array<{ employeeId: number; reason: string }>
 }
+// teamIds: الفرق — السيرفر بيجيب أعضاءها الشغالين (في نطاق فرعك)
 export const assignScheduleRange = (d: {
-  employeeIds: number[]; from: string; to: string; weekdays?: number[]; shiftId: number; keepDayOverrides?: boolean
+  employeeIds?: number[]; teamIds?: number[]; from: string; to: string; weekdays?: number[]; shiftId: number; keepDayOverrides?: boolean
 }) => post<ApiScheduleRangeResult>('/attendance/schedule/range', d)
 export const fetchWeekDayOverrides = (week: string) =>
   get<Array<{ id: number; employeeId: number; date: string; shiftId?: number | null; shiftName: string; startTime: string; endTime: string }>>(

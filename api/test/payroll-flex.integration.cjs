@@ -51,7 +51,7 @@ async function fixture({ kind = 'shifts', rule = {}, employee = {}, day = date }
   })
   assert.equal(createdRule.status, 201, JSON.stringify(createdRule.body))
   const source = createdRule.body
-  const employeeInput = { employeeCode: `FLEXEMP${n}`, fullName: 'موظف اختبار المرونة', branchId: branch.id,
+  const employeeInput = { employeeCode: `FLEXEMP${n}`, fingerprintCode: `FLEXEMP${n}`, fullName: 'موظف اختبار المرونة', branchId: branch.id,
     joinDate: '2020-01-01', basicSalary: 9000, housingAllowance: 0, transportAllowance: 0,
     phoneAllowance: 0, workNatureAllowance: 0, otherAllowance: 0, status: 'active', isActive: true,
     payMethod: 'cash', ...(kind === 'work-schedules' ? { workScheduleId: source.id } : {}), ...employee }
@@ -73,7 +73,7 @@ async function assign(f, day) {
 }
 async function punches(f, start, end, day = f.day, endDay = day) {
   const rows = [[day, start], ...(end ? [[endDay, end]] : [])].map(([punchDate, time]) => ({
-    employeeCode: f.emp.employeeCode, timestamp: new Date(`${punchDate}T${time.length === 5 ? time + ':00' : time}`).toISOString(),
+    employeeCode: f.emp.fingerprintCode, timestamp: new Date(`${punchDate}T${time.length === 5 ? time + ':00' : time}`).toISOString(),
   }))
   const response = await request(f.actor, 'POST', '/attendance/punches/manual', { punches: rows, reason: 'بصمات اختبار معزول للمرونة' })
   assert.equal(response.status, 201, JSON.stringify(response.body))

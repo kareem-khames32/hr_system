@@ -31,6 +31,7 @@ import {
   fetchEmployees,
   updateBranch,
   can,
+  getCurrentUser,
 } from '@/lib/api'
 import { buildCalendarChange, calendarScopeWritable, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
 import { CalendarChangeFields, CalendarContextSummary, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
@@ -78,6 +79,14 @@ const emptyForm = {
   weekendDays: [] as string[],
   isActive: true,
   isHeadquarters: false,
+  // نظام التأمينات الاجتماعية للفرع — بيغيّره حساب على مستوى الشركة بس
+  insuranceSystem: 'NONE' as NonNullable<ApiBranch['insuranceSystem']>,
+}
+
+const INSURANCE_SYSTEM_LABELS: Record<NonNullable<ApiBranch['insuranceSystem']>, string> = {
+  NONE: 'بدون تأمينات',
+  SAUDI: 'التأمينات السعودية',
+  EGYPTIAN: 'التأمينات المصرية',
 }
 
 export default function BranchesPage() {
@@ -93,6 +102,7 @@ export default function BranchesPage() {
   const [activeMenu, setActiveMenu] = useState<number | null>(null)
 
   const [formData, setFormData] = useState({ ...emptyForm })
+  const companyWide = getCurrentUser()?.role === 'super_admin'
   const calendar = useCalendarContext('BRANCH', editingBranch?.id ?? 0, showModal && !!editingBranch)
   useEffect(() => {
     if (!calendar.context) return
@@ -163,6 +173,7 @@ export default function BranchesPage() {
         weekendDays: weekendCodesOf(branch.weekendDays),
         isActive: branch.isActive,
         isHeadquarters: branch.isHeadquarters,
+        insuranceSystem: branch.insuranceSystem ?? 'NONE',
       })
     } else {
       setEditingBranch(null)
@@ -210,6 +221,8 @@ export default function BranchesPage() {
           ? null
           : undefined,
       isHeadquarters: formData.isHeadquarters,
+      // حساب الفرع ما يبعتش نظام التأمينات (إعداد شركة)
+      ...(companyWide ? { insuranceSystem: formData.insuranceSystem } : {}),
     }
     if (editingBranch && !calendarChanged) { delete payload.country; delete payload.weekendDays }
     try {
@@ -373,6 +386,9 @@ export default function BranchesPage() {
                 <div className="absolute top-4 left-4 flex items-center gap-2">
                   {branch.isHeadquarters && (
                     <span className="badge badge-primary">المقر الرئيسي</span>
+                  )}
+                  {branch.insuranceSystem && branch.insuranceSystem !== 'NONE' && (
+                    <span className="badge badge-warning">{INSURANCE_SYSTEM_LABELS[branch.insuranceSystem]}</span>
                   )}
                   <span
                     className={`badge ${
@@ -611,6 +627,28 @@ export default function BranchesPage() {
                       الدولة يتطلب تحديد تاريخ تطبيق القرار وسببه
                     </p>
                   </div>
+                </div>
+
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                    نظام التأمينات الاجتماعية
+                  </label>
+                  <select
+                    value={formData.insuranceSystem}
+                    disabled={!companyWide}
+                    onChange={(e) =>
+                      setFormData({ ...formData, insuranceSystem: e.target.value as typeof formData.insuranceSystem })
+                    }
+                    className="input w-full"
+                  >
+                    {Object.entries(INSURANCE_SYSTEM_LABELS).map(([value, label]) => (
+                      <option key={value} value={value}>{label}</option>
+                    ))}
+                  </select>
+                  <p className="text-xs text-gray-400 mt-1">
+                    موظفين الفرع المسجلين في التأمينات بتتخصم حصتهم في المسير بنسب «التأمينات»
+                    {companyWide ? '' : ' — بيتغير من حساب على مستوى الشركة بس'}
+                  </p>
                 </div>
 
                 <div>

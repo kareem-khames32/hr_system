@@ -25,6 +25,8 @@ import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { recordEmployeeChange } from './employee-change-log'
+import { generateEmployeeCode } from './employee-code'
+import { employeePayMethodIssue } from '../payroll/pay-split'
 import { assertArchiveReason, nextOpeningBalance } from './employee-input-rules'
 import { Leave, LeaveBalance } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
@@ -205,7 +207,6 @@ export class EmployeesService {
   // البحث على مستوى الشركة كلها، لكن اسم صاحب القيمة يظهر بس لو في نطاق المستخدم (عزل الفروع):
   // حساب فرع ياخد رسالة عامة لو الموظف التاني في فرع تاني
   private async assertUnique(data: {
-    employeeCode?: string
     fingerprintCode?: string
     email?: string
     nationalId?: string
@@ -213,32 +214,11 @@ export class EmployeesService {
   }, branchScope: number | null) {
     const notSelf = data.excludeId ? { id: Not(data.excludeId) } : {}
     const whose = (dup: Employee) => employeeNameInScope(dup, branchScope)
-    if (data.employeeCode) {
-      // ولا يطابق رقم بصمة موظف آخر (المطابقة برقم البصمة أولاً)
-      const dup = await this.employees.findOne({
-        where: [
-          { employeeCode: data.employeeCode, ...notSelf },
-          { fingerprintCode: data.employeeCode, ...notSelf },
-        ],
-      })
-      if (dup) {
-        throw new ConflictException(
-          `كود الموظف ${data.employeeCode} مستخدم بالفعل${whose(dup)} — الكود هو مفتاح البصمة ولا يتكرر`
-        )
-      }
-    }
+    // كود الموظف يولّده النظام (فريد بفهرس) — مش مدخل ومش مفتاح بصمة؛ رقم البصمة وحده يربط البصمات
     if (data.fingerprintCode) {
-      // رقم البصمة يُطابَق أولاً — تكراره أو مطابقته لكود موظف آخر ينسب بصماته لغيره
-      const dup = await this.employees.findOne({
-        where: [
-          { fingerprintCode: data.fingerprintCode, ...notSelf },
-          { employeeCode: data.fingerprintCode, ...notSelf },
-        ],
-      })
+      const dup = await this.employees.findOne({ where: { fingerprintCode: data.fingerprintCode, ...notSelf } })
       if (dup) {
-        throw new ConflictException(
-          `رقم البصمة ${data.fingerprintCode} مستخدم بالفعل${whose(dup)} — لا يتكرر ولا يطابق كود موظف آخر`
-        )
+        throw new ConflictException(`رقم البصمة ${data.fingerprintCode} مستخدم بالفعل${whose(dup)} — لا يتكرر`)
       }
     }
     if (data.email) {
@@ -390,6 +370,13 @@ export class EmployeesService {
     await this.assertRelations(dto)
     this.assertContractDates(dto)
     this.assertSalaryEntitlementStart(dto.salaryEntitlementStart, dto.actualStartDate || dto.joinDate)
+    // طريقة الصرف: «نقدي + بنك» بمبلغ بنك > 0، والبنك والآيبان مطلوبان لما البنك داخل في الصرف
+    // (مسار لم يرسل طريقة صرف يبقى على الافتراضي كما كان)
+    const payIssue = dto.payMethod !== undefined || dto.bankTransferAmount != null ? employeePayMethodIssue(dto) : null
+    if (payIssue) throw new BadRequestException(payIssue)
+    if ((dto.payMethod ?? 'transfer') !== 'mixed') dto.bankTransferAmount = null
+    // الكود يولّده النظام داخل المعاملة — أي كود مرسل (حتى من مسار تعيين مرشح) يُتجاهل
+    delete (dto as { employeeCode?: unknown }).employeeCode
     // أنواع مرفقات الملف من كتالوج أنواع المستندات (لا نص حر) — قبل أي حفظ
     await assertDocTypes(this.docs.manager, (dto.documentRefs ?? []).map((r) => r?.docType))
     // الرصيد الافتتاحي حقلا حمولة فقط (ليسا عمودَي موظف) — يُطبَّقان على الرصيد
@@ -411,7 +398,8 @@ export class EmployeesService {
     }
     const emp = await this.employees.manager.transaction(async em => {
       await lockAttendanceRuleMutation(em)
-      const result = await em.save(Employee, em.create(Employee, empDto as Partial<Employee>))
+      const employeeCode = await generateEmployeeCode(em)
+      const result = await em.save(Employee, em.create(Employee, { ...(empDto as Partial<Employee>), employeeCode }))
       {
         const change = attendanceRuleChange({ effectiveFrom: attendanceEffectiveFrom, changeReason: attendanceChangeReason }, true)
         // المصدر قبل إنشاء الموظف لا يحمل إسنادًا سابقًا؛ لا ننسب الدوام الحالي للماضي.
@@ -614,6 +602,16 @@ export class EmployeesService {
       birthDate: dto.birthDate !== undefined && dto.birthDate !== String(emp.birthDate ?? '').slice(0, 10) ? dto.birthDate : null,
     })
     await this.assertUnique({ ...dto, excludeId: id }, branchScope)
+    // كود الموظف لا يُعدّل من أحد
+    delete (dto as { employeeCode?: unknown }).employeeCode
+    // طريقة الصرف على الحالة بعد الحفظ — تُفحص لما التعديل يمسّها؛ ملف قديم ناقص البنك يحفظ باقي حقوله
+    if (dto.payMethod !== undefined || dto.bankTransferAmount !== undefined || dto.bankName !== undefined || dto.iban !== undefined) {
+      const pick = <K extends 'payMethod' | 'bankTransferAmount' | 'bankName' | 'iban'>(key: K) => dto[key] !== undefined ? dto[key] : emp[key]
+      const payIssue = employeePayMethodIssue({ payMethod: pick('payMethod'), bankTransferAmount: pick('bankTransferAmount'),
+        bankName: pick('bankName'), iban: pick('iban') }, emp)
+      if (payIssue) throw new BadRequestException(payIssue)
+      if ((pick('payMethod') ?? 'transfer') !== 'mixed' && (emp.bankTransferAmount != null || dto.bankTransferAmount != null)) dto.bankTransferAmount = null
+    }
     this.assertContractDates({
       contractStart: dto.contractStart !== undefined ? dto.contractStart : emp.contractStart,
       contractEnd: dto.contractEnd !== undefined ? dto.contractEnd : emp.contractEnd,
@@ -651,7 +649,7 @@ export class EmployeesService {
       openingBalanceDays?: number
       openingBalanceExpiry?: string | null
     }
-    const prevCodes = `${emp.employeeCode}|${emp.fingerprintCode ?? ''}`
+    const prevCodes = emp.fingerprintCode ?? ''
     const { flexOverrideMode, attendanceEffectiveFrom, attendanceChangeReason, salaryChange, calendarChange, ...employeeFields } = empDto
     const legacySalaryKeys = [...SALARY_HISTORY_MONEY_KEYS, 'currency'] as const
     const legacySalary = Object.fromEntries(legacySalaryKeys.filter(key => employeeFields[key] !== undefined)
@@ -720,7 +718,7 @@ export class EmployeesService {
       }, em)
       await this.saveDocuments(id, documentRefs, em)
       const trackedFields = ['teamId', 'branchId', 'departmentId', 'managerEmployeeId', 'jobTitle',
-        'iban', 'bankName', 'bankBranch', 'payMethod', 'salaryCycle', 'gosiBaseSalary', 'workType',
+        'iban', 'bankName', 'bankBranch', 'payMethod', 'bankTransferAmount', 'salaryCycle', 'gosiBaseSalary', 'workType',
         'contractType', 'contractStart', 'contractEnd', 'contractNumber'] as const
       for (const fieldName of trackedFields) {
         if ((beforeChange[fieldName] ?? null) !== (result[fieldName] ?? null)) await recordEmployeeChange(em, {
@@ -738,8 +736,8 @@ export class EmployeesService {
       }
       return result
     })
-    // تغيّر رقم البصمة/الكود → بصماته اليتيمة السابقة بالكود الجديد تُربط به
-    if (`${saved.employeeCode}|${saved.fingerprintCode ?? ''}` !== prevCodes) {
+    // تغيّر رقم البصمة → بصماته اليتيمة السابقة بالرقم الجديد تُربط به
+    if ((saved.fingerprintCode ?? '') !== prevCodes) {
       await this.relinkPunches(saved)
     }
     // تبديل استحقاق السنوي → مزامنة رصيد السنوي (0 أو القيمة العامة)

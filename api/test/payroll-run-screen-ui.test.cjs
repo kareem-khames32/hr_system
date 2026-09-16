@@ -107,7 +107,7 @@ test('deductions (ALDD-12): every column including shortfall and other deduction
     { latenessDeduction: 0, shortfallDeduction: 0, absenceDeduction: 0, unpaidLeaveDeduction: 0, loanInstallments: 0, otherDeductions: 0 },
   ]
   const summary = totals.payrollDeductionSummary(items)
-  assert.deepEqual(summary.lines.map(line => line.field), ['latenessDeduction', 'shortfallDeduction', 'absenceDeduction', 'unpaidLeaveDeduction', 'loanInstallments', 'otherDeductions'])
+  assert.deepEqual(summary.lines.map(line => line.field), ['latenessDeduction', 'shortfallDeduction', 'absenceDeduction', 'unpaidLeaveDeduction', 'loanInstallments', 'otherDeductions', 'socialInsuranceDeduction'])
   assert.equal(summary.lines.find(line => line.field === 'shortfallDeduction').label, 'نقص ساعات العمل')
   assert.equal(money.sumMoney(summary.lines.map(line => line.total)), summary.grandTotal)
   assert.equal(summary.grandTotal, money.sumMoney(items.map(totals.payrollItemDeductions)))

@@ -10,11 +10,12 @@ import { definitionInBranch } from '../common/definition-branch'
 //
 // قرار المالك 16 سبتمبر: الجمهور «مين» + «فين».
 //   مين: الكل / حسب المنصب / أدوار / موظفون بعينهم           ← mode + ids (الشكل القديم كما هو)
-//   فين: كل الشركة / فروع محددة / أقسام محددة                ← where: { mode, ids } (غيابه = كل الشركة)
+//   فين: كل الشركة / فروع محددة / أقسام محددة / فرق محددة    ← where: { mode, ids } (غيابه = كل الشركة)
 // مثال: «مديرو الأقسام في فرع مصر فقط» = { mode: 'positions', ids: ['DEPARTMENT_MANAGERS'], where: { mode: 'branches', ids: [2] } }
 // الوضع القديم mode: 'departments' يفضل شغال كما هو (= الكل في أقسام محددة).
+// «فرق محددة» ({ mode: 'teams', ids }) إضافة: الشكل القديم كله زي ما هو.
 export type RequestAudiencePurpose = 'catalog' | 'submit'
-export type AudienceWhereMode = 'company' | 'branches' | 'departments'
+export type AudienceWhereMode = 'company' | 'branches' | 'departments' | 'teams'
 export type AudienceWhere = { mode?: string; ids?: Array<number | string> }
 export type RequestAudience = { mode?: string; ids?: Array<number | string>; where?: AudienceWhere | null }
 // المنصب في الهيكل (قرار المالك 16 سبتمبر): قادة الفرق ومديرو الأقسام غالبًا دورهم «موظف»،
@@ -23,12 +24,13 @@ export type AudiencePositions = { departmentManager?: boolean; teamLeader?: bool
 export const AUDIENCE_POSITION_KEYS = ['DEPARTMENT_MANAGERS', 'TEAM_LEADERS', 'BRANCH_MANAGERS'] as const
 // «مين»: الأوضاع المقبولة عند الحفظ (departments قديم ومقبول لتوافق العملاء القدامى)
 export const AUDIENCE_WHO_MODES = ['all', 'positions', 'roles', 'employees', 'departments'] as const
-export const AUDIENCE_WHERE_MODES = ['company', 'branches', 'departments'] as const
+export const AUDIENCE_WHERE_MODES = ['company', 'branches', 'departments', 'teams'] as const
 export type AudienceSubject = {
   role?: string | null
   permissions?: string[] | null
   employeeId?: number | null
   departmentId?: number | null
+  teamId?: number | null
   branchId?: number | null
   positions?: AudiencePositions | null
 }
@@ -37,12 +39,12 @@ export type AudienceSubject = {
 export const audienceNeedsPositions = (visibleTo: string | null | undefined): boolean =>
   parseRequestAudience(visibleTo)?.mode === 'positions'
 
-// قسم الموظف وفرعه يُقرآن فقط لو الجمهور محصور في أقسام أو فروع
+// قسم الموظف وفريقه وفرعه يُقرؤوا فقط لو الجمهور محصور في أقسام أو فرق أو فروع
 export const audienceNeedsEmployee = (visibleTo: string | null | undefined): boolean => {
   const audience = parseRequestAudience(visibleTo)
   if (!audience) return false
   const where = audienceWhereOf(audience)
-  return audience.mode === 'departments' || where.mode === 'branches' || where.mode === 'departments'
+  return audience.mode === 'departments' || where.mode !== 'company'
 }
 
 export function parseRequestAudience(visibleTo: string | null | undefined): RequestAudience | null {
@@ -59,7 +61,7 @@ export function parseRequestAudience(visibleTo: string | null | undefined): Requ
 export function audienceWhereOf(audience: RequestAudience | null | undefined): { mode: AudienceWhereMode; ids: number[] } {
   const where = audience?.where
   const ids = Array.isArray(where?.ids) ? where!.ids.map(Number).filter((n) => Number.isInteger(n) && n > 0) : []
-  if (where && (where.mode === 'branches' || where.mode === 'departments') && ids.length) {
+  if (where && (where.mode === 'branches' || where.mode === 'departments' || where.mode === 'teams') && ids.length) {
     return { mode: where.mode, ids }
   }
   return { mode: 'company', ids: [] }
@@ -96,6 +98,8 @@ function audienceWhereAllows(audience: RequestAudience, subject: AudienceSubject
       return subject.branchId != null && where.ids.includes(Number(subject.branchId))
     case 'departments':
       return subject.departmentId != null && where.ids.includes(Number(subject.departmentId))
+    case 'teams':
+      return subject.teamId != null && where.ids.includes(Number(subject.teamId))
     default:
       return true
   }
@@ -129,12 +133,13 @@ export function requestTypeInBranch(
 
 export const audienceSubjectOf = (
   user: JwtPayload,
-  employee?: { departmentId?: number | null; branchId?: number | null } | null
+  employee?: { departmentId?: number | null; teamId?: number | null; branchId?: number | null } | null
 ): AudienceSubject => ({
   role: user.role,
   permissions: user.permissions ?? [],
   employeeId: user.employeeId ?? null,
   departmentId: employee?.departmentId ?? null,
+  teamId: employee?.teamId ?? null,
   // فرع الموظف نفسه أولًا؛ حساب بلا موظف مربوط يُقاس بفرع حسابه
   branchId: employee?.branchId ?? user.branchId ?? null,
 })

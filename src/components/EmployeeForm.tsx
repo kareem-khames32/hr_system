@@ -107,6 +107,8 @@ export interface EmployeeFormState {
   phoneAllowance: string
   workNatureAllowance: string
   payMethod: string
+  // «نقدي + بنك»: مبلغ التحويل البنكي والباقي من صافي الراتب نقدي
+  bankTransferAmount: string
   costCenterId: string
   bankName: string
   iban: string
@@ -319,6 +321,7 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
   phoneAllowance: '',
   workNatureAllowance: '',
   payMethod: 'transfer',
+  bankTransferAmount: '',
   costCenterId: '',
   bankName: '',
   iban: '',
@@ -784,11 +787,13 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
   const buildPayload = (
     qualifications: QualificationsPayload = { education: eduRows, certifications: certRows, experiences: expRows, skills: skillRows, languages: langRows }
   ): EmployeeFormPayload => {
+    // الكود الوظيفي يولّده النظام ولا يُرسل (لا إضافة ولا تعديل)
     const payload: EmployeeFormPayload = {
-      employeeCode: (form.employeeCode || form.fingerprintCode).trim(),
       fullName: fullNameAr,
       payMethod: form.payMethod,
     }
+    if (form.payMethod === 'mixed') payload.bankTransferAmount = Number(form.bankTransferAmount)
+    else if (mode === 'edit' && initial?.bankTransferAmount) payload.bankTransferAmount = null
     // الحالة تُرسل عند الإضافة أو لو اتغيرت بس: «موقوف» المعروضة مشتقة من فترة إيقاف مؤرخة ومش بتتحفظ من هنا
     if (mode === 'add' || form.status !== initial?.status) payload.status = form.status
     if (form.branchId) payload.branchId = Number(form.branchId)
@@ -952,9 +957,18 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     // أول مشكلة في حقول الخطوة الإجبارية (بترتيب الخانات)
     const requiredIssue = requiredIssues.find((issue) => issue.step === step)
     if (requiredIssue) return requiredIssue.message
+    // طريقة الصرف: «نقدي + بنك» بمبلغ بنك > 0، والبنك والآيبان مطلوبان لما البنك داخل (ملف قديم ناقص بنفس الطريقة يتحفظ)
+    if (step === 3) {
+      const paysBank = form.payMethod !== 'cash'
+      if (form.payMethod === 'mixed' && !(Number(form.bankTransferAmount) > 0)) return 'في «نقدي + بنك» اكتب مبلغ التحويل البنكي (أكبر من صفر)'
+      const legacyIncomplete = mode === 'edit' && (initial?.payMethod ?? 'transfer') === form.payMethod && !(initial?.bankName?.trim() && initial?.iban?.trim())
+        && form.bankName === (initial?.bankName ?? '') && form.iban === (initial?.iban ?? '')
+      if (paysBank && !legacyIncomplete && !form.bankName.trim()) return 'اسم البنك مطلوب لما الصرف فيه تحويل بنكي'
+      if (paysBank && !legacyIncomplete && !form.iban.trim()) return 'رقم الآيبان مطلوب لما الصرف فيه تحويل بنكي'
+    }
     if (step === 2) {
-      if (!(form.employeeCode.trim() || form.fingerprintCode.trim())) {
-        return 'كود الموظف (أو كود البصمة) مطلوب'
+      if (!form.fingerprintCode.trim()) {
+        return 'رقم البصمة مطلوب'
       }
       if (!form.branchId) return 'اختر الفرع قبل المتابعة'
       if (!form.joinDate) return 'تاريخ التعيين مطلوب'
@@ -1354,14 +1368,14 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               {/* Employee ID */}
               <div className="grid grid-cols-4 gap-4">
                 <div>
-                  <label className="label">الرقم الوظيفي *</label>
-                  <input type="text" className="input" placeholder="EMP001" dir="ltr" value={form.employeeCode} onChange={(e) => setField('employeeCode', e.target.value)} />
-                  <p className="text-xs text-gray-400 mt-1">اكتب الرقم الوظيفي، أو سيُستخدم رقم البصمة عند تركه فارغاً</p>
+                  <label className="label">الرقم الوظيفي</label>
+                  <input type="text" className="input bg-gray-50" dir="ltr" readOnly tabIndex={-1} value={mode === 'edit' ? form.employeeCode : ''} placeholder="EMP0001" />
+                  <p className="text-xs text-gray-400 mt-1">{mode === 'edit' ? 'بيولّده النظام ومش بيتعدل' : 'النظام بيولّده تلقائي عند الحفظ (EMP0001، EMP0002…)'}</p>
                 </div>
                 <div>
                   <label className="label">رقم البصمة *</label>
                   <input type="text" className="input" placeholder="001" dir="ltr" maxLength={20} value={form.fingerprintCode} onChange={(e) => setField('fingerprintCode', e.target.value)} />
-                  <p className="text-xs text-gray-400 mt-1">كوده على جهاز البصمة — تُطابَق به البصمات أولاً ثم بالرقم الوظيفي</p>
+                  <p className="text-xs text-gray-400 mt-1">كوده على جهاز البصمة — البصمات بتتربط بيه هو بس</p>
                 </div>
                 <div>
                   <label className="label">تاريخ التعيين *</label>
@@ -1933,11 +1947,21 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 <div>
                   <label className="label">طريقة الدفع</label>
                   <select className="input" value={form.payMethod} onChange={(e) => setField('payMethod', e.target.value)}>
-                    <option value="transfer">تحويل بنكي</option>
-                    <option value="visa">فيزا</option>
                     <option value="cash">نقدي</option>
+                    <option value="transfer">تحويل بنكي</option>
+                    <option value="mixed">نقدي + بنك</option>
+                    {/* قيمة قديمة تظهر بس لملف محفوظ بيها */}
+                    {form.payMethod === 'visa' && <option value="visa">فيزا</option>}
                   </select>
                 </div>
+                {form.payMethod === 'mixed' && (
+                  <div>
+                    <label className="label">مبلغ التحويل البنكي *</label>
+                    <input type="number" min="0.01" step="0.01" className="input" dir="ltr" value={form.bankTransferAmount}
+                      onChange={(e) => setField('bankTransferAmount', e.target.value)} placeholder="0.00" />
+                    <p className="text-xs text-gray-400 mt-1">الباقي من صافي الراتب يتصرف نقدي — ولو الصافي أقل من المبلغ يتحول كله للبنك</p>
+                  </div>
+                )}
                 <div>
                   <label className="label">دورة الراتب</label>
                   <select className="input" value={form.salaryCycle || DEFAULT_SALARY_CYCLE} onChange={(e) => setField('salaryCycle', e.target.value)}>
@@ -2023,7 +2047,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               </h3>
               <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
                 <div>
-                  <label className="label">اسم البنك</label>
+                  <label className="label">اسم البنك{form.payMethod !== 'cash' ? ' *' : ''}</label>
                   <input className="input" list="employee-bank-options" value={form.bankName} onChange={(e) => setField('bankName', e.target.value)} placeholder="اكتب اسم البنك" />
                   <datalist id="employee-bank-options">{bankOptions.map(bank => <option key={bank} value={bank} />)}</datalist>
                 </div>
@@ -2032,7 +2056,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <input type="text" className="input" placeholder="فرع العليا" value={form.bankBranch} onChange={(e) => setField('bankBranch', e.target.value)} />
                 </div>
                 <div>
-                  <label className="label">رقم الحساب (IBAN)</label>
+                  <label className="label">رقم الحساب (IBAN){form.payMethod !== 'cash' ? ' *' : ''}</label>
                   <input type="text" className="input" placeholder="SA00 0000 0000 0000 0000 0000" dir="ltr" value={form.iban} onChange={(e) => setField('iban', e.target.value)} />
                 </div>
               </div>

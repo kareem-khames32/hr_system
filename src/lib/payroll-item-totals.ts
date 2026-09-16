@@ -3,11 +3,12 @@ import type { ApiPayrollItem } from './api'
 import { sumMoney, toMoneyNumber } from './money'
 
 export const PAYROLL_EARNING_FIELDS = ['basicSalary', 'allowances', 'overtimeAmount', 'otherAdditions'] as const
-export const PAYROLL_DEDUCTION_FIELDS = ['latenessDeduction', 'shortfallDeduction', 'absenceDeduction', 'unpaidLeaveDeduction', 'loanInstallments', 'otherDeductions'] as const
+export const PAYROLL_DEDUCTION_FIELDS = ['latenessDeduction', 'shortfallDeduction', 'absenceDeduction', 'unpaidLeaveDeduction', 'loanInstallments', 'otherDeductions', 'socialInsuranceDeduction'] as const
 export type PayrollDeductionField = typeof PAYROLL_DEDUCTION_FIELDS[number]
 export const PAYROLL_DEDUCTION_LABELS: Record<PayrollDeductionField, string> = {
   latenessDeduction: 'خصم التأخير', shortfallDeduction: 'نقص ساعات العمل', absenceDeduction: 'خصم الغياب',
   unpaidLeaveDeduction: 'إجازات بدون راتب', loanInstallments: 'أقساط السلف', otherDeductions: 'خصومات أخرى (مصنفة/عهدة/استرداد)',
+  socialInsuranceDeduction: 'التأمينات الاجتماعية (حصة الموظف)',
 }
 
 type ItemAmounts = Partial<Pick<ApiPayrollItem, typeof PAYROLL_EARNING_FIELDS[number] | PayrollDeductionField | 'netPay'>>

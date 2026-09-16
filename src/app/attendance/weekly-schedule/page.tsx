@@ -37,6 +37,7 @@ import {
   clearWeekSchedule,
   fetchEmployees,
   fetchDepartments,
+  fetchTeams,
   fetchBranches,
   fetchWeekDayOverrides,
   getCurrentUser,
@@ -45,6 +46,7 @@ import {
   fetchScheduleRules,
   type ApiEmployee,
   type ApiDepartment,
+  type ApiTeam,
   type ApiBranch,
   type ApiScheduleRule,
   type ApiWorkSchedule,
@@ -312,6 +314,7 @@ const matchShiftIn = (
 export default function WeeklySchedulePage() {
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [departmentsList, setDepartmentsList] = useState<ApiDepartment[]>([])
+  const [teamsList, setTeamsList] = useState<ApiTeam[]>([])
   const [branchesList, setBranchesList] = useState<ApiBranch[]>([])
   // كتالوج الورديات الحقيقي — النشِطة فقط، من /catalogs/shifts
   const [shiftCatalog, setShiftCatalog] = useState<Shift[]>([])
@@ -343,9 +346,10 @@ export default function WeeklySchedulePage() {
   const [notice, setNotice] = useState('')
 
   const [searchQuery, setSearchQuery] = useState('')
-  // فلترة الجدول بنفس ترتيب الاستهداف: فرع ← أقسامه
+  // فلترة الجدول بنفس ترتيب الاستهداف: فرع ← أقسامه ← فرقه
   const [selectedBranch, setSelectedBranch] = useState('all')
   const [selectedDepartment, setSelectedDepartment] = useState('all')
+  const [selectedTeam, setSelectedTeam] = useState('all')
   // مستخدم فرع: الاستهداف مقفول على فرعه (الفرض الحقيقي في الباك)
   const [lockedBranchId, setLockedBranchId] = useState<number | null>(null)
   const [selectedCell, setSelectedCell] = useState<{ empId: number; day: string } | null>(null)
@@ -368,8 +372,9 @@ export default function WeeklySchedulePage() {
         setDepartmentsList(deps)
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل الموظفين'))
-    // الفروع — لمنتقي الاستهداف والفلترة؛ تُتجاهَل بصمت لو فشلت
+    // الفروع والفرق — لمنتقي الاستهداف والفلترة؛ تُتجاهَل بصمت لو فشلت
     fetchBranches().then(setBranchesList).catch(() => setBranchesList([]))
+    fetchTeams().then(setTeamsList).catch(() => setTeamsList([]))
     const user = getCurrentUser()
     setLockedBranchId(user && user.role !== 'super_admin' && user.branchId ? user.branchId : null)
     // قواعد الاستثناء — اختيارية للتمييز؛ تُتجاهَل بصمت لو فشلت
@@ -587,12 +592,19 @@ export default function WeeklySchedulePage() {
       emp.employeeCode.toLowerCase().includes(searchQuery.toLowerCase())
     const matchesBranch = selectedBranch === 'all' || String(emp.branchId) === selectedBranch
     const matchesDepartment = selectedDepartment === 'all' || String(emp.departmentId) === selectedDepartment
-    return matchesSearch && matchesBranch && matchesDepartment
+    const matchesTeam = selectedTeam === 'all' || String(emp.teamId) === selectedTeam
+    return matchesSearch && matchesBranch && matchesDepartment && matchesTeam
   })
 
   // الأقسام المتاحة للفلترة — أقسام الفرع المختار بس
   const departments = departmentsList.filter(
     (d) => selectedBranch === 'all' || String(d.branchId) === selectedBranch
+  )
+  // الفرق المتاحة للفلترة — فرق الأقسام الظاهرة، ولو اخترت قسم: فرقه بس
+  const filterTeams = teamsList.filter((t) =>
+    t.isActive !== false &&
+    departments.some((d) => d.id === t.departmentId) &&
+    (selectedDepartment === 'all' || String(t.departmentId) === selectedDepartment)
   )
 
   // حفظ التغييرات — upsert لكل موظف تغيّرت ورديته ثم إعادة تحميل الأسبوع
@@ -862,7 +874,7 @@ export default function WeeklySchedulePage() {
               {branchesList.length > 1 && (
                 <select
                   value={selectedBranch}
-                  onChange={e => { setSelectedBranch(e.target.value); setSelectedDepartment('all') }}
+                  onChange={e => { setSelectedBranch(e.target.value); setSelectedDepartment('all'); setSelectedTeam('all') }}
                   className="input w-48"
                   aria-label="الفرع"
                 >
@@ -876,7 +888,7 @@ export default function WeeklySchedulePage() {
               )}
               <select
                 value={selectedDepartment}
-                onChange={e => setSelectedDepartment(e.target.value)}
+                onChange={e => { setSelectedDepartment(e.target.value); setSelectedTeam('all') }}
                 className="input w-48"
                 aria-label="القسم"
               >
@@ -887,6 +899,21 @@ export default function WeeklySchedulePage() {
                   </option>
                 ))}
               </select>
+              {filterTeams.length > 0 && (
+                <select
+                  value={selectedTeam}
+                  onChange={e => setSelectedTeam(e.target.value)}
+                  className="input w-48"
+                  aria-label="الفريق"
+                >
+                  <option value="all">{selectedDepartment === 'all' ? 'كل الفرق' : 'كل فرق القسم'}</option>
+                  {filterTeams.map(team => (
+                    <option key={team.id} value={team.id}>
+                      {team.name}
+                    </option>
+                  ))}
+                </select>
+              )}
 
               {selectedEmployees.length > 0 && (
                 <span className="px-3 py-2 bg-primary-100 text-primary-700 rounded-lg text-sm">
@@ -1345,12 +1372,13 @@ export default function WeeklySchedulePage() {
           </div>
         )}
 
-        {/* تعيين وردية لمدة — مين (فرع ← أقسام ← موظفين) + إمتى (أسبوع/شهر/مدة) + الوردية */}
+        {/* تعيين وردية لمدة — مين (فرع ← أقسام ← فرق ← موظفين) + إمتى (أسبوع/شهر/مدة) + الوردية */}
         {showBulkAssign && (
           <RangeAssignModal
             employees={employees}
             branches={branchesList}
             departments={departmentsList}
+            teams={teamsList}
             selectedEmployees={selectedEmployees}
             shifts={shiftCatalog}
             weekStart={currentWeekStart}
@@ -1584,6 +1612,7 @@ function RangeAssignModal({
   employees,
   branches,
   departments,
+  teams,
   selectedEmployees,
   shifts,
   weekStart,
@@ -1594,6 +1623,7 @@ function RangeAssignModal({
   employees: ApiEmployee[]
   branches: ApiBranch[]
   departments: ApiDepartment[]
+  teams: ApiTeam[]
   selectedEmployees: number[]
   shifts: Shift[]
   weekStart: Date
@@ -1608,7 +1638,7 @@ function RangeAssignModal({
     const picked = employees.filter((e) => selectedEmployees.includes(e.id))
     const branchIds = [...new Set(picked.map((e) => e.branchId))]
     if (picked.length > 0 && branchIds.length === 1 && (!lockedBranchId || branchIds[0] === lockedBranchId)) {
-      return { level: 'employees', branchId: branchIds[0], departmentIds: [], employeeIds: picked.map((e) => e.id) }
+      return { level: 'employees', branchId: branchIds[0], departmentIds: [], teamIds: [], employeeIds: picked.map((e) => e.id) }
     }
     return initialOrgTarget(lockedBranchId)
   })
@@ -1635,7 +1665,7 @@ function RangeAssignModal({
 
   const apply = async () => {
     if (busy) return
-    if (targetIds.length === 0) { setError('اختار على مين: الشركة أو فرع أو أقسام أو موظفين'); return }
+    if (targetIds.length === 0) { setError('اختار على مين: الشركة أو فرع أو أقسام أو فرق أو موظفين'); return }
     if (!from || !to || from > to) { setError('تاريخ البداية لازم يكون قبل أو يساوي تاريخ النهاية'); return }
     if (dates.length === 0) { setError('مفيش أيام في المدة دي من الأيام المختارة'); return }
     if (!shift?.shiftId) { setError('اختار الوردية'); return }
@@ -1644,12 +1674,26 @@ function RangeAssignModal({
     setProgress({ done: 0, total: targetIds.length })
     let applied = 0, removed = 0, kept = 0, recomputed = 0, recomputeFailed = 0, weeks = 0, days = 0
     const problems: string[] = []
+    // الفرق: طلب لكل فريق والسيرفر بيجيب أعضاءه؛ غير كده: دفعات موظفين
+    const batches: Array<{ body: { employeeIds?: number[]; teamIds?: number[] }; ids: number[] }> =
+      target.level === 'teams'
+        ? (target.teamIds ?? [])
+            .map((teamId) => ({
+              body: { teamIds: [teamId] },
+              ids: targetIds.filter((id) => employees.find((e) => e.id === id)?.teamId === teamId),
+            }))
+            .filter((b) => b.ids.length > 0)
+        : Array.from({ length: Math.ceil(targetIds.length / RANGE_CHUNK) }, (_, n) => {
+            const ids = targetIds.slice(n * RANGE_CHUNK, (n + 1) * RANGE_CHUNK)
+            return { body: { employeeIds: ids }, ids }
+          })
+    let done = 0
     try {
-      for (let i = 0; i < targetIds.length; i += RANGE_CHUNK) {
-        const chunk = targetIds.slice(i, i + RANGE_CHUNK)
+      for (const batch of batches) {
+        const chunk = batch.ids
         try {
           const res = await assignScheduleRange({
-            employeeIds: chunk, from, to, shiftId: shift.shiftId,
+            ...batch.body, from, to, shiftId: shift.shiftId,
             ...(weekdays.length ? { weekdays } : {}),
             ...(keepOverrides ? { keepDayOverrides: true } : {}),
           })
@@ -1672,7 +1716,8 @@ function RangeAssignModal({
           }
           problems.push(...chunk.map((id) => `${nameOf(id)}: ${message}`))
         }
-        setProgress({ done: Math.min(i + RANGE_CHUNK, targetIds.length), total: targetIds.length })
+        done += chunk.length
+        setProgress({ done: Math.min(done, targetIds.length), total: targetIds.length })
       }
       const parts = [
         `اتسجلت «${shift.name}» لـ${applied} من ${targetIds.length} موظف من ${from} لـ${to}`,
@@ -1700,7 +1745,7 @@ function RangeAssignModal({
         <div className="p-6 border-b border-gray-100 flex items-center justify-between">
           <div>
             <h3 id="range-assign-title" className="text-xl font-bold text-gray-800">تعيين وردية لمدة</h3>
-            <p className="text-gray-500 text-sm mt-1">لفرع كامل أو أقسام منه أو موظفين — لأسبوع أو شهر أو أي مدة مرة واحدة</p>
+            <p className="text-gray-500 text-sm mt-1">لفرع كامل أو أقسام منه أو فرق أو موظفين — لأسبوع أو شهر أو أي مدة مرة واحدة</p>
           </div>
           <button onClick={onClose} disabled={busy} className="p-2 hover:bg-gray-100 rounded-lg disabled:opacity-50">
             <X size={20} className="text-gray-500" />
@@ -1716,6 +1761,7 @@ function RangeAssignModal({
             onChange={setTarget}
             branches={branches}
             departments={departments}
+            teams={teams}
             employees={employees}
             lockedBranchId={lockedBranchId}
             disabled={busy}
@@ -1819,7 +1865,7 @@ function RangeAssignModal({
 
           <div className="bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm text-gray-600 space-y-1">
             <p>
-              {describeOrgTarget(target, branches, departments)} — <b>{targetIds.length}</b> موظف ×{' '}
+              {describeOrgTarget(target, branches, departments, teams)} — <b>{targetIds.length}</b> موظف ×{' '}
               <b>{dates.length}</b> يوم
               {dates.length > 0 && <> (<span dir="ltr">{dates[0]}</span> ← <span dir="ltr">{dates[dates.length - 1]}</span>)</>}
             </p>

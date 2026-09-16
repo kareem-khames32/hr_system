@@ -66,7 +66,7 @@ async function fixture({ day = workDate, shift = {}, employee = {} } = {}) {
   assert.ok(n <= 475254, 'fixture country code stays within five letters')
   const branch = await repo('Branch').save({ code: `OT${n}`, name: `فرع اختبار إضافي ${n}`, country: fixtureCountry(n), weekendDays: 'FRI,SAT' })
   const department = await repo('Department').save({ branchId: branch.id, code: `OTDEPT${n}`, name: `قسم اختبار إضافي ${n}` })
-  const person = (suffix, extra = {}) => repo('Employee').save({ employeeCode: `OT${n}${suffix}`, fullName: `موظف إضافي ${n} ${suffix}`,
+  const person = (suffix, extra = {}) => repo('Employee').save({ employeeCode: `OT${n}${suffix}`, fingerprintCode: `OT${n}${suffix}`, fullName: `موظف إضافي ${n} ${suffix}`,
     branchId: branch.id, departmentId: department.id, joinDate: '2020-01-01', basicSalary: 0,
     housingAllowance: 0, transportAllowance: 0, phoneAllowance: 0, workNatureAllowance: 0, otherAllowance: 0,
     status: 'active', isActive: true, annualLeaveEntitled: false, payMethod: 'cash', ...extra })

@@ -41,6 +41,14 @@ export class Department {
   @Column({ default: true })
   isActive: boolean
 
+  // الهيكل التنظيمي: قسم واحد بس في الشركة «الإدارة التنفيذية» — مديره الرئيس التنفيذي
+  @Column({ default: false })
+  isExecutive: boolean
+
+  // السكرتير التنفيذي: تابع للرئيس التنفيذي بس (مش مدير لحد) — معنى له مع الإدارة التنفيذية فقط
+  @Column({ type: 'int', nullable: true })
+  executiveSecretaryEmployeeId: number | null
+
   @OneToMany(() => Team, (t) => t.department)
   teams: Team[]
 }

@@ -145,6 +145,7 @@ interface EmployeeVM {
   emergencyPhoneAlt: string
   totalSalary: number
   payMethod: string
+  payMethodSplit: string | null
   salaryCycle: string
   currencyCode: string
   bankName: string
@@ -574,6 +575,9 @@ export default function EmployeeProfilePage() {
             Number(e.phoneAllowance ?? 0) +
             Number(e.workNatureAllowance ?? 0),
           payMethod: PAY_METHOD_AR[e.payMethod] ?? e.payMethod ?? '—',
+          // «نقدي + بنك»: تحويل بنكي X — والباقي من الصافي نقدي
+          payMethodSplit: e.payMethod === 'mixed' && e.bankTransferAmount != null
+            ? `تحويل بنكي ${formatMoney(e.bankTransferAmount)} — نقدي الباقي من صافي الراتب` : null,
           salaryCycle: labelOf(SALARY_CYCLE_AR, e.salaryCycle),
           currencyCode: labelOf(CURRENCY_AR, e.currency),
           bankName: e.bankName ?? '—',
@@ -1394,6 +1398,12 @@ export default function EmployeeProfilePage() {
                       <span className="text-gray-500">طريقة الصرف</span>
                       <span className="font-medium text-gray-800">{employee.payMethod}</span>
                     </div>
+                    {employee.payMethodSplit && (
+                      <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                        <span className="text-gray-500">تقسيم الصرف</span>
+                        <span className="font-medium text-gray-800">{employee.payMethodSplit}</span>
+                      </div>
+                    )}
                     <div className="flex items-center justify-between py-2 border-b border-gray-100">
                       <span className="text-gray-500">العملة</span>
                       <span className="font-medium text-gray-800">{employee.currencyCode}</span>

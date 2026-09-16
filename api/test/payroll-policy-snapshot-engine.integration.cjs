@@ -53,7 +53,7 @@ async function employee(salary = {}) {
   return repo('Employee').findOneByOrFail({ id: saved.id })
 }
 async function punch(emp, stamps) {
-  expect(await request('POST', '/attendance/punches/manual', { punches: stamps.map(stamp => ({ employeeCode: emp.employeeCode, timestamp: new Date(stamp).toISOString() })),
+  expect(await request('POST', '/attendance/punches/manual', { punches: stamps.map(stamp => ({ employeeCode: emp.fingerprintCode, timestamp: new Date(stamp).toISOString() })),
     reason: 'بصمات اختبار لقطة السياسة' }), 201)
 }
 const itemOf = (run, emp) => {

@@ -115,6 +115,10 @@ export class OrgService {
     if (!branch || (scope != null && branch.id !== scope)) {
       throw new NotFoundException('الفرع غير موجود')
     }
+    // نظام التأمينات بيغيّر خصم المسير — إعداد شركة، مش بيتغير من حساب فرع
+    if (scope != null && dto.insuranceSystem !== undefined && dto.insuranceSystem !== (branch.insuranceSystem ?? 'NONE')) {
+      throw new ForbiddenException('نظام التأمينات للفرع بيتغير من حساب على مستوى الشركة بس')
+    }
     if (dto.code) {
       const dup = await this.branches.findOne({
         where: { code: dto.code, id: Not(id) },
@@ -184,9 +188,60 @@ export class OrgService {
       }
     }
     await this.assertManagerExists(dto.managerEmployeeId, scope)
-    return this.departments.save(
-      this.departments.create(dto as Partial<Department>)
-    )
+    const makesExecutive = await this.prepareExecutiveFields(dto, null, scope)
+    return this.saveDepartment(this.departments.create(dto as Partial<Department>), makesExecutive)
+  }
+
+  // الهيكل التنظيمي: «الإدارة التنفيذية» قسم واحد في الشركة (مديره الرئيس التنفيذي) ومعاه السكرتير التنفيذي.
+  // إعداد لكل الشركة: حساب الفرع مايغيّرهوش (نفس القيمة المبعوتة تاني بتتجاهل عادي).
+  // بيرجّع true لو القسم هيبقى الإدارة التنفيذية (عشان يتشال التعليم من أي قسم تاني).
+  private async prepareExecutiveFields(
+    dto: { isExecutive?: boolean; executiveSecretaryEmployeeId?: number | null; managerEmployeeId?: number | null },
+    current: Department | null,
+    scope: number | null
+  ): Promise<boolean> {
+    const wasExecutive = !!current?.isExecutive
+    const currentSecretary = current?.executiveSecretaryEmployeeId ?? null
+    const flagChanged = dto.isExecutive !== undefined && !!dto.isExecutive !== wasExecutive
+    const secretaryChanged =
+      dto.executiveSecretaryEmployeeId !== undefined && (dto.executiveSecretaryEmployeeId ?? null) !== currentSecretary
+    if (!flagChanged && !secretaryChanged) {
+      delete dto.isExecutive
+      delete dto.executiveSecretaryEmployeeId
+      return false
+    }
+    if (scope != null) {
+      throw new ForbiddenException('الإدارة التنفيذية والسكرتير التنفيذي إعداد لكل الشركة، ومش بيتعدل من حساب فرع — يعدّله حساب على مستوى الشركة')
+    }
+    const isExecutive = dto.isExecutive ?? wasExecutive
+    const secretaryId = dto.executiveSecretaryEmployeeId !== undefined ? dto.executiveSecretaryEmployeeId ?? null : currentSecretary
+    if (!isExecutive) {
+      if (secretaryChanged && secretaryId != null) {
+        throw new BadRequestException('السكرتير التنفيذي بيتحدد للإدارة التنفيذية بس — علِّم القسم «الإدارة التنفيذية» الأول')
+      }
+      dto.executiveSecretaryEmployeeId = null
+      return false
+    }
+    if (secretaryId != null && secretaryChanged) {
+      const secretary = await this.employees.findOne({ where: { id: secretaryId } })
+      if (!secretary) throw new BadRequestException('موظف السكرتير التنفيذي غير موجود')
+      const ceoId = dto.managerEmployeeId !== undefined ? dto.managerEmployeeId : current?.managerEmployeeId
+      if (ceoId && ceoId === secretaryId) {
+        throw new BadRequestException('السكرتير التنفيذي مايبقاش هو نفسه الرئيس التنفيذي (مدير الإدارة التنفيذية)')
+      }
+    }
+    return flagChanged
+  }
+
+  private saveDepartment(dept: Department, makesExecutive: boolean) {
+    if (!makesExecutive) return this.departments.save(dept)
+    return this.departments.manager.transaction(async (em) => {
+      const saved = await em.getRepository(Department).save(dept)
+      await em
+        .getRepository(Department)
+        .update({ isExecutive: true, id: Not(saved.id) }, { isExecutive: false, executiveSecretaryEmployeeId: null })
+      return saved
+    })
   }
 
   async updateDepartment(
@@ -229,8 +284,9 @@ export class OrgService {
       dto.managerEmployeeId,
       dto.managerEmployeeId !== dept.managerEmployeeId ? scope : null
     )
+    const makesExecutive = await this.prepareExecutiveFields(dto, dept, scope)
     Object.assign(dept, dto)
-    return this.departments.save(dept)
+    return this.saveDepartment(dept, makesExecutive)
   }
 
   // SET-14: الهيكل بعد تعديل القسم — الأب (الجديد أو القائم) في نفس فرع القسم كما

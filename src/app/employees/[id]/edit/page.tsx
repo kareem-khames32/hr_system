@@ -139,6 +139,7 @@ export default function EditEmployeePage() {
           phoneAllowance: salary?.current.phoneAllowance ?? '',
           workNatureAllowance: salary?.current.workNatureAllowance ?? '',
           payMethod: emp.payMethod ?? 'transfer',
+          bankTransferAmount: emp.bankTransferAmount != null ? String(Number(emp.bankTransferAmount)) : '',
           costCenterId: emp.costCenterId != null ? String(emp.costCenterId) : '',
           workScheduleId: emp.workScheduleId,
           flexOverrideMode: emp.flexOverrideMode ?? 'INHERIT',

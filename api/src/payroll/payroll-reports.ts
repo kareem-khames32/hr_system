@@ -168,7 +168,7 @@ function effectiveBranch(run: RunRow, member: MemberRow | undefined) {
 }
 
 const ITEM_MONEY_COLUMNS = ['basicSalary', 'allowances', 'overtimeAmount', 'otherAdditions', 'latenessDeduction', 'shortfallDeduction',
-  'absenceDeduction', 'unpaidLeaveDeduction', 'loanInstallments', 'otherDeductions', 'netPay'] as const
+  'absenceDeduction', 'unpaidLeaveDeduction', 'loanInstallments', 'otherDeductions', 'socialInsuranceDeduction', 'netPay'] as const
 type ItemMoneyColumn = typeof ITEM_MONEY_COLUMNS[number]
 type ItemRow = { runId: number; employeeId: number; payMethod: string } & Record<ItemMoneyColumn, string>
 const ITEM_SELECT = `SELECT i.[runId], i.[employeeId], i.[payMethod], ${ITEM_MONEY_COLUMNS.map(column => `CONVERT(varchar(40), i.[${column}]) AS [${column}]`).join(', ')}
@@ -821,12 +821,13 @@ export const VARIANCE_COMPONENTS = [
   { key: 'unpaidLeaveDeduction', label: 'إجازة بدون راتب', sign: -1n, cause: 'ATTENDANCE_DEDUCTIONS' },
   { key: 'loanInstallments', label: 'أقساط السلف', sign: -1n, cause: 'LOAN_INSTALLMENT' },
   { key: 'otherDeductions', label: 'خصومات أخرى', sign: -1n, cause: 'OTHER_DEDUCTIONS' },
+  { key: 'socialInsuranceDeduction', label: 'التأمينات الاجتماعية (حصة الموظف)', sign: -1n, cause: 'SOCIAL_INSURANCE' },
 ] as const
 
 export const VARIANCE_CAUSE_LABELS: Record<string, string> = {
   NEW_IN_PERIOD: 'انضمام أو دخول مسير جديد', LEFT_PERIOD: 'غير موجود في الفترة الحالية', WAGE_CHANGE: 'تغيير الأجر أو التناسب',
   OVERTIME: 'إضافي', OTHER_ADDITIONS: 'إضافة/مكافأة', ATTENDANCE_DEDUCTIONS: 'خصومات الحضور والإجازات',
-  LOAN_INSTALLMENT: 'قسط سلفة', OTHER_DEDUCTIONS: 'خصم آخر', UNEXPLAINED: 'غير مفسَّر',
+  LOAN_INSTALLMENT: 'قسط سلفة', OTHER_DEDUCTIONS: 'خصم آخر', SOCIAL_INSURANCE: 'التأمينات الاجتماعية', UNEXPLAINED: 'غير مفسَّر',
 }
 
 export function previousPayrollPeriod(period: string) {

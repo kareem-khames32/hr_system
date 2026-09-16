@@ -117,7 +117,7 @@ export const LOAN_STATUS_LABELS: Record<string, string> = { APPROVED: 'معتم�
 export const EMPLOYEE_STATUS_LABELS: Record<string, string> = {
   active: 'نشط', probation: 'تحت التجربة', notice_period: 'فترة إشعار', suspended: 'موقوف', terminated: 'منتهي الخدمة', archived: 'مؤرشف',
 }
-export const PAY_METHOD_LABELS: Record<string, string> = { transfer: 'تحويل بنكي', cash: 'نقدًا', cheque: 'شيك', visa: 'فيزا' }
+export const PAY_METHOD_LABELS: Record<string, string> = { transfer: 'تحويل بنكي', cash: 'نقدًا', mixed: 'نقدي + بنك', cheque: 'شيك', visa: 'فيزا' }
 export const UNASSIGNED_REASON_OPTIONS: Array<{ code: string; label: string }> = [
   { code: 'DATA_ISSUE', label: 'بيانات الخدمة ناقصة أو متعارضة' },
   { code: 'EXCLUDED_IN_RUN', label: 'مستبعد في مسير للفترة' },

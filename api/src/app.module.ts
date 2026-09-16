@@ -18,6 +18,8 @@ import { HrDocumentsModule } from './hr-documents/hr-documents.module'
 import { LoansModule } from './loans/loans.module'
 import { DashboardController } from './dashboard/dashboard.controller'
 import { ReportsController } from './reports/reports.controller'
+import { CostCenterReportController } from './reports/cost-center-report.controller'
+import { CostCenterReportService } from './reports/cost-center-report.service'
 import { validateEnv } from './auth/jwt-secret'
 
 @Module({
@@ -77,6 +79,7 @@ import { validateEnv } from './auth/jwt-secret'
     HrDocumentsModule,
     LoansModule,
   ],
-  controllers: [HealthController, DashboardController, ReportsController],
+  controllers: [HealthController, DashboardController, ReportsController, CostCenterReportController],
+  providers: [CostCenterReportService],
 })
 export class AppModule {}

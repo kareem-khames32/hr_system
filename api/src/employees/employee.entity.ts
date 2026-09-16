@@ -14,7 +14,7 @@ export class Employee {
   @PrimaryGeneratedColumn()
   id: number
 
-  // الكود الوظيفي — نفسه كود البصمة (EMP001) لمطابقة سجلات ZKTeco
+  // الكود الوظيفي — يولّده النظام عند الإضافة (EMP0001…) ولا يُعدّل؛ ربط البصمات برقم البصمة وحده
   @Index({ unique: true })
   @Column({ length: 20 })
   employeeCode: string
@@ -219,9 +219,13 @@ export class Employee {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
   otherAllowance: number
 
-  // طريقة الصرف — لتقارير حالة الصرف في المسير
+  // طريقة الصرف — نقدي / تحويل بنكي / نقدي + بنك (mixed)؛ visa قيمة قديمة
   @Column({ length: 20, default: 'transfer' })
-  payMethod: 'transfer' | 'cash' | 'visa'
+  payMethod: 'transfer' | 'cash' | 'mixed' | 'visa'
+
+  // في «نقدي + بنك»: المبلغ اللي يتحول للبنك من صافي الراتب، والباقي نقدي
+  @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
+  bankTransferAmount: number | null
 
   @Column({ length: 100, nullable: true })
   bankName: string

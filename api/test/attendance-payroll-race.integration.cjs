@@ -78,7 +78,7 @@ after(async t => {
 test('approval holding employee-finance wins before a waiting recompute; attendance snapshot and approved OT stay immutable', { timeout: 60000 }, async () => {
   // weekendDays=null = إعداد النظام (فحص لقطة التقويم يرفض النص الفارغ كما يرفضه API الفروع)
   const branch = await repo('Branch').save({ name: 'Attendance race fixture', code: 'ATRACE', weekendDays: null })
-  const emp = await repo('Employee').save({ employeeCode: 'ATRACE', fullName: 'Attendance race fixture', branchId: branch.id,
+  const emp = await repo('Employee').save({ employeeCode: 'ATRACE', fingerprintCode: 'ATRACE', fullName: 'Attendance race fixture', branchId: branch.id,
     joinDate: '2020-01-01', basicSalary: 9000, status: 'active', isActive: true, payMethod: 'cash' })
   const source = await request(creator, 'POST', '/catalogs/shifts', { name: 'Race flex', startTime: '09:00', endTime: '18:00',
     flexEnabled: true, flexWindowMinutes: 60, requiredWorkMinutes: 540, graceMinutes: 0,

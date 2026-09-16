@@ -28,6 +28,7 @@ import {
   ApiDepartment,
   ApiEmployee,
   ApiRequestType,
+  ApiTeam,
   CustomFieldDef,
   createRequestType,
   fetchAdminRequestTypes,
@@ -35,6 +36,7 @@ import {
   fetchDepartments,
   fetchDestinationHandlers,
   fetchEmployees,
+  fetchTeams,
   updateRequestType,
   updateRequestTypeFull,
 } from '@/lib/api'
@@ -96,8 +98,8 @@ const audienceRoles: Array<[string, string]> = [
 
 // «مين» يقدر يقدّم الطلب. 'departments' وضع قديم: بيتحول عند الفتح لـ «الكل» + «فين: أقسام محددة»
 type AudienceMode = 'all' | 'departments' | 'roles' | 'employees' | 'positions'
-// «فين» (قرار المالك 16 سبتمبر): كل الشركة / فروع محددة / أقسام محددة
-type WhereMode = 'company' | 'branches' | 'departments'
+// «فين» (قرار المالك 16 سبتمبر): كل الشركة / فروع محددة / أقسام محددة / فرق محددة
+type WhereMode = 'company' | 'branches' | 'departments' | 'teams'
 
 // «حسب المنصب»: المنصب يُعرف من الهيكل (مدير القسم/قائد الفريق/مدير الفرع)، ومعه أدوار مختارة
 const audiencePositions: Array<[string, string]> = [
@@ -149,6 +151,8 @@ type BuilderForm = {
   posIds: string[]
   whereMode: WhereMode
   branchIds: number[]
+  // فرق «فين»
+  teamIds: number[]
   // فرع النوع نفسه: null = كل الشركة
   branchId: number | null
 }
@@ -168,6 +172,7 @@ const emptyForm = (): BuilderForm => ({
   posIds: [],
   whereMode: 'company',
   branchIds: [],
+  teamIds: [],
   branchId: null,
 })
 
@@ -181,7 +186,7 @@ const namesText = (names: string[]): string =>
 const audienceText = (
   audience: StoredAudience | null,
   typeBranch: string | null,
-  lookup: { branch: (id: number) => string; department: (id: number) => string }
+  lookup: { branch: (id: number) => string; department: (id: number) => string; team: (id: number) => string }
 ): string => {
   const ids = Array.isArray(audience?.ids) ? audience!.ids : []
   const label = (list: Array<[string, string]>) => (id: number | string) => list.find(([key]) => key === String(id))?.[1] ?? String(id)
@@ -194,6 +199,7 @@ const audienceText = (
   if (audience?.mode === 'departments' && ids.length) where = `في ${namesText(ids.map(Number).map(lookup.department))}`
   else if (audience?.where?.mode === 'branches' && whereIds.length) where = `في ${namesText(whereIds.map(lookup.branch))}`
   else if (audience?.where?.mode === 'departments' && whereIds.length) where = `في ${namesText(whereIds.map(lookup.department))}`
+  else if (audience?.where?.mode === 'teams' && whereIds.length) where = `في ${namesText(whereIds.map(lookup.team))}`
   return `${who} ${where}`
 }
 
@@ -201,13 +207,21 @@ const audienceText = (
 const audienceOfForm = (form: BuilderForm, ids: Array<number | string>): StoredAudience =>
   form.whereMode === 'company'
     ? { mode: form.audienceMode, ids }
-    : { mode: form.audienceMode, ids, where: { mode: form.whereMode, ids: form.whereMode === 'branches' ? form.branchIds : form.deptIds } }
+    : {
+        mode: form.audienceMode,
+        ids,
+        where: {
+          mode: form.whereMode,
+          ids: form.whereMode === 'branches' ? form.branchIds : form.whereMode === 'teams' ? form.teamIds : form.deptIds,
+        },
+      }
 
 export default function RequestTypesPage() {
   const [requestTypes, setRequestTypes] = useState<ApiRequestType[]>([])
   const [chains, setChains] = useState<ApprovalChain[]>([])
   const [handlers, setHandlers] = useState<Array<{ key: string; labelAr: string }>>([])
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
+  const [teams, setTeams] = useState<ApiTeam[]>([])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -229,7 +243,8 @@ export default function RequestTypesPage() {
   // فرع كل نوع (قرار المالك 16 سبتمبر): حساب الفرع يعدّل أنواع فرعه بس
   const branchInfo = useDefinitionBranches()
   const departmentName = (id: number) => departments.find((d) => d.id === id)?.name ?? `قسم رقم ${id}`
-  const audienceLookup = { branch: (id: number) => branchInfo.label(id), department: departmentName }
+  const teamName = (id: number) => teams.find((t) => t.id === id)?.name ?? `فريق رقم ${id}`
+  const audienceLookup = { branch: (id: number) => branchInfo.label(id), department: departmentName, team: teamName }
   const typeAudienceText = (rt: ApiRequestType) =>
     audienceText(parseJson<StoredAudience | null>(rt.visibleTo, null), rt.branchId != null ? branchInfo.label(rt.branchId) : null, audienceLookup)
 
@@ -240,13 +255,15 @@ export default function RequestTypesPage() {
   useEffect(() => {
     const loadData = async () => {
       // الأنواع والوجهات أساس الشاشة (request_types.manage)؛ الباقي اختياري
-      const [types, hs, ch, deps, emps] = await Promise.allSettled([
+      const [types, hs, ch, deps, emps, tms] = await Promise.allSettled([
         fetchAdminRequestTypes(),
         fetchDestinationHandlers(),
         fetchApprovalChains(),
         fetchDepartments(),
         fetchEmployees(),
+        fetchTeams(),
       ])
+      if (tms.status === 'fulfilled') setTeams(tms.value)
       if (types.status === 'fulfilled') setRequestTypes(types.value)
       if (hs.status === 'fulfilled') setHandlers(hs.value)
       const coreFailure = [types, hs].find(
@@ -340,7 +357,7 @@ export default function RequestTypesPage() {
       const whereIds = (Array.isArray(v?.where?.ids) ? v!.where!.ids : []).map(Number)
       const whereMode: WhereMode = legacyDepartments
         ? 'departments'
-        : (v?.where?.mode === 'branches' || v?.where?.mode === 'departments') && whereIds.length
+        : (v?.where?.mode === 'branches' || v?.where?.mode === 'departments' || v?.where?.mode === 'teams') && whereIds.length
           ? (v!.where!.mode as WhereMode)
           : 'company'
       setForm({
@@ -365,6 +382,7 @@ export default function RequestTypesPage() {
         posIds: mode === 'positions' ? (v?.ids ?? []).map(String) : [],
         whereMode,
         branchIds: whereMode === 'branches' ? whereIds : [],
+        teamIds: whereMode === 'teams' ? whereIds : [],
         branchId: rt.branchId ?? null,
       })
     } else {
@@ -436,6 +454,10 @@ export default function RequestTypesPage() {
       setModalError('اختار قسم واحد على الأقل في «فين»')
       return
     }
+    if (form.whereMode === 'teams' && form.teamIds.length === 0) {
+      setModalError('اختار فريق واحد على الأقل في «فين»')
+      return
+    }
 
     const customFields: CustomFieldDef[] = form.fields.map((f) => ({
       key: f.key.trim(),
@@ -498,6 +520,8 @@ export default function RequestTypesPage() {
     ? editing.branchId ?? null
     : branchInfo.scope === null ? form.branchId : branchInfo.scope === -1 ? null : branchInfo.scope
   const formDepartments = departments.filter((d) => formBranch == null || d.branchId === formBranch)
+  // فرق «فين»: فرق أقسام فرع النوع (فرع الفريق = فرع قسمه)
+  const formTeams = teams.filter((t) => formDepartments.some((d) => d.id === t.departmentId) && (t.isActive !== false || form.teamIds.includes(t.id)))
   const filteredEmployees = employees.filter(
     (e) =>
       (formBranch == null || e.branchId === formBranch) &&
@@ -1169,7 +1193,7 @@ export default function RequestTypesPage() {
                   <div className="max-w-sm">
                     <DefinitionBranchField
                       value={editing ? editing.branchId ?? null : form.branchId}
-                      onChange={(branchId) => setForm({ ...form, branchId, branchIds: [], deptIds: [], empIds: [],
+                      onChange={(branchId) => setForm({ ...form, branchId, branchIds: [], deptIds: [], teamIds: [], empIds: [],
                         whereMode: branchId != null && form.whereMode === 'branches' ? 'company' : form.whereMode })}
                       editing={!!editing}
                       info={branchInfo}
@@ -1311,6 +1335,7 @@ export default function RequestTypesPage() {
                           // نوع خاص بفرع مايظهرش في فروع تانية، فاختيار الفروع للنوع العام بس
                           ...(formBranch == null ? [['branches', 'فروع محددة']] : []),
                           ['departments', 'أقسام محددة'],
+                          ['teams', 'فرق محددة'],
                         ] as Array<[WhereMode, string]>
                       ).map(([mode, label]) => (
                         <label key={mode} className="flex items-center gap-2">
@@ -1365,6 +1390,33 @@ export default function RequestTypesPage() {
                         ))}
                         {formDepartments.length === 0 && (
                           <p className="text-sm text-gray-400">لا توجد أقسام</p>
+                        )}
+                      </div>
+                    )}
+
+                    {form.whereMode === 'teams' && (
+                      <div className="mt-3 max-h-44 overflow-y-auto border border-gray-100 bg-white rounded-xl p-3 space-y-2">
+                        {formTeams.map((t) => {
+                          const dept = departments.find((d) => d.id === t.departmentId)
+                          return (
+                            <label key={t.id} className="flex items-center gap-2">
+                              <input
+                                type="checkbox"
+                                checked={form.teamIds.includes(t.id)}
+                                onChange={() => setForm({ ...form, teamIds: toggleId(form.teamIds, t.id) })}
+                                className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                              />
+                              <span className="text-sm text-gray-700">
+                                {t.name}
+                                <span className="text-xs text-gray-400 mr-2">
+                                  {[dept?.name, formBranch == null && dept ? branchInfo.label(dept.branchId) : null].filter(Boolean).join(' — ')}
+                                </span>
+                              </span>
+                            </label>
+                          )
+                        })}
+                        {formTeams.length === 0 && (
+                          <p className="text-sm text-gray-400">لا توجد فرق</p>
                         )}
                       </div>
                     )}
