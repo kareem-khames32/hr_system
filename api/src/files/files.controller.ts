@@ -97,7 +97,7 @@ export class FilesController {
   ) {
     if (!file) throw new BadRequestException('لم يصل ملف — أرسل الحقل file')
     try {
-    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract'].includes(entityType)) {
+    if (entityType && !['request', 'employee_photo', 'company_logo', 'document', 'contract', 'leave_attachment'].includes(entityType)) {
       throw new BadRequestException('تصنيف الملف غير صالح')
     }
     for (const value of [entityId, employeeId]) {

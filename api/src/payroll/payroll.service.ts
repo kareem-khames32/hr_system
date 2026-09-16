@@ -8,7 +8,7 @@ import {
   NotFoundException,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Between, EntityManager, In, LessThanOrEqual, Not, Repository } from 'typeorm'
+import { Between, EntityManager, In, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, userHasPerm } from '../auth/guards'
 import { AttendanceService } from '../attendance/attendance.service'
@@ -21,7 +21,9 @@ import {
   Loan,
   LoanInstallment,
 } from '../requests/entities/financial.entities'
-import { Leave } from '../requests/entities/leave.entities'
+import { Leave, LeaveType } from '../requests/entities/leave.entities'
+import { PayrollDecimal } from './payroll-decimal'
+import { parseSickPayTiers, payrollLeaveDeductionLines, sickLeaveDaysInCover, sickLeaveDeduction, type SickPayTier } from './sick-leave-pay'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import {
   PayrollItem,
@@ -627,6 +629,9 @@ export class PayrollService {
     const periodDays = Math.round((Date.parse(`${endDate}T12:00:00Z`) - Date.parse(`${startDate}T12:00:00Z`)) / 86400000) + 1
 
     let totalNet = 0
+    // الإجازة المرضية بأجر متدرج (قرار المالك 16 سبتمبر): شرائح كل نوع من فئة SICK، تُقرأ مرة للمسير
+    const sickTiersByCode = new Map<string, SickPayTier[]>((await em.getRepository(LeaveType).find({ where: { category: 'SICK' } }))
+      .map(type => [type.code, parseSickPayTiers(type.sickPayTiers)]))
     for (const { emp, coverage, member, claims, salary } of covered) {
       const { coverFrom, coverTo, coverDays } = coverage
       // الحضور قد يصحح ساعات مصدر الإضافي؛ نقرأ الاستحقاق بعد إتمام التصحيح داخل المعاملة.
@@ -639,11 +644,11 @@ export class PayrollService {
       const basic = monthlyCents[0] / 100
       const allowances = monthlyCents.slice(1).reduce((sum, amount) => sum + amount, 0) / 100
       const gross = grossCents / 100
-      // أ2: الجزء على أيام الفترة الفعلية (لا على 30)؛ الدورة الكاملة تستحق شهرًا كاملًا.
-      // سعر اليوم أدناه يبقى على أساس الشهر حتى لا تتحرك مبالغ الغياب والتأخير في هذه الموجة.
+      // قرار المالك: الشهر 30 يومًا في كل شيء — الجزء = الراتب ÷ أساس أيام الشهر × أيام التغطية، بسقف الراتب كاملًا،
+      // وبنفس الأساس الذي يُحسب به سعر يوم الخصم أدناه. الدورة الكاملة تستحق الشهر كاملًا مهما كان طولها.
       const fullCoverage = coverFrom === startDate && coverTo === endDate
-      const prorataFactor = fullCoverage ? 1 : Math.min(coverDays / periodDays, 1)
-      const prorateCents = (cents: number) => fullCoverage ? cents : Math.min(cents, Math.round(cents * coverDays / periodDays))
+      const prorataFactor = fullCoverage ? 1 : Math.min(coverDays / monthlyDays, 1)
+      const prorateCents = (cents: number) => fullCoverage ? cents : Math.min(cents, Math.round(cents * coverDays / monthlyDays))
       const grossEarnedCents = prorateCents(grossCents)
       const grossEarned = grossEarnedCents / 100
       const earnedCents = monthlyCents.map(prorateCents)
@@ -793,7 +798,17 @@ export class PayrollService {
           }
         }
       }
-      const unpaidDeduction = round2(unpaidDays * dayRate)
+      const unpaidOnlyDeduction = round2(unpaidDays * dayRate)
+      // 3ب) الإجازة المرضية بأجر متدرج: ترتيب كل يوم بين أيام المرض المعتمدة في سنته (شاملًا ما قبل الفترة)، ونسبة أجره من شرائح نوعه؛
+      // الخصم = سعر اليوم × (100 − النسبة)/100. اليوم المسجل بدون راتب يُعدّ في الترتيب ولا يُخصم مرتين (يخصمه بند 3).
+      // المبلغ يدخل عمود الإجازة بلا أجر (عدم استحقاق لا خصم) بدقة محرك السياسة، ويظهر سطرًا مستقلًا في التفصيل والقسيمة.
+      const sickLeaves = sickTiersByCode.size ? await em.getRepository(Leave).find({ where: { employeeId: emp.id, status: 'APPROVED',
+        leaveTypeCode: In([...sickTiersByCode.keys()]), fromDate: LessThanOrEqual(coverTo), toDate: MoreThanOrEqual(`${coverFrom.slice(0, 4)}-01-01`) } }) : []
+      const sick = sickLeaveDeduction(sickLeaveDaysInCover({ leaves: sickLeaves, tiersByCode: sickTiersByCode, coverFrom, coverTo,
+        deductible: date => policyOnDate(date).unpaidLeaveDeductible }), grossCents, monthlyDays)
+      const unpaidDeduction = sick.equivalentDays === '0' ? unpaidOnlyDeduction
+        : Number(PayrollDecimal.from(String(unpaidDays)).add(PayrollDecimal.from(sick.equivalentDays))
+          .multiply(new PayrollDecimal(BigInt(grossCents), BigInt(100 * monthlyDays))).format(2, 'HALF_UP'))
 
       // 5) دفتر المديونيات: بنود PENDING سرت فترتها (effectiveDate ضمن الفترة أو فارغة، والشهر
       // المستهدف لا يتجاوز شهر المسير — DD-07) وغير محجوزة لمسير معتمد آخر (DD-09) — DEBIT خصم،
@@ -871,7 +886,7 @@ export class PayrollService {
         const shadowTotals = policyShadow && 'totals' in policyShadow && policyShadow.totals?.policy && ['MATCHED', 'DIFFERENT'].includes(policyShadow.status) ? policyShadow.totals.policy : null
         const engineFacts: PayrollPolicyEngineFacts = { employeeId: emp.id, period: run.period, periodStart: startDate, periodEnd: endDate, monthlyComponents,
           coverDays, periodDays, fullCoverage,
-          dailyHours, monthlyDays, lateDeductionEnabled: lateEnabled, currency: policyValues.currency, overtimeAmount: otAmount, unpaidLeaveDays: unpaidDays,
+          dailyHours, monthlyDays, lateDeductionEnabled: lateEnabled, currency: policyValues.currency, overtimeAmount: otAmount, unpaidLeaveDays: unpaidDays + Number(sick.equivalentDays),
           credits: pendingObligations.filter(o => o.type === 'CREDIT').map(obligationEntry), debits: exemptedDebits,
           // الخطوة 26: نفس قرار الإعفاء على مجاميع ظل الحضور، فيقيس التكافؤ الحساب لا الإعفاء
           protectionSettings, attendance: { status: policyShadow?.status ?? 'UNAVAILABLE',
@@ -921,6 +936,7 @@ export class PayrollService {
         }
       }
       totalNet = round2(totalNet + paid.netPay)
+      const leaveLines = payrollLeaveDeductionLines(paid.unpaidDeduction, unpaidOnlyDeduction, unpaidDays, sick.lines)
 
       prepared.push(
         items.create({
@@ -957,7 +973,7 @@ export class PayrollService {
             salaryComponents: paid.salaryComponents,
             salarySource: salary.source,
             prorataFactor: Math.round(prorataFactor * 1e6) / 1e6,
-            prorationBasis: 'PERIOD_DAYS',
+            prorationBasis: 'MONTHLY_DAYS',
             attendanceExemptions,
             attendanceDeductions: { policy: attendancePolicy, days: attendanceDeductionDays,
               totals: { lateMinutes, shortfallMinutes, latenessDeduction: paid.latenessDeduction, shortfallDeduction: paid.shortfallDeduction },
@@ -1003,6 +1019,11 @@ export class PayrollService {
               )
               .map((r) => r.id),
             unpaidLeaveIds: unpaidLeaves.map((l) => l.id),
+            // الإجازة المرضية بأجر متدرج: أيام الفترة بترتيبها في السنة ونسبة أجرها، وسطر خصم لكل نسبة
+            ...(sick.days.length ? { sickLeave: { ...sick, amount: leaveLines.sickAmount, lines: leaveLines.sickLines,
+              leaveIds: [...new Set(sick.days.map(day => day.leaveId))] } } : {}),
+            // سطور عمود الإجازة بلا أجر كما تظهر في القسيمة: بدون راتب + خصم المرضية لكل نسبة أجر (مجموعها = العمود)
+            leaveDeductionLines: leaveLines.lines,
           }),
         })
       )
@@ -1532,7 +1553,11 @@ export class PayrollService {
     const financialExemptions = await describePayslipExemptions(em, savedBreakdown)
     // C8 / الخطوة 31: هل عُكس صرف هذا البند (بأي مسير وسبب) وقسيمة المسير التكميلي المربوطة
     const reversal = await describePayrollItemReversal(em, item)
-    return { item, run: this.lightRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY', obligationDetails, financialExemptions, reversal }
+    // سطور عمود الإجازة بلا أجر (بدون راتب + خصم الإجازة المرضية لكل نسبة أجر)؛ البند القديم بلا سطور = سطر واحد بالعمود
+    const savedLeaveLines = (savedBreakdown as { leaveDeductionLines?: unknown }).leaveDeductionLines
+    const leaveDeductions = Array.isArray(savedLeaveLines) ? savedLeaveLines
+      : Number(item.unpaidLeaveDeduction) > 0 ? [{ code: 'UNPAID_LEAVE', label: 'إجازة بدون راتب', days: Number(item.unpaidLeaveDays), payPercent: 0, amount: Number(item.unpaidLeaveDeduction) }] : []
+    return { item, run: this.lightRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY', obligationDetails, financialExemptions, reversal, leaveDeductions }
     })
   }
 
@@ -1831,8 +1856,7 @@ export class PayrollService {
         startDate: conflict.startDate, endDate: conflict.endDate, overlapDays: conflict.overlapDays, kind: conflict.kind, blocking: conflict.blocking }
     }
     const dayBasis = monthlyDays === 30 ? 'FIXED_30' : `FIXED_${monthlyDays}`
-    // أ2: المعاينة تقسم على أيام الفترة نفسها التي يقسم عليها الحساب، فما يُعرض هو ما يُحسب.
-    const periodDays = Math.round((Date.parse(`${run.endDate}T12:00:00Z`) - Date.parse(`${run.startDate}T12:00:00Z`)) / 86400000) + 1
+    // قرار المالك: الشهر 30 يومًا — المعاينة تقسم على نفس أساس الحساب، فما يُعرض هو ما يُحسب.
     const included = [], excluded = []
     let monthlyCents = 0, earnedCents = 0
     for (const row of resolution.rows) {
@@ -1844,10 +1868,10 @@ export class PayrollService {
         const coverage = row.coverage
         const grossCents = row.salary.monthlyComponents.reduce((sum, amount) => sum + Math.round(amount * 100), 0)
         const fullCoverage = coverage.coverFrom === run.startDate && coverage.coverTo === run.endDate
-        const earned = fullCoverage ? grossCents : Math.min(grossCents, Math.round(grossCents * coverage.coverDays / periodDays))
+        const earned = fullCoverage ? grossCents : Math.min(grossCents, Math.round(grossCents * coverage.coverDays / monthlyDays))
         monthlyCents += grossCents; earnedCents += earned
         included.push({ ...common, hireDate: coverage.hireDate, leaveDate: coverage.leaveDate, coverFrom: coverage.coverFrom, coverTo: coverage.coverTo,
-          coverDays: coverage.coverDays, partial: !fullCoverage, prorataFactor: fullCoverage ? 1 : Math.round(Math.min(coverage.coverDays / periodDays, 1) * 1e6) / 1e6,
+          coverDays: coverage.coverDays, partial: !fullCoverage, prorataFactor: fullCoverage ? 1 : Math.round(Math.min(coverage.coverDays / monthlyDays, 1) * 1e6) / 1e6,
           monthlyDays, dayBasis, monthlyGross: grossCents / 100, earnedGross: earned / 100,
           salarySource: { kind: row.salary.source.kind, referencePeriod: row.salary.source.referencePeriod, effectivePayrollPeriod: row.salary.source.effectivePayrollPeriod,
             currency: row.salary.source.currency, warning: row.salary.source.warning },

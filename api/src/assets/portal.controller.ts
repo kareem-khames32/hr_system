@@ -24,6 +24,7 @@ import { Request } from '../requests/entities/request.entity'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { Leave } from '../requests/entities/leave.entities'
 import { RequestsService } from '../requests/requests.service'
+import { LeaveAttachmentDeadlineJob } from '../requests/leave-attachment-deadline.job'
 import { EmployeeDocument, PublicHoliday } from './assets.entities'
 import { NotificationRead } from './notification-read.entity'
 import { leaveView } from '../common/leave-contract'
@@ -78,7 +79,8 @@ export class PortalController {
     @InjectRepository(Branch) private readonly branches: Repository<Branch>,
     @InjectRepository(NotificationRead)
     private readonly notificationReads: Repository<NotificationRead>,
-    private readonly attendance: AttendanceService
+    private readonly attendance: AttendanceService,
+    private readonly leaveAttachments: LeaveAttachmentDeadlineJob
   ) {}
 
   // ===== التقويم: عطلات + إجازات معتمدة في الشهر =====
@@ -537,6 +539,9 @@ export class PortalController {
         link: request.typeCode === 'TEAM_TRANSFER' ? '/employees/transfers' : '/requests-console',
       })
     }
+
+    // 3د) مرفق الإجازة «بعد الرجوع»: تذكير يومي بالمعلق وإخطار بالتحويل بدون راتب — للموظف وللموارد البشرية في نطاقها
+    items.push(...await this.leaveAttachments.notificationsFor(user))
 
     return items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
   }

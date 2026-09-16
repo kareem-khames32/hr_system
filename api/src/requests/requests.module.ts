@@ -11,6 +11,8 @@ import { ApproverResolver } from './approver-resolver.service'
 import { DestinationsService } from './destinations.service'
 import { LeaveBalancesService } from './leave-balances.service'
 import { LeavesController } from './leaves.controller'
+import { LeaveAttachmentsController } from './leave-attachments.controller'
+import { LeaveAttachmentDeadlineJob } from './leave-attachment-deadline.job'
 import { ApprovalChain } from './entities/approval-chain.entity'
 import { ApprovalStep } from './entities/approval-step.entity'
 import { AttendanceCorrection, OvertimeEntry } from './entities/attendance.entities'
@@ -73,7 +75,7 @@ import { OvertimeDispatchSubscriber } from './overtime-dispatch.subscriber'
       Branch,
     ]),
   ],
-  controllers: [RequestsController, LeavesController],
+  controllers: [RequestsController, LeavesController, LeaveAttachmentsController],
   providers: [
     RequestsService,
     OvertimeDispatchSubscriber,
@@ -81,7 +83,9 @@ import { OvertimeDispatchSubscriber } from './overtime-dispatch.subscriber'
     DestinationsService,
     LeaveBalancesService,
     RequestsScheduler,
+    // مهلة مرفق الإجازة «بعد الرجوع»: تذكير يومي وتحويل الأيام بدون راتب بعد المهلة
+    LeaveAttachmentDeadlineJob,
   ],
-  exports: [RequestsService, LeaveBalancesService, DestinationsService, ApproverResolver],
+  exports: [RequestsService, LeaveBalancesService, DestinationsService, ApproverResolver, LeaveAttachmentDeadlineJob],
 })
 export class RequestsModule {}

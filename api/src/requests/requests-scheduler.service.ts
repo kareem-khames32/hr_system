@@ -48,16 +48,26 @@ export class RequestsScheduler implements OnApplicationBootstrap {
 
   // لحاق الترحيل عند الإقلاع وكل يوم 00:05؛ علامة الإتمام تمنع تكراره داخل السنة.
   // تعطل الخادم يوم 1 يناير لا يسقط الرصيد المرحل، والفشل لا يسجل إتماماً.
+  // وبعده تجديد سنوات الرصيد بذكرى التعيين (يومي، مستقل عن نجاح الترحيل السنوي)
   @Cron('5 0 * * *')
   async yearStart() {
     try {
       const r = await this.balances.catchUpRollover()
-      if (!r) return
-      this.logger.log(
-        `ترحيل إجازات ${r.fromPeriod} → ${r.toPeriod}: ${r.created} رصيد مُرحّل، ${r.ensured} صف جديد`
-      )
+      if (r) {
+        this.logger.log(
+          `ترحيل إجازات ${r.fromPeriod} → ${r.toPeriod}: ${r.created} رصيد مُرحّل، ${r.ensured} صف جديد`
+        )
+      }
     } catch (e) {
       this.logger.error('تعذّر الترحيل السنوي للإجازات', (e as Error)?.stack)
+    }
+    try {
+      const r = await this.balances.renewBalancePeriods()
+      if (r && (r.created || r.carried)) {
+        this.logger.log(`تجديد أرصدة الإجازات: ${r.created} سنة رصيد جديدة، ${r.carried} رصيد مُرحّل`)
+      }
+    } catch (e) {
+      this.logger.error('تعذّر تجديد سنوات أرصدة الإجازات', (e as Error)?.stack)
     }
   }
 }

@@ -51,6 +51,75 @@ export class LeaveType {
 
   @Column({ default: true })
   isActive: boolean
+
+  // ===== شاشة أنواع الإجازات (قرار المالك 16 سبتمبر) =====
+  // الفئة تحدد باقي الإعداد: ANNUAL برصيد سنوي · OCCASION بمناسبة · SICK مرضية بأجر متدرج · UNPAID بدون راتب
+  @Column({ type: 'nvarchar', length: 20, nullable: true })
+  category: string | null
+
+  @Column({ type: 'nvarchar', length: 200, nullable: true })
+  nameEn: string | null
+
+  @Column({ type: 'nvarchar', length: 500, nullable: true })
+  description: string | null
+
+  // الرصيد (السنوية والمرضية): أيام السنة، ويتجدد أول السنة أو في ذكرى التعيين، والترحيل وسقفه
+  @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
+  annualDays: number | null
+
+  @Column({ type: 'nvarchar', length: 20, default: 'YEAR_START' })
+  renewalBasis: string
+
+  @Column({ default: false })
+  carryOverEnabled: boolean
+
+  @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
+  carryOverMaxDays: number | null
+
+  // المناسبة: أيام ثابتة للمرة، وأقصى مرات في السنة (مرة طول الخدمة = oncePerService)
+  @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
+  fixedDays: number | null
+
+  @Column({ type: 'int', nullable: true })
+  maxTimesPerYear: number | null
+
+  // المرضية: [{fromDay,toDay|null,payPercent}] على مجموع أيام المرض في السنة
+  @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
+  sickPayTiers: string | null
+
+  // شروط الطلب (أقصى أيام للطلب الواحد = maxDays)
+  @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
+  minDaysPerRequest: number | null
+
+  @Column({ type: 'int', default: 0 })
+  noticeDays: number
+
+  @Column({ default: true })
+  backdateAllowed: boolean
+
+  @Column({ type: 'int', nullable: true })
+  backdateMaxDays: number | null
+
+  // ALL_DAYS كل أيام التقويم · WORKING_DAYS أيام العمل فقط
+  @Column({ type: 'nvarchar', length: 20, default: 'WORKING_DAYS' })
+  countingMode: string
+
+  @Column({ default: true })
+  halfDayAllowed: boolean
+
+  // المرفق: NONE · OPTIONAL · REQUIRED · REQUIRED_ABOVE_DAYS (اسمه = requiredAttachment)
+  @Column({ type: 'nvarchar', length: 30, default: 'NONE' })
+  attachmentRule: string
+
+  @Column({ type: 'int', nullable: true })
+  attachmentAboveDays: number | null
+
+  // WITH_REQUEST مع الطلب · AFTER_RETURN بعد الرجوع خلال attachmentDeadlineDays وإلا تتحول الأيام بدون راتب
+  @Column({ type: 'nvarchar', length: 20, default: 'WITH_REQUEST' })
+  attachmentTiming: string
+
+  @Column({ type: 'int', default: 7 })
+  attachmentDeadlineDays: number
 }
 
 @Entity('leaves')
@@ -100,6 +169,16 @@ export class Leave {
 
   @Column({ type: 'datetime', nullable: true })
   revokedAt: Date
+
+  // مرفق «بعد الرجوع»: PENDING حتى attachmentDueDate · UPLOADED · MISSED (تحوّلت الأيام بدون راتب)
+  @Column({ type: 'nvarchar', length: 20, nullable: true })
+  attachmentStatus: string | null
+
+  @Column({ type: 'date', nullable: true })
+  attachmentDueDate: string | null
+
+  @Column({ type: 'nvarchar', length: 300, nullable: true })
+  attachmentRef: string | null
 }
 
 @Entity('leave_balances')

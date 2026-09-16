@@ -26,6 +26,7 @@ import { Request } from './entities/request.entity'
 import { RequestApproval } from './entities/request-approval.entity'
 import { RequestType } from './entities/request-type.entity'
 import { Leave, LeaveType } from './entities/leave.entities'
+import { initialLeaveAttachment } from './leave-attachment-rules'
 import {
   AttendanceCorrection,
   OvertimeEntry,
@@ -289,6 +290,8 @@ export class DestinationsService {
         period,
         isUnpaid: ltDef ? !ltDef.isPaid : false,
         status: 'APPROVED',
+        // مرفق «بعد الرجوع» المطلوب بقاعدة النوع: PENDING حتى toDate + المهلة (أو UPLOADED لو أُرفق مع الطلب)
+        ...(initialLeaveAttachment(ltDef, { toDate: String(payload.toDate), days: leaveDays }, payload.attachmentUrl) ?? {}),
       })
 
       if (deductBalance) {

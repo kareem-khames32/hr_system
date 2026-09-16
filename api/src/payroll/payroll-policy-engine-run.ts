@@ -46,6 +46,7 @@ export interface PayrollPolicyEngineFacts {
   employeeId: number; period: string; periodStart: string; periodEnd: string
   monthlyComponents: number[]; coverDays: number; periodDays: number; fullCoverage: boolean
   dailyHours: number; monthlyDays: number; lateDeductionEnabled: boolean; currency: string | null
+  // أيام بلا أجر + الأيام المكافئة لخصم الإجازة المرضية المتدرج (كسور حتى 6 منازل)
   overtimeAmount: number; unpaidLeaveDays: number
   credits: PayrollObligationProtectionEntry[]; debits: PayrollObligationProtectionEntry[]
   protectionSettings: PayrollObligationProtectionSettings
@@ -139,7 +140,7 @@ export function computePayrollPolicyEnginePreNet(facts: PayrollPolicyEngineFacts
   const variables: Record<string, string | { numerator: string; denominator: string }> = {
     BASE_SALARY: basic.format(2, 'HALF_UP'), GROSS_SALARY: gross.format(2, 'HALF_UP'), BASE_DAYS_BASIS: '30', STANDARD_DAY_HOURS: String(facts.dailyHours),
     DAY_RATE: fraction(dayRate), HOUR_RATE: fraction(hourRate), MINUTE_RATE: fraction(minuteRate), COVERED_DAYS: String(facts.coverDays), PERIOD_DAYS: String(facts.periodDays),
-    UNPAID_LEAVE_DAYS: PayrollDecimal.from(facts.unpaidLeaveDays.toFixed(2)).canonical(), OT_AMOUNT: money(facts.overtimeAmount), IS_ATTENDANCE_EXEMPT: '0',
+    UNPAID_LEAVE_DAYS: PayrollDecimal.from(facts.unpaidLeaveDays.toFixed(6)).canonical(), OT_AMOUNT: money(facts.overtimeAmount), IS_ATTENDANCE_EXEMPT: '0',
   }
   const variableRef = (code: string) => ['BASE_SALARY', 'GROSS_SALARY', 'DAY_RATE', 'HOUR_RATE', 'MINUTE_RATE'].includes(code) ? salaryRef
     : code === 'OT_AMOUNT' ? `payroll-overtime-approved:employee:${facts.employeeId}:period:${facts.period}`

@@ -8,12 +8,21 @@ import type { JwtPayload } from '../auth/auth.service'
 // التقديم نيابةً عن موظف آخر لا يحكمه جمهور النوع (القرار ج1) — يحكمه صلاحية النيابة.
 export type RequestAudiencePurpose = 'catalog' | 'submit'
 export type RequestAudience = { mode?: string; ids?: Array<number | string> }
+// المنصب في الهيكل (قرار المالك 16 سبتمبر): قادة الفرق ومديرو الأقسام غالبًا دورهم «موظف»،
+// فالجمهور «حسب المنصب» يعرفهم من الهيكل نفسه لا من الدور.
+export type AudiencePositions = { departmentManager?: boolean; teamLeader?: boolean; branchManager?: boolean }
+export const AUDIENCE_POSITION_KEYS = ['DEPARTMENT_MANAGERS', 'TEAM_LEADERS', 'BRANCH_MANAGERS'] as const
 export type AudienceSubject = {
   role?: string | null
   permissions?: string[] | null
   employeeId?: number | null
   departmentId?: number | null
+  positions?: AudiencePositions | null
 }
+
+// جمهور «حسب المنصب» وحده يحتاج قراءة الهيكل؛ باقي الأوضاع لا تكلّف استعلامًا
+export const audienceNeedsPositions = (visibleTo: string | null | undefined): boolean =>
+  parseRequestAudience(visibleTo)?.mode === 'positions'
 
 export function parseRequestAudience(visibleTo: string | null | undefined): RequestAudience | null {
   if (!visibleTo) return null
@@ -45,6 +54,15 @@ export function requestAudienceAllows(
       return !!subject.role && ids.map(String).includes(subject.role)
     case 'employees':
       return subject.employeeId != null && ids.map(Number).includes(Number(subject.employeeId))
+    // حسب المنصب: أي منصب مختار يكفي (مدير قسم / قائد فريق / مدير فرع)، أو دور مختار (الموارد البشرية، الإدارة العليا)
+    case 'positions': {
+      const keys = ids.map(String)
+      const positions = subject.positions ?? {}
+      return (!!subject.role && keys.includes(subject.role))
+        || (keys.includes('DEPARTMENT_MANAGERS') && !!positions.departmentManager)
+        || (keys.includes('TEAM_LEADERS') && !!positions.teamLeader)
+        || (keys.includes('BRANCH_MANAGERS') && !!positions.branchManager)
+    }
     // 'all' أو وضع غير معروف أو قيمة تالفة: الباب لا يُقفل صامتًا
     default:
       return true

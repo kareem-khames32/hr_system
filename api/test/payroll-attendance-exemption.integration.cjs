@@ -305,7 +305,7 @@ test('EX-09: a pending exemption has no financial effect before approval', async
   assertExemptionSnapshot(run, emp, null, 0, false)
 })
 
-test('EX-13 / أ2: a new exempt hire receives 13/31 of 19000 in a 31-day cycle', async () => {
+test('EX-13: a new exempt hire receives 13/30 of 19000 in a 31-day cycle (the month is 30 days)', async () => {
   const oldConfig = await repo('RequestsConfig').findOneByOrFail({ key: 'payroll.cycle_start_day' })
   try {
     await repo('RequestsConfig').save({ key: oldConfig.key, value: '23' })
@@ -313,12 +313,12 @@ test('EX-13 / أ2: a new exempt hire receives 13/31 of 19000 in a 31-day cycle',
     const window = await exemption(emp, { effectiveFrom: '2026-08-01', effectiveTo: null })
     const run = await calculate([emp], { period: '2026-08' }), result = item(run, emp)
     assert.equal(run.startDate, '2026-07-23'); assert.equal(run.endDate, '2026-08-22')
-    // أ2: 19000 × 13 / 31 = 7967.74 (كان 13/30)
-    assert.equal(Number(result.netPay), 7967.74)
+    // قرار المالك: الشهر 30 يومًا — 19000 × 13 / 30 = 8233.33
+    assert.equal(Number(result.netPay), 8233.33)
     assertNoAttendanceDeductions(result)
     const breakdown = JSON.parse(result.breakdown)
     assert.equal(breakdown.coverDays, 13); assert.equal(breakdown.monthlyDays, 30); assert.equal(breakdown.periodDays, 31)
-    assert.equal(breakdown.grossEarned, 7967.74)
+    assert.equal(breakdown.grossEarned, 8233.33)
     assertExemptionSnapshot(run, emp, window, 13, true)
     const attendance = await repo('AttendanceDay').find({ where: { employeeId: emp.id } })
     assert.ok(attendance.every(row => row.date >= '2026-08-10' && row.date <= '2026-08-22'))

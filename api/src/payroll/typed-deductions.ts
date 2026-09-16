@@ -214,7 +214,7 @@ export function normalizeDeductionTypeRules(input: Record<string, unknown>, exis
   const installmentAllowed = bool(pick('installmentAllowed'), false, 'يسمح بالتقسيط')
   const maxInstallments = installmentAllowed ? integer(pick('maxInstallments'), 6, 1, 24, 'أقصى عدد أقساط') : 1
   const requiresAttachment = bool(pick('requiresAttachment'), false, 'المرفق إلزامي')
-  const creatorScopes = list(pick('creatorScopes') ?? 'DIRECT_MANAGER,TEAM_LEADER,DEPARTMENT_MANAGER,HR', DEDUCTION_CREATOR_BASES, 'نطاق المُنشئ')
+  const creatorScopes = list(pick('creatorScopes') ?? 'DIRECT_MANAGER,TEAM_LEADER,DEPARTMENT_MANAGER,BRANCH_MANAGER,HR', DEDUCTION_CREATOR_BASES, 'نطاق المُنشئ')
   if (!creatorScopes.length) fail('DEDUCTION_TYPE_INVALID', 'حدد نطاق مُنشئ واحدًا على الأقل')
   // DD-06 قاعدة 2: خطوة الموارد البشرية الأخيرة لا تُحذف
   const approvalSteps = [...list(pick('approvalSteps') ?? 'HR', DEDUCTION_APPROVAL_ROLES, 'سلسلة الاعتماد').filter(role => role !== 'HR'), 'HR'] as DeductionApprovalRole[]

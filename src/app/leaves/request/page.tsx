@@ -22,6 +22,13 @@ import {
   type ApiRequest,
 } from '@/lib/api'
 import { statusLabels, type RequestStatus } from '@/data/requestsCatalog'
+import {
+  leaveAttachmentName,
+  leaveAttachmentRequiredNow,
+  leaveCountsCalendarDays,
+  leaveHalfDayAllowed,
+  leaveRulesHint,
+} from '@/lib/leave-catalog'
 
 // نوع الإجازة من كتالوج السيرفر (الفعّال فقط) — النموذج الموحّد: طلب واحد «LEAVE» يحمل النوع
 type ApiLeaveType = ApiLeaveTypeOption
@@ -91,7 +98,7 @@ export default function LeaveRequestPage() {
   } | null>(null)
   // مرجع الملف المرفوع (file:N) + اسمه للعرض + حالة الرفع
   const [attachmentRef, setAttachmentRef] = useState('')
-  const [attachmentName, setAttachmentName] = useState('')
+  const [attachmentFileName, setAttachmentName] = useState('')
   const [uploading, setUploading] = useState(false)
 
   useEffect(() => {
@@ -192,9 +199,10 @@ export default function LeaveRequestPage() {
       ? daysError
       : null
   const selectedLeaveType = leaveTypes.find(t => t.code === formData.leaveType)
-  // الإجازة بدون مرتب تُحسب بأيام التقويم كاملة — نفس ما يخصمه المسير، فالطلب
-  // والرصيد والخصم رقم واحد. المدفوعة تبقى بأيام العمل
-  const countsCalendarDays = !!selectedLeaveType && selectedLeaveType.isPaid === false
+  // طريقة عدّ النوع: كل أيام التقويم (زي بدون راتب) أو أيام العمل — نفس حساب السيرفر،
+  // فالطلب والرصيد والخصم رقم واحد
+  const countsCalendarDays = leaveCountsCalendarDays(selectedLeaveType)
+  const halfDayAllowed = leaveHalfDayAllowed(selectedLeaveType)
   const countedDays: number | null = daysInfo
     ? countsCalendarDays
       ? daysInfo.total
@@ -205,7 +213,16 @@ export default function LeaveRequestPage() {
     countedDays === null ? null : countedDays === 0 ? 0 : isHalfDay ? 0.5 : countedDays
 
   const selectedBalance = selectedLeaveType ? balanceFor(selectedLeaveType) : null
-  const attachmentRequired = (selectedLeaveType?.requiredAttachment ?? '').trim()
+  // المرفق حسب قاعدة النوع: مطلوب مع الطلب (أو فوق عدد أيام) — «بعد الرجوع» مش وقت التقديم
+  const attachmentName = leaveAttachmentName(selectedLeaveType)
+  const attachmentRequired = leaveAttachmentRequiredNow(selectedLeaveType, effectiveDays)
+    ? attachmentName
+    : ''
+
+  // النوع مابيسمحش بنص يوم: نرجع ليوم كامل
+  useEffect(() => {
+    if (!halfDayAllowed && period !== 'FULL') setPeriod('FULL')
+  }, [halfDayAllowed, period])
 
   // رفع فوري للمرفق — يخزّن مرجع file:N ليُرسل في payload.attachmentUrl
   const handleAttachment = async (file: File | null) => {
@@ -353,11 +370,16 @@ export default function LeaveRequestPage() {
               })}
             </div>
           )}
+          {selectedLeaveType && (
+            <p className="text-xs text-gray-500 mt-3">{leaveRulesHint(selectedLeaveType)}</p>
+          )}
         </div>
 
         {/* Date Selection */}
         <div className="card">
           <h2 className="text-lg font-bold text-gray-800 mb-4">تاريخ الإجازة</h2>
+          {/* نص اليوم بيظهر بس لو النوع بيسمح بيه */}
+          {halfDayAllowed && (
           <div className="mb-4">
             <label className="block text-sm font-medium text-gray-700 mb-2">نطاق اليوم</label>
             <select
@@ -377,6 +399,7 @@ export default function LeaveRequestPage() {
               </p>
             )}
           </div>
+          )}
           <div className="grid grid-cols-2 gap-4">
             <div>
               <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -429,7 +452,7 @@ export default function LeaveRequestPage() {
           ) : daysInfo && countsCalendarDays ? (
             <p className="flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 mt-2">
               <AlertCircle size={13} className="shrink-0" />
-              الإجازة بدون مرتب تُحسب بأيام التقويم — العطلات والويك إند داخل المدى تُحسب وتُخصم
+              النوع ده بيتحسب بأيام التقويم — العطلات والويك إند داخل المدى تُحسب وتُخصم
             </p>
           ) : daysInfo && !isHalfDay && daysInfo.skipped.length > 0 ? (
             <p className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-2">
@@ -449,7 +472,7 @@ export default function LeaveRequestPage() {
           ) : rangeSet ? (
             <p className="text-xs text-gray-400 mt-2">
               {countsCalendarDays
-                ? 'كل أيام المدى تُحسب — نفس ما يُخصم من راتبك'
+                ? 'كل أيام المدى تُحسب (أيام تقويم)'
                 : 'أيام العمل الفعلية فقط (تُستبعد الويك إند والعطلات الرسمية) — نفس ما يُخصم من رصيدك'}
             </p>
           ) : null}
@@ -497,6 +520,8 @@ export default function LeaveRequestPage() {
                     مرفق مطلوب: {attachmentRequired}{' '}
                     <span className="text-red-500">*</span>
                   </>
+                ) : attachmentName ? (
+                  `مرفق: ${attachmentName} (اختياري)`
                 ) : (
                   'مرفقات (اختياري)'
                 )}
@@ -511,7 +536,7 @@ export default function LeaveRequestPage() {
                 {attachmentRef ? (
                   <div className="flex items-center justify-center gap-2 text-success-700">
                     <CheckCircle2 size={18} />
-                    <span className="text-sm truncate max-w-[240px]">{attachmentName}</span>
+                    <span className="text-sm truncate max-w-[240px]">{attachmentFileName}</span>
                     <button
                       type="button"
                       className="text-red-500 text-xs underline"

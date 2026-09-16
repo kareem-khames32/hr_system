@@ -8,6 +8,7 @@ import RequestPayload from '@/components/RequestPayload'
 import OvertimePreview from '@/components/OvertimePreview'
 import OvertimeRequestSummary from '@/components/OvertimeRequestSummary'
 import { payloadFieldLabel, payloadSummary, payloadValueLabel } from '@/lib/request-payload'
+import { leaveAttachmentName, leaveAttachmentRequiredNow, leaveCountsCalendarDays as countsCalendarDaysOf, leaveHalfDayAllowed, leaveRulesHint } from '@/lib/leave-catalog'
 import { salaryIncreaseRequestFields, salaryIncreaseRequestPayload } from '@/lib/employee-salary-change-api'
 import {
   Plus,
@@ -578,9 +579,17 @@ export default function MyRequestsPage() {
   const selectedLeaveTypeDef = isLeave
     ? leaveTypes.find((lt) => lt.code === (fieldValues.leaveTypeCode ?? fieldValues.leaveType))
     : undefined
-  const leaveAttachmentRequired = (selectedLeaveTypeDef?.requiredAttachment ?? '').trim()
-  // الإجازة بدون مرتب تُحسب بأيام التقويم كاملة (نفس ما يخصمه المسير)؛ المدفوعة بأيام العمل
-  const leaveCountsCalendarDays = selectedLeaveTypeDef?.isPaid === false
+  // طريقة عدّ النوع (أيام تقويم/أيام عمل) ونص اليوم والمرفق من قواعد النوع — السيرفر بيفرضها
+  const leaveCountsCalendarDays = countsCalendarDaysOf(selectedLeaveTypeDef)
+  const leaveHalfDayOk = leaveHalfDayAllowed(selectedLeaveTypeDef)
+  const leaveAttachmentLabel = leaveAttachmentName(selectedLeaveTypeDef)
+  const leaveDaysNow = isHalfDay ? 0.5 : (fieldValues.days ?? '').trim() === '' ? null : Number(fieldValues.days)
+  const leaveAttachmentRequired = leaveAttachmentRequiredNow(selectedLeaveTypeDef, leaveDaysNow) ? leaveAttachmentLabel : ''
+  // النوع مابيسمحش بنص يوم: نرجع ليوم كامل
+  useEffect(() => {
+    if (isLeave && !leaveHalfDayOk && leavePeriod !== 'FULL') changeLeavePeriod('FULL')
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isLeave, leaveHalfDayOk, leavePeriod])
 
   // إجازة يوم كامل والتاريخان محددان — حقل الأيام يعكس أيام العمل الفعلية (قراءة فقط)
   const leaveFrom = (fieldValues.fromDate ?? '').trim()
@@ -629,7 +638,7 @@ export default function MyRequestsPage() {
       leaveCountsCalendarDays ? (
         <p className="flex items-center gap-1.5 text-xs text-gray-600 bg-gray-50 rounded-lg px-3 py-2 mt-1.5">
           <AlertTriangle size={13} className="shrink-0" />
-          الإجازة بدون مرتب تُحسب بأيام التقويم — العطلات والويك إند داخل المدى تُحسب وتُخصم
+          النوع ده بيتحسب بأيام التقويم — العطلات والويك إند داخل المدى تُحسب وتُخصم
         </p>
       ) : workingDaysInfo.working === 0 ? (
         <p className="flex items-center gap-1.5 text-xs text-red-700 bg-red-50 rounded-lg px-3 py-2 mt-1.5">
@@ -782,6 +791,9 @@ export default function MyRequestsPage() {
                 إجازة مدفوعة لا تُخصم من الرصيد
               </p>
             ))}
+          {selected && (
+            <p className="text-xs text-gray-500 mt-1">{leaveRulesHint(selected)}</p>
+          )}
         </>
       )
     }
@@ -1839,8 +1851,13 @@ export default function MyRequestsPage() {
                       }
                     >
                       <option value="FULL">يوم كامل</option>
-                      <option value="MORNING">النصف الصباحي</option>
-                      <option value="EVENING">النصف المسائي</option>
+                      {/* نص اليوم بيظهر بس لو نوع الإجازة بيسمح بيه */}
+                      {(!isLeave || leaveHalfDayOk) && (
+                        <>
+                          <option value="MORNING">النصف الصباحي</option>
+                          <option value="EVENING">النصف المسائي</option>
+                        </>
+                      )}
                     </select>
                     {isHalfDay && (
                       <p className="text-xs text-gray-500 mt-1.5">
@@ -1852,11 +1869,17 @@ export default function MyRequestsPage() {
                 )}
 
                 {/* مرفق إجباري لنوع الإجازة المختار (تقرير طبي/عقد زواج…) */}
-                {selectedType && isLeave && leaveAttachmentRequired && (
+                {selectedType && isLeave && leaveAttachmentLabel && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      مرفق مطلوب: {leaveAttachmentRequired}{' '}
-                      <span className="text-red-500">*</span>
+                      {leaveAttachmentRequired ? (
+                        <>
+                          مرفق مطلوب: {leaveAttachmentRequired}{' '}
+                          <span className="text-red-500">*</span>
+                        </>
+                      ) : (
+                        `مرفق: ${leaveAttachmentLabel} (اختياري)`
+                      )}
                     </label>
                     <div className="border-2 border-dashed border-gray-300 rounded-xl p-4 text-center hover:border-primary-500 transition-colors">
                       {fieldValues.attachmentUrl ? (

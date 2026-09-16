@@ -10,8 +10,10 @@ import {
   Calendar,
   ClipboardList,
   Layers,
+  Paperclip,
   Plus,
   Stethoscope,
+  Upload,
   Wallet,
   X,
   Zap,
@@ -22,12 +24,14 @@ import {
   type RequestStatus,
 } from '@/data/requestsCatalog'
 import {
+  attachLeaveFile,
   cancelRequest,
   createRequest,
   fetchMyApprovedLeaves,
   fetchMyBalances,
   fetchMyRequests,
   fetchRequestTypes,
+  uploadFile,
   type ApiBalance,
   type ApiLeave,
   type ApiRequest,
@@ -80,6 +84,8 @@ export default function MyLeavesPage() {
   const [cancelReason, setCancelReason] = useState('')
   const [cancelError, setCancelError] = useState('')
   const [submittingCancel, setSubmittingCancel] = useState(false)
+  // رفع مرفق «بعد الرجوع» لإجازة معتمدة تنتظره
+  const [uploadingId, setUploadingId] = useState<number | null>(null)
 
   const load = async () => {
     try {
@@ -140,6 +146,26 @@ export default function MyLeavesPage() {
       setError(e instanceof Error ? e.message : 'تعذّر سحب الطلب')
     } finally {
       setBusyId(null)
+    }
+  }
+
+  // مرفق «بعد الرجوع»: رفع الملف بآلية الملفات نفسها ثم ربط مرجعه بالإجازة — قبل الموعد وإلا تتحول أيامها بدون راتب
+  const awaitingAttachment = approvedLeaves.filter((l) => l.attachmentStatus === 'PENDING')
+  const missedAttachment = approvedLeaves.filter((l) => l.attachmentStatus === 'MISSED')
+  const attachFor = async (leave: ApiLeave, file: File | undefined) => {
+    if (!file) return
+    setError('')
+    setNotice('')
+    setUploadingId(leave.id)
+    try {
+      const uploaded = await uploadFile(file, { entityType: 'leave_attachment', entityId: leave.id })
+      await attachLeaveFile(leave.id, uploaded.ref)
+      setNotice('تم رفع مرفق الإجازة — أيامها محسوبة بأجرها')
+      await load()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذّر رفع المرفق')
+    } finally {
+      setUploadingId(null)
     }
   }
 
@@ -288,6 +314,52 @@ export default function MyLeavesPage() {
                 )
               })}
             </div>
+
+            {/* إجازات تنتظر مرفقًا بعد الرجوع (تقرير طبي…) — بموعدها */}
+            {(awaitingAttachment.length > 0 || missedAttachment.length > 0) && (
+              <div className="card border border-warning-200">
+                <div className="flex items-center gap-2 mb-3">
+                  <Paperclip size={18} className="text-warning-600" />
+                  <h2 className="font-bold text-gray-800">مرفقات الإجازات بعد الرجوع</h2>
+                </div>
+                <div className="space-y-2">
+                  {awaitingAttachment.map((l) => (
+                    <div key={l.id} className="flex flex-wrap items-center justify-between gap-3 p-3 bg-warning-50 rounded-xl">
+                      <div>
+                        <p className="text-sm font-medium text-gray-800">{leaveTypeLabels[l.leaveType] ?? l.leaveType}</p>
+                        <p className="text-xs text-gray-600 mt-0.5">
+                          من <span dir="ltr">{String(l.fromDate).slice(0, 10)}</span> إلى <span dir="ltr">{String(l.toDate).slice(0, 10)}</span>
+                          {' — '}ارفع المرفق حتى <span dir="ltr" className="font-bold">{String(l.attachmentDueDate ?? '').slice(0, 10)}</span>
+                          {' '}وإلا تتحول أيامها بدون راتب
+                        </p>
+                      </div>
+                      <label className={`btn-primary text-xs flex items-center gap-1.5 ${uploadingId !== null ? 'opacity-50 pointer-events-none' : 'cursor-pointer'}`}>
+                        <Upload size={14} />
+                        {uploadingId === l.id ? 'جارٍ الرفع...' : 'إرفاق المستند'}
+                        <input
+                          type="file"
+                          className="hidden"
+                          accept="image/jpeg,image/png,image/webp,application/pdf"
+                          disabled={uploadingId !== null}
+                          onChange={(e) => {
+                            const file = e.target.files?.[0]
+                            e.target.value = ''
+                            void attachFor(l, file)
+                          }}
+                        />
+                      </label>
+                    </div>
+                  ))}
+                  {missedAttachment.map((l) => (
+                    <div key={l.id} className="p-3 bg-red-50 rounded-xl text-xs text-red-700">
+                      {leaveTypeLabels[l.leaveType] ?? l.leaveType} (<span dir="ltr">{String(l.fromDate).slice(0, 10)}</span> إلى{' '}
+                      <span dir="ltr">{String(l.toDate).slice(0, 10)}</span>): لم يُرفع المرفق حتى{' '}
+                      <span dir="ltr">{String(l.attachmentDueDate ?? '').slice(0, 10)}</span> — تحولت أيامها بدون راتب
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             {/* My leave requests */}
             <div className="card overflow-hidden p-0">

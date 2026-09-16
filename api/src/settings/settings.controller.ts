@@ -70,10 +70,75 @@ class UpsertConfigDto {
   value: string
 }
 
-class CreateLeaveTypeDto {
+// ===== شاشة أنواع الإجازات (قرار المالك 16 سبتمبر): إعداد كل نوع حسب فئته =====
+const LEAVE_CATEGORIES = ['ANNUAL', 'OCCASION', 'SICK', 'UNPAID'] as const
+class LeaveTypeRulesDto {
+  @IsOptional() @IsIn(LEAVE_CATEGORIES, { message: 'فئة الإجازة: برصيد سنوي أو بمناسبة أو مرضية أو بدون راتب' })
+  category?: string
+
+  @IsOptional() @IsString() @MaxLength(200)
+  nameEn?: string | null
+
+  @IsOptional() @IsString() @MaxLength(500)
+  description?: string | null
+
+  @IsOptional() @Type(() => Number) @IsNumber({}, { message: 'عدد أيام السنة رقم' }) @Min(0)
+  annualDays?: number | null
+
+  @IsOptional() @IsIn(['YEAR_START', 'HIRE_ANNIVERSARY'], { message: 'تجديد الرصيد: بداية السنة أو تاريخ تعيين الموظف' })
+  renewalBasis?: string
+
+  @IsOptional() @IsBoolean()
+  carryOverEnabled?: boolean
+
+  @IsOptional() @Type(() => Number) @IsNumber({}, { message: 'أقصى أيام الترحيل رقم' }) @Min(0)
+  carryOverMaxDays?: number | null
+
+  @IsOptional() @Type(() => Number) @IsNumber({}, { message: 'عدد أيام المناسبة رقم' }) @Min(0)
+  fixedDays?: number | null
+
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'أقصى مرات في السنة رقم صحيح' }) @Min(1)
+  maxTimesPerYear?: number | null
+
+  @IsOptional() @IsArray({ message: 'جدول أجر المرضية قائمة صفوف' })
+  sickPayTiers?: Array<{ fromDay: number; toDay: number | null; payPercent: number }> | null
+
+  @IsOptional() @Type(() => Number) @IsNumber({}, { message: 'أقل أيام في الطلب رقم' }) @Min(0)
+  minDaysPerRequest?: number | null
+
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'التقديم قبلها بكام يوم رقم صحيح' }) @Min(0)
+  noticeDays?: number
+
+  @IsOptional() @IsBoolean()
+  backdateAllowed?: boolean
+
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'أقصى أيام للخلف رقم صحيح' }) @Min(0)
+  backdateMaxDays?: number | null
+
+  @IsOptional() @IsIn(['ALL_DAYS', 'WORKING_DAYS'], { message: 'حساب الأيام: كل الأيام أو أيام العمل' })
+  countingMode?: string
+
+  @IsOptional() @IsBoolean()
+  halfDayAllowed?: boolean
+
+  @IsOptional() @IsIn(['NONE', 'OPTIONAL', 'REQUIRED', 'REQUIRED_ABOVE_DAYS'], { message: 'المرفق: لا أو اختياري أو مطلوب أو مطلوب فوق عدد أيام' })
+  attachmentRule?: string
+
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'عدد الأيام اللي فوقها المرفق مطلوب رقم صحيح' }) @Min(0)
+  attachmentAboveDays?: number | null
+
+  @IsOptional() @IsIn(['WITH_REQUEST', 'AFTER_RETURN'], { message: 'وقت رفع المرفق: مع الطلب أو بعد الرجوع' })
+  attachmentTiming?: string
+
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'مهلة رفع المرفق رقم صحيح' }) @Min(1)
+  attachmentDeadlineDays?: number
+}
+
+class CreateLeaveTypeDto extends LeaveTypeRulesDto {
   @IsString({ message: 'كود نوع الإجازة مطلوب' })
   @MinLength(2)
   @MaxLength(50)
+  @Matches(/^[A-Z][A-Z0-9_]*$/, { message: 'الكود بالإنجليزي بحروف كبيرة وأرقام وشرطة سفلية، مثل ANNUAL' })
   code: string
 
   @IsString({ message: 'اسم نوع الإجازة مطلوب' })
@@ -110,7 +175,7 @@ class CreateLeaveTypeDto {
   oncePerService?: boolean
 }
 
-class UpdateLeaveTypeDto {
+class UpdateLeaveTypeDto extends LeaveTypeRulesDto {
   @IsOptional()
   @IsString()
   @MinLength(2)
@@ -685,9 +750,18 @@ export class SettingsController {
 
   @Post('leave-types')
   async createLeaveType(@Body() dto: CreateLeaveTypeDto) {
+    // الشاشة ترسل الفئة دائمًا؛ العملاء القدامى (بلا فئة) تُشتق فئتهم من المدفوعية ومصدر الرصيد كما في ترحيل 042
+    if (!dto.category) {
+      const balance = dto.balanceType ?? dto.balanceSource ?? 'none'
+      dto.category = dto.isPaid === false ? 'UNPAID' : balance === 'sick' ? 'SICK' : balance === 'annual' ? 'ANNUAL' : 'OCCASION'
+      if (dto.category === 'SICK' && dto.sickPayTiers === undefined) {
+        dto.sickPayTiers = [{ fromDay: 1, toDay: 30, payPercent: 100 }, { fromDay: 31, toDay: 90, payPercent: 75 }, { fromDay: 91, toDay: null, payPercent: 0 }]
+      }
+    }
     const dup = await this.leaveTypes.findOne({ where: { code: dto.code } })
     if (dup) throw new BadRequestException(`الكود ${dto.code} مستخدم بالفعل`)
-    return this.leaveTypes.save(this.leaveTypes.create(this.leaveTypeInput(dto)))
+    const row = this.leaveTypes.create({ code: dto.code } as Partial<LeaveType>)
+    return this.leaveTypes.save(Object.assign(row, this.leaveTypeInput(dto, row)))
   }
 
   @Patch('leave-types/:id')
@@ -697,19 +771,71 @@ export class SettingsController {
   ) {
     const row = await this.leaveTypes.findOne({ where: { id } })
     if (!row) throw new NotFoundException('نوع الإجازة غير موجود')
-    Object.assign(row, this.leaveTypeInput(dto))
+    Object.assign(row, this.leaveTypeInput(dto, row))
     return this.leaveTypes.save(row)
   }
 
-  private leaveTypeInput(dto: CreateLeaveTypeDto | UpdateLeaveTypeDto) {
+  // الفئة تحدد المدفوعية ومصدر الرصيد، وقواعد كل تبويب تُفحص على الحالة بعد الحفظ (الموجود + المُرسل)
+  private leaveTypeInput(dto: CreateLeaveTypeDto | UpdateLeaveTypeDto, current: LeaveType) {
     if (dto.balanceType !== undefined && dto.balanceSource !== undefined && dto.balanceType !== dto.balanceSource) {
       throw new BadRequestException('balanceType وbalanceSource يشيران إلى قيمتين مختلفتين')
     }
-    const { balanceSource, ...input } = dto
+    const { balanceSource, sickPayTiers, ...rest } = dto
+    const input: Record<string, unknown> = { ...rest }
     if (dto.balanceType !== undefined || balanceSource !== undefined) {
       input.balanceType = dto.balanceType !== undefined ? dto.balanceType : balanceSource
     }
+    if (sickPayTiers !== undefined) {
+      input.sickPayTiers = sickPayTiers === null ? null : JSON.stringify(this.checkSickPayTiers(sickPayTiers))
+    }
+    // عميل قديم يغيّر المدفوعية أو مصدر الرصيد بلا فئة: الفئة تتبع القيمة الجديدة (نفس اشتقاق ترحيل 042)
+    if (dto.category === undefined && (input.balanceType !== undefined || dto.isPaid !== undefined)) {
+      const balance = (input.balanceType ?? current.balanceType ?? 'none') as string
+      const paid = dto.isPaid !== undefined ? dto.isPaid : current.isPaid
+      input.category = paid === false ? 'UNPAID' : balance === 'sick' ? 'SICK' : balance === 'annual' ? 'ANNUAL' : 'OCCASION'
+    }
+    const merged = { ...current, ...input } as LeaveType
+    const category = merged.category
+    if (category === 'ANNUAL') { input.isPaid = true; input.balanceType = merged.balanceType === 'annual' || !merged.balanceType || merged.balanceType === 'none' ? 'annual' : merged.balanceType }
+    if (category === 'SICK') { input.isPaid = true; input.balanceType = 'sick' }
+    if (category === 'OCCASION') { input.isPaid = true; input.balanceType = 'none' }
+    if (category === 'UNPAID') { input.isPaid = false; input.balanceType = 'none' }
+    const num = (v: unknown) => v === null || v === undefined || v === '' ? null : Number(v)
+    const min = num(merged.minDaysPerRequest), max = num(merged.maxDays)
+    if (min !== null && max !== null && max <= min) throw new BadRequestException('أقصى عدد أيام في الطلب لازم يكون أكبر من أقل عدد أيام')
+    if (category === 'SICK' && !merged.sickPayTiers && sickPayTiers === undefined) {
+      throw new BadRequestException('الإجازة المرضية محتاجة جدول نسبة الأجر')
+    }
+    if (category === 'OCCASION' && num(merged.fixedDays) !== null && num(merged.fixedDays)! <= 0) {
+      throw new BadRequestException('عدد أيام المناسبة لازم يكون أكبر من صفر')
+    }
+    if (merged.attachmentRule === 'REQUIRED_ABOVE_DAYS' && num(merged.attachmentAboveDays) === null) {
+      throw new BadRequestException('حدد عدد الأيام اللي فوقها المرفق يبقى مطلوب')
+    }
+    if (merged.attachmentRule && merged.attachmentRule !== 'NONE' && !String(merged.requiredAttachment ?? '').trim()) {
+      throw new BadRequestException('اكتب اسم المرفق، مثلًا: تقرير طبي')
+    }
+    if (merged.backdateAllowed === false) input.backdateMaxDays = null
+    if (merged.carryOverEnabled === false) input.carryOverMaxDays = null
     return input
+  }
+
+  private checkSickPayTiers(rows: Array<{ fromDay: number; toDay: number | null; payPercent: number }>) {
+    if (!Array.isArray(rows) || rows.length === 0) throw new BadRequestException('جدول أجر المرضية محتاج صف واحد على الأقل')
+    const tiers = rows.map(r => ({ fromDay: Number(r.fromDay), toDay: r.toDay === null || r.toDay === undefined || (r.toDay as unknown) === '' ? null : Number(r.toDay), payPercent: Number(r.payPercent) }))
+    tiers.forEach((t, i) => {
+      const where = `الصف ${i + 1}`
+      if (!Number.isInteger(t.fromDay) || t.fromDay < 1) throw new BadRequestException(`${where}: «من يوم» رقم صحيح من 1`)
+      if (t.toDay !== null && (!Number.isInteger(t.toDay) || t.toDay < t.fromDay)) throw new BadRequestException(`${where}: «إلى يوم» لازم يكون بعد «من يوم»`)
+      if (!Number.isFinite(t.payPercent) || t.payPercent < 0 || t.payPercent > 100) throw new BadRequestException(`${where}: نسبة الأجر من 0 لـ 100`)
+      if (i === 0 && t.fromDay !== 1) throw new BadRequestException('أول صف في جدول أجر المرضية يبدأ من يوم 1')
+      if (i > 0) {
+        const prev = tiers[i - 1]
+        if (prev.toDay === null) throw new BadRequestException(`${where}: الصف اللي قبله مفتوح النهاية، فمفيش صفوف بعده`)
+        if (t.fromDay !== prev.toDay + 1) throw new BadRequestException(`${where}: لازم يبدأ من يوم ${prev.toDay + 1} عشان مايبقاش فيه فجوة أو تداخل`)
+      }
+    })
+    return tiers
   }
 
   // ===== سلاسل الاعتماد (عرض + تعديل SLA/العتبات) =====

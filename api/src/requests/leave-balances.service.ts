@@ -1,24 +1,49 @@
 import type { BalanceType } from '../common/domain-status'
 import { BadRequestException, ConflictException, Injectable, NotFoundException } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { EntityManager, In, Not, Repository } from 'typeorm'
+import { EntityManager, In, Like, Not, Repository } from 'typeorm'
 import { Employee } from '../employees/employee.entity'
-import { Leave, LeaveBalance, LeaveBalanceAdjustment } from './entities/leave.entities'
+import { Leave, LeaveBalance, LeaveBalanceAdjustment, LeaveType } from './entities/leave.entities'
 import { Request } from './entities/request.entity'
 import { RequestsConfig } from './entities/requests-config.entity'
 import { localDateOf } from '../attendance/attendance.service'
+import {
+  BalanceTypeSettings,
+  PeriodEntry,
+  RenewalBasis,
+  accruedDays,
+  addDays,
+  balanceTimeline,
+  balanceTypeSettings,
+  carryOverDays,
+  carryOverExpiry,
+  dayCount,
+  effectiveBasis,
+  isDateKey,
+  isYearKey,
+  nominalWindow,
+  periodAt,
+  periodKeyFor,
+  previousEntry,
+  prorate,
+} from './leave-balance-periods'
 
 // ============================================================
 // الأرصدة بالطبقات:
 // طبقة 1: الرصيد الافتتاحي المُرحّل (بصلاحية) — تُستهلك أولاً
-// طبقة 2: استحقاق السنة الحالية
-// الترحيل السنوي: المتبقي حتى حد أقصى → طبقة افتتاحية للسنة الجديدة
+// طبقة 2: استحقاق سنة الرصيد الحالية
+// الترحيل عند التجديد: المتبقي حتى سقف نوع الإجازة → طبقة افتتاحية للسنة الجديدة
+// سنة الرصيد من إعداد النوع (leave-balance-periods.ts): بداية السنة 'YYYY' أو ذكرى
+// التعيين 'YYYY-MM-DD'. الاستحقاق والترحيل وسقفه من نوعي ANNUAL وSICK.
 // ============================================================
 
 export interface BalanceView {
   employeeId: number
   balanceType: BalanceType
   period: string
+  // نافذة سنة الرصيد الفعلية (أول يوم وآخر يوم)
+  periodStart: string
+  periodEnd: string
   opening: {
     days: number
     taken: number
@@ -26,8 +51,8 @@ export interface BalanceView {
     expired: boolean
     available: number
   }
-  // استحقاق السنة كاملة: السنة الجارية وما بعدها من سياسة الإجازات (السنوي 0
-  // لغير المستحق)، والسنوات المنقضية كما خُزّنت في الصف
+  // استحقاق السنة كاملة: السنة الجارية وما بعدها من نوع الإجازة (السنوي 0 لغير
+  // المستحق)، والسنوات المنقضية كما خُزّنت في الصف؛ بنسبة الأيام لسنة انتقالية أقصر
   annualEntitlement: number
   // المتراكم لتاريخه من استحقاق السنة حسب طريقة الاستحقاق — منه يُحسب المتبقي
   accruedToDate: number
@@ -41,27 +66,42 @@ export interface BalanceView {
   deficit: number
 }
 
-// سياق الاستحقاق لموظف: التعيين + طريقة الاستحقاق + التجربة + استحقاق السياسة
+type TypedBalance = 'annual' | 'sick'
+const TYPED: TypedBalance[] = ['annual', 'sick']
+const isTyped = (t: string): t is TypedBalance => t === 'annual' || t === 'sick'
+type Entry = PeriodEntry<LeaveBalance>
+
+// سياق الاستحقاق لموظف: التعيين + طريقة الاستحقاق + التجربة + استحقاق النوع وإعداده
 interface AccrualContext {
   joinDate: string | null
   mode: string
   probationMonths: number
   policy: { annual: number; sick: number }
+  settings: Record<TypedBalance, BalanceTypeSettings>
 }
 
 // إعدادات الاستحقاق العامة (مشتركة بين كل الموظفين) — الحساب الجماعي يقرأها مرة
 interface AccrualSettings {
   mode: string
   probationMonths: number
-  annual: number
-  sick: number
+  expiryMonths: number
+  types: Record<TypedBalance, BalanceTypeSettings>
 }
 
 const num = (v: unknown) => Number(v ?? 0)
+const LEAVE_CONFIG_KEYS = [
+  'leave.accrual_mode',
+  'leave.probation_months',
+  'leave.annual_entitled',
+  'leave.sick_entitled',
+  'leave.carryover_max_days',
+  'leave.carryover_expiry_months',
+]
 
 @Injectable()
 export class LeaveBalancesService {
   private rolloverRunning = false
+  private renewalRunning = false
   constructor(
     @InjectRepository(LeaveBalance)
     private readonly balances: Repository<LeaveBalance>,
@@ -71,70 +111,40 @@ export class LeaveBalancesService {
     private readonly config: Repository<RequestsConfig>
   ) {}
 
-  // الاستحقاق المتراكم لتاريخه من استحقاق السنة (entitled) بعد فترة التجربة:
-  // شهري = entitled÷12 لكل شهر خدمة مكتمل داخل السنة، يومي = entitled÷أيام
-  // السنة لكل يوم خدمة داخلها حتى onDate شاملاً، سنوي = كامل مقدماً
-  private accruedEntitlement(
-    bal: LeaveBalance,
-    entitled: number,
-    onDate: string,
-    joinDate: string | null,
-    mode: string,
-    probationMonths: number,
-    inclusiveEnd = false
-  ): number {
-    // الأنواع القانونية (مرضي) والوضع «سنوي» (مقدماً) → الاستحقاق كامل
-    if (bal.balanceType !== 'annual' || (mode !== 'monthly' && mode !== 'daily')) {
-      return entitled
-    }
-
-    const periodStart = new Date(`${bal.period}-01-01T12:00:00`)
-    let start = periodStart
-    if (joinDate) {
-      const jd = new Date(`${joinDate}T12:00:00`)
-      jd.setMonth(jd.getMonth() + probationMonths)
-      if (jd > start) start = jd
-    }
-    const now = new Date(`${onDate}T12:00:00`)
-    if (now < start) return 0
-    if (mode === 'daily') {
-      // أيام الخدمة داخل السنة حتى onDate شاملاً (بحدّ آخر يوم في السنة)
-      const DAY = 24 * 60 * 60 * 1000
-      const periodEnd = new Date(`${bal.period}-12-31T12:00:00`)
-      const end = now > periodEnd ? periodEnd : now
-      const yearDays =
-        Math.round((periodEnd.getTime() - periodStart.getTime()) / DAY) + 1
-      const days = Math.round((end.getTime() - start.getTime()) / DAY) + 1
-      const accruedDaily = Math.round((days * entitled) / yearDays * 100) / 100
-      return Math.min(entitled, Math.max(0, accruedDaily))
-    }
-    // Settlement includes the final working day, without changing opening-balance expiry or its year.
-    if (inclusiveEnd) now.setDate(now.getDate() + 1)
-    // عدد الشهور المكتملة من بداية الاستحقاق حتى اليوم
-    let months =
-      (now.getFullYear() - start.getFullYear()) * 12 +
-      (now.getMonth() - start.getMonth())
-    if (now.getDate() < start.getDate()) months -= 1
-    months = Math.max(0, months)
-    const accrued = Math.round((months * entitled) / 12 * 100) / 100
-    return Math.min(entitled, accrued)
+  private basisOf(ctx: AccrualContext | undefined, balanceType: string): RenewalBasis {
+    return ctx && isTyped(balanceType)
+      ? effectiveBasis(ctx.settings[balanceType].renewalBasis, ctx.joinDate)
+      : 'YEAR_START'
   }
 
-  // استحقاق السنة كاملة: للسنة الجارية وما بعدها من سياسة الإجازات عشان تعديل
-  // الإعدادات يسري فوراً (السنوي 0 لغير المستحق)؛ السنوات المنقضية كما خُزّنت
-  private annualEntitlementOf(bal: LeaveBalance, ctx?: AccrualContext): number {
-    const stored = num(bal.entitled)
-    if (!ctx || bal.period < String(new Date().getFullYear())) return stored
-    if (bal.balanceType === 'annual') return ctx.policy.annual
-    if (bal.balanceType === 'sick') return ctx.policy.sick
-    return stored
+  // نافذة الصف وحده (بلا باقي صفوف الموظف) — للسنة 'YYYY' = السنة الميلادية
+  private entryOf(bal: LeaveBalance, ctx?: AccrualContext): Entry {
+    const y = String(bal.period).slice(0, 4)
+    const w = nominalWindow(String(bal.period), ctx?.joinDate) ?? { start: `${y}-01-01`, end: `${y}-12-31`, calendar: true }
+    return { row: bal, key: String(bal.period), calendar: w.calendar, nominalStart: w.start, nominalEnd: w.end, start: w.start, end: w.end }
+  }
+
+  // استحقاق السنة كاملة: للسنة الجارية وما بعدها من نوع الإجازة عشان تعديل
+  // الإعدادات يسري فوراً (السنوي 0 لغير المستحق)؛ السنوات المنقضية كما خُزّنت.
+  // السنة الانتقالية الأقصر (تغيير أساس التجديد) بنسبة أيامها
+  private annualEntitlementOf(bal: LeaveBalance, entry: Entry, ctx?: AccrualContext) {
+    let fullYear = num(bal.entitled)
+    const ended = entry.calendar
+      ? bal.period < String(new Date().getFullYear())
+      : entry.end < localDateOf(new Date())
+    if (ctx && !ended) {
+      if (bal.balanceType === 'annual') fullYear = ctx.policy.annual
+      else if (bal.balanceType === 'sick') fullYear = ctx.policy.sick
+    }
+    return { fullYear, entitlement: prorate(fullYear, entry) }
   }
 
   private view(
     bal: LeaveBalance,
     onDate: string,
     ctx?: AccrualContext,
-    inclusiveEnd = false
+    inclusiveEnd = false,
+    entry: Entry = this.entryOf(bal, ctx)
   ): BalanceView {
     const expired =
       !!bal.openingExpiry && bal.openingExpiry < onDate ? true : false
@@ -142,19 +152,21 @@ export class LeaveBalancesService {
       ? 0
       : Math.max(0, num(bal.openingDays) - num(bal.openingTaken))
     const entitledTaken = Math.max(0, num(bal.taken) - num(bal.openingTaken))
-    // استحقاق السنة كاملة (من السياسة للسنة الجارية) والمتراكم منه لتاريخه
+    // استحقاق السنة كاملة (من النوع للسنة الجارية) والمتراكم منه لتاريخه
     // حسب طريقة الاستحقاق إن توفّر السياق، وإلا الكامل
-    const annualEntitlement = this.annualEntitlementOf(bal, ctx)
+    const { fullYear, entitlement: annualEntitlement } = this.annualEntitlementOf(bal, entry, ctx)
     const effectiveEntitled = ctx
-      ? this.accruedEntitlement(
-          bal,
-          annualEntitlement,
+      ? accruedDays({
+          balanceType: bal.balanceType,
+          fullYear,
+          entitlement: annualEntitlement,
           onDate,
-          ctx.joinDate,
-          ctx.mode,
-          ctx.probationMonths,
-          inclusiveEnd
-        )
+          joinDate: ctx.joinDate,
+          mode: ctx.mode,
+          probationMonths: ctx.probationMonths,
+          inclusiveEnd,
+          window: entry,
+        })
       : annualEntitlement
     const adjustmentDays = num(bal.adjustmentDays)
     const realRemaining = Math.round((openingAvailable + effectiveEntitled + adjustmentDays - entitledTaken) * 100) / 100
@@ -162,6 +174,8 @@ export class LeaveBalancesService {
       employeeId: bal.employeeId,
       balanceType: bal.balanceType,
       period: bal.period,
+      periodStart: entry.start,
+      periodEnd: entry.end,
       opening: {
         days: num(bal.openingDays),
         taken: num(bal.openingTaken),
@@ -181,20 +195,44 @@ export class LeaveBalancesService {
   }
 
   // سياق الاستحقاق: تاريخ تعيين الموظف + وضع الاستحقاق + فترة التجربة +
-  // استحقاق السياسة الحالي (السنوي 0 لغير المستحق)
-  private async accrualContext(employeeId: number): Promise<AccrualContext> {
-    const emp = await this.employees.findOne({ where: { id: employeeId } })
-    return this.contextOf(emp, await this.accrualSettings())
+  // استحقاق النوع الحالي (السنوي 0 لغير المستحق)
+  private async accrualContext(employeeId: number, manager?: EntityManager): Promise<AccrualContext> {
+    const emp = await (manager ? manager.getRepository(Employee) : this.employees).findOne({ where: { id: employeeId } })
+    return this.contextOf(emp, await this.accrualSettings(manager))
   }
 
-  private async accrualSettings(): Promise<AccrualSettings> {
-    const cfg = async (k: string, d: string) =>
-      (await this.config.findOne({ where: { key: k } }))?.value ?? d
+  private async accrualSettings(manager?: EntityManager): Promise<AccrualSettings> {
+    const m = manager ?? this.balances.manager
+    const rows = await (manager ? manager.getRepository(RequestsConfig) : this.config).find({
+      where: { key: In(LEAVE_CONFIG_KEYS) },
+    })
+    const cfg = (k: string, d: string) => rows.find((r) => r.key === k)?.value ?? d
+    const globals = {
+      annual: Number(cfg('leave.annual_entitled', '21')),
+      sick: Number(cfg('leave.sick_entitled', '180')),
+      carryOverMaxDays: Number(cfg('leave.carryover_max_days', '10')),
+    }
+    const types = await m.getRepository(LeaveType).find({
+      select: {
+        id: true,
+        code: true,
+        category: true,
+        balanceType: true,
+        isActive: true,
+        annualDays: true,
+        renewalBasis: true,
+        carryOverEnabled: true,
+        carryOverMaxDays: true,
+      },
+    })
     return {
-      mode: await cfg('leave.accrual_mode', 'monthly'),
-      probationMonths: Number(await cfg('leave.probation_months', '0')),
-      annual: Number(await cfg('leave.annual_entitled', '21')),
-      sick: Number(await cfg('leave.sick_entitled', '180')),
+      mode: cfg('leave.accrual_mode', 'monthly'),
+      probationMonths: Number(cfg('leave.probation_months', '0')),
+      expiryMonths: Number(cfg('leave.carryover_expiry_months', '3')),
+      types: {
+        annual: balanceTypeSettings(types, 'annual', globals),
+        sick: balanceTypeSettings(types, 'sick', globals),
+      },
     }
   }
 
@@ -207,35 +245,56 @@ export class LeaveBalancesService {
       mode: s.mode,
       probationMonths: s.probationMonths,
       policy: {
-        annual: emp?.annualLeaveEntitled === false ? 0 : s.annual,
-        sick: s.sick,
+        annual: emp?.annualLeaveEntitled === false ? 0 : s.types.annual.annualDays,
+        sick: s.types.sick.annualDays,
       },
+      settings: s.types,
     }
   }
 
-  // صف رصيد السنة من سياسة الإجازات لو ناقص (LEV-2) — بدل ما الإجازة تعدّي بلا
-  // حد ولا خصم. السنوي 0 لغير المستحق؛ نوع غير السنوي/المرضي بلا صف = خطأ صريح
-  private async ensureRow(
+  // صف سنة الرصيد اللي يغطي تاريخًا من صفوف الموظف/النوع، ومفتاح الصف لو ناقص
+  private async resolveAt(
     repo: Repository<LeaveBalance>,
     employeeId: number,
     balanceType: BalanceType,
-    period: string
-  ): Promise<LeaveBalance> {
-    const found = await repo.findOne({ where: { employeeId, balanceType, period } })
-    if (found) return found
-    if (balanceType !== 'annual' && balanceType !== 'sick') {
+    date: string,
+    ctx: AccrualContext
+  ) {
+    const rows = await repo.find({ where: { employeeId, balanceType } })
+    const basis = this.basisOf(ctx, balanceType)
+    const timeline = balanceTimeline(rows, ctx.joinDate, basis)
+    const key = periodKeyFor(date, ctx.joinDate, basis)
+    let entry = periodAt(timeline, date)
+    if (!entry) {
+      const byKey = rows.find((r) => r.period === key)
+      if (byKey) entry = timeline.find((e) => e.row === byKey) ?? this.entryOf(byKey, ctx)
+    }
+    return { rows, timeline, entry, key }
+  }
+
+  // صف سنة الرصيد من إعداد النوع لو ناقص (LEV-2) — بدل ما الإجازة تعدّي بلا
+  // حد ولا خصم. السنوي 0 لغير المستحق؛ نوع غير السنوي/المرضي بلا صف = خطأ صريح
+  private async ensureAt(
+    repo: Repository<LeaveBalance>,
+    employeeId: number,
+    balanceType: BalanceType,
+    date: string,
+    ctx: AccrualContext
+  ): Promise<Entry> {
+    const found = await this.resolveAt(repo, employeeId, balanceType, date, ctx)
+    if (found.entry) return found.entry
+    if (!isTyped(balanceType)) {
       throw new BadRequestException(
-        `لا يوجد رصيد «${balanceType}» للموظف في سنة ${period}`
+        `لا يوجد رصيد «${balanceType}» للموظف في سنة ${date.slice(0, 4)}`
       )
     }
-    const ctx = await this.accrualContext(employeeId)
     try {
-      return await repo.save(
+      await repo.save(
         repo.create({
           employeeId,
           balanceType,
-          period,
-          entitled: balanceType === 'annual' ? ctx.policy.annual : ctx.policy.sick,
+          period: found.key,
+          entitled: ctx.policy[balanceType],
           taken: 0,
           openingDays: 0,
           openingTaken: 0,
@@ -243,10 +302,25 @@ export class LeaveBalancesService {
       )
     } catch (e) {
       // صف اتعمل بالتوازي (قيد التفرّد موظف/نوع/سنة) — نقرأه
-      const again = await repo.findOne({ where: { employeeId, balanceType, period } })
-      if (again) return again
-      throw e
+      const again = await repo.findOne({ where: { employeeId, balanceType, period: found.key } })
+      if (!again) throw e
     }
+    const after = await this.resolveAt(repo, employeeId, balanceType, date, ctx)
+    if (after.entry) return after.entry
+    throw new BadRequestException(`تعذّر تحديد سنة رصيد «${balanceType}» للموظف في ${date}`)
+  }
+
+  // بوابة الاعتماد تمرر 31 ديسمبر لجزء السنة اللاحقة من إجازة تعدّي السنة (يبدأ 1 يناير)
+  private gateSegment(onDate: string) {
+    const later = onDate.slice(5) === '12-31'
+    return { start: later ? `${onDate.slice(0, 4)}-01-01` : onDate, later }
+  }
+
+  // تاريخ قياس المتراكم: صف السنة الميلادية كما كان (تاريخ البوابة)؛ صف الذكرى لجزء
+  // لاحق يبدأ مع سنة رصيد جديدة = استحقاقها كله، وإلا المتراكم حتى أول يوم في الجزء
+  private measureDate(entry: Entry, onDate: string, segmentStart: string, later: boolean) {
+    if (entry.calendar || !later) return onDate
+    return entry.start === segmentStart ? entry.end : segmentStart
   }
 
   // تاريخ فحص رصيد سنة من إجازة (بوابة الاعتماد والخصم عند التنفيذ بنفس التاريخ):
@@ -290,22 +364,29 @@ export class LeaveBalancesService {
     onDate = localDateOf(new Date()),
     inclusiveEnd = false
   ): Promise<BalanceView | null> {
-    const period = onDate.slice(0, 4)
-    const bal = await this.balances.findOne({
-      where: { employeeId, balanceType, period },
-    })
-    if (!bal) return null
     const ctx = await this.accrualContext(employeeId)
-    return this.view(bal, onDate, ctx, inclusiveEnd)
+    const { entry } = await this.resolveAt(this.balances, employeeId, balanceType, onDate, ctx)
+    if (!entry) return null
+    return this.view(entry.row, onDate, ctx, inclusiveEnd, entry)
+  }
+
+  // صف السنة الجارية لكل نوع رصيد (السنوي والمرضي حسب أساس تجديد النوع)
+  private currentViews(rows: LeaveBalance[], onDate: string, ctx: AccrualContext): BalanceView[] {
+    const types = [...new Set([...rows].sort((a, b) => a.id - b.id).map((r) => r.balanceType))]
+    const out: BalanceView[] = []
+    for (const t of types) {
+      const own = rows.filter((r) => r.balanceType === t)
+      const entry = periodAt(balanceTimeline(own, ctx.joinDate, this.basisOf(ctx, t)), onDate)
+      if (entry) out.push(this.view(entry.row, onDate, ctx, false, entry))
+    }
+    return out
   }
 
   async allBalances(employeeId: number) {
     const onDate = localDateOf(new Date())
-    const rows = await this.balances.find({
-      where: { employeeId, period: onDate.slice(0, 4) },
-    })
     const ctx = await this.accrualContext(employeeId)
-    return rows.map((b) => this.view(b, onDate, ctx))
+    const rows = await this.balances.find({ where: { employeeId } })
+    return this.currentViews(rows, onDate, ctx)
   }
 
   // أرصدة السنة الجارية لكل موظفي النطاق دفعة واحدة — شاشة الأرصدة (LEV-23).
@@ -313,7 +394,7 @@ export class LeaveBalancesService {
   // تعذّر حساب موظف يرجع في صفّه (error) ولا يُسقط الباقي؛ branchId null = كل الفروع
   async bulkBalances(branchId: number | null) {
     const onDate = localDateOf(new Date())
-    const period = onDate.slice(0, 4)
+    const year = Number(onDate.slice(0, 4))
     const emps = await this.employees.find({
       select: {
         id: true,
@@ -328,9 +409,14 @@ export class LeaveBalancesService {
       where: branchId != null ? { branchId } : {},
       order: { id: 'ASC' },
     })
+    // صفوف السنة الجارية والسابقة (سنة الذكرى تبدأ في السنة السابقة أحيانًا)
     const qb = this.balances
       .createQueryBuilder('b')
-      .where('b.period = :period', { period })
+      .where('(b.period IN (:...years) OR b.period LIKE :cur OR b.period LIKE :prev)', {
+        years: [String(year), String(year - 1)],
+        cur: `${year}-%`,
+        prev: `${year - 1}-%`,
+      })
     if (branchId != null) {
       qb.andWhere(
         'b.employeeId IN (SELECT e.id FROM employees e WHERE e.branchId = :branchId)',
@@ -356,7 +442,7 @@ export class LeaveBalancesService {
         const ctx = this.contextOf(e, settings)
         return {
           employee,
-          balances: (byEmp.get(e.id) ?? []).map((b) => this.view(b, onDate, ctx)),
+          balances: this.currentViews(byEmp.get(e.id) ?? [], onDate, ctx),
         }
       } catch (err) {
         return {
@@ -378,9 +464,10 @@ export class LeaveBalancesService {
     onDate: string,
     pendingDays = 0
   ) {
-    await this.ensureRow(this.balances, employeeId, balanceType, onDate.slice(0, 4))
-    const view = await this.balanceOf(employeeId, balanceType, onDate)
-    if (!view) return
+    const ctx = await this.accrualContext(employeeId)
+    const segment = this.gateSegment(onDate)
+    const entry = await this.ensureAt(this.balances, employeeId, balanceType, segment.start, ctx)
+    const view = this.view(entry.row, this.measureDate(entry, onDate, segment.start, segment.later), ctx, false, entry)
     const available = Math.round((view.remaining - pendingDays) * 100) / 100
     if (available < days) {
       throw new BadRequestException(
@@ -400,7 +487,10 @@ export class LeaveBalancesService {
     const onDate = localDateOf(new Date())
     const reason = dto.reason?.trim()
     const cents = (value: number) => Math.round(value * 100) / 100
-    if (dto.period !== onDate.slice(0, 4)) throw new BadRequestException('التعديل اليدوي متاح لرصيد السنة الجارية فقط')
+    const notCurrent = 'التعديل اليدوي متاح لرصيد السنة الجارية فقط'
+    if (!(isYearKey(dto.period) || isDateKey(dto.period)) || (isYearKey(dto.period) && dto.period !== onDate.slice(0, 4))) {
+      throw new BadRequestException(notCurrent)
+    }
     if (!Number.isFinite(dto.delta) || dto.delta === 0 || Math.abs(dto.delta) > 9999.99 || Math.abs(dto.delta - cents(dto.delta)) > 1e-8) {
       throw new BadRequestException('التعديل يجب أن يكون عدداً غير صفري بدقة منزلتين عشريتين وبحد أقصى 9999.99 يوم')
     }
@@ -409,32 +499,39 @@ export class LeaveBalancesService {
       // Employee first serializes first-row creation and freezes branch scope.
       const employee = await em.findOne(Employee, { where: { id: employeeId }, lock: { mode: 'pessimistic_write' } })
       if (!employee || (branchScope !== null && employee.branchId !== branchScope)) throw new NotFoundException('الموظف غير موجود')
-      const ctx = this.contextOf(employee, await this.accrualSettings())
+      const ctx = this.contextOf(employee, await this.accrualSettings(em))
+      const repo = em.getRepository(LeaveBalance)
+      const current = await this.resolveAt(repo, employeeId, dto.balanceType, onDate, ctx)
+      if (dto.period !== (current.entry?.key ?? current.key)) throw new BadRequestException(notCurrent)
       const where = { employeeId, balanceType: dto.balanceType, period: dto.period }
       let bal = await em.findOne(LeaveBalance, { where, lock: { mode: 'pessimistic_write' } })
+      const entryFor = (row: LeaveBalance) =>
+        periodAt(balanceTimeline([...current.rows.filter((r) => r.period !== row.period), row], ctx.joinDate, this.basisOf(ctx, row.balanceType)), onDate) ??
+        this.entryOf(row, ctx)
       const prior = await em.findOneBy(LeaveBalanceAdjustment, { ...where, idempotencyKey: dto.idempotencyKey })
       if (prior) {
         if (num(prior.delta) !== dto.delta || prior.reason !== reason || prior.actorUserId !== actorUserId) {
           throw new ConflictException('مفتاح العملية مستخدم لتعديل مختلف — أعد فتح نموذج التعديل')
         }
         if (!bal) throw new ConflictException('سجل التعديل موجود لكن صف الرصيد غير موجود')
-        return { balance: this.view(bal, onDate, ctx), adjustment: prior, replayed: true }
+        return { balance: this.view(bal, onDate, ctx, false, entryFor(bal)), adjustment: prior, replayed: true }
       }
       if (['archived', 'terminated'].includes(employee.status)) throw new BadRequestException('لا يمكن تعديل رصيد موظف مؤرشف أو منتهية خدمته')
       if (!bal) {
-        if (!['annual', 'sick'].includes(dto.balanceType)) throw new BadRequestException('لا يوجد رصيد من هذا النوع للموظف')
+        if (!isTyped(dto.balanceType)) throw new BadRequestException('لا يوجد رصيد من هذا النوع للموظف')
         bal = await em.save(LeaveBalance, em.create(LeaveBalance, { ...where,
-          entitled: dto.balanceType === 'annual' ? ctx.policy.annual : ctx.policy.sick,
+          entitled: ctx.policy[dto.balanceType],
           taken: 0, openingDays: 0, openingTaken: 0, adjustmentDays: 0 }))
       }
-      const before = this.view(bal, onDate, ctx)
+      const entry = entryFor(bal)
+      const before = this.view(bal, onDate, ctx, false, entry)
       if (dto.expectedRemaining !== undefined && dto.expectedRemaining !== before.remaining) {
         throw new ConflictException('تغير الرصيد منذ فتح النافذة — حدّث البيانات وراجع التعديل')
       }
       const afterAdjustment = cents(num(bal.adjustmentDays) + dto.delta)
       if (Math.abs(afterAdjustment) > 999999.99) throw new BadRequestException('إجمالي التعديلات يتجاوز الحد المدعوم')
       bal.adjustmentDays = afterAdjustment
-      const after = this.view(bal, onDate, ctx)
+      const after = this.view(bal, onDate, ctx, false, entry)
       if (after.deficit > 0) throw new BadRequestException('التعديل يؤدي إلى رصيد سالب — راجع قيمة الخصم')
       if (after.remaining > 999999.99) throw new BadRequestException('الرصيد يتجاوز الحد المدعوم')
       await em.save(LeaveBalance, bal)
@@ -449,14 +546,15 @@ export class LeaveBalancesService {
   }
 
   adjustmentHistory(employeeId: number, period = String(new Date().getFullYear())) {
-    if (!/^\d{4}$/.test(period)) throw new BadRequestException('السنة غير صالحة')
+    if (!isYearKey(period) && !isDateKey(period)) throw new BadRequestException('السنة غير صالحة')
     return this.balances.manager.find(LeaveBalanceAdjustment, {
       where: { employeeId, period }, order: { id: 'DESC' },
     })
   }
 
   // الخصم بالطبقات: الافتتاحي الساري أولاً ثم استحقاق السنة. الأيام لازم موجبة
-  // (السالب كان بيزوّد الرصيد — LEV-4)، وصف السنة الناقص يتعمل (LEV-2)
+  // (السالب كان بيزوّد الرصيد — LEV-4)، وصف السنة الناقص يتعمل (LEV-2).
+  // سنة الرصيد = اللي تغطي أول يوم للإجازة داخل السنة (openingOnDate)
   async deduct(
     em: EntityManager,
     employeeId: number,
@@ -472,18 +570,14 @@ export class LeaveBalancesService {
     if (openingOnDate.slice(0, 4) !== onDate.slice(0, 4)) {
       throw new BadRequestException('تاريخ الطبقة الافتتاحية يجب أن يكون في سنة الرصيد نفسها')
     }
-    const period = onDate.slice(0, 4)
     // Read context before the balance lock: adjustments lock employee then
     // balance, so acquiring those locks in reverse order could deadlock.
     const ctx = await this.accrualContext(employeeId)
-    await this.ensureRow(
-      em.getRepository(LeaveBalance),
-      employeeId,
-      balanceType,
-      period
-    )
-    const bal = await em.getRepository(LeaveBalance).findOneOrFail({ where: { employeeId, balanceType, period }, lock: { mode: 'pessimistic_write' } })
-    const available = this.view(bal, onDate, ctx).remaining
+    const repo = em.getRepository(LeaveBalance)
+    const entry = await this.ensureAt(repo, employeeId, balanceType, openingOnDate, ctx)
+    const bal = await repo.findOneOrFail({ where: { employeeId, balanceType, period: entry.key }, lock: { mode: 'pessimistic_write' } })
+    const measure = this.measureDate(entry, onDate, openingOnDate, openingOnDate !== onDate)
+    const available = this.view(bal, measure, ctx, false, { ...entry, row: bal }).remaining
     if (available < days) throw new BadRequestException('الرصيد غير كافٍ عند التنفيذ — المتبقي ' + available + ' يوم')
     const openingValid = !bal.openingExpiry || bal.openingExpiry >= openingOnDate
     const openingAvailable = openingValid
@@ -492,7 +586,7 @@ export class LeaveBalancesService {
     const fromOpening = Math.min(days, openingAvailable)
     bal.openingTaken = num(bal.openingTaken) + fromOpening
     bal.taken = num(bal.taken) + days
-    await em.getRepository(LeaveBalance).save(bal)
+    await repo.save(bal)
   }
 
   // الإرجاع: يعكس بترتيب عكسي (استحقاق السنة أولاً ثم الطبقة الافتتاحية)
@@ -517,7 +611,7 @@ export class LeaveBalancesService {
     await em.getRepository(LeaveBalance).save(bal)
   }
 
-  // إرجاع رصيد إجازة بنفس تقسيم السنين اللي اتخصم بيه (من حمولة طلبها)
+  // إرجاع رصيد إجازة بنفس تقسيم السنين وسنة الرصيد اللي اتخصم منها (من حمولة طلبها)
   async restoreLeave(em: EntityManager, leave: Leave, balanceType: BalanceType) {
     let payload: unknown = {}
     if (leave.requestId) {
@@ -531,26 +625,35 @@ export class LeaveBalancesService {
       }
     }
     const byYear = this.splitByYear(payload, leave.fromDate, Number(leave.days))
+    const ctx = await this.accrualContext(leave.employeeId, em)
     for (const [year, d] of Object.entries(byYear)) {
-      await this.restore(em, leave.employeeId, balanceType, d, year)
+      const { entry } = await this.resolveAt(
+        em.getRepository(LeaveBalance),
+        leave.employeeId,
+        balanceType,
+        this.leaveYearStart(year, String(leave.fromDate)),
+        ctx
+      )
+      await this.restore(em, leave.employeeId, balanceType, d, entry?.key ?? year)
     }
   }
 
-  // صفوف السنوي والمرضي لسنة لكل الموظفين النشطين — المرضي مابيترحّلش فصفه
-  // لازم يتعمل مع بداية كل سنة (LEV-2). الموجود مابيتلمسش
+  // صفوف السنوي والمرضي اللي تغطي بداية سنة لكل الموظفين النشطين — المرضي
+  // مابيترحّلش فصفه لازم يتعمل مع بداية كل سنة (LEV-2). الموجود مابيتلمسش
   async ensureYearRows(period: string) {
     const emps = await this.employees.find({
       where: { status: Not(In(['terminated', 'archived'])) },
-      select: { id: true },
+      select: { id: true, joinDate: true, annualLeaveEntitled: true },
     })
+    const settings = await this.accrualSettings()
+    const date = `${period}-01-01`
     let created = 0
     for (const e of emps) {
-      for (const t of ['annual', 'sick']) {
-        const exists = await this.balances.count({
-          where: { employeeId: e.id, balanceType: t, period },
-        })
-        if (!exists) {
-          await this.ensureRow(this.balances, e.id, t, period)
+      const ctx = this.contextOf(e, settings)
+      for (const t of TYPED) {
+        const { entry } = await this.resolveAt(this.balances, e.id, t, date, ctx)
+        if (!entry) {
+          await this.ensureAt(this.balances, e.id, t, date, ctx)
           created++
         }
       }
@@ -573,74 +676,169 @@ export class LeaveBalancesService {
     } finally { this.rolloverRunning = false }
   }
 
-  // ===== الترحيل السنوي: متبقي سنة → طبقة افتتاحية للسنة الجديدة =====
-  // وبعده صفوف السنة الجديدة الناقصة (السنوي بلا مُرحّل + المرضي) لكل النشطين
+  // ===== الترحيل السنوي: متبقي سنة ميلادية → طبقة افتتاحية لسنة الرصيد التالية =====
+  // فقط لو الترحيل مفعّل في النوع وبحد سقفه (null = بلا سقف). سنة الرصيد التالية حسب
+  // أساس التجديد (سنة ميلادية أو ذكرى تعيين تبدأ بعد نهاية السنة). وبعده صفوف السنة
+  // الجديدة الناقصة لكل النشطين
   async rollover(fromPeriod: string) {
     const toPeriod = String(Number(fromPeriod) + 1)
-    const maxCarry = Number(
-      (await this.config.findOne({ where: { key: 'leave.carryover_max_days' } }))
-        ?.value ?? '10'
-    )
-    const expiryMonths = Number(
-      (
-        await this.config.findOne({
-          where: { key: 'leave.carryover_expiry_months' },
-        })
-      )?.value ?? '3'
-    )
-    // نهاية صلاحية المُرحّل: آخر يوم في الشهر رقم expiryMonths من السنة الجديدة
-    // (تنسيق محلي — toISOString يزحزح اليوم بفارق التوقيت)
-    const expiryDate = new Date(Number(toPeriod), expiryMonths, 0)
-    const expiry = `${expiryDate.getFullYear()}-${String(expiryDate.getMonth() + 1).padStart(2, '0')}-${String(expiryDate.getDate()).padStart(2, '0')}`
-
-    const endOfYear = `${fromPeriod}-12-31`
-    const rows = await this.balances.find({
-      where: { period: fromPeriod, balanceType: 'annual' },
-    })
+    const settings = await this.accrualSettings()
+    const expiry = carryOverExpiry(`${toPeriod}-01-01`, settings.expiryMonths)
     let created = 0
-    for (const bal of rows) {
-      const existing = await this.balances.findOne({
-        where: {
-          employeeId: bal.employeeId,
-          balanceType: 'annual',
-          period: toPeriod,
-        },
-      })
-      const ctx = await this.accrualContext(bal.employeeId)
-      const view = this.view(bal, endOfYear, ctx, true)
-      const carry = Math.min(maxCarry, Math.max(0, view.remaining))
-      if (existing) {
-        // صف السنة الجديدة ممكن يكون اتعمل بدري (إجازة بتعدّي السنة أو خصم) من
-        // غير مُرحّل — نكمّل المُرحّل عليه بدل ما يضيع؛ المُرحّل مرة واحدة بس
-        const hasOpening =
-          num(existing.openingDays) > 0 ||
-          num(existing.openingTaken) > 0 ||
-          !!existing.openingExpiry
-        if (!hasOpening && carry > 0) {
-          existing.openingDays = carry
-          existing.openingTaken = 0
-          existing.openingExpiry = expiry
-          await this.balances.save(existing)
-          created++
+    for (const t of TYPED) {
+      const typeSettings = settings.types[t]
+      if (!typeSettings.carryOverEnabled) continue
+      const rows = await this.balances.find({ where: { period: fromPeriod, balanceType: t } })
+      for (const bal of rows) {
+        const ctx = await this.accrualContext(bal.employeeId)
+        const all = await this.balances.find({ where: { employeeId: bal.employeeId, balanceType: t } })
+        const timeline = balanceTimeline(all, ctx.joinDate, this.basisOf(ctx, t))
+        const own = timeline.find((e) => e.row.id === bal.id)
+        if (!own) continue
+        const carry = carryOverDays(typeSettings, this.view(bal, own.end, ctx, true, own).remaining)
+        const nextDate = addDays(own.end, 1)
+        const next = periodAt(timeline, nextDate)
+        if (next) {
+          // صف السنة الجديدة ممكن يكون اتعمل بدري (إجازة بتعدّي السنة أو خصم) من
+          // غير مُرحّل — نكمّل المُرحّل عليه بدل ما يضيع؛ المُرحّل مرة واحدة بس
+          if (!this.hasOpening(next.row) && carry > 0) {
+            next.row.openingDays = carry
+            next.row.openingTaken = 0
+            next.row.openingExpiry = carryOverExpiry(next.start, settings.expiryMonths)
+            await this.balances.save(next.row)
+            created++
+          }
+          continue
         }
-        continue
+        const key = periodKeyFor(nextDate, ctx.joinDate, this.basisOf(ctx, t))
+        if (all.some((r) => r.period === key)) continue
+        await this.balances.save(
+          this.balances.create({
+            employeeId: bal.employeeId,
+            balanceType: t,
+            period: key,
+            // استحقاق النوع (0 لغير المستحق) مش رقم ثابت لكل الناس
+            entitled: ctx.policy[t],
+            taken: 0,
+            openingDays: carry,
+            openingTaken: 0,
+            openingExpiry: carryOverExpiry(nextDate, settings.expiryMonths),
+          })
+        )
+        created++
       }
-      await this.balances.save(
-        this.balances.create({
-          employeeId: bal.employeeId,
-          balanceType: 'annual',
-          period: toPeriod,
-          // استحقاق السياسة (0 لغير المستحق) مش رقم ثابت لكل الناس
-          entitled: ctx.policy.annual,
-          taken: 0,
-          openingDays: carry,
-          openingTaken: 0,
-          openingExpiry: expiry,
-        })
-      )
-      created++
     }
     const ensured = await this.ensureYearRows(toPeriod)
-    return { fromPeriod, toPeriod, created, ensured, maxCarry, expiry }
+    const annual = settings.types.annual
+    return {
+      fromPeriod,
+      toPeriod,
+      created,
+      ensured,
+      maxCarry: annual.carryOverEnabled ? annual.carryOverMaxDays : 0,
+      expiry,
+    }
+  }
+
+  private hasOpening(row: LeaveBalance) {
+    return num(row.openingDays) > 0 || num(row.openingTaken) > 0 || !!row.openingExpiry
+  }
+
+  // ===== التجديد اليومي لسنوات الرصيد بذكرى التعيين =====
+  // لكل موظف نشط ونوع (سنوي/مرضي): صف سنة الذكرى اللي بدأت يتعمل في يومها، والمتبقي
+  // من السنة السابقة يترحّل عليه مرة (لو مفعّل وبسقفه) خلال أول شهر منها. السنة
+  // الميلادية بعد سنة ميلادية يتولاها rollover. واستحقاق السنة الجارية المخزّن يتزامن
+  // مع النوع حتى تُحفظ السنة المنقضية بقيمتها الصحيحة
+  async renewBalancePeriods(today = localDateOf(new Date())) {
+    if (this.renewalRunning) return null
+    this.renewalRunning = true
+    try {
+      const settings = await this.accrualSettings()
+      const emps = await this.employees.find({
+        where: { status: Not(In(['terminated', 'archived'])) },
+        select: { id: true, joinDate: true, annualLeaveEntitled: true },
+      })
+      const year = Number(today.slice(0, 4))
+      const typeIn = In(TYPED)
+      const rows = await this.balances.find({
+        where: [
+          { balanceType: typeIn, period: In([String(year), String(year - 1)]) },
+          { balanceType: typeIn, period: Like(`${year}-%`) },
+          { balanceType: typeIn, period: Like(`${year - 1}-%`) },
+        ],
+      })
+      const byEmp = new Map<number, LeaveBalance[]>()
+      for (const b of rows) byEmp.set(b.employeeId, [...(byEmp.get(b.employeeId) ?? []), b])
+      let created = 0
+      let carried = 0
+      let synced = 0
+      for (const e of emps) {
+        const ctx = this.contextOf(e, settings)
+        for (const t of TYPED) {
+          const typeSettings = settings.types[t]
+          const basis = this.basisOf(ctx, t)
+          const own = (byEmp.get(e.id) ?? []).filter((r) => r.balanceType === t)
+          let timeline = balanceTimeline(own, ctx.joinDate, basis)
+          let entry = periodAt(timeline, today)
+          if (!entry) {
+            const key = periodKeyFor(today, ctx.joinDate, basis)
+            const last = timeline.filter((x) => x.end < today).sort((a, b) => (a.end < b.end ? -1 : 1)).pop()
+            // سنة ميلادية بلا صف: السلوك القديم (تتعمل عند الحاجة) إلا بعد سنة ذكرى انتهت
+            if (isYearKey(key) && !(last && !last.calendar)) continue
+            if (own.some((r) => r.period === key)) continue
+            let row: LeaveBalance | null = null
+            try {
+              row = await this.balances.save(
+                this.balances.create({
+                  employeeId: e.id,
+                  balanceType: t,
+                  period: key,
+                  entitled: ctx.policy[t],
+                  taken: 0,
+                  openingDays: 0,
+                  openingTaken: 0,
+                })
+              )
+              created++
+            } catch (err) {
+              row = await this.balances.findOne({ where: { employeeId: e.id, balanceType: t, period: key } })
+              if (!row) throw err
+            }
+            own.push(row)
+            timeline = balanceTimeline(own, ctx.joinDate, basis)
+            entry = periodAt(timeline, today)
+            if (!entry) continue
+          }
+          const row = entry.row
+          let dirty = false
+          if (num(row.entitled) !== ctx.policy[t]) {
+            row.entitled = ctx.policy[t]
+            dirty = true
+            synced++
+          }
+          const prev = previousEntry(timeline, entry)
+          if (
+            prev &&
+            addDays(prev.end, 1) === entry.start &&
+            (!entry.calendar || !prev.calendar) &&
+            dayCount(entry.start, today) <= 31 &&
+            !this.hasOpening(row)
+          ) {
+            const carry = carryOverDays(typeSettings, this.view(prev.row, prev.end, ctx, true, prev).remaining)
+            if (carry > 0) {
+              row.openingDays = carry
+              row.openingTaken = 0
+              row.openingExpiry = carryOverExpiry(entry.start, settings.expiryMonths)
+              dirty = true
+              carried++
+            }
+          }
+          if (dirty) await this.balances.save(row)
+        }
+      }
+      return { created, carried, synced }
+    } finally {
+      this.renewalRunning = false
+    }
   }
 }

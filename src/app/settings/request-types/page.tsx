@@ -87,7 +87,16 @@ const audienceRoles: Array<[string, string]> = [
   ['employee', 'موظف'],
 ]
 
-type AudienceMode = 'all' | 'departments' | 'roles' | 'employees'
+type AudienceMode = 'all' | 'departments' | 'roles' | 'employees' | 'positions'
+
+// «حسب المنصب»: المنصب يُعرف من الهيكل (مدير القسم/قائد الفريق/مدير الفرع)، ومعه أدوار مختارة
+const audiencePositions: Array<[string, string]> = [
+  ['DEPARTMENT_MANAGERS', 'مديرو الأقسام'],
+  ['TEAM_LEADERS', 'قادة الفرق'],
+  ['BRANCH_MANAGERS', 'مديرو الفروع'],
+  ['hr_manager', 'الموارد البشرية'],
+  ['executive', 'الإدارة العليا'],
+]
 
 // صف حقل مخصّص داخل البانِي
 type FieldRow = {
@@ -126,6 +135,7 @@ type BuilderForm = {
   deptIds: number[]
   roleIds: string[]
   empIds: number[]
+  posIds: string[]
 }
 
 const emptyForm = (): BuilderForm => ({
@@ -140,6 +150,7 @@ const emptyForm = (): BuilderForm => ({
   deptIds: [],
   roleIds: [],
   empIds: [],
+  posIds: [],
 })
 
 // ملخص الجمهور لشريحة البطاقة
@@ -157,6 +168,8 @@ const audienceSummary = (rt: ApiRequestType): string => {
       return `أدوار: ${n}`
     case 'employees':
       return `موظفون: ${n}`
+    case 'positions':
+      return `حسب المنصب: ${n}`
     default:
       return 'الكل'
   }
@@ -287,7 +300,7 @@ export default function RequestTypesPage() {
         null
       )
       const mode: AudienceMode =
-        v?.mode === 'departments' || v?.mode === 'roles' || v?.mode === 'employees'
+        v?.mode === 'departments' || v?.mode === 'roles' || v?.mode === 'employees' || v?.mode === 'positions'
           ? v.mode
           : 'all'
       setForm({
@@ -309,6 +322,7 @@ export default function RequestTypesPage() {
         deptIds: mode === 'departments' ? (v?.ids ?? []).map(Number) : [],
         roleIds: mode === 'roles' ? (v?.ids ?? []).map(String) : [],
         empIds: mode === 'employees' ? (v?.ids ?? []).map(Number) : [],
+        posIds: mode === 'positions' ? (v?.ids ?? []).map(String) : [],
       })
     } else {
       setEditing(null)
@@ -343,6 +357,8 @@ export default function RequestTypesPage() {
         return form.roleIds
       case 'employees':
         return form.empIds
+      case 'positions':
+        return form.posIds
       default:
         return []
     }
@@ -1079,6 +1095,7 @@ export default function RequestTypesPage() {
                     {(
                       [
                         ['all', 'الكل'],
+                        ['positions', 'حسب المنصب'],
                         ['departments', 'أقسام محددة'],
                         ['roles', 'أدوار محددة'],
                         ['employees', 'موظفون بعينهم'],
@@ -1124,6 +1141,30 @@ export default function RequestTypesPage() {
                       {departments.length === 0 && (
                         <p className="text-sm text-gray-400">لا توجد أقسام</p>
                       )}
+                    </div>
+                  )}
+
+                  {form.audienceMode === 'positions' && (
+                    <div className="mt-3 space-y-2 border border-gray-100 rounded-xl p-3">
+                      <div className="flex items-center gap-5 flex-wrap">
+                        {audiencePositions.map(([key, label]) => (
+                          <label key={key} className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={form.posIds.includes(key)}
+                              onChange={() =>
+                                setForm({
+                                  ...form,
+                                  posIds: toggleId(form.posIds, key),
+                                })
+                              }
+                              className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                            />
+                            <span className="text-sm text-gray-700">{label}</span>
+                          </label>
+                        ))}
+                      </div>
+                      <p className="text-xs text-gray-500">كل واحد يقدّم لمن تحته فقط: مدير القسم لقسمه، وقائد الفريق لفريقه، ومدير الفرع لفرعه.</p>
                     </div>
                   )}
 

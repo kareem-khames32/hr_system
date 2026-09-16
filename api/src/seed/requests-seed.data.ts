@@ -122,8 +122,9 @@ export const chainsSeed: ChainSeed[] = [
 
 // ===== أنواع الطلبات (55) — chain بالكود، والحقول المطلوبة للتقديم =====
 
-// ب4: جمهور «خصم» و«مكافأة» الافتراضي — من يتعامل مع مال غيره؛ المالك يوسّعه من «بانِي أنواع الطلبات»
-export const MONEY_REQUEST_AUDIENCE = '{"mode":"roles","ids":["super_admin","hr_manager","branch_manager"]}'
+// جمهور «خصم» و«مكافأة» الافتراضي حسب المنصب (قرار المالك 16 سبتمبر): مديرو الأقسام وقادة الفرق ومديرو الفروع
+// والموارد البشرية والإدارة العليا؛ كل واحد يقدّم لمن تحته فقط. المالك يغيّره من «أنواع الطلبات».
+export const MONEY_REQUEST_AUDIENCE = '{"mode":"positions","ids":["DEPARTMENT_MANAGERS","TEAM_LEADERS","BRANCH_MANAGERS","hr_manager","executive"]}'
 
 export interface TypeSeed {
   code: string

@@ -156,7 +156,6 @@ interface EmployeeVM {
   workScheduleTo: string
   workScheduleWeekend: string // عطلة الجدول المعيّن فقط (الافتراضي يتبع الفرع)
   annualLeaveEntitled: boolean
-  flexOverrideMode: string
   attendanceRuleEffectiveFrom: string
   annualEntitlementDays: number | null // استحقاق السنة كاملة من رصيد السنة الجارية
   // عملة راتب الموظف نفسه (عملة النظام لو غير محددة على ملفه): رمز + اسم للخطابات
@@ -197,12 +196,11 @@ interface CustodyView {
 
 type HistoryEventView = EmployeeHistoryView
 
-// سطر في «سجل الدوام» — نسخة من قاعدة حضور الموظف (جدول/مرونة) بسريانها وسببها
+// سطر في «سجل الدوام» — نسخة من قاعدة حضور الموظف (جدول العمل) بسريانها وسببها
 interface AttendanceRuleRowView {
   id: number
   effectiveFrom: string
   schedule: string
-  flex: string
   reason: string
   actor: string
 }
@@ -574,7 +572,6 @@ export default function EmployeeProfilePage() {
           workScheduleTo: effectiveSchedule?.endTime ?? '',
           workScheduleWeekend: schedule?.weekendDays ?? '',
           annualLeaveEntitled: e.annualLeaveEntitled !== false,
-          flexOverrideMode: ({ INHERIT: 'يتبع الوردية أو جدول العمل', ENABLED: 'مفعلة لهذا الموظف', DISABLED: 'موقوفة لهذا الموظف' } as Record<string, string>)[e.flexOverrideMode ?? 'INHERIT'],
           attendanceRuleEffectiveFrom: e.attendanceRuleEffectiveFrom ?? 'لا يوجد تاريخ سريان مسجل',
           annualEntitlementDays: annual?.annualEntitlement ?? null,
           salaryCurrency: e.currency ? currencyLabel(e.currency) : currencyNow,
@@ -637,16 +634,13 @@ export default function EmployeeProfilePage() {
         // بلا صلاحية قراءة المستخدمين: «أحد المستخدمين» — لا رقم مستخدم خام على أي شاشة
         const actorName = (userId: number) => userNameById.get(userId)?.trim() || 'أحد المستخدمين'
         const scheduleNameById = new Map(workSchedules.map((s) => [s.id, s.name]))
-        const flexLabels: Record<string, string> = { INHERIT: 'يتبع الوردية أو جدول العمل', ENABLED: 'مفعلة', DISABLED: 'موقوفة' }
         setRuleHistory(
           attendanceRules.map((v) => {
             const scheduleId = v.snapshot?.workScheduleId as number | null | undefined
-            const flexMode = String(v.snapshot?.flexOverrideMode ?? 'INHERIT')
             return {
               id: v.id,
               effectiveFrom: v.effectiveFrom ? String(v.effectiveFrom).slice(0, 10) : v.legacyBaseline ? 'قبل بدء السجل' : '—',
               schedule: scheduleId == null ? 'بدون جدول (يتبع الفرع)' : scheduleNameById.get(scheduleId) ?? `#${scheduleId}`,
-              flex: flexLabels[flexMode] ?? flexMode,
               reason: v.reason?.trim() || '—',
               actor: `${v.actorUserId ? actorName(v.actorUserId) : 'النظام'} · ${fmtDate(v.createdAt)}`,
             }
@@ -1111,11 +1105,6 @@ export default function EmployeeProfilePage() {
               </div>
 
               {/* تفاصيل التعيين — بداية العمل الفعلي وفترة التجربة ومصدر التوظيف */}
-              <div className="rounded-xl border border-blue-100 bg-blue-50/50 p-4">
-                <p className="text-sm text-gray-500">المرونة في الحضور</p>
-                <p className="font-bold text-gray-800 mt-1">{employee.flexOverrideMode}</p>
-                <p className="text-sm text-gray-600 mt-1">السريان: {employee.attendanceRuleEffectiveFrom}. مدة المرونة والساعات المطلوبة من تعريف دوام اليوم.</p>
-              </div>
               <div className="grid grid-cols-3 gap-6">
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">بداية العمل الفعلي</p>
@@ -1246,7 +1235,6 @@ export default function EmployeeProfilePage() {
                         <tr className="text-gray-500 border-b border-gray-100">
                           <th className="py-2 text-right font-medium">يسري من</th>
                           <th className="py-2 text-right font-medium">جدول العمل</th>
-                          <th className="py-2 text-right font-medium">المرونة</th>
                           <th className="py-2 text-right font-medium">السبب</th>
                           <th className="py-2 text-right font-medium">سجّله</th>
                         </tr>
@@ -1256,7 +1244,6 @@ export default function EmployeeProfilePage() {
                           <tr key={row.id} className="border-b border-gray-50 align-top">
                             <td className="py-2 whitespace-nowrap" dir="ltr">{row.effectiveFrom}</td>
                             <td className="py-2">{row.schedule}</td>
-                            <td className="py-2">{row.flex}</td>
                             <td className="py-2 whitespace-pre-wrap break-words">{row.reason}</td>
                             <td className="py-2 whitespace-nowrap">{row.actor}</td>
                           </tr>

@@ -18,6 +18,7 @@ import { Team } from '../org/entities/team.entity'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { audienceSubjectOf, parseRequestAudience, requestAudienceAllows } from '../requests/request-audience'
+import { orgPositionsOf } from '../requests/request-audience-positions'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { PayrollDecimal } from './payroll-decimal'
 import { salaryPayrollPeriodBounds } from './payroll-period-salary'
@@ -329,7 +330,9 @@ export class TypedDeductionsService {
     const self = audience?.mode === 'departments' && user.employeeId
       ? await em.getRepository(Employee).findOne({ where: { id: user.employeeId }, select: { id: true, departmentId: true } })
       : null
-    if (!requestAudienceAllows(type.visibleTo, audienceSubjectOf(user, self), 'submit')) {
+    // «حسب المنصب»: مدير قسم / قائد فريق / مدير فرع يُعرفون من الهيكل لا من الدور
+    const positions = audience?.mode === 'positions' ? await orgPositionsOf(em, user.employeeId) : null
+    if (!requestAudienceAllows(type.visibleTo, { ...audienceSubjectOf(user, self), positions }, 'submit')) {
       throw new ForbiddenException({ code: 'MONEY_REQUEST_NOT_VISIBLE', message: `طلب ${label} غير متاح لك` })
     }
   }

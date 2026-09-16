@@ -13,6 +13,7 @@ import { LetterTemplatesService } from '../letters/letter-templates.service'
 import { assertLetterIssuable } from '../letters/letter-issuance'
 import { InjectRepository } from '@nestjs/typeorm'
 import {
+  Between,
   DataSource,
   EntityManager,
   In,
@@ -36,7 +37,8 @@ import {
 } from '../attendance/attendance.service'
 import { OvertimeEntry } from './entities/attendance.entities'
 import { ApproverResolver, ResolvedStep } from './approver-resolver.service'
-import { audienceSubjectOf, requestAudienceAllows } from './request-audience'
+import { audienceNeedsPositions, audienceSubjectOf, requestAudienceAllows, type AudiencePositions } from './request-audience'
+import { orgPositionsOf } from './request-audience-positions'
 import {
   assertBankName,
   assertIban,
@@ -46,6 +48,7 @@ import {
 } from './destinations.service'
 import { LeaveBalancesService } from './leave-balances.service'
 import { Leave, LeaveType } from './entities/leave.entities'
+import { assertLeaveTypeDateRules, assertLeaveTypeDaysRules, leaveCountsAllDays, leaveTypeBackdateLimit } from './leave-type-rules'
 import { ApprovalChain } from './entities/approval-chain.entity'
 import { ApprovalStep } from './entities/approval-step.entity'
 import { ApprovalAction, RequestApproval } from './entities/request-approval.entity'
@@ -206,14 +209,18 @@ export class RequestsService {
     const emp = user.employeeId
       ? await this.employees.findOne({ where: { id: user.employeeId } })
       : null
-    return groupLeaveProfiles(all.filter((t) => this.audienceAllows(t, user, emp)))
+    // مناصب الهيكل تُقرأ مرة واحدة وفقط لو فيه نوع جمهوره «حسب المنصب»
+    const positions = all.some((t) => audienceNeedsPositions(t.visibleTo))
+      ? await orgPositionsOf(this.employees.manager, user.employeeId)
+      : null
+    return groupLeaveProfiles(all.filter((t) => this.audienceAllows(t, user, emp, 'catalog', positions)))
   }
 
   // هل النوع متاح للمستخدم ده؟ (ب4)
   // المقيّم واحد مشترك مع شاشتي «خصم» و«مكافأة» (request-audience.ts): إخفاء النوع عن جهة
   // معناه منعها من تقديمه فعلاً، والعرض في الكتالوج والتقديم يقرآن نفس الإجابة.
-  private audienceAllows(type: RequestType, user: JwtPayload, emp: Employee | null, purpose: 'catalog' | 'submit' = 'catalog'): boolean {
-    return requestAudienceAllows(type.visibleTo, audienceSubjectOf(user, emp), purpose)
+  private audienceAllows(type: RequestType, user: JwtPayload, emp: Employee | null, purpose: 'catalog' | 'submit' = 'catalog', positions: AudiencePositions | null = null): boolean {
+    return requestAudienceAllows(type.visibleTo, { ...audienceSubjectOf(user, emp), positions }, purpose)
   }
 
   // ===== الإنشاء — لنفسي أو نيابة عن موظف آخر (بصلاحية) =====
@@ -302,8 +309,11 @@ export class RequestsService {
     }
     // جمهور النوع يحكم التقديم لا العرض فقط (ب4). التقديم نيابةً عن موظف آخر يمر:
     // الموارد البشرية تدفع الشغل ولا يوقفها جمهور النوع (القرار ج1).
-    if (requesterId === actorEmployeeId && !this.audienceAllows(type, user, requester, 'submit')) {
-      throw new ForbiddenException('هذا النوع من الطلبات غير متاح لك')
+    if (requesterId === actorEmployeeId) {
+      const positions = audienceNeedsPositions(type.visibleTo) ? await orgPositionsOf(this.employees.manager, actorEmployeeId) : null
+      if (!this.audienceAllows(type, user, requester, 'submit', positions)) {
+        throw new ForbiddenException('هذا النوع من الطلبات غير متاح لك')
+      }
     }
 
     // التحقق من الحقول: القديمة (أسماء) + المخصّصة (كاملة الوصف)
@@ -628,16 +638,32 @@ export class RequestsService {
         if (String(p.toDate) < String(p.fromDate)) {
           throw new BadRequestException('تاريخ نهاية الإجازة قبل تاريخ بدايتها')
         }
-        // الأثر الرجعي بحدّ من الإعدادات؛ الأقدم منه للموارد البشرية بس (LEV-20)
-        const maxBack = await this.leaveBalances.maxBackdateDays()
-        const oldest = localDateOf(new Date(Date.now() - maxBack * 86400000))
-        if (
-          String(p.fromDate) < oldest &&
-          !userHasPerm(user, 'requests.create_on_behalf')
-        ) {
-          throw new BadRequestException(
-            `الإجازة بأثر رجعي أقدم من ${maxBack} يوم بتتسجل عن طريق الموارد البشرية`
-          )
+        // الأثر الرجعي بحدّ من الإعدادات؛ الأقدم منه للموارد البشرية بس (LEV-20).
+        // النوع لو حدد حدّه (ممنوع/أقصى أيام) بيغلب الإعداد العام ويتفحص تحت مع الإشعار
+        if (!leaveTypeDef || leaveTypeBackdateLimit(leaveTypeDef) === null) {
+          const maxBack = await this.leaveBalances.maxBackdateDays()
+          const oldest = localDateOf(new Date(Date.now() - maxBack * 86400000))
+          if (
+            String(p.fromDate) < oldest &&
+            !userHasPerm(user, 'requests.create_on_behalf')
+          ) {
+            throw new BadRequestException(
+              `الإجازة بأثر رجعي أقدم من ${maxBack} يوم بتتسجل عن طريق الموارد البشرية`
+            )
+          }
+        }
+        // قواعد النوع للتواريخ: نص اليوم، الأثر الرجعي، مدة الإشعار — الموارد البشرية
+        // وهي بتسجّل نيابةً عن موظف معفية من التوقيت بس (نص اليوم بيتفحص للكل)
+        if (leaveTypeDef) {
+          const hrOnBehalf =
+            userHasPerm(user, 'requests.create_on_behalf') &&
+            !(await this.actorIsRequester(em, user, req))
+          assertLeaveTypeDateRules(leaveTypeDef, {
+            fromDate: String(p.fromDate),
+            period: p.period,
+            today: localDateOf(new Date()),
+            exemptTiming: hrOnBehalf,
+          })
         }
       }
 
@@ -650,33 +676,29 @@ export class RequestsService {
         )
       }
 
-      // المدفوعة: المخصوم من الرصيد = أيام العمل الفعلية فقط (الويك إند والعطلات
-      // الرسمية داخل المدى لا تُحسب ولا تُخصم).
-      // غير المدفوعة (A3): أيام التقويم كاملة — نفس ما يخصمه المسير يوماً بيوم،
-      // فالطلب والرصيد والخصم رقم واحد
+      // الأيام حسب طريقة عدّ النوع (countingMode): WORKING_DAYS = أيام العمل الفعلية
+      // بس (الويك إند والعطلات الرسمية داخل المدى لا تُحسب ولا تُخصم)، ALL_DAYS = أيام
+      // التقويم كاملة (بدون راتب: نفس ما يخصمه المسير يوماً بيوم). الطلب والإجازة والرصيد رقم واحد
       if (p.fromDate && p.toDate && p.fromDate <= p.toDate) {
-        const emp = await this.employees.findOne({
-          where: { id: req.requesterId },
-        })
-        const unpaidLeave = leaveTypeDef ? leaveTypeDef.isPaid === false : false
+        const allDays = leaveTypeDef ? leaveCountsAllDays(leaveTypeDef) : false
         const { total, working, skipped } =
           await this.attendance.workingDaysForEmployee(
             req.requesterId,
             String(p.fromDate),
             String(p.toDate)
           )
-        if (!unpaidLeave && working === 0) {
+        if (!allDays && working === 0) {
           throw new BadRequestException(
             'كل الأيام المختارة عطلات (ويك إند/عطلة رسمية) — لا حاجة لطلب إجازة'
           )
         }
         const isHalf = ['MORNING', 'EVENING'].includes(String(p.period))
-        const countedDays = unpaidLeave ? total : working
+        const countedDays = allDays ? total : working
         const effectiveDays = isHalf ? 0.5 : countedDays
         // الأيام دايماً من السيرفر — رقم العميل مابيتاخدش (LEV-4)
         p.days = effectiveDays
-        // غير المدفوعة لا تستبعد يوماً: كل أيام المدى محسوبة ومخصومة
-        p.skippedHolidays = unpaidLeave ? [] : skipped
+        // عدّ كل الأيام لا يستبعد يوماً: كل أيام المدى محسوبة ومخصومة
+        p.skippedHolidays = allDays ? [] : skipped
         // إجازة بتعدّي السنة: أيامها بتتقسم على رصيد كل سنة (LEV-2)
         const y1 = Number(String(p.fromDate).slice(0, 4))
         const y2 = Number(String(p.toDate).slice(0, 4))
@@ -688,7 +710,7 @@ export class RequestsService {
               y === y1 ? String(p.fromDate) : `${y}-01-01`,
               y === y2 ? String(p.toDate) : `${y}-12-31`
             )
-            const segDays = unpaidLeave ? seg.total : seg.working
+            const segDays = allDays ? seg.total : seg.working
             if (segDays > 0) byYear[String(y)] = segDays
           }
           p.daysByYear = byYear
@@ -743,16 +765,20 @@ export class RequestsService {
 
       // قواعد نوع الإجازة من الكتالوج (تُطبَّق بعد تثبيت أيام العمل الفعلية):
       if (leaveTypeDef) {
-        // حدّ أيام النوع — رفض ما يتجاوزه (مرضية 180، عارضة 7، حج 21…)
-        const effDays = Number(p.days)
-        if (
-          leaveTypeDef.maxDays != null &&
-          effDays > Number(leaveTypeDef.maxDays)
-        ) {
-          throw new BadRequestException(
-            `«${leaveTypeDef.nameAr}» حدّها الأقصى ${leaveTypeDef.maxDays} يوم ` +
-              `(${leaveTypeDef.isPaid === false ? 'أيام تقويم' : 'أيام عمل'}) — طلبت ${effDays}`
-          )
+        // أقل/أقصى أيام للطلب، أيام المناسبة الثابتة ومراتها في السنة، والمرفق مع الطلب
+        // (مرفق «بعد الرجوع» مش مطلوب وقت التقديم) — مرجعه في payload.attachmentUrl
+        if (p.leaveId == null) {
+          const year = String(p.fromDate ?? '').slice(0, 4)
+          const timesThisYear =
+            leaveTypeDef.category === 'OCCASION' && Number(leaveTypeDef.maxTimesPerYear) > 0 && /^\d{4}$/.test(year)
+              ? await this.leaveTimesInYear(em, req, leaveTypeDef.code, year)
+              : 0
+          assertLeaveTypeDaysRules(leaveTypeDef, {
+            days: Number(p.days),
+            attachmentRef: p.attachmentUrl,
+            timesThisYear,
+            year,
+          })
         }
         // مرة واحدة طوال الخدمة (الحج) — رفض لو للموظف سابقة من النوع:
         // (أ) سجل إجازة معتمد (منفَّذ)، أو (ب) طلب إجازة آخر لا يزال في المسار.
@@ -797,15 +823,6 @@ export class RequestsService {
               `«${leaveTypeDef.nameAr}» تُمنح مرة واحدة طوال الخدمة — للموظف طلب/إجازة سابقة من هذا النوع`
             )
           }
-        }
-        // مرفق إجباري (تقرير طبي/عقد زواج…) — يُرحّل مرجعه في payload.attachmentUrl
-        if (
-          leaveTypeDef.requiredAttachment &&
-          !String(p.attachmentUrl ?? '').trim()
-        ) {
-          throw new BadRequestException(
-            `«${leaveTypeDef.nameAr}» تتطلب إرفاق: ${leaveTypeDef.requiredAttachment}`
-          )
         }
       }
     }
@@ -910,6 +927,40 @@ export class RequestsService {
     req.status = 'UNDER_REVIEW'
     req.currentStep = resolved[0].stepOrder
     return em.getRepository(Request).save(req)
+  }
+
+  // مرات نوع الإجازة للموظف في سنة (بتاريخ البداية): الإجازات المعتمدة + طلبات النوع
+  // اللي لسه في المسار أو اتعتمدت ولسه ماتنفذتش — من غير عدّ الطلب مرتين لو له إجازة
+  private async leaveTimesInYear(em: EntityManager, req: Request, code: string, year: string): Promise<number> {
+    const approved = await em.getRepository(Leave).find({
+      where: {
+        employeeId: req.requesterId,
+        leaveTypeCode: code,
+        status: 'APPROVED',
+        fromDate: Between(`${year}-01-01`, `${year}-12-31`),
+      },
+      select: { id: true, requestId: true },
+    })
+    const counted = new Set(approved.map((l) => l.requestId).filter((id) => id != null))
+    const live = await em.getRepository(Request).find({
+      where: {
+        requesterId: req.requesterId,
+        typeCode: 'LEAVE',
+        status: In(['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'IN_EXECUTION']),
+      },
+    })
+    const pending = live.filter((r) => {
+      if (r.id === req.id || counted.has(r.id)) return false
+      try {
+        const rp = JSON.parse(r.payload ?? '{}')
+        return rp.leaveId == null &&
+          String(rp.fromDate ?? '').slice(0, 4) === year &&
+          leaveCodeOf(rp, definitionCodeOf(r)) === code
+      } catch {
+        return false
+      }
+    }).length
+    return approved.length + pending
   }
 
   // نوع الرصيد لطلب إجازة (من كتالوج أنواع الإجازة؛ الافتراضي السنوي)

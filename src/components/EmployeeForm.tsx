@@ -1690,7 +1690,6 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               )}
 
               <div className="mt-4 space-y-4 rounded-xl border border-blue-100 bg-blue-50/50 p-4">
-                <p className="text-sm text-gray-600">المرونة تتبع الوردية أو جدول العمل: الموظف مرن لأن ورديته مرنة، ومدة المرونة والساعات المطلوبة من دوام يومه.</p>
                 {mode === 'edit' && <div className="space-y-2">
                   <CalendarContextSummary context={calendarContext} error={calendarContextError} />
                   {calendarContext && <label className="flex gap-2 items-start text-sm text-gray-700"><input type="checkbox" checked={calendarInitialConfirmation} disabled={submitting || calendarContext.currentMatchesHistory === false} onChange={event => setCalendarInitialConfirmation(event.target.checked)} />أؤكد سريان الفرع الحالي لهذا الموظف من تاريخ أحدده، حتى دون تغيير الفرع.</label>}
@@ -1704,7 +1703,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                     </label>
                     <label className="text-sm text-gray-700">سبب التغيير
                       <input type="text" maxLength={500} className="input mt-2 w-full" value={form.attendanceChangeReason ?? ''}
-                        onChange={event => setField('attendanceChangeReason', event.target.value)} placeholder={mode === 'add' ? 'تعيين الموظف على الدوام' : 'سبب تعديل الدوام أو المرونة'} />
+                        onChange={event => setField('attendanceChangeReason', event.target.value)} placeholder={mode === 'add' ? 'تعيين الموظف على الدوام' : 'سبب تعديل الدوام أو الفرع'} />
                     </label>
                     <p className="text-xs text-gray-500 sm:col-span-2">يُحفظ تاريخ التغيير وصاحبه. الفترات المعتمدة تظل محفوظة؛ التعديل يؤثر من تاريخ السريان المحدد.</p>
                     {mode === 'add' && <p className="text-xs text-gray-500 sm:col-span-2">عند الإنشاء يثبت هذا التاريخ سريان الدوام والفرع معًا. إن تركته فارغًا تبدأ التغطية من تاريخ إنشاء الملف، وليس تاريخ الالتحاق؛ إثبات تاريخ سابق يحتاج إدخاله مع السبب.</p>}

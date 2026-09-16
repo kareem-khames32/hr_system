@@ -324,6 +324,10 @@ export interface ApiLeave {
   isUnpaid: boolean
   revokedByUserId?: number | null
   revokedAt?: string | null
+  // مرفق «بعد الرجوع»: PENDING حتى attachmentDueDate · UPLOADED · MISSED (تحولت أيامها بدون راتب)
+  attachmentStatus?: 'PENDING' | 'UPLOADED' | 'MISSED' | null
+  attachmentDueDate?: string | null
+  attachmentRef?: string | null
   employeeName?: string; employeeCode?: string
 }
 // سجل الإجازات مرقّم من السيرفر — الإحصاءات بنفس الفلاتر عدا الحالة
@@ -796,6 +800,20 @@ export interface ApiLeaveTypeOption {
   requiredAttachment: string | null
   maxDays: number | null
   oncePerService: boolean
+  // قواعد الطلب (شاشة أنواع الإجازات) — اختيارية لتوافق سيرفر أقدم
+  category?: 'ANNUAL' | 'OCCASION' | 'SICK' | 'UNPAID' | null
+  minDaysPerRequest?: number | string | null
+  noticeDays?: number | null
+  backdateAllowed?: boolean
+  backdateMaxDays?: number | null
+  countingMode?: 'ALL_DAYS' | 'WORKING_DAYS'
+  halfDayAllowed?: boolean
+  fixedDays?: number | string | null
+  maxTimesPerYear?: number | null
+  attachmentRule?: 'NONE' | 'OPTIONAL' | 'REQUIRED' | 'REQUIRED_ABOVE_DAYS'
+  attachmentAboveDays?: number | null
+  attachmentTiming?: 'WITH_REQUEST' | 'AFTER_RETURN'
+  attachmentDeadlineDays?: number | null
 }
 export const fetchActiveLeaveTypes = () => get<ApiLeaveTypeOption[]>('/leaves/types')
 export const createLeaveType = (lt: Record<string, unknown>) => post('/settings/leave-types', lt)
@@ -1192,6 +1210,8 @@ export const fetchMyOffboardingCase = () =>
 export const revokeLeave = (leaveId: number) => post<ApiLeave>(`/leaves/${leaveId}/revoke`)
 // إجازاتي المعتمدة — لمنتقي «إلغاء/تعديل إجازة»
 export const fetchMyApprovedLeaves = () => get<ApiLeave[]>('/leaves/mine')
+// ربط ملف مرفوع (uploadFile → ref) بإجازة تنتظر مرفقها بعد الرجوع — صاحبها أو الموارد البشرية
+export const attachLeaveFile = (leaveId: number, fileRef: string) => post<ApiLeave>(`/leaves/${leaveId}/attachment`, { fileRef })
 
 // ===== تهيئة الموظفين الجدد (قالب + مهام لكل موظف بجهة مسؤولة وموعد) =====
 export type OnboardingParty = 'hr' | 'it' | 'custody' | 'finance' | 'manager'

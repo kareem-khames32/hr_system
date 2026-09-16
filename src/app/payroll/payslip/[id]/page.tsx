@@ -128,6 +128,8 @@ export default function PayslipPage() {
   // تتبع كل قيد دفتر (الخصم المصنف بنوعه وسببه وطلبه وسعر اليوم) كما يعيده الخادم مع القسيمة
   const [obligationDetails, setObligationDetails] = useState<PayrollObligationDetail[] | null>(null)
   const [financialExemptions, setFinancialExemptions] = useState<PayslipExemption[] | null>(null)
+  // سطور عمود الإجازة بلا أجر: «إجازة بدون راتب» + «خصم إجازة مرضية (بنسبة أجر 75%)» لكل نسبة (من الخادم)
+  const [leaveDeductions, setLeaveDeductions] = useState<Array<{ code: string; label: string; amount: number }> | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -135,6 +137,7 @@ export default function PayslipPage() {
       .then(([data, branches]) => {
         setObligationDetails((data as { obligationDetails?: PayrollObligationDetail[] }).obligationDetails ?? [])
         setFinancialExemptions((data as { financialExemptions?: PayslipExemption[] }).financialExemptions ?? [])
+        setLeaveDeductions((data as { leaveDeductions?: Array<{ code: string; label: string; amount: number }> }).leaveDeductions ?? null)
         setItem(data.item)
         setRun(data.run)
         setEmployee(data.employee)
@@ -174,7 +177,9 @@ export default function PayslipPage() {
         { name: 'خصم التأخير', amount: Number(item.latenessDeduction), component: 'LATENESS' },
         { name: 'خصم نقص ساعات العمل', amount: Number(item.shortfallDeduction ?? 0), component: 'SHORTFALL' },
         { name: 'خصم الغياب', amount: Number(item.absenceDeduction ?? 0), component: 'ABSENCE' },
-        { name: 'إجازة بدون راتب', amount: Number(item.unpaidLeaveDeduction) },
+        ...(leaveDeductions?.length
+          ? leaveDeductions.map(line => ({ name: line.label, amount: Number(line.amount) }))
+          : [{ name: 'إجازة بدون راتب', amount: Number(item.unpaidLeaveDeduction) }]),
         { name: 'أقساط السلف', amount: Number(item.loanInstallments), component: 'LOAN' },
         { name: 'خصومات أخرى — تفصيلها أدناه', amount: Number(item.otherDeductions ?? 0), component: 'TYPED' },
       ]
