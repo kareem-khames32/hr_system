@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { MainLayout } from '@/components/layout'
 import Link from 'next/link'
 import {
@@ -21,6 +21,7 @@ import {
   type LoanCapPolicy, type LoanCapPolicyInput,
 } from '@/lib/loans-api'
 import { GraceOverridesNote } from '@/components/GraceOverridesNote'
+import { fetchPayrollPolicies, type PayrollPolicySummary } from '@/lib/payroll-policies-api'
 import { buildCalendarChange, calendarScopeWritable, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
 import { CalendarChangeFields, CalendarContextSummary, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
 
@@ -54,6 +55,7 @@ interface PolicyGroup {
 // قبل الحفظ (حروف كبيرة بترتيب الأسبوع)، وكل أيام الأسبوع مرفوضة. null = قيمة غير صالحة
 const WEEKEND_KEY = 'attendance.weekend_days'
 const DEVICE_KEY = 'attendance.device_key'
+const CYCLE_KEY = 'payroll.cycle_start_day'
 const deviceKeyWeak = (value: string) => !!value.trim() && (value.trim() === 'zk-device-key-change-me' || value.trim().length < 24)
 const WEEK_CODES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
 const WEEK_DAY_NAMES: Record<string, string> = { SUN: 'الأحد', MON: 'الاثنين', TUE: 'الثلاثاء', WED: 'الأربعاء', THU: 'الخميس', FRI: 'الجمعة', SAT: 'السبت' }
@@ -166,10 +168,12 @@ const GROUPS: PolicyGroup[] = [
     icon: Wallet,
     iconBg: 'bg-success-50',
     iconColor: 'text-success-500',
+    note: 'الفلوس بتتحسب وبتظهر بمنزلتين من غير تقريب: 1234.567 تبقى 1234.56.',
     fields: [
       { key: 'system.currency', label: 'عملة النظام', type: 'select', options: [{ value: 'SAR', label: 'ريال سعودي (ر.س)' }, { value: 'EGP', label: 'جنيه مصري (ج.م)' }] },
       { key: 'eos.months_per_year', label: 'مكافأة نهاية الخدمة', type: 'number', unit: 'شهر/سنة', min: 0 },
-      { key: 'payroll.cycle_start_day', label: 'يوم بداية دورة المسير', type: 'number', unit: 'من الشهر', min: 1, max: 31, integer: true, hint: 'مسير سبتمبر بدورة 23 = من 23 أغسطس إلى 22 سبتمبر.' },
+      // قرار المالك (16 سبتمبر): فترة المسير «من يوم … إلى يوم …»؛ «إلى» مشتقة (اليوم السابق للبداية) وتُعرض للقراءة. العرض في PayrollPeriodSetting
+      { key: CYCLE_KEY, label: 'فترة المسير', type: 'number', min: 1, max: 31, integer: true, hint: 'مسير سبتمبر من 23 = من 23 أغسطس إلى 22 سبتمبر.' },
       // الخطوة 22 / SRS PR-11 (B5): رخصة الشركة الصغيرة لفصل المهام
       { key: 'payroll.approval_self_approval_allowed', label: 'رخصة الشركة الصغيرة: يعتمد المسير من احتسبه', type: 'bool', perm: 'payroll.self_approval_licence', hint: 'الأصل مقفل: من احتسب نسخة المسير لا يعتمدها. فعّلها فقط لو لا يوجد مستخدم ثانٍ يحمل صلاحية الاعتماد. تغييرها يتطلب صلاحية «رخصة الشركة الصغيرة» التي يمنحها مدير النظام فقط (صلاحية الإعدادات وحدها لا تكفي)، وكل اعتماد بها يُسجل في سجل المسير.' },
       { key: 'payroll.salary_evidence_mode', label: 'مصدر راتب شهر المسير', type: 'select', options: [
@@ -180,10 +184,7 @@ const GROUPS: PolicyGroup[] = [
       { key: 'payroll.daily_hours', label: 'ساعات العمل اليومية', type: 'number', unit: 'ساعة', min: 1, max: 24, hint: 'أساس سعر الساعة والدقيقة.' },
       { key: 'payroll.hourly_rate_basis', label: 'أساس سعر الساعة', type: 'select', options: [{ value: 'DAILY_HOURS', label: 'سعر اليوم ÷ ساعات العمل اليومية' }], readOnly: true },
       { key: 'payroll.day_rate_basis', label: 'أساس سعر اليوم للغياب ونهاية الخدمة', type: 'select', options: [{ value: 'MONTHLY_FIXED_COMPONENTS_30', label: 'الأجر الشهري للمكونات الستة ÷ 30' }], readOnly: true },
-      { key: 'payroll.policy.rounding_mode', label: 'تقريب مبالغ الرواتب', type: 'select', options: [
-        { value: 'HALF_UP', label: 'نصف لأعلى' }, { value: 'HALF_EVEN', label: 'نصف للزوجي' }, { value: 'FLOOR', label: 'لأسفل' }, { value: 'CEIL', label: 'لأعلى' },
-      ], hint: 'نصف لأعلى بمنزلتين. يُنسخ إلى نسخ السياسات الجديدة.' },
-      { key: 'payroll.policy.rounding_scale', label: 'منازل التقريب', type: 'number', min: 0, max: 6, integer: true },
+      // قرار المالك (16 سبتمبر): لا اختيار تقريب — الفلوس بمنزلتين بالقص (src/lib/money.ts وapi/src/payroll/payroll-money.ts)
     ],
   },
 ]
@@ -298,6 +299,105 @@ function LoanAdvanceCapBlock({ onSaveConfig, pendingConfigCount }: { onSaveConfi
         {policy ? `الساري الآن: ${policy.percentOfSalary ? `${Number(policy.percentOfSalary)}% من ${policy.salaryBase === 'BASIC' ? 'الراتب الأساسي' : 'إجمالي الراتب'}` : policy.flatCapAmount ? `${formatLoanMoney(policy.flatCapAmount)} ${currency}` : 'بلا حد مبلغ'}`
           : 'لا يوجد سقف سلفة الآن — أي مبلغ يمر في الاعتماد.'}
       </p>
+    </div>
+  )
+}
+
+// ===== فترة المسير «من يوم … إلى يوم …» ومعاينة أثر تغييرها =====
+// مرآة payrollPeriodBounds في api/src/payroll/payroll-period.ts: نهاية شهر M = (البداية − 1) مقصوصة على آخر M، وبدايته = نهاية M−1 + يوم.
+const AR_MONTHS = ['يناير', 'فبراير', 'مارس', 'أبريل', 'مايو', 'يونيو', 'يوليو', 'أغسطس', 'سبتمبر', 'أكتوبر', 'نوفمبر', 'ديسمبر']
+type Ymd = { y: number; m: number; d: number }
+const monthLastDay = (y: number, m: number) => new Date(Date.UTC(y, m, 0)).getUTCDate()
+const shiftMonth = (y: number, m: number, by: number): [number, number] => { const i = y * 12 + (m - 1) + by; return [Math.floor(i / 12), (i % 12) + 1] }
+const cycleEndDay = (y: number, m: number, start: number) => start === 1 ? monthLastDay(y, m) : Math.min(start - 1, monthLastDay(y, m))
+const utcDay = (date: Ymd) => Date.UTC(date.y, date.m - 1, date.d)
+const addDay = (date: Ymd): Ymd => { const next = new Date(utcDay(date) + 86_400_000); return { y: next.getUTCFullYear(), m: next.getUTCMonth() + 1, d: next.getUTCDate() } }
+const dayBefore = (date: Ymd): Ymd => { const prev = new Date(utcDay(date) - 86_400_000); return { y: prev.getUTCFullYear(), m: prev.getUTCMonth() + 1, d: prev.getUTCDate() } }
+const daysInclusive = (from: Ymd, to: Ymd) => Math.round((utcDay(to) - utcDay(from)) / 86_400_000) + 1
+const daysText = (count: number) => count === 1 ? 'يوم واحد' : count === 2 ? 'يومين' : count <= 10 ? `${count} أيام` : `${count} يوم`
+const arDate = (date: Ymd) => `${date.d} ${AR_MONTHS[date.m - 1]} ${date.y}`
+interface PayrollPeriodView { y: number; m: number; start: Ymd; end: Ymd }
+function payrollPeriod(y: number, m: number, start: number): PayrollPeriodView {
+  const end = { y, m, d: cycleEndDay(y, m, start) }
+  if (start === 1) return { y, m, start: { y, m, d: 1 }, end }
+  const [py, pm] = shiftMonth(y, m, -1), previousEnd = cycleEndDay(py, pm, start)
+  return { y, m, start: previousEnd === monthLastDay(py, pm) ? { y, m, d: 1 } : { y: py, m: pm, d: previousEnd + 1 }, end }
+}
+function payrollPeriodOfToday(start: number): PayrollPeriodView {
+  const now = new Date(), y = now.getFullYear(), m = now.getMonth() + 1
+  const [py, pm] = now.getDate() <= cycleEndDay(y, m, start) ? [y, m] : shiftMonth(y, m, 1)
+  return payrollPeriod(py, pm, start)
+}
+const periodLine = (period: PayrollPeriodView) =>
+  `مسير ${AR_MONTHS[period.m - 1]} ${period.y}: من ${arDate(period.start)} إلى ${arDate(period.end)} (${daysText(daysInclusive(period.start, period.end))})`
+const validCycleDay = (text: string) => /^\d{1,2}$/.test(text.trim()) && Number(text) >= 1 && Number(text) <= 31
+
+// دورة مجموعة المعادلات السارية اليوم (المسير المربوط بها يأخذ فترته منها لا من الإعداد العام)
+function policyCycleLabel(summary: PayrollPolicySummary): { name: string; start: number | null; label: string } | null {
+  if (!summary.policy.isActive) return null
+  const today = todayText()
+  const active = summary.versions.filter(version => version.status === 'ACTIVE').sort((a, b) => b.effectiveFrom.localeCompare(a.effectiveFrom))
+  const version = active.find(row => row.effectiveFrom <= today && (row.effectiveUntil == null || row.effectiveUntil >= today)) ?? active[0]
+  if (!version) return null
+  if (version.defaultPeriodType === 'SEMI_MONTHLY') return { name: summary.policy.name, start: null, label: 'نصف شهري' }
+  const start = version.defaultPeriodType === 'CALENDAR_MONTH' ? 1 : Number(version.cycleStartDay)
+  if (!Number.isInteger(start) || start < 1 || start > 31) return null
+  return { name: summary.policy.name, start, label: start === 1 ? 'من يوم 1 إلى آخر الشهر' : `من يوم ${start} إلى يوم ${start - 1}` }
+}
+
+function PayrollPeriodSetting({ value, original, disabled, onChange }: { value: string; original: string; disabled: boolean; onChange: (value: string) => void }) {
+  const [policies, setPolicies] = useState<PayrollPolicySummary[] | null>(null)
+  useEffect(() => {
+    if (!can('payroll.view')) return
+    const controller = new AbortController()
+    fetchPayrollPolicies(controller.signal).then(setPolicies).catch(() => setPolicies(null))
+    return () => controller.abort()
+  }, [])
+  const valid = validCycleDay(value), start = Number(value)
+  const changed = value.trim() !== original.trim() && valid && validCycleDay(original)
+  const current = validCycleDay(original) ? payrollPeriodOfToday(Number(original)) : null
+  const cycles = (policies ?? []).map(policyCycleLabel).filter((row): row is NonNullable<typeof row> => row !== null)
+  const different = valid ? cycles.filter(row => row.start !== start) : []
+
+  let preview: ReactNode = null
+  if (changed && current) {
+    // أول فترة بالإعداد الجديد = الشهر التالي لآخر فترة بالإعداد الحالي (الفترة الجارية اليوم)
+    const [ny, nm] = shiftMonth(current.y, current.m, 1)
+    const first = payrollPeriod(ny, nm, start), second = payrollPeriod(...shiftMonth(ny, nm, 1), start)
+    const expectedStart = addDay(current.end), firstDays = daysInclusive(first.start, first.end)
+    const usualDays = daysInclusive(payrollPeriod(ny, nm, Number(original)).start, payrollPeriod(ny, nm, Number(original)).end)
+    const gap = utcDay(first.start) > utcDay(expectedStart), overlap = utcDay(first.start) < utcDay(expectedStart)
+    preview = (
+      <div className="rounded-lg bg-amber-50 px-3 py-2 text-sm text-amber-900 space-y-1" role="status" data-testid="payroll-period-preview">
+        <p className="font-medium">أثر التغيير قبل الحفظ:</p>
+        <p>• الفترتين الجايين: {periodLine(first)}، و{periodLine(second)}.</p>
+        <p>• المسيرات المعتمدة والمصروفة مش بتتغير؛ تواريخها محفوظة جواها.</p>
+        <p>• أول فترة بعد التغيير ({AR_MONTHS[first.m - 1]} {first.y}) طولها {firstDays} يوم{firstDays !== usualDays ? ` بدل ${usualDays} يوم بالإعداد الحالي` : ''}.</p>
+        {gap && <p>• آخر فترة حالية بتخلص {arDate(current.end)}، فالأيام من {arDate(expectedStart)} إلى {arDate(dayBefore(first.start))} ({daysText(daysInclusive(expectedStart, dayBefore(first.start)))}) مش داخلة في أي فترة جاية: النظام مش بيطوّل أول فترة لوحده.</p>}
+        {overlap && <p>• الأيام من {arDate(first.start)} إلى {arDate(current.end)} ({daysText(daysInclusive(first.start, current.end))}) داخلة في آخر فترة حالية وفي أول فترة جديدة: النظام مش بيقصّر أول فترة لوحده، واعتماد مسير عليها لموظف اتصرف له قبل كده هيتوقف.</p>}
+      </div>
+    )
+  }
+
+  return (
+    <div className="w-full space-y-2" data-testid="payroll-period-setting">
+      <div className="flex flex-wrap items-center gap-2 text-sm text-gray-700">
+        <label className="flex items-center gap-2">من يوم
+          <input type="number" aria-label="فترة المسير من يوم" className="input w-20" min={1} max={31} step={1} disabled={disabled} value={value} onChange={event => onChange(event.target.value)} />
+        </label>
+        <label className="flex items-center gap-2">إلى يوم
+          <input type="text" aria-label="فترة المسير إلى يوم" className="input w-44 bg-gray-50" readOnly tabIndex={-1}
+            value={!valid ? '' : start === 1 ? 'آخر الشهر نفسه' : `${start - 1} من الشهر اللي بعده`} />
+        </label>
+        <span className="text-xs text-gray-400">«إلى» بتتحسب لوحدها: اليوم اللي قبل البداية.</span>
+      </div>
+      {valid && start > 28 && <p className="text-xs text-gray-500">في الشهور القصيرة الفترة بتخلص آخر يوم في الشهر، واللي بعدها بتبدأ من اليوم اللي بعده.</p>}
+      {current && !changed && <p className="text-xs text-gray-500">الفترة الجارية: {periodLine(current)}.</p>}
+      {preview}
+      <p className="text-xs text-gray-500">مين بيكسب: المسير المربوط بمجموعة معادلات بياخد تواريخه من دورة المجموعة نفسها. الإعداد ده بيحدد شهر السلف والخصومات والمكافآت والإضافي، ودورة أي مجموعة معادلات جديدة.</p>
+      {policies && valid && (different.length
+        ? <p className="text-xs text-amber-800 bg-amber-50 rounded-lg px-3 py-2">مجموعات معادلات دورتها مختلفة عن الإعداد ده (والمسير بيمشي على دورتها): {different.slice(0, 5).map(row => `«${row.name}» ${row.label}`).join('، ')}{different.length > 5 ? ` و${different.length - 5} غيرهم` : ''}. غيّرها من شاشة «معادلات الرواتب» علشان كله يمشي على نفس الفترة.</p>
+        : cycles.length > 0 && <p className="text-xs text-success-700">كل مجموعات المعادلات النشطة ({cycles.length}) على نفس الفترة.</p>)}
     </div>
   )
 }
@@ -469,6 +569,9 @@ export default function PoliciesPage() {
           ))}
         </select>
       )
+    }
+    if (f.key === CYCLE_KEY) {
+      return <PayrollPeriodSetting value={v} original={original[f.key] ?? ''} disabled={saving || !!f.readOnly} onChange={(next) => setVal(f.key, next)} />
     }
     if (f.key === WEEKEND_KEY) {
       // أيام نهاية الأسبوع بأسمائها العربية؛ القيمة المحفوظة تبقى رموز الأيام مطبَّعة كما يقرؤها الخادم

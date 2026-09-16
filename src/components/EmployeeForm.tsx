@@ -1,5 +1,6 @@
 'use client'
-import { localToday } from '@/lib/dates'
+import { DISPLAY_LOCALE, localToday } from '@/lib/dates'
+import { formatMoney } from '@/lib/money'
 
 import { currencyLabel } from '@/lib/currency'
 import { employeeStatusLabels as statusLabels } from '@/lib/status-labels'
@@ -7,6 +8,7 @@ import { loadEmployeeAddDraft, saveEmployeeAddDraft, clearEmployeeAddDraft, type
 import { buildEmployeeSalaryChange, employeeCreateSalaryPeriod, employeeSalaryChanged, employeeSalaryEditPayload, employeeSalaryTotal, employeePreviousSalaryCanBeConfirmed, fetchEmployeeSalaryStartContext, payrollMonthExplanation, type EmployeeSalaryChangeCommand, type EmployeeSalaryChangeContext, type EmployeeSalaryStartContext } from '@/lib/employee-salary-change-api'
 import { SALARY_HISTORY_FIELDS } from '@/lib/payroll-salary-history-api'
 import { buildCalendarChange, employeeCalendarPayload, type PayrollCalendarChange, type PayrollCalendarContext } from '@/lib/payroll-calendar-api'
+import { employeeRequiredIssues, nationalIdHint, type EmployeeRequiredValues } from '../../api/src/employees/employee-required-fields'
 import { DEFAULT_SALARY_CYCLE, SALARY_CYCLE_OPTIONS, clearedEmployeeFields, employeeFullNameAr, employeeFullNameEn, employeeWorkEmailPayload, gradeSelectOptions, initialOpeningBalance, joinEmployeeAddress, jobTitleSelectOptions, openingBalanceIssue, openingBalancePayload, savedDocumentsOf, settleQualificationDrafts, type SavedEmployeeDocument } from '@/lib/employee-form-fields'
 
 import { useEffect, useRef, useState } from 'react'
@@ -211,6 +213,9 @@ interface EmployeeFormProps {
   calendarContextError?: string
   // مستندات الموظف المحفوظة (التعديل) — تُعرض بجانب خانات الرفع
   savedDocuments?: SavedEmployeeDocument[] | null
+  // عنوان الصفحة (مثلًا «تعيين المرشح …» لما نموذج الإضافة يتفتح من التوظيف)
+  title?: string
+  subtitle?: string
 }
 
 // أيام الأسبوع
@@ -351,7 +356,7 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
   workType: initial?.workType === 'fulltime' ? 'full_time' : initial?.workType === 'parttime' ? 'part_time' : initial?.workType ?? '',
 })
 
-export default function EmployeeForm({ mode, initial, onSubmit, submitting, error, employeeId, savedQualifications, salaryChangeContext = null, salaryContextError = '', salaryChangeForbidden = false, calendarContext = null, calendarContextError = '', savedDocuments = null }: EmployeeFormProps) {
+export default function EmployeeForm({ mode, initial, onSubmit, submitting, error, employeeId, savedQualifications, salaryChangeContext = null, salaryContextError = '', salaryChangeForbidden = false, calendarContext = null, calendarContextError = '', savedDocuments = null, title, subtitle }: EmployeeFormProps) {
   const [currentStep, setCurrentStep] = useState(1)
   const [stepError, setStepError] = useState('') // خطأ تحقق الخطوة
   // يستحق سنوي؟ — من بيانات الموظف في التعديل (افتراضي نعم)
@@ -767,15 +772,25 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     (Number(form.workNatureAllowance) || 0) +
     (Number(form.otherAllowance) || 0) : 0
 
+  // الحقول الإجبارية عند الإضافة (قرار المالك): نفس قاعدة الخادم. في التعديل الناقص القديم لا يمنع الحفظ
+  const requiredValuesOf = (state: EmployeeFormState): EmployeeRequiredValues => ({
+    fullName: employeeFullNameAr(state), birthDate: state.birthDate, gender: state.gender, nationality: state.nationality,
+    nationalId: state.nationalId, phone: state.phone, fingerprintCode: state.fingerprintCode, joinDate: state.joinDate,
+    branchId: state.branchId, departmentId: state.departmentId, jobTitle: state.jobTitle, basicSalary: state.basicSalary,
+  })
+  const [initialRequired] = useState<EmployeeRequiredValues | null>(() => mode === 'edit' && initial ? requiredValuesOf(makeInitialState(initial)) : null)
+  const requiredIssues = employeeRequiredIssues(requiredValuesOf(form), { mode, initial: initialRequired, today: localToday() })
+
   const buildPayload = (
     qualifications: QualificationsPayload = { education: eduRows, certifications: certRows, experiences: expRows, skills: skillRows, languages: langRows }
   ): EmployeeFormPayload => {
     const payload: EmployeeFormPayload = {
       employeeCode: (form.employeeCode || form.fingerprintCode).trim(),
       fullName: fullNameAr,
-      status: form.status,
       payMethod: form.payMethod,
     }
+    // الحالة تُرسل عند الإضافة أو لو اتغيرت بس: «موقوف» المعروضة مشتقة من فترة إيقاف مؤرخة ومش بتتحفظ من هنا
+    if (mode === 'add' || form.status !== initial?.status) payload.status = form.status
     if (form.branchId) payload.branchId = Number(form.branchId)
     if (fullNameEn) payload.fullNameEn = fullNameEn
     // بريد العمل وحده في عمود email (البريد الشخصي يُرسل في personalEmail) — في التعديل الإفراغ = null
@@ -931,6 +946,12 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (step === 1 && !(arNameAsWhole ? fullNameAr : form.firstNameAr.trim())) {
       return arNameAsWhole ? 'الاسم الكامل (عربي) مطلوب قبل المتابعة' : 'الاسم الأول مطلوب قبل المتابعة'
     }
+    if (step === 1 && mode === 'add' && !arNameAsWhole && !form.familyNameAr.trim()) {
+      return 'اسم العائلة (عربي) مطلوب قبل المتابعة'
+    }
+    // أول مشكلة في حقول الخطوة الإجبارية (بترتيب الخانات)
+    const requiredIssue = requiredIssues.find((issue) => issue.step === step)
+    if (requiredIssue) return requiredIssue.message
     if (step === 2) {
       if (!(form.employeeCode.trim() || form.fingerprintCode.trim())) {
         return 'كود الموظف (أو كود البصمة) مطلوب'
@@ -1006,10 +1027,10 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">
-              {isEdit ? 'تعديل بيانات الموظف' : 'إضافة موظف جديد'}
+              {title ?? (isEdit ? 'تعديل بيانات الموظف' : 'إضافة موظف جديد')}
             </h1>
             <p className="text-gray-500 mt-1">
-              {isEdit ? 'تحديث بيانات الموظف في النظام' : 'إدخال بيانات الموظف الجديد في النظام'}
+              {subtitle ?? (isEdit ? 'تحديث بيانات الموظف في النظام' : 'إدخال بيانات الموظف الجديد في النظام')}
             </p>
           </div>
           <Link href="/employees" className="btn-secondary flex items-center gap-2">
@@ -1020,7 +1041,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
 
         {!isEdit && <div className="rounded-xl border border-primary-100 bg-primary-50 p-4 space-y-3">
           <div className="flex flex-wrap items-start justify-between gap-3">
-            <div><h2 className="font-semibold text-primary-900">مسودة إضافة الموظف</h2><p className="text-xs text-primary-800 mt-1 leading-6">حفظ يدوي للبيانات ومراجع المرفقات المرفوعة في جلسة هذا التبويب فقط. تُمسح عند إغلاق التبويب أو تسجيل الخروج أو إنشاء الموظف.</p>{sessionDraft && <p className="text-xs text-gray-600 mt-1">آخر حفظ: {new Date(sessionDraft.savedAt).toLocaleString('ar-EG-u-ca-gregory')}</p>}</div>
+            <div><h2 className="font-semibold text-primary-900">مسودة إضافة الموظف</h2><p className="text-xs text-primary-800 mt-1 leading-6">حفظ يدوي للبيانات ومراجع المرفقات المرفوعة في جلسة هذا التبويب فقط. تُمسح عند إغلاق التبويب أو تسجيل الخروج أو إنشاء الموظف.</p>{sessionDraft && <p className="text-xs text-gray-600 mt-1">آخر حفظ: {new Date(sessionDraft.savedAt).toLocaleString(DISPLAY_LOCALE)}</p>}</div>
             <div className="flex flex-wrap gap-2">
               {sessionDraft && <button type="button" onClick={() => setRestoreDraftOpen(true)} disabled={submitting || uploadingAny} className="btn-secondary text-sm">استرجاع المسودة</button>}
               {(sessionDraft || draftError) && <button type="button" onClick={discardSessionDraft} disabled={!draftUserId || submitting || uploadingAny} className="btn-secondary text-sm">حذف المسودة</button>}
@@ -1143,7 +1164,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                     <input type="text" className="input" placeholder="علي" value={form.grandNameAr} onChange={(e) => setField('grandNameAr', e.target.value)} />
                   </div>
                   <div>
-                    <label className="label">اسم العائلة (عربي)</label>
+                    <label className="label">اسم العائلة (عربي){mode === 'add' ? ' *' : ''}</label>
                     <input type="text" className="input" placeholder="السعيد" value={form.familyNameAr} onChange={(e) => setField('familyNameAr', e.target.value)} />
                   </div>
                   </>)}
@@ -1186,7 +1207,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               {/* Basic Info */}
               <div className="grid grid-cols-4 gap-4">
                 <div>
-                  <label className="label">تاريخ الميلاد</label>
+                  <label className="label">تاريخ الميلاد *</label>
                   <div className="relative">
                     <input type="date" className="input pl-10" value={form.birthDate} onChange={(e) => setField('birthDate', e.target.value)} />
                     <Calendar size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -1197,7 +1218,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <input type="text" className="input" placeholder="الرياض" value={form.birthPlace} onChange={(e) => setField('birthPlace', e.target.value)} />
                 </div>
                 <div>
-                  <label className="label">الجنس</label>
+                  <label className="label">الجنس *</label>
                   <select className="input" value={form.gender} onChange={(e) => setField('gender', e.target.value)}>
                     <option value="">اختر</option>
                     <option value="male">ذكر</option>
@@ -1219,13 +1240,14 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               {/* Identity Documents */}
               <div className="grid grid-cols-4 gap-4">
                 <div>
-                  <label className="label">الجنسية</label>
+                  <label className="label">الجنسية *</label>
                   <input className="input" list="employee-nationality-options" value={form.nationality} onChange={(e) => setField('nationality', e.target.value)} placeholder="اكتب الجنسية" />
                   <datalist id="employee-nationality-options">{nationalityOptions.map(n => <option key={n} value={n} />)}</datalist>
                 </div>
                 <div>
-                  <label className="label">رقم الهوية / الإقامة</label>
-                  <input type="text" className="input" placeholder="1234567890" dir="ltr" value={form.nationalId} onChange={(e) => setField('nationalId', e.target.value)} />
+                  <label className="label">رقم الهوية / الإقامة *</label>
+                  <input type="text" inputMode="numeric" className="input" placeholder="1234567890" dir="ltr" maxLength={14} value={form.nationalId} onChange={(e) => setField('nationalId', e.target.value.replace(/\D/g, ''))} />
+                  <p className="text-xs text-gray-400 mt-1">{nationalIdHint(form.nationality)}</p>
                 </div>
                 <div>
                   <label className="label">رقم جواز السفر</label>
@@ -1243,7 +1265,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               </h3>
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="label">رقم الجوال</label>
+                  <label className="label">رقم الجوال *</label>
                   <div className="relative">
                     <input type="tel" className="input pl-10" placeholder="+966 50 123 4567" dir="ltr" value={form.phone} onChange={(e) => setField('phone', e.target.value)} />
                     <Phone size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -1337,7 +1359,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <p className="text-xs text-gray-400 mt-1">اكتب الرقم الوظيفي، أو سيُستخدم رقم البصمة عند تركه فارغاً</p>
                 </div>
                 <div>
-                  <label className="label">رقم البصمة</label>
+                  <label className="label">رقم البصمة *</label>
                   <input type="text" className="input" placeholder="001" dir="ltr" maxLength={20} value={form.fingerprintCode} onChange={(e) => setField('fingerprintCode', e.target.value)} />
                   <p className="text-xs text-gray-400 mt-1">كوده على جهاز البصمة — تُطابَق به البصمات أولاً ثم بالرقم الوظيفي</p>
                 </div>
@@ -1419,7 +1441,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   </select>
                 </div>
                 <div>
-                  <label className="label">الإدارة/القسم</label>
+                  <label className="label">الإدارة/القسم *</label>
                   <select
                     className="input"
                     value={form.departmentId}
@@ -1447,7 +1469,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <p className="text-xs text-gray-400 mt-1">قائد الفريق يعتمد كمدير مباشر فقط إن لم يُحدَّد للموظف مدير مباشر</p>
                 </div>
                 <div>
-                  <label className="label">المسمى الوظيفي</label>
+                  <label className="label">المسمى الوظيفي *</label>
                   <select className="input" value={form.jobTitle} onChange={(e) => setField('jobTitle', e.target.value)}>
                     <option value="">اختر</option>
                     {/* المسميات الفعّالة من كتالوج المسميات؛ المحفوظ خارجه يبقى أول خيار */}
@@ -1894,7 +1916,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 : <p role="alert" className="text-sm text-amber-800">{salaryContextError || 'تعذر تحميل الأجر الحالي بدقة.'} تعديل الأجر غير متاح حتى إعادة تحميل الصفحة؛ يمكنك حفظ البيانات غير المالية.</p>)}
               <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                 <div>
-                  <label className="label">الراتب الأساسي</label>
+                  <label className="label">الراتب الأساسي{mode === 'add' ? ' *' : ''}</label>
                   <input type={mode === 'edit' ? 'text' : 'number'} inputMode="decimal" disabled={salaryLocked} className="input disabled:opacity-50" placeholder="10000" dir="ltr" value={form.basicSalary} onChange={(e) => setField('basicSalary', e.target.value)} />
                 </div>
                 <div>
@@ -1959,7 +1981,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               <div className="p-4 bg-primary-50 rounded-xl">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-medium text-gray-700">إجمالي الراتب الشهري</span>
-                  <span className="text-2xl font-bold text-primary-600">{mode === 'edit' ? employeeSalaryTotal(form) ?? 'غير مكتمل' : totalMonthlySalary.toLocaleString()} {form.currency ? currencyLabel(form.currency) : ''}</span>
+                  <span className="text-2xl font-bold text-primary-600">{mode === 'edit' ? employeeSalaryTotal(form) ?? 'غير مكتمل' : formatMoney(totalMonthlySalary)} {form.currency ? currencyLabel(form.currency) : ''}</span>
                 </div>
               </div>
 
@@ -2665,7 +2687,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
             </div>
           </div>
         </div>
-        {!isEdit && restoreDraftOpen && sessionDraft && <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="restore-employee-draft-title"><div className="bg-white rounded-2xl p-6 max-w-md w-full"><h2 id="restore-employee-draft-title" className="text-lg font-bold">استرجاع مسودة الإضافة</h2><p className="text-sm text-gray-600 mt-3 leading-6">سيستبدل هذا الإجراء البيانات المفتوحة في النموذج بالمسودة المحفوظة بتاريخ {new Date(sessionDraft.savedAt).toLocaleString('ar-EG-u-ca-gregory')}. لم تُرسل المسودة إلى سجل الموظفين.</p><div className="flex justify-end gap-3 mt-6"><button type="button" onClick={() => setRestoreDraftOpen(false)} className="btn-secondary">العودة للنموذج</button><button type="button" onClick={() => void restoreSessionDraft()} className="btn-primary">استرجاع البيانات</button></div></div></div>}
+        {!isEdit && restoreDraftOpen && sessionDraft && <div className="fixed inset-0 z-50 bg-black/50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-labelledby="restore-employee-draft-title"><div className="bg-white rounded-2xl p-6 max-w-md w-full"><h2 id="restore-employee-draft-title" className="text-lg font-bold">استرجاع مسودة الإضافة</h2><p className="text-sm text-gray-600 mt-3 leading-6">سيستبدل هذا الإجراء البيانات المفتوحة في النموذج بالمسودة المحفوظة بتاريخ {new Date(sessionDraft.savedAt).toLocaleString(DISPLAY_LOCALE)}. لم تُرسل المسودة إلى سجل الموظفين.</p><div className="flex justify-end gap-3 mt-6"><button type="button" onClick={() => setRestoreDraftOpen(false)} className="btn-secondary">العودة للنموذج</button><button type="button" onClick={() => void restoreSessionDraft()} className="btn-primary">استرجاع البيانات</button></div></div></div>}
       </div>
     </MainLayout>
   )

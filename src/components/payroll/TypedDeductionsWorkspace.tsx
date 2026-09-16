@@ -11,6 +11,7 @@ import {
   type DeductionCreatorBasis, type DeductionInput, type DeductionPreview, type DeductionSelectionMode, type DeductionStatus, type DeductionStepView,
   type DeductionTypeInput, type DeductionTypeView, type DeductionView,
 } from '@/lib/deductions-api'
+import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 
 // الخطوة 25: مساحة الخصومات المصنفة — القائمة والاعتماد (مع الاعتراض والعكس وقرارات الأقساط المعلقة)، والإنشاء لموظف أو
 // اختيار أو فريق أو قسم أو فرع بمعاينة واستبعاد، وكتالوج الأنواع، والتقارير. الخادم يعيد فحص النطاق والحدود والتكرار
@@ -602,6 +603,8 @@ function DeductionTypesPanel({ onChanged }: { onChanged: () => void }) {
   const [formError, setFormError] = useState('')
   const [org, setOrg] = useState<{ departments: ApiDepartment[]; teams: ApiTeam[]; employees: ApiEmployee[] }>({ departments: [], teams: [], employees: [] })
   const [employeeSearch, setEmployeeSearch] = useState('')
+  // أنواع الخصومات لكل الشركة: حساب الفرع يشوفها بس
+  const { canWrite, readOnly } = useCompanyWideWrite()
   const load = () => { setLoading(true); fetchDeductionTypes(true).then(setTypes).catch(err => setError(errorText(err, 'تعذر تحميل الكتالوج'))).finally(() => setLoading(false)) }
   useEffect(load, [])
   useEffect(() => {
@@ -654,8 +657,9 @@ function DeductionTypesPanel({ onChanged }: { onChanged: () => void }) {
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">كل تعديل مالي (الحدود، المُنشئ، الجهة المالكة، النطاق الوظيفي، مصفوفة التصعيد) يرفع نسخة النوع؛ الطلبات القائمة تكمل بالنسخة والسلسلة الملتقطة فيها. التعطيل يخفي النوع من الإنشاء فقط.</p>
-        <button type="button" className="btn-primary flex items-center gap-1" onClick={() => open('new')}><Plus size={16} />نوع جديد</button>
+        {canWrite && <button type="button" className="btn-primary flex items-center gap-1" onClick={() => open('new')}><Plus size={16} />نوع جديد</button>}
       </div>
+      {readOnly && <CompanyWideReadOnlyNote />}
       {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
       {loading ? <p className="text-sm text-gray-400">جارٍ التحميل…</p> : (
         <div className="overflow-x-auto">
@@ -677,14 +681,14 @@ function DeductionTypesPanel({ onChanged }: { onChanged: () => void }) {
                     {row.ownerDepartmentId ? <span className="block text-gray-500">الجهة المالكة: {departmentName(row.ownerDepartmentId)}{row.functionalScope ? ` — نطاق وظيفي: ${row.functionalScope.departmentIds.length} قسم، ${row.functionalScope.teamIds.length} فريق، ${row.functionalScope.employeeIds.length} موظف` : ''}</span> : null}</td>
                   <td className="table-cell text-xs">{row.approvalSteps.map(role => DEDUCTION_ROLE_LABELS[role]).join(' ← ')}</td>
                   <td className="table-cell text-center"><Badge className={row.isActive ? 'bg-success-100 text-success-700' : 'bg-gray-100 text-gray-500'}>{row.isActive ? 'مفعل' : 'معطل'}</Badge></td>
-                  <td className="table-cell text-center"><button type="button" className="btn-secondary text-xs px-2 py-1" onClick={() => open(row)}>تعديل</button></td>
+                  <td className="table-cell text-center">{canWrite && <button type="button" className="btn-secondary text-xs px-2 py-1" onClick={() => open(row)}>تعديل</button>}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      {editing && (
+      {editing && canWrite && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" role="dialog" aria-modal="true">
           <div className="bg-white rounded-2xl p-6 w-full max-w-3xl max-h-[90vh] overflow-y-auto space-y-3">
             <div className="flex items-center justify-between">

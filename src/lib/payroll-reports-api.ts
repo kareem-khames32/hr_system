@@ -107,7 +107,7 @@ export const fetchPayrollVarianceReport = (params: Record<string, QueryValue>) =
   apiFetch<VarianceReport>(`/reports/payroll/variance${reportQuery(params)}`)
 
 // ===== التسميات =====
-export const RUN_STATUS_LABELS: Record<string, string> = { CALCULATED: 'محسوب', IN_REVIEW: 'قيد المراجعة', APPROVED: 'معتمد', PAID: 'مصروف', CANCELLED: 'ملغى' }
+export const RUN_STATUS_LABELS: Record<string, string> = { DRAFT: 'مسودة', CALCULATED: 'محسوب', IN_REVIEW: 'قيد المراجعة', APPROVED: 'معتمد', PAID: 'مصروف', CANCELLED: 'ملغى' }
 export const OVERTIME_STATUS_LABELS: Record<string, string> = {
   DETECTED: 'مكتشف', SUBMITTED: 'مقدَّم للاعتماد', APPROVED: 'معتمد', PAID: 'مصروف', REJECTED: 'مرفوض', CANCELLED: 'ملغى',
 }

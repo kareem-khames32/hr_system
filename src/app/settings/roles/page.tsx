@@ -276,9 +276,6 @@ export default function RolesPage() {
                           </span>
                         )}
                       </div>
-                      <p className="text-sm text-gray-500 font-mono" dir="ltr">
-                        {role.code}
-                      </p>
                     </div>
                   </div>
                   {/* تفعيل/تعطيل — للأدوار المخصصة فقط */}

@@ -71,7 +71,7 @@ function money(value: unknown, path: string): string {
   if (typeof value !== 'string' || value.length > 80 || value.replace(/[^0-9]/g, '').length > 60 || !/^\d+(?:\.\d{1,2})?$/.test(value) || value.split('.')[0].replace(/^0+/, '').length > 16) {
     fail('AMOUNT_INVALID', 'المبلغ نص عشري غير سالب ضمنDECIMAL(18,2) دون تقريب ضمني', path)
   }
-  return PayrollDecimal.from(value).format(2, 'HALF_UP')
+  return PayrollDecimal.from(value).format(2, 'DOWN')
 }
 function category(value: unknown, path: string): string {
   const code = text(value, 40, path)
@@ -206,7 +206,7 @@ export function resolvePayrollLedgerComponent(prepared: PreparedPayrollLedgerSou
   const due = rows.filter(row => row.eligible), amount = due.reduce((sum, row) => sum.add(PayrollDecimal.from(row.remainingAmount)), PayrollDecimal.from('0'))
   const sourceRefs = [...new Set(due.flatMap(row => [row.sourceRef, ...(row.manualDeferral ? [row.manualDeferral.sourceRef] : [])]))].sort()
   return freeze({ componentCode, direction: debit ? 'DEBIT' : 'CREDIT', value: { numerator: String(amount.numerator), denominator: String(amount.denominator) },
-    amount: amount.format(2, 'HALF_UP'), sourceRefs, rows, trace: { sourceValidation: 'CALLER_UNVERIFIED', period: prepared.period, nextPeriod: prepared.nextPeriod,
+    amount: amount.format(2, 'DOWN'), sourceRefs, rows, trace: { sourceValidation: 'CALLER_UNVERIFIED', period: prepared.period, nextPeriod: prepared.nextPeriod,
       sourceKind: debit ? 'INSTALLMENT' : 'OBLIGATION', insufficientMode: debit ? modes[component.ledgerPartialPayment!] : null },
     warnings: [{ code: 'COMPONENT_LEDGER_CALLER_UNVERIFIED', message: 'المبالغ والمراجع لقطةصريحة غيرموثقة؛ لا تثبت سدادًا أو اكتمال جدول أو قرارًا معتمدًا', path: `components.${componentCode}` }] })
 }

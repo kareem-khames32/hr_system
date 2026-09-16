@@ -19,14 +19,16 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import {
+  can,
   fetchCandidates,
   createCandidate,
   updateCandidate,
-  hireCandidate,
   fetchBranches,
   type ApiCandidate,
   type ApiBranch,
 } from '@/lib/api'
+import { formatDate } from '@/lib/dates'
+import { candidateHireHref } from '@/lib/candidate-hire'
 
 const stageLabels: Record<string, string> = {
   applied: 'تقدّم',
@@ -71,13 +73,6 @@ export default function RecruitmentPage() {
   const [addForm, setAddForm] = useState(emptyAddForm)
   const [addError, setAddError] = useState('')
   const [addSaving, setAddSaving] = useState(false)
-
-  // نافذة التعيين
-  const [hireTarget, setHireTarget] = useState<ApiCandidate | null>(null)
-  const [hireForm, setHireForm] = useState({ employeeCode: '', branchId: '', basicSalary: '' })
-  const [hireError, setHireError] = useState('')
-  const [hireSaving, setHireSaving] = useState(false)
-  const [hiredEmployeeId, setHiredEmployeeId] = useState<number | null>(null)
 
   const load = async () => {
     try {
@@ -146,39 +141,12 @@ export default function RecruitmentPage() {
     }
   }
 
+  // التعيين بنفس نموذج إضافة الموظف وحقوله الإجبارية، متعبّي من بيانات المرشح
   const openHire = (candidate: ApiCandidate) => {
-    setHireTarget(candidate)
-    setHireForm({
-      employeeCode: '',
-      branchId: candidate.branchId ? String(candidate.branchId) : '',
-      basicSalary: '',
-    })
-    setHireError('')
-    setHiredEmployeeId(null)
+    window.location.href = candidateHireHref(candidate.id)
   }
-
-  const submitHire = async () => {
-    if (!hireTarget) return
-    if (!hireForm.employeeCode.trim() || !hireForm.branchId) {
-      setHireError('الرقم الوظيفي والفرع مطلوبان')
-      return
-    }
-    setHireSaving(true)
-    setHireError('')
-    try {
-      const res = await hireCandidate(hireTarget.id, {
-        employeeCode: hireForm.employeeCode.trim(),
-        branchId: Number(hireForm.branchId),
-        ...(hireForm.basicSalary ? { basicSalary: Number(hireForm.basicSalary) } : {}),
-      })
-      setHiredEmployeeId(res.employee.id)
-      await load()
-    } catch (err) {
-      setHireError(err instanceof Error ? err.message : 'تعذر إتمام التعيين')
-    } finally {
-      setHireSaving(false)
-    }
-  }
+  // التعيين = إضافة موظف: الزرار يظهر بس لصاحب صلاحية employees.create (نفس شرط الباك)
+  const canHire = can('employees.create')
 
   const filteredCandidates = candidates.filter((candidate) => {
     const matchesSearch =
@@ -355,7 +323,7 @@ export default function RecruitmentPage() {
                         <div className="flex items-center gap-1 text-gray-500 text-sm">
                           <Calendar size={14} />
                           <span>
-                            تقدّم بتاريخ: {new Date(candidate.createdAt).toLocaleDateString('ar-SA')}
+                            تقدّم بتاريخ: {formatDate(candidate.createdAt)}
                           </span>
                         </div>
                         {candidate.notes && (
@@ -387,7 +355,7 @@ export default function RecruitmentPage() {
                           </option>
                         ))}
                       </select>
-                      {(candidate.stage === 'interview' || candidate.stage === 'offer') && (
+                      {canHire && (candidate.stage === 'interview' || candidate.stage === 'offer') && (
                         <button
                           onClick={() => openHire(candidate)}
                           className="p-2 bg-success-50 rounded-lg hover:bg-success-100 transition-colors"
@@ -545,98 +513,6 @@ export default function RecruitmentPage() {
                 <button onClick={submitAdd} disabled={addSaving} className="btn-primary">
                   {addSaving ? 'جارٍ الحفظ...' : 'حفظ المرشح'}
                 </button>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Hire Modal */}
-        {hireTarget && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl w-full max-w-md">
-              <div className="p-4 border-b border-gray-100 flex items-center justify-between">
-                <h2 className="text-lg font-bold text-gray-800">
-                  تعيين المرشح: {hireTarget.fullName}
-                </h2>
-                <button
-                  onClick={() => setHireTarget(null)}
-                  className="text-gray-400 hover:text-gray-600"
-                >
-                  <X size={18} />
-                </button>
-              </div>
-              <div className="p-6 space-y-4">
-                {hireError && <div className="bg-red-50 text-red-700 rounded-xl p-4">{hireError}</div>}
-                {hiredEmployeeId != null ? (
-                  <div className="bg-success-50 text-success-700 rounded-xl p-4">
-                    تم التعيين بنجاح — رقم الموظف الجديد: {hiredEmployeeId}
-                  </div>
-                ) : (
-                  <>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        الرقم الوظيفي <span className="text-red-500">*</span>
-                      </label>
-                      <input
-                        type="text"
-                        className="input w-full"
-                        placeholder="مثال: EMP100"
-                        value={hireForm.employeeCode}
-                        onChange={(e) =>
-                          setHireForm((prev) => ({ ...prev, employeeCode: e.target.value }))
-                        }
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        الفرع <span className="text-red-500">*</span>
-                      </label>
-                      <select
-                        className="input w-full"
-                        value={hireForm.branchId}
-                        onChange={(e) =>
-                          setHireForm((prev) => ({ ...prev, branchId: e.target.value }))
-                        }
-                      >
-                        <option value="">اختر الفرع</option>
-                        {branches.map((branch) => (
-                          <option key={branch.id} value={String(branch.id)}>
-                            {branch.name}
-                          </option>
-                        ))}
-                      </select>
-                    </div>
-                    <div>
-                      <label className="block text-sm font-medium text-gray-700 mb-2">
-                        الراتب الأساسي
-                      </label>
-                      <input
-                        type="number"
-                        className="input w-full"
-                        value={hireForm.basicSalary}
-                        onChange={(e) =>
-                          setHireForm((prev) => ({ ...prev, basicSalary: e.target.value }))
-                        }
-                      />
-                    </div>
-                  </>
-                )}
-              </div>
-              <div className="p-4 border-t bg-gray-50 flex justify-end gap-2 rounded-b-xl">
-                {hiredEmployeeId != null ? (
-                  <button onClick={() => setHireTarget(null)} className="btn-primary">
-                    إغلاق
-                  </button>
-                ) : (
-                  <>
-                    <button onClick={() => setHireTarget(null)} className="btn-secondary">
-                      إلغاء
-                    </button>
-                    <button onClick={submitHire} disabled={hireSaving} className="btn-primary">
-                      {hireSaving ? 'جارٍ التعيين...' : 'تعيين'}
-                    </button>
-                  </>
-                )}
               </div>
             </div>
           </div>

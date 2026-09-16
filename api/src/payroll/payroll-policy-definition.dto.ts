@@ -11,7 +11,7 @@ export const PAYROLL_DEFINITION_PARAMETER_UNITS = [...PAYROLL_DEFINITION_COMPONE
 export const PAYROLL_DEFINITION_TIER_UNITS = ['MINUTES', 'COUNT', 'HOURS', 'DAYS', 'CURRENCY'] as const
 export const PAYROLL_DEFINITION_SOURCE_TYPES = ['FIXED', 'EMPLOYEE_FIELD', 'SYSTEM_VAR', 'PERCENT_OF', 'TIERED', 'FORMULA', 'LEDGER', 'EXTERNAL', 'SYS_NET'] as const
 export const PAYROLL_DEFINITION_METHODS = ['NONE', 'MULTIPLIER', 'DAY_FRACTION', 'RATE_1_1', 'FIXED_AMOUNT', 'FORMULA'] as const
-export const PAYROLL_DEFINITION_ROUNDING_MODES = ['HALF_UP', 'HALF_EVEN', 'FLOOR', 'CEIL'] as const
+export const PAYROLL_DEFINITION_ROUNDING_MODES = ['HALF_UP', 'HALF_EVEN', 'FLOOR', 'CEIL', 'DOWN'] as const
 const symbol = /^[A-Z][A-Z0-9_]{0,39}$/
 
 // لا تستخدم IsOptional: null خيار صريح للحقول المشروطة، أما غياب المفتاح فلا يكمل التعريف.

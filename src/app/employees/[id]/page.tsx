@@ -1,5 +1,6 @@
 'use client'
 import { localToday } from '@/lib/dates'
+import { formatMoney } from '@/lib/money'
 import { useParams } from 'next/navigation'
 
 import { employeeStatusLabels as EMP_STATUS_AR, CUSTODY_STATUS, payMethodLabels as PAY_METHOD_AR } from '@/lib/status-labels'
@@ -64,6 +65,8 @@ import { docTypeLabel } from '@/lib/doc-types'
 import { describeEmployeeHistory, type EmployeeHistoryView } from '@/lib/employee-history'
 import { displayEmployeeAddress } from '@/lib/employee-form-fields'
 import { loadCurrency, currencyLabel, useCurrency } from '@/lib/currency'
+import EmployeeSuspensionDialog from '@/components/EmployeeSuspensionDialog'
+import { SUSPENSION_STATE_LABELS, suspensionHistoryNote, suspensionPeriodText, type EmployeeSuspension } from '@/lib/employee-suspensions-api'
 
 // الحقول الشخصية والمالية الجديدة المدعومة في الباك إند (ليست بعد ضمن ApiEmployee)
 type EmployeeExtras = {
@@ -80,6 +83,10 @@ type EmployeeExtras = {
   contractType?: string | null
   contractStart?: string | null
   contractEnd?: string | null
+  // الإيقاف عن العمل (status المعروضة قد تكون «موقوف» مشتقة من التواريخ)
+  storedStatus?: string
+  suspension?: EmployeeSuspension | null
+  suspensions?: EmployeeSuspension[]
 }
 
 // نموذج العرض — يُملأ من الباك إند، والحقول غير المدعومة تظهر «—»
@@ -410,6 +417,15 @@ export default function EmployeeProfilePage() {
   const [ruleHistory, setRuleHistory] = useState<AttendanceRuleRowView[]>([])
   // المؤهلات والخبرات — خمس قوائم من مسارها الخاص
   const [quals, setQuals] = useState<ApiQualifications | null>(null)
+  // الإيقاف عن العمل: الحالة المحفوظة، الإيقاف الساري/القادم، والسجل — ونافذة الإيقاف/الإنهاء
+  const [suspensionInfo, setSuspensionInfo] = useState<{ storedStatus: string; current: EmployeeSuspension | null; history: EmployeeSuspension[] }>({ storedStatus: '', current: null, history: [] })
+  const [suspensionDialog, setSuspensionDialog] = useState<'create' | 'end' | null>(null)
+  // إيقاف منتهي مختار من السجل للإلغاء أو تقديم نهايته (بدل الساري/القادم)
+  const [finishedSuspension, setFinishedSuspension] = useState<EmployeeSuspension | null>(null)
+  const [notice, setNotice] = useState('')
+  const [reloadKey, setReloadKey] = useState(0)
+  const canSuspend = can('employees.edit') && ['active', 'probation', 'notice_period'].includes(suspensionInfo.storedStatus)
+  const openSuspension = suspensionInfo.current && ['CURRENT', 'UPCOMING'].includes(suspensionInfo.current.state) ? suspensionInfo.current : null
 
   useEffect(() => {
     const load = async () => {
@@ -438,6 +454,12 @@ export default function EmployeeProfilePage() {
           ])
         setQuals(qualifications)
         const e = profile.employee as ApiEmployee & EmployeeExtras
+        // الإيقاف عن العمل: الساري/القادم وسجله كامل (الحالة المحفوظة في storedStatus)
+        setSuspensionInfo({
+          storedStatus: e.storedStatus ?? e.status,
+          current: e.suspension ?? null,
+          history: e.suspensions ?? [],
+        })
         const branchById = new Map(branches.map((b) => [b.id, b.name]))
         const deptById = new Map(departments.map((d) => [d.id, d.name]))
         const teamById = new Map(teams.map((t) => [t.id, t.name]))
@@ -563,7 +585,7 @@ export default function EmployeeProfilePage() {
           gosiBaseSalary:
             e.gosiBaseSalary == null
               ? '—'
-              : Number(e.gosiBaseSalary).toLocaleString(),
+              : formatMoney(e.gosiBaseSalary),
           team: teamById.get(e.teamId ?? 0) ?? '—',
           costCenter: costCenters.find(c => c.id === e.costCenterId)?.name ?? '—',
           workSchedule: effectiveSchedule ? effectiveSchedule.name + (schedule ? '' : ' (افتراضي)') : 'بلا جدول',
@@ -667,7 +689,7 @@ export default function EmployeeProfilePage() {
     }
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [params.id])
+  }, [params.id, reloadKey])
 
   // صورة الموظف — رابط blob بالتوكن (يُلغى عند التفريغ)
   useEffect(() => {
@@ -733,6 +755,39 @@ export default function EmployeeProfilePage() {
 
         {!loading && employee && (
           <>
+        {notice && (
+          <div role="status" className="bg-green-50 text-green-800 rounded-xl p-4">{notice}</div>
+        )}
+        {/* الإيقاف عن العمل الساري أو القادم */}
+        {openSuspension && (
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-red-100 bg-red-50 p-4">
+            <div className="text-sm text-red-800 space-y-1">
+              <p className="font-bold">
+                {openSuspension.state === 'CURRENT' ? 'الموظف موقوف عن العمل' : 'إيقاف عن العمل قادم'} {suspensionPeriodText(openSuspension)}
+              </p>
+              <p>السبب: {openSuspension.reason}</p>
+              <p className="text-xs text-red-700">أيام الإيقاف مش غياب، وبتتخصم من الراتب يوم بيوم. الحالة بترجع لوحدها بعد {openSuspension.toDate}.</p>
+            </div>
+            {canSuspend && (
+              <button type="button" className="btn-secondary text-sm" onClick={() => { setNotice(''); setSuspensionDialog('end') }}>
+                {openSuspension.state === 'CURRENT' ? 'إنهاء الإيقاف' : 'إلغاء الإيقاف القادم'}
+              </button>
+            )}
+          </div>
+        )}
+        {suspensionDialog && (
+          <EmployeeSuspensionDialog
+            employee={{ id: employee.id, name: employee.name }}
+            current={suspensionDialog === 'end' ? (finishedSuspension ?? openSuspension) : null}
+            onClose={() => { setSuspensionDialog(null); setFinishedSuspension(null) }}
+            onSaved={(message) => {
+              setSuspensionDialog(null)
+              setFinishedSuspension(null)
+              setNotice(message)
+              setReloadKey((key) => key + 1)
+            }}
+          />
+        )}
         {/* Profile Header */}
         <div className="card">
           <div className="flex items-start justify-between">
@@ -828,6 +883,17 @@ export default function EmployeeProfilePage() {
                         <Calculator size={18} className="text-primary-500" />
                         <span>تصفية المستحقات</span>
                       </Link>
+                      {/* إيقاف مؤقت بالتواريخ والسبب — أو إنهاء الإيقاف القائم */}
+                      {canSuspend && (
+                        <button
+                          type="button"
+                          className="w-full flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 transition-colors"
+                          onClick={() => { setShowActionsMenu(false); setNotice(''); setSuspensionDialog(openSuspension ? 'end' : 'create') }}
+                        >
+                          <Clock size={18} className="text-danger-500" />
+                          <span>{openSuspension ? (openSuspension.state === 'CURRENT' ? 'إنهاء الإيقاف' : 'إلغاء الإيقاف القادم') : 'إيقاف مؤقت'}</span>
+                        </button>
+                      )}
                       {/* EMP-1: الإنهاء لـ HR (offboarding.manage) ولموظف على رأس العمل —
                           فترة الإشعار معناها ملف مفتوح بالفعل (تصفية المستحقات) */}
                       {can('offboarding.manage') &&
@@ -1267,23 +1333,23 @@ export default function EmployeeProfilePage() {
               <div className="grid grid-cols-5 gap-4">
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">الراتب الأساسي</p>
-                  <p className="font-bold text-gray-800 text-xl mt-1">{Number(employee.basicSalary).toLocaleString()} {currency}</p>
+                  <p className="font-bold text-gray-800 text-xl mt-1">{formatMoney(employee.basicSalary)} {currency}</p>
                 </div>
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">بدل السكن</p>
-                  <p className="font-bold text-gray-800 text-xl mt-1">{Number(employee.housingAllowance).toLocaleString()} {currency}</p>
+                  <p className="font-bold text-gray-800 text-xl mt-1">{formatMoney(employee.housingAllowance)} {currency}</p>
                 </div>
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">بدل المواصلات</p>
-                  <p className="font-bold text-gray-800 text-xl mt-1">{Number(employee.transportAllowance).toLocaleString()} {currency}</p>
+                  <p className="font-bold text-gray-800 text-xl mt-1">{formatMoney(employee.transportAllowance)} {currency}</p>
                 </div>
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <p className="text-sm text-gray-500">بدلات أخرى</p>
-                  <p className="font-bold text-gray-800 text-xl mt-1">{Number(employee.otherAllowance).toLocaleString()} {currency}</p>
+                  <p className="font-bold text-gray-800 text-xl mt-1">{formatMoney(employee.otherAllowance)} {currency}</p>
                 </div>
                 <div className="p-4 bg-primary-50 rounded-xl">
                   <p className="text-sm text-primary-600">إجمالي الراتب</p>
-                  <p className="font-bold text-primary-600 text-xl mt-1">{Number(employee.totalSalary).toLocaleString()} {currency}</p>
+                  <p className="font-bold text-primary-600 text-xl mt-1">{formatMoney(employee.totalSalary)} {currency}</p>
                 </div>
               </div>
 
@@ -1293,11 +1359,11 @@ export default function EmployeeProfilePage() {
                 <div className="grid grid-cols-5 gap-4">
                   <div className="p-4 bg-gray-50 rounded-xl">
                     <p className="text-sm text-gray-500">بدل الهاتف</p>
-                    <p className="font-bold text-gray-800 text-xl mt-1">{Number(employee.phoneAllowance).toLocaleString()} {currency}</p>
+                    <p className="font-bold text-gray-800 text-xl mt-1">{formatMoney(employee.phoneAllowance)} {currency}</p>
                   </div>
                   <div className="p-4 bg-gray-50 rounded-xl">
                     <p className="text-sm text-gray-500">بدل طبيعة العمل</p>
-                    <p className="font-bold text-gray-800 text-xl mt-1">{Number(employee.workNatureAllowance).toLocaleString()} {currency}</p>
+                    <p className="font-bold text-gray-800 text-xl mt-1">{formatMoney(employee.workNatureAllowance)} {currency}</p>
                   </div>
                 </div>
               </div>
@@ -1698,6 +1764,53 @@ export default function EmployeeProfilePage() {
               <h2 className="text-lg font-bold text-gray-800 border-b border-gray-100 pb-4">
                 السجل الوظيفي — كل تغيير مؤرَّخ وموثَّق
               </h2>
+
+              {/* سجل الإيقاف عن العمل — كل إيقاف بفترته وسببه وإنهائه المبكر أو إلغائه */}
+              <div className="space-y-3">
+                <h3 className="font-bold text-gray-700">سجل الإيقاف عن العمل</h3>
+                {suspensionInfo.history.length === 0 ? (
+                  <p className="text-sm text-gray-500">مفيش إيقافات مسجلة للموظف</p>
+                ) : (
+                  <div className="overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="table-header">
+                          <th className="text-right px-4 py-3">الفترة</th>
+                          <th className="text-right px-4 py-3">السبب</th>
+                          <th className="text-right px-4 py-3">الحالة</th>
+                          <th className="text-right px-4 py-3">ملاحظات</th>
+                          {can('employees.edit') && <th className="text-right px-4 py-3">تصحيح</th>}
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {suspensionInfo.history.map((row) => (
+                          <tr key={row.id} className="table-row">
+                            <td className="table-cell" dir="rtl">{suspensionPeriodText(row)}</td>
+                            <td className="table-cell">{row.reason}</td>
+                            <td className="table-cell">
+                              <span className={`badge ${row.state === 'CURRENT' ? 'badge-danger' : row.state === 'UPCOMING' ? 'badge-warning' : 'bg-gray-100 text-gray-600'}`}>
+                                {SUSPENSION_STATE_LABELS[row.state] ?? row.state}
+                              </span>
+                            </td>
+                            <td className="table-cell text-gray-500">{suspensionHistoryNote(row) ?? '—'}</td>
+                            {can('employees.edit') && (
+                              <td className="table-cell">
+                                {/* إيقاف انتهى (مثلًا اتسجل بأثر رجعي غلط): يتلغى أو تتقدّم نهايته لو أيامه مش في مسير معتمد */}
+                                {row.state === 'FINISHED' ? (
+                                  <button type="button" className="text-primary-600 hover:underline text-sm"
+                                    onClick={() => { setNotice(''); setFinishedSuspension(row); setSuspensionDialog('end') }}>
+                                    إلغاء أو تعديل النهاية
+                                  </button>
+                                ) : '—'}
+                              </td>
+                            )}
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                )}
+              </div>
 
               {historyEvents.length === 0 ? (
                 <div className="py-12 text-center">

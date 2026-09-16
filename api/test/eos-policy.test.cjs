@@ -66,10 +66,11 @@ test('custom thresholds, wage tiers and reason factors override defaults without
   assert.equal(computeEos(8000, 5, 'contract_end', policy).amount, 56000)
 })
 
-test('payout rounding follows the existing two-stage money rule and zero service or wage yields zero', () => {
+test('payout follows the two-stage money rule (cut at two decimals, no rounding) and zero service or wage yields zero', () => {
   const result = computeEos(1000.01, 5, 'resignation', defaultPolicy)
-  assert.equal(result.full, 2500.03)
-  assert.equal(result.amount, 1666.69)
+  // قص نحو الصفر بلا تقريب (قرار المالك): 1000.01 × 2.5 = 2500.025 ← 2500.02، و2500.02 × ⅔ = 1666.68
+  assert.equal(result.full, 2500.02)
+  assert.equal(result.amount, 1666.68)
   assert.equal(computeEos(0, 10, 'termination', defaultPolicy).amount, 0)
   assert.equal(computeEos(12000, 0, 'termination', defaultPolicy).amount, 0)
 })

@@ -112,6 +112,29 @@ export class FinancialExemptionsService {
   }
   private privileged(user: JwtPayload) { return [VIEW, GRANT, APPROVE].some(perm => userHasPerm(user, perm)) }
 
+  // فصل الفروع (قرار المالك): فرع/قسم كل عضو في المسير من لقطته (أو ملفه الحالي للقديم بلا لقطة)
+  private async runOrgs(em: EntityManager, runId: number) {
+    const members = await em.getRepository(PayrollRunMember).find({ where: { runId } })
+    const items = await em.getRepository(PayrollItem).find({ where: { runId }, select: { id: true, employeeId: true } })
+    const orgs = new Map<number, { branchId: number | null; departmentId: number | null }>()
+    for (const member of members) if (member.snapshot) orgs.set(member.employeeId, { branchId: member.snapshot.branchId ?? null, departmentId: member.snapshot.departmentId ?? null })
+    const legacy = [...new Set([...members, ...items].map(row => row.employeeId))].filter(id => !orgs.has(id))
+    if (legacy.length) for (const row of await em.getRepository(Employee).find({ where: { id: In(legacy) }, select: { id: true, branchId: true, departmentId: true } })) {
+      orgs.set(row.id, { branchId: row.branchId ?? null, departmentId: row.departmentId ?? null })
+    }
+    return orgs
+  }
+
+  // مسير بلا عضو في فرع المستخدم (ولا في أقسامه ولا إعفاء منحه هو) لا تُكشف بياناته لمستخدم مقيد بفرع
+  private async assertRunInScope(em: EntityManager, user: JwtPayload, facts: OrgFacts, runId: number, orgs: Map<number, { branchId: number | null; departmentId: number | null }>) {
+    if (branchScopeOf(user) === null) return
+    for (const org of orgs.values()) {
+      if (this.inBranch(user, org.branchId) || (!!org.departmentId && facts.departments.has(org.departmentId))) return
+    }
+    if (await em.getRepository(PayrollFinancialExemption).count({ where: { runId, grantedByUserId: user.sub } })) return
+    forbidden('EXEMPTION_RUN_OUT_OF_SCOPE', 'المسير خارج نطاق فرعك')
+  }
+
   // نفس قفل المسير في PayrollService (الحساب والاعتماد والانتقالات): المنح والاعتماد والإلغاء لا تتداخل مع إعادة الحساب
   private async lockRun(em: EntityManager, runId: number) {
     const rows = await em.query(`DECLARE @result int;
@@ -570,6 +593,8 @@ export class FinancialExemptionsService {
       const run = await this.loadRun(em, runId)
       const facts = await this.org.facts(em, user)
       if (!this.privileged(user) && !facts.departments.size) forbidden('EXEMPTION_FORBIDDEN', 'عرض إعفاءات المسير يتطلب صلاحية الإعفاءات أو إدارة قسم')
+      const orgs = await this.runOrgs(em, runId)
+      await this.assertRunInScope(em, user, facts, runId, orgs)
       const settings = await this.settings(em)
       const rows = await em.getRepository(PayrollFinancialExemption).find({ where: { runId }, order: { id: 'DESC' } })
       const employees = rows.length ? new Map((await em.getRepository(Employee).find({ where: { id: In([...new Set(rows.map(row => row.employeeId))]) }, select: { id: true, branchId: true, departmentId: true } })).map(row => [row.id, row])) : new Map<number, Employee>()
@@ -581,7 +606,7 @@ export class FinancialExemptionsService {
         const key = (list: Array<{ id: number; revision: number }>) => JSON.stringify([...list].map(entry => ({ id: Number(entry.id), revision: Number(entry.revision) })).sort((a, b) => a.id - b.id))
         const visibleEmployees = new Set(visibleRows.map(row => row.employeeId))
         recalcEmployeeIds = applied.filter(item => key(parseJson(item.applied, [])) !== key(active.filter(row => row.employeeId === item.employeeId)))
-          .map(item => Number(item.employeeId)).filter(id => this.privileged(user) || visibleEmployees.has(id)).sort((a, b) => a - b)
+          .map(item => Number(item.employeeId)).filter(id => (this.privileged(user) && this.inBranch(user, orgs.get(id)?.branchId)) || visibleEmployees.has(id)).sort((a, b) => a - b)
       }
       return {
         run: { id: run.id, name: run.name, period: run.period, status: run.status, statusLabel: RUN_STATUS_LABELS[run.status] ?? run.status, snapshotVersion: run.snapshotVersion },
@@ -602,6 +627,7 @@ export class FinancialExemptionsService {
       const facts = await this.org.facts(em, user)
       const hr = userHasPerm(user, GRANT)
       if (!hr && !facts.departments.size) forbidden('EXEMPTION_FORBIDDEN', 'منح الإعفاء المالي للموارد البشرية أو لمدير القسم أو الجهة المالكة')
+      await this.assertRunInScope(em, user, facts, runId, await this.runOrgs(em, runId))
       const ownedTypes = facts.departments.size ? new Set((await em.getRepository(DeductionType).find({ select: { id: true, ownerDepartmentId: true } }))
         .filter(type => type.ownerDepartmentId && facts.departments.has(type.ownerDepartmentId)).map(type => type.id)) : new Set<number>()
       const basesOf = (org: Pick<MemberOrg, 'branchId' | 'departmentId' | 'employeeId'>, typedTypeIds: number[]) => {

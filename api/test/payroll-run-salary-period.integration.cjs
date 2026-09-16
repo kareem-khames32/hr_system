@@ -23,6 +23,7 @@ function token(user) {
 }
 // الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ (هذه المجموعة لا تختبر التكافؤ نفسه)
 const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
+const { employeeRequiredFields } = require('./helpers/employee-fixture.cjs')
 async function request(user, method, url, body) {
   await writeParityReasonsBeforeApproval(request, user, method, url)
   const response = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json', ...(user ? { Authorization: `Bearer ${token(user)}` } : {}) },
@@ -191,7 +192,7 @@ test('الخطوة 13: إنشاء الموظف يوثّق أجر التعيين 
   const local = new Date(), today = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`
   const current = payrollPeriodOfDate(today, 23), currentBounds = payrollPeriodBounds(current, 23)
   const codeOf = n => `RSPNEW${String(n).padStart(2, '0')}`
-  const create = (n, extra = {}) => request(admin, 'POST', '/employees', { employeeCode: codeOf(n), fullName: `موظف جديد ${n}`, branchId: branch.id,
+  const create = async (n, extra = {}) => request(admin, 'POST', '/employees', { ...(await employeeRequiredFields(ds, branch.id)), employeeCode: codeOf(n), fullName: `موظف جديد ${n}`, branchId: branch.id,
     joinDate: currentBounds.startDate, basicSalary: 6000, housingAllowance: 1000, currency: 'SAR', status: 'active', payMethod: 'transfer', ...extra })
   const history = async emp => expectStatus(await request(admin, 'GET', `/payroll/employees/${emp.id}/salary-history`), 200)
 
@@ -236,7 +237,7 @@ test('الخطوة 13: إنشاء الموظف يوثّق أجر التعيين 
   const nextBounds = payrollPeriodBounds(shiftPayrollPeriod(current, 1), 23)
   const future = expectStatus(await create(4, { joinDate: nextBounds.startDate }), 201)
   assert.equal((await history(future)).segments[0].effectivePayrollPeriod, shiftPayrollPeriod(current, 1))
-  const delayed = await request(admin, 'POST', '/employees', { employeeCode: codeOf(5), fullName: 'موظف ببداية فعلية لاحقة', branchId: branch.id,
+  const delayed = await request(admin, 'POST', '/employees', { ...(await employeeRequiredFields(ds, branch.id)), employeeCode: codeOf(5), fullName: 'موظف ببداية فعلية لاحقة', branchId: branch.id,
     joinDate: payrollPeriodBounds(shiftPayrollPeriod(current, -2), 23).startDate, actualStartDate: currentBounds.startDate, basicSalary: 5000, currency: 'EGP',
     salaryEffectivePayrollPeriod: shiftPayrollPeriod(current, -1) })
   assert.equal(delayed.status, 400, JSON.stringify(delayed.body)); assert.equal(delayed.body.code, 'EMPLOYEE_SALARY_START_BEFORE_HIRE')
@@ -246,7 +247,6 @@ test('الخطوة 13: إنشاء الموظف يوثّق أجر التعيين 
     [6, { salaryEffectivePayrollPeriod: shiftPayrollPeriod(current, -1) }, 'EMPLOYEE_SALARY_START_BEFORE_HIRE'],
     [7, { salaryEffectivePayrollPeriod: shiftPayrollPeriod(current, 1) }, 'EMPLOYEE_SALARY_START_TOO_LATE'],
     [8, { currency: 'AED' }, 'EMPLOYEE_SALARY_CURRENCY_REQUIRED'],
-    [9, { basicSalary: undefined, housingAllowance: undefined, salaryEffectivePayrollPeriod: current }, 'EMPLOYEE_SALARY_START_WITHOUT_SALARY'],
   ]) {
     const rejected = await create(n, extra)
     assert.equal(rejected.status, 400, JSON.stringify(rejected.body)); assert.equal(rejected.body.code, wanted)
@@ -255,9 +255,13 @@ test('الخطوة 13: إنشاء الموظف يوثّق أجر التعيين 
   assert.equal(await repo('Employee').countBy({ employeeCode: codeOf(5) }), 0)
   assert.equal((await create(10, { salaryEffectivePayrollPeriod: '2026-9' })).status, 400)
 
-  // بلا أجر: لا سجل (يُستبعد من المسير بسبب ظاهر كما في الاختبارات أعلاه).
-  const unpaid = expectStatus(await create(11, { basicSalary: undefined, housingAllowance: undefined }), 201)
-  assert.equal((await history(unpaid)).revision, 0)
+  // بلا أجر: الراتب الأساسي بقى إجباريًا عند الإضافة (قرار المالك 16 سبتمبر) — بشهر سريان أو بدونه يُرفض ولا يُحفظ ملف.
+  for (const [n, extra] of [[9, { basicSalary: undefined, housingAllowance: undefined, salaryEffectivePayrollPeriod: current }],
+    [11, { basicSalary: undefined, housingAllowance: undefined }]]) {
+    const unpaid = await create(n, extra)
+    assert.equal(unpaid.status, 400, JSON.stringify(unpaid.body)); assert.ok(unpaid.body.message.includes('الراتب الأساسي مطلوب'), JSON.stringify(unpaid.body))
+    assert.equal(await repo('Employee').countBy({ employeeCode: codeOf(n) }), 0)
+  }
   t.diagnostic(`إنشاء بتعيين ${currentBounds.startDate}: مراجعة شهرية 1 من ${current} ومشمول في المسير بـ6,000+1,000؛ القديم افتراضيًا من ${current}؛ الرفض يرجّع الملف`)
 })
 

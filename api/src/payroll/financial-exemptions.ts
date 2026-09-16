@@ -397,7 +397,7 @@ export function exemptPolicyShadowTotals(totals: { lateness: string; shortfall: 
       if (typeof day?.date !== 'string' || dates.has(day.date) || typeof value !== 'string' || !/^-?\d+(\.\d+)?$/.test(value)) continue
       kept = kept.add(PayrollDecimal.from(value))
     }
-    result[key] = kept.format(2, 'HALF_UP')
+    result[key] = kept.format(2, 'DOWN')
   }
   return result
 }

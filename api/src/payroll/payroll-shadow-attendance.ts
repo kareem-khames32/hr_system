@@ -35,6 +35,8 @@ export interface PayrollShadowAttendanceLegacy {
 export interface PayrollShadowAttendanceInput {
   employeeId: number; periodStart: string; periodEnd: string; monthlyComponents: number[]
   rules: PayrollShadowAttendanceRules; legacy: PayrollShadowAttendanceLegacy
+  /** أيام الإيقاف عن العمل: المسير بيخصمها يوم إيقاف بس بلا تأخير أو نقص أو غياب، فالظل بيستبعدها زيه */
+  suspendedDates?: string[]
 }
 export interface PayrollShadowAttendanceSources { schedule: PayrollLiveSourceSection; employment: PayrollLiveSourceSection; attendance: PayrollLiveSourceSection }
 
@@ -45,7 +47,7 @@ const KEYS = Object.keys(COMPONENTS) as PayrollShadowComponent[]
 const zero = () => PayrollDecimal.from('0')
 const unique = (values: string[]) => [...new Set(values)].sort()
 const six = (value: PayrollDecimal) => value.format(6, 'HALF_UP')
-const two = (value: PayrollDecimal) => value.format(2, 'HALF_UP')
+const two = (value: PayrollDecimal) => value.format(2, 'DOWN')
 const fraction = (value: PayrollDecimal) => ({ numerator: String(value.numerator), denominator: String(value.denominator) })
 // أرقام إعدادات المسير القديم (JS) تُحوّل إلى نص عشري مضبوط قبل دخول المحرك؛ لا أعداد ثنائية داخل الحساب.
 function decimalText(value: number, scale: number, code: string): string {
@@ -157,12 +159,13 @@ export function computePayrollShadowAttendance(input: PayrollShadowAttendanceInp
   const gross = new PayrollDecimal(BigInt(cents.reduce((sum, value) => sum + value, 0)), 100n), basic = new PayrollDecimal(BigInt(cents[0]), 100n)
   const dayRate = gross.divide(PayrollDecimal.from('30')), hourRate = dayRate.divide(PayrollDecimal.from(String(input.rules.dailyHours))), minuteRate = hourRate.divide(PayrollDecimal.from('60'))
   const settings: PayrollPolicySettings = { defaultPeriodType: 'CUSTOM_DAY_RANGE', cycleStartDay: 1, cycleEndMode: 'DERIVED', cycleEndDay: null, baseDaysBasis: 'FIXED_30',
-    monthlyDays: 30, dailyHours: input.rules.dailyHours, rateBase: 'GROSS', roundingMode: 'HALF_UP', roundingScale: 2, divisionByZeroMode: 'ZERO_WITH_WARNING',
+    monthlyDays: 30, dailyHours: input.rules.dailyHours, rateBase: 'GROSS', roundingMode: 'DOWN', roundingScale: 2, divisionByZeroMode: 'ZERO_WITH_WARNING',
     maxDeductionPctOfGross: null, minNetGuarantee: null, netFloorPct: null, carryOverExcess: false, skipAttendance: false, lateDeductionEnabled: input.rules.lateEnabled,
     currency: (['SAR', 'EGP'].includes(input.rules.currency ?? '') ? input.rules.currency : 'SAR') as PayrollPolicySettings['currency'] }
   const salaryRef = `payroll-run-salary:employee:${input.employeeId}:period:${input.periodEnd.slice(0, 7)}`
   const legacyByDate = new Map(input.legacy.days.map(day => [day.date, day]))
   const legacyAbsent = new Set(input.legacy.absentDates)
+  const suspended = new Set(input.suspendedDates ?? [])
   const legacyDay = (date: string): Record<PayrollShadowComponent, PayrollDecimal> => ({ lateness: legacyMoney(legacyByDate.get(date)?.lateness ?? 0),
     shortfall: legacyMoney(legacyByDate.get(date)?.shortfall ?? 0), absence: legacyMoney(legacyAbsent.has(date) ? input.legacy.absenceDayAmount : 0) })
   const hasValue = (values: Record<PayrollShadowComponent, PayrollDecimal>) => KEYS.some(key => !values[key].isZero())
@@ -173,7 +176,7 @@ export function computePayrollShadowAttendance(input: PayrollShadowAttendanceInp
     for (const day of days) {
       const date = day.date as string, proof = day.proof as Row | null, legacy = legacyDay(date)
       seen.add(date)
-      if (proof?.excluded || proof?.attendanceNotRequired) {
+      if (proof?.excluded || proof?.attendanceNotRequired || suspended.has(date)) {
         if (hasValue(legacy)) for (const key of KEYS) if (!legacy[key].isZero()) differences.push({ date, component: key, legacy: six(legacy[key]), policy: '0.000000', reasonCode: 'LEGACY_DAY_OUTSIDE_SOURCE', reason: reasons.LEGACY_DAY_OUTSIDE_SOURCE })
         continue
       }
@@ -188,7 +191,7 @@ export function computePayrollShadowAttendance(input: PayrollShadowAttendanceInp
       const definition = legacyEquivalentShadowDefinition(input.rules, { graceMinutes: inputs.graceMinutes, windowSupersedesGrace: inputs.windowSupersedesGrace !== false,
         shortfallToleranceMinutes: Number(inputs.shortfallToleranceMinutes ?? 0), flexEnabled: inputs.flexEnabled === true })
       const dayRef = typeof day.sourceRef === 'string' ? day.sourceRef : `attendance_day:${date}`
-      const variables: Row = { BASE_SALARY: basic.format(2, 'HALF_UP'), GROSS_SALARY: gross.format(2, 'HALF_UP'), DAY_RATE: fraction(dayRate), HOUR_RATE: fraction(hourRate),
+      const variables: Row = { BASE_SALARY: basic.format(2, 'DOWN'), GROSS_SALARY: gross.format(2, 'DOWN'), DAY_RATE: fraction(dayRate), HOUR_RATE: fraction(hourRate),
         MINUTE_RATE: fraction(minuteRate), LATE_MINUTES: String(absent ? 0 : Number(inputs.unexcusedLateMinutes ?? 0)),
         SHORT_MINUTES: String(absent ? 0 : Number(proof.shortfallMinutes ?? 0)), ABSENCE_DAYS: absent ? '1' : '0', IS_ATTENDANCE_EXEMPT: '0' }
       const metadata = Object.fromEntries(Object.keys(variables).map(key => [key, { sourceRef: ['BASE_SALARY', 'GROSS_SALARY', 'DAY_RATE', 'HOUR_RATE', 'MINUTE_RATE'].includes(key) ? salaryRef : dayRef, alreadyProrated: false }]))
@@ -196,7 +199,7 @@ export function computePayrollShadowAttendance(input: PayrollShadowAttendanceInp
         variables, employeeFields: Object.fromEntries(MONTHLY_SALARY_COMPONENTS.map(item => [item.key, null])), externalValues: {},
         sourceMetadata: { variables: metadata, employeeFields: {}, externalValues: {} },
         proration: { calendar30: { value: '1', sourceRef: salaryRef }, working: { value: null, sourceRef: salaryRef } }, exemptions: [],
-      }, { tiers: { [COMPONENTS.lateness]: { expectedRevision: 1, periodStart: date, periodEnd: date, basicSalary: basic.format(2, 'HALF_UP'), grossSalary: gross.format(2, 'HALF_UP'),
+      }, { tiers: { [COMPONENTS.lateness]: { expectedRevision: 1, periodStart: date, periodEnd: date, basicSalary: basic.format(2, 'DOWN'), grossSalary: gross.format(2, 'DOWN'),
         days: [{ ...proof.tierDay }], sourceRef: dayRef } }, ledger: null })
       const policy = Object.fromEntries(KEYS.map(key => {
         const line = execution.components.find(item => item.code === COMPONENTS[key])
@@ -230,7 +233,7 @@ export function computePayrollShadowAttendance(input: PayrollShadowAttendanceInp
   const complete = sources.attendance.state === 'AVAILABLE' && unproven.size === 0
   // مجموع الفترة: تقريب واحد لمجموع كسور الأيام (D4) مقابل مجموع المسير القديم المطلوب قبل حماية الصافي
   if (complete && !differences.length) {
-    for (const key of KEYS) if (policyTotals[key].format(2, 'HALF_UP') !== legacyTotals[key].format(2, 'HALF_UP')) {
+    for (const key of KEYS) if (policyTotals[key].format(2, 'DOWN') !== legacyTotals[key].format(2, 'DOWN')) {
       differences.push({ date: null, component: key, legacy: two(legacyTotals[key]), policy: two(policyTotals[key]), reasonCode: 'PERIOD_TOTAL_ROUNDING', reason: reasons.PERIOD_TOTAL_ROUNDING })
     }
   }

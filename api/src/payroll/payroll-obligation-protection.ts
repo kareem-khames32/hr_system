@@ -56,7 +56,7 @@ const STATUTORY_CATEGORIES = ['STATUTORY', 'COURT_ORDER']
 const DEFAULT_CARRY_PRIORITY = 3
 const decimal = (value: string | number) => PayrollDecimal.from(typeof value === 'number' ? value.toFixed(2) : String(value))
 const optional = (value: string | number | null | undefined) => value === null || value === undefined || value === '' ? null : PayrollDecimal.from(String(value))
-const amount = (value: PayrollDecimal) => Number(value.format(2, 'HALF_UP'))
+const amount = (value: PayrollDecimal) => Number(value.format(2, 'DOWN'))
 const max = (a: PayrollDecimal, b: PayrollDecimal) => a.compare(b) >= 0 ? a : b
 const min = (a: PayrollDecimal, b: PayrollDecimal) => a.compare(b) <= 0 ? a : b
 const statutory = (row: PayrollObligationProtectionEntry) => row.deductionRequestId != null && STATUTORY_CATEGORIES.includes(row.typedCategory ?? '')
@@ -147,7 +147,7 @@ export function protectPayrollObligations(input: PayrollObligationProtectionInpu
   const otherDeductions = debitLines.reduce((sum, line) => sum.add(decimal(line.collected)), zero)
   const warnings: Array<{ code: string; message: string }> = []
   const droppedTotal = dropped.shortfall.add(dropped.lateness).add(dropped.absence)
-  if (!droppedTotal.isZero()) warnings.push({ code: 'ATTENDANCE_EXCESS_DROPPED', message: `سقط ${droppedTotal.format(2, 'HALF_UP')} من خصومات الحضور لحماية الصافي؛ لا يتحول دينًا` })
+  if (!droppedTotal.isZero()) warnings.push({ code: 'ATTENDANCE_EXCESS_DROPPED', message: `سقط ${droppedTotal.format(2, 'DOWN')} من خصومات الحضور لحماية الصافي؛ لا يتحول دينًا` })
   const carried = debitLines.reduce((sum, line) => sum + Math.round(line.carried * 100), 0)
   if (carried > 0) warnings.push({ code: 'OBLIGATION_CARRIED', message: `يُرحّل ${(carried / 100).toFixed(2)} من قيود الدفتر إلى المسير التالي عند الصرف` })
   if (statutoryLines.some(line => line.carried > 0)) warnings.push({ code: 'STATUTORY_EXCEEDS_ROOM', message: 'الاستقطاع النظامي أو الحكم القضائي يتجاوز المتاح فوق الأرضية؛ كل القيود الأخرى تُرحّل' })
@@ -165,13 +165,13 @@ export function protectPayrollObligations(input: PayrollObligationProtectionInpu
     trace: {
       version: PAYROLL_OBLIGATION_PROTECTION_VERSION,
       settings: { minNetGuarantee: minNet?.canonical() ?? null, netFloorPct: floorPct?.canonical() ?? null, maxDeductionPctOfGross: capPct?.canonical() ?? null },
-      balanceBeforeDeductions: balance.format(2, 'HALF_UP'), floor: floor.format(6, 'HALF_UP'), cap: cap === null ? null : cap.format(6, 'HALF_UP'),
-      statutoryCollected: statutoryCollected.format(2, 'HALF_UP'),
-      attendanceRequested: requestedAttendance.format(2, 'HALF_UP'), attendanceCapacity: attendanceCapacity.format(2, 'HALF_UP'),
-      attendanceDropped: { shortfall: dropped.shortfall.format(2, 'HALF_UP'), lateness: dropped.lateness.format(2, 'HALF_UP'), absence: dropped.absence.format(2, 'HALF_UP') },
-      debitCapacity: (initialDebitCapacity ?? capacityNow()).format(2, 'HALF_UP'), debitCapacityRemaining: (debitCapacityRemaining ?? capacityNow()).format(2, 'HALF_UP'),
+      balanceBeforeDeductions: balance.format(2, 'DOWN'), floor: floor.format(6, 'HALF_UP'), cap: cap === null ? null : cap.format(6, 'HALF_UP'),
+      statutoryCollected: statutoryCollected.format(2, 'DOWN'),
+      attendanceRequested: requestedAttendance.format(2, 'DOWN'), attendanceCapacity: attendanceCapacity.format(2, 'DOWN'),
+      attendanceDropped: { shortfall: dropped.shortfall.format(2, 'DOWN'), lateness: dropped.lateness.format(2, 'DOWN'), absence: dropped.absence.format(2, 'DOWN') },
+      debitCapacity: (initialDebitCapacity ?? capacityNow()).format(2, 'DOWN'), debitCapacityRemaining: (debitCapacityRemaining ?? capacityNow()).format(2, 'DOWN'),
       // ترتيب المالك المطبق وأقساط موضع السلف؛ الترتيب الافتراضي لا يضيف حقلًا (التتبع السابق كما هو)
-      ...(order === null ? {} : { collectionOrder: [...order], loanCollected: loanCollected.format(2, 'HALF_UP') }),
+      ...(order === null ? {} : { collectionOrder: [...order], loanCollected: loanCollected.format(2, 'DOWN') }),
       warnings,
     },
   }

@@ -249,7 +249,7 @@ test('evaluation validates its contract/options and reparses JSON-safe source in
   compiled.ast = compiled
   assert.equal(evaluate(compiled, {}, defaults).value, '3.00')
   rejected(() => evaluate({ ...compiled, contractVersion: 'LEGACY_V1' }, {}, defaults), 'CONTRACT_INVALID')
-  for (const options of [{ roundingMode: 'DOWN' }, { roundingScale: 7 }, { roundingScale: 0.1 }, { divisionByZeroMode: 'IGNORE' }]) {
+  for (const options of [{ roundingMode: 'HALF_DOWN' }, { roundingScale: 7 }, { roundingScale: 0.1 }, { divisionByZeroMode: 'IGNORE' }]) {
     rejected(() => evaluate(compiled, {}, { ...defaults, ...options }), 'OPTIONS_INVALID')
   }
 })

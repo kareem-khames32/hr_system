@@ -89,7 +89,7 @@ export function employeeHistoryValue(field: string, value: unknown, lookups: Emp
   }
   if (MONEY_FIELDS.test(field)) {
     const amount = Number(value)
-    return Number.isFinite(amount) ? `${amount.toLocaleString()} ${lookups.currency}`.trim() : text
+    return Number.isFinite(amount) ? `${amount.toLocaleString('en-US')} ${lookups.currency}`.trim() : text
   }
   if (typeof value === 'boolean') return value ? 'نعم' : 'لا'
   return text
@@ -119,7 +119,7 @@ function legacyHistory(row: EmployeeHistoryRow, lookups: EmployeeHistoryLookups,
   const [, fromValue] = split(row.oldStatus ?? '')
   switch (kind) {
     case 'salary':
-      return { ...base, title: 'تغيير راتب', from: `الراتب: ${Number(fromValue || 0).toLocaleString()} ${lookups.currency}`, to: `${Number(toValue || 0).toLocaleString()} ${lookups.currency}`, color: COLORS.SALARY }
+      return { ...base, title: 'تغيير راتب', from: `الراتب: ${Number(fromValue || 0).toLocaleString('en-US')} ${lookups.currency}`, to: `${Number(toValue || 0).toLocaleString('en-US')} ${lookups.currency}`, color: COLORS.SALARY }
     case 'team':
       return { ...base, title: 'نقل بين فرق', from: `الفريق: ${lookups.teams?.get(Number(fromValue)) ?? `#${fromValue}`}`, to: lookups.teams?.get(Number(toValue)) ?? `#${toValue}`, color: COLORS.TEAM }
     case 'title':

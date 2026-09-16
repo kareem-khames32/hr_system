@@ -175,14 +175,22 @@ test('Small-company licence (review fix): changing it needs a dedicated permissi
   assert.ok(guard > 0 && guard < controller.indexOf('row.value = dto.value'), 'the licence guard runs before any config value is saved')
 })
 
-test('One shared rounding (D4 / CQ-04): 1.005 rounds to 1.01 in the run kernel, the end-of-service award and the settlement', () => {
-  assert.equal(roundPayrollMoney(1.005), 1.01)
-  assert.equal(Math.round(1.005 * 100) / 100, 1, 'the old private round2 gave 1.00')
+test('One shared money rule (owner decision 16 Sept): two decimals cut toward zero, no rounding, in the run kernel, the end-of-service award and the settlement', () => {
+  assert.equal(roundPayrollMoney(1234.567), 1234.56)
+  assert.equal(roundPayrollMoney(1.005), 1)
+  assert.equal(roundPayrollMoney(0.999), 0.99)
+  assert.equal(roundPayrollMoney(-1.239), -1.23)
+  assert.equal(roundPayrollMoney(-0.004), 0)
+  // ضجيج التمثيل الثنائي لا يُسقط قرشًا حقيقيًا
+  assert.equal(roundPayrollMoney(0.1 + 0.2), 0.3)
+  assert.equal(roundPayrollMoney(1.15), 1.15)
+  assert.equal(roundPayrollMoney(0.3 - 0.1), 0.2)
+  assert.equal(roundPayrollMoney(103.33333333333333 * 3), 310)
   const policy = buildEosPolicy(EOS_DEFAULTS)
-  // سنة خدمة بنصف شهر: 2.01 × 0.5 = 1.005
+  // سنة خدمة بنصف شهر: 2.01 × 0.5 = 1.005 ← 1.00
   const eos = computeEos(2.01, 1, 'termination', policy)
-  assert.deepEqual([eos.fullMonths, eos.full, eos.amount], [0.5, roundPayrollMoney(1.005), roundPayrollMoney(1.005)])
-  assert.equal(computeEos(2.03, 1, 'termination', policy).full, roundPayrollMoney(1.015))
+  assert.deepEqual([eos.fullMonths, eos.full, eos.amount], [0.5, 1, 1])
+  assert.equal(computeEos(2.03, 1, 'termination', policy).full, 1.01)
   const root = path.resolve(__dirname, '..')
   for (const file of ['src/offboarding/eos.ts', 'src/offboarding/offboarding.service.ts']) {
     const source = fs.readFileSync(path.join(root, file), 'utf8')

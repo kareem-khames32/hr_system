@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import EmptyState from '@/components/EmptyState'
 import {
   Search,
   Plus,
@@ -17,6 +18,7 @@ import {
   Users,
   X,
 } from 'lucide-react'
+import { formatDate } from '@/lib/dates'
 
 interface ReviewTemplate {
   id: string
@@ -198,6 +200,8 @@ export default function PerformanceTemplatesPage() {
           </div>
         </div>
 
+        {filteredTemplates.length === 0 && <EmptyState title="لا توجد نماذج تقييم مطابقة للبحث" />}
+
         {/* Templates Grid */}
         <div className="grid grid-cols-2 gap-4">
           {filteredTemplates.map((template) => (
@@ -329,13 +333,13 @@ export default function PerformanceTemplatesPage() {
                   <div className="p-4 bg-gray-50 rounded-xl">
                     <p className="text-sm text-gray-500">تاريخ الإنشاء</p>
                     <p className="font-medium text-gray-800">
-                      {new Date(selectedTemplate.createdAt).toLocaleDateString('ar-SA')}
+                      {formatDate(selectedTemplate.createdAt)}
                     </p>
                   </div>
                   <div className="p-4 bg-gray-50 rounded-xl">
                     <p className="text-sm text-gray-500">آخر تحديث</p>
                     <p className="font-medium text-gray-800">
-                      {new Date(selectedTemplate.updatedAt).toLocaleDateString('ar-SA')}
+                      {formatDate(selectedTemplate.updatedAt)}
                     </p>
                   </div>
                 </div>

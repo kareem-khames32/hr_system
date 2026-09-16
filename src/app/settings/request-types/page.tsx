@@ -39,6 +39,13 @@ import {
   updateRequestTypeFull,
 } from '@/lib/api'
 import { categoryLabels } from '@/data/requestsCatalog'
+import { DefinitionBranchBadge, DefinitionBranchField, useDefinitionBranches } from '@/components/DefinitionBranchField'
+import { payloadFieldLabel } from '@/lib/request-payload'
+
+const FIXED_HANDLER_LABELS: Record<string, string> = {
+  custody_assignments: 'العهد (طلب ونقل وإرجاع)',
+  leave_calendar_balance: 'إجازة من الرصيد حسب نوعها',
+}
 
 interface ApprovalChain {
   id: number
@@ -87,7 +94,10 @@ const audienceRoles: Array<[string, string]> = [
   ['employee', 'موظف'],
 ]
 
+// «مين» يقدر يقدّم الطلب. 'departments' وضع قديم: بيتحول عند الفتح لـ «الكل» + «فين: أقسام محددة»
 type AudienceMode = 'all' | 'departments' | 'roles' | 'employees' | 'positions'
+// «فين» (قرار المالك 16 سبتمبر): كل الشركة / فروع محددة / أقسام محددة
+type WhereMode = 'company' | 'branches' | 'departments'
 
 // «حسب المنصب»: المنصب يُعرف من الهيكل (مدير القسم/قائد الفريق/مدير الفرع)، ومعه أدوار مختارة
 const audiencePositions: Array<[string, string]> = [
@@ -132,10 +142,15 @@ type BuilderForm = {
   requiredAttachments: string
   fields: FieldRow[]
   audienceMode: AudienceMode
+  // أقسام «فين» (وأقسام الوضع القديم)
   deptIds: number[]
   roleIds: string[]
   empIds: number[]
   posIds: string[]
+  whereMode: WhereMode
+  branchIds: number[]
+  // فرع النوع نفسه: null = كل الشركة
+  branchId: number | null
 }
 
 const emptyForm = (): BuilderForm => ({
@@ -151,29 +166,42 @@ const emptyForm = (): BuilderForm => ({
   roleIds: [],
   empIds: [],
   posIds: [],
+  whereMode: 'company',
+  branchIds: [],
+  branchId: null,
 })
 
-// ملخص الجمهور لشريحة البطاقة
-const audienceSummary = (rt: ApiRequestType): string => {
-  const v = parseJson<{ mode?: string; ids?: unknown[] } | null>(
-    (rt as any).visibleTo,
-    null
-  )
-  if (!v?.mode) return 'الكل'
-  const n = Array.isArray(v.ids) ? v.ids.length : 0
-  switch (v.mode) {
-    case 'departments':
-      return `أقسام: ${n}`
-    case 'roles':
-      return `أدوار: ${n}`
-    case 'employees':
-      return `موظفون: ${n}`
-    case 'positions':
-      return `حسب المنصب: ${n}`
-    default:
-      return 'الكل'
-  }
+type StoredAudience = { mode?: string; ids?: Array<number | string>; where?: { mode?: string; ids?: Array<number | string> } | null }
+
+// «فلان وفلان» أو «فلان، فلان و3 غيرهم»
+const namesText = (names: string[]): string =>
+  names.length <= 2 ? names.join(' و') : `${names.slice(0, 2).join('، ')} و${names.length - 2} غيرهم`
+
+// جملة «يظهر لـ…»: مين + فين، مثل «مديرو الأقسام في الفرع الرئيسي»
+const audienceText = (
+  audience: StoredAudience | null,
+  typeBranch: string | null,
+  lookup: { branch: (id: number) => string; department: (id: number) => string }
+): string => {
+  const ids = Array.isArray(audience?.ids) ? audience!.ids : []
+  const label = (list: Array<[string, string]>) => (id: number | string) => list.find(([key]) => key === String(id))?.[1] ?? String(id)
+  let who = 'الكل'
+  if (audience?.mode === 'positions' && ids.length) who = namesText(ids.map(label(audiencePositions)))
+  if (audience?.mode === 'roles' && ids.length) who = namesText(ids.map(label(audienceRoles)))
+  if (audience?.mode === 'employees' && ids.length) who = ids.length === 1 ? 'موظف واحد بعينه' : `${ids.length} موظفين بعينهم`
+  const whereIds = (Array.isArray(audience?.where?.ids) ? audience!.where!.ids : []).map(Number)
+  let where = typeBranch ? `في ${typeBranch}` : 'في كل الشركة'
+  if (audience?.mode === 'departments' && ids.length) where = `في ${namesText(ids.map(Number).map(lookup.department))}`
+  else if (audience?.where?.mode === 'branches' && whereIds.length) where = `في ${namesText(whereIds.map(lookup.branch))}`
+  else if (audience?.where?.mode === 'departments' && whereIds.length) where = `في ${namesText(whereIds.map(lookup.department))}`
+  return `${who} ${where}`
 }
+
+// الجمهور كما يُحفظ من النموذج: بدون «فين» = نفس الشكل القديم {mode, ids}
+const audienceOfForm = (form: BuilderForm, ids: Array<number | string>): StoredAudience =>
+  form.whereMode === 'company'
+    ? { mode: form.audienceMode, ids }
+    : { mode: form.audienceMode, ids, where: { mode: form.whereMode, ids: form.whereMode === 'branches' ? form.branchIds : form.deptIds } }
 
 export default function RequestTypesPage() {
   const [requestTypes, setRequestTypes] = useState<ApiRequestType[]>([])
@@ -198,6 +226,12 @@ export default function RequestTypesPage() {
   const [chainsAvailable, setChainsAvailable] = useState(true)
   // قوائم الجمهور (الأقسام/الموظفون) بصلاحياتها — فشلها لا يُسقط الشاشة
   const [audienceNote, setAudienceNote] = useState<string | null>(null)
+  // فرع كل نوع (قرار المالك 16 سبتمبر): حساب الفرع يعدّل أنواع فرعه بس
+  const branchInfo = useDefinitionBranches()
+  const departmentName = (id: number) => departments.find((d) => d.id === id)?.name ?? `قسم رقم ${id}`
+  const audienceLookup = { branch: (id: number) => branchInfo.label(id), department: departmentName }
+  const typeAudienceText = (rt: ApiRequestType) =>
+    audienceText(parseJson<StoredAudience | null>(rt.visibleTo, null), rt.branchId != null ? branchInfo.label(rt.branchId) : null, audienceLookup)
 
   const reloadTypes = async () => {
     setRequestTypes(await fetchAdminRequestTypes())
@@ -260,8 +294,9 @@ export default function RequestTypesPage() {
   const chainNameOf = (chainId?: number) =>
     chains.find((c) => c.id === chainId)?.nameAr ?? 'غير مربوط'
 
+  // وجهات بتتنفذ من شاشتها الخاصة ومش في قايمة الاختيار — اسمها بالعربي بدل الكود
   const handlerLabelOf = (key: string) =>
-    handlers.find((h) => h.key === key)?.labelAr ?? key
+    handlers.find((h) => h.key === key)?.labelAr ?? FIXED_HANDLER_LABELS[key] ?? key
 
   const toggleStatus = async (rt: ApiRequestType) => {
     setActiveMenu(null)
@@ -295,14 +330,19 @@ export default function RequestTypesPage() {
       setEditing(rt)
       const raw = rt as any
       const cf = parseJson<CustomFieldDef[]>(raw.customFields, [])
-      const v = parseJson<{ mode?: string; ids?: Array<number | string> } | null>(
-        raw.visibleTo,
-        null
-      )
+      const v = parseJson<StoredAudience | null>(raw.visibleTo, null)
+      // الوضع القديم «أقسام محددة» = الكل في أقسام محددة
+      const legacyDepartments = v?.mode === 'departments'
       const mode: AudienceMode =
-        v?.mode === 'departments' || v?.mode === 'roles' || v?.mode === 'employees' || v?.mode === 'positions'
+        v?.mode === 'roles' || v?.mode === 'employees' || v?.mode === 'positions'
           ? v.mode
           : 'all'
+      const whereIds = (Array.isArray(v?.where?.ids) ? v!.where!.ids : []).map(Number)
+      const whereMode: WhereMode = legacyDepartments
+        ? 'departments'
+        : (v?.where?.mode === 'branches' || v?.where?.mode === 'departments') && whereIds.length
+          ? (v!.where!.mode as WhereMode)
+          : 'company'
       setForm({
         nameAr: rt.nameAr,
         category: rt.category,
@@ -319,10 +359,13 @@ export default function RequestTypesPage() {
           optionsRaw: (f.options ?? []).join('، '),
         })),
         audienceMode: mode,
-        deptIds: mode === 'departments' ? (v?.ids ?? []).map(Number) : [],
+        deptIds: legacyDepartments ? (v?.ids ?? []).map(Number) : whereMode === 'departments' ? whereIds : [],
         roleIds: mode === 'roles' ? (v?.ids ?? []).map(String) : [],
         empIds: mode === 'employees' ? (v?.ids ?? []).map(Number) : [],
         posIds: mode === 'positions' ? (v?.ids ?? []).map(String) : [],
+        whereMode,
+        branchIds: whereMode === 'branches' ? whereIds : [],
+        branchId: rt.branchId ?? null,
       })
     } else {
       setEditing(null)
@@ -382,7 +425,15 @@ export default function RequestTypesPage() {
       }
     }
     if (form.audienceMode !== 'all' && audienceIds().length === 0) {
-      setModalError('حدد عناصر الجمهور (ids)')
+      setModalError('اختار واحد على الأقل في «مين يقدر يقدّم الطلب»')
+      return
+    }
+    if (form.whereMode === 'branches' && form.branchIds.length === 0) {
+      setModalError('اختار فرع واحد على الأقل في «فين»')
+      return
+    }
+    if (form.whereMode === 'departments' && form.deptIds.length === 0) {
+      setModalError('اختار قسم واحد على الأقل في «فين»')
       return
     }
 
@@ -393,7 +444,7 @@ export default function RequestTypesPage() {
       required: f.required,
       ...(f.type === 'select' ? { options: parseOptions(f.optionsRaw) } : {}),
     }))
-    const visibleTo = { mode: form.audienceMode, ids: audienceIds() }
+    const visibleTo = audienceOfForm(form, audienceIds())
 
     setSaving(true)
     setModalError(null)
@@ -426,7 +477,9 @@ export default function RequestTypesPage() {
           ...(form.approvalChainId
             ? { approvalChainId: Number(form.approvalChainId) }
             : {}),
-          visibleTo,
+          visibleTo: visibleTo as Parameters<typeof createRequestType>[0]['visibleTo'],
+          // حساب الشركة يختار الفرع؛ حساب الفرع يتضاف لفرعه تلقائيًا من الخادم
+          ...(branchInfo.scope === null && form.branchId != null ? { branchId: form.branchId } : {}),
         })
         setNotice(`تم إنشاء نوع الطلب «${form.nameAr.trim()}» بنجاح`)
       }
@@ -440,12 +493,19 @@ export default function RequestTypesPage() {
     }
   }
 
+  // فرع النوع اللي بيتعدّل/بيتضاف: نوع الفرع يختار موظفين وأقسام من فرعه بس
+  const formBranch: number | null = editing
+    ? editing.branchId ?? null
+    : branchInfo.scope === null ? form.branchId : branchInfo.scope === -1 ? null : branchInfo.scope
+  const formDepartments = departments.filter((d) => formBranch == null || d.branchId === formBranch)
   const filteredEmployees = employees.filter(
     (e) =>
-      !empFilter ||
+      (formBranch == null || e.branchId === formBranch) &&
+      (!empFilter ||
       e.fullName.includes(empFilter) ||
-      e.employeeCode.toLowerCase().includes(empFilter.toLowerCase())
+      e.employeeCode.toLowerCase().includes(empFilter.toLowerCase()))
   )
+  const canEditType = (rt: ApiRequestType) => branchInfo.canEdit(rt.branchId)
 
   return (
     <MainLayout>
@@ -597,10 +657,6 @@ export default function RequestTypesPage() {
                 >
                   {/* Badges */}
                   <div className="absolute top-4 left-4 flex items-center gap-2">
-                    <span className="badge text-xs bg-blue-50 text-blue-700 flex items-center gap-1">
-                      <Users size={11} />
-                      {audienceSummary(rt)}
-                    </span>
                     <span className="badge text-xs bg-gray-100 text-gray-600">
                       {categoryLabelOf(rt.category)}
                     </span>
@@ -613,7 +669,8 @@ export default function RequestTypesPage() {
                     </span>
                   </div>
 
-                  {/* Menu */}
+                  {/* Menu — نوع لكل الشركة أو لفرع تاني: للعرض بس من حساب الفرع */}
+                  {canEditType(rt) && (
                   <div className="absolute top-4 left-64">
                     <button
                       onClick={() =>
@@ -660,6 +717,7 @@ export default function RequestTypesPage() {
                       </>
                     )}
                   </div>
+                  )}
 
                   {/* Info */}
                   <div className="flex items-start gap-4 mt-8">
@@ -671,6 +729,19 @@ export default function RequestTypesPage() {
                       <p className="text-gray-600 text-sm mt-2">
                         {phaseLabels[rt.phase] ?? rt.phase}
                       </p>
+                      {/* مين يشوف الطلب ده (قرار المالك 16 سبتمبر) — ملخص الإعداد نفسه */}
+                      <p className="mt-2 text-sm text-blue-800 bg-blue-50 rounded-lg px-3 py-1.5 flex items-start gap-1.5">
+                        <Users size={15} className="mt-0.5 shrink-0" />
+                        <span>يظهر لـ: {typeAudienceText(rt)}</span>
+                      </p>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <DefinitionBranchBadge branchId={rt.branchId} info={branchInfo} />
+                        {!canEditType(rt) && (
+                          <span className="text-xs text-gray-500">
+                            {rt.branchId == null ? 'نوع لكل الشركة — للعرض بس من حساب الفرع' : 'للعرض بس'}
+                          </span>
+                        )}
+                      </div>
                     </div>
                   </div>
 
@@ -687,7 +758,7 @@ export default function RequestTypesPage() {
                             const chainId = Number(e.target.value)
                             if (chainId) assignChain(rt, chainId)
                           }}
-                          disabled={updatingId === rt.id}
+                          disabled={updatingId === rt.id || !canEditType(rt)}
                           className="input flex-1 py-1.5 text-sm"
                         >
                           <option value="" disabled>
@@ -759,10 +830,9 @@ export default function RequestTypesPage() {
                       : fields.map((f) => (
                           <span
                             key={f}
-                            className="text-xs bg-gray-50 text-gray-500 px-2 py-1 rounded-lg border border-gray-100 font-mono"
-                            dir="ltr"
+                            className="text-xs bg-gray-50 text-gray-500 px-2 py-1 rounded-lg border border-gray-100"
                           >
-                            {f}
+                            {payloadFieldLabel(f)}
                           </span>
                         ))}
                   </div>
@@ -1086,62 +1156,56 @@ export default function RequestTypesPage() {
                   </div>
                 </div>
 
-                {/* ===== الجمهور ===== */}
-                <div>
-                  <label className="text-sm font-medium text-gray-700 mb-3 block">
-                    الجمهور — من يستطيع تقديم هذا النوع؟
-                  </label>
-                  <div className="flex items-center gap-5 flex-wrap">
-                    {(
-                      [
-                        ['all', 'الكل'],
-                        ['positions', 'حسب المنصب'],
-                        ['departments', 'أقسام محددة'],
-                        ['roles', 'أدوار محددة'],
-                        ['employees', 'موظفون بعينهم'],
-                      ] as Array<[AudienceMode, string]>
-                    ).map(([mode, label]) => (
-                      <label key={mode} className="flex items-center gap-2">
-                        <input
-                          type="radio"
-                          name="audienceMode"
-                          checked={form.audienceMode === mode}
-                          onChange={() => setForm({ ...form, audienceMode: mode })}
-                          className="w-4 h-4 border-gray-300 text-primary-600 focus:ring-primary-500"
-                        />
-                        <span className="text-sm text-gray-700">{label}</span>
-                      </label>
-                    ))}
+                {/* ===== مين يشوف الطلب ده ويقدّمه؟ (قرار المالك 16 سبتمبر: مين + فين) ===== */}
+                <div className="rounded-2xl border border-blue-100 bg-blue-50/40 p-4 space-y-4">
+                  <div>
+                    <h3 className="font-bold text-gray-800 flex items-center gap-2">
+                      <Users size={18} className="text-blue-600" />
+                      مين يشوف الطلب ده ويقدّمه؟
+                    </h3>
+                    <p className="text-xs text-gray-500 mt-1">اختار «مين» وبعدين «فين». مثال: مديرو الأقسام في فرع واحد بس.</p>
                   </div>
 
-                  {audienceNote && form.audienceMode !== 'all' && (
-                    <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-3">
-                      {audienceNote}
-                    </p>
-                  )}
+                  <div className="max-w-sm">
+                    <DefinitionBranchField
+                      value={editing ? editing.branchId ?? null : form.branchId}
+                      onChange={(branchId) => setForm({ ...form, branchId, branchIds: [], deptIds: [], empIds: [],
+                        whereMode: branchId != null && form.whereMode === 'branches' ? 'company' : form.whereMode })}
+                      editing={!!editing}
+                      info={branchInfo}
+                      disabled={saving}
+                    />
+                  </div>
 
-                  {form.audienceMode === 'departments' && (
-                    <div className="mt-3 max-h-44 overflow-y-auto border border-gray-100 rounded-xl p-3 space-y-2">
-                      {departments.map((d) => (
-                        <label key={d.id} className="flex items-center gap-2">
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 mb-2">مين؟</p>
+                    <div className="flex items-center gap-5 flex-wrap">
+                      {(
+                        [
+                          ['all', 'الكل'],
+                          ['positions', 'حسب المنصب'],
+                          ['roles', 'أدوار محددة'],
+                          ['employees', 'موظفون بعينهم'],
+                        ] as Array<[AudienceMode, string]>
+                      ).map(([mode, label]) => (
+                        <label key={mode} className="flex items-center gap-2">
                           <input
-                            type="checkbox"
-                            checked={form.deptIds.includes(d.id)}
-                            onChange={() =>
-                              setForm({
-                                ...form,
-                                deptIds: toggleId(form.deptIds, d.id),
-                              })
-                            }
-                            className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                            type="radio"
+                            name="audienceMode"
+                            checked={form.audienceMode === mode}
+                            onChange={() => setForm({ ...form, audienceMode: mode })}
+                            className="w-4 h-4 border-gray-300 text-primary-600 focus:ring-primary-500"
                           />
-                          <span className="text-sm text-gray-700">{d.name}</span>
+                          <span className="text-sm text-gray-700">{label}</span>
                         </label>
                       ))}
-                      {departments.length === 0 && (
-                        <p className="text-sm text-gray-400">لا توجد أقسام</p>
-                      )}
                     </div>
+                  </div>
+
+                  {audienceNote && (form.audienceMode !== 'all' || form.whereMode !== 'company') && (
+                    <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                      {audienceNote}
+                    </p>
                   )}
 
                   {form.audienceMode === 'positions' && (
@@ -1237,6 +1301,79 @@ export default function RequestTypesPage() {
                       )}
                     </div>
                   )}
+
+                  <div>
+                    <p className="text-sm font-medium text-gray-700 mb-2">فين؟</p>
+                    <div className="flex items-center gap-5 flex-wrap">
+                      {(
+                        [
+                          ['company', formBranch != null ? `كل ${branchInfo.label(formBranch)}` : 'كل الشركة'],
+                          // نوع خاص بفرع مايظهرش في فروع تانية، فاختيار الفروع للنوع العام بس
+                          ...(formBranch == null ? [['branches', 'فروع محددة']] : []),
+                          ['departments', 'أقسام محددة'],
+                        ] as Array<[WhereMode, string]>
+                      ).map(([mode, label]) => (
+                        <label key={mode} className="flex items-center gap-2">
+                          <input
+                            type="radio"
+                            name="whereMode"
+                            checked={form.whereMode === mode}
+                            onChange={() => setForm({ ...form, whereMode: mode })}
+                            className="w-4 h-4 border-gray-300 text-primary-600 focus:ring-primary-500"
+                          />
+                          <span className="text-sm text-gray-700">{label}</span>
+                        </label>
+                      ))}
+                    </div>
+
+                    {form.whereMode === 'branches' && (
+                      <div className="mt-3 max-h-44 overflow-y-auto border border-gray-100 bg-white rounded-xl p-3 space-y-2">
+                        {branchInfo.branches.filter((b) => b.isActive || form.branchIds.includes(b.id)).map((b) => (
+                          <label key={b.id} className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={form.branchIds.includes(b.id)}
+                              onChange={() => setForm({ ...form, branchIds: toggleId(form.branchIds, b.id) })}
+                              className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                            />
+                            <span className="text-sm text-gray-700">{b.name}</span>
+                          </label>
+                        ))}
+                        {branchInfo.branches.length === 0 && (
+                          <p className="text-sm text-gray-400">لا توجد فروع</p>
+                        )}
+                      </div>
+                    )}
+
+                    {form.whereMode === 'departments' && (
+                      <div className="mt-3 max-h-44 overflow-y-auto border border-gray-100 bg-white rounded-xl p-3 space-y-2">
+                        {formDepartments.map((d) => (
+                          <label key={d.id} className="flex items-center gap-2">
+                            <input
+                              type="checkbox"
+                              checked={form.deptIds.includes(d.id)}
+                              onChange={() => setForm({ ...form, deptIds: toggleId(form.deptIds, d.id) })}
+                              className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                            />
+                            <span className="text-sm text-gray-700">
+                              {d.name}
+                              {formBranch == null && (
+                                <span className="text-xs text-gray-400 mr-2">{branchInfo.label(d.branchId)}</span>
+                              )}
+                            </span>
+                          </label>
+                        ))}
+                        {formDepartments.length === 0 && (
+                          <p className="text-sm text-gray-400">لا توجد أقسام</p>
+                        )}
+                      </div>
+                    )}
+                  </div>
+
+                  <p className="text-sm text-blue-900 bg-white border border-blue-100 rounded-xl px-3 py-2">
+                    <span className="font-medium">النتيجة: </span>
+                    يظهر لـ {audienceText(audienceOfForm(form, audienceIds()), formBranch != null ? branchInfo.label(formBranch) : null, audienceLookup)}
+                  </p>
                 </div>
               </div>
 

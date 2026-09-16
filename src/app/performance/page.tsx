@@ -24,6 +24,7 @@ import {
   ChevronDown,
 } from 'lucide-react'
 import Link from 'next/link'
+import { formatDate } from '@/lib/dates'
 
 interface PerformanceReview {
   id: string
@@ -310,6 +311,11 @@ export default function PerformancePage() {
               </tr>
             </thead>
             <tbody className="divide-y divide-gray-100">
+              {filteredReviews.length === 0 && (
+                <tr>
+                  <td colSpan={8} className="px-4 py-10 text-center text-gray-400">لا توجد تقييمات مطابقة للبحث أو الفلاتر</td>
+                </tr>
+              )}
               {filteredReviews.map((review) => (
                 <tr key={review.id} className="hover:bg-gray-50">
                   <td className="px-4 py-4">
@@ -326,7 +332,7 @@ export default function PerformancePage() {
                   <td className="px-4 py-4">
                     <p className="text-gray-800">{review.reviewPeriod}</p>
                     <p className="text-sm text-gray-500">
-                      {new Date(review.reviewDate).toLocaleDateString('ar-SA')}
+                      {formatDate(review.reviewDate)}
                     </p>
                   </td>
                   <td className="px-4 py-4">

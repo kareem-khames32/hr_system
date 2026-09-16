@@ -2,6 +2,8 @@
 
 import Link from 'next/link'
 import type { ApiOvertimeRequestDetail } from '@/lib/api'
+import { DISPLAY_LOCALE } from '@/lib/dates'
+import { formatMoney } from '@/lib/money'
 
 const number = (value: unknown): number | null => value == null || !Number.isFinite(Number(value)) ? null : Number(value)
 const duration = (value: unknown) => {
@@ -12,7 +14,7 @@ const duration = (value: unknown) => {
 const time = (value?: string | null) => {
   if (!value) return 'غير متاح'
   const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? 'غير متاح' : date.toLocaleString('ar-EG')
+  return Number.isNaN(date.getTime()) ? 'غير متاح' : date.toLocaleString(DISPLAY_LOCALE)
 }
 const dayLabels: Record<string, string> = { WEEKDAY: 'يوم عمل', WEEKEND: 'راحة أسبوعية', HOLIDAY: 'عطلة رسمية' }
 const workdayClock = (minutes: number) => `${String(Math.floor(minutes / 60) % 24).padStart(2, '0')}:${String(minutes % 60).padStart(2, '0')}${minutes >= 1440 ? ' (+1 يوم)' : ''}`
@@ -87,7 +89,7 @@ export default function OvertimeRequestSummary({ overtime, reviewRequired }: {
         سيُسعَّر على راتب الملف غير الموثق لشهر <span dir="ltr">{overtime.wageEvidence.wagePayrollPeriod}</span> (الوضع الانتقالي لمصدر الراتب).
       </p>}
       {amount != null && <div className="rounded-lg bg-success-50 p-3 text-success-800">
-        <p className="text-sm">القيمة المثبتة عند الاعتماد</p><p className="text-lg font-bold">{amount.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</p>
+        <p className="text-sm">القيمة المثبتة عند الاعتماد</p><p className="text-lg font-bold">{formatMoney(amount)}</p>
         {approval?.approvedAt && <p className="text-xs mt-1">اعتمدت في {time(approval.approvedAt)}</p>}
       </div>}
       {overtime?.originalPeriod && <p className="text-sm text-amber-800">{overtime.deferredFromRunId != null ? 'مستحق بأثر رجعي عن فترة' : 'فترة الاستحقاق الأصلية'} {overtime.originalPeriod}</p>}

@@ -24,6 +24,7 @@ import {
   reactivateEmployee,
   type ApiDepartment,
 } from '@/lib/api'
+import { formatDate } from '@/lib/dates'
 
 interface ArchivedEmployee {
   id: number
@@ -368,12 +369,12 @@ export default function ArchivedEmployeesPage() {
                   </td>
                   <td className="px-4 py-4 text-gray-600">
                     {emp.joinDate
-                      ? new Date(emp.joinDate).toLocaleDateString('ar-SA')
+                      ? formatDate(emp.joinDate)
                       : '—'}
                   </td>
                   <td className="px-4 py-4 text-gray-600">
                     {emp.archivedAt
-                      ? new Date(emp.archivedAt).toLocaleDateString('ar-SA')
+                      ? formatDate(emp.archivedAt)
                       : '—'}
                   </td>
                   <td className="px-4 py-4 text-gray-600">{emp.yearsOfService}</td>

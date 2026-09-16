@@ -324,7 +324,10 @@ test('الملف يعرض الفريق ومركز التكلفة وجدول ال
 // ===== 19) بداية استحقاق الراتب (قرار المالك أ2) =====
 test('بداية استحقاق الراتب: حقل يوم اختياري يُرسل ويُمسح، ولا يسبق تاريخ التعيين، وله مدخل واحد في الشاشة', () => {
   const dto = require('../src/employees/employees.dto')
-  assert.deepEqual(messages(dto.CreateEmployeeDto, { employeeCode: 'SES-01', fullName: 'موظف تجربة', branchId: 1, salaryEntitlementStart: '2026-09-15' }), [])
+  // الحقول الإجبارية عند الإضافة (قرار المالك 16 سبتمبر) كاملة، فالفحص هنا لبداية الاستحقاق وحدها
+  assert.deepEqual(messages(dto.CreateEmployeeDto, { employeeCode: 'SES-01', fingerprintCode: 'SES-01', fullName: 'موظف تجربة', branchId: 1, departmentId: 1,
+    phone: '0501234567', nationalId: '1012345678', birthDate: '1990-01-01', gender: 'male', nationality: 'سعودي', jobTitle: 'محاسب',
+    joinDate: '2026-09-01', basicSalary: 5000, salaryEntitlementStart: '2026-09-15' }), [])
   assert.deepEqual(messages(dto.UpdateEmployeeDto, { salaryEntitlementStart: '2026-09-15' }), [])
   assert.deepEqual(messages(dto.UpdateEmployeeDto, { salaryEntitlementStart: '15-09-2026' }), ['بداية استحقاق الراتب بصيغة YYYY-MM-DD'])
   assert.ok(f.EMPLOYEE_CLEARABLE_FIELDS.some(([field, target]) => field === 'salaryEntitlementStart' && target === 'salaryEntitlementStart'))

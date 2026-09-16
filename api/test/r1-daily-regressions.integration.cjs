@@ -13,6 +13,7 @@ const database = `hr_r1_regressions_test_${crypto.randomBytes(8).toString('hex')
 const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-r1-regressions-files-'))
 const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
+const { requiredEmployeeFields, fixtureDepartmentId } = require('./helpers/employee-fixture.cjs')
 let master, app, ds, base, created = false, sequence = 0
 let branch, otherBranch, admin, hr, otherHr
 const RECORD_ONLY_CODES = ['ACCESS_REQUEST', 'APPRAISAL_OBJECTION', 'CERT_REIMBURSEMENT', 'CONFERENCE', 'DEPENDENTS_UPDATE', 'DOCUMENT_RENEWAL',
@@ -325,7 +326,8 @@ test('S7 HRC-07 the EOS comparison helper covers missing, duplicated, renamed an
 test('S7 HRC-08 an unknown gradeId is rejected with 400 on create and update; an unchanged inactive grade does not block edits', async () => {
   const grade = await repos.Grade().save({ name: `درجة R1 ${crypto.randomBytes(3).toString('hex')}`, isActive: true })
   const inactive = await repos.Grade().save({ name: `درجة معطلة R1 ${crypto.randomBytes(3).toString('hex')}`, isActive: false })
-  const input = code => ({ employeeCode: code, fullName: 'موظف درجة', branchId: branch.id, basicSalary: 6000, currency: 'SAR', joinDate: '2024-01-01' })
+  const departmentId = await fixtureDepartmentId(ds, branch.id)
+  const input = code => ({ ...requiredEmployeeFields({ departmentId }), employeeCode: code, fullName: 'موظف درجة', branchId: branch.id, basicSalary: 6000, currency: 'SAR', joinDate: '2024-01-01' })
   const unknown = expectStatus(await request(admin, 'POST', '/employees', { ...input('R1GRADE0'), gradeId: 999999 }), 400)
   assert.match(unknown.message, /الدرجة الوظيفية غير موجودة/)
   assert.equal(await repos.Employee().countBy({ employeeCode: 'R1GRADE0' }), 0)
@@ -361,6 +363,8 @@ test('S7 HRC-09 GET /employees runs a constant number of queries and returns the
       }
     }
     await addEmployees(3)
+    // فحص وجود جدول الإيقاف يتم مرة واحدة ويُحفظ؛ طلب تمهيدي يثبّت العدّ قبل المقارنة
+    await measure(admin)
     const small = await measure(admin), smallScoped = await measure(hr)
     await addEmployees(25)
     const large = await measure(admin), largeScoped = await measure(hr)

@@ -45,6 +45,7 @@ import {
   type ApiDepartment,
 } from '@/lib/api'
 
+import { DISPLAY_LOCALE } from '@/lib/dates'
 
 const balanceTypeLabels: Record<string, string> = {
   annual: 'إجازة سنوية',
@@ -80,7 +81,7 @@ const serviceDuration = (joinDate?: string) => {
 }
 
 const formatDate = (value?: string | null) =>
-  value ? new Date(value).toLocaleDateString('ar-EG-u-ca-gregory') : '—'
+  value ? new Date(value).toLocaleDateString(DISPLAY_LOCALE) : '—'
 
 export default function ProfilePage() {
   const leaveCatalog = useLeaveCatalog()
@@ -429,13 +430,13 @@ export default function ProfilePage() {
                       <span className="text-gray-500">الراتب الأساسي</span>
                       <span className="font-medium text-gray-800">
                         {employee?.basicSalary != null
-                          ? `${Number(employee.basicSalary).toLocaleString()} ${employee.currency ? currencyLabel(employee.currency) : systemCurrency}`
+                          ? `${Number(employee.basicSalary).toLocaleString('en-US')} ${employee.currency ? currencyLabel(employee.currency) : systemCurrency}`
                           : '—'}
                       </span>
                     </div>
                     {employee && <>
-                      {([['بدل السكن', employee.housingAllowance], ['بدل النقل', employee.transportAllowance], ['بدل الهاتف', employee.phoneAllowance], ['بدل طبيعة العمل', employee.workNatureAllowance], ['بدلات أخرى', employee.otherAllowance]] as const).map(([label, amount]) => <div key={label} className="flex justify-between py-3 border-b border-gray-100"><span className="text-gray-500">{label}</span><span>{Number(amount ?? 0).toLocaleString()} {employee.currency ? currencyLabel(employee.currency) : systemCurrency}</span></div>)}
-                      <div className="flex justify-between py-3 font-bold"><span>إجمالي الراتب</span><span>{[employee.basicSalary, employee.housingAllowance, employee.transportAllowance, employee.phoneAllowance, employee.workNatureAllowance, employee.otherAllowance].reduce<number>((sum, amount) => sum + Number(amount ?? 0), 0).toLocaleString()} {employee.currency ? currencyLabel(employee.currency) : systemCurrency}</span></div>
+                      {([['بدل السكن', employee.housingAllowance], ['بدل النقل', employee.transportAllowance], ['بدل الهاتف', employee.phoneAllowance], ['بدل طبيعة العمل', employee.workNatureAllowance], ['بدلات أخرى', employee.otherAllowance]] as const).map(([label, amount]) => <div key={label} className="flex justify-between py-3 border-b border-gray-100"><span className="text-gray-500">{label}</span><span>{Number(amount ?? 0).toLocaleString('en-US')} {employee.currency ? currencyLabel(employee.currency) : systemCurrency}</span></div>)}
+                      <div className="flex justify-between py-3 font-bold"><span>إجمالي الراتب</span><span>{[employee.basicSalary, employee.housingAllowance, employee.transportAllowance, employee.phoneAllowance, employee.workNatureAllowance, employee.otherAllowance].reduce<number>((sum, amount) => sum + Number(amount ?? 0), 0).toLocaleString('en-US')} {employee.currency ? currencyLabel(employee.currency) : systemCurrency}</span></div>
                     </>}
                     <div className="flex justify-between py-3">
                       <span className="text-gray-500">طريقة الصرف</span>

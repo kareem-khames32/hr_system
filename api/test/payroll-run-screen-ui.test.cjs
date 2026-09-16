@@ -22,7 +22,9 @@ const root = path.resolve(__dirname, '..', '..')
 const read = file => fs.readFileSync(path.join(root, file), 'utf8')
 const render = (component, props) => renderToStaticMarkup(React.createElement(component, props))
 
-test('one money formatter (FE-06): Latin digits, thousands separators and two decimals; rounding identical to the server kernel', () => {
+test('one money formatter (FE-06): Latin digits, thousands separators and two decimals cut without rounding, identical to the server kernel', () => {
+  assert.equal(money.formatMoney(1234.567), '1,234.56')
+  assert.equal(money.formatMoney('1234.567'), '1,234.56')
   assert.equal(money.formatMoney(1500.5), '1,500.50')
   assert.equal(money.formatMoney('1500.50'), '1,500.50')
   assert.equal(money.formatMoney(-0.004), '0.00')
@@ -32,9 +34,11 @@ test('one money formatter (FE-06): Latin digits, thousands separators and two de
   assert.equal(money.sumMoney([0.1, 0.2]), 0.3)
   for (let thousandths = 0; thousandths <= 20000; thousandths++) {
     const value = thousandths / 1000
-    assert.equal(money.roundMoney(value), roundPayrollMoney(value), `rounding of ${value}`)
+    assert.equal(money.roundMoney(value), roundPayrollMoney(value), `cut of ${value}`)
+    assert.equal(money.roundMoney(-value), roundPayrollMoney(-value), `cut of ${-value}`)
   }
-  assert.equal(money.roundMoney(1.005), 1.01)
+  assert.equal(money.roundMoney(1.005), 1)
+  assert.equal(money.roundMoney(0.1 + 0.2), 0.3)
 })
 
 test('no direct toLocaleString(\'ar-EG\') in payroll screens; the run table and the payslip format money with formatMoney only (the deductions page and the hidden payslips page show no run amounts)', () => {
@@ -68,14 +72,14 @@ test('one formatter with one rounding on every payroll money screen (review fix)
   const deductionsUi = require('../../src/lib/deductions-api')
   const bonusesUi = require('../../src/lib/bonuses-api')
   const loansUi = require('../../src/lib/loans-api')
-  for (const [text, expected] of [['100.0050', '100.01'], ['100.0049', '100.00'], ['1500.5', '1,500.50'], ['-0.004', '0.00'], ['-0.005', '-0.01'], ['-2.675', '-2.68'],
-    ['0.995', '1.00'], ['999999.995', '1,000,000.00'], ['1234567890123456.785', '1,234,567,890,123,456.79']]) {
+  for (const [text, expected] of [['100.0050', '100.00'], ['100.0049', '100.00'], ['1500.5', '1,500.50'], ['-0.004', '0.00'], ['-0.005', '0.00'], ['-2.675', '-2.67'],
+    ['0.995', '0.99'], ['999999.995', '999,999.99'], ['1234.567', '1,234.56'], ['1234567890123456.785', '1,234,567,890,123,456.78']]) {
     assert.equal(money.formatMoney(text), expected, text)
     assert.equal(deductionsUi.formatDeductionMoney(text), expected, `deductions ${text}`)
     assert.equal(bonusesUi.formatBonusMoney(text), expected, `bonuses ${text}`)
     assert.equal(loansUi.formatLoanMoney(text), expected, `loans ${text}`)
   }
-  assert.equal(money.formatMoney(100.005), '100.01')
+  assert.equal(money.formatMoney(100.005), '100.00')
   // مسار النص ومسار الرقم يتطابقان على كل قيمة من -20.000 إلى 20.000 (وroundMoney = roundPayrollMoney في الاختبار الأول)
   for (let thousandths = -20000; thousandths <= 20000; thousandths++) {
     const value = thousandths / 1000

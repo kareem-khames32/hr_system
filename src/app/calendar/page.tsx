@@ -20,6 +20,7 @@ import {
   Download,
 } from "lucide-react";
 import { can, fetchCalendar, type ApiLeave } from "@/lib/api";
+import { DISPLAY_LOCALE } from "@/lib/dates";
 
 interface CalendarEvent {
   id: string;
@@ -166,7 +167,7 @@ export default function CalendarPage() {
         {/* Header */}
         <div className="flex flex-wrap items-center justify-between gap-4">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">التقويم</h1>
+            <h1 className="text-2xl font-bold text-gray-800">التقويم</h1>
             <p className="text-gray-600 mt-1">عرض العطلات الرسمية وإجازات الموظفين في مكان واحد</p>
           </div>
           <div className="flex gap-2">
@@ -182,7 +183,7 @@ export default function CalendarPage() {
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
 
         {/* Stats */}
-        <p className="text-xs text-gray-500">الإحصاءات والتصدير حسب الفلاتر، من {parseLocalDate(range.from).toLocaleDateString('ar-EG-u-ca-gregory')} إلى {parseLocalDate(range.to).toLocaleDateString('ar-EG-u-ca-gregory')}. أيام الإجازة هي الأيام الفعلية داخل النطاق.</p>
+        <p className="text-xs text-gray-500">الإحصاءات والتصدير حسب الفلاتر، من {parseLocalDate(range.from).toLocaleDateString(DISPLAY_LOCALE)} إلى {parseLocalDate(range.to).toLocaleDateString(DISPLAY_LOCALE)}. أيام الإجازة هي الأيام الفعلية داخل النطاق.</p>
         <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
           <div className="card p-4">
             <div className="flex items-center gap-3">
@@ -255,7 +256,7 @@ export default function CalendarPage() {
                   <ChevronRight size={20} className="text-gray-600" />
                 </button>
                 <h2 className="text-base font-bold text-gray-900">
-                  {view === 'week' ? `${parseLocalDate(range.from).toLocaleDateString('ar-EG-u-ca-gregory', { day: 'numeric', month: 'short' })} — ${parseLocalDate(range.to).toLocaleDateString('ar-EG-u-ca-gregory', { day: 'numeric', month: 'short', year: 'numeric' })}` : `${arabicMonths[month]} ${year}`}
+                  {view === 'week' ? `${parseLocalDate(range.from).toLocaleDateString(DISPLAY_LOCALE, { day: 'numeric', month: 'short' })} — ${parseLocalDate(range.to).toLocaleDateString(DISPLAY_LOCALE, { day: 'numeric', month: 'short', year: 'numeric' })}` : `${arabicMonths[month]} ${year}`}
                 </h2>
                 <button
                   onClick={nextMonth}
@@ -383,9 +384,9 @@ export default function CalendarPage() {
                         <div className="flex-1 min-w-0">
                           <p className="font-medium text-gray-900 text-sm truncate">{event.title}</p>
                           <p className="text-xs text-gray-500">
-                            {parseLocalDate(event.date).toLocaleDateString("ar-EG-u-ca-gregory")}
+                            {parseLocalDate(event.date).toLocaleDateString(DISPLAY_LOCALE)}
                             {event.endDate && event.endDate !== event.date &&
-                              ` - ${parseLocalDate(event.endDate).toLocaleDateString("ar-EG-u-ca-gregory")}`}
+                              ` - ${parseLocalDate(event.endDate).toLocaleDateString(DISPLAY_LOCALE)}`}
                           </p>
                         </div>
                       </div>
@@ -414,9 +415,9 @@ export default function CalendarPage() {
                 <div className="flex items-center gap-3">
                   <CalendarIcon size={18} className="text-gray-400" />
                   <span className="text-gray-700">
-                    {parseLocalDate(selectedEvent.date).toLocaleDateString("ar-EG-u-ca-gregory")}
+                    {parseLocalDate(selectedEvent.date).toLocaleDateString(DISPLAY_LOCALE)}
                     {selectedEvent.endDate && selectedEvent.endDate !== selectedEvent.date &&
-                      ` - ${parseLocalDate(selectedEvent.endDate).toLocaleDateString("ar-EG-u-ca-gregory")}`}
+                      ` - ${parseLocalDate(selectedEvent.endDate).toLocaleDateString(DISPLAY_LOCALE)}`}
                   </span>
                 </div>
                 {selectedEvent.employee && (

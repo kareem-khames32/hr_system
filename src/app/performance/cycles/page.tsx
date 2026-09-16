@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import EmptyState from '@/components/EmptyState'
 import {
   Search,
   Plus,
@@ -19,6 +20,7 @@ import {
   BarChart3,
   X,
 } from 'lucide-react'
+import { formatDate } from '@/lib/dates'
 
 interface ReviewCycle {
   id: string
@@ -213,6 +215,8 @@ export default function PerformanceCyclesPage() {
           </div>
         </div>
 
+        {filteredCycles.length === 0 && <EmptyState title="لا توجد دورات تقييم مطابقة للبحث أو الفلاتر" />}
+
         {/* Cycles List */}
         <div className="space-y-4">
           {filteredCycles.map((cycle) => {
@@ -268,7 +272,7 @@ export default function PerformanceCyclesPage() {
                       تاريخ البداية
                     </div>
                     <p className="font-bold text-gray-800">
-                      {new Date(cycle.startDate).toLocaleDateString('ar-SA')}
+                      {formatDate(cycle.startDate)}
                     </p>
                   </div>
                   <div className="p-3 bg-gray-50 rounded-xl">
@@ -277,7 +281,7 @@ export default function PerformanceCyclesPage() {
                       تاريخ النهاية
                     </div>
                     <p className="font-bold text-gray-800">
-                      {new Date(cycle.endDate).toLocaleDateString('ar-SA')}
+                      {formatDate(cycle.endDate)}
                     </p>
                   </div>
                   <div className="p-3 bg-gray-50 rounded-xl">

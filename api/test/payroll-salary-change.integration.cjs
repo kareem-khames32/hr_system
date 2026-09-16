@@ -300,9 +300,10 @@ test('dated schedule and status changes retain existing behavior without round-t
   const emp = await employee(), c = await context(emp)
   const schedule = await repo('WorkSchedule').save({ name: 'جدول اختبار حفظ جزئي', startTime: '09:00', endTime: '18:00', isActive: true })
   expect(await request(editor, 'PATCH', `/employees/${emp.id}`, { workScheduleId: schedule.id,
-    attendanceEffectiveFrom: today, attendanceChangeReason: 'قرار تغيير جدول الاختبار', status: 'suspended' }), 200)
+    attendanceEffectiveFrom: today, attendanceChangeReason: 'قرار تغيير جدول الاختبار', status: 'probation' }), 200)
+  // الإيقاف بقى مؤرخًا بمساره المستقل؛ تغيير الحالة المسموح في نفس الحفظ هو «تحت التجربة»
   const stored = await repo('Employee').findOneByOrFail({ id: emp.id })
-  assert.equal(stored.workScheduleId, schedule.id); assert.equal(stored.status, 'suspended'); assert.equal(stored.isActive, false)
+  assert.equal(stored.workScheduleId, schedule.id); assert.equal(stored.status, 'probation'); assert.equal(stored.isActive, true)
   assert.deepEqual(await context(emp), c)
   const rules = await repo('AttendanceRuleVersion').findBy({ sourceType: 'EMPLOYEE', sourceId: emp.id })
   assert.ok(rules.length > 0)

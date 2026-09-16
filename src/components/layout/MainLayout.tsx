@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { createContext, useContext, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { ShieldAlert } from 'lucide-react'
@@ -64,18 +64,34 @@ const requiredPermFor = (path: string): string | string[] | null => {
   return hit ? hit[1] : null
 }
 
-// حارس الدخول: كل شاشات النظام تمر من هنا — بلا توكن → صفحة اللوجين
-export default function MainLayout({ children }: MainLayoutProps) {
-  const pathname = usePathname()
-  const [authed, setAuthed] = useState<boolean | null>(null)
+// شاشات بلا إطار النظام (القائمة الجانبية والهيدر)
+const BARE_PATHS = ['/login']
+const isBarePath = (path: string) => BARE_PATHS.some((bare) => path === bare || path.startsWith(`${bare}/`))
 
+// داخل الإطار الدائم؟ — كل صفحة تلف نفسها بـ<MainLayout> فيصير مجرد تمرير للمحتوى
+const ShellContext = createContext(false)
+
+/**
+ * الإطار الدائم للنظام (القائمة الجانبية + الهيدر + حارس الدخول) — يُركَّب مرة واحدة في الـroot layout.
+ * كان كل صفحة تركّب إطارها بنفسها، فيُعاد بناء القائمة الجانبية مع كل انتقال:
+ * تنغلق المجموعة المفتوحة، يرجع تمرير القائمة لأعلى، ويومض المحتوى بمؤشر التحميل.
+ */
+export function AppShell({ children }: MainLayoutProps) {
+  const pathname = usePathname() ?? ''
+  const [authed, setAuthed] = useState<boolean | null>(null)
+  const bare = isBarePath(pathname)
+
+  // حارس الدخول: كل شاشات النظام تمر من هنا — بلا توكن → صفحة اللوجين
   useEffect(() => {
+    if (bare) return
     if (!getToken()) {
       window.location.href = '/login'
       return
     }
     setAuthed(true)
-  }, [])
+  }, [bare, pathname])
+
+  if (bare) return <>{children}</>
 
   // لا نعرض محتوى محمي قبل التحقق (يمنع وميض البيانات)
   if (!authed) {
@@ -87,38 +103,47 @@ export default function MainLayout({ children }: MainLayoutProps) {
   }
 
   // بعد التوثيق (على العميل): تحقق خفيف من صلاحية الشاشة
-  const requiredPerm = requiredPermFor(pathname ?? '')
+  const requiredPerm = requiredPermFor(pathname)
   const allowed =
     !requiredPerm ||
     (Array.isArray(requiredPerm) ? requiredPerm : [requiredPerm]).every((p) => can(p))
 
   return (
-    <div className="min-h-screen bg-gray-50">
-      <Sidebar />
-      <div className="mr-72">
-        <Header />
-        <main className="p-8">
-          {allowed ? (
-            children
-          ) : (
-            <div className="card p-12 text-center max-w-lg mx-auto mt-12">
-              <div className="w-16 h-16 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
-                <ShieldAlert size={32} className="text-red-500" />
+    <ShellContext.Provider value>
+      <div className="min-h-screen bg-gray-50">
+        <Sidebar />
+        <div className="mr-72">
+          <Header />
+          <main className="p-8">
+            {allowed ? (
+              children
+            ) : (
+              <div className="card p-12 text-center max-w-lg mx-auto mt-12">
+                <div className="w-16 h-16 bg-red-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <ShieldAlert size={32} className="text-red-500" />
+                </div>
+                <h2 className="text-xl font-bold text-gray-800 mb-2">
+                  غير مصرح لك بهذه الصفحة
+                </h2>
+                <p className="text-gray-500 mb-6">
+                  هذه الشاشة تتطلب صلاحية غير ممنوحة لحسابك — إذا كنت تعتقد أن ذلك
+                  خطأ فتواصل مع مسؤول النظام
+                </p>
+                <Link href="/" className="btn-primary inline-flex items-center gap-2">
+                  العودة إلى لوحتي
+                </Link>
               </div>
-              <h2 className="text-xl font-bold text-gray-800 mb-2">
-                غير مصرح لك بهذه الصفحة
-              </h2>
-              <p className="text-gray-500 mb-6">
-                هذه الشاشة تتطلب صلاحية غير ممنوحة لحسابك — إذا كنت تعتقد أن ذلك
-                خطأ فتواصل مع مسؤول النظام
-              </p>
-              <Link href="/" className="btn-primary inline-flex items-center gap-2">
-                العودة إلى لوحتي
-              </Link>
-            </div>
-          )}
-        </main>
+            )}
+          </main>
+        </div>
       </div>
-    </div>
+    </ShellContext.Provider>
   )
+}
+
+// الصفحات تلف محتواها بـ<MainLayout>: داخل الإطار الدائم هو تمرير فقط، وخارجه (اختبارات/عرض منفصل) يركّب الإطار كاملًا
+export default function MainLayout({ children }: MainLayoutProps) {
+  const inShell = useContext(ShellContext)
+  if (inShell) return <>{children}</>
+  return <AppShell>{children}</AppShell>
 }

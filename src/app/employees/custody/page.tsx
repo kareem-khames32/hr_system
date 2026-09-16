@@ -276,7 +276,7 @@ export default function CustodyPage() {
       })
       if (Number(res.assetValue ?? 0) > 0) {
         setWriteOffNotice(
-          `قيمة الأصل ${Number(res.assetValue).toLocaleString()} ${currency} — تُحتسب تلقائياً في خصومات تصفية إنهاء الخدمة وفق سياسة الخادم`
+          `قيمة الأصل ${Number(res.assetValue).toLocaleString('en-US')} ${currency} — تُحتسب تلقائياً في خصومات تصفية إنهاء الخدمة وفق سياسة الخادم`
         )
       } else {
         setWriteOffNotice(
@@ -839,7 +839,7 @@ export default function CustodyPage() {
                   <p className="text-sm text-gray-600">
                     قيمة الأصل المسجلة:{' '}
                     <span className="font-medium">
-                      {Number(writeOffAsset?.value).toLocaleString()} {currency}
+                      {Number(writeOffAsset?.value).toLocaleString('en-US')} {currency}
                     </span>
                   </p>
                 ) : (

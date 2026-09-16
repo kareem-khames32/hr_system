@@ -12,7 +12,7 @@ const { roundPayrollMoney: round2 } = require('../src/payroll/payroll-money')
 /** نسخة من خطوات calculateDefined القديمة (التناسب بالقروش وتوزيع الباقي على أكبر مكوّن، الإجازة بلا أجر، حماية الصافي). */
 function legacy(facts, requested) {
   const monthlyCents = facts.monthlyComponents.map(amount => Math.round(amount * 100)), grossCents = monthlyCents.reduce((a, b) => a + b, 0)
-  const prorate = cents => facts.fullCoverage ? cents : Math.min(cents, Math.round(cents * facts.coverDays / 30))
+  const prorate = cents => facts.fullCoverage ? cents : Math.min(cents, Math.trunc(cents * facts.coverDays / 30))
   const grossEarnedCents = prorate(grossCents), earnedCents = monthlyCents.map(prorate)
   earnedCents[facts.monthlyComponents.indexOf(Math.max(...facts.monthlyComponents))] += grossEarnedCents - earnedCents.reduce((a, b) => a + b, 0)
   const earned = earnedCents.map(cents => cents / 100), grossEarned = grossEarnedCents / 100, dayRate = grossCents / 100 / 30
@@ -56,9 +56,10 @@ test('partial coverage with odd cents: per-component rounding differs by a cent 
   const { row } = parity(facts)
   assert.equal(row.status, 'DIFFERENT')
   const basic = row.components.find(item => item.code === 'BASIC'), net = row.components.find(item => item.code === 'NET')
-  assert.deepEqual([basic.legacy, basic.policy, basic.difference, basic.reasonCode], ['233.33', '233.34', '0.01', 'SALARY_ROUNDING_DISTRIBUTION'])
-  assert.deepEqual([net.legacy, net.policy, net.reasonCode], ['700.01', '700.02', 'FOLLOWS_UPSTREAM_DIFFERENCE'])
-  assert.equal(basic.differenceKey, engine.payrollParityDifferenceKey(7, 'BASIC', '233.33', '233.34'))
+  // قص نحو الصفر (قرار المالك): القديم يوزّع قرش الباقي على الأساسي، والمحرك يقص كل مكوّن
+  assert.deepEqual([basic.legacy, basic.policy, basic.difference, basic.reasonCode], ['233.34', '233.33', '-0.01', 'SALARY_ROUNDING_DISTRIBUTION'])
+  assert.deepEqual([net.legacy, net.policy, net.reasonCode], ['700.00', '699.99', 'FOLLOWS_UPSTREAM_DIFFERENCE'])
+  assert.equal(basic.differenceKey, engine.payrollParityDifferenceKey(7, 'BASIC', '233.34', '233.33'))
 })
 
 test('unproven attendance source: the dependent items have no policy value (UNAVAILABLE with the shadow reason), the salary items still compute', () => {
@@ -208,4 +209,18 @@ test('source plan (pure): shadow source issue codes per employee, summarised per
   const readiness = engine.summarizePayrollEngineParity({ engineMode: 'SHADOW', snapshotVersion: 1, policySnapshotHash: null, rows }).sourceReadiness
   assert.deepEqual(readiness.map(item => [item.code, item.employees, item.employeeIds]), [['SCHEDULE_TIMING_FIELDS_MISSING', 2, [1, 2]], ['ATTENDANCE_CALENDAR_UNPROVEN', 1, [1]], ['NEW_SOURCE_CODE', 1, [2]]])
   assert.match(readiness[0].remedy, /جداول العمل/); assert.match(readiness[2].remedy, /ظل السياسة/)
+})
+
+test('الراتب على 30 يوم: تناسب المحرك لموظف معيّن نص الدورة على 30 مش على طول الفترة، فمفيش فرق زائف في دورة 31 أو 28 يوم', () => {
+  for (const periodDays of [31, 28, 30]) {
+    const facts = base({ coverDays: 15, periodDays, fullCoverage: false, overtimeAmount: 0, unpaidLeaveDays: 0, credits: [], debits: [],
+      attendance: { status: 'MATCHED', totals: { lateness: '0.00', shortfall: '0.00', absence: '0.00' }, message: 'ok' } })
+    const { preNet, row } = parity(facts)
+    // 6500 و1000 و300 × 15 ÷ 30
+    assert.deepEqual(preNet.earnedComponents.slice(0, 3), [3250, 500, 150], `periodDays=${periodDays}`)
+    assert.equal(preNet.grossEarned.toFixed(2), '3900.00')
+    assert.equal(row.status, 'MATCHED', `periodDays=${periodDays}: ${JSON.stringify(row.components.filter(item => item.difference !== null))}`)
+  }
+  const capped = engine.computePayrollPolicyEnginePreNet(base({ coverDays: 31, periodDays: 31, fullCoverage: false }))
+  assert.equal(capped.grossEarned.toFixed(2), '7800.00', 'بسقف الراتب كاملًا')
 })

@@ -48,6 +48,7 @@ import {
   ApiEmployee,
 } from '@/lib/api'
 import { docTypeLabel, docTypeSelectOptions, loadDocTypes, type ApiDocType } from '@/lib/doc-types'
+import { formatDate } from '@/lib/dates'
 
 interface DocumentRow {
   id: number
@@ -632,12 +633,12 @@ export default function DocumentsPage() {
                       <td className="px-4 py-4 text-gray-600">{doc.category}</td>
                       <td className="px-4 py-4 text-gray-600">
                         {doc.issueDate
-                          ? new Date(doc.issueDate).toLocaleDateString('ar-SA')
+                          ? formatDate(doc.issueDate)
                           : '-'}
                       </td>
                       <td className="px-4 py-4 text-gray-600">
                         {doc.expiryDate
-                          ? new Date(doc.expiryDate).toLocaleDateString('ar-SA')
+                          ? formatDate(doc.expiryDate)
                           : '-'}
                       </td>
                       <td className="px-4 py-4">
@@ -992,7 +993,7 @@ export default function DocumentsPage() {
                         <span className="text-gray-500">تاريخ الإصدار:</span>
                         <span className="text-gray-800">
                           {previewDoc.issueDate
-                            ? new Date(previewDoc.issueDate).toLocaleDateString('ar-SA')
+                            ? formatDate(previewDoc.issueDate)
                             : '—'}
                         </span>
                       </div>
@@ -1000,7 +1001,7 @@ export default function DocumentsPage() {
                         <div className="flex justify-between text-sm">
                           <span className="text-gray-500">تاريخ الانتهاء:</span>
                           <span className="text-gray-800">
-                            {new Date(previewDoc.expiryDate).toLocaleDateString('ar-SA')}
+                            {formatDate(previewDoc.expiryDate)}
                           </span>
                         </div>
                       )}

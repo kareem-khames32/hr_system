@@ -70,20 +70,50 @@ export class ApiError extends Error {
   }
 }
 
+// انقطاع الاتصال بالخادم يوصل ApiError بالحالة 0 (مفيش رد HTTP أصلاً)
+export const NETWORK_ERROR_STATUS = 0
+// نتيجة حفظ مش مؤكدة: انقطاع اتصال أو مهلة (408) أو خطأ خادم (5xx) أو خطأ مش من الخادم —
+// ممكن يكون الحفظ تم والرد بس اللي ضاع، فتتعاد المحاولة بنفس مفتاح منع التكرار
+export const isUncertainWriteError = (err: unknown): boolean =>
+  !(err instanceof ApiError) || err.status === NETWORK_ERROR_STATUS || err.status === 408 || err.status >= 500
+
+// رسائل الإطار الافتراضية بالإنجليزية («Internal server error»، «Forbidden resource»، «Cannot GET …»)
+// لا تُعرض للمستخدم كما هي: رسالة بلا أي حرف عربي تُستبدل بجملة عربية حسب الحالة؛ رسائل الخادم العربية تبقى كما هي
+const GENERIC_ERRORS: Record<number, string> = {
+  400: 'البيانات المرسلة غير صحيحة — راجع الحقول ثم أعد المحاولة',
+  401: 'انتهت الجلسة — سجّل الدخول مرة أخرى',
+  403: 'ليست لديك صلاحية لتنفيذ هذا الإجراء',
+  404: 'العنصر المطلوب غير موجود',
+  409: 'تعارض مع تعديل آخر — حدّث الصفحة ثم أعد المحاولة',
+  413: 'حجم الملف أو البيانات أكبر من المسموح',
+  429: 'طلبات كثيرة في وقت قصير — انتظر قليلًا ثم أعد المحاولة',
+}
+const arabicErrorMessage = (status: number, message: string): string => {
+  if (/[؀-ۿ]/.test(message)) return message
+  return GENERIC_ERRORS[status] ?? (status >= 500 ? 'حدث خطأ في الخادم — أعد المحاولة بعد قليل' : `تعذر تنفيذ الطلب (${status})`)
+}
+
 // نداء عام — يضيف التوكن تلقائياً ويرمي ApiError برسالة السيرفر
 export async function apiFetch<T>(
   path: string,
   options: RequestInit = {}
 ): Promise<T> {
   const token = getToken()
-  const res = await fetch(`${API_BASE}${path}`, {
-    ...options,
-    headers: {
-      'Content-Type': 'application/json',
-      ...(token ? { Authorization: `Bearer ${token}` } : {}),
-      ...options.headers,
-    },
-  })
+  let res: Response
+  try {
+    res = await fetch(`${API_BASE}${path}`, {
+      ...options,
+      headers: {
+        'Content-Type': 'application/json',
+        ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        ...options.headers,
+      },
+    })
+  } catch (error) {
+    // انقطاع الشبكة/الخادم: «Failed to fetch» الإنجليزية كانت تظهر كما هي في الشاشات
+    if (error instanceof DOMException && error.name === 'AbortError') throw error
+    throw new ApiError(NETWORK_ERROR_STATUS, 'تعذر الاتصال بالخادم — تحقق من الاتصال ثم أعد المحاولة')
+  }
 
   if (!res.ok) {
     // انتهاء الجلسة/توكن غير صالح (401 ومعنا توكن): امسح الجلسة ووجّه لصفحة
@@ -111,7 +141,7 @@ export async function apiFetch<T>(
     } catch {
       /* الرد ليس JSON */
     }
-    throw new ApiError(res.status, message, details)
+    throw new ApiError(res.status, arabicErrorMessage(res.status, message), details)
   }
 
   // ردود فارغة (endpoint يرجّع null) لا تكسر التحليل
@@ -199,6 +229,8 @@ export interface ApiRequestType {
   id: number; code: string; nameAr: string; category: string
   requiredFields?: string; approvalChainId?: number; destinationHandler: string
   customFields?: string; visibleTo?: string; requiredAttachments?: string
+  // فرع النوع: null = كل الشركة (قرار المالك 16 سبتمبر)
+  branchId?: number | null
   approvalChainName?: string
   affectsBalance: boolean; isSecurityRoute: boolean; isConfidential: boolean
   autoGeneratesPdf: boolean; phase: string; isActive: boolean
@@ -628,13 +660,15 @@ export interface ApiOvertimePeriod {
 }
 export const fetchOvertimePeriods = () =>
   get<ApiOvertimePeriod[]>('/attendance/overtime-periods')
+// recompute = الأيام اللي فاتت جوه الفترة واتحسبت تاني بعد الحفظ
+export interface ApiOvertimePeriodRecompute { recomputed: number; failed: number }
 export const createOvertimePeriod = (
   p: Omit<ApiOvertimePeriod, 'id' | 'isActive'>
-) => post<ApiOvertimePeriod>('/attendance/overtime-periods', p)
+) => post<ApiOvertimePeriod & { recompute?: ApiOvertimePeriodRecompute }>('/attendance/overtime-periods', p)
 export const updateOvertimePeriod = (id: number, p: Partial<ApiOvertimePeriod>) =>
-  patch<ApiOvertimePeriod>(`/attendance/overtime-periods/${id}`, p)
+  patch<ApiOvertimePeriod & { recompute?: ApiOvertimePeriodRecompute }>(`/attendance/overtime-periods/${id}`, p)
 export const deleteOvertimePeriod = (id: number) =>
-  del<{ deleted: boolean }>(`/attendance/overtime-periods/${id}`)
+  del<{ deleted: boolean; recompute?: ApiOvertimePeriodRecompute }>(`/attendance/overtime-periods/${id}`)
 export const fetchPendingOvertime = () => get<any[]>('/attendance/overtime/pending')
 export const confirmOvertime = (id: number, approve: boolean, reason?: string) =>
   post(`/attendance/overtime/${id}/confirm`, { approve, reason })
@@ -814,8 +848,12 @@ export interface ApiLeaveTypeOption {
   attachmentAboveDays?: number | null
   attachmentTiming?: 'WITH_REQUEST' | 'AFTER_RETURN'
   attachmentDeadlineDays?: number | null
+  // فرع النوع: null = كل الشركة (قرار المالك 16 سبتمبر)
+  branchId?: number | null
 }
-export const fetchActiveLeaveTypes = () => get<ApiLeaveTypeOption[]>('/leaves/types')
+// branchId (للحساب العام): أنواع الشركة + أنواع فرع الموظف اللي بيتقدّم له بس
+export const fetchActiveLeaveTypes = (branchId?: number | null) =>
+  get<ApiLeaveTypeOption[]>(`/leaves/types${branchId ? `?branchId=${branchId}` : ''}`)
 export const createLeaveType = (lt: Record<string, unknown>) => post('/settings/leave-types', lt)
 export const updateLeaveType = (id: number, lt: Record<string, unknown>) => patch(`/settings/leave-types/${id}`, lt)
 export const fetchApprovalChains = () => get<any[]>('/settings/approval-chains')
@@ -906,8 +944,11 @@ export const updateDocument = (id: number, d: Partial<ApiDocument>) => patch<Api
 
 // ===== الكتالوجات (عطلات/ورديات/أجهزة/مسميات/درجات/أنواع أصول) =====
 export type CatalogKind = 'holidays' | 'shifts' | 'devices' | 'job-titles' | 'grades' | 'asset-types' | 'permission-types' | 'cost-centers' | 'work-schedules' | 'doc-types'
-export const fetchCatalog = <T = any>(kind: CatalogKind, effectiveOn?: string) =>
-  get<T[]>(`/catalogs/${kind}${effectiveOn ? `?effectiveOn=${encodeURIComponent(effectiveOn)}` : ''}`)
+// branchId (الورديات وجداول العمل): تعريفات الشركة + تعريفات الفرع ده بس — لمنتقي موظف في فرع معيّن
+export const fetchCatalog = <T = any>(kind: CatalogKind, effectiveOn?: string, branchId?: number | null) => {
+  const query = [effectiveOn ? `effectiveOn=${encodeURIComponent(effectiveOn)}` : '', branchId ? `branchId=${branchId}` : ''].filter(Boolean).join('&')
+  return get<T[]>(`/catalogs/${kind}${query ? `?${query}` : ''}`)
+}
 export const createCatalogItem = <T = any>(kind: CatalogKind, item: Record<string, unknown>) =>
   post<T>(`/catalogs/${kind}`, item)
 export const updateCatalogItem = <T = any>(kind: CatalogKind, id: number, item: Record<string, unknown>) =>
@@ -923,6 +964,8 @@ export interface ApiWorkSchedule {
   employeeCount?: number
   flexEnabled?: boolean | null; flexWindowMinutes?: number | null; requiredWorkMinutes?: number | null
   attendanceRuleVersion?: number | null; attendanceRuleEffectiveFrom?: string | null
+  // فرع الجدول: null = كل الشركة (قرار المالك 16 سبتمبر)
+  branchId?: number | null
 }
 export interface ApiAttendanceRuleChange { effectiveFrom: string; changeReason: string }
 export interface ApiAttendanceRuleVersion {
@@ -957,8 +1000,9 @@ export interface ApiCandidate {
 export const fetchCandidates = () => get<ApiCandidate[]>('/candidates')
 export const createCandidate = (c: Partial<ApiCandidate>) => post<ApiCandidate>('/candidates', c)
 export const updateCandidate = (id: number, c: Partial<ApiCandidate>) => patch<ApiCandidate>(`/candidates/${id}`, c)
-export const hireCandidate = (id: number, h: { employeeCode: string; branchId: number; departmentId?: number; basicSalary?: number; joinDate?: string }) =>
-  post<{ candidate: ApiCandidate; employee: ApiEmployee }>(`/candidates/${id}/hire`, h)
+// التعيين = بيانات إضافة الموظف كاملة (نفس الحقول الإجبارية) من نموذج الإضافة المفتوح من المرشح
+export const hireCandidate = (id: number, employee: Clearable<ApiEmployee>) =>
+  post<{ candidate: ApiCandidate; employee: ApiEmployee }>(`/candidates/${id}/hire`, employee)
 
 // ===== النقل والملف المجمّع والسلف =====
 export interface ApiTransfer {
@@ -1288,6 +1332,18 @@ export const setDayShiftOverridesBulk = (d: {
   failed?: Array<{ employeeId: number; date: string; error: string }>
   skipped?: number // موظفون استُبعدوا: خارج نطاق فرعك أو أنت نفسك
 }>('/attendance/schedule/day/bulk', d)
+// إسناد وردية لمدة (من تاريخ لتاريخ) لمجموعة موظفين — weekdays اختياري (0 = الأحد … 6 = السبت).
+// الأسبوع الكامل يتخزن وردية أسبوع والباقي أيام خاصة؛ keepDayOverrides يسيب الأيام الخاصة القديمة
+export interface ApiScheduleRangeResult {
+  ok: boolean; applied: number; employees: number; dates: number; weeks: number; days: number
+  removedOverrides: number; keptOverrides: number; recomputed: number
+  recomputeFailed: Array<{ employeeId: number; date: string }>
+  failed: Array<{ employeeId: number; error: string }>
+  skipped: Array<{ employeeId: number; reason: string }>
+}
+export const assignScheduleRange = (d: {
+  employeeIds: number[]; from: string; to: string; weekdays?: number[]; shiftId: number; keepDayOverrides?: boolean
+}) => post<ApiScheduleRangeResult>('/attendance/schedule/range', d)
 export const fetchWeekDayOverrides = (week: string) =>
   get<Array<{ id: number; employeeId: number; date: string; shiftId?: number | null; shiftName: string; startTime: string; endTime: string }>>(
     `/attendance/schedule/day-overrides?week=${week}`)
@@ -1361,7 +1417,10 @@ export const createRequestType = (d: {
   nameAr: string; category: string; code?: string
   customFields?: CustomFieldDef[]; requiredAttachments?: string
   destinationHandler?: string; approvalChainId?: number
-  visibleTo?: { mode: string; ids: Array<number | string> }
+  // مين + فين (قرار المالك 16 سبتمبر): where غايب = كل الشركة
+  visibleTo?: { mode: string; ids: Array<number | string>; where?: { mode: 'branches' | 'departments'; ids: number[] } }
+  // فرع النوع: فاضي = كل الشركة؛ حساب الفرع يتضاف لفرعه تلقائيًا
+  branchId?: number | null
 }) => post<ApiRequestType>('/settings/request-types', d)
 export const updateRequestTypeFull = (id: number, d: Record<string, unknown>) =>
   patch<ApiRequestType>(`/settings/request-types/${id}`, d)

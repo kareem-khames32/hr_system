@@ -21,6 +21,7 @@ import {
   markNotificationsRead,
   NOTIFICATIONS_CHANGED,
 } from '@/lib/api'
+import { formatDate } from '@/lib/dates'
 
 interface Notification {
   id: string
@@ -135,7 +136,7 @@ export default function NotificationsPage() {
     if (hours < 1) return 'الآن'
     if (hours < 24) return `منذ ${hours} ساعة`
     if (days < 7) return `منذ ${days} يوم`
-    return date.toLocaleDateString('ar-SA')
+    return formatDate(date)
   }
 
   return (

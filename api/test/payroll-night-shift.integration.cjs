@@ -12,6 +12,7 @@ const database = `hr_night_shift_test_${crypto.randomBytes(8).toString('hex')}`
 const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-night-shift-files-'))
 const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
+const { employeeRequiredFields } = require('./helpers/employee-fixture.cjs')
 const { readCalendarSource, confirmCalendarSource } = require('../src/attendance/attendance-calendar-history')
 const { readPayrollLiveSchedule } = require('../src/payroll/payroll-live-schedule-provider')
 const { readPayrollLiveEmployment } = require('../src/payroll/payroll-live-employment-provider')
@@ -41,7 +42,7 @@ async function confirm(scope, sourceId, effectiveFrom = '2026-01-01') {
 }
 async function nightEmployee(joinDate) {
   const n = ++sequence
-  const saved = expect(await request('POST', '/employees', { employeeCode: `NIGHT${n}`, fullName: `موظف وردية ليلية ${n}`, branchId: branch.id,
+  const saved = expect(await request('POST', '/employees', { ...(await employeeRequiredFields(ds, branch.id)), employeeCode: `NIGHT${n}`, fullName: `موظف وردية ليلية ${n}`, branchId: branch.id,
     joinDate, basicSalary: 9000, housingAllowance: 0, transportAllowance: 0, phoneAllowance: 0, workNatureAllowance: 0, otherAllowance: 0,
     status: 'active', isActive: true, payMethod: 'cash', attendanceEffectiveFrom: '2026-07-01', attendanceChangeReason: 'إسناد دوام موظف اختبار الوردية الليلية' }), 201)
   // إنشاء الموظف بسريان حضور 2026-07-01 يسجل تغيير تقويمه بهذا التاريخ؛ التأكيد لا يسبقه
@@ -215,13 +216,14 @@ test('ليلة آخر يوم في فترة الرواتب (22 أغسطس) تبق
   assert.deepEqual(aug.details.attendanceDeductions.days.map(row => row.date), ['2026-08-22'])
   assert.deepEqual(sep.details.attendanceDeductions.days.map(row => row.date), ['2026-08-23'])
   const augDay = aug.details.attendanceDeductions.days[0], sepDay = sep.details.attendanceDeductions.days[0]
-  assert.equal(augDay.unexcusedLateMinutes, 10); assert.equal(augDay.rawShortfallMinutes, 20); assert.equal(augDay.chargeableShortfallMinutes, 10)
-  assert.equal(number(aug.item.latenessDeduction), 6.25); assert.equal(number(aug.item.shortfallDeduction), 6.25)
+  // أ4: دقائق التأخير لا تُطرح من النقص — النقص الخاضع للخصم 20 كاملة، و20 × .625 = 12.50
+  assert.equal(augDay.unexcusedLateMinutes, 10); assert.equal(augDay.rawShortfallMinutes, 20); assert.equal(augDay.chargeableShortfallMinutes, 20)
+  assert.equal(number(aug.item.latenessDeduction), 6.25); assert.equal(number(aug.item.shortfallDeduction), 12.5)
   assert.equal(number(aug.item.shortfallMinutes), 20); assert.equal(number(aug.item.absenceDays), 0)
   assert.equal(sepDay.unexcusedLateMinutes, 0); assert.equal(sepDay.rawShortfallMinutes, 0); assert.equal(sepDay.totalAmount, 0)
   assert.equal(number(sep.item.latenessDeduction), 0); assert.equal(number(sep.item.shortfallDeduction), 0)
   assert.equal(number(sep.item.shortfallMinutes), 0); assert.equal(number(sep.item.absenceDays), 0)
-  t.diagnostic('يدويًا: 9000/30 = 300 لليوم، 300/8/60 = 0.625 للدقيقة؛ تأخير 10 = 6.25، نقص 20 صافيًا من التأخير = 10 × 0.625 = 6.25 — كلها في مسير أغسطس.')
+  t.diagnostic('يدويًا: 9000/30 = 300 لليوم، 300/8/60 = 0.625 للدقيقة؛ تأخير 10 = 6.25، ونقص 20 كاملًا بلا طرح التأخير (أ4) = 20 × 0.625 = 12.50 — كلها في مسير أغسطس.')
 
   // محرك السياسة بوضع SHADOW داخل المسيرين الفعليين نفسيهما (المصروف = القديم): الليلة تُحسب ليوم البداية 22 أغسطس
   const augShadow = aug.details.policyShadow, sepShadow = sep.details.policyShadow
@@ -233,9 +235,10 @@ test('ليلة آخر يوم في فترة الرواتب (22 أغسطس) تبق
   assert.equal(shadowNight.date, '2026-08-22'); assert.equal(shadowNight.overnight, true)
   assert.deepEqual(shadowNight.punchIds, [idOf(ids, '2026-08-22T20:10:00'), idOf(ids, '2026-08-23T00:50:00')], 'انصراف 23 أغسطس داخل يوم 22 في محرك السياسة')
   assert.equal(shadowNight.inputs.rawLateSeconds, '600'); assert.equal(shadowNight.inputs.shortfallMinutes, 20)
-  assert.deepEqual(shadowNight.policy, { lateness: '6.250000', shortfall: '6.250000', absence: '0.000000', total: '12.500000' })
+  // أ4: الظل كالقديم — نقص 20 كاملًا = 12.50، والمجموع 6.25 + 12.50 = 18.75
+  assert.deepEqual(shadowNight.policy, { lateness: '6.250000', shortfall: '12.500000', absence: '0.000000', total: '18.750000' })
   assert.deepEqual(shadowNight.legacy, shadowNight.policy); assert.equal(shadowNight.matches, true)
-  assert.deepEqual(augShadow.totals.policy, { lateness: '6.25', shortfall: '6.25', absence: '0.00', total: '12.50' })
+  assert.deepEqual(augShadow.totals.policy, { lateness: '6.25', shortfall: '12.50', absence: '0.00', total: '18.75' })
   assert.deepEqual(augShadow.totals.legacy, augShadow.totals.policy)
   // سبتمبر: ليلة 23 نظيفة لا ترث انصراف ليلة 22، ومحرك السياسة يطابق صفر المسير القديم
   assert.equal(sepShadow.status, 'MATCHED', JSON.stringify({ status: sepShadow.status, differences: sepShadow.differences, unproven: sepShadow.unprovenDays, error: sepShadow.error }))
@@ -245,5 +248,6 @@ test('ليلة آخر يوم في فترة الرواتب (22 أغسطس) تبق
   assert.deepEqual(sepShadow.days[0].policy, { lateness: '0.000000', shortfall: '0.000000', absence: '0.000000', total: '0.000000' })
   assert.deepEqual(sepShadow.totals.policy, { lateness: '0.00', shortfall: '0.00', absence: '0.00', total: '0.00' })
   // SHADOW لا يغير المصروف: البند القديم كما هو
-  assert.equal(number(aug.item.latenessDeduction) + number(aug.item.shortfallDeduction), 12.5)
+  // أ4: 6.25 + 12.50 = 18.75
+  assert.equal(number(aug.item.latenessDeduction) + number(aug.item.shortfallDeduction), 18.75)
 })

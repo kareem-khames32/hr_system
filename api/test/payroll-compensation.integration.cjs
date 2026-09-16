@@ -32,6 +32,7 @@ function token(user) {
 }
 // الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ (هذه المجموعة لا تختبر التكافؤ نفسه)
 const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
+const { employeeRequiredFields } = require('./helpers/employee-fixture.cjs')
 async function request(user, method, url, body) {
   await writeParityReasonsBeforeApproval(request, user, method, url)
   const response = await fetch(base + url, { method, headers: { 'Content-Type': 'application/json',
@@ -219,7 +220,7 @@ test('SPEC⑥: all six independent components appear once in the full salary, SQ
 test('SPEC⑥ F1: HTTP employee creation accepts phone and work nature without manufacturing otherAllowance', async () => {
   // الخطوة 13: الإنشاء يوثّق أجر التعيين «يسري من راتب شهر»؛ تاريخ التعيين قديم (2020) فالافتراض الشهر الجاري،
   // ومسير هذا الاختبار لشهر سابق فيُختار شهره صراحةً (من له سجل شهري لا يرجع لراتب الملف).
-  const input = { ...employeeData(), salaryEffectivePayrollPeriod: period }
+  const input = { ...(await employeeRequiredFields(ds, branch.id)), ...employeeData(), salaryEffectivePayrollPeriod: period }
   delete input.otherAllowance
   const createdEmployee = await request(admin, 'POST', '/employees', input)
   assert.equal(createdEmployee.status, 201, JSON.stringify(createdEmployee.body))
@@ -292,14 +293,14 @@ test('SPEC⑥ / PR-10: joining July 1 prorates all six components by 22/30 while
   const emp = await employee({ joinDate: '2026-07-01' })
   await attendance(emp, '2026-07-01', endDate)
   const run = await calculate([emp]), item = itemFor(run, emp)
-  const details = assertComponents(run, emp, monthly, [4400, 1100, 366.67, 220, 146.67, 73.33])
+  const details = assertComponents(run, emp, monthly, [4400.01, 1100, 366.66, 220, 146.66, 73.33])
   assert.equal(details.coverFrom, '2026-07-01'); assert.equal(details.coverTo, endDate); assert.equal(details.coverDays, 22)
   assert.equal(details.monthlyDays, 30); assert.equal(details.prorataFactor, 0.733333)
-  assert.equal(details.dayRate, 286.67); assert.equal(details.hourRate, 35.83)
-  assert.equal(details.gross, 8600); assert.equal(details.grossEarned, 6306.67)
-  assert.equal(number(item.netPay), 6306.67)
+  assert.equal(details.dayRate, 286.66); assert.equal(details.hourRate, 35.83)
+  assert.equal(details.gross, 8600); assert.equal(details.grossEarned, 6306.66)
+  assert.equal(number(item.netPay), 6306.66)
   deductionsAreZero(item)
-  t.diagnostic('Manual: 8600 × 22 / 30 = 6306.67; daily basis remains 8600 / 30 = 286.666… and hourly basis 35.833….')
+  t.diagnostic('Manual: 8600 × 22 / 30 = 6306.666… cut to 6306.66 (money is truncated to 2 decimals); daily basis remains 8600 / 30 = 286.666… and hourly basis 35.833….')
 })
 
 test('SPEC⑥: partial salary still uses all six full-month components for one absence, 48 late minutes and one overtime hour', async t => {
@@ -309,14 +310,14 @@ test('SPEC⑥: partial salary still uses all six full-month components for one a
   const ot = await repo('OvertimeEntry').save({ employeeId: emp.id, date: '2026-07-10', source: 'PRE_REQUESTED',
     hoursRequested: 1, payableHours: 1, rate: 1.5, status: 'APPROVED' })
   const run = await calculate([emp]), item = itemFor(run, emp), details = breakdown(item)
-  assert.equal(details.grossEarned, 6306.67); assert.equal(details.dayRate, 286.67)
-  assert.equal(number(item.absenceDays), 1); assert.equal(number(item.absenceDeduction), 286.67)
-  assert.equal(number(item.lateMinutes), 48); assert.equal(number(item.latenessDeduction), 28.67)
+  assert.equal(details.grossEarned, 6306.66); assert.equal(details.dayRate, 286.66)
+  assert.equal(number(item.absenceDays), 1); assert.equal(number(item.absenceDeduction), 286.66)
+  assert.equal(number(item.lateMinutes), 48); assert.equal(number(item.latenessDeduction), 28.66)
   assert.equal(number(item.overtimeHours), 1); assert.equal(number(item.overtimeAmount), 53.75)
-  assert.equal(number(item.netPay), 6045.08)
+  assert.equal(number(item.netPay), 6045.09)
   assert.deepEqual(details.absentDates, ['2026-07-08']); assert.deepEqual(details.overtimeEntryIds, [ot.id])
   assert.equal((await repo('OvertimeEntry').findOneByOrFail({ id: ot.id })).status, 'APPROVED')
-  t.diagnostic('Manual: 6306.67 − 286.67 − 28.67 + 53.75 = 6045.08. Rates use 8600, not the partial gross.')
+  t.diagnostic('Manual (truncated to 2 decimals): 6306.66 − 286.66 − 28.66 + 53.75 = 6045.09. Rates use 8600, not the partial gross.')
 })
 
 test('SPEC⑥ / PR-10: eighteen days in a 31-day cycle use /30; complete 31- and 28-day cycles earn every full component', async t => {

@@ -174,7 +174,7 @@ export function computeLoanCap(input: {
   const { policy } = input, amount = toCents(input.amount), components: LoanCapComponent[] = []
   const baseValue = policy?.salaryBase === 'BASIC' ? input.salary.basic : policy?.salaryBase === 'GROSS' ? input.salary.gross : null
   if (policy?.percentOfSalary && baseValue !== null) {
-    const limit = PayrollDecimal.from(baseValue).multiply(PayrollDecimal.from(policy.percentOfSalary)).divide(PayrollDecimal.from('100')).format(2, 'HALF_UP')
+    const limit = PayrollDecimal.from(baseValue).multiply(PayrollDecimal.from(policy.percentOfSalary)).divide(PayrollDecimal.from('100')).format(2, 'DOWN')
     const pct = PayrollDecimal.from(policy.percentOfSalary).canonical()
     components.push({ code: 'PERCENT', label: `سقف النسبة (${pct}% من ${policy.salaryBase === 'BASIC' ? 'الراتب الأساسي' : 'إجمالي الراتب'})`, limit, used: null, available: limit })
   }

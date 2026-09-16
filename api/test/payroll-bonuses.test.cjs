@@ -54,7 +54,7 @@ test('EX-05 rule 2: 9,500 on base 9,000 exceeds the 100% cap — rejected withou
   assert.equal(rules.computeBonusAmount(type({ code: 'SPOT', calcMethod: 'FIXED_AMOUNT' }), '9000', salary('9000.00')).capExceeded, false, 'exactly the cap is allowed')
 })
 
-test('EX-05 limits: step 0.25, minimum, maximum, zero salary, decimals are exact (half-up at 2 decimals)', () => {
+test('EX-05 limits: step 0.25, minimum, maximum, zero salary, decimals are exact (cut at 2 decimals, no rounding)', () => {
   assert.equal(body(() => rules.computeBonusAmount(type(), '0.3', salary('9000'))).code, 'BONUS_STEP_INVALID')
   assert.equal(rules.computeBonusAmount(type(), '0.75', salary('9000')).amount, '225.00')
   assert.equal(body(() => rules.computeBonusAmount(type({ code: 'MIN', calcMethod: 'FIXED_AMOUNT', minAmount: '100' }), '99.99', salary('9000'))).code, 'BONUS_BELOW_MIN')
@@ -63,8 +63,8 @@ test('EX-05 limits: step 0.25, minimum, maximum, zero salary, decimals are exact
   assert.equal(body(() => rules.computeBonusAmount(type({ code: 'FIX', calcMethod: 'FIXED_AMOUNT' }), '10.001', salary('9000'))).code, 'BONUS_VALUE_INVALID')
   // 1/3 يوم على 1000: سعر اليوم 33.333… × 0.25 = 8.3333 → 8.33
   assert.equal(rules.computeBonusAmount(type({ minAmount: null }), '0.25', salary('1000')).amount, '8.33')
-  // 0.5 × 20.01 = 10.005 → 10.01 (نصف لأعلى)
-  assert.equal(rules.computeBonusAmount(type({ code: 'PCT', calcMethod: 'PERCENT_OF_BASE', minAmount: null }), '0.5', salary('2001', '2001')).amount, '10.01')
+  // 0.5 × 20.01 = 10.005 → 10.00 (قص بلا تقريب)
+  assert.equal(rules.computeBonusAmount(type({ code: 'PCT', calcMethod: 'PERCENT_OF_BASE', minAmount: null }), '0.5', salary('2001', '2001')).amount, '10.00')
 })
 
 test('EX-05 rule 1 chain: an escalated bonus from a direct manager inserts the department manager before HR; a department-manager proposer skips his own step', () => {

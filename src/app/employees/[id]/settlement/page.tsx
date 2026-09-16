@@ -8,7 +8,7 @@ import {
   Printer,
   CheckCircle2,
   User,
-  ArrowLeft,
+  ArrowRight,
   AlertTriangle,
   Plus,
   Minus,
@@ -185,7 +185,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
   })()
 
   const fmtMoney = (v?: number | null) =>
-    v == null ? '—' : `${Number(v).toLocaleString()} ${currency}`
+    v == null ? '—' : `${Number(v).toLocaleString('en-US')} ${currency}`
 
   const salaryParts = [
     emp?.basicSalary,
@@ -330,7 +330,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                 <td className="px-4 py-3 text-left">
                   <span className={`font-bold ${isCredit ? 'text-success-600' : 'text-red-600'}`}>
                     {isCredit ? '+' : '-'}
-                    {Number(line.amount).toLocaleString()} {currency}
+                    {Number(line.amount).toLocaleString('en-US')} {currency}
                   </span>
                 </td>
                 {isEditable && (
@@ -385,7 +385,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                 colSpan={isEditable ? 2 : 1}
               >
                 {isCredit ? '+' : '-'}
-                {total.toLocaleString()} {currency}
+                {total.toLocaleString('en-US')} {currency}
               </td>
             </tr>
           </tfoot>
@@ -401,9 +401,10 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
         <div className="flex items-center gap-4">
           <Link
             href={backHref}
-            className="p-2 rounded-lg hover:bg-gray-100 transition-colors"
+            aria-label="رجوع"
+            className="p-2 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"
           >
-            <ArrowLeft size={20} className="text-gray-500" />
+            <ArrowRight size={20} className="text-gray-600" />
           </Link>
           <div>
             <h1 className="text-2xl font-bold text-gray-800">تصفية مستحقات نهاية الخدمة</h1>
@@ -470,7 +471,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                   </span>
                   {seesMoney && (
                     <>
-                      {' — '}الصافي: {Number(net).toLocaleString()} {currency}
+                      {' — '}الصافي: {Number(net).toLocaleString('en-US')} {currency}
                     </>
                   )}
                 </p>
@@ -593,7 +594,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                       <div className="flex justify-between py-2 bg-gray-50 -mx-6 px-6 rounded-lg">
                         <span className="font-bold text-gray-800">الإجمالي</span>
                         <span className="font-bold text-primary-600">
-                          {hasSalary ? `${totalSalary.toLocaleString()} ${currency}` : '—'}
+                          {hasSalary ? `${totalSalary.toLocaleString('en-US')} ${currency}` : '—'}
                         </span>
                       </div>
                     </div>
@@ -730,8 +731,8 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                         <div>
                           <p className="text-gray-600">صافي المستحقات النهائية</p>
                           <p className="text-xs text-gray-500 mt-1">
-                            {totalEntitlements.toLocaleString()} - {totalDeductions.toLocaleString()}{' '}
-                            = {Number(net).toLocaleString()}
+                            {totalEntitlements.toLocaleString('en-US')} - {totalDeductions.toLocaleString('en-US')}{' '}
+                            = {Number(net).toLocaleString('en-US')}
                           </p>
                         </div>
                       </div>
@@ -741,7 +742,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                             Number(net) >= 0 ? 'text-primary-600' : 'text-red-600'
                           }`}
                         >
-                          {Number(net).toLocaleString()}
+                          {Number(net).toLocaleString('en-US')}
                         </p>
                         <p className="text-gray-500">{currency}</p>
                       </div>
@@ -980,7 +981,7 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                 <tr key={l.id}>
                   <td>{l.label}</td>
                   <td>{l.type === 'CREDIT' ? 'استحقاق' : 'خصم'}</td>
-                  <td dir="ltr">{Number(l.amount).toLocaleString()}</td>
+                  <td dir="ltr">{Number(l.amount).toLocaleString('en-US')}</td>
                 </tr>
               ))}
               {lines.length === 0 && (
@@ -992,15 +993,15 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
             <tfoot>
               <tr>
                 <td colSpan={2}>إجمالي الاستحقاقات</td>
-                <td dir="ltr">{totalEntitlements.toLocaleString()}</td>
+                <td dir="ltr">{totalEntitlements.toLocaleString('en-US')}</td>
               </tr>
               <tr>
                 <td colSpan={2}>إجمالي الخصومات</td>
-                <td dir="ltr">{totalDeductions.toLocaleString()}</td>
+                <td dir="ltr">{totalDeductions.toLocaleString('en-US')}</td>
               </tr>
               <tr className="pv-net">
                 <td colSpan={2}>صافي المستحقات</td>
-                <td dir="ltr">{Number(net).toLocaleString()}</td>
+                <td dir="ltr">{Number(net).toLocaleString('en-US')}</td>
               </tr>
             </tfoot>
           </table>

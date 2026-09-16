@@ -1,6 +1,6 @@
 import { Body, Controller, Get, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common'
 import type { JwtPayload } from '../auth/auth.service'
-import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { assertCompanyWideWrite, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { DeactivateLoanCapPolicyDto, LoanCapPolicyDto, LoanCapPreviewQueryDto, LoanRecoveryCollectDto, LoanRecoveryWriteOffDto, LoanRepaymentDto } from './loans.dto'
 import { LoansService } from './loans.service'
 
@@ -25,17 +25,22 @@ export class LoansController {
 
   @Perm('loans.policies')
   @Post('cap-policies')
-  createPolicy(@CurrentUser() user: JwtPayload, @Body() dto: LoanCapPolicyDto) { return this.loans.createPolicy(user, dto) }
+  createPolicy(@CurrentUser() user: JwtPayload, @Body() dto: LoanCapPolicyDto) {
+    assertCompanyWideWrite(user)
+    return this.loans.createPolicy(user, dto)
+  }
 
   @Perm('loans.policies')
   @Post('cap-policies/:id/versions')
   createPolicyVersion(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: LoanCapPolicyDto) {
+    assertCompanyWideWrite(user)
     return this.loans.createPolicyVersion(user, id, dto)
   }
 
   @Perm('loans.policies')
   @Post('cap-policies/:id/deactivate')
   deactivatePolicy(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: DeactivateLoanCapPolicyDto) {
+    assertCompanyWideWrite(user)
     return this.loans.deactivatePolicy(user, id, dto.reason)
   }
 

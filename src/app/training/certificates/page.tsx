@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import EmptyState from '@/components/EmptyState'
 import {
   Search,
   Eye,
@@ -14,6 +15,7 @@ import {
   Filter,
   FileText,
 } from 'lucide-react'
+import { formatDate } from '@/lib/dates'
 
 interface Certificate {
   id: string
@@ -230,6 +232,8 @@ export default function CertificatesPage() {
           </div>
         </div>
 
+        {filteredCertificates.length === 0 && <EmptyState title="لا توجد شهادات مطابقة للبحث أو الفلاتر" />}
+
         {/* Certificates Grid */}
         <div className="grid grid-cols-2 gap-4">
           {filteredCertificates.map((cert) => (
@@ -276,14 +280,14 @@ export default function CertificatesPage() {
                   <div className="p-2 bg-gray-50 rounded-lg">
                     <p className="text-xs text-gray-500">تاريخ الإصدار</p>
                     <p className="text-sm text-gray-800">
-                      {new Date(cert.issueDate).toLocaleDateString('ar-SA')}
+                      {formatDate(cert.issueDate)}
                     </p>
                   </div>
                   <div className="p-2 bg-gray-50 rounded-lg">
                     <p className="text-xs text-gray-500">صالحة حتى</p>
                     <p className="text-sm text-gray-800">
                       {cert.expiryDate
-                        ? new Date(cert.expiryDate).toLocaleDateString('ar-SA')
+                        ? formatDate(cert.expiryDate)
                         : 'غير محددة'}
                     </p>
                   </div>

@@ -80,7 +80,7 @@ const round2 = (value: number) => cents(value) / 100
 const component = (code: string, extra: Record<string, unknown>) => ({ code, nameAr: code, componentType: 'EARNING', stage: 1, sequence: 1, valueSource: 'FORMULA',
   conditionFormula: null, unit: 'CURRENCY', prorationMode: 'NONE', amount: null, fieldPath: null, missingFieldBehavior: null, varCode: null, multiplier: null,
   percent: null, baseCode: null, tierSetCode: null, formula: null, ledgerCategory: null, ledgerDirection: null, ledgerPartialPayment: null, minAmount: null,
-  maxAmount: null, capPctOfBase: null, capBaseCode: null, roundingMode: 'HALF_UP', roundingScale: 2, deductionPriority: null, carryOverEligible: false,
+  maxAmount: null, capPctOfBase: null, capBaseCode: null, roundingMode: 'DOWN', roundingScale: 2, deductionPriority: null, carryOverEligible: false,
   rollupTo: null, exemptible: false, showOnPayslip: true, isActive: true, ...extra })
 
 /** السياسة الافتراضية المقلدة للمسير القديم لفترة كاملة (البنود قبل الصافي). خصومات الحضور تأتي مبالغ فترة من منفذ الأيام. */
@@ -106,7 +106,7 @@ export function legacyEquivalentPayrollDefinition() {
 
 function engineSettings(facts: PayrollPolicyEngineFacts): PayrollPolicySettings {
   return { defaultPeriodType: 'CUSTOM_DAY_RANGE', cycleStartDay: 1, cycleEndMode: 'DERIVED', cycleEndDay: null, baseDaysBasis: 'FIXED_30', monthlyDays: 30,
-    dailyHours: facts.dailyHours, rateBase: 'GROSS', roundingMode: 'HALF_UP', roundingScale: 2, divisionByZeroMode: 'ZERO_WITH_WARNING',
+    dailyHours: facts.dailyHours, rateBase: 'GROSS', roundingMode: 'DOWN', roundingScale: 2, divisionByZeroMode: 'ZERO_WITH_WARNING',
     maxDeductionPctOfGross: null, minNetGuarantee: null, netFloorPct: null, carryOverExcess: false, skipAttendance: false,
     lateDeductionEnabled: facts.lateDeductionEnabled, currency: (['SAR', 'EGP'].includes(facts.currency ?? '') ? facts.currency : 'SAR') as PayrollPolicySettings['currency'] }
 }
@@ -132,13 +132,13 @@ export function computePayrollPolicyEnginePreNet(facts: PayrollPolicyEngineFacts
   const dayRate = gross.divide(d('30')), hourRate = dayRate.divide(d(String(facts.dailyHours))), minuteRate = hourRate.divide(d('60'))
   const salaryRef = `payroll-run-salary:employee:${facts.employeeId}:period:${facts.period}`
   const coverageRef = `payroll-employment-coverage:employee:${facts.employeeId}:${facts.periodStart}:${facts.periodEnd}`
-  // أ2: مقام التناسب هو طول الفترة الفعلي (نفس الحساب القديم)، وسعر اليوم يبقى على أساس 30.
-  const factor = facts.fullCoverage ? d('1') : (() => { const value = new PayrollDecimal(BigInt(facts.coverDays), BigInt(facts.periodDays)); return value.compare(d('1')) > 0 ? d('1') : value })()
+  // قرار المالك (الراتب على 30 يوم): مقام التناسب 30 مهما كان طول الفترة (نفس الحساب القديم)، بسقف الراتب كاملًا.
+  const factor = facts.fullCoverage ? d('1') : (() => { const value = new PayrollDecimal(BigInt(facts.coverDays), 30n); return value.compare(d('1')) > 0 ? d('1') : value })()
   const attendance = facts.attendance.totals
   if (!attendance) unavailable.push({ components: ['LATENESS', 'SHORTFALL', 'ABSENCE', 'OTHER_DEDUCTIONS', 'LOANS', 'NET'], code: `ATTENDANCE_SHADOW_${facts.attendance.status}`, message: facts.attendance.message })
   const credits = facts.credits.reduce((sum, row) => sum + cents(row.amount), 0)
   const variables: Record<string, string | { numerator: string; denominator: string }> = {
-    BASE_SALARY: basic.format(2, 'HALF_UP'), GROSS_SALARY: gross.format(2, 'HALF_UP'), BASE_DAYS_BASIS: '30', STANDARD_DAY_HOURS: String(facts.dailyHours),
+    BASE_SALARY: basic.format(2, 'DOWN'), GROSS_SALARY: gross.format(2, 'DOWN'), BASE_DAYS_BASIS: '30', STANDARD_DAY_HOURS: String(facts.dailyHours),
     DAY_RATE: fraction(dayRate), HOUR_RATE: fraction(hourRate), MINUTE_RATE: fraction(minuteRate), COVERED_DAYS: String(facts.coverDays), PERIOD_DAYS: String(facts.periodDays),
     UNPAID_LEAVE_DAYS: PayrollDecimal.from(facts.unpaidLeaveDays.toFixed(6)).canonical(), OT_AMOUNT: money(facts.overtimeAmount), IS_ATTENDANCE_EXEMPT: '0',
   }

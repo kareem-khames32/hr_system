@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useMemo, useState } from 'react'
+import { useEffect, useMemo, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
@@ -216,15 +216,57 @@ const roleLabels: Record<string, string> = {
   employee: 'موظف',
 }
 
+// المجموعة المفتوحة تُحفظ (تفضيل عرض فقط) — مجموعة واحدة مفتوحة في كل مرة حتى تبقى القائمة قصيرة
+const OPEN_GROUP_KEY = 'hr_sidebar_open_group'
+const readOpenGroup = (): string | null => {
+  try { return localStorage.getItem(OPEN_GROUP_KEY) } catch { return null }
+}
+const saveOpenGroup = (id: string | null) => {
+  try {
+    if (id) localStorage.setItem(OPEN_GROUP_KEY, id)
+    else localStorage.removeItem(OPEN_GROUP_KEY)
+  } catch { /* تخزين غير متاح */ }
+}
+
+// الرابط النشط = أطول رابط في القائمة يطابق المسار أو يسبقه بمقطع كامل
+// (/employees/12/edit ← «قائمة الموظفين»، /payroll/payslip/5 ← «مسير الرواتب»)؛ الرئيسية بالتطابق فقط
+const activeHrefFor = (pathname: string, items: MenuItem[]): string | null => {
+  let best: string | null = null
+  const consider = (href?: string) => {
+    if (!href) return
+    const hit = href === '/' ? pathname === '/' : pathname === href || pathname.startsWith(`${href}/`)
+    if (hit && (!best || href.length > best.length)) best = href
+  }
+  for (const item of items) {
+    consider(item.href)
+    item.children?.forEach((child) => consider(child.href))
+  }
+  if (best) return best
+  // شاشات تُفتح من بوابة الموظف بلا عنصر خاص بها (طلب إجازة، قسيمة راتب): يُميَّز العنصر الذي فُتحت منه
+  const alias = PATH_ALIASES.find(([prefix]) => pathname === prefix || pathname.startsWith(`${prefix}/`))?.[1]
+  return alias && items.some((item) => item.href === alias) ? alias : null
+}
+const PATH_ALIASES: Array<[prefix: string, href: string]> = [
+  ['/leaves/request', '/my/leaves'],
+  ['/payroll/payslip', '/my/payslips'],
+  ['/my/exemptions', '/my/payslips'],
+]
+
 export default function Sidebar() {
-  const pathname = usePathname()
-  const [expandedItems, setExpandedItems] = useState<string[]>(['employees'])
-  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(null)
+  const pathname = usePathname() ?? ''
+  // القائمة تُركَّب بعد التحقق من الجلسة على العميل — قراءة التخزين المحلي هنا آمنة وتمنع وميض قائمة فارغة
+  // المفتوحة = مجموعة الشاشة الحالية من أول رسم (بلا وميض مجموعة مغلقة)، وإلا آخر مجموعة فتحها المستخدم
+  const [openGroup, setOpenGroup] = useState<string | null>(() => {
+    const href = activeHrefFor(pathname, adminMenuDefs)
+    return adminMenuDefs.find((item) => item.children?.some((child) => child.href === href))?.id ?? readOpenGroup()
+  })
+  const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => getCurrentUser())
+  const navRef = useRef<HTMLElement>(null)
   const [inboxError, setInboxError] = useState(false)
   const [inboxRevision, setInboxRevision] = useState(0)
   const [inboxCount, setInboxCount] = useState<number>(0)
 
-  // يُقرأ بعد الـ mount — الجلسة في التخزين المحلي
+  // الإطار ثابت بين الصفحات: الجلسة تُقرأ من جديد وعدّاد الموافقات يتحدث مع كل انتقال
   useEffect(() => {
     const user = getCurrentUser()
     setCurrentUser(user)
@@ -234,7 +276,7 @@ export default function Sidebar() {
         .then((rows) => { setInboxCount(rows.length); setInboxError(false) })
         .catch(() => setInboxError(true))
     }
-  }, [inboxRevision])
+  }, [inboxRevision, pathname])
 
   // القائمة تُبنى من صلاحيات المستخدم الحالي — الفرض الحقيقي في الباك إند
   const menuItems = useMemo<MenuItem[]>(() => {
@@ -300,15 +342,37 @@ export default function Sidebar() {
     return [...portalItems, ...adminItems]
   }, [currentUser, inboxCount, inboxError])
 
-  const toggleExpanded = (id: string) => {
-    setExpandedItems((prev) =>
-      prev.includes(id) ? prev.filter((item) => item !== id) : [...prev, id]
-    )
-  }
+  const activeHref = activeHrefFor(pathname, menuItems)
+  const activeGroup = menuItems.find((item) => item.children?.some((child) => child.href === activeHref))?.id
 
-  const isActive = (href: string) => pathname === href
+  // الانتقال لشاشة في مجموعة أخرى (ولو من رابط خارج القائمة) يفتح مجموعتها؛ التنقل داخل المجموعة لا يغلقها
+  useEffect(() => {
+    if (!activeGroup) return
+    setOpenGroup(activeGroup)
+    saveOpenGroup(activeGroup)
+  }, [activeGroup])
+
+  // العنصر النشط ظاهر داخل القائمة (مجموعات الإدارة أسفل بوابة الموظف): يُمرَّر إليه فقط لو كان خارج المنطقة الظاهرة
+  useEffect(() => {
+    const nav = navRef.current
+    const active = nav?.querySelector<HTMLElement>('[aria-current="page"]')
+    if (!nav || !active) return
+    const navBox = nav.getBoundingClientRect()
+    const box = active.getBoundingClientRect()
+    if (box.top < navBox.top) nav.scrollTop -= navBox.top - box.top + 48
+    else if (box.bottom > navBox.bottom - 8) nav.scrollTop += box.bottom - navBox.bottom + 48
+  }, [activeHref])
+
+  const toggleExpanded = (id: string) => {
+    const next = openGroup === id ? null : id
+    setOpenGroup(next)
+    saveOpenGroup(next)
+  }
+  const isExpanded = (id: string) => openGroup === id
+
+  const isActive = (href: string) => href === activeHref
   const isChildActive = (children?: { href: string }[]) =>
-    children?.some((child) => pathname === child.href)
+    children?.some((child) => child.href === activeHref)
 
   return (
     <aside className="fixed right-0 top-0 h-screen w-72 bg-white border-l border-gray-100 flex flex-col z-50">
@@ -326,13 +390,14 @@ export default function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav className="flex-1 overflow-y-auto p-4 space-y-1">
+      <nav ref={navRef} className="flex-1 overflow-y-auto p-4 space-y-1">
         {inboxError && <div role="alert" className="text-xs text-amber-700 p-2">تعذر تحديث صندوق الموافقات. <button type="button" className="underline" onClick={() => setInboxRevision(value => value + 1)}>إعادة المحاولة</button></div>}
         {menuItems.map((item) => (
           <div key={item.id}>
             {item.href ? (
               <Link
                 href={item.href}
+                aria-current={isActive(item.href) ? 'page' : undefined}
                 className={clsx('sidebar-item', isActive(item.href) && 'active')}
               >
                 {item.icon}
@@ -353,6 +418,8 @@ export default function Sidebar() {
             ) : (
               <>
                 <button
+                  type="button"
+                  aria-expanded={isExpanded(item.id)}
                   onClick={() => toggleExpanded(item.id)}
                   className={clsx(
                     'sidebar-item w-full justify-between',
@@ -367,16 +434,17 @@ export default function Sidebar() {
                     size={18}
                     className={clsx(
                       'transition-transform duration-200',
-                      expandedItems.includes(item.id) && 'rotate-180'
+                      isExpanded(item.id) && 'rotate-180'
                     )}
                   />
                 </button>
-                {expandedItems.includes(item.id) && item.children && (
+                {isExpanded(item.id) && item.children && (
                   <div className="mr-8 mt-1 space-y-1">
                     {item.children.map((child) => (
                       <Link
                         key={child.href}
                         href={child.href}
+                        aria-current={isActive(child.href) ? 'page' : undefined}
                         className={clsx(
                           'block px-4 py-2.5 rounded-xl text-sm transition-all',
                           isActive(child.href)

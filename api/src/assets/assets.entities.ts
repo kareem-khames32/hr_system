@@ -148,6 +148,10 @@ export class Shift {
 
   @Column({ default: true })
   isActive: boolean
+
+  // فرع الوردية: null = كل الشركة؛ وردية الفرع لا تظهر ولا تُسند خارج فرعها (ترحيل 043)
+  @Column({ type: 'int', nullable: true })
+  branchId: number | null
 }
 
 // جدول العمل — نمط قابل للإعداد يتبعه الموظف: أيام نهاية الأسبوع + ساعات الدوام.
@@ -190,6 +194,10 @@ export class WorkSchedule {
 
   @Column({ default: true })
   isActive: boolean
+
+  // فرع الجدول: null = كل الشركة؛ جدول الفرع لا يظهر ولا يُسند خارج فرعه ولا يكون الافتراضي (ترحيل 043)
+  @Column({ type: 'int', nullable: true })
+  branchId: number | null
 }
 
 // أجهزة البصمة المسجلة (Device ↔ الفرع) — سحب مباشر عبر TCP/IP

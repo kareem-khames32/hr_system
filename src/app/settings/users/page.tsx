@@ -169,8 +169,9 @@ export default function UsersPage() {
     lastLoginAt ? lastLoginAt.replace('T', ' ').slice(0, 16) : '-'
 
   const filteredUsers = users.filter((user) => {
+    const term = searchTerm.trim().toLowerCase()
     const matchesSearch =
-      user.displayName.includes(searchTerm) || user.email.includes(searchTerm)
+      !term || user.displayName.toLowerCase().includes(term) || user.email.toLowerCase().includes(term)
     const matchesRole = filterRole === 'all' || user.role === filterRole
     const matchesStatus = filterStatus === 'all' || statusOf(user) === filterStatus
     return matchesSearch && matchesRole && matchesStatus
@@ -439,6 +440,13 @@ export default function UsersPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
+                {filteredUsers.length === 0 && (
+                  <tr>
+                    <td colSpan={6} className="px-4 py-10 text-center text-gray-400">
+                      {users.length === 0 ? 'لا يوجد مستخدمون' : 'لا يوجد مستخدمون مطابقون للبحث أو الفلاتر'}
+                    </td>
+                  </tr>
+                )}
                 {filteredUsers.map((user) => (
                   <tr key={user.id} className="hover:bg-gray-50">
                     <td className="px-4 py-4">

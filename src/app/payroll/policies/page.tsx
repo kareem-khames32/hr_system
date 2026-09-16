@@ -6,6 +6,7 @@ import { ArrowRight, ListOrdered, Plus, RefreshCw } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { PayrollPolicyChargeRulesPanel, PayrollPolicyCreateForm, PayrollPolicyVersionPanel } from '@/components/PayrollPolicySetEditor'
 import { can } from '@/lib/api'
+import { useDefinitionBranches } from '@/components/DefinitionBranchField'
 import { fetchPayrollPolicies, fetchPayrollPolicy, payrollPoliciesError, type PayrollPolicySummary } from '@/lib/payroll-policies-api'
 
 // «معادلات الرواتب»: مدخل واحد لكل مجموعة بالاسم — دورتها وساعات اليوم وحماية الصافي وطريقة الخصم.
@@ -63,10 +64,12 @@ function PayrollPoliciesContent() {
   const versions = [...(selected?.versions ?? [])].sort((a, b) => b.versionNo - a.versionNo)
   const version = versions.find(item => item.status === 'DRAFT') ?? versions.find(item => item.status === 'ACTIVE') ?? versions[0] ?? null
   const canManage = can('payroll.policy.manage')
+  // فرع كل مجموعة (قرار المالك 16 سبتمبر): «كل الشركة» أو اسم الفرع — مجموعة الفرع ماتتستخدمش في مسير فرع تاني
+  const branchInfo = useDefinitionBranches()
   return <div className="space-y-6 pb-8">
-    <div className="flex flex-wrap items-start justify-between gap-4">
-      <div className="flex items-start gap-3"><span className="rounded-2xl p-3 bg-primary-50 text-primary-600"><ListOrdered size={26} /></span><div><h1 className="text-2xl font-bold text-gray-800">معادلات الرواتب</h1><p className="text-gray-500 mt-1">كل مجموعة معادلات تحدد دورة المسير وساعات اليوم وطريقة خصم التأخير والخروج المبكر ونقص الساعات والغياب لموظفيها.</p></div></div>
-      <div className="flex flex-wrap gap-2">
+    <div className="flex flex-wrap md:flex-nowrap items-start justify-between gap-4">
+      <div className="flex items-start gap-3 min-w-0"><span className="rounded-2xl p-3 bg-primary-50 text-primary-600"><ListOrdered size={26} /></span><div><h1 className="text-2xl font-bold text-gray-800">معادلات الرواتب</h1><p className="text-gray-500 mt-1">كل مجموعة معادلات تحدد دورة المسير وساعات اليوم وطريقة خصم التأخير والخروج المبكر ونقص الساعات والغياب لموظفيها.</p></div></div>
+      <div className="flex flex-wrap gap-2 shrink-0">
         {canManage && !creating && <button type="button" className="btn-primary flex gap-2 items-center text-sm" disabled={loading} onClick={() => setCreating(true)}><Plus size={17} />معادلات جديدة</button>}
         <Link href="/payroll" className="btn-secondary flex gap-2 items-center text-sm"><ArrowRight size={17} />مسير الرواتب</Link>
       </div>
@@ -79,8 +82,9 @@ function PayrollPoliciesContent() {
     {policies.length > 0 && <section className="card" aria-label="اختيار معادلات الرواتب">
       <label htmlFor="payroll-policy" className="block text-sm font-medium text-gray-700 mb-2">المعادلات</label>
       <select id="payroll-policy" value={selected?.policy.id ?? ''} disabled={loading} onChange={event => void loadSelection(Number(event.target.value))} className="w-full md:w-1/2 rounded-xl border border-gray-200 p-3 bg-white disabled:bg-gray-50">
-        <option value="" disabled>اختر المعادلات</option>{policies.map(item => <option key={item.policy.id} value={item.policy.id}>{item.policy.name}{item.policy.branchId == null ? ' · عامة' : ''}{!item.policy.isActive ? ' · مؤرشفة' : ''}</option>)}
+        <option value="" disabled>اختر المعادلات</option>{policies.map(item => <option key={item.policy.id} value={item.policy.id}>{item.policy.name} · {branchInfo.label(item.policy.branchId)}{!item.policy.isActive ? ' · مؤرشفة' : ''}</option>)}
       </select>
+      {selected && <p className="text-sm text-gray-500 mt-2">متاحة في: <span className={selected.policy.branchId != null ? 'text-amber-700 font-medium' : 'text-gray-700'}>{branchInfo.label(selected.policy.branchId)}</span>{selected.policy.branchId != null ? ' — مسير فرع تاني مايقدرش يستخدمها' : ''}{!selected.capabilities.canEdit && selected.policy.isActive ? ' · للعرض بس من حسابك' : ''}</p>}
     </section>}
 
     {loading && <div role="status" className="card py-16 text-center text-gray-500">جارٍ التحميل…</div>}

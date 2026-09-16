@@ -170,7 +170,9 @@ export async function lockAttendanceRuleMutation(em: EntityManager, employeeIds?
   await lockPayrollEmployees(em, ids)
 }
 
-export async function assertAttendanceRulePeriodOpen(em: EntityManager, employeeIds: number[], from: string, to = '9999-12-31') {
+// نفس الحاجز يحمي أي تغيير على أيام الموظف داخل مسير معتمد أو مصروف (الإيقاف عن العمل بيمرر رسالته)
+export async function assertAttendanceRulePeriodOpen(em: EntityManager, employeeIds: number[], from: string, to = '9999-12-31',
+  message = 'سريان الدوام أو إسناده يتداخل مع مسير معتمد أو مصروف؛ يلزم تصحيح بتسوية لاحقة') {
   attendanceRuleDate(from)
   for (const employeeId of [...new Set(employeeIds)]) {
     const locked = await em.query(`SELECT TOP (1) r.id FROM dbo.payroll_runs r
@@ -179,7 +181,7 @@ export async function assertAttendanceRulePeriodOpen(em: EntityManager, employee
         OR EXISTS (SELECT 1 FROM dbo.payroll_run_members m WHERE m.runId=r.id AND m.employeeId=@2 AND (m.membershipStatus IS NULL OR m.membershipStatus='INCLUDED')))
       AND ${payrollLineNotReversedSql('r.id', '@2')}`,
     [to, from, employeeId])
-    if (locked.length) throw new ConflictException('سريان الدوام أو إسناده يتداخل مع مسير معتمد أو مصروف؛ يلزم تصحيح بتسوية لاحقة')
+    if (locked.length) throw new ConflictException(message)
   }
 }
 
@@ -296,6 +298,10 @@ export async function saveEmployeeAttendanceRule(em: EntityManager, employee: Em
     if (!Number.isSafeInteger(snapshot.workScheduleId) || snapshot.workScheduleId < 1) throw new BadRequestException('جدول عمل الموظف غير صالح')
     const row = await em.findOneBy(WorkSchedule, { id: snapshot.workScheduleId })
     if (!row) throw new BadRequestException('جدول عمل الموظف غير موجود')
+    // جدول خاص بفرع يتسند لموظفي فرعه بس (قرار المالك 16 سبتمبر) — من شاشة الموظف أو الإسناد الجماعي.
+    // employee.branchId هنا = فرع الموظف بعد الحفظ (تعديل الملف بيحدّثه قبل النداء لو الفرع اتغير في نفس الحفظة)
+    const issue = scheduleBranchIssue(row, employee.branchId)
+    if (issue) throw new BadRequestException(issue)
     const resolved = await resolveAttendanceRule(em, 'WORK_SCHEDULE', row.id, from, row)
     if (resolved.unavailable || !resolved.snapshot.isActive) throw new BadRequestException('جدول العمل غير فعال في تاريخ السريان المختار')
   }
@@ -313,4 +319,43 @@ export async function saveEmployeeAttendanceRule(em: EntityManager, employee: Em
   const latest = await resolveAttendanceRule(em, 'EMPLOYEE', employee.id, '9999-12-31', snapshot)
   employee.workScheduleId = latest.snapshot.workScheduleId as any
   return version
+}
+
+/**
+ * جدول خاص بفرع تاني غير مسموح لموظف الفرع ده؛ جدول كل الشركة (branchId = null) مسموح للكل.
+ * moving = true: نقل من تعديل الملف (الجدول الجديد بيتختار في نفس الحفظة).
+ * moving = 'transfer': طلب نقل — جدول الفرع الجديد مينفعش يتسند قبل النقل، فالحل جدول لكل الشركة الأول.
+ */
+export function scheduleBranchIssue(schedule: { name: string; branchId: number | null } | null, branchId: number | null | undefined,
+  moving: boolean | 'transfer' = false): string | null {
+  if (!schedule || schedule.branchId == null || Number(schedule.branchId) === Number(branchId)) return null
+  if (moving === 'transfer') {
+    return `جدول العمل «${schedule.name}» خاص بفرع تاني؛ حوّل الموظف لجدول لكل الشركة الأول (ساري من تاريخ النقل أو قبله)، وبعد تنفيذ النقل اختار له جدول الفرع الجديد`
+  }
+  return moving
+    ? `جدول العمل «${schedule.name}» خاص بفرع تاني؛ اختار جدول للفرع الجديد أو جدول لكل الشركة قبل نقل الموظف`
+    : `جدول العمل «${schedule.name}» خاص بفرع تاني؛ اختار جدول لفرع الموظف أو جدول لكل الشركة`
+}
+
+/**
+ * نقل الموظف لفرع تاني (تعديل الملف أو طلب نقل منفّذ): جدوله الساري من تاريخ النقل، وأي جدول مؤرخ بعده،
+ * لازم يكون جدول للفرع الجديد أو لكل الشركة — وإلا يترفض النقل برسالة تطلب اختيار جدول مناسب.
+ */
+export async function assertEmployeeSchedulesFitBranch(em: EntityManager, employee: Pick<Employee, 'id' | 'workScheduleId'>, branchId: number, from: string,
+  via: 'profile' | 'transfer' = 'profile') {
+  attendanceRuleDate(from)
+  const versions = await em.find(AttendanceRuleVersion, { where: { sourceType: 'EMPLOYEE', sourceId: employee.id } })
+  const ids = new Set<number>()
+  const active = pickAttendanceRule<EmployeeAttendanceRuleSnapshot>(versions, from, employeeAttendanceFallback(employee)).snapshot.workScheduleId
+  if (active != null) ids.add(Number(active))
+  for (const version of versions) {
+    const later = (version.snapshot as EmployeeAttendanceRuleSnapshot | null)?.workScheduleId
+    if (version.effectiveFrom && version.effectiveFrom > from && later != null) ids.add(Number(later))
+  }
+  if (!ids.size) return
+  const schedules = await em.find(WorkSchedule, { where: { id: In([...ids]) }, order: { id: 'ASC' } })
+  for (const schedule of schedules) {
+    const issue = scheduleBranchIssue(schedule, branchId, via === 'transfer' ? 'transfer' : true)
+    if (issue) throw new BadRequestException(issue)
+  }
 }

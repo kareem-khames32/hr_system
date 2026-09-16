@@ -1,4 +1,5 @@
-@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&family=Tajawal:wght@300;400;500;700&display=swap');
+/* خط واحد للنظام كله (العربي واللاتيني والأرقام): Tajawal — كان Inter أول الخطوط فتظهر الأرقام والحروف اللاتينية بخط مختلف عن العربي */
+@import url('https://fonts.googleapis.com/css2?family=Tajawal:wght@300;400;500;700;800&display=swap');
 
 @tailwind base;
 @tailwind components;
@@ -22,14 +23,21 @@ body {
   overflow-x: hidden;
 }
 
+html,
 body {
-  font-family: 'Inter', 'Tajawal', system-ui, sans-serif;
+  font-family: 'Tajawal', system-ui, sans-serif;
+}
+
+body {
   background: rgb(var(--background-start-rgb));
 }
 
-/* RTL Support */
-[dir="rtl"] {
-  font-family: 'Tajawal', 'Inter', system-ui, sans-serif;
+/* الحقول والأزرار ترث خط الصفحة */
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
 }
 
 /* Custom Scrollbar */
@@ -135,4 +143,20 @@ body {
   .table-cell {
     @apply px-4 py-4 text-sm text-gray-700;
   }
+}
+
+/* ===== الأرقام: نظام واحد ومحاذاة واحدة =====
+   font-mono كان يعرض الأرقام (مبالغ، أوقات، أكواد) بخط برمجي مختلف عن باقي الشاشة؛
+   صار بنفس خط النظام بأرقام متساوية العرض حتى تبقى الأعمدة الرقمية مصطفّة */
+.font-mono {
+  font-family: inherit;
+  font-variant-numeric: tabular-nums;
+}
+
+table,
+input[type='number'],
+input[type='date'],
+input[type='time'],
+input[type='month'] {
+  font-variant-numeric: tabular-nums;
 }

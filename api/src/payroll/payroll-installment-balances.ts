@@ -46,8 +46,8 @@ export async function readLoanInstallmentPositions(em: EntityManager, employeeId
         (financialStatus === 'PARTIAL' && paidAmount.isZero()) ||
         !/^\d{4}-\d{2}-\d{2}$/.test(row.dueDate) || (row.originalDueDate && row.originalDueDate > row.dueDate)) throw invalid()
     return { id: row.id, loanId: row.loanId, employeeId: row.employeeId, dueDate: row.dueDate,
-      originalDueDate: row.originalDueDate ?? row.dueDate, amount: amount.format(2, 'HALF_UP'), paidAmount: paidAmount.format(2, 'HALF_UP'),
-      remainingAmount: financialStatus === 'DUE' ? amount.format(2, 'HALF_UP') : '0.00', financialStatus,
+      originalDueDate: row.originalDueDate ?? row.dueDate, amount: amount.format(2, 'DOWN'), paidAmount: paidAmount.format(2, 'DOWN'),
+      remainingAmount: financialStatus === 'DUE' ? amount.format(2, 'DOWN') : '0.00', financialStatus,
       financialRevision: revision, paid: Boolean(row.paid), parentInstallmentId: row.parentInstallmentId ?? null, paidAt: row.paidAt ?? null }
   })
   const byId = new Map(result.map(row => [row.id, row])), children = new Map<number, LoanInstallmentPosition[]>()

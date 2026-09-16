@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { History, ChevronDown, ChevronUp } from 'lucide-react'
 import { apiFetch } from '@/lib/api'
 import { requestStatusLabels } from '@/lib/status-labels'
+import { DISPLAY_LOCALE } from '@/lib/dates'
 
 interface Decision {
   id: number; requestId: number; step: number; action: string; comment: string | null
@@ -46,7 +47,7 @@ export default function MyApprovalDecisions({ onOpen, revision }: { onOpen: (id:
         </tr></thead><tbody className="divide-y divide-gray-100">{data.items.map(item => <tr key={item.id}>
           <td className="p-3"><button type="button" onClick={() => onOpen(item.requestId)} className="font-medium text-primary-600 hover:underline">{item.requestTitle}<span dir="ltr" className="block text-xs">REQ-{item.requestId}</span></button></td>
           <td className="p-3 whitespace-nowrap">{labels[item.action] || 'قرار مسجل'}</td>
-          <td className="p-3 whitespace-nowrap">{new Date(item.actedAt).toLocaleString('ar-EG')}</td>
+          <td className="p-3 whitespace-nowrap">{new Date(item.actedAt).toLocaleString(DISPLAY_LOCALE)}</td>
           <td className="p-3 min-w-48 max-w-md whitespace-pre-wrap break-words">{item.comment || '—'}</td>
           <td className="p-3">{requestStatusLabels[item.requestStatus as keyof typeof requestStatusLabels] || 'حالة مسجلة'}</td>
         </tr>)}</tbody></table></div>}

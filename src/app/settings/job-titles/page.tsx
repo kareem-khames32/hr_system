@@ -15,6 +15,7 @@ import {
   Award,
 } from 'lucide-react'
 import { createCatalogItem, fetchCatalog, updateCatalogItem } from '@/lib/api'
+import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 
 interface JobTitle {
   id: number
@@ -40,6 +41,8 @@ export default function JobTitlesPage() {
   const [editingJob, setEditingJob] = useState<JobTitle | null>(null)
   const [activeMenu, setActiveMenu] = useState<number | null>(null)
   const [formData, setFormData] = useState({ ...emptyForm })
+  // المسميات لكل الشركة: حساب الفرع يشوفها بس
+  const { canWrite, readOnly } = useCompanyWideWrite()
 
   const loadData = async () => {
     try {
@@ -140,14 +143,18 @@ export default function JobTitlesPage() {
             <h1 className="text-2xl font-bold text-gray-800">المسميات الوظيفية</h1>
             <p className="text-gray-500 mt-1">إدارة المسميات والوظائف في الشركة</p>
           </div>
-          <button
-            onClick={() => handleOpenModal()}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Plus size={20} />
-            إضافة مسمى وظيفي
-          </button>
+          {canWrite && (
+            <button
+              onClick={() => handleOpenModal()}
+              className="btn-primary flex items-center gap-2"
+            >
+              <Plus size={20} />
+              إضافة مسمى وظيفي
+            </button>
+          )}
         </div>
+
+        {readOnly && <CompanyWideReadOnlyNote />}
 
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
@@ -245,9 +252,11 @@ export default function JobTitlesPage() {
                   <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
                     الحالة
                   </th>
-                  <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
-                    إجراءات
-                  </th>
+                  {canWrite && (
+                    <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
+                      إجراءات
+                    </th>
+                  )}
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
@@ -280,7 +289,7 @@ export default function JobTitlesPage() {
                         {job.isActive ? 'مفعّل' : 'معطّل'}
                       </span>
                     </td>
-                    <td className="py-4 px-6">
+                    {canWrite && <td className="py-4 px-6">
                       <div className="relative">
                         <button
                           onClick={() =>
@@ -328,7 +337,7 @@ export default function JobTitlesPage() {
                           </>
                         )}
                       </div>
-                    </td>
+                    </td>}
                   </tr>
                 ))}
               </tbody>
@@ -340,14 +349,14 @@ export default function JobTitlesPage() {
                 <h3 className="text-lg font-bold text-gray-800 mb-2">
                   لا توجد مسميات وظيفية
                 </h3>
-                <p className="text-gray-500">أضف أول مسمى وظيفي من الزر أعلاه</p>
+                {canWrite && <p className="text-gray-500">أضف أول مسمى وظيفي من الزر أعلاه</p>}
               </div>
             )}
           </div>
         )}
 
         {/* Modal */}
-        {showModal && (
+        {showModal && canWrite && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b border-gray-100">

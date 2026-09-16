@@ -60,7 +60,7 @@ export async function readPayrollLiveOvertime(em: EntityManager, employeeId: num
       if (!Number.isSafeInteger(minutes)) issue('INVALID', 'OT_MINUTES_TOTAL_INVALID', 'إجمالي دقائق الإضافي يتجاوز الحد الآمن')
     }
     if (state !== 'AVAILABLE') for (const row of result) { row.eligible = false; if (!row.reasons.includes('SECTION_UNRESOLVED')) row.reasons.push('SECTION_UNRESOLVED') }
-    return { state, data: { periodStart, periodEnd, rows: result, totals: state === 'AVAILABLE' ? { eligibleAmount: total.format(2, 'HALF_UP'), eligibleApprovedMinutes: minutes } : null, readOnly: true }, issues, sourceRefs: [...refs].sort() }
+    return { state, data: { periodStart, periodEnd, rows: result, totals: state === 'AVAILABLE' ? { eligibleAmount: total.format(2, 'DOWN'), eligibleApprovedMinutes: minutes } : null, readOnly: true }, issues, sourceRefs: [...refs].sort() }
   }
   if (!id(employeeId) || !validDate(periodStart) || !validDate(periodEnd) || periodStart > periodEnd) {
     issue('INVALID', 'OT_PERIOD_INVALID', 'الموظف أو فترة قراءة الإضافي غير صالحين'); return finish()

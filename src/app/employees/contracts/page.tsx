@@ -303,7 +303,7 @@ export default function ContractsPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-900">إدارة العقود</h1>
+            <h1 className="text-2xl font-bold text-gray-800">إدارة العقود</h1>
             <p className="text-gray-600 mt-1">
               متابعة عقود الموظفين وتجديدها من واقع ملفات الموظفين
             </p>

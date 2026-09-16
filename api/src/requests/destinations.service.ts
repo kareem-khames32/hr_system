@@ -56,6 +56,8 @@ import { startCustodyTransfer } from './custody-execution'
 import { executeSalaryChangeRequest } from './salary-change-requests'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 import { appendEmployeeOrgCalendar } from '../attendance/attendance-calendar-history'
+import { assertEmployeeSchedulesFitBranch } from '../attendance/attendance-rule-history'
+import { assertLeaveOutsideSuspension } from '../employees/employee-suspension-overlap'
 import { DATA_PLACEHOLDER_REJECTED, isDataPlaceholder } from '../common/data-placeholders'
 
 // ناتج تنفيذ الوجهة: المرجع الدائم + هل اكتمل فوراً أم ينتظر (سريان/تأكيد استلام)
@@ -86,6 +88,23 @@ export const RECORD_UPDATE_FIELDS: Record<string, Record<string, keyof Employee>
     relation: 'emergencyRelation',
     phoneAlt: 'emergencyPhoneAlt',
   },
+}
+
+// قيمة حقل «تحديث البيانات»: نص/رقم بعد القص، والنص الفارغ أو غير النصي = null (لا تغيير)
+export const recordValue = (raw: unknown): string | null => {
+  if (typeof raw !== 'string' && typeof raw !== 'number') return null
+  const value = String(raw).trim()
+  return value === '' ? null : value
+}
+
+// مبلغ قيد الدفتر من طلب مالي: رقم موجب (يُقرَّب لقرشين) وضمن decimal(18,2) — وإلا رفض صريح
+export const obligationAmount = (raw: unknown): number => {
+  const text = typeof raw === 'number' ? String(raw) : typeof raw === 'string' ? raw.trim() : ''
+  const amount = text !== '' && Number.isFinite(Number(text)) ? Math.trunc(Number((Number(text) * 100).toFixed(6))) / 100 : NaN
+  if (!(amount > 0) || amount > 999_999_999) {
+    throw new BadRequestException('المبلغ مطلوب رقمًا موجبًا (حتى 999,999,999) — أرجع الطلب لتصحيح المبلغ')
+  }
+  return amount
 }
 
 // وجهات «الطلب نفسه هو السجل» يقرؤها محرك الحضور بكود النوع (الاستئذان والعمل عن
@@ -280,6 +299,8 @@ export class DestinationsService {
           'بيانات الإجازة غير صالحة (التواريخ أو عدد الأيام) — ارفض الطلب واطلب تقديمه من جديد'
         )
       }
+      // إيقاف عن العمل اتسجل بعد تقديم الطلب على نفس الأيام: الاعتماد يترفض قبل كتابة الإجازة أو خصم الرصيد
+      await assertLeaveOutsideSuspension(em, req.requesterId, String(payload.fromDate), String(payload.toDate))
       const leave = await em.getRepository(Leave).save({
         requestId: req.id,
         employeeId: req.requesterId,
@@ -394,11 +415,21 @@ export class DestinationsService {
         : type === 'OUT'
           ? { in: null, out: time || null }
           : { in: payload.in ?? null, out: payload.out ?? null } // توافق قديم
+    // تصحيح بلا يوم صالح أو بلا وقت HH:MM كان يُحفظ ويكتمل الطلب بلا أي أثر على اليوم
+    // (محرك الحضور يتجاهل التالف) — يُرفض ليبقى في الصندوق للإرجاع
+    const hhmm = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
+    if (!isValidYmd(String(payload.date ?? '')) || String(payload.date) > localDateOf(new Date())) {
+      throw new BadRequestException('تاريخ البصمة المطلوب تصحيحها غير صالح أو في المستقبل')
+    }
+    if (![corrected.in, corrected.out].some(value => value != null) ||
+      [corrected.in, corrected.out].some(value => value != null && !hhmm.test(String(value)))) {
+      throw new BadRequestException('نوع البصمة (حضور/انصراف) ووقتها بصيغة HH:MM مطلوبان')
+    }
     const row = await em.getRepository(AttendanceCorrection).save({
       requestId: req.id,
       employeeId: req.requesterId,
       date: String(payload.date),
-      reason: String(payload.reason ?? ''),
+      reason: String(payload.reason ?? '').slice(0, 500),
       correctedPunch: JSON.stringify(corrected),
     })
     return { ref: refOf('AC', row.id), completed: true }
@@ -481,9 +512,12 @@ export class DestinationsService {
   // ========== الحالة الوظيفية ==========
 
   private transferHandler: Handler = async (em, req, _t, payload) => {
-    const { emp } = await validateTransfer(em, req, payload, true)
+    const { emp, department } = await validateTransfer(em, req, payload, true)
     const effectiveDate = String(payload.effectiveDate)
     const today = localDateOf(new Date())
+    // نقل لفرع تاني وجدول الموظف خاص بفرعه القديم: يترفض من الاعتماد بدل ما يفشل التنفيذ المجدول بعدين
+    // الرسالة بتاعة طلب النقل: جدول لكل الشركة الأول، وجدول الفرع الجديد بعد التنفيذ (قبله بيترفض)
+    if (emp.branchId !== department.branchId) await assertEmployeeSchedulesFitBranch(em, emp, department.branchId, effectiveDate, 'transfer')
     const transfer = await em.getRepository(Transfer).save({
       requestId: req.id,
       employeeId: emp.id,
@@ -525,6 +559,8 @@ export class DestinationsService {
     const changes = { teamId: team.id, departmentId: department.id, branchId: department.branchId, managerEmployeeId: managerId as any }
     let calendarActor: number | null = null
     if (emp.branchId !== department.branchId) {
+      // جدول خاص بفرع يتسند لموظفي فرعه بس: الموظف مايتنقلش لفرع تاني وهو على جدول فرعه القديم
+      await assertEmployeeSchedulesFitBranch(em, emp, department.branchId, transfer.effectiveDate, 'transfer')
       const decisions = em.getRepository(RequestApproval)
       const decision = original && await decisions.findOne({ where: { requestId: original.id, action: 'APPROVED' }, order: { id: 'DESC' } })
       const returned = original && await decisions.findOne({ where: { requestId: original.id, action: 'RETURNED_FOR_INFO' }, order: { id: 'DESC' } })
@@ -593,9 +629,15 @@ export class DestinationsService {
       if (!emp) throw new BadRequestException('الموظف المطلوب تحديث بياناته غير موجود')
       const changes: { fieldName: string; oldValue: unknown; newValue: unknown }[] = []
       for (const [key, col] of Object.entries(fields)) {
-        if (payload[key] !== undefined && payload[key] !== (emp as any)[col]) {
-          changes.push({ fieldName: col, oldValue: (emp as any)[col], newValue: payload[key] })
-          ;(emp as any)[col] = payload[key]
+        // الشاشة ترسل كل حقول النموذج، والحقل الذي تركه الموظف فارغًا يصل ''. النص الفارغ = «لم يُطلب
+        // تغييره» — كان يمسح العنوان/الهاتف المحفوظ بصمت عند الاعتماد. المسح الصريح (REQ-10) بقيمة null فقط
+        const raw = payload[key]
+        if (raw === undefined) continue
+        const next = raw === null ? null : recordValue(raw)
+        if (raw !== null && next === null) continue
+        if ((next ?? null) !== ((emp as any)[col] ?? null)) {
+          changes.push({ fieldName: col, oldValue: (emp as any)[col], newValue: next })
+          ;(emp as any)[col] = next
         }
       }
       if (!changes.length) throw new BadRequestException('لم تتغير أي بيانات في الطلب')
@@ -612,7 +654,7 @@ export class DestinationsService {
     const emp = await em.getRepository(Employee).findOne({
       where: { id: req.requesterId },
     })
-    if (!emp) return { ref: refOf('BNK', req.id), completed: true }
+    if (!emp) throw new BadRequestException('الموظف المطلوب تغيير حسابه البنكي غير موجود')
     // نفس regex الـDTO — ويُتحقق منه عند التقديم أيضاً (SEC-EMP-2)
     const iban = assertIban(payload.iban)
     const old = emp.iban
@@ -633,7 +675,7 @@ export class DestinationsService {
     const emp = await em.getRepository(Employee).findOne({
       where: { id: req.requesterId },
     })
-    if (!emp) return { ref: refOf('ST', req.id), completed: true }
+    if (!emp) throw new BadRequestException('الموظف المطلوب تغيير حالته غير موجود')
     const ending = type.code === 'RESIGNATION' || type.code === 'RETIREMENT'
     const lastWorkingDay = String(payload.lastWorkingDate ?? payload.effectiveDate ?? '')
     if (ending) {
@@ -711,13 +753,8 @@ export class DestinationsService {
       : payload.assetId
         ? [Number(payload.assetId)]
         : []
-    if (ids.length === 0) {
-      return {
-        ref: refOf('CU', req.id),
-        completed: true,
-        note: 'لم تُحدد أصول — راجع الطلب',
-      }
-    }
+    // طلب عهدة بلا أصول كان يكتمل «مكتمل» بلا أي إسناد (REQ-3)
+    if (ids.length === 0) throw new BadRequestException('لم تُحدد أصول في طلب العهدة — أرجعه لاختيار الأصول')
     let firstId = 0
     for (const assetId of ids) {
       const asset = await em.getRepository(Asset).findOne({
@@ -815,29 +852,29 @@ export class DestinationsService {
   private obligationHandler =
     (defaultType: ObligationType, category: string, labelPrefix: string): Handler =>
     async (em, req, _t, payload) => {
-      const amount = Number(payload.amount ?? 0)
+      // صرف المصروفات/البدل هو أثر الطلب الوحيد: مبلغ غير موجب أو غير رقمي كان يكتمل «سجل عام»
+      // بلا قيد (المعتمد يظن أنه صرف) — يُرفض ليبقى الطلب في الصندوق للإرجاع أو الرفض (REQ-3)
+      const amount = obligationAmount(payload.amount)
       // SEC ٤-أ بند 6 / الخطوة 25: نوع القيد من تعريف الوجهة فقط — payload.type من العميل
       // كان يحوّل مكافأة/بدل/مصروفات معتمدة إلى خصم DEBIT؛ الخصم يمر من الخصومات المصنفة
       const type: ObligationType = defaultType
-      if (amount > 0) {
-        await em.getRepository(EmployeeObligation).save({
-          employeeId: req.requesterId,
-          type,
-          category,
-          amount: Math.round(amount * 100) / 100,
-          label: `${labelPrefix}${payload.reason || payload.description ? ': ' + (payload.reason ?? payload.description) : ''}`,
-          status: 'PENDING',
-          sourceRequestId: req.id,
-          effectiveDate: payload.effectiveDate ?? null,
-        })
-      }
+      const text = String(payload.reason || payload.description || '').trim()
+      const effectiveDate = typeof payload.effectiveDate === 'string' && isValidYmd(payload.effectiveDate) ? payload.effectiveDate : null
+      await em.getRepository(EmployeeObligation).save({
+        employeeId: req.requesterId,
+        type,
+        category,
+        amount,
+        // عمود البيان 300 حرف — الوصف الطويل كان يُسقط الاعتماد بخطأ داخلي
+        label: `${labelPrefix}${text ? ': ' + text : ''}`.slice(0, 300),
+        status: 'PENDING',
+        sourceRequestId: req.id,
+        effectiveDate: effectiveDate as string,
+      })
       return {
         ref: refOf('REQ', req.id),
         completed: true,
-        note:
-          amount > 0
-            ? `${type === 'DEBIT' ? 'خصم' : 'إضافة'} ${amount} في دفتر المديونيات`
-            : 'بلا مبلغ — سجل عام',
+        note: `${type === 'DEBIT' ? 'خصم' : 'إضافة'} ${amount} في دفتر المديونيات`,
       }
     }
 
@@ -875,32 +912,32 @@ export class DestinationsService {
   // بلاغ فقد/تلف العهدة المعتمد: يعلّم الإسناد LOST، يقاعِد الأصل، ويقيّد قيمته
   // كمديونية DEBIT على حائز العهدة يستهلكها المسير
   private custodyFinanceHandler: Handler = async (em, req, _t, payload) => {
+    // البلاغ عن عهدة صاحب الطلب النشطة فقط، ومرة واحدة: بلا هذا كان بلاغ على إسناد موظف آخر
+    // يقيّد قيمة الأصل عليه، والبلاغ على عهدة مُرجَعة أو مبلَّغ عنها يقيّد مديونية ثانية
+    // والأصل في المخزن، والإسناد غير المحدد يكتمل «بلا أثر» (REQ-3)
     const assignmentId = Number(payload.assignmentId)
-    const row = assignmentId
-      ? await em.getRepository(CustodyAssignment).findOne({ where: { id: assignmentId } })
-      : null
-    if (!row) {
-      return {
-        ref: refOf('REQ', req.id),
-        completed: true,
-        note: 'إسناد العهدة غير محدد',
-      }
+    if (!Number.isSafeInteger(assignmentId) || assignmentId <= 0) throw new BadRequestException('إسناد العهدة المبلَّغ عنها مطلوب')
+    const found = await em.getRepository(CustodyAssignment).findOneBy({ id: assignmentId, employeeId: req.requesterId })
+    if (!found) throw new BadRequestException('إسناد العهدة غير موجود أو ليس باسم صاحب البلاغ')
+    const asset = await em.getRepository(Asset).findOne({ where: { id: found.assetId }, lock: { mode: 'pessimistic_write' } })
+    const row = await em.getRepository(CustodyAssignment).findOneBy({ id: assignmentId, employeeId: req.requesterId })
+    if (!row || !['ACTIVE', 'RETURN_REQUESTED'].includes(row.status)) {
+      throw new BadRequestException('العهدة ليست بحوزة الموظف حاليًا (مُرجَعة أو مبلَّغ عنها من قبل أو لم يؤكَّد استلامها) — لا يُقيَّد فقدها')
     }
-    const asset = await em.getRepository(Asset).findOne({ where: { id: row.assetId } })
-    if (
-      ['PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'ACTIVE', 'RETURN_REQUESTED'].includes(
-        row.status
-      )
-    ) {
-      row.status = 'LOST'
-      row.returnedAt = new Date()
-      row.condition = String(payload.description ?? 'مفقودة')
-      await em.getRepository(CustodyAssignment).save(row)
-      await em
-        .getRepository(Asset)
-        .update({ id: row.assetId }, { currentHolderId: null as any, status: 'RETIRED' })
+    if (!asset || asset.status === 'RETIRED' || (asset.currentHolderId && asset.currentHolderId !== row.employeeId)) {
+      throw new BadRequestException('حالة الأصل لا تطابق العهدة المبلَّغ عنها — راجع المخزون')
     }
-    const val = Number(asset?.value ?? 0)
+    const pending = await em.getRepository(CustodyAssignment).count({ where: { assetId: row.assetId, id: Not(row.id), status: In(['ACTIVE', 'PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'RETURN_REQUESTED']) } })
+    if (pending) throw new BadRequestException('للأصل نقل أو إسناد آخر مفتوح — ألغِ النقل أو أكمله قبل بلاغ الفقد')
+    row.status = 'LOST'
+    row.returnedAt = new Date()
+    // عمود الحالة 100 حرف — الوصف الطويل كان يُسقط الاعتماد بخطأ داخلي
+    row.condition = String(payload.description ?? 'مفقودة').trim().slice(0, 100) || 'مفقودة'
+    await em.getRepository(CustodyAssignment).save(row)
+    await em
+      .getRepository(Asset)
+      .update({ id: row.assetId }, { currentHolderId: null as any, status: 'RETIRED' })
+    const val = Number(asset.value ?? 0)
     if (val > 0) {
       await em.getRepository(EmployeeObligation).save({
         employeeId: row.employeeId,

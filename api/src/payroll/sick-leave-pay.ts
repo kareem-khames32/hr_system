@@ -116,9 +116,9 @@ export function sickLeaveDeduction(days: readonly SickLeaveDay[], grossCents: nu
     bucket.equivalent = bucket.equivalent.add(share)
     byPercent.set(day.payPercent, bucket)
   }
-  const amount = Number(equivalent.multiply(dayRate).format(2, 'HALF_UP'))
+  const amount = Number(equivalent.multiply(dayRate).format(2, 'DOWN'))
   const lines = [...byPercent.entries()].sort((a, b) => b[0] - a[0]).map(([payPercent, bucket]) => ({ payPercent, days: bucket.days,
-    amount: Number(bucket.equivalent.multiply(dayRate).format(2, 'HALF_UP')), label: sickLeaveDeductionLabel(payPercent) }))
+    amount: Number(bucket.equivalent.multiply(dayRate).format(2, 'DOWN')), label: sickLeaveDeductionLabel(payPercent) }))
   if (lines.length) {
     const residualCents = Math.round(amount * 100) - lines.reduce((sum, line) => sum + Math.round(line.amount * 100), 0)
     lines[lines.length - 1].amount = (Math.round(lines[lines.length - 1].amount * 100) + residualCents) / 100

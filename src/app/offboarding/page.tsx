@@ -203,7 +203,7 @@ export default function OffboardingPage() {
                       <div className="flex items-center gap-2 flex-wrap">
                         {c.settlementNet != null && (
                           <span className="badge text-xs bg-success-50 text-success-700">
-                            الصافي: {Number(c.settlementNet).toLocaleString()} {currency}
+                            الصافي: {Number(c.settlementNet).toLocaleString('en-US')} {currency}
                           </span>
                         )}
                         {c.settlementDocRef && (

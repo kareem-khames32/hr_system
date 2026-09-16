@@ -380,7 +380,7 @@ function execute(definition: unknown, settings: PayrollPolicySettings, explicitI
       if ((component.valueSource === 'TIERED' || component.valueSource === 'LEDGER') && amount.round(scale, mode).compare(amount) !== 0) fail('COMPONENT_SOURCE_ROUNDING_CONFLICT', 'تقريب البند سيغير مجموع المصدر التفصيلي؛ وحّد دقة التقريب أو حدود البند', path)
       finish(amount)
     }
-    const total = (value: PayrollDecimal) => ({ amount: value.format(totalScale, 'HALF_UP'), amountExact: fraction(value) })
+    const total = (value: PayrollDecimal) => ({ amount: value.format(totalScale, 'DOWN'), amountExact: fraction(value) })
     return freeze({ engineVersion: PAYROLL_COMPONENT_EXECUTION_VERSION, source: 'EXPLICIT_UNVERIFIED' as const, preCapsOnly: true as const,
       ...(withSources ? { sourceExecutionVersion: PAYROLL_COMPONENT_SOURCES_VERSION } : {}),
       components, totalsPreCaps: { earnings: total(earnings), deductions: total(deductions), balanceBeforeCaps: total(earnings.subtract(deductions)) },

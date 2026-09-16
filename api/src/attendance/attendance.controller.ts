@@ -12,14 +12,17 @@ import {
   UseGuards,
 } from '@nestjs/common'
 import {
+  ArrayMaxSize,
   ArrayNotEmpty,
   IsArray,
   IsBoolean,
+  IsIn,
   IsInt,
   IsNotEmpty,
   IsOptional,
   IsString,
   Matches,
+  Max,
   MaxLength,
   Min,
   ValidateIf,
@@ -185,6 +188,67 @@ class DayOverridesBulkDto {
   clear?: boolean
 }
 
+// إسناد وردية لمدة (شهر أو أي مدى) لمجموعة موظفين مرة واحدة — التحقق التقويمي
+// وسريان الوردية في كل يوم ونطاق الفرع في الخدمة
+class ScheduleRangeDto {
+  @IsArray({ message: 'الموظفون (employeeIds) قائمة أرقام' })
+  @ArrayNotEmpty({ message: 'اختر موظف واحد على الأقل' })
+  @ArrayMaxSize(500, { message: 'الدفعة الواحدة لا تزيد عن 500 موظف' })
+  @Type(() => Number)
+  @IsInt({ each: true, message: 'الموظفون (employeeIds) أرقام صحيحة' })
+  @Min(1, { each: true, message: 'الموظفون (employeeIds) أرقام صحيحة' })
+  employeeIds: number[]
+
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'من تاريخ (from) بصيغة YYYY-MM-DD' })
+  from: string
+
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'إلى تاريخ (to) بصيغة YYYY-MM-DD' })
+  to: string
+
+  // أيام الأسبوع (0 = الأحد … 6 = السبت) — فاضية = كل أيام المدة
+  @IsOptional()
+  @IsArray({ message: 'أيام الأسبوع (weekdays) قائمة أرقام' })
+  @Type(() => Number)
+  @IsInt({ each: true, message: 'أيام الأسبوع أرقام من 0 إلى 6' })
+  @Min(0, { each: true, message: 'أيام الأسبوع أرقام من 0 إلى 6' })
+  @Max(6, { each: true, message: 'أيام الأسبوع أرقام من 0 إلى 6' })
+  weekdays?: number[]
+
+  @Type(() => Number)
+  @IsInt({ message: 'الوردية (shiftId) مطلوبة — رقم صحيح' })
+  @Min(1, { message: 'الوردية (shiftId) مطلوبة — رقم صحيح' })
+  shiftId: number
+
+  // true = الأيام الخاصة المسجلة جوه المدة تفضل زي ما هي
+  @IsOptional()
+  @IsBoolean({ message: 'keepDayOverrides قيمة منطقية (true/false)' })
+  keepDayOverrides?: boolean
+}
+
+// فترة فتح/قفل الإضافي — كان جسمًا بنوع مضمَّن بلا تحقق
+class OvertimePeriodDto {
+  @IsString({ message: 'اسم الفترة مطلوب' })
+  @IsNotEmpty({ message: 'اسم الفترة مطلوب' })
+  @MaxLength(200, { message: 'اسم الفترة لا يتجاوز 200 حرف' })
+  name: string
+
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'من تاريخ بصيغة YYYY-MM-DD' })
+  fromDate: string
+
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'إلى تاريخ بصيغة YYYY-MM-DD' })
+  toDate: string
+
+  @IsIn(['OPEN', 'CLOSED'], { message: 'الأثر: OPEN أو CLOSED' })
+  effect: 'OPEN' | 'CLOSED'
+
+  // فاضي/null = كل الفروع
+  @IsOptional()
+  @Type(() => Number)
+  @IsInt({ message: 'الفرع (branchId) رقم صحيح' })
+  @Min(1, { message: 'الفرع (branchId) رقم صحيح' })
+  branchId?: number | null
+}
+
 class ConfirmOvertimeDto {
   @IsBoolean()
   approve: boolean
@@ -301,6 +365,14 @@ export class AttendanceController {
     return this.service.setDayOverridesBulk(dto, user)
   }
 
+  // إسناد وردية لمدة (من تاريخ لتاريخ، واختياريًا أيام أسبوع بعينها) لمجموعة موظفين
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.manage')
+  @Post('schedule/range')
+  assignScheduleRange(@Body() dto: ScheduleRangeDto, @CurrentUser() user: JwtPayload) {
+    return this.service.assignScheduleRange(dto, user)
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.view_all')
   @Get('schedule/day-overrides')
@@ -370,24 +442,15 @@ export class AttendanceController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Get('overtime-periods')
-  listOvertimePeriods() {
-    return this.service.listOvertimePeriods()
+  listOvertimePeriods(@CurrentUser() user: JwtPayload) {
+    return this.service.listOvertimePeriods(user)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Post('overtime-periods')
-  createOvertimePeriod(
-    @Body()
-    dto: {
-      name: string
-      fromDate: string
-      toDate: string
-      effect: string
-      branchId?: number | null
-    }
-  ) {
-    return this.service.createOvertimePeriod(dto)
+  createOvertimePeriod(@Body() dto: OvertimePeriodDto, @CurrentUser() user: JwtPayload) {
+    return this.service.createOvertimePeriod(dto, user)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
@@ -395,16 +458,17 @@ export class AttendanceController {
   @Patch('overtime-periods/:id')
   updateOvertimePeriod(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: Record<string, any>
+    @Body() dto: Record<string, any>,
+    @CurrentUser() user: JwtPayload
   ) {
-    return this.service.updateOvertimePeriod(id, dto)
+    return this.service.updateOvertimePeriod(id, dto, user)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Delete('overtime-periods/:id')
-  deleteOvertimePeriod(@Param('id', ParseIntPipe) id: number) {
-    return this.service.deleteOvertimePeriod(id)
+  deleteOvertimePeriod(@Param('id', ParseIntPipe) id: number, @CurrentUser() user: JwtPayload) {
+    return this.service.deleteOvertimePeriod(id, user)
   }
 
   // أيام العمل الفعلية في مدى (خدمة ذاتية) — لتلميح نموذج الإجازة:

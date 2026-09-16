@@ -9,6 +9,7 @@ import { Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
+import { roundPayrollMoney } from './payroll-money'
 import {
   EmployeeObligation,
   ObligationType,
@@ -64,7 +65,7 @@ export class ObligationsService {
         employeeId: Number(dto.employeeId),
         type: dto.type,
         category: (dto.category ?? 'manual').trim() || 'manual',
-        amount: Math.round(amount * 100) / 100,
+        amount: roundPayrollMoney(amount),
         label: String(dto.label).trim(),
         effectiveDate: dto.effectiveDate || (null as any),
         createdByUserId: user.sub,

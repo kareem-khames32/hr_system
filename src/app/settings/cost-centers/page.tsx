@@ -14,6 +14,7 @@ import {
   X,
 } from 'lucide-react'
 import { createCatalogItem, fetchCatalog, updateCatalogItem } from '@/lib/api'
+import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 
 interface CostCenter {
   id: number
@@ -37,6 +38,8 @@ export default function CostCentersPage() {
   const [saving, setSaving] = useState(false)
   const [editing, setEditing] = useState<CostCenter | null>(null)
   const [formData, setFormData] = useState({ ...emptyForm })
+  // مراكز التكلفة لكل الشركة: حساب الفرع يشوفها بس
+  const { canWrite, readOnly } = useCompanyWideWrite()
 
   const loadData = async () => {
     try {
@@ -128,14 +131,18 @@ export default function CostCentersPage() {
               تصنيف مالي للموظفين — يُستخدم في تقارير الرواتب لاحقاً
             </p>
           </div>
-          <button
-            onClick={() => handleOpenModal()}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Plus size={20} />
-            إضافة مركز تكلفة
-          </button>
+          {canWrite && (
+            <button
+              onClick={() => handleOpenModal()}
+              className="btn-primary flex items-center gap-2"
+            >
+              <Plus size={20} />
+              إضافة مركز تكلفة
+            </button>
+          )}
         </div>
+
+        {readOnly && <CompanyWideReadOnlyNote />}
 
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
@@ -203,7 +210,7 @@ export default function CostCentersPage() {
                 <h3 className="text-lg font-bold text-gray-800 mb-2">
                   لا توجد مراكز تكلفة
                 </h3>
-                <p className="text-gray-500">أضف أول مركز تكلفة من الزر أعلاه</p>
+                {canWrite && <p className="text-gray-500">أضف أول مركز تكلفة من الزر أعلاه</p>}
               </div>
             ) : (
               <div className="overflow-x-auto">
@@ -213,7 +220,7 @@ export default function CostCentersPage() {
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">الكود</th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">الاسم</th>
                       <th className="py-3 px-4 text-sm font-medium text-gray-500">الحالة</th>
-                      <th className="py-3 px-4 text-sm font-medium text-gray-500">إجراءات</th>
+                      {canWrite && <th className="py-3 px-4 text-sm font-medium text-gray-500">إجراءات</th>}
                     </tr>
                   </thead>
                   <tbody>
@@ -241,7 +248,7 @@ export default function CostCentersPage() {
                             {c.isActive ? 'مفعّل' : 'معطّل'}
                           </span>
                         </td>
-                        <td className="py-3 px-4">
+                        {canWrite && <td className="py-3 px-4">
                           <div className="flex items-center gap-2">
                             <button
                               onClick={() => handleOpenModal(c)}
@@ -271,7 +278,7 @@ export default function CostCentersPage() {
                               )}
                             </button>
                           </div>
-                        </td>
+                        </td>}
                       </tr>
                     ))}
                   </tbody>
@@ -282,7 +289,7 @@ export default function CostCentersPage() {
         )}
 
         {/* Modal */}
-        {showModal && (
+        {showModal && canWrite && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b border-gray-100 flex items-center justify-between">

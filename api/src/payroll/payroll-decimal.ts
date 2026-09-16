@@ -1,5 +1,6 @@
 // حساب كسري عشري نقي؛ لا تستخدم الأعداد الثنائية في أي عملية مالية.
-export type PayrollRoundingMode = 'HALF_UP' | 'HALF_EVEN' | 'FLOOR' | 'CEIL'
+// DOWN = قص نحو الصفر، قاعدة الفلوس بقرار المالك (1234.567 ← 1234.56)؛ بقية الأوضاع لدقة المعادلات فقط.
+export type PayrollRoundingMode = 'HALF_UP' | 'HALF_EVEN' | 'FLOOR' | 'CEIL' | 'DOWN'
 export const PAYROLL_DECIMAL_LIMITS = Object.freeze({ inputCharacters: 80, inputDigits: 60, intermediateBits: 4096 })
 export class PayrollDecimalError extends Error {
   constructor(readonly code: string, message: string) { super(message); this.name = 'PayrollDecimalError' }
@@ -70,7 +71,8 @@ export class PayrollDecimal {
     bounded(scaled)
     let units = scaled / this.denominator
     const remainder = abs(scaled % this.denominator), sign = scaled < 0n ? -1n : 1n
-    if (remainder) {
+    // قسمة BigInt تقص نحو الصفر أصلًا، فـDOWN لا يضيف شيئًا.
+    if (remainder && mode !== 'DOWN') {
       if (mode === 'FLOOR' && sign < 0n) units -= 1n
       else if (mode === 'CEIL' && sign > 0n) units += 1n
       else if (mode === 'HALF_UP' && remainder * 2n >= this.denominator) units += sign

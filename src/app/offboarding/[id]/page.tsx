@@ -42,6 +42,7 @@ import {
 } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
 import { terminationReasonLabel } from '@/lib/termination-reasons'
+import { DISPLAY_LOCALE } from '@/lib/dates'
 
 // حالات الملف
 const statusLabels: Record<string, string> = {
@@ -71,7 +72,7 @@ const partyConfig: Record<string, { label: string; icon: typeof UserCheck }> = {
 
 const fmtDate = (v?: string | null) => (v ? String(v).slice(0, 10) : '—')
 const fmtDateTime = (v?: string | null) =>
-  v ? new Date(v).toLocaleString('ar-EG-u-ca-gregory', { dateStyle: 'medium', timeStyle: 'short' }) : '—'
+  v ? new Date(v).toLocaleString(DISPLAY_LOCALE, { dateStyle: 'medium', timeStyle: 'short' }) : '—'
 
 export default function OffboardingCasePage() {
   const params = useParams<{ id: string }>()
@@ -503,7 +504,7 @@ export default function OffboardingCasePage() {
                               {item.note && <p>ملاحظة: {item.note}</p>}
                               {item.amount != null && Number(item.amount) > 0 && (
                                 <p className="text-red-600">
-                                  خصم: {Number(item.amount).toLocaleString()} {currency}
+                                  خصم: {Number(item.amount).toLocaleString('en-US')} {currency}
                                 </p>
                               )}
                             </div>
@@ -633,7 +634,7 @@ export default function OffboardingCasePage() {
                             line.type === 'CREDIT' ? 'text-success-700' : 'text-red-600'
                           }`}
                         >
-                          {Number(line.amount).toLocaleString()} {currency}
+                          {Number(line.amount).toLocaleString('en-US')} {currency}
                         </td>
                         {editable && (
                           <td className="py-3 px-4">
@@ -688,7 +689,7 @@ export default function OffboardingCasePage() {
                         }`}
                         colSpan={editable ? 2 : 1}
                       >
-                        {Number(net).toLocaleString()} {currency}
+                        {Number(net).toLocaleString('en-US')} {currency}
                       </td>
                     </tr>
                   </tfoot>

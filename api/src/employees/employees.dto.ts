@@ -11,6 +11,7 @@ import {
   MaxLength,
   Min,
   MinLength,
+  ValidateBy,
   ValidateIf,
   ValidateNested,
 } from 'class-validator'
@@ -18,10 +19,48 @@ import { Transform, Type } from 'class-transformer'
 import { EmployeeSalaryChangeDto } from './employee-salary-change.dto'
 import { CalendarChangeDto } from '../attendance/attendance-calendar-history'
 import { IsNotDataPlaceholder } from '../common/data-placeholders'
+import { EMPLOYEE_PHONE_PATTERN } from './employee-required-fields'
+import { SUSPENSION_REASON_MAX, SUSPENSION_REASON_MIN } from './employee-suspension-rules'
 
 // أعمدة NOT NULL في التعديل: الغائب = بلا تغيير، وnull يُرفض برسالة (IsOptional كان
 // يمرّره فيسقط الحفظ بخطأ قاعدة بيانات 500). بقية الحقول الاختيارية تقبل null = مسح القيمة
 const NotNullIfSent = () => ValidateIf((_o, v) => v !== undefined)
+
+// إجباري عند إضافة موظف (قرار المالك 16 سبتمبر): رسالة واحدة واضحة لكل حقل بدل تكرار رسائل المدققات
+const RequiredText = (label: string, max: number, feminine = false) => ValidateBy({ name: 'requiredText', validator: {
+  validate: (value: unknown) => typeof value === 'string' && value.trim().length > 0 && value.length <= max,
+  defaultMessage: args => typeof args?.value === 'string' && args.value.trim() ? `${label} بحد أقصى ${max} حرف` : `${label} ${feminine ? 'مطلوبة' : 'مطلوب'}`,
+} })
+const RequiredPositiveNumber = (label: string) => ValidateBy({ name: 'requiredPositiveNumber', validator: {
+  validate: (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0,
+  defaultMessage: args => args?.value === undefined || args?.value === null || args?.value === '' ? `${label} مطلوب` : `${label} لازم يكون رقم أكبر من صفر`,
+} })
+
+// الإيقاف عن العمل لفترة (قرار المالك 16 سبتمبر) — التحقق الكامل في suspensionInputIssue
+export class CreateEmployeeSuspensionDto {
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ بداية الإيقاف مطلوب بصيغة YYYY-MM-DD' })
+  fromDate: string
+
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ نهاية الإيقاف مطلوب بصيغة YYYY-MM-DD' })
+  toDate: string
+
+  @IsString({ message: 'سبب الإيقاف مطلوب' })
+  @MinLength(SUSPENSION_REASON_MIN, { message: `سبب الإيقاف ${SUSPENSION_REASON_MIN} أحرف على الأقل` })
+  @MaxLength(SUSPENSION_REASON_MAX, { message: `سبب الإيقاف بحد أقصى ${SUSPENSION_REASON_MAX} حرف` })
+  reason: string
+}
+
+export class EndEmployeeSuspensionDto {
+  // يرجع للعمل من هذا اليوم (الافتراضي النهارده)
+  @IsOptional()
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ الرجوع للعمل بصيغة YYYY-MM-DD' })
+  returnDate?: string
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(SUSPENSION_REASON_MAX, { message: `سبب الإنهاء بحد أقصى ${SUSPENSION_REASON_MAX} حرف` })
+  reason?: string
+}
 
 export class RenewEmployeeContractDto {
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'بداية العقد بصيغة YYYY-MM-DD' })
@@ -64,13 +103,12 @@ export class CreateEmployeeDto {
   })
   employeeCode: string
 
-  // يُطابَق بكود البصمة القادم من الجهاز (عمود 20 خانة) — الأطول لا يطابق أبداً
-  @IsOptional()
-  @IsString()
-  @MaxLength(20, { message: 'رقم البصمة لا يتجاوز 20 خانة (طول كود جهاز البصمة)' })
-  fingerprintCode?: string
+  // يُطابَق بكود البصمة القادم من الجهاز (عمود 20 خانة) — الأطول لا يطابق أبداً. إجباري عند الإضافة (قرار المالك)
+  @RequiredText('رقم البصمة', 20)
+  fingerprintCode: string
 
-  @IsString({ message: 'الاسم الكامل مطلوب' })
+  // عربي واسمين على الأقل — تفحصه الخدمة (arabicFullNameIssue)
+  @IsString({ message: 'الاسم الكامل بالعربي مطلوب' })
   @MinLength(3, { message: 'الاسم الكامل 3 أحرف على الأقل' })
   @MaxLength(200)
   fullName: string
@@ -90,18 +128,17 @@ export class CreateEmployeeDto {
   @MaxLength(160)
   personalEmail?: string
 
-  @IsOptional()
-  @Matches(/^[+\d][\d\s-]{6,20}$/, { message: 'رقم الهاتف غير صالح' })
-  phone?: string
+  @Matches(EMPLOYEE_PHONE_PATTERN, { message: 'رقم الجوال مطلوب وصالح' })
+  phone: string
 
   @IsOptional()
   @IsString()
   @MaxLength(30)
   phoneAlt?: string
 
-  @IsOptional()
-  @Matches(/^\d{10,14}$/, { message: 'الرقم القومي: 10-14 رقماً' })
-  nationalId?: string
+  // الطول والبداية حسب الجنسية تفحصهما الخدمة (nationalIdIssue)، والتفرد في assertUnique
+  @Matches(/^\d{10,14}$/, { message: 'رقم الهوية / الإقامة مطلوب — أرقام فقط (من 10 إلى 14 رقم)' })
+  nationalId: string
 
   @IsOptional()
   @IsString()
@@ -112,18 +149,16 @@ export class CreateEmployeeDto {
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'انتهاء الجواز بصيغة YYYY-MM-DD' })
   passportExpiry?: string
 
-  @IsOptional()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ الميلاد بصيغة YYYY-MM-DD' })
-  birthDate?: string
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ الميلاد مطلوب بصيغة YYYY-MM-DD' })
+  birthDate: string
 
   @IsOptional()
   @IsString()
   @MaxLength(120)
   birthPlace?: string
 
-  @IsOptional()
-  @IsIn(['male', 'female'], { message: 'النوع: male أو female' })
-  gender?: string
+  @IsIn(['male', 'female'], { message: 'الجنس مطلوب (ذكر أو أنثى)' })
+  gender: string
 
   @IsOptional()
   @IsIn(['single', 'married', 'divorced', 'widowed'], {
@@ -131,10 +166,8 @@ export class CreateEmployeeDto {
   })
   maritalStatus?: string
 
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
-  nationality?: string
+  @RequiredText('الجنسية', 100, true)
+  nationality: string
 
   @IsOptional()
   @IsString()
@@ -170,20 +203,17 @@ export class CreateEmployeeDto {
   @MaxLength(30)
   emergencyPhoneAlt?: string
 
-  @IsOptional()
-  @IsString()
-  @MaxLength(100)
+  @RequiredText('المسمى الوظيفي', 100)
   @IsNotDataPlaceholder()
-  jobTitle?: string
+  jobTitle: string
 
   @Type(() => Number)
   @IsInt({ message: 'الفرع مطلوب' })
   branchId: number
 
-  @IsOptional()
   @Type(() => Number)
-  @IsInt()
-  departmentId?: number
+  @IsInt({ message: 'القسم مطلوب' })
+  departmentId: number
 
   @IsOptional()
   @Type(() => Number)
@@ -228,9 +258,8 @@ export class CreateEmployeeDto {
   @IsInt()
   managerEmployeeId?: number
 
-  @IsOptional()
-  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ التعيين بصيغة YYYY-MM-DD' })
-  joinDate?: string
+  @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'تاريخ التعيين مطلوب بصيغة YYYY-MM-DD' })
+  joinDate: string
 
   // بداية استحقاق الراتب — الفارغ يعني من تاريخ التعيين (أو بدء العمل الفعلي)
   @IsOptional()
@@ -305,9 +334,10 @@ export class CreateEmployeeDto {
   @MaxLength(500)
   contractFileRef?: string
 
+  // الإيقاف عن العمل له مساره المؤرخ (POST /employees/:id/suspensions) — لا يُضاف موظف موقوف
   @IsOptional()
-  @IsIn(['active', 'probation', 'suspended'], {
-    message: 'حالة الموظف غير صالحة',
+  @IsIn(['active', 'probation'], {
+    message: 'حالة الموظف عند الإضافة: نشط أو تحت التجربة',
   })
   status?: string
 
@@ -321,11 +351,9 @@ export class CreateEmployeeDto {
   @MaxLength(20)
   salaryCycle?: string
 
-  @IsOptional()
   @Type(() => Number)
-  @IsNumber({}, { message: 'الراتب الأساسي رقم' })
-  @Min(0, { message: 'الراتب لا يكون سالباً' })
-  basicSalary?: number
+  @RequiredPositiveNumber('الراتب الأساسي')
+  basicSalary: number
 
   @IsOptional()
   @Type(() => Number)

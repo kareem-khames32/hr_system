@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import EmptyState from '@/components/EmptyState'
 import {
   Search,
   Plus,
@@ -20,6 +21,7 @@ import {
   Briefcase,
   Building2,
 } from 'lucide-react'
+import { formatDate } from '@/lib/dates'
 
 interface JobOffer {
   id: string
@@ -240,6 +242,8 @@ export default function OffersPage() {
           </div>
         </div>
 
+        {filteredOffers.length === 0 && <EmptyState title="لا توجد عروض عمل مطابقة للبحث أو الفلاتر" />}
+
         {/* Offers List */}
         <div className="space-y-4">
           {filteredOffers.map((offer) => (
@@ -281,7 +285,7 @@ export default function OffersPage() {
                     <DollarSign size={16} />
                     الراتب المعروض
                   </div>
-                  <p className="font-bold text-gray-800">{offer.salary.toLocaleString()} ر.س</p>
+                  <p className="font-bold text-gray-800">{offer.salary.toLocaleString('en-US')} ر.س</p>
                 </div>
                 <div className="p-3 bg-gray-50 rounded-xl">
                   <div className="flex items-center gap-2 text-gray-500 text-sm mb-1">
@@ -289,7 +293,7 @@ export default function OffersPage() {
                     تاريخ البدء
                   </div>
                   <p className="font-bold text-gray-800">
-                    {new Date(offer.startDate).toLocaleDateString('ar-SA')}
+                    {formatDate(offer.startDate)}
                   </p>
                 </div>
                 <div className="p-3 bg-gray-50 rounded-xl">
@@ -298,7 +302,7 @@ export default function OffersPage() {
                     تاريخ العرض
                   </div>
                   <p className="font-bold text-gray-800">
-                    {new Date(offer.offerDate).toLocaleDateString('ar-SA')}
+                    {formatDate(offer.offerDate)}
                   </p>
                 </div>
                 <div className="p-3 bg-gray-50 rounded-xl">
@@ -307,7 +311,7 @@ export default function OffersPage() {
                     صالح حتى
                   </div>
                   <p className="font-bold text-gray-800">
-                    {new Date(offer.expiryDate).toLocaleDateString('ar-SA')}
+                    {formatDate(offer.expiryDate)}
                   </p>
                 </div>
               </div>

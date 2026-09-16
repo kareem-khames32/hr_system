@@ -11,6 +11,7 @@ import {
   type ApiLetterTemplate, type ApiLetterTemplateCatalog, type ApiLetterTemplateDraft,
   type ApiLetterTemplateVariable,
 } from '@/lib/api'
+import { DISPLAY_LOCALE } from '@/lib/dates'
 
 type DraftField = keyof ApiLetterTemplateDraft
 type Editor = { name: string; draft: ApiLetterTemplateDraft }
@@ -26,7 +27,7 @@ const FIELDS: Array<{ key: DraftField; label: string; rows: number; limit: numbe
 ]
 const TOKEN = /\{\{\s*([^{}]+?)\s*\}\}/g
 const variableKey = (key: string) => key.replace(/^\{\{\s*|\s*\}\}$/g, '')
-const formatDate = (value: string) => new Date(value).toLocaleString('ar-EG-u-ca-gregory', { dateStyle: 'medium', timeStyle: 'short' })
+const formatDate = (value: string) => new Date(value).toLocaleString(DISPLAY_LOCALE, { dateStyle: 'medium', timeStyle: 'short' })
 
 function mapTokens(text: string, variables: ApiLetterTemplateVariable[], mode: 'readable' | 'canonical' | 'sample') {
   return text.replace(TOKEN, (original, key: string) => {
@@ -176,7 +177,7 @@ function TemplatesWorkspace() {
   return (
     <div className="space-y-6 pb-10">
       <div className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex gap-3"><div className="w-12 h-12 rounded-2xl bg-primary-100 text-primary-700 flex items-center justify-center"><FileSignature size={25} /></div><div><div className="flex items-center gap-2 text-xs text-gray-500 mb-1"><Link href="/settings" className="hover:text-primary-700">الإعدادات</Link><ChevronLeft size={13} /><span>إصدار الخطابات</span></div><h1 className="text-2xl font-bold text-gray-900">قوالب الخطابات</h1><p className="text-sm text-gray-500 mt-1">صياغة الخطاب الذي يصل إلى الموظف بعد اعتماد طلبه.</p></div></div>
+        <div className="flex gap-3"><div className="w-12 h-12 rounded-2xl bg-primary-100 text-primary-700 flex items-center justify-center"><FileSignature size={25} /></div><div><div className="flex items-center gap-2 text-xs text-gray-500 mb-1"><Link href="/settings" className="hover:text-primary-700">الإعدادات</Link><ChevronLeft size={13} /><span>إصدار الخطابات</span></div><h1 className="text-2xl font-bold text-gray-800">قوالب الخطابات</h1><p className="text-sm text-gray-500 mt-1">صياغة الخطاب الذي يصل إلى الموظف بعد اعتماد طلبه.</p></div></div>
         <div className="flex gap-2"><button type="button" disabled={!!operation} onClick={() => navigate({ kind: 'reload' })} className="btn-secondary flex items-center gap-2"><RefreshCw size={16} className={operation === 'load' ? 'animate-spin' : ''} />تحديث</button><button type="button" disabled={!!operation || !catalog} onClick={() => navigate({ kind: 'new' })} className="btn-primary flex items-center gap-2"><Plus size={17} />قالب جديد</button></div>
       </div>
       <div className="rounded-2xl border border-primary-100 bg-gradient-to-l from-primary-50 to-white px-5 py-4"><div className="flex flex-wrap items-center gap-x-3 gap-y-2 text-sm text-gray-700">{[{ icon: FileText, label: 'اكتب المسودة' }, { icon: Send, label: 'انشر النسخة' }, { icon: Link2, label: 'اربط نوع الطلب' }, { icon: FileCheck, label: 'اعتماد الطلب وإصدار PDF' }].map((step, index) => <div key={step.label} className="flex items-center gap-3"><span className="flex items-center gap-2"><step.icon size={17} className="text-primary-600" />{step.label}</span>{index < 3 && <ArrowLeft size={14} className="text-primary-300" />}</div>)}</div><p className="text-xs text-gray-500 mt-2">التعديل على المسودة لا يغير النسخة المنشورة، والخطابات التي صدرت سابقًا تبقى محفوظة.</p></div>

@@ -372,7 +372,7 @@ export default function ReportsPage() {
                 </div>
                 <p className="text-sm text-gray-500">إجمالي صافي الرواتب</p>
                 <p className="text-3xl font-bold text-gray-800">
-                  {payrollTotal.toLocaleString()}
+                  {payrollTotal.toLocaleString('en-US')}
                 </p>
               </div>
             </div>
@@ -638,7 +638,7 @@ export default function ReportsPage() {
                 <div className="flex justify-between text-xs text-gray-500 mt-2">
                   {payroll?.runs.map((r) => (
                     <span key={r.id}>
-                      {r.period} — {r.branchName ?? r.scopeLabel} ({Number(r.totalNet).toLocaleString()})
+                      {r.period} — {r.branchName ?? r.scopeLabel} ({Number(r.totalNet).toLocaleString('en-US')})
                     </span>
                   ))}
                 </div>
@@ -653,7 +653,7 @@ export default function ReportsPage() {
                         {payMethodLabels[m.payMethod] ?? m.payMethod}
                       </span>
                       <span className="font-medium text-gray-800">
-                        {m.count} موظف — {Number(m.total).toLocaleString()}
+                        {m.count} موظف — {Number(m.total).toLocaleString('en-US')}
                       </span>
                     </div>
                   ))}
@@ -667,10 +667,10 @@ export default function ReportsPage() {
                         خصومات {d.period}
                       </span>
                       <span className="font-medium text-gray-800">
-                        تأخير {Number(d.lateness).toLocaleString()} • بدون راتب{' '}
-                        {Number(d.unpaidLeave).toLocaleString()} • سلف{' '}
-                        {Number(d.loans).toLocaleString()} • أوفرتايم{' '}
-                        {Number(d.overtime).toLocaleString()}
+                        تأخير {Number(d.lateness).toLocaleString('en-US')} • بدون راتب{' '}
+                        {Number(d.unpaidLeave).toLocaleString('en-US')} • سلف{' '}
+                        {Number(d.loans).toLocaleString('en-US')} • أوفرتايم{' '}
+                        {Number(d.overtime).toLocaleString('en-US')}
                       </span>
                     </div>
                   ))}

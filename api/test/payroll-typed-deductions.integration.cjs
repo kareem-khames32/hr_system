@@ -133,9 +133,10 @@ before(async () => {
   users.a1 = await user('employee-a1', 'employee', org.branchA.id, people.a1.id)
   await app.get(require('../src/requests/requests-scheduler.service').RequestsScheduler).catchUp()
   await app.get(require('../src/attendance/attendance-scheduler.service').AttendanceScheduler).catchUpIfBehind()
-  types.commitment = expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'COMMITMENT', nameAr: 'خصم التزام', category: 'DISCIPLINARY',
+  // أنواع الخصومات لكل الشركة: بتتضاف وتتعدّل من حساب على مستوى الشركة، وموارد الفرع تشتغل عليها بس
+  types.commitment = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'COMMITMENT', nameAr: 'خصم التزام', category: 'DISCIPLINARY',
     calcMethod: 'DAYS_OF_SALARY', creatorScopes: ['DIRECT_MANAGER', 'TEAM_LEADER', 'DEPARTMENT_MANAGER', 'HR'], approvalSteps: ['HR'], escalationDays: '1', escalationStep: 'DEPARTMENT_MANAGER' }), 201)
-  types.admin = expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'ADMIN_FIXED', nameAr: 'خصم إداري', category: 'ADMINISTRATIVE',
+  types.admin = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'ADMIN_FIXED', nameAr: 'خصم إداري', category: 'ADMINISTRATIVE',
     calcMethod: 'FIXED_AMOUNT', creatorScopes: ['DIRECT_MANAGER', 'HR'], escalationDays: null, installmentAllowed: true, maxInstallments: 3 }), 201)
 }, { timeout: 120000 })
 
@@ -161,20 +162,24 @@ after(async t => {
 
 test('DD-01: only deductions.manage writes the catalog; court orders reject exemption; a disabled type leaves existing requests untouched', async () => {
   expectStatus(await request(users.manager, 'POST', '/deductions/types', { code: 'NOPE', nameAr: 'غير مسموح', category: 'DISCIPLINARY', calcMethod: 'FIXED_AMOUNT' }), 403)
-  expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'COURT', nameAr: 'حكم قضائي', category: 'COURT_ORDER', calcMethod: 'FIXED_AMOUNT', isExemptable: true }), 400, 'DEDUCTION_TYPE_NOT_EXEMPTABLE')
-  expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'COMMITMENT', nameAr: 'مكرر', category: 'DISCIPLINARY', calcMethod: 'FIXED_AMOUNT' }), 409, 'DEDUCTION_TYPE_CODE_EXISTS')
-  const productivity = expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'PRODUCTIVITY', nameAr: 'خصم إنتاجية', category: 'PERFORMANCE', calcMethod: 'PERCENT_OF_BASE', creatorScopes: ['DIRECT_MANAGER'] }), 201)
+  // النوع لكل الشركة: موارد فرع (حتى بصلاحية deductions.manage) تشوفه بس، لا تضيف ولا تعدّل
+  expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'BRANCH_HR', nameAr: 'من حساب فرع', category: 'DISCIPLINARY', calcMethod: 'FIXED_AMOUNT' }), 403)
+  expectStatus(await request(users.hr, 'PATCH', `/deductions/types/${types.commitment.id}`, { isActive: false }), 403)
+  assert.equal((await repo('DeductionType').findOneByOrFail({ id: types.commitment.id })).isActive, true)
+  expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'COURT', nameAr: 'حكم قضائي', category: 'COURT_ORDER', calcMethod: 'FIXED_AMOUNT', isExemptable: true }), 400, 'DEDUCTION_TYPE_NOT_EXEMPTABLE')
+  expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'COMMITMENT', nameAr: 'مكرر', category: 'DISCIPLINARY', calcMethod: 'FIXED_AMOUNT' }), 409, 'DEDUCTION_TYPE_CODE_EXISTS')
+  const productivity = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'PRODUCTIVITY', nameAr: 'خصم إنتاجية', category: 'PERFORMANCE', calcMethod: 'PERCENT_OF_BASE', creatorScopes: ['DIRECT_MANAGER'] }), 201)
   const pending = expectStatus(await request(users.manager, 'POST', '/deductions', { ...input({ deductionTypeId: productivity.id, inputValue: '2', reason: `${REASON} — إنتاجية` }), employeeId: people.a3.id, targetPeriod: '2026-09' }), 201)
-  const disabled = expectStatus(await request(users.hr, 'PATCH', `/deductions/types/${productivity.id}`, { isActive: false }), 200)
+  const disabled = expectStatus(await request(users.admin, 'PATCH', `/deductions/types/${productivity.id}`, { isActive: false }), 200)
   assert.equal(disabled.version, productivity.version, 'activation is not a financial change')
   const creatable = expectStatus(await request(users.manager, 'GET', '/deductions/creatable'), 200)
   assert.ok(!creatable.types.some(row => row.id === productivity.id), 'a disabled type disappears from the creation list')
   assert.deepEqual(creatable.bases, ['DIRECT_MANAGER'])
   expectStatus(await request(users.manager, 'POST', '/deductions', { ...input({ deductionTypeId: productivity.id, inputValue: '3' }), employeeId: people.a3.id, targetPeriod: '2026-09' }), 400, 'DEDUCTION_TYPE_INACTIVE')
   assert.equal(expectStatus(await request(users.hr, 'GET', `/deductions/${pending.id}`), 200).status, 'IN_APPROVAL')
-  const capped = expectStatus(await request(users.hr, 'PATCH', `/deductions/types/${types.commitment.id}`, { maxPctOfGross: '30' }), 200)
+  const capped = expectStatus(await request(users.admin, 'PATCH', `/deductions/types/${types.commitment.id}`, { maxPctOfGross: '30' }), 200)
   assert.equal(capped.version, types.commitment.version + 1, 'a cap change bumps the type version')
-  types.commitment = expectStatus(await request(users.hr, 'PATCH', `/deductions/types/${types.commitment.id}`, { maxPctOfGross: '25' }), 200)
+  types.commitment = expectStatus(await request(users.admin, 'PATCH', `/deductions/types/${types.commitment.id}`, { maxPctOfGross: '25' }), 200)
   expectStatus(await request(users.hr, 'POST', `/deductions/${pending.id}/cancel`, { expectedRevision: 0, reason: 'إلغاء طلب اختبار الكتالوج بعد تعطيل النوع' }), 201)
 })
 
@@ -294,7 +299,7 @@ test('DD-02/05: caps, value step, installments and incident age are enforced per
   const split = expectStatus(await request(users.manager, 'POST', '/deductions', { ...input({ deductionTypeId: types.admin.id, inputValue: '1000', installments: 3, reason: `${REASON} — تقسيط إداري` }), employeeId: people.a2.id, targetPeriod: '2026-11' }), 201)
   const splitApproved = expectStatus(await request(users.hr, 'POST', `/deductions/${split.id}/approve`, { expectedRevision: 0 }), 201)
   assert.deepEqual(splitApproved.obligations.map(row => [row.targetPeriod, row.amount, row.effectiveDate]), [['2026-11', '333.33', '2026-11-01'], ['2026-12', '333.33', '2026-12-01'], ['2027-01', '333.34', '2027-01-01']])
-  const quick = expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'QUICK', nameAr: 'خصم فوري', category: 'ADMINISTRATIVE', calcMethod: 'FIXED_AMOUNT', maxIncidentAgeDays: 1, creatorScopes: ['DIRECT_MANAGER', 'HR'] }), 201)
+  const quick = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'QUICK', nameAr: 'خصم فوري', category: 'ADMINISTRATIVE', calcMethod: 'FIXED_AMOUNT', maxIncidentAgeDays: 1, creatorScopes: ['DIRECT_MANAGER', 'HR'] }), 201)
   expectStatus(await request(users.manager, 'POST', '/deductions', { ...input({ deductionTypeId: quick.id, inputValue: '100' }), employeeId: people.a1.id, targetPeriod: '2026-11' }), 400, 'DEDUCTION_INCIDENT_TOO_OLD')
   const hrOld = expectStatus(await request(users.hr, 'POST', '/deductions', { ...input({ deductionTypeId: quick.id, inputValue: '100' }), employeeId: people.a1.id, targetPeriod: '2026-11' }), 201)
   assert.deepEqual([hrOld.creator.basis, hrOld.overrides.incidentAgeOverride], ['HR', true])
@@ -428,9 +433,9 @@ test('Review S25 DD-01/03/04: an owned type is closed to structural creators out
   people.qualityManager = await employee('DD_QM', { departmentId: org.departmentQ.id, managerEmployeeId: people.branchManager.id })
   await repo('Department').update(org.departmentQ.id, { managerEmployeeId: people.qualityManager.id })
   users.qualityManager = await userFor('quality-manager', people.qualityManager)
-  expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'QUALITY_NO_OWNER', nameAr: 'جودة بلا جهة', category: 'PERFORMANCE', calcMethod: 'DAYS_OF_SALARY', creatorScopes: ['FUNCTION_OWNER', 'HR'] }), 400, 'DEDUCTION_TYPE_INVALID')
-  expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'QUALITY_BAD_OWNER', nameAr: 'جودة بجهة مفقودة', category: 'PERFORMANCE', calcMethod: 'DAYS_OF_SALARY', ownerDepartmentId: 99999999 }), 400, 'DEDUCTION_TYPE_OWNER_NOT_FOUND')
-  const quality = expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'QUALITY_OWNED', nameAr: 'خصم جودة مملوك', category: 'PERFORMANCE', calcMethod: 'DAYS_OF_SALARY',
+  expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'QUALITY_NO_OWNER', nameAr: 'جودة بلا جهة', category: 'PERFORMANCE', calcMethod: 'DAYS_OF_SALARY', creatorScopes: ['FUNCTION_OWNER', 'HR'] }), 400, 'DEDUCTION_TYPE_INVALID')
+  expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'QUALITY_BAD_OWNER', nameAr: 'جودة بجهة مفقودة', category: 'PERFORMANCE', calcMethod: 'DAYS_OF_SALARY', ownerDepartmentId: 99999999 }), 400, 'DEDUCTION_TYPE_OWNER_NOT_FOUND')
+  const quality = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'QUALITY_OWNED', nameAr: 'خصم جودة مملوك', category: 'PERFORMANCE', calcMethod: 'DAYS_OF_SALARY',
     ownerDepartmentId: org.departmentQ.id, functionalScope: { teamIds: [org.teamA.id] }, creatorScopes: ['DIRECT_MANAGER', 'FUNCTION_OWNER', 'HR'],
     basisEscalationDays: { FUNCTION_OWNER: '2' }, escalationDays: '1', escalationStep: 'DEPARTMENT_MANAGER' }), 201)
   assert.deepEqual([quality.ownerDepartmentId, quality.functionalScope, quality.basisEscalationDays],
@@ -450,7 +455,7 @@ test('Review S25 DD-01/03/04: an owned type is closed to structural creators out
     ['FUNCTION_OWNER', false, ['HR'], '2'], 'two days do not exceed the function owner limit of two days (the type limit is one)')
   const aboveLimit = expectStatus(await request(users.qualityManager, 'POST', '/deductions', { ...input({ deductionTypeId: quality.id, inputValue: '2.5', reason: `${REASON} — جودة متكررة` }), employeeId: people.a2.id, targetPeriod: '2026-12' }), 201)
   assert.deepEqual(aboveLimit.steps.map(step => [step.role, step.approverEmployeeId]), [['DEPARTMENT_MANAGER', people.departmentManager.id], ['HR', null]])
-  const widened = expectStatus(await request(users.hr, 'PATCH', `/deductions/types/${quality.id}`, { functionalScope: { teamIds: [org.teamA.id], employeeIds: [people.low.id] } }), 200)
+  const widened = expectStatus(await request(users.admin, 'PATCH', `/deductions/types/${quality.id}`, { functionalScope: { teamIds: [org.teamA.id], employeeIds: [people.low.id] } }), 200)
   assert.equal(widened.version, quality.version + 1, 'widening the functional scope is a versioned change')
   const low = expectStatus(await request(users.qualityManager, 'POST', '/deductions', { ...input({ deductionTypeId: quality.id, inputValue: '0.5', reason: `${REASON} — جودة موسعة` }), employeeId: people.low.id, targetPeriod: '2026-12' }), 201)
   assert.deepEqual(JSON.parse((await repo('DeductionRequest').findOneByOrFail({ id: low.id })).typeSnapshot).functionalScope.employeeIds, [people.low.id])
@@ -465,7 +470,7 @@ test('Review S25 DD-10/DD-08: day installments split the days and price each at 
     otherAllowance: '0.00', currency: 'SAR', effectivePayrollPeriod: from, effectiveToPayrollPeriod: to })
   expectStatus(await request(users.admin, 'POST', `/payroll/employees/${people.a2.id}/salary-history/monthly`, { expectedRevision: history.revision, expectedCurrentSourceHash: history.currentSourceHash,
     reason: 'راتب شهري موثق لاختبار تسعير أقساط الأيام', evidenceReference: `fixture:dd:${people.a2.id}`, periods: [month('9000.00', '2020-01', '2027-01'), month('12000.00', '2027-02', null)] }), 201)
-  const split = expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'SPLIT_DAYS', nameAr: 'خصم أيام مقسط', category: 'DISCIPLINARY', calcMethod: 'DAYS_OF_SALARY',
+  const split = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'SPLIT_DAYS', nameAr: 'خصم أيام مقسط', category: 'DISCIPLINARY', calcMethod: 'DAYS_OF_SALARY',
     installmentAllowed: true, maxInstallments: 3, escalationDays: null, creatorScopes: ['DIRECT_MANAGER', 'HR'] }), 201)
   const created = expectStatus(await request(users.manager, 'POST', '/deductions', { ...input({ deductionTypeId: split.id, inputValue: '3', installments: 2, reason: `${REASON} — أيام مقسطة` }), employeeId: people.a2.id, targetPeriod: '2027-01' }), 201)
   assert.deepEqual(created.amountTrace.installments.map(part => [part.period, part.units, part.rate, part.amount]),
@@ -528,7 +533,7 @@ test('Review S25 DD-12/DD-11/DD-13 and payslip: the payslip traces each ledger l
   // DD-11 قاعدة 4: الترحيل فوق الحد يعلّق القسط ويحيله لقرار الموارد البشرية
   const carrier = await employee('DD_CARRY', { basicSalary: 1000, managerEmployeeId: people.manager.id })
   await exempt(carrier)
-  const big = expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'BIG_FIXED', nameAr: 'غرامة إدارية كبيرة', category: 'ADMINISTRATIVE', calcMethod: 'FIXED_AMOUNT',
+  const big = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'BIG_FIXED', nameAr: 'غرامة إدارية كبيرة', category: 'ADMINISTRATIVE', calcMethod: 'FIXED_AMOUNT',
     maxPctOfGross: null, escalationDays: null, creatorScopes: ['HR'] }), 201)
   const heavy = expectStatus(await request(users.hr, 'POST', '/deductions', { ...input({ deductionTypeId: big.id, inputValue: '2500', reason: `${REASON} — ترحيل متكرر` }), employeeId: carrier.id, targetPeriod: '2027-04' }), 201)
   const heavyApproved = expectStatus(await request(users.admin, 'POST', `/deductions/${heavy.id}/approve`, { expectedRevision: 0 }), 201)

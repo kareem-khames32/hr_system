@@ -19,6 +19,7 @@ import { EntityManager, In, Repository } from 'typeorm'
 import type { ObjectLiteral } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import {
+  assertCompanyWideWrite,
   branchScopeOf,
   CurrentUser,
   JwtAuthGuard,
@@ -28,6 +29,8 @@ import {
 } from '../auth/guards'
 import { AttendancePunch, PermissionType } from '../attendance/attendance.entities'
 import { AttendanceService } from '../attendance/attendance.service'
+import { assertDefinitionBranchUnchanged, assertDefinitionWritable, definitionBranchForCreate, definitionBranchQuery,
+  definitionBranchWhere, definitionInBranch } from '../common/definition-branch'
 import { AttendanceRuleVersion } from '../attendance/attendance-rule.entities'
 import { assertCalendarScope, beginCalendarChange, finishCalendarChange } from '../attendance/attendance-calendar-history'
 import { appendAttendanceRuleVersion, assertAttendanceRulePeriodOpen, attendanceRuleChange,
@@ -247,7 +250,8 @@ export class CatalogsController {
   }
 
   @Get(':kind')
-  async list(@Param('kind') kind: string, @CurrentUser() user: JwtPayload, @Query('effectiveOn') effectiveOn?: string) {
+  async list(@Param('kind') kind: string, @CurrentUser() user: JwtPayload, @Query('effectiveOn') effectiveOn?: string,
+    @Query('branchId') branchIdRaw?: string) {
     const repo = this.repoOf(kind)
     const perms = READ_PERMS[kind]
     if (perms && !perms.some((p) => userHasPerm(user, p))) {
@@ -255,13 +259,18 @@ export class CatalogsController {
     }
     // authKey الأجهزة لا يُقرأ أصلاً (select:false في الكيان)
     const scope = branchScopeOf(user)
-    const rows = await repo.find({ where: kind === 'devices' && scope !== null ? { branchId: scope } : {}, order: { id: 'ASC' } })
+    // الورديات وجداول العمل (قرار المالك 16 سبتمبر): حساب الفرع يرى العام + فرعه، والعام يرى الكل
+    // أو (مع ?branchId=) العام + الفرع ده — لمنتقي موظف في فرع معيّن
+    const definitionKind = kind === 'shifts' || kind === 'work-schedules'
+    const rows = await repo.find({ where: kind === 'devices' && scope !== null ? { branchId: scope }
+      : definitionKind ? definitionBranchWhere<ObjectLiteral>(user, {}, definitionBranchQuery(branchIdRaw)) : {}, order: { id: 'ASC' } })
     if (kind === 'shifts' || kind === 'work-schedules') {
       const sourceType = kind === 'shifts' ? 'SHIFT' : 'WORK_SCHEDULE'
       const date = effectiveOn === undefined ? '9999-12-31' : attendanceRuleDate(effectiveOn)
       for (let i = 0; i < rows.length; i++) {
         const resolved = await resolveAttendanceRule(repo.manager, sourceType, rows[i].id, date, rows[i])
-        rows[i] = { ...resolved.snapshot, id: rows[i].id, attendanceRuleVersion: resolved.version,
+        // الفرع ملكية للصف الحي لا جزء من إعداد الدوام المؤرخ
+        rows[i] = { ...resolved.snapshot, id: rows[i].id, branchId: rows[i].branchId ?? null, attendanceRuleVersion: resolved.version,
           attendanceRuleEffectiveFrom: resolved.effectiveFrom, attendanceRuleLegacy: resolved.legacyBaseline }
       }
     }
@@ -316,6 +325,9 @@ export class CatalogsController {
     if (kind === 'shifts' || kind === 'work-schedules') return this.saveAttendanceSource(kind, null, body, user)
     if (kind === 'holidays') return this.changeHoliday(null, body, user)
     const repo = this.repoOf(kind)
+    // الكتالوجات المشتركة (درجات/مسميات/أنواع أصول/أنواع أذونات/مراكز تكلفة/أنواع مستندات) مالهاش فرع = لكل الشركة:
+    // حساب الفرع يشوفها بس. الأجهزة ليها فحص فرع خاص بيها تحت
+    if (kind !== 'devices') assertCompanyWideWrite(user)
     const data = this.pick(kind, body)
     if (kind === 'holidays' && data.country === undefined) {
       const configured = await this.holidays.manager.findOneBy(RequestsConfig, { key: 'system.country' })
@@ -351,6 +363,7 @@ export class CatalogsController {
     if (kind === 'shifts' || kind === 'work-schedules') return this.saveAttendanceSource(kind, id, body, user)
     if (kind === 'holidays') return this.changeHoliday(id, body, user)
     const repo = this.repoOf(kind)
+    if (kind !== 'devices') assertCompanyWideWrite(user)
     const row = await repo.findOne({ where: { id } })
     if (!row) throw new NotFoundException('السجل غير موجود')
     if (kind === 'devices') {
@@ -481,6 +494,18 @@ export class CatalogsController {
     } else {
       emps = await this.employees.find({ where: { isActive: true, ...inScope } })
     }
+    // جدول خاص بفرع يتسند لموظفي فرعه بس (قرار المالك 16 سبتمبر): اختيار صريح لموظف من فرع تاني يترفض،
+    // والإسناد لقسم أو للكل يقتصر على موظفي فرع الجدول
+    const schedule = await this.workSchedules.findOneBy({ id })
+    if (!schedule || !definitionInBranch(schedule.branchId, scope ?? schedule.branchId)) {
+      throw new NotFoundException('جدول العمل غير موجود')
+    }
+    if (schedule.branchId != null) {
+      if (b.employeeIds !== undefined && emps.some((e) => e.branchId !== schedule.branchId)) {
+        throw new BadRequestException('جدول العمل ده خاص بفرع واحد، وفيه موظفين مختارين من فرع تاني')
+      }
+      emps = emps.filter((e) => e.branchId === schedule.branchId)
+    }
     if (emps.length === 0) {
       throw new BadRequestException('لا يوجد موظفون نشطون مطابقون ضمن نطاقك')
     }
@@ -507,12 +532,14 @@ export class CatalogsController {
   // أولاً في نفس المعاملة إلى جدول نشط يحدده moveTo، وإلا يُرفض الحذف بعددهم. النقل
   // تعديل لبيانات موظفين: employees.edit وكلهم داخل نطاق فرع المستخدم
   private async removeWorkSchedule(id: number, user: JwtPayload, moveTo?: string, body: Record<string, unknown> = {}) {
-    if (branchScopeOf(user) !== null) throw new ForbiddenException('تعطيل تعريف دوام مشترك يحتاج نطاق إدارة عام')
+    if (branchScopeOf(user) === -1) throw new ForbiddenException('حسابك مش مربوط بفرع، فمينفعش تعدّل تعريفات الدوام')
     const meta = attendanceRuleChange(body)
     return this.workSchedules.manager.transaction(async em => {
       await lockAttendanceRuleMutation(em)
       const ws = await em.findOneBy(WorkSchedule, { id })
       if (!ws) throw new NotFoundException('جدول العمل غير موجود')
+      // جدول الشركة يتعطل من حساب عام؛ حساب الفرع يعطّل جداول فرعه بس (قرار المالك 16 سبتمبر)
+      assertDefinitionWritable(user, ws)
       const active = await resolveAttendanceRule(em, 'WORK_SCHEDULE', id, meta.effectiveFrom, ws)
       if (active.snapshot.isDefault) throw new BadRequestException('الجدول الافتراضي لا يُعطّل؛ اختر جدولًا افتراضيًا آخر أولًا')
       const assigned: Employee[] = []
@@ -687,7 +714,8 @@ export class CatalogsController {
 
   private async saveAttendanceSource(kind: 'shifts' | 'work-schedules', id: number | null,
     body: Record<string, unknown>, user: JwtPayload) {
-    if (branchScopeOf(user) !== null) throw new ForbiddenException('تعريف الدوام مشترك بين الفروع؛ تعديله يحتاج نطاق إدارة عام')
+    // حساب الفرع يضيف ويعدّل تعريفات فرعه بس (قرار المالك 16 سبتمبر) — الفحص جوه المعاملة على الصف نفسه
+    if (branchScopeOf(user) === -1) throw new ForbiddenException('حسابك مش مربوط بفرع، فمينفعش تعدّل تعريفات الدوام')
     return this.shifts.manager.transaction(async em => {
       await lockAttendanceRuleMutation(em)
       return this.saveAttendanceSourceInTransaction(em, kind, id, body, user)
@@ -700,6 +728,11 @@ export class CatalogsController {
     const sourceType = kind === 'shifts' ? 'SHIFT' : 'WORK_SCHEDULE'
     const row = id === null ? null : await repo.findOneBy({ id })
     if (id !== null && !row) throw new NotFoundException('تعريف الدوام غير موجود')
+    if (row) {
+      assertDefinitionWritable(user, row)
+      assertDefinitionBranchUnchanged(row, body.branchId)
+    }
+    const branchId: number | null = row ? (row.branchId ?? null) : await definitionBranchForCreate(em, user, body.branchId)
     const data = this.pick(kind, body)
     const financialChange = !row || Object.keys(data).some(key => !['name', 'description'].includes(key) && data[key] !== row[key])
     const meta = attendanceRuleChange({ effectiveFrom: body.effectiveFrom ?? (!financialChange ? attendanceRuleToday() : undefined),
@@ -714,6 +747,10 @@ export class CatalogsController {
       ...(financialChange ? { flexPolicy: undefined } : {}) })
     if (!row && data.shiftMode === 'flexible' && data.flexEnabled === undefined) snapshot.flexEnabled = true
     this.validate(kind, snapshot)
+    // الجدول الافتراضي بيتطبق على كل موظف ملوش جدول في كل الفروع، فمايبقاش خاص بفرع
+    if (kind === 'work-schedules' && branchId !== null && snapshot.isDefault) {
+      throw new BadRequestException('الجدول الافتراضي لازم يكون لكل الشركة، مش لفرع واحد')
+    }
     if (financialChange) {
       validateAttendanceFlexSource(snapshot)
       const employees = row ? await attendanceSourceEmployees(em, sourceType, row.id, before, snapshot)
@@ -748,7 +785,7 @@ export class CatalogsController {
         await em.save(WorkSchedule, Object.assign(other, this.pick(kind, { ...latest.snapshot })))
       }
     }
-    const saved = row ?? await this.saveUnique(repo, repo.create(this.pick(kind, snapshot)))
+    const saved = row ?? await this.saveUnique(repo, repo.create({ ...this.pick(kind, snapshot), branchId }))
     snapshot.id = saved.id
     const version = await appendAttendanceRuleVersion(em, { sourceType, sourceId: saved.id, before,
       snapshot, effectiveFrom: meta.effectiveFrom, reason: meta.reason, actorUserId: user.sub })

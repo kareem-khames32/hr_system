@@ -545,7 +545,7 @@ export default function AddJobPage() {
                   <p className="text-sm text-gray-500">نطاق الراتب</p>
                   <p className="font-medium text-gray-800">
                     {formData.salaryMin && formData.salaryMax
-                      ? `${Number(formData.salaryMin).toLocaleString()} - ${Number(formData.salaryMax).toLocaleString()} ر.س`
+                      ? `${Number(formData.salaryMin).toLocaleString('en-US')} - ${Number(formData.salaryMax).toLocaleString('en-US')} ر.س`
                       : 'غير محدد'}
                   </p>
                 </div>

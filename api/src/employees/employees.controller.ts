@@ -22,7 +22,7 @@ import {
   userHasPerm,
 } from '../auth/guards'
 import type { JwtPayload } from '../auth/auth.service'
-import { CreateEmployeeDto, RenewEmployeeContractDto, UpdateEmployeeDto } from './employees.dto'
+import { CreateEmployeeDto, CreateEmployeeSuspensionDto, EndEmployeeSuspensionDto, RenewEmployeeContractDto, UpdateEmployeeDto } from './employees.dto'
 import { EmployeesService } from './employees.service'
 import { projectEmployee } from './employee-projection'
 
@@ -92,7 +92,7 @@ export class EmployeesController {
     // مدير الفرع يضيف داخل فرعه فقط
     const scope = branchScopeOf(user)
     if (scope != null) dto.branchId = scope
-    return projectEmployee(await this.employees.create(dto, user.sub), user)
+    return projectEmployee(await this.employees.create(dto, user.sub, scope), user)
   }
 
   // سياق تعديل الأجر (الأجر الحالي الدقيق + بصمة المصدر) = بداية تغيير الراتب →
@@ -139,6 +139,41 @@ export class EmployeesController {
     @Body() body?: { reason?: string }
   ) {
     return projectEmployee(await this.employees.archive(id, branchScopeOf(user), body?.reason, user.sub), user)
+  }
+
+  // ===== الإيقاف عن العمل لفترة (قرار المالك 16 سبتمبر) =====
+  // السجل: الموظف يشوف إيقافاته، وغيره يحتاج employees.view
+  @Get(':id/suspensions')
+  suspensions(
+    @Param('id', ParseIntPipe) id: number,
+    @CurrentUser() user: JwtPayload
+  ) {
+    if (user.employeeId !== id && !userHasPerm(user, 'employees.view')) {
+      throw new ForbiddenException('لا تملك صلاحية عرض الموظفين')
+    }
+    return this.employees.listSuspensions(id, branchScopeOf(user))
+  }
+
+  @Perm('employees.edit')
+  @Post(':id/suspensions')
+  suspend(
+    @Param('id', ParseIntPipe) id: number,
+    @Body() dto: CreateEmployeeSuspensionDto,
+    @CurrentUser() user: JwtPayload
+  ) {
+    return this.employees.createSuspension(id, dto, branchScopeOf(user), user.sub)
+  }
+
+  // إنهاء الإيقاف بدري أو إلغاؤه (حتى لو انتهى، طالما أيامه مش في مسير معتمد أو مصروف)
+  @Perm('employees.edit')
+  @Post(':id/suspensions/:suspensionId/end')
+  endSuspension(
+    @Param('id', ParseIntPipe) id: number,
+    @Param('suspensionId', ParseIntPipe) suspensionId: number,
+    @Body() dto: EndEmployeeSuspensionDto,
+    @CurrentUser() user: JwtPayload
+  ) {
+    return this.employees.endSuspension(id, suspensionId, dto, branchScopeOf(user), user.sub)
   }
 
   // العودة على رأس العمل — للمؤرشف والمنتهي خدمته

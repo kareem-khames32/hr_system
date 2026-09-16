@@ -57,7 +57,7 @@ export interface PayrollObligationDetail {
 }
 
 const moneyText = (value: unknown) => value === null || value === undefined || value === '' ? null
-  : PayrollDecimal.from(typeof value === 'number' ? value.toFixed(4) : String(value)).format(2, 'HALF_UP')
+  : PayrollDecimal.from(typeof value === 'number' ? value.toFixed(4) : String(value)).format(2, 'DOWN')
 const parse = <T>(text: string | null | undefined, fallback: T): T => { if (!text) return fallback; try { return JSON.parse(text) as T } catch { return fallback } }
 
 export async function describePayrollObligationLines(em: EntityManager, breakdown: unknown): Promise<PayrollObligationDetail[]> {

@@ -14,7 +14,8 @@ export interface PayrollPolicySettingsInput {
   defaultPeriodType: 'CALENDAR_MONTH' | 'CUSTOM_DAY_RANGE' | 'SEMI_MONTHLY'
   cycleStartDay: number; cycleEndMode: 'DERIVED' | 'FIXED_DAY'; cycleEndDay: number | null
   baseDaysBasis: 'FIXED_30'; monthlyDays: number; dailyHours: number
-  rateBase: 'GROSS' | 'BASIC'; roundingMode: 'HALF_UP' | 'HALF_EVEN' | 'FLOOR' | 'CEIL'; roundingScale: number
+  // DOWN = قص الفلوس على منزلتين بلا تقريب (قرار المالك)؛ البقية تظهر فقط في نسخ تاريخية ولا اختيار لها في الشاشات.
+  rateBase: 'GROSS' | 'BASIC'; roundingMode: 'HALF_UP' | 'HALF_EVEN' | 'FLOOR' | 'CEIL' | 'DOWN'; roundingScale: number
   divisionByZeroMode: 'ZERO_WITH_WARNING' | 'FAIL_ROW'
   maxDeductionPctOfGross: number | null; minNetGuarantee: number | null; netFloorPct: number | null
   carryOverExcess: boolean; skipAttendance: boolean; lateDeductionEnabled: boolean; currency: 'SAR' | 'EGP'
@@ -76,7 +77,7 @@ export const POLICY_PERIOD_TYPE_LABELS: Record<PayrollPolicySettingsInput['defau
 export const POLICY_STATUS_LABELS: Record<PayrollPolicyVersionSummary['status'], string> = { DRAFT: 'مسودة', ACTIVE: 'منشورة', ARCHIVED: 'مؤرشفة' }
 export const DEFAULT_POLICY_SETTINGS: PayrollPolicySettingsInput = {
   defaultPeriodType: 'CUSTOM_DAY_RANGE', cycleStartDay: 23, cycleEndMode: 'DERIVED', cycleEndDay: null,
-  baseDaysBasis: 'FIXED_30', monthlyDays: 30, dailyHours: 8, rateBase: 'GROSS', roundingMode: 'HALF_UP', roundingScale: 2,
+  baseDaysBasis: 'FIXED_30', monthlyDays: 30, dailyHours: 8, rateBase: 'GROSS', roundingMode: 'DOWN', roundingScale: 2,
   divisionByZeroMode: 'ZERO_WITH_WARNING', maxDeductionPctOfGross: null, minNetGuarantee: null, netFloorPct: null,
   carryOverExcess: false, skipAttendance: false, lateDeductionEnabled: true, currency: 'SAR',
 }
@@ -95,6 +96,8 @@ export interface PayrollPolicyVersionEditResponse { policyId: number; version: P
 export interface CreatePayrollPolicyInput {
   // فارغ = يولّده الخادم (PS-YYYYMMDD-NN) بلا تصادم.
   code: string; name: string; description?: string | null; effectiveFrom: string; effectiveTo?: string | null
+  // فرع المعادلات: null = كل الشركة؛ غيابه = فرع الحساب (أو كل الشركة للحساب العام)
+  branchId?: number | null
   settings: PayrollPolicySettingsInput; metadata?: { title?: string | null; notes?: string | null } | null
 }
 const policyPath = (policyId: number, versionId?: number) => `/payroll/policies/${policyId}${versionId == null ? '' : `/versions/${versionId}`}`
@@ -147,6 +150,8 @@ export function policySettingsFromConfig(rows: Array<{ key: string; value: strin
     result[field] = text
   }
   if (!['SAR', 'EGP'].includes(String(result.currency))) result.currency = DEFAULT_POLICY_SETTINGS.currency
+  // لا اختيار تقريب: المجموعة الجديدة تقص الفلوس على منزلتين مهما كان المفتاح القديم في الإعدادات.
+  result.roundingMode = 'DOWN'; result.roundingScale = 2
   return result as unknown as PayrollPolicySettingsInput
 }
 

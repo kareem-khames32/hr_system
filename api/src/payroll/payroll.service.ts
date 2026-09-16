@@ -24,6 +24,8 @@ import {
 import { Leave, LeaveType } from '../requests/entities/leave.entities'
 import { PayrollDecimal } from './payroll-decimal'
 import { parseSickPayTiers, payrollLeaveDeductionLines, sickLeaveDaysInCover, sickLeaveDeduction, type SickPayTier } from './sick-leave-pay'
+import { readSuspensionPayrollDays, suspendedDatesBetween } from '../employees/employee-suspensions'
+import { withSuspensionLine } from '../employees/employee-suspension-rules'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import {
   PayrollItem,
@@ -51,7 +53,7 @@ import { legacyInstallmentNumber, readLoanInstallmentPositions } from './payroll
 import { protectPayrollObligations } from './payroll-obligation-protection'
 import { postPayrollObligations, readPayrollNetProtectionSettings, readTypedObligationFacts, releasePayrollObligations, reservePayrollObligations } from './payroll-obligation-ledger'
 import { describePayrollObligationLines } from './payroll-obligation-trace'
-import { approvedPayrollOvertimeClaims, assertUniqueOvertimeDays, closedOvertimePeriod, legacyExemptOvertimeSource, overtimeFinancialValue, projectOvertimeFinancialValue } from './overtime-financial'
+import { approvedPayrollOvertimeClaims, assertUniqueOvertimeDays, closedOvertimePeriod, legacyExemptOvertimeSource, overtimeFinancialValue, overtimeTraceMatchesStoredTotals, projectOvertimeFinancialValue } from './overtime-financial'
 import { findPayrollPeriodContinuity, payrollPeriodBounds, PayrollPeriodError, payrollPolicyPeriodBounds } from './payroll-period'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, samePayrollRunSalarySource, selectPayrollRunSalary } from './payroll-run-salary'
 import { createHash } from 'node:crypto'
@@ -93,6 +95,15 @@ export interface PayrollRunDefinitionInput {
   exclusions?: Array<{ employeeId: number; reason: string }>
   confirmEmptyScope?: boolean
   emptyScopeReason?: string | null
+}
+
+/**
+ * سقف أيام الإيقاف المخصومة: أيام الراتب المستحق ناقص أيام بدون راتب ومكافئ خصم المرضية، بمنزلتين مقصوصتين،
+ * فمجموع أيام الخصم ما يعديش أيام الراتب والصافي ما يبقاش سالب (مثلًا دورة 31 يوم: 3 أيام مرضية بلا أجر + 28 إيقاف).
+ */
+export function payrollSuspensionDaysWithinCap(suspensionDays: number, paidDays: number, unpaidDays: number, sickEquivalentDays: string): number {
+  const room = PayrollDecimal.from(String(paidDays)).subtract(PayrollDecimal.from(String(unpaidDays))).subtract(PayrollDecimal.from(sickEquivalentDays || '0'))
+  return Math.min(suspensionDays, Math.max(0, Number(room.format(2, 'DOWN'))))
 }
 
 @Injectable()
@@ -330,9 +341,11 @@ export class PayrollService {
         date: Between(saved.coverFrom ?? run.startDate, saved.coverTo ?? run.endDate) } })
       const exemptions = await loadAttendanceExemptions(em, item.employeeId, saved.coverFrom ?? run.startDate, saved.coverTo ?? run.endDate)
       const comparable = (days: Array<{ date: string }>) => JSON.stringify([...days].sort((a, b) => a.date.localeCompare(b.date)))
+      // يوم الإيقاف عن العمل مش داخل حضور المسير (بيتخصم يوم إيقاف بس)، فمايتقارنش هنا كمان
+      const suspended = await suspendedDatesBetween(em, item.employeeId, saved.coverFrom ?? run.startDate, saved.coverTo ?? run.endDate)
       const fresh: ReturnType<PayrollService['attendanceRuleTrace']>[] = []
       for (const day of rows) {
-        if (exemptionPolicyOnDate(exemptions, day.date, { overtimeEligible: false, unpaidLeaveDeductible: true }).isExempt) continue
+        if (suspended.has(day.date) || exemptionPolicyOnDate(exemptions, day.date, { overtimeEligible: false, unpaidLeaveDeductible: true }).isExempt) continue
         fresh.push(this.attendanceRuleTrace(day.date > today ? day : await this.attendanceService.computeDay(item.employeeId, day.date, false, true, em)))
       }
       if (comparable(fresh) !== comparable(saved.attendanceRules)) {
@@ -380,8 +393,8 @@ export class PayrollService {
           new Set(breakdown.overtime.map((row: any) => row?.id)).size !== breakdown.overtimeEntryIds.length ||
           breakdown.overtime.some((row: any) => !row || !breakdown.overtimeEntryIds.includes(row.id) ||
             typeof row.amount !== 'number' || !Number.isFinite(row.amount) || row.amount < 0 || typeof row.hours !== 'number' || !Number.isFinite(row.hours) || row.hours < 0) ||
-          round2(breakdown.overtime.reduce((sum: number, row: any) => sum + row.amount, 0)) !== Number(item.overtimeAmount) ||
-          round2(breakdown.overtime.reduce((sum: number, row: any) => sum + row.hours, 0)) !== Number(item.overtimeHours))) {
+          // مسير اتحسب قبل قرار القص (16 سبتمبر) إجماليه محفوظ بالتقريب القديم وبيفضل صالح للاعتماد والصرف
+          !overtimeTraceMatchesStoredTotals(breakdown.overtime, Number(item.overtimeAmount), Number(item.overtimeHours)))) {
           throw new ConflictException('تفصيل الإضافي لا يطابق مصادره أو إجماليه المحفوظ في المسير')
         }
         const paidClaims = await approvedPayrollOvertimeClaims(em, item.employeeId, item.runId)
@@ -625,7 +638,7 @@ export class PayrollService {
     // الخطوة 14: فجوة أو تداخل مع فترة الشهر السابق/التالي لنفس الموظفين (قراءة فقط، تظهر على المسير وسجل الحدث).
     const periodContinuity = await findPayrollPeriodContinuity(em, { id: run.id ?? null, period: run.period, startDate, endDate }, covered.map(({ emp }) => emp.id))
     const prepared: PayrollItem[] = []
-    // أ2 (قرار المالك 16 سبتمبر): طول الفترة الفعلي شاملًا طرفيه — مقام تناسب أيام الخدمة.
+    // طول الفترة الفعلي شاملًا طرفيه — للتفصيل ومتغير PERIOD_DAYS في المحرك؛ تناسب أيام الخدمة على أساس 30 (monthlyDays) مهما كان طول الفترة.
     const periodDays = Math.round((Date.parse(`${endDate}T12:00:00Z`) - Date.parse(`${startDate}T12:00:00Z`)) / 86400000) + 1
 
     let totalNet = 0
@@ -638,7 +651,7 @@ export class PayrollService {
       await this.attendanceService.materializeAbsences(emp.id, coverFrom, coverTo, em)
       // راتب شهر المسير كاملًا (لا تقسيم ولا متوسط داخل الشهر)؛ التناسب أدناه لأيام الخدمة فقط.
       const monthlyComponents = salary.monthlyComponents
-      // PR-10: قروش صحيحة قبل التناسب؛ 30.15 × 3÷30 = 3.015 تُقرّب إلى3.02.
+      // PR-10: قروش صحيحة قبل التناسب؛ 30.15 × 3÷30 = 3.015 تُقص إلى 3.01 (قرار المالك: لا تقريب للفلوس).
       const monthlyCents = monthlyComponents.map(amount => Math.round(amount * 100))
       const grossCents = monthlyCents.reduce((sum, amount) => sum + amount, 0)
       const basic = monthlyCents[0] / 100
@@ -648,7 +661,7 @@ export class PayrollService {
       // وبنفس الأساس الذي يُحسب به سعر يوم الخصم أدناه. الدورة الكاملة تستحق الشهر كاملًا مهما كان طولها.
       const fullCoverage = coverFrom === startDate && coverTo === endDate
       const prorataFactor = fullCoverage ? 1 : Math.min(coverDays / monthlyDays, 1)
-      const prorateCents = (cents: number) => fullCoverage ? cents : Math.min(cents, Math.round(cents * coverDays / monthlyDays))
+      const prorateCents = (cents: number) => fullCoverage ? cents : Math.min(cents, Math.trunc(cents * coverDays / monthlyDays))
       const grossEarnedCents = prorateCents(grossCents)
       const grossEarned = grossEarnedCents / 100
       const earnedCents = monthlyCents.map(prorateCents)
@@ -735,13 +748,21 @@ export class PayrollService {
       const otHours = round2(overtimeDetails.reduce((sum, row) => sum + row.hours, 0))
       const otAmount = round2(overtimeDetails.reduce((sum, row) => sum + row.amount, 0))
 
+      // 1ب) أيام الإيقاف عن العمل (قرار المالك 16 سبتمبر) تُقرأ قبل الحضور: يوم الإيقاف يتخصم «يوم إيقاف» بس،
+      // فتأخير أو نقص أو غياب صف حضوره (بصمة يوم تحقيق مثلًا، أو صف اتسجل قبل الإيقاف) ما يتخصمش تاني.
+      const unpaidLeaves = (await em.getRepository(Leave).find({
+        where: { employeeId: emp.id, isUnpaid: true, status: 'APPROVED' },
+      })).filter(lv => lv.fromDate <= coverTo && lv.toDate >= coverFrom)
+      const suspension = await readSuspensionPayrollDays(em, emp.id, coverFrom, coverTo, unpaidLeaves, date => policyOnDate(date).unpaidLeaveDeductible)
+      const suspendedDates = new Set(suspension.dates)
+
       // 2) خصم التأخير: الدقائق غير المعذورة + دقائق الإذن «بخصم»
       // (المعذور بإذن بدون خصم أو إجازة جزئية لا يُخصم)
       // أولاً: جسّد الغياب — أنشئ صفوف 'absent' لأيام العمل غير الملموسة في
       // الفترة (بلا بصمة ولا إجازة) قبل القراءة، فتُحتسب في الخصم والتقارير
       const attRows = (await em.getRepository(AttendanceDay).find({
         where: { employeeId: emp.id, date: Between(coverFrom, coverTo) },
-      })).filter(row => !policyOnDate(row.date).isExempt)
+      })).filter(row => !policyOnDate(row.date).isExempt && !suspendedDates.has(row.date))
       const lateMinutes = attRows.reduce(
         (s, r) => s + r.lateMinutes + (r.deductibleMinutes ?? 0),
         0
@@ -775,15 +796,13 @@ export class PayrollService {
       const policyShadow = engineMode === 'LEGACY' ? null : await readPayrollShadowAttendance(em, { employeeId: emp.id, periodStart: startDate, periodEnd: endDate, monthlyComponents,
         rules: { monthlyDays, dailyHours, lateEnabled, shortfallEnabled: shortfallEnabledValue === 'true', shortfallMode, shortfallValue, overlapPolicy,
           dailyCapDays, earlyLeaveEnabled: earlyLeaveValue === 'true', absencePenalty, latenessTiers: tiers },
+        suspendedDates: suspension.dates,
         legacy: { days: attendanceDeductionDays.map(day => ({ date: day.date, lateness: day.latenessAmount + day.permissionAmount, shortfall: day.shortfallAmount })),
           absentDates: absentRows.map(row => row.date), absenceDayAmount: dayRate * absencePenalty,
           totals: { lateness: latenessRequested, shortfall: shortfallRequested, absence: absenceRequested } } })
 
       // 3) الإجازات غير المدفوعة (isUnpaid من تعريف النوع — أي نوع
-      // غير مدفوع يُخصم يوم بيوم، بلا سياسة غياب) المتقاطعة مع الفترة
-      const unpaidLeaves = (await em.getRepository(Leave).find({
-        where: { employeeId: emp.id, isUnpaid: true, status: 'APPROVED' },
-      })).filter(lv => lv.fromDate <= coverTo && lv.toDate >= coverFrom)
+      // غير مدفوع يُخصم يوم بيوم، بلا سياسة غياب) المتقاطعة مع الفترة (unpaidLeaves مقروءة فوق مع الإيقاف)
       let unpaidDays = 0
       let exemptUnpaidLeaveDays = 0
       for (const lv of unpaidLeaves) {
@@ -798,17 +817,22 @@ export class PayrollService {
           }
         }
       }
-      const unpaidOnlyDeduction = round2(unpaidDays * dayRate)
-      // 3ب) الإجازة المرضية بأجر متدرج: ترتيب كل يوم بين أيام المرض المعتمدة في سنته (شاملًا ما قبل الفترة)، ونسبة أجره من شرائح نوعه؛
+      // 3أ) الإجازة المرضية بأجر متدرج: ترتيب كل يوم بين أيام المرض المعتمدة في سنته (شاملًا ما قبل الفترة)، ونسبة أجره من شرائح نوعه؛
       // الخصم = سعر اليوم × (100 − النسبة)/100. اليوم المسجل بدون راتب يُعدّ في الترتيب ولا يُخصم مرتين (يخصمه بند 3).
       // المبلغ يدخل عمود الإجازة بلا أجر (عدم استحقاق لا خصم) بدقة محرك السياسة، ويظهر سطرًا مستقلًا في التفصيل والقسيمة.
+      // تُحسب قبل سقف الإيقاف: يوم الإيقاف مستبعد منها، وأيامها المخصومة تدخل في السقف.
       const sickLeaves = sickTiersByCode.size ? await em.getRepository(Leave).find({ where: { employeeId: emp.id, status: 'APPROVED',
         leaveTypeCode: In([...sickTiersByCode.keys()]), fromDate: LessThanOrEqual(coverTo), toDate: MoreThanOrEqual(`${coverFrom.slice(0, 4)}-01-01`) } }) : []
       const sick = sickLeaveDeduction(sickLeaveDaysInCover({ leaves: sickLeaves, tiersByCode: sickTiersByCode, coverFrom, coverTo,
-        deductible: date => policyOnDate(date).unpaidLeaveDeductible }), grossCents, monthlyDays)
+        deductible: date => policyOnDate(date).unpaidLeaveDeductible && !suspension.dates.includes(date) }), grossCents, monthlyDays)
+      // 3ب) أيام الإيقاف عن العمل (قرار المالك 16 سبتمبر): مش غياب، وتُخصم يومًا بيوم مع الإجازة بدون راتب بلا ازدواج في نفس اليوم.
+      // سقفها أيام الراتب المستحق ناقص اللي اتخصم فعلًا (بدون راتب + المرضية): دورة 31 يوم موقوفة كلها = صافي صفر مش سالب
+      suspension.days = payrollSuspensionDaysWithinCap(suspension.days, fullCoverage ? monthlyDays : Math.min(coverDays, monthlyDays), unpaidDays, sick.equivalentDays)
+      unpaidDays += suspension.days
+      const unpaidOnlyDeduction = round2(unpaidDays * dayRate)
       const unpaidDeduction = sick.equivalentDays === '0' ? unpaidOnlyDeduction
         : Number(PayrollDecimal.from(String(unpaidDays)).add(PayrollDecimal.from(sick.equivalentDays))
-          .multiply(new PayrollDecimal(BigInt(grossCents), BigInt(100 * monthlyDays))).format(2, 'HALF_UP'))
+          .multiply(new PayrollDecimal(BigInt(grossCents), BigInt(100 * monthlyDays))).format(2, 'DOWN'))
 
       // 5) دفتر المديونيات: بنود PENDING سرت فترتها (effectiveDate ضمن الفترة أو فارغة، والشهر
       // المستهدف لا يتجاوز شهر المسير — DD-07) وغير محجوزة لمسير معتمد آخر (DD-09) — DEBIT خصم،
@@ -936,7 +960,8 @@ export class PayrollService {
         }
       }
       totalNet = round2(totalNet + paid.netPay)
-      const leaveLines = payrollLeaveDeductionLines(paid.unpaidDeduction, unpaidOnlyDeduction, unpaidDays, sick.lines)
+      const leaveLinesAll = payrollLeaveDeductionLines(paid.unpaidDeduction, unpaidOnlyDeduction, unpaidDays, sick.lines)
+      const leaveLines = { ...leaveLinesAll, lines: withSuspensionLine(leaveLinesAll.lines, suspension.days) }
 
       prepared.push(
         items.create({
@@ -1019,6 +1044,7 @@ export class PayrollService {
               )
               .map((r) => r.id),
             unpaidLeaveIds: unpaidLeaves.map((l) => l.id),
+            ...(suspension.dates.length ? { suspension: { days: suspension.days, dates: suspension.dates, suspensionIds: suspension.ids } } : {}),
             // الإجازة المرضية بأجر متدرج: أيام الفترة بترتيبها في السنة ونسبة أجرها، وسطر خصم لكل نسبة
             ...(sick.days.length ? { sickLeave: { ...sick, amount: leaveLines.sickAmount, lines: leaveLines.sickLines,
               leaveIds: [...new Set(sick.days.map(day => day.leaveId))] } } : {}),
@@ -1868,7 +1894,7 @@ export class PayrollService {
         const coverage = row.coverage
         const grossCents = row.salary.monthlyComponents.reduce((sum, amount) => sum + Math.round(amount * 100), 0)
         const fullCoverage = coverage.coverFrom === run.startDate && coverage.coverTo === run.endDate
-        const earned = fullCoverage ? grossCents : Math.min(grossCents, Math.round(grossCents * coverage.coverDays / monthlyDays))
+        const earned = fullCoverage ? grossCents : Math.min(grossCents, Math.trunc(grossCents * coverage.coverDays / monthlyDays))
         monthlyCents += grossCents; earnedCents += earned
         included.push({ ...common, hireDate: coverage.hireDate, leaveDate: coverage.leaveDate, coverFrom: coverage.coverFrom, coverTo: coverage.coverTo,
           coverDays: coverage.coverDays, partial: !fullCoverage, prorataFactor: fullCoverage ? 1 : Math.round(Math.min(coverage.coverDays / monthlyDays, 1) * 1e6) / 1e6,
@@ -2025,6 +2051,7 @@ export class PayrollService {
   async calculateRunDraft(user: JwtPayload, runId: number, dto: { allowDraftConflicts?: boolean; refreshInstallmentPolicy?: boolean }) {
     const run = await this.runs.findOneBy({ id: runId })
     if (!run) throw new NotFoundException('المسير غير موجود')
+    await this.assertRunAccess(user, run) // فصل الفروع: لا تُكشف حالة مسير فرع آخر قبل فحص النطاق
     if (run.status !== 'DRAFT') throw this.stateError('احتساب المسودة', run.status)
     return this.calculateDefined(user, { runId, period: run.period, scopeType: run.scopeType,
       allowDraftConflicts: dto.allowDraftConflicts, refreshInstallmentPolicy: dto.refreshInstallmentPolicy })
@@ -2034,6 +2061,7 @@ export class PayrollService {
     refreshPolicySnapshot?: boolean; expectedPolicySnapshotHash?: string }) {
     const run = await this.runs.findOneBy({ id: runId })
     if (!run) throw new NotFoundException('المسير غير موجود')
+    await this.assertRunAccess(user, run) // فصل الفروع: لا تُكشف حالة مسير فرع آخر قبل فحص النطاق
     if (run.status !== 'CALCULATED') throw this.stateError('إعادة حساب المسير', run.status)
     return this.calculateDefined(user, { runId, period: run.period, scopeType: run.scopeType, reason: this.requireReason(dto.reason),
       allowDraftConflicts: dto.allowDraftConflicts, refreshInstallmentPolicy: dto.refreshInstallmentPolicy,

@@ -28,7 +28,7 @@ import {
   ValidateNested,
 } from 'class-validator'
 import { Type } from 'class-transformer'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
+import { assertCompanyWideWrite, branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import { ApprovalChain } from '../requests/entities/approval-chain.entity'
 import { ApprovalStep } from '../requests/entities/approval-step.entity'
 import { Branch } from '../org/entities/branch.entity'
@@ -54,6 +54,9 @@ import { DATA_PLACEHOLDER_REJECTED, isDataPlaceholder, withoutDataPlaceholder } 
 import { deductionSettingError } from '../payroll/typed-deductions'
 import { bonusSettingError } from '../payroll/bonuses'
 import { exemptionSettingError } from '../payroll/financial-exemptions'
+import { assertDefinitionBranchUnchanged, assertDefinitionWritable, definitionBranchForCreate, definitionBranchWhere, definitionInBranch } from '../common/definition-branch'
+import { AUDIENCE_POSITION_KEYS, AUDIENCE_WHERE_MODES, AUDIENCE_WHO_MODES } from '../requests/request-audience'
+import { Department } from '../org/entities/department.entity'
 
 class UpsertConfigDto {
   @IsOptional()
@@ -173,6 +176,11 @@ class CreateLeaveTypeDto extends LeaveTypeRulesDto {
   @IsOptional()
   @IsBoolean()
   oncePerService?: boolean
+
+  // فرع النوع: فاضي = كل الشركة؛ حساب الفرع يضيف لفرعه تلقائيًا
+  @IsOptional()
+  @IsInt({ message: 'الفرع غير صحيح' })
+  branchId?: number | null
 }
 
 class UpdateLeaveTypeDto extends LeaveTypeRulesDto {
@@ -211,6 +219,11 @@ class UpdateLeaveTypeDto extends LeaveTypeRulesDto {
   @IsOptional()
   @IsBoolean()
   isActive?: boolean
+
+  // فرع النوع ثابت بعد الإضافة — يُقبل فقط لو مطابق للحالي
+  @IsOptional()
+  @IsInt({ message: 'الفرع غير صحيح' })
+  branchId?: number | null
 }
 
 class UpdateStepDto {
@@ -344,7 +357,8 @@ class UpdateChainDto {
 
 // ===== بانِي أنواع الطلبات: نوع من الصفر بحقول مخصوصة وجمهور =====
 const FIELD_TYPES = ['text', 'number', 'date', 'select', 'file']
-const AUDIENCE_MODES = ['all', 'departments', 'roles', 'employees']
+// الجمهور «مين» + «فين» (قرار المالك 16 سبتمبر) — القيم المقبولة من request-audience.ts نفسه
+const AUDIENCE_MODES: readonly string[] = AUDIENCE_WHO_MODES
 // تسميات الوجهات للبانِي. المقبول فعلياً = «none» + كل handler مسجّل في
 // DestinationsService (مفتاح منفّذ بلا تسمية هنا يظهر بكوده ولا يُرفض)
 const AVAILABLE_HANDLERS: Array<{ key: string; labelAr: string }> = [
@@ -440,8 +454,15 @@ class CreateRequestTypeDto {
   approvalChainId?: number
 
   @IsOptional()
-  visibleTo?: { mode: string; ids: Array<number | string> }
+  visibleTo?: AudienceDto
+
+  // فرع النوع: فاضي = كل الشركة؛ حساب الفرع يضيف لفرعه تلقائيًا
+  @IsOptional()
+  @IsInt({ message: 'الفرع غير صحيح' })
+  branchId?: number | null
 }
+
+type AudienceDto = { mode: string; ids: Array<number | string>; where?: { mode?: string; ids?: Array<number | string> } | null }
 
 class UpdateRequestTypeFullDto {
   @IsOptional()
@@ -465,7 +486,12 @@ class UpdateRequestTypeFullDto {
   customFields?: CustomFieldDto[]
 
   @IsOptional()
-  visibleTo?: { mode: string; ids: Array<number | string> }
+  visibleTo?: AudienceDto
+
+  // فرع النوع ثابت بعد الإضافة — يُقبل فقط لو مطابق للحالي
+  @IsOptional()
+  @IsInt({ message: 'الفرع غير صحيح' })
+  branchId?: number | null
 
   @IsOptional()
   @IsString()
@@ -613,6 +639,7 @@ export class SettingsController {
 
   @Patch('config')
   async upsertConfig(@Body() dto: UpsertConfigDto, @CurrentUser() user: JwtPayload) {
+    assertCompanyWideWrite(user)
     // مفاتيح جديدة غير مسموحة إلا من الكود — نعدّل الموجود فقط
     const row = await this.config.findOne({ where: { key: dto.key } })
     if (!row) throw new NotFoundException(`المفتاح ${dto.key} غير معروف`)
@@ -743,13 +770,15 @@ export class SettingsController {
   }
 
   // ===== أنواع الإجازات =====
+  // حساب الفرع يرى أنواع الشركة كلها + أنواع فرعه؛ الحساب العام يرى الكل (قرار المالك 16 سبتمبر)
   @Get('leave-types')
-  listLeaveTypes() {
-    return this.leaveTypes.find({ order: { id: 'ASC' } })
+  listLeaveTypes(@CurrentUser() user: JwtPayload) {
+    return this.leaveTypes.find({ where: definitionBranchWhere<LeaveType>(user), order: { id: 'ASC' } })
   }
 
   @Post('leave-types')
-  async createLeaveType(@Body() dto: CreateLeaveTypeDto) {
+  async createLeaveType(@Body() dto: CreateLeaveTypeDto, @CurrentUser() user: JwtPayload) {
+    const branchId = await definitionBranchForCreate(this.leaveTypes.manager, user, dto.branchId)
     // الشاشة ترسل الفئة دائمًا؛ العملاء القدامى (بلا فئة) تُشتق فئتهم من المدفوعية ومصدر الرصيد كما في ترحيل 042
     if (!dto.category) {
       const balance = dto.balanceType ?? dto.balanceSource ?? 'none'
@@ -760,17 +789,20 @@ export class SettingsController {
     }
     const dup = await this.leaveTypes.findOne({ where: { code: dto.code } })
     if (dup) throw new BadRequestException(`الكود ${dto.code} مستخدم بالفعل`)
-    const row = this.leaveTypes.create({ code: dto.code } as Partial<LeaveType>)
+    const row = this.leaveTypes.create({ code: dto.code, branchId } as Partial<LeaveType>)
     return this.leaveTypes.save(Object.assign(row, this.leaveTypeInput(dto, row)))
   }
 
   @Patch('leave-types/:id')
   async updateLeaveType(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdateLeaveTypeDto
+    @Body() dto: UpdateLeaveTypeDto,
+    @CurrentUser() user: JwtPayload
   ) {
     const row = await this.leaveTypes.findOne({ where: { id } })
     if (!row) throw new NotFoundException('نوع الإجازة غير موجود')
+    assertDefinitionWritable(user, row)
+    assertDefinitionBranchUnchanged(row, dto.branchId)
     Object.assign(row, this.leaveTypeInput(dto, row))
     return this.leaveTypes.save(row)
   }
@@ -780,7 +812,8 @@ export class SettingsController {
     if (dto.balanceType !== undefined && dto.balanceSource !== undefined && dto.balanceType !== dto.balanceSource) {
       throw new BadRequestException('balanceType وbalanceSource يشيران إلى قيمتين مختلفتين')
     }
-    const { balanceSource, sickPayTiers, ...rest } = dto
+    // الفرع لا يمر من هنا: يتحدد عند الإضافة فقط (definitionBranchForCreate)
+    const { balanceSource, sickPayTiers, branchId: _branchId, ...rest } = dto
     const input: Record<string, unknown> = { ...rest }
     if (dto.balanceType !== undefined || balanceSource !== undefined) {
       input.balanceType = dto.balanceType !== undefined ? dto.balanceType : balanceSource
@@ -851,7 +884,12 @@ export class SettingsController {
     const typeByCode = new Map(types.map((t) => [t.code, t]))
     // الدورة الأساسية لنوع = تُحلّ بالـid لكل الفروع — الشاشة تقفل نقلها لفرع
     const primaryIds = new Set(types.map((t) => t.approvalChainId).filter(Boolean))
-    return chains.map((c) => ({
+    // عزل الفروع: سلسلة معمولة لنوع خاص بفرع تاني ماتظهرش لحساب الفرع (ولا اسم النوع)، حتى لو صفها قديم من غير فرع
+    const typeHidden = (typeCode: string | null) => {
+      const type = typeCode ? typeByCode.get(typeCode) : undefined
+      return scope !== null && !!type && !definitionInBranch(type.branchId, scope)
+    }
+    return chains.filter((c) => !typeHidden(c.requestTypeCode)).map((c) => ({
       ...c,
       isPrimary: primaryIds.has(c.id),
       steps: allSteps.filter((s) => s.chainId === c.id),
@@ -1025,8 +1063,9 @@ export class SettingsController {
   // ===== بانِي الطلبات: عرض + إنشاء من الصفر + تعديل شامل =====
   @Perm('request_types.manage')
   @Get('request-types')
-  async listRequestTypes() {
-    const types = await this.requestTypes.find({ order: { category: 'ASC', id: 'ASC' } })
+  async listRequestTypes(@CurrentUser() user: JwtPayload) {
+    // حساب الفرع يرى أنواع الشركة كلها + أنواع فرعه (قرار المالك 16 سبتمبر)
+    const types = await this.requestTypes.find({ where: definitionBranchWhere<RequestType>(user), order: { category: 'ASC', id: 'ASC' } })
     return types.map((t) => this.withDestinationStatus(t))
   }
 
@@ -1066,15 +1105,48 @@ export class SettingsController {
     return !!typeCode && this.destinations.supports({ code: typeCode, destinationHandler: key })
   }
 
-  private validateAudience(v?: { mode: string; ids: Array<number | string> }) {
+  // الجمهور «مين» + «فين» (قرار المالك 16 سبتمبر). بدون «فين» يتخزن بالشكل القديم نفسه {mode, ids}.
+  // نوع خاص بفرع: «فين» لازم يكون جوه الفرع ده (وإلا النوع يختفي عن الكل بصمت).
+  private async validateAudience(v: AudienceDto | undefined, typeBranchId: number | null) {
     if (v === undefined) return undefined
-    if (!v.mode || !AUDIENCE_MODES.includes(v.mode)) {
-      throw new BadRequestException('جمهور النوع: all/departments/roles/employees')
+    if (!v || typeof v !== 'object' || !v.mode || !AUDIENCE_MODES.includes(v.mode)) {
+      throw new BadRequestException('اختار مين يقدر يقدّم الطلب: الكل أو حسب المنصب أو أدوار أو موظفين بعينهم')
     }
-    if (v.mode !== 'all' && (!Array.isArray(v.ids) || v.ids.length === 0)) {
-      throw new BadRequestException('حدد عناصر الجمهور (ids)')
+    const ids = Array.isArray(v.ids) ? v.ids : []
+    if (v.mode !== 'all' && ids.length === 0) {
+      throw new BadRequestException('اختار واحد على الأقل في «مين يقدر يقدّم الطلب»')
     }
-    return JSON.stringify({ mode: v.mode, ids: v.ids ?? [] })
+    const positionKeys: string[] = [...AUDIENCE_POSITION_KEYS, 'hr_manager', 'executive']
+    if (v.mode === 'positions' && ids.some((id) => !positionKeys.includes(String(id)))) {
+      throw new BadRequestException('منصب غير معروف في «مين يقدر يقدّم الطلب»')
+    }
+    if ((v.mode === 'employees' || v.mode === 'departments') && ids.some((id) => !Number.isInteger(Number(id)) || Number(id) < 1)) {
+      throw new BadRequestException('اختيار غير صحيح في «مين يقدر يقدّم الطلب»')
+    }
+    const whereMode = v.where?.mode ?? 'company'
+    if (!(AUDIENCE_WHERE_MODES as readonly string[]).includes(whereMode)) {
+      throw new BadRequestException('اختار فين: كل الشركة أو فروع محددة أو أقسام محددة')
+    }
+    if (whereMode === 'company') return JSON.stringify({ mode: v.mode, ids })
+    const whereIds = [...new Set((Array.isArray(v.where?.ids) ? v.where!.ids : []).map(Number))]
+    if (!whereIds.length || whereIds.some((id) => !Number.isInteger(id) || id < 1)) {
+      throw new BadRequestException(whereMode === 'branches' ? 'اختار فرع واحد على الأقل' : 'اختار قسم واحد على الأقل')
+    }
+    const em = this.requestTypes.manager
+    if (whereMode === 'branches') {
+      const found = await em.getRepository(Branch).find({ where: { id: In(whereIds) }, select: { id: true } })
+      if (found.length !== whereIds.length) throw new BadRequestException('فرع من الفروع المختارة غير موجود')
+      if (typeBranchId !== null && whereIds.some((id) => id !== typeBranchId)) {
+        throw new BadRequestException('الطلب ده خاص بفرع واحد، فمينفعش يظهر في فروع تانية')
+      }
+    } else {
+      const found = await em.getRepository(Department).find({ where: { id: In(whereIds) }, select: { id: true, branchId: true } })
+      if (found.length !== whereIds.length) throw new BadRequestException('قسم من الأقسام المختارة غير موجود')
+      if (typeBranchId !== null && found.some((d) => d.branchId !== typeBranchId)) {
+        throw new BadRequestException('الطلب ده خاص بفرع واحد، فاختار أقسام من نفس الفرع')
+      }
+    }
+    return JSON.stringify({ mode: v.mode, ids, where: { mode: whereMode, ids: whereIds } })
   }
 
   private validateCustomFields(fields?: CustomFieldDto[]) {
@@ -1095,7 +1167,10 @@ export class SettingsController {
   // §2.2: نوع طلب جديد من الصفر
   @Perm('request_types.manage')
   @Post('request-types')
-  async createRequestType(@Body() dto: CreateRequestTypeDto) {
+  async createRequestType(@Body() dto: CreateRequestTypeDto, @CurrentUser() user: JwtPayload) {
+    // الفرع والجمهور يتراجعوا قبل أي حفظ (حتى سلسلة الاعتماد الفاضية)
+    const branchId = await definitionBranchForCreate(this.requestTypes.manager, user, dto.branchId)
+    const visibleTo = await this.validateAudience(dto.visibleTo, branchId)
     // توليد كود من الاسم إن لم يُحدد
     let code = dto.code
     if (!code) {
@@ -1112,7 +1187,13 @@ export class SettingsController {
       const chain = await this.chains.findOne({
         where: { id: dto.approvalChainId },
       })
-      if (!chain) throw new BadRequestException('سلسلة الاعتماد غير موجودة')
+      // سلسلة فرع تاني كأنها مش موجودة لحساب الفرع
+      if (!chain || (branchScopeOf(user) !== null && !definitionInBranch(chain.branchId, branchId))) {
+        throw new BadRequestException('سلسلة الاعتماد غير موجودة')
+      }
+      if (!definitionInBranch(chain.branchId, branchId)) {
+        throw new BadRequestException('سلسلة الاعتماد دي خاصة بفرع — اختار سلسلة لكل الشركة أو لنفس فرع النوع')
+      }
     }
     const customFields = this.validateCustomFields(dto.customFields)
     // الحقول المطلوبة (القديمة) تُشتق من المخصّصة الإجبارية
@@ -1125,7 +1206,9 @@ export class SettingsController {
     let chainId = dto.approvalChainId
     if (!chainId) {
       const chainCode = `CH_${code}`
-      let chain = await this.chains.findOne({ where: { code: chainCode } })
+      // السلسلة بنفس فرع النوع: نوع خاص بفرع = سلسلته خاصة بنفس الفرع (فرعه يعدّلها والفروع التانية ماتشوفهاش).
+      // IsNull صراحةً: TypeORM يتجاهل null في where فيطابق الكود بأي فرع
+      let chain = await this.chains.findOne({ where: { code: chainCode, branchId: branchId ?? IsNull() } })
       if (!chain) {
         chain = await this.chains.save(
           this.chains.create({
@@ -1133,6 +1216,7 @@ export class SettingsController {
             nameAr: `سلسلة اعتماد ${dto.nameAr}`,
             requestTypeCode: code,
             autoApprove: false,
+            branchId: branchId ?? undefined,
           })
         )
       }
@@ -1151,7 +1235,8 @@ export class SettingsController {
         requiredAttachments: dto.requiredAttachments,
         destinationHandler: handler,
         approvalChainId: chainId,
-        visibleTo: this.validateAudience(dto.visibleTo),
+        visibleTo,
+        branchId,
         phase: 'P1',
       })
     )
@@ -1163,16 +1248,27 @@ export class SettingsController {
   @Patch('request-types/:id')
   async updateRequestType(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdateRequestTypeFullDto
+    @Body() dto: UpdateRequestTypeFullDto,
+    @CurrentUser() user: JwtPayload
   ) {
     const type = await this.requestTypes.findOne({ where: { id } })
     if (!type) throw new NotFoundException('نوع الطلب غير موجود')
+    assertDefinitionWritable(user, type)
+    assertDefinitionBranchUnchanged(type, dto.branchId)
     if (dto.approvalChainId !== undefined) {
-      const chain = await this.chains.findOne({
+      // نفس شروط الإضافة: فرع النوع ثابت، فالسلسلة لازم تكون لكل الشركة أو لنفس فرعه.
+      // null صراحةً مرفوض: TypeORM يتجاهل null في where فكان هيطابق أي سلسلة
+      const chain = dto.approvalChainId == null ? null : await this.chains.findOne({
         where: { id: dto.approvalChainId },
       })
-      if (!chain) throw new BadRequestException('سلسلة الاعتماد غير موجودة')
-      type.approvalChainId = dto.approvalChainId
+      // سلسلة فرع تاني كأنها مش موجودة لحساب الفرع
+      if (!chain || (branchScopeOf(user) !== null && !definitionInBranch(chain.branchId, type.branchId))) {
+        throw new BadRequestException('سلسلة الاعتماد غير موجودة')
+      }
+      if (!definitionInBranch(chain.branchId, type.branchId)) {
+        throw new BadRequestException('سلسلة الاعتماد دي خاصة بفرع — اختار سلسلة لكل الشركة أو لنفس فرع النوع')
+      }
+      type.approvalChainId = chain.id
     }
     // الوجهة الحالية مقبولة كما هي (أنواع مبذورة بوجهات قديمة/لم تُبنَ بعد) —
     // والتغيير لازم يكون لوجهة منفّذة فعلاً في محرك الوجهات
@@ -1215,7 +1311,7 @@ export class SettingsController {
         : (null as any)
     }
     if (dto.visibleTo !== undefined) {
-      type.visibleTo = this.validateAudience(dto.visibleTo) as string
+      type.visibleTo = (await this.validateAudience(dto.visibleTo, type.branchId ?? null)) as string
     }
     if (dto.nameAr !== undefined) type.nameAr = dto.nameAr
     if (dto.requiredAttachments !== undefined) {

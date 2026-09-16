@@ -38,6 +38,7 @@ import {
   type ApiUnmatchedCode,
   type ApiEmployee,
 } from '@/lib/api'
+import { DISPLAY_LOCALE } from '@/lib/dates'
 
 interface Device {
   id: number
@@ -63,7 +64,7 @@ const formatLastSeen = (lastSeen: string | null): string => {
   if (!lastSeen) return 'لم يظهر بعد'
   const d = new Date(lastSeen)
   if (Number.isNaN(d.getTime())) return 'لم يظهر بعد'
-  return d.toLocaleString('ar-EG', { dateStyle: 'medium', timeStyle: 'short' })
+  return d.toLocaleString(DISPLAY_LOCALE, { dateStyle: 'medium', timeStyle: 'short' })
 }
 
 const emptyForm = { name: '', serialNumber: '', branchId: '', ip: '', port: '', authKey: '', clearAuthKey: false }

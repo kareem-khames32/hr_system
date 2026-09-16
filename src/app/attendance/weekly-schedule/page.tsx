@@ -29,6 +29,8 @@ import {
   Star,
 } from 'lucide-react'
 import {
+  ApiError,
+  assignScheduleRange,
   fetchCatalog,
   fetchWeekSchedule,
   upsertWeekSchedule,
@@ -36,19 +38,25 @@ import {
   fetchEmployees,
   fetchDepartments,
   fetchBranches,
-  fetchTeams,
   fetchWeekDayOverrides,
+  getCurrentUser,
   setDayShiftOverride,
-  setDayShiftOverridesBulk,
   fetchWorkingDays,
   fetchScheduleRules,
   type ApiEmployee,
   type ApiDepartment,
   type ApiBranch,
-  type ApiTeam,
   type ApiScheduleRule,
   type ApiWorkSchedule,
 } from '@/lib/api'
+import { DISPLAY_LOCALE, localDateStr, localToday } from '@/lib/dates'
+import {
+  OrgTargetPicker,
+  describeOrgTarget,
+  initialOrgTarget,
+  resolveOrgTarget,
+  type OrgTarget,
+} from '@/components/OrgTargetPicker'
 
 // أنواع البيانات
 // صف الوردية كما يرجّعه كتالوج الورديات الحقيقي (/catalogs/shifts)
@@ -61,6 +69,7 @@ interface ApiShift {
   shiftMode?: 'fixed' | 'flexible'
   requiredHours?: number | string | null
   isActive?: boolean
+  branchId?: number | null // null = كل الشركة
 }
 
 // وردية جاهزة للعرض — مشتقّة من صف الكتالوج (لا كتالوج مكتوب في الكود)
@@ -76,6 +85,7 @@ interface Shift {
   workHours: number
   shiftMode?: 'fixed' | 'flexible'
   graceMinutes?: number | null
+  branchId?: number | null
 }
 
 // تجاوز وردية يوم بعينه — يتقدم على وردية الأسبوع (من السيرفر)
@@ -151,6 +161,7 @@ const toShift = (row: ApiShift, index: number): Shift => {
     workHours: row.shiftMode === 'flexible' && Number(row.requiredHours) > 0 ? Number(row.requiredHours) : hoursBetween(startTime, endTime),
     shiftMode: row.shiftMode,
     graceMinutes: row.graceMinutes ?? null,
+    branchId: row.branchId ?? null,
   }
 }
 
@@ -302,7 +313,6 @@ export default function WeeklySchedulePage() {
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [departmentsList, setDepartmentsList] = useState<ApiDepartment[]>([])
   const [branchesList, setBranchesList] = useState<ApiBranch[]>([])
-  const [teamsList, setTeamsList] = useState<ApiTeam[]>([])
   // كتالوج الورديات الحقيقي — النشِطة فقط، من /catalogs/shifts
   const [shiftCatalog, setShiftCatalog] = useState<Shift[]>([])
   const [shiftsLoading, setShiftsLoading] = useState(true)
@@ -333,7 +343,11 @@ export default function WeeklySchedulePage() {
   const [notice, setNotice] = useState('')
 
   const [searchQuery, setSearchQuery] = useState('')
+  // فلترة الجدول بنفس ترتيب الاستهداف: فرع ← أقسامه
+  const [selectedBranch, setSelectedBranch] = useState('all')
   const [selectedDepartment, setSelectedDepartment] = useState('all')
+  // مستخدم فرع: الاستهداف مقفول على فرعه (الفرض الحقيقي في الباك)
+  const [lockedBranchId, setLockedBranchId] = useState<number | null>(null)
   const [selectedCell, setSelectedCell] = useState<{ empId: number; day: string } | null>(null)
   const [hasChanges, setHasChanges] = useState(false)
   const [showTemplates, setShowTemplates] = useState(false)
@@ -354,9 +368,10 @@ export default function WeeklySchedulePage() {
         setDepartmentsList(deps)
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل الموظفين'))
-    // الفروع والفرق — اختيارية لنطاق التعيين؛ تُتجاهَل بصمت لو فشلت
+    // الفروع — لمنتقي الاستهداف والفلترة؛ تُتجاهَل بصمت لو فشلت
     fetchBranches().then(setBranchesList).catch(() => setBranchesList([]))
-    fetchTeams().then(setTeamsList).catch(() => setTeamsList([]))
+    const user = getCurrentUser()
+    setLockedBranchId(user && user.role !== 'super_admin' && user.branchId ? user.branchId : null)
     // قواعد الاستثناء — اختيارية للتمييز؛ تُتجاهَل بصمت لو فشلت
     fetchScheduleRules()
       .then(setScheduleRules)
@@ -529,7 +544,7 @@ export default function WeeklySchedulePage() {
 
   // تنسيق التاريخ
   const formatDate = (date: Date) => {
-    return date.toLocaleDateString('ar-EG-u-ca-gregory', { day: 'numeric', month: 'long' })
+    return date.toLocaleDateString(DISPLAY_LOCALE, { day: 'numeric', month: 'long' })
   }
 
   // الانتقال للأسبوع السابق
@@ -570,13 +585,14 @@ export default function WeeklySchedulePage() {
     const matchesSearch =
       emp.employeeName.includes(searchQuery) ||
       emp.employeeCode.toLowerCase().includes(searchQuery.toLowerCase())
-    const matchesDepartment = selectedDepartment === 'all' || emp.department === selectedDepartment
-    return matchesSearch && matchesDepartment
+    const matchesBranch = selectedBranch === 'all' || String(emp.branchId) === selectedBranch
+    const matchesDepartment = selectedDepartment === 'all' || String(emp.departmentId) === selectedDepartment
+    return matchesSearch && matchesBranch && matchesDepartment
   })
 
-  // الأقسام المتاحة
-  const departments = Array.from(new Set(rows.map((emp) => emp.department))).filter(
-    (d) => d !== '-'
+  // الأقسام المتاحة للفلترة — أقسام الفرع المختار بس
+  const departments = departmentsList.filter(
+    (d) => selectedBranch === 'all' || String(d.branchId) === selectedBranch
   )
 
   // حفظ التغييرات — upsert لكل موظف تغيّرت ورديته ثم إعادة تحميل الأسبوع
@@ -726,7 +742,9 @@ export default function WeeklySchedulePage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">الجدول الأسبوعي</h1>
-            <p className="text-gray-500 mt-1">إدارة جداول الورديات الأسبوعية للموظفين</p>
+            <p className="text-gray-500 mt-1">
+              «تعيين وردية لمدة» للشهر أو أي مدة مرة واحدة، والأسبوع هنا للتعديل الدقيق يوم بيوم
+            </p>
           </div>
           <div className="flex items-center gap-3">
             {hasChanges && (
@@ -840,16 +858,32 @@ export default function WeeklySchedulePage() {
                 />
               </div>
 
-              {/* Department Filter */}
+              {/* فلترة بالفرع ثم أقسامه — نفس ترتيب الاستهداف */}
+              {branchesList.length > 1 && (
+                <select
+                  value={selectedBranch}
+                  onChange={e => { setSelectedBranch(e.target.value); setSelectedDepartment('all') }}
+                  className="input w-48"
+                  aria-label="الفرع"
+                >
+                  <option value="all">كل الفروع</option>
+                  {branchesList.map(branch => (
+                    <option key={branch.id} value={branch.id}>
+                      {branch.name}
+                    </option>
+                  ))}
+                </select>
+              )}
               <select
                 value={selectedDepartment}
                 onChange={e => setSelectedDepartment(e.target.value)}
                 className="input w-48"
+                aria-label="القسم"
               >
-                <option value="all">كل الأقسام</option>
+                <option value="all">{selectedBranch === 'all' ? 'كل الأقسام' : 'كل أقسام الفرع'}</option>
                 {departments.map(dept => (
-                  <option key={dept} value={dept}>
-                    {dept}
+                  <option key={dept.id} value={dept.id}>
+                    {dept.name}
                   </option>
                 ))}
               </select>
@@ -877,11 +911,15 @@ export default function WeeklySchedulePage() {
                 نسخ من أسبوع
               </button>
               <button
-                onClick={() => setShowBulkAssign(true)}
-                className="btn-secondary flex items-center gap-2"
+                onClick={() => {
+                  if (hasChanges || saving) { setError('احفظ تغييرات الأسبوع الأول قبل التعيين لمدة'); return }
+                  setShowBulkAssign(true)
+                }}
+                className="btn-primary flex items-center gap-2"
+                title="وردية لفرع أو أقسام أو موظفين — للأسبوع أو الشهر أو أي مدة"
               >
                 <UserCheck size={18} />
-                تعيين جماعي
+                تعيين وردية لمدة
               </button>
               <div className="h-8 w-px bg-gray-200" />
               <button onClick={() => window.print()} className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200 transition-colors" title="طباعة">
@@ -1307,76 +1345,24 @@ export default function WeeklySchedulePage() {
           </div>
         )}
 
-        {/* Bulk Assign Modal */}
+        {/* تعيين وردية لمدة — مين (فرع ← أقسام ← موظفين) + إمتى (أسبوع/شهر/مدة) + الوردية */}
         {showBulkAssign && (
-          <BulkAssignModal
-            employees={filteredRows}
-            allEmployees={rows}
-            departments={departmentsList}
+          <RangeAssignModal
+            employees={employees}
             branches={branchesList}
-            teams={teamsList}
+            departments={departmentsList}
             selectedEmployees={selectedEmployees}
             shifts={shiftCatalog}
-            weekDays={weekDays}
+            weekStart={currentWeekStart}
+            lockedBranchId={lockedBranchId}
             onClose={() => setShowBulkAssign(false)}
-            onAssign={async (empIds, days, shiftKey) => {
-              const shift = shiftCatalog.find((s) => s.id === shiftKey)
-              if (days.length > 0 && shift) {
-                // أيام محددة → «يوم استثنائي»: الوردية تُطبَّق كتجاوز لتلك
-                // التواريخ فقط (مثلاً السبت) لكل موظفي النطاق، دون تغيير الأسبوع
-                const dates = days
-                  .map((k) => weekDays.findIndex((d) => d.key === k))
-                  .filter((i) => i >= 0)
-                  .map((i) => dateOfDayIndex(currentWeekStart, i))
-                // shiftId مع الاسم والأوقات — مرجع الوردية في الكتالوج
-                const payload = {
-                  employeeIds: empIds,
-                  dates,
-                  shiftName: shift.name,
-                  startTime: shift.startTime,
-                  endTime: shift.endTime,
-                  ...(shift.shiftId ? { shiftId: shift.shiftId } : {}),
-                }
-                try {
-                  const res = await setDayShiftOverridesBulk(payload)
-                  await loadOverrides(currentKey)
-                  const expected = empIds.length * dates.length
-                  // سبب فشل كل موظف/يوم من السيرفر — لا «تخطّى N» بلا تفسير
-                  const failed = res.failed ?? []
-                  const reasons = failed.slice(0, 10).map((f) => {
-                    const r = rows.find((x) => x.id === f.employeeId)
-                    return `${r?.employeeName ?? `موظف #${f.employeeId}`} (${f.date}): ${f.error}`
-                  })
-                  if (failed.length > 10) reasons.push(`و${failed.length - 10} أخرى`)
-                  // موظفون استبعدهم السيرفر قبل التطبيق (خارج نطاق فرعك أو أنت نفسك)
-                  if (res.skipped) {
-                    reasons.push(`${res.skipped} موظف مستبعَد: خارج نطاق فرعك أو أنت نفسك`)
-                  }
-                  if (res.applied === 0) {
-                    // لم يُطبَّق شيء فعلاً — لا نعرض نجاحاً كاذباً
-                    setError(
-                      reasons.length > 0
-                        ? `لم يُطبَّق التجاوز على أي موظف — ${reasons.join('؛ ')}`
-                        : 'لم يُطبَّق التجاوز على أي موظف — تحقق من النطاق والوردية'
-                    )
-                  } else {
-                    setError('')
-                    setNotice(
-                      res.applied < expected
-                        ? `تم تطبيق «${shift.name}» على ${res.applied} من ${expected} تعيين — تعذّر ${expected - res.applied}:\n${reasons.map((x) => `• ${x}`).join('\n')}`
-                        : `تم تطبيق «${shift.name}» كاستثناء على ${res.employees} موظف في ${res.days} يوم`
-                    )
-                  }
-                } catch (e) {
-                  setError(e instanceof Error ? e.message : 'تعذر تطبيق استثناء اليوم')
-                }
-              } else {
-                // بلا أيام → وردية الأسبوع لكل موظفي النطاق (سلوك أساسي)
-                empIds.forEach((id) => changeShift(id, shiftKey))
-                setHasChanges(true)
-                setNotice(`حُددت ورديات ${empIds.length} موظف؛ اضغط حفظ الجدول لتطبيقها`)
-              }
+            onDone={async (message, problems) => {
               setShowBulkAssign(false)
+              setSelectedEmployees([])
+              await Promise.all([loadWeek(currentKey), loadOverrides(currentKey)])
+              if (problems) setError(problems)
+              else setError('')
+              setNotice(message)
             }}
           />
         )}
@@ -1571,231 +1557,215 @@ function DayOverrideModal({
   )
 }
 
-// نطاق التعيين الجماعي
-type AssignScope = 'individual' | 'team' | 'department' | 'branch' | 'company'
-const SCOPE_LABELS: { key: AssignScope; label: string }[] = [
-  { key: 'individual', label: 'موظف محدد' },
-  { key: 'team', label: 'فريق' },
-  { key: 'department', label: 'قسم' },
-  { key: 'branch', label: 'فرع' },
-  { key: 'company', label: 'الشركة كلها' },
-]
+// عدد الموظفين في كل طلب — الإسناد بيعيد حساب الأيام اللي فاتت فبنقسّمه ونعرض التقدم
+const RANGE_CHUNK = 10
 
-// Modal التعيين الجماعي
-function BulkAssignModal({
+const monthBounds = (offset: number) => {
+  const today = new Date(`${localToday()}T12:00:00`)
+  const first = new Date(today.getFullYear(), today.getMonth() + offset, 1, 12)
+  const last = new Date(today.getFullYear(), today.getMonth() + offset + 1, 0, 12)
+  return { from: localDateStr(first), to: localDateStr(last) }
+}
+
+// أيام المدة اللي عليها الإسناد (بعد فلترة أيام الأسبوع) — للمعاينة قبل الحفظ
+const rangeDates = (from: string, to: string, weekdays: number[]): string[] => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) return []
+  const out: string[] = []
+  const d = new Date(`${from}T12:00:00`)
+  for (let i = 0; i < 400 && localDateStr(d) <= to; i++) {
+    if (weekdays.length === 0 || weekdays.includes(d.getDay())) out.push(localDateStr(d))
+    d.setDate(d.getDate() + 1)
+  }
+  return out
+}
+
+// Modal تعيين وردية لمدة: الشركة/فرع/أقسام/موظفين × من تاريخ لتاريخ (واختياريًا أيام بعينها)
+function RangeAssignModal({
   employees,
-  allEmployees,
-  departments,
   branches,
-  teams,
-  selectedEmployees: initialSelected,
+  departments,
+  selectedEmployees,
   shifts,
-  weekDays,
+  weekStart,
+  lockedBranchId,
   onClose,
-  onAssign,
+  onDone,
 }: {
-  employees: EmployeeRow[]
-  allEmployees: EmployeeRow[]
-  departments: ApiDepartment[]
+  employees: ApiEmployee[]
   branches: ApiBranch[]
-  teams: ApiTeam[]
+  departments: ApiDepartment[]
   selectedEmployees: number[]
   shifts: Shift[]
-  weekDays: { key: string; name: string }[]
+  weekStart: Date
+  lockedBranchId: number | null
   onClose: () => void
-  onAssign: (empIds: number[], days: string[], shiftId: string) => Promise<void>
+  onDone: (message: string, problems: string) => Promise<void>
 }) {
-  const [selectedEmps, setSelectedEmps] = useState<number[]>(initialSelected)
-  const [selectedDays, setSelectedDays] = useState<string[]>([])
-  const [selectedShift, setSelectedShift] = useState('')
-  // النطاق: فرد (بالتحديد) أو فريق/قسم/فرع (بمعرّف) أو الشركة كلها
-  const [scope, setScope] = useState<AssignScope>('individual')
-  const [scopeId, setScopeId] = useState<number | ''>('')
+  const weekFrom = dateOfDayIndex(weekStart, 0)
+  const weekTo = dateOfDayIndex(weekStart, 6)
+  // الموظفين المحددين في الجدول (من نفس الفرع) يبقوا الاختيار الأولي
+  const [target, setTarget] = useState<OrgTarget>(() => {
+    const picked = employees.filter((e) => selectedEmployees.includes(e.id))
+    const branchIds = [...new Set(picked.map((e) => e.branchId))]
+    if (picked.length > 0 && branchIds.length === 1 && (!lockedBranchId || branchIds[0] === lockedBranchId)) {
+      return { level: 'employees', branchId: branchIds[0], departmentIds: [], employeeIds: picked.map((e) => e.id) }
+    }
+    return initialOrgTarget(lockedBranchId)
+  })
+  const [from, setFrom] = useState(weekFrom)
+  const [to, setTo] = useState(weekTo)
+  const [weekdays, setWeekdays] = useState<number[]>([])
+  const [shiftKey, setShiftKey] = useState('')
+  const [keepOverrides, setKeepOverrides] = useState(false)
   const [busy, setBusy] = useState(false)
+  const [progress, setProgress] = useState<{ done: number; total: number } | null>(null)
   const [error, setError] = useState('')
 
-  const toggleEmployee = (empId: number) => {
-    setSelectedEmps(prev =>
-      prev.includes(empId) ? prev.filter(id => id !== empId) : [...prev, empId]
-    )
-  }
+  const targetIds = resolveOrgTarget(target, employees)
+  const dates = rangeDates(from, to, weekdays)
+  // وردية الفرع تتسند لموظفي فرعها بس — الشركة كلها تاخد ورديات الشركة
+  const shiftOptions = shifts.filter((s) => s.branchId == null || (target.level !== 'company' && s.branchId === target.branchId))
+  const shift = shiftOptions.find((s) => s.id === shiftKey)
+  const nameOf = (id: number) => employees.find((e) => e.id === id)?.fullName ?? `موظف #${id}`
+  const quick = [
+    { label: 'الأسبوع المعروض', from: weekFrom, to: weekTo },
+    { label: 'الشهر ده', ...monthBounds(0) },
+    { label: 'الشهر الجاي', ...monthBounds(1) },
+  ]
 
-  const toggleDay = (day: string) => {
-    setSelectedDays(prev =>
-      prev.includes(day) ? prev.filter(d => d !== day) : [...prev, day]
-    )
-  }
-
-  // الموظفون المستهدفون فعلياً حسب النطاق المختار (من كل الموظفين لا المفلترين)
-  const targetEmps: number[] =
-    scope === 'individual'
-      ? selectedEmps
-      : scope === 'company'
-        ? allEmployees.map((e) => e.id)
-        : scopeId === ''
-          ? []
-          : allEmployees
-              .filter((e) =>
-                scope === 'team'
-                  ? e.teamId === scopeId
-                  : scope === 'department'
-                    ? e.departmentId === scopeId
-                    : e.branchId === scopeId
-              )
-              .map((e) => e.id)
-
-  // قائمة خيارات القائمة المنسدلة حسب النطاق
-  const scopeOptions =
-    scope === 'team'
-      ? teams.map((t) => ({ id: t.id, name: t.name }))
-      : scope === 'department'
-        ? departments.map((d) => ({ id: d.id, name: d.name }))
-        : scope === 'branch'
-          ? branches.map((b) => ({ id: b.id, name: b.name }))
-          : []
-
-  const handleAssign = async () => {
+  const apply = async () => {
     if (busy) return
-    if (targetEmps.length === 0 || !selectedShift) {
-      setError('اختر النطاق (أو الموظفين) والوردية')
-      return
-    }
+    if (targetIds.length === 0) { setError('اختار على مين: الشركة أو فرع أو أقسام أو موظفين'); return }
+    if (!from || !to || from > to) { setError('تاريخ البداية لازم يكون قبل أو يساوي تاريخ النهاية'); return }
+    if (dates.length === 0) { setError('مفيش أيام في المدة دي من الأيام المختارة'); return }
+    if (!shift?.shiftId) { setError('اختار الوردية'); return }
     setBusy(true)
     setError('')
-    try { await onAssign(targetEmps, selectedDays, selectedShift) }
-    catch (e) { setError(e instanceof Error ? e.message : 'تعذر تطبيق الوردية') }
-    finally { setBusy(false) }
+    setProgress({ done: 0, total: targetIds.length })
+    let applied = 0, removed = 0, kept = 0, recomputed = 0, recomputeFailed = 0, weeks = 0, days = 0
+    const problems: string[] = []
+    try {
+      for (let i = 0; i < targetIds.length; i += RANGE_CHUNK) {
+        const chunk = targetIds.slice(i, i + RANGE_CHUNK)
+        try {
+          const res = await assignScheduleRange({
+            employeeIds: chunk, from, to, shiftId: shift.shiftId,
+            ...(weekdays.length ? { weekdays } : {}),
+            ...(keepOverrides ? { keepDayOverrides: true } : {}),
+          })
+          applied += res.applied
+          removed += res.removedOverrides
+          kept += res.keptOverrides
+          recomputed += res.recomputed
+          recomputeFailed += res.recomputeFailed.length
+          weeks = res.weeks
+          days = res.days
+          problems.push(...res.failed.map((f) => `${nameOf(f.employeeId)}: ${f.error}`))
+          problems.push(...res.skipped.map((s) => `${nameOf(s.employeeId)}: ${s.reason}`))
+        } catch (e) {
+          const message = e instanceof Error ? e.message : 'تعذر حفظ الوردية'
+          // خطأ في الطلب نفسه (وردية مش سارية/تاريخ غلط) هيتكرر مع كل دفعة — نوقف
+          if (e instanceof ApiError && e.status === 400) {
+            if (applied === 0) { setError(message); return }
+            problems.push(message)
+            break
+          }
+          problems.push(...chunk.map((id) => `${nameOf(id)}: ${message}`))
+        }
+        setProgress({ done: Math.min(i + RANGE_CHUNK, targetIds.length), total: targetIds.length })
+      }
+      const parts = [
+        `اتسجلت «${shift.name}» لـ${applied} من ${targetIds.length} موظف من ${from} لـ${to}`,
+        weeks ? `${weeks} أسبوع كامل` : '',
+        days ? `${days} يوم خاص` : '',
+        removed ? `اتشال ${removed} يوم خاص قديم` : '',
+        kept ? `فضل ${kept} يوم خاص زي ما هو` : '',
+        recomputed ? `اتحسب تاني ${recomputed} يوم حضور` : '',
+      ].filter(Boolean)
+      const issues = [
+        ...problems.slice(0, 8),
+        ...(problems.length > 8 ? [`و${problems.length - 8} غيرهم`] : []),
+        ...(recomputeFailed ? [`${recomputeFailed} يوم ما اتحسبش تاني — راجع سجل الحضور`] : []),
+      ]
+      await onDone(parts.join(' — '), issues.length ? `ما اتطبقش على الكل: ${issues.join('؛ ')}` : '')
+    } finally {
+      setBusy(false)
+      setProgress(null)
+    }
   }
 
   return (
     <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
+      <div role="dialog" aria-modal="true" aria-labelledby="range-assign-title" className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-hidden flex flex-col">
         <div className="p-6 border-b border-gray-100 flex items-center justify-between">
           <div>
-            <h3 className="text-xl font-bold text-gray-800">تعيين جماعي</h3>
-            <p className="text-gray-500 text-sm mt-1">تعيين وردية الأسبوع لمجموعة موظفين</p>
+            <h3 id="range-assign-title" className="text-xl font-bold text-gray-800">تعيين وردية لمدة</h3>
+            <p className="text-gray-500 text-sm mt-1">لفرع كامل أو أقسام منه أو موظفين — لأسبوع أو شهر أو أي مدة مرة واحدة</p>
           </div>
-          <button onClick={onClose} className="p-2 hover:bg-gray-100 rounded-lg">
+          <button onClick={onClose} disabled={busy} className="p-2 hover:bg-gray-100 rounded-lg disabled:opacity-50">
             <X size={20} className="text-gray-500" />
           </button>
         </div>
 
         <div className="p-6 space-y-6 overflow-y-auto flex-1">
           {error && <p role="alert" className="text-red-700 bg-red-50 p-3 rounded-lg">{error}</p>}
-          {/* نطاق التعيين — موظف / فريق / قسم / فرع / الشركة كلها */}
+
+          {/* 1) على مين — نفس ترتيب الاستهداف في النظام كله */}
+          <OrgTargetPicker
+            value={target}
+            onChange={setTarget}
+            branches={branches}
+            departments={departments}
+            employees={employees}
+            lockedBranchId={lockedBranchId}
+            disabled={busy}
+          />
+
+          {/* 2) إمتى */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-3">
-              نطاق التعيين
-            </label>
-            <div className="flex gap-2 flex-wrap">
-              {SCOPE_LABELS.map((s) => (
+            <label className="block text-sm font-medium text-gray-700 mb-2">المدة</label>
+            <div className="flex gap-2 flex-wrap mb-3">
+              {quick.map((q) => (
                 <button
-                  key={s.key}
-                  onClick={() => {
-                    setScope(s.key)
-                    setScopeId('')
-                  }}
-                  className={`px-4 py-2 rounded-lg text-sm transition-all ${
-                    scope === s.key
-                      ? 'bg-primary-500 text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  key={q.label}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => { setFrom(q.from); setTo(q.to) }}
+                  className={`px-3 py-1.5 rounded-lg text-sm transition-colors ${
+                    from === q.from && to === q.to ? 'bg-primary-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                 >
-                  {s.label}
+                  {q.label}
                 </button>
               ))}
             </div>
-          </div>
-
-          {/* الاختيار حسب النطاق */}
-          {scope === 'individual' ? (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-3">
-                الموظفين ({selectedEmps.length} محدد)
-              </label>
-              <div className="max-h-40 overflow-y-auto border border-gray-200 rounded-xl p-2 space-y-1">
-                {employees.length === 0 && (
-                  <p className="text-sm text-gray-400 text-center py-3">
-                    لا موظفين مطابقين للفلتر الحالي
-                  </p>
-                )}
-                {employees.map(emp => (
-                  <label
-                    key={emp.id}
-                    className={`flex items-center gap-3 p-2 rounded-lg cursor-pointer transition-colors ${
-                      selectedEmps.includes(emp.id) ? 'bg-primary-50' : 'hover:bg-gray-50'
-                    }`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedEmps.includes(emp.id)}
-                      onChange={() => toggleEmployee(emp.id)}
-                      className="w-4 h-4 rounded border-gray-300"
-                    />
-                    <span className="text-sm text-gray-700">{emp.employeeName}</span>
-                    <span className="text-xs text-gray-400">{emp.department}</span>
-                  </label>
-                ))}
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="block text-xs text-gray-500 mb-1" htmlFor="range-from">من تاريخ</label>
+                <input id="range-from" type="date" dir="ltr" className="input w-full" value={from} disabled={busy} onChange={(e) => setFrom(e.target.value)} />
+              </div>
+              <div>
+                <label className="block text-xs text-gray-500 mb-1" htmlFor="range-to">إلى تاريخ</label>
+                <input id="range-to" type="date" dir="ltr" className="input w-full" value={to} disabled={busy} onChange={(e) => setTo(e.target.value)} />
               </div>
             </div>
-          ) : scope === 'company' ? (
-            <div className="bg-primary-50 border border-primary-100 rounded-xl p-4 text-sm text-primary-800">
-              سيُطبَّق على <span className="font-bold">كل موظفي الشركة</span> —{' '}
-              {targetEmps.length} موظف.
-            </div>
-          ) : (
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-3">
-                {scope === 'team' ? 'اختر الفريق' : scope === 'department' ? 'اختر القسم' : 'اختر الفرع'}
-              </label>
-              <select
-                className="input w-full"
-                value={scopeId === '' ? '' : String(scopeId)}
-                onChange={(e) =>
-                  setScopeId(e.target.value === '' ? '' : Number(e.target.value))
-                }
-              >
-                <option value="">
-                  — {scope === 'team' ? 'الفريق' : scope === 'department' ? 'القسم' : 'الفرع'} —
-                </option>
-                {scopeOptions.map((o) => (
-                  <option key={o.id} value={o.id}>
-                    {o.name}
-                  </option>
-                ))}
-              </select>
-              {scopeOptions.length === 0 && (
-                <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-1.5">
-                  لا توجد عناصر لهذا النطاق
-                </p>
-              )}
-              {scopeId !== '' && (
-                <p className="text-xs text-gray-500 mt-1.5">
-                  ينطبق على {targetEmps.length} موظف
-                </p>
-              )}
-            </div>
-          )}
+          </div>
 
-          {/* اختيار الأيام: محدَّدة = «يوم استثنائي» (السبت مثلاً بدوام مختلف)؛
-              فارغة = الوردية تُطبَّق على الأسبوع كله */}
           <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">
-              الأيام
-            </label>
+            <label className="block text-sm font-medium text-gray-700 mb-1">أيام معينة؟ (اختياري)</label>
             <p className="text-xs text-gray-400 mb-3">
-              اختر أياماً محددة لتطبيق الوردية كـ«استثناء» لتلك الأيام فقط (مثلاً السبت)،
-              أو اترك الكل فارغاً لتطبيقها على الأسبوع كله
+              سيبها فاضية عشان الوردية تتطبق على كل أيام المدة، أو اختار أيام زي السبت بس.
+              أيام الراحة والعطلات بتفضل راحة حسب تقويم الموظف.
             </p>
             <div className="flex gap-2 flex-wrap">
-              {weekDays.map(day => (
+              {weekDays.map((day, index) => (
                 <button
                   key={day.key}
-                  onClick={() => toggleDay(day.key)}
-                  className={`px-4 py-2 rounded-lg transition-all ${
-                    selectedDays.includes(day.key)
-                      ? 'bg-primary-500 text-white'
-                      : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setWeekdays((prev) => (prev.includes(index) ? prev.filter((d) => d !== index) : [...prev, index]))}
+                  className={`px-3 py-1.5 rounded-lg text-sm transition-all ${
+                    weekdays.includes(index) ? 'bg-primary-500 text-white' : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
                   }`}
                 >
                   {day.name}
@@ -1804,47 +1774,74 @@ function BulkAssignModal({
             </div>
           </div>
 
-          {/* اختيار الوردية — من كتالوج الورديات بأوقاته الحيّة */}
+          {/* 3) الوردية */}
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-3">الوردية</label>
-            {shifts.length === 0 && (
+            {shiftOptions.length === 0 && (
               <p className="text-sm text-amber-700 bg-amber-50 rounded-xl px-3 py-3 text-center">
                 لا توجد ورديات — أنشئها من إعدادات الورديات
               </p>
             )}
             <div className="grid grid-cols-3 gap-2">
-              {shifts.map(shift => (
+              {shiftOptions.map((s) => (
                 <button
-                  key={shift.id}
-                  onClick={() => setSelectedShift(shift.id)}
+                  key={s.id}
+                  type="button"
+                  disabled={busy}
+                  onClick={() => setShiftKey(s.id)}
                   className={`p-3 rounded-xl border-2 transition-all ${
-                    selectedShift === shift.id
-                      ? 'border-primary-500 bg-primary-50'
-                      : 'border-gray-200 hover:border-gray-300'
+                    shiftKey === s.id ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300'
                   }`}
                 >
-                  <div className={`w-8 h-8 ${shift.bgColor} ${shift.color} rounded-lg flex items-center justify-center text-sm font-bold mx-auto mb-2`}>
-                    {shift.code}
+                  <div className={`w-8 h-8 ${s.bgColor} ${s.color} rounded-lg flex items-center justify-center text-sm font-bold mx-auto mb-2`}>
+                    {s.code}
                   </div>
-                  <p className="text-sm text-gray-700 text-center">{shift.name}</p>
-                  <p className="text-xs text-gray-400 text-center" dir="ltr">
-                    {shift.startTime}–{shift.endTime}
-                  </p>
+                  <p className="text-sm text-gray-700 text-center">{s.name}</p>
+                  <p className="text-xs text-gray-400 text-center" dir="ltr">{s.startTime}–{s.endTime}</p>
                 </button>
               ))}
             </div>
+          </div>
+
+          <label className="flex items-start gap-2 text-sm text-gray-700">
+            <input
+              type="checkbox"
+              className="w-4 h-4 mt-0.5 rounded border-gray-300"
+              checked={keepOverrides}
+              disabled={busy}
+              onChange={(e) => setKeepOverrides(e.target.checked)}
+            />
+            <span>
+              سيب الأيام الخاصة (اللي عليها نجمة) جوه المدة زي ما هي
+              <span className="block text-xs text-gray-400">من غيرها كل أيام المدة بتاخد الوردية دي</span>
+            </span>
+          </label>
+
+          <div className="bg-gray-50 border border-gray-100 rounded-xl p-3 text-sm text-gray-600 space-y-1">
+            <p>
+              {describeOrgTarget(target, branches, departments)} — <b>{targetIds.length}</b> موظف ×{' '}
+              <b>{dates.length}</b> يوم
+              {dates.length > 0 && <> (<span dir="ltr">{dates[0]}</span> ← <span dir="ltr">{dates[dates.length - 1]}</span>)</>}
+            </p>
+            <p className="text-xs text-gray-400">
+              الأسابيع الكاملة بتتسجل وردية أسبوع، والأيام اللي على طرف المدة أو المحددة بالاسم بتتسجل يوم خاص.
+              الأيام اللي فاتت وفيها حضور بتتحسب تاني بالوردية الجديدة، والفترات اللي مسيرها اتعتمد مابتتغيرش.
+              تقدر تعدّل أي يوم بعدها من الجدول.
+            </p>
           </div>
         </div>
 
         <div className="p-4 border-t border-gray-100 flex gap-3">
           <button
-            onClick={handleAssign}
-            disabled={busy || targetEmps.length === 0 || !selectedShift}
+            onClick={apply}
+            disabled={busy || targetIds.length === 0 || !shift || dates.length === 0}
             className="flex-1 btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
           >
-            {busy ? 'جارٍ التطبيق…' : `تطبيق (${targetEmps.length} موظف)`}
+            {busy
+              ? `جارٍ الحفظ… ${progress ? `${progress.done} من ${progress.total}` : ''}`
+              : `تطبيق (${targetIds.length} موظف × ${dates.length} يوم)`}
           </button>
-          <button onClick={onClose} className="flex-1 btn-secondary">
+          <button onClick={onClose} disabled={busy} className="flex-1 btn-secondary disabled:opacity-50">
             إلغاء
           </button>
         </div>

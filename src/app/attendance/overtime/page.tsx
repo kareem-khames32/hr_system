@@ -15,15 +15,36 @@ import {
   Wallet,
   AlertTriangle,
   Inbox,
+  Lock,
+  Unlock,
+  Plus,
+  Trash2,
+  ToggleLeft,
+  ToggleRight,
+  X,
+  Building2,
 } from 'lucide-react'
 import {
   fetchOvertimeLog,
   confirmOvertime,
   fetchDepartments,
+  fetchBranches,
+  fetchConfig,
+  fetchOvertimePeriods,
+  createOvertimePeriod,
+  updateOvertimePeriod,
+  deleteOvertimePeriod,
+  can,
+  getCurrentUser,
   type ApiOvertimeEntry,
   type ApiDepartment,
+  type ApiBranch,
+  type ApiOvertimePeriod,
+  type ApiOvertimePeriodRecompute,
 } from '@/lib/api'
+import { OrgTargetPicker, describeOrgTarget, initialOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
 import { localMonth, localToday } from '@/lib/dates'
+import { formatMoney } from '@/lib/money'
 import { statusLabels as requestStatusLabels, type RequestStatus } from '@/data/requestsCatalog'
 
 // ============================================================
@@ -112,6 +133,9 @@ export default function OvertimePage() {
   const [rejectEntry, setRejectEntry] = useState<OvertimeEntry | null>(null)
   const [rejectReason, setRejectReason] = useState('')
   const [rejectError, setRejectError] = useState('')
+  // إدارة فترات فتح/قفل الإضافي لمن يدير الحضور بس (الفرض الحقيقي في الباك)
+  const [canManagePeriods, setCanManagePeriods] = useState(false)
+  useEffect(() => { setCanManagePeriods(can('attendance.manage')) }, [])
 
   // سجل الشهر من السيرفر (كل الحالات) + قيمة الإعداد الحيّة
   const load = async (m: string) => {
@@ -426,7 +450,7 @@ export default function OvertimePage() {
                     <td className="table-cell text-center text-sm text-gray-500">×{e.rate}</td>
                     <td className="table-cell text-center text-sm">
                       {e.amountSnapshot != null && ['APPROVED', 'PAID'].includes(e.status) ? (
-                        <><span className="font-semibold text-gray-800">{e.amountSnapshot.toLocaleString('ar-EG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}</span>
+                        <><span className="font-semibold text-gray-800">{formatMoney(e.amountSnapshot)}</span>
                           <p className="text-[10px] text-gray-400 mt-1">مثبتة عند الاعتماد</p></>
                       ) : <span className="text-gray-300">—</span>}
                     </td>
@@ -494,6 +518,9 @@ export default function OvertimePage() {
             افتح الطلب المرتبط للمراجعة والموافقة؛ الرفض هنا متاح للمكتشف الذي لم يُوجَّه بعد.
           </p>
         </div>
+
+        {/* فترات فتح وقفل الإضافي — كانت في الإعدادات ← أيام العمل */}
+        {canManagePeriods && <OvertimePeriodsSection onChanged={() => load(month)} />}
       </div>
       {rejectEntry && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
@@ -519,5 +546,362 @@ export default function OvertimePage() {
         </div>
       )}
     </MainLayout>
+  )
+}
+
+// ============================================================
+// فترات فتح وقفل الإضافي — تواريخ بعينها (زي رمضان) تفتح أو تقفل حساب الإضافي
+// بغض النظر عن الإعداد العام. المقفولة تكسب لو اتداخلوا.
+// ============================================================
+const recomputeNote = (r?: ApiOvertimePeriodRecompute) =>
+  r && (r.recomputed || r.failed)
+    ? ` — اتحسب تاني ${r.recomputed} يوم حضور جوه الفترة${r.failed ? `، وتعذر ${r.failed}` : ''}`
+    : ''
+
+function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
+  const [periods, setPeriods] = useState<ApiOvertimePeriod[]>([])
+  const [branches, setBranches] = useState<ApiBranch[]>([])
+  const [globalOpen, setGlobalOpen] = useState<boolean | null>(null)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+  const [busyId, setBusyId] = useState<number | null>(null)
+  const [showAdd, setShowAdd] = useState(false)
+  const [lockedBranchId, setLockedBranchId] = useState<number | null>(null)
+  const today = localToday()
+
+  const reload = async () => {
+    try {
+      setPeriods(await fetchOvertimePeriods())
+      setError('')
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر تحميل فترات الإضافي')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  useEffect(() => {
+    const user = getCurrentUser()
+    setLockedBranchId(user && user.role !== 'super_admin' && user.branchId ? user.branchId : null)
+    reload()
+    fetchBranches().then(setBranches).catch(() => setBranches([]))
+    // الإعداد العام محتاج صلاحية الإعدادات — لو مش متاح بنكتفي بالإشارة لمكانه
+    fetchConfig()
+      .then((rows) => {
+        const row = rows.find((r) => r.key === 'overtime.enabled')
+        setGlobalOpen(row ? row.value === 'true' : true)
+      })
+      .catch(() => setGlobalOpen(null))
+  }, [])
+
+  const branchName = (branchId?: number | null) =>
+    branchId == null ? 'كل الفروع' : branches.find((b) => b.id === branchId)?.name ?? `فرع #${branchId}`
+  const canEdit = (p: ApiOvertimePeriod) => !lockedBranchId || p.branchId === lockedBranchId
+
+  const toggle = async (p: ApiOvertimePeriod) => {
+    setBusyId(p.id)
+    setError('')
+    setNotice('')
+    try {
+      const res = await updateOvertimePeriod(p.id, { isActive: !p.isActive })
+      await reload()
+      setNotice(`${p.isActive ? 'اتوقفت' : 'اتفعلت'} فترة «${p.name}»${recomputeNote(res.recompute)}`)
+      onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر تعديل الفترة')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  const remove = async (p: ApiOvertimePeriod) => {
+    if (!confirm(`متأكد إنك عايز تحذف فترة «${p.name}»؟`)) return
+    setBusyId(p.id)
+    setError('')
+    setNotice('')
+    try {
+      const res = await deleteOvertimePeriod(p.id)
+      await reload()
+      setNotice(`اتحذفت فترة «${p.name}»${recomputeNote(res.recompute)}`)
+      onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر حذف الفترة')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
+  return (
+    <section id="overtime-periods" className="card scroll-mt-6">
+      <div className="flex items-center justify-between gap-3 mb-4">
+        <div className="flex items-center gap-3">
+          <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
+            <CalendarClock size={20} className="text-amber-600" />
+          </div>
+          <div>
+            <h2 className="text-lg font-bold text-gray-800">فترات فتح وقفل الإضافي</h2>
+            <p className="text-sm text-gray-500">افتح أو اقفل حساب الإضافي لتواريخ معينة (زي رمضان أو الجرد)</p>
+          </div>
+        </div>
+        <button onClick={() => setShowAdd(true)} className="btn-primary flex items-center gap-2 text-sm py-2">
+          <Plus size={16} />
+          إضافة فترة
+        </button>
+      </div>
+
+      {/* شرح مختصر: يعني إيه مفتوحة ومقفولة */}
+      <div className="grid md:grid-cols-2 gap-3 mb-4">
+        <div className="p-3 rounded-xl bg-success-50 border border-success-100 flex items-start gap-2">
+          <Unlock size={18} className="text-success-600 mt-0.5 shrink-0" />
+          <p className="text-sm text-success-700">
+            <b>مفتوحة:</b> الإضافي بيتحسب من البصمة في الأيام دي، حتى لو الإضافي العام مقفول.
+          </p>
+        </div>
+        <div className="p-3 rounded-xl bg-red-50 border border-red-100 flex items-start gap-2">
+          <Lock size={18} className="text-red-600 mt-0.5 shrink-0" />
+          <p className="text-sm text-red-700">
+            <b>مقفولة:</b> مفيش إضافي بيتحسب في الأيام دي خالص، حتى لو الإضافي العام مفتوح.
+          </p>
+        </div>
+      </div>
+      <p className="text-xs text-gray-500 mb-4 leading-relaxed">
+        لو فترتين على نفس اليوم المقفولة هي اللي تمشي. برا أي فترة بيمشي الإعداد العام
+        {globalOpen === null ? ' (الإعدادات ← أيام العمل)' : globalOpen ? ' — وهو دلوقتي مفتوح' : ' — وهو دلوقتي مقفول'}.
+        إضافة أو تعديل أو حذف فترة بيعيد حساب الأيام اللي فاتت جواها فورًا: القفل بيلغي الإضافي المكتشف
+        اللي لسه ما اتبعتش للاعتماد، والفتح بيكتشف الإضافي في الأيام دي. اللي اتبعت للاعتماد فعلًا بيفضل
+        قرار المعتمد، والمعتمد أو المصروف مابيتغيرش.
+      </p>
+
+      {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-4">{error}</div>}
+      {notice && <div role="status" className="bg-success-50 text-success-700 rounded-xl p-3 text-sm mb-4">{notice}</div>}
+
+      {loading ? (
+        <div className="flex items-center justify-center py-10">
+          <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
+        </div>
+      ) : periods.length === 0 ? (
+        <div className="text-center py-8 text-gray-500 bg-gray-50 rounded-xl">
+          <p>مفيش فترات — الإضافي ماشي بالإعداد العام.</p>
+        </div>
+      ) : (
+        <div className="space-y-3">
+          {periods.map((p) => {
+            const isOpen = p.effect === 'OPEN'
+            const busy = busyId === p.id
+            const current = p.isActive && p.fromDate <= today && p.toDate >= today
+            return (
+              <div
+                key={p.id}
+                className={`border-2 rounded-2xl p-4 flex items-center justify-between gap-4 ${
+                  p.isActive ? 'border-gray-200 bg-white' : 'border-gray-100 bg-gray-50 opacity-60'
+                }`}
+              >
+                <div className="flex items-center gap-4 min-w-0">
+                  <div className={`w-10 h-10 ${isOpen ? 'bg-green-500' : 'bg-red-500'} rounded-xl flex items-center justify-center shrink-0`}>
+                    {isOpen ? <Unlock size={20} className="text-white" /> : <Lock size={20} className="text-white" />}
+                  </div>
+                  <div className="min-w-0">
+                    <div className="flex items-center gap-2 flex-wrap">
+                      <h3 className="font-bold text-gray-800">{p.name}</h3>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${isOpen ? 'bg-success-100 text-success-700' : 'bg-red-100 text-red-700'}`}>
+                        {isOpen ? 'مفتوحة — الإضافي بيتحسب' : 'مقفولة — مفيش إضافي'}
+                      </span>
+                      <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${p.isActive ? 'bg-success-100 text-success-600' : 'bg-gray-200 text-gray-500'}`}>
+                        {p.isActive ? 'شغالة' : 'متوقفة'}
+                      </span>
+                      {current && (
+                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">سارية النهارده</span>
+                      )}
+                    </div>
+                    <p className="text-sm text-gray-600 mt-1">
+                      من <span dir="ltr">{p.fromDate}</span> إلى <span dir="ltr">{p.toDate}</span>
+                    </p>
+                    <span className="inline-flex items-center gap-1 mt-2 px-2 py-0.5 bg-gray-100 text-gray-600 rounded-lg text-xs">
+                      <Building2 size={12} />
+                      {branchName(p.branchId)}
+                    </span>
+                  </div>
+                </div>
+                {canEdit(p) ? (
+                  <div className="flex items-center gap-2 shrink-0">
+                    <button
+                      onClick={() => toggle(p)}
+                      disabled={busy}
+                      className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors disabled:opacity-50 ${
+                        p.isActive ? 'bg-success-50 text-success-600 hover:bg-success-100' : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
+                      }`}
+                    >
+                      {p.isActive ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}
+                      {p.isActive ? 'إيقاف' : 'تفعيل'}
+                    </button>
+                    <button
+                      onClick={() => remove(p)}
+                      disabled={busy}
+                      className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 transition-colors disabled:opacity-50"
+                    >
+                      <Trash2 size={18} />
+                      حذف
+                    </button>
+                  </div>
+                ) : (
+                  <span className="text-xs text-gray-400 shrink-0">لكل الفروع — تعديلها لمدير الشركة</span>
+                )}
+              </div>
+            )
+          })}
+        </div>
+      )}
+
+      {showAdd && (
+        <AddOvertimePeriodModal
+          branches={branches}
+          lockedBranchId={lockedBranchId}
+          onClose={() => setShowAdd(false)}
+          onCreated={async (created) => {
+            await reload()
+            setError('')
+            setNotice(`اتضافت فترة «${created.name}»${recomputeNote(created.recompute)}`)
+            onChanged()
+          }}
+        />
+      )}
+    </section>
+  )
+}
+
+function AddOvertimePeriodModal({
+  branches,
+  lockedBranchId,
+  onClose,
+  onCreated,
+}: {
+  branches: ApiBranch[]
+  lockedBranchId: number | null
+  onClose: () => void
+  onCreated: (created: ApiOvertimePeriod & { recompute?: ApiOvertimePeriodRecompute }) => Promise<void>
+}) {
+  const [name, setName] = useState('')
+  const [fromDate, setFromDate] = useState('')
+  const [toDate, setToDate] = useState('')
+  const [effect, setEffect] = useState<ApiOvertimePeriod['effect']>('OPEN')
+  // الفترة للشركة كلها أو فرع — نفس منتقي الاستهداف بمستوى الفرع بس
+  const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(lockedBranchId, ['company', 'branch']))
+  const [saving, setSaving] = useState(false)
+  const [error, setError] = useState('')
+
+  const submit = async () => {
+    if (!name.trim()) { setError('اكتب اسم الفترة'); return }
+    if (!fromDate || !toDate) { setError('حدد من تاريخ وإلى تاريخ'); return }
+    if (fromDate > toDate) { setError('تاريخ البداية لازم يكون قبل أو يساوي تاريخ النهاية'); return }
+    if (target.level !== 'company' && target.branchId == null) { setError('اختار الفرع'); return }
+    setSaving(true)
+    setError('')
+    try {
+      const created = await createOvertimePeriod({
+        name: name.trim(),
+        fromDate,
+        toDate,
+        effect,
+        branchId: target.level === 'company' ? undefined : target.branchId,
+      })
+      await onCreated(created)
+      onClose()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر حفظ الفترة')
+    } finally {
+      setSaving(false)
+    }
+  }
+
+  return (
+    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+      <div role="dialog" aria-modal="true" aria-labelledby="ot-period-title" className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
+        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+          <div>
+            <h2 id="ot-period-title" className="text-xl font-bold text-gray-800">إضافة فترة فتح أو قفل للإضافي</h2>
+            <p className="text-gray-500 text-sm mt-1">الفترة بتسري على الأيام اللي جواها بس</p>
+          </div>
+          <button onClick={onClose} disabled={saving} className="p-2 rounded-lg hover:bg-gray-100 disabled:opacity-50">
+            <X size={20} className="text-gray-500" />
+          </button>
+        </div>
+
+        <div className="p-6 space-y-5">
+          {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">{error}</div>}
+
+          <div>
+            <label htmlFor="ot-period-name" className="block text-sm font-medium text-gray-700 mb-2">اسم الفترة</label>
+            <input id="ot-period-name" type="text" value={name} maxLength={200} onChange={(e) => setName(e.target.value)}
+              placeholder="مثال: رمضان — فتح الإضافي" className="input w-full" />
+          </div>
+
+          <div className="grid grid-cols-2 gap-4">
+            <div>
+              <label htmlFor="ot-period-from" className="block text-sm font-medium text-gray-700 mb-2">من تاريخ</label>
+              <input id="ot-period-from" type="date" dir="ltr" value={fromDate} onChange={(e) => setFromDate(e.target.value)} className="input w-full" />
+            </div>
+            <div>
+              <label htmlFor="ot-period-to" className="block text-sm font-medium text-gray-700 mb-2">إلى تاريخ</label>
+              <input id="ot-period-to" type="date" dir="ltr" value={toDate} onChange={(e) => setToDate(e.target.value)} className="input w-full" />
+            </div>
+          </div>
+
+          <div>
+            <label className="block text-sm font-medium text-gray-700 mb-2">الإضافي في الفترة دي</label>
+            <div className="grid grid-cols-2 gap-3">
+              {([
+                { value: 'OPEN', title: 'مفتوح', desc: 'بيتحسب حتى لو الإعداد العام مقفول', Icon: Unlock, color: 'bg-green-500' },
+                { value: 'CLOSED', title: 'مقفول', desc: 'مابيتحسبش حتى لو الإعداد العام مفتوح', Icon: Lock, color: 'bg-red-500' },
+              ] as const).map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  onClick={() => setEffect(option.value)}
+                  className={`p-4 rounded-xl border-2 text-right transition-all ${
+                    effect === option.value ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300'
+                  }`}
+                >
+                  <div className="flex items-center gap-3">
+                    <div className={`w-10 h-10 ${option.color} rounded-lg flex items-center justify-center shrink-0`}>
+                      <option.Icon size={20} className="text-white" />
+                    </div>
+                    <div>
+                      <p className="font-medium text-gray-800">{option.title}</p>
+                      <p className="text-xs text-gray-500 mt-0.5">{option.desc}</p>
+                    </div>
+                  </div>
+                </button>
+              ))}
+            </div>
+          </div>
+
+          <OrgTargetPicker
+            value={target}
+            onChange={setTarget}
+            branches={branches}
+            levels={['company', 'branch']}
+            lockedBranchId={lockedBranchId}
+            disabled={saving}
+            showCount={false}
+          />
+
+          <div className="p-3 bg-blue-50 rounded-xl text-sm text-blue-700">
+            {fromDate && toDate
+              ? `من ${fromDate} إلى ${toDate} — الإضافي ${effect === 'OPEN' ? 'مفتوح' : 'مقفول'} لـ${describeOrgTarget(target, branches, [])}`
+              : 'حدد التواريخ عشان تشوف ملخص الفترة'}
+          </div>
+        </div>
+
+        <div className="p-6 border-t border-gray-100 flex gap-3">
+          <button onClick={submit} disabled={saving} className="flex-1 btn-primary disabled:opacity-50 disabled:cursor-not-allowed">
+            {saving ? 'جارٍ الحفظ...' : 'حفظ الفترة'}
+          </button>
+          <button onClick={onClose} disabled={saving} className="flex-1 btn-secondary disabled:opacity-50">
+            إلغاء
+          </button>
+        </div>
+      </div>
+    </div>
   )
 }

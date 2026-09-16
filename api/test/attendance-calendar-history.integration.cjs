@@ -11,6 +11,7 @@ const database = `hr_calendar_history_test_${crypto.randomBytes(8).toString('hex
 const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-calendar-history-files-'))
 const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
+const { employeeRequiredFields } = require('./helpers/employee-fixture.cjs')
 const keys = ['basicSalary', 'housingAllowance', 'transportAllowance', 'phoneAllowance', 'workNatureAllowance', 'otherAllowance']
 const today = require('../src/attendance/attendance.service').localDateOf(new Date())
 const baseSalary = { basicSalary: '6000.00', housingAllowance: '1500.00', transportAllowance: '500.00',
@@ -276,7 +277,7 @@ test('a settled service also blocks retrospective calendar changes before its fi
 })
 
 test('employee creation records only the observed creation date when no explicit calendar date was supplied', async () => {
-  const emp = expect(await request(admin, 'POST', '/employees', { employeeCode: 'CALCREATEA', fullName: 'إنشاء موظف دون تأريخ سابق', branchId: branchA.id,
+  const emp = expect(await request(admin, 'POST', '/employees', { ...(await employeeRequiredFields(ds, branchA.id)), employeeCode: 'CALCREATEA', fullName: 'إنشاء موظف دون تأريخ سابق', branchId: branchA.id,
     basicSalary: 6000, currency: 'EGP', joinDate: '2020-01-01' }), 201)
   const c = await calContext('EMPLOYEE', emp.id)
   assert.equal(c.effectiveFrom, today); assert.equal(c.revision, 1)
@@ -286,7 +287,7 @@ test('employee creation records only the observed creation date when no explicit
 })
 
 test('an explicit creation calendar date records both branch and schedule without deriving either from joinDate', async () => {
-  const emp = expect(await request(admin, 'POST', '/employees', { employeeCode: 'CALCREATEB', fullName: 'إنشاء موظف بتاريخ موثق', branchId: branchA.id,
+  const emp = expect(await request(admin, 'POST', '/employees', { ...(await employeeRequiredFields(ds, branchA.id)), employeeCode: 'CALCREATEB', fullName: 'إنشاء موظف بتاريخ موثق', branchId: branchA.id,
     basicSalary: 6000, currency: 'EGP', joinDate: '2020-01-01', attendanceEffectiveFrom: '2026-06-01', attendanceChangeReason: 'تسجيل الدوام والفرع من القرار الصريح' }), 201)
   const c = await calContext('EMPLOYEE', emp.id)
   assert.equal(c.effectiveFrom, '2026-06-01')
@@ -297,13 +298,19 @@ test('an explicit creation calendar date records both branch and schedule withou
 })
 
 test('candidate hiring supplies the real actor to employee calendar creation and enforces target branch scope', async () => {
-  const recruiter = await repo('User').save({ email: 'calendar-recruiter@fixture.invalid', displayName: 'اختبار تعيين', passwordHash: 'test-only', role: 'hr', branchId: branchA.id, permissions: JSON.stringify(['candidates.manage']) })
+  // التعيين = إضافة موظف: candidates.manage + employees.create، وبنفس الحقول الإجبارية
+  const recruiter = await repo('User').save({ email: 'calendar-recruiter@fixture.invalid', displayName: 'اختبار تعيين', passwordHash: 'test-only', role: 'hr', branchId: branchA.id, permissions: JSON.stringify(['candidates.manage', 'employees.create']) })
+  const pipelineOnly = await repo('User').save({ email: 'calendar-pipeline@fixture.invalid', displayName: 'مرشحين بس', passwordHash: 'test-only', role: 'hr', branchId: branchA.id, permissions: JSON.stringify(['candidates.manage']) })
+  const hireBody = async (branchId, extra) => ({ ...(await employeeRequiredFields(ds, branchId)), branchId, basicSalary: 6000, currency: 'EGP', joinDate: '2020-01-01', ...extra })
   const candidate = await repo('Candidate').save({ fullName: 'مرشح تعيين التقويم', positionTitle: 'موظف', branchId: branchA.id })
-  expect(await request(recruiter, 'POST', `/candidates/${candidate.id}/hire`, { employeeCode: 'CALRECRUIT', branchId: branchB.id }), 403)
-  const result = expect(await request(recruiter, 'POST', `/candidates/${candidate.id}/hire`, { employeeCode: 'CALRECRUIT', branchId: branchA.id, basicSalary: 6000 }), 201)
+  expect(await request(pipelineOnly, 'POST', `/candidates/${candidate.id}/hire`, await hireBody(branchA.id, { employeeCode: 'CALNOPERM' })), 403)
+  expect(await request(recruiter, 'POST', `/candidates/${candidate.id}/hire`, await hireBody(branchB.id, { employeeCode: 'CALRECRUIT' })), 403)
+  assert.equal((await repo('Candidate').findOneByOrFail({ id: candidate.id })).stage, 'applied')
+  assert.equal(await repo('Employee').countBy({ employeeCode: 'CALNOPERM' }), 0)
+  const result = expect(await request(recruiter, 'POST', `/candidates/${candidate.id}/hire`, await hireBody(branchA.id, { employeeCode: 'CALRECRUIT' })), 201)
   assert.equal(result.candidate.stage, 'hired')
   const version = await repo('AttendanceRuleVersion').findOne({ where: { sourceType: 'EMPLOYEE_ORG', sourceId: result.employee.id }, order: { version: 'DESC' } })
   assert.equal(version.actorUserId, recruiter.id); assert.equal(version.effectiveFrom, today)
   const foreign = await repo('Candidate').save({ fullName: 'مرشح فرع آخر', positionTitle: 'موظف', branchId: branchB.id })
-  expect(await request(recruiter, 'POST', `/candidates/${foreign.id}/hire`, { employeeCode: 'CALREJECT', branchId: branchA.id }), 404)
+  expect(await request(recruiter, 'POST', `/candidates/${foreign.id}/hire`, await hireBody(branchA.id, { employeeCode: 'CALREJECT' })), 404)
 })

@@ -14,7 +14,7 @@ function requireTransaction(em: EntityManager) { if (!em.queryRunner?.isTransact
 const exact = (value: unknown) => {
   const number = typeof value === 'string' ? value : Number(value)
   if (typeof number === 'number' && !Number.isFinite(number)) throw new ConflictException('مبلغ أحد بنود التصفية غير صالح')
-  return PayrollDecimal.from(typeof number === 'number' ? number.toFixed(2) : number).format(2, 'HALF_UP')
+  return PayrollDecimal.from(typeof number === 'number' ? number.toFixed(2) : number).format(2, 'DOWN')
 }
 export const openRecoveryAmount = (row: { amount: string; recoveredAmount: string; writtenOffAmount: string }) =>
   fromCents(toCents(row.amount) - toCents(row.recoveredAmount) - toCents(row.writtenOffAmount))

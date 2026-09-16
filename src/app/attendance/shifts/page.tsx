@@ -15,7 +15,8 @@ import {
   X,
   AlertTriangle,
 } from 'lucide-react'
-import { can, fetchCatalog, createCatalogItem, updateCatalogItem, getCurrentUser } from '@/lib/api'
+import { can, fetchCatalog, createCatalogItem, updateCatalogItem } from '@/lib/api'
+import { DefinitionBranchBadge, DefinitionBranchField, useDefinitionBranches } from '@/components/DefinitionBranchField'
 
 interface Shift {
   id: number
@@ -36,6 +37,8 @@ interface Shift {
   checkoutFrom?: string | null
   checkoutTo?: string | null
   isActive: boolean
+  // فرع الوردية: null = كل الشركة (قرار المالك 16 سبتمبر)
+  branchId?: number | null
 }
 
 // ألوان الكروت — تُسنَد بالتناوب حسب ترتيب الوردية
@@ -77,6 +80,7 @@ const emptyForm = {
   graceMinutes: '',
   overtimeThresholdHours: '',
   checkinFrom: '', checkinTo: '', checkoutFrom: '', checkoutTo: '',
+  branchId: null as number | null,
 }
 
 const localToday = () => new Date().toLocaleDateString('en-CA')
@@ -102,17 +106,15 @@ export default function ShiftsPage() {
   const [pendingToggle, setPendingToggle] = useState<Shift | null>(null)
   const [toggleChange, setToggleChange] = useState({ effectiveFrom: '', changeReason: '' })
   const [toggleError, setToggleError] = useState('')
-  // الإضافة/التعديل/التفعيل = كتابة كتالوج (settings.manage في الباك). وتعريف الدوام
-  // مشترك بين الفروع فيحتاج نطاق إدارة عام — مستخدم الفرع يرى الشاشة للقراءة فقط
-  // ويعرف السبب قبل أن يملأ الفورم (كان الحفظ يُرفض بعد تعبئته كله)
-  const [canManage, setCanManage] = useState(false)
-  const [branchScopedNotice, setBranchScopedNotice] = useState(false)
-  useEffect(() => {
-    const allowed = can('settings.manage')
-    const branchScoped = (getCurrentUser()?.role ?? '') !== 'super_admin'
-    setCanManage(allowed && !branchScoped)
-    setBranchScopedNotice(allowed && branchScoped)
-  }, [])
+  // الإضافة/التعديل/التفعيل = كتابة كتالوج (settings.manage في الباك). قرار المالك 16 سبتمبر:
+  // الوردية لكل الشركة افتراضيًا، وحساب الفرع يضيف وردية خاصة بفرعه ويعدّل ورديات فرعه بس —
+  // ورديات الشركة عنده للعرض، ويعرف ده قبل ما يملأ الفورم
+  const branchInfo = useDefinitionBranches()
+  const [allowed, setAllowed] = useState(false)
+  useEffect(() => { setAllowed(can('settings.manage')) }, [])
+  const canManage = allowed && branchInfo.scope !== -1
+  const branchScopedNotice = allowed && branchInfo.scope !== null
+  const canEditShift = (shift: Shift) => canManage && branchInfo.canEdit(shift.branchId)
 
   const loadShifts = () => {
     setLoading(true)
@@ -154,6 +156,7 @@ export default function ShiftsPage() {
       checkinTo: s(shift.checkinTo),
       checkoutFrom: s(shift.checkoutFrom),
       checkoutTo: s(shift.checkoutTo),
+      branchId: shift.branchId ?? null,
     })
     setModalError('')
     setShowModal(true)
@@ -191,7 +194,9 @@ export default function ShiftsPage() {
       if (editingShift) {
         await updateCatalogItem('shifts', editingShift.id, payload)
       } else {
-        await createCatalogItem('shifts', payload)
+        // حساب الشركة يختار الفرع؛ حساب الفرع يتضاف لفرعه تلقائيًا من الخادم
+        await createCatalogItem('shifts', { ...payload,
+          ...(branchInfo.scope === null && formData.branchId != null ? { branchId: formData.branchId } : {}) })
       }
       setShowModal(false)
       loadShifts()
@@ -246,8 +251,8 @@ export default function ShiftsPage() {
           <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 text-sm text-amber-800 flex items-start gap-2">
             <AlertTriangle size={18} className="mt-0.5 shrink-0" />
             <span>
-              تعريف الورديات مشترك بين كل الفروع، فإضافته أو تعديله يحتاج نطاق إدارة عام.
-              الشاشة هنا للعرض فقط — اطلب التعديل من مدير النظام.
+              الورديات اللي لكل الشركة هنا للعرض بس — تعديلها من حساب على مستوى الشركة.
+              تقدر تضيف وردية خاصة بفرعك، وتتسند لموظفين فرعك بس.
             </span>
           </div>
         )}
@@ -338,6 +343,7 @@ export default function ShiftsPage() {
                         <p className="text-sm text-gray-400">
                           {isNightShift(shift) ? 'وردية ليلية' : 'وردية نهارية'}
                         </p>
+                        <DefinitionBranchBadge branchId={shift.branchId} info={branchInfo} />
                       </div>
                     </div>
                     <div className="flex items-center gap-1">
@@ -431,7 +437,7 @@ export default function ShiftsPage() {
                     <div className="flex items-center gap-2">
                       <button
                         onClick={() => { setPendingToggle(shift); setToggleChange({ effectiveFrom: localToday(), changeReason: '' }); setToggleError('') }}
-                        disabled={!canManage || togglingId === shift.id}
+                        disabled={!canEditShift(shift) || togglingId === shift.id}
                         className={`px-2 py-1 rounded-lg text-xs font-medium transition-colors ${
                           shift.isActive
                             ? 'bg-success-50 text-success-600 hover:bg-success-100'
@@ -444,7 +450,7 @@ export default function ShiftsPage() {
                   </div>
 
                   {/* Actions */}
-                  {canManage && (
+                  {canEditShift(shift) && (
                     <div className="mt-4 flex items-center gap-2">
                       <button
                         onClick={() => openEdit(shift)}
@@ -539,6 +545,13 @@ export default function ShiftsPage() {
                     placeholder="مثال: الوردية الصباحية"
                   />
                 </div>
+                <DefinitionBranchField
+                  value={editingShift ? editingShift.branchId ?? null : formData.branchId}
+                  onChange={(branchId) => setFormData({ ...formData, branchId })}
+                  editing={!!editingShift}
+                  info={branchInfo}
+                  disabled={saving}
+                />
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">بداية الدوام *</label>

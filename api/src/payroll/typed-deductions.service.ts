@@ -9,7 +9,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { assertCompanyWideWrite, branchScopeOf, userHasPerm } from '../auth/guards'
 import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
@@ -17,7 +17,7 @@ import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import { RequestType } from '../requests/entities/request-type.entity'
-import { audienceSubjectOf, parseRequestAudience, requestAudienceAllows } from '../requests/request-audience'
+import { audienceNeedsEmployee, audienceSubjectOf, parseRequestAudience, requestAudienceAllows, requestTypeInBranch } from '../requests/request-audience'
 import { orgPositionsOf } from '../requests/request-audience-positions'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { PayrollDecimal } from './payroll-decimal'
@@ -156,9 +156,9 @@ const MANAGE = 'deductions.manage', APPROVE = 'deductions.approve', VIEW = 'dedu
 const OBJECTION_EVENTS = ['OBJECTION', 'OBJECTION_RESPONDED']
 const bad = (code: string, message: string, details: Record<string, unknown> = {}): never => { throw new BadRequestException({ code, message, ...details }) }
 const dec = (value: unknown) => PayrollDecimal.from(typeof value === 'number' ? value.toFixed(4) : String(value))
-const money = (value: unknown) => value === null || value === undefined ? null : dec(value).format(2, 'HALF_UP')
+const money = (value: unknown) => value === null || value === undefined ? null : dec(value).format(2, 'DOWN')
 const decimalText = (value: unknown) => PayrollDecimal.from(typeof value === 'number' ? value : String(value)).canonical()
-const sumMoney = (values: Array<unknown>) => values.reduce<PayrollDecimal>((sum, value) => value === null || value === undefined ? sum : sum.add(dec(value)), PayrollDecimal.from('0')).format(2, 'HALF_UP')
+const sumMoney = (values: Array<unknown>) => values.reduce<PayrollDecimal>((sum, value) => value === null || value === undefined ? sum : sum.add(dec(value)), PayrollDecimal.from('0')).format(2, 'DOWN')
 const json = <T>(text: string | null, fallback: T): T => { if (!text) return fallback; try { return JSON.parse(text) as T } catch { return fallback } }
 
 // DD-01..DD-13: الكتالوج (مع الجهة المالكة والنطاق الوظيفي ومصفوفة التصعيد)، صلاحية المنشئ ونطاقه، الطلب والاعتماد مع
@@ -326,13 +326,15 @@ export class TypedDeductionsService {
     const type = await em.getRepository(RequestType).findOne({ where: { code: typeCode } })
     if (!type) return
     const audience = parseRequestAudience(type.visibleTo)
-    // قسم المستخدم لا يُقرأ إلا لجمهور «أقسام»
-    const self = audience?.mode === 'departments' && user.employeeId
-      ? await em.getRepository(Employee).findOne({ where: { id: user.employeeId }, select: { id: true, departmentId: true } })
+    // قسم المستخدم وفرعه لا يُقرآن إلا لجمهور محصور في أقسام/فروع أو لنوع خاص بفرع (قرار المالك 16 سبتمبر)
+    const self = (audienceNeedsEmployee(type.visibleTo) || type.branchId != null) && user.employeeId
+      ? await em.getRepository(Employee).findOne({ where: { id: user.employeeId }, select: { id: true, departmentId: true, branchId: true } })
       : null
     // «حسب المنصب»: مدير قسم / قائد فريق / مدير فرع يُعرفون من الهيكل لا من الدور
     const positions = audience?.mode === 'positions' ? await orgPositionsOf(em, user.employeeId) : null
-    if (!requestAudienceAllows(type.visibleTo, { ...audienceSubjectOf(user, self), positions }, 'submit')) {
+    const owner = user.role === 'super_admin' || (user.permissions ?? []).includes('*')
+    if (!requestTypeInBranch(type, self?.branchId ?? user.branchId, owner)
+      || !requestAudienceAllows(type.visibleTo, { ...audienceSubjectOf(user, self), positions }, 'submit')) {
       throw new ForbiddenException({ code: 'MONEY_REQUEST_NOT_VISIBLE', message: `طلب ${label} غير متاح لك` })
     }
   }
@@ -360,8 +362,8 @@ export class TypedDeductionsService {
     if (!selection.ok) {
       throw new BadRequestException({ code: `DEDUCTION_${selection.code}`, message: `${selection.message} — لا يُحسب الخصم بلا راتب الشهر ${period}` })
     }
-    const values = MONTHLY_SALARY_COMPONENTS.map(component => PayrollDecimal.from(selection.source.amounts[component.key]).format(2, 'HALF_UP'))
-    const gross = values.reduce((sum, value) => sum.add(PayrollDecimal.from(value)), PayrollDecimal.from('0')).format(2, 'HALF_UP')
+    const values = MONTHLY_SALARY_COMPONENTS.map(component => PayrollDecimal.from(selection.source.amounts[component.key]).format(2, 'DOWN'))
+    const gross = values.reduce((sum, value) => sum.add(PayrollDecimal.from(value)), PayrollDecimal.from('0')).format(2, 'DOWN')
     const source = selection.source.kind === 'MONTHLY_HISTORY' ? String(selection.source.sourceRef) : `${selection.source.sourceRef}:CURRENT_FILE_UNVERIFIED`
     return { basic: values[0], gross, monthlyDays: settings.monthlyDays, dailyHours: settings.dailyHours, source }
   }
@@ -433,6 +435,8 @@ export class TypedDeductionsService {
   }
 
   private scopedBases(user: JwtPayload, ctx: EvaluationContext, employee: Employee) {
+    // عزل الفروع: حساب مقفول على فرع ما ينزلش خصم/مكافأة على موظف في فرع تاني حتى لو الهيكل رابطهم
+    if (!this.inBranchScope(user, employee)) return []
     return this.basesFor(user, ctx.facts, ctx.settings, employee, ctx.rules).filter(basis => ctx.rules.creatorScopes.includes(basis))
   }
 
@@ -532,7 +536,9 @@ export class TypedDeductionsService {
       await employees(scope.employeeIds) !== scope.employeeIds.length)) bad('DEDUCTION_TYPE_SCOPE_NOT_FOUND', 'أحد أقسام أو فرق أو موظفي النطاق الوظيفي غير موجود')
   }
 
+  // أنواع الخصم مالهاش فرع = لكل الشركة: حساب الفرع يشوفها بس، والإضافة والتعديل والتعطيل لحساب على مستوى الشركة
   async createType(user: JwtPayload, dto: DeductionTypeDto) {
+    assertCompanyWideWrite(user)
     const rules = normalizeDeductionTypeRules(dto as unknown as Record<string, unknown>)
     if (await this.types.findOneBy({ code: rules.code })) throw new ConflictException({ code: 'DEDUCTION_TYPE_CODE_EXISTS', message: `الكود ${rules.code} مستخدم لنوع آخر` })
     await this.assertTypeReferences(this.manager, rules)
@@ -541,6 +547,7 @@ export class TypedDeductionsService {
   }
 
   async updateType(user: JwtPayload, id: number, dto: DeductionTypeDto) {
+    assertCompanyWideWrite(user)
     return this.manager.transaction(async em => {
       const repo = em.getRepository(DeductionType)
       const row = await repo.createQueryBuilder('t').setLock('pessimistic_write').where('t.id = :id', { id }).getOne()
@@ -594,7 +601,7 @@ export class TypedDeductionsService {
     const employees = await em.getRepository(Employee).find({ where: { isActive: true }, order: { fullName: 'ASC' },
       select: { id: true, fullName: true, employeeCode: true, branchId: true, departmentId: true, teamId: true, managerEmployeeId: true, isActive: true } })
     const names = await this.orgNames(em)
-    return employees.filter(row => row.id !== facts.employeeId && !facts.superiors.has(row.id))
+    return employees.filter(row => row.id !== facts.employeeId && !facts.superiors.has(row.id) && this.inBranchScope(user, row))
       .map(row => ({ row, bases: this.basesFor(user, facts, settings, row, rules).filter(basis => !rules || rules.creatorScopes.includes(basis)) }))
       .filter(entry => entry.bases.length)
       .map(({ row, bases }) => ({ id: row.id, fullName: row.fullName, employeeCode: row.employeeCode, branchId: row.branchId, branchName: names.branches.get(row.branchId) ?? null,
@@ -1130,8 +1137,8 @@ export class TypedDeductionsService {
       const totals = this.ledgerTotals(obligations)
       const remaining = dec(totals.collected).subtract(dec(totals.reversed))
       if (remaining.compare(PayrollDecimal.from('0')) <= 0) throw new ConflictException({ code: 'DEDUCTION_NOTHING_TO_REVERSE', message: 'لا يوجد مبلغ مستهلك غير معكوس لهذا الخصم' })
-      const amount = dto.amount !== undefined && String(dto.amount).trim() !== '' ? deductionDecimal(dto.amount, 'مبلغ العكس', { scale: 2 }) : remaining.format(2, 'HALF_UP')
-      if (dec(amount).compare(remaining) > 0) bad('DEDUCTION_REVERSAL_ABOVE_APPLIED', `مبلغ العكس ${money(amount)} يتجاوز المستهلك غير المعكوس ${remaining.format(2, 'HALF_UP')}`, { limit: remaining.format(2, 'HALF_UP') })
+      const amount = dto.amount !== undefined && String(dto.amount).trim() !== '' ? deductionDecimal(dto.amount, 'مبلغ العكس', { scale: 2 }) : remaining.format(2, 'DOWN')
+      if (dec(amount).compare(remaining) > 0) bad('DEDUCTION_REVERSAL_ABOVE_APPLIED', `مبلغ العكس ${money(amount)} يتجاوز المستهلك غير المعكوس ${remaining.format(2, 'DOWN')}`, { limit: remaining.format(2, 'DOWN') })
       const appliedRunIds = [...new Set(obligations.filter(item => item.type === 'DEBIT' && item.status === 'APPLIED' && item.appliedPayrollRunId).map(item => item.appliedPayrollRunId as number))]
       const runPeriods = appliedRunIds.length ? (await em.getRepository(PayrollRun).find({ where: { id: In(appliedRunIds) }, select: { id: true, period: true } })).map(run => run.period).sort() : []
       const period = payrollPeriodForDate(this.today(), settings.cycleStartDay)
@@ -1370,7 +1377,7 @@ export class TypedDeductionsService {
         const ledgerTyped = run.status === 'PAID' ? sumMoney(ledgerRows.map(item => item.appliedAmount ?? 0))
           : sumMoney(lines.filter(line => ledgerRows.some(item => item.id === line.id)).map(line => line.collected))
         reconciliation.push({ runId: run.id, runName: run.name ?? null, period: run.period, status: run.status, lines: lines.length, breakdownTyped, ledgerTyped,
-          difference: dec(breakdownTyped).subtract(dec(ledgerTyped)).format(2, 'HALF_UP') })
+          difference: dec(breakdownTyped).subtract(dec(ledgerTyped)).format(2, 'DOWN') })
       }
     }
     return { generatedAt: new Date().toISOString(), currentPeriod, fromPeriod, toPeriod, repeatThreshold: settings.repeatThreshold,

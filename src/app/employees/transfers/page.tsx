@@ -265,10 +265,10 @@ export default function TransfersPage() {
         <div className="card p-4 bg-blue-50 border border-blue-200 flex items-start gap-3">
           <History size={18} className="text-blue-600 mt-0.5 shrink-0" />
           <p className="text-sm text-blue-800">
-            <strong>المبدأ (§7.2):</strong> HR لا تعيد إدخال البيانات — الطلب فيه from/to وتاريخ
-            السريان، وبعد الموافقة النهائية <strong>النظام ينفّذ آلياً في تاريخ السريان</strong>
+            <strong>كيف يعمل النقل:</strong> لا حاجة لإعادة إدخال البيانات — طلب النقل يحمل الجهة الحالية والجديدة وتاريخ
+            السريان، وبعد الموافقة النهائية <strong>ينفّذه النظام آلياً في تاريخ السريان</strong>
             (تحديث الفريق والقسم والمدير المباشر). كل نقل يُسجَّل في سجل تنقلات الموظف
-            (assignment history) الظاهر في تبويب «السجل الوظيفي».
+            الظاهر في تبويب «السجل الوظيفي».
           </p>
         </div>
       </div>

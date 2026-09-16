@@ -8,7 +8,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { Request } from '../requests/entities/request.entity'
 import { exemptionPolicyOnDate, loadAttendanceExemptions, type AttendanceExemptionDayPolicy } from '../attendance/attendance-exemption-resolver'
 import { PayrollPeriodClaim } from './payroll-membership.entities'
-import { roundPayrollMoney } from './payroll-money'
+import { matchesStoredPayrollMoney, roundPayrollMoney } from './payroll-money'
 import { payrollPeriodOfDate } from './payroll-period'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, selectPayrollRunSalary } from './payroll-run-salary'
 // C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُغلق فترة الإضافي ولا يحجز سجلاته (عادت معتمدة بلا مسير)
@@ -93,12 +93,13 @@ export function overtimeFinancialValue(entry: OvertimeEntry, legacyHourlyRate: n
     !near(components.reduce((sum, component) => sum + component.amount, 0), approval.wageBase) ||
     !near(approval.hourlyRate, approval.wageBase / approval.monthlyDays / approval.dailyHours) ||
     !near(approval.hours, approval.approvedMinutes / 60) ||
-    roundPayrollMoney(approval.hours * approval.multiplier * approval.hourlyRate) !== approval.amount ||
+    // لقطات ما قبل قرار القص (16 سبتمبر) حُفظت بتقريب نصف لأعلى وتبقى صالحة؛ الجديد يُحسب بالقص.
+    !matchesStoredPayrollMoney(approval.hours * approval.multiplier * approval.hourlyRate, approval.amount) ||
     entry.approvedMinutes == null || Number(entry.approvedMinutes) !== approval.approvedMinutes ||
     entry.hourlyRateSnapshot == null || !near(Number(entry.hourlyRateSnapshot), Number(approval.hourlyRate.toFixed(6))) ||
     entry.amountSnapshot == null || Number(entry.amountSnapshot) !== approval.amount ||
-    Number(entry.rate) !== roundPayrollMoney(approval.multiplier) ||
-    Number(entry.payableHours) !== roundPayrollMoney(approval.hours)) invalid(entry.id)
+    !matchesStoredPayrollMoney(approval.multiplier, Number(entry.rate)) ||
+    !matchesStoredPayrollMoney(approval.hours, Number(entry.payableHours))) invalid(entry.id)
   return { approvedMinutes: approval.approvedMinutes, hours: approval.hours, multiplier: approval.multiplier,
     hourlyRate: approval.hourlyRate, amount: approval.amount, provenance: 'APPROVAL_SNAPSHOT' }
 }
@@ -111,6 +112,15 @@ export function projectOvertimeFinancialValue(entry: OvertimeEntry, legacyHourly
       message: `سجل الإضافي القديم رقم ${entry.id} بتاريخ ${entry.date} بلا ساعات مستحقة مثبتة؛ راجع مصدره قبل احتسابه أو صرفه` })
   }
   return value
+}
+
+/**
+ * مجموع تفصيل الإضافي المحفوظ يطابق إجمالي المبلغ والساعات على بند المسير: بالقص الحالي، أو بالتقريب القديم (نصف لأعلى)
+ * لمسير اتحسب قبل قرار القص (16 سبتمبر) — فالمسير القديم يتعتمد ويتصرف بمبالغه المحفوظة من غير ما تتغير.
+ */
+export function overtimeTraceMatchesStoredTotals(rows: ReadonlyArray<{ amount: number; hours: number }>, storedAmount: number, storedHours: number): boolean {
+  return matchesStoredPayrollMoney(rows.reduce((sum, row) => sum + row.amount, 0), storedAmount) &&
+    matchesStoredPayrollMoney(rows.reduce((sum, row) => sum + row.hours, 0), storedHours)
 }
 
 /** OT-05: نقرأ حجز الفترة تحت قفل الموظف، دون طلب قفل صف المسير بعد القفل المالي. */

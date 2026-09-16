@@ -25,7 +25,7 @@ function money(value: unknown, sourceRef: string): PayrollDecimal {
   if (typeof value !== 'string' || !/^\d{1,16}\.\d{2}$/.test(value)) fail('LIVE_LEDGER_AMOUNT_INVALID', 'المبلغ ليس نصًا دقيقًا غير سالب ضمن DECIMAL(18,2)', sourceRef)
   return PayrollDecimal.from(value as string)
 }
-function total(values: string[]) { return values.reduce((sum, value) => sum.add(PayrollDecimal.from(value)), PayrollDecimal.from('0')).format(2, 'HALF_UP') }
+function total(values: string[]) { return values.reduce((sum, value) => sum.add(PayrollDecimal.from(value)), PayrollDecimal.from('0')).format(2, 'DOWN') }
 function parsed(raw: unknown, sourceRef: string): Row {
   if (typeof raw !== 'string' || raw.length > 2000000) fail('LIVE_LEDGER_SNAPSHOT_INVALID', 'تفصيل المطالبة مفقود أو يتجاوز حد القراءة', sourceRef)
   let value: any
@@ -153,7 +153,7 @@ export async function readPayrollLiveLedger(em: EntityManager, employeeId: numbe
         const lines = data.installmentPlan.allocation.lines
         if (lines.some((line: any) => typeof line.eligible !== 'boolean')) fail('LIVE_PAYROLL_INSTALLMENT_PLAN_INVALID', 'أهلية أقساط المطالبة السابقة غير مثبتة', ref)
         claimed = ids(lines.filter((line: any) => line.eligible).map((line: any) => /^\d+$/.test(line.installmentRef) ? Number(line.installmentRef) : null), ref)
-        if (PayrollDecimal.from(total(lines.filter((line: any) => line.eligible).map((line: any) => money(line.deductedAmount, ref).format(2, 'HALF_UP')))).compare(loanAmount) !== 0) fail('LIVE_PAYROLL_INSTALLMENT_PLAN_INVALID', 'مبلغ أقساط المسير لا يطابق خطة مصادره', ref)
+        if (PayrollDecimal.from(total(lines.filter((line: any) => line.eligible).map((line: any) => money(line.deductedAmount, ref).format(2, 'DOWN')))).compare(loanAmount) !== 0) fail('LIVE_PAYROLL_INSTALLMENT_PLAN_INVALID', 'مبلغ أقساط المسير لا يطابق خطة مصادره', ref)
       } else if (own(data, 'installmentIds')) claimed = ids(data.installmentIds, ref)
       else if (!loanAmount.isZero()) fail('LIVE_PAYROLL_INSTALLMENT_SOURCES_MISSING', 'مسير سابق خصم أقساطًا دون توثيق مصادرها', ref)
       if (!loanAmount.isZero() && !claimed.length) fail('LIVE_PAYROLL_INSTALLMENT_SOURCES_MISSING', 'مبلغ قسط سابق موجب بلا مصدر موثق', ref)

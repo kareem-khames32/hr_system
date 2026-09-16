@@ -20,6 +20,7 @@ import {
   Building2,
   Briefcase,
 } from 'lucide-react'
+import { formatDate } from '@/lib/dates'
 
 const reviewData = {
   id: '1',
@@ -137,7 +138,7 @@ export default function PerformanceDetailsPage() {
                   </span>
                   <span className="flex items-center gap-1">
                     <Calendar size={14} />
-                    {new Date(reviewData.reviewDate).toLocaleDateString('ar-SA')}
+                    {formatDate(reviewData.reviewDate)}
                   </span>
                 </div>
               </div>

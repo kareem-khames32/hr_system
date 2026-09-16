@@ -191,7 +191,7 @@ export class LoansService {
       return {
         ...loan, isExceptional: loan.isExceptional === true || loan.isExceptional === 1, installments,
         paidCount: installments.filter(row => ['PAID', 'SETTLED'].includes(row.financialStatus)).length,
-        paidAmount: paidAmount.format(2, 'HALF_UP'), remainingAmount: remainingAmount.format(2, 'HALF_UP'),
+        paidAmount: paidAmount.format(2, 'DOWN'), remainingAmount: remainingAmount.format(2, 'DOWN'),
         repayments: repayments.filter((row: any) => row.loanId === loan.id), events: events.filter((row: any) => row.loanId === loan.id),
       }
     })

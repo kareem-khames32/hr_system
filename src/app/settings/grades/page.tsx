@@ -17,6 +17,7 @@ import {
 } from 'lucide-react'
 import { createCatalogItem, fetchCatalog, updateCatalogItem } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
+import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 
 interface Grade {
   id: number
@@ -45,6 +46,8 @@ export default function GradesPage() {
   const [editingGrade, setEditingGrade] = useState<Grade | null>(null)
   const [activeMenu, setActiveMenu] = useState<number | null>(null)
   const [formData, setFormData] = useState({ ...emptyForm })
+  // الدرجات لكل الشركة: حساب الفرع يشوفها بس
+  const { canWrite, readOnly } = useCompanyWideWrite()
 
   const loadData = async () => {
     try {
@@ -168,14 +171,18 @@ export default function GradesPage() {
             <h1 className="text-2xl font-bold text-gray-800">الدرجات الوظيفية</h1>
             <p className="text-gray-500 mt-1">سلم الدرجات والرواتب</p>
           </div>
-          <button
-            onClick={() => handleOpenModal()}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Plus size={20} />
-            إضافة درجة وظيفية
-          </button>
+          {canWrite && (
+            <button
+              onClick={() => handleOpenModal()}
+              className="btn-primary flex items-center gap-2"
+            >
+              <Plus size={20} />
+              إضافة درجة وظيفية
+            </button>
+          )}
         </div>
+
+        {readOnly && <CompanyWideReadOnlyNote />}
 
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
@@ -212,7 +219,7 @@ export default function GradesPage() {
               <div>
                 <p className="text-sm text-gray-500">متوسط الراتب</p>
                 <p className="text-2xl font-bold text-gray-800">
-                  {avgSalary.toLocaleString()} <span className="text-sm text-gray-500">{currency}</span>
+                  {avgSalary.toLocaleString('en-US')} <span className="text-sm text-gray-500">{currency}</span>
                 </p>
               </div>
             </div>
@@ -225,7 +232,7 @@ export default function GradesPage() {
               <div>
                 <p className="text-sm text-gray-500">أعلى راتب</p>
                 <p className="text-2xl font-bold text-gray-800">
-                  {maxSalary.toLocaleString()} <span className="text-sm text-gray-500">{currency}</span>
+                  {maxSalary.toLocaleString('en-US')} <span className="text-sm text-gray-500">{currency}</span>
                 </p>
               </div>
             </div>
@@ -265,7 +272,7 @@ export default function GradesPage() {
                 className={`card p-6 relative ${!grade.isActive ? 'opacity-60' : ''}`}
               >
                 {/* Actions */}
-                <div className="absolute top-4 left-4">
+                {canWrite && <div className="absolute top-4 left-4">
                   <button
                     onClick={() =>
                       setActiveMenu(activeMenu === grade.id ? null : grade.id)
@@ -311,7 +318,7 @@ export default function GradesPage() {
                       </div>
                     </>
                   )}
-                </div>
+                </div>}
 
                 {/* Header */}
                 <div className="flex items-start gap-4">
@@ -332,14 +339,14 @@ export default function GradesPage() {
                   <div className="flex items-center justify-between">
                     <div>
                       <span className="text-2xl font-bold text-gray-800">
-                        {Number(grade.minSalary).toLocaleString()}
+                        {Number(grade.minSalary).toLocaleString('en-US')}
                       </span>
                       <span className="text-gray-500 text-sm mr-1">{currency}</span>
                     </div>
                     <div className="flex-1 mx-4">
                       <div
                         className="relative h-2 bg-gray-200 rounded-full"
-                        title={`النطاق نسبةً لأعلى حد أقصى بين الدرجات (${maxSalary.toLocaleString()} ${currency})`}
+                        title={`النطاق نسبةً لأعلى حد أقصى بين الدرجات (${maxSalary.toLocaleString('en-US')} ${currency})`}
                       >
                         <div
                           className="absolute inset-y-0 bg-gradient-to-l from-primary-500 to-primary-300 rounded-full"
@@ -349,7 +356,7 @@ export default function GradesPage() {
                     </div>
                     <div>
                       <span className="text-2xl font-bold text-primary-600">
-                        {Number(grade.maxSalary).toLocaleString()}
+                        {Number(grade.maxSalary).toLocaleString('en-US')}
                       </span>
                       <span className="text-gray-500 text-sm mr-1">{currency}</span>
                     </div>
@@ -379,12 +386,12 @@ export default function GradesPage() {
           <div className="card p-12 text-center">
             <Award size={48} className="mx-auto text-gray-300 mb-4" />
             <h3 className="text-lg font-bold text-gray-800 mb-2">لا توجد درجات وظيفية</h3>
-            <p className="text-gray-500">أضف أول درجة وظيفية من الزر أعلاه</p>
+            {canWrite && <p className="text-gray-500">أضف أول درجة وظيفية من الزر أعلاه</p>}
           </div>
         )}
 
         {/* Modal */}
-        {showModal && (
+        {showModal && canWrite && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b border-gray-100">

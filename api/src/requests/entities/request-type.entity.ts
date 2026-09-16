@@ -36,10 +36,14 @@ export class RequestType {
   @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
   customFields: string
 
-  // JSON: جمهور النوع — مين يقدر يقدمه:
-  // {mode: 'all'|'departments'|'roles'|'employees', ids: number[]|string[]}
+  // JSON: جمهور النوع — مين يقدر يقدمه وفين:
+  // {mode: 'all'|'positions'|'roles'|'employees'|'departments'(قديم), ids, where?: {mode: 'company'|'branches'|'departments', ids}}
   @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
   visibleTo: string
+
+  // فرع النوع: null = كل الشركة؛ نوع الفرع لا يظهر ولا يُقدَّم خارج فرعه (ترحيل 043)
+  @Column({ type: 'int', nullable: true })
+  branchId: number | null
 
   // JSON: المرفقات المطلوبة
   @Column({ type: 'nvarchar', length: 'MAX', nullable: true })

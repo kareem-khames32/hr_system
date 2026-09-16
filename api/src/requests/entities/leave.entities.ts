@@ -120,6 +120,10 @@ export class LeaveType {
 
   @Column({ type: 'int', default: 7 })
   attachmentDeadlineDays: number
+
+  // فرع النوع: null = كل الشركة؛ نوع الفرع لا يظهر ولا يُطلب خارج فرعه (ترحيل 043)
+  @Column({ type: 'int', nullable: true })
+  branchId: number | null
 }
 
 @Entity('leaves')

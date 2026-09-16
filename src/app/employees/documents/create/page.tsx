@@ -5,7 +5,7 @@ import { useCallback, useEffect, useRef, useState } from 'react'
 import { CheckCircle2, Download, Eye, FileCheck, FilePlus2, FileText, Loader2, Plus, Printer, RefreshCw, ShieldCheck, X } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import PdfPreview from '@/components/PdfPreview'
-import { ApiError, can } from '@/lib/api'
+import { ApiError, can, isUncertainWriteError } from '@/lib/api'
 import {
   downloadIssuedHrDocument, fetchHrDocumentEmployees, fetchIssuedHrDocuments, fetchPublishedHrDocumentTemplates,
   HR_DOCUMENT_CATEGORY_LABELS, issueHrDocument, previewHrDocument,
@@ -13,11 +13,12 @@ import {
 } from '@/lib/hr-documents'
 import { hrDocumentAttemptFingerprint } from '@/lib/hr-document-template-editor'
 import { printHrDocument } from '@/lib/print-hr-document'
+import { DISPLAY_LOCALE } from '@/lib/dates'
 
 type Operation = 'load' | 'preview' | 'issue' | 'download' | 'print' | null
 type Attempt = { input: HrDocumentIssueInput; key: string; fingerprint: string }
 type Preview = { url: string; title: string; saved: boolean; documentId?: number }
-const dateLabel = (date: string) => new Date(date).toLocaleString('ar-EG-u-ca-gregory', { dateStyle: 'medium', timeStyle: 'short' })
+const dateLabel = (date: string) => new Date(date).toLocaleString(DISPLAY_LOCALE, { dateStyle: 'medium', timeStyle: 'short' })
 
 function IssueWorkspace() {
   const [catalog, setCatalog] = useState<HrDocumentCatalog | null>(null)
@@ -113,8 +114,8 @@ function IssueWorkspace() {
     let document: IssuedHrDocument
     try { document = await issueHrDocument({ ...currentAttempt.input, idempotencyKey: currentAttempt.key }) }
     catch (err) {
-      // Transport/server errors may have occurred after commit. Retry the same UUID and payload.
-      if (!(err instanceof ApiError) || err.status >= 500 || err.status === 408) setUncertain(currentAttempt)
+      // انقطاع الاتصال (الحالة 0) أو مهلة أو خطأ خادم: ممكن المستند اتحفظ والرد ضاع — نقفل المدخلات ونعيد بنفس المفتاح
+      if (isUncertainWriteError(err)) setUncertain(currentAttempt)
       else setUncertain(null)
       throw err
     }
@@ -141,7 +142,7 @@ function IssueWorkspace() {
   }
 
   return <div className="space-y-6 pb-10">
-    <div className="flex flex-wrap items-start justify-between gap-4"><div className="flex gap-3"><div className="w-12 h-12 rounded-2xl bg-primary-100 text-primary-700 flex items-center justify-center"><FilePlus2 size={25} /></div><div><Link href="/employees/documents" className="text-xs text-gray-500 hover:underline">مستندات الموظفين</Link><h1 className="text-2xl font-bold text-gray-900">إصدار مستند</h1><p className="text-sm text-gray-500 mt-1">أصدر مستندًا عامًا أو مستندًا لموظف من قالب منشور، واحفظ نسخته النهائية.</p></div></div><div className="flex gap-2">{can('settings.manage') && <Link href="/settings/document-templates" className="btn-secondary">إدارة القوالب</Link>}<button type="button" disabled={inputsDisabled} onClick={() => void run('load', async () => { await load(); setNotice('حُدثت القوالب المنشورة. راجع الحقول ثم أعد المعاينة قبل الإصدار.') })} className="btn-secondary flex gap-2 items-center"><RefreshCw size={16} />تحديث القوالب</button></div></div>
+    <div className="flex flex-wrap items-start justify-between gap-4"><div className="flex gap-3"><div className="w-12 h-12 rounded-2xl bg-primary-100 text-primary-700 flex items-center justify-center"><FilePlus2 size={25} /></div><div><Link href="/employees/documents" className="text-xs text-gray-500 hover:underline">مستندات الموظفين</Link><h1 className="text-2xl font-bold text-gray-800">إصدار مستند</h1><p className="text-sm text-gray-500 mt-1">أصدر مستندًا عامًا أو مستندًا لموظف من قالب منشور، واحفظ نسخته النهائية.</p></div></div><div className="flex gap-2">{can('settings.manage') && <Link href="/settings/document-templates" className="btn-secondary">إدارة القوالب</Link>}<button type="button" disabled={inputsDisabled} onClick={() => void run('load', async () => { await load(); setNotice('حُدثت القوالب المنشورة. راجع الحقول ثم أعد المعاينة قبل الإصدار.') })} className="btn-secondary flex gap-2 items-center"><RefreshCw size={16} />تحديث القوالب</button></div></div>
     <div className="rounded-xl border border-primary-100 bg-primary-50 p-4 text-sm text-gray-700 leading-7"><p>اختر القالب والموظف عند الحاجة، ثم أكمل الحقول وعاين PDF قبل الإصدار. بيانات الشركة والموظف تأتي من السجل الحالي. المستند الصادر يحتفظ بنسخته الأصلية حتى إذا تغيرت البيانات أو القالب لاحقًا.</p><p className="text-xs text-gray-500 flex items-center gap-2 mt-1"><ShieldCheck size={15} />تظهر القوالب والموظفون والمستندات المسموح لك بالوصول إليها.</p></div>
     {error && <div role="alert" className="rounded-xl bg-red-50 border border-red-100 p-4 text-sm text-red-800">{error}{!catalog && <button type="button" disabled={!!operation} onClick={() => void run('load', () => load(true))} className="block underline mt-2">إعادة المحاولة</button>}</div>}
     {notice && <div role="status" className="rounded-xl bg-green-50 border border-green-100 p-4 text-sm text-green-800 flex gap-2"><CheckCircle2 size={18} className="shrink-0" />{notice}</div>}

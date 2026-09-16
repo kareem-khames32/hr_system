@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import EmptyState from '@/components/EmptyState'
 import {
   Search,
   Plus,
@@ -21,6 +22,7 @@ import {
   BarChart3,
 } from 'lucide-react'
 import Link from 'next/link'
+import { formatDate } from '@/lib/dates'
 
 interface Goal {
   id: string
@@ -306,6 +308,8 @@ export default function GoalsPage() {
           </div>
         </div>
 
+        {filteredGoals.length === 0 && <EmptyState title="لا توجد أهداف مطابقة للبحث أو الفلاتر" />}
+
         {/* Goals List */}
         <div className="space-y-4">
           {filteredGoals.map((goal) => {
@@ -344,7 +348,7 @@ export default function GoalsPage() {
                           </span>
                           <span className="flex items-center gap-1">
                             <Calendar size={14} />
-                            {new Date(goal.endDate).toLocaleDateString('ar-SA')}
+                            {formatDate(goal.endDate)}
                           </span>
                         </div>
                       </div>

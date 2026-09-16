@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import EmptyState from '@/components/EmptyState'
 import {
   Search,
   Filter,
@@ -320,6 +321,8 @@ export default function TrainingPage() {
             <button className="btn-primary btn-sm">عرض الدورات</button>
           </div>
         </div>
+
+        {filteredCourses.length === 0 && <EmptyState title="لا توجد دورات مطابقة للبحث أو الفلاتر" />}
 
         {/* Courses Grid */}
         <div className={viewMode === 'grid' ? 'grid grid-cols-3 gap-4' : 'space-y-4'}>

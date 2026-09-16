@@ -872,7 +872,8 @@ test('REQ-23 an out-of-branch structural manager sees no custody and cannot conf
 
 const personalInitial = { phone: '01012345678', phoneAlt: '02012345678', address: 'Original fixture address', maritalStatus: 'single' }
 const personalChanged = { phone: '01098765432', phoneAlt: '02098765432', address: 'Updated fixture address', maritalStatus: 'married' }
-for (const clear of [null, '']) test(`REQ-10 allowed personal fields persist with exact before/after audit and clear with ${clear === null ? 'null' : 'empty strings'}`, async () => {
+// المسح الصريح بقيمة null؛ النص الفارغ (ما ترسله الشاشة للحقل غير المعدّل) لا يمسح — الاختبار التالي
+for (const clear of [null]) test(`REQ-10 allowed personal fields persist with exact before/after audit and clear with ${clear === null ? 'null' : 'empty strings'}`, async () => {
   await requestType('PERSONAL_DATA_UPDATE', 'employee_record')
   const target = await person({ ...personalInitial, emergencyContactName: 'Unaffected fixture contact' })
   const changed = await submit(target.user, 'PERSONAL_DATA_UPDATE', personalChanged)
@@ -901,6 +902,20 @@ for (const clear of [null, '']) test(`REQ-10 allowed personal fields persist wit
   const repeat = await submit(target.user, 'PERSONAL_DATA_UPDATE', Object.fromEntries(Object.keys(personalChanged).map(field => [field, clear])))
   assert.equal(repeat.status, 400); assert.match(repeat.body.message, /لم تتغير/)
   assert.equal(await histories().countBy({ employeeId: target.employee.id }), 8)
+})
+
+test('REQ-10 blank strings sent by the requests screen for untouched fields keep saved personal data (only changed fields are written)', async () => {
+  await requestType('PERSONAL_DATA_UPDATE', 'employee_record')
+  const target = await person(personalInitial)
+  // الشاشة ترسل كل حقول النموذج؛ الموظف غيّر العنوان فقط
+  const result = await submit(target.user, 'PERSONAL_DATA_UPDATE', { phone: '', phoneAlt: '', address: 'Only the address changed', maritalStatus: '' })
+  assert.equal(result.status, 201, JSON.stringify(result.body)); assert.equal(result.body.status, 'COMPLETED')
+  const saved = await employeesRepo().findOneBy({ id: target.employee.id })
+  assert.deepEqual([saved.phone, saved.phoneAlt, saved.address, saved.maritalStatus], [personalInitial.phone, personalInitial.phoneAlt, 'Only the address changed', personalInitial.maritalStatus])
+  assert.deepEqual((await histories().findBy({ requestId: result.body.id })).map(item => item.fieldName), ['address'])
+  const blank = await submit(target.user, 'PERSONAL_DATA_UPDATE', { phone: '', phoneAlt: ' ', address: '', maritalStatus: '' })
+  assert.equal(blank.status, 400); assert.match(blank.body.message, /لم تتغير/)
+  assert.equal((await employeesRepo().findOneBy({ id: target.employee.id })).phone, personalInitial.phone)
 })
 
 test('REQ-10 empty, unchanged, protected and malformed personal updates cannot complete or append history', async () => {

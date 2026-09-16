@@ -14,6 +14,9 @@ import {
   Mail,
   Phone,
   Building2,
+  PauseCircle,
+  PlayCircle,
+  Archive,
 } from 'lucide-react'
 import Link from 'next/link'
 import { csvDateStamp, downloadCsv } from '@/lib/csv'
@@ -26,7 +29,10 @@ import {
   archiveEmployee,
   fetchFileObjectUrl,
   ApiDepartment,
+  type ApiEmployee,
 } from '@/lib/api'
+import EmployeeSuspensionDialog from '@/components/EmployeeSuspensionDialog'
+import type { EmployeeSuspension } from '@/lib/employee-suspensions-api'
 
 interface Employee {
   id: number
@@ -40,15 +46,26 @@ interface Employee {
   department: string
   jobTitle: string
   status: string
+  // الحالة المحفوظة (status قد تكون «موقوف» مشتقة من فترة إيقاف مؤرخة)
+  storedStatus: string
+  // الإيقاف الساري أو القادم
+  suspension: EmployeeSuspension | null
   joinDate: string
   branch: string
 }
 
-const getStatusBadge = (status: string) => (
-  <span className={`badge ${employeeStatusStyles[status] ?? 'bg-gray-100 text-gray-600'}`}>
-    {employeeStatusLabels[status] ?? status}
+const getStatusBadge = (status: string, suspension?: EmployeeSuspension | null) => (
+  <span className="inline-flex flex-col items-start gap-0.5">
+    <span className={`badge ${employeeStatusStyles[status] ?? 'bg-gray-100 text-gray-600'}`}>
+      {employeeStatusLabels[status] ?? status}
+    </span>
+    {suspension?.state === 'CURRENT' && <span className="text-[11px] text-gray-500">لحد {suspension.toDate}</span>}
+    {suspension?.state === 'UPCOMING' && <span className="text-[11px] text-gray-500">إيقاف من {suspension.fromDate}</span>}
   </span>
 )
+
+// الإيقاف المؤرخ لموظف على رأس العمل (الموقوف بالنظام القديم يتعدل من ملفه)
+const SUSPENDABLE = ['active', 'probation', 'notice_period']
 
 // خيارات فلتر الحالة بقيم الباك (EmployeeStatus) — وتسمياتها لعمود الحالة في التصدير
 const STATUS_OPTIONS = Object.entries(EMPLOYEE_STATUS).map(([value, meta]) => ({ value, label: meta.label }))
@@ -70,6 +87,11 @@ export default function EmployeesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({})
+  const [notice, setNotice] = useState('')
+  // قائمة إجراءات صف مفتوحة، ونافذة الإيقاف المؤقت (جديد أو إنهاء القائم)
+  const [menuFor, setMenuFor] = useState<number | null>(null)
+  const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 })
+  const [suspensionTarget, setSuspensionTarget] = useState<{ employee: Employee; current: EmployeeSuspension | null } | null>(null)
 
   // بحث الهيدر يفتح القائمة بـ ?q= — يُقرأ مرة عند فتح الصفحة
   useEffect(() => {
@@ -90,7 +112,7 @@ export default function EmployeesPage() {
       const deptById = new Map(depts.map((d) => [d.id, d.name]))
       setDepartments(depts)
       setEmployees(
-        emps.map((e) => ({
+        (emps as Array<ApiEmployee & { storedStatus?: string; suspension?: EmployeeSuspension | null }>).map((e) => ({
           id: e.id,
           employeeId: e.employeeCode,
           name: e.fullName,
@@ -105,8 +127,10 @@ export default function EmployeesPage() {
               : '—',
           jobTitle: e.jobTitle ?? '—',
           status: e.status,
+          storedStatus: e.storedStatus ?? e.status,
+          suspension: e.suspension ?? null,
           joinDate: e.joinDate
-            ? e.joinDate.slice(0, 10).split('-').join('/')
+            ? e.joinDate.slice(0, 10)
             : '—',
           branch: branchById.get(e.branchId) ?? '—',
         }))
@@ -179,6 +203,22 @@ export default function EmployeesPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذرت أرشفة الموظف')
     }
+  }
+
+  // إجراءات قائمة الصف: «إيقاف مؤقت» بالتواريخ (أو إنهاء الإيقاف القائم) والأرشفة — كل واحد بصلاحيته
+  const menuItems = (employee: Employee) => {
+    const items: { key: string; label: string; icon: typeof Archive; danger?: boolean; run: () => void }[] = []
+    if (can('employees.edit') && SUSPENDABLE.includes(employee.storedStatus)) {
+      const open = employee.suspension && ['CURRENT', 'UPCOMING'].includes(employee.suspension.state) ? employee.suspension : null
+      items.push(open
+        ? { key: 'end-suspension', label: open.state === 'UPCOMING' ? 'إلغاء الإيقاف القادم' : 'إنهاء الإيقاف', icon: PlayCircle,
+            run: () => { setNotice(''); setSuspensionTarget({ employee, current: open }) } }
+        : { key: 'suspend', label: 'إيقاف مؤقت', icon: PauseCircle, run: () => { setNotice(''); setSuspensionTarget({ employee, current: null }) } })
+    }
+    if (can('employees.archive') && employee.storedStatus !== 'archived') {
+      items.push({ key: 'archive', label: 'أرشفة', icon: Archive, danger: true, run: () => handleArchive(employee.id) })
+    }
+    return items
   }
 
   const filteredEmployees = employees.filter((emp) => {
@@ -338,6 +378,43 @@ export default function EmployeesPage() {
         {error && (
           <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>
         )}
+        {notice && (
+          <div role="status" className="bg-green-50 text-green-800 rounded-xl p-4">{notice}</div>
+        )}
+
+        {/* قائمة إجراءات الصف — ثابتة الموضع حتى لا يقصها تمرير الجدول */}
+        {menuFor != null && (() => {
+          const target = employees.find((e) => e.id === menuFor)
+          if (!target) return null
+          return (
+            <>
+              <div className="fixed inset-0 z-30" onClick={() => setMenuFor(null)} />
+              <div role="menu" className="fixed z-40 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-2"
+                style={{ top: menuPosition.top, left: Math.max(8, menuPosition.left) }}>
+                {menuItems(target).map((item) => (
+                  <button key={item.key} type="button" role="menuitem" onClick={() => { setMenuFor(null); item.run() }}
+                    className={`w-full flex items-center gap-3 px-4 py-2.5 text-sm hover:bg-gray-50 transition-colors ${item.danger ? 'text-danger-600' : 'text-gray-700'}`}>
+                    <item.icon size={16} />
+                    <span>{item.label}</span>
+                  </button>
+                ))}
+              </div>
+            </>
+          )
+        })()}
+
+        {suspensionTarget && (
+          <EmployeeSuspensionDialog
+            employee={{ id: suspensionTarget.employee.id, name: suspensionTarget.employee.name }}
+            current={suspensionTarget.current}
+            onClose={() => setSuspensionTarget(null)}
+            onSaved={async (message) => {
+              setSuspensionTarget(null)
+              setNotice(message)
+              await loadData()
+            }}
+          />
+        )}
 
         {/* Results Count */}
         <div className="flex items-center justify-between">
@@ -400,7 +477,7 @@ export default function EmployeesPage() {
                         </div>
                       </td>
                       <td className="table-cell text-gray-500">{employee.joinDate}</td>
-                      <td className="table-cell">{getStatusBadge(employee.status)}</td>
+                      <td className="table-cell">{getStatusBadge(employee.status, employee.suspension)}</td>
                       <td className="table-cell">
                         <div className="flex items-center justify-center gap-1">
                           <Link
@@ -417,10 +494,17 @@ export default function EmployeesPage() {
                               <Edit size={18} className="text-gray-500" />
                             </Link>
                           )}
-                          {can('employees.archive') && (
+                          {menuItems(employee).length > 0 && (
                             <button
-                              onClick={() => handleArchive(employee.id)}
-                              title="أرشفة"
+                              type="button"
+                              onClick={(event) => {
+                                const rect = event.currentTarget.getBoundingClientRect()
+                                setMenuPosition({ top: rect.bottom + 4, left: rect.left })
+                                setMenuFor(menuFor === employee.id ? null : employee.id)
+                              }}
+                              title="إجراءات أخرى"
+                              aria-haspopup="menu"
+                              aria-expanded={menuFor === employee.id}
                               className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
                             >
                               <MoreVertical size={18} className="text-gray-500" />
@@ -448,7 +532,7 @@ export default function EmployeesPage() {
                       employee.avatar
                     )}
                   </div>
-                  {getStatusBadge(employee.status)}
+                  {getStatusBadge(employee.status, employee.suspension)}
                 </div>
                 <h3 className="font-bold text-gray-800">{employee.name}</h3>
                 <p className="text-sm text-gray-500 mt-1">{employee.jobTitle}</p>

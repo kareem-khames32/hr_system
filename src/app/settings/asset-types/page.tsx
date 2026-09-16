@@ -28,6 +28,7 @@ import {
   type ApiAsset,
 } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
+import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 
 // حالات الأصل — تسميات موحّدة في كل النظام
 const assetStatusLabels: Record<string, string> = {
@@ -69,6 +70,8 @@ export default function AssetRegistryPage() {
   const [assetTypes, setAssetTypes] = useState<AssetTypeRow[]>([])
   const [typesError, setTypesError] = useState<string | null>(null)
   const canManageTypes = can('settings.manage')
+  // التصنيفات لكل الشركة: حساب الفرع يشوفها بس (الأصول نفسها بفرعها وتتدار عادي)
+  const { canWrite: canWriteTypes, readOnly: typesReadOnly } = useCompanyWideWrite()
   const [showTypesModal, setShowTypesModal] = useState(false)
   const [newTypeName, setNewTypeName] = useState('')
   const [editingTypeId, setEditingTypeId] = useState<number | null>(null)
@@ -435,7 +438,7 @@ export default function AssetRegistryPage() {
                           </td>
                           <td className="py-3 px-4 text-sm text-gray-700">
                             {a.value != null
-                              ? `${Number(a.value).toLocaleString()} ${currency}`
+                              ? `${Number(a.value).toLocaleString('en-US')} ${currency}`
                               : '—'}
                           </td>
                           <td className="py-3 px-4">
@@ -546,7 +549,7 @@ export default function AssetRegistryPage() {
                     ) : (
                       activeTypeNames.length === 0 && (
                         <p className="text-xs text-gray-400 mt-1">
-                          {canManageTypes
+                          {canManageTypes && canWriteTypes
                             ? 'لا توجد تصنيفات مفعّلة — أضفها من «تصنيفات الأصول»'
                             : 'لا توجد تصنيفات مفعّلة — اطلب إضافتها من مسؤول الإعدادات'}
                         </p>
@@ -624,11 +627,12 @@ export default function AssetRegistryPage() {
                 </button>
               </div>
               <div className="p-6 space-y-4">
+                {typesReadOnly && <CompanyWideReadOnlyNote />}
                 {typeModalError && (
                   <div className="bg-red-50 text-red-700 rounded-xl p-4">{typeModalError}</div>
                 )}
 
-                <div className="flex items-center gap-2">
+                {canWriteTypes && <div className="flex items-center gap-2">
                   <input
                     type="text"
                     value={newTypeName}
@@ -646,7 +650,7 @@ export default function AssetRegistryPage() {
                     <Plus size={16} />
                     إضافة
                   </button>
-                </div>
+                </div>}
 
                 <div className="divide-y divide-gray-100 border border-gray-100 rounded-xl">
                   {assetTypes.length === 0 && (
@@ -654,7 +658,7 @@ export default function AssetRegistryPage() {
                   )}
                   {assetTypes.map((t) => (
                     <div key={t.id} className="flex items-center gap-2 p-3">
-                      {editingTypeId === t.id ? (
+                      {editingTypeId === t.id && canWriteTypes ? (
                         <>
                           <input
                             type="text"
@@ -688,6 +692,7 @@ export default function AssetRegistryPage() {
                           >
                             {t.name}
                           </span>
+                          {canWriteTypes && <>
                           <button
                             onClick={() => {
                               setEditingTypeId(t.id)
@@ -710,6 +715,7 @@ export default function AssetRegistryPage() {
                           >
                             {t.isActive ? 'تعطيل' : 'تفعيل'}
                           </button>
+                          </>}
                         </>
                       )}
                     </div>

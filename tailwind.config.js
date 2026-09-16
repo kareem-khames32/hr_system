@@ -37,8 +37,10 @@ module.exports = {
         },
       },
       fontFamily: {
-        sans: ['Inter', 'Tajawal', 'system-ui', 'sans-serif'],
-        arabic: ['Tajawal', 'Arial', 'sans-serif'],
+        // خط واحد للنظام: font-sans وfont-mono وfont-arabic كلها Tajawal (الأرقام في الجداول متساوية العرض من globals.css)
+        sans: ['Tajawal', 'system-ui', 'sans-serif'],
+        mono: ['Tajawal', 'system-ui', 'sans-serif'],
+        arabic: ['Tajawal', 'system-ui', 'sans-serif'],
       },
     },
   },

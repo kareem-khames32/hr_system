@@ -37,18 +37,21 @@ import {
 } from '../attendance/attendance.service'
 import { OvertimeEntry } from './entities/attendance.entities'
 import { ApproverResolver, ResolvedStep } from './approver-resolver.service'
-import { audienceNeedsPositions, audienceSubjectOf, requestAudienceAllows, type AudiencePositions } from './request-audience'
+import { audienceNeedsPositions, audienceSubjectOf, requestAudienceAllows, requestTypeInBranch, type AudiencePositions } from './request-audience'
+import { definitionInBranch } from '../common/definition-branch'
 import { orgPositionsOf } from './request-audience-positions'
 import {
   assertBankName,
   assertIban,
   assertJobTitle,
   DestinationsService,
+  obligationAmount,
   RECORD_UPDATE_FIELDS,
 } from './destinations.service'
 import { LeaveBalancesService } from './leave-balances.service'
 import { Leave, LeaveType } from './entities/leave.entities'
 import { assertLeaveTypeDateRules, assertLeaveTypeDaysRules, leaveCountsAllDays, leaveTypeBackdateLimit } from './leave-type-rules'
+import { assertLeaveOutsideSuspension } from '../employees/employee-suspension-overlap'
 import { ApprovalChain } from './entities/approval-chain.entity'
 import { ApprovalStep } from './entities/approval-step.entity'
 import { ApprovalAction, RequestApproval } from './entities/request-approval.entity'
@@ -96,6 +99,8 @@ export interface ActDto {
 // القديمة للبصمة — لا تُقبل إلا إن عُرّفت حقلاً في «أنواع الطلبات»، عمداً: فلا
 // يغيّر مفتاح يقرؤه المعالج التنفيذَ خفيةً عن المعتمد. أي مفتاح غيرها يُرفض عند التقديم
 const COMMON_PAYLOAD_KEYS = ['note', 'reason', 'attachmentUrl']
+// وقت البصمة HH:MM (والثواني اختيارية) — نفس فحص التنفيذ في destinations.service
+export const PUNCH_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
 const CATEGORY_PAYLOAD_KEYS: Record<string, string[]> = {
   // نوع الإجازة + نطاق اليوم + العطلات المستبعدة (يكتبها التقديم) + رقم التواصل
   // daysByYear: تقسيم أيام الإجازة اللي بتعدّي السنة (يكتبه التقديم ويُعاد حسابه)
@@ -213,7 +218,11 @@ export class RequestsService {
     const positions = all.some((t) => audienceNeedsPositions(t.visibleTo))
       ? await orgPositionsOf(this.employees.manager, user.employeeId)
       : null
-    return groupLeaveProfiles(all.filter((t) => this.audienceAllows(t, user, emp, 'catalog', positions)))
+    // نوع خاص بفرع (قرار المالك 16 سبتمبر) لا يظهر خارج فرعه؛ الحساب العام يراه لأنه قد يقدّم نيابةً عن أي فرع
+    const companyWide = branchScopeOf(user) === null
+    const subjectBranch = emp?.branchId ?? user.branchId ?? null
+    return groupLeaveProfiles(all.filter((t) => requestTypeInBranch(t, subjectBranch, companyWide)
+      && this.audienceAllows(t, user, emp, 'catalog', positions)))
   }
 
   // هل النوع متاح للمستخدم ده؟ (ب4)
@@ -306,6 +315,10 @@ export class RequestsService {
       throw new ForbiddenException(
         'حساب الموظف غير نشط (منتهي/مؤرشف) — لا يقدّم طلبات جديدة'
       )
+    }
+    // نوع خاص بفرع: لموظفي فرعه بس — حتى التقديم نيابةً (قرار المالك 16 سبتمبر)
+    if (!requestTypeInBranch(type, requester.branchId)) {
+      throw new ForbiddenException('هذا النوع من الطلبات خاص بفرع تاني، ومش متاح للموظف ده')
     }
     // جمهور النوع يحكم التقديم لا العرض فقط (ب4). التقديم نيابةً عن موظف آخر يمر:
     // الموارد البشرية تدفع الشغل ولا يوقفها جمهور النوع (القرار ج1).
@@ -593,6 +606,13 @@ export class RequestsService {
               `نوع الإجازة «${ltCode}» غير معروف أو معطل — اختر من الأنواع المتاحة`
             )
           }
+          // نوع إجازة خاص بفرع: لموظفي فرعه بس (قرار المالك 16 سبتمبر)
+          if (leaveTypeDef.branchId != null) {
+            const owner = await em.getRepository(Employee).findOne({ where: { id: req.requesterId }, select: { id: true, branchId: true } })
+            if (!definitionInBranch(leaveTypeDef.branchId, owner?.branchId)) {
+              throw new BadRequestException(`نوع الإجازة «${leaveTypeDef.nameAr}» خاص بفرع تاني — اختر من الأنواع المتاحة`)
+            }
+          }
         }
       }
 
@@ -760,6 +780,10 @@ export class RequestsService {
           throw new BadRequestException(
             'للموظف طلب إجازة آخر قيد المعالجة يتداخل مع هذه الفترة'
           )
+        }
+        // الموظف موقوف عن العمل في أي يوم من المدى: الإجازة تترفض (للموظف وللموارد البشرية نيابةً)
+        if (p.leaveId == null) {
+          await assertLeaveOutsideSuspension(em, req.requesterId, reqFrom, reqTo)
         }
       }
 
@@ -2663,6 +2687,13 @@ export class RequestsService {
     if (type.destinationHandler === 'loans_installments' && type.code !== 'EARLY_LOAN_SETTLEMENT') loanScheduleAmounts(p.amount, p.months ?? 1)
     // AD-14 (C6): المبلغ الفارغ = كلي؛ الجزئي يتطلب مرجعًا وطريقة صالحة
     if (isEarlySettlementType(type)) { assertLoanReferenceId(p.loanId); readEarlySettlementPayload(p, null) }
+    // نفس فحوص التنفيذ بتترفض من التقديم، بدل ما الطلب يوصل للمعتمد ويقع عنده
+    if (['expense_register', 'payroll_allowance', 'payroll_adjustment'].includes(type.destinationHandler ?? '') && p.amount != null && p.amount !== '') obligationAmount(p.amount)
+    if (type.code === 'PUNCH_CORRECTION' && p.date != null && p.date !== '') {
+      if (!isValidYmd(String(p.date)) || String(p.date) > localDateOf(new Date())) throw new BadRequestException('تاريخ البصمة المطلوب تصحيحها غير صالح أو في المستقبل')
+      const time = String(p.time ?? p.in ?? p.out ?? '').trim()
+      if (time && !PUNCH_TIME_PATTERN.test(time)) throw new BadRequestException('وقت البصمة بصيغة HH:MM')
+    }
     const required = this.requiredRequestFields(type)
     const custom: Array<{ key: string; label: string; required?: boolean; type: string; options?: string[] }> =
       type.customFields ? JSON.parse(type.customFields) : []

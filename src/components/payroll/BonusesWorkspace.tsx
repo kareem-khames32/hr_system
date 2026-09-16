@@ -11,6 +11,7 @@ import {
   reverseBonus, submitBonusBatch, updateBonusType, withdrawBonus, type BonusCalcMethod, type BonusCandidate, type BonusCreatable, type BonusCreatorBasis,
   type BonusInput, type BonusPreview, type BonusSelection, type BonusSelectionMode, type BonusStatus, type BonusTypeInput, type BonusTypeView, type BonusView,
 } from '@/lib/bonuses-api'
+import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 
 // C4 / الخطوة 27: مساحة المكافآت — القائمة والاعتماد (المدير الأعلى عند التصعيد ثم الموارد البشرية)، والاقتراح لموظف واحد
 // أو اختيار أو فريق أو قسم أو فرع بمعاينة أرقام حقيقية واستبعاد، وكتالوج الأنواع. الخادم يعيد فحص النطاق والسقف والتكرار
@@ -561,6 +562,8 @@ function BonusTypesPanel({ onChanged }: { onChanged: () => void }) {
   const [form, setForm] = useState<BonusTypeInput>(emptyType())
   const [busy, setBusy] = useState(false)
   const [formError, setFormError] = useState('')
+  // أنواع المكافآت لكل الشركة: حساب الفرع يشوفها بس
+  const { canWrite, readOnly } = useCompanyWideWrite()
 
   const load = () => { setLoading(true); fetchBonusTypes(true).then(setTypes).catch(err => setError(errorText(err, 'تعذر تحميل الكتالوج'))).finally(() => setLoading(false)) }
   useEffect(load, [])
@@ -591,8 +594,9 @@ function BonusTypesPanel({ onChanged }: { onChanged: () => void }) {
     <div className="space-y-3">
       <div className="flex items-center justify-between">
         <p className="text-sm text-gray-500">تعديل طريقة الحساب أو الحدود أو السقف أو النطاق أو السلسلة يرفع نسخة النوع؛ الطلبات القائمة تبقى بلقطتها.</p>
-        <button type="button" className="btn-primary flex items-center gap-1" onClick={() => open('new')}><Plus size={16} />نوع جديد</button>
+        {canWrite && <button type="button" className="btn-primary flex items-center gap-1" onClick={() => open('new')}><Plus size={16} />نوع جديد</button>}
       </div>
+      {readOnly && <CompanyWideReadOnlyNote />}
       {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
       {loading ? <p className="text-sm text-gray-400">جارٍ التحميل…</p> : (
         <div className="overflow-x-auto">
@@ -610,14 +614,14 @@ function BonusTypesPanel({ onChanged }: { onChanged: () => void }) {
                   <td className="table-cell text-sm">{row.calcMethodLabel}{row.defaultValue ? ` (افتراضي ${row.defaultValue})` : ''}</td>
                   <td className="table-cell text-center text-sm">{row.maxPctOfBase ? `${row.maxPctOfBase}% من الأساسي` : 'بلا'}</td>
                   <td className="table-cell text-xs text-gray-600">{row.creatorScopes.map(role => BONUS_ROLE_LABELS[role]).join('، ')}<span className="block">{row.approvalSteps.map(role => BONUS_ROLE_LABELS[role]).join(' ← ')}</span></td>
-                  <td className="table-cell text-center"><button type="button" className="btn-secondary text-xs px-2 py-1" onClick={() => open(row)}>تعديل</button></td>
+                  <td className="table-cell text-center">{canWrite && <button type="button" className="btn-secondary text-xs px-2 py-1" onClick={() => open(row)}>تعديل</button>}</td>
                 </tr>
               ))}
             </tbody>
           </table>
         </div>
       )}
-      {editing && (
+      {editing && canWrite && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" role="dialog" aria-modal="true">
           <div className="bg-white rounded-2xl p-6 w-full max-w-2xl space-y-3 max-h-[90vh] overflow-y-auto">
             <div className="flex items-center justify-between">

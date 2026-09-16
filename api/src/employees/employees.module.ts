@@ -10,6 +10,7 @@ import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { LeaveBalance } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { Employee } from './employee.entity'
+import { EmployeeSuspension } from './employee-suspension.entity'
 import {
   EmployeeCertification,
   EmployeeEducation,
@@ -38,6 +39,8 @@ import { EmployeesService } from './employees.service'
       EmployeeExperience,
       EmployeeSkill,
       EmployeeLanguage,
+      // الإيقاف عن العمل لفترة (ترحيل 20260916_044)
+      EmployeeSuspension,
     ]),
     // ربط البصمات اليتيمة بأثر رجعي عند ضبط رقم البصمة/الكود
     AttendanceModule,

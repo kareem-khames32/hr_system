@@ -19,6 +19,7 @@ import {
   markNotificationsRead,
   NOTIFICATIONS_CHANGED,
 } from '@/lib/api'
+import { formatDate } from '@/lib/dates'
 import { pageTitleFor } from './pageTitles'
 
 interface Notification {
@@ -40,7 +41,7 @@ const formatTime = (at: string) => {
   if (minutes < 60) return `منذ ${minutes} دقيقة`
   if (hours < 24) return `منذ ${hours} ساعة`
   if (days < 7) return `منذ ${days} يوم`
-  return new Date(at).toLocaleDateString('ar-EG-u-ca-gregory')
+  return formatDate(at)
 }
 
 export default function Header() {
@@ -79,11 +80,16 @@ export default function Header() {
   }, [])
 
   useEffect(() => {
-    loadNotifications()
     // القراءة/الحذف من شاشة الإشعارات أو من الجرس نفسه — حدّث القائمة والعدّاد
     window.addEventListener(NOTIFICATIONS_CHANGED, loadNotifications)
     return () => window.removeEventListener(NOTIFICATIONS_CHANGED, loadNotifications)
   }, [loadNotifications])
+
+  // الهيدر ثابت بين الصفحات: الإشعارات تتحدث مع كل انتقال والقائمة المنسدلة تُغلق
+  useEffect(() => {
+    loadNotifications()
+    setShowNotifications(false)
+  }, [loadNotifications, pathname])
 
   // ⌘K / Ctrl+K يركّز خانة البحث
   useEffect(() => {
@@ -131,13 +137,19 @@ export default function Header() {
         : 'لوحتي'
       : pageTitleFor(pathname) ?? 'نظام الموارد البشرية'
 
-  const today = new Date()
-  const formattedDate = today.toLocaleDateString('ar-EG-u-ca-gregory', {
-    weekday: 'long',
-    year: 'numeric',
-    month: 'long',
-    day: 'numeric',
-  })
+  // عنوان تبويب المتصفح = عنوان الشاشة (يُعاد تطبيقه لو كتبت Next عنوان الـmetadata العام بعده)
+  useEffect(() => {
+    const wanted = pageTitle === 'نظام الموارد البشرية' ? pageTitle : `${pageTitle} | نظام الموارد البشرية`
+    const apply = () => {
+      if (document.title !== wanted) document.title = wanted
+    }
+    apply()
+    const observer = new MutationObserver(apply)
+    observer.observe(document.head, { childList: true, subtree: true, characterData: true })
+    return () => observer.disconnect()
+  }, [pageTitle])
+
+  const formattedDate = formatDate(new Date(), { weekday: 'long', year: 'numeric', month: 'long', day: 'numeric' })
 
   return (
     <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-lg border-b border-gray-100">
@@ -170,7 +182,7 @@ export default function Header() {
             >
               <Bell size={20} className="text-gray-600" />
               {unreadCount > 0 && (
-                <span className="absolute -top-1 -right-1 w-5 h-5 bg-danger-500 text-white text-xs rounded-full flex items-center justify-center">
+                <span dir="ltr" className="absolute -top-1 -right-1 min-w-5 h-5 px-1 bg-danger-500 text-white text-xs rounded-full flex items-center justify-center">
                   {unreadCount > 9 ? '9+' : unreadCount}
                 </span>
               )}

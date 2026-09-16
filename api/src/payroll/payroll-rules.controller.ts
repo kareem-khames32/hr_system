@@ -12,7 +12,7 @@ import {
 import { Allow, IsIn, IsInt, IsNumberString, IsOptional, IsString, Min } from 'class-validator'
 import { Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
-import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { assertCompanyWideWrite, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { LatenessTierMode } from './payroll-rules.entities'
 import { PayrollRulesService } from './payroll-rules.service'
 
@@ -97,12 +97,14 @@ export class PayrollRulesController {
   @Perm('payroll.policy.manage')
   @Post('lateness-tier-sets')
   createTierSet(@CurrentUser() user: JwtPayload, @Body() dto: TierSetDto) {
+    assertCompanyWideWrite(user)
     return this.service.createTierSet(user, dto)
   }
 
   @Perm('payroll.policy.manage')
   @Post('lateness-tier-sets/:id/deactivate')
   deactivateTierSet(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: TierSetReasonDto) {
+    assertCompanyWideWrite(user)
     return this.service.deactivateTierSet(user, id, dto)
   }
 }

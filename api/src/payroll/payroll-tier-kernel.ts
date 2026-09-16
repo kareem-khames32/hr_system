@@ -92,7 +92,7 @@ export function evaluatePayrollTierValue(set: PayrollTierSet, input: PayrollDeci
     if ([dayRate, hourRate, minuteRate].some(value => value.compare(zero) < 0)) fail('TIER_RATE_INVALID', 'أسعار الأساس لا تقبل قيمة سالبة', currentPath)
     const roundingMode = field(context, 'roundingMode', currentPath) as PayrollRoundingMode
     const divisionByZeroMode = field(context, 'divisionByZeroMode', currentPath) as PayrollTierKernelContext['divisionByZeroMode']
-    if (!['HALF_UP', 'HALF_EVEN', 'FLOOR', 'CEIL'].includes(roundingMode) || !['ZERO_WITH_WARNING', 'FAIL_ROW'].includes(divisionByZeroMode)) fail('TIER_OPTIONS_INVALID', 'قاعدة التقريب أو القسمة غير صالحة', currentPath)
+    if (!['HALF_UP', 'HALF_EVEN', 'FLOOR', 'CEIL', 'DOWN'].includes(roundingMode) || !['ZERO_WITH_WARNING', 'FAIL_ROW'].includes(divisionByZeroMode)) fail('TIER_OPTIONS_INVALID', 'قاعدة التقريب أو القسمة غير صالحة', currentPath)
     const variables = record(field(context, 'variables', currentPath), 'context.variables')
     const components = record(field(context, 'components', currentPath), 'context.components')
     const parameters = record(field(context, 'parameters', currentPath), 'context.parameters')

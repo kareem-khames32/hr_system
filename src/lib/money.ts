@@ -1,5 +1,6 @@
 // الخطوة 22 / FE-06 (B5): منسّق واحد ونظام أرقام واحد لكل مبالغ الرواتب في الشاشات والقسيمة:
-// أرقام لاتينية بفواصل الآلاف ومنزلتين دائمًا (1500.5 ← 1,500.50)، وتقريب نصف لأعلى مطابق لـroundPayrollMoney في الخادم
+// أرقام لاتينية بفواصل الآلاف ومنزلتين دائمًا (1500.5 ← 1,500.50).
+// قرار المالك (16 سبتمبر): لا تقريب للفلوس — المنزلتان بالقص نحو الصفر (1234.567 ← 1,234.56)، مطابق لـroundPayrollMoney في الخادم
 // (api/src/payroll/payroll-money.ts) حتى يتطابق المعروض مع المحفوظ في المسير ونهاية الخدمة والتصفية.
 
 const moneyFormatter = new Intl.NumberFormat('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 })
@@ -11,12 +12,18 @@ export function toMoneyNumber(value: unknown): number {
   return Number.isFinite(number) ? number : 0
 }
 
-/** نفس خوارزمية الخادم: منزلتان، نصف لأعلى، مع هامش خطأ التمثيل الثنائي قرب نصف القرش (1.005 ← 1.01). */
+// أكبر قيمة نثبّتها على 6 منازل بعدد صحيح آمن (≈ 9 مليار).
+const MICRO_LIMIT = Number.MAX_SAFE_INTEGER / 1e6
+
+/**
+ * نفس خوارزمية الخادم: قص على منزلتين نحو الصفر بقروش صحيحة (1234.567 ← 1234.56، و-1.239 ← -1.23).
+ * القيمة تُثبّت أولًا على 6 منازل لإزالة ضجيج التمثيل الثنائي (0.1 + 0.2، و1.15 × 100) حتى لا يسقط قرش حقيقي.
+ */
 export function roundMoney(value: number): number {
-  const scaled = Math.abs(value) * 100
-  const tolerance = Number.EPSILON * Math.max(1, scaled) * 4
-  const rounded = Math.sign(value) * Math.round(scaled + tolerance) / 100
-  return rounded === 0 ? 0 : rounded
+  if (!Number.isFinite(value) || value === 0) return 0
+  const magnitude = Math.abs(value)
+  const cents = magnitude < MICRO_LIMIT ? Math.trunc(Math.round(magnitude * 1e6) / 1e4) : Math.trunc(magnitude * 100)
+  return cents === 0 ? 0 : Math.sign(value) * cents / 100
 }
 
 /** نص عشري صالح كما يصل من الخادم (DECIMAL نصًا): «-1234.5670». */
@@ -24,30 +31,17 @@ export const isMoneyText = (value: unknown): value is string => typeof value ===
 
 const groupThousands = (whole: string) => whole.replace(/\B(?=(\d{3})+(?!\d))/g, ',')
 
-// زيادة رقم نصي بمقدار واحد (للتقريب لأعلى) دون تحويل ثنائي — مبالغ DECIMAL(18,4) الكبيرة تبقى دقيقة.
-function incrementDigits(digits: string): string {
-  const chars = digits.split('')
-  for (let index = chars.length - 1; index >= 0; index--) {
-    if (chars[index] !== '9') { chars[index] = String(Number(chars[index]) + 1); return chars.join('') }
-    chars[index] = '0'
-  }
-  return `1${chars.join('')}`
-}
-
-/** نفس قاعدة roundMoney (منزلتان، نصف لأعلى بعيدًا عن الصفر) على النص العشري مباشرة: «100.0050» ← «100.01». */
+/** نفس قاعدة roundMoney (قص منزلتين نحو الصفر) على النص العشري مباشرة بلا تحويل ثنائي: «100.0090» ← «100.00». */
 function formatMoneyText(text: string): string {
   const negative = text.startsWith('-')
   const [whole, fraction = ''] = (negative ? text.slice(1) : text).split('.')
-  const padded = fraction.padEnd(3, '0')
-  let cents = `${whole}${padded.slice(0, 2)}`.replace(/^0+(?=\d)/, '')
-  if (padded[2] >= '5') cents = incrementDigits(cents)
-  cents = cents.padStart(3, '0')
-  const integer = cents.slice(0, -2).replace(/^0+(?=\d)/, '')
-  const result = `${groupThousands(integer)}.${cents.slice(-2)}`
-  return negative && /[1-9]/.test(cents) ? `-${result}` : result
+  const integer = whole.replace(/^0+(?=\d)/, '')
+  const cents = fraction.padEnd(2, '0').slice(0, 2)
+  const result = `${groupThousands(integer)}.${cents}`
+  return negative && /[1-9]/.test(`${integer}${cents}`) ? `-${result}` : result
 }
 
-/** المنسّق الواحد لكل مبالغ الرواتب: النص العشري يُقرّب نصيًا بلا تحويل ثنائي، والرقم بـroundMoney؛ القاعدة نفسها في الحالتين. */
+/** المنسّق الواحد لكل مبالغ الرواتب: النص العشري يُقص نصيًا بلا تحويل ثنائي، والرقم بـroundMoney؛ القاعدة نفسها في الحالتين. */
 export const formatMoney = (value: unknown): string => isMoneyText(value) ? formatMoneyText(value) : moneyFormatter.format(roundMoney(toMoneyNumber(value)))
 
 /** المبلغ الموجب منسقًا، والصفر أو الفارغ «-». */

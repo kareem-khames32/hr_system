@@ -338,7 +338,7 @@ export async function repayLoanEarly(em: EntityManager, input: { employeeId: num
   if (reference.length < 1 || reference.length > 100) throw new BadRequestException('مرجع السداد (رقم الإيصال أو التحويل) مطلوب حتى 100 حرف')
   const reason = input.reason?.trim() || null
   if (reason && reason.length > 500) throw new BadRequestException('سبب السداد لا يتجاوز 500 حرف')
-  const amount = input.amount === null ? null : PayrollDecimal.from(input.amount).format(2, 'HALF_UP')
+  const amount = input.amount === null ? null : PayrollDecimal.from(input.amount).format(2, 'DOWN')
   if (input.requestId !== null) {
     const prior = await em.getRepository(LoanInstallmentEvent).findOneBy({ actionKey: `request:${input.requestId}:early` })
     if (prior) {

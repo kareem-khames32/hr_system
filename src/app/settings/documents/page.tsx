@@ -24,6 +24,7 @@ import {
   updateCatalogItem,
 } from '@/lib/api'
 import { loadDocTypes, type ApiDocType } from '@/lib/doc-types'
+import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 
 // كود النوع — مرآة DOC_TYPE_CODE_RE في api/src/assets/doc-types.ts (والخادم يتحقق أيضاً)
 const CODE_RE = /^[a-z][a-z0-9_]{1,49}$/
@@ -59,6 +60,8 @@ export default function DocumentTypesPage() {
   const [editingName, setEditingName] = useState('')
   const [busy, setBusy] = useState(false)
   const [actionError, setActionError] = useState<string | null>(null)
+  // أنواع المستندات لكل الشركة: حساب الفرع يشوفها بس
+  const { canWrite, readOnly } = useCompanyWideWrite()
 
   useEffect(() => {
     const load = async () => {
@@ -206,17 +209,21 @@ export default function DocumentTypesPage() {
               والخادم يرفض ما عداها
             </p>
           </div>
-          <button
-            onClick={() => {
-              setShowAdd(true)
-              setActionError(null)
-            }}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Plus size={18} />
-            إضافة نوع مستند
-          </button>
+          {canWrite && (
+            <button
+              onClick={() => {
+                setShowAdd(true)
+                setActionError(null)
+              }}
+              className="btn-primary flex items-center gap-2"
+            >
+              <Plus size={18} />
+              إضافة نوع مستند
+            </button>
+          )}
         </div>
+
+        {readOnly && <CompanyWideReadOnlyNote />}
 
         {/* Error Banners */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
@@ -225,7 +232,7 @@ export default function DocumentTypesPage() {
         )}
 
         {/* إضافة نوع */}
-        {showAdd && (
+        {showAdd && canWrite && (
           <div className="card p-4 space-y-4">
             <div className="flex items-center justify-between">
               <h2 className="font-bold text-gray-800">نوع مستند جديد</h2>
@@ -410,7 +417,7 @@ export default function DocumentTypesPage() {
                         </th>
                       </>
                     )}
-                    <th className="text-center py-3 px-4 font-medium text-gray-700">إجراءات</th>
+                    {canWrite && <th className="text-center py-3 px-4 font-medium text-gray-700">إجراءات</th>}
                   </tr>
                 </thead>
                 <tbody className="divide-y">
@@ -422,7 +429,7 @@ export default function DocumentTypesPage() {
                         className={`hover:bg-gray-50 ${t.isActive ? '' : 'opacity-60'}`}
                       >
                         <td className="py-3 px-4">
-                          {editingId === t.id ? (
+                          {editingId === t.id && canWrite ? (
                             <div className="flex items-center gap-2">
                               <input
                                 type="text"
@@ -450,9 +457,6 @@ export default function DocumentTypesPage() {
                           ) : (
                             <div>
                               <p className="font-medium text-gray-900">{t.nameAr}</p>
-                              <p className="text-xs text-gray-400 font-mono" dir="ltr">
-                                {t.code}
-                              </p>
                             </div>
                           )}
                         </td>
@@ -494,7 +498,7 @@ export default function DocumentTypesPage() {
                             </td>
                           </>
                         )}
-                        <td className="py-3 px-4">
+                        {canWrite && <td className="py-3 px-4">
                           <div className="flex items-center justify-center gap-2">
                             <button
                               onClick={() => {
@@ -520,7 +524,7 @@ export default function DocumentTypesPage() {
                               {t.isActive ? 'تعطيل' : 'تفعيل'}
                             </button>
                           </div>
-                        </td>
+                        </td>}
                       </tr>
                     )
                   })}

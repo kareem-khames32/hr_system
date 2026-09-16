@@ -22,6 +22,7 @@ import {
   GraduationCap,
   Star,
 } from 'lucide-react'
+import { formatDate } from '@/lib/dates'
 
 const jobDetails = {
   id: '1',
@@ -180,7 +181,7 @@ export default function JobDetailsPage() {
             <div>
               <p className="text-sm text-gray-500">تاريخ النشر</p>
               <p className="text-lg font-bold text-gray-800">
-                {new Date(jobDetails.postedDate).toLocaleDateString('ar-SA')}
+                {formatDate(jobDetails.postedDate)}
               </p>
             </div>
           </div>
@@ -191,7 +192,7 @@ export default function JobDetailsPage() {
             <div>
               <p className="text-sm text-gray-500">آخر موعد</p>
               <p className="text-lg font-bold text-gray-800">
-                {new Date(jobDetails.deadline).toLocaleDateString('ar-SA')}
+                {formatDate(jobDetails.deadline)}
               </p>
             </div>
           </div>
@@ -271,7 +272,7 @@ export default function JobDetailsPage() {
                       <h4 className="font-medium text-gray-800">{applicant.name}</h4>
                       <p className="text-sm text-gray-500">
                         {applicant.experience} خبرة • تقدم في{' '}
-                        {new Date(applicant.appliedDate).toLocaleDateString('ar-SA')}
+                        {formatDate(applicant.appliedDate)}
                       </p>
                     </div>
                   </div>

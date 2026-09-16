@@ -68,7 +68,7 @@ export function deductionDecimal(value: unknown, label: string, options: { scale
 }
 const optionalDecimal = (value: unknown, label: string, options: { scale: number; positive?: boolean; max?: string }) =>
   value === null || value === undefined || value === '' ? null : deductionDecimal(value, label, options)
-const money = (value: PayrollDecimal) => value.format(2, 'HALF_UP')
+const money = (value: PayrollDecimal) => value.format(2, 'DOWN')
 
 // ===== إعدادات الخصومات المصنفة: حدود واحدة يقرؤها الخادم ويتحقق بها PATCH /settings/config =====
 export const DEDUCTION_NUMERIC_SETTINGS: Record<string, { min: number; max: number; fallback: number; label: string }> = {

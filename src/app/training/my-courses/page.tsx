@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import EmptyState from '@/components/EmptyState'
 import {
   Search,
   BookOpen,
@@ -14,6 +15,7 @@ import {
   Download,
 } from 'lucide-react'
 import Link from 'next/link'
+import { formatDate } from '@/lib/dates'
 
 interface EnrolledCourse {
   id: string
@@ -253,6 +255,8 @@ export default function MyCoursesPage() {
           </div>
         )}
 
+        {filteredCourses.length === 0 && <EmptyState title="لا توجد دورات مطابقة للبحث أو الفلاتر" />}
+
         {/* Courses List */}
         <div className="space-y-4">
           {filteredCourses.map((course) => (
@@ -286,7 +290,7 @@ export default function MyCoursesPage() {
                     {course.lastAccessed && (
                       <span className="flex items-center gap-1">
                         <Calendar size={14} />
-                        آخر دخول: {new Date(course.lastAccessed).toLocaleDateString('ar-SA')}
+                        آخر دخول: {formatDate(course.lastAccessed)}
                       </span>
                     )}
                   </div>
@@ -307,7 +311,7 @@ export default function MyCoursesPage() {
                   )}
                   {course.dueDate && course.status !== 'completed' && (
                     <p className="text-xs text-warning-600 mt-1">
-                      مطلوب قبل: {new Date(course.dueDate).toLocaleDateString('ar-SA')}
+                      مطلوب قبل: {formatDate(course.dueDate)}
                     </p>
                   )}
                 </div>

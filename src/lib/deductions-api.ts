@@ -133,7 +133,7 @@ export interface PayrollObligationDetail {
   bonus?: null | { requestId: number; typeName: string | null; calcMethodLabel: string; inputValue: string; reason: string; formula: string | null; reversal: boolean }
 }
 
-/** المبلغ النصي بالمنسّق الواحد (FE-06، src/lib/money): منزلتان بتقريب نصف لأعلى مطابق لـroundPayrollMoney وفواصل آلاف، بلا تحويل ثنائي؛ غير الصالح «—». */
+/** المبلغ النصي بالمنسّق الواحد (FE-06، src/lib/money): منزلتان بالقص بلا تقريب مطابق لـroundPayrollMoney وفواصل آلاف، بلا تحويل ثنائي؛ غير الصالح «—». */
 export function formatDeductionMoney(value: string | null | undefined): string {
   return isMoneyText(value) ? formatMoney(value) : '—'
 }

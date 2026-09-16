@@ -4,7 +4,8 @@ import { payrollCycleSettingsIssue, type PayrollCycleSettings } from './payroll-
 export const PAYROLL_POLICY_PERIOD_TYPES = ['CALENDAR_MONTH', 'CUSTOM_DAY_RANGE', 'SEMI_MONTHLY'] as const
 export const PAYROLL_POLICY_END_MODES = ['DERIVED', 'FIXED_DAY'] as const
 export const PAYROLL_POLICY_RATE_BASES = ['GROSS', 'BASIC'] as const
-export const PAYROLL_POLICY_ROUNDING_MODES = ['HALF_UP', 'HALF_EVEN', 'FLOOR', 'CEIL'] as const
+// DOWN = قص الفلوس على منزلتين بلا تقريب (قرار المالك)، وهو الافتراضي؛ البقية تبقى مقبولة لنسخ تاريخية فقط.
+export const PAYROLL_POLICY_ROUNDING_MODES = ['HALF_UP', 'HALF_EVEN', 'FLOOR', 'CEIL', 'DOWN'] as const
 export const PAYROLL_POLICY_DIVISION_MODES = ['ZERO_WITH_WARNING', 'FAIL_ROW'] as const
 export const PAYROLL_POLICY_CURRENCIES = ['SAR', 'EGP'] as const
 
@@ -51,7 +52,7 @@ export const PAYROLL_POLICY_DEFAULT_CONFIG_SEED: Array<{ key: string; value: str
   { key: PAYROLL_POLICY_CONFIG_KEYS.cycleEndDay, value: 'null' },
   { key: PAYROLL_POLICY_CONFIG_KEYS.baseDaysBasis, value: 'FIXED_30' },
   { key: PAYROLL_POLICY_CONFIG_KEYS.rateBase, value: 'GROSS' },
-  { key: PAYROLL_POLICY_CONFIG_KEYS.roundingMode, value: 'HALF_UP' },
+  { key: PAYROLL_POLICY_CONFIG_KEYS.roundingMode, value: 'DOWN' },
   { key: PAYROLL_POLICY_CONFIG_KEYS.roundingScale, value: '2' },
   { key: PAYROLL_POLICY_CONFIG_KEYS.divisionByZeroMode, value: 'ZERO_WITH_WARNING' },
   { key: PAYROLL_POLICY_CONFIG_KEYS.maxDeductionPctOfGross, value: 'null' },

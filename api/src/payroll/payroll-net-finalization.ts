@@ -170,7 +170,7 @@ export function finalizePayrollNet(execution: unknown, settings: PayrollPolicySe
     const collectionOrder = array(input.collectionOrder, 'input.collectionOrder').map((value, index) => code(value, `input.collectionOrder[${index}]`))
     const reducibles = classifications.filter(row => !protectedClasses.has(row.kind))
     if (new Set(collectionOrder).size !== collectionOrder.length || collectionOrder.length !== reducibles.length || collectionOrder.some(value => !classified.has(value) || protectedClasses.has(classified.get(value)!.kind))) fail('ORDER_INVALID', 'الترتيب الصريح يجب أن يشمل كل خصم قابل للتخفيض مرة واحدة', 'input.collectionOrder')
-    const money = (value: PayrollDecimal): PayrollNetMoney => ({ amount: value.format(scale, 'HALF_UP'), amountExact: fraction(value) })
+    const money = (value: PayrollDecimal): PayrollNetMoney => ({ amount: value.format(scale, 'DOWN'), amountExact: fraction(value) })
     const displayExact = (value: PayrollDecimal) => ({ rawValue6: value.format(6, 'HALF_UP'), exact: fraction(value) })
     const max = (a: PayrollDecimal, b: PayrollDecimal) => a.compare(b) >= 0 ? a : b
     const min = (a: PayrollDecimal, b: PayrollDecimal) => a.compare(b) <= 0 ? a : b
@@ -210,7 +210,7 @@ export function finalizePayrollNet(execution: unknown, settings: PayrollPolicySe
         if (!resolveLoan && !due.isZero()) fail('LOAN_RESOLVER_REQUIRED', 'تحصيل دين فعلي يحتاج محلل أقساط داخليًا؛ لا يجوز إسقاط الدين', path)
         if (resolveLoan) {
           let resolution: unknown
-          try { resolution = resolveLoan(freeze({ componentCode, dueAmount: due.format(2, 'HALF_UP'), availableBudget: money(budget).amount, sourceRefs: [...new Set([...line.sourceRefs, classification.sourceRef])].sort() })) }
+          try { resolution = resolveLoan(freeze({ componentCode, dueAmount: due.format(2, 'DOWN'), availableBudget: money(budget).amount, sourceRefs: [...new Set([...line.sourceRefs, classification.sourceRef])].sort() })) }
           catch { fail('LOAN_RESOLUTION_FAILED', 'تعذر حل تخصيص الأقساط من اللقطة الداخلية', path) }
           const answer = fields(clone(resolution, `${path}.loanResolution`), ['collectedAmount', 'carriedAmount', 'details'], ['collectedAmount', 'carriedAmount', 'details'], `${path}.loanResolution`)
           collected = decimal(answer.collectedAmount, `${path}.collectedAmount`, true, 2); carried = decimal(answer.carriedAmount, `${path}.carriedAmount`, true, 2)

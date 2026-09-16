@@ -29,6 +29,7 @@ import {
   leaveHalfDayAllowed,
   leaveRulesHint,
 } from '@/lib/leave-catalog'
+import { formatDate } from '@/lib/dates'
 
 // نوع الإجازة من كتالوج السيرفر (الفعّال فقط) — النموذج الموحّد: طلب واحد «LEAVE» يحمل النوع
 type ApiLeaveType = ApiLeaveTypeOption
@@ -580,13 +581,13 @@ export default function LeaveRequestPage() {
               <div className="flex justify-between">
                 <span className="text-gray-600">من:</span>
                 <span className="font-medium text-gray-800">
-                  {new Date(formData.startDate).toLocaleDateString('ar-SA')}
+                  {formatDate(formData.startDate)}
                 </span>
               </div>
               <div className="flex justify-between">
                 <span className="text-gray-600">إلى:</span>
                 <span className="font-medium text-gray-800">
-                  {new Date(formData.endDate).toLocaleDateString('ar-SA')}
+                  {formatDate(formData.endDate)}
                 </span>
               </div>
               {isHalfDay && (

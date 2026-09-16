@@ -136,9 +136,10 @@ before(async () => {
   users.solo = await user('employee-solo', 'employee', org.branchA.id, people.solo.id)
   await app.get(require('../src/requests/requests-scheduler.service').RequestsScheduler).catchUp()
   await app.get(require('../src/attendance/attendance-scheduler.service').AttendanceScheduler).catchUpIfBehind()
-  types.spot = expectStatus(await request(users.hr, 'POST', '/bonuses/types', { code: 'SPOT', nameAr: 'مكافأة فورية', calcMethod: 'FIXED_AMOUNT' }), 201)
-  types.performance = expectStatus(await request(users.hr, 'POST', '/bonuses/types', { code: 'PERFORMANCE', nameAr: 'مكافأة أداء', calcMethod: 'DAYS_OF_SALARY', defaultValue: '1' }), 201)
-  types.commitment = expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'COMMITMENT', nameAr: 'خصم التزام', category: 'DISCIPLINARY',
+  // أنواع المكافآت والخصومات لكل الشركة: بتتضاف من حساب على مستوى الشركة، وموارد الفرع تشتغل عليها بس
+  types.spot = expectStatus(await request(users.admin, 'POST', '/bonuses/types', { code: 'SPOT', nameAr: 'مكافأة فورية', calcMethod: 'FIXED_AMOUNT' }), 201)
+  types.performance = expectStatus(await request(users.admin, 'POST', '/bonuses/types', { code: 'PERFORMANCE', nameAr: 'مكافأة أداء', calcMethod: 'DAYS_OF_SALARY', defaultValue: '1' }), 201)
+  types.commitment = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'COMMITMENT', nameAr: 'خصم التزام', category: 'DISCIPLINARY',
     calcMethod: 'DAYS_OF_SALARY', creatorScopes: ['DIRECT_MANAGER', 'TEAM_LEADER', 'DEPARTMENT_MANAGER', 'HR'], approvalSteps: ['HR'], escalationDays: '1', escalationStep: 'DEPARTMENT_MANAGER' }), 201)
 }, { timeout: 120000 })
 
@@ -164,14 +165,18 @@ after(async t => {
 
 test('EX-05 catalog: only bonuses.manage writes types, defaults are the SRS defaults, a cap change bumps the version, and the manager sees only his subordinates', async () => {
   expectStatus(await request(users.manager, 'POST', '/bonuses/types', { code: 'NOPE', nameAr: 'غير مسموح', calcMethod: 'FIXED_AMOUNT' }), 403)
-  expectStatus(await request(users.hr, 'POST', '/bonuses/types', { code: 'SPOT', nameAr: 'مكرر', calcMethod: 'FIXED_AMOUNT' }), 409, 'BONUS_TYPE_CODE_EXISTS')
+  // النوع لكل الشركة: موارد فرع (حتى بصلاحية bonuses.manage) تشوفه بس، لا تضيف ولا تعدّل
+  expectStatus(await request(users.hr, 'POST', '/bonuses/types', { code: 'BRANCH_HR', nameAr: 'من حساب فرع', calcMethod: 'FIXED_AMOUNT' }), 403)
+  expectStatus(await request(users.hr, 'PATCH', `/bonuses/types/${types.spot.id}`, { nameAr: 'تعديل من حساب فرع' }), 403)
+  assert.equal((await repo('BonusType').findOneByOrFail({ id: types.spot.id })).nameAr, 'مكافأة فورية')
+  expectStatus(await request(users.admin, 'POST', '/bonuses/types', { code: 'SPOT', nameAr: 'مكرر', calcMethod: 'FIXED_AMOUNT' }), 409, 'BONUS_TYPE_CODE_EXISTS')
   assert.deepEqual([types.spot.maxPctOfBase, types.spot.escalationDays, types.spot.escalationStep, types.spot.approvalSteps, types.spot.minAmount],
     ['100', '1', 'DEPARTMENT_MANAGER', ['HR'], '1'])
-  const renamed = expectStatus(await request(users.hr, 'PATCH', `/bonuses/types/${types.spot.id}`, { nameAr: 'مكافأة فورية للإنجاز' }), 200)
+  const renamed = expectStatus(await request(users.admin, 'PATCH', `/bonuses/types/${types.spot.id}`, { nameAr: 'مكافأة فورية للإنجاز' }), 200)
   assert.equal(renamed.version, types.spot.version, 'a label change keeps the version')
-  const capped = expectStatus(await request(users.hr, 'PATCH', `/bonuses/types/${types.spot.id}`, { maxPctOfBase: '90' }), 200)
+  const capped = expectStatus(await request(users.admin, 'PATCH', `/bonuses/types/${types.spot.id}`, { maxPctOfBase: '90' }), 200)
   assert.equal(capped.version, types.spot.version + 1)
-  types.spot = expectStatus(await request(users.hr, 'PATCH', `/bonuses/types/${types.spot.id}`, { maxPctOfBase: '100', nameAr: 'مكافأة فورية' }), 200)
+  types.spot = expectStatus(await request(users.admin, 'PATCH', `/bonuses/types/${types.spot.id}`, { maxPctOfBase: '100', nameAr: 'مكافأة فورية' }), 200)
   const creatable = expectStatus(await request(users.manager, 'GET', '/bonuses/creatable'), 200)
   assert.deepEqual([creatable.bases, creatable.canExceedCap, creatable.types.map(row => row.code).sort()], [['DIRECT_MANAGER'], false, ['PERFORMANCE', 'SPOT']])
   assert.deepEqual(expectStatus(await request(users.solo, 'GET', '/bonuses/creatable'), 200).types, [], 'an employee without subordinates proposes nothing')

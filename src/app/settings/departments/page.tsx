@@ -460,6 +460,11 @@ export default function DepartmentsPage() {
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
+                {filteredDepartments.length === 0 && (
+                  <tr>
+                    <td colSpan={8} className="px-4 py-10 text-center text-gray-400">لا توجد أقسام مطابقة للبحث</td>
+                  </tr>
+                )}
                 {filteredDepartments.map((dept) => (
                   <tr key={dept.id} className="hover:bg-gray-50 transition-colors">
                     <td className="py-4 px-6">

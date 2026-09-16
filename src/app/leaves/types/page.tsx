@@ -4,6 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import { Plus, Edit2, Trash2, CheckCircle2, XCircle, CalendarDays, Gift, HeartPulse, Ban } from 'lucide-react'
 import { can, createLeaveType, fetchLeaveTypes, updateLeaveType } from '@/lib/api'
+import { DefinitionBranchField, useDefinitionBranches } from '@/components/DefinitionBranchField'
 
 // ===== شاشة أنواع الإجازات (قرار المالك 16 سبتمبر) =====
 // الفئة أول اختيار وبتغيّر باقي الفورم. كل تبويب يظهر حسب الفئة، وكل شرط هنا بيتطبق فعلًا
@@ -42,6 +43,8 @@ interface LeaveTypeRow {
   requiredAttachment: string | null
   attachmentTiming: string
   attachmentDeadlineDays: number
+  // فرع النوع: null = كل الشركة (قرار المالك 16 سبتمبر)
+  branchId?: number | null
 }
 
 const categories: Array<{ key: Category; label: string; hint: string; icon: typeof CalendarDays }> = [
@@ -78,6 +81,7 @@ type Form = {
   minDays: string; maxDays: string; noticeDays: string; backdateAllowed: boolean; backdateMaxDays: string
   countingMode: string; halfDayAllowed: boolean
   attachmentRule: string; attachmentAboveDays: string; attachmentName: string; attachmentTiming: string; attachmentDeadlineDays: string
+  branchId: number | null
 }
 
 const newForm = (category: Category): Form => ({
@@ -91,6 +95,7 @@ const newForm = (category: Category): Form => ({
   attachmentRule: category === 'SICK' ? 'REQUIRED' : 'NONE', attachmentAboveDays: '',
   attachmentName: category === 'SICK' ? 'تقرير طبي' : '', attachmentTiming: category === 'SICK' ? 'AFTER_RETURN' : 'WITH_REQUEST',
   attachmentDeadlineDays: '7',
+  branchId: null,
 })
 
 const formOf = (t: LeaveTypeRow): Form => {
@@ -109,6 +114,7 @@ const formOf = (t: LeaveTypeRow): Form => {
     countingMode: t.countingMode ?? 'WORKING_DAYS', halfDayAllowed: t.halfDayAllowed !== false,
     attachmentRule: t.attachmentRule ?? 'NONE', attachmentAboveDays: str(t.attachmentAboveDays), attachmentName: t.requiredAttachment ?? '',
     attachmentTiming: t.attachmentTiming ?? 'WITH_REQUEST', attachmentDeadlineDays: str(t.attachmentDeadlineDays ?? 7),
+    branchId: t.branchId ?? null,
   }
 }
 
@@ -128,6 +134,9 @@ export default function LeaveTypesPage() {
   const [formError, setFormError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const canManage = can('settings.manage')
+  // حساب الفرع يضيف لفرعه ويعدّل أنواع فرعه بس؛ أنواع الشركة عنده للعرض (قرار المالك 16 سبتمبر)
+  const branchInfo = useDefinitionBranches()
+  const canEditRow = (t: LeaveTypeRow) => canManage && branchInfo.canEdit(t.branchId)
 
   const load = async () => {
     try {
@@ -214,7 +223,8 @@ export default function LeaveTypesPage() {
     setFormError(null)
     try {
       if (editing) await updateLeaveType(editing.id, payload)
-      else await createLeaveType({ ...payload, code: form.code })
+      else await createLeaveType({ ...payload, code: form.code,
+        ...(branchInfo.scope === null && form.branchId != null ? { branchId: form.branchId } : {}) })
       await load()
       close()
     } catch (err: any) {
@@ -243,6 +253,9 @@ export default function LeaveTypesPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-800">أنواع الإجازات</h1>
             <p className="text-gray-500 mt-1">كل نوع ليه رصيده وأجره وشروط طلبه ومرفقه</p>
+            {canManage && branchInfo.scope !== null && (
+              <p className="text-sm text-amber-700 mt-1">الأنواع اللي لكل الشركة هنا للعرض بس. تقدر تضيف نوع خاص بفرعك، ويظهر لموظفين فرعك بس.</p>
+            )}
           </div>
           {canManage && !form && (
             <button onClick={openNew} className="btn-primary flex items-center gap-2">
@@ -307,6 +320,7 @@ export default function LeaveTypesPage() {
                   <label className={field}>الاسم بالإنجليزي</label>
                   <input className="input w-full" dir="ltr" value={form.nameEn} onChange={e => set('nameEn', e.target.value)} placeholder="Annual leave" />
                 </div>
+                <DefinitionBranchField value={form.branchId} onChange={v => set('branchId', v)} editing={!!editing} info={branchInfo} disabled={saving} />
                 <label className="flex items-center gap-2 mt-7">
                   <input type="checkbox" className={check} checked={form.isActive} onChange={e => set('isActive', e.target.checked)} />
                   <span className="text-sm text-gray-700">مفعّل</span>
@@ -526,7 +540,7 @@ export default function LeaveTypesPage() {
             <table className="w-full text-sm">
               <thead>
                 <tr className="table-header">
-                  {['الاسم', 'الكود', 'النوع', 'الأيام', 'مدفوعة؟', 'مفعّل؟', ''].map(h => (
+                  {['الاسم', 'الكود', 'النوع', 'الأيام', 'مدفوعة؟', 'متاح في', 'مفعّل؟', ''].map(h => (
                     <th key={h} className="table-cell text-right">{h}</th>
                   ))}
                 </tr>
@@ -536,14 +550,16 @@ export default function LeaveTypesPage() {
                   <tr key={t.id} className="table-row">
                     <td className="table-cell">
                       <p className="font-semibold text-gray-800">{t.nameAr}</p>
-                      {t.nameEn && <p className="text-xs text-gray-500" dir="ltr">{t.nameEn}</p>}
                     </td>
                     <td className="table-cell font-mono" dir="ltr">{t.code}</td>
                     <td className="table-cell">{categoryLabel(t.category)}</td>
                     <td className="table-cell">{daysLabel(t)}</td>
                     <td className="table-cell">{t.isPaid ? (t.category === 'SICK' ? 'حسب الجدول' : 'نعم') : 'لا'}</td>
                     <td className="table-cell">
-                      {canManage ? (
+                      <span className={t.branchId != null ? 'text-amber-700' : 'text-gray-600'}>{branchInfo.label(t.branchId)}</span>
+                    </td>
+                    <td className="table-cell">
+                      {canEditRow(t) ? (
                         <button onClick={() => toggleActive(t)} className="flex items-center gap-1" title={t.isActive ? 'تعطيل' : 'تفعيل'}>
                           {t.isActive ? <CheckCircle2 size={16} className="text-success-600" /> : <XCircle size={16} className="text-gray-400" />}
                           <span className={t.isActive ? 'text-success-600' : 'text-gray-400'}>{t.isActive ? 'مفعّل' : 'معطّل'}</span>
@@ -553,7 +569,10 @@ export default function LeaveTypesPage() {
                       )}
                     </td>
                     <td className="table-cell">
-                      {canManage && (
+                      {canManage && !canEditRow(t) && (
+                        <span className="text-xs text-gray-400" title="نوع لكل الشركة — تعديله من حساب على مستوى الشركة">للعرض بس</span>
+                      )}
+                      {canEditRow(t) && (
                         <button onClick={() => openEdit(t)} title="تعديل" className="p-2 bg-gray-100 rounded-lg hover:bg-gray-200">
                           <Edit2 size={16} className="text-gray-600" />
                         </button>
@@ -562,7 +581,7 @@ export default function LeaveTypesPage() {
                   </tr>
                 ))}
                 {rows.length === 0 && (
-                  <tr><td colSpan={7} className="table-cell text-center text-gray-500 py-10">لا توجد أنواع إجازات</td></tr>
+                  <tr><td colSpan={8} className="table-cell text-center text-gray-500 py-10">لا توجد أنواع إجازات</td></tr>
                 )}
               </tbody>
             </table>

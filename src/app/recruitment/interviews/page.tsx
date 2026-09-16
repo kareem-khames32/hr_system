@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import EmptyState from '@/components/EmptyState'
 import {
   Search,
   Plus,
@@ -18,6 +19,7 @@ import {
   MessageSquare,
   Phone,
 } from 'lucide-react'
+import { formatDate } from '@/lib/dates'
 
 interface Interview {
   id: string
@@ -297,6 +299,8 @@ export default function InterviewsPage() {
           </div>
         </div>
 
+        {filteredInterviews.length === 0 && <EmptyState title="لا توجد مقابلات مطابقة للبحث أو الفلاتر" />}
+
         {/* Interviews List */}
         <div className="space-y-4">
           {filteredInterviews.map((interview) => {
@@ -321,7 +325,7 @@ export default function InterviewsPage() {
                     <div className="flex items-center gap-4 text-sm text-gray-500">
                       <span className="flex items-center gap-1">
                         <Calendar size={14} />
-                        {new Date(interview.date).toLocaleDateString('ar-SA')}
+                        {formatDate(interview.date)}
                       </span>
                       <span className="flex items-center gap-1">
                         <Clock size={14} />

@@ -12,7 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Repository } from 'typeorm'
+import { IsNull, Repository } from 'typeorm'
 import {
   IsEmail,
   IsIn,
@@ -23,9 +23,10 @@ import {
   MinLength,
 } from 'class-validator'
 import { Type } from 'class-transformer'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import type { JwtPayload } from '../auth/auth.service'
 import { EmployeesService } from '../employees/employees.service'
+import { CreateEmployeeDto } from '../employees/employees.dto'
 import { Candidate, CandidateStage } from './assets.entities'
 
 const STAGES: CandidateStage[] = [
@@ -83,26 +84,9 @@ class UpdateCandidateDto {
   positionTitle?: string
 }
 
-class HireCandidateDto {
-  @IsString({ message: 'كود الموظف (البصمة) مطلوب' })
-  employeeCode: string
-
-  @Type(() => Number)
-  @IsInt({ message: 'الفرع مطلوب' })
-  branchId: number
-
-  @IsOptional()
-  @Type(() => Number)
-  @IsInt()
-  departmentId?: number
-
-  @IsOptional()
-  @Type(() => Number)
-  basicSalary?: number
-
-  @IsOptional()
-  joinDate?: string
-}
+// التعيين = بيانات إضافة الموظف كاملة بنفس الحقول الإجبارية والتحقق (الاسم بالعربي، الجنسية، الجنس، الميلاد، الجوال،
+// الهوية، التعيين، الفرع، القسم، المسمى، الراتب، البصمة). الشاشة بتفتح نموذج الإضافة متعبّي من بيانات المرشح.
+export class HireCandidateDto extends CreateEmployeeDto {}
 
 // المرشحون — pipeline التوظيف حتى التعيين الفعلي
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -115,23 +99,33 @@ export class CandidatesController {
     private readonly employeesService: EmployeesService
   ) {}
 
+  // فصل الفروع: المقيد بفرع يرى مرشحي فرعه (وغير المسندين لفرع — نفس قاعدة التعيين) فقط
   @Get()
-  list() {
-    return this.candidates.find({ order: { createdAt: 'DESC' } })
+  list(@CurrentUser() user: JwtPayload) {
+    const scope = branchScopeOf(user)
+    return this.candidates.find({
+      where: scope === null ? {} : [{ branchId: scope }, { branchId: IsNull() }],
+      order: { createdAt: 'DESC' },
+    })
   }
 
+  // ما ينشئه المقيد بفرع يبقى في فرعه
   @Post()
-  create(@Body() dto: CreateCandidateDto) {
+  create(@Body() dto: CreateCandidateDto, @CurrentUser() user: JwtPayload) {
+    const scope = branchScopeOf(user)
+    if (scope !== null) dto.branchId = scope
     return this.candidates.save(this.candidates.create(dto))
   }
 
   @Patch(':id')
   async update(
     @Param('id', ParseIntPipe) id: number,
-    @Body() dto: UpdateCandidateDto
+    @Body() dto: UpdateCandidateDto,
+    @CurrentUser() user: JwtPayload
   ) {
     const c = await this.candidates.findOne({ where: { id } })
-    if (!c) throw new NotFoundException('المرشح غير موجود')
+    const scope = branchScopeOf(user)
+    if (!c || (scope !== null && c.branchId != null && c.branchId !== scope)) throw new NotFoundException('المرشح غير موجود')
     if (c.stage === 'hired') {
       throw new BadRequestException('المرشح مُعيَّن بالفعل — لا يُعدَّل')
     }
@@ -139,13 +133,15 @@ export class CandidatesController {
     return this.candidates.save(c)
   }
 
-  // التعيين: ينشئ الموظف فعلياً (بكل تحقق الموظفين) ويقفل المرشح
+  // التعيين: ينشئ الموظف فعلياً (بكل تحقق الموظفين) ويقفل المرشح.
+  // التعيين = إضافة موظف: محتاج employees.create كمان (فوق candidates.manage)، زي شاشة /employees/add بالظبط.
   @Post(':id/hire')
   async hire(
     @Param('id', ParseIntPipe) id: number,
     @Body() dto: HireCandidateDto,
     @CurrentUser() user: JwtPayload
   ) {
+    if (!userHasPerm(user, 'employees.create')) throw new ForbiddenException('تعيين المرشح محتاج صلاحية إضافة موظف')
     const c = await this.candidates.findOne({ where: { id } })
     const scope = branchScopeOf(user)
     if (!c || (scope !== null && c.branchId != null && c.branchId !== scope)) throw new NotFoundException('المرشح غير موجود')
@@ -154,18 +150,7 @@ export class CandidatesController {
     if (c.stage === 'rejected') {
       throw new BadRequestException('المرشح مرفوض — أعد فتح مرحلته أولاً')
     }
-    const employee = await this.employeesService.create({
-      employeeCode: dto.employeeCode,
-      fullName: c.fullName,
-      email: c.email ?? undefined,
-      phone: c.phone ?? undefined,
-      jobTitle: c.positionTitle,
-      branchId: dto.branchId,
-      departmentId: dto.departmentId,
-      basicSalary: dto.basicSalary,
-      joinDate: dto.joinDate ?? new Date().toISOString().slice(0, 10),
-      status: 'probation',
-    } as any, user.sub)
+    const employee = await this.employeesService.create(Object.assign(dto, { status: dto.status ?? 'probation' }), user.sub, scope)
     c.stage = 'hired'
     c.hiredEmployeeId = employee.id
     await this.candidates.save(c)

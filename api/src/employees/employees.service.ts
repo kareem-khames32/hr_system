@@ -7,13 +7,15 @@ import {
   NotFoundException,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { EntityManager, In, Not, Repository } from 'typeorm'
+import { Between, EntityManager, In, IsNull, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm'
 import { OffboardingCase } from '../offboarding/offboarding.entities'
 import { OPEN_CASE_STATUSES } from '../offboarding/offboarding-open'
 import { AttendanceService } from '../attendance/attendance.service'
 import { beginCalendarChange, finishCalendarChange, readCalendarSource } from '../attendance/attendance-calendar-history'
-import { attendanceRuleChange, attendanceRuleToday, employeeAttendanceFallback, lockAttendanceRuleMutation,
+import { assertAttendanceRulePeriodOpen, assertEmployeeSchedulesFitBranch, attendanceRuleChange, attendanceRuleToday, employeeAttendanceFallback, lockAttendanceRuleMutation,
   pickAttendanceRule, resolveAttendanceRule, saveEmployeeAttendanceRule } from '../attendance/attendance-rule-history'
+import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
+import { isLeaveRequest } from '../common/leave-contract'
 import { AttendanceRuleVersion, EmployeeAttendanceRuleSnapshot } from '../attendance/attendance-rule.entities'
 import { User } from '../auth/user.entity'
 import { EmployeeDocument, Grade } from '../assets/assets.entities'
@@ -24,7 +26,7 @@ import { Team } from '../org/entities/team.entity'
 import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { recordEmployeeChange } from './employee-change-log'
 import { assertArchiveReason, nextOpeningBalance } from './employee-input-rules'
-import { LeaveBalance } from '../requests/entities/leave.entities'
+import { Leave, LeaveBalance } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { Request } from '../requests/entities/request.entity'
 import { Employee } from './employee.entity'
@@ -35,6 +37,31 @@ import { payrollPeriodBounds, payrollPeriodOfDate } from '../payroll/payroll-per
 import { localDateOf } from '../attendance/attendance.service'
 import { readSalaryHistory, readSalaryHistoryCurrent, SALARY_HISTORY_MONEY_KEYS,
   salaryHistoryMoney, salaryHistorySchemaMissing } from '../payroll/payroll-salary-history'
+import { AttendanceDay } from '../attendance/attendance.entities'
+import { arabicFullNameIssue, birthDateIssue, employeeRequiredIssues, nationalIdIssue, type EmployeeRequiredValues } from './employee-required-fields'
+import { addDays, currentSuspension, displayEmployeeStatus, overlappingLeave, overlappingSuspension, SUSPENDABLE_STATUSES,
+  SUSPENSION_CLOSED_PAYROLL_MESSAGE, SUSPENSION_LEAVE_OVERLAP_MESSAGE, suspensionEndPlan, suspensionFreedRange, suspensionInputIssue,
+  upcomingSuspension } from './employee-suspension-rules'
+import { EmployeeSuspension } from './employee-suspension.entity'
+import { readEmployeeSuspensions, readOpenSuspensions, suspensionTableReady, suspensionView } from './employee-suspensions'
+import type { CreateEmployeeSuspensionDto, EndEmployeeSuspensionDto } from './employees.dto'
+
+// حقول إجبارية عند الإضافة (قرار المالك 16 سبتمبر): في التعديل الغائب بلا تغيير، والمرسل فاضي = مسح مرفوض
+const REQUIRED_ON_EDIT: Record<string, string> = {
+  nationality: 'الجنسية مطلوبة ولا يمكن مسحها', gender: 'الجنس مطلوب ولا يمكن مسحه', birthDate: 'تاريخ الميلاد مطلوب ولا يمكن مسحه',
+  phone: 'رقم الجوال مطلوب ولا يمكن مسحه', nationalId: 'رقم الهوية / الإقامة مطلوب ولا يمكن مسحه', joinDate: 'تاريخ التعيين مطلوب ولا يمكن مسحه',
+  departmentId: 'القسم مطلوب ولا يمكن مسحه', jobTitle: 'المسمى الوظيفي مطلوب ولا يمكن مسحه', fingerprintCode: 'رقم البصمة مطلوب ولا يمكن مسحه',
+}
+
+/** « (الاسم)» لرسائل التكرار لو صاحب القيمة في نطاق المستخدم (مدير النظام أو نفس الفرع)، وإلا فاضي. */
+export function employeeNameInScope(dup: Pick<Employee, 'fullName' | 'branchId'>, branchScope: number | null): string {
+  return branchScope === null || Number(dup.branchId) === Number(branchScope) ? ` (${dup.fullName})` : ''
+}
+
+/** أول مشكلة في الحقول الإجبارية عند إنشاء موظف (أي مسار: الإضافة أو التعيين من مرشح)، أو null. */
+export function employeeCreateIssue(dto: object, today: string): string | null {
+  return employeeRequiredIssues(dto as EmployeeRequiredValues, { mode: 'add', today })[0]?.message ?? null
+}
 
 @Injectable()
 export class EmployeesService {
@@ -121,8 +148,22 @@ export class EmployeesService {
       else byEmployee.set(version.sourceId, [version])
     }
     const today = attendanceRuleToday()
-    return rows.map(row => this.withAttendanceRule(row,
-      pickAttendanceRule(byEmployee.get(row.id) ?? [], today, employeeAttendanceFallback(row))))
+    // الإيقاف عن العمل: الحالة المعروضة «موقوف» مشتقة من التواريخ باستعلام واحد للكل
+    const suspensions = await readOpenSuspensions(this.employees.manager, localDateOf(new Date()))
+    return rows.map(row => this.withSuspension(this.withAttendanceRule(row,
+      pickAttendanceRule(byEmployee.get(row.id) ?? [], today, employeeAttendanceFallback(row))), suspensions.get(row.id) ?? []))
+  }
+
+  // الحالة المحفوظة تبقى في storedStatus؛ status = «suspended» طول فترة الإيقاف وترجع لوحدها بعدها
+  private withSuspension<T extends Employee>(employee: T, periods: EmployeeSuspension[], history?: EmployeeSuspension[]) {
+    const today = localDateOf(new Date())
+    const current = currentSuspension(periods, today) ?? upcomingSuspension(periods, today)
+    return Object.assign(employee, {
+      storedStatus: employee.status,
+      status: displayEmployeeStatus(employee.status, periods, today) as Employee['status'],
+      suspension: current ? suspensionView(current, today) : null,
+      ...(history ? { suspensions: history.map(row => suspensionView(row, today)) } : {}),
+    })
   }
 
   // دليل مختصر للنشطين في النطاق — المعرّف والاسم والكود فقط (بلا راتب/هوية/بنك)
@@ -150,7 +191,8 @@ export class EmployeesService {
   private async attendanceView(employee: Employee) {
     const resolved = await resolveAttendanceRule(this.employees.manager, 'EMPLOYEE', employee.id,
       attendanceRuleToday(), employeeAttendanceFallback(employee))
-    return this.withAttendanceRule(employee, resolved)
+    const history = await readEmployeeSuspensions(this.employees.manager, employee.id, undefined, { includeCancelled: true })
+    return this.withSuspension(this.withAttendanceRule(employee, resolved), history.filter(row => row.status !== 'CANCELLED'), history)
   }
 
   private withAttendanceRule(employee: Employee, resolved: ReturnType<typeof pickAttendanceRule<EmployeeAttendanceRuleSnapshot>>) {
@@ -160,14 +202,17 @@ export class EmployeesService {
   }
 
   // ===== فحوصات التفرد — كود البصمة/البريد/الرقم القومي =====
+  // البحث على مستوى الشركة كلها، لكن اسم صاحب القيمة يظهر بس لو في نطاق المستخدم (عزل الفروع):
+  // حساب فرع ياخد رسالة عامة لو الموظف التاني في فرع تاني
   private async assertUnique(data: {
     employeeCode?: string
     fingerprintCode?: string
     email?: string
     nationalId?: string
     excludeId?: number
-  }) {
+  }, branchScope: number | null) {
     const notSelf = data.excludeId ? { id: Not(data.excludeId) } : {}
+    const whose = (dup: Employee) => employeeNameInScope(dup, branchScope)
     if (data.employeeCode) {
       // ولا يطابق رقم بصمة موظف آخر (المطابقة برقم البصمة أولاً)
       const dup = await this.employees.findOne({
@@ -178,7 +223,7 @@ export class EmployeesService {
       })
       if (dup) {
         throw new ConflictException(
-          `كود الموظف ${data.employeeCode} مستخدم بالفعل (${dup.fullName}) — الكود هو مفتاح البصمة ولا يتكرر`
+          `كود الموظف ${data.employeeCode} مستخدم بالفعل${whose(dup)} — الكود هو مفتاح البصمة ولا يتكرر`
         )
       }
     }
@@ -192,7 +237,7 @@ export class EmployeesService {
       })
       if (dup) {
         throw new ConflictException(
-          `رقم البصمة ${data.fingerprintCode} مستخدم بالفعل (${dup.fullName}) — لا يتكرر ولا يطابق كود موظف آخر`
+          `رقم البصمة ${data.fingerprintCode} مستخدم بالفعل${whose(dup)} — لا يتكرر ولا يطابق كود موظف آخر`
         )
       }
     }
@@ -209,7 +254,7 @@ export class EmployeesService {
         where: { nationalId: data.nationalId, ...notSelf },
       })
       if (dup) {
-        throw new ConflictException('الرقم القومي مسجل لموظف آخر')
+        throw new ConflictException(`رقم الهوية / الإقامة ${data.nationalId} مسجل لموظف آخر${whose(dup)}`)
       }
     }
   }
@@ -328,8 +373,20 @@ export class EmployeesService {
     })
   }
 
-  async create(dto: CreateEmployeeDto, actorId: number) {
-    await this.assertUnique(dto)
+  // قرار المالك 16 سبتمبر: الاسم بالعربي، رقم الهوية / الإقامة بطول الجنسية، وتاريخ ميلاد قبل النهارده.
+  // الإلزام نفسه في CreateEmployeeDto؛ هنا شكل القيم المكتوبة (يسري على كل مسار إنشاء)
+  private assertIdentity(values: { fullName?: string | null; nationalId?: string | null; nationality?: string | null; birthDate?: string | null }) {
+    const issue = arabicFullNameIssue(values.fullName) ?? nationalIdIssue(values.nationalId, values.nationality)
+      ?? birthDateIssue(values.birthDate, localDateOf(new Date()))
+    if (issue) throw new BadRequestException(issue)
+  }
+
+  async create(dto: CreateEmployeeDto, actorId: number, branchScope: number | null) {
+    // الحقول الإجبارية وشكلها (الاسم بالعربي، الهوية بطول الجنسية، الميلاد…) على كل مسار إنشاء — مش الـDTO بس
+    const requiredIssue = employeeCreateIssue(dto, localDateOf(new Date()))
+    if (requiredIssue) throw new BadRequestException(requiredIssue)
+    this.assertIdentity(dto)
+    await this.assertUnique(dto, branchScope)
     await this.assertRelations(dto)
     this.assertContractDates(dto)
     this.assertSalaryEntitlementStart(dto.salaryEntitlementStart, dto.actualStartDate || dto.joinDate)
@@ -521,20 +578,42 @@ export class EmployeesService {
 
   async update(id: number, dto: UpdateEmployeeDto, branchScope: number | null, actorId?: number) {
     const emp = await this.findOne(id, branchScope)
+    // الحالة المحفوظة — المعروضة قد تكون «موقوف» مشتقة من فترة إيقاف مؤرخة
+    const storedStatus = (emp as Employee & { storedStatus?: Employee['status'] }).storedStatus ?? emp.status
     if (branchScope != null && dto.branchId !== undefined && dto.branchId !== branchScope) {
       throw new ForbiddenException('لا يمكنك نقل الموظف خارج نطاق فرعك')
     }
     if (dto.status !== undefined && !['active', 'probation', 'suspended'].includes(dto.status)) {
       throw new BadRequestException('إنهاء الخدمة والأرشفة لهما مسارات مستقلة')
     }
-    if (dto.status !== undefined && dto.status !== emp.status &&
-        ['archived', 'terminated', 'notice_period'].includes(emp.status)) {
+    // الإيقاف بقى مؤرخًا (من/إلى/سبب): «موقوف» المعروضة ترجع كما هي = بلا تغيير، والإيقاف الجديد له مساره
+    if (dto.status === 'suspended' && storedStatus !== 'suspended') {
+      if (emp.status !== 'suspended') throw new BadRequestException('الإيقاف عن العمل يتسجل من «إيقاف مؤقت» بتاريخ من وإلى وسبب')
+      delete dto.status
+    }
+    if (dto.status !== undefined && dto.status !== storedStatus &&
+        ['archived', 'terminated', 'notice_period'].includes(storedStatus)) {
       throw new BadRequestException('استخدم مسار إعادة التفعيل أو إلغاء إنهاء الخدمة لتغيير هذه الحالة')
     }
     for (const field of ['branchId', 'employeeCode', 'fullName', 'status', 'basicSalary', 'isActive']) {
       if ((dto as any)[field] === null) throw new BadRequestException('لا يجوز مسح الحقل ' + field)
     }
-    await this.assertUnique({ ...dto, excludeId: id })
+    // الحقول الإجبارية: تُفحص في التعديل لما تتبعت بس — ملف قديم ناقص يحفظ باقي حقوله
+    for (const [field, message] of Object.entries(REQUIRED_ON_EDIT)) {
+      const value = (dto as Record<string, unknown>)[field]
+      if (value === null || (typeof value === 'string' && !value.trim())) throw new BadRequestException(message)
+    }
+    const nextNationalId = dto.nationalId !== undefined ? dto.nationalId : emp.nationalId
+    const nextNationality = dto.nationality !== undefined ? dto.nationality : emp.nationality
+    this.assertIdentity({
+      fullName: dto.fullName !== undefined && dto.fullName !== emp.fullName ? dto.fullName : null,
+      // رقم الهوية يُعاد فحصه لو اتغير هو أو الجنسية؛ المحفوظ القديم كما هو لا يمنع الحفظ
+      nationalId: (dto.nationalId !== undefined && dto.nationalId !== emp.nationalId)
+        || (dto.nationality !== undefined && dto.nationality !== emp.nationality) ? nextNationalId : null,
+      nationality: nextNationality,
+      birthDate: dto.birthDate !== undefined && dto.birthDate !== String(emp.birthDate ?? '').slice(0, 10) ? dto.birthDate : null,
+    })
+    await this.assertUnique({ ...dto, excludeId: id }, branchScope)
     this.assertContractDates({
       contractStart: dto.contractStart !== undefined ? dto.contractStart : emp.contractStart,
       contractEnd: dto.contractEnd !== undefined ? dto.contractEnd : emp.contractEnd,
@@ -588,7 +667,11 @@ export class EmployeesService {
       if (!fresh || (branchScope !== null && fresh.branchId !== branchScope)) throw new NotFoundException('الموظف غير موجود')
       const beforeChange = { ...fresh }
       const oldStatus = fresh.status
-      const orgTouched = (dto.branchId !== undefined && dto.branchId !== fresh.branchId) || calendarChange !== undefined
+      const branchChanged = dto.branchId !== undefined && dto.branchId !== fresh.branchId
+      const orgTouched = branchChanged || calendarChange !== undefined
+      // فحص فرع جدول العمل يكون على الفرع بعد الحفظ؛ fresh نفسه (مش نسخة) لأن حفظ الدوام بيحدّث workScheduleId عليه،
+      // وfresh مش بيتحفظ غير عبر updates تحت
+      if (branchChanged) fresh.branchId = dto.branchId!
       if (orgTouched && calendarChange?.effectiveFrom && calendarChange.effectiveFrom > attendanceRuleToday()) {
         throw new BadRequestException('النقل المستقبلي يُسجل بطلب نقل؛ تعديل فرع الملف يسري اليوم أو في تاريخ سابق مفتوح')
       }
@@ -612,6 +695,8 @@ export class EmployeesService {
           await saveEmployeeAttendanceRule(em, fresh, { workScheduleId: dto.workScheduleId, flexOverrideMode, ...meta, actorUserId: actorId })
         }
       }
+      // نقل لفرع تاني والجدول الساري (أو المؤرخ بعد النقل) خاص بفرع غيره → يترفض لحد ما يتختار جدول للفرع الجديد أو لكل الشركة
+      if (branchChanged) await assertEmployeeSchedulesFitBranch(em, fresh, dto.branchId!, calendarChange?.effectiveFrom ?? attendanceRuleToday())
       // workScheduleId يُحفظ عبر نسخته أعلاه، وبقية الحقول المرسلة وحدها تُدمج في
       // الصف المعاد قراءته داخل القفل كي لا تدهس إسنادًا أو بيانات حفظت بالتزامن.
       const { workScheduleId: _workScheduleId, ...otherFields } = employeeFields
@@ -708,5 +793,120 @@ export class EmployeesService {
         changedByUserId: actorId, reason: oldStatus === 'terminated' ? 'عودة على رأس العمل بعد انتهاء خدمة' : 'إعادة تفعيل من الأرشيف' })
       return emp
     })
+  }
+
+  // ===== الإيقاف عن العمل لفترة (قرار المالك 16 سبتمبر) =====
+  // من/إلى/سبب. الحالة «موقوف» مشتقة من التواريخ، فلا تُكتب على employees.status ولا تقفل isActive؛
+  // أيام الإيقاف ليست غيابًا (تجسيد الغياب يتخطاها) وتُخصم في المسير يومًا بيوم مثل الإجازة بدون راتب.
+
+  private async assertSuspensionSchema() {
+    if (!(await suspensionTableReady(this.employees.manager))) {
+      throw new ConflictException({ code: 'EMPLOYEE_SUSPENSION_SCHEMA_MISSING', message: 'ترحيل الإيقاف عن العمل (20260916_044) غير مطبق على قاعدة البيانات بعد' })
+    }
+  }
+
+  private async scopedEmployee(em: EntityManager, id: number, branchScope: number | null, lock = false) {
+    const employee = await em.findOne(Employee, { where: { id }, ...(lock ? { lock: { mode: 'pessimistic_write' as const } } : {}) })
+    if (!employee || (branchScope !== null && employee.branchId !== branchScope)) throw new NotFoundException('الموظف غير موجود')
+    return employee
+  }
+
+  // الإيقاف مايتسجلش فوق إجازة معتمدة أو طلب إجازة لسه في المسار (الإجازة بدون راتب كمان — أبسط وأوضح)
+  private async assertNoLeaveOverlap(em: EntityManager, employeeId: number, fromDate: string, toDate: string) {
+    const approved = await em.find(Leave, { where: { employeeId, status: 'APPROVED', fromDate: LessThanOrEqual(toDate), toDate: MoreThanOrEqual(fromDate) },
+      order: { fromDate: 'ASC' } })
+    const leave = overlappingLeave(approved, fromDate, toDate)
+    if (leave) throw new ConflictException(SUSPENSION_LEAVE_OVERLAP_MESSAGE(leave, false))
+    const live = await em.find(Request, { where: { requesterId: employeeId,
+      status: In(['SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO', 'APPROVED', 'IN_EXECUTION']) }, order: { id: 'ASC' } })
+    const pending = overlappingLeave(live.filter(isLeaveRequest).flatMap(request => {
+      try {
+        const payload = JSON.parse(request.payload ?? '{}')
+        // طلب إلغاء/تعديل إجازة (leaveId) مش إجازة جديدة
+        return payload.leaveId == null && payload.fromDate && payload.toDate ? [{ fromDate: String(payload.fromDate), toDate: String(payload.toDate) }] : []
+      } catch { return [] }
+    }), fromDate, toDate)
+    if (pending) throw new ConflictException(SUSPENSION_LEAVE_OVERLAP_MESSAGE(pending, true))
+  }
+
+  async listSuspensions(id: number, branchScope: number | null) {
+    await this.scopedEmployee(this.employees.manager, id, branchScope)
+    const today = localDateOf(new Date())
+    return (await readEmployeeSuspensions(this.employees.manager, id, undefined, { includeCancelled: true })).map(row => suspensionView(row, today))
+  }
+
+  async createSuspension(id: number, dto: CreateEmployeeSuspensionDto, branchScope: number | null, actorId: number) {
+    const issue = suspensionInputIssue(dto)
+    if (issue) throw new BadRequestException(issue)
+    await this.assertSuspensionSchema()
+    const today = localDateOf(new Date())
+    const saved = await this.employees.manager.transaction(async em => {
+      // القفل المالي المشترك مع اعتماد المسير قبل قفل صف الموظف (نفس ترتيب الحضور والأجر)
+      await lockPayrollEmployees(em, [id])
+      const employee = await this.scopedEmployee(em, id, branchScope, true)
+      if (!SUSPENDABLE_STATUSES.includes(employee.status)) {
+        throw new BadRequestException('الإيقاف عن العمل لموظف على رأس العمل بس (مش منتهي الخدمة ولا مؤرشف ولا موقوف بالنظام القديم)')
+      }
+      const hireDate = String(employee.actualStartDate || employee.joinDate || '').slice(0, 10)
+      if (hireDate && dto.fromDate < hireDate) throw new BadRequestException(`بداية الإيقاف قبل تاريخ بدء عمل الموظف (${hireDate})`)
+      const existing = await em.find(EmployeeSuspension, { where: { employeeId: id, status: Not('CANCELLED') as any } })
+      const overlap = overlappingSuspension(existing.map(row => ({ ...row, fromDate: String(row.fromDate).slice(0, 10), toDate: String(row.toDate).slice(0, 10) })), dto.fromDate, dto.toDate)
+      if (overlap) throw new ConflictException(`يوجد إيقاف تاني متداخل من ${overlap.fromDate} إلى ${overlap.toDate}`)
+      // فترة رواتب مقفولة (مسير معتمد أو مصروف) لا يُسجَّل عليها إيقاف، ولا تُمسح صفوف غيابها اللي اتخصمت
+      await assertAttendanceRulePeriodOpen(em, [id], dto.fromDate, dto.toDate, SUSPENSION_CLOSED_PAYROLL_MESSAGE)
+      // إجازة على نفس الأيام: الراتب يتخصم والرصيد يفضل مستهلك — HR يلغي الإجازة أو يقصّرها الأول
+      await this.assertNoLeaveOverlap(em, id, dto.fromDate, dto.toDate)
+      const row = await em.save(EmployeeSuspension, em.create(EmployeeSuspension, {
+        employeeId: id, fromDate: dto.fromDate, toDate: dto.toDate, plannedToDate: dto.toDate, reason: dto.reason.trim(),
+        status: 'ACTIVE', createdByUserId: actorId ?? null,
+      }))
+      // أيام فاتت اتسجلت غياب قبل الإيقاف: صف الغياب بلا بصمة تصنيف مؤقت يُشال (اليوم إيقاف مش غياب)
+      const lastPast = dto.toDate < today ? dto.toDate : today
+      if (dto.fromDate <= lastPast) {
+        await em.delete(AttendanceDay, { employeeId: id, date: Between(dto.fromDate, lastPast), status: 'absent', checkIn: IsNull(), checkOut: IsNull() })
+      }
+      await recordEmployeeChange(em, { employeeId: id, fieldName: 'suspension', oldValue: null,
+        newValue: `إيقاف عن العمل ${dto.fromDate} → ${dto.toDate}`, changedByUserId: actorId, reason: dto.reason.trim() })
+      return row
+    })
+    return suspensionView(saved, today)
+  }
+
+  // إنهاء بدري: يرجع للعمل من returnDate (الافتراضي النهارده). الرجوع في يوم البداية أو قبله = إلغاء
+  async endSuspension(id: number, suspensionId: number, dto: EndEmployeeSuspensionDto, branchScope: number | null, actorId: number) {
+    await this.assertSuspensionSchema()
+    const today = localDateOf(new Date())
+    const returnDate = dto.returnDate ?? today
+    const reason = dto.reason?.trim() || null
+    const { saved, freedFrom, freedTo } = await this.employees.manager.transaction(async em => {
+      await lockPayrollEmployees(em, [id])
+      await this.scopedEmployee(em, id, branchScope, true)
+      const row = await em.findOne(EmployeeSuspension, { where: { id: suspensionId, employeeId: id } })
+      if (!row) throw new NotFoundException('الإيقاف غير موجود')
+      const period = { ...row, fromDate: String(row.fromDate).slice(0, 10), toDate: String(row.toDate).slice(0, 10) }
+      const plan = suspensionEndPlan(period, returnDate, today)
+      if (!plan.ok) throw new BadRequestException(plan.message)
+      // الأيام اللي هترجع أيام عمل: لو داخل مسير معتمد أو مصروف اتخصمت خلاص — التعديل أو الإلغاء مرفوض (التصحيح بتسوية)
+      const freed = suspensionFreedRange(period, plan, returnDate)
+      await assertAttendanceRulePeriodOpen(em, [id], freed.from, freed.to, SUSPENSION_CLOSED_PAYROLL_MESSAGE)
+      const oldTo = period.toDate
+      row.status = plan.status
+      row.toDate = plan.toDate
+      row.endReason = reason
+      row.endedAt = new Date()
+      row.endedByUserId = actorId ?? null
+      const result = await em.save(EmployeeSuspension, row)
+      await recordEmployeeChange(em, { employeeId: id, fieldName: 'suspension', oldValue: `إيقاف عن العمل ${period.fromDate} → ${oldTo}`,
+        newValue: plan.status === 'CANCELLED' ? 'إلغاء الإيقاف' : `إنهاء الإيقاف بدري — رجوع للعمل ${returnDate}`, changedByUserId: actorId,
+        reason: reason ?? (plan.status === 'CANCELLED' ? 'إلغاء الإيقاف' : 'إنهاء الإيقاف قبل موعده') })
+      return { saved: result, freedFrom: freed.from, freedTo: freed.to }
+    })
+    // الأيام اللي رجعت أيام عمل وفاتت: تُجسَّد (بصمة = حضور، بلا بصمة = غياب) — أفضل جهد لا يُفشل الإنهاء
+    const yesterday = addDays(today, -1)
+    if (freedFrom <= yesterday) {
+      try { await this.attendance.materializeAbsences(id, freedFrom, freedTo < yesterday ? freedTo : yesterday) }
+      catch (error) { this.logger.warn(`تعذر تجسيد أيام ما بعد إنهاء إيقاف الموظف ${id}: ${(error as Error).message}`) }
+    }
+    return suspensionView(saved, today)
   }
 }

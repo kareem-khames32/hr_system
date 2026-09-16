@@ -212,15 +212,15 @@ function ExemptionsContent() {
 
   return (
     <div className="space-y-6 pb-8">
-      <header className="flex flex-wrap items-start justify-between gap-4">
-        <div className="flex items-start gap-3">
+      <header className="flex items-start justify-between gap-4">
+        <div className="flex items-start gap-3 min-w-0">
           <span className="rounded-2xl p-3 bg-primary-50 text-primary-600"><ShieldCheck size={26} /></span>
           <div>
             <h1 className="text-2xl font-bold text-gray-800">استثناء الحضور</h1>
             <p className="text-gray-500 mt-1">في أيام الاستثناء المعتمد لا يُخصم على الموظف غياب ولا تأخير ولا نقص ساعات، ويُصرف راتبه الثابت عن تلك الأيام.</p>
           </div>
         </div>
-        <div className="flex gap-2">
+        <div className="flex gap-2 shrink-0">
           <button type="button" className="btn-secondary inline-flex items-center gap-2 disabled:opacity-50" disabled={loading} onClick={() => setReload(value => value + 1)}>
             <RefreshCw size={16} />تحديث
           </button>

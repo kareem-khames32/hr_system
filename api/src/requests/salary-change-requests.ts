@@ -9,6 +9,7 @@ import { applyEmployeeSalaryChange, readSalaryCycleStartDay } from '../payroll/p
 import { readSalaryHistory, readSalaryHistoryCurrent, SALARY_HISTORY_MONEY_KEYS, salaryCurrentSourceHash, salaryHistoryDate, salaryHistoryMoney, salaryHistoryText } from '../payroll/payroll-salary-history'
 import { PayrollPeriodSalaryError, salaryPayrollPeriod } from '../payroll/payroll-period-salary'
 import { payrollPeriodBounds, payrollPeriodOfDate } from '../payroll/payroll-period'
+import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
 
 export const SALARY_CHANGE_HANDLER = 'salary_update_history'
 // V2: قاعدة المالك — الزيادة تسري من راتب شهر كامل (effectivePayrollPeriod)؛ دليل V1 اليومي يلزمه إعادة تقديم.
@@ -62,6 +63,18 @@ function salaryShape(raw: unknown): Salary {
   const value = raw as Payload
   if (!['SAR', 'EGP'].includes(value.currency)) conflict('SALARY_REQUEST_BASIS_INVALID', 'عملة دليل الأجر غير صالحة')
   return { currency: value.currency, ...Object.fromEntries(SALARY_HISTORY_MONEY_KEYS.map(key => [key, salaryHistoryMoney(value[key])])) } as Salary
+}
+
+/** ملف أجر ناقص (عملة غير محددة أو مكوّن فارغ) لا يُبنى عليه دليل زيادة. كان يرجع 409 «عملة دليل الأجر غير صالحة»
+ * أو «كل مكوّن أجر مبلغ نصي صريح…» دون أن يعرف الموظف أو المعتمد ما الناقص ولا من يستكمله. */
+export function assertSalaryRequestFileComplete(current: Record<string, unknown> & { currency?: unknown }) {
+  if (current.currency !== 'SAR' && current.currency !== 'EGP') {
+    throw new BadRequestException({ code: 'SALARY_REQUEST_CURRENCY_REQUIRED', message: 'عملة أجر الموظف غير محددة في ملفه (ريال SAR أو جنيه EGP) — تضبطها الموارد البشرية من ملف الموظف ثم يُقدَّم طلب زيادة الراتب' })
+  }
+  const missing = MONTHLY_SALARY_COMPONENTS.filter(component => current[component.key] == null || current[component.key] === '')
+  if (missing.length) {
+    throw new BadRequestException({ code: 'SALARY_REQUEST_COMPONENTS_REQUIRED', message: `مكونات أجر الموظف غير مكتملة في ملفه (${missing.map(component => component.nameAr).join('، ')}) — تُدخلها الموارد البشرية (الصفر مقبول) ثم يُقدَّم طلب زيادة الراتب` })
+  }
 }
 
 function increase(newSalary: string, salary: Salary) {
@@ -126,6 +139,7 @@ async function currentBasis(em: EntityManager, req: Pick<Request, 'requesterId' 
   if (!positive(req.branchId) || employee.branchId !== req.branchId) throw new ForbiddenException('تغير فرع الموظف منذ إنشاء الطلب؛ أعد تقديمه من الفرع الحالي')
   const current = await readSalaryHistoryCurrent(em, req.requesterId), history = await readSalaryHistory(em, req.requesterId)
   if (!current || current.employee.branchId !== req.branchId) conflict('SALARY_REQUEST_EMPLOYEE_CHANGED', 'تغير نطاق الموظف أثناء قراءة دليل الأجر')
+  assertSalaryRequestFileComplete(current!.current)
   const salary = salaryShape(current!.current)
   if (history.version && history.version.currentSourceHash !== current!.currentSourceHash) conflict('SALARY_REQUEST_HISTORY_DRIFT', 'سجل الأجر السابق لا يطابق الملف الحالي؛ راجعه قبل تقديم زيادة جديدة')
   return { current: current!, salary, history }

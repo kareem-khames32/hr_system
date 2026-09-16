@@ -15,7 +15,7 @@ test('configSeed carries every decision key with the chosen owner value (D1, D2,
     'payroll.day_rate_basis': 'MONTHLY_FIXED_COMPONENTS_30', 'payroll.loan_catchup_max_overdue': '1',
     'overtime.default_window': 'AFTER_SHIFT_END', 'overtime.outside_window_policy': 'CLOSED',
     ...decisions.PAYROLL_D5_CHOSEN_VALUES, 'payroll.monthly_days': '30', 'payroll.daily_hours': '8', 'payroll.cycle_start_day': '23',
-    'payroll.policy.rounding_mode': 'HALF_UP', 'payroll.policy.rounding_scale': '2', 'system.currency': 'SAR',
+    'payroll.policy.rounding_mode': 'DOWN', 'payroll.policy.rounding_scale': '2', 'system.currency': 'SAR',
   }
   for (const [key, value] of Object.entries(expected)) assert.equal(seed.get(key), value, key)
   // كل قيمة مبذورة تمر من تحقق الإعدادات نفسه.

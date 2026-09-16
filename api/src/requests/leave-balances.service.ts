@@ -640,9 +640,9 @@ export class LeaveBalancesService {
 
   // صفوف السنوي والمرضي اللي تغطي بداية سنة لكل الموظفين النشطين — المرضي
   // مابيترحّلش فصفه لازم يتعمل مع بداية كل سنة (LEV-2). الموجود مابيتلمسش
-  async ensureYearRows(period: string) {
+  async ensureYearRows(period: string, branchId: number | null = null) {
     const emps = await this.employees.find({
-      where: { status: Not(In(['terminated', 'archived'])) },
+      where: { status: Not(In(['terminated', 'archived'])), ...(branchId !== null ? { branchId } : {}) },
       select: { id: true, joinDate: true, annualLeaveEntitled: true },
     })
     const settings = await this.accrualSettings()
@@ -680,16 +680,20 @@ export class LeaveBalancesService {
   // فقط لو الترحيل مفعّل في النوع وبحد سقفه (null = بلا سقف). سنة الرصيد التالية حسب
   // أساس التجديد (سنة ميلادية أو ذكرى تعيين تبدأ بعد نهاية السنة). وبعده صفوف السنة
   // الجديدة الناقصة لكل النشطين
-  async rollover(fromPeriod: string) {
+  // branchId (فصل الفروع): المستخدم المقيد بفرع يرحّل أرصدة موظفي فرعه فقط؛ null = الشركة (المهمة الآلية ومدير النظام)
+  async rollover(fromPeriod: string, branchId: number | null = null) {
     const toPeriod = String(Number(fromPeriod) + 1)
     const settings = await this.accrualSettings()
     const expiry = carryOverExpiry(`${toPeriod}-01-01`, settings.expiryMonths)
+    const inBranch = branchId === null ? null
+      : new Set((await this.employees.find({ where: { branchId }, select: { id: true } })).map((e) => e.id))
     let created = 0
     for (const t of TYPED) {
       const typeSettings = settings.types[t]
       if (!typeSettings.carryOverEnabled) continue
       const rows = await this.balances.find({ where: { period: fromPeriod, balanceType: t } })
       for (const bal of rows) {
+        if (inBranch && !inBranch.has(bal.employeeId)) continue
         const ctx = await this.accrualContext(bal.employeeId)
         const all = await this.balances.find({ where: { employeeId: bal.employeeId, balanceType: t } })
         const timeline = balanceTimeline(all, ctx.joinDate, this.basisOf(ctx, t))
@@ -728,7 +732,7 @@ export class LeaveBalancesService {
         created++
       }
     }
-    const ensured = await this.ensureYearRows(toPeriod)
+    const ensured = await this.ensureYearRows(toPeriod, branchId)
     const annual = settings.types.annual
     return {
       fromPeriod,

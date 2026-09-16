@@ -768,7 +768,7 @@ export class OffboardingService implements OnApplicationBootstrap {
 
     // (−) رصيد السلف المتبقي
     const loanRemaining = legacyInstallmentNumber(unpaidInstallments
-      .reduce((sum, installment) => sum.add(PayrollDecimal.from(installment.remainingAmount)), PayrollDecimal.from('0')).format(2, 'HALF_UP'))
+      .reduce((sum, installment) => sum.add(PayrollDecimal.from(installment.remainingAmount)), PayrollDecimal.from('0')).format(2, 'DOWN'))
     snapshot.installmentAmount = loanRemaining
     if (loanRemaining > 0) {
       rows.push({

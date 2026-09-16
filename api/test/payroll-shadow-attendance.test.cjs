@@ -183,3 +183,16 @@ test('SHADOW: زمن الحساب اليومي مقبول لمسير كامل', 
   t.diagnostic(`متوسط زمن حساب يوم عمل واحد بمحرك السياسة: ${perDayMs.toFixed(2)} ms`)
   assert.ok(perDayMs < 50, `${perDayMs} ms`)
 })
+
+test('SHADOW: يوم الإيقاف عن العمل مستبعد زي المسير (بلا تأخير ولا نقص) فالتكافؤ يفضل مطابق', () => {
+  const fixture = night(), r = rules()
+  // المسير بيشيل يوم 12 (يوم إيقاف فيه بصمة) من صفوف الحضور، فمطلوبه صفر
+  const legacyWithoutSuspended = legacy(fixture.rows.filter(row => row.date !== D12), r)
+  const withSuspension = shadow.computePayrollShadowAttendance({ employeeId: 3, periodStart: D12, periodEnd: D13, monthlyComponents: monthly, rules: r,
+    legacy: legacyWithoutSuspended, suspendedDates: [D12] }, fixture.sources)
+  assert.equal(withSuspension.status, 'MATCHED', JSON.stringify(withSuspension.differences))
+  assert.equal(withSuspension.days.some(day => day.date === D12), false)
+  assert.deepEqual(withSuspension.totals.policy, { lateness: '0.00', shortfall: '0.00', absence: '0.00', total: '0.00' })
+  const withoutSuspension = compute(fixture, r, legacyWithoutSuspended)
+  assert.equal(withoutSuspension.status, 'DIFFERENT', 'من غير أيام الإيقاف كان الظل هيحسب تأخير يوم 12 ويطلع فرق زائف')
+})

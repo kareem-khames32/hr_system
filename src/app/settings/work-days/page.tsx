@@ -1,6 +1,7 @@
 'use client'
 
 import { useEffect, useState } from 'react'
+import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import {
   fetchConfig,
@@ -10,10 +11,6 @@ import {
   updateScheduleRule,
   deleteScheduleRule,
   fetchBranches,
-  fetchOvertimePeriods,
-  createOvertimePeriod,
-  updateOvertimePeriod,
-  deleteOvertimePeriod,
   fetchCatalog,
   createCatalogItem,
   updateCatalogItem,
@@ -29,7 +26,6 @@ import { CalendarChangeFields, CalendarContextSummary, CalendarMutationDialog, C
 import type {
   ApiScheduleRule,
   ApiBranch,
-  ApiOvertimePeriod,
   ApiWorkSchedule,
   ApiEmployee,
   ApiDepartment,
@@ -162,38 +158,6 @@ function scheduleRuleSentence(rule: Pick<ApiScheduleRule, 'weekday' | 'occurrenc
   return `${when} — ${EFFECT_AR[rule.effect]}`
 }
 
-// ===== فترات فتح/قفل الأوفرتايم بالتواريخ (backend حقيقي عبر /attendance/overtime-periods) =====
-const OT_PERIOD_EFFECTS: { value: ApiOvertimePeriod['effect']; label: string; desc: string }[] = [
-  {
-    value: 'OPEN',
-    label: 'مفتوح — يُحتسب الأوفرتايم',
-    desc: 'يفعّل احتساب الأوفرتايم في هذه التواريخ حتى لو المفتاح العام مقفول',
-  },
-  {
-    value: 'CLOSED',
-    label: 'مقفول — لا يُحتسب',
-    desc: 'يوقف احتساب الأوفرتايم في هذه التواريخ حتى لو المفتاح العام مفعّل',
-  },
-]
-// جملة تأثير مختصرة للمعاينة
-const OT_EFFECT_VERB_AR: Record<ApiOvertimePeriod['effect'], string> = {
-  OPEN: 'فتح احتساب الأوفرتايم',
-  CLOSED: 'قفل احتساب الأوفرتايم',
-}
-// وصف الشارة الملوّنة داخل الصف
-const OT_EFFECT_CHIP_AR: Record<ApiOvertimePeriod['effect'], string> = {
-  OPEN: 'مفتوح — يُحتسب الأوفرتايم',
-  CLOSED: 'مقفول — لا يُحتسب',
-}
-
-// يبني جملة معاينة مثل: «من 2026-03-01 إلى 2026-03-30 — فتح احتساب الأوفرتايم لكل الفروع»
-function overtimePeriodSentence(
-  p: Pick<ApiOvertimePeriod, 'fromDate' | 'toDate' | 'effect'>,
-  branchPhrase: string,
-): string {
-  return `من ${p.fromDate || '—'} إلى ${p.toDate || '—'} — ${OT_EFFECT_VERB_AR[p.effect]} ${branchPhrase}`
-}
-
 // ألوان الجداول بالفهرس بين الجداول النشطة — لا يخزّن السيرفر لوناً (تمييز بصري
 // فقط، بنفس ترتيب منتقي الجدول في نموذج الموظف)، والمعطَّل رمادي
 const scheduleColors = [
@@ -243,39 +207,24 @@ export default function WorkDaysSettingsPage() {
   const [showAddScheduleRule, setShowAddScheduleRule] = useState(false)
   const [ruleBusyId, setRuleBusyId] = useState<number | null>(null)
 
-  // ===== فترات فتح/قفل الأوفرتايم بالتواريخ (backend حقيقي) =====
-  const [overtimePeriods, setOvertimePeriods] = useState<ApiOvertimePeriod[]>([])
-  const [otPeriodsLoading, setOtPeriodsLoading] = useState(true)
-  const [otPeriodsError, setOtPeriodsError] = useState<string | null>(null)
-  const [showAddOtPeriod, setShowAddOtPeriod] = useState(false)
-  const [otPeriodBusyId, setOtPeriodBusyId] = useState<number | null>(null)
 
   // تحميل أولي: القواعد + الفروع
   useEffect(() => {
     let active = true
     ;(async () => {
       try {
-        const [rules, brs, periods] = await Promise.all([
+        const [rules, brs] = await Promise.all([
           fetchScheduleRules(),
           fetchBranches(),
-          fetchOvertimePeriods(),
         ])
         if (!active) return
         setScheduleRules(rules)
         setBranches(brs)
-        setOvertimePeriods(periods)
         setRulesError(null)
-        setOtPeriodsError(null)
       } catch (err: any) {
-        if (active) {
-          setRulesError(err.message)
-          setOtPeriodsError(err.message)
-        }
+        if (active) setRulesError(err.message)
       } finally {
-        if (active) {
-          setRulesLoading(false)
-          setOtPeriodsLoading(false)
-        }
+        if (active) setRulesLoading(false)
       }
     })()
     return () => {
@@ -329,44 +278,6 @@ export default function WorkDaysSettingsPage() {
     branchId == null
       ? 'كل الفروع'
       : branches.find((b) => b.id === branchId)?.name ?? `فرع #${branchId}`
-
-  // إعادة تحميل فترات الأوفرتايم بعد أي تعديل
-  const reloadOtPeriods = async () => {
-    try {
-      const periods = await fetchOvertimePeriods()
-      setOvertimePeriods(periods)
-      setOtPeriodsError(null)
-    } catch (err: any) {
-      setOtPeriodsError(err.message)
-    }
-  }
-
-  // تفعيل/تعطيل فترة أوفرتايم
-  const toggleOtPeriod = async (period: ApiOvertimePeriod) => {
-    setOtPeriodBusyId(period.id)
-    try {
-      await updateOvertimePeriod(period.id, { isActive: !period.isActive })
-      await reloadOtPeriods()
-    } catch (err: any) {
-      setOtPeriodsError(err.message)
-    } finally {
-      setOtPeriodBusyId(null)
-    }
-  }
-
-  // حذف فترة أوفرتايم
-  const removeOtPeriod = async (period: ApiOvertimePeriod) => {
-    if (!confirm(`هل أنت متأكد من حذف الفترة «${period.name}»؟`)) return
-    setOtPeriodBusyId(period.id)
-    try {
-      await deleteOvertimePeriod(period.id)
-      await reloadOtPeriods()
-    } catch (err: any) {
-      setOtPeriodsError(err.message)
-    } finally {
-      setOtPeriodBusyId(null)
-    }
-  }
 
   useEffect(() => {
     const loadConfig = async () => {
@@ -814,134 +725,23 @@ export default function WorkDaysSettingsPage() {
                 </div>
               </div>
 
-              {/* فترات فتح/قفل الأوفرتايم بالتواريخ — backend حقيقي، تتقدّم على المفتاح العام */}
+              {/* فترات فتح وقفل الإضافي اتنقلت لشاشة العمل الإضافي */}
               <div className="mt-6 pt-6 border-t border-gray-100">
-                <div className="flex items-center justify-between mb-4">
-                  <div className="flex items-center gap-3">
-                    <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
-                      <Calendar size={20} className="text-amber-600" />
-                    </div>
-                    <div>
-                      <div className="flex items-center gap-2">
-                        <h3 className="text-base font-bold text-gray-800">
-                          فترات فتح/قفل الأوفرتايم بالتواريخ
-                        </h3>
-                        <span className="px-2 py-0.5 bg-success-100 text-success-700 rounded-full text-xs font-medium">
-                          فعّالة
-                        </span>
-                      </div>
-                      <p className="text-sm text-gray-500">
-                        افتح أو اقفل احتساب الأوفرتايم لتواريخ بعينها (مثل رمضان) بغضّ النظر عن المفتاح العام
-                      </p>
-                    </div>
-                  </div>
-                  <button
-                    onClick={() => setShowAddOtPeriod(true)}
-                    className="btn-primary flex items-center gap-2 text-sm py-2"
-                  >
-                    <Plus size={16} />
-                    إضافة فترة
-                  </button>
-                </div>
-
-                {otPeriodsError && (
-                  <div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-4">
-                    {otPeriodsError}
-                  </div>
-                )}
-
-                {otPeriodsLoading ? (
-                  <div className="flex items-center justify-center py-12">
-                    <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
-                  </div>
-                ) : overtimePeriods.length === 0 ? (
-                  <div className="text-center py-10 text-gray-500 bg-gray-50 rounded-xl">
-                    <Calendar size={40} className="mx-auto mb-3 text-gray-300" />
-                    <p>لا توجد فترات — الأوفرتايم يتبع المفتاح العام أعلاه.</p>
-                    <p className="text-sm mt-1">أضف فترة لفتح/قفل تواريخ بعينها.</p>
-                  </div>
-                ) : (
-                  <div className="space-y-3">
-                    {overtimePeriods.map((period) => {
-                      const isOpen = period.effect === 'OPEN'
-                      const EffectIcon = isOpen ? Sun : Moon
-                      const busy = otPeriodBusyId === period.id
-                      return (
-                        <div
-                          key={period.id}
-                          className={`border-2 rounded-2xl p-4 flex items-center justify-between gap-4 transition-all ${
-                            period.isActive
-                              ? 'border-gray-200 bg-white'
-                              : 'border-gray-100 bg-gray-50 opacity-60'
-                          }`}
-                        >
-                          <div className="flex items-center gap-4 min-w-0">
-                            <div className={`w-10 h-10 ${isOpen ? 'bg-green-500' : 'bg-red-500'} rounded-xl flex items-center justify-center flex-shrink-0`}>
-                              <EffectIcon size={20} className="text-white" />
-                            </div>
-                            <div className="min-w-0">
-                              <div className="flex items-center gap-2 flex-wrap">
-                                <h4 className="font-bold text-gray-800">{period.name}</h4>
-                                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                                  isOpen
-                                    ? 'bg-success-100 text-success-700'
-                                    : 'bg-red-100 text-red-700'
-                                }`}>
-                                  {OT_EFFECT_CHIP_AR[period.effect]}
-                                </span>
-                                <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${
-                                  period.isActive
-                                    ? 'bg-success-100 text-success-600'
-                                    : 'bg-gray-200 text-gray-500'
-                                }`}>
-                                  {period.isActive ? 'نشطة' : 'معطلة'}
-                                </span>
-                              </div>
-                              <p className="text-sm text-gray-600 mt-1">
-                                من {period.fromDate} إلى {period.toDate}
-                              </p>
-                              <span className="inline-flex items-center gap-1 mt-2 px-2 py-0.5 bg-gray-100 text-gray-600 rounded-lg text-xs">
-                                <Building2 size={12} />
-                                {branchName(period.branchId)}
-                              </span>
-                            </div>
-                          </div>
-                          <div className="flex items-center gap-2 flex-shrink-0">
-                            <button
-                              onClick={() => toggleOtPeriod(period)}
-                              disabled={busy}
-                              className={`flex items-center gap-2 px-3 py-2 rounded-lg transition-colors disabled:opacity-50 ${
-                                period.isActive
-                                  ? 'bg-success-50 text-success-600 hover:bg-success-100'
-                                  : 'bg-gray-100 text-gray-500 hover:bg-gray-200'
-                              }`}
-                            >
-                              {period.isActive ? <ToggleRight size={18} /> : <ToggleLeft size={18} />}
-                              {period.isActive ? 'تعطيل' : 'تفعيل'}
-                            </button>
-                            <button
-                              onClick={() => removeOtPeriod(period)}
-                              disabled={busy}
-                              className="flex items-center gap-2 px-3 py-2 rounded-lg bg-red-50 text-red-600 hover:bg-red-100 transition-colors disabled:opacity-50"
-                            >
-                              <Trash2 size={18} />
-                              حذف
-                            </button>
-                          </div>
-                        </div>
-                      )
-                    })}
-                  </div>
-                )}
-
-                {/* آلية الأولوية */}
-                <div className="mt-4 p-4 bg-blue-50 rounded-xl flex items-start gap-3">
-                  <Info size={18} className="text-blue-500 mt-0.5 shrink-0" />
-                  <p className="text-sm text-blue-700 leading-relaxed">
-                    الفترات تتقدّم على المفتاح العام: فترة مقفولة توقف الاحتساب في تواريخها، وفترة
-                    مفتوحة تفعّله حتى لو المفتاح العام مقفول. عند التداخل يُغلَّب القفل.
-                  </p>
-                </div>
+                <Link
+                  href="/attendance/overtime#overtime-periods"
+                  className="p-4 bg-amber-50 border border-amber-200 rounded-xl flex items-center justify-between gap-3 hover:bg-amber-100 transition-colors"
+                >
+                  <span className="flex items-start gap-3">
+                    <Calendar size={20} className="text-amber-600 mt-0.5 shrink-0" />
+                    <span>
+                      <span className="block font-bold text-gray-800">فترات فتح وقفل الإضافي</span>
+                      <span className="block text-sm text-gray-600 mt-0.5">
+                        اتنقلت لشاشة «العمل الإضافي» — افتح أو اقفل حساب الإضافي لتواريخ معينة (زي رمضان) من هناك
+                      </span>
+                    </span>
+                  </span>
+                  <span className="text-sm text-primary-600 shrink-0">افتح الشاشة ←</span>
+                </Link>
               </div>
             </div>
             </>
@@ -1326,15 +1126,6 @@ export default function WorkDaysSettingsPage() {
           />
         )}
 
-        {/* Modal إضافة فترة أوفرتايم بالتواريخ (backend حقيقي) */}
-        {showAddOtPeriod && (
-          <AddOvertimePeriodModal
-            branches={branches}
-            onClose={() => setShowAddOtPeriod(false)}
-            onCreated={reloadOtPeriods}
-          />
-        )}
-
         {/* Modal تعيين الجدول للموظفين */}
         {showAssignModal && selectedSchedule && (
           <AssignScheduleModal
@@ -1621,194 +1412,6 @@ function AddScheduleRuleModal({
             className="flex-1 btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
           >
             {saving ? 'جارٍ الحفظ...' : 'إضافة القاعدة'}
-          </button>
-          <button onClick={onClose} className="flex-1 btn-secondary">
-            إلغاء
-          </button>
-        </div>
-      </div>
-    </div>
-  )
-}
-
-// Modal إضافة فترة فتح/قفل الأوفرتايم بالتواريخ (backend حقيقي عبر createOvertimePeriod)
-function AddOvertimePeriodModal({
-  branches,
-  onClose,
-  onCreated,
-}: {
-  branches: ApiBranch[]
-  onClose: () => void
-  onCreated: () => void | Promise<void>
-}) {
-  const [name, setName] = useState('')
-  const [fromDate, setFromDate] = useState('')
-  const [toDate, setToDate] = useState('')
-  const [effect, setEffect] = useState<ApiOvertimePeriod['effect']>('OPEN')
-  const [branchId, setBranchId] = useState<string>('') // '' = كل الفروع
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState<string | null>(null)
-
-  // عبارة نطاق الفرع للمعاينة: «لكل الفروع» أو «لفرع كذا»
-  const branchPhrase = branchId
-    ? `لفرع ${branches.find((b) => String(b.id) === branchId)?.name ?? branchId}`
-    : 'لكل الفروع'
-
-  // معاينة حيّة للجملة العربية
-  const preview = overtimePeriodSentence({ fromDate, toDate, effect }, branchPhrase)
-
-  const handleSubmit = async () => {
-    if (!name.trim()) {
-      setError('الرجاء إدخال اسم الفترة')
-      return
-    }
-    if (!fromDate || !toDate) {
-      setError('الرجاء تحديد تاريخ البداية وتاريخ النهاية')
-      return
-    }
-    if (fromDate > toDate) {
-      setError('تاريخ البداية يجب أن يكون قبل أو يساوي تاريخ النهاية')
-      return
-    }
-    setSaving(true)
-    setError(null)
-    try {
-      await createOvertimePeriod({
-        name: name.trim(),
-        fromDate,
-        toDate,
-        effect,
-        branchId: branchId ? Number(branchId) : undefined,
-      })
-      await onCreated()
-      onClose()
-    } catch (err: any) {
-      setError(err.message)
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-      <div className="bg-white rounded-2xl w-full max-w-lg max-h-[90vh] overflow-y-auto">
-        <div className="p-6 border-b border-gray-100 flex items-center justify-between">
-          <div>
-            <h2 className="text-xl font-bold text-gray-800">إضافة فترة أوفرتايم بالتواريخ</h2>
-            <p className="text-gray-500 text-sm mt-1">
-              فترة فعّالة تفتح أو تقفل احتساب الأوفرتايم في تواريخها
-            </p>
-          </div>
-          <button onClick={onClose} className="p-2 rounded-lg hover:bg-gray-100">
-            <X size={20} className="text-gray-500" />
-          </button>
-        </div>
-
-        <div className="p-6 space-y-5">
-          {error && (
-            <div className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">{error}</div>
-          )}
-
-          {/* الاسم */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">اسم الفترة *</label>
-            <input
-              type="text"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="مثال: رمضان — فتح الأوفرتايم"
-              className="input w-full"
-            />
-          </div>
-
-          {/* من / إلى */}
-          <div className="grid grid-cols-2 gap-4">
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">من تاريخ</label>
-              <input
-                type="date"
-                value={fromDate}
-                onChange={(e) => setFromDate(e.target.value)}
-                dir="ltr"
-                className="input w-full"
-              />
-            </div>
-            <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">إلى تاريخ</label>
-              <input
-                type="date"
-                value={toDate}
-                onChange={(e) => setToDate(e.target.value)}
-                dir="ltr"
-                className="input w-full"
-              />
-            </div>
-          </div>
-
-          {/* التأثير */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">التأثير</label>
-            <div className="grid grid-cols-2 gap-3">
-              {OT_PERIOD_EFFECTS.map((ef) => {
-                const active = effect === ef.value
-                const Icon = ef.value === 'OPEN' ? Sun : Moon
-                return (
-                  <button
-                    key={ef.value}
-                    type="button"
-                    onClick={() => setEffect(ef.value)}
-                    className={`p-4 rounded-xl border-2 text-right transition-all ${
-                      active ? 'border-primary-500 bg-primary-50' : 'border-gray-200 hover:border-gray-300'
-                    }`}
-                  >
-                    <div className="flex items-center gap-3">
-                      <div className={`w-10 h-10 ${ef.value === 'OPEN' ? 'bg-green-500' : 'bg-red-500'} rounded-lg flex items-center justify-center flex-shrink-0`}>
-                        <Icon size={20} className="text-white" />
-                      </div>
-                      <div>
-                        <p className="font-medium text-gray-800">{ef.label}</p>
-                        <p className="text-xs text-gray-500 mt-0.5">{ef.desc}</p>
-                      </div>
-                    </div>
-                  </button>
-                )
-              })}
-            </div>
-          </div>
-
-          {/* الفرع */}
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-2">الفرع</label>
-            <select
-              value={branchId}
-              onChange={(e) => setBranchId(e.target.value)}
-              className="input w-full"
-            >
-              <option value="">كل الفروع</option>
-              {branches.map((b) => (
-                <option key={b.id} value={String(b.id)}>{b.name}</option>
-              ))}
-            </select>
-          </div>
-
-          {/* معاينة الجملة */}
-          <div className="p-4 bg-blue-50 rounded-xl flex items-start gap-3">
-            <Info size={18} className="text-blue-500 mt-0.5 shrink-0" />
-            <div className="text-sm text-blue-700">
-              <p className="font-medium">معاينة الفترة:</p>
-              <p className="mt-1">{preview}</p>
-            </div>
-          </div>
-        </div>
-
-        {/* Actions */}
-        <div className="p-6 border-t border-gray-100 flex gap-3">
-          <button
-            onClick={handleSubmit}
-            disabled={saving}
-            className="flex-1 btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
-          >
-            {saving ? 'جارٍ الحفظ...' : 'إضافة الفترة'}
           </button>
           <button onClick={onClose} className="flex-1 btn-secondary">
             إلغاء

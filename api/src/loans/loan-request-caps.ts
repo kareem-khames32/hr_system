@@ -95,8 +95,8 @@ export function parseLoanCapPolicyRow(row: any): LoanCapPolicyRow & Record<strin
 }
 
 async function salaryBasis(em: EntityManager, employee: Record<string, any>, period: string) {
-  const exact = (value: unknown) => PayrollDecimal.from(value == null ? '0' : String(value)).format(2, 'HALF_UP')
-  const gross = (row: Record<string, any>) => MONTHLY_SALARY_COMPONENTS.reduce((sum, c) => sum.add(PayrollDecimal.from(exact(row[c.key]))), PayrollDecimal.from('0')).format(2, 'HALF_UP')
+  const exact = (value: unknown) => PayrollDecimal.from(value == null ? '0' : String(value)).format(2, 'DOWN')
+  const gross = (row: Record<string, any>) => MONTHLY_SALARY_COMPONENTS.reduce((sum, c) => sum.add(PayrollDecimal.from(exact(row[c.key]))), PayrollDecimal.from('0')).format(2, 'DOWN')
   const fromEmployee = (note: string | null) => ({ basic: exact(employee.basicSalary), gross: gross(employee), sourceRef: `employees:${employee.id}:current`, note })
   try {
     const history = await readSalaryHistory(em, employee.id)
@@ -135,7 +135,7 @@ export async function evaluateEmployeeLoanCap(em: EntityManager, input: { employ
   const positions = await readLoanInstallmentPositions(em, input.employeeId)
   let outstanding = positions.filter(row => row.financialStatus === 'DUE').reduce((sum, row) => sum + toCents(row.remainingAmount), 0n)
   for (const row of await em.query(`SELECT CONVERT(varchar(40),[amount]-[recoveredAmount]-[writtenOffAmount]) AS [open] FROM [loan_recovery_balances] WHERE [employeeId]=@0 AND [status]='PENDING_RECOVERY'`, [input.employeeId])) {
-    outstanding += toCents(PayrollDecimal.from(row.open).format(2, 'HALF_UP'))
+    outstanding += toCents(PayrollDecimal.from(row.open).format(2, 'DOWN'))
   }
   return computeLoanCap({ asOf: input.asOf, amount: input.amount, months: input.months, policy, salary,
     usage: { requests: requests.length, amount: fromCents(used) }, outstanding: fromCents(outstanding), window })

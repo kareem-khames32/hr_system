@@ -3,6 +3,7 @@
 import { useEffect, useState, type FormEvent } from 'react'
 import { AlertTriangle, CalendarRange, CheckCircle2, Plus, Save, X } from 'lucide-react'
 import { ApiError, fetchConfig, updateConfig } from '../lib/api'
+import { DefinitionBranchField, useDefinitionBranches } from './DefinitionBranchField'
 import {
   createLatenessTierSet, fetchLatenessTierSets, LATENESS_TIER_MODE_LABELS,
   type LatenessTierDraftRow, type LatenessTierMode, type LatenessTierSet,
@@ -110,6 +111,9 @@ function createDefaults(rows: Array<{ key: string; value: string }>): Settings {
 
 export function PayrollPolicyCreateForm({ onCreated, onCancel }: { onCreated: (summary: PayrollPolicySummary) => void; onCancel: () => void }) {
   const [name, setName] = useState('')
+  // قرار المالك 16 سبتمبر: المعادلات لكل الشركة أو لفرع واحد — حساب الفرع يتضاف لفرعه تلقائيًا
+  const branchInfo = useDefinitionBranches()
+  const [branchId, setBranchId] = useState<number | null>(null)
   const [settings, setSettings] = useState<Settings>(DEFAULT_POLICY_SETTINGS)
   const [loadingDefaults, setLoadingDefaults] = useState(true)
   const [from, setFrom] = useState<string | null>(null)
@@ -131,7 +135,9 @@ export function PayrollPolicyCreateForm({ onCreated, onCancel }: { onCreated: (s
     if (!ready) return
     setSaving(true); setError('')
     try {
-      onCreated(await createPayrollPolicy({ code: '', name, description: null, effectiveFrom, settings, metadata: { title: 'النسخة الأولى', notes: null } }))
+      onCreated(await createPayrollPolicy({ code: '', name, description: null, effectiveFrom, settings, metadata: { title: 'النسخة الأولى', notes: null },
+        // حساب الشركة: null = كل الشركة صراحةً؛ حساب الفرع: من غير فرع والخادم يحط فرعه
+        ...(branchInfo.scope === null ? { branchId } : {}) }))
     } catch (cause) { setError(errorText(cause)) } finally { setSaving(false) }
   }
 
@@ -144,6 +150,7 @@ export function PayrollPolicyCreateForm({ onCreated, onCancel }: { onCreated: (s
       <label className="md:col-span-2"><span className={labelClass}>الاسم</span><input className="input w-full" value={name} maxLength={200} placeholder="مثل: معادلات رواتب فرع المعادي" onChange={event => setName(event.target.value)} required /></label>
       <label><span className={labelClass}>تُطبّق من</span><input className="input w-full" type="date" value={effectiveFrom} onChange={event => setFrom(event.target.value)} required />
         <span className="text-xs text-gray-500">بداية فترة مسير. المقترح: {suggested}{from !== null && from !== suggested && <button type="button" className="text-primary-600 mr-1" onClick={() => setFrom(null)}>استخدام المقترح</button>}</span></label>
+      <DefinitionBranchField value={branchId} onChange={setBranchId} editing={false} info={branchInfo} disabled={saving} />
     </div>
     <PolicySettingsFields value={settings} onChange={setSettings} disabled={saving || loadingDefaults} />
     {error && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-800">{error}</p>}

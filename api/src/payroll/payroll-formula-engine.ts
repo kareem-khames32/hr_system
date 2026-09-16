@@ -47,7 +47,7 @@ export interface PayrollExactFormulaResult {
 export interface PayrollFormulaEvaluationOptions { divisionByZeroMode: 'ZERO_WITH_WARNING' | 'FAIL_ROW'; roundingMode: PayrollRoundingMode; roundingScale: number }
 export interface PayrollFormulaWarning { code: 'MISSING_INPUT' | 'DIVISION_BY_ZERO' | 'ATTENDANCE_EXEMPT'; message: string; position: number; reference?: string; expression?: string }
 const groups: Group[] = ['variables', 'components', 'parameters', 'typedDeductions']
-const roundingModes: PayrollRoundingMode[] = ['HALF_UP', 'HALF_EVEN', 'FLOOR', 'CEIL']
+const roundingModes: PayrollRoundingMode[] = ['HALF_UP', 'HALF_EVEN', 'FLOOR', 'CEIL', 'DOWN']
 const functions = new Set<FunctionName>(['MIN', 'MAX', 'ABS', 'ROUND', 'FLOOR', 'CEIL', 'CLAMP', 'IF'])
 const prefixes = new Map<string, Group>([['COMP', 'components'], ['PARAM', 'parameters'], ['TYPED_DEDUCTION', 'typedDeductions']])
 const reserved = new Set<string>([...functions, ...prefixes.keys(), 'AND', 'OR', 'NOT'])

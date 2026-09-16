@@ -50,6 +50,8 @@ import { DEVICE_KEY_MIN_LENGTH, deviceKeyWeakness } from './device-key'
 import { AttendanceExemption } from './attendance-exemption.entities'
 import { AttendanceRuleVersion } from './attendance-rule.entities'
 import { exemptionOnDate, exemptionPolicyOnDate, loadAttendanceExemptions } from './attendance-exemption-resolver'
+import { readOpenSuspensions, suspendedDatesBetween } from '../employees/employee-suspensions'
+import { suspensionCovers } from '../employees/employee-suspension-rules'
 import { assertAttendanceRulePeriodOpen, attendanceFlexPolicy, attendanceRuleDate, lockAttendanceRuleMutation, resolveAttendanceGrace, resolveAttendanceRule } from './attendance-rule-history'
 import type { AttendanceGraceSource } from './attendance-rule-history'
 import { calculateAttendanceFlex, attendanceIntervalMinutes } from './attendance-flex-calculator'
@@ -88,6 +90,8 @@ export type AttendanceDayWithExemption = AttendanceDay & {
   exemption: AttendanceExemptionInfo | null
   provenance?: 'LEGACY_STORED'
   hasShortfall?: boolean
+  // يوم إيقاف عن العمل بلا بصمة — مش غياب ومالوش صف محفوظ
+  suspended?: boolean
 }
 
 // حدّ أمان صريح لمدى عدّ أيام العمل (سنة) — الأطول يُرفض برسالة بدل قصّه بصمت
@@ -156,6 +160,51 @@ export const weekKeyOf = (dateStr: string): string => {
   const d = new Date(`${dateStr}T12:00:00`)
   d.setDate(d.getDate() - d.getDay())
   return d.toISOString().slice(0, 10)
+}
+
+// يوم يتحفظ له صف حضور؟ اليوم المنقضي أيوه، والمستقبلي بس لو حقيقة معروفة سلفًا (إجازة كاملة/عطلة/مأمورية/عن بُعد).
+// يوم الإيقاف عن العمل بلا بصمة مش غياب: ما يتحفظش «غائب» وأي صف قديم له يتمسح — المسير بيخصمه يوم إيقاف،
+// ولو اتحفظ غياب كمان يتخصم مرتين (غياب بجزائه + يوم إيقاف)
+export function attendanceDayPersists(status: AttendanceStatus, isFuture: boolean, suspended: boolean): boolean {
+  if (suspended && status === 'absent') return false
+  return !isFuture || status === 'leave' || status === 'holiday' || status === 'mission' || status === 'remote'
+}
+
+// فرع نسخة EMPLOYEE_ORG المؤرخة ({data:{branchId}} أو {branchId}) أو null
+export function employeeOrgSnapshotBranch(snapshot: unknown): number | null {
+  let value: any = snapshot
+  if (typeof value === 'string') {
+    try { value = JSON.parse(value) } catch { return null }
+  }
+  const branchId = Number((value?.data ?? value)?.branchId)
+  return Number.isSafeInteger(branchId) && branchId > 0 ? branchId : null
+}
+
+// الأيام اللي تتعاد بعد تغيير فترة إضافي (لحد النهارده): يوم فيه دخول وخروج، أو عليه إضافي مكتشف لسه ما اتحسمش.
+// فترة الفرع بتختار الموظف بفرع اليوم نفسه مش بفرعه الحالي بس: فرع صف اليوم المحفوظ، أو فرعه الحالي، أو أي
+// نسخة فرع مؤرخة له — اللي نقل من الفرع بعد كده أيامه القديمة فيه لازم تتعاد (computeDay بيختار الفترة بفرع اليوم).
+// الزيادة (يوم مالوش علاقة بالفرع) إعادة حساب بلا أثر
+export function overtimeWindowRecomputeTargets(
+  range: { fromDate: string; toDate: string; branchId?: number | null },
+  today: string,
+  days: ReadonlyArray<{ employeeId: number; date: string; branchId?: number | null; checkIn?: string | null; checkOut?: string | null }>,
+  pending: ReadonlyArray<{ employeeId: number; date: string }>,
+  employeeBranches: ReadonlyMap<number, ReadonlySet<number>>,
+): Array<{ employeeId: number; date: string }> {
+  const to = range.toDate < today ? range.toDate : today
+  if (range.fromDate > to) return []
+  const inRange = (date: string) => range.fromDate <= date && date <= to
+  const dayBranch = new Map(days.map(day => [`${day.employeeId}|${String(day.date).slice(0, 10)}`, day.branchId ?? null]))
+  const inBranch = (employeeId: number, date: string) => range.branchId == null ||
+    dayBranch.get(`${employeeId}|${date}`) === range.branchId || !!employeeBranches.get(employeeId)?.has(range.branchId)
+  const targets = new Map<string, { employeeId: number; date: string }>()
+  const add = (employeeId: number, rawDate: string) => {
+    const date = String(rawDate).slice(0, 10)
+    if (inRange(date) && inBranch(employeeId, date)) targets.set(`${employeeId}|${date}`, { employeeId, date })
+  }
+  for (const day of days) if (day.checkIn && day.checkOut) add(day.employeeId, day.date)
+  for (const entry of pending) add(entry.employeeId, entry.date)
+  return [...targets.values()]
 }
 
 export interface PunchDto {
@@ -392,8 +441,36 @@ export class AttendanceService {
       governingWindowIds: governing.map(p => p.id), reason: governing.map(p => p.name).join('، ') || 'الإعداد العام للإضافي خارج الفترات المحددة' }
   }
 
-  listOvertimePeriods() {
-    return this.overtimePeriods.find({ order: { fromDate: 'DESC' } })
+  // مستخدم فرع يشوف فترات «كل الفروع» وفترات فرعه بس
+  listOvertimePeriods(user?: JwtPayload) {
+    const scope = user ? branchScopeOf(user) : null
+    return this.overtimePeriods.find({
+      where: scope === null ? {} : [{ branchId: IsNull() }, { branchId: scope }],
+      order: { fromDate: 'DESC' },
+    })
+  }
+
+  // فرع الفترة لازم يكون جوه نطاق المستخدم؛ «كل الفروع» لمن نطاقه الشركة كلها بس
+  private assertOvertimePeriodScope(user: JwtPayload | undefined, branchId: number | null | undefined) {
+    if (!user) return
+    const scope = branchScopeOf(user)
+    if (scope === null) return
+    if (branchId == null) throw new ForbiddenException('فترة لكل الفروع محتاجة صلاحية على الشركة كلها — اختار فرعك')
+    if (branchId !== scope) throw new ForbiddenException('الفرع خارج نطاق فرعك')
+  }
+
+  private async overtimePeriodBranch(value: unknown): Promise<number | null> {
+    if (value === null || value === undefined || value === '') return null
+    const id = Number(value)
+    if (!Number.isInteger(id) || id < 1) throw new BadRequestException('الفرع (branchId) رقم صحيح')
+    if (!(await this.branches.existsBy({ id }))) throw new BadRequestException('الفرع غير موجود')
+    return id
+  }
+
+  private validOvertimePeriodDates(fromDate: unknown, toDate: unknown) {
+    const real = (v: unknown) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && localDateOf(new Date(`${v}T12:00:00`)) === v
+    if (!real(fromDate) || !real(toDate)) throw new BadRequestException('التواريخ لازم تكون تواريخ حقيقية بصيغة YYYY-MM-DD')
+    if (String(fromDate) > String(toDate)) throw new BadRequestException('تاريخ البداية بعد النهاية')
   }
 
   async createOvertimePeriod(dto: {
@@ -402,28 +479,26 @@ export class AttendanceService {
     toDate: string
     effect: string
     branchId?: number | null
-  }) {
+  }, user?: JwtPayload) {
     if (!dto.name?.trim()) throw new BadRequestException('اسم الفترة مطلوب')
-    const dateRe = /^\d{4}-\d{2}-\d{2}$/
-    if (!dateRe.test(dto.fromDate) || !dateRe.test(dto.toDate)) {
-      throw new BadRequestException('التواريخ بصيغة YYYY-MM-DD')
-    }
-    if (dto.fromDate > dto.toDate) {
-      throw new BadRequestException('تاريخ البداية بعد النهاية')
-    }
+    this.validOvertimePeriodDates(dto.fromDate, dto.toDate)
     if (!['OPEN', 'CLOSED'].includes(dto.effect)) {
       throw new BadRequestException('الأثر: OPEN أو CLOSED')
     }
-    return this.overtimePeriods.save(
+    const branchId = await this.overtimePeriodBranch(dto.branchId)
+    this.assertOvertimePeriodScope(user, branchId)
+    const saved = await this.overtimePeriods.save(
       this.overtimePeriods.create({
         name: dto.name.trim(),
         fromDate: dto.fromDate,
         toDate: dto.toDate,
         effect: dto.effect as any,
-        branchId: dto.branchId ?? undefined,
+        branchId: branchId as any,
         isActive: true,
       })
     )
+    const recompute = await this.recomputeOvertimeWindowDays([saved])
+    return { ...saved, recompute }
   }
 
   async updateOvertimePeriod(
@@ -435,38 +510,101 @@ export class AttendanceService {
       effect: string
       branchId: number | null
       isActive: boolean
-    }>
+    }>,
+    user?: JwtPayload
   ) {
     const p = await this.overtimePeriods.findOne({ where: { id } })
     if (!p) throw new NotFoundException('الفترة غير موجودة')
-    const dateRe = /^\d{4}-\d{2}-\d{2}$/
-    if (dto.fromDate !== undefined && !dateRe.test(dto.fromDate)) {
-      throw new BadRequestException('تاريخ البداية غير صالح')
-    }
-    if (dto.toDate !== undefined && !dateRe.test(dto.toDate)) {
-      throw new BadRequestException('تاريخ النهاية غير صالح')
-    }
+    this.assertOvertimePeriodScope(user, p.branchId)
     if (dto.effect !== undefined && !['OPEN', 'CLOSED'].includes(dto.effect)) {
       throw new BadRequestException('الأثر: OPEN أو CLOSED')
     }
+    const before = { fromDate: p.fromDate, toDate: p.toDate, branchId: p.branchId ?? null, effect: p.effect, isActive: p.isActive }
     // حقول قابلة للتعديل فقط — ممنوع الجسم يكتب على id
-    if (dto.name !== undefined) p.name = String(dto.name).trim()
+    if (dto.name !== undefined) {
+      if (!String(dto.name).trim()) throw new BadRequestException('اسم الفترة مطلوب')
+      p.name = String(dto.name).trim()
+    }
     if (dto.fromDate !== undefined) p.fromDate = dto.fromDate
     if (dto.toDate !== undefined) p.toDate = dto.toDate
+    this.validOvertimePeriodDates(p.fromDate, p.toDate)
     if (dto.effect !== undefined) p.effect = dto.effect as any
-    if (dto.branchId !== undefined) p.branchId = dto.branchId ?? (undefined as any)
-    if (dto.isActive !== undefined) p.isActive = !!dto.isActive
-    if (p.fromDate > p.toDate) {
-      throw new BadRequestException('تاريخ البداية بعد النهاية')
+    if (dto.branchId !== undefined) {
+      // null لازم يتكتب null صريح — undefined كان بيسيب الفرع القديم في القاعدة
+      p.branchId = (await this.overtimePeriodBranch(dto.branchId)) as any
+      this.assertOvertimePeriodScope(user, p.branchId)
     }
-    return this.overtimePeriods.save(p)
+    if (dto.isActive !== undefined) p.isActive = !!dto.isActive
+    const saved = await this.overtimePeriods.save(p)
+    const changed = before.fromDate !== saved.fromDate || before.toDate !== saved.toDate ||
+      before.branchId !== (saved.branchId ?? null) || before.effect !== saved.effect || before.isActive !== saved.isActive
+    const recompute = changed
+      ? await this.recomputeOvertimeWindowDays([before, saved])
+      : { recomputed: 0, failed: 0 }
+    return { ...saved, recompute }
   }
 
-  async deleteOvertimePeriod(id: number) {
+  async deleteOvertimePeriod(id: number, user?: JwtPayload) {
     const p = await this.overtimePeriods.findOne({ where: { id } })
     if (!p) throw new NotFoundException('الفترة غير موجودة')
+    this.assertOvertimePeriodScope(user, p.branchId)
     await this.overtimePeriods.delete({ id })
-    return { deleted: true }
+    const recompute = p.isActive ? await this.recomputeOvertimeWindowDays([p]) : { recomputed: 0, failed: 0 }
+    return { deleted: true, recompute }
+  }
+
+  // تغيير فترة بيسري على الأيام اللي فاتت جواها فورًا: يوم فيه دخول وخروج (غيره
+  // مالوش دليل إضافي) أو عليه إضافي مكتشف يتحسب تاني، فالقفل يلغي المكتشف اللي
+  // لسه ما اتوجهش للاعتماد والفتح يكتشفه. اللي في دورة الاعتماد قرار معتمده (detectOvertime
+  // مابيلمسوش)، والمعتمد والمصروف ثابتين، والفترات المالية المقفلة محمية جوه computeDay.
+  // الأيام الجاية بتتحسب بالفترة وقت حسابها. فترة الفرع بتعيد أيام كل اللي اشتغل في الفرع وقتها،
+  // حتى اللي نقل منه بعد كده (overtimeWindowRecomputeTargets)
+  private async recomputeOvertimeWindowDays(ranges: Array<{ fromDate: string; toDate: string; branchId?: number | null }>) {
+    const today = localDateOf(new Date())
+    const targets = new Map<string, { employeeId: number; date: string }>()
+    let employeeBranches: Map<number, Set<number>> | null = null
+    const loadEmployeeBranches = async () => {
+      const map = new Map<number, Set<number>>()
+      const add = (employeeId: number, branchId: number | null) => {
+        if (branchId == null) return
+        const set = map.get(employeeId) ?? new Set<number>()
+        set.add(branchId)
+        map.set(employeeId, set)
+      }
+      for (const e of await this.employees.find({ select: { id: true, branchId: true } })) add(e.id, e.branchId ?? null)
+      for (const v of await this.days.manager.find(AttendanceRuleVersion, { select: { sourceId: true, snapshot: true }, where: { sourceType: 'EMPLOYEE_ORG' } })) {
+        add(Number(v.sourceId), employeeOrgSnapshotBranch(v.snapshot))
+      }
+      return map
+    }
+    for (const range of ranges) {
+      const to = range.toDate < today ? range.toDate : today
+      if (range.fromDate > to) continue
+      if (range.branchId != null && !employeeBranches) employeeBranches = await loadEmployeeBranches()
+      const days = await this.days.find({
+        select: { employeeId: true, date: true, branchId: true, checkIn: true, checkOut: true },
+        where: { date: Between(range.fromDate, to) },
+      })
+      const pending = await this.overtime.find({
+        select: { employeeId: true, date: true },
+        where: { date: Between(range.fromDate, to), source: 'BIOMETRIC_DETECTED', status: In(['DETECTED', 'SUBMITTED']) },
+      })
+      for (const target of overtimeWindowRecomputeTargets(range, today, days, pending, employeeBranches ?? new Map())) {
+        targets.set(`${target.employeeId}|${target.date}`, target)
+      }
+    }
+    let recomputed = 0
+    let failed = 0
+    for (const { employeeId, date } of targets.values()) {
+      try {
+        await this.computeDay(employeeId, date)
+        recomputed++
+      } catch (e) {
+        failed++
+        this.logger.warn(`تعذر إعادة حساب ${date} للموظف ${employeeId} بعد تغيير فترة الإضافي: ${(e as Error).message}`)
+      }
+    }
+    return { recomputed, failed }
   }
 
   // كتابات الحضور (بصمة يدوية/جدول/تجاوز يوم/تأكيد أوفرتايم) بنطاق فرع
@@ -865,6 +1003,14 @@ export class AttendanceService {
       // عميل قديم بلا مصدر معروف يحتفظ بالاسم والأوقات المرسلة؛ لا نخترع له نسخة.
       if (!shift) return { shiftId: null, shiftName: input.shiftName, startTime: input.startTime!, endTime: input.endTime! }
     }
+    // وردية خاصة بفرع تتسند لموظفي فرعها بس (قرار المالك 16 سبتمبر)
+    const assignee = Number((input as { employeeId?: unknown }).employeeId)
+    if (shift.branchId != null && Number.isInteger(assignee) && assignee > 0) {
+      const owner = await this.employees.findOne({ where: { id: assignee }, select: { id: true, branchId: true } })
+      if (Number(owner?.branchId) !== Number(shift.branchId)) {
+        throw new BadRequestException(`الوردية «${shift.name}» خاصة بفرع تاني؛ اختار وردية لفرع الموظف أو وردية لكل الشركة`)
+      }
+    }
     // المصدر القديم المعطل بلا أي تاريخ غير صالح للطلب كله؛ نحافظ على رفضه
     // المبكر. وجود نسخ مؤرخة يستلزم فحص كل يوم، فقد يسبق تعطيلًا مستقبليًا.
     if (dates.length === 0 && shift.isActive === false && !(await this.days.manager.existsBy(AttendanceRuleVersion, {
@@ -1220,6 +1366,17 @@ export class AttendanceService {
     if (start > end) return 0
 
     const exemptions = await loadAttendanceExemptions(this.days.manager, employeeId, start, end)
+    // أيام الإيقاف عن العمل مش غياب — المسير بيخصمها كأيام إيقاف (قرار المالك 16 سبتمبر)
+    const suspendedDates = await suspendedDatesBetween(this.days.manager, employeeId, start, end)
+    if (suspendedDates.size) {
+      // غياب محفوظ قديم في يوم إيقاف (اتكتب قبل الإيقاف أو من إعادة حساب) يتشال: computeDay بيمسحه
+      // (والفترة المالية المقفلة محمية جواه) — وإلا المسير يخصم اليوم غياب ويوم إيقاف
+      const staleAbsences = await this.days.find({ select: { date: true }, where: { employeeId, date: Between(start, end), status: 'absent' } })
+      for (const row of staleAbsences) {
+        const date = String(row.date).slice(0, 10)
+        if (suspendedDates.has(date)) await this.computeDay(employeeId, date, false)
+      }
+    }
     const calendarCache = createCalendarResolverCache(this.days.manager)
     let created = 0
     const from = new Date(`${start}T12:00:00`)
@@ -1230,6 +1387,7 @@ export class AttendanceService {
       d.setDate(d.getDate() + 1), i++
     ) {
       const date = ymd(d)
+      if (suspendedDates.has(date)) continue
       if (em) {
         // Rebuilding a payroll draft needs current dated quantities even for an
         // existing present/holiday row; computeDay itself preserves closed days.
@@ -1568,6 +1726,159 @@ export class AttendanceService {
       all.filter((o) => o.date >= start && o.date <= endStr),
       user
     )
+  }
+
+  // ===== إسناد وردية لمدة (شهر أو أي مدى) مرة واحدة =====
+  // نفس تخزين الجدول: كل أسبوع كامل جوه المدة (من غير تحديد أيام) = وردية أسبوع،
+  // والباقي (أطراف المدة أو أيام أسبوع بعينها) = وردية يوم خاص. كل يوم متغطّي
+  // ياخد الوردية دي: الأيام الخاصة القديمة جوه المدة بتتشال إلا مع keepDayOverrides.
+  // كل موظف في معاملة لوحده بنفس الأقفال وحماية المسيرات المعتمدة، وأيامه اللي
+  // فاتت (والجار الليلي) بتتحسب تاني زي إسناد اليوم الواحد
+  async assignScheduleRange(dto: {
+    employeeIds: number[]
+    from: string
+    to: string
+    weekdays?: number[]
+    shiftId: number
+    keepDayOverrides?: boolean
+  }, user?: JwtPayload /* بلا مستخدم = نداء داخلي موثوق */) {
+    const real = (v: unknown) => typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) && localDateOf(new Date(`${v}T12:00:00`)) === v
+    if (!real(dto.from) || !real(dto.to)) throw new BadRequestException('التاريخ لازم يكون تاريخ حقيقي بصيغة YYYY-MM-DD')
+    if (dto.from > dto.to) throw new BadRequestException('تاريخ البداية بعد تاريخ النهاية')
+    const total = Math.round((Date.parse(`${dto.to}T12:00:00Z`) - Date.parse(`${dto.from}T12:00:00Z`)) / 86400000) + 1
+    if (total > MAX_RANGE_DAYS) throw new BadRequestException(`المدة لا تزيد عن ${MAX_RANGE_DAYS} يوم`)
+    const weekdays = [...new Set((dto.weekdays ?? []).map(Number))]
+    if (weekdays.some(d => !Number.isInteger(d) || d < 0 || d > 6)) throw new BadRequestException('أيام الأسبوع أرقام من 0 (الأحد) إلى 6 (السبت)')
+    const allDays = weekdays.length === 0 || weekdays.length === 7
+    const dates: string[] = []
+    for (let i = 0; i < total; i++) {
+      const date = dateAfter(dto.from, i)
+      if (allDays || weekdays.includes(new Date(`${date}T12:00:00`).getDay())) dates.push(date)
+    }
+    if (!dates.length) throw new BadRequestException('مفيش أيام في المدة دي من الأيام المختارة')
+    const shiftId = Number(dto.shiftId)
+    if (!Number.isInteger(shiftId) || shiftId < 1) throw new BadRequestException('اختار الوردية')
+
+    // الأسابيع الكاملة (الأحد للسبت) جوه المدة — والباقي أيام خاصة
+    const weeks = allDays ? dates.filter(date => weekKeyOf(date) === date && dateAfter(date, 6) <= dto.to) : []
+    const weekOf = (week: string) => Array.from({ length: 7 }, (_, offset) => dateAfter(week, offset))
+    const inWeeks = new Set(weeks.flatMap(weekOf))
+    const dayDates = dates.filter(date => !inWeeks.has(date))
+    // الوردية لازم تكون سارية في كل أيام المدة — وإلا الطلب كله مرفوض قبل أي كتابة
+    type Snapshot = { shiftId: number | null; shiftName: string; startTime: string; endTime: string }
+    const weekShift = new Map<string, Snapshot>()
+    const dayShift = new Map<string, Snapshot>()
+    for (const week of weeks) weekShift.set(week, await this.scheduleShift({ shiftId }, weekOf(week)))
+    for (const date of dayDates) dayShift.set(date, await this.scheduleShift({ shiftId }, [date]))
+
+    let employeeIds = [...new Set((dto.employeeIds ?? []).map(Number))].filter(id => Number.isInteger(id) && id > 0)
+    if (!employeeIds.length) throw new BadRequestException('اختار موظف واحد على الأقل')
+    const emps = await this.employees.find({ where: { id: In(employeeIds) } })
+    const byId = new Map(emps.map(e => [e.id, e]))
+    const skipped: Array<{ employeeId: number; reason: string }> = []
+    // وردية خاصة بفرع تتسند لموظفي فرعها بس — نفس قاعدة إسناد اليوم الواحد
+    const shiftRow = await this.shiftsCatalog.findOneBy({ id: shiftId })
+    const shiftBranch = shiftRow?.branchId ?? null
+    employeeIds = employeeIds.filter(id => {
+      const emp = byId.get(id)
+      const reason = !emp ? 'الموظف غير موجود'
+        : (user ? this.writeBlock(user, emp, 'لا يمكنك تعديل ورديتك بنفسك') : null)
+          ?? (shiftBranch != null && Number(emp.branchId) !== Number(shiftBranch) ? `الوردية «${shiftRow!.name}» خاصة بفرع تاني` : null)
+      if (reason) skipped.push({ employeeId: id, reason })
+      return !reason
+    })
+    if (!employeeIds.length) throw new ForbiddenException([...new Set(skipped.map(s => s.reason))].join('، '))
+
+    const plan = { dates, weeks, dayDates, weekShift, dayShift, keep: !!dto.keepDayOverrides }
+    const failed: Array<{ employeeId: number; error: string }> = []
+    const recomputeFailed: Array<{ employeeId: number; date: string }> = []
+    let applied = 0, recomputed = 0, removedOverrides = 0, keptOverrides = 0
+    for (const employeeId of employeeIds) {
+      try {
+        const result = await this.days.manager.transaction(em => this.inManager(em).applyScheduleRange(employeeId, plan))
+        applied++
+        recomputed += result.recomputed
+        removedOverrides += result.removedOverrides
+        keptOverrides += result.keptOverrides
+        recomputeFailed.push(...result.failed.map(date => ({ employeeId, date })))
+      } catch (e) {
+        const known = e instanceof HttpException
+        if (!known) this.logger.warn(`تعذر إسناد وردية المدة للموظف ${employeeId}: ${(e as Error)?.message}`)
+        failed.push({ employeeId, error: known ? (e as HttpException).message : 'خطأ غير متوقع أثناء حفظ الوردية' })
+      }
+    }
+    return {
+      ok: true, applied, employees: employeeIds.length, dates: dates.length, weeks: weeks.length,
+      days: dayDates.length, removedOverrides, keptOverrides, recomputed, recomputeFailed, failed, skipped,
+    }
+  }
+
+  private async applyScheduleRange(employeeId: number, plan: {
+    dates: string[]; weeks: string[]; dayDates: string[]; keep: boolean
+    weekShift: Map<string, { shiftId: number | null; shiftName: string; startTime: string; endTime: string }>
+    dayShift: Map<string, { shiftId: number | null; shiftName: string; startTime: string; endTime: string }>
+  }) {
+    const { dates, weeks, dayDates, weekShift, dayShift, keep } = plan
+    await lockAttendanceRuleMutation(this.days.manager, [employeeId])
+    const first = dates[0], last = dates[dates.length - 1]
+    await assertAttendanceRulePeriodOpen(this.days.manager, [employeeId], first, last)
+    // الجيران برا المدة: ليلة اليوم اللي قبلها حدّها بداية أول يوم، وليلة آخر يوم
+    // (قبل أو بعد الإسناد) بتمتد لصباح اللي بعده — نفس فحص تجاوز اليوم الواحد
+    const covered = new Set(dates)
+    const neighbors = new Set<string>()
+    const newShift = (date: string) => dayShift.get(date) ?? weekShift.get(weekKeyOf(date))!
+    for (const date of dates) {
+      const prev = dateAfter(date, -1), next = dateAfter(date, 1)
+      if (!covered.has(prev) && !neighbors.has(prev)) {
+        const shift = await this.shiftFor(employeeId, prev)
+        if (isOvernight(shift.start, shift.end)) {
+          await assertAttendanceRulePeriodOpen(this.days.manager, [employeeId], prev, prev)
+          neighbors.add(prev)
+        }
+      }
+      if (!covered.has(next) && !neighbors.has(next)) {
+        const before = await this.shiftFor(employeeId, date), after = newShift(date)
+        if (isOvernight(before.start, before.end) || isOvernight(after.startTime, after.endTime)) {
+          await assertAttendanceRulePeriodOpen(this.days.manager, [employeeId], next, next)
+          neighbors.add(next)
+        }
+      }
+    }
+    const existing = await this.dayOverrides.find({ where: { employeeId, date: Between(first, last) } })
+    const existingOn = new Map(existing.map(row => [String(row.date).slice(0, 10), row]))
+    let removedOverrides = 0, keptOverrides = 0
+    for (const week of weeks) {
+      let row = await this.schedule.findOne({ where: { weekStart: week, employeeId } })
+      if (!row) row = this.schedule.create({ weekStart: week, employeeId })
+      Object.assign(row, weekShift.get(week))
+      await this.schedule.save(row)
+      const inWeek = existing.filter(o => { const d = String(o.date).slice(0, 10); return d >= week && d <= dateAfter(week, 6) })
+      if (keep) keptOverrides += inWeek.length
+      else if (inWeek.length) {
+        await this.dayOverrides.delete({ id: In(inWeek.map(o => o.id)) })
+        removedOverrides += inWeek.length
+      }
+    }
+    for (const date of dayDates) {
+      const current = existingOn.get(date)
+      if (current && keep) { keptOverrides++; continue }
+      const row = current ?? this.dayOverrides.create({ employeeId, date })
+      Object.assign(row, dayShift.get(date))
+      await this.dayOverrides.save(row)
+    }
+    // الأيام اللي فاتت (والجار الليلي): المحسوب أو اللي فيه بصمات بس — مفيش يوم يتختلق
+    const today = localDateOf(new Date())
+    let recomputed = 0
+    const failed: string[] = []
+    for (const date of [...new Set([...dates, ...neighbors])].filter(d => d <= today).sort()) {
+      try {
+        if (await this.recomputeIfTouched(employeeId, date)) recomputed++
+      } catch (e) {
+        failed.push(date)
+        this.logger.warn(`تعذر إعادة حساب ${date} للموظف ${employeeId} بعد إسناد وردية المدة: ${(e as Error).message}`)
+      }
+    }
+    return { recomputed, removedOverrides, keptOverrides, failed }
   }
 
   // الأذونات المعتمدة لليوم — نوافذ [from, to] بالدقائق مع نوع الخصم
@@ -2206,13 +2517,12 @@ export class AttendanceService {
     // يوم مستقبلي لا يُحفظ له صف (لا «غائب» مقدماً ولا حضور) إلا الإجازة الكاملة
     // والعطلة — حقائق معروفة سلفاً. وأي صف قديم له يُمسح: سحب/إلغاء إجازة
     // مستقبلية كان يكتب أيامها «غائب» قبل أن تأتي فتدخل التقارير والمسير.
-    // والمأمورية/العمل عن بُعد المعتمد كذلك (طلب مكتمل لا يُلغى بعد اعتماده)
-    const persist =
-      !isFuture ||
-      status === 'leave' ||
-      status === 'holiday' ||
-      status === 'mission' ||
-      status === 'remote'
+    // والمأمورية/العمل عن بُعد المعتمد كذلك (طلب مكتمل لا يُلغى بعد اعتماده).
+    // ويوم الإيقاف عن العمل بلا بصمة مش غياب على أي مسار (إلغاء إجازة، حذف بصمة، اعتماد طلب،
+    // إعادة حساب): ما يتحفظش «غائب» وأي غياب قديم له يتمسح — المسير بيخصمه يوم إيقاف بس
+    const suspendedAbsence = status === 'absent' &&
+      (await suspendedDatesBetween(this.days.manager, employeeId, date, date)).has(date)
+    const persist = attendanceDayPersists(status, isFuture, suspendedAbsence)
     let day = persist ? await this.days.findOne({ where: { employeeId, date } }) : null
     const storedShift = day ? { start: day.shiftStart, end: day.shiftEnd } : null
     if (!day) day = this.days.create({ employeeId, date })
@@ -2251,10 +2561,17 @@ export class AttendanceService {
       computedAt: new Date(),
     })
     // EX-14: إظهار يوم مفقود أو إعادة تفسير exempt قديم لا يكتب حضورًا من GET.
-    if (readOnly) return this.exemptionView(day, exemption)
+    if (readOnly) return Object.assign(this.exemptionView(day, exemption), suspendedAbsence ? { suspended: true } : {})
     if (!persist) {
       await this.days.delete({ employeeId, date })
-      return this.exemptionView(day, exemption) // نتيجة للعرض فقط — غير محفوظة
+      if (suspendedAbsence && !isFuture) {
+        // يوم الإيقاف المنقضي بلا بصمة: مكتشف قديم لليوم مالوش مبرر، والجار الليلي يتعاد زي اليوم المحفوظ
+        await this.clearStaleOvertime(employeeId, date, 'لا بصمة دخول وخروج لليوم')
+        if (cascade) await this.recomputeNightNeighbors(employeeId, date, frame, shift.start,
+          storedDay ? { start: storedDay.shiftStart, end: storedDay.shiftEnd } : null)
+      }
+      // نتيجة للعرض فقط — غير محفوظة (suspended: يوم إيقاف مش غياب)
+      return Object.assign(this.exemptionView(day, exemption), suspendedAbsence ? { suspended: true } : {})
     }
     day = await this.days.save(day)
 
@@ -3076,8 +3393,11 @@ export class AttendanceService {
     const fullLeave = new Set(leaves.filter(l => (l.period ?? 'FULL') === 'FULL').map(l => l.employeeId))
     const exemptions = await this.exemptionsFor(emps.map(emp => emp.id), date, date)
     const excuses = await this.approvedDayExcuses(emps.map(emp => emp.id), date)
+    // الموقوف عن العمل النهارده مش غائب
+    const suspensions = await readOpenSuspensions(this.days.manager, date)
     const candidates = emps.filter(emp => !touched.has(emp.id) && !fullLeave.has(emp.id) && !excuses.has(emp.id)
-      && !exemptionOnDate(exemptions.get(emp.id) ?? [], date))
+      && !exemptionOnDate(exemptions.get(emp.id) ?? [], date)
+      && !(suspensions.get(emp.id) ?? []).some(period => suspensionCovers(period, date)))
     const out: Array<AttendanceDay & { live: true }> = []
     for (let i = 0; i < candidates.length; i += 20) {
       const batch = await Promise.all(candidates.slice(i, i + 20).map(async emp => {

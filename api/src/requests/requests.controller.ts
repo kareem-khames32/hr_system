@@ -28,6 +28,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, Roles, RolesGuard, userHasPerm } from '../auth/guards'
 import { EmployeesService } from '../employees/employees.service'
 import { LeaveType } from './entities/leave.entities'
+import { definitionBranchQuery, definitionBranchWhere } from '../common/definition-branch'
 import { LeaveBalancesService } from './leave-balances.service'
 import { RequestsService } from './requests.service'
 import { leaveTypeView } from '../common/leave-contract'
@@ -148,12 +149,15 @@ export class RequestsController {
 
   // أنواع الإجازة الفعّالة لشاشات التقديم (خدمة ذاتية — أي مستخدم مسجّل).
   // حقول العرض فقط؛ الإدارة الكاملة تبقى على /settings/leave-types (settings.manage)
+  // نوع الإجازة الخاص بفرع يظهر لفرعه بس (قرار المالك 16 سبتمبر): حساب الفرع = العام + فرعه،
+  // والحساب العام = الكل أو (مع ?branchId=) العام + فرع الموظف اللي بيقدّم له
   @Get(['requests/leave-types', 'leaves/types'])
-  async activeLeaveTypes() {
+  async activeLeaveTypes(@CurrentUser() user: JwtPayload, @Query('branchId') branchIdRaw?: string) {
     return (await this.leaveTypes.find({
-      where: { isActive: true },
+      where: definitionBranchWhere<LeaveType>(user, { isActive: true }, definitionBranchQuery(branchIdRaw)),
       select: {
         id: true,
+        branchId: true,
         code: true,
         nameAr: true,
         isPaid: true,
@@ -244,8 +248,9 @@ export class RequestsController {
 
   @Perm('leave_balances.manage')
   @Post(['requests/leave-balances/rollover/:fromPeriod', 'leaves/balances/rollover/:fromPeriod'])
-  rollover(@Param('fromPeriod') fromPeriod: string) {
-    return this.balances.rollover(fromPeriod)
+  rollover(@CurrentUser() user: JwtPayload, @Param('fromPeriod') fromPeriod: string) {
+    // فصل الفروع: HR الفرع لا يرحّل أرصدة فروع أخرى
+    return this.balances.rollover(fromPeriod, branchScopeOf(user))
   }
 
   // «طلباتي»: طلبات صاحب الحساب. شاشة «طلباتي» وحدها تطلب معها ما قدّمه نيابةً

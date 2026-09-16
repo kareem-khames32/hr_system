@@ -154,9 +154,12 @@ before(async () => {
   users.manager = await user('direct-manager', 'employee', people.manager.id)
   users.e1 = await user('employee-e1', 'employee', people.e1.id)
   users.e2 = await user('employee-e2', 'employee', people.e2.id)
-  types.quality = expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'EX_QUALITY', nameAr: 'خصم جودة', category: 'PERFORMANCE', calcMethod: 'FIXED_AMOUNT',
+  // أنواع الخصومات لكل الشركة: بتتضاف من حساب على مستوى الشركة، وموارد الفرع (hr) تشتغل عليها بس
+  users.admin = await repo('User').save({ email: 'admin@exemptions.invalid', displayName: 'admin', passwordHash: 'test-only', role: 'super_admin', branchId: null, employeeId: null, permissions: '[]' })
+  expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'EX_BRANCH_HR', nameAr: 'من حساب فرع', category: 'PERFORMANCE', calcMethod: 'FIXED_AMOUNT' }), 403)
+  types.quality = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'EX_QUALITY', nameAr: 'خصم جودة', category: 'PERFORMANCE', calcMethod: 'FIXED_AMOUNT',
     creatorScopes: ['DIRECT_MANAGER', 'HR'], approvalSteps: ['HR'], escalationDays: null, isExemptable: true }), 201)
-  types.statutory = expectStatus(await request(users.hr, 'POST', '/deductions/types', { code: 'EX_STATUTORY', nameAr: 'استقطاع نظامي', category: 'STATUTORY', calcMethod: 'FIXED_AMOUNT',
+  types.statutory = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'EX_STATUTORY', nameAr: 'استقطاع نظامي', category: 'STATUTORY', calcMethod: 'FIXED_AMOUNT',
     creatorScopes: ['HR'], approvalSteps: ['HR'], escalationDays: null, maxPctOfGross: null }), 201)
   assert.equal(types.statutory.isExemptable, false)
 }, { timeout: 180000 })

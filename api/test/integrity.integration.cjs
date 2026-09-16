@@ -17,6 +17,7 @@ let admin, hr, employee, outsider, branch, otherBranch, emp, otherEmp
 const repos = {}
 const { JwtService } = require('../node_modules/@nestjs/jwt')
 const jwt = new JwtService({ secret })
+const { employeeRequiredFields } = require('./helpers/employee-fixture.cjs')
 function token(user) {
   return jwt.sign({ sub: user.id, role: user.role, email: user.email, branchId: user.branchId ?? null,
     employeeId: user.employeeId ?? null, tokenVersion: user.tokenVersion ?? 0,
@@ -178,11 +179,16 @@ test('EMP-8 lifecycle statuses cannot be changed through generic patch and statu
   }
   assert.equal((await request(hr, 'PATCH', `/employees/${target.id}`, { branchId: otherBranch.id })).status, 403)
   assert.equal((await request(admin, 'PATCH', `/employees/${target.id}`, { branchId: null })).status, 400)
-  const suspend = await request(admin, 'PATCH', `/employees/${target.id}`, { status: 'suspended' })
-  assert.equal(suspend.status, 200, JSON.stringify(suspend.body)); assert.equal(suspend.body.isActive, false)
+  // الإيقاف بقى مؤرخًا (POST /employees/:id/suspensions) — «suspended» مباشرة من التعديل العام مرفوضة ولا تغيّر شيئًا
+  const directSuspend = await request(admin, 'PATCH', `/employees/${target.id}`, { status: 'suspended' })
+  assert.equal(directSuspend.status, 400, JSON.stringify(directSuspend.body))
+  assert.equal((await repos.Employee.findOneByOrFail({ id: target.id })).status, 'active')
+  // تغيير الحالة المسموح من التعديل العام (نشط → تحت التجربة) يُسجَّل ويبطل جلسات المستخدم المرتبط
+  const probation = await request(admin, 'PATCH', `/employees/${target.id}`, { status: 'probation' })
+  assert.equal(probation.status, 200, JSON.stringify(probation.body)); assert.equal(probation.body.isActive, true)
   const history = await entity('requests/entities/employment.entities','EmployeeStatusHistory').findBy({ employeeId: target.id })
-  assert.equal(history.length, 1); assert.equal(history[0].oldStatus,'active'); assert.equal(history[0].newStatus,'suspended')
-  assert.equal((await repos.User.findOneBy({id:user.id})).isActive,false)
+  assert.equal(history.length, 1); assert.equal(history[0].oldStatus,'active'); assert.equal(history[0].newStatus,'probation')
+  assert.equal((await repos.User.findOneBy({id:user.id})).tokenVersion,1)
   assert.equal((await request(user,'GET','/attendance/my-today')).status,401)
 })
 
@@ -190,8 +196,10 @@ test('EMP-12 clearing contract and relations persists and retained incompatible 
   const deptRepo = entity('org/entities/department.entity','Department')
   const dept = await deptRepo.save({ name: 'Integrity contract', branchId: branch.id })
   const target = await employeeFixture({ departmentId: dept.id, managerEmployeeId: emp.id, contractStart:'2026-01-01',contractEnd:'2026-12-31' })
-  const result = await request(admin, 'PATCH', `/employees/${target.id}`, { contractStart:'2027-01-01',contractEnd:null,departmentId:null,managerEmployeeId:null })
-  assert.equal(result.status,200,JSON.stringify(result.body)); assert.equal(result.body.contractEnd,null); assert.equal(result.body.departmentId,null); assert.equal(result.body.managerEmployeeId,null)
+  // القسم بقى إجباريًا (قرار المالك 16 سبتمبر): مسحه مرفوض، وباقي العلاقات والعقد تتمسح عادي
+  assert.equal((await request(admin, 'PATCH', `/employees/${target.id}`, { departmentId:null })).status,400)
+  const result = await request(admin, 'PATCH', `/employees/${target.id}`, { contractStart:'2027-01-01',contractEnd:null,managerEmployeeId:null })
+  assert.equal(result.status,200,JSON.stringify(result.body)); assert.equal(result.body.contractEnd,null); assert.equal(result.body.departmentId,dept.id); assert.equal(result.body.managerEmployeeId,null)
   await repos.Employee.update({id:target.id},{ departmentId:dept.id })
   assert.equal((await request(admin, 'PATCH', `/employees/${target.id}`, { branchId:otherBranch.id })).status,400)
 })
@@ -522,17 +530,17 @@ test('document attachment ownership links preliminary uploads and blocks forged 
   const photo=await makeFile({entityType:'employee_photo',mime:'image/png'})
   const attachment=await makeFile()
   const code='ATT'+crypto.randomBytes(4).toString('hex')
-  const createdEmployee=await request(uploader,'POST','/employees',{employeeCode:code,fullName:'Attachment lifecycle',branchId:branch.id,basicSalary:5000,joinDate:'2026-01-01',photoFileId:photo.id,contractFileRef:`file:${contract.id}`,documentRefs:[{docType:'contract',fileRef:`file:${attachment.id}`}]})
+  const createdEmployee=await request(uploader,'POST','/employees',{...(await employeeRequiredFields(ds,branch.id)),employeeCode:code,fullName:'موظف دورة المرفقات',branchId:branch.id,basicSalary:5000,joinDate:'2026-01-01',photoFileId:photo.id,contractFileRef:`file:${contract.id}`,documentRefs:[{docType:'contract',fileRef:`file:${attachment.id}`}]})
   assert.equal(createdEmployee.status,201,JSON.stringify(createdEmployee.body))
   for(const file of [contract,photo,attachment])assert.equal((await files.findOneByOrFail({id:file.id})).employeeId,createdEmployee.body.id)
   assert.equal(await docs.count({where:{employeeId:createdEmployee.body.id}}),2)
   const rollbackFile=await makeFile()
   const rollbackCode='BAD'+crypto.randomBytes(4).toString('hex')
-  const bad=await request(uploader,'POST','/employees',{employeeCode:rollbackCode,fullName:'Must rollback',branchId:branch.id,basicSalary:5000,joinDate:'2026-01-01',documentRefs:[{docType:'contract',fileRef:`file:${rollbackFile.id}`},{docType:'contract',fileRef:`file:${unknown.id}`}]})
+  const bad=await request(uploader,'POST','/employees',{...(await employeeRequiredFields(ds,branch.id)),employeeCode:rollbackCode,fullName:'موظف يجب التراجع عنه',branchId:branch.id,basicSalary:5000,joinDate:'2026-01-01',documentRefs:[{docType:'contract',fileRef:`file:${rollbackFile.id}`},{docType:'contract',fileRef:`file:${unknown.id}`}]})
   assert.equal(bad.status,403,JSON.stringify(bad.body))
   assert.equal(await repos.Employee.count({where:{employeeCode:rollbackCode}}),0)
   assert.equal((await files.findOneByOrFail({id:rollbackFile.id})).employeeId,emp.id)
-  const edit=await request(uploader,'PATCH',`/employees/${target.id}`,{fullName:'Must not change',documentRefs:[{docType:'contract',fileRef:`file:${unknown.id}`}]})
+  const edit=await request(uploader,'PATCH',`/employees/${target.id}`,{fullName:'اسم لا يجب أن يتغير',documentRefs:[{docType:'contract',fileRef:`file:${unknown.id}`}]})
   assert.equal(edit.status,403)
   assert.equal((await repos.Employee.findOneByOrFail({id:target.id})).fullName,target.fullName)
 })

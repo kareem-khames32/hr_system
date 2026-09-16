@@ -43,7 +43,7 @@ const fail = (code: string, message: string, details: Record<string, unknown> = 
 }
 const D = (value: string) => PayrollDecimal.from(value)
 const ZERO = D('0'), HUNDRED = D('100')
-const money = (value: PayrollDecimal) => value.format(2, 'HALF_UP')
+const money = (value: PayrollDecimal) => value.format(2, 'DOWN')
 
 /** نص عشري قانوني من رقم أو نص؛ بلا تقريب صامت للمنازل الزائدة. */
 export function bonusDecimal(value: unknown, label: string, options: { scale: number; positive?: boolean; max?: string }): string {

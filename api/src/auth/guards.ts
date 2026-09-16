@@ -2,6 +2,7 @@ import {
   CanActivate,
   createParamDecorator,
   ExecutionContext,
+  ForbiddenException,
   Injectable,
   SetMetadata,
 } from '@nestjs/common'
@@ -76,3 +77,9 @@ export const branchScopeOf = (user: JwtPayload): number | null =>
     : Number.isInteger(user.branchId) && Number(user.branchId) > 0
       ? Number(user.branchId)
       : -1 // Unassigned legacy accounts have an empty scope, never global access.
+
+// عزل الفروع: إعداد يسري على كل الشركة (سياسات النظام، سقوف السلف، شرائح التأخير) لا يعدّله حساب مقفول على فرع،
+// عشان تعديله بيغيّر الفروع التانية. يشوفه عادي، والتعديل لحساب على مستوى الشركة.
+export const assertCompanyWideWrite = (user: JwtPayload): void => {
+  if (branchScopeOf(user) !== null) throw new ForbiddenException('الإعداد ده لكل الشركة، ومش بيتعدل من حساب فرع — يعدّله حساب على مستوى الشركة')
+}
