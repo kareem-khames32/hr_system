@@ -166,3 +166,45 @@ curl http://10.23.0.222:4000/api/health
 - قاعدة البيانات: `BACKUP DATABASE [hr_system] TO DISK = N'/var/opt/mssql/backup/hr_system_<تاريخ>.bak' WITH COPY_ONLY, CHECKSUM` يوميًا.
 - فولدر `uploads` مع نفس النسخة.
 - التعديلات على المخطط بعد كده بالمُرحّل بس: `node api/scripts/db-migrate.cjs plan --company` ثم `apply --company` (والـAPI واقف).
+
+---
+
+## 10) الوضع الفعلي على السيرفر (تم التنفيذ 2026-09-17)
+
+| | |
+|---|---|
+| السيرفر | `OUTLOOK-HQ` — `10.23.0.222` (ويندوز) |
+| SQL Server | **2019 Enterprise** (15.0.2000.5)، الـinstance الافتراضي `MSSQLSERVER` على 1433 |
+| قاعدة النظام | `hr_system` — 110 جدول، 37,453 صف |
+| الـAPI | `http://10.23.0.222:4000/api` |
+| الواجهة | `http://10.23.0.222:3001` |
+| مجلد المرفوعات | `C:/Users/Kareem.khamis/Documents/hr_system/api/uploads` |
+| النسخ الاحتياطية | `C:\SQLBackup\` |
+
+> **بورت 3000 محجوز**: عليه نظام «حصل بلس» شغال على نفس السيرفر (وقاعدته `HasselPlus` على نفس الـinstance).
+> عشان كده واجهتنا على **3001** — ولازم `FRONTEND_URL` في `api/.env` يفضل مطابق ليه وإلا CORS هيرفض.
+
+### ملاحظة على نقل البيانات
+
+النسخة الاحتياطية الأصلية (`hr_system_deploy_20260917131043.bak`) اتعملت على **SQL Server 2022**،
+والسيرفر ده عليه **2019** — وSQL Server مابيرجّعش نسخة من إصدار أحدث لإصدار أقدم.
+الحل اللي اتنفذ: instance مؤقت أحدث اتثبت لقراءة النسخة، اتسحب منه المخطط بـSMO (مولّد لصيغة 2019)،
+واتنقلت كل الصفوف، والتحقق كان:
+
+- عدد الصفوف مطابق في كل الـ110 جدول (37,453 صف)،
+- مقارنة قيمة بقيمة للجداول اللي اختلفت بصمتها (فرق أنواع `ntext` بس) — كلها متطابقة،
+- كل القيود اترجعت بـ`WITH CHECK` من غير أي تعارض،
+- `node api/scripts/db-migrate.cjs plan` → `pending: 0` و`schema diff: 0`.
+
+**أي نسخة احتياطية جاية من جهاز تطوير عليه 2022 مش هتترجع هنا** — خد النسخ من السيرفر ده نفسه.
+
+### التحديث من git بعد أي تعديل
+
+من على السيرفر:
+
+```bash
+powershell -ExecutionPolicy Bypass -File C:\Users\Kareem.khamis\Documents\hr_system\update-from-git.ps1
+```
+
+بيعمل `git pull` ← `npm ci` ← فحص الترحيلات المعلقة (بيقف لو فيه) ← بناء ← إعادة تشغيل الخدمتين ← تحقق.
+الأسرار في `api/.env` و`.env.production.local` (الاتنين متجاهلين في git) وماتتلمسش.

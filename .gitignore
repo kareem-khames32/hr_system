@@ -49,3 +49,6 @@ public/vendor/pdfjs/
 /output/
 .next-prod/
 .claude/settings.local.json
+
+# نسخ قاعدة البيانات — بيانات حقيقية، ممنوع ترفع على git
+*.bak
