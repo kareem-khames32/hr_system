@@ -503,7 +503,8 @@ export class AttendanceController {
     if (employeeId !== undefined) return this.service.employeeWorkingDays(user, Number(employeeId), from, to)
     return (self === '1' || self === 'true') && user.employeeId
       ? this.service.workingDaysForEmployee(user.employeeId, from, to)
-      : this.service.workingDaysBetween(user.branchId ?? 1, from, to)
+      // حساب بلا فرع (مدير النظام) بياخد أول فرع فعّال بدل فرع رقم 1 اللي ممكن يكون مش موجود
+      : this.service.workingDaysForBranchOrDefault(user.branchId ?? null, from, to)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

@@ -30,6 +30,7 @@ import {
   fetchDepartments,
   fetchBranches,
   fetchConfig,
+  updateConfig,
   fetchOvertimePeriods,
   createOvertimePeriod,
   updateOvertimePeriod,
@@ -519,6 +520,9 @@ export default function OvertimePage() {
           </p>
         </div>
 
+        {/* قاعدة الحساب وشرط الاستحقاق (قاعدة المالك 17 سبتمبر) */}
+        <OvertimeRuleSection onChanged={() => load(month)} />
+
         {/* فترات فتح وقفل الإضافي — كانت في الإعدادات ← أيام العمل */}
         {canManagePeriods && <OvertimePeriodsSection onChanged={() => load(month)} />}
       </div>
@@ -553,6 +557,87 @@ export default function OvertimePage() {
 // فترات فتح وقفل الإضافي — تواريخ بعينها (زي رمضان) تفتح أو تقفل حساب الإضافي
 // بغض النظر عن الإعداد العام. المقفولة تكسب لو اتداخلوا.
 // ============================================================
+// قاعدة حساب الإضافي وشرط الاستحقاق — القيمة من إعداد overtime.detection_threshold_hours
+// ============================================================
+const THRESHOLD_KEY = 'overtime.detection_threshold_hours'
+
+function OvertimeRuleSection({ onChanged }: { onChanged: () => void }) {
+  const [saved, setSaved] = useState<string | null>(null)
+  const [value, setValue] = useState('')
+  const [canEdit, setCanEdit] = useState(false)
+  const [busy, setBusy] = useState(false)
+  const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
+
+  useEffect(() => {
+    setCanEdit(can('settings.manage'))
+    fetchConfig()
+      .then((rows) => {
+        const row = rows.find((r) => r.key === THRESHOLD_KEY)
+        setSaved(row?.value ?? null)
+        setValue(row?.value ?? '')
+      })
+      .catch(() => setSaved(null))
+  }, [])
+
+  const save = async () => {
+    const hours = Number(value)
+    if (!value.trim() || !Number.isFinite(hours) || hours < 0 || hours > 24 || Math.abs(hours * 60 - Math.round(hours * 60)) > 1e-8) {
+      setError('اكتب عدد ساعات من 0 لـ 24 يساوي دقايق صحيحة (مثال: 1 أو 0.5)')
+      return
+    }
+    setBusy(true)
+    setError('')
+    setNotice('')
+    try {
+      await updateConfig(THRESHOLD_KEY, String(hours))
+      setSaved(String(hours))
+      setValue(String(hours))
+      setNotice('اتحفظ شرط الاستحقاق — بيسري على الحساب الجاي (المعتمد قبل كده مابيتغيرش)')
+      onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر حفظ شرط الاستحقاق')
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  return (
+    <section id="overtime-rule" className="card scroll-mt-6 space-y-3">
+      <div className="flex items-center gap-3">
+        <div className="w-10 h-10 bg-indigo-100 rounded-xl flex items-center justify-center">
+          <Clock size={20} className="text-indigo-600" />
+        </div>
+        <div>
+          <h2 className="text-lg font-bold text-gray-800">إزاي الإضافي بيتحسب</h2>
+          <p className="text-sm text-gray-500">الإضافي بيتحسب بعد إكمال ساعات العمل المطلوبة لليوم، مش بعد ميعاد نهاية الوردية.</p>
+        </div>
+      </div>
+      <div className="flex flex-wrap items-center gap-2 text-sm text-gray-700">
+        <label htmlFor="overtime-threshold-hours">شرط استحقاق الإضافي: الزيادة عن ساعات العمل المطلوبة لازم توصل</label>
+        <input id="overtime-threshold-hours" type="number" min={0} max={24} step={0.25} dir="ltr"
+          className="input w-24 py-1 text-center" value={value} disabled={!canEdit || busy}
+          onChange={(e) => { setValue(e.target.value); setNotice('') }} placeholder={saved == null ? '—' : undefined} />
+        <span>ساعة — ولو وصلت بتتحسب كلها</span>
+        {canEdit && (
+          <button onClick={save} disabled={busy || value === (saved ?? '')} className="btn-primary text-sm py-1.5 px-4 disabled:opacity-50">
+            {busy ? 'بيتحفظ...' : 'حفظ'}
+          </button>
+        )}
+      </div>
+      <p className="text-xs text-gray-500 leading-relaxed">
+        مثال لوردية 9 ساعات وشرط ساعة: اشتغل 10 ساعات ← ساعة إضافي. اشتغل 9 ساعات و40 دقيقة ← صفر.
+        جه متأخر ساعة ومشي بعد الميعاد بساعة ← صفر. جه بدري ساعة ومشي في ميعاده ← ساعة إضافي.
+        الشغل الفعلي من أول بصمة دخول لآخر بصمة خروج ناقص الاستراحة غير المدفوعة ووقت الأذونات، وبعدها التقريب لتحت والسقف اليومي.
+        في الويك إند والعطلات الرسمية كل مدة الشغل بتتحسب. الوردية ممكن يكون ليها شرط خاص بيغلب الإعداد ده.
+      </p>
+      {!canEdit && <p className="text-xs text-gray-400">تعديل الشرط محتاج صلاحية الإعدادات.</p>}
+      {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">{error}</div>}
+      {notice && <div role="status" className="bg-success-50 text-success-700 rounded-xl p-3 text-sm">{notice}</div>}
+    </section>
+  )
+}
+
 const recomputeNote = (r?: ApiOvertimePeriodRecompute) =>
   r && (r.recomputed || r.failed)
     ? ` — اتحسب تاني ${r.recomputed} يوم حضور جوه الفترة${r.failed ? `، وتعذر ${r.failed}` : ''}`
@@ -661,7 +746,7 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
         <div className="p-3 rounded-xl bg-red-50 border border-red-100 flex items-start gap-2">
           <Lock size={18} className="text-red-600 mt-0.5 shrink-0" />
           <p className="text-sm text-red-700">
-            <b>مقفولة:</b> مفيش إضافي بيتحسب في الأيام دي خالص، حتى لو الإضافي العام مفتوح.
+            <b>مقفولة:</b> مفيش إضافي بيتحسب تلقائي من البصمة في الأيام دي، حتى لو الإضافي العام مفتوح. الموظف يقدر يقدّم طلب إضافي ليوم معين، ولما يتعتمد نهائي بيتحسب من بصمات اليوم بنفس القاعدة (ولو طلع صفر بيتسجل صفر).
           </p>
         </div>
       </div>

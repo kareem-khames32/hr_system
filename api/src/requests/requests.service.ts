@@ -36,6 +36,7 @@ import {
   MAX_RANGE_DAYS,
 } from '../attendance/attendance.service'
 import { OvertimeEntry } from './entities/attendance.entities'
+import { OVERTIME_ZERO_AT_APPROVAL_BLOCKERS, overtimeSubmissionBlockers } from '../attendance/overtime-evidence'
 import { ApproverResolver, ResolvedStep } from './approver-resolver.service'
 import { audienceNeedsPositions, audienceSubjectOf, requestAudienceAllows, requestTypeInBranch, type AudiencePositions } from './request-audience'
 import { definitionInBranch } from '../common/definition-branch'
@@ -1740,10 +1741,22 @@ export class RequestsService {
   }
 
   // إجازاتي المعتمدة (خدمة ذاتية) — لمنتقي «إلغاء/تعديل إجازة»
-  async myApprovedLeaves(user: JwtPayload) {
-    if (!user.employeeId) return []
+  async myApprovedLeaves(user: JwtPayload, onBehalfEmployeeId?: number) {
+    let employeeId = user.employeeId
+    // طلب إلغاء إجازة نيابةً عن موظف: إجازاته هو — بنفس صلاحية ونطاق التقديم نيابةً
+    if (onBehalfEmployeeId && onBehalfEmployeeId !== user.employeeId) {
+      const canOnBehalf = user.role === 'super_admin' || (user.permissions ?? []).includes('*') ||
+        (user.permissions ?? []).includes('requests.create_on_behalf')
+      if (!canOnBehalf) throw new ForbiddenException('لا تملك صلاحية التقديم نيابة عن الغير')
+      const target = await this.employees.findOne({ where: { id: onBehalfEmployeeId } })
+      if (!target) throw new BadRequestException('الموظف المستهدف غير موجود')
+      const scope = branchScopeOf(user)
+      if (scope !== null && target.branchId !== scope) throw new ForbiddenException('لا يمكنك تقديم طلب لموظف خارج نطاق فرعك')
+      employeeId = target.id
+    }
+    if (!employeeId) return []
     return this.ds.getRepository(Leave).find({
-      where: { employeeId: user.employeeId, status: 'APPROVED' },
+      where: { employeeId, status: 'APPROVED' },
       order: { fromDate: 'DESC' },
       take: 50,
     })
@@ -1936,6 +1949,11 @@ export class RequestsService {
       amountSnapshot: entry.amountSnapshot, hourlyRateSnapshot: entry.hourlyRateSnapshot, originalPeriod: entry.originalPeriod,
       deferredFromRunId: entry.deferredFromRunId, calculationSnapshot: saved ? { schemaVersion: saved.schemaVersion,
         submission: saved.submission ?? null, review: saved.review ?? null,
+        // نتيجة حساب طلب الفترة المقفولة وقت الاعتماد (بما فيها الصفر) — من غير تفاصيل الأجر.
+        approvalResult: saved.approvalResult ? { approvedMinutes: saved.approvalResult.approvedMinutes, detectedMinutes: saved.approvalResult.detectedMinutes,
+          rawMinutes: saved.approvalResult.rawMinutes, workedMinutes: saved.approvalResult.workedMinutes, requiredMinutes: saved.approvalResult.requiredMinutes,
+          checkIn: saved.approvalResult.evidence?.checkIn ?? null, checkOut: saved.approvalResult.evidence?.checkOut ?? null,
+          computedAt: saved.approvalResult.computedAt, message: saved.approvalResult.message } : null,
         // تفاصيل الأجر الأساسي ليست حقلاً عاماً في شاشة الطلب؛ المعتمد يرى ناتج الإضافي فقط.
         approval: approved ? { approvedMinutes: approved.approvedMinutes, hourlyRate: approved.hourlyRate, multiplier: approved.multiplier,
           amount: approved.amount, dayKind: approved.dayKind, approvedAt: approved.approvedAt, approverId: approved.approverId } : null } : null,
@@ -2322,7 +2340,13 @@ export class RequestsService {
     if (payload.previewFingerprint != null && payload.previewFingerprint !== evidence.fingerprint) {
       throw new ConflictException({ code: 'OVERTIME_PREVIEW_CHANGED', message: 'تغير سجل اليوم أو إعداد الإضافي بعد المعاينة؛ حدّث المعاينة قبل إرسال الطلب' })
     }
-    if (evidence.blockers.length) throw new BadRequestException({ message: evidence.blockers.map(blocker => blocker.message).join('؛ '), blockers: evidence.blockers })
+    // الفترة المقفولة (قاعدة المالك): طلب ليوم بصماته لسه ناقصة أو زيادته أقل من الشرط مقبول،
+    // والإضافي بيتحسب من البصمات وقت الاعتماد النهائي بنفس القاعدة.
+    const deferral = overtimeSubmissionBlockers(evidence, automatic)
+    if (deferral.blockers.length) throw new BadRequestException({ message: deferral.blockers.map(blocker => blocker.message).join('؛ '), blockers: deferral.blockers })
+    // في الفترة المقفولة الطلب دايمًا بيتحسب من بصمات اليوم وقت الاعتماد (قاعدة المالك)، حتى لو بصماته كاملة وقت التقديم —
+    // عشان سحب بصمات متأخر من الجهاز مايوقفش الاعتماد
+    const computeAtApproval = deferral.deferred.length > 0 || (!automatic && !evidence.window.open && evidence.evidenceMode === 'PUNCH')
     if (!evidence.window.open && !String(payload.reason ?? '').trim()) throw new BadRequestException('سبب طلب الإضافي إلزامي داخل الفترة المغلقة')
     this.assertOvertimeChain(steps, evidence.evidenceMode === 'EXEMPT_APPROVAL')
     await assertOvertimeSubmission(em, evidence, entry?.id)
@@ -2342,7 +2366,8 @@ export class RequestsService {
     entry.hoursActual = evidence.evidenceMode === 'PUNCH' ? evidence.detectedMinutes / 60 : null
     entry.payableHours = null
     entry.status = 'SUBMITTED'
-    entry.calculationSnapshot = { schemaVersion: 1, submission: { evidence, requestedMinutes, submittedAt: new Date().toISOString(), submittedByUserId: actorUserId } }
+    entry.calculationSnapshot = { schemaVersion: 1, submission: { evidence, requestedMinutes, submittedAt: new Date().toISOString(), submittedByUserId: actorUserId,
+      ...(computeAtApproval ? { computeAtApproval: true, deferredBlockers: deferral.deferred } : {}) } }
     await repo.save(entry)
     await claimOvertimeDay(em, entry)
     await appendOvertimeEvent(em, { entryId: entry.id, requestId: req.id, actorUserId, eventType: resubmission || before?.submission ? 'RESUBMITTED' : 'SUBMITTED',
@@ -2362,14 +2387,44 @@ export class RequestsService {
     return evidence
   }
 
+  // طلب اتقدّم في فترة مقفولة قبل اكتمال بصماته: إضافيه بيتحسب من البصمات وقت الاعتماد مش من دليل التقديم.
+  private overtimeComputedAtApproval(entry: OvertimeEntry) {
+    return entry.calculationSnapshot?.submission?.computeAtApproval === true && !entry.calculationSnapshot?.approval
+  }
+
+  // نفس قاعدة الإضافي (الشغل الفعلي − المطلوب) على بصمات اللحظة؛ النافذة المقفولة مابتمنعش الحساب.
+  // مفيش بصمات أو الزيادة أقل من الشرط = صفر؛ البصمة الناقصة أو يوم لسه ماجاش أو أي تعارض بيمنع الاعتماد.
+  private async approvalTimeOvertimeEvidence(em: EntityManager, req: Request, entry: OvertimeEntry) {
+    if (['APPROVED', 'PAID', 'REJECTED', 'CANCELLED'].includes(entry.status)) throw new ConflictException('حالة سجل الإضافي لا تسمح باعتماده')
+    const evidence = await this.attendance.overtimeEvidence(entry.employeeId, entry.date, em)
+    if (evidence.evidenceMode !== 'PUNCH') throw new ConflictException('الموظف بقى مستثنى من الحضور في اليوم ده؛ أرجع الطلب عشان يتقدم بساعات صريحة')
+    const hard = evidence.blockers.filter(blocker => !OVERTIME_ZERO_AT_APPROVAL_BLOCKERS.includes(blocker.code))
+      .map(blocker => blocker.code === 'FUTURE_DATE' ? { ...blocker, message: 'يوم الإضافي لسه ماخلصش؛ الاعتماد النهائي بعد اليوم عشان الإضافي يتحسب من بصماته' } : blocker)
+    if (hard.length) throw new BadRequestException({ message: hard.map(blocker => blocker.message).join('؛ '), blockers: hard })
+    // يوم الإضافي هو النهارده: الموظف ممكن لسه مابصمش انصراف، فالاعتماد النهائي بيستنى لبكرة بدل ما يتقفل على صفر
+    if (entry.date >= localDateOf(new Date())) {
+      throw new BadRequestException('يوم الإضافي لسه ماخلصش؛ الاعتماد النهائي من بكرة عشان الإضافي يتحسب من بصمات اليوم كاملة')
+    }
+    this.assertOvertimeChain(this.parseSteps(req.resolvedSteps), false)
+    return evidence
+  }
+
   private async reviewOvertimeApproval(em: EntityManager, req: Request, user: JwtPayload, dto: ActDto) {
     const entry = await this.overtimeEntryForRequest(em, req)
     if (!entry) throw new ConflictException('طلب إضافي قديم بلا سجل ودليل تقديم؛ أرجعه ثم أعد تقديمه قبل الاعتماد')
-    const evidence = await this.currentOvertimeEvidence(em, req, entry)
+    const atApproval = this.overtimeComputedAtApproval(entry)
+    // الخطوات الوسيطة لطلب بيتحسب وقت الاعتماد مابتحتاجش بصمات لسه، إلا لو المعتمد بيخفض الدقائق.
+    if (atApproval && dto.approvedMinutes == null) {
+      if (dto.reductionReason != null) throw new BadRequestException('سبب التخفيض يحتاج تحديد الدقائق المعتمدة')
+      this.assertOvertimeChain(this.parseSteps(req.resolvedSteps), false)
+      return
+    }
+    const evidence = atApproval ? await this.approvalTimeOvertimeEvidence(em, req, entry) : await this.currentOvertimeEvidence(em, req, entry)
     const requested = entry.calculationSnapshot!.submission.requestedMinutes
     const cap = evidence.evidenceMode === 'EXEMPT_APPROVAL' ? requested : Math.min(evidence.detectedMinutes, requested ?? evidence.detectedMinutes)
-    const currentMinutes = entry.calculationSnapshot?.review?.approvedMinutes ?? cap
-    if (!Number.isSafeInteger(currentMinutes) || currentMinutes <= 0) throw new BadRequestException('لا توجد دقائق إضافي موجبة قابلة للاعتماد')
+    const reviewed = entry.calculationSnapshot?.review?.approvedMinutes
+    const currentMinutes = atApproval && reviewed != null ? Math.min(reviewed, cap) : reviewed ?? cap
+    if (!Number.isSafeInteger(currentMinutes) || currentMinutes <= 0) throw new BadRequestException(atApproval ? 'الإضافي المحسوب من بصمات اليوم = 0 دقيقة؛ مفيش دقائق تتخفض' : 'لا توجد دقائق إضافي موجبة قابلة للاعتماد')
     if (dto.approvedMinutes != null) {
       if (!Number.isSafeInteger(dto.approvedMinutes) || dto.approvedMinutes <= 0 || dto.approvedMinutes > currentMinutes) throw new BadRequestException('الدقائق المعتمدة يجب أن تكون موجبة ولا تزيد عن آخر حد معتمد')
       if (dto.approvedMinutes < currentMinutes) {
@@ -2387,6 +2442,7 @@ export class RequestsService {
   private async finalizeOvertimeApproval(em: EntityManager, req: Request, actorUserId: number) {
     const entry = await this.overtimeEntryForRequest(em, req)
     if (!entry) throw new ConflictException('لا يوجد سجل إضافي مرتبط يمكن اعتماده')
+    if (this.overtimeComputedAtApproval(entry)) return this.finalizeApprovalTimeOvertime(em, req, entry, actorUserId)
     const evidence = await this.currentOvertimeEvidence(em, req, entry)
     const steps = this.parseSteps(req.resolvedSteps)
     if (steps.some(step => step.action !== 'APPROVED' || !step.actedAt)) throw new ConflictException('لم تكتمل خطوات اعتماد الإضافي')
@@ -2396,6 +2452,44 @@ export class RequestsService {
     Object.assign(entry, values, { status: 'APPROVED' })
     await em.getRepository(OvertimeEntry).save(entry)
     await appendOvertimeEvent(em, { entryId: entry.id, requestId: req.id, actorUserId, eventType: 'APPROVED', payload: { approval: entry.calculationSnapshot?.approval } })
+  }
+
+  // قاعدة المالك (3): طلب الفترة المقفولة بيتحسب إضافيه من بصمات اليوم لحظة الاعتماد النهائي بنفس القاعدة،
+  // والدقائق دي هي المعتمدة للمسير (بحد الساعات المطلوبة وتخفيض المعتمد لو موجود). لو الناتج صفر
+  // بيتسجل صفر: الطلب بيكمل، والقيد بيتقفل من غير قيمة مالية ومن غير حجز اليوم.
+  private async finalizeApprovalTimeOvertime(em: EntityManager, req: Request, entry: OvertimeEntry, actorUserId: number) {
+    const evidence = await this.approvalTimeOvertimeEvidence(em, req, entry)
+    const steps = this.parseSteps(req.resolvedSteps)
+    if (steps.some(step => step.action !== 'APPROVED' || !step.actedAt)) throw new ConflictException('لم تكتمل خطوات اعتماد الإضافي')
+    const snapshot = entry.calculationSnapshot!
+    const requested = snapshot.submission.requestedMinutes
+    const cap = Math.min(evidence.detectedMinutes, requested ?? evidence.detectedMinutes)
+    const reviewed = snapshot.review?.approvedMinutes
+    const approvedMinutes = reviewed != null ? Math.min(reviewed, cap) : cap
+    const clock = (minutes: number) => `${Math.floor(minutes / 60)} ساعة و${minutes % 60} دقيقة`
+    const message = approvedMinutes > 0
+      ? `اتحسب الإضافي من بصمات اليوم وقت الاعتماد: ${clock(approvedMinutes)}`
+      : `اتوافق على الطلب، لكن الإضافي المحسوب من بصمات اليوم = 0 دقيقة (${evidence.blockers[0]?.message ?? 'الشغل الفعلي ماعداش الساعات المطلوبة بشرط الاستحقاق'})`
+    const approvalResult = { computedAtApproval: true, approvedMinutes, detectedMinutes: evidence.detectedMinutes, rawMinutes: evidence.rawMinutes,
+      workedMinutes: evidence.workedMinutes ?? null, requiredMinutes: evidence.requiredMinutes ?? null, requestedMinutes: requested ?? null,
+      computedAt: new Date().toISOString(), approverId: actorUserId, message, evidence }
+    if (approvedMinutes > 0) {
+      await claimOvertimeDay(em, entry)
+      const values = await buildOvertimeApprovalSnapshot(em, entry, evidence, { approvedMinutes, approverId: actorUserId, reason: snapshot.review?.reductionReason })
+      Object.assign(entry, values, { status: 'APPROVED' })
+      entry.calculationSnapshot = { ...entry.calculationSnapshot, approvalResult }
+      await em.getRepository(OvertimeEntry).save(entry)
+      await appendOvertimeEvent(em, { entryId: entry.id, requestId: req.id, actorUserId, eventType: 'APPROVED', reason: message,
+        payload: { approval: entry.calculationSnapshot?.approval, computedAtApproval: true } })
+      return
+    }
+    // صفر: مفيش لقطة مالية (المسير مابيقبلش قيد معتمد بصفر دقيقة)؛ القيد بيتقفل بصفر والطلب بيكمل.
+    Object.assign(entry, { status: 'CANCELLED', approvedMinutes: 0, hoursActual: 0, payableHours: null,
+      calculationSnapshot: { ...snapshot, approvalResult } })
+    await em.getRepository(OvertimeEntry).save(entry)
+    await releaseOvertimeDayClaim(em, entry.id)
+    await appendOvertimeEvent(em, { entryId: entry.id, requestId: req.id, actorUserId, eventType: 'APPROVED_ZERO', reason: message,
+      payload: { approvedMinutes: 0, computedAtApproval: true } })
   }
 
   private async releaseRequestOvertime(em: EntityManager, req: Request, status: 'REJECTED' | 'CANCELLED', actorUserId: number, reason?: string) {

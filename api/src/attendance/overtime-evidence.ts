@@ -1,4 +1,5 @@
 import { createHash } from 'crypto'
+import { attendanceIntervalMinutes } from './attendance-flex-calculator'
 
 export type OvertimeDayKind = 'WEEKDAY' | 'WEEKEND' | 'HOLIDAY'
 export interface OvertimeEvidencePolicy {
@@ -35,6 +36,10 @@ export interface OvertimeEvidence {
   checkOut: string | null
   dayKind: OvertimeDayKind
   window: { open: boolean; governingWindowIds: number[]; reason: string }
+  // يوم العمل: الشغل الفعلي (بعد الاستراحة غير المدفوعة ووقت الأذونات) والساعات المطلوبة (بعد نص يوم الإجازة).
+  // العطلة: الشغل = مدة البصمتين كلها والمطلوب null. اللقطات القديمة من غير الحقلين.
+  workedMinutes?: number | null
+  requiredMinutes?: number | null
   rawMinutes: number
   detectedMinutes: number
   policy: OvertimeEvidencePolicy
@@ -43,13 +48,54 @@ export interface OvertimeEvidence {
   fingerprint: string
 }
 
-// العتبة قبل التقريب، والسقف اليومي ظاهر بعلامة بدل إخفاء الفرق بين الخام والمحتسب.
-export function overtimeMinutes(raw: number, policy: OvertimeEvidencePolicy) {
+// شرط الاستحقاق قبل التقريب: لو الزيادة وصلت العتبة بتتحسب كلها (مش اللي بعد العتبة بس)،
+// ولو أقل منها = صفر. بعدها التقريب لتحت ثم السقف اليومي ظاهر بعلامة.
+export function overtimeMinutes(raw: number, policy: Pick<OvertimeEvidencePolicy, 'thresholdMinutes' | 'roundingMinutes' | 'maxDailyMinutes'>) {
   const rawMinutes = Math.max(0, Math.floor(raw + 1e-8))
-  const rounded = raw < policy.thresholdMinutes ? 0
+  const rounded = raw + 1e-8 < policy.thresholdMinutes ? 0
     : Math.floor(Math.max(0, raw) / policy.roundingMinutes) * policy.roundingMinutes
   const capped = policy.maxDailyMinutes > 0 && rounded > policy.maxDailyMinutes
   return { rawMinutes, detectedMinutes: capped ? policy.maxDailyMinutes : rounded, capped }
+}
+
+type MinuteWindow = { from: number; to: number }
+export interface WorkedOvertimeInput {
+  checkInMinute: number // دقيقة على خط يوم بدء الوردية بكسورها
+  checkOutMinute: number
+  sessionMinutes?: number // مدة البصمتين من اللحظات الفعلية لو متاحة
+  requiredWorkMinutes: number
+  shiftStartMinute: number
+  shiftEndMinute: number
+  unpaidBreakMinutes?: number
+  halfLeaveWindows?: MinuteWindow[]
+  permissionWindows?: MinuteWindow[]
+}
+
+// قاعدة المالك (17 سبتمبر): إضافي يوم العمل = الشغل الفعلي − ساعات اليوم المطلوبة، مش الوقت بعد نهاية الوردية.
+// الشغل الفعلي = أول دخول ← آخر خروج، ناقص الاستراحة غير المدفوعة (زي محرك الحضور) وناقص وقت الأذونات
+// المعتمدة اللي جوه المدة (وقت الإذن مش شغل). المطلوب = ساعات الوردية ناقص نص يوم الإجازة زي الحضور.
+// الشغل بدري بيدخل لأنه جزء من الشغل الفعلي، والتأخير الصبح بيقل من نفس المدة.
+export function workedOvertime(input: WorkedOvertimeInput) {
+  const session = Math.max(0, input.sessionMinutes ?? input.checkOutMinute - input.checkInMinute)
+  const permissionMinutes = attendanceIntervalMinutes(input.checkInMinute, input.checkInMinute + session, input.permissionWindows ?? [])
+  const workedMinutes = Math.max(0, session - Math.max(0, input.unpaidBreakMinutes ?? 0) - permissionMinutes)
+  const leaveMinutes = attendanceIntervalMinutes(input.shiftStartMinute, input.shiftEndMinute, input.halfLeaveWindows ?? [])
+  const requiredMinutes = Math.max(0, Math.max(0, input.requiredWorkMinutes) - leaveMinutes)
+  const extra = workedMinutes - requiredMinutes
+  return { workedMinutes, requiredMinutes, extraMinutes: Math.max(0, extra),
+    // الدقيقة اللي اكتملت فيها ساعات اليوم المطلوبة (على خط اليوم)، أو null لو ماكملتش
+    completedAtMinute: extra + 1e-8 >= 0 ? input.checkInMinute + session - Math.max(0, extra) : null }
+}
+
+// الفترة المقفولة: الموظف يقدر يقدّم طلب إضافي ليوم بصماته لسه ناقصة أو زيادته أقل من الشرط،
+// والحساب الحقيقي بيحصل وقت الاعتماد النهائي بنفس القاعدة.
+export const OVERTIME_DEFERRED_SUBMISSION_BLOCKERS = ['NO_PUNCH_EVIDENCE', 'INCOMPLETE_PUNCH', 'BELOW_THRESHOLD', 'FUTURE_DATE']
+// وقت الاعتماد: مفيش بصمات خالص أو الزيادة أقل من الشرط = إضافي صفر بيتسجل. البصمة الناقصة واليوم اللي لسه ماجاش بيمنعوا الاعتماد.
+export const OVERTIME_ZERO_AT_APPROVAL_BLOCKERS = ['NO_PUNCH_EVIDENCE', 'BELOW_THRESHOLD']
+export function overtimeSubmissionBlockers(evidence: Pick<OvertimeEvidence, 'window' | 'evidenceMode' | 'blockers'>, automatic = false) {
+  const defer = !automatic && !evidence.window.open && evidence.evidenceMode === 'PUNCH'
+  const deferred = defer ? evidence.blockers.filter(b => OVERTIME_DEFERRED_SUBMISSION_BLOCKERS.includes(b.code)) : []
+  return { blockers: evidence.blockers.filter(b => !deferred.includes(b)), deferred }
 }
 
 export function overtimeEvidenceFingerprint(evidence: Omit<OvertimeEvidence, 'fingerprint'>): string {

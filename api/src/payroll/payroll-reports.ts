@@ -626,7 +626,8 @@ export async function payrollOvertimeReport(em: EntityManager, scope: PayrollRep
     const emp = employeeById.get(entry.employeeId)
     const snapshot = (entry.calculationSnapshot ?? {}) as Record<string, any>
     const approval = snapshot.approval, submission = snapshot.submission
-    const detectedMinutes = toNumberOrNull(submission?.evidence?.detectedMinutes ?? approval?.evidence?.detectedMinutes ??
+    // دليل الاعتماد أولًا: طلب الفترة المقفولة بيتحسب من البصمات وقت الاعتماد (قبلها نفس دليل التقديم).
+    const detectedMinutes = toNumberOrNull(approval?.evidence?.detectedMinutes ?? submission?.evidence?.detectedMinutes ??
       (entry.hoursActual == null ? null : Math.round(Number(entry.hoursActual) * 60)))
     const requestedMinutes = toNumberOrNull(submission?.requestedMinutes ?? (entry.hoursRequested == null ? null : Math.round(Number(entry.hoursRequested) * 60)))
     const payable = ['APPROVED', 'PAID'].includes(entry.status)

@@ -340,6 +340,7 @@ export default function MyRequestsPage() {
     from: string
     to: string
     self: boolean
+    employeeId?: number
     total: number
     working: number
     skipped: string[]
@@ -416,7 +417,8 @@ export default function MyRequestsPage() {
     if (selectedType === 'LEAVE_MODIFY_CANCEL') {
       // تحميل طازج كل مرة — قائمة الإجازات المعتمدة تتغير مع كل اعتماد/إلغاء
       setMyLeavesLoading(true)
-      fetchMyApprovedLeaves()
+      // نيابةً عن موظف: إجازاته هو، مش إجازات صاحب الحساب
+      fetchMyApprovedLeaves(onBehalf && onBehalfEmployeeId ? Number(onBehalfEmployeeId) : undefined)
         .then((leaves) => setMyLeaves(leaves as ApprovedLeave[]))
         .catch((err) =>
           setSubmitError(
@@ -441,7 +443,7 @@ export default function MyRequestsPage() {
         )
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [selectedType])
+  }, [selectedType, onBehalf, onBehalfEmployeeId])
 
   // قائمة الموظفين — فقط لمن يملك صلاحية التقديم نيابة عن غيره
   useEffect(() => {
@@ -602,19 +604,25 @@ export default function MyRequestsPage() {
       setWorkingDaysInfo(null)
       return
     }
-    // لنفسه: جدول عمله (= خصم السيرفر)؛ نيابةً: فرع المستخدم كما كان
+    // لنفسه: جدول عمله (= خصم السيرفر)؛ نيابةً: جدول الموظف المختار نفسه (الأدمن ممكن يكون من غير فرع)
     const self = !onBehalf
+    const employeeId = onBehalf && onBehalfEmployeeId ? Number(onBehalfEmployeeId) : undefined
+    if (onBehalf && !employeeId) {
+      setWorkingDaysInfo(null)
+      return
+    }
     if (
       workingDaysInfo &&
       workingDaysInfo.from === leaveFrom &&
       workingDaysInfo.to === leaveTo &&
-      workingDaysInfo.self === self
+      workingDaysInfo.self === self &&
+      workingDaysInfo.employeeId === employeeId
     )
       return
     const timer = setTimeout(() => {
-      fetchWorkingDays(leaveFrom, leaveTo, { self })
+      fetchWorkingDays(leaveFrom, leaveTo, employeeId ? { employeeId } : { self })
         .then((res) => {
-          setWorkingDaysInfo({ from: leaveFrom, to: leaveTo, self, ...res })
+          setWorkingDaysInfo({ from: leaveFrom, to: leaveTo, self, employeeId, ...res })
           // ضبط عدد الأيام كما يحسبها السيرفر — فقط إن ظل المدى كما هو
           setFieldValues((prev) =>
             (prev.fromDate ?? '').trim() === leaveFrom &&
@@ -627,7 +635,7 @@ export default function MyRequestsPage() {
     }, 400)
     return () => clearTimeout(timer)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [leaveFrom, leaveTo, isLeaveCategory, isHalfDay, onBehalf, leaveCountsCalendarDays])
+  }, [leaveFrom, leaveTo, isLeaveCategory, isHalfDay, onBehalf, onBehalfEmployeeId, leaveCountsCalendarDays])
 
   // تلميح الخصم تحت حقل الأيام — كهرماني عند وجود عطلات داخل المدى، أحمر لو كله عطلات
   const workingDaysHint =

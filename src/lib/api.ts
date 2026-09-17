@@ -269,6 +269,9 @@ export interface ApiRequest {
 export type ApiOvertimeEvidence = OvertimeEvidence
 export interface ApiOvertimePreview extends OvertimeEvidence {
   canSubmit: boolean
+  // الفترة المقفولة: ملاحظات ماتمنعش التقديم لأن الإضافي بيتحسب من البصمات وقت الاعتماد النهائي
+  deferredBlockers?: Array<{ code: string; message: string }>
+  computeAtApproval?: boolean
   resubmission?: boolean
   existingRecord: { id: number; status: OvertimeStatus; requestId: number | null } | null
 }
@@ -280,7 +283,10 @@ export interface ApiOvertimeRequestDetail {
   hoursRequested: number | null; hoursActual: number | null; approvedMinutes: number | null
   amountSnapshot: number | null; hourlyRateSnapshot: number | null; originalPeriod: string | null; deferredFromRunId: number | null
   calculationSnapshot: { schemaVersion: number;
-    submission: { evidence: OvertimeEvidence; requestedMinutes: number | null; submittedAt: string; submittedByUserId: number } | null;
+    submission: { evidence: OvertimeEvidence; requestedMinutes: number | null; submittedAt: string; submittedByUserId: number;
+      computeAtApproval?: boolean; deferredBlockers?: Array<{ code: string; message: string }> } | null;
+    approvalResult?: { approvedMinutes: number; detectedMinutes: number; rawMinutes: number; workedMinutes: number | null; requiredMinutes: number | null;
+      checkIn: string | null; checkOut: string | null; computedAt: string; message: string } | null;
     review: { approvedMinutes: number; reductionReason?: string; actorUserId?: number } | null;
     approval: { approvedMinutes: number; hourlyRate: number; multiplier: number; amount: number; dayKind: string; approvedAt: string; approverId: number } | null;
   } | null
@@ -1275,7 +1281,7 @@ export const fetchMyOffboardingCase = () =>
 // إلغاء إجازة معتمدة مباشرة (HR بصلاحية leaves.revoke)
 export const revokeLeave = (leaveId: number) => post<ApiLeave>(`/leaves/${leaveId}/revoke`)
 // إجازاتي المعتمدة — لمنتقي «إلغاء/تعديل إجازة»
-export const fetchMyApprovedLeaves = () => get<ApiLeave[]>('/leaves/mine')
+export const fetchMyApprovedLeaves = (employeeId?: number) => get<ApiLeave[]>(`/leaves/mine${employeeId ? `?employeeId=${employeeId}` : ''}`)
 // ربط ملف مرفوع (uploadFile → ref) بإجازة تنتظر مرفقها بعد الرجوع — صاحبها أو الموارد البشرية
 export const attachLeaveFile = (leaveId: number, fileRef: string) => post<ApiLeave>(`/leaves/${leaveId}/attachment`, { fileRef })
 

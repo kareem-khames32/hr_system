@@ -264,8 +264,10 @@ export class RequestsController {
 
   // إجازاتي المعتمدة — لمنتقي «إلغاء/تعديل إجازة» (خدمة ذاتية)
   @Get(['requests/my-leaves', 'leaves/mine'])
-  myLeaves(@CurrentUser() user: JwtPayload) {
-    return this.service.myApprovedLeaves(user)
+  myLeaves(@CurrentUser() user: JwtPayload, @Query('employeeId') employeeId?: string) {
+    // employeeId: إجازات موظف تاني لطلب إلغاء نيابةً عنه (الصلاحية والنطاق بيتفحصوا في الخدمة)
+    const target = employeeId && /^\d+$/.test(employeeId) ? Number(employeeId) : undefined
+    return this.service.myApprovedLeaves(user, target)
   }
 
   // السجل الكامل — كونسول HR (بنطاق الفرع)

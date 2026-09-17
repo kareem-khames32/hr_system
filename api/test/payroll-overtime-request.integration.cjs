@@ -285,7 +285,9 @@ after(async t => {
   if (errors.length) throw new AggregateError(errors, 'Overtime fixture cleanup failed')
 })
 
-test('OT-06 preview: closed-window 07:52–19:20 over an 08:00–17:00 shift exposes 140 raw and 135 rounded minutes without writes', async t => {
+// قاعدة المالك (17 سبتمبر): الإضافي = الشغل الفعلي − الساعات المطلوبة. 07:52–19:20 = 688 دقيقة − 540 = 148 خام
+// (كانت 140 لما كان بيتحسب بعد نهاية الوردية 17:00 بس)، والمحتسب لسه 135 بعد التقريب كل 15.
+test('OT-06 preview: closed-window 07:52–19:20 over an 08:00–17:00 shift exposes 148 raw (worked − required) and 135 rounded minutes without writes', async t => {
   const f = await fixture()
   await punches(f, '07:52', '19:20')
   const before = await counts(f), beforeDays = await repo('AttendanceDay').find({ where: { employeeId: f.emp.id } })
@@ -296,13 +298,15 @@ test('OT-06 preview: closed-window 07:52–19:20 over an 08:00–17:00 shift exp
   assert.ok(evidence.firstIn); assert.ok(evidence.lastOut)
   assert.equal(evidence.schedule.start, '08:00'); assert.equal(evidence.schedule.end, '17:00')
   assert.equal(evidence.schedule.sourceId, f.source.id); assert.ok(evidence.schedule.sourceVersionId)
-  assert.equal(evidence.rawMinutes, 140); assert.equal(evidence.detectedMinutes, 135)
+  assert.equal(evidence.rawMinutes, 148); assert.equal(evidence.detectedMinutes, 135)
+  assert.equal(evidence.workedMinutes, 688); assert.equal(evidence.requiredMinutes, 540)
+  assert.equal(evidence.schedule.overtimeStartMinute, 16 * 60 + 52) // اكتملت الـ9 ساعات 16:52
   assert.equal(evidence.policy.thresholdMinutes, 30); assert.equal(evidence.policy.roundingMinutes, 15)
   assert.equal(evidence.policy.roundingDirection, 'DOWN'); assert.equal(evidence.policy.multiplier, 1.5)
   assert.equal(evidence.window.open, false); assert.ok(evidence.fingerprint)
   assert.deepEqual(await counts(f), before)
   assert.deepEqual(await repo('AttendanceDay').find({ where: { employeeId: f.emp.id } }), beforeDays)
-  t.diagnostic('Manual: max(19:20−17:00,0)=140; floor(140/15)×15=135min=2.25h; 9000/30/8×1.5×2.25=126.56.')
+  t.diagnostic('Manual: (19:20−07:52)=688 − 540 = 148; floor(148/15)×15=135min=2.25h; 9000/30/8×1.5×2.25=126.56.')
 })
 
 test('OT-03 preview: threshold precedes rounding and 155 raw minutes become exactly 150', async () => {
@@ -315,12 +319,15 @@ test('OT-03 preview: threshold precedes rounding and 155 raw minutes become exac
   }
 })
 
-test('OT-06 preview: no evidence, incomplete checkout and a future date prevent submission without request or entry orphans', async () => {
+// قاعدة المالك (3): المنع ده بقى للفترة المفتوحة بس؛ في المقفولة الطلب بيتقبل ويتحسب وقت الاعتماد (اختبارات OT closed window).
+test('OT-06 preview: in an OPEN window no evidence, incomplete checkout and a future date prevent submission without request or entry orphans', async () => {
   for (const mode of ['none', 'missing_checkout', 'future']) {
     const f = await fixture()
     if (mode === 'missing_checkout') await punches(f, '08:00', null)
     const day = mode === 'future' ? dateAfter(today, 1) : f.day
+    await window(f, 'OPEN', { fromDate: day, toDate: day })
     const evidence = await preview(f, day)
+    assert.equal(evidence.window.open, true)
     assert.equal(evidence.detectedMinutes, 0); assert.equal(evidence.canSubmit, false)
     assert.ok(evidence.blockers.length > 0)
     const before = await counts(f)
@@ -329,6 +336,53 @@ test('OT-06 preview: no evidence, incomplete checkout and a future date prevent 
     assert.deepEqual(await counts(f), before)
     assert.equal(await repo('AttendanceDay').count({ where: { employeeId: f.emp.id, date: dateAfter(today, 1) } }), 0)
   }
+})
+
+// قاعدة المالك (3): في الفترة المقفولة الموظف يقدّم طلب ليوم بصماته لسه ناقصة؛ الحساب من البصمات وقت الاعتماد النهائي.
+test('OT closed window: a request submitted before checkout is computed from punches at final approval with the worked-time rule', async t => {
+  const f = await fixture()
+  await punches(f, '07:00', null)
+  const view = await preview(f)
+  assert.equal(view.window.open, false); assert.equal(view.canSubmit, true); assert.equal(view.computeAtApproval, true)
+  assert.ok(view.deferredBlockers.some(blocker => blocker.code === 'INCOMPLETE_PUNCH'), JSON.stringify(view.deferredBlockers))
+  const pending = await submit(f, { hours: undefined })
+  assert.equal(pending.status, 201, JSON.stringify(pending.body))
+  const submitted = await repo('OvertimeEntry').findOneByOrFail({ requestId: pending.body.id })
+  assert.equal(submitted.status, 'SUBMITTED'); assert.equal(toObject(submitted.calculationSnapshot).submission.computeAtApproval, true)
+  // الخطوات الوسيطة ماتحتاجش البصمات؛ الاعتماد النهائي ممنوع طول ما البصمة ناقصة
+  for (const actor of [f.manager, f.head]) assert.equal((await decide(actor, pending.body.id)).status, 201)
+  const blocked = await decide(f.hr, pending.body.id)
+  assert.equal(blocked.status, 400, JSON.stringify(blocked.body))
+  assert.equal((await repo('OvertimeEntry').findOneByOrFail({ id: submitted.id })).status, 'SUBMITTED')
+  // بصمة الخروج بعدها: 07:00–17:00 = 600 − 540 = 60 (جه بدري ساعة ومشي في ميعاده ← ساعة)
+  await punches(f, '17:00', null)
+  const done = await decide(f.hr, pending.body.id)
+  assert.equal(done.status, 201, JSON.stringify(done.body)); assert.equal(done.body.status, 'COMPLETED')
+  const approved = await repo('OvertimeEntry').findOneByOrFail({ id: submitted.id })
+  assert.equal(approved.status, 'APPROVED'); assert.equal(numeric(approved.approvedMinutes), 60)
+  const snapshot = toObject(approved.calculationSnapshot)
+  assert.equal(snapshot.approvalResult.approvedMinutes, 60); assert.equal(snapshot.approval.evidence.window.open, false)
+  assert.equal(numeric(approved.amountSnapshot), 56.25)
+  t.diagnostic('Manual: 07:00–17:00 = 600 − 540 = 60 ≥ 30 ⇒ 60min=1h; 37.50×1.5×1 = 56.25.')
+})
+
+test('OT closed window: an approved request whose punches give no eligible overtime records zero and completes without payroll value', async () => {
+  const f = await fixture()
+  await punches(f, '09:00', null)
+  const pending = await submit(f, { hours: undefined })
+  assert.equal(pending.status, 201, JSON.stringify(pending.body))
+  // جه متأخر ساعة ومشي بعد الميعاد بساعة: 09:00–18:00 = 540 − 540 = 0
+  await punches(f, '18:00', null)
+  const entry = await complete(f, pending.body)
+  assert.equal(entry.status, 'CANCELLED'); assert.equal(numeric(entry.approvedMinutes), 0)
+  assert.equal(entry.amountSnapshot, null); assert.equal(entry.payableHours, null)
+  const snapshot = toObject(entry.calculationSnapshot)
+  assert.equal(snapshot.approval, undefined); assert.equal(snapshot.approvalResult.approvedMinutes, 0)
+  assert.match(snapshot.approvalResult.message, /= 0 دقيقة/)
+  assert.equal(await repo('OvertimeEntryEvent').count({ where: { entryId: entry.id, eventType: 'APPROVED_ZERO' } }), 1)
+  assert.equal((await claimsFor(f)).every(claim => claim.releasedAt != null), true)
+  const detail = await request(f.owner, 'GET', '/requests/' + pending.body.id)
+  assert.equal(detail.status, 200); assert.equal(detail.body.overtime.calculationSnapshot.approvalResult.approvedMinutes, 0)
 })
 
 test('OT-02 preview: a company closure governs over a branch opening and exposes its identifier', async () => {
@@ -664,15 +718,15 @@ test('EX-11 overtime: ineligible exemption rejects submission and eligibility re
   assert.deepEqual(await repo('RequestApproval').find({ where: { requestId: pending.body.id }, order: { id: 'ASC' } }), approvalsBefore)
 })
 
-test('OT-10 return: changed evidence cannot be approved until return and resubmit refresh the same claimed entry', async () => {
+test('OT-10 return: in a closed period changed punches do not block (computed at approval); return and resubmit refresh the same claimed entry', async () => {
   const f = await fixture()
   await punches(f, '08:00', '19:20')
   const pending = await submit(f)
   assert.equal(pending.status, 201, JSON.stringify(pending.body))
   const original = await repo('OvertimeEntry').findOneByOrFail({ requestId: pending.body.id }), claim = await claimsFor(f)
   await punches(f, '08:00', '19:35')
-  const denied = await decide(f.manager, pending.body.id)
-  assert.equal(denied.status, 409, JSON.stringify(denied.body)); assert.equal(denied.body.code, 'OVERTIME_EVIDENCE_CHANGED')
+  // قاعدة المالك: طلب الفترة المقفولة بيتحسب من بصمات وقت الاعتماد، فتغيير البصمة بعد التقديم مابيوقفش الطلب
+  assert.equal(toObject((await repo('OvertimeEntry').findOneByOrFail({ requestId: pending.body.id })).calculationSnapshot).submission.computeAtApproval, true)
   const returned = await decide(f.manager, pending.body.id, { action: 'RETURN', comment: 'تغيرت البصمة ويرجى إعادة تقديم الأدلة الحالية' })
   assert.equal(returned.status, 201, JSON.stringify(returned.body)); assert.equal(returned.body.status, 'RETURNED_FOR_INFO')
   assert.deepEqual(await claimsFor(f), claim)
@@ -770,11 +824,13 @@ test('OT-09 limits: daily cap preserves raw evidence and weekly approval cap rej
   })
 })
 
-test('OT-03 policy: early work is excluded by default and counts only when explicitly enabled', async () => {
+// قاعدة المالك: الشغل بدري جزء من الشغل الفعلي؛ 07:00–17:45 = 645 − 540 = 105 بغض النظر عن allow_early_overtime
+// (كان 45 افتراضيًا و105 بالمفتاح لما كان الإضافي بعد نهاية الوردية).
+test('OT-03 policy: early work counts as worked time whether or not the legacy early switch is enabled', async () => {
   const f = await fixture()
   await punches(f, '07:00', '17:45')
   const normal = await preview(f)
-  assert.equal(normal.rawMinutes, 45); assert.equal(normal.detectedMinutes, 45)
+  assert.equal(normal.rawMinutes, 105); assert.equal(normal.detectedMinutes, 105)
   await configDuring({ 'overtime.allow_early_overtime': true }, async () => {
     const early = await preview(f)
     assert.equal(early.policy.earlyOvertime, true)

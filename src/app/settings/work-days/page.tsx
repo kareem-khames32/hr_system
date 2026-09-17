@@ -349,7 +349,6 @@ export default function WorkDaysSettingsPage() {
   }
 
   const otEnabled = (otValues[OVERTIME_ENABLED_KEY] ?? '') === 'true'
-  const otEarlyEnabled = otValues[OVERTIME_EARLY_KEY] === 'true'
   const overtimeMonthlyDays = Number(configValue('payroll.monthly_days'))
   const overtimeDailyHours = Number(configValue('payroll.daily_hours'))
   const overtimeDivisorsValid = Number.isFinite(overtimeMonthlyDays) && overtimeMonthlyDays > 0 && Number.isFinite(overtimeDailyHours) && overtimeDailyHours > 0
@@ -654,7 +653,7 @@ export default function WorkDaysSettingsPage() {
                 {/* الحد الأدنى للاحتساب بالساعات */}
                 <div className="p-4 bg-gray-50 rounded-xl">
                   <label className="block font-medium text-gray-800 mb-2">
-                    الحد الأدنى للاحتساب (ساعات)
+                    شرط استحقاق الإضافي (ساعات)
                   </label>
                   <input
                     type="number"
@@ -668,7 +667,7 @@ export default function WorkDaysSettingsPage() {
                     onChange={(e) => setOtValue(OVERTIME_THRESHOLD_KEY, e.target.value)}
                   />
                   <p className="text-xs text-gray-500 mt-2">
-                    يبدأ الاحتساب عند بلوغ العتبة قبل التقريب. أدخل ساعات تمثل دقائق صحيحة، مثل 0.5 ساعة = 30 دقيقة. تُستخدم عتبة دوام الموظف بدلًا منها إن كانت محددة.
+                    الزيادة عن ساعات العمل المطلوبة لازم توصل العدد ده — ولو وصلت بتتحسب كلها (قبل التقريب). أدخل ساعات تساوي دقائق صحيحة، مثل 0.5 ساعة = 30 دقيقة. شرط وردية الموظف بيغلب لو محدد.
                   </p>
                 </div>
 
@@ -683,15 +682,10 @@ export default function WorkDaysSettingsPage() {
                   </div>)}
                 </fieldset>
 
-                <div className="p-4 bg-gray-50 rounded-xl">
-                  <label className="flex items-start gap-3">
-                    <input type="checkbox" checked={otEarlyEnabled} disabled={otSaving || !canEditOvertime}
-                      onChange={event => setOtValue(OVERTIME_EARLY_KEY, String(event.target.checked))}
-                      className="w-4 h-4 rounded mt-1 text-primary-600" />
-                    <span><span className="block font-medium text-gray-800">احتساب العمل قبل بداية الدوام ضمن الإضافي</span>
-                      <span className="block text-xs text-gray-500 mt-1">عند التفعيل يدخل الوقت المبكر المثبت في حساب الإضافي، مع بقاء العتبة والتقريب والسقوف ودورة الاعتماد.</span></span>
-                  </label>
-                </div>
+                {/* قاعدة المالك (17 سبتمبر): إضافي يوم العمل = الشغل الفعلي − الساعات المطلوبة، فالحضور بدري بيتحسب لوحده؛ مفتاح «الحضور المبكر» اتشال */}
+                <p className="p-4 bg-gray-50 rounded-xl text-xs text-gray-600">
+                  الإضافي بيتحسب بعد إكمال ساعات العمل المطلوبة لليوم، مش بعد ميعاد نهاية الوردية؛ فالشغل قبل بداية الدوام بيدخل تلقائي ضمن الشغل الفعلي ومحتاجش إعداد منفصل.
+                </p>
 
                 <div className="rounded-xl bg-indigo-50 border border-indigo-100 p-4 space-y-2 text-sm">
                   <p className="font-semibold text-indigo-900">معادلة أجر الساعة</p>

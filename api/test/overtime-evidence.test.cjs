@@ -77,3 +77,79 @@ test('سجل العمل الإضافي يعرض سبب النافذة المقف
   assert.match(page, /window\?\.open/)
   assert.match(page, /routingBlock\(e\)/)
 })
+
+// ===== قاعدة المالك (17 سبتمبر): الإضافي = الشغل الفعلي − الساعات المطلوبة، مش الوقت بعد نهاية الوردية =====
+const { workedOvertime, overtimeSubmissionBlockers } = require('../src/attendance/overtime-evidence')
+const hm = t => { const [h, m] = t.split(':').map(Number); return h * 60 + m }
+// وردية 08:00–17:00 مطلوب 9 ساعات، شرط الاستحقاق ساعة، التقريب كل 15 دقيقة لتحت
+const ownerPolicy = { thresholdMinutes: 60, roundingMinutes: 15, roundingDirection: 'DOWN', maxDailyMinutes: 0 }
+const ownerDay = (checkIn, checkOut, extra = {}) => {
+  const work = workedOvertime({ checkInMinute: hm(checkIn), checkOutMinute: hm(checkOut), requiredWorkMinutes: 540,
+    shiftStartMinute: hm('08:00'), shiftEndMinute: hm('17:00'), ...extra })
+  return { ...work, ...overtimeMinutes(work.extraMinutes, extra.policy ?? ownerPolicy) }
+}
+test('المالك: اشتغل 10 ساعات ← 60 دقيقة', () => {
+  const r = ownerDay('08:00', '18:00')
+  assert.equal(r.workedMinutes, 600); assert.equal(r.requiredMinutes, 540); assert.equal(r.detectedMinutes, 60)
+  assert.equal(r.completedAtMinute, hm('17:00'))
+})
+test('المالك: اشتغل 9 ساعات و40 دقيقة ← صفر (40 أقل من شرط الساعة)', () => {
+  const r = ownerDay('08:00', '17:40')
+  assert.equal(r.extraMinutes, 40); assert.equal(r.detectedMinutes, 0)
+})
+test('المالك: جه متأخر ساعة ومشي بعد الميعاد بساعة (9 ساعات) ← صفر', () => {
+  const r = ownerDay('09:00', '18:00')
+  assert.equal(r.workedMinutes, 540); assert.equal(r.extraMinutes, 0); assert.equal(r.detectedMinutes, 0)
+  assert.equal(r.completedAtMinute, hm('18:00'))
+})
+test('المالك: جه بدري ساعة ومشي في ميعاده (10 ساعات) ← 60 دقيقة', () => {
+  const r = ownerDay('07:00', '17:00')
+  assert.equal(r.detectedMinutes, 60); assert.equal(r.completedAtMinute, hm('16:00'))
+})
+test('المالك: لو الزيادة وصلت الشرط بتتحسب كلها ثم التقريب لتحت والسقف اليومي', () => {
+  assert.equal(ownerDay('08:00', '18:50').detectedMinutes, 105) // 110 كلها (مش 50 بعد الشرط) ← 105
+  assert.equal(ownerDay('08:00', '17:59').detectedMinutes, 0) // 59 دقيقة
+  assert.deepEqual(overtimeMinutes(300, { ...ownerPolicy, maxDailyMinutes: 120 }), { rawMinutes: 300, detectedMinutes: 120, capped: true })
+  const precise = workedOvertime({ checkInMinute: hm('08:00'), checkOutMinute: hm('18:00') - 1 / 60, requiredWorkMinutes: 540, shiftStartMinute: hm('08:00'), shiftEndMinute: hm('17:00') })
+  assert.equal(overtimeMinutes(precise.extraMinutes, ownerPolicy).detectedMinutes, 0, 'ثانية ناقصة عن الشرط = صفر')
+})
+test('المالك: ماكملش الساعات المطلوبة ← صفر ومفيش دقيقة بداية إضافي', () => {
+  const r = ownerDay('08:00', '16:00')
+  assert.equal(r.extraMinutes, 0); assert.equal(r.completedAtMinute, null); assert.equal(r.detectedMinutes, 0)
+})
+test('الاستراحة غير المدفوعة ووقت الإذن جوه المدة بيتخصموا من الشغل الفعلي', () => {
+  const withBreak = ownerDay('08:00', '19:00', { unpaidBreakMinutes: 60 })
+  assert.equal(withBreak.workedMinutes, 600); assert.equal(withBreak.detectedMinutes, 60)
+  const withPermission = ownerDay('08:00', '19:00', { permissionWindows: [{ from: hm('12:00'), to: hm('13:30') }] })
+  assert.equal(withPermission.workedMinutes, 570); assert.equal(withPermission.detectedMinutes, 0)
+  // إذن برا مدة البصمات (الصبح قبل الدخول) مابيزودش ولا بيقلل الشغل الفعلي
+  assert.equal(ownerDay('10:00', '19:00', { permissionWindows: [{ from: hm('08:00'), to: hm('10:00') }] }).detectedMinutes, 0)
+})
+test('نص يوم إجازة بيقلل الساعات المطلوبة زي الحضور', () => {
+  const r = ownerDay('12:30', '18:30', { halfLeaveWindows: [{ from: hm('08:00'), to: hm('12:30') }] })
+  assert.equal(r.requiredMinutes, 270); assert.equal(r.workedMinutes, 360); assert.equal(r.detectedMinutes, 90)
+})
+test('وردية ليلية: الشغل على خط يوم البداية', () => {
+  const r = workedOvertime({ checkInMinute: hm('22:00'), checkOutMinute: hm('08:00') + 1440, requiredWorkMinutes: 480,
+    shiftStartMinute: hm('22:00'), shiftEndMinute: hm('06:00') + 1440 })
+  assert.equal(r.workedMinutes, 600); assert.equal(r.extraMinutes, 120)
+})
+test('الفترة المقفولة: نقص البصمات أو الزيادة الأقل من الشرط مابيمنعوش التقديم، والمفتوحة والمستثنى والمكتشف زي ما هم', () => {
+  const blockers = [{ code: 'NO_PUNCH_EVIDENCE', message: 'x' }, { code: 'FUTURE_DATE', message: 'y' }, { code: 'LEAVE_CONFLICT', message: 'z' }]
+  const closed = overtimeSubmissionBlockers({ window: { open: false }, evidenceMode: 'PUNCH', blockers })
+  assert.deepEqual(closed.deferred.map(b => b.code), ['NO_PUNCH_EVIDENCE', 'FUTURE_DATE'])
+  assert.deepEqual(closed.blockers.map(b => b.code), ['LEAVE_CONFLICT'])
+  assert.equal(overtimeSubmissionBlockers({ window: { open: true }, evidenceMode: 'PUNCH', blockers }).blockers.length, 3)
+  assert.equal(overtimeSubmissionBlockers({ window: { open: false }, evidenceMode: 'PUNCH', blockers }, true).deferred.length, 0)
+  assert.equal(overtimeSubmissionBlockers({ window: { open: false }, evidenceMode: 'EXEMPT_APPROVAL', blockers }).deferred.length, 0)
+})
+test('خدمة الحضور بتقيس إضافي يوم العمل بالشغل الفعلي مش بنهاية الوردية', () => {
+  const fs = require('node:fs')
+  const service = fs.readFileSync(path.join(__dirname, '..', 'src', 'attendance', 'attendance.service.ts'), 'utf8')
+  assert.match(service, /workedOvertime\(\{/)
+  assert.doesNotMatch(service, /policy\.earlyOvertime \?/)
+  const page = fs.readFileSync(path.join(__dirname, '..', '..', 'src', 'app', 'attendance', 'overtime', 'page.tsx'), 'utf8')
+  assert.match(page, /شرط استحقاق الإضافي: الزيادة عن ساعات العمل المطلوبة لازم توصل/)
+  assert.match(page, /ولو وصلت بتتحسب كلها/)
+  assert.match(page, /overtime\.detection_threshold_hours/)
+})

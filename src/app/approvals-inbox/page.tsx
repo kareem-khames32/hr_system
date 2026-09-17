@@ -24,7 +24,7 @@ import MyClearanceItems from '@/components/dashboard/MyClearanceItems'
 import MyApprovalDecisions from '@/components/MyApprovalDecisions'
 // كل مفاتيح الحمولة بتسمياتها — مشترك مع ويدجت لوحة التحكم (SEC-REQ-2)
 import RequestPayload from '@/components/RequestPayload'
-import OvertimeRequestSummary, { overtimeApprovalLimit } from '@/components/OvertimeRequestSummary'
+import OvertimeRequestSummary, { overtimeApprovalLimit, overtimeComputedAtApproval } from '@/components/OvertimeRequestSummary'
 import { payloadSummary } from '@/lib/request-payload'
 import { useCurrency } from '@/lib/currency'
 import { approveLoanRequest, fetchLoanCapReview, formatLoanMoney, LOAN_APPROVAL_DECISION_LABELS, LOAN_EXCEPTIONAL_CATEGORY_LABELS, type LoanCapReview } from '@/lib/loans-api'
@@ -285,12 +285,14 @@ export default function ApprovalsInboxPage() {
   const isOvertimeDetail = !!detail && (['OVERTIME', 'OVERTIME_AUTO'].includes(detail.typeCode) || !!detail.overtime || detail.overtimeReviewRequired === true)
   const overtimeLimit = overtimeApprovalLimit(detail?.overtime)
   const isOvertimeApproval = actionModal?.action === 'approve' && isOvertimeDetail
+  // طلب الفترة المقفولة: الدقائق بتتحسب من البصمات عند الاعتماد النهائي، فمفيش حد دقائق يتراجع قبلها
+  const overtimeAtApproval = overtimeComputedAtApproval(detail?.overtime)
   const enteredMinutes = approvedMinutesInput.trim() ? Number(approvedMinutesInput) : overtimeLimit
-  const invalidMinutes = isOvertimeApproval && (overtimeLimit == null || enteredMinutes == null ||
+  const invalidMinutes = isOvertimeApproval && !overtimeAtApproval && (overtimeLimit == null || enteredMinutes == null ||
     !Number.isSafeInteger(enteredMinutes) || enteredMinutes <= 0 || enteredMinutes > overtimeLimit)
   const reducingMinutes = isOvertimeApproval && enteredMinutes != null && overtimeLimit != null && enteredMinutes < overtimeLimit
   const overtimeApprovalBlocked = isOvertimeApproval && (detail?.overtimeReviewRequired === true ||
-    !detail?.overtime?.calculationSnapshot?.submission?.evidence || !!detail.overtime.calculationSnapshot.submission.evidence.blockers?.length ||
+    !detail?.overtime?.calculationSnapshot?.submission?.evidence || (!overtimeAtApproval && !!detail.overtime.calculationSnapshot.submission.evidence.blockers?.length) ||
     invalidMinutes || (reducingMinutes && (!canAdjustOvertime || !comment.trim())))
 
   const confirmAction = async () => {

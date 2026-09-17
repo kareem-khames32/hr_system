@@ -388,6 +388,13 @@ export class DestinationsService {
     const entry = entries.length === 1 ? entries[0] : null
     let steps: Array<{ action?: string; actedAt?: string }> = []
     try { steps = JSON.parse(req.resolvedSteps || '[]') } catch { /* التاريخ التالف لا يُعتمد ضمنياً. */ }
+    const stepsComplete = Array.isArray(steps) && steps.length > 0 && steps.every(step => step.action === 'APPROVED' && !!step.actedAt)
+    // طلب الفترة المقفولة اللي اتحسب إضافيه وقت الاعتماد = 0: الطلب بيكمل بنتيجة صفر من غير قيمة مالية ولا حجز يوم.
+    const zero = entry?.calculationSnapshot?.approvalResult
+    if (entry && entry.employeeId === req.requesterId && entry.date === String(payload.date) && ['APPROVED', 'COMPLETED'].includes(req.status) &&
+      entry.status === 'CANCELLED' && !entry.calculationSnapshot?.approval && zero?.computedAtApproval === true && zero.approvedMinutes === 0 && stepsComplete) {
+      return { ref: refOf('OT', entry.id), completed: true, note: String(zero.message ?? 'الإضافي المحسوب من البصمات = 0 دقيقة') }
+    }
     if (!entry || entry.employeeId !== req.requesterId || entry.date !== String(payload.date) ||
       !['APPROVED', 'COMPLETED'].includes(req.status) || entry.status !== 'APPROVED' || !entry.calculationSnapshot?.approval ||
       !Array.isArray(steps) || !steps.length || steps.some(step => step.action !== 'APPROVED' || !step.actedAt)) {

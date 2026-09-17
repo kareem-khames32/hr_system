@@ -21,15 +21,21 @@ const workdayClock = (minutes: number) => `${String(Math.floor(minutes / 60) % 2
 const eventLabels: Record<string, string> = {
   DETECTED: 'اكتشاف الساعات', DETECTION_REFRESHED: 'تحديث أدلة الاكتشاف', SUBMITTED: 'تقديم الطلب',
   RESUBMITTED: 'إعادة تقديم الأدلة', STEP_APPROVED: 'اعتماد خطوة', MINUTES_REDUCED: 'تخفيض الدقائق',
-  APPROVED: 'اكتمال الاعتماد وتثبيت القيمة', REJECTED: 'رفض', RETURNED: 'إعادة لاستكمال المعلومات',
+  APPROVED: 'اكتمال الاعتماد وتثبيت القيمة', APPROVED_ZERO: 'اكتمل الاعتماد والإضافي المحسوب = صفر', REJECTED: 'رفض', RETURNED: 'إعادة لاستكمال المعلومات',
   CANCELLED: 'إلغاء', AUTO_CANCELLED: 'إلغاء بعد مراجعة الحضور', CLAIM_RELEASED: 'تحرير حجز اليوم', STEP_ESCALATED: 'تصعيد الخطوة',
+}
+
+// طلب الفترة المقفولة اللي إضافيه بيتحسب من البصمات وقت الاعتماد النهائي (لسه ماتحسبش).
+export function overtimeComputedAtApproval(overtime?: ApiOvertimeRequestDetail | null): boolean {
+  const snapshot = overtime?.calculationSnapshot
+  return snapshot?.submission?.computeAtApproval === true && !snapshot.approval && !snapshot.approvalResult
 }
 
 // نفس حد الخادم: آخر تخفيض ثم حد الطلب والدليل، والساعات الصريحة للمستثنى.
 export function overtimeApprovalLimit(overtime?: ApiOvertimeRequestDetail | null): number | null {
   const snapshot = overtime?.calculationSnapshot
   const evidence = snapshot?.submission?.evidence
-  if (!evidence?.schedule || !evidence.policy || !Array.isArray(evidence.blockers) || !Array.isArray(evidence.flags)) return null
+  if (!evidence?.schedule || !evidence.policy || !Array.isArray(evidence.blockers) || !Array.isArray(evidence.flags) || overtimeComputedAtApproval(overtime)) return null
   const requested = number(snapshot?.submission?.requestedMinutes)
   const detected = number(evidence.detectedMinutes)
   const base = evidence.evidenceMode === 'EXEMPT_APPROVAL' ? requested : detected == null ? null : Math.min(detected, requested ?? detected)
@@ -50,6 +56,8 @@ export default function OvertimeRequestSummary({ overtime, reviewRequired }: {
   const approved = number(overtime?.approvedMinutes) ?? number(approval?.approvedMinutes)
   const amount = number(overtime?.amountSnapshot) ?? number(approval?.amount)
   const limit = overtimeApprovalLimit(overtime)
+  const atApproval = overtimeComputedAtApproval(overtime)
+  const result = snapshot?.approvalResult
   return (
     <section className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-4 space-y-4" aria-label="أدلة ومراجعة العمل الإضافي">
       <div className="flex items-center justify-between gap-3 flex-wrap">
@@ -68,7 +76,11 @@ export default function OvertimeRequestSummary({ overtime, reviewRequired }: {
           </p> : <>
             <div><p className="text-gray-500">بصمة الدخول</p><p>{time(evidence.firstIn)}</p></div>
             <div><p className="text-gray-500">بصمة الخروج</p><p>{time(evidence.lastOut)}</p></div>
-            <div className="sm:col-span-2"><p className="text-gray-500">بداية الوقت الإضافي</p><p>{evidence.schedule.overtimeStartMinute == null ? 'كل مدة العمل المثبتة في يوم العطلة' : <span dir="ltr">{workdayClock(evidence.schedule.overtimeStartMinute)}</span>}{evidence.schedule.flexEnabled && <span className="text-xs text-gray-500"> · بعد استكمال ساعات الدوام المرن</span>}</p></div>
+            <div className="sm:col-span-2"><p className="text-gray-500">بداية الوقت الإضافي</p><p>{evidence.dayKind !== 'WEEKDAY' ? 'كل مدة العمل المثبتة في يوم العطلة' : evidence.schedule.overtimeStartMinute == null ? 'ساعات العمل المطلوبة ماكملتش' : <>بعد إكمال ساعات اليوم المطلوبة — <span dir="ltr">{workdayClock(evidence.schedule.overtimeStartMinute)}</span></>}</p></div>
+            {evidence.dayKind === 'WEEKDAY' && evidence.workedMinutes != null && evidence.requiredMinutes != null && <>
+              <div><p className="text-gray-500">الشغل الفعلي</p><p>{duration(evidence.workedMinutes)}</p></div>
+              <div><p className="text-gray-500">ساعات العمل المطلوبة</p><p>{duration(evidence.requiredMinutes)}</p></div>
+            </>}
             <div><p className="text-gray-500">المدة قبل التقريب والسقف</p><p>{duration(evidence.rawMinutes)}</p></div>
             <div><p className="text-gray-500">الساعات التي حسبها النظام</p><p className="font-semibold text-indigo-700">{duration(evidence.detectedMinutes)}</p></div>
           </>}
@@ -79,8 +91,18 @@ export default function OvertimeRequestSummary({ overtime, reviewRequired }: {
         <p className="text-xs text-gray-500">{evidence.evidenceMode !== 'EXEMPT_APPROVAL' && <>العتبة {evidence.policy.thresholdMinutes} دقيقة · التقريب للأسفل كل {evidence.policy.roundingMinutes} دقيقة · </>}{evidence.policy.maxDailyMinutes > 0 ? `السقف اليومي ${duration(evidence.policy.maxDailyMinutes)}` : 'السقف اليومي غير مفعّل'}</p>
         {evidence.evidenceMode === 'EXEMPT_APPROVAL' && evidence.policy.maxDailyMinutes > 0 && number(requested) != null && Number(requested) > evidence.policy.maxDailyMinutes && <p className="text-sm text-amber-800">الساعات المطلوبة تتجاوز السقف اليومي؛ يلزم تخفيضها قبل اكتمال الاعتماد.</p>}
         {evidence.flags.includes('DAILY_CAP_TRIMMED') && <p className="text-sm text-amber-800">خُفّضت الساعات المحتسبة إلى السقف اليومي؛ المدة الخام محفوظة أعلاه.</p>}
-        {!!evidence.blockers.length && <ul role="alert" className="space-y-1 text-sm text-red-700">{evidence.blockers.map((blocker, index) => <li key={`${blocker.code}-${index}`}>{blocker.message}</li>)}</ul>}
+        {atApproval && <p className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800">
+          الطلب اتقدم والفترة مقفولة: الإضافي هيتحسب من بصمات اليوم لحظة الاعتماد النهائي بنفس القاعدة (الشغل الفعلي − الساعات المطلوبة بشرط الاستحقاق)، ولو طلع صفر هيتسجل صفر. الأرقام اللي فوق وقت التقديم بس.
+        </p>}
+        {!atApproval && !result && !!evidence.blockers.length && <ul role="alert" className="space-y-1 text-sm text-red-700">{evidence.blockers.map((blocker, index) => <li key={`${blocker.code}-${index}`}>{blocker.message}</li>)}</ul>}
       </>}
+      {result && <div className={`rounded-lg p-3 text-sm ${result.approvedMinutes > 0 ? 'bg-success-50 text-success-800' : 'bg-amber-50 text-amber-800'}`}>
+        <p className="font-semibold">{result.message}</p>
+        <p className="text-xs mt-1">الدخول/الخروج وقت الحساب: <span dir="ltr">{result.checkIn ?? '—'} / {result.checkOut ?? '—'}</span>
+          {result.workedMinutes != null && <> · الشغل الفعلي {duration(result.workedMinutes)}</>}
+          {result.requiredMinutes != null && <> · المطلوب {duration(result.requiredMinutes)}</>}
+          {' '}· المحسوب {duration(result.detectedMinutes)}</p>
+      </div>}
       {overtime?.wageEvidence && !overtime.wageEvidence.ready && <div role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 space-y-1">
         <p>يُسعَّر الإضافي عند الاعتماد النهائي على راتب شهر <span dir="ltr">{overtime.wageEvidence.wagePayrollPeriod}</span> الذي يقع فيه يوم العمل، ولا يوجد لهذا الشهر راتب موثق؛ الاعتماد النهائي سيُرفض حتى يُثبت راتب الشهر من <Link href="/payroll/salary-history" className="underline">سجل الأجر</Link>.</p>
         {overtime.wageEvidence.message && <p className="text-xs">{overtime.wageEvidence.message}</p>}

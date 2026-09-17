@@ -56,7 +56,7 @@ import { assertAttendanceRulePeriodOpen, attendanceFlexPolicy, attendanceRuleDat
 import type { AttendanceGraceSource } from './attendance-rule-history'
 import { calculateAttendanceFlex, attendanceIntervalMinutes } from './attendance-flex-calculator'
 import type { AttendanceFlexResult, AttendanceRuleSnapshot, FlexOverrideMode } from './attendance-flex-calculator'
-import { overtimeEvidenceFingerprint, overtimeMinutes, selectOvertimePunches } from './overtime-evidence'
+import { overtimeEvidenceFingerprint, overtimeMinutes, overtimeSubmissionBlockers, selectOvertimePunches, workedOvertime } from './overtime-evidence'
 import type { OvertimeEvidence, OvertimeEvidencePolicy, OvertimeBlocker } from './overtime-evidence'
 import { appendOvertimeEvent, assertOvertimeDayAvailable, claimOvertimeDay, describeOvertimeSubmission, findActiveOvertimeEntries, releaseOvertimeDayClaim } from '../requests/overtime-day-claims'
 import { queueOvertimeDispatch } from '../requests/overtime-dispatch'
@@ -293,6 +293,13 @@ export class AttendanceService {
 
   // أيام العمل الفعلية في مدى — الويك إند والعطلات الرسمية مستثناة
   // (للإجازات: المخصوم من الرصيد = أيام العمل فقط)
+  async workingDaysForBranchOrDefault(branchId: number | null, fromDate: string, toDate: string) {
+    if (branchId) return this.workingDaysBetween(branchId, fromDate, toDate)
+    const first = await this.days.manager.query(`SELECT TOP 1 id FROM branches WHERE isActive = 1 ORDER BY id`)
+    if (!first.length) return { total: 0, working: 0, skipped: [] }
+    return this.workingDaysBetween(Number(first[0].id), fromDate, toDate)
+  }
+
   async workingDaysBetween(
     branchId: number,
     fromDate: string,
@@ -2677,7 +2684,7 @@ export class AttendanceService {
       if (!employee) throw new NotFoundException('الموظف غير موجود')
       const scope = branchScopeOf(user)
       if (!isSelf && scope !== null && employee.branchId !== scope) throw new ForbiddenException('الموظف خارج نطاق فرعك')
-      let exceptEntryId: number | undefined
+      let exceptEntryId: number | undefined, automatic = false
       if (requestId != null) {
         if (!Number.isSafeInteger(requestId) || requestId < 1) throw new BadRequestException('معرف طلب الإضافي غير صالح')
         const request = await em.getRepository(Request).findOneBy({ id: requestId })
@@ -2696,13 +2703,17 @@ export class AttendanceService {
         }
         if (request.typeCode === 'OVERTIME_AUTO' && !linked.length) throw new ConflictException('طلب كشف قديم بلا سجل مرتبط؛ راجع المرجع قبل إعادة التقديم')
         exceptEntryId = linked[0]?.id
+        automatic = request.typeCode === 'OVERTIME_AUTO'
       }
       const evidence = await this.overtimeEvidence(employeeId!, date, em)
       const existing = await findActiveOvertimeEntries(em, employeeId!, date)
       const submission = await describeOvertimeSubmission(em, evidence, exceptEntryId)
       // حدود التقديم والسجل القائم لا تدخل بصمة الأدلة؛ إنشاء الطلب لا يغير الدليل نفسه.
-      const blockers = [...evidence.blockers, ...submission]
-      return { ...evidence, blockers, canSubmit: blockers.length === 0, resubmission: requestId != null,
+      // الفترة المقفولة: نقص البصمات أو الزيادة الأقل من الشرط مايمنعش التقديم — الحساب وقت الاعتماد النهائي.
+      const deferral = overtimeSubmissionBlockers(evidence, automatic)
+      const blockers = [...deferral.blockers, ...submission]
+      return { ...evidence, blockers, deferredBlockers: deferral.deferred, computeAtApproval: deferral.deferred.length > 0,
+        canSubmit: blockers.length === 0, resubmission: requestId != null,
         existingRecord: existing[0] ? { id: existing[0].id, status: existing[0].status, requestId: existing[0].requestId ?? null } : null }
     })
   }
@@ -2735,7 +2746,7 @@ export class AttendanceService {
         sourceId: shift.sourceId, sourceVersionId: shift.sourceVersionId, employeeVersionId: shift.employeeVersionId,
         flexEnabled: shift.flexEnabled, overtimeStartMinute: null },
       firstIn: null, lastOut: null, checkIn: null, checkOut: null, dayKind, window,
-      rawMinutes: 0, detectedMinutes: 0, policy, flags, blockers,
+      workedMinutes: null, requiredMinutes: null, rawMinutes: 0, detectedMinutes: 0, policy, flags, blockers,
     }
     if (!window.open) flags.push('CLOSED_WINDOW_REASON_REQUIRED')
     const leaves = await this.leaves.find({ where: { employeeId, status: 'APPROVED', fromDate: LessThanOrEqual(date), toDate: MoreThanOrEqual(date) } })
@@ -2762,34 +2773,44 @@ export class AttendanceService {
     if (shift.source === 'none' && kind === 'WORKING') block('UNSCHEDULED', 'اليوم بلا دوام محدد يمكن احتساب الإضافي بعده')
     const start = shift.source === 'none' ? 0 : toMinutes(shift.start)
     const end = shift.source === 'none' ? 0 : toMinutes(shift.end) + (frame.overnight ? 1440 : 0)
-    let overtimeStart = end
+    let overtimeStart: number | null = null
     const flexPolicy = shift.sourceSettings?.flexPolicy ?? await attendanceFlexPolicy(this.days.manager)
     if (checkInInstant && checkOutInstant) {
       const duration = (checkOutInstant.getTime() - checkInInstant.getTime()) / 60000
       if (duration <= 0 || duration > flexPolicy.maxSessionMinutes || checkInInstant.getTimezoneOffset() !== checkOutInstant.getTimezoneOffset()) block('ATTENDANCE_REVIEW', 'مدة البصمات أو تغير التوقيت يحتاج مراجعة قبل احتساب الإضافي')
+      // العطلة والراحة: كل مدة الشغل إضافي (ثم الشرط والتقريب زي ما هو)
+      let raw = Math.max(0, duration)
+      base.workedMinutes = Math.max(0, Math.floor(raw + 1e-8))
       if (kind === 'WORKING' && shift.source !== 'none') {
         const mid = Math.round((start + end) / 2)
         const halfLeaves = leaves.filter(l => (l.period ?? 'FULL') !== 'FULL').map(l => ({ from: l.period === 'MORNING' ? start : mid, to: l.period === 'MORNING' ? mid : end }))
         const precise = (time: string, instant: Date) => toMinutes(time) + instant.getSeconds() / 60 + instant.getMilliseconds() / 60000
         const required = shift.sourceSettings?.requiredWorkMinutes != null ? Number(shift.sourceSettings.requiredWorkMinutes)
           : shift.sourceSettings?.requiredHours != null ? Math.round(Number(shift.sourceSettings.requiredHours) * 60) : end - start
+        const permissions = (await this.approvedPermissionWindows(employeeId, date)).map(w => frame.window(w))
+        const checkInMinute = precise(checkIn!, checkInInstant), checkOutMinute = precise(checkOut!, checkOutInstant)
         const result = calculateAttendanceFlex({ startMinute: start, endMinute: end,
-          checkInMinute: precise(checkIn!, checkInInstant), checkOutMinute: precise(checkOut!, checkOutInstant),
+          checkInMinute, checkOutMinute,
           flexEnabled: shift.flexEnabled, flexWindowMinutes: shift.flexWindowMinutes, requiredWorkMinutes: required,
           graceMinutes: 0, countEarlyWorkTowardRequired: flexPolicy.countEarlyWorkTowardRequired,
           prorateFlexWindowOnPartialLeave: flexPolicy.prorateWindowOnPartialLeave, unpaidBreakMinutes: flexPolicy.unpaidBreakMinutes,
-          maxSessionMinutes: flexPolicy.maxSessionMinutes, halfLeaveWindows: halfLeaves,
-          permissions: (await this.approvedPermissionWindows(employeeId, date)).map(w => frame.window(w)) })
+          maxSessionMinutes: flexPolicy.maxSessionMinutes, halfLeaveWindows: halfLeaves, permissions })
         if (result.attendanceReviewRequired) block('ATTENDANCE_REVIEW', result.attendanceReviewReason || 'تعريف الدوام يحتاج مراجعة')
-        if (shift.flexEnabled && result.expectedEndMinute != null) overtimeStart = Math.max(end, Math.ceil(result.expectedEndMinute))
+        // قاعدة المالك: الإضافي = الشغل الفعلي − الساعات المطلوبة لليوم (مش الوقت بعد نهاية الوردية)،
+        // فالحضور بدري بيتحسب والتأخير الصبح بيتخصم؛ allow_early_overtime مالوش أثر في يوم العمل.
+        const work = workedOvertime({ checkInMinute, checkOutMinute, sessionMinutes: duration, requiredWorkMinutes: required,
+          shiftStartMinute: start, shiftEndMinute: end, unpaidBreakMinutes: flexPolicy.unpaidBreakMinutes,
+          halfLeaveWindows: halfLeaves, permissionWindows: permissions })
+        raw = work.extraMinutes
+        base.workedMinutes = Math.max(0, Math.floor(work.workedMinutes + 1e-8))
+        base.requiredMinutes = Math.max(0, Math.ceil(work.requiredMinutes - 1e-8))
+        overtimeStart = work.completedAtMinute == null ? null : Math.ceil(work.completedAtMinute - 1e-8)
       }
-      const raw = kind !== 'WORKING' ? Math.max(0, duration) : Math.max(0, (checkOutInstant.getTime() - Math.max(checkInInstant.getTime(), atMinute(date, overtimeStart).getTime())) / 60000)
-        + (policy.earlyOvertime ? Math.max(0, (Math.min(checkOutInstant.getTime(), atMinute(date, start).getTime()) - checkInInstant.getTime()) / 60000) : 0)
       const result = overtimeMinutes(raw, policy)
       base.rawMinutes = result.rawMinutes
       base.detectedMinutes = result.detectedMinutes
       if (result.capped) flags.push('DAILY_CAP_TRIMMED')
-      if (!result.detectedMinutes && !blockers.length) block('BELOW_THRESHOLD', 'مدة العمل الإضافي دون العتبة أو وحدة التقريب المقررة')
+      if (!result.detectedMinutes && !blockers.length) block('BELOW_THRESHOLD', 'الزيادة عن ساعات العمل المطلوبة ماوصلتش شرط استحقاق الإضافي أو وحدة التقريب')
     }
     base.schedule.overtimeStartMinute = kind === 'WORKING' && shift.source !== 'none' ? overtimeStart : null
     if (blockers.length) base.detectedMinutes = 0
@@ -3610,7 +3631,8 @@ export class AttendanceService {
         return {
           ...attendanceFields,
           ...(maySeeFinancials ? { calculationSnapshot, hourlyRateSnapshot, amountSnapshot } : {}),
-          evidence: calculationSnapshot?.submission?.evidence ?? calculationSnapshot?.evidence ?? null,
+          // طلب الفترة المقفولة بيتحسب وقت الاعتماد؛ دليل الاعتماد هو الأحدث لو موجود.
+          evidence: calculationSnapshot?.approval?.evidence ?? calculationSnapshot?.approvalResult?.evidence ?? calculationSnapshot?.submission?.evidence ?? calculationSnapshot?.evidence ?? null,
           employeeName: emp?.fullName ?? null,
           employeeCode: emp?.employeeCode ?? null,
           departmentId: emp?.departmentId ?? null,
