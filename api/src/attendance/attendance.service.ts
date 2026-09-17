@@ -754,7 +754,8 @@ export class AttendanceService {
         affected.add(`${emp.id}|${localDateOf(punchTime)}`)
       }
     }
-    if (rows.length > 0) await this.punches.save(rows)
+    // SQL Server بيقبل 2100 باراميتر في الطلب الواحد: البصمة ~10 أعمدة، فالحفظ على دفعات 150 (سحب الأجهزة بيجيب مئات مرة واحدة)
+    if (rows.length > 0) await this.punches.save(rows, { chunk: 150 })
 
     // Resolve after saving: the morning punch can belong to last night's shift.
     // Resolving calendar dates alone leaves the previous workday incomplete.

@@ -111,9 +111,11 @@ export class ZkTcpAdapter {
       let reply = await this.command(CMD.CONNECT)
       this.session = reply.session
       if (reply.command === CMD.UNAUTH) {
-        if (!this.#key) throw new ZkTcpError('AUTH_REQUIRED')
+        // أجهزة كتير بترد UNAUTH حتى لو Comm Key = 0 وبتستنى CMD_AUTH بالمفتاح 0 (نفس سلوك pyzk)،
+        // فبنجرب المفتاح المسجل (أو 0) الأول؛ لو اترفض ومفيش مفتاح مسجل يبقى الجهاز فعلًا عليه مفتاح.
+        const hadKey = this.#key !== 0
         reply = await this.command(CMD.AUTH, makeCommKey(this.#key, this.session))
-        if (reply.command !== CMD.OK) throw new ZkTcpError('AUTH_FAILED')
+        if (reply.command !== CMD.OK) throw new ZkTcpError(hadKey ? 'AUTH_FAILED' : 'AUTH_REQUIRED')
       } else if (reply.command !== CMD.OK) throw new ZkTcpError('DEVICE_REJECTED')
       this.authenticated = true
     } catch (error) {
@@ -171,7 +173,9 @@ export class ZkTcpAdapter {
       const timer = setTimeout(() => this.fail(new ZkTcpError('TIMEOUT')), deadline - Date.now())
       this.waiter = { resolve, reject, timer }
     })
-    if (packet.reply !== expectedReply || (!connecting && packet.session !== this.session)) {
+    // أجهزة حقيقية بتبعت حزم البيانات (CMD_DATA) أثناء نقل الدفعات بجلسة 0 بدل رقم الجلسة (pyzk بيتجاهل الجلسة فيها)
+    const dataWithoutSession = packet.command === CMD.DATA && packet.session === 0
+    if (packet.reply !== expectedReply || (!connecting && packet.session !== this.session && !dataWithoutSession)) {
       this.fail(new ZkTcpError('PROTOCOL'))
       throw this.failure
     }

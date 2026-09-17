@@ -163,7 +163,9 @@ export class DeviceSyncService {
     } catch (e: any) {
       // Never serialize transport errors, request packets, or database parameters.
       const msg = e instanceof ZkTcpError ? e.message : 'تعذر إكمال مزامنة الجهاز'
-      this.logger.warn(`فشل مزامنة الجهاز #${device.id}: ${msg}`)
+      // تشخيص من غير قيم: نوع الخطأ ورقمه ونص قاعدة البيانات بعد إخفاء أي قيمة بين علامات تنصيص
+      const diag = e instanceof ZkTcpError ? '' : ` [${e?.name ?? 'Error'}${e?.driverError?.number ? ' #' + e.driverError.number : ''}: ${String(e?.driverError?.message ?? e?.message ?? '').replace(/'[^']*'/g, "'…'").replace(/@\d+/g, '@…').slice(0, 160)}]`
+      this.logger.warn(`فشل مزامنة الجهاز #${device.id}: ${msg}${diag}`)
       return this.finish(device, {
         ok: false,
         pulled: 0,

@@ -47,6 +47,17 @@ test('ATT24 TCP authentication succeeds with fragmented frames; existing node-zk
   } finally { await zk.disconnect(); await device.stop() }
 })
 
+test('ATT24 terminal that answers UNAUTH with Comm Key 0 connects by authenticating with key 0 (like pyzk)', async () => {
+  // أجهزة الشركة الحقيقية (Comm Key = 0) بترد UNAUTH وبتستنى CMD_AUTH بالمفتاح 0
+  const device = await terminal({ authHex: makeCommKey(0, 0x4567).toString('hex'), data: Buffer.alloc(0) })
+  const zk = new ZkTcpAdapter('127.0.0.1', device.port, null, 300)
+  try {
+    await zk.createSocket()
+    assert.deepEqual((await zk.getAttendances()).data, [])
+    assert.ok(device.commands.includes(1102))
+  } finally { await zk.disconnect(); await device.stop() }
+})
+
 test('ATT24 unprotected terminal remains compatible and never receives CMD_AUTH', async () => {
   const device = await terminal({ open: true, data: Buffer.alloc(0) })
   const zk = new ZkTcpAdapter('127.0.0.1', device.port, null, 300)
