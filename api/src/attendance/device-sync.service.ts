@@ -31,12 +31,36 @@ export interface UnmatchedCode {
   deviceSns: string[]
 }
 
+// آخر كام يوم بنسحبهم من ذاكرة الجهاز (الشهر الحالي والسابق)
+export const DEVICE_LOOKBACK_DAYS = 62
+
+// SQL Server بيختار طلب ضحية في الـdeadlock (1205): نعيد نفس الدفعة لحد 3 مرات
+export async function withDeadlockRetry<T>(fn: () => Promise<T>, attempts = 3): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try { return await fn() } catch (e: any) {
+      const deadlock = e?.driverError?.number === 1205 || e?.number === 1205
+      if (!deadlock || attempt >= attempts) throw e
+      await new Promise((resolve) => setTimeout(resolve, 500 * attempt))
+    }
+  }
+}
+
 // مزامنة أجهزة ZKTeco عبر TCP/IP: سحب اللوجات → dedupe →
 // نفس pipeline الحضور (حساب التأخير حسب الوردية المؤرّخة)
 @Injectable()
 export class DeviceSyncService {
   private readonly logger = new Logger(DeviceSyncService.name)
   private syncing = new Set<number>()
+  // جهاز واحد في المرة على مستوى الخدمة كلها (الجدولة + زرار الشاشة + مزامنة الكل): مزامنتين مع بعض
+  // بيحسبوا نفس أيام الموظفين فبيعملوا deadlock في SQL Server
+  private lock: Promise<void> = Promise.resolve()
+  private async exclusive<T>(fn: () => Promise<T>): Promise<T> {
+    const previous = this.lock
+    let release!: () => void
+    this.lock = new Promise<void>((resolve) => (release = resolve))
+    await previous
+    try { return await fn() } finally { release() }
+  }
 
   constructor(
     @InjectRepository(BiometricDevice)
@@ -78,6 +102,7 @@ export class DeviceSyncService {
       }
     }
     this.syncing.add(device.id)
+    return this.exclusive(async () => {
     try {
       // مهلات قصيرة: جهاز غير متاح ميعلقش النظام
       const zk = new ZkTcpAdapter(device.ip, device.port || 4370, device.authKey, 8000)
@@ -98,13 +123,15 @@ export class DeviceSyncService {
           `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())} ${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`
         // نفس الكود + نفس الثانية + نفس الجهاز = مكررة
         const keyOf = (code: string, t: number) => `${code}|${Math.round(t / 1000)}`
+        // الجهاز شايل تاريخه كله (أحيانًا سنين): بناخد آخر ${DEVICE_LOOKBACK_DAYS} يوم بس عشان مانحسبش أيام قديمة ملهاش لازمة
+        const cutoff = Date.now() - DEVICE_LOOKBACK_DAYS * 86400000
         const parsed: Array<{ code: string; at: Date }> = []
         let minT = Infinity
         let maxT = -Infinity
         for (const r of rows) {
           const code = String(r.deviceUserId ?? '').trim()
           const at = new Date(r.recordTime)
-          if (!code || Number.isNaN(at.getTime())) continue
+          if (!code || Number.isNaN(at.getTime()) || at.getTime() < cutoff) continue
           parsed.push({ code, at })
           if (at.getTime() < minT) minT = at.getTime()
           if (at.getTime() > maxT) maxT = at.getTime()
@@ -138,14 +165,14 @@ export class DeviceSyncService {
         let rejected = 0
         // دفعات عشان الطلب الواحد مايكبرش — ingest بيعيد حساب كل يوم متأثر مرة واحدة
         for (let i = 0; i < fresh.length; i += 500) {
-          const result = await this.attendance.ingest(
+          const result = await withDeadlockRetry(() => this.attendance.ingest(
             fresh.slice(i, i + 500),
             undefined,
             // مصدر داخلي موثوق — نتخطى مفتاح الجهاز
             { sub: 0, email: 'device-sync', role: 'super_admin', branchId: null, employeeId: null },
             // مصدر جهاز: البصمة المرفوضة (وقت مستقبلي/كود غير صالح) تُعدّ ولا تُفشل المزامنة
             { fromDevice: true }
-          )
+          ))
           inserted += result.received
           matched += result.matched
           rejected += result.rejectedFuture + result.rejectedInvalid
@@ -176,6 +203,7 @@ export class DeviceSyncService {
     } finally {
       this.syncing.delete(device.id)
     }
+    })
   }
 
   private async finish(
