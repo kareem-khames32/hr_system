@@ -84,6 +84,10 @@ export class CustodyAssignment {
 
   @Column({ type: String, length: 30, default: 'PENDING_ACK' })
   status: CustodyStatus
+
+  // ملاحظات العهدة — تُنقل من النظام القديم (ترحيل 20260917_054)
+  @Column({ type: 'nvarchar', length: 1000, nullable: true })
+  notes: string | null
 }
 
 
