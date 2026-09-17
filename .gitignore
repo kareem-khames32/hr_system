@@ -43,3 +43,9 @@ next-env.d.ts
 .next-preview/
 api/test/.preview-state.json
 public/vendor/pdfjs/
+
+# تقارير PDF مولّدة محليًا ومخرجات البناء والتشغيل
+/*.pdf
+/output/
+.next-prod/
+.claude/settings.local.json

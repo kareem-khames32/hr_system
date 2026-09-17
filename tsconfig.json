@@ -34,9 +34,10 @@
     "**/*.tsx",
     ".next-preview/types/**/*.ts",
     ".next-recovery/types/**/*.ts",
+    ".next-review/types/**/*.ts",
     ".next/types/**/*.ts",
     "next-env.d.ts",
-    ".next-review/types/**/*.ts"
+    ".next-prod/types/**/*.ts"
   ],
   "exclude": [
     "node_modules",
