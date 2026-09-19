@@ -55,6 +55,24 @@ export function reportDayRange(q: { month?: string | null; from?: string | null;
   return null
 }
 
+/**
+ * فلتر على «تاريخ الطلب» لعمود datetime2 مخزّن بـSYSUTCDATETIME: الأيام المحلية (بتوقيت الخادم، نفس «النهارده» في الشاشات)
+ * → حدود UTC نصية [start, end) تتقارن بـCONVERT(datetime2, @x, 126) — نص من غير منطقة زمنية عشان مشغل mssql (useUTC=false) ما يزحلقوش.
+ */
+export function utcBoundsOfLocalDays(range: { from: string; to: string }): { start: string; end: string } {
+  const at = (day: string, plus: number) => {
+    const [y, m, d] = day.split('-').map(Number)
+    return new Date(y, m - 1, d + plus).toISOString().slice(0, 23)
+  }
+  return { start: at(range.from, 0), end: at(range.to, 1) }
+}
+
+/** «من تاريخ / إلى تاريخ» اختياري لقوائم الطلبات: الاتنين أو ولا واحد (400 لو ناقص أو غلط)، وnull = من غير فلتر. */
+export function optionalCreatedRange(q: { from?: string | null; to?: string | null }): { start: string; end: string } | null {
+  const range = reportDayRange({ from: q.from, to: q.to })
+  return range ? utcBoundsOfLocalDays(range) : null
+}
+
 /** يوم بداية الدورة من الإعداد (نص) — القيمة الفاسدة ترجع للافتراضي بدل ما تكسر شاشة الحضور. */
 export function cycleStartDayOf(value: string | null | undefined): number {
   const day = Number(value)

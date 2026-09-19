@@ -13,6 +13,7 @@ import {
   Transfer,
 } from '../requests/entities/employment.entities'
 import { RequestApproval } from '../requests/entities/request-approval.entity'
+import { Request } from '../requests/entities/request.entity'
 import { Leave, LeaveBalance } from '../requests/entities/leave.entities'
 import { LeaveBalancesService } from '../requests/leave-balances.service'
 import { Loan, LoanInstallment } from '../requests/entities/financial.entities'
@@ -98,12 +99,15 @@ export class EmployeeExtrasController {
     const empById = new Map(emps.map((e) => [e.id, e]))
     if (scope !== null && !emps.length) return []
     // المبلغ الأصلي أيضًا يُقرأ كنص؛ أرقام SQL الكبيرة لا تفقد قروشًا في شاشة العرض.
+    // requestedAt = تاريخ طلب السلفة (لفلتر «من تاريخ / إلى تاريخ» في شاشة السلف)
     const query = this.loans.createQueryBuilder('loan').select('loan.id', 'id')
       .addSelect('loan.requestId', 'requestId').addSelect('loan.employeeId', 'employeeId')
       .addSelect('CONVERT(varchar(40), loan.amount)', 'amount').addSelect('loan.status', 'status')
-      .addSelect('loan.disbursedAt', 'disbursedAt').orderBy('loan.id', 'DESC')
+      .addSelect('loan.disbursedAt', 'disbursedAt')
+      .leftJoin(Request, 'req', 'req.id = loan.requestId').addSelect('req.createdAt', 'requestedAt')
+      .orderBy('loan.id', 'DESC')
     if (scope !== null) query.where('loan.employeeId IN (:...ids)', { ids: emps.map(employee => employee.id) })
-    const rows = await query.getRawMany<{ id: number; requestId: number | null; employeeId: number; amount: string; status: string; disbursedAt: Date | null }>()
+    const rows = await query.getRawMany<{ id: number; requestId: number | null; employeeId: number; amount: string; status: string; disbursedAt: Date | null; requestedAt: Date | null }>()
     const result = []
     for (const loan of rows) {
       const inst = (await readLoanInstallmentPositions(this.loans.manager, loan.employeeId, loan.id))

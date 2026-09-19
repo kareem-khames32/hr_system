@@ -20,6 +20,8 @@ import {
 import Link from 'next/link'
 import { downloadCsv } from '@/lib/csv'
 import { fetchLeaves, revokeLeave, can, type ApiLeavePage } from '@/lib/api'
+import { DayRangeFilter, usePayrollMonthContext } from '@/components/DayRangeFilter'
+import { validDayRange, type DayRange } from '@/lib/payroll-month-range'
 
 // سجل الإجازات — هذا هو «سجل الوجهة» بعد اكتمال الموافقات في محرك الطلبات.
 // الاعتماد/الرفض يتم في صندوق الموافقات، وليس هنا.
@@ -77,8 +79,12 @@ export default function LeavesPage() {
   // البحث بيتبعت بعد ما الكتابة تقف — طلب واحد مش طلب لكل حرف
   const [search, setSearch] = useState('')
   const [selectedType, setSelectedType] = useState('all')
-  const [fromFilter, setFromFilter] = useState('')
-  const [toFilter, setToFilter] = useState('')
+  // «من تاريخ / إلى تاريخ» اختياري (الإجازات المتقاطعة مع المدى) أو شهر رواتب بضغطة — فاضي = كل التواريخ
+  const payrollMonth = usePayrollMonthContext()
+  const [dateRange, setDateRange] = useState<DayRange | null>(null)
+  const activeRange = validDayRange(dateRange, null)
+  const fromFilter = activeRange?.from ?? ''
+  const toFilter = activeRange?.to ?? ''
   const [page, setPage] = useState(1)
 
   const [data, setData] = useState<ApiLeavePage>(EMPTY_PAGE)
@@ -244,7 +250,7 @@ export default function LeavesPage() {
 
         {/* Filters */}
         <div className="card">
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-end gap-4">
             {/* Search */}
             <div className="flex-1 min-w-[300px]">
               <div className="relative">
@@ -274,21 +280,8 @@ export default function LeavesPage() {
             </select>
 
             {/* Date Range — الإجازات المتقاطعة مع المدى */}
-            <div className="flex items-center gap-2">
-              <input
-                type="date"
-                className="input w-40"
-                value={fromFilter}
-                onChange={(e) => setFromFilter(e.target.value)}
-              />
-              <span className="text-gray-400">إلى</span>
-              <input
-                type="date"
-                className="input w-40"
-                value={toFilter}
-                onChange={(e) => setToFilter(e.target.value)}
-              />
-            </div>
+            <DayRangeFilter idPrefix="leaves" value={dateRange} onChange={setDateRange} onClear={() => setDateRange(null)} maxDays={null}
+              cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today} />
           </div>
         </div>
 

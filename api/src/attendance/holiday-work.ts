@@ -1,6 +1,8 @@
 import { BadRequestException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
+import { suspendedDatesBetween } from '../employees/employee-suspensions'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
+import { resolveEmployeeCalendarDay } from './attendance-calendar-resolver'
 import { HolidayWorkOrder } from './holiday-work.entities'
 
 // «بدل دوام أيام العطلات» (قرار المالك 19 سبتمبر):
@@ -250,6 +252,46 @@ export async function holidayWorkCoversDay(em: EntityManager, org: HolidayWorkOr
   return grants.some(grant => grant.dates.includes(date) && holidayWorkGrantMatches(grant, org))
 }
 
+// ===== الإضافي والبدل ما يجتمعوش على نفس اليوم =====
+
+export const HOLIDAY_WORK_OVERTIME_REFUSAL = 'اليوم ده متغطي بأمر/طلب دوام يوم عطلة وبيتحسب «بدل دوام أيام العطلات» مش إضافي'
+
+/**
+ * يوم الإضافي متغطي بأمر ساري أو طلب «دوام يوم عطلة» معتمد للموظف؟ يوم العمل العادي للموظف (أمر شركة وفرعه شغال اليوم ده)
+ * مش متغطي — الأمر مالوش أثر عليه وبيتحسب دوام عادي بقواعده (زي محرك الحضور: عطلة + أمر). التقويم المش مثبت بيتعامل كعطلة.
+ */
+export function holidayWorkCoversOvertimeDay(grants: ReadonlyArray<Pick<HolidayWorkGrant, 'targetLevel' | 'branchId' | 'targetIds' | 'dates'>>,
+  org: HolidayWorkOrg, date: string, workingDay: boolean | null): boolean {
+  if (workingDay === true) return false
+  return grants.some(grant => grant.dates.includes(date) && holidayWorkGrantMatches(grant, org))
+}
+
+export async function holidayWorkCoversOvertime(em: EntityManager, employeeId: number, date: string): Promise<boolean> {
+  if (!isHolidayWorkYmd(date) || !(await holidayWorkTableReady(em))) return false
+  const grants = await readHolidayWorkGrants(em, date, date, true)
+  if (!grants.length) return false
+  const rows: Array<{ branchId: number | null; departmentId: number | null; teamId: number | null }> =
+    await em.query('SELECT [branchId], [departmentId], [teamId] FROM [employees] WHERE [id] = @0', [employeeId])
+  if (!rows.length) return false
+  const id = (value: unknown) => value == null ? null : Number(value)
+  const org: HolidayWorkOrg = { employeeId, branchId: id(rows[0].branchId), departmentId: id(rows[0].departmentId), teamId: id(rows[0].teamId) }
+  if (!holidayWorkCoversOvertimeDay(grants, org, date, null)) return false
+  let working: boolean | null = null
+  try {
+    const calendar = await resolveEmployeeCalendarDay(em, employeeId, date)
+    if (calendar.state === 'AVAILABLE' && typeof calendar.working === 'boolean') working = calendar.working
+  } catch { /* تقويم مش مثبت: الأمر هو الحكم */ }
+  return holidayWorkCoversOvertimeDay(grants, org, date, working)
+}
+
+/**
+ * طلب الإضافي (أو قيد الإضافي المكتشف) ليوم متغطي بيترفض عند التقديم وعند كل خطوة اعتماد — اليوم بيتحسب «بدل دوام أيام العطلات» بس.
+ * والعكس في مزامنة المسير: اليوم اللي له إضافي معتمد/مصروف بيتخطى في البدل. فاليوم مايتصرفش مرتين.
+ */
+export async function assertOvertimeNotHolidayWork(em: EntityManager, employeeId: number, date: string): Promise<void> {
+  if (await holidayWorkCoversOvertime(em, employeeId, date)) throw new BadRequestException(HOLIDAY_WORK_OVERTIME_REFUSAL)
+}
+
 async function configNumber(em: EntityManager, key: string, fallback: number): Promise<number> {
   const rows: Array<{ value: string }> = await em.query('SELECT [value] FROM [requests_config] WHERE [key] = @0', [key])
   const value = Number(rows[0]?.value ?? fallback)
@@ -310,6 +352,8 @@ export interface HolidayWorkPayrollLine {
   status: 'IN_RUN' | 'ALREADY_SETTLED' | 'SKIPPED'
   code?: HolidayWorkSkipCode
   message?: string
+  /** يوم قبل تغطية المسير ماتصرفش في مسير فترته (أمر اتعمل أو طلب اتعتمد بعد اعتماده) — داخل أول مسير مفتوح بعده. */
+  carried?: true
 }
 
 interface ObligationRow {
@@ -331,9 +375,14 @@ async function cancelObligations(em: EntityManager, ids: number[]) {
   }
 }
 
+/** أقدم يوم بيرجع له المسير يدوّر على أيام عطلة مغطاة ماتصرفتش (الأوامر نفسها بدأت مع ترحيل 055 في سبتمبر 2026). */
+export const HOLIDAY_WORK_CARRY_FLOOR = '2000-01-01'
+
 /**
  * قبل قراءة قيود الدفتر في حساب المسير: لكل يوم عطلة مغطى بأمر/طلب معتمد داخل تغطية الموظف في الفترة،
  * ينشئ أو يحدّث قيد «بدل» PENDING بالمبلغ المحسوب، ويلغي القيد اللي ماعادش له مبرر (أمر اتلغى، بصمة اتشالت).
+ * والأيام اللي قبل التغطية وماتصرفتش (أمر اتعمل أو طلب اتعتمد بعد اعتماد مسير فترتها) بتدخل أول مسير مفتوح للموظف
+ * بعدها — زي أي قيد مستحق شهره المستهدف لا يتجاوز شهر المسير؛ واليوم اللي قيده في إيد مسير مفتوح تاني بيفضل معاه.
  * القيد المحجوز لمسير معتمد أو المصروف ما يتلمسش (المعتمد والمصروف ما بيتغيرش).
  */
 export async function syncHolidayWorkPayroll(em: EntityManager, input: {
@@ -346,31 +395,54 @@ export async function syncHolidayWorkPayroll(em: EntityManager, input: {
   skipDates?: ReadonlySet<string>
   actorUserId: number | null
   today?: string
+  /** أول يوم يتدوّر فيه على الأيام اللي قبل التغطية (الافتراضي HOLIDAY_WORK_CARRY_FLOOR). */
+  carryFrom?: string
 }): Promise<{ lines: HolidayWorkPayrollLine[]; total: number }> {
   if (input.from > input.to || !(await holidayWorkTableReady(em))) return { lines: [], total: 0 }
   const today = input.today ?? holidayWorkToday()
-  const grants = await readHolidayWorkGrants(em, input.from, input.to, true)
-  const byDate = holidayWorkGrantsByDate(grants, input.org, input.from, input.to)
+  const scanFrom = [input.carryFrom ?? HOLIDAY_WORK_CARRY_FLOOR, input.from].sort()[0]
+  const grants = await readHolidayWorkGrants(em, scanFrom, input.to, true)
+  const byDate = holidayWorkGrantsByDate(grants, input.org, scanFrom, input.to)
   const existing: ObligationRow[] = await em.query(`SELECT [id], [sourceRef], [status], CAST([amount] AS nvarchar(40)) AS [amount], [label], [targetPeriod],
       [reservedPayrollRunId], [payrollReversalOfObligationId], [carriedFromObligationId], [sourceRequestId]
     FROM [employee_obligations] WHERE [employeeId] = @0 AND [sourceRef] LIKE N'holiday[_]work:%' AND [status] <> N'CANCELLED'
-      AND [effectiveDate] >= @1 AND [effectiveDate] <= @2`, [input.employeeId, input.from, input.to])
+      AND [effectiveDate] >= @1 AND [effectiveDate] <= @2`, [input.employeeId, scanFrom, input.to])
   const rowsByDate = new Map<string, ObligationRow[]>()
   for (const row of existing) {
     const ref = parseHolidayWorkSourceRef(row.sourceRef)
     if (!ref) continue
     rowsByDate.set(ref.date, [...(rowsByDate.get(ref.date) ?? []), row])
   }
-  const dates = [...new Set([...byDate.keys(), ...rowsByDate.keys()])].sort()
-  if (!dates.length) return { lines: [], total: 0 }
-  const grantDates = [...byDate.keys()]
+  // قيد مستحق شهره المستهدف مسير تاني (مسير مفتوح أقدم أو أحدث بيديره): مش بتاع المسير ده
+  const ownRow = (row: ObligationRow) => row.targetPeriod == null || row.targetPeriod === input.period
+  const toCancel: number[] = []
+  const carried = new Set<string>()
+  const dates: string[] = []
+  for (const date of [...new Set([...byDate.keys(), ...rowsByDate.keys()])].sort()) {
+    if (date >= input.from) { dates.push(date); continue }
+    // قبل التغطية: يوم عليه أمر/طلب ساري للموظف ومااتسوّاش — مش مصروف ولا محجوز لمسير معتمد ولا في إيد مسير مفتوح تاني
+    const rows = rowsByDate.get(date) ?? []
+    if (!byDate.has(date) || rows.some(row => !managedRow(row))) continue
+    if (rows.some(row => !ownRow(row))) { toCancel.push(...rows.filter(ownRow).map(row => row.id)); continue }
+    dates.push(date)
+    carried.add(date)
+  }
+  if (!dates.length) {
+    if (toCancel.length) await cancelObligations(em, [...new Set(toCancel)])
+    return { lines: [], total: 0 }
+  }
+  const grantDates = dates.filter(date => byDate.has(date))
   const days = await readHolidayWorkAttendanceDays(em, input.employeeId, grantDates)
   const approvedOvertime = await readApprovedOvertimeDates(em, input.employeeId, grantDates)
   const rules = await readHolidayWorkAttendanceRules(em)
+  const carriedDates = [...carried]
+  // الإيقاف عن العمل للأيام القديمة من سجل الإيقاف نفسه (أيام التغطية جاية من المسير)
+  const carriedSuspended = carriedDates.length
+    ? await suspendedDatesBetween(em, input.employeeId, carriedDates[0], carriedDates[carriedDates.length - 1]) : new Set<string>()
   const hourlyRate = Math.round(holidayWorkHourlyRate(input.basis) * 1e6) / 1e6
-  const toCancel: number[] = []
   const lines: HolidayWorkPayrollLine[] = []
   for (const date of dates) {
+    const isCarried = carried.has(date)
     const rows = rowsByDate.get(date) ?? []
     const managed = rows.filter(managedRow), settled = rows.filter(row => !managedRow(row))
     const grant = byDate.get(date)
@@ -382,18 +454,19 @@ export async function syncHolidayWorkPayroll(em: EntityManager, input: {
       lines.push({ ...base, minutes: null, hours: null, amount: cents(settled[0].amount) / 100, obligationId: settled[0].id, status: 'ALREADY_SETTLED' })
       continue
     }
-    const result = holidayWorkDayResult({ date, today, day: days.get(date) ?? null, ...rules,
-      approvedOvertime: approvedOvertime.has(date), suspended: input.skipDates?.has(date) ?? false })
+    const result = holidayWorkDayResult({ date, today, day: days.get(date) ?? null, ...rules, approvedOvertime: approvedOvertime.has(date),
+      suspended: isCarried ? carriedSuspended.has(date) : input.skipDates?.has(date) ?? false })
+    // اليوم القديم اللي مالوش استحقاق (ماجاش، له إضافي معتمد…) ما يظهرش في كل مسير جديد — بيظهر في شاشة الأمر نفسه
     if (!result.eligible) {
       toCancel.push(...managed.map(row => row.id))
-      lines.push({ ...base, minutes: result.rawMinutes, hours: null, amount: 0, obligationId: null, status: 'SKIPPED', code: result.code, message: result.message })
+      if (!isCarried) lines.push({ ...base, minutes: result.rawMinutes, hours: null, amount: 0, obligationId: null, status: 'SKIPPED', code: result.code, message: result.message })
       continue
     }
     const amount = holidayWorkAmount(input.basis, result.minutes, grant.multiplier)
     const hours = Math.round(result.minutes / 60 * 100) / 100
     if (amount <= 0) {
       toCancel.push(...managed.map(row => row.id))
-      lines.push({ ...base, minutes: result.minutes, hours, amount: 0, obligationId: null, status: 'SKIPPED', code: 'NO_WORK', message: 'المبلغ صفر (مفيش راتب مسجل)' })
+      if (!isCarried) lines.push({ ...base, minutes: result.minutes, hours, amount: 0, obligationId: null, status: 'SKIPPED', code: 'NO_WORK', message: 'المبلغ صفر (مفيش راتب مسجل)' })
       continue
     }
     const sourceRef = holidayWorkSourceRef(grant.id, date)
@@ -416,7 +489,7 @@ export async function syncHolidayWorkPayroll(em: EntityManager, input: {
       }))
       obligationId = saved.id
     }
-    lines.push({ ...base, minutes: result.minutes, hours, amount, obligationId, status: 'IN_RUN' })
+    lines.push({ ...base, minutes: result.minutes, hours, amount, obligationId, status: 'IN_RUN', ...(isCarried ? { carried: true as const } : {}) })
   }
   if (toCancel.length) await cancelObligations(em, [...new Set(toCancel)])
   const total = lines.filter(line => line.status === 'IN_RUN').reduce((sum, line) => sum + Math.round(line.amount * 100), 0) / 100

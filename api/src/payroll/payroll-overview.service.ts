@@ -8,6 +8,7 @@ import {
   DEDUCTION_WAIVER_KIND_LABELS, DEDUCTION_WAIVER_LEVELS, DeductionWaiverKind, DeductionWaiverLevel, isDeductionWaiverKind, parseWaiverTargetIds,
 } from './payroll-deduction-waivers'
 import { findPayrollConflicts } from './payroll-membership-guard'
+import { describePayrollItemsLines, payrollLineColumns, type PayrollItemLines } from './payroll-item-lines'
 import { PayrollRun } from './payroll.entities'
 import { PayrollService } from './payroll.service'
 
@@ -255,6 +256,36 @@ export class PayrollOverviewService {
     const totals: Partial<Record<DeductionWaiverKind, number>> = {}
     for (const row of rows) totals[row.kind] = money(cents(totals[row.kind] ?? 0) + cents(row.amount))
     return { period, runs: runs.map(run => ({ id: run.id, name: run.name, status: run.status })), totals, rows }
+  }
+
+  // ===== كل بنود الشهر (طلب المالك 19 سبتمبر): صف لكل موظف في كل مسير محسوب، وكل بند استحقاق واستقطاع باسمه =====
+  // «البدلات» تعرض الاستحقاقات و«الاستقطاعات» تعرض الاستقطاعات؛ نفس تقسيم جدول المسير والقسيمة، ومجموع كل صف = أعمدة بنده المحفوظة.
+  async itemLines(user: JwtPayload, rawPeriod: unknown) {
+    const period = this.period(rawPeriod), scope = this.scope(user)
+    const runs = (await this.monthRuns(period)).filter(run => run.runType !== 'REVERSAL')
+    const names = await this.orgNames()
+    const rows: Array<{ runId: number; runName: string | null; runStatus: string; itemId: number; employeeId: number; employeeCode: string; fullName: string
+      branchName: string | null; departmentName: string | null } & PayrollItemLines> = []
+    for (const chunk of chunks(runs.map(run => run.id))) {
+      const items: Array<Record<string, any>> = await this.em.query(`SELECT i.*, CAST(m.[snapshot] AS nvarchar(max)) AS [memberSnapshot]
+        FROM [payroll_items] i LEFT JOIN [payroll_run_members] m ON m.[runId] = i.[runId] AND m.[employeeId] = i.[employeeId]
+        WHERE i.[runId] IN (${idList(chunk)})`, chunk)
+      const employees = await this.employees(items.map(item => Number(item.employeeId)))
+      const visible = items.map(item => {
+        const employeeId = Number(item.employeeId), snapshot = parseJson(item.memberSnapshot), employee = employees.get(employeeId)
+        return { item, employeeId, snapshot, employee, place: this.placeOf(snapshot, employee) }
+      }).filter(row => scope === null || row.place.branchId === scope)
+      const lines = await describePayrollItemsLines(this.em, visible.map(row => row.item))
+      visible.forEach(({ item, employeeId, snapshot, employee, place }, index) => {
+        const run = runs.find(row => row.id === Number(item.runId))!
+        rows.push({ runId: run.id, runName: run.name, runStatus: run.status, itemId: Number(item.id), employeeId,
+          employeeCode: snapshot.employeeCode ?? employee?.employeeCode ?? '', fullName: snapshot.fullName ?? employee?.fullName ?? `#${employeeId}`,
+          branchName: place.branchId ? names.branches.get(place.branchId) ?? null : null,
+          departmentName: place.departmentId ? names.departments.get(place.departmentId) ?? null : null, ...lines[index] })
+      })
+    }
+    rows.sort((a, b) => a.fullName.localeCompare(b.fullName, 'ar') || a.runId - b.runId)
+    return { period, runs: runs.map(run => ({ id: run.id, name: run.name, status: run.status })), columns: payrollLineColumns(rows), rows }
   }
 
   private async fixedShiftDays(items: Array<Record<string, any>>, runs: RunRow[]) {

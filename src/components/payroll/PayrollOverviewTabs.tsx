@@ -6,15 +6,15 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Ban, Calendar, CheckCircle, Plus, Search, X } from 'lucide-react'
 import { can, getCurrentUser, type ApiBranch, type ApiDepartment, type ApiEmployee, type ApiTeam } from '@/lib/api'
-import { formatMoney } from '@/lib/money'
 import EmptyState from '@/components/EmptyState'
+import { PayrollMonthLinesTable } from '@/components/payroll/PayrollMonthLinesTable'
 import { OrgTargetPicker, describeOrgTarget, initialOrgTarget, resolveOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
 import { usePayrollDayRange } from '@/components/DayRangeFilter'
 import { dayRangeLabel, payrollMonthBounds } from '@/lib/payroll-month-range'
 import {
   cancelDeductionWaiver, createDeductionWaiver, DEDUCTION_KIND_LABELS, DEDUCTION_KINDS, fetchDeductionWaivers, fetchPayrollConflicts,
-  fetchPayrollDeductions, fetchPayrollIncluded, fetchPayrollWithoutRun,
-  type DeductionKind, type DeductionWaiverCreated, type DeductionWaiverRow, type OverviewConflicts, type OverviewDeductions,
+  fetchPayrollIncluded, fetchPayrollWithoutRun,
+  type DeductionKind, type DeductionWaiverCreated, type DeductionWaiverRow, type OverviewConflicts,
   type OverviewIncluded, type OverviewUnassigned,
 } from '@/lib/payroll-overview-api'
 
@@ -228,16 +228,13 @@ function DeductionsTab({ period, matches, onOpenRun, branches, departments, team
   branches: ApiBranch[]; departments: ApiDepartment[]; teams: ApiTeam[]; employees: ApiEmployee[]
 }) {
   const [version, setVersion] = useState(0)
-  const { data, error, loading } = useMonthData<OverviewDeductions>(period, fetchPayrollDeductions, version)
   const waivers = useMonthData<DeductionWaiverRow[]>(period, fetchDeductionWaivers, version)
-  const [kindFilter, setKindFilter] = useState<DeductionKind | ''>('')
   const [showForm, setShowForm] = useState(false)
   const [saved, setSaved] = useState<DeductionWaiverCreated | null>(null)
   const [cancelError, setCancelError] = useState('')
   const canWaive = can('payroll.calculate')
   useEffect(() => { setSaved(null); setShowForm(false) }, [period])
 
-  const rows = (data?.rows ?? []).filter(row => (!kindFilter || row.kind === kindFilter) && matches(row))
   const cancel = async (row: DeductionWaiverRow) => {
     if (!window.confirm(`إلغاء شيل «${row.kindLabel}» عن ${row.targetText}؟ المسيرات المفتوحة هترجع تخصمه بعد إعادة الحساب.`)) return
     setCancelError('')
@@ -304,42 +301,9 @@ function DeductionsTab({ period, matches, onOpenRun, branches, departments, team
         )}
       </div>
 
-      {/* الاستقطاعات المحسوبة */}
-      {loading ? <Loading /> : error ? <div className="card text-danger-600 text-sm">{error}</div> : (
-        <div className="card p-0 overflow-hidden">
-          <div className="p-4 border-b border-gray-100 flex flex-wrap gap-2 items-center">
-            <button type="button" onClick={() => setKindFilter('')}
-              className={`px-3 py-1 rounded-lg text-sm ${kindFilter === '' ? 'bg-primary-500 text-white' : 'bg-gray-100 text-gray-600'}`}>الكل</button>
-            {DEDUCTION_KINDS.filter(kind => data?.totals[kind]).map(kind => (
-              <button key={kind} type="button" onClick={() => setKindFilter(kind)}
-                className={`px-3 py-1 rounded-lg text-sm ${kindFilter === kind ? 'bg-primary-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
-                {DEDUCTION_KIND_LABELS[kind]} <span className="font-mono">{formatMoney(data?.totals[kind] ?? 0)}</span>
-              </button>
-            ))}
-          </div>
-          {rows.length === 0 ? <EmptyState title={data?.runs.length ? 'مفيش خصومات مطابقة' : 'مفيش مسيرات محسوبة للشهر ده'} className="shadow-none" /> : (
-            <div className="overflow-x-auto">
-              <table className="w-full">
-                <thead><tr className="table-header">
-                  <th className="table-cell text-right">الموظف</th><th className="table-cell text-right">الفرع / القسم</th>
-                  <th className="table-cell text-right">نوع الخصم</th><th className="table-cell text-center">المبلغ</th><th className="table-cell text-right">المسير</th>
-                </tr></thead>
-                <tbody>
-                  {rows.map((row, index) => (
-                    <tr key={`${row.runId}:${row.employeeId}:${row.kind}:${index}`} className="table-row">
-                      <td className="table-cell"><div className="font-medium text-gray-800">{row.fullName}</div><div className="text-xs text-gray-400">{row.employeeCode}</div></td>
-                      <td className="table-cell text-sm">{row.branchName ?? '—'}{row.departmentName ? ` / ${row.departmentName}` : ''}</td>
-                      <td className="table-cell">{DEDUCTION_KIND_LABELS[row.kind] ?? row.kindLabel}</td>
-                      <td className="table-cell text-center font-mono text-danger-600">{formatMoney(row.amount)}</td>
-                      <td className="table-cell"><button type="button" className="text-primary-600 hover:underline" onClick={() => onOpenRun(row.runId)}>{runLabel(row.runId, row.runName)}</button> <StatusBadge status={row.runStatus} /></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          )}
-        </div>
-      )}
+      {/* طلب المالك 19 سبتمبر: كل بند استقطاع لكل موظف عمود باسمه (التأخير، الانصراف المبكر، النقص، الغياب، الإجازة، الإيقاف، المرضية،
+          كل نوع خصم مسجل باسمه، السلف، التأمينات) — نفس تقسيم جدول المسير والقسيمة، وإجمالي كل بند في آخر الجدول */}
+      <PayrollMonthLinesTable side="deductions" period={period} matches={matches} onOpenRun={onOpenRun} version={version} />
     </div>
   )
 }

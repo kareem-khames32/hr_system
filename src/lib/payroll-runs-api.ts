@@ -180,6 +180,17 @@ export function nextPayrollPeriod(period: string): string {
   return month === 12 ? `${year + 1}-01` : `${year}-${String(month + 1).padStart(2, '0')}`
 }
 
+// «إنشاء مسيرات الشهر الجديد» (طلب المالك 19 سبتمبر): مسودة لكل مسير عادي غير ملغى في شهر المصدر بنفس الاسم والمعادلة والفلاتر والاستبعادات.
+// dryRun = المعاينة (هيتعمل إيه وهيتخطى إيه) بلا حفظ؛ شهر المصدر الافتراضي من الخادم = آخر شهر فيه مسير اتحسب.
+export interface PayrollNextPeriodCreated { sourceRunId: number; name: string; runId: number | null; policyName: string; versionNo: number }
+export interface PayrollNextPeriodSkipped { sourceRunId: number; name: string | null; code: string; reason: string; existingRunId?: number | null }
+export interface PayrollNextPeriodResult {
+  dryRun: boolean; sourcePeriod: string; targetPeriod: string; sourcePeriods: string[]
+  created: PayrollNextPeriodCreated[]; skipped: PayrollNextPeriodSkipped[]
+}
+export const createNextPeriodPayrollRuns = (input: { dryRun?: boolean; sourcePeriod?: string } = {}) =>
+  send<PayrollNextPeriodResult>('/payroll/runs/create-next-period', 'POST', input)
+
 /**
  * إعادة حساب مسير محسوب بسبب جاهز، وبآخر قيم المعادلات دائمًا: لو تغيّرت المعادلة منذ الحساب تُحدَّث لقطة السياسة ببصمة القيم الحالية.
  * المسير المعتمد أو المصروف لا يُعاد حسابه (الخادم يرفض).

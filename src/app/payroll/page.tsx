@@ -24,10 +24,15 @@ import {
   type ApiEmployee,
 } from '@/lib/api'
 import {
-  calculatePayrollRunDraft, fetchPayrollRunMembershipPreview, MEMBERSHIP_EXCLUSION_LABELS, nextPayrollPeriod, payPayrollRun, payrollRunErrorCode,
+  calculatePayrollRunDraft, createNextPeriodPayrollRuns, fetchPayrollRunMembershipPreview, MEMBERSHIP_EXCLUSION_LABELS, nextPayrollPeriod, payPayrollRun, payrollRunErrorCode,
   payrollRunErrorMessage, recalculatePayrollRunWithCurrentFormula,
-  type PayrollMembershipPreview, type PayrollPayChannel, type PayrollRunScreenFields, type PayrollRunWithSelection,
+  type PayrollMembershipPreview, type PayrollNextPeriodResult, type PayrollPayChannel, type PayrollRunScreenFields, type PayrollRunWithSelection,
 } from '@/lib/payroll-runs-api'
+// طلب المالك 19 سبتمبر: كل بند استحقاق واستقطاع عمود باسمه (من تقسيم الخادم للبند المحفوظ)
+import {
+  fetchPayrollRunLines, PAYROLL_LINE_GROUP_LABELS, PAYROLL_LINE_KEYS, PAYROLL_LINE_TOTAL_LABELS, payrollLineAmount, payrollLineColumnTotals,
+  type PayrollLineColumn, type PayrollRunLines,
+} from '@/lib/payroll-lines-api'
 import { PayrollRunDefinitionPanel, type PayrollRunDefinitionInitial } from '@/components/payroll/PayrollRunDefinitionPanel'
 import { PayrollDraftMembership } from '@/components/payroll/PayrollDraftMembership'
 // تبسيط الرواتب (2026-09-15): لوحات محرك الحساب ولقطة السياسة وسجل الأحداث والعكس/التكميلي و«موظفون بلا مسير» والإعفاء المالي
@@ -57,6 +62,7 @@ import {
   Calculator,
   TrendingUp,
   Banknote,
+  CalendarPlus,
 } from 'lucide-react'
 import Link from 'next/link'
 import { useCurrency } from '@/lib/currency'
@@ -65,9 +71,6 @@ import { dayRangeLabel } from '@/lib/payroll-month-range'
 import { PayrollOvertimeBreakdown } from '@/components/PayrollOvertimeBreakdown'
 import { PayrollInstallmentBreakdown } from '@/components/PayrollInstallmentBreakdown'
 import { PayrollObligationBreakdown } from '@/components/PayrollObligationBreakdown'
-
-// حقل البدلات الجديد في بند المسير (ليس بعد ضمن ApiPayrollItem)
-type PayrollItemWithAllowances = ApiPayrollItem & { allowances?: number }
 
 const payMethodLabels: Record<string, string> = {
   transfer: 'تحويل بنكي',
@@ -147,8 +150,14 @@ const errorConflicts = (error: unknown): ApiPayrollConflict[] => {
 // القيم العشرية قد تصل نصوصاً من قاعدة البيانات
 const n = (v: unknown): number => Number(v ?? 0) || 0
 const fmtDate = (s?: string) => (s ? s.slice(0, 10) : '')
-const allowancesOf = (item: ApiPayrollItem) =>
-  n((item as PayrollItemWithAllowances).allowances)
+// أيام سطر من سطور الإجازة بلا أجر المحفوظة مع البند (بدون راتب / الإيقاف) — تحت مبلغه في الجدول
+const leaveLineDays = (item: ApiPayrollItem, code: string): number => {
+  try {
+    const lines = JSON.parse(item.breakdown || '{}').leaveDeductionLines
+    if (!Array.isArray(lines)) return code === 'UNPAID_LEAVE' ? n(item.unpaidLeaveDays) : 0
+    return Math.round(lines.filter(line => line?.code === code).reduce((sum: number, line: { days?: unknown }) => sum + n(line.days), 0) * 100) / 100
+  } catch { return 0 }
+}
 // سطر التغطية بالأيام والتواريخ فقط (بلا معامل أو أساس أيام)
 const coverageLine = (item: ApiPayrollItem) => {
   const coverage = payrollItemCoverage(item)
@@ -189,6 +198,14 @@ export default function PayrollPage() {
   const [draftPreviewError, setDraftPreviewError] = useState('')
   // «إلغاء خصم» لموظف في المسير المحسوب
   const [removeDeductionFor, setRemoveDeductionFor] = useState<{ employeeId: number; name: string; amounts: RemovableAttendanceAmounts } | null>(null)
+  // طلب المالك 19 سبتمبر: بنود كل موظف (استحقاقات واستقطاعات بأسمائها) للجدول والتصدير
+  const [runLines, setRunLines] = useState<PayrollRunLines | null>(null)
+  const [linesError, setLinesError] = useState('')
+  // «إنشاء مسيرات الشهر الجديد»: المعاينة (هيتعمل إيه وهيتخطى إيه) ثم النتيجة
+  const [nextPeriodPlan, setNextPeriodPlan] = useState<PayrollNextPeriodResult | null>(null)
+  const [nextPeriodResult, setNextPeriodResult] = useState<PayrollNextPeriodResult | null>(null)
+  const [nextPeriodBusy, setNextPeriodBusy] = useState(false)
+  const [nextPeriodError, setNextPeriodError] = useState('')
 
   const loadDetail = async (id: number) => {
     const request = ++detailRequest.current
@@ -196,16 +213,17 @@ export default function PayrollPage() {
     setChangeReason('')
     setActionConflicts([])
     setPayMethods(null)
+    setRunLines(null)
+    setLinesError('')
     try {
       const detail = await fetchPayrollRun(id)
       if (request !== detailRequest.current) return
       setRunDetail(detail)
-      try {
-        const report = await fetchPayMethodReport(id)
-        if (request === detailRequest.current) setPayMethods(report)
-      } catch {
-        if (request === detailRequest.current) setPayMethods(null)
-      }
+      const [report, lines] = await Promise.allSettled([fetchPayMethodReport(id), fetchPayrollRunLines(id)])
+      if (request !== detailRequest.current) return
+      setPayMethods(report.status === 'fulfilled' ? report.value : null)
+      if (lines.status === 'fulfilled') setRunLines(lines.value)
+      else setLinesError(lines.reason instanceof Error && lines.reason.message ? lines.reason.message : 'تعذر تحميل بنود المسير')
     } catch (e) {
       if (request === detailRequest.current) {
         setRunDetail(null)
@@ -391,6 +409,39 @@ export default function PayrollPage() {
     }
   }
 
+  // «إنشاء مسيرات الشهر الجديد» (طلب المالك 19 سبتمبر): معاينة من الخادم الأول (من أنهي شهر لأنهي شهر، هيتعمل إيه وهيتخطى إيه)، ثم الإنشاء بنفس شهر المصدر.
+  // كل مسودة بتتحفظ بنفس حفظ «مسير جديد» وتحققه؛ حساب الفرع بيعمل مسيرات فرعه بس.
+  const previewNextPeriod = async (sourcePeriod?: string) => {
+    if (nextPeriodBusy || !can('payroll.calculate')) return
+    setNextPeriodBusy(true)
+    setNextPeriodError('')
+    setNextPeriodResult(null)
+    try {
+      setNextPeriodPlan(await createNextPeriodPayrollRuns({ dryRun: true, ...(sourcePeriod ? { sourcePeriod } : {}) }))
+    } catch (e) {
+      setNextPeriodPlan(null)
+      setNextPeriodError(payrollRunErrorMessage(e, 'تعذر تجهيز مسيرات الشهر الجديد'))
+    } finally {
+      setNextPeriodBusy(false)
+    }
+  }
+  const confirmNextPeriod = async () => {
+    if (!nextPeriodPlan || nextPeriodBusy || !nextPeriodPlan.created.length) return
+    setNextPeriodBusy(true)
+    setNextPeriodError('')
+    try {
+      const result = await createNextPeriodPayrollRuns({ sourcePeriod: nextPeriodPlan.sourcePeriod })
+      setNextPeriodPlan(null)
+      setNextPeriodResult(result)
+      await refreshRuns(result.created.find(row => row.runId != null)?.runId ?? undefined)
+    } catch (e) {
+      setNextPeriodError(payrollRunErrorMessage(e, 'تعذر إنشاء مسيرات الشهر الجديد'))
+    } finally {
+      setNextPeriodBusy(false)
+    }
+  }
+  const closeNextPeriod = () => { setNextPeriodPlan(null); setNextPeriodResult(null); setNextPeriodError('') }
+
   // بعد «إلغاء خصم»: إعادة حساب المسير المحسوب تلقائيًا ثم تحديث الشاشة.
   // الإلغاء لا يغيّر موظفي المسير، فالتعارض مع مسودة أو مسير محسوب آخر لنفس الأيام لا يوقف هذه الإعادة (allowDraftConflicts)؛
   // التعارض مع مسير معتمد أو مصروف يبقى حاجبًا في الخادم كما هو.
@@ -432,6 +483,47 @@ export default function PayrollPage() {
   // إجماليات المسير من البنود الفعلية بالقروش الصحيحة (مجموع كل عمود = مجموع الصفوف، ولا تراكم كسور)
   const runTotals = payrollRunTotals(filteredItems)
   const totals = { totalEarnings: runTotals.earnings, totalDeductions: runTotals.deductions, netSalary: runTotals.net }
+  // طلب المالك 19 سبتمبر: أعمدة الاستحقاقات والاستقطاعات = البنود الموجودة فعلًا في المسير (مفيش عمود فاضي)، ومجموع كل صف = أعمدة بنده المحفوظة
+  const earningColumns: PayrollLineColumn[] = runLines?.columns.earnings ?? []
+  const deductionColumns: PayrollLineColumn[] = runLines?.columns.deductions ?? []
+  const linesByItem = new Map((runLines?.rows ?? []).map(row => [row.itemId, row]))
+  const shownLines = filteredItems.flatMap(item => linesByItem.get(item.id) ?? [])
+  const earningColumnTotals = payrollLineColumnTotals(shownLines, 'earnings', earningColumns)
+  const deductionColumnTotals = payrollLineColumnTotals(shownLines, 'deductions', deductionColumns)
+  const tableColumns = 1 + earningColumns.length + 1 + deductionColumns.length + 1 + 4
+  const linesReady = !!runLines && filteredItems.every(item => linesByItem.has(item.id))
+  // تصدير CSV بنفس أعمدة الجدول: كل بند باسمه ثم إجمالي كل مجموعة والصافي
+  const exportRunCsv = () => {
+    if (!runDetail || !linesReady) return
+    downloadCsv(`payroll-run-${runDetail.id}-${runDetail.period}-${csvDateStamp()}.csv`,
+      ['الرقم الوظيفي', 'الموظف', ...earningColumns.map(column => column.name), PAYROLL_LINE_TOTAL_LABELS.earnings,
+        ...deductionColumns.map(column => column.name), PAYROLL_LINE_TOTAL_LABELS.deductions, PAYROLL_LINE_TOTAL_LABELS.net, 'طريقة الدفع'],
+      filteredItems.map((item) => {
+        const lines = linesByItem.get(item.id)
+        return [snapshotOf(item.employeeId)?.employeeCode ?? employeeOf(item.employeeId)?.employeeCode ?? '', employeeName(item.employeeId),
+          ...earningColumns.map(column => payrollLineAmount(lines?.earnings, column.key)), payrollItemEarnings(item),
+          ...deductionColumns.map(column => payrollLineAmount(lines?.deductions, column.key)), payrollItemDeductions(item), item.netPay,
+          payMethodLabel(item.payMethod)]
+      }))
+  }
+  // تفصيل تحت مبلغ البند في الخلية (الساعات والدقائق والأيام وتفصيل الإضافي والأقساط) من أعمدة البند نفسه
+  const lineExtra = (item: ApiPayrollItem, key: string) => {
+    if (key === PAYROLL_LINE_KEYS.overtime) return <>
+      {n(item.overtimeHours) > 0 && <span className="text-xs text-success-600">{n(item.overtimeHours)} ساعة</span>}
+      <PayrollOvertimeBreakdown item={item} currency={currency} compact />
+    </>
+    if (key === PAYROLL_LINE_KEYS.lateness && n(item.lateMinutes) > 0) return <span className="text-xs text-danger-600">{n(item.lateMinutes)} دقيقة</span>
+    if (key === (deductionColumns.some(column => column.key === PAYROLL_LINE_KEYS.shortfall) ? PAYROLL_LINE_KEYS.shortfall : PAYROLL_LINE_KEYS.earlyLeave) && n(item.shortfallMinutes) > 0) {
+      return <span className="text-xs text-gray-500">{n(item.shortfallMinutes)} دقيقة نقص مرصود</span>
+    }
+    if (key === PAYROLL_LINE_KEYS.absence && n(item.absenceDays) > 0) return <span className="text-xs text-danger-600">{n(item.absenceDays)} يوم</span>
+    if (key === PAYROLL_LINE_KEYS.unpaidLeave || key === 'SUSPENSION') {
+      const days = leaveLineDays(item, key)
+      return days > 0 ? <span className="text-xs text-danger-600">{days} يوم</span> : null
+    }
+    if (key === PAYROLL_LINE_KEYS.loan) return <PayrollInstallmentBreakdown item={item} currency={currency} compact />
+    return null
+  }
 
   if (loading) {
     return (
@@ -458,21 +550,26 @@ export default function PayrollPage() {
               <FileText size={18} />
               تقرير ملخص
             </Link>
-            {/* التصدير ينتج CSV لبنود المسير المعروض بعد البحث (الخطوة 30) */}
+            {/* التصدير ينتج CSV لبنود المسير المعروض بعد البحث (الخطوة 30) — بنفس أعمدة الجدول: كل بند استحقاق واستقطاع باسمه */}
             <button
               type="button"
-              onClick={() => runDetail && downloadCsv(`payroll-run-${runDetail.id}-${runDetail.period}-${csvDateStamp()}.csv`,
-                ['الرقم الوظيفي', 'الموظف', 'الأساسي', 'البدلات', 'الإضافي', 'إضافات أخرى', 'خصم التأخير', 'نقص الساعات', 'الغياب', 'بدون راتب', 'أقساط السلف', 'خصومات أخرى', 'الصافي', 'طريقة الدفع'],
-                filteredItems.map((item) => [snapshotOf(item.employeeId)?.employeeCode ?? employeeOf(item.employeeId)?.employeeCode ?? '', employeeName(item.employeeId),
-                  item.basicSalary, allowancesOf(item), item.overtimeAmount, item.otherAdditions ?? 0, item.latenessDeduction, item.shortfallDeduction ?? 0,
-                  item.absenceDeduction ?? 0, item.unpaidLeaveDeduction, item.loanInstallments, item.otherDeductions ?? 0, item.netPay,
-                  payMethodLabel(item.payMethod)]))}
-              disabled={!runDetail || filteredItems.length === 0}
+              onClick={exportRunCsv}
+              disabled={!runDetail || filteredItems.length === 0 || !linesReady}
               className="btn-secondary flex items-center gap-2 disabled:opacity-50"
             >
               <Download size={18} />
               تصدير CSV
             </button>
+            {can('payroll.calculate') && <button
+              type="button"
+              onClick={() => { setTab('runs'); previewNextPeriod() }}
+              disabled={actionBusy || nextPeriodBusy}
+              className="btn-secondary flex items-center gap-2 disabled:opacity-50"
+              data-create-next-period
+            >
+              <CalendarPlus size={18} />
+              إنشاء مسيرات الشهر الجديد
+            </button>}
             {can('payroll.calculate') && <button
               onClick={() => { setEditingDraft(null); setNextMonthInitial(null); setShowDefinition(true) }}
               disabled={actionBusy}
@@ -497,6 +594,66 @@ export default function PayrollPage() {
         {tab === 'runs' ? (<>
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+
+        {/* «إنشاء مسيرات الشهر الجديد»: المعاينة ثم الإنشاء، والنتيجة (اتعمل / اتخطى وسببه) */}
+        {can('payroll.calculate') && (nextPeriodPlan || nextPeriodResult || nextPeriodError) && (
+          <div className="card border-2 border-primary-100 space-y-3" data-next-period-panel>
+            <div className="flex items-center justify-between gap-3">
+              <h3 className="font-bold text-gray-800">إنشاء مسيرات الشهر الجديد</h3>
+              <button type="button" onClick={closeNextPeriod} disabled={nextPeriodBusy} className="text-sm text-gray-500 underline disabled:opacity-50">قفل</button>
+            </div>
+            {nextPeriodError && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">{nextPeriodError}</p>}
+            {nextPeriodPlan && <>
+              <div className="flex flex-wrap items-center gap-2 text-sm text-gray-700">
+                <span>من مسيرات شهر</span>
+                <select value={nextPeriodPlan.sourcePeriod} disabled={nextPeriodBusy} onChange={e => previewNextPeriod(e.target.value)} className="input w-36" dir="ltr">
+                  {nextPeriodPlan.sourcePeriods.map(period => <option key={period} value={period}>{period}</option>)}
+                </select>
+                <span>لشهر</span>
+                <b dir="ltr">{nextPeriodPlan.targetPeriod}</b>
+                <span className="text-xs text-gray-500">— نفس الاسم والمعادلة والفلاتر والموظفين والمستبعدين بأسبابهم، مسودات لسه محتاجة «احتساب المسودة».</span>
+              </div>
+              {nextPeriodPlan.created.length > 0 ? (
+                <div className="text-sm space-y-1">
+                  <p className="font-medium text-gray-800">هيتعمل {nextPeriodPlan.created.length} مسودة:</p>
+                  <ul className="space-y-1">{nextPeriodPlan.created.map(row => <li key={row.sourceRunId} className="bg-gray-50 rounded-lg px-3 py-1.5">
+                    «{row.name}» — معادلة «{row.policyName}» نسخة {row.versionNo}
+                  </li>)}</ul>
+                </div>
+              ) : <p className="text-sm text-gray-500">مفيش مسيرات جديدة تتعمل لشهر {nextPeriodPlan.targetPeriod}.</p>}
+              {nextPeriodPlan.skipped.length > 0 && (
+                <div className="text-sm space-y-1">
+                  <p className="font-medium text-gray-800">هيتخطى {nextPeriodPlan.skipped.length}:</p>
+                  <ul className="space-y-1">{nextPeriodPlan.skipped.map(row => <li key={row.sourceRunId} className="bg-amber-50 text-amber-900 rounded-lg px-3 py-1.5">
+                    {row.name ? `«${row.name}»` : 'مسير بلا اسم'} — {row.reason}
+                  </li>)}</ul>
+                </div>
+              )}
+              <div className="flex flex-wrap gap-2">
+                <button type="button" onClick={confirmNextPeriod} disabled={nextPeriodBusy || !nextPeriodPlan.created.length} className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50">
+                  <CalendarPlus size={16} />
+                  {nextPeriodBusy ? 'بيتعمل...' : `إنشاء ${nextPeriodPlan.created.length} مسودة`}
+                </button>
+                <button type="button" onClick={closeNextPeriod} disabled={nextPeriodBusy} className="btn-secondary text-sm disabled:opacity-50">رجوع</button>
+              </div>
+            </>}
+            {nextPeriodResult && <>
+              <p className="text-sm text-success-700 font-medium">
+                اتعمل {nextPeriodResult.created.length} مسودة لشهر {nextPeriodResult.targetPeriod} من مسيرات {nextPeriodResult.sourcePeriod}
+                {nextPeriodResult.skipped.length ? `، واتخطى ${nextPeriodResult.skipped.length}` : ''}.
+              </p>
+              {nextPeriodResult.created.length > 0 && <ul className="text-sm space-y-1">{nextPeriodResult.created.map(row => <li key={row.sourceRunId} className="flex flex-wrap items-center gap-2 bg-success-50 rounded-lg px-3 py-1.5">
+                <span>«{row.name}» — معادلة «{row.policyName}» نسخة {row.versionNo}</span>
+                {row.runId != null && <button type="button" className="text-primary-700 underline" onClick={() => loadDetail(row.runId!)}>افتح المسودة</button>}
+              </li>)}</ul>}
+              {nextPeriodResult.skipped.length > 0 && <ul className="text-sm space-y-1">{nextPeriodResult.skipped.map(row => <li key={row.sourceRunId} className="bg-amber-50 text-amber-900 rounded-lg px-3 py-1.5">
+                {row.name ? `«${row.name}»` : 'مسير بلا اسم'} — {row.reason}
+                {row.existingRunId != null && <button type="button" className="text-primary-700 underline mr-2" onClick={() => loadDetail(row.existingRunId!)}>افتح الموجود</button>}
+              </li>)}</ul>}
+              <p className="text-xs text-gray-500">كل مسودة محتاجة «احتساب المسودة» من اختيار المسير.</p>
+            </>}
+          </div>
+        )}
 
         {/* الخطوة 16: تعريف مسير جديد أو تعديل مسودة أو مسير الشهر التالي — مع معاينة العضوية قبل الحفظ */}
         {can('payroll.calculate') && (showDefinition || editingDraft) && (
@@ -844,42 +1001,48 @@ export default function PayrollPage() {
           ) : (
           <div className="overflow-x-auto">
             <table className="w-full">
+              {/* طلب المالك 19 سبتمبر: مجموعتان — «الاستحقاقات» و«الاستقطاعات» — وكل بند موجود في المسير عمود باسمه */}
               <thead>
                 <tr className="table-header">
-                  <th className="text-right px-4 py-4">الموظف</th>
-                  <th className="text-center px-4 py-4">الأساسي</th>
-                  <th className="text-center px-4 py-4">البدلات</th>
-                  <th className="text-center px-4 py-4">العمل الإضافي</th>
-                  <th className="text-center px-4 py-4">إضافات أخرى</th>
-                  <th className="text-center px-4 py-4 bg-success-50">الإجمالي</th>
-                  <th className="text-center px-4 py-4">خصم التأخير</th>
-                  <th className="text-center px-4 py-4">نقص ساعات العمل</th>
-                  <th className="text-center px-4 py-4">خصم الغياب</th>
-                  <th className="text-center px-4 py-4">إجازة بدون راتب</th>
-                  <th className="text-center px-4 py-4">أقساط السلف</th>
-                  <th className="text-center px-4 py-4">خصومات أخرى</th>
-                  <th className="text-center px-4 py-4 bg-danger-50">إجمالي الخصم</th>
-                  <th className="text-center px-4 py-4 bg-primary-50 font-bold">الصافي</th>
-                  <th className="text-center px-4 py-4">طريقة الصرف</th>
-                  <th className="text-center px-4 py-4">حالة الصرف</th>
-                  <th className="text-center px-4 py-4">عرض</th>
+                  <th rowSpan={2} className="text-right px-4 py-4">الموظف</th>
+                  <th colSpan={earningColumns.length + 1} className="text-center px-4 py-2 bg-success-50 text-success-700">{PAYROLL_LINE_GROUP_LABELS.earnings}</th>
+                  <th colSpan={deductionColumns.length + 1} className="text-center px-4 py-2 bg-danger-50 text-danger-700">{PAYROLL_LINE_GROUP_LABELS.deductions}</th>
+                  <th rowSpan={2} className="text-center px-4 py-4 bg-primary-50 font-bold">{PAYROLL_LINE_TOTAL_LABELS.net}</th>
+                  <th rowSpan={2} className="text-center px-4 py-4">طريقة الصرف</th>
+                  <th rowSpan={2} className="text-center px-4 py-4">حالة الصرف</th>
+                  <th rowSpan={2} className="text-center px-4 py-4">عرض</th>
+                </tr>
+                <tr className="table-header" data-payroll-line-columns>
+                  {earningColumns.map(column => <th key={column.key} className="text-center px-3 py-3 whitespace-nowrap">{column.name}</th>)}
+                  <th className="text-center px-3 py-3 bg-success-50 whitespace-nowrap">{PAYROLL_LINE_TOTAL_LABELS.earnings}</th>
+                  {deductionColumns.map(column => <th key={column.key} className="text-center px-3 py-3 whitespace-nowrap">{column.name}</th>)}
+                  <th className="text-center px-3 py-3 bg-danger-50 whitespace-nowrap">{PAYROLL_LINE_TOTAL_LABELS.deductions}</th>
                 </tr>
               </thead>
               <tbody>
                 {filteredItems.length === 0 && (
                   <tr>
-                    <td colSpan={17} className="px-4 py-10 text-center text-sm text-gray-400">
+                    <td colSpan={tableColumns} className="px-4 py-10 text-center text-sm text-gray-400">
                       {runDetail ? 'لا توجد بنود في هذا المسير' : 'اختر مسيراً أو احسب مسيراً جديداً'}
                     </td>
                   </tr>
                 )}
-                {filteredItems.map((item) => {
+                {filteredItems.length > 0 && !runLines && (
+                  <tr>
+                    <td colSpan={tableColumns} className="px-4 py-6 text-center text-sm text-red-700" role="alert">
+                      {linesError || 'تعذر تحميل بنود المسير'}
+                      {runDetail && <button type="button" onClick={() => loadDetail(runDetail.id)} className="text-primary-700 underline mr-2">إعادة المحاولة</button>}
+                    </td>
+                  </tr>
+                )}
+                {runLines && filteredItems.map((item) => {
                   const emp = employeeOf(item.employeeId)
                   const snapshot = snapshotOf(item.employeeId)
                   const name = employeeName(item.employeeId)
                   // الخطوة 22 (B5): الإجمالي والخصومات بالقروش من الأعمدة نفسها، والتغطية من تفصيل البند المحفوظ
                   const gross = payrollItemEarnings(item)
                   const totalDeductions = payrollItemDeductions(item)
+                  const lines = linesByItem.get(item.id)
                   const coverage = coverageLine(item)
                   // د: أيام البصمة الناقصة تُقال وقت الحساب على صف الموظف، لا عند رفض الاعتماد
                   const missingPunch = payrollMissingPunchText(payrollItemMissingPunchDates(item))
@@ -906,80 +1069,31 @@ export default function PayrollPage() {
                         </div>
                       </div>
                     </td>
-                    <td className="table-cell text-center font-mono">{formatMoney(item.basicSalary)}</td>
-                    <td className="table-cell text-center font-mono">
-                      {formatMoneyOrDash(allowancesOf(item))}
-                    </td>
-                    <td className="table-cell text-center font-mono">
-                      <div className="flex flex-col items-center">
-                        <span className={n(item.overtimeAmount) > 0 ? 'text-success-600 font-bold' : ''}>
-                          {formatMoney(item.overtimeAmount)}
-                        </span>
-                        {n(item.overtimeHours) > 0 && (
-                          <span className="text-xs text-success-600">{n(item.overtimeHours)} ساعة</span>
-                        )}
-                        <PayrollOvertimeBreakdown item={item} currency={currency} compact />
-                      </div>
-                    </td>
-                    <td className="table-cell text-center font-mono">
-                      <span className={n(item.otherAdditions) > 0 ? 'text-success-600' : ''}>
-                        {formatMoneyOrDash(item.otherAdditions)}
-                      </span>
-                    </td>
+                    {earningColumns.map(column => {
+                      const amount = payrollLineAmount(lines?.earnings, column.key)
+                      return <td key={column.key} className="table-cell text-center font-mono">
+                        <div className="flex flex-col items-center">
+                          <span className={amount > 0 && column.key !== 'BASIC' ? 'text-success-600' : ''}>{column.key === 'BASIC' ? formatMoney(amount) : formatMoneyOrDash(amount)}</span>
+                          {lineExtra(item, column.key)}
+                        </div>
+                      </td>
+                    })}
                     <td className="table-cell text-center font-mono font-bold text-success-600 bg-success-50">
                       {formatMoney(gross)}
                     </td>
-                    <td className="table-cell text-center font-mono">
-                      <div className="flex flex-col items-center">
-                        <span className={n(item.latenessDeduction) > 0 ? 'text-danger-600' : ''}>
-                          {formatMoneyOrDash(item.latenessDeduction)}
-                        </span>
-                        {n(item.lateMinutes) > 0 && (
-                          <span className="text-xs text-danger-600">{n(item.lateMinutes)} دقيقة</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="table-cell text-center font-mono">
-                      <span className={n(item.shortfallDeduction) > 0 ? 'text-danger-600' : ''}>{formatMoney(item.shortfallDeduction)}</span>
-                      {n(item.shortfallMinutes) > 0 && <p className="text-xs text-gray-500">{n(item.shortfallMinutes)} دقيقة نقص مرصود</p>}
-                    </td>
-                    <td className="table-cell text-center font-mono">
-                      <div className="flex flex-col items-center">
-                        <span className={n(item.absenceDeduction) > 0 ? 'text-danger-600' : ''}>
-                          {formatMoneyOrDash(item.absenceDeduction)}
-                        </span>
-                        {n(item.absenceDays) > 0 && (
-                          <span className="text-xs text-danger-600">{n(item.absenceDays)} يوم</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="table-cell text-center font-mono">
-                      <div className="flex flex-col items-center">
-                        <span className={n(item.unpaidLeaveDeduction) > 0 ? 'text-danger-600' : ''}>
-                          {formatMoneyOrDash(item.unpaidLeaveDeduction)}
-                        </span>
-                        {n(item.unpaidLeaveDays) > 0 && (
-                          <span className="text-xs text-danger-600">{n(item.unpaidLeaveDays)} يوم</span>
-                        )}
-                      </div>
-                    </td>
-                    <td className="table-cell text-center font-mono">
-                      <div className="flex flex-col items-center">
-                        {n(item.loanInstallments) > 0 ? (
-                          <span className="text-danger-600">{formatMoney(item.loanInstallments)}</span>
-                        ) : '-'}
-                        <PayrollInstallmentBreakdown item={item} currency={currency} compact />
-                      </div>
-                    </td>
-                    <td className="table-cell text-center font-mono">
-                      {n(item.otherDeductions) > 0 ? (
-                        <span className="text-danger-600">{formatMoney(item.otherDeductions)}</span>
-                      ) : '-'}
-                      {/* C2: تتبع الخصومات والإضافات الأخرى سطرًا سطرًا (النوع والسبب والطلب وسعر اليوم) */}
-                      <PayrollObligationBreakdown item={item} currency={currency} compact />
-                    </td>
+                    {deductionColumns.map(column => {
+                      const amount = payrollLineAmount(lines?.deductions, column.key)
+                      return <td key={column.key} className="table-cell text-center font-mono">
+                        <div className="flex flex-col items-center">
+                          <span className={amount > 0 ? 'text-danger-600' : ''}>{formatMoneyOrDash(amount)}</span>
+                          {lineExtra(item, column.key)}
+                        </div>
+                      </td>
+                    })}
                     <td className="table-cell text-center font-mono font-bold text-danger-600 bg-danger-50">
                       {formatMoney(totalDeductions)}
+                      {/* C2: تتبع قيود الدفتر (الخصومات المسجلة والبدلات والمكافآت) سطرًا سطرًا: النوع والسبب والطلب وسعر اليوم */}
+                      <div className="font-normal"><PayrollObligationBreakdown item={item} currency={currency} compact /></div>
                     </td>
                     <td className={`table-cell text-center font-mono font-bold bg-primary-50 text-lg ${negativeNet ? 'text-red-700' : 'text-primary-600'}`}>
                       {formatMoney(item.netPay)}
@@ -1047,43 +1161,19 @@ export default function PayrollPage() {
                 )}
                 )}
               </tbody>
-              {filteredItems.length > 0 && (
+              {filteredItems.length > 0 && runLines && (
               <tfoot>
                 <tr className="bg-gray-100">
                   <td className="px-4 py-4 font-bold text-gray-800">الإجمالي</td>
-                  <td className="px-4 py-4 text-center font-mono font-bold">
-                    {formatMoney(runTotals.column('basicSalary'))}
-                  </td>
-                  <td className="px-4 py-4 text-center font-mono font-bold">
-                    {formatMoney(runTotals.column('allowances'))}
-                  </td>
-                  <td className="px-4 py-4 text-center font-mono font-bold">
-                    {formatMoney(runTotals.column('overtimeAmount'))}
-                  </td>
-                  <td className="px-4 py-4 text-center font-mono font-bold text-success-600">
-                    {formatMoney(runTotals.column('otherAdditions'))}
-                  </td>
+                  {earningColumns.map(column => <td key={column.key} className="px-4 py-4 text-center font-mono font-bold">
+                    {formatMoney(earningColumnTotals[column.key])}
+                  </td>)}
                   <td className="px-4 py-4 text-center font-mono font-bold text-success-600 bg-success-100">
                     {formatMoney(totals.totalEarnings)}
                   </td>
-                  <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {formatMoney(runTotals.column('latenessDeduction'))}
-                  </td>
-                  <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {formatMoney(runTotals.column('shortfallDeduction'))}
-                  </td>
-                  <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {formatMoney(runTotals.column('absenceDeduction'))}
-                  </td>
-                  <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {formatMoney(runTotals.column('unpaidLeaveDeduction'))}
-                  </td>
-                  <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {formatMoney(runTotals.column('loanInstallments'))}
-                  </td>
-                  <td className="px-4 py-4 text-center font-mono font-bold text-danger-600">
-                    {formatMoney(runTotals.column('otherDeductions'))}
-                  </td>
+                  {deductionColumns.map(column => <td key={column.key} className="px-4 py-4 text-center font-mono font-bold text-danger-600">
+                    {formatMoney(deductionColumnTotals[column.key])}
+                  </td>)}
                   <td className="px-4 py-4 text-center font-mono font-bold text-danger-600 bg-danger-100">
                     {formatMoney(totals.totalDeductions)}
                   </td>

@@ -17,7 +17,6 @@ import {
   LogIn,
   Timer,
   Briefcase,
-  Calendar,
   Paperclip,
 } from 'lucide-react'
 import {

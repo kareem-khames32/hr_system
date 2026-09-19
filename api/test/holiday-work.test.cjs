@@ -57,6 +57,24 @@ test('مطابقة الأمر: الشركة، الفرع، أقسام وفرق �
   assert.equal(hw.holidayWorkGrantMatches(grant({ targetLevel: 'employees', branchId: 1, targetIds: [11] }), org()), false)
 })
 
+test('الإضافي والبدل ما يجتمعوش: يوم العطلة المغطى بأمر/طلب للموظف بيرفض الإضافي، ويوم العمل العادي للموظف لأ', () => {
+  const grants = [grant({ id: 1, targetLevel: 'departments', branchId: 1, targetIds: [5], dates: ['2026-07-10'] }),
+    grant({ id: 2, kind: 'REQUEST', targetLevel: 'employees', branchId: 1, targetIds: [11], dates: ['2026-07-11'], sourceRequestId: 9 })]
+  // عطلة للموظف (أو تقويم مش مثبت) وعليها أمر قسمه / طلبه المعتمد
+  assert.equal(hw.holidayWorkCoversOvertimeDay(grants, org(), '2026-07-10', false), true)
+  assert.equal(hw.holidayWorkCoversOvertimeDay(grants, org(), '2026-07-10', null), true)
+  assert.equal(hw.holidayWorkCoversOvertimeDay(grants, org({ employeeId: 11, departmentId: 6 }), '2026-07-11', false), true)
+  // أمر شركة/فرع وفرع الموظف شغال اليوم ده: دوام عادي والإضافي بقواعده
+  assert.equal(hw.holidayWorkCoversOvertimeDay(grants, org(), '2026-07-10', true), false)
+  // مش مستهدف، أو يوم تاني
+  assert.equal(hw.holidayWorkCoversOvertimeDay(grants, org({ departmentId: 6 }), '2026-07-10', false), false)
+  assert.equal(hw.holidayWorkCoversOvertimeDay(grants, org(), '2026-07-11', false), false)
+  assert.equal(hw.holidayWorkCoversOvertimeDay([], org(), '2026-07-10', false), false)
+  assert.equal(hw.HOLIDAY_WORK_OVERTIME_REFUSAL, 'اليوم ده متغطي بأمر/طلب دوام يوم عطلة وبيتحسب «بدل دوام أيام العطلات» مش إضافي')
+  // والعكس: يوم له إضافي معتمد/مصروف بيتخطى في البدل
+  assert.equal(result({ approvedOvertime: true }).code, 'OVERTIME_APPROVED')
+})
+
 test('يوم عليه أكتر من أمر/طلب بيتحسب مرة واحدة بأعلى مضاعف ثم الأقدم، وجوه المدى بس', () => {
   const grants = [grant({ id: 3, multiplier: 1.5, dates: ['2026-07-10', '2026-07-11'] }), grant({ id: 2, multiplier: 2, dates: ['2026-07-11'] }),
     grant({ id: 1, multiplier: 1.5, dates: ['2026-07-10'] }), grant({ id: 4, multiplier: 3, targetLevel: 'branch', branchId: 9, dates: ['2026-07-10'] })]

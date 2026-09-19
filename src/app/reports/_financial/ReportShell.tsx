@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import { AlertTriangle, ArrowRight, CalendarRange, Download, Info, Printer, RefreshCw } from 'lucide-react'
 import { fetchBranches, fetchCatalog, fetchDepartments, getCurrentUser, type ApiBranch, type ApiDepartment } from '@/lib/api'
+import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { RUN_STATUS_LABELS, type FinancialFilters, type FinancialReportHeader } from './api'
 
 interface CostCenterOption { id: number; code?: string; name: string }
@@ -84,6 +85,8 @@ export function FinancialReportShell(props: ShellProps) {
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [costCenters, setCostCenters] = useState<CostCenterOption[]>([])
   const [myBranchId, setMyBranchId] = useState<number | null>(null)
+  // التقارير دي على مسيرات شهر رواتب بالاسم؛ الاختيار بيوضّح أيامه بالظبط (23 أغسطس – 22 سبتمبر)
+  const payrollMonth = usePayrollMonthContext()
 
   useEffect(() => {
     const user = getCurrentUser()
@@ -152,15 +155,9 @@ export function FinancialReportShell(props: ShellProps) {
         </div>
 
         <div className="card grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end fr-no-print">
-          <div>
-            <label className="label">شهر الرواتب</label>
-            <input
-              type="month"
-              className="input"
-              value={filters.period}
-              onChange={(e) => setFilters((current) => ({ ...current, period: e.target.value }))}
-            />
-          </div>
+          <PayrollPeriodSelect id="financial-report-period" label="شهر الرواتب" value={filters.period}
+            cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today}
+            onChange={(period) => setFilters((current) => ({ ...current, period }))} />
           <div>
             <label className="label">الفرع</label>
             {companyWide ? (

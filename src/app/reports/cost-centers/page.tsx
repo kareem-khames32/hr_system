@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import { AlertTriangle, ArrowRight, ChevronDown, ChevronLeft, Download, Info, Landmark, RefreshCw } from 'lucide-react'
 import { fetchBranches, getCurrentUser, type ApiBranch } from '@/lib/api'
+import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { useCurrency } from '@/lib/currency'
 import { formatMoney } from '@/lib/money'
 import {
@@ -14,8 +15,7 @@ import {
   type CostCenterReport,
 } from '@/lib/cost-center-report-api'
 
-const thisMonth = () => new Date().toLocaleDateString('en-CA').slice(0, 7)
-const money = (value: string | null) => (value === null ? '—' : formatMoney(value))
+const money =(value: string | null) => (value === null ? '—' : formatMoney(value))
 const centerKey = (id: number | null) => (id === null ? 'none' : String(id))
 
 // تقرير مراكز التكلفة: لكل مركز عدد الموظفين وإجمالي الرواتب والخصومات والصافي وحصة صاحب العمل في التأمينات،
@@ -24,7 +24,10 @@ export default function CostCenterReportPage() {
   const currency = useCurrency()
   const [companyWide, setCompanyWide] = useState(false)
   const [branches, setBranches] = useState<ApiBranch[]>([])
-  const [period, setPeriod] = useState(thisMonth)
+  // التقرير على مسيرات شهر رواتب بالاسم — الافتراضي شهر الرواتب الجاري (بدورة 23 يوم 25 سبتمبر = رواتب أكتوبر) مش الشهر التقويمي
+  const payrollMonth = usePayrollMonthContext()
+  const [period, setPeriod] = useState('')
+  useEffect(() => { if (payrollMonth) setPeriod((current) => current || payrollMonth.period) }, [payrollMonth])
   const [branchId, setBranchId] = useState('')
   const [includeDraft, setIncludeDraft] = useState(false)
   const [report, setReport] = useState<CostCenterReport | null>(null)
@@ -93,10 +96,8 @@ export default function CostCenterReportPage() {
         </div>
 
         <div className="card grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
-          <div>
-            <label className="label">الشهر</label>
-            <input type="month" className="input" value={period} onChange={(e) => setPeriod(e.target.value)} />
-          </div>
+          <PayrollPeriodSelect id="cost-center-period" label="شهر الرواتب" value={period} onChange={setPeriod}
+            cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today} />
           <div>
             <label className="label">الفرع</label>
             {companyWide ? (

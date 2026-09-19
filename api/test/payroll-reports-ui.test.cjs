@@ -170,11 +170,14 @@ test('every export/download/print/share control in every screen has a real handl
 test('unassigned and overtime tabs default to the API payroll month (cycle start day), not the calendar month', () => {
   const source = fs.readFileSync(path.join(repoRoot, 'src', 'app', 'payroll', 'reports', 'page.tsx'), 'utf8')
   assert.doesNotMatch(source, /localMonth/, 'لا شهر ميلادي افتراضي في تقارير الرواتب')
+  assert.doesNotMatch(source, /type="month"/, 'قاعدة المالك 2026-09-19: شهر بضغطة + «من تاريخ / إلى تاريخ»، مش خانة شهر بس')
+  // المدى الافتراضي من /attendance/payroll-month (يوم بداية الدورة) عبر usePayrollDayRange، والطلب بـfrom/to بالظبط
   for (const fetcher of ['fetchPayrollUnassignedReport', 'fetchPayrollOvertimeReport']) {
-    assert.match(source, new RegExp(`${fetcher}\\(\\{ period,[^\\n]*\\n\\s*\\.then\\(\\(data\\) => \\{ setReport\\(data\\); if \\(!period && data\\.period\\) setPeriod\\(data\\.period\\) \\}\\)`),
-      `${fetcher}: الفترة الأولى فارغة فيختارها الـAPI ثم تُعرض`)
+    assert.ok(source.includes(`${fetcher}({ from: listRange.from, to: listRange.to,`), `${fetcher}: بالفترة المختارة`)
   }
-  assert.equal((source.match(/const \[period, setPeriod\] = useState\(''\)/g) ?? []).length, 4, 'كل التبويبات الأربعة تبدأ بفترة من الـAPI')
+  assert.equal((source.match(/const \{ range, setRange, context \} = usePayrollDayRange\(\)/g) ?? []).length, 3, 'المسيرات وبلا مسير والإضافي على شهر الرواتب الجاري')
+  // الفروق بين مسيرين تفضل بالشهر (الـAPI يختار أول مرة) والاختيار بيوضح أيام كل شهر
+  assert.equal((source.match(/const \[period, setPeriod\] = useState\(''\)/g) ?? []).length, 1, 'الفروق تبدأ بفترة من الـAPI')
   assert.equal(ui.reportQuery({ period: '', branchId: '' }), '', 'الفترة الفارغة لا تُرسل فيطبق الـAPI دورة payroll.cycle_start_day')
 })
 

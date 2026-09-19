@@ -3,6 +3,7 @@ import {
   ConflictException,
   ForbiddenException,
   GoneException,
+  HttpException,
   Injectable,
   Logger,
   NotFoundException,
@@ -56,14 +57,15 @@ import { legacyInstallmentNumber, readLoanInstallmentPositions } from './payroll
 import { protectPayrollObligations } from './payroll-obligation-protection'
 import { postPayrollObligations, readPayrollNetProtectionSettings, readTypedObligationFacts, releasePayrollObligations, reservePayrollObligations } from './payroll-obligation-ledger'
 import { describePayrollObligationLines } from './payroll-obligation-trace'
+import { describePayrollItemsLines, payrollLineColumns } from './payroll-item-lines'
 import { approvedPayrollOvertimeClaims, assertUniqueOvertimeDays, closedOvertimePeriod, legacyExemptOvertimeSource, overtimeFinancialValue, overtimeTraceMatchesStoredTotals, projectOvertimeFinancialValue } from './overtime-financial'
-import { findPayrollPeriodContinuity, payrollPeriodBounds, PayrollPeriodError, payrollPolicyPeriodBounds } from './payroll-period'
+import { findPayrollPeriodContinuity, payrollPeriodBounds, PayrollPeriodError, payrollPolicyPeriodBounds, shiftPayrollPeriod } from './payroll-period'
 import { PAYROLL_SALARY_EVIDENCE_MODE_KEY, parsePayrollSalaryEvidenceMode, samePayrollRunSalarySource, selectPayrollRunSalary } from './payroll-run-salary'
 import { createHash } from 'node:crypto'
 import { localDateOf } from '../attendance/attendance.service'
 import { PayrollPolicy, PayrollPolicyVersion } from './payroll-policy.entities'
 import { payrollPolicyEffectiveEnds } from './payroll-policy-publish'
-import { PayrollRunDefinition, payrollRunDefinitionColumns, payrollRunDefinitionOf, payrollRunHasOrgFilters, payrollRunSelectionMode, PayrollRunExclusion, PayrollRunFilters, payrollLegacyCalculateAllowed } from './payroll-run-definition'
+import { PayrollRunDefinition, payrollRunDefinitionColumns, payrollRunDefinitionOf, PayrollRunDefinitionError, payrollRunHasOrgFilters, payrollRunSelectionMode, PayrollRunExclusion, PayrollRunFilters, payrollLegacyCalculateAllowed } from './payroll-run-definition'
 import { PayrollMembershipRow, resolvePayrollRunMembership } from './payroll-run-membership'
 import { buildPayrollUnassignedReport, PAYROLL_EXCLUSION_LABELS, PayrollUnassignedReport } from './payroll-unassigned-report'
 import { PayrollRunUnassignedAck } from './payroll-run-definition.entities'
@@ -1624,7 +1626,20 @@ export class PayrollService {
     const savedLeaveLines = (savedBreakdown as { leaveDeductionLines?: unknown }).leaveDeductionLines
     const leaveDeductions = Array.isArray(savedLeaveLines) ? savedLeaveLines
       : Number(item.unpaidLeaveDeduction) > 0 ? [{ code: 'UNPAID_LEAVE', label: 'إجازة بدون راتب', days: Number(item.unpaidLeaveDays), payPercent: 0, amount: Number(item.unpaidLeaveDeduction) }] : []
-    return { item, run: this.lightRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY', obligationDetails, financialExemptions, reversal, leaveDeductions }
+    // طلب المالك 19 سبتمبر: الاستحقاقات والاستقطاعات بندًا بندًا بأسمائها (نفس جدول المسير وتصديره)، مجموعها = الأعمدة المحفوظة
+    const [lines] = await describePayrollItemsLines(em, [item])
+    return { item, run: this.lightRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY', obligationDetails, financialExemptions, reversal, leaveDeductions, lines }
+    })
+  }
+
+  // طلب المالك 19 سبتمبر: بنود كل موظف في المسير (استحقاقات واستقطاعات بأسمائها) وأعمدة الجدول الموجودة فعلًا — قراءة فقط
+  async runLines(user: JwtPayload, runId: number) {
+    return this.readRun(runId, async (em, run) => {
+      await this.assertRunAccess(user, run, em)
+      const items = await em.getRepository(PayrollItem).find({ where: { runId }, order: { employeeId: 'ASC' } })
+      const lines = await describePayrollItemsLines(em, items)
+      const rows = items.map((item, index) => ({ itemId: item.id, employeeId: item.employeeId, ...lines[index] }))
+      return { runId, columns: payrollLineColumns(rows), rows }
     })
   }
 
@@ -2008,7 +2023,14 @@ export class PayrollService {
   // C8 / الخطوة 31: correction = مسير تكميلي مربوط بمسير مصروف (من payroll-corrections.service بعد فحص الأهلية)
   async createRunDraft(user: JwtPayload, dto: PayrollRunDefinitionInput,
     correction?: { runType: 'SUPPLEMENTARY'; parentRunId: number; correctionReason: string; startDate: string; endDate: string; employeeIds: number[] }) {
-    const runId = await this.runs.manager.transaction(async em => {
+    return this.detail(user, await this.saveRunDraft(user, dto, correction))
+  }
+
+  // حفظ المسودة نفسه (تحقق الاسم والسياسة وفترتها والتعريف ونطاق الفرع والنطاق الفارغ ثم الحفظ وحدثه) — «مسير جديد» و«إنشاء مسيرات الشهر الجديد» بنفس المسار
+  private async saveRunDraft(user: JwtPayload, dto: PayrollRunDefinitionInput,
+    correction?: { runType: 'SUPPLEMENTARY'; parentRunId: number; correctionReason: string; startDate: string; endDate: string; employeeIds: number[] },
+    copiedFromRunId?: number): Promise<number> {
+    return this.runs.manager.transaction(async em => {
       await this.calculationLock(em)
       const name = this.runName(dto.name)
       const context = await this.runPolicyPeriod(em, user, dto.policyVersionId, dto.period)
@@ -2033,7 +2055,7 @@ export class PayrollService {
         ...(correction ? { runType: 'SUPPLEMENTARY' as const, parentRunId: correction.parentRunId, correctionReason: correction.correctionReason } : {}) }))
       await this.event(em, user, saved.id, 'DRAFT_CREATED', correction ? correction.correctionReason.slice(0, 500) : null, { name, definition, policy: this.policyViewOf(context),
         period: { period: context.period, startDate: context.startDate, endDate: context.endDate }, previewTotals: preview.totals, previewHash: preview.previewHash,
-        ...(correction ? { runType: 'SUPPLEMENTARY', parentRunId: correction.parentRunId } : {}) })
+        ...(correction ? { runType: 'SUPPLEMENTARY', parentRunId: correction.parentRunId } : {}), ...(copiedFromRunId ? { copiedFromRunId } : {}) })
       if (correction) {
         // C3 × C8: إعفاء خصومات الحضور المطبق على البنود المعكوسة يُنقل للتكميلي بقراره الأصلي (لا يُعاد منحه ولا يُحتسب في الحدود)
         const carriedExemptions = await carryReversedRunExemptions(em, { parentRun: { id: correction.parentRunId, period: context.period }, supplementaryRun: saved,
@@ -2043,7 +2065,87 @@ export class PayrollService {
       }
       return saved.id
     })
-    return this.detail(user, runId)
+  }
+
+  // «إنشاء مسيرات الشهر الجديد» (طلب المالك 19 سبتمبر): لكل مسير عادي غير ملغى في شهر المصدر مسودة للشهر التالي بنفس الاسم والمعادلة
+  // (أحدث نسخة منشورة سارية على الشهر الجديد) والفلاتر والقائمة والاستبعادات بأسبابها — بنفس حفظ «مسير جديد» وتحققه، مسير مسير.
+  // الموجود بنفس الاسم في الشهر الجديد يتخطى، والمرفوض يرجع بسببه. حساب الفرع يشوف ويعمل مسيرات فرعه بس.
+  // شهر المصدر الافتراضي = آخر شهر فيه مسير اتحسب (مش مسودة بس) ومش بعد الشهر الجاي (مسير شهر بعيد محفوظ من تجربة ما يبقاش مصدر)؛
+  // فالضغط مرتين ما يعملش شهرين، والمسودات الجديدة ما تبقاش مصدر لحد ما تتحسب. لو كله مسودات = أقدم شهر. أي شهر تاني بالاختيار.
+  async createNextPeriodRuns(user: JwtPayload, dto: { dryRun?: boolean; sourcePeriod?: string }) {
+    if (!userHasPerm(user, 'payroll.calculate')) throw new ForbiddenException('ليست لديك صلاحية إنشاء المسيرات')
+    const visible = (await this.list(user)).filter(run => run.status !== 'CANCELLED' && payrollRunTypeOf(run) === 'REGULAR')
+    const periods = [...new Set(visible.map(run => run.period))].sort().reverse()
+    if (!periods.length) this.bad('PAYRUN-NEXT-NO-SOURCE', 'مفيش مسيرات سابقة تتنسخ — اعمل أول مسير من «مسير جديد»')
+    let sourcePeriod: string
+    if (dto.sourcePeriod !== undefined && dto.sourcePeriod !== null && dto.sourcePeriod !== '') {
+      if (!periods.includes(dto.sourcePeriod)) this.bad('PAYRUN-NEXT-SOURCE-EMPTY', `مفيش مسيرات في شهر ${dto.sourcePeriod} تتنسخ`)
+      sourcePeriod = dto.sourcePeriod
+    } else {
+      const processed = (period: string) => visible.some(run => run.period === period && run.status !== 'DRAFT')
+      const latestAllowed = shiftPayrollPeriod(localDateOf(new Date()).slice(0, 7), 1)
+      sourcePeriod = periods.find(period => period <= latestAllowed && processed(period)) ?? periods.find(processed) ?? periods[periods.length - 1]
+    }
+    const targetPeriod = shiftPayrollPeriod(sourcePeriod, 1)
+    const sources = visible.filter(run => run.period === sourcePeriod).sort((a, b) => a.id - b.id)
+    // الأسماء المحجوزة في الشهر الجديد (كل الفروع — القيد الفريد على الاسم في الشهر للشركة كلها)
+    const taken = new Map((await this.runs.find({ where: { period: targetPeriod, status: Not('CANCELLED') }, select: { id: true, name: true } }))
+      .filter(run => run.name).map(run => [run.name!.trim(), run.id]))
+    const created: Array<{ sourceRunId: number; name: string; runId: number | null; policyName: string; versionNo: number }> = []
+    const skipped: Array<{ sourceRunId: number; name: string | null; code: string; reason: string; existingRunId?: number | null }> = []
+    for (const source of sources) {
+      const name = source.name?.trim() ?? ''
+      if (!name) { skipped.push({ sourceRunId: source.id, name: null, code: 'PAYRUN-NEXT-NO-NAME', reason: 'مسير قديم بلا اسم — اعمله من «مسير جديد»' }); continue }
+      if (taken.has(name)) {
+        const existingRunId = taken.get(name)!
+        skipped.push({ sourceRunId: source.id, name, code: 'PAYRUN-NEXT-EXISTS', reason: `موجود بالفعل في شهر ${targetPeriod}`,
+          existingRunId: visible.some(run => run.id === existingRunId) ? existingRunId : null })
+        continue
+      }
+      try {
+        const plan = await this.runs.manager.transaction(em => this.nextPeriodDraftInput(em, user, source, targetPeriod))
+        if (dto.dryRun) { created.push({ sourceRunId: source.id, name, runId: null, policyName: plan.policyName, versionNo: plan.versionNo }); continue }
+        const runId = await this.saveRunDraft(user, plan.input, undefined, source.id)
+        taken.set(name, runId)
+        created.push({ sourceRunId: source.id, name, runId, policyName: plan.policyName, versionNo: plan.versionNo })
+      } catch (error) {
+        // تعريف محفوظ تالف في مسير المصدر: يتخطى بسببه بدل ما يوقف باقي المسيرات
+        if (error instanceof PayrollRunDefinitionError) { skipped.push({ sourceRunId: source.id, name, code: error.code, reason: error.message }); continue }
+        if (!(error instanceof HttpException)) throw error
+        const response = error.getResponse()
+        const body = typeof response === 'object' && response ? response as { code?: unknown; message?: unknown } : { message: response }
+        const message = Array.isArray(body.message) ? body.message.join('، ') : typeof body.message === 'string' ? body.message : 'تعذر إنشاء المسودة'
+        skipped.push({ sourceRunId: source.id, name, code: typeof body.code === 'string' ? body.code : 'PAYRUN-NEXT-REFUSED', reason: message })
+      }
+    }
+    return { dryRun: dto.dryRun === true, sourcePeriod, targetPeriod, sourcePeriods: periods.slice(0, 12), created, skipped }
+  }
+
+  // تعريف مسودة الشهر الجديد من مسير المصدر: نفس الاسم والفلاتر والقائمة والاستبعادات وتأكيد النطاق الفارغ، وأحدث نسخة منشورة
+  // من نفس المعادلة يقبلها الشهر الجديد (سريانها ودورتها) — نفس اختيار «مسير الشهر التالي» في الشاشة.
+  private async nextPeriodDraftInput(em: EntityManager, user: JwtPayload, source: PayrollRun, targetPeriod: string) {
+    const current = source.policyVersionId ? await em.getRepository(PayrollPolicyVersion).findOneBy({ id: source.policyVersionId }) : null
+    const policy = current ? await em.getRepository(PayrollPolicy).findOneBy({ id: current.policyId }) : null
+    if (!current || !policy) this.bad('PAYRUN-NEXT-NO-POLICY', 'مسير قديم بلا معادلة رواتب — اعمله من «مسير جديد»')
+    const versions = (await em.getRepository(PayrollPolicyVersion).find({ where: { policyId: policy.id } }))
+      .filter(version => version.status === 'ACTIVE' && version.publishedAt).sort((a, b) => b.versionNo - a.versionNo)
+    let chosen: PayrollPolicyVersion | null = null
+    for (const version of versions) {
+      try { await this.runPolicyPeriod(em, user, version.id, targetPeriod); chosen = version; break }
+      catch (error) { if (!(error instanceof BadRequestException) && !(error instanceof NotFoundException)) throw error }
+    }
+    if (!chosen) this.bad('PAYRUN-NEXT-NO-POLICY-VERSION', `معادلة الرواتب «${policy.name}» مالهاش نسخة منشورة سارية على شهر ${targetPeriod}`)
+    const definition = payrollRunDefinitionOf(source)
+    const { filters } = definition
+    const input: PayrollRunDefinitionInput = {
+      name: source.name, policyVersionId: chosen.id, period: targetPeriod,
+      filters: { branchIds: filters.branchIds, departmentIds: filters.departmentIds, teamIds: filters.teamIds, employeeIds: filters.employeeIds, allEmployees: filters.allEmployees },
+      exclusions: definition.exclusions.map(row => ({ employeeId: row.employeeId, reason: row.reason })),
+      ...(definition.emptyScope ? { confirmEmptyScope: true, emptyScopeReason: definition.emptyScope.reason } : {}),
+    }
+    // نفس تحقق التعريف قبل الحفظ (الأرقام الموجودة ونطاق الفرع وترابط الفلاتر) عشان المعاينة تقول المرفوض بسببه
+    await this.assertPolicyBranchScope(em, policy, await this.normalizeRunDefinition(em, user, input, null))
+    return { input, policyName: policy.name, versionNo: chosen.versionNo }
   }
 
   async updateRunDraft(user: JwtPayload, runId: number, dto: PayrollRunDefinitionInput & { appendExclusions?: Array<{ employeeId: number; reason: string }> }) {

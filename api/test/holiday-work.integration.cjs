@@ -1,7 +1,8 @@
 // «بدل دوام أيام العطلات» على قاعدة SQL مؤقتة معزولة (synchronize) — لا تلمس hr_system:
 // ترحيل 055 يطابق الكيان ويُعاد تشغيله بلا أثر، وأمر الموارد البشرية → قيد «بدل» في مسير الفترة بالساعات × سعر الساعة × المضاعف
 // من غير أي خصم يوم العطلة، واللي ماجاش أو جه من نفسه مالوش حاجة، وإلغاء الأمر + إعادة الحساب يشيله، والمسير المعتمد ما يتغيرش،
-// وطلب «دوام يوم عطلة» المعتمد بيتحسب بنفس الطريقة، وعزل الفرع.
+// وطلب «دوام يوم عطلة» المعتمد بيتحسب بنفس الطريقة، وعزل الفرع. والإضافي والبدل ما يجتمعوش على نفس اليوم (تقديم/اعتماد/مسير)،
+// واليوم اللي اتعتمد بعد اعتماد مسير فترته بيدخل أول مسير مفتوح بعده مرة واحدة من غير ما المعتمد يتغير.
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -20,6 +21,9 @@ const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-holiday-work-files-'))
 const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
 const FRIDAY = '2026-07-10', SATURDAY = '2026-07-11', THURSDAY = '2026-07-09', PERIOD = '2026-07'
+// أيام عطلة منفصلة لكل سيناريو إضافي/بدل، ويوم الاعتماد المتأخر
+const OT_ORDER_DAY = '2026-07-17', OT_REQUEST_DAY = '2026-07-18', OT_FIRST_DAY = '2026-07-24', LATE_DAY = '2026-07-25'
+const { HOLIDAY_WORK_OVERTIME_REFUSAL } = require('../src/attendance/holiday-work')
 let app, master, ds, base, admin, approver, hrA, hrB, branchA, branchB, deptA, deptA2, created = false, employeeNumber = 0, runNumber = 0
 const repo = name => { assert.equal(ds.options.database, database); return ds.getRepository(name) }
 const breakdownOf = item => JSON.parse(item.breakdown || '{}')
@@ -57,6 +61,21 @@ async function calculate(employeeIds, extra = {}) {
 }
 const holidayObligations = employeeId => repo('EmployeeObligation').find({ where: { employeeId }, order: { id: 'ASC' } })
   .then(rows => rows.filter(row => String(row.sourceRef ?? '').startsWith('holiday_work:')))
+async function approveRun(runId) {
+  const report = expectStatus(await request(approver, 'GET', `/payroll/runs/${runId}/unassigned`), 200)
+  expectStatus(await request(approver, 'POST', `/payroll/runs/${runId}/unassigned-ack`, { reportHash: report.reportHash }), 201)
+  expectStatus(await request(approver, 'POST', `/payroll/runs/${runId}/approve`), 201)
+}
+const ownerOf = (emp, handle) => repo('User').save({ email: `${handle}@holiday-work.invalid`, displayName: emp.fullName, passwordHash: 'test-only',
+  role: 'employee', branchId: branchA.id, employeeId: emp.id, permissions: '[]' })
+const submitOvertime = (owner, date) => request(owner, 'POST', '/requests', { typeCode: 'OVERTIME', submit: true,
+  payload: { date, hours: 4, reason: 'شغل يوم العطلة' } })
+// الكشف طلّع إضافي لليوم (بصمات يوم عطلة من غير أمر): المدير بيرفضه عشان الموظف يقدّم طلب إضافي صريح
+async function rejectDetected(emp, date) {
+  const detected = (await repo('OvertimeEntry').find({ where: { employeeId: emp.id, date } })).filter(entry => entry.status === 'DETECTED')
+  assert.equal(detected.length, 1, 'الكشف طلّع إضافي لليوم')
+  expectStatus(await request(admin, 'POST', `/attendance/overtime/${detected[0].id}/confirm`, { approve: false, reason: 'هيتقدم طلب إضافي صريح' }), 201)
+}
 
 before(async () => {
   assert.equal(env.DB_TYPE || 'mssql', 'mssql')
@@ -91,7 +110,14 @@ async function fixtureSetup() {
     { key: 'payroll.cycle_start_day', value: '1' }, { key: 'payroll.monthly_days', value: '30' }, { key: 'payroll.daily_hours', value: '8' },
     { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' }, { key: 'attendance.weekend_days', value: 'FRI,SAT' },
     { key: 'attendance.grace_minutes', value: '0' }, { key: 'payroll.exempt_overtime_eligible', value: 'false' },
+    // أيام يوليو أقدم من أثر الإضافي الرجعي الافتراضي (30 يوم)
+    { key: 'overtime.request_backdate_days', value: '400' },
   ])
+  // طلب «عمل إضافي» بخطوة موارد بشرية واحدة
+  const chain = await repo('ApprovalChain').save({ code: 'HW_OT_HR', nameAr: 'إضافي — موارد بشرية', requestTypeCode: 'OVERTIME', isActive: true, autoApprove: false })
+  await repo('ApprovalStep').save({ chainId: chain.id, stepOrder: 1, approverRole: 'hr' })
+  await repo('RequestType').save({ code: 'OVERTIME', nameAr: 'عمل إضافي', category: 'time_attendance', destinationHandler: 'overtime_entries',
+    approvalChainId: chain.id, isActive: true, requiredFields: JSON.stringify(['date', 'hours']) })
 }
 
 after(async t => {
@@ -252,4 +278,95 @@ test('طلب «دوام يوم عطلة»: الموظف يقدّم على يوم
   assert.equal(row.canEdit, false); assert.equal(row.canCancel, true); assert.equal(row.summary.totalAmount, 225)
   assert.equal((await request(hrA, 'PATCH', `/attendance/holiday-work/${grant.id}`, { name: 'تعديل', targetLevel: 'employees', branchId: branchA.id,
     employeeIds: [emp.id], dates: [SATURDAY] })).status, 400)
+})
+
+test('الإضافي والبدل ما يجتمعوش (1): طلب إضافي ليوم عطلة متغطي بأمر ساري بيترفض من التقديم', async () => {
+  const emp = await employee(deptA2), owner = await ownerOf(emp, 'ot-order')
+  expectStatus(await request(hrA, 'POST', '/attendance/holiday-work', { name: 'جرد جمعة 17', targetLevel: 'employees', branchId: branchA.id,
+    employeeIds: [emp.id], dates: [OT_ORDER_DAY] }), 201)
+  await punch(emp, OT_ORDER_DAY, '09:00', '13:00')
+  const refused = await submitOvertime(owner, OT_ORDER_DAY)
+  assert.equal(refused.status, 400, JSON.stringify(refused.body))
+  assert.equal(refused.body.message, HOLIDAY_WORK_OVERTIME_REFUSAL)
+  assert.equal(await repo('Request').countBy({ requesterId: emp.id, typeCode: 'OVERTIME' }), 0, 'التقديم المرفوض ما بيسيبش مسودة')
+  const active = (await repo('OvertimeEntry').find({ where: { employeeId: emp.id, date: OT_ORDER_DAY } })).filter(entry => !['CANCELLED', 'REJECTED'].includes(entry.status))
+  assert.deepEqual(active, [], 'لا إضافي مكتشف ولا مطلوب لليوم المغطى')
+})
+
+test('الإضافي والبدل ما يجتمعوش (2): إضافي اتقدّم قبل اعتماد «دوام يوم عطلة» لنفس اليوم — اعتماده بيترفض والمسير بيحسب البدل بس', async () => {
+  const emp = await employee(deptA2), owner = await ownerOf(emp, 'ot-request')
+  await punch(emp, OT_REQUEST_DAY, '09:00', '13:00')
+  await rejectDetected(emp, OT_REQUEST_DAY)
+  const overtime = expectStatus(await submitOvertime(owner, OT_REQUEST_DAY), 201)
+  assert.equal(overtime.status, 'UNDER_REVIEW')
+  const holiday = expectStatus(await request(owner, 'POST', '/requests', { typeCode: 'HOLIDAY_WORK', submit: true,
+    payload: { dates: OT_REQUEST_DAY, reason: 'جرد المخزن يوم السبت' } }), 201)
+  assert.equal(expectStatus(await request(hrA, 'POST', `/requests/${holiday.id}/act`, { action: 'APPROVE', comment: 'الجرد اتعمل فعلًا' }), 201).status, 'COMPLETED')
+  const refused = await request(hrA, 'POST', `/requests/${overtime.id}/act`, { action: 'APPROVE', comment: 'اعتماد الإضافي' })
+  assert.equal(refused.status, 400, JSON.stringify(refused.body))
+  assert.equal(refused.body.message, HOLIDAY_WORK_OVERTIME_REFUSAL)
+  assert.equal((await repo('Request').findOneByOrFail({ id: overtime.id })).status, 'UNDER_REVIEW', 'الطلب فاضل في الصندوق يترفض أو يرجع')
+  assert.equal((await repo('OvertimeEntry').findOneByOrFail({ requestId: overtime.id })).status, 'SUBMITTED')
+  // المسير: البدل بس — 4 ساعات × 37.5 × 1.5 = 225 — ومفيش إضافي
+  const run = await calculate([emp.id])
+  const item = run.item(emp.id), breakdown = breakdownOf(item)
+  assert.equal(Number(item.otherAdditions), 225); assert.equal(Number(item.overtimeAmount), 0)
+  assert.deepEqual(breakdown.holidayWork.lines.map(line => [line.date, line.status, line.amount]), [[OT_REQUEST_DAY, 'IN_RUN', 225]])
+})
+
+test('الإضافي والبدل ما يجتمعوش (3): إضافي اتعتمد قبل الأمر — المسير بيصرفه إضافي ويتخطى البدل لليوم، وإضافي جديد لليوم مرفوض', async () => {
+  const emp = await employee(deptA2), owner = await ownerOf(emp, 'ot-first')
+  await punch(emp, OT_FIRST_DAY, '09:00', '13:00')
+  await rejectDetected(emp, OT_FIRST_DAY)
+  const overtime = expectStatus(await submitOvertime(owner, OT_FIRST_DAY), 201)
+  assert.equal(expectStatus(await request(hrA, 'POST', `/requests/${overtime.id}/act`, { action: 'APPROVE', comment: 'اعتماد الإضافي' }), 201).status, 'COMPLETED')
+  assert.equal((await repo('OvertimeEntry').findOneByOrFail({ requestId: overtime.id })).status, 'APPROVED')
+  expectStatus(await request(hrA, 'POST', '/attendance/holiday-work', { name: 'جرد جمعة 24', targetLevel: 'employees', branchId: branchA.id,
+    employeeIds: [emp.id], dates: [OT_FIRST_DAY] }), 201)
+  assert.equal((await repo('OvertimeEntry').findOneByOrFail({ requestId: overtime.id })).status, 'APPROVED', 'الأمر ما بيلمسش الإضافي المعتمد')
+  const again = await submitOvertime(owner, OT_FIRST_DAY)
+  assert.equal(again.status, 400, JSON.stringify(again.body)); assert.equal(again.body.message, HOLIDAY_WORK_OVERTIME_REFUSAL)
+  const run = await calculate([emp.id])
+  const item = run.item(emp.id), breakdown = breakdownOf(item)
+  assert.equal(Number(item.overtimeAmount), 225, 'الإضافي المعتمد اتصرف: 4 × 37.5 × 1.5')
+  assert.equal(Number(item.otherAdditions), 0, 'ومفيش بدل لنفس اليوم')
+  assert.deepEqual(breakdown.holidayWork.lines.map(line => [line.date, line.status, line.code]), [[OT_FIRST_DAY, 'SKIPPED', 'OVERTIME_APPROVED']])
+  assert.deepEqual((await holidayObligations(emp.id)).filter(row => row.status !== 'CANCELLED'), [])
+})
+
+test('يوم عطلة اتعتمد بعد اعتماد مسير فترته: بيدخل أول مسير مفتوح بعده مرة واحدة، والمعتمد ما بيتغيرش', async () => {
+  const emp = await employee(deptA2), owner = await ownerOf(emp, 'late')
+  await punch(emp, LATE_DAY, '10:00', '14:00')
+  // مسير يوليو اتحسب واتعتمد قبل الطلب: مفيش بدل
+  const july = await calculate([emp.id])
+  assert.equal(Number(july.item(emp.id).otherAdditions), 0)
+  await approveRun(july.run.id)
+  // الطلب اتقدم واتعتمد بعد اعتماد مسير يوليو
+  const submitted = expectStatus(await request(owner, 'POST', '/requests', { typeCode: 'HOLIDAY_WORK', submit: true,
+    payload: { dates: LATE_DAY, reason: 'استلام بضاعة يوم السبت' } }), 201)
+  expectStatus(await request(hrA, 'POST', `/requests/${submitted.id}/act`, { action: 'APPROVE', comment: 'اعتماد متأخر' }), 201)
+  // مسير أغسطس المفتوح بياخد اليوم القديم: 4 ساعات × 37.5 × 1.5 = 225، قيده بشهر أغسطس ويومه في يوليو
+  const august = await calculate([emp.id], { period: '2026-08' })
+  const item = august.item(emp.id)
+  assert.equal(Number(item.otherAdditions), 225)
+  assert.deepEqual(breakdownOf(item).holidayWork.lines.map(line => [line.date, line.status, line.carried, line.hours, line.amount, line.grantKind]),
+    [[LATE_DAY, 'IN_RUN', true, 4, 225, 'REQUEST']])
+  let rows = (await holidayObligations(emp.id)).filter(row => row.status !== 'CANCELLED')
+  assert.deepEqual(rows.map(row => [row.status, row.effectiveDate, row.targetPeriod, Number(row.amount), row.sourceRequestId]),
+    [['PENDING', LATE_DAY, '2026-08', 225, submitted.id]])
+  // إعادة الحساب ما بتكررش القيد
+  const again = await calculate(undefined, { runId: august.run.id, period: '2026-08', employeeIds: [emp.id], reason: 'إعادة حساب أغسطس', name: undefined })
+  assert.equal(Number(again.item(emp.id).otherAdditions), 225)
+  assert.deepEqual((await holidayObligations(emp.id)).filter(row => row.status !== 'CANCELLED').map(row => row.id), rows.map(row => row.id))
+  // مسير يوليو المعتمد زي ما هو
+  const julyAfter = expectStatus(await request(admin, 'GET', `/payroll/runs/${july.run.id}`), 200)
+  assert.equal(julyAfter.status, 'APPROVED')
+  assert.equal(Number(julyAfter.items.find(row => row.employeeId === emp.id).otherAdditions), 0)
+  // اعتماد أغسطس بيحجزه، ومسير سبتمبر ما بيصرفوش تاني
+  await approveRun(august.run.id)
+  rows = (await holidayObligations(emp.id)).filter(row => row.status !== 'CANCELLED')
+  assert.deepEqual(rows.map(row => row.reservedPayrollRunId), [august.run.id])
+  const september = await calculate([emp.id], { period: '2026-09' })
+  assert.equal(Number(september.item(emp.id).otherAdditions), 0)
+  assert.equal(breakdownOf(september.item(emp.id)).holidayWork, undefined)
 })

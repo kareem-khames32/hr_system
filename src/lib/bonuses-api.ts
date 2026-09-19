@@ -108,7 +108,8 @@ export const fetchBonusCandidates = (typeId?: number) => apiFetch<BonusCandidate
 export const previewBonuses = (input: BonusInput, selection: BonusSelection) => post<BonusPreview>('/bonuses/preview', { ...input, selection })
 export const submitBonusBatch = (input: BonusInput, selection: BonusSelection, previewHash: string) => post<BonusBulkResult>('/bonuses/bulk', { ...input, selection, previewHash })
 export const createBonus = (input: BonusInput & { employeeId: number }) => post<BonusView>('/bonuses', input)
-export function fetchBonuses(filters: { status?: string; typeId?: number; targetPeriod?: string; employeeId?: number; batchId?: number; view?: 'all' | 'created' | 'pending_me' } = {}) {
+// from/to = «من تاريخ / إلى تاريخ» على تاريخ الطلب — بيتفلتر على الخادم قبل حد الـ500
+export function fetchBonuses(filters: { status?: string; typeId?: number; targetPeriod?: string; employeeId?: number; batchId?: number; view?: 'all' | 'created' | 'pending_me'; from?: string; to?: string } = {}) {
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(filters)) if (value !== undefined && value !== '' && value !== null) query.set(key, String(value))
   const text = query.toString()

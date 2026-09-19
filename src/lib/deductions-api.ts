@@ -162,7 +162,8 @@ export const previewDeductions = (input: DeductionInput, selection: DeductionSel
 export const submitDeductionBatch = (input: DeductionInput, selection: DeductionSelection, previewHash: string) =>
   post<DeductionBulkResult>('/deductions/bulk', { ...input, selection, previewHash })
 export const createDeduction = (input: DeductionInput & { employeeId: number }) => post<DeductionView>('/deductions', input)
-export function fetchDeductions(filters: { status?: string; typeId?: number; targetPeriod?: string; employeeId?: number; batchId?: number; view?: 'all' | 'created' | 'pending_me' } = {}) {
+// from/to = «من تاريخ / إلى تاريخ» على تاريخ الطلب — بيتفلتر على الخادم قبل حد الـ500
+export function fetchDeductions(filters: { status?: string; typeId?: number; targetPeriod?: string; employeeId?: number; batchId?: number; view?: 'all' | 'created' | 'pending_me'; from?: string; to?: string } = {}) {
   const query = new URLSearchParams()
   for (const [key, value] of Object.entries(filters)) if (value !== undefined && value !== '' && value !== null) query.set(key, String(value))
   const text = query.toString()

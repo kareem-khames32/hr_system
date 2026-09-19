@@ -229,6 +229,12 @@ class PayrollParityCountingDto {
   @Allow() reason?: unknown
 }
 
+// «إنشاء مسيرات الشهر الجديد»: شهر المصدر اختياري (الافتراضي آخر شهر فيه مسير اتحسب)
+class PayrollNextPeriodDto {
+  @IsOptional() @IsBoolean() dryRun?: boolean
+  @IsOptional() @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'اختار الشهر بصيغة YYYY-MM' }) sourcePeriod?: string
+}
+
 // المسير محصور بأدوار الإدارة — الدورة الكاملة (محاسب → HR → مالي → تنفيذي) لاحقاً
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll')
@@ -245,6 +251,20 @@ export class PayrollController {
   @Get('runs/:id')
   detail(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
     return this.service.detail(user, id)
+  }
+
+  // طلب المالك 19 سبتمبر: بنود الاستحقاقات والاستقطاعات لكل موظف بأسمائها (قراءة فقط، مجموعها = أعمدة البند المحفوظة)
+  @Perm('payroll.view')
+  @Get('runs/:id/lines')
+  lines(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number) {
+    return this.service.runLines(user, id)
+  }
+
+  // «إنشاء مسيرات الشهر الجديد»: مسودة لكل مسير عادي في شهر المصدر بنفس تعريفه (dryRun = المعاينة بلا حفظ)
+  @Perm('payroll.calculate')
+  @Post('runs/create-next-period')
+  createNextPeriod(@CurrentUser() user: JwtPayload, @Body() dto: PayrollNextPeriodDto) {
+    return this.service.createNextPeriodRuns(user, dto)
   }
 
   // المسار القديم: إنشاء/إعادة حساب مسير فرع لفترة في نداء واحد — مغلق على قاعدة الشركة (410 PAYRUN-LEGACY-ENDPOINT)،

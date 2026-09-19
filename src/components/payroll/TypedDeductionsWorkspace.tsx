@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useEffect, useMemo, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Plus, RefreshCw, Settings2, Users, X } from 'lucide-react'
 import { ApiError, can, fetchDepartments, fetchEmployees, fetchTeams, type ApiDepartment, type ApiEmployee, type ApiTeam } from '@/lib/api'
 import {
@@ -12,8 +12,8 @@ import {
   type DeductionTypeInput, type DeductionTypeView, type DeductionView,
 } from '@/lib/deductions-api'
 import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
-import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
-import { dateInRange, localDayOf } from '@/lib/payroll-month-range'
+import { DayRangeFilter, PayrollPeriodSelect, usePayrollDayRange } from '@/components/DayRangeFilter'
+import { validDayRange, type DayRange, type PayrollMonthContext } from '@/lib/payroll-month-range'
 
 // الخطوة 25: مساحة الخصومات المصنفة — القائمة والاعتماد (مع الاعتراض والعكس وقرارات الأقساط المعلقة)، والإنشاء لموظف أو
 // اختيار أو فريق أو قسم أو فرع بمعاينة واستبعاد، وكتالوج الأنواع، والتقارير. الخادم يعيد فحص النطاق والحدود والتكرار
@@ -51,27 +51,45 @@ export function TypedDeductionsWorkspace({ currency, mode, focusRequestId = null
   const [filters, setFilters] = useState<ListFilters>({ view: mode === 'manager' || focusRequestId ? 'all' : 'pending_me', status: '', targetPeriod: '' })
   const [canManage, setCanManage] = useState(false)
   const [ready, setReady] = useState(false)
+  // «من تاريخ / إلى تاريخ» على تاريخ الطلب (أو شهر رواتب بضغطة) — الافتراضي شهر الرواتب الجاري، والفلترة على الخادم قبل حد الـ500
+  const { range, setRange, context } = usePayrollDayRange()
+  const listRange = validDayRange(range)
+  const [outsideRange, setOutsideRange] = useState(0)
+  const latest = useRef(0)
   useEffect(() => {
     const view = urlParam('view')
     if (view === 'pending_me' || view === 'created' || view === 'all') setFilters(value => ({ ...value, view }))
   }, [])
 
   const loadRows = () => {
+    if (!listRange) return
+    const request = ++latest.current
     setLoadingRows(true)
-    fetchDeductions({ view: filters.view, status: filters.status || undefined, targetPeriod: filters.targetPeriod || undefined })
-      .then(setRows).catch(error => setLoadError(errorText(error, 'تعذر تحميل الخصومات المصنفة'))).finally(() => setLoadingRows(false))
+    const base = { view: filters.view, status: filters.status || undefined, targetPeriod: filters.targetPeriod || undefined }
+    fetchDeductions({ ...base, from: listRange.from, to: listRange.to })
+      .then(async list => {
+        // «بانتظار اعتمادي» أو فترة فاضية: عدد الطلبات برا الفترة يبان بدل ما تستخبى بصمت
+        const everything = filters.view === 'pending_me' || list.length === 0 ? await fetchDeductions(base).catch(() => null) : null
+        if (request !== latest.current) return
+        const inRange = new Set(list.map(row => row.id))
+        setRows(list)
+        setOutsideRange(everything ? everything.filter(row => !inRange.has(row.id)).length : 0)
+      })
+      .catch(error => { if (request === latest.current) setLoadError(errorText(error, 'تعذر تحميل الخصومات المصنفة')) })
+      .finally(() => { if (request === latest.current) setLoadingRows(false) })
   }
   useEffect(() => {
     setCanManage(can('deductions.manage'))
     fetchDeductionCreatable().then(value => { setCreatable(value); if (urlParam('tab') === 'create' && value.types.length > 0) setTab('create') })
       .catch(error => setLoadError(errorText(error, 'تعذر تحميل أنواع الخصومات المسموحة'))).finally(() => setReady(true))
   }, [])
-  useEffect(loadRows, [filters.view, filters.status, filters.targetPeriod])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(loadRows, [filters.view, filters.status, filters.targetPeriod, listRange?.from, listRange?.to])
   useEffect(() => { if (focusRequestId) { setTab('list'); setFilters(value => ({ ...value, view: 'all' })) } }, [focusRequestId])
 
   const canCreate = (creatable?.types.length ?? 0) > 0
-  // الموظف غير المدير ولا المعتمد: لا مساحة إدارية تُعرض له
-  if (mode === 'manager' && ready && !loadingRows && !canCreate && rows.length === 0 && filters.view === 'all' && !filters.status && !filters.targetPeriod && !focusRequestId) return null
+  // الموظف غير المدير ولا المعتمد: لا مساحة إدارية تُعرض له (ولا طلب ليه حتى برا الفترة)
+  if (mode === 'manager' && ready && !loadingRows && !canCreate && rows.length === 0 && outsideRange === 0 && filters.view === 'all' && !filters.status && !filters.targetPeriod && !focusRequestId) return null
 
   return (
     <div className="card space-y-4">
@@ -88,7 +106,8 @@ export function TypedDeductionsWorkspace({ currency, mode, focusRequestId = null
       </div>
       {loadError && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm flex items-center gap-2"><AlertTriangle size={16} />{loadError}</div>}
       {tab === 'list' && <DeductionList rows={rows} loading={loadingRows} filters={filters} setFilters={setFilters} reload={loadRows} currency={currency}
-        reasonMinLength={creatable?.reasonMinLength ?? 20} currentPeriod={creatable?.currentPeriod ?? ''} focusRequestId={focusRequestId} />}
+        reasonMinLength={creatable?.reasonMinLength ?? 20} currentPeriod={creatable?.currentPeriod ?? ''} focusRequestId={focusRequestId}
+        range={range} setRange={setRange} context={context} outsideRange={outsideRange} />}
       {tab === 'create' && creatable && <DeductionCreator creatable={creatable} currency={currency} onCreated={() => { setFilters(value => ({ ...value, view: 'created' })); setTab('list'); loadRows() }} />}
       {tab === 'types' && canManage && <DeductionTypesPanel onChanged={() => fetchDeductionCreatable().then(setCreatable).catch(() => undefined)} />}
     </div>
@@ -96,10 +115,13 @@ export function TypedDeductionsWorkspace({ currency, mode, focusRequestId = null
 }
 
 type ListFilters = { view: 'all' | 'pending_me' | 'created'; status: string; targetPeriod: string }
+// نفس حد قائمة الخادم (أحدث 500 طلب مرئي في الفترة)
+const LIST_LIMIT = 500
 
-function DeductionList({ rows, loading, filters, setFilters, reload, currency, reasonMinLength, currentPeriod, focusRequestId }: {
+function DeductionList({ rows, loading, filters, setFilters, reload, currency, reasonMinLength, currentPeriod, focusRequestId, range, setRange, context, outsideRange }: {
   rows: DeductionView[]; loading: boolean; filters: ListFilters; setFilters: (update: (value: ListFilters) => ListFilters) => void
   reload: () => void; currency: string; reasonMinLength: number; currentPeriod: string; focusRequestId: number | null
+  range: DayRange | null; setRange: (range: DayRange) => void; context: PayrollMonthContext | null; outsideRange: number
 }) {
   const [expanded, setExpanded] = useState<number | null>(null)
   const [detail, setDetail] = useState<DeductionView | null>(null)
@@ -118,11 +140,8 @@ function DeductionList({ rows, loading, filters, setFilters, reload, currency, r
     fetchDeduction(focusRequestId).then(view => { setFocused(view); setExpanded(view.id); setDetail(view) })
       .catch(error => setNotice(errorText(error, 'تعذر فتح طلب الخصم المطلوب')))
   }, [focusRequestId])
-  // فلتر «من تاريخ / إلى تاريخ» على تاريخ الطلب — الافتراضي شهر الرواتب الجاري؛ الطلب المفتوح من رابط يظهر دايمًا
-  const { range, setRange, context } = usePayrollDayRange()
-  const rangeRows = range ? rows.filter(row => dateInRange(localDayOf(row.createdAt), range)) : rows
-  const outsideRange = rows.length - rangeRows.length
-  const shown = focused && !rangeRows.some(row => row.id === focused.id) ? [focused, ...rangeRows] : rangeRows
+  // الصفوف جاية من الخادم متفلترة بالفترة؛ الطلب المفتوح من رابط يظهر دايمًا حتى لو تاريخه برّاها
+  const shown = focused && !rows.some(row => row.id === focused.id) ? [focused, ...rows] : rows
 
   const toggle = (row: DeductionView) => {
     if (expanded === row.id) { setExpanded(null); setDetail(null); return }
@@ -174,13 +193,13 @@ function DeductionList({ rows, loading, filters, setFilters, reload, currency, r
             {(Object.keys(DEDUCTION_STATUS_META) as DeductionStatus[]).map(status => <option key={status} value={status}>{DEDUCTION_STATUS_META[status].label}</option>)}
           </select>
         </label>
-        <label className="text-sm text-gray-600">شهر المسير المستهدف
-          <input type="month" className="input mt-1" dir="ltr" value={filters.targetPeriod} onChange={event => setFilters(value => ({ ...value, targetPeriod: event.target.value }))} />
-        </label>
+        <PayrollPeriodSelect id="deductions-target-period" label="شهر المسير المستهدف" value={filters.targetPeriod} allLabel="كل الشهور"
+          onChange={targetPeriod => setFilters(value => ({ ...value, targetPeriod }))} cycleStartDay={context?.cycleStartDay} today={context?.today} className="w-auto" />
         <DayRangeFilter idPrefix="deductions" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
         <button type="button" className="btn-secondary flex items-center gap-1" onClick={reload}><RefreshCw size={16} />تحديث</button>
       </div>
-      {outsideRange > 0 && <p className="text-xs text-gray-500" data-outside-range>فيه {outsideRange} طلب تاريخه برا الفترة المختارة — غيّر «من تاريخ» أو «إلى تاريخ» عشان تشوفهم.</p>}
+      {outsideRange > 0 && <p className="text-xs text-gray-500" data-outside-range>فيه {outsideRange} طلب {filters.view === 'pending_me' ? 'بانتظار اعتمادك ' : ''}تاريخه برا الفترة المختارة — اختار شهر تاني أو غيّر «من تاريخ» / «إلى تاريخ» عشان تشوفهم.</p>}
+      {rows.length >= LIST_LIMIT && <p className="text-xs text-warning-700" data-list-limit>بيظهر أحدث {LIST_LIMIT} طلب في الفترة — ضيّق الفترة عشان تشوف الأقدم.</p>}
       {notice && <div role="status" className="bg-primary-50 text-primary-700 rounded-xl p-3 text-sm flex items-center justify-between">{notice}<button type="button" aria-label="إغلاق" onClick={() => setNotice('')}><X size={14} /></button></div>}
       {loading ? (
         <div className="flex items-center justify-center py-10"><div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>

@@ -17,6 +17,12 @@ test('التابة: الشهر والبحث، والمنتقي الموحد، و
   const tab = read('src/components/payroll/PayrollAllowancesTab.tsx')
   assert.match(tab, /data-payroll-overview-tab="allowances"/)
   assert.match(tab, /type="month"/)
+  // الافتراضي شهر الرواتب الجاري بحدوده (نفس باقي تابات المسير)، مش الشهر التقويمي
+  assert.match(tab, /usePayrollDayRange\(\)\.context/)
+  assert.match(tab, /payrollMonthBounds\(period, payrollMonth\.cycleStartDay\)/)
+  assert.match(tab, /> شهر الرواتب<\/span>/)
+  assert.match(tab, /data-payroll-period-range>\{dayRangeLabel\(periodRange\)\}/)
+  assert.doesNotMatch(tab, /new Date\(\)\.getMonth|thisMonth/)
   assert.match(tab, /<OrgTargetPicker /)
   assert.match(tab, /formatMoney\(data\?\.totals\.amount/)
   assert.match(tab, /cancelAllowanceLine\(row\.id\)/)
@@ -28,8 +34,12 @@ test('التابة: الشهر والبحث، والمنتقي الموحد، و
 })
 
 test('القسيمة: البدل سطر باسمه والباقي «إضافات أخرى»، والمجموع هو عمود الإضافات', () => {
+  // طلب المالك 19 سبتمبر: التقسيم بقى في الخادم (payroll-item-lines) لكل البنود — البدل ALLOWANCE:<اسمه> والباقي OTHER_ADDITIONS، ومجموعها = العمود
+  // (مختبر في payroll-item-lines.test.cjs)؛ القسيمة بتعرض بنود الخادم بأسمائها وإجمالياتها.
   const payslip = read('src/app/payroll/payslip/[id]/page.tsx')
-  assert.match(payslip, /row\.type === 'CREDIT' && row\.category === 'allowance'/)
-  assert.match(payslip, /allowanceCents <= otherAdditionsCents/)
-  assert.match(payslip, /\(otherAdditionsCents - allowanceCents\) \/ 100/)
+  assert.match(payslip, /setLines\(\(data as \{ lines\?: PayrollItemLines \}\)\.lines \?\? null\)/)
+  assert.match(payslip, /const totalEarnings = itemLines\?\.totals\.earnings \?\? 0/)
+  const lines = read('api/src/payroll/payroll-item-lines.ts')
+  assert.match(lines, /if \(fact\.category === 'allowance'\) \{ const name = label \|\| 'بدل'; return \{ key: `ALLOWANCE:\$\{name\}`, name \} \}/)
+  assert.match(lines, /mergeWithRemainder\(earnings, credits, otherAdditions, 'OTHER_ADDITIONS', PAYROLL_LINE_NAMES\.OTHER_ADDITIONS\)/)
 })

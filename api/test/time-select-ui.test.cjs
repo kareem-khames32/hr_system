@@ -63,6 +63,13 @@ test('نموذج الطلبات: من/إلى ووقت البصمة بقوا قا
   assert.equal((page.match(/renderSmartField\(f(\.key)?\)/g) || []).length, 2)
   const timeBranch = page.slice(page.indexOf("if (key === 'time') {"), page.indexOf("if (key === 'leaveType'"))
   assert.match(timeBranch, /<TimeSelect/)
+  // وقت تصحيح البصمة كل 5 دقايق، وأوقات الإذن (من/إلى) فاضلة كل ربع ساعة
+  assert.match(timeBranch, /<TimeSelect\s+value=\{tv\}[\s\S]{0,200}?stepMinutes=\{5\}[\s\S]{0,100}?\/>/)
+  const permissionBranch = page.slice(page.indexOf("(key === 'from' || key === 'to') &&"), page.indexOf("if (key === 'time') {"))
+  assert.match(permissionBranch, /<TimeSelect/)
+  assert.doesNotMatch(permissionBranch, /stepMinutes/)
+  assert.equal(timeSelect.timeOptions(5).length, 288)
+  assert.deepEqual(timeSelect.timeOptions(5).slice(108, 111).map(o => o.value), ['09:00', '09:05', '09:10'])
   // الإذن: الوقتين مطلوبين قبل الإرسال والمدة محسوبة بنفس المساعد
   assert.match(page, /اختار وقت بداية ونهاية الإذن/)
   assert.match(page, /timeSpanMinutes\(from, to\)/)

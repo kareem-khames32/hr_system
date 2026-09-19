@@ -253,8 +253,9 @@ export class PayrollAllowancesService {
     const grantViews = [...grants.values()].sort((a, b) => b.id - a.id).map(grant => {
       const mine = rows.filter(row => row.grantId === grant.id)
       const cancellable = mine.filter(row => row.canCancel).length
+      // حساب الفرع يشوف سطور فرعه بس: العدد هو سطوره الظاهرة (مش عدد الشركة كلها — ولا «اتلغى منه» غلط من سطور الفروع التانية)
       return { id: grant.id, typeName: grant.typeName, amount: money(cents(grant.amount)), targetLevel: grant.targetLevel,
-        targetText: this.describeTarget(grant, names), reason: grant.reason, employeeCount: grant.employeeCount,
+        targetText: this.describeTarget(grant, names), reason: grant.reason, employeeCount: scope === null ? grant.employeeCount : mine.length,
         activeCount: mine.filter(row => row.state !== 'CANCELLED').length, cancellableCount: cancellable,
         createdAt: grant.createdAt, createdByName: users.get(grant.createdByUserId) ?? null, canCancel: cancellable > 0 }
     })

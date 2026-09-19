@@ -1,7 +1,7 @@
 import { apiFetch, type ApiAttendanceDay, type ApiOvertimeEntry, type ApiPunch } from './api'
 import { dayRangeQuery, type DayRange } from './payroll-month-range'
 
-// نسخ باليوم (?from=&to=) من استعلامات الحضور — الشهر (?month=) لسه شغال في api.ts للشاشات القديمة
+// استعلامات الحضور والإضافي باليوم (?from=&to=) — كل الشاشات بتبعت الفترة؛ الـAPI لسه بيقبل ?month= للتوافق بس
 
 export const fetchAttendanceSheetRange = (employeeId: number, range: DayRange) =>
   apiFetch<{ employeeId: number; month: string; from: string; to: string; days: ApiAttendanceDay[]; summary: Record<string, number> }>(

@@ -71,4 +71,7 @@ export class BonusListQueryDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) employeeId?: number
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) @Max(2147483647) batchId?: number
   @IsOptional() @IsIn(['all', 'created', 'pending_me']) view?: string
+  // «من تاريخ / إلى تاريخ» على تاريخ الطلب (الاتنين مع بعض) — الفلترة على الخادم قبل حد الـ500
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: '«من تاريخ» بصيغة YYYY-MM-DD' }) from?: string
+  @IsOptional() @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: '«إلى تاريخ» بصيغة YYYY-MM-DD' }) to?: string
 }

@@ -73,7 +73,7 @@ import { isValidYmd } from '../offboarding/eos'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 import { buildOvertimeApprovalSnapshot, overtimeWageEvidence } from '../payroll/overtime-financial'
 import { appendOvertimeEvent, assertOvertimeSubmission, claimOvertimeDay, releaseOvertimeDayClaim } from './overtime-day-claims'
-import { HOLIDAY_WORK_HANDLER, HOLIDAY_WORK_REQUEST_TYPE, parseHolidayWorkDates } from '../attendance/holiday-work'
+import { assertOvertimeNotHolidayWork, holidayWorkCoversOvertime, HOLIDAY_WORK_HANDLER, HOLIDAY_WORK_OVERTIME_REFUSAL, parseHolidayWorkDates } from '../attendance/holiday-work'
 import { OvertimeEntryEvent } from './entities/overtime-workflow.entities'
 import { getLoanInstallmentDeferralEvidence } from '../payroll/payroll-installment-ledger'
 import { assertLoanDeferralClientPayload, assertLoanReferenceId, LOAN_DEFERRAL_FIELDS, LOAN_DEFERRAL_HANDLER, LOAN_DEFERRAL_TYPE,
@@ -1453,8 +1453,9 @@ export class RequestsService {
             catch (error) { this.logger.error(`تعذّرت إعادة حساب يوم مبادلة الوردية للموظف #${employeeId}`, (error as Error).stack) }
           }
         }
-      } else if (saved.typeCode === HOLIDAY_WORK_REQUEST_TYPE && saved.status === 'COMPLETED') {
-        // «دوام يوم عطلة» معتمد: إعادة حساب أيامه تلغي الإضافي المكتشف لليوم المغطى (بيتحسب بدل مش إضافي)
+      } else if (saved.status === 'COMPLETED' &&
+        (await this.types.findOne({ where: { code: definitionCodeOf(saved) } }))?.destinationHandler === HOLIDAY_WORK_HANDLER) {
+        // «دوام يوم عطلة» معتمد (بوجهة النوع زي التقديم والتنفيذ، مش بكوده): إعادة حساب أيامه تلغي الإضافي المكتشف لليوم المغطى (بيتحسب بدل مش إضافي)
         let dates: string[] = []
         try { dates = parseHolidayWorkDates(payload.dates) } catch { dates = [] }
         for (const date of dates.filter(value => value <= localDateOf(new Date()))) {
@@ -2035,6 +2036,17 @@ export class RequestsService {
           if (!entry || entry.status !== 'DETECTED' || entry.requestId) return false
           const employee = await em.getRepository(Employee).findOneBy({ id: entry.employeeId })
           if (!employee?.isActive) return false
+          // يوم عطلة متغطي بأمر/طلب «دوام يوم عطلة»: بيتحسب بدل مش إضافي — المكتشف يتلغي بأثره بدل ما يتوجه لاعتماد هيترفض
+          if (await holidayWorkCoversOvertime(em, entry.employeeId, entry.date)) {
+            const stale = await em.getRepository(OvertimeEntry).findOne({ where: { id: entry.id }, lock: { mode: 'pessimistic_write' } })
+            if (!stale || stale.requestId || stale.status !== 'DETECTED') return false
+            stale.status = 'CANCELLED'
+            stale.payableHours = null
+            await em.getRepository(OvertimeEntry).save(stale)
+            await releaseOvertimeDayClaim(em, stale.id)
+            await appendOvertimeEvent(em, { entryId: stale.id, eventType: 'AUTO_CANCELLED', reason: HOLIDAY_WORK_OVERTIME_REFUSAL })
+            return false
+          }
           const evidence = await this.attendance.overtimeEvidence(entry.employeeId, entry.date, em)
           if (!evidence.window.open || evidence.blockers.length || evidence.evidenceMode !== 'PUNCH') return false
           await assertOvertimeSubmission(em, evidence, entry.id)
@@ -2369,6 +2381,8 @@ export class RequestsService {
     if (payload.hours != null && !['number', 'string'].includes(typeof payload.hours)) throw new BadRequestException('ساعات الإضافي المطلوبة يجب أن تكون رقماً')
     const employee = await em.getRepository(Employee).findOneBy({ id: req.requesterId })
     if (!employee?.isActive) throw new BadRequestException('تقديم الإضافي متاح للموظف النشط؛ راجع حالة الموظف قبل التقديم')
+    // يوم عطلة متغطي بأمر ساري أو طلب «دوام يوم عطلة» معتمد: بيتحسب بدل مش إضافي (ما يتصرفش مرتين)
+    await assertOvertimeNotHolidayWork(em, req.requesterId, date)
     const repo = em.getRepository(OvertimeEntry)
     let entry = await this.overtimeEntryForRequest(em, req)
     const automatic = req.typeCode === 'OVERTIME_AUTO'
@@ -2451,6 +2465,8 @@ export class RequestsService {
   private async reviewOvertimeApproval(em: EntityManager, req: Request, user: JwtPayload, dto: ActDto) {
     const entry = await this.overtimeEntryForRequest(em, req)
     if (!entry) throw new ConflictException('طلب إضافي قديم بلا سجل ودليل تقديم؛ أرجعه ثم أعد تقديمه قبل الاعتماد')
+    // اليوم اتغطى بأمر/طلب «دوام يوم عطلة» بعد التقديم: أي خطوة اعتماد مرفوضة — اليوم بيتحسب بدل مش إضافي
+    await assertOvertimeNotHolidayWork(em, entry.employeeId, entry.date)
     const atApproval = this.overtimeComputedAtApproval(entry)
     // الخطوات الوسيطة لطلب بيتحسب وقت الاعتماد مابتحتاجش بصمات لسه، إلا لو المعتمد بيخفض الدقائق.
     if (atApproval && dto.approvedMinutes == null) {

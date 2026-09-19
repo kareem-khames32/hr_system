@@ -211,3 +211,19 @@ test('المسير المعتمد ما بيتغيرش: الإلغاء بعد ا�
   const detail = expectStatus(await request(admin, 'GET', `/payroll/runs/${run.id}`), 200)
   assert.equal(Number(itemOf(detail.items, emp.id).otherAdditions), 75, 'المعتمد زي ما هو')
 })
+
+test('بدل على الشركة كلها: حساب الفرع يشوف عدد سطور فرعه بس (مش عدد الشركة)، ومفيش «اتلغى منه» من سطور فروع تانية', async () => {
+  const inA = await employee(), inB = await employee({ branchId: branchB.id, departmentId: null })
+  const grant = expectStatus(await request(admin, 'POST', '/payroll/allowances/grants', { period: '2026-10', allowanceTypeId: transport.id, amount: '40',
+    targetLevel: 'company', reason: 'بدل الشركة كلها' }), 201)
+  assert.ok(grant.created > 2, 'الشركة فيها موظفين أكتر من فرع ب')
+  // إلغاء سطر في فرع أ: الشركة تشوفه ملغي، وفرع ب ما يتأثرش
+  const companyView = expectStatus(await request(admin, 'GET', '/payroll/allowances/grants?period=2026-10'), 200)
+  expectStatus(await request(admin, 'POST', `/payroll/allowances/lines/${companyView.rows.find(row => row.employeeId === inA.id).id}/cancel`), 201)
+  const all = expectStatus(await request(admin, 'GET', '/payroll/allowances/grants?period=2026-10'), 200)
+  assert.deepEqual([all.grants[0].employeeCount, all.grants[0].activeCount], [grant.created, grant.created - 1])
+  const branch = expectStatus(await request(branchUser, 'GET', '/payroll/allowances/grants?period=2026-10'), 200)
+  assert.deepEqual(branch.rows.map(row => row.employeeId), [inB.id])
+  assert.equal(branch.grants.length, 1)
+  assert.deepEqual([branch.grants[0].employeeCount, branch.grants[0].activeCount], [1, 1], 'عدد سطور الفرع الظاهرة، من غير «اتلغى منه»')
+})

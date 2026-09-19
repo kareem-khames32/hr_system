@@ -13,8 +13,8 @@ import {
 } from 'lucide-react'
 import { can, type ApiBranch, type ApiDepartment } from '@/lib/api'
 import { FinancialReportLinks } from '@/app/reports/_financial/links'
-import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
-import { payrollMonthBounds, periodOverlapsRange } from '@/lib/payroll-month-range'
+import { DayRangeFilter, PayrollPeriodSelect, usePayrollDayRange, usePayrollMonthContext } from '@/components/DayRangeFilter'
+import { dayRangeKey, payrollMonthBounds, periodOverlapsRange, validDayRange, type DayRange } from '@/lib/payroll-month-range'
 import { downloadCsv } from '@/lib/csv'
 import { useCurrency } from '@/lib/currency'
 import {
@@ -263,8 +263,9 @@ function RunsTab() {
 
 // ===== تبويب بلا مسير =====
 function UnassignedTab({ branches, departments }: { branches: ApiBranch[]; departments: ApiDepartment[] }) {
-  // فارغ في البداية: الـAPI يختار شهر الرواتب الجاري بدورة payroll.cycle_start_day (من 23 الشهر يبدأ الشهر التالي) ثم نعرضه
-  const [period, setPeriod] = useState('')
+  // «من تاريخ / إلى تاريخ» أو شهر رواتب بضغطة — الافتراضي شهر الرواتب الجاري بدورة payroll.cycle_start_day (23 → 22)
+  const { range, setRange, context } = usePayrollDayRange()
+  const listRange = validDayRange(range)
   const [org, setOrg] = useState<OrgFilters>({ branchId: '', departmentId: '' })
   const [reason, setReason] = useState('')
   const [includeSuspended, setIncludeSuspended] = useState(false)
@@ -272,23 +273,21 @@ function UnassignedTab({ branches, departments }: { branches: ApiBranch[]; depar
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const load = () => {
+    if (!listRange) return
     setLoading(true); setError('')
-    fetchPayrollUnassignedReport({ period, branchId: org.branchId, departmentId: org.departmentId, reason, includeSuspended })
-      .then((data) => { setReport(data); if (!period && data.period) setPeriod(data.period) })
+    fetchPayrollUnassignedReport({ from: listRange.from, to: listRange.to, branchId: org.branchId, departmentId: org.departmentId, reason, includeSuspended })
+      .then(setReport)
       .catch((e) => { setReport(null); setError(e instanceof Error ? e.message : 'تعذر تحميل تقرير الموظفين بلا مسير') })
       .finally(() => setLoading(false))
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(load, [])
+  useEffect(load, [listRange?.from, listRange?.to])
   const summary = report?.summary
   return (
     <div className="space-y-6">
-      <div className="card">
-        <div className="grid grid-cols-6 gap-4 items-end">
-          <div>
-            <label className="label">شهر الرواتب</label>
-            <input type="month" className="input" value={period} onChange={(e) => setPeriod(e.target.value)} />
-          </div>
+      <div className="card space-y-4">
+        <DayRangeFilter idPrefix="payroll-unassigned" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
+        <div className="grid grid-cols-5 gap-4 items-end">
           <OrgFilterFields value={org} onChange={setOrg} branches={branches} departments={departments} />
           <div>
             <label className="label">السبب</label>
@@ -302,8 +301,8 @@ function UnassignedTab({ branches, departments }: { branches: ApiBranch[]; depar
             إظهار الموقوفين بلا أجر
           </label>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={load} disabled={loading} className="btn-primary disabled:opacity-50">عرض</button>
-            <ExportButton table={report ? unassignedReportCsv(report) : null} file={reportFileName('unassigned', report?.period)} />
+            <button type="button" onClick={load} disabled={loading || !listRange} className="btn-primary disabled:opacity-50">عرض</button>
+            <ExportButton table={report ? unassignedReportCsv(report) : null} file={reportFileName('unassigned', report?.period ?? (listRange ? dayRangeKey(listRange) : null))} />
           </div>
         </div>
       </div>
@@ -394,31 +393,30 @@ function UnassignedTab({ branches, departments }: { branches: ApiBranch[]; depar
 // ===== تبويب الإضافي =====
 function OvertimeTab({ branches, departments }: { branches: ApiBranch[]; departments: ApiDepartment[] }) {
   const currency = useCurrency()
-  // فارغ في البداية: شهر الرواتب الافتراضي من الـAPI بدورة الإعداد لا بالشهر الميلادي
-  const [period, setPeriod] = useState('')
+  // «من تاريخ / إلى تاريخ» أو شهر رواتب بضغطة — الافتراضي شهر الرواتب الجاري بدورة الإعداد لا بالشهر الميلادي
+  const { range, setRange, context } = usePayrollDayRange()
+  const listRange = validDayRange(range)
   const [org, setOrg] = useState<OrgFilters>({ branchId: '', departmentId: '' })
   const [status, setStatus] = useState('')
   const [report, setReport] = useState<OvertimeReport | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const load = () => {
+    if (!listRange) return
     setLoading(true); setError('')
-    fetchPayrollOvertimeReport({ period, branchId: org.branchId, departmentId: org.departmentId, status })
-      .then((data) => { setReport(data); if (!period && data.period) setPeriod(data.period) })
+    fetchPayrollOvertimeReport({ from: listRange.from, to: listRange.to, branchId: org.branchId, departmentId: org.departmentId, status })
+      .then(setReport)
       .catch((e) => { setReport(null); setError(e instanceof Error ? e.message : 'تعذر تحميل تقرير الإضافي') })
       .finally(() => setLoading(false))
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(load, [])
+  useEffect(load, [listRange?.from, listRange?.to])
   const summary = report?.summary
   return (
     <div className="space-y-6">
-      <div className="card">
-        <div className="grid grid-cols-5 gap-4 items-end">
-          <div>
-            <label className="label">شهر الرواتب</label>
-            <input type="month" className="input" value={period} onChange={(e) => setPeriod(e.target.value)} />
-          </div>
+      <div className="card space-y-4">
+        <DayRangeFilter idPrefix="payroll-overtime" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
+        <div className="grid grid-cols-4 gap-4 items-end">
           <OrgFilterFields value={org} onChange={setOrg} branches={branches} departments={departments} />
           <div>
             <label className="label">الحالة</label>
@@ -428,8 +426,8 @@ function OvertimeTab({ branches, departments }: { branches: ApiBranch[]; departm
             </select>
           </div>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={load} disabled={loading} className="btn-primary disabled:opacity-50">عرض</button>
-            <ExportButton table={report ? overtimeReportCsv(report) : null} file={reportFileName('overtime', report?.period)} />
+            <button type="button" onClick={load} disabled={loading || !listRange} className="btn-primary disabled:opacity-50">عرض</button>
+            <ExportButton table={report ? overtimeReportCsv(report) : null} file={reportFileName('overtime', report?.period ?? (listRange ? dayRangeKey(listRange) : null))} />
           </div>
         </div>
       </div>
@@ -494,13 +492,16 @@ function LoansTab({ branches, departments }: { branches: ApiBranch[]; department
   const currency = useCurrency()
   const [status, setStatus] = useState<'open' | 'settled' | 'all'>('open')
   const [org, setOrg] = useState<OrgFilters>({ branchId: '', departmentId: '' })
-  const [period, setPeriod] = useState('')
+  // مطابقة فترة اختيارية: شهر رواتب بضغطة أو «من تاريخ / إلى تاريخ» — فاضي = من غير مطابقة
+  const payrollMonth = usePayrollMonthContext()
+  const [match, setMatch] = useState<DayRange | null>(null)
+  const matchRange = validDayRange(match)
   const [report, setReport] = useState<LoansReport | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
   const load = () => {
     setLoading(true); setError('')
-    fetchPayrollLoansReport({ status, branchId: org.branchId, departmentId: org.departmentId, period })
+    fetchPayrollLoansReport({ status, branchId: org.branchId, departmentId: org.departmentId, from: matchRange?.from, to: matchRange?.to })
       .then(setReport)
       .catch((e) => { setReport(null); setError(e instanceof Error ? e.message : 'تعذر تحميل تقرير السلف') })
       .finally(() => setLoading(false))
@@ -510,8 +511,8 @@ function LoansTab({ branches, departments }: { branches: ApiBranch[]; department
   const summary = report?.summary
   return (
     <div className="space-y-6">
-      <div className="card">
-        <div className="grid grid-cols-5 gap-4 items-end">
+      <div className="card space-y-4">
+        <div className="grid grid-cols-4 gap-4 items-end">
           <div>
             <label className="label">حالة الرصيد</label>
             <select className="input" value={status} onChange={(e) => setStatus(e.target.value as typeof status)}>
@@ -521,14 +522,15 @@ function LoansTab({ branches, departments }: { branches: ApiBranch[]; department
             </select>
           </div>
           <OrgFilterFields value={org} onChange={setOrg} branches={branches} departments={departments} />
-          <div>
-            <label className="label">مطابقة شهر رواتب (اختياري)</label>
-            <input type="month" className="input" value={period} onChange={(e) => setPeriod(e.target.value)} />
-          </div>
           <div className="flex items-center gap-2">
-            <button type="button" onClick={load} disabled={loading} className="btn-primary disabled:opacity-50">عرض</button>
-            <ExportButton table={report ? loansReportCsv(report) : null} file={reportFileName('loans', report?.period)} />
+            <button type="button" onClick={load} disabled={loading || (!!match && !matchRange)} className="btn-primary disabled:opacity-50">عرض</button>
+            <ExportButton table={report ? loansReportCsv(report) : null} file={reportFileName('loans', report?.period ?? (matchRange ? dayRangeKey(matchRange) : null))} />
           </div>
+        </div>
+        <div>
+          <p className="text-sm text-gray-600 mb-1">مطابقة فترة (اختياري): الأقساط المستحقة فيها مقابل عمود السلف في المسيرات</p>
+          <DayRangeFilter idPrefix="payroll-loans-match" value={match} onChange={setMatch} onClear={() => setMatch(null)}
+            cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today} />
         </div>
       </div>
       {error && <ErrorBanner message={error} />}
@@ -614,6 +616,8 @@ function LoansTab({ branches, departments }: { branches: ApiBranch[]; department
 
 // ===== تبويب الفروق =====
 function VarianceTab() {
+  // مقارنة مسيرين بالشهر (المسير بيتحدد بشهره) — والاختيار بيوضح أيام كل شهر رواتب بالظبط
+  const payrollMonth = usePayrollMonthContext()
   const [period, setPeriod] = useState('')
   const [comparePeriod, setComparePeriod] = useState('')
   const [minAmount, setMinAmount] = useState('')
@@ -635,14 +639,10 @@ function VarianceTab() {
     <div className="space-y-6">
       <div className="card">
         <div className="grid grid-cols-6 gap-4 items-end">
-          <div>
-            <label className="label">الشهر الحالي</label>
-            <input type="month" className="input" value={period} onChange={(e) => { setPeriod(e.target.value); if (e.target.value) setComparePeriod(previousMonth(e.target.value)) }} />
-          </div>
-          <div>
-            <label className="label">شهر المقارنة</label>
-            <input type="month" className="input" value={comparePeriod} onChange={(e) => setComparePeriod(e.target.value)} />
-          </div>
+          <PayrollPeriodSelect id="variance-period" label="شهر الرواتب الحالي" value={period} cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today}
+            onChange={(value) => { setPeriod(value); if (value) setComparePeriod(previousMonth(value)) }} />
+          <PayrollPeriodSelect id="variance-compare-period" label="شهر المقارنة" value={comparePeriod} cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today}
+            onChange={setComparePeriod} />
           <div>
             <label className="label">أقل فرق بالمبلغ</label>
             <input type="number" min="0" className="input" dir="ltr" value={minAmount} onChange={(e) => setMinAmount(e.target.value)} />

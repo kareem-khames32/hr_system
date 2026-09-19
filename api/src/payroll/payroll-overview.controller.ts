@@ -51,6 +51,13 @@ export class PayrollOverviewController {
     return this.service.deductions(user, query.period)
   }
 
+  // كل بنود الاستحقاق والاستقطاع لكل موظف في مسيرات الشهر بأسمائها (تابتي «البدلات» و«الاستقطاعات»)
+  @Perm('payroll.view')
+  @Get('lines')
+  lines(@CurrentUser() user: JwtPayload, @Query() query: OverviewPeriodQuery) {
+    return this.service.itemLines(user, query.period)
+  }
+
   @Perm('payroll.view')
   @Get('waivers')
   waivers(@CurrentUser() user: JwtPayload, @Query() query: OverviewPeriodQuery) {

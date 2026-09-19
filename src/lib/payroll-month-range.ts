@@ -72,16 +72,35 @@ export function payrollMonthOfRange(range: DayRange, cycleStartDay: number): str
   return bounds.from === range.from && bounds.to === range.to ? bounds.period : null
 }
 
+export const isPeriodKey = (value: unknown): value is string => typeof value === 'string' && MONTH_RE.test(value)
+
+/** اسم الشهر للعرض: «سبتمبر 2026». */
+export const periodLabel = (period: string) => isPeriodKey(period) ? formatDate(`${period}-01`, { year: 'numeric', month: 'long' }) : period
+
+/**
+ * شهور الاختيار السريع حوالين الشهر الجاري (3 قدام و24 لورا)، والشهر المختار لو برّاهم — الأحدث الأول.
+ * الأبعد من كده بأزرار السابق/التالي أو بكتابة التاريخ.
+ */
+export function payrollMonthOptions(anchor: string | null | undefined, selected?: string | null, back = 24, ahead = 3): string[] {
+  const months = isPeriodKey(anchor) ? Array.from({ length: back + ahead + 1 }, (_, index) => shiftPeriod(anchor, ahead - index)) : []
+  if (isPeriodKey(selected) && !months.includes(selected)) months.push(selected)
+  return months.sort((a, b) => b.localeCompare(a))
+}
+
 export const dayRangeLength = (from: string, to: string) =>
   Math.round((Date.parse(`${to}T00:00:00Z`) - Date.parse(`${from}T00:00:00Z`)) / 86_400_000) + 1
 
-/** رسالة خطأ للمدى أو null لو سليم. */
-export function dayRangeError(range: DayRange): string | null {
+/** رسالة خطأ للمدى أو null لو سليم (maxDays = null: من غير حد أقصى للمدة). */
+export function dayRangeError(range: DayRange, maxDays: number | null = DAY_RANGE_MAX_DAYS): string | null {
   if (!isDayKey(range.from) || !isDayKey(range.to)) return 'اختار «من تاريخ» و«إلى تاريخ»'
   if (range.to < range.from) return '«إلى تاريخ» لازم يكون بعد «من تاريخ» أو نفس اليوم'
-  if (dayRangeLength(range.from, range.to) > DAY_RANGE_MAX_DAYS) return `أقصى مدة للفلتر ${DAY_RANGE_MAX_DAYS} يوم`
+  if (maxDays !== null && dayRangeLength(range.from, range.to) > maxDays) return `أقصى مدة للفلتر ${maxDays} يوم`
   return null
 }
+
+/** المدى لو سليم وإلا null — للاستعلام بس بعد ما الفلتر يكمل. */
+export const validDayRange = (range: DayRange | null | undefined, maxDays: number | null = DAY_RANGE_MAX_DAYS): DayRange | null =>
+  range && !dayRangeError(range, maxDays) ? range : null
 
 /** تعديل طرف واحد مع الحفاظ على الترتيب: «من» بعد «إلى» يسحب «إلى» معاه والعكس. */
 export function setRangeEdge(range: DayRange, edge: 'from' | 'to', value: string): DayRange {

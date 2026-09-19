@@ -117,14 +117,16 @@ function ExemptionsContent() {
 
   const rows = useMemo(() => data?.rows ?? [], [data])
   const minLength = data?.reasonMinLength ?? 20
+  // العدادات والجدول على نفس الفترة المختارة (الاستثناءات اللي مدتها بتتقاطع معاها)
+  const rangeRows = useMemo(() => rows.filter(row => !range || periodOverlapsRange(row.effectiveFrom, row.effectiveTo, range)), [rows, range])
   const counts = useMemo(() => ({
-    pending: rows.filter(row => row.state === 'PENDING_HR' || row.state === 'PENDING_EXECUTIVE').length,
-    awaitingMe: rows.filter(row => row.actions.approve || row.actions.approveExecutive).length,
-    active: rows.filter(row => row.state === 'ACTIVE').length,
-    scheduled: rows.filter(row => row.state === 'SCHEDULED').length,
-  }), [rows])
+    pending: rangeRows.filter(row => row.state === 'PENDING_HR' || row.state === 'PENDING_EXECUTIVE').length,
+    awaitingMe: rangeRows.filter(row => row.actions.approve || row.actions.approveExecutive).length,
+    active: rangeRows.filter(row => row.state === 'ACTIVE').length,
+    scheduled: rangeRows.filter(row => row.state === 'SCHEDULED').length,
+  }), [rangeRows])
   const term = search.trim().toLowerCase()
-  const visible = rows.filter(row => matchesFilter(row.state, filter) && (!range || periodOverlapsRange(row.effectiveFrom, row.effectiveTo, range)) && (!term ||
+  const visible = rangeRows.filter(row => matchesFilter(row.state, filter) && (!term ||
     `${row.employee?.fullName ?? ''} ${row.employee?.employeeCode ?? ''} #${row.id}`.toLowerCase().includes(term)))
   const employeeTerm = employeeSearch.trim().toLowerCase()
   const employeeChoices = employees.filter(row => String(row.id) === form.employeeId || !employeeTerm ||

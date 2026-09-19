@@ -30,31 +30,18 @@ import { PayrollExemptionPayslipSection } from '@/components/payroll/PayrollExem
 import { savedFinancialExemptions, type ExemptionComponent, type PayslipExemption } from '@/lib/financial-exemptions-api'
 import type { PayrollObligationDetail } from '@/lib/deductions-api'
 // الخطوة 22 (B5): منسّق المبالغ الموحد (نفس جدول المسير)، والتغطية والمعامل، وقيد الصرف
-import { formatMoney, formatMoneyOrDash, sumMoney } from '@/lib/money'
+import { formatMoney, formatMoneyOrDash } from '@/lib/money'
 import { payrollCoverageText, payrollItemCoverage } from '@/lib/payroll-item-totals'
 import { PAY_CHANNEL_LABELS, type PayrollPayChannel, type PayrollRunScreenFields } from '@/lib/payroll-runs-api'
+// طلب المالك 19 سبتمبر: الاستحقاقات والاستقطاعات بندًا بندًا بأسمائها من الخادم (نفس جدول المسير وتصديره)
+import { PAYROLL_LINE_GROUP_LABELS, PAYROLL_LINE_TOTAL_LABELS, payrollItemColumnLines, type PayrollItemLines } from '@/lib/payroll-lines-api'
 
-type SavedSalaryComponent = {
-  code: string; nameAr: string; nameEn: string; monthlyAmount: number; earnedAmount: number
-}
-
-function savedSalaryComponents(item: ApiPayrollItem): SavedSalaryComponent[] | null {
-  try {
-    const components = JSON.parse(item.breakdown || '{}').salaryComponents
-    if (!Array.isArray(components) || !components.length || components.some(component =>
-      !component || typeof component.code !== 'string' || typeof component.nameAr !== 'string' ||
-      typeof component.nameEn !== 'string' || typeof component.earnedAmount !== 'number' ||
-      !Number.isFinite(component.earnedAmount) || component.earnedAmount < 0)) return null
-    if (new Set(components.map(component => component.code)).size !== components.length) return null
-    const basic = components.find(component => component.code === 'BASIC')
-    const allowanceCents = components.filter(component => component.code !== 'BASIC')
-      .reduce((sum, component) => sum + Math.round(component.earnedAmount * 100), 0)
-    // AL-11: التفصيل محفوظ وقت الحساب؛ القسيمة القديمة تعرض مجموعها التاريخي دون تخمين.
-    if (!basic || Math.round(basic.earnedAmount * 100) !== Math.round(Number(item.basicSalary) * 100) ||
-      allowanceCents !== Math.round(Number(item.allowances ?? 0) * 100)) return null
-    return components
-  } catch { return null }
-}
+// سطر الخصم اللي عليه ملاحظة الإلغاء («الأصل قبل الإلغاء — أُلغي منه»): التأخير، والنقص بنوعيه، والغياب، والخصومات المسجلة كلها نوع واحد، والسلف
+const exemptionComponentOf = (key: string): ExemptionComponent | undefined =>
+  key === 'LATENESS' ? 'LATENESS' : key === 'SHORTFALL' || key === 'EARLY_LEAVE' ? 'SHORTFALL' : key === 'ABSENCE' ? 'ABSENCE'
+    : key === 'LOAN' ? 'LOAN' : key.startsWith('TYPED:') ? 'TYPED' : undefined
+// خصم اتلغى بالكامل ما بيطلعش بند؛ سطره يفضل ظاهر بصفر عشان يقول إنه اتلغى
+const EXEMPTION_LINE_NAMES: Array<[ExemptionComponent, string]> = [['LATENESS', 'التأخير'], ['SHORTFALL', 'نقص الساعات'], ['ABSENCE', 'الغياب'], ['TYPED', 'الخصومات المسجلة'], ['LOAN', 'السلف']]
 
 const runStatusLabels: Record<string, string> = {
   CALCULATED: 'محسوب',
@@ -129,8 +116,8 @@ export default function PayslipPage() {
   // تتبع كل قيد دفتر (الخصم المصنف بنوعه وسببه وطلبه وسعر اليوم) كما يعيده الخادم مع القسيمة
   const [obligationDetails, setObligationDetails] = useState<PayrollObligationDetail[] | null>(null)
   const [financialExemptions, setFinancialExemptions] = useState<PayslipExemption[] | null>(null)
-  // سطور عمود الإجازة بلا أجر: «إجازة بدون راتب» + «خصم إجازة مرضية (بنسبة أجر 75%)» لكل نسبة (من الخادم)
-  const [leaveDeductions, setLeaveDeductions] = useState<Array<{ code: string; label: string; amount: number }> | null>(null)
+  // بنود الاستحقاقات والاستقطاعات بأسمائها (سكن، انتقال، الإضافي، بدل العطلات، كل بدل ونوع خصم، الإيقاف والمرضية…) من الخادم
+  const [lines, setLines] = useState<PayrollItemLines | null>(null)
 
   useEffect(() => {
     setLoading(true)
@@ -138,7 +125,7 @@ export default function PayslipPage() {
       .then(([data, branches]) => {
         setObligationDetails((data as { obligationDetails?: PayrollObligationDetail[] }).obligationDetails ?? [])
         setFinancialExemptions((data as { financialExemptions?: PayslipExemption[] }).financialExemptions ?? [])
-        setLeaveDeductions((data as { leaveDeductions?: Array<{ code: string; label: string; amount: number }> }).leaveDeductions ?? null)
+        setLines((data as { lines?: PayrollItemLines }).lines ?? null)
         setItem(data.item)
         setRun(data.run)
         setEmployee(data.employee)
@@ -148,55 +135,24 @@ export default function PayslipPage() {
       .finally(() => setLoading(false))
   }, [params.id])
 
-  // تبسيط الرواتب (2026-09-15): السطور الإنجليزية تحت أسماء البنود أُزيلت
-  const salaryComponents = item ? savedSalaryComponents(item) : null
-  const salaryEarnings = item
-    ? salaryComponents?.map(component => ({ name: component.nameAr, amount: component.earnedAmount })) ?? [
-        { name: 'الراتب الأساسي', amount: Number(item.basicSalary) },
-        {
-          name: 'البدلات',
-          amount: Number(item.allowances ?? 0),
-        },
-      ]
-    : []
-  // «تابة البدلات»: كل بدل (إضافة دفتر بتصنيف allowance) سطر باسمه، والباقي «إضافات أخرى» — المجموع = عمود الإضافات نفسه
-  const otherAdditionsCents = Math.round(Number(item?.otherAdditions ?? 0) * 100)
-  const allowanceLines = (obligationDetails ?? [])
-    .filter(row => row.type === 'CREDIT' && row.category === 'allowance' && Number(row.collected ?? 0) > 0)
-    .map(row => ({ name: row.label || 'بدل', cents: Math.round(Number(row.collected) * 100) }))
-  const allowanceCents = allowanceLines.reduce((sum, line) => sum + line.cents, 0)
-  const splitAllowances = allowanceLines.length > 0 && allowanceCents <= otherAdditionsCents
-  const earnings = item
-    ? [
-        ...salaryEarnings,
-        {
-          name: 'العمل الإضافي',
-          amount: Number(item.overtimeAmount),
-        },
-        ...(splitAllowances ? allowanceLines.map(line => ({ name: line.name, amount: line.cents / 100 })) : []),
-        ...(splitAllowances && otherAdditionsCents === allowanceCents ? [] : [{
-          name: 'إضافات أخرى (مكافآت/بدلات)',
-          amount: splitAllowances ? (otherAdditionsCents - allowanceCents) / 100 : Number(item.otherAdditions ?? 0),
-        }]),
-      ]
-    : []
-
-  const deductions: Array<{ name: string; amount: number; component?: ExemptionComponent }> = item
-    ? [
-        { name: 'خصم التأخير', amount: Number(item.latenessDeduction), component: 'LATENESS' },
-        { name: 'خصم نقص ساعات العمل', amount: Number(item.shortfallDeduction ?? 0), component: 'SHORTFALL' },
-        { name: 'خصم الغياب', amount: Number(item.absenceDeduction ?? 0), component: 'ABSENCE' },
-        ...(leaveDeductions?.length
-          ? leaveDeductions.map(line => ({ name: line.label, amount: Number(line.amount) }))
-          : [{ name: 'إجازة بدون راتب', amount: Number(item.unpaidLeaveDeduction) }]),
-        { name: 'أقساط السلف', amount: Number(item.loanInstallments), component: 'LOAN' },
-        { name: 'خصومات أخرى — تفصيلها أدناه', amount: Number(item.otherDeductions ?? 0), component: 'TYPED' },
-        ...(Number(item.socialInsuranceDeduction ?? 0) > 0 ? [{ name: 'التأمينات الاجتماعية (حصة الموظف)', amount: Number(item.socialInsuranceDeduction) }] : []),
-      ]
-    : []
+  // طلب المالك 19 سبتمبر: كل استحقاق واستقطاع سطر باسمه كما قسمه الخادم (نفس جدول المسير وتصديره)، والمجاميع = أعمدة البند المحفوظة.
+  // لو الخادم ما رجعش البنود (نسخة أقدم) تظهر أعمدة البند نفسها سطور عامة بنفس المجاميع.
+  const itemLines: PayrollItemLines | null = item ? lines ?? payrollItemColumnLines(item) : null
+  const earnings = (itemLines?.earnings ?? []).map(line => ({ name: line.name, amount: line.amount }))
   // القرار د: سطر الخصم نفسه يقول إنه أُلغي — المبلغ الملغى (والأصل قبله لخصومات الحضور) بجانب البند،
   // والسطر المختصر أسفل القسيمة يبقى كما هو. بلا رقم قرار ولا مصطلحات.
   const savedExemptions = item ? savedFinancialExemptions(item) : null
+  const deductions: Array<{ name: string; amount: number; component?: ExemptionComponent }> = []
+  const notedComponents = new Set<ExemptionComponent>()
+  for (const line of itemLines?.deductions ?? []) {
+    // ملاحظة الإلغاء مرة واحدة لكل نوع (الخصومات المسجلة كلها نوع واحد في قرار الإلغاء)
+    const component = exemptionComponentOf(line.key)
+    deductions.push({ name: line.name, amount: line.amount, component: component && !notedComponents.has(component) ? component : undefined })
+    if (component) notedComponents.add(component)
+  }
+  for (const [component, name] of EXEMPTION_LINE_NAMES) {
+    if (!notedComponents.has(component) && savedExemptions?.totals.byComponent[component]) deductions.push({ name, amount: 0, component })
+  }
   const exemptionNote = (component?: ExemptionComponent) => {
     const total = component ? savedExemptions?.totals.byComponent[component] : undefined
     if (!component || !savedExemptions || !total) return null
@@ -204,8 +160,8 @@ export default function PayslipPage() {
     return `${requested ? `الأصل قبل الإلغاء ${formatMoney(requested)} — ` : ''}أُلغي منه ${formatMoney(total.exempted)}`
   }
 
-  const totalEarnings = sumMoney(earnings.map(e => e.amount))
-  const totalDeductions = sumMoney(deductions.map(d => d.amount))
+  const totalEarnings = itemLines?.totals.earnings ?? 0
+  const totalDeductions = itemLines?.totals.deductions ?? 0
   const paidRun = run as (ApiPayrollRun & PayrollRunScreenFields) | null
   const netSalary = item ? Number(item.netPay) : 0
   const attendanceNotes = (() => {
@@ -342,7 +298,7 @@ export default function PayslipPage() {
             {/* Earnings */}
             <div>
               <h3 className="font-bold text-success-700 bg-success-50 px-4 py-2 rounded-t-xl">
-                الاستحقاقات
+                {PAYROLL_LINE_GROUP_LABELS.earnings}
               </h3>
               <div className="border border-gray-200 border-t-0 rounded-b-xl overflow-hidden">
                 <table className="w-full">
@@ -362,7 +318,7 @@ export default function PayslipPage() {
                   </tbody>
                   <tfoot>
                     <tr className="bg-success-100">
-                      <td className="px-4 py-3 font-bold text-success-800">إجمالي الاستحقاقات</td>
+                      <td className="px-4 py-3 font-bold text-success-800">{PAYROLL_LINE_TOTAL_LABELS.earnings}</td>
                       <td className="px-4 py-3 text-left font-mono font-bold text-success-800 text-lg">
                         {formatMoney(totalEarnings)}
                       </td>
@@ -375,11 +331,12 @@ export default function PayslipPage() {
             {/* Deductions */}
             <div>
               <h3 className="font-bold text-danger-700 bg-danger-50 px-4 py-2 rounded-t-xl">
-                الخصومات
+                {PAYROLL_LINE_GROUP_LABELS.deductions}
               </h3>
               <div className="border border-gray-200 border-t-0 rounded-b-xl overflow-hidden">
                 <table className="w-full">
                   <tbody>
+                    {deductions.length === 0 && <tr><td colSpan={2} className="px-4 py-3 text-sm text-gray-400">مفيش استقطاعات</td></tr>}
                     {deductions.map((deduction, index) => (
                       <tr key={index} className={index % 2 === 0 ? 'bg-white' : 'bg-gray-50'}>
                         <td className="px-4 py-3 text-sm">
@@ -396,7 +353,7 @@ export default function PayslipPage() {
                   </tbody>
                   <tfoot>
                     <tr className="bg-danger-100">
-                      <td className="px-4 py-3 font-bold text-danger-800">إجمالي الخصومات</td>
+                      <td className="px-4 py-3 font-bold text-danger-800">{PAYROLL_LINE_TOTAL_LABELS.deductions}</td>
                       <td className="px-4 py-3 text-left font-mono font-bold text-danger-800 text-lg">
                         {formatMoney(totalDeductions)}
                       </td>

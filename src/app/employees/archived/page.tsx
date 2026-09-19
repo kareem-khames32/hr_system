@@ -25,6 +25,8 @@ import {
   type ApiDepartment,
 } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
+import { DayRangeFilter, usePayrollMonthContext } from '@/components/DayRangeFilter'
+import { dateInRange, validDayRange, type DayRange } from '@/lib/payroll-month-range'
 
 interface ArchivedEmployee {
   id: number
@@ -61,8 +63,10 @@ export default function ArchivedEmployeesPage() {
   const [filterStatus, setFilterStatus] = useState('')
   const [filterReason, setFilterReason] = useState('')
   const [filterDept, setFilterDept] = useState('')
-  const [dateFrom, setDateFrom] = useState('')
-  const [dateTo, setDateTo] = useState('')
+  // فترة الأرشفة: شهر بضغطة أو «من تاريخ / إلى تاريخ» — فاضي = كل التواريخ
+  const payrollMonth = usePayrollMonthContext()
+  const [archiveRange, setArchiveRange] = useState<DayRange | null>(null)
+  const activeRange = validDayRange(archiveRange, null)
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [archivedEmployees, setArchivedEmployees] = useState<ArchivedEmployee[]>([])
   const [loading, setLoading] = useState(true)
@@ -141,14 +145,7 @@ export default function ArchivedEmployeesPage() {
     const matchesDept =
       !filterDept || String(emp.departmentId ?? '') === filterDept
     // الفترة على تاريخ الأرشفة (مقارنة تاريخ فقط) — بلا تاريخ يُستبعد عند تحديد فترة
-    let matchesDate = true
-    if (dateFrom || dateTo) {
-      if (!emp.archivedAt) matchesDate = false
-      else
-        matchesDate =
-          (!dateFrom || emp.archivedAt >= dateFrom) &&
-          (!dateTo || emp.archivedAt <= dateTo)
-    }
+    const matchesDate = !activeRange || dateInRange(emp.archivedAt, activeRange)
     return matchesSearch && matchesStatus && matchesReason && matchesDept && matchesDate
   })
 
@@ -259,7 +256,7 @@ export default function ArchivedEmployeesPage() {
 
         {/* Filters */}
         <div className="card">
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-end gap-4">
             <div className="relative flex-1 min-w-[220px]">
               <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
@@ -307,25 +304,9 @@ export default function ArchivedEmployeesPage() {
                 </option>
               ))}
             </select>
-            {/* فترة الأرشفة: من / إلى */}
-            <div className="flex items-center gap-2">
-              <span className="text-sm text-gray-500 whitespace-nowrap">من</span>
-              <input
-                type="date"
-                value={dateFrom}
-                onChange={(e) => setDateFrom(e.target.value)}
-                className="input w-40"
-                title="بداية فترة الأرشفة"
-              />
-              <span className="text-sm text-gray-500 whitespace-nowrap">إلى</span>
-              <input
-                type="date"
-                value={dateTo}
-                onChange={(e) => setDateTo(e.target.value)}
-                className="input w-40"
-                title="نهاية فترة الأرشفة"
-              />
-            </div>
+            {/* فترة الأرشفة: شهر بضغطة أو من / إلى بأي يوم */}
+            <DayRangeFilter idPrefix="archived" value={archiveRange} onChange={setArchiveRange} onClear={() => setArchiveRange(null)} maxDays={null}
+              cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today} />
           </div>
         </div>
 

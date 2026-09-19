@@ -80,6 +80,7 @@ import type {
   DeductionReverseDto,
   DeductionTypeDto,
 } from './typed-deductions.dto'
+import { optionalCreatedRange } from '../attendance/attendance-report-range'
 
 interface Settings {
   reasonMinLength: number
@@ -845,12 +846,15 @@ export class TypedDeductionsService {
 
   async list(user: JwtPayload, query: DeductionListQueryDto) {
     // الصفحات تُقرأ حتى 500 صف مرئي فعلًا؛ تصفية الرؤية بعد القراءة لا تُسقط الأقدم عن صاحب نطاق محدود
+    // «من تاريخ / إلى تاريخ» على تاريخ الطلب بيتفلتر هنا في كل صفحة (قبل حد الـ500) — مش في المتصفح على قائمة ناقصة
+    const created = optionalCreatedRange(query)
     const settings = await this.settings(this.manager)
     const result: Array<Record<string, unknown>> = []
     let beforeId: number | null = null
     for (let page = 0; page < 40 && result.length < 500; page++) {
       const qb = this.requests.createQueryBuilder('r').orderBy('r.id', 'DESC').take(500)
       if (beforeId !== null) qb.andWhere('r.id < :beforeId', { beforeId })
+      if (created) qb.andWhere('r.createdAt >= CONVERT(datetime2, :createdFrom, 126) AND r.createdAt < CONVERT(datetime2, :createdTo, 126)', { createdFrom: created.start, createdTo: created.end })
       if (query.status) qb.andWhere('r.status = :status', { status: query.status })
       if (query.typeId) qb.andWhere('r.deductionTypeId = :typeId', { typeId: query.typeId })
       if (query.targetPeriod) qb.andWhere('r.targetPeriod = :targetPeriod', { targetPeriod: query.targetPeriod })

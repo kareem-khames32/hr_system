@@ -22,6 +22,9 @@ import { downloadCsv, csvDateStamp } from '@/lib/csv'
 import { useCurrency } from '@/lib/currency'
 import { fetchLoanCapPreview, loanMoneyInputValid, type LoanCapEvaluation } from '@/lib/loans-api'
 import { LoanCapSummary } from '@/components/payroll/LoanCapSummary'
+import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
+import { dateInRange, dayRangeKey, localDayOf, validDayRange } from '@/lib/payroll-month-range'
+import { formatDate } from '@/lib/dates'
 
 type Money = string | number
 // REVERSED (C8): قسط ترحيل أُلغي بعكس صرف مسير — بلا رصيد
@@ -49,6 +52,8 @@ interface Loan {
   amount: Money
   status: string // APPROVED | DISBURSED | SETTLED
   disbursedAt?: string | null
+  // تاريخ طلب السلفة من محرك الطلبات
+  requestedAt?: string | null
   employeeName?: string
   installments: LoanInstallment[]
   paidCount: number
@@ -102,6 +107,10 @@ const installmentNo = (list: Array<{ id: number }>, id: number | null) => { cons
 // أيام طلب السلفة من الشهر كما يعيدها الخادم مع معاينة السقف
 type CapPreview = LoanCapEvaluation & { requestWindow?: { fromDay: number; toDay: number; open: boolean; message: string } }
 
+// فلتر التاريخ في السجل: بتاريخ طلب السلفة، أو بشهر القسط (سلفة ليها قسط مستحق في الفترة)
+type LoanDateBasis = 'all' | 'requested' | 'installment'
+const loanRequestDay = (loan: Loan) => localDayOf(loan.requestedAt ?? loan.disbursedAt ?? null)
+
 const LOAN_STATUS_LABELS: Record<string, string> = { APPROVED: 'معتمد', DISBURSED: 'جاري السداد', SETTLED: 'مكتمل' }
 const loanStatusLabel = (status: string) => LOAN_STATUS_LABELS[status] ?? 'غير معروف'
 
@@ -142,6 +151,9 @@ export default function LoansPage() {
   const currency = useCurrency()
   const [activeTab, setActiveTab] = useState<'all' | 'open' | 'settled'>('all')
   const [searchQuery, setSearchQuery] = useState('')
+  // «من تاريخ / إلى تاريخ» (أو شهر رواتب بضغطة) — على تاريخ الطلب أو على شهر القسط
+  const [dateBasis, setDateBasis] = useState<LoanDateBasis>('all')
+  const { range, setRange, context } = usePayrollDayRange()
   const [showNewLoanModal, setShowNewLoanModal] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
 
@@ -224,7 +236,13 @@ export default function LoansPage() {
     }, BigInt(0)),
   }
 
-  const filteredLoans = loans.filter((loan) => {
+  // الفترة بتفلتر الجدول والتبويبات والتصدير؛ كروت الإجماليات فوق فاضلة على كل السلف
+  const activeRange = dateBasis === 'all' ? null : validDayRange(range)
+  const datedLoans = !activeRange ? loans : loans.filter((loan) => dateBasis === 'requested'
+    ? dateInRange(loanRequestDay(loan), activeRange)
+    : loan.installments.some((item) => dateInRange(item.dueDate, activeRange)))
+  const datedOpen = datedLoans.filter((l) => centsOf(l.remainingAmount) > BigInt(0)).length
+  const filteredLoans = datedLoans.filter((loan) => {
     if (activeTab === 'open' && centsOf(loan.remainingAmount) === BigInt(0)) return false
     if (activeTab === 'settled' && centsOf(loan.remainingAmount) > BigInt(0)) return false
     if (searchQuery && !(loan.employeeName ?? '').includes(searchQuery)) return false
@@ -243,9 +261,9 @@ export default function LoansPage() {
           <div className="flex items-center gap-3">
             <button
               type="button"
-              onClick={() => downloadCsv(`loans-${activeTab}-${csvDateStamp()}.csv`,
-                ['رقم السلفة', 'الموظف', 'أصل المبلغ', 'المسدد', 'المتبقي', 'الأقساط المسددة', 'عدد الأقساط', 'تاريخ الصرف', 'الحالة'],
-                filteredLoans.map((loan) => [loan.id, loan.employeeName ?? 'غير معروف', String(loan.amount), String(loan.paidAmount),
+              onClick={() => downloadCsv(`loans-${activeTab}-${activeRange ? `${dayRangeKey(activeRange)}-` : ''}${csvDateStamp()}.csv`,
+                ['رقم السلفة', 'الموظف', 'تاريخ الطلب', 'أصل المبلغ', 'المسدد', 'المتبقي', 'الأقساط المسددة', 'عدد الأقساط', 'تاريخ الصرف', 'الحالة'],
+                filteredLoans.map((loan) => [loan.id, loan.employeeName ?? 'غير معروف', loanRequestDay(loan), String(loan.amount), String(loan.paidAmount),
                   String(loan.remainingAmount), loan.paidCount, loan.installments.length, loan.disbursedAt ? String(loan.disbursedAt).slice(0, 10) : '', loanStatusLabel(loan.status)]))}
               disabled={loading || filteredLoans.length === 0}
               className="btn-secondary flex items-center gap-2 disabled:opacity-50"
@@ -330,9 +348,9 @@ export default function LoansPage() {
         <div className="card p-2">
           <div className="flex items-center gap-2">
             {[
-              { id: 'all', label: 'الكل', count: loans.length },
-              { id: 'open', label: 'جاري السداد', count: openLoans.length },
-              { id: 'settled', label: 'مكتمل', count: loans.length - openLoans.length },
+              { id: 'all', label: 'الكل', count: datedLoans.length },
+              { id: 'open', label: 'جاري السداد', count: datedOpen },
+              { id: 'settled', label: 'مكتمل', count: datedLoans.length - datedOpen },
             ].map((tab) => (
               <button
                 key={tab.id}
@@ -358,7 +376,7 @@ export default function LoansPage() {
 
         {/* Filters */}
         <div className="card">
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-end gap-4">
             <div className="flex-1 min-w-[300px]">
               <div className="relative">
                 <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -371,6 +389,15 @@ export default function LoansPage() {
                 />
               </div>
             </div>
+            <label htmlFor="loans-date-basis" className="text-sm text-gray-600">
+              فلتر التاريخ
+              <select id="loans-date-basis" className="input mt-1 block w-52" value={dateBasis} onChange={(e) => setDateBasis(e.target.value as LoanDateBasis)}>
+                <option value="all">كل السلف (من غير تاريخ)</option>
+                <option value="requested">بتاريخ طلب السلفة</option>
+                <option value="installment">بشهر القسط (مستحق في الفترة)</option>
+              </select>
+            </label>
+            <DayRangeFilter idPrefix="loans" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} disabled={dateBasis === 'all'} />
           </div>
         </div>
 
@@ -406,7 +433,10 @@ export default function LoansPage() {
                         </div>
                         <div>
                           <p className="font-medium text-gray-800">{loan.employeeName ?? 'غير معروف'}</p>
-                          <p className="text-sm text-gray-400">{loan.requestId ? `طلب رقم ${loan.requestId}` : `سلفة رقم ${loan.id}`}</p>
+                          <p className="text-sm text-gray-400">
+                            {loan.requestId ? `طلب رقم ${loan.requestId}` : `سلفة رقم ${loan.id}`}
+                            {loanRequestDay(loan) ? ` — ${formatDate(loanRequestDay(loan))}` : ''}
+                          </p>
                         </div>
                       </div>
                     </td>
@@ -465,7 +495,7 @@ export default function LoansPage() {
                             </thead>
                             <tbody>
                               {loan.installments.map((inst, index) => (
-                                <tr key={inst.id} className="table-row">
+                                <tr key={inst.id} className={`table-row ${dateBasis === 'installment' && activeRange && dateInRange(inst.dueDate, activeRange) ? 'bg-primary-50' : ''}`}>
                                   <td className="table-cell">
                                     <span>{index + 1}</span>
                                     {inst.parentInstallmentId !== null && <p className="text-xs text-gray-500">مرحّل من القسط {installmentNo(loan.installments, inst.parentInstallmentId)}</p>}
@@ -498,7 +528,7 @@ export default function LoansPage() {
                 {filteredLoans.length === 0 && (
                   <tr>
                     <td colSpan={8} className="text-center py-10 text-gray-400">
-                      لا توجد سلف مسجلة
+                      {loans.length === 0 ? 'لا توجد سلف مسجلة' : 'لا توجد سلف مطابقة للفلاتر أو الفترة المختارة'}
                     </td>
                   </tr>
                 )}

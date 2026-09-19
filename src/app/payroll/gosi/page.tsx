@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import { downloadCsv } from '@/lib/csv'
 import { formatMoney } from '@/lib/money'
+import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import {
   fetchSocialInsuranceReport, fetchSocialInsuranceSettings, INSURANCE_CATEGORY_LABELS, INSURANCE_SYSTEM_LABELS, saveSocialInsuranceSettings,
   type SocialInsuranceReport, type SocialInsuranceSettings, type SocialInsuranceSettingsView,
@@ -29,8 +30,7 @@ const EGYPTIAN_FIELDS: Array<{ key: Field; label: string; pct?: boolean }> = [
   { key: 'egyptianMaxSalary', label: 'الحد الأقصى للأجر التأميني' },
 ]
 
-const thisMonth = () => new Date().toLocaleDateString('en-CA').slice(0, 7)
-const Th = ({ children, center }: { children: React.ReactNode; center?: boolean }) =>
+const Th =({ children, center }: { children: React.ReactNode; center?: boolean }) =>
   <th className={`px-4 py-3 ${center ? 'text-center' : 'text-right'} text-sm font-medium text-gray-600 whitespace-nowrap`}>{children}</th>
 
 function reportTable(report: SocialInsuranceReport) {
@@ -117,24 +117,31 @@ function SettingsCard({ view, onSaved }: { view: SocialInsuranceSettingsView; on
 
 export default function PayrollGosiPage() {
   const [view, setView] = useState<SocialInsuranceSettingsView | null>(null)
-  const [period, setPeriod] = useState(thisMonth)
+  // التقرير على مسيرات شهر رواتب بالاسم — الافتراضي شهر الرواتب الجاري (مش الشهر التقويمي)، والاختيار بيوضّح أيامه
+  const payrollMonth = usePayrollMonthContext()
+  const [period, setPeriod] = useState('')
   const [branchId, setBranchId] = useState('')
   const [report, setReport] = useState<SocialInsuranceReport | null>(null)
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const load = () => {
+  const load = (target = period) => {
+    if (!target) return
     setLoading(true); setError(null)
-    fetchSocialInsuranceReport(period, branchId ? Number(branchId) : null)
+    fetchSocialInsuranceReport(target, branchId ? Number(branchId) : null)
       .then(setReport)
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل تقرير التأمينات'))
       .finally(() => setLoading(false))
   }
   useEffect(() => {
     fetchSocialInsuranceSettings().then(setView).catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل إعدادات التأمينات'))
-    load()
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  useEffect(() => {
+    if (!payrollMonth || period) return
+    setPeriod(payrollMonth.period)
+    load(payrollMonth.period)
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [payrollMonth])
 
   const exportRows = (kind: 'csv' | 'xls') => {
     if (!report) return
@@ -158,10 +165,8 @@ export default function PayrollGosiPage() {
 
         <div className="card">
           <div className="flex flex-wrap items-end gap-4">
-            <div>
-              <label className="label">الشهر</label>
-              <input type="month" className="input" value={period} onChange={(event) => setPeriod(event.target.value)} />
-            </div>
+            <PayrollPeriodSelect id="gosi-period" label="شهر الرواتب" value={period} onChange={setPeriod} className="w-56"
+              cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today} />
             {view && view.branches.length > 1 && (
               <div>
                 <label className="label">الفرع</label>
@@ -171,7 +176,7 @@ export default function PayrollGosiPage() {
                 </select>
               </div>
             )}
-            <button type="button" onClick={load} disabled={loading || !period} className="btn-primary disabled:opacity-50">عرض</button>
+            <button type="button" onClick={() => load()} disabled={loading || !period} className="btn-primary disabled:opacity-50">عرض</button>
             <button type="button" onClick={() => exportRows('csv')} disabled={!report?.rows.length} className="btn-secondary disabled:opacity-50">تصدير CSV</button>
             <button type="button" onClick={() => exportRows('xls')} disabled={!report?.rows.length} className="btn-secondary disabled:opacity-50">تصدير Excel</button>
           </div>

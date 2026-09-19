@@ -762,9 +762,11 @@ export default function MyRequestsPage() {
         ((pt === 'IN' && hh >= 14) || (pt === 'OUT' && hh < 10))
       return (
         <>
+          {/* وقت تصحيح البصمة كل 5 دقايق (البصمة الحقيقية مش على ربع ساعة)؛ أوقات الإذن فوق فاضلة كل ربع ساعة */}
           <TimeSelect
             value={tv}
             onChange={(v) => setFieldValue(key, v)}
+            stepMinutes={5}
             aria-label={humanizeKey(key)}
           />
           {amPmWarn && (

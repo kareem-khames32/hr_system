@@ -624,9 +624,7 @@ export const rejectFailedRequestExecution = (id: number, comment: string) =>
 
 // ===== الحضور =====
 export const fetchDailyAttendance = (date: string) => get<ApiAttendanceDay[]>(`/attendance/daily?date=${date}`)
-export const fetchMonthlyAttendance = (employeeId: number, month: string) =>
-  get<{ employeeId: number; month: string; days: ApiAttendanceDay[]; summary: Record<string, number> }>(
-    `/attendance/monthly?employeeId=${employeeId}&month=${month}`)
+// كشف الموظف بالفترة (?from=&to=): fetchAttendanceSheetRange في attendance-range-api.ts
 // إعادة حساب يوم كامل بنطاق المستخدم (بصمات + صفوف محسوبة/غياب؛ واليوم المنقضي يُجسَّد غيابه)
 export const recomputeAttendanceDay = (date: string) =>
   post<{ recomputed: number; materialized: number; failed: number }>(
@@ -774,9 +772,7 @@ export interface ApiOvertimeEntry {
   calculationSnapshot?: { submission?: { evidence?: OvertimeEvidence }; approval?: { dayKind?: string; amount?: number; approvedMinutes?: number } } | null
 }
 // OT-05: كل قيد جديد يمر بدورة اعتماد، بصرف النظر عن قيمة المفتاح القديم.
-export const fetchOvertimeLog = (month: string) =>
-  get<{ month: string; requiresConfirmation: boolean; entries: ApiOvertimeEntry[] }>(
-    `/attendance/overtime?month=${month}`)
+// سجل الإضافي بالفترة (?from=&to=): fetchOvertimeLogRange في attendance-range-api.ts
 
 // ===== الإجازات =====
 // سجل الإجازات مرقّم ومفلتر على السيرفر (LEV-22)
@@ -1117,6 +1113,8 @@ export interface ApiLoan {
 }
 export interface ApiLoanDetails extends ApiLoan {
   employeeName: string
+  // تاريخ طلب السلفة (لفلتر «من تاريخ / إلى تاريخ» في شاشة السلف)
+  requestedAt?: string | null
   installments: Array<{ id: number; loanId: number; dueDate: string; amount: number | string; paid: boolean;
     paidAmount: string; remainingAmount: string; financialStatus: 'DUE' | 'PARTIAL' | 'DEFERRED' | 'PAID' | 'SETTLED';
     financialRevision: number; parentInstallmentId: number | null; originalDueDate: string; paidAt: string | null }>
@@ -1189,11 +1187,10 @@ export const previewLetterTemplate = async (draft: ApiLetterTemplateDraft): Prom
 }
 
 // ===== التقارير =====
+// الحضور والإضافي بالفترة (?from=&to=) في attendance-range-api.ts — مفيش نسخة بالشهر التقويمي بس
 export const fetchHeadcountReport = () => get<any>('/reports/headcount')
-export const fetchAttendanceReport = (month: string) => get<any[]>(`/reports/attendance?month=${month}`)
 export const fetchLeavesReport = (year: string) => get<any>(`/reports/leaves?year=${year}`)
 export const fetchPayrollReport = () => get<any>('/reports/payroll')
-export const fetchOvertimeReport = (month: string) => get<any[]>(`/reports/overtime?month=${month}`)
 export const fetchRequestsReport = () => get<any>('/reports/requests')
 
 // ===== التقويم والإشعارات =====

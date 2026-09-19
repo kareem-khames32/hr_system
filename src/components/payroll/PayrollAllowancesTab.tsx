@@ -10,18 +10,18 @@ import { can, getCurrentUser, type ApiBranch, type ApiDepartment, type ApiEmploy
 import { formatMoney, sumMoney } from '@/lib/money'
 import EmptyState from '@/components/EmptyState'
 import { ORG_TARGET_LEVELS, OrgTargetPicker, describeOrgTarget, initialOrgTarget, resolveOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
+import { usePayrollDayRange } from '@/components/DayRangeFilter'
+import { dayRangeLabel, payrollMonthBounds } from '@/lib/payroll-month-range'
 import {
   cancelAllowanceGrant, cancelAllowanceLine, createAllowanceGrant, createAllowanceType, fetchAllowanceMonth, fetchAllowanceTypes, updateAllowanceType,
   type AllowanceGrantBatch, type AllowanceGrantCreated, type AllowanceGrantRow, type AllowanceLineState, type AllowanceMonth, type AllowanceType,
 } from '@/lib/payroll-allowances-api'
+import { PayrollMonthLinesTable } from '@/components/payroll/PayrollMonthLinesTable'
 
 const RUN_STATUS: Record<string, string> = { DRAFT: 'مسودة', CALCULATED: 'محسوب', IN_REVIEW: 'قيد المراجعة', APPROVED: 'معتمد', PAID: 'مصروف', CANCELLED: 'ملغى' }
 const runLabel = (id: number, name: string | null) => name ? `${name} (#${id})` : `مسير #${id}`
 const errorText = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback)
-const thisMonth = () => {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-}
+const MONTH = /^\d{4}-(0[1-9]|1[0-2])$/
 const AMOUNT = /^\d{1,12}(\.\d{1,2})?$/
 const STATE_TONE: Record<AllowanceLineState, string> = {
   PENDING: 'bg-gray-100 text-gray-600',
@@ -54,7 +54,13 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
   employees: ApiEmployee[]
   onOpenRun: (runId: number) => void
 }) {
-  const [period, setPeriod] = useState(thisMonth)
+  // الافتراضي شهر الرواتب الجاري (بدورة 23 يوم 25 سبتمبر = رواتب أكتوبر) بحدوده — نفس باقي تابات المسير؛
+  // فاضي لحد ما نعرفه بدل تحميل الشهر التقويمي الأول
+  const [period, setPeriod] = useState('')
+  const payrollMonth = usePayrollDayRange().context
+  const [periodTouched, setPeriodTouched] = useState(false)
+  useEffect(() => { if (payrollMonth && !periodTouched) setPeriod(payrollMonth.period) }, [payrollMonth, periodTouched])
+  const periodRange = payrollMonth && MONTH.test(period) ? payrollMonthBounds(period, payrollMonth.cycleStartDay) : null
   const [query, setQuery] = useState('')
   const [version, setVersion] = useState(0)
   const [data, setData] = useState<AllowanceMonth | null>(null)
@@ -122,8 +128,9 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
     <div className="space-y-4" data-payroll-overview-tab="allowances">
       <div className="card flex flex-wrap items-end gap-4">
         <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-gray-700 flex items-center gap-1.5"><Calendar size={15} className="text-gray-400" /> الشهر</span>
-          <input type="month" className="input w-48" dir="ltr" value={period} onChange={e => setPeriod(e.target.value)} />
+          <span className="font-medium text-gray-700 flex items-center gap-1.5"><Calendar size={15} className="text-gray-400" /> شهر الرواتب</span>
+          <input type="month" className="input w-48" dir="ltr" value={period} onChange={e => { setPeriodTouched(true); setPeriod(e.target.value) }} />
+          {periodRange && <span className="text-xs text-gray-500" data-payroll-period-range>{dayRangeLabel(periodRange)}</span>}
         </label>
         <div className="relative flex-1 min-w-[220px]">
           <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
@@ -141,7 +148,7 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
             <button type="button" className="btn-secondary flex items-center gap-2 text-sm" onClick={() => setShowTypes(v => !v)}>
               <Settings2 size={16} /> أنواع البدلات
             </button>
-            {canWrite && !showForm && (
+            {canWrite && !showForm && MONTH.test(period) && (
               <button type="button" className="btn-primary flex items-center gap-2 text-sm" onClick={() => { setSaved(null); setNotice(null); setShowForm(true) }}>
                 <Plus size={16} /> صرف بدل
               </button>
@@ -195,7 +202,7 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
         )}
       </div>
 
-      {loading ? <Loading /> : error ? <div className="card text-danger-600 text-sm">{error}</div> : (
+      {loading || (!period && !periodTouched) ? <Loading /> : error ? <div className="card text-danger-600 text-sm">{error}</div> : (
         <div className="card p-0 overflow-hidden">
           <div className="p-4 border-b border-gray-100 flex flex-wrap gap-2 items-center">
             <button type="button" onClick={() => setTypeFilter('')}
@@ -262,6 +269,9 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
           )}
         </div>
       )}
+
+      {/* طلب المالك 19 سبتمبر: كل بنود الاستحقاق الداخلة مسيرات الشهر لكل موظف (مش البدلات اليدوية بس) — قراءة بس */}
+      <PayrollMonthLinesTable side="earnings" period={period} matches={matches} onOpenRun={onOpenRun} version={version} />
     </div>
   )
 }

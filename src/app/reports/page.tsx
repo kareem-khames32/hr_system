@@ -3,7 +3,7 @@
 import { employeeStatusLabels as statusLabels, overtimeStatusLabels, payMethodLabels } from '@/lib/status-labels'
 import { useLeaveCatalog } from '@/lib/leave-catalog'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import {
@@ -18,15 +18,16 @@ import {
 } from 'lucide-react'
 import {
   can,
-  fetchAttendanceReport,
   fetchHeadcountReport,
   fetchLeavesReport,
-  fetchOvertimeReport,
   fetchPayrollReport,
   fetchRequestsReport,
 } from '@/lib/api'
+import { fetchAttendanceReportRange, fetchOvertimeReportRange } from '@/lib/attendance-range-api'
+import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
+import { dayRangeKey, dayRangeLabel, validDayRange, type DayRange } from '@/lib/payroll-month-range'
 import { downloadCsv, csvDateStamp } from '@/lib/csv'
-import { localMonth, localToday } from '@/lib/dates'
+import { localToday } from '@/lib/dates'
 import { categoryLabels } from '@/data/requestsCatalog'
 import { FinancialReportLinks } from './_financial/links'
 
@@ -119,26 +120,43 @@ export default function ReportsPage() {
   const [canPayroll, setCanPayroll] = useState(false)
   useEffect(() => { setCanPayroll(can('payroll.view')) }, [])
 
-  // الشهر/السنة بالتوقيت المحلي — toISOString (UTC) كانت تفتح الشهر السابق من 00:00 لـ03:00
-  const currentMonth = localMonth()
+  // السنة بالتوقيت المحلي — toISOString (UTC) كانت تفتح السنة السابقة من 00:00 لـ03:00 يوم 1 يناير
   const currentYear = localToday().slice(0, 4)
+  // الحضور والإضافي: «من تاريخ / إلى تاريخ» أو شهر رواتب بضغطة — الافتراضي شهر الرواتب الجاري (23 → 22) مش الشهر التقويمي
+  const { range, setRange, context } = usePayrollDayRange()
+  const listRange = validDayRange(range)
+  const periodText = listRange ? dayRangeLabel(listRange) : 'الفترة المختارة'
+  const [rangeLoading, setRangeLoading] = useState(false)
+  const [rangeError, setRangeError] = useState<string | null>(null)
+  const rangeRequest = useRef(0)
+
+  const loadRange = (target: DayRange) => {
+    const request = ++rangeRequest.current
+    setRangeLoading(true)
+    Promise.all([fetchAttendanceReportRange(target), fetchOvertimeReportRange(target)])
+      .then(([att, ot]) => {
+        if (request !== rangeRequest.current) return
+        setAttendance(att)
+        setOvertime(ot)
+        setRangeError(null)
+      })
+      .catch((err) => { if (request === rangeRequest.current) setRangeError(err instanceof Error ? err.message : 'تعذر تحميل الحضور والإضافي للفترة') })
+      .finally(() => { if (request === rangeRequest.current) setRangeLoading(false) })
+  }
 
   const loadData = async () => {
     setLoading(true)
+    if (listRange) loadRange(listRange)
     try {
-      const [hc, att, lv, pr, ot, rq] = await Promise.all([
+      const [hc, lv, pr, rq] = await Promise.all([
         fetchHeadcountReport(),
-        fetchAttendanceReport(currentMonth),
         fetchLeavesReport(currentYear),
         fetchPayrollReport(),
-        fetchOvertimeReport(currentMonth),
         fetchRequestsReport(),
       ])
       setHeadcount(hc)
-      setAttendance(att)
       setLeaves(lv)
       setPayroll(pr)
-      setOvertime(ot)
       setRequests(rq)
       setError(null)
     } catch (err: any) {
@@ -152,6 +170,10 @@ export default function ReportsPage() {
     loadData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  useEffect(() => {
+    if (listRange) loadRange(listRange)
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [listRange?.from, listRange?.to])
 
   // ===== مشتقات القوى العاملة =====
   const totalEmployees =
@@ -224,7 +246,7 @@ export default function ReportsPage() {
       category: 'الحضور',
       icon: '⏰',
       href: '/attendance/reports',
-      stat: `${attendance.length} موظف متابع هذا الشهر`,
+      stat: `${attendance.length} موظف متابع في ${periodText}`,
     },
     {
       id: 'payroll',
@@ -247,7 +269,7 @@ export default function ReportsPage() {
     {
       id: 'overtime',
       title: 'تقرير العمل الإضافي',
-      description: 'ساعات الأوفرتايم الفعلية والمستحقة هذا الشهر',
+      description: 'ساعات الأوفرتايم الفعلية والمستحقة في الفترة المختارة',
       category: 'الحضور',
       icon: '⏱️',
       href: '/attendance/overtime',
@@ -275,7 +297,7 @@ export default function ReportsPage() {
           ...(headcount?.byStatus ?? []).map((s) => ['حالة', statusLabels[s.status] ?? s.status, s.total, '']),
         ])
       case 'attendance':
-        return downloadCsv(`attendance-${currentMonth}-${stamp}.csv`,
+        return downloadCsv(`attendance-${listRange ? dayRangeKey(listRange) : 'range'}-${stamp}.csv`,
           ['الرقم الوظيفي', 'الموظف', 'أيام الحضور', 'أيام التأخير', 'أيام الغياب', 'انصراف مبكر', 'دقائق التأخير', 'دقائق العمل'],
           attendance.map((a) => [a.employeeCode, a.fullName, a.presentDays, a.lateDays, a.absentDays, a.earlyLeaveDays, a.totalLateMinutes, a.totalWorkMinutes]))
       case 'payroll':
@@ -285,7 +307,7 @@ export default function ReportsPage() {
         return downloadCsv(`leaves-${currentYear}-${stamp}.csv`, ['نوع الإجازة', 'عدد الطلبات', 'إجمالي الأيام'],
           (leaves?.byType ?? []).map((t) => [leaveTypeLabels[t.leaveType] ?? t.leaveType, t.requests, t.totalDays]))
       case 'overtime':
-        return downloadCsv(`overtime-${currentMonth}-${stamp}.csv`, ['الموظف', 'الحالة', 'عدد السجلات', 'الساعات الفعلية', 'الساعات المستحقة', 'قيمة المعتمد'],
+        return downloadCsv(`overtime-${listRange ? dayRangeKey(listRange) : 'range'}-${stamp}.csv`, ['الموظف', 'الحالة', 'عدد السجلات', 'الساعات الفعلية', 'الساعات المستحقة', 'قيمة المعتمد'],
           overtime.map((o) => [o.fullName, overtimeStatusLabels[o.status] ?? o.status, o.entries, o.actualHours, o.payableHours, o.approvedAmount ?? '']))
       case 'requests':
         return exportRequests()
@@ -326,6 +348,13 @@ export default function ReportsPage() {
 
         {/* التقارير المالية لشهر الرواتب (محتاجة صلاحية عرض الرواتب) — ظاهرة حتى لو باقي اللوحة ما حمّلتش */}
         {canPayroll && <FinancialReportLinks />}
+
+        {/* فترة الحضور والعمل الإضافي: شهر رواتب بضغطة أو «من تاريخ / إلى تاريخ» بأي يوم */}
+        <div className="card space-y-2">
+          <p className="text-sm font-medium text-gray-700">فترة الحضور والعمل الإضافي</p>
+          <DayRangeFilter idPrefix="reports-attendance" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
+          {rangeError && <p role="alert" className="text-sm text-red-600">{rangeError}</p>}
+        </div>
 
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
@@ -511,11 +540,11 @@ export default function ReportsPage() {
                 </div>
               </div>
 
-              {/* Attendance this month */}
-              <div className="card">
+              {/* Attendance in the chosen range */}
+              <div className={`card ${rangeLoading ? 'opacity-60' : ''}`}>
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-lg font-bold text-gray-800">
-                    الحضور مقابل التأخير (هذا الشهر)
+                    الحضور مقابل التأخير ({periodText})
                   </h2>
                 </div>
                 <div className="h-64 flex items-end gap-2">
@@ -549,7 +578,7 @@ export default function ReportsPage() {
                   ))}
                   {attendance.length === 0 && (
                     <p className="w-full text-center text-sm text-gray-400">
-                      لا توجد سجلات حضور هذا الشهر
+                      لا توجد سجلات حضور في الفترة المختارة
                     </p>
                   )}
                 </div>
@@ -722,11 +751,11 @@ export default function ReportsPage() {
                 </div>
               </div>
 
-              {/* Overtime this month */}
-              <div className="card">
+              {/* Overtime in the chosen range */}
+              <div className={`card ${rangeLoading ? 'opacity-60' : ''}`}>
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-lg font-bold text-gray-800">
-                    العمل الإضافي (هذا الشهر)
+                    العمل الإضافي ({periodText})
                   </h2>
                 </div>
                 <div className="space-y-2">
@@ -749,7 +778,7 @@ export default function ReportsPage() {
                   ))}
                   {overtime.length === 0 && (
                     <p className="text-sm text-gray-400">
-                      لا يوجد عمل إضافي هذا الشهر
+                      لا يوجد عمل إضافي في الفترة المختارة
                     </p>
                   )}
                 </div>

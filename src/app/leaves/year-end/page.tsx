@@ -6,7 +6,8 @@ import { AlertTriangle, CalendarCheck, CheckCircle2, Hourglass, Layers, Lock, Re
 import { MainLayout } from '@/components/layout'
 import { OrgTargetPicker, describeOrgTarget, initialOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
 import { can, fetchBranches, getCurrentUser, type ApiBranch } from '@/lib/api'
-import { formatDateTime, localMonth, localToday } from '@/lib/dates'
+import { formatDateTime, localToday } from '@/lib/dates'
+import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { formatMoney } from '@/lib/money'
 import {
   SETTLEMENT_MODE_LABELS,
@@ -342,7 +343,10 @@ function SettleDialog({ year, row, canPay, onClose, onDone }: {
   onDone: (message: string) => void
 }) {
   const [mode, setMode] = useState<LeaveSettlementMode>(canPay ? 'PAID' : 'ZEROED')
-  const [month, setMonth] = useState(localMonth())
+  // مسير الصرف بشهره — الافتراضي شهر الرواتب الجاري (بدورة 23 يوم 25 سبتمبر = رواتب أكتوبر) مش الشهر التقويمي، وبأيامه ظاهرة
+  const payrollMonth = usePayrollMonthContext()
+  const [month, setMonth] = useState('')
+  useEffect(() => { if (payrollMonth) setMonth(current => current || payrollMonth.period) }, [payrollMonth])
   const [reason, setReason] = useState('')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
@@ -404,10 +408,8 @@ function SettleDialog({ year, row, canPay, onClose, onDone }: {
           </label>
         </div>
         {mode === 'PAID' && (
-          <div>
-            <label className="label" htmlFor="settle-month">شهر المسير</label>
-            <input id="settle-month" type="month" className="input w-full" dir="ltr" value={month} disabled={saving} onChange={(e) => setMonth(e.target.value)} />
-          </div>
+          <PayrollPeriodSelect id="settle-month" label="شهر المسير" value={month} onChange={setMonth} disabled={saving}
+            cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today} />
         )}
         <div>
           <label className="label" htmlFor="settle-reason">السبب</label>
