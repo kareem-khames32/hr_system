@@ -6,6 +6,7 @@ import { HealthController } from './health/health.controller'
 import { AuthModule } from './auth/auth.module'
 import { OrgModule } from './org/org.module'
 import { EmployeesModule } from './employees/employees.module'
+import { EmployeeBulkUpdateModule } from './employees/employee-bulk-update.module'
 import { RequestsModule } from './requests/requests.module'
 import { AttendanceModule } from './attendance/attendance.module'
 import { PayrollModule } from './payroll/payroll.module'
@@ -16,10 +17,12 @@ import { OnboardingModule } from './onboarding/onboarding.module'
 import { FilesModule } from './files/files.module'
 import { HrDocumentsModule } from './hr-documents/hr-documents.module'
 import { LoansModule } from './loans/loans.module'
+import { LeaveYearEndModule } from './requests/leave-year-end.module'
 import { DashboardController } from './dashboard/dashboard.controller'
 import { ReportsController } from './reports/reports.controller'
 import { CostCenterReportController } from './reports/cost-center-report.controller'
 import { CostCenterReportService } from './reports/cost-center-report.service'
+import { FinancialReportModule } from './reports/financial-report.module'
 import { validateEnv } from './auth/jwt-secret'
 
 @Module({
@@ -68,6 +71,8 @@ import { validateEnv } from './auth/jwt-secret'
     AuthModule,
     OrgModule,
     EmployeesModule,
+    // تحديث بيانات مجموعة موظفين من ملف Excel/CSV
+    EmployeeBulkUpdateModule,
     RequestsModule,
     AttendanceModule,
     PayrollModule,
@@ -78,6 +83,10 @@ import { validateEnv } from './auth/jwt-secret'
     FilesModule,
     HrDocumentsModule,
     LoansModule,
+    // إقفال سنة الإجازات: معاينة وتسوية رصيد موظف وإقفال السنة
+    LeaveYearEndModule,
+    // التقارير المالية لشهر الرواتب (كشف الرواتب، التكلفة، الخصومات، السلف، الإضافي)
+    FinancialReportModule,
   ],
   controllers: [HealthController, DashboardController, ReportsController, CostCenterReportController],
   providers: [CostCenterReportService],

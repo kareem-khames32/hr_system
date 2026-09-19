@@ -1,0 +1,74 @@
+import { Controller, ForbiddenException, Get, Query, UseGuards } from '@nestjs/common'
+import { Transform, Type } from 'class-transformer'
+import { IsBoolean, IsInt, IsOptional, Matches, Min } from 'class-validator'
+import type { JwtPayload } from '../auth/auth.service'
+import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
+import { FinancialReportService, type FinancialReportQuery } from './financial-report.service'
+
+const toBoolean = ({ value }: { value: unknown }) =>
+  value === true || value === 'true' || value === '1' ? true : value === false || value === 'false' || value === '0' ? false : value
+
+export class FinancialReportQueryDto {
+  @IsOptional() @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'اختار شهر الرواتب بصيغة YYYY-MM' })
+  period?: string
+
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'رقم الفرع غير صالح' }) @Min(1)
+  branchId?: number
+
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'رقم القسم غير صالح' }) @Min(1)
+  departmentId?: number
+
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'رقم مركز التكلفة غير صالح' }) @Min(1)
+  costCenterId?: number
+
+  @IsOptional() @Transform(toBoolean) @IsBoolean({ message: 'إظهار المسيرات اللي لسه ما اتعتمدتش يقبل true أو false بس' })
+  includeDraft?: boolean
+}
+
+// التقارير المالية لشهر رواتب: مبالغ رواتب فردية، فمحتاجة صلاحية عرض الرواتب فوق التقارير. حساب الفرع يشوف فرعه بس.
+@UseGuards(JwtAuthGuard, RolesGuard)
+@Perm('reports.view')
+@Controller('reports/financial')
+export class FinancialReportController {
+  constructor(private readonly service: FinancialReportService) {}
+
+  private scoped(query: FinancialReportQueryDto, user: JwtPayload): FinancialReportQuery {
+    if (!userHasPerm(user, 'payroll.view')) throw new ForbiddenException('التقارير المالية محتاجة صلاحية عرض الرواتب')
+    const scope = branchScopeOf(user)
+    if (scope !== null && query.branchId !== undefined && query.branchId !== scope) {
+      throw new ForbiddenException('حساب الفرع يشوف تقارير فرعه بس')
+    }
+    return { period: query.period, branchId: scope ?? query.branchId ?? null, departmentId: query.departmentId ?? null,
+      costCenterId: query.costCenterId ?? null, includeDraft: query.includeDraft === true }
+  }
+
+  // ١) كشف الرواتب: سطر لكل موظف في كل مسير بالبدلات والإضافي والخصومات بأنواعها والصافي وطريقة الصرف
+  @Get('payroll-register')
+  payrollRegister(@Query() query: FinancialReportQueryDto, @CurrentUser() user: JwtPayload) {
+    return this.service.payrollRegister(this.scoped(query, user))
+  }
+
+  // ٢) ملخص تكلفة الرواتب بالفرع وبالقسم
+  @Get('payroll-cost')
+  payrollCost(@Query() query: FinancialReportQueryDto, @CurrentUser() user: JwtPayload) {
+    return this.service.payrollCost(this.scoped(query, user))
+  }
+
+  // ٣) الخصومات بالنوع وبالموظف
+  @Get('deductions')
+  deductions(@Query() query: FinancialReportQueryDto, @CurrentUser() user: JwtPayload) {
+    return this.service.deductions(this.scoped(query, user))
+  }
+
+  // ٤) السلف: الأرصدة القائمة وأقساط الشهر
+  @Get('loans')
+  loans(@Query() query: FinancialReportQueryDto, @CurrentUser() user: JwtPayload) {
+    return this.service.loans(this.scoped(query, user))
+  }
+
+  // ٥) الإضافي المعتمد اللي دخل مسيرات الشهر بالموظف والقسم
+  @Get('overtime')
+  overtime(@Query() query: FinancialReportQueryDto, @CurrentUser() user: JwtPayload) {
+    return this.service.overtime(this.scoped(query, user))
+  }
+}

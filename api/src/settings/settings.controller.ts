@@ -24,6 +24,7 @@ import {
   Matches,
   MaxLength,
   MinLength,
+  Max,
   Min,
   ValidateNested,
 } from 'class-validator'
@@ -98,6 +99,14 @@ class LeaveTypeRulesDto {
 
   @IsOptional() @Type(() => Number) @IsNumber({}, { message: 'أقصى أيام الترحيل رقم' }) @Min(0)
   carryOverMaxDays?: number | null
+
+  // السنوية للموظف الجديد: الرصيد يبدأ بعد كام شهر من التعيين (0 = من يوم التعيين، فاضي = الإعداد العام)
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'شهور بداية الاستحقاق رقم صحيح' }) @Min(0) @Max(60, { message: 'شهور بداية الاستحقاق لحد 60 شهر' })
+  entitlementStartMonths?: number | null
+
+  // أول سنة يستحق فيها: بالنسبة والتناسب ولا كاملة
+  @IsOptional() @IsBoolean()
+  firstYearProrated?: boolean
 
   @IsOptional() @Type(() => Number) @IsNumber({}, { message: 'عدد أيام المناسبة رقم' }) @Min(0)
   fixedDays?: number | null
@@ -369,6 +378,7 @@ const AVAILABLE_HANDLERS: Array<{ key: string; labelAr: string }> = [
   { key: 'leave_no_balance', labelAr: 'إجازة بلا خصم رصيد' },
   { key: 'overtime_entries', labelAr: 'قيد أوفرتايم' },
   { key: 'attendance_corrections', labelAr: 'تصحيح بصمة' },
+  { key: 'holiday_work', labelAr: 'دوام يوم عطلة — ساعات البصمة بدل في المسير' },
   { key: 'loans_installments', labelAr: 'سلفة بجدول أقساط' },
   { key: 'loan_installment_defer', labelAr: 'تأجيل قسط سلفة بعد الاعتماد' },
   { key: 'salary_update_history', labelAr: 'تحديث راتب' },
@@ -855,6 +865,8 @@ export class SettingsController {
     }
     if (merged.backdateAllowed === false) input.backdateMaxDays = null
     if (merged.carryOverEnabled === false) input.carryOverMaxDays = null
+    // بداية الاستحقاق وأول سنة للسنوية بس
+    if (category !== 'ANNUAL') { input.entitlementStartMonths = null; input.firstYearProrated = true }
     return input
   }
 

@@ -4,7 +4,7 @@ import { createContext, useContext, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { ShieldAlert } from 'lucide-react'
-import { can, getToken } from '@/lib/api'
+import { can, CHANGE_PASSWORD_PATH, getCurrentUser, getToken } from '@/lib/api'
 import Sidebar from './Sidebar'
 import Header from './Header'
 
@@ -86,6 +86,11 @@ export function AppShell({ children }: MainLayoutProps) {
     if (bare) return
     if (!getToken()) {
       window.location.href = '/login'
+      return
+    }
+    // كلمة مؤقتة من المدير لسه ماتغيّرتش → «غيّر كلمة المرور» الأول (الخادم قافل الباقي أصلًا)
+    if (getCurrentUser()?.mustChangePassword) {
+      window.location.href = CHANGE_PASSWORD_PATH
       return
     }
     setAuthed(true)

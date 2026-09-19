@@ -1,0 +1,10 @@
+import { Module } from '@nestjs/common'
+import { FinancialReportController } from './financial-report.controller'
+import { FinancialReportService } from './financial-report.service'
+
+// التقارير المالية لشهر الرواتب (/reports/financial/*): قراءة فقط من بنود المسيرات والسلف
+@Module({
+  controllers: [FinancialReportController],
+  providers: [FinancialReportService],
+})
+export class FinancialReportModule {}

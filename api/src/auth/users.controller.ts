@@ -5,6 +5,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  HttpCode,
   NotFoundException,
   Param,
   ParseIntPipe,
@@ -13,9 +14,12 @@ import {
   UseGuards,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Not, Repository } from 'typeorm'
+import { In, Not, Repository } from 'typeorm'
 import * as bcrypt from 'bcryptjs'
 import {
+  ArrayMaxSize,
+  ArrayMinSize,
+  IsArray,
   IsBoolean,
   IsEmail,
   IsInt,
@@ -41,6 +45,7 @@ import { Role } from './role.entity'
 import { User, UserRole } from './user.entity'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
+import { legacyUnusablePasswordUserIds, needsPasswordFromLegacy } from './legacy-password-marker'
 
 // الصلاحيات الإضافية القابلة للمنح = سجل الصلاحيات المركزي كاملاً
 // + أسماء قديمة للتوافق (كانت hardcoded قبل السجل)
@@ -115,7 +120,14 @@ class UpdateUserDto {
   @IsOptional()
   @IsString()
   @MinLength(8, { message: 'كلمة المرور 8 أحرف على الأقل' })
+  @MaxLength(200, { message: 'كلمة المرور طويلة قوي' })
   password?: string
+
+  // مع password بس: الكلمة دي مؤقتة ولازم صاحب الحساب يغيّرها أول دخول
+  // (لو مابعتهاش: مؤقتة افتراضيًا، إلا لو بتغيّر كلمة حسابك إنت)
+  @IsOptional()
+  @IsBoolean()
+  mustChangePassword?: boolean
 
   @IsOptional()
   @Type(() => Number)
@@ -129,6 +141,26 @@ class UpdateUserDto {
 
   @IsOptional()
   permissions?: string[]
+}
+
+// كلمة مرور مؤقتة واحدة لكذا حساب مرة واحدة (الحسابات المنقولة من القديم جات من غير كلمة)
+class TemporaryPasswordDto {
+  @IsArray({ message: 'اختار المستخدمين' })
+  @ArrayMinSize(1, { message: 'اختار مستخدم واحد على الأقل' })
+  @ArrayMaxSize(200, { message: 'أقصى حاجة 200 مستخدم في المرة' })
+  @Type(() => Number)
+  @IsInt({ each: true, message: 'أرقام المستخدمين غير صحيحة' })
+  userIds: number[]
+
+  @IsString({ message: 'اكتب كلمة المرور المؤقتة' })
+  @MinLength(8, { message: 'كلمة المرور 8 أحرف على الأقل' })
+  @MaxLength(200, { message: 'كلمة المرور طويلة قوي' })
+  password: string
+
+  // افتراضيًا: لازم يغيّرها أول دخول
+  @IsOptional()
+  @IsBoolean()
+  mustChangePassword?: boolean
 }
 
 // إدارة حسابات الدخول — منفصلة عن سجل الموظف نفسه
@@ -191,15 +223,91 @@ export class UsersController {
     return employee
   }
 
+  // كلمة المرور وإعادة التفعيل = السيطرة على الحساب: لو الحساب (بعد التعديل) يملك صلاحية إدارية
+  // لا يملكها المنفّذ فسيدخل به ويرثها → لمدير النظام فقط. يرجّع أسماء الصلاحيات اللي فوق المنفّذ
+  private async takeoverBeyond(actor: JwtPayload, target: User): Promise<string | null> {
+    if (actor.role === 'super_admin') return null
+    const perms = await this.auth.resolvePermissions(target)
+    const beyond = [...SUPER_ADMIN_ONLY_GRANTS, '*'].filter(
+      (p) => perms.includes(p) && !hasPerm(actor.permissions, p)
+    )
+    return beyond.length > 0
+      ? beyond.map((p) => `«${PERMISSIONS[p] ?? 'كل الصلاحيات'}»`).join(' و')
+      : null
+  }
+
   @Get()
   async list(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)
-    const rows = await this.users.find({
-      where: scope !== null ? { branchId: scope } : {},
-      order: { id: 'ASC' },
+    const query = this.users
+      .createQueryBuilder('u')
+      .addSelect(['u.mustChangePassword', 'u.passwordChangedAt'])
+      .orderBy('u.id', 'ASC')
+    if (scope !== null) query.where('u.branchId = :scope', { scope })
+    const rows = await query.getMany()
+    const legacyIds = legacyUnusablePasswordUserIds()
+    // لا نُخرج الـ hash أبداً — بس علامة «مستخدم منقول — محتاج باسورد»
+    return rows.map(({ passwordHash: _ph, ...rest }) => ({
+      ...rest,
+      mustChangePassword: !!rest.mustChangePassword,
+      legacyNeedsPassword: needsPasswordFromLegacy(rest, legacyIds),
+    }))
+  }
+
+  // كلمة مرور مؤقتة واحدة لكل المختارين: bcrypt لكل حساب، و«لازم يغيّرها أول دخول» افتراضيًا،
+  // وأي جلسة قديمة تبطل. كله أو ولا حاجة: حساب واحد مش مسموح = مفيش ولا حساب يتغيّر.
+  @Post('temporary-password')
+  @HttpCode(200)
+  async setTemporaryPassword(
+    @CurrentUser() actor: JwtPayload,
+    @Body() dto: TemporaryPasswordDto
+  ) {
+    const ids = [...new Set(dto.userIds)]
+    if (ids.includes(actor.sub)) {
+      throw new BadRequestException(
+        'مينفعش تعيّن كلمة مؤقتة لحسابك إنت — غيّرها من «غيّر كلمة المرور»'
+      )
+    }
+    const targets = await this.users.find({ where: { id: In(ids) } })
+    const scope = branchScopeOf(actor)
+    // خارج نطاق فرع المنفّذ = غير موجود (زي القائمة)
+    const visible = targets.filter((u) => scope === null || u.branchId === scope)
+    if (visible.length !== ids.length) {
+      throw new NotFoundException('مستخدم أو أكتر من المختارين مش موجود')
+    }
+    for (const target of visible) {
+      if (actor.role !== 'super_admin' && target.role === 'super_admin') {
+        throw new ForbiddenException(
+          `تغيير كلمة مرور ${target.displayName} (مدير النظام) متاح لمدير النظام فقط`
+        )
+      }
+      const beyond = await this.takeoverBeyond(actor, target)
+      if (beyond) {
+        throw new ForbiddenException(
+          `حساب ${target.displayName} فيه ${beyond} — تغيير كلمة مروره لمدير النظام بس`
+        )
+      }
+    }
+    const mustChangePassword = dto.mustChangePassword ?? true
+    const passwordChangedAt = new Date()
+    const hashes = new Map<number, string>()
+    for (const target of visible) hashes.set(target.id, await bcrypt.hash(dto.password, 10))
+    await this.users.manager.transaction(async (em) => {
+      for (const target of visible) {
+        await em
+          .createQueryBuilder()
+          .update(User)
+          .set({
+            passwordHash: hashes.get(target.id) as string,
+            mustChangePassword,
+            passwordChangedAt,
+            tokenVersion: () => 'tokenVersion + 1',
+          })
+          .where('id = :id', { id: target.id })
+          .execute()
+      }
     })
-    // لا نُخرج الـ hash أبداً
-    return rows.map(({ passwordHash: _ph, ...rest }) => rest)
+    return { updated: visible.length, userIds: visible.map((u) => u.id), mustChangePassword }
   }
 
   @Post()
@@ -242,6 +350,7 @@ export class UsersController {
       this.users.create({
         email,
         passwordHash: await bcrypt.hash(dto.password, 10),
+        passwordChangedAt: new Date(),
         displayName: dto.displayName,
         role: dto.role as UserRole,
         branchId: branchId as unknown as number,
@@ -307,22 +416,20 @@ export class UsersController {
     // صلاحية إدارية لا يملكها المنفّذ فسيدخل به ويرثها → لمدير النظام فقط
     // (التعطيل مسموح: لا يمنح شيئاً، وسحب الصلاحيات نفسه مسموح)
     const reactivating = dto.isActive === true && !user.isActive
-    if (actor.role !== 'super_admin' && (dto.password || reactivating)) {
-      const target = await this.auth.resolvePermissions({
+    if (dto.password || reactivating) {
+      const beyond = await this.takeoverBeyond(actor, {
         ...user,
         role: (dto.role ?? user.role) as UserRole,
         permissions: perms ?? user.permissions,
       })
-      const beyond = [...SUPER_ADMIN_ONLY_GRANTS, '*'].filter(
-        (p) => target.includes(p) && !hasPerm(actor.permissions, p)
-      )
-      if (beyond.length > 0) {
+      if (beyond) {
         throw new ForbiddenException(
-          `تغيير كلمة المرور أو تفعيل حساب يملك ${beyond
-            .map((p) => `«${PERMISSIONS[p] ?? 'كل الصلاحيات'}»`)
-            .join(' و')} متاح لمدير النظام فقط`
+          `تغيير كلمة المرور أو تفعيل حساب يملك ${beyond} متاح لمدير النظام فقط`
         )
       }
+    }
+    if (dto.mustChangePassword !== undefined && !dto.password) {
+      throw new BadRequestException('«يغيّرها أول دخول» بتتبعت مع كلمة المرور الجديدة')
     }
     // نفس فحوص الإنشاء: الفرع في النطاق، والموظف موجود وفي النطاق وغير مربوط بغيره
     if (branchChanged) {
@@ -333,6 +440,9 @@ export class UsersController {
     }
     if (dto.password) {
       user.passwordHash = await bcrypt.hash(dto.password, 10)
+      // إعادة التعيين من المدير = كلمة مؤقتة افتراضيًا (إلا حسابك إنت)
+      user.mustChangePassword = dto.mustChangePassword ?? actor.sub !== id
+      user.passwordChangedAt = new Date()
     }
     if (dto.role !== undefined) user.role = dto.role as UserRole
     if (dto.isActive !== undefined) user.isActive = dto.isActive

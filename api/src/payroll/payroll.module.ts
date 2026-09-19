@@ -54,6 +54,10 @@ import { SocialInsuranceService } from './social-insurance.service'
 import { PayrollDeductionWaiver } from './payroll-deduction-waivers.entities'
 import { PayrollOverviewController } from './payroll-overview.controller'
 import { PayrollOverviewService } from './payroll-overview.service'
+// «تابة البدلات»: أنواع البدلات وصرفها لشهر (إضافة في دفتر المديونيات)
+import { PayrollAllowanceGrant, PayrollAllowanceGrantLine, PayrollAllowanceType } from './allowances-grants.entities'
+import { PayrollAllowancesController } from './allowances-grants.controller'
+import { PayrollAllowancesService } from './allowances-grants.service'
 
 @Module({
   imports: [
@@ -110,11 +114,14 @@ import { PayrollOverviewService } from './payroll-overview.service'
       // C8 / الخطوة 31: سطور عكس صرف المسير
       PayrollRunReversalLine,
       PayrollDeductionWaiver,
+      PayrollAllowanceType,
+      PayrollAllowanceGrant,
+      PayrollAllowanceGrantLine,
     ]),
   ],
   controllers: [PayrollController, ObligationsController, PayrollRulesController, PayrollPolicyController, PayrollSalaryHistoryController, TypedDeductionsController, BonusesController,
-    FinancialExemptionsController, PayrollCorrectionsController, SocialInsuranceController, PayrollBankSheetController, PayrollOverviewController],
+    FinancialExemptionsController, PayrollCorrectionsController, SocialInsuranceController, PayrollBankSheetController, PayrollOverviewController, PayrollAllowancesController],
   providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService,
-    FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService],
+    FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService, PayrollAllowancesService],
 })
 export class PayrollModule {}

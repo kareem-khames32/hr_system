@@ -21,7 +21,12 @@ export interface CurrentUser {
   employeeId: number | null
   // صلاحيات إضافية ممنوحة فوق الدور (hr/finance/custody_officer/it/executive...)
   permissions?: string[]
+  // دخل بكلمة مؤقتة من المدير — لازم يغيّرها قبل ما يستخدم النظام (/login/change-password)
+  mustChangePassword?: boolean
 }
+
+// صفحة «غيّر كلمة المرور» — تحت /login فبتفتح من غير إطار النظام
+export const CHANGE_PASSWORD_PATH = '/login/change-password'
 
 export const getToken = (): string | null => {
   if (typeof window === 'undefined') return null
@@ -141,6 +146,15 @@ export async function apiFetch<T>(
     } catch {
       /* الرد ليس JSON */
     }
+    // كلمة مؤقتة لسه ماتغيّرتش: الخادم قافل كل حاجة غير «غيّر كلمة المرور» → وجّه لها
+    if (
+      res.status === 403 &&
+      details?.code === 'PASSWORD_CHANGE_REQUIRED' &&
+      typeof window !== 'undefined' &&
+      !window.location.pathname.startsWith('/login')
+    ) {
+      window.location.href = CHANGE_PASSWORD_PATH
+    }
     throw new ApiError(res.status, arabicErrorMessage(res.status, message), details)
   }
 
@@ -160,6 +174,17 @@ export const login = (email: string, password: string) =>
     method: 'POST',
     body: JSON.stringify({ email, password }),
   })
+
+// صاحب الحساب يغيّر كلمته (ومنها الكلمة المؤقتة) — الرد جلسة جديدة
+export const changeMyPassword = (currentPassword: string, newPassword: string) =>
+  apiFetch<LoginResponse>('/auth/change-password', {
+    method: 'POST',
+    body: JSON.stringify({ currentPassword, newPassword }),
+  })
+
+// الجلسة الحالية محفوظة في localStorage (تذكرني) ولا sessionStorage؟ — عشان الجلسة الجديدة تتحفظ في نفس المكان
+export const isSessionRemembered = (): boolean =>
+  typeof window !== 'undefined' && localStorage.getItem(TOKEN_KEY) !== null
 
 // اختصارات الأفعال — كل نداءات النظام من هنا
 const get = <T>(path: string) => apiFetch<T>(path)
@@ -485,6 +510,10 @@ export interface ApiPayrollItem {
 export interface ApiUser {
   id: number; email: string; displayName: string; role: string
   branchId?: number; employeeId?: number; isActive: boolean; lastLoginAt?: string
+  // كلمة مؤقتة لسه ماتغيّرتش، وآخر تعيين للكلمة على النظام ده
+  mustChangePassword?: boolean; passwordChangedAt?: string | null
+  // «مستخدم منقول — محتاج باسورد»: جه من النظام القديم بكلمة غير قابلة للاستخدام ولسه محدش عيّن له كلمة
+  legacyNeedsPassword?: boolean
 }
 export interface ApiDashboardStats {
   role: string
@@ -685,6 +714,44 @@ export const updateOvertimePeriod = (id: number, p: Partial<ApiOvertimePeriod>) 
   patch<ApiOvertimePeriod & { recompute?: ApiOvertimePeriodRecompute }>(`/attendance/overtime-periods/${id}`, p)
 export const deleteOvertimePeriod = (id: number) =>
   del<{ deleted: boolean; recompute?: ApiOvertimePeriodRecompute }>(`/attendance/overtime-periods/${id}`)
+
+// ===== دوام أيام العطلات: أوامر الموارد البشرية + طلبات «دوام يوم عطلة» المعتمدة → «بدل دوام أيام العطلات» في المسير =====
+export type HolidayWorkTargetLevel = 'company' | 'branch' | 'departments' | 'teams' | 'employees'
+export interface ApiHolidayWorkRow {
+  employeeId: number; employeeName: string; employeeCode: string; date: string
+  checkIn: string | null; checkOut: string | null; minutes: number | null; hours: number | null
+  // محسوب في البدل ولا لأ (ماجاش/بصمة ناقصة/محسوب على أمر تاني…) — السبب في message
+  counted: boolean; message: string | null
+  // المبلغ بيظهر لصاحب صلاحية عرض الرواتب بس؛ PAYROLL = من قيد المسير، ESTIMATE = تقديري براتب الملف
+  amount: number | null; amountSource: 'PAYROLL' | 'ESTIMATE'
+  payrollState: 'IN_DRAFT' | 'APPROVED_RUN' | 'PAID' | null
+}
+export interface ApiHolidayWorkOrder {
+  id: number; kind: 'ORDER' | 'REQUEST'; name: string; targetLevel: HolidayWorkTargetLevel; branchId: number | null; targetIds: number[]
+  targetText: string; dates: string[]; multiplier: number; status: 'ACTIVE' | 'CANCELLED'; note: string | null; sourceRequestId: number | null
+  createdAt: string; createdByName: string | null; updatedAt: string | null; cancelledAt: string | null; cancelReason: string | null; cancelledByName: string | null
+  canEdit: boolean; canCancel: boolean
+  summary: { targetedEmployees: number; cameEmployees: number; countedDays: number; totalHours: number; totalAmount: number | null; pastDates: number } | null
+  rows?: ApiHolidayWorkRow[]
+}
+export interface ApiHolidayWorkOrderInput {
+  name: string; targetLevel: HolidayWorkTargetLevel; branchId: number | null
+  departmentIds: number[]; teamIds: number[]; employeeIds: number[]; dates: string[]; multiplier?: number | string; note?: string | null
+}
+export const fetchHolidayWorkOrders = (filters: { status?: 'ACTIVE' | 'CANCELLED' | 'ALL'; kind?: 'ORDER' | 'REQUEST' | 'ALL' } = {}) =>
+  get<{ today: string; canSeeAmounts: boolean; orders: ApiHolidayWorkOrder[] }>(
+    `/attendance/holiday-work?status=${filters.status ?? 'ALL'}&kind=${filters.kind ?? 'ALL'}`)
+export const fetchHolidayWorkOrder = (id: number) =>
+  get<{ today: string; canSeeAmounts: boolean; order: ApiHolidayWorkOrder }>(`/attendance/holiday-work/${id}`)
+export const createHolidayWorkOrder = (input: ApiHolidayWorkOrderInput) =>
+  post<{ order: ApiHolidayWorkOrder; overtime?: { recomputed: number; failed: number } }>('/attendance/holiday-work', input)
+export const updateHolidayWorkOrder = (id: number, input: ApiHolidayWorkOrderInput) =>
+  patch<{ order: ApiHolidayWorkOrder; overtime?: { recomputed: number; failed: number } }>(`/attendance/holiday-work/${id}`, input)
+export const cancelHolidayWorkOrder = (id: number, reason?: string) =>
+  post<{ order: ApiHolidayWorkOrder }>(`/attendance/holiday-work/${id}/cancel`, reason ? { reason } : {})
+export const fetchHolidayWorkSettings = () => get<{ multiplier: number; canEdit: boolean }>('/attendance/holiday-work/settings')
+export const updateHolidayWorkSettings = (multiplier: number | string) =>
+  patch<{ multiplier: number; canEdit: boolean }>('/attendance/holiday-work/settings', { multiplier })
 export const fetchPendingOvertime = () => get<any[]>('/attendance/overtime/pending')
 export const confirmOvertime = (id: number, approve: boolean, reason?: string) =>
   post(`/attendance/overtime/${id}/confirm`, { approve, reason })
@@ -825,8 +892,11 @@ export const fetchBankSheet = (runId: number) => get<ApiBankSheet>(`/payroll/run
 export const fetchUsers = () => get<ApiUser[]>('/users')
 export const createUser = (u: { email: string; password: string; displayName: string; role: string; branchId?: number; employeeId?: number; permissions?: string[] }) =>
   post<ApiUser>('/users', u)
-export const updateUser = (id: number, u: Partial<{ role: string; isActive: boolean; password: string; branchId: number | null; employeeId: number | null; permissions: string[] }>) =>
+export const updateUser = (id: number, u: Partial<{ role: string; isActive: boolean; password: string; mustChangePassword: boolean; branchId: number | null; employeeId: number | null; permissions: string[] }>) =>
   patch<ApiUser>(`/users/${id}`, u)
+// كلمة مرور مؤقتة واحدة لكذا حساب (افتراضيًا: لازم يغيّروها أول دخول)
+export const setTemporaryPassword = (userIds: number[], password: string, mustChangePassword = true) =>
+  post<{ updated: number; userIds: number[]; mustChangePassword: boolean }>('/users/temporary-password', { userIds, password, mustChangePassword })
 export const fetchConfig = () => get<Array<{ key: string; value: string }>>('/settings/config')
 export const updateConfig = (key: string, value: string, calendarChange?: PayrollCalendarChange) => patch('/settings/config', { key, value, ...(calendarChange ? { calendarChange } : {}) })
 // بيانات الشركة لرأس المستندات المولَّدة (مفاتيح company.*) — الفارغ = غير مضبوط

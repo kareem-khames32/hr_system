@@ -16,13 +16,14 @@ import {
   Laptop,
 } from 'lucide-react'
 import {
-  fetchMonthlyAttendance,
   fetchMyAttendanceExemptions,
   getCurrentUser,
   type ApiAttendanceDay,
   type ApiAttendanceExemption,
 } from '@/lib/api'
-import { localMonth } from '@/lib/dates'
+import { fetchAttendanceSheetRange } from '@/lib/attendance-range-api'
+import { dayRangeError, dayRangeLabel, periodOverlapsRange } from '@/lib/payroll-month-range'
+import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 
 const weekdayNames = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت']
 
@@ -37,9 +38,6 @@ const formatMinutes = (mins: number): string | null => {
   if (!m || m <= 0) return null
   return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`
 }
-
-// الشهر بالتوقيت المحلي — toISOString كانت تفتح الشهر السابق أول يوم بعد منتصف الليل
-const currentMonth = () => localMonth()
 
 const statusConfig: Record<
   string,
@@ -63,7 +61,8 @@ const statusConfig: Record<
 export default function MyAttendancePage() {
   const [employeeId, setEmployeeId] = useState<number | null>(null)
   const [noEmployee, setNoEmployee] = useState(false)
-  const [month, setMonth] = useState(currentMonth())
+  // كشف حضوري بيفتح على شهر الرواتب (مثلًا 23 أغسطس – 22 سبتمبر) مش الشهر التقويمي
+  const { range, setRange, context } = usePayrollDayRange()
 
   const [days, setDays] = useState<ApiAttendanceDay[]>([])
   const [exemptions, setExemptions] = useState<ApiAttendanceExemption[]>([])
@@ -84,22 +83,22 @@ export default function MyAttendancePage() {
 
   // كشف الشهر — من السيرفر (مصدر الحقيقة)
   useEffect(() => {
-    if (!employeeId || !month) return
+    if (!employeeId || !range || dayRangeError(range)) return
     setLoading(true)
     setError('')
     let cancelled = false
-    Promise.all([fetchMonthlyAttendance(employeeId, month), fetchMyAttendanceExemptions()])
+    Promise.all([fetchAttendanceSheetRange(employeeId, range), fetchMyAttendanceExemptions()])
       .then(([res, windows]) => {
         if (cancelled) return
         setDays(res.days)
         setSummary(res.summary)
-        setExemptions(windows.filter(window => window.effectiveFrom.slice(0, 7) <= month &&
-          (!window.effectiveTo || window.effectiveTo.slice(0, 7) >= month) && (!window.terminatedFrom || window.terminatedFrom > `${month}-01`)))
+        setExemptions(windows.filter(window => periodOverlapsRange(window.effectiveFrom, window.effectiveTo, range) &&
+          (!window.terminatedFrom || window.terminatedFrom > range.from)))
       })
       .catch((e) => { if (!cancelled) setError(e instanceof Error ? e.message : 'تعذر تحميل كشف حضورك') })
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
-  }, [employeeId, month])
+  }, [employeeId, range])
 
   return (
     <MainLayout>
@@ -107,17 +106,14 @@ export default function MyAttendancePage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">حضوري — {month}</h1>
+            <h1 className="text-2xl font-bold text-gray-800">حضوري — {range ? dayRangeLabel(range) : ''}</h1>
             <p className="text-gray-500 mt-1">
               كشف حضورك يوم بيوم: الوردية والحالة والتأخير محسوبة من السيرفر
             </p>
           </div>
-          <input
-            type="month"
-            value={month}
-            onChange={(e) => setMonth(e.target.value)}
-            className="input w-44"
-          />
+        </div>
+        <div className="card">
+          <DayRangeFilter idPrefix="my-attendance" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
         </div>
 
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}

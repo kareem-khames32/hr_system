@@ -180,7 +180,8 @@ test('unassigned and overtime tabs default to the API payroll month (cycle start
 
 test('payroll reports page (payroll simplification) shows the runs tab only, exported from its own builder, without internal run numbers; the other report endpoints stay in the API file', () => {
   const source = fs.readFileSync(path.join(repoRoot, 'src', 'app', 'payroll', 'reports', 'page.tsx'), 'utf8')
-  assert.match(source, /<ExportButton table=\{report \? runsReportCsv\(\{ \.\.\.report, runs \}\)/, 'runsReportCsv مربوط بزر تصدير')
+  // التصدير = المسيرات المعروضة بعد فلتر «من تاريخ / إلى تاريخ» (2026-09-19)
+  assert.match(source, /<ExportButton table=\{report \? runsReportCsv\(\{ \.\.\.report, runs: shownRuns \}\)/, 'runsReportCsv مربوط بزر تصدير')
   const tabs = /const TABS[^=]*= \[([\s\S]*?)\n\]/.exec(source)
   assert.ok(tabs, 'TABS')
   assert.deepEqual([...tabs[1].matchAll(/id: '(\w+)'/g)].map(match => match[1]), ['runs'])

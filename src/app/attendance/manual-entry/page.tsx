@@ -16,13 +16,15 @@ import {
 import {
   ingestPunchesManual,
   fetchEmployees,
-  fetchPunches,
   deleteManualPunch,
   can,
   type ApiEmployee,
   type ApiPunch,
 } from '@/lib/api'
-import { localMonth, localToday } from '@/lib/dates'
+import { localToday } from '@/lib/dates'
+import { fetchPunchesRange } from '@/lib/attendance-range-api'
+import { dateInRange, dayRangeError, dayRangeLabel, payrollMonthRangeOf } from '@/lib/payroll-month-range'
+import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 
 // ============================================================
 // الإدخال اليدوي للحضور: كل بصمة يدوية تُحفظ بمصدرها (MANUAL) ومُدخِلها
@@ -45,7 +47,8 @@ const dayStatusConfig: Record<string, { label: string; className: string }> = {
 }
 
 export default function ManualEntryPage() {
-  const [month, setMonth] = useState(localMonth())
+  // الفترة باليوم — الافتراضي شهر الرواتب الجاري (مثلًا 23 → 22)
+  const { range, setRange, context } = usePayrollDayRange()
   const [searchTerm, setSearchTerm] = useState('')
   const [showForm, setShowForm] = useState(false)
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
@@ -75,14 +78,15 @@ export default function ManualEntryPage() {
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل الموظفين'))
   }, [])
 
-  // سجل البصمات اليدوية للشهر المحدد — من السيرفر (يبقى بعد إعادة التحميل)
+  // سجل البصمات اليدوية للفترة المحددة — من السيرفر (يبقى بعد إعادة التحميل)
   useEffect(() => {
+    if (!range || dayRangeError(range)) return
     setLoading(true)
-    fetchPunches({ source: 'MANUAL', month })
+    fetchPunchesRange('MANUAL', range)
       .then(setPunches)
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل سجل الإدخال اليدوي'))
       .finally(() => setLoading(false))
-  }, [month, reloadKey])
+  }, [range, reloadKey])
 
   // إرسال البصمات اليدوية لمحرك الحضور — timestamp = YYYY-MM-DD HH:mm:ss + السبب
   const handleSubmit = async () => {
@@ -130,12 +134,14 @@ export default function ManualEntryPage() {
       setSuccess(
         `تم الحفظ: ${result.received} بصمة لـ${emp.fullName} — أُعيد حساب ${result.recomputedDays ?? 0} يوم حضور`
       )
-      const entryMonth = formData.date.slice(0, 7)
+      const entryDate = formData.date
       setFormData({ employeeId: '', date: '', checkIn: '', checkOut: '', reason: '' })
       setShowForm(false)
-      // القائمة تنتقل لشهر الإدخال حتى تظهر البصمة فيها
-      if (entryMonth !== month) setMonth(entryMonth)
-      else setReloadKey((k) => k + 1)
+      // القائمة تنتقل لشهر رواتب الإدخال لو اليوم برا الفترة المعروضة حتى تظهر البصمة فيها
+      if (range && !dateInRange(entryDate, range)) {
+        const { from, to } = payrollMonthRangeOf(entryDate, context?.cycleStartDay ?? 1)
+        setRange({ from, to })
+      } else setReloadKey((k) => k + 1)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'تعذر حفظ الإدخال')
     } finally {
@@ -352,8 +358,8 @@ export default function ManualEntryPage() {
 
         {/* Search + Month */}
         <div className="card">
-          <div className="flex items-center gap-3">
-            <div className="relative flex-1">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="relative flex-1 min-w-[16rem]">
               <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
@@ -363,13 +369,7 @@ export default function ManualEntryPage() {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
-            <input
-              type="month"
-              value={month}
-              onChange={(e) => e.target.value && setMonth(e.target.value)}
-              className="input w-44"
-              title="شهر السجل"
-            />
+            <DayRangeFilter idPrefix="manual-entry" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
           </div>
         </div>
 
@@ -398,7 +398,7 @@ export default function ManualEntryPage() {
                 <tr>
                   <td colSpan={7} className="text-center py-10 text-gray-400">
                     {punches.length === 0
-                      ? `لا توجد بصمات يدوية في ${month} — البصمات المُدخلة تُطبَّق فوراً على سجل الحضور`
+                      ? `لا توجد بصمات يدوية في الفترة ${range ? dayRangeLabel(range) : ''} — البصمات المُدخلة تُطبَّق فوراً على سجل الحضور`
                       : 'لا توجد نتائج مطابقة للبحث'}
                   </td>
                 </tr>

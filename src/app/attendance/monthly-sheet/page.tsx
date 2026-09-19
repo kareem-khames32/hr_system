@@ -17,12 +17,13 @@ import {
   Laptop,
 } from 'lucide-react'
 import {
-  fetchMonthlyAttendance,
   fetchEmployees,
   type ApiAttendanceDay,
   type ApiEmployee,
 } from '@/lib/api'
-import { localMonth } from '@/lib/dates'
+import { fetchAttendanceSheetRange } from '@/lib/attendance-range-api'
+import { dayRangeError, dayRangeKey, dayRangeLabel } from '@/lib/payroll-month-range'
+import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 
 const weekdayNames = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت']
 
@@ -37,9 +38,6 @@ const formatMinutes = (mins: number): string | null => {
   if (!m || m <= 0) return null
   return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`
 }
-
-// الشهر بالتوقيت المحلي — toISOString كانت تفتح الشهر السابق أول يوم بعد منتصف الليل
-const currentMonth = () => localMonth()
 
 // BOM في مقدمة ملف CSV — بدونه يفتح Excel العربية كرموز مشوّهة
 const CSV_BOM = String.fromCharCode(0xfeff)
@@ -66,19 +64,23 @@ const statusConfig: Record<
 export default function MonthlySheetPage() {
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [employeeId, setEmployeeId] = useState<number | null>(null)
-  const [month, setMonth] = useState(currentMonth())
+  // الكشف بيفتح على شهر الرواتب (من يوم بداية الدورة لليوم اللي قبله، مثلًا 23 → 22) مش الشهر التقويمي
+  const { range, setRange, context } = usePayrollDayRange()
+  const rangeTitle = range ? dayRangeLabel(range) : ''
 
   const [days, setDays] = useState<ApiAttendanceDay[]>([])
   const [summary, setSummary] = useState<Record<string, number>>({})
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  // الموظفون — مرة واحدة، وأول موظف يُختار تلقائياً
+  // الموظفون — مرة واحدة؛ ?employeeId= في الرابط يفتح كشف الموظف ده، وإلا أول موظف
   useEffect(() => {
+    const requested = Number(new URLSearchParams(window.location.search).get('employeeId'))
     fetchEmployees()
       .then((rows) => {
         setEmployees(rows)
-        if (rows.length > 0) setEmployeeId((prev) => prev ?? rows[0].id)
+        const linked = rows.find((row) => row.id === requested)
+        if (rows.length > 0) setEmployeeId((prev) => prev ?? (linked ? linked.id : rows[0].id))
         else setLoading(false)
       })
       .catch((e) => {
@@ -89,17 +91,17 @@ export default function MonthlySheetPage() {
 
   // كشف الشهر — من السيرفر (مصدر الحقيقة)
   useEffect(() => {
-    if (!employeeId || !month) return
+    if (!employeeId || !range || dayRangeError(range)) return
     setLoading(true)
     setError('')
-    fetchMonthlyAttendance(employeeId, month)
+    fetchAttendanceSheetRange(employeeId, range)
       .then((res) => {
         setDays(res.days)
         setSummary(res.summary)
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل الكشف الشهري'))
       .finally(() => setLoading(false))
-  }, [employeeId, month])
+  }, [employeeId, range])
 
   // إجمالي دقائق الانصراف المبكر — من الملخّص إن أرسله السيرفر، وإلا يُجمَع من الأيام
   const totalEarlyLeaveMinutes =
@@ -156,7 +158,7 @@ export default function MonthlySheetPage() {
     )
     const a = document.createElement('a')
     a.href = url
-    a.download = `monthly-sheet-${emp?.employeeCode || employeeId || ''}-${month}.csv`
+    a.download = `monthly-sheet-${emp?.employeeCode || employeeId || ''}-${range ? dayRangeKey(range) : ''}.csv`
     a.click()
     URL.revokeObjectURL(url)
   }
@@ -176,7 +178,7 @@ export default function MonthlySheetPage() {
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">الكشف الشهري — {month}</h1>
+            <h1 className="text-2xl font-bold text-gray-800">الكشف الشهري — {rangeTitle}</h1>
             <p className="text-gray-500 mt-1">
               يوم بيوم: الوردية والحالة والتأخير والانصراف المبكر محسوبة من السيرفر
             </p>
@@ -193,12 +195,6 @@ export default function MonthlySheetPage() {
                 </option>
               ))}
             </select>
-            <input
-              type="month"
-              value={month}
-              onChange={(e) => setMonth(e.target.value)}
-              className="input w-44"
-            />
             <button
               onClick={exportCsv}
               disabled={loading || days.length === 0}
@@ -209,6 +205,11 @@ export default function MonthlySheetPage() {
               تصدير
             </button>
           </div>
+        </div>
+
+        {/* الفترة: شهر الرواتب افتراضيًا، أو أي مدى باليوم */}
+        <div className="card">
+          <DayRangeFilter idPrefix="monthly-sheet" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
         </div>
 
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
@@ -304,7 +305,7 @@ export default function MonthlySheetPage() {
                   {days.length === 0 ? (
                     <tr>
                       <td colSpan={9} className="table-cell text-center text-gray-400 py-10">
-                        لا توجد سجلات حضور لهذا الموظف في هذا الشهر
+                        لا توجد سجلات حضور لهذا الموظف في الفترة دي
                       </td>
                     </tr>
                   ) : (

@@ -14,8 +14,9 @@ import {
   BarChart3,
   Printer,
 } from 'lucide-react'
-import { fetchAttendanceReport, fetchOvertimeReport } from '@/lib/api'
-import { localMonth } from '@/lib/dates'
+import { fetchAttendanceReportRange, fetchOvertimeReportRange } from '@/lib/attendance-range-api'
+import { dayRangeError, dayRangeKey, dayRangeLabel } from '@/lib/payroll-month-range'
+import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { filterAttendanceReportRows } from '@/lib/attendance-report-search'
 
 interface AttendanceReportRow {
@@ -49,12 +50,9 @@ const formatMinutes = (mins: number): string => {
   return `${Math.floor(m / 60)}:${String(m % 60).padStart(2, '0')}`
 }
 
-
-// الشهر بالتوقيت المحلي — toISOString كانت تفتح الشهر السابق أول يوم بعد منتصف الليل
-const currentMonth = () => localMonth()
-
 export default function AttendanceReportsPage() {
-  const [selectedMonth, setSelectedMonth] = useState(currentMonth())
+  // الافتراضي شهر الرواتب الجاري (مثلًا 23 → 22) مش الشهر التقويمي، والفلتر باليوم
+  const { range, setRange, context } = usePayrollDayRange()
   const [searchTerm, setSearchTerm] = useState('')
 
   const [attendanceRows, setAttendanceRows] = useState<AttendanceReportRow[]>([])
@@ -63,17 +61,18 @@ export default function AttendanceReportsPage() {
   const [error, setError] = useState('')
 
   useEffect(() => {
-    if (!selectedMonth) return
+    if (!range || dayRangeError(range)) return
     setLoading(true)
     setError('')
-    Promise.all([fetchAttendanceReport(selectedMonth), fetchOvertimeReport(selectedMonth)])
+    Promise.all([fetchAttendanceReportRange(range), fetchOvertimeReportRange(range)])
       .then(([att, ot]) => {
         setAttendanceRows(Array.isArray(att) ? att : [])
         setOvertimeRows(Array.isArray(ot) ? ot : [])
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل التقارير'))
       .finally(() => setLoading(false))
-  }, [selectedMonth])
+  }, [range])
+  const rangeTitle = range ? dayRangeLabel(range) : ''
 
   // البحث يطبَّق على الجدولين بنفس المطابقة (الاسم أو الرقم الوظيفي)
   const { attendance: filteredData, overtime: filteredOvertime } = filterAttendanceReportRows(attendanceRows, overtimeRows, searchTerm)
@@ -100,7 +99,7 @@ export default function AttendanceReportsPage() {
               <Printer size={18} />
               طباعة
             </button>
-            <button onClick={() => downloadCsv(`attendance-${selectedMonth}.csv`, ['كود الموظف', 'الموظف', 'حضور', 'تأخير', 'غياب', 'خروج مبكر', 'إجازة', 'عطلة', 'أيام بها إجازة جزئية', 'دقائق التأخير', 'دقائق العمل'], filteredData.map(row => [row.employeeCode, row.fullName, row.presentDays, row.lateDays, row.absentDays, row.earlyLeaveDays, row.leaveDays, row.holidayDays, row.partialLeaveDays, row.totalLateMinutes, row.totalWorkMinutes]))} disabled={loading} className="btn-primary flex items-center gap-2">
+            <button onClick={() => downloadCsv(`attendance-${range ? dayRangeKey(range) : ''}.csv`, ['كود الموظف', 'الموظف', 'حضور', 'تأخير', 'غياب', 'خروج مبكر', 'إجازة', 'عطلة', 'أيام بها إجازة جزئية', 'دقائق التأخير', 'دقائق العمل'], filteredData.map(row => [row.employeeCode, row.fullName, row.presentDays, row.lateDays, row.absentDays, row.earlyLeaveDays, row.leaveDays, row.holidayDays, row.partialLeaveDays, row.totalLateMinutes, row.totalWorkMinutes]))} disabled={loading} className="btn-primary flex items-center gap-2">
               <Download size={18} />
               تصدير CSV
             </button>
@@ -151,8 +150,8 @@ export default function AttendanceReportsPage() {
 
         {/* Filters */}
         <div className="card">
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1">
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="relative flex-1 min-w-[16rem]">
               <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
@@ -162,12 +161,7 @@ export default function AttendanceReportsPage() {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
-            <input
-              type="month"
-              className="input w-48"
-              value={selectedMonth}
-              onChange={(e) => setSelectedMonth(e.target.value)}
-            />
+            <DayRangeFilter idPrefix="attendance-report" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
           </div>
         </div>
 
@@ -180,7 +174,7 @@ export default function AttendanceReportsPage() {
             {/* Attendance Report Table */}
             <div className="card overflow-hidden">
               <h2 className="text-lg font-bold text-gray-800 px-4 pt-4 pb-2">
-                تقرير الحضور — {selectedMonth}
+                تقرير الحضور — {rangeTitle}
               </h2>
               <table className="w-full">
                 <thead className="bg-gray-50">
@@ -198,7 +192,7 @@ export default function AttendanceReportsPage() {
                   {filteredData.length === 0 ? (
                     <tr>
                       <td colSpan={10} className="px-4 py-10 text-center text-gray-400">
-                        {searching && attendanceRows.length > 0 ? 'لا يوجد موظفون مطابقون للبحث' : 'لا توجد بيانات حضور لهذا الشهر'}
+                        {searching && attendanceRows.length > 0 ? 'لا يوجد موظفون مطابقون للبحث' : 'لا توجد بيانات حضور في الفترة دي'}
                       </td>
                     </tr>
                   ) : (
@@ -236,7 +230,7 @@ export default function AttendanceReportsPage() {
             {/* Overtime Report Table */}
             <div className="card overflow-hidden">
               <h2 className="text-lg font-bold text-gray-800 px-4 pt-4 pb-2">
-                تقرير الساعات الإضافية — {selectedMonth}
+                تقرير الساعات الإضافية — {rangeTitle}
               </h2>
               <table className="w-full">
                 <thead className="bg-gray-50">
@@ -252,7 +246,7 @@ export default function AttendanceReportsPage() {
                   {filteredOvertime.length === 0 ? (
                     <tr>
                       <td colSpan={5} className="px-4 py-10 text-center text-gray-400">
-                        {searching && overtimeRows.length > 0 ? 'لا يوجد موظفون مطابقون للبحث' : 'لا توجد ساعات إضافية لهذا الشهر'}
+                        {searching && overtimeRows.length > 0 ? 'لا يوجد موظفون مطابقون للبحث' : 'لا توجد ساعات إضافية في الفترة دي'}
                       </td>
                     </tr>
                   ) : (

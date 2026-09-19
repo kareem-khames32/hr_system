@@ -81,10 +81,14 @@ test('إعداد النوع: ANNUAL بالكود قبل أنواع فئة الس
     { id: 1, code: 'ANNUAL', category: 'ANNUAL', balanceType: 'annual', annualDays: '30.00', renewalBasis: 'HIRE_ANNIVERSARY', carryOverEnabled: true, carryOverMaxDays: null },
     { id: 2, code: 'SICK', category: 'SICK', balanceType: 'sick', annualDays: null, renewalBasis: 'YEAR_START', carryOverEnabled: false, carryOverMaxDays: null },
   ]
-  assert.deepEqual(p.balanceTypeSettings(types, 'annual', globals), { annualDays: 30, renewalBasis: 'HIRE_ANNIVERSARY', carryOverEnabled: true, carryOverMaxDays: null })
-  assert.deepEqual(p.balanceTypeSettings(types, 'sick', globals), { annualDays: 180, renewalBasis: 'YEAR_START', carryOverEnabled: false, carryOverMaxDays: null })
+  // بداية الاستحقاق فاضية = الإعداد العام، وأول سنة بالنسبة افتراضيًا (ترحيل 058)
+  const start = { entitlementStartMonths: null, firstYearProrated: true }
+  assert.deepEqual(p.balanceTypeSettings(types, 'annual', globals), { annualDays: 30, renewalBasis: 'HIRE_ANNIVERSARY', carryOverEnabled: true, carryOverMaxDays: null, ...start })
+  assert.deepEqual(p.balanceTypeSettings(types, 'sick', globals), { annualDays: 180, renewalBasis: 'YEAR_START', carryOverEnabled: false, carryOverMaxDays: null, ...start })
   // بلا أنواع: السلوك القديم بالكامل
-  assert.deepEqual(p.balanceTypeSettings([], 'annual', globals), { annualDays: 21, renewalBasis: 'YEAR_START', carryOverEnabled: true, carryOverMaxDays: 10 })
+  assert.deepEqual(p.balanceTypeSettings([], 'annual', globals), { annualDays: 21, renewalBasis: 'YEAR_START', carryOverEnabled: true, carryOverMaxDays: 10, ...start })
+  const withStart = [{ ...types[1], entitlementStartMonths: '6', firstYearProrated: false }]
+  assert.deepEqual([p.balanceTypeSettings(withStart, 'annual', globals).entitlementStartMonths, p.balanceTypeSettings(withStart, 'annual', globals).firstYearProrated], [6, false])
 })
 
 // ===== الخدمة على مستودعات مزيفة =====

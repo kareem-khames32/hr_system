@@ -10,9 +10,38 @@ import { AuthGuard } from '@nestjs/passport'
 import { Reflector } from '@nestjs/core'
 import type { JwtPayload } from './auth.service'
 
+// كلمة مرور مؤقتة: التوكن اللي فيه mustChangePassword مايفتحش غير المسارات المعلَّمة بالديكوريتور ده
+// (تغيير كلمة المرور و«مين أنا»). العلامة جوه التوكن متزامنة مع القاعدة: أي تغيير لـ users.mustChangePassword
+// بيزوّد tokenVersion فيبطل التوكن القديم فورًا (JwtStrategy بيطابق الإصدار كل طلب).
+export const PASSWORD_CHANGE_REQUIRED = 'PASSWORD_CHANGE_REQUIRED'
+const ALLOW_PENDING_PASSWORD_KEY = 'allowPendingPasswordChange'
+export const AllowPendingPasswordChange = () => SetMetadata(ALLOW_PENDING_PASSWORD_KEY, true)
+
 // حارس JWT الافتراضي
 @Injectable()
-export class JwtAuthGuard extends AuthGuard('jwt') {}
+export class JwtAuthGuard extends AuthGuard('jwt') {
+  handleRequest<TUser = JwtPayload>(
+    err: unknown,
+    user: unknown,
+    info: unknown,
+    context: ExecutionContext,
+    status?: unknown
+  ): TUser {
+    const payload = super.handleRequest<TUser>(err, user, info, context, status)
+    if (
+      (payload as JwtPayload | undefined)?.mustChangePassword &&
+      !Reflect.getMetadata(ALLOW_PENDING_PASSWORD_KEY, context.getHandler()) &&
+      !Reflect.getMetadata(ALLOW_PENDING_PASSWORD_KEY, context.getClass())
+    ) {
+      throw new ForbiddenException({
+        statusCode: 403,
+        code: PASSWORD_CHANGE_REQUIRED,
+        message: 'لازم تغيّر كلمة المرور المؤقتة الأول قبل ما تستخدم النظام',
+      })
+    }
+    return payload
+  }
+}
 
 // @CurrentUser() — يحقن حمولة التوكن في المعامل
 export const CurrentUser = createParamDecorator(

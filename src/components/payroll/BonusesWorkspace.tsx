@@ -12,6 +12,8 @@ import {
   type BonusInput, type BonusPreview, type BonusSelection, type BonusSelectionMode, type BonusStatus, type BonusTypeInput, type BonusTypeView, type BonusView,
 } from '@/lib/bonuses-api'
 import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
+import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
+import { dateInRange, localDayOf } from '@/lib/payroll-month-range'
 
 // C4 / الخطوة 27: مساحة المكافآت — القائمة والاعتماد (المدير الأعلى عند التصعيد ثم الموارد البشرية)، والاقتراح لموظف واحد
 // أو اختيار أو فريق أو قسم أو فرع بمعاينة أرقام حقيقية واستبعاد، وكتالوج الأنواع. الخادم يعيد فحص النطاق والسقف والتكرار
@@ -113,7 +115,11 @@ function BonusList({ rows, loading, filters, setFilters, reload, currency, reaso
     if (!focusRequestId) return
     fetchBonus(focusRequestId).then(view => { setFocused(view); setExpanded(view.id); setDetail(view) }).catch(error => setNotice(errorText(error, 'تعذر فتح طلب المكافأة المطلوب')))
   }, [focusRequestId])
-  const shown = focused && !rows.some(row => row.id === focused.id) ? [focused, ...rows] : rows
+  // فلتر «من تاريخ / إلى تاريخ» على تاريخ الطلب — الافتراضي شهر الرواتب الجاري؛ الطلب المفتوح من رابط يظهر دايمًا
+  const { range, setRange, context } = usePayrollDayRange()
+  const rangeRows = range ? rows.filter(row => dateInRange(localDayOf(row.createdAt), range)) : rows
+  const outsideRange = rows.length - rangeRows.length
+  const shown = focused && !rangeRows.some(row => row.id === focused.id) ? [focused, ...rangeRows] : rangeRows
 
   const toggle = (row: BonusView) => {
     if (expanded === row.id) { setExpanded(null); setDetail(null); return }
@@ -167,9 +173,11 @@ function BonusList({ rows, loading, filters, setFilters, reload, currency, reaso
         <label className="text-sm text-gray-600">شهر المسير المستهدف
           <input type="month" className="input mt-1" dir="ltr" value={filters.targetPeriod} onChange={event => setFilters(value => ({ ...value, targetPeriod: event.target.value }))} />
         </label>
+        <DayRangeFilter idPrefix="bonuses" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
         <button type="button" className="btn-secondary flex items-center gap-1" onClick={reload}><RefreshCw size={16} />تحديث</button>
         <button type="button" className="btn-secondary flex items-center gap-1 disabled:opacity-50" onClick={exportCsv} disabled={loading || shown.length === 0}><Download size={16} />تصدير CSV</button>
       </div>
+      {outsideRange > 0 && <p className="text-xs text-gray-500" data-outside-range>فيه {outsideRange} طلب تاريخه برا الفترة المختارة — غيّر «من تاريخ» أو «إلى تاريخ» عشان تشوفهم.</p>}
       {notice && <div role="status" className="bg-primary-50 text-primary-700 rounded-xl p-3 text-sm flex items-center justify-between">{notice}<button type="button" aria-label="إغلاق" onClick={() => setNotice('')}><X size={14} /></button></div>}
       {loading ? (
         <div className="flex items-center justify-center py-10"><div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>

@@ -11,7 +11,7 @@ import {
   AlertCircle,
   Clock,
 } from 'lucide-react'
-import { login, saveSession, ApiError } from '@/lib/api'
+import { login, saveSession, ApiError, CHANGE_PASSWORD_PATH } from '@/lib/api'
 
 export default function LoginPage() {
   const [email, setEmail] = useState('')
@@ -39,7 +39,8 @@ export default function LoginPage() {
     try {
       const { accessToken, user } = await login(email, password)
       saveSession(accessToken, user, rememberMe)
-      window.location.href = '/'
+      // كلمة مؤقتة من المدير → لازم يغيّرها الأول قبل ما يدخل النظام
+      window.location.href = user.mustChangePassword ? CHANGE_PASSWORD_PATH : '/'
     } catch (err) {
       setError(
         err instanceof ApiError

@@ -473,6 +473,8 @@ export default function LeaveBalancesPage() {
                                 </p>
                                 <p className="text-xs text-success-600 mt-1">
                                   {Number(annual.opening.available)} مُرحّل ساري + {Number(annual.entitled)} متراكم + {Number(annual.adjustmentDays ?? 0)} تعديل − {Number(annual.entitledTaken)} مستهلك من الاستحقاق
+                                  {/* أيام اتسوّت من «إقفال سنة الإجازات» (بدل أو تصفير) */}
+                                  {Number((annual as { settledDays?: number }).settledDays ?? 0) > 0 && ` − ${Number((annual as { settledDays?: number }).settledDays)} اتسوّى`}
                                 </p>
                               </div>
                             </div>

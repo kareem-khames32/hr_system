@@ -11,7 +11,10 @@ import {
   Printer,
   RefreshCw,
 } from 'lucide-react'
-import type { ApiBranch, ApiDepartment } from '@/lib/api'
+import { can, type ApiBranch, type ApiDepartment } from '@/lib/api'
+import { FinancialReportLinks } from '@/app/reports/_financial/links'
+import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
+import { payrollMonthBounds, periodOverlapsRange } from '@/lib/payroll-month-range'
 import { downloadCsv } from '@/lib/csv'
 import { useCurrency } from '@/lib/currency'
 import {
@@ -160,7 +163,15 @@ function RunsTab() {
   useEffect(load, [])
   // تبسيط الرواتب (2026-09-15): مسيرات عكس الصرف والتكميلي لا تظهر في التقرير ولا تدخل مجاميعه ولا ملف التصدير
   const runs = (report?.runs ?? []).filter((run) => run.runType !== 'REVERSAL' && run.runType !== 'SUPPLEMENTARY')
-  const active = runs.filter((run) => run.status !== 'CANCELLED')
+  // «من تاريخ / إلى تاريخ»: المسيرات اللي فترتها بتتقاطع مع المدى — الافتراضي شهر الرواتب الجاري
+  const { range, setRange, context } = usePayrollDayRange()
+  const shownRuns = range ? runs.filter((run) => periodOverlapsRange(run.startDate, run.endDate, range)) : runs
+  const periodRows = (report?.deductions ?? []).filter((row) => {
+    if (!range || !context || !/^\d{4}-(0[1-9]|1[0-2])$/.test(row.period)) return true
+    const bounds = payrollMonthBounds(row.period, context.cycleStartDay)
+    return periodOverlapsRange(bounds.from, bounds.to, range)
+  })
+  const active = shownRuns.filter((run) => run.status !== 'CANCELLED')
   const totalNet = sumReportMoney(active.map((run) => run.totalNet))
   return (
     <div className="space-y-6">
@@ -168,15 +179,18 @@ function RunsTab() {
         <p className="text-sm text-gray-500">كل المسيرات بما فيها مسيرات القسم والفريق والقائمة المخصّصة التي لا ترتبط بفرع. الملغى يظهر ولا يدخل المجاميع.</p>
         <div className="flex items-center gap-2">
           <button type="button" onClick={load} className="btn-secondary flex items-center gap-2"><RefreshCw size={18} />تحديث</button>
-          <ExportButton table={report ? runsReportCsv({ ...report, runs }) : null} file={reportFileName('runs')} />
+          <ExportButton table={report ? runsReportCsv({ ...report, runs: shownRuns }) : null} file={reportFileName('runs')} />
         </div>
+      </div>
+      <div className="card">
+        <DayRangeFilter idPrefix="payroll-runs-report" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
       </div>
       {error && <ErrorBanner message={error} />}
       {loading ? <Spinner /> : report && (
         <>
           <div className="grid grid-cols-2 gap-4">
             <Stat label={`صافي المسيرات غير الملغاة (${currency})`} value={formatReportMoney(totalNet)} />
-            <Stat label="عدد المسيرات" value={runs.length} />
+            <Stat label="عدد المسيرات" value={shownRuns.length} />
           </div>
           <div className="card overflow-x-auto">
             <h2 className="text-lg font-bold text-gray-800 mb-4">مسيرات الرواتب</h2>
@@ -185,7 +199,7 @@ function RunsTab() {
                 <tr><Th>الاسم</Th><Th>الفترة</Th><Th>النطاق</Th><Th center>الحالة</Th><Th center>الموظفون</Th><Th center>المستبعدون</Th><Th center>صافي الإجمالي</Th></tr>
               </thead>
               <tbody className="divide-y divide-gray-100">
-                {runs.map((run) => (
+                {shownRuns.map((run) => (
                   <tr key={run.id} className="hover:bg-gray-50">
                     <td className="px-4 py-3 font-medium text-gray-800">{run.name ?? `مسير ${run.period}`}</td>
                     <td className="px-4 py-3 text-gray-600">
@@ -199,7 +213,7 @@ function RunsTab() {
                     <td className="px-4 py-3 text-center font-bold text-gray-800" dir="ltr">{formatReportMoney(run.totalNet)}</td>
                   </tr>
                 ))}
-                {runs.length === 0 && <EmptyRow colSpan={8} text="لا توجد مسيرات رواتب بعد" />}
+                {shownRuns.length === 0 && <EmptyRow colSpan={8} text={runs.length === 0 ? 'لا توجد مسيرات رواتب بعد' : 'لا توجد مسيرات في الفترة المختارة'} />}
               </tbody>
             </table>
           </div>
@@ -223,7 +237,7 @@ function RunsTab() {
                   <tr><Th>الفترة</Th><Th center>الأساسي والبدلات</Th><Th center>الإضافي</Th><Th center>التأخير والنقص</Th><Th center>الغياب</Th><Th center>بدون راتب</Th><Th center>السلف</Th><Th center>خصومات أخرى</Th><Th center>الصافي</Th></tr>
                 </thead>
                 <tbody className="divide-y divide-gray-100">
-                  {report.deductions.map((row) => (
+                  {periodRows.map((row) => (
                     <tr key={row.period}>
                       <td className="px-4 py-3 font-medium">{row.period}</td>
                       <td className="px-4 py-3 text-center" dir="ltr">{formatReportMoney(row.basic)} + {formatReportMoney(row.allowances)}</td>
@@ -236,7 +250,7 @@ function RunsTab() {
                       <td className="px-4 py-3 text-center font-bold" dir="ltr">{formatReportMoney(row.net)}</td>
                     </tr>
                   ))}
-                  {report.deductions.length === 0 && <EmptyRow colSpan={9} text="لا توجد بيانات" />}
+                  {periodRows.length === 0 && <EmptyRow colSpan={9} text="لا توجد بيانات" />}
                 </tbody>
               </table>
             </div>
@@ -710,6 +724,9 @@ export default function PayrollReportsPage() {
   // تبسيط الرواتب (2026-09-15): تبويب المسيرات وحده، وأي ?tab في الرابط يفتح المسيرات.
   // الوصف تحت العنوان كان يعدّد التبويبات المخفية فأُخفي معها.
   const [tab, setTab] = useState<Tab>('runs')
+  // التقارير المالية للشهر (كشف الرواتب، التكلفة، الخصومات، السلف، الإضافي، مراكز التكلفة) محتاجة صلاحية التقارير كمان
+  const [canReports, setCanReports] = useState(false)
+  useEffect(() => { setCanReports(can('reports.view')) }, [])
 
   return (
     <MainLayout>
@@ -723,6 +740,8 @@ export default function PayrollReportsPage() {
             طباعة
           </button>
         </div>
+
+        {canReports && <FinancialReportLinks title="التقارير المالية للشهر" />}
 
         <div className="card p-2">
           <div className="flex flex-wrap items-center gap-2">

@@ -76,6 +76,14 @@ export class LeaveType {
   @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
   carryOverMaxDays: number | null
 
+  // السنوية للموظف الجديد: الرصيد يبدأ بعد كام شهر من التعيين (0 = من يوم التعيين، فاضي = الإعداد
+  // العام leave.probation_months)، وأول سنة يستحق فيها بالنسبة والتناسب ولا كاملة (ترحيل 058)
+  @Column({ type: 'int', nullable: true })
+  entitlementStartMonths: number | null
+
+  @Column({ default: true })
+  firstYearProrated: boolean
+
   // المناسبة: أيام ثابتة للمرة، وأقصى مرات في السنة (مرة طول الخدمة = oncePerService)
   @Column({ type: 'decimal', precision: 6, scale: 2, nullable: true })
   fixedDays: number | null
@@ -220,6 +228,11 @@ export class LeaveBalance {
   // تعديل إداري مستقل عن السياسة والإجازات المستهلكة، موثق في سجل منفصل.
   @Column({ type: 'decimal', precision: 8, scale: 2, default: 0 })
   adjustmentDays: number
+
+  // أيام اتسوّت من شاشة إقفال سنة الإجازات (اتصرفت بدل أو اتصفّرت) — بتنقص من المتبقي،
+  // وسجلها في leave_balance_settlements (ترحيل 058)
+  @Column({ type: 'decimal', precision: 8, scale: 2, default: 0 })
+  settledDays: number
 }
 
 @Entity('leave_balance_adjustments')

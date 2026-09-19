@@ -7,6 +7,7 @@ import { readApprovedLoanRequest, readEarlySettlementPayload } from '../loans/lo
 import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { LOAN_DEFERRAL_HANDLER, LOAN_DEFERRAL_TYPE, assertLoanReferenceId, loanScheduleAmounts, readStoredLoanDeferralPayload } from './loan-installment-requests'
 import { claimOvertimeDay } from './overtime-day-claims'
+import { recordHolidayWorkRequest } from '../attendance/holiday-work'
 import {
   EntityManager,
   In,
@@ -410,6 +411,14 @@ export class DestinationsService {
   // الإدخال الموجود (BIOMETRIC_DETECTED) يُعتمد بالساعات الفعلية
   private overtimeAutoHandler: Handler = async (em, req, _type, payload) => {
     return this.overtimeHandler(em, req, _type, payload)
+  }
+
+  // «دوام يوم عطلة» المعتمد: الأيام تتسجل كأمر لصاحب الطلب (مضاعف الإعداد وقت الاعتماد)، والحساب نفسه
+  // من البصمة في مسير الفترة كـ«بدل دوام أيام العطلات» — نفس حساب أوامر الموارد البشرية بالظبط
+  private holidayWorkHandler: Handler = async (em, req, _t, payload) => {
+    const grant = await recordHolidayWorkRequest(em, req, payload)
+    return { ref: refOf('HW', grant.id), completed: true,
+      note: `${grant.dates.length} يوم عطلة معتمد — ساعاته بتتحسب من البصمة في المسير كبدل دوام أيام العطلات` }
   }
 
   private punchCorrectionHandler: Handler = async (em, req, _t, payload) => {
@@ -977,6 +986,7 @@ export class DestinationsService {
     overtime_entries: this.overtimeHandler,
     overtime_auto: this.overtimeAutoHandler,
     attendance_corrections: this.punchCorrectionHandler,
+    holiday_work: this.holidayWorkHandler,
     // مالية
     loans_installments: this.loanHandler,
     loan_early_settlement: this.loanHandler,

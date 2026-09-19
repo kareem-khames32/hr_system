@@ -60,6 +60,7 @@ import { overtimeEvidenceFingerprint, overtimeMinutes, overtimeSubmissionBlocker
 import type { OvertimeEvidence, OvertimeEvidencePolicy, OvertimeBlocker } from './overtime-evidence'
 import { appendOvertimeEvent, assertOvertimeDayAvailable, claimOvertimeDay, describeOvertimeSubmission, findActiveOvertimeEntries, releaseOvertimeDayClaim } from '../requests/overtime-day-claims'
 import { queueOvertimeDispatch } from '../requests/overtime-dispatch'
+import { holidayWorkCoversDay } from './holiday-work'
 import { createCalendarResolverCache, resolveBranchCalendarDay, resolveEmployeeCalendarDay, resolveGlobalCalendarDay } from './attendance-calendar-resolver'
 import type { CalendarResolverCache, ResolvedCalendarDay } from './attendance-calendar-resolver'
 import { assertCalendarScope, beginCalendarChange, calendarSourceContext, confirmCalendarSource, finishCalendarChange } from './attendance-calendar-history'
@@ -781,7 +782,9 @@ export class AttendanceService {
   }
 
   // شهر YYYY-MM (الافتراضي: الشهر الجاري محلياً) → أول وآخر يوم
-  private monthRange(month?: string): { month: string; from: string; to: string } {
+  // مدى صريح باليوم (from/to متحقق منه في الكنترولر) يغلب الشهر
+  private monthRange(month?: string, range?: { from: string; to: string }): { month: string; from: string; to: string } {
+    if (range) return { month: range.from.slice(0, 7), from: range.from, to: range.to }
     const m = month || localDateOf(new Date()).slice(0, 7)
     const [yy, mm] = m.split('-').map(Number)
     if (!/^\d{4}-\d{2}$/.test(m) || mm < 1 || mm > 12) {
@@ -795,12 +798,12 @@ export class AttendanceService {
   // بصمات شهر بمصدرها (MANUAL افتراضياً) بنطاق الفرع: من أدخلها ولماذا وحالة يوم
   // الحضور الذي طُبّقت عليه — الشاشة كانت تحفظ القائمة في الجلسة فقط بحالة «معتمد»
   // ثابتة. اليدوية تُطبَّق فوراً (لا مسار اعتماد لها)، فحالتها الحقيقية حالة يومها
-  async listPunches(user: JwtPayload, q: { source?: string; month?: string }) {
+  async listPunches(user: JwtPayload, q: { source?: string; month?: string; from?: string; to?: string }) {
     const source = String(q.source || 'MANUAL').toUpperCase() as PunchSource
     if (source !== 'MANUAL' && source !== 'DEVICE') {
       throw new BadRequestException('المصدر (source): MANUAL أو DEVICE')
     }
-    const { from, to } = this.monthRange(q.month)
+    const { from, to } = this.monthRange(q.month, q.from && q.to ? { from: q.from, to: q.to } : undefined)
     const qb = this.punches
       .createQueryBuilder('p')
       .where('p.source = :source', { source })
@@ -2609,7 +2612,11 @@ export class AttendanceService {
       if (!isFuture) await this.clearStaleOvertime(employeeId, date, 'مقادير الحضور تحتاج مراجعة قبل كشف إضافي')
     } else if (checkIn && checkOut && !(isFullLeaveDay && !isHoliday) && !isFuture) {
       // نوع اليوم من تقويمه؛ أدلة الإضافي تفحص تعارض الإجازة بصورة مستقلة.
-      await this.detectOvertime(emp, date)
+      // يوم العطلة المغطى بأمر/طلب «دوام يوم عطلة» بيتحسب «بدل دوام أيام العطلات» في المسير، مش إضافي مكتشف
+      if (isHoliday && await holidayWorkCoversDay(this.days.manager,
+        { employeeId: emp.id, branchId: emp.branchId ?? null, departmentId: emp.departmentId ?? null, teamId: emp.teamId ?? null }, date)) {
+        await this.clearStaleOvertime(employeeId, date, 'اليوم عليه أمر دوام يوم عطلة — بيتحسب بدل دوام أيام العطلات مش إضافي')
+      } else await this.detectOvertime(emp, date)
     } else if (!isFuture) {
       // الكشف لا ينطبق الآن (بصمة طرف واحد/بلا بصمة، أو إجازة كاملة): قيد مكتشف من
       // حساب سابق لليوم لم يعد مبرَّراً — يُزال ولا يُوجَّه طلباً
@@ -3471,8 +3478,9 @@ export class AttendanceService {
     return out
   }
 
-  async monthly(user: JwtPayload, employeeId: number, month: string) {
-    if (!/^\d{4}-\d{2}$/.test(month)) {
+  // الكشف لشهر (YYYY-MM) أو لمدى باليوم (شهر الرواتب 23 → 22 مثلًا؛ متحقق منه في الكنترولر)
+  async monthly(user: JwtPayload, employeeId: number, month: string, dayRange?: { from: string; to: string }) {
+    if (!dayRange && !/^\d{4}-\d{2}$/.test(month)) {
       throw new BadRequestException('صيغة الشهر YYYY-MM')
     }
     const emp = await this.employees.findOne({ where: { id: employeeId } })
@@ -3489,23 +3497,21 @@ export class AttendanceService {
       }
     }
     // صفوف الشهر فقط من قاعدة البيانات (لا تحميل كل تاريخ الموظف وفلترته هنا)
-    const [yy, mm] = month.split('-').map(Number)
-    if (mm < 1 || mm > 12) throw new BadRequestException('صيغة الشهر YYYY-MM')
-    const lastDay = String(new Date(yy, mm, 0).getDate()).padStart(2, '0')
+    const { from: rangeFrom, to: rangeTo } = this.monthRange(month, dayRange)
     // غياب أقدم من نافذة اللحاق الليلية لا يجسّده أحد، فيظهر الشهر «بلا غياب» حتى
     // يُحسب المسير — يُجسَّد هنا لهذا الموظف وحده (أفضل جهد) لمن يملك إدارة الحضور
     // وحده: عرض الكشف لا يكتب صفوفاً تدخل حساب الراتب بيد من لا يملك الصلاحية
     if (userHasPerm(user, 'attendance.manage')) {
-      await this.catchUpEmployeeAbsences(employeeId, `${month}-01`, `${month}-${lastDay}`)
+      await this.catchUpEmployeeAbsences(employeeId, rangeFrom, rangeTo)
     }
     const monthRows = await this.withDerivedSource(
       await this.projectExemptionDays(await this.days.find({
         where: {
           employeeId,
-          date: Between(`${month}-01`, `${month}-${lastDay}`),
+          date: Between(rangeFrom, rangeTo),
         } as any,
         order: { date: 'ASC' },
-      }), [emp], `${month}-01`, `${month}-${lastDay}`)
+      }), [emp], rangeFrom, rangeTo)
     )
     const count = (s: AttendanceStatus) =>
       monthRows.filter((r) => r.status === s).length
@@ -3516,7 +3522,9 @@ export class AttendanceService {
     const attended = measured.filter(row => ['present', 'late', 'early_leave', 'partial_leave', 'mission', 'remote'].includes(row.status)).length
     return {
       employeeId,
-      month,
+      month: month || rangeFrom.slice(0, 7),
+      from: rangeFrom,
+      to: rangeTo,
       days: monthRows,
       summary: {
         present: count('present'),
@@ -3597,8 +3605,8 @@ export class AttendanceService {
   // ===== سجل الأوفرتايم الشهري (شاشة الأوفرتايم) =====
   // كل حالات الشهر (مكتشف/مقدَّم/معتمد/مدفوع/مرفوض) بنطاق الفرع مع حالة الطلب المرتبط
   // الاعتماد من الطلب المرتبط دائمًا. رفض المكتشف غير الموجه يتطلب صلاحية وسببًا.
-  async overtimeLog(user: JwtPayload, month?: string) {
-    const range = this.monthRange(month)
+  async overtimeLog(user: JwtPayload, month?: string, dayRange?: { from: string; to: string }) {
+    const range = this.monthRange(month, dayRange)
     const all = await this.overtime.find({
       where: { date: Between(range.from, range.to) },
       order: { date: 'DESC', id: 'DESC' },
@@ -3622,6 +3630,8 @@ export class AttendanceService {
     const requiresConfirmation = true
     return {
       month: range.month,
+      from: range.from,
+      to: range.to,
       requiresConfirmation,
       entries: rows.map((r) => {
         const emp = empById.get(r.employeeId)

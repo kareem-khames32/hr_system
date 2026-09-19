@@ -72,6 +72,8 @@ import { capturePayrollRunPolicySnapshot, diffPayrollRunPolicySnapshots, parsePa
 import { payrollLatenessTierDeduction } from './payroll-lateness-tiers'
 // «شيل خصم» لشهر على شركة/فرع/أقسام/فرق/موظفين — يتطبق على المسودة والمحسوب بس عند الحساب
 import { readActiveDeductionWaivers, waiveAttendanceDeductionDay, waivedDeductionKinds, waivePolicyShadowTotals, withoutWaivedObligations } from './payroll-deduction-waivers'
+// بدل دوام أيام العطلات (أوامر الموارد البشرية + طلبات «دوام يوم عطلة» المعتمدة) → قيد «بدل» في الدفتر عند الحساب
+import { syncHolidayWorkPayroll } from '../attendance/holiday-work'
 import { computePayrollPolicyEnginePreNet, parsePayrollEngineParityReport, PAYROLL_DEFAULT_ENGINE_MODE, PAYROLL_ENGINE_MODE_LABELS, PAYROLL_ENGINE_MODES, PAYROLL_PARITY_COMPONENTS,
   payrollParityDifferenceKey, payrollParityEmployeeRow, payrollPolicySwitchIssues, summarizePayrollEngineParity, type PayrollEngineMode, type PayrollParityEmployeeRow,
   payrollApprovalParityIssues, payrollParityPendingGroups, payrollShadowSourceIssueCodes, payrollPolicyEngineWithLoans, type PayrollPolicyEngineFacts } from './payroll-policy-engine-run'
@@ -852,6 +854,12 @@ export class PayrollService {
       // المستهدف لا يتجاوز شهر المسير — DD-07) وغير محجوزة لمسير معتمد آخر (DD-09) — DEBIT خصم،
       // CREDIT إضافة. تُحجز عند الاعتماد وتُستهلك عند الصرف. DD-11 (C2): حماية الصافي لكل الخصومات:
       // فائض الحضور يسقط، وفائض القيود يُرحّل عند الصرف، والأقساط بعدها من الباقي.
+      // 5أ) بدل دوام أيام العطلات: أوامر الموارد البشرية وطلبات «دوام يوم عطلة» المعتمدة في أيام تغطية الموظف → قيد «بدل» CREDIT
+      // (ساعات البصمة × سعر الساعة بنفس أساس الإضافي × المضاعف، مقصوص لقرشين) يُقرأ تحت مع باقي القيود؛ المحجوز لمسير معتمد والمصروف ما يتلمسش.
+      const holidayWork = await syncHolidayWorkPayroll(em, { employeeId: emp.id,
+        org: { employeeId: emp.id, branchId: org.branchId ?? null, departmentId: org.departmentId ?? null, teamId: org.teamId ?? null },
+        from: coverFrom, to: coverTo, period: run.period, basis: { grossMonthly: gross, monthlyDays, dailyHours },
+        skipDates: suspendedDates, actorUserId: user.sub ?? null })
       const obligationRunId = run.id, obligationRunPeriod = run.period
       // «شيل خصم»: القيد المشال (مسجل/تأمينات/أخرى) ما يدخلش المسير ده ويفضل في الدفتر؛ الإضافات ما بتتشالش
       const pendingObligations = withoutWaivedObligations((
@@ -1076,6 +1084,8 @@ export class PayrollService {
             leaveDeductionLines: leaveLines.lines,
             // التأمينات الاجتماعية: النظام والفئة والأجر التأميني بعد الحدود والنسب وحصتا الموظف وصاحب العمل (kind = SOCIAL_INSURANCE)
             socialInsurance,
+            // بدل دوام أيام العطلات: لكل يوم مغطى — الأمر/الطلب والساعات والمبلغ وقيده في الدفتر، أو سبب عدم احتسابه
+            ...(holidayWork.lines.length ? { holidayWork } : {}),
           }),
         })
       )

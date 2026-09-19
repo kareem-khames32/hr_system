@@ -25,7 +25,6 @@ import {
   Building2,
 } from 'lucide-react'
 import {
-  fetchOvertimeLog,
   confirmOvertime,
   fetchDepartments,
   fetchBranches,
@@ -44,7 +43,10 @@ import {
   type ApiOvertimePeriodRecompute,
 } from '@/lib/api'
 import { OrgTargetPicker, describeOrgTarget, initialOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
-import { localMonth, localToday } from '@/lib/dates'
+import { localToday } from '@/lib/dates'
+import { fetchOvertimeLogRange } from '@/lib/attendance-range-api'
+import { dayRangeError, dayRangeLabel, type DayRange } from '@/lib/payroll-month-range'
+import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { formatMoney } from '@/lib/money'
 import { statusLabels as requestStatusLabels, type RequestStatus } from '@/data/requestsCatalog'
 
@@ -52,7 +54,7 @@ import { statusLabels as requestStatusLabels, type RequestStatus } from '@/data/
 // البصمة دليل للمراجعة؛ الساعات والقيمة تثبتان عند اكتمال دورة الاعتماد.
 // المستثنى المستحق يستخدم ساعات صريحة معتمدة بدل استنتاجها من البصمة.
 // دورة حياة السطر: DETECTED → SUBMITTED → APPROVED → PAID
-// القائمة هنا من السيرفر: /attendance/overtime?month= — كل حالات الشهر
+// القائمة هنا من السيرفر: /attendance/overtime?from=&to= — كل حالات الفترة (الافتراضي شهر الرواتب)
 // وحالة الطلب المرتبط (المكتشف يوجّهه الـcron لسلسلة الاعتماد فيصير SUBMITTED)
 // ============================================================
 
@@ -121,7 +123,8 @@ const requestStatusLabel = (s: string) => requestStatusLabels[s as RequestStatus
 const round2 = (n: number) => Math.round(n * 100) / 100
 
 export default function OvertimePage() {
-  const [month, setMonth] = useState(localMonth())
+  // الفترة باليوم — الافتراضي شهر الرواتب الجاري (مثلًا 23 → 22)
+  const { range, setRange, context } = usePayrollDayRange()
   const [rows, setRows] = useState<ApiOvertimeEntry[]>([])
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [loading, setLoading] = useState(true)
@@ -139,11 +142,12 @@ export default function OvertimePage() {
   useEffect(() => { setCanManagePeriods(can('attendance.manage')) }, [])
 
   // سجل الشهر من السيرفر (كل الحالات) + قيمة الإعداد الحيّة
-  const load = async (m: string) => {
+  const load = async (r: DayRange | null) => {
+    if (!r || dayRangeError(r)) return
     setLoading(true)
     setError('')
     try {
-      const log = await fetchOvertimeLog(m)
+      const log = await fetchOvertimeLogRange(r)
       setRows(log.entries)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'تعذر تحميل سجل الأوفرتايم')
@@ -160,8 +164,8 @@ export default function OvertimePage() {
   }, [])
 
   useEffect(() => {
-    load(month)
-  }, [month])
+    load(range)
+  }, [range])
 
   const entries: OvertimeEntry[] = useMemo(() => {
     const depById = new Map(departments.map((d) => [d.id, d]))
@@ -230,7 +234,7 @@ export default function OvertimePage() {
     try {
       await confirmOvertime(id, false, reason)
       setRejectEntry(null)
-      await load(month)
+      await load(range)
       setNotice('تم رفض الإضافي وحفظ السبب')
     } catch (e) {
       setRejectError(e instanceof Error ? e.message : 'تعذر رفض الإضافي')
@@ -317,7 +321,7 @@ export default function OvertimePage() {
               <Wallet size={24} className="text-success-500" />
             </div>
             <div>
-              <p className="text-sm text-gray-500">ساعات مدفوعة (هذا الشهر)</p>
+              <p className="text-sm text-gray-500">ساعات مدفوعة (في الفترة)</p>
               <p className="text-2xl font-bold text-success-600">{stats.paidHours}</p>
             </div>
           </div>
@@ -325,8 +329,8 @@ export default function OvertimePage() {
 
         {/* التصفية */}
         <div className="card p-4">
-          <div className="flex items-center gap-3">
-            <div className="relative flex-1">
+          <div className="flex flex-wrap items-end gap-3">
+            <div className="relative flex-1 min-w-[16rem]">
               <Search
                 size={18}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
@@ -339,13 +343,7 @@ export default function OvertimePage() {
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
-            <input
-              type="month"
-              value={month}
-              onChange={(e) => e.target.value && setMonth(e.target.value)}
-              className="input w-44"
-              title="شهر السجل"
-            />
+            <DayRangeFilter idPrefix="overtime" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
             <select
               value={filterSource}
               onChange={(e) => setFilterSource(e.target.value as '' | OvertimeSource)}
@@ -398,7 +396,7 @@ export default function OvertimePage() {
                   <tr>
                     <td colSpan={10} className="text-center py-10 text-gray-400">
                       {entries.length === 0
-                        ? `لا يوجد أوفرتايم مسجَّل في ${month}`
+                        ? `لا يوجد أوفرتايم مسجَّل في الفترة ${range ? dayRangeLabel(range) : ''}`
                         : 'لا توجد سطور مطابقة للبحث أو التصفية'}
                     </td>
                   </tr>
@@ -521,10 +519,10 @@ export default function OvertimePage() {
         </div>
 
         {/* قاعدة الحساب وشرط الاستحقاق (قاعدة المالك 17 سبتمبر) */}
-        <OvertimeRuleSection onChanged={() => load(month)} />
+        <OvertimeRuleSection onChanged={() => load(range)} />
 
         {/* فترات فتح وقفل الإضافي — كانت في الإعدادات ← أيام العمل */}
-        {canManagePeriods && <OvertimePeriodsSection onChanged={() => load(month)} />}
+        {canManagePeriods && <OvertimePeriodsSection onChanged={() => load(range)} />}
       </div>
       {rejectEntry && (
         <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">

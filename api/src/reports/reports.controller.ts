@@ -3,6 +3,7 @@ import { ModuleRef } from '@nestjs/core'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 import { localDateOf } from '../attendance/attendance.service'
+import { reportDayRange } from '../attendance/attendance-report-range'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import {
@@ -13,7 +14,6 @@ import {
   PayrollLoansReportQuery, PayrollOvertimeReportQuery, PayrollReportFiltersQuery, PayrollUnassignedReportQuery, PayrollVarianceReportQuery,
 } from './payroll-reports.dto'
 
-const MONTH_RE = /^\d{4}-\d{2}$/
 const YEAR_RE = /^\d{4}$/
 
 // التقارير المجمعة — استعلامات حقيقية بنطاق الفرع
@@ -85,11 +85,13 @@ export class ReportsController {
   @Get('attendance')
   async attendance(
     @CurrentUser() user: JwtPayload,
-    @Query('month') month: string
+    @Query('month') month?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string
   ) {
-    if (!MONTH_RE.test(month ?? '')) {
-      throw new BadRequestException('الشهر بصيغة YYYY-MM')
-    }
+    // «من تاريخ / إلى تاريخ» باليوم (شهر الرواتب 23 → 22 مثلًا)، أو الشهر للتوافق
+    const range = reportDayRange({ month, from, to })
+    if (!range) throw new BadRequestException('حدد «من تاريخ» و«إلى تاريخ» أو الشهر بصيغة YYYY-MM')
     const s = this.scopeSql(user, 'a.branchId')
     return this.ds.query(
       `SELECT a.employeeId, e.fullName, e.employeeCode,
@@ -103,9 +105,10 @@ export class ReportsController {
               SUM(a.lateMinutes) AS totalLateMinutes,
               SUM(a.workMinutes) AS totalWorkMinutes
        FROM attendance_days a JOIN employees e ON e.id = a.employeeId
-       WHERE a.date LIKE '${month}%' ${s}
+       WHERE a.date BETWEEN @0 AND @1 ${s}
        GROUP BY a.employeeId, e.fullName, e.employeeCode
-       ORDER BY e.employeeCode`
+       ORDER BY e.employeeCode`,
+      [range.from, range.to]
     )
   }
 
@@ -185,11 +188,12 @@ export class ReportsController {
   @Get('overtime')
   async overtime(
     @CurrentUser() user: JwtPayload,
-    @Query('month') month: string
+    @Query('month') month?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string
   ) {
-    if (!MONTH_RE.test(month ?? '')) {
-      throw new BadRequestException('الشهر بصيغة YYYY-MM')
-    }
+    const range = reportDayRange({ month, from, to })
+    if (!range) throw new BadRequestException('حدد «من تاريخ» و«إلى تاريخ» أو الشهر بصيغة YYYY-MM')
     const scope = branchScopeOf(user)
     const empFilter =
       scope !== null
@@ -205,9 +209,10 @@ export class ReportsController {
               SUM(o.hoursActual) AS actualHours,
               SUM(o.payableHours) AS payableHours${amount}
        FROM overtime_entries o JOIN employees e ON e.id = o.employeeId
-       WHERE o.date LIKE '${month}%' ${empFilter}
+       WHERE o.date BETWEEN @0 AND @1 ${empFilter}
        GROUP BY o.employeeId, e.fullName, o.status
-       ORDER BY e.fullName`
+       ORDER BY e.fullName`,
+      [range.from, range.to]
     )
   }
 

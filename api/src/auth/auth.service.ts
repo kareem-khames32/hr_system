@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Injectable,
   UnauthorizedException,
 } from '@nestjs/common'
@@ -21,6 +22,8 @@ export interface JwtPayload {
   permissions?: string[]
   // إصدار التوكن وقت الإصدار — يُطابَق مع users.tokenVersion لإبطاله فوراً
   tokenVersion?: number
+  // كلمة مرور مؤقتة: التوكن مايفتحش غير «غيّر كلمة المرور» (JwtAuthGuard)
+  mustChangePassword?: boolean
 }
 
 @Injectable()
@@ -84,22 +87,66 @@ export class AuthService {
     return effectivePermissions(rolePerms, grants, revokes)
   }
 
+  // الحساب بعمودي كلمة المرور المؤقتة (select: false في الكيان — بيتقروا هنا صراحةً)
+  private withPasswordState() {
+    return this.users
+      .createQueryBuilder('u')
+      .addSelect(['u.mustChangePassword', 'u.passwordChangedAt'])
+  }
+
   async login(email: string, password: string) {
-    const user = await this.users.findOne({
-      where: { email: email.toLowerCase().trim() },
-    })
+    const user = await this.withPasswordState()
+      .where('u.email = :email', { email: email.toLowerCase().trim() })
+      .getOne()
     if (!user || !user.isActive) {
       throw new UnauthorizedException('بيانات الدخول غير صحيحة')
     }
+    // الحسابات المنقولة من القديم: hash لسر عشوائي محدش يعرفه → المقارنة بتفشل دايمًا لحد ما المدير يعيّن كلمة
     const ok = await bcrypt.compare(password, user.passwordHash)
     if (!ok) {
       throw new UnauthorizedException('بيانات الدخول غير صحيحة')
     }
 
-    user.lastLoginAt = new Date()
-    await this.users.save(user)
+    await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
+    return this.issueSession(user)
+  }
 
+  // تغيير كلمة المرور من صاحب الحساب — الطريق الوحيد المفتوح لتوكن «لازم يغيّر» (غير «مين أنا»)
+  async changePassword(userId: number, currentPassword: string, newPassword: string) {
+    const user = await this.withPasswordState().where('u.id = :id', { id: userId }).getOne()
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('الحساب معطّل')
+    }
+    // 400 مش 401: الواجهة بتعتبر 401 انتهاء جلسة وبتطلّع المستخدم
+    if (!(await bcrypt.compare(currentPassword, user.passwordHash))) {
+      throw new BadRequestException('كلمة المرور الحالية مش صح')
+    }
+    if (await bcrypt.compare(newPassword, user.passwordHash)) {
+      throw new BadRequestException(
+        user.mustChangePassword
+          ? 'كلمة المرور الجديدة لازم تختلف عن المؤقتة'
+          : 'كلمة المرور الجديدة لازم تختلف عن الحالية'
+      )
+    }
+    const tokenVersion = (user.tokenVersion ?? 0) + 1
+    const passwordChangedAt = new Date()
+    await this.users.update(
+      { id: user.id },
+      {
+        passwordHash: await AuthService.hashPassword(newPassword),
+        mustChangePassword: false,
+        passwordChangedAt,
+        // أي جلسة تانية مفتوحة بالكلمة القديمة (أو بتوكن «لازم يغيّر») تبطل فورًا
+        tokenVersion,
+      }
+    )
+    return this.issueSession({ ...user, mustChangePassword: false, passwordChangedAt, tokenVersion })
+  }
+
+  // توكن + بيانات الحساب للواجهة (نفس رد الدخول)
+  private async issueSession(user: User) {
     const permissions = await this.resolvePermissions(user)
+    const mustChangePassword = !!user.mustChangePassword
 
     const payload: JwtPayload = {
       sub: user.id,
@@ -109,6 +156,7 @@ export class AuthService {
       employeeId: user.employeeId ?? null,
       permissions,
       tokenVersion: user.tokenVersion ?? 0,
+      ...(mustChangePassword ? { mustChangePassword: true } : {}),
     }
 
     return {
@@ -121,6 +169,7 @@ export class AuthService {
         branchId: user.branchId,
         employeeId: user.employeeId,
         permissions,
+        mustChangePassword,
       },
     }
   }

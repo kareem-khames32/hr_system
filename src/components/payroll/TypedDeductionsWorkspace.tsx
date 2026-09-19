@@ -12,6 +12,8 @@ import {
   type DeductionTypeInput, type DeductionTypeView, type DeductionView,
 } from '@/lib/deductions-api'
 import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
+import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
+import { dateInRange, localDayOf } from '@/lib/payroll-month-range'
 
 // الخطوة 25: مساحة الخصومات المصنفة — القائمة والاعتماد (مع الاعتراض والعكس وقرارات الأقساط المعلقة)، والإنشاء لموظف أو
 // اختيار أو فريق أو قسم أو فرع بمعاينة واستبعاد، وكتالوج الأنواع، والتقارير. الخادم يعيد فحص النطاق والحدود والتكرار
@@ -116,7 +118,11 @@ function DeductionList({ rows, loading, filters, setFilters, reload, currency, r
     fetchDeduction(focusRequestId).then(view => { setFocused(view); setExpanded(view.id); setDetail(view) })
       .catch(error => setNotice(errorText(error, 'تعذر فتح طلب الخصم المطلوب')))
   }, [focusRequestId])
-  const shown = focused && !rows.some(row => row.id === focused.id) ? [focused, ...rows] : rows
+  // فلتر «من تاريخ / إلى تاريخ» على تاريخ الطلب — الافتراضي شهر الرواتب الجاري؛ الطلب المفتوح من رابط يظهر دايمًا
+  const { range, setRange, context } = usePayrollDayRange()
+  const rangeRows = range ? rows.filter(row => dateInRange(localDayOf(row.createdAt), range)) : rows
+  const outsideRange = rows.length - rangeRows.length
+  const shown = focused && !rangeRows.some(row => row.id === focused.id) ? [focused, ...rangeRows] : rangeRows
 
   const toggle = (row: DeductionView) => {
     if (expanded === row.id) { setExpanded(null); setDetail(null); return }
@@ -171,8 +177,10 @@ function DeductionList({ rows, loading, filters, setFilters, reload, currency, r
         <label className="text-sm text-gray-600">شهر المسير المستهدف
           <input type="month" className="input mt-1" dir="ltr" value={filters.targetPeriod} onChange={event => setFilters(value => ({ ...value, targetPeriod: event.target.value }))} />
         </label>
+        <DayRangeFilter idPrefix="deductions" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
         <button type="button" className="btn-secondary flex items-center gap-1" onClick={reload}><RefreshCw size={16} />تحديث</button>
       </div>
+      {outsideRange > 0 && <p className="text-xs text-gray-500" data-outside-range>فيه {outsideRange} طلب تاريخه برا الفترة المختارة — غيّر «من تاريخ» أو «إلى تاريخ» عشان تشوفهم.</p>}
       {notice && <div role="status" className="bg-primary-50 text-primary-700 rounded-xl p-3 text-sm flex items-center justify-between">{notice}<button type="button" aria-label="إغلاق" onClick={() => setNotice('')}><X size={14} /></button></div>}
       {loading ? (
         <div className="flex items-center justify-center py-10"><div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>

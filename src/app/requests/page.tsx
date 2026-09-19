@@ -7,6 +7,7 @@ import LetterDownloadButton from '@/components/LetterDownloadButton'
 import RequestPayload from '@/components/RequestPayload'
 import OvertimePreview from '@/components/OvertimePreview'
 import OvertimeRequestSummary from '@/components/OvertimeRequestSummary'
+import TimeSelect, { normalizeTime, timeSpanMinutes } from '@/components/TimeSelect'
 import { payloadFieldLabel, payloadSummary, payloadValueLabel } from '@/lib/request-payload'
 import { leaveAttachmentName, leaveAttachmentRequiredNow, leaveCountsCalendarDays as countsCalendarDaysOf, leaveHalfDayAllowed, leaveRulesHint } from '@/lib/leave-catalog'
 import { salaryIncreaseRequestFields, salaryIncreaseRequestPayload } from '@/lib/employee-salary-change-api'
@@ -177,6 +178,7 @@ const handlerLabels: Record<string, string> = {
   overtime_entries: 'قيد أوفرتايم',
   attendance_log: 'سجل الحضور',
   attendance_corrections: 'تصحيح بصمة',
+  holiday_work: 'بدل دوام أيام العطلات في المسير (من البصمة)',
   attendance_trips: 'سجل المأموريات',
   shift_schedule: 'جدول الورديات',
   loans_installments: 'سلفة بجدول أقساط',
@@ -320,7 +322,7 @@ export default function MyRequestsPage() {
   const [withdrawingResignation, setWithdrawingResignation] = useState(false)
   // أنواع الإذن (استئذان) من الكتالوج
   const [permissionTypes, setPermissionTypes] = useState<
-    Array<{ id: number; nameAr: string; isDeductible: boolean; maxDurationMinutes?: number | null; isActive: boolean }>
+    Array<{ id: number; nameAr: string; isDeductible: boolean; maxDurationMinutes?: number | null; monthlyFreeMinutes?: number | null; isActive: boolean }>
   >([])
   const [permissionType, setPermissionType] = useState('')
   // أنواع الإجازة الفعّالة (السنوية/المرضية/بدون راتب...) — طلب إجازة موحّد يختار منها
@@ -433,6 +435,7 @@ export default function MyRequestsPage() {
         nameAr: string
         isDeductible: boolean
         maxDurationMinutes?: number | null
+        monthlyFreeMinutes?: number | null
         isActive: boolean
       }>('permission-types')
         .then(setPermissionTypes)
@@ -736,6 +739,19 @@ export default function MyRequestsPage() {
           <option value="OUT">بصمة انصراف</option>
         </select>
       )
+    // وقت الإذن (من/إلى): اختيار من قائمة كل ربع ساعة بدل الكتابة — لو نوع تاني معرّف
+    // «من/إلى» تاريخ أو رقم في حقوله المخصّصة يفضل زي ما هو
+    if (
+      (key === 'from' || key === 'to') &&
+      (isPermission || (customFields.find((f) => f.key === key)?.type ?? 'text') === 'text')
+    )
+      return (
+        <TimeSelect
+          value={fieldValues[key] ?? ''}
+          onChange={(v) => setFieldValue(key, v)}
+          aria-label={humanizeKey(key)}
+        />
+      )
     if (key === 'time') {
       const tv = fieldValues[key] ?? ''
       const pt = fieldValues.punchType
@@ -746,11 +762,10 @@ export default function MyRequestsPage() {
         ((pt === 'IN' && hh >= 14) || (pt === 'OUT' && hh < 10))
       return (
         <>
-          <input
-            type="time"
-            className="input w-full"
+          <TimeSelect
             value={tv}
-            onChange={(e) => setFieldValue(key, e.target.value)}
+            onChange={(v) => setFieldValue(key, v)}
+            aria-label={humanizeKey(key)}
           />
           {amPmWarn && (
             <p className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-1.5">
@@ -937,6 +952,23 @@ export default function MyRequestsPage() {
         setSubmitError('اختر نوع الإذن')
         return
       }
+      // الإذن بيغطي فترته بالظبط: البداية والنهاية مطلوبين ومختلفين (النهاية قبل البداية = بيعدّي نص الليل)
+      const from = normalizeTime(fieldValues.from), to = normalizeTime(fieldValues.to)
+      if (!from || !to) {
+        setSubmitError('اختار وقت بداية ونهاية الإذن')
+        return
+      }
+      const minutes = timeSpanMinutes(from, to) ?? 0
+      if (minutes <= 0) {
+        setSubmitError('وقت نهاية الإذن لازم يكون بعد وقت البداية')
+        return
+      }
+      if (selectedPermissionDef?.maxDurationMinutes && minutes > selectedPermissionDef.maxDurationMinutes) {
+        setSubmitError(`مدة الإذن ${minutes} دقيقة أكتر من الحد المسموح للمرة الواحدة (${selectedPermissionDef.maxDurationMinutes} دقيقة)`)
+        return
+      }
+      payload.from = from
+      payload.to = to
       // المعرّف مرجع الحساب، والاسم للعرض عند المعتمد (السيرفر يثبّتهما من الكتالوج)
       payload.permissionTypeId = Number(permissionType)
       payload.permissionType = selectedPermissionDef?.nameAr ?? ''
@@ -1703,9 +1735,21 @@ export default function MyRequestsPage() {
                     </select>
                     {selectedPermissionDef?.maxDurationMinutes ? (
                       <p className="text-xs text-gray-500 mt-1.5">
-                        الحد الأقصى: {selectedPermissionDef.maxDurationMinutes} دقيقة
+                        الحد الأقصى للمرة الواحدة: {selectedPermissionDef.maxDurationMinutes} دقيقة
                       </p>
                     ) : null}
+                    {!selectedPermissionDef?.isDeductible && selectedPermissionDef?.monthlyFreeMinutes ? (
+                      <p className="text-xs text-gray-500 mt-1">
+                        رصيد الشهر: {selectedPermissionDef.monthlyFreeMinutes} دقيقة — تتقسم على أكتر من إذن أو تتاخد مرة واحدة
+                      </p>
+                    ) : null}
+                    {(timeSpanMinutes(fieldValues.from, fieldValues.to) ?? 0) > 0 && (
+                      <p className="text-xs text-gray-600 mt-1">
+                        مدة الإذن: {timeSpanMinutes(fieldValues.from, fieldValues.to)} دقيقة
+                        {(normalizeTime(fieldValues.to) ?? '') < (normalizeTime(fieldValues.from) ?? '') ? ' (بيعدّي نص الليل)' : ''}
+                        {' '}— الإذن بيغطي الفترة دي بس، وأي تأخير أو خروج بدري براها بيتحسب عادي
+                      </p>
+                    )}
                     {selectedPermissionDef?.isDeductible && (
                       <p className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-1.5">
                         <AlertTriangle size={13} className="shrink-0" />
@@ -1823,7 +1867,6 @@ export default function MyRequestsPage() {
                               className="input w-full disabled:bg-gray-50 disabled:text-gray-400 read-only:bg-gray-50 read-only:text-gray-500"
                               disabled={isHalfDay && (f === 'toDate' || f === 'days')}
                               readOnly={f === 'days' && fullDayLeaveDatesSet}
-                              placeholder={f === 'from' || f === 'to' ? 'HH:MM' : undefined}
                               value={fieldValues[f] ?? ''}
                               onChange={(e) => setFieldValue(f, e.target.value)}
                             />

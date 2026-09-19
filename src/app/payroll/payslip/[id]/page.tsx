@@ -159,6 +159,13 @@ export default function PayslipPage() {
         },
       ]
     : []
+  // «تابة البدلات»: كل بدل (إضافة دفتر بتصنيف allowance) سطر باسمه، والباقي «إضافات أخرى» — المجموع = عمود الإضافات نفسه
+  const otherAdditionsCents = Math.round(Number(item?.otherAdditions ?? 0) * 100)
+  const allowanceLines = (obligationDetails ?? [])
+    .filter(row => row.type === 'CREDIT' && row.category === 'allowance' && Number(row.collected ?? 0) > 0)
+    .map(row => ({ name: row.label || 'بدل', cents: Math.round(Number(row.collected) * 100) }))
+  const allowanceCents = allowanceLines.reduce((sum, line) => sum + line.cents, 0)
+  const splitAllowances = allowanceLines.length > 0 && allowanceCents <= otherAdditionsCents
   const earnings = item
     ? [
         ...salaryEarnings,
@@ -166,10 +173,11 @@ export default function PayslipPage() {
           name: 'العمل الإضافي',
           amount: Number(item.overtimeAmount),
         },
-        {
+        ...(splitAllowances ? allowanceLines.map(line => ({ name: line.name, amount: line.cents / 100 })) : []),
+        ...(splitAllowances && otherAdditionsCents === allowanceCents ? [] : [{
           name: 'إضافات أخرى (مكافآت/بدلات)',
-          amount: Number(item.otherAdditions ?? 0),
-        },
+          amount: splitAllowances ? (otherAdditionsCents - allowanceCents) / 100 : Number(item.otherAdditions ?? 0),
+        }]),
       ]
     : []
 

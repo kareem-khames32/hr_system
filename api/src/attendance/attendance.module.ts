@@ -26,6 +26,10 @@ import { AttendanceExemptionsController } from './attendance-exemptions.controll
 import { AttendanceExemptionsService } from './attendance-exemptions.service'
 import { AttendanceRuleVersion } from './attendance-rule.entities'
 import { AttendanceRuleController } from './attendance-rule.controller'
+// «دوام أيام العطلات»: أوامر الموارد البشرية وطلبات الموظفين المعتمدة → بدل في المسير
+import { HolidayWorkOrder } from './holiday-work.entities'
+import { HolidayWorkController } from './holiday-work.controller'
+import { HolidayWorkService } from './holiday-work.service'
 
 @Module({
   imports: [
@@ -53,10 +57,11 @@ import { AttendanceRuleController } from './attendance-rule.controller'
       AttendanceExemption,
       AttendanceExemptionEvent,
       AttendanceRuleVersion,
+      HolidayWorkOrder,
     ]),
   ],
-  controllers: [AttendanceController, AttendanceExemptionsController, AttendanceRuleController],
-  providers: [AttendanceService, DeviceSyncService, AttendanceScheduler, AttendanceExemptionsService],
+  controllers: [AttendanceController, AttendanceExemptionsController, AttendanceRuleController, HolidayWorkController],
+  providers: [AttendanceService, DeviceSyncService, AttendanceScheduler, AttendanceExemptionsService, HolidayWorkService],
   exports: [AttendanceService],
 })
 export class AttendanceModule {}

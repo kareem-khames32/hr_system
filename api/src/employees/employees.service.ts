@@ -564,7 +564,9 @@ export class EmployeesService {
     }
   }
 
-  async update(id: number, dto: UpdateEmployeeDto, branchScope: number | null, actorId?: number) {
+  // audit (اختياري — التحديث الجماعي من ملف): سبب سجل التغييرات وحقول إضافية تتسجل في نفس المعاملة
+  async update(id: number, dto: UpdateEmployeeDto, branchScope: number | null, actorId?: number,
+    audit?: { reason: string; fields?: ReadonlyArray<keyof Employee> }) {
     const emp = await this.findOne(id, branchScope)
     // الحالة المحفوظة — المعروضة قد تكون «موقوف» مشتقة من فترة إيقاف مؤرخة
     const storedStatus = (emp as Employee & { storedStatus?: Employee['status'] }).storedStatus ?? emp.status
@@ -720,10 +722,10 @@ export class EmployeesService {
       const trackedFields = ['teamId', 'branchId', 'departmentId', 'managerEmployeeId', 'jobTitle',
         'iban', 'bankName', 'bankBranch', 'payMethod', 'bankTransferAmount', 'salaryCycle', 'gosiBaseSalary', 'workType',
         'contractType', 'contractStart', 'contractEnd', 'contractNumber'] as const
-      for (const fieldName of trackedFields) {
+      for (const fieldName of new Set<keyof Employee>([...trackedFields, ...(audit?.fields ?? [])])) {
         if ((beforeChange[fieldName] ?? null) !== (result[fieldName] ?? null)) await recordEmployeeChange(em, {
           employeeId: id, fieldName, oldValue: beforeChange[fieldName], newValue: result[fieldName],
-          changedByUserId: actorId, reason: 'تعديل من ملف الموظف',
+          changedByUserId: actorId, reason: audit?.reason ?? 'تعديل من ملف الموظف',
         })
       }
       if (result.status !== oldStatus) {

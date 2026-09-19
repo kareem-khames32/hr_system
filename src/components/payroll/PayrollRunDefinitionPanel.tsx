@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import type { ApiBranch, ApiDepartment, ApiEmployee, ApiTeam } from '../../lib/api'
 import { fetchPayrollPolicies } from '../../lib/payroll-policies-api'
+import { dayRangeLabel, payrollMonthBounds } from '../../lib/payroll-month-range'
 import {
   createPayrollRunDraft, emptyRunFilters, linkedFilterOptions, payrollExclusionCandidates, payrollRunErrorCode, payrollRunErrorMessage,
   previewPayrollRunDefinition, pruneLinkedFilters, publishedPolicyVersions, updatePayrollRunDraft,
@@ -199,7 +200,9 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
         <label className="text-sm text-gray-700 space-y-1">
           <span className="font-medium">شهر الراتب</span>
           <input type="month" value={period} onChange={e => setPeriod(e.target.value)} disabled={busy} className="input w-full" dir="ltr" />
-          {policy && <span className="text-xs text-gray-500">الفترة تبدأ يوم {policy.cycleStartDay ?? '—'}؛ التواريخ الدقيقة تظهر في المعاينة.</span>}
+          {policy && (policy.cycleStartDay && /^\d{4}-(0[1-9]|1[0-2])$/.test(period)
+            ? <span className="text-xs text-gray-500" data-run-period-range>الفترة: {dayRangeLabel(payrollMonthBounds(period, policy.cycleStartDay))} (تبدأ يوم {policy.cycleStartDay})</span>
+            : <span className="text-xs text-gray-500">الفترة تبدأ يوم {policy.cycleStartDay ?? '—'}؛ التواريخ الدقيقة تظهر في المعاينة.</span>)}
         </label>
       </div>
 

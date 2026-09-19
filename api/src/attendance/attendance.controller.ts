@@ -29,9 +29,13 @@ import {
   ValidateNested,
 } from 'class-validator'
 import { Transform, Type } from 'class-transformer'
+import { InjectRepository } from '@nestjs/typeorm'
+import { Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
-import { AttendanceService, PunchDto } from './attendance.service'
+import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { AttendanceService, localDateOf, PunchDto } from './attendance.service'
+import { cycleStartDayOf, payrollMonthContext, payrollMonthContextOfPeriod, reportDayRange } from './attendance-report-range'
 import { DeviceSyncService } from './device-sync.service'
 
 // عنصر البصمة داخل الدفعة — يُتحقق منه عنصراً عنصراً: عنصر بلا وقت كان يرمي
@@ -289,8 +293,21 @@ class OvertimePreviewDto {
 export class AttendanceController {
   constructor(
     private readonly service: AttendanceService,
-    private readonly deviceSync: DeviceSyncService
+    private readonly deviceSync: DeviceSyncService,
+    @InjectRepository(RequestsConfig)
+    private readonly config: Repository<RequestsConfig>
   ) {}
+
+  // شهر الرواتب (مثلًا 23 أغسطس → 22 سبتمبر) — الافتراضي لفلاتر الحضور والرواتب.
+  // ?date=YYYY-MM-DD: شهر الرواتب اللي فيه اليوم ده، ?period=YYYY-MM: شهر بالاسم، ومن غيرهم: الشهر الجاري.
+  @UseGuards(JwtAuthGuard)
+  @Get('payroll-month')
+  async payrollMonth(@Query('date') date?: string, @Query('period') period?: string) {
+    const row = await this.config.findOne({ where: { key: 'payroll.cycle_start_day' } })
+    const cycleStartDay = cycleStartDayOf(row?.value)
+    const today = localDateOf(new Date())
+    return period ? payrollMonthContextOfPeriod(cycleStartDay, today, period) : payrollMonthContext(cycleStartDay, today, date)
+  }
 
   // استقبال بصمات ZKTeco — بمفتاح جهاز (x-device-key) بدون JWT
   // الجهاز/الوسيط يبعت دفعات: {punches: [{employeeCode, timestamp, deviceSn}]}
@@ -323,9 +340,12 @@ export class AttendanceController {
   listPunches(
     @CurrentUser() user: JwtPayload,
     @Query('source') source?: string,
-    @Query('month') month?: string
+    @Query('month') month?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string
   ) {
-    return this.service.listPunches(user, { source, month })
+    const range = reportDayRange({ month, from, to })
+    return this.service.listPunches(user, { source, month, ...(range && !range.month ? { from: range.from, to: range.to } : {}) })
   }
 
   // حذف بصمة يدوية + إعادة حساب يومها (بصمة الجهاز لا تُحذف)
@@ -519,9 +539,13 @@ export class AttendanceController {
   monthly(
     @CurrentUser() user: JwtPayload,
     @Query('employeeId', ParseIntPipe) employeeId: number,
-    @Query('month') month: string
+    @Query('month') month?: string,
+    @Query('from') from?: string,
+    @Query('to') to?: string
   ) {
-    return this.service.monthly(user, employeeId, month)
+    // from/to باليوم (شهر الرواتب مثلًا 23 → 22) أو month للتوافق
+    const range = reportDayRange({ month, from, to })
+    return this.service.monthly(user, employeeId, month ?? '', range && !range.month ? { from: range.from, to: range.to } : undefined)
   }
 
   // يومي (لوحة الموظف — خدمة ذاتية): وردية اليوم وبصمته وحالته لصاحب الحساب فقط —
@@ -551,8 +575,9 @@ export class AttendanceController {
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('overtime.confirm', 'attendance.view_all')
   @Get('overtime')
-  overtimeLog(@CurrentUser() user: JwtPayload, @Query('month') month?: string) {
-    return this.service.overtimeLog(user, month)
+  overtimeLog(@CurrentUser() user: JwtPayload, @Query('month') month?: string, @Query('from') from?: string, @Query('to') to?: string) {
+    const range = reportDayRange({ month, from, to })
+    return this.service.overtimeLog(user, month, range && !range.month ? { from: range.from, to: range.to } : undefined)
   }
 
   @UseGuards(JwtAuthGuard, RolesGuard)

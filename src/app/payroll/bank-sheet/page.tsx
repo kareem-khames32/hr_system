@@ -6,6 +6,7 @@ import { MainLayout } from '@/components/layout'
 import { fetchBankSheet, fetchPayrollRuns, type ApiBankSheet, type ApiPayrollRun } from '@/lib/api'
 import { downloadCsv } from '@/lib/csv'
 import { formatMoney } from '@/lib/money'
+import { dayRangeLabel } from '@/lib/payroll-month-range'
 
 // كشف البنوك (قرار المالك): لكل مسير — مين بيتحوله كام على أي بنك، وكام نقدي، وإجمالي كل بنك.
 // حساب الفرع بيشوف مسيرات وموظفي فرعه بس (الخادم بيفلتر).
@@ -107,7 +108,7 @@ export default function PayrollBankSheetPage() {
           <label className="label">المسير</label>
           <select className="input max-w-md" value={runId} onChange={(e) => setRunId(e.target.value)}>
             {runs.length === 0 && <option value="">مفيش مسيرات محسوبة</option>}
-            {runs.map(run => <option key={run.id} value={run.id}>{runLabel(run)} — {run.period}</option>)}
+            {runs.map(run => <option key={run.id} value={run.id}>{runLabel(run)} — {run.period}{run.startDate && run.endDate ? ` (${dayRangeLabel({ from: String(run.startDate).slice(0, 10), to: String(run.endDate).slice(0, 10) })})` : ''}</option>)}
           </select>
         </div>
 

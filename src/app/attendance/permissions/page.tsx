@@ -32,6 +32,8 @@ import {
   type ApiEmployee,
 } from '@/lib/api'
 import { payloadSummary } from '@/lib/request-payload'
+import { dateInRange } from '@/lib/payroll-month-range'
+import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 
 // حالات محرك الطلبات — تسميات عربية
 
@@ -94,7 +96,8 @@ const getStatusBadge = (status: string) => (
 export default function PermissionsPage() {
   const [activeTab, setActiveTab] = useState<'all' | 'pending' | 'approved' | 'rejected'>('all')
   const [searchQuery, setSearchQuery] = useState('')
-  const [selectedDate, setSelectedDate] = useState('')
+  // فترة يوم الإذن — الافتراضي شهر الرواتب الجاري (مثلًا 23 → 22)
+  const { range, setRange, context } = usePayrollDayRange()
 
   const [requests, setRequests] = useState<ApiRequest[]>([])
   const [employees, setEmployees] = useState<Pick<ApiEmployee, 'id' | 'fullName' | 'employeeCode'>[]>([])
@@ -182,19 +185,20 @@ export default function PermissionsPage() {
     }
   })
 
+  // الأذونات اللي يومها داخل الفترة المختارة (العدادات والجدول على نفس الفترة)
+  const rangeRows = range ? rows.filter((p) => dateInRange(p.date, range)) : rows
   const stats = {
-    all: rows.length,
-    pending: rows.filter((p) => ['SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO'].includes(p.status)).length,
-    approved: rows.filter((p) => ['APPROVED', 'IN_EXECUTION', 'COMPLETED'].includes(p.status)).length,
-    rejected: rows.filter((p) => p.status === 'REJECTED').length,
-    totalHours: rows.filter((p) => ['APPROVED', 'IN_EXECUTION', 'COMPLETED'].includes(p.status)).reduce((sum, p) => sum + p.hours, 0),
+    all: rangeRows.length,
+    pending: rangeRows.filter((p) => ['SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO'].includes(p.status)).length,
+    approved: rangeRows.filter((p) => ['APPROVED', 'IN_EXECUTION', 'COMPLETED'].includes(p.status)).length,
+    rejected: rangeRows.filter((p) => p.status === 'REJECTED').length,
+    totalHours: rangeRows.filter((p) => ['APPROVED', 'IN_EXECUTION', 'COMPLETED'].includes(p.status)).reduce((sum, p) => sum + p.hours, 0),
   }
 
-  const filteredRequests = rows.filter((req) => {
+  const filteredRequests = rangeRows.filter((req) => {
     if (activeTab === 'pending' && !['SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO'].includes(req.status)) return false
     if (activeTab === 'approved' && !['APPROVED', 'IN_EXECUTION', 'COMPLETED'].includes(req.status)) return false
     if (activeTab === 'rejected' && req.status !== 'REJECTED') return false
-    if (selectedDate && req.date !== selectedDate) return false
     if (
       searchQuery &&
       !req.employeeName.includes(searchQuery) &&
@@ -294,8 +298,8 @@ export default function PermissionsPage() {
 
         {/* Filters */}
         <div className="card">
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex-1 min-w-[300px]">
+          <div className="flex flex-wrap items-end gap-4">
+            <div className="flex-1 min-w-[16rem]">
               <div className="relative">
                 <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
@@ -308,15 +312,7 @@ export default function PermissionsPage() {
               </div>
             </div>
 
-            <div className="flex items-center gap-2">
-              <Calendar size={18} className="text-gray-400" />
-              <input
-                type="date"
-                className="input w-40"
-                value={selectedDate}
-                onChange={(e) => setSelectedDate(e.target.value)}
-              />
-            </div>
+            <DayRangeFilter idPrefix="permissions" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
           </div>
         </div>
 

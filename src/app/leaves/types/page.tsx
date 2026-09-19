@@ -27,6 +27,9 @@ interface LeaveTypeRow {
   renewalBasis: string
   carryOverEnabled: boolean
   carryOverMaxDays: number | string | null
+  // السنوية للموظف الجديد: الرصيد يبدأ بعد كام شهر من التعيين (فاضي = الإعداد العام)، وأول سنة بالنسبة ولا كاملة
+  entitlementStartMonths?: number | null
+  firstYearProrated?: boolean
   fixedDays: number | string | null
   maxTimesPerYear: number | null
   oncePerService: boolean
@@ -76,6 +79,7 @@ type Form = {
   category: Category
   code: string; nameAr: string; nameEn: string; description: string; isActive: boolean
   annualDays: string; renewalBasis: string; carryOverEnabled: boolean; carryOverMaxDays: string
+  entitlementStartMonths: string; firstYearProrated: boolean
   fixedDays: string; oncePerService: boolean; maxTimesPerYear: string
   tiers: Tier[]
   minDays: string; maxDays: string; noticeDays: string; backdateAllowed: boolean; backdateMaxDays: string
@@ -88,6 +92,7 @@ const newForm = (category: Category): Form => ({
   category, code: '', nameAr: '', nameEn: '', description: '', isActive: true,
   annualDays: category === 'ANNUAL' ? '21' : category === 'SICK' ? '120' : '',
   renewalBasis: 'YEAR_START', carryOverEnabled: false, carryOverMaxDays: '',
+  entitlementStartMonths: category === 'ANNUAL' ? '0' : '', firstYearProrated: true,
   fixedDays: '', oncePerService: false, maxTimesPerYear: '',
   tiers: defaultTiers.map(t => ({ ...t })),
   minDays: '', maxDays: '', noticeDays: '0', backdateAllowed: true, backdateMaxDays: '',
@@ -108,6 +113,7 @@ const formOf = (t: LeaveTypeRow): Form => {
     category: (t.category ?? 'OCCASION') as Category,
     code: t.code, nameAr: t.nameAr, nameEn: t.nameEn ?? '', description: t.description ?? '', isActive: t.isActive,
     annualDays: str(t.annualDays), renewalBasis: t.renewalBasis ?? 'YEAR_START', carryOverEnabled: !!t.carryOverEnabled, carryOverMaxDays: str(t.carryOverMaxDays),
+    entitlementStartMonths: str(t.entitlementStartMonths), firstYearProrated: t.firstYearProrated !== false,
     fixedDays: str(t.fixedDays), oncePerService: !!t.oncePerService, maxTimesPerYear: str(t.maxTimesPerYear),
     tiers,
     minDays: str(t.minDaysPerRequest), maxDays: str(t.maxDays), noticeDays: str(t.noticeDays ?? 0), backdateAllowed: t.backdateAllowed !== false, backdateMaxDays: str(t.backdateMaxDays),
@@ -188,6 +194,10 @@ export default function LeaveTypesPage() {
         }
       }
     }
+    if (form.category === 'ANNUAL' && form.entitlementStartMonths !== '' &&
+      (!Number.isInteger(Number(form.entitlementStartMonths)) || Number(form.entitlementStartMonths) < 0 || Number(form.entitlementStartMonths) > 60)) {
+      return 'الرصيد يبدأ بعد كام شهر: رقم صحيح من 0 لـ 60'
+    }
     if (form.attachmentRule === 'REQUIRED_ABOVE_DAYS' && form.attachmentAboveDays === '') return 'حدد عدد الأيام اللي فوقها المرفق مطلوب'
     if (form.attachmentRule !== 'NONE' && !form.attachmentName.trim()) return 'اكتب اسم المرفق، مثلًا: تقرير طبي'
     return null
@@ -204,6 +214,8 @@ export default function LeaveTypesPage() {
       renewalBasis: form.renewalBasis,
       carryOverEnabled: c === 'ANNUAL' ? form.carryOverEnabled : false,
       carryOverMaxDays: c === 'ANNUAL' && form.carryOverEnabled ? n(form.carryOverMaxDays) : null,
+      entitlementStartMonths: c === 'ANNUAL' ? n(form.entitlementStartMonths) : null,
+      firstYearProrated: c === 'ANNUAL' ? form.firstYearProrated : true,
       fixedDays: c === 'OCCASION' ? n(form.fixedDays) : null,
       oncePerService: c === 'OCCASION' ? form.oncePerService : false,
       maxTimesPerYear: c === 'OCCASION' ? n(form.maxTimesPerYear) : null,
@@ -357,6 +369,22 @@ export default function LeaveTypesPage() {
                         <input type="number" min={0} className="input w-full" value={form.carryOverMaxDays} onChange={e => set('carryOverMaxDays', e.target.value)} />
                       </div>
                     )}
+                    <div className="md:col-span-2 border-t border-gray-100 pt-4">
+                      <p className="text-sm font-semibold text-gray-800">الموظف الجديد</p>
+                    </div>
+                    <div>
+                      <label className={field}>الرصيد يبدأ بعد كام شهر من التعيين (0 = من يوم التعيين)</label>
+                      <input type="number" min={0} max={60} step={1} className="input w-full" value={form.entitlementStartMonths}
+                        placeholder="فاضي = فترة التجربة من سياسات النظام" onChange={e => set('entitlementStartMonths', e.target.value)} />
+                    </div>
+                    <label className="flex items-center gap-2">
+                      <input type="checkbox" className={check} checked={form.firstYearProrated} onChange={e => set('firstYearProrated', e.target.checked)} />
+                      <span className="text-sm text-gray-700">أول سنة بالنسبة والتناسب (من يوم ما يستحق لآخر سنة الرصيد)، مش كاملة</span>
+                    </label>
+                    <p className="text-sm text-gray-500 md:col-span-2">
+                      قبل يوم الاستحقاق رصيده السنوي صفر ومايقدرش يطلب سنوية. مثال: اتعيّن 1 مارس والرصيد بعد 6 شهور ⇐ يستحق من 1 سبتمبر؛
+                      بالنسبة = 21 × (من 1 سبتمبر لآخر السنة) ÷ السنة، وكاملة = 21 يوم.
+                    </p>
                   </>
                 )}
                 {form.category === 'SICK' && (

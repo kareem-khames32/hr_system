@@ -3,6 +3,8 @@
 
 const fieldLabels: Record<string, string> = {
   date: 'التاريخ',
+  // طلب «دوام يوم عطلة»: الأيام مفصولة بفاصلة (YYYY-MM-DD)
+  dates: 'أيام العطلة (مثال: 2026-09-18، 2026-09-19)',
   fromDate: 'من تاريخ',
   toDate: 'إلى تاريخ',
   effectiveDate: 'تاريخ السريان',

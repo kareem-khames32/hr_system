@@ -5,6 +5,8 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Ban, CalendarX, CheckCircle, History, Plus, RefreshCw, Search, ShieldCheck, X, XCircle } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
+import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
+import { periodOverlapsRange } from '@/lib/payroll-month-range'
 import {
   approveAttendanceExemption,
   can,
@@ -68,6 +70,8 @@ function ExemptionsContent() {
   const [reload, setReload] = useState(0)
   const [filter, setFilter] = useState<StatusFilter>('ALL')
   const [search, setSearch] = useState('')
+  // الاستثناءات اللي مدتها بتتقاطع مع الفترة — الافتراضي شهر الرواتب الجاري (مثلًا 23 → 22)
+  const { range, setRange, context } = usePayrollDayRange()
   const [notice, setNotice] = useState('')
 
   const [createOpen, setCreateOpen] = useState(false)
@@ -120,7 +124,7 @@ function ExemptionsContent() {
     scheduled: rows.filter(row => row.state === 'SCHEDULED').length,
   }), [rows])
   const term = search.trim().toLowerCase()
-  const visible = rows.filter(row => matchesFilter(row.state, filter) && (!term ||
+  const visible = rows.filter(row => matchesFilter(row.state, filter) && (!range || periodOverlapsRange(row.effectiveFrom, row.effectiveTo, range)) && (!term ||
     `${row.employee?.fullName ?? ''} ${row.employee?.employeeCode ?? ''} #${row.id}`.toLowerCase().includes(term)))
   const employeeTerm = employeeSearch.trim().toLowerCase()
   const employeeChoices = employees.filter(row => String(row.id) === form.employeeId || !employeeTerm ||
@@ -274,6 +278,7 @@ function ExemptionsContent() {
               {STATUS_FILTERS.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
             </select>
           </div>
+          <DayRangeFilter idPrefix="exemptions" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
         </div>
         {error && (
           <div role="alert" className="text-sm text-danger-600 flex items-center gap-2"><AlertTriangle size={16} />{error}</div>

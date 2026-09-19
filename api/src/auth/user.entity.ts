@@ -44,4 +44,14 @@ export class User {
 
   @Column({ type: 'datetime', nullable: true })
   lastLoginAt: Date
+
+  // كلمة مرور مؤقتة عيّنها المدير: بعد الدخول الصح لازم صاحب الحساب يغيّرها قبل ما يستخدم النظام.
+  // select: false — مش بتتقري إلا صراحةً (الدخول وشاشة المستخدمين)، فباقي النظام مايتأثرش بيها
+  @Column({ default: false, select: false })
+  mustChangePassword: boolean
+
+  // آخر مرة اتعيّنت فيها كلمة المرور على النظام ده (المدير أو صاحب الحساب) — null = لسه ما اتعيّنتش هنا
+  // (الحسابات المنقولة من القديم جات بكلمة غير قابلة للاستخدام: null + علامة المستورد = «محتاج باسورد»)
+  @Column({ type: 'datetime', nullable: true, select: false })
+  passwordChangedAt: Date | null
 }

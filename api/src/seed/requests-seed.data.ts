@@ -172,6 +172,9 @@ export const typesSeed: TypeSeed[] = [
   { code: 'SHIFT_SWAP', nameAr: 'تبديل وردية', category: 'time_attendance', chain: 'CHAIN_MANAGER', handler: 'shift_schedule', requiredFields: ['date', 'withEmployeeId'], phase: 'P3' },
   { code: 'REMOTE_WORK', nameAr: 'عمل عن بُعد', category: 'time_attendance', chain: 'CHAIN_MANAGER', handler: 'attendance_log', requiredFields: ['fromDate', 'toDate'], phase: 'P2' },
   { code: 'BUSINESS_TRIP', nameAr: 'مأمورية/انتداب', category: 'time_attendance', chain: 'CHAIN_MANAGER_HR', handler: 'attendance_trips', requiredFields: ['fromDate', 'toDate', 'destination'], phase: 'P2' },
+  // بدل دوام أيام العطلات (19 سبتمبر): الموظف يقدّم على أيام عطلة اشتغلها؛ بعد الاعتماد ساعاته من البصمة بتتحسب «بدل» في المسير
+  // (ترحيل 20260919_055 للقاعدة الحية: نفس الكود والحقول، وسلسلته CH_HOLIDAY_WORK بخطوة الموارد البشرية)
+  { code: 'HOLIDAY_WORK', nameAr: 'دوام يوم عطلة', category: 'time_attendance', chain: 'CHAIN_HR', handler: 'holiday_work', requiredFields: ['dates', 'reason'], phase: 'P1' },
 
   // ===== 3) المالية =====
   { code: 'LOAN', nameAr: 'سلفة', category: 'financial', chain: 'CHAIN_MANAGER_FINANCE_T', handler: 'loans_installments', requiredFields: ['amount', 'months'], phase: 'P1' },
@@ -277,6 +280,8 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'overtime.multiplier_weekday', value: '1.5' },
   { key: 'overtime.multiplier_weekend', value: '1.5' },
   { key: 'overtime.multiplier_holiday', value: '2' },
+  // بدل دوام أيام العطلات: المضاعف الافتراضي لأمر الدوام ولطلب «دوام يوم عطلة» (يتعدل لكل أمر)
+  { key: 'attendance.holiday_work_multiplier', value: '1.5' },
   { key: 'attendance.grace_minutes', value: '10' },
   // تُثبت هذه القيم داخل النسخة المؤرخة لتعريف الدوام، فلا تغيّر أياماً سابقة.
   { key: 'attendance.flex.count_early_work_toward_required', value: 'false' },

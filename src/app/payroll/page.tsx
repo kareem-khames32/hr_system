@@ -39,6 +39,8 @@ import { payrollItemCoverage, payrollItemDeductions, payrollItemEarnings, payrol
 import { PayrollConflictResolution } from '@/components/payroll/PayrollConflictResolution'
 // تبويبات الشاشة بعد «المسيرات»: المدرجين، بلا مسير، التضارب، الاستقطاعات («شيل خصم»)
 import { PayrollOverviewTabs, type PayrollOverviewTab } from '@/components/payroll/PayrollOverviewTabs'
+// «تابة البدلات»: صرف بدل لشهر على استهداف (يدخل إضافات المسير باسمه)
+import { PayrollAllowancesTab } from '@/components/payroll/PayrollAllowancesTab'
 import { defaultPayRecord, PayrollPayRecordForm, PayrollPayRecordSummary, payRecordReady, type PayRecordDraft } from '@/components/payroll/PayrollPayRecordForm'
 import {
   Search,
@@ -59,6 +61,7 @@ import {
 import Link from 'next/link'
 import { useCurrency } from '@/lib/currency'
 import { downloadCsv, csvDateStamp } from '@/lib/csv'
+import { dayRangeLabel } from '@/lib/payroll-month-range'
 import { PayrollOvertimeBreakdown } from '@/components/PayrollOvertimeBreakdown'
 import { PayrollInstallmentBreakdown } from '@/components/PayrollInstallmentBreakdown'
 import { PayrollObligationBreakdown } from '@/components/PayrollObligationBreakdown'
@@ -121,12 +124,14 @@ const SNAPSHOT_MISSING_MESSAGE = 'هذا المسير محسوب بإصدار س
 
 // قائمة المسيرات: المسيرات الشهرية العادية غير الملغاة فقط — مسيرات العكس والتكميلي تصحيح لمسير مصروف،
 // والملغى محفوظ للمراجعة. الرابط «?run=ID» يظل يفتح أي مسير قديم ويبقيه معروضًا في القائمة.
-const PAYROLL_PAGE_TABS: Array<['runs' | PayrollOverviewTab, string]> = [
+type PayrollPageTab = 'runs' | PayrollOverviewTab | 'allowances'
+const PAYROLL_PAGE_TABS: Array<[PayrollPageTab, string]> = [
   ['runs', 'المسيرات'],
   ['included', 'المدرجين بالمسير'],
   ['unassigned', 'موظفين ليس لديهم مسير'],
   ['conflicts', 'التضارب'],
   ['deductions', 'الاستقطاعات'],
+  ['allowances', 'البدلات'],
 ]
 
 const isListedRun = (run: Pick<ApiPayrollRun, 'status' | 'runType'>) =>
@@ -171,7 +176,7 @@ export default function PayrollPage() {
   const [actionConflicts, setActionConflicts] = useState<ApiPayrollConflict[]>([])
   // الخطوة 22 (B5): قيد الصرف (القناة والمرجع) — متعبّأ جاهزًا باسم المسير وشهره
   const [payRecord, setPayRecord] = useState<PayRecordDraft>({ channel: 'MIXED', reference: '' })
-  const [tab, setTab] = useState<'runs' | PayrollOverviewTab>('runs')
+  const [tab, setTab] = useState<PayrollPageTab>('runs')
 
   const [searchQuery, setSearchQuery] = useState('')
   // الخطوة 16: «مسير جديد» (تعريف مسودة) منفصل عن «احتساب المسودة» و«إعادة حساب مسير»
@@ -523,7 +528,7 @@ export default function PayrollPage() {
                 {listedRuns.length === 0 && <option value="">لا توجد مسيرات بعد</option>}
                 {listedRuns.map((run) => (
                   <option key={run.id} value={run.id}>
-                    {run.period} — {run.name || branchName(run.branchId) || 'مسير متعدد النطاقات'} ({statusLabel(run.status)})
+                    {run.period} — {run.name || branchName(run.branchId) || 'مسير متعدد النطاقات'} ({statusLabel(run.status)}){run.startDate && run.endDate ? ` · ${dayRangeLabel({ from: String(run.startDate).slice(0, 10), to: String(run.endDate).slice(0, 10) })}` : ''}
                   </option>
                 ))}
               </select>
@@ -1093,7 +1098,10 @@ export default function PayrollPage() {
           </div>
           )}
         </div>
-        </>) : (
+        </>) : tab === 'allowances' ? (
+          <PayrollAllowancesTab branches={branches} departments={departments} teams={teams} employees={employees}
+            onOpenRun={(id) => { setTab('runs'); loadDetail(id) }} />
+        ) : (
           <PayrollOverviewTabs tab={tab} branches={branches} departments={departments} teams={teams} employees={employees}
             onOpenRun={(id) => { setTab('runs'); loadDetail(id) }} />
         )}

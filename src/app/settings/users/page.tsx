@@ -15,6 +15,8 @@ import {
   X,
   MinusCircle,
   PlusCircle,
+  KeyRound,
+  AlertTriangle,
 } from 'lucide-react'
 import {
   type ApiBranch,
@@ -29,9 +31,13 @@ import {
   fetchRolesFull,
   fetchUserPermissions,
   fetchUsers,
+  getCurrentUser,
+  setTemporaryPassword,
   setUserPermissions,
   updateUser,
 } from '@/lib/api'
+
+const MIN_PASSWORD = 8
 
 const roleLabels: Record<string, string> = {
   super_admin: 'مدير النظام',
@@ -107,6 +113,18 @@ export default function UsersPage() {
   const [editingUser, setEditingUser] = useState<ApiUser | null>(null)
   const [resetUser, setResetUser] = useState<ApiUser | null>(null)
   const [newPassword, setNewPassword] = useState('')
+  // إعادة التعيين من المدير = كلمة مؤقتة افتراضيًا (يغيّرها أول دخول)
+  const [resetMustChange, setResetMustChange] = useState(true)
+
+  // كلمة مرور مؤقتة لكذا مستخدم مرة واحدة (المنقولين من القديم جم من غير كلمة)
+  const [selected, setSelected] = useState<Set<number>>(new Set())
+  const [showBulk, setShowBulk] = useState(false)
+  const [bulkPassword, setBulkPassword] = useState('')
+  const [bulkConfirm, setBulkConfirm] = useState('')
+  const [bulkMustChange, setBulkMustChange] = useState(true)
+  const [bulkError, setBulkError] = useState<string | null>(null)
+  const [notice, setNotice] = useState<string | null>(null)
+  const [meId, setMeId] = useState<number | null>(null)
 
   // الصلاحيات الدقيقة — تُحمَّل عند فتح مودال التعديل
   const [overrides, setOverrides] = useState<Overrides | null>(null)
@@ -137,8 +155,61 @@ export default function UsersPage() {
   }
 
   useEffect(() => {
+    setMeId(getCurrentUser()?.id ?? null)
     loadData()
   }, [])
+
+  // «مستخدم منقول — محتاج باسورد» (من سجل الترحيل، ولسه محدش عيّن له كلمة هنا)
+  const legacyNeedPassword = users.filter((u) => u.legacyNeedsPassword)
+
+  const toggleSelected = (id: number, checked: boolean) =>
+    setSelected((prev) => {
+      const next = new Set(prev)
+      if (checked) next.add(id)
+      else next.delete(id)
+      return next
+    })
+
+  const selectLegacyWithoutPassword = () =>
+    setSelected(new Set(legacyNeedPassword.filter((u) => u.id !== meId).map((u) => u.id)))
+
+  const openBulk = () => {
+    setBulkPassword('')
+    setBulkConfirm('')
+    setBulkMustChange(true)
+    setBulkError(null)
+    setShowBulk(true)
+  }
+
+  const bulkProblem =
+    bulkPassword.length > 0 && bulkPassword.length < MIN_PASSWORD
+      ? `كلمة المرور ${MIN_PASSWORD} حروف على الأقل`
+      : bulkConfirm.length > 0 && bulkConfirm !== bulkPassword
+        ? 'التأكيد مش زي كلمة المرور'
+        : null
+
+  const handleBulkPassword = async () => {
+    if (bulkPassword.length < MIN_PASSWORD || bulkConfirm !== bulkPassword || selected.size === 0) return
+    setSaving(true)
+    setBulkError(null)
+    try {
+      const res = await setTemporaryPassword([...selected], bulkPassword, bulkMustChange)
+      setShowBulk(false)
+      setBulkPassword('')
+      setBulkConfirm('')
+      setSelected(new Set())
+      setNotice(
+        res.mustChangePassword
+          ? `اتعيّنت كلمة مؤقتة لـ ${res.updated} مستخدم — بلّغهم بيها، وأول ما يدخلوا هيتطلب منهم يغيّروها`
+          : `اتعيّنت كلمة المرور لـ ${res.updated} مستخدم`
+      )
+      await loadData()
+    } catch (err: any) {
+      setBulkError(err.message)
+    } finally {
+      setSaving(false)
+    }
+  }
 
   // تسمية عربية لأي مفتاح صلاحية — من سجل الصلاحيات
   const permLabels = useMemo(
@@ -298,9 +369,15 @@ export default function UsersPage() {
     setSaving(true)
     setModalError(null)
     try {
-      await updateUser(resetUser.id, { password: newPassword })
+      await updateUser(resetUser.id, { password: newPassword, mustChangePassword: resetMustChange })
+      setNotice(
+        resetMustChange
+          ? `اتعيّنت كلمة مؤقتة لـ ${resetUser.displayName} — أول ما يدخل هيتطلب منه يغيّرها`
+          : `اتعيّنت كلمة المرور لـ ${resetUser.displayName}`
+      )
       setResetUser(null)
       setNewPassword('')
+      await loadData()
     } catch (err: any) {
       setModalError(err.message)
     } finally {
@@ -315,7 +392,7 @@ export default function UsersPage() {
     if (!confirm(question)) return
     try {
       const updated = await updateUser(user.id, { isActive: !user.isActive })
-      setUsers((prev) => prev.map((u) => (u.id === updated.id ? updated : u)))
+      setUsers((prev) => prev.map((u) => (u.id === updated.id ? { ...u, ...updated } : u)))
       setError(null)
     } catch (err: any) {
       setError(err.message)
@@ -339,6 +416,45 @@ export default function UsersPage() {
 
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+        {notice && (
+          <div className="bg-green-50 text-green-700 rounded-xl p-4 flex items-center justify-between gap-4">
+            <span>{notice}</span>
+            <button onClick={() => setNotice(null)} className="p-1 hover:bg-green-100 rounded-lg" aria-label="إغلاق">
+              <X size={16} />
+            </button>
+          </div>
+        )}
+
+        {/* المنقولين من القديم من غير كلمة + كلمة مؤقتة للمختارين */}
+        {!loading && (legacyNeedPassword.length > 0 || selected.size > 0) && (
+          <div className="card flex flex-wrap items-center gap-3 bg-amber-50/60 border border-amber-100">
+            {legacyNeedPassword.length > 0 && (
+              <div className="flex items-center gap-2 text-amber-800 text-sm flex-1 min-w-[16rem]">
+                <AlertTriangle size={18} className="shrink-0" />
+                <span>
+                  فيه {legacyNeedPassword.length} مستخدم منقول من النظام القديم من غير كلمة مرور — مش هيقدروا يدخلوا غير
+                  لما تعيّن لهم كلمة.
+                </span>
+              </div>
+            )}
+            {legacyNeedPassword.length > 0 && (
+              <button onClick={selectLegacyWithoutPassword} className="btn-secondary text-sm">
+                اختيار المستخدمين المنقولين اللي مالهمش باسورد
+              </button>
+            )}
+            {selected.size > 0 && (
+              <>
+                <button onClick={openBulk} className="btn-primary text-sm flex items-center gap-2">
+                  <KeyRound size={16} />
+                  تعيين كلمة مرور مؤقتة ({selected.size})
+                </button>
+                <button onClick={() => setSelected(new Set())} className="text-sm text-gray-500 hover:text-gray-700">
+                  إلغاء الاختيار
+                </button>
+              </>
+            )}
+          </div>
+        )}
 
         {/* Stats */}
         <div className="grid grid-cols-4 gap-4">
@@ -431,6 +547,29 @@ export default function UsersPage() {
             <table className="w-full">
               <thead className="bg-gray-50">
                 <tr>
+                  <th className="px-4 py-3 w-10">
+                    {/* اختيار كل الظاهرين (غير حسابك) — لتعيين كلمة مؤقتة */}
+                    <input
+                      type="checkbox"
+                      aria-label="اختيار كل الظاهرين"
+                      className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                      checked={
+                        filteredUsers.some((u) => u.id !== meId) &&
+                        filteredUsers.filter((u) => u.id !== meId).every((u) => selected.has(u.id))
+                      }
+                      onChange={(e) =>
+                        setSelected((prev) => {
+                          const next = new Set(prev)
+                          for (const u of filteredUsers) {
+                            if (u.id === meId) continue
+                            if (e.target.checked) next.add(u.id)
+                            else next.delete(u.id)
+                          }
+                          return next
+                        })
+                      }
+                    />
+                  </th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">المستخدم</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الدور</th>
                   <th className="px-4 py-3 text-right text-sm font-medium text-gray-600">الفرع</th>
@@ -442,13 +581,24 @@ export default function UsersPage() {
               <tbody className="divide-y divide-gray-100">
                 {filteredUsers.length === 0 && (
                   <tr>
-                    <td colSpan={6} className="px-4 py-10 text-center text-gray-400">
+                    <td colSpan={7} className="px-4 py-10 text-center text-gray-400">
                       {users.length === 0 ? 'لا يوجد مستخدمون' : 'لا يوجد مستخدمون مطابقون للبحث أو الفلاتر'}
                     </td>
                   </tr>
                 )}
                 {filteredUsers.map((user) => (
-                  <tr key={user.id} className="hover:bg-gray-50">
+                  <tr key={user.id} className={selected.has(user.id) ? 'bg-primary-50/40' : 'hover:bg-gray-50'}>
+                    <td className="px-4 py-4">
+                      <input
+                        type="checkbox"
+                        aria-label={`اختيار ${user.displayName}`}
+                        title={user.id === meId ? 'حسابك إنت — غيّر كلمتك من «غيّر كلمة المرور»' : undefined}
+                        disabled={user.id === meId}
+                        className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:opacity-40"
+                        checked={selected.has(user.id)}
+                        onChange={(e) => toggleSelected(user.id, e.target.checked)}
+                      />
+                    </td>
                     <td className="px-4 py-4">
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center text-primary-600 font-bold">
@@ -457,6 +607,20 @@ export default function UsersPage() {
                         <div>
                           <p className="font-medium text-gray-800">{user.displayName}</p>
                           <p className="text-sm text-gray-500">{user.email}</p>
+                          {(user.legacyNeedsPassword || user.mustChangePassword) && (
+                            <div className="flex flex-wrap gap-1 mt-1">
+                              {user.legacyNeedsPassword && (
+                                <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-xs">
+                                  مستخدم منقول — محتاج باسورد
+                                </span>
+                              )}
+                              {user.mustChangePassword && (
+                                <span className="px-2 py-0.5 bg-sky-50 text-sky-700 border border-sky-200 rounded-full text-xs">
+                                  كلمة مؤقتة — هيغيّرها أول دخول
+                                </span>
+                              )}
+                            </div>
+                          )}
                         </div>
                       </div>
                     </td>
@@ -510,6 +674,7 @@ export default function UsersPage() {
                           onClick={() => {
                             setResetUser(user)
                             setNewPassword('')
+                            setResetMustChange(user.id !== meId)
                             setModalError(null)
                           }}
                           title="إعادة تعيين كلمة المرور"
@@ -852,6 +1017,15 @@ export default function UsersPage() {
                     dir="ltr"
                   />
                 </div>
+                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer w-fit">
+                  <input
+                    type="checkbox"
+                    checked={resetMustChange}
+                    onChange={(e) => setResetMustChange(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  كلمة مؤقتة — يغيّرها أول ما يدخل
+                </label>
               </div>
 
               <div className="flex items-center gap-3 p-6 border-t border-gray-100">
@@ -864,6 +1038,94 @@ export default function UsersPage() {
                   className="flex-1 btn-primary"
                 >
                   {saving ? 'جارٍ الحفظ...' : 'تعيين كلمة المرور'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* كلمة مرور مؤقتة واحدة للمختارين */}
+        {showBulk && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-2xl w-full max-w-md mx-4 max-h-[90vh] overflow-y-auto">
+              <div className="flex items-center justify-between p-6 border-b border-gray-100">
+                <h2 className="text-xl font-bold text-gray-800">تعيين كلمة مرور مؤقتة</h2>
+                <button onClick={() => setShowBulk(false)} className="p-2 hover:bg-gray-100 rounded-lg" aria-label="إغلاق">
+                  <X size={20} className="text-gray-500" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4">
+                {(bulkError || bulkProblem) && (
+                  <div className="bg-red-50 text-red-700 rounded-xl p-4">{bulkError ?? bulkProblem}</div>
+                )}
+
+                <p className="text-sm text-gray-600">
+                  كلمة واحدة لـ <span className="font-bold text-gray-800">{selected.size}</span> مستخدم. اكتبها إنت وبلّغهم
+                  بيها، وأي جلسة قديمة ليهم هتقفل.
+                </p>
+                <div className="flex flex-wrap gap-1 max-h-28 overflow-y-auto">
+                  {users
+                    .filter((u) => selected.has(u.id))
+                    .map((u) => (
+                      <span key={u.id} className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded-full text-xs">
+                        {u.displayName}
+                      </span>
+                    ))}
+                </div>
+
+                <div>
+                  <label htmlFor="bulk-password" className="block text-sm font-medium text-gray-700 mb-2">
+                    كلمة المرور المؤقتة
+                  </label>
+                  <input
+                    id="bulk-password"
+                    type="password"
+                    autoComplete="new-password"
+                    className="input w-full"
+                    value={bulkPassword}
+                    onChange={(e) => setBulkPassword(e.target.value)}
+                    placeholder={`${MIN_PASSWORD} أحرف على الأقل`}
+                    dir="ltr"
+                  />
+                </div>
+                <div>
+                  <label htmlFor="bulk-confirm" className="block text-sm font-medium text-gray-700 mb-2">
+                    اكتبها تاني
+                  </label>
+                  <input
+                    id="bulk-confirm"
+                    type="password"
+                    autoComplete="new-password"
+                    className="input w-full"
+                    value={bulkConfirm}
+                    onChange={(e) => setBulkConfirm(e.target.value)}
+                    dir="ltr"
+                  />
+                </div>
+                <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer w-fit">
+                  <input
+                    type="checkbox"
+                    checked={bulkMustChange}
+                    onChange={(e) => setBulkMustChange(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
+                  />
+                  لازم كل واحد يغيّرها أول ما يدخل
+                </label>
+              </div>
+
+              <div className="flex items-center gap-3 p-6 border-t border-gray-100">
+                <button onClick={() => setShowBulk(false)} className="flex-1 btn-secondary">
+                  إلغاء
+                </button>
+                <button
+                  onClick={handleBulkPassword}
+                  disabled={
+                    saving || selected.size === 0 || bulkPassword.length < MIN_PASSWORD || bulkConfirm !== bulkPassword
+                  }
+                  className="flex-1 btn-primary disabled:opacity-50"
+                >
+                  {saving ? 'جارٍ الحفظ...' : `تعيين لـ ${selected.size} مستخدم`}
                 </button>
               </div>
             </div>

@@ -17,6 +17,7 @@ import {
   UserMinus,
 } from 'lucide-react'
 import {
+  can,
   fetchAttendanceReport,
   fetchHeadcountReport,
   fetchLeavesReport,
@@ -27,6 +28,7 @@ import {
 import { downloadCsv, csvDateStamp } from '@/lib/csv'
 import { localMonth, localToday } from '@/lib/dates'
 import { categoryLabels } from '@/data/requestsCatalog'
+import { FinancialReportLinks } from './_financial/links'
 
 interface HeadcountReport {
   byBranch: Array<{ branchName: string; total: number; active: number }>
@@ -114,6 +116,8 @@ export default function ReportsPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [selectedCategory, setSelectedCategory] = useState('all')
+  const [canPayroll, setCanPayroll] = useState(false)
+  useEffect(() => { setCanPayroll(can('payroll.view')) }, [])
 
   // الشهر/السنة بالتوقيت المحلي — toISOString (UTC) كانت تفتح الشهر السابق من 00:00 لـ03:00
   const currentMonth = localMonth()
@@ -319,6 +323,9 @@ export default function ReportsPage() {
             {/* «تصدير الكل» أُزيل (بلا تنفيذ)؛ لكل تقرير زر CSV خاص به في بطاقته */}
           </div>
         </div>
+
+        {/* التقارير المالية لشهر الرواتب (محتاجة صلاحية عرض الرواتب) — ظاهرة حتى لو باقي اللوحة ما حمّلتش */}
+        {canPayroll && <FinancialReportLinks />}
 
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}

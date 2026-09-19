@@ -1,4 +1,5 @@
 import { assertExemptionOvertimeAllowed } from '../attendance/attendance-exemption-overtime'
+import { permissionDurationMinutes } from './permission-allowance'
 import {
   BadRequestException,
   ConflictException,
@@ -72,6 +73,7 @@ import { isValidYmd } from '../offboarding/eos'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 import { buildOvertimeApprovalSnapshot, overtimeWageEvidence } from '../payroll/overtime-financial'
 import { appendOvertimeEvent, assertOvertimeSubmission, claimOvertimeDay, releaseOvertimeDayClaim } from './overtime-day-claims'
+import { HOLIDAY_WORK_HANDLER, HOLIDAY_WORK_REQUEST_TYPE, parseHolidayWorkDates } from '../attendance/holiday-work'
 import { OvertimeEntryEvent } from './entities/overtime-workflow.entities'
 import { getLoanInstallmentDeferralEvidence } from '../payroll/payroll-installment-ledger'
 import { assertLoanDeferralClientPayload, assertLoanReferenceId, LOAN_DEFERRAL_FIELDS, LOAN_DEFERRAL_HANDLER, LOAN_DEFERRAL_TYPE,
@@ -437,6 +439,15 @@ export class RequestsService {
     this.assertPayloadKeys(type, req.payload)
     // قيم البنك/المسمى إلزامية وصالحة عند التقديم (SEC-EMP-2)
     this.assertSubmitValues(type, req.payload)
+    // «دوام يوم عطلة»: كل يوم لازم يكون عطلة (ويك إند/عطلة رسمية) لصاحب الطلب — يوم العمل العادي بيترفض من التقديم
+    if (type.destinationHandler === HOLIDAY_WORK_HANDLER) {
+      const working: string[] = []
+      for (const date of parseHolidayWorkDates(JSON.parse(req.payload || '{}').dates)) {
+        // تقويم اليوم مش مثبت: ما نرفضش — حالة اليوم في الحضور هي الحكم وقت حساب المسير
+        try { if ((await this.attendance.calendarDay(req.requesterId, date)).working) working.push(date) } catch { /* لا حكم */ }
+      }
+      if (working.length) throw new BadRequestException(`${working.join('، ')} ${working.length > 1 ? 'أيام عمل عادية' : 'يوم عمل عادي'} ليك — الطلب لأيام العطلة اللي اشتغلتها بس`)
+    }
     if (type.code === 'OVERTIME') {
       const payload = JSON.parse(req.payload || '{}')
       await assertExemptionOvertimeAllowed(em, req.requesterId, String(payload.date ?? ''))
@@ -514,22 +525,30 @@ export class RequestsService {
           p.permissionType = pt.nameAr
           req.payload = JSON.stringify(p)
         }
-        if (pt.maxDurationMinutes && p.from && p.to) {
-          const [fh, fm] = String(p.from).split(':').map(Number)
-          const [th, tm] = String(p.to).split(':').map(Number)
-          const dur = th * 60 + tm - (fh * 60 + fm)
-          if (dur > pt.maxDurationMinutes) {
-            throw new BadRequestException(
-              `مدة الإذن ${dur} دقيقة تتجاوز الحد الأقصى لنوع «${pt.nameAr}» (${pt.maxDurationMinutes} دقيقة)`
-            )
-          }
+        // الإذن بيغطي فترته بالظبط (من → إلى): الوقتين لازم يكونوا صالحين ومختلفين —
+        // النهاية قبل البداية = بيعدّي نص الليل (وردية ليلية). المدة دي أساس الحد للمرة
+        // الواحدة ورصيد الشهر (كان الإذن من غير وقت أو بنهاية قبل بدايته يعدّي بمدة سالبة)
+        const dur = permissionDurationMinutes(p.from, p.to)
+        if (dur == null) {
+          throw new BadRequestException('اختار وقت بداية ونهاية الإذن بصيغة HH:MM')
         }
-        // «كام مرة في الشهر» حدّ فعلي يُرفض تجاوزه عند التقديم (C3). العدّ بنفس مرجع
-        // محرك الحضور: المعرّف للطلبات الجديدة والاسم للقديمة، ويشمل الطلبات الحيّة
-        // في المسار حتى لا يمرّ التجاوز بتقديمين متتاليين قبل الاعتماد
-        // 0 (وكذلك الفارغ) = بلا حدّ على العدد — يبقى معناه في محرك الحضور
-        // (بلا مرات مجانية: كل إذن يُحسب بخصمه)، والرفض لِما جاوز عدداً محدداً
-        if (pt.monthlyFreeCount != null && pt.monthlyFreeCount > 0 && /^\d{4}-\d{2}-\d{2}$/.test(String(p.date ?? ''))) {
+        if (dur <= 0) {
+          throw new BadRequestException('وقت نهاية الإذن لازم يكون بعد وقت البداية')
+        }
+        if (pt.maxDurationMinutes && dur > pt.maxDurationMinutes) {
+          throw new BadRequestException(
+            `مدة الإذن ${dur} دقيقة تتجاوز الحد الأقصى لنوع «${pt.nameAr}» (${pt.maxDurationMinutes} دقيقة)`
+          )
+        }
+        // «كام مرة في الشهر» و«كام دقيقة في الشهر» حدّان فعليان يُرفض تجاوزهما عند
+        // التقديم (C3). العدّ بنفس مرجع محرك الحضور: المعرّف للطلبات الجديدة والاسم
+        // للقديمة، ويشمل الطلبات الحيّة في المسار حتى لا يمرّ التجاوز بتقديمين متتاليين
+        // قبل الاعتماد. 0 (وكذلك الفارغ) = بلا حدّ — يبقى معناه في محرك الحضور.
+        // دقائق الشهر للنوع اللي من غير خصم بس (خانتها مقفولة في الإعدادات للنوع بخصم):
+        // رصيد ساعتين = ساعة + ساعة أو ساعتين مرة واحدة (قرار المالك)
+        const countCap = pt.monthlyFreeCount != null && pt.monthlyFreeCount > 0 ? pt.monthlyFreeCount : null
+        const minutesCap = !pt.isDeductible && pt.monthlyFreeMinutes != null && pt.monthlyFreeMinutes > 0 ? pt.monthlyFreeMinutes : null
+        if ((countCap != null || minutesCap != null) && /^\d{4}-\d{2}-\d{2}$/.test(String(p.date ?? ''))) {
           const month = String(p.date).slice(0, 7)
           const siblings = await em.getRepository(Request).find({
             where: {
@@ -538,23 +557,35 @@ export class RequestsService {
               status: In(['SUBMITTED', 'UNDER_REVIEW', 'APPROVED', 'IN_EXECUTION', 'COMPLETED']),
             },
           })
-          const used = siblings.filter((other) => {
-            if (other.id === req.id) return false
+          const sameMonth: Array<Record<string, unknown>> = []
+          for (const other of siblings) {
+            if (other.id === req.id) continue
             try {
               const op = JSON.parse(other.payload ?? '{}')
-              if (!String(op.date ?? '').startsWith(month)) return false
+              if (!String(op.date ?? '').startsWith(month)) continue
               const otherTypeId = Number(op.permissionTypeId)
-              return Number.isInteger(otherTypeId) && otherTypeId > 0
+              const sameType = Number.isInteger(otherTypeId) && otherTypeId > 0
                 ? otherTypeId === pt.id
                 : String(op.permissionType ?? '') === pt.nameAr
+              if (sameType) sameMonth.push(op)
             } catch {
-              return false
+              /* payload تالف — لا يُعدّ */
             }
-          }).length
-          if (used >= pt.monthlyFreeCount) {
+          }
+          const used = sameMonth.length
+          if (countCap != null && used >= countCap) {
             throw new BadRequestException(
-              `«${pt.nameAr}» مسموح ${pt.monthlyFreeCount} مرة في الشهر، وللموظف ${used} إذن من هذا النوع في شهر ${month}`
+              `«${pt.nameAr}» مسموح ${countCap} مرة في الشهر، وللموظف ${used} إذن من هذا النوع في شهر ${month}`
             )
+          }
+          if (minutesCap != null) {
+            const usedMinutes = sameMonth.reduce((s, op) => s + Math.max(0, permissionDurationMinutes(op.from, op.to) ?? 0), 0)
+            if (usedMinutes + dur > minutesCap) {
+              const left = Math.max(0, minutesCap - usedMinutes)
+              throw new BadRequestException(
+                `رصيد «${pt.nameAr}» ${minutesCap} دقيقة في الشهر؛ اتاخد منه ${usedMinutes} دقيقة في شهر ${month} والباقي ${left} دقيقة، والإذن المطلوب ${dur} دقيقة`
+              )
+            }
           }
         }
       }
@@ -1421,6 +1452,14 @@ export class RequestsService {
             try { await this.attendance.computeDay(employeeId, localDateOf(day)) }
             catch (error) { this.logger.error(`تعذّرت إعادة حساب يوم مبادلة الوردية للموظف #${employeeId}`, (error as Error).stack) }
           }
+        }
+      } else if (saved.typeCode === HOLIDAY_WORK_REQUEST_TYPE && saved.status === 'COMPLETED') {
+        // «دوام يوم عطلة» معتمد: إعادة حساب أيامه تلغي الإضافي المكتشف لليوم المغطى (بيتحسب بدل مش إضافي)
+        let dates: string[] = []
+        try { dates = parseHolidayWorkDates(payload.dates) } catch { dates = [] }
+        for (const date of dates.filter(value => value <= localDateOf(new Date()))) {
+          try { await this.attendance.computeDay(saved.requesterId, date) }
+          catch (error) { this.logger.error(`تعذّرت إعادة حساب يوم دوام العطلة ${date} للموظف #${saved.requesterId}`, (error as Error).stack) }
         }
       }
     } catch (e) {
@@ -2788,6 +2827,8 @@ export class RequestsService {
       const time = String(p.time ?? p.in ?? p.out ?? '').trim()
       if (time && !PUNCH_TIME_PATTERN.test(time)) throw new BadRequestException('وقت البصمة بصيغة HH:MM')
     }
+    // «دوام يوم عطلة»: أيام صحيحة وفاتت (الموظف بيقدّم على أيام عطلة اشتغلها) — نفس قراءة الوجهة وقت الاعتماد
+    if (type.destinationHandler === HOLIDAY_WORK_HANDLER && p.dates != null && p.dates !== '') parseHolidayWorkDates(p.dates, { notAfter: localDateOf(new Date()) })
     const required = this.requiredRequestFields(type)
     const custom: Array<{ key: string; label: string; required?: boolean; type: string; options?: string[] }> =
       type.customFields ? JSON.parse(type.customFields) : []

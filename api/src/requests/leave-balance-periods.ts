@@ -15,6 +15,10 @@ export interface BalanceTypeSettings {
   carryOverEnabled: boolean
   // null = بلا سقف
   carryOverMaxDays: number | null
+  // الموظف الجديد: الاستحقاق السنوي يبدأ بعد كام شهر من التعيين (null = الإعداد العام leave.probation_months)
+  entitlementStartMonths: number | null
+  // أول سنة يستحق فيها: بالنسبة من يوم الاستحقاق لآخر السنة، أو كاملة
+  firstYearProrated: boolean
 }
 
 export interface LeaveTypeBalanceFields {
@@ -27,6 +31,8 @@ export interface LeaveTypeBalanceFields {
   renewalBasis?: string | null
   carryOverEnabled?: boolean | null
   carryOverMaxDays?: number | string | null
+  entitlementStartMonths?: number | string | null
+  firstYearProrated?: boolean | null
 }
 
 // الإعدادات العامة القديمة — احتياطي لو النوع غير موجود أو أيامه فارغة
@@ -175,8 +181,20 @@ export function prorate(fullYear: number, e: { start: string; end: string; nomin
   return f === 1 ? fullYear : round2(fullYear * f)
 }
 
+// أول يوم يستحق فيه الموظف رصيده السنوي: التعيين + شهور بداية الاستحقاق (0 = يوم التعيين)؛
+// بلا تاريخ تعيين صالح = لا بوابة (null)
+export function entitlementEligibleDate(joinDate: string | null | undefined, months: number | null | undefined): string | null {
+  const join = validJoin(joinDate)
+  if (!join) return null
+  const m = Number(months)
+  return Number.isFinite(m) && m > 0 ? addMonths(join, m) : join
+}
+
 // المتراكم لتاريخه: شهري = استحقاق السنة÷12 لكل شهر خدمة مكتمل داخل النافذة، يومي =
-// استحقاق السنة÷أيام السنة الكاملة لكل يوم خدمة داخلها، سنوي/غير السنوي = الكامل
+// استحقاق السنة÷أيام السنة الكاملة لكل يوم خدمة داخلها، سنوي/غير السنوي = الكامل.
+// السنوي قبل يوم الاستحقاق (التعيين + probationMonths) = 0 في كل الطرق. أول سنة يستحق فيها:
+// بالنسبة (prorateFirstYear، الافتراضي) = من يوم الاستحقاق بس؛ كاملة = السنوي كامل والشهري/اليومي
+// يعدّ من أول النافذة أو التعيين (الشهور اللي قبل الاستحقاق تتحسب لما يستحق)
 export function accruedDays(args: {
   balanceType: string
   fullYear: number
@@ -185,16 +203,24 @@ export function accruedDays(args: {
   joinDate: string | null | undefined
   mode: string
   probationMonths: number
+  prorateFirstYear?: boolean
   inclusiveEnd?: boolean
   window: { start: string; end: string; nominalStart: string; nominalEnd: string }
 }): number {
   const { balanceType, fullYear, entitlement, onDate, mode, probationMonths, window } = args
-  if (balanceType !== 'annual' || (mode !== 'monthly' && mode !== 'daily')) return entitlement
-  let start = window.start
+  if (balanceType !== 'annual') return entitlement
   const join = validJoin(args.joinDate)
-  if (join) {
-    const eligible = addMonths(join, probationMonths)
-    if (eligible > start) start = eligible
+  const eligible = entitlementEligibleDate(join, probationMonths)
+  const prorateFirst = args.prorateFirstYear !== false
+  if (eligible && (eligible > window.end || onDate < eligible)) return 0
+  if (mode !== 'monthly' && mode !== 'daily') {
+    if (!eligible || !prorateFirst || eligible <= window.start) return entitlement
+    return Math.min(entitlement, round2((dayCount(eligible, window.end) * fullYear) / dayCount(window.nominalStart, window.nominalEnd)))
+  }
+  let start = window.start
+  if (join && eligible) {
+    const from = prorateFirst ? eligible : join
+    if (from > start) start = from
   }
   if (onDate < start) return 0
   if (mode === 'daily') {
@@ -249,14 +275,19 @@ export function balanceTypeSettings(
       renewalBasis: 'YEAR_START',
       carryOverEnabled: balanceType === 'annual',
       carryOverMaxDays: balanceType === 'annual' ? globals.carryOverMaxDays : null,
+      entitlementStartMonths: null,
+      firstYearProrated: true,
     }
   }
   const days = t.annualDays == null || t.annualDays === '' ? NaN : Number(t.annualDays)
   const cap = t.carryOverMaxDays == null || t.carryOverMaxDays === '' ? NaN : Number(t.carryOverMaxDays)
+  const start = t.entitlementStartMonths == null || t.entitlementStartMonths === '' ? NaN : Number(t.entitlementStartMonths)
   return {
     annualDays: Number.isFinite(days) && days >= 0 ? days : fallbackDays,
     renewalBasis: t.renewalBasis === 'HIRE_ANNIVERSARY' ? 'HIRE_ANNIVERSARY' : 'YEAR_START',
     carryOverEnabled: t.carryOverEnabled === true,
     carryOverMaxDays: Number.isFinite(cap) && cap >= 0 ? cap : null,
+    entitlementStartMonths: Number.isFinite(start) && start >= 0 ? start : null,
+    firstYearProrated: t.firstYearProrated !== false,
   }
 }

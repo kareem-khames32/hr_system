@@ -9,6 +9,8 @@ import { can, getCurrentUser, type ApiBranch, type ApiDepartment, type ApiEmploy
 import { formatMoney } from '@/lib/money'
 import EmptyState from '@/components/EmptyState'
 import { OrgTargetPicker, describeOrgTarget, initialOrgTarget, resolveOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
+import { usePayrollDayRange } from '@/components/DayRangeFilter'
+import { dayRangeLabel, payrollMonthBounds } from '@/lib/payroll-month-range'
 import {
   cancelDeductionWaiver, createDeductionWaiver, DEDUCTION_KIND_LABELS, DEDUCTION_KINDS, fetchDeductionWaivers, fetchPayrollConflicts,
   fetchPayrollDeductions, fetchPayrollIncluded, fetchPayrollWithoutRun,
@@ -21,10 +23,6 @@ export type PayrollOverviewTab = 'included' | 'unassigned' | 'conflicts' | 'dedu
 const RUN_STATUS: Record<string, string> = { DRAFT: 'مسودة', CALCULATED: 'محسوب', IN_REVIEW: 'قيد المراجعة', APPROVED: 'معتمد', PAID: 'مصروف', CANCELLED: 'ملغى' }
 const runLabel = (id: number, name: string | null) => name ? `${name} (#${id})` : `مسير #${id}`
 const errorText = (e: unknown, fallback: string) => (e instanceof Error && e.message ? e.message : fallback)
-const thisMonth = () => {
-  const now = new Date()
-  return `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}`
-}
 
 function useMonthData<T>(period: string, load: (period: string) => Promise<T>, version = 0) {
   const [data, setData] = useState<T | null>(null)
@@ -62,7 +60,13 @@ export function PayrollOverviewTabs({ tab, branches, departments, teams, employe
   employees: ApiEmployee[]
   onOpenRun: (runId: number) => void
 }) {
-  const [period, setPeriod] = useState(thisMonth)
+  // فاضي لحد ما نعرف شهر الرواتب الجاري (useMonthData مش بيحمّل غير YYYY-MM صحيح) — بدل تحميل مزدوج
+  const [period, setPeriod] = useState('')
+  // المسير فترة: الافتراضي شهر الرواتب الجاري (بدورة 23 يوم 25 سبتمبر = رواتب أكتوبر)، ونعرض حدوده الدقيقة
+  const payrollMonth = usePayrollDayRange().context
+  const [periodTouched, setPeriodTouched] = useState(false)
+  useEffect(() => { if (payrollMonth && !periodTouched) setPeriod(payrollMonth.period) }, [payrollMonth, periodTouched])
+  const periodRange = payrollMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(period) ? payrollMonthBounds(period, payrollMonth.cycleStartDay) : null
   const [query, setQuery] = useState('')
   const matches = (row: { fullName: string; employeeCode: string }) =>
     !query.trim() || row.fullName.includes(query.trim()) || row.employeeCode.toLowerCase().includes(query.trim().toLowerCase())
@@ -71,8 +75,9 @@ export function PayrollOverviewTabs({ tab, branches, departments, teams, employe
     <div className="space-y-4" data-payroll-overview-tab={tab}>
       <div className="card flex flex-wrap items-end gap-4">
         <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-gray-700 flex items-center gap-1.5"><Calendar size={15} className="text-gray-400" /> الشهر</span>
-          <input type="month" className="input w-48" dir="ltr" value={period} onChange={e => setPeriod(e.target.value)} />
+          <span className="font-medium text-gray-700 flex items-center gap-1.5"><Calendar size={15} className="text-gray-400" /> شهر الرواتب</span>
+          <input type="month" className="input w-48" dir="ltr" value={period} onChange={e => { setPeriodTouched(true); setPeriod(e.target.value) }} />
+          {periodRange && <span className="text-xs text-gray-500" data-payroll-period-range>{dayRangeLabel(periodRange)}</span>}
         </label>
         <div className="relative flex-1 min-w-[220px]">
           <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
