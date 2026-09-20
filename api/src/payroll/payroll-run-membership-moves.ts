@@ -122,3 +122,83 @@ export function planPayrollRunMembership(definition: PayrollRunDefinition, input
 /** هل الموظف داخل قائمة هذا المسير الدائمة (بالاسم لا بالفلاتر)؟ */
 export const payrollRunListsEmployee = (definition: PayrollRunDefinition, employeeId: number): boolean =>
   definition.filters.employeeIds.includes(employeeId) || definition.filters.includeEmployeeIds.includes(employeeId)
+
+/**
+ * نقل/إضافة مجموعة مختلطة في نداء واحد («نقل لمسير…» من الجدول الموحد): لكل موظف نتيجته بالاسم.
+ * المتخطى بيرجع بسببه بالعربي عشان المالك يشوف كل صف لوحده بدل رسالة خطأ واحدة توقف الدفعة كلها.
+ */
+export const PAYROLL_BULK_MEMBERSHIP_OUTCOMES = ['MOVED', 'ADDED', 'SKIPPED'] as const
+export type PayrollBulkMembershipOutcome = typeof PAYROLL_BULK_MEMBERSHIP_OUTCOMES[number]
+
+export const PAYROLL_BULK_SKIP_LABELS: Record<string, string> = {
+  ALREADY_IN_RUN: 'موجود في المسير ده أصلًا',
+  LOCKED_RUN: 'مسيره الحالي في الشهر ده معتمد أو مصروف — الشهر المقفول ما يتغيرش',
+  OUT_OF_BRANCH_SCOPE: 'خارج نطاق فرعك',
+  SOURCE_OUT_OF_SCOPE: 'مسيره الحالي خارج نطاق فرعك',
+  SOURCE_NO_NAME: 'مسيره الحالي قديم بلا اسم — اعمله من «مسير جديد» باسم ثابت قبل النقل',
+  SOURCE_RUN_TYPE: 'مسيره الحالي تكميلي أو عكس صرف — غيّر العضوية من المسير العادي',
+  EMPLOYEE_NOT_FOUND: 'الموظف مش موجود',
+  FAILED: 'تعذر التنفيذ',
+}
+export const payrollBulkSkipText = (code: string, detail?: string | null): string =>
+  detail && detail.trim() ? detail.trim() : PAYROLL_BULK_SKIP_LABELS[code] ?? 'اتخطى'
+
+export interface PayrollBulkMembershipResultRow {
+  employeeId: number
+  fullName: string | null
+  employeeCode: string | null
+  outcome: PayrollBulkMembershipOutcome
+  /** المسير اللي خرج منه (النقل) أو null (إضافة) */
+  fromRunId: number | null
+  fromRunName: string | null
+  /** كود ونص سبب التخطي — فاضيين للناجح */
+  skipCode: string | null
+  skipReason: string | null
+}
+
+/** تقسيم الاختيار المختلط: مين ينتقل من أنهي مسير، مين يتضاف، ومين يتخطى وليه. دالة صافية. */
+export interface PayrollBulkMembershipCandidate {
+  employeeId: number
+  fullName: string | null
+  employeeCode: string | null
+  /** فرع الموظف الآن (null = ملفه مش موجود) */
+  branchId?: number | null
+  exists: boolean
+  /** مسيرات الشهر اللي هو فيها فعلًا (مرتبة بالـid) */
+  homes: Array<{ id: number; name: string | null; status: string; runType: string; visible: boolean }>
+}
+export interface PayrollBulkMembershipSplit {
+  /** مفاتيح المجموعات: null = إضافة (مش في أي مسير)، ورقم = نقل من المسير ده */
+  groups: Array<{ fromRunId: number | null; employeeIds: number[] }>
+  skipped: PayrollBulkMembershipResultRow[]
+  namesById: Map<number, { fullName: string | null; employeeCode: string | null }>
+  fromNames: Map<number, string | null>
+}
+
+export function splitPayrollBulkMembership(candidates: PayrollBulkMembershipCandidate[], input: { targetRunId: number; branchScope: number | null }): PayrollBulkMembershipSplit {
+  const groups = new Map<number | null, number[]>()
+  const skipped: PayrollBulkMembershipResultRow[] = []
+  const namesById = new Map<number, { fullName: string | null; employeeCode: string | null }>()
+  const fromNames = new Map<number, string | null>()
+  const skip = (candidate: PayrollBulkMembershipCandidate, code: string, from?: { id: number; name: string | null }) => skipped.push({
+    employeeId: candidate.employeeId, fullName: candidate.fullName, employeeCode: candidate.employeeCode, outcome: 'SKIPPED',
+    fromRunId: from?.id ?? null, fromRunName: from?.name ?? null, skipCode: code, skipReason: payrollBulkSkipText(code),
+  })
+  for (const candidate of candidates) {
+    namesById.set(candidate.employeeId, { fullName: candidate.fullName, employeeCode: candidate.employeeCode })
+    if (!candidate.exists) { skip(candidate, 'EMPLOYEE_NOT_FOUND'); continue }
+    if (input.branchScope !== null && (candidate.branchId ?? null) !== input.branchScope) { skip(candidate, 'OUT_OF_BRANCH_SCOPE'); continue }
+    if (candidate.homes.some(run => run.id === input.targetRunId)) { skip(candidate, 'ALREADY_IN_RUN'); continue }
+    const home = candidate.homes[0] ?? null
+    if (!home) { groups.set(null, [...(groups.get(null) ?? []), candidate.employeeId]); continue }
+    if (!home.visible) { skip(candidate, 'SOURCE_OUT_OF_SCOPE', home); continue }
+    if (home.runType !== 'REGULAR') { skip(candidate, 'SOURCE_RUN_TYPE', home); continue }
+    if (!(PAYROLL_MEMBERSHIP_OPEN_STATUSES as readonly string[]).includes(home.status)) { skip(candidate, 'LOCKED_RUN', home); continue }
+    if (!payrollRunSeriesName(home.name)) { skip(candidate, 'SOURCE_NO_NAME', home); continue }
+    fromNames.set(home.id, home.name)
+    groups.set(home.id, [...(groups.get(home.id) ?? []), candidate.employeeId])
+  }
+  // الإضافة أولًا (أبسط وأسرع)، بعدين النقل من كل مسير بترتيب ثابت
+  const ordered = [...groups.entries()].sort((a, b) => (a[0] ?? 0) - (b[0] ?? 0))
+  return { groups: ordered.map(([fromRunId, employeeIds]) => ({ fromRunId, employeeIds })), skipped, namesById, fromNames }
+}

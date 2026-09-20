@@ -4,10 +4,30 @@ import { Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { DEDUCTION_WAIVER_KINDS, DEDUCTION_WAIVER_LEVELS } from './payroll-deduction-waivers'
+import { PAYROLL_MEMBERSHIP_VIEWS } from './payroll-overview-filters'
 import { PayrollOverviewService } from './payroll-overview.service'
 
 class OverviewPeriodQuery {
   @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'اختار الشهر بصيغة YYYY-MM' }) period: string
+}
+
+/**
+ * فلاتر تبويبي «المدرجين بالمسير» و«موظفين ليس لديهم مسير» والجدول الموحد (طلب المالك 20 سبتمبر).
+ * كل فلتر اختياري؛ القيم غير الصالحة تسقط في normalizePayrollOverviewFilters بلا رفض الطلب.
+ */
+class OverviewRosterQuery extends OverviewPeriodQuery {
+  @IsOptional() @IsString() @MaxLength(200) search?: string
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) branchId?: number
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) departmentId?: number
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) teamId?: number
+  @IsOptional() @IsString() @MaxLength(200) jobTitle?: string
+  /** حالات الموظف مفصولة بفاصلة: active,probation,suspended… */
+  @IsOptional() @IsString() @MaxLength(200) statuses?: string
+  @IsOptional() @IsString() @MaxLength(10) hiredFrom?: string
+  @IsOptional() @IsString() @MaxLength(10) hiredTo?: string
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) runId?: number
+  @IsOptional() @IsString() @MaxLength(60) reasonCode?: string
+  @IsOptional() @IsIn([...PAYROLL_MEMBERSHIP_VIEWS], { message: 'المنظور: الكل أو المدرجين أو بلا مسير' }) membership?: string
 }
 
 class CreateDeductionWaiverDto {
@@ -29,14 +49,28 @@ export class PayrollOverviewController {
 
   @Perm('payroll.view')
   @Get('included')
-  included(@CurrentUser() user: JwtPayload, @Query() query: OverviewPeriodQuery) {
-    return this.service.included(user, query.period)
+  included(@CurrentUser() user: JwtPayload, @Query() query: OverviewRosterQuery) {
+    return this.service.included(user, query.period, query)
   }
 
   @Perm('payroll.view')
   @Get('unassigned')
-  unassigned(@CurrentUser() user: JwtPayload, @Query() query: OverviewPeriodQuery) {
-    return this.service.unassigned(user, query.period)
+  unassigned(@CurrentUser() user: JwtPayload, @Query() query: OverviewRosterQuery) {
+    return this.service.unassigned(user, query.period, query)
+  }
+
+  // الجدول الموحد: كل موظفي الشهر في جدول واحد بعمود «المسير» ومنظور «الكل / المدرجين / بلا مسير»
+  @Perm('payroll.view')
+  @Get('roster')
+  roster(@CurrentUser() user: JwtPayload, @Query() query: OverviewRosterQuery) {
+    return this.service.roster(user, query.period, query)
+  }
+
+  // وجهات النقل: المسيرات المفتوحة في الشهر بفترتها ومعادلتها (لقائمة نافذة «نقل لمسير…»)
+  @Perm('payroll.view')
+  @Get('run-targets')
+  runTargets(@CurrentUser() user: JwtPayload, @Query() query: OverviewPeriodQuery) {
+    return this.service.runTargets(user, query.period)
   }
 
   @Perm('payroll.view')

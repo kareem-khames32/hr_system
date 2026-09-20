@@ -2,108 +2,34 @@
 
 // قرار المالك (20 سبتمبر): «نقل لمسير آخر» — المسير قائمة دائمة باسمها، والنقل يسري من الشهر المختار ورايح.
 // الشهر المعتمد أو المصروف ما يتغيرش، ومسير الشهر الجديد بينسخ القائمة الجديدة لوحده.
-// نفس النافذة تُستعمل من صف الموظف في جدول المسير ومن قسم الرواتب في ملف الموظف.
+// النافذة نفسها واحدة في كل الشاشات (PayrollMoveToRunModal): جدول الشهر الموحد، وصف الموظف في جدول المسير، وملف الموظف.
 
 import { useEffect, useState } from 'react'
-import { ArrowLeftRight } from 'lucide-react'
 import { can } from '@/lib/api'
 import { PayrollPeriodSelect, usePayrollDayRange } from '@/components/DayRangeFilter'
+import { PayrollMoveToRunModal } from '@/components/payroll/PayrollMoveToRunModal'
 import {
-  addPayrollRunMembers, fetchEmployeePayrollRuns, payrollRunErrorMessage,
-  type PayrollEmployeeRuns, type PayrollRunMemberRef, type PayrollRunMembershipResult,
+  fetchEmployeePayrollRuns, payrollRunErrorMessage,
+  type PayrollBulkMembershipResult, type PayrollEmployeeRuns, type PayrollRunMemberRef,
 } from '@/lib/payroll-runs-api'
 
 const RUN_STATUS: Record<string, string> = { DRAFT: 'مسودة', CALCULATED: 'محسوب', IN_REVIEW: 'قيد المراجعة', APPROVED: 'معتمد', PAID: 'مصروف', CANCELLED: 'ملغى' }
 const runLabel = (run: Pick<PayrollRunMemberRef, 'id' | 'name'>) => run.name ? `${run.name} (#${run.id})` : `مسير #${run.id}`
 
-export function PayrollRunMoveMemberModal({ employeeId, employeeName, period, fromRunId, onClose, onMoved }: {
+/** غلاف بالاسم القديم على النافذة الموحدة — لموظف واحد من صفه أو من ملفه. */
+export function PayrollRunMoveMemberModal({ employeeId, employeeName, period, fromRunId, fromRunName, onClose, onMoved }: {
   employeeId: number
   employeeName: string
   period: string
-  /** المسير اللي الموظف فيه دلوقتي؛ بلاش قيمة = هيتحدد من مسيراته في الشهر ده */
+  /** المسير اللي الموظف فيه دلوقتي؛ بلاش قيمة = إضافة */
   fromRunId?: number | null
+  fromRunName?: string | null
   onClose: () => void
-  onMoved: (result: PayrollRunMembershipResult) => Promise<void> | void
+  onMoved: (result: PayrollBulkMembershipResult) => Promise<void> | void
 }) {
-  const [data, setData] = useState<PayrollEmployeeRuns | null>(null)
-  const [source, setSource] = useState<number | ''>(fromRunId ?? '')
-  const [target, setTarget] = useState<number | ''>('')
-  const [reason, setReason] = useState('')
-  const [busy, setBusy] = useState(false)
-  const [error, setError] = useState('')
-
-  useEffect(() => {
-    let cancelled = false
-    fetchEmployeePayrollRuns(employeeId, period)
-      .then(value => {
-        if (cancelled) return
-        setData(value)
-        if (fromRunId == null && value.current.length === 1) setSource(value.current[0].id)
-      })
-      .catch(e => { if (!cancelled) setError(payrollRunErrorMessage(e, 'تعذر تحميل مسيرات الموظف')) })
-    return () => { cancelled = true }
-  }, [employeeId, period, fromRunId])
-
-  const targets = (data?.targets ?? []).filter(run => run.id !== source)
-  const submit = async () => {
-    setError('')
-    if (!target) { setError('اختار المسير المنقول إليه'); return }
-    if (reason.trim().length < 3) { setError('اكتب سبب النقل'); return }
-    setBusy(true)
-    try {
-      const result = await addPayrollRunMembers(Number(target), { employeeIds: [employeeId], reason: reason.trim(),
-        ...(source ? { fromRunId: Number(source) } : {}) })
-      await onMoved(result)
-      onClose()
-    } catch (e) {
-      setError(payrollRunErrorMessage(e, 'تعذر نقل الموظف'))
-    } finally { setBusy(false) }
-  }
-
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label={`نقل لمسير آخر — ${employeeName}`}>
-      <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl space-y-3 text-right" data-testid="payroll-move-member">
-        <div className="flex items-center justify-between gap-2">
-          <h3 className="font-bold text-gray-800 flex items-center gap-2"><ArrowLeftRight size={18} /> نقل لمسير آخر — {employeeName}</h3>
-          <button type="button" onClick={onClose} disabled={busy} className="text-sm text-gray-500 disabled:opacity-50">إغلاق</button>
-        </div>
-        <p className="text-xs text-gray-500">
-          النقل عضوية دائمة: يبدأ من شهر {period} ويكمّل كل شهر بعده (مسير الشهر الجديد بينسخ القائمة).
-          الأشهر المعتمدة أو المصروفة ما بتتغيرش.
-        </p>
-        {error && <p role="alert" className="p-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</p>}
-        {!data && !error && <p className="text-sm text-gray-400">جارٍ تحميل مسيرات الموظف…</p>}
-        {data && (
-          <div className="space-y-3 text-sm">
-            <label className="flex flex-col gap-1">
-              <span className="font-medium text-gray-700">من مسير</span>
-              <select className="input w-full" value={source} disabled={busy || fromRunId != null} onChange={e => setSource(e.target.value ? Number(e.target.value) : '')}>
-                <option value="">مش في أي مسير (إضافة بس)</option>
-                {data.current.map(run => <option key={run.id} value={run.id}>{runLabel(run)} — {RUN_STATUS[run.status] ?? run.status}</option>)}
-              </select>
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="font-medium text-gray-700">إلى مسير</span>
-              <select className="input w-full" value={target} disabled={busy} onChange={e => setTarget(e.target.value ? Number(e.target.value) : '')}>
-                <option value="">اختار المسير</option>
-                {targets.map(run => <option key={run.id} value={run.id}>{runLabel(run)} — {RUN_STATUS[run.status] ?? run.status}</option>)}
-              </select>
-              {!targets.length && <span className="text-xs text-gray-500">مفيش مسير تاني مفتوح في شهر {period}.</span>}
-            </label>
-            <label className="flex flex-col gap-1">
-              <span className="font-medium text-gray-700">السبب</span>
-              <input className="input w-full" maxLength={400} value={reason} disabled={busy} placeholder="مثال: اتنقل لفرع النصر" onChange={e => setReason(e.target.value)} />
-            </label>
-            <div className="flex gap-2 justify-end">
-              <button type="button" className="btn-secondary text-sm" disabled={busy} onClick={onClose}>رجوع</button>
-              <button type="button" className="btn-primary text-sm disabled:opacity-50" disabled={busy || !target || reason.trim().length < 3} onClick={submit}>
-                {busy ? 'بينقل...' : 'انقل'}
-              </button>
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
+    <PayrollMoveToRunModal period={period} onClose={onClose} onDone={onMoved}
+      employees={[{ employeeId, fullName: employeeName, runId: fromRunId ?? null, runName: fromRunName ?? null }]} />
   )
 }
 
@@ -119,7 +45,7 @@ export function EmployeePayrollRunsCard({ employeeId, employeeName }: { employee
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [version, setVersion] = useState(0)
-  const [moving, setMoving] = useState<number | null>(null)
+  const [moving, setMoving] = useState<PayrollRunMemberRef | null | undefined>(undefined)
   const canMove = can('payroll.calculate')
   useEffect(() => { if (payrollMonth && !touched) setPeriod(payrollMonth.period) }, [payrollMonth, touched])
   useEffect(() => {
@@ -154,7 +80,7 @@ export function EmployeePayrollRunsCard({ employeeId, employeeName }: { employee
                 <p className="text-xs text-gray-500">{RUN_STATUS[run.status] ?? run.status}{run.listed ? ' · مضاف بالاسم (عضوية دائمة)' : ' · داخل بنطاق المسير'}</p>
               </div>
               {canMove && ['DRAFT', 'CALCULATED'].includes(run.status) && (
-                <button type="button" className="btn-secondary text-xs px-2 py-1" data-move-employee-run={run.id} onClick={() => setMoving(run.id)}>نقل لمسير آخر</button>
+                <button type="button" className="btn-secondary text-xs px-2 py-1" data-move-employee-run={run.id} onClick={() => setMoving(run)}>نقل لمسير آخر</button>
               )}
             </div>
           ))}
@@ -162,14 +88,18 @@ export function EmployeePayrollRunsCard({ employeeId, employeeName }: { employee
       ) : (
         <div className="flex flex-wrap items-center justify-between gap-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-900">
           <span>مالوش مسير في شهر {period}.</span>
-          {canMove && data.targets.length > 0 && <button type="button" className="btn-secondary text-xs px-2 py-1" onClick={() => setMoving(0)}>ضمّه لمسير</button>}
+          {canMove && data.targets.length > 0 && <button type="button" className="btn-secondary text-xs px-2 py-1" onClick={() => setMoving(null)}>ضمّه لمسير</button>}
         </div>
       ))}
-      {moving !== null && (
-        <PayrollRunMoveMemberModal employeeId={employeeId} employeeName={employeeName} period={period} fromRunId={moving || null}
-          onClose={() => setMoving(null)}
+      {moving !== undefined && (
+        <PayrollRunMoveMemberModal employeeId={employeeId} employeeName={employeeName} period={period}
+          fromRunId={moving?.id ?? null} fromRunName={moving?.name ?? null}
+          onClose={() => setMoving(undefined)}
           onMoved={result => {
-            setNotice(`اتنقل لـ${runLabel(result.moved[0].to)} من شهر ${result.fromPeriod} ورايح${result.recalculated ? ' واتحسب تاني' : ''}.`)
+            const done = result.results.find(row => row.outcome !== 'SKIPPED')
+            setNotice(done
+              ? `${done.outcome === 'MOVED' ? 'اتنقل' : 'اتضاف'} لـ${runLabel(result.target)} من شهر ${result.fromPeriod} ورايح${result.recalculated ? ' واتحسب تاني' : ''}.`
+              : `ما اتغيّرش: ${result.results[0]?.skipReason ?? 'اتخطى'}`)
             setVersion(v => v + 1)
           }} />
       )}

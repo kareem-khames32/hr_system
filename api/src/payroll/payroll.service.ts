@@ -67,7 +67,10 @@ import { localDateOf } from '../attendance/attendance.service'
 import { PayrollPolicy, PayrollPolicyVersion } from './payroll-policy.entities'
 import { payrollPolicyEffectiveEnds } from './payroll-policy-publish'
 import { foldPayrollRunInclusions, PayrollRunDefinition, payrollRunDefinitionColumns, payrollRunDefinitionOf, PayrollRunDefinitionError, payrollRunHasOrgFilters, payrollRunSelectionMode, PayrollRunExclusion, PayrollRunFilters, payrollLegacyCalculateAllowed } from './payroll-run-definition'
-import { findPayrollRunSeries, findPayrollRunSeriesLocked, payrollRunListsEmployee, payrollRunSeriesName, planPayrollRunMembership, type PayrollRunMembershipPlan } from './payroll-run-membership-moves'
+import {
+  findPayrollRunSeries, findPayrollRunSeriesLocked, payrollBulkSkipText, payrollRunListsEmployee, payrollRunSeriesName, planPayrollRunMembership,
+  splitPayrollBulkMembership, type PayrollBulkMembershipOutcome, type PayrollBulkMembershipResultRow, type PayrollRunMembershipPlan,
+} from './payroll-run-membership-moves'
 import { PayrollMembershipRow, resolvePayrollRunMembership } from './payroll-run-membership'
 import { buildPayrollUnassignedReport, PAYROLL_EXCLUSION_LABELS, PayrollUnassignedReport } from './payroll-unassigned-report'
 import { PayrollRunUnassignedAck } from './payroll-run-definition.entities'
@@ -2667,6 +2670,95 @@ export class PayrollService {
     return { runId, fromPeriod: period, employeeIds, moved, recalculated: anchorRecalculated,
       added: [...new Set(applied.added)], alreadyMember: [...new Set(applied.alreadyMember)], removed: [...new Set(applied.removed)],
       recalculateRuns: recalculate, lockedRuns: locked, run: await this.detail(user, runId) }
+  }
+
+  /**
+   * «نقل لمسير…» لمجموعة مختلطة في نداء واحد (طلب المالك 20 سبتمبر): اللي في مسير مفتوح يُنقل منه، واللي بلا مسير يُضاف،
+   * واللي شهره معتمد أو خارج نطاق فرعك يُتخطى بسببه. لكل موظف نتيجته، والتنفيذ نفسه بمسار changeRunMembership القائم.
+   */
+  async changeRunMembershipBulk(user: JwtPayload, runId: number, dto: { employeeIds: number[]; reason?: unknown; allowDraftConflicts?: boolean }) {
+    const target = await this.runs.findOneBy({ id: runId })
+    if (!target) throw new NotFoundException('المسير غير موجود')
+    await this.assertRunAccess(user, target)
+    this.runOpenForMembership(target, 'إضافة موظفين للمسير')
+    const employeeIds = [...new Set((dto.employeeIds ?? []).map(Number))].filter(id => Number.isSafeInteger(id) && id > 0)
+    if (!employeeIds.length) this.bad('PAYRUN-MEMBERSHIP-EMPTY', 'اختر موظفًا واحدًا على الأقل')
+    if (employeeIds.length > 500) this.bad('PAYRUN-MEMBERSHIP-TOO-MANY', 'أضف 500 موظف كحد أقصى في المرة الواحدة')
+    const reason = typeof dto.reason === 'string' ? dto.reason.trim() : ''
+    if (reason.length < 3 || reason.length > 400) this.bad('PAYRUN-MEMBERSHIP-REASON', 'اكتب سبب تغيير مسير الموظف (من 3 إلى 400 حرف)')
+
+    const em = this.runs.manager
+    const period = target.period
+    const employees = await em.getRepository(Employee).find({ where: { id: In(employeeIds) }, select: { id: true, fullName: true, employeeCode: true, branchId: true } })
+    const byId = new Map(employees.map(row => [row.id, row]))
+    // مسيرات الشهر الحية، ورؤية كل واحد منها بنطاق المستخدم (نفس شرط assertRunAccess)
+    const monthRuns = (await this.runs.find({ where: { period }, order: { id: 'ASC' } })).filter(run => run.status !== 'CANCELLED')
+    const visible = await this.runVisibility(user, em)
+    const runVisible = new Map<number, boolean>()
+    for (const run of monthRuns) runVisible.set(run.id, await visible(run.id))
+    const members = monthRuns.length
+      ? await em.getRepository(PayrollRunMember).find({ where: { runId: In(monthRuns.map(run => run.id)), employeeId: In(employeeIds) } })
+      : []
+    const listedIn = new Map<number, Set<number>>()
+    for (const run of monthRuns) {
+      const set = new Set<number>()
+      try {
+        const definition = payrollRunDefinitionOf(run)
+        for (const id of employeeIds) if (payrollRunListsEmployee(definition, id)) set.add(id)
+      } catch { /* تعريف قديم أو تالف: نعتمد على صفوف العضوية وحدها */ }
+      listedIn.set(run.id, set)
+    }
+    const split = splitPayrollBulkMembership(employeeIds.map(employeeId => {
+      const employee = byId.get(employeeId)
+      const homes = monthRuns.filter(run => listedIn.get(run.id)?.has(employeeId)
+        || members.some(row => row.runId === run.id && row.employeeId === employeeId && row.membershipStatus !== 'EXCLUDED'))
+      return { employeeId, exists: !!employee, fullName: employee?.fullName ?? null, employeeCode: employee?.employeeCode ?? null,
+        branchId: employee?.branchId ?? null,
+        homes: homes.map(run => ({ id: run.id, name: run.name, status: run.status, runType: payrollRunTypeOf(run), visible: runVisible.get(run.id) === true })) }
+    }), { targetRunId: runId, branchScope: branchScopeOf(user) })
+
+    const results: PayrollBulkMembershipResultRow[] = [...split.skipped]
+    const recalculateRuns = new Map<number, { id: number; name: string | null; period: string; status: string }>()
+    const lockedRuns = new Map<number, { id: number; name: string | null; period: string; status: string }>()
+    let recalculated = false
+    for (const group of split.groups) {
+      const name = (id: number) => split.namesById.get(id) ?? { fullName: null, employeeCode: null }
+      try {
+        const result = await this.changeRunMembership(user, runId, { employeeIds: group.employeeIds, reason,
+          allowDraftConflicts: dto.allowDraftConflicts, ...(group.fromRunId == null ? {} : { fromRunId: group.fromRunId }) })
+        recalculated = recalculated || result.recalculated
+        for (const row of result.recalculateRuns) recalculateRuns.set(row.id, row)
+        for (const row of result.lockedRuns) lockedRuns.set(row.id, row)
+        for (const employeeId of group.employeeIds) {
+          results.push({ employeeId, ...name(employeeId), outcome: group.fromRunId == null ? 'ADDED' : 'MOVED',
+            fromRunId: group.fromRunId, fromRunName: group.fromRunId == null ? null : split.fromNames.get(group.fromRunId) ?? null,
+            skipCode: null, skipReason: null })
+        }
+      } catch (error) {
+        const detail = error instanceof HttpException ? this.httpExceptionMessage(error) : error instanceof Error ? error.message : null
+        for (const employeeId of group.employeeIds) {
+          results.push({ employeeId, ...name(employeeId), outcome: 'SKIPPED',
+            fromRunId: group.fromRunId, fromRunName: group.fromRunId == null ? null : split.fromNames.get(group.fromRunId) ?? null,
+            skipCode: 'FAILED', skipReason: payrollBulkSkipText('FAILED', detail) })
+        }
+      }
+    }
+    results.sort((a, b) => employeeIds.indexOf(a.employeeId) - employeeIds.indexOf(b.employeeId))
+    const of = (outcome: PayrollBulkMembershipOutcome) => results.filter(row => row.outcome === outcome).map(row => row.employeeId)
+    return { runId, period, fromPeriod: period, target: this.runRef(target), results,
+      moved: of('MOVED'), added: of('ADDED'), skipped: of('SKIPPED'), recalculated,
+      recalculateRuns: [...recalculateRuns.values()], lockedRuns: [...lockedRuns.values()],
+      run: await this.detail(user, runId) }
+  }
+
+  /** نص رسالة استثناء Nest أيًّا كان شكل جسمه (نص، أو {message}، أو {code,message}). */
+  private httpExceptionMessage(error: HttpException): string | null {
+    const body = error.getResponse()
+    if (typeof body === 'string') return body
+    const message = (body as { message?: unknown })?.message
+    if (typeof message === 'string') return message
+    if (Array.isArray(message)) return message.filter(row => typeof row === 'string').join('، ') || null
+    return error.message || null
   }
 
   /** مسير الموظف في شهر: أين هو الآن (بالقائمة الدائمة أو بالفلاتر) وما المسيرات المفتوحة التي يمكن نقله إليها — قراءة فقط. */

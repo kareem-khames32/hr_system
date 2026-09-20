@@ -9,6 +9,10 @@ import {
 } from './payroll-deduction-waivers'
 import { findPayrollConflicts } from './payroll-membership-guard'
 import { describePayrollItemsLines, payrollLineColumns, type PayrollItemLines } from './payroll-item-lines'
+import {
+  matchesPayrollOverviewFilter, normalizePayrollOverviewFilters, payrollOverviewNeedsSuspended,
+  type PayrollOverviewFilterInput, type PayrollOverviewFilters,
+} from './payroll-overview-filters'
 import { PayrollRun } from './payroll.entities'
 import { PayrollService } from './payroll.service'
 
@@ -27,12 +31,27 @@ export interface DeductionWaiverInput {
 
 interface RunRow { id: number; name: string | null; status: string; period: string; startDate: string; endDate: string; runType: string | null }
 interface OrgNames { branches: Map<number, string>; departments: Map<number, string>; teams: Map<number, string> }
+interface EmployeeRow {
+  id: number; fullName: string; employeeCode: string; branchId: number | null; departmentId: number | null; teamId: number | null
+  jobTitle: string | null; status: string | null; hireDate: string | null
+}
+/** صف جدول الشهر الموحد: الموظف ومكانه، ومسيره أو «بلا مسير» وسببه. */
+interface RosterRow {
+  employeeId: number; employeeCode: string; fullName: string; jobTitle: string | null; employmentStatus: string | null; hireDate: string | null
+  branchId: number | null; branchName: string | null; departmentId: number | null; departmentName: string | null
+  teamId: number | null; teamName: string | null
+  runId: number | null; runName: string | null; runStatus: string | null; runCount: number
+  reasonCode: string | null; reasonText: string | null
+}
 
 const OPEN_STATUSES = ['DRAFT', 'CALCULATED', 'IN_REVIEW']
 const cents = (value: unknown) => Math.trunc(Math.round(Number(value ?? 0) * 1000) / 10)
 const money = (value: number) => value / 100
 const idList = (ids: number[], offset = 0) => ids.map((_, index) => `@${index + offset}`).join(', ')
 const chunks = <T>(rows: T[], size = 500) => Array.from({ length: Math.ceil(rows.length / size) }, (_, index) => rows.slice(index * size, (index + 1) * size))
+/** المسميات الوظيفية الموجودة فعلًا في صفوف الشهر — قائمة فلتر «المسمى الوظيفي» بلا قراءة كل الموظفين. */
+const jobTitles = (rows: Array<{ jobTitle?: string | null }>): string[] =>
+  [...new Set(rows.map(row => (row.jobTitle ?? '').trim()).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ar'))
 const parseJson = (raw: unknown): Record<string, any> => {
   if (!raw || typeof raw !== 'string') return {}
   try { const value = JSON.parse(raw); return value && typeof value === 'object' ? value : {} } catch { return {} }
@@ -92,9 +111,9 @@ export class PayrollOverviewService {
   }
 
   private async employees(ids: number[]) {
-    const map = new Map<number, { id: number; fullName: string; employeeCode: string; branchId: number | null; departmentId: number | null; teamId: number | null; hireDate: string | null }>()
+    const map = new Map<number, EmployeeRow>()
     for (const chunk of chunks([...new Set(ids)])) {
-      const rows = await this.em.query(`SELECT [id], [fullName], [employeeCode], [branchId], [departmentId], [teamId],
+      const rows = await this.em.query(`SELECT [id], [fullName], [employeeCode], [branchId], [departmentId], [teamId], [jobTitle], [status],
           CONVERT(varchar(10), COALESCE([actualStartDate], [joinDate]), 23) AS [hireDate]
         FROM [employees] WHERE [id] IN (${idList(chunk)})`, chunk)
       for (const row of rows) map.set(Number(row.id), { ...row, id: Number(row.id) })
@@ -107,9 +126,19 @@ export class PayrollOverviewService {
     return { branchId: pick('branchId'), departmentId: pick('departmentId'), teamId: pick('teamId') }
   }
 
-  // ===== المدرجين بالمسير =====
-  async included(user: JwtPayload, rawPeriod: unknown) {
-    const period = this.period(rawPeriod), scope = this.scope(user)
+  // ===== الفلاتر المشتركة بين التبويبات (طلب المالك 20 سبتمبر): بحث وفرع وقسم وفريق ومسمى وحالة وتاريخ تعيين ومسير وسبب =====
+  // النطاق (فرع الحساب) بيتفرض الأول دايمًا، والفلتر بيشتغل جوّاه بس.
+  private names(place: { branchId: number | null; departmentId: number | null; teamId: number | null }, names: OrgNames) {
+    return {
+      branchName: place.branchId ? names.branches.get(place.branchId) ?? null : null,
+      departmentName: place.departmentId ? names.departments.get(place.departmentId) ?? null : null,
+      teamName: place.teamId ? names.teams.get(place.teamId) ?? null : null,
+    }
+  }
+
+  /** كل صفوف «المدرجين بالمسير» داخل النطاق قبل الفلترة — صف لكل (موظف، مسير). */
+  private async includedRows(user: JwtPayload, period: string) {
+    const scope = this.scope(user)
     const runs = await this.monthRuns(period)
     const members = await this.includedMembers(runs)
     const employees = await this.employees(members.map(row => row.employeeId))
@@ -119,37 +148,140 @@ export class PayrollOverviewService {
       const place = this.placeOf(member.snapshot, employee)
       const run = runs.find(row => row.id === member.runId)!
       return {
-        employeeId: member.employeeId, employeeCode: member.snapshot.employeeCode ?? employee?.employeeCode ?? '', fullName: member.snapshot.fullName ?? employee?.fullName ?? `#${member.employeeId}`,
-        ...place, branchName: place.branchId ? names.branches.get(place.branchId) ?? null : null,
-        departmentName: place.departmentId ? names.departments.get(place.departmentId) ?? null : null,
+        employeeId: member.employeeId, employeeCode: member.snapshot.employeeCode ?? employee?.employeeCode ?? '',
+        fullName: member.snapshot.fullName ?? employee?.fullName ?? `#${member.employeeId}`,
+        jobTitle: (member.snapshot.jobTitle as string | undefined) ?? employee?.jobTitle ?? null,
+        employmentStatus: employee?.status ?? null, hireDate: employee?.hireDate ?? null,
+        ...place, ...this.names(place, names),
         runId: run.id, runName: run.name, runStatus: run.status, startDate: run.startDate, endDate: run.endDate,
       }
     }).filter(row => scope === null || row.branchId === scope)
       .sort((a, b) => a.fullName.localeCompare(b.fullName, 'ar') || a.runId - b.runId)
-    return { period, runs: runs.length, employees: new Set(rows.map(row => row.employeeId)).size, rows }
+    return { runs, rows }
+  }
+
+  /** المسيرات المفتوحة في الشهر اللي المستخدم يقدر يشوفها (وجهات الإضافة والنقل). */
+  private async visibleOpenRuns(user: JwtPayload, runs: RunRow[]) {
+    const visible: Array<{ id: number; name: string | null; status: string }> = []
+    for (const run of runs.filter(row => OPEN_STATUSES.includes(row.status) && row.runType !== 'REVERSAL')) {
+      try {
+        await this.payroll.assertRunAccess(user, await this.em.getRepository(PayrollRun).findOneByOrFail({ id: run.id }))
+        visible.push({ id: run.id, name: run.name, status: run.status })
+      } catch { /* مسير خارج نطاق الفرع */ }
+    }
+    return visible
+  }
+
+  /** كل صفوف «موظفين ليس لديهم مسير» داخل النطاق قبل الفلترة. */
+  private async unassignedRows(user: JwtPayload, period: string, filters: PayrollOverviewFilters) {
+    const scope = this.scope(user)
+    // الموقوف بلا أجر خارج التقرير افتراضيًا؛ يدخل لما المالك يفلتر بحالة «موقوف» بالاسم
+    const report = await this.payroll.unassignedReport(user, { period, includeSuspended: payrollOverviewNeedsSuspended(filters) })
+    const names = await this.orgNames()
+    const employees = await this.employees(report.rows.map(row => row.employeeId))
+    const rows = report.rows.filter(row => scope === null || row.branchId === scope).map(row => {
+      const place = { branchId: row.branchId, departmentId: row.departmentId, teamId: row.teamId }
+      return {
+        employeeId: row.employeeId, employeeCode: row.employeeCode, fullName: row.fullName, hireDate: row.hireDate,
+        jobTitle: employees.get(row.employeeId)?.jobTitle ?? null, employmentStatus: row.employmentStatus,
+        ...place, ...this.names(place, names),
+        reasonCode: row.reasonCode, reasonText: row.reasonText,
+      }
+    })
+    return { report, rows }
+  }
+
+  // ===== المدرجين بالمسير =====
+  async included(user: JwtPayload, rawPeriod: unknown, rawFilters?: PayrollOverviewFilterInput) {
+    const period = this.period(rawPeriod)
+    const filters = normalizePayrollOverviewFilters(rawFilters)
+    const { runs, rows } = await this.includedRows(user, period)
+    const filtered = rows.filter(row => matchesPayrollOverviewFilter(row, filters))
+    return { period, filters, runs: runs.length, total: rows.length,
+      employees: new Set(filtered.map(row => row.employeeId)).size, rows: filtered,
+      runOptions: [...new Map(rows.map(row => [row.runId, { id: row.runId, name: row.runName, status: row.runStatus }])).values()],
+      jobTitleOptions: jobTitles(rows) }
   }
 
   // ===== موظفين ليس لديهم مسير =====
-  async unassigned(user: JwtPayload, rawPeriod: unknown) {
+  async unassigned(user: JwtPayload, rawPeriod: unknown, rawFilters?: PayrollOverviewFilterInput) {
     const period = this.period(rawPeriod)
-    const report = await this.payroll.unassignedReport(user, { period })
-    const names = await this.orgNames()
-    const scope = this.scope(user)
-    const openRuns = (await this.monthRuns(period)).filter(run => OPEN_STATUSES.includes(run.status) && run.runType !== 'REVERSAL')
-    const visibleRuns = []
-    for (const run of openRuns) {
-      try {
-        await this.payroll.assertRunAccess(user, await this.em.getRepository(PayrollRun).findOneByOrFail({ id: run.id }))
-        visibleRuns.push({ id: run.id, name: run.name, status: run.status })
-      } catch { /* مسير خارج نطاق الفرع */ }
+    const filters = normalizePayrollOverviewFilters(rawFilters)
+    const { report, rows } = await this.unassignedRows(user, period, filters)
+    const openRuns = await this.visibleOpenRuns(user, await this.monthRuns(period))
+    const filtered = rows.filter(row => matchesPayrollOverviewFilter(row, filters))
+    return { period, filters, startDate: report.startDate, endDate: report.endDate, openRuns,
+      total: rows.length, rows: filtered,
+      reasonOptions: [...new Set(rows.map(row => row.reasonCode))].sort(), jobTitleOptions: jobTitles(rows) }
+  }
+
+  // ===== جدول الشهر الموحد (طلب المالك 20 سبتمبر): كل موظفي الشهر في جدول واحد بعمود «المسير» =====
+  // «الكل / المدرجين في مسير / بلا مسير» منظور واحد على نفس البيانات، فالمالك ما يحتاجش يبدّل تبويبات عشان ينقل موظف.
+  async roster(user: JwtPayload, rawPeriod: unknown, rawFilters?: PayrollOverviewFilterInput) {
+    const period = this.period(rawPeriod)
+    const filters = normalizePayrollOverviewFilters(rawFilters)
+    const monthRuns = await this.monthRuns(period)
+    const included = await this.includedRows(user, period)
+    const unassigned = await this.unassignedRows(user, period, filters)
+    // صف واحد لكل موظف: مسيره الأول بالاسم، وعدد مسيراته لو أكتر من واحد (التضارب له تبويبه)
+    const byEmployee = new Map<number, RosterRow>()
+    for (const row of included.rows) {
+      const existing = byEmployee.get(row.employeeId)
+      if (existing) { existing.runCount += 1; continue }
+      byEmployee.set(row.employeeId, this.rosterRow(row))
     }
-    const rows = report.rows.filter(row => scope === null || row.branchId === scope).map(row => ({
-      employeeId: row.employeeId, employeeCode: row.employeeCode, fullName: row.fullName, hireDate: row.hireDate,
-      branchId: row.branchId, branchName: row.branchId ? names.branches.get(row.branchId) ?? null : null,
-      departmentId: row.departmentId, departmentName: row.departmentId ? names.departments.get(row.departmentId) ?? null : null,
-      reasonCode: row.reasonCode, reasonText: row.reasonText,
-    }))
-    return { period, startDate: report.startDate, endDate: report.endDate, openRuns: visibleRuns, rows }
+    for (const row of unassigned.rows) {
+      if (byEmployee.has(row.employeeId)) continue
+      byEmployee.set(row.employeeId, this.rosterRow(row))
+    }
+    const rows = [...byEmployee.values()].sort((a, b) => a.fullName.localeCompare(b.fullName, 'ar') || a.employeeId - b.employeeId)
+    const counts = { all: rows.length, assigned: rows.filter(row => row.runId !== null).length, unassigned: rows.filter(row => row.runId === null).length }
+    const filtered = rows.filter(row => matchesPayrollOverviewFilter(row, filters))
+    return {
+      period, filters, counts, total: rows.length, rows: filtered,
+      startDate: unassigned.report.startDate, endDate: unassigned.report.endDate,
+      openRuns: await this.visibleOpenRuns(user, monthRuns),
+      runOptions: [...new Map(included.rows.map(row => [row.runId, { id: row.runId, name: row.runName, status: row.runStatus }])).values()],
+      reasonOptions: [...new Set(unassigned.rows.map(row => row.reasonCode))].sort(),
+      jobTitleOptions: jobTitles(rows),
+    }
+  }
+
+  private rosterRow(row: {
+    employeeId: number; employeeCode: string; fullName: string; jobTitle: string | null; employmentStatus: string | null; hireDate: string | null
+    branchId: number | null; branchName: string | null; departmentId: number | null; departmentName: string | null; teamId: number | null; teamName: string | null
+    runId?: number; runName?: string | null; runStatus?: string; reasonCode?: string; reasonText?: string
+  }): RosterRow {
+    return {
+      employeeId: row.employeeId, employeeCode: row.employeeCode, fullName: row.fullName, jobTitle: row.jobTitle,
+      employmentStatus: row.employmentStatus, hireDate: row.hireDate,
+      branchId: row.branchId, branchName: row.branchName, departmentId: row.departmentId, departmentName: row.departmentName,
+      teamId: row.teamId, teamName: row.teamName,
+      runId: row.runId ?? null, runName: row.runName ?? null, runStatus: row.runStatus ?? null, runCount: row.runId == null ? 0 : 1,
+      reasonCode: row.reasonCode ?? null, reasonText: row.reasonText ?? null,
+    }
+  }
+
+  /** وجهات النقل: المسيرات المفتوحة في الشهر بفترتها ومعادلتها وعدد أعضائها — لقائمة نافذة «نقل لمسير…». */
+  async runTargets(user: JwtPayload, rawPeriod: unknown) {
+    const period = this.period(rawPeriod)
+    const rows: Array<Record<string, any>> = await this.em.query(`SELECT r.[id], r.[name], r.[status], r.[period],
+        CONVERT(varchar(10), r.[startDate], 23) AS [startDate], CONVERT(varchar(10), r.[endDate], 23) AS [endDate],
+        p.[name] AS [policyName], v.[versionNo] AS [versionNo]
+      FROM [payroll_runs] r
+      LEFT JOIN [payroll_policy_versions] v ON v.[id] = r.[policyVersionId]
+      LEFT JOIN [payroll_policies] p ON p.[id] = COALESCE(r.[policyId], v.[policyId])
+      WHERE r.[period] = @0 AND r.[status] IN ('DRAFT', 'CALCULATED') AND COALESCE(r.[runType], 'REGULAR') = 'REGULAR'
+      ORDER BY r.[id]`, [period])
+    const targets = []
+    for (const row of rows) {
+      try { await this.payroll.assertRunAccess(user, await this.em.getRepository(PayrollRun).findOneByOrFail({ id: Number(row.id) })) }
+      catch { continue }
+      targets.push({ id: Number(row.id), name: row.name ?? null, status: String(row.status), period: String(row.period),
+        startDate: String(row.startDate), endDate: String(row.endDate),
+        policyName: row.policyName ?? null, versionNo: row.versionNo == null ? null : Number(row.versionNo) })
+    }
+    return { period, targets }
   }
 
   // ===== التضارب: نفس الموظف في أكتر من مسير غير ملغى لنفس الشهر أو فترات متداخلة =====

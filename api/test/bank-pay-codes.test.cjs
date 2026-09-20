@@ -13,7 +13,7 @@ const { plainToInstance } = require('../node_modules/class-transformer')
 const { validateSync } = require('../node_modules/class-validator')
 const dto = require('../src/employees/employees.dto')
 const root = path.resolve(__dirname, '..', '..')
-const read = file => fs.readFileSync(path.join(root, file), 'utf8')
+const read = file => fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n')
 
 test('تقسيم الصافي: نقدي كله نقدي، تحويل كله بنك، نقدي + بنك = مبلغ البنك والباقي نقدي بالقص', () => {
   assert.deepEqual(payrollPaySplit(5000, 'cash', null), { bank: 0, cash: 5000 })

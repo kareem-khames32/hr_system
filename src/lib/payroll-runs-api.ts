@@ -283,6 +283,26 @@ export interface PayrollEmployeeRuns {
 /** ضم موظفين لمسير (أو نقلهم إليه من مسير آخر بنفس الشهر) — عضوية دائمة من شهر المسير وما بعده. */
 export const addPayrollRunMembers = (runId: number, input: { employeeIds: number[]; reason: string; fromRunId?: number; allowDraftConflicts?: boolean }) =>
   send<PayrollRunMembershipResult>(`/payroll/runs/${runId}/members`, 'POST', input)
+
+// ===== «نقل لمسير…» لاختيار مختلط في نداء واحد: اللي في مسير يتنقل، واللي بلا مسير يتضاف، والباقي يتخطى بسببه =====
+export type PayrollBulkOutcome = 'MOVED' | 'ADDED' | 'SKIPPED'
+export const PAYROLL_BULK_OUTCOME_LABELS: Record<PayrollBulkOutcome, string> = { MOVED: 'اتنقل', ADDED: 'اتضاف', SKIPPED: 'اتخطى' }
+export interface PayrollBulkMembershipRow {
+  employeeId: number; fullName: string | null; employeeCode: string | null
+  outcome: PayrollBulkOutcome
+  fromRunId: number | null; fromRunName: string | null
+  skipCode: string | null; skipReason: string | null
+}
+export interface PayrollBulkMembershipResult {
+  runId: number; period: string; fromPeriod: string; target: PayrollRunMemberRef
+  results: PayrollBulkMembershipRow[]
+  moved: number[]; added: number[]; skipped: number[]
+  recalculated: boolean
+  recalculateRuns: PayrollRunMemberRef[]; lockedRuns: PayrollRunMemberRef[]
+  run: PayrollRunWithSelection
+}
+export const movePayrollRunMembers = (runId: number, input: { employeeIds: number[]; reason: string; allowDraftConflicts?: boolean }) =>
+  send<PayrollBulkMembershipResult>(`/payroll/runs/${runId}/members/bulk`, 'POST', input)
 export const fetchEmployeePayrollRuns = (employeeId: number, period: string) =>
   apiFetch<PayrollEmployeeRuns>(`/payroll/employee-runs?employeeId=${employeeId}&period=${encodeURIComponent(period)}`)
 

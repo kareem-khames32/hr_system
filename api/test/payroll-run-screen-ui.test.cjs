@@ -19,7 +19,7 @@ const { PayrollParityOperationsSummary, PARITY_OPERATIONS_PLAN_TEXT } = require(
 const { PayrollInstallmentBreakdown } = require('../../src/components/PayrollInstallmentBreakdown')
 const { PayrollOvertimeBreakdown } = require('../../src/components/PayrollOvertimeBreakdown')
 const root = path.resolve(__dirname, '..', '..')
-const read = file => fs.readFileSync(path.join(root, file), 'utf8')
+const read = file => fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n')
 const render = (component, props) => renderToStaticMarkup(React.createElement(component, props))
 
 test('one money formatter (FE-06): Latin digits, thousands separators and two decimals cut without rounding, identical to the server kernel', () => {

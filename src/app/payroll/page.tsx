@@ -41,7 +41,7 @@ import { PayrollDraftMembership } from '@/components/payroll/PayrollDraftMembers
 // تبسيط الرواتب (2026-09-15): لوحات محرك الحساب ولقطة السياسة وسجل الأحداث والعكس/التكميلي و«موظفون بلا مسير» والإعفاء المالي
 // لم تعد تُعرض هنا (ملفاتها وواجهاتها الخلفية باقية). «إلغاء خصم» صار زرًا على صف الموظف.
 import { PayrollRemoveDeductionModal, type RunDeductionLine } from '@/components/payroll/PayrollFinancialExemptionsPanel'
-import { PayrollRunMoveMemberModal } from '@/components/payroll/PayrollRunMoveMemberModal'
+import { PayrollMoveToRunModal } from '@/components/payroll/PayrollMoveToRunModal'
 // B5 / الخطوة 22: منسّق المبالغ الموحد، ومجاميع البنود بالقروش، وقيد الصرف، وحل التعارضات
 import { formatMoney, formatMoneyOrDash } from '@/lib/money'
 import { payrollItemCoverage, payrollItemDeductions, payrollItemEarnings, payrollItemMissingPunchDates, payrollItemSettlementPayout, payrollMissingPunchText, payrollRunPayable, payrollRunTotals, SETTLEMENT_PAYOUT_LABEL } from '@/lib/payroll-item-totals'
@@ -134,6 +134,8 @@ const SNAPSHOT_MISSING_MESSAGE = 'هذا المسير محسوب بإصدار س
 type PayrollPageTab = 'runs' | PayrollOverviewTab | 'allowances'
 const PAYROLL_PAGE_TABS: Array<[PayrollPageTab, string]> = [
   ['runs', 'المسيرات'],
+  // قرار المالك (20 سبتمبر): جدول واحد لكل موظفي الشهر بعمود «المسير» — التبويبات القديمة باقية زي ما هي
+  ['roster', 'كل الموظفين والمسير'],
   ['included', 'المدرجين بالمسير'],
   ['unassigned', 'موظفين ليس لديهم مسير'],
   ['conflicts', 'التضارب'],
@@ -1278,9 +1280,10 @@ export default function PayrollPage() {
           employeeBranchId={removeDeductionFor.branchId} lines={removeDeductionFor.lines}
           onClose={() => setRemoveDeductionFor(null)} onGranted={recalculateAfterRemoval} />
       )}
+      {/* «نقل لمسير آخر» من صف الموظف في جدول المسير — نفس نافذة الجدول الموحد بالظبط (نتيجة لكل موظف وشهر البداية والسبب) */}
       {moveMemberFor && runDetail && (
-        <PayrollRunMoveMemberModal employeeId={moveMemberFor.employeeId} employeeName={moveMemberFor.name} period={runDetail.period} fromRunId={runDetail.id}
-          onClose={() => setMoveMemberFor(null)} onMoved={async () => { await refreshRuns(runDetail.id) }} />
+        <PayrollMoveToRunModal employees={[{ employeeId: moveMemberFor.employeeId, fullName: moveMemberFor.name, runId: runDetail.id, runName: runDetail.name ?? null }]}
+          period={runDetail.period} onClose={() => setMoveMemberFor(null)} onDone={async () => { await refreshRuns(runDetail.id) }} />
       )}
     </MainLayout>
   )

@@ -235,6 +235,13 @@ class PayrollRunMembersDto {
   @IsOptional() @IsBoolean() allowDraftConflicts?: boolean
 }
 
+// الاختيار المختلط من الجدول الموحد: بلا fromRunId — الخادم بيحدد مسير كل موظف لوحده
+class PayrollRunMembersBulkDto {
+  @IsArray() @ArrayUnique() @ArrayMaxSize(500) @Type(() => Number) @IsInt({ each: true }) @Min(1, { each: true }) employeeIds: number[]
+  @Allow() reason?: unknown
+  @IsOptional() @IsBoolean() allowDraftConflicts?: boolean
+}
+
 class PayrollEmployeeRunsQueryDto {
   @Type(() => Number) @IsInt() @Min(1) employeeId: number
   @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'اختار الشهر بصيغة YYYY-MM' }) period: string
@@ -409,6 +416,13 @@ export class PayrollController {
   @Post('runs/:id/members')
   addMembers(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PayrollRunMembersDto) {
     return this.service.changeRunMembership(user, id, dto)
+  }
+
+  // اختيار مختلط في نداء واحد: اللي في مسير مفتوح يُنقل منه، واللي بلا مسير يُضاف، والباقي يُتخطى بسببه لكل موظف
+  @Perm('payroll.calculate')
+  @Post('runs/:id/members/bulk')
+  addMembersBulk(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PayrollRunMembersBulkDto) {
+    return this.service.changeRunMembershipBulk(user, id, dto)
   }
 
   // مسير الموظف في شهر والمسيرات المفتوحة التي يمكن نقله إليها (لملف الموظف ولنافذة النقل) — قراءة فقط
