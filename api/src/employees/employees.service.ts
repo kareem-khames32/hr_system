@@ -15,6 +15,8 @@ import { beginCalendarChange, finishCalendarChange, readCalendarSource } from '.
 import { assertAttendanceRulePeriodOpen, assertEmployeeSchedulesFitBranch, attendanceRuleChange, attendanceRuleToday, employeeAttendanceFallback, lockAttendanceRuleMutation,
   pickAttendanceRule, resolveAttendanceRule, saveEmployeeAttendanceRule } from '../attendance/attendance-rule-history'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
+// تراكم المسير يومًا بيوم: الإيقاف بيغيّر أيام — نعلّمها «متسخة» فالجار الليلي يعيدها
+import { markPayrollRangeDirty } from '../payroll/payroll-daily-accrual'
 import { isLeaveRequest } from '../common/leave-contract'
 import { AttendanceRuleVersion, EmployeeAttendanceRuleSnapshot } from '../attendance/attendance-rule.entities'
 import { User } from '../auth/user.entity'
@@ -867,6 +869,8 @@ export class EmployeesService {
       }
       await recordEmployeeChange(em, { employeeId: id, fieldName: 'suspension', oldValue: null,
         newValue: `إيقاف عن العمل ${dto.fromDate} → ${dto.toDate}`, changedByUserId: actorId, reason: dto.reason.trim() })
+      // تراكم المسير: أيام الإيقاف تتحسب من جديد (يوم إيقاف مش غياب ولا تأخير)
+      await markPayrollRangeDirty(em, id, dto.fromDate, dto.toDate, 'تسجيل إيقاف عن العمل')
       return row
     })
     return suspensionView(saved, today)
@@ -899,6 +903,8 @@ export class EmployeesService {
       await recordEmployeeChange(em, { employeeId: id, fieldName: 'suspension', oldValue: `إيقاف عن العمل ${period.fromDate} → ${oldTo}`,
         newValue: plan.status === 'CANCELLED' ? 'إلغاء الإيقاف' : `إنهاء الإيقاف بدري — رجوع للعمل ${returnDate}`, changedByUserId: actorId,
         reason: reason ?? (plan.status === 'CANCELLED' ? 'إلغاء الإيقاف' : 'إنهاء الإيقاف قبل موعده') })
+      // تراكم المسير: الأيام اللي رجعت أيام عمل تتحسب من جديد
+      await markPayrollRangeDirty(em, id, freed.from, freed.to, 'إنهاء أو إلغاء إيقاف عن العمل')
       return { saved: result, freedFrom: freed.from, freedTo: freed.to }
     })
     // الأيام اللي رجعت أيام عمل وفاتت: تُجسَّد (بصمة = حضور، بلا بصمة = غياب) — أفضل جهد لا يُفشل الإنهاء

@@ -1,10 +1,14 @@
 import { BadRequestException } from '@nestjs/common'
 import { EntityManager, In } from 'typeorm'
+import { localDateOf } from '../attendance/attendance.service'
+import { payrollSuspensionNote } from '../employees/employee-suspension-rules'
+import { readEmployeeSuspensions } from '../employees/employee-suspensions'
 import { Employee } from '../employees/employee.entity'
 import { OffboardingCase } from '../offboarding/offboarding.entities'
 import { payrollEmploymentCoverage, PayrollEmploymentCoverage } from './payroll-employment'
 import { findPayrollConflicts, PayrollConflict } from './payroll-membership-guard'
 import type { PayrollMemberSnapshot } from './payroll-membership.entities'
+import { payrollSettlementCase, PayrollSettlementCase, SETTLEMENT_RUN_ROW_LABEL } from './payroll-settlement-salary'
 import { PayrollRunSalarySelection, PayrollSalaryEvidenceMode, selectPayrollRunSalary } from './payroll-run-salary'
 import {
   loadPayrollOrgHistory, PayrollOrgAt, PayrollOrgHistory, payrollDepartmentSet, payrollOrgAt, PayrollRunDefinition,
@@ -18,7 +22,8 @@ import {
  */
 export type PayrollMembershipCode =
   | 'EXC_MANUAL_EXCLUSION' | 'TRANSFERRED_OUT' | 'EXC_OUT_OF_SCOPE' | 'EXC_ALREADY_IN_RUN' | 'EXC_EMPLOYMENT_DATA_INVALID'
-  | 'SUSPENDED' | 'ARCHIVED' | 'EXC_JOINS_AFTER_PERIOD' | 'EXC_TERMINATED_BEFORE_PERIOD' | 'EXC_NO_ACTIVE_EMPLOYMENT'
+  | 'SUSPENDED' | 'ARCHIVED' | 'EXC_ARCHIVED_NO_LAST_DAY' | 'EXC_JOINS_AFTER_PERIOD' | 'EXC_TERMINATED_BEFORE_PERIOD'
+  | 'EXC_NO_ACTIVE_EMPLOYMENT'
   | string
 
 export interface PayrollMembershipRow {
@@ -38,6 +43,10 @@ export interface PayrollMembershipRow {
   alreadyInRun: PayrollConflict | null
   draftConflicts: PayrollConflict[]
   dataProblem: { code: string; message: string } | null
+  /** قرار المالك (20 سبتمبر): الموقوف عضو في المسير — صفّه بيقول «موقوف من … إلى …» أو «رجع نشط من …». */
+  suspensionNote: string | null
+  /** شهر آخر يوم عمل: راتبه بيتصرف مع التصفية — داخل إجمالي المسير وبرّه المستحق للصرف وكشف البنك. */
+  settlement: (PayrollSettlementCase & { label: string }) | null
 }
 
 export interface PayrollMembershipResolution {
@@ -61,11 +70,36 @@ export interface PayrollMembershipInput {
 
 const ID_CHUNK = 500
 
-function coverageExclusion(emp: Employee, cases: OffboardingCase[], startDate: string, endDate: string): PayrollMembershipCode {
-  // أ2: أرضية الاستحقاق نفسها التي تستعملها payrollEmploymentCoverage، فسبب الاستبعاد يطابق سبب غياب التغطية.
-  return emp.status === 'suspended' ? 'SUSPENDED' : emp.status === 'archived' ? 'ARCHIVED' :
-    (emp.salaryEntitlementStart || emp.actualStartDate || emp.joinDate || '') > endDate ? 'EXC_JOINS_AFTER_PERIOD' :
-      cases.some(kase => kase.status !== 'CANCELLED' && kase.lastWorkingDay < startDate) ? 'EXC_TERMINATED_BEFORE_PERIOD' : 'EXC_NO_ACTIVE_EMPLOYMENT'
+/**
+ * أ2: أرضية الاستحقاق نفسها التي تستعملها payrollEmploymentCoverage، فسبب الاستبعاد يطابق سبب غياب التغطية.
+ * قرار المالك (20 سبتمبر): الإيقاف عن العمل والأرشفة وحدهما ما بقاش سبب استبعاد — الموقوف عضو،
+ * والمؤرشف بتاريخ آخر يوم عمل موثّق بياخد أجر أيامه في شهر آخر يوم عمل، وبعد الشهر ده يختفي (EXC_TERMINATED_BEFORE_PERIOD).
+ * المؤرشف/المنتهي بلا تاريخ آخر يوم عمل (أغلب المرحّلين من النظام القديم) يفضل مستبعد بسبب واضح.
+ */
+export function coverageExclusion(emp: PayrollCoverageEmployee, cases: ReadonlyArray<{ status: string; lastWorkingDay: string }>,
+  startDate: string, endDate: string): PayrollMembershipCode {
+  if ((emp.salaryEntitlementStart || emp.actualStartDate || emp.joinDate || '') > endDate) return 'EXC_JOINS_AFTER_PERIOD'
+  const ends = cases.filter(kase => kase.status !== 'CANCELLED').map(kase => String(kase.lastWorkingDay).slice(0, 10))
+  const ended = emp.status === 'archived' || emp.status === 'terminated'
+  const archiveEnd = ended && !ends.length && emp.archivedAt && Number.isFinite(new Date(emp.archivedAt).getTime())
+    ? localDateOf(new Date(emp.archivedAt)) : null
+  const lastDay = [...ends, ...(archiveEnd ? [archiveEnd] : [])].sort().pop() ?? null
+  if (lastDay && lastDay < startDate) return 'EXC_TERMINATED_BEFORE_PERIOD'
+  if (ended && !lastDay) return 'EXC_ARCHIVED_NO_LAST_DAY'
+  return 'EXC_NO_ACTIVE_EMPLOYMENT'
+}
+
+export interface PayrollCoverageEmployee {
+  salaryEntitlementStart?: string | null; actualStartDate?: string | null; joinDate?: string | null
+  archivedAt?: Date | string | null; status: string; isActive: boolean
+}
+
+/** سبب الاستبعاد بنص واضح على صف الموظف في المعاينة وفي جدول المسير. */
+export const PAYROLL_COVERAGE_EXCLUSION_MESSAGES: Record<string, string> = {
+  EXC_ARCHIVED_NO_LAST_DAY: 'مؤرشف بلا تاريخ آخر يوم عمل — حدده عشان راتبه يتحسب',
+  EXC_TERMINATED_BEFORE_PERIOD: 'انتهت خدمته قبل بداية الفترة؛ راتب آخر شهر في مسير الشهر اللي فيه آخر يوم عمل',
+  EXC_JOINS_AFTER_PERIOD: 'بداية استحقاقه بعد نهاية الفترة',
+  EXC_NO_ACTIVE_EMPLOYMENT: 'لا توجد مدة عمل مستحقة داخل الفترة',
 }
 
 export async function resolvePayrollRunMembership(em: EntityManager, input: PayrollMembershipInput): Promise<PayrollMembershipResolution> {
@@ -114,10 +148,17 @@ export async function resolvePayrollRunMembership(em: EntityManager, input: Payr
     caseRows.push(...await em.getRepository(OffboardingCase).find({ where: { employeeId: In(evaluatedIds.slice(offset, offset + ID_CHUNK)) } }))
   }
   const casesOf = (id: number) => caseRows.filter(row => row.employeeId === id)
+  // قرار المالك (20 سبتمبر): الموقوف عضو في المسير — بنقرأ فترات إيقافه المتقاطعة مع الفترة عشان صفّه يقول حالته.
+  const suspensions: Awaited<ReturnType<typeof readEmployeeSuspensions>> = []
+  for (let offset = 0; offset < evaluatedIds.length; offset += ID_CHUNK) {
+    suspensions.push(...await readEmployeeSuspensions(em, evaluatedIds.slice(offset, offset + ID_CHUNK), { from: run.startDate, to: run.endDate }))
+  }
+  const noteOf = (id: number) => payrollSuspensionNote(suspensions.filter(row => row.employeeId === id), run.startDate, run.endDate)
   const exclusions = new Map(definition.exclusions.map(row => [row.employeeId, row]))
   const rows: PayrollMembershipRow[] = outside.map(row => ({
     employee: row.employee, status: 'EXCLUDED', code: row.code, inclusionSource, org: row.org, orgAtEnd: row.orgAtEnd, cases: [],
     coverage: null, salary: null, manualReason: null, alreadyInRun: null, draftConflicts: [], dataProblem: null,
+    suspensionNote: null, settlement: null,
     message: row.code === 'TRANSFERRED_OUT' ? 'انتقل خارج نطاق المسير قبل نهاية الفترة؛ العضوية بمكان الموظف في آخر يوم' : 'لم يعد داخل نطاق المسير في آخر يوم من الفترة',
     transferredOut: row.code === 'TRANSFERRED_OUT' ? { lastInScopeDate: row.lastInScopeDate ?? row.org.date, branchId: row.orgAtEnd.branchId,
       departmentId: row.orgAtEnd.departmentId, teamId: row.orgAtEnd.teamId } : null,
@@ -125,8 +166,10 @@ export async function resolvePayrollRunMembership(em: EntityManager, input: Payr
   const eligible: PayrollMembershipRow[] = []
   for (const { employee, org } of candidates) {
     const cases = casesOf(employee.id)
+    const settled = payrollSettlementCase(cases, run.startDate, run.endDate)
     const base = { employee, org, orgAtEnd: org, cases, inclusionSource, manualReason: null, transferredOut: null, alreadyInRun: null,
-      draftConflicts: [] as PayrollConflict[], dataProblem: null, coverage: null, salary: null }
+      draftConflicts: [] as PayrollConflict[], dataProblem: null, coverage: null, salary: null,
+      suspensionNote: noteOf(employee.id), settlement: settled ? { ...settled, label: SETTLEMENT_RUN_ROW_LABEL } : null }
     const manual = exclusions.get(employee.id)
     if (manual) {
       rows.push({ ...base, status: 'EXCLUDED', code: 'EXC_MANUAL_EXCLUSION', message: manual.reason, manualReason: manual.reason })
@@ -141,7 +184,8 @@ export async function resolvePayrollRunMembership(em: EntityManager, input: Payr
       continue
     }
     if (!coverage) {
-      rows.push({ ...base, status: 'EXCLUDED', code: coverageExclusion(employee, cases, run.startDate, run.endDate), message: null })
+      const code = coverageExclusion(employee, cases, run.startDate, run.endDate)
+      rows.push({ ...base, status: 'EXCLUDED', code, message: PAYROLL_COVERAGE_EXCLUSION_MESSAGES[code] ?? null })
       continue
     }
     const salary = await selectPayrollRunSalary(em, employee, run.period, input.salaryEvidenceMode)

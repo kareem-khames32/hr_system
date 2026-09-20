@@ -33,9 +33,13 @@ test('النداءات عبر ملف API واحد، ولا fetch مباشر ول
   }
 })
 
-test('شاشة المسير: «إلغاء خصم» على صف الموظف ببوابة صلاحية المنح، بمعاينة إلزامية وبصمتها وسبب جاهز، ثم إعادة حساب تلقائية بآخر معادلة', () => {
+test('شاشة المسير: «شيل خصم» على صف الموظف ببوابة صلاحية المنح، بكل بنود استقطاعه ومعاينة إلزامية وسبب مكتوب، ثم إعادة حساب تلقائية بآخر معادلة', () => {
   const page = read(files.runPage)
-  assert.ok(page.includes("import { PayrollRemoveDeductionModal, type RemovableAttendanceAmounts } from '@/components/payroll/PayrollFinancialExemptionsPanel'"))
+  assert.ok(page.includes("import { PayrollRemoveDeductionModal, type RunDeductionLine } from '@/components/payroll/PayrollFinancialExemptionsPanel'"))
+  // قرار المالك (20 سبتمبر): مكان واحد واضح — النافذة تاخد كل بنود استقطاع الموظف بأسمائها ومبالغها من صف الجدول نفسه
+  assert.ok(page.includes('lines={removeDeductionFor.lines}'), 'بنود الاستقطاع تدخل النافذة')
+  assert.ok(page.includes('lines: lines?.deductions ?? []'), 'البنود من صف الموظف في الجدول')
+  assert.ok(page.includes('شيل خصم'), 'اسم الإجراء «شيل خصم»')
   assert.ok(page.includes("const canRemoveDeduction = runDetail?.status === 'CALCULATED' && can('financial_exemption.grant')"))
   assert.ok(page.includes('onGranted={recalculateAfterRemoval}'))
   assert.ok(page.includes('recalculatePayrollRunWithCurrentFormula(runDetail.id, { allowDraftConflicts: true })'))
@@ -52,9 +56,16 @@ test('شاشة المسير: «إلغاء خصم» على صف الموظف بب
   // فصل المهام يُقال على الصف قبل الضغط بدل رفض 403 بعد التأكيد: من أنزل الخصم لا يلغيه
   assert.ok(panel.includes("` — ${row.protectedReason ?? 'لا يمكن إلغاؤه'}`"), 'سبب المنع مكتوب على صف الخصم')
   assert.ok(read('api/src/payroll/financial-exemptions.service.ts').includes("ownCreator(row) ? 'أنت من أنزل هذا الخصم؛ يلغيه مستخدم آخر' : null"))
-  assert.ok(panel.includes('سبب الإلغاء (اختياري)'))
+  // قرار المالك (20 سبتمبر): السبب مطلوب قبل التأكيد
+  assert.ok(panel.includes('سبب الشيل (مطلوب)') && panel.includes('reason.trim().length < 3'), 'السبب مطلوب')
+  // البنود اللي مالهاش إعفاء مالي بنوعها (الانصراف المبكر، الإجازة، الإيقاف، المرضية، السلف، التأمينات، الأخرى)
+  // تُشال بقاعدة «شيل خصم» للموظف في شهر المسير — إعادة استعمال المنظومتين بلا تكرار منطق
+  assert.ok(panel.includes("createDeductionWaiver({ period, kind: option.input.waiverKind, targetLevel: 'employees'"), 'يعيد استعمال «شيل خصم»')
+  for (const kind of ['EARLY_LEAVE', 'UNPAID_LEAVE', 'SUSPENSION', 'SICK_LEAVE', 'LOAN', 'SOCIAL_INSURANCE']) {
+    assert.ok(panel.includes(`${kind}: '${kind}'`), kind)
+  }
   // الصف يبقى موسومًا «أُلغي» لا يختفي
-  assert.ok(panel.includes("option.removed ? 'أُلغي' : 'إلغاء هذا الخصم'"))
+  assert.ok(panel.includes("option.removed ? 'أُلغي' : 'شيل الخصم ده'"))
   assert.ok(!/grantedBy(UserId)?\s*[:=]\s*[a-zA-Z]/.test(panel.split('grantExemption(')[1]?.split(')')[0] ?? ''), 'لا يُرسل المانح من الواجهة')
 })
 

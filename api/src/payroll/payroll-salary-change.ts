@@ -4,6 +4,8 @@ import { localDateOf } from '../attendance/attendance.service'
 import { recordEmployeeChange } from '../employees/employee-change-log'
 import { payrollLiveSourceContent } from './payroll-live-source-contract'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
+// تراكم المسير يومًا بيوم: تغيير الراتب بيغيّر سعر اليوم — الأيام المتراكمة تتعلّم «متسخة»
+import { markPayrollRangeDirty } from './payroll-daily-accrual'
 // C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُقفل شهر الأجر (يُصحح الأجر ثم يُصرف بمسير تكميلي)
 import { payrollLineNotReversedSql } from './payroll-reversal-sql'
 import { appendMonthlySalaryHistoryRevision, readSalaryHistory, readSalaryHistoryCurrent,
@@ -241,6 +243,11 @@ export async function applyEmployeeSalaryChange(em: EntityManager, input: Employ
     if (!savedCurrent || savedCurrent.currentSourceHash !== salaryCurrentSourceHash(plan.current)) conflict('SALARY_CHANGE_STORAGE_MISMATCH', 'الأجر المحفوظ لا يطابق التغيير المطلوب بدقته المالية')
     const history = await appendMonthlySalaryHistoryRevision(em, { employeeId: input.employeeId, reason, evidenceReference, currentSourceHash: savedCurrent!.currentSourceHash,
       periods: plan.periods, cycleStartDay, createdBy: input.actorUserId })
+    // تراكم المسير: الراتب اتغير من شهر سريانه — أيام الموظف من أول الشهر ده تتحسب من جديد
+    // (سعر اليوم والدقيقة بيتغيروا، فمبالغ الأيام المتراكمة لازم تتعاد)
+    const effectiveBounds = payrollPeriodBounds(plan.effectivePayrollPeriod, cycleStartDay)
+    const toBounds = payrollPeriodBounds(plan.effectiveToPayrollPeriod ?? plan.effectivePayrollPeriod, cycleStartDay)
+    await markPayrollRangeDirty(em, input.employeeId, effectiveBounds.startDate, toBounds.endDate, 'تغيير راتب يسري على الفترة')
     return { history, current: savedCurrent!.current, changed: true, applied: true }
   } catch (error) {
     if (salaryHistorySchemaMissing(error)) conflict('SALARY_HISTORY_SCHEMA_MISSING', 'ترحيل سجل الأجر المؤرخ غير مطبق على قاعدة البيانات الحالية')

@@ -5,6 +5,8 @@ import type { JwtPayload } from '../auth/auth.service'
 import { assertCompanyWideWrite, branchScopeOf, userHasPerm } from '../auth/guards'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { AttendanceService } from './attendance.service'
+// تراكم المسير يومًا بيوم: أمر دوام العطلة بيغيّر أيام الموظفين المشمولين
+import { markPayrollDaysDirty } from '../payroll/payroll-daily-accrual'
 import { HolidayWorkOrder } from './holiday-work.entities'
 import {
   cancelHolidayWorkObligations, holidayWorkAmount, holidayWorkDayResult, holidayWorkGrantMatches, holidayWorkGrantOf, holidayWorkGrantsByDate,
@@ -385,6 +387,10 @@ export class HolidayWorkService {
     }
     if (!pairs.length) return { recomputed: 0, failed: 0 }
     const employees = await this.employeesLite()
+    // تراكم المسير: أيام الأمر للموظفين المشمولين تتحسب من جديد (تصنيف اليوم وبدله بيتغيروا)
+    for (const emp of employees.values()) {
+      if (holidayWorkGrantMatches(grant, emp)) await markPayrollDaysDirty(this.em, emp.employeeId, dates, 'أمر أو طلب دوام يوم عطلة')
+    }
     let recomputed = 0, failed = 0
     for (const pair of pairs) {
       const emp = employees.get(Number(pair.employeeId))

@@ -24,6 +24,7 @@ import {
   type ExemptionView,
   type RunExemptionsView,
 } from '@/lib/financial-exemptions-api'
+import { createDeductionWaiver, fetchDeductionWaivers, type DeductionKind, type DeductionWaiverRow } from '@/lib/payroll-overview-api'
 import { formatMoney } from '@/lib/money'
 
 // الخطوة 26 — الإعفاء المالي على شاشة المسير (EX-01..08): منفصل عن استثناء الحضور. يُسقط عن موظف في هذا المسير خصمًا واحدًا أو نوع خصم
@@ -32,17 +33,29 @@ import { formatMoney } from '@/lib/money'
 type Decision = { id: number; action: 'approve' | 'reject' | 'revoke' | 'attach'; text: string; revision: number }
 const ACTION_LABELS: Record<Decision['action'], string> = { approve: 'اعتماد', reject: 'رفض', revoke: 'إلغاء الإعفاء', attach: 'إضافة مرجع المرفق' }
 
-// ===== تبسيط الرواتب (2026-09-15): «إلغاء خصم» من صف الموظف في جدول المسير =====
-// يعرض خصومات الموظف بمبالغها كما في صفه؛ الاختيار = معاينة ثم منح إعفاء «إسقاط نهائي» بسبب جاهز، ثم إعادة حساب المسير (من الصفحة).
-// الخصم الملغى الذي لم يُطبق بعد يظهر «أُلغي» ولا يُمنح مرتين؛ وإن تعذرت إعادة الحساب بعد الإلغاء فالمتاح «إعادة حساب المسير» وحدها.
-// أقساط السلف (تُؤجل ولا تُسقط) والإجازة بلا راتب والمحمي لا تُلغى من هنا. اللوحة القديمة أدناه لم تعد تُعرض على شاشة المسير.
+// ===== «شيل خصم» من صف الموظف في جدول المسير (قرار المالك 20 سبتمبر: مكان واحد واضح) =====
+// النافذة تعرض كل بنود استقطاع الموظف في هذا المسير بأسمائها ومبالغها كما في صفه، وشيل أي بند منها بسبب مكتوب ثم إعادة حساب المسير.
+// ما بتكررش منطق قائم: التأخير والنقص والغياب والخصومات المصنفة تمرّ على الإعفاء المالي (بمعاينته واعتماده وسجله)،
+// وباقي البنود (الانصراف المبكر، الإجازة بدون راتب، الإيقاف، المرضية، أقساط السلف، التأمينات، الخصومات الأخرى)
+// تمرّ على قاعدة «شيل خصم» للموظف في شهر المسير — وهي المنظومة اللي بتشيلها فعلًا عند الحساب.
 const REMOVE_DEDUCTION_REASON = 'إلغاء خصم من شاشة المسير بقرار الموارد البشرية'
-// القرار ب5: السبب خانة اختيارية تُرسل بدل النص الجاهز متى كُتبت — بلا نافذة تأكيد ثانية
+// السبب مطلوب (قرار المالك 20 سبتمبر)؛ الثابت يبقى شبكة أمان لو وصل نص أقصر من ثلاثة حروف
 const removalReason = (note: string) => note.trim().length >= 3 ? note.trim() : REMOVE_DEDUCTION_REASON
 const LIVE_EXEMPTION_STATUSES: ExemptionView['status'][] = ['ACTIVE', 'PENDING_APPROVAL']
-type RemovalOption = { key: string; label: string; disabled: boolean; removed: boolean; input: Omit<ExemptionInput, 'runId' | 'employeeId' | 'reason'> }
+type RemovalOption = { key: string; label: string; disabled: boolean; removed: boolean
+  input: Omit<ExemptionInput, 'runId' | 'employeeId' | 'reason'> | { waiverKind: DeductionKind } }
+const isWaiverOption = (input: RemovalOption['input']): input is { waiverKind: DeductionKind } => 'waiverKind' in input
+/** بند استقطاع في صف الموظف كما يعرضه جدول المسير (نفس بنود القسيمة). */
+export interface RunDeductionLine { key: string; name: string; amount: number }
 /** مبالغ خصومات الحضور كما تظهر في صف الموظف (المخصوم فعلًا بعد حماية الصافي). */
 export interface RemovableAttendanceAmounts { lateness: number; shortfall: number; absence: number }
+// بند الصف ← نوع الخصم في «شيل خصم» (لما مايكونش للبند إعفاء مالي بنوعه)
+const WAIVER_KIND_OF_LINE: Record<string, DeductionKind> = {
+  EARLY_LEAVE: 'EARLY_LEAVE', UNPAID_LEAVE: 'UNPAID_LEAVE', SUSPENSION: 'SUSPENSION', SICK_LEAVE: 'SICK_LEAVE',
+  LOAN: 'LOAN', SOCIAL_INSURANCE: 'SOCIAL_INSURANCE', OTHER_DEDUCTIONS: 'OTHER',
+}
+const lineWaiverKind = (key: string): DeductionKind | null => WAIVER_KIND_OF_LINE[key] ?? (key.startsWith('DEBIT:') ? 'OTHER' : null)
+const lineAmountOf = (lines: readonly RunDeductionLine[], key: string) => lines.find(line => line.key === key)?.amount ?? 0
 
 /** رفض الخادم بعربي مبسط: بلا رموز تقنية بين قوسين ولا أرقام داخلية. */
 function plainRefusal(error: unknown, fallback: string) {
@@ -51,10 +64,15 @@ function plainRefusal(error: unknown, fallback: string) {
   return /[؀-ۿ]/.test(text) ? text : fallback
 }
 
-export function PayrollRemoveDeductionModal({ runId, employeeId, employeeName, amounts, onClose, onGranted }: {
-  runId: number; employeeId: number; employeeName: string; amounts: RemovableAttendanceAmounts; onClose: () => void; onGranted: () => Promise<void> | void
+export function PayrollRemoveDeductionModal({ runId, period, employeeId, employeeName, employeeBranchId, lines, onClose, onGranted }: {
+  runId: number; period: string; employeeId: number; employeeName: string; employeeBranchId: number | null
+  lines: readonly RunDeductionLine[]; onClose: () => void; onGranted: () => Promise<void> | void
 }) {
+  const amounts: RemovableAttendanceAmounts = {
+    lateness: lineAmountOf(lines, 'LATENESS'), shortfall: lineAmountOf(lines, 'SHORTFALL'), absence: lineAmountOf(lines, 'ABSENCE'),
+  }
   const [entries, setEntries] = useState<ExemptionEmployeeEntries | null>(null)
+  const [waivers, setWaivers] = useState<DeductionWaiverRow[]>([])
   const [reloadKey, setReloadKey] = useState(0)
   const [error, setError] = useState('')
   const [note, setNote] = useState('')
@@ -67,8 +85,10 @@ export function PayrollRemoveDeductionModal({ runId, employeeId, employeeName, a
     let cancelled = false
     fetchExemptionEntries(runId, employeeId).then(value => { if (!cancelled) setEntries(value) })
       .catch(e => { if (!cancelled) setError(plainRefusal(e, 'تعذر تحميل خصومات الموظف')) })
+    // قواعد «شيل خصم» السارية للشهر: البند المشمول بقاعدة يظهر «اتشال» ولا يُشال مرتين
+    fetchDeductionWaivers(period).then(rows => { if (!cancelled) setWaivers(rows) }).catch(() => { if (!cancelled) setWaivers([]) })
     return () => { cancelled = true }
-  }, [runId, employeeId, reloadKey])
+  }, [runId, employeeId, period, reloadKey])
 
   // إلغاء حي (نشط أو بانتظار الاعتماد) على الخصم نفسه أو نوعه أو كل الخصومات
   const live = (entries?.exemptions ?? []).filter(row => LIVE_EXEMPTION_STATUSES.includes(row.status))
@@ -80,10 +100,22 @@ export function PayrollRemoveDeductionModal({ runId, employeeId, employeeName, a
     const removed = removedType(key)
     return amount > 0 ? [{ key, removed, disabled: removed, label: `${label} — ${formatMoney(amount)}`, input: { scopeKind: 'DEDUCTION_TYPE', targetKind: key } }] : []
   }
+  // قاعدة «شيل خصم» سارية على هذا الموظف لهذا النوع (على الشركة كلها أو باسمه)
+  const waivedKind = (kind: DeductionKind) => waivers.some(row => row.kind === kind &&
+    (row.targetLevel === 'company' || (row.targetLevel === 'employees' && row.targetIds.includes(employeeId))))
+  // باقي بنود صف الموظف: تُشال بقاعدة «شيل خصم» للموظف في شهر المسير (نفس المنظومة اللي بتشيلها عند الحساب)
+  const waiverOptions: RemovalOption[] = lines.flatMap(line => {
+    const kind = lineWaiverKind(line.key)
+    if (!kind || line.amount <= 0) return []
+    const removed = waivedKind(kind)
+    return [{ key: `WAIVER:${kind}:${line.key}`, removed, disabled: removed,
+      label: `${line.name} — ${formatMoney(line.amount)}`, input: { waiverKind: kind } }]
+  })
   const options: RemovalOption[] = entries ? [
     ...attendance('LATENESS', 'خصم التأخير', amounts.lateness),
     ...attendance('SHORTFALL', 'خصم نقص ساعات العمل', amounts.shortfall),
     ...attendance('ABSENCE', 'خصم الغياب', amounts.absence),
+    ...waiverOptions,
     ...entries.typedObligations.map(row => {
       const removed = removedObligation(row.obligationId, row.deductionTypeId)
       return {
@@ -113,6 +145,19 @@ export function PayrollRemoveDeductionModal({ runId, employeeId, employeeName, a
   const remove = async (option: RemovalOption) => {
     if (busyKey || option.disabled) return
     setBusyKey(option.key); setError(''); setNote(''); setConfirming(null)
+    // البنود اللي مالهاش إعفاء مالي بنوعها تُشال بقاعدة «شيل خصم» على الموظف في شهر المسير، ثم إعادة الحساب
+    if (isWaiverOption(option.input)) {
+      try {
+        await createDeductionWaiver({ period, kind: option.input.waiverKind, targetLevel: 'employees', branchId: employeeBranchId,
+          departmentIds: [], teamIds: [], employeeIds: [employeeId], reason: removalReason(reason) })
+      } catch (e) {
+        setError(plainRefusal(e, 'تعذر شيل الخصم'))
+        setBusyKey(null)
+        return
+      }
+      await recalculate()
+      return
+    }
     const input: ExemptionInput = { runId, employeeId, reason: removalReason(reason), ...option.input }
     let granted: ExemptionView
     try {
@@ -133,40 +178,42 @@ export function PayrollRemoveDeductionModal({ runId, employeeId, employeeName, a
   }
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label={`إلغاء خصم — ${employeeName}`}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" role="dialog" aria-modal="true" aria-label={`شيل خصم — ${employeeName}`}>
       <div className="w-full max-w-lg rounded-2xl bg-white p-5 shadow-xl space-y-3 text-right" data-testid="payroll-remove-deduction">
         <div className="flex items-center justify-between gap-2">
-          <h3 className="font-bold text-gray-800 flex items-center gap-2"><ShieldOff size={18} /> إلغاء خصم — {employeeName}</h3>
+          <h3 className="font-bold text-gray-800 flex items-center gap-2"><ShieldOff size={18} /> شيل خصم — {employeeName}</h3>
           <button type="button" onClick={onClose} disabled={busyKey !== null} className="text-sm text-gray-500 disabled:opacity-50">إغلاق</button>
         </div>
-        <p className="text-xs text-gray-500">اختر الخصم الذي يُلغى عن الموظف في هذا المسير، ويُعاد حساب المسير تلقائيًا. أقساط السلف والإجازة بدون راتب لا تُلغى من هنا.</p>
+        <p className="text-xs text-gray-500">دي كل خصومات الموظف في المسير ده بمبالغها. اختار اللي يتشال واكتب السبب، والمسير هيتحسب تاني لوحده.
+          الخصم النظامي أو القضائي واللي إنت نزّلته بنفسك مبيتشالوش من هنا.</p>
         {error && <p role="alert" className="p-2 bg-red-50 text-red-700 rounded-lg text-sm">{error}</p>}
         {note && <p role="status" className="p-2 bg-amber-50 text-amber-900 rounded-lg text-sm">{note}</p>}
         {!entries && !error && <p className="text-sm text-gray-400">جارٍ تحميل خصومات الموظف…</p>}
-        {entries && options.length === 0 && <p className="text-sm text-gray-500">لا توجد خصومات يمكن إلغاؤها لهذا الموظف في هذا المسير.</p>}
+        {entries && options.length === 0 && <p className="text-sm text-gray-500">مفيش خصومات تتشال للموظف ده في المسير ده.</p>}
         <ul className="space-y-2">
           {options.map(option => (
             <li key={option.key} className="flex items-center justify-between gap-2 rounded-xl border border-gray-100 p-3 text-sm">
               <span className={option.disabled && !option.removed ? 'text-gray-400' : 'text-gray-800'}>{option.label}</span>
               <button type="button" className="btn-secondary text-xs whitespace-nowrap disabled:opacity-50" disabled={option.disabled || busyKey !== null}
                 onClick={() => { setConfirming(option); setError(''); setNote('') }}>
-                {busyKey === option.key ? 'جارٍ الإلغاء…' : option.removed ? 'أُلغي' : 'إلغاء هذا الخصم'}
+                {busyKey === option.key ? 'جارٍ الإلغاء…' : option.removed ? 'أُلغي' : 'شيل الخصم ده'}
               </button>
             </li>
           ))}
         </ul>
         {confirming && (
           <div className="rounded-xl border border-red-200 bg-red-50 p-3 space-y-2 text-sm" data-testid="payroll-remove-deduction-confirm">
-            <p className="text-red-800">تأكيد إلغاء: {confirming.label}</p>
-            <label className="block text-xs text-gray-600">سبب الإلغاء (اختياري)
+            <p className="text-red-800">تأكيد شيل: {confirming.label}</p>
+            <label className="block text-xs text-gray-600">سبب الشيل (مطلوب)
               <input className="input w-full mt-1" value={reason} maxLength={300} placeholder={REMOVE_DEDUCTION_REASON} onChange={event => setReason(event.target.value)} />
             </label>
             <div className="flex gap-2">
-              <button type="button" className="btn-primary text-xs disabled:opacity-50" disabled={busyKey !== null} onClick={() => remove(confirming)}>
+              <button type="button" className="btn-primary text-xs disabled:opacity-50" disabled={busyKey !== null || reason.trim().length < 3} onClick={() => remove(confirming)}>
                 {busyKey === confirming.key ? 'جارٍ الإلغاء…' : 'تأكيد الإلغاء'}
               </button>
               <button type="button" className="btn-secondary text-xs" disabled={busyKey !== null} onClick={() => setConfirming(null)}>تراجع</button>
             </div>
+            {reason.trim().length < 3 && <p className="text-xs text-gray-500">اكتب السبب عشان تقدر تأكد.</p>}
           </div>
         )}
         {awaitingRecalc && <div className="flex items-center justify-between gap-2 rounded-xl bg-amber-50 p-3 text-sm text-amber-900" data-testid="payroll-remove-deduction-recalc">

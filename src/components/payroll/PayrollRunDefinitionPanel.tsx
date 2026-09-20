@@ -29,8 +29,8 @@ const POLICY_VERSION_UNUSABLE = new Set(['PAYRUN-POLICY-PERIOD', 'PAYRUN-POLICY-
 async function seedPolicyVersion(options: PublishedPolicyVersionOption[], seed: PayrollRunDefinitionInitial): Promise<PublishedPolicyVersionOption | null> {
   if (seed.policyId == null || !/^\d{4}-\d{2}$/.test(seed.period)) return null
   const filters: PayrollRunFiltersInput = seed.filters.employeeIds.length
-    ? { branchIds: seed.filters.branchIds, departmentIds: [], teamIds: [], employeeIds: seed.filters.employeeIds }
-    : { ...seed.filters, employeeIds: [] }
+    ? { branchIds: seed.filters.branchIds, departmentIds: [], teamIds: [], employeeIds: seed.filters.employeeIds, includeEmployeeIds: seed.filters.includeEmployeeIds ?? [] }
+    : { ...seed.filters, employeeIds: [], includeEmployeeIds: seed.filters.includeEmployeeIds ?? [] }
   for (const option of options.filter(row => row.policyId === seed.policyId).sort((a, b) => b.versionNo - a.versionNo)) {
     try {
       await previewPayrollRunDefinition({ policyVersionId: option.versionId, period: seed.period, filters, exclusions: seed.exclusions })
@@ -76,10 +76,13 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
   const [policyVersionId, setPolicyVersionId] = useState<number | null>(draft?.policyVersionId ?? null)
   const [period, setPeriod] = useState(draft?.period ?? seed?.period ?? '')
   const [mode, setMode] = useState<Mode>((draft?.selection?.filters.employeeIds.length ?? seed?.filters.employeeIds.length) ? 'LIST' : 'FILTERS')
+  // القائمة الدائمة (المضافون للمسير) تُحمل وتُعاد كما هي مع أي تعديل للتعريف، فما تسقطش عضويتهم
   const [filters, setFilters] = useState<PayrollRunFiltersInput>(() => draft?.selection ? {
     branchIds: draft.selection.filters.branchIds, departmentIds: draft.selection.filters.departmentIds,
-    teamIds: draft.selection.filters.teamIds, employeeIds: draft.selection.filters.employeeIds }
-    : seed ? { branchIds: seed.filters.branchIds, departmentIds: seed.filters.departmentIds, teamIds: seed.filters.teamIds, employeeIds: seed.filters.employeeIds }
+    teamIds: draft.selection.filters.teamIds, employeeIds: draft.selection.filters.employeeIds,
+    includeEmployeeIds: draft.selection.filters.includeEmployeeIds ?? [] }
+    : seed ? { branchIds: seed.filters.branchIds, departmentIds: seed.filters.departmentIds, teamIds: seed.filters.teamIds, employeeIds: seed.filters.employeeIds,
+      includeEmployeeIds: seed.filters.includeEmployeeIds ?? [] }
     : emptyRunFilters())
   const [exclusions, setExclusions] = useState<PayrollRunExclusionInput[]>(draft?.selection?.exclusions.map(row => ({ employeeId: row.employeeId, reason: row.reason }))
     ?? seed?.exclusions.map(row => ({ employeeId: row.employeeId, reason: row.reason })) ?? [])
@@ -121,8 +124,8 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
 
   const options = useMemo(() => linkedFilterOptions(branches, departments, teams, filters), [branches, departments, teams, filters])
   const selectedFilters: PayrollRunFiltersInput = mode === 'LIST'
-    ? { branchIds: filters.branchIds, departmentIds: [], teamIds: [], employeeIds: filters.employeeIds }
-    : { ...filters, employeeIds: [] }
+    ? { branchIds: filters.branchIds, departmentIds: [], teamIds: [], employeeIds: filters.employeeIds, includeEmployeeIds: filters.includeEmployeeIds ?? [] }
+    : { ...filters, employeeIds: [], includeEmployeeIds: filters.includeEmployeeIds ?? [] }
   const input = policyVersionId && /^\d{4}-\d{2}$/.test(period) ? {
     name: name.trim() || undefined, policyVersionId, period, filters: selectedFilters, exclusions,
     ...(confirmEmpty ? { confirmEmptyScope: true, emptyScopeReason: emptyReason.trim() } : {}),

@@ -27,8 +27,10 @@ export const PAYROLL_UNASSIGNED_REASON_LABELS: Record<PayrollUnassignedReason, s
 
 // أسباب الاستبعاد المحفوظة في payroll_run_members.exclusionReason بنص عربي للتقرير والمعاينة.
 export const PAYROLL_EXCLUSION_LABELS: Record<string, string> = {
+  // أكواد قديمة محفوظة في صفوف سابقة؛ قرار المالك (20 سبتمبر) ألغى الاستبعاد العام للموقوف والمؤرشف.
   SUSPENDED: 'الموظف موقوف',
   ARCHIVED: 'ملف الموظف مؤرشف',
+  EXC_ARCHIVED_NO_LAST_DAY: 'مؤرشف بلا تاريخ آخر يوم عمل — حدده عشان راتبه يتحسب',
   EXC_JOINS_AFTER_PERIOD: 'بداية العمل بعد نهاية الفترة',
   EXC_TERMINATED_BEFORE_PERIOD: 'انتهاء الخدمة قبل بداية الفترة',
   EXC_NO_ACTIVE_EMPLOYMENT: 'لا توجد مدة عمل مستحقة داخل الفترة',

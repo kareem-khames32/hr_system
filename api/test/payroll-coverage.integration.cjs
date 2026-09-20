@@ -545,26 +545,26 @@ test('PR-11: an employee cannot read their calculated draft payslip but can read
   assert.ok(afterList.body.some(row => row.item.id === item.id && row.run.status === 'APPROVED'))
 })
 
-test('PR-10: half-cent proration rounds upward and the adjusted components equal the earned gross', async t => {
+test('PR-10: half-cent proration is cut down (قرار المالك: خانتين بلا تقريب) and the adjusted components equal the earned gross', async t => {
   const single = await employee({ joinDate: '2026-07-20', basicSalary: 30.15 })
   const split = await employee({ joinDate: '2026-07-20', basicSalary: 10.15, housingAllowance: 10.15, transportAllowance: 10.15 })
   await attendance(single, '2026-07-20', endDate)
   await attendance(split, '2026-07-20', endDate)
   const run = await calculate([single, split])
   const singleItem = itemFor(run, single)
-  assert.equal(amount(singleItem.netPay), 3.02, '30.15 × 3 / 30 = 3.015 must round to 3.02')
-  assert.equal(amount(singleItem.basicSalary), 3.02)
+  assert.equal(amount(singleItem.netPay), 3.01, '30.15 × 3 / 30 = 3.015 يتقص لـ 3.01 (بلا تقريب)')
+  assert.equal(amount(singleItem.basicSalary), 3.01)
   deductionsAreZero(singleItem)
-  coverageIs(singleItem, { coverFrom: '2026-07-20', coverTo: endDate, coverDays: 3, grossEarned: 3.02, prorataFactor: 0.1 })
+  coverageIs(singleItem, { coverFrom: '2026-07-20', coverTo: endDate, coverDays: 3, grossEarned: 3.01, prorataFactor: 0.1 })
 
   const splitItem = itemFor(run, split)
-  assert.equal(amount(splitItem.netPay), 3.05, '30.45 × 3 / 30 = 3.045 must round to 3.05')
-  assert.equal(Math.round(amount(splitItem.basicSalary) * 100) + Math.round(amount(splitItem.allowances) * 100), 305,
-    'Rounded basic salary and allowances must reconcile to 305 cents after the one-cent adjustment')
+  assert.equal(amount(splitItem.netPay), 3.04, '30.45 × 3 / 30 = 3.045 يتقص لـ 3.04 (بلا تقريب)')
+  assert.equal(Math.round(amount(splitItem.basicSalary) * 100) + Math.round(amount(splitItem.allowances) * 100), 304,
+    'الأساسي والبدلات بعد القص لازم يطابقوا 304 قرش')
   deductionsAreZero(splitItem)
-  coverageIs(splitItem, { coverFrom: '2026-07-20', coverTo: endDate, coverDays: 3, grossEarned: 3.05, prorataFactor: 0.1 })
+  coverageIs(splitItem, { coverFrom: '2026-07-20', coverTo: endDate, coverDays: 3, grossEarned: 3.04, prorataFactor: 0.1 })
   const splitBreakdown = JSON.parse(splitItem.breakdown)
-  assert.equal(splitBreakdown.earnedComponents.reduce((cents, component) => cents + Math.round(component * 100), 0), 305)
-  assert.equal(amount(run.totalNet), 6.07)
-  t.diagnostic('Manual half-cent cases: 30.15 × 3/30 = 3.02; (10.15 + 10.15 + 10.15) × 3/30 = 3.05; component cents and run total reconcile.')
+  assert.equal(splitBreakdown.earnedComponents.reduce((cents, component) => cents + Math.round(component * 100), 0), 304)
+  assert.equal(amount(run.totalNet), 6.05)
+  t.diagnostic('Manual half-cent cases (قص بلا تقريب): 30.15 × 3/30 = 3.015 → 3.01؛ (10.15 × 3) × 3/30 = 3.045 → 3.04؛ القروش والإجمالي متطابقين.')
 })

@@ -16,6 +16,26 @@ type ItemAmounts = Partial<Pick<ApiPayrollItem, typeof PAYROLL_EARNING_FIELDS[nu
 export const payrollItemEarnings = (item: ItemAmounts) => sumMoney(PAYROLL_EARNING_FIELDS.map(field => item[field]))
 export const payrollItemDeductions = (item: ItemAmounts) => sumMoney(PAYROLL_DEDUCTION_FIELDS.map(field => item[field]))
 
+/**
+ * قرار المالك (20 سبتمبر): راتب شهر آخر يوم عمل بيتصرف مع التصفية بنفس رقم المسير.
+ * صفّه داخل إجمالي المسير (تكلفة الشهر كاملة) وبرّه المبلغ المستحق للصرف وكشف البنك.
+ */
+export const SETTLEMENT_PAYOUT_LABEL = 'تصفية — مصروف مع التصفية'
+export function payrollItemSettlementPayout(item: Pick<ApiPayrollItem, 'breakdown'>): { caseId: number; lastWorkingDay: string } | null {
+  try {
+    const payout = JSON.parse(item.breakdown || '{}').settlementPayout
+    return payout && typeof payout.lastWorkingDay === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(payout.lastWorkingDay)
+      ? { caseId: Number(payout.caseId) || 0, lastWorkingDay: payout.lastWorkingDay } : null
+  } catch { return null }
+}
+
+/** المبلغ المستحق للصرف = صافي المسير ناقص صفوف «مصروف مع التصفية». */
+export function payrollRunPayable(items: ReadonlyArray<ItemAmounts & Pick<ApiPayrollItem, 'breakdown'>>) {
+  const settlementItems = items.filter(item => payrollItemSettlementPayout(item))
+  return { payable: sumMoney(items.filter(item => !payrollItemSettlementPayout(item)).map(item => item.netPay)),
+    settlement: sumMoney(settlementItems.map(item => item.netPay)), settlementCount: settlementItems.length }
+}
+
 /** ملخص خصومات المسير: سطر لكل عمود (ومنها النقص والخصومات الأخرى) والإجمالي الكبير من الصفوف نفسها. */
 export function payrollDeductionSummary(items: readonly ItemAmounts[]) {
   const lines = PAYROLL_DEDUCTION_FIELDS.map(field => ({ field, label: PAYROLL_DEDUCTION_LABELS[field], total: sumMoney(items.map(item => item[field])) }))

@@ -72,6 +72,8 @@ import { definitionCodeOf, groupLeaveProfiles, isLeaveDefinition, isLeaveRequest
 import { isValidYmd } from '../offboarding/eos'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 import { buildOvertimeApprovalSnapshot, overtimeWageEvidence } from '../payroll/overtime-financial'
+// تراكم المسير يومًا بيوم: اعتماد متأخر بيغيّر يوم — نعلّمه «متسخ» فالجار الليلي يعيده
+import { markPayrollDaysDirty } from '../payroll/payroll-daily-accrual'
 import { appendOvertimeEvent, assertOvertimeSubmission, claimOvertimeDay, releaseOvertimeDayClaim } from './overtime-day-claims'
 import { assertOvertimeNotHolidayWork, holidayWorkCoversOvertime, HOLIDAY_WORK_HANDLER, HOLIDAY_WORK_OVERTIME_REFUSAL, parseHolidayWorkDates } from '../attendance/holiday-work'
 import { OvertimeEntryEvent } from './entities/overtime-workflow.entities'
@@ -2507,6 +2509,7 @@ export class RequestsService {
     Object.assign(entry, values, { status: 'APPROVED' })
     await em.getRepository(OvertimeEntry).save(entry)
     await appendOvertimeEvent(em, { entryId: entry.id, requestId: req.id, actorUserId, eventType: 'APPROVED', payload: { approval: entry.calculationSnapshot?.approval } })
+    await markPayrollDaysDirty(em, entry.employeeId, [entry.date], 'اعتماد إضافي')
   }
 
   // قاعدة المالك (3): طلب الفترة المقفولة بيتحسب إضافيه من بصمات اليوم لحظة الاعتماد النهائي بنفس القاعدة،
@@ -2536,6 +2539,7 @@ export class RequestsService {
       await em.getRepository(OvertimeEntry).save(entry)
       await appendOvertimeEvent(em, { entryId: entry.id, requestId: req.id, actorUserId, eventType: 'APPROVED', reason: message,
         payload: { approval: entry.calculationSnapshot?.approval, computedAtApproval: true } })
+      await markPayrollDaysDirty(em, entry.employeeId, [entry.date], 'اعتماد إضافي محسوب وقت الاعتماد')
       return
     }
     // صفر: مفيش لقطة مالية (المسير مابيقبلش قيد معتمد بصفر دقيقة)؛ القيد بيتقفل بصفر والطلب بيكمل.
@@ -2545,6 +2549,7 @@ export class RequestsService {
     await releaseOvertimeDayClaim(em, entry.id)
     await appendOvertimeEvent(em, { entryId: entry.id, requestId: req.id, actorUserId, eventType: 'APPROVED_ZERO', reason: message,
       payload: { approvedMinutes: 0, computedAtApproval: true } })
+    await markPayrollDaysDirty(em, entry.employeeId, [entry.date], 'اعتماد إضافي بصفر دقيقة')
   }
 
   private async releaseRequestOvertime(em: EntityManager, req: Request, status: 'REJECTED' | 'CANCELLED', actorUserId: number, reason?: string) {
@@ -2557,6 +2562,7 @@ export class RequestsService {
     await releaseOvertimeDayClaim(em, entry.id)
     await appendOvertimeEvent(em, { entryId: entry.id, requestId: req.id, actorUserId, eventType: 'CLAIM_RELEASED', reason, payload: { status } })
     if (status === 'CANCELLED') await appendOvertimeEvent(em, { entryId: entry.id, requestId: req.id, actorUserId, eventType: status, reason })
+    await markPayrollDaysDirty(em, entry.employeeId, [entry.date], 'إلغاء أو رفض إضافي')
   }
 
   // طلب يملكه المستخدم: صاحبه أو منشئه (نيابة عن الغير) أو الأدمن

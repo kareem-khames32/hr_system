@@ -127,6 +127,8 @@ class PayrollRunFiltersDto {
   @IsOptional() @IsArray() @ArrayMaxSize(1000) @Type(() => Number) @IsInt({ each: true }) @Min(1, { each: true }) teamIds?: number[]
   @IsOptional() @IsArray() @ArrayMaxSize(1000) @Type(() => Number) @IsInt({ each: true }) @Min(1, { each: true }) employeeIds?: number[]
   @IsOptional() @IsBoolean() allEmployees?: boolean
+  // قائمة الإضافة الدائمة: أسماء مضمومة للمسير فوق فلاتره — تُعاد كما هي عند تعديل التعريف حتى لا تسقط العضوية
+  @IsOptional() @IsArray() @ArrayMaxSize(1000) @Type(() => Number) @IsInt({ each: true }) @Min(1, { each: true }) includeEmployeeIds?: number[]
 }
 
 class PayrollRunExclusionDto {
@@ -221,6 +223,21 @@ class PayrollMemberExclusionDto {
   @Type(() => Number) @IsInt() @Min(1) employeeId: number
   @Allow() reason?: unknown
   @IsOptional() @IsBoolean() allowDraftConflicts?: boolean
+}
+
+// قرار المالك (20 سبتمبر): «أضفهم لمسير…» و«نقل لمسير آخر» — عضوية دائمة من شهر المسير وما بعده.
+// السبب يُتحقق في الخدمة برمز عربي (PAYRUN-MEMBERSHIP-REASON) لا بنص class-validator.
+class PayrollRunMembersDto {
+  @IsArray() @ArrayUnique() @ArrayMaxSize(500) @Type(() => Number) @IsInt({ each: true }) @Min(1, { each: true }) employeeIds: number[]
+  @Allow() reason?: unknown
+  // المسير الذي يخرج منه الموظف (النقل)؛ بدونه = إضافة من «موظفين ليس لديهم مسير»
+  @IsOptional() @Type(() => Number) @IsInt() @Min(1) fromRunId?: number
+  @IsOptional() @IsBoolean() allowDraftConflicts?: boolean
+}
+
+class PayrollEmployeeRunsQueryDto {
+  @Type(() => Number) @IsInt() @Min(1) employeeId: number
+  @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'اختار الشهر بصيغة YYYY-MM' }) period: string
 }
 
 // الخطوة 23 (B5، تصحيح المراجعة): مسير تجريبي لا يُحتسب في فترة التكافؤ — القرار والسبب (يُتحقق من السبب في الخدمة برمز عربي)
@@ -385,6 +402,20 @@ export class PayrollController {
   @Post('runs/:id/member-exclusions')
   excludeMember(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PayrollMemberExclusionDto) {
     return this.service.excludeRunMember(user, id, dto)
+  }
+
+  // قرار المالك (20 سبتمبر): ضم موظفين لمسير (أو نقلهم إليه من مسير آخر) عضوية دائمة من شهر المسير وما بعده
+  @Perm('payroll.calculate')
+  @Post('runs/:id/members')
+  addMembers(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PayrollRunMembersDto) {
+    return this.service.changeRunMembership(user, id, dto)
+  }
+
+  // مسير الموظف في شهر والمسيرات المفتوحة التي يمكن نقله إليها (لملف الموظف ولنافذة النقل) — قراءة فقط
+  @Perm('payroll.view')
+  @Get('employee-runs')
+  employeeRuns(@CurrentUser() user: JwtPayload, @Query() query: PayrollEmployeeRunsQueryDto) {
+    return this.service.employeeRunMembership(user, query.employeeId, query.period)
   }
 
   // الخطوة 23 (B5): فترة التكافؤ التشغيلية (خمسة أشهر) من المسيرات المعتمدة والمصروفة — قراءة فقط

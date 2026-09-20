@@ -11,6 +11,9 @@ import {
   ApiError,
   can,
   fetchPayMethodReport,
+  fetchPayrollRunAccrual,
+  refreshPayrollRunAccrual,
+  type ApiPayrollRunAccrual,
   fetchBranches,
   fetchDepartments,
   fetchTeams,
@@ -37,10 +40,11 @@ import { PayrollRunDefinitionPanel, type PayrollRunDefinitionInitial } from '@/c
 import { PayrollDraftMembership } from '@/components/payroll/PayrollDraftMembership'
 // تبسيط الرواتب (2026-09-15): لوحات محرك الحساب ولقطة السياسة وسجل الأحداث والعكس/التكميلي و«موظفون بلا مسير» والإعفاء المالي
 // لم تعد تُعرض هنا (ملفاتها وواجهاتها الخلفية باقية). «إلغاء خصم» صار زرًا على صف الموظف.
-import { PayrollRemoveDeductionModal, type RemovableAttendanceAmounts } from '@/components/payroll/PayrollFinancialExemptionsPanel'
+import { PayrollRemoveDeductionModal, type RunDeductionLine } from '@/components/payroll/PayrollFinancialExemptionsPanel'
+import { PayrollRunMoveMemberModal } from '@/components/payroll/PayrollRunMoveMemberModal'
 // B5 / الخطوة 22: منسّق المبالغ الموحد، ومجاميع البنود بالقروش، وقيد الصرف، وحل التعارضات
 import { formatMoney, formatMoneyOrDash } from '@/lib/money'
-import { payrollItemCoverage, payrollItemDeductions, payrollItemEarnings, payrollItemMissingPunchDates, payrollMissingPunchText, payrollRunTotals } from '@/lib/payroll-item-totals'
+import { payrollItemCoverage, payrollItemDeductions, payrollItemEarnings, payrollItemMissingPunchDates, payrollItemSettlementPayout, payrollMissingPunchText, payrollRunPayable, payrollRunTotals, SETTLEMENT_PAYOUT_LABEL } from '@/lib/payroll-item-totals'
 import { PayrollConflictResolution } from '@/components/payroll/PayrollConflictResolution'
 // تبويبات الشاشة بعد «المسيرات»: المدرجين، بلا مسير، التضارب، الاستقطاعات («شيل خصم»)
 import { PayrollOverviewTabs, type PayrollOverviewTab } from '@/components/payroll/PayrollOverviewTabs'
@@ -196,8 +200,13 @@ export default function PayrollPage() {
   const [nextMonthInitial, setNextMonthInitial] = useState<PayrollRunDefinitionInitial | null>(null)
   const [draftPreview, setDraftPreview] = useState<PayrollMembershipPreview | null>(null)
   const [draftPreviewError, setDraftPreviewError] = useState('')
-  // «إلغاء خصم» لموظف في المسير المحسوب
-  const [removeDeductionFor, setRemoveDeductionFor] = useState<{ employeeId: number; name: string; amounts: RemovableAttendanceAmounts } | null>(null)
+  // تراكم المسير يومًا بيوم: «آخر يوم محسوب» وزرار «حدّث الحساب»
+  const [accrual, setAccrual] = useState<ApiPayrollRunAccrual | null>(null)
+  const [accrualBusy, setAccrualBusy] = useState(false)
+  // «شيل خصم» لموظف في المسير المحسوب — النافذة بتاخد كل بنود استقطاعه بأسمائها ومبالغها
+  const [removeDeductionFor, setRemoveDeductionFor] = useState<{ employeeId: number; name: string; branchId: number | null; lines: RunDeductionLine[] } | null>(null)
+  // «نقل لمسير آخر» لموظف من صف المسير — عضوية دائمة من شهر المسير ورايح
+  const [moveMemberFor, setMoveMemberFor] = useState<{ employeeId: number; name: string } | null>(null)
   // طلب المالك 19 سبتمبر: بنود كل موظف (استحقاقات واستقطاعات بأسمائها) للجدول والتصدير
   const [runLines, setRunLines] = useState<PayrollRunLines | null>(null)
   const [linesError, setLinesError] = useState('')
@@ -281,6 +290,18 @@ export default function PayrollPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [runDetail?.id, runDetail?.snapshotVersion, runDetail?.name, runDetail?.period])
 
+  // تراكم المسير يومًا بيوم: «آخر يوم محسوب» للمسير المفتوح (قراءة خفيفة، فشلها ما يوقفش الشاشة)
+  useEffect(() => {
+    setAccrual(null)
+    setAccrualBusy(false)
+    if (!runDetail || !['DRAFT', 'CALCULATED'].includes(runDetail.status)) return
+    let cancelled = false
+    fetchPayrollRunAccrual(runDetail.id)
+      .then(row => { if (!cancelled) setAccrual(row) })
+      .catch(() => { /* الترحيل مش متطبق أو مافيش صلاحية — السطر ما يظهرش */ })
+    return () => { cancelled = true }
+  }, [runDetail])
+
   // المسودة: معاينة العضوية المحفوظة (قراءة فقط) قبل «احتساب المسودة»
   useEffect(() => {
     setDraftPreview(null)
@@ -307,6 +328,8 @@ export default function PayrollPage() {
   const canRemoveDeduction = runDetail?.status === 'CALCULATED' && can('financial_exemption.grant')
   // «مسير الشهر التالي» للمسير العادي فقط؛ مسيرات العكس والتكميلي تصحيح لمسير مصروف لا تتكرر شهريًا
   const isRegularRun = (runDetail?.runType ?? 'REGULAR') === 'REGULAR'
+  // «نقل لمسير آخر»: المسير مفتوح (مسودة أو محسوب) وعادي، وحامل صلاحية الحساب
+  const canMoveMember = !!runDetail && isRegularRun && ['DRAFT', 'CALCULATED'].includes(runDetail.status) && can('payroll.calculate')
 
   const refreshRuns = async (selectId?: number) => {
     const runsData = await fetchPayrollRuns()
@@ -384,6 +407,21 @@ export default function PayrollPage() {
     }
   }
 
+  // «حدّث الحساب»: يحسب الأيام الناقصة والمتسخة للمسير المفتوح دلوقتي (زي الجار الليلي بالظبط)
+  const handleRefreshAccrual = async () => {
+    if (!runDetail || accrualBusy) return
+    setError('')
+    setAccrualBusy(true)
+    try {
+      const result = await refreshPayrollRunAccrual(runDetail.id)
+      setAccrual(result.accrual)
+    } catch (e) {
+      setError(payrollRunErrorMessage(e, 'تعذر تحديث حساب الأيام'))
+    } finally {
+      setAccrualBusy(false)
+    }
+  }
+
   // «مسير الشهر التالي»: نفس الاسم والفلاتر والموظفين والمستبعدين بأسبابهم للشهر التالي، والحفظ مسودة عادية من «مسير جديد»
   const openNextMonthRun = async () => {
     if (!runDetail || runDetail.status === 'CANCELLED' || !isRegularRun || actionBusy) return
@@ -399,6 +437,8 @@ export default function PayrollPage() {
         filters: {
           branchIds: selection?.filters.branchIds ?? [], departmentIds: selection?.filters.departmentIds ?? [],
           teamIds: selection?.filters.teamIds ?? [], employeeIds: selection?.filters.employeeIds ?? [],
+          // العضوية دائمة: المضافون يدويًا للمسير ينتقلوا للشهر التالي زي ما هم
+          includeEmployeeIds: selection?.filters.includeEmployeeIds ?? [],
         },
         exclusions: selection?.exclusions.map(row => ({ employeeId: row.employeeId, reason: row.reason })) ?? [],
       })
@@ -483,6 +523,8 @@ export default function PayrollPage() {
   // إجماليات المسير من البنود الفعلية بالقروش الصحيحة (مجموع كل عمود = مجموع الصفوف، ولا تراكم كسور)
   const runTotals = payrollRunTotals(filteredItems)
   const totals = { totalEarnings: runTotals.earnings, totalDeductions: runTotals.deductions, netSalary: runTotals.net }
+  // قرار المالك (20 سبتمبر): المستحق للصرف = الصافي ناقص صفوف «مصروف مع التصفية»
+  const payable = payrollRunPayable(filteredItems)
   // طلب المالك 19 سبتمبر: أعمدة الاستحقاقات والاستقطاعات = البنود الموجودة فعلًا في المسير (مفيش عمود فاضي)، ومجموع كل صف = أعمدة بنده المحفوظة
   const earningColumns: PayrollLineColumn[] = runLines?.columns.earnings ?? []
   const deductionColumns: PayrollLineColumn[] = runLines?.columns.deductions ?? []
@@ -757,6 +799,10 @@ export default function PayrollPage() {
                 <p className="text-success-100 text-sm">صافي الرواتب</p>
                 <p className="text-3xl font-bold mt-1">{formatMoney(totals.netSalary)}</p>
                 <p className="text-success-200 text-sm mt-1">{currency}</p>
+                {/* قرار المالك (20 سبتمبر): راتب شهر آخر يوم عمل داخل الإجمالي وبرّه المستحق للصرف — بيتصرف مع التصفية */}
+                {payable.settlementCount > 0 && <p className="text-success-100 text-xs mt-1">
+                  المستحق للصرف {formatMoney(payable.payable)} — {formatMoney(payable.settlement)} لـ{payable.settlementCount} موظف مصروف مع التصفية
+                </p>}
               </div>
               <div className="w-14 h-14 bg-white/20 rounded-2xl flex items-center justify-center">
                 <Banknote size={28} />
@@ -793,8 +839,24 @@ export default function PayrollPage() {
                   {screen.actors.approved && ` • اعتمده: ${actorName(screen.actors.approved)}`}
                   {screen.actors.paid && ` • صرفه: ${actorName(screen.actors.paid)}`}
                 </p>}
+                {/* تراكم المسير يومًا بيوم: الحساب بيتجمّع كل ليلة، فالإقفال آخر الشهر بياخد دقايق */}
+                {accrual && <p className="text-xs text-gray-600 mt-1" data-payroll-accrual>
+                  آخر يوم محسوب: {accrual.lastAccruedDate ?? 'لسه مافيش'}
+                  {accrual.dirtyDays > 0
+                    ? ` • ${accrual.dirtyDays} يوم-موظف محتاج إعادة حساب`
+                    : accrual.upToDate ? ' • الحساب متجمّع لحد أمس' : ` • المفروض يوصل ${accrual.targetDate}`}
+                </p>}
               </div>
               <div className="flex flex-wrap items-center gap-2">
+                {/* «حدّث الحساب»: يحسب الأيام الناقصة والمتسخة دلوقتي بدل ما يستنى الجار الليلي */}
+                {accrual?.open && can('payroll.calculate') && (
+                  <button type="button" onClick={handleRefreshAccrual} disabled={accrualBusy || actionBusy || detailLoading}
+                    title="يحسب الأيام اللي لسه ناقصة أو اتغيرت، فإقفال الشهر ما يستناش"
+                    className="btn-secondary flex items-center gap-2 text-sm disabled:opacity-50">
+                    <Calendar size={16} />
+                    {accrualBusy ? 'بيحدّث…' : 'حدّث الحساب'}
+                  </button>
+                )}
                 {runDetail.status !== 'CANCELLED' && isRegularRun && can('payroll.calculate') && (
                   <button type="button" onClick={openNextMonthRun} disabled={actionBusy || detailLoading}
                     className="btn-secondary flex items-center gap-2 text-sm disabled:opacity-50">
@@ -1047,6 +1109,7 @@ export default function PayrollPage() {
                   // د: أيام البصمة الناقصة تُقال وقت الحساب على صف الموظف، لا عند رفض الاعتماد
                   const missingPunch = payrollMissingPunchText(payrollItemMissingPunchDates(item))
                   const negativeNet = n(item.netPay) < 0
+                  const settlementPayout = payrollItemSettlementPayout(item)
 
                   return (
                   <tr key={item.id} className={`table-row ${negativeNet ? 'bg-red-50' : ''}`}>
@@ -1065,6 +1128,11 @@ export default function PayrollPage() {
                             راتب شهر {snapshot.salarySource.referencePeriod} من السجل (يسري من {snapshot.salarySource.effectivePayrollPeriod})
                           </p>}
                           {coverage && <p className="text-xs text-gray-500">التغطية: {coverage}</p>}
+                          {/* قرار المالك (20 سبتمبر): الموقوف عضو في المسير وصفّه يقول حالته، وشهر آخر يوم عمل راتبه مصروف مع التصفية */}
+                          {snapshot?.suspensionNote && <p className="text-xs text-amber-700">{snapshot.suspensionNote}</p>}
+                          {settlementPayout && <p className="text-xs text-purple-700">
+                            {SETTLEMENT_PAYOUT_LABEL} (آخر يوم عمل {settlementPayout.lastWorkingDay}) — داخل إجمالي المسير وخارج كشف البنك والمبلغ المستحق
+                          </p>}
                           {missingPunch && <p className="text-xs text-warning-600">{missingPunch}</p>}
                         </div>
                       </div>
@@ -1142,11 +1210,19 @@ export default function PayrollPage() {
                         </Link>
                       </div>
                       <div className="flex flex-col items-center gap-1 mt-1">
+                        {/* قرار المالك (20 سبتمبر): «شيل خصم» مكان واحد واضح — كل بنود استقطاع الموظف في النافذة بمبالغها */}
                         {canRemoveDeduction && n(totalDeductions) > 0 && (
                           <button type="button" onClick={() => setRemoveDeductionFor({ employeeId: item.employeeId, name,
-                            amounts: { lateness: n(item.latenessDeduction), shortfall: n(item.shortfallDeduction), absence: n(item.absenceDeduction) } })} disabled={actionBusy || detailLoading}
+                            branchId: snapshot?.branchId ?? emp?.branchId ?? null, lines: lines?.deductions ?? [] })} disabled={actionBusy || detailLoading}
                             className="text-xs text-danger-700 underline whitespace-nowrap disabled:opacity-50" data-remove-deduction={item.employeeId}>
-                            إلغاء خصم
+                            شيل خصم
+                          </button>
+                        )}
+                        {/* «نقل لمسير آخر»: عضوية دائمة تنتقل من شهر المسير ورايح، والشهر المعتمد أو المصروف ما يتغيرش */}
+                        {canMoveMember && (
+                          <button type="button" onClick={() => setMoveMemberFor({ employeeId: item.employeeId, name })} disabled={actionBusy || detailLoading}
+                            className="text-xs text-primary-700 underline whitespace-nowrap disabled:opacity-50" data-move-member={item.employeeId}>
+                            نقل لمسير آخر
                           </button>
                         )}
                         {runDetail && runDetail.status !== 'CANCELLED' && (
@@ -1198,8 +1274,13 @@ export default function PayrollPage() {
       </div>
 
       {removeDeductionFor && runDetail && (
-        <PayrollRemoveDeductionModal runId={runDetail.id} employeeId={removeDeductionFor.employeeId} employeeName={removeDeductionFor.name} amounts={removeDeductionFor.amounts}
+        <PayrollRemoveDeductionModal runId={runDetail.id} period={runDetail.period} employeeId={removeDeductionFor.employeeId} employeeName={removeDeductionFor.name}
+          employeeBranchId={removeDeductionFor.branchId} lines={removeDeductionFor.lines}
           onClose={() => setRemoveDeductionFor(null)} onGranted={recalculateAfterRemoval} />
+      )}
+      {moveMemberFor && runDetail && (
+        <PayrollRunMoveMemberModal employeeId={moveMemberFor.employeeId} employeeName={moveMemberFor.name} period={runDetail.period} fromRunId={runDetail.id}
+          onClose={() => setMoveMemberFor(null)} onMoved={async () => { await refreshRuns(runDetail.id) }} />
       )}
     </MainLayout>
   )

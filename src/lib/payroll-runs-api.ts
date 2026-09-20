@@ -3,7 +3,9 @@
 import { apiFetch, ApiError, type ApiBranch, type ApiDepartment, type ApiPayrollRun, type ApiTeam } from './api'
 import type { PayrollPolicySummary } from './payroll-policies-api'
 
-export interface PayrollRunFiltersInput { branchIds: number[]; departmentIds: number[]; teamIds: number[]; employeeIds: number[]; allEmployees?: boolean }
+// includeEmployeeIds = قائمة الإضافة الدائمة: أسماء ضمّها المالك للمسير فوق فلاتره («أضفهم لمسير…» أو نقل من مسير آخر).
+// أي تعديل للتعريف لازم يبعتها كما هي، وإلا تسقط عضويتهم الدائمة.
+export interface PayrollRunFiltersInput { branchIds: number[]; departmentIds: number[]; teamIds: number[]; employeeIds: number[]; allEmployees?: boolean; includeEmployeeIds?: number[] }
 export interface PayrollRunExclusionInput { employeeId: number; reason: string }
 export interface PayrollRunDefinitionInput {
   name?: string; policyVersionId: number; period: string
@@ -29,6 +31,9 @@ interface PreviewCommon {
   branchId: number | null; branchName: string | null; departmentId: number | null; departmentName: string | null
   teamId: number | null; teamName: string | null; orgDate: string; orgIssues: Array<{ code: string; message: string }>
   inclusionSource: 'SCOPE' | 'MANUAL_INCLUDE'
+  // قرار المالك (20 سبتمبر): الموقوف عضو في المسير وصفّه يقول حالته، وشهر آخر يوم عمل راتبه مصروف مع التصفية
+  suspensionNote: string | null
+  settlementPayout: { caseId: number; lastWorkingDay: string; status: string; label: string } | null
 }
 export interface PayrollPreviewIncluded extends PreviewCommon {
   hireDate: string; leaveDate: string | null; coverFrom: string; coverTo: string; coverDays: number; partial: boolean
@@ -49,7 +54,8 @@ export interface PayrollMembershipPreview {
   selection: PayrollRunSelection
   emptyScopeRequiresConfirmation: boolean
   totals: { candidates: number; included: number; excluded: number; partial: number; dataProblems: number; alreadyInRun: number; transferredOut: number
-    manualExclusions: number; draftConflictEmployees: number; monthlyGross: number; earnedGross: number }
+    manualExclusions: number; draftConflictEmployees: number; monthlyGross: number; earnedGross: number
+    settlementPayout: number; suspended: number }
   included: PayrollPreviewIncluded[]; excluded: PayrollPreviewExcluded[]
   unusedExclusions: Array<{ employeeId: number; reason: string }>
   nameTaken?: boolean
@@ -102,7 +108,9 @@ export const UNASSIGNED_REASON_LABELS: Record<PayrollUnassignedReason, string> =
 }
 // أكواد الاستبعاد المحفوظة على العضوية بنص عربي (مرآة PAYROLL_EXCLUSION_LABELS في الخادم).
 export const MEMBERSHIP_EXCLUSION_LABELS: Record<string, string> = {
+  // أكواد قديمة محفوظة في مسيرات سابقة؛ قرار المالك (20 سبتمبر) ألغى الاستبعاد العام للموقوف والمؤرشف
   SUSPENDED: 'الموظف موقوف', ARCHIVED: 'ملف الموظف مؤرشف',
+  EXC_ARCHIVED_NO_LAST_DAY: 'مؤرشف بلا تاريخ آخر يوم عمل — حدده عشان راتبه يتحسب',
   EXC_JOINS_AFTER_PERIOD: 'بداية العمل بعد نهاية الفترة', EXC_TERMINATED_BEFORE_PERIOD: 'انتهاء الخدمة قبل بداية الفترة',
   EXC_NO_ACTIVE_EMPLOYMENT: 'لا توجد مدة عمل مستحقة داخل الفترة',
   EXC_MANUAL_EXCLUSION: 'استبعاد يدوي بسبب مكتوب', MANUAL: 'استبعاد يدوي', EXC_MANUAL: 'استبعاد يدوي',
@@ -115,7 +123,7 @@ export const MEMBERSHIP_EXCLUSION_LABELS: Record<string, string> = {
   SALARY_COMPONENT_INVALID: 'أحد مكونات راتب الملف غير صالح',
 }
 
-export const emptyRunFilters = (): PayrollRunFiltersInput => ({ branchIds: [], departmentIds: [], teamIds: [], employeeIds: [] })
+export const emptyRunFilters = (): PayrollRunFiltersInput => ({ branchIds: [], departmentIds: [], teamIds: [], employeeIds: [], includeEmployeeIds: [] })
 
 // أكواد لا يُكتب لها استبعاد: خارج النطاق آخر يوم (الاستبعاد لا ينطبق)، أو مستبعد يدويًا بالفعل.
 const NOT_EXCLUDABLE = new Set(['TRANSFERRED_OUT', 'EXC_OUT_OF_SCOPE', 'EXC_MANUAL_EXCLUSION'])
@@ -254,6 +262,30 @@ export interface PayrollParityOperations {
 export const fetchPayrollRunEventsView = (runId: number) => apiFetch<PayrollRunEventView[]>(`/payroll/runs/${runId}/events`)
 export const payPayrollRun = (runId: number, record: { channel: PayrollPayChannel; reference: string }) =>
   send<ApiPayrollRun & PayrollRunScreenFields>(`/payroll/runs/${runId}/pay`, 'POST', record)
+// ===== قرار المالك (20 سبتمبر): المسير قائمة دائمة — «أضفهم لمسير…» و«نقل لمسير آخر» =====
+export interface PayrollRunMemberRef { id: number; name: string | null; period: string; status: string }
+export interface PayrollRunMembershipResult {
+  runId: number; fromPeriod: string; employeeIds: number[]
+  moved: Array<{ from: PayrollRunMemberRef | null; to: PayrollRunMemberRef }>
+  recalculated: boolean
+  added: number[]; alreadyMember: number[]; removed: number[]
+  /** مسيرات الأشهر اللاحقة اللي اتغيّرت قائمتها ومحتاجة إعادة حساب */
+  recalculateRuns: PayrollRunMemberRef[]
+  /** أشهر معتمدة أو مصروفة ما اتغيّرتش */
+  lockedRuns: PayrollRunMemberRef[]
+  run: PayrollRunWithSelection
+}
+export interface PayrollEmployeeRuns {
+  employeeId: number; period: string
+  current: Array<PayrollRunMemberRef & { listed: boolean; member: boolean }>
+  targets: PayrollRunMemberRef[]
+}
+/** ضم موظفين لمسير (أو نقلهم إليه من مسير آخر بنفس الشهر) — عضوية دائمة من شهر المسير وما بعده. */
+export const addPayrollRunMembers = (runId: number, input: { employeeIds: number[]; reason: string; fromRunId?: number; allowDraftConflicts?: boolean }) =>
+  send<PayrollRunMembershipResult>(`/payroll/runs/${runId}/members`, 'POST', input)
+export const fetchEmployeePayrollRuns = (employeeId: number, period: string) =>
+  apiFetch<PayrollEmployeeRuns>(`/payroll/employee-runs?employeeId=${employeeId}&period=${encodeURIComponent(period)}`)
+
 export const excludePayrollRunMember = (runId: number, input: { employeeId: number; reason: string; allowDraftConflicts?: boolean }) =>
   send<PayrollRunWithSelection>(`/payroll/runs/${runId}/member-exclusions`, 'POST', input)
 export const fetchPayrollParityHistory = () => apiFetch<PayrollParityOperations>('/payroll/parity-history')

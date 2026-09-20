@@ -17,6 +17,7 @@ import {
   type DeductionKind, type DeductionWaiverCreated, type DeductionWaiverRow, type OverviewConflicts,
   type OverviewIncluded, type OverviewUnassigned,
 } from '@/lib/payroll-overview-api'
+import { addPayrollRunMembers, payrollRunErrorMessage, type PayrollRunMembershipResult } from '@/lib/payroll-runs-api'
 
 export type PayrollOverviewTab = 'included' | 'unassigned' | 'conflicts' | 'deductions'
 
@@ -131,37 +132,104 @@ function IncludedTab({ period, matches, onOpenRun }: { period: string; matches: 
   )
 }
 
+/**
+ * قرار المالك (20 سبتمبر): من هنا تختار موظف أو أكتر و«أضفهم لمسير…» — بيبقوا أعضاء دائمين في المسير ده من الشهر ده ورايح،
+ * ومسير الشهر الجديد بينسخ القائمة زي ما هي. التبويب بيفضى منهم بعد الإضافة (وبعد حساب المسودة لو المسير لسه مسودة).
+ */
 function UnassignedTab({ period, matches, onOpenRun }: { period: string; matches: Matches; onOpenRun: (id: number) => void }) {
-  const { data, error, loading } = useMonthData<OverviewUnassigned>(period, fetchPayrollWithoutRun)
-  if (loading) return <Loading />
-  if (error) return <div className="card text-danger-600 text-sm">{error}</div>
+  const [version, setVersion] = useState(0)
+  const { data, error, loading } = useMonthData<OverviewUnassigned>(period, fetchPayrollWithoutRun, version)
+  const [picked, setPicked] = useState<number[]>([])
+  const [targetRunId, setTargetRunId] = useState<number | ''>('')
+  const [reason, setReason] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [addError, setAddError] = useState('')
+  const [result, setResult] = useState<PayrollRunMembershipResult | null>(null)
+  const canAdd = can('payroll.calculate')
+  useEffect(() => { setPicked([]); setTargetRunId(''); setReason(''); setResult(null); setAddError('') }, [period])
+
   const rows = (data?.rows ?? []).filter(matches)
   const drafts = (data?.openRuns ?? []).filter(run => run.status === 'DRAFT' || run.status === 'CALCULATED')
+  const toggle = (employeeId: number) => setPicked(previous => previous.includes(employeeId) ? previous.filter(id => id !== employeeId) : [...previous, employeeId])
+  const allPicked = rows.length > 0 && rows.every(row => picked.includes(row.employeeId))
+
+  const add = async () => {
+    setAddError(''); setResult(null)
+    if (!picked.length) { setAddError('اختار موظف واحد على الأقل'); return }
+    if (!targetRunId) { setAddError('اختار المسير اللي هيتضافوا له'); return }
+    if (reason.trim().length < 3) { setAddError('اكتب سبب الإضافة'); return }
+    setBusy(true)
+    try {
+      setResult(await addPayrollRunMembers(Number(targetRunId), { employeeIds: picked, reason: reason.trim() }))
+      setPicked([]); setReason('')
+      setVersion(v => v + 1)
+    } catch (e) {
+      setAddError(payrollRunErrorMessage(e, 'تعذر إضافة الموظفين للمسير'))
+    } finally { setBusy(false) }
+  }
+
+  if (loading && !data) return <Loading />
+  if (error) return <div className="card text-danger-600 text-sm">{error}</div>
   return (
     <div className="card p-0 overflow-hidden">
-      <div className="p-4 border-b border-gray-100 text-sm text-gray-600 space-y-2">
+      <div className="p-4 border-b border-gray-100 text-sm text-gray-600 space-y-3">
         {data && <p>الفترة من {data.startDate} إلى {data.endDate} — <b>{data.rows.length}</b> موظف شغالين ومالهمش مسير.</p>}
-        {rows.length > 0 && (drafts.length ? (
-          <p className="flex flex-wrap items-center gap-2">
-            <span>عشان تضيفهم: افتح مسير الشهر وعدّل تعريفه (أو أعد حسابه) —</span>
-            {drafts.map(run => (
-              <button key={run.id} type="button" className="btn-secondary text-xs px-2 py-1 flex items-center gap-1" onClick={() => onOpenRun(run.id)}>
-                <Plus size={13} /> {runLabel(run.id, run.name)} <StatusBadge status={run.status} />
-              </button>
-            ))}
+        {rows.length > 0 && (drafts.length ? (canAdd ? (
+          <div className="flex flex-wrap items-end gap-2" data-payroll-add-to-run>
+            <label className="flex flex-col gap-1">
+              <span className="font-medium text-gray-700">أضفهم لمسير…</span>
+              <select className="input w-64" value={targetRunId} disabled={busy} onChange={e => setTargetRunId(e.target.value ? Number(e.target.value) : '')}>
+                <option value="">اختار المسير</option>
+                {drafts.map(run => <option key={run.id} value={run.id}>{runLabel(run.id, run.name)} — {RUN_STATUS[run.status] ?? run.status}</option>)}
+              </select>
+            </label>
+            <label className="flex flex-col gap-1 flex-1 min-w-[220px]">
+              <span className="font-medium text-gray-700">السبب</span>
+              <input className="input w-full" maxLength={400} value={reason} disabled={busy} placeholder="مثال: موظفين فرع المعادي الجدد" onChange={e => setReason(e.target.value)} />
+            </label>
+            <button type="button" className="btn-primary flex items-center gap-2 text-sm disabled:opacity-50" disabled={busy || !picked.length} onClick={add}>
+              <Plus size={16} /> {busy ? 'بيضيف...' : `أضف ${picked.length || ''} للمسير`}
+            </button>
+          </div>
+        ) : (
+          <p className="flex flex-wrap items-center gap-2"><span>افتح مسير الشهر لمراجعته —</span>
+            {drafts.map(run => <button key={run.id} type="button" className="btn-secondary text-xs px-2 py-1 flex items-center gap-1" onClick={() => onOpenRun(run.id)}>
+              {runLabel(run.id, run.name)} <StatusBadge status={run.status} /></button>)}
           </p>
-        ) : <p className="text-gray-500">مفيش مسير مفتوح للشهر ده — اعمل «مسير جديد» من تبويب المسيرات.</p>)}
+        )) : <p className="text-gray-500">مفيش مسير مفتوح للشهر ده — اعمل «مسير جديد» من تبويب المسيرات.</p>)}
+        {addError && <p className="text-sm text-danger-600" role="alert">{addError}</p>}
+        {result && (
+          <div className="p-3 rounded-xl bg-success-50 text-success-700 text-sm space-y-1">
+            <p className="font-medium">
+              اتضافوا لـ{runLabel(result.moved[0].to.id, result.moved[0].to.name)} من شهر {result.fromPeriod} ورايح — عضوية دائمة، ومسير الشهر الجديد هينسخهم.
+            </p>
+            {!result.recalculated && <p>المسير لسه مسودة: احسبها عشان يظهروا في بنوده.
+              <button type="button" className="underline mr-1" onClick={() => onOpenRun(result.moved[0].to.id)}>افتح المسير</button></p>}
+            {result.recalculateRuns.length > 0 && <p className="flex flex-wrap items-center gap-2">أعد حساب أشهر لاحقة:
+              {result.recalculateRuns.map(run => <button key={run.id} type="button" className="underline" onClick={() => onOpenRun(run.id)}>{runLabel(run.id, run.name)} ({run.period})</button>)}
+            </p>}
+            {result.lockedRuns.length > 0 && <p className="text-gray-600">ما اتغيّرش: {result.lockedRuns.map(run => `${runLabel(run.id, run.name)} ${run.period} (${RUN_STATUS[run.status] ?? run.status})`).join('، ')}</p>}
+          </div>
+        )}
       </div>
       {rows.length === 0 ? <EmptyState title="كل الموظفين الشغالين ليهم مسير في الشهر ده" icon={CheckCircle} className="shadow-none" /> : (
         <div className="overflow-x-auto">
           <table className="w-full">
             <thead><tr className="table-header">
+              {canAdd && <th className="table-cell text-center w-10">
+                <input type="checkbox" aria-label="اختار الكل" checked={allPicked} disabled={busy}
+                  onChange={() => setPicked(allPicked ? [] : rows.map(row => row.employeeId))} />
+              </th>}
               <th className="table-cell text-right">الموظف</th><th className="table-cell text-center">تاريخ التعيين</th>
               <th className="table-cell text-right">الفرع</th><th className="table-cell text-right">القسم</th><th className="table-cell text-right">السبب</th>
             </tr></thead>
             <tbody>
               {rows.map(row => (
                 <tr key={row.employeeId} className="table-row">
+                  {canAdd && <td className="table-cell text-center">
+                    <input type="checkbox" aria-label={`اختار ${row.fullName}`} data-pick-employee={row.employeeId}
+                      checked={picked.includes(row.employeeId)} disabled={busy} onChange={() => toggle(row.employeeId)} />
+                  </td>}
                   <td className="table-cell"><div className="font-medium text-gray-800">{row.fullName}</div><div className="text-xs text-gray-400">{row.employeeCode}</div></td>
                   <td className="table-cell text-center" dir="ltr">{row.hireDate ?? '—'}</td>
                   <td className="table-cell">{row.branchName ?? '—'}</td>

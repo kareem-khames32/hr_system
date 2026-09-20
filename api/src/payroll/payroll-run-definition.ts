@@ -19,6 +19,13 @@ export interface PayrollRunFilters {
   allEmployees: boolean
   // التعريف الجديد يشمل الأقسام الفرعية للقسم المختار؛ نطاق القسم القديم يطابق القسم نفسه فقط كما حُسب.
   includeSubDepartments: boolean
+  /**
+   * قرار المالك (20 سبتمبر): المسير قائمة دائمة باسمه. الموظف المُضاف يدويًا من «موظفين ليس لديهم مسير» أو المنقول من مسير آخر
+   * يُكتب هنا فيدخل المسير بالإضافة (OR) إلى الفلاتر، لا بالتقاطع معها — إضافة اسم لمسير فرع لا تُقلّص المسير إلى هذا الاسم.
+   * العضوية دائمة: «إنشاء مسيرات الشهر الجديد» ينسخ القائمة كما هي، فيبقى الموظف في مسيره كل شهر حتى ينقله المالك.
+   * لا تُستعمل في مسير القائمة وحدها (بلا فلاتر تنظيمية): هناك تُطوى في employeeIds نفسها.
+   */
+  includeEmployeeIds: number[]
 }
 export interface PayrollRunExclusion { employeeId: number; reason: string; byUserId: number | null; at: string | null }
 export interface PayrollRunEmptyScope { reason: string; byUserId: number; at: string }
@@ -44,10 +51,23 @@ const ids = (value: unknown): number[] => Array.isArray(value)
   : []
 
 export const emptyPayrollRunFilters = (): PayrollRunFilters => ({ branchIds: [], departmentIds: [], teamIds: [], costCenterIds: [],
-  employeeIds: [], allEmployees: false, includeSubDepartments: true })
+  employeeIds: [], allEmployees: false, includeSubDepartments: true, includeEmployeeIds: [] })
 
 export function payrollRunHasOrgFilters(filters: PayrollRunFilters) {
   return filters.branchIds.length + filters.departmentIds.length + filters.teamIds.length + filters.costCenterIds.length > 0
+}
+
+/**
+ * قائمة الإضافة الدائمة لها معنى واحد فقط مع فلاتر تنظيمية أو «الشركة كلها» (تُضاف إليها بالـOR).
+ * في مسير القائمة وحدها تُطوى داخل employeeIds نفسها، فلا يبقى وضع اختيار (mode) يتجاهلها عند اشتقاق الأعضاء.
+ */
+export function foldPayrollRunInclusions(filters: PayrollRunFilters): PayrollRunFilters {
+  if (!filters.includeEmployeeIds.length) return filters
+  if (filters.allEmployees) { filters.includeEmployeeIds = []; return filters }
+  if (payrollRunHasOrgFilters(filters)) return filters
+  filters.employeeIds = [...new Set([...filters.employeeIds, ...filters.includeEmployeeIds])].sort((a, b) => a - b)
+  filters.includeEmployeeIds = []
+  return filters
 }
 
 export function payrollRunSelectionMode(filters: PayrollRunFilters): PayrollRunSelectionMode {
@@ -64,9 +84,10 @@ export function payrollRunDefinitionOf(run: { definition?: string | null; scopeT
     if (!parsed || parsed.version !== PAYROLL_RUN_DEFINITION_VERSION || !parsed.filters || !Array.isArray(parsed.exclusions)) {
       throw new PayrollRunDefinitionError('PAYRUN-DEFINITION-INVALID', 'تعريف المسير المحفوظ غير صالح؛ راجع المسير قبل استخدامه')
     }
-    const filters: PayrollRunFilters = { branchIds: ids(parsed.filters.branchIds), departmentIds: ids(parsed.filters.departmentIds), teamIds: ids(parsed.filters.teamIds),
-      costCenterIds: ids(parsed.filters.costCenterIds), employeeIds: ids(parsed.filters.employeeIds), allEmployees: parsed.filters.allEmployees === true,
-      includeSubDepartments: parsed.filters.includeSubDepartments !== false }
+    const filters: PayrollRunFilters = foldPayrollRunInclusions({ branchIds: ids(parsed.filters.branchIds), departmentIds: ids(parsed.filters.departmentIds),
+      teamIds: ids(parsed.filters.teamIds), costCenterIds: ids(parsed.filters.costCenterIds), employeeIds: ids(parsed.filters.employeeIds),
+      allEmployees: parsed.filters.allEmployees === true, includeSubDepartments: parsed.filters.includeSubDepartments !== false,
+      includeEmployeeIds: ids(parsed.filters.includeEmployeeIds) })
     const exclusions = parsed.exclusions.map((row: any) => ({ employeeId: Number(row.employeeId), reason: String(row.reason ?? ''),
       byUserId: row.byUserId == null ? null : Number(row.byUserId), at: row.at == null ? null : String(row.at) }))
     return { version: PAYROLL_RUN_DEFINITION_VERSION, source: 'DEFINITION', mode: payrollRunSelectionMode(filters), filters, exclusions,
@@ -305,8 +326,10 @@ export function payrollDepartmentSet(history: PayrollOrgHistory, departmentIds: 
   return result
 }
 
-/** مطابقة موظف بمكانه لتعريف المسير: OR داخل النوع وAND بين الأنواع. */
+/** مطابقة موظف بمكانه لتعريف المسير: OR داخل النوع وAND بين الأنواع، والمُضافون يدويًا يدخلون فوق الفلاتر كلها. */
 export function payrollRunFilterMatches(filters: PayrollRunFilters, employeeId: number, org: PayrollOrgRef, departments: Set<number>): boolean {
+  // عضوية دائمة أضافها المالك (من تبويب «بلا مسير» أو بنقل من مسير آخر) — لا تُقيدها فلاتر الفرع والقسم
+  if (filters.includeEmployeeIds?.includes(employeeId)) return true
   if (filters.allEmployees) return true
   if (!filters.employeeIds.length && !payrollRunHasOrgFilters(filters)) return false
   if (filters.employeeIds.length && !filters.employeeIds.includes(employeeId)) return false

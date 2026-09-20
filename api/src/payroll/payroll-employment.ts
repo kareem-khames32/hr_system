@@ -38,8 +38,9 @@ export function payrollEmploymentCoverage(
   if (endDate < startDate) throw new BadRequestException('نهاية فترة الرواتب قبل بدايتها')
   // أ2: أرضية التغطية واحدة للحضور والغياب والنقص والإضافي والتناسب — بداية الاستحقاق إن وُجدت، وإلا المباشرة ثم التعيين.
   const hireDate = dateOnly(employee.salaryEntitlementStart || employee.actualStartDate || employee.joinDate || '1900-01-01')
-  // الإيقاف المؤقت ليس إنهاء خدمة، وتظل سياسة استحقاقه الحالية كما هي لحين بند الاستثناءات.
-  if (employee.status === 'suspended' && !employee.isActive) return null
+  // قرار المالك (20 سبتمبر): الإيقاف عن العمل مش إنهاء خدمة — الموقوف عضو في المسير زي أي حد،
+  // بياخد أجر الأيام اللي برّه فترة الإيقاف، وأيام الإيقاف بتتخصم بمنطق employee_suspensions في payroll.service.
+  const suspendedOnly = employee.status === 'suspended'
   // الملفات الملغاة لا تنهي الخدمة، وملف انتهى قبل التعيين الحالي لا ينهي إعادة التعيين.
   const effectiveEnds = [...new Set(cases.filter(kase => kase.status !== 'CANCELLED')
     .map(kase => dateOnly(kase.lastWorkingDay)).filter(date => date >= hireDate))]
@@ -52,15 +53,18 @@ export function payrollEmploymentCoverage(
   }
   let leaveDate: string | null = effectiveEnds[0] ?? null
   let endDateSource: PayrollEmploymentCoverage['endDateSource'] = leaveDate ? 'OFFBOARDING' : null
-  if (!leaveDate && (employee.status === 'terminated' || !employee.isActive) && employee.archivedAt) {
+  if (!leaveDate && !suspendedOnly && (employee.status === 'terminated' || !employee.isActive) && employee.archivedAt) {
     const archivedAt = new Date(employee.archivedAt)
     if (!Number.isFinite(archivedAt.getTime())) throw new BadRequestException('تاريخ أرشفة الموظف غير صالح لتحديد نهاية الخدمة')
     leaveDate = localDateOf(archivedAt); endDateSource = 'ARCHIVE'
   }
-  // الأرشفة الإدارية وحدها لا تثبت استحقاقًا؛ يلزم تاريخ انتهاء موثّق للمنتهي.
-  if (employee.status === 'archived' && !effectiveEnds.length) return null
-  if ((!employee.isActive || employee.status === 'terminated') && !leaveDate) {
-    throw new BadRequestException('تاريخ آخر يوم عمل غير مسجل للموظف غير النشط؛ حدده قبل حساب راتبه')
+  if (!leaveDate) {
+    // قرار المالك: المؤرشف/المنتهي من غير تاريخ آخر يوم عمل موثّق (أغلب المرحّلين من النظام القديم)
+    // يفضل مستبعد بسبب واضح (EXC_ARCHIVED_NO_LAST_DAY) بدل ما يترمي بسبب مبهم أو يتحسب بالغلط.
+    if (employee.status === 'archived' || employee.status === 'terminated') return null
+    if (!employee.isActive && !suspendedOnly) {
+      throw new BadRequestException('تاريخ آخر يوم عمل غير مسجل للموظف غير النشط؛ حدده قبل حساب راتبه')
+    }
   }
   const coverFrom = hireDate > startDate ? hireDate : startDate
   const coverTo = leaveDate && leaveDate < endDate ? leaveDate : endDate

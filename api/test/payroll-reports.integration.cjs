@@ -116,6 +116,9 @@ before(async () => {
   E.wageChange = await employee({ branchId: branchB.id, basicSalary: 5000 }, [JUNE, JULY])
   E.suspended = await employee({ status: 'suspended', isActive: false }, [])
   E.dataIssue = await employee({ branchId: branchB.id, status: 'terminated', isActive: false }, [])
+  // قرار المالك (20 سبتمبر): المنتهي/المؤرشف بلا تاريخ آخر يوم عمل ما بقاش «مشكلة بيانات» (له سبب استبعاد واضح
+  // في عضوية المسير) — بيانات الخدمة المتعارضة هي «على رأس العمل ومع ذلك غير نشط»
+  E.noLastDay = await employee({ branchId: branchB.id, status: 'active', isActive: false }, [])
   E.outOfScope = await employee({ branchId: branchB.id })
 
   // مسير قسم بلا فرع (نفس شكل المسيرات 18-21 في قاعدة الشركة)
@@ -284,10 +287,13 @@ test('unassigned report lists every on-job employee outside a run with a reason,
   assert.ok(joined.reasons.some(reason => reason.code === 'NO_SALARY_DEFINED'), 'الراتب الصفري سبب إضافي')
   const excluded = expectReason(E.manualExcluded, 'EXCLUDED_IN_RUN', R.custom.id)
   assert.equal(excluded.detail, 'استبعاد يدوي')
-  assert.match(expectReason(E.dataIssue, 'DATA_ISSUE').detail, /آخر يوم عمل/)
+  assert.match(expectReason(E.noLastDay, 'DATA_ISSUE').detail, /آخر يوم عمل/)
   expectReason(E.outOfScope, 'OUT_OF_ALL_RUN_SCOPES')
   for (const covered of [E.inDept1, E.inDept2, E.wageChange]) assert.equal(row(covered), undefined, `${covered.employeeCode} مشمول`)
-  assert.equal(row(E.suspended), undefined, 'الموقوف بلا أجر مخفي افتراضيًا')
+  // قرار المالك (20 سبتمبر): الموقوف عضو في المسير زي أي حد، فلو مش في مسير بيظهر «بلا مسير» ومش مخفي؛
+  // والمنتهي بلا تاريخ آخر يوم عمل مش على رأس العمل، سببه بيظهر في معاينة عضوية المسير
+  assert.ok(row(E.suspended), 'الموقوف بقى عضوًا عاديًا؛ غيابه عن المسيرات لازم يظهر')
+  assert.equal(row(E.dataIssue), undefined, 'المنتهي بلا تاريخ آخر يوم عمل خارج «على رأس العمل»')
   assert.ok(report.rows.every(item => typeof item.reasonLabel === 'string' && item.reasonLabel.length > 3))
   assert.equal(report.summary.covered + report.summary.unassigned, report.summary.onJob, 'PR-07: المشمولون + بلا مسير = على رأس العمل')
   assert.equal(report.summary.unassigned, report.rows.length)
@@ -296,20 +302,22 @@ test('unassigned report lists every on-job employee outside a run with a reason,
   assert.deepEqual(new Set(duplicate.runs.map(run => run.id)), new Set([R.dept.id, R.duplicate.id]))
   assert.ok(row(E.outOfScope).lastRun === null)
 
-  const withSuspended = await get(admin, '/reports/payroll/unassigned?period=2026-07&includeSuspended=true')
-  assert.equal(withSuspended.rows.find(item => item.employeeId === E.suspended.id)?.reason, 'SUSPENDED')
-  assert.equal(withSuspended.summary.suspended, 1)
-  assert.equal((await get(admin, '/reports/payroll/unassigned?period=2026-07&includeSuspended=1')).rows.some(item => item.employeeId === E.suspended.id), true)
-  assert.equal((await get(admin, '/reports/payroll/unassigned?period=2026-07&includeSuspended=0')).rows.some(item => item.employeeId === E.suspended.id), false)
+  // فلتر «أظهر الموقوفين» ما بقاش بيخفي حد: الموقوف مستحق لأيامه برّه الإيقاف فبيتعد على رأس العمل دائمًا
+  for (const flag of ['true', '1', '0']) {
+    const view = await get(admin, `/reports/payroll/unassigned?period=2026-07&includeSuspended=${flag}`)
+    assert.equal(view.rows.some(item => item.employeeId === E.suspended.id), true, flag)
+    assert.equal(view.summary.suspended, 0, flag)
+  }
   const onlyIssues = await get(admin, '/reports/payroll/unassigned?period=2026-07&reason=DATA_ISSUE')
-  assert.deepEqual(onlyIssues.rows.map(item => item.employeeId), [E.dataIssue.id])
+  assert.deepEqual(onlyIssues.rows.map(item => item.employeeId), [E.noLastDay.id])
   const explicit = await get(admin, `/reports/payroll/unassigned?from=${JULY.startDate}&to=${JULY.endDate}`)
   assert.equal(explicit.rows.length, report.rows.length)
   const noRuns = await get(admin, '/reports/payroll/unassigned?period=2026-01')
   assert.equal(noRuns.rows.find(item => item.employeeId === E.inDept1.id)?.reason, 'NO_RUN_IN_PERIOD')
 
   const scoped = await get(hrA, '/reports/payroll/unassigned?period=2026-07')
-  assert.deepEqual(new Set(scoped.rows.map(item => item.employeeId)), new Set([E.movedLater.id, E.cancelledOnly.id, E.joinedAfter.id]))
+  assert.deepEqual(new Set(scoped.rows.map(item => item.employeeId)),
+    new Set([E.movedLater.id, E.cancelledOnly.id, E.joinedAfter.id, E.suspended.id]))
   const masked = scoped.rows.find(item => item.employeeId === E.cancelledOnly.id).reasons[0].run
   assert.equal(masked.id, null, 'مسير مخصّص لا يُكشف رقمه لمستخدم الفرع')
   assert.equal(masked.name, 'مسير خارج نطاق صلاحيتك')

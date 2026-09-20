@@ -33,6 +33,9 @@ export function PayrollMembershipPreviewView({ preview, currency, onExclude, exc
     ['في مسير معتمد آخر', totals.alreadyInRun, 'bg-red-50 text-red-700'],
     ['انتقلوا خارج النطاق', totals.transferredOut, 'bg-purple-50 text-purple-700'],
     ['بيانات خدمة غير مكتملة', totals.dataProblems, 'bg-amber-50 text-amber-800'],
+    // قرار المالك (20 سبتمبر): الموقوف والمصروف مع التصفية أعضاء في المسير — بيتعدّوا زي أي حد
+    ['موقوفون داخل الفترة', totals.suspended ?? 0, 'bg-amber-50 text-amber-800'],
+    ['مصروف مع التصفية', totals.settlementPayout ?? 0, 'bg-purple-50 text-purple-700'],
   ]
   return (
     <div className="space-y-4" data-testid="payroll-membership-preview">
@@ -77,6 +80,11 @@ export function PayrollMembershipPreviewView({ preview, currency, onExclude, exc
                   {excludeButton(row.employeeId, 'text-amber-700')}
                   {row.draftConflicts.length > 0 && <p className="text-xs text-amber-700">مدرج في مسير آخر لنفس الأيام</p>}
                   {row.orgIssues.map(issue => <p key={issue.code} className="text-xs text-amber-700">{issue.message}</p>)}
+                  {/* قرار المالك (20 سبتمبر): الموقوف عضو ويتخصم أيام إيقافه بس، وشهر آخر يوم عمل راتبه مصروف مع التصفية */}
+                  {row.suspensionNote && <p className="text-xs text-amber-700">{row.suspensionNote}</p>}
+                  {row.settlementPayout && <p className="text-xs text-purple-700">
+                    {row.settlementPayout.label} (آخر يوم عمل {row.settlementPayout.lastWorkingDay})
+                  </p>}
                 </td>
                 <td className="table-cell text-xs">{[row.branchName, row.departmentName, row.teamName].filter(Boolean).join(' / ') || '—'}</td>
                 <td className="table-cell text-center text-xs" dir="ltr">{row.coverFrom} → {row.coverTo}</td>
@@ -109,6 +117,7 @@ export function PayrollMembershipPreviewView({ preview, currency, onExclude, exc
                   <p className="font-medium text-gray-800">{row.fullName}</p>
                   <p className="text-xs text-gray-400">{row.employeeCode} • {[row.branchName, row.departmentName, row.teamName].filter(Boolean).join(' / ')}</p>
                   {excludeButton(row.employeeId, 'text-amber-700')}
+                  {row.suspensionNote && <p className="text-xs text-amber-700">{row.suspensionNote}</p>}
                 </td>
                 <td className="table-cell text-xs text-amber-900">{MEMBERSHIP_EXCLUSION_LABELS[row.code ?? ''] ?? row.label ?? 'سبب غير معروف'}</td>
                 <td className="table-cell text-xs">

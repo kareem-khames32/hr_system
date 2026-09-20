@@ -22,6 +22,8 @@ import {
 } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
+// تراكم المسير يومًا بيوم: علامة «متسخ» رخيصة (دوال خالصة بلا خدمات، فلا حلقة اعتماد بين الموديولين)
+import { markPayrollDaysDirty } from '../payroll/payroll-daily-accrual'
 import { branchScopeOf, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { PublicHoliday, Shift, WorkSchedule } from '../assets/assets.entities'
@@ -2583,6 +2585,8 @@ export class AttendanceService {
     if (readOnly) return Object.assign(this.exemptionView(day, exemption), suspendedAbsence ? { suspended: true } : {})
     if (!persist) {
       await this.days.delete({ employeeId, date })
+      // صف اليوم اتشال (إيقاف، يوم مستقبلي، بلا وردية) — المسير لازم يعيد قراءته
+      await markPayrollDaysDirty(this.days.manager, employeeId, [date], 'حذف صف يوم حضور')
       if (suspendedAbsence && !isFuture) {
         // يوم الإيقاف المنقضي بلا بصمة: مكتشف قديم لليوم مالوش مبرر، والجار الليلي يتعاد زي اليوم المحفوظ
         await this.clearStaleOvertime(employeeId, date, 'لا بصمة دخول وخروج لليوم')
@@ -2627,6 +2631,9 @@ export class AttendanceService {
       )
     }
     if (cascade) await this.recomputeNightNeighbors(employeeId, date, frame, shift.start, storedShift)
+    // تراكم المسير: اليوم اتغير (بصمة، تصحيح، إذن، إجازة، عطلة، إيقاف…) — نعلّمه «متسخ»
+    // فالجار الليلي أو إقفال الشهر يعيد حسابه وحده. كتابة رخيصة ولا ترمي أبدًا.
+    await markPayrollDaysDirty(this.days.manager, employeeId, [date], 'إعادة حساب يوم حضور')
     return this.exemptionView(day, exemption)
   }
 

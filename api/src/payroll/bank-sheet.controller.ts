@@ -4,6 +4,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { buildBankSheet } from './bank-sheet'
+import { payrollItemSettlementPayout } from './payroll-settlement-salary'
 import { PayrollService } from './payroll.service'
 
 // كشف البنوك لمسير: مين بيتحوله كام على أي بنك، وكام نقدي. حساب الفرع يشوف موظفي فرعه بس.
@@ -31,7 +32,9 @@ export class PayrollBankSheetController {
       if (scope !== null && Number(branchId) !== Number(scope)) continue
       sources.push({ employeeId: item.employeeId, employeeCode: snapshot?.employeeCode ?? employee?.employeeCode ?? '', fullName: snapshot?.fullName ?? employee?.fullName ?? '',
         payMethod: employee?.payMethod ?? item.payMethod, bankTransferAmount: employee?.bankTransferAmount ?? null,
-        bankName: employee?.bankName ?? null, iban: employee?.iban ?? null, netPay: item.netPay })
+        bankName: employee?.bankName ?? null, iban: employee?.iban ?? null, netPay: item.netPay,
+        // قرار المالك (20 سبتمبر): راتب شهر آخر يوم عمل بيتصرف مع التصفية — خارج كشف البنك والمبلغ المستحق.
+        settlementPayout: payrollItemSettlementPayout(item.breakdown) })
     }
     return { run: { id: detail.id, name: detail.name, period: detail.period, status: detail.status, startDate: detail.startDate, endDate: detail.endDate },
       ...buildBankSheet(sources) }

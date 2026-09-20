@@ -66,6 +66,7 @@ import { describeEmployeeHistory, type EmployeeHistoryView } from '@/lib/employe
 import { displayEmployeeAddress } from '@/lib/employee-form-fields'
 import { loadCurrency, currencyLabel, useCurrency } from '@/lib/currency'
 import EmployeeSuspensionDialog from '@/components/EmployeeSuspensionDialog'
+import { EmployeePayrollRunsCard } from '@/components/payroll/PayrollRunMoveMemberModal'
 import { SUSPENSION_STATE_LABELS, suspensionHistoryNote, suspensionPeriodText, type EmployeeSuspension } from '@/lib/employee-suspensions-api'
 
 // الحقول الشخصية والمالية الجديدة المدعومة في الباك إند (ليست بعد ضمن ApiEmployee)
@@ -1438,6 +1439,9 @@ export default function EmployeeProfilePage() {
                   </div>
                 </div>
               </div>
+
+              {/* قرار المالك (20 سبتمبر): مسير الموظف قائمة دائمة — يظهر هنا ومنه «نقل لمسير آخر» من شهر ورايح */}
+              {can('payroll.view') && <EmployeePayrollRunsCard employeeId={employee.id} employeeName={employee.name} />}
             </div>
           )}
 

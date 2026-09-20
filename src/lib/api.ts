@@ -462,6 +462,9 @@ export interface ApiPayrollMemberSnapshot {
   salarySource?: { kind: 'MONTHLY_HISTORY' | 'CURRENT_FILE_UNVERIFIED'; referencePeriod: string; currency: string | null
     effectivePayrollPeriod: string | null; effectiveToPayrollPeriod: string | null; historyRevision: number | null; sourceRef: string | null; warning: string | null } | null
   salaryIssue?: { code: string; message: string } | null
+  // قرار المالك (20 سبتمبر): الموقوف عضو في المسير وصفّه يقول حالته، وشهر آخر يوم عمل راتبه مصروف مع التصفية
+  suspensionNote?: string | null
+  settlementPayout?: { caseId: number; lastWorkingDay: string; label: string } | null
   attendanceExemptions?: Array<{
     id: number; effectiveFrom: string; effectiveTo: string | null; terminatedFrom: string | null; reasonCode: string
     overtimeEligible: boolean; unpaidLeaveDeductible: boolean; overtimeSource: string; unpaidLeaveSource: string
@@ -869,6 +872,15 @@ export const approvePayroll = (id: number) => post<ApiPayrollRun>(`/payroll/runs
 export const reopenPayroll = (id: number, reason: string) => post<ApiPayrollRun>(`/payroll/runs/${id}/reopen`, { reason })
 export const cancelPayroll = (id: number, reason: string) => post<ApiPayrollRun>(`/payroll/runs/${id}/cancel`, { reason })
 export const fetchPayrollRunEvents = (id: number) => get<ApiPayrollRunEvent[]>(`/payroll/runs/${id}/events`)
+// تراكم المسير يومًا بيوم: «آخر يوم محسوب» وزرار «حدّث الحساب» (يحسب الأيام الناقصة والمتسخة دلوقتي)
+export interface ApiPayrollRunAccrual {
+  runId: number; period: string; startDate: string; endDate: string; status: string; open: boolean
+  employees: number; lastAccruedDate: string | null; accruedDays: number; dirtyDays: number
+  expectedDays: number; targetDate: string; upToDate: boolean
+}
+export const fetchPayrollRunAccrual = (id: number) => get<ApiPayrollRunAccrual>(`/payroll/runs/${id}/accrual`)
+export const refreshPayrollRunAccrual = (id: number) =>
+  post<{ runId: number; employees: number; days: number; computed: number; reused: number; accrual: ApiPayrollRunAccrual }>(`/payroll/runs/${id}/accrual/refresh`)
 export const fetchPayMethodReport = (id: number) =>
   get<Record<string, { count: number; total: number }>>(`/payroll/runs/${id}/pay-methods`)
 // كشف البنوك لمسير — مبلغ البنك والنقدي لكل موظف وإجمالي كل بنك (حساب الفرع: موظفي فرعه بس)

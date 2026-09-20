@@ -38,6 +38,7 @@ import { LatenessTier } from './payroll-rules.entities'
 import { OffboardingCase } from '../offboarding/offboarding.entities'
 import { payrollEmploymentCoverage } from './payroll-employment'
 import { getSettlementFinancialClaims, lockPayrollEmployees } from './payroll-settlement-boundary'
+import { assertSettlementSalaryMatchesItem, payrollItemSettlementPayout } from './payroll-settlement-salary'
 import { PayrollMemberSnapshot, PayrollRunEvent } from './payroll-membership.entities'
 import { claimPayrollPeriod, findPayrollConflicts, releasePayrollClaims } from './payroll-membership-guard'
 import { Branch } from '../org/entities/branch.entity'
@@ -65,7 +66,8 @@ import { createHash } from 'node:crypto'
 import { localDateOf } from '../attendance/attendance.service'
 import { PayrollPolicy, PayrollPolicyVersion } from './payroll-policy.entities'
 import { payrollPolicyEffectiveEnds } from './payroll-policy-publish'
-import { PayrollRunDefinition, payrollRunDefinitionColumns, payrollRunDefinitionOf, PayrollRunDefinitionError, payrollRunHasOrgFilters, payrollRunSelectionMode, PayrollRunExclusion, PayrollRunFilters, payrollLegacyCalculateAllowed } from './payroll-run-definition'
+import { foldPayrollRunInclusions, PayrollRunDefinition, payrollRunDefinitionColumns, payrollRunDefinitionOf, PayrollRunDefinitionError, payrollRunHasOrgFilters, payrollRunSelectionMode, PayrollRunExclusion, PayrollRunFilters, payrollLegacyCalculateAllowed } from './payroll-run-definition'
+import { findPayrollRunSeries, findPayrollRunSeriesLocked, payrollRunListsEmployee, payrollRunSeriesName, planPayrollRunMembership, type PayrollRunMembershipPlan } from './payroll-run-membership-moves'
 import { PayrollMembershipRow, resolvePayrollRunMembership } from './payroll-run-membership'
 import { buildPayrollUnassignedReport, PAYROLL_EXCLUSION_LABELS, PayrollUnassignedReport } from './payroll-unassigned-report'
 import { PayrollRunUnassignedAck } from './payroll-run-definition.entities'
@@ -76,6 +78,8 @@ import { payrollLatenessTierDeduction } from './payroll-lateness-tiers'
 import { readActiveDeductionWaivers, waiveAttendanceDeductionDay, waivedDeductionKinds, waivePolicyShadowTotals, withoutWaivedObligations } from './payroll-deduction-waivers'
 // بدل دوام أيام العطلات (أوامر الموارد البشرية + طلبات «دوام يوم عطلة» المعتمدة) → قيد «بدل» في الدفتر عند الحساب
 import { syncHolidayWorkPayroll } from '../attendance/holiday-work'
+// تراكم المسير يومًا بيوم (قرار المالك 20 سبتمبر): اليوم بيتحسب ليلته، وإقفال الشهر بيقرأه
+import { PayrollDailyAccrualService } from './payroll-daily-accrual.service'
 import { computePayrollPolicyEnginePreNet, parsePayrollEngineParityReport, PAYROLL_DEFAULT_ENGINE_MODE, PAYROLL_ENGINE_MODE_LABELS, PAYROLL_ENGINE_MODES, PAYROLL_PARITY_COMPONENTS,
   payrollParityDifferenceKey, payrollParityEmployeeRow, payrollPolicySwitchIssues, summarizePayrollEngineParity, type PayrollEngineMode, type PayrollParityEmployeeRow,
   payrollApprovalParityIssues, payrollParityPendingGroups, payrollShadowSourceIssueCodes, payrollPolicyEngineWithLoans, type PayrollPolicyEngineFacts } from './payroll-policy-engine-run'
@@ -100,7 +104,8 @@ export interface PayrollRunDefinitionInput {
   name?: string | null
   policyVersionId?: number
   period?: string
-  filters?: { branchIds?: number[]; departmentIds?: number[]; teamIds?: number[]; employeeIds?: number[]; allEmployees?: boolean }
+  // includeEmployeeIds: قائمة الإضافة الدائمة — أسماء يضمها المالك للمسير فوق فلاتره (OR)، وتُنسخ لمسير الشهر الجديد كما هي
+  filters?: { branchIds?: number[]; departmentIds?: number[]; teamIds?: number[]; employeeIds?: number[]; allEmployees?: boolean; includeEmployeeIds?: number[] }
   exclusions?: Array<{ employeeId: number; reason: string }>
   confirmEmptyScope?: boolean
   emptyScopeReason?: string | null
@@ -144,7 +149,9 @@ export class PayrollService {
     private readonly latenessTiers: Repository<LatenessTier>,
     @InjectRepository(RequestsConfig)
     private readonly config: Repository<RequestsConfig>,
-    private readonly attendanceService: AttendanceService
+    private readonly attendanceService: AttendanceService,
+    // تراكم المسير يومًا بيوم: إقفال الشهر بيقرأ الأيام المتراكمة النضيفة بدل ما يعيد حساب كل يوم-موظف
+    private readonly dailyAccrual: PayrollDailyAccrualService
   ) {}
 
   private async cfg(key: string, fallback: string): Promise<string> {
@@ -395,6 +402,10 @@ export class PayrollService {
         (breakdown.installmentIds ?? []).some((id: number) => claims.installmentIds.has(id))) {
         throw new ConflictException('أحد بنود المسير دخل تصفية معتمدة؛ أعد حساب المسودة أو راجع التسوية المالية قبل الصرف')
       }
+      // قرار المالك (20 سبتمبر): صف «تصفية — مصروف مع التصفية» لازم يساوي بند الراتب في التصفية المعتمدة بالظبط.
+      if (breakdown.settlementPayout) {
+        await assertSettlementSalaryMatchesItem(em, item.employeeId, Number(breakdown.settlementPayout.caseId), Number(item.netPay))
+      }
       if ((breakdown.overtimeEntryIds ?? []).length) {
         if (!Array.isArray(breakdown.overtimeEntryIds) || breakdown.overtimeEntryIds.some((id: unknown) => !Number.isSafeInteger(id) || Number(id) < 1) ||
           new Set(breakdown.overtimeEntryIds).size !== breakdown.overtimeEntryIds.length) throw new ConflictException('مراجع مصادر الإضافي غير صالحة أو مكررة')
@@ -482,6 +493,8 @@ export class PayrollService {
     expectedPolicySnapshotHash?: string | null
     // الخطوة 22 (B5): استبعاد موظف من مسير محسوب لحل تعارض — يُكتب في التعريف وتُعاد العضوية والمبالغ في المعاملة نفسها
     addExclusions?: Array<{ employeeId: number; reason: string }>
+    // قرار المالك (20 سبتمبر): ضم أسماء لمسير محسوب (عضوية دائمة) — يُكتب في التعريف وتُعاد العضوية والمبالغ في المعاملة نفسها
+    membership?: { add?: number[]; remove?: number[]; reason: string }
   }) {
     const proposedRange = await this.periodRange(dto.period)
     const runId = await this.runs.manager.transaction(async em => {
@@ -552,6 +565,17 @@ export class PayrollService {
           confirmEmptyScope: !!current.emptyScope, emptyScopeReason: current.emptyScope?.reason ?? null }, current)
         Object.assign(run, payrollRunDefinitionColumns(next))
         exclusionsAdded = next.exclusions.filter(item => dto.addExclusions!.some(row => row.employeeId === item.employeeId))
+      }
+      // قرار المالك (20 سبتمبر): «أضفهم لمسير» و«نقل لمسير آخر» على مسير محسوب — العضوية الدائمة تُكتب في التعريف
+      // وإعادة الحساب نفسها (بسبب إلزامي ونسخة جديدة) تعيد الأعضاء والمبالغ، فلا تبقى فترة بين التعديل وأثره.
+      let membershipPlan: PayrollRunMembershipPlan | null = null
+      if (dto.membership && (dto.membership.add?.length || dto.membership.remove?.length)) {
+        if (!run || isDraft || !run.definition) this.bad('PAYRUN-MEMBERSHIP-RUN', 'تعديل أعضاء المسير مع إعادة الحساب متاح لمسير محسوب له تعريف؛ المسودة تُعدل من تعريفها')
+        const current = payrollRunDefinitionOf(run)
+        membershipPlan = planPayrollRunMembership(current, dto.membership)
+        const next = await this.normalizeRunDefinition(em, user, { filters: membershipPlan.filters, exclusions: membershipPlan.exclusions,
+          confirmEmptyScope: !!current.emptyScope, emptyScopeReason: current.emptyScope?.reason ?? null }, current)
+        Object.assign(run, payrollRunDefinitionColumns(next))
       }
       // الخطوة 22 (B5): ترتيب تحصيل المالك من نسخة السياسة المجمدة (أو الترتيب الافتراضي)، للحساب القديم ومحرك السياسة معًا
       const collection: PayrollRunCollectionOrder = await readPayrollRunCollectionOrder(em, run?.policyVersionId ?? null)
@@ -632,11 +656,17 @@ export class PayrollService {
         prorataFactor: null, monthlyDays, basicSalary: null, allowances: null, gross: null, grossEarned: null,
         salarySource: salary?.ok ? salary.source : null,
         salaryIssue: salary && !salary.ok ? { code: salary.code, message: salary.message } : null,
+        // قرار المالك (20 سبتمبر): حالة الإيقاف، وصرف راتب آخر شهر مع التصفية — يظهران على صف الموظف في جدول المسير.
+        suspensionNote: row.suspensionNote,
+        settlementPayout: row.settlement ? { caseId: row.settlement.caseId, lastWorkingDay: row.settlement.lastWorkingDay, label: row.settlement.label } : null,
       }
       const member = members.create({ employeeId: emp.id, snapshot, membershipStatus: row.status, inclusionSource: row.inclusionSource,
         exclusionReason: row.status === 'INCLUDED' ? null : row.code })
       newMembers.push(member)
-      if (row.status === 'INCLUDED' && coverage && salary?.ok) covered.push({ emp, coverage, member, salary, org: row.org, claims: await getSettlementFinancialClaims(em, emp.id) })
+      if (row.status === 'INCLUDED' && coverage && salary?.ok) {
+        covered.push({ emp, coverage, member, salary, org: row.org, settlement: snapshot.settlementPayout ?? null,
+          claims: await getSettlementFinancialClaims(em, emp.id) })
+      }
     }
     const conflicts = [...membership.draftConflicts, ...membership.blockingConflicts]
     if (membership.draftConflicts.length && !dto.allowDraftConflicts) {
@@ -658,11 +688,17 @@ export class PayrollService {
       .map(type => [type.code, parseSickPayTiers(type.sickPayTiers)]))
     // «شيل خصم»: قواعد الشهر السارية، تُقرأ مرة للمسير وتتطابق على مكان الموظف في آخر يوم من الفترة
     const deductionWaivers = await readActiveDeductionWaivers(em, run.period)
-    for (const { emp, coverage, member, claims, salary, org } of covered) {
+    // أساس مبالغ التراكم الاسترشادية — يُقرأ مرة للمسير كله (لا يمس أي مبلغ يُصرف)
+    const accrualBasis = await this.dailyAccrual.deductionBasis(em)
+    for (const { emp, coverage, member, claims, salary, org, settlement } of covered) {
       const { coverFrom, coverTo, coverDays } = coverage
       const waived = waivedDeductionKinds(deductionWaivers, { employeeId: emp.id, branchId: org.branchId, departmentId: org.departmentId, teamId: org.teamId })
       // الحضور قد يصحح ساعات مصدر الإضافي؛ نقرأ الاستحقاق بعد إتمام التصحيح داخل المعاملة.
-      await this.attendanceService.materializeAbsences(emp.id, coverFrom, coverTo, em)
+      // تراكم يومًا بيوم (قرار المالك 20 سبتمبر): اليوم اللي اتحسب ليلته ولسه مدخلاته زي ما هي
+      // (مش متسخ، وبصمة مدخلاته مطابقة، وقبل النهارده) بيتقرا كما هو؛ الناقص والمتسخ بس هو اللي
+      // بيتحسب هنا بنفس computeDay بالحرف. أول حساب (بلا تراكم) = نفس المسار القديم تمامًا.
+      await this.dailyAccrual.accrueEmployeeRange(em, { employeeId: emp.id, period: run.period, runId: run.id ?? null,
+        from: coverFrom, to: coverTo, basis: accrualBasis })
       // راتب شهر المسير كاملًا (لا تقسيم ولا متوسط داخل الشهر)؛ التناسب أدناه لأيام الخدمة فقط.
       const monthlyComponents = salary.monthlyComponents
       // PR-10: قروش صحيحة قبل التناسب؛ 30.15 × 3÷30 = 3.015 تُقص إلى 3.01 (قرار المالك: لا تقريب للفلوس).
@@ -1079,6 +1115,9 @@ export class PayrollService {
               .map((r) => r.id),
             unpaidLeaveIds: unpaidLeaves.map((l) => l.id),
             ...(suspension.dates.length ? { suspension: { days: suspension.days, dates: suspension.dates, suspensionIds: suspension.ids } } : {}),
+            // قرار المالك (20 سبتمبر): شهر آخر يوم عمل — الصافي ده بيتصرف مع التصفية بنفس الرقم؛
+            // داخل إجمالي المسير (تكلفة الشهر كاملة) وبرّه كشف البنك والمبلغ المستحق للصرف، فمينفعش يتصرف مرتين.
+            ...(settlement ? { settlementPayout: settlement } : {}),
             // الإجازة المرضية بأجر متدرج: أيام الفترة بترتيبها في السنة ونسبة أجرها، وسطر خصم لكل نسبة
             ...(sick.days.length ? { sickLeave: { ...sick, amount: leaveLines.sickAmount, lines: leaveLines.sickLines,
               leaveIds: [...new Set(sick.days.map(day => day.leaveId))] } } : {}),
@@ -1155,7 +1194,9 @@ export class PayrollService {
         engine: { mode: engineMode, parityReportHash: parityReport.reportHash, totals: parityReport.totals },
         // الخطوة 22 (B5): ترتيب التحصيل المطبق، والاستبعاد المضاف لحل تعارض (بسببه ومن استبعده)
         collection: { source: collection.source, order: collection.effectiveOrder, versionId: collection.versionId },
-        ...(exclusionsAdded.length ? { exclusionsAdded } : {}) })
+        ...(exclusionsAdded.length ? { exclusionsAdded } : {}),
+        // قرار المالك (20 سبتمبر): من دخل المسير ومن خرج منه بهذه الإعادة (عضوية دائمة) بسببها
+        ...(membershipPlan ? { membership: { added: membershipPlan.added, removed: membershipPlan.removed, reason: dto.membership?.reason ?? null } } : {}) })
     return run.id
     })
     return this.detail(user, runId)
@@ -1844,8 +1885,9 @@ export class PayrollService {
       }
       return [...new Set(value as number[])].sort((a, b) => a - b)
     }
-    const filters: PayrollRunFilters = { branchIds: list(raw.branchIds, 'الفروع'), departmentIds: list(raw.departmentIds, 'الأقسام'), teamIds: list(raw.teamIds, 'الفرق'),
-      costCenterIds: [], employeeIds: list(raw.employeeIds, 'قائمة الموظفين'), allEmployees: raw.allEmployees === true, includeSubDepartments: true }
+    const filters: PayrollRunFilters = foldPayrollRunInclusions({ branchIds: list(raw.branchIds, 'الفروع'), departmentIds: list(raw.departmentIds, 'الأقسام'),
+      teamIds: list(raw.teamIds, 'الفرق'), costCenterIds: [], employeeIds: list(raw.employeeIds, 'قائمة الموظفين'), allEmployees: raw.allEmployees === true,
+      includeSubDepartments: true, includeEmployeeIds: list(raw.includeEmployeeIds, 'المضافون للمسير') })
     if (filters.allEmployees && (payrollRunHasOrgFilters(filters) || filters.employeeIds.length)) this.bad('PAYRUN-FILTER-INVALID', 'اختر «الشركة كلها» أو فلاتر محددة، لا الاثنين معًا')
     const scope = branchScopeOf(user)
     if (scope !== null) {
@@ -1882,6 +1924,7 @@ export class PayrollService {
     await absent('department', filters.departmentIds, 'رقم القسم', 'departmentIds')
     await absent('team', filters.teamIds, 'رقم الفريق', 'teamIds')
     await absent('employee', filters.employeeIds, 'رقم الموظف', 'employeeIds')
+    await absent('employee', filters.includeEmployeeIds, 'رقم الموظف المضاف للمسير', 'includeEmployeeIds')
     if (filters.departmentIds.length || filters.teamIds.length) {
       const departments = await em.getRepository(Department).find({ select: { id: true, branchId: true, parentId: true, name: true } })
       const byId = new Map(departments.map(row => [row.id, row]))
@@ -1906,7 +1949,8 @@ export class PayrollService {
       if (!Number.isSafeInteger(employeeId) || employeeId < 1) this.bad('PAYRUN-EXCLUSION-INVALID', 'رقم الموظف المستبعد غير صالح')
       if (exclusions.some(item => item.employeeId === employeeId)) this.bad('PAYRUN-EXCLUSION-DUPLICATE', `الموظف رقم ${employeeId} مستبعد أكثر من مرة`)
       if (reason.length < 3 || reason.length > 500) this.bad('PAYRUN-EXCLUSION-REASON', `اكتب سبب استبعاد الموظف رقم ${employeeId} (من 3 إلى 500 حرف)`, { employeeId })
-      if (filters.employeeIds.length && !filters.employeeIds.includes(employeeId)) {
+      // مسير القائمة وحدها يُحذف منه الاسم لا يُستبعد؛ مسير الفلاتر (ومعه المضافون يدويًا) يقبل الاستبعاد بسببه
+      if (filters.employeeIds.length && !payrollRunHasOrgFilters(filters) && !filters.employeeIds.includes(employeeId)) {
         this.bad('PAYRUN-EXCLUSION-NOT-LISTED', `الموظف رقم ${employeeId} ليس في قائمة المسير؛ احذفه من القائمة بدل استبعاده`, { employeeId })
       }
       const prior = previous?.exclusions.find(item => item.employeeId === employeeId && item.reason === reason)
@@ -1945,7 +1989,9 @@ export class PayrollService {
       const org = this.snapshotOrg(row, names)
       const common = { employeeId: row.employee.id, employeeCode: row.employee.employeeCode, fullName: row.employee.fullName, jobTitle: row.employee.jobTitle ?? null,
         branchId: org.branchId, branchName: org.branchName, departmentId: org.departmentId, departmentName: org.departmentName, teamId: org.teamId, teamName: org.teamName,
-        orgDate: org.orgDate, orgIssues: row.org.issues, inclusionSource: row.inclusionSource }
+        orgDate: org.orgDate, orgIssues: row.org.issues, inclusionSource: row.inclusionSource,
+        // قرار المالك (20 سبتمبر): حالة الإيقاف وصرف راتب آخر شهر مع التصفية يبانوا على صف الموظف في المعاينة زي جدول المسير.
+        suspensionNote: row.suspensionNote, settlementPayout: row.settlement }
       if (row.status === 'INCLUDED' && row.coverage && row.salary?.ok) {
         const coverage = row.coverage
         const grossCents = row.salary.monthlyComponents.reduce((sum, amount) => sum + Math.round(amount * 100), 0)
@@ -1970,6 +2016,9 @@ export class PayrollService {
       partial: included.filter(row => row.partial).length, dataProblems: excluded.filter(row => row.dataProblem).length,
       alreadyInRun: excluded.filter(row => row.code === 'EXC_ALREADY_IN_RUN').length, transferredOut: excluded.filter(row => row.code === 'TRANSFERRED_OUT').length,
       manualExclusions: excluded.filter(row => row.code === 'EXC_MANUAL_EXCLUSION').length, draftConflictEmployees: draftConflictEmployees.size,
+      // قرار المالك: صفوف «تصفية — مصروف مع التصفية» داخلة في تكلفة الشهر وبرّه المبلغ المستحق للصرف.
+      settlementPayout: included.filter(row => row.settlementPayout).length,
+      suspended: included.filter(row => row.suspensionNote).length,
       monthlyGross: monthlyCents / 100, earnedGross: earnedCents / 100 }
     const previewHash = createHash('sha256').update(JSON.stringify({ run: [run.id, run.period, run.startDate, run.endDate], filters: definition.filters,
       exclusions: definition.exclusions.map(row => [row.employeeId, row.reason]),
@@ -2139,7 +2188,9 @@ export class PayrollService {
     const { filters } = definition
     const input: PayrollRunDefinitionInput = {
       name: source.name, policyVersionId: chosen.id, period: targetPeriod,
-      filters: { branchIds: filters.branchIds, departmentIds: filters.departmentIds, teamIds: filters.teamIds, employeeIds: filters.employeeIds, allEmployees: filters.allEmployees },
+      // العضوية دائمة: القائمة والمضافون يدويًا والاستبعادات تُنسخ كما هي، فالموظف يفضل في مسيره كل شهر لحد ما المالك ينقله
+      filters: { branchIds: filters.branchIds, departmentIds: filters.departmentIds, teamIds: filters.teamIds, employeeIds: filters.employeeIds,
+        allEmployees: filters.allEmployees, includeEmployeeIds: filters.includeEmployeeIds },
       exclusions: definition.exclusions.map(row => ({ employeeId: row.employeeId, reason: row.reason })),
       ...(definition.emptyScope ? { confirmEmptyScope: true, emptyScopeReason: definition.emptyScope.reason } : {}),
     }
@@ -2504,6 +2555,140 @@ export class PayrollService {
       allowDraftConflicts: dto.allowDraftConflicts, addExclusions: [{ employeeId: dto.employeeId, reason }] })
   }
 
+  // ===== قرار المالك (20 سبتمبر): المسير قائمة دائمة — «أضفهم لمسير…» و«نقل لمسير آخر» =====
+  // العضوية تتغير من الشهر المختار وما بعده: مسير الشهر نفسه، وكل مسير بنفس الاسم في شهر لاحق ما دام مفتوحًا.
+  // الشهر المعتمد أو المصروف لا يُمس. «إنشاء مسيرات الشهر الجديد» ينسخ التعريف كما هو فتستمر العضوية تلقائيًا.
+
+  private runOpenForMembership(run: PayrollRun, action: string) {
+    if (run.status !== 'DRAFT' && run.status !== 'CALCULATED') throw new BadRequestException(payrollRunStateIssue(action, run.status, ['DRAFT', 'CALCULATED']))
+    if (payrollRunTypeOf(run) !== 'REGULAR') this.bad('PAYRUN-MEMBERSHIP-RUN-TYPE', 'المسير التكميلي ومسير العكس قائمتهما مثبتة بمسيرهما الأصلي؛ غيّر العضوية من المسير العادي')
+    if (!payrollRunSeriesName(run.name)) this.bad('PAYRUN-MEMBERSHIP-NO-NAME', 'مسير قديم بلا اسم لا تُنقل عضويته؛ اعمله من «مسير جديد» باسم ثابت')
+  }
+
+  /** تغيير العضوية على مسير واحد (تعريفه وحدثه) دون إعادة حساب — للمسودات ولأشهر السلسلة اللاحقة. */
+  private async applyRunMembership(em: EntityManager, user: JwtPayload, run: PayrollRun, change: { add?: number[]; remove?: number[]; reason: string }) {
+    const before = payrollRunDefinitionOf(run)
+    const plan = planPayrollRunMembership(before, change)
+    if (!plan.changed) return { plan, changed: false }
+    const next = await this.normalizeRunDefinition(em, user, { filters: plan.filters, exclusions: plan.exclusions,
+      confirmEmptyScope: !!before.emptyScope, emptyScopeReason: before.emptyScope?.reason ?? null }, before)
+    const policy = run.policyId ? await em.getRepository(PayrollPolicy).findOneBy({ id: run.policyId }) : null
+    if (policy) await this.assertPolicyBranchScope(em, policy, next)
+    Object.assign(run, payrollRunDefinitionColumns(next))
+    await this.saveRunRow(em, run)
+    await this.event(em, user, run.id, 'MEMBERSHIP_CHANGED', change.reason.slice(0, 500),
+      { added: plan.added, removed: plan.removed, alreadyMember: plan.alreadyMember, before: before.filters, after: next.filters })
+    return { plan, changed: true }
+  }
+
+  private runRef(run: { id: number; name: string | null; period: string; status: string }) {
+    return { id: run.id, name: run.name, period: run.period, status: run.status }
+  }
+
+  /**
+   * «أضفهم لمسير…» من تبويب «موظفين ليس لديهم مسير»، و«نقل لمسير آخر» من صف الموظف أو من ملفه:
+   * fromRunId = المسير الذي يخرج منه (النقل)، والمسير المستهدف :runId. الاثنان في الشهر نفسه، والتغيير يسري منه وما بعده.
+   */
+  async changeRunMembership(user: JwtPayload, runId: number, dto: { employeeIds: number[]; reason?: unknown; fromRunId?: number | null; allowDraftConflicts?: boolean }) {
+    const target = await this.runs.findOneBy({ id: runId })
+    if (!target) throw new NotFoundException('المسير غير موجود')
+    await this.assertRunAccess(user, target)
+    this.runOpenForMembership(target, 'إضافة موظفين للمسير')
+    const employeeIds = [...new Set((dto.employeeIds ?? []).map(Number))].filter(id => Number.isSafeInteger(id) && id > 0)
+    if (!employeeIds.length) this.bad('PAYRUN-MEMBERSHIP-EMPTY', 'اختر موظفًا واحدًا على الأقل')
+    if (employeeIds.length > 500) this.bad('PAYRUN-MEMBERSHIP-TOO-MANY', 'أضف 500 موظف كحد أقصى في المرة الواحدة')
+    const reason = typeof dto.reason === 'string' ? dto.reason.trim() : ''
+    if (reason.length < 3 || reason.length > 400) this.bad('PAYRUN-MEMBERSHIP-REASON', 'اكتب سبب تغيير مسير الموظف (من 3 إلى 400 حرف)')
+    let source: PayrollRun | null = null
+    if (dto.fromRunId != null) {
+      if (dto.fromRunId === runId) this.bad('PAYRUN-MEMBERSHIP-SAME-RUN', 'المسير المنقول منه هو نفسه المسير المنقول إليه')
+      source = await this.runs.findOneBy({ id: dto.fromRunId })
+      if (!source) throw new NotFoundException('المسير المنقول منه غير موجود')
+      await this.assertRunAccess(user, source)
+      this.runOpenForMembership(source, 'نقل موظف من المسير')
+      if (source.period !== target.period) this.bad('PAYRUN-MEMBERSHIP-PERIOD', `النقل يبدأ من شهر واحد: المسير المنقول منه شهر ${source.period} والمنقول إليه ${target.period}`)
+    }
+    const period = target.period
+    const moved: Array<{ from: ReturnType<PayrollService['runRef']> | null; to: ReturnType<PayrollService['runRef']> }> = []
+    const recalculate: Array<ReturnType<PayrollService['runRef']>> = []
+    const applied = { added: [] as number[], alreadyMember: [] as number[], removed: [] as number[] }
+    let anchorRecalculated = false
+
+    // الأشهر اللاحقة أولًا داخل معاملة واحدة، ثم شهر الأساس (بإعادة حساب لو محسوب) — فلا تبقى سلسلة نصف معدلة.
+    await this.runs.manager.transaction(async em => {
+      await this.calculationLock(em)
+      const forward = async (name: string, change: { add?: number[]; remove?: number[] }) => {
+        for (const row of await findPayrollRunSeries(em, { name, fromPeriod: period, excludeRunId: null })) {
+          if (row.period === period) continue
+          await this.lockRun(em, row.id)
+          const run = await em.getRepository(PayrollRun).findOneByOrFail({ id: row.id })
+          const result = await this.applyRunMembership(em, user, run, { ...change, reason })
+          if (result.changed && run.status === 'CALCULATED') recalculate.push(this.runRef(run))
+        }
+      }
+      if (source) {
+        await this.lockRun(em, source.id)
+        const row = await em.getRepository(PayrollRun).findOneByOrFail({ id: source.id })
+        await forward(payrollRunSeriesName(row.name), { remove: employeeIds })
+        if (row.status === 'DRAFT') {
+          const result = await this.applyRunMembership(em, user, row, { remove: employeeIds, reason })
+          applied.removed.push(...result.plan.removed)
+        }
+      }
+      await forward(payrollRunSeriesName(target.name), { add: employeeIds })
+      await this.lockRun(em, target.id)
+      const row = await em.getRepository(PayrollRun).findOneByOrFail({ id: target.id })
+      if (row.status === 'DRAFT') {
+        const result = await this.applyRunMembership(em, user, row, { add: employeeIds, reason })
+        applied.added.push(...result.plan.added)
+        applied.alreadyMember.push(...result.plan.alreadyMember)
+      }
+    })
+    // المسير المحسوب في شهر الأساس يُعاد حسابه بالتغيير نفسه (معاملة الحساب تقفل وتحدث التعريف والأعضاء والمبالغ معًا)
+    if (source && source.status === 'CALCULATED') {
+      await this.calculateDefined(user, { runId: source.id, period: source.period, scopeType: source.scopeType,
+        reason: `نقل ${employeeIds.length} موظف إلى «${payrollRunSeriesName(target.name)}»: ${reason}`,
+        allowDraftConflicts: dto.allowDraftConflicts, membership: { remove: employeeIds, reason } })
+      applied.removed.push(...employeeIds)
+      anchorRecalculated = true
+    }
+    if (target.status === 'CALCULATED') {
+      await this.calculateDefined(user, { runId: target.id, period, scopeType: target.scopeType,
+        reason: `إضافة ${employeeIds.length} موظف لمسير «${payrollRunSeriesName(target.name)}»: ${reason}`,
+        allowDraftConflicts: dto.allowDraftConflicts, membership: { add: employeeIds, reason } })
+      applied.added.push(...employeeIds)
+      anchorRecalculated = true
+    }
+    moved.push({ from: source ? this.runRef(source) : null, to: this.runRef(target) })
+    const locked = [
+      ...(source ? await findPayrollRunSeriesLocked(this.runs.manager, { name: payrollRunSeriesName(source.name), fromPeriod: period }) : []),
+      ...await findPayrollRunSeriesLocked(this.runs.manager, { name: payrollRunSeriesName(target.name), fromPeriod: period }),
+    ].map(row => this.runRef(row))
+    return { runId, fromPeriod: period, employeeIds, moved, recalculated: anchorRecalculated,
+      added: [...new Set(applied.added)], alreadyMember: [...new Set(applied.alreadyMember)], removed: [...new Set(applied.removed)],
+      recalculateRuns: recalculate, lockedRuns: locked, run: await this.detail(user, runId) }
+  }
+
+  /** مسير الموظف في شهر: أين هو الآن (بالقائمة الدائمة أو بالفلاتر) وما المسيرات المفتوحة التي يمكن نقله إليها — قراءة فقط. */
+  async employeeRunMembership(user: JwtPayload, employeeId: number, period: string) {
+    const em = this.runs.manager
+    const rows = await this.runs.find({ where: { period }, order: { id: 'ASC' } })
+    const current: Array<{ id: number; name: string | null; period: string; status: string; listed: boolean; member: boolean }> = []
+    const targets: Array<{ id: number; name: string | null; period: string; status: string }> = []
+    for (const run of rows) {
+      if (payrollRunTypeOf(run) !== 'REGULAR' || run.status === 'CANCELLED') continue
+      try { await this.assertRunAccess(user, run, em) } catch { continue }
+      let listed = false
+      try { listed = payrollRunListsEmployee(payrollRunDefinitionOf(run), employeeId) } catch { listed = false }
+      const member = await em.getRepository(PayrollRunMember).findOne({ where: { runId: run.id, employeeId } })
+      if (listed || (member && member.membershipStatus !== 'EXCLUDED')) {
+        current.push({ ...this.runRef(run), listed, member: !!member && member.membershipStatus !== 'EXCLUDED' })
+      }
+      if (run.status === 'DRAFT' || run.status === 'CALCULATED') targets.push(this.runRef(run))
+    }
+    return { employeeId, period, current, targets }
+  }
+
   // الخطوة 23: فترة التكافؤ التشغيلية من المسيرات الحقيقية (قراءة فقط، بنطاق الفرع). تصحيح المراجعة: كل المسيرات غير الملغاة تُقرأ،
   // فالشهر لا يُحتسب لو فيه مسير آخر LEGACY أو غير مصروف، والمسير المعلّم تجريبيًا لا يُحتسب ولا يحجب.
   async parityHistory(user: JwtPayload) {
@@ -2557,6 +2742,8 @@ export class PayrollService {
     const { items } = await this.detail(user, runId)
     const byMethod: Record<string, { count: number; total: number }> = {}
     for (const i of items) {
+      // قرار المالك (20 سبتمبر): صف «مصروف مع التصفية» مش داخل المبلغ المستحق للصرف — بيتصرف مع التصفية.
+      if (payrollItemSettlementPayout(i.breakdown)) continue
       const m = i.payMethod
       byMethod[m] = byMethod[m] ?? { count: 0, total: 0 }
       byMethod[m].count++

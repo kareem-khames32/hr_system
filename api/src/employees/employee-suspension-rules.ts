@@ -146,6 +146,22 @@ export function suspensionPayrollDays(
   return { days: Math.round(days * 100) / 100, dates, ids }
 }
 
+/**
+ * قرار المالك (20 سبتمبر): الموقوف بيفضل عضو في المسير، وصفّه لازم يقول حالته.
+ * «موقوف من … إلى …» لكل فترة إيقاف متقاطعة مع فترة المسير، و«رجع نشط من …» لو الإيقاف خلص جوه الفترة.
+ * مفيش إيقاف متقاطع = null (مفيش سطر زيادة على الصف).
+ */
+export function payrollSuspensionNote(periods: readonly SuspensionPeriod[], from: string, to: string): string | null {
+  const overlapping = periods.filter(period => period.status !== 'CANCELLED'
+    && dateOnly(period.fromDate) <= to && from <= dateOnly(period.toDate))
+    .sort((a, b) => dateOnly(a.fromDate).localeCompare(dateOnly(b.fromDate)))
+  if (!overlapping.length) return null
+  const parts = overlapping.map(period => `موقوف من ${dateOnly(period.fromDate)} إلى ${dateOnly(period.toDate)}`)
+  const last = overlapping[overlapping.length - 1]
+  const back = dateOnly(last.toDate) < to ? addDays(dateOnly(last.toDate), 1) : null
+  return back ? `${parts.join('، ')} — رجع نشط من ${back}` : parts.join('، ')
+}
+
 export interface LeaveDeductionLineLike { code: string; label: string; days: number; payPercent: number | null; amount: number }
 
 /**

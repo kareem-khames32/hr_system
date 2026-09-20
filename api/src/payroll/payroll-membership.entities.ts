@@ -49,6 +49,10 @@ export interface PayrollMemberSnapshot {
   transferredOut?: { lastInScopeDate: string; branchId: number | null; branchName: string | null; departmentId: number | null
     departmentName: string | null; teamId: number | null; teamName: string | null } | null
   alreadyInRun?: { otherRunId: number | null; name: string | null; status: string; startDate: string; endDate: string; overlapDays: number; kind: string } | null
+  // قرار المالك (20 سبتمبر): الموقوف عضو في المسير وصفّه يقول «موقوف من … إلى …» / «رجع نشط من …».
+  suspensionNote?: string | null
+  // شهر آخر يوم عمل: الراتب مصروف مع التصفية — داخل إجمالي المسير وبرّه المستحق للصرف وكشف البنك.
+  settlementPayout?: { caseId: number; lastWorkingDay: string; label: string } | null
 }
 
 export type PayrollMembershipStatus = 'INCLUDED' | 'EXCLUDED'

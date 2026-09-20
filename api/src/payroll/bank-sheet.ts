@@ -13,6 +13,8 @@ export interface BankSheetSource {
   bankName: string | null
   iban: string | null
   netPay: unknown
+  /** قرار المالك (20 سبتمبر): راتب آخر شهر بيتصرف مع التصفية — برّه كشف البنك تمامًا، ومبلغه بيتقال للعلم فقط. */
+  settlementPayout?: { caseId: number; lastWorkingDay: string; label: string } | null
 }
 
 export interface BankSheetRow {
@@ -22,7 +24,10 @@ export interface BankSheetRow {
 
 const cents = (value: number) => Math.round(value * 100)
 
-export function buildBankSheet(sources: BankSheetSource[]) {
+export function buildBankSheet(allSources: BankSheetSource[]) {
+  // صفوف التصفية مش في الكشف ولا في مبلغ الصرف؛ بتتذكر في «مصروف مع التصفية» عشان حد ما يفتكرش إنها اتنسيت.
+  const settlement = allSources.filter(source => source.settlementPayout)
+  const sources = allSources.filter(source => !source.settlementPayout)
   const rows: BankSheetRow[] = sources.map(source => {
     const payMethod = source.payMethod ?? 'transfer'
     const split = payrollPaySplit(source.netPay, payMethod, source.bankTransferAmount)
@@ -42,9 +47,14 @@ export function buildBankSheet(sources: BankSheetSource[]) {
     bank.employees++; bank.totalCents += cents(row.bankAmount)
     banks.set(name, bank)
   }
+  const settlementCents = settlement.reduce((sum, source) => sum + cents(roundPayrollMoney(Number(source.netPay) || 0)), 0)
   return {
     rows,
     banks: [...banks.values()].map(bank => ({ bankName: bank.bankName, employees: bank.employees, total: bank.totalCents / 100 })),
     totals: { employees: rows.length, bank: bankCents / 100, cash: cashCents / 100, net: (bankCents + cashCents) / 100 },
+    settlement: { employees: settlement.length, total: settlementCents / 100,
+      rows: settlement.map(source => ({ employeeId: source.employeeId, employeeCode: source.employeeCode, fullName: source.fullName,
+        netPay: roundPayrollMoney(Number(source.netPay) || 0), lastWorkingDay: source.settlementPayout?.lastWorkingDay ?? null,
+        caseId: source.settlementPayout?.caseId ?? null })) },
   }
 }

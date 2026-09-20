@@ -282,7 +282,9 @@ test('Step 17 acceptance: the membership preview is read-only with codes, covera
   const joiner = await employee(unit, { joinDate: '2026-08-08' })
   const unpaid = await employee(unit, { basicSalary: 0 })
   const booked = await employee(unit)
-  const broken = await employee(unit, { status: 'terminated', isActive: false })
+  // بيانات خدمة متعارضة: على رأس العمل ومع ذلك غير نشط بلا تاريخ آخر يوم عمل
+  // (المنتهي/المؤرشف بلا تاريخ صار له سبب استبعاد واضح بقرار المالك 20 سبتمبر، لا مشكلة بيانات)
+  const broken = await employee(unit, { status: 'active', isActive: false })
   const archived = await employee(unit, { status: 'archived', isActive: false })
   const approvedRun = await calculateDraft(await createDraft({ name: 'مسير الإدارة العليا — أغسطس', policyVersionId: policyTwo.versionId, period, filters: { employeeIds: [booked.id] } }))
   await acknowledge(approvedRun)
@@ -307,7 +309,9 @@ test('Step 17 acceptance: the membership preview is read-only with codes, covera
   assert.equal(excluded(unpaid.id).code, 'NO_SALARY_DEFINED')
   assert.deepEqual([excluded(booked.id).code, excluded(booked.id).otherRun.otherRunId, excluded(booked.id).otherRun.status], ['EXC_ALREADY_IN_RUN', approvedRun.id, 'APPROVED'])
   assert.equal(excluded(broken.id).code, 'EXC_EMPLOYMENT_DATA_INVALID'); assert.ok(excluded(broken.id).dataProblem); assert.match(excluded(broken.id).message, new RegExp(broken.employeeCode))
-  assert.equal(excluded(archived.id).code, 'ARCHIVED')
+  // قرار المالك (20 سبتمبر): المؤرشف بلا تاريخ آخر يوم عمل مستبعد بسبب يقول له يعمل إيه، مش بكود «مؤرشف» مبهم
+  assert.equal(excluded(archived.id).code, 'EXC_ARCHIVED_NO_LAST_DAY')
+  assert.equal(excluded(archived.id).message, 'مؤرشف بلا تاريخ آخر يوم عمل — حدده عشان راتبه يتحسب')
   assert.equal(preview.totals.candidates, 6); assert.equal(preview.totals.included + preview.totals.excluded, 6)
   assert.deepEqual([preview.totals.partial, preview.totals.alreadyInRun, preview.totals.dataProblems], [1, 1, 1])
   assert.ok(preview.excluded.every(row => row.code), 'every excluded row carries a code')

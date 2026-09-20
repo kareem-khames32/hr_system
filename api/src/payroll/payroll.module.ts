@@ -58,6 +58,11 @@ import { PayrollOverviewService } from './payroll-overview.service'
 import { PayrollAllowanceGrant, PayrollAllowanceGrantLine, PayrollAllowanceType } from './allowances-grants.entities'
 import { PayrollAllowancesController } from './allowances-grants.controller'
 import { PayrollAllowancesService } from './allowances-grants.service'
+// تراكم المسير يومًا بيوم: جدول الأيام المتراكمة، وخدمتها، والجار الليلي، وشاشة «آخر يوم محسوب»
+import { PayrollDailyAccrual } from './payroll-daily-accrual.entities'
+import { PayrollDailyAccrualService } from './payroll-daily-accrual.service'
+import { PayrollDailyAccrualScheduler } from './payroll-daily-accrual.scheduler'
+import { PayrollDailyAccrualController } from './payroll-daily-accrual.controller'
 
 @Module({
   imports: [
@@ -117,11 +122,15 @@ import { PayrollAllowancesService } from './allowances-grants.service'
       PayrollAllowanceType,
       PayrollAllowanceGrant,
       PayrollAllowanceGrantLine,
+      // تراكم المسير يومًا بيوم
+      PayrollDailyAccrual,
     ]),
   ],
   controllers: [PayrollController, ObligationsController, PayrollRulesController, PayrollPolicyController, PayrollSalaryHistoryController, TypedDeductionsController, BonusesController,
-    FinancialExemptionsController, PayrollCorrectionsController, SocialInsuranceController, PayrollBankSheetController, PayrollOverviewController, PayrollAllowancesController],
+    FinancialExemptionsController, PayrollCorrectionsController, SocialInsuranceController, PayrollBankSheetController, PayrollOverviewController, PayrollAllowancesController,
+    PayrollDailyAccrualController],
   providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService,
-    FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService, PayrollAllowancesService],
+    FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService, PayrollAllowancesService,
+    PayrollDailyAccrualService, PayrollDailyAccrualScheduler],
 })
 export class PayrollModule {}

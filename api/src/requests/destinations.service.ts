@@ -56,6 +56,8 @@ import {
 import { startCustodyTransfer } from './custody-execution'
 import { executeSalaryChangeRequest } from './salary-change-requests'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
+// تراكم المسير يومًا بيوم: النقل بيغيّر فرع الموظف فتقويمه وأيامه تتعاد
+import { markPayrollRangeDirty } from '../payroll/payroll-daily-accrual'
 import { appendEmployeeOrgCalendar } from '../attendance/attendance-calendar-history'
 import { assertEmployeeSchedulesFitBranch } from '../attendance/attendance-rule-history'
 import { assertLeaveOutsideSuspension } from '../employees/employee-suspension-overlap'
@@ -598,6 +600,8 @@ export class DestinationsService {
     transfer.status = 'EXECUTED'
     transfer.executedAt = new Date()
     await em.getRepository(Transfer).save(transfer)
+    // تراكم المسير: النقل بيغيّر فرع الموظف (تقويم العطلات وقواعد الحضور) من تاريخ السريان
+    await markPayrollRangeDirty(em, emp.id, String(transfer.effectiveDate).slice(0, 10), '9999-12-31', 'تنفيذ نقل الموظف')
     return true
   }
 

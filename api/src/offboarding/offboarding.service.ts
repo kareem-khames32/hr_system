@@ -27,6 +27,7 @@ import { LeaveBalance } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { PayrollItem, PayrollRun } from '../payroll/payroll.entities'
 import { getSettlementFinancialClaims, lockPayrollEmployees, type SettlementFinancialSnapshot } from '../payroll/payroll-settlement-boundary'
+import { assertSettlementSalaryMatchesRun, readPayrollSettlementSalary, settlementSalaryLineLabel } from '../payroll/payroll-settlement-salary'
 // C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يحجز مصادر إضافيه وأقساطه عن التصفية
 import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
 import { legacyInstallmentNumber, readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
@@ -695,6 +696,14 @@ export class OffboardingService implements OnApplicationBootstrap {
       })
     }
 
+    // (+) راتب آخر شهر — المصدر الوحيد بند المسير للشهر اللي فيه آخر يوم عمل (قرار المالك 20 سبتمبر).
+    // نفس التغطية والتناسب والخصومات اللي حسبها المسير، فمستحيل الرقمين يختلفوا، والمسير مستبعده من كشف البنك والمستحق للصرف.
+    const runSalary = await readPayrollSettlementSalary(this.lines.manager, emp.id, kase.lastWorkingDay)
+    if (runSalary.found && runSalary.runId && runSalary.amount !== 0) {
+      rows.push({ caseId: kase.id, label: settlementSalaryLineLabel(runSalary.period ?? '', runSalary.runId),
+        type: runSalary.amount > 0 ? 'CREDIT' : 'DEBIT', amount: round2(Math.abs(runSalary.amount)), isAuto: true })
+    }
+
     // (+) بدل رصيد الإجازات المتبقي (encashment)
     const annual = await this.leaveBalances.balanceOf(emp.id, 'annual', kase.lastWorkingDay, true)
     if (annual && annual.remaining > 0) {
@@ -935,6 +944,8 @@ export class OffboardingService implements OnApplicationBootstrap {
       // HRC-07: سطر المكافأة التلقائي المحفوظ لازم يطابق computeEos بالسياسة الحالية
       // قبل القفل — قبل أي فحص آخر حتى يظهر سبب الفرق للمعتمد صريحًا
       assertEosLineMatchesPolicy(lines, freshRows)
+      // قرار المالك (20 سبتمبر): راتب آخر شهر المحفوظ لازم يفضل مساوي لبند المسير قبل القفل — مصدر واحد لا يتجزأ.
+      assertSettlementSalaryMatchesRun(lines, freshRows)
       const fresh = financial.snapshot
       if (!fresh) throw new ConflictException('تعذر التحقق من مصادر التصفية؛ أعد توليد البنود')
       const stored = current.settlementFinancialSnapshot
