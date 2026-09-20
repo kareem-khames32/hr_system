@@ -208,3 +208,19 @@ powershell -ExecutionPolicy Bypass -File C:\Users\Kareem.khamis\Documents\hr_sys
 
 بيعمل `git pull` ← `npm ci` ← فحص الترحيلات المعلقة (بيقف لو فيه) ← بناء ← إعادة تشغيل الخدمتين ← تحقق.
 الأسرار في `api/.env` و`.env.production.local` (الاتنين متجاهلين في git) وماتتلمسش.
+
+### المُرحّل على SQL Server مثبّت أصليًا (بلا Docker)
+
+`db-migrate.cjs` كان مبنيًا على كون SQL Server داخل حاوية Docker (`docker cp`/`docker exec`).
+السيرفر ده تثبيت أصلي على ويندوز، فاتضافت طبقة تجريد: الكشف تلقائي (لو `docker` مش موجود)
+ويتحكم فيه `HR_SQL_NATIVE=1|0`. سلوك الحاوية زي ما هو لما تكون موجودة.
+
+متغيرات لازمة على السيرفر ده:
+
+```ini
+HR_SQL_BACKUP_DIR=C:\SQLBackup                 # مجلد النسخ الافتراضي تحت Program Files غير مقروء لغير المسؤولين
+HR_FREEZE_BACKUP_DIR=C:\SQLBackup\freeze
+HR_COMPANY_BACKUP=C:\SQLBackup\hr_system_2019_20260917150253.bak
+```
+
+`update-from-git.ps1` بيضبطهم لوحده. وقبل أي `apply --company` اعمل `rehearse` الأول.

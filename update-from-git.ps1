@@ -14,6 +14,12 @@ $branch = 'payroll-2026-09-14'
 $apiPort = 4000
 $webPort = 3001   # 3000 is taken by the HasselPlus app already running on this server
 
+# SQL Server here is a NATIVE Windows install (no Docker), and the default backup folder under
+# Program Files is not readable by a non-admin account, so the migrator needs these:
+$env:HR_SQL_BACKUP_DIR    = 'C:\SQLBackup'
+$env:HR_FREEZE_BACKUP_DIR = 'C:\SQLBackup\freeze'
+$env:HR_COMPANY_BACKUP    = 'C:\SQLBackup\hr_system_2019_20260917150253.bak'
+
 Set-Location $root
 
 function Stop-OnPort([int]$port, [string]$label) {

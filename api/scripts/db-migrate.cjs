@@ -529,17 +529,52 @@ function docker(args, options = {}) {
   return execFileSync('docker', args, { encoding: options.encoding ?? 'utf8', stdio: ['ignore', 'pipe', 'pipe'], maxBuffer: 16 * 1024 * 1024 })
 }
 
+// SQL Server مثبت أصليًا على نفس الجهاز (بلا حاوية): ما يراه SQL Server هو نفس نظام ملفات الجهاز.
+// HR_SQL_NATIVE=1 يفرض المسار الأصلي، و=0 يفرض الحاوية؛ الافتراضي: الحاوية لو docker موجود.
+let sqlNativeCache = null
+function sqlIsNative() {
+  if (process.env.HR_SQL_NATIVE === '1') return true
+  if (process.env.HR_SQL_NATIVE === '0') return false
+  if (sqlNativeCache === null) {
+    try { docker(['version', '--format', '{{.Server.Os}}']); sqlNativeCache = false } catch { sqlNativeCache = true }
+  }
+  return sqlNativeCache
+}
+
 function fileSha256(file) {
   const hash = crypto.createHash('sha256'), fd = fs.openSync(file, 'r'), buffer = Buffer.alloc(1024 * 1024)
   try { let n; while ((n = fs.readSync(fd, buffer, 0, buffer.length, null)) > 0) hash.update(buffer.subarray(0, n)) } finally { fs.closeSync(fd) }
   return hash.digest('hex')
 }
 
+// مجلد النسخ الذي يكتب فيه SQL Server. HR_SQL_BACKUP_DIR يتجاوز المجلد الافتراضي — لازم على
+// التثبيت الأصلي لأن مجلد Program Files الافتراضي مقروء للمسؤولين وحساب الخدمة فقط.
 async function sqlBackupDir(masterPool) {
+  if (process.env.HR_SQL_BACKUP_DIR) return process.env.HR_SQL_BACKUP_DIR
   return (await masterPool.request().query("SELECT CAST(SERVERPROPERTY('InstanceDefaultBackupPath') AS nvarchar(400)) AS dir")).recordset[0].dir || '/var/opt/mssql/data'
 }
 const sqlJoin = (dir, name) => dir.replace(/[\\/]+$/, '') + (dir.includes('/') ? '/' : '\\') + name
 const containerSha = file => { try { return docker(['exec', SQL_CONTAINER, 'sha256sum', file]).trim().split(/\s+/)[0] } catch { return null } }
+// بصمة الملف كما يراه SQL Server: من داخل الحاوية، أو من نظام ملفات الجهاز لو التثبيت أصلي
+const sqlVisibleSha = file => {
+  if (!sqlIsNative()) return containerSha(file)
+  try { return fs.existsSync(file) ? fileSha256(file) : null } catch { return null }
+}
+// إتاحة ملف من الجهاز لـSQL Server (نسخ داخل الحاوية، أو نسخ عادي لو التثبيت أصلي)
+const sqlPutFile = (hostPath, sqlPath) => {
+  if (!sqlIsNative()) { docker(['cp', hostPath, `${SQL_CONTAINER}:${sqlPath}`]); docker(['exec', '-u', '0', SQL_CONTAINER, 'chown', 'mssql', sqlPath]); return }
+  fs.mkdirSync(path.dirname(sqlPath), { recursive: true })
+  fs.copyFileSync(hostPath, sqlPath)
+}
+// سحب ملف من SQL Server للجهاز
+const sqlGetFile = (sqlPath, hostPath) => {
+  if (!sqlIsNative()) { docker(['cp', `${SQL_CONTAINER}:${sqlPath}`, hostPath]); return }
+  fs.copyFileSync(sqlPath, hostPath)
+}
+// حذف ملف مؤقت يراه SQL Server — الفشل غير مهم (يبقى ملف مؤقت فقط)
+const sqlRemoveFile = sqlPath => {
+  try { if (!sqlIsNative()) docker(['exec', '-u', '0', SQL_CONTAINER, 'rm', '-f', sqlPath]); else fs.rmSync(sqlPath, { force: true }) } catch { /* ملف مؤقت */ }
+}
 
 // النسخة الاحتياطية على الجهاز + نسخة مطابقة البصمة يراها SQL Server + HEADERONLY + VERIFYONLY
 async function verifyCompanyBackup(masterPool, companyDatabase, backupPath = COMPANY_BACKUP) {
@@ -549,17 +584,16 @@ async function verifyCompanyBackup(masterPool, companyDatabase, backupPath = COM
   const hostSha256 = fileSha256(backupPath), sizeBytes = fs.statSync(backupPath).size
   const dataDir = await sqlBackupDir(masterPool)
   let sqlPath = sqlJoin(dataDir, path.basename(backupPath)), staged = false
-  if (containerSha(sqlPath) !== hostSha256) {
+  if (sqlVisibleSha(sqlPath) !== hostSha256) {
     // لا توجد نسخة مطابقة داخل الحاوية: ننسخ الملف مؤقتًا للتحقق ثم نزيل النسخة المؤقتة فقط
     sqlPath = sqlJoin(dataDir, `migrate_verify_${crypto.randomBytes(6).toString('hex')}.bak`)
     try {
-      docker(['cp', backupPath, `${SQL_CONTAINER}:${sqlPath}`])
-      docker(['exec', '-u', '0', SQL_CONTAINER, 'chown', 'mssql', sqlPath])
+      sqlPutFile(backupPath, sqlPath)
     } catch (error) {
-      throw new Error(`وضع الشركة موقوف: تعذر إتاحة النسخة الاحتياطية لـSQL Server داخل الحاوية ${SQL_CONTAINER} (${String(error.message).split('\n')[0]})`)
+      throw new Error(`وضع الشركة موقوف: تعذر إتاحة النسخة الاحتياطية لـSQL Server (${sqlIsNative() ? 'تثبيت أصلي' : `الحاوية ${SQL_CONTAINER}`}) (${String(error.message).split('\n')[0]})`)
     }
     staged = true
-    if (containerSha(sqlPath) !== hostSha256) throw new Error('وضع الشركة موقوف: بصمة النسخة داخل الحاوية لا تطابق الملف على الجهاز')
+    if (sqlVisibleSha(sqlPath) !== hostSha256) throw new Error('وضع الشركة موقوف: بصمة النسخة التي يراها SQL Server لا تطابق الملف على الجهاز')
   }
   try {
     const header = (await masterPool.request().input('p', sqlPath).query('RESTORE HEADERONLY FROM DISK = @p')).recordset
@@ -572,7 +606,7 @@ async function verifyCompanyBackup(masterPool, companyDatabase, backupPath = COM
       backupStartDate: header[0].BackupStartDate, backupFinishDate: header[0].BackupFinishDate,
       copyOnly: header[0].IsCopyOnly === true || Number(header[0].IsCopyOnly) === 1, checksums, verifyOnly: 'passed' }
   } finally {
-    if (staged && !process.env.HR_KEEP_STAGED_BACKUP) { try { docker(['exec', '-u', '0', SQL_CONTAINER, 'rm', '-f', sqlPath]) } catch { /* يبقى ملف مؤقت فقط */ } }
+    if (staged && !process.env.HR_KEEP_STAGED_BACKUP) sqlRemoveFile(sqlPath)
   }
 }
 
@@ -587,7 +621,7 @@ async function takeCompanyBackup(masterPool, database, { hostDir = FREEZE_BACKUP
     .query(`BACKUP DATABASE ${quoteName(database)} TO DISK = @p WITH COPY_ONLY, CHECKSUM, INIT, FORMAT, NAME = @n`)
   fs.mkdirSync(hostDir, { recursive: true })
   const hostPath = path.join(hostDir, name)
-  docker(['cp', `${SQL_CONTAINER}:${sqlPath}`, hostPath])
+  sqlGetFile(sqlPath, hostPath)
   const verified = await verifyCompanyBackup(masterPool, database, hostPath)
   return { ...verified, taken: stamp, label }
 }
@@ -990,13 +1024,13 @@ async function rehearse(options = {}) {
     } else backup = await stageLiveCopy(master, companyDatabase)
     await restoreCopy(master, backup.sqlPath, database)
     restored = true
-    if (from === 'live') { try { docker(['exec', '-u', '0', SQL_CONTAINER, 'rm', '-f', backup.sqlPath]) } catch { /* ملف مؤقت */ } backup.staged = false }
+    if (from === 'live') { sqlRemoveFile(backup.sqlPath); backup.staged = false }
     const record = await apply({ ...options, database, company: false, recordCommand: 'rehearse', trial: options.trial ?? true })
     record.from = from
     record.backup = backup
     return record
   } finally {
-    if (backup?.staged) { try { docker(['exec', '-u', '0', SQL_CONTAINER, 'rm', '-f', backup.sqlPath]) } catch { /* ملف مؤقت */ } }
+    if (backup?.staged) sqlRemoveFile(backup.sqlPath)
     if (restored && !options.keep) { try { await dropCopy(master, database) } catch (error) { console.error(`تعذر حذف قاعدة البروفة ${database}: ${error.message}`) } }
     await master.close()
   }
@@ -1038,7 +1072,7 @@ async function main() {
 module.exports = { stripComments, splitBatches, splitStatements, executionUnits, LEGACY_STATEMENT_FILES, forbiddenStatements, forbiddenScript, scanJavaScript,
   droppedPermanentTables, foldLiteralConcatenation, columnChangeProblem, backupFreshnessProblems, throwCodes, duplicateThrowCodes, discover, analyze, classifyTarget,
   ledgerStatus, compareCounts, plan, apply, verify, rehearse, runtime, masterPool, openDataSource, verifyCompanyBackup, takeCompanyBackup, databaseWriteState,
-  restoreCopy, dropCopy, rehearsalName, stageLiveCopy, docker, fileSha256, DISPOSABLE_DATABASE, REHEARSAL_DATABASE, LEDGER, COMPANY_BACKUP, FREEZE_BACKUP_DIR, SQL_CONTAINER, APP_NAME }
+  restoreCopy, dropCopy, rehearsalName, stageLiveCopy, docker, sqlIsNative, sqlVisibleSha, sqlPutFile, sqlGetFile, sqlRemoveFile, fileSha256, DISPOSABLE_DATABASE, REHEARSAL_DATABASE, LEDGER, COMPANY_BACKUP, FREEZE_BACKUP_DIR, SQL_CONTAINER, APP_NAME }
 
 if (require.main === module) {
   main().catch(error => {
