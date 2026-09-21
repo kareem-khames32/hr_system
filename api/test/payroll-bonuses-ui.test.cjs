@@ -67,18 +67,21 @@ test('workspace (money-requests simplification): one selection list (an employee
   assert.doesNotMatch(workspace, /Number\([^)]*\)\s*\*/, 'no amount arithmetic in the screen')
 })
 
-test('money requests (B3/B4): the financial catalog cards open the existing workspaces, the generic engine refuses them, and the audience gates creating', () => {
+test('money requests (B3/B4): both financial catalog cards open their own form in place, the generic engine refuses them, and the audience gates creating', () => {
   const requests = read('src/app/requests/page.tsx')
   // «خصم» لم يعد ينتقل لشاشة أخرى: نموذجه الحقيقي داخل شاشة الطلبات (deduction-request-ui.test.cjs)
   assert.ok(!requests.includes("if (code === 'PAYROLL_DEDUCTION')"), 'the deduction card no longer routes away')
   assert.ok(requests.includes('<DeductionRequestForm onSubmitted={load} />'), 'the deduction card opens its own form inline')
-  assert.ok(requests.includes("if (code === 'PAYROLL_BONUS') return can('bonuses.manage') ? '/payroll/bonuses?tab=create' : '/my/bonuses?tab=create'"))
-  assert.ok(requests.includes('const workspace = moneyWorkspaceRoute(t.code)'), 'the bonus card routes instead of opening a generic form')
+  // «مكافأة» كمان لم تعد تنتقل: نموذجها الحقيقي داخل شاشة الطلبات (bonus-request-ui.test.cjs)
+  assert.ok(!requests.includes("if (code === 'PAYROLL_BONUS')"), 'the bonus card no longer routes away')
+  assert.ok(!requests.includes('moneyWorkspaceRoute'), 'no money card navigates to another screen any more')
+  assert.ok(!requests.includes("'/my/bonuses?tab=create'"), 'the bonus card no longer navigates away')
+  assert.ok(requests.includes('<BonusRequestForm onSubmitted={load} />'), 'the bonus card opens its own form inline')
   const engine = read('api/src/requests/requests.service.ts')
   assert.ok(engine.includes("PAYROLL_DEDUCTION: 'الخصم يُرفع من شاشة الخصومات"), 'the generic engine refuses with a message that names the screen')
   assert.ok(engine.includes("PAYROLL_BONUS: 'المكافأة تُرفع من شاشة المكافآت"))
-  // كلا الكارتين يفتح تبويب الإنشاء فعلاً: كل مساحة تقرأ ?tab=create بنفسها،
-  // فرابط /my/bonuses?tab=create يعمل مثل /my/deductions?tab=create بلا تمرير prop من الصفحة.
+  // الرابط الثانوي للمجموعات في كل نموذج يفتح تبويب الإنشاء فعلاً: كل مساحة تقرأ ?tab=create بنفسها
+  // بلا تمرير prop من الصفحة — شاشتا المال باقيتان كما هما للمكافأة/الخصم الجماعي.
   assert.ok(read('src/components/payroll/BonusesWorkspace.tsx').includes("(initialTab === 'create' || urlParam('tab') === 'create') && value.types.length > 0"))
   assert.ok(read('src/components/payroll/TypedDeductionsWorkspace.tsx').includes("urlParam('tab') === 'create' && value.types.length > 0"))
   // مقيّم جمهور واحد لا اثنين: محرك الطلبات وشاشتا المال يسألون نفس الدالة بنفس الاستثناءات

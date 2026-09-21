@@ -5,11 +5,12 @@ import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import LetterDownloadButton from '@/components/LetterDownloadButton'
 import RequestPayload from '@/components/RequestPayload'
+import BonusRequestForm from '@/components/requests/BonusRequestForm'
 import DeductionRequestForm from '@/components/requests/DeductionRequestForm'
 import OvertimePreview from '@/components/OvertimePreview'
 import OvertimeRequestSummary from '@/components/OvertimeRequestSummary'
 import TimeSelect, { normalizeTime, timeSpanMinutes } from '@/components/TimeSelect'
-import { payloadFieldLabel, payloadSummary, payloadValueLabel } from '@/lib/request-payload'
+import { payloadFieldKind, payloadFieldLabel, payloadNumberProps, payloadSummary, payloadValueLabel } from '@/lib/request-payload'
 import { leaveAttachmentName, leaveAttachmentRequiredNow, leaveCountsCalendarDays as countsCalendarDaysOf, leaveHalfDayAllowed, leaveRulesHint } from '@/lib/leave-catalog'
 import { salaryIncreaseRequestFields, salaryIncreaseRequestPayload } from '@/lib/employee-salary-change-api'
 import {
@@ -84,13 +85,10 @@ interface ResolvedStep {
   action?: string | null
 }
 
-// خط الفلوس: كارت «خصم» صار نموذج طلب حقيقي داخل هذه الشاشة (DeductionRequestForm) مربوطاً بكتالوج
-// «أنواع الخصومات» ونقطة الإنشاء الفردي نفسها — بلا انتقال ولا فورم عام ولا محرك ثانٍ. كارت «مكافأة»
-// لسه بيفتح مساحة المكافآت جاهزة على تبويب الإنشاء.
-const moneyWorkspaceRoute = (code: string): string | null => {
-  if (code === 'PAYROLL_BONUS') return can('bonuses.manage') ? '/payroll/bonuses?tab=create' : '/my/bonuses?tab=create'
-  return null
-}
+// خط الفلوس: كارتا «خصم» و«مكافأة» صارا نموذجَي طلب حقيقيين داخل هذه الشاشة (DeductionRequestForm و
+// BonusRequestForm) مربوطين بكتالوجَي «أنواع الخصومات» و«أنواع المكافآت» ونقطتَي الإنشاء الفردي نفسيهما —
+// بلا انتقال لشاشة أخرى ولا فورم عام ولا محرك ثانٍ. شاشتا /payroll/deductions و/payroll/bonuses باقيتان
+// كما هما للمجموعات، ولكل نموذج رابط ثانوي إليهما لمن يملك صلاحيتهما.
 
 const parseJson = <T,>(raw: string | null | undefined, fallback: T): T => {
   if (!raw) return fallback
@@ -156,6 +154,23 @@ const fieldLabels: Record<string, string> = {
   note: 'ملاحظات',
 }
 
+// ===== «دوام يوم عطلة»: مدى «من/إلى» بدل قائمة أيام مكتوبة بالإيد =====
+// أقصى عدد أيام في الطلب الواحد كما يفرضه الخادم (HOLIDAY_WORK_MAX_DATES)
+const HOLIDAY_WORK_MAX_DAYS = 62
+// صيغة الأيام المرسلة لا تتغير: نص أيام YYYY-MM-DD مفصولة بفاصلة عربية — نفس ما كان يكتبه المستخدم
+const HOLIDAY_DATES_SEPARATOR = '، '
+const holidayDatesText = (days: string[]) => days.join(HOLIDAY_DATES_SEPARATOR)
+const holidayDatesList = (raw: string | undefined): string[] =>
+  (raw ?? '').split(/[\s,،;؛]+/).filter((value) => /^\d{4}-\d{2}-\d{2}$/.test(value))
+const localToday = () => new Date().toLocaleDateString('en-CA')
+// كل أيام المدى شاملاً طرفيه — حساب على منتصف اليوم فلا تزحلق المنطقة الزمنية يوماً
+const daysInRange = (from: string, to: string): string[] => {
+  const out: string[] = []
+  const end = Date.parse(`${to}T12:00:00Z`)
+  for (let t = Date.parse(`${from}T12:00:00Z`); t <= end; t += 86400000) out.push(new Date(t).toISOString().slice(0, 10))
+  return out
+}
+
 // نطاق اليوم للإجازات — القيم كود، والعرض عربي دائماً
 const periodLabels: Record<string, string> = {
   FULL: 'يوم كامل',
@@ -205,9 +220,12 @@ const handlerLabels: Record<string, string> = {
   training_expense: 'مصروفات التدريب',
 }
 
-const isDateField = (f: string) => f === 'date' || f.includes('Date')
-const isNumberField = (f: string) =>
-  /days|hours|amount|months|salary|pct/i.test(f) || /Id$/.test(f)
+// ودجة الحقل ونوعه من خريطة واحدة جنب تسميات المعتمد (src/lib/request-payload.ts) — الشاشة لا تخمّن
+const isDateField = (f: string) => payloadFieldKind(f) === 'date'
+const isNumberField = (f: string) => payloadFieldKind(f) === 'number'
+// نوع الحقل المخصّص من الخادم يسبق الخريطة؛ الخادم لما يقول «text» (الافتراضي العام) الخريطة هي الحكم
+const fieldKindOf = (key: string, configured?: CustomFieldDef['type']): string =>
+  configured && configured !== 'text' ? configured : payloadFieldKind(key)
 
 // حقول تُرسم كقوائم اختيار ذكية (بيانات حقيقية بدل إدخال رقم خام)
 const SMART_SELECT_FIELDS: readonly string[] = ['toTeamId', 'toEmployeeId', 'assignmentId']
@@ -348,6 +366,15 @@ export default function MyRequestsPage() {
     working: number
     skipped: string[]
   } | null>(null)
+  // «دوام يوم عطلة»: مدى «من/إلى» بدل كتابة الأيام بالإيد — أيام العطلة الحقيقية جواه من نفس
+  // حساب الخادم الذي يحكم به على الطلب (attendance/working-days ← calendarDay لكل يوم)
+  const [holidayRange, setHolidayRange] = useState({ from: '', to: '' })
+  const [holidayDays, setHolidayDays] = useState<string[]>([])
+  const [holidayPicked, setHolidayPicked] = useState<string[]>([])
+  const [holidayLoading, setHolidayLoading] = useState(false)
+  const [holidayError, setHolidayError] = useState('')
+  // الخادم ما قدرش يحسب العطلات (نيابةً بلا صلاحية مثلاً) → نفرد المدى يوم بيوم والمستخدم يعلّم اللي اشتغله
+  const [holidayManual, setHolidayManual] = useState(false)
 
   const load = async () => {
     try {
@@ -579,8 +606,12 @@ export default function MyRequestsPage() {
   const isLeaveCancel = selectedTypeDef?.code === 'LEAVE_MODIFY_CANCEL'
   // تصحيح/طلب بصمة — تلميح تعبئة البصمة الناقصة (النموذج يُبنى بالحقول العامة/المخصّصة)
   const isPunchCorrection = selectedTypeDef?.code === 'PUNCH_CORRECTION'
-  // «خصم»: نموذجه الخاص المربوط بكتالوج أنواع الخصومات — لا حقول عامة ولا زر إرسال عام
+  // «خصم» و«مكافأة»: لكل منهما نموذجه الخاص المربوط بكتالوجه — لا حقول عامة ولا زر إرسال عام
   const isPayrollDeduction = selectedTypeDef?.code === 'PAYROLL_DEDUCTION'
+  const isPayrollBonus = selectedTypeDef?.code === 'PAYROLL_BONUS'
+  const isMoneyRequest = isPayrollDeduction || isPayrollBonus
+  // «دوام يوم عطلة»: مدى «من/إلى» + شرائح أيام العطلة الحقيقية بدل خانة نص يكتبها المستخدم بيده
+  const isHolidayWork = formFieldKeys.includes('dates')
   const isLeaveCategory = selectedTypeDef?.category === 'leaves' && !isLeaveCancel
   const isHalfDay = isLeaveCategory && leavePeriod !== 'FULL'
   // نوع الإجازة المختار في الطلب الموحّد + المرفق الإجباري إن وُجد
@@ -742,11 +773,11 @@ export default function MyRequestsPage() {
           <option value="OUT">بصمة انصراف</option>
         </select>
       )
-    // وقت الإذن (من/إلى): اختيار من قائمة كل ربع ساعة بدل الكتابة — لو نوع تاني معرّف
+    // وقت الإذن (من/إلى): حقل وقت بدل الكتابة الحرة — لو نوع تاني معرّف
     // «من/إلى» تاريخ أو رقم في حقوله المخصّصة يفضل زي ما هو
     if (
       (key === 'from' || key === 'to') &&
-      (isPermission || (customFields.find((f) => f.key === key)?.type ?? 'text') === 'text')
+      (isPermission || fieldKindOf(key, customFields.find((f) => f.key === key)?.type) === 'time')
     )
       return (
         <TimeSelect
@@ -859,6 +890,74 @@ export default function MyRequestsPage() {
       return next
     })
   }
+
+  const resetHolidayPicker = () => {
+    setHolidayRange({ from: '', to: '' })
+    setHolidayDays([])
+    setHolidayPicked([])
+    setHolidayError('')
+    setHolidayManual(false)
+    setHolidayLoading(false)
+  }
+
+  // الأيام المختارة هي مصدر قيمة الحمولة `dates` — نفس النص الذي كان يُكتب بالإيد
+  const pickHolidayDays = (days: string[]) => {
+    const sorted = [...new Set(days)].sort()
+    setHolidayPicked(sorted)
+    setFieldValue('dates', holidayDatesText(sorted))
+  }
+
+  // مدى «من/إلى» ← أيام العطلة الحقيقية جواه: نفس حساب الخادم الذي يحكم به على الطلب
+  // (attendance/working-days يسأل calendarDay لكل يوم، وهو نفسه ما يرفض به «يوم عمل عادي ليك»)
+  useEffect(() => {
+    if (!isHolidayWork) return
+    const { from, to } = holidayRange
+    const today = localToday()
+    if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to) || from > to) {
+      setHolidayDays([]); setHolidayError(''); setHolidayManual(false); setHolidayLoading(false)
+      pickHolidayDays([])
+      return
+    }
+    // نيابةً عن موظف: عطلات جدوله هو، مش جدول صاحب الحساب
+    const employeeId = onBehalf && onBehalfEmployeeId ? Number(onBehalfEmployeeId) : undefined
+    if (onBehalf && !employeeId) return
+    const past = daysInRange(from, to).filter((day) => day <= today)
+    if (past.length === 0) {
+      setHolidayDays([]); setHolidayManual(false); setHolidayLoading(false)
+      setHolidayError('المدى كله لسه ماجاش — قدّم على أيام العطلة اللي اشتغلتها فعلًا')
+      pickHolidayDays([])
+      return
+    }
+    let cancelled = false
+    setHolidayLoading(true)
+    setHolidayError('')
+    const timer = setTimeout(() => {
+      fetchWorkingDays(from, to, employeeId ? { employeeId } : { self: true })
+        .then((res) => {
+          if (cancelled) return
+          // skipped = الأيام غير العمل لهذا الموظف (ويك إند + عطلة رسمية) = الأيام المقبولة في الطلب
+          const holidays = res.skipped.filter((day) => day <= today).sort()
+          setHolidayManual(false)
+          setHolidayDays(holidays)
+          setHolidayError(holidays.length === 0 ? 'مفيش أيام عطلة في المدى ده — كله أيام عمل عادية ليك' : '')
+          // اختيار سابق (طلب مُرجَع للاستكمال مثلاً) يُحترم ما دام داخل المدى؛ وإلا كل الأيام مختارة
+          const prior = holidayDatesList(fieldValues.dates).filter((day) => holidays.includes(day))
+          pickHolidayDays(prior.length ? prior : holidays)
+        })
+        .catch((err) => {
+          if (cancelled) return
+          // تعذّر حساب العطلات: نفرد المدى يوم بيوم والمستخدم يعلّم اللي اشتغله — والخادم يبقى الحكم
+          const manual = past.length <= HOLIDAY_WORK_MAX_DAYS
+          setHolidayManual(manual)
+          setHolidayDays(manual ? past : [])
+          setHolidayError(err instanceof Error ? err.message : 'تعذّر تحديد أيام العطلة داخل المدى')
+          pickHolidayDays([])
+        })
+        .finally(() => { if (!cancelled) setHolidayLoading(false) })
+    }, 400)
+    return () => { cancelled = true; clearTimeout(timer) }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [isHolidayWork, holidayRange.from, holidayRange.to, onBehalf, onBehalfEmployeeId])
 
   // فلترة الأصول بالبحث وتجميعها حسب الفئة
   const filteredAssets = availableAssets.filter(
@@ -998,6 +1097,18 @@ export default function MyRequestsPage() {
       else delete payload.reason
       payload.previewFingerprint = overtimePreview.fingerprint
     }
+    if (isHolidayWork) {
+      // الأيام من الشرائح المختارة لا من كتابة حرة — والصيغة المرسلة نفس صيغة اليوم (YYYY-MM-DD مفصولة بفاصلة)
+      if (holidayPicked.length === 0) {
+        setSubmitError('علّم يوم عطلة واحد على الأقل من أيام المدى')
+        return
+      }
+      if (holidayPicked.length > HOLIDAY_WORK_MAX_DAYS) {
+        setSubmitError(`أقصى عدد أيام في المرة الواحدة ${HOLIDAY_WORK_MAX_DAYS} يوم — ضيّق المدى`)
+        return
+      }
+      payload.dates = holidayDatesText(holidayPicked)
+    }
     if (isLeaveCategory) {
       payload.period = leavePeriod
       if (isHalfDay) {
@@ -1046,6 +1157,7 @@ export default function MyRequestsPage() {
       setPermissionType('')
       setSelectedLeaveId(null)
       setCancelReason('')
+      resetHolidayPicker()
       setOnBehalf(false)
       setOnBehalfEmployeeId('')
       setShowNewModal(false)
@@ -1084,6 +1196,13 @@ export default function MyRequestsPage() {
       setCustodyReason(String(payload.reason ?? ''))
       setSelectedLeaveId(payload.leaveId ? Number(payload.leaveId) : null)
       setCancelReason(String(payload.reason ?? ''))
+      // «دوام يوم عطلة» مُرجَع للاستكمال: المدى يُشتق من الأيام المحفوظة ويُعاد حلّها من الخادم
+      const savedHolidayDays = holidayDatesList(typeof payload.dates === 'string' ? payload.dates : undefined).sort()
+      resetHolidayPicker()
+      if (savedHolidayDays.length) {
+        setHolidayPicked(savedHolidayDays)
+        setHolidayRange({ from: savedHolidayDays[0], to: savedHolidayDays[savedHolidayDays.length - 1] })
+      }
       setOnBehalf(false)
       const last = [...(detail.approvals ?? [])].reverse().find(a => ['RETURN', 'RETURNED_FOR_INFO'].includes(a.action))
       setReturnComment(last?.comment || 'راجع بيانات الطلب وأكمل المطلوب قبل إعادة الإرسال')
@@ -1122,7 +1241,7 @@ export default function MyRequestsPage() {
             </p>
           </div>
           <button
-            onClick={() => { setEditingRequest(null); setReturnComment(''); setSelectedType(''); setFieldValues({}); setRequestNote(''); setSelectedAssetIds([]); setCustodyReason(''); setUploadedFiles({}); setShowNewModal(true) }}
+            onClick={() => { setEditingRequest(null); setReturnComment(''); setSelectedType(''); setFieldValues({}); setRequestNote(''); setSelectedAssetIds([]); setCustodyReason(''); setUploadedFiles({}); resetHolidayPicker(); setShowNewModal(true) }}
             className="btn-primary flex items-center gap-2"
           >
             <Plus size={20} />
@@ -1343,8 +1462,8 @@ export default function MyRequestsPage() {
                   </div>
                 )}
 
-                {/* التقديم نيابة عن موظف آخر — بصلاحية فقط (الخصم له منتقي موظفه الخاص بنطاق النوع) */}
-                {canOnBehalf && !editingRequest && !isPayrollDeduction && (
+                {/* التقديم نيابة عن موظف آخر — بصلاحية فقط (الخصم والمكافأة لكل منهما منتقي موظفه بنطاق النوع) */}
+                {canOnBehalf && !editingRequest && !isMoneyRequest && (
                   <div className="bg-indigo-50/60 border border-indigo-100 rounded-xl p-4 space-y-3">
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
@@ -1432,9 +1551,7 @@ export default function MyRequestsPage() {
                                   key={t.code}
                                   disabled={!!editingRequest}
                                   onClick={() => {
-                                    // القرار ب3 (خط الفلوس): «خصم» و«مكافأة» يفتحان مساحتهما الجاهزة بدل فورم عام
-                                    const workspace = moneyWorkspaceRoute(t.code)
-                                    if (workspace) { window.location.assign(workspace); return }
+                                    // القرار ب3 (خط الفلوس): «خصم» و«مكافأة» يفتحان نموذجهما داخل الشاشة — بلا انتقال
                                     setSelectedType(t.code)
                                     setSelectedDefinition(t.leaveProfiles?.length === 1 ? t.leaveProfiles[0].definitionCode ?? '' : '')
                                     setFieldValues(t.leaveProfiles?.length === 1 && t.leaveProfiles[0].leaveTypeCode
@@ -1447,6 +1564,7 @@ export default function MyRequestsPage() {
                                     setPermissionType('')
                                     setSelectedLeaveId(null)
                                     setCancelReason('')
+                                    resetHolidayPicker()
                                     setSubmitError(null)
                                   }}
                                   className={`p-4 rounded-xl border-2 text-right transition-all flex items-center justify-between ${
@@ -1533,6 +1651,10 @@ export default function MyRequestsPage() {
                     والموظف والسبب والمرفق والأقساط، ثم سلسلة اعتماد النوع حتى الموارد البشرية */}
                 {selectedType && isPayrollDeduction && <DeductionRequestForm onSubmitted={load} />}
 
+                {/* «مكافأة»: نفس الحكاية — أنواع المكافآت وقيمتها بطريقة حسابها وشهر المسير والموظف
+                    والسبب ومرجع المستند، ومعاينة حيّة للمبلغ والسلسلة من الخادم قبل الإرسال */}
+                {selectedType && isPayrollBonus && <BonusRequestForm onSubmitted={load} />}
+
                 {/* تصحيح/طلب بصمة: تلميح تعبئة البصمة الناقصة */}
                 {selectedType && isPunchCorrection && (
                   <div className="flex items-start gap-2 text-xs text-blue-700 bg-blue-50 rounded-xl px-3 py-2.5">
@@ -1541,6 +1663,107 @@ export default function MyRequestsPage() {
                       حدد البصمة الناقصة (حضور أو انصراف) ووقتها — بعد الاعتماد
                       تُطبَّق على يومك تلقائياً
                     </span>
+                  </div>
+                )}
+
+                {/* «دوام يوم عطلة»: مدى «من/إلى» والنظام يطلّع أيام العطلة الحقيقية جواه شرائح تُعلَّم —
+                    المستخدم ما بيكتبش تواريخ بإيده، والمُرسَل يفضل نفس نص الأيام المفصولة بفاصلة */}
+                {selectedType && isHolidayWork && (
+                  <div className="space-y-3">
+                    <div className="flex items-start gap-2 text-xs text-blue-700 bg-blue-50 rounded-xl px-3 py-2.5">
+                      <Info size={14} className="shrink-0 mt-0.5" />
+                      <span>
+                        حدد مدى «من / إلى» والنظام يطلّع لك أيام العطلة اللي جواه (ويك إند وعطلات رسمية حسب جدولك
+                        وفرعك) — شيل اللي ما اشتغلتوش. يوم العمل العادي مابيظهرش أصلاً، والخادم بيرفضه لو اتبعت.
+                      </span>
+                    </div>
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label htmlFor="holiday-work-from" className="block text-sm font-medium text-gray-700 mb-2">من تاريخ <span className="text-red-500">*</span></label>
+                        <input
+                          id="holiday-work-from"
+                          type="date"
+                          dir="ltr"
+                          max={localToday()}
+                          className="input w-full"
+                          value={holidayRange.from}
+                          onChange={(e) => setHolidayRange((range) => ({ from: e.target.value, to: range.to && range.to >= e.target.value ? range.to : e.target.value }))}
+                        />
+                      </div>
+                      <div>
+                        <label htmlFor="holiday-work-to" className="block text-sm font-medium text-gray-700 mb-2">إلى تاريخ <span className="text-red-500">*</span></label>
+                        <input
+                          id="holiday-work-to"
+                          type="date"
+                          dir="ltr"
+                          min={holidayRange.from || undefined}
+                          max={localToday()}
+                          className="input w-full"
+                          value={holidayRange.to}
+                          onChange={(e) => setHolidayRange((range) => ({ ...range, to: e.target.value }))}
+                        />
+                      </div>
+                    </div>
+                    {holidayLoading && <p className="text-xs text-gray-500">جارٍ تحديد أيام العطلة داخل المدى…</p>}
+                    {holidayError && (
+                      <p role="alert" className="flex items-center gap-1.5 text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                        <AlertTriangle size={13} className="shrink-0" />
+                        {holidayError}
+                      </p>
+                    )}
+                    {holidayManual && holidayDays.length > 0 && (
+                      <p className="text-xs text-gray-500">
+                        تعذّر تمييز العطلات آلياً — دي كل أيام المدى؛ علّم اللي اشتغلته فعلاً، والخادم بيرفض أي يوم عمل عادي.
+                      </p>
+                    )}
+                    {holidayDays.length > 0 && (
+                      <>
+                        <div className="flex items-center justify-between gap-2 flex-wrap">
+                          <label className="block text-sm font-medium text-gray-700">
+                            أيام العطلة اللي اشتغلتها <span className="text-red-500">*</span>
+                          </label>
+                          <div className="flex gap-2">
+                            <button type="button" className="text-xs px-2.5 py-1 bg-gray-100 rounded-lg hover:bg-gray-200" onClick={() => pickHolidayDays(holidayDays)}>اختر الكل</button>
+                            <button type="button" className="text-xs px-2.5 py-1 bg-gray-100 rounded-lg hover:bg-gray-200" onClick={() => pickHolidayDays([])}>امسح الكل</button>
+                          </div>
+                        </div>
+                        <div className="flex flex-wrap gap-2">
+                          {holidayDays.map((day) => {
+                            const picked = holidayPicked.includes(day)
+                            return (
+                              <button
+                                key={day}
+                                type="button"
+                                aria-pressed={picked}
+                                dir="ltr"
+                                onClick={() => pickHolidayDays(picked ? holidayPicked.filter((value) => value !== day) : [...holidayPicked, day])}
+                                className={`flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border transition-colors ${
+                                  picked
+                                    ? 'bg-primary-50 border-primary-300 text-primary-700'
+                                    : 'bg-white border-gray-200 text-gray-500 hover:border-gray-300'
+                                }`}
+                              >
+                                {picked ? <CheckCircle2 size={12} /> : <X size={12} />}
+                                {day}
+                              </button>
+                            )
+                          })}
+                        </div>
+                        <p className="text-xs text-gray-500">
+                          {holidayPicked.length === 0
+                            ? 'علّم يوم عطلة واحد على الأقل قبل الإرسال'
+                            : `${holidayPicked.length} يوم مختار من ${holidayDays.length} يوم عطلة في المدى`}
+                          {holidayPicked.length > HOLIDAY_WORK_MAX_DAYS && ` — أقصى عدد أيام في المرة الواحدة ${HOLIDAY_WORK_MAX_DAYS} يوم`}
+                        </p>
+                      </>
+                    )}
+                    {/* رفض الخادم يظهر مقروءاً هنا كمان، جنب الشرائح اللي المستخدم محتاج يعدّلها */}
+                    {submitError && /يوم عمل عادي|أيام عمل عادية/.test(submitError) && (
+                      <p role="alert" className="flex items-center gap-1.5 text-xs text-red-700 bg-red-50 rounded-lg px-3 py-2">
+                        <AlertTriangle size={13} className="shrink-0" />
+                        {submitError} — شيل الأيام دي من اختيارك.
+                      </p>
+                    )}
                   </div>
                 )}
 
@@ -1769,10 +1992,10 @@ export default function MyRequestsPage() {
                 )}
 
                 {/* النموذج من تعريف الحقول المخصّصة — يحل محل الاستنتاج القديم */}
-                {selectedType && hasCustomFields && !isCustodyRequest && !isLeaveCancel && !isPayrollDeduction && (
+                {selectedType && hasCustomFields && !isCustodyRequest && !isLeaveCancel && !isMoneyRequest && (
                   <div className="grid grid-cols-2 gap-3">
-                    {customFields.filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f.key)).map((f) => (
-                      <div key={f.key} className={f.type === 'file' ? 'col-span-2' : ''}>
+                    {customFields.filter(f => f.key !== 'dates' || !isHolidayWork).filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f.key)).map((f) => (
+                      <div key={f.key} className={f.type === 'file' || fieldKindOf(f.key, f.type) === 'textarea' ? 'col-span-2' : ''}>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
                           {f.label}
                           {f.required && <span className="text-red-500 mr-1">*</span>}
@@ -1827,18 +2050,28 @@ export default function MyRequestsPage() {
                               }
                             />
                           </label>
+                        ) : fieldKindOf(f.key, f.type) === 'textarea' ? (
+                          <textarea
+                            className="input w-full min-h-[80px]"
+                            maxLength={isSalaryIncrease && f.key === 'reason' ? 500 : 1000}
+                            value={fieldValues[f.key] ?? ''}
+                            onChange={(e) => setFieldValue(f.key, e.target.value)}
+                          />
                         ) : (
                           <input
                             type={
-                              f.type === 'date'
-                                ? 'date'
-                                : f.type === 'month'
-                                ? 'month'
-                                : f.type === 'number'
+                              fieldKindOf(f.key, f.type) === 'number'
                                 ? 'number'
+                                : fieldKindOf(f.key, f.type) === 'month'
+                                ? 'month'
+                                : fieldKindOf(f.key, f.type) === 'date'
+                                ? 'date'
                                 : 'text'
                             }
+                            step={fieldKindOf(f.key, f.type) === 'number' ? payloadNumberProps(f.key).step : undefined}
+                            min={fieldKindOf(f.key, f.type) === 'number' ? payloadNumberProps(f.key).min : undefined}
                             className="input w-full disabled:bg-gray-50 disabled:text-gray-400 read-only:bg-gray-50 read-only:text-gray-500"
+                            dir={['date', 'month', 'number'].includes(fieldKindOf(f.key, f.type)) ? 'ltr' : undefined}
                             inputMode={isSalaryIncrease && f.key === 'newSalary' ? 'decimal' : undefined}
                             maxLength={isSalaryIncrease ? f.key === 'newSalary' ? 19 : f.key === 'reason' ? 500 : undefined : undefined}
                             disabled={
@@ -1861,26 +2094,36 @@ export default function MyRequestsPage() {
                   !hasCustomFields &&
                   !isCustodyRequest &&
                   !isLeaveCancel &&
-                  !isPayrollDeduction &&
+                  !isMoneyRequest &&
                   requiredFields.length > 0 && (
                     <div className="grid grid-cols-2 gap-3">
-                      {requiredFields.filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f)).map((f) => (
-                        <div key={f}>
+                      {requiredFields.filter(f => f !== 'dates' || !isHolidayWork).filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f)).map((f) => (
+                        <div key={f} className={payloadFieldKind(f) === 'textarea' ? 'col-span-2' : ''}>
                           <label className="block text-sm font-medium text-gray-700 mb-2">
                             {humanizeKey(f)}
                           </label>
-                          {renderSmartField(f) ?? (
+                          {renderSmartField(f) ?? (payloadFieldKind(f) === 'textarea' ? (
+                            <textarea
+                              className="input w-full min-h-[80px]"
+                              maxLength={1000}
+                              value={fieldValues[f] ?? ''}
+                              onChange={(e) => setFieldValue(f, e.target.value)}
+                            />
+                          ) : (
                             <input
                               type={
-                                isDateField(f) ? 'date' : isNumberField(f) ? 'number' : 'text'
+                                isDateField(f) ? 'date' : payloadFieldKind(f) === 'month' ? 'month' : isNumberField(f) ? 'number' : 'text'
                               }
+                              step={isNumberField(f) ? payloadNumberProps(f).step : undefined}
+                              min={isNumberField(f) ? payloadNumberProps(f).min : undefined}
                               className="input w-full disabled:bg-gray-50 disabled:text-gray-400 read-only:bg-gray-50 read-only:text-gray-500"
+                              dir={['date', 'month', 'number'].includes(payloadFieldKind(f)) ? 'ltr' : undefined}
                               disabled={isHalfDay && (f === 'toDate' || f === 'days')}
                               readOnly={f === 'days' && fullDayLeaveDatesSet}
                               value={fieldValues[f] ?? ''}
                               onChange={(e) => setFieldValue(f, e.target.value)}
                             />
-                          )}
+                          ))}
                           {f === 'days' && workingDaysHint}
                         </div>
                       ))}
@@ -1985,7 +2228,7 @@ export default function MyRequestsPage() {
                   </div>
                 )}
 
-                {selectedType && !isPayrollDeduction && (
+                {selectedType && !isMoneyRequest && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       تفاصيل الطلب
@@ -2001,10 +2244,10 @@ export default function MyRequestsPage() {
               </div>
               <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">
                 <button onClick={() => setShowNewModal(false)} className="btn-secondary">
-                  {isPayrollDeduction ? 'إغلاق' : 'إلغاء'}
+                  {isMoneyRequest ? 'إغلاق' : 'إلغاء'}
                 </button>
-                {/* «خصم» له زر إرساله داخل نموذجه (نقطة الخصومات لا محرك الطلبات العام) */}
-                {!isPayrollDeduction && (
+                {/* «خصم» و«مكافأة» لكل منهما زر إرساله داخل نموذجه (نقطة المال لا محرك الطلبات العام) */}
+                {!isMoneyRequest && (
                 <button
                   onClick={handleSubmit}
                   className="btn-primary flex items-center gap-2"

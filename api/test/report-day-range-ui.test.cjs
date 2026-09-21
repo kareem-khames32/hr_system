@@ -319,8 +319,12 @@ test('no month-only date filter is left in src/: every remaining month input is 
   const allowed = ['src/app/employees/bulk-update/page.tsx', 'src/components/EmployeeForm.tsx', 'src/components/PayrollSalaryHistoryEditor.tsx',
     'src/components/payroll/BonusesWorkspace.tsx', 'src/components/payroll/LoanExceptionalModal.tsx', 'src/components/payroll/PayrollAllowancesTab.tsx',
     'src/components/payroll/PayrollOverviewTabs.tsx', 'src/components/payroll/PayrollRunDefinitionPanel.tsx', 'src/components/payroll/TypedDeductionsWorkspace.tsx',
-    // «خصم» في شاشة الطلبات: نفس حقل «شهر المسير المستهدف» في نموذج الطلب لا فلتر
+    // «خصم» و«مكافأة» في شاشة الطلبات: نفس حقل «شهر المسير المستهدف» في نموذج الطلب لا فلتر
     'src/components/requests/DeductionRequestForm.tsx',
+    'src/components/requests/BonusRequestForm.tsx',
+    // نموذج الطلب العام: مفتاح شهر المسير (effectivePayrollPeriod/firstInstallmentPeriod/toPeriod) بقى
+    // حقل شهر بدل خانة نص يكتبها المستخدم — حقل إدخال في النموذج لا فلتر شاشة
+    'src/app/requests/page.tsx',
     // «مكافأة» من صف المسير: نفس حقل «شهر المسير المستهدف» في نموذج الاقتراح، جاهزًا بشهر المسير — لا فلتر
     'src/components/payroll/PayrollBonusCreateModal.tsx']
   const unexpected = monthInputs.filter(file => !allowed.includes(file))

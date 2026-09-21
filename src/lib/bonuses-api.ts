@@ -100,6 +100,40 @@ export function bonusInputError(input: BonusInput, reasonMinLength: number, type
   return null
 }
 
+// ===== وصف مدخل القيمة بلغة النوع (شاشة «الطلبات» ← كارت «مكافأة») =====
+// الوحدة وخطوتها كما ضبطها المسؤول في «أنواع المكافآت»؛ نص عربي واحد لا يحسب مالًا ولا يقرر شيئًا.
+const BONUS_STEP_WORDS: Record<string, string> = { '0.25': 'ربع', '0.5': 'نصف', '0.75': 'ثلاثة أرباع' }
+/** «0.2500» ← «0.25»؛ الفارغ أو غير الرقمي ← null. */
+const canonicalBonusStep = (value: string | null | undefined): string | null => {
+  const text = (value ?? '').trim()
+  if (!/^\d+(\.\d+)?$/.test(text) || Number(text) <= 0) return null
+  return text.includes('.') ? text.replace(/0+$/, '').replace(/\.$/, '') : text
+}
+/** تلميح حقل القيمة: «أيام من الراتب — ربع يوم (مضاعفات 0.25)» وأخواته. */
+export function bonusValueHint(type: Pick<BonusTypeView, 'calcMethod' | 'valueStep'> | null | undefined): string {
+  if (!type) return ''
+  const label = BONUS_METHOD_LABELS[type.calcMethod]
+  if (type.calcMethod === 'FIXED_AMOUNT') return `${label} — بمنزلتين عشريتين على الأكثر`
+  if (type.calcMethod === 'PERCENT_OF_BASE') return `${label} — النسبة من 0 إلى 100`
+  const step = canonicalBonusStep(type.valueStep)
+  if (!step) return label
+  const word = BONUS_STEP_WORDS[step]
+  return `${label} — ${word ? `${word} يوم` : step === '1' ? 'يوم كامل' : `الخطوة ${step} يوم`} (مضاعفات ${step})`
+}
+/** خطوة حقل الإدخال الرقمي من النوع نفسه؛ الخادم يعيد الفحص (BONUS_STEP_INVALID). */
+export const bonusValueStep = (type: Pick<BonusTypeView, 'calcMethod' | 'valueStep'> | null | undefined): string =>
+  !type ? 'any' : type.calcMethod === 'FIXED_AMOUNT' ? '0.01' : canonicalBonusStep(type.valueStep) ?? 'any'
+/** القيمة من مضاعفات خطوة النوع؟ null = صالحة أو لا خطوة لهذا النوع. */
+export function bonusStepError(type: Pick<BonusTypeView, 'calcMethod' | 'valueStep'> | null | undefined, inputValue: string): string | null {
+  if (!type || type.calcMethod !== 'DAYS_OF_SALARY') return null
+  const step = canonicalBonusStep(type.valueStep)
+  const text = (inputValue ?? '').trim()
+  if (!step || !/^\d+(\.\d{1,4})?$/.test(text)) return null
+  // حساب صحيح بأربع منازل (نفس دقة الخادم) بلا كسور ثنائية
+  const scaled = (value: string) => { const [whole, fraction = ''] = value.split('.'); return Number(whole) * 10000 + Number(`${fraction}0000`.slice(0, 4)) }
+  return scaled(text) % scaled(step) === 0 ? null : `${bonusValueHint(type)} — القيمة ${text} ليست من مضاعفات ${step}.`
+}
+
 export const fetchBonusTypes = (includeInactive = false) => apiFetch<BonusTypeView[]>(`/bonuses/types${includeInactive ? '?includeInactive=true' : ''}`)
 export const createBonusType = (input: BonusTypeInput) => post<BonusTypeView>('/bonuses/types', input)
 export const updateBonusType = (id: number, input: BonusTypeInput) => apiFetch<BonusTypeView>(`/bonuses/types/${id}`, { method: 'PATCH', body: JSON.stringify(input) })

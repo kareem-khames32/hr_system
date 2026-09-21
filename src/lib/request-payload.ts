@@ -3,8 +3,8 @@
 
 const fieldLabels: Record<string, string> = {
   date: 'التاريخ',
-  // طلب «دوام يوم عطلة»: الأيام مفصولة بفاصلة (YYYY-MM-DD)
-  dates: 'أيام العطلة (مثال: 2026-09-18، 2026-09-19)',
+  // طلب «دوام يوم عطلة»: الأيام مفصولة بفاصلة (YYYY-MM-DD) — النموذج يختارها من مدى، لا يكتبها المستخدم
+  dates: 'أيام العطلة',
   fromDate: 'من تاريخ',
   toDate: 'إلى تاريخ',
   effectiveDate: 'تاريخ السريان',
@@ -66,6 +66,64 @@ const fieldLabels: Record<string, string> = {
   attachmentUrl: 'المرفق',
   skippedHolidays: 'عطلات مستبعدة',
 }
+
+// ===== نوع ودجة الحقل — جنب التسميات عمداً عشان خريطة المعتمد وخريطة المُدخِل ما يفترقوش =====
+// «ليه أكتب أنا بإيدي؟» — المفتاح نفسه اللي المعتمد بيقرا تسميته هو اللي بيحدد ودجة الإدخال:
+// تاريخ ← حقل تاريخ، شهر مسير ← حقل شهر (زي شاشات الرواتب)، وقت ← TimeSelect المشترك،
+// رقم ← حقل رقمي بخطوة وحد أدنى، والباقي نص أو نص طويل. المُرسَل للخادم ما بيتغيرش:
+// كل ودجة بتطلع نفس النص اللي كان المستخدم بيكتبه بإيده (YYYY-MM-DD / YYYY-MM / HH:MM / رقم).
+export type RequestFieldKind = 'date' | 'month' | 'time' | 'number' | 'text' | 'textarea'
+
+const fieldKinds: Record<string, RequestFieldKind> = {
+  // تواريخ
+  date: 'date',
+  fromDate: 'date',
+  toDate: 'date',
+  effectiveDate: 'date',
+  contractStart: 'date',
+  contractEnd: 'date',
+  lastWorkingDate: 'date',
+  // شهور المسير — نفس ودجة شاشات الرواتب (YYYY-MM)
+  effectivePayrollPeriod: 'month',
+  firstInstallmentPeriod: 'month',
+  toPeriod: 'month',
+  // أوقات — TimeSelect المشترك (input type="time")
+  from: 'time',
+  to: 'time',
+  time: 'time',
+  // أرقام
+  days: 'number',
+  hours: 'number',
+  amount: 'number',
+  months: 'number',
+  newSalary: 'number',
+  increase_pct: 'number',
+  // نص طويل
+  reason: 'textarea',
+  description: 'textarea',
+  note: 'textarea',
+  // «دوام يوم عطلة»: نص أيام مفصولة بفاصلة — النموذج يبنيه من مدى «من/إلى» وشرائح الأيام
+  dates: 'text',
+}
+
+/** ودجة المفتاح؛ المفتاح غير المعروف يرجع للاستنتاج القديم (تاريخ ثم رقم ثم نص). */
+export function payloadFieldKind(key: string): RequestFieldKind {
+  const explicit = fieldKinds[key]
+  if (explicit) return explicit
+  if (key === 'date' || key.includes('Date')) return 'date'
+  if (/days|hours|amount|months|salary|pct/i.test(key) || /Id$/.test(key)) return 'number'
+  return 'text'
+}
+
+/** خطوة الحقل الرقمي وحده الأدنى — ضبط لوحة الأرقام فقط، بلا أي حساب مالي. */
+export const payloadNumberProps = (key: string): { step: string; min: string } =>
+  key === 'days' ? { step: '0.5', min: '0' }
+    : key === 'hours' ? { step: '0.25', min: '0' }
+    : key === 'months' ? { step: '1', min: '1' }
+    : key === 'amount' || key === 'newSalary' ? { step: '0.01', min: '0' }
+    : key === 'increase_pct' ? { step: '0.01', min: '0' }
+    : /Id$/.test(key) ? { step: '1', min: '1' }
+    : { step: 'any', min: '0' }
 
 const periodLabels: Record<string, string> = {
   FULL: 'يوم كامل',

@@ -61,12 +61,15 @@ test('the requests screen opens the deduction form inline — no navigation, and
   // لا انتقال: كارت الخصم لم يعد يوجّه لشاشة الخصومات ولا لخصوماتي
   assert.ok(!page.includes("if (code === 'PAYROLL_DEDUCTION')"), 'no route for the deduction card')
   assert.ok(!page.includes("'/my/deductions?tab=create'"), 'the deduction card no longer navigates away')
-  // حقول المحرك العام وزر إرساله العام لا يظهران مع الخصم (له زره داخل نموذجه)
-  assert.ok(page.includes('{selectedType && hasCustomFields && !isCustodyRequest && !isLeaveCancel && !isPayrollDeduction && ('))
-  assert.ok(page.includes('{selectedType && !isPayrollDeduction && (\n                  <div>\n                    <label className="block text-sm font-medium text-gray-700 mb-2">\n                      تفاصيل الطلب'))
-  assert.ok(page.includes('{!isPayrollDeduction && (\n                <button\n                  onClick={handleSubmit}'))
-  // كارت «مكافأة» باقٍ كما هو على مساحته
-  assert.ok(page.includes("if (code === 'PAYROLL_BONUS') return can('bonuses.manage') ? '/payroll/bonuses?tab=create' : '/my/bonuses?tab=create'"))
+  // حقول المحرك العام وزر إرساله العام لا يظهران مع الخصم ولا مع المكافأة (لكل منهما زره داخل نموذجه)
+  assert.ok(page.includes('const isPayrollBonus = selectedTypeDef?.code === \'PAYROLL_BONUS\''))
+  assert.ok(page.includes('const isMoneyRequest = isPayrollDeduction || isPayrollBonus'))
+  assert.ok(page.includes('{selectedType && hasCustomFields && !isCustodyRequest && !isLeaveCancel && !isMoneyRequest && ('))
+  assert.ok(page.includes('{selectedType && !isMoneyRequest && (\n                  <div>\n                    <label className="block text-sm font-medium text-gray-700 mb-2">\n                      تفاصيل الطلب'))
+  assert.ok(page.includes('{!isMoneyRequest && (\n                <button\n                  onClick={handleSubmit}'))
+  // كارت «مكافأة» بقى زيه: نموذج داخل الشاشة لا انتقال (bonus-request-ui.test.cjs)
+  assert.ok(page.includes('{selectedType && isPayrollBonus && <BonusRequestForm onSubmitted={load} />}'))
+  assert.ok(!page.includes("if (code === 'PAYROLL_BONUS')"), 'no route for the bonus card either')
 })
 
 test('the form is bound to the deduction catalog: allowed types, the type value unit, target month, reason counter, attachment, instalments, and a live amount preview', () => {
