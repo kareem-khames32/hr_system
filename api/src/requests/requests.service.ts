@@ -1224,11 +1224,12 @@ export class RequestsService {
 
       // عضو المجموعة الذي لم يتصرف بعد ويطابق المستخدم.
       // مخرج الموارد البشرية (C1) لدفع شغل الآخرين وحده: لا يعتمد به أحد طلبه
-      // هو، ولا طلباً أنشأه بنفسه نيابةً — فالمال وتغيير العقد يلزمهما شخص ثانٍ
-      const hrUnblock =
-        req.requesterId !== user.employeeId && req.createdByUserId !== user.sub
+      // هو، ولا طلباً أنشأه بنفسه نيابةً — فالمال وتغيير العقد يلزمهما شخص ثانٍ.
+      const selfRequest =
+        req.requesterId === user.employeeId || req.createdByUserId === user.sub
+      const hrUnblock = !selfRequest
       const mine = group.find(
-        (s) => !s.actedAt && this.resolver.satisfies(user, s, { hrUnblock })
+        (s) => !s.actedAt && this.resolver.satisfies(user, s, { hrUnblock, selfRequest })
       )
       if (!mine) {
         throw new ForbiddenException(
@@ -1915,16 +1916,15 @@ export class RequestsService {
       : new Set<number>()
     const pending = candidates.filter((req) => {
       const resolved = this.parseSteps(req.resolvedSteps)
-      const hrUnblock =
-        stuck.has(req.id) &&
-        req.requesterId !== user.employeeId &&
-        req.createdByUserId !== user.sub
+      const selfRequest =
+        req.requesterId === user.employeeId || req.createdByUserId === user.sub
+      const hrUnblock = stuck.has(req.id) && !selfRequest
       // المجموعة الحالية: أي عضو لم يتصرف ويطابق المستخدم
       return resolved.some(
         (s) =>
           s.stepOrder === req.currentStep &&
           !s.actedAt &&
-          this.resolver.satisfies(user, s, { hrUnblock })
+          this.resolver.satisfies(user, s, { hrUnblock, selfRequest })
       )
     })
     // اسم مقدّم الطلب ضمن الحمولة — المعتمد يعرضه بلا حاجة لصلاحية employees.view
@@ -2106,7 +2106,12 @@ export class RequestsService {
       }
       if (
         steps.some(
-          (s) => s.stepOrder === act.step && !s.actedAt && this.resolver.satisfies(user, s)
+          (s) =>
+            s.stepOrder === act.step &&
+            !s.actedAt &&
+            this.resolver.satisfies(user, s, {
+              selfRequest: request.createdByUserId === user.sub,
+            })
         )
       ) {
         out.push({ act, request })

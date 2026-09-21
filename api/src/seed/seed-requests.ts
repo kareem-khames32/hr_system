@@ -241,7 +241,9 @@ export async function ensureLeaveBalance(
         balances.create({
           employeeId,
           balanceType,
-          entitled: balanceType === 'annual' ? entitled : 180,
+          // الاستحقاق من السياسة فعلاً: كان بيكتب undefined للسنوي و180 ثابتة للمرضي
+          // فمفتاح leave.sick_entitled كان ميت والقيمة المحفوظة غلط (موجة ب)
+          entitled: balanceType === 'annual' ? annual : sick,
           taken: 0,
           period,
         })

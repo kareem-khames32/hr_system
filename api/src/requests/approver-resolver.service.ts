@@ -121,7 +121,16 @@ export class ApproverResolver {
   // الدور الأساسي أو صلاحية إضافية ممنوحة من شاشة المستخدمين
   // hrUnblock: true = يُسمح بمخرج الموارد البشرية في هذا النداء (خطوة واقفة،
   // وطلب ليس لصاحب الفعل) — والافتراضي بلا مخرج
-  satisfies(user: JwtPayload, step: ResolvedStep, options: { hrUnblock?: boolean } = {}): boolean {
+  satisfies(
+    user: JwtPayload,
+    step: ResolvedStep,
+    options: { hrUnblock?: boolean; selfRequest?: boolean } = {}
+  ): boolean {
+    // تدقيق ما قبل التشغيل (موجة ب): الأدوار الوظيفية (hr/مالية/IT/عهدة/رواتب/تنفيذي)
+    // وsuper_admin كانت بتطابق بالدور وحده، فصاحب الطلب اللي بيحمل دور الخطوة كان
+    // يعتمد طلبه بنفسه والأثر ينزل. الأدوار الهيكلية كانت محميّة وقت الحل، دي بقت
+    // محميّة هنا: مين قدّم الطلب أو أنشأه ما يتصرفش في أي خطوة منه.
+    if (options.selfRequest === true) return false
     // super_admin يتصرف في أي خطوة — يفكّ أي انسداد
     if (user.role === 'super_admin') return true
     if (options.hrUnblock === true && this.hasHrOverride(user)) return true
