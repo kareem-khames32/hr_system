@@ -91,7 +91,11 @@ export class EmployeesController {
   async create(@Body() dto: CreateEmployeeDto, @CurrentUser() user: JwtPayload) {
     // مدير الفرع يضيف داخل فرعه فقط
     const scope = branchScopeOf(user)
-    if (scope != null) dto.branchId = scope
+    if (scope != null) {
+      // فرع مختلف مكتوب صراحةً: رفض واضح بدل ما يتكتب على فرع المستخدم في السكوت ويتأكد له فرع مااختارهوش
+      if (dto.branchId != null && Number(dto.branchId) !== scope) throw new ForbiddenException('مش مسموح تضيف موظف على فرع غير فرعك')
+      dto.branchId = scope
+    }
     return projectEmployee(await this.employees.create(dto, user.sub, scope), user)
   }
 

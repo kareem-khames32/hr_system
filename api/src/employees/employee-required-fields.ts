@@ -45,8 +45,13 @@ export function nationalIdIssue(nationalId: unknown, nationality: unknown): stri
   }
 }
 
-const validDate = (value: string) => /^\d{4}-\d{2}-\d{2}$/.test(value)
-  && new Date(`${value}T12:00:00Z`).toISOString().slice(0, 10) === value
+// تاريخ بالشكل ده وموجود فعلًا في التقويم. 2026-13-01 بيعدّي الشكل لكن Date بترجع Invalid،
+// و.toISOString() ساعتها بترمي RangeError — يبقى 500 بدل رسالة عربية، فبنفحص القيمة الأول.
+const validDate = (value: string) => {
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const time = Date.parse(`${value}T12:00:00Z`)
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === value
+}
 
 export function birthDateIssue(birthDate: unknown, today: string): string | null {
   const value = String(birthDate ?? '').trim()
@@ -57,6 +62,15 @@ export function birthDateIssue(birthDate: unknown, today: string): string | null
   return null
 }
 
+/** تاريخ التعيين: تاريخ حقيقي، مش قبل 1900 (المُرحّلين عندهم 1900-01-01)، ومش أبعد من سنة قدّام — غلطة سنة بتخلق موظف مايدخلش أي مسير. */
+export function joinDateIssue(joinDate: unknown, today: string): string | null {
+  const value = String(joinDate ?? '').trim()
+  if (!value) return null
+  if (!validDate(value) || value < '1900-01-01') return 'تاريخ التعيين غير صحيح'
+  const limit = `${Number(today.slice(0, 4)) + 1}${today.slice(4)}`
+  if (value > limit) return 'تاريخ التعيين أبعد من سنة من النهارده — راجع السنة'
+  return null
+}
 export function arabicFullNameIssue(fullName: unknown): string | null {
   const value = String(fullName ?? '').trim()
   if (!value) return null
@@ -114,7 +128,7 @@ export function employeeFieldFormatIssue(key: EmployeeRequiredKey, values: Emplo
     case 'nationalId': return nationalIdIssue(value, values.nationality)
     case 'phone': return EMPLOYEE_PHONE_PATTERN.test(String(value).trim()) ? null : 'رقم الجوال غير صالح'
     case 'fingerprintCode': return String(value).trim().length > 20 ? 'رقم البصمة لا يتجاوز 20 خانة' : null
-    case 'joinDate': return validDate(String(value)) ? null : 'تاريخ التعيين غير صحيح'
+    case 'joinDate': return joinDateIssue(value, today)
     case 'basicSalary': {
       const amount = Number(value)
       return Number.isFinite(amount) && amount > 0 ? null : 'الراتب الأساسي لازم يكون رقم أكبر من صفر'

@@ -101,3 +101,25 @@ test('الواجهة: نموذج الموظف يستخدم نفس القاعدة
   // «موقوف» المعروضة مشتقة من التواريخ: الحالة لا تُرسل في التعديل إلا لو اتغيرت
   assert.match(form, /if \(mode === 'add' \|\| form\.status !== initial\?\.status\) payload\.status = form\.status/)
 })
+
+// تدقيق ما قبل التشغيل (موجة أ): غلطة سنة في تاريخ التعيين كانت بتعدي وتخلق موظف مايدخلش أي مسير،
+// وفرع مكتوب صراحةً كان بيتكتب عليه فرع المستخدم في السكوت.
+test('تاريخ التعيين: سقف سنة قدّام، والمُرحّلون بـ1900-01-01 يعدّوا', () => {
+  const today = '2026-09-21'
+  assert.equal(rules.joinDateIssue('2026-09-21', today), null)
+  assert.equal(rules.joinDateIssue('1900-01-01', today), null, 'المُرحّلون بتاريخ 1900-01-01 مايتمنعوش')
+  assert.equal(rules.joinDateIssue('2027-09-21', today), null, 'سنة واحدة قدّام مقبولة')
+  assert.match(String(rules.joinDateIssue('2126-01-01', today)), /أبعد من سنة/)
+  assert.match(String(rules.joinDateIssue('2027-09-22', today)), /أبعد من سنة/)
+  assert.match(String(rules.joinDateIssue('1899-12-31', today)), /غير صحيح/)
+  assert.match(String(rules.joinDateIssue('2026-13-01', today)), /غير صحيح/)
+  assert.notEqual(rules.employeeFieldFormatIssue('joinDate', { joinDate: '2126-01-01' }, today), null, 'القاعدة المشتركة بتستدعي نفس الفحص')
+  assert.equal(rules.employeeFieldFormatIssue('joinDate', { joinDate: '2026-01-01' }, today), null)
+})
+
+test('إضافة موظف: فرع غير فرع المستخدم يُرفض صراحةً بدل إعادة كتابته', () => {
+  const controller = fs.readFileSync(path.join(__dirname, '../src/employees/employees.controller.ts'), 'utf8').split(String.fromCharCode(13)).join('')
+  assert.ok(controller.includes("throw new ForbiddenException('مش مسموح تضيف موظف على فرع غير فرعك')"))
+  assert.ok(controller.includes('Number(dto.branchId) !== scope'))
+  assert.ok(controller.includes('dto.branchId = scope'), 'الفرع لسه بيتحدد للمستخدم المقيّد لما مايبعتش فرع')
+})
