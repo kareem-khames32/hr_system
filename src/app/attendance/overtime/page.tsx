@@ -36,6 +36,7 @@ import {
   deleteOvertimePeriod,
   can,
   getCurrentUser,
+  lockedBranchIdOf,
   type ApiOvertimeEntry,
   type ApiDepartment,
   type ApiBranch,
@@ -666,7 +667,7 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
 
   useEffect(() => {
     const user = getCurrentUser()
-    setLockedBranchId(user && user.role !== 'super_admin' && user.branchId ? user.branchId : null)
+    setLockedBranchId(lockedBranchIdOf(user))
     reload()
     fetchBranches().then(setBranches).catch(() => setBranches([]))
     // الإعداد العام محتاج صلاحية الإعدادات — لو مش متاح بنكتفي بالإشارة لمكانه

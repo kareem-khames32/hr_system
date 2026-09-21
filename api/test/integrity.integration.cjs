@@ -256,6 +256,11 @@ test('direct custody writes enforce branch, typed patch, pending reservation and
   const returned=await request(admin,'POST',`/custody/${assigned.body.id}/return`,{condition:'Checked'})
   assert.equal(returned.status,201);assert.equal(returned.body.status,'RETURNED')
   assert.equal(assigned.body.assignedBy,null,'unlinked user does not write users.id into employees.id field')
+  // فرع الأصل (تدقيق الأدوار D3): الأصل اتختم بفرع موظفه لما مدير النظام سلّمه لموظف الفرع التاني، فأمين عهدة فرعنا مايعرفوش
+  // (نفس رد الأصل الغايب) لحد ما حساب كل الفروع يرجّعه لفرعنا
+  assert.equal((await entity('requests/entities/custody.entities','Asset').findOneByOrFail({id:a.body.id})).branchId,otherBranch.id)
+  assert.deepEqual([(await request(operator,'POST','/custody/assign',{assetId:a.body.id,employeeId:emp.id})).status,(await request(operator,'PATCH',`/assets/${a.body.id}`,{name:'foreign'})).status],[400,404])
+  assert.equal((await request(admin,'PATCH',`/assets/${a.body.id}`,{branchId:branch.id})).body.branchId,branch.id)
   const linked=await request(operator,'POST','/custody/assign',{assetId:a.body.id,employeeId:emp.id})
   assert.equal(linked.status,201,JSON.stringify(linked.body))
   assert.equal(linked.body.assignedBy,emp.id)
@@ -449,7 +454,8 @@ test('NAM-14 bare employee readers cannot retrieve finance through list detail p
 
 test('NAM-14 structured changes mask bank audit at rest, preserve actors and legacy API contracts, and roll back atomically',async()=>{
   // مكونات الأجر الستة صريحة (صفر) كملف موظف حقيقي؛ أمر الأجر المنظم يرسل كل مكون نصًا دقيقًا
-  const target=await employeeFixture({iban:'SA0311111111111111111111',basicSalary:6000,phoneAllowance:0,workNatureAllowance:0,contractType:'fixed_term',contractStart:'2025-01-01',contractEnd:'2025-12-31'})
+  // bankName: تعديل الآيبان على ملف «تحويل» بلا اسم بنك بيترفض بفحص طريقة الصرف (employeePayMethodIssue) قبل فحص الأجر — الملف هنا كامل
+  const target=await employeeFixture({iban:'SA0311111111111111111111',bankName:'بنك الاختبار',basicSalary:6000,phoneAllowance:0,workNatureAllowance:0,contractType:'fixed_term',contractStart:'2025-01-01',contractEnd:'2025-12-31'})
   const hist=entity('requests/entities/employment.entities','EmployeeStatusHistory')
   const nextIban='SA0322222222222222222222'
   // عقد الخطوة 13: الأجر لا يُعدل بمفاتيح الملف العامة؛ الطلب القديم يُرفض ذريًا فلا يمس الحساب البنكي ولا السجل

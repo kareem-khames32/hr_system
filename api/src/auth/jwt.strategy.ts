@@ -27,12 +27,18 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   async validate(payload: JwtPayload) {
     const user = await this.users.findOne({
       where: { id: payload.sub },
-      select: ['id', 'isActive', 'tokenVersion'],
+      select: ['id', 'isActive', 'tokenVersion', 'scopeAllBranches'],
     })
     if (!user || !user.isActive) {
       throw new UnauthorizedException('الحساب معطّل')
     }
     if ((user.tokenVersion ?? 0) !== (payload.tokenVersion ?? 0)) {
+      throw new UnauthorizedException('انتهت صلاحية الجلسة — سجّل الدخول من جديد')
+    }
+    // «نطاقه: كل الفروع» داخل التوكن لازم يطابق القاعدة: الشاشة بتزوّد tokenVersion مع أي تغيير، وده حزام تاني
+    // لو العمود اتقفل من برّه الشاشة (SQL مباشر) — توكن لسه شايل «كل الفروع» لحساب اتقفل نطاقه يموت هنا.
+    // العكس (العمود اتفتح والتوكن قديم) بيفضل مقفول على الفرع لحد الدخول الجاي: فشل مقفول.
+    if (payload.scopeAllBranches === true && user.scopeAllBranches !== true) {
       throw new UnauthorizedException('انتهت صلاحية الجلسة — سجّل الدخول من جديد')
     }
     return payload

@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import { AlertTriangle, ArrowRight, CalendarRange, Download, Info, Printer, RefreshCw } from 'lucide-react'
-import { fetchBranches, fetchCatalog, fetchDepartments, getCurrentUser, type ApiBranch, type ApiDepartment } from '@/lib/api'
+import { fetchBranches, fetchCatalog, fetchDepartments, getCurrentUser, isCompanyWideUser, type ApiBranch, type ApiDepartment } from '@/lib/api'
 import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { RUN_STATUS_LABELS, type FinancialFilters, type FinancialReportHeader } from './api'
 
@@ -90,7 +90,7 @@ export function FinancialReportShell(props: ShellProps) {
 
   useEffect(() => {
     const user = getCurrentUser()
-    setCompanyWide(user?.role === 'super_admin')
+    setCompanyWide(isCompanyWideUser(user))
     setMyBranchId(user?.branchId ?? null)
     fetchBranches().then(setBranches).catch(() => setBranches([]))
     fetchDepartments().then(setDepartments).catch(() => setDepartments([]))

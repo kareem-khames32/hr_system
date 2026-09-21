@@ -35,6 +35,13 @@ export class Asset {
   // مين ماسك الأصل دلوقتي
   @Column({ nullable: true })
   currentHolderId: number
+
+  // فرع الأصل (ترحيل 20260922_065 — تدقيق الأدوار D3: السجل كان بلا فرع فأمين عهدة أي فرع بيعدّل أصول كل الشركة).
+  // الأصل الجديد بيتختم بفرع اللي أضافه، وعند تنشيط العهدة بياخد فرع حامله. NULL = أصل قديم لسه مالوش فرع:
+  // حساب الفرع يشوفه قراءة بس، وحساب نطاقه كل الفروع هو اللي يعدّله ويحدد فرعه (assets/asset-branch.ts).
+  @Index()
+  @Column({ type: 'int', nullable: true })
+  branchId: number | null
 }
 
 // الدورة: PENDING_ACK (بانتظار تأكيد الموظف) → PENDING_MANAGER_CONFIRM

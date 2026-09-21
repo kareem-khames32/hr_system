@@ -29,6 +29,8 @@ function columnsOf(report: PayrollRegisterReport, hideEmpty: boolean): Column[] 
     { key: 'net', label: 'الصافي', cell: (row) => row.net, total: () => t.net, money: true, tone: 'font-bold' },
     { key: 'bank', label: 'بنك', cell: (row) => row.bank, total: () => t.bank, money: true },
     { key: 'cash', label: 'نقدي', cell: (row) => row.cash, total: () => t.cash, money: true },
+    // راتب آخر شهر للمنتهية خدمته بيتصرف مع تصفيته: برّه البنك والنقدي زي كشف البنوك بالظبط، فالصافي = بنك + نقدي + مع التصفية
+    ...(keep(t.settlement) ? [{ key: 'settlement', label: 'مصروف مع التصفية', cell: (row: RegisterRow) => row.settlement, total: () => t.settlement, money: true }] : []),
   ]
 }
 
@@ -64,7 +66,7 @@ export default function PayrollRegisterPage() {
       onRefresh={reload}
       onExport={exportCsv}
       exportDisabled={!report || report.rows.length === 0}
-      note="البنك والنقدي بطريقة الصرف الحالية في ملف الموظف."
+      note="البنك والنقدي بطريقة الصرف الحالية في ملف الموظف، وبنفس أرقام كشف البنوك. راتب آخر شهر للمنتهية خدمته بيتصرف مع تصفيته: صافيه في الكشف، وبرّه البنك والنقدي، ومذكور في «مصروف مع التصفية»."
     >
       {report && (
         <>
@@ -78,6 +80,12 @@ export default function PayrollRegisterPage() {
                 بنك: <span dir="ltr">{formatMoney(report.totals.bank)}</span>
                 <br />
                 نقدي: <span dir="ltr">{formatMoney(report.totals.cash)}</span>
+                {nonZero(report.totals.settlement) && (
+                  <>
+                    <br />
+                    مع التصفية: <span dir="ltr">{formatMoney(report.totals.settlement)}</span>
+                  </>
+                )}
               </span>
             } />
           </div>

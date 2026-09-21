@@ -23,7 +23,18 @@ export interface CurrentUser {
   permissions?: string[]
   // دخل بكلمة مؤقتة من المدير — لازم يغيّرها قبل ما يستخدم النظام (/login/change-password)
   mustChangePassword?: boolean
+  // «نطاقه: كل الفروع» — مدير النظام فتحه للحساب ده (الخادم هو اللي بيفرضه؛ هنا لإظهار الأزرار بس)
+  scopeAllBranches?: boolean
 }
+
+// مرآة branchScopeOf في الخادم: الحساب «على مستوى الشركة» = مدير النظام أو حساب فتح له مدير النظام «كل الفروع».
+// الشاشات اللي بتخفي أزرار «إعداد لكل الشركة» أو بتقفل منتقي الفرع تسأل هنا بدل ما تقارن الدور بإيدها.
+export const isCompanyWideUser = (user: CurrentUser | null | undefined): boolean =>
+  !!user && (user.role === 'super_admin' || user.scopeAllBranches === true)
+
+// الفرع اللي الحساب مقفول عليه في الواجهة — null = مش مقفول (على مستوى الشركة، أو حساب بلا فرع والخادم بيرجّع له نطاق فاضي)
+export const lockedBranchIdOf = (user: CurrentUser | null | undefined): number | null =>
+  user && !isCompanyWideUser(user) && user.branchId ? user.branchId : null
 
 // صفحة «غيّر كلمة المرور» — تحت /login فبتفتح من غير إطار النظام
 export const CHANGE_PASSWORD_PATH = '/login/change-password'
@@ -517,6 +528,8 @@ export interface ApiUser {
   mustChangePassword?: boolean; passwordChangedAt?: string | null
   // «مستخدم منقول — محتاج باسورد»: جه من النظام القديم بكلمة غير قابلة للاستخدام ولسه محدش عيّن له كلمة
   legacyNeedsPassword?: boolean
+  // «نطاقه: كل الفروع» (false = مقفول على فرعه) — يفتحه ويقفله مدير النظام فقط
+  scopeAllBranches?: boolean
 }
 export interface ApiDashboardStats {
   role: string
@@ -906,9 +919,9 @@ export const fetchBankSheet = (runId: number) => get<ApiBankSheet>(`/payroll/run
 
 // ===== المستخدمون والإعدادات =====
 export const fetchUsers = () => get<ApiUser[]>('/users')
-export const createUser = (u: { email: string; password: string; displayName: string; role: string; branchId?: number; employeeId?: number; permissions?: string[] }) =>
+export const createUser = (u: { email: string; password: string; displayName: string; role: string; branchId?: number; employeeId?: number; permissions?: string[]; scopeAllBranches?: boolean }) =>
   post<ApiUser>('/users', u)
-export const updateUser = (id: number, u: Partial<{ role: string; isActive: boolean; password: string; mustChangePassword: boolean; branchId: number | null; employeeId: number | null; permissions: string[] }>) =>
+export const updateUser = (id: number, u: Partial<{ role: string; isActive: boolean; password: string; mustChangePassword: boolean; branchId: number | null; employeeId: number | null; permissions: string[]; scopeAllBranches: boolean }>) =>
   patch<ApiUser>(`/users/${id}`, u)
 // كلمة مرور مؤقتة واحدة لكذا حساب (افتراضيًا: لازم يغيّروها أول دخول)
 export const setTemporaryPassword = (userIds: number[], password: string, mustChangePassword = true) =>
@@ -1007,6 +1020,11 @@ export interface ApiAsset {
   // قيمة الأصل (اختيارية) — تُستخدم خصماً عند الفقد/التلف في التصفية
   value?: number | null
   status?: 'AVAILABLE' | 'ASSIGNED' | 'RETIRED'
+  // فرع الأصل: الجديد بيتختم بفرع اللي أضافه. null = أصل قديم لسه مالوش فرع — حساب الفرع يشوفه قراءة بس (readOnly)،
+  // وحساب نطاقه كل الفروع هو اللي يحدد فرعه
+  branchId?: number | null
+  branchName?: string | null
+  readOnly?: boolean
 }
 export interface ApiCustody {
   id: number; requestId?: number; assetId: number; employeeId: number
@@ -1018,6 +1036,9 @@ export interface ApiCustody {
 export const fetchAssets = () => get<ApiAsset[]>('/assets')
 export const createAsset = (a: Partial<ApiAsset>) => post<ApiAsset>('/assets', a)
 export const updateAsset = (id: number, a: Partial<ApiAsset>) => patch<ApiAsset>(`/assets/${id}`, a)
+// تحديد فرع دفعة أصول — لحساب نطاقه كل الفروع بس. اللي في عهدة موظف فرع تاني بيتخطّى بسببه
+export const setAssetsBranch = (assetIds: number[], branchId: number) =>
+  post<{ branchId: number; updated: number[]; unchanged: number[]; skipped: Array<{ id: number; reason: string }> }>('/assets/branch', { assetIds, branchId })
 // الأصول المتاحة — لنموذج «طلب عهدة» (خدمة ذاتية)
 export const fetchAvailableAssets = () =>
   get<Array<{ id: number; name: string; category: string; serialNumber?: string }>>('/assets/available')
@@ -1259,23 +1280,49 @@ export const updateRequestType = (id: number, d: { isActive?: boolean; approvalC
   patch<ApiRequestType>(`/settings/request-types/${id}`, d)
 
 // ===== الصلاحيات الدقيقة والأدوار =====
-export interface ApiPermission { key: string; labelAr: string; group: string }
+export interface ApiPermission {
+  key: string; labelAr: string
+  // سطر بيقول الصلاحية بتفتح إيه فعلًا، والوحدة اللي تحتها في الشاشة
+  description: string; group: string; groupLabelAr: string
+  // منحها (لدور أو لمستخدم) متاح لمدير النظام فقط
+  superAdminOnly: boolean
+  // الأدوار المفعّلة اللي شايلاها — فاضية = صلاحية «يتيمة» مايحملهاش أي دور (مدير النظام شايل الكل ضمنيًا)
+  carriedBy: Array<{ code: string; nameAr: string }>
+}
 export interface ApiRole {
   id: number; code: string; nameAr: string
   permissions: string[]; isSystem: boolean; isActive: boolean
   // عدد مستخدمي الدور بنطاق فرع المنفّذ (من GET /roles فقط)
   userCount?: number
+  // فرق الدور عن حزمته المعتمدة في النظام: extra زيادة عنها، missing ناقص منها — null = دور مخصص مالوش حزمة معتمدة
+  presetDiff?: { extra: string[]; missing: string[] } | null
 }
-export const fetchPermissionsRegistry = () => get<ApiPermission[]>('/permissions-registry')
+// الصلاحيات النهائية لمستخدم بمكوّناتها: النهائي = حزمة الدور ∪ المنح − السحب
+export interface ApiUserPermissions {
+  role: string; grants: string[]; revokes: string[]; effective: string[]
+  // حزمة الدور زي ما بتتحسب فعلًا (دور معطَّل = فاضية)، ومنح العمود القديم للحساب
+  rolePermissions: string[]; roleActive: boolean; legacyGrants: string[]
+  scopeAllBranches: boolean
+}
+// الحقول الجديدة (الشرح والوحدة ومين شايلها) بقيم آمنة لو الخادم نسخة أقدم — الشاشتان بتبحثان وتجمّعان بيها
+export const fetchPermissionsRegistry = async (): Promise<ApiPermission[]> =>
+  (await get<Array<Partial<ApiPermission> & Pick<ApiPermission, 'key' | 'labelAr'>>>('/permissions-registry')).map((p) => ({
+    ...p,
+    description: p.description ?? '',
+    group: p.group ?? 'other',
+    groupLabelAr: p.groupLabelAr ?? p.group ?? 'أخرى',
+    superAdminOnly: p.superAdminOnly === true,
+    carriedBy: p.carriedBy ?? [],
+  }))
 export const fetchRolesFull = () => get<ApiRole[]>('/roles')
 export const createRole = (r: { code: string; nameAr: string; permissions: string[] }) =>
   post<ApiRole>('/roles', r)
 export const updateRole = (id: number, r: { nameAr?: string; permissions?: string[]; isActive?: boolean }) =>
   patch<ApiRole>(`/roles/${id}`, r)
 export const fetchUserPermissions = (userId: number) =>
-  get<{ role: string; grants: string[]; revokes: string[]; effective: string[] }>(`/users/${userId}/permissions`)
+  get<ApiUserPermissions>(`/users/${userId}/permissions`)
 export const setUserPermissions = (userId: number, grants: string[], revokes: string[]) =>
-  apiFetch<{ role: string; grants: string[]; revokes: string[]; effective: string[] }>(
+  apiFetch<ApiUserPermissions>(
     `/users/${userId}/permissions`, { method: 'PUT', body: JSON.stringify({ grants, revokes }) })
 
 // هل المستخدم الحالي يملك الصلاحية؟ (للإخفاء في الواجهة — الفرض الحقيقي في الباك)

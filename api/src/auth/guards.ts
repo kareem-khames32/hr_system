@@ -99,16 +99,20 @@ export const userHasPerm = (user: JwtPayload, perm: string): boolean =>
   (user.permissions ?? []).includes(perm)
 
 // نطاق الفرع (القاعدة الأساسية للعزل):
-// super_admin يرى كل الفروع — أي دور آخر مقفول على فرعه
+// super_admin يرى كل الفروع — أي دور آخر مقفول على فرعه، إلا حساب مدير النظام فتح له «نطاقه: كل الفروع»
+// (users.scopeAllBranches، قرار المالك 22 سبتمبر). المفتاح راكب في التوكن، وأي تغيير له بيزوّد tokenVersion
+// فالتوكن القديم يموت فورًا. النطاق مش صلاحية: الحساب ده لسه محتاج الصلاحية المحددة لكل فعل (RolesGuard ماتغيّرش).
+// المقارنة `=== true` حرفية: أي قيمة تانية في التوكن (نص، رقم، undefined) = مقفول على فرعه.
 export const branchScopeOf = (user: JwtPayload): number | null =>
-  user.role === 'super_admin'
+  user.role === 'super_admin' || user.scopeAllBranches === true
     ? null
     : Number.isInteger(user.branchId) && Number(user.branchId) > 0
       ? Number(user.branchId)
       : -1 // Unassigned legacy accounts have an empty scope, never global access.
 
 // عزل الفروع: إعداد يسري على كل الشركة (سياسات النظام، سقوف السلف، شرائح التأخير) لا يعدّله حساب مقفول على فرع،
-// عشان تعديله بيغيّر الفروع التانية. يشوفه عادي، والتعديل لحساب على مستوى الشركة.
+// عشان تعديله بيغيّر الفروع التانية. يشوفه عادي، والتعديل لحساب على مستوى الشركة (مدير النظام، أو حساب نطاقه
+// «كل الفروع» — والصلاحية نفسها بيفرضها @Perm على المسار قبل الوصول هنا).
 export const assertCompanyWideWrite = (user: JwtPayload): void => {
   if (branchScopeOf(user) !== null) throw new ForbiddenException('الإعداد ده لكل الشركة، ومش بيتعدل من حساب فرع — يعدّله حساب على مستوى الشركة')
 }

@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ArrowLeftRight, Ban, Calendar, CheckCircle, Plus, Search, X } from 'lucide-react'
-import { can, getCurrentUser, type ApiBranch, type ApiDepartment, type ApiEmployee, type ApiTeam } from '@/lib/api'
+import { can, getCurrentUser, lockedBranchIdOf, type ApiBranch, type ApiDepartment, type ApiEmployee, type ApiTeam } from '@/lib/api'
 import EmptyState from '@/components/EmptyState'
 import { PayrollMonthLinesTable } from '@/components/payroll/PayrollMonthLinesTable'
 import { PayrollEmployeeFilters, payrollReasonLabel } from '@/components/payroll/PayrollEmployeeFilters'
@@ -548,8 +548,8 @@ function WaiverForm({ period, branches, departments, teams, employees, onClose, 
   onClose: () => void; onSaved: (result: DeductionWaiverCreated) => void
 }) {
   const lockedBranchId = useMemo(() => {
-    const user = getCurrentUser()
-    return user && user.role !== 'super_admin' && user.branchId ? user.branchId : null
+    // حساب «كل الفروع» (مدير النظام أو من فتح له نطاق الشركة) مش مقفول على فرع — نفس مرآة branchScopeOf في الخادم
+    return lockedBranchIdOf(getCurrentUser())
   }, [])
   const [kind, setKind] = useState<DeductionKind>('LATENESS')
   const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(lockedBranchId))

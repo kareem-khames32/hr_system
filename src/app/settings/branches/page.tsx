@@ -32,6 +32,7 @@ import {
   updateBranch,
   can,
   getCurrentUser,
+  isCompanyWideUser,
 } from '@/lib/api'
 import { buildCalendarChange, calendarScopeWritable, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
 import { CalendarChangeFields, CalendarContextSummary, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
@@ -102,7 +103,7 @@ export default function BranchesPage() {
   const [activeMenu, setActiveMenu] = useState<number | null>(null)
 
   const [formData, setFormData] = useState({ ...emptyForm })
-  const companyWide = getCurrentUser()?.role === 'super_admin'
+  const companyWide = isCompanyWideUser(getCurrentUser())
   const calendar = useCalendarContext('BRANCH', editingBranch?.id ?? 0, showModal && !!editingBranch)
   useEffect(() => {
     if (!calendar.context) return

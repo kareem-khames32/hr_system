@@ -10,6 +10,7 @@ import {
   getCurrentUser,
   type CurrentUser,
 } from '@/lib/api'
+import { fetchMyPayrollApprovalsCount } from '@/lib/payroll-approval-chain-api'
 import {
   LayoutDashboard,
   Users,
@@ -136,7 +137,17 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'التأمينات', href: '/payroll/gosi' },
       { label: 'تقرير الرواتب', href: '/payroll/reports' },
       { label: 'كشف البنوك', href: '/payroll/bank-sheet' },
+      // قرار المالك (22 سبتمبر): المالك بيرتب سلسلة اعتماد المسير بنفسه (سلسلة الشركة + سلسلة خاصة بمسير دائم)
+      { label: 'سلسلة اعتماد المسير', href: '/payroll/approval-chain', perm: 'payroll.chain_manage' },
     ],
+  },
+  // صرف المسير موظف بموظف: عنصر مستقل لأن موظف المالية حامل payroll.disburse مابيحملش payroll.view فمابيشوفش مجموعة «الرواتب»
+  {
+    id: 'payroll-disbursement',
+    label: 'صرف الرواتب',
+    icon: <Wallet size={20} />,
+    href: '/payroll/disbursement',
+    perm: 'payroll.disburse',
   },
   {
     id: 'recruitment',
@@ -220,6 +231,13 @@ const roleLabels: Record<string, string> = {
   hr_manager: 'مدير الموارد البشرية',
   branch_manager: 'مدير فرع',
   employee: 'موظف',
+  // الأدوار التشغيلية (حزمها في api/src/auth/permissions.ts) — من غيرها كان بيظهر الكود الإنجليزي تحت اسم المستخدم
+  payroll_manager: 'مسؤول الرواتب',
+  payroll_disburser: 'مسؤول صرف الرواتب',
+  asset_officer: 'مسؤول الأصول',
+  hr_officer: 'مسؤول موارد بشرية',
+  data_entry: 'مدخل بيانات',
+  read_only: 'قراءة فقط',
 }
 
 // المجموعة المفتوحة تُحفظ (تفضيل عرض فقط) — مجموعة واحدة مفتوحة في كل مرة حتى تبقى القائمة قصيرة
@@ -271,6 +289,8 @@ export default function Sidebar() {
   const [inboxError, setInboxError] = useState(false)
   const [inboxRevision, setInboxRevision] = useState(0)
   const [inboxCount, setInboxCount] = useState<number>(0)
+  // سلسلة اعتماد المسير: عدد المسيرات اللي الدور فيها على المستخدم (التسمية في السلسلة هي المنحة، فممكن يكون بلا أي صلاحية رواتب)
+  const [payrollApprovals, setPayrollApprovals] = useState<number>(0)
 
   // الإطار ثابت بين الصفحات: الجلسة تُقرأ من جديد وعدّاد الموافقات يتحدث مع كل انتقال
   useEffect(() => {
@@ -281,6 +301,10 @@ export default function Sidebar() {
       fetchInbox()
         .then((rows) => { setInboxCount(rows.length); setInboxError(false) })
         .catch(() => setInboxError(true))
+      // «مسيرات بانتظار اعتمادي» تظهر بس لما فيه مسير منتظره فعلًا؛ فشل النداء مايظهرش حاجة
+      fetchMyPayrollApprovalsCount()
+        .then((result) => setPayrollApprovals(result.count))
+        .catch(() => setPayrollApprovals(0))
     }
   }, [inboxRevision, pathname])
 
@@ -329,6 +353,17 @@ export default function Sidebar() {
             } satisfies MenuItem,
           ]
         : []),
+      ...(payrollApprovals > 0
+        ? [
+            {
+              id: 'payroll-my-approvals',
+              label: 'مسيرات بانتظار اعتمادي',
+              icon: <Wallet size={20} />,
+              href: '/payroll/my-approvals',
+              badge: payrollApprovals,
+            } satisfies MenuItem,
+          ]
+        : []),
       { id: 'my-attendance', label: 'حضوري', icon: <Clock size={20} />, href: '/my/attendance' },
       { id: 'my-leaves', label: 'إجازاتي وأرصدتي', icon: <Calendar size={20} />, href: '/my/leaves' },
       { id: 'my-payslips', label: 'قسائم راتبي', icon: <Wallet size={20} />, href: '/my/payslips' },
@@ -346,7 +381,7 @@ export default function Sidebar() {
     ]
 
     return [...portalItems, ...adminItems]
-  }, [currentUser, inboxCount, inboxError])
+  }, [currentUser, inboxCount, inboxError, payrollApprovals])
 
   const activeHref = activeHrefFor(pathname, menuItems)
   const activeGroup = menuItems.find((item) => item.children?.some((child) => child.href === activeHref))?.id

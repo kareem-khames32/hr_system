@@ -389,10 +389,17 @@ test('letters generate real Arabic PDFs, persist once and restrict downloads to 
   assert.equal(response.status, 200)
   assert.equal(response.headers.get('content-type'), 'application/pdf')
   assert.equal((await response.arrayBuffer()).byteLength, bytes.length)
-  assert.equal((await request(outsider, 'GET', `/letters/${letter.id}/download`)).status, 403)
-  assert.equal((await request(outsider, 'GET', `/files/${file.id}`)).status, 403)
+  // تدقيق الأدوار D6: خطاب موجود خارج النطاق = نفس رد الخطاب الغايب بالحرف (كان 403 فبيفشّي وجود الخطاب)
+  const missingLetter = await request(outsider, 'GET', '/letters/99999999/download')
+  const missingFile = await request(outsider, 'GET', '/files/99999999')
+  assert.deepEqual([missingLetter.status, missingFile.status], [404, 404])
   const scopedOtherHR = { ...hr, branchId: otherBranch.id, permissions: JSON.stringify(['documents.manage']) }
-  assert.equal((await request(scopedOtherHR, 'GET', `/letters/${letter.id}/download`)).status, 403)
+  for (const stranger of [outsider, scopedOtherHR]) {
+    const onLetter = await request(stranger, 'GET', `/letters/${letter.id}/download`)
+    const onFile = await request(stranger, 'GET', `/files/${file.id}`)
+    assert.deepEqual([onLetter.status, onLetter.body], [missingLetter.status, missingLetter.body])
+    assert.deepEqual([onFile.status, onFile.body], [missingFile.status, missingFile.body])
+  }
   const repeat = await ds.transaction(em => destinations.execute(em, req, { code: 'LETTER_SALARY', destinationHandler: 'letter_pdf_generator' }))
   assert.deepEqual(repeat, result)
   assert.equal(await repos.LetterRequest.countBy({ requestId: req.id }), 1)
@@ -580,7 +587,7 @@ test('approved custom letter uses the bound published revision and preserves its
   const download = await fetch(`${base}/letters/${issued.id}/download`, { headers: { Authorization: `Bearer ${token(actor)}` } })
   assert.equal(download.status, 200)
   assert.equal(crypto.createHash('sha256').update(Buffer.from(await download.arrayBuffer())).digest('hex'), hash)
-  assert.equal((await request(outsider, 'GET', `/letters/${issued.id}/download`)).status, 403)
+  assert.equal((await request(outsider, 'GET', `/letters/${issued.id}/download`)).status, 404)
 })
 
 test('my decisions are private, canonical, paginated and retain audit access after a branch change', async () => {

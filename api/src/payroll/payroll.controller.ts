@@ -217,6 +217,8 @@ class PayrollReasonDto {
 class PayrollPayDto {
   @IsOptional() @Allow() channel?: unknown
   @IsOptional() @Allow() reference?: unknown
+  // «إقفال الصرف»: سبب مكتوب لمن لم يتعلّم «تم الصرف» لو المسير اتصرف موظف بموظف (يُتحقق منه في الخدمة برمز عربي)
+  @IsOptional() @Allow() unpaidReason?: unknown
 }
 
 class PayrollMemberExclusionDto {
@@ -388,6 +390,8 @@ export class PayrollController {
     return this.service.unassignedReport(user, query)
   }
 
+  // الاعتماد بخطوة واحدة لمسير بلا سلسلة اعتماد؛ مسير تحكمه سلسلة ← 409 PAYRUN-CHAIN-ACTIVE واعتماد الخطوات من
+  // runs/:id/approval-chain/approve|reject (payroll-approval-chain.controller)
   @Perm('payroll.approve')
   @Post('runs/:id/approve')
   approve(
@@ -398,6 +402,7 @@ export class PayrollController {
   }
 
   // الخطوة 22 (B5): الصرف يسجل من صرف وقناة الصرف ومرجعه؛ صرف مسير غير معتمد ← PAYRUN-STATE-001
+  // وهو نفسه «إقفال الصرف» لمسير اتعلّم فيه «تم الصرف» موظف بموظف (unpaidReason لمن لم يُصرف له)؛ مسير بلا علامات كما هو
   @Perm('payroll.pay')
   @Post('runs/:id/pay')
   pay(@CurrentUser() user: JwtPayload, @Param('id', ParseIntPipe) id: number, @Body() dto: PayrollPayDto) {

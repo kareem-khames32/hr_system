@@ -756,7 +756,8 @@ test('RS7 — كشف الرواتب المالي: كل سطر = بنده، وا�
       sumC(Object.values(row.deductions)), C(row.totalDeductions)))
     expect(`سطر ${row.employeeCode}: الصافي = الإجمالي − الخصومات`, () => assert.equal(
       C(row.net), C(row.gross) - C(row.totalDeductions)))
-    expect(`سطر ${row.employeeCode}: بنك + نقدي = الصافي`, () => assert.equal(C(row.bank) + C(row.cash), C(row.net)))
+    // قرار 2026-09-22: صف «مصروف مع التصفية» برّه البنك والنقدي زي كشف البنك بالظبط، فالصافي = بنك + نقدي + مع التصفية
+    expect(`سطر ${row.employeeCode}: بنك + نقدي + مع التصفية = الصافي`, () => assert.equal(C(row.bank) + C(row.cash) + C(row.settlement), C(row.net)))
     expect(`سطر ${row.employeeCode}: مجموع البدلات المفصلة = عمود البدلات`, () => assert.equal(
       sumC(Object.values(row.allowanceBuckets)), C(row.allowances)))
     expect(`سطر ${row.employeeCode}: مجموع الإضافات المفصلة = عمود الإضافات`, () => assert.equal(
@@ -773,7 +774,8 @@ test('RS7 — كشف الرواتب المالي: كل سطر = بنده، وا�
       sumC(report.rows.map(r => r.gross)), sumC(report.rows.map(r => r.totalDeductions)), sumC(report.rows.map(r => r.net)),
       sumC(report.rows.map(r => r.bank)), sumC(report.rows.map(r => r.cash)), report.rows.length]))
   expect('مجموع الصافي = مجموع بنود المسيرات المعتمدة', () => assert.equal(C(report.totals.net), sumC(included.map(i => i.netPay))))
-  expect('بنك + نقدي = إجمالي الصافي', () => assert.equal(C(report.totals.bank) + C(report.totals.cash), C(report.totals.net)))
+  // قرار 2026-09-22: نفس القاعدة في المجاميع — التصفية برّه البنك والنقدي ومذكورة في عمودها
+  expect('بنك + نقدي + مع التصفية = إجمالي الصافي', () => assert.equal(C(report.totals.bank) + C(report.totals.cash) + C(report.totals.settlement), C(report.totals.net)))
   expect('أعمدة الخصومات بعناوينها العربية', () => assert.deepEqual(
     ['التأخير', 'الغياب', 'إجازة بدون راتب', 'أقساط السلف', 'الخصومات والجزاءات']
       .filter(label => !report.columns.deductions.some(c => c.label === label)), []))

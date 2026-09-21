@@ -16,6 +16,9 @@ export const PAYROLL_RUN_EVENT_LABELS: Record<string, string> = {
   // C8 / الخطوة 31: مسار العكس والمسير التكميلي بعد الصرف
   REVERSAL_CREATED: 'أنشأ مسير عكس صرف مربوطًا', REVERSAL_POSTED: 'نفّذ عكس صرف بنود من هذا المسير', REVERSAL_CANCELLED: 'ألغى مسير عكس قبل تنفيذه',
   SUPPLEMENTARY_CREATED: 'أنشأ مسيرًا تكميليًا مربوطًا بهذا المسير',
+  // قرار المالك (22 سبتمبر): سلسلة اعتماد المسير، وصرف المسير موظف بموظف
+  CHAIN_STEP_APPROVED: 'اعتمد خطوته في سلسلة الاعتماد', CHAIN_REJECTED: 'رفض المسير وأرجعه لمسؤول الرواتب', CHAIN_CHANGED: 'غيّر سلسلة الاعتماد والمسير في نص الاعتماد',
+  DISBURSEMENT_MARKED: 'علّم صرف رواتب موظفين',
 }
 const SNAPSHOT_MODES: Record<string, string> = { FIRST_CALCULATION: 'التقاط أول', STORED: 'من اللقطة المحفوظة', REFRESHED: 'تحديث صريح للقطة' }
 
@@ -67,6 +70,19 @@ export function payrollRunEventDetails(event: Pick<PayrollRunEventView, 'eventTy
   if (event.eventType === 'SUPPLEMENTARY_CREATED') {
     if (typeof payload.supplementaryRunId === 'number') details.push(`المسير التكميلي #${payload.supplementaryRunId}`)
     if (Array.isArray(payload.employeeIds)) details.push(`${payload.employeeIds.length} موظف`)
+  }
+  if (event.eventType === 'CHAIN_STEP_APPROVED' || event.eventType === 'CHAIN_REJECTED') {
+    if (typeof payload.stepOrder === 'number') details.push(`الخطوة ${payload.stepOrder} من ${payload.stepCount ?? '—'}${typeof payload.stepLabel === 'string' ? ` «${payload.stepLabel}»` : ''}`)
+    if (payload.final === true) details.push('الاعتماد النهائي')
+    if (payload.smallCompanyException === true) details.push('بترخيص الشركة الصغيرة: المعتمِد هو من احتسب')
+  }
+  if (event.eventType === 'DISBURSEMENT_MARKED') {
+    details.push(`${payload.paid === true ? 'تم الصرف' : 'لم يتم'} لـ${typeof payload.count === 'number' ? payload.count : 0} موظف`)
+    if (typeof payload.total === 'number') details.push(`بإجمالي ${formatMoney(payload.total)}`)
+  }
+  const disbursement = record(payload.disbursement)
+  if (event.eventType === 'PAID' && disbursement?.mode === 'PER_EMPLOYEE') {
+    details.push(`صرف موظف بموظف: تم ${disbursement.paidCount ?? 0} • لم يتم ${disbursement.unpaidCount ?? 0}`)
   }
   const effects = record(payload.effects)
   if (effects) details.push(`أعاد التنفيذ: إضافي ${effects.overtime ?? 0} • أقساط ${effects.installments ?? 0} • قيود دفتر ${effects.obligations ?? 0} • حجوزات فترة ${effects.releasedClaims ?? 0}`)

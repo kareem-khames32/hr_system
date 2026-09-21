@@ -3,7 +3,7 @@
 import { useCallback, useEffect, useState } from 'react'
 import { Building2 } from 'lucide-react'
 // مسار نسبي (لا @/): محرر معادلات الرواتب يستورد الملف ده ويتحمّل في اختبارات الخادم
-import { fetchBranches, getCurrentUser, type ApiBranch } from '../lib/api'
+import { fetchBranches, getCurrentUser, isCompanyWideUser, type ApiBranch } from '../lib/api'
 
 // ===== تعريفات الفرع (قرار المالك 16 سبتمبر) =====
 // أنواع الإجازات وأنواع الطلبات والورديات ومعادلات الرواتب لكل الشركة افتراضيًا، والفرع يقدر يعمل تعريف خاص بيه.
@@ -23,7 +23,7 @@ export function useDefinitionBranches(): DefinitionBranches {
   const [branches, setBranches] = useState<ApiBranch[]>([])
   useEffect(() => {
     const user = getCurrentUser()
-    setScope(!user ? -1 : user.role === 'super_admin' ? null : user.branchId && user.branchId > 0 ? user.branchId : -1)
+    setScope(!user ? -1 : isCompanyWideUser(user) ? null : user.branchId && user.branchId > 0 ? user.branchId : -1)
     fetchBranches().then(setBranches).catch(() => { /* أسماء الفروع للعرض بس: من غيرها يظهر رقم الفرع */ })
   }, [])
   const label = useCallback((branchId?: number | null) => branchId == null

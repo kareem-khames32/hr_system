@@ -26,7 +26,7 @@ import {
 import { AuthService } from './auth.service'
 import type { JwtPayload } from './auth.service'
 import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from './guards'
-import { adminGrantViolation, ALL_PERMISSIONS, PERMISSIONS } from './permissions'
+import { adminGrantViolation, ALL_PERMISSIONS, permissionRegistry, ROLE_PRESETS } from './permissions'
 import { Role, UserPermissionOverride } from './role.entity'
 import { User } from './user.entity'
 
@@ -76,6 +76,21 @@ const validatePermList = (perms: unknown): string[] => {
   return perms
 }
 
+// فرق حزمة الدور في القاعدة عن الحزمة المعتمدة في الكود (ROLE_PRESETS) — للعرض بس، مايغيّرش حاجة:
+// ترحيل 20260922_064 مايلمسش دورًا المالك عدّله، فالشاشة بتقول له بالظبط إيه الزائد اللي يشيله بإيده
+// (extra) وإيه الناقص (missing). null = الدور مالوش حزمة معتمدة (دور مخصص) أو مدير النظام.
+export const presetDiffOf = (
+  code: string,
+  permissions: string[]
+): { extra: string[]; missing: string[] } | null => {
+  const preset = ROLE_PRESETS.find((r) => r.code === code)
+  if (!preset || preset.permissions.includes('*') || permissions.includes('*')) return null
+  return {
+    extra: permissions.filter((p) => !preset.permissions.includes(p)),
+    missing: preset.permissions.filter((p) => !permissions.includes(p)),
+  }
+}
+
 // نفس المجموعة بغض النظر عن الترتيب
 const sameSet = (a: string[], b: string[]) => {
   const sa = new Set(a)
@@ -95,14 +110,28 @@ export class RolesController {
     private readonly auth: AuthService
   ) {}
 
-  // سجل الصلاحيات الكامل — لشاشات الإدارة
+  // سجل الصلاحيات الكامل — لشاشات الإدارة: كل صلاحية بتسميتها وشرحها ووحدتها، ومين شايلها من الأدوار.
+  // carriedBy = الأدوار المفعّلة اللي حزمتها فيها الصلاحية صراحةً (مدير النظام شايل '*' فمش محسوب):
+  // القائمة الفاضية = صلاحية «يتيمة» مايحملهاش أي دور — الشاشة بتعلّم عليها عشان ماتتنسيش
+  // (approve.custody فضلت كده لحد تدقيق 21 سبتمبر).
   @Perm('roles.manage', 'users.manage')
   @Get('permissions-registry')
-  registry() {
-    return Object.entries(PERMISSIONS).map(([key, labelAr]) => ({
-      key,
-      labelAr,
-      group: key.split('.')[0],
+  async registry() {
+    const roles = (await this.roles.find({ order: { id: 'ASC' } })).map((role) => {
+      let permissions: string[] = []
+      try {
+        const parsed = JSON.parse(role.permissions)
+        permissions = Array.isArray(parsed) ? parsed.map(String) : []
+      } catch {
+        permissions = []
+      }
+      return { code: role.code, nameAr: role.nameAr, isActive: !!role.isActive, permissions }
+    })
+    return permissionRegistry().map((entry) => ({
+      ...entry,
+      carriedBy: roles
+        .filter((role) => role.isActive && role.permissions.includes(entry.key))
+        .map((role) => ({ code: role.code, nameAr: role.nameAr })),
     }))
   }
 
@@ -126,11 +155,15 @@ export class RolesController {
         Number(c.n),
       ])
     )
-    return rows.map((r) => ({
-      ...r,
-      permissions: JSON.parse(r.permissions),
-      userCount: counts.get(r.code) ?? 0,
-    }))
+    return rows.map((r) => {
+      const permissions: string[] = JSON.parse(r.permissions)
+      return {
+        ...r,
+        permissions,
+        userCount: counts.get(r.code) ?? 0,
+        presetDiff: presetDiffOf(r.code, permissions),
+      }
+    })
   }
 
   @Perm('roles.manage')
@@ -236,12 +269,19 @@ export class RolesController {
     @Param('id', ParseIntPipe) id: number
   ) {
     const user = await this.scopedUser(actor, id)
-    const ovr = await this.overrides.find({ where: { userId: id } })
+    // النهائي = حزمة الدور ∪ المنح − السحب — بمكوّناته، عشان الشاشة تبيّن مصدر كل صلاحية
+    const breakdown = await this.auth.permissionBreakdown(user)
     return {
       role: user.role,
-      grants: ovr.filter((o) => o.effect === 'GRANT').map((o) => o.permission),
-      revokes: ovr.filter((o) => o.effect === 'REVOKE').map((o) => o.permission),
-      effective: await this.auth.resolvePermissions(user),
+      grants: breakdown.grants,
+      revokes: breakdown.revokes,
+      effective: breakdown.effective,
+      // حزمة الدور زي ما بتتحسب فعلًا (الدور المعطَّل = فاضية)، ومنح العمود القديم users.permissions
+      rolePermissions: breakdown.rolePermissions,
+      roleActive: breakdown.roleActive,
+      legacyGrants: breakdown.legacyGrants,
+      // «نطاقه: فرعه / كل الفروع» — مدير النظام نطاقه كامل بدوره
+      scopeAllBranches: user.role !== 'super_admin' && user.scopeAllBranches === true,
     }
   }
 
@@ -260,6 +300,10 @@ export class RolesController {
     // لا أحد يعدّل صلاحياته هو (تصعيد ذاتي)
     if (actor.sub === id) {
       throw new BadRequestException('لا يمكنك تعديل صلاحياتك بنفسك')
+    }
+    // حساب «كل الفروع»: أي صلاحية تتمنح له بتسري على الشركة كلها — تجاوزاته لمدير النظام فقط
+    if (actor.role !== 'super_admin' && user.scopeAllBranches === true) {
+      throw new ForbiddenException('الحساب ده نطاقه «كل الفروع» — تعديل صلاحياته متاح لمدير النظام فقط')
     }
     const grants = validatePermList(dto.grants ?? [])
     const revokes = validatePermList(dto.revokes ?? [])

@@ -869,11 +869,24 @@ export class TypedDeductionsService {
     return result.slice(0, 500)
   }
 
+  // لا كاشف وجود (تدقيق الأدوار D6): اللي مالوش أي صفة على الطلب بياخد نفس رد الطلب الغايب بالحرف — زي ملفات الموظفين والسلف —
+  // فالرد مايفرّقش بين رقم موجود خارج نطاقه ورقم مش موجود أصلًا.
+  private notFound() { return new NotFoundException({ code: 'DEDUCTION_NOT_FOUND', message: 'طلب الخصم غير موجود' }) }
+
+  /** له صفة على الطلب: مُنشئه، أو صاحب الخصم نفسه (شايفه في «خصوماتي»)، أو معتمِد في سلسلته، أو صاحب صلاحية خصومات في فرع الموظف، أو صاحب الخطوة الحالية. */
+  private knows(user: JwtPayload, row: DeductionRequest, employee: Pick<Employee, 'branchId'> | undefined | null) {
+    const chain = parseDeductionSteps(row.steps), step = currentDeductionStep(chain)
+    return row.creatorUserId === user.sub
+      || (!!user.employeeId && (user.employeeId === row.employeeId || chain.some(item => item.approverEmployeeId === user.employeeId)))
+      || (this.privileged(user) && this.inBranchScope(user, employee))
+      || (row.status === 'IN_APPROVAL' && !!step && !this.actorProblem(user, row, step, employee))
+  }
+
   async detail(user: JwtPayload, id: number) {
     const row = await this.requests.findOneBy({ id })
-    if (!row) throw new NotFoundException({ code: 'DEDUCTION_NOT_FOUND', message: 'طلب الخصم غير موجود' })
+    if (!row) throw this.notFound()
     const [view] = await this.views(this.manager, user, [row], 'all')
-    if (!view) throw new ForbiddenException({ code: 'DEDUCTION_FORBIDDEN', message: 'طلب الخصم خارج نطاق صلاحيتك' })
+    if (!view) throw this.notFound()
     const events = await this.manager.getRepository(DeductionRequestEvent).find({ where: { requestId: id }, order: { id: 'ASC' } })
     return { ...view, events: events.map(event => ({ ...event, payload: json(event.payload, null) })) }
   }
@@ -940,10 +953,10 @@ export class TypedDeductionsService {
     const text = dto.text?.trim() ?? ''
     if (text.length < 5) bad('DEDUCTION_OBJECTION_RESPONSE_TOO_SHORT', 'اكتب الرد على الاعتراض (5 أحرف على الأقل)')
     await this.manager.transaction(async em => {
-      const row = await this.lockedRequest(em, id)
+      const row = await this.lockedRequest(em, id, undefined, user)
       const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
       const step = currentDeductionStep(parseDeductionSteps(row.steps))
-      const currentApprover = row.status === 'IN_APPROVAL' && !!step && !this.actorProblem(user, row, step, employee)
+      const currentApprover =row.status === 'IN_APPROVAL' && !!step && !this.actorProblem(user, row, step, employee)
       const hr = (userHasPerm(user, MANAGE) || userHasPerm(user, APPROVE)) && this.inBranchScope(user, employee)
       if (user.employeeId === row.employeeId || !(currentApprover || hr)) throw new ForbiddenException({ code: 'DEDUCTION_OBJECTION_RESPONSE_FORBIDDEN', message: 'الرد على الاعتراض للمعتمِد الحالي أو الموارد البشرية في نطاق الموظف' })
       const objection = await this.openObjection(em, row.id)
@@ -956,9 +969,11 @@ export class TypedDeductionsService {
   }
 
   // ===== دورة الاعتماد (DD-06) =====
-  private async lockedRequest(em: EntityManager, id: number, expectedRevision?: number) {
+  // actor: صاحب الإجراء — اللي مالوش صفة على الطلب بياخد «غير موجود» قبل فحص النسخة والحالة، فالإجراءات مش كاشف وجود هي كمان
+  private async lockedRequest(em: EntityManager, id: number, expectedRevision?: number, actor?: JwtPayload) {
     const row = await em.getRepository(DeductionRequest).createQueryBuilder('r').setLock('pessimistic_write').where('r.id = :id', { id }).getOne()
-    if (!row) throw new NotFoundException({ code: 'DEDUCTION_NOT_FOUND', message: 'طلب الخصم غير موجود' })
+    if (!row) throw this.notFound()
+    if (actor && !this.knows(actor, row, await em.getRepository(Employee).findOne({ where: { id: row.employeeId }, select: { id: true, branchId: true } }))) throw this.notFound()
     if (expectedRevision !== undefined && row.revision !== expectedRevision) {
       throw new ConflictException({ code: 'DEDUCTION_REVISION_CHANGED', message: 'تغيّر طلب الخصم منذ فتحه؛ حدّث الشاشة ثم أعد المحاولة' })
     }
@@ -974,7 +989,7 @@ export class TypedDeductionsService {
 
   async approve(user: JwtPayload, id: number, dto: DeductionDecisionDto) {
     const notice = await this.manager.transaction(async em => {
-      const row = await this.lockedRequest(em, id, dto.expectedRevision)
+      const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       await lockPayrollEmployees(em, [row.employeeId])
       if (row.status !== 'IN_APPROVAL') throw new ConflictException({ code: 'DEDUCTION_STATE', message: `لا يمكن اعتماد خصم حالته «${DEDUCTION_LABELS.statuses[row.status] ?? row.status}»` })
       const steps = parseDeductionSteps(row.steps)
@@ -1063,7 +1078,7 @@ export class TypedDeductionsService {
     const reason = dto.reason?.trim() ?? ''
     if (reason.length < 5) bad('DEDUCTION_REASON_REQUIRED', 'سبب الرفض مطلوب (5 أحرف على الأقل)')
     await this.manager.transaction(async em => {
-      const row = await this.lockedRequest(em, id, dto.expectedRevision)
+      const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       if (row.status !== 'IN_APPROVAL') throw new ConflictException({ code: 'DEDUCTION_STATE', message: `لا يمكن رفض خصم حالته «${DEDUCTION_LABELS.statuses[row.status] ?? row.status}»` })
       const steps = parseDeductionSteps(row.steps), step = currentDeductionStep(steps)
       if (!step) throw new ConflictException({ code: 'DEDUCTION_CHAIN_INVALID', message: 'لا توجد خطوة اعتماد معلقة' })
@@ -1080,7 +1095,7 @@ export class TypedDeductionsService {
 
   async withdraw(user: JwtPayload, id: number, dto: DeductionDecisionDto) {
     await this.manager.transaction(async em => {
-      const row = await this.lockedRequest(em, id, dto.expectedRevision)
+      const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       if (row.creatorUserId !== user.sub) throw new ForbiddenException({ code: 'DEDUCTION_WITHDRAW_FORBIDDEN', message: 'سحب الخصم متاح لمُنشئه فقط' })
       if (row.status !== 'IN_APPROVAL') throw new ConflictException({ code: 'DEDUCTION_STATE', message: 'السحب متاح قبل اكتمال الاعتماد فقط؛ بعده يُلغى من الموارد البشرية' })
       const reason = dto.reason?.trim() || null
@@ -1098,7 +1113,7 @@ export class TypedDeductionsService {
       const settings = await this.settings(em)
       const reason = dto.reason?.trim() ?? ''
       if (reason.length < settings.reasonMinLength) bad('DEDUCTION_REASON_TOO_SHORT', `سبب الإلغاء لا يقل عن ${settings.reasonMinLength} حرفًا`, { minLength: settings.reasonMinLength })
-      const row = await this.lockedRequest(em, id, dto.expectedRevision)
+      const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
       if (!this.inBranchScope(user, employee)) throw new ForbiddenException({ code: 'DEDUCTION_FORBIDDEN', message: 'طلب الخصم خارج نطاق فرعك' })
       if (!['IN_APPROVAL', 'APPROVED'].includes(row.status)) throw new ConflictException({ code: 'DEDUCTION_STATE', message: `لا يمكن إلغاء خصم حالته «${DEDUCTION_LABELS.statuses[row.status] ?? row.status}»` })
@@ -1132,7 +1147,7 @@ export class TypedDeductionsService {
       const settings = await this.settings(em)
       const reason = dto.reason?.trim() ?? ''
       if (reason.length < settings.reasonMinLength) bad('DEDUCTION_REASON_TOO_SHORT', `سبب العكس لا يقل عن ${settings.reasonMinLength} حرفًا`, { minLength: settings.reasonMinLength })
-      const row = await this.lockedRequest(em, id, dto.expectedRevision)
+      const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
       if (!this.inBranchScope(user, employee)) throw new ForbiddenException({ code: 'DEDUCTION_FORBIDDEN', message: 'طلب الخصم خارج نطاق فرعك' })
       if (row.status !== 'APPROVED') throw new ConflictException({ code: 'DEDUCTION_STATE', message: 'العكس متاح لخصم معتمد استُهلك في مسير مصروف' })
@@ -1168,10 +1183,12 @@ export class TypedDeductionsService {
       const reason = dto.reason?.trim() ?? ''
       if (reason.length < settings.reasonMinLength) bad('DEDUCTION_REASON_TOO_SHORT', `سبب القرار لا يقل عن ${settings.reasonMinLength} حرفًا`, { minLength: settings.reasonMinLength })
       const obligation = await em.getRepository(EmployeeObligation).createQueryBuilder('o').setLock('pessimistic_write').where('o.id = :id', { id: obligationId }).getOne()
-      if (!obligation?.deductionRequestId) throw new NotFoundException({ code: 'DEDUCTION_OBLIGATION_NOT_FOUND', message: 'قسط الخصم المصنف غير موجود' })
+      const missing = () => new NotFoundException({ code: 'DEDUCTION_OBLIGATION_NOT_FOUND', message: 'قسط الخصم المصنف غير موجود' })
+      if (!obligation?.deductionRequestId) throw missing()
       const row = await this.lockedRequest(em, obligation.deductionRequestId)
       const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
-      if (!this.inBranchScope(user, employee)) throw new ForbiddenException({ code: 'DEDUCTION_FORBIDDEN', message: 'الخصم خارج نطاق فرعك' })
+      // قسط موظف فرع تاني = نفس رد القسط الغايب (لا كاشف وجود)
+      if (!this.inBranchScope(user, employee)) throw missing()
       if (obligation.status !== 'SUSPENDED') throw new ConflictException({ code: 'DEDUCTION_OBLIGATION_STATE', message: 'القرار متاح لقسط معلق فقط' })
       await lockPayrollEmployees(em, [row.employeeId])
       const currentPeriod = payrollPeriodForDate(this.today(), settings.cycleStartDay)

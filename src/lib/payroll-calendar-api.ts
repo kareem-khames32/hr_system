@@ -16,7 +16,7 @@ function scopeValid(scope: PayrollCalendarScope, sourceId: number) {
 }
 export function calendarScopeWritable(scope: PayrollCalendarScope, sourceId: number, user: CurrentUser | null = getCurrentUser()): boolean {
   if (!user) return false
-  if (user.role === 'super_admin') return true
+  if (user.role === 'super_admin' || user.scopeAllBranches === true) return true
   if (scope === 'GLOBAL') return user.branchId == null
   if (scope === 'BRANCH') return user.branchId == null || user.branchId === sourceId
   return true // نطاق الموظف يُثبت من سياق الخادم؛ لا نستنتجه من معرّف الموظف.

@@ -66,6 +66,10 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/payroll/gosi', 'التأمينات'],
   ['/payroll/reports', 'تقرير الرواتب'],
   ['/payroll/bank-sheet', 'كشف البنوك'],
+  // قرار المالك (22 سبتمبر): سلسلة اعتماد المسير، وصرف المسير موظف بموظف
+  ['/payroll/approval-chain', 'سلسلة اعتماد المسير'],
+  ['/payroll/my-approvals', 'مسيرات بانتظار اعتمادي'],
+  ['/payroll/disbursement', 'صرف الرواتب'],
   ['/payroll', 'مسير الرواتب'],
   // التوظيف والأداء والتدريب والتقارير
   ['/recruitment/applicants', 'المتقدمين'],

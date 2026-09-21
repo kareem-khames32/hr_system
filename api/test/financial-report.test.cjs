@@ -7,6 +7,10 @@ const {
   computeFinancialRow, buildPayrollRegister, buildPayrollCostSummary, buildDeductionsReport, buildOvertimeReport, buildLoansReport,
   installmentPosition, FR_NO_DEPARTMENT, FR_UNNAMED_TYPED,
 } = require('../src/reports/financial-report')
+const { buildBankSheet } = require('../src/payroll/bank-sheet')
+const { payrollItemSettlementPayout } = require('../src/payroll/payroll-settlement-salary')
+const fs = require('node:fs')
+const readSource = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8').replace(/\r\n/g, '\n')
 
 const source = (over = {}) => ({
   runId: 1, runName: 'سبتمبر', runStatus: 'APPROVED', runType: null, employeeId: 1, employeeCode: 'EMP0001', fullName: 'أحمد',
@@ -109,12 +113,70 @@ test('register: dynamic columns only for used buckets/categories, footer totals 
   assert.equal(register.totals.deductions.LATENESS, '100.10')
   assert.equal(register.totals.allowanceBuckets.HOUSING, '2000.00')
   assert.equal(register.totals.bank, '13099.90')
+  assert.deepEqual([register.totals.cash, register.totals.settlement], ['0.00', '0.00'])
   assert.equal(register.totals.employerInsurance, '100.00')
   assert.deepEqual(register.rows.map(row => [row.employeeCode, row.runId]), [['EMP0001', 1], ['EMP0001', 2], ['EMP0002', 1]])
   assert.equal(register.rows[2].additions.allowance, '200.00')
   assert.equal(register.rows[0].allowanceBuckets.HOUSING, '1000.00')
   assert.equal(buildPayrollRegister(rows, false).totals.employerInsurance, null)
   assert.equal(buildPayrollRegister(rows, false).rows[1].employerInsurance, null)
+})
+
+// تدقيق الالتحاق والانفكاك (PAYROLL_PROOF_JOINER_LEAVER.md ملاحظة 1): مسير #4 — خمسة بنود، اتنين منهم «مصروف مع التصفية».
+// كان عمود «بنك» في الدفتر 37,440.00 وكشف البنك 18,720.00 لنفس المسير.
+test('register vs bank sheet: the bank and cash totals of one run equal the bank sheet, the settlement leavers stay in the net column', () => {
+  const IBAN = 'SA0380000000608010167519'
+  const run = [
+    { id: 1, code: 'EMP-A', net: '3840.00', method: 'transfer', bankAmount: null, payout: null },
+    { id: 2, code: 'EMP-B', net: '14400.00', method: 'mixed', bankAmount: '10000', payout: null },
+    { id: 3, code: 'EMP-C', net: '480.00', method: 'cash', bankAmount: null, payout: null },
+    { id: 4, code: 'EMP-D', net: '11520.00', method: 'transfer', bankAmount: null, payout: { caseId: 1, lastWorkingDay: '2026-09-15' } },
+    { id: 5, code: 'EMP-E', net: '7200.00', method: 'mixed', bankAmount: '5000', payout: { caseId: 2, lastWorkingDay: '2026-09-10' } },
+  ]
+  // الدفتر: نفس ما بيرجع من استعلام الخدمة — العلامة نص JSON من breakdown.settlementPayout
+  const rows = run.map(item => computeFinancialRow(source({ runId: 4, employeeId: item.id, employeeCode: item.code, basicSalary: item.net, allowances: '0.00',
+    salaryComponents: null, netPay: item.net, employeePayMethod: item.method, itemPayMethod: item.method, bankTransferAmount: item.bankAmount,
+    settlementPayout: item.payout ? JSON.stringify(item.payout) : null }), new Map()))
+  const register = buildPayrollRegister(rows, false)
+  // كشف البنك لنفس المسير من نفس البنود (نفس قارئ العلامة اللي الخدمتين بيستخدموه)
+  const sheet = buildBankSheet(run.map(item => ({ employeeId: item.id, employeeCode: item.code, fullName: item.code, payMethod: item.method,
+    bankTransferAmount: item.bankAmount, bankName: 'بنك الاختبار', iban: IBAN, netPay: item.net,
+    settlementPayout: payrollItemSettlementPayout(JSON.stringify({ settlementPayout: item.payout ?? undefined })) })))
+
+  assert.deepEqual([sheet.totals.bank, sheet.totals.cash, sheet.settlement.total, sheet.settlement.employees], [13840, 4880, 18720, 2])
+  assert.deepEqual([register.totals.bank, register.totals.cash], [sheet.totals.bank.toFixed(2), sheet.totals.cash.toFixed(2)], 'الدفتر = كشف البنك')
+  assert.equal(register.totals.settlement, sheet.settlement.total.toFixed(2), '«مع التصفية» = بلوك «مصروف مع التصفية» في الكشف')
+  // الصافي لسه شامل المنفكّين (تكلفة الشهر كاملة)، والأعمدة التلاتة بتقفل عليه بالقرش
+  assert.equal(register.totals.net, '37440.00')
+  const C = value => Math.round(Number(value) * 100)
+  assert.equal(C(register.totals.bank) + C(register.totals.cash) + C(register.totals.settlement), C(register.totals.net))
+  for (const row of register.rows) assert.equal(C(row.bank) + C(row.cash) + C(row.settlement), C(row.net), row.employeeCode)
+  const byCode = Object.fromEntries(register.rows.map(row => [row.employeeCode, [row.net, row.bank, row.cash, row.settlement]]))
+  assert.deepEqual(byCode, {
+    'EMP-A': ['3840.00', '3840.00', '0.00', '0.00'], 'EMP-B': ['14400.00', '10000.00', '4400.00', '0.00'], 'EMP-C': ['480.00', '0.00', '480.00', '0.00'],
+    // المنفكّ: لا بنك ولا نقدي حتى لو ملفه «نقدي + بنك» — صافيه كله «مع التصفية»
+    'EMP-D': ['11520.00', '0.00', '0.00', '11520.00'], 'EMP-E': ['7200.00', '0.00', '0.00', '7200.00'],
+  })
+  // نفس الصفوف في كشف البنك بالظبط: المنفكّين برّه، والباقي بنفس المبالغ
+  assert.deepEqual(sheet.rows.map(row => [row.employeeCode, row.bankAmount.toFixed(2), row.cashAmount.toFixed(2)]).sort(),
+    register.rows.filter(row => row.settlement === '0.00').map(row => [row.employeeCode, row.bank, row.cash]).sort())
+  // علامة تالفة أو بلا آخر يوم عمل صالح = مش تصفية (نفس حكم قارئ العلامة في كشف البنك)
+  for (const broken of ['{"caseId":3}', '{"caseId":3,"lastWorkingDay":"قريبًا"}', 'مش JSON', '']) {
+    const row = computeFinancialRow(source({ netPay: '6500.00', settlementPayout: broken }), new Map())
+    assert.deepEqual([row.bank, row.cash, row.settlement], [650000n, 0n, 0n], broken)
+  }
+})
+
+test('register wiring: one exclusion rule imported from the bank sheet, the mark read from the saved breakdown', () => {
+  const pure = readSource('src/reports/financial-report.ts')
+  assert.ok(pure.includes("import { buildBankSheet } from '../payroll/bank-sheet'"))
+  assert.ok(pure.includes("import { payrollItemSettlementPayout } from '../payroll/payroll-settlement-salary'"))
+  // القاعدة مش متكررة هنا: لا تقسيم مباشر ولا فحص يدوي للعلامة
+  assert.ok(!pure.includes('payrollPaySplit'))
+  assert.ok(!pure.includes('lastWorkingDay'))
+  assert.ok(readSource('src/reports/financial-report.service.ts').includes("JSON_QUERY(i.[breakdown], '$.settlementPayout') END AS [settlementPayout]"))
+  // كشف البنك نفسه ماتلمسش: الاستبعاد لسه جوه buildBankSheet
+  assert.ok(readSource('src/payroll/bank-sheet.ts').includes('const sources = allSources.filter(source => !source.settlementPayout)'))
 })
 
 test('cost summary: by branch and by department with headcount, overtime, employer share and company cost', () => {

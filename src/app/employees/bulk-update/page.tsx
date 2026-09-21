@@ -10,7 +10,7 @@ import {
   AlertTriangle, ArrowRight, CheckCircle2, Download, FileSpreadsheet, Info, Loader2, RefreshCw, Upload, XCircle,
 } from 'lucide-react'
 import {
-  ApiError, can, fetchBranches, fetchDepartments, fetchEmployees, fetchTeams, getCurrentUser, getToken,
+  ApiError, can, fetchBranches, fetchDepartments, fetchEmployees, fetchTeams, getCurrentUser, getToken, lockedBranchIdOf,
   type ApiBranch, type ApiDepartment, type ApiEmployee, type ApiTeam,
 } from '@/lib/api'
 import { csvDateStamp, downloadCsv } from '@/lib/csv'
@@ -132,7 +132,7 @@ export default function EmployeesBulkUpdatePage() {
     setAllowed(can('employees.edit'))
     setCanSalary(can('payroll.approve'))
     const user = getCurrentUser()
-    const locked = user && user.role !== 'super_admin' && user.branchId ? user.branchId : null
+    const locked = lockedBranchIdOf(user)
     setLockedBranchId(locked)
     setTarget(initialOrgTarget(locked))
   }, [])

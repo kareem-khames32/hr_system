@@ -24,6 +24,9 @@ export interface JwtPayload {
   tokenVersion?: number
   // كلمة مرور مؤقتة: التوكن مايفتحش غير «غيّر كلمة المرور» (JwtAuthGuard)
   mustChangePassword?: boolean
+  // «نطاقه: كل الفروع» (users.scopeAllBranches): بيتكتب في التوكن لما يكون مفتوح بس، وbranchScopeOf بيقرأه
+  // بمقارنة حرفية `=== true`. تغييره في القاعدة بيزوّد tokenVersion فالتوكن اللي شايل القيمة القديمة يموت.
+  scopeAllBranches?: boolean
 }
 
 @Injectable()
@@ -42,13 +45,31 @@ export class AuthService {
     user: User,
     proposed?: { grants: string[]; revokes: string[] }
   ): Promise<string[]> {
+    return (await this.permissionBreakdown(user, proposed)).effective
+  }
+
+  // نفس الحساب بمكوّناته — لشاشة المستخدمين: «النهائي = حزمة الدور ∪ المنح − السحب» ومصدر كل صلاحية
+  // (roleActive=false: الدور معطَّل فحزمته لا تمنح شيئًا؛ legacyGrants: العمود القديم users.permissions)
+  async permissionBreakdown(
+    user: User,
+    proposed?: { grants: string[]; revokes: string[] }
+  ): Promise<{
+    rolePermissions: string[]
+    roleActive: boolean
+    grants: string[]
+    revokes: string[]
+    legacyGrants: string[]
+    effective: string[]
+  }> {
     let rolePerms: string[] = []
+    let roleActive = true
     // مطابقة حرفية: الـcollation لا يفرّق حالة الأحرف ولا المسافات الأخيرة →
     // دور مخزَّن كـ "SUPER_ADMIN" لا يرث حزمة super_admin (الحراس تقارن حرفياً)
     const found = await this.roles.findOne({ where: { code: user.role } })
     const roleRow = found && found.code === user.role ? found : null
     if (roleRow) {
       // الدور المعطَّل لا يمنح شيئاً — تبقى تجاوزات المستخدم فقط
+      roleActive = !!roleRow.isActive
       if (roleRow.isActive) {
         try {
           rolePerms = JSON.parse(roleRow.permissions)
@@ -71,6 +92,7 @@ export class AuthService {
     const revokes = ovr.filter((o) => o.effect === 'REVOKE').map((o) => o.permission)
 
     // توافق خلفي: صلاحيات العمود القديم permissions (functional roles) كـ GRANTs
+    const legacyGrants: string[] = []
     try {
       const legacy: string[] = user.permissions ? JSON.parse(user.permissions) : []
       const legacyMap: Record<string, string> = {
@@ -80,11 +102,19 @@ export class AuthService {
         custody_officer: 'approve.custody',
         executive: 'approve.executive',
       }
-      for (const l of legacy) grants.push(legacyMap[l] ?? l)
+      for (const l of legacy) legacyGrants.push(legacyMap[l] ?? l)
     } catch {
       /* تجاهل */
     }
-    return effectivePermissions(rolePerms, grants, revokes)
+    return {
+      rolePermissions: rolePerms,
+      roleActive,
+      grants,
+      revokes,
+      legacyGrants,
+      // السحب بيتطبق بعد كل المنح (التجاوزات والعمود القديم) — نفس الترتيب السابق بالحرف
+      effective: effectivePermissions(rolePerms, [...grants, ...legacyGrants], revokes),
+    }
   }
 
   // الحساب بعمودي كلمة المرور المؤقتة (select: false في الكيان — بيتقروا هنا صراحةً)
@@ -147,6 +177,8 @@ export class AuthService {
   private async issueSession(user: User) {
     const permissions = await this.resolvePermissions(user)
     const mustChangePassword = !!user.mustChangePassword
+    // «كل الفروع» من عمود القاعدة بقيمته الحرفية فقط (bit → true)؛ مدير النظام نطاقه كامل بدوره فمايتكتبش له
+    const scopeAllBranches = user.role !== 'super_admin' && user.scopeAllBranches === true
 
     const payload: JwtPayload = {
       sub: user.id,
@@ -157,6 +189,7 @@ export class AuthService {
       permissions,
       tokenVersion: user.tokenVersion ?? 0,
       ...(mustChangePassword ? { mustChangePassword: true } : {}),
+      ...(scopeAllBranches ? { scopeAllBranches: true } : {}),
     }
 
     return {
@@ -170,6 +203,7 @@ export class AuthService {
         employeeId: user.employeeId,
         permissions,
         mustChangePassword,
+        scopeAllBranches,
       },
     }
   }

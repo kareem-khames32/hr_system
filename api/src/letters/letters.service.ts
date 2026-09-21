@@ -10,7 +10,7 @@ import { LetterRequest } from '../requests/entities/letter.entities'
 import { Request } from '../requests/entities/request.entity'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { JwtPayload } from '../auth/auth.service'
-import { assertLetterAccess } from './letter-access'
+import { assertLetterAccess, LETTER_NOT_FOUND } from './letter-access'
 import { assertLetterIssuable } from './letter-issuance'
 import { LetterTemplatesService } from './letter-templates.service'
 import { LetterRenderer } from './letter-renderer.service'
@@ -73,8 +73,8 @@ export class LettersService {
 
   async fileFor(user: JwtPayload, id: number) {
     const letter = await this.ds.getRepository(LetterRequest).findOneBy({ id })
-    if (!letter) throw new NotFoundException('الخطاب غير موجود')
-    // نفس سياسة /files/:id — والخطاب المالي يحتاج قراءة مالية الموظف (SEC-07)
+    if (!letter) throw new NotFoundException(LETTER_NOT_FOUND)
+    // نفس سياسة /files/:id — والخطاب المالي يحتاج قراءة مالية الموظف (SEC-07). خطاب خارج النطاق = نفس رد الغايب
     await assertLetterAccess(this.ds.manager, user, letter)
     const fileId = Number(letter.generatedPdfRef?.replace(/^file:/, ''))
     const file = fileId ? await this.ds.getRepository(StoredFile).findOneBy({ id: fileId }) : null

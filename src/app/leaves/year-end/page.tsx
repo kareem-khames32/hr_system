@@ -5,7 +5,7 @@ import Link from 'next/link'
 import { AlertTriangle, CalendarCheck, CheckCircle2, Hourglass, Layers, Lock, RefreshCw, Search, Wallet, X } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { OrgTargetPicker, describeOrgTarget, initialOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
-import { can, fetchBranches, getCurrentUser, type ApiBranch } from '@/lib/api'
+import { can, fetchBranches, getCurrentUser, lockedBranchIdOf, type ApiBranch } from '@/lib/api'
 import { formatDateTime, localToday } from '@/lib/dates'
 import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { formatMoney } from '@/lib/money'
@@ -54,7 +54,7 @@ export default function LeaveYearEndPage() {
 
   useEffect(() => {
     const user = getCurrentUser()
-    const locked = user && user.role !== 'super_admin' && user.branchId ? user.branchId : null
+    const locked = lockedBranchIdOf(user)
     setLockedBranchId(locked)
     setTarget(initialOrgTarget(locked, ['company', 'branch']))
     fetchBranches().then(setBranches).catch(() => setBranches([]))

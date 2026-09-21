@@ -87,6 +87,7 @@ export class FinancialReportService {
            i.[payMethod] AS [itemPayMethod], e.[payMethod] AS [employeePayMethod], CONVERT(varchar(40), e.[bankTransferAmount]) AS [bankTransferAmount],
            ${money.map(column => `CONVERT(varchar(40), i.[${column}]) AS [${column}]`).join(', ')},
            ${BREAKDOWN_ARRAYS.map(key => `CASE WHEN bd.[ok] = 1 THEN JSON_QUERY(i.[breakdown], '$.${key}') END AS [${key}]`).join(', ')},
+           CASE WHEN bd.[ok] = 1 THEN JSON_QUERY(i.[breakdown], '$.settlementPayout') END AS [settlementPayout],
            ${insurance ? `CASE WHEN bd.[ok] = 1 AND JSON_VALUE(i.[breakdown], '$.socialInsurance.applies') = 'true'
              THEN JSON_VALUE(i.[breakdown], '$.socialInsurance.employerShare') END` : 'NULL'} AS [employerInsurance]
          FROM [payroll_items] i

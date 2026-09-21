@@ -11,6 +11,9 @@ import { BonusesService } from './bonuses.service'
 export class BonusesController {
   constructor(private readonly service: BonusesService) {}
 
+  // الكتالوج الكامل (الأكواد والقيم والسقوف وسلاسل الاعتماد) إعداد، مش قائمة اختيار: لحامل «إدارة أنواع المكافآت» بس
+  // (تدقيق الأدوار D9 — كان مفتوحًا لأي حساب). نموذج الطلب بياخد أنواعه من creatable/candidates بنطاق صاحبه.
+  @Perm('bonuses.manage')
   @Get('types')
   types(@CurrentUser() user: JwtPayload, @Query('includeInactive') includeInactive?: string) {
     return this.service.listTypes(user, includeInactive === 'true')

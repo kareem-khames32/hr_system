@@ -18,7 +18,7 @@ import {
   CheckCircle2,
   AlertCircle,
 } from 'lucide-react'
-import { fetchConfig, updateConfig, uploadFile, fetchFileObjectUrl, getCurrentUser } from '@/lib/api'
+import { fetchConfig, updateConfig, uploadFile, fetchFileObjectUrl, getCurrentUser, isCompanyWideUser } from '@/lib/api'
 import { COMPANY_NAME_PLACEHOLDER, isDataPlaceholder } from '@/lib/data-placeholders'
 
 // بيانات الشركة — تُطبع في رأس المستندات المولَّدة من ملف الموظف وفي نصوصها
@@ -254,7 +254,7 @@ export default function CompanySettingsPage() {
 
   useEffect(() => {
     // بيانات الشركة لكل الشركة — حساب الفرع يشوفها بس
-    setReadOnly(getCurrentUser()?.role !== 'super_admin')
+    setReadOnly(!isCompanyWideUser(getCurrentUser()))
     fetchConfig()
       .then((rows) => {
         const map: Record<string, string> = {}

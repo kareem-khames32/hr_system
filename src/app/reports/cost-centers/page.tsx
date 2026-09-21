@@ -4,7 +4,7 @@ import { Fragment, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import { AlertTriangle, ArrowRight, ChevronDown, ChevronLeft, Download, Info, Landmark, RefreshCw } from 'lucide-react'
-import { fetchBranches, getCurrentUser, type ApiBranch } from '@/lib/api'
+import { fetchBranches, getCurrentUser, isCompanyWideUser, type ApiBranch } from '@/lib/api'
 import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { useCurrency } from '@/lib/currency'
 import { formatMoney } from '@/lib/money'
@@ -37,7 +37,7 @@ export default function CostCenterReportPage() {
 
   useEffect(() => {
     const user = getCurrentUser()
-    const wide = user?.role === 'super_admin'
+    const wide = isCompanyWideUser(user)
     setCompanyWide(wide)
     fetchBranches().then(setBranches).catch(() => setBranches([]))
   }, [])

@@ -27,7 +27,8 @@ function assertDisposable() {
 const repo = name => { assertDisposable(); return ds.getRepository(name) }
 function token(user) {
   return jwt.sign({ sub: user.id, email: user.email, role: user.role, branchId: user.branchId ?? null, employeeId: null,
-    tokenVersion: user.tokenVersion ?? 0, permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
+    tokenVersion: user.tokenVersion ?? 0, permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]'),
+    ...(user.scopeAllBranches === true ? { scopeAllBranches: true } : {}) })
 }
 // الخطوة 20 (B4): قبل اعتماد مسير يُكتب سبب لكل رمز في تقرير التكافؤ بنفس المستخدم (هذه المجموعة لا تختبر التكافؤ نفسه)
 const { writeParityReasonsBeforeApproval } = require('./fixtures/payroll-parity-reasons.cjs')
@@ -93,15 +94,17 @@ before(async () => {
   branchA = await repo('Branch').save({ code: 'RSC_A', name: 'فرع القاهرة' })
   branchB = await repo('Branch').save({ code: 'RSC_B', name: 'فرع الجيزة' })
   branchC = await repo('Branch').save({ code: 'RSC_C', name: 'فرع الإسكندرية' })
-  const user = (email, displayName, role, branchId, permissions) => repo('User').save({ email: `${email}@run-screen-test.invalid`, displayName,
-    passwordHash: 'test-only', role, branchId, permissions: JSON.stringify(permissions) })
+  const user = (email, displayName, role, branchId, permissions, extra = {}) => repo('User').save({ email: `${email}@run-screen-test.invalid`, displayName,
+    passwordHash: 'test-only', role, branchId, permissions: JSON.stringify(permissions), ...extra })
   const payrollDesk = ['payroll.view', 'payroll.calculate', 'payroll.approve', 'payroll.pay', 'payroll.cancel']
   admin = await user('admin', 'مدير النظام', 'super_admin', null, [])
   hrA = await user('hr-a', 'هالة — فرع القاهرة', 'hr_manager', branchA.id, payrollDesk)
   hrB = await user('hr-b', 'باسم — فرع الجيزة', 'hr_manager', branchB.id, payrollDesk)
   hrC = await user('hr-c', 'كريمة — فرع الإسكندرية', 'hr_manager', branchC.id, payrollDesk)
-  // ملف المراجعة: يحتسب ويعتمد ويملك الإعدادات — لا يفعّل رخصة الشركة الصغيرة لنفسه
-  hrS = await user('hr-s', 'سامية — إعدادات القاهرة', 'hr_manager', branchA.id, [...payrollDesk, 'settings.manage'])
+  // ملف المراجعة: يحتسب ويعتمد ويملك الإعدادات — لا يفعّل رخصة الشركة الصغيرة لنفسه.
+  // إعدادات الشركة كلها بقت لحساب على مستوى الشركة (عزل الفروع: assertCompanyWideWrite)، فالحساب ده «نطاقه: كل الفروع»
+  // عشان يوصل لفحص الرخصة نفسه؛ حساب الفرع بيترفض قبلها بحارس عزل الفروع (مغطى في اختبارات الإعدادات).
+  hrS = await user('hr-s', 'سامية — إعدادات الشركة', 'hr_manager', branchA.id, [...payrollDesk, 'settings.manage'], { scopeAllBranches: true })
   await repo('RequestsConfig').save([
     { key: 'payroll.cycle_start_day', value: '23' }, { key: 'payroll.monthly_days', value: '30' }, { key: 'payroll.daily_hours', value: '8' },
     { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' }, { key: 'payroll.late_deduction_enabled', value: 'true' },

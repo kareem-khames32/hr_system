@@ -21,6 +21,7 @@ import {
   fetchHolidayWorkSettings,
   fetchTeams,
   getCurrentUser,
+  lockedBranchIdOf,
   updateHolidayWorkOrder,
   updateHolidayWorkSettings,
   type ApiBranch,
@@ -60,7 +61,7 @@ function HolidayWorkContent() {
   const canManage = can('attendance.manage')
   const lockedBranchId = useMemo(() => {
     const user = getCurrentUser()
-    return user && user.role !== 'super_admin' && user.branchId ? user.branchId : null
+    return lockedBranchIdOf(user)
   }, [])
   const [status, setStatus] = useState<StatusFilter>('ACTIVE')
   const [kind, setKind] = useState<KindFilter>('ALL')

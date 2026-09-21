@@ -1330,7 +1330,8 @@ test('P10 — الخدمة الذاتية: الموظف يرى قسيمته وإ
   const otherItem = (await repo('PayrollItem').find({ where: { employeeId: pLate.id } }))[0]
   if (otherItem) {
     const foreign = await request(pBase.user, 'GET', `/payroll/items/${otherItem.id}`)
-    expect('لا يفتح قسيمة غيره', () => assert.equal(foreign.status, 403))
+    // لا كاشف وجود: قسيمة غيره = نفس رد البند المفقود (404 «بند المسير غير موجود») بدل 403 اللي كان بيأكد وجودها
+    expect('لا يفتح قسيمة غيره', () => assert.equal(foreign.status, 404))
   }
   const noPayrollList = await request(pBase.user, 'GET', '/payroll/runs')
   expect('الموظف لا يرى قائمة المسيرات', () => assert.equal(noPayrollList.status, 403))

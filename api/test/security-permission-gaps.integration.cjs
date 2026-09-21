@@ -169,14 +169,15 @@ test('SEC-07: salary letters need the finance read check on /letters download an
       assert.equal(await status(docsOnly, route), 403, `documents.manage only ${route}`)
       assert.equal(await status(docsFinance, route), 200, `documents.manage + payroll.view ${route}`)
       assert.equal(await status(owner, route), 200, `owner ${route}`)
-      assert.equal(await status(docsOutsider, route), 403, `other branch ${route}`)
-      assert.equal(await status(payrollA, route), 403, `payroll without documents.manage ${route}`)
+      // تدقيق الأدوار D6: اللي مالوش أي اطلاع على خطابات الموظف بياخد نفس رد الخطاب الغايب (404) — مش 403 بيفشّي وجوده
+      assert.equal(await status(docsOutsider, route), 404, `other branch ${route}`)
+      assert.equal(await status(payrollA, route), 404, `payroll without documents.manage ${route}`)
     }
   }
   // الخطاب غير المالي باقٍ على سياسته: documents.manage في النطاق يكفي
   for (const route of experience.routes) {
     assert.equal(await status(docsOnly, route), 200, `non-financial ${route}`)
-    assert.equal(await status(docsOutsider, route), 403, `non-financial other branch ${route}`)
+    assert.equal(await status(docsOutsider, route), 404, `non-financial other branch ${route}`)
   }
 })
 

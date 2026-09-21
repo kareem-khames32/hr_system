@@ -68,6 +68,7 @@ import {
   SCHEDULED_EMPLOYMENT_HANDLERS, validateEmploymentRequest,
 } from './employment-destinations'
 import { custodyTransferTarget, finishCustodyRequest, startCustodyTransfer } from './custody-execution'
+import { CUSTODY_CROSS_BRANCH, custodyBranchProblem, employeeInScope } from '../assets/asset-branch'
 import { definitionCodeOf, groupLeaveProfiles, isLeaveDefinition, isLeaveRequest, legacyLeaveCode, leaveCodeOf, normalizedLeavePayload } from '../common/leave-contract'
 import { isValidYmd } from '../offboarding/eos'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
@@ -475,10 +476,14 @@ export class RequestsService {
       if (ids.length === 0) {
         throw new BadRequestException('اختر أصلاً واحداً على الأقل من الأصول المتاحة')
       }
+      // عزل الفروع (تدقيق الأدوار D3): الأصل المطلوب لازم يكون أصل فرع صاحب الطلب؛ أصل فرع تاني (أو أصل قديم بلا فرع
+      // يطلبه حساب فرع) بياخد نفس رد الأصل الغايب بالحرف — برقمه مش باسمه — فالرد مايفشّيش أصول الفروع التانية
+      const custodyRequester = await em.getRepository(Employee).findOne({ where: { id: req.requesterId }, select: { id: true, branchId: true } })
       for (const assetId of ids) {
-        const asset = await em
+        const found = await em
           .getRepository(Asset)
           .findOne({ where: { id: assetId } })
+        const asset = found && custodyRequester && !custodyBranchProblem(branchScopeOf(user), found, custodyRequester) ? found : null
         if (!asset || asset.status !== 'AVAILABLE' || asset.currentHolderId) {
           throw new BadRequestException(
             `الأصل «${asset?.name ?? '#' + assetId}» غير متاح — اختر من المتاح فقط`
@@ -1617,18 +1622,42 @@ export class RequestsService {
     })
   }
 
+  // ===== عزل فروع العهدة (تدقيق الأدوار D3 — القاعدة في assets/asset-branch.ts، والحكم على ناتج branchScopeOf) =====
+  // لا كاشف وجود عبر الفروع: عهدة موظف خارج نطاق السائل = نفس رد الإسناد الغايب بالحرف. أطراف العهدة نفسها
+  // (صاحبها ومن سلّمها/نقلها) مستثنون — هم عارفينها أصلًا، وبياخدوا السبب الصريح.
+  private async assertCustodyInScope(user: JwtPayload, row: CustodyAssignment) {
+    if (user.employeeId && (user.employeeId === row.employeeId || user.employeeId === row.assignedBy)) return
+    const scope = branchScopeOf(user)
+    if (scope === null) return
+    const employee = await this.ds.getRepository(Employee).findOne({ where: { id: row.employeeId }, select: { id: true, branchId: true } })
+    if (!employeeInScope(scope, employee)) throw new NotFoundException('إسناد العهدة غير موجود')
+  }
+
+  // العهدة جوه الفرع الواحد: أصل مختوم بفرع غير فرع موظف العهدة مايتسلّمش ومايتنشّطش — إلا الطرف المستلم في نقل
+  // بين فرعين بدأه حساب نطاقه كل الفروع (الحامل الحالي لسه ACTIVE وهو اللي مسجَّل ناقل العهدة). أصل بلا فرع بيكمّل دورته.
+  private async custodyRowBranchProblem(em: EntityManager, row: CustodyAssignment, asset: Asset, employee: Pick<Employee, 'branchId'>) {
+    if (asset.branchId == null || Number(asset.branchId) === Number(employee.branchId)) return null
+    const source = asset.currentHolderId && row.assignedBy === asset.currentHolderId
+      ? await em.getRepository(CustodyAssignment).findOneBy({ assetId: row.assetId, employeeId: asset.currentHolderId, status: 'ACTIVE' }) : null
+    return source && source.id !== row.id ? null : CUSTODY_CROSS_BRANCH
+  }
+
   // ===== تأكيد استلام العهدة (الموظف) → بانتظار اعتماد المدير المباشر =====
   async acknowledgeCustody(user: JwtPayload, assignmentId: number) {
     const found = await this.ds.getRepository(CustodyAssignment).findOne({
       where: { id: assignmentId },
     })
     if (!found) throw new NotFoundException('إسناد العهدة غير موجود')
+    await this.assertCustodyInScope(user, found)
     return this.ds.transaction(async em => {
       const asset = await em.getRepository(Asset).findOne({ where: { id: found.assetId }, lock: { mode: 'pessimistic_write' } })
       if (!asset || asset.status === 'RETIRED') throw new BadRequestException('الأصل غير موجود أو متقاعد')
       const row = await em.getRepository(CustodyAssignment).findOneBy({ id: assignmentId })
       if (!row || row.employeeId !== user.employeeId) throw new ForbiddenException('العهدة ليست باسمك')
       if (row.status !== 'PENDING_ACK') throw new BadRequestException('العهدة ليست بانتظار التأكيد')
+      const recipient = await em.getRepository(Employee).findOne({ where: { id: row.employeeId }, select: { id: true, branchId: true } })
+      const crossBranch = recipient ? await this.custodyRowBranchProblem(em, row, asset, recipient) : null
+      if (crossBranch) throw new BadRequestException(crossBranch)
       row.status = 'PENDING_MANAGER_CONFIRM'
       row.acknowledgedAt = new Date()
       return em.getRepository(CustodyAssignment).save(row)
@@ -1641,6 +1670,7 @@ export class RequestsService {
       where: { id: assignmentId },
     })
     if (!row) throw new NotFoundException('إسناد العهدة غير موجود')
+    await this.assertCustodyInScope(user, row)
     if (row.employeeId !== user.employeeId) {
       throw new ForbiddenException('العهدة ليست باسمك')
     }
@@ -1679,6 +1709,7 @@ export class RequestsService {
   async managerConfirmCustody(user: JwtPayload, assignmentId: number) {
     const found = await this.ds.getRepository(CustodyAssignment).findOneBy({ id: assignmentId })
     if (!found) throw new NotFoundException('إسناد العهدة غير موجود')
+    await this.assertCustodyInScope(user, found)
     const directManager = await this.resolver.directManagerOf(found.employeeId)
     if (user.employeeId !== directManager && !userHasPerm(user, 'custody.assign')) throw new ForbiddenException('اعتماد العهدة للمدير المباشر أو مسؤول العهدة')
     if (user.employeeId === found.employeeId) throw new ForbiddenException('لا يمكنك اعتماد عهدتك بنفسك')
@@ -1692,6 +1723,8 @@ export class RequestsService {
       if (!employee || !employee.isActive) throw new BadRequestException('الموظف المستلم غير نشط')
       if (scope !== null && employee.branchId !== scope) throw new ForbiddenException('العهدة خارج نطاق فرعك')
       if (!asset || asset.status === 'RETIRED') throw new BadRequestException('الأصل غير موجود أو متقاعد')
+      const crossBranch = await this.custodyRowBranchProblem(em, row, asset, employee)
+      if (crossBranch) throw new BadRequestException(crossBranch)
       const active = await repo.find({ where: { assetId: row.assetId, id: Not(row.id), status: In(['ACTIVE', 'RETURN_REQUESTED']) } })
       const source = active.length === 1 && active[0].status === 'ACTIVE' && active[0].employeeId === asset.currentHolderId
         && active[0].employeeId === row.assignedBy ? active[0] : null
@@ -1707,7 +1740,8 @@ export class RequestsService {
       row.status = 'ACTIVE'
       row.managerConfirmAt = new Date()
       await repo.save(row)
-      await em.getRepository(Asset).update(asset.id, { currentHolderId: row.employeeId, status: 'ASSIGNED' })
+      // الأصل بياخد فرع حامله الجديد لحظة التنشيط: نقل بين فرعين بيكمل هنا، والأصل القديم اللي بلا فرع بيتختم (نفس قاعدة ترحيل 065)
+      await em.getRepository(Asset).update(asset.id, { currentHolderId: row.employeeId, status: 'ASSIGNED', branchId: employee.branchId })
       await finishCustodyRequest(em, row.requestId)
       return row
     })
@@ -1717,6 +1751,7 @@ export class RequestsService {
     if (typeof reason !== 'string' || reason.trim().length < 3 || reason.trim().length > 100) throw new BadRequestException('سبب رفض الاستلام مطلوب — من 3 إلى 100 حرف')
     const found = await this.ds.getRepository(CustodyAssignment).findOneBy({ id: assignmentId })
     if (!found) throw new NotFoundException('إسناد العهدة غير موجود')
+    await this.assertCustodyInScope(user, found)
     return this.ds.transaction(async em => {
       const asset = await em.getRepository(Asset).findOne({ where: { id: found.assetId }, lock: { mode: 'pessimistic_write' } })
       const repo = em.getRepository(CustodyAssignment)

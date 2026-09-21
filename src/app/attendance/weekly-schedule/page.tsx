@@ -41,6 +41,7 @@ import {
   fetchBranches,
   fetchWeekDayOverrides,
   getCurrentUser,
+  lockedBranchIdOf,
   setDayShiftOverride,
   fetchWorkingDays,
   fetchScheduleRules,
@@ -376,7 +377,7 @@ export default function WeeklySchedulePage() {
     fetchBranches().then(setBranchesList).catch(() => setBranchesList([]))
     fetchTeams().then(setTeamsList).catch(() => setTeamsList([]))
     const user = getCurrentUser()
-    setLockedBranchId(user && user.role !== 'super_admin' && user.branchId ? user.branchId : null)
+    setLockedBranchId(lockedBranchIdOf(user))
     // قواعد الاستثناء — اختيارية للتمييز؛ تُتجاهَل بصمت لو فشلت
     fetchScheduleRules()
       .then(setScheduleRules)

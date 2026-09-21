@@ -1,6 +1,6 @@
-import { BadRequestException, Body, Controller, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common'
+import { BadRequestException, Body, Controller, ForbiddenException, Get, Param, ParseIntPipe, Patch, Post, Query, UseGuards } from '@nestjs/common'
 import type { JwtPayload } from '../auth/auth.service'
-import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import {
   CreateDeductionDto,
   DeductionBulkPreviewDto,
@@ -22,6 +22,9 @@ import { TypedDeductionsService } from './typed-deductions.service'
 export class TypedDeductionsController {
   constructor(private readonly service: TypedDeductionsService) {}
 
+  // الكتالوج الكامل (الأكواد والقيم والسقوف وسلاسل الاعتماد) إعداد، مش قائمة اختيار: لحامل «إدارة أنواع الخصومات» بس
+  // (تدقيق الأدوار D9 — كان مفتوحًا لأي حساب). نموذج الطلب بياخد أنواعه من creatable/candidates بنطاق صاحبه.
+  @Perm('deductions.manage')
   @Get('types')
   types(@CurrentUser() user: JwtPayload, @Query('includeInactive') includeInactive?: string) {
     return this.service.listTypes(user, includeInactive === 'true')
@@ -55,9 +58,12 @@ export class TypedDeductionsController {
     return this.service.mine(user)
   }
 
-  // DD-13: تقارير الخصومات بنطاق المستخدم (قبل :id)
+  // DD-13: تقارير الخصومات بنطاق المستخدم (قبل :id). نفس بوابة نظيره /reports/financial/deductions بالظبط:
+  // مركز التقارير + عرض الرواتب (تدقيق الأدوار D11 — كان بلا أي صلاحية، فأي طرف في خصم يسحب مبالغه واعتراضاته مجمّعة).
+  @Perm('reports.view')
   @Get('reports')
   reports(@CurrentUser() user: JwtPayload, @Query() query: DeductionReportQueryDto) {
+    if (!userHasPerm(user, 'payroll.view')) throw new ForbiddenException('تقارير الخصومات محتاجة صلاحية عرض الرواتب')
     return this.service.reports(user, query)
   }
 

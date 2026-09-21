@@ -42,6 +42,10 @@ const PATH_PERMS: Array<[prefix: string | RegExp, perm: string | string[] | null
   ['/settings/permission-types', 'settings.manage'],
   ['/settings/asset-types', 'custody.assign'], // سجل الأصول — نفس صلاحية /assets
   ['/employees', 'employees.view'],
+  // سلسلة اعتماد المسير: التسمية في السلسلة هي المنحة (معتمد بلا أي صلاحية رواتب)، وصرف الرواتب لحامل payroll.disburse أو قارئ/صارف المسير — الباك يحكم
+  ['/payroll/my-approvals', null],
+  ['/payroll/disbursement', null],
+  ['/payroll/approval-chain', 'payroll.chain_manage'],
   ['/payroll', 'payroll.view'],
   ['/settings', 'settings.manage'],
   ['/requests-console', 'requests.view_all'],

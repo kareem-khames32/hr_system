@@ -45,6 +45,10 @@ export const PERMISSIONS: Record<string, string> = {
   'payroll.calculate': 'احتساب المسير',
   'payroll.approve': 'اعتماد المسير',
   'payroll.pay': 'صرف المسير',
+  // قرار المالك 22 سبتمبر: «مسؤول صرف الرواتب» يعلّم صرف كل موظف في مسير معتمد ولا يعدّل أي رقم — منفصلة عن payroll.pay (قفل المسير كله)
+  'payroll.disburse': 'تسجيل صرف الرواتب للموظفين (تم / لم يتم) بلا أي تعديل',
+  // مين يعتمد المسير وبأي ترتيب = ضابط فصل المهام نفسه، فلا يمنحها إلا مدير النظام (SUPER_ADMIN_ONLY_GRANTS)
+  'payroll.chain_manage': 'ضبط سلسلة اعتماد المسير',
   'payroll.reopen': 'إعادة فتح مسير معتمد للمراجعة بسبب موثق',
   'payroll.cancel': 'إلغاء مسودة مسير مع الاحتفاظ بأثرها',
   // C8 / الخطوة 31: عكس صرف مسير مصروف بمسير عكس مربوط (يعيد الإضافي والأقساط والقيود لحالتها قبل الصرف) — اعتماده وتنفيذه بصلاحيتي الاعتماد والصرف
@@ -95,6 +99,138 @@ export type Permission = keyof typeof PERMISSIONS
 
 export const ALL_PERMISSIONS = Object.keys(PERMISSIONS)
 
+// ===== شاشة الصلاحيات: كل صلاحية في السجل تحت وحدة واحدة ولها سطر شرح =====
+// الاختبار api/test/roles-scope-presets.test.cjs بيفشل لو صلاحية اتضافت للسجل من غير وحدة أو شرح،
+// فمفيش صلاحية تتوه من الشاشة تاني (approve.custody فضلت بلا أي دور يحملها لحد تدقيق 21 سبتمبر).
+export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissions: string[] }> = [
+  { key: 'employees', labelAr: 'الموظفون', permissions: ['employees.view', 'employees.create', 'employees.edit', 'employees.archive', 'documents.manage', 'transfers.view'] },
+  { key: 'recruitment', labelAr: 'التوظيف', permissions: ['candidates.manage'] },
+  { key: 'org', labelAr: 'الهيكل التنظيمي', permissions: ['org.manage'] },
+  { key: 'requests', labelAr: 'الطلبات', permissions: ['requests.view_all', 'requests.create_on_behalf'] },
+  { key: 'approvals', labelAr: 'خطوات الاعتماد', permissions: ['approve.hr', 'approve.finance', 'approve.it', 'approve.custody', 'approve.payroll', 'approve.executive'] },
+  {
+    key: 'attendance', labelAr: 'الحضور والإضافي',
+    permissions: [
+      'attendance.view_all', 'attendance.manage', 'attendance.sync',
+      'attendance_exemption.view', 'attendance_exemption.manage', 'attendance_exemption.approve', 'attendance_exemption.approve_executive',
+      'overtime.confirm', 'overtime.adjust',
+    ],
+  },
+  { key: 'leaves', labelAr: 'الإجازات', permissions: ['leaves.view_all', 'leaves.revoke', 'leave_balances.manage'] },
+  {
+    key: 'payroll', labelAr: 'الرواتب',
+    permissions: [
+      'payroll.view', 'payroll.calculate', 'payroll.approve', 'payroll.pay', 'payroll.disburse',
+      'payroll.reopen', 'payroll.cancel', 'payroll.reverse',
+      'payroll.policy.manage', 'payroll.chain_manage', 'payroll.self_approval_licence',
+    ],
+  },
+  { key: 'loans', labelAr: 'السلف', permissions: ['loans.policies', 'loans.exceptional', 'loans.cap_override', 'loans.repay', 'loans.write_off'] },
+  {
+    key: 'adjustments', labelAr: 'الخصومات والمكافآت والإعفاءات',
+    permissions: [
+      'deductions.view', 'deductions.approve', 'deductions.manage',
+      'bonuses.view', 'bonuses.approve', 'bonuses.manage', 'bonuses.exceed_cap',
+      'financial_exemption.view', 'financial_exemption.grant', 'financial_exemption.approve', 'financial_exemption.override_limits',
+    ],
+  },
+  { key: 'assets', labelAr: 'الأصول والعهد', permissions: ['custody.assign'] },
+  { key: 'offboarding', labelAr: 'إنهاء الخدمة', permissions: ['offboarding.manage', 'settlement.edit', 'settlement.approve'] },
+  { key: 'insights', labelAr: 'التقارير واللوحات', permissions: ['reports.view', 'dashboard.view_all', 'calendar.view_all'] },
+  { key: 'access', labelAr: 'الحسابات والأدوار', permissions: ['users.manage', 'roles.manage'] },
+  { key: 'settings', labelAr: 'إعدادات النظام', permissions: ['settings.manage', 'request_types.manage', 'approval_chains.manage'] },
+]
+
+// سطر واحد بيقول الصلاحية بتفتح إيه فعلًا (من جرد مسارات الـAPI، مش من اسمها)
+export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
+  'employees.view': 'يشوف قائمة موظفي نطاقه ويفتح ملف أي واحد فيهم (بياناته وسجله ومؤهلاته) — قراءة بس',
+  'employees.create': 'يعيّن موظف جديد ويدخّل بياناته وراتبه الأول',
+  'employees.edit': 'يعدّل بيانات الموظف وعقده ومؤهلاته ويوقفه عن العمل، ويعدّل كذا موظف مرة واحدة من ملف إكسل',
+  'employees.archive': 'يأرشف موظف (يخرجه من الخدمة) ويرجّعه على رأس العمل',
+  'documents.manage': 'يرفع مستندات الموظفين ويعدّلها، ويصدر الخطابات الرسمية من القوالب',
+  'transfers.view': 'يشوف سجل تنقلات الموظفين بين الفرق والأقسام — قراءة بس',
+  'candidates.manage': 'يضيف المرشحين ويعدّل مراحلهم ويحوّل المرشح المقبول لموظف',
+  'org.manage': 'ينشئ الفروع والأقسام والفرق ويعدّلها ويحدّد مديريها',
+  'requests.view_all': 'يشوف كل طلبات موظفي نطاقه في كونسول الطلبات — قراءة بس، والقرار لأصحاب خطوات الاعتماد',
+  'requests.create_on_behalf': 'يقدّم طلب (إجازة، إذن، سلفة...) باسم موظف تاني في نطاقه',
+  'approve.hr': 'يعتمد أو يرفض الطلبات الواقفة على خطوة «الموارد البشرية»',
+  'approve.finance': 'يعتمد أو يرفض الطلبات الواقفة على خطوة «المالية»',
+  'approve.it': 'يعتمد أو يرفض الطلبات الواقفة على خطوة «تقنية المعلومات»',
+  'approve.custody': 'يعتمد أو يرفض الطلبات الواقفة على خطوة «أمين العهدة» (تسليم العهد واستلامها وإخلاء الطرف)',
+  'approve.payroll': 'يعتمد أو يرفض الطلبات الواقفة على خطوة «موظف الرواتب»',
+  'approve.executive': 'يعتمد أو يرفض الطلبات الواقفة على خطوة «الإدارة التنفيذية»',
+  'attendance.view_all': 'يشوف حضور موظفي نطاقه وبصماتهم وجداولهم والعمل الإضافي — قراءة بس',
+  'attendance.manage': 'يدخّل بصمة يدوية ويحذفها، ويعمل جداول الدوام ودوام العطلات، ويعيد حساب الحضور — بيأثر على المسير مباشرة',
+  'attendance.sync': 'يسحب البصمات من أجهزة البصمة ويشوف البصمات اللي مالهاش موظف',
+  'attendance_exemption.view': 'يشوف طلبات استثناء الحضور (الإعفاء من البصمة) في نطاقه — قراءة بس',
+  'attendance_exemption.manage': 'يطلب استثناء حضور لموظف ويلغي الطلب — القرار مش له',
+  'attendance_exemption.approve': 'يعتمد استثناء الحضور أو يرفضه أو ينهيه — لا يمنحها إلا مدير النظام',
+  'attendance_exemption.approve_executive': 'الاعتماد التنفيذي لاستثناء حضور القيادات — لا يمنحها إلا مدير النظام',
+  'overtime.confirm': 'يأكّد ساعات الإضافي اللي النظام اكتشفها من البصمات عشان تدخل المسير',
+  'overtime.adjust': 'يقلّل دقائق الإضافي وقت الاعتماد بسبب مكتوب — لا يمنحها إلا مدير النظام',
+  'leaves.view_all': 'يشوف سجل إجازات موظفي نطاقه وأرصدتهم — قراءة بس',
+  'leaves.revoke': 'يلغي إجازة معتمدة: الرصيد يرجع والحضور يتحسب من جديد',
+  'leave_balances.manage': 'يقفل سنة الإجازات ويرحّل الأرصدة ويصفّي رصيد الموظف',
+  'payroll.view': 'يشوف المسيرات وبنودها وقسائم الموظفين وكشف البنك (بأرقام الحسابات البنكية) والسلف والتقارير المالية',
+  'payroll.calculate': 'يفتح المسير ويحتسبه ويعيد حسابه، ويدير البدلات والالتزامات وشيل الخصومات — من غير ما يعتمد',
+  'payroll.approve': 'يعتمد المسير المحسوب ويسجّل تغييرات أساس الراتب — مايعتمدش مسير هو اللي حسبه',
+  'payroll.pay': 'يقفل المسير المعتمد كـ«مصروف» (صرف المسير كله مرة واحدة)',
+  'payroll.disburse': 'يعلّم على كل موظف في مسير معتمد «اتصرف / لسه» — من غير ما يغيّر أي رقم ولا حالة المسير',
+  'payroll.reopen': 'يرجّع مسير معتمد لحالة «محسوب» بسبب مكتوب — لا يمنحها إلا مدير النظام',
+  'payroll.cancel': 'يلغي مسودة مسير محسوب بسبب مكتوب — لا يمنحها إلا مدير النظام',
+  'payroll.reverse': 'يعكس مسير اتصرف بمسير عكس مربوط بيه — لا يمنحها إلا مدير النظام',
+  'payroll.policy.manage': 'ينشئ مجموعات سياسات الرواتب وينشر نسخها، ويعدّل شرائح التأخير وإعدادات التأمينات',
+  'payroll.chain_manage': 'يحدّد مين يعتمد المسير وبأي ترتيب — لا يمنحها إلا مدير النظام',
+  'payroll.self_approval_licence': 'يشغّل أو يوقف رخصة «اللي حسب المسير يعتمده» — بتفك فصل المهام، لا يمنحها إلا مدير النظام',
+  'loans.policies': 'يعدّل سقوف السلف ونسخها (إعداد لكل الشركة)',
+  'loans.exceptional': 'ينشئ سلفة استثنائية فوق السقف لموظف بسبب مكتوب',
+  'loans.cap_override': 'يعتمد سلفة عدّت السقف باستثناء مكتوب — لا يمنحها إلا مدير النظام',
+  'loans.repay': 'يسجّل السداد المبكر ويحصّل رصيد السلفة بعد انتهاء الخدمة',
+  'loans.write_off': 'يشطب رصيد سلفة متبقي بعد انتهاء الخدمة (خسارة على الشركة) — لا يمنحها إلا مدير النظام',
+  'deductions.view': 'يشوف الخصومات المصنفة على موظفي نطاقه — قراءة بس',
+  'deductions.approve': 'يعتمد أو يرفض خطوة الموارد البشرية في الخصومات',
+  'deductions.manage': 'يدير أنواع الخصومات، وينشئ خصم على موظف، ويلغيه أو يعكسه بسبب مكتوب',
+  'bonuses.view': 'يشوف مكافآت موظفي نطاقه — قراءة بس',
+  'bonuses.approve': 'يعتمد أو يرفض خطوة الموارد البشرية في المكافآت',
+  'bonuses.manage': 'يدير أنواع المكافآت، ويقترح مكافأة لموظف، ويلغيها أو يعكسها بسبب مكتوب',
+  'bonuses.exceed_cap': 'يقترح أو يعتمد مكافأة أعلى من سقف نوعها — لا يمنحها إلا مدير النظام',
+  'financial_exemption.view': 'يشوف الإعفاءات المالية في المسيرات وتقرير حوكمتها — قراءة بس',
+  'financial_exemption.grant': 'يعفي موظف من خصم (أو من كل خصوماته القابلة) في مسير محسوب',
+  'financial_exemption.approve': 'يعتمد أو يرفض الإعفاء المالي المحوّل للموارد البشرية — مايعتمدش إعفاء هو اللي منحه',
+  'financial_exemption.override_limits': 'يتخطى حدود الإعفاء المالي بتبرير مكتوب — لا يمنحها إلا مدير النظام',
+  'custody.assign': 'يسجّل الأصول ويعدّلها ويخرجها من الخدمة، ويسلّم العهدة للموظف ويستلمها منه ويسجّل فقدها أو تلفها',
+  'offboarding.manage': 'يبدأ إنهاء خدمة موظف وإخلاء طرفه ويتابعه',
+  'settlement.edit': 'يضيف بنود تصفية نهاية الخدمة ويعدّلها ويحذفها',
+  'settlement.approve': 'يعتمد التصفية ويقفلها',
+  'reports.view': 'يفتح مركز التقارير (الأعداد والحضور والإجازات) — التقارير المالية محتاجة معاها «عرض مسيرات الرواتب»',
+  'dashboard.view_all': 'يشوف لوحة التحكم الإدارية بأرقام نطاقه',
+  'calendar.view_all': 'يشوف إجازات كل موظفي نطاقه في التقويم (من غيرها يشوف إجازاته هو بس)',
+  'users.manage': 'ينشئ حسابات الدخول ويغيّر دورها وفرعها وكلمة مرورها ويعطّلها — لا يمنحها إلا مدير النظام',
+  'roles.manage': 'ينشئ الأدوار ويعدّل صلاحيات كل دور، ويمنح أو يسحب صلاحية من مستخدم بعينه — لا يمنحها إلا مدير النظام',
+  'settings.manage': 'يعدّل إعدادات النظام والكتالوجات والعطلات وقوالب الخطابات؛ وإعداد «لكل الشركة» بيتعدّل بس من حساب نطاقه «كل الفروع» — لا يمنحها إلا مدير النظام',
+  'request_types.manage': 'ينشئ أنواع الطلبات ويعدّل حقولها وجمهورها',
+  'approval_chains.manage': 'ينشئ دورات اعتماد الطلبات ويعدّل خطواتها',
+}
+
+const MODULE_OF_PERMISSION = new Map(
+  PERMISSION_MODULES.flatMap((module) => module.permissions.map((key) => [key, module] as const))
+)
+
+// صف سجل الصلاحيات لشاشات الإدارة: التسمية والشرح والوحدة وهل منحها حصري لمدير النظام
+export const permissionRegistry = () =>
+  ALL_PERMISSIONS.map((key) => {
+    const module = MODULE_OF_PERMISSION.get(key)
+    return {
+      key,
+      labelAr: PERMISSIONS[key],
+      description: PERMISSION_DESCRIPTIONS[key] ?? '',
+      // صلاحية اتضافت للسجل ونسيها صاحبها من الوحدات تظهر تحت «أخرى» بدل ما تختفي من الشاشة
+      group: module?.key ?? 'other',
+      groupLabelAr: module?.labelAr ?? 'أخرى',
+      superAdminOnly: SUPER_ADMIN_ONLY_GRANTS.includes(key),
+    }
+  })
+
 // صلاحيات إدارية لا يمنحها إلا مدير النظام — منع التصعيد: من يملك users.manage
 // أو roles.manage لا يصنع لنفسه أو لغيره مدير نظام فعلياً (تجاوز أو دور أو إسناد دور)
 // + الصلاحيات الحساسة التي تغيّر الصافي أو تتخطى الحضور (SEC-05): إعادة فتح المسير
@@ -114,6 +250,9 @@ export const SUPER_ADMIN_ONLY_GRANTS = [
   'financial_exemption.override_limits',
   // B5: من يملك الرخصة مع الاحتساب والاعتماد يعتمد ما احتسبه — لا يُمنح لدور أو تجاوز إلا من مدير النظام
   'payroll.self_approval_licence',
+  // سلسلة اعتماد المسير هي ضابط فصل المهام نفسه: من يضبطها يقرر مين يعتمد الرواتب — حامل users.manage
+  // لا يصنع حسابًا أو دورًا أو تجاوزًا يحملها (وإلا يكتب نفسه معتمدًا وحيدًا عبر حساب وسيط)
+  'payroll.chain_manage',
 ]
 
 // ما يُضاف حديثاً منها (مقارنة بالسابق) → رسالة الرفض، أو null لو لا منح جديد
@@ -207,7 +346,79 @@ export const ROLE_PRESETS: Array<{
     // الموظف = خدمة ذاتية فقط — endpoints الذاتية لا تحتاج صلاحيات
     permissions: [],
   },
+  // ===== أدوار تشغيلية (قرارات المالك 22 سبتمبر — تدقيق الأدوار ROLES_AUDIT.md) =====
+  // غير نظامية: تتعدل وتتعطل من شاشة الأدوار، والبذر يدرج الناقص منها فقط ولا يلمس صفًا قائمًا.
+  // الصفوف القائمة في قاعدة الشركة يعدّلها ترحيل 20260922_064 فقط لو لسه مطابقة للحزمة القديمة بالحرف.
+  {
+    // D1: يحتسب ويدير المسيرات — لا يعتمد ولا يصرف (فصل المهام): بلا payroll.approve ولا payroll.pay ولا payroll.disburse
+    code: 'payroll_manager',
+    nameAr: 'مسؤول الرواتب',
+    isSystem: false,
+    permissions: [
+      'bonuses.manage', 'dashboard.view_all', 'deductions.manage', 'deductions.view', 'documents.manage',
+      'employees.view', 'payroll.calculate', 'payroll.view', 'reports.view', 'requests.create_on_behalf',
+    ],
+  },
+  {
+    // D2: «قراءة فقط» لا يكتب — بلا بصمات يدوية ولا إعادة حساب حضور ولا عهد ولا مرشحين ولا مستندات،
+    // وبلا payroll.view (كشف البنك بالحسابات البنكية مفتوح بها)
+    code: 'read_only',
+    nameAr: 'قراءة فقط',
+    isSystem: false,
+    permissions: [
+      'attendance.view_all', 'dashboard.view_all', 'deductions.view', 'employees.view',
+      'leaves.view_all', 'reports.view', 'requests.view_all',
+    ],
+  },
+  {
+    // D4: مدخل البيانات يعيّن ويعدّل ولا يؤرشف
+    code: 'data_entry',
+    nameAr: 'مدخل بيانات',
+    isSystem: false,
+    permissions: ['documents.manage', 'employees.create', 'employees.edit', 'employees.view'],
+  },
+  {
+    // يسجّل الأصل ويسلّم العهدة ويستلمها وينقلها ويعتمد خطوة أمين العهدة — ولا شيء غير ذلك:
+    // لا مال ولا ملفات موظفين (منتقي الموظف من الدليل المختصر بلا employees.view) ولا حضور ولا إعدادات
+    code: 'asset_officer',
+    nameAr: 'مسؤول الأصول',
+    isSystem: false,
+    permissions: ['custody.assign', 'approve.custody'],
+  },
+  {
+    // قراءة فقط في وحدات الموارد البشرية: لا يعدّل ولا يلغي ولا يعتمد، ولا يرى الرواتب ولا الخصومات والمكافآت
+    code: 'hr_officer',
+    nameAr: 'مسؤول موارد بشرية',
+    isSystem: false,
+    permissions: [
+      'employees.view', 'requests.view_all',
+      'attendance.view_all', 'attendance_exemption.view',
+      'leaves.view_all', 'calendar.view_all',
+      'dashboard.view_all', 'reports.view', 'transfers.view',
+    ],
+  },
+  {
+    // يرى المسيرات ويعلّم صرف كل موظف (تم / لم يتم) — لا يحتسب ولا يعتمد ولا يقفل الصرف ولا يعدّل رقمًا
+    code: 'payroll_disburser',
+    nameAr: 'مسؤول صرف الرواتب',
+    isSystem: false,
+    permissions: ['payroll.view', 'payroll.disburse'],
+  },
 ]
+
+// الحزم اللي اتشحنت قبل قرارات 22 سبتمبر (أنشأها مستورد النظام القديم users-assets.ts من أدوار logic-leap،
+// مرتبة أبجديًا بالحرف زي ما المستورد بيكتبها). مرجع ترحيل 20260922_064: الصف يتعدّل فقط لو لسه مطابق لها.
+export const LEGACY_SHIPPED_ROLE_PRESETS: Record<string, string[]> = {
+  payroll_manager: [
+    'bonuses.manage', 'dashboard.view_all', 'deductions.manage', 'deductions.view', 'documents.manage', 'employees.view',
+    'payroll.approve', 'payroll.calculate', 'payroll.pay', 'payroll.view', 'reports.view', 'requests.create_on_behalf',
+  ],
+  read_only: [
+    'attendance.manage', 'attendance.view_all', 'candidates.manage', 'custody.assign', 'dashboard.view_all', 'deductions.view',
+    'documents.manage', 'employees.view', 'leaves.view_all', 'payroll.view', 'reports.view', 'requests.view_all',
+  ],
+  data_entry: ['documents.manage', 'employees.archive', 'employees.create', 'employees.edit', 'employees.view'],
+}
 
 // حساب الصلاحيات النهائية
 export function effectivePermissions(

@@ -63,6 +63,13 @@ import { PayrollDailyAccrual } from './payroll-daily-accrual.entities'
 import { PayrollDailyAccrualService } from './payroll-daily-accrual.service'
 import { PayrollDailyAccrualScheduler } from './payroll-daily-accrual.scheduler'
 import { PayrollDailyAccrualController } from './payroll-daily-accrual.controller'
+// سلسلة اعتماد المسير (سلسلة الشركة + سلسلة خاصة بمسير دائم) وصرف المسير موظف بموظف
+import { PayrollApprovalChain, PayrollRunApproval } from './payroll-approval-chain.entities'
+import { PayrollApprovalChainService } from './payroll-approval-chain.service'
+import { PayrollApprovalChainController } from './payroll-approval-chain.controller'
+import { PayrollItemDisbursement } from './payroll-disbursement.entities'
+import { PayrollDisbursementService } from './payroll-disbursement.service'
+import { PayrollDisbursementController } from './payroll-disbursement.controller'
 
 @Module({
   imports: [
@@ -124,13 +131,17 @@ import { PayrollDailyAccrualController } from './payroll-daily-accrual.controlle
       PayrollAllowanceGrantLine,
       // تراكم المسير يومًا بيوم
       PayrollDailyAccrual,
+      // سلسلة اعتماد المسير وقراراتها، وعلامات صرف الموظفين
+      PayrollApprovalChain,
+      PayrollRunApproval,
+      PayrollItemDisbursement,
     ]),
   ],
   controllers: [PayrollController, ObligationsController, PayrollRulesController, PayrollPolicyController, PayrollSalaryHistoryController, TypedDeductionsController, BonusesController,
     FinancialExemptionsController, PayrollCorrectionsController, SocialInsuranceController, PayrollBankSheetController, PayrollOverviewController, PayrollAllowancesController,
-    PayrollDailyAccrualController],
+    PayrollDailyAccrualController, PayrollApprovalChainController, PayrollDisbursementController],
   providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService,
     FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService, PayrollAllowancesService,
-    PayrollDailyAccrualService, PayrollDailyAccrualScheduler],
+    PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService],
 })
 export class PayrollModule {}

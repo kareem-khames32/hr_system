@@ -653,11 +653,24 @@ export class BonusesService {
     return result.slice(0, 500)
   }
 
+  // لا كاشف وجود (نفس قاعدة الخصومات — تدقيق الأدوار D6): اللي مالوش أي صفة على الطلب بياخد نفس رد الطلب الغايب بالحرف،
+  // فالرد مايفرّقش بين رقم موجود خارج نطاقه ورقم مش موجود أصلًا.
+  private notFound() { return new NotFoundException({ code: 'BONUS_NOT_FOUND', message: 'طلب المكافأة غير موجود' }) }
+
+  /** له صفة على الطلب: مُقترِحه، أو صاحب المكافأة نفسه (شايفها في «مكافآتي»)، أو معتمِد في سلسلتها، أو صاحب صلاحية مكافآت في فرع الموظف، أو صاحب الخطوة الحالية. */
+  private knows(user: JwtPayload, row: BonusRequest, employee: Pick<Employee, 'branchId'> | undefined | null) {
+    const chain = parseDeductionSteps(row.steps), step = currentDeductionStep(chain)
+    return row.creatorUserId === user.sub
+      || (!!user.employeeId && (user.employeeId === row.employeeId || chain.some(item => item.approverEmployeeId === user.employeeId)))
+      || (this.privileged(user) && this.inBranchScope(user, employee))
+      || (row.status === 'IN_APPROVAL' && !!step && !this.actorProblem(user, row, step, employee))
+  }
+
   async detail(user: JwtPayload, id: number) {
     const row = await this.requests.findOneBy({ id })
-    if (!row) throw new NotFoundException({ code: 'BONUS_NOT_FOUND', message: 'طلب المكافأة غير موجود' })
+    if (!row) throw this.notFound()
     const [view] = await this.views(this.manager, user, [row], 'all')
-    if (!view) throw new ForbiddenException({ code: 'BONUS_FORBIDDEN', message: 'طلب المكافأة خارج نطاق صلاحيتك' })
+    if (!view) throw this.notFound()
     const events = await this.manager.getRepository(BonusRequestEvent).find({ where: { requestId: id }, order: { id: 'ASC' } })
     return { ...view, events: events.map(event => ({ ...event, payload: json(event.payload, null) })) }
   }
@@ -683,9 +696,11 @@ export class BonusesService {
   }
 
   // ===== دورة الاعتماد =====
-  private async lockedRequest(em: EntityManager, id: number, expectedRevision?: number) {
+  // actor: صاحب الإجراء — اللي مالوش صفة على الطلب بياخد «غير موجود» قبل فحص النسخة والحالة، فالإجراءات مش كاشف وجود هي كمان
+  private async lockedRequest(em: EntityManager, id: number, expectedRevision?: number, actor?: JwtPayload) {
     const row = await em.getRepository(BonusRequest).createQueryBuilder('r').setLock('pessimistic_write').where('r.id = :id', { id }).getOne()
-    if (!row) throw new NotFoundException({ code: 'BONUS_NOT_FOUND', message: 'طلب المكافأة غير موجود' })
+    if (!row) throw this.notFound()
+    if (actor && !this.knows(actor, row, await em.getRepository(Employee).findOne({ where: { id: row.employeeId }, select: { id: true, branchId: true } }))) throw this.notFound()
     if (expectedRevision !== undefined && row.revision !== expectedRevision) {
       throw new ConflictException({ code: 'BONUS_REVISION_CHANGED', message: 'تغيّر طلب المكافأة منذ فتحه؛ حدّث الشاشة ثم أعد المحاولة' })
     }
@@ -701,7 +716,7 @@ export class BonusesService {
 
   async approve(user: JwtPayload, id: number, dto: BonusDecisionDto) {
     const notice = await this.manager.transaction(async em => {
-      const row = await this.lockedRequest(em, id, dto.expectedRevision)
+      const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       await lockPayrollEmployees(em, [row.employeeId])
       if (row.status !== 'IN_APPROVAL') throw new ConflictException({ code: 'BONUS_STATE', message: `لا يمكن اعتماد مكافأة حالتها «${BONUS_LABELS.statuses[row.status] ?? row.status}»` })
       const steps = parseDeductionSteps(row.steps)
@@ -780,7 +795,7 @@ export class BonusesService {
     const reason = dto.reason?.trim() ?? ''
     if (reason.length < 5) bad('BONUS_REASON_REQUIRED', 'سبب الرفض مطلوب (5 أحرف على الأقل)')
     await this.manager.transaction(async em => {
-      const row = await this.lockedRequest(em, id, dto.expectedRevision)
+      const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       if (row.status !== 'IN_APPROVAL') throw new ConflictException({ code: 'BONUS_STATE', message: `لا يمكن رفض مكافأة حالتها «${BONUS_LABELS.statuses[row.status] ?? row.status}»` })
       const steps = parseDeductionSteps(row.steps), step = currentDeductionStep(steps)
       if (!step) throw new ConflictException({ code: 'BONUS_CHAIN_INVALID', message: 'لا توجد خطوة اعتماد معلقة' })
@@ -797,7 +812,7 @@ export class BonusesService {
 
   async withdraw(user: JwtPayload, id: number, dto: BonusDecisionDto) {
     await this.manager.transaction(async em => {
-      const row = await this.lockedRequest(em, id, dto.expectedRevision)
+      const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       if (row.creatorUserId !== user.sub) throw new ForbiddenException({ code: 'BONUS_WITHDRAW_FORBIDDEN', message: 'سحب المكافأة متاح لمُقترِحها فقط' })
       if (row.status !== 'IN_APPROVAL') throw new ConflictException({ code: 'BONUS_STATE', message: 'السحب متاح قبل اكتمال الاعتماد فقط؛ بعده تُلغى من الموارد البشرية' })
       const reason = dto.reason?.trim() || null
@@ -815,7 +830,7 @@ export class BonusesService {
       const settings = await this.settings(em)
       const reason = dto.reason?.trim() ?? ''
       if (reason.length < settings.reasonMinLength) bad('BONUS_REASON_TOO_SHORT', `سبب الإلغاء لا يقل عن ${settings.reasonMinLength} حرفًا`, { minLength: settings.reasonMinLength })
-      const row = await this.lockedRequest(em, id, dto.expectedRevision)
+      const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
       if (!this.inBranchScope(user, employee)) throw new ForbiddenException({ code: 'BONUS_FORBIDDEN', message: 'طلب المكافأة خارج نطاق فرعك' })
       if (!['IN_APPROVAL', 'APPROVED'].includes(row.status)) throw new ConflictException({ code: 'BONUS_STATE', message: `لا يمكن إلغاء مكافأة حالتها «${BONUS_LABELS.statuses[row.status] ?? row.status}»` })
@@ -847,7 +862,7 @@ export class BonusesService {
       const settings = await this.settings(em)
       const reason = dto.reason?.trim() ?? ''
       if (reason.length < settings.reasonMinLength) bad('BONUS_REASON_TOO_SHORT', `سبب العكس لا يقل عن ${settings.reasonMinLength} حرفًا`, { minLength: settings.reasonMinLength })
-      const row = await this.lockedRequest(em, id, dto.expectedRevision)
+      const row = await this.lockedRequest(em, id, dto.expectedRevision, user)
       const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
       if (!this.inBranchScope(user, employee)) throw new ForbiddenException({ code: 'BONUS_FORBIDDEN', message: 'طلب المكافأة خارج نطاق فرعك' })
       if (row.status !== 'APPROVED') throw new ConflictException({ code: 'BONUS_STATE', message: 'العكس متاح لمكافأة معتمدة صُرفت في مسير مصروف' })

@@ -13,10 +13,11 @@ import {
   CheckCircle2,
   Clock,
   X,
-  MinusCircle,
-  PlusCircle,
   KeyRound,
   AlertTriangle,
+  Globe2,
+  Building2,
+  Lock,
 } from 'lucide-react'
 import {
   type ApiBranch,
@@ -24,6 +25,7 @@ import {
   type ApiPermission,
   type ApiRole,
   type ApiUser,
+  type ApiUserPermissions,
   createUser,
   fetchBranches,
   fetchEmployees,
@@ -87,14 +89,17 @@ const emptyForm = {
   employeeId: '',
   password: '',
   isActive: true,
+  // «نطاقه: فرعه / كل الفروع» — يفتحه ويقفله مدير النظام فقط
+  scopeAllBranches: false,
 }
 
-// تجاوزات الصلاحيات الدقيقة للمستخدم (فوق حزمة الدور)
-interface Overrides {
-  grants: string[]
-  revokes: string[]
-  effective: string[]
-}
+// تجاوزات الصلاحيات الدقيقة للمستخدم (فوق حزمة الدور) زي ما الخادم حسبها:
+// النهائي = حزمة الدور ∪ المنح − السحب
+type Overrides = Pick<ApiUserPermissions, 'grants' | 'revokes' | 'effective' | 'rolePermissions' | 'roleActive' | 'legacyGrants'>
+
+// بحث عربي متسامح (الهمزات والتاء المربوطة والياء) — نفس بحث شاشة الأدوار
+const normalizeSearch = (text: string) =>
+  text.toLowerCase().replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').trim()
 
 export default function UsersPage() {
   const [users, setUsers] = useState<UserRow[]>([])
@@ -125,10 +130,13 @@ export default function UsersPage() {
   const [bulkError, setBulkError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [meId, setMeId] = useState<number | null>(null)
+  // نطاق الحساب وصلاحياته الحصرية بيغيّرهم مدير النظام بس (الخادم بيرفض غيره) — الشاشة بتقفل المفتاح وتشرح
+  const [isSuperAdmin, setIsSuperAdmin] = useState(false)
 
   // الصلاحيات الدقيقة — تُحمَّل عند فتح مودال التعديل
   const [overrides, setOverrides] = useState<Overrides | null>(null)
   const [permsLoading, setPermsLoading] = useState(false)
+  const [permSearch, setPermSearch] = useState('')
 
   const [formData, setFormData] = useState({ ...emptyForm })
 
@@ -155,7 +163,9 @@ export default function UsersPage() {
   }
 
   useEffect(() => {
-    setMeId(getCurrentUser()?.id ?? null)
+    const me = getCurrentUser()
+    setMeId(me?.id ?? null)
+    setIsSuperAdmin(me?.role === 'super_admin')
     loadData()
   }, [])
 
@@ -220,15 +230,38 @@ export default function UsersPage() {
   const roleNameOf = (code: string) =>
     roles.find((r) => r.code === code)?.nameAr ?? roleLabels[code] ?? code
 
-  // حزمة صلاحيات الدور المختار حالياً في النموذج
-  const roleBundle = useMemo(
-    () => roles.find((r) => r.code === formData.role)?.permissions ?? [],
-    [roles, formData.role]
-  )
+  // حزمة صلاحيات الدور المختار حالياً في النموذج — الدور المعطَّل مابيمنحش حاجة.
+  // لو الدور في النموذج هو نفسه المحفوظ، نستخدم حزمته زي ما الخادم حسبها بالظبط
+  const roleBundle = useMemo(() => {
+    if (editingUser && overrides && formData.role === editingUser.role) return overrides.rolePermissions
+    const role = roles.find((r) => r.code === formData.role)
+    return role && role.isActive ? role.permissions : []
+  }, [roles, formData.role, editingUser, overrides])
 
-  // المنح الإضافي يعرض ما ليس في حزمة الدور — والسحب يعرض ما فيها فقط
-  const grantablePerms = registry.filter((p) => !roleBundle.includes(p.key))
-  const revocablePerms = registry.filter((p) => roleBundle.includes(p.key))
+  // الصلاحيات النهائية للمستخدم = حزمة الدور ∪ المنح (ومعاها منح العمود القديم) − السحب — بتتحسب هنا مع كل تعديل
+  // عشان المدير يشوف النتيجة قبل الحفظ، والخادم بيحسبها تاني بنفسه عند الحفظ
+  const legacyGrants = overrides?.legacyGrants ?? []
+  const permissionState = (key: string) => {
+    const inRole = roleBundle.includes(key) || roleBundle.includes('*')
+    const legacy = legacyGrants.includes(key)
+    const granted = !!overrides?.grants.includes(key) && !inRole
+    const revoked = !!overrides?.revokes.includes(key) && (inRole || legacy || granted)
+    return { inRole, legacy, granted, revoked, effective: (inRole || legacy || granted) && !revoked }
+  }
+  const effectiveNow = registry.filter((p) => permissionState(p.key).effective)
+
+  // السجل مجمّعًا حسب الوحدة + بحث
+  const groupedRegistry = useMemo(() => {
+    const term = normalizeSearch(permSearch)
+    const groups = new Map<string, { label: string; perms: ApiPermission[] }>()
+    for (const p of registry) {
+      if (term && ![p.labelAr, p.description, p.key, p.groupLabelAr].some((f) => normalizeSearch(f).includes(term))) continue
+      const entry = groups.get(p.group) ?? { label: p.groupLabelAr, perms: [] }
+      entry.perms.push(p)
+      groups.set(p.group, entry)
+    }
+    return Array.from(groups.entries()).map(([key, value]) => ({ key, ...value }))
+  }, [registry, permSearch])
 
   const branchNameOf = (branchId?: number) =>
     branches.find((b) => b.id === branchId)?.name ?? '—'
@@ -259,6 +292,7 @@ export default function UsersPage() {
     setEditingUser(null)
     setFormData({ ...emptyForm })
     setOverrides(null)
+    setPermSearch('')
     setModalError(null)
     setShowModal(true)
   }
@@ -273,7 +307,9 @@ export default function UsersPage() {
       employeeId: user.employeeId ? String(user.employeeId) : '',
       password: '',
       isActive: user.isActive,
+      scopeAllBranches: user.scopeAllBranches === true,
     })
+    setPermSearch('')
     setModalError(null)
     setShowModal(true)
     // الصلاحيات الدقيقة — لا تنطبق على مدير النظام
@@ -286,6 +322,9 @@ export default function UsersPage() {
             grants: res.grants,
             revokes: res.revokes,
             effective: res.effective,
+            rolePermissions: res.rolePermissions ?? [],
+            roleActive: res.roleActive !== false,
+            legacyGrants: res.legacyGrants ?? [],
           })
         )
         .catch((err: any) => setModalError(err.message))
@@ -293,27 +332,22 @@ export default function UsersPage() {
     }
   }
 
-  const toggleGrant = (key: string, checked: boolean) => {
-    setOverrides((o) =>
-      o
-        ? {
-            ...o,
-            grants: checked ? [...o.grants, key] : o.grants.filter((p) => p !== key),
-          }
-        : o
-    )
+  // قائمة واحدة: العلامة = «الصلاحية سارية على المستخدم». تشغيل صلاحية مش في دوره = منحة (GRANT)،
+  // وإطفاء صلاحية جاية من دوره = سحب (REVOKE) — والرجوع عن أي منهما بيشيل التجاوز
+  const togglePermission = (key: string, checked: boolean) => {
+    const { inRole, legacy } = permissionState(key)
+    setOverrides((o) => {
+      if (!o) return o
+      const grants = o.grants.filter((p) => p !== key)
+      const revokes = o.revokes.filter((p) => p !== key)
+      if (checked && !inRole && !legacy) grants.push(key)
+      if (!checked && (inRole || legacy)) revokes.push(key)
+      return { ...o, grants, revokes }
+    })
   }
 
-  const toggleRevoke = (key: string, checked: boolean) => {
-    setOverrides((o) =>
-      o
-        ? {
-            ...o,
-            revokes: checked ? [...o.revokes, key] : o.revokes.filter((p) => p !== key),
-          }
-        : o
-    )
-  }
+  // حساب نطاقه «كل الفروع» مايعدّلوش غير مدير النظام (الخادم بيرفض) — الشاشة بتقفل الحفظ وتقول ليه
+  const lockedScopeAllAccount = !!editingUser && editingUser.scopeAllBranches === true && !isSuperAdmin
 
   const handleSave = async () => {
     setSaving(true)
@@ -335,13 +369,19 @@ export default function UsersPage() {
             : editingUser.employeeId
               ? { employeeId: null }
               : {}),
+          // النطاق بيتبعت بس لو مدير النظام غيّره فعلًا (غيره الخادم بيرفضه)
+          ...(isSuperAdmin &&
+          formData.role !== 'super_admin' &&
+          formData.scopeAllBranches !== (editingUser.scopeAllBranches === true)
+            ? { scopeAllBranches: formData.scopeAllBranches }
+            : {}),
         })
-        // حفظ تجاوزات الصلاحيات الدقيقة — السحب مقصور على حزمة الدور
+        // حفظ تجاوزات الصلاحيات الدقيقة — المنحة لصلاحية مش في الدور، والسحب لصلاحية جاية من الدور أو من العمود القديم
         if (formData.role !== 'super_admin' && overrides) {
           await setUserPermissions(
             editingUser.id,
-            overrides.grants.filter((g) => !roleBundle.includes(g)),
-            overrides.revokes.filter((r) => roleBundle.includes(r))
+            overrides.grants.filter((g) => !roleBundle.includes(g) && !overrides.revokes.includes(g)),
+            overrides.revokes.filter((r) => roleBundle.includes(r) || legacyGrants.includes(r))
           )
         }
       } else {
@@ -353,6 +393,9 @@ export default function UsersPage() {
           role: formData.role,
           branchId: formData.branchId ? Number(formData.branchId) : undefined,
           employeeId: formData.employeeId ? Number(formData.employeeId) : undefined,
+          ...(isSuperAdmin && formData.role !== 'super_admin' && formData.scopeAllBranches
+            ? { scopeAllBranches: true }
+            : {}),
         })
       }
       await loadData()
@@ -645,6 +688,21 @@ export default function UsersPage() {
                     </td>
                     <td className="px-4 py-4 text-gray-600">
                       <p>{branchNameOf(user.branchId)}</p>
+                      {/* نطاق الحساب: مدير النظام كل الفروع بدوره، وغيره مقفول على فرعه إلا لو اتفتح له «كل الفروع» */}
+                      {user.role === 'super_admin' || user.scopeAllBranches ? (
+                        <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-emerald-50 text-emerald-700 border border-emerald-200 rounded-full text-xs">
+                          <Globe2 size={11} />
+                          نطاقه: كل الفروع
+                        </span>
+                      ) : !user.branchId && user.role !== 'employee' ? (
+                        <span
+                          className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-red-50 text-red-700 border border-red-100 rounded-full text-xs"
+                          title="حساب إداري بلا فرع ونطاقه مش «كل الفروع»: شاشات النطاق بتطلع له فاضية — حدّد فرعه"
+                        >
+                          <AlertTriangle size={11} />
+                          بلا فرع — نطاقه فاضي
+                        </span>
+                      ) : null}
                       {employeeNameOf(user.employeeId) && (
                         <p className="text-xs text-gray-400 mt-0.5">
                           الموظف: {employeeNameOf(user.employeeId)}
@@ -802,6 +860,59 @@ export default function UsersPage() {
                   </div>
                 </div>
 
+                {/* ===== نطاقه: فرعه / كل الفروع ===== */}
+                {formData.role === 'super_admin' ? (
+                  <div className="bg-gray-50 rounded-xl p-4 text-sm text-gray-500 flex items-center gap-2">
+                    <Globe2 size={16} />
+                    مدير النظام نطاقه كل الفروع بحكم دوره
+                  </div>
+                ) : (
+                  <div className="rounded-xl border border-gray-200 p-4" data-testid="branch-scope-switch">
+                    <p className="text-sm font-medium text-gray-700 mb-2">نطاقه</p>
+                    <div className="grid grid-cols-2 gap-2">
+                      {([
+                        [false, 'فرعه', 'يشوف ويعدّل بيانات فرعه بس', Building2],
+                        [true, 'كل الفروع', 'يشوف النظام كله ويعدّل إعدادات الشركة — بالصلاحيات اللي معاه بس', Globe2],
+                      ] as const).map(([value, title, hint, Icon]) => (
+                        <label
+                          key={String(value)}
+                          className={`flex items-start gap-2 p-3 rounded-lg border ${
+                            formData.scopeAllBranches === value ? 'border-primary-500 bg-primary-50/50' : 'border-gray-200'
+                          } ${isSuperAdmin ? 'cursor-pointer' : 'opacity-70 cursor-not-allowed'}`}
+                        >
+                          <input
+                            type="radio"
+                            name="branch-scope"
+                            className="mt-1 text-primary-600"
+                            checked={formData.scopeAllBranches === value}
+                            disabled={!isSuperAdmin}
+                            onChange={() => setFormData({ ...formData, scopeAllBranches: value })}
+                          />
+                          <span>
+                            <span className="flex items-center gap-1.5 text-sm font-medium text-gray-800">
+                              <Icon size={14} />
+                              {title}
+                            </span>
+                            <span className="block text-xs text-gray-500 mt-0.5">{hint}</span>
+                          </span>
+                        </label>
+                      ))}
+                    </div>
+                    <p className="text-xs text-gray-500 mt-2 flex items-center gap-1">
+                      <Lock size={12} />
+                      {isSuperAdmin
+                        ? '«كل الفروع» بتوسّع كل صلاحية معاه على الشركة كلها (ومنها اعتماد الطلبات) — النطاق مش صلاحية: لسه محتاج الصلاحية لكل فعل. تغييره بيقفل جلسته الحالية.'
+                        : 'يغيّره مدير النظام فقط'}
+                    </p>
+                  </div>
+                )}
+
+                {lockedScopeAllAccount && (
+                  <div className="bg-amber-50 text-amber-800 border border-amber-200 rounded-xl p-4 text-sm">
+                    الحساب ده نطاقه «كل الفروع» — تعديله (الدور والصلاحيات وكلمة المرور والتفعيل) متاح لمدير النظام فقط.
+                  </div>
+                )}
+
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     الموظف المرتبط
@@ -871,93 +982,98 @@ export default function UsersPage() {
                       <div className="w-6 h-6 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
                     </div>
                   ) : overrides ? (
-                    <div className="space-y-4 border-t border-gray-100 pt-4">
+                    <div className="space-y-4 border-t border-gray-100 pt-4" data-testid="user-effective-permissions">
                       <div>
                         <label className="block text-sm font-bold text-gray-800 mb-1">
-                          الصلاحيات الدقيقة
+                          صلاحيات المستخدم الفعلية ({effectiveNow.length} من {registry.length})
                         </label>
-                        <p className="text-xs text-gray-400">
-                          منح صلاحيات فوق الدور أو سحب صلاحيات منه — الفرض الحقيقي
-                          في الباك إند
+                        <p className="text-xs text-gray-500">
+                          النهائي = صلاحيات الدور + المنح الإضافية − المسحوب منه. علّم على الصلاحية عشان تسري عليه:
+                          لو مش في دوره تبقى «منحة»، ولو شلت علامة صلاحية جاية من دوره تبقى «مسحوبة». الفرض الحقيقي في الخادم.
                         </p>
+                        {!overrides.roleActive && formData.role === editingUser.role && (
+                          <p className="text-xs text-amber-700 mt-1">دوره معطّل دلوقتي — حزمة الدور مابتمنحوش حاجة، والساري عليه المنح الإضافية بس.</p>
+                        )}
                       </div>
 
-                      {/* الصلاحيات الفعلية الحالية */}
-                      <div>
-                        <p className="text-sm font-medium text-gray-700 mb-2">
-                          الصلاحيات الفعلية الآن ({overrides.effective.length})
-                        </p>
-                        <div className="flex flex-wrap gap-1.5 max-h-28 overflow-y-auto p-3 bg-gray-50 rounded-xl">
-                          {overrides.effective.length === 0 && (
-                            <span className="text-xs text-gray-400">لا توجد صلاحيات</span>
-                          )}
-                          {overrides.effective.map((p) => (
-                            <span
-                              key={p}
-                              className="px-2 py-0.5 bg-indigo-50 text-indigo-700 rounded-full text-xs"
-                            >
-                              {permLabels[p] ?? p}
-                            </span>
-                          ))}
-                        </div>
+                      {/* ملخص التجاوزات */}
+                      <div className="flex flex-wrap gap-2 text-xs">
+                        <span className="px-2 py-1 bg-gray-100 text-gray-700 rounded-full">
+                          من الدور: {registry.filter((p) => permissionState(p.key).inRole).length}
+                        </span>
+                        <span className="px-2 py-1 bg-success-50 text-success-700 rounded-full">
+                          منح إضافية: {registry.filter((p) => { const s = permissionState(p.key); return (s.granted || s.legacy) && !s.inRole && !s.revoked }).length}
+                        </span>
+                        <span className="px-2 py-1 bg-red-50 text-red-700 rounded-full">
+                          مسحوبة: {registry.filter((p) => permissionState(p.key).revoked).length}
+                        </span>
                       </div>
 
-                      {/* منح إضافي */}
-                      <div className="p-4 bg-success-50/50 rounded-xl border border-success-100">
-                        <p className="text-sm font-medium text-success-800 mb-2 flex items-center gap-2">
-                          <PlusCircle size={16} />
-                          منح إضافي (GRANT) — صلاحيات ليست في حزمة الدور
-                        </p>
-                        <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto">
-                          {grantablePerms.length === 0 && (
-                            <span className="text-xs text-gray-400 col-span-2">
-                              الدور يشمل كل صلاحيات السجل
-                            </span>
-                          )}
-                          {grantablePerms.map((p) => (
-                            <label
-                              key={p.key}
-                              className="flex items-center gap-2 p-2 rounded-lg hover:bg-white cursor-pointer"
-                            >
-                              <input
-                                type="checkbox"
-                                className="w-4 h-4 rounded border-gray-300 text-success-600"
-                                checked={overrides.grants.includes(p.key)}
-                                onChange={(e) => toggleGrant(p.key, e.target.checked)}
-                              />
-                              <span className="text-sm text-gray-700">{p.labelAr}</span>
-                            </label>
-                          ))}
-                        </div>
+                      <div className="relative">
+                        <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                        <input
+                          type="text"
+                          placeholder="بحث في الصلاحيات..."
+                          className="input pr-9 w-full text-sm"
+                          value={permSearch}
+                          onChange={(e) => setPermSearch(e.target.value)}
+                        />
                       </div>
 
-                      {/* سحب من الدور */}
-                      <div className="p-4 bg-red-50/50 rounded-xl border border-red-100">
-                        <p className="text-sm font-medium text-red-800 mb-2 flex items-center gap-2">
-                          <MinusCircle size={16} />
-                          سحب من الدور (REVOKE) — من صلاحيات الحزمة الحالية فقط
-                        </p>
-                        <div className="grid grid-cols-2 gap-1.5 max-h-48 overflow-y-auto">
-                          {revocablePerms.length === 0 && (
-                            <span className="text-xs text-gray-400 col-span-2">
-                              حزمة الدور فارغة — لا شيء يُسحب
-                            </span>
-                          )}
-                          {revocablePerms.map((p) => (
-                            <label
-                              key={p.key}
-                              className="flex items-center gap-2 p-2 rounded-lg hover:bg-white cursor-pointer"
-                            >
-                              <input
-                                type="checkbox"
-                                className="w-4 h-4 rounded border-gray-300 text-red-600"
-                                checked={overrides.revokes.includes(p.key)}
-                                onChange={(e) => toggleRevoke(p.key, e.target.checked)}
-                              />
-                              <span className="text-sm text-gray-700">{p.labelAr}</span>
-                            </label>
-                          ))}
-                        </div>
+                      <div className="space-y-3 max-h-[28rem] overflow-y-auto pl-1">
+                        {groupedRegistry.length === 0 && (
+                          <p className="text-sm text-gray-400 text-center py-6">مفيش صلاحية مطابقة للبحث</p>
+                        )}
+                        {groupedRegistry.map((group) => (
+                          <div key={group.key} className="border border-gray-100 rounded-xl p-3">
+                            <p className="text-sm font-bold text-gray-700 mb-2">
+                              {group.label}{' '}
+                              <span className="font-normal text-gray-400">
+                                ({group.perms.filter((p) => permissionState(p.key).effective).length} من {group.perms.length})
+                              </span>
+                            </p>
+                            <div className="space-y-1">
+                              {group.perms.map((p) => {
+                                const state = permissionState(p.key)
+                                // الصلاحية الحصرية: منحها لمدير النظام بس (سحبها مسموح لأي مدير حسابات)
+                                const locked = p.superAdminOnly && !isSuperAdmin && !state.effective
+                                return (
+                                  <label
+                                    key={p.key}
+                                    className={`flex items-start gap-2 p-2 rounded-lg ${
+                                      locked || lockedScopeAllAccount ? 'opacity-60 cursor-not-allowed' : 'hover:bg-gray-50 cursor-pointer'
+                                    }`}
+                                    title={locked ? 'منحها متاح لمدير النظام فقط' : undefined}
+                                  >
+                                    <input
+                                      type="checkbox"
+                                      className="w-4 h-4 mt-0.5 rounded border-gray-300 text-primary-600"
+                                      checked={state.effective}
+                                      disabled={locked || lockedScopeAllAccount}
+                                      onChange={(e) => togglePermission(p.key, e.target.checked)}
+                                    />
+                                    <span className="min-w-0 flex-1">
+                                      <span className="flex flex-wrap items-center gap-1.5">
+                                        <span className={`text-sm ${state.revoked ? 'text-gray-400 line-through' : 'text-gray-800'}`}>{p.labelAr}</span>
+                                        {p.superAdminOnly && <Lock size={12} className="text-red-500" aria-label="يمنحها مدير النظام فقط" />}
+                                        {state.revoked ? (
+                                          <span className="px-1.5 py-0.5 bg-red-50 text-red-700 rounded text-[10px]">مسحوبة من دوره</span>
+                                        ) : state.inRole ? (
+                                          <span className="px-1.5 py-0.5 bg-gray-100 text-gray-600 rounded text-[10px]">من الدور</span>
+                                        ) : state.granted ? (
+                                          <span className="px-1.5 py-0.5 bg-success-50 text-success-700 rounded text-[10px]">منحة إضافية</span>
+                                        ) : state.legacy ? (
+                                          <span className="px-1.5 py-0.5 bg-indigo-50 text-indigo-700 rounded text-[10px]">صلاحية قديمة على الحساب</span>
+                                        ) : null}
+                                      </span>
+                                      <span className="block text-xs text-gray-500 mt-0.5">{p.description}</span>
+                                    </span>
+                                  </label>
+                                )
+                              })}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   ) : null)}
@@ -967,7 +1083,11 @@ export default function UsersPage() {
                 <button onClick={() => setShowModal(false)} className="flex-1 btn-secondary">
                   إلغاء
                 </button>
-                <button onClick={handleSave} disabled={saving} className="flex-1 btn-primary">
+                <button
+                  onClick={handleSave}
+                  disabled={saving || lockedScopeAllAccount}
+                  className="flex-1 btn-primary disabled:opacity-50"
+                >
                   {saving
                     ? 'جارٍ الحفظ...'
                     : editingUser

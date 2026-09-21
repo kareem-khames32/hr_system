@@ -189,7 +189,8 @@ test('PR-05: snapshot payslip maps the saved hireDate to joinDate and keeps empl
   assert.equal(Number(result.body.employee.basicSalary), snapshot.basicSalary)
   assert.equal(result.body.employee.branchId, snapshot.branchId)
   assertNoCurrentPrivateValues(result.body, live)
-  assert.equal((await request(managerB, 'GET', `/payroll/items/${run.items[0].id}`)).status, 403)
+  // لا كاشف وجود: قسيمة فرع آخر = نفس رد البند المفقود (404)
+  assert.equal((await request(managerB, 'GET', `/payroll/items/${run.items[0].id}`)).status, 404)
 })
 
 test('PR-05: legacy branch payslip never exposes current private data or current salary after an employee transfer', async () => {
@@ -209,7 +210,7 @@ test('PR-05: legacy branch payslip never exposes current private data or current
     assert.equal(result.body.run.snapshotVersion, 0)
     assertNoCurrentPrivateValues(result.body, live)
   }
-  assert.equal((await request(managerB, 'GET', `/payroll/items/${item.id}`)).status, 403)
+  assert.equal((await request(managerB, 'GET', `/payroll/items/${item.id}`)).status, 404)
 })
 
 test('PR-12: an installment-only recalculation appears in changedEmployeeIds while membership and employee salary stay unchanged', async () => {

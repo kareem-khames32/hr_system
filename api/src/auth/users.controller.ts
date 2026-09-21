@@ -105,6 +105,11 @@ class CreateUserDto {
 
   @IsOptional()
   permissions?: string[]
+
+  // «نطاقه: فرعه / كل الفروع» — منطقية فقط (1 أو "true" مرفوضة)، ولمدير النظام فقط
+  @IsOptional()
+  @IsBoolean({ message: 'نطاق الحساب غير صالح' })
+  scopeAllBranches?: boolean
 }
 
 class UpdateUserDto {
@@ -141,7 +146,18 @@ class UpdateUserDto {
 
   @IsOptional()
   permissions?: string[]
+
+  // «نطاقه: فرعه / كل الفروع» — منطقية فقط، ولمدير النظام فقط (فتحًا وقفلًا)
+  @IsOptional()
+  @IsBoolean({ message: 'نطاق الحساب غير صالح' })
+  scopeAllBranches?: boolean
 }
+
+// «نطاقه: كل الفروع» بيوسّع كل صلاحية يحملها الحساب على الشركة كلها، فهو تصعيد زي الصلاحيات الحصرية:
+// مايفتحوش ولا يقفلوش غير مدير النظام، والحساب المفتوح له مايديروش (دور/صلاحيات/كلمة مرور/تفعيل/فرع) غير مدير النظام —
+// وإلا مدير موارد بشرية مقفول على فرع يعيّن كلمة مرور لحساب «كل الفروع» في فرعه ويدخل بيه.
+export const SCOPE_ALL_BRANCHES_SUPER_ADMIN_ONLY = 'تغيير نطاق الحساب «فرعه / كل الفروع» متاح لمدير النظام فقط'
+export const SCOPE_ALL_BRANCHES_ACCOUNT_LOCKED = 'الحساب ده نطاقه «كل الفروع» — تعديله متاح لمدير النظام فقط'
 
 // كلمة مرور مؤقتة واحدة لكذا حساب مرة واحدة (الحسابات المنقولة من القديم جات من غير كلمة)
 class TemporaryPasswordDto {
@@ -250,6 +266,8 @@ export class UsersController {
     return rows.map(({ passwordHash: _ph, ...rest }) => ({
       ...rest,
       mustChangePassword: !!rest.mustChangePassword,
+      // «نطاقه: كل الفروع» — مدير النظام نطاقه كامل بدوره فالعلم عليه دايمًا false
+      scopeAllBranches: rest.role !== 'super_admin' && rest.scopeAllBranches === true,
       legacyNeedsPassword: needsPasswordFromLegacy(rest, legacyIds),
     }))
   }
@@ -279,6 +297,12 @@ export class UsersController {
       if (actor.role !== 'super_admin' && target.role === 'super_admin') {
         throw new ForbiddenException(
           `تغيير كلمة مرور ${target.displayName} (مدير النظام) متاح لمدير النظام فقط`
+        )
+      }
+      // حساب «كل الفروع»: كلمة مروره = نطاق الشركة كلها، فتعيينها لمدير النظام بس
+      if (actor.role !== 'super_admin' && target.scopeAllBranches === true) {
+        throw new ForbiddenException(
+          `حساب ${target.displayName} نطاقه «كل الفروع» — تغيير كلمة مروره لمدير النظام بس`
         )
       }
       const beyond = await this.takeoverBeyond(actor, target)
@@ -315,6 +339,10 @@ export class UsersController {
     // HR لا ينشئ حسابات أعلى من صلاحيته
     if (actor.role !== 'super_admin' && dto.role === 'super_admin') {
       throw new ForbiddenException('إنشاء super_admin متاح للـ super_admin فقط')
+    }
+    // «نطاقه: كل الفروع» لمدير النظام فقط (false الصريحة = الوضع الافتراضي، مش تغيير)
+    if (actor.role !== 'super_admin' && dto.scopeAllBranches === true) {
+      throw new ForbiddenException(SCOPE_ALL_BRANCHES_SUPER_ADMIN_ONLY)
     }
     await this.assertAssignableRole(dto.role)
     const email = dto.email.toLowerCase().trim()
@@ -356,6 +384,8 @@ export class UsersController {
         branchId: branchId as unknown as number,
         employeeId: dto.employeeId,
         permissions,
+        // مدير النظام نطاقه كامل بدوره — العلم مالوش معنى عليه فمايتخزنش
+        scopeAllBranches: dto.role !== 'super_admin' && dto.scopeAllBranches === true,
       })
     )
     const { passwordHash: _ph, ...rest } = saved
@@ -391,10 +421,24 @@ export class UsersController {
       dto.branchId !== undefined && dto.branchId !== user.branchId
     const employeeChanged =
       dto.employeeId !== undefined && dto.employeeId !== user.employeeId
+    // مدير النظام نطاقه كامل بدوره: الترقية له بتقفل العلم، ومايتفتحش على حسابه
+    const nextRole = dto.role ?? user.role
+    const wasScopeAll = user.scopeAllBranches === true
+    const nextScopeAll =
+      nextRole === 'super_admin' ? false : (dto.scopeAllBranches ?? wasScopeAll)
+    const scopeChanged = nextScopeAll !== wasScopeAll
+    if (actor.role !== 'super_admin') {
+      // فتح «كل الفروع» أو قفله = تصعيد/تنزيل نطاق — لمدير النظام فقط، زي الصلاحيات الحصرية
+      if (dto.scopeAllBranches !== undefined && dto.scopeAllBranches !== wasScopeAll) {
+        throw new ForbiddenException(SCOPE_ALL_BRANCHES_SUPER_ADMIN_ONLY)
+      }
+      // والحساب المفتوح له لا يديره (دور/صلاحيات/كلمة مرور/تفعيل/فرع/ربط) إلا مدير النظام
+      if (wasScopeAll) throw new ForbiddenException(SCOPE_ALL_BRANCHES_ACCOUNT_LOCKED)
+    }
     // لا أحد يعدّل دوره أو صلاحياته أو ربط حسابه بنفسه (تصعيد ذاتي / انتحال موظف)
     if (
       actor.sub === id &&
-      (roleChanged || permsChanged || branchChanged || employeeChanged)
+      (roleChanged || permsChanged || branchChanged || employeeChanged || scopeChanged)
     ) {
       throw new BadRequestException(
         'لا يمكنك تعديل دور حسابك أو صلاحياته أو ربطه بنفسك'
@@ -449,15 +493,17 @@ export class UsersController {
     if (dto.branchId !== undefined) user.branchId = dto.branchId
     if (dto.employeeId !== undefined) user.employeeId = dto.employeeId
     if (perms !== undefined) user.permissions = perms
-    // تغيير أمني (دور/صلاحيات/تعطيل/كلمة مرور/فرع/موظف مربوط) → أبطِل التوكنات
-    // القائمة فوراً (الفرع والموظف داخل الـJWT: نطاق البيانات وهوية الخدمة الذاتية)
+    if (scopeChanged) user.scopeAllBranches = nextScopeAll
+    // تغيير أمني (دور/صلاحيات/تعطيل/كلمة مرور/فرع/موظف مربوط/نطاق الفروع) → أبطِل التوكنات
+    // القائمة فوراً (الفرع والموظف و«كل الفروع» داخل الـJWT: نطاق البيانات وهوية الخدمة الذاتية)
     if (
       dto.role !== undefined ||
       perms !== undefined ||
       dto.isActive !== undefined ||
       dto.password ||
       branchChanged ||
-      employeeChanged
+      employeeChanged ||
+      scopeChanged
     ) {
       user.tokenVersion = (user.tokenVersion ?? 0) + 1
     }

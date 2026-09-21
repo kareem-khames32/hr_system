@@ -25,6 +25,12 @@ export class User {
   @Column({ nullable: true })
   branchId: number
 
+  // «نطاقه: فرعه / كل الفروع» (قرار المالك 22 سبتمبر): لما يتفتح، branchScopeOf بيرجّع null للحساب ده فيشوف كل
+  // الفروع ويعدّل إعدادات الشركة — بشرط الصلاحية المحددة لكل فعل (النطاق مش صلاحية). مايفتحوش ولا يقفلوش غير
+  // مدير النظام، وراكب في التوكن: أي تغيير له بيزوّد tokenVersion. branchId بيفضل «الفرع الأصلي» للحساب.
+  @Column({ default: false })
+  scopeAllBranches: boolean
+
   // ربط الحساب بالموظف
   @Column({ nullable: true })
   employeeId: number

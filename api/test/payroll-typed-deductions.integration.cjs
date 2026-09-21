@@ -122,7 +122,7 @@ before(async () => {
   await repo('Team').update(org.teamA.id, { leaderEmployeeId: people.teamLeader.id })
   await repo('Branch').update(org.branchA.id, { managerEmployeeId: people.branchManager.id })
   for (const emp of [people.a1, people.a2, people.a3, people.low]) await exempt(emp)
-  const hrPermissions = ['deductions.view', 'deductions.approve', 'deductions.manage', 'payroll.view', 'payroll.calculate', 'payroll.approve', 'payroll.pay', 'payroll.reopen']
+  const hrPermissions = ['deductions.view', 'deductions.approve', 'deductions.manage', 'reports.view', 'payroll.view', 'payroll.calculate', 'payroll.approve', 'payroll.pay', 'payroll.reopen']
   users.hr = await user('hr-a', 'hr_manager', org.branchA.id, null, hrPermissions)
   users.hrB = await user('hr-b', 'hr_manager', org.branchB.id, null, hrPermissions)
   users.viewer = await user('viewer-a', 'branch_manager', org.branchA.id, null, ['deductions.view'])
@@ -173,6 +173,15 @@ test('DD-01: only deductions.manage writes the catalog; court orders reject exem
   const disabled = expectStatus(await request(users.admin, 'PATCH', `/deductions/types/${productivity.id}`, { isActive: false }), 200)
   assert.equal(disabled.version, productivity.version, 'activation is not a financial change')
   const creatable = expectStatus(await request(users.manager, 'GET', '/deductions/creatable'), 200)
+  // تدقيق الأدوار D9: الكتالوج الكامل (القيم والسقوف وسلاسل الاعتماد) لحامل deductions.manage بس — كان مفتوحًا لأي حساب.
+  // المدير العادي (بلا أي صلاحية) يفضل شايف أنواعه وموظفيه من creatable/candidates، وده اللي نموذج الطلب بيستخدمه.
+  for (const blocked of [users.manager, users.a1, users.outsider, users.viewer]) expectStatus(await request(blocked, 'GET', '/deductions/types'), 403)
+  expectStatus(await request(users.manager, 'GET', '/deductions/types?includeInactive=true'), 403)
+  assert.ok(expectStatus(await request(users.hr, 'GET', '/deductions/types'), 200).some(row => row.code === 'COMMITMENT'))
+  assert.ok(expectStatus(await request(users.admin, 'GET', '/deductions/types?includeInactive=true'), 200).some(row => row.code === 'PRODUCTIVITY'))
+  assert.ok(creatable.types.some(row => row.id === types.commitment.id && row.calcMethod === 'DAYS_OF_SALARY'), 'نموذج الطلب بياخد النوع بقواعده من creatable')
+  assert.ok(expectStatus(await request(users.manager, 'GET', `/deductions/candidates?typeId=${types.commitment.id}`), 200).some(row => row.id === people.a1.id))
+  assert.deepEqual(expectStatus(await request(users.a1, 'GET', '/deductions/creatable'), 200).types, [], 'موظف بلا مرؤوسين ماياخدش أي نوع')
   assert.ok(!creatable.types.some(row => row.id === productivity.id), 'a disabled type disappears from the creation list')
   assert.deepEqual(creatable.bases, ['DIRECT_MANAGER'])
   expectStatus(await request(users.manager, 'POST', '/deductions', { ...input({ deductionTypeId: productivity.id, inputValue: '3' }), employeeId: people.a3.id, targetPeriod: '2026-09' }), 400, 'DEDUCTION_TYPE_INACTIVE')
@@ -202,11 +211,29 @@ test('Acceptance: a commitment deduction by an authorized direct manager for a s
   // DD-08: الموظف يرى خصمه بحالته، ولا يرى خصومات غيره ولا يعتمد خصمه
   const mine = expectStatus(await request(users.a1, 'GET', '/deductions/mine'), 200)
   assert.deepEqual(mine.map(row => [row.id, row.status, row.amount, row.issuer.basisLabel]), [[createdRow.id, 'IN_APPROVAL', '300.00', 'المدير المباشر']])
-  expectStatus(await request(users.a1, 'GET', `/deductions/${createdRow.id}`), 403, 'DEDUCTION_FORBIDDEN')
+  // تدقيق الأدوار D6: الرد مايفرّقش بين طلب موجود خارج النطاق وطلب غايب — نفس الحالة ونفس الجسم بالحرف
+  const missing = await request(users.outsider, 'GET', '/deductions/99999999')
+  expectStatus(missing, 404, 'DEDUCTION_NOT_FOUND')
+  for (const stranger of [users.outsider, users.hrB, users.a1]) {
+    const real = await request(stranger, 'GET', `/deductions/${createdRow.id}`)
+    assert.deepEqual([real.status, real.body], [missing.status, missing.body], `${stranger.email}: موجود خارج النطاق = غايب`)
+  }
+  // ونفس القاعدة في الإجراءات: الغريب بياخد «غير موجود» قبل فحص النسخة (كان 409) وقبل فحص الصفة (كان 403)
+  for (const action of ['approve', 'reject', 'withdraw', 'cancel', 'reverse', 'objection-response']) {
+    const body = { expectedRevision: 77, reason: 'محاولة من حساب بلا أي صفة على الطلب', text: 'رد من حساب بلا صفة' }
+    const stranger = ['cancel', 'reverse'].includes(action) ? users.hrB : users.outsider
+    const onReal = await request(stranger, 'POST', `/deductions/${createdRow.id}/${action}`, body)
+    const onMissing = await request(stranger, 'POST', `/deductions/99999999/${action}`, body)
+    assert.deepEqual([onReal.status, onReal.body], [onMissing.status, onMissing.body], `${action}: موجود خارج النطاق = غايب`)
+    assert.deepEqual([onReal.status, onReal.body.code], [404, 'DEDUCTION_NOT_FOUND'], action)
+  }
+  assert.deepEqual([(await repo('DeductionRequest').findOneByOrFail({ id: createdRow.id })).status, (await repo('DeductionRequest').findOneByOrFail({ id: createdRow.id })).revision], ['IN_APPROVAL', 0])
   assert.equal(expectStatus(await request(users.viewer, 'GET', `/deductions/${createdRow.id}`), 200).capabilities.canApprove, false)
   // DD-06: لا يعتمد المُنشئ، ولا موارد بشرية فرع آخر؛ النسخة القديمة ترفض
   expectStatus(await request(users.manager, 'POST', `/deductions/${createdRow.id}/approve`, { expectedRevision: 0 }), 403, 'DEDUCTION_NOT_CURRENT_APPROVER')
-  expectStatus(await request(users.hrB, 'POST', `/deductions/${createdRow.id}/approve`, { expectedRevision: 0 }), 403, 'DEDUCTION_NOT_CURRENT_APPROVER')
+  expectStatus(await request(users.hrB, 'POST', `/deductions/${createdRow.id}/approve`, { expectedRevision: 0 }), 404, 'DEDUCTION_NOT_FOUND')
+  // صاحب الخصم نفسه عارف إنه موجود (شايفه في «خصوماتي») فبياخد السبب الصريح مش «غير موجود»
+  expectStatus(await request(users.a1, 'POST', `/deductions/${createdRow.id}/approve`, { expectedRevision: 0 }), 403, 'DEDUCTION_NOT_CURRENT_APPROVER')
   expectStatus(await request(users.hr, 'POST', `/deductions/${createdRow.id}/approve`, { expectedRevision: 5 }), 409, 'DEDUCTION_REVISION_CHANGED')
   const approved = expectStatus(await request(users.hr, 'POST', `/deductions/${createdRow.id}/approve`, { expectedRevision: 0, reason: 'موثق بمحضر الاجتماع' }), 201)
   assert.equal(approved.status, 'APPROVED')
@@ -581,8 +608,11 @@ test('Review S25 DD-12/DD-11/DD-13 and payslip: the payslip traces each ledger l
   assert.ok(report.objections.some(row => row.response === 'المهمة في يوم آخر حسب نظام المهام'))
   assert.ok(report.cycleTime.some(row => row.role === 'HR' && row.acted > 0))
   assert.ok(report.byEmployee.some(row => row.employeeId === people.a1.id && row.last12.count >= 1))
-  const outsiderReport = expectStatus(await request(users.outsider, 'GET', '/deductions/reports'), 200)
-  assert.deepEqual([outsiderReport.byType.length, outsiderReport.reconciliation.length, outsiderReport.objections.length, outsiderReport.byEmployee.length], [0, 0, 0, 0])
+  // تدقيق الأدوار D11: كان بلا أي صلاحية — المدير المباشر (طرف في خصومات فريقه) كان بيسحب مبالغها واعتراضاتها مجمّعة بلا reports.view
+  for (const blocked of [users.outsider, users.manager, users.a1, users.viewer]) expectStatus(await request(blocked, 'GET', '/deductions/reports'), 403)
+  // حامل البوابة من فرع تاني: التقرير يفتح ومافيهوش حاجة من فرع أ
+  const otherBranchReport = expectStatus(await request(users.hrB, 'GET', '/deductions/reports?fromPeriod=2026-07&toPeriod=2027-08'), 200)
+  assert.deepEqual([otherBranchReport.byType.length, otherBranchReport.reconciliation.length, otherBranchReport.objections.length, otherBranchReport.byEmployee.length], [0, 0, 0, 0])
 })
 
 test('Review S25 settings: deduction keys reject values above their maximum and closed choices outside their list', async () => {

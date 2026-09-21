@@ -29,7 +29,8 @@ export interface RegisterRow {
   branchName: string | null; departmentName: string | null; costCenterName: string | null; payMethod: string
   basic: Money; allowances: Money; allowanceBuckets: Record<string, Money>; additions: Record<string, Money>; otherAdditions: Money
   overtime: Money; overtimeMinutes: number; holidayWork: Money; gross: Money
-  deductions: Record<string, Money>; totalDeductions: Money; net: Money; bank: Money; cash: Money; employerInsurance: Money | null
+  // settlement = صافي الصف لو راتبه «مصروف مع التصفية» (برّه كشف البنك)، وإلا 0.00 — الصافي = بنك + نقدي + مع التصفية
+  deductions: Record<string, Money>; totalDeductions: Money; net: Money; bank: Money; cash: Money; settlement: Money; employerInsurance: Money | null
   lines: Array<{ type: 'CREDIT' | 'DEBIT'; key: string; category: string | null; label: string | null; typeName: string | null; amount: Money }>
 }
 
@@ -39,7 +40,7 @@ export interface PayrollRegisterReport extends FinancialReportHeader {
   totals: {
     headcount: number; items: number; basic: Money; allowances: Money; allowanceBuckets: Record<string, Money>; additions: Record<string, Money>
     otherAdditions: Money; overtime: Money; overtimeMinutes: number; holidayWork: Money; gross: Money; deductions: Record<string, Money>
-    totalDeductions: Money; net: Money; bank: Money; cash: Money; employerInsurance: Money | null
+    totalDeductions: Money; net: Money; bank: Money; cash: Money; settlement: Money; employerInsurance: Money | null
   }
 }
 

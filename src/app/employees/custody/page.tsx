@@ -20,6 +20,7 @@ import {
   fetchCustody,
   fetchAssets,
   fetchEmployees,
+  fetchEmployeeDirectory,
   fetchBranches,
   createAsset,
   updateAsset,
@@ -28,6 +29,9 @@ import {
   writeOffCustody,
   transferCustody,
   managerConfirmCustody,
+  setAssetsBranch,
+  getCurrentUser,
+  isCompanyWideUser,
   can,
   ApiAsset,
   ApiEmployee,
@@ -88,7 +92,11 @@ export default function CustodyPage() {
     serialNumber: '',
     // قيمة الأصل (اختيارية) — تغذي خصم الفقد/التلف في التصفية
     value: '',
+    // فرع الأصل — حساب نطاقه كل الفروع يختاره؛ حساب الفرع أصله بيتختم بفرعه في الخادم
+    branchId: '',
   })
+  // حساب على مستوى الشركة (مدير النظام أو «نطاقه: كل الفروع») — الخادم هو اللي بيفرض؛ هنا لإظهار الأدوات بس
+  const [companyWide, setCompanyWide] = useState(false)
 
   const loadData = async () => {
     setLoading(true)
@@ -97,7 +105,13 @@ export default function CustodyPage() {
       const [rows, assetRows, emps, brs] = await Promise.all([
         fetchCustody(),
         fetchAssets(),
-        fetchEmployees(),
+        // «مسؤول الأصول» بلا «عرض الموظفين» (مايفتحش ملفات الموظفين): منتقي الموظف من الدليل المختصر —
+        // النشطين في نطاقه بالاسم والكود بس. من غيره الشاشة كلها كانت بتقع بـ403 على قائمة الموظفين.
+        can('employees.view')
+          ? fetchEmployees()
+          : fetchEmployeeDirectory().then((list) =>
+              list.map((entry) => ({ ...entry, isActive: true, status: 'active' }) as ApiEmployee)
+            ),
         fetchBranches(),
       ])
       const empById = new Map(emps.map((e) => [e.id, e]))
@@ -135,6 +149,7 @@ export default function CustodyPage() {
   }
 
   useEffect(() => {
+    setCompanyWide(isCompanyWideUser(getCurrentUser()))
     loadData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
@@ -164,9 +179,44 @@ export default function CustodyPage() {
   const reservedAssetIds = new Set(
     records.filter((r) => OPEN_STATUSES.includes(r.status)).map((r) => r.assetId)
   )
+  // العهدة جوه الفرع الواحد: الأصل القديم اللي بلا فرع (readOnly لحساب الفرع) مايتسلّمش منه، ومع اختيار الموظف
+  // بيتعرض أصل فرعه بس (أو أصل بلا فرع — حساب كل الفروع بيسلّمه فيتختم بفرع الموظف)
+  const chosenEmployee = employees.find((emp) => String(emp.id) === formData.employeeId)
   const freeAssets = assets.filter(
-    (a) => a.status === 'AVAILABLE' && !a.currentHolderId && !reservedAssetIds.has(a.id)
+    (a) =>
+      a.status === 'AVAILABLE' && !a.currentHolderId && !reservedAssetIds.has(a.id) && !a.readOnly &&
+      (!chosenEmployee || a.branchId == null || a.branchId === chosenEmployee.branchId)
   )
+  const branchNameOf = (id?: number | null) => (id == null ? 'بلا فرع' : branches.find((b) => b.id === id)?.name ?? `#${id}`)
+
+  // الأصول القديمة اللي لسه بلا فرع — حساب نطاقه كل الفروع يحدد فرعها (واحد أو دفعة)؛ حساب الفرع يشوفها قراءة بس
+  const unbranchedAssets = assets.filter((a) => a.branchId == null)
+  const [selectedUnbranched, setSelectedUnbranched] = useState<number[]>([])
+  const [targetBranch, setTargetBranch] = useState('')
+  const [settingBranch, setSettingBranch] = useState(false)
+  const [branchNotice, setBranchNotice] = useState<string | null>(null)
+  const toggleUnbranched = (id: number) =>
+    setSelectedUnbranched((ids) => (ids.includes(id) ? ids.filter((x) => x !== id) : [...ids, id]))
+
+  const handleSetBranch = async () => {
+    if (!selectedUnbranched.length || !targetBranch) return
+    setSettingBranch(true)
+    setError('')
+    try {
+      const res = await setAssetsBranch(selectedUnbranched, Number(targetBranch))
+      const nameOf = (id: number) => assets.find((a) => a.id === id)?.name ?? `#${id}`
+      setBranchNotice(
+        `اتحدد فرع ${res.updated.length} أصل على «${branchNameOf(res.branchId)}»` +
+          (res.skipped.length ? ` — اتخطّى ${res.skipped.length}: ${res.skipped.map((row) => `${nameOf(row.id)} (${row.reason})`).join('، ')}` : '')
+      )
+      setSelectedUnbranched([])
+      await loadData()
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'تعذر تحديد فرع الأصول')
+    } finally {
+      setSettingBranch(false)
+    }
+  }
 
   // قيمة الأصل اختيارية — لو أُدخلت لازم رقم غير سالب
   const invalidValue = (v: string) => v.trim() !== '' && !(Number(v) >= 0)
@@ -182,10 +232,12 @@ export default function CustodyPage() {
         category: newAsset.category,
         serialNumber: newAsset.serialNumber || undefined,
         value: newAsset.value.trim() !== '' ? Number(newAsset.value) : undefined,
+        // حساب الفرع: الخادم بيختم الأصل بفرعه؛ حساب كل الفروع يختار (أو يسيبه بلا فرع)
+        branchId: companyWide && newAsset.branchId ? Number(newAsset.branchId) : undefined,
       })
       setAssets([...assets, created])
       setFormData({ ...formData, assetId: String(created.id) })
-      setNewAsset({ name: '', category: '', serialNumber: '', value: '' })
+      setNewAsset({ name: '', category: '', serialNumber: '', value: '', branchId: '' })
     } catch (err) {
       setError(err instanceof Error ? err.message : 'تعذر إنشاء الأصل')
     } finally {
@@ -388,6 +440,88 @@ export default function CustodyPage() {
             >
               <X size={16} className="text-indigo-500" />
             </button>
+          </div>
+        )}
+
+        {/* أصول بلا فرع — تحديد الفرع (واحد أو دفعة) لحساب نطاقه كل الفروع؛ حساب الفرع يشوفها قراءة بس */}
+        {branchNotice && (
+          <div className="bg-success-50 border border-success-200 text-success-800 rounded-xl p-4 flex items-center justify-between gap-3">
+            <p className="text-sm font-medium">{branchNotice}</p>
+            <button onClick={() => setBranchNotice(null)} className="p-1.5 hover:bg-success-100 rounded-lg">
+              <X size={16} className="text-success-600" />
+            </button>
+          </div>
+        )}
+        {!loading && unbranchedAssets.length > 0 && !companyWide && (
+          <div className="bg-amber-50 border border-amber-200 text-amber-800 rounded-xl p-4 text-sm">
+            فيه {unbranchedAssets.length} أصل قديم لسه بلا فرع — بيظهروا لك للقراءة بس ومايتسلّموش من حساب الفرع. حساب نطاقه كل
+            الفروع هو اللي يحدد فرعهم.
+          </div>
+        )}
+        {!loading && unbranchedAssets.length > 0 && companyWide && (
+          <div className="card p-4 space-y-3">
+            <div className="flex items-center justify-between gap-3 flex-wrap">
+              <div>
+                <h2 className="font-bold text-gray-800">أصول بلا فرع ({unbranchedAssets.length})</h2>
+                <p className="text-xs text-gray-500 mt-1">
+                  أصول قديمة لسه مالهاش فرع: حساب الفرع يشوفها قراءة بس. اختار أصل أو أكتر وحدد فرعهم. الأصل اللي في عهدة
+                  موظف بياخد فرع صاحب العهدة بس.
+                </p>
+              </div>
+              <div className="flex items-center gap-2">
+                <select value={targetBranch} onChange={(e) => setTargetBranch(e.target.value)} className="input w-48">
+                  <option value="">— اختر الفرع —</option>
+                  {branches.map((b) => (
+                    <option key={b.id} value={String(b.id)}>{b.name}</option>
+                  ))}
+                </select>
+                <button
+                  onClick={handleSetBranch}
+                  disabled={settingBranch || !targetBranch || selectedUnbranched.length === 0}
+                  className="btn-primary disabled:opacity-50"
+                >
+                  {settingBranch ? 'جارٍ الحفظ...' : `حدد الفرع (${selectedUnbranched.length})`}
+                </button>
+              </div>
+            </div>
+            <div className="max-h-64 overflow-y-auto border border-gray-100 rounded-xl">
+              <table className="w-full text-sm">
+                <thead className="bg-gray-50 text-right sticky top-0">
+                  <tr>
+                    <th className="py-2 px-3 w-10">
+                      <input
+                        type="checkbox"
+                        aria-label="اختيار كل الأصول اللي بلا فرع"
+                        checked={selectedUnbranched.length === unbranchedAssets.length}
+                        onChange={(e) => setSelectedUnbranched(e.target.checked ? unbranchedAssets.map((a) => a.id) : [])}
+                      />
+                    </th>
+                    <th className="py-2 px-3 font-medium text-gray-500">الأصل</th>
+                    <th className="py-2 px-3 font-medium text-gray-500">الفئة</th>
+                    <th className="py-2 px-3 font-medium text-gray-500">الرقم التسلسلي</th>
+                    <th className="py-2 px-3 font-medium text-gray-500">الحامل الحالي</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {unbranchedAssets.map((a) => (
+                    <tr key={a.id} className="border-t border-gray-50">
+                      <td className="py-2 px-3">
+                        <input
+                          type="checkbox"
+                          aria-label={`اختيار ${a.name}`}
+                          checked={selectedUnbranched.includes(a.id)}
+                          onChange={() => toggleUnbranched(a.id)}
+                        />
+                      </td>
+                      <td className="py-2 px-3 text-gray-800">{a.name}</td>
+                      <td className="py-2 px-3 text-gray-600">{a.category}</td>
+                      <td className="py-2 px-3 font-mono text-gray-600" dir="ltr">{a.serialNumber ?? '—'}</td>
+                      <td className="py-2 px-3 text-gray-600">{a.holderName ?? '—'}</td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
           </div>
         )}
 
@@ -658,11 +792,13 @@ export default function CustodyPage() {
                       <option key={a.id} value={String(a.id)}>
                         {a.name} ({a.category})
                         {a.serialNumber ? ` — ${a.serialNumber}` : ''}
+                        {companyWide ? ` — ${a.branchName ?? branchNameOf(a.branchId)}` : ''}
                       </option>
                     ))}
                   </select>
                   <p className="text-xs text-gray-400 mt-1">
-                    تظهر الأصول المتاحة فقط — لا المسلَّمة ولا المتقاعدة ولا المحجوزة بإسناد مفتوح
+                    تظهر الأصول المتاحة فقط — لا المسلَّمة ولا المتقاعدة ولا المحجوزة بإسناد مفتوح. العهدة جوه الفرع
+                    الواحد: بعد اختيار الموظف بتظهر أصول فرعه بس.
                   </p>
                 </div>
 
@@ -742,6 +878,27 @@ export default function CustodyPage() {
                         : 'اختيارية — تُخصم من تصفية إنهاء الخدمة عند الفقد/التلف، وبدونها لا يُحتسب خصم'}
                     </p>
                   </div>
+                  {/* فرع الأصل: حساب الفرع أصله بيتسجل على فرعه تلقائي؛ حساب كل الفروع يختار */}
+                  {companyWide ? (
+                    <div>
+                      <label className="block text-sm font-medium text-gray-700 mb-2">فرع الأصل</label>
+                      <select
+                        value={newAsset.branchId}
+                        onChange={(e) => setNewAsset({ ...newAsset, branchId: e.target.value })}
+                        className="input w-full"
+                      >
+                        <option value="">— بلا فرع (يتحدد بعدين) —</option>
+                        {branches.map((b) => (
+                          <option key={b.id} value={String(b.id)}>{b.name}</option>
+                        ))}
+                      </select>
+                      <p className="text-xs text-gray-400 mt-1">
+                        الأصل بيتسلّم لموظفي فرعه بس. الأصل اللي بلا فرع بيتختم بفرع أول موظف تسلّمه له.
+                      </p>
+                    </div>
+                  ) : (
+                    <p className="text-xs text-gray-500">الأصل الجديد بيتسجل على فرعك.</p>
+                  )}
                   <button
                     onClick={handleCreateAsset}
                     className="btn-secondary"
@@ -962,6 +1119,15 @@ export default function CustodyPage() {
                   العهدة الحالية ستُقفل، وتُفتح عهدة جديدة للمستلم بانتظار قبوله ثم اعتماد
                   مديره المباشر
                 </p>
+                {/* نقل بين فرعين — متاح لحساب نطاقه كل الفروع بس؛ الأصل بيتنقل لفرع المستلم لحظة اعتماد مديره */}
+                {(() => {
+                  const target = employees.find((emp) => String(emp.id) === transferForm.toEmployeeId)
+                  return target && transferTarget.branchId != null && target.branchId !== transferTarget.branchId ? (
+                    <p className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-lg p-2">
+                      المستلم في فرع «{branchNameOf(target.branchId)}» — نقل بين فرعين: الأصل هيتنقل لفرعه بعد قبوله واعتماد مديره.
+                    </p>
+                  ) : null
+                })()}
               </div>
               <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">
                 <button onClick={() => setTransferTarget(null)} className="btn-secondary">

@@ -180,6 +180,12 @@ test('EX-05 catalog: only bonuses.manage writes types, defaults are the SRS defa
   const creatable = expectStatus(await request(users.manager, 'GET', '/bonuses/creatable'), 200)
   assert.deepEqual([creatable.bases, creatable.canExceedCap, creatable.types.map(row => row.code).sort()], [['DIRECT_MANAGER'], false, ['PERFORMANCE', 'SPOT']])
   assert.deepEqual(expectStatus(await request(users.solo, 'GET', '/bonuses/creatable'), 200).types, [], 'an employee without subordinates proposes nothing')
+  // تدقيق الأدوار D9: الكتالوج الكامل (القيم والسقوف وسلاسل الاعتماد) لحامل bonuses.manage بس — كان مفتوحًا لأي حساب.
+  // المدير العادي (بلا أي صلاحية) يفضل شايف أنواعه وموظفيه من creatable/candidates، وده اللي نموذج طلب المكافأة بيستخدمه.
+  for (const blocked of [users.manager, users.solo, users.outsider]) expectStatus(await request(blocked, 'GET', '/bonuses/types'), 403)
+  expectStatus(await request(users.manager, 'GET', '/bonuses/types?includeInactive=true'), 403)
+  assert.ok(expectStatus(await request(users.hr, 'GET', '/bonuses/types'), 200).some(row => row.code === 'SPOT'))
+  assert.ok(creatable.types.some(row => row.id === types.spot.id && row.calcMethod === 'FIXED_AMOUNT'), 'نموذج الطلب بياخد النوع بقواعده من creatable')
   const candidates = expectStatus(await request(users.manager, 'GET', `/bonuses/candidates?typeId=${types.spot.id}`), 200)
   assert.deepEqual(candidates.map(row => row.id).sort((a, b) => a - b), [people.a1.id, people.a2.id, people.a3.id, people.solo.id].sort((a, b) => a - b))
 })
@@ -204,7 +210,23 @@ test('Step 27 individual (review ⑧): a manager proposes for his subordinate �
   // الاعتماد: لا المُقترِح ولا المستفيد ولا موارد بشرية فرع آخر؛ النسخة القديمة ترفض
   expectStatus(await request(users.manager, 'POST', `/bonuses/${proposed.id}/approve`, { expectedRevision: 0 }), 403, 'BONUS_NOT_CURRENT_APPROVER')
   expectStatus(await request(users.solo, 'POST', `/bonuses/${proposed.id}/approve`, { expectedRevision: 0 }), 403, 'BONUS_NOT_CURRENT_APPROVER')
-  expectStatus(await request(users.hrB, 'POST', `/bonuses/${proposed.id}/approve`, { expectedRevision: 0 }), 403, 'BONUS_NOT_CURRENT_APPROVER')
+  // تدقيق الأدوار D6 (نفس قاعدة الخصومات): اللي مالوش صفة على الطلب بياخد نفس رد الطلب الغايب بالحرف — في العرض وفي كل إجراء
+  expectStatus(await request(users.hrB, 'POST', `/bonuses/${proposed.id}/approve`, { expectedRevision: 0 }), 404, 'BONUS_NOT_FOUND')
+  const missing = await request(users.outsider, 'GET', '/bonuses/99999999')
+  expectStatus(missing, 404, 'BONUS_NOT_FOUND')
+  for (const stranger of [users.outsider, users.hrB, users.solo]) {
+    const real = await request(stranger, 'GET', `/bonuses/${proposed.id}`)
+    assert.deepEqual([real.status, real.body], [missing.status, missing.body], `${stranger.email}: موجود خارج النطاق = غايب`)
+  }
+  for (const action of ['approve', 'reject', 'withdraw', 'cancel', 'reverse']) {
+    const body = { expectedRevision: 77, reason: 'محاولة من حساب بلا أي صفة على الطلب' }
+    const stranger = ['cancel', 'reverse'].includes(action) ? users.hrB : users.outsider
+    const onReal = await request(stranger, 'POST', `/bonuses/${proposed.id}/${action}`, body)
+    const onMissing = await request(stranger, 'POST', `/bonuses/99999999/${action}`, body)
+    assert.deepEqual([onReal.status, onReal.body], [onMissing.status, onMissing.body], `${action}: موجود خارج النطاق = غايب`)
+    assert.deepEqual([onReal.status, onReal.body.code], [404, 'BONUS_NOT_FOUND'], action)
+  }
+  assert.deepEqual([(await repo('BonusRequest').findOneByOrFail({ id: proposed.id })).status, (await repo('BonusRequest').findOneByOrFail({ id: proposed.id })).revision], ['IN_APPROVAL', 0])
   expectStatus(await request(users.hr, 'POST', `/bonuses/${proposed.id}/approve`, { expectedRevision: 3 }), 409, 'BONUS_REVISION_CHANGED')
   const approved = expectStatus(await request(users.hr, 'POST', `/bonuses/${proposed.id}/approve`, { expectedRevision: 0, reason: 'موثق بتقرير العميل' }), 201)
   assert.deepEqual([approved.status, approved.statusLabel, approved.finalAmount, approved.payout.state], ['APPROVED', 'معتمد — بانتظار الصرف', '250.00', 'AWAITING_PAYROLL'])

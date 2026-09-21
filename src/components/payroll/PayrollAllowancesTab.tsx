@@ -6,7 +6,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import { Calendar, CheckCircle, Pencil, Plus, Search, Settings2, Wallet, X } from 'lucide-react'
-import { can, getCurrentUser, type ApiBranch, type ApiDepartment, type ApiEmployee, type ApiTeam } from '@/lib/api'
+import { can, getCurrentUser, lockedBranchIdOf, type ApiBranch, type ApiDepartment, type ApiEmployee, type ApiTeam } from '@/lib/api'
 import { formatMoney, sumMoney } from '@/lib/money'
 import EmptyState from '@/components/EmptyState'
 import { ORG_TARGET_LEVELS, OrgTargetPicker, describeOrgTarget, initialOrgTarget, resolveOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
@@ -278,8 +278,8 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
 
 function useLockedBranchId() {
   return useMemo(() => {
-    const user = getCurrentUser()
-    return user && user.role !== 'super_admin' && user.branchId ? user.branchId : null
+    // حساب «كل الفروع» (مدير النظام أو من فتح له نطاق الشركة) مش مقفول على فرع — نفس مرآة branchScopeOf في الخادم
+    return lockedBranchIdOf(getCurrentUser())
   }, [])
 }
 

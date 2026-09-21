@@ -10,7 +10,7 @@
 import { readRaw, readRawEach, unusablePasswordHash, type Ctx, type Source } from './framework'
 import { User } from '../../src/auth/user.entity'
 import { Role, UserPermissionOverride } from '../../src/auth/role.entity'
-import { ALL_PERMISSIONS, SUPER_ADMIN_ONLY_GRANTS } from '../../src/auth/permissions'
+import { ALL_PERMISSIONS, ROLE_PRESETS, SUPER_ADMIN_ONLY_GRANTS } from '../../src/auth/permissions'
 import { AssetType } from '../../src/assets/assets.entities'
 import { Asset, type AssetStatus, type CustodyStatus } from '../../src/requests/entities/custody.entities'
 
@@ -283,10 +283,15 @@ export async function run(ctx: Ctx): Promise<void> {
       continue
     }
     const saOnly = [...perms].filter((p) => SA_ONLY.has(p)).sort()
-    const granted = [...perms].filter((p) => !SA_ONLY.has(p)).sort()
-    if (saOnly.length) ctx.flag('ROLE_SUPER_ADMIN_ONLY_SKIPPED', role.id, `صلاحيات حصرية لمدير النظام لم تُمنح للدور (سؤال مفتوح Q5): ${saOnly.join(', ')}`)
+    // دور له حزمة معتمدة عندنا (ROLE_PRESETS — قرارات المالك 22 سبتمبر بعد تدقيق الأدوار): الحزمة المعتمدة تكسب.
+    // ترجمة صلاحيات النظام القديم كانت بتطلّع «مدير الرواتب» يحتسب ويعتمد ويصرف، و«قراءة فقط» يكتب بصمات وعهد،
+    // و«مدخل بيانات» يؤرشف (D1/D2/D4) — إعادة الاستيراد على قاعدة جديدة ماترجّعش الحزم دي.
+    const preset = ROLE_PRESETS.find((r) => r.code === code && !r.permissions.includes('*'))
+    const granted = preset ? [...preset.permissions] : [...perms].filter((p) => !SA_ONLY.has(p)).sort()
+    if (preset) ctx.flag('ROLE_APPROVED_PRESET_USED', role.id, 'للدور حزمة صلاحيات معتمدة عندنا — استُخدمت بدل ترجمة صلاحيات النظام القديم')
+    else if (saOnly.length) ctx.flag('ROLE_SUPER_ADMIN_ONLY_SKIPPED', role.id, `صلاحيات حصرية لمدير النظام لم تُمنح للدور (سؤال مفتوح Q5): ${saOnly.join(', ')}`)
     const saved = await em.save(
-      em.create(Role, { code, nameAr: cut(ROLE_NAME_AR[name] ?? name, 100), permissions: JSON.stringify(granted), isSystem: false, isActive: true }),
+      em.create(Role, { code, nameAr: cut(preset?.nameAr ?? ROLE_NAME_AR[name] ?? name, 100), permissions: JSON.stringify(granted), isSystem: false, isActive: true }),
     )
     targetRoles.set(code, { id: saved.id, perms: granted })
     ctx.ids.set('role', role.id, saved.id)
@@ -408,7 +413,13 @@ export async function run(ctx: Ctx): Promise<void> {
     const rolePerms = targetRoles.get(role)?.perms ?? []
     if (rolePerms.includes('*')) continue
     const { perms: userPerms, unmapped } = translatePerms(permNames(u.permissions))
-    const extras = [...userPerms].filter((p) => !rolePerms.includes(p)).sort()
+    // دور له حزمة معتمدة أضيق من القديم: اللي اتشال منها بقرار المالك (اعتماد/صرف المسير، الأرشفة، كتابات «قراءة فقط»)
+    // كان عند المستخدم بحكم دوره القديم — مايرجعش له كتجاوز GRANT من باب «صلاحيات فوق الدور»
+    const approved = ROLE_PRESETS.find((r) => r.code === role && !r.isSystem)
+    const trimmedAway = approved
+      ? new Set([...translatePerms(permNames(legacyRoleByName.get(legacyRoleName)?.permissions)).perms].filter((p) => !approved.permissions.includes(p)))
+      : new Set<string>()
+    const extras = [...userPerms].filter((p) => !rolePerms.includes(p) && !trimmedAway.has(p)).sort()
     if (!extras.length) continue
     if (scope === 'self' || scope === 'team') {
       ctx.flag('USER_EXTRA_PERMS_SKIPPED', u.id, `نطاقه في القديم ذاتي/فريق — لم تُمنح صلاحيات إضافية توسّع رؤيته: ${extras.join(', ')}`)

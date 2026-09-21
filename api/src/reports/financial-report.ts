@@ -3,7 +3,8 @@
 // كل تفصيل (البدلات، الإضافات، سطور الإجازة، الخصومات) يُقفل على عمود البند نفسه: الباقي غير المفصل يظهر سطرًا صريحًا، فمجموع الأعمدة = الإجمالي دائمًا.
 import { HOLIDAY_WORK_SOURCE_PREFIX } from '../attendance/holiday-work'
 import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
-import { payrollPaySplit } from '../payroll/pay-split'
+import { buildBankSheet } from '../payroll/bank-sheet'
+import { payrollItemSettlementPayout } from '../payroll/payroll-settlement-salary'
 import { costCenterCents as cents, costCenterMoney as money } from './cost-center-report'
 
 export { cents as financialCents, money as financialMoney }
@@ -67,6 +68,8 @@ export interface FinancialItemSource {
   leaveDeductionLines?: string | null; overtimeEntryIds?: string | null
   /** حصة صاحب العمل في التأمينات من تفصيل البند؛ null = لا تنطبق أو غير متاحة */
   employerInsurance?: MoneyInput
+  /** علامة «مصروف مع التصفية» من تفصيل البند: نص JSON لـ breakdown.settlementPayout كما هو، أو null */
+  settlementPayout?: string | null
 }
 
 /** قيد الدفتر المرتبط بسطر في obligationLines: تصنيفه ونصه ومصدره ونوع الخصم/المكافأة لو موجود. */
@@ -84,6 +87,8 @@ export interface FinancialRow {
   basic: bigint; allowances: bigint; buckets: Map<string, bigint>; additions: Map<string, bigint>; otherAdditions: bigint
   overtime: bigint; overtimeMinutes: number; overtimeEntries: number; holidayWork: bigint
   gross: bigint; deductions: Record<FrDeductionKind, bigint>; totalDeductions: bigint; net: bigint; bank: bigint; cash: bigint
+  /** صافي الصف لو راتبه «مصروف مع التصفية» (برّه كشف البنك)، وإلا صفر — فالصافي = بنك + نقدي + مع التصفية */
+  settlement: bigint
   employerInsurance: bigint | null
   lines: FinancialLine[]
 }
@@ -201,7 +206,13 @@ export function computeFinancialRow(source: FinancialItemSource, obligations: Re
   const totalDeductions = DEDUCTION_KEYS.reduce((sum, key) => sum + deductions[key], 0n)
   const net = cents(source.netPay)
   const payMethod = source.employeePayMethod || source.itemPayMethod || 'transfer'
-  const split = payrollPaySplit(money(net), payMethod, source.bankTransferAmount ?? null)
+  // تقسيم بنك/نقدي من كشف البنوك نفسه (payroll/bank-sheet.ts) — مصدر واحد للقاعدة: الموظف اللي راتبه «مصروف مع التصفية»
+  // برّه الكشف، فبنكه صفر ونقديه صفر هنا كمان، وصافيه كامل في عمود الصافي (تكلفة الشهر) ومذكور في عمود «مع التصفية».
+  // قبل كده الدفتر كان بيقسّم كل صف فعمود «بنك» مابيتصالحش على كشف البنك (37,440.00 مقابل 18,720.00 لنفس المسير).
+  const sheet = buildBankSheet([{ employeeId: toId(source.employeeId) ?? 0, employeeCode: source.employeeCode ?? '', fullName: source.fullName ?? '',
+    payMethod, bankTransferAmount: source.bankTransferAmount ?? null, bankName: null, iban: null, netPay: money(net),
+    settlementPayout: payrollItemSettlementPayout(source.settlementPayout ? `{"settlementPayout":${source.settlementPayout}}` : null) }])
+  const split = { bank: sheet.rows[0]?.bankAmount ?? 0, cash: sheet.rows[0]?.cashAmount ?? 0, settlement: sheet.settlement.total }
   const hours = Number(source.overtimeHours ?? 0)
   const insurance = source.employerInsurance
   return {
@@ -213,7 +224,7 @@ export function computeFinancialRow(source: FinancialItemSource, obligations: Re
     basic, allowances, buckets: allowanceBuckets(source, allowances), additions, otherAdditions,
     overtime, overtimeMinutes: Number.isFinite(hours) ? Math.round(hours * 60) : 0, overtimeEntries: parseArray(source.overtimeEntryIds).length,
     holidayWork, gross, deductions, totalDeductions, net,
-    bank: cents(split.bank), cash: cents(split.cash),
+    bank: cents(split.bank), cash: cents(split.cash), settlement: cents(split.settlement),
     employerInsurance: insurance === null || insurance === undefined || insurance === '' ? null : cents(insurance),
     lines,
   }
@@ -263,7 +274,8 @@ export function buildPayrollRegister(rows: readonly FinancialRow[], insuranceAva
       additions: mapToRecord(additionKeys, row.additions), otherAdditions: money(row.otherAdditions),
       overtime: money(row.overtime), overtimeMinutes: row.overtimeMinutes, holidayWork: money(row.holidayWork), gross: money(row.gross),
       deductions: kindsToRecord(row.deductions), totalDeductions: money(row.totalDeductions), net: money(row.net),
-      bank: money(row.bank), cash: money(row.cash), employerInsurance: insuranceAvailable && row.employerInsurance !== null ? money(row.employerInsurance) : null,
+      bank: money(row.bank), cash: money(row.cash), settlement: money(row.settlement),
+      employerInsurance: insuranceAvailable && row.employerInsurance !== null ? money(row.employerInsurance) : null,
       lines: row.lines.map(line => ({ type: line.type, key: line.key, category: line.category, label: line.label, typeName: line.typeName, amount: money(line.amount) })),
     })),
     totals: {
@@ -272,7 +284,7 @@ export function buildPayrollRegister(rows: readonly FinancialRow[], insuranceAva
       allowanceBuckets: mapToRecord(bucketKeys, bucketTotals), additions: mapToRecord(additionKeys, additionTotals), otherAdditions: total(row => row.otherAdditions),
       overtime: total(row => row.overtime), overtimeMinutes: rows.reduce((sum, row) => sum + row.overtimeMinutes, 0), holidayWork: total(row => row.holidayWork),
       gross: total(row => row.gross), deductions: kindsToRecord(totalKinds), totalDeductions: total(row => row.totalDeductions),
-      net: total(row => row.net), bank: total(row => row.bank), cash: total(row => row.cash),
+      net: total(row => row.net), bank: total(row => row.bank), cash: total(row => row.cash), settlement: total(row => row.settlement),
       employerInsurance: insuranceAvailable ? total(row => row.employerInsurance ?? 0n) : null,
     },
   }

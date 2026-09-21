@@ -102,6 +102,9 @@ import { payrollRunTypeOf } from './payroll-corrections'
 import { PayrollRunReversalLine } from './payroll-corrections.entities'
 import { cancelPayrollReversalLines, carryReversedRunExemptions, describePayrollItemReversal, describePayrollRunCorrection, lockPayrollRunForCorrection, planPayrollItemReversal,
   postPayrollReversalLine, type PayrollReversalBlocker } from './payroll-reversal-ledger'
+// قرار المالك (22 سبتمبر): سلسلة اعتماد المسير (الاعتماد بخطوة واحدة يبقى لمسير بلا سلسلة)، وصرف المسير موظف بموظف (الآثار المالية تبقى في pay وحده)
+import { assertPayrollRunHasNoChain, voidPayrollRunApprovals } from './payroll-approval-chain'
+import { assertPayrollRunNotDisbursed, closePayrollRunDisbursement } from './payroll-disbursement'
 
 // الخطوة 16: مدخلات تعريف المسير من الشاشة (تُتحقق هنا ضد القاعدة؛ الـDTO يتحقق من الشكل فقط).
 export interface PayrollRunDefinitionInput {
@@ -1158,6 +1161,8 @@ export class PayrollService {
     if (existing) {
       await items.delete({ runId: run.id })
       await members.delete({ runId: run.id })
+      // سلسلة الاعتماد: القرارات تخص نسخة حساب واحدة؛ إعادة الحساب بتلغي قرارات النسخة السابقة فتبدأ السلسلة من الخطوة الأولى
+      await voidPayrollRunApprovals(em, run.id, 'RECALCULATED')
     }
     for (const member of newMembers) member.runId = run.id
     if (newMembers.length) await members.save(newMembers)
@@ -1241,6 +1246,8 @@ export class PayrollService {
   }
 
   // ===== الاعتماد =====
+  // الاعتماد بخطوة واحدة (السلوك القائم): حامل payroll.approve غير من احتسب. مسير تحكمه سلسلة اعتماد لا يُعتمد من هنا —
+  // كل معتمد بيعتمد خطوته (payroll-approval-chain.service) وآخر خطوة بتنادي approveLocked نفسها.
   async approve(user: JwtPayload, runId: number) {
     return this.runs.manager.transaction(async em => {
       await this.lockRun(em, runId)
@@ -1250,6 +1257,20 @@ export class PayrollService {
       await this.assertRunAccess(user, run, em)
       // الخطوة 22 (B5): خطأ الحالة برمز PAYRUN-STATE-001 والحالة الحالية والحالات المتاحة (SRS PR-11)
       if (run.status !== 'CALCULATED') throw new BadRequestException(payrollRunStateIssue('اعتماد المسير', run.status, ['CALCULATED']))
+      // صلاحية الاعتماد وحدها لا تتخطى سلسلة الاعتماد؛ بلا سلسلة = لا مانع
+      await assertPayrollRunHasNoChain(em, run)
+      return this.approveLocked(em, user, run, null)
+    })
+  }
+
+  /**
+   * الاعتماد النهائي تحت قفل المسير وداخل معاملة المنادي: فصل المهام ثم كل فحوص الاعتماد وحجوزاته ثم APPROVED — لحظة ظهور القسيمة للموظف.
+   * ينادَى من الاعتماد بخطوة واحدة (approve) ومن آخر خطوة في سلسلة الاعتماد (chain = بيانات السلسلة لحدث الاعتماد)؛ المنادي هو من قفل وفحص الحالة والنطاق.
+   */
+  async approveLocked(em: EntityManager, user: JwtPayload, run: PayrollRun, chain: Record<string, unknown> | null) {
+    const runs = em.getRepository(PayrollRun)
+    const runId = run.id
+    {
       // فصل المهام: لا يعتمد المسير من احتسب نسخته الحالية، إلا برخصة الشركة الصغيرة المفعّلة صراحةً (تُسجل في حدث الاعتماد).
       const calculatedBy = await this.runCalculator(em, run)
       const selfApprovalAllowed = payrollSelfApprovalAllowed(await this.cfg(PAYROLL_SELF_APPROVAL_KEY, 'false'))
@@ -1263,7 +1284,7 @@ export class PayrollService {
         run.approvedAt = new Date()
         await runs.save(run)
         await this.event(em, user, run.id, 'APPROVED', null, { runType: 'REVERSAL', parentRunId: ready.parent.id, employeeIds: ready.employeeIds, totalNet: Number(run.totalNet),
-          lineIds: ready.pairs.map(pair => pair.line.id), calculatedBy, smallCompanyException: calculatedBy === user.sub, selfApprovalSetting: selfApprovalAllowed })
+          lineIds: ready.pairs.map(pair => pair.line.id), calculatedBy, smallCompanyException: calculatedBy === user.sub, selfApprovalSetting: selfApprovalAllowed, approvalChain: chain })
         return run
       }
       // الخطوة 19: لا اعتماد بلا لقطة سياسة سليمة (بصمتها ومحتواها وشهرها)؛ اللقطة المعدلة خارج الشاشة ترفض بـPAYRUN-POLICY-SNAPSHOT-INVALID.
@@ -1312,13 +1333,17 @@ export class PayrollService {
         parityReportHash: parity?.report.reportHash ?? null, parityTotals: parity?.report.totals ?? null, parityExplanationIds: parity?.explanationIds ?? null,
         parityExplained: parity?.explained ?? null,
         // الخطوة 22 (B5): من احتسب، واستخدام رخصة الشركة الصغيرة (المعتمِد هو المحتسِب) إن وقع
-        calculatedBy, smallCompanyException: calculatedBy === user.sub, selfApprovalSetting: selfApprovalAllowed })
+        calculatedBy, smallCompanyException: calculatedBy === user.sub, selfApprovalSetting: selfApprovalAllowed,
+        // سلسلة الاعتماد: الاعتماد النهائي جه من آخر خطوة في السلسلة دي (null = اعتماد بخطوة واحدة)
+        approvalChain: chain })
       return run
-    })
+    }
   }
 
   // ===== الصرف: يقفل الأوفرتايم والأقساط المرتبطة =====
-  async pay(user: JwtPayload, runId: number, dto: { channel?: unknown; reference?: unknown } = {}) {
+  // «إقفال الصرف»: علامات «تم الصرف» لكل موظف (payroll-disbursement) بلا أي أثر مالي؛ آثار الصرف كلها هنا في انتقال واحد
+  // APPROVED→PAID تحت قفل المسير — مرة واحدة بالظبط. مسير بلا علامات = الصرف للمسير كله زي ما هو؛ بعلامات وناقص ناس = unpaidReason إلزامي.
+  async pay(user: JwtPayload, runId: number, dto: { channel?: unknown; reference?: unknown; unpaidReason?: unknown } = {}) {
     return this.runs.manager.transaction(async em => {
       await this.lockRun(em, runId)
       const runs = em.getRepository(PayrollRun)
@@ -1360,6 +1385,8 @@ export class PayrollService {
       // DD-11 (C2): الصافي السالب المحفوظ يمنع الصرف أيضًا، لا الاعتماد وحده
       const negativeNetAtPay = items.filter(item => Number(item.netPay) < 0).map(item => item.employeeId)
       if (negativeNetAtPay.length) throw new ConflictException({ code: 'PAYRUN-NET-NEGATIVE', message: 'صافي بعض الموظفين سالب؛ أعد فتح المسير وعالج الإجازة بلا أجر أو الاستحقاق ثم أعد الحساب قبل الصرف', employeeIds: negativeNetAtPay })
+      // إقفال الصرف موظف بموظف قبل أي أثر مالي: سبب مكتوب لمن لم يتعلّم «تم الصرف» (مسير بلا علامات = لا شرط)
+      const disbursement = await closePayrollRunDisbursement(em, run, items, user.sub, dto.unpaidReason)
       // المسيرات القديمة لا تتجاوز الحارس لمجرد غياب صفوف claims في ترحيلها.
       await claimPayrollPeriod(em, run, employeeIds)
       for (const item of items) {
@@ -1386,8 +1413,10 @@ export class PayrollService {
       run.payChannel = payRecord.channel
       run.payReference = payRecord.reference
       await runs.save(run)
-      await this.event(em, user, run.id, 'PAID', null, { snapshotVersion: run.snapshotVersion, totalNet: Number(run.totalNet), employeeIds,
-        paidBy: user.sub, channel: payRecord.channel, channelLabel: PAYROLL_PAY_CHANNEL_LABELS[payRecord.channel], reference: payRecord.reference })
+      await this.event(em, user, run.id, 'PAID', disbursement.unpaidReason, { snapshotVersion: run.snapshotVersion, totalNet: Number(run.totalNet), employeeIds,
+        paidBy: user.sub, channel: payRecord.channel, channelLabel: PAYROLL_PAY_CHANNEL_LABELS[payRecord.channel], reference: payRecord.reference,
+        // الصرف للمسير كله مرة واحدة (RUN_LEVEL) أو موظف بموظف (PER_EMPLOYEE) بعدد وإجمالي من اتصرف له ومن لم يُصرف له وسببه
+        disbursement })
       return run
     })
   }
@@ -1552,6 +1581,10 @@ export class PayrollService {
       if (!run) throw new NotFoundException('المسير غير موجود')
       await this.assertRunAccess(user, run, em)
       if (!(Array.isArray(expected) ? expected : [expected]).includes(run.status)) throw this.stateError(eventType === 'REOPENED' ? 'إعادة فتح المسير' : 'إلغاء المسير', run.status)
+      // مسير اتعلّم فيه «تم الصرف» لموظفين لا يُعاد فتحه (إعادة الحساب بتعيد إنشاء البنود فتضيع العلامات) — تتلغى العلامات الأول
+      if (status === 'CALCULATED') await assertPayrollRunNotDisbursed(em, runId)
+      // سلسلة الاعتماد: إعادة الفتح أو الإلغاء بيلغوا القرارات السارية، فالاعتماد الجاي يبدأ من الخطوة الأولى
+      const voidedApprovals = await voidPayrollRunApprovals(em, runId, status === 'CALCULATED' ? 'REOPENED' : 'CANCELLED')
       const items = await em.getRepository(PayrollItem).find({ where: { runId } })
       const members = await em.getRepository(PayrollRunMember).find({ where: { runId } })
       await lockPayrollEmployees(em, [...members, ...items].map(row => row.employeeId))
@@ -1569,7 +1602,8 @@ export class PayrollService {
       run.status = status
       if (status === 'CALCULATED') { run.approvedBy = null; run.approvedAt = null }
       await runs.save(run)
-      await this.event(em, user, runId, eventType, reason, { before, after: { status }, snapshotVersion: run.snapshotVersion })
+      await this.event(em, user, runId, eventType, reason, { before, after: { status }, snapshotVersion: run.snapshotVersion,
+        ...(voidedApprovals ? { voidedChainApprovals: voidedApprovals } : {}) })
     })
   }
 
@@ -1631,21 +1665,27 @@ export class PayrollService {
     return result
   }
 
+  // لا كاشف وجود (نفس نمط ملف الموظف: «الموظف غير موجود» للمفقود ولخارج النطاق): رقم بند موجود لكنه خارج نطاق السائل
+  // يستلم نفس رد الرقم المفقود بالحرف — 404 وبنفس الرسالة — فلا يُعرف من الرد إن كان البند موجودًا.
+  private payslipNotFound() {
+    return new NotFoundException('بند المسير غير موجود')
+  }
+
   // قسيمة راتب: البند + المسير + الموظف — لشاشة payslip
   async payslip(user: JwtPayload, itemId: number) {
     const reference = await this.items.findOne({ where: { id: itemId }, select: ['runId'] })
-    if (!reference) throw new NotFoundException('بند المسير غير موجود')
+    if (!reference) throw this.payslipNotFound()
     return this.readRun(reference.runId, async (em, run) => {
     const item = await em.getRepository(PayrollItem).findOneBy({ id: itemId, runId: run.id })
-    if (!item) throw new NotFoundException('بند المسير تغير بعد إعادة الحساب؛ حدّث الشاشة')
+    if (!item) throw this.payslipNotFound()
     const ownPublished = item.employeeId === user.employeeId && ['APPROVED', 'PAID'].includes(run.status)
-    if (!ownPublished && !userHasPerm(user, 'payroll.view')) throw new ForbiddenException('القسيمة غير متاحة لك')
+    if (!ownPublished && !userHasPerm(user, 'payroll.view')) throw this.payslipNotFound()
     const member = await em.getRepository(PayrollRunMember).findOneBy({ runId: run.id, employeeId: item.employeeId })
     const snapshot = member?.snapshot
     const branchIds = run.scopeIds ? JSON.parse(run.scopeIds) as number[] : [run.branchId]
     const savedBranch = snapshot ? snapshot.branchId : run.scopeType === 'BRANCH' && branchIds.length === 1 ? branchIds[0] : null
     const scope = branchScopeOf(user)
-    if (!ownPublished && scope !== null && savedBranch !== scope) throw new ForbiddenException('القسيمة خارج الفرع المسموح لك أو بلا نطاق تاريخي موثّق')
+    if (!ownPublished && scope !== null && savedBranch !== scope) throw this.payslipNotFound()
     // القسيمة القديمة لا تمتلك لقطة هوية أو بنك؛ لا ننسب بيانات الموظف الحالية إلى تاريخها.
     const legacyIdentity = snapshot ? null : await em.getRepository(Employee).findOne({ where: { id: item.employeeId }, select: ['id', 'fullName', 'employeeCode'] })
     // الهوية والبنك والآيبان على القسيمة: قراءة فقط من ملف الموظف، محكومة بنفس صلاحية القسيمة أعلاه.

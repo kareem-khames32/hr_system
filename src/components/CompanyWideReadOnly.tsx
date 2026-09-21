@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { Info } from 'lucide-react'
-import { getCurrentUser } from '@/lib/api'
+import { getCurrentUser, isCompanyWideUser } from '@/lib/api'
 
 // ===== تعريفات لكل الشركة (عزل الفروع) =====
 // الكتالوجات المشتركة (الدرجات، المسميات، تصنيفات الأصول، أنواع الأذونات والمستندات، مراكز التكلفة) وأنواع الخصومات والمكافآت
@@ -11,7 +11,7 @@ import { getCurrentUser } from '@/lib/api'
 export function useCompanyWideWrite(): { canWrite: boolean; readOnly: boolean } {
   // الاتنين false لحد ما نقرا الحساب: لا زرار يظهر ويختفي، ولا ملاحظة تظهر وتختفي
   const [companyWide, setCompanyWide] = useState<boolean | null>(null)
-  useEffect(() => { setCompanyWide(getCurrentUser()?.role === 'super_admin') }, [])
+  useEffect(() => { setCompanyWide(isCompanyWideUser(getCurrentUser())) }, [])
   return { canWrite: companyWide === true, readOnly: companyWide === false }
 }
 

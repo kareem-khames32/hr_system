@@ -54,6 +54,9 @@ import { PayrollOverviewTabs, type PayrollOverviewTab } from '@/components/payro
 // «تابة البدلات»: صرف بدل لشهر على استهداف (يدخل إضافات المسير باسمه)
 import { PayrollAllowancesTab } from '@/components/payroll/PayrollAllowancesTab'
 import { defaultPayRecord, PayrollPayRecordForm, PayrollPayRecordSummary, payRecordReady, type PayRecordDraft } from '@/components/payroll/PayrollPayRecordForm'
+// قرار المالك (22 سبتمبر): سلسلة اعتماد المسير — مين اعتمد ومين عليه الدور، و«اعتمد خطوتي» / «ارفض بسبب» لصاحب الخطوة
+import { PayrollApprovalChainStrip } from '@/components/payroll/PayrollApprovalChainStrip'
+import { approvePayrollChainStep, fetchPayrollRunChain, rejectPayrollChainStep, type PayrollRunChain } from '@/lib/payroll-approval-chain-api'
 import {
   Search,
   Download,
@@ -180,6 +183,8 @@ export default function PayrollPage() {
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [runDetail, setRunDetail] = useState<ApiPayrollRun | null>(null)
+  // سلسلة اعتماد المسير المعروض (null = لسه بتتحمّل أو بلا صلاحية قراءتها؛ governed=false = الاعتماد بخطوة واحدة)
+  const [chain, setChain] = useState<PayrollRunChain | null>(null)
   const [payMethods, setPayMethods] = useState<Record<string, ApiPayMethodReportRow> | null>(null)
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
@@ -231,13 +236,16 @@ export default function PayrollPage() {
     setPayMethods(null)
     setRunLines(null)
     setLinesError('')
+    setChain(null)
     try {
       const detail = await fetchPayrollRun(id)
       if (request !== detailRequest.current) return
       setRunDetail(detail)
-      const [report, lines] = await Promise.allSettled([fetchPayMethodReport(id), fetchPayrollRunLines(id)])
+      const [report, lines, runChain] = await Promise.allSettled([fetchPayMethodReport(id), fetchPayrollRunLines(id), fetchPayrollRunChain(id)])
       if (request !== detailRequest.current) return
       setPayMethods(report.status === 'fulfilled' ? report.value : null)
+      // فشل تحميل السلسلة لا يوقف الشاشة؛ الخادم نفسه بيرفض «اعتماد المسير» لو المسير ماشي بسلسلة
+      setChain(runChain.status === 'fulfilled' ? runChain.value : null)
       if (lines.status === 'fulfilled') setRunLines(lines.value)
       else setLinesError(lines.reason instanceof Error && lines.reason.message ? lines.reason.message : 'تعذر تحميل بنود المسير')
     } catch (e) {
@@ -336,6 +344,8 @@ export default function PayrollPage() {
   // مسير محسوب قبل حفظ لقطة معادلات الرواتب (مسيرات قديمة): الخادم يرفض اعتماده، و«إعادة حساب المسير» تحدّثه. مسير العكس لا لقطة له أصلًا.
   const snapshotMissing = runDetail?.status === 'CALCULATED' && runDetail.runType !== 'REVERSAL' && !(runDetail as { policySnapshotHash?: string | null }).policySnapshotHash
   const approvalBlocked = selfApprovalBlocked || negativeNetCount > 0 || snapshotMissing
+  // مسير تحكمه سلسلة اعتماد: زرار «اعتماد المسير» بخطوة واحدة مابيظهرش، وكل معتمد بيعتمد خطوته من شريط السلسلة
+  const chainGoverned = chain?.governed === true
   const canRemoveDeduction = runDetail?.status === 'CALCULATED' && can('financial_exemption.grant')
   // «مسير الشهر التالي» للمسير العادي فقط؛ مسيرات العكس والتكميلي تصحيح لمسير مصروف لا تتكرر شهريًا
   const isRegularRun = (runDetail?.runType ?? 'REGULAR') === 'REGULAR'
@@ -385,6 +395,24 @@ export default function PayrollPage() {
       setActionBusy(false)
     }
   }
+
+  // سلسلة الاعتماد: «اعتمد خطوتي» (آخر خطوة = الاعتماد النهائي) و«ارفض بسبب» (يرجع لمسؤول الرواتب) — الخادم هو اللي بيحكم مين عليه الدور
+  const handleChainDecision = async (decide: () => Promise<unknown>, fallback: string) => {
+    if (!runDetail || actionBusy || detailLoading) return
+    setActionBusy(true)
+    setError('')
+    try {
+      await decide()
+      await refreshRuns(runDetail.id)
+    } catch (e) {
+      setError(e instanceof Error ? e.message : fallback)
+      setActionConflicts(errorConflicts(e))
+    } finally {
+      setActionBusy(false)
+    }
+  }
+  const handleChainApprove = () => handleChainDecision(() => approvePayrollChainStep(runDetail!.id), 'تعذر اعتماد الخطوة')
+  const handleChainReject = (reason: string) => handleChainDecision(() => rejectPayrollChainStep(runDetail!.id, reason), 'تعذر رفض المسير')
 
   const handlePay = async () => {
     if (!runDetail || runDetail.status !== 'APPROVED' || actionBusy || detailLoading || runBlocked || !can('payroll.pay') || !payRecordReady(payRecord)) return
@@ -603,6 +631,11 @@ export default function PayrollPage() {
               <FileText size={18} />
               تقرير ملخص
             </Link>
+            {/* المالك بيرتب سلسلة الاعتماد بنفسه: سلسلة الشركة، وسلسلة خاصة لأي مسير دائم */}
+            {can('payroll.chain_manage') && <Link href="/payroll/approval-chain" className="btn-secondary flex items-center gap-2 text-sm" data-open-approval-chain>
+              <CheckCircle size={18} />
+              سلسلة الاعتماد
+            </Link>}
             {/* التصدير ينتج CSV لبنود المسير المعروض بعد البحث (الخطوة 30) — بنفس أعمدة الجدول: كل بند استحقاق واستقطاع باسمه */}
             <button
               type="button"
@@ -875,7 +908,7 @@ export default function PayrollPage() {
                     مسير الشهر التالي
                   </button>
                 )}
-                {runDetail.status === 'CALCULATED' && can('payroll.approve') && (
+                {runDetail.status === 'CALCULATED' && can('payroll.approve') && !chainGoverned && (
                   <button
                     onClick={handleApprove}
                     disabled={actionBusy || detailLoading || runBlocked || approvalBlocked}
@@ -890,6 +923,13 @@ export default function PayrollPage() {
                 {runDetail.status === 'APPROVED' && can('payroll.pay') && (
                   <PayrollPayRecordForm draft={payRecord} onChange={setPayRecord} disabled={actionBusy || detailLoading || runBlocked || negativeNetCount > 0} onPay={handlePay} />
                 )}
+                {/* صرف المسير موظف بموظف: علامة «تم الصرف» لكل موظف، وإقفال الصرف بسبب لمن لم يُصرف له — من شاشة «صرف الرواتب» */}
+                {['APPROVED', 'PAID'].includes(runDetail.status) && runDetail.runType !== 'REVERSAL' && (can('payroll.disburse') || can('payroll.pay')) && (
+                  <Link href={`/payroll/disbursement?runId=${runDetail.id}`} className="btn-secondary flex items-center gap-2 text-sm" data-open-disbursement>
+                    <Banknote size={16} />
+                    صرف موظف بموظف
+                  </Link>
+                )}
                 {runDetail.status === 'PAID' && (
                   <div className="flex flex-col items-end gap-1">
                     <span className="badge badge-success">المسير مصروف ومقفل ✓</span>
@@ -899,8 +939,11 @@ export default function PayrollPage() {
                 {runDetail.status === 'CANCELLED' && <span className="badge bg-gray-100 text-gray-600">المسير ملغى ومقفل</span>}
               </div>
             </div>
+            {/* سلسلة اعتماد المسير: مين اعتمد ومين عليه الدور، وقرار صاحب الخطوة، وسبب الرفض لمسؤول الرواتب */}
+            {chain && runDetail.status !== 'CANCELLED' && <PayrollApprovalChainStrip key={`${chain.runId}-${chain.snapshotVersion}-${chain.state}-${chain.currentStep?.order ?? 0}`} chain={chain}
+              busy={actionBusy || detailLoading} onApprove={handleChainApprove} onReject={handleChainReject} />}
             {showConflicts(runConflicts, 'تعارضات المسير الحالي')}
-            {!!runDetail.pendingOvertime?.length && <div className="rounded-xl border border-amber-200 bg-amber-50 p-4 my-4 space-y-2" role="status">
+            {!!runDetail.pendingOvertime?.length &&<div className="rounded-xl border border-amber-200 bg-amber-50 p-4 my-4 space-y-2" role="status">
               <h4 className="font-bold text-amber-900">إضافي معلّق داخل الفترة — {runDetail.pendingOvertime.length} سجل</h4>
               <p className="text-sm text-amber-800">هذه الساعات لم يكتمل اعتمادها، ولا تدخل في قيمة المسير. راجعها قبل الإقفال؛ اعتمادها بعد الإقفال يجعلها مستحقات عن الفترة الأصلية في مسير لاحق.</p>
               <ul className="text-sm space-y-2 max-h-56 overflow-y-auto">{runDetail.pendingOvertime.map(row => <li key={row.id} className="flex flex-wrap items-center gap-2 border-t border-amber-100 pt-2">
@@ -922,7 +965,7 @@ export default function PayrollPage() {
               onClick={() => { setError(''); loadDetail(runDetail.id) }} disabled={actionBusy || detailLoading}
               className="btn-secondary text-sm mt-2 mb-3 disabled:opacity-50">تحديث حالة التعارضات</button>}
             {snapshotMissing && can('payroll.approve') && <p role="alert" className="p-3 mb-3 bg-amber-50 text-amber-900 rounded-xl text-sm">{SNAPSHOT_MISSING_MESSAGE}</p>}
-            {runDetail.status === 'CALCULATED' && selfApprovalBlocked && can('payroll.approve') && <p role="alert" className="p-3 mb-3 bg-amber-50 text-amber-900 rounded-xl text-sm">
+            {runDetail.status === 'CALCULATED' && selfApprovalBlocked && can('payroll.approve') && !chainGoverned && <p role="alert" className="p-3 mb-3 bg-amber-50 text-amber-900 rounded-xl text-sm">
               {SELF_APPROVAL_MESSAGE}</p>}
             {negativeNetCount > 0 && ['CALCULATED', 'APPROVED'].includes(runDetail.status) && <p role="alert" className="p-3 mb-3 bg-red-50 text-red-700 rounded-xl text-sm">
               صافي {negativeNetCount} موظف سالب (مظلل في الجدول)؛ الاعتماد والصرف ممنوعان حتى معالجة الإجازة بلا أجر أو الاستحقاق ثم إعادة الحساب.</p>}
