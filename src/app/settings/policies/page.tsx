@@ -171,6 +171,10 @@ const GROUPS: PolicyGroup[] = [
     note: 'الفلوس بتتحسب وبتظهر بمنزلتين من غير تقريب: 1234.567 تبقى 1234.56.',
     fields: [
       { key: 'system.currency', label: 'عملة النظام', type: 'select', options: [{ value: 'SAR', label: 'ريال سعودي (ر.س)' }, { value: 'EGP', label: 'جنيه مصري (ج.م)' }] },
+      { key: 'system.country', label: 'دولة النظام', type: 'select', hint: 'العطلة الرسمية الجديدة بلا دولة صريحة تأخذ هذا الرمز.', options: [{ value: '', label: 'كل الدول' }, { value: 'SA', label: 'السعودية (SA)' }, { value: 'EG', label: 'مصر (EG)' }] },
+      // صمام أمان التراكم اليومي: كان يُقرأ بقيمة احتياطية في الكود بلا مفتاح مبذور، فمكانش ينفع يتغير
+      { key: 'payroll.daily_accrual_enabled', label: 'تراكم المسير اليومي', type: 'bool', hint: 'مفعّل: الجار الليلي يحسب أيام المسير المفتوح مقدمًا فالاعتماد يأخذ دقائق. اقفله ليُحسب كل يوم-موظف من الأول عند الاحتساب (نفس النتيجة، وقت أطول).' },
+      { key: 'payroll.daily_accrual_hour', label: 'ساعة تشغيل التراكم اليومي', type: 'number', unit: 'الساعة', min: 0, max: 23, integer: true, hint: 'بعد تجسيد الغياب ومزامنة الأجهزة — الافتراضي الساعة 2 فجرًا.' },
       { key: 'eos.months_per_year', label: 'مكافأة نهاية الخدمة', type: 'number', unit: 'شهر/سنة', min: 0 },
       // قرار المالك (16 سبتمبر): فترة المسير «من يوم … إلى يوم …»؛ «إلى» مشتقة (اليوم السابق للبداية) وتُعرض للقراءة. العرض في PayrollPeriodSetting
       { key: CYCLE_KEY, label: 'فترة المسير', type: 'number', min: 1, max: 31, integer: true, hint: 'مسير سبتمبر من 23 = من 23 أغسطس إلى 22 سبتمبر.' },

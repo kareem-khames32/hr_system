@@ -16,6 +16,8 @@ export interface FinancialReportQuery {
   /** فرع محدد (أو فرع حساب الفرع إجباريًا)، null = كل الفروع */
   branchId: number | null
   departmentId?: number | null
+  /** فريق محدد، null = كل الفرق (نفس مرشح /reports/payroll/*) */
+  teamId?: number | null
   costCenterId?: number | null
   /** true = يشمل المسيرات المحسوبة اللي لسه ما اتعتمدتش */
   includeDraft: boolean
@@ -66,6 +68,7 @@ export class FinancialReportService {
     }
     filter('branchId', query.branchId)
     filter('departmentId', query.departmentId)
+    filter('teamId', query.teamId)
     filter('costCenterId', query.costCenterId)
     const money = [...MONEY_COLUMNS, ...(insurance ? [INSURANCE_COLUMN] : [])]
     const snapped = (key: string, fallback: string) => `CASE WHEN s.[snap] IS NOT NULL THEN TRY_CONVERT(int, JSON_VALUE(s.[snap], '$.${key}')) ELSE ${fallback} END`
@@ -78,6 +81,7 @@ export class FinancialReportService {
            COALESCE(JSON_VALUE(s.[snap], '$.fullName'), e.[fullName]) AS [fullName],
            ${snapped('branchId', 'e.[branchId]')} AS [branchId],
            ${snapped('departmentId', 'e.[departmentId]')} AS [departmentId],
+           ${snapped('teamId', 'e.[teamId]')} AS [teamId],
            ${snapped('costCenterId', 'e.[costCenterId]')} AS [costCenterId],
            JSON_VALUE(s.[snap], '$.costCenterName') AS [snapCostCenterName],
            i.[payMethod] AS [itemPayMethod], e.[payMethod] AS [employeePayMethod], CONVERT(varchar(40), e.[bankTransferAmount]) AS [bankTransferAmount],
@@ -114,7 +118,8 @@ export class FinancialReportService {
     const rows: FinancialRow[] = included.map(source => computeFinancialRow(source, obligations))
     const runList = [...runs.values()].sort((a, b) => a.startDate.localeCompare(b.startDate) || a.id - b.id)
     return {
-      header: { ...header, includeDraft: query.includeDraft, branchId: query.branchId, departmentId: query.departmentId ?? null, costCenterId: query.costCenterId ?? null,
+      header: { ...header, includeDraft: query.includeDraft, branchId: query.branchId, departmentId: query.departmentId ?? null,
+        teamId: query.teamId ?? null, costCenterId: query.costCenterId ?? null,
         runs: runList.filter(run => run.included), pendingRuns: runList.filter(run => !run.included), employerInsuranceAvailable: insurance },
       rows, insurance,
     }
@@ -179,6 +184,7 @@ export class FinancialReportService {
     }
     filter('branchId', query.branchId)
     filter('departmentId', query.departmentId)
+    filter('teamId', query.teamId)
     filter('costCenterId', query.costCenterId)
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''
     const loans: FinancialLoanSource[] = await this.ds.query(

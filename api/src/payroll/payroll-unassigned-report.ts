@@ -1,6 +1,8 @@
 import { createHash } from 'node:crypto'
 import { BadRequestException } from '@nestjs/common'
 import { EntityManager, In } from 'typeorm'
+import { displayEmployeeStatus, payrollSuspensionNote, suspendedWholeRange } from '../employees/employee-suspension-rules'
+import { readEmployeeSuspensions } from '../employees/employee-suspensions'
 import { Employee } from '../employees/employee.entity'
 import { OffboardingCase } from '../offboarding/offboarding.entities'
 import { payrollEmploymentCoverage } from './payroll-employment'
@@ -141,6 +143,14 @@ export async function buildPayrollUnassignedReport(em: EntityManager, input: {
   for (let offset = 0; offset < employeeIds.length; offset += ID_CHUNK) {
     cases.push(...await em.getRepository(OffboardingCase).find({ where: { employeeId: In(employeeIds.slice(offset, offset + ID_CHUNK)) } }))
   }
+  // «موقوف بلا أجر» مشتق من فترات الإيقاف المؤرخة (نفس أساس شاشة الموظفين) لا من عمود employees.status
+  // — مسار الإيقاف الحالي لا يكتب في العمود ده، فقراءته كانت شرطًا ميتًا.
+  const suspensions = new Map<number, Awaited<ReturnType<typeof readEmployeeSuspensions>>>()
+  for (let offset = 0; offset < employeeIds.length; offset += ID_CHUNK) {
+    for (const row of await readEmployeeSuspensions(em, employeeIds.slice(offset, offset + ID_CHUNK), { from: startDate, to: endDate })) {
+      suspensions.set(row.employeeId, [...(suspensions.get(row.employeeId) ?? []), row])
+    }
+  }
   const filterDepartments = filters.departmentId ? payrollDepartmentSet(history, [filters.departmentId], true) : null
   const ref = (entry: { run: RunRow; exclusionReason: string | null }): PayrollUnassignedRunRef => ({ runId: entry.run.id, name: entry.run.name,
     status: entry.run.status, period: entry.run.period, startDate: entry.run.startDate, endDate: entry.run.endDate, exclusionReason: entry.exclusionReason })
@@ -152,16 +162,20 @@ export async function buildPayrollUnassignedReport(em: EntityManager, input: {
     let coverage: ReturnType<typeof payrollEmploymentCoverage> = null, problem: string | null = null
     try { coverage = payrollEmploymentCoverage(employee, own, startDate, endDate) }
     catch (error) { if (!(error instanceof BadRequestException)) throw error; problem = error.message }
-    const suspended = !coverage && !problem && employee.status === 'suspended'
-    if (!coverage && !problem && !(suspended && input.includeSuspended)) continue
+    if (!coverage && !problem) continue
+    const periods = suspensions.get(employee.id) ?? []
+    // موقوف بلا أجر: كل أيام تغطيته في الفترة أيام إيقاف ⇒ مفيش يوم مستحق، فهو خارج التقرير إلا بـincludeSuspended
+    const suspended = !!coverage && !problem && suspendedWholeRange(periods, coverage.coverFrom, coverage.coverTo)
+    if (suspended && !input.includeSuspended) continue
     const org = payrollOrgAt(history, employee, coverage?.coverTo ?? endDate)
     if (input.branchScope !== null && org.branchId !== input.branchScope) continue
     if (filters.branchId && org.branchId !== filters.branchId) continue
     if (filterDepartments && (org.departmentId === null || !filterDepartments.has(org.departmentId))) continue
     if (filters.teamId && org.teamId !== filters.teamId) continue
+    // الموقوف بلا أجر خارج «على رأس العمل» وخارج «المدرجين» معًا، فالعددان يبقيان قابلين للجمع
     if (!suspended) employed++
     const entries = memberships.get(employee.id) ?? []
-    if (entries.some(entry => entry.included && ACTIVE.has(entry.run.status))) { assigned++; continue }
+    if (entries.some(entry => entry.included && ACTIVE.has(entry.run.status))) { if (!suspended) assigned++; continue }
     let reasonCode: PayrollUnassignedReason, reasonText: string, refs: PayrollUnassignedRunRef[] = []
     const excluded = entries.filter(entry => !entry.included && ACTIVE.has(entry.run.status))
     const scopeMatch = (status: (run: RunRow) => boolean) => runs.filter(run => status(run) && !entries.some(entry => entry.run.id === run.id)).filter(run => {
@@ -171,7 +185,9 @@ export async function buildPayrollUnassignedReport(em: EntityManager, input: {
     if (problem) {
       reasonCode = 'DATA_PROBLEM'; reasonText = `بيانات الخدمة تمنع حسابه: ${problem}`
     } else if (suspended) {
-      reasonCode = 'SUSPENDED'; reasonText = 'موقوف بلا أجر مسجل في النظام'
+      const note = payrollSuspensionNote(periods, startDate, endDate)
+      reasonCode = 'SUSPENDED'
+      reasonText = note ? `${PAYROLL_UNASSIGNED_REASON_LABELS.SUSPENDED}: ${note}` : `${PAYROLL_UNASSIGNED_REASON_LABELS.SUSPENDED} في كل أيام الفترة`
     } else if (excluded.length) {
       reasonCode = 'EXCLUDED_IN_RUN'; refs = excluded.map(ref)
       reasonText = `مستبعد من ${refs.map(item => `${runLabel(item)}: ${PAYROLL_EXCLUSION_LABELS[item.exclusionReason ?? ''] ?? item.exclusionReason ?? 'سبب غير موثق'}`).join('؛ ')}`
@@ -188,7 +204,9 @@ export async function buildPayrollUnassignedReport(em: EntityManager, input: {
     } else {
       reasonCode = 'OUT_OF_ALL_RUNS'; reasonText = 'خارج نطاق كل المسيرات المنشأة لهذه الفترة'
     }
-    rows.push({ employeeId: employee.id, employeeCode: employee.employeeCode, fullName: employee.fullName, employmentStatus: employee.status,
+    rows.push({ employeeId: employee.id, employeeCode: employee.employeeCode, fullName: employee.fullName,
+      // الحالة المعروضة «موقوف» مشتقة من فترات الإيقاف في آخر يوم تغطية (عشان فلتر الحالة في منظور الرواتب يلاقيه)
+      employmentStatus: displayEmployeeStatus(employee.status, periods, coverage?.coverTo ?? endDate),
       branchId: org.branchId, departmentId: org.departmentId, teamId: org.teamId,
       hireDate: coverage?.hireDate ?? employee.actualStartDate ?? employee.joinDate ?? null, leaveDate: coverage?.leaveDate ?? null,
       coverFrom: coverage?.coverFrom ?? null, coverTo: coverage?.coverTo ?? null, coverDays: coverage?.coverDays ?? null,

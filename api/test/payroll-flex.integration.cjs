@@ -720,7 +720,35 @@ test('FX-09 regression: changing general grace preserves historical source versi
     assert.equal(recomputed.lateMinutes, 15, 'Changing a global setting must not forgive lateness under an existing source version')
     assert.equal(recomputed.attendanceRuleSnapshot.sourceVersionId, original.attendanceRuleSnapshot.sourceVersionId)
     assert.deepEqual(recomputed.attendanceRuleSnapshot, original.attendanceRuleSnapshot)
-    assert.deepEqual(await history(f), originalHistory, 'An existing version must retain its captured general grace')
+    // تدقيق ما قبل المسير (الإصلاح 1): الإعداد لازم يسري للأمام على التعريف القائم، فحفظه
+    // بيولّد نسخة مؤرخة من تاريخ التغيير. النسخ الموجودة تفضل بحروفها — الماضي مجمّد.
+    const changedHistory = await history(f)
+    for (const version of originalHistory) {
+      assert.deepEqual(changedHistory.find(row => row.id === version.id), version,
+        'An existing version must retain its captured general grace')
+    }
+    const now = new Date()
+    const today = `${now.getFullYear()}-${String(now.getMonth() + 1).padStart(2, '0')}-${String(now.getDate()).padStart(2, '0')}`
+    const fromSettings = changedHistory.filter(row => !originalHistory.some(old => old.id === row.id))
+    assert.equal(fromSettings.length, 1, 'One dated version carries the new general grace forward')
+    assert.equal(fromSettings[0].effectiveFrom, today, 'The new version is effective from the change date, not earlier')
+    assert.equal(fromSettings[0].snapshot.generalGraceMinutes, 20)
+    assert.equal(fromSettings[0].legacyBaseline, false)
+    assert.equal(fromSettings[0].actorUserId, admin.id)
+    // اليوم من تاريخ السريان: نفس التعريف القائم (بلا تعديل ولا تعريف جديد) بياخد القيمة الجديدة.
+    // البصمة لحظة ماضية (البصمة المستقبلية مرفوضة)، والمقياس هو السماحية المحسوبة لليوم لا مقدار التأخير.
+    const stamp = new Date(now.getTime() - 120000)
+    if (stamp.getDate() === now.getDate()) {
+      const at = `${String(stamp.getHours()).padStart(2, '0')}:${String(stamp.getMinutes()).padStart(2, '0')}:00`
+      const forward = await punches(f, at, null, today)
+      assert.equal(forward.attendanceRuleSnapshot.graceMinutes, 20,
+        'A day from the effective date forward resolves the new general grace on the same existing source')
+      assert.equal(forward.attendanceRuleSnapshot.sourceVersionId, fromSettings[0].id)
+    }
+    // ونفس اللحظة: اليوم الأقدم لسه على نسخته القديمة بقيمتها القديمة
+    const stillFrozen = await recompute(f)
+    assert.equal(stillFrozen.lateMinutes, 15, 'A day before the change keeps its old lateness after a recompute')
+    assert.deepEqual(stillFrozen.attendanceRuleSnapshot, original.attendanceRuleSnapshot)
 
     const changed = await request(admin, 'PATCH', `/catalogs/work-schedules/${f.source.id}`, {
       flexWindowMinutes: 45, effectiveFrom: nextDate, changeReason: 'نسخة دوام جديدة تلتقط سماحية التأخير الحالية',

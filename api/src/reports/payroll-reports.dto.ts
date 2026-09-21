@@ -8,6 +8,12 @@ const DATE = /^\d{4}-\d{2}-\d{2}$/
 const toBoolean = ({ value }: { value: unknown }) =>
   value === true || value === 'true' || value === '1' ? true : value === false || value === 'false' || value === '0' ? false : value
 
+// المسيرات المحسوبة اللي لسه ما اتعتمدتش: نفس اسم العلم ونفس رسالته في /reports/financial/* و/reports/cost-centers
+export class PayrollRunsReportQuery {
+  @IsOptional() @Transform(toBoolean) @IsBoolean({ message: 'إظهار المسيرات اللي لسه ما اتعتمدتش يقبل true أو false بس' })
+  includeDraft?: boolean
+}
+
 // مرشحات مشتركة لتقارير الرواتب: شهر الرواتب (دورة الإعداد) أو تاريخان صريحان، مع الفرع والقسم والفريق ومركز التكلفة
 export class PayrollReportFiltersQuery {
   @IsOptional() @Matches(MONTH, { message: 'شهر الرواتب بصيغة YYYY-MM' })
@@ -50,7 +56,7 @@ export class PayrollLoansReportQuery extends PayrollReportFiltersQuery {
   status?: 'open' | 'settled' | 'all'
 }
 
-export class PayrollVarianceReportQuery {
+export class PayrollVarianceReportQuery extends PayrollRunsReportQuery {
   @IsOptional() @Matches(MONTH, { message: 'شهر الرواتب بصيغة YYYY-MM' })
   period?: string
 

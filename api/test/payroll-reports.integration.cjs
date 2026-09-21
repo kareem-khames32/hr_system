@@ -241,12 +241,19 @@ test('runs report lists runs without a branch, keeps cancelled runs out of total
   assert.equal(report.runs.find(run => run.id === R.custom.id).scopeLabel, 'قائمة مخصّصة (2 موظف)')
   assert.equal(report.runs.find(run => run.id === R.cancelled.id).status, 'CANCELLED')
   assert.deepEqual(new Set(report.runs.map(run => run.id)), new Set(Object.values(R).map(run => run.id)))
+  // مجاميع الشهر مال فعلي: مسيرات التجهيزة كلها محسوبة ولم تُعتمد، فالافتراضي بلا مجاميع — والقائمة كما هي بحالاتها
+  assert.deepEqual([report.includeDraft, report.byMethod, report.deductions], [false, [], []],
+    'الافتراضي: المعتمد والمصروف وحدهما يدخلان طرق الصرف ومجاميع الخصومات (نفس قاعدة كشف الرواتب المالي)')
+  const withDraft = await get(admin, '/reports/payroll?includeDraft=true')
+  assert.equal(withDraft.includeDraft, true)
+  assert.deepEqual(new Set(withDraft.runs.map(run => run.id)), new Set(report.runs.map(run => run.id)), 'العلم لا يغيّر قائمة المسيرات')
   const [{ count, total }] = await ds.query(`SELECT COUNT(*) AS count, CONVERT(varchar(40), SUM(i.netPay)) AS total FROM payroll_items i
     JOIN payroll_runs r ON r.id = i.runId WHERE r.status <> 'CANCELLED'`)
-  const methodCount = report.byMethod.reduce((sum, row) => sum + row.count, 0)
+  const methodCount = withDraft.byMethod.reduce((sum, row) => sum + row.count, 0)
   assert.equal(methodCount, Number(count), 'طرق الصرف لا تحسب بنود المسير الملغى')
-  assert.equal(report.byMethod.reduce((sum, row) => sum + cents(row.total), 0n), cents(total))
-  assert.deepEqual(report.deductions.map(row => row.period).sort(), ['2026-06', '2026-07'])
+  assert.equal(withDraft.byMethod.reduce((sum, row) => sum + cents(row.total), 0n), cents(total))
+  assert.deepEqual(withDraft.deductions.map(row => row.period).sort(), ['2026-06', '2026-07'])
+  assert.equal((await request(admin, 'GET', '/reports/payroll?includeDraft=maybe')).status, 400, 'قيمة غير منطقية لـincludeDraft مرفوضة')
 
   const scoped = await get(hrA, '/reports/payroll')
   assert.deepEqual(new Set(scoped.runs.map(run => run.id)), new Set([R.dept.id, R.duplicate.id, R.cancelled.id]), 'مدير الفرع أ يرى مسيرات أعضاء فرعه فقط')
@@ -420,7 +427,13 @@ test('loans report reconciles paid + remaining = principal, shows installment n 
 })
 
 test('variance report explains each employee difference by component and isolates unexplained residuals', async () => {
-  const report = await get(admin, '/reports/payroll/variance?period=2026-07&comparePeriod=2026-06')
+  // الفروق مال فعلي زي كشف الرواتب المالي: مسيرات التجهيزة محسوبة ولم تُعتمد، فالافتراضي فاضي وتفصيلها بـincludeDraft
+  const approvedOnly = await get(admin, '/reports/payroll/variance?period=2026-07&comparePeriod=2026-06')
+  assert.deepEqual([approvedOnly.includeDraft, approvedOnly.rows, approvedOnly.summary.employees], [false, [], 0],
+    'الافتراضي لا يحسب مسيرًا لم يُعتمد')
+  assert.deepEqual(approvedOnly.totals.filter(item => item.current !== '0.00' || item.previous !== '0.00'), [])
+  const report = await get(admin, '/reports/payroll/variance?period=2026-07&comparePeriod=2026-06&includeDraft=true')
+  assert.equal(report.includeDraft, true)
   const row = emp => report.rows.find(item => item.employeeId === emp.id)
   const wage = row(E.wageChange)
   assert.ok(wage)
@@ -438,15 +451,150 @@ test('variance report explains each employee difference by component and isolate
   assert.ok(wage.causes.some(cause => cause.code === 'OVERTIME'), 'الموجود في الفترتين يحتفظ بأسباب بنوده')
   assert.deepEqual(new Set(row(E.inDept1).currentRuns), new Set([R.dept.id, R.duplicate.id]))
   // الغائب عن الفترة الحالية (LEFT_PERIOD): لا أسباب بنود مزعجة، ويبقى «غير مفسَّر» إن كان بنده السابق غير متسق
-  const reversed = await get(admin, '/reports/payroll/variance?period=2026-06&comparePeriod=2026-07')
+  const reversed = await get(admin, '/reports/payroll/variance?period=2026-06&comparePeriod=2026-07&includeDraft=true')
   const left = emp => reversed.rows.find(item => item.employeeId === emp.id)
   assert.deepEqual(left(E.inDept1).causes.map(cause => cause.code), ['LEFT_PERIOD'])
   assert.ok(left(E.inDept1).components.length > 0, 'تفصيل البنود يبقى معروضًا')
   assert.deepEqual(left(E.inDept2).causes.map(cause => cause.code), ['LEFT_PERIOD', 'UNEXPLAINED'])
-  const high = await get(admin, `/reports/payroll/variance?period=2026-07&comparePeriod=2026-06&minAmount=${Number(cents(wage.difference) / 100n) + 1}`)
+  const high = await get(admin, `/reports/payroll/variance?period=2026-07&comparePeriod=2026-06&includeDraft=true&minAmount=${Number(cents(wage.difference) / 100n) + 1}`)
   assert.equal(high.rows.some(item => item.employeeId === E.wageChange.id), false, 'رفع العتبة يقلل الصفوف')
   assert.equal(high.summary.employees, report.summary.employees, 'دون تغيير قيم الفروق أو عدد الموظفين')
   assert.equal((await request(admin, 'GET', '/reports/payroll/variance?period=2026-07&comparePeriod=2026-07')).status, 400)
-  const scoped = await get(hrA, '/reports/payroll/variance?period=2026-07&comparePeriod=2026-06')
+  const scoped = await get(hrA, '/reports/payroll/variance?period=2026-07&comparePeriod=2026-06&includeDraft=true')
   assert.ok(scoped.rows.every(item => [E.inDept1.id, E.inDept2.id].includes(item.employeeId)))
+})
+
+// ============================================================================
+// تدقيق ما قبل الإطلاق: رقم واحد للشهر في التقارير الثلاثة، والموقوف بسببه الحقيقي، والفلاتر المقبولة تُطبَّق
+// ============================================================================
+const AUGUST = { period: '2026-08', startDate: '2026-07-23', endDate: '2026-08-22' }
+let approver, teamA, augApproved, augDraft
+
+const netOfRun = async runId => {
+  const [{ total }] = await ds.query(`SELECT CONVERT(varchar(40), ISNULL(SUM(i.netPay), 0)) AS total FROM payroll_items i WHERE i.runId = ${Number(runId)}`)
+  return cents(total)
+}
+
+test('month totals are one number in the payroll month report, the variance report and the financial payroll register', async () => {
+  // فصل المهام: من يعتمد ليس من احتسب (حساب على مستوى الشركة — حساب بلا فرع نطاقه فاضي لا عام)
+  approver = await repo('User').save({ email: 'approver@payroll-reports.invalid', displayName: 'approver@payroll-reports.invalid',
+    passwordHash: 'test-only', role: 'super_admin', branchId: null, permissions: JSON.stringify([]) })
+  teamA = await repo('Team').save({ name: 'فريق تقارير أ', code: 'RPT_T1', departmentId: deptA.id })
+  E.augApproved = await employee({ departmentId: deptA.id, teamId: teamA.id }, [AUGUST])
+  E.augDraft = await employee({ departmentId: deptA.id }, [AUGUST])
+  E.augSuspended = await employee({ departmentId: deptA.id }, [AUGUST])
+  augApproved = await calculate({ period: AUGUST.period, scopeType: 'CUSTOM', employeeIds: [E.augApproved.id], name: 'أغسطس — يُعتمد' })
+  augDraft = await calculate({ period: AUGUST.period, scopeType: 'CUSTOM', employeeIds: [E.augDraft.id], name: 'أغسطس — محسوب بس' })
+  const approve = await request(approver, 'POST', `/payroll/runs/${augApproved.id}/approve`)
+  assert.equal(approve.status, 201, JSON.stringify(approve.body))
+  assert.equal((await repo('PayrollRun').findOneBy({ id: augDraft.id })).status, 'CALCULATED', 'شرط مسبق: المسير التاني محسوب ولم يُعتمد')
+
+  const approvedNet = await netOfRun(augApproved.id)
+  const draftNet = await netOfRun(augDraft.id)
+  assert.ok(approvedNet > 0n && draftNet > 0n, `شرط مسبق: للمسيرين بنود بمبالغ (${approvedNet} / ${draftNet})`)
+
+  const flag = (base, on) => `${base}${on ? `${base.includes('?') ? '&' : '?'}includeDraft=true` : ''}`
+  const monthNet = async on => cents((await get(admin, flag('/reports/payroll', on))).deductions.find(row => row.period === AUGUST.period)?.net ?? '0')
+  const varianceNet = async on => cents((await get(admin, flag(`/reports/payroll/variance?period=${AUGUST.period}&comparePeriod=${JULY.period}`, on)))
+    .totals.find(row => row.key === 'netPay').current)
+  const registerNet = async on => cents((await get(admin, flag(`/reports/financial/payroll-register?period=${AUGUST.period}`, on))).totals.net)
+
+  // الافتراضي: المعتمد وحده — ورقم واحد في التقارير الثلاثة
+  assert.deepEqual([await monthNet(false), await varianceNet(false), await registerNet(false)], [approvedNet, approvedNet, approvedNet],
+    'إجمالي الشهر لازم يكون رقمًا واحدًا في «تقارير الرواتب» و«الفروق» و«كشف الرواتب المالي»')
+  // وبالعلم الصريح: المعتمد + المحسوب اللي لسه ما اتعتمدش — برضه رقم واحد، والفرق = المسير غير المعتمد بالظبط
+  const both = approvedNet + draftNet
+  assert.deepEqual([await monthNet(true), await varianceNet(true), await registerNet(true)], [both, both, both],
+    'includeDraft يضيف نفس المسير في التقارير الثلاثة')
+  assert.equal(await registerNet(true) - await registerNet(false), draftNet)
+  // سطر المسير غير المعتمد يبقى ظاهرًا في قائمة المسيرات بحالته (لا يخلط ماله بالمال المعتمد)
+  const list = await get(admin, '/reports/payroll')
+  assert.equal(list.runs.find(row => row.id === augDraft.id)?.status, 'CALCULATED')
+  assert.equal(cents(list.runs.find(row => row.id === augDraft.id).totalNet), draftNet)
+})
+
+test('a suspended employee is derived from the suspension periods: real reason, real count, and the checkbox filters', async () => {
+  const runReport = () => get(admin, `/payroll/runs/${augDraft.id}/unassigned`)
+  const others = report => report.rows.filter(row => row.employeeId !== E.augSuspended.id)
+    .map(row => [row.employeeId, row.reasonCode, row.coverFrom, row.coverTo]).sort()
+  const before = await runReport()
+  assert.equal(before.rows.find(row => row.employeeId === E.augSuspended.id)?.reasonCode, 'OUT_OF_ALL_RUNS',
+    'شرط مسبق: قبل الإيقاف سببه عام «خارج نطاق كل المسيرات»')
+
+  const suspension = await request(admin, 'POST', `/employees/${E.augSuspended.id}/suspensions`,
+    { fromDate: AUGUST.startDate, toDate: AUGUST.endDate, reason: 'تحقيق إداري — تدقيق التقارير' })
+  assert.equal(suspension.status, 201, JSON.stringify(suspension.body))
+  const stored = await repo('Employee').findOneBy({ id: E.augSuspended.id })
+  assert.deepEqual([stored.status, Boolean(stored.isActive)], ['active', true], 'مسار الإيقاف لا يكتب عمود الحالة المحفوظ')
+
+  // (أ) تقرير حاجز الاعتماد: بصمته تتغير بتغير التقرير، والإقرار بالبصمة القديمة يُرفض
+  const after = await runReport()
+  assert.notEqual(after.reportHash, before.reportHash, 'بصمة تقرير «موظفون بلا مسير» لازم تتغير لما التقرير يتغير')
+  assert.equal(after.rows.some(row => row.employeeId === E.augSuspended.id), false, 'الموقوف بلا أجر خارج التقرير افتراضيًا')
+  const stale = await request(approver, 'POST', `/payroll/runs/${augDraft.id}/unassigned-ack`, { reportHash: before.reportHash })
+  assert.equal(stale.status, 409, JSON.stringify(stale.body))
+  assert.equal(stale.body?.code ?? stale.body?.message?.code, 'PAYRUN-UNASSIGNED-STALE', JSON.stringify(stale.body))
+  assert.equal((await request(approver, 'POST', `/payroll/runs/${augDraft.id}/unassigned-ack`, { reportHash: after.reportHash })).status, 201)
+  // (ب) غير الموقوف لم يتأثر: كل صف تانٍ بسببه وتغطيته كما هو
+  assert.deepEqual(others(after), others(before), 'صفوف باقي الموظفين وأسبابها وتغطيتها كما هي')
+
+  // (ج) بالسبب الصحيح ونصه العربي الموثق لما يُطلب صراحة، ومخفي بغير العلم
+  const shown = await get(admin, `/payroll/unassigned-report?period=${AUGUST.period}&includeSuspended=true`)
+  const hidden = await get(admin, `/payroll/unassigned-report?period=${AUGUST.period}`)
+  const shownRow = shown.rows.find(row => row.employeeId === E.augSuspended.id)
+  assert.equal(shownRow?.reasonCode, 'SUSPENDED', JSON.stringify(shownRow))
+  assert.equal(shownRow.reasonText, 'موقوف بلا أجر: موقوف من 2026-07-23 إلى 2026-08-22')
+  assert.equal(shownRow.employmentStatus, 'suspended', 'الحالة المعروضة مشتقة من فترة الإيقاف زي شاشة الموظفين')
+  assert.equal(shown.totals.byReason.SUSPENDED, 1)
+  assert.equal(hidden.rows.some(row => row.employeeId === E.augSuspended.id), false)
+  assert.deepEqual([shown.totals.employed, shown.totals.unassigned], [hidden.totals.employed, hidden.totals.unassigned],
+    'الموقوف بلا أجر خارج «على رأس العمل» وخارج «بلا مسير» في الحالتين')
+
+  // ونفس القاعدة في /reports/payroll/unassigned: السبب والعدّ والفلتر
+  const reportShown = await get(admin, `/reports/payroll/unassigned?period=${AUGUST.period}&includeSuspended=true`)
+  const reportHidden = await get(admin, `/reports/payroll/unassigned?period=${AUGUST.period}`)
+  const reportRow = reportShown.rows.find(row => row.employeeId === E.augSuspended.id)
+  assert.equal(reportRow?.reason, 'SUSPENDED', JSON.stringify(reportRow?.reasons))
+  assert.equal(reportRow.reasonLabel, 'موقوف بلا أجر (غير مستحق في الفترة)')
+  assert.equal(reportRow.detail, 'موقوف من 2026-07-23 إلى 2026-08-22')
+  assert.equal(reportRow.status, 'suspended')
+  assert.equal(reportHidden.rows.some(row => row.employeeId === E.augSuspended.id), false, 'إظهار الموقوفين فلتر فعّال')
+  assert.ok(reportShown.summary.suspended >= 1, `summary.suspended=${reportShown.summary.suspended}`)
+  assert.equal(reportHidden.summary.suspended, reportShown.summary.suspended, 'العدّ نفسه بالفلتر وبغيره')
+  assert.equal(reportShown.summary.covered + reportShown.summary.unassigned, reportShown.summary.onJob)
+  for (const emp of [E.augApproved, E.augDraft]) {
+    assert.equal(reportShown.rows.some(row => row.employeeId === emp.id), false, `${emp.employeeCode} مشمول في مسير فلا يظهر`)
+  }
+})
+
+test('accepted filters are applied: teamId on the financial reports and branchId on the attendance report', async () => {
+  // (أ) الفريق على التقارير المالية — كان يُقبل ويُتجاهل بصمت
+  const all = await get(admin, `/reports/financial/payroll-register?period=${AUGUST.period}&includeDraft=true`)
+  const byTeam = await get(admin, `/reports/financial/payroll-register?period=${AUGUST.period}&includeDraft=true&teamId=${teamA.id}`)
+  assert.equal(byTeam.teamId, teamA.id)
+  assert.deepEqual(byTeam.rows.map(row => row.employeeId), [E.augApproved.id], 'سطور الفريق وحده')
+  assert.ok(all.rows.length > byTeam.rows.length, `الفلتر بيقلل فعلًا (${all.rows.length} ← ${byTeam.rows.length})`)
+  assert.equal(cents(byTeam.totals.net), await netOfRun(augApproved.id))
+  for (const route of ['payroll-cost', 'deductions', 'overtime', 'loans']) {
+    const scoped = await get(admin, `/reports/financial/${route}?period=${AUGUST.period}&includeDraft=true&teamId=${teamA.id}`)
+    assert.equal(scoped.teamId, teamA.id, route)
+  }
+  assert.equal((await request(admin, 'GET', `/reports/financial/payroll-register?period=${AUGUST.period}&teamId=x`)).status, 400)
+  assert.equal((await request(admin, 'GET', `/reports/financial/payroll-register?period=${AUGUST.period}&teamId=0`)).status, 400)
+
+  // (ب) الفرع على تقرير الحضور — كان يُقبل ويُتجاهل بصمت، ونطاق الفرع لازم يبقى مطبقًا
+  const range = `from=${JULY.startDate}&to=${JULY.endDate}`
+  const branchBIds = new Set((await repo('Employee').find({ where: { branchId: branchB.id } })).map(row => row.id))
+  const everyBranch = await get(admin, `/reports/attendance?${range}`)
+  const onlyB = await get(admin, `/reports/attendance?${range}&branchId=${branchB.id}`)
+  assert.ok(onlyB.length > 0, 'شرط مسبق: لفرع ب حضور في الفترة')
+  assert.deepEqual(onlyB.filter(row => !branchBIds.has(Number(row.employeeId))).map(row => row.employeeId), [], 'ولا موظف من فرع تاني')
+  assert.ok(everyBranch.length > onlyB.length, `الفلتر بيقلل فعلًا (${everyBranch.length} ← ${onlyB.length})`)
+  const foreign = await request(hrA, 'GET', `/reports/attendance?${range}&branchId=${branchB.id}`)
+  assert.equal(foreign.status, 403, JSON.stringify(foreign.body))
+  assert.deepEqual((await get(hrA, `/reports/attendance?${range}&branchId=${branchA.id}`)).map(row => Number(row.employeeId)).sort(),
+    (await get(hrA, `/reports/attendance?${range}`)).map(row => Number(row.employeeId)).sort(), 'فرعه الصريح = نطاقه')
+  for (const bad of ['0', '-1', 'x', '1.5']) {
+    assert.equal((await request(admin, 'GET', `/reports/attendance?${range}&branchId=${bad}`)).status, 400, bad)
+  }
 })

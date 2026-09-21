@@ -6,12 +6,15 @@ import { localDateOf } from '../attendance/attendance.service'
 import { reportDayRange } from '../attendance/attendance-report-range'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
+import { readOpenSuspensions } from '../employees/employee-suspensions'
+import { displayEmployeeStatus } from '../employees/employee-suspension-rules'
 import {
   assertReportRange, payrollLoansReport, payrollOvertimeReport, payrollRunsReport, payrollUnassignedReport, payrollVarianceReport,
 } from '../payroll/payroll-reports'
 import { PayrollService } from '../payroll/payroll.service'
 import {
-  PayrollLoansReportQuery, PayrollOvertimeReportQuery, PayrollReportFiltersQuery, PayrollUnassignedReportQuery, PayrollVarianceReportQuery,
+  PayrollLoansReportQuery, PayrollOvertimeReportQuery, PayrollReportFiltersQuery, PayrollRunsReportQuery, PayrollUnassignedReportQuery,
+  PayrollVarianceReportQuery,
 } from './payroll-reports.dto'
 
 const YEAR_RE = /^\d{4}$/
@@ -59,26 +62,58 @@ export class ReportsController {
     return scope !== null ? `AND ${col} = ${scope}` : ''
   }
 
+  /**
+   * فرع مطلوب صراحة في مرشح التقرير: رقم صحيح موجب، وحساب الفرع لا يطلب غير فرعه
+   * (نفس رفض /reports/financial/* و/reports/cost-centers بالحرف). null = كل الفروع في نطاق المستخدم.
+   */
+  private branchFilterOf(user: JwtPayload, raw?: string): number | null {
+    const scope = branchScopeOf(user)
+    if (raw === undefined || raw === null || String(raw).trim() === '') return scope
+    const branchId = Number(raw)
+    if (!Number.isInteger(branchId) || branchId < 1) throw new BadRequestException('رقم الفرع غير صالح')
+    if (scope !== null && branchId !== scope) throw new ForbiddenException('حساب الفرع يشوف تقرير فرعه بس')
+    return branchId
+  }
+
   // ===== التعداد: بالفرع والقسم والحالة =====
+  // تدقيق ما قبل التشغيل (موجة ج): كان بيجمّع على عمود employees.status المخزَّن، والإيقاف الحالي
+  // مابيتكتبش فيه — بيتحسب من فترات الإيقاف وقت العرض (displayEmployeeStatus). فالموقوف النهارده
+  // كان بيتعدّ «على رأس العمل» ومفيش خانة «موقوف» أصلًا. بقى بيقرا الصفوف ويجمّعها بنفس قاعدة
+  // شاشة الموظفين، فالتعداد والشاشة بيقولوا نفس الكلام.
   @Get('headcount')
   async headcount(@CurrentUser() user: JwtPayload) {
     const s = this.scopeSql(user, 'e.branchId')
-    const byBranch = await this.ds.query(
-      `SELECT b.name AS branchName, COUNT(e.id) AS total,
-              SUM(CASE WHEN e.status = 'active' THEN 1 ELSE 0 END) AS active
-       FROM employees e JOIN branches b ON b.id = e.branchId
-       WHERE 1=1 ${s} GROUP BY b.name`
-    )
-    const byDepartment = await this.ds.query(
-      `SELECT d.name AS departmentName, COUNT(e.id) AS total
-       FROM employees e JOIN departments d ON d.id = e.departmentId
-       WHERE 1=1 ${s} GROUP BY d.name`
-    )
-    const byStatus = await this.ds.query(
-      `SELECT e.status, COUNT(*) AS total FROM employees e
-       WHERE 1=1 ${s} GROUP BY e.status`
-    )
-    return { byBranch, byDepartment, byStatus }
+    const rows: Array<{ id: number; status: string; branchName: string | null; departmentName: string | null }> =
+      await this.ds.query(
+        `SELECT e.id AS id, e.status AS status, b.name AS branchName, d.name AS departmentName
+         FROM employees e JOIN branches b ON b.id = e.branchId
+         LEFT JOIN departments d ON d.id = e.departmentId
+         WHERE 1=1 ${s}`
+      )
+    const today = localDateOf(new Date())
+    const suspensions = await readOpenSuspensions(this.ds.manager, today)
+    const statusOf = (row: { id: number; status: string }) =>
+      displayEmployeeStatus(row.status, suspensions.get(row.id) ?? [], today)
+    const bump = (map: Map<string, { total: number; active: number }>, key: string, isActive: boolean) => {
+      const cell = map.get(key) ?? { total: 0, active: 0 }
+      cell.total += 1
+      if (isActive) cell.active += 1
+      map.set(key, cell)
+    }
+    const branches = new Map<string, { total: number; active: number }>()
+    const departments = new Map<string, { total: number; active: number }>()
+    const statuses = new Map<string, number>()
+    for (const row of rows) {
+      const status = statusOf(row)
+      if (row.branchName) bump(branches, row.branchName, status === 'active')
+      if (row.departmentName) bump(departments, row.departmentName, status === 'active')
+      statuses.set(status, (statuses.get(status) ?? 0) + 1)
+    }
+    return {
+      byBranch: [...branches.entries()].map(([branchName, cell]) => ({ branchName, total: cell.total, active: cell.active })),
+      byDepartment: [...departments.entries()].map(([departmentName, cell]) => ({ departmentName, total: cell.total })),
+      byStatus: [...statuses.entries()].map(([status, total]) => ({ status, total })),
+    }
   }
 
   // ===== الحضور الشهري لكل موظف =====
@@ -87,12 +122,15 @@ export class ReportsController {
     @CurrentUser() user: JwtPayload,
     @Query('month') month?: string,
     @Query('from') from?: string,
-    @Query('to') to?: string
+    @Query('to') to?: string,
+    @Query('branchId') branchId?: string
   ) {
     // «من تاريخ / إلى تاريخ» باليوم (شهر الرواتب 23 → 22 مثلًا)، أو الشهر للتوافق
     const range = reportDayRange({ month, from, to })
     if (!range) throw new BadRequestException('حدد «من تاريخ» و«إلى تاريخ» أو الشهر بصيغة YYYY-MM')
-    const s = this.scopeSql(user, 'a.branchId')
+    // فلتر الفرع يُطبَّق فعلًا (كان يُقبل ويُتجاهل بصمت)، وحساب الفرع ممنوع من فرع غيره
+    const branch = this.branchFilterOf(user, branchId)
+    const s = branch !== null ? `AND a.branchId = ${branch}` : ''
     return this.ds.query(
       `SELECT a.employeeId, e.fullName, e.employeeCode,
               SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) AS presentDays,
@@ -142,10 +180,11 @@ export class ReportsController {
 
   // ===== الرواتب: ملخص المسيرات وطرق الصرف =====
   // الخطوة 30: كل المسيرات تظهر حتى بلا فرع (قسم/فريق/مخصّص)؛ نطاق الفرع من لقطة العضو لا من r.branchId وحده.
-  // الملغى يظهر في القائمة ولا يدخل مجاميع طرق الصرف والخصومات.
+  // القائمة تعرض كل المسيرات بحالتها (حتى الملغى والمسودة)، ومجاميع طرق الصرف والخصومات من المعتمد والمصروف
+  // وحدهما — إلا بـincludeDraft، نفس علم /reports/financial/* بالحرف، فأرقام الشهر تتطابق بين التقارير.
   @Get('payroll')
-  async payroll(@CurrentUser() user: JwtPayload) {
-    return payrollRunsReport(this.ds.manager, branchScopeOf(user))
+  async payroll(@CurrentUser() user: JwtPayload, @Query() query: PayrollRunsReportQuery) {
+    return payrollRunsReport(this.ds.manager, branchScopeOf(user), { includeDraft: query.includeDraft === true })
   }
 
   // ===== موظفون بلا مسير في الفترة، مع السبب (PR-07 / RP-12) =====
@@ -178,6 +217,7 @@ export class ReportsController {
   }
 
   // ===== الفروق بين شهرين لكل موظف مع تفسير البنود (RP-10) =====
+  // المعتمد والمصروف وحدهما، إلا بـincludeDraft — فإجمالي الشهر هنا = إجمالي كشف الرواتب المالي لنفس الشهر
   @Get('payroll/variance')
   async payrollVariance(@CurrentUser() user: JwtPayload, @Query() query: PayrollVarianceReportQuery) {
     this.requirePayrollView(user)

@@ -157,6 +157,35 @@ export async function captureLegacyAttendanceRuleBaselines(em: EntityManager, ac
   }
 }
 
+// سماحية التأخير العامة مجمّدة داخل النسخة المؤرخة لكل تعريف دوام (resolveAttendanceGrace
+// بيقرا sourceSettings.generalGraceMinutes)، فتغيير الإعداد لوحده كان مايوصلش لموظف عنده
+// تعريف قائم — التعريف الجديد بس هو اللي بياخد القيمة الحيّة. الحل بنفس مسار تعديل تعريف
+// الدوام: نسخة مؤرخة جديدة (appendAttendanceRuleVersion) بتاريخ التغيير لكل تعريف ساري.
+// الأيام قبل تاريخ السريان تفضل على نسختها القديمة بقيمتها القديمة — الماضي ما يتغيرش.
+// الـgraceMinutes على مستوى الوردية بيعلو العام كما هو (resolveAttendanceGrace بيقراه أولاً).
+// يُستدعى بعد captureLegacyAttendanceRuleBaselines وقبل كتابة القيمة الجديدة في الإعدادات.
+export async function applyGeneralGraceToAttendanceRules(em: EntityManager, minutes: number, effectiveFrom: string,
+  reason: string, actorUserId?: number) {
+  const from = attendanceRuleDate(effectiveFrom)
+  const appended: Array<{ sourceType: AttendanceRuleSourceType; sourceId: number; versionId: number; version: number }> = []
+  for (const [sourceType, entity] of [['SHIFT', Shift], ['WORK_SCHEDULE', WorkSchedule]] as const) {
+    for (const row of await em.find(entity, { order: { id: 'ASC' } })) {
+      const active = await resolveAttendanceRule<Record<string, any>>(em, sourceType, row.id, from, row as Record<string, any>)
+      // تعريف كل نسخه مؤرخة في المستقبل: مالوش تعريف ساري في تاريخ التغيير، ونسخته
+      // المستقبلية جمّدت قيمتها بنفسها — نسخة «بلا تعريف» هنا كانت هتوقّفه من اليوم.
+      if (active.unavailable) continue
+      const current = active.snapshot.generalGraceMinutes
+      // نفس القيمة السارية = لا نسخة بلا داعٍ (ولا تكثير نسخ على كل حفظة إعدادات)
+      if (current != null && Number(current) === minutes) continue
+      const version = await appendAttendanceRuleVersion(em, { sourceType, sourceId: row.id,
+        before: await attendanceSourceSnapshot(em, row), snapshot: { ...active.snapshot, generalGraceMinutes: minutes },
+        effectiveFrom: from, actorUserId, reason })
+      appended.push({ sourceType, sourceId: row.id, versionId: version.id, version: version.version })
+    }
+  }
+  return appended
+}
+
 // لا كتابة في SQL قبل هذه الأقفال: حساب الرواتب يقرأ الدوام باتصال آخر وهو يحمل
 // employee-finance؛ أخذ صف الدوام أولًا ثم انتظار الموظف يصنع دورة deadlock.
 export async function lockAttendanceRuleMutation(em: EntityManager, employeeIds?: number[]) {

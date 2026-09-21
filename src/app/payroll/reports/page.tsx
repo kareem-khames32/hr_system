@@ -176,7 +176,10 @@ function RunsTab() {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <p className="text-sm text-gray-500">كل المسيرات بما فيها مسيرات القسم والفريق والقائمة المخصّصة التي لا ترتبط بفرع. الملغى يظهر ولا يدخل المجاميع.</p>
+        <p className="text-sm text-gray-500">
+          كل المسيرات بما فيها مسيرات القسم والفريق والقائمة المخصّصة التي لا ترتبط بفرع، وكل مسير بصافيه وحالته.
+          ومجاميع طرق الصرف والاستحقاقات والخصومات تحت من المسيرات المعتمدة والمصروفة وحدها — نفس أرقام كشف الرواتب المالي للشهر.
+        </p>
         <div className="flex items-center gap-2">
           <button type="button" onClick={load} className="btn-secondary flex items-center gap-2"><RefreshCw size={18} />تحديث</button>
           <ExportButton table={report ? runsReportCsv({ ...report, runs: shownRuns }) : null} file={reportFileName('runs')} />
@@ -227,7 +230,7 @@ function RunsTab() {
                     <span className="font-bold text-primary-600" dir="ltr">{formatReportMoney(method.total)}</span>
                   </div>
                 ))}
-                {report.byMethod.length === 0 && <p className="text-sm text-gray-400">لا توجد بنود في مسيرات غير ملغاة</p>}
+                {report.byMethod.length === 0 && <p className="text-sm text-gray-400">لا توجد بنود في مسيرات معتمدة أو مصروفة</p>}
               </div>
             </div>
             <div className="card col-span-2 overflow-x-auto">
@@ -663,7 +666,7 @@ function VarianceTab() {
       </div>
       {error && <ErrorBanner message={error} />}
       {loading ? <Spinner /> : report && (
-        !report.summary ? <div className="card text-center text-gray-400 py-10">لا توجد مسيرات غير ملغاة للمقارنة</div> : (
+        !report.summary ? <div className="card text-center text-gray-400 py-10">لا توجد مسيرات معتمدة أو مصروفة للمقارنة</div> : (
         <>
           <div className="grid grid-cols-5 gap-4">
             <Stat label="موظفون في الفترتين" value={report.summary.employees} />

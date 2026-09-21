@@ -25,8 +25,13 @@ export const SUSPENSION_STATE_LABELS: Record<SuspensionState, string> = {
 export const SUSPENDABLE_STATUSES: readonly string[] = ['active', 'probation', 'notice_period']
 
 export const dateOnly = (value: unknown): string => value instanceof Date ? value.toISOString().slice(0, 10) : String(value ?? '').slice(0, 10)
-export const isValidDate = (value: unknown): value is string => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value)
-  && new Date(`${value}T12:00:00Z`).toISOString().slice(0, 10) === value
+// تاريخ موجود فعلًا: الصيغة ثم قيمة زمنية صالحة (2026-13-01 يعدّي الصيغة، فلازم فحص القيمة قبل toISOString
+// وإلا رمى RangeError بدل ما يرجع false — والنتيجة 500 بدل رسالة عربية على مسار تسجيل الإيقاف)
+export const isValidDate = (value: unknown): value is string => {
+  if (typeof value !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(value)) return false
+  const time = Date.parse(`${value}T12:00:00Z`)
+  return Number.isFinite(time) && new Date(time).toISOString().slice(0, 10) === value
+}
 export function addDays(date: string, days: number): string {
   return new Date(Date.parse(`${dateOnly(date)}T12:00:00Z`) + days * 86400000).toISOString().slice(0, 10)
 }
@@ -119,6 +124,16 @@ export function suspendedDatesInRange(periods: readonly SuspensionPeriod[], from
     for (let date = start, guard = 0; date <= end && guard <= 400; date = addDays(date, 1), guard++) dates.add(date)
   }
   return [...dates].sort()
+}
+
+/**
+ * موقوف بلا أجر في المدى كله: مفيش ولا يوم مستحق جواه (كل أيامه أيام إيقاف).
+ * الأساس نفس أساس displayEmployeeStatus — فترات الإيقاف المؤرخة، لا عمود حالة محفوظ.
+ * التقارير بتستخدمها لتقول «موقوف بلا أجر (غير مستحق في الفترة)» بدل سبب عام.
+ */
+export function suspendedWholeRange(periods: readonly SuspensionPeriod[], from: string, to: string): boolean {
+  if (!isValidDate(from) || !isValidDate(to) || to < from) return false
+  return suspendedDatesInRange(periods, from, to).length === inclusiveDays(from, to)
 }
 
 /**

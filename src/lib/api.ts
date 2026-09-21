@@ -911,6 +911,13 @@ export const updateConfig = (key: string, value: string, calendarChange?: Payrol
 export interface ApiCompanyInfo {
   name: string; nameEn: string; commercialRegister: string
   address: string; phone: string; logoFileId: number | null
+  // ملف الشركة الكامل (ترحيل 051) — الفارغ = غير مضبوط
+  commercialRegisterExpiry: string; vatNumber: string; unifiedNumber: string
+  gosiEstablishmentNumber: string; egInsuranceEstablishmentNumber: string; qiwaEstablishmentNumber: string
+  nationalAddressBuildingNo: string; nationalAddressStreet: string; nationalAddressDistrict: string
+  nationalAddressCity: string; nationalAddressPostalCode: string; nationalAddressAdditionalNo: string
+  email: string; website: string
+  payrollBankName: string; payrollIban: string; wpsEstablishmentId: string
 }
 export const fetchCompanyInfo = () => get<ApiCompanyInfo>('/settings/company')
 

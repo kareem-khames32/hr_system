@@ -132,8 +132,11 @@ export class PayrollDailyAccrualService {
   // فما فيش أي طريق تخلي التراكم يغيّر مبلغًا مصروفًا.
   async deductionBasis(em: EntityManager) {
     const rows = await em.getRepository(RequestsConfig).find({
+      // payroll.shortfall_enabled هو المفتاح المبذور اللي بتضبطه الشاشة ويقراه المسير
+      // (payroll-policy-snapshot). القراءة القديمة كانت باسم payroll.shortfall_deduction_enabled
+      // وهو مفتاح مش مبذور، فإيقاف خصم نقص الساعات مكانش بيوصل للتراكم اليومي خالص.
       where: { key: In(['payroll.monthly_days', 'payroll.daily_hours', 'payroll.late_deduction_enabled',
-        'payroll.shortfall_deduction_enabled', 'payroll.shortfall_mode', 'payroll.shortfall_value',
+        'payroll.shortfall_enabled', 'payroll.shortfall_mode', 'payroll.shortfall_value',
         'payroll.early_leave_deduction_enabled', 'attendance.absence_penalty_days', PAYROLL_ACCRUAL_ENABLED_KEY]) },
     })
     const value = (key: string, fallback: string) => rows.find(row => row.key === key)?.value ?? fallback
@@ -144,7 +147,7 @@ export class PayrollDailyAccrualService {
       monthlyDays: Number(value('payroll.monthly_days', '30')) || 30,
       dailyHours: Number(value('payroll.daily_hours', '8')) || 8,
       lateEnabled: value('payroll.late_deduction_enabled', 'true') === 'true',
-      shortfallEnabled: value('payroll.shortfall_deduction_enabled', 'true') === 'true',
+      shortfallEnabled: value('payroll.shortfall_enabled', 'true') === 'true',
       shortfallMode: value('payroll.shortfall_mode', 'MINUTES') as AttendanceDeductionPolicy['shortfallMode'],
       shortfallValue: Number(value('payroll.shortfall_value', '1')) || 1,
       earlyLeaveEnabled: value('payroll.early_leave_deduction_enabled', 'true') === 'true',

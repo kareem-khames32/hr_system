@@ -45,7 +45,7 @@ import { normalizeWeekendDays, weekendDaysError } from '../attendance/weekend-da
 import { eosConfigError } from '../offboarding/eos'
 import { Employee } from '../employees/employee.entity'
 import type { JwtPayload } from '../auth/auth.service'
-import { captureLegacyAttendanceRuleBaselines, lockAttendanceRuleMutation } from '../attendance/attendance-rule-history'
+import { applyGeneralGraceToAttendanceRules, attendanceRuleToday, captureLegacyAttendanceRuleBaselines, lockAttendanceRuleMutation } from '../attendance/attendance-rule-history'
 import { assertCalendarScope, beginCalendarChange, CalendarChangeDto, finishCalendarChange } from '../attendance/attendance-calendar-history'
 import { overtimeWageComponents } from '../payroll/overtime-financial'
 import { PAYROLL_POLICY_CYCLE_CONFIG_KEYS, PAYROLL_POLICY_NULLABLE_CONFIG_KEYS, payrollPolicyCycleConfigError, validatePayrollPolicyDefaultConfig } from '../payroll/payroll-policy-settings'
@@ -55,7 +55,7 @@ import { DATA_PLACEHOLDER_REJECTED, isDataPlaceholder, withoutDataPlaceholder } 
 import { deductionSettingError } from '../payroll/typed-deductions'
 import { bonusSettingError } from '../payroll/bonuses'
 import { exemptionSettingError } from '../payroll/financial-exemptions'
-import { companyProfileConfigError } from './company-profile'
+import { companyProfileConfigError, COMPANY_PROFILE_FIELD_NAMES } from './company-profile'
 import { assertDefinitionBranchUnchanged, assertDefinitionWritable, definitionBranchForCreate, definitionBranchWhere, definitionInBranch } from '../common/definition-branch'
 import { AUDIENCE_POSITION_KEYS, AUDIENCE_WHERE_MODES, AUDIENCE_WHO_MODES } from '../requests/request-audience'
 import { Department } from '../org/entities/department.entity'
@@ -541,25 +541,24 @@ export class SettingsController {
   }
 
   // بيانات الشركة لرأس المستندات المولَّدة من ملف الموظف (الاسم/السجل/العنوان/
-  // الشعار) — قراءة لمن يفتح ملفات الموظفين أو يدير المستندات، والتعديل عبر
-  // PATCH config (settings.manage). القيمة الفارغة = غير مضبوط
+  // الشعار) ولملف الشركة الكامل (الأرقام الرسمية والعنوان الوطني وبنك الرواتب وحماية
+  // الأجور) — قراءة لمن يفتح ملفات الموظفين أو يدير المستندات، والتعديل عبر
+  // PATCH config (settings.manage). القيمة الفارغة = غير مضبوط.
+  // مفاتيح ترحيل 051 كانت مخزَّنة ومتحقَّق منها ومعروضة في شاشة بيانات الشركة لكن
+  // مفيش قارئ يقدر يرجّعها من هنا، فبيانات بنك الرواتب وحماية الأجور كانت تُدخل ولا تُستخدم.
+  // الأسماء الستة القديمة في الرد ما اتغيرتش (توافق خلفي مع قارئي الرد الحاليين).
   @Perm('settings.manage', 'employees.view', 'documents.manage')
   @Get('company')
   async company() {
+    const legacy = ['company.name', 'company.name_en', 'company.commercial_register',
+      'company.address', 'company.phone', 'company.logo_file_id']
     const rows = await this.config.find({
-      where: {
-        key: In([
-          'company.name',
-          'company.name_en',
-          'company.commercial_register',
-          'company.address',
-          'company.phone',
-          'company.logo_file_id',
-        ]),
-      },
+      where: { key: In([...legacy, ...Object.keys(COMPANY_PROFILE_FIELD_NAMES)]) },
     })
     const v = (k: string) => (rows.find((r) => r.key === k)?.value ?? '').trim()
     const logo = Number(v('company.logo_file_id'))
+    const profile: Record<string, string> = {}
+    for (const [key, field] of Object.entries(COMPANY_PROFILE_FIELD_NAMES)) profile[field] = v(key)
     return {
       // القيمة المؤقتة (الخطوة 9) = غير مضبوط، لا اسم يُطبع في رأس المستندات
       name: withoutDataPlaceholder(v('company.name')),
@@ -568,6 +567,7 @@ export class SettingsController {
       address: v('company.address'),
       phone: v('company.phone'),
       logoFileId: Number.isInteger(logo) && logo > 0 ? logo : null,
+      ...profile,
     }
   }
 
@@ -581,6 +581,15 @@ export class SettingsController {
     'leave.carryover_max_days': 0,
     'leave.carryover_expiry_months': 0,
     'attendance.grace_minutes': 0,
+    // معامل عقوبة الغياب: القيمة السالبة كانت تُحفظ فيصير الغياب «إضافة» للموظف في
+    // أرقام التراكم اليومي (Number(value) || 1 بيمرر السالب) — نفس حدّ تجاوز المعادلة (0..9999)
+    'attendance.absence_penalty_days': 0,
+    // مضاعف بدل دوام العطلة: السالب/الصفر كان يُحفظ وقارئه يرجع للافتراضي بصمت
+    'attendance.holiday_work_multiplier': 0.01,
+    // فاصل مزامنة أجهزة البصمة بالدقائق (0 = متوقفة) — السالب لا معنى له
+    'attendance.sync_interval_minutes': 0,
+    // ساعة تشغيل جار التراكم اليومي (0..23)
+    'payroll.daily_accrual_hour': 0,
     'attendance.flex.shortfall_grace_minutes': 0,
     'attendance.flex.unpaid_break_minutes': 0,
     'attendance.flex.max_session_minutes': 1,
@@ -635,6 +644,8 @@ export class SettingsController {
     'attendance.flex.window_supersedes_grace': ['true', 'false'],
     'attendance.flex.missing_checkout_policy': ['MANUAL_ONLY'],
     'payroll.shortfall_enabled': ['true', 'false'],
+    // مفتاح إيقاف تراكم المسير اليومي (صمام الأمان الموثق في payroll-daily-accrual.ts)
+    'payroll.daily_accrual_enabled': ['true', 'false'],
     'payroll.shortfall_mode': ['MINUTES', 'MULTIPLIER', 'FRACTION'],
     'payroll.attendance_overlap_policy': ['CUMULATIVE', 'MAX_OF_BOTH', 'NET_OF_LATENESS'],
     'payroll.late_deduction_enabled': ['true', 'false'],
@@ -706,6 +717,35 @@ export class SettingsController {
       const n = Number(dto.value)
       if (!Number.isInteger(n) || n > 31) throw new BadRequestException('أيام طلب السلفة أعداد صحيحة من 1 إلى 31')
     }
+    // معامل عقوبة الغياب: نفس حدّ تجاوز المعادلة (payroll-policy.dto.ts) — 0 إلى 9999 بمنزلتين
+    if (dto.key === 'attendance.absence_penalty_days') {
+      const n = Number(dto.value)
+      if (n > 9999 || n !== Number(n.toFixed(2))) {
+        throw new BadRequestException('معامل عقوبة الغياب بلا إذن رقم من 0 إلى 9999 بمنزلتين عشريتين على الأكثر')
+      }
+    }
+    if (dto.key === 'attendance.holiday_work_multiplier') {
+      const n = Number(dto.value)
+      if (n > 99.99 || n !== Number(n.toFixed(2))) {
+        throw new BadRequestException('مضاعف بدل دوام العطلة رقم من 0.01 إلى 99.99 بمنزلتين عشريتين على الأكثر')
+      }
+    }
+    if (['attendance.sync_interval_minutes', 'payroll.daily_accrual_hour'].includes(dto.key)) {
+      const n = Number(dto.value)
+      const max = dto.key === 'payroll.daily_accrual_hour' ? 23 : 1440
+      if (!Number.isInteger(n) || n > max) {
+        throw new BadRequestException(dto.key === 'payroll.daily_accrual_hour'
+          ? 'ساعة تشغيل التراكم اليومي عدد صحيح من 0 إلى 23'
+          : 'فاصل مزامنة أجهزة البصمة عدد صحيح من 0 إلى 1440 دقيقة (0 = متوقفة)')
+      }
+    }
+    // دولة النظام الافتراضية للعطلات الرسمية: رمز الدولة أو فارغ = كل الدول
+    if (dto.key === 'system.country') {
+      if (dto.value !== '' && !/^[A-Za-z]{2,5}$/.test(dto.value)) {
+        throw new BadRequestException('رمز دولة النظام حروف إنجليزية من 2 إلى 5 (مثل SA أو EG)، أو فارغ لكل الدول')
+      }
+      dto.value = dto.value.toUpperCase()
+    }
     if (['attendance.flex.shortfall_grace_minutes', 'attendance.flex.unpaid_break_minutes',
       'attendance.flex.max_session_minutes'].includes(dto.key)) {
       const n = Number(dto.value)
@@ -776,6 +816,15 @@ export class SettingsController {
         const current = await em.getRepository(RequestsConfig).findOneByOrFail({ key: dto.key })
         if (current.value === dto.value) return current
         await captureLegacyAttendanceRuleBaselines(em, user.sub)
+        // سماحية التأخير العامة مجمّدة في النسخة المؤرخة لكل تعريف دوام، فالإعداد لوحده
+        // كان مايوصلش لموظف عنده تعريف قائم. نسخة مؤرخة من تاريخ التغيير توصّلها للأمام،
+        // والأيام الأقدم تفضل على نسختها بقيمتها القديمة. (إعدادات attendance.flex.*
+        // مجمّدة في لقطة flexPolicy عند حفظ التعريف وليها مسارها، فما تعملش نسخة هنا)
+        if (dto.key === 'attendance.grace_minutes') {
+          const minutes = Number(dto.value)
+          await applyGeneralGraceToAttendanceRules(em, minutes, attendanceRuleToday(),
+            `تغيير سماحية التأخير العامة إلى ${minutes} دقيقة من إعدادات النظام`, user.sub)
+        }
         current.value = dto.value
         return em.getRepository(RequestsConfig).save(current)
       })

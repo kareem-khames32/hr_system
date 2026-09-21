@@ -11,6 +11,9 @@ export interface PayrollRunsReportRun {
   runType?: 'REGULAR' | 'REVERSAL' | 'SUPPLEMENTARY'; parentRunId?: number | null; reversedEmployees?: number; reversedNet?: Money
 }
 export interface PayrollRunsReport {
+  // مجاميع طرق الصرف والخصومات من المسيرات المعتمدة والمصروفة وحدها؛ includeDraft=true يضيف المحسوب اللي لسه ما اتعتمدش
+  // (نفس علم التقارير المالية). الشاشة ما بتبعتوش، فالأرقام دايمًا = أرقام كشف الرواتب المالي لنفس الشهر.
+  includeDraft?: boolean
   runs: PayrollRunsReportRun[]
   byMethod: Array<{ payMethod: string; count: number; total: Money }>
   deductions: Array<{
@@ -80,6 +83,8 @@ export interface VarianceRow {
   causes: Array<{ code: string; label: string }>; residual: Money; unexplained: boolean; changed: boolean
 }
 export interface VarianceReport {
+  // نفس قاعدة كشف الرواتب المالي: المعتمد والمصروف وحدهما إلا بـincludeDraft
+  includeDraft?: boolean
   period: string | null; comparePeriod: string | null; rows: VarianceRow[]; unexplained: VarianceRow[]
   totals: Array<{ key: string; label: string; current: Money; previous: Money; delta: Money }>
   summary: { employees: number; shown: number; increased: number; decreased: number; unexplained: number; currentRuns: number; previousRuns: number } | null

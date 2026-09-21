@@ -292,6 +292,11 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'attendance.flex.window_supersedes_grace', value: 'true' },
   { key: 'attendance.flex.missing_checkout_policy', value: 'MANUAL_ONLY' },
   { key: 'payroll.shortfall_enabled', value: 'true' },
+  // صمام أمان تراكم المسير اليومي: false يرجّع الحساب لمساره القديم (كل يوم-موظف من الأول).
+  // كان يُقرأ بقيمة احتياطية في الكود بس، فمكانش ينفع يتغير من الإعدادات («المفتاح غير معروف»).
+  { key: 'payroll.daily_accrual_enabled', value: 'true' },
+  // ساعة تشغيل جار التراكم الليلي (0..23) — بعد تجسيد الغياب ومزامنة الأجهزة
+  { key: 'payroll.daily_accrual_hour', value: '2' },
   { key: 'payroll.shortfall_mode', value: 'MINUTES' },
   { key: 'payroll.shortfall_value', value: '1' },
   { key: 'payroll.attendance_overlap_policy', value: 'NET_OF_LATENESS' },
@@ -322,6 +327,9 @@ export const configSeed: Array<{ key: string; value: string }> = [
   { key: 'onboarding.window_days', value: '90' },
   // عملة النظام: SAR أو EGP — كل الشاشات تقرأها
   { key: 'system.currency', value: 'SAR' },
+  // دولة النظام الافتراضية: العطلة الرسمية الجديدة بلا دولة صريحة تأخذ الرمز ده.
+  // فارغ = كل الدول (نفس القيمة الاحتياطية في catalogs.controller قبل بذرها)
+  { key: 'system.country', value: '' },
   // بيانات الشركة في المستندات المولَّدة من ملف الموظف (خطابات/شهادات/عقد) —
   // فارغ = غير مضبوط فلا تُنشأ الخطابات الرسمية. تُضبط من «الإعدادات ← بيانات الشركة»،
   // والشعار = معرّف ملف مرفوع (entityType=company_logo)

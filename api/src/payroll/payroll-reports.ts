@@ -1,6 +1,8 @@
 import { BadRequestException } from '@nestjs/common'
 import { Between, EntityManager, In } from 'typeorm'
 import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
+import { displayEmployeeStatus, payrollSuspensionNote, suspendedWholeRange } from '../employees/employee-suspension-rules'
+import { readEmployeeSuspensions } from '../employees/employee-suspensions'
 import { OvertimeEntry } from '../requests/entities/attendance.entities'
 import { overtimeFinancialValue } from './overtime-financial'
 import { payrollEmploymentCoverage } from './payroll-employment'
@@ -116,6 +118,21 @@ const RUN_COLUMNS = `r.[id], r.[name], r.[period], r.[status], r.[scopeType], r.
 
 const runTypeOf = (run: Pick<RunRow, 'runType'>) => run.runType === 'REVERSAL' || run.runType === 'SUPPLEMENTARY' ? run.runType : 'REGULAR'
 
+// ===== أي مسير يدخل «مال الشهر»؟ نفس قاعدة FinancialReportService.loadMonth و/reports/financial/* بالحرف =====
+// المعتمد والمصروف وحدهما مال فعلي. المسير المحسوب اللي لسه ما اتعتمدش يدخل بعلم صريح اسمه includeDraft
+// (نفس اسم وسلوك العلم في التقارير المالية)، والمسودة والملغى لا يدخلان بحال. بكده إجمالي الشهر في
+// «تقارير الرواتب» و«الفروق» و«كشف الرواتب المالي» رقم واحد لنفس البيانات.
+export const PAYROLL_REPORT_PAID_STATUSES: readonly string[] = ['APPROVED', 'PAID']
+export const payrollReportRunInTotals = (status: string, includeDraft?: boolean) =>
+  status !== 'CANCELLED' && status !== 'DRAFT' && (includeDraft === true || PAYROLL_REPORT_PAID_STATUSES.includes(status))
+export const payrollReportRunStatusSql = (alias: string, includeDraft?: boolean) =>
+  includeDraft === true ? `${alias}[status] NOT IN ('CANCELLED', 'DRAFT')` : `${alias}[status] IN ('APPROVED', 'PAID')`
+
+export interface PayrollReportDraftOption {
+  /** true = يشمل المسيرات المحسوبة اللي لسه ما اتعتمدتش (نفس includeDraft في /reports/financial/*) */
+  includeDraft?: boolean
+}
+
 export function payrollRunScopeLabel(run: Pick<RunRow, 'scopeType' | 'scopeIds' | 'employeeIds' | 'branchId'>, names: OrgNames) {
   const ids = run.scopeIds ? parseIds(run.scopeIds) : run.branchId ? [run.branchId] : []
   const named = (map: Map<number, string>, prefix: string) =>
@@ -182,8 +199,9 @@ const groupBy = <T, K>(rows: T[], key: (row: T) => K) => {
 }
 
 // ===== ١) ملخص المسيرات: كل المسيرات حتى التي بلا فرع (LEFT JOIN منطقي) =====
-export async function payrollRunsReport(em: EntityManager, scope: PayrollReportScope) {
-  if (emptyScope(scope)) return { runs: [], byMethod: [], deductions: [] }
+export async function payrollRunsReport(em: EntityManager, scope: PayrollReportScope, options: PayrollReportDraftOption = {}) {
+  const includeDraft = options.includeDraft === true
+  if (emptyScope(scope)) return { includeDraft, runs: [], byMethod: [], deductions: [] }
   const names = await loadOrgNames(em)
   const runs: RunRow[] = await em.query(`SELECT ${RUN_COLUMNS} FROM [payroll_runs] r ORDER BY r.[period] DESC, r.[id] DESC`)
   const members: MemberRow[] = await em.query(MEMBER_SELECT)
@@ -229,7 +247,8 @@ export async function payrollRunsReport(em: EntityManager, scope: PayrollReportS
     if (!visible) continue
     const reversed = (item: ItemRow) => reversedKeys.has(memberKey(Number(run.id), Number(item.employeeId)))
     const reversedItems = visibleItems.filter(reversed)
-    if (run.status !== 'CANCELLED') for (const item of visibleItems) if (!reversed(item)) activeItems.push({ run, item })
+    // مجاميع الشهر (طرق الصرف والخصومات) من المال الفعلي وحده؛ سطر كل مسير فوق يبقى كما هو بحالته
+    if (payrollReportRunInTotals(run.status, includeDraft)) for (const item of visibleItems) if (!reversed(item)) activeItems.push({ run, item })
     resultRuns.push({
       ...base,
       employees: visibleItems.length,
@@ -255,6 +274,7 @@ export async function payrollRunsReport(em: EntityManager, scope: PayrollReportS
     periods.set(run.period, row)
   }
   return {
+    includeDraft,
     runs: resultRuns,
     byMethod: [...methods.entries()].map(([payMethod, row]) => ({ payMethod, count: row.count, total: reportMoney(row.total) })),
     deductions: [...periods.entries()].sort((a, b) => b[0].localeCompare(a[0])).map(([period, row]) => ({
@@ -328,6 +348,13 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
     FROM [employees] e ${filter.sql} ORDER BY e.[employeeCode], e.[id]`, filter.params)
   const cases = groupBy(await em.query(`SELECT [employeeId], CONVERT(varchar(10), [lastWorkingDay], 23) AS [lastWorkingDay], [status] FROM [offboarding_cases]`),
     (row: any) => Number(row.employeeId))
+  // «موقوف بلا أجر» مشتق من فترات الإيقاف المؤرخة (نفس أساس شاشة الموظفين ومنطق خصم أيام الإيقاف)،
+  // لا من عمود employees.status — مسار الإيقاف الحالي لا يكتب فيه أبدًا.
+  const suspensionRows: Awaited<ReturnType<typeof readEmployeeSuspensions>> = []
+  for (let offset = 0; offset < employees.length; offset += 500) {
+    suspensionRows.push(...await readEmployeeSuspensions(em, employees.slice(offset, offset + 500).map(emp => Number(emp.id)), { from, to }))
+  }
+  const suspensionsByEmployee = groupBy(suspensionRows, row => Number(row.employeeId))
   const runs: RunRow[] = await em.query(`SELECT ${RUN_COLUMNS} FROM [payroll_runs] r
     WHERE r.[startDate] <= CONVERT(date, @1, 23) AND r.[endDate] >= CONVERT(date, @0, 23) ORDER BY r.[startDate], r.[id]`, [from, to])
   const runIds = runs.map(run => Number(run.id))
@@ -385,8 +412,10 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
       if (!(error instanceof BadRequestException)) throw error
       dataIssue = error.message
     }
-    const suspended = !coverage && !dataIssue && emp.status === 'suspended'
-    if (!coverage && !dataIssue && !suspended) continue // ليس على رأس العمل في الفترة
+    if (!coverage && !dataIssue) continue // ليس على رأس العمل في الفترة
+    // موقوف بلا أجر: كل أيام تغطيته في الفترة أيام إيقاف ⇒ غير مستحق لأي يوم، فغيابه عن المسيرات مفهوم لا ناقص
+    const suspended = !!coverage && !dataIssue &&
+      suspendedWholeRange(suspensionsByEmployee.get(employeeId) ?? [], coverage.coverFrom, coverage.coverTo)
 
     const employeeMembers = membersByEmployee.get(employeeId) ?? []
     const rawItems = itemsByEmployee.get(employeeId) ?? []
@@ -416,7 +445,7 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
     const reason = (code: UnassignedReasonCode, detail: string | null = null, run: RunRow | null = null) =>
       reasons.push({ code, label: UNASSIGNED_REASON_LABELS[code], detail, run: run ? runRef(run, scope) : null })
     if (dataIssue) reason('DATA_ISSUE', dataIssue)
-    if (suspended) reason('SUSPENDED')
+    if (suspended) reason('SUSPENDED', payrollSuspensionNote(suspensionsByEmployee.get(employeeId) ?? [], from, to))
     for (const member of employeeMembers.filter(row => row.membershipStatus === 'EXCLUDED')) {
       const run = runById.get(Number(member.runId))
       if (run && run.status !== 'CANCELLED') {
@@ -456,7 +485,9 @@ export async function payrollUnassignedReport(em: EntityManager, scope: PayrollR
     const last = lastRuns.get(employeeId)
     const pending = pendingInstallments.get(employeeId)
     rows.push({
-      employeeId, employeeCode: emp.employeeCode, fullName: emp.fullName, status: emp.status,
+      // الحالة المعروضة: «موقوف» مشتقة من فترات الإيقاف في آخر يوم تغطية داخل الفترة (نفس شاشة الموظفين)
+      employeeId, employeeCode: emp.employeeCode, fullName: emp.fullName,
+      status: displayEmployeeStatus(emp.status, suspensionsByEmployee.get(employeeId) ?? [], coverage?.coverTo ?? to),
       branchId: employee.branchId, branchName: employee.branchId ? names.branches.get(employee.branchId) ?? null : null,
       departmentId: employee.departmentId, departmentName: employee.departmentId ? names.departments.get(employee.departmentId) ?? null : null,
       teamName: employee.teamId ? names.teams.get(employee.teamId) ?? null : null,
@@ -838,17 +869,22 @@ export function previousPayrollPeriod(period: string) {
   return month === 1 ? `${year - 1}-12` : `${year}-${String(month - 1).padStart(2, '0')}`
 }
 
-export interface PayrollVarianceOptions { period?: string; comparePeriod?: string; minAmount?: number; minPercent?: number; includeUnchanged?: boolean }
+export interface PayrollVarianceOptions extends PayrollReportDraftOption {
+  period?: string; comparePeriod?: string; minAmount?: number; minPercent?: number; includeUnchanged?: boolean
+}
 
 export async function payrollVarianceReport(em: EntityManager, scope: PayrollReportScope, options: PayrollVarianceOptions) {
   for (const value of [options.period, options.comparePeriod]) if (value !== undefined) previousPayrollPeriod(value)
-  if (emptyScope(scope)) return { period: options.period ?? null, comparePeriod: options.comparePeriod ?? null, rows: [], unexplained: [], totals: [], summary: null }
-  const latest = options.period ?? (await em.query(`SELECT TOP (1) [period] FROM [payroll_runs] WHERE [status] <> 'CANCELLED' ORDER BY [period] DESC`))[0]?.period
-  if (!latest) return { period: null, comparePeriod: null, rows: [], unexplained: [], totals: [], summary: null }
+  const includeDraft = options.includeDraft === true
+  // الفروق تقارن مالًا فعليًا: المعتمد والمصروف وحدهما إلا بـincludeDraft — نفس قاعدة كشف الرواتب المالي
+  const statusSql = payrollReportRunStatusSql('', includeDraft)
+  if (emptyScope(scope)) return { includeDraft, period: options.period ?? null, comparePeriod: options.comparePeriod ?? null, rows: [], unexplained: [], totals: [], summary: null }
+  const latest = options.period ?? (await em.query(`SELECT TOP (1) [period] FROM [payroll_runs] WHERE ${statusSql} ORDER BY [period] DESC`))[0]?.period
+  if (!latest) return { includeDraft, period: null, comparePeriod: null, rows: [], unexplained: [], totals: [], summary: null }
   const period = String(latest)
   const comparePeriod = options.comparePeriod ?? previousPayrollPeriod(period)
   if (period === comparePeriod) throw new BadRequestException('اختر فترتين مختلفتين للمقارنة')
-  const runs: RunRow[] = await em.query(`SELECT ${RUN_COLUMNS} FROM [payroll_runs] r WHERE r.[status] <> 'CANCELLED' AND r.[period] IN (@0, @1)`, [period, comparePeriod])
+  const runs: RunRow[] = await em.query(`SELECT ${RUN_COLUMNS} FROM [payroll_runs] r WHERE ${payrollReportRunStatusSql('r.', includeDraft)} AND r.[period] IN (@0, @1)`, [period, comparePeriod])
   const runById = new Map(runs.map(run => [Number(run.id), run]))
   const runIds = [...runById.keys()]
   const inRuns = runIds.length ? `IN (${runIds.join(', ')})` : 'IN (NULL)'
@@ -910,7 +946,7 @@ export async function payrollVarianceReport(em: EntityManager, scope: PayrollRep
     (options.minPercent === undefined || row.percent === null || Math.abs(row.percent) >= options.minPercent))
     .sort((a, b) => Number(abs(reportCents(b.difference)) - abs(reportCents(a.difference))) || a.employeeId - b.employeeId)
   return {
-    period, comparePeriod, rows, unexplained: rows.filter(row => row.unexplained),
+    includeDraft, period, comparePeriod, rows, unexplained: rows.filter(row => row.unexplained),
     totals: [...VARIANCE_COMPONENTS.map(component => ({ key: component.key, label: component.label })), { key: 'netPay', label: 'الصافي' }]
       .map(component => ({ ...component, current: reportMoney(periodTotals.current[component.key]), previous: reportMoney(periodTotals.previous[component.key]),
         delta: reportMoney(periodTotals.current[component.key] - periodTotals.previous[component.key]) })),

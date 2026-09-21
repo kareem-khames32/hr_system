@@ -18,6 +18,10 @@ export class FinancialReportQueryDto {
   @IsOptional() @Type(() => Number) @IsInt({ message: 'رقم القسم غير صالح' }) @Min(1)
   departmentId?: number
 
+  // الفريق: نفس مرشح /reports/payroll/* عشان الفلتر ما يبقاش مقبولًا ومتجاهلًا بصمت
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'رقم الفريق غير صالح' }) @Min(1)
+  teamId?: number
+
   @IsOptional() @Type(() => Number) @IsInt({ message: 'رقم مركز التكلفة غير صالح' }) @Min(1)
   costCenterId?: number
 
@@ -39,7 +43,7 @@ export class FinancialReportController {
       throw new ForbiddenException('حساب الفرع يشوف تقارير فرعه بس')
     }
     return { period: query.period, branchId: scope ?? query.branchId ?? null, departmentId: query.departmentId ?? null,
-      costCenterId: query.costCenterId ?? null, includeDraft: query.includeDraft === true }
+      teamId: query.teamId ?? null, costCenterId: query.costCenterId ?? null, includeDraft: query.includeDraft === true }
   }
 
   // ١) كشف الرواتب: سطر لكل موظف في كل مسير بالبدلات والإضافي والخصومات بأنواعها والصافي وطريقة الصرف

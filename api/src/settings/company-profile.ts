@@ -21,6 +21,31 @@ export const COMPANY_PROFILE_NEW_KEYS = [
   'company.wps_establishment_id',
 ] as const
 
+/**
+ * اسم الحقل في GET /settings/company لكل مفتاح جديد. المفاتيح القديمة الستة ليها أسماؤها
+ * التاريخية في الرد (name, nameEn, commercialRegister, address, phone, logoFileId) وما تتغيرش.
+ * النوع Record<...> بيجبر أي مفتاح جديد يتضاف هنا كمان، فما يبقاش مخزَّن وغير مقروء.
+ */
+export const COMPANY_PROFILE_FIELD_NAMES: Record<typeof COMPANY_PROFILE_NEW_KEYS[number], string> = {
+  'company.commercial_register_expiry': 'commercialRegisterExpiry',
+  'company.vat_number': 'vatNumber',
+  'company.unified_number': 'unifiedNumber',
+  'company.gosi_establishment_number': 'gosiEstablishmentNumber',
+  'company.eg_insurance_establishment_number': 'egInsuranceEstablishmentNumber',
+  'company.qiwa_establishment_number': 'qiwaEstablishmentNumber',
+  'company.national_address_building_no': 'nationalAddressBuildingNo',
+  'company.national_address_street': 'nationalAddressStreet',
+  'company.national_address_district': 'nationalAddressDistrict',
+  'company.national_address_city': 'nationalAddressCity',
+  'company.national_address_postal_code': 'nationalAddressPostalCode',
+  'company.national_address_additional_no': 'nationalAddressAdditionalNo',
+  'company.email': 'email',
+  'company.website': 'website',
+  'company.payroll_bank_name': 'payrollBankName',
+  'company.payroll_iban': 'payrollIban',
+  'company.wps_establishment_id': 'wpsEstablishmentId',
+}
+
 const DIGITS = (min: number, max: number, message: string) => (value: string) => new RegExp(`^\\d{${min},${max}}$`).test(value) ? null : message
 
 const RULES: Record<string, (value: string) => string | null> = {
