@@ -201,7 +201,9 @@ test('(ج) التصفية = المسير بالظبط، والمسير بيست�
   // المستحق للصرف وكشف البنك من غيره
   const payMethods = await request(admin, 'GET', `/payroll/runs/${run.id}/pay-methods`)
   assert.equal(payMethods.status, 200, JSON.stringify(payMethods.body))
-  assert.deepEqual(payMethods.body.transfer, { count: 1, total: Number(stayerItem.netPay) })
+  // تقرير طرق الصرف بيقسم البنك والنقدي بنفس أرقام كشف البنوك (تحويل كامل ⇒ كله بنك)
+  assert.deepEqual(payMethods.body.transfer,
+    { label: 'تحويل بنكي', count: 1, total: Number(stayerItem.netPay), bank: Number(stayerItem.netPay), cash: 0 })
   const sheet = await request(admin, 'GET', `/payroll/runs/${run.id}/bank-sheet`)
   assert.equal(sheet.status, 200, JSON.stringify(sheet.body))
   assert.deepEqual(sheet.body.rows.map(row => row.employeeId), [stayer.id])

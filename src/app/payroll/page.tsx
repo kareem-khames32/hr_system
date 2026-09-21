@@ -11,6 +11,7 @@ import {
   ApiError,
   can,
   fetchPayMethodReport,
+  type ApiPayMethodReportRow,
   fetchPayrollRunAccrual,
   refreshPayrollRunAccrual,
   type ApiPayrollRunAccrual,
@@ -179,7 +180,7 @@ export default function PayrollPage() {
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [runDetail, setRunDetail] = useState<ApiPayrollRun | null>(null)
-  const [payMethods, setPayMethods] = useState<Record<string, { count: number; total: number }> | null>(null)
+  const [payMethods, setPayMethods] = useState<Record<string, ApiPayMethodReportRow> | null>(null)
   const [loading, setLoading] = useState(true)
   const [detailLoading, setDetailLoading] = useState(false)
   const [actionBusy, setActionBusy] = useState(false)
@@ -320,6 +321,10 @@ export default function PayrollPage() {
     return () => { cancelled = true }
   }, [runDetail])
 
+  // مجاميع تقرير طرق الصرف: بنك + نقدي = الصافي المستحق للصرف (صف «مصروف مع التصفية» خارجهم)
+  const payMethodTotals = Object.values(payMethods ?? {}).reduce(
+    (sum, row) => ({ bank: sum.bank + n(row.bank), cash: sum.cash + n(row.cash), total: sum.total + n(row.total) }),
+    { bank: 0, cash: 0, total: 0 })
   const calculationTarget = runDetail && (runDetail.status === 'DRAFT' || runDetail.status === 'CALCULATED') ? runDetail : null
   const calculateDisabled = actionBusy || detailLoading || !calculationTarget
   const runConflicts = actionConflicts.length ? actionConflicts : runDetail?.conflicts ?? []
@@ -1024,20 +1029,29 @@ export default function PayrollPage() {
               <div>
                 <h3 className="font-bold text-gray-800">ملخص طرق الصرف</h3>
                 <p className="text-sm text-gray-500 mt-1">
-                  توزيع صافي المسير على طرق الصرف (تحويل / كاش / فيزا)
+                  توزيع صافي المسير على طرق الصرف (نقدي / تحويل بنكي / نقدي + بنك) — ومنه كام رايح للبنك وكام بيتصرف نقدي
                 </p>
               </div>
             </div>
-            <div className="grid grid-cols-4 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
               {Object.entries(payMethods).map(([method, data]) => (
                 <div key={method} className="p-4 bg-gray-50 rounded-xl border border-gray-100">
-                  <p className="text-xs text-gray-500">{payMethodLabel(method)}</p>
+                  <p className="text-xs text-gray-500">{data.label || payMethodLabel(method)}</p>
                   <p className="text-lg font-bold text-gray-800">
                     {formatMoney(data.total)} {currency}
+                  </p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    بنك <span className="font-bold text-primary-700">{formatMoney(data.bank)}</span>
+                    {' · '}نقدي <span className="font-bold text-success-700">{formatMoney(data.cash)}</span>
                   </p>
                   <p className="text-xs text-gray-400 mt-1">{n(data.count)} موظف</p>
                 </div>
               ))}
+            </div>
+            <div className="mt-4 pt-3 border-t border-teal-100 text-sm text-gray-700">
+              الإجمالي: تحويل بنكي <span className="font-bold text-primary-700">{formatMoney(payMethodTotals.bank)} {currency}</span>
+              {' · '}نقدي <span className="font-bold text-success-700">{formatMoney(payMethodTotals.cash)} {currency}</span>
+              {' · '}الصافي المستحق للصرف <span className="font-bold text-gray-800">{formatMoney(payMethodTotals.total)} {currency}</span>
             </div>
           </div>
         )}

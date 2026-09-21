@@ -881,18 +881,26 @@ export interface ApiPayrollRunAccrual {
 export const fetchPayrollRunAccrual = (id: number) => get<ApiPayrollRunAccrual>(`/payroll/runs/${id}/accrual`)
 export const refreshPayrollRunAccrual = (id: number) =>
   post<{ runId: number; employees: number; days: number; computed: number; reused: number; accrual: ApiPayrollRunAccrual }>(`/payroll/runs/${id}/accrual/refresh`)
+// تقرير طرق الصرف — نفس أرقام كشف البنوك: صافي كل طريقة، ومنه كام بنك وكام نقدي
+export interface ApiPayMethodReportRow { label: string; count: number; total: number; bank: number; cash: number }
 export const fetchPayMethodReport = (id: number) =>
-  get<Record<string, { count: number; total: number }>>(`/payroll/runs/${id}/pay-methods`)
+  get<Record<string, ApiPayMethodReportRow>>(`/payroll/runs/${id}/pay-methods`)
 // كشف البنوك لمسير — مبلغ البنك والنقدي لكل موظف وإجمالي كل بنك (حساب الفرع: موظفي فرعه بس)
 export interface ApiBankSheetRow {
   employeeId: number; employeeCode: string; fullName: string; payMethod: string; payMethodLabel: string
   bankName: string | null; iban: string | null; netPay: number; bankAmount: number; cashAmount: number
+  /** بيانات صرف ناقصة أو غلط على الصف ده (بدون آيبان، «نقدي + بنك» بلا مبلغ…) أو null لو سليم */
+  issue: string | null
 }
 export interface ApiBankSheet {
   run: { id: number; name: string | null; period: string; status: string; startDate: string; endDate: string }
   rows: ApiBankSheetRow[]
   banks: { bankName: string; employees: number; total: number }[]
   totals: { employees: number; bank: number; cash: number; net: number }
+  issues: { employees: number; bank: number; cash: number; rows: ApiBankSheetRow[] }
+  // راتب آخر شهر بيتصرف مع التصفية — خارج الكشف والمبلغ المستحق، وبيتقال للعلم
+  settlement: { employees: number; total: number
+    rows: { employeeId: number; employeeCode: string; fullName: string; netPay: number; lastWorkingDay: string | null; caseId: number | null }[] }
 }
 export const fetchBankSheet = (runId: number) => get<ApiBankSheet>(`/payroll/runs/${runId}/bank-sheet`)
 

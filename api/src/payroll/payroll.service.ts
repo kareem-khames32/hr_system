@@ -23,6 +23,7 @@ import {
   LoanInstallment,
 } from '../requests/entities/financial.entities'
 import { Leave, LeaveType } from '../requests/entities/leave.entities'
+import { bankSheetPayMethodSummary, bankSheetSources, buildBankSheet } from './bank-sheet'
 import { PayrollDecimal } from './payroll-decimal'
 import { parseSickPayTiers, payrollLeaveDeductionLines, sickLeaveDaysInCover, sickLeaveDeduction, type SickPayTier } from './sick-leave-pay'
 import { readSuspensionPayrollDays, suspendedDatesBetween } from '../employees/employee-suspensions'
@@ -2829,18 +2830,20 @@ export class PayrollService {
     return this.parityHistory(user)
   }
 
-  // تقرير حالة الصرف: تجميع بطريقة الدفع (كاش/تحويل/فيزا)
+  /**
+   * تقرير حالة الصرف: لكل طريقة صرف (نقدي / تحويل بنكي / نقدي + بنك) عدد الموظفين وصافيهم،
+   * ومنه كام رايح للبنك وكام بيتصرف نقدي. نفس مصدر كشف البنوك بالحرف (طريقة الصرف من ملف الموظف
+   * لا من لقطة البند، والتقسيم بـpayrollPaySplit، وصف التصفية خارج المستحق) عشان الشاشتين
+   * ما يقولوش رقمين مختلفين لنفس المسير.
+   */
   async payMethodReport(user: JwtPayload, runId: number) {
-    const { items } = await this.detail(user, runId)
-    const byMethod: Record<string, { count: number; total: number }> = {}
-    for (const i of items) {
-      // قرار المالك (20 سبتمبر): صف «مصروف مع التصفية» مش داخل المبلغ المستحق للصرف — بيتصرف مع التصفية.
-      if (payrollItemSettlementPayout(i.breakdown)) continue
-      const m = i.payMethod
-      byMethod[m] = byMethod[m] ?? { count: 0, total: 0 }
-      byMethod[m].count++
-      byMethod[m].total = round2(byMethod[m].total + Number(i.netPay))
-    }
-    return byMethod
+    // detail يتحقق من صلاحية المسير ونطاق فرعه قبل أي بند
+    const detail = await this.detail(user, runId)
+    const employeeIds = [...new Set(detail.items.map(item => item.employeeId))]
+    const employees = employeeIds.length ? await this.runs.manager.getRepository(Employee).find({ where: { id: In(employeeIds) },
+      select: ['id', 'employeeCode', 'fullName', 'branchId', 'payMethod', 'bankTransferAmount', 'bankName', 'iban'] }) : []
+    const sources = bankSheetSources({ items: detail.items, employees, members: detail.members,
+      branchScope: branchScopeOf(user), settlementOf: payrollItemSettlementPayout })
+    return bankSheetPayMethodSummary(buildBankSheet(sources).rows)
   }
 }

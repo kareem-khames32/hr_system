@@ -12,17 +12,19 @@ import { dayRangeLabel } from '@/lib/payroll-month-range'
 // حساب الفرع بيشوف مسيرات وموظفي فرعه بس (الخادم بيفلتر).
 
 const runLabel = (run: Pick<ApiPayrollRun, 'name' | 'period'>) => run.name || `مسير ${run.period}`
-const HEADER = ['الرقم الوظيفي', 'الاسم', 'طريقة الصرف', 'البنك', 'الآيبان', 'صافي الراتب', 'تحويل بنكي', 'نقدي']
+const HEADER = ['الرقم الوظيفي', 'الاسم', 'طريقة الصرف', 'البنك', 'الآيبان', 'صافي الراتب', 'تحويل بنكي', 'نقدي', 'تنبيه']
 
 function sheetRows(sheet: ApiBankSheet) {
   return sheet.rows.map(row => [row.employeeCode, row.fullName, row.payMethodLabel, row.bankName ?? '', row.iban ?? '',
-    row.netPay.toFixed(2), row.bankAmount.toFixed(2), row.cashAmount.toFixed(2)])
+    row.netPay.toFixed(2), row.bankAmount.toFixed(2), row.cashAmount.toFixed(2), row.issue ?? ''])
 }
 
 function sheetTotals(sheet: ApiBankSheet) {
   return [
-    ...sheet.banks.map(bank => [`إجمالي ${bank.bankName}`, `${bank.employees} موظف`, '', '', '', '', bank.total.toFixed(2), '']),
-    ['الإجمالي', `${sheet.totals.employees} موظف`, '', '', '', sheet.totals.net.toFixed(2), sheet.totals.bank.toFixed(2), sheet.totals.cash.toFixed(2)],
+    ...sheet.banks.map(bank => [`إجمالي ${bank.bankName}`, `${bank.employees} موظف`, '', '', '', '', bank.total.toFixed(2), '', '']),
+    ['الإجمالي', `${sheet.totals.employees} موظف`, '', '', '', sheet.totals.net.toFixed(2), sheet.totals.bank.toFixed(2), sheet.totals.cash.toFixed(2), ''],
+    ...sheet.settlement.rows.map(row => [row.employeeCode, row.fullName, 'مصروف مع التصفية', '', '',
+      row.netPay.toFixed(2), '', '', `راتب آخر شهر بيتصرف مع تصفية #${row.caseId ?? ''} (آخر يوم عمل ${row.lastWorkingDay ?? ''}) — خارج الكشف`]),
   ]
 }
 
@@ -130,6 +132,55 @@ export default function PayrollBankSheetPage() {
               <div className="card"><p className="text-sm text-gray-500">نقدي</p><p className="text-2xl font-bold mt-1 text-success-600" dir="ltr">{formatMoney(sheet.totals.cash)}</p></div>
             </div>
 
+            {sheet.issues.employees > 0 && (
+              <div role="alert" className="card border-2 border-amber-300 bg-amber-50">
+                <div className="flex items-start gap-2">
+                  <AlertTriangle size={18} className="text-amber-600 mt-0.5 shrink-0" />
+                  <div className="space-y-2">
+                    <p className="font-bold text-amber-800">
+                      {sheet.issues.employees} موظف بيانات صرفهم ناقصة أو غلط — صحّحها في ملف الموظف قبل الصرف
+                    </p>
+                    <p className="text-sm text-amber-800">
+                      منهم <span dir="ltr" className="font-bold">{formatMoney(sheet.issues.bank)}</span> محسوبة تحويل بنكي
+                      و<span dir="ltr" className="font-bold">{formatMoney(sheet.issues.cash)}</span> محسوبة نقدي.
+                      الصفوف دي لسه في الكشف بمبلغها — مفيش حد بيتشال من غير قرارك.
+                    </p>
+                    <ul className="text-sm text-amber-900 space-y-1 list-disc ps-5">
+                      {sheet.issues.rows.map(row => (
+                        <li key={row.employeeId}>
+                          <span className="font-medium">{row.fullName}</span>
+                          <span className="font-mono text-xs text-amber-700" dir="ltr"> ({row.employeeCode})</span>
+                          {' — '}{row.issue}
+                        </li>
+                      ))}
+                    </ul>
+                  </div>
+                </div>
+              </div>
+            )}
+
+            {sheet.settlement.employees > 0 && (
+              <div className="card border-2 border-sky-200 bg-sky-50">
+                <h2 className="text-md font-bold text-sky-900 mb-2">مصروف مع التصفية — خارج الكشف</h2>
+                <p className="text-sm text-sky-900 mb-3">
+                  {sheet.settlement.employees} موظف راتب آخر شهرهم بيتصرف مع التصفية، مجموعه
+                  <span dir="ltr" className="font-bold"> {formatMoney(sheet.settlement.total)} </span>
+                  — مش داخل تحويل البنك ولا النقدي فوق عشان ما يتصرفش مرتين.
+                </p>
+                <ul className="text-sm text-sky-900 space-y-1 list-disc ps-5">
+                  {sheet.settlement.rows.map(row => (
+                    <li key={row.employeeId}>
+                      <span className="font-medium">{row.fullName}</span>
+                      <span className="font-mono text-xs text-sky-700" dir="ltr"> ({row.employeeCode})</span>
+                      {' — '}<span dir="ltr">{formatMoney(row.netPay)}</span>
+                      {row.lastWorkingDay ? ` · آخر يوم عمل ${row.lastWorkingDay}` : ''}
+                      {row.caseId ? ` · تصفية #${row.caseId}` : ''}
+                    </li>
+                  ))}
+                </ul>
+              </div>
+            )}
+
             {sheet.banks.length > 0 && (
               <div className="card overflow-x-auto">
                 <h2 className="text-md font-bold text-gray-700 mb-3">إجمالي كل بنك</h2>
@@ -160,13 +211,13 @@ export default function PayrollBankSheetPage() {
                   <thead className="bg-gray-50">
                     <tr>
                       {HEADER.map((title, index) => (
-                        <th key={title} className={`px-4 py-3 ${index >= 5 ? 'text-center' : 'text-right'} text-sm font-medium text-gray-600 whitespace-nowrap`}>{title}</th>
+                        <th key={title} className={`px-4 py-3 ${index >= 5 && index <= 7 ? 'text-center' : 'text-right'} text-sm font-medium text-gray-600 whitespace-nowrap`}>{title}</th>
                       ))}
                     </tr>
                   </thead>
                   <tbody className="divide-y divide-gray-100">
                     {bankRows.map(row => (
-                      <tr key={row.employeeId}>
+                      <tr key={row.employeeId} className={row.issue ? 'bg-amber-50' : undefined}>
                         <td className="px-4 py-3 font-mono text-sm text-gray-600" dir="ltr">{row.employeeCode}</td>
                         <td className="px-4 py-3 font-medium text-gray-800">{row.fullName}</td>
                         <td className="px-4 py-3 text-gray-600">{row.payMethodLabel}</td>
@@ -175,6 +226,9 @@ export default function PayrollBankSheetPage() {
                         <td className="px-4 py-3 text-center text-gray-800" dir="ltr">{formatMoney(row.netPay)}</td>
                         <td className="px-4 py-3 text-center font-bold text-primary-700" dir="ltr">{formatMoney(row.bankAmount)}</td>
                         <td className="px-4 py-3 text-center font-bold text-success-700" dir="ltr">{formatMoney(row.cashAmount)}</td>
+                        <td className="px-4 py-3 text-sm text-amber-800">
+                          {row.issue ? <span className="flex items-start gap-1"><AlertTriangle size={14} className="mt-0.5 shrink-0" />{row.issue}</span> : '—'}
+                        </td>
                       </tr>
                     ))}
                   </tbody>
