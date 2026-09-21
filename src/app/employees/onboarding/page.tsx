@@ -289,6 +289,7 @@ export default function OnboardingPage() {
                 <button
                   onClick={() => saveEdit(task)}
                   disabled={busy || draft.label.trim().length < 2 || !draft.dueDate}
+                  title="الحفظ يحتاج وصفًا من حرفين على الأقل مع تاريخ استحقاق"
                   className="btn-primary text-sm disabled:opacity-50"
                 >
                   حفظ
@@ -411,6 +412,7 @@ export default function OnboardingPage() {
         <button
           onClick={saveAdd}
           disabled={savingAdd || adding.label.trim().length < 2 || !adding.dueDate}
+          title="الإضافة تحتاج وصفًا من حرفين على الأقل مع تاريخ استحقاق"
           className="btn-primary text-sm disabled:opacity-50"
         >
           إضافة
@@ -913,6 +915,7 @@ function TemplateModal({
                               d.label.trim().length < 2 ||
                               !validOffset(d.dueOffsetDays)
                             }
+                            title="الحفظ يحتاج وصفًا من حرفين على الأقل وموعدًا بالأيام بين -60 و365"
                             className="btn-primary text-sm disabled:opacity-50"
                           >
                             حفظ
@@ -968,6 +971,7 @@ function TemplateModal({
                           newItem.label.trim().length < 2 ||
                           !validOffset(newItem.dueOffsetDays)
                         }
+                        title="الإضافة تحتاج وصفًا من حرفين على الأقل وموعدًا بالأيام بين -60 و365"
                         className="btn-primary text-sm flex items-center gap-1 disabled:opacity-50"
                       >
                         <Plus size={14} />

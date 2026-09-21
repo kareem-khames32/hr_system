@@ -282,6 +282,21 @@ const steps = [
 
 // خيارات ثابتة للقوائم — لحقن القيمة الحالية عند التعديل إن لم تكن ضمنها
 const nationalityOptions = ['سعودي', 'مصري', 'أردني', 'سوري', 'أخرى']
+// البلد: المعروض اسم عربي والمحفوظ كود الدولة (SA/EG/…) — ربط العطلات الرسمية بالدولة في المسير بيقرا الكود.
+const COUNTRY_BY_NAME: Record<string, string> = {
+  'السعودية': 'SA', 'الإمارات': 'AE', 'مصر': 'EG', 'الكويت': 'KW', 'قطر': 'QA', 'البحرين': 'BH', 'عُمان': 'OM',
+  'الأردن': 'JO', 'سوريا': 'SY', 'لبنان': 'LB', 'فلسطين': 'PS', 'العراق': 'IQ', 'اليمن': 'YE', 'السودان': 'SD',
+  'المغرب': 'MA', 'تونس': 'TN', 'الجزائر': 'DZ', 'ليبيا': 'LY', 'الهند': 'IN', 'باكستان': 'PK', 'بنجلاديش': 'BD',
+  'الفلبين': 'PH', 'نيبال': 'NP', 'سريلانكا': 'LK', 'إثيوبيا': 'ET', 'كينيا': 'KE', 'أوغندا': 'UG', 'تركيا': 'TR',
+}
+const countryOptions = Object.keys(COUNTRY_BY_NAME)
+/** المكتوب في الخانة → كود الدولة: اسم معروف = كوده، كود لاتيني = بحروف كبيرة، غير كده يتحفظ زي ما هو. */
+export function countryCodeOf(value: string): string {
+  const text = String(value ?? '').trim()
+  if (!text) return ''
+  if (COUNTRY_BY_NAME[text]) return COUNTRY_BY_NAME[text]
+  return /^[A-Za-z]{2,5}$/.test(text) ? text.toUpperCase() : text
+}
 const bankOptions = ['بنك الراجحي', 'بنك الإنماء', 'البنك الأهلي', 'بنك الرياض', 'بنك ساب']
 
 const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormState => ({
@@ -868,7 +883,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.passportNo.trim()) payload.passportNo = form.passportNo.trim()
     if (form.passportExpiry) payload.passportExpiry = form.passportExpiry
     if (form.phoneAlt.trim()) payload.phoneAlt = form.phoneAlt.trim()
-    if (form.country) payload.country = form.country
+    if (form.country) payload.country = countryCodeOf(form.country)
     if (form.postalCode.trim()) payload.postalCode = form.postalCode.trim()
     if (form.emergencyRelation) payload.emergencyRelation = form.emergencyRelation
     if (form.emergencyPhoneAlt.trim()) payload.emergencyPhoneAlt = form.emergencyPhoneAlt.trim()
@@ -1305,12 +1320,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="label">البلد</label>
-                  <select className="input" value={form.country} onChange={(e) => setField('country', e.target.value)}>
-                    <option value="">اختر</option>
-                    <option value="SA">السعودية</option>
-                    <option value="AE">الإمارات</option>
-                    <option value="EG">مصر</option>
-                  </select>
+                  <input className="input" list="employee-country-options" value={form.country} onChange={(e) => setField('country', e.target.value)} placeholder="اكتب البلد" />
+                  <datalist id="employee-country-options">{countryOptions.map(c => <option key={c} value={c} />)}</datalist>
                 </div>
                 <div>
                   <label className="label">المدينة</label>

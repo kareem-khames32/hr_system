@@ -55,6 +55,7 @@ interface Loan {
   // تاريخ طلب السلفة من محرك الطلبات
   requestedAt?: string | null
   employeeName?: string
+  employeeCode?: string | null
   installments: LoanInstallment[]
   paidCount: number
   paidAmount: Money
@@ -245,7 +246,8 @@ export default function LoansPage() {
   const filteredLoans = datedLoans.filter((loan) => {
     if (activeTab === 'open' && centsOf(loan.remainingAmount) === BigInt(0)) return false
     if (activeTab === 'settled' && centsOf(loan.remainingAmount) > BigInt(0)) return false
-    if (searchQuery && !(loan.employeeName ?? '').includes(searchQuery)) return false
+    if (searchQuery && !(loan.employeeName ?? '').includes(searchQuery)
+      && !(loan.employeeCode ?? '').toLowerCase().includes(searchQuery.toLowerCase())) return false
     return true
   })
 
@@ -382,7 +384,7 @@ export default function LoansPage() {
                 <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
                   type="text"
-                  placeholder="بحث باسم الموظف..."
+                  placeholder="بحث بالاسم أو الرقم الوظيفي..."
                   value={searchQuery}
                   onChange={(e) => setSearchQuery(e.target.value)}
                   className="input pr-10"

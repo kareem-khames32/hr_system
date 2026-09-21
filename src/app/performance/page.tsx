@@ -29,6 +29,7 @@ import { formatDate } from '@/lib/dates'
 interface PerformanceReview {
   id: string
   employeeName: string
+  employeeCode: string
   employeeAvatar: string
   department: string
   position: string
@@ -48,6 +49,7 @@ const reviews: PerformanceReview[] = [
   {
     id: '1',
     employeeName: 'أحمد محمد علي',
+    employeeCode: 'EMP001',
     employeeAvatar: 'أ',
     department: 'تقنية المعلومات',
     position: 'مطور برمجيات أول',
@@ -67,6 +69,7 @@ const reviews: PerformanceReview[] = [
   {
     id: '2',
     employeeName: 'سارة أحمد الخالدي',
+    employeeCode: 'EMP002',
     employeeAvatar: 'س',
     department: 'الموارد البشرية',
     position: 'أخصائي موارد بشرية',
@@ -86,6 +89,7 @@ const reviews: PerformanceReview[] = [
   {
     id: '3',
     employeeName: 'عمر سالم الحربي',
+    employeeCode: 'EMP003',
     employeeAvatar: 'ع',
     department: 'المبيعات',
     position: 'مندوب مبيعات',
@@ -105,6 +109,7 @@ const reviews: PerformanceReview[] = [
   {
     id: '4',
     employeeName: 'نورة محمد الدوسري',
+    employeeCode: 'EMP004',
     employeeAvatar: 'ن',
     department: 'التسويق',
     position: 'مدير تسويق',
@@ -119,6 +124,7 @@ const reviews: PerformanceReview[] = [
   {
     id: '5',
     employeeName: 'فهد عبدالله السعيد',
+    employeeCode: 'EMP005',
     employeeAvatar: 'ف',
     department: 'تقنية المعلومات',
     position: 'مطور برمجيات',
@@ -181,7 +187,9 @@ export default function PerformancePage() {
 
   const filteredReviews = reviews.filter((review) => {
     const matchesSearch =
-      review.employeeName.includes(searchTerm) || review.department.includes(searchTerm)
+      review.employeeName.includes(searchTerm) ||
+      review.department.includes(searchTerm) ||
+      review.employeeCode.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesStatus = filterStatus === 'all' || review.status === filterStatus
     const matchesDepartment = filterDepartment === 'all' || review.department === filterDepartment
     return matchesSearch && matchesStatus && matchesDepartment
@@ -264,7 +272,7 @@ export default function PerformancePage() {
               <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
-                placeholder="بحث عن موظف..."
+                placeholder="بحث بالاسم أو الرقم الوظيفي..."
                 className="input pr-10 w-full"
                 value={searchTerm}
                 onChange={(e) => setSearchTerm(e.target.value)}

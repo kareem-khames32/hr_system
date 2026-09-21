@@ -1194,7 +1194,7 @@ function ScheduleModal({ schedule, onClose, onSaved }: {
         <p className="text-xs text-blue-800">نقص العمل مستقل عن التأخير. بعد النافذة يُحسب التأخير من بداية الدوام، وإكمال الساعات لا يمنح إضافيًا تلقائيًا.</p>
       </div>
       <fieldset><legend>أيام الدوام</legend><div className="flex gap-2 flex-wrap">{weekDays.map(d => <label key={d.code} className="flex gap-1"><input type="checkbox" checked={!off.includes(d.code)} onChange={() => setOff(prev => prev.includes(d.code) ? prev.filter(c => c !== d.code) : [...prev, d.code])} />{d.name}</label>)}</div></fieldset>
-      <label className="flex gap-2"><input type="checkbox" checked={isActive} disabled={schedule?.isDefault} onChange={e => setActive(e.target.checked)} />نشط</label>
+      <label className="flex gap-2" title={schedule?.isDefault ? 'الجدول الافتراضي لا يمكن تعطيله' : undefined}><input type="checkbox" checked={isActive} disabled={schedule?.isDefault} onChange={e => setActive(e.target.checked)} />نشط{schedule?.isDefault && <span className="text-xs text-gray-500">(الجدول الافتراضي لا يمكن تعطيله)</span>}</label>
       <AttendanceRuleChangeFields value={change} onChange={setChange} />
       <div className="flex gap-3"><button type="submit" disabled={busy} className="btn-primary">{busy ? 'جارٍ الحفظ…' : 'حفظ الجدول'}</button><button type="button" disabled={busy} onClick={onClose} className="btn-secondary">إلغاء</button></div>
     </form>

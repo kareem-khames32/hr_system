@@ -42,6 +42,8 @@ import { PayrollDraftMembership } from '@/components/payroll/PayrollDraftMembers
 // لم تعد تُعرض هنا (ملفاتها وواجهاتها الخلفية باقية). «إلغاء خصم» صار زرًا على صف الموظف.
 import { PayrollRemoveDeductionModal, type RunDeductionLine } from '@/components/payroll/PayrollFinancialExemptionsPanel'
 import { PayrollMoveToRunModal } from '@/components/payroll/PayrollMoveToRunModal'
+// «مكافأة» على صف الموظف: نافذة في نفس الشاشة (زي «شيل خصم» و«نقل لمسير آخر») — مش انتقال لشاشة المكافآت
+import { PayrollBonusCreateModal } from '@/components/payroll/PayrollBonusCreateModal'
 // B5 / الخطوة 22: منسّق المبالغ الموحد، ومجاميع البنود بالقروش، وقيد الصرف، وحل التعارضات
 import { formatMoney, formatMoneyOrDash } from '@/lib/money'
 import { payrollItemCoverage, payrollItemDeductions, payrollItemEarnings, payrollItemMissingPunchDates, payrollItemSettlementPayout, payrollMissingPunchText, payrollRunPayable, payrollRunTotals, SETTLEMENT_PAYOUT_LABEL } from '@/lib/payroll-item-totals'
@@ -209,6 +211,8 @@ export default function PayrollPage() {
   const [removeDeductionFor, setRemoveDeductionFor] = useState<{ employeeId: number; name: string; branchId: number | null; lines: RunDeductionLine[] } | null>(null)
   // «نقل لمسير آخر» لموظف من صف المسير — عضوية دائمة من شهر المسير ورايح
   const [moveMemberFor, setMoveMemberFor] = useState<{ employeeId: number; name: string } | null>(null)
+  // «مكافأة» لموظف من صف المسير — نافذة اقتراح لموظف واحد بشهر المسير جاهز
+  const [bonusFor, setBonusFor] = useState<{ employeeId: number; name: string } | null>(null)
   // طلب المالك 19 سبتمبر: بنود كل موظف (استحقاقات واستقطاعات بأسمائها) للجدول والتصدير
   const [runLines, setRunLines] = useState<PayrollRunLines | null>(null)
   const [linesError, setLinesError] = useState('')
@@ -1227,11 +1231,12 @@ export default function PayrollPage() {
                             نقل لمسير آخر
                           </button>
                         )}
+                        {/* «مكافأة»: نافذة الاقتراح لموظف واحد هنا — الزرار بينفّذ الإجراء مكانه، ما بيوديش شاشة تانية */}
                         {runDetail && runDetail.status !== 'CANCELLED' && (
-                          <Link href={`/payroll/bonuses?tab=create&employeeId=${item.employeeId}&period=${runDetail.period}`}
-                            className="text-xs text-success-700 underline whitespace-nowrap" data-bonus-employee={item.employeeId}>
+                          <button type="button" onClick={() => setBonusFor({ employeeId: item.employeeId, name })} disabled={actionBusy || detailLoading}
+                            className="text-xs text-success-700 underline whitespace-nowrap disabled:opacity-50" data-bonus-employee={item.employeeId}>
                             مكافأة
-                          </Link>
+                          </button>
                         )}
                       </div>
                     </td>
@@ -1284,6 +1289,11 @@ export default function PayrollPage() {
       {moveMemberFor && runDetail && (
         <PayrollMoveToRunModal employees={[{ employeeId: moveMemberFor.employeeId, fullName: moveMemberFor.name, runId: runDetail.id, runName: runDetail.name ?? null }]}
           period={runDetail.period} onClose={() => setMoveMemberFor(null)} onDone={async () => { await refreshRuns(runDetail.id) }} />
+      )}
+      {/* «مكافأة» من صف الموظف: الاقتراح يتم هنا بنفس نقطة الإنشاء الفردي وشهر المسير جاهز — والمكافأة تدخل المسير بعد اعتمادها */}
+      {bonusFor && runDetail && (
+        <PayrollBonusCreateModal employeeId={bonusFor.employeeId} employeeName={bonusFor.name} period={runDetail.period}
+          onClose={() => setBonusFor(null)} />
       )}
     </MainLayout>
   )

@@ -73,6 +73,12 @@ interface AttendanceRecord {
   location: string
 }
 
+// «بصم رغم الإجازة» يفتح سجل الإجازات على الصف نفسه مباشرة: الموظف في مربع البحث واليوم في فلتر
+// التاريخ — بدل قائمة غير مفلترة يدوّر فيها المستخدم على الموظف من جديد. الكود أدقّ من الاسم في
+// البحث، والاسم بديله لو الكود مش محفوظ (الصف بيعرض «#رقم» ساعتها).
+const leaveConflictHref = (record: AttendanceRecord): string =>
+  `/leaves?employee=${encodeURIComponent(record.employeeCode.startsWith('#') ? record.employeeName : record.employeeCode)}&date=${record.date}`
+
 const formatWorkMinutes = (mins: number): string | null => {
   if (!mins || mins <= 0) return null
   return `${Math.floor(mins / 60)}:${String(mins % 60).padStart(2, '0')}`
@@ -622,9 +628,9 @@ export default function AttendancePage() {
                           {record.attendanceExempt && record.status !== 'exempt' && <span className="badge bg-gray-100 text-gray-600">مستثنى من الحضور</span>}
                           {record.leaveConflict && (
                             <Link
-                              href="/leaves"
+                              href={leaveConflictHref(record)}
                               className="badge bg-amber-100 text-amber-700 hover:bg-amber-200 flex items-center gap-1"
-                              title="الموظف حضر يوم إجازته المعتمدة — راجع شاشة الإجازات: إلغاء الإجازة يحسبه دواماً ويرجع الرصيد"
+                              title="الموظف حضر يوم إجازته المعتمدة — يفتح سجل الإجازات على هذا الموظف ويومه: إلغاء الإجازة يحسبه دواماً ويرجع الرصيد"
                             >
                               <AlertTriangle size={12} />
                               بصم رغم الإجازة

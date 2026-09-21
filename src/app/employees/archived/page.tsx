@@ -139,7 +139,8 @@ export default function ArchivedEmployeesPage() {
 
   const filteredEmployees = archivedEmployees.filter((emp) => {
     const matchesSearch =
-      emp.name.includes(searchTerm) || emp.employeeId.includes(searchTerm)
+      emp.name.includes(searchTerm) ||
+      emp.employeeId.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesStatus = !filterStatus || emp.status === filterStatus
     const matchesReason = !filterReason || emp.archiveReason === filterReason
     const matchesDept =

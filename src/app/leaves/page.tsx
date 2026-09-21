@@ -21,7 +21,7 @@ import Link from 'next/link'
 import { downloadCsv } from '@/lib/csv'
 import { fetchLeaves, revokeLeave, can, type ApiLeavePage } from '@/lib/api'
 import { DayRangeFilter, usePayrollMonthContext } from '@/components/DayRangeFilter'
-import { validDayRange, type DayRange } from '@/lib/payroll-month-range'
+import { isDayKey, validDayRange, type DayRange } from '@/lib/payroll-month-range'
 
 // سجل الإجازات — هذا هو «سجل الوجهة» بعد اكتمال الموافقات في محرك الطلبات.
 // الاعتماد/الرفض يتم في صندوق الموافقات، وليس هنا.
@@ -114,6 +114,22 @@ export default function LeavesPage() {
 
   useEffect(() => {
     setCanRevoke(can('leaves.revoke'))
+  }, [])
+
+  // وصلة «بصم رغم الإجازة» في كشف الحضور بتوصل للصف نفسه: الموظف يدخل مربع البحث واليوم يدخل
+  // فلتر التاريخ الموجودين — بلا فلاتر جديدة. الرابط يُستهلك مرة واحدة فلا يرجع بعد أي تغيير فلتر.
+  useEffect(() => {
+    if (typeof window === 'undefined') return
+    const qs = new URLSearchParams(window.location.search)
+    const employee = (qs.get('employee') ?? '').trim()
+    const date = (qs.get('date') ?? '').trim()
+    if (!employee && !isDayKey(date)) return
+    if (employee) {
+      setSearchQuery(employee)
+      setSearch(employee)
+    }
+    if (isDayKey(date)) setDateRange({ from: date, to: date })
+    window.history.replaceState(null, '', window.location.pathname)
   }, [])
 
   useEffect(() => {

@@ -5,6 +5,7 @@ import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import LetterDownloadButton from '@/components/LetterDownloadButton'
 import RequestPayload from '@/components/RequestPayload'
+import DeductionRequestForm from '@/components/requests/DeductionRequestForm'
 import OvertimePreview from '@/components/OvertimePreview'
 import OvertimeRequestSummary from '@/components/OvertimeRequestSummary'
 import TimeSelect, { normalizeTime, timeSpanMinutes } from '@/components/TimeSelect'
@@ -83,10 +84,10 @@ interface ResolvedStep {
   action?: string | null
 }
 
-// القرار ب3 (خط الفلوس): كارتا «خصم» و«مكافأة» في المجموعة المالية يفتحان مساحة الخصومات أو المكافآت
-// جاهزة على تبويب الإنشاء — الطلب نفسه يُرفع هناك بدفتره وسلسلته، بلا فورم عام ولا محرك ثانٍ.
+// خط الفلوس: كارت «خصم» صار نموذج طلب حقيقي داخل هذه الشاشة (DeductionRequestForm) مربوطاً بكتالوج
+// «أنواع الخصومات» ونقطة الإنشاء الفردي نفسها — بلا انتقال ولا فورم عام ولا محرك ثانٍ. كارت «مكافأة»
+// لسه بيفتح مساحة المكافآت جاهزة على تبويب الإنشاء.
 const moneyWorkspaceRoute = (code: string): string | null => {
-  if (code === 'PAYROLL_DEDUCTION') return can('deductions.manage') ? '/payroll/deductions?tab=create' : '/my/deductions?tab=create'
   if (code === 'PAYROLL_BONUS') return can('bonuses.manage') ? '/payroll/bonuses?tab=create' : '/my/bonuses?tab=create'
   return null
 }
@@ -578,6 +579,8 @@ export default function MyRequestsPage() {
   const isLeaveCancel = selectedTypeDef?.code === 'LEAVE_MODIFY_CANCEL'
   // تصحيح/طلب بصمة — تلميح تعبئة البصمة الناقصة (النموذج يُبنى بالحقول العامة/المخصّصة)
   const isPunchCorrection = selectedTypeDef?.code === 'PUNCH_CORRECTION'
+  // «خصم»: نموذجه الخاص المربوط بكتالوج أنواع الخصومات — لا حقول عامة ولا زر إرسال عام
+  const isPayrollDeduction = selectedTypeDef?.code === 'PAYROLL_DEDUCTION'
   const isLeaveCategory = selectedTypeDef?.category === 'leaves' && !isLeaveCancel
   const isHalfDay = isLeaveCategory && leavePeriod !== 'FULL'
   // نوع الإجازة المختار في الطلب الموحّد + المرفق الإجباري إن وُجد
@@ -1340,8 +1343,8 @@ export default function MyRequestsPage() {
                   </div>
                 )}
 
-                {/* التقديم نيابة عن موظف آخر — بصلاحية فقط */}
-                {canOnBehalf && !editingRequest && (
+                {/* التقديم نيابة عن موظف آخر — بصلاحية فقط (الخصم له منتقي موظفه الخاص بنطاق النوع) */}
+                {canOnBehalf && !editingRequest && !isPayrollDeduction && (
                   <div className="bg-indigo-50/60 border border-indigo-100 rounded-xl p-4 space-y-3">
                     <label className="flex items-center gap-2 cursor-pointer">
                       <input
@@ -1525,6 +1528,10 @@ export default function MyRequestsPage() {
                     {selectedTypeDef && <p className="text-xs text-gray-500">السلسلة: {selectedTypeDef.approvalChainName} • {handlerLabels[selectedTypeDef.destinationHandler] ?? 'إجازة'}</p>}
                   </div>
                 )}
+
+                {/* «خصم»: النموذج الحقيقي داخل الشاشة — أنواع الخصومات وقيمتها بطريقة حسابها وشهر المسير
+                    والموظف والسبب والمرفق والأقساط، ثم سلسلة اعتماد النوع حتى الموارد البشرية */}
+                {selectedType && isPayrollDeduction && <DeductionRequestForm onSubmitted={load} />}
 
                 {/* تصحيح/طلب بصمة: تلميح تعبئة البصمة الناقصة */}
                 {selectedType && isPunchCorrection && (
@@ -1762,7 +1769,7 @@ export default function MyRequestsPage() {
                 )}
 
                 {/* النموذج من تعريف الحقول المخصّصة — يحل محل الاستنتاج القديم */}
-                {selectedType && hasCustomFields && !isCustodyRequest && !isLeaveCancel && (
+                {selectedType && hasCustomFields && !isCustodyRequest && !isLeaveCancel && !isPayrollDeduction && (
                   <div className="grid grid-cols-2 gap-3">
                     {customFields.filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f.key)).map((f) => (
                       <div key={f.key} className={f.type === 'file' ? 'col-span-2' : ''}>
@@ -1854,6 +1861,7 @@ export default function MyRequestsPage() {
                   !hasCustomFields &&
                   !isCustodyRequest &&
                   !isLeaveCancel &&
+                  !isPayrollDeduction &&
                   requiredFields.length > 0 && (
                     <div className="grid grid-cols-2 gap-3">
                       {requiredFields.filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f)).map((f) => (
@@ -1977,7 +1985,7 @@ export default function MyRequestsPage() {
                   </div>
                 )}
 
-                {selectedType && (
+                {selectedType && !isPayrollDeduction && (
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       تفاصيل الطلب
@@ -1993,8 +2001,10 @@ export default function MyRequestsPage() {
               </div>
               <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">
                 <button onClick={() => setShowNewModal(false)} className="btn-secondary">
-                  إلغاء
+                  {isPayrollDeduction ? 'إغلاق' : 'إلغاء'}
                 </button>
+                {/* «خصم» له زر إرساله داخل نموذجه (نقطة الخصومات لا محرك الطلبات العام) */}
+                {!isPayrollDeduction && (
                 <button
                   onClick={handleSubmit}
                   className="btn-primary flex items-center gap-2"
@@ -2003,6 +2013,7 @@ export default function MyRequestsPage() {
                   <Send size={16} />
                   {submitting ? 'جارٍ الإرسال...' : 'إرسال الطلب'}
                 </button>
+                )}
               </div>
             </div>
           </div>

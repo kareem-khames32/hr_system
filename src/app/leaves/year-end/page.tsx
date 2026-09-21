@@ -27,11 +27,15 @@ import {
 // و«إقفال السنة» يرحّل للكل أو لفرع ويفتح أرصدة السنة الجديدة — ينفع يتكرر من غير ما يرحّل مرتين.
 
 const THIS_YEAR = Number(localToday().slice(0, 4))
-const YEARS = [THIS_YEAR - 1, THIS_YEAR, THIS_YEAR - 2].map(String)
+// من 2020 لحد السنة الجاية — سنة قديمة فاتت لازم تفضل قابلة للإقفال
+const FIRST_YEAR = 2020
+const YEARS = Array.from({ length: THIS_YEAR + 1 - FIRST_YEAR + 1 }, (_, i) => String(FIRST_YEAR + i))
+// الافتراضي السنة اللي فاتت — هي اللي بتتقفل عادة
+const DEFAULT_YEAR = String(THIS_YEAR - 1)
 const days = (v: unknown) => `${Number(v ?? 0)} يوم`
 
 export default function LeaveYearEndPage() {
-  const [year, setYear] = useState(YEARS[0])
+  const [year, setYear] = useState(DEFAULT_YEAR)
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [lockedBranchId, setLockedBranchId] = useState<number | null>(null)
   const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(null, ['company', 'branch']))

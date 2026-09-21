@@ -53,6 +53,7 @@ import {
   fetchAttendanceRuleHistory,
   fetchUsers,
   createDocument,
+  createRequest,
   uploadFile,
   can,
   getCurrentUser,
@@ -273,9 +274,13 @@ const SALARY_CYCLE_AR: Record<string, string> = {
 }
 
 const COUNTRY_AR: Record<string, string> = {
-  SA: 'السعودية',
-  AE: 'الإمارات',
-  EG: 'مصر',
+  SA: 'السعودية', AE: 'الإمارات', EG: 'مصر', KW: 'الكويت',
+  QA: 'قطر', BH: 'البحرين', OM: 'عُمان', JO: 'الأردن',
+  SY: 'سوريا', LB: 'لبنان', PS: 'فلسطين', IQ: 'العراق',
+  YE: 'اليمن', SD: 'السودان', MA: 'المغرب', TN: 'تونس',
+  DZ: 'الجزائر', LY: 'ليبيا', IN: 'الهند', PK: 'باكستان',
+  BD: 'بنجلاديش', PH: 'الفلبين', NP: 'نيبال', LK: 'سريلانكا',
+  ET: 'إثيوبيا', KE: 'كينيا', UG: 'أوغندا', TR: 'تركيا',
 }
 
 const RELATION_AR: Record<string, string> = {
@@ -426,6 +431,16 @@ export default function EmployeeProfilePage() {
   const [finishedSuspension, setFinishedSuspension] = useState<EmployeeSuspension | null>(null)
   const [notice, setNotice] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
+  // طلب الخطاب يتم هنا في ملف الموظف: القالب المختار + «الغرض من الخطاب» (الحقل الوحيد الذي يعرّفه
+  // الخادم لمعالج letter_pdf_generator) + نتيجة الإرسال — بلا مغادرة الشاشة إلى «طلباتي».
+  const [letterTemplate, setLetterTemplate] = useState('')
+  const [letterPurpose, setLetterPurpose] = useState('')
+  const [letterSubmitting, setLetterSubmitting] = useState(false)
+  const [letterError, setLetterError] = useState('')
+  const [letterDone, setLetterDone] = useState('')
+  // نفس بوابة شاشة «طلباتي»: التقديم لموظف آخر يحتاج requests.create_on_behalf، والموظف لنفسه لا
+  const letterForSelf = !!employee && getCurrentUser()?.employeeId === employee.id
+  const canRequestLetter = letterForSelf || can('requests.create_on_behalf')
   const canSuspend = can('employees.edit') && ['active', 'probation', 'notice_period'].includes(suspensionInfo.storedStatus)
   const openSuspension = suspensionInfo.current && ['CURRENT', 'UPCOMING'].includes(suspensionInfo.current.state) ? suspensionInfo.current : null
 
@@ -733,6 +748,74 @@ export default function EmployeeProfilePage() {
     }
     window.open(url)
   }
+
+  // اختيار قالب الخطاب يفتح حقله هنا؛ لا انتقال لشاشة أخرى لملء حقل واحد.
+  const pickLetter = (templateId: string) => {
+    setLetterTemplate(prev => (prev === templateId ? '' : templateId))
+    setLetterPurpose('')
+    setLetterError('')
+    setLetterDone('')
+  }
+
+  // إرسال طلب الخطاب من مكانه بنفس نقطة الإنشاء التي تستخدمها شاشة «طلباتي»
+  // (createRequest + النيابة عن الموظف)، والنتيجة تظهر في نفس البطاقة.
+  const submitLetter = async () => {
+    if (!employee || !letterTemplate || letterSubmitting) return
+    const template = documentTemplates.find(t => t.id === letterTemplate)
+    setLetterSubmitting(true)
+    setLetterError('')
+    setLetterDone('')
+    try {
+      const created = await createRequest(
+        letterTemplate,
+        { purpose: letterPurpose.trim() },
+        true,
+        letterForSelf ? undefined : employee.id
+      )
+      setLetterTemplate('')
+      setLetterPurpose('')
+      setLetterDone(`تم إرسال طلب «${template?.name ?? 'الخطاب'}» برقم #${created.id} — يصدر الخطاب بعد اكتمال الاعتماد`)
+    } catch (err) {
+      setLetterError(err instanceof Error ? err.message : 'تعذّر إرسال طلب الخطاب')
+    } finally {
+      setLetterSubmitting(false)
+    }
+  }
+
+  // حقل «الغرض من الخطاب» ونتيجته — يظهر تحت البطاقات في التبويب وفي النافذة بنفس الحالة
+  const letterPanel = (scope: string) => (
+    <div className="mt-4 space-y-3">
+      {letterTemplate && (
+        <div className="p-4 border border-primary-200 bg-primary-50/60 rounded-xl space-y-3">
+          <label htmlFor={`letter-purpose-${scope}`} className="label">
+            الغرض من الخطاب — {documentTemplates.find(t => t.id === letterTemplate)?.name}
+          </label>
+          <input
+            id={`letter-purpose-${scope}`}
+            type="text"
+            autoFocus
+            maxLength={500}
+            value={letterPurpose}
+            disabled={letterSubmitting}
+            onChange={e => { setLetterPurpose(e.target.value); setLetterError('') }}
+            placeholder="مثال: تقديمه إلى الجهة المختصة"
+            className="input w-full"
+          />
+          {letterError && <p role="alert" className="text-sm text-red-600">{letterError}</p>}
+          <div className="flex items-center justify-end gap-3">
+            <button type="button" className="btn-secondary" disabled={letterSubmitting} onClick={() => pickLetter('')}>
+              إلغاء
+            </button>
+            <button type="button" className="btn-primary disabled:opacity-50" disabled={letterSubmitting} onClick={submitLetter}>
+              {letterSubmitting ? 'جارٍ الإرسال...' : 'إرسال الطلب'}
+            </button>
+          </div>
+        </div>
+      )}
+      {letterDone && <p role="status" className="p-3 bg-green-50 text-green-800 rounded-xl text-sm">{letterDone}</p>}
+      {!letterTemplate && letterError && <p role="alert" className="p-3 bg-red-50 text-red-700 rounded-xl text-sm">{letterError}</p>}
+    </div>
+  )
 
   return (
     <MainLayout>
@@ -1940,13 +2023,17 @@ export default function EmployeeProfilePage() {
               {/* Quick Generate Section */}
               <div className="pt-6 border-t border-gray-100">
                 <h3 className="font-medium text-gray-700 mb-2">طلب خطاب للموظف</h3>
-                <p className="text-sm text-gray-500 mb-4">اختر الخطاب لاستكمال الطلب؛ يُنشأ المستند ويُحفظ بعد الاعتماد.</p>
+                <p className="text-sm text-gray-500 mb-4">اختر الخطاب واكتب غرضه هنا؛ يُرسل الطلب من هذه الشاشة ويُنشأ المستند بعد الاعتماد.</p>
+                {canRequestLetter ? (
+                <>
                 <div className="grid grid-cols-3 gap-4">
                   {documentTemplates.map((template) => (
-                    <Link
+                    <button
                       key={template.id}
-                      href={`/requests?type=${template.id}&employeeId=${employee.id}`}
-                      className="p-4 border border-gray-200 rounded-xl hover:border-primary-300 hover:bg-primary-50 transition-all text-right group"
+                      type="button"
+                      aria-pressed={letterTemplate === template.id}
+                      onClick={() => pickLetter(template.id)}
+                      className={`p-4 border rounded-xl hover:border-primary-300 hover:bg-primary-50 transition-all text-right group ${letterTemplate === template.id ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}
                     >
                       <div className="flex items-center gap-3">
                         <div className="w-10 h-10 bg-primary-100 rounded-lg flex items-center justify-center group-hover:bg-primary-200 transition-colors">
@@ -1957,9 +2044,14 @@ export default function EmployeeProfilePage() {
                           <p className="text-xs text-gray-400">{template.nameEn}</p>
                         </div>
                       </div>
-                    </Link>
+                    </button>
                   ))}
                 </div>
+                {letterPanel('tab')}
+                </>
+                ) : (
+                  <p className="text-sm text-gray-500">طلب خطاب لموظف آخر يحتاج صلاحية التقديم نيابة عنه.</p>
+                )}
               </div>
             </div>
           )}
@@ -1975,7 +2067,7 @@ export default function EmployeeProfilePage() {
             <div className="p-6 border-b flex items-center justify-between">
               <div>
                 <h2 className="text-xl font-bold text-gray-900">طلب خطاب</h2>
-                <p className="text-sm text-gray-500 mt-1">اختر الخطاب لاستكمال طلبه للموظف {employee.name}؛ يُحفظ المستند بعد الاعتماد.</p>
+                <p className="text-sm text-gray-500 mt-1">اختر الخطاب واكتب غرضه هنا لإرسال طلبه للموظف {employee.name}؛ يُحفظ المستند بعد الاعتماد.</p>
               </div>
               <button
                 onClick={() => setShowDocumentModal(false)}
@@ -1986,12 +2078,16 @@ export default function EmployeeProfilePage() {
             </div>
 
             <div className="p-6">
+              {canRequestLetter ? (
+              <>
               <div className="grid grid-cols-2 gap-4">
                 {documentTemplates.map((template) => (
-                  <Link
+                  <button
                     key={template.id}
-                    href={`/requests?type=${template.id}&employeeId=${employee.id}`}
-                    className="p-4 border border-gray-200 rounded-xl hover:border-primary-500 hover:bg-primary-50 transition-all text-right group"
+                    type="button"
+                    aria-pressed={letterTemplate === template.id}
+                    onClick={() => pickLetter(template.id)}
+                    className={`p-4 border rounded-xl hover:border-primary-500 hover:bg-primary-50 transition-all text-right group ${letterTemplate === template.id ? 'border-primary-500 bg-primary-50' : 'border-gray-200'}`}
                   >
                     <div className="flex items-center gap-4">
                       <div className="w-12 h-12 bg-primary-100 rounded-xl flex items-center justify-center group-hover:bg-primary-200 transition-colors">
@@ -2002,9 +2098,14 @@ export default function EmployeeProfilePage() {
                         <p className="text-sm text-gray-500">{template.nameEn}</p>
                       </div>
                     </div>
-                  </Link>
+                  </button>
                 ))}
               </div>
+              {letterPanel('modal')}
+              </>
+              ) : (
+                <p className="text-sm text-gray-500">طلب خطاب لموظف آخر يحتاج صلاحية التقديم نيابة عنه.</p>
+              )}
             </div>
 
             <div className="p-4 border-t bg-gray-50 flex justify-between items-center">

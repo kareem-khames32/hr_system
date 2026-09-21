@@ -119,6 +119,7 @@ export class EmployeeExtrasController {
       result.push({
         ...loan,
         employeeName: empById.get(loan.employeeId)?.fullName ?? `#${loan.employeeId}`,
+        employeeCode: empById.get(loan.employeeId)?.employeeCode ?? null,
         installments: inst,
         paidCount: inst.filter(item => ['PAID', 'SETTLED'].includes(item.financialStatus)).length,
         paidAmount: paidAmount.format(2, 'DOWN'),

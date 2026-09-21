@@ -1116,7 +1116,7 @@ export default function WeeklySchedulePage() {
                               } ${isSelected ? 'ring-2 ring-primary-500 ring-offset-1' : ''} ${
                                 isLocked ? 'opacity-60 cursor-not-allowed' : ''
                               } ${isUnassigned && !override ? 'opacity-50' : ''}`}
-                              title={
+                              title={[
                                 isExceptionalWork
                                   ? workTooltip(dayDate, employee.id)
                                   : isExceptionalOff
@@ -1127,8 +1127,10 @@ export default function WeeklySchedulePage() {
                                         ? 'راحة بحسب تقويم الموظف — تعيين الوردية لا يغير أيام الراحة'
                                       : isUnassigned
                                         ? 'غير مجدوَل — اختر وردية الأسبوع'
-                                        : ''
-                              }
+                                        : '',
+                                // الخلية مقفولة في وضع «عرض» — التلميح يقول إزاي تفتحها
+                                viewMode === 'view' ? 'وضع العرض — اضغط «تعديل» فوق لتغيير الوردية' : '',
+                              ].filter(Boolean).join(' · ')}
                             >
                               {override && overrideShift ? (
                                 <>

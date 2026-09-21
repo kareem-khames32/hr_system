@@ -122,3 +122,11 @@ test('الشاشات: الجدول الأسبوعي بيعيّن لمدة بال
   const service = fs.readFileSync(path.join(__dirname, '..', 'src', 'attendance', 'attendance.service.ts'), 'utf8')
   assert.ok(service.includes("where: { teamId: In(teamIds), ...(scope !== null ? { branchId: scope } : {}) },"), 'team members resolved inside the branch scope')
 })
+
+test('المقفول بيقول سبب القفل: خلية الوردية في وضع «عرض»، و«نشط» في الجدول الافتراضي', () => {
+  const weekly = src('app/attendance/weekly-schedule/page.tsx').replace(/\r\n/g, '\n')
+  assert.ok(weekly.includes("viewMode === 'view' ? 'وضع العرض — اضغط «تعديل» فوق لتغيير الوردية' : ''"), 'the locked cell names the «تعديل» toggle')
+  const workDays = src('app/settings/work-days/page.tsx').replace(/\r\n/g, '\n')
+  assert.ok(workDays.includes("title={schedule?.isDefault ? 'الجدول الافتراضي لا يمكن تعطيله' : undefined}"), 'the locked «نشط» box says why')
+  assert.ok(workDays.includes('(الجدول الافتراضي لا يمكن تعطيله)'), 'and says it on screen, not only on hover')
+})

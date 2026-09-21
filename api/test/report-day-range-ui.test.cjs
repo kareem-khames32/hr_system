@@ -318,7 +318,11 @@ test('no month-only date filter is left in src/: every remaining month input is 
   // حقول إدخال في نماذج (يسري من راتب شهر، أول قسط، شهر المسير المستهدف للطلب الجديد) أو اختيار مسير بشهره وأيامه ظاهرة
   const allowed = ['src/app/employees/bulk-update/page.tsx', 'src/components/EmployeeForm.tsx', 'src/components/PayrollSalaryHistoryEditor.tsx',
     'src/components/payroll/BonusesWorkspace.tsx', 'src/components/payroll/LoanExceptionalModal.tsx', 'src/components/payroll/PayrollAllowancesTab.tsx',
-    'src/components/payroll/PayrollOverviewTabs.tsx', 'src/components/payroll/PayrollRunDefinitionPanel.tsx', 'src/components/payroll/TypedDeductionsWorkspace.tsx']
+    'src/components/payroll/PayrollOverviewTabs.tsx', 'src/components/payroll/PayrollRunDefinitionPanel.tsx', 'src/components/payroll/TypedDeductionsWorkspace.tsx',
+    // «خصم» في شاشة الطلبات: نفس حقل «شهر المسير المستهدف» في نموذج الطلب لا فلتر
+    'src/components/requests/DeductionRequestForm.tsx',
+    // «مكافأة» من صف المسير: نفس حقل «شهر المسير المستهدف» في نموذج الاقتراح، جاهزًا بشهر المسير — لا فلتر
+    'src/components/payroll/PayrollBonusCreateModal.tsx']
   const unexpected = monthInputs.filter(file => !allowed.includes(file))
   assert.deepEqual(unexpected, [], `month-only inputs outside forms — use DayRangeFilter (filters) or PayrollPeriodSelect (payroll run by period): ${unexpected.join(', ')}`)
   for (const file of ['src/components/payroll/PayrollAllowancesTab.tsx', 'src/components/payroll/PayrollOverviewTabs.tsx']) {
@@ -326,4 +330,20 @@ test('no month-only date filter is left in src/: every remaining month input is 
   }
   const localMonthUsers = files.filter(file => file !== 'src/lib/dates.ts' && /localMonth\(\)/.test(read(file)))
   assert.deepEqual(localMonthUsers, [], 'no calendar-month default left')
+})
+
+// حواجز صغيرة على نفس الشاشات: البحث بالرقم الوظيفي، وأول سطر في منتقي شهر الرواتب، وسنين إقفال الإجازات
+test('employee-code search, a readable payroll-month placeholder, and every closable leave year', () => {
+  const text = file => read(file).replace(/\r\n/g, '\n')
+  // PayrollPeriodSelect من غير allLabel: أول سطر يقرأ بدل ما يبقى فاضي
+  assert.ok(text('src/components/DayRangeFilter.tsx').includes("{allLabel ?? 'اختر شهر الرواتب'}"), 'the empty period row is readable')
+  const loans = text('src/app/payroll/loans/page.tsx')
+  assert.ok(loans.includes('placeholder="بحث بالاسم أو الرقم الوظيفي..."'), 'loans placeholder names the code')
+  assert.ok(loans.includes("!(loan.employeeCode ?? '').toLowerCase().includes(searchQuery.toLowerCase())"), 'loans search matches the code')
+  assert.ok(text('api/src/assets/employee-extras.controller.ts').includes('employeeCode: empById.get(loan.employeeId)?.employeeCode ?? null,'), 'the loans list carries the code')
+  // المؤرشفون: كود بحروف صغيرة لازم يلاقي كود متخزن بحروف كبيرة
+  assert.ok(text('src/app/employees/archived/page.tsx').includes('emp.employeeId.toLowerCase().includes(searchTerm.toLowerCase())'), 'archived code search is case-insensitive')
+  const yearEnd = text('src/app/leaves/year-end/page.tsx')
+  assert.ok(yearEnd.includes('const FIRST_YEAR = 2020') && yearEnd.includes('String(FIRST_YEAR + i)'), 'older years stay closable')
+  assert.ok(yearEnd.includes('useState(DEFAULT_YEAR)'), 'the default year is still last year')
 })

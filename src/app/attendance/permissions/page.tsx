@@ -103,7 +103,12 @@ export default function PermissionsPage() {
   const [permissionTypes, setPermissionTypes] = useState<Array<{ id: number; nameAr: string; isDeductible: boolean; maxDurationMinutes?: number | null; isActive: boolean }>>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  const [notice, setNotice] = useState('')
   const [actingId, setActingId] = useState<number | null>(null)
+  // القرار في مكانه على الصف: نافذة تأكيد بسبب مكتوب — نفس نمط «رفض بسبب» في شاشة الإضافي
+  const [decision, setDecision] = useState<{ row: PermissionRow; action: 'APPROVE' | 'REJECT' } | null>(null)
+  const [decisionReason, setDecisionReason] = useState('')
+  const [decisionError, setDecisionError] = useState('')
 
   // أزرار الاعتماد/الرفض للطلبات اللي في صندوقي بس — يعني عليّ خطوتها الحالية
   // (ATT-19). بالدور كانت بتظهر لأي حد مش موظف، والـAPI بيرجّع 403 لغير المعتمد
@@ -136,14 +141,34 @@ export default function PermissionsPage() {
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل الموظفين'))
   }, [])
 
-  const handleAct = async (id: number, action: 'APPROVE' | 'REJECT') => {
+  const openDecision = (row: PermissionRow, action: 'APPROVE' | 'REJECT') => {
+    setDecision({ row, action })
+    setDecisionReason('')
+    setDecisionError('')
+    setNotice('')
+  }
+
+  // القرار من الصف نفسه بنفس نقطة صندوق الموافقات (actOnRequest) وبنفس قاعدته:
+  // الرفض لا يمر بلا سبب مكتوب، والسبب مع الاعتماد اختياري. الأهلية = الطلب في صندوقي
+  // (actionable من /requests/inbox)، والخادم يرفض غير المعتمد ورسالته تظهر في النافذة.
+  const confirmDecision = async () => {
+    if (!decision || actingId != null) return
+    const reason = decisionReason.trim()
+    if (decision.action === 'REJECT' && !reason) {
+      setDecisionError('اكتب سبب الرفض قبل تنفيذ القرار')
+      return
+    }
+    const { id, employeeName } = decision.row
     setActingId(id)
     setError('')
+    setDecisionError('')
     try {
-      await actOnRequest(id, action)
+      await actOnRequest(id, decision.action, reason || undefined)
+      setDecision(null)
+      setNotice(`${decision.action === 'APPROVE' ? 'تم اعتماد' : 'تم رفض'} إذن ${employeeName} — طلب #${id}`)
       loadRequests()
     } catch (e) {
-      setError(e instanceof Error ? e.message : 'تعذر تنفيذ الإجراء')
+      setDecisionError(e instanceof Error ? e.message : 'تعذر تنفيذ الإجراء')
     } finally {
       setActingId(null)
     }
@@ -219,6 +244,7 @@ export default function PermissionsPage() {
         </div>
 
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
+        {notice && <div role="status" className="bg-green-50 text-green-800 rounded-xl p-4">{notice}</div>}
 
         {/* Stats */}
         <div className="grid grid-cols-5 gap-4">
@@ -382,9 +408,30 @@ export default function PermissionsPage() {
                       <td className="table-cell text-center">{getStatusBadge(request.status)}</td>
                       {canAct && (
                         <td className="table-cell">
-                          <div className="flex items-center justify-center gap-1">
-                            {actionable.has(request.id) && <Link href={`/approvals-inbox?request=${request.id}`} className="text-primary-600 text-sm underline">مراجعة الطلب</Link>}
-                          </div>
+                          {actionable.has(request.id) && (
+                            <div className="flex flex-col items-center gap-1.5">
+                              <div className="flex items-center justify-center gap-1.5">
+                                <button
+                                  type="button"
+                                  onClick={() => openDecision(request, 'APPROVE')}
+                                  disabled={actingId !== null}
+                                  className="text-xs px-3 py-1.5 bg-green-50 text-green-700 rounded-lg hover:bg-green-100 inline-flex items-center gap-1 disabled:opacity-50"
+                                >
+                                  <CheckCircle size={12} /> اعتماد
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openDecision(request, 'REJECT')}
+                                  disabled={actingId !== null}
+                                  className="text-xs px-3 py-1.5 bg-red-50 text-red-600 rounded-lg hover:bg-red-100 inline-flex items-center gap-1 disabled:opacity-50"
+                                >
+                                  <XCircle size={12} /> رفض بسبب
+                                </button>
+                              </div>
+                              {/* العرض الكامل (خطوات الاعتماد وإعادة الطلب للمقدّم) يبقى في صندوق الموافقات */}
+                              <Link href={`/approvals-inbox?request=${request.id}`} className="text-primary-600 text-xs underline">مراجعة في صندوق الموافقات</Link>
+                            </div>
+                          )}
                         </td>
                       )}
                     </tr>
@@ -401,6 +448,37 @@ export default function PermissionsPage() {
           {permissionTypes.map(type => <div key={type.id} className="card border-r-4 border-primary-500"><h3 className="font-bold text-gray-800 mb-2">{type.nameAr}</h3><p className="text-sm text-gray-500">{type.isDeductible ? 'بخصم وفق السياسة' : 'بدون خصم ضمن الحدود المحددة'}</p><p className="text-xs text-gray-500 mt-2">{type.maxDurationMinutes != null ? `أقصى مدة: ${type.maxDurationMinutes} دقيقة` : 'لا يوجد حد أقصى للمدة'}</p></div>)}
         </div>
       </div>
+      {decision && (
+        <div className="fixed inset-0 z-50 bg-black/40 flex items-center justify-center p-4">
+          <div role="dialog" aria-modal="true" aria-labelledby="permission-decision-title" className="bg-white rounded-2xl shadow-xl w-full max-w-lg p-6 space-y-4">
+            <h2 id="permission-decision-title" className="text-lg font-bold text-gray-800">
+              {decision.action === 'APPROVE' ? 'اعتماد' : 'رفض'} إذن {decision.row.employeeName}
+            </h2>
+            <p className="text-sm text-gray-500">
+              اليوم {decision.row.date} · من {decision.row.fromTime} إلى {decision.row.toTime} ({decision.row.hours} ساعة) · الطلب #{decision.row.id}
+            </p>
+            <div>
+              <label htmlFor="permission-decision-reason" className="label">
+                {decision.action === 'APPROVE' ? 'ملاحظة الاعتماد (اختيارية)' : 'سبب الرفض'}
+              </label>
+              <textarea id="permission-decision-reason" autoFocus maxLength={500} rows={3}
+                required={decision.action === 'REJECT'}
+                value={decisionReason} disabled={actingId !== null}
+                onChange={event => { setDecisionReason(event.target.value); setDecisionError('') }}
+                placeholder={decision.action === 'APPROVE' ? 'أضف ملاحظة تظهر للمقدّم' : 'وضح سبب رفض الإذن'} className="input w-full" />
+            </div>
+            {decisionError && <p role="alert" className="text-sm text-red-600">{decisionError}</p>}
+            <div className="flex justify-end gap-3">
+              <button type="button" className="btn-secondary" disabled={actingId !== null} onClick={() => setDecision(null)}>إلغاء</button>
+              <button type="button"
+                className={`px-4 py-2 rounded-lg text-white disabled:opacity-50 ${decision.action === 'APPROVE' ? 'bg-green-600' : 'bg-red-600'}`}
+                disabled={actingId !== null || (decision.action === 'REJECT' && !decisionReason.trim())} onClick={confirmDecision}>
+                {actingId !== null ? 'جارٍ الحفظ...' : decision.action === 'APPROVE' ? 'اعتماد الإذن' : 'حفظ الرفض والسبب'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </MainLayout>
   )
 }

@@ -133,7 +133,7 @@ export function PayrollPeriodSelect({ id, label, value, onChange, cycleStartDay,
     <label htmlFor={id} className={`block text-sm text-gray-600 ${className}`} data-payroll-period-select>
       {label}
       <select id={id} className="input mt-1 block w-full min-w-[11rem]" value={value} disabled={disabled} onChange={event => onChange(event.target.value)}>
-        {(allLabel !== undefined || !value) && <option value="">{allLabel ?? ''}</option>}
+        {(allLabel !== undefined || !value) && <option value="">{allLabel ?? 'اختر شهر الرواتب'}</option>}
         {months.map(month => <option key={month} value={month}>{periodLabel(month)}</option>)}
       </select>
       {bounds && <span className="block text-xs text-gray-500 mt-1" data-payroll-period-range>{dayRangeLabel(bounds)}</span>}

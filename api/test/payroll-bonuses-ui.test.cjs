@@ -1,5 +1,6 @@
 // C4 / الخطوة 27: شاشات المكافآت — فحص الإدخال في الواجهة، شارة «معتمد — بانتظار الصرف» و«مصروف»، والاقتراح الفردي والجماعي
 // بمعاينة واستبعاد، وبوابة الكتالوج بصلاحية، وتسميات طلبات BONUS القديمة (COMPLETED ليس «مصروف»). منطق الواجهة ونصوصها فقط؛ لا SQL ولا خدمة.
+// وقاعدة المالك: «مكافأة» على صف المسير بتفتح نافذة مكانها ولا توديش شاشة تانية. (الملفات على القرص CRLF — تُطبّع قبل الفحص)
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -9,7 +10,7 @@ require('../node_modules/ts-node').register({ project: path.join(__dirname, '..'
 const ui = require('../../src/lib/bonuses-api')
 const deductionsUi = require('../../src/lib/deductions-api')
 const root = path.resolve(__dirname, '..', '..')
-const read = file => fs.readFileSync(path.join(root, file), 'utf8')
+const read = file => fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n')
 
 const spot = { id: 2, calcMethod: 'FIXED_AMOUNT' }
 const valid = { bonusTypeId: 2, inputValue: '250', reason: 'أداء متميز في تسليم مشروع الربع الثالث', targetPeriod: '2026-09' }
@@ -68,9 +69,11 @@ test('workspace (money-requests simplification): one selection list (an employee
 
 test('money requests (B3/B4): the financial catalog cards open the existing workspaces, the generic engine refuses them, and the audience gates creating', () => {
   const requests = read('src/app/requests/page.tsx')
-  assert.ok(requests.includes("if (code === 'PAYROLL_DEDUCTION') return can('deductions.manage') ? '/payroll/deductions?tab=create' : '/my/deductions?tab=create'"))
+  // «خصم» لم يعد ينتقل لشاشة أخرى: نموذجه الحقيقي داخل شاشة الطلبات (deduction-request-ui.test.cjs)
+  assert.ok(!requests.includes("if (code === 'PAYROLL_DEDUCTION')"), 'the deduction card no longer routes away')
+  assert.ok(requests.includes('<DeductionRequestForm onSubmitted={load} />'), 'the deduction card opens its own form inline')
   assert.ok(requests.includes("if (code === 'PAYROLL_BONUS') return can('bonuses.manage') ? '/payroll/bonuses?tab=create' : '/my/bonuses?tab=create'"))
-  assert.ok(requests.includes('const workspace = moneyWorkspaceRoute(t.code)'), 'the card routes instead of opening a generic form')
+  assert.ok(requests.includes('const workspace = moneyWorkspaceRoute(t.code)'), 'the bonus card routes instead of opening a generic form')
   const engine = read('api/src/requests/requests.service.ts')
   assert.ok(engine.includes("PAYROLL_DEDUCTION: 'الخصم يُرفع من شاشة الخصومات"), 'the generic engine refuses with a message that names the screen')
   assert.ok(engine.includes("PAYROLL_BONUS: 'المكافأة تُرفع من شاشة المكافآت"))
@@ -115,7 +118,8 @@ test('B4: the seeded money types match the live rows — one row each, no approv
   assert.ok(!/\b(DROP|DELETE|TRUNCATE)\b/.test(statements), 'الترحيل إضافي فقط')
 })
 
-test('pages: /payroll/bonuses inside MainLayout with the admin workspace, opened prefilled from the run («مكافأة»), without the legacy BONUS requests table; /my/bonuses shows the employee his bonuses plus the manager workspace', () => {
+// شاشة المكافآت نفسها لم تتغير: تبقى شاشة المجموعات، وتُفتح جاهزة بالموظف والشهر من الرابط الثانوي داخل نافذة صف المسير
+test('pages: /payroll/bonuses inside MainLayout with the admin workspace, opened prefilled by employee and month from the run row modal’s group link, without the legacy BONUS requests table; /my/bonuses shows the employee his bonuses plus the manager workspace', () => {
   const admin = read('src/app/payroll/bonuses/page.tsx')
   for (const text of ['<MainLayout>', '<BonusesWorkspace currency={currency} mode="admin"', "params.get('tab') === 'create'",
     'initialTab={initial.tab ?? undefined} initialEmployeeId={initial.employeeId} initialPeriod={initial.period}']) {
@@ -138,4 +142,86 @@ test('pages: /payroll/bonuses inside MainLayout with the admin workspace, opened
   assert.ok(sidebar.includes("href: '/payroll/bonuses'") && sidebar.includes("href: '/my/bonuses'"))
   const breakdown = read('src/components/PayrollObligationBreakdown.tsx')
   assert.ok(breakdown.includes("can('bonuses.view') ? `/payroll/bonuses?request=${row.bonus.requestId}` : '/my/bonuses'"), 'payslip line links to its bonus request')
+})
+
+const RUN_PAGE = 'src/app/payroll/page.tsx'
+const BONUS_MODAL = 'src/components/payroll/PayrollBonusCreateModal.tsx'
+
+test('«مكافأة» على صف المسير بتفتح نافذة مكانها: نفس نمط «شيل خصم» و«نقل لمسير آخر»، بلا انتقال لشاشة المكافآت', () => {
+  const page = read(RUN_PAGE)
+  // لا انتقال: الرابط القديم لشاشة المكافآت بتبويب الإنشاء لم يعد على الصف
+  assert.ok(!page.includes('/payroll/bonuses?tab=create&employeeId='), 'the run row no longer routes away to the bonuses screen')
+  assert.doesNotMatch(page, /<Link href=\{`\/payroll\/bonuses/, 'no bonus link on the run row')
+  // الزرار على الصف بنفس شكل الزرارين الجارين عليه (حالة + تعطيل أثناء الشغل + نفس السمة للاختبار)
+  assert.ok(page.includes('onClick={() => setBonusFor({ employeeId: item.employeeId, name })} disabled={actionBusy || detailLoading}'))
+  assert.ok(page.includes('data-bonus-employee={item.employeeId}'), 'the row action keeps its test hook')
+  assert.ok(page.includes("{runDetail && runDetail.status !== 'CANCELLED' && ("), 'same visibility rule as before: any run but a cancelled one')
+  // نفس نمط الحالة والعرض بالظبط زي «شيل خصم» و«نقل لمسير آخر»
+  for (const text of [
+    "const [bonusFor, setBonusFor] = useState<{ employeeId: number; name: string } | null>(null)",
+    "import { PayrollBonusCreateModal } from '@/components/payroll/PayrollBonusCreateModal'",
+    '{bonusFor && runDetail && (',
+    '<PayrollBonusCreateModal employeeId={bonusFor.employeeId} employeeName={bonusFor.name} period={runDetail.period}',
+    'onClose={() => setBonusFor(null)} />',
+  ]) {
+    assert.ok(page.includes(text), text)
+  }
+  // الأشقاء الثلاثة على الصف نفسه: كلهم نافذة في الشاشة
+  for (const text of ['setRemoveDeductionFor({ employeeId: item.employeeId', 'setMoveMemberFor({ employeeId: item.employeeId, name })']) {
+    assert.ok(page.includes(text), text)
+  }
+})
+
+test('نافذة المكافأة: نفس نقطة الإنشاء الفردي ونفس المعاينة والفحص وبوابة المجموعات — بلا حساب مال ولا نقطة خدمة جديدة', () => {
+  const modal = read(BONUS_MODAL)
+  for (const text of [
+    // الأنواع المسموح له بإنشائها من الخادم — لا صلاحية مخترعة في الواجهة
+    'fetchBonusCreatable()',
+    // الموظف وشهر المسير جاهزان من صف المسير
+    'isPeriod(period) ? period : value.currentPeriod',
+    'previewBonuses(input, { mode: \'EMPLOYEES\', ids: [employeeId], excludeEmployeeIds: [] })',
+    // نقطة الإنشاء الفردي نفسها (POST /bonuses) التي تستعملها مكتبة العميل
+    'createBonus({ ...input, employeeId })',
+    // نفس فحص الواجهة قبل الإرسال الذي تستعمله شاشة المكافآت
+    'bonusInputError(input, creatable.reasonMinLength, type)',
+    // نفس منسّق المبالغ وتسميات الأدوار والوحدات — بلا نسخ
+    'formatBonusMoney(', 'BONUS_METHOD_UNIT[type.calcMethod]', 'BONUS_ROLE_LABELS[role]',
+    'شهر المسير المستهدف', 'سبب المكافأة',
+  ]) {
+    assert.ok(modal.includes(text), text)
+  }
+  // النافذة لا تقرر شيئًا ماليًا: لا تنسيق أرقام محلي ولا حساب مبلغ ولا نداء خادم خارج مكتبة المكافآت
+  assert.doesNotMatch(modal, /toLocaleString\(/)
+  assert.doesNotMatch(modal, /toFixed\(/)
+  assert.doesNotMatch(modal, /Number\([^)]*\)\s*[*+\-/]/, 'no amount arithmetic in the modal')
+  assert.doesNotMatch(modal, /apiFetch|\bfetch\(/, 'no new endpoint: every call goes through the bonuses client')
+  // شاشة المكافآت باقية للمجموعات، والرابط الثانوي خلف نفس بوابة الشاشة الإدارية
+  assert.ok(modal.includes("const canBulk = can('bonuses.manage')"), 'the group link reuses the bonuses screen gate')
+  assert.ok(modal.includes('مكافأة لمجموعة موظفين ← شاشة المكافآت'))
+  assert.ok(modal.includes('const bulkHref = `/payroll/bonuses?tab=create&employeeId=${employeeId}&period=${form.targetPeriod || period}`'), 'the group link carries the employee and month')
+  assert.ok(modal.includes('{canBulk && ('), 'the group link is behind the permission')
+})
+
+test('نافذة المكافأة: رسالة الخادم العربية على النموذج، وسطر تأكيد باسم سلسلة الاعتماد وشهر المسير — زي نافذتي الخصم والنقل', () => {
+  const modal = read(BONUS_MODAL)
+  // الخطأ: رسالة الخادم كما هي في مكانها على النموذج (لا انتقال ولا تنبيه متصفح)
+  assert.ok(modal.includes("setError(errorText(err, 'تعذر إرسال المكافأة'))"), 'server refusal surfaces as Arabic on the form')
+  assert.ok(modal.includes('{error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">{error}</div>}'))
+  assert.ok(modal.includes("setLoadError(errorText(err, 'تعذر تحميل أنواع المكافآت المسموحة لك'))"))
+  assert.ok(modal.includes("setPreviewError(errorText(err, 'تعذرت معاينة مبلغ المكافأة'))"))
+  assert.doesNotMatch(modal, /\balert\(|window\.location|router\.push/, 'the modal never navigates away nor uses a browser alert')
+  // التكرار: نفس تأكيد شاشة المكافآت بدل رفض صامت
+  assert.ok(modal.includes("row?.status === 'BONUS_DUPLICATE' || errorKind === 'BONUS_DUPLICATE'"))
+  assert.ok(modal.includes('confirmNotDuplicate: form.confirmNotDuplicate'))
+  // النجاح: سطر قصير فيه رقم الطلب والحالة وسلسلة الاعتماد وشهر الصرف
+  assert.ok(modal.includes("const chainOf = (steps: BonusView['steps']) => steps.filter(step => step.status !== 'SKIPPED').map(step => step.roleLabel).join(' ← ')"))
+  assert.ok(modal.includes('سلسلة الاعتماد: {chainOf(created.steps)}. بعد اعتماد الموارد البشرية تُصرف مع مسير {created.targetPeriod}.'))
+  assert.ok(modal.includes('role="status"'))
+  // نفس هيكل نافذتي «شيل خصم» و«نقل لمسير آخر» على الشاشة نفسها
+  const siblings = [read('src/components/payroll/PayrollMoveToRunModal.tsx'), read('src/components/payroll/PayrollFinancialExemptionsPanel.tsx')]
+  for (const marker of ['role="dialog" aria-modal="true"', 'fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4', 'text-sm text-gray-500 disabled:opacity-50">إغلاق</button>']) {
+    assert.ok(modal.includes(marker), `نمط النوافذ: ${marker}`)
+    assert.ok(siblings.some(file => file.includes(marker)), `الشقيق: ${marker}`)
+  }
+  assert.ok(modal.includes('data-testid="payroll-bonus-create"'))
 })

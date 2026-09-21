@@ -153,6 +153,42 @@ export function deductionInputError(input: DeductionInput, reasonMinLength: numb
   return null
 }
 
+// ===== وصف مدخل القيمة بلغة النوع (شاشة «الطلبات» ← كارت «خصم») =====
+// الوحدة وخطوتها كما ضبطها المسؤول في «أنواع الخصومات»؛ نص عربي واحد لا يحسب مالًا ولا يقرر شيئًا.
+const DEDUCTION_STEP_WORDS: Record<string, string> = { '0.25': 'ربع', '0.5': 'نصف', '0.75': 'ثلاثة أرباع' }
+/** «0.2500» ← «0.25»؛ الفارغ أو غير الرقمي ← null. */
+const canonicalStep = (value: string | null | undefined): string | null => {
+  const text = (value ?? '').trim()
+  if (!/^\d+(\.\d+)?$/.test(text) || Number(text) <= 0) return null
+  return text.includes('.') ? text.replace(/0+$/, '').replace(/\.$/, '') : text
+}
+/** تلميح حقل القيمة: «أيام من الراتب — ربع يوم (مضاعفات 0.25)» وأخواته. */
+export function deductionValueHint(type: Pick<DeductionTypeView, 'calcMethod' | 'valueStep'> | null | undefined): string {
+  if (!type) return ''
+  const label = DEDUCTION_METHOD_LABELS[type.calcMethod]
+  if (type.calcMethod === 'FIXED_AMOUNT') return `${label} — بمنزلتين عشريتين على الأكثر`
+  if (type.calcMethod === 'PERCENT_OF_BASE' || type.calcMethod === 'PERCENT_OF_GROSS') return `${label} — النسبة من 0 إلى 100`
+  const step = canonicalStep(type.valueStep)
+  if (!step) return label
+  const unit = type.calcMethod === 'DAYS_OF_SALARY' ? 'يوم' : 'ساعة'
+  const whole = type.calcMethod === 'DAYS_OF_SALARY' ? 'يوم كامل' : 'ساعة كاملة'
+  const word = DEDUCTION_STEP_WORDS[step]
+  return `${label} — ${word ? `${word} ${unit}` : step === '1' ? whole : `الخطوة ${step} ${unit}`} (مضاعفات ${step})`
+}
+/** خطوة حقل الإدخال الرقمي؛ الخادم يعيد نفس الفحص (DEDUCTION_STEP_INVALID). */
+export const deductionValueStep = (type: Pick<DeductionTypeView, 'calcMethod' | 'valueStep'> | null | undefined): string =>
+  !type ? 'any' : type.calcMethod === 'FIXED_AMOUNT' ? '0.01' : canonicalStep(type.valueStep) ?? 'any'
+/** القيمة من مضاعفات خطوة النوع؟ null = صالحة أو لا خطوة لهذا النوع. */
+export function deductionStepError(type: Pick<DeductionTypeView, 'calcMethod' | 'valueStep'> | null | undefined, inputValue: string): string | null {
+  if (!type || (type.calcMethod !== 'DAYS_OF_SALARY' && type.calcMethod !== 'HOURS_OF_SALARY')) return null
+  const step = canonicalStep(type.valueStep)
+  const text = (inputValue ?? '').trim()
+  if (!step || !/^\d+(\.\d{1,4})?$/.test(text)) return null
+  // حساب صحيح بأربع منازل (نفس دقة الخادم) بلا كسور ثنائية
+  const scaled = (value: string) => { const [whole, fraction = ''] = value.split('.'); return Number(whole) * 10000 + Number(`${fraction}0000`.slice(0, 4)) }
+  return scaled(text) % scaled(step) === 0 ? null : `${deductionValueHint(type)} — القيمة ${text} ليست من مضاعفات ${step}.`
+}
+
 export const fetchDeductionTypes = (includeInactive = false) => apiFetch<DeductionTypeView[]>(`/deductions/types${includeInactive ? '?includeInactive=true' : ''}`)
 export const createDeductionType = (input: DeductionTypeInput) => post<DeductionTypeView>('/deductions/types', input)
 export const updateDeductionType = (id: number, input: DeductionTypeInput) => apiFetch<DeductionTypeView>(`/deductions/types/${id}`, { method: 'PATCH', body: JSON.stringify(input) })

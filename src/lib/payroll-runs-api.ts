@@ -144,11 +144,7 @@ export function payrollExclusionCandidates(preview: Pick<PayrollMembershipPrevie
 
 /** الفلاتر المترابطة: الأقسام داخل الفروع المختارة (وفروعها)، والفرق داخل الأقسام المختارة أو فروعها. */
 export function linkedFilterOptions(branches: ApiBranch[], departments: ApiDepartment[], teams: ApiTeam[], filters: PayrollRunFiltersInput) {
-  const selectedDepartments = new Set(filters.departmentIds)
-  for (let grew = true; grew;) {
-    grew = false
-    for (const row of departments) if (row.parentId != null && selectedDepartments.has(row.parentId) && !selectedDepartments.has(row.id)) { selectedDepartments.add(row.id); grew = true }
-  }
+  const selectedDepartments = expandDepartmentIds(departments, filters.departmentIds)
   const departmentOptions = departments.filter(row => !filters.branchIds.length || filters.branchIds.includes(row.branchId))
   const branchOf = new Map(departments.map(row => [row.id, row.branchId]))
   const teamOptions = teams.filter(team => (!filters.departmentIds.length || selectedDepartments.has(team.departmentId)) &&
@@ -161,6 +157,81 @@ export function pruneLinkedFilters(branches: ApiBranch[], departments: ApiDepart
   const withDepartments = { ...filters, departmentIds: filters.departmentIds.filter(id => linkedFilterOptions(branches, departments, teams, { ...filters, departmentIds: [] }).departments.some(row => row.id === id)) }
   const allowedTeams = linkedFilterOptions(branches, departments, teams, withDepartments).teams
   return { ...withDepartments, teamIds: withDepartments.teamIds.filter(id => allowedTeams.some(team => team.id === id)) }
+}
+
+// ===== جملة النطاق ومطابقته (طلب المالك 21 سبتمبر: «لو اخترت الفرع لازم أعلم على كل الأقسام؟») =====
+// القاعدة في المحرك (payrollRunFilterMatches): قائمة أقسام أو فرق فاضية = بلا تقييد = الكل داخل ما فوقها،
+// والاختيار الفاضي تمامًا (بلا فرع ولا قسم ولا فريق ولا قائمة) = لا أحد. الشاشة تقول ده بالنص بدل ما يخمّن.
+const orgNames = <T extends { id: number; name: string }>(rows: T[], ids: number[]) =>
+  ids.map(id => rows.find(row => row.id === id)?.name ?? `#${id}`)
+const prefixed = (word: string, name: string) => new RegExp(`^(ال)?${word}`).test(name.trim()) ? name : `${word} ${name}`
+
+export interface PayrollScopeSummary { text: string; parts: string[]; empty: boolean }
+
+/** أقسام الاختيار مع فروعها (نفس توسعة الخادم للأقسام الفرعية). */
+export function expandDepartmentIds(departments: ApiDepartment[], departmentIds: number[], includeSubDepartments = true): Set<number> {
+  const selected = new Set(departmentIds)
+  if (!includeSubDepartments) return selected
+  for (let grew = true; grew;) {
+    grew = false
+    for (const row of departments) if (row.parentId != null && selected.has(row.parentId) && !selected.has(row.id)) { selected.add(row.id); grew = true }
+  }
+  return selected
+}
+
+/** جملة واحدة بالعربي تقرأ النطاق الناتج من الاختيار الحالي: «النطاق: فرع النصر — كل الأقسام — كل الفرق». */
+export function payrollScopeSummary(branches: ApiBranch[], departments: ApiDepartment[], teams: ApiTeam[],
+  filters: PayrollRunFiltersInput, mode: 'FILTERS' | 'LIST' = 'FILTERS', includeSubDepartments = true): PayrollScopeSummary {
+  const kept = filters.includeEmployeeIds?.length ?? 0
+  const keptPart = kept ? `${kept} مضافين دائمًا للمسير` : null
+  const branchNames = orgNames(branches, filters.branchIds)
+  const branchPart = !branchNames.length ? 'كل الفروع'
+    : branchNames.length === 1 ? prefixed('فرع', branchNames[0]) : `الفروع: ${branchNames.join('، ')}`
+  if (mode === 'LIST') {
+    const parts = [`قائمة محددة (${filters.employeeIds.length} موظف)`, branchNames.length ? `داخل ${branchPart}` : 'من كل الفروع',
+      ...(keptPart ? [keptPart] : [])]
+    return { text: `النطاق: ${parts.join(' — ')}`, parts, empty: filters.employeeIds.length === 0 && kept === 0 }
+  }
+  if (!filters.branchIds.length && !filters.departmentIds.length && !filters.teamIds.length) {
+    const parts = keptPart ? [keptPart] : []
+    return {
+      text: kept
+        ? `النطاق: بلا فلاتر تنظيمية — ${keptPart} فقط؛ اختر فرعًا لو عايز المسير ياخد ناس بالفلاتر.`
+        : 'النطاق: لسه فاضي — اختر فرعًا على الأقل؛ من غير اختيار مش هيدخل المسير أي موظف.',
+      parts, empty: kept === 0,
+    }
+  }
+  const departmentNames = orgNames(departments, filters.departmentIds)
+  const subText = includeSubDepartments ? ' وأقسامه الفرعية' : ' وحده بلا أقسامه الفرعية'
+  const departmentPart = !departmentNames.length ? 'كل الأقسام'
+    : departmentNames.length === 1 ? `${prefixed('قسم', departmentNames[0])}${subText}`
+    : `الأقسام: ${departmentNames.join('، ')}${includeSubDepartments ? ' وأقسامها الفرعية' : ' وحدها بلا أقسامها الفرعية'}`
+  const teamNames = orgNames(teams, filters.teamIds)
+  const teamPart = !teamNames.length ? 'كل الفرق'
+    : teamNames.length === 1 ? prefixed('فريق', teamNames[0]) : `الفرق: ${teamNames.join('، ')}`
+  const parts = [branchPart, departmentPart, teamPart, ...(keptPart ? [keptPart] : [])]
+  return { text: `النطاق: ${parts.join(' — ')}`, parts, empty: false }
+}
+
+export interface PayrollScopeEmployeeRef { id: number; branchId?: number | null; departmentId?: number | null; teamId?: number | null }
+/**
+ * هل الموظف داخل النطاق المختار؟ مرآة payrollRunFilterMatches في الخادم لكن بملف الموظف الحالي
+ * (الخادم يحكم بمكانه آخر يوم في الفترة، فالنتيجة هنا للتنبيه في الشاشة لا للحفظ).
+ */
+export function payrollScopeCoversEmployee(departments: ApiDepartment[], filters: PayrollRunFiltersInput,
+  employee: PayrollScopeEmployeeRef, includeSubDepartments = true): boolean {
+  if (filters.includeEmployeeIds?.includes(employee.id)) return true
+  if (filters.allEmployees) return true
+  const hasOrgFilters = filters.branchIds.length + filters.departmentIds.length + filters.teamIds.length > 0
+  if (!filters.employeeIds.length && !hasOrgFilters) return false
+  if (filters.employeeIds.length && !filters.employeeIds.includes(employee.id)) return false
+  if (filters.branchIds.length && (employee.branchId == null || !filters.branchIds.includes(employee.branchId))) return false
+  if (filters.departmentIds.length) {
+    const selected = expandDepartmentIds(departments, filters.departmentIds, includeSubDepartments)
+    if (employee.departmentId == null || !selected.has(employee.departmentId)) return false
+  }
+  if (filters.teamIds.length && (employee.teamId == null || !filters.teamIds.includes(employee.teamId))) return false
+  return true
 }
 
 export interface PublishedPolicyVersionOption {

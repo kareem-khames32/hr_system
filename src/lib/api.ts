@@ -1125,6 +1125,7 @@ export interface ApiLoan {
 }
 export interface ApiLoanDetails extends ApiLoan {
   employeeName: string
+  employeeCode?: string | null
   // تاريخ طلب السلفة (لفلتر «من تاريخ / إلى تاريخ» في شاشة السلف)
   requestedAt?: string | null
   installments: Array<{ id: number; loanId: number; dueDate: string; amount: number | string; paid: boolean;

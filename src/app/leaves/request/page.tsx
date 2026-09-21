@@ -220,6 +220,17 @@ export default function LeaveRequestPage() {
     ? attachmentName
     : ''
 
+  // أول حقل ناقص يمنع «تقديم الطلب» — يظهر تحت الزر بدل ما يفضل رمادي من غير سبب
+  const missingField = !formData.leaveType
+    ? 'نوع الإجازة'
+    : !formData.startDate
+      ? 'تاريخ البداية'
+      : !formData.endDate
+        ? 'تاريخ النهاية'
+        : !formData.reason
+          ? 'سبب الإجازة'
+          : ''
+
   // النوع مابيسمحش بنص يوم: نرجع ليوم كامل
   useEffect(() => {
     if (!halfDayAllowed && period !== 'FULL') setPeriod('FULL')
@@ -611,23 +622,26 @@ export default function LeaveRequestPage() {
           <Link href="/leaves" className="btn-secondary">
             إلغاء
           </Link>
-          <button
-            type="submit"
-            className="btn-primary flex items-center gap-2"
-            disabled={
-              submitting ||
-              !formData.leaveType ||
-              !formData.startDate ||
-              !formData.endDate ||
-              !formData.reason ||
-              // كل الأيام عطلات، أو المدى نفسه مرفوض (400) — السيرفر سيرفض
-              effectiveDays === 0 ||
-              !!rangeError?.rejected
-            }
-          >
-            <CheckCircle2 size={18} />
-            {submitting ? 'جارٍ التقديم...' : 'تقديم الطلب'}
-          </button>
+          <div className="flex flex-col items-end gap-1">
+            <button
+              type="submit"
+              className="btn-primary flex items-center gap-2"
+              disabled={
+                submitting ||
+                !formData.leaveType ||
+                !formData.startDate ||
+                !formData.endDate ||
+                !formData.reason ||
+                // كل الأيام عطلات، أو المدى نفسه مرفوض (400) — السيرفر سيرفض
+                effectiveDays === 0 ||
+                !!rangeError?.rejected
+              }
+            >
+              <CheckCircle2 size={18} />
+              {submitting ? 'جارٍ التقديم...' : 'تقديم الطلب'}
+            </button>
+            {missingField && <p className="text-xs text-gray-500">ناقص: {missingField}</p>}
+          </div>
         </div>
       </form>
     </MainLayout>

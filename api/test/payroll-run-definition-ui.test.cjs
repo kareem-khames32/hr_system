@@ -153,3 +153,110 @@ test('payroll page: «مسير جديد» is separate from «احتساب الم
   const lib = read('src/lib/payroll-runs-api.ts')
   assert.doesNotMatch(lib, /fetch\(/, 'API calls go through apiFetch only')
 })
+
+
+// ===== طلب المالك (21 سبتمبر): «لو اخترت الفرع لازم أعلم على كل الأقسام؟» و«أستثني موظف واحد إزاي؟» =====
+// الفاضي = الكل (نفس payrollRunFilterMatches في الخادم)، والشاشة تقوله بجملة نطاق حيّة وشريحة «كل …» مختارة افتراضيًا.
+const scopeEmployees = [
+  { id: 7, fullName: 'ليلى', employeeCode: 'E-104', branchId: 1, departmentId: 10, teamId: 100, status: 'ACTIVE', payMethod: 'BANK' },
+  { id: 8, fullName: 'فهد', employeeCode: 'E-106', branchId: 2, departmentId: 20, teamId: 200, status: 'ACTIVE', payMethod: 'BANK' },
+  { id: 9, fullName: 'منى', employeeCode: 'E-107', branchId: 1, departmentId: 11, teamId: 110, status: 'ACTIVE', payMethod: 'BANK' },
+  { id: 12, fullName: 'سالم', employeeCode: 'E-300', branchId: 2, departmentId: 20, teamId: 200, status: 'ACTIVE', payMethod: 'BANK' },
+]
+const cairoDraft = (overrides = {}) => ({ id: 51, name: 'مسير القاهرة', status: 'DRAFT', period: '2026-12', policyVersionId: 4,
+  selection: { mode: 'FILTERS', source: 'DEFINITION',
+    filters: { ...ui.emptyRunFilters(), branchIds: [1], costCenterIds: [], includeSubDepartments: true, allEmployees: false, ...(overrides.filters ?? {}) },
+    exclusions: overrides.exclusions ?? [], emptyScope: null } })
+
+test('scope sentence: an empty department or team list reads «كل الأقسام»/«كل الفرق», sub-departments are said out loud, and an empty selection says nobody joins', () => {
+  const branchOnly = ui.payrollScopeSummary(branches, departments, teams, { ...ui.emptyRunFilters(), branchIds: [1] })
+  assert.equal(branchOnly.text, 'النطاق: فرع القاهرة — كل الأقسام — كل الفرق')
+  assert.equal(branchOnly.empty, false)
+  const withDepartment = ui.payrollScopeSummary(branches, departments, teams, { ...ui.emptyRunFilters(), branchIds: [1], departmentIds: [10] })
+  assert.equal(withDepartment.text, 'النطاق: فرع القاهرة — قسم المبيعات وأقسامه الفرعية — كل الفرق')
+  const legacyScope = ui.payrollScopeSummary(branches, departments, teams, { ...ui.emptyRunFilters(), branchIds: [1], departmentIds: [10] }, 'FILTERS', false)
+  assert.equal(legacyScope.text, 'النطاق: فرع القاهرة — قسم المبيعات وحده بلا أقسامه الفرعية — كل الفرق')
+  const withTeam = ui.payrollScopeSummary(branches, departments, teams, { ...ui.emptyRunFilters(), branchIds: [1], departmentIds: [10], teamIds: [100] })
+  assert.equal(withTeam.text, 'النطاق: فرع القاهرة — قسم المبيعات وأقسامه الفرعية — فريق أ')
+  // اسم الفرع اللي أصلًا بيبدأ بـ«الفرع» ما يتكررش عليه اللقب
+  assert.equal(ui.payrollScopeSummary([{ id: 3, name: 'الفرع الرئيسي' }], departments, teams, { ...ui.emptyRunFilters(), branchIds: [3] }).text,
+    'النطاق: الفرع الرئيسي — كل الأقسام — كل الفرق')
+  const many = ui.payrollScopeSummary(branches, departments, teams, { ...ui.emptyRunFilters(), branchIds: [1, 2] })
+  assert.equal(many.text, 'النطاق: الفروع: القاهرة، الجيزة — كل الأقسام — كل الفرق')
+  // العضوية الدائمة تظهر في الجملة فما تضيعش عند التعديل
+  assert.match(ui.payrollScopeSummary(branches, departments, teams, { ...ui.emptyRunFilters(), branchIds: [1], includeEmployeeIds: [42] }).text,
+    /— 1 مضافين دائمًا للمسير$/)
+  const nothing = ui.payrollScopeSummary(branches, departments, teams, ui.emptyRunFilters())
+  assert.equal(nothing.text, 'النطاق: لسه فاضي — اختر فرعًا على الأقل؛ من غير اختيار مش هيدخل المسير أي موظف.')
+  assert.equal(nothing.empty, true)
+  const list = ui.payrollScopeSummary(branches, departments, teams, { ...ui.emptyRunFilters(), employeeIds: [7, 9] }, 'LIST')
+  assert.equal(list.text, 'النطاق: قائمة محددة (2 موظف) — من كل الفروع')
+  assert.equal(ui.payrollScopeSummary(branches, departments, teams, { ...ui.emptyRunFilters(), branchIds: [1], employeeIds: [7] }, 'LIST').text,
+    'النطاق: قائمة محددة (1 موظف) — داخل فرع القاهرة')
+  assert.equal(ui.payrollScopeSummary(branches, departments, teams, { ...ui.emptyRunFilters(), employeeIds: [] }, 'LIST').empty, true)
+})
+
+test('exclusion scope check mirrors the engine: an empty department list covers the whole branch, sub-departments included, and nothing selected covers nobody', () => {
+  const inCairo = { ...ui.emptyRunFilters(), branchIds: [1] }
+  assert.equal(ui.payrollScopeCoversEmployee(departments, inCairo, scopeEmployees[0]), true)
+  assert.equal(ui.payrollScopeCoversEmployee(departments, inCairo, scopeEmployees[1]), false, 'another branch is out of scope')
+  const salesOnly = { ...ui.emptyRunFilters(), branchIds: [1], departmentIds: [10] }
+  assert.equal(ui.payrollScopeCoversEmployee(departments, salesOnly, scopeEmployees[2]), true, 'sub-department 11 follows department 10')
+  assert.equal(ui.payrollScopeCoversEmployee(departments, salesOnly, scopeEmployees[2], false), false, 'legacy scope: the department itself only')
+  assert.equal(ui.payrollScopeCoversEmployee(departments, ui.emptyRunFilters(), scopeEmployees[0]), false, 'no filter at all matches nobody')
+  assert.equal(ui.payrollScopeCoversEmployee(departments, { ...inCairo, includeEmployeeIds: [8] }, scopeEmployees[1]), true, 'permanent membership beats the filters')
+  const listRun = { ...ui.emptyRunFilters(), employeeIds: [7] }
+  assert.equal(ui.payrollScopeCoversEmployee(departments, listRun, scopeEmployees[0]), true)
+  assert.equal(ui.payrollScopeCoversEmployee(departments, listRun, scopeEmployees[2]), false)
+  assert.deepEqual([...ui.expandDepartmentIds(departments, [10])].sort(), [10, 11])
+  assert.deepEqual([...ui.expandDepartmentIds(departments, [10], false)], [10])
+})
+
+test('definition panel: the live scope sentence, «كل الأقسام» selected by default, and an exclusion picker that works before any preview', () => {
+  const draft = cairoDraft({ exclusions: [{ employeeId: 8, reason: 'يُصرف في مسير الجيزة', byUserId: 1, at: '2026-09-21T00:00:00.000Z' }] })
+  const html = renderToStaticMarkup(React.createElement(PayrollRunDefinitionPanel,
+    { branches, departments, teams, employees: scopeEmployees, currency: 'SAR', draft, onSaved() {}, onCancel() {} })).replace(/<!-- -->/g, '')
+  // 1) النطاق مقروء بالعربي من الاختيار نفسه
+  assert.ok(html.includes('data-testid="payroll-run-scope-summary"'), 'the scope sentence has its own line')
+  assert.ok(html.includes('النطاق: فرع القاهرة — كل الأقسام — كل الفرق'), 'the sentence reads the current selection')
+  for (const chip of ['كل الفروع', 'كل الأقسام', 'كل الفرق']) assert.ok(html.includes(`data-scope-all="${chip}"`), chip)
+  assert.match(html, /aria-pressed="true"[^>]*data-scope-all="كل الأقسام"/, 'كل الأقسام is the default state, not silence')
+  assert.match(html, /aria-pressed="true"[^>]*data-scope-all="كل الفرق"/)
+  assert.ok(html.includes('فاضية = كل أقسام الفرع المختار (مش لازم تعلّم عليها كلها).'))
+  assert.ok(html.includes('اختر الفرع وبس'), 'the tabs explain that an empty box means all')
+  // 2) الاستبعاد شغّال من أول فتح اللوحة: بحث بالاسم أو الرقم ثم السبب
+  assert.ok(html.includes('data-testid="payroll-run-exclusion-search"'), 'a searchable picker, not a disabled dropdown')
+  assert.ok(html.includes('ابحث بالاسم أو الرقم الوظيفي'))
+  for (const id of [7, 9]) assert.ok(html.includes(`data-exclusion-pick="${id}"`), `pick ${id} without any preview`)
+  assert.ok(!html.includes('data-exclusion-pick="8"'), 'someone already excluded is not offered again')
+  assert.ok(html.includes('data-exclusion-pick="12"') && html.includes('سالم (E-300) — خارج النطاق'), 'out-of-scope employees are labelled, not silently equal')
+  assert.ok(html.includes('الاستبعادات (1) — السبب إجباري'))
+  assert.ok(html.includes('فهد (E-106) — يُصرف في مسير الجيزة'), 'the excluded row shows name + code + reason')
+  assert.ok(html.includes('خارج النطاق المختار'), 'a stored exclusion outside the scope says so')
+  assert.ok(html.includes('شيل'), 'each excluded row can be removed')
+  assert.ok(!html.includes('اعرض المعاينة لاختيار موظف'), 'the dead «preview first» dropdown is gone')
+  // 3) مسير القائمة: الاستبعاد من داخل القائمة فقط (الخادم يرفض PAYRUN-EXCLUSION-NOT-LISTED)
+  const listDraft = cairoDraft({ filters: { branchIds: [], employeeIds: [7] } })
+  const listHtml = renderToStaticMarkup(React.createElement(PayrollRunDefinitionPanel,
+    { branches, departments, teams, employees: scopeEmployees, currency: 'SAR', draft: listDraft, onSaved() {}, onCancel() {} })).replace(/<!-- -->/g, '')
+  assert.ok(listHtml.includes('من داخل قائمة المسير'))
+  assert.ok(listHtml.includes('data-exclusion-pick="7"'))
+  for (const id of [9, 12]) assert.ok(!listHtml.includes(`data-exclusion-pick="${id}"`), `${id} is not in the run list`)
+  assert.ok(listHtml.includes('النطاق: قائمة محددة (1 موظف) — من كل الفروع'))
+  // 4) المصدر: نفس الضمانات باقية (المعاينة الكاملة، بحث موظفي نطاق المستخدم، السبب إجباري)
+  const panel = read('src/components/payroll/PayrollRunDefinitionPanel.tsx').replace(/\r\n/g, '\n')
+  assert.ok(panel.includes('payrollScopeSummary(branches, departments, teams, selectedFilters, mode, includeSubDepartments)'), 'the sentence is computed from the live selection')
+  assert.ok(panel.includes('fetchEmployeeDirectory'), 'the picker falls back to the branch-scoped employee directory')
+  assert.ok(panel.includes('exclusionReason.trim().length < 3'), 'the mandatory reason stays enforced on the client too')
+  assert.ok(panel.includes('onExclude={chooseExclusion}'), '«معاينة العضوية» keeps its own exclusion action')
+  assert.ok(panel.includes("mode !== 'LIST' || filters.employeeIds.includes(person.id)"), 'list runs mirror the server rejection')
+  assert.ok(!panel.includes('<select value={exclusionEmployee}'), 'no disabled dropdown left')
+})
+
+test('no new endpoint: the exclusion picker reuses the employees the screen already loads (or the scoped directory)', () => {
+  const lib = read('src/lib/payroll-runs-api.ts').replace(/\r\n/g, '\n')
+  assert.ok(!/payrollScope\w*\s*=\s*\(.*apiFetch/.test(lib), 'the scope helpers are pure — no call added')
+  const panel = read('src/components/payroll/PayrollRunDefinitionPanel.tsx').replace(/\r\n/g, '\n')
+  const calls = panel.match(/fetch[A-Z]\w+\(/g) ?? []
+  assert.deepEqual([...new Set(calls)].sort(), ['fetchEmployeeDirectory(', 'fetchPayrollPolicies('], 'only existing endpoints are used')
+})

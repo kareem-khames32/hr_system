@@ -201,7 +201,8 @@ export default function DocumentsPage() {
       doc.name.includes(searchTerm) ||
       doc.docTypeCode.includes(searchTerm) ||
       doc.number.includes(searchTerm) ||
-      doc.employeeName.includes(searchTerm)
+      doc.employeeName.includes(searchTerm) ||
+      doc.employeeCode.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesCategory =
       selectedCategory === 'الكل' || doc.docTypeCode === selectedCategory
     const matchesEmployee =
@@ -209,6 +210,9 @@ export default function DocumentsPage() {
     const matchesStatus = !selectedStatus || doc.status === selectedStatus
     return matchesSearch && matchesCategory && matchesEmployee && matchesStatus
   })
+
+  // أول حقل ناقص يمنع «إضافة المستند» — يظهر جنب الزر بدل ما يفضل رمادي من غير سبب
+  const missingUploadField = !uploadForm.docType ? 'نوع المستند' : !uploadForm.employeeId ? 'الموظف' : ''
 
   const stats = {
     total: documents.length,
@@ -906,7 +910,10 @@ export default function DocumentsPage() {
                   />
                 </div>
               </div>
-              <div className="p-6 border-t border-gray-100 flex justify-end gap-3">
+              <div className="p-6 border-t border-gray-100 flex justify-end items-center gap-3">
+                {missingUploadField && (
+                  <p className="text-xs text-gray-500">ناقص: {missingUploadField}</p>
+                )}
                 <button
                   onClick={() => setShowUploadModal(false)}
                   className="btn-secondary"
