@@ -18,9 +18,13 @@ import {
   Globe2,
   Building2,
   Lock,
+  Network,
+  RefreshCw,
 } from 'lucide-react'
 import {
   type ApiBranch,
+  type ApiDomainSyncEntry,
+  type ApiDomainSyncSummary,
   type ApiEmployee,
   type ApiPermission,
   type ApiRole,
@@ -34,8 +38,10 @@ import {
   fetchUserPermissions,
   fetchUsers,
   getCurrentUser,
+  isCompanyWideUser,
   setTemporaryPassword,
   setUserPermissions,
+  syncDomainUsers,
   updateUser,
 } from '@/lib/api'
 
@@ -97,6 +103,23 @@ const emptyForm = {
 // النهائي = حزمة الدور ∪ المنح − السحب
 type Overrides = Pick<ApiUserPermissions, 'grants' | 'revokes' | 'effective' | 'rolePermissions' | 'roleActive' | 'legacyGrants'>
 
+// ===== مزامنة حسابات الدومين =====
+// المالك عايز كل موظف مطابق يبقى له حساب ظاهر هنا قبل أي دخول، عشان يسند دور أو صلاحية لحد
+// قبل ما يسجّل دخول ولا مرة. الشاشة بتعرض **المعاينة** الأول (مفيش كتابة)، وبعد تأكيد صريح بس
+// بتطبّق. الخادم بيرفض التطبيق من حساب مقفول على فرع (المزامنة بتلمس كل الفروع).
+const syncActionLabels: Record<ApiDomainSyncEntry['action'], string> = {
+  create: 'حساب جديد',
+  link: 'ربط حساب قائم',
+  skip: 'تخطّي',
+  conflict: 'تعارض',
+}
+const syncActionColors: Record<ApiDomainSyncEntry['action'], string> = {
+  create: 'bg-success-50 text-success-700 border-success-200',
+  link: 'bg-sky-50 text-sky-700 border-sky-200',
+  skip: 'bg-gray-100 text-gray-600 border-gray-200',
+  conflict: 'bg-red-50 text-red-700 border-red-200',
+}
+
 // بحث عربي متسامح (الهمزات والتاء المربوطة والياء) — نفس بحث شاشة الأدوار
 const normalizeSearch = (text: string) =>
   text.toLowerCase().replace(/[أإآ]/g, 'ا').replace(/ة/g, 'ه').replace(/ى/g, 'ي').trim()
@@ -132,6 +155,17 @@ export default function UsersPage() {
   const [meId, setMeId] = useState<number | null>(null)
   // نطاق الحساب وصلاحياته الحصرية بيغيّرهم مدير النظام بس (الخادم بيرفض غيره) — الشاشة بتقفل المفتاح وتشرح
   const [isSuperAdmin, setIsSuperAdmin] = useState(false)
+  // «نطاقه: كل الفروع»؟ مزامنة الدومين بتعمل حسابات في كل الفروع فالخادم بيرفضها من حساب مقفول على فرع
+  const [isCompanyWide, setIsCompanyWide] = useState(false)
+
+  // مزامنة حسابات الدومين: معاينة → تأكيد → نتيجة
+  const [showSync, setShowSync] = useState(false)
+  const [syncBusy, setSyncBusy] = useState(false)
+  const [syncError, setSyncError] = useState<string | null>(null)
+  const [syncPreview, setSyncPreview] = useState<ApiDomainSyncSummary | null>(null)
+  const [syncResult, setSyncResult] = useState<ApiDomainSyncSummary | null>(null)
+  // فلتر قائمة الصفوف في المودال: 'all' أو إجراء أو سبب
+  const [syncFilter, setSyncFilter] = useState<string>('all')
 
   // الصلاحيات الدقيقة — تُحمَّل عند فتح مودال التعديل
   const [overrides, setOverrides] = useState<Overrides | null>(null)
@@ -166,8 +200,53 @@ export default function UsersPage() {
     const me = getCurrentUser()
     setMeId(me?.id ?? null)
     setIsSuperAdmin(me?.role === 'super_admin')
+    setIsCompanyWide(isCompanyWideUser(me))
     loadData()
   }, [])
+
+  // ===== مزامنة حسابات الدومين =====
+  // فتح المودال = معاينة على طول (apply=false: الخادم مابيكتبش أي صف)
+  const openSync = async () => {
+    setShowSync(true)
+    setSyncPreview(null)
+    setSyncResult(null)
+    setSyncError(null)
+    setSyncFilter('all')
+    setSyncBusy(true)
+    try {
+      setSyncPreview(await syncDomainUsers(false))
+    } catch (err: any) {
+      setSyncError(err.message)
+    } finally {
+      setSyncBusy(false)
+    }
+  }
+
+  // التطبيع الفعلي — بعد ما المالك شاف المعاينة وضغط تأكيد
+  const applySync = async () => {
+    setSyncBusy(true)
+    setSyncError(null)
+    try {
+      const result = await syncDomainUsers(true)
+      setSyncResult(result)
+      setSyncFilter('all')
+      setNotice(
+        `المزامنة خلصت: ${result.counts.create} حساب جديد و${result.counts.link} ربط لحساب قائم — ` +
+          'كلهم بدور «موظف» وبلا صلاحيات إضافية، اسند الأدوار من هنا.'
+      )
+      await loadData()
+    } catch (err: any) {
+      setSyncError(err.message)
+    } finally {
+      setSyncBusy(false)
+    }
+  }
+
+  // الصفوف المعروضة في المودال: المعاينة قبل التطبيق، والنتيجة بعده
+  const syncShown = syncResult ?? syncPreview
+  const syncRows = (syncShown?.entries ?? []).filter(
+    (e) => syncFilter === 'all' || e.action === syncFilter || e.reason === syncFilter
+  )
 
   // «مستخدم منقول — محتاج باسورد» (من سجل الترحيل، ولسه محدش عيّن له كلمة هنا)
   const legacyNeedPassword = users.filter((u) => u.legacyNeedsPassword)
@@ -451,10 +530,23 @@ export default function UsersPage() {
             <h1 className="text-2xl font-bold text-gray-800">المستخدمين</h1>
             <p className="text-gray-500 mt-1">إدارة مستخدمي النظام وصلاحياتهم</p>
           </div>
-          <button onClick={openAddModal} className="btn-primary flex items-center gap-2">
-            <Plus size={18} />
-            إضافة مستخدم
-          </button>
+          <div className="flex items-center gap-3">
+            {/* حسابات الدومين جاهزة قبل أي دخول — الزر بيعرض المعاينة الأول ومفيش كتابة قبل التأكيد */}
+            {isCompanyWide && (
+              <button
+                onClick={openSync}
+                className="btn-secondary flex items-center gap-2"
+                title="يطابق حسابات Active Directory بالموظفين ويعمل الحسابات الناقصة — معاينة الأول"
+              >
+                <Network size={18} />
+                مزامنة حسابات الدومين
+              </button>
+            )}
+            <button onClick={openAddModal} className="btn-primary flex items-center gap-2">
+              <Plus size={18} />
+              إضافة مستخدم
+            </button>
+          </div>
         </div>
 
         {/* Error Banner */}
@@ -650,8 +742,19 @@ export default function UsersPage() {
                         <div>
                           <p className="font-medium text-gray-800">{user.displayName}</p>
                           <p className="text-sm text-gray-500">{user.email}</p>
-                          {(user.legacyNeedsPassword || user.mustChangePassword) && (
+                          {(user.isDomainAccount || user.legacyNeedsPassword || user.mustChangePassword) && (
                             <div className="flex flex-wrap gap-1 mt-1">
+                              {/* حساب دومين: بيدخل بكلمة المجال ومفيش كلمة مرور عندنا — «إعادة تعيين
+                                  كلمة المرور» عليه بتفتح له مسار البريد+الكلمة كمان */}
+                              {user.isDomainAccount && (
+                                <span
+                                  className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-50 text-violet-700 border border-violet-200 rounded-full text-xs"
+                                  title="مربوط بحساب Active Directory — بيدخل بكلمة المجال"
+                                >
+                                  <Network size={11} />
+                                  حساب دومين
+                                </span>
+                              )}
                               {user.legacyNeedsPassword && (
                                 <span className="px-2 py-0.5 bg-amber-50 text-amber-700 border border-amber-200 rounded-full text-xs">
                                   مستخدم منقول — محتاج باسورد
@@ -1247,6 +1350,223 @@ export default function UsersPage() {
                 >
                   {saving ? 'جارٍ الحفظ...' : `تعيين لـ ${selected.size} مستخدم`}
                 </button>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* مزامنة حسابات الدومين: معاينة (مفيش كتابة) → تأكيد صريح → نتيجة */}
+        {showSync && (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl w-full max-w-5xl max-h-[92vh] flex flex-col">
+              <div className="flex items-center justify-between p-6 border-b border-gray-100">
+                <div>
+                  <h2 className="text-xl font-bold text-gray-800 flex items-center gap-2">
+                    <Network size={20} className="text-violet-600" />
+                    مزامنة حسابات الدومين
+                  </h2>
+                  <p className="text-sm text-gray-500 mt-1">
+                    كل موظف مطابق في Active Directory يبقى له حساب ظاهر هنا — تقدر تسند له دور أو صلاحية قبل ما
+                    يدخل ولا مرة.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setShowSync(false)}
+                  className="p-2 hover:bg-gray-100 rounded-lg"
+                  aria-label="إغلاق"
+                >
+                  <X size={20} className="text-gray-500" />
+                </button>
+              </div>
+
+              <div className="p-6 space-y-4 overflow-y-auto">
+                {syncError && <div className="bg-red-50 text-red-700 rounded-xl p-4">{syncError}</div>}
+
+                {syncBusy && !syncShown && (
+                  <div className="flex items-center gap-3 text-gray-600 p-6 justify-center">
+                    <RefreshCw size={18} className="animate-spin" />
+                    جارٍ قراءة الدليل ومطابقة الموظفين...
+                  </div>
+                )}
+
+                {syncShown && (
+                  <>
+                    {syncResult ? (
+                      <div className="bg-green-50 text-green-800 rounded-xl p-4 flex items-start gap-3">
+                        <CheckCircle2 size={18} className="shrink-0 mt-0.5" />
+                        <span>
+                          المزامنة اتطبقت. الحسابات الجديدة كلها بدور «موظف» وبلا صلاحيات إضافية وبلا كلمة مرور
+                          عندنا — بتدخل بكلمة المجال. تشغيل المزامنة تاني مش هيغيّر حاجة.
+                        </span>
+                      </div>
+                    ) : (
+                      <div className="bg-amber-50 text-amber-800 rounded-xl p-4 flex items-start gap-3">
+                        <AlertTriangle size={18} className="shrink-0 mt-0.5" />
+                        <span>
+                          دي <span className="font-bold">معاينة</span> — لسه مفيش أي حساب اتعمل ولا اتغيّر. راجع
+                          الأرقام والأسباب تحت، وبعدها اضغط «تطبيق» لو الكلام مظبوط.
+                        </span>
+                      </div>
+                    )}
+
+                    {/* الأرقام */}
+                    <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
+                      {[
+                        ['حسابات في الدليل', syncShown.counts.scanned, 'bg-gray-50 text-gray-700'],
+                        ['حساب جديد', syncShown.counts.create, 'bg-success-50 text-success-700'],
+                        ['ربط حساب قائم', syncShown.counts.link, 'bg-sky-50 text-sky-700'],
+                        ['تخطّي', syncShown.counts.skip, 'bg-gray-100 text-gray-600'],
+                      ].map(([label, count, cls]) => (
+                        <div key={String(label)} className={`rounded-xl p-4 ${cls}`}>
+                          <p className="text-sm">{label}</p>
+                          <p className="text-2xl font-bold">{Number(count)}</p>
+                        </div>
+                      ))}
+                    </div>
+                    {(syncShown.counts.conflict > 0 || syncShown.counts.failed > 0) && (
+                      <div className="bg-red-50 text-red-700 rounded-xl p-4 text-sm">
+                        فيه {syncShown.counts.conflict} تعارض
+                        {syncShown.counts.failed > 0 ? ` و${syncShown.counts.failed} فشل` : ''} — محتاجين قرار
+                        منك، ومفيش حساب اتلمس فيهم.
+                      </div>
+                    )}
+                    <p className="text-xs text-gray-500">
+                      الدليل: {syncShown.directory.server ?? 'غير مضبوط'} — مفعّلين {syncShown.counts.adEnabled}،
+                      وموظفين اتطابقوا {syncShown.counts.employees}. الأدوار والصلاحيات من جداولنا بس (مفيش
+                      مجموعة AD بتتقري).
+                    </p>
+
+                    {/* توزيع الأسباب — كل سبب زر فلتر */}
+                    {syncShown.reasons.length > 0 && (
+                      <div className="border border-gray-100 rounded-xl divide-y divide-gray-100">
+                        {syncShown.reasons.map((r) => (
+                          <button
+                            key={r.reason}
+                            onClick={() => setSyncFilter(syncFilter === r.reason ? 'all' : r.reason)}
+                            className={`w-full flex items-center justify-between gap-3 p-3 text-right text-sm hover:bg-gray-50 ${
+                              syncFilter === r.reason ? 'bg-gray-50 font-medium' : ''
+                            }`}
+                          >
+                            <span className="text-gray-700">{r.reasonText}</span>
+                            <span className="px-2 py-0.5 bg-gray-100 text-gray-700 rounded-full text-xs shrink-0">
+                              {r.count}
+                            </span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+
+                    {/* الصفوف */}
+                    <div className="flex flex-wrap items-center gap-2">
+                      {(['all', 'create', 'link', 'conflict', 'skip'] as const).map((key) => (
+                        <button
+                          key={key}
+                          onClick={() => setSyncFilter(key)}
+                          className={`px-3 py-1 rounded-full text-xs border ${
+                            syncFilter === key
+                              ? 'bg-primary-600 text-white border-primary-600'
+                              : 'bg-white text-gray-600 border-gray-200 hover:bg-gray-50'
+                          }`}
+                        >
+                          {key === 'all' ? 'الكل' : syncActionLabels[key]}
+                        </button>
+                      ))}
+                      <span className="text-xs text-gray-500">{syncRows.length} صف</span>
+                    </div>
+                    <div className="border border-gray-100 rounded-xl overflow-hidden">
+                      <div className="max-h-72 overflow-y-auto">
+                        <table className="w-full text-sm">
+                          <thead className="bg-gray-50 sticky top-0">
+                            <tr className="text-gray-600">
+                              <th className="px-3 py-2 text-right font-medium">حساب المجال</th>
+                              <th className="px-3 py-2 text-right font-medium">الإجراء</th>
+                              <th className="px-3 py-2 text-right font-medium">الموظف</th>
+                              <th className="px-3 py-2 text-right font-medium">التفاصيل</th>
+                            </tr>
+                          </thead>
+                          <tbody className="divide-y divide-gray-100">
+                            {syncRows.length === 0 && (
+                              <tr>
+                                <td colSpan={4} className="px-3 py-6 text-center text-gray-400">
+                                  مفيش صفوف في الفلتر ده
+                                </td>
+                              </tr>
+                            )}
+                            {syncRows.map((e) => (
+                              <tr key={e.objectGuid} className="hover:bg-gray-50">
+                                <td className="px-3 py-2">
+                                  <p className="text-gray-800" dir="ltr">
+                                    {e.sAMAccountName}
+                                  </p>
+                                  {e.displayName && <p className="text-xs text-gray-500">{e.displayName}</p>}
+                                </td>
+                                <td className="px-3 py-2">
+                                  <span
+                                    className={`px-2 py-0.5 rounded-full text-xs border ${syncActionColors[e.action]}`}
+                                  >
+                                    {syncActionLabels[e.action]}
+                                    {e.applied ? ' ✓' : ''}
+                                  </span>
+                                </td>
+                                <td className="px-3 py-2">
+                                  {e.employeeCode ? (
+                                    <>
+                                      <p className="text-gray-800">{e.employeeName}</p>
+                                      <p className="text-xs text-gray-500" dir="ltr">
+                                        {e.employeeCode}
+                                        {e.matchedViaLabel ? ` — ${e.matchedViaLabel}` : ''}
+                                      </p>
+                                    </>
+                                  ) : (
+                                    <span className="text-gray-400">—</span>
+                                  )}
+                                </td>
+                                <td className="px-3 py-2 text-gray-600">
+                                  {e.action === 'create' || e.action === 'link' ? (
+                                    <span dir="ltr">{e.email}</span>
+                                  ) : (
+                                    <>
+                                      <span>{e.reasonText}</span>
+                                      {e.candidates.length > 0 && (
+                                        <span className="block text-xs text-gray-500">
+                                          {e.candidates.map((c) => `${c.employeeCode} ${c.fullName}`).join(' | ')}
+                                        </span>
+                                      )}
+                                      {e.error && <span className="block text-xs text-red-600">{e.error}</span>}
+                                    </>
+                                  )}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              <div className="flex items-center gap-3 p-6 border-t border-gray-100">
+                <button onClick={() => setShowSync(false)} className="flex-1 btn-secondary">
+                  {syncResult ? 'إغلاق' : 'إلغاء'}
+                </button>
+                {!syncResult && (
+                  <button
+                    onClick={applySync}
+                    disabled={
+                      syncBusy ||
+                      !syncPreview ||
+                      syncPreview.counts.create + syncPreview.counts.link === 0
+                    }
+                    className="flex-1 btn-primary disabled:opacity-50"
+                  >
+                    {syncBusy
+                      ? 'جارٍ التطبيق...'
+                      : syncPreview && syncPreview.counts.create + syncPreview.counts.link > 0
+                        ? `تطبيق: ${syncPreview.counts.create} حساب جديد و${syncPreview.counts.link} ربط`
+                        : 'مفيش حاجة تتطبق'}
+                  </button>
+                )}
               </div>
             </div>
           </div>

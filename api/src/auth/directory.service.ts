@@ -3,6 +3,7 @@ import { ConfigService } from '@nestjs/config'
 import {
   DirectoryAuthError,
   DirectoryConfig,
+  DirectoryListProvider,
   DirectoryProvider,
   DirectoryUser,
   directoryConfigGaps,
@@ -27,6 +28,15 @@ const ATTRIBUTES = [
   'userAccountControl',
 ]
 
+/** سرد المزامنة محتاج objectClass كمان: بيها نفرّق حساب الجهاز/الخدمة عن الشخص. */
+const LIST_ATTRIBUTES = [...ATTRIBUTES, 'objectClass']
+
+/** كائنات الأشخاص بس — الأجهزة والمجموعات مستثناة من الفلتر نفسه قبل ما توصل للشبكة. */
+const LIST_FILTER = '(&(objectCategory=person)(objectClass=user)(!(objectClass=computer)))'
+
+/** AD بيرجّع 1000 صف كحد أقصى للصفحة افتراضيًّا، والدليل الحيّ فيه 827 كائن — فالسرد بصفحات إلزامي. */
+const LIST_PAGE_SIZE = 400
+
 const first = (value: unknown): string | null => {
   const raw = Array.isArray(value) ? value[0] : value
   if (raw === undefined || raw === null) return null
@@ -41,7 +51,9 @@ const first = (value: unknown): string | null => {
  * - الاختبارات بتستبدل authenticate على النسخة نفسها، فمفيش اتصال حقيقي في أي اختبار.
  */
 @Injectable()
-export class DirectoryService implements DirectoryProvider, OnApplicationBootstrap {
+export class DirectoryService
+  implements DirectoryProvider, DirectoryListProvider, OnApplicationBootstrap
+{
   private readonly logger = new Logger(DirectoryService.name)
   readonly config: DirectoryConfig
 
@@ -183,10 +195,97 @@ export class DirectoryService implements DirectoryProvider, OnApplicationBootstr
     }
   }
 
+  /**
+   * سرد كل حسابات الأشخاص في المجال — للمزامنة الجماعية بس (المالك عايز الحسابات موجودة وظاهرة
+   * قبل أي دخول). قراءة فقط: مفيش كتابة ولا bind بكلمة أي مستخدم، والحساب المستخدم هو حساب الخدمة
+   * المضبوط في AD_BIND_DN (وهو read-only على الدليل). ولا مجموعة واحدة بتتقري.
+   * بيرجّع الحسابات المتوقفة كمان ومعلّمة disabled — المزامنة هي اللي بتتخطاها وتقول السبب.
+   */
+  async listUsers(): Promise<DirectoryUser[]> {
+    if (!this.isConfigured()) {
+      throw new DirectoryAuthError(
+        'NOT_CONFIGURED',
+        `إعداد المجال ناقص: ${directoryConfigGaps(this.config).join(', ') || 'AD_ENABLED=false'}`
+      )
+    }
+    if (!this.config.bindDn) {
+      throw new DirectoryAuthError(
+        'NOT_CONFIGURED',
+        'مزامنة حسابات الدومين محتاجة حساب خدمة للقراءة — اضبط AD_BIND_DN و AD_BIND_PASSWORD في api/.env'
+      )
+    }
+    // مفيش سر محاولة هنا (مفيش مستخدم بيدخل) — الدالة بتمسح كلمة حساب الخدمة بس
+    const brief = this.briefer('')
+    const client = this.client()
+    try {
+      try {
+        await client.bind(this.config.bindDn, this.config.bindPassword)
+      } catch (error) {
+        throw new DirectoryAuthError(
+          'DIRECTORY_UNAVAILABLE',
+          `فشل ربط حساب الخدمة (AD_BIND_DN): ${brief(error)}`
+        )
+      }
+      let entries: Array<Record<string, unknown>>
+      try {
+        const result = await client.search(this.config.baseDn, {
+          scope: 'sub',
+          filter: LIST_FILTER,
+          attributes: LIST_ATTRIBUTES,
+          // objectGUID ثنائي: بدون ده بيرجع نص متكسّر
+          explicitBufferAttributes: ['objectGUID'],
+          paged: { pageSize: LIST_PAGE_SIZE },
+        })
+        entries = result.searchEntries as Array<Record<string, unknown>>
+      } catch (error) {
+        throw new DirectoryAuthError(
+          'DIRECTORY_UNAVAILABLE',
+          `فشل سرد حسابات ${this.config.baseDn}: ${brief(error)}`
+        )
+      }
+      const users: DirectoryUser[] = []
+      for (const entry of entries) {
+        const objectGuid = objectGuidToString(entry.objectGUID)
+        const sAMAccountName = first(entry.sAMAccountName)
+        // بلا objectGUID مفيش ربط ثابت، وبلا sAMAccountName مفيش اسم نقوله للمالك — بيتعدّى بصمت
+        if (!objectGuid || !sAMAccountName) continue
+        users.push({
+          objectGuid,
+          sAMAccountName,
+          userPrincipalName: (first(entry.userPrincipalName) ?? '').toLowerCase(),
+          mail: first(entry.mail)?.toLowerCase() ?? null,
+          displayName: first(entry.displayName),
+          employeeId: first(entry.employeeID),
+          disabled: isDisabledAccountControl(entry.userAccountControl),
+          objectClasses: (Array.isArray(entry.objectClass)
+            ? entry.objectClass
+            : entry.objectClass === undefined || entry.objectClass === null
+              ? []
+              : [entry.objectClass]
+          ).map((value) => String(value)),
+        })
+      }
+      return users
+    } finally {
+      await this.close(client, brief)
+    }
+  }
+
   // ===== أدوات داخلية =====
 
   // معزولة عن authenticate عشان الاختبار يقدر يتأكد إن مفيش عميل حقيقي بيتعمل
   protected client() {
+    // ===== ولا اتصال LDAP حقيقي واحد من أي اختبار — قاعدة بنيوية مش مسؤولية كل اختبار =====
+    // api/.env على أجهزتنا مضبوط على المجال الحيّ (AD_ENABLED=true وحساب خدمة)، وConfigModule بيعيد
+    // تحميل الملف — فاختبار شايل مفاتيح المجال من process.env لسه بيلاقي الإعداد «مضبوط». ومن يوم ما
+    // إضافة موظف بقت بتزوّد حساب دخول، أي اختبار بيضيف موظف كان هيفتح جلسة LDAPS على الدومين الحيّ.
+    // الاختبارات بتزيّف الحدود الخارجية (listUsers/authenticate)، والحارس ده هو الشبكة اللي تحت:
+    // نسيان التزييف = فشل بصوت عالي بدل خروج صامت للشبكة. الإنتاج مالوش علاقة (NODE_ENV مش 'test').
+    if (process.env.NODE_ENV === 'test') {
+      throw new Error(
+        'الاختبار حاول يفتح اتصال LDAP حقيقي — زيّف الدليل (listUsers/authenticate) بدل الخروج للشبكة'
+      )
+    }
     // require متأخر: الاختبارات اللي مابتلمسش المجال مابتحمّلش المكتبة
     const { Client } = require('ldapts') as typeof import('ldapts')
     return new Client({

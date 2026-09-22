@@ -5,6 +5,7 @@ import {
   Injectable,
   Logger,
   NotFoundException,
+  Optional,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Between, EntityManager, In, IsNull, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm'
@@ -20,6 +21,8 @@ import { markPayrollRangeDirty } from '../payroll/payroll-daily-accrual'
 import { isLeaveRequest } from '../common/leave-contract'
 import { AttendanceRuleVersion, EmployeeAttendanceRuleSnapshot } from '../attendance/attendance-rule.entities'
 import { User } from '../auth/user.entity'
+// حساب الدخول من المجال للموظف الجديد — نفس خدمة المزامنة الجماعية، مفيش روتين إنشاء تاني
+import { DomainSyncService, type DomainProvisionResult } from '../auth/domain-sync.service'
 import { EmployeeDocument, Grade } from '../assets/assets.entities'
 import { assertDocTypes } from '../assets/doc-types'
 import { Branch } from '../org/entities/branch.entity'
@@ -90,7 +93,10 @@ export class EmployeesService {
     private readonly users: Repository<User>,
     @InjectRepository(EmployeeDocument)
     private readonly docs: Repository<EmployeeDocument>,
-    private readonly attendance: AttendanceService
+    private readonly attendance: AttendanceService,
+    // اختيارية وفي الآخر عن قصد: الاختبارات اللي بتعمل الخدمة بإيدها بترسل عشر حقن،
+    // وغياب الخدمة معناه إن التزويد بيتخطّى بصمت — إضافة الموظف مش بتتعطّل أبدًا
+    @Optional() private readonly domainSync?: DomainSyncService
   ) {}
 
   // مرفق العقد → مستند نوعه «عقد» مربوط بالموظف (يظهر في مستنداته)
@@ -432,7 +438,29 @@ export class EmployeesService {
     }
     // بصمات وصلت بكوده/رقم بصمته قبل تسجيله تُربط به
     await this.relinkPunches(emp)
-    return this.attendanceView(emp)
+    // حساب الدخول من الدومين في لحظته (قرار المالك 22 سبتمبر بالليل) — **بعد** ما المعاملة اتثبّتت
+    // وبأفضل جهد. النتيجة حقل إضافي في الرد عشان الشاشة تقول اللي حصل بالنص
+    const domainProvision = await this.provisionDomainUser(emp)
+    return Object.assign(await this.attendanceView(emp), { domainProvision })
+  }
+
+  /**
+   * حساب الدخول من الدومين للموظف اللي لسه اتعمل — أفضل جهد بالكامل:
+   *   • الدليل واقف أو مش مضبوط أو بطيء، أو مفيش موظف مطابق، أو المفتاح مقفول = الموظف اتحفظ
+   *     والطلب ناجح، والسبب بيرجع في الرد (ولا استثناء بيطلع من هنا خالص).
+   *   • مفيش روتين إنشاء تاني: كله بيمر على DomainSyncService.provisionOnHire (نفس المطابقة ونفس
+   *     أسباب المزامنة الجماعية بالحرف، والإنشاء/الربط في DomainLoginService).
+   * null = الخدمة مش محقونة (اختبار بيعمل الخدمة بإيده) → مفيش تزويد ومفيش كلام.
+   */
+  private async provisionDomainUser(emp: Employee): Promise<DomainProvisionResult | null> {
+    if (!this.domainSync) return null
+    try {
+      return await this.domainSync.provisionOnHire(emp.id)
+    } catch (e) {
+      // provisionOnHire بيلمّ كل حاجة جوّاه؛ دي شبكة تانية عشان إنشاء الموظف مايرجعش أبدًا
+      this.logger.warn(`تعذر تزويد حساب دخول للموظف ${emp.id}: ${(e as Error).message}`)
+      return null
+    }
   }
 
   // ربط البصمات اليتيمة بكود الموظف/رقم بصمته بأثر رجعي — أفضل جهد: فشله لا

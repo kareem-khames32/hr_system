@@ -10,6 +10,8 @@ import { AuthController } from './auth.controller'
 import { AuthService } from './auth.service'
 import { DirectoryService } from './directory.service'
 import { DomainLoginService } from './domain-login.service'
+import { DomainSyncService } from './domain-sync.service'
+import { EmployeeLoginAccountController } from './employee-login-account.controller'
 import { JwtStrategy } from './jwt.strategy'
 import { LoginChallenge } from './login-challenge.entity'
 import { MailService } from './mail.service'
@@ -44,10 +46,16 @@ import { jwtLifetimeSeconds } from './jwt-secret'
       }),
     }),
   ],
-  controllers: [AuthController, UsersController, RolesController],
+  controllers: [AuthController, UsersController, RolesController,
+    // كارت «مرتبط بحساب دخول» في ملف الموظف — قراءة بصلاحية الملف نفسه، مش users.manage
+    EmployeeLoginAccountController],
   // DirectoryService و MailService نسختين واحدتين: الاختبارات بتستبدل authenticate/send عليهما
   // بـ app.get(...) فمفيش اتصال LDAP ولا SMTP حقيقي في أي اختبار
-  providers: [AuthService, JwtStrategy, DirectoryService, MailService, TwoFactorService, DomainLoginService],
-  exports: [AuthService, DirectoryService, MailService, TwoFactorService],
+  providers: [AuthService, JwtStrategy, DirectoryService, MailService, TwoFactorService, DomainLoginService,
+    // المزامنة الجماعية: نفس DomainLoginService للإنشاء والربط، فمفيش روتين إنشاء تاني
+    DomainSyncService],
+  // DomainSyncService مصدَّرة عشان إضافة الموظف (EmployeesModule) تزوّده بحساب دخول في لحظته
+  // من **نفس** الخدمة — مفيش روتين إنشاء تاني في النظام
+  exports: [AuthService, DirectoryService, MailService, TwoFactorService, DomainSyncService],
 })
 export class AuthModule {}

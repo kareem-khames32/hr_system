@@ -396,4 +396,9 @@ export const configSeed: Array<{ key: string; value: string }> = [
   // (POST /auth/mail-test أو node api/scripts/mail-selftest.cjs) — وإلا الشركة كلها تتقفل برّه النظام.
   // مفتاح الطوارئ من الترمينال بلا تطبيق: node api/scripts/two-factor-off.cjs
   { key: 'auth.two_factor_enabled', value: 'false' },
+  // حساب دخول للموظف الجديد من الدومين في لحظته (قرار المالك 22 سبتمبر بالليل) — **بيتسلّم مفتوح**،
+  // لأن الدخول بالدومين شغّال حيًّا خلاص. 'false' بتقفل التلقائي **بس**؛ زرّ «مزامنة من AD» في ملف
+  // الموظف ضغطة بإيد المالك وبيفضل شغّال. القفل مايوقّفش إضافة موظف ولا يفشّلها أصلًا:
+  // التزويد كله بأفضل جهد بعد ما صف الموظف اتثبّت (api/src/auth/domain-provision.ts).
+  { key: 'auth.domain_autoprovision_enabled', value: 'true' },
 ]

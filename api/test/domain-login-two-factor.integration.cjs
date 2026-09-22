@@ -741,7 +741,10 @@ test('I2 — حالة الأمان للشاشة: بتقول مفتوح/مقفو�
   // مفيش أي سر في الرد
   const text = JSON.stringify(status)
   assert.doesNotMatch(text, /password|Password|bindPassword/)
-  assert.equal(status.directory.serviceAccountConfigured, false)
+  // «مضبوط / مش مضبوط» بس — علامة بلا قيمة. ممنوع نثبّتها على false: ConfigModule بيعيد تحميل
+  // api/.env بعد ما الاختبار يشيل مفاتيح المجال من process.env، فالقيمة بتختلف بحسب مكان التشغيل
+  // وبحسب إن كان حساب الخدمة مضبوط على الجهاز (وهو مضبوط فعلاً بعد المزامنة الحيّة).
+  assert.equal(typeof status.directory.serviceAccountConfigured, 'boolean')
   // زر شاشة الدخول: الدليل مضبوط في الاختبار (isConfigured مزيّف true)
   const options = expect(await http(null, 'GET', '/auth/login/options'), 200)
   assert.deepEqual(Object.keys(options), ['domainLoginEnabled'])
@@ -807,8 +810,10 @@ test('K1 — مفتاح الطوارئ: node scripts/two-factor-off.cjs بيقف
   assert.ok(session.accessToken)
   assert.equal(mailbox.length, 0)
 
-  // --on مرفوض وخادم البريد مش مضبوط (نفس حاجز الشاشة، من الترمينال)
-  delete process.env.SMTP_HOST
+  // --on مرفوض وخادم البريد مش مضبوط (نفس حاجز الشاشة، من الترمينال).
+  // **فاضي مش محذوف**: السكربت بيقرا api/.env بنفسه، وdotenv بيملّي المفاتيح الغايبة بس — فالحذف
+  // كان بيرجّع قيمة .env الحقيقية ويخلي الاختبار يعتمد على إعداد جهاز المطوّر.
+  process.env.SMTP_HOST = ''
   let failed = null
   try { run(['--on']) } catch (error) { failed = error }
   assert.ok(failed, '--on لازم يفشل وSMTP_HOST مش مضبوط')
@@ -819,12 +824,11 @@ test('K1 — مفتاح الطوارئ: node scripts/two-factor-off.cjs بيقف
 
 test('K2 — سكربت فحص البريد بيقرأ نفس إعداد الخادم ويقول بالاسم إيه الناقص', async () => {
   const { execFileSync } = require('node:child_process')
-  delete process.env.SMTP_HOST
-  delete process.env.SMTP_FROM
+  // فاضي مش محذوف: السكربت بيقرا api/.env بنفسه وdotenv بيملّي الغايب بس (زي K1)
   let failed = null
   try {
     execFileSync(process.execPath, [path.join(apiRoot, 'scripts', 'mail-selftest.cjs'), '--status'],
-      { cwd: apiRoot, env: { ...process.env }, encoding: 'utf8' })
+      { cwd: apiRoot, env: { ...process.env, SMTP_HOST: '', SMTP_FROM: '', SMTP_PASSWORD: '' }, encoding: 'utf8' })
   } catch (error) { failed = error }
   assert.ok(failed, 'الفحص لازم يفشل والإعداد ناقص')
   const out = String(failed.stdout ?? '')
@@ -832,6 +836,17 @@ test('K2 — سكربت فحص البريد بيقرأ نفس إعداد الخ�
   assert.match(out, /SMTP_FROM/)
   // ومفيش كلمة مرور بتتطبع
   assert.match(out, /SMTP_PASSWORD\s*:\s*\(فاضية\)/)
+
+  // وبإعداد الجهاز الحقيقي زي ما هو: الكلمة بتظهر كعلامة بس، وقيمتها عمرها ما بتتطبع
+  let real = null
+  try {
+    real = execFileSync(process.execPath, [path.join(apiRoot, 'scripts', 'mail-selftest.cjs'), '--status'],
+      { cwd: apiRoot, env: { ...process.env }, encoding: 'utf8' })
+  } catch (error) { real = String(error.stdout ?? '') }
+  assert.match(real, /SMTP_PASSWORD\s*:\s*\((?:مضبوطة — مش بتتطبع|فاضية)\)/)
+  if (typeof env.SMTP_PASSWORD === 'string' && env.SMTP_PASSWORD.length >= 3) {
+    assert.equal(real.includes(env.SMTP_PASSWORD), false, 'ممنوع كلمة مرور البريد تظهر في أي مخرج')
+  }
 })
 
 // ============================================================================

@@ -262,12 +262,17 @@ test('SRC5 — حساب المجال بلا كلمة مرور قابلة للا�
   assert.match(domain, /role: 'employee'/)
   // ممنوع قراءة أي مجموعة من الدليل — الفحص على الكود بعد مسح التعليقات (الشرح بيذكرها عمدًا)
   const withoutComments = (source) => source.split('\n').filter((line) => !/^\s*(?:\/\/|\*|\/\*)/.test(line)).join('\n')
-  for (const file of ['api/src/auth/directory.service.ts', 'api/src/auth/directory.types.ts', 'api/src/auth/domain-login.service.ts']) {
+  for (const file of ['api/src/auth/directory.service.ts', 'api/src/auth/directory.types.ts',
+    'api/src/auth/domain-login.service.ts', 'api/src/auth/domain-match.ts', 'api/src/auth/domain-sync.service.ts']) {
     assert.doesNotMatch(withoutComments(read(file)), /memberOf|primaryGroupID|tokenGroups/i, `${file}: ممنوع قراءة مجموعات AD`)
   }
-  // ترتيب المطابقة موثق ومطبَّق: employeeID ثم mail ثم UPN
-  assert.match(domain, /employeeCode = :code/)
-  assert.match(domain, /\[directory\.mail, directory\.userPrincipalName\]/)
+  // ترتيب المطابقة بقى في ملف مشترك واحد (domain-match) بيستخدمه الدخول الحيّ والمزامنة الجماعية:
+  // employeeCode ثم fingerprintCode ثم mail ثم UPN
+  assert.match(domain, /matchEmployeeForDirectory\(directory, employeeRepositoryMatchSource\(this\.employees\)\)/)
+  const match = read('api/src/auth/domain-match.ts')
+  assert.match(match, /byEmployeeCode[\s\S]{0,400}byFingerprintCode[\s\S]{0,400}\['mail', 'userPrincipalName'\]/)
+  assert.match(match, /e\.employeeCode/)
+  assert.match(match, /e\.fingerprintCode/)
   // مفيش إنشاء موظف من الدخول — الإنشاء للحساب بس
   assert.doesNotMatch(domain, /this\.employees\.(save|insert|create)\(/)
 })

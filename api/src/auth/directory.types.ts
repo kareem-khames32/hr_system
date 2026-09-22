@@ -12,10 +12,36 @@ export interface DirectoryUser {
   /** صندوق البريد من AD — منه بتتبعت رسالة رمز التحقق (مش من نسختنا) */
   mail: string | null
   displayName: string | null
-  /** خاصية employeeID لو الـIT عبّاها — تُطابَق بكود الموظف عندنا */
+  /**
+   * خاصية employeeID لو الـIT عبّاها — تُطابَق بكود الموظف **أو رقم البصمة** عندنا.
+   * في الدليل الحيّ الخانة دي بتحمل رقم البصمة أكتر من كود الموظف (323 مقابل 43) — domain-match.ts
+   */
   employeeId: string | null
   /** userAccountControl & 2 — حساب متوقف في المجال */
   disabled: boolean
+  /**
+   * فئات الكائن (objectClass) — بتتقرا في سرد المزامنة الجماعية بس عشان نفرّق حساب الجهاز/الخدمة
+   * عن الشخص. مسار الدخول مابيقراهاش (بحثه على حساب واحد بعينه) فهي اختيارية.
+   */
+  objectClasses?: string[]
+}
+
+/** الواجهة اللي المزامنة الجماعية بتتكلم بيها — الاختبار بيحط مكانها دليل مزيّف. */
+export interface DirectoryListProvider {
+  isConfigured(): boolean
+  /** كل حسابات الأشخاص في المجال (مفعّلة ومتوقفة) — قراءة فقط بحساب الخدمة */
+  listUsers(): Promise<DirectoryUser[]>
+}
+
+/**
+ * حساب مش شخص: حساب جهاز أو ثقة (sAMAccountName بينتهي بـ$) أو objectClass فيه computer.
+ * حسابات الخدمة اللي شكلها شخص مالهاش علامة في AD، فهي بتتخطّى بسبب «مفيش موظف مطابق» زي أي غريب.
+ */
+export function isNonPersonAccount(user: Pick<DirectoryUser, 'sAMAccountName' | 'objectClasses'>): boolean {
+  if (/\$$/.test(String(user.sAMAccountName ?? '').trim())) return true
+  return (user.objectClasses ?? []).some((value) =>
+    /^(computer|msds-groupmanagedserviceaccount|msds-managedserviceaccount)$/i.test(String(value).trim())
+  )
 }
 
 /** سبب رفض الدخول بحساب المجال — كل سبب برسالته العربية، والتفاصيل التقنية تفضل في سجل الخادم. */

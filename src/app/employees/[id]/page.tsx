@@ -31,6 +31,7 @@ import {
   Globe,
   Hash,
   UserMinus,
+  Network,
   Calculator,
   FileSignature,
   Eye,
@@ -52,15 +53,20 @@ import {
   fetchCompanyInfo,
   fetchAttendanceRuleHistory,
   fetchUsers,
+  fetchEmployeeLoginAccount,
+  syncDomainUserForEmployee,
   createDocument,
   createRequest,
   uploadFile,
   can,
   getCurrentUser,
+  DOMAIN_PROVISION_WROTE,
   type ApiEmployee,
   type ApiQualifications,
   type ApiCompanyInfo,
   type ApiAttendanceRuleVersion,
+  type ApiEmployeeLoginAccount,
+  type ApiDomainProvisionResult,
 } from '@/lib/api'
 import { docTypeLabel } from '@/lib/doc-types'
 import { describeEmployeeHistory, type EmployeeHistoryView } from '@/lib/employee-history'
@@ -431,6 +437,13 @@ export default function EmployeeProfilePage() {
   const [finishedSuspension, setFinishedSuspension] = useState<EmployeeSuspension | null>(null)
   const [notice, setNotice] = useState('')
   const [reloadKey, setReloadKey] = useState(0)
+  // «مرتبط بحساب دخول» — الكارت بيتقرا بصلاحية الملف نفسها، وزرّ «مزامنة من AD» بـusers.manage
+  // ونطاق كل الفروع (الخادم بيفرضها، وcanSync مرآتها عشان الزر مايظهرش لمين مايقدرش)
+  const [loginAccount, setLoginAccount] = useState<ApiEmployeeLoginAccount | null>(null)
+  const [loginAccountError, setLoginAccountError] = useState('')
+  const [domainSyncing, setDomainSyncing] = useState(false)
+  const [domainSyncResult, setDomainSyncResult] = useState<ApiDomainProvisionResult | null>(null)
+  const [domainSyncError, setDomainSyncError] = useState('')
   // طلب الخطاب يتم هنا في ملف الموظف: القالب المختار + «الغرض من الخطاب» (الحقل الوحيد الذي يعرّفه
   // الخادم لمعالج letter_pdf_generator) + نتيجة الإرسال — بلا مغادرة الشاشة إلى «طلباتي».
   const [letterTemplate, setLetterTemplate] = useState('')
@@ -710,6 +723,41 @@ export default function EmployeeProfilePage() {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [params.id, reloadKey])
+
+  // حساب الدخول المرتبط بالموظف — نداء مستقل بأفضل جهد: فشله يظهر في الكارت وحده ولا يعطّل الملف
+  useEffect(() => {
+    let active = true
+    setLoginAccount(null)
+    setLoginAccountError('')
+    fetchEmployeeLoginAccount(Number(params.id))
+      .then((row) => { if (active) setLoginAccount(row) })
+      .catch((err) => {
+        if (active) setLoginAccountError(err instanceof Error ? err.message : 'تعذر قراءة حساب الدخول')
+      })
+    return () => { active = false }
+  }, [params.id, reloadKey])
+
+  // «مزامنة من AD» لهذا الموظف وحده: نفس مطابقة المزامنة الجماعية ونفس أسبابها، بلا معاينة
+  // (صف واحد وبضغطة مقصودة). الضغط مرتين لا يغيّر شيئاً — النتيجة تصير «مربوط خلاص».
+  const runDomainSync = async () => {
+    if (domainSyncing) return
+    setDomainSyncing(true)
+    setDomainSyncError('')
+    setDomainSyncResult(null)
+    try {
+      const result = await syncDomainUserForEmployee(Number(params.id))
+      setDomainSyncResult(result)
+      // اتعمل حساب أو اتربط → نعيد قراءة الكارت عشان يعرض الحساب الجديد فوراً
+      if (DOMAIN_PROVISION_WROTE.includes(result.outcome)) {
+        const refreshed = await fetchEmployeeLoginAccount(Number(params.id)).catch(() => null)
+        if (refreshed) setLoginAccount(refreshed)
+      }
+    } catch (err) {
+      setDomainSyncError(err instanceof Error ? err.message : 'تعذّر تشغيل المزامنة من AD')
+    } finally {
+      setDomainSyncing(false)
+    }
+  }
 
   // صورة الموظف — رابط blob بالتوكن (يُلغى عند التفريغ)
   useEffect(() => {
@@ -1375,6 +1423,109 @@ export default function EmployeeProfilePage() {
                     </div>
                   </div>
                 </div>
+              </div>
+
+              {/* حساب الدخول: مرتبط ولا لأ، ودومين ولا عندنا — وزرّ مزامنة من AD لمن يملكها */}
+              <div className="pt-6 border-t border-gray-100">
+                <h3 className="text-md font-bold text-gray-700 mb-4">حساب الدخول</h3>
+                {loginAccountError ? (
+                  <p role="alert" className="text-sm text-red-700 bg-red-50 rounded-xl p-3">{loginAccountError}</p>
+                ) : !loginAccount ? (
+                  <p role="status" className="text-sm text-gray-500">جارٍ قراءة حساب الدخول...</p>
+                ) : (
+                  <div className="space-y-4">
+                    <div className={`p-4 rounded-xl border ${loginAccount.hasAccount ? 'bg-gray-50 border-gray-100' : 'bg-amber-50 border-amber-200'}`}>
+                      <div className="flex flex-wrap items-center gap-2">
+                        {loginAccount.hasAccount ? (
+                          loginAccount.account?.isDomainAccount ? (
+                            /* نفس علامة شاشة المستخدمين بالحرف — المالك بيعرفها من هناك */
+                            <span
+                              className="inline-flex items-center gap-1 px-2 py-0.5 bg-violet-50 text-violet-700 border border-violet-200 rounded-full text-xs"
+                              title="مربوط بحساب Active Directory — بيدخل بكلمة المجال"
+                            >
+                              <Network size={11} />
+                              حساب دومين
+                            </span>
+                          ) : (
+                            <span className="badge badge-success">حساب عندنا (بريد + كلمة مرور)</span>
+                          )
+                        ) : (
+                          <span className="badge badge-warning">مفيش حساب دخول</span>
+                        )}
+                        {loginAccount.account?.isActive === false && <span className="badge badge-danger">معطّل</span>}
+                        <span className={`text-sm ${loginAccount.hasAccount ? 'text-gray-700' : 'text-amber-900'}`}>{loginAccount.summary}</span>
+                      </div>
+                      {loginAccount.account && (
+                        <div className="grid grid-cols-3 gap-4 mt-4">
+                          <div>
+                            <p className="text-sm text-gray-500">بريد الدخول</p>
+                            <p className="font-medium text-gray-800 break-all" dir="ltr">{loginAccount.account.email}</p>
+                          </div>
+                          <div>
+                            <p className="text-sm text-gray-500">الدور</p>
+                            <p className="font-medium text-gray-800">{loginAccount.account.roleLabel}</p>
+                          </div>
+                          <div>
+                            <p className="text-sm text-gray-500">آخر دخول</p>
+                            <p className="font-medium text-gray-800">{loginAccount.account.lastLoginAt ? fmtDate(loginAccount.account.lastLoginAt) : 'لسه مادخلش ولا مرة'}</p>
+                          </div>
+                        </div>
+                      )}
+                      {loginAccount.account?.legacyNeedsPassword && (
+                        <p className="text-sm text-amber-900 mt-3">حساب منقول من النظام القديم — محتاج كلمة مرور من شاشة المستخدمين.</p>
+                      )}
+                    </div>
+
+                    {loginAccount.canSync && (
+                      <div className="space-y-3">
+                        <div className="flex flex-wrap items-center gap-3">
+                          <button
+                            type="button"
+                            onClick={runDomainSync}
+                            disabled={domainSyncing || !loginAccount.directory.configured}
+                            className="btn-secondary flex items-center gap-2"
+                            title={loginAccount.directory.configured ? 'يطابق الموظف بحساب المجال ويفتح له الحساب' : 'إعداد المجال ناقص في api/.env'}
+                          >
+                            <Globe size={16} />
+                            {domainSyncing ? 'جارٍ المزامنة...' : 'مزامنة من AD'}
+                          </button>
+                          {!loginAccount.directory.configured && (
+                            <span className="text-sm text-gray-500">إعداد المجال ناقص في api/.env — المزامنة مقفولة لحد ما يتضبط.</span>
+                          )}
+                          {loginAccount.directory.configured && !loginAccount.autoProvisionEnabled && (
+                            <span className="text-sm text-gray-500">المزامنة التلقائية عند إضافة موظف مقفولة من الإعدادات — الزر ده شغّال برضه.</span>
+                          )}
+                        </div>
+                        {domainSyncError && <p role="alert" className="text-sm text-red-700 bg-red-50 rounded-xl p-3">{domainSyncError}</p>}
+                        {domainSyncResult && (
+                          <div
+                            role="status"
+                            className={`rounded-xl p-3 text-sm space-y-2 ${
+                              DOMAIN_PROVISION_WROTE.includes(domainSyncResult.outcome)
+                                ? 'bg-green-50 text-green-800'
+                                : domainSyncResult.outcome === 'alreadyLinked'
+                                  ? 'bg-gray-50 text-gray-700'
+                                  : 'bg-amber-50 text-amber-900'
+                            }`}
+                          >
+                            <p>{domainSyncResult.message}</p>
+                            {domainSyncResult.sAMAccountName && (
+                              <p className="text-xs">
+                                حساب المجال: <span dir="ltr" className="font-mono">{domainSyncResult.sAMAccountName}</span>
+                                {domainSyncResult.matchedViaLabel ? ` — طابق بـ${domainSyncResult.matchedViaLabel}` : ''}
+                              </p>
+                            )}
+                            {domainSyncResult.candidates.length > 0 && (
+                              <p className="text-xs">
+                                الموظفين المتشابهين: {domainSyncResult.candidates.map((c) => `${c.fullName} (${c.employeeCode})`).join(' — ')}
+                              </p>
+                            )}
+                          </div>
+                        )}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
 
               {/* سجل الدوام — تاريخ السريان والسبب ومن سجّل تغيير الجدول أو المرونة */}

@@ -351,6 +351,9 @@ export interface ApiEmployee {
   // توثيق الأرشفة — للفلترة في شاشة الأرشيف
   archivedAt?: string; archiveReason?: string
   isActive: boolean; createdAt: string
+  // حقل إضافي في رد **الإنشاء بس**: حساب الدخول من الدومين اللي اتعمل للموظف في لحظته (أو سبب
+  // إنه ما اتعملش). ممنوع يبقى شرطًا لأي حاجة — الموظف اتحفظ في كل الحالات.
+  domainProvision?: ApiDomainProvisionResult | null
 }
 export interface ApiRequestType {
   id: number; code: string; nameAr: string; category: string
@@ -613,7 +616,99 @@ export interface ApiUser {
   legacyNeedsPassword?: boolean
   // «نطاقه: كل الفروع» (false = مقفول على فرعه) — يفتحه ويقفله مدير النظام فقط
   scopeAllBranches?: boolean
+  // «حساب دومين»: مربوط بحساب Active Directory — بيدخل بكلمة المجال ومفيش كلمة مرور عندنا.
+  // الشاشة بتعلّمه عشان تفرّقه عن حساب البريد+كلمة المرور وإنت بتسند الأدوار.
+  isDomainAccount?: boolean
+  domainObjectGuid?: string | null
 }
+
+// ===== مزامنة حسابات الدومين (POST /users/domain-sync) =====
+// مرآة الأنواع في api/src/auth/domain-sync.service.ts — مكتوبة هنا عشان الواجهة ماتستوردش
+// ملف فيه decorators من NestJS. **معاينة افتراضيًّا**: بلا apply=true مفيش صف بيتكتب.
+export type ApiDomainSyncAction = 'create' | 'link' | 'skip' | 'conflict'
+export interface ApiDomainSyncEntry {
+  objectGuid: string
+  sAMAccountName: string
+  userPrincipalName: string
+  displayName: string | null
+  mail: string | null
+  adEmployeeId: string | null
+  adDisabled: boolean
+  employeeId: number | null
+  employeeCode: string | null
+  employeeName: string | null
+  matchedVia: string | null
+  matchedViaLabel: string | null
+  action: ApiDomainSyncAction
+  reason: string | null
+  reasonText: string | null
+  email: string | null
+  userId: number | null
+  candidates: Array<{ id: number; employeeCode: string; fullName: string }>
+  applied: boolean
+  error: string | null
+}
+export interface ApiDomainSyncSummary {
+  applied: boolean
+  startedAt: string
+  finishedAt: string
+  counts: {
+    scanned: number; adEnabled: number; employees: number
+    create: number; link: number; skip: number; conflict: number; failed: number
+  }
+  reasons: Array<{ reason: string; reasonText: string; count: number }>
+  entries: ApiDomainSyncEntry[]
+  directory: { configured: boolean; server: string | null; upnSuffix: string | null }
+}
+/** apply=false (الافتراضي) = معاينة بس؛ apply=true = تنفيذ فعلي بعد تأكيد صريح من الشاشة. */
+export const syncDomainUsers = (apply = false) =>
+  post<ApiDomainSyncSummary>('/users/domain-sync', { apply })
+
+// ===== موظف واحد: كارت «مرتبط بحساب دخول» + زرّ «مزامنة من AD» =====
+// مرآة api/src/auth/domain-provision.ts و employee-login-account.controller.ts.
+export type ApiDomainProvisionOutcome =
+  | 'created' | 'linked' | 'alreadyLinked' | 'noMatch' | 'skipped' | 'conflict'
+  | 'switchedOff' | 'directoryUnavailable' | 'failed'
+export interface ApiDomainProvisionResult {
+  employeeId: number
+  outcome: ApiDomainProvisionOutcome
+  /** سطر عربي واحد جاهز للعرض (سبب التخطّي الأدق لو فيه) */
+  message: string
+  userId: number | null
+  email: string | null
+  reason: string | null
+  reasonText: string | null
+  sAMAccountName: string | null
+  matchedVia: string | null
+  matchedViaLabel: string | null
+  candidates: Array<{ id: number; employeeCode: string; fullName: string }>
+  entries: ApiDomainSyncEntry[]
+  directoryConfigured: boolean
+}
+/** الحالتين اللي فيهما حساب اتعمل/اتربط فعلًا — الشاشة بتلوّن بيهما وبتعيد التحميل. */
+export const DOMAIN_PROVISION_WROTE: ApiDomainProvisionOutcome[] = ['created', 'linked']
+export interface ApiEmployeeLoginAccount {
+  employeeId: number
+  employeeCode: string
+  employeeName: string
+  hasAccount: boolean
+  account: {
+    id: number; email: string; displayName: string; role: string; roleLabel: string
+    isActive: boolean; isDomainAccount: boolean; scopeAllBranches: boolean
+    mustChangePassword: boolean; legacyNeedsPassword: boolean; lastLoginAt: string | null
+  } | null
+  /** المشاهد يقدر يضغط «مزامنة من AD»؟ (users.manage + نطاق كل الفروع) — الخادم بيفرضها برضه */
+  canSync: boolean
+  directory: { configured: boolean }
+  autoProvisionEnabled: boolean
+  summary: string
+}
+/** كارت الملف — بصلاحية عرض الموظف نفسها (الموظف لنفسه أو employees.view). */
+export const fetchEmployeeLoginAccount = (employeeId: number) =>
+  get<ApiEmployeeLoginAccount>(`/employees/${employeeId}/login-account`)
+/** زرّ «مزامنة من AD» لموظف واحد — بلا معاينة: صف واحد والمالك ضغط بإيده. */
+export const syncDomainUserForEmployee = (employeeId: number) =>
+  post<ApiDomainProvisionResult>(`/users/domain-sync/employee/${employeeId}`)
 export interface ApiDashboardStats {
   role: string
   employees: { total: number; active: number; probation: number }

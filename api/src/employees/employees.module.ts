@@ -1,6 +1,7 @@
 import { Module } from '@nestjs/common'
 import { TypeOrmModule } from '@nestjs/typeorm'
 import { AttendanceModule } from '../attendance/attendance.module'
+import { AuthModule } from '../auth/auth.module'
 import { User } from '../auth/user.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
@@ -44,6 +45,9 @@ import { EmployeesService } from './employees.service'
     ]),
     // ربط البصمات اليتيمة بأثر رجعي عند ضبط رقم البصمة/الكود
     AttendanceModule,
+    // حساب الدخول من الدومين للموظف الجديد في لحظته — DomainSyncService من AuthModule،
+    // فمفيش روتين إنشاء تاني. AuthModule مابيستوردش EmployeesModule (بياخد الكيان لوحده) فمفيش حلقة.
+    AuthModule,
   ],
   controllers: [EmployeesController, QualificationsController],
   providers: [EmployeesService],

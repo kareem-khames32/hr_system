@@ -45,6 +45,7 @@ import { Role } from './role.entity'
 import { User, UserRole } from './user.entity'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
+import { DomainSyncService } from './domain-sync.service'
 import { legacyUnusablePasswordUserIds, needsPasswordFromLegacy } from './legacy-password-marker'
 
 // الصلاحيات الإضافية القابلة للمنح = سجل الصلاحيات المركزي كاملاً
@@ -159,6 +160,17 @@ class UpdateUserDto {
 export const SCOPE_ALL_BRANCHES_SUPER_ADMIN_ONLY = 'تغيير نطاق الحساب «فرعه / كل الفروع» متاح لمدير النظام فقط'
 export const SCOPE_ALL_BRANCHES_ACCOUNT_LOCKED = 'الحساب ده نطاقه «كل الفروع» — تعديله متاح لمدير النظام فقط'
 
+// مزامنة حسابات الدومين: معاينة افتراضيًّا، والكتابة محتاجة apply=true صريحة في الجسم
+class DomainSyncDto {
+  @IsOptional()
+  @IsBoolean({ message: 'تطبيق المزامنة لازم يكون true أو false' })
+  apply?: boolean
+}
+
+// المزامنة بتعمل حسابات في كل الفروع، فحساب مقفول على فرع مايشغّلهاش (نفس قاعدة «مايسندش فرع خارج نطاقه»)
+export const DOMAIN_SYNC_COMPANY_WIDE_ONLY =
+  'مزامنة حسابات الدومين بتعمل حسابات في كل الفروع — متاحة للحساب اللي نطاقه «كل الفروع» بس'
+
 // كلمة مرور مؤقتة واحدة لكذا حساب مرة واحدة (الحسابات المنقولة من القديم جات من غير كلمة)
 class TemporaryPasswordDto {
   @IsArray({ message: 'اختار المستخدمين' })
@@ -190,7 +202,8 @@ export class UsersController {
     private readonly employees: Repository<Employee>,
     @InjectRepository(Role) private readonly roles: Repository<Role>,
     @InjectRepository(Branch) private readonly branches: Repository<Branch>,
-    private readonly auth: AuthService
+    private readonly auth: AuthService,
+    private readonly domainSync: DomainSyncService
   ) {}
 
   // الدور القابل للإسناد = موجود في جدول roles ومفعّل (المخصصة مسموحة)
@@ -269,7 +282,37 @@ export class UsersController {
       // «نطاقه: كل الفروع» — مدير النظام نطاقه كامل بدوره فالعلم عليه دايمًا false
       scopeAllBranches: rest.role !== 'super_admin' && rest.scopeAllBranches === true,
       legacyNeedsPassword: needsPasswordFromLegacy(rest, legacyIds),
+      // «حساب دومين»: مربوط بحساب Active Directory (بيدخل بكلمة المجال، ومفيش كلمة عندنا).
+      // الشاشة بتعلّمه عشان المالك يفرّق وهو بيسند الأدوار بين حساب المجال وحساب البريد+الكلمة.
+      isDomainAccount: !!rest.domainObjectGuid,
     }))
+  }
+
+  /**
+   * مزامنة حسابات الدومين: كل موظف مطابق يبقى له حساب ظاهر في الشاشة قبل أي دخول، فالمالك يقدر
+   * يسند دور أو صلاحية لحد قبل ما يسجّل دخول ولا مرة (قرار المالك 22 سبتمبر).
+   * **معاينة افتراضيًّا**: بلا apply=true مفيش صف واحد بيتكتب، والرد بيقول اللي كان هيحصل.
+   */
+  @Post('domain-sync')
+  @HttpCode(200)
+  async domainSyncRun(@CurrentUser() actor: JwtPayload, @Body() dto: DomainSyncDto) {
+    if (branchScopeOf(actor) !== null) throw new ForbiddenException(DOMAIN_SYNC_COMPANY_WIDE_ONLY)
+    return this.domainSync.run({ apply: dto.apply === true })
+  }
+
+  /**
+   * موظف واحد بالاسم — زرّ «مزامنة من AD» في ملف الموظف. نفس خطة المزامنة الجماعية ونفس الأسباب،
+   * ومفيش معاينة هنا: صف واحد والمالك ضغط الزر بإيده. التمرير التاني مابيغيّرش حاجة.
+   * نفس حراسة المزامنة الجماعية: users.manage (على الكلاس) + نطاق «كل الفروع».
+   */
+  @Post('domain-sync/employee/:id')
+  @HttpCode(200)
+  async domainSyncEmployee(
+    @CurrentUser() actor: JwtPayload,
+    @Param('id', ParseIntPipe) id: number
+  ) {
+    if (branchScopeOf(actor) !== null) throw new ForbiddenException(DOMAIN_SYNC_COMPANY_WIDE_ONLY)
+    return this.domainSync.syncEmployee(id)
   }
 
   // كلمة مرور مؤقتة واحدة لكل المختارين: bcrypt لكل حساب، و«لازم يغيّرها أول دخول» افتراضيًا،
