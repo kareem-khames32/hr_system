@@ -32,7 +32,7 @@ export const PAYROLL_EXCLUSION_LABELS: Record<string, string> = {
   // أكواد قديمة محفوظة في صفوف سابقة؛ قرار المالك (20 سبتمبر) ألغى الاستبعاد العام للموقوف والمؤرشف.
   SUSPENDED: 'الموظف موقوف',
   ARCHIVED: 'ملف الموظف مؤرشف',
-  EXC_ARCHIVED_NO_LAST_DAY: 'مؤرشف بلا تاريخ آخر يوم عمل — حدده عشان راتبه يتحسب',
+  EXC_ARCHIVED_NO_LAST_DAY: 'مؤرشف بلا ملف إنهاء خدمة — افتح له ملف إنهاء خدمة بآخر يوم عمل عشان راتبه يتحسب',
   EXC_JOINS_AFTER_PERIOD: 'بداية العمل بعد نهاية الفترة',
   EXC_TERMINATED_BEFORE_PERIOD: 'انتهاء الخدمة قبل بداية الفترة',
   EXC_NO_ACTIVE_EMPLOYMENT: 'لا توجد مدة عمل مستحقة داخل الفترة',

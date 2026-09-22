@@ -179,7 +179,7 @@ test('(ب) المؤرشف بآخر يوم عمل موثق يظهر في شهره
   const undocumented = await employee({ status: 'archived', isActive: false })
   const view = await preview([undocumented])
   assert.equal(view.excluded[0].code, 'EXC_ARCHIVED_NO_LAST_DAY')
-  assert.equal(view.excluded[0].message, 'مؤرشف بلا تاريخ آخر يوم عمل — حدده عشان راتبه يتحسب')
+  assert.equal(view.excluded[0].message, 'مؤرشف بلا ملف إنهاء خدمة — افتح له ملف إنهاء خدمة بآخر يوم عمل عشان راتبه يتحسب')
 }, { timeout: 180000 })
 
 test('(ج) التصفية = المسير بالظبط، والمسير بيستبعده من المستحق للصرف وكشف البنك', async () => {

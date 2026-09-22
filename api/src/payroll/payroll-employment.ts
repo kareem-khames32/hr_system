@@ -63,7 +63,9 @@ export function payrollEmploymentCoverage(
     // يفضل مستبعد بسبب واضح (EXC_ARCHIVED_NO_LAST_DAY) بدل ما يترمي بسبب مبهم أو يتحسب بالغلط.
     if (employee.status === 'archived' || employee.status === 'terminated') return null
     if (!employee.isActive && !suspendedOnly) {
-      throw new BadRequestException('تاريخ آخر يوم عمل غير مسجل للموظف غير النشط؛ حدده قبل حساب راتبه')
+      // الرسالة بتسمّي الإجراء الفعلي: آخر يوم عمل بييجي من ملف إنهاء الخدمة (استقالة أو إنهاء من الشركة)،
+      // مفيش خانة له في ملف الموظف — فالكلام القديم «حدده» كان بيوجّه لحقل مش موجود.
+      throw new BadRequestException('لا يوجد ملف إنهاء خدمة يحدد آخر يوم عمل لهذا الموظف غير النشط؛ سجّل إنهاء خدمته قبل حساب راتبه')
     }
   }
   const coverFrom = hireDate > startDate ? hireDate : startDate

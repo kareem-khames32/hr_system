@@ -105,6 +105,11 @@ export interface ActDto {
 // القديمة للبصمة — لا تُقبل إلا إن عُرّفت حقلاً في «أنواع الطلبات»، عمداً: فلا
 // يغيّر مفتاح يقرؤه المعالج التنفيذَ خفيةً عن المعتمد. أي مفتاح غيرها يُرفض عند التقديم
 const COMMON_PAYLOAD_KEYS = ['note', 'reason', 'attachmentUrl']
+// أسماء يبعتها العميل بدل مفتاح المرفق الصحيح: مرفق أي طلب اسمه attachmentUrl بمرجع «file:رقم»
+// من POST /files/upload (نفس مرجع leaves.attachmentRef ومرفق «بعد الرجوع») — الرفض يسمّي الحقل
+// الصحيح بدل ما يترك المقدّم يخمّن (تدقيق 21 سبتمبر: «attachmentRef» اترفض وما حدّش عرف الاسم)
+const ATTACHMENT_KEY_ALIASES = ['attachmentRef', 'attachmentFile', 'attachmentId', 'attachmentPath',
+  'attachmentUrls', 'attachments', 'attachment', 'fileRef', 'fileId', 'file']
 // وقت البصمة HH:MM (والثواني اختيارية) — نفس فحص التنفيذ في destinations.service
 export const PUNCH_TIME_PATTERN = /^([01]\d|2[0-3]):[0-5]\d(:[0-5]\d)?$/
 const CATEGORY_PAYLOAD_KEYS: Record<string, string[]> = {
@@ -2813,8 +2818,13 @@ export class RequestsService {
     }
     const extra = Object.keys(payload ?? {}).filter((k) => !allowed.has(k))
     if (extra.length > 0) {
+      // مفتاح مرفق بالاسم الخطأ: الرسالة تسمّي الحقل الصحيح (attachmentUrl) بدل «عرّفه في أنواع الطلبات»
+      const aliased = extra.filter((k) => ATTACHMENT_KEY_ALIASES.includes(k))
+      const hint = aliased.length
+        ? ` — مرفق الطلب اسمه «attachmentUrl» ومرجعه «file:رقم» من رفع الملفات`
+        : ' — أزِلها أو عرّفها في «أنواع الطلبات»'
       throw new BadRequestException(
-        `حقول غير معرّفة لنوع «${type.nameAr}»: ${extra.join('، ')} — أزِلها أو عرّفها في «أنواع الطلبات»`
+        `حقول غير معرّفة لنوع «${type.nameAr}»: ${extra.join('، ')}${hint}`
       )
     }
     // SEC-EMP-2: قيم تُكتب في ملف الموظف — تُرفض من التقديم لا عند الاعتماد

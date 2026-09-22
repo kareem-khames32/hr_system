@@ -110,7 +110,8 @@ export const UNASSIGNED_REASON_LABELS: Record<PayrollUnassignedReason, string> =
 export const MEMBERSHIP_EXCLUSION_LABELS: Record<string, string> = {
   // أكواد قديمة محفوظة في مسيرات سابقة؛ قرار المالك (20 سبتمبر) ألغى الاستبعاد العام للموقوف والمؤرشف
   SUSPENDED: 'الموظف موقوف', ARCHIVED: 'ملف الموظف مؤرشف',
-  EXC_ARCHIVED_NO_LAST_DAY: 'مؤرشف بلا تاريخ آخر يوم عمل — حدده عشان راتبه يتحسب',
+  // مافيش خانة «آخر يوم عمل» في ملف الموظف: التاريخ بييجي من ملف إنهاء الخدمة (استقالة أو إنهاء من الشركة)
+  EXC_ARCHIVED_NO_LAST_DAY: 'مؤرشف بلا ملف إنهاء خدمة — افتح له ملف إنهاء خدمة بآخر يوم عمل عشان راتبه يتحسب',
   EXC_JOINS_AFTER_PERIOD: 'بداية العمل بعد نهاية الفترة', EXC_TERMINATED_BEFORE_PERIOD: 'انتهاء الخدمة قبل بداية الفترة',
   EXC_NO_ACTIVE_EMPLOYMENT: 'لا توجد مدة عمل مستحقة داخل الفترة',
   EXC_MANUAL_EXCLUSION: 'استبعاد يدوي بسبب مكتوب', MANUAL: 'استبعاد يدوي', EXC_MANUAL: 'استبعاد يدوي',

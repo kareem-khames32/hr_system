@@ -80,6 +80,10 @@ test('attachment at submit: required, required above days, and never for after-r
   const req = type({ nameAr: 'امتحانات', attachmentRule: 'REQUIRED', requiredAttachment: 'جدول الامتحانات' })
   rejects(() => rules.assertLeaveTypeDaysRules(req, { days: 1 }), /لازم ترفع جدول الامتحانات مع الطلب/)
   rules.assertLeaveTypeDaysRules(req, { days: 1, attachmentRef: 'file:12' })
+  // نص مكتوب بالإيد مش مرفق: لازم مرجع ملف مرفوع فعلاً
+  rejects(() => rules.assertLeaveTypeDaysRules(req, { days: 1, attachmentRef: 'عندي الجدول' }), /لازم يكون ملف مرفوع فعلاً/)
+  rejects(() => rules.assertLeaveTypeDaysRules(req, { days: 1, attachmentRef: 'file:abc' }), /لازم يكون ملف مرفوع فعلاً/)
+  rules.assertLeaveTypeDaysRules(req, { days: 1, attachmentRef: '  file:12  ' })
   const above = type({ attachmentRule: 'REQUIRED_ABOVE_DAYS', attachmentAboveDays: 2, requiredAttachment: 'تقرير طبي' })
   rules.assertLeaveTypeDaysRules(above, { days: 2 })
   rejects(() => rules.assertLeaveTypeDaysRules(above, { days: 3 }), /تقرير طبي/)

@@ -63,3 +63,16 @@ export function attendanceDeductionDay(
     cappedAmount: 0,
     totalAmount: round2(latenessAmount + shortfallAmount + permissionAmount) }
 }
+
+/**
+ * نسبة عمود التأخير المحفوظ بين «التأخير» و«إذن بخصم» بلا تغيير قرش واحد: المجموع = العمود دائمًا.
+ * الإذن أولًا بمبلغه المطلوب (مقصوصًا على العمود) والباقي تأخير — زي «الانصراف المبكر» جوه عمود النقص:
+ * البند المحدد باسمه يبقى، والبند العام يمتص ما أسقطته حماية الصافي.
+ */
+export function splitLatenessPermission(column: number, permissionRequested: number): { lateness: number; permission: number } {
+  const columnCents = Math.round(round2(column) * 100)
+  const requestedCents = Math.max(0, Math.round(round2(permissionRequested) * 100))
+  const sign = columnCents < 0 ? -1 : 1
+  const permissionCents = sign * Math.min(Math.abs(columnCents), requestedCents)
+  return { lateness: (columnCents - permissionCents) / 100, permission: permissionCents / 100 }
+}

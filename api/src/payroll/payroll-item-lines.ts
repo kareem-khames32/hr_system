@@ -39,7 +39,7 @@ export interface PayrollLineItem {
 
 export const PAYROLL_LINE_NAMES = {
   BASIC: 'الأساسي', SALARY_ALLOWANCES: 'البدلات الثابتة', OVERTIME: 'الإضافي', HOLIDAY_WORK: HOLIDAY_WORK_LABEL, OTHER_ADDITIONS: 'إضافات أخرى',
-  LATENESS: 'التأخير', EARLY_LEAVE: 'الانصراف المبكر', SHORTFALL: 'نقص الساعات', ABSENCE: 'الغياب', UNPAID_LEAVE: 'إجازة بدون راتب',
+  LATENESS: 'التأخير', DEDUCT_PERMISSION: 'إذن بخصم', EARLY_LEAVE: 'الانصراف المبكر', SHORTFALL: 'نقص الساعات', ABSENCE: 'الغياب', UNPAID_LEAVE: 'إجازة بدون راتب',
   SUSPENSION: 'الإيقاف', SICK_LEAVE: 'خصم المرضية', OTHER_DEDUCTIONS: 'خصومات أخرى', LOAN: 'السلف', SOCIAL_INSURANCE: 'التأمينات (حصة الموظف)',
 } as const
 export const PAYROLL_LINE_TOTAL_NAMES = { earnings: 'إجمالي الاستحقاقات', deductions: 'إجمالي الاستقطاعات', net: 'الصافي' } as const
@@ -56,7 +56,7 @@ function lineRank(key: string): number {
   if (key.startsWith('BONUS:')) return 50
   if (key.startsWith('CREDIT:')) return 60
   if (key === 'OTHER_ADDITIONS') return 90
-  const fixed: Record<string, number> = { LATENESS: 100, EARLY_LEAVE: 101, SHORTFALL: 102, ABSENCE: 103, UNPAID_LEAVE: 104, SUSPENSION: 105, SICK_LEAVE: 106,
+  const fixed: Record<string, number> = { LATENESS: 100, DEDUCT_PERMISSION: 101, EARLY_LEAVE: 102, SHORTFALL: 103, ABSENCE: 104, UNPAID_LEAVE: 105, SUSPENSION: 106, SICK_LEAVE: 107,
     OTHER_DEDUCTIONS: 130, LOAN: 140, SOCIAL_INSURANCE: 150 }
   if (key in fixed) return fixed[key]
   if (key.startsWith('TYPED:')) return 110
@@ -153,6 +153,17 @@ function debitLine(fact: PayrollLineObligationFact | undefined): { key: string; 
   return { key: `DEBIT:${category}`, name: PAYROLL_OBLIGATION_CATEGORY_LABELS[category] ?? PAYROLL_LINE_NAMES.OTHER_DEDUCTIONS }
 }
 
+/**
+ * مبلغ «إذن بخصم» جوه عمود التأخير المحفوظ بالقرش، أو null لما البند ما يحملش التقسيم (كل المسيرات قبل هذا التغيير)
+ * فيظهر «التأخير» سطرًا واحدًا كما كان. مقصوص على العمود وبإشارته، فمجموع السطرين = العمود بالقرش دائمًا.
+ */
+function storedPermissionCents(breakdown: Record<string, any>, latenessColumn: number): number | null {
+  const stored = breakdown.attendanceDeductions?.totals?.permissionDeduction
+  if (typeof stored === 'number' ? !Number.isFinite(stored) : !(typeof stored === 'string' && stored.trim() !== '')) return null
+  const sign = latenessColumn < 0 ? -1 : 1
+  return sign * Math.min(Math.abs(latenessColumn), Math.max(0, Math.abs(cents(stored))))
+}
+
 /** أيام الوردية الثابتة (flexEnabled = false) من لقطة قواعد الحضور المحفوظة مع البند: نقصها بعد التأخير = انصراف مبكر. */
 function fixedShiftDates(breakdown: Record<string, any>): Set<string> {
   const dates = new Set<string>()
@@ -192,7 +203,12 @@ export function projectPayrollItemLines(item: PayrollLineItem, facts: ReadonlyMa
   mergeWithRemainder(earnings, credits, otherAdditions, 'OTHER_ADDITIONS', PAYROLL_LINE_NAMES.OTHER_ADDITIONS)
 
   // ===== الاستقطاعات =====
-  deductions.add('LATENESS', PAYROLL_LINE_NAMES.LATENESS, cents(item.latenessDeduction))
+  // عمود التأخير المحفوظ = خصم شرائح التأخير + خصم دقائق «إذن بخصم» بنفس القرش؛ التفصيل المحفوظ يقول كم منه إذن، فيبقى لكل واحد سطره باسمه.
+  // المسير الأقدم من التقسيم (بلا permissionDeduction في التفصيل) يفضل سطر «التأخير» واحد كما كان بالضبط — لا سطر «إذن بخصم» بصفر.
+  const latenessColumn = cents(item.latenessDeduction)
+  const permission = storedPermissionCents(breakdown, latenessColumn)
+  deductions.add('LATENESS', PAYROLL_LINE_NAMES.LATENESS, latenessColumn - (permission ?? 0))
+  if (permission !== null) deductions.add('DEDUCT_PERMISSION', PAYROLL_LINE_NAMES.DEDUCT_PERMISSION, permission)
   // عمود النقص = انصراف مبكر (أيام الوردية الثابتة) + نقص ساعات (المرنة)، بأيام الخصم المحفوظة بعد «شيل خصم»
   const shortfall = cents(item.shortfallDeduction)
   const fixed = fixedShiftDates(breakdown)

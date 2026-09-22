@@ -20,6 +20,7 @@ const { COMPANY_PROFILE_NEW_KEYS, COMPANY_PROFILE_FIELD_NAMES } = require('../sr
 
 // الملفات على القرص CRLF — أي فحص نصي يطبّع أولاً
 const source = file => fs.readFileSync(path.join(apiRoot, file), 'utf8').replace(/\r\n/g, '\n')
+const screen = file => fs.readFileSync(path.join(apiRoot, '..', file), 'utf8').replace(/\r\n/g, '\n')
 const seeded = new Map(configSeed.map(row => [row.key, row.value]))
 
 // ===== EntityManager مزيّف: بس اللي بيستخدمه applyGeneralGraceToAttendanceRules =====
@@ -146,6 +147,47 @@ test('الإصلاح 1: حفظ attendance.grace_minutes بيولّد النسخ�
   assert.ok(baselines > 0 && apply > baselines, 'الأساس القديم يُجمّد قبل توليد النسخة الجديدة')
   assert.ok(write > apply, 'النسخة المؤرخة قبل كتابة القيمة الجديدة، فلقطة «قبل» تحمل القيمة القديمة')
   assert.match(block, /attendanceRuleToday\(\)/, 'تاريخ السريان = تاريخ التغيير')
+})
+
+// الإعداد كان شغّالاً بلا مدخل: يُحفظ من PATCH /settings/config بس، و«أيام العمل والدوام» تعرضه للقراءة.
+test('الإصلاح 1: للسماحية العامة مدخل في «سياسات النظام» بحدودها الرقمية داخل مجموعة الحضور', () => {
+  const policies = screen('src/app/settings/policies/page.tsx')
+  assert.match(policies, /const GRACE_KEY = 'attendance\.grace_minutes'/, 'نفس المفتاح اللي الخادم بيحفظه — مش مفتاح تاني')
+  const attendance = policies.slice(policies.indexOf("title: 'الحضور والتأخير'"))
+  const group = attendance.slice(0, attendance.indexOf("title: 'نقص ساعات العمل والمرونة'"))
+  const field = group.slice(group.indexOf('{ key: GRACE_KEY,'))
+  const entry = field.slice(0, field.indexOf('\n'))
+  assert.ok(entry.includes("label: 'سماحية التأخير العامة'"), 'المدخل جوه مجموعة «الحضور والتأخير» نفسها')
+  assert.ok(entry.includes("type: 'number'") && entry.includes("unit: 'دقيقة'"), 'مدخل رقمي بالدقائق')
+  // الحد الأدنى مرآة NUMERIC_MIN في الخادم؛ والصحيح/1440 زي «سماحية نقص الساعات» المجاورة
+  assert.ok(entry.includes('min: 0') && entry.includes('max: 1440') && entry.includes('integer: true'), 'الحدود الرقمية على المدخل')
+  const controller = source('src/settings/settings.controller.ts')
+  const mins = controller.slice(controller.indexOf('NUMERIC_MIN'), controller.indexOf('ALLOWED_VALUES'))
+  assert.match(mins, /'attendance\.grace_minutes': 0,/, 'حد الشاشة الأدنى هو حد الخادم نفسه')
+  assert.equal(seeded.get('attendance.grace_minutes'), '10', 'المفتاح مبذور فالشاشة بتلاقيه في known')
+})
+
+test('الإصلاح 1: نصّ المدخل بيقول إنه من يوم التغيير وما بعده، وإن سماحية الوردية تعلو عليه', () => {
+  const policies = screen('src/app/settings/policies/page.tsx')
+  const attendance = policies.slice(policies.indexOf("title: 'الحضور والتأخير'"))
+  const copy = attendance.slice(0, attendance.indexOf("title: 'نقص ساعات العمل والمرونة'"))
+  assert.match(copy, /يسري من يوم حفظه وما بعده/, 'الملاحظة تقول من يوم التغيير')
+  assert.match(copy, /تسري من يوم التغيير وما بعده/, 'وتلميح المدخل كذلك')
+  assert.match(copy, /لا يُعاد حسابها/, 'الأيام السابقة ما بتتحسبش من جديد')
+  assert.match(copy, /تعلو على العامة/, 'سماحية الوردية تعلو على العامة')
+  assert.match(copy, /سماحية الوردية الخاصة تعلو عليها/)
+  // الملاحظة القديمة كانت توجّه لسماحية الوردية وحدها لأن العامة مكانش ليها مدخل
+  assert.ok(!copy.includes('سماحية التأخير تُضبط لكل وردية على حدة'), 'التوجيه القديم اختفى بعد ما بقى للعامة مدخل')
+})
+
+test('الإصلاح 1: «أيام العمل والدوام» تفضل عرضاً للقراءة وتدلّ على المدخل الجديد', () => {
+  const workDays = screen('src/app/settings/work-days/page.tsx')
+  const start = workDays.indexOf('سماحية التأخير العامة')
+  const card = workDays.slice(start, workDays.indexOf('<GraceOverridesNote', start))
+  assert.match(card, /href="\/settings\/policies"/, 'العرض للقراءة بيدلّ على شاشة السياسات')
+  assert.match(card, /يسري من يومه وما بعده، والأيام السابقة لا يُعاد حسابها/, 'نفس الكلام في الشاشتين')
+  assert.ok(!/updateConfig\(\s*'attendance\.grace_minutes'/.test(workDays), 'شاشة واحدة بس تحفظ المفتاح')
+  assert.ok(!/OVERTIME_EDIT_KEYS[^\n]*attendance\.grace_minutes/.test(workDays))
 })
 
 // ===== 2) مفتاح إيقاف خصم نقص الساعات =====

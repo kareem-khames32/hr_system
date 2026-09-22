@@ -56,6 +56,17 @@ export function leaveAttachmentRequiredNow(lt: LeaveRules | null | undefined, da
   return false
 }
 
+// قاعدة المرفق بنصها جنب زر الرفع — '' لو النوع مابيطلبش مرفق وقت التقديم (بعد الرجوع أو بلا مرفق)
+export function leaveAttachmentRuleText(lt?: LeaveRules | null): string {
+  const name = leaveAttachmentName(lt)
+  if (!name) return ''
+  if (lt?.attachmentRule === 'OPTIONAL') return `${name} اختياري مع الطلب`
+  if (lt?.attachmentRule === 'REQUIRED_ABOVE_DAYS') {
+    return `${name} مطلوب مع الطلب لو المدة أكتر من ${ruleNum(lt.attachmentAboveDays) ?? 0} يوم`
+  }
+  return `${name} مطلوب مع الطلب`
+}
+
 // سطر واحد بحدود النوع: الأيام، الإشعار، الأثر الرجعي، نص اليوم، المرفق
 export function leaveRulesHint(lt?: LeaveRules | null): string {
   if (!lt) return ''

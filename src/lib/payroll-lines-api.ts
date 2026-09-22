@@ -57,5 +57,17 @@ export function payrollItemColumnLines(item: ColumnAmounts): PayrollItemLines {
 
 /** المفاتيح اللي ليها سطر تفصيل تحت المبلغ في جدول المسير (الساعات والدقائق والأيام من أعمدة البند نفسه). */
 export const PAYROLL_LINE_KEYS = {
-  overtime: 'OVERTIME', lateness: 'LATENESS', shortfall: 'SHORTFALL', earlyLeave: 'EARLY_LEAVE', absence: 'ABSENCE', unpaidLeave: 'UNPAID_LEAVE', loan: 'LOAN',
+  overtime: 'OVERTIME', lateness: 'LATENESS', deductPermission: 'DEDUCT_PERMISSION', shortfall: 'SHORTFALL', earlyLeave: 'EARLY_LEAVE', absence: 'ABSENCE',
+  unpaidLeave: 'UNPAID_LEAVE', loan: 'LOAN',
 } as const
+
+/**
+ * دقائق «إذن بخصم» المحفوظة مع البند: عدّاد سطر «إذن بخصم» في جدول المسير، بينما عمود البند lateMinutes = دقائق التأخير الحقيقي.
+ * صفر للمسير الأقدم من التقسيم (lateMinutes عنده يجمع الاثنين وما عندهوش سطر «إذن بخصم» أصلًا، فيفضل معروضًا كما كان).
+ */
+export function payrollItemPermissionMinutes(item: { breakdown?: string | null }): number {
+  try {
+    const minutes = Number(JSON.parse(item.breakdown || '{}')?.attendanceDeductions?.totals?.permissionMinutes)
+    return Number.isFinite(minutes) && minutes > 0 ? minutes : 0
+  } catch { return 0 }
+}

@@ -25,6 +25,7 @@ import { statusLabels, type RequestStatus } from '@/data/requestsCatalog'
 import {
   leaveAttachmentName,
   leaveAttachmentRequiredNow,
+  leaveAttachmentRuleText,
   leaveCountsCalendarDays,
   leaveHalfDayAllowed,
   leaveRulesHint,
@@ -219,6 +220,8 @@ export default function LeaveRequestPage() {
   const attachmentRequired = leaveAttachmentRequiredNow(selectedLeaveType, effectiveDays)
     ? attachmentName
     : ''
+  // نص القاعدة جنب زر الرفع (مطلوب / اختياري / فوق N يوم)
+  const attachmentRuleText = leaveAttachmentRuleText(selectedLeaveType)
 
   // أول حقل ناقص يمنع «تقديم الطلب» — يظهر تحت الزر بدل ما يفضل رمادي من غير سبب
   const missingField = !formData.leaveType
@@ -229,7 +232,9 @@ export default function LeaveRequestPage() {
         ? 'تاريخ النهاية'
         : !formData.reason
           ? 'سبب الإجازة'
-          : ''
+          : attachmentRequired && !attachmentRef
+            ? `${attachmentRequired} (مرفق مطلوب مع الطلب)`
+            : ''
 
   // النوع مابيسمحش بنص يوم: نرجع ليوم كامل
   useEffect(() => {
@@ -525,19 +530,20 @@ export default function LeaveRequestPage() {
                 onChange={(e) => handleChange('contactNumber', e.target.value)}
               />
             </div>
+            {/* المرفق يظهر فقط لنوع بيطلبه مع الطلب (قاعدة شاشة أنواع الإجازات) */}
+            {attachmentName && (
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-sm font-medium text-gray-700 mb-1">
                 {attachmentRequired ? (
                   <>
                     مرفق مطلوب: {attachmentRequired}{' '}
                     <span className="text-red-500">*</span>
                   </>
-                ) : attachmentName ? (
-                  `مرفق: ${attachmentName} (اختياري)`
                 ) : (
-                  'مرفقات (اختياري)'
+                  `مرفق: ${attachmentName} (اختياري)`
                 )}
               </label>
+              <p className="text-xs text-gray-500 mb-2">{attachmentRuleText}</p>
               <div
                 className={`border-2 border-dashed rounded-xl p-6 text-center transition-colors ${
                   attachmentRequired && !attachmentRef
@@ -572,11 +578,12 @@ export default function LeaveRequestPage() {
                       />
                       {uploading ? 'جارٍ الرفع...' : 'اختر ملف'}
                     </label>
-                    <p className="text-xs text-gray-400 mt-2">PDF, JPG, PNG (الحد الأقصى 5MB)</p>
+                    <p className="text-xs text-gray-400 mt-2">PDF أو صورة أو Word (الحد الأقصى 10MB)</p>
                   </>
                 )}
               </div>
             </div>
+            )}
           </div>
         </div>
 
@@ -634,7 +641,9 @@ export default function LeaveRequestPage() {
                 !formData.reason ||
                 // كل الأيام عطلات، أو المدى نفسه مرفوض (400) — السيرفر سيرفض
                 effectiveDays === 0 ||
-                !!rangeError?.rejected
+                !!rangeError?.rejected ||
+                // مرفق النوع مطلوب مع الطلب ولم يُرفع — السيرفر يرفض التقديم
+                !!(attachmentRequired && !attachmentRef)
               }
             >
               <CheckCircle2 size={18} />

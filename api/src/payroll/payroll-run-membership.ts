@@ -96,7 +96,7 @@ export interface PayrollCoverageEmployee {
 
 /** سبب الاستبعاد بنص واضح على صف الموظف في المعاينة وفي جدول المسير. */
 export const PAYROLL_COVERAGE_EXCLUSION_MESSAGES: Record<string, string> = {
-  EXC_ARCHIVED_NO_LAST_DAY: 'مؤرشف بلا تاريخ آخر يوم عمل — حدده عشان راتبه يتحسب',
+  EXC_ARCHIVED_NO_LAST_DAY: 'مؤرشف بلا ملف إنهاء خدمة — افتح له ملف إنهاء خدمة بآخر يوم عمل عشان راتبه يتحسب',
   EXC_TERMINATED_BEFORE_PERIOD: 'انتهت خدمته قبل بداية الفترة؛ راتب آخر شهر في مسير الشهر اللي فيه آخر يوم عمل',
   EXC_JOINS_AFTER_PERIOD: 'بداية استحقاقه بعد نهاية الفترة',
   EXC_NO_ACTIVE_EMPLOYMENT: 'لا توجد مدة عمل مستحقة داخل الفترة',

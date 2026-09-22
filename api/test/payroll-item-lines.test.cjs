@@ -6,6 +6,7 @@ const assert = require('node:assert/strict')
 const path = require('node:path')
 require('../node_modules/ts-node').register({ project: path.join(__dirname, '..', 'tsconfig.json'), transpileOnly: true })
 const L = require('../src/payroll/payroll-item-lines')
+const { splitLatenessPermission } = require('../src/payroll/attendance-deductions')
 
 const cents = value => Math.round(Number(value ?? 0) * 100)
 const sumCents = lines => lines.reduce((sum, line) => sum + cents(line.amount), 0)
@@ -138,6 +139,73 @@ test('الانصراف المبكر ما يزيدش عن عمود النقص ب�
   assert.deepEqual(byKey(lines.deductions), { EARLY_LEAVE: 12 })
 })
 
+// ===== «إذن بخصم» سطر مستقل بجانب «التأخير» (بلا أي تغيير في المبلغ) =====
+// عمود التأخير المحفوظ يجمع خصم شرائح التأخير + خصم دقائق الإذن «بخصم». التفصيل المحفوظ بقى يقول كم منه إذن،
+// فبقى لكل واحد سطره: الموظف المعترض على «390 تأخير» يلاقي 270 تأخير + 120 إذن بخصم بدل رقم واحد ملخبط.
+const permissionItem = (latenessColumn, totals, extra = {}) => ({
+  basicSalary: '9000.00', latenessDeduction: latenessColumn, netPay: '0.00', ...extra,
+  breakdown: JSON.stringify({ attendanceDeductions: { days: [
+    { date: '2026-08-04', latenessAmount: 135, shortfallAmount: 0, permissionAmount: 0 },
+    { date: '2026-08-11', latenessAmount: 135, shortfallAmount: 0, permissionAmount: 0 },
+    { date: '2026-08-30', latenessAmount: 0, shortfallAmount: 0, permissionAmount: 120 },
+  ], totals } }),
+})
+
+test('شهر بتأخير وإذن بخصم: سطران مجموعهما = رقم «التأخير» القديم بالقرش، وعدّادا الدقائق منفصلان', () => {
+  // نفس شهر الإثبات: 390.00 كانت سطرًا واحدًا «التأخير» — 270.00 تأخير حقيقي (يومان × 135 دقيقة) + 120.00 إذن بخصم
+  const item = permissionItem('390.00', { lateMinutes: 270, permissionMinutes: 120, shortfallMinutes: 0,
+    latenessDeduction: 390, latenessOnlyDeduction: 270, permissionDeduction: 120 })
+  const lines = L.projectPayrollItemLines(item)
+  assertTotals(item, lines)
+  assert.deepEqual(lines.deductions.map(line => [line.key, line.name, line.amount]), [
+    ['LATENESS', 'التأخير', 270], ['DEDUCT_PERMISSION', 'إذن بخصم', 120],
+  ])
+  assert.equal(sumCents(lines.deductions), cents('390.00'), 'مجموع السطرين = عمود التأخير المحفوظ بالقرش')
+  // العدّادان محفوظان منفصلين: «دقائق التأخير» بقت التأخير الحقيقي بس، ودقائق الإذن سطرها
+  const totals = JSON.parse(item.breakdown).attendanceDeductions.totals
+  assert.deepEqual([totals.lateMinutes, totals.permissionMinutes], [270, 120])
+  assert.equal(totals.lateMinutes + totals.permissionMinutes, 390, 'المجموع = الرقم القديم المُلخبط')
+  assert.equal(totals.latenessOnlyDeduction + totals.permissionDeduction, totals.latenessDeduction)
+})
+
+test('مسير قديم بلا تقسيم محفوظ: «التأخير» يفضل سطرًا واحدًا كما هو — لا سطر «إذن بخصم» بصفر', () => {
+  // كل المسيرات المحفوظة قبل التغيير: التفصيل فيه أيام بمبالغ أذونات لكن بلا permissionDeduction في المجاميع
+  const legacy = permissionItem('390.00', { lateMinutes: 390, shortfallMinutes: 0, latenessDeduction: 390, shortfallDeduction: 0 })
+  const lines = L.projectPayrollItemLines(legacy)
+  assertTotals(legacy, lines)
+  assert.deepEqual(lines.deductions.map(line => [line.key, line.amount]), [['LATENESS', 390]])
+  // ولا تفصيل حضور أصلًا، أو تقسيم تالف (نص غير رقمي) → نفس السطر الواحد
+  for (const breakdown of [null, '{bad json', JSON.stringify({ attendanceDeductions: { totals: { permissionDeduction: 'x' } } })]) {
+    const item = { basicSalary: 0, latenessDeduction: '390.00', netPay: '-390.00', breakdown }
+    const single = L.projectPayrollItemLines(item)
+    assertTotals(item, single)
+    assert.deepEqual(single.deductions.map(line => [line.key, line.amount]), [['LATENESS', 390]], String(breakdown))
+  }
+  // مسير جديد بلا أي إذن: التقسيم محفوظ بصفر فيفضل سطر «التأخير» وحده (سطور الصفر ما تظهرش)
+  const noPermission = permissionItem('270.00', { lateMinutes: 270, permissionMinutes: 0, latenessDeduction: 270, latenessOnlyDeduction: 270, permissionDeduction: 0 })
+  assert.deepEqual(L.projectPayrollItemLines(noPermission).deductions.map(line => [line.key, line.amount]), [['LATENESS', 270]])
+})
+
+test('حماية الصافي قصّت عمود التأخير: الإذن بخصم ما يزيدش عن العمود ومجموع السطرين يساويه بالقرش', () => {
+  // العمود المصروف 100.00 بس (الباقي أسقطته حماية الصافي) والإذن المطلوب 120.00 → الإذن مقصوص والتأخير صفر
+  const cut = permissionItem('100.00', { lateMinutes: 270, permissionMinutes: 120, latenessDeduction: 100, latenessOnlyDeduction: 0, permissionDeduction: 120 })
+  const lines = L.projectPayrollItemLines(cut)
+  assertTotals(cut, lines)
+  assert.deepEqual(lines.deductions.map(line => [line.key, line.amount]), [['DEDUCT_PERMISSION', 100]])
+  // القاصم نفسه في الخادم: المجموع = العمود دائمًا مهما كان المطلوب
+  assert.deepEqual(splitLatenessPermission(390, 120), { lateness: 270, permission: 120 })
+  assert.deepEqual(splitLatenessPermission(100, 120), { lateness: 0, permission: 100 })
+  assert.deepEqual(splitLatenessPermission(0, 120), { lateness: 0, permission: 0 })
+  assert.deepEqual(splitLatenessPermission(56.25, 37.5), { lateness: 18.75, permission: 37.5 })
+  assert.deepEqual(splitLatenessPermission(390, 0), { lateness: 390, permission: 0 })
+  assert.deepEqual(splitLatenessPermission(-390, 120), { lateness: -270, permission: -120 }, 'بند بأرقام سالبة: نفس القسمة بالإشارة')
+  for (const [column, requested] of [[0.01, 0.02], [12.34, 5.67], [999.99, 999.98], [7.07, 7.07], [3, -5]]) {
+    const split = splitLatenessPermission(column, requested)
+    assert.equal(Math.round(split.lateness * 100) + Math.round(split.permission * 100), Math.round(column * 100), `${column}/${requested}`)
+    assert.ok(split.permission >= 0 && split.lateness >= 0)
+  }
+})
+
 test('المجاميع بالقرش لأي بيانات (عشوائي): مجموع البنود = الأعمدة المحفوظة والصافي كما هو', () => {
   let seed = 20260919
   const random = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648 }
@@ -164,7 +232,9 @@ test('المجاميع بالقرش لأي بيانات (عشوائي): مجمو
       breakdown: JSON.stringify({
         salaryComponents: [{ code: 'BASIC', earnedAmount: 1 }, { code: 'HOUSING', nameAr: 'بدل السكن', earnedAmount: housing }, { code: 'TRANSPORT', nameAr: 'بدل الانتقال', earnedAmount: transport }],
         attendanceRules: [{ date: '2026-09-01', snapshot: { flexEnabled: random() < 0.5 } }],
-        attendanceDeductions: { days: [{ date: '2026-09-01', shortfallAmount: random() * 120 }] },
+        // نصف الحالات بتقسيم «إذن بخصم» محفوظ (ومنه ما هو أكبر من العمود بعد حماية الصافي) والنصف بلا تقسيم (مسير قديم)
+        attendanceDeductions: { days: [{ date: '2026-09-01', shortfallAmount: random() * 120 }],
+          ...(random() < 0.5 ? { totals: { permissionDeduction: amount(150) } } : {}) },
         leaveDeductionLines: [{ code: 'UNPAID_LEAVE', amount: amount(300) }, { code: 'SICK_LEAVE_50', amount: amount(300) }],
         obligationLines,
       }),

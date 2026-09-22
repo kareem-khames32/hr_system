@@ -48,7 +48,11 @@ export class LeaveAttachmentsController {
     if (leave.attachmentStatus === 'MISSED') {
       throw new BadRequestException(`انتهت مهلة المرفق في ${leave.attachmentDueDate} وتحولت أيام الإجازة بدون راتب — راجع الموارد البشرية`)
     }
-    if (leave.attachmentStatus !== 'PENDING' && leave.attachmentStatus !== 'UPLOADED') throw new BadRequestException('هذه الإجازة لا تنتظر مرفقًا')
+    // بلا موعد تسليم = الإجازة لا تنتظر مرفقًا بعد الرجوع (نوعه «مع الطلب»، والملف جاء مع الطلب واعتمده المعتمِد):
+    // استبداله يكون بطلب جديد لا من هنا
+    if (!leave.attachmentDueDate || (leave.attachmentStatus !== 'PENDING' && leave.attachmentStatus !== 'UPLOADED')) {
+      throw new BadRequestException('هذه الإجازة لا تنتظر مرفقًا')
+    }
     if (leave.attachmentStatus === 'PENDING' && leaveAttachmentOverdue(leave.attachmentDueDate, localDateOf(new Date()))) {
       throw new BadRequestException(`انتهت مهلة المرفق في ${leave.attachmentDueDate} — تتحول أيام الإجازة بدون راتب`)
     }

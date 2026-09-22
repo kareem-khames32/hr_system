@@ -72,7 +72,7 @@ export const PAYROLL_SCOPE_LABELS: Record<string, string> = {
 
 export const PAYROLL_EXCLUSION_LABELS: Record<string, string> = {
   SUSPENDED: 'الموظف موقوف', ARCHIVED: 'ملف الموظف مؤرشف', EXC_JOINS_AFTER_PERIOD: 'بداية العمل بعد نهاية الفترة',
-  EXC_ARCHIVED_NO_LAST_DAY: 'مؤرشف بلا تاريخ آخر يوم عمل — حدده عشان راتبه يتحسب',
+  EXC_ARCHIVED_NO_LAST_DAY: 'مؤرشف بلا ملف إنهاء خدمة — افتح له ملف إنهاء خدمة بآخر يوم عمل عشان راتبه يتحسب',
   EXC_TERMINATED_BEFORE_PERIOD: 'انتهاء الخدمة قبل بداية الفترة', EXC_NO_ACTIVE_EMPLOYMENT: 'لا توجد مدة عمل مستحقة داخل الفترة',
   MANUAL: 'استبعاد يدوي', EXC_MANUAL: 'استبعاد يدوي', EXC_ALREADY_IN_RUN: 'مدرج في مسير آخر',
   // أكواد مصدر راتب شهر المسير (payroll-run-salary)

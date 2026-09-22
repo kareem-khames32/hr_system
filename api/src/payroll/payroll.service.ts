@@ -48,7 +48,7 @@ import { Team } from '../org/entities/team.entity'
 import { CostCenter } from '../assets/assets.entities'
 import { loadAttendanceExemptions, exemptionPolicyOnDate } from '../attendance/attendance-exemption-resolver'
 import { Request } from '../requests/entities/request.entity'
-import { attendanceDeductionDay, AttendanceDeductionPolicy } from './attendance-deductions'
+import { attendanceDeductionDay, AttendanceDeductionPolicy, splitLatenessPermission } from './attendance-deductions'
 import { computeSocialInsurance } from './social-insurance'
 import { readSocialInsuranceContext } from './social-insurance.service'
 import { readPayrollShadowAttendance } from './payroll-shadow-attendance'
@@ -820,10 +820,10 @@ export class PayrollService {
       const attRows = (await em.getRepository(AttendanceDay).find({
         where: { employeeId: emp.id, date: Between(coverFrom, coverTo) },
       })).filter(row => !policyOnDate(row.date).isExempt && !suspendedDates.has(row.date))
-      const lateMinutes = attRows.reduce(
-        (s, r) => s + r.lateMinutes + (r.deductibleMinutes ?? 0),
-        0
-      )
+      // «دقائق التأخير» = التأخير الحقيقي بس، ودقائق الإذن «بخصم» عدّاد مستقل يحمله سطر «إذن بخصم»:
+      // الموظف المعترض على رقم التأخير يلاقيه في كشف حضوره، والإدارة تفرّق بين تأخير وإذن.
+      const lateMinutes = attRows.reduce((s, r) => s + r.lateMinutes, 0)
+      const permissionMinutes = attRows.reduce((s, r) => s + (r.deductibleMinutes ?? 0), 0)
       // خصم التأخير بالشرائح: كل يوم متأخر على حدة (كسر يوم أو بالدقيقة)، +
       // دقائق الإذن «بخصم» بالدقيقة. بلا شرائح → بالدقيقة (السلوك الافتراضي)
       const attendancePolicy: AttendanceDeductionPolicy = { schemaVersion: 1, lateEnabled,
@@ -838,7 +838,8 @@ export class PayrollService {
         return waiveAttendanceDeductionDay({ ...attendanceDeductionDay(row, attendancePolicy, tier.amount), latenessTier: tier.trace }, waived,
           row.attendanceRuleSnapshot?.flexEnabled === false)
       })
-      // المجموع التاريخي يشمل الأذونات المدفوعة؛ تفصيل اليوم يميز مبلغها صراحةً.
+      // المجموع المالي (عمود التأخير وحماية الصافي والإعفاء والظل) يشمل الأذونات المدفوعة كما كان — ولا قرش يتغير.
+      // التقسيم بين سطري القسيمة «التأخير» و«إذن بخصم» يتحسب تحت من نفس الأيام بعد ما يستقر المبلغ المصروف.
       const latenessRequested = round2(attendanceDeductionDays.reduce((sum, day) => sum + day.latenessAmount + day.permissionAmount, 0))
       const shortfallMinutes = attRows.reduce((sum, day) => sum + Number(day.shortfallMinutes ?? 0), 0)
       const shortfallRequested = round2(attendanceDeductionDays.reduce((sum, day) => sum + day.shortfallAmount, 0))
@@ -929,6 +930,14 @@ export class PayrollService {
         debits: pendingObligations.filter((o) => o.type === 'DEBIT').map(o => ({ ...obligationEntry(o), ...exemptionFacts.get(o.id), label: o.label })),
         unpaidLeave: unpaidDeduction })
       const exemptedDebits = exemption.debits.map(({ deductionTypeId: _typeId, isExemptable: _exemptable, typeName: _typeName, label: _label, creatorUserId: _creator, ...entry }) => entry)
+      // مبلغ «إذن بخصم» المطلوب بعد الإعفاء: إعفاء «تأخير يوم» يُسقط اليومَ بشقيه (الشريحة والإذن)، فيسقط إذنه معه.
+      // إعفاء كل التأخير أو كل الخصومات يصفّر العمود كله فالتقسيم تحت بيقصّ الإذن على العمود بلا حاجة لحساب خاص.
+      const latenessExemptDates = new Set(exemptionRules
+        .filter(rule => rule.scopeKind === 'SINGLE_ENTRY' && rule.targetKind === 'LATENESS_DAY' && rule.targetRef)
+        .map(rule => rule.targetRef as string))
+      const permissionRequested = round2(attendanceDeductionDays
+        .filter(day => !latenessExemptDates.has(day.date))
+        .reduce((sum, day) => sum + day.permissionAmount, 0))
       const protectionInput = {
         earnedFixedGross: grossEarned, overtime: otAmount, unpaidLeave: unpaidDeduction,
         attendance: exemption.attendance,
@@ -1036,6 +1045,8 @@ export class PayrollService {
         }
       }
       totalNet = round2(totalNet + paid.netPay)
+      // تقسيم عمود التأخير المصروف بين سطري القسيمة «التأخير» و«إذن بخصم» (المجموع = العمود بالقرش، فالصافي وإجمالي الخصم ما يتغيرانش).
+      const latenessSplit = splitLatenessPermission(paid.latenessDeduction, permissionRequested)
       const leaveLinesAll = payrollLeaveDeductionLines(paid.unpaidDeduction, unpaidOnlyDeduction, unpaidDays, sick.lines)
       const leaveLines = { ...leaveLinesAll, lines: withSuspensionLine(leaveLinesAll.lines, suspension.days) }
 
@@ -1078,7 +1089,11 @@ export class PayrollService {
             prorationBasis: 'MONTHLY_DAYS',
             attendanceExemptions,
             attendanceDeductions: { policy: attendancePolicy, days: attendanceDeductionDays,
-              totals: { lateMinutes, shortfallMinutes, latenessDeduction: paid.latenessDeduction, shortfallDeduction: paid.shortfallDeduction },
+              // latenessDeduction = العمود المحفوظ كما هو (تأخير + إذن بخصم)، وتحته تقسيمه بالقرش:
+              // latenessOnlyDeduction + permissionDeduction = latenessDeduction دائمًا، ومنهم سطرا القسيمة.
+              totals: { lateMinutes, permissionMinutes, shortfallMinutes, latenessDeduction: paid.latenessDeduction,
+                latenessOnlyDeduction: latenessSplit.lateness, permissionDeduction: latenessSplit.permission,
+                shortfallDeduction: paid.shortfallDeduction },
               // الخطوة 21: مجموعة الشرائح المؤرخة المطبقة (من لقطة السياسة)
               latenessTierSet: { setId: policySnapshot.latenessTiers.setId, effectivePeriod: policySnapshot.latenessTiers.effectivePeriod, contentHash: policySnapshot.latenessTiers.contentHash } },
             attendanceRules: attRows.map(row => this.attendanceRuleTrace(row)),

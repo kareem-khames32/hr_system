@@ -311,7 +311,7 @@ test('Step 17 acceptance: the membership preview is read-only with codes, covera
   assert.equal(excluded(broken.id).code, 'EXC_EMPLOYMENT_DATA_INVALID'); assert.ok(excluded(broken.id).dataProblem); assert.match(excluded(broken.id).message, new RegExp(broken.employeeCode))
   // قرار المالك (20 سبتمبر): المؤرشف بلا تاريخ آخر يوم عمل مستبعد بسبب يقول له يعمل إيه، مش بكود «مؤرشف» مبهم
   assert.equal(excluded(archived.id).code, 'EXC_ARCHIVED_NO_LAST_DAY')
-  assert.equal(excluded(archived.id).message, 'مؤرشف بلا تاريخ آخر يوم عمل — حدده عشان راتبه يتحسب')
+  assert.equal(excluded(archived.id).message, 'مؤرشف بلا ملف إنهاء خدمة — افتح له ملف إنهاء خدمة بآخر يوم عمل عشان راتبه يتحسب')
   assert.equal(preview.totals.candidates, 6); assert.equal(preview.totals.included + preview.totals.excluded, 6)
   assert.deepEqual([preview.totals.partial, preview.totals.alreadyInRun, preview.totals.dataProblems], [1, 1, 1])
   assert.ok(preview.excluded.every(row => row.code), 'every excluded row carries a code')

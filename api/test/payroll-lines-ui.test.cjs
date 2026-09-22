@@ -46,6 +46,27 @@ test('القسيمة وتابتا الشهر: بنود الخادم بأسمائ
   for (const route of ['/payroll/runs/${runId}/lines', '/payroll/overview/lines?period=']) assert.ok(lib.includes(route), route)
 })
 
+test('«إذن بخصم» في الواجهة: عموده ودقائقه في جدول المسير، وسطره في القسيمة تحت قرار إلغاء التأخير نفسه', () => {
+  const page = read('src/app/payroll/page.tsx').replace(/\r\n/g, '\n')
+  // عمود «إذن بخصم» بييجي من بنود الخادم زي أي بند؛ اللي تكتبه الشاشة هو دقائقه تحت مبلغه
+  assert.ok(page.includes('PAYROLL_LINE_KEYS.deductPermission'), 'سطر دقائق الإذن بخصم في خلية البند')
+  assert.ok(page.includes('payrollItemPermissionMinutes(item)'))
+  // «دقائق التأخير» بقت عدّاد التأخير وحده (عمود البند نفسه) — بلا جمع الإذن جواها
+  assert.match(page, /PAYROLL_LINE_KEYS\.lateness && n\(item\.lateMinutes\) > 0/)
+  assert.equal(lines.PAYROLL_LINE_KEYS.deductPermission, 'DEDUCT_PERMISSION')
+  assert.equal(lines.payrollItemPermissionMinutes({ breakdown: JSON.stringify({ attendanceDeductions: { totals: { permissionMinutes: 120 } } }) }), 120)
+  for (const breakdown of [null, '', '{bad json', JSON.stringify({ attendanceDeductions: { totals: {} } })]) {
+    assert.equal(lines.payrollItemPermissionMinutes({ breakdown }), 0, String(breakdown))
+  }
+  // القسيمة: سطر الإذن بخصم تحت نفس قرار «إلغاء خصم التأخير» (الإلغاء بيشيل الاثنين)
+  const payslip = read('src/app/payroll/payslip/[id]/page.tsx').replace(/\r\n/g, '\n')
+  assert.ok(payslip.includes("key === 'LATENESS' || key === 'DEDUCT_PERMISSION' ? 'LATENESS'"))
+  // «شيل خصم»: المبلغ القابل للإلغاء في بند التأخير = سطر التأخير + سطر الإذن بخصم
+  const panel = read('src/components/payroll/PayrollFinancialExemptionsPanel.tsx').replace(/\r\n/g, '\n')
+  assert.ok(panel.includes("lineAmountOf(lines, 'DEDUCT_PERMISSION')"))
+  assert.ok(panel.includes("sumMoney([lineAmountOf(lines, 'LATENESS'), permissionAmount])"))
+})
+
 test('إجماليات الأعمدة بالقرش، والاحتياطي من أعمدة البند بنفس المجاميع', () => {
   const rows = [
     { earnings: [{ key: 'BASIC', name: 'الأساسي', amount: 0.1 }, { key: 'ALLOWANCE:بدل وجبات', name: 'بدل وجبات', amount: 0.2 }], deductions: [{ key: 'TYPED:الجودة', name: 'الجودة', amount: 10.05 }] },

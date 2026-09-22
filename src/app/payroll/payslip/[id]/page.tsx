@@ -36,9 +36,10 @@ import { PAY_CHANNEL_LABELS, type PayrollPayChannel, type PayrollRunScreenFields
 // طلب المالك 19 سبتمبر: الاستحقاقات والاستقطاعات بندًا بندًا بأسمائها من الخادم (نفس جدول المسير وتصديره)
 import { PAYROLL_LINE_GROUP_LABELS, PAYROLL_LINE_TOTAL_LABELS, payrollItemColumnLines, type PayrollItemLines } from '@/lib/payroll-lines-api'
 
-// سطر الخصم اللي عليه ملاحظة الإلغاء («الأصل قبل الإلغاء — أُلغي منه»): التأخير، والنقص بنوعيه، والغياب، والخصومات المسجلة كلها نوع واحد، والسلف
+// سطر الخصم اللي عليه ملاحظة الإلغاء («الأصل قبل الإلغاء — أُلغي منه»): التأخير (وإذنه بخصم نوع واحد في قرار الإلغاء)،
+// والنقص بنوعيه، والغياب، والخصومات المسجلة كلها نوع واحد، والسلف
 const exemptionComponentOf = (key: string): ExemptionComponent | undefined =>
-  key === 'LATENESS' ? 'LATENESS' : key === 'SHORTFALL' || key === 'EARLY_LEAVE' ? 'SHORTFALL' : key === 'ABSENCE' ? 'ABSENCE'
+  key === 'LATENESS' || key === 'DEDUCT_PERMISSION' ? 'LATENESS' : key === 'SHORTFALL' || key === 'EARLY_LEAVE' ? 'SHORTFALL' : key === 'ABSENCE' ? 'ABSENCE'
     : key === 'LOAN' ? 'LOAN' : key.startsWith('TYPED:') ? 'TYPED' : undefined
 // خصم اتلغى بالكامل ما بيطلعش بند؛ سطره يفضل ظاهر بصفر عشان يقول إنه اتلغى
 const EXEMPTION_LINE_NAMES: Array<[ExemptionComponent, string]> = [['LATENESS', 'التأخير'], ['SHORTFALL', 'نقص الساعات'], ['ABSENCE', 'الغياب'], ['TYPED', 'الخصومات المسجلة'], ['LOAN', 'السلف']]

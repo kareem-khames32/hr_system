@@ -107,8 +107,14 @@ export function assertLeaveTypeDaysRules(
       )
     }
   }
-  if (leaveAttachmentRequiredAtSubmit(lt, days) && !String(input.attachmentRef ?? '').trim()) {
+  if (leaveAttachmentRequiredAtSubmit(lt, days)) {
+    // المرجع لازم يكون ملف مرفوع فعلاً (file:رقم من POST /files/upload) — نص مكتوب بالإيد
+    // كان بيعدّي كأنه مرفق ويسيب الاعتماد بلا مستند
+    const ref = String(input.attachmentRef ?? '').trim()
     const label = String(lt.requiredAttachment ?? '').trim() || 'مستند داعم'
-    throw new BadRequestException(`«${name}» لازم ترفع ${label} مع الطلب`)
+    if (!ref) throw new BadRequestException(`«${name}» لازم ترفع ${label} مع الطلب`)
+    if (!/^file:\d+$/.test(ref)) {
+      throw new BadRequestException(`«${name}»: ${label} لازم يكون ملف مرفوع فعلاً مع الطلب — ارفعه من زر المرفق`)
+    }
   }
 }

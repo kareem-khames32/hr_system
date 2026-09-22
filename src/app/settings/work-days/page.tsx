@@ -570,6 +570,14 @@ export default function WorkDaysSettingsPage() {
                   <p className="text-lg font-bold text-gray-800">
                     {configValue('attendance.grace_minutes') ?? '—'} دقيقة
                   </p>
+                  {/* مدخل واحد للقيمة: تُضبط من «سياسات النظام» وتُعرض هنا للقراءة، فلا شاشتان تحفظان نفس المفتاح */}
+                  <p className="text-xs text-gray-500 mt-1">
+                    تُضبط من{' '}
+                    <Link href="/settings/policies" className="text-primary-600 hover:underline">
+                      سياسات النظام
+                    </Link>
+                    {' '}— التغيير يسري من يومه وما بعده، والأيام السابقة لا يُعاد حسابها.
+                  </p>
                   {/* العامة ليست الساري على الجميع: سماحية الوردية تغلبها */}
                   <GraceOverridesNote globalGrace={configValue('attendance.grace_minutes')} />
                 </div>

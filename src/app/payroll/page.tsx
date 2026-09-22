@@ -34,7 +34,7 @@ import {
 } from '@/lib/payroll-runs-api'
 // طلب المالك 19 سبتمبر: كل بند استحقاق واستقطاع عمود باسمه (من تقسيم الخادم للبند المحفوظ)
 import {
-  fetchPayrollRunLines, PAYROLL_LINE_GROUP_LABELS, PAYROLL_LINE_KEYS, PAYROLL_LINE_TOTAL_LABELS, payrollLineAmount, payrollLineColumnTotals,
+  fetchPayrollRunLines, PAYROLL_LINE_GROUP_LABELS, PAYROLL_LINE_KEYS, PAYROLL_LINE_TOTAL_LABELS, payrollItemPermissionMinutes, payrollLineAmount, payrollLineColumnTotals,
   type PayrollLineColumn, type PayrollRunLines,
 } from '@/lib/payroll-lines-api'
 import { PayrollRunDefinitionPanel, type PayrollRunDefinitionInitial } from '@/components/payroll/PayrollRunDefinitionPanel'
@@ -594,6 +594,11 @@ export default function PayrollPage() {
       <PayrollOvertimeBreakdown item={item} currency={currency} compact />
     </>
     if (key === PAYROLL_LINE_KEYS.lateness && n(item.lateMinutes) > 0) return <span className="text-xs text-danger-600">{n(item.lateMinutes)} دقيقة</span>
+    // «إذن بخصم» سطر مستقل بجانب «التأخير»: دقائقه من تفصيل البند، ودقائق التأخير في عمودها ما بقتش تجمع الاثنين
+    if (key === PAYROLL_LINE_KEYS.deductPermission) {
+      const minutes = payrollItemPermissionMinutes(item)
+      return minutes > 0 ? <span className="text-xs text-danger-600">{minutes} دقيقة</span> : null
+    }
     if (key === (deductionColumns.some(column => column.key === PAYROLL_LINE_KEYS.shortfall) ? PAYROLL_LINE_KEYS.shortfall : PAYROLL_LINE_KEYS.earlyLeave) && n(item.shortfallMinutes) > 0) {
       return <span className="text-xs text-gray-500">{n(item.shortfallMinutes)} دقيقة نقص مرصود</span>
     }

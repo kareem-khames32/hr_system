@@ -11,7 +11,7 @@ import OvertimePreview from '@/components/OvertimePreview'
 import OvertimeRequestSummary from '@/components/OvertimeRequestSummary'
 import TimeSelect, { normalizeTime, timeSpanMinutes } from '@/components/TimeSelect'
 import { payloadFieldKind, payloadFieldLabel, payloadNumberProps, payloadSummary, payloadValueLabel } from '@/lib/request-payload'
-import { leaveAttachmentName, leaveAttachmentRequiredNow, leaveCountsCalendarDays as countsCalendarDaysOf, leaveHalfDayAllowed, leaveRulesHint } from '@/lib/leave-catalog'
+import { leaveAttachmentName, leaveAttachmentRequiredNow, leaveAttachmentRuleText, leaveCountsCalendarDays as countsCalendarDaysOf, leaveHalfDayAllowed, leaveRulesHint } from '@/lib/leave-catalog'
 import { salaryIncreaseRequestFields, salaryIncreaseRequestPayload } from '@/lib/employee-salary-change-api'
 import {
   Plus,
@@ -624,6 +624,7 @@ export default function MyRequestsPage() {
   const leaveAttachmentLabel = leaveAttachmentName(selectedLeaveTypeDef)
   const leaveDaysNow = isHalfDay ? 0.5 : (fieldValues.days ?? '').trim() === '' ? null : Number(fieldValues.days)
   const leaveAttachmentRequired = leaveAttachmentRequiredNow(selectedLeaveTypeDef, leaveDaysNow) ? leaveAttachmentLabel : ''
+  const leaveAttachmentRuleHint = leaveAttachmentRuleText(selectedLeaveTypeDef)
   // النوع مابيسمحش بنص يوم: نرجع ليوم كامل
   useEffect(() => {
     if (isLeave && !leaveHalfDayOk && leavePeriod !== 'FULL') changeLeavePeriod('FULL')
@@ -2175,7 +2176,7 @@ export default function MyRequestsPage() {
                 {/* مرفق إجباري لنوع الإجازة المختار (تقرير طبي/عقد زواج…) */}
                 {selectedType && isLeave && leaveAttachmentLabel && (
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label className="block text-sm font-medium text-gray-700 mb-1">
                       {leaveAttachmentRequired ? (
                         <>
                           مرفق مطلوب: {leaveAttachmentRequired}{' '}
@@ -2185,6 +2186,8 @@ export default function MyRequestsPage() {
                         `مرفق: ${leaveAttachmentLabel} (اختياري)`
                       )}
                     </label>
+                    {/* قاعدة النوع بنصها جنب زر الرفع (مطلوب / اختياري / فوق N يوم) */}
+                    <p className="text-xs text-gray-500 mb-2">{leaveAttachmentRuleHint}</p>
                     <div className="border-2 border-dashed border-gray-300 rounded-xl p-4 text-center hover:border-primary-500 transition-colors">
                       {fieldValues.attachmentUrl ? (
                         <div className="flex items-center justify-center gap-2 text-success-700 text-sm">
@@ -2251,7 +2254,10 @@ export default function MyRequestsPage() {
                 <button
                   onClick={handleSubmit}
                   className="btn-primary flex items-center gap-2"
-                  disabled={!selectedTypeDef || submitting || uploadingField !== null || (isOvertime && (overtimePreviewLoading || !overtimePreviewCurrent || !overtimePreview?.canSubmit))}
+                  disabled={!selectedTypeDef || submitting || uploadingField !== null
+                    // مرفق نوع الإجازة مطلوب مع الطلب ولم يُرفع — السيرفر يرفض التقديم
+                    || !!(leaveAttachmentRequired && !(fieldValues.attachmentUrl ?? '').trim())
+                    || (isOvertime && (overtimePreviewLoading || !overtimePreviewCurrent || !overtimePreview?.canSubmit))}
                 >
                   <Send size={16} />
                   {submitting ? 'جارٍ الإرسال...' : 'إرسال الطلب'}

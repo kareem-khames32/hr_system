@@ -83,6 +83,16 @@ test('attachment after return: PENDING until toDate + deadline only when the rul
   assert.equal(rules.initialLeaveAttachment(above, { toDate: '2026-06-28', days: 2 }), null)
   assert.equal(rules.initialLeaveAttachment(above, { toDate: '2026-12-28', days: 3 }).attachmentDueDate, '2027-01-04')
   assert.equal(rules.initialLeaveAttachment({ ...afterReturn, attachmentDeadlineDays: null }, { toDate: '2026-06-28', days: 1 }).attachmentDueDate, '2026-07-05')
+  // مرفق جاء مع الطلب: يُسجَّل على سجل الإجازة في نفس الحقل بلا موعد تسليم (لا مهلة ولا تحويل بدون راتب)
+  const withRequest = { ...afterReturn, attachmentTiming: 'WITH_REQUEST' }
+  assert.deepEqual(rules.initialLeaveAttachment(withRequest, { toDate: '2026-06-28', days: 3 }, 'file:12'),
+    { attachmentStatus: 'UPLOADED', attachmentDueDate: null, attachmentRef: 'file:12' })
+  assert.deepEqual(rules.initialLeaveAttachment({ ...withRequest, attachmentRule: 'OPTIONAL' }, { toDate: '2026-06-28', days: 1 }, 'file:13'),
+    { attachmentStatus: 'UPLOADED', attachmentDueDate: null, attachmentRef: 'file:13' })
+  assert.deepEqual(rules.initialLeaveAttachment({ ...withRequest, attachmentRule: 'NONE' }, { toDate: '2026-06-28', days: 1 }, '  file:14  '),
+    { attachmentStatus: 'UPLOADED', attachmentDueDate: null, attachmentRef: 'file:14' })
+  assert.equal(rules.initialLeaveAttachment(withRequest, { toDate: '2026-06-28', days: 3 }, '   '), null)
+  assert.equal(rules.initialLeaveAttachment(null, { toDate: '2026-06-28', days: 3 }, 'file:15').attachmentRef, 'file:15')
   assert.equal(rules.leaveAttachmentOverdue('2026-07-05', '2026-07-05'), false)
   assert.equal(rules.leaveAttachmentOverdue('2026-07-05', '2026-07-06'), true)
   assert.equal(rules.leaveAttachmentOverdue(null, '2026-07-06'), false)

@@ -25,7 +25,7 @@ import {
   type RunExemptionsView,
 } from '@/lib/financial-exemptions-api'
 import { createDeductionWaiver, fetchDeductionWaivers, type DeductionKind, type DeductionWaiverRow } from '@/lib/payroll-overview-api'
-import { formatMoney } from '@/lib/money'
+import { formatMoney, sumMoney } from '@/lib/money'
 
 // الخطوة 26 — الإعفاء المالي على شاشة المسير (EX-01..08): منفصل عن استثناء الحضور. يُسقط عن موظف في هذا المسير خصمًا واحدًا أو نوع خصم
 // أو كل الخصومات القابلة للإعفاء؛ أقساط السلف تُؤجل ولا تُسقط، والنظامي والقضائي وغير القابل والاستردادات والإجازة بلا أجر تبقى.
@@ -68,8 +68,11 @@ export function PayrollRemoveDeductionModal({ runId, period, employeeId, employe
   runId: number; period: string; employeeId: number; employeeName: string; employeeBranchId: number | null
   lines: readonly RunDeductionLine[]; onClose: () => void; onGranted: () => Promise<void> | void
 }) {
+  // «إذن بخصم» سطر مستقل في الصف، لكنه جوه بند إعفاء «كل خصم التأخير» في الخادم (اليوم المُعفى يسقط بشقيه)،
+  // فالمبلغ القابل للإلغاء = سطر التأخير + سطر الإذن بخصم — وإلا ما ينفعش يُشال إذن بخصم بلا تأخير.
+  const permissionAmount = lineAmountOf(lines, 'DEDUCT_PERMISSION')
   const amounts: RemovableAttendanceAmounts = {
-    lateness: lineAmountOf(lines, 'LATENESS'), shortfall: lineAmountOf(lines, 'SHORTFALL'), absence: lineAmountOf(lines, 'ABSENCE'),
+    lateness: sumMoney([lineAmountOf(lines, 'LATENESS'), permissionAmount]), shortfall: lineAmountOf(lines, 'SHORTFALL'), absence: lineAmountOf(lines, 'ABSENCE'),
   }
   const [entries, setEntries] = useState<ExemptionEmployeeEntries | null>(null)
   const [waivers, setWaivers] = useState<DeductionWaiverRow[]>([])
@@ -112,7 +115,7 @@ export function PayrollRemoveDeductionModal({ runId, period, employeeId, employe
       label: `${line.name} — ${formatMoney(line.amount)}`, input: { waiverKind: kind } }]
   })
   const options: RemovalOption[] = entries ? [
-    ...attendance('LATENESS', 'خصم التأخير', amounts.lateness),
+    ...attendance('LATENESS', permissionAmount > 0 ? 'خصم التأخير والإذن بخصم' : 'خصم التأخير', amounts.lateness),
     ...attendance('SHORTFALL', 'خصم نقص ساعات العمل', amounts.shortfall),
     ...attendance('ABSENCE', 'خصم الغياب', amounts.absence),
     ...waiverOptions,

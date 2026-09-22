@@ -56,6 +56,10 @@ interface PolicyGroup {
 const WEEKEND_KEY = 'attendance.weekend_days'
 const DEVICE_KEY = 'attendance.device_key'
 const CYCLE_KEY = 'payroll.cycle_start_day'
+// سماحية التأخير العامة: كان مفيش مدخل ليها في أي شاشة (بتتغير من PATCH /settings/config بس)
+// و«أيام العمل والدوام» بتعرضها للقراءة. حفظها بيضيف نسخة مؤرخة لكل تعريف دوام من تاريخ
+// التغيير (applyGeneralGraceToAttendanceRules)، فالأيام الأقدم تفضل على نسختها بقيمتها القديمة.
+const GRACE_KEY = 'attendance.grace_minutes'
 const deviceKeyWeak = (value: string) => !!value.trim() && (value.trim() === 'zk-device-key-change-me' || value.trim().length < 24)
 const WEEK_CODES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
 const WEEK_DAY_NAMES: Record<string, string> = { SUN: 'الأحد', MON: 'الاثنين', TUE: 'الثلاثاء', WED: 'الأربعاء', THU: 'الخميس', FRI: 'الجمعة', SAT: 'السبت' }
@@ -96,8 +100,11 @@ const GROUPS: PolicyGroup[] = [
     icon: Clock,
     iconBg: 'bg-blue-50',
     iconColor: 'text-blue-500',
-    note: 'سماحية التأخير تُضبط لكل وردية على حدة من شاشة «الورديات».',
+    note: 'سماحية التأخير العامة تُضبط من هنا: التغيير يسري من يوم حفظه وما بعده، والأيام السابقة تبقى بسماحيتها القديمة ولا يُعاد حسابها. الوردية التي لها سماحية خاصة من شاشة «الورديات» تعلو على العامة.',
     fields: [
+      // من يوم التغيير وما بعده فقط: الحفظ يضيف نسخة مؤرخة لكل تعريف دوام بتاريخ اليوم،
+      // والأيام الأقدم تفضل على نسختها القديمة. سماحية الوردية (graceMinutes) تعلو على العامة.
+      { key: GRACE_KEY, label: 'سماحية التأخير العامة', type: 'number', unit: 'دقيقة', min: 0, max: 1440, integer: true, hint: 'تسري من يوم التغيير وما بعده — الأيام السابقة لا يُعاد حسابها ولا تتغير خصوماتها. سماحية الوردية الخاصة تعلو عليها.' },
       { key: 'attendance.weekend_days', label: 'أيام نهاية الأسبوع', type: 'text', hint: 'اختر يوم الإجازة الأسبوعية أو أكثر (لا تُختار كل الأيام). يتجاوزها الفرع من شاشة «الفروع»' },
       { key: 'attendance.absence_catchup_max_days', label: 'حد استدراك تسجيل الغياب', type: 'number', unit: 'يوم', min: 1, max: 366, integer: true, hint: 'أقصى عدد أيام تُراجع بعد توقف الخادم، من 1 إلى 366 يوماً.' },
       { key: DEVICE_KEY, label: 'مفتاح استقبال البصمات', type: 'secret', hint: 'يُستخدم في إعداد الجهاز أو الوسيط. اتركه فارغاً لإيقاف استقبال البصمات.' },
@@ -678,7 +685,7 @@ export default function PoliciesPage() {
                       {g.note}
                     </p>
                   )}
-                  {g.title === 'الحضور والتأخير' && <GraceOverridesNote globalGrace={values['attendance.grace_minutes']} />}
+                  {g.title === 'الحضور والتأخير' && <GraceOverridesNote globalGrace={values[GRACE_KEY]} />}
                   {g.title === 'الحضور والتأخير' && <div className="space-y-3 mb-4">
                     <CalendarScopeConfirmation key={calendarRefresh} scope="GLOBAL" sourceId={0} canConfirm={can('settings.manage') && calendarScopeWritable('GLOBAL', 0)} disabled={saving || dirtyKeys.includes(WEEKEND_KEY)} onConfirmed={calendar.reload} />
                     {dirtyKeys.includes(WEEKEND_KEY) && <><CalendarContextSummary context={calendar.context} loading={calendar.loading} error={calendar.error} /><CalendarChangeFields context={calendar.context} value={calendar.evidence} onChange={calendar.setEvidence} disabled={saving} /></>}
