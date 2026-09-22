@@ -906,7 +906,9 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.gosiBaseSalary !== '') payload.gosiBaseSalary = Number(form.gosiBaseSalary)
     // ===== إصلاحات ذهاب/عودة — حقول مستقلة (بجانب سلوك الـfallback الحالي) =====
     if (form.fingerprintCode.trim()) payload.fingerprintCode = form.fingerprintCode.trim()
+    // التعديل: الخانة اللي اتفضّت = مسح فعلي (زي بريد العمل)، مش تجاهل — وإلا القيمة القديمة تفضل محبوسة
     if (form.personalEmail.trim()) payload.personalEmail = form.personalEmail.trim()
+    else if (mode === 'edit' && (initial?.personalEmail ?? '') !== '') payload.personalEmail = null
     if (mode === 'add' && form.phoneAllowance !== '') payload.phoneAllowance = Number(form.phoneAllowance)
     if (mode === 'add' && form.workNatureAllowance !== '')
       payload.workNatureAllowance = Number(form.workNatureAllowance)
@@ -1310,6 +1312,16 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                     <input type="email" className="input pl-10" placeholder="email@example.com" dir="ltr" value={form.personalEmail} onChange={(e) => setField('personalEmail', e.target.value)} />
                     <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
                   </div>
+                </div>
+                {/* بريد العمل كان في قسم لوحده في خطوة تانية فمحدش بيلاقيه، وهو اللي بيتطابق
+                    بيه حساب الدومين — فمكانه الطبيعي جنب البريد الشخصي في معلومات الاتصال. */}
+                <div>
+                  <label className="label">البريد الإلكتروني للعمل</label>
+                  <div className="relative">
+                    <input type="email" className="input pl-10" placeholder="ahmed.m@maharah.pro" dir="ltr" value={form.workEmail} onChange={(e) => setField('workEmail', e.target.value)} />
+                    <Mail size={18} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">اختياري — وهو اللي بيتطابق بيه حساب الدومين لما الموظف يدخل بحساب الشركة.</p>
                 </div>
               </div>
 
@@ -1914,17 +1926,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               </div>
               )}
 
-              {/* Work Email */}
-              <h3 className="text-md font-bold text-gray-700 mt-8 border-b border-gray-100 pb-2">
-                البريد الإلكتروني للعمل
-              </h3>
-              <div className="grid grid-cols-2 gap-4">
-                <div>
-                  <label className="label">البريد الإلكتروني للعمل</label>
-                  <input type="email" className="input" placeholder="ahmed.m@company.com" dir="ltr" value={form.workEmail} onChange={(e) => setField('workEmail', e.target.value)} />
-                  <p className="text-xs text-gray-400 mt-1">البريد اختياري ولا يُنشأ تلقائياً</p>
-                </div>
-              </div>
+              {/* بريد العمل اتنقل لـ«معلومات الاتصال» جنب البريد الشخصي — مكان واحد للاتنين */}
             </div>
           )}
 
