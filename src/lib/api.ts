@@ -180,10 +180,93 @@ export interface LoginResponse {
   user: CurrentUser
 }
 
+// التحقق بخطوتين مفتوح: الرد مش جلسة — حالة معلَّقة بتنتظر الرمز اللي وصل على البريد
+export interface TwoFactorChallenge {
+  twoFactor: true
+  challengeToken: string
+  /** العنوان مقنَّعًا (ka****@maharah.pro) — صاحب الحساب بيعرف منه فين الرمز */
+  sentTo: string
+  expiresInSeconds: number
+  resendAfterSeconds: number
+  codeLength: number
+}
+
+export type LoginOutcome = LoginResponse | TwoFactorChallenge
+
+/** الرد حالة معلَّقة ولا جلسة كاملة؟ — الشاشة بتفرّق بيهم بالعلم ده بس */
+export const isTwoFactorChallenge = (value: LoginOutcome): value is TwoFactorChallenge =>
+  (value as TwoFactorChallenge).twoFactor === true
+
 export const login = (email: string, password: string) =>
-  apiFetch<LoginResponse>('/auth/login', {
+  apiFetch<LoginOutcome>('/auth/login', {
     method: 'POST',
     body: JSON.stringify({ email, password }),
+  })
+
+// «الدخول بحساب الشركة» — الاسم بس (name) أو الـUPN كامل (name@maharah.local)، والخادم بيطبّعه
+export const domainLogin = (username: string, password: string) =>
+  apiFetch<LoginOutcome>('/auth/login/domain', {
+    method: 'POST',
+    body: JSON.stringify({ username, password }),
+  })
+
+// الخطوة الثانية للمسارين: الرمز → جلسة
+export const verifyLoginCode = (challengeToken: string, code: string) =>
+  apiFetch<LoginResponse>('/auth/login/verify', {
+    method: 'POST',
+    body: JSON.stringify({ challengeToken, code }),
+  })
+
+// رمز جديد لنفس محاولة الدخول (بمهلة وحد أعلى يفرضهم الخادم)
+export const resendLoginCode = (challengeToken: string) =>
+  apiFetch<{ sentTo: string; resendAfterSeconds: number; expiresInSeconds: number }>(
+    '/auth/login/resend',
+    { method: 'POST', body: JSON.stringify({ challengeToken }) }
+  )
+
+// قبل أي مصادقة: هل زر «الدخول بحساب الشركة» يظهر؟ (بلا أي تفصيل عن خادم الدليل)
+export const fetchLoginOptions = () =>
+  apiFetch<{ domainLoginEnabled: boolean }>('/auth/login/options')
+
+// ===== حالة الدخول والأمان (شاشة سياسات النظام — settings.manage) =====
+export interface SecurityStatus {
+  twoFactorEnabled: boolean
+  twoFactorConfigKey: string
+  mail: {
+    configured: boolean
+    missing: string[]
+    server: string | null
+    secure: boolean
+    requireTls: boolean
+    from: string | null
+    authConfigured: boolean
+  }
+  directory: {
+    enabled: boolean
+    configured: boolean
+    missing: string[]
+    server: string | null
+    ldaps: boolean
+    upnSuffix: string | null
+    serviceAccountConfigured: boolean
+    warning: string | null
+  }
+  code: {
+    length: number
+    ttlSeconds: number
+    maxAttempts: number
+    resendCooldownSeconds: number
+    maxResends: number
+  }
+}
+
+export const fetchSecurityStatus = () => apiFetch<SecurityStatus>('/auth/security-status')
+
+/** الفحص الذاتي للبريد قبل فتح التحقق بخطوتين — الرد بيحمل رد خادم البريد بالحرف */
+export const sendMailTest = (to: string) =>
+  apiFetch<{ ok: boolean; sentTo: string; response: string; detail?: string }>('/auth/mail-test', {
+    method: 'POST',
+    body: JSON.stringify({ to }),
   })
 
 // صاحب الحساب يغيّر كلمته (ومنها الكلمة المؤقتة) — الرد جلسة جديدة

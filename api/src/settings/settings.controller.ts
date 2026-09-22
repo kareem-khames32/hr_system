@@ -45,6 +45,7 @@ import { normalizeWeekendDays, weekendDaysError } from '../attendance/weekend-da
 import { eosConfigError } from '../offboarding/eos'
 import { Employee } from '../employees/employee.entity'
 import type { JwtPayload } from '../auth/auth.service'
+import { twoFactorEnableBlock } from '../auth/two-factor-gate'
 import { applyGeneralGraceToAttendanceRules, attendanceRuleToday, captureLegacyAttendanceRuleBaselines, lockAttendanceRuleMutation } from '../attendance/attendance-rule-history'
 import { assertCalendarScope, beginCalendarChange, CalendarChangeDto, finishCalendarChange } from '../attendance/attendance-calendar-history'
 import { overtimeWageComponents } from '../payroll/overtime-financial'
@@ -658,6 +659,9 @@ export class SettingsController {
     'overtime.allow_early_overtime': ['true', 'false'],
     'overtime.missing_punch_policy': ['BLOCK'],
     'overtime.leave_conflict_policy': ['BLOCK'],
+    // التحقق بخطوتين: 'true' بس هي اللي تفتحه. أي قيمة تانية مرفوضة هنا عشان خطأ كتابة
+    // (True / 1 / yes) مايقفلهوش بصمت — والقارئ نفسه بيقارن 'true' حرفيًّا.
+    'auth.two_factor_enabled': ['true', 'false'],
   }
 
   @Patch('config')
@@ -669,6 +673,9 @@ export class SettingsController {
     // الخطوة 22 (B5، تصحيح المراجعة): رخصة الشركة الصغيرة تفك فصل المهام في اعتماد المسير — صلاحية مستقلة يمنحها مدير النظام فقط، لا settings.manage وحدها
     const licenceIssue = payrollSelfApprovalLicenceIssue({ key: dto.key, canManageLicence: userHasPerm(user, PAYROLL_SELF_APPROVAL_LICENCE_PERMISSION) })
     if (licenceIssue) throw new ForbiddenException(licenceIssue)
+    // قرار المالك 22 سبتمبر: التحقق بخطوتين مايتفتحش وخادم البريد مش مضبوط — وإلا الشركة كلها تتقفل برّه النظام
+    const twoFactorBlock = twoFactorEnableBlock(dto.key, dto.value)
+    if (twoFactorBlock) throw new BadRequestException(twoFactorBlock)
     // الخطوة 9 (مسار R2): القيمة المؤقتة لا تُحفظ كاسم شركة مؤكد
     if (dto.key.startsWith('company.') && isDataPlaceholder(dto.value)) throw new BadRequestException(DATA_PLACEHOLDER_REJECTED)
     // ملف الشركة: صيغ خفيفة (آيبان SA/EG، بريد، رقم موحد، تاريخ انتهاء السجل...)

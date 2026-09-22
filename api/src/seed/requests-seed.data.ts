@@ -391,4 +391,9 @@ export const configSeed: Array<{ key: string; value: string }> = [
   // C3 / الخطوة 26 (EX-03/06/07): الإعفاء المالي — أقل طول للسبب، حد المرفق بأيام الراتب، عدد إعفاءات الموظف في 12 شهرًا، نسبة المانح،
   // فترة التهدئة، عتبات تنبيه التقرير، ومنح مدير القسم — الحدود في EXEMPTION_NUMERIC_SETTINGS/ENUM_SETTINGS.
   ...EXEMPTION_CONFIG_SEED,
+  // التحقق بخطوتين برمز بريد لكل مسارات الدخول (قرار المالك 22 سبتمبر) — **بيتسلّم مقفول**.
+  // 'true' بس هي اللي بتفتحه، وأي قيمة تانية = مقفول (فشل مقفول). ممنوع يتفتح قبل ما البريد يتفحص
+  // (POST /auth/mail-test أو node api/scripts/mail-selftest.cjs) — وإلا الشركة كلها تتقفل برّه النظام.
+  // مفتاح الطوارئ من الترمينال بلا تطبيق: node api/scripts/two-factor-off.cjs
+  { key: 'auth.two_factor_enabled', value: 'false' },
 ]

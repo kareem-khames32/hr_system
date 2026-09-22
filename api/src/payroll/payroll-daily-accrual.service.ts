@@ -133,8 +133,8 @@ export class PayrollDailyAccrualService {
   async deductionBasis(em: EntityManager) {
     const rows = await em.getRepository(RequestsConfig).find({
       // payroll.shortfall_enabled هو المفتاح المبذور اللي بتضبطه الشاشة ويقراه المسير
-      // (payroll-policy-snapshot). القراءة القديمة كانت باسم payroll.shortfall_deduction_enabled
-      // وهو مفتاح مش مبذور، فإيقاف خصم نقص الساعات مكانش بيوصل للتراكم اليومي خالص.
+      // (payroll-policy-snapshot). كانت القراءة هنا باسم تاني مش مبذور، فإيقاف خصم
+      // نقص الساعات مكانش بيوصل للتراكم اليومي خالص — اتوحّدوا على المفتاح المبذور.
       where: { key: In(['payroll.monthly_days', 'payroll.daily_hours', 'payroll.late_deduction_enabled',
         'payroll.shortfall_enabled', 'payroll.shortfall_mode', 'payroll.shortfall_value',
         'payroll.early_leave_deduction_enabled', 'attendance.absence_penalty_days', PAYROLL_ACCRUAL_ENABLED_KEY]) },

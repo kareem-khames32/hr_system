@@ -13,8 +13,10 @@ import {
   Wallet,
   CheckCircle2,
   AlertCircle,
+  ShieldCheck,
+  Send,
 } from 'lucide-react'
-import { can, fetchConfig, updateConfig } from '@/lib/api'
+import { can, fetchConfig, fetchSecurityStatus, sendMailTest, updateConfig, type SecurityStatus } from '@/lib/api'
 import { invalidateCurrency, useCurrency } from '@/lib/currency'
 import {
   createLoanCapPolicy, createLoanCapPolicyVersion, fetchLoanCapPolicies, formatLoanMoney,
@@ -60,6 +62,9 @@ const CYCLE_KEY = 'payroll.cycle_start_day'
 // و«أيام العمل والدوام» بتعرضها للقراءة. حفظها بيضيف نسخة مؤرخة لكل تعريف دوام من تاريخ
 // التغيير (applyGeneralGraceToAttendanceRules)، فالأيام الأقدم تفضل على نسختها بقيمتها القديمة.
 const GRACE_KEY = 'attendance.grace_minutes'
+// التحقق بخطوتين (قرار المالك 22 سبتمبر): مفتاح واحد بيفتح رمز البريد لكل مسارات الدخول، ومُسلَّم مقفول.
+// فتحه وخادم البريد مش مضبوط = قفل الشركة كلها برّه النظام — فالخادم بيرفضه، والشاشة بتمنعه قبل الحفظ.
+const TWO_FACTOR_KEY = 'auth.two_factor_enabled'
 const deviceKeyWeak = (value: string) => !!value.trim() && (value.trim() === 'zk-device-key-change-me' || value.trim().length < 24)
 const WEEK_CODES = ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT']
 const WEEK_DAY_NAMES: Record<string, string> = { SUN: 'الأحد', MON: 'الاثنين', TUE: 'الثلاثاء', WED: 'الأربعاء', THU: 'الخميس', FRI: 'الجمعة', SAT: 'السبت' }
@@ -196,6 +201,18 @@ const GROUPS: PolicyGroup[] = [
       { key: 'payroll.hourly_rate_basis', label: 'أساس سعر الساعة', type: 'select', options: [{ value: 'DAILY_HOURS', label: 'سعر اليوم ÷ ساعات العمل اليومية' }], readOnly: true },
       { key: 'payroll.day_rate_basis', label: 'أساس سعر اليوم للغياب ونهاية الخدمة', type: 'select', options: [{ value: 'MONTHLY_FIXED_COMPONENTS_30', label: 'الأجر الشهري للمكونات الستة ÷ 30' }], readOnly: true },
       // قرار المالك (16 سبتمبر): لا اختيار تقريب — الفلوس بمنزلتين بالقص (src/lib/money.ts وapi/src/payroll/payroll-money.ts)
+    ],
+  },
+  {
+    // قرار المالك 22 سبتمبر: طريقتان للدخول (بريد+كلمة مرور، وحساب الشركة على الـActive Directory)،
+    // والتحقق بخطوتين برمز بريد لكل الحسابات — بيتسلّم مقفول ومايتفتحش قبل ما البريد يتفحص.
+    title: 'الدخول والأمان',
+    icon: ShieldCheck,
+    iconBg: 'bg-primary-50',
+    iconColor: 'text-primary-500',
+    note: 'إعداد خادم البريد ودليل الشركة (Active Directory) بيتم في api/.env على الخادم — مش من الشاشة. الشاشة بتقول لك مضبوط ولا لأ، وبتديك زر فحص إرسال، والمفتاح الوحيد اللي بيتغيّر من هنا هو فتح التحقق بخطوتين.',
+    fields: [
+      { key: TWO_FACTOR_KEY, label: 'التحقق بخطوتين برمز على البريد', type: 'bool', hint: 'مفتوح: كل دخول (بالبريد أو بحساب الشركة، ومنهم مدير النظام) بيطلب رمز 6 أرقام على البريد قبل فتح الجلسة. مايتفتحش إلا لما خادم البريد يكون مضبوط ومفحوص.' },
     ],
   },
 ]
@@ -413,6 +430,149 @@ function PayrollPeriodSetting({ value, original, disabled, onChange }: { value: 
   )
 }
 
+// ===== لوحة «الدخول والأمان»: حالة البريد والدليل + الفحص الذاتي =====
+// الإعداد كله في api/.env على الخادم؛ الشاشة بتقرأ الحالة بس (بلا أي سر: كلمة حساب الخدمة
+// وكلمة البريد مابيظهروش، بس «مضبوط / غير مضبوط»). الفحص بيبعت رمزًا تجريبيًّا ويعرض رد خادم البريد بالحرف.
+function SecurityStatusBlock({ status, reload }: { status: SecurityStatus | null; reload: () => void }) {
+  const [to, setTo] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [result, setResult] = useState<{ ok: boolean; text: string } | null>(null)
+
+  const runTest = async () => {
+    if (!to.trim() || busy) return
+    setBusy(true)
+    setResult(null)
+    try {
+      const r = await sendMailTest(to.trim())
+      setResult(
+        r.ok
+          ? { ok: true, text: `خادم البريد قبل الرسالة إلى ${r.sentTo} — رده: ${r.response}. افتح الصندوق وتأكد إنها وصلت فعلًا قبل ما تفتح التحقق.` }
+          : { ok: false, text: `فشل الإرسال إلى ${r.sentTo} — ${r.detail ?? 'بلا تفاصيل'}` }
+      )
+      reload()
+    } catch (e) {
+      setResult({ ok: false, text: e instanceof Error ? e.message : 'تعذّر تنفيذ الفحص' })
+    } finally {
+      setBusy(false)
+    }
+  }
+
+  const pill = (ok: boolean, okText: string, badText: string) => (
+    <span className={`rounded-lg px-2 py-0.5 text-xs font-medium ${ok ? 'bg-success-50 text-success-700' : 'bg-amber-50 text-amber-800'}`}>
+      {ok ? okText : badText}
+    </span>
+  )
+
+  if (!status) return null
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-100 space-y-4" data-testid="security-status">
+      <div className="grid gap-3 sm:grid-cols-2">
+        {/* البريد */}
+        <div className="rounded-xl border border-gray-200 p-3 space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-medium text-gray-800">خادم البريد (SMTP)</p>
+            {pill(status.mail.configured, 'مضبوط', 'غير مضبوط')}
+          </div>
+          {status.mail.configured ? (
+            <>
+              <p className="text-xs text-gray-500" dir="ltr">{status.mail.server}</p>
+              <p className="text-xs text-gray-500">
+                {status.mail.secure ? 'TLS من أول الاتصال' : status.mail.requireTls ? 'STARTTLS إلزامي' : '⚠️ بلا TLS'}
+                {' · '}
+                {status.mail.authConfigured ? 'بمصادقة' : 'بلا مصادقة'}
+              </p>
+              <p className="text-xs text-gray-500" dir="ltr">{status.mail.from}</p>
+            </>
+          ) : (
+            <p className="text-xs text-amber-800">
+              ناقص في api/.env: {status.mail.missing.join(', ')} — من غيره التحقق بخطوتين مش هيتفتح.
+            </p>
+          )}
+        </div>
+
+        {/* دليل الشركة */}
+        <div className="rounded-xl border border-gray-200 p-3 space-y-1.5">
+          <div className="flex items-center justify-between gap-2">
+            <p className="text-sm font-medium text-gray-800">الدخول بحساب الشركة (Active Directory)</p>
+            {pill(status.directory.configured, 'مضبوط', status.directory.enabled ? 'إعداد ناقص' : 'مقفول')}
+          </div>
+          {status.directory.configured ? (
+            <>
+              <p className="text-xs text-gray-500" dir="ltr">{status.directory.server}</p>
+              <p className="text-xs text-gray-500">
+                لاحقة الحساب: <span dir="ltr">@{status.directory.upnSuffix}</span>
+                {' · '}
+                {status.directory.serviceAccountConfigured ? 'بحساب خدمة للقراءة' : 'بلا حساب خدمة'}
+              </p>
+              <p className="text-xs text-gray-500">
+                الصلاحيات والأدوار ونطاق الفروع من جداول النظام — ولا مجموعة AD بتتقري ولا بتمنح حاجة.
+              </p>
+            </>
+          ) : (
+            <p className="text-xs text-gray-500">
+              {status.directory.enabled && status.directory.missing.length
+                ? `ناقص في api/.env: ${status.directory.missing.join(', ')}`
+                : 'AD_HOST مش مكتوب في api/.env — زر «الدخول بحساب الشركة» مش ظاهر في شاشة الدخول.'}
+            </p>
+          )}
+          {status.directory.warning && (
+            <p className="text-xs text-red-700 bg-red-50 rounded-lg px-2 py-1.5">{status.directory.warning}</p>
+          )}
+        </div>
+      </div>
+
+      {/* الفحص الذاتي */}
+      <div className="space-y-2">
+        <p className="text-sm font-medium text-gray-800">فحص إرسال البريد</p>
+        <p className="text-xs text-gray-500">
+          ابعت رمزًا تجريبيًّا لعنوان واحد واقرأ رد خادم البريد بالحرف. نفس الفحص من ترمينال الخادم:
+          <span className="font-mono" dir="ltr"> node api/scripts/mail-selftest.cjs &lt;عنوان&gt;</span>
+        </p>
+        <div className="flex flex-wrap items-center gap-2">
+          <input
+            aria-label="عنوان بريد للفحص"
+            className="input w-full max-w-xs"
+            dir="ltr"
+            type="email"
+            placeholder="you@company.com"
+            value={to}
+            disabled={!status.mail.configured}
+            onChange={(e) => { setTo(e.target.value); setResult(null) }}
+          />
+          <button
+            type="button"
+            className="btn-secondary flex items-center gap-2 text-sm"
+            disabled={busy || !to.trim() || !status.mail.configured}
+            onClick={runTest}
+          >
+            <Send size={16} />
+            {busy ? 'جارٍ الإرسال…' : 'ابعت رسالة فحص'}
+          </button>
+        </div>
+        {!status.mail.configured && (
+          <p className="text-xs text-amber-800">اضبط SMTP في api/.env الأول — مفيش فحص ممكن من غيره.</p>
+        )}
+        {result && (
+          <p role="status" className={`text-xs rounded-lg px-3 py-2 ${result.ok ? 'bg-success-50 text-success-700' : 'bg-red-50 text-red-700'}`}>
+            {result.text}
+          </p>
+        )}
+      </div>
+
+      {/* مفتاح الطوارئ — مكتوب في الشاشة عشان يكون معروف قبل ما يحتاجه */}
+      <div className="rounded-xl bg-gray-50 px-3 py-2.5 space-y-1">
+        <p className="text-xs font-medium text-gray-700">لو خادم البريد وقع والتحقق مفتوح (محدش يقدر يدخل):</p>
+        <p className="text-xs text-gray-600 font-mono" dir="ltr">cd D:\projects\hr_system\api &amp;&amp; node scripts/two-factor-off.cjs</p>
+        <p className="text-xs text-gray-500">
+          بيقفل التحقق من الترمينال على القاعدة مباشرة، بلا تطبيق وبلا إعادة تشغيل، وبيسري على أول محاولة دخول بعده.
+          الرمز {status.code.length} أرقام، صالح {Math.round(status.code.ttlSeconds / 60)} دقائق، {status.code.maxAttempts} محاولات،
+          وإعادة الإرسال كل {status.code.resendCooldownSeconds} ثانية بحد {status.code.maxResends} مرات.
+        </p>
+      </div>
+    </div>
+  )
+}
+
 export default function PoliciesPage() {
   const [values, setValues] = useState<Record<string, string>>({})
   const [original, setOriginal] = useState<Record<string, string>>({})
@@ -422,6 +582,8 @@ export default function PoliciesPage() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState('')
   const [showDeviceKey, setShowDeviceKey] = useState(false)
+  // حالة الدخول والأمان (البريد/الدليل/التحقق) — قراءة من الخادم، مفيش سر فيها
+  const [security, setSecurity] = useState<SecurityStatus | null>(null)
   const calendar = useCalendarContext('GLOBAL', 0)
   const [calendarRefresh, setCalendarRefresh] = useState(0)
   useEffect(() => {
@@ -447,8 +609,16 @@ export default function PoliciesPage() {
     }
   }
 
+  const loadSecurity = () => {
+    // فشل النداء مايكسرش الشاشة — اللوحة بتتخفي بس
+    fetchSecurityStatus().then(setSecurity).catch(() => setSecurity(null))
+  }
+
   useEffect(() => {
-    if (can('settings.manage')) load()
+    if (can('settings.manage')) {
+      load()
+      loadSecurity()
+    }
   }, [])
 
   const setVal = (key: string, value: string) => {
@@ -490,6 +660,14 @@ export default function PoliciesPage() {
         setSuccess('')
         return
       }
+      // مرآة رفض الخادم: فتح التحقق بخطوتين وخادم البريد مش مضبوط = قفل كل الحسابات برّه النظام
+      if (key === TWO_FACTOR_KEY && values[key] === 'true' && security && !security.mail.configured) {
+        setError(
+          `مينفعش تفتح التحقق بخطوتين وخادم البريد مش مضبوط (ناقص ${security.mail.missing.join(', ')} في api/.env) — كل الحسابات هتتقفل برّه النظام. اضبط البريد، افحصه بزر «ابعت رسالة فحص»، وبعدها افتحه.`
+        )
+        setSuccess('')
+        return
+      }
     }
     let calendarChange: PayrollCalendarChange | undefined
     if (dirtyKeys.includes(WEEKEND_KEY)) {
@@ -515,6 +693,7 @@ export default function PoliciesPage() {
       setValues(toSave)
       setOriginal(toSave)
       if (calendarChange) { calendar.reload(); setCalendarRefresh(value => value + 1) }
+      if (dirtyKeys.includes(TWO_FACTOR_KEY)) loadSecurity()
       setSuccess(`تم حفظ ${dirtyKeys.length} سياسة`)
     } catch (e) {
       setError(e instanceof Error ? e.message : 'تعذر حفظ السياسات')
@@ -705,6 +884,7 @@ export default function PoliciesPage() {
                     ))}
                   </div>
                   {g.title === 'أقساط السلف وحماية الصافي' && <LoanAdvanceCapBlock onSaveConfig={handleSave} pendingConfigCount={dirtyKeys.length} />}
+                  {g.title === 'الدخول والأمان' && <SecurityStatusBlock status={security} reload={loadSecurity} />}
                 </div>
               )
             })}

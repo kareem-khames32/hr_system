@@ -1,14 +1,22 @@
 import {
   BadRequestException,
+  HttpException,
   Injectable,
+  Logger,
+  ServiceUnavailableException,
   UnauthorizedException,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { JwtService } from '@nestjs/jwt'
 import { Repository } from 'typeorm'
 import * as bcrypt from 'bcryptjs'
+import { DirectoryAuthError } from './directory.types'
+import { DirectoryService } from './directory.service'
+import { DomainLoginService } from './domain-login.service'
+import { MailSendError, MailService, maskEmail } from './mail.service'
 import { effectivePermissions, ROLE_PRESETS } from './permissions'
 import { Role, UserPermissionOverride } from './role.entity'
+import { OTP, TWO_FACTOR_CONFIG_KEY, TwoFactorChallengeView, TwoFactorError, TwoFactorService } from './two-factor.service'
 import { User } from './user.entity'
 
 // حمولة التوكن — الدور والفرع هما أساس عزل البيانات
@@ -29,14 +37,39 @@ export interface JwtPayload {
   scopeAllBranches?: boolean
 }
 
+/** الجلسة المفتوحة — نفس شكل رد الدخول الحالي بالحرف (الواجهة بتقرأه كما هو). */
+export interface SessionResponse {
+  accessToken: string
+  user: {
+    id: number
+    email: string
+    displayName: string
+    role: string
+    branchId: number | null
+    employeeId: number | null
+    permissions: string[]
+    mustChangePassword: boolean
+    scopeAllBranches: boolean
+  }
+}
+
+/** رد الدخول: جلسة كاملة (التحقق بخطوتين مقفول) أو حالة معلَّقة تنتظر الرمز (مفتوح). */
+export type LoginResult = SessionResponse | TwoFactorChallengeView
+
 @Injectable()
 export class AuthService {
+  private readonly logger = new Logger(AuthService.name)
+
   constructor(
     @InjectRepository(User) private readonly users: Repository<User>,
     @InjectRepository(Role) private readonly roles: Repository<Role>,
     @InjectRepository(UserPermissionOverride)
     private readonly overrides: Repository<UserPermissionOverride>,
-    private readonly jwt: JwtService
+    private readonly jwt: JwtService,
+    private readonly twoFactor: TwoFactorService,
+    private readonly directory: DirectoryService,
+    private readonly domain: DomainLoginService,
+    private readonly mail: MailService
   ) {}
 
   // الصلاحيات النهائية = حزمة الدور + GRANTs − REVOKEs
@@ -124,7 +157,12 @@ export class AuthService {
       .addSelect(['u.mustChangePassword', 'u.passwordChangedAt'])
   }
 
-  async login(email: string, password: string) {
+  /**
+   * الدخول بالبريد وكلمة المرور.
+   * التحقق بخطوتين مقفول (الافتراضي) → الرد جلسة كاملة زي ما هو بالحرف.
+   * مفتوح → الرد حالة معلَّقة بس (مفيش accessToken)، والجلسة بتتفتح بعد verifyTwoFactor.
+   */
+  async login(email: string, password: string): Promise<LoginResult> {
     const user = await this.withPasswordState()
       .where('u.email = :email', { email: email.toLowerCase().trim() })
       .getOne()
@@ -132,13 +170,98 @@ export class AuthService {
       throw new UnauthorizedException('بيانات الدخول غير صحيحة')
     }
     // الحسابات المنقولة من القديم: hash لسر عشوائي محدش يعرفه → المقارنة بتفشل دايمًا لحد ما المدير يعيّن كلمة
+    // وحسابات المجال بس (بلا كلمة مرور عندنا) نفس الحكاية: المسار ده بيفشل عليها دايمًا
     const ok = await bcrypt.compare(password, user.passwordHash)
     if (!ok) {
       throw new UnauthorizedException('بيانات الدخول غير صحيحة')
     }
+    return this.finishLogin(user, 'PASSWORD', user.email)
+  }
 
+  /**
+   * الدخول بحساب الشركة: المجال بيثبت الهوية، وبعدها نطابق الموظف ونعمل/نربط الحساب في لحظته.
+   * الصلاحيات والأدوار ونطاق الفروع من جداولنا — مفيش مجموعة AD بتتقري ولا بتمنح حاجة.
+   */
+  async domainLogin(username: string, password: string): Promise<LoginResult> {
+    let directoryUser
+    try {
+      directoryUser = await this.directory.authenticate(username, password)
+    } catch (error) {
+      if (error instanceof DirectoryAuthError) {
+        // السبب التقني في سجل الخادم بس — المستخدم بياخد الرسالة العربية المناسبة للسبب
+        this.logger.warn(`رفض دخول بحساب الشركة [${error.code}]: ${error.detail ?? 'بلا تفاصيل'}`)
+        if (error.code === 'DIRECTORY_UNAVAILABLE' || error.code === 'NOT_CONFIGURED') {
+          throw new ServiceUnavailableException(error.message)
+        }
+        throw new UnauthorizedException(error.message)
+      }
+      throw error
+    }
+    const user = await this.domain.resolveUser(directoryUser)
+    // صندوق البريد من AD الأول (322 موظف بريدهم عندنا @maharah.local) وإلا بريد الحساب
+    return this.finishLogin(user, 'DOMAIN', directoryUser.mail ?? user.email)
+  }
+
+  /** الخطوة الأخيرة المشتركة للمسارين: جلسة فورًا لما التحقق مقفول، وإلا رمز على البريد. */
+  private async finishLogin(
+    user: User,
+    method: 'PASSWORD' | 'DOMAIN',
+    address: string
+  ): Promise<LoginResult> {
+    if (!(await this.twoFactor.isEnabled())) {
+      await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
+      return this.issueSession(user)
+    }
+    try {
+      return await this.twoFactor.open(user, method, address)
+    } catch (error) {
+      // فشل البريد ممنوع يدخّل حد: رفض صريح بالسبب الحقيقي، ومفيش جلسة ولا حالة معلَّقة
+      if (error instanceof MailSendError) throw new ServiceUnavailableException(error.message)
+      throw error
+    }
+  }
+
+  /**
+   * ترجمة رفض الرمز لحالة HTTP: رفض الرمز نفسه 401 (زي بيانات الدخول الغلط)،
+   * والمهلة وحد إعادة الإرسال 429 (مش خطأ في البيانات — «استنى»).
+   * مفيش حالة واحدة بتخرج بلا ترجمة (وإلا الإطار بيرجّع 500 برسالة إنجليزية).
+   */
+  private httpFor(error: unknown): unknown {
+    if (!(error instanceof TwoFactorError)) return error
+    if (error.code === 'RESEND_TOO_SOON' || error.code === 'RESEND_LIMIT') {
+      return new HttpException(
+        { statusCode: 429, message: error.message, ...(error.retryAfterSeconds ? { retryAfterSeconds: error.retryAfterSeconds } : {}) },
+        429
+      )
+    }
+    return new UnauthorizedException(error.message)
+  }
+
+  /** التحقق من رمز البريد → الجلسة. كل قواعد الحساب بتتقري من القاعدة من جديد هنا. */
+  async verifyTwoFactor(challengeToken: string, code: string): Promise<SessionResponse> {
+    const challenge = await this.twoFactor.verify(challengeToken, code).catch((error) => {
+      throw this.httpFor(error)
+    })
+    const user = await this.withPasswordState().where('u.id = :id', { id: challenge.userId }).getOne()
+    // الحساب اتعطّل بين إرسال الرمز والتحقق منه؟ مفيش جلسة (نفس قاعدة الدخول)
+    if (!user || !user.isActive) throw new UnauthorizedException('بيانات الدخول غير صحيحة')
     await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
     return this.issueSession(user)
+  }
+
+  /** إعادة إرسال الرمز لنفس محاولة الدخول (بمهلة وحد أعلى) — مفيش جلسة بتتفتح هنا. */
+  async resendTwoFactor(challengeToken: string) {
+    try {
+      return await this.twoFactor.resend(challengeToken)
+    } catch (error) {
+      if (error instanceof MailSendError) throw new ServiceUnavailableException(error.message)
+      throw this.httpFor(error)
+    }
+  }
+
+  /** ما تعرضه شاشة الدخول قبل أي مصادقة: هل زر «الدخول بحساب الشركة» يظهر (بلا أي تفصيل عن الخادم). */
+  loginOptions() {
+    return { domainLoginEnabled: this.directory.isConfigured() }
   }
 
   // تغيير كلمة المرور من صاحب الحساب — الطريق الوحيد المفتوح لتوكن «لازم يغيّر» (غير «مين أنا»)
@@ -174,7 +297,7 @@ export class AuthService {
   }
 
   // توكن + بيانات الحساب للواجهة (نفس رد الدخول)
-  private async issueSession(user: User) {
+  private async issueSession(user: User): Promise<SessionResponse> {
     const permissions = await this.resolvePermissions(user)
     const mustChangePassword = !!user.mustChangePassword
     // «كل الفروع» من عمود القاعدة بقيمته الحرفية فقط (bit → true)؛ مدير النظام نطاقه كامل بدوره فمايتكتبش له
@@ -210,6 +333,46 @@ export class AuthService {
 
   async findById(id: number) {
     return this.users.findOne({ where: { id } })
+  }
+
+  /**
+   * حالة الدخول بحساب الشركة والبريد والتحقق بخطوتين — لشاشة السياسات (مدير النظام).
+   * بلا أي سر: كلمة حساب الخدمة وكلمة البريد مابيظهروش، بس «مضبوط / غير مضبوط».
+   */
+  async securityStatus() {
+    return {
+      twoFactorEnabled: await this.twoFactor.isEnabled(),
+      twoFactorConfigKey: TWO_FACTOR_CONFIG_KEY,
+      mail: this.mail.status(),
+      directory: this.directory.status(),
+      code: { length: OTP.codeLength, ttlSeconds: OTP.ttlSeconds, maxAttempts: OTP.maxAttempts,
+        resendCooldownSeconds: OTP.resendCooldownSeconds, maxResends: OTP.maxResends },
+    }
+  }
+
+  /**
+   * الفحص الذاتي قبل فتح التحقق بخطوتين: بيبعت رمزًا تجريبيًّا لعنوان واحد ويرجّع رد خادم البريد بالحرف.
+   * مفيش حالة دخول بتتعمل ومفيش جلسة — إرسال بس.
+   */
+  async sendTestCode(to: string): Promise<{ ok: boolean; sentTo: string; response: string; detail?: string }> {
+    const address = (to ?? '').trim()
+    if (!address.includes('@')) throw new BadRequestException('اكتب عنوان بريد صالح للفحص')
+    const code = String(Math.floor(100000 + Math.random() * 900000))
+    try {
+      const result = await this.mail.send({
+        to: address,
+        subject: 'فحص إرسال رمز الدخول — نظام الموارد البشرية',
+        text:
+          `ده فحص إعداد البريد. رمز تجريبي: ${code}\n\n` +
+          'وصلت الرسالة دي يعني إعداد SMTP سليم وينفع تفتح التحقق بخطوتين.',
+      })
+      this.logger.log(`فحص بريد ناجح إلى ${maskEmail(address)} — رد الخادم: ${result.response || 'بلا رد'}`)
+      return { ok: true, sentTo: maskEmail(address), response: result.response || 'قبل الرسالة بلا رد نصي' }
+    } catch (error) {
+      const detail = error instanceof MailSendError ? error.detail : String((error as Error)?.message ?? error)
+      this.logger.error(`فحص بريد فاشل إلى ${maskEmail(address)} — ${detail}`)
+      return { ok: false, sentTo: maskEmail(address), response: '', detail }
+    }
   }
 
   static async hashPassword(plain: string): Promise<string> {
