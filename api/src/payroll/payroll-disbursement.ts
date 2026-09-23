@@ -70,8 +70,9 @@ export function buildPayrollDisbursementRows(input: {
 }): { rows: PayrollDisbursementRow[]; mode: PayrollDisbursementMode } {
   const mode = payrollDisbursementMode(input.runStatus, input.marks)
   const open = payrollDisbursementOpen(input.runStatus, mode)
+  // نفس مصدر كشف البنوك والتقرير المالي: الصف المصروف بتقسيمه المسجل (العلامة أو لقطة البند في مسير مصروف)، وغيره من ملف الموظف
   const sheet = buildBankSheet(bankSheetSources({ items: input.items, employees: input.employees, members: input.members,
-    branchScope: input.branchScope, settlementOf: payrollItemSettlementPayout }))
+    branchScope: input.branchScope, settlementOf: payrollItemSettlementPayout, runStatus: input.runStatus, marks: input.marks }))
   const itemOf = new Map(input.items.map(item => [item.employeeId, item]))
   const memberOf = new Map(input.members.map(member => [member.employeeId, member]))
   const markOf = new Map(input.marks.map(mark => [mark.itemId, mark]))
@@ -88,12 +89,12 @@ export function buildPayrollDisbursementRows(input: {
     const paidMark = mark?.status === 'PAID' ? mark : null
     const hasAmount = row.bankAmount + row.cashAmount > 0
     const state: PayrollDisbursementState = paidMark ? 'PAID' : !hasAmount ? 'NO_AMOUNT' : mode === 'RUN_LEVEL' ? 'PAID' : 'UNPAID'
-    // صف «تم الصرف» بيعرض اللي اتثبت وقت العلامة؛ غيره من ملف الموظف الحالي (زي كشف البنوك بالظبط)
-    const payMethod = paidMark?.payMethod ?? row.payMethod
+    // صف «تم الصرف» بيعرض اللي اتثبت وقت العلامة، وغيره من ملف الموظف الحالي — والاتنين جايين من صف الكشف نفسه (مصدر واحد)
+    const payMethod = row.payMethod
     rows.push({ itemId: item.id, employeeId: row.employeeId, employeeCode: row.employeeCode, fullName: row.fullName, ...org(row.employeeId),
       payMethod, payMethodLabel: PAY_METHOD_LABELS[payMethod] ?? payMethod, bankName: row.bankName, iban: row.iban,
-      netPay: paidMark ? Number(paidMark.amount) : row.netPay, bankAmount: paidMark ? Number(paidMark.bankAmount) : row.bankAmount,
-      cashAmount: paidMark ? Number(paidMark.cashAmount) : row.cashAmount, issue: state === 'PAID' ? null : row.issue,
+      netPay: paidMark ? Number(paidMark.amount) : row.netPay, bankAmount: row.bankAmount,
+      cashAmount: row.cashAmount, issue: state === 'PAID' ? null : row.issue,
       state, stateLabel: PAYROLL_DISBURSEMENT_STATE_LABELS[state],
       tickable: (state === 'PAID' || state === 'UNPAID') && (open === 'OPEN' || (open === 'LATE_ONLY' && state === 'UNPAID')),
       markedByUserId: mark?.markedByUserId ?? null, markedAt: mark?.markedAt ?? null, note: mark?.note ?? null, settlement: null })

@@ -85,6 +85,8 @@ export class FinancialReportService {
            ${snapped('costCenterId', 'e.[costCenterId]')} AS [costCenterId],
            JSON_VALUE(s.[snap], '$.costCenterName') AS [snapCostCenterName],
            i.[payMethod] AS [itemPayMethod], e.[payMethod] AS [employeePayMethod], CONVERT(varchar(40), e.[bankTransferAmount]) AS [bankTransferAmount],
+           pd.[status] AS [disbursementStatus], pd.[payMethod] AS [disbursedPayMethod],
+           CONVERT(varchar(40), pd.[bankAmount]) AS [disbursedBankAmount], CONVERT(varchar(40), pd.[cashAmount]) AS [disbursedCashAmount],
            ${money.map(column => `CONVERT(varchar(40), i.[${column}]) AS [${column}]`).join(', ')},
            ${BREAKDOWN_ARRAYS.map(key => `CASE WHEN bd.[ok] = 1 THEN JSON_QUERY(i.[breakdown], '$.${key}') END AS [${key}]`).join(', ')},
            CASE WHEN bd.[ok] = 1 THEN JSON_QUERY(i.[breakdown], '$.settlementPayout') END AS [settlementPayout],
@@ -94,6 +96,8 @@ export class FinancialReportService {
          INNER JOIN [payroll_runs] r ON r.[id] = i.[runId]
          LEFT JOIN [payroll_run_members] m ON m.[runId] = i.[runId] AND m.[employeeId] = i.[employeeId]
          LEFT JOIN [employees] e ON e.[id] = i.[employeeId]
+         -- اللي اتصرف فعلًا للبند (صف واحد لكل بند بقيد فريد): تقسيمه المثبت يغلب طريقة الصرف الحالية في الملف
+         LEFT JOIN [payroll_item_disbursements] pd ON pd.[itemId] = i.[id]
          OUTER APPLY (SELECT CASE WHEN ISJSON(CAST(m.[snapshot] AS nvarchar(max))) = 1 THEN CAST(m.[snapshot] AS nvarchar(max)) END AS [snap]) s
          OUTER APPLY (SELECT CASE WHEN ISJSON(i.[breakdown]) = 1 THEN 1 ELSE 0 END AS [ok]) bd
          WHERE r.[period] = @0 AND r.[status] NOT IN ('CANCELLED', 'DRAFT') AND ISNULL(r.[runType], 'REGULAR') <> 'REVERSAL'

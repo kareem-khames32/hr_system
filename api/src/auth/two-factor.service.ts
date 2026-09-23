@@ -29,17 +29,32 @@ export const OTP = {
   challengeTokenBytes: 32,
   /** الحالات المعلَّقة الأقدم من كده تُنضَّف مع أي دخول جديد */
   cleanupAfterHours: 24,
+  /**
+   * أقصى عدد مرات لإعادة كتابة عدّاد المحاولات لما صف الحالة يتغيّر تحت إيدينا.
+   * الحد ده مش سياسة أمان: هو حاجز ضد دوران بلا نهاية تحت ضغط متوازي، ولو اتخطى بنقفل الحالة.
+   */
+  attemptWriteRounds: 12,
 } as const
 
-/** سبب رفض الرمز — الرسالة عربية صريحة، بلا لبس بين «غلط» و«منتهي» و«مستخدم». */
+/** سبب رفض الرمز — الرسالة عربية صريحة، بلا لبس بين «غلط» و«منتهي» و«مستخدم» و«اتبدّل». */
 export type TwoFactorRejection =
   | 'UNKNOWN'
   | 'CONSUMED'
   | 'LOCKED'
   | 'EXPIRED'
   | 'WRONG_CODE'
+  /** الرمز اللي قارنّاه استبدلته إعادة إرسال وإحنا بنقارن — بطل، ومايتقبلش */
+  | 'SUPERSEDED'
   | 'RESEND_TOO_SOON'
   | 'RESEND_LIMIT'
+
+/**
+ * حالة بوابة التحقق بخطوتين — **تلات حالات مش اتنين**:
+ * - `ENABLED` / `DISABLED`: قيمة قريناها من القاعدة بنجاح (والمفتاح الغايب أو الفاضي = المُسلَّم، مقفول).
+ * - `UNKNOWN`: قراءة الإعداد نفسها فشلت، فمش معروف هل الرمز مطلوب.
+ * `UNKNOWN` **ممنوع** يتعامل معاملة `DISABLED`: ده بيخلّي خلل في قراءة الإعداد يفتح جلسة بلا رمز.
+ */
+export type TwoFactorGate = 'ENABLED' | 'DISABLED' | 'UNKNOWN'
 
 export class TwoFactorError extends Error {
   constructor(
@@ -84,17 +99,25 @@ export class TwoFactorService {
   ) {}
 
   /**
-   * التحقق بخطوتين مفتوح؟ يُقرأ من القاعدة كل محاولة دخول (بلا كاش) عشان مفتاح الطوارئ
-   * يسري في نفس اللحظة بلا إعادة تشغيل. القيمة الناقصة أو أي قيمة غير 'true' = مقفول (فشل مقفول).
+   * حالة التحقق بخطوتين: تُقرأ من القاعدة كل محاولة دخول (بلا كاش) عشان مفتاح الطوارئ
+   * يسري في نفس اللحظة بلا إعادة تشغيل.
+   *
+   * الفرق اللي بيحمي الدخول: **مفتاح غايب أو فاضي ≠ قراءة فشلت.**
+   * - صف مش موجود، أو قيمته فاضية، أو أي قيمة غير 'true' → `DISABLED`: دي قيمة قريناها بنجاح
+   *   ومعناها المُسلَّم (مقفول) — السلوك المقصود زي ما هو.
+   * - استثناء من القراءة (القاعدة مش رادة، الجدول مش موجود، مهلة) → `UNKNOWN`: مانعرفش هل الرمز
+   *   مطلوب، والمتصل لازم **يرفض الدخول** (فشل مقفول). قبل كده كانت بترجّع false هنا، فخلل قراءة
+   *   واحد كان بيفتح جلسة بلا رمز ولا حالة معلَّقة.
    */
-  async isEnabled(): Promise<boolean> {
+  async gate(): Promise<TwoFactorGate> {
     try {
       const row = await this.config.findOne({ where: { key: TWO_FACTOR_CONFIG_KEY } })
-      return (row?.value ?? '').trim().toLowerCase() === 'true'
+      return (row?.value ?? '').trim().toLowerCase() === 'true' ? 'ENABLED' : 'DISABLED'
     } catch (error) {
-      // القاعدة مش رادة: مانقفلش الدخول على المالك بسبب قراءة إعداد فشلت
-      this.logger.warn(`تعذّر قراءة ${TWO_FACTOR_CONFIG_KEY} فاعتُبر مقفولًا: ${(error as Error).message}`)
-      return false
+      this.logger.error(
+        `تعذّر قراءة ${TWO_FACTOR_CONFIG_KEY} — حالة التحقق بخطوتين مش معروفة والدخول بيُرفض: ${(error as Error).message}`
+      )
+      return 'UNKNOWN'
     }
   }
 
@@ -173,6 +196,11 @@ export class TwoFactorService {
   /**
    * التحقق من الرمز. النجاح بيستهلك الحالة (مرة واحدة) ويرجّع الصف عشان auth.service يفتح الجلسة.
    * أي رفض بيرمي TwoFactorError برسالة عربية — ومفيش جلسة في أي حالة رفض.
+   *
+   * **الصف بيتقرا تاني بعد المقارنة.** مقارنة bcrypt بتاخد وقتًا محسوسًا (عشرات المللي)، والصف
+   * ممكن يتغيّر خلالها: محاولة متوازية بتزوّد العدّاد، أو إعادة إرسال بتبدّل الرمز. فأي قرار بعد
+   * المقارنة (العدّ والقفل، والاستهلاك) مبني على القراءة الجديدة وعلى تحديث مشروط بها — مش على
+   * النسخة اللي دخلنا بيها المقارنة.
    */
   async verify(token: string, code: string): Promise<LoginChallenge> {
     const row = await this.challenges.findOne({ where: { token: (token ?? '').trim() } })
@@ -180,21 +208,15 @@ export class TwoFactorService {
     if (!row || row.token !== (token ?? '').trim()) {
       throw new TwoFactorError('UNKNOWN', 'طلب الدخول مش معروف أو انتهى — ابدأ تسجيل الدخول من جديد')
     }
-    if (row.consumedAt) {
-      throw new TwoFactorError('CONSUMED', 'الرمز ده استُخدم قبل كده — ابدأ تسجيل الدخول من جديد')
-    }
-    if (row.lockedAt) {
-      throw new TwoFactorError('LOCKED', 'المحاولات خلصت وطلب الدخول اتقفل — ابدأ تسجيل الدخول من جديد')
-    }
+    this.assertOpen(row)
     if (row.expiresAt.getTime() <= Date.now()) {
       throw new TwoFactorError('EXPIRED', 'انتهت صلاحية الرمز — ابدأ تسجيل الدخول من جديد واطلب رمزًا جديدًا')
     }
     const clean = String(code ?? '').replace(/\D/g, '')
     const ok = clean.length === OTP.codeLength && (await bcrypt.compare(clean, row.codeHash))
+    const fresh = await this.reread(row.id)
     if (!ok) {
-      const attempts = row.attempts + 1
-      const locked = attempts >= OTP.maxAttempts
-      await this.challenges.update({ id: row.id }, { attempts, ...(locked ? { lockedAt: new Date() } : {}) })
+      const { attempts, locked } = await this.countWrongAttempt(row.id, fresh)
       this.logger.warn(`رمز تحقق غلط للحساب ${row.userId} (محاولة ${attempts}/${OTP.maxAttempts})${locked ? ' — الطلب اتقفل' : ''}`)
       throw new TwoFactorError(
         locked ? 'LOCKED' : 'WRONG_CODE',
@@ -203,15 +225,74 @@ export class TwoFactorService {
           : `الرمز غلط — باقي لك ${OTP.maxAttempts - attempts} محاولة`
       )
     }
-    // استهلاك بشرط: تحديث واحد مشروط بأن الصف لسه مفتوح، فطلبين متوازيين بنفس الرمز مايفتحوش جلستين
+    // الرمز صح، لكن لازم يكون **لسه** رمز الحالة: إعادة إرسال بدّلت الـhash وإحنا بنقارن؟ القديم بطل.
+    // المقارنة هنا حرفية في JS لأن الـcollation مش حسّاس لحالة الأحرف (نفس سبب مقارنة التوكن فوق)
+    this.assertOpen(fresh)
+    if (fresh.codeHash !== row.codeHash) {
+      throw new TwoFactorError('SUPERSEDED', 'الرمز ده بطل بعد إرسال رمز جديد — استخدم آخر رمز وصلك')
+    }
+    // استهلاك بشرط: تحديث واحد مشروط بأن الصف لسه مفتوح **وأن الرمز لسه هو اللي قارنّاه**، فطلبين
+    // متوازيين بنفس الرمز مايفتحوش جلستين، ورمز استبدلته إعادة إرسال مايُستهلكش ولو كان التحقق جارٍ
     const consumed = await this.challenges.update(
-      { id: row.id, consumedAt: IsNull(), lockedAt: IsNull() },
+      { id: row.id, codeHash: row.codeHash, consumedAt: IsNull(), lockedAt: IsNull() },
       { consumedAt: new Date() }
     )
     if (!consumed.affected) {
       throw new TwoFactorError('CONSUMED', 'الرمز ده استُخدم قبل كده — ابدأ تسجيل الدخول من جديد')
     }
     return row
+  }
+
+  /** الصف لسه مفتوح؟ مستهلك أو مقفول = رفض بنفس رسائل النهاردة بالحرف. */
+  private assertOpen(row: LoginChallenge): void {
+    if (row.consumedAt) {
+      throw new TwoFactorError('CONSUMED', 'الرمز ده استُخدم قبل كده — ابدأ تسجيل الدخول من جديد')
+    }
+    if (row.lockedAt) {
+      throw new TwoFactorError('LOCKED', 'المحاولات خلصت وطلب الدخول اتقفل — ابدأ تسجيل الدخول من جديد')
+    }
+  }
+
+  /** الصف من القاعدة من جديد بمعرّفه (التوكن اتحقق قبل كده) — واختفاؤه = طلب دخول مش معروف. */
+  private async reread(id: number): Promise<LoginChallenge> {
+    const row = await this.challenges.findOne({ where: { id } })
+    if (!row) {
+      throw new TwoFactorError('UNKNOWN', 'طلب الدخول مش معروف أو انتهى — ابدأ تسجيل الدخول من جديد')
+    }
+    return row
+  }
+
+  /**
+   * عدّ محاولة غلط — بحيث المتوازي مايضيّعش أي محاولة:
+   * الزيادة بتتكتب بتحديث **مشروط** بالقيمة اللي قريناها لتوّنا
+   * (`WHERE id = @id AND attempts = @seen AND consumedAt IS NULL AND lockedAt IS NULL`).
+   * لو استدعاء تاني سبقنا وزوّد العدّاد، التحديث مايأثّرش على أي صف (SQL Server بيعيد تقييم شرط
+   * الـWHERE بعد ما قفل الصف يُفك)، فنقرأ القيمة الجديدة من القاعدة ونزوّد من فوقها. القفل بيتكتب
+   * في **نفس** التحديث اللي بيوصل للحد، فمفيش نافذة بين وصول العدّاد للحد وكتابة القفل.
+   * القرار بيرجع من القيمة اللي القاعدة قبلتها، مش من القيمة المقروءة قبل المقارنة (سبب فقدان
+   * المحاولات المتوازية قبل كده: `row.attempts + 1` محسوبة في JS ومكتوبة بالتعيين).
+   */
+  private async countWrongAttempt(
+    id: number,
+    seen: LoginChallenge
+  ): Promise<{ attempts: number; locked: boolean }> {
+    let current = seen
+    for (let round = 0; round < OTP.attemptWriteRounds; round++) {
+      // استدعاء متوازي قفل الحالة أو استهلكها؟ مفيش عدّ ولا رسالة «باقي لك» — الرفض بسببه الحقيقي
+      this.assertOpen(current)
+      const attempts = current.attempts + 1
+      const locked = attempts >= OTP.maxAttempts
+      const written = await this.challenges.update(
+        { id, attempts: current.attempts, consumedAt: IsNull(), lockedAt: IsNull() },
+        { attempts, ...(locked ? { lockedAt: new Date() } : {}) }
+      )
+      if (written.affected) return { attempts, locked }
+      current = await this.reread(id)
+    }
+    // الصف بيتغيّر تحت إيدينا أكتر من الحد: ضغط متوازي على رمز واحد، مش استخدام عادي → نقفل
+    this.logger.error(`ضغط متوازي على حالة دخول واحدة (${id}) فوق الحد المسموح — الحالة اتقفلت`)
+    await this.challenges.update({ id, consumedAt: IsNull(), lockedAt: IsNull() }, { lockedAt: new Date() })
+    return { attempts: OTP.maxAttempts, locked: true }
   }
 
   /** إعادة إرسال رمز جديد لنفس محاولة الدخول — بمهلة وبحد أعلى، والمحاولات الغلط مابتتصفّرش. */

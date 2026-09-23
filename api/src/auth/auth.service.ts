@@ -202,13 +202,27 @@ export class AuthService {
     return this.finishLogin(user, 'DOMAIN', directoryUser.mail ?? user.email)
   }
 
-  /** الخطوة الأخيرة المشتركة للمسارين: جلسة فورًا لما التحقق مقفول، وإلا رمز على البريد. */
+  /**
+   * الخطوة الأخيرة المشتركة للمسارين: جلسة فورًا لما التحقق مقفول، وإلا رمز على البريد.
+   * وحالة تالتة لازم تتفصل صريحة: **مش معروف**. قراءة مفتاح التحقق لما تفشل مش معناها إن المالك
+   * قفله — فالدخول بيُرفض ومفيش جلسة ولا حالة معلَّقة (فشل مقفول).
+   */
   private async finishLogin(
     user: User,
     method: 'PASSWORD' | 'DOMAIN',
     address: string
   ): Promise<LoginResult> {
-    if (!(await this.twoFactor.isEnabled())) {
+    const gate = await this.twoFactor.gate()
+    if (gate === 'UNKNOWN') {
+      this.logger.error(
+        `رفض دخول ${method} للحساب ${user.id}: تعذّر قراءة مفتاح ${TWO_FACTOR_CONFIG_KEY} من قاعدة البيانات`
+      )
+      throw new ServiceUnavailableException(
+        'تعذّر قراءة إعداد التحقق بخطوتين من قاعدة البيانات، ومنعرفش هل رمز البريد مطلوب — ' +
+          'الدخول موقوف لحد ما القاعدة ترد. راجع اتصال قاعدة البيانات وسجل الخادم وحاول تاني.'
+      )
+    }
+    if (gate === 'DISABLED') {
       await this.users.update({ id: user.id }, { lastLoginAt: new Date() })
       return this.issueSession(user)
     }
@@ -340,8 +354,11 @@ export class AuthService {
    * بلا أي سر: كلمة حساب الخدمة وكلمة البريد مابيظهروش، بس «مضبوط / غير مضبوط».
    */
   async securityStatus() {
+    const gate = await this.twoFactor.gate()
     return {
-      twoFactorEnabled: await this.twoFactor.isEnabled(),
+      // «مفتوح» بس اللي بيرجع true. لو قراءة المفتاح فشلت مابنقولش «مقفول» — بنقول مش معروف صراحةً
+      twoFactorEnabled: gate === 'ENABLED',
+      twoFactorState: gate,
       twoFactorConfigKey: TWO_FACTOR_CONFIG_KEY,
       mail: this.mail.status(),
       directory: this.directory.status(),

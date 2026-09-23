@@ -105,6 +105,7 @@ import { cancelPayrollReversalLines, carryReversedRunExemptions, describePayroll
 // قرار المالك (22 سبتمبر): سلسلة اعتماد المسير (الاعتماد بخطوة واحدة يبقى لمسير بلا سلسلة)، وصرف المسير موظف بموظف (الآثار المالية تبقى في pay وحده)
 import { assertPayrollRunHasNoChain, voidPayrollRunApprovals } from './payroll-approval-chain'
 import { assertPayrollRunNotDisbursed, closePayrollRunDisbursement } from './payroll-disbursement'
+import { PayrollItemDisbursement } from './payroll-disbursement.entities'
 
 // الخطوة 16: مدخلات تعريف المسير من الشاشة (تُتحقق هنا ضد القاعدة؛ الـDTO يتحقق من الشكل فقط).
 export interface PayrollRunDefinitionInput {
@@ -2888,8 +2889,8 @@ export class PayrollService {
   /**
    * تقرير حالة الصرف: لكل طريقة صرف (نقدي / تحويل بنكي / نقدي + بنك) عدد الموظفين وصافيهم،
    * ومنه كام رايح للبنك وكام بيتصرف نقدي. نفس مصدر كشف البنوك بالحرف (طريقة الصرف من ملف الموظف
-   * لا من لقطة البند، والتقسيم بـpayrollPaySplit، وصف التصفية خارج المستحق) عشان الشاشتين
-   * ما يقولوش رقمين مختلفين لنفس المسير.
+   * لا من لقطة البند إلا لو البند اتصرف فعلًا، والتقسيم بـpayrollPaySplit، وصف التصفية خارج المستحق)
+   * عشان الشاشتين ما يقولوش رقمين مختلفين لنفس المسير.
    */
   async payMethodReport(user: JwtPayload, runId: number) {
     // detail يتحقق من صلاحية المسير ونطاق فرعه قبل أي بند
@@ -2897,8 +2898,10 @@ export class PayrollService {
     const employeeIds = [...new Set(detail.items.map(item => item.employeeId))]
     const employees = employeeIds.length ? await this.runs.manager.getRepository(Employee).find({ where: { id: In(employeeIds) },
       select: ['id', 'employeeCode', 'fullName', 'branchId', 'payMethod', 'bankTransferAmount', 'bankName', 'iban'] }) : []
+    // نفس علامات الصرف اللي كشف البنوك بيقرأها: البند المصروف بتقسيمه المثبت
+    const marks = await this.runs.manager.getRepository(PayrollItemDisbursement).find({ where: { runId: detail.id } })
     const sources = bankSheetSources({ items: detail.items, employees, members: detail.members,
-      branchScope: branchScopeOf(user), settlementOf: payrollItemSettlementPayout })
+      branchScope: branchScopeOf(user), settlementOf: payrollItemSettlementPayout, runStatus: detail.status, marks })
     return bankSheetPayMethodSummary(buildBankSheet(sources).rows)
   }
 }

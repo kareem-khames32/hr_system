@@ -1321,12 +1321,13 @@ export class AttendanceService {
   async employeeWorkingDays(user: JwtPayload, employeeId: number, from: string, to: string) {
     if (!Number.isInteger(employeeId) || employeeId < 1) throw new BadRequestException('الموظف غير صالح')
     const emp = await this.employees.findOneBy({ id: employeeId })
-    if (!emp) throw new NotFoundException('الموظف غير موجود')
+    // لا كاشف وجود: غير الموجود وخارج النطاق نفس الرد بالحرف، و«غير موجود» لمن يملك النطاق كله وحده
     if (user.employeeId !== employeeId) {
       if (!userHasPerm(user, 'attendance.view_all')) throw new ForbiddenException('لا تملك صلاحية عرض جدول الموظف')
       const scope = branchScopeOf(user)
-      if (scope !== null && scope !== emp.branchId) throw new ForbiddenException('الموظف خارج نطاق فرعك')
+      if (scope !== null && scope !== emp?.branchId) throw new ForbiddenException('الموظف خارج نطاق فرعك')
     }
+    if (!emp) throw new NotFoundException('الموظف غير موجود')
     const [days, weekendDays] = await Promise.all([
       this.workingDaysForEmployee(employeeId, from, to),
       this.calendarWeekendDays(employeeId, emp.branchId),
@@ -2695,9 +2696,10 @@ export class AttendanceService {
     return this.days.manager.transaction(async em => {
       await lockPayrollEmployees(em, [employeeId!])
       const employee = await em.getRepository(Employee).findOneBy({ id: employeeId! })
-      if (!employee) throw new NotFoundException('الموظف غير موجود')
       const scope = branchScopeOf(user)
-      if (!isSelf && scope !== null && employee.branchId !== scope) throw new ForbiddenException('الموظف خارج نطاق فرعك')
+      // لا كاشف وجود: خارج النطاق وغير الموجود نفس الرد لمن لا يملك النطاق كله
+      if (!isSelf && scope !== null && employee?.branchId !== scope) throw new ForbiddenException('الموظف خارج نطاق فرعك')
+      if (!employee) throw new NotFoundException('الموظف غير موجود')
       let exceptEntryId: number | undefined, automatic = false
       if (requestId != null) {
         if (!Number.isSafeInteger(requestId) || requestId < 1) throw new BadRequestException('معرف طلب الإضافي غير صالح')
@@ -3491,18 +3493,20 @@ export class AttendanceService {
       throw new BadRequestException('صيغة الشهر YYYY-MM')
     }
     const emp = await this.employees.findOne({ where: { id: employeeId } })
-    if (!emp) throw new NotFoundException('الموظف غير موجود')
-    // الموظف يشوف شهره هو فقط — غير كده يحتاج attendance.view_all وداخل نطاقه
+    // الموظف يشوف شهره هو فقط — غير كده يحتاج attendance.view_all وداخل نطاقه.
+    // لا كاشف وجود (نفس نمط ملف الموظف وtyped-deductions): الموظف غير الموجود والموظف خارج النطاق
+    // يستلمان نفس الرد بالحرف، فالنداء مايتحولش لوسيلة اكتشاف مين موجود؛ ومن يملك النطاق كله وحده يشوف «غير موجود».
     if (user.employeeId !== employeeId) {
       const scope = branchScopeOf(user)
       const canViewAll =
         user.role === 'super_admin' ||
         (user.permissions ?? []).includes('*') ||
         (user.permissions ?? []).includes('attendance.view_all')
-      if (!canViewAll || (scope !== null && emp.branchId !== scope)) {
+      if (!canViewAll || (scope !== null && emp?.branchId !== scope)) {
         throw new BadRequestException('لا تملك صلاحية عرض حضور غيرك')
       }
     }
+    if (!emp) throw new NotFoundException('الموظف غير موجود')
     // صفوف الشهر فقط من قاعدة البيانات (لا تحميل كل تاريخ الموظف وفلترته هنا)
     const { from: rangeFrom, to: rangeTo } = this.monthRange(month, dayRange)
     // غياب أقدم من نافذة اللحاق الليلية لا يجسّده أحد، فيظهر الشهر «بلا غياب» حتى

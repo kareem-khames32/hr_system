@@ -4,6 +4,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { bankSheetSources, buildBankSheet } from './bank-sheet'
+import { PayrollItemDisbursement } from './payroll-disbursement.entities'
 import { payrollItemSettlementPayout } from './payroll-settlement-salary'
 import { PayrollService } from './payroll.service'
 
@@ -22,8 +23,10 @@ export class PayrollBankSheetController {
     const employeeIds = [...new Set(detail.items.map(item => item.employeeId))]
     const employees = employeeIds.length ? await this.dataSource.getRepository(Employee).find({ where: { id: In(employeeIds) },
       select: ['id', 'employeeCode', 'fullName', 'branchId', 'payMethod', 'bankTransferAmount', 'bankName', 'iban'] }) : []
+    // اللي اتصرف فعلًا: علامات الصرف المثبتة + حالة المسير — الصف المصروف بتقسيمه المسجل لا بملف الموظف الحالي
+    const marks = await this.dataSource.getRepository(PayrollItemDisbursement).find({ where: { runId: detail.id } })
     const sources = bankSheetSources({ items: detail.items, employees, members: detail.members, branchScope: scope,
-      settlementOf: payrollItemSettlementPayout })
+      settlementOf: payrollItemSettlementPayout, runStatus: detail.status, marks })
     return { run: { id: detail.id, name: detail.name, period: detail.period, status: detail.status, startDate: detail.startDate, endDate: detail.endDate },
       ...buildBankSheet(sources) }
   }

@@ -4,6 +4,7 @@
 import { HOLIDAY_WORK_SOURCE_PREFIX } from '../attendance/holiday-work'
 import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
 import { buildBankSheet } from '../payroll/bank-sheet'
+import { recordedDisbursement } from '../payroll/payroll-disbursement-split'
 import { payrollItemSettlementPayout } from '../payroll/payroll-settlement-salary'
 import { costCenterCents as cents, costCenterMoney as money } from './cost-center-report'
 
@@ -70,6 +71,9 @@ export interface FinancialItemSource {
   employerInsurance?: MoneyInput
   /** علامة «مصروف مع التصفية» من تفصيل البند: نص JSON لـ breakdown.settlementPayout كما هو، أو null */
   settlementPayout?: string | null
+  /** علامة صرف البند (payroll_item_disbursements) لو موجودة: اللي اتصرف فعلًا بتقسيمه المثبت */
+  disbursementStatus?: string | null; disbursedPayMethod?: string | null
+  disbursedBankAmount?: MoneyInput; disbursedCashAmount?: MoneyInput
 }
 
 /** قيد الدفتر المرتبط بسطر في obligationLines: تصنيفه ونصه ومصدره ونوع الخصم/المكافأة لو موجود. */
@@ -205,13 +209,19 @@ export function computeFinancialRow(source: FinancialItemSource, obligations: Re
   const gross = basic + allowances + overtime + otherAdditions
   const totalDeductions = DEDUCTION_KEYS.reduce((sum, key) => sum + deductions[key], 0n)
   const net = cents(source.netPay)
-  const payMethod = source.employeePayMethod || source.itemPayMethod || 'transfer'
+  const livePayMethod = source.employeePayMethod || source.itemPayMethod || 'transfer'
   // تقسيم بنك/نقدي من كشف البنوك نفسه (payroll/bank-sheet.ts) — مصدر واحد للقاعدة: الموظف اللي راتبه «مصروف مع التصفية»
   // برّه الكشف، فبنكه صفر ونقديه صفر هنا كمان، وصافيه كامل في عمود الصافي (تكلفة الشهر) ومذكور في عمود «مع التصفية».
   // قبل كده الدفتر كان بيقسّم كل صف فعمود «بنك» مابيتصالحش على كشف البنك (37,440.00 مقابل 18,720.00 لنفس المسير).
+  // واللي اتصرف فعلًا بيغلب ملف الموظف الحالي (payroll-disbursement-split.ts): تغيير طريقة الصرف بعد الصرف
+  // كان بينقل صافي البند من عمود لعمود في الدفتر لواقعة صرف حصلت خلاص.
+  const recorded = recordedDisbursement({ runStatus: source.runStatus, itemPayMethod: source.itemPayMethod,
+    mark: source.disbursementStatus ? { status: source.disbursementStatus, payMethod: source.disbursedPayMethod,
+      bankAmount: source.disbursedBankAmount, cashAmount: source.disbursedCashAmount } : null })
   const sheet = buildBankSheet([{ employeeId: toId(source.employeeId) ?? 0, employeeCode: source.employeeCode ?? '', fullName: source.fullName ?? '',
-    payMethod, bankTransferAmount: source.bankTransferAmount ?? null, bankName: null, iban: null, netPay: money(net),
-    settlementPayout: payrollItemSettlementPayout(source.settlementPayout ? `{"settlementPayout":${source.settlementPayout}}` : null) }])
+    payMethod: livePayMethod, bankTransferAmount: source.bankTransferAmount ?? null, bankName: null, iban: null, netPay: money(net),
+    settlementPayout: payrollItemSettlementPayout(source.settlementPayout ? `{"settlementPayout":${source.settlementPayout}}` : null), recorded }])
+  const payMethod = sheet.rows[0]?.payMethod ?? recorded?.payMethod ?? livePayMethod
   const split = { bank: sheet.rows[0]?.bankAmount ?? 0, cash: sheet.rows[0]?.cashAmount ?? 0, settlement: sheet.settlement.total }
   const hours = Number(source.overtimeHours ?? 0)
   const insurance = source.employerInsurance

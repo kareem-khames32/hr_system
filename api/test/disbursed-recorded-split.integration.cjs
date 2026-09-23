@@ -1,0 +1,160 @@
+'use strict'
+// «اللي اتصرف فعلًا» حيًّا على قاعدة SQL مؤقتة معزولة (تدقيق 24 سبتمبر — N02):
+// بند مسير اتسجل صرفه نقدي (payroll_item_disbursements) وبعده ملف الموظف بقى «تحويل بنكي» —
+// كشف البنوك والتقرير المالي وشاشة الصرف وتقرير طرق الصرف لازم يقولوا نفس الرقم: بنك 0.00 / نقدي 1,000.00.
+// والبند اللي لسه ماتصرفش (بلا علامة أو بعلامة «لم يتم») يفضل على طريقة الصرف الحالية في الملف.
+// لا مساس بقاعدة الشركة ولا بقاعدة المراجعة؛ التوكن موقّع محليًّا بسر عشوائي (لا كلمات مرور ولا أسرار).
+const { test, before, after } = require('node:test')
+const assert = require('node:assert/strict')
+const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto')
+const apiRoot = path.resolve(__dirname, '..')
+require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
+require('../node_modules/reflect-metadata')
+const sql = require('../node_modules/mssql')
+const env = require('../node_modules/dotenv').parse(fs.readFileSync(path.join(apiRoot, '.env')))
+const database = `hr_recorded_split_test_${crypto.randomBytes(8).toString('hex')}`
+const NAME = /^hr_recorded_split_test_[a-f0-9]{16}$/
+const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-recorded-split-files-'))
+const secret = crypto.randomBytes(48).toString('hex')
+const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
+const IBAN = 'SA0380000000608010167519'
+let app, master, ds, base, created = false, admin
+const E = {}, R = {}, I = {}
+const repo = name => { assert.equal(ds.options.database, database); return ds.getRepository(name) }
+const C = value => Math.round(Number(value) * 100)
+
+async function get(endpoint) {
+  const token = jwt.sign({ sub: admin.id, email: admin.email, role: admin.role, branchId: null, employeeId: null, tokenVersion: 0, permissions: ['*'] })
+  const response = await fetch(base + endpoint, { headers: { Authorization: `Bearer ${token}` } })
+  const text = await response.text()
+  const body = text ? JSON.parse(text) : null
+  assert.equal(response.status, 200, `${endpoint}: ${text}`)
+  return body
+}
+/** الأربع شاشات لنفس المسير: كشف البنوك، صفوف التقرير المالي، شاشة الصرف، وتقرير طرق الصرف. */
+async function surfaces(run, period) {
+  const [sheet, register, screen, methods] = await Promise.all([
+    get(`/payroll/runs/${run.id}/bank-sheet`), get(`/reports/financial/payroll-register?period=${period}`),
+    get(`/payroll/disbursement/runs/${run.id}`), get(`/payroll/runs/${run.id}/pay-methods`),
+  ])
+  const rowOf = employeeId => ({
+    sheet: sheet.rows.find(row => row.employeeId === employeeId),
+    register: register.rows.find(row => row.employeeId === employeeId),
+    screen: screen.rows.find(row => row.employeeId === employeeId),
+  })
+  return { sheet, register, screen, methods, rowOf }
+}
+const split = ({ sheet, register, screen }) => [
+  [sheet.payMethod, C(sheet.bankAmount), C(sheet.cashAmount)],
+  [register.payMethod, C(register.bank), C(register.cash)],
+  [screen.payMethod, C(screen.bankAmount), C(screen.cashAmount)],
+]
+
+before(async () => {
+  assert.equal(env.DB_TYPE || 'mssql', 'mssql')
+  assert.match(database, NAME); assert.notEqual(database, env.DB_DATABASE)
+  master = await new sql.ConnectionPool({ server: env.DB_HOST || 'localhost', port: Number(env.DB_PORT || 1433), user: env.DB_USERNAME,
+    password: env.DB_PASSWORD, database: 'master', options: { encrypt: false, trustServerCertificate: true }, connectionTimeout: 5000 }).connect()
+  await master.request().query(`CREATE DATABASE [${database}]`); created = true
+  Object.assign(process.env, env, { DB_DATABASE: database, DB_SYNCHRONIZE: 'true', NODE_ENV: 'test', JWT_SECRET: secret, UPLOADS_ROOT: uploads })
+  app = await require('../node_modules/@nestjs/core').NestFactory.create(require('../src/app.module').AppModule, { logger: ['error'], abortOnError: false })
+  app.setGlobalPrefix('api')
+  app.useGlobalPipes(new (require('../node_modules/@nestjs/common').ValidationPipe)({ whitelist: true, transform: true }))
+  await app.listen(0, '127.0.0.1')
+  for (const job of app.get(require('../node_modules/@nestjs/schedule').SchedulerRegistry).getCronJobs().values()) job.stop()
+  ds = app.get(require('../node_modules/typeorm').DataSource)
+  assert.equal(ds.options.database, database)
+  base = `http://127.0.0.1:${app.getHttpServer().address().port}/api`
+
+  const cycle = await repo('RequestsConfig').findOneBy({ key: 'payroll.cycle_start_day' })
+  await repo('RequestsConfig').save(cycle ? { ...cycle, value: '23' } : { key: 'payroll.cycle_start_day', value: '23' })
+  const branch = await repo('Branch').save({ code: 'FR_RS', name: 'فرع الصرف' })
+  admin = await repo('User').save({ email: 'admin@rs.invalid', displayName: 'مدير النظام', passwordHash: 'test-only', role: 'super_admin',
+    branchId: null, permissions: JSON.stringify(['*']) })
+  // كل الموظفين بدأوا «نقدي» ⇒ لقطة البند نقدي، وبعد الصرف بيتحولوا «تحويل بنكي»
+  const employee = (code, fullName) => repo('Employee').save({ employeeCode: code, fullName, branchId: branch.id, joinDate: '2020-01-01',
+    basicSalary: 1000, housingAllowance: 0, transportAllowance: 0, otherAllowance: 0, status: 'active', isActive: true, payMethod: 'cash' })
+  E.paid = await employee('RS-001', 'مصروف نقدي')
+  E.open = await employee('RS-002', 'لسه ماتصرفلوش')
+  E.runLevel = await employee('RS-003', 'مسير اتصرف كله')
+
+  const snapshot = emp => ({ version: 1, capturedAt: '2026-08-01T00:00:00.000Z', employeeCode: emp.employeeCode, fullName: emp.fullName,
+    branchId: branch.id, departmentId: null, teamId: null, costCenterId: null, coverFrom: null, coverTo: null, coverDays: null,
+    prorataFactor: null, monthlyDays: 30, basicSalary: 1000, allowances: 0, gross: 1000, grossEarned: 1000 })
+  const item = (runId, emp, netPay) => repo('PayrollItem').save({ runId, employeeId: emp.id, basicSalary: netPay, allowances: 0,
+    payMethod: 'cash', netPay, breakdown: '{}' })
+
+  // مسير معتمد: بند اتعلّم «تم الصرف» نقدي، وبند تاني لسه ماتعلّمش
+  R.approved = await repo('PayrollRun').save({ status: 'APPROVED', period: '2026-08', scopeType: 'COMPANY', name: 'مسير أغسطس',
+    startDate: '2026-07-23', endDate: '2026-08-22' })
+  await repo('PayrollRunMember').save([{ runId: R.approved.id, employeeId: E.paid.id, snapshot: snapshot(E.paid) },
+    { runId: R.approved.id, employeeId: E.open.id, snapshot: snapshot(E.open) }])
+  I.paid = await item(R.approved.id, E.paid, 1000)
+  I.open = await item(R.approved.id, E.open, 500)
+  await repo('PayrollItemDisbursement').save({ runId: R.approved.id, itemId: I.paid.id, employeeId: E.paid.id, status: 'PAID',
+    amount: 1000, bankAmount: 0, cashAmount: 1000, payMethod: 'cash', note: 'استلم نقدي', markedByUserId: admin.id, markedAt: new Date('2026-08-23T09:00:00Z') })
+
+  // مسير مصروف كله مرة واحدة بلا علامات (الشهر اللي قبله)
+  R.runLevel = await repo('PayrollRun').save({ status: 'PAID', period: '2026-07', scopeType: 'COMPANY', name: 'مسير يوليو',
+    startDate: '2026-06-23', endDate: '2026-07-22' })
+  await repo('PayrollRunMember').save({ runId: R.runLevel.id, employeeId: E.runLevel.id, snapshot: snapshot(E.runLevel) })
+  I.runLevel = await item(R.runLevel.id, E.runLevel, 700)
+
+  // ... وبعد الصرف: ملف كل الموظفين بقى «تحويل بنكي»
+  for (const emp of [E.paid, E.open, E.runLevel]) {
+    await repo('Employee').update(emp.id, { payMethod: 'transfer', bankName: 'بنك الاختبار', iban: IBAN })
+  }
+}, { timeout: 180000 })
+
+after(async t => {
+  const errors = []
+  try { if (app) await app.close() } catch (error) { errors.push(error) }
+  try {
+    if (created && master) {
+      assert.match(database, NAME); assert.notEqual(database, env.DB_DATABASE)
+      await master.request().query(`ALTER DATABASE [${database}] SET SINGLE_USER WITH ROLLBACK IMMEDIATE; DROP DATABASE [${database}]`)
+      const found = await master.request().input('database', sql.NVarChar, database).query('SELECT name FROM sys.databases WHERE name = @database')
+      assert.equal(found.recordset.length, 0)
+      t.diagnostic(`Cleanup verified: ${database} is absent from sys.databases.`)
+    }
+  } catch (error) { errors.push(error) }
+  try { if (master) await master.close() } catch (error) { errors.push(error) }
+  try { fs.rmSync(uploads, { recursive: true, force: true }) } catch (error) { errors.push(error) }
+  if (errors.length) throw new AggregateError(errors, 'recorded disbursement split fixture cleanup failed')
+})
+
+test('RS-01: البند المصروف نقدي يفضل نقدي في الشاشات الأربع بعد ما الملف بقى «تحويل بنكي»، واللي لسه ماتصرفش بيتبع الملف', async () => {
+  const view = await surfaces(R.approved, '2026-08')
+  // الصف المصروف: نقدي في كشف البنوك والتقرير المالي وشاشة الصرف بالحرف
+  assert.deepEqual(split(view.rowOf(E.paid.id)), [['cash', 0, 100000], ['cash', 0, 100000], ['cash', 0, 100000]])
+  assert.equal(view.rowOf(E.paid.id).screen.state, 'PAID')
+  assert.equal(view.rowOf(E.paid.id).sheet.issue, null, 'مبلغ اتصرف خلاص مش تنبيه بيانات صرف')
+  // الصف اللي لسه ماتعلّمش: طريقة الصرف الحالية في الملف (تحويل بنكي) — السلوك الصح ما اتغيرش
+  assert.deepEqual(split(view.rowOf(E.open.id)), [['transfer', 50000, 0], ['transfer', 50000, 0], ['transfer', 50000, 0]])
+  assert.equal(view.rowOf(E.open.id).screen.state, 'UNPAID')
+  // المجاميع والتسوية: بنك 500 ونقدي 1000 في الكشف = الدفتر = شاشة الصرف = تقرير طرق الصرف
+  assert.deepEqual([C(view.sheet.totals.bank), C(view.sheet.totals.cash), C(view.sheet.totals.net)], [50000, 100000, 150000])
+  assert.deepEqual([C(view.register.totals.bank), C(view.register.totals.cash), C(view.register.totals.settlement), C(view.register.totals.net)],
+    [50000, 100000, 0, 150000])
+  assert.deepEqual([C(view.screen.totals.paid.bank), C(view.screen.totals.paid.cash)], [0, 100000])
+  assert.deepEqual([C(view.screen.totals.unpaid.bank), C(view.screen.totals.unpaid.cash)], [50000, 0])
+  assert.deepEqual([C(view.screen.totals.payable.bank), C(view.screen.totals.payable.cash)], [C(view.sheet.totals.bank), C(view.sheet.totals.cash)])
+  assert.deepEqual([C(view.methods.cash?.bank ?? 0), C(view.methods.cash?.cash ?? 0)], [0, 100000])
+  assert.deepEqual([C(view.methods.transfer?.bank ?? 0), C(view.methods.transfer?.cash ?? 0)], [50000, 0])
+  assert.equal(C(view.register.totals.bank) + C(view.register.totals.cash) + C(view.register.totals.settlement), C(view.register.totals.net))
+}, { timeout: 120000 })
+
+test('RS-02: مسير اتصرف كله مرة واحدة بلا علامات بياخد لقطة البند، و«لم يتم» ترجّع الصف لملف الموظف', async () => {
+  const runLevel = await surfaces(R.runLevel, '2026-07')
+  assert.deepEqual(split(runLevel.rowOf(E.runLevel.id)), [['cash', 0, 70000], ['cash', 0, 70000], ['cash', 0, 70000]])
+  assert.deepEqual([C(runLevel.sheet.totals.bank), C(runLevel.sheet.totals.cash)], [0, 70000])
+  assert.equal(runLevel.rowOf(E.runLevel.id).screen.state, 'PAID')
+
+  // «لم يتم» (اتقفل الصرف بسبب مكتوب): البند لسه مستحق ⇒ طريقة الصرف الحالية
+  await repo('PayrollItemDisbursement').update({ itemId: I.paid.id }, { status: 'UNPAID', bankAmount: 0, cashAmount: 0, payMethod: null })
+  const after = await surfaces(R.approved, '2026-08')
+  assert.deepEqual(split(after.rowOf(E.paid.id)), [['transfer', 100000, 0], ['transfer', 100000, 0], ['transfer', 100000, 0]])
+  assert.deepEqual([C(after.sheet.totals.bank), C(after.sheet.totals.cash)], [150000, 0])
+  assert.deepEqual([C(after.register.totals.bank), C(after.register.totals.cash)], [150000, 0])
+  assert.equal(after.rowOf(E.paid.id).screen.state, 'UNPAID')
+}, { timeout: 120000 })

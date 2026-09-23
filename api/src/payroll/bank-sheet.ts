@@ -1,4 +1,5 @@
 import { PAY_METHOD_LABELS, PAY_METHODS, payrollPaySplit } from './pay-split'
+import { disbursementMarksByItem, recordedDisbursement, type DisbursementMarkInput, type RecordedDisbursement } from './payroll-disbursement-split'
 import { roundPayrollMoney } from './payroll-money'
 
 // كشف البنوك لمسير (قرار المالك): لكل موظف الكود والاسم والبنك والآيبان ومبلغ البنك والنقدي، وإجمالي كل بنك.
@@ -15,6 +16,11 @@ export interface BankSheetSource {
   netPay: unknown
   /** قرار المالك (20 سبتمبر): راتب آخر شهر بيتصرف مع التصفية — برّه كشف البنك تمامًا، ومبلغه بيتقال للعلم فقط. */
   settlementPayout?: { caseId: number; lastWorkingDay: string; label: string } | null
+  /**
+   * الصرف المسجل للبند لو حصل (payroll-disbursement-split.ts): طريقة الصرف المثبتة وتقسيمها وقت العلامة.
+   * موجود ⇒ الصف بيعرض اللي اتصرف فعلًا لا ملف الموظف الحالي. غير موجود ⇒ الملف الحالي زي ما هو.
+   */
+  recorded?: RecordedDisbursement | null
 }
 
 export interface BankSheetRow {
@@ -54,7 +60,7 @@ export function bankSheetRowIssue(row: {
   return null
 }
 
-export interface BankSheetItemInput { employeeId: number; netPay: unknown; payMethod?: string | null; breakdown?: string | null }
+export interface BankSheetItemInput { id?: number; employeeId: number; netPay: unknown; payMethod?: string | null; breakdown?: string | null }
 export interface BankSheetEmployeeInput {
   id: number; employeeCode?: string | null; fullName?: string | null; branchId?: number | null
   payMethod?: string | null; bankTransferAmount?: unknown; bankName?: string | null; iban?: string | null
@@ -67,6 +73,9 @@ export interface BankSheetMemberInput {
 /**
  * مصادر كشف البنوك من بنود المسير: الهوية من لقطة العضوية (تاريخية)، وبيانات الصرف من ملف الموظف الحالي
  * (طريقة الصرف ومبلغ البنك والآيبان قرار صرف حالي لا لقطة). دالة صافية يستخدمها الكشف وتقرير طرق الصرف معًا.
+ *
+ * الاستثناء الواحد: بند اتصرف فعلًا (علامة «تم الصرف» أو مسير مصروف بلا علامات) بياخد تقسيمه المسجل —
+ * `runStatus` و`marks` هما مصدره؛ من غيرهم الدالة زي ما هي بالحرف (ملف الموظف الحالي).
  */
 export function bankSheetSources(input: {
   items: ReadonlyArray<BankSheetItemInput>
@@ -74,9 +83,14 @@ export function bankSheetSources(input: {
   members: ReadonlyArray<BankSheetMemberInput>
   branchScope: number | null
   settlementOf: (breakdown: string | null | undefined) => BankSheetSource['settlementPayout']
+  /** حالة المسير — PAID معناها الفلوس اتحركت خلاص */
+  runStatus?: string | null
+  /** علامات صرف البنود (payroll_item_disbursements) */
+  marks?: ReadonlyArray<DisbursementMarkInput & { itemId?: unknown }> | null
 }): BankSheetSource[] {
   const byId = new Map(input.employees.map(employee => [employee.id, employee]))
   const members = new Map(input.members.map(member => [member.employeeId, member]))
+  const markOf = disbursementMarksByItem(input.marks)
   const sources: BankSheetSource[] = []
   for (const item of input.items) {
     const employee = byId.get(item.employeeId)
@@ -94,6 +108,8 @@ export function bankSheetSources(input: {
       netPay: item.netPay,
       // قرار المالك (20 سبتمبر): راتب شهر آخر يوم عمل بيتصرف مع التصفية — خارج كشف البنك والمبلغ المستحق.
       settlementPayout: input.settlementOf(item.breakdown),
+      recorded: recordedDisbursement({ runStatus: input.runStatus, itemPayMethod: item.payMethod,
+        mark: item.id == null ? null : markOf.get(item.id) ?? null }),
     })
   }
   return sources
@@ -104,13 +120,16 @@ export function buildBankSheet(allSources: BankSheetSource[]) {
   const settlement = allSources.filter(source => source.settlementPayout)
   const sources = allSources.filter(source => !source.settlementPayout)
   const rows: BankSheetRow[] = sources.map(source => {
-    const payMethod = source.payMethod ?? 'transfer'
-    const split = payrollPaySplit(source.netPay, payMethod, source.bankTransferAmount)
+    // اللي اتصرف فعلًا أولًا: طريقة الصرف المسجلة وتقسيمها المثبت؛ غير المصروف من ملف الموظف الحالي زي ما هو
+    const payMethod = source.recorded?.payMethod ?? source.payMethod ?? 'transfer'
+    const split = source.recorded?.amounts ?? payrollPaySplit(source.netPay, payMethod, source.bankTransferAmount)
     const bankName = source.bankName?.trim() || null, iban = source.iban?.trim() || null
     return { employeeId: source.employeeId, employeeCode: source.employeeCode, fullName: source.fullName, payMethod,
       payMethodLabel: PAY_METHOD_LABELS[payMethod] ?? payMethod, bankName, iban,
       netPay: roundPayrollMoney(Number(source.netPay) || 0), bankAmount: split.bank, cashAmount: split.cash,
-      issue: bankSheetRowIssue({ payMethod, bankTransferAmount: source.bankTransferAmount, bankName, iban, bankAmount: split.bank }) }
+      // مبلغ اتصرف بالفعل بتقسيمه المثبت: بيانات الملف مش تنبيه دلوقتي (الفلوس اتحركت خلاص)
+      issue: source.recorded?.amounts ? null
+        : bankSheetRowIssue({ payMethod, bankTransferAmount: source.bankTransferAmount, bankName, iban, bankAmount: split.bank }) }
   })
   rows.sort((a, b) => (a.bankAmount > 0 ? 0 : 1) - (b.bankAmount > 0 ? 0 : 1)
     || (a.bankName ?? NO_BANK_LABEL).localeCompare(b.bankName ?? NO_BANK_LABEL, 'ar') || a.employeeCode.localeCompare(b.employeeCode, 'en'))
