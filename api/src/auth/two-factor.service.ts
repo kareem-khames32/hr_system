@@ -30,8 +30,9 @@ export const OTP = {
   /** الحالات المعلَّقة الأقدم من كده تُنضَّف مع أي دخول جديد */
   cleanupAfterHours: 24,
   /**
-   * أقصى عدد مرات لإعادة كتابة عدّاد المحاولات لما صف الحالة يتغيّر تحت إيدينا.
-   * الحد ده مش سياسة أمان: هو حاجز ضد دوران بلا نهاية تحت ضغط متوازي، ولو اتخطى بنقفل الحالة.
+   * أقصى عدد مرات لإعادة كتابة عدّاد (المحاولات أو إعادة الإرسال) لما صف الحالة يتغيّر تحت إيدينا.
+   * الحد ده مش سياسة أمان: هو حاجز ضد دوران بلا نهاية تحت ضغط متوازي — ولو اتخطى في عدّ المحاولات
+   * بنقفل الحالة، وفي إعادة الإرسال بنرفض الإرسال بس (الحالة مابتتقفلش).
    */
   attemptWriteRounds: 12,
 } as const
@@ -295,12 +296,11 @@ export class TwoFactorService {
     return { attempts: OTP.maxAttempts, locked: true }
   }
 
-  /** إعادة إرسال رمز جديد لنفس محاولة الدخول — بمهلة وبحد أعلى، والمحاولات الغلط مابتتصفّرش. */
-  async resend(token: string): Promise<{ sentTo: string; resendAfterSeconds: number; expiresInSeconds: number }> {
-    const row = await this.challenges.findOne({ where: { token: (token ?? '').trim() } })
-    if (!row || row.token !== (token ?? '').trim()) {
-      throw new TwoFactorError('UNKNOWN', 'طلب الدخول مش معروف أو انتهى — ابدأ تسجيل الدخول من جديد')
-    }
+  /**
+   * شروط إعادة الإرسال بترتيبها ورسائلها زي ما هي بالحرف: الحالة لسه مفتوحة، المهلة عدّت، والحد ما اتخطاش.
+   * منفصلة عن `assertOpen` بقصد — رسائل مسار إعادة الإرسال مختلفة بالحرف عن رسائل مسار التحقق.
+   */
+  private assertResendAllowed(row: LoginChallenge): void {
     if (row.consumedAt) throw new TwoFactorError('CONSUMED', 'طلب الدخول ده خلص — ابدأ تسجيل الدخول من جديد')
     if (row.lockedAt) throw new TwoFactorError('LOCKED', 'طلب الدخول اتقفل — ابدأ تسجيل الدخول من جديد')
     const waited = Math.floor((Date.now() - row.lastSentAt.getTime()) / 1000)
@@ -311,8 +311,58 @@ export class TwoFactorService {
     if (row.resendCount >= OTP.maxResends) {
       throw new TwoFactorError('RESEND_LIMIT', 'وصلت أقصى عدد لإعادة إرسال الرمز — ابدأ تسجيل الدخول من جديد')
     }
+  }
+
+  /**
+   * حجز خانة إعادة إرسال **قبل** ما أي رسالة تتبعت — بنفس أسلوب `countWrongAttempt` بالحرف:
+   * الزيادة بتتكتب بتحديث **مشروط** بالقيمة اللي قريناها لتوّنا
+   * (`WHERE id = @id AND resendCount = @seen AND consumedAt IS NULL AND lockedAt IS NULL`).
+   * لو استدعاء تاني سبقنا، التحديث مايأثّرش على أي صف، فنقرأ الصف من جديد ونعيد فحص الشروط على القيم
+   * اللي القاعدة قبلتها — والمهلة محمية بالتبعية: الكاسب كتب `lastSentAt` فالتاني بياخد «استنى ثانية»
+   * بدل رسالة تانية في نفس النافذة. قبل كده كانت الزيادة بالتعيين (`row.resendCount + 1` محسوبة في JS)،
+   * فطلبان في نفس اللحظة كانا بيكتبوا نفس الرقم — رسالتان بخانة واحدة، والحد المعلن بيتخطى.
+   *
+   * العدّاد لوحده كافٍ للإقصاء المتبادل (كل حجز بيزوّده)، و`lastSentAt` **مقصود** إنه مش في الشرط:
+   * اتقيس على SQL حقيقي — الكتابة بتروح بنوع العمود فتتخزن بالتوقيت المحلي (`02:30:21.621`)، لكن باراميتر
+   * الـ`Date` في `WHERE` بيتبعت بلا نوع (نص ISO بـUTC: `23:30:21.621Z`)، فالمساواة بتطابق **صفر** صفوف
+   * بالسكوت وكل الحجوزات بتفضل تدوّر لحد الحد. الشرط على العدّاد رقم صحيح — مفيش لبس فيه.
+   */
+  private async claimResend(seen: LoginChallenge): Promise<{ resendCount: number; sentAt: Date }> {
+    let current = seen
+    for (let round = 0; round < OTP.attemptWriteRounds; round++) {
+      this.assertResendAllowed(current)
+      const sentAt = new Date()
+      const resendCount = current.resendCount + 1
+      const written = await this.challenges.update(
+        { id: current.id, resendCount: current.resendCount, consumedAt: IsNull(), lockedAt: IsNull() },
+        { resendCount, lastSentAt: sentAt }
+      )
+      if (written.affected) return { resendCount, sentAt }
+      current = await this.reread(current.id)
+    }
+    // الصف بيتغيّر تحت إيدينا أكتر من الحد: ضغط متوازي على طلب دخول واحد، مش استخدام عادي.
+    // الرفض هنا على الإرسال بس — الحالة مابتتقفلش، فالرمز اللي في إيد صاحب الحساب يفضل شغّال.
+    this.logger.error(`ضغط متوازي على إعادة إرسال حالة دخول واحدة (${seen.id}) فوق الحد المسموح — مفيش رسالة اتبعت`)
+    throw new TwoFactorError('RESEND_LIMIT', 'وصلت أقصى عدد لإعادة إرسال الرمز — ابدأ تسجيل الدخول من جديد')
+  }
+
+  /**
+   * إعادة إرسال رمز جديد لنفس محاولة الدخول — بمهلة وبحد أعلى، والمحاولات الغلط مابتتصفّرش.
+   * **الترتيب: نحجز الأول وبعدين نبعت.** الحجز تحديث مشروط بيزوّد العدّاد، فمستحيل عدد الرسايل
+   * يزيد على `OTP.maxResends` مهما كان التوازي. وفشل الإرسال بيفضل بياكل الخانة زي النهاردة بالحرف
+   * (السلوك المقصود: إعادة الإرسال مش طبنجة على خادم بريد واقع) — والرمز القديم بيفضل صالح.
+   */
+  async resend(token: string): Promise<{ sentTo: string; resendAfterSeconds: number; expiresInSeconds: number }> {
+    const row = await this.challenges.findOne({ where: { token: (token ?? '').trim() } })
+    if (!row || row.token !== (token ?? '').trim()) {
+      throw new TwoFactorError('UNKNOWN', 'طلب الدخول مش معروف أو انتهى — ابدأ تسجيل الدخول من جديد')
+    }
+    // الرفض المبكر زي ما هو: طلب مرفوض مايستهلكش أي شغل تشفير ولا يلمس الصف
+    this.assertResendAllowed(row)
     const code = rawCode(OTP.codeLength)
-    const now = new Date()
+    // الـhash قبل الحجز: نافذة «اتبعت والـhash لسه ما اتكتبش» تفضل أضيق ما يمكن
+    const codeHash = await bcrypt.hash(code, 10)
+    const claim = await this.claimResend(row)
     try {
       const result = await this.mail.send({
         to: row.sentTo,
@@ -322,22 +372,21 @@ export class TwoFactorService {
           `الرمز صالح ${Math.round(OTP.ttlSeconds / 60)} دقائق ولمرة واحدة، والرمز القديم بطل.\n` +
           'لو مش إنت اللي طلب الدخول، بلّغ الدعم الفني ولا تشارك الرمز مع أي حد.',
       })
-      await this.challenges.update(
-        { id: row.id },
-        {
-          codeHash: await bcrypt.hash(code, 10),
-          lastSentAt: now,
-          resendCount: row.resendCount + 1,
-          expiresAt: new Date(now.getTime() + OTP.ttlSeconds * 1000),
-        }
+      // الرمز الجديد بيتثبت بعد نجاح الإرسال بس، ومشروط بحجزنا: لو إعادة إرسال أحدث كسبت خانة بعدينا
+      // مانكتبش hash أقدم فوق الأحدث (نفس منطق الاستهلاك المشروط في `verify`).
+      const stored = await this.challenges.update(
+        { id: row.id, resendCount: claim.resendCount, consumedAt: IsNull(), lockedAt: IsNull() },
+        { codeHash, expiresAt: new Date(claim.sentAt.getTime() + OTP.ttlSeconds * 1000) }
       )
+      if (!stored.affected) {
+        this.logger.warn(`حالة الدخول ${row.id} اتغيرت بعد الحجز — الرمز المبعوت ما اتثبتش، والصالح هو آخر رمز اتثبت`)
+      }
       this.logger.log(
         `إعادة إرسال رمز للحساب ${row.userId} إلى ${maskEmail(row.sentTo)} — رد خادم البريد: ${result.response || 'بلا رد'}`
       )
     } catch (error) {
-      // الإرسال فشل: الرمز القديم بيفضل صالح (مابنكتبش hash جديد)، والمهلة بتتحسب برضه
-      // عشان إعادة الإرسال ماتبقاش طبنجة على خادم بريد واقع
-      await this.challenges.update({ id: row.id }, { lastSentAt: now, resendCount: row.resendCount + 1 })
+      // الإرسال فشل: الرمز القديم بيفضل صالح (مابنكتبش hash جديد)، والخانة المحجوزة بتفضل متحسبة —
+      // المهلة والحد بيسريان برضه عشان إعادة الإرسال ماتبقاش طبنجة على خادم بريد واقع
       const detail = error instanceof MailSendError ? error.detail : String((error as Error)?.message ?? error)
       this.logger.error(`فشل إعادة إرسال رمز للحساب ${row.userId} إلى ${maskEmail(row.sentTo)} — ${detail}`)
       throw error

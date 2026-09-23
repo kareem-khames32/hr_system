@@ -9,6 +9,7 @@
 //   R3) نفس السيناريو عبر HTTP (12 طلب في نفس اللحظة) — نفس النتيجة
 //   R4) إعادة إرسال وسط تحقق جارٍ: الرمز القديم مرفوض، والحالة مش مستهلكة، والرمز الجديد شغّال
 //   R5) 6 تحققات متوازية بالرمز **الصح**: جلسة واحدة بالظبط
+//   R7) 8 إعادات إرسال في نفس اللحظة: رسالة واحدة بالظبط، والعدّاد مش بيضيع، والحد المعلن مايتخطاش
 // Run: node --test --test-concurrency=1 api/test/two-factor-race.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -95,6 +96,23 @@ function releaseTogether(count) {
     return result
   }
   return () => { bcryptjs.compare = original }
+}
+/**
+ * نفس الفكرة لإعادة الإرسال: يحبس كل عمليات bcrypt.hash لحد ما يوصل عددها `count` وبعدها يسيبها معًا.
+ * الـhash في `resend` بيحصل **بعد** قراءة صف الحالة و**قبل** حجز الخانة، فكل الطلبات المتوازية بتكون
+ * قرأت نفس الصف من SQL قبل ما أي واحدة تكتب — أقصى تداخل ممكن على اتصالات حقيقية.
+ */
+function releaseHashesTogether(count) {
+  const original = bcryptjs.hash
+  let arrived = 0, open
+  const gate = new Promise((resolve) => { open = resolve })
+  bcryptjs.hash = async (value, rounds) => {
+    const result = await original.call(bcryptjs, value, rounds)
+    if (++arrived >= count) open()
+    await gate
+    return result
+  }
+  return () => { bcryptjs.hash = original }
 }
 /** يوقف أول مقارنة عند نتيجتها — نافذة «تحقق جارٍ» حقيقية بلا لمس المستودع. */
 function holdFirstCompare() {
@@ -333,4 +351,66 @@ test('R6 — 6 تحققات متوازية بالرمز الصح: جلسة وا�
   }
   const row = await challengeRow(token)
   assert.ok(row.consumedAt)
+})
+
+// ============================================================================
+// R7) إعادة إرسال متوازية — الحد المعلن مايتخطاش (نفس أسلوب إثبات عدّ المحاولات)
+// ============================================================================
+
+test('R7 — 8 إعادات إرسال في نفس اللحظة: رسالة واحدة بالظبط، والعدّاد مش بيضيع، وإجمالي الرسايل = الحد المعلن', async t => {
+  const { token } = await openChallenge()
+  const sentOnLogin = mailbox.length
+  // المهلة عدّت على القاعدة نفسها (مفيش انتظار حقيقي)
+  const cooldownPassed = () => ds.query(
+    'UPDATE dbo.login_challenges SET [lastSentAt] = DATEADD(second, -120, [lastSentAt]) WHERE [token] = @0', [token])
+  const resendOnce = () => http('POST', '/auth/login/resend', { challengeToken: token })
+  /** ثمانية طلبات بيقروا الصف كلهم قبل ما أي واحد يكتب — وقتها بس واحد يكسب الخانة */
+  const burst = async (size) => {
+    await cooldownPassed()
+    const before = mailbox.length
+    const waited = Math.floor((Date.now() - new Date((await challengeRow(token)).lastSentAt).getTime()) / 1000)
+    const restore = releaseHashesTogether(size)
+    let responses
+    try { responses = await Promise.all(Array.from({ length: size }, resendOnce)) } finally { restore() }
+    const row = await challengeRow(token)
+    return { responses, waited, messages: [...new Set(responses.filter(r => r.status !== 200).map(msg))],
+      mails: mailbox.length - before, resendCount: row.resendCount, locked: !!row.lockedAt, consumed: !!row.consumedAt }
+  }
+
+  const first = await burst(8)
+  t.diagnostic(JSON.stringify({ statuses: first.responses.map(r => r.status), mails: first.mails,
+    resendCount: first.resendCount, waitedSeconds: first.waited, messages: first.messages }))
+  assert.equal(first.mails, 1, 'ثمانية طلبات في نفس اللحظة = رسالة واحدة بالظبط (الخانة تُحجز قبل الإرسال)')
+  assert.equal(first.resendCount, 1, 'العدّاد لازم يطابق عدد الرسايل — مفيش زيادة ضايعة')
+  assert.equal(first.responses.filter(r => r.status === 200).length, 1, 'واحد بس بينجح')
+  for (const refused of first.responses.filter(r => r.status !== 200)) {
+    assert.equal(refused.status, 429, JSON.stringify(refused.body))
+    assert.ok(isArabic(msg(refused)), msg(refused))
+    assert.equal(refused.body.accessToken, undefined)
+  }
+  assert.equal(first.locked, false, 'ضغط إعادة الإرسال ممنوع يقفل طلب الدخول')
+  assert.equal(first.consumed, false)
+
+  // ونفس الشيء لكل خانة لحد الحد المعلن: كل دفعة رسالة واحدة وعدّاد واحد
+  for (let claimed = 2; claimed <= OTP.maxResends; claimed++) {
+    const next = await burst(8)
+    assert.equal(next.mails, 1, `الدفعة ${claimed}: رسالة واحدة بالظبط`)
+    assert.equal(next.resendCount, claimed, `الدفعة ${claimed}: العدّاد بيوصل ${claimed} بالظبط`)
+  }
+  assert.equal(mailbox.length - sentOnLogin, OTP.maxResends, 'إجمالي رسايل إعادة الإرسال = الحد المعلن بالظبط، مهما كان التوازي')
+
+  // وبعد استنفاد الحد: ولا رسالة واحدة تانية حتى لو المهلة عدّت و8 طلبات جوا معًا
+  await cooldownPassed()
+  const overLimit = await Promise.all(Array.from({ length: 8 }, resendOnce))
+  const afterLimit = await challengeRow(token)
+  t.diagnostic(JSON.stringify({ statuses: overLimit.map(r => r.status), resendCount: afterLimit.resendCount, mails: mailbox.length - sentOnLogin }))
+  for (const refused of overLimit) {
+    assert.equal(refused.status, 429, JSON.stringify(refused.body))
+    assert.match(msg(refused), /أقصى عدد/)
+  }
+  assert.equal(mailbox.length - sentOnLogin, OTP.maxResends, 'الحد المعلن هو سقف الرسايل — مفيش رسالة بعده')
+  assert.equal(afterLimit.resendCount, OTP.maxResends)
+  // وآخر رمز اتبعت لسه شغّال: الحجز قبل الإرسال ما خلاش حالة معلَّقة نصف مكتوبة
+  const session = expect(await verifyHttp(token, lastCode()), 200, 'last resent code:')
+  assert.ok(session.accessToken)
 })

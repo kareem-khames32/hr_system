@@ -24,6 +24,7 @@ import {
 } from '../requests/entities/financial.entities'
 import { Leave, LeaveType } from '../requests/entities/leave.entities'
 import { bankSheetPayMethodSummary, bankSheetSources, buildBankSheet } from './bank-sheet'
+import { recordedDisbursement } from './payroll-disbursement-split'
 import { PayrollDecimal } from './payroll-decimal'
 import { parseSickPayTiers, payrollLeaveDeductionLines, sickLeaveDaysInCover, sickLeaveDeduction, type SickPayTier } from './sick-leave-pay'
 import { readSuspensionPayrollDays, suspendedDatesBetween } from '../employees/employee-suspensions'
@@ -1705,12 +1706,17 @@ export class PayrollService {
     // القسيمة القديمة لا تمتلك لقطة هوية أو بنك؛ لا ننسب بيانات الموظف الحالية إلى تاريخها.
     const legacyIdentity = snapshot ? null : await em.getRepository(Employee).findOne({ where: { id: item.employeeId }, select: ['id', 'fullName', 'employeeCode'] })
     // الهوية والبنك والآيبان على القسيمة: قراءة فقط من ملف الموظف، محكومة بنفس صلاحية القسيمة أعلاه.
-    // ليست لقطة تاريخية (اللقطة لا تحملها)، فهي بيانات صرف حالية يحتاجها من يقرأ القسيمة.
+    // ليست لقطة تاريخية (اللقطة لا تحملها)، فهي بيانات التواصل البنكية الحالية ومبلغ التحويل المكتوب في الملف.
     const payee = await em.getRepository(Employee).findOne({ where: { id: item.employeeId }, select: ['id', 'nationalId', 'bankName', 'iban', 'payMethod', 'bankTransferAmount'] })
-    // طريقة الصرف وتقسيم الصافي «تحويل بنكي X — نقدي Y» من بيانات الصرف الحالية (نفس كشف البنوك)
-    const payMethod = payee?.payMethod ?? item.payMethod ?? 'transfer'
+    // طريقة الصرف وتقسيم الصافي «تحويل بنكي X — نقدي Y»: **اللي اتصرف فعلًا** لا ملف الموظف الحالي (قرار المالك 24 سبتمبر).
+    // نفس قاعدة الشاشات التانية بالحرف (payroll-disbursement-split.ts): بند اتسجل صرفه نقدي يفضل نقدي على القسيمة
+    // بعد ما الملف يبقى «تحويل بنكي»، وبند بلا صرف مسجل ⇒ ملف الموظف الحالي زي ما هو (السلوك القديم بالحرف).
+    const mark = await em.getRepository(PayrollItemDisbursement).findOneBy({ itemId: item.id })
+    const recorded = recordedDisbursement({ runStatus: run.status, itemPayMethod: item.payMethod, mark })
+    const payMethod = recorded?.payMethod ?? payee?.payMethod ?? item.payMethod ?? 'transfer'
     const identity = { nationalId: payee?.nationalId ?? null, bankName: payee?.bankName ?? null, iban: payee?.iban ?? null,
-      payMethod, bankTransferAmount: payee?.bankTransferAmount ?? null, paySplit: payrollPaySplit(item.netPay, payMethod, payee?.bankTransferAmount) }
+      payMethod, bankTransferAmount: payee?.bankTransferAmount ?? null,
+      paySplit: recorded?.amounts ?? payrollPaySplit(item.netPay, payMethod, payee?.bankTransferAmount) }
     const employee = snapshot ? { id: item.employeeId, fullName: snapshot.fullName, employeeCode: snapshot.employeeCode,
       jobTitle: snapshot.jobTitle, joinDate: snapshot.hireDate, branchId: snapshot.branchId, departmentId: snapshot.departmentId,
       teamId: snapshot.teamId, costCenterId: snapshot.costCenterId, basicSalary: snapshot.basicSalary, ...identity } :

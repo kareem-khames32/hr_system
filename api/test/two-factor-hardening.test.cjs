@@ -9,6 +9,7 @@
 //   A) عدّ المحاولات المتوازية: 12 رمز غلط في نفس اللحظة = العدّاد 5 والحالة مقفولة، والصح مرفوض
 //   S) رمز استبدلته إعادة إرسال وإحنا بنقارن: مرفوض، والحالة مابتُستهلكش، والرمز الجديد شغّال
 //   R) المتتابع زي ما هو بالحرف: القفل عند المحاولة الخامسة
+//   RS) إعادة إرسال متوازية: خانة واحدة بتتحجز لكل دفعة، والعدّاد مش بيضيع، والحد المعلن سقف للرسايل
 // الملفات على القرص CRLF — كل قراءة مصدر بتتطبّع.
 // Run: node --test api/test/two-factor-hardening.test.cjs
 const { test } = require('node:test')
@@ -108,6 +109,24 @@ function releaseTogether(count) {
     return result
   }
   return () => { bcryptjs.compare = original }
+}
+
+/**
+ * نفس الفكرة لإعادة الإرسال: يحبس كل عمليات bcrypt.hash لحد ما يوصل عددها `count` وبعدها يسيبها معًا.
+ * الـhash في `resend` بيحصل بعد قراءة الصف وقبل حجز الخانة، فكل الطلبات بتكون قرات نفس الصف قبل أي كتابة.
+ */
+function releaseHashesTogether(count) {
+  const original = bcryptjs.hash
+  let arrived = 0
+  let open
+  const gate = new Promise((resolve) => { open = resolve })
+  bcryptjs.hash = async (value, rounds) => {
+    const result = await original.call(bcryptjs, value, rounds)
+    if (++arrived >= count) open()
+    await gate
+    return result
+  }
+  return () => { bcryptjs.hash = original }
 }
 
 /** يوقف أول مقارنة bcrypt عند نتيجتها لحد ما نسيبها — نافذة «تحقق جارٍ» بلا لمس المستودع. */
@@ -290,6 +309,51 @@ test('2FS1 — إعادة الإرسال بتُبطل الرمز القديم ح
   const session = await h.auth.verifyTwoFactor(pending.challengeToken, h.code)
   assert.ok(session.accessToken)
   assert.equal(h.stats.sessions, 1)
+})
+
+// ============================================================================
+// RS) إعادة إرسال متوازية — الحد المعلن سقف للرسايل
+// ============================================================================
+
+test('2FRS1 — 4 إعادات إرسال في نفس اللحظة: رسالة واحدة لكل خانة، والعدّاد بيطابق عدد الرسايل', async () => {
+  const h = harness()
+  const pending = await h.auth.domainLogin('someone', 'secret')
+  const sentOnLogin = h.stats.mails
+  const cooldownPassed = () => { h.challenges.row.lastSentAt = new Date(Date.now() - (OTP.resendCooldownSeconds + 1) * 1000) }
+  for (let claimed = 1; claimed <= OTP.maxResends; claimed++) {
+    cooldownPassed()
+    const restore = releaseHashesTogether(4)
+    let results
+    try {
+      results = await Promise.allSettled(Array.from({ length: 4 }, () => h.twoFactor.resend(pending.challengeToken)))
+    } finally { restore() }
+    assert.equal(results.filter((r) => r.status === 'fulfilled').length, 1, `الدفعة ${claimed}: واحد بس بيكسب الخانة`)
+    assert.equal(h.stats.mails - sentOnLogin, claimed, `الدفعة ${claimed}: رسالة واحدة بالظبط (الحجز قبل الإرسال)`)
+    assert.equal(h.challenges.row.resendCount, claimed, `الدفعة ${claimed}: العدّاد مش بيضيع`)
+    for (const rejected of results.filter((r) => r.status === 'rejected')) {
+      assert.equal(rejected.reason.code, 'RESEND_TOO_SOON', rejected.reason.message)
+      assert.ok(isArabic(rejected.reason.message), rejected.reason.message)
+    }
+    assert.equal(h.challenges.row.lockedAt, null, 'ضغط إعادة الإرسال ممنوع يقفل طلب الدخول')
+  }
+  // الحد المعلن سقف: بعده ولا رسالة، والرمز الأخير لسه شغّال
+  cooldownPassed()
+  const refused = await h.twoFactor.resend(pending.challengeToken).then(() => null, (error) => error)
+  assert.equal(refused?.code, 'RESEND_LIMIT', String(refused?.message))
+  assert.equal(h.stats.mails - sentOnLogin, OTP.maxResends, 'إجمالي الرسايل = الحد المعلن بالظبط')
+  const session = await h.auth.verifyTwoFactor(pending.challengeToken, h.code)
+  assert.ok(session.accessToken, 'آخر رمز اتبعت لازم يفضل شغّال')
+})
+
+test('2FRS2 — المصدر: الخانة تُحجز بتحديث مشروط قبل الإرسال، مش بتعيين محسوب في JS بعده', () => {
+  const source = read('api/src/auth/two-factor.service.ts')
+  assert.match(source, /\{ id: current\.id, resendCount: current\.resendCount, consumedAt: IsNull\(\), lockedAt: IsNull\(\) \}/)
+  assert.doesNotMatch(source, /resendCount: row\.resendCount \+ 1/)
+  const resend = source.slice(source.indexOf('  async resend('))
+  assert.ok(resend.indexOf('await this.claimResend(row)') < resend.indexOf('await this.mail.send('), 'الحجز قبل الإرسال')
+  // والـhash بيتثبت بعد نجاح الإرسال بس ومشروط بالحجز (فشل الإرسال بيخلي الرمز القديم صالح)
+  assert.ok(resend.indexOf('await this.mail.send(') < resend.indexOf('{ codeHash, expiresAt:'))
+  assert.match(resend, /\{ id: row\.id, resendCount: claim\.resendCount, consumedAt: IsNull\(\), lockedAt: IsNull\(\) \}/)
 })
 
 test('2FS2 — المصدر: الاستهلاك مشروط بالـhash اللي قورن، والمقارنة حرفية في JS كمان', () => {

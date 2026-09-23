@@ -122,6 +122,24 @@ test('REC-04: استعلام التقرير المالي بيقرأ علامة �
   assert.ok(read('src/payroll/payroll.service.ts').includes('settlementOf: payrollItemSettlementPayout, runStatus: detail.status, marks'))
 })
 
+test('REC-07: القسيمة على نفس القاعدة (قرار المالك 24 سبتمبر) — بلا لقطة هوية جديدة وبلا تقسيم تاني', () => {
+  const service = read('src/payroll/payroll.service.ts')
+  const payslip = service.slice(service.indexOf('  async payslip('), service.indexOf('  async runLines('))
+  // نفس دالة القاعدة المشتركة، على علامة البند نفسها وحالة المسير
+  assert.ok(payslip.includes("const mark = await em.getRepository(PayrollItemDisbursement).findOneBy({ itemId: item.id })"))
+  assert.ok(payslip.includes('const recorded = recordedDisbursement({ runStatus: run.status, itemPayMethod: item.payMethod, mark })'))
+  // الطريقة والتقسيم: المسجل يغلب، وغير المسجل ملف الموظف الحالي بالحرف (نفس تركيب كشف البنوك)
+  assert.ok(payslip.includes("const payMethod = recorded?.payMethod ?? payee?.payMethod ?? item.payMethod ?? 'transfer'"))
+  assert.ok(payslip.includes('paySplit: recorded?.amounts ?? payrollPaySplit(item.netPay, payMethod, payee?.bankTransferAmount)'))
+  assert.ok(service.includes("import { recordedDisbursement } from './payroll-disbursement-split'"))
+  // الهوية والبنك والآيبان لسه قراءة حالية بنفس صلاحية القسيمة — التغيير على الطريقة والتقسيم بس
+  assert.ok(payslip.includes("select: ['id', 'nationalId', 'bankName', 'iban', 'payMethod', 'bankTransferAmount']"))
+  assert.ok(payslip.includes('nationalId: payee?.nationalId ?? null, bankName: payee?.bankName ?? null, iban: payee?.iban ?? null'))
+  // والتعليق بيقول القاعدة الجديدة، مش «بيانات صرف حالية»
+  assert.ok(payslip.includes('**اللي اتصرف فعلًا** لا ملف الموظف الحالي'))
+  assert.ok(!payslip.includes('فهي بيانات صرف حالية يحتاجها من يقرأ القسيمة'))
+})
+
 test('REC-05: تقرير الحضور الشهري بلا كاشف وجود — الموظف الموجود خارج النطاق وغير الموجود نفس الرد', async () => {
   const service = Object.create(AttendanceService.prototype)
   service.employees = { async findOne({ where }) { return where.id === 2 ? { id: 2, branchId: 2 } : null } }

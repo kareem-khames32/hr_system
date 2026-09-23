@@ -1,7 +1,7 @@
 'use strict'
 // «اللي اتصرف فعلًا» حيًّا على قاعدة SQL مؤقتة معزولة (تدقيق 24 سبتمبر — N02):
 // بند مسير اتسجل صرفه نقدي (payroll_item_disbursements) وبعده ملف الموظف بقى «تحويل بنكي» —
-// كشف البنوك والتقرير المالي وشاشة الصرف وتقرير طرق الصرف لازم يقولوا نفس الرقم: بنك 0.00 / نقدي 1,000.00.
+// كشف البنوك والتقرير المالي وشاشة الصرف وتقرير طرق الصرف **والقسيمة** لازم يقولوا نفس الرقم: بنك 0.00 / نقدي 1,000.00.
 // والبند اللي لسه ماتصرفش (بلا علامة أو بعلامة «لم يتم») يفضل على طريقة الصرف الحالية في الملف.
 // لا مساس بقاعدة الشركة ولا بقاعدة المراجعة؛ التوكن موقّع محليًّا بسر عشوائي (لا كلمات مرور ولا أسرار).
 const { test, before, after } = require('node:test')
@@ -157,4 +157,32 @@ test('RS-02: مسير اتصرف كله مرة واحدة بلا علامات ب
   assert.deepEqual([C(after.sheet.totals.bank), C(after.sheet.totals.cash)], [150000, 0])
   assert.deepEqual([C(after.register.totals.bank), C(after.register.totals.cash)], [150000, 0])
   assert.equal(after.rowOf(E.paid.id).screen.state, 'UNPAID')
+}, { timeout: 120000 })
+
+// قرار المالك 24 سبتمبر: القسيمة كمان لازم تقول اللي اتصرف فعلًا — كانت مستثناة بقصد قبل كده.
+test('RS-03: القسيمة تقول اللي اتصرف فعلًا — نقدي بعد ما الملف بقى «تحويل بنكي»، وبند بلا علامة يتبع الملف', async () => {
+  // RS-02 سابته «لم يتم»؛ نرجّع العلامة لحالتها المعلنة عشان الاختبار ده يقف على رجليه لوحده
+  await repo('PayrollItemDisbursement').update({ itemId: I.paid.id },
+    { status: 'PAID', amount: 1000, bankAmount: 0, cashAmount: 1000, payMethod: 'cash' })
+  const payslip = id => get(`/payroll/items/${id}`)
+  const pay = slip => [slip.employee.payMethod, C(slip.employee.paySplit.bank), C(slip.employee.paySplit.cash)]
+
+  const paid = await payslip(I.paid.id)
+  assert.deepEqual(pay(paid), ['cash', 0, 100000], 'قسيمة بند اتصرف نقدي تفضل نقدي بعد ما الملف بقى تحويل')
+  // ونفس رقم كشف البنوك بالحرف (مصدر واحد للخمس شاشات)
+  const sheet = await get(`/payroll/runs/${R.approved.id}/bank-sheet`)
+  const row = sheet.rows.find(entry => entry.employeeId === E.paid.id)
+  assert.deepEqual(pay(paid), [row.payMethod, C(row.bankAmount), C(row.cashAmount)])
+  // الهوية والبنك والآيبان لسه قراءة حالية من الملف (مش لقطة) — نفس سلوك النهاردة
+  assert.equal(paid.employee.bankName, 'بنك الاختبار')
+  assert.equal(paid.employee.iban, IBAN)
+
+  // بند بلا علامة في مسير معتمد: ملف الموظف الحالي زي ما هو (السلوك القديم بالحرف)
+  assert.deepEqual(pay(await payslip(I.open.id)), ['transfer', 50000, 0])
+  // مسير مصروف كله مرة واحدة بلا علامات: طريقة الصرف المحفوظة على البند
+  assert.deepEqual(pay(await payslip(I.runLevel.id)), ['cash', 0, 70000])
+
+  // و«لم يتم» ترجّع القسيمة لملف الموظف الحالي (لسه ماتصرفلوش)
+  await repo('PayrollItemDisbursement').update({ itemId: I.paid.id }, { status: 'UNPAID', bankAmount: 0, cashAmount: 0, payMethod: null })
+  assert.deepEqual(pay(await payslip(I.paid.id)), ['transfer', 100000, 0])
 }, { timeout: 120000 })
