@@ -2,7 +2,8 @@
 require('./codex-review-round2-harness.cjs')
 const {test}=require('node:test'),assert=require('node:assert/strict'),fs=require('node:fs'),path=require('node:path'),vm=require('node:vm')
 const {canonical}=require('./codex-review-round3-strict-shadow.cjs')
-const source=fs.readFileSync(path.join(__dirname,'helpers/attendance-batch-shadow.cjs'),'utf8')
+// الأداة الأولى (اللي الاختبار ده بيثبت ثغرتها) اتشالت من helpers بعد الجولة التالتة واتحفظت نصًا بلا تشغيل في fixtures;
+const source=fs.readFileSync(path.join(__dirname,'fixtures/attendance-batch-shadow-v1.cjs.txt'),'utf8')
 const functions=source.slice(source.indexOf('const dateKey ='),source.indexOf('PayrollDailyAccrualService.prototype.accrueEmployeeRange ='))
 const supplied=vm.runInNewContext(functions+';({snapshot,difference})',{Date,Map,JSON,Object,Array,String})
 const empty=()=>({days:[],overtime:[],accruals:[],claims:[],events:[],requests:[]})
