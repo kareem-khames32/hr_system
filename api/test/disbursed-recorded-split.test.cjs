@@ -127,7 +127,7 @@ test('REC-07: القسيمة على نفس القاعدة (قرار المالك
   const payslip = service.slice(service.indexOf('  async payslip('), service.indexOf('  async runLines('))
   // نفس دالة القاعدة المشتركة، على علامة البند نفسها وحالة المسير
   assert.ok(payslip.includes("const mark = await em.getRepository(PayrollItemDisbursement).findOneBy({ itemId: item.id })"))
-  assert.ok(payslip.includes('const recorded = recordedDisbursement({ runStatus: run.status, itemPayMethod: item.payMethod, mark })'))
+  assert.ok(payslip.includes('const recorded = recordedDisbursement({ runStatus: run.status, itemPayMethod: item.payMethod, mark,'))
   // الطريقة والتقسيم: المسجل يغلب، وغير المسجل ملف الموظف الحالي بالحرف (نفس تركيب كشف البنوك)
   assert.ok(payslip.includes("const payMethod = recorded?.payMethod ?? payee?.payMethod ?? item.payMethod ?? 'transfer'"))
   assert.ok(payslip.includes('paySplit: recorded?.amounts ?? payrollPaySplit(item.netPay, payMethod, payee?.bankTransferAmount)'))
@@ -186,4 +186,77 @@ test('REC-06: أيام عمل الموظف ومعاينة الإضافي — ن�
   const onBehalf = { sub: 4, role: 'hr_manager', employeeId: 9, branchId: 1, permissions: ['requests.create_on_behalf'] }
   assert.deepEqual(await preview(onBehalf, 2), await preview(onBehalf, 999))
   assert.deepEqual(await preview(onBehalf, 2), { status: 403, message: 'الموظف خارج نطاق فرعك' })
+})
+
+// مراجعة مستقلة 24 سبتمبر (تكملة N02 — ترحيل 067): التقسيم المثبت على البند وقت الصرف هو اللي بيتقال للمسير المصروف
+// جماعيًا، بدل لقطة وقت الحساب. القاعدة بترتيبها: علامة «تم الصرف» ← علامة «لم يتم» ← المثبت وقت الصرف ← لقطة الحساب
+// (بند مصروف قبل الترحيل) ← ملف الموظف الحالي.
+test('REC-08: المثبت وقت الصرف يغلب لقطة الحساب، والعلامة تغلبه، والبند القديم بلا تثبيت يفضل على سلوكه', () => {
+  const frozenMixed = { payMethod: 'mixed', bankAmount: '300.00', cashAmount: '700.00' }
+  assert.deepEqual(recordedDisbursement({ runStatus: 'PAID', itemPayMethod: 'cash', itemPaid: frozenMixed, mark: null }),
+    { payMethod: 'mixed', amounts: { bank: 300, cash: 700 } }, 'المسير المصروف جماعيًا بياخد المثبت وقت الصرف لا لقطة الحساب')
+  // مصروف نقدي وقت الصرف بعد ما الحساب كان تحويل: الرقم مابينقلبش عند الإقفال
+  assert.deepEqual(recordedDisbursement({ runStatus: 'PAID', itemPayMethod: 'cash', itemPaid: { payMethod: 'transfer', bankAmount: '1000.00', cashAmount: '0.00' } }),
+    { payMethod: 'transfer', amounts: { bank: 1000, cash: 0 } })
+  // علامة «لم يتم» متجاوزة (اتلغت علامته ثم المسير اتصرف كله): التثبيت يغلبها — الصرف الجماعي صرف للكل
+  assert.deepEqual(recordedDisbursement({ runStatus: 'PAID', itemPayMethod: 'cash', itemPaid: frozenMixed,
+    mark: { status: 'UNPAID', bankAmount: 0, cashAmount: 0 } }), { payMethod: 'mixed', amounts: { bank: 300, cash: 700 } })
+  // و«لم يتم» الحقيقية (إقفال موظف بموظف: البند مش مثبت لأنه ما اتصرفلوش) ⇒ ملف الموظف الحالي
+  assert.equal(recordedDisbursement({ runStatus: 'PAID', itemPayMethod: 'cash', itemPaid: { payMethod: null },
+    mark: { status: 'UNPAID', bankAmount: 0, cashAmount: 0 } }), null)
+  // وعلامة «تم الصرف» بمبالغها تغلبه (أحدث دليل على اللي اتصرف)
+  assert.deepEqual(recordedDisbursement({ runStatus: 'PAID', itemPayMethod: 'cash', itemPaid: frozenMixed, mark: paidCashMark }),
+    { payMethod: 'cash', amounts: { bank: 0, cash: 1000 } })
+  // بند مصروف قبل الترحيل (الأعمدة فاضية): السلوك القديم بالحرف — تاريخ ما بيتغيّرش رجعيًا
+  assert.deepEqual(recordedDisbursement({ runStatus: 'PAID', itemPayMethod: 'cash', itemPaid: { payMethod: null } }),
+    { payMethod: 'cash', amounts: null })
+  // ومسير لسه ما اتصرفش: التثبيت مالوش أي أثر (ملف الموظف الحالي هو اللي هيتصرف بيه)
+  assert.equal(recordedDisbursement({ runStatus: 'APPROVED', itemPayMethod: 'cash', itemPaid: frozenMixed }), null)
+  // القص لا التقريب على المثبت
+  assert.deepEqual(recordedDisbursement({ runStatus: 'PAID', itemPaid: { payMethod: 'mixed', bankAmount: '300.019', cashAmount: '700.115' } }).amounts,
+    { bank: 300.01, cash: 700.11 })
+
+  // كشف البنوك بياخد المثبت من البند نفسه: الملف «تحويل بنكي» والمثبت نقدي ⇒ الكشف نقدي
+  const frozenItem = { ...item, payMethod: 'transfer', paidPayMethod: 'cash', paidBankAmount: '0.00', paidCashAmount: '1000.00' }
+  const sheet = buildBankSheet(bankSheetSources({ items: [frozenItem], employees: [liveTransfer], members: [member], branchScope: null,
+    settlementOf: payrollItemSettlementPayout, runStatus: 'PAID', marks: [] }))
+  assert.deepEqual([sheet.rows[0].payMethod, sheet.totals.bank, sheet.totals.cash], ['cash', 0, 1000])
+  assert.equal(sheet.rows[0].issue, null, 'مبلغ اتصرف خلاص: بيانات الملف مش تنبيه دلوقتي')
+  // وشاشة الصرف على نفس الصف
+  const screen = summarizePayrollDisbursement(buildPayrollDisbursementRows({ runStatus: 'PAID', items: [frozenItem],
+    employees: [liveTransfer], members: [member], marks: [], branchScope: null }).rows)
+  assert.deepEqual([screen.paid.bank, screen.paid.cash], [0, 1000])
+
+  // والتقرير المالي بيقرا نفس الأعمدة من استعلامه
+  const service = read('src/reports/financial-report.service.ts')
+  assert.ok(service.includes('i.[paidPayMethod] AS [itemPaidPayMethod]'))
+  assert.ok(service.includes('CONVERT(varchar(40), i.[paidBankAmount]) AS [itemPaidBankAmount]'))
+  assert.ok(service.includes('CONVERT(varchar(40), i.[paidCashAmount]) AS [itemPaidCashAmount]'))
+})
+
+test('REC-09: الصرف بيثبّت التقسيم على البند قبل ما المسير يبقى PAID، وإقفال موظف بموظف مايثبّتش اللي ما اتصرفلوش', () => {
+  const source = read('src/payroll/payroll.service.ts')
+  // التثبيت بعد إقفال الصرف (عشان يعرف نوع الإقفال ومين «لم يتم») وقبل انتقال الحالة — جوّه نفس المعاملة وتحت قفل المسير
+  const close = source.indexOf('const disbursement = await closePayrollRunDisbursement(')
+  const freeze = source.indexOf('await this.freezePaidSplit(em, run, items, disbursement.mode)')
+  const paid = source.indexOf("run.status = 'PAID'", freeze)
+  assert.ok(close > 0 && freeze > close, 'التثبيت بعد إقفال الصرف')
+  assert.ok(paid > freeze, 'التثبيت قبل ما المسير يبقى PAID')
+  // المصدر: العلامة لو موجودة، وإلا ملف الموظف وقتها بنفس دالة تقسيم كشف البنك
+  assert.ok(source.includes("if (mode === 'PER_EMPLOYEE' && mark?.status === 'UNPAID') continue"),
+    'البند اللي ما اتصرفلوش في إقفال موظف بموظف مايتثبّتش، والصرف الجماعي بيثبّت للكل')
+  assert.ok(source.includes('await this.freezePaidSplit(em, run, items, disbursement.mode)'))
+  assert.ok(source.includes('payrollPaySplit(item.netPay, payMethod, employee?.bankTransferAmount ?? null)'))
+  assert.ok(source.includes('items.filter(item => !payrollItemSettlementPayout(item.breakdown))'), 'صف التصفية برّه التثبيت')
+  // والقسيمة بتقرا المثبت زي باقي الشاشات
+  assert.ok(source.includes('itemPaid: { payMethod: item.paidPayMethod, bankAmount: item.paidBankAmount, cashAmount: item.paidCashAmount }'))
+  // الترحيل إضافي فقط وبلا تعبئة رجعية
+  const migration = read('../docs/migrations/payroll/20260924_067_payroll_item_paid_split.sql')
+  for (const column of ['paidPayMethod', 'paidBankAmount', 'paidCashAmount']) {
+    assert.ok(migration.includes(`IF COL_LENGTH(N'dbo.payroll_items', N'${column}') IS NULL`), column)
+  }
+  // التعليق العربي نفسه بيذكر إن مفيش DROP، فالفحص على الأوامر الفعلية بعد شيل سطور التعليق
+  const statements = migration.split('\n').filter(line => !line.trim().startsWith('--')).join('\n')
+  assert.ok(!/\b(DROP|TRUNCATE|DELETE)\b/i.test(statements), 'إضافي فقط')
+  assert.ok(!/^\s*UPDATE\s/mi.test(statements), 'بلا تعبئة رجعية — التاريخ زي ما هو')
 })

@@ -7,8 +7,16 @@ import { roundPayrollMoney } from './payroll-money'
 // القاعدة (مصدر واحد للتلات شاشات):
 //   ١) علامة «تم الصرف» على البند ⇒ المبلغ وتقسيمه وطريقة الصرف المثبتين وقت العلامة (دليل اللي اتصرف).
 //   ٢) علامة «لم يتم» ⇒ لسه ماتصرفلوش: ملف الموظف الحالي (هو اللي هيتصرف بيه لما يتصرف فعلًا).
-//   ٣) مسير مصروف بلا علامات (اتصرف كله مرة واحدة) ⇒ طريقة الصرف المحفوظة على البند وقت الحساب.
+//   ٣) مسير مصروف بلا علامات (اتصرف كله مرة واحدة) ⇒ طريقة الصرف وتقسيمها المثبتين على البند وقت الصرف (ترحيل 067).
 //   ٤) غير كده (مسير لسه ما اتصرفش) ⇒ ملف الموظف الحالي زي ما هو — السلوك القديم بالحرف.
+//
+// تكملة القاعدة ٣ (مراجعة مستقلة 24 سبتمبر): قبل ترحيل 067 كان الصف المصروف جماعيًا بيرجع لطريقة الصرف المحفوظة وقت
+// «الحساب»، وده كان بيعمل حاجتين ثبتوا حيًّا:
+//   أ) موظف اتحسب نقدي ثم بقى «تحويل بنكي» قبل الصرف: الكشف يقول بنك 1,000 قبل الصرف وينقلب نقدي 1,000 بمجرد الصرف.
+//   ب) صرف «نقدي + بنك» مثبت 300/700 يتحول لـ800/200 بمجرد تعديل مبلغ التحويل في ملف الموظف بعد الصرف — لأن مبلغ
+//      البنك ما كانش بيتثبّت في أي مكان، والتقسيم كان بيعاد حسابه من الملف الحالي.
+// دلوقتي الصرف بيثبّت على البند طريقته وتقسيمه (paidPayMethod/paidBankAmount/paidCashAmount)، فاللحظة اللي الفلوس
+// اتحركت فيها هي اللي بتتقال دايمًا. بند مصروف قديم (الأعمدة فاضية) بياخد السلوك القديم عشان التاريخ ما يتغيّرش رجعيًا.
 
 /** علامة صرف بند كما هي في payroll_item_disbursements (أو نفس أعمدتها من استعلام التقرير). */
 export interface DisbursementMarkInput {
@@ -31,6 +39,8 @@ export function recordedDisbursement(input: {
   runStatus?: string | null
   /** طريقة الصرف المحفوظة على بند المسير وقت الحساب (payroll_items.payMethod) */
   itemPayMethod?: string | null
+  /** اللي اتثبت على البند وقت الصرف (payroll_items.paidPayMethod/paidBankAmount/paidCashAmount — ترحيل 067) */
+  itemPaid?: { payMethod?: string | null; bankAmount?: unknown; cashAmount?: unknown } | null
   mark?: DisbursementMarkInput | null
 }): RecordedDisbursement | null {
   const status = input.mark?.status ?? null
@@ -40,9 +50,21 @@ export function recordedDisbursement(input: {
       amounts: { bank: roundPayrollMoney(Number(input.mark?.bankAmount) || 0), cash: roundPayrollMoney(Number(input.mark?.cashAmount) || 0) },
     }
   }
-  // «لم يتم» علامة صريحة إن البند ده ماتصرفش — حتى لو المسير نفسه اتقفل بسبب مكتوب
+  // التثبيت وقت الصرف يغلب علامة «لم يتم» قديمة: البند المثبت معناه إن الصرف نفسه سجّله مصروفًا، والعلامة اتخطّت.
+  // (بتحصل لما حد يعلّم موظف «تم الصرف» ثم يلغي علامته وهو معتمد، وبعدها المسير يتصرف كله مرة واحدة —
+  //  وقتها الصرف الجماعي صرف للكل، والعلامة القديمة بقيت كلام متجاوز. سجلها محفوظ في أحداث DISBURSEMENT_MARKED.)
+  const paidMethod = input.runStatus === 'PAID' ? input.itemPaid?.payMethod || null : null
+  if (paidMethod) {
+    return {
+      payMethod: paidMethod,
+      amounts: { bank: roundPayrollMoney(Number(input.itemPaid?.bankAmount) || 0), cash: roundPayrollMoney(Number(input.itemPaid?.cashAmount) || 0) },
+    }
+  }
+  // «لم يتم» علامة صريحة إن البند ده ماتصرفش (ومفيش تثبيت) — حتى لو المسير نفسه اتقفل بسبب مكتوب
   if (status) return null
-  if (input.runStatus !== 'PAID' || !input.itemPayMethod) return null
+  if (input.runStatus !== 'PAID') return null
+  // بند مصروف قبل الترحيل: لقطة وقت الحساب زي ما هي (تاريخ ما بيتغيّرش رجعيًا)
+  if (!input.itemPayMethod) return null
   return { payMethod: input.itemPayMethod, amounts: null }
 }
 

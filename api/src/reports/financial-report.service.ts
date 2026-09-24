@@ -85,6 +85,9 @@ export class FinancialReportService {
            ${snapped('costCenterId', 'e.[costCenterId]')} AS [costCenterId],
            JSON_VALUE(s.[snap], '$.costCenterName') AS [snapCostCenterName],
            i.[payMethod] AS [itemPayMethod], e.[payMethod] AS [employeePayMethod], CONVERT(varchar(40), e.[bankTransferAmount]) AS [bankTransferAmount],
+           -- اللي اتثبت على البند وقت الصرف (ترحيل 067): يغلب ملف الموظف الحالي في المسير المصروف جماعيًا
+           i.[paidPayMethod] AS [itemPaidPayMethod], CONVERT(varchar(40), i.[paidBankAmount]) AS [itemPaidBankAmount],
+           CONVERT(varchar(40), i.[paidCashAmount]) AS [itemPaidCashAmount],
            pd.[status] AS [disbursementStatus], pd.[payMethod] AS [disbursedPayMethod],
            CONVERT(varchar(40), pd.[bankAmount]) AS [disbursedBankAmount], CONVERT(varchar(40), pd.[cashAmount]) AS [disbursedCashAmount],
            ${money.map(column => `CONVERT(varchar(40), i.[${column}]) AS [${column}]`).join(', ')},

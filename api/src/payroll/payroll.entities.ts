@@ -256,9 +256,21 @@ export class PayrollItem {
   @Column({ type: 'decimal', precision: 18, scale: 2 })
   netPay: number
 
-  // طريقة الصرف من ملف الموظف — لتقارير حالة الصرف
+  // طريقة الصرف من ملف الموظف وقت الحساب — لتقارير حالة الصرف
   @Column({ length: 20 })
   payMethod: string
+
+  // اللي اتصرف فعلًا (ترحيل 067): طريقة الصرف وتقسيمها المثبتين وقت الصرف (APPROVED→PAID) من ملف الموظف في تلك اللحظة —
+  // نفس اللي كشف البنك كان بيقوله قبل الصرف بلحظة. NULL = البند لسه ما اتصرفش، أو اتصرف قبل الترحيل ده (وقتها السلوك
+  // القديم زي ما هو بالحرف). بعد كده تعديل ملف الموظف مابيغيّرش واقعة صرف حصلت — راجع payroll-disbursement-split.ts.
+  @Column({ type: 'nvarchar', length: 20, nullable: true })
+  paidPayMethod: string | null
+
+  @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
+  paidBankAmount: number | null
+
+  @Column({ type: 'decimal', precision: 18, scale: 2, nullable: true })
+  paidCashAmount: number | null
 
   // JSON: تفاصيل الحساب للمراجعة (أقساط، أيام...)
   @Column({ type: 'nvarchar', length: 'MAX', nullable: true })

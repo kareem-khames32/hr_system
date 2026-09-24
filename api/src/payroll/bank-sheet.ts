@@ -60,7 +60,11 @@ export function bankSheetRowIssue(row: {
   return null
 }
 
-export interface BankSheetItemInput { id?: number; employeeId: number; netPay: unknown; payMethod?: string | null; breakdown?: string | null }
+export interface BankSheetItemInput {
+  id?: number; employeeId: number; netPay: unknown; payMethod?: string | null; breakdown?: string | null
+  /** اللي اتثبت على البند وقت الصرف (ترحيل 067) — يغلب ملف الموظف الحالي في المسير المصروف */
+  paidPayMethod?: string | null; paidBankAmount?: unknown; paidCashAmount?: unknown
+}
 export interface BankSheetEmployeeInput {
   id: number; employeeCode?: string | null; fullName?: string | null; branchId?: number | null
   payMethod?: string | null; bankTransferAmount?: unknown; bankName?: string | null; iban?: string | null
@@ -109,6 +113,7 @@ export function bankSheetSources(input: {
       // قرار المالك (20 سبتمبر): راتب شهر آخر يوم عمل بيتصرف مع التصفية — خارج كشف البنك والمبلغ المستحق.
       settlementPayout: input.settlementOf(item.breakdown),
       recorded: recordedDisbursement({ runStatus: input.runStatus, itemPayMethod: item.payMethod,
+        itemPaid: { payMethod: item.paidPayMethod ?? null, bankAmount: item.paidBankAmount, cashAmount: item.paidCashAmount },
         mark: item.id == null ? null : markOf.get(item.id) ?? null }),
     })
   }

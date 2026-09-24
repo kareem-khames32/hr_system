@@ -62,6 +62,8 @@ export interface FinancialItemSource {
   departmentId: IdInput; departmentName: string | null
   costCenterId: IdInput; costCenterName: string | null
   itemPayMethod: string | null; employeePayMethod?: string | null; bankTransferAmount?: MoneyInput
+  /** اللي اتثبت على البند وقت الصرف (ترحيل 067) */
+  itemPaidPayMethod?: string | null; itemPaidBankAmount?: MoneyInput; itemPaidCashAmount?: MoneyInput
   basicSalary: MoneyInput; allowances: MoneyInput; overtimeAmount: MoneyInput; overtimeHours?: MoneyInput; otherAdditions: MoneyInput
   latenessDeduction: MoneyInput; shortfallDeduction: MoneyInput; absenceDeduction: MoneyInput; unpaidLeaveDeduction: MoneyInput
   loanInstallments: MoneyInput; otherDeductions: MoneyInput; socialInsuranceDeduction?: MoneyInput; netPay: MoneyInput
@@ -216,6 +218,7 @@ export function computeFinancialRow(source: FinancialItemSource, obligations: Re
   // واللي اتصرف فعلًا بيغلب ملف الموظف الحالي (payroll-disbursement-split.ts): تغيير طريقة الصرف بعد الصرف
   // كان بينقل صافي البند من عمود لعمود في الدفتر لواقعة صرف حصلت خلاص.
   const recorded = recordedDisbursement({ runStatus: source.runStatus, itemPayMethod: source.itemPayMethod,
+    itemPaid: { payMethod: source.itemPaidPayMethod ?? null, bankAmount: source.itemPaidBankAmount, cashAmount: source.itemPaidCashAmount },
     mark: source.disbursementStatus ? { status: source.disbursementStatus, payMethod: source.disbursedPayMethod,
       bankAmount: source.disbursedBankAmount, cashAmount: source.disbursedCashAmount } : null })
   const sheet = buildBankSheet([{ employeeId: toId(source.employeeId) ?? 0, employeeCode: source.employeeCode ?? '', fullName: source.fullName ?? '',

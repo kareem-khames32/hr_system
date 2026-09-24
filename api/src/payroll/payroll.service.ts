@@ -1357,6 +1357,39 @@ export class PayrollService {
     }
   }
 
+  /**
+   * تثبيت «اللي اتصرف فعلًا» على بنود المسير وقت الصرف (ترحيل 067). جوّه معاملة pay() وتحت قفل المسير وقبل ما المسير يبقى PAID.
+   * المصدر لكل بند:
+   *   - علامة «تم الصرف» موجودة ⇒ مبالغ العلامة نفسها (عشان البند والعلامة يقولوا نفس الرقم).
+   *   - غير كده ⇒ ملف الموظف في هذه اللحظة، بنفس دالة التقسيم اللي كشف البنك بيستخدمها — فاللي الكشف كان بيقوله قبل
+   *     الصرف بلحظة هو اللي بيتثبّت، ومابينقلبش عند الإقفال.
+   * المستثنى: صف «مصروف مع التصفية» (برّه كشف البنك تمامًا)، والبند المعلَّم «لم يتم» في إقفال موظف بموظف
+   * (ما اتصرفلوش فعلًا فيفضل على ملفه الحالي لحد ما يتصرفله). في الصرف الجماعي (RUN_LEVEL) الكل اتصرف له،
+   * فعلامة «لم يتم» قديمة متجاوزة ومابتمنعش التثبيت — وإلا يبقى فيه موظف الشاشة تقول عنه «تم الصرف» وتقسيمه
+   * لسه بيتغير مع أي تعديل في ملفه.
+   */
+  private async freezePaidSplit(em: EntityManager, run: PayrollRun,
+    items: ReadonlyArray<PayrollItem>, mode: 'RUN_LEVEL' | 'PER_EMPLOYEE') {
+    const payable = items.filter(item => !payrollItemSettlementPayout(item.breakdown))
+    if (!payable.length) return
+    const marks = await em.getRepository(PayrollItemDisbursement).find({ where: { runId: run.id } })
+    const markOf = new Map(marks.map(mark => [mark.itemId, mark]))
+    const employees = await em.getRepository(Employee).find({ where: { id: In([...new Set(payable.map(item => item.employeeId))]) },
+      select: ['id', 'payMethod', 'bankTransferAmount'] })
+    const employeeOf = new Map(employees.map(employee => [employee.id, employee]))
+    for (const item of payable) {
+      const mark = markOf.get(item.id) ?? null
+      if (mode === 'PER_EMPLOYEE' && mark?.status === 'UNPAID') continue
+      const employee = employeeOf.get(item.employeeId) ?? null
+      const payMethod = (mark?.status === 'PAID' ? mark.payMethod : null) || employee?.payMethod || item.payMethod || 'transfer'
+      const split = mark?.status === 'PAID'
+        ? { bank: Number(mark.bankAmount) || 0, cash: Number(mark.cashAmount) || 0 }
+        : payrollPaySplit(item.netPay, payMethod, employee?.bankTransferAmount ?? null)
+      await em.getRepository(PayrollItem).update({ id: item.id, runId: run.id },
+        { paidPayMethod: payMethod, paidBankAmount: split.bank, paidCashAmount: split.cash })
+    }
+  }
+
   // ===== الصرف: يقفل الأوفرتايم والأقساط المرتبطة =====
   // «إقفال الصرف»: علامات «تم الصرف» لكل موظف (payroll-disbursement) بلا أي أثر مالي؛ آثار الصرف كلها هنا في انتقال واحد
   // APPROVED→PAID تحت قفل المسير — مرة واحدة بالظبط. مسير بلا علامات = الصرف للمسير كله زي ما هو؛ بعلامات وناقص ناس = unpaidReason إلزامي.
@@ -1404,6 +1437,10 @@ export class PayrollService {
       if (negativeNetAtPay.length) throw new ConflictException({ code: 'PAYRUN-NET-NEGATIVE', message: 'صافي بعض الموظفين سالب؛ أعد فتح المسير وعالج الإجازة بلا أجر أو الاستحقاق ثم أعد الحساب قبل الصرف', employeeIds: negativeNetAtPay })
       // إقفال الصرف موظف بموظف قبل أي أثر مالي: سبب مكتوب لمن لم يتعلّم «تم الصرف» (مسير بلا علامات = لا شرط)
       const disbursement = await closePayrollRunDisbursement(em, run, items, user.sub, dto.unpaidReason)
+      // تثبيت اللي اتصرف فعلًا على كل بند اتصرف (ترحيل 067 — العيب N02 المتبقّي، مراجعة مستقلة 24 سبتمبر):
+      // طريقة الصرف وتقسيمها من ملف الموظف في هذه اللحظة = نفس اللي كشف البنك كان بيقوله قبل الصرف بلحظة.
+      // بعد كده تعديل ملف الموظف مابيغيّرش واقعة صرف حصلت، والرقم مابينقلبش من بنك لنقدي عند الإقفال.
+      await this.freezePaidSplit(em, run, items, disbursement.mode)
       // المسيرات القديمة لا تتجاوز الحارس لمجرد غياب صفوف claims في ترحيلها.
       await claimPayrollPeriod(em, run, employeeIds)
       for (const item of items) {
@@ -1712,7 +1749,8 @@ export class PayrollService {
     // نفس قاعدة الشاشات التانية بالحرف (payroll-disbursement-split.ts): بند اتسجل صرفه نقدي يفضل نقدي على القسيمة
     // بعد ما الملف يبقى «تحويل بنكي»، وبند بلا صرف مسجل ⇒ ملف الموظف الحالي زي ما هو (السلوك القديم بالحرف).
     const mark = await em.getRepository(PayrollItemDisbursement).findOneBy({ itemId: item.id })
-    const recorded = recordedDisbursement({ runStatus: run.status, itemPayMethod: item.payMethod, mark })
+    const recorded = recordedDisbursement({ runStatus: run.status, itemPayMethod: item.payMethod, mark,
+      itemPaid: { payMethod: item.paidPayMethod, bankAmount: item.paidBankAmount, cashAmount: item.paidCashAmount } })
     const payMethod = recorded?.payMethod ?? payee?.payMethod ?? item.payMethod ?? 'transfer'
     const identity = { nationalId: payee?.nationalId ?? null, bankName: payee?.bankName ?? null, iban: payee?.iban ?? null,
       payMethod, bankTransferAmount: payee?.bankTransferAmount ?? null,

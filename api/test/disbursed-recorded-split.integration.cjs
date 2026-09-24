@@ -186,3 +186,60 @@ test('RS-03: القسيمة تقول اللي اتصرف فعلًا — نقدي
   await repo('PayrollItemDisbursement').update({ itemId: I.paid.id }, { status: 'UNPAID', bankAmount: 0, cashAmount: 0, payMethod: null })
   assert.deepEqual(pay(await payslip(I.paid.id)), ['transfer', 100000, 0])
 }, { timeout: 120000 })
+
+// مراجعة مستقلة 24 سبتمبر (تكملة N02): الصرف الجماعي كان بيرجع لطريقة الصرف المحفوظة وقت **الحساب**، فالرقم كان بينقلب
+// من بنك لنقدي بمجرد الإقفال، و«نقدي + بنك» المصروف كان بيتغير تاريخيًا بتعديل مبلغ التحويل في الملف. دلوقتي الصرف
+// بيثبّت على البند طريقته وتقسيمه (paidPayMethod/paidBankAmount/paidCashAmount — ترحيل 067)، والخمس شاشات بتقراه.
+test('RS-04: التقسيم المثبت وقت الصرف يغلب الملف الحالي ولقطة الحساب في الخمس شاشات، وتعديل الملف بعده مابيغيّرش حاجة', async () => {
+  const branchId = E.paid.branchId
+  // الملف الحالي: تحويل بنكي كامل بمبلغ 800. لقطة الحساب: نقدي. المثبت وقت الصرف: نقدي + بنك 300 / 700.
+  const employee = await repo('Employee').save({ employeeCode: 'RS-004', fullName: 'مثبت وقت الصرف', branchId, joinDate: '2020-01-01',
+    basicSalary: 1000, housingAllowance: 0, transportAllowance: 0, otherAllowance: 0, status: 'active', isActive: true,
+    payMethod: 'transfer', bankTransferAmount: 800, bankName: 'بنك الاختبار', iban: IBAN })
+  const run = await repo('PayrollRun').save({ status: 'PAID', period: '2026-06', scopeType: 'COMPANY', name: 'مسير يونيو',
+    startDate: '2026-05-23', endDate: '2026-06-22' })
+  await repo('PayrollRunMember').save({ runId: run.id, employeeId: employee.id, snapshot: { version: 1, capturedAt: '2026-06-01T00:00:00.000Z',
+    employeeCode: employee.employeeCode, fullName: employee.fullName, branchId, departmentId: null, teamId: null, costCenterId: null,
+    coverFrom: null, coverTo: null, coverDays: null, prorataFactor: null, monthlyDays: 30, basicSalary: 1000, allowances: 0, gross: 1000, grossEarned: 1000 } })
+  const item = await repo('PayrollItem').save({ runId: run.id, employeeId: employee.id, basicSalary: 1000, allowances: 0,
+    payMethod: 'cash', netPay: 1000, breakdown: '{}', paidPayMethod: 'mixed', paidBankAmount: 300, paidCashAmount: 700 })
+
+  const frozen = [['mixed', 30000, 70000], ['mixed', 30000, 70000], ['mixed', 30000, 70000]]
+  const before = await surfaces(run, '2026-06')
+  assert.deepEqual(split(before.rowOf(employee.id)), frozen, 'المثبت وقت الصرف لا الملف (800/200) ولا لقطة الحساب (نقدي)')
+  assert.deepEqual([C(before.sheet.totals.bank), C(before.sheet.totals.cash)], [30000, 70000])
+  assert.deepEqual([C(before.register.totals.bank), C(before.register.totals.cash)], [30000, 70000])
+  assert.equal(before.rowOf(employee.id).screen.state, 'PAID')
+  // تقرير طرق الصرف على نفس المصدر (مجموعة «نقدي + بنك» لوحدها في هذا المسير)
+  const mixedBucket = before.methods.mixed
+  assert.deepEqual([mixedBucket.count, C(mixedBucket.bank), C(mixedBucket.cash)], [1, 30000, 70000])
+  // والقسيمة كمان (الخامسة)
+  const slip = await get(`/payroll/items/${item.id}`)
+  assert.deepEqual([slip.employee.payMethod, C(slip.employee.paySplit.bank), C(slip.employee.paySplit.cash)], ['mixed', 30000, 70000])
+
+  // تعديل ملف الموظف بعد الصرف: ولا رقم بيتغير في أي شاشة (واقعة صرف حصلت خلاص)
+  await repo('Employee').update(employee.id, { payMethod: 'cash', bankTransferAmount: 999 })
+  const after = await surfaces(run, '2026-06')
+  assert.deepEqual(split(after.rowOf(employee.id)), frozen, 'تعديل الملف بعد الصرف مابيلمسش المثبت')
+  assert.deepEqual([C(after.sheet.totals.bank), C(after.sheet.totals.cash)], [30000, 70000])
+
+  // علامة «لم يتم» متجاوزة (اتعلّم ثم اتلغى وهو معتمد، وبعدها المسير اتصرف كله مرة واحدة): التثبيت يغلبها،
+  // عشان الشاشة ماتقولش «تم الصرف» وتقسيمه لسه بيتغير مع أي تعديل في الملف. (الشاشة أصلًا بتقول PAID في الصرف الجماعي.)
+  await repo('PayrollItemDisbursement').save({ runId: run.id, itemId: item.id, employeeId: employee.id, status: 'UNPAID',
+    amount: 1000, bankAmount: 0, cashAmount: 0, payMethod: null, note: 'اتلغت علامته قبل إقفال المسير', markedByUserId: admin.id, markedAt: new Date() })
+  const stale = await surfaces(run, '2026-06')
+  assert.deepEqual(split(stale.rowOf(employee.id)), frozen, 'المثبت وقت الصرف يغلب علامة «لم يتم» المتجاوزة')
+  assert.equal(stale.rowOf(employee.id).screen.state, 'PAID', 'الصرف الجماعي صرف للكل')
+
+  // و«لم يتم» الحقيقية (إقفال موظف بموظف: البند ده مش مثبت أصلًا لأنه ما اتصرفلوش) ⇒ ملف الموظف الحالي
+  await repo('PayrollItem').update({ id: item.id }, { paidPayMethod: null, paidBankAmount: null, paidCashAmount: null })
+  const unpaid = await surfaces(run, '2026-06')
+  assert.deepEqual(split(unpaid.rowOf(employee.id)), [['cash', 0, 100000], ['cash', 0, 100000], ['cash', 0, 100000]])
+  await repo('PayrollItem').update({ id: item.id }, { paidPayMethod: 'mixed', paidBankAmount: 300, paidCashAmount: 700 })
+
+  // وعلامة «تم الصرف» بمبالغها تغلب المثبت كمان (العلامة أحدث دليل)
+  await repo('PayrollItemDisbursement').update({ itemId: item.id },
+    { status: 'PAID', bankAmount: 250, cashAmount: 750, payMethod: 'mixed' })
+  const marked = await surfaces(run, '2026-06')
+  assert.deepEqual(split(marked.rowOf(employee.id)), [['mixed', 25000, 75000], ['mixed', 25000, 75000], ['mixed', 25000, 75000]])
+}, { timeout: 120000 })
