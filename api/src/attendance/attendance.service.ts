@@ -289,10 +289,15 @@ export class AttendanceService {
   //   - نتيجة الوردية بترجع نسخة مستقلة لكل نداء، فمحدش يقدر يعدّل المحفوظ.
   private batch: { calendar: CalendarResolverCache; values: Map<string, Promise<unknown>> } | null = null
 
-  /** نسخة الخدمة داخل em بذاكرة دفعة: لحساب أيام كتير في نفس المعاملة (تراكم المسير، شاشة الحضور اليومي). */
+  /** نسخة الخدمة داخل em بذاكرة دفعة: لحساب أيام كتير في نفس المعاملة (تراكم المسير). */
   batchScope(em: EntityManager): AttendanceService {
-    const scoped = this.inManager(em)
-    scoped.batch = { calendar: createCalendarResolverCache(em), values: new Map() }
+    return this.inManager(em).withBatch()
+  }
+
+  /** نفس الخدمة بمستودعاتها زي ما هي + ذاكرة دفعة (شاشة الحضور اليومي: نفس اللي كانت بتقرا بيه بالحرف). */
+  private withBatch(): AttendanceService {
+    const scoped = Object.assign(Object.create(Object.getPrototypeOf(this)), this) as AttendanceService
+    scoped.batch = { calendar: createCalendarResolverCache(this.days.manager), values: new Map() }
     return scoped
   }
 
@@ -3293,7 +3298,7 @@ export class AttendanceService {
     const result = new Map<string, AttendanceDayWithExemption>()
     // دفعة واحدة لصفوف الشاشة كلها (المراجعة المستقلة — شاشة الحضور اليومي 122–223 ثانية): التقويم والإعدادات
     // وقواعد الجداول المشتركة بتتقري مرة للصفوف كلها بدل مرة لكل صف — نفس computeDay (قراءة بس) بالحرف
-    const scope = this.batchScope(this.days.manager)
+    const scope = this.withBatch()
     for (const row of rows) {
       const exemption = exemptionOnDate(windows.get(row.employeeId) ?? [], row.date)
       const day = await scope.computeDay(row.employeeId, row.date, false, true)

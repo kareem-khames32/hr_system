@@ -150,7 +150,8 @@ test('PB-07: الدفعة متوصّلة في المسارين الكبار وم
   assert.ok(!accrual.includes('this.attendance.computeDay('), 'كل حسابات الأيام في التراكم من الدفعة')
   const attendance = read('src/attendance/attendance.service.ts')
   const projection = attendance.slice(attendance.indexOf('  private async projectExemptionDays('), attendance.indexOf('  private async withDerivedSource<'))
-  assert.ok(projection.includes('const scope = this.batchScope(this.days.manager)'))
+  // الشاشة بمستودعاتها زي ما هي (نفس اللي كانت بتقرا بيه)، والتراكم بس اللي بيعيد الربط على معاملته
+  assert.ok(projection.includes('const scope = this.withBatch()'))
   assert.ok(!projection.includes('this.computeDay('), 'صفوف الشاشة كلها من الدفعة')
   // الإعفاءات بمفتاح المدى نفسه: التحميل بيفحص تداخل النوافذ جوّه المدى، ومدى أوسع كان هيرمي تداخل مالوش علاقة
   assert.ok(attendance.includes('this.batched(`EXEMPTIONS:${employeeId}:${from}:${to}`, () => loadAttendanceExemptions(this.days.manager, employeeId, from, to))'))
