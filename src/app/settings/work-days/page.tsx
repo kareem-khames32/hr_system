@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import {
@@ -18,8 +18,10 @@ import {
   assignWorkSchedule,
   fetchEmployees,
   fetchDepartments,
+  fetchTeams,
   can,
   getCurrentUser,
+  lockedBranchIdOf,
 } from '@/lib/api'
 import { buildCalendarChange, calendarRuleToggle, calendarScopeWritable, type PayrollCalendarContext, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
 import { CalendarChangeFields, CalendarContextSummary, CalendarMutationDialog, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
@@ -29,8 +31,10 @@ import type {
   ApiWorkSchedule,
   ApiEmployee,
   ApiDepartment,
+  ApiTeam,
   ApiAttendanceRuleChange,
 } from '@/lib/api'
+import { OrgTargetPicker, initialOrgTarget, resolveOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
 import { GraceOverridesNote } from '@/components/GraceOverridesNote'
 import {
   Calendar,
@@ -1424,34 +1428,41 @@ function AddScheduleRuleModal({
   )
 }
 
-// الإسناد إلى الموظفين الفعليين داخل نطاق المستخدم.
+// الإسناد بنفس ترتيب الاستهداف في باقي النظام (طلب المالك 24 سبتمبر): الشركة ← الفرع ← أقسام الفرع ← فرقه ← موظفين
+// فيه. الاختيار بيتحول لموظفين فعليين — نفس أثر الإسناد القديم بالحرف: الجدول بيتسجل على كل موظف بتاريخ سريانه، ومفيش
+// «افتراضي» بيتخزن لقسم أو فرع. جدول خاص بفرع: المنتقي على فرعه وموظفيه بس (الخادم بيرفض موظف من فرع تاني)،
+// وحساب الفرع مقفول على فرعه.
 function AssignScheduleModal({ schedule, onClose, onAssign }: {
   schedule: ApiWorkSchedule; onClose: () => void; onAssign: () => Promise<void>
 }) {
-  const [employees, setEmployees] = useState<ApiEmployee[]>([])
-  const [departments, setDepartments] = useState<ApiDepartment[]>([])
-  const [scope, setScope] = useState<'custom' | 'department' | 'all'>('custom')
-  const [departmentId, setDepartmentId] = useState('')
-  const [ids, setIds] = useState<number[]>([])
-  const [search, setSearch] = useState('')
-  const [loading, setLoading] = useState(true)
+  const scheduleBranchId = schedule.branchId ?? null
+  const lockedBranchId = scheduleBranchId ?? lockedBranchIdOf(getCurrentUser())
+  const [org, setOrg] = useState<{ branches: ApiBranch[]; departments: ApiDepartment[]; teams: ApiTeam[]; employees: ApiEmployee[] } | null>(null)
+  const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(lockedBranchId))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [change, setChange] = useState<ApiAttendanceRuleChange>({ effectiveFrom: localToday(), changeReason: '' })
   useEffect(() => {
-    Promise.all([fetchEmployees(), fetchDepartments()]).then(([emps, deps]) => {
-      setEmployees(emps.filter(e => !['archived', 'terminated'].includes(e.status)))
-      setDepartments(deps)
-    }).catch(err => setError(err.message)).finally(() => setLoading(false))
-  }, [])
+    Promise.all([fetchBranches(), fetchDepartments(), fetchTeams().catch(() => [] as ApiTeam[]), fetchEmployees()])
+      .then(([branches, departments, teams, employees]) => {
+        if (scheduleBranchId == null) { setOrg({ branches, departments, teams, employees }); return }
+        const ownDepartments = departments.filter(d => d.branchId === scheduleBranchId)
+        setOrg({
+          branches: branches.filter(b => b.id === scheduleBranchId),
+          departments: ownDepartments,
+          teams: teams.filter(t => ownDepartments.some(d => d.id === t.departmentId)),
+          employees: employees.filter(e => e.branchId === scheduleBranchId),
+        })
+      })
+      .catch(err => setError(err instanceof Error ? err.message : 'تعذر تحميل الموظفين'))
+  }, [scheduleBranchId])
+  const ids = useMemo(() => org ? resolveOrgTarget(target, org.employees) : [], [org, target])
   const save = async () => {
     if (!change.effectiveFrom || !change.changeReason.trim()) { setError('حدد تاريخ سريان الإسناد والسبب'); return }
-    if ((scope === 'custom' && !ids.length) || (scope === 'department' && !departmentId)) {
-      setError('اختر الموظفين أو القسم المطلوب'); return
-    }
+    if (!ids.length) { setError('مفيش موظفين في الاختيار ده — اختار فرع أو قسم أو فريق أو موظفين'); return }
     setBusy(true); setError('')
     try {
-      await assignWorkSchedule(schedule.id, scope === 'all' ? { all: true } : scope === 'department' ? { departmentId: Number(departmentId) } : { employeeIds: ids }, change)
+      await assignWorkSchedule(schedule.id, { employeeIds: ids }, change)
       await onAssign()
     } catch (err) { setError(err instanceof Error ? err.message : 'تعذر إسناد الجدول') }
     finally { setBusy(false) }
@@ -1460,14 +1471,13 @@ function AssignScheduleModal({ schedule, onClose, onAssign }: {
     <div className="bg-white rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto p-6 space-y-4">
       <h2 className="text-xl font-bold">تعيين جدول «{schedule.name}»</h2>
       {error && <p role="alert" className="text-red-600">{error}</p>}
-      {loading ? <p>جارٍ تحميل الموظفين…</p> : <>
-        <label className="block">نطاق الإسناد<select className="input w-full" value={scope} onChange={e => setScope(e.target.value as typeof scope)}><option value="custom">موظفون محددون</option><option value="department">قسم</option><option value="all">كل الموظفين النشطين في نطاقك</option></select></label>
-        {scope === 'department' && <select aria-label="القسم" className="input w-full" value={departmentId} onChange={e => setDepartmentId(e.target.value)}><option value="">اختر القسم</option>{departments.map(d => <option key={d.id} value={d.id}>{d.name}</option>)}</select>}
-        {scope === 'all' && <p className="text-amber-700">سيتم استبدال الجدول الحالي لكل الموظفين النشطين داخل نطاق صلاحياتك.</p>}
-        {scope === 'custom' && <><input aria-label="بحث الموظفين" className="input w-full" placeholder="بحث بالاسم أو الكود" value={search} onChange={e => setSearch(e.target.value)} /><div className="max-h-64 overflow-auto space-y-2">{employees.filter(e => (e.fullName + e.employeeCode).includes(search)).map(e => <label key={e.id} className="flex gap-2 p-2"><input type="checkbox" checked={ids.includes(e.id)} onChange={() => setIds(prev => prev.includes(e.id) ? prev.filter(id => id !== e.id) : [...prev, e.id])} />{e.fullName} — {e.employeeCode}</label>)}</div><p>{ids.length} موظف محدد</p></>}
+      {org === null ? <p>جارٍ تحميل الفروع والموظفين…</p> : <>
+        <OrgTargetPicker value={target} onChange={setTarget} branches={org.branches} departments={org.departments}
+          teams={org.teams} employees={org.employees} lockedBranchId={lockedBranchId} disabled={busy} />
+        {ids.length > 0 && <p className="text-amber-700 text-sm">الجدول الحالي لـ{ids.length} موظف هيتغير للجدول ده من تاريخ السريان.</p>}
       </>}
       <AttendanceRuleChangeFields value={change} onChange={setChange} />
-      <div className="flex gap-3"><button disabled={loading || busy} onClick={save} className="btn-primary">{busy ? 'جارٍ الإسناد…' : 'تأكيد الإسناد'}</button><button disabled={busy} onClick={onClose} className="btn-secondary">إلغاء</button></div>
+      <div className="flex gap-3"><button disabled={org === null || busy} onClick={save} className="btn-primary">{busy ? 'جارٍ الإسناد…' : 'تأكيد الإسناد'}</button><button disabled={busy} onClick={onClose} className="btn-secondary">إلغاء</button></div>
     </div>
   </div>
 }

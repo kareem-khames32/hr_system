@@ -130,3 +130,20 @@ test('المقفول بيقول سبب القفل: خلية الوردية في 
   assert.ok(workDays.includes("title={schedule?.isDefault ? 'الجدول الافتراضي لا يمكن تعطيله' : undefined}"), 'the locked «نشط» box says why')
   assert.ok(workDays.includes('(الجدول الافتراضي لا يمكن تعطيله)'), 'and says it on screen, not only on hover')
 })
+
+// طلب المالك 24 سبتمبر: إسناد جدول العمل من «أيام العمل» كان موظفين أو قسم أو الكل (من غير فرع ولا فريق).
+// دلوقتي نفس ترتيب باقي النظام: الشركة ← الفرع ← أقسام الفرع ← فرقه ← موظفين فيه، والاختيار بيتحول لموظفين فعليين.
+test('أيام العمل: إسناد الجدول بالمنتقي الموحد (فرع ← قسم ← فريق ← موظفين)، والجدول الخاص بفرع مقفول على فرعه', () => {
+  const workDays = src('app/settings/work-days/page.tsx').replace(/\r\n/g, '\n')
+  const modal = workDays.slice(workDays.indexOf('function AssignScheduleModal('))
+  assert.match(modal, /<OrgTargetPicker value=\{target\} onChange=\{setTarget\} branches=\{org\.branches\} departments=\{org\.departments\}/)
+  assert.match(modal, /teams=\{org\.teams\} employees=\{org\.employees\} lockedBranchId=\{lockedBranchId\}/)
+  assert.match(modal, /resolveOrgTarget\(target, org\.employees\)/)
+  assert.match(modal, /assignWorkSchedule\(schedule\.id, \{ employeeIds: ids \}, change\)/)
+  // جدول خاص بفرع: فرعه بس (الخادم بيرفض موظف من فرع تاني)، وحساب الفرع مقفول على فرعه
+  assert.match(modal, /const lockedBranchId = scheduleBranchId \?\? lockedBranchIdOf\(getCurrentUser\(\)\)/)
+  assert.match(modal, /employees: employees\.filter\(e => e\.branchId === scheduleBranchId\)/)
+  // الاختيارات التلاتة القديمة راحت
+  assert.doesNotMatch(modal, /<option value="department">قسم<\/option>/)
+  assert.doesNotMatch(modal, /\{ all: true \}/)
+})
