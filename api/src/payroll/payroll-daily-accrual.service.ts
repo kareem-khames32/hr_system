@@ -186,6 +186,9 @@ export class PayrollDailyAccrualService {
     if (today < end) end = today
     if (start > end) return result
 
+    // دفعة واحدة لأيام الموظف في المعاملة دي: قراءاته المرجعية (ملفه ووردياته وقواعد دوامه والتقويم والإعدادات)
+    // مرة واحدة بدل مرة لكل يوم — نفس computeDay بالحرف (AttendanceService.batchScope)
+    const attendance = this.attendance.batchScope(em)
     const suspendedDates = await suspendedDatesBetween(em, input.employeeId, start, end)
     // نفس خطوة تجسيد الغياب بالحرف: غياب محفوظ قديم في يوم إيقاف (اتكتب قبل الإيقاف) يتشال،
     // وإلا المسير يخصم اليوم غياب ويوم إيقاف مع بعض.
@@ -195,7 +198,7 @@ export class PayrollDailyAccrualService {
       })
       for (const row of stale) {
         const date = String(row.date).slice(0, 10)
-        if (suspendedDates.has(date)) await this.attendance.computeDay(input.employeeId, date, false, false, em)
+        if (suspendedDates.has(date)) await attendance.computeDay(input.employeeId, date, false, false)
       }
     }
     const exemptions = await loadAttendanceExemptions(em, input.employeeId, start, end)
@@ -249,7 +252,7 @@ export class PayrollDailyAccrualService {
       // يوم الإيقاف: المسير بيخصمه «يوم إيقاف» بس، ومحرك الحضور ما بيلمسوش — يتخزن بلا إعادة حساب
       if (!suspended) {
         // نفس نداء تجسيد الغياب في المسير بالحرف: بلا تسلسل، وداخل معاملة الاستدعاء
-        await this.attendance.computeDay(input.employeeId, date, false, false, em)
+        await attendance.computeDay(input.employeeId, date, false, false)
         recomputed.push(date)
       }
       result.computed++

@@ -90,7 +90,9 @@ test('approval holding employee-finance wins before a waiting recompute; attenda
     punches: ['09:30', '18:30'].map(time => ({ employeeCode: emp.employeeCode, timestamp: new Date(`${date}T${time}:00`).toISOString() })) })
   assert.equal(punched.status, 201, JSON.stringify(punched.body))
   await repo('Employee').update(emp.id, { joinDate: date, status: 'terminated', isActive: false })
-  await repo('OffboardingCase').save({ employeeId: emp.id, lastWorkingDay: date, status: 'CLOSED', terminationReason: 'termination' })
+  // تصفية لسه في التسوية (مش مقفولة): التصفية المقفولة من غير بند «راتب آخر شهر» بيرفضها حارس أحدث صح (409)،
+  // والاختبار ده عن سباق الاعتماد مع إعادة الحساب مش عن التصفية. نفس تكييف المراجع المستقل في جولته التانية.
+  await repo('OffboardingCase').save({ employeeId: emp.id, lastWorkingDay: date, status: 'IN_SETTLEMENT', terminationReason: 'termination' })
   const calculated = await request(creator, 'POST', '/payroll/runs/calculate-defined', {
     period: '2026-07', scopeType: 'CUSTOM', employeeIds: [emp.id], name: 'اختبار الاعتماد المتزامن مع الحضور' })
   assert.equal(calculated.status, 201, JSON.stringify(calculated.body))

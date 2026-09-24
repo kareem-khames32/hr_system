@@ -23,6 +23,7 @@ import { RequestApproval } from '../requests/entities/request-approval.entity'
 import { Request } from '../requests/entities/request.entity'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { Leave } from '../requests/entities/leave.entities'
+import { saveInSqlBatches } from '../common/sql-batches'
 import { RequestsService } from '../requests/requests.service'
 import { LeaveAttachmentDeadlineJob } from '../requests/leave-attachment-deadline.job'
 import { EmployeeDocument, PublicHoliday } from './assets.entities'
@@ -243,7 +244,8 @@ export class PortalController {
         return row
       })
       try {
-        await this.notificationReads.save(rows)
+        // «تعليم الكل» ممكن يبقى مئات الصفوف: على دفعات تحت حد SQL Server (2,100 قيمة للجملة)
+        await saveInSqlBatches(this.notificationReads, rows)
         return
       } catch (e) {
         if (attempt >= 1) throw e

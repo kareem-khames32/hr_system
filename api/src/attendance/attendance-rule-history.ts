@@ -46,8 +46,12 @@ export async function resolveAttendanceRule<T extends object>(
   em: EntityManager, sourceType: AttendanceRuleSourceType, sourceId: number, date: string, fallback: T
 ): Promise<{ snapshot: T; versionId: number | null; version: number | null; effectiveFrom: string | null; legacyBaseline: boolean; unavailable?: boolean }> {
   attendanceRuleDate(date)
-  const rows = await em.find(AttendanceRuleVersion, { where: { sourceType, sourceId }, order: { version: 'DESC' } })
-  return pickAttendanceRule(rows, date, fallback)
+  return pickAttendanceRule(await readAttendanceRuleVersions(em, sourceType, sourceId), date, fallback)
+}
+
+/** كل نسخ مصدر واحد — نفس قراءة resolveAttendanceRule؛ دفعة حساب الأيام بتقراها مرة للمصدر وتختار بـpickAttendanceRule. */
+export function readAttendanceRuleVersions(em: EntityManager, sourceType: AttendanceRuleSourceType, sourceId: number) {
+  return em.find(AttendanceRuleVersion, { where: { sourceType, sourceId }, order: { version: 'DESC' } })
 }
 
 // اختيار النسخة السارية من صفوف مصدر واحد محمّلة مسبقًا (مرتبة أو لا) — نفس قاعدة
@@ -123,7 +127,9 @@ export type AttendanceGraceSource = 'SHIFT_OVERRIDE' | 'SOURCE_SNAPSHOT' | 'LEGA
 export async function resolveAttendanceGrace(em: EntityManager, date: string, source: {
   sourceType: 'SHIFT' | 'WORK_SCHEDULE' | null; sourceId: number | null;
   sourceVersionId: number | null; sourceVersion: number | null; sourceSettings: Record<string, any> | null
-}, savedDaySnapshot?: Record<string, any> | null): Promise<{ minutes: number; source: AttendanceGraceSource }> {
+}, savedDaySnapshot?: Record<string, any> | null,
+// دفعة حساب الأيام بتمرر قراءة واحدة للسماحية العامة بدل قراءة لكل يوم (نفس الإعداد ونفس التحقق)
+readGeneralGrace: () => Promise<number> = () => attendanceGeneralGrace(em)): Promise<{ minutes: number; source: AttendanceGraceSource }> {
   if (source.sourceSettings?.graceMinutes != null) {
     return { minutes: validAttendanceGrace(source.sourceSettings.graceMinutes), source: 'SHIFT_OVERRIDE' }
   }
@@ -139,7 +145,7 @@ export async function resolveAttendanceGrace(em: EntityManager, date: string, so
     return { minutes: validAttendanceGrace(savedDaySnapshot.graceMinutes),
       source: savedDaySnapshot.graceSource === 'LEGACY_CURRENT_CONFIG' ? 'LEGACY_CURRENT_CONFIG' : 'LEGACY_DAY_SNAPSHOT' }
   }
-  return { minutes: await attendanceGeneralGrace(em), source: 'LEGACY_CURRENT_CONFIG' }
+  return { minutes: await readGeneralGrace(), source: 'LEGACY_CURRENT_CONFIG' }
 }
 
 // يستدعيه حفظ الإعدادات العامة بعد الأقفال وقبل تعديل القيم؛ لا ينسب الماضي إلى

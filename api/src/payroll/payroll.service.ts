@@ -25,6 +25,7 @@ import {
 import { Leave, LeaveType } from '../requests/entities/leave.entities'
 import { bankSheetPayMethodSummary, bankSheetSources, buildBankSheet } from './bank-sheet'
 import { recordedDisbursement } from './payroll-disbursement-split'
+import { saveInSqlBatches } from '../common/sql-batches'
 import { PayrollDecimal } from './payroll-decimal'
 import { parseSickPayTiers, payrollLeaveDeductionLines, sickLeaveDaysInCover, sickLeaveDeduction, type SickPayTier } from './sick-leave-pay'
 import { readSuspensionPayrollDays, suspendedDatesBetween } from '../employees/employee-suspensions'
@@ -1182,7 +1183,8 @@ export class PayrollService {
       await voidPayrollRunApprovals(em, run.id, 'RECALCULATED')
     }
     for (const member of newMembers) member.runId = run.id
-    if (newMembers.length) await members.save(newMembers)
+    // على دفعات تحت حد SQL Server (2,100 قيمة للجملة): المسير فوق ~350 موظف كان بيقع هنا بالخطأ 8003 (CR2-B01)
+    if (newMembers.length) await saveInSqlBatches(members, newMembers)
     for (const item of prepared) {
       item.runId = run.id
       await items.save(item)

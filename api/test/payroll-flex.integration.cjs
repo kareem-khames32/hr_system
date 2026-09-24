@@ -135,7 +135,9 @@ async function payroll(f, expected = { gross: 9000, grossEarned: 300, dayRate: 3
   // a month of attendance. Monthly gross 9000 still determines rates: 300/day, .625/min.
   // قرار المالك (الراتب على 30 يوم): المستحق = الراتب ÷ 30 × أيام التغطية مهما كان طول الفترة — يوم واحد من يوليو = 9000 ÷ 30 = 300.
   await repo('Employee').update(f.emp.id, { joinDate: f.day, status: 'terminated', isActive: false })
-  await repo('OffboardingCase').save({ employeeId: f.emp.id, lastWorkingDay: f.day, status: 'CLOSED', terminationReason: 'termination' })
+  // تصفية لسه في التسوية (مش مقفولة): التصفية المقفولة من غير بند «راتب آخر شهر» بيرفضها حارس أحدث صح (409)،
+  // والاختبار ده عن حماية الحضور المعتمد مش عن التصفية. نفس تكييف المراجع المستقل في جولته التانية.
+  await repo('OffboardingCase').save({ employeeId: f.emp.id, lastWorkingDay: f.day, status: 'IN_SETTLEMENT', terminationReason: 'termination' })
   // الخطوة 16 (B3): اسم المسير فريد داخل الشهر لغير الملغى؛ كل مسير جديد يأخذ رقم الموظف.
   const result = await request(admin, 'POST', '/payroll/runs/calculate-defined', {
     period: '2026-07', scopeType: 'CUSTOM', employeeIds: [f.emp.id], name: `تقييم مالي ليوم مرونة — قاعدة اختبار #${f.emp.id}`,

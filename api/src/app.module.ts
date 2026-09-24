@@ -24,6 +24,7 @@ import { CostCenterReportController } from './reports/cost-center-report.control
 import { CostCenterReportService } from './reports/cost-center-report.service'
 import { FinancialReportModule } from './reports/financial-report.module'
 import { validateEnv } from './auth/jwt-secret'
+import { dbPacketSize } from './common/sql-packet-size'
 
 @Module({
   imports: [
@@ -61,6 +62,8 @@ import { validateEnv } from './auth/jwt-secret'
             trustServerCertificate:
               config.get<string>('DB_TRUST_SERVER_CERTIFICATE', 'true') === 'true',
             encrypt: false, // سيرفر محلي
+            // حزمة 32 كيلو بدل 4: الاستعلام الطويل بيروح في حزمة واحدة بدل ما يقف ~48 مللي (common/sql-packet-size.ts)
+            packetSize: dbPacketSize(config.get<string>('DB_PACKET_SIZE')),
           },
         }
       },

@@ -51,10 +51,12 @@ import {
 import { DEVICE_KEY_MIN_LENGTH, deviceKeyWeakness } from './device-key'
 import { AttendanceExemption } from './attendance-exemption.entities'
 import { AttendanceRuleVersion } from './attendance-rule.entities'
+import type { AttendanceRuleSourceType } from './attendance-rule.entities'
 import { exemptionOnDate, exemptionPolicyOnDate, loadAttendanceExemptions } from './attendance-exemption-resolver'
 import { readOpenSuspensions, suspendedDatesBetween } from '../employees/employee-suspensions'
 import { suspensionCovers } from '../employees/employee-suspension-rules'
-import { assertAttendanceRulePeriodOpen, attendanceFlexPolicy, attendanceRuleDate, lockAttendanceRuleMutation, resolveAttendanceGrace, resolveAttendanceRule } from './attendance-rule-history'
+import { assertAttendanceRulePeriodOpen, attendanceFlexPolicy, attendanceGeneralGrace, attendanceRuleDate, lockAttendanceRuleMutation, pickAttendanceRule,
+  readAttendanceRuleVersions, resolveAttendanceGrace, resolveAttendanceRule } from './attendance-rule-history'
 import type { AttendanceGraceSource } from './attendance-rule-history'
 import { calculateAttendanceFlex, attendanceIntervalMinutes } from './attendance-flex-calculator'
 import type { AttendanceFlexResult, AttendanceRuleSnapshot, FlexOverrideMode } from './attendance-flex-calculator'
@@ -270,7 +272,59 @@ export class AttendanceService {
       'config', 'leaves', 'requests', 'holidays', 'branches', 'dayOverrides', 'scheduleRules',
       'overtimePeriods', 'permissionTypes', 'workSchedules', 'shiftsCatalog'] as const
     for (const name of names) (scoped as any)[name] = em.getRepository(this[name].target as any)
+    // ذاكرة الدفعة تخص معاملتها بس — نسخة لمعاملة تانية تبدأ من غيرها
+    scoped.batch = null
     return scoped
+  }
+
+  // ===== دفعة حساب أيام داخل معاملة واحدة (المراجعة المستقلة 24 سبتمبر — بطء حساب المسير) =====
+  // حساب يوم حضور واحد كان بيعمل ~65 استعلامًا على بيانات الشركة، أغلبها قراءات مرجعية ثابتة بتتكرر لكل يوم:
+  // ملف الموظف 8 مرات، ونسخ قواعد الدوام 8، والتقويم ~10، والوردية (shiftFor) 3 مرات لنفس الأيام، والإعدادات.
+  // تراكم المسير بيحسب ~30 يوم لكل موظف فشهر الشركة كان بيوصل لساعة. الدفعة بتقرا القراءات دي مرة واحدة.
+  // القواعد (نفس نمط ذاكرة التقويم createCalendarResolverCache):
+  //   - مفتاح الذاكرة = مدخلات الاستعلام بالظبط؛ مفيش «تحميل أوسع ثم فلترة» إلا نسخ القواعد (pickAttendanceRule
+  //     هي نفس دالة resolveAttendanceRule بالحرف) والتقويم (ذاكرته الموجودة أصلًا).
+  //   - مابيدخلهاش أي جدول بيتكتب أثناء حساب اليوم: أيام الحضور والبصمات والتصحيحات والإضافي والطلبات والتراكم
+  //     بتتقري كل مرة زي ما هي.
+  //   - نتيجة الوردية بترجع نسخة مستقلة لكل نداء، فمحدش يقدر يعدّل المحفوظ.
+  private batch: { calendar: CalendarResolverCache; values: Map<string, Promise<unknown>> } | null = null
+
+  /** نسخة الخدمة داخل em بذاكرة دفعة: لحساب أيام كتير في نفس المعاملة (تراكم المسير، شاشة الحضور اليومي). */
+  batchScope(em: EntityManager): AttendanceService {
+    const scoped = this.inManager(em)
+    scoped.batch = { calendar: createCalendarResolverCache(em), values: new Map() }
+    return scoped
+  }
+
+  private batched<T>(key: string, read: () => Promise<T>): Promise<T> {
+    if (!this.batch) return read()
+    if (!this.batch.values.has(key)) this.batch.values.set(key, read())
+    return this.batch.values.get(key) as Promise<T>
+  }
+
+  private employeeRow(employeeId: number) {
+    return this.batched(`EMPLOYEE:${employeeId}`, () => this.employees.findOne({ where: { id: employeeId } }))
+  }
+
+  private async ruleFor<T extends object>(sourceType: AttendanceRuleSourceType, sourceId: number, date: string, fallback: T) {
+    if (!this.batch) return resolveAttendanceRule(this.days.manager, sourceType, sourceId, date, fallback)
+    attendanceRuleDate(date)
+    const rows = await this.batched(`RULE:${sourceType}:${sourceId}`, () => readAttendanceRuleVersions(this.days.manager, sourceType, sourceId))
+    return pickAttendanceRule(rows, date, fallback)
+  }
+
+  private flexPolicyOf() {
+    return this.batched('FLEX_POLICY', () => attendanceFlexPolicy(this.days.manager))
+  }
+
+  // دالة عادية مش حقل سهم: الحقل كان هيمسك this بتاع الخدمة الأصلية وinManager ينسخه بمعاملتها هي
+  private generalGraceOf() {
+    return this.batched('GENERAL_GRACE', () => attendanceGeneralGrace(this.days.manager))
+  }
+
+  // نفس المدى بالظبط (مش مدى أوسع): التحميل بيفحص تداخل النوافذ اللي جوّه المدى بس، ومدى أوسع كان هيرمي تداخل مالوش علاقة باليوم
+  private exemptionsOf(employeeId: number, from: string, to: string) {
+    return this.batched(`EXEMPTIONS:${employeeId}:${from}:${to}`, () => loadAttendanceExemptions(this.days.manager, employeeId, from, to))
   }
 
   private async financiallyClosedDay(employeeId: number, date: string) {
@@ -291,7 +345,8 @@ export class AttendanceService {
   }
 
   async calendarDay(employeeId: number, date: string, cache?: CalendarResolverCache) {
-    return this.requireCalendar(await resolveEmployeeCalendarDay(this.days.manager, employeeId, date, { cache }))
+    // في دفعة حساب الأيام: ذاكرة التقويم بتاعة الدفعة (نفس معاملتها) لو المستدعي ماحددش ذاكرة
+    return this.requireCalendar(await resolveEmployeeCalendarDay(this.days.manager, employeeId, date, { cache: cache ?? this.batch?.calendar }))
   }
 
   // أيام العمل الفعلية في مدى — الويك إند والعطلات الرسمية مستثناة
@@ -355,7 +410,7 @@ export class AttendanceService {
   }
 
   private async configValue(key: string, fallback: string): Promise<string> {
-    const row = await this.config.findOne({ where: { key } })
+    const row = await this.batched(`CONFIG:${key}`, () => this.config.findOne({ where: { key } }))
     return row?.value ?? fallback
   }
 
@@ -985,7 +1040,7 @@ export class AttendanceService {
   // بلا مرجع أو وردية محذوفة، فتُستخدم اللقطة المخزّنة كاحتياطي
   private async liveShift(shiftId?: number | null) {
     if (!shiftId) return null
-    return this.shiftsCatalog.findOne({ where: { id: shiftId } })
+    return this.batched(`SHIFT_ROW:${shiftId}`, () => this.shiftsCatalog.findOne({ where: { id: shiftId } }))
   }
 
   // مرجع الوردية من اسمها — لملء shiftId عند الإسناد ولترقية الصفوف القديمة
@@ -1229,8 +1284,15 @@ export class AttendanceService {
   }
 
   async shiftFor(employeeId: number, date: string): Promise<DayAttendanceShift> {
-    const emp = await this.employees.findOne({ where: { id: employeeId } })
-    const employeeRule = await resolveAttendanceRule(this.days.manager, 'EMPLOYEE', employeeId, date, {
+    // في الدفعة: وردية اليوم بتتطلب كذا مرة (اليوم نفسه، ونافذة اليوم اللي بعده، وكشف الإضافي) — تتحل مرة واحدة،
+    // وكل نداء ياخد نسخة مستقلة منها
+    if (this.batch) return structuredClone(await this.batched(`SHIFT:${employeeId}:${date}`, () => this.resolveShift(employeeId, date)))
+    return this.resolveShift(employeeId, date)
+  }
+
+  private async resolveShift(employeeId: number, date: string): Promise<DayAttendanceShift> {
+    const emp = await this.employeeRow(employeeId)
+    const employeeRule = await this.ruleFor('EMPLOYEE', employeeId, date, {
       workScheduleId: emp?.workScheduleId ?? null,
       flexOverrideMode: (emp as any)?.flexOverrideMode ?? 'INHERIT',
     })
@@ -1243,7 +1305,7 @@ export class AttendanceService {
       sourceType: 'SHIFT' | 'WORK_SCHEDULE', id: number, fallback: Record<string, any>,
       source: ScheduleSource, suffix = ''
     ): Promise<DayAttendanceShift | null> => {
-      const rule = await resolveAttendanceRule(this.days.manager, sourceType, id, date, fallback)
+      const rule = await this.ruleFor(sourceType, id, date, fallback)
       if (rule.unavailable) return null
       const settings = rule.snapshot
       const inherited = settings.flexEnabled ?? settings.shiftMode === 'flexible'
@@ -1280,18 +1342,20 @@ export class AttendanceService {
     }
     const override = await this.dayOverrides.findOne({ where: { employeeId, date } })
     if (override) return scheduled(override, 'override', ' (يوم خاص)')
-    const entry = await this.schedule.findOne({ where: { weekStart: weekKeyOf(date), employeeId } })
+    // جدول الأسبوع واحد لأيامه السبعة
+    const weekStart = weekKeyOf(date)
+    const entry = await this.batched(`WEEK_ENTRY:${employeeId}:${weekStart}`, () => this.schedule.findOne({ where: { weekStart, employeeId } }))
     if (entry) return scheduled(entry, 'week')
     const workScheduleId = employeeRule.snapshot.workScheduleId
     if (workScheduleId) {
-      const ws = await this.workSchedules.findOne({ where: { id: workScheduleId } })
+      const ws = await this.batched(`WORK_SCHEDULE:${workScheduleId}`, () => this.workSchedules.findOne({ where: { id: workScheduleId } }))
       if (ws) {
         const resolved = await fromSource('WORK_SCHEDULE', ws.id, ws, 'employee')
         if (resolved) return resolved
       }
     }
     // Default selection is dated too; future edits do not rewrite earlier days.
-    for (const ws of await this.workSchedules.find({ order: { id: 'ASC' } })) {
+    for (const ws of await this.batched('WORK_SCHEDULES_ALL', () => this.workSchedules.find({ order: { id: 'ASC' } }))) {
       const resolved = await fromSource('WORK_SCHEDULE', ws.id, ws, 'default')
       if (resolved?.sourceSettings?.isDefault && resolved.sourceSettings.isActive) return resolved
     }
@@ -1971,7 +2035,7 @@ export class AttendanceService {
     // كتالوج الأنواع: بالمعرّف (permissionTypeId) أولاً، وبالاسم للصفوف القديمة
     // قبل حفظ المعرّف فقط — الاسم قابل للتعديل، وإعادة التسمية كانت تحوّل كل
     // أذونات النوع لعذر مجاني. معرّف محذوف/اسم مجهول = نوع مجهول (بخصم كامل)
-    const allTypes = await this.permissionTypes.find()
+    const allTypes = await this.batched('PERMISSION_TYPES', () => this.permissionTypes.find())
     const typeById = new Map<number, PermissionType>(allTypes.map((t) => [t.id, t]))
     const typeByName = new Map<string, PermissionType>(allTypes.map((t) => [t.nameAr, t]))
     const typeOf = (x: { typeId: number | null; type: string | null }) =>
@@ -2141,10 +2205,9 @@ export class AttendanceService {
         attendanceReviewRequired: true, attendanceReviewReason: 'الفترة مقفلة ولا يوجد سجل حضور محفوظ لهذا اليوم',
       }), { attendanceExempt: false, exemption: null })
     }
-    const emp = await this.employees.findOne({ where: { id: employeeId } })
+    const emp = await this.employeeRow(employeeId)
     if (!emp) throw new NotFoundException('الموظف غير موجود')
-    const exemption = exemptionOnDate(
-      await loadAttendanceExemptions(this.days.manager, employeeId, date, date), date)
+    const exemption = exemptionOnDate(await this.exemptionsOf(employeeId, date, date), date)
     // يوم لم يأتِ بعد (بالتاريخ المحلي) — يُحسب لكن لا يُحفظ إلا إجازة كاملة أو
     // عطلة (انظر نقطة الحفظ أدناه)
     const isFuture = date > localDateOf(new Date())
@@ -2166,8 +2229,8 @@ export class AttendanceService {
     // بالاسم (الافتراضي «صباحي» وجداول العمل كانت تستعير إعدادات وردية بنفس الاسم).
     // الليلية: نوافذها على خط اليوم الممتد (نافذة الخروج صباح الغد)
     const sc = this.nightWindows(shift.sourceSettings as Shift | null, frame)
-    const flexPolicy = shift.sourceSettings?.flexPolicy ?? await attendanceFlexPolicy(this.days.manager)
-    const graceResolution = await resolveAttendanceGrace(this.days.manager, date, shift, storedDay?.attendanceRuleSnapshot)
+    const flexPolicy = shift.sourceSettings?.flexPolicy ?? await this.flexPolicyOf()
+    const graceResolution = await resolveAttendanceGrace(this.days.manager, date, shift, storedDay?.attendanceRuleSnapshot, () => this.generalGraceOf())
     const grace = graceResolution.minutes
 
     // البصمات الخام (من الجهاز، بلا اتجاه) تُصنّف بالنوافذ/الافتراضي.
@@ -2254,9 +2317,9 @@ export class AttendanceService {
 
     // الإجازات المعتمدة المغطية لليوم: يوم كامل ← 'leave'،
     // نصف يوم ← نافذة تغطية (النصف الأول أو الثاني من الوردية)
-    const approvedLeaves = await this.leaves.find({
+    const approvedLeaves = await this.batched(`APPROVED_LEAVES:${employeeId}`, () => this.leaves.find({
       where: { employeeId, status: 'APPROVED' },
-    })
+    }))
     const dayLeaves = approvedLeaves.filter(
       (l) => l.fromDate <= date && l.toDate >= date
     )
@@ -2739,7 +2802,7 @@ export class AttendanceService {
     if (em && em !== this.days.manager) return this.inManager(em).overtimeEvidence(employeeId, date)
     attendanceRuleDate(date)
     if (!Number.isSafeInteger(employeeId) || employeeId < 1) throw new BadRequestException('معرف الموظف غير صالح')
-    const emp = await this.employees.findOneBy({ id: employeeId })
+    const emp = await this.employeeRow(employeeId)
     if (!emp) throw new NotFoundException('الموظف غير موجود')
     const shift = await this.shiftFor(employeeId, date)
     const frame = await this.workdayFrame(employeeId, date, shift)
@@ -2749,7 +2812,7 @@ export class AttendanceService {
     const dayKind = kind === 'WORKING' ? 'WEEKDAY' : kind
     const policy = await this.overtimeEvidencePolicy(shift, dayKind)
     const window = await this.overtimeWindow(date, calendar.branchId!)
-    const windows = await loadAttendanceExemptions(this.days.manager, employeeId, date, date)
+    const windows = await this.exemptionsOf(employeeId, date, date)
     const exemptDefault = await this.configValue('payroll.exempt_overtime_eligible', 'false')
     if (!['true', 'false'].includes(exemptDefault)) throw new BadRequestException('إعداد استحقاق المستثنى للإضافي غير صالح')
     const exemption = exemptionPolicyOnDate(windows, date, { overtimeEligible: exemptDefault === 'true', unpaidLeaveDeductible: true })
@@ -2790,7 +2853,7 @@ export class AttendanceService {
     const start = shift.source === 'none' ? 0 : toMinutes(shift.start)
     const end = shift.source === 'none' ? 0 : toMinutes(shift.end) + (frame.overnight ? 1440 : 0)
     let overtimeStart: number | null = null
-    const flexPolicy = shift.sourceSettings?.flexPolicy ?? await attendanceFlexPolicy(this.days.manager)
+    const flexPolicy = shift.sourceSettings?.flexPolicy ?? await this.flexPolicyOf()
     if (checkInInstant && checkOutInstant) {
       const duration = (checkOutInstant.getTime() - checkInInstant.getTime()) / 60000
       if (duration <= 0 || duration > flexPolicy.maxSessionMinutes || checkInInstant.getTimezoneOffset() !== checkOutInstant.getTimezoneOffset()) block('ATTENDANCE_REVIEW', 'مدة البصمات أو تغير التوقيت يحتاج مراجعة قبل احتساب الإضافي')
@@ -2838,7 +2901,7 @@ export class AttendanceService {
       'max_hours_per_day', 'max_hours_per_week', 'max_hours_per_month', 'allow_early_overtime',
       'missing_punch_policy', 'leave_conflict_policy', 'detection_threshold_hours',
       'multiplier_weekday', 'multiplier_weekend', 'multiplier_holiday']
-    const rows = await this.config.find({ where: { key: In(names.map(key => `overtime.${key}`)) } })
+    const rows = await this.batched('OVERTIME_POLICY_ROWS', () => this.config.find({ where: { key: In(names.map(key => `overtime.${key}`)) } }))
     const values = new Map(rows.map(row => [row.key.slice('overtime.'.length), row.value]))
     const number = (key: string, fallback: number, integer = false) => {
       const value = Number(values.get(key) ?? fallback)
@@ -3228,9 +3291,12 @@ export class AttendanceService {
     const windows = await this.exemptionsFor([...rows, ...employees.map(emp => ({ employeeId: emp.id }))]
       .map(row => row.employeeId), from, to)
     const result = new Map<string, AttendanceDayWithExemption>()
+    // دفعة واحدة لصفوف الشاشة كلها (المراجعة المستقلة — شاشة الحضور اليومي 122–223 ثانية): التقويم والإعدادات
+    // وقواعد الجداول المشتركة بتتقري مرة للصفوف كلها بدل مرة لكل صف — نفس computeDay (قراءة بس) بالحرف
+    const scope = this.batchScope(this.days.manager)
     for (const row of rows) {
       const exemption = exemptionOnDate(windows.get(row.employeeId) ?? [], row.date)
-      const day = await this.computeDay(row.employeeId, row.date, false, true)
+      const day = await scope.computeDay(row.employeeId, row.date, false, true)
       result.set(`${row.employeeId}|${row.date}`, day)
     }
     for (const emp of employees) {
@@ -3240,7 +3306,7 @@ export class AttendanceService {
         const key = `${emp.id}|${date}`
         if (result.has(key) || !this.attendanceEmploymentDate(emp, date) ||
           !exemptionOnDate(employeeWindows, date)) continue
-        const day = await this.computeDay(emp.id, date, false, true)
+        const day = await scope.computeDay(emp.id, date, false, true)
         result.set(key, Object.assign(day, { id: day.id ?? -emp.id, projected: true }))
       }
     }
