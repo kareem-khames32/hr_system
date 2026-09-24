@@ -33,6 +33,8 @@ import {
   createApprovalChain,
   fetchApprovalChains,
   fetchBranches,
+  getCurrentUser,
+  lockedBranchIdOf,
   fetchEmployees,
   fetchRequestTypes,
   replaceChainSteps,
@@ -184,6 +186,8 @@ export default function ApprovalsPage() {
   const [editingChain, setEditingChain] = useState<ApiChain | null>(null)
   // «نسخة خاصة بفرع»: السلسلة العامة اللي بتتنسخ لفرع (إنشاء بنفس كودها)
   const [copyOf, setCopyOf] = useState<ApiChain | null>(null)
+  // النموذج زي ما اتفتح — مقارنته بالحالي بتقول لو فيه تعديلات مش محفوظة
+  const [openedForm, setOpenedForm] = useState('')
   const [codeTouched, setCodeTouched] = useState(false)
   const [activeMenu, setActiveMenu] = useState<number | null>(null)
   const [expandedChain, setExpandedChain] = useState<number | null>(null)
@@ -305,12 +309,14 @@ export default function ApprovalsPage() {
     setCopyOf(null)
     if (chain) {
       setEditingChain(chain)
-      setFormData({
+      const next = {
         name: chain.nameAr,
         code: chain.code,
         branchId: chain.branchId === null ? 'all' : String(chain.branchId),
         steps: chain.steps.map((s) => stepFormOf(s, `db-${s.id}`)),
-      })
+      }
+      setFormData(next)
+      setOpenedForm(JSON.stringify(next))
     } else {
       setEditingChain(null)
       setFormData({
@@ -333,24 +339,33 @@ export default function ApprovalsPage() {
     const taken = new Set(branchVersionsOf(chain).map((c) => c.branchId))
     return branches.filter((b) => !taken.has(b.id))
   }
-  const handleOpenBranchCopy = (chain: ApiChain) => {
+  const handleOpenBranchCopy = (chain: ApiChain, branchId?: number) => {
     setActiveMenu(null)
     const free = branchesWithoutVersion(chain)
     if (!free.length) {
       setNotice(`كل الفروع ليها نسخة خاصة من «${chain.nameAr}» — عدّل نسخة الفرع من القائمة`)
       return
     }
+    const branch = free.find((b) => b.id === branchId) ?? free[0]
     setEditingChain(null)
     setCopyOf(chain)
     setFormData({
-      name: `${chain.nameAr} — ${free[0].name}`,
+      name: `${chain.nameAr} — ${branch.name}`,
       code: chain.code,
-      branchId: String(free[0].id),
+      branchId: String(branch.id),
       steps: chain.steps.length ? chain.steps.map((s) => stepFormOf(s, `copy-${s.id}`)) : [emptyStep()],
     })
     setCodeTouched(true)
     setModalError(null)
     setShowModal(true)
+  }
+
+  const leaveGeneralFor = (go: () => void) => {
+    if (editingChain && JSON.stringify(formData) !== openedForm) {
+      setModalError('فيه تعديلات على السلسلة دي لسه ما اتحفظتش — احفظها الأول (أو اضغط إلغاء) وبعدين افتح سلسلة الفرع')
+      return
+    }
+    go()
   }
 
   // اسم الدورة يقترح الكود تلقائياً ما دام المستخدم لم يلمس حقل الكود
@@ -1105,6 +1120,17 @@ export default function ApprovalsPage() {
                   </div>
                 </div>
 
+                {editingChain?.isPrimary && editingChain.branchId === null ? (
+                  <p className="text-sm text-gray-600 bg-gray-50 rounded-xl px-4 py-3">
+                    السلسلة دي هي سلسلة «{chainTypeName(editingChain) ?? editingChain.nameAr}» لكل الشركة — طلبات أي فرع بتمشي
+                    عليها، إلا الفرع اللي ليه سلسلة خاصة (جدول «سلسلة مختلفة لكل فرع» تحت).
+                  </p>
+                ) : editingChain && generalOf(editingChain) ? (
+                  <p className="text-sm text-gray-600 bg-amber-50 rounded-xl px-4 py-3">
+                    دي السلسلة الخاصة بـ<b>{branchLabelOf(editingChain.branchId)}</b> — طلبات موظفي الفرع ده بتمشي عليها، وباقي
+                    الفروع على «{generalOf(editingChain)!.nameAr}».
+                  </p>
+                ) : (
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
                     نطاق الفرع
@@ -1151,6 +1177,7 @@ export default function ApprovalsPage() {
                     </p>
                   )}
                 </div>
+                )}
 
                 {/* Approval Steps */}
                 <div>
@@ -1371,6 +1398,54 @@ export default function ApprovalsPage() {
                     ))}
                   </div>
                 </div>
+
+                {/* «سلسلة مختلفة لكل فرع» (طلب المالك 24 سبتمبر): جوّه تعديل السلسلة الأساسية نفسها — المكان اللي بيتدخل
+                    طبيعي. نوع الطلب واحد لكل الشركة، وطلب الموظف بيمشي في سلسلة فرعه لو ليه سلسلة خاصة، وإلا في دي. */}
+                {editingChain?.isPrimary && editingChain.branchId === null && (() => {
+                  const locked = lockedBranchIdOf(getCurrentUser())
+                  const rows = locked ? branches.filter((b) => b.id === locked) : branches
+                  return (
+                    <div className="border border-gray-200 rounded-xl">
+                      <div className="px-4 py-3 border-b border-gray-100">
+                        <p className="text-sm font-medium text-gray-800">سلسلة مختلفة لكل فرع</p>
+                        <p className="text-xs text-gray-500 mt-1">
+                          طلب «{chainTypeName(editingChain) ?? editingChain.nameAr}» واحد لكل الشركة — وطلب كل موظف بيمشي في سلسلة
+                          فرعه لو ليه سلسلة خاصة، وإلا في السلسلة دي.
+                        </p>
+                      </div>
+                      <div className="divide-y divide-gray-100">
+                        {rows.map((b) => {
+                          const version = chains.find((c) => c.code === editingChain.code && c.branchId === b.id) ?? null
+                          return (
+                            <div key={b.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
+                              <div className="min-w-0">
+                                <p className="text-sm text-gray-800">{b.name}</p>
+                                <p className={`text-xs ${version?.isActive ? 'text-amber-700' : 'text-gray-500'}`}>
+                                  {version
+                                    ? version.isActive
+                                      ? `ليه سلسلة خاصة — ${version.steps.length} ${version.steps.length === 1 ? 'خطوة' : 'خطوات'}`
+                                      : 'سلسلته الخاصة معطّلة — ماشي على السلسلة دي'
+                                    : 'ماشي على السلسلة دي'}
+                                </p>
+                              </div>
+                              {version ? (
+                                <button type="button" className="btn-secondary text-sm shrink-0" disabled={saving}
+                                  onClick={() => leaveGeneralFor(() => handleOpenModal(version))}>
+                                  تعديل سلسلة الفرع
+                                </button>
+                              ) : (
+                                <button type="button" className="btn-secondary text-sm shrink-0" disabled={saving}
+                                  onClick={() => leaveGeneralFor(() => handleOpenBranchCopy(editingChain, b.id))}>
+                                  اعمل سلسلة خاصة للفرع
+                                </button>
+                              )}
+                            </div>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )
+                })()}
               </div>
 
               <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">

@@ -136,4 +136,11 @@ test('BC-05: الشاشة: «نسخة خاصة بفرع» شغالة بنفس ا
   assert.ok(page.includes('disabled={!!editingChain || !!copyOf}'), 'الكود مقفول على كود العامة')
   assert.ok(page.includes('{(copyOf ? branchesWithoutVersion(copyOf) : branches).map((b) => ('), 'الفروع اللي مالهاش نسخة بس')
   assert.ok(page.includes('{!copyOf && <option value="all">كل الفروع (دورة عامة)</option>}'))
+  // جوّه تعديل السلسلة الأساسية نفسها: جدول «سلسلة مختلفة لكل فرع» — المكان اللي المالك دخله ومالقاش فيه الفروع
+  assert.ok(page.includes('<p className="text-sm font-medium text-gray-800">سلسلة مختلفة لكل فرع</p>'))
+  assert.ok(page.includes('onClick={() => leaveGeneralFor(() => handleOpenBranchCopy(editingChain, b.id))}>'), 'اعمل سلسلة خاصة للفرع')
+  assert.ok(page.includes('onClick={() => leaveGeneralFor(() => handleOpenModal(version))}>'), 'تعديل سلسلة الفرع')
+  assert.ok(page.includes('const rows = locked ? branches.filter((b) => b.id === locked) : branches'), 'حساب الفرع يشوف فرعه بس')
+  // تعديلات مش محفوظة على العامة ماتضيعش لما ينقل لسلسلة فرع
+  assert.ok(page.includes('if (editingChain && JSON.stringify(formData) !== openedForm) {'))
 })
