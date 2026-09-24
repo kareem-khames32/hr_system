@@ -1,0 +1,569 @@
+module.exports = [
+  {
+    "label": "draft 500",
+    "route": "/payroll/runs",
+    "queries": 537,
+    "writes": 0,
+    "transactions": 2,
+    "maxTransactionMs": 750.5170000000016,
+    "rssStartMiB": 568.63671875,
+    "peakRssMiB": 575.125,
+    "ms": 784.190700000001,
+    "status": 201,
+    "responseBytes": 2766,
+    "rows": 0,
+    "topSql": [
+      {
+        "group": "SELECT employee_salary_history_versions",
+        "count": 500,
+        "ms": 346.1967999999724
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 4,
+        "ms": 124.42820000000029
+      },
+      {
+        "group": "SELECT employee_suspensions",
+        "count": 1,
+        "ms": 77.07780000000093
+      },
+      {
+        "group": "SELECT offboarding_cases",
+        "count": 1,
+        "ms": 67.66009999999915
+      },
+      {
+        "group": "SELECT payroll_period_claims",
+        "count": 1,
+        "ms": 55.62790000000314
+      },
+      {
+        "group": "SELECT requests_config",
+        "count": 3,
+        "ms": 12.583800000000338
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1,
+        "ms": 9.209100000000035
+      },
+      {
+        "group": "SELECT payroll_policy_versions",
+        "count": 4,
+        "ms": 7.2246999999988475
+      }
+    ],
+    "sqlSumMs": 736.0919999999714
+  },
+  {
+    "label": "calculate 500",
+    "route": "/payroll/runs/1/calculate",
+    "queries": 33063,
+    "writes": 1,
+    "transactions": 2,
+    "maxTransactionMs": 52093.703299999994,
+    "rssStartMiB": 575.3203125,
+    "peakRssMiB": 901.3125,
+    "ms": 52876.0823,
+    "status": 201,
+    "responseBytes": 18306848,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "OTHER payroll_items",
+        "count": 500,
+        "ms": 23039.315400000087
+      },
+      {
+        "group": "SELECT attendance_days",
+        "count": 3500,
+        "ms": 3427.1705000001275
+      },
+      {
+        "group": "SELECT employees",
+        "count": 3001,
+        "ms": 2396.6263000000363
+      },
+      {
+        "group": "OTHER payroll_daily_accrual",
+        "count": 1000,
+        "ms": 2186.9176000001025
+      },
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 2500,
+        "ms": 1726.8559000001078
+      },
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 1501,
+        "ms": 1332.017499999918
+      },
+      {
+        "group": "SELECT requests_config",
+        "count": 2006,
+        "ms": 1274.0689000001003
+      },
+      {
+        "group": "SELECT schedule_day_overrides",
+        "count": 2000,
+        "ms": 1222.6157000000458
+      }
+    ],
+    "sqlSumMs": 49215.96620000107
+  },
+  {
+    "label": "payroll detail 500",
+    "route": "/payroll/runs/1",
+    "queries": 18,
+    "writes": 0,
+    "transactions": 1,
+    "maxTransactionMs": 442.05869999999413,
+    "rssStartMiB": 420.4609375,
+    "peakRssMiB": 428.12890625,
+    "ms": 601.0811000000103,
+    "status": 200,
+    "responseBytes": 18306848,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_runs",
+        "count": 4,
+        "ms": 130.29309999999532
+      },
+      {
+        "group": "SELECT payroll_items",
+        "count": 2,
+        "ms": 127.98519999999553
+      },
+      {
+        "group": "SELECT payroll_period_claims",
+        "count": 1,
+        "ms": 50.95470000000205
+      },
+      {
+        "group": "SELECT overtime_entries",
+        "count": 1,
+        "ms": 50.3122999999905
+      },
+      {
+        "group": "SELECT payroll_run_members",
+        "count": 1,
+        "ms": 41.75560000000405
+      },
+      {
+        "group": "SELECT users",
+        "count": 2,
+        "ms": 4.658100000000559
+      },
+      {
+        "group": "SELECT payroll_policy_versions",
+        "count": 2,
+        "ms": 2.2221999999892432
+      },
+      {
+        "group": "SELECT requests_config",
+        "count": 1,
+        "ms": 1.6291999999957625
+      }
+    ],
+    "sqlSumMs": 413.0613999999914
+  },
+  {
+    "label": "bank sheet 500",
+    "route": "/payroll/runs/1/bank-sheet",
+    "queries": 20,
+    "writes": 0,
+    "transactions": 1,
+    "maxTransactionMs": 505.8770000000077,
+    "rssStartMiB": 539.33984375,
+    "peakRssMiB": 599.11328125,
+    "ms": 616.8803000000044,
+    "status": 200,
+    "responseBytes": 105107,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_items",
+        "count": 2,
+        "ms": 202.546399999992
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 4,
+        "ms": 106.9484000000084
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1,
+        "ms": 72.8689000000013
+      },
+      {
+        "group": "SELECT overtime_entries",
+        "count": 1,
+        "ms": 47.519899999999325
+      },
+      {
+        "group": "SELECT payroll_period_claims",
+        "count": 1,
+        "ms": 45.8009999999922
+      },
+      {
+        "group": "SELECT payroll_run_members",
+        "count": 1,
+        "ms": 42.31679999998596
+      },
+      {
+        "group": "SELECT users",
+        "count": 2,
+        "ms": 5.904600000008941
+      },
+      {
+        "group": "SELECT payroll_item_disbursements",
+        "count": 1,
+        "ms": 2.989900000000489
+      }
+    ],
+    "sqlSumMs": 537.3127999999706
+  },
+  {
+    "label": "financial include draft 500",
+    "route": "/reports/financial/payroll-register?period=2026-10&includeDraft=true&branchId=1",
+    "queries": 4,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 500.390625,
+    "peakRssMiB": 511.58203125,
+    "ms": 1314.016100000008,
+    "status": 200,
+    "responseBytes": 402736,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_items",
+        "count": 1,
+        "ms": 1284.1299
+      },
+      {
+        "group": "SELECT users",
+        "count": 1,
+        "ms": 2.382400000002235
+      },
+      {
+        "group": "SELECT requests_config",
+        "count": 1,
+        "ms": 2.0047000000049593
+      },
+      {
+        "group": "SELECT other",
+        "count": 1,
+        "ms": 1.7621999999973923
+      }
+    ],
+    "sqlSumMs": 1290.2792000000045
+  },
+  {
+    "label": "approve 500 including acknowledgements",
+    "route": "fixture.approve including prerequisite acknowledgements",
+    "queries": 22640,
+    "writes": 2,
+    "transactions": 7,
+    "maxTransactionMs": 17142.9816,
+    "rssStartMiB": 516.34765625,
+    "peakRssMiB": 1163.1875,
+    "ms": 19066.661500000002,
+    "status": 200,
+    "responseBytes": 1996190,
+    "rows": null,
+    "topSql": [
+      {
+        "group": "SELECT employees",
+        "count": 3504,
+        "ms": 2531.5614000007627
+      },
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 2000,
+        "ms": 1456.6828999998106
+      },
+      {
+        "group": "SELECT requests_config",
+        "count": 2004,
+        "ms": 1326.9406000001181
+      },
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 2004,
+        "ms": 1277.5540000001347
+      },
+      {
+        "group": "SELECT schedule_day_overrides",
+        "count": 2000,
+        "ms": 1197.3663000001688
+      },
+      {
+        "group": "SELECT attendance_days",
+        "count": 1500,
+        "ms": 1189.6128000001481
+      },
+      {
+        "group": "SELECT weekly_schedule_entries",
+        "count": 2000,
+        "ms": 1181.071699999622
+      },
+      {
+        "group": "SELECT work_schedules",
+        "count": 2000,
+        "ms": 1162.0314000000799
+      }
+    ],
+    "sqlSumMs": 16805.59490000106
+  },
+  {
+    "label": "disbursement 500",
+    "route": "/payroll/disbursement/runs/1",
+    "queries": 6,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 1186.54296875,
+    "peakRssMiB": 1201.265625,
+    "ms": 557.6184999999969,
+    "status": 200,
+    "responseBytes": 246100,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_items",
+        "count": 1,
+        "ms": 401.6006000000052
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1,
+        "ms": 51.435800000006566
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 1,
+        "ms": 37.84909999999218
+      },
+      {
+        "group": "SELECT payroll_run_members",
+        "count": 1,
+        "ms": 29.683799999998882
+      },
+      {
+        "group": "SELECT users",
+        "count": 1,
+        "ms": 2.8150000000023283
+      },
+      {
+        "group": "SELECT payroll_item_disbursements",
+        "count": 1,
+        "ms": 1.6370000000024447
+      }
+    ],
+    "sqlSumMs": 525.0213000000076
+  },
+  {
+    "label": "pay 500",
+    "route": "/payroll/runs/1/pay",
+    "queries": 2514,
+    "writes": 501,
+    "transactions": 1,
+    "maxTransactionMs": 2559.848299999998,
+    "rssStartMiB": 924.90625,
+    "peakRssMiB": 1015.20703125,
+    "ms": 2578.2955000000075,
+    "status": 201,
+    "responseBytes": 1996236,
+    "rows": null,
+    "topSql": [
+      {
+        "group": "OTHER other",
+        "count": 501,
+        "ms": 361.7513000000472
+      },
+      {
+        "group": "SELECT loan_installments",
+        "count": 500,
+        "ms": 349.33889999994426
+      },
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 500,
+        "ms": 339.34800000002724
+      },
+      {
+        "group": "UPDATE payroll_items",
+        "count": 500,
+        "ms": 304.71829999993497
+      },
+      {
+        "group": "SELECT offboarding_cases",
+        "count": 500,
+        "ms": 298.0330000000977
+      },
+      {
+        "group": "SELECT payroll_items",
+        "count": 1,
+        "ms": 232.41860000000452
+      },
+      {
+        "group": "SELECT payroll_period_claims",
+        "count": 2,
+        "ms": 163.3450999999768
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 3,
+        "ms": 88.21860000000743
+      }
+    ],
+    "sqlSumMs": 2284.762800000055
+  },
+  {
+    "label": "paid bank sheet 500",
+    "route": "/payroll/runs/1/bank-sheet",
+    "queries": 19,
+    "writes": 0,
+    "transactions": 1,
+    "maxTransactionMs": 451.854800000001,
+    "rssStartMiB": 995.83984375,
+    "peakRssMiB": 1016.57421875,
+    "ms": 535.1339000000007,
+    "status": 200,
+    "responseBytes": 105101,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_runs",
+        "count": 4,
+        "ms": 169.81000000001222
+      },
+      {
+        "group": "SELECT payroll_items",
+        "count": 1,
+        "ms": 81.1987999999983
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1,
+        "ms": 51.98050000000512
+      },
+      {
+        "group": "SELECT payroll_period_claims",
+        "count": 1,
+        "ms": 49.33989999999176
+      },
+      {
+        "group": "SELECT overtime_entries",
+        "count": 1,
+        "ms": 49.04080000000249
+      },
+      {
+        "group": "SELECT payroll_run_members",
+        "count": 1,
+        "ms": 38.33890000000247
+      },
+      {
+        "group": "SELECT payroll_run_parity_explanations",
+        "count": 1,
+        "ms": 24.719700000001467
+      },
+      {
+        "group": "SELECT users",
+        "count": 2,
+        "ms": 13.287400000001071
+      }
+    ],
+    "sqlSumMs": 484.9838000000309
+  },
+  {
+    "label": "paid financial 500",
+    "route": "/reports/financial/payroll-register?period=2026-10&branchId=1",
+    "queries": 4,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 969.28515625,
+    "peakRssMiB": 969.84765625,
+    "ms": 1264.3037999999942,
+    "status": 200,
+    "responseBytes": 399731,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_items",
+        "count": 1,
+        "ms": 1243.3329999999987
+      },
+      {
+        "group": "SELECT users",
+        "count": 1,
+        "ms": 2.4800999999861233
+      },
+      {
+        "group": "SELECT other",
+        "count": 1,
+        "ms": 1.3787000000011176
+      },
+      {
+        "group": "SELECT requests_config",
+        "count": 1,
+        "ms": 1.3052000000025146
+      }
+    ],
+    "sqlSumMs": 1248.4969999999885
+  },
+  {
+    "label": "paid disbursement 500",
+    "route": "/payroll/disbursement/runs/1",
+    "queries": 7,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 922.8359375,
+    "peakRssMiB": 980.65234375,
+    "ms": 284.2853000000032,
+    "status": 200,
+    "responseBytes": 247750,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_items",
+        "count": 1,
+        "ms": 172.99069999999483
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1,
+        "ms": 52.72370000000228
+      },
+      {
+        "group": "SELECT payroll_run_members",
+        "count": 1,
+        "ms": 10.845199999996112
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 1,
+        "ms": 9.010199999989709
+      },
+      {
+        "group": "SELECT users",
+        "count": 2,
+        "ms": 4.272199999992154
+      },
+      {
+        "group": "SELECT payroll_item_disbursements",
+        "count": 1,
+        "ms": 1.7491999999911059
+      }
+    ],
+    "sqlSumMs": 251.5911999999662
+  }
+]
