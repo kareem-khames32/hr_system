@@ -15,13 +15,15 @@ const defaults = ['fulltest-employees-attendance', 'fulltest-leaves-payroll', 'f
   'leave-attachment-with-request', 'leave-sick-pay-attachment', 'request-decision-race',
   'attendance-payroll-race', 'request-execution', 'financial-report', 'cost-center-report']
 const selected = process.argv.slice(2).length ? process.argv.slice(2) : defaults
+// Owner explicitly permits migrations on our disposable databases (24 September clarification).
+const reviewedTemporaryMigrations=new Set(['holiday-work.integration.cjs','leave-year-end.integration.cjs','assets-branch.integration.cjs','leave-contract.integration.cjs','codex-review-round2-migration067.integration.cjs'])
 const files = selected.map(name => path.join(__dirname, name + '.integration.cjs')).filter(f => {
   const source = fs.readFileSync(f, 'utf8')
-  if (/migrat\w*\.apply\(|\.splitBatches\(|\.executionUnits\(|migrations-lib|child_process|docs[\\/'" ,]+migrations|readFileSync\(MIGRATION/.test(source)) { console.log('EXCLUDED_MIGRATION_FIXTURE ' + path.basename(f)); return false }
+  if (!reviewedTemporaryMigrations.has(path.basename(f)) && /migrat\w*\.apply\(|\.splitBatches\(|\.executionUnits\(|migrations-lib|child_process|docs[\\/'" ,]+migrations|readFileSync\(MIGRATION/.test(source)) { console.log('EXCLUDED_MIGRATION_FIXTURE ' + path.basename(f)); return false }
   return true
 })
 const results = [], failures = [], diagnostics = [], stdout = []
-const stream = run({ files, concurrency: 2, execArgv: ['--require', path.join(__dirname, 'codex-review-round2-harness.cjs')] })
+const stream = run({ files, concurrency: Number(process.env.REVIEW_CONCURRENCY||2), execArgv: ['--require', path.join(__dirname, 'codex-review-round2-harness.cjs')] })
 const output = value => console.log(redact(JSON.stringify(value)))
 stream.on('test:stdout', d => { const s=redact(d.message); stdout.push(s); if (/REVIEW_MEASURE|cleanupVerified/.test(s)) console.log(s.trim()) })
 stream.on('test:pass', d => results.push({ file: path.basename(d.file || ''), name: d.name, ms: d.details.duration_ms, pass: true }))

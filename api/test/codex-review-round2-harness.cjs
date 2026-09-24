@@ -31,6 +31,18 @@ DataSource.prototype.initialize = async function (...args) {
 }
 const { Logger } = require('../node_modules/@nestjs/common')
 Logger.overrideLogger(false)
+if(process.env.REVIEW_CAPTURE_ERRORS==='true'){
+  const {ExceptionsHandler}=require('../node_modules/@nestjs/core/exceptions/exceptions-handler')
+  const next=ExceptionsHandler.prototype.next
+  ExceptionsHandler.prototype.next=function(error,ctx){
+    if(!error.getStatus||error.getStatus()>=500){
+      let message=String(error.message||error.name).split('\n')[0]
+      for(const [key,value] of Object.entries(env))if(/password|secret|token|ad_bind_dn|smtp_(host|from|user)|ad_host/i.test(key)&&value.length>2)message=message.split(value).join('[REDACTED]')
+      console.log('REVIEW_EXCEPTION '+JSON.stringify({name:error.name,message:message.slice(0,1000),frames:String(error.stack||'').split('\n').slice(1,5)}))
+    }
+    return next.call(this,error,ctx)
+  }
+}
 const { SchedulerOrchestrator } = require('../node_modules/@nestjs/schedule/dist/scheduler.orchestrator')
 SchedulerOrchestrator.prototype.onApplicationBootstrap = function () {}
 require('../src/attendance/attendance-scheduler.service').AttendanceScheduler.prototype.onApplicationBootstrap = function () {}
@@ -89,6 +101,7 @@ global.fetch = async (url, options = {}) => {
       else { res.statusCode = 404; res.end() }
     })
     if (body) req.push(body)
+    req.complete = true // The in-memory HTTP parser has received the entire encoded request.
     req.push(null)
   })
 }
