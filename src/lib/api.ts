@@ -1739,6 +1739,37 @@ export const downloadLetter = async (id: number) => {
   setTimeout(() => URL.revokeObjectURL(url), 10000)
 }
 
+// تصدير الموظفين الظاهرين في الصفحة (بترتيبهم) لملف Excel بكل بيانات الملف — وأولها كود البصمة.
+// ملف Excel مش CSV: الأكواد والجوال والهوية نص فالأصفار الأولى ماتضيعش؛ والراتب والبنك بس لو حسابك يشوفهم.
+export const exportEmployeesXlsx = async (employeeIds: number[]) => {
+  let res: Response
+  try {
+    // GET (قراءة بس) بأرقام الموظفين بترتيب الشاشة: ids=12,5,9
+    res = await fetch(`${API_BASE}/employees/export?ids=${employeeIds.join(',')}`, {
+      headers: { Authorization: `Bearer ${getToken()}` },
+    })
+  } catch {
+    throw new ApiError(0, 'تعذر الاتصال بالخادم — تحقق من الاتصال ثم أعد المحاولة')
+  }
+  if (!res.ok) {
+    const body = await res.json().catch(() => ({}))
+    const message = Array.isArray(body?.message) ? body.message.join('، ') : body?.message
+    throw new ApiError(res.status, message ?? 'تعذّر تصدير الموظفين')
+  }
+  const header = res.headers.get('content-disposition') ?? ''
+  const match = /filename\*=UTF-8''([^;]+)/i.exec(header)
+  let name = 'employees.xlsx'
+  try { if (match) name = decodeURIComponent(match[1]) } catch { /* الاسم الافتراضي */ }
+  const url = URL.createObjectURL(await res.blob())
+  const a = document.createElement('a')
+  a.href = url
+  a.download = name
+  document.body.appendChild(a)
+  a.click()
+  a.remove()
+  setTimeout(() => URL.revokeObjectURL(url), 10000)
+}
+
 // جلب ملف كـ blob URL بالتوكن — لعرض الصور في <img> (اللي مبيبعتش الهيدر)
 // النتيجة تُلغى بـ URL.revokeObjectURL عند التفريغ
 export const fetchFileObjectUrl = async (id: number): Promise<string | null> => {

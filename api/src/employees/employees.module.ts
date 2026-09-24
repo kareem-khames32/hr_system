@@ -22,6 +22,7 @@ import {
 import { EmployeesController } from './employees.controller'
 import { QualificationsController } from './qualifications.controller'
 import { EmployeesService } from './employees.service'
+import { EmployeeExportService } from './employee-export.service'
 
 @Module({
   imports: [
@@ -50,7 +51,7 @@ import { EmployeesService } from './employees.service'
     AuthModule,
   ],
   controllers: [EmployeesController, QualificationsController],
-  providers: [EmployeesService],
+  providers: [EmployeesService, EmployeeExportService],
   exports: [EmployeesService],
 })
 export class EmployeesModule {}

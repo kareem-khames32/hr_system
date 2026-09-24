@@ -19,7 +19,6 @@ import {
   Archive,
 } from 'lucide-react'
 import Link from 'next/link'
-import { csvDateStamp, downloadCsv } from '@/lib/csv'
 import { ARCHIVE_REASON_MAX, archiveReasonIssue } from '@/lib/input-limits'
 import {
   can,
@@ -27,6 +26,7 @@ import {
   fetchBranches,
   fetchDepartments,
   archiveEmployee,
+  exportEmployeesXlsx,
   fetchFileObjectUrl,
   ApiDepartment,
   type ApiEmployee,
@@ -88,6 +88,7 @@ export default function EmployeesPage() {
   const [error, setError] = useState('')
   const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({})
   const [notice, setNotice] = useState('')
+  const [exporting, setExporting] = useState(false)
   // قائمة إجراءات صف مفتوحة، ونافذة الإيقاف المؤقت (جديد أو إنهاء القائم)
   const [menuFor, setMenuFor] = useState<number | null>(null)
   const [menuPosition, setMenuPosition] = useState({ top: 0, left: 0 })
@@ -240,37 +241,19 @@ export default function EmployeesPage() {
     return matchesSearch && matchesDepartment && matchesStatus
   })
 
-  // تصدير الصفوف المعروضة (بعد البحث والفلاتر) إلى CSV
-  const handleExport = () => {
-    if (filteredEmployees.length === 0) return
-    const statusLabel = new Map(STATUS_OPTIONS.map((s) => [s.value, s.label]))
-    downloadCsv(
-      `employees-${csvDateStamp()}.csv`,
-      [
-        'الرقم الوظيفي',
-        'الاسم',
-        'الاسم بالإنجليزية',
-        'البريد الإلكتروني',
-        'الجوال',
-        'القسم',
-        'المسمى الوظيفي',
-        'الفرع',
-        'تاريخ التعيين',
-        'الحالة',
-      ],
-      filteredEmployees.map((e) => [
-        e.employeeId,
-        e.name,
-        e.nameEn,
-        e.email,
-        e.phone,
-        e.department,
-        e.jobTitle,
-        e.branch,
-        e.joinDate,
-        statusLabel.get(e.status) ?? e.status,
-      ])
-    )
+  // تصدير الصفوف المعروضة (بعد البحث والفلاتر، بترتيبها) لملف Excel بكل بيانات الملف — وأولها كود البصمة.
+  // الملف بيتبني في الخادم: الأكواد والجوال والهوية نص (الأصفار الأولى ماتضيعش)، والراتب والبنك بصلاحيتهم بس.
+  const handleExport = async () => {
+    if (filteredEmployees.length === 0 || exporting) return
+    setExporting(true)
+    setNotice('')
+    try {
+      await exportEmployeesXlsx(filteredEmployees.map((e) => e.id))
+    } catch (err) {
+      setNotice(err instanceof Error ? err.message : 'تعذّر تصدير الموظفين')
+    } finally {
+      setExporting(false)
+    }
   }
 
   return (
@@ -286,11 +269,11 @@ export default function EmployeesPage() {
             {/* التصدير من الصفوف المعروضة — الاستيراد الجماعي بلا endpoint فأُزيل زرّه */}
             <button
               onClick={handleExport}
-              disabled={loading || filteredEmployees.length === 0}
+              disabled={loading || exporting || filteredEmployees.length === 0}
               className="btn-secondary flex items-center gap-2 disabled:opacity-50"
             >
               <Download size={18} />
-              تصدير CSV
+              {exporting ? 'جاري التصدير…' : 'تصدير Excel'}
             </button>
             {/* الإضافة/التعديل/الأرشفة بصلاحياتها في الباك — لا زرار ينتهي بـ403 */}
             {can('employees.create') && (

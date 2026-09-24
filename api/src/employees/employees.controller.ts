@@ -10,8 +10,10 @@ import {
   Patch,
   Post,
   Query,
+  Res,
   UseGuards,
 } from '@nestjs/common'
+import type { Response } from 'express'
 import { ForbiddenException } from '@nestjs/common'
 import {
   branchScopeOf,
@@ -25,6 +27,8 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CreateEmployeeDto, CreateEmployeeSuspensionDto, EndEmployeeSuspensionDto, RenewEmployeeContractDto, UpdateEmployeeDto } from './employees.dto'
 import { EmployeesService } from './employees.service'
 import { projectEmployee } from './employee-projection'
+import { parseEmployeeExportIds } from './employee-export'
+import { EmployeeExportService } from './employee-export.service'
 
 // تغيير الأجر (أو قراءة سياقه للتغيير) يغيّر صافي المسير → اعتماد المسير شرط إضافي
 // فوق employees.edit — مدير النظام يتخطى (userHasPerm)
@@ -51,7 +55,7 @@ class SalaryChangeAuthorityGuard implements CanActivate {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('employees')
 export class EmployeesController {
-  constructor(private readonly employees: EmployeesService) {}
+  constructor(private readonly employees: EmployeesService, private readonly exporter: EmployeeExportService) {}
 
   @Perm('employees.view')
   @Get()
@@ -72,6 +76,19 @@ export class EmployeesController {
   @Get('salary-start-context')
   salaryStartContext(@Query('hireDate') hireDate?: string) {
     return this.employees.salaryStartContext(hireDate)
+  }
+
+  // تصدير الموظفين الظاهرين في صفحة الموظفين (بعد البحث والفلاتر، بترتيبهم: ids=12,5,9) لملف Excel بكل بيانات
+  // الملف وأولها كود البصمة — employee-export.ts. GET لأنه قراءة بس (أدوار «قراءة فقط» مالهاش أي مسار كاتب)،
+  // وقبل ':id' حتى لا يلتقطه.
+  @Perm('employees.view')
+  @Get('export')
+  async export(@Query('ids') ids: string | undefined, @CurrentUser() user: JwtPayload, @Res() res: Response) {
+    const file = await this.exporter.export(parseEmployeeExportIds(ids), user)
+    res.setHeader('Content-Type', file.contentType)
+    res.setHeader('Content-Disposition', `attachment; filename="employees.xlsx"; filename*=UTF-8''${encodeURIComponent(file.fileName)}`)
+    res.setHeader('Cache-Control', 'no-store')
+    res.send(file.buffer)
   }
 
   // الموظف يشوف سجله هو — غيره يحتاج employees.view

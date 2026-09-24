@@ -4,8 +4,13 @@ import type { EmployeeStatusHistory } from '../requests/entities/employment.enti
 import type { Employee } from './employee.entity'
 import { historyWithLegacyLabels, FINANCIAL_CHANGE_FIELDS } from './employee-change-log'
 
+/** يشوف الراتب والبدلات والبنك لكل الموظفين في نطاقه (مش ملفه هو بس) — نفس القاعدة للقراءة والتصدير. */
+export function canSeeEmployeesFinance(user: JwtPayload) {
+  return userHasPerm(user, 'payroll.view') || userHasPerm(user, 'employees.edit')
+}
+
 export function canReadEmployeeFinance(user: JwtPayload, employeeId: number) {
-  return user.employeeId === employeeId || userHasPerm(user, 'payroll.view') || userHasPerm(user, 'employees.edit')
+  return user.employeeId === employeeId || canSeeEmployeesFinance(user)
 }
 
 // Apply only at HTTP response boundaries. Internal payroll/settlement services
