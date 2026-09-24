@@ -182,6 +182,8 @@ export default function ApprovalsPage() {
   const [modalError, setModalError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
   const [editingChain, setEditingChain] = useState<ApiChain | null>(null)
+  // «نسخة خاصة بفرع»: السلسلة العامة اللي بتتنسخ لفرع (إنشاء بنفس كودها)
+  const [copyOf, setCopyOf] = useState<ApiChain | null>(null)
   const [codeTouched, setCodeTouched] = useState(false)
   const [activeMenu, setActiveMenu] = useState<number | null>(null)
   const [expandedChain, setExpandedChain] = useState<number | null>(null)
@@ -244,12 +246,17 @@ export default function ApprovalsPage() {
 
   // اسم/فئة النوع المربوط — نفضّل ما يرسله الباك (مستقل عن فلترة الجمهور)
   // ونرجع للكتالوج المحلي كخطة بديلة
+  // النسخة الخاصة بفرع = نفس كود سلسلة عامة، ونوع طلبها هو نوع العامة
+  const generalOf = (chain: ApiChain): ApiChain | null =>
+    chain.branchId === null ? null : chains.find((c) => c.code === chain.code && c.branchId === null) ?? null
+  const branchVersionsOf = (chain: ApiChain): ApiChain[] =>
+    chain.branchId !== null ? [] : chains.filter((c) => c.code === chain.code && c.branchId !== null)
   const chainTypeName = (chain: ApiChain): string | null =>
     chain.requestTypeName ??
     (chain.requestTypeCode
       ? requestTypes.find((t) => t.code === chain.requestTypeCode)?.nameAr ??
         chain.requestTypeCode
-      : null)
+      : generalOf(chain) ? chainTypeName(generalOf(chain)!) : null)
   const chainTypeCategory = (chain: ApiChain): string =>
     chain.requestTypeCategory ??
     (chain.requestTypeCode
@@ -281,25 +288,28 @@ export default function ApprovalsPage() {
       return a.nameAr.localeCompare(b.nameAr, 'ar')
     })
 
+  const stepFormOf = (s: ApiChainStep, key: string): StepForm => ({
+    key,
+    approverRole: s.approverRole,
+    specificEmployeeId:
+      s.specificEmployeeId != null ? String(s.specificEmployeeId) : '',
+    slaDays: s.slaDays != null ? String(s.slaDays) : '',
+    escalateTo: s.escalateTo ?? '',
+    thresholdField: s.thresholdField ?? '',
+    thresholdOp: s.thresholdOp ?? '',
+    thresholdValue: s.thresholdValue != null ? String(s.thresholdValue) : '',
+    isParallel: !!s.isParallel,
+  })
+
   const handleOpenModal = (chain?: ApiChain) => {
+    setCopyOf(null)
     if (chain) {
       setEditingChain(chain)
       setFormData({
         name: chain.nameAr,
         code: chain.code,
         branchId: chain.branchId === null ? 'all' : String(chain.branchId),
-        steps: chain.steps.map((s) => ({
-          key: `db-${s.id}`,
-          approverRole: s.approverRole,
-          specificEmployeeId:
-            s.specificEmployeeId != null ? String(s.specificEmployeeId) : '',
-          slaDays: s.slaDays != null ? String(s.slaDays) : '',
-          escalateTo: s.escalateTo ?? '',
-          thresholdField: s.thresholdField ?? '',
-          thresholdOp: s.thresholdOp ?? '',
-          thresholdValue: s.thresholdValue != null ? String(s.thresholdValue) : '',
-          isParallel: !!s.isParallel,
-        })),
+        steps: chain.steps.map((s) => stepFormOf(s, `db-${s.id}`)),
       })
     } else {
       setEditingChain(null)
@@ -311,6 +321,34 @@ export default function ApprovalsPage() {
       })
     }
     setCodeTouched(false)
+    setModalError(null)
+    setShowModal(true)
+  }
+
+  // «نسخة خاصة بفرع» (طلب المالك 24 سبتمبر): نفس نوع الطلب بسلسلة مختلفة في كل فرع — طلب الإجازة في المعادي غير
+  // النصر. نسخة بنفس كود السلسلة العامة لفرع بعينه بتتقدم على العامة لطلبات موظفي الفرع ده (resolveChain في الخادم)،
+  // والفرع اللي مالوش نسخة (أو نسخته معطلة) بيمشي على العامة. الشاشة كانت بتقول «أنشئ نسخة بنفس الكود» وزرار النسخ
+  // مقفول، فكان لازم الكود يتكتب بالإيد. هنا الكود مقفول على الأصل، والخطوات منسوخة للتعديل، والفروع المتاحة بس.
+  const branchesWithoutVersion = (chain: ApiChain) => {
+    const taken = new Set(branchVersionsOf(chain).map((c) => c.branchId))
+    return branches.filter((b) => !taken.has(b.id))
+  }
+  const handleOpenBranchCopy = (chain: ApiChain) => {
+    setActiveMenu(null)
+    const free = branchesWithoutVersion(chain)
+    if (!free.length) {
+      setNotice(`كل الفروع ليها نسخة خاصة من «${chain.nameAr}» — عدّل نسخة الفرع من القائمة`)
+      return
+    }
+    setEditingChain(null)
+    setCopyOf(chain)
+    setFormData({
+      name: `${chain.nameAr} — ${free[0].name}`,
+      code: chain.code,
+      branchId: String(free[0].id),
+      steps: chain.steps.length ? chain.steps.map((s) => stepFormOf(s, `copy-${s.id}`)) : [emptyStep()],
+    })
+    setCodeTouched(true)
     setModalError(null)
     setShowModal(true)
   }
@@ -438,7 +476,9 @@ export default function ApprovalsPage() {
             formData.branchId === 'all' ? undefined : Number(formData.branchId),
           steps: buildSteps(),
         })
-        setNotice(`تم إنشاء دورة الاعتماد «${name}» بنجاح`)
+        setNotice(copyOf
+          ? `تم إنشاء نسخة «${name}» — طلبات موظفي ${branchLabelOf(Number(formData.branchId))} هتمشي عليها بدل «${copyOf.nameAr}»`
+          : `تم إنشاء دورة الاعتماد «${name}» بنجاح`)
       }
       await reloadChains()
       setShowModal(false)
@@ -706,6 +746,16 @@ export default function ApprovalsPage() {
                             <span className="badge text-xs bg-indigo-100 text-indigo-700">
                               {branchLabelOf(chain.branchId)}
                             </span>
+                            {branchVersionsOf(chain).length > 0 && (
+                              <span className="badge text-xs bg-amber-50 text-amber-700">
+                                نسخ خاصة: {branchVersionsOf(chain).map((v) => branchLabelOf(v.branchId)).join('، ')}
+                              </span>
+                            )}
+                            {generalOf(chain) && (
+                              <span className="badge text-xs bg-amber-50 text-amber-700">
+                                نسخة خاصة من «{generalOf(chain)!.nameAr}»
+                              </span>
+                            )}
                           </div>
 
                           {/* Conditions */}
@@ -748,14 +798,15 @@ export default function ApprovalsPage() {
                                 <Edit size={16} />
                                 تعديل
                               </button>
-                              <button
-                                disabled
-                                title="النسخ في مرحلة لاحقة"
-                                className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 opacity-50 cursor-not-allowed text-sm"
-                              >
-                                <Copy size={16} />
-                                نسخ
-                              </button>
+                              {chain.branchId === null && (
+                                <button
+                                  onClick={() => handleOpenBranchCopy(chain)}
+                                  className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50 text-sm"
+                                >
+                                  <Copy size={16} />
+                                  نسخة خاصة بفرع
+                                </button>
+                              )}
                               <button
                                 onClick={() => toggleChainActive(chain)}
                                 className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50 text-sm"
@@ -985,9 +1036,14 @@ export default function ApprovalsPage() {
             <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b border-gray-100">
                 <h2 className="text-xl font-bold text-gray-800">
-                  {editingChain ? 'تعديل دورة الاعتماد' : 'إنشاء دورة اعتماد جديدة'}
+                  {editingChain ? 'تعديل دورة الاعتماد' : copyOf ? `نسخة خاصة بفرع من «${copyOf.nameAr}»` : 'إنشاء دورة اعتماد جديدة'}
                 </h2>
-                {editingChain ? (
+                {copyOf ? (
+                  <p className="text-sm text-gray-500 mt-2 flex items-center gap-1.5">
+                    <AlertCircle size={15} className="shrink-0 text-primary-500" />
+                    الخطوات منسوخة من السلسلة العامة — عدّلها للفرع ده. طلبات موظفي الفرع هتمشي عليها، وباقي الفروع على العامة
+                  </p>
+                ) : editingChain ? (
                   <p className="text-sm text-warning-600 mt-2 flex items-center gap-1.5">
                     <AlertCircle size={15} className="shrink-0" />
                     تعديل الخطوات يسري على الطلبات الجديدة فقط — الطلبات الجارية تكمل
@@ -1038,10 +1094,10 @@ export default function ApprovalsPage() {
                       className="input w-full font-mono"
                       placeholder="CHAIN_X"
                       dir="ltr"
-                      disabled={!!editingChain}
-                      title={editingChain ? 'الكود لا يتغير بعد الإنشاء' : undefined}
+                      disabled={!!editingChain || !!copyOf}
+                      title={editingChain ? 'الكود لا يتغير بعد الإنشاء' : copyOf ? 'نفس كود السلسلة العامة — هو اللي بيخلي النسخة تتقدم عليها لطلبات موظفي الفرع' : undefined}
                     />
-                    {!editingChain && (
+                    {!editingChain && !copyOf && (
                       <p className="text-xs text-gray-400 mt-1">
                         يُقترح تلقائياً من الاسم — أحرف إنجليزية وأرقام و _ أو - (من 3 إلى 50)
                       </p>
@@ -1068,8 +1124,8 @@ export default function ApprovalsPage() {
                         : undefined
                     }
                   >
-                    <option value="all">كل الفروع (دورة عامة)</option>
-                    {branches.map((b) => (
+                    {!copyOf && <option value="all">كل الفروع (دورة عامة)</option>}
+                    {(copyOf ? branchesWithoutVersion(copyOf) : branches).map((b) => (
                       <option
                         key={b.id}
                         value={b.id}
@@ -1079,7 +1135,11 @@ export default function ApprovalsPage() {
                       </option>
                     ))}
                   </select>
-                  {editingChain?.isPrimary ? (
+                  {copyOf ? (
+                    <p className="text-xs text-gray-400 mt-1">
+                      الفروع اللي لسه مالهاش نسخة خاصة من «{copyOf.nameAr}» بس
+                    </p>
+                  ) : editingChain?.isPrimary ? (
                     <p className="text-xs text-warning-600 mt-1">
                       دورة أساسية لنوع طلب وتسري على كل الفروع — لتخصيص فرع أنشئ نسخة
                       بنفس الكود ({editingChain.code}) لهذا الفرع
