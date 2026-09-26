@@ -197,7 +197,8 @@ test('wiring: every door asks the same helpers (settings, request catalog + subm
 })
 
 test('migration 043: additive, re-runnable, nullable branch column on the four definition tables', () => {
-  const migration = read('docs/migrations/payroll/20260916_043_branch_definitions.sql')
+  // نسخة Windows جديدة (core.autocrlf) بتطلّع الملف CRLF — المقارنة على LF زي ما المُرحّل بيوحّدها قبل البصمة
+  const migration = read('docs/migrations/payroll/20260916_043_branch_definitions.sql').replace(/\r\n/g, '\n')
   const statements = migration.split('\n').filter((line) => !line.trim().startsWith('--')).join('\n')
   assert.ok(!/\b(DROP|DELETE|TRUNCATE|UPDATE)\b/i.test(statements), 'additive only')
   for (const table of ['leave_types', 'request_types', 'shifts', 'work_schedules']) {
