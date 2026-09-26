@@ -9,7 +9,9 @@ import { AttendanceService } from './attendance.service'
 // تراكم المسير يومًا بيوم: أمر دوام العطلة بيغيّر أيام الموظفين المشمولين
 import { markPayrollDaysDirty } from '../payroll/payroll-daily-accrual'
 import { HolidayWorkOrder } from './holiday-work.entities'
-import { departmentPathOf, holidayAudienceMatches, parseHolidayAudienceColumn } from './holiday-audience'
+import { readCalendarSource } from './attendance-calendar-history'
+import type { CalendarHoliday } from './attendance-calendar-history'
+import { createCalendarResolverCache, selectCalendarVersion } from './attendance-calendar-resolver'
 import {
   cancelHolidayWorkObligations, holidayWorkAmount, holidayWorkDayResult, holidayWorkGrantMatches, holidayWorkGrantOf, holidayWorkGrantsByDate,
   holidayWorkToday, HOLIDAY_WORK_LEVELS, HOLIDAY_WORK_MULTIPLIER_KEY, parseHolidayWorkDates, parseHolidayWorkIds, parseHolidayWorkMultiplier,
@@ -42,6 +44,8 @@ interface AttendanceRow extends HolidayWorkAttendanceDay { employeeId: number; d
 interface ObligationRow { id: number; employeeId: number; sourceRef: string; status: string; amount: string; reservedPayrollRunId: number | null; appliedPayrollRunId: number | null }
 
 const INACTIVE_STATUSES = new Set(['terminated', 'archived'])
+// سقف فحص «عطلة مخصصة لمستهدف واحد على الأقل» عند تسجيل أمر دوام — التقويم المؤرخ لكل موظف بذاكرة واحدة
+const TARGETED_HOLIDAY_CHECK_LIMIT = 500
 const inList = (values: unknown[], offset = 0) => values.map((_, index) => `@${index + offset}`).join(', ')
 const chunks = <T>(rows: T[], size = 500) => Array.from({ length: Math.ceil(rows.length / size) }, (_, index) => rows.slice(index * size, (index + 1) * size))
 const cents = (value: unknown) => Math.round(Number(value ?? 0) * 100)
@@ -343,22 +347,24 @@ export class HolidayWorkService {
   }
 
   // يوم شغل للفرع بس عليه عطلة رسمية مخصصة: مقبول لو إجازة لموظف واحد على الأقل من مستهدفي الأمر — الحكم من تقويم الموظف
-  // المؤرخ نفسه. التصفية الأولى (مين ممكن تخصه العطلة) بمكانه الحالي عشان مانحسبش تقويم الفرع كله موظف موظف.
+  // المؤرخ نفسه (تنظيمه في اليوم ده ونسخة التقويم السارية فيه). مراجعة Codex الجولة 7 (CR7-N01): العطلات المخصصة من نسخة
+  // التقويم العام المؤرخة لليوم ده (مش القيم الحالية)، ومفيش فلترة بتنظيم الموظف الحالي — موظف اتنقل من القسم بعد اليوم كان
+  // بيتشال قبل ما تقويمه المؤرخ يتسأل. الترتيب بس بيقدّم اللي فرعه الحالي فرع التخصيص أو مذكور بالاسم (الأغلب) عشان الإجابة تيجي بدري.
   private async targetedHolidayOff(date: string, target: Pick<HolidayWorkGrant, 'targetLevel' | 'branchId' | 'targetIds'>): Promise<boolean> {
-    const rows: Array<{ audience: string | null }> = await this.em.query(`SELECT [audience] FROM [public_holidays]
-      WHERE [audience] IS NOT NULL AND [date] <= @0 AND ISNULL([endDate], [date]) >= @0`, [date])
-    const audiences = rows.flatMap(row => {
-      try { const audience = parseHolidayAudienceColumn(row.audience, message => { throw new Error(message) }); return audience ? [audience] : [] } catch { return [] }
-    })
-    if (!audiences.length) return false
-    const parents = new Map((await this.em.query('SELECT [id], [parentId] FROM [departments]') as Array<{ id: number; parentId: number | null }>)
-      .map(row => [Number(row.id), row.parentId == null ? null : Number(row.parentId)] as const))
-    const candidates = [...(await this.employeesLite()).values()].filter(emp => !INACTIVE_STATUSES.has(emp.status) && holidayWorkGrantMatches(target, emp)
-      && audiences.some(audience => holidayAudienceMatches(audience, { employeeId: emp.employeeId, branchId: emp.branchId, teamId: emp.teamId,
-        departmentPath: departmentPathOf(emp.departmentId, id => parents.get(id)) })))
-    for (const emp of candidates.slice(0, 50)) {
+    const selected = selectCalendarVersion(await readCalendarSource(this.em, 'GLOBAL', 0) as never, 'CALENDAR_GLOBAL', 0, date, false)
+    const holidays = ((selected.value as { holidays?: CalendarHoliday[] } | null)?.holidays ?? [])
+      .filter(holiday => holiday.audience && holiday.date <= date && (holiday.endDate ?? holiday.date) >= date)
+    if (!holidays.length) return false
+    const branches = new Set(holidays.map(holiday => holiday.audience!.branchId))
+    const named = new Set(holidays.flatMap(holiday => holiday.audience!.level === 'employees' ? holiday.audience!.employeeIds : []))
+    const targeted = [...(await this.employeesLite()).values()].filter(emp => !INACTIVE_STATUSES.has(emp.status) && holidayWorkGrantMatches(target, emp))
+    const likely = (emp: EmployeeLite) => named.has(emp.employeeId) || (emp.branchId != null && branches.has(emp.branchId))
+    const ordered = [...targeted.filter(likely), ...targeted.filter(emp => !likely(emp))]
+    // ذاكرة تقويم واحدة للفحص كله: التقويم العام وتقويم الفرع ونسخ الجداول بتتقري مرة
+    const cache = createCalendarResolverCache(this.em)
+    for (const emp of ordered.slice(0, TARGETED_HOLIDAY_CHECK_LIMIT)) {
       try {
-        if (!(await this.attendance.calendarDay(emp.employeeId, date)).working) return true
+        if (!(await this.attendance.calendarDay(emp.employeeId, date, cache)).working) return true
       } catch {
         // تقويم الموظف مش مثبت لليوم ده: نفس حكم الفرع فوق — ما نرفضش، وحالة اليوم في الحضور هي الحكم وقت الحساب
         return true

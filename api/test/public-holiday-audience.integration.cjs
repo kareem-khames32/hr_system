@@ -421,3 +421,28 @@ test('HA-07: a branch-scoped settings account sees targeted holidays of its own 
   assert.ok(full.current.holidays.some(row => row.audience && row.audience.branchId === B.a.id), 'حساب الشركة بيشوفها كاملة')
   assert.equal(contextB.currentSourceHash, full.currentSourceHash, 'البصمة على القيم كاملة زي ما هي')
 })
+
+test('HA-08: an employee who moved to another department keeps his dated department holiday, and a holiday-work order for him that day is accepted (CR7-N01); a colleague never in that department is still rejected', async () => {
+  // E.z كان في «مبيعات الشرق» (فرعي من المبيعات) يوم عطلة قسم المبيعات، واتنقل بعدها للمخازن
+  const attendance = app.get(require('../src/attendance/attendance.service').AttendanceService)
+  assert.equal((await attendance.calendarDay(E.z.id, D_DEPT)).dayKind, 'HOLIDAY')
+  expect(await http(U.admin, 'PATCH', `/employees/${E.z.id}`, { departmentId: DEP.store.id }), 200)
+  assert.equal((await repo('Employee').findOneByOrFail({ id: E.z.id })).departmentId, DEP.store.id)
+  assert.equal((await attendance.calendarDay(E.z.id, D_DEPT)).dayKind, 'HOLIDAY', 'التنظيم المؤرخ: كان في القسم يوم العطلة')
+  const order = (name, employeeIds) => http(U.admin, 'POST', '/attendance/holiday-work', { name, targetLevel: 'employees', branchId: B.a.id,
+    employeeIds, dates: [D_DEPT], multiplier: 1.5 })
+  expect(await order('دوام عطلة قسم قديم لموظف اتنقل', [E.z.id]), 201)
+  const refused = await order('دوام يوم شغل عادي', [E.w.id])
+  assert.equal(refused.status, 400, JSON.stringify(refused.body)); assert.match(JSON.stringify(refused.body), /يوم عمل عادي/)
+})
+
+test('HA-09: the payroll live schedule evidence of a branch-A employee never carries a holiday targeted to branch B — name, date or branch (CR7-B01); the branch-B employee still sees his own', async () => {
+  const marker = 'عطلة خاصة بفرع الشروق — HA09'
+  const date = '2026-09-21'
+  await addHoliday(marker, date, { level: 'employees', branchId: B.b.id, employeeIds: [E.v.id] })
+  const { readPayrollLiveSchedule } = require('../src/payroll/payroll-live-schedule-provider')
+  const read = employeeId => ds.transaction(em => readPayrollLiveSchedule(em, employeeId, date, date))
+  const ofA = JSON.stringify(await read(E.x.id)), ofB = JSON.stringify(await read(E.v.id))
+  assert.ok(!ofA.includes(marker), 'دليل موظف الفرع (أ) مافيهوش عطلة الفرع (ب)')
+  assert.ok(ofB.includes(marker), 'وموظف الفرع (ب) بيشوف عطلته')
+})

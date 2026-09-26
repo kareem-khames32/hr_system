@@ -173,6 +173,13 @@ export async function readPayrollLiveSchedule(em: EntityManager, employeeId: num
       const parsed = parseHolidayAudienceColumn(row.audience ?? null, message => { throw new Error(message) })
       audience = parsed ? { level: parsed.level, branchId: parsed.branchId } : null
     } catch { audienceValid = false }
+    // العطلة المخصصة لفرع تاني مالهاش دعوة بالموظف ده ولا بقارئ دليله (مراجعة Codex الجولة 7 — CR7-B01): مابترجعش خالص،
+    // لا اسمها ولا تاريخها ولا فرعها. والتخصيص غير المقروء بيتسجل كمشكلة من غير ما يطلع اسم العطلة
+    if (!audienceValid) {
+      report('SCHEDULE_HOLIDAY_INVALID', 'سجل عطلة رسمية بتخصيص غير مقروء؛ حجبت تفاصيله', 'public_holidays')
+      return []
+    }
+    if (audience && audience.branchId !== employee?.branchId) return []
     if (!validId(row.id) || holidayIds.has(row.id) || !text(row.name, 200) || !validDate(row.date) || (row.endDate != null && (!validDate(row.endDate) || row.endDate < row.date)) || !text(row.country, 5) || row.date > periodEnd || (row.endDate ?? row.date) < periodStart || !audienceValid) report('SCHEDULE_HOLIDAY_INVALID', 'سجل عطلة رسمية مكرر أو خارج الفترة أو غير صالح', ref)
     holidayIds.add(row.id)
     return [{ id: validId(row.id) ? row.id : null, name: text(row.name, 200) ? row.name : null, date: validDate(row.date) ? row.date : null, endDate: validDate(row.endDate) ? row.endDate : null,
