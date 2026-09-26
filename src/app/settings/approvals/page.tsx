@@ -17,196 +17,59 @@ import {
   UserCheck,
   ChevronDown,
   ChevronLeft,
-  ChevronUp,
   AlertCircle,
   Zap,
   Copy,
   ToggleRight,
   ToggleLeft,
   X,
+  Layers,
 } from 'lucide-react'
 import {
   ApiBranch,
   ApiEmployee,
   ApiRequestType,
-  ChainStepInput,
-  createApprovalChain,
   fetchApprovalChains,
   fetchBranches,
-  getCurrentUser,
-  lockedBranchIdOf,
   fetchEmployees,
   fetchRequestTypes,
-  replaceChainSteps,
   updateApprovalChain,
 } from '@/lib/api'
+import { ChainEditorModal, type ChainEditorTarget } from '@/components/approvals/ChainEditorModal'
+import {
+  branchesWithoutVersionOf,
+  branchVersionsOfChain,
+  generalChainOf,
+  roleDescriptions,
+  roleLabels,
+  thresholdFieldLabels,
+  type ApiChain,
+  type ApiChainStep,
+} from '@/components/approvals/chainEditorModel'
+import { categoryChainLabelsOf, fetchRequestCategoryMap, type ApiRequestCategoryMap } from '@/lib/request-category-chains'
 
-// شكل سلسلة الاعتماد كما يرجعها الباك إند
-interface ApiChainStep {
-  id: number
-  chainId: number
-  stepOrder: number
-  approverRole: string
-  isParallel: boolean
-  thresholdField: string | null
-  thresholdOp: string | null
-  thresholdValue: number | null
-  slaDays: number | null
-  escalateTo: string | null
-  canDelegate: boolean
-  specificEmployeeId?: number | null
-}
-
-interface ApiChain {
-  id: number
-  code: string
-  nameAr: string
-  branchId: number | null
-  isActive: boolean
-  // نوع الطلب المرتبط بالسلسلة — null للسلاسل المخصّصة (اليدوية)
-  requestTypeCode: string | null
-  // اسم النوع وفئته من الباك (مستقل عن فلترة جمهور الكتالوج)
-  requestTypeName?: string | null
-  requestTypeCategory?: string | null
-  // دورة أساسية لنوع طلب (approvalChainId) — تسري على كل الفروع، فلا تُنقل لفرع
-  isPrimary?: boolean
-  // تنفيذ فوري بلا اعتمادات — يسري فقط حين تكون السلسلة بلا خطوات
-  autoApprove: boolean
-  steps: ApiChainStep[]
-}
-
-// أدوار المعتمدين الحقيقية في المحرك
-const roleLabels: Record<string, string> = {
-  direct_manager_of_requester: 'المدير المباشر',
-  department_manager_of_requester: 'مدير القسم',
-  branch_manager_of_requester: 'مدير الفرع',
-  receiving_team_manager: 'المدير المستقبِل',
-  hr: 'الموارد البشرية',
-  finance: 'المالية',
-  custody_officer: 'أمين العهدة',
-  it: 'تقنية المعلومات',
-  executive: 'التنفيذي',
-  payroll_officer: 'موظف الرواتب',
-  specific_employee: 'موظف بعينه',
-}
-
-const roleDescriptions: Record<string, string> = {
-  direct_manager_of_requester: 'مدير مقدم الطلب المباشر',
-  department_manager_of_requester: 'مدير قسم مقدم الطلب',
-  branch_manager_of_requester: 'مدير فرع مقدم الطلب',
-  receiving_team_manager: 'مدير الفريق المستقبِل (النقل)',
-  hr: 'إدارة الموارد البشرية',
-  finance: 'الإدارة المالية',
-  custody_officer: 'المسؤول عن العُهد',
-  it: 'قسم تقنية المعلومات',
-  executive: 'الإدارة التنفيذية',
-  payroll_officer: 'موظف الرواتب — يُحل بصلاحية اعتماد خطوات الرواتب',
-  specific_employee: 'موظف محدد بالاسم يعتمد الخطوة',
-}
-
-// أدوار التصعيد — كل الأدوار عدا «موظف بعينه»
-const escalationRoles = Object.entries(roleLabels).filter(
-  ([id]) => id !== 'specific_employee'
-)
-
-const thresholdFieldLabels: Record<string, string> = {
-  amount: 'المبلغ',
-  increase_pct: 'نسبة الزيادة %',
-}
-
-const thresholdOps = ['>=', '>', '<', '<='] as const
-
-// كود السلسلة — نفس قيد الباك إند
-const CODE_RE = /^[A-Za-z0-9_-]{3,50}$/
-
-// تحويل صوتي مبسّط عربي → لاتيني لاقتراح الكود من الاسم
-const AR_TO_EN: Record<string, string> = {
-  ا: 'A', أ: 'A', إ: 'E', آ: 'A', ء: '', ئ: 'Y', ؤ: 'W',
-  ب: 'B', ت: 'T', ث: 'TH', ج: 'J', ح: 'H', خ: 'KH',
-  د: 'D', ذ: 'TH', ر: 'R', ز: 'Z', س: 'S', ش: 'SH',
-  ص: 'S', ض: 'D', ط: 'T', ظ: 'Z', ع: 'A', غ: 'GH',
-  ف: 'F', ق: 'Q', ك: 'K', ل: 'L', م: 'M', ن: 'N',
-  ه: 'H', ة: 'H', و: 'W', ي: 'Y', ى: 'A',
-  '٠': '0', '١': '1', '٢': '2', '٣': '3', '٤': '4',
-  '٥': '5', '٦': '6', '٧': '7', '٨': '8', '٩': '9',
-}
-
-const suggestCode = (nameAr: string): string =>
-  nameAr
-    .trim()
-    .split('')
-    .map((ch) => {
-      if (/[A-Za-z0-9_-]/.test(ch)) return ch.toUpperCase()
-      if (/\s/.test(ch)) return '_'
-      return AR_TO_EN[ch] ?? ''
-    })
-    .join('')
-    .replace(/_+/g, '_')
-    .replace(/^_+|_+$/g, '')
-    .slice(0, 50)
-
-// نموذج الخطوة داخل البانِي — نصوص خام للحقول الاختيارية
-type StepForm = {
-  key: string
-  approverRole: string
-  specificEmployeeId: string
-  slaDays: string
-  escalateTo: string
-  thresholdField: string
-  thresholdOp: string
-  thresholdValue: string
-  isParallel: boolean
-}
-
-const emptyStep = (): StepForm => ({
-  key: `s-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-  approverRole: 'direct_manager_of_requester',
-  specificEmployeeId: '',
-  slaDays: '',
-  escalateTo: '',
-  thresholdField: '',
-  thresholdOp: '',
-  thresholdValue: '',
-  isParallel: false,
-})
-
+// «الاعتمادات والموافقات» = مكتبة كل سلاسل الاعتماد. ربط الطلبات بالسلاسل (سلسلة لكل فئة، وسلسلة خاصة لطلب بعينه)
+// بقى جوّه «بانِي الطلبات» (طلب المالك 26 سبتمبر) — والمحرر نفسه مشترك بين الشاشتين (ChainEditorModal).
 export default function ApprovalsPage() {
   const [chains, setChains] = useState<ApiChain[]>([])
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [requestTypes, setRequestTypes] = useState<ApiRequestType[]>([])
+  // سلسلة كل فئة (من «بانِي الطلبات») — لشارة «سلسلة فئة» وجدول الفروع؛ فشلها مايوقعش المكتبة
+  const [categoryMap, setCategoryMap] = useState<ApiRequestCategoryMap | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [filterBranch, setFilterBranch] = useState('')
-  const [showModal, setShowModal] = useState(false)
-  const [modalError, setModalError] = useState<string | null>(null)
-  const [saving, setSaving] = useState(false)
-  const [editingChain, setEditingChain] = useState<ApiChain | null>(null)
-  // «نسخة خاصة بفرع»: السلسلة العامة اللي بتتنسخ لفرع (إنشاء بنفس كودها)
-  const [copyOf, setCopyOf] = useState<ApiChain | null>(null)
-  // النموذج زي ما اتفتح — مقارنته بالحالي بتقول لو فيه تعديلات مش محفوظة
-  const [openedForm, setOpenedForm] = useState('')
-  const [codeTouched, setCodeTouched] = useState(false)
+  const [editorTarget, setEditorTarget] = useState<ChainEditorTarget | null>(null)
   const [activeMenu, setActiveMenu] = useState<number | null>(null)
   const [expandedChain, setExpandedChain] = useState<number | null>(null)
 
-  const [formData, setFormData] = useState<{
-    name: string
-    code: string
-    branchId: string
-    steps: StepForm[]
-  }>({
-    name: '',
-    code: '',
-    branchId: 'all',
-    steps: [],
-  })
-
   const reloadChains = async () => {
-    const ch = await fetchApprovalChains()
-    setChains(ch as ApiChain[])
+    const [ch, map] = await Promise.allSettled([fetchApprovalChains(), fetchRequestCategoryMap()])
+    if (ch.status === 'fulfilled') setChains(ch.value as ApiChain[])
+    if (map.status === 'fulfilled') setCategoryMap(map.value)
   }
 
   useEffect(() => {
@@ -228,6 +91,7 @@ export default function ApprovalsPage() {
       } finally {
         setLoading(false)
       }
+      fetchRequestCategoryMap().then(setCategoryMap).catch(() => setCategoryMap(null))
     }
     load()
   }, [])
@@ -251,10 +115,8 @@ export default function ApprovalsPage() {
   // اسم/فئة النوع المربوط — نفضّل ما يرسله الباك (مستقل عن فلترة الجمهور)
   // ونرجع للكتالوج المحلي كخطة بديلة
   // النسخة الخاصة بفرع = نفس كود سلسلة عامة، ونوع طلبها هو نوع العامة
-  const generalOf = (chain: ApiChain): ApiChain | null =>
-    chain.branchId === null ? null : chains.find((c) => c.code === chain.code && c.branchId === null) ?? null
-  const branchVersionsOf = (chain: ApiChain): ApiChain[] =>
-    chain.branchId !== null ? [] : chains.filter((c) => c.code === chain.code && c.branchId !== null)
+  const generalOf = (chain: ApiChain): ApiChain | null => generalChainOf(chain, chains)
+  const branchVersionsOf = (chain: ApiChain): ApiChain[] => branchVersionsOfChain(chain, chains)
   const chainTypeName = (chain: ApiChain): string | null =>
     chain.requestTypeName ??
     (chain.requestTypeCode
@@ -267,6 +129,9 @@ export default function ApprovalsPage() {
       ? requestTypes.find((t) => t.code === chain.requestTypeCode)?.category ??
         ''
       : '')
+  // الفئات اللي السلسلة دي سلسلتها (نسخة الفرع بتاخد فئات العامة)
+  const categoriesOf = (chain: ApiChain): string[] =>
+    categoryChainLabelsOf(categoryMap, generalOf(chain)?.id ?? chain.id)
 
   const filteredChains = chains
     .filter((chain) => {
@@ -292,228 +157,31 @@ export default function ApprovalsPage() {
       return a.nameAr.localeCompare(b.nameAr, 'ar')
     })
 
-  const stepFormOf = (s: ApiChainStep, key: string): StepForm => ({
-    key,
-    approverRole: s.approverRole,
-    specificEmployeeId:
-      s.specificEmployeeId != null ? String(s.specificEmployeeId) : '',
-    slaDays: s.slaDays != null ? String(s.slaDays) : '',
-    escalateTo: s.escalateTo ?? '',
-    thresholdField: s.thresholdField ?? '',
-    thresholdOp: s.thresholdOp ?? '',
-    thresholdValue: s.thresholdValue != null ? String(s.thresholdValue) : '',
-    isParallel: !!s.isParallel,
-  })
-
   const handleOpenModal = (chain?: ApiChain) => {
-    setCopyOf(null)
-    if (chain) {
-      setEditingChain(chain)
-      const next = {
-        name: chain.nameAr,
-        code: chain.code,
-        branchId: chain.branchId === null ? 'all' : String(chain.branchId),
-        steps: chain.steps.map((s) => stepFormOf(s, `db-${s.id}`)),
-      }
-      setFormData(next)
-      setOpenedForm(JSON.stringify(next))
-    } else {
-      setEditingChain(null)
-      setFormData({
-        name: '',
-        code: '',
-        branchId: 'all',
-        steps: [emptyStep()],
-      })
-    }
-    setCodeTouched(false)
-    setModalError(null)
-    setShowModal(true)
+    setEditorTarget(chain ? { kind: 'edit', chainId: chain.id } : { kind: 'create' })
   }
 
-  // «نسخة خاصة بفرع» (طلب المالك 24 سبتمبر): نفس نوع الطلب بسلسلة مختلفة في كل فرع — طلب الإجازة في المعادي غير
-  // النصر. نسخة بنفس كود السلسلة العامة لفرع بعينه بتتقدم على العامة لطلبات موظفي الفرع ده (resolveChain في الخادم)،
-  // والفرع اللي مالوش نسخة (أو نسخته معطلة) بيمشي على العامة. الشاشة كانت بتقول «أنشئ نسخة بنفس الكود» وزرار النسخ
-  // مقفول، فكان لازم الكود يتكتب بالإيد. هنا الكود مقفول على الأصل، والخطوات منسوخة للتعديل، والفروع المتاحة بس.
-  const branchesWithoutVersion = (chain: ApiChain) => {
-    const taken = new Set(branchVersionsOf(chain).map((c) => c.branchId))
-    return branches.filter((b) => !taken.has(b.id))
-  }
-  const handleOpenBranchCopy = (chain: ApiChain, branchId?: number) => {
+  // «نسخة خاصة بفرع» (طلب المالك 24 سبتمبر): نفس نوع الطلب بسلسلة مختلفة في كل فرع — المحرر بيفتح بنفس الكود مقفول
+  // والخطوات منسوخة، والفروع اللي لسه مالهاش نسخة بس
+  const handleOpenBranchCopy = (chain: ApiChain) => {
     setActiveMenu(null)
-    const free = branchesWithoutVersion(chain)
-    if (!free.length) {
+    if (!branchesWithoutVersionOf(chain, chains, branches).length) {
       setNotice(`كل الفروع ليها نسخة خاصة من «${chain.nameAr}» — عدّل نسخة الفرع من القائمة`)
       return
     }
-    const branch = free.find((b) => b.id === branchId) ?? free[0]
-    setEditingChain(null)
-    setCopyOf(chain)
-    setFormData({
-      name: `${chain.nameAr} — ${branch.name}`,
-      code: chain.code,
-      branchId: String(branch.id),
-      steps: chain.steps.length ? chain.steps.map((s) => stepFormOf(s, `copy-${s.id}`)) : [emptyStep()],
-    })
-    setCodeTouched(true)
-    setModalError(null)
-    setShowModal(true)
-  }
-
-  const leaveGeneralFor = (go: () => void) => {
-    if (editingChain && JSON.stringify(formData) !== openedForm) {
-      setModalError('فيه تعديلات على السلسلة دي لسه ما اتحفظتش — احفظها الأول (أو اضغط إلغاء) وبعدين افتح سلسلة الفرع')
-      return
-    }
-    go()
-  }
-
-  // اسم الدورة يقترح الكود تلقائياً ما دام المستخدم لم يلمس حقل الكود
-  const handleNameChange = (value: string) => {
-    if (!editingChain && !codeTouched) {
-      setFormData({ ...formData, name: value, code: suggestCode(value) })
-    } else {
-      setFormData({ ...formData, name: value })
-    }
-  }
-
-  const addStep = () => {
-    setFormData({ ...formData, steps: [...formData.steps, emptyStep()] })
-  }
-
-  const removeStep = (index: number) => {
-    setFormData({
-      ...formData,
-      steps: formData.steps.filter((_, i) => i !== index),
-    })
-  }
-
-  const moveStep = (index: number, dir: -1 | 1) => {
-    const target = index + dir
-    if (target < 0 || target >= formData.steps.length) return
-    const steps = [...formData.steps]
-    ;[steps[index], steps[target]] = [steps[target], steps[index]]
-    setFormData({ ...formData, steps })
-  }
-
-  const updateStep = (
-    index: number,
-    field: keyof StepForm,
-    value: string | boolean
-  ) => {
-    const steps = formData.steps.map((s, i) =>
-      i === index ? { ...s, [field]: value } : s
-    )
-    setFormData({ ...formData, steps })
-  }
-
-  // تحقق محلي يطابق قواعد الباك إند قبل الإرسال
-  const validateForm = (): string | null => {
-    if (formData.name.trim().length < 3) {
-      return 'اسم الدورة مطلوب (3 أحرف على الأقل)'
-    }
-    if (!editingChain && !CODE_RE.test(formData.code.trim())) {
-      return 'كود الدورة: أحرف إنجليزية وأرقام و _ أو - فقط (من 3 إلى 50 خانة)'
-    }
-    for (const s of formData.steps) {
-      if (s.approverRole === 'specific_employee' && s.specificEmployeeId === '') {
-        // نفس رسالة الباك إند حرفياً
-        return 'خطوة «موظف بعينه» تحتاج تحديد الموظف'
-      }
-      const parts = [
-        s.thresholdField.trim() !== '',
-        s.thresholdOp !== '',
-        s.thresholdValue.trim() !== '',
-      ].filter(Boolean).length
-      if (parts !== 0 && parts !== 3) {
-        // نفس رسالة الباك إند حرفياً
-        return 'الخطوة الشرطية تحتاج: حقل + معامل + قيمة عتبة'
-      }
-      if (s.slaDays !== '') {
-        const n = Number(s.slaDays)
-        if (!Number.isInteger(n) || n < 1) return 'مهلة الرد: عدد أيام صحيح (1 فأكثر)'
-      }
-      if (s.thresholdValue.trim() !== '' && Number.isNaN(Number(s.thresholdValue))) {
-        return 'قيمة العتبة يجب أن تكون رقماً'
-      }
-    }
-    return null
-  }
-
-  const buildSteps = (): ChainStepInput[] =>
-    formData.steps.map(
-      (s, i) =>
-        ({
-          approverRole: s.approverRole,
-          // «موازية مع السابقة» — مدعومة في الباك وإن لم تكن مُعرَّفة في ChainStepInput
-          isParallel: i > 0 && s.isParallel,
-          // «موظف بعينه» — المفتاح مقبول في الباك وإن لم يكن مُعرَّفاً في ChainStepInput
-          ...(s.approverRole === 'specific_employee' && s.specificEmployeeId !== ''
-            ? { specificEmployeeId: Number(s.specificEmployeeId) }
-            : {}),
-          ...(s.slaDays !== '' ? { slaDays: Number(s.slaDays) } : {}),
-          ...(s.escalateTo ? { escalateTo: s.escalateTo } : {}),
-          ...(s.thresholdField.trim()
-            ? {
-                thresholdField: s.thresholdField.trim(),
-                thresholdOp: s.thresholdOp as ChainStepInput['thresholdOp'],
-                thresholdValue: Number(s.thresholdValue),
-              }
-            : {}),
-        }) as any
-    )
-
-  const handleSave = async () => {
-    const problem = validateForm()
-    if (problem) {
-      setModalError(problem)
-      return
-    }
-    setSaving(true)
-    setModalError(null)
-    try {
-      const name = formData.name.trim()
-      if (editingChain) {
-        // نقل النطاق (فرع ↔ عامة) يُرسل فقط لو تغيّر — null = دورة عامة
-        const newBranchId =
-          formData.branchId === 'all' ? null : Number(formData.branchId)
-        await updateApprovalChain(editingChain.id, {
-          nameAr: name,
-          ...(newBranchId !== editingChain.branchId ? { branchId: newBranchId } : {}),
-        })
-        await replaceChainSteps(editingChain.id, buildSteps())
-        setNotice(`تم تحديث دورة «${name}» — الخطوات الجديدة تسري على الطلبات القادمة`)
-      } else {
-        await createApprovalChain({
-          code: formData.code.trim(),
-          nameAr: name,
-          branchId:
-            formData.branchId === 'all' ? undefined : Number(formData.branchId),
-          steps: buildSteps(),
-        })
-        setNotice(copyOf
-          ? `تم إنشاء نسخة «${name}» — طلبات موظفي ${branchLabelOf(Number(formData.branchId))} هتمشي عليها بدل «${copyOf.nameAr}»`
-          : `تم إنشاء دورة الاعتماد «${name}» بنجاح`)
-      }
-      await reloadChains()
-      setShowModal(false)
-      setError(null)
-    } catch (err: any) {
-      // رسالة الباك إند العربية كما هي
-      setModalError(err.message)
-    } finally {
-      setSaving(false)
-    }
+    setEditorTarget({ kind: 'branchCopy', chainId: chain.id })
   }
 
   const toggleChainActive = async (chain: ApiChain) => {
     setActiveMenu(null)
-    // التعطيل بيوقف التقديم الجديد على الدورة (SET-3) — تأكيد للدورة الأساسية لنوع
-    const typeName = chainTypeName(chain)
-    const typeLabel = typeName ? `«${typeName}»` : 'الأنواع المربوطة بها'
+    // التعطيل بيوقف التقديم الجديد على الدورة (SET-3) — تأكيد للدورة الأساسية لنوع أو لفئة
+    const cats = chain.branchId === null ? categoriesOf(chain) : []
+    const typeName = cats.length ? null : chainTypeName(chain)
+    const typeLabel = cats.length ? `فئة «${cats.join('» و«')}»` : typeName ? `«${typeName}»` : 'الأنواع المربوطة بها'
+    const primary = !!chain.isPrimary || cats.length > 0
     if (
       chain.isActive &&
-      chain.isPrimary &&
+      primary &&
       !window.confirm(
         `تعطيل «${chain.nameAr}» يوقف تقديم طلبات ${typeLabel} الجديدة في كل فرع ليس له نسخة مفعّلة من الدورة، والطلبات الجارية تكمل مسارها. متابعة؟`
       )
@@ -527,7 +195,7 @@ export default function ApprovalsPage() {
           ? `تم تفعيل دورة «${chain.nameAr}»`
           : chain.branchId !== null
             ? `تم تعطيل دورة «${chain.nameAr}» — طلبات الفرع الجديدة ترجع للدورة العامة`
-            : chain.isPrimary
+            : primary
               ? `تم تعطيل دورة «${chain.nameAr}» — تقديم طلبات ${typeLabel} الجديدة موقوف لحد ما تتفعّل (الجارية تكمل مسارها)`
               : `تم تعطيل دورة «${chain.nameAr}»`
       )
@@ -580,7 +248,7 @@ export default function ApprovalsPage() {
         <div className="flex items-center justify-between">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">الاعتمادات والموافقات</h1>
-            <p className="text-gray-500 mt-1">سلاسل الاعتماد الفعلية المطبقة على الطلبات</p>
+            <p className="text-gray-500 mt-1">مكتبة كل سلاسل الاعتماد — سلاسل الفئات والطلبات والفروع</p>
           </div>
           <button
             onClick={() => handleOpenModal()}
@@ -589,6 +257,19 @@ export default function ApprovalsPage() {
             <Plus size={20} />
             إنشاء دورة اعتماد
           </button>
+        </div>
+
+        {/* الربط بقى جوّه الطلبات نفسها (طلب المالك 26 سبتمبر) */}
+        <div className="bg-blue-50 text-blue-900 rounded-xl p-4 flex items-start gap-3" data-request-builder-note>
+          <Layers size={18} className="shrink-0 mt-0.5" />
+          <p className="text-sm">
+            مين بيمشي على أنهي سلسلة بقى من{' '}
+            <Link href="/settings/request-types" className="font-medium underline hover:text-blue-700">
+              «بانِي الطلبات»
+            </Link>
+            : كل فئة ليها سلسلة عامة (والإجازات والحضور ممكن يبقوا على نفس السلسلة)، وتقدر تخصّص سلسلة لطلب بعينه ولكل فرع.
+            الشاشة دي مكتبة كل السلاسل: تعدّل أي سلسلة، أو تفعّلها وتعطّلها، أو تعمل سلسلة يدوية لحالة خاصة.
+          </p>
         </div>
 
         {/* Error Banner */}
@@ -711,8 +392,7 @@ export default function ApprovalsPage() {
                 <h3 className="font-bold text-gray-800">سلاسل الاعتماد</h3>
                 <p className="text-sm text-gray-500">{filteredChains.length} مسار اعتماد</p>
                 <p className="text-xs text-gray-400 mt-0.5">
-                  لكل نوع طلب سلسلته الخاصة — أضف المعتمدين والترتيب، والسلسلة الفاضية
-                  توقف الطلب حتى تضبطها
+                  أضف المعتمدين والترتيب لكل سلسلة — والسلسلة الفاضية توقف الطلب حتى تضبطها
                 </p>
               </div>
             </div>
@@ -721,6 +401,7 @@ export default function ApprovalsPage() {
             <div className="grid grid-cols-1 gap-4 mr-13">
               {filteredChains.map((chain) => {
                 const thresholdSteps = chain.steps.filter((s) => s.thresholdField)
+                const chainCategories = chain.branchId === null ? categoriesOf(chain) : []
                 return (
                   <div
                     key={chain.id}
@@ -748,16 +429,22 @@ export default function ApprovalsPage() {
                             >
                               {chain.isActive ? 'نشط' : 'معطل'}
                             </span>
+                            {/* سلسلة فئة — كل طلبات الفئة الماشية عليها */}
+                            {chainCategories.length > 0 && (
+                              <span className="badge text-xs bg-emerald-50 text-emerald-700">
+                                سلسلة فئة: {chainCategories.join('، ')}
+                              </span>
+                            )}
                             {/* شارة نوع الطلب المرتبط — يوضّح أي طلب تعتمده هذه السلسلة */}
                             {chain.requestTypeCode ? (
                               <span className="badge text-xs bg-blue-50 text-blue-700">
                                 الطلب: {chainTypeName(chain)}
                               </span>
-                            ) : (
+                            ) : chainCategories.length === 0 && !generalOf(chain) ? (
                               <span className="badge text-xs bg-gray-100 text-gray-600">
                                 سلسلة مخصّصة
                               </span>
-                            )}
+                            ) : null}
                             <span className="badge text-xs bg-indigo-100 text-indigo-700">
                               {branchLabelOf(chain.branchId)}
                             </span>
@@ -1045,432 +732,22 @@ export default function ApprovalsPage() {
           </div>
         )}
 
-        {/* Builder Modal — إنشاء / تعديل دورة اعتماد */}
-        {showModal && (
-          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl w-full max-w-2xl max-h-[90vh] overflow-y-auto">
-              <div className="p-6 border-b border-gray-100">
-                <h2 className="text-xl font-bold text-gray-800">
-                  {editingChain ? 'تعديل دورة الاعتماد' : copyOf ? `نسخة خاصة بفرع من «${copyOf.nameAr}»` : 'إنشاء دورة اعتماد جديدة'}
-                </h2>
-                {copyOf ? (
-                  <p className="text-sm text-gray-500 mt-2 flex items-center gap-1.5">
-                    <AlertCircle size={15} className="shrink-0 text-primary-500" />
-                    الخطوات منسوخة من السلسلة العامة — عدّلها للفرع ده. طلبات موظفي الفرع هتمشي عليها، وباقي الفروع على العامة
-                  </p>
-                ) : editingChain ? (
-                  <p className="text-sm text-warning-600 mt-2 flex items-center gap-1.5">
-                    <AlertCircle size={15} className="shrink-0" />
-                    تعديل الخطوات يسري على الطلبات الجديدة فقط — الطلبات الجارية تكمل
-                    بخطواتها المحلولة
-                  </p>
-                ) : (
-                  <p className="text-sm text-gray-500 mt-2 flex items-center gap-1.5">
-                    <AlertCircle size={15} className="shrink-0 text-primary-500" />
-                    معظم الأنواع لها سلاسلها تلقائياً — أنشئ سلسلة يدوية فقط لحالة خاصة
-                  </p>
-                )}
-              </div>
-
-              <div className="p-6 space-y-6">
-                {/* Modal Error — رسائل الباك إند العربية كما هي */}
-                {modalError && (
-                  <div className="bg-red-50 text-red-700 rounded-xl p-4 text-sm flex items-start gap-2">
-                    <AlertCircle size={16} className="shrink-0 mt-0.5" />
-                    <span>{modalError}</span>
-                  </div>
-                )}
-
-                {/* Basic Info */}
-                <div className="grid grid-cols-2 gap-4">
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      اسم الدورة *
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.name}
-                      onChange={(e) => handleNameChange(e.target.value)}
-                      className="input w-full"
-                      placeholder="مثال: اعتماد الإجازات"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      كود الدورة *
-                    </label>
-                    <input
-                      type="text"
-                      value={formData.code}
-                      onChange={(e) => {
-                        setCodeTouched(true)
-                        setFormData({ ...formData, code: e.target.value.toUpperCase() })
-                      }}
-                      className="input w-full font-mono"
-                      placeholder="CHAIN_X"
-                      dir="ltr"
-                      disabled={!!editingChain || !!copyOf}
-                      title={editingChain ? 'الكود لا يتغير بعد الإنشاء' : copyOf ? 'نفس كود السلسلة العامة — هو اللي بيخلي النسخة تتقدم عليها لطلبات موظفي الفرع' : undefined}
-                    />
-                    {!editingChain && !copyOf && (
-                      <p className="text-xs text-gray-400 mt-1">
-                        يُقترح تلقائياً من الاسم — أحرف إنجليزية وأرقام و _ أو - (من 3 إلى 50)
-                      </p>
-                    )}
-                  </div>
-                </div>
-
-                {editingChain?.isPrimary && editingChain.branchId === null ? (
-                  <p className="text-sm text-gray-600 bg-gray-50 rounded-xl px-4 py-3">
-                    السلسلة دي هي سلسلة «{chainTypeName(editingChain) ?? editingChain.nameAr}» لكل الشركة — طلبات أي فرع بتمشي
-                    عليها، إلا الفرع اللي ليه سلسلة خاصة (جدول «سلسلة مختلفة لكل فرع» تحت).
-                  </p>
-                ) : editingChain && generalOf(editingChain) ? (
-                  <p className="text-sm text-gray-600 bg-amber-50 rounded-xl px-4 py-3">
-                    دي السلسلة الخاصة بـ<b>{branchLabelOf(editingChain.branchId)}</b> — طلبات موظفي الفرع ده بتمشي عليها، وباقي
-                    الفروع على «{generalOf(editingChain)!.nameAr}».
-                  </p>
-                ) : (
-                <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
-                    نطاق الفرع
-                  </label>
-                  <select
-                    value={formData.branchId}
-                    onChange={(e) =>
-                      setFormData({ ...formData, branchId: e.target.value })
-                    }
-                    className="input w-full"
-                    // الدورة الأساسية لنوع طلب تُحلّ لكل الفروع — نقلها لفرع شكلي فقط
-                    // (الباك يرفضه)؛ المسموح لها فقط الرجوع لـ«عامة»
-                    disabled={!!editingChain?.isPrimary && editingChain.branchId === null}
-                    title={
-                      editingChain?.isPrimary
-                        ? 'الدورة الأساسية لنوع الطلب تسري على كل الفروع'
-                        : undefined
-                    }
-                  >
-                    {!copyOf && <option value="all">كل الفروع (دورة عامة)</option>}
-                    {(copyOf ? branchesWithoutVersion(copyOf) : branches).map((b) => (
-                      <option
-                        key={b.id}
-                        value={b.id}
-                        disabled={!!editingChain?.isPrimary && b.id !== editingChain.branchId}
-                      >
-                        {b.name} فقط
-                      </option>
-                    ))}
-                  </select>
-                  {copyOf ? (
-                    <p className="text-xs text-gray-400 mt-1">
-                      الفروع اللي لسه مالهاش نسخة خاصة من «{copyOf.nameAr}» بس
-                    </p>
-                  ) : editingChain?.isPrimary ? (
-                    <p className="text-xs text-warning-600 mt-1">
-                      دورة أساسية لنوع طلب وتسري على كل الفروع — لتخصيص فرع أنشئ نسخة
-                      بنفس الكود ({editingChain.code}) لهذا الفرع
-                    </p>
-                  ) : (
-                    <p className="text-xs text-gray-400 mt-1">
-                      نسخة بفرع محدد تتقدم على العامة عند التنفيذ — طلبات موظفي الفرع تتبع
-                      دورته الخاصة أولاً
-                    </p>
-                  )}
-                </div>
-                )}
-
-                {/* Approval Steps */}
-                <div>
-                  <div className="flex items-center justify-between mb-4">
-                    <label className="text-sm font-medium text-gray-700">
-                      خطوات الاعتماد
-                    </label>
-                    <button
-                      onClick={addStep}
-                      className="text-sm text-primary-600 hover:text-primary-700 flex items-center gap-1"
-                    >
-                      <Plus size={16} />
-                      إضافة خطوة
-                    </button>
-                  </div>
-
-                  {formData.steps.length === 0 && (
-                    <div className="p-4 bg-gray-50 rounded-xl text-sm text-gray-500 flex items-center gap-2">
-                      <Zap size={16} className="text-warning-500" />
-                      بلا خطوات — الطلب يُنفَّذ أوتوماتيكياً فور التقديم
-                    </div>
-                  )}
-
-                  <div className="space-y-3">
-                    {formData.steps.map((step, index) => (
-                      <div
-                        key={step.key}
-                        className="p-4 bg-gray-50 rounded-xl space-y-3"
-                      >
-                        <div className="flex items-center justify-between">
-                          <div className="flex items-center gap-2">
-                            <span className="w-6 h-6 bg-primary-500 text-white rounded-full flex items-center justify-center text-sm font-bold">
-                              {index + 1}
-                            </span>
-                            <span className="text-sm font-medium text-gray-700">
-                              الخطوة {index + 1}
-                            </span>
-                            <label
-                              className={`flex items-center gap-1.5 mr-3 ${
-                                index === 0 ? 'opacity-40 cursor-not-allowed' : ''
-                              }`}
-                              title={
-                                index === 0
-                                  ? 'الخطوة الأولى لا يمكن أن تكون موازية'
-                                  : 'تُعتمد بالتوازي مع الخطوة السابقة (نفس الترتيب)'
-                              }
-                            >
-                              <input
-                                type="checkbox"
-                                checked={index > 0 && step.isParallel}
-                                disabled={index === 0}
-                                onChange={(e) =>
-                                  updateStep(index, 'isParallel', e.target.checked)
-                                }
-                                className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500 disabled:cursor-not-allowed"
-                              />
-                              <span className="text-xs text-gray-600">
-                                موازية مع السابقة
-                              </span>
-                            </label>
-                          </div>
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => moveStep(index, -1)}
-                              disabled={index === 0}
-                              title="نقل لأعلى"
-                              className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
-                            >
-                              <ChevronUp size={16} />
-                            </button>
-                            <button
-                              onClick={() => moveStep(index, 1)}
-                              disabled={index === formData.steps.length - 1}
-                              title="نقل لأسفل"
-                              className="p-1.5 rounded-lg text-gray-500 hover:bg-gray-200 disabled:opacity-30 disabled:cursor-not-allowed"
-                            >
-                              <ChevronDown size={16} />
-                            </button>
-                            <button
-                              onClick={() => removeStep(index)}
-                              title="حذف الخطوة"
-                              className="p-1.5 rounded-lg text-danger-500 hover:bg-danger-50"
-                            >
-                              <Trash2 size={16} />
-                            </button>
-                          </div>
-                        </div>
-
-                        <div className="grid grid-cols-3 gap-3">
-                          <div>
-                            <label className="text-xs text-gray-500 mb-1 block">
-                              المعتمد
-                            </label>
-                            <select
-                              value={step.approverRole}
-                              onChange={(e) =>
-                                updateStep(index, 'approverRole', e.target.value)
-                              }
-                              className="input w-full text-sm"
-                            >
-                              {Object.entries(roleLabels).map(([id, name]) => (
-                                <option key={id} value={id}>
-                                  {name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-500 mb-1 block">
-                              مهلة الرد (أيام — اختياري)
-                            </label>
-                            <input
-                              type="number"
-                              value={step.slaDays}
-                              onChange={(e) =>
-                                updateStep(index, 'slaDays', e.target.value)
-                              }
-                              className="input w-full text-sm"
-                              min={1}
-                              placeholder="بلا مهلة"
-                            />
-                          </div>
-                          <div>
-                            <label className="text-xs text-gray-500 mb-1 block">
-                              التصعيد إلى (اختياري)
-                            </label>
-                            <select
-                              value={step.escalateTo}
-                              onChange={(e) =>
-                                updateStep(index, 'escalateTo', e.target.value)
-                              }
-                              className="input w-full text-sm"
-                            >
-                              <option value="">بدون تصعيد</option>
-                              {escalationRoles.map(([id, name]) => (
-                                <option key={id} value={id}>
-                                  {name}
-                                </option>
-                              ))}
-                            </select>
-                          </div>
-                        </div>
-
-                        {/* اختيار الموظف — لخطوة «موظف بعينه» فقط */}
-                        {step.approverRole === 'specific_employee' && (
-                          <div>
-                            <label className="text-xs text-gray-500 mb-1 block">
-                              الموظف المعتمد *
-                            </label>
-                            <select
-                              value={step.specificEmployeeId}
-                              onChange={(e) =>
-                                updateStep(index, 'specificEmployeeId', e.target.value)
-                              }
-                              className="input w-full text-sm"
-                            >
-                              <option value="">— اختر الموظف —</option>
-                              {employees.map((emp) => (
-                                <option key={emp.id} value={emp.id}>
-                                  {emp.fullName}
-                                </option>
-                              ))}
-                            </select>
-                            <p className="text-xs text-gray-400 mt-1">
-                              هذا الموظف بعينه هو من يعتمد الخطوة أياً كان مقدم الطلب
-                            </p>
-                          </div>
-                        )}
-
-                        {/* شرط العتبة — الثلاثة معاً أو لا شيء */}
-                        <div>
-                          <label className="text-xs text-gray-500 mb-1 block">
-                            شرط العتبة (اختياري — الحقل والمعامل والقيمة معاً أو لا شيء)
-                          </label>
-                          <div className="grid grid-cols-3 gap-3">
-                            <input
-                              type="text"
-                              value={step.thresholdField}
-                              onChange={(e) =>
-                                updateStep(index, 'thresholdField', e.target.value)
-                              }
-                              className="input w-full text-sm font-mono"
-                              placeholder="amount"
-                              dir="ltr"
-                            />
-                            <select
-                              value={step.thresholdOp}
-                              onChange={(e) =>
-                                updateStep(index, 'thresholdOp', e.target.value)
-                              }
-                              className="input w-full text-sm font-mono"
-                              dir="ltr"
-                            >
-                              <option value="">—</option>
-                              {thresholdOps.map((op) => (
-                                <option key={op} value={op}>
-                                  {op}
-                                </option>
-                              ))}
-                            </select>
-                            <input
-                              type="number"
-                              value={step.thresholdValue}
-                              onChange={(e) =>
-                                updateStep(index, 'thresholdValue', e.target.value)
-                              }
-                              className="input w-full text-sm"
-                              placeholder="القيمة"
-                              dir="ltr"
-                            />
-                          </div>
-                          <p className="text-xs text-gray-400 mt-1">
-                            مثال: amount &gt;= 1000 — الخطوة تُطبَّق فقط إذا تحقق الشرط على
-                            بيانات الطلب
-                          </p>
-                        </div>
-                      </div>
-                    ))}
-                  </div>
-                </div>
-
-                {/* «سلسلة مختلفة لكل فرع» (طلب المالك 24 سبتمبر): جوّه تعديل السلسلة الأساسية نفسها — المكان اللي بيتدخل
-                    طبيعي. نوع الطلب واحد لكل الشركة، وطلب الموظف بيمشي في سلسلة فرعه لو ليه سلسلة خاصة، وإلا في دي. */}
-                {editingChain?.isPrimary && editingChain.branchId === null && (() => {
-                  const locked = lockedBranchIdOf(getCurrentUser())
-                  const rows = locked ? branches.filter((b) => b.id === locked) : branches
-                  return (
-                    <div className="border border-gray-200 rounded-xl">
-                      <div className="px-4 py-3 border-b border-gray-100">
-                        <p className="text-sm font-medium text-gray-800">سلسلة مختلفة لكل فرع</p>
-                        <p className="text-xs text-gray-500 mt-1">
-                          طلب «{chainTypeName(editingChain) ?? editingChain.nameAr}» واحد لكل الشركة — وطلب كل موظف بيمشي في سلسلة
-                          فرعه لو ليه سلسلة خاصة، وإلا في السلسلة دي.
-                        </p>
-                      </div>
-                      <div className="divide-y divide-gray-100">
-                        {rows.map((b) => {
-                          const version = chains.find((c) => c.code === editingChain.code && c.branchId === b.id) ?? null
-                          return (
-                            <div key={b.id} className="flex items-center justify-between gap-3 px-4 py-2.5">
-                              <div className="min-w-0">
-                                <p className="text-sm text-gray-800">{b.name}</p>
-                                <p className={`text-xs ${version?.isActive ? 'text-amber-700' : 'text-gray-500'}`}>
-                                  {version
-                                    ? version.isActive
-                                      ? `ليه سلسلة خاصة — ${version.steps.length} ${version.steps.length === 1 ? 'خطوة' : 'خطوات'}`
-                                      : 'سلسلته الخاصة معطّلة — ماشي على السلسلة دي'
-                                    : 'ماشي على السلسلة دي'}
-                                </p>
-                              </div>
-                              {version ? (
-                                <button type="button" className="btn-secondary text-sm shrink-0" disabled={saving}
-                                  onClick={() => leaveGeneralFor(() => handleOpenModal(version))}>
-                                  تعديل سلسلة الفرع
-                                </button>
-                              ) : (
-                                <button type="button" className="btn-secondary text-sm shrink-0" disabled={saving}
-                                  onClick={() => leaveGeneralFor(() => handleOpenBranchCopy(editingChain, b.id))}>
-                                  اعمل سلسلة خاصة للفرع
-                                </button>
-                              )}
-                            </div>
-                          )
-                        })}
-                      </div>
-                    </div>
-                  )
-                })()}
-              </div>
-
-              <div className="p-6 border-t border-gray-100 flex items-center justify-end gap-3">
-                <button
-                  onClick={() => setShowModal(false)}
-                  className="btn-secondary"
-                  disabled={saving}
-                >
-                  إلغاء
-                </button>
-                <button
-                  onClick={handleSave}
-                  disabled={saving}
-                  className="btn-primary disabled:opacity-50"
-                >
-                  {saving
-                    ? 'جارٍ الحفظ...'
-                    : editingChain
-                      ? 'حفظ التغييرات'
-                      : 'إنشاء الدورة'}
-                </button>
-              </div>
-            </div>
-          </div>
-        )}
+        {/* المحرر المشترك مع «بانِي الطلبات» — إنشاء / تعديل / نسخة خاصة بفرع + جدول «سلسلة مختلفة لكل فرع» */}
+        <ChainEditorModal
+          target={editorTarget}
+          chains={chains}
+          branches={branches}
+          employees={employees}
+          onNavigate={setEditorTarget}
+          onClose={() => setEditorTarget(null)}
+          onSaved={async (message) => {
+            await reloadChains()
+            setNotice(message)
+            setError(null)
+          }}
+          typeNameOf={chainTypeName}
+          categoriesOf={categoriesOf}
+        />
       </div>
     </MainLayout>
   )

@@ -12,7 +12,7 @@ import {
   UseGuards,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { In, IsNull, Repository } from 'typeorm'
+import { In, IsNull, Like, Repository } from 'typeorm'
 import {
   IsArray,
   IsBoolean,
@@ -59,6 +59,7 @@ import { exemptionSettingError } from '../payroll/financial-exemptions'
 import { companyProfileConfigError, COMPANY_PROFILE_FIELD_NAMES } from './company-profile'
 import { assertDefinitionBranchUnchanged, assertDefinitionWritable, definitionBranchForCreate, definitionBranchWhere, definitionInBranch } from '../common/definition-branch'
 import { AUDIENCE_POSITION_KEYS, AUDIENCE_WHERE_MODES, AUDIENCE_WHO_MODES } from '../requests/request-audience'
+import { CATEGORY_CHAIN_KEY_PREFIX, REQUEST_CATEGORY_LABELS, categoryChainMap, isCategoryChainKey } from '../requests/request-category-chains'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 
@@ -667,6 +668,8 @@ export class SettingsController {
   @Patch('config')
   async upsertConfig(@Body() dto: UpsertConfigDto, @CurrentUser() user: JwtPayload) {
     assertCompanyWideWrite(user)
+    // سلسلة الفئة ليها مسارها: تغييرها بينقل الأنواع الماشية عليها في نفس المعاملة — كتابة القيمة هنا كانت هتسيبهم على القديمة
+    if (isCategoryChainKey(dto.key)) throw new BadRequestException('سلسلة الفئة بتتغيّر من «بانِي الطلبات» — مش من هنا')
     // مفاتيح جديدة غير مسموحة إلا من الكود — نعدّل الموجود فقط
     const row = await this.config.findOne({ where: { key: dto.key } })
     if (!row) throw new NotFoundException(`المفتاح ${dto.key} غير معروف`)
@@ -1051,6 +1054,16 @@ export class SettingsController {
           throw new BadRequestException(
             `هذه الدورة الأساسية لنوع «${linked.nameAr}» وتسري على كل الفروع — ` +
               `لتخصيص فرع أنشئ نسخة بنفس الكود (${chain.code}) لهذا الفرع`
+          )
+        }
+        // سلسلة فئة (حتى لو مفيش نوع ماشي عليها لسه): عامة بطبيعتها — الفرع ياخد نسخة بنفس الكود
+        const categories = [...categoryChainMap(await this.config.find({ where: { key: Like(`${CATEGORY_CHAIN_KEY_PREFIX}%`) } }))]
+          .filter(([, chainId]) => chainId === chain.id)
+          .map(([category]) => REQUEST_CATEGORY_LABELS[category])
+        if (categories.length) {
+          throw new BadRequestException(
+            `دي سلسلة فئة «${categories.join('» و«')}» وبتسري على كل الفروع — ` +
+              `لتخصيص فرع اعمل نسخة بنفس الكود (${chain.code}) لهذا الفرع`
           )
         }
       }
