@@ -33,7 +33,8 @@ export default function UpcomingEvents() {
       const missing: string[] = []
       if (calendarResult.status === 'fulfilled') {
         for (const calendar of calendarResult.value) {
-          for (const holiday of calendar.holidays) rows.push({ id: `holiday-${holiday.id}`, title: holiday.name, date: holiday.date, href: '/calendar' })
+          // العطلة المخصصة («تسري على» — ترحيل 070) بوصف مين تخصه
+          for (const holiday of calendar.holidays) rows.push({ id: `holiday-${holiday.id}`, title: holiday.targeted && holiday.audienceText ? `${holiday.name} — ${holiday.audienceText}` : holiday.name, date: holiday.date, href: '/calendar' })
           for (const leave of calendar.leaves) rows.push({ id: `leave-${leave.id}`, title: `إجازة ${leave.employeeName ?? `موظف #${leave.employeeId}`}`, date: leave.fromDate, href: '/leaves/calendar' })
         }
       } else missing.push('التقويم')

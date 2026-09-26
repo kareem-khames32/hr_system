@@ -11,6 +11,8 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { AttendanceRuleSourceType, AttendanceRuleVersion } from './attendance-rule.entities'
 import { assertAttendanceRulePeriodOpen, attendanceRuleDate, lockAttendanceRuleMutation } from './attendance-rule-history'
 import { ScheduleExceptionRule } from './attendance.entities'
+import { normalizeHolidayAudience, parseHolidayAudienceColumn } from './holiday-audience'
+import type { HolidayAudience } from './holiday-audience'
 import { normalizeWeekendDays, weekendDaysError } from './weekend-days'
 
 export type CalendarScope = 'GLOBAL' | 'BRANCH' | 'EMPLOYEE'
@@ -22,7 +24,8 @@ export class CalendarChangeDto {
   @Matches(/^[a-f0-9]{64}$/) expectedCurrentSourceHash: string
 }
 export interface CalendarException { id: number; name: string; weekday: string; occurrence: string; effect: string; isActive: boolean }
-export interface CalendarHoliday { id: number; name: string; date: string; endDate: string | null; country: string | null }
+// audience موجود للعطلة المخصصة بس (ترحيل 070) — العطلة اللي للكل مالهاش المفتاح خالص (نفس شكل النسخ القديمة)
+export interface CalendarHoliday { id: number; name: string; date: string; endDate: string | null; country: string | null; audience?: HolidayAudience }
 export interface GlobalCalendarSnapshot { weekendDays: string | null; holidays: CalendarHoliday[]; exceptions: CalendarException[] }
 export interface BranchCalendarSnapshot { id: number; country: string | null; weekendDays: string | null; exceptions: CalendarException[] }
 export interface EmployeeOrgCalendarSnapshot { branchId: number | null }
@@ -87,10 +90,14 @@ export function normalizeCalendarSnapshot(scope: CalendarScope, sourceId: number
     return { id: sourceId, country: country(data.country), weekendDays, exceptions }
   }
   const holidays = collection(data.holidays, row => {
-    exact(row, ['id', 'name', 'date', 'endDate', 'country'])
+    // «تسري على» (ترحيل 070): المفتاح بيتحط للعطلة المخصصة بس. العطلة اللي للكل (NULL أو مفتاح مش موجود) بتطلع بالمفاتيح
+    // الخمسة القديمة بالحرف، فبصمة كل نسخة قديمة والقيم الحالية لتقويم مافيهوش تخصيص ماتتغيرش (لا انحراف بعد الترحيل)
+    const targeted = !!row && typeof row === 'object' && !Array.isArray(row) && Object.prototype.hasOwnProperty.call(row, 'audience')
+    exact(row, targeted ? ['id', 'name', 'date', 'endDate', 'country', 'audience'] : ['id', 'name', 'date', 'endDate', 'country'])
     const date = attendanceRuleDate(row.date), endDate = row.endDate === null ? null : attendanceRuleDate(row.endDate)
     if (endDate && endDate < date) fail('CALENDAR_SNAPSHOT_INVALID', 'مدى العطلة غير صالح')
-    return { id: positive(row.id), name: label(row.name), date, endDate, country: country(row.country) }
+    const audience = targeted ? normalizeHolidayAudience(row.audience, message => fail('CALENDAR_SNAPSHOT_INVALID', message)) : null
+    return { id: positive(row.id), name: label(row.name), date, endDate, country: country(row.country), ...(audience ? { audience } : {}) }
   })
   return { weekendDays, holidays, exceptions }
 }
@@ -126,8 +133,12 @@ async function currentCalendar(em: EntityManager, scope: CalendarScope, id: numb
     return { id, country: branch.country?.trim().toUpperCase() || null, weekendDays: branch.weekendDays ?? null, exceptions }
   }
   const config = await em.findOneBy(RequestsConfig, { key: 'attendance.weekend_days' })
-  const holidays = (await em.find(PublicHoliday, { order: { id: 'ASC' }, take: LIMIT + 1 })).map(row => ({ id: row.id, name: row.name,
-    date: row.date, endDate: row.endDate ?? null, country: row.country?.trim().toUpperCase() || null }))
+  const holidays = (await em.find(PublicHoliday, { order: { id: 'ASC' }, take: LIMIT + 1 })).map(row => {
+    // تخصيص تالف في العمود مايتقراش «للكل» — المصدر كله بيقف لحد ما يتراجع
+    const audience = parseHolidayAudienceColumn(row.audience ?? null, message => fail('CALENDAR_SOURCE_INVALID', message))
+    return { id: row.id, name: row.name, date: row.date, endDate: row.endDate ?? null, country: row.country?.trim().toUpperCase() || null,
+      ...(audience ? { audience } : {}) }
+  })
   return { weekendDays: config?.value ?? null, holidays, exceptions }
 }
 export async function readCalendarSource(em: EntityManager, scope: CalendarScope, sourceId: number): Promise<CalendarSourceRead> {

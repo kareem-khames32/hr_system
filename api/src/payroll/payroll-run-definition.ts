@@ -171,11 +171,18 @@ function changeLogId(text: unknown): { ok: boolean; value: number | null } {
   return Number.isSafeInteger(value) && value > 0 && value <= 2_147_483_647 ? { ok: true, value } : { ok: false, value: null }
 }
 
-/** قراءة فقط: نسخ فرع الموظف المؤرخة (EMPLOYEE_ORG) وحركات النقل والهيكل. */
-export async function loadPayrollOrgHistory(em: EntityManager, today: string): Promise<PayrollOrgHistory> {
+/**
+ * قراءة فقط: نسخ فرع الموظف المؤرخة (EMPLOYEE_ORG) وحركات النقل والهيكل.
+ * employeeId: سجل موظف واحد بس (تقويم العطلة المخصصة لأقسام أو فرق بيسأل عن قسم موظف في يوم) — نفس الصفوف بفلتر الموظف،
+ * والهيكل (الفرق والأقسام) كامل زي ما هو. من غيره القراءة زي ما كانت بالحرف.
+ */
+export async function loadPayrollOrgHistory(em: EntityManager, today: string, employeeId?: number): Promise<PayrollOrgHistory> {
+  if (employeeId !== undefined && !(Number.isSafeInteger(employeeId) && employeeId > 0 && employeeId <= 2_147_483_647)) throw new Error('Invalid employee for organization history')
+  const filter = (column: string) => employeeId === undefined ? '' : ` AND [${column}] = @0`
+  const params = employeeId === undefined ? undefined : [employeeId]
   const history: PayrollOrgHistory = { today, versions: new Map(), transfers: new Map(), teamDepartment: new Map(), departmentBranch: new Map(), departmentParent: new Map() }
   const versionRows: Array<Record<string, any>> = await em.query(`SELECT [sourceId], [version], CONVERT(varchar(10), [effectiveFrom], 23) AS [effectiveFrom],
-    [legacyBaseline], [snapshot] FROM [attendance_rule_versions] WHERE [sourceType] = 'EMPLOYEE_ORG'`)
+    [legacyBaseline], [snapshot] FROM [attendance_rule_versions] WHERE [sourceType] = 'EMPLOYEE_ORG'${filter('sourceId')}`, params)
   for (const row of versionRows) {
     let branchId: number | null = null, valid = true
     try {
@@ -192,7 +199,7 @@ export async function loadPayrollOrgHistory(em: EntityManager, today: string): P
   // executedAt يكتبه التطبيق بالتوقيت المحلي (useUTC=false)، فتاريخه المحلي هو نص العمود.
   const transfers: Array<Record<string, any>> = await em.query(`SELECT [id], [employeeId], [fromTeamId], [toTeamId], [requestId],
     CONVERT(varchar(10), [effectiveDate], 23) AS [effectiveDate], CONVERT(varchar(10), [executedAt], 23) AS [executedDate], [status]
-    FROM [transfers] WHERE [status] IN ('EXECUTED', 'SCHEDULED')`)
+    FROM [transfers] WHERE [status] IN ('EXECUTED', 'SCHEDULED')${filter('employeeId')}`, params)
   for (const row of transfers) {
     const list = history.transfers.get(Number(row.employeeId)) ?? []
     list.push({ id: Number(row.id), employeeId: Number(row.employeeId), fromTeamId: row.fromTeamId == null ? null : Number(row.fromTeamId),
@@ -212,7 +219,7 @@ export async function loadPayrollOrgHistory(em: EntityManager, today: string): P
   const changes: Array<Record<string, any>> = await em.query(`SELECT [id], [employeeId], [fieldName], [requestId],
     CAST([oldValue] AS nvarchar(200)) AS [oldValue], CAST([newValue] AS nvarchar(200)) AS [newValue],
     CONVERT(varchar(19), DATEADD(minute, DATEDIFF(minute, GETDATE(), GETUTCDATE()), [changedAt]), 126) AS [changedAtUtc]
-    FROM [employee_status_history] WHERE [fieldName] IN (N'departmentId', N'teamId')`)
+    FROM [employee_status_history] WHERE [fieldName] IN (N'departmentId', N'teamId')${filter('employeeId')}`, params)
   for (const row of changes) {
     const oldValue = changeLogId(row.oldValue), newValue = changeLogId(row.newValue)
     const time = Date.parse(`${row.changedAtUtc}Z`)

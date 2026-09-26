@@ -14,9 +14,12 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength } from 'class-validator'
 import { Between, In, IsNull, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchIdIn, branchScopeOf, CurrentUser, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
+import { branchIdIn, branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
 import { AttendanceDay } from '../attendance/attendance.entities'
 import { AttendanceService } from '../attendance/attendance.service'
+import { currentHolidayAudienceMember, describeHolidayAudience, holidayAudienceMatches, holidayAudienceNames,
+  parseHolidayAudienceColumn } from '../attendance/holiday-audience'
+import type { HolidayAudience } from '../attendance/holiday-audience'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { RequestApproval } from '../requests/entities/request-approval.entity'
@@ -112,9 +115,21 @@ export class PortalController {
     const allHolidays = (await this.holidays.find({ order: { date: 'ASC' } })).filter(
       (h) => !country || !h.country || h.country.trim().toUpperCase() === country
     )
+    // «تسري على» (ترحيل 070): العطلة المخصصة بتظهر لمين تخصه (بمكانه الحالي — عرض بس، حساب الأيام من التقويم المؤرخ)،
+    // واللي معاه «تقويم النطاق» بيشوف كمان المخصصة لفروع نطاقه بوصف «تسري على» (الفرع/القسم/الفريق بالاسم والموظفين
+    // بالعدد بس). العمود الخام بأرقام الموظفين مابيطلعش
+    const viewAll = userHasPerm(user, 'calendar.view_all')
+    const member = await currentHolidayAudienceMember(this.holidays.manager, user.employeeId)
+    const names = await holidayAudienceNames(this.holidays.manager)
     const monthHolidays = allHolidays.filter(
       (h) => h.date <= monthEnd && (h.endDate || h.date) >= monthStart && h.date <= to && (h.endDate || h.date) >= from
-    )
+    ).flatMap((h) => {
+      let audience: HolidayAudience | null
+      try { audience = parseHolidayAudienceColumn(h.audience ?? null, (message) => { throw new Error(message) }) } catch { return [] }
+      if (audience && !holidayAudienceMatches(audience, member) && !(viewAll && inBranchScope(scope, audience.branchId))) return []
+      return [{ id: h.id, name: h.name, date: h.date, endDate: h.endDate ?? null, country: h.country ?? null, targeted: !!audience,
+        audienceText: describeHolidayAudience(audience, names) }]
+    })
     const allLeaves = await this.leaves.find({
       where:
         scope !== null

@@ -14,14 +14,31 @@ import {
 } from 'lucide-react'
 import {
   can,
+  fetchBranches,
   fetchCatalog,
   fetchConfig,
+  fetchDepartments,
+  fetchEmployees,
+  fetchTeams,
   createCatalogItem,
   updateCatalogItem,
   deleteCatalogItem,
+  type ApiBranch,
+  type ApiDepartment,
+  type ApiEmployee,
+  type ApiTeam,
 } from '@/lib/api'
 import { buildCalendarChange, calendarScopeWritable, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
 import { CalendarChangeFields, CalendarContextSummary, CalendarMutationDialog, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
+import { OrgTargetPicker, type OrgTarget } from '@/components/OrgTargetPicker'
+import {
+  describeHolidayAudience,
+  holidayAudienceToTarget,
+  holidayTargetIncomplete,
+  holidayTargetToAudience,
+  isHolidayAudience,
+  type ApiHolidayAudience,
+} from '@/lib/holiday-audience'
 
 interface Holiday {
   id: number
@@ -29,7 +46,18 @@ interface Holiday {
   date: string
   endDate?: string | null
   country?: string | null
+  // «تسري على» (ترحيل 070): null = للكل؛ audienceText وصف جاهز من الخادم بالأسماء
+  audience?: ApiHolidayAudience | null
+  audienceText?: string
+  audienceInvalid?: boolean
 }
+
+// «تسري على»: الشركة كلها افتراضيًا (نفس سلوك كل العطلات القديمة)
+const EVERYONE: OrgTarget = { level: 'company', branchId: null, departmentIds: [], teamIds: [], employeeIds: [] }
+const audienceOf = (h: Holiday): ApiHolidayAudience | null => (isHolidayAudience(h.audience) ? h.audience : null)
+// «للكل» / «فرع المعادي» / «فرع المعادي — قسم المبيعات» / «3 موظفين» — وصف الخادم بالأسماء، وإلا بالعدد
+const audienceLabel = (h: Holiday): string =>
+  h.audienceInvalid ? 'تخصيص غير مقروء — راجع العطلة' : h.audienceText || describeHolidayAudience(audienceOf(h))
 
 const daysOf = (h: Holiday): number => {
   if (!h.endDate) return 1
@@ -86,6 +114,10 @@ export default function HolidaysPage() {
   const [formDate, setFormDate] = useState('')
   const [formEndDate, setFormEndDate] = useState('')
   const [formCountry, setFormCountry] = useState('')
+  // «تسري على» — نفس منتقي الاستهداف الموحّد (الشركة كلها ← فرع ← أقسامه/فرقه/موظفينه)
+  const [formTarget, setFormTarget] = useState<OrgTarget>(EVERYONE)
+  const [org, setOrg] = useState<{ branches: ApiBranch[]; departments: ApiDepartment[]; teams: ApiTeam[]; employees: ApiEmployee[] } | null>(null)
+  const [orgError, setOrgError] = useState('')
   const [saving, setSaving] = useState(false)
   const [saveError, setSaveError] = useState('')
   const [deletingId, setDeletingId] = useState<number | null>(null)
@@ -98,7 +130,19 @@ export default function HolidaysPage() {
     const row = (calendar.context.current.holidays as Holiday[]).find(item => item.id === editing.id)
     if (!row) { setSaveError('العطلة غير موجودة في نسخة التقويم الحالية. أغلق النموذج وأعد تحميل القائمة.'); return }
     setFormName(row.name); setFormDate(row.date); setFormEndDate(row.endDate ?? ''); setFormCountry(row.country ?? '')
+    // «تسري على» من نسخة التقويم الحالية نفسها (اللي الحفظ هيتقارن بيها)
+    setFormTarget(holidayAudienceToTarget(audienceOf(row)))
   }, [calendar.context, editing])
+  // الفروع والأقسام والفرق والموظفين للمنتقي — مرة واحدة أول ما النموذج يتفتح
+  useEffect(() => {
+    if (!showModal || org) return
+    let alive = true
+    setOrgError('')
+    Promise.all([fetchBranches(), fetchDepartments(), fetchTeams().catch(() => [] as ApiTeam[]), fetchEmployees()])
+      .then(([branches, departments, teams, employees]) => { if (alive) setOrg({ branches, departments, teams, employees }) })
+      .catch((e) => { if (alive) setOrgError(e instanceof Error ? e.message : 'تعذر تحميل الفروع والموظفين') })
+    return () => { alive = false }
+  }, [showModal, org])
   // الحذف لمن يدير الإعدادات فقط (الباك يفرضها أيضاً)
   const [canManage, setCanManage] = useState(false)
   useEffect(() => setCanManage(can('settings.manage') && calendarScopeWritable('GLOBAL', 0)), [])
@@ -120,6 +164,7 @@ export default function HolidaysPage() {
     setFormDate('')
     setFormEndDate('')
     setFormCountry('')
+    setFormTarget(EVERYONE)
     setSaveError('')
     try {
       const config = await fetchConfig()
@@ -146,6 +191,7 @@ export default function HolidaysPage() {
     setFormDate(h.date)
     setFormEndDate(h.endDate ?? '')
     setFormCountry(h.country ?? '')
+    setFormTarget(holidayAudienceToTarget(audienceOf(h)))
     setSaveError('')
     setShowModal(true)
   }
@@ -158,6 +204,10 @@ export default function HolidaysPage() {
       setSaveError('تاريخ النهاية لا يسبق تاريخ البداية')
       return
     }
+    if (holidayTargetIncomplete(formTarget)) {
+      setSaveError('كمّل اختيار «تسري على»: الفرع، والأقسام أو الفرق أو الموظفين')
+      return
+    }
     let calendarChange: PayrollCalendarChange
     try { calendarChange = buildCalendarChange(calendar.context, calendar.evidence) }
     catch (cause) { setSaveError((cause as Error).message); return }
@@ -168,6 +218,8 @@ export default function HolidaysPage() {
       endDate: formEndDate || null,
       // الإضافة تبدأ ببلد النظام والتعديل بقيمة العطلة المحمّلة؛ فارغ = كل الدول.
       country: formCountry.trim(),
+      // «تسري على»: null = للكل
+      audience: holidayTargetToAudience(formTarget),
       calendarChange,
     }
     try {
@@ -310,13 +362,15 @@ export default function HolidaysPage() {
                       {monthHolidays.map((h) => (
                         <div
                           key={h.id}
-                          className="p-2 rounded-lg text-xs bg-primary-100 text-primary-700"
+                          title={`تسري على: ${audienceLabel(h)}`}
+                          className={`p-2 rounded-lg text-xs ${audienceOf(h) || h.audienceInvalid ? 'bg-amber-100 text-amber-800' : 'bg-primary-100 text-primary-700'}`}
                         >
                           <div className="flex items-center gap-1">
                             <Star size={12} />
                             <span className="font-medium">{h.name}</span>
                           </div>
                           <span className="text-xs opacity-75">{rangeLabel(h)}</span>
+                          {(audienceOf(h) || h.audienceInvalid) && <span className="block text-xs opacity-75">{audienceLabel(h)}</span>}
                         </div>
                       ))}
                     </div>
@@ -347,6 +401,9 @@ export default function HolidaysPage() {
                     <p className="text-sm text-gray-500">
                       {holiday.date}
                       {holiday.endDate && ` - ${holiday.endDate}`}
+                    </p>
+                    <p className={`text-xs mt-1 ${audienceOf(holiday) || holiday.audienceInvalid ? 'text-amber-700' : 'text-gray-500'}`} data-holiday-audience>
+                      تسري على: {audienceLabel(holiday)}
                     </p>
                   </div>
                 </div>
@@ -464,6 +521,30 @@ export default function HolidaysPage() {
                 />
                 <p className="text-xs text-gray-400 mt-1">
                   تسري العطلة على فروع هذه الدولة فقط، وفارغ = كل الدول (الفرع بلا دولة تسري عليه كل العطلات)
+                </p>
+              </div>
+              {/* «تسري على» (طلب المالك 26 سبتمبر): الكل أو فرع أو أقسام أو فرق أو موظفين بالاسم */}
+              <div className="border-t border-gray-100 pt-4" data-holiday-audience-picker>
+                <label className="label">تسري على</label>
+                {orgError && <p role="alert" className="text-sm text-red-600 mb-2">{orgError}</p>}
+                {org === null ? (
+                  !orgError && <p className="text-sm text-gray-500">جارٍ تحميل الفروع والموظفين…</p>
+                ) : (
+                  <OrgTargetPicker
+                    value={formTarget}
+                    onChange={setFormTarget}
+                    branches={org.branches}
+                    departments={org.departments}
+                    teams={org.teams}
+                    employees={org.employees}
+                    disabled={saving}
+                  />
+                )}
+                <p className="text-xs text-gray-500 mt-2">
+                  {formTarget.level === 'company'
+                    ? 'العطلة لكل الموظفين (في دولتها).'
+                    : 'العطلة للمختارين بس. غيرهم اليوم ده عندهم يوم عادي: بيتحسب شغل، واللي مايبصمش يتسجل غياب، والإجازة بتعدّه.'}
+                  {formTarget.level === 'departments' && ' القسم بيشمل أقسامه الفرعية.'}
                 </p>
               </div>
             </fieldset>

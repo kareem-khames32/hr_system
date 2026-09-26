@@ -45,6 +45,9 @@ import { Employee } from '../employees/employee.entity'
 import { employmentWindowsOf } from '../attendance/attendance-employment'
 import { assertWorkScheduleExceptionsFit, normalizeWorkScheduleExceptions, parseWorkScheduleExceptions } from '../attendance/work-schedule-exceptions'
 import { cycleStartDayOf } from '../attendance/attendance-report-range'
+import { assertHolidayAudienceTargets, currentHolidayAudienceMember, describeHolidayAudience, holidayAudienceColumn, holidayAudienceFromInput,
+  holidayAudienceMatches, holidayAudienceNames, parseHolidayAudienceColumn, sameHolidayAudience } from '../attendance/holiday-audience'
+import type { HolidayAudience, HolidayAudienceNames } from '../attendance/holiday-audience'
 import {
   AssetType,
   BiometricDevice,
@@ -324,7 +327,27 @@ export class CatalogsController {
       }
       return out
     }
+    if (kind === 'holidays') return this.holidayViews(rows as PublicHoliday[], user)
     return rows
+  }
+
+  // «تسري على» (ترحيل 070): التخصيص مقروء (audience) مع وصفه (audienceText). اللي بيدير الإعدادات أو يشوفها بياخد كل
+  // العطلات بتخصيصها كامل. غيره (القائمة مفتوحة لأي حساب) بيشوف اللي للكل واللي تخصه هو بس — من غير أرقام حد تاني:
+  // تخصيص بالاسم ممكن يكشف بيانات حساسة (زي عطلة دينية لموظفين بعينهم)
+  private async holidayViews(rows: PublicHoliday[], user: JwtPayload) {
+    const names = await holidayAudienceNames(this.holidays.manager)
+    const views = rows.map(row => this.holidayView(row, names))
+    if (userHasPerm(user, 'settings.manage') || userHasPerm(user, 'settings.view')) return views
+    const member = await currentHolidayAudienceMember(this.holidays.manager, user.employeeId)
+    return views.filter(view => !view.audienceInvalid && (!view.audience || holidayAudienceMatches(view.audience, member)))
+      .map(({ audience, ...view }) => ({ ...view, targeted: !!audience }))
+  }
+
+  private holidayView(row: PublicHoliday, names: HolidayAudienceNames) {
+    let audience: HolidayAudience | null = null, audienceInvalid = false
+    try { audience = parseHolidayAudienceColumn(row.audience ?? null, message => { throw new Error(message) }) } catch { audienceInvalid = true }
+    return { ...row, audience, audienceText: audienceInvalid ? 'تخصيص غير مقروء — راجع العطلة' : describeHolidayAudience(audience, names),
+      ...(audienceInvalid ? { audienceInvalid } : {}) }
   }
 
   @Perm('settings.manage')
@@ -443,15 +466,27 @@ export class CatalogsController {
         const configured = await em.findOneBy(RequestsConfig, { key: 'system.country' })
         data.country = (configured?.value ?? '').trim().toUpperCase()
       }
+      // «تسري على» (ترحيل 070): مش مبعوتة = زي ما هي (الإضافة = للكل). المبعوتة بتتحقق أرقامها الجديدة (موجودة وتبع فرع
+      // الاختيار ومستواها متسق) وبتتخزن بشكلها القانوني، وبتدخل نسخة التقويم العام المؤرخة مع باقي العطلة
+      if (Object.prototype.hasOwnProperty.call(body, 'audience')) {
+        const audience = holidayAudienceFromInput(body.audience)
+        // القديم اتقرا وتحقق فعلًا في قراءة التقويم الحالي فوق (beginCalendarChange) — التالف كان وقف قبل هنا
+        const previous = old ? parseHolidayAudienceColumn(old.audience ?? null, message => { throw new BadRequestException(message) }) : null
+        if (!old || !sameHolidayAudience(audience, previous)) await assertHolidayAudienceTargets(em, audience, branchScopeOf(user), previous)
+        data.audience = holidayAudienceColumn(audience)
+      }
       this.validate('holidays', { ...old, ...data })
       const saved = await em.save(PublicHoliday, em.create(PublicHoliday, { ...old, ...data }))
       await finishCalendarChange(em, before, body.calendarChange, user.sub)
       return { old, saved }
     })
+    // تغيير المدى أو «تسري على»: القديم بيتعامل كمدى اتشال (يرجع يوم شغل لمين ماعادش مشمول ويتجسد غيابه لو مابصمش)
+    // والجديد بيتعاد حسابه — كل موظف بتقويمه هو (resolveEmployeeCalendarDay)
     const old = result.old ? [result.old] : [], next = result.saved ? [result.saved] : []
     const recompute = await this.recomputeHolidays(next, old)
     const warning = await this.payrollWarning([...old, ...next])
-    return result.saved ? { ...this.withoutSecrets(result.saved), ...warning } : { deleted: true, ...recompute, ...warning }
+    return result.saved ? { ...this.holidayView(result.saved, await holidayAudienceNames(this.holidays.manager)), ...warning }
+      : { deleted: true, ...recompute, ...warning }
   }
 
   // إسناد جدول عمل لموظفين دفعة واحدة (شاشة أيام العمل): employeeIds (فرد أو اختيار

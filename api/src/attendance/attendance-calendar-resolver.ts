@@ -2,8 +2,11 @@ import { BadRequestException, ConflictException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
 import { Employee } from '../employees/employee.entity'
 import { WorkSchedule } from '../assets/assets.entities'
-import { attendanceRuleDate } from './attendance-rule-history'
+import { loadPayrollOrgHistory, payrollOrgAt } from '../payroll/payroll-run-definition'
+import { attendanceRuleDate, attendanceRuleToday } from './attendance-rule-history'
 import { readCalendarSource } from './attendance-calendar-history'
+import { departmentPathOf, holidayAudienceMatches, holidayAudienceNeedsOrg } from './holiday-audience'
+import type { HolidayAudience, HolidayAudienceMember } from './holiday-audience'
 import { parseWorkScheduleExceptions, scheduleExceptionMatches } from './work-schedule-exceptions'
 import type { WorkScheduleException } from './work-schedule-exceptions'
 
@@ -19,7 +22,7 @@ export interface ResolvedCalendarDay {
   versionRefs: CalendarVersionRef[]; legacyFallback: boolean
   issues: Array<{ code: string; message: string }>
 }
-type Holiday = { id: number; name: string; date: string; endDate: string | null; country: string | null }
+type Holiday = { id: number; name: string; date: string; endDate: string | null; country: string | null; audience?: HolidayAudience | null }
 type Exception = { id: number; name: string; weekday: string; occurrence: string; effect: 'WORK' | 'OFF'; isActive: boolean }
 type GlobalCalendar = { weekendDays: string | null; holidays: Holiday[]; exceptions: Exception[] }
 type BranchCalendar = { id: number; country: string | null; weekendDays: string | null; exceptions: Exception[] }
@@ -40,14 +43,21 @@ const idValid = (value: unknown): value is number => typeof value === 'number' &
 const invalid = (message: string): never => { throw new ConflictException({ code: 'CALENDAR_SOURCE_INVALID', message }) }
 const plain = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value)
 
-/** أولوية اليوم واحدة للحضور والإجازات والإضافي؛ الوردية الأسبوعية لا تبطل يوم الراحة.
- *  الترتيب: العطلة الرسمية تكسب دايمًا ← أيام راحة الجدول/الفرع/الشركة ← قواعد الشركة ← قواعد الفرع ← استثناءات جدول الموظف. */
-export function evaluateCalendarDay(date: string, country: string | null, weekendDays: string[], holidays: Holiday[], globalRules: Exception[], branchRules: Exception[],
-  scheduleRules: WorkScheduleException[] = []): CalendarDayKind {
-  attendanceRuleDate(date)
+/** العطلة واقعة على اليوم ده في دولة الفرع؟ (فرع بلا دولة = كل العطلات، وعطلة بلا دولة = كل الفروع) — من غير «تسري على». */
+function holidayCoversDay(holiday: Holiday, date: string, country: string | null) {
   const normalizedCountry = String(country ?? '').trim().toUpperCase()
-  if (holidays.some(holiday => (!normalizedCountry || !String(holiday.country ?? '').trim() || String(holiday.country).trim().toUpperCase() === normalizedCountry)
-    && holiday.date <= date && (holiday.endDate ?? holiday.date) >= date)) return 'HOLIDAY'
+  return (!normalizedCountry || !String(holiday.country ?? '').trim() || String(holiday.country).trim().toUpperCase() === normalizedCountry)
+    && holiday.date <= date && (holiday.endDate ?? holiday.date) >= date
+}
+
+/** أولوية اليوم واحدة للحضور والإجازات والإضافي؛ الوردية الأسبوعية لا تبطل يوم الراحة.
+ *  الترتيب: العطلة الرسمية تكسب دايمًا ← أيام راحة الجدول/الفرع/الشركة ← قواعد الشركة ← قواعد الفرع ← استثناءات جدول الموظف.
+ *  العطلة المخصصة («تسري على» — ترحيل 070) بتكسب لمين تخصه بس (member)؛ لغيره اليوم عادي بقواعده. من غير member
+ *  (التقويم العام) العطلات اللي للكل بس هي اللي بتتحسب. */
+export function evaluateCalendarDay(date: string, country: string | null, weekendDays: string[], holidays: Holiday[], globalRules: Exception[], branchRules: Exception[],
+  scheduleRules: WorkScheduleException[] = [], member: HolidayAudienceMember | null = null): CalendarDayKind {
+  attendanceRuleDate(date)
+  if (holidays.some(holiday => holidayCoversDay(holiday, date, country) && holidayAudienceMatches(holiday.audience, member))) return 'HOLIDAY'
   const parsed = new Date(`${date}T12:00:00Z`), weekday = days[parsed.getUTCDay()]
   const occurrence = Math.floor((parsed.getUTCDate() - 1) / 7) + 1
   const after = new Date(parsed); after.setUTCDate(parsed.getUTCDate() + 7)
@@ -160,14 +170,19 @@ async function readAttendanceCalendarVersions(em: EntityManager, sourceType: 'EM
 }
 
 function applyDay(out: ResolvedCalendarDay, global: GlobalCalendar, branch: BranchCalendar, override?: string[], globalLegacy = false,
-  scheduleRules: WorkScheduleException[] = []) {
+  scheduleRules: WorkScheduleException[] = [], member: HolidayAudienceMember | null = null) {
   const base = override ?? (branch.weekendDays ? weekend(branch.weekendDays) : global.weekendDays == null && globalLegacy ? ['FRI', 'SAT'] : weekend(global.weekendDays))
   out.weekendDays = base
-  out.dayKind = evaluateCalendarDay(out.date, branch.country, base, global.holidays, global.exceptions, branch.exceptions, scheduleRules)
+  out.dayKind = evaluateCalendarDay(out.date, branch.country, base, global.holidays, global.exceptions, branch.exceptions, scheduleRules, member)
   out.working = out.dayKind === 'WORKING'
   return out
 }
 
+/**
+ * تقويم فرع كامل (مش موظف بعينه): أيام العمل للفرع، وفحص أمر «دوام يوم عطلة» للفرع، وحساب من غير موظف.
+ * العطلة اللي للكل أو لـ«الفرع كله» ده بس اللي بتتحسب هنا — عطلة أقسام أو فرق أو موظفين بالاسم مابتخليش الفرع كله إجازة
+ * (أي حساب ليه موظف معروف بياخد تقويم الموظف نفسه: resolveEmployeeCalendarDay).
+ */
 export async function resolveBranchCalendarDay(em: EntityManager, branchId: number, date: string, options: Options & { weekendOverride?: string } = {}): Promise<ResolvedCalendarDay> {
   attendanceRuleDate(date)
   if (!idValid(branchId)) throw new BadRequestException('فرع التقويم مطلوب')
@@ -175,10 +190,12 @@ export async function resolveBranchCalendarDay(em: EntityManager, branchId: numb
   try {
     const context = await branchContext(em, branchId, date, strict, out, options.cache)
     if (!context) return out
-    return applyDay(out, context.global, context.branch, options.weekendOverride === undefined ? undefined : weekend(options.weekendOverride, true), context.globalLegacy)
+    return applyDay(out, context.global, context.branch, options.weekendOverride === undefined ? undefined : weekend(options.weekendOverride, true), context.globalLegacy,
+      [], { employeeId: null, branchId, departmentPath: [], teamId: null })
   } catch (error) { return failed(out, error, strict) }
 }
 
+/** التقويم العام من غير فرع ولا موظف: العطلات اللي للكل بس. */
 export async function resolveGlobalCalendarDay(em: EntityManager, date: string, options: Options = {}): Promise<ResolvedCalendarDay> {
   attendanceRuleDate(date)
   const strict = options.strict === true, out = result(date)
@@ -189,6 +206,25 @@ export async function resolveGlobalCalendarDay(em: EntityManager, date: string, 
     if (!global) return out
     return applyDay(out, global, { id: 0, country: null, weekendDays: null, exceptions: [] }, undefined, selected.ref.legacyBaseline)
   } catch (error) { return failed(out, error, strict) }
+}
+
+/**
+ * مين الموظف ده في يوم عليه عطلة مخصصة («تسري على» — ترحيل 070). قرار المصدر لكل قيمة في أي تاريخ (حتى الماضي):
+ * - الفرع = فرع نسخة EMPLOYEE_ORG المؤرخة لليوم نفسه — نفس الفرع اللي التقويم بياخد منه دولته وأيام راحته (مش فرع الملف
+ *   الحالي)، فموظف اتنقل بعد العطلة بياخد عطلة فرعه القديم في أيامها.
+ * - القسم والفريق = مكانه في اليوم ده من سجل التنظيم (payrollOrgAt — نفس ما عضوية المسير بتتحسب بيه): الملف الحالي مع التراجع
+ *   عن كل نقل اتنفذ بسريان بعد اليوم وكل تعديل قسم/فريق اتسجل بعد اليوم. مفيش نسخة مؤرخة للقسم في التقويم، والملف الحالي لوحده
+ *   كان هيقلب عطلة قديمة لموظف اتنقل من القسم قبل حساب مسير فترتها. بيتقري بس لو فيه عطلة أقسام أو فرق واقعة على اليوم.
+ *   شجرة الأقسام (القسم الفرعي تبع أبوه) من الهيكل الحالي، زي تعريف المسير.
+ * - الموظف بالاسم = رقمه مهما اتنقل.
+ */
+async function audienceMember(em: EntityManager, employee: Employee, branchId: number, date: string, holidays: Holiday[], country: string | null,
+  cache?: CalendarResolverCache): Promise<HolidayAudienceMember> {
+  const member: HolidayAudienceMember = { employeeId: employee.id, branchId, departmentPath: [], teamId: null }
+  if (!holidays.some(holiday => holidayAudienceNeedsOrg(holiday.audience) && holidayCoversDay(holiday, date, country))) return member
+  const history = await memo(em, cache, `ORG_HISTORY:${employee.id}`, () => loadPayrollOrgHistory(em, attendanceRuleToday(), employee.id))
+  const at = payrollOrgAt(history, employee, date)
+  return { ...member, teamId: at.teamId, departmentPath: departmentPathOf(at.departmentId, id => history.departmentParent.get(id)) }
 }
 
 export async function resolveEmployeeCalendarDay(em: EntityManager, employeeId: number, date: string, options: Options = {}): Promise<ResolvedCalendarDay> {
@@ -206,6 +242,7 @@ export async function resolveEmployeeCalendarDay(em: EntityManager, employeeId: 
     if (!context) return out
     const override = await employeeWeekend(em, employee, date, strict, out, options.cache)
     if (!override.known) return out
-    return applyDay(out, context.global, context.branch, override.override, context.globalLegacy, override.exceptions)
+    const member = await audienceMember(em, employee, org.branchId, date, context.global.holidays, context.branch.country, options.cache)
+    return applyDay(out, context.global, context.branch, override.override, context.globalLegacy, override.exceptions, member)
   } catch (error) { return failed(out, error, strict) }
 }

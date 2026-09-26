@@ -364,7 +364,9 @@ export class AttendanceService {
   }
 
   // أيام العمل الفعلية في مدى — الويك إند والعطلات الرسمية مستثناة
-  // (للإجازات: المخصوم من الرصيد = أيام العمل فقط)
+  // (للإجازات: المخصوم من الرصيد = أيام العمل فقط — وده بيتحسب بتقويم الموظف نفسه: workingDaysForEmployee)
+  // دي والتلاتة اللي بعدها بتقويم فرع كامل: العطلة المخصصة لأقسام أو فرق أو موظفين بالاسم (ترحيل 070) مابتتحسبش هنا —
+  // بس اللي للكل أو لـ«الفرع كله». أي حساب ليه موظف معروف بيروح لـcalendarDay/workingDaysForEmployee.
   async workingDaysForBranchOrDefault(branchId: number | null, fromDate: string, toDate: string) {
     if (branchId) return this.workingDaysBetween(branchId, fromDate, toDate)
     const first = await this.days.manager.query(`SELECT TOP 1 id FROM branches WHERE isActive = 1 ORDER BY id`)
@@ -402,8 +404,8 @@ export class AttendanceService {
     return { total, working, skipped }
   }
 
-  // §2.4: يوم عطلة؟ (ويك إند من الإعدادات/الفرع + العطلات الرسمية + قواعد الاستثناء)
-  // ممنوع يتحسب تأخير أو غياب فيه حتى لو فيه بصمة
+  // §2.4: يوم عطلة للفرع كله؟ (ويك إند من الإعدادات/الفرع + العطلات الرسمية اللي للكل أو للفرع كله + قواعد الاستثناء)
+  // ممنوع يتحسب تأخير أو غياب فيه حتى لو فيه بصمة. يوم موظف بعينه: calendarDay (بياخد العطلة المخصصة ليه)
   async isNonWorkingDay(
     date: string,
     branchId: number,
@@ -414,7 +416,8 @@ export class AttendanceService {
   }
 
   // تصنيف اليوم لأغراض مُضاعِف الأوفرتايم: يوم عمل / عطلة أسبوعية / عطلة رسمية
-  // (العطلة الرسمية تُميَّز عن الويك إند لأن مُضاعِفها قد يختلف)
+  // (العطلة الرسمية تُميَّز عن الويك إند لأن مُضاعِفها قد يختلف) — للفرع كله؛ إضافي الموظف نفسه بياخد
+  // calendarDay(employeeId).dayKind (overtimeEvidence/computeDay) عشان العطلة المخصصة ليه تتحسب «رسمية»
   async dayKind(
     date: string,
     branchId: number,
