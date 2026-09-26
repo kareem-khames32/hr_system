@@ -439,10 +439,13 @@ test('HA-08: an employee who moved to another department keeps his dated departm
 test('HA-09: the payroll live schedule evidence of a branch-A employee never carries a holiday targeted to branch B — name, date or branch (CR7-B01); the branch-B employee still sees his own', async () => {
   const marker = 'عطلة خاصة بفرع الشروق — HA09'
   const date = '2026-09-21'
-  await addHoliday(marker, date, { level: 'employees', branchId: B.b.id, employeeIds: [E.v.id] })
+  const foreign = await addHoliday(marker, date, { level: 'employees', branchId: B.b.id, employeeIds: [E.v.id] })
   const { readPayrollLiveSchedule } = require('../src/payroll/payroll-live-schedule-provider')
   const read = employeeId => ds.transaction(em => readPayrollLiveSchedule(em, employeeId, date, date))
   const ofA = JSON.stringify(await read(E.x.id)), ofB = JSON.stringify(await read(E.v.id))
   assert.ok(!ofA.includes(marker), 'دليل موظف الفرع (أ) مافيهوش عطلة الفرع (ب)')
+  // ولا حتى مرجعها برقمها في sourceRefs (مراجعة Codex الجولة 8 — CR8-B01: كان بيكشف أيامها بقراءة يوم يوم)
+  assert.ok(!ofA.includes(`public_holidays:${foreign.id}`), 'مرجع العطلة الأجنبية مش موجود')
+  assert.ok(ofB.includes(`public_holidays:${foreign.id}`), 'وموجود في دليل صاحبها')
   assert.ok(ofB.includes(marker), 'وموظف الفرع (ب) بيشوف عطلته')
 })

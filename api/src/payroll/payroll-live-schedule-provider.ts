@@ -165,7 +165,6 @@ export async function readPayrollLiveSchedule(em: EntityManager, employeeId: num
       report('SCHEDULE_HOLIDAY_SCOPE_INVALID', 'تضمنت نتيجة قراءة العطلات سجلًا خارج دولة الفرع الحالي أو غير محدد النطاق؛ حجبت تفاصيله', 'public_holidays')
       return []
     }
-    const ref = validId(row.id) ? `public_holidays:${row.id}` : 'public_holidays'; sourceRefs.push(ref)
     // «تسري على» (ترحيل 070): وصف حالي بس (مستوى التخصيص وفرعه، من غير قائمة الأرقام — دليل كل موظف مايشيلش أسماء غيره)؛
     // حكم كل يوم للموظف ده نفسه من التقويم المؤرخ تحت (resolveEmployeeCalendarDay → dayKind)
     let audience: Pick<HolidayAudience, 'level' | 'branchId'> | null = null, audienceValid = true
@@ -173,13 +172,16 @@ export async function readPayrollLiveSchedule(em: EntityManager, employeeId: num
       const parsed = parseHolidayAudienceColumn(row.audience ?? null, message => { throw new Error(message) })
       audience = parsed ? { level: parsed.level, branchId: parsed.branchId } : null
     } catch { audienceValid = false }
-    // العطلة المخصصة لفرع تاني مالهاش دعوة بالموظف ده ولا بقارئ دليله (مراجعة Codex الجولة 7 — CR7-B01): مابترجعش خالص،
-    // لا اسمها ولا تاريخها ولا فرعها. والتخصيص غير المقروء بيتسجل كمشكلة من غير ما يطلع اسم العطلة
+    // العطلة المخصصة لفرع تاني مالهاش دعوة بالموظف ده ولا بقارئ دليله (مراجعة Codex الجولتين 7 و8 — CR7-B01/CR8-B01): مابترجعش
+    // خالص — لا اسمها ولا تاريخها ولا فرعها ولا حتى مرجعها في sourceRefs (مرجع برقمها كان بيكشف أيامها بقراءة يوم يوم).
+    // والتخصيص غير المقروء بيتسجل كمشكلة بمرجع عام من غير رقم العطلة ولا اسمها
     if (!audienceValid) {
       report('SCHEDULE_HOLIDAY_INVALID', 'سجل عطلة رسمية بتخصيص غير مقروء؛ حجبت تفاصيله', 'public_holidays')
       return []
     }
     if (audience && audience.branchId !== employee?.branchId) return []
+    // المرجع بيتسجل بس بعد ما العطلة عدّت فحص الدولة والتخصيص
+    const ref = validId(row.id) ? `public_holidays:${row.id}` : 'public_holidays'; sourceRefs.push(ref)
     if (!validId(row.id) || holidayIds.has(row.id) || !text(row.name, 200) || !validDate(row.date) || (row.endDate != null && (!validDate(row.endDate) || row.endDate < row.date)) || !text(row.country, 5) || row.date > periodEnd || (row.endDate ?? row.date) < periodStart || !audienceValid) report('SCHEDULE_HOLIDAY_INVALID', 'سجل عطلة رسمية مكرر أو خارج الفترة أو غير صالح', ref)
     holidayIds.add(row.id)
     return [{ id: validId(row.id) ? row.id : null, name: text(row.name, 200) ? row.name : null, date: validDate(row.date) ? row.date : null, endDate: validDate(row.endDate) ? row.endDate : null,

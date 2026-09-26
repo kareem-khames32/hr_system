@@ -9,6 +9,7 @@ import { AttendanceService } from './attendance.service'
 // تراكم المسير يومًا بيوم: أمر دوام العطلة بيغيّر أيام الموظفين المشمولين
 import { markPayrollDaysDirty } from '../payroll/payroll-daily-accrual'
 import { HolidayWorkOrder } from './holiday-work.entities'
+import { departmentPathOf, holidayAudienceMatches } from './holiday-audience'
 import { readCalendarSource } from './attendance-calendar-history'
 import type { CalendarHoliday } from './attendance-calendar-history'
 import { createCalendarResolverCache, selectCalendarVersion } from './attendance-calendar-resolver'
@@ -45,7 +46,7 @@ interface ObligationRow { id: number; employeeId: number; sourceRef: string; sta
 
 const INACTIVE_STATUSES = new Set(['terminated', 'archived'])
 // سقف فحص «عطلة مخصصة لمستهدف واحد على الأقل» عند تسجيل أمر دوام — التقويم المؤرخ لكل موظف بذاكرة واحدة
-const TARGETED_HOLIDAY_CHECK_LIMIT = 500
+const TARGETED_HOLIDAY_CHECK_LIMIT = 3000
 const inList = (values: unknown[], offset = 0) => values.map((_, index) => `@${index + offset}`).join(', ')
 const chunks = <T>(rows: T[], size = 500) => Array.from({ length: Math.ceil(rows.length / size) }, (_, index) => rows.slice(index * size, (index + 1) * size))
 const cents = (value: unknown) => Math.round(Number(value ?? 0) * 100)
@@ -355,11 +356,19 @@ export class HolidayWorkService {
     const holidays = ((selected.value as { holidays?: CalendarHoliday[] } | null)?.holidays ?? [])
       .filter(holiday => holiday.audience && holiday.date <= date && (holiday.endDate ?? holiday.date) >= date)
     if (!holidays.length) return false
-    const branches = new Set(holidays.map(holiday => holiday.audience!.branchId))
-    const named = new Set(holidays.flatMap(holiday => holiday.audience!.level === 'employees' ? holiday.audience!.employeeIds : []))
+    const audiences = holidays.map(holiday => holiday.audience!)
+    const branches = new Set(audiences.map(audience => audience.branchId))
+    const named = new Set(audiences.flatMap(audience => audience.level === 'employees' ? audience.employeeIds : []))
+    const parents = new Map((await this.em.query('SELECT [id], [parentId] FROM [departments]') as Array<{ id: number; parentId: number | null }>)
+      .map(row => [Number(row.id), row.parentId == null ? null : Number(row.parentId)] as const))
     const targeted = [...(await this.employeesLite()).values()].filter(emp => !INACTIVE_STATUSES.has(emp.status) && holidayWorkGrantMatches(target, emp))
-    const likely = (emp: EmployeeLite) => named.has(emp.employeeId) || (emp.branchId != null && branches.has(emp.branchId))
-    const ordered = [...targeted.filter(likely), ...targeted.filter(emp => !likely(emp))]
+    // الترتيب بس (الحكم دايمًا من التقويم المؤرخ): المذكور بالاسم ← اللي تنظيمه الحالي جوه التخصيص ← باقي فرع التخصيص (اتنقلوا جواه)
+    // ← الباقي (اتنقلوا من فرع لفرع). مراجعة Codex الجولة 8 (CR8-N01): انتهاء الحد مايبقاش حكم «يوم عادي»
+    const rank = (emp: EmployeeLite) => named.has(emp.employeeId) ? 0
+      : audiences.some(audience => holidayAudienceMatches(audience, { employeeId: emp.employeeId, branchId: emp.branchId, teamId: emp.teamId,
+        departmentPath: departmentPathOf(emp.departmentId, id => parents.get(id)) })) ? 1
+      : emp.branchId != null && branches.has(emp.branchId) ? 2 : 3
+    const ordered = targeted.map(emp => ({ emp, rank: rank(emp) })).sort((a, b) => a.rank - b.rank || a.emp.employeeId - b.emp.employeeId).map(row => row.emp)
     // ذاكرة تقويم واحدة للفحص كله: التقويم العام وتقويم الفرع ونسخ الجداول بتتقري مرة
     const cache = createCalendarResolverCache(this.em)
     for (const emp of ordered.slice(0, TARGETED_HOLIDAY_CHECK_LIMIT)) {
@@ -369,6 +378,11 @@ export class HolidayWorkService {
         // تقويم الموظف مش مثبت لليوم ده: نفس حكم الفرع فوق — ما نرفضش، وحالة اليوم في الحضور هي الحكم وقت الحساب
         return true
       }
+    }
+    // الفحص ماخلصش: مانقولش «يوم عمل عادي» — رسالة صريحة بالحد
+    if (ordered.length > TARGETED_HOLIDAY_CHECK_LIMIT) {
+      throw new BadRequestException(`${date}: فحص «العطلة المخصصة» وقف عند ${TARGETED_HOLIDAY_CHECK_LIMIT} موظف من ${ordered.length} من غير ما يلاقي حد اليوم ده عطلته — ` +
+        'حدد الموظفين بالاسم أو قسم/فريق أصغر في الأمر')
     }
     return false
   }
