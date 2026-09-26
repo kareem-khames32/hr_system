@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
-import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
+import { PAID_SALARY_COMPONENTS } from '../employees/compensation'
 import { payrollEmploymentCoverage } from './payroll-employment'
 import { PAYROLL_LIVE_SOURCE_ROW_LIMIT, payrollLiveSourcePeriod, PayrollLiveSourceIssue, PayrollLiveSourceSection } from './payroll-live-source-contract'
 
@@ -29,7 +29,8 @@ export async function readPayrollLiveEmployment(em: EntityManager, employeeId: n
     CONVERT(varchar(33), [archivedAt], 126) AS [archivedAt], [currency],
     CAST([basicSalary] AS nvarchar(80)) AS [basicSalary], CAST([housingAllowance] AS nvarchar(80)) AS [housingAllowance],
     CAST([transportAllowance] AS nvarchar(80)) AS [transportAllowance], CAST([phoneAllowance] AS nvarchar(80)) AS [phoneAllowance],
-    CAST([workNatureAllowance] AS nvarchar(80)) AS [workNatureAllowance], CAST([otherAllowance] AS nvarchar(80)) AS [otherAllowance]
+    CAST([workNatureAllowance] AS nvarchar(80)) AS [workNatureAllowance], CAST([otherAllowance] AS nvarchar(80)) AS [otherAllowance],
+    CAST([workPressureAllowance] AS nvarchar(80)) AS [workPressureAllowance]
     FROM [employees] WHERE [id] = @0`, [employeeId])
   const employeeRef = `employees:${employeeId}`
   if (!employeeRows.length) {
@@ -133,7 +134,8 @@ export async function readPayrollLiveEmployment(em: EntityManager, employeeId: n
 
   const compensationIssues = [issue('COMPENSATION_EFFECTIVE_HISTORY_UNSUPPORTED', 'المتاح الأجر الحالي فقط؛ سريانه على أيام الفترة غير موثق، ويلزم استكماله قبل الحساب', employeeRef)]
   const salaries: Record<string, string | null> = {}
-  for (const component of MONTHLY_SALARY_COMPONENTS) {
+  // للعرض: المكونات السبعة المصروفة (بدل ضغط العمل ظاهر هنا، بس محرك السياسة وأسسه على الست بس)
+  for (const component of PAID_SALARY_COMPONENTS) {
     const value = employee[component.key]
     salaries[component.key] = typeof value === 'string' ? value : null
     if (value == null) compensationIssues.push(issue('COMPENSATION_COMPONENT_MISSING', `قيمة ${component.nameAr} الحالية غير مسجلة ولا تستبدل بصفر`, employeeRef))

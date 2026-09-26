@@ -1,6 +1,7 @@
 import { apiFetch } from './api'
 
-export const SALARY_HISTORY_FIELDS = { basicSalary: 'الأساسي', housingAllowance: 'السكن', transportAllowance: 'الانتقال', phoneAllowance: 'الهاتف', workNatureAllowance: 'طبيعة العمل', otherAllowance: 'أخرى' } as const
+// المكونات السبعة المؤرخة: الست + «ضغط العمل» (بدل بيتصرف من غير مؤثرات — قرار المالك 26 سبتمبر)
+export const SALARY_HISTORY_FIELDS = { basicSalary: 'الأساسي', housingAllowance: 'السكن', transportAllowance: 'الانتقال', phoneAllowance: 'الهاتف', workNatureAllowance: 'طبيعة العمل', otherAllowance: 'أخرى', workPressureAllowance: 'ضغط العمل' } as const
 export type SalaryHistoryAmounts = Record<keyof typeof SALARY_HISTORY_FIELDS, string>
 export const MONTHLY_SALARY_HISTORY_VERSION = 'SALARY_PAYROLL_PERIOD_HISTORY_V2_20260914'
 export type SalaryHistorySegment = SalaryHistoryAmounts & { effectiveFrom: string; effectiveTo: string | null; currency: 'SAR' | 'EGP'; effectivePayrollPeriod?: string; effectiveToPayrollPeriod?: string | null }
@@ -13,7 +14,7 @@ export interface SalaryHistoryView {
   segments: SalaryHistorySegment[]
   capabilities: { canEdit: boolean }
 }
-export const emptySalaryHistorySegment = (): SalaryHistorySegment => ({ effectiveFrom: '', effectiveTo: null, currency: 'EGP', basicSalary: '', housingAllowance: '', transportAllowance: '', phoneAllowance: '', workNatureAllowance: '', otherAllowance: '' })
+export const emptySalaryHistorySegment = (): SalaryHistorySegment => ({ effectiveFrom: '', effectiveTo: null, currency: 'EGP', basicSalary: '', housingAllowance: '', transportAllowance: '', phoneAllowance: '', workNatureAllowance: '', otherAllowance: '', workPressureAllowance: '' })
 export const emptyMonthlySalaryPeriod = (): SalaryHistorySegment => ({ ...emptySalaryHistorySegment(), effectivePayrollPeriod: '', effectiveToPayrollPeriod: null })
 const monthValid = (value: unknown): value is string => typeof value === 'string' && /^(?!0000)\d{4}-(0[1-9]|1[0-2])$/.test(value)
 const dateValid = (value: unknown): value is string => typeof value === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(value) && !value.startsWith('0000-') && Number.isFinite(Date.parse(value + 'T00:00:00Z')) && new Date(value + 'T00:00:00Z').toISOString().slice(0, 10) === value
@@ -25,7 +26,7 @@ export function monthlySalaryFormError(segments: SalaryHistorySegment[], reason:
   for (let index = 0; index < segments.length; index++) {
     const row = segments[index]
     if (!row || !monthValid(row.effectivePayrollPeriod) || (row.effectiveToPayrollPeriod !== null && (!monthValid(row.effectiveToPayrollPeriod) || row.effectiveToPayrollPeriod < row.effectivePayrollPeriod))) return `حدد شهر سريان الراتب وآخر شهر للفترة ${index + 1}؛ لا نستنتج الشهر من التاريخ القديم.`
-    if (!['SAR', 'EGP'].includes(row.currency) || Object.keys(SALARY_HISTORY_FIELDS).some(key => !exactMoney(row[key as keyof SalaryHistoryAmounts]))) return `أكمل العملة ومكونات الراتب الستة للفترة ${index + 1} بمبالغ صريحة غير سالبة ومنزلتين عشريتين على الأكثر.`
+    if (!['SAR', 'EGP'].includes(row.currency) || Object.keys(SALARY_HISTORY_FIELDS).some(key => !exactMoney(row[key as keyof SalaryHistoryAmounts]))) return `أكمل العملة ومكونات الراتب للفترة ${index + 1} (بما فيها بدل ضغط العمل) بمبالغ صريحة غير سالبة ومنزلتين عشريتين على الأكثر.`
     const previous = segments[index - 1]
     if (previous && (previous.effectiveToPayrollPeriod === null || previous.effectiveToPayrollPeriod! >= row.effectivePayrollPeriod)) return 'رتب فترات الرواتب من الأقدم إلى الأحدث دون تداخل؛ الفترة المستمرة تكون الأخيرة.'
   }
@@ -39,7 +40,7 @@ export function salaryHistoryFormError(segments: SalaryHistorySegment[], reason:
     const row = segments[index]
     if (!row || !dateValid(row.effectiveFrom) || (row.effectiveTo !== null && (!dateValid(row.effectiveTo) || row.effectiveTo < row.effectiveFrom))) return `حدد بداية ونهاية صحيحتين لفترة الأجر ${index + 1}.`
     if (!['SAR', 'EGP'].includes(row.currency)) return 'حدد عملة كل فترة أجر.'
-    if (Object.keys(SALARY_HISTORY_FIELDS).some(key => !exactMoney(row[key as keyof SalaryHistoryAmounts]))) return `اكتب المكونات الستة للفترة ${index + 1}، بما فيها الصفر عند عدم الاستحقاق. المبلغ غير سالب وبحد أقصى منزلتين عشريتين.`
+    if (Object.keys(SALARY_HISTORY_FIELDS).some(key => !exactMoney(row[key as keyof SalaryHistoryAmounts]))) return `اكتب مكونات الأجر للفترة ${index + 1} (بما فيها بدل ضغط العمل)، بما فيها الصفر عند عدم الاستحقاق. المبلغ غير سالب وبحد أقصى منزلتين عشريتين.`
     if (index && (segments[index - 1].effectiveTo === null || segments[index - 1].effectiveTo! >= row.effectiveFrom)) return 'رتب الفترات من الأقدم إلى الأحدث دون تداخل؛ الفترة المفتوحة تكون الأخيرة فقط.'
   }
   return null

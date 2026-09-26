@@ -1,6 +1,6 @@
 // تحديث بيانات مجموعة موظفين من ملف (Excel أو CSV) بكود الموظف.
 // ملف صرف بلا Nest ولا TypeORM ولا exceljs: الواجهة تستورده لقائمة الحقول، والخادم لقراءة CSV وتطبيع قيم الخلايا.
-import { MONTHLY_SALARY_COMPONENTS } from './compensation'
+import { PAID_SALARY_COMPONENTS } from './compensation'
 import { EMPLOYEE_PHONE_PATTERN } from './employee-required-fields'
 
 export const BULK_UPDATE_MAX_ROWS = 2000
@@ -21,7 +21,8 @@ export const BULK_FIELD_GROUPS: ReadonlyArray<{ key: BulkFieldGroup; label: stri
   { key: 'salary', label: 'الراتب والبدلات' },
 ]
 
-export type BulkSalaryKey = typeof MONTHLY_SALARY_COMPONENTS[number]['key']
+// أعمدة الراتب: المكونات السبعة المصروفة (آخرها «بدل ضغط العمل») — كود الموظف + البدل يكفي لتحديثه من ملف
+export type BulkSalaryKey = typeof PAID_SALARY_COMPONENTS[number]['key']
 export type BulkFieldKey =
   | 'phone' | 'email' | 'nationalId' | 'nationality' | 'gender' | 'birthDate'
   | 'fingerprintCode' | 'branch' | 'department' | 'team' | 'jobTitle' | 'costCenter' | 'grade' | 'manager'
@@ -102,7 +103,7 @@ export const BULK_FIELDS: ReadonlyArray<BulkFieldDef> = [
   { key: 'isGosiRegistered', label: 'مسجل في التأمينات', group: 'insurance', kind: 'bool', options: YES_NO_OPTIONS, hint: 'نعم / لا' },
   { key: 'gosiBaseSalary', label: 'الأجر التأميني', group: 'insurance', kind: 'money', hint: MONEY_HINT, aliases: ['الراتب الخاضع للتأمينات'] },
 
-  ...MONTHLY_SALARY_COMPONENTS.map(component => ({ key: component.key as BulkFieldKey, label: component.nameAr, group: 'salary' as const,
+  ...PAID_SALARY_COMPONENTS.map(component => ({ key: component.key as BulkFieldKey, label: component.nameAr, group: 'salary' as const,
     kind: 'money' as const, salary: true, hint: MONEY_HINT })),
 ]
 

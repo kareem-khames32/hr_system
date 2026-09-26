@@ -196,7 +196,9 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
     emp?.otherAllowance,
   ]
   const hasSalary = salaryParts.some((v) => v != null)
+  // إجمالي المكونات الست = أساس مكافأة نهاية الخدمة وبدل الرصيد؛ بدل ضغط العمل برّه (قرار المالك 26 سبتمبر) ويظهر لوحده تحت
   const totalSalary = salaryParts.reduce((s: number, v) => s + (Number(v) || 0), 0)
+  const workPressure = Number(emp?.workPressureAllowance ?? 0) || 0
 
   const handleAddLine = async () => {
     // اسم البند حرفان على الأقل (AddLineDto) — لا يُرسل أقصر فتظهر رسالة الخادم الإنجليزية
@@ -592,11 +594,20 @@ function SettlementContent({ employeeId, backHref }: { employeeId: number; backH
                         </span>
                       </div>
                       <div className="flex justify-between py-2 bg-gray-50 -mx-6 px-6 rounded-lg">
-                        <span className="font-bold text-gray-800">الإجمالي</span>
+                        <span className="font-bold text-gray-800">{workPressure > 0 ? 'الإجمالي (أساس المكافأة)' : 'الإجمالي'}</span>
                         <span className="font-bold text-primary-600">
                           {hasSalary ? `${totalSalary.toLocaleString('en-US')} ${currency}` : '—'}
                         </span>
                       </div>
+                      {workPressure > 0 && (
+                        <div className="py-2 border-b border-gray-100">
+                          <div className="flex justify-between">
+                            <span className="text-gray-500">بدل ضغط العمل</span>
+                            <span className="font-medium text-gray-800">{fmtMoney(workPressure)}</span>
+                          </div>
+                          <p className="text-xs text-gray-400 mt-1">مش داخل في مكافأة نهاية الخدمة ولا بدل الرصيد — بيوصل التصفية جوه «راتب آخر شهر» بتناسب أيام الخدمة بس.</p>
+                        </div>
+                      )}
                     </div>
                   </div>
 

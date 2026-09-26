@@ -1,14 +1,30 @@
 import { BadRequestException, ConflictException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
-import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
+import { MONTHLY_SALARY_COMPONENTS, PAID_SALARY_COMPONENTS, WORK_PRESSURE_ALLOWANCE } from '../employees/compensation'
 import { payrollLiveSourceContent } from './payroll-live-source-contract'
 import { lockPayrollEmployees } from './payroll-settlement-boundary'
 import { MonthlySalaryPeriod, normalizeMonthlySalaryPeriods, PAYROLL_MONTHLY_SALARY_HISTORY_VERSION } from './payroll-period-salary'
 
 export const PAYROLL_SALARY_HISTORY_VERSION = 'SALARY_EFFECTIVE_HISTORY_V1_20260913' as const
 export const PAYROLL_SALARY_HISTORY_LIMIT = 120
-export const SALARY_HISTORY_MONEY_KEYS = MONTHLY_SALARY_COMPONENTS.map(row => row.key)
-export type SalaryHistoryMoneyKey = typeof MONTHLY_SALARY_COMPONENTS[number]['key']
+// سجل الأجر المؤرخ بيأرّخ كل مكونات الراتب المصروفة: الست + بدل ضغط العمل (تغييره بشهر سريان زي أي تغيير أجر).
+export const SALARY_HISTORY_MONEY_KEYS = PAID_SALARY_COMPONENTS.map(row => row.key)
+export type SalaryHistoryMoneyKey = typeof PAID_SALARY_COMPONENTS[number]['key']
+// بدل ضغط العمل (ترحيل 071) مكوّن اختياري في المدخلات: غيابه = صفر (قيمته الافتراضية في القاعدة)، والصفر منه ما بيدخلش
+// أي بصمة — فكل بصمة اتحفظت قبله (السجل، والأجر الحالي، ودليل طلب الزيادة) فاضلة مطابقة بالحرف، والمكونات الست زي ما هي إلزامية.
+export const SALARY_HISTORY_REQUIRED_MONEY_KEYS = MONTHLY_SALARY_COMPONENTS.map(row => row.key)
+export type SalaryHistoryOptionalMoneyKey = typeof WORK_PRESSURE_ALLOWANCE.key
+export const SALARY_HISTORY_OPTIONAL_MONEY_KEYS: readonly SalaryHistoryOptionalMoneyKey[] = [WORK_PRESSURE_ALLOWANCE.key]
+export const isOptionalSalaryKey = (key: string): key is SalaryHistoryOptionalMoneyKey => (SALARY_HISTORY_OPTIONAL_MONEY_KEYS as readonly string[]).includes(key)
+const zeroOrMissing = (value: unknown) => value === null || value === undefined || value === 0 || (typeof value === 'string' && /^-?0*(?:\.0*)?$/.test(value) && /0/.test(value))
+/** نسخة للبصمة: بدل ضغط العمل الصفري (أو الغائب) يتشال، فالبصمة = بصمة ما قبل ترحيل 071 بالحرف؛ غير الصفري بيدخلها. */
+export function withoutZeroOptionalSalary<T extends object>(row: T): T {
+  const record = row as Record<string, unknown>
+  if (!SALARY_HISTORY_OPTIONAL_MONEY_KEYS.some(key => Object.prototype.hasOwnProperty.call(record, key) && zeroOrMissing(record[key]))) return row
+  const copy: Record<string, unknown> = { ...record }
+  for (const key of SALARY_HISTORY_OPTIONAL_MONEY_KEYS) if (Object.prototype.hasOwnProperty.call(copy, key) && zeroOrMissing(copy[key])) delete copy[key]
+  return copy as T
+}
 export type SalaryHistorySegment = Record<SalaryHistoryMoneyKey, string> & { effectiveFrom: string; effectiveTo: string | null; currency: 'SAR' | 'EGP'; effectivePayrollPeriod?: string | null; effectiveToPayrollPeriod?: string | null }
 export type SalaryHistoryCurrent = Record<SalaryHistoryMoneyKey, string | null> & { currency: string | null }
 export interface SalaryHistoryVersionView { id: number; revision: number; reason: string; evidenceReference: string; createdAt: string; createdBy: number; contentHash: string; currentSourceHash: string; contractVersion: string | null; cycleStartDay: number | null }
@@ -16,9 +32,15 @@ export interface SalaryHistoryRead { revision: number; version: SalaryHistoryVer
 
 const invalid = (code: string, message: string): never => { throw new BadRequestException({ code, message }) }
 const plain = (value: unknown): value is Record<string, unknown> => !!value && typeof value === 'object' && !Array.isArray(value)
-function exactKeys(value: unknown, keys: string[]) {
-  if (!plain(value) || Object.keys(value).length !== keys.length || keys.some(key => !Object.prototype.hasOwnProperty.call(value, key))) invalid('SALARY_HISTORY_SHAPE_INVALID', 'حقول سجل الأجر غير مكتملة أو تحتوي على بيانات غير مسموحة')
+function exactKeys(value: unknown, keys: readonly string[], optional: readonly string[] = []) {
+  if (!plain(value) || keys.some(key => !Object.prototype.hasOwnProperty.call(value, key)) ||
+    Object.keys(value).some(key => !keys.includes(key) && !optional.includes(key))) invalid('SALARY_HISTORY_SHAPE_INVALID', 'حقول سجل الأجر غير مكتملة أو تحتوي على بيانات غير مسموحة')
   return value as Record<string, unknown>
+}
+/** مبالغ المكونات السبعة من صف مُدخل: الست إلزامية، وبدل ضغط العمل الغائب = صفر (قيمته الافتراضية). */
+export function salaryHistoryMoneyOf(row: Record<string, unknown>, allowNegative = false): Record<SalaryHistoryMoneyKey, string> {
+  return Object.fromEntries(SALARY_HISTORY_MONEY_KEYS.map(key => [key,
+    isOptionalSalaryKey(key) && row[key] === undefined ? '0.00' : salaryHistoryMoney(row[key], allowNegative)])) as Record<SalaryHistoryMoneyKey, string>
 }
 
 export function salaryHistoryDate(value: unknown): string {
@@ -47,11 +69,11 @@ export function salaryHistoryText(value: unknown, max: number, label: string): s
 export function normalizeSalaryHistorySegments(input: unknown): SalaryHistorySegment[] {
   if (!Array.isArray(input) || input.length < 1 || input.length > PAYROLL_SALARY_HISTORY_LIMIT) invalid('SALARY_HISTORY_SEGMENT_LIMIT', 'أدخل من فترة واحدة إلى 120 فترة أجر موثقة')
   const rows = (input as unknown[]).map(value => {
-    const row = exactKeys(value, ['effectiveFrom', 'effectiveTo', 'currency', ...SALARY_HISTORY_MONEY_KEYS])
+    const row = exactKeys(value, ['effectiveFrom', 'effectiveTo', 'currency', ...SALARY_HISTORY_REQUIRED_MONEY_KEYS], SALARY_HISTORY_OPTIONAL_MONEY_KEYS)
     const effectiveFrom = salaryHistoryDate(row.effectiveFrom), effectiveTo = row.effectiveTo === null ? null : salaryHistoryDate(row.effectiveTo)
     if (effectiveTo !== null && effectiveTo < effectiveFrom) invalid('SALARY_HISTORY_RANGE_INVALID', 'نهاية سريان الأجر تسبق بدايته')
     if (row.currency !== 'SAR' && row.currency !== 'EGP') invalid('SALARY_HISTORY_CURRENCY_INVALID', 'عملة فترة الأجر يجب أن تكون SAR أو EGP')
-    const money = Object.fromEntries(SALARY_HISTORY_MONEY_KEYS.map(key => [key, salaryHistoryMoney(row[key])])) as Record<SalaryHistoryMoneyKey, string>
+    const money = salaryHistoryMoneyOf(row)
     return { effectiveFrom, effectiveTo, currency: row.currency as 'SAR' | 'EGP', ...money }
   }).sort((left, right) => left.effectiveFrom.localeCompare(right.effectiveFrom))
   for (let index = 1; index < rows.length; index++) {
@@ -62,17 +84,18 @@ export function normalizeSalaryHistorySegments(input: unknown): SalaryHistorySeg
 }
 
 export function salaryCurrentSourceHash(current: SalaryHistoryCurrent): string {
-  const row = exactKeys(current, [...SALARY_HISTORY_MONEY_KEYS, 'currency'])
-  const normalized = Object.fromEntries(SALARY_HISTORY_MONEY_KEYS.map(key => [key, row[key] === null ? null : salaryHistoryMoney(row[key], true)]))
+  const row = exactKeys(current, [...SALARY_HISTORY_REQUIRED_MONEY_KEYS, 'currency'], SALARY_HISTORY_OPTIONAL_MONEY_KEYS)
+  const normalized = Object.fromEntries(SALARY_HISTORY_MONEY_KEYS.filter(key => !isOptionalSalaryKey(key) || row[key] !== undefined)
+    .map(key => [key, row[key] === null ? null : salaryHistoryMoney(row[key], true)]))
   if (row.currency !== null && (typeof row.currency !== 'string' || row.currency.length > 20)) invalid('SALARY_HISTORY_CURRENT_INVALID', 'عملة الأجر الحالي غير صالحة')
-  return payrollLiveSourceContent({ ...normalized, currency: row.currency }).contentHash
+  return payrollLiveSourceContent(withoutZeroOptionalSalary({ ...normalized, currency: row.currency })).contentHash
 }
 
 export function salaryHistoryContentHash(input: { employeeId: number; revision: number; reason: string; evidenceReference: string; currentSourceHash: string; segments: SalaryHistorySegment[] }): string {
-  // أعمدة012 الفارغة لا تدخل بصمةV1؛ تبقى كل البصمات السابقة مطابقة حرفيًا.
+  // أعمدة012 الفارغة لا تدخل بصمةV1؛ تبقى كل البصمات السابقة مطابقة حرفيًا. وكذلك بدل ضغط العمل الصفري (ترحيل 071).
   const segments = input.segments.map(({ effectivePayrollPeriod, effectiveToPayrollPeriod, ...row }) => {
     if (effectivePayrollPeriod != null || effectiveToPayrollPeriod != null) invalid('SALARY_HISTORY_MONTHLY_REQUIRED', 'الدليل الشهري يتطلب عقد الرواتب الشهري ولا يقبل بصمة التاريخ اليومي')
-    return row
+    return withoutZeroOptionalSalary(row)
   })
   return payrollLiveSourceContent({ schemaVersion: PAYROLL_SALARY_HISTORY_VERSION, employeeId: input.employeeId, revision: input.revision,
     reason: input.reason, evidenceReference: input.evidenceReference, currentSourceHash: input.currentSourceHash, segments }).contentHash
@@ -80,7 +103,9 @@ export function salaryHistoryContentHash(input: { employeeId: number; revision: 
 
 export function monthlySalaryHistoryContentHash(input: { employeeId: number; revision: number; reason: string; evidenceReference: string; currentSourceHash: string; cycleStartDay: number; segments: SalaryHistorySegment[]; createdBy: number; createdAt: string }): string {
   if (!sqlInt(input.createdBy) || typeof input.createdAt !== 'string' || !Number.isFinite(Date.parse(input.createdAt)) || new Date(input.createdAt).toISOString() !== input.createdAt) invalid('SALARY_HISTORY_IDENTITY_INVALID', 'فاعل وتوقيت إثبات الراتب الشهري مطلوبان بصيغة صريحة صحيحة')
-  return payrollLiveSourceContent({ schemaVersion: PAYROLL_MONTHLY_SALARY_HISTORY_VERSION, contractVersion: PAYROLL_MONTHLY_SALARY_HISTORY_VERSION, ...input }).contentHash
+  // بدل ضغط العمل الصفري برّه البصمة: مراجعات ما قبل ترحيل 071 (العمود بقى صفر) فاضلة مطابقة بصمتها المحفوظة
+  return payrollLiveSourceContent({ schemaVersion: PAYROLL_MONTHLY_SALARY_HISTORY_VERSION, contractVersion: PAYROLL_MONTHLY_SALARY_HISTORY_VERSION, ...input,
+    segments: input.segments.map(row => withoutZeroOptionalSalary(row)) }).contentHash
 }
 
 export function salaryHistorySchemaMissing(error: any): boolean {
@@ -161,7 +186,7 @@ export async function appendSalaryHistoryRevision(em: EntityManager, input: {
     const values = segments.slice(offset, offset + 50).map((segment, index) => {
       const at = parameters.length
       parameters.push(versionId, offset + index + 1, segment.effectiveFrom, segment.effectiveTo, segment.currency, ...SALARY_HISTORY_MONEY_KEYS.map(key => segment[key]))
-      return `(${Array.from({ length: 11 }, (_unused, i) => i >= 5 ? `CAST(@${at + i} AS decimal(18,2))` : `@${at + i}`).join(', ')})`
+      return `(${Array.from({ length: 5 + SALARY_HISTORY_MONEY_KEYS.length }, (_unused, i) => i >= 5 ? `CAST(@${at + i} AS decimal(18,2))` : `@${at + i}`).join(', ')})`
     })
     await em.query(`INSERT INTO dbo.employee_salary_history ([versionId], [sequence], [effectiveFrom], [effectiveTo], [currency], ${SALARY_HISTORY_MONEY_KEYS.map(key => `[${key}]`).join(', ')}) VALUES ${values.join(', ')}`, parameters)
   }
@@ -171,7 +196,8 @@ export async function appendSalaryHistoryRevision(em: EntityManager, input: {
 /** إثبات شهري كامل مستقل عن راتب الملف الحالي؛ لا تحويل تلقائي للتاريخ اليومي القديم. */
 export async function appendMonthlySalaryHistoryRevision(em: EntityManager, input: {
   employeeId: number; reason: string; evidenceReference: string; currentSourceHash: string;
-  periods: MonthlySalaryPeriod[]; cycleStartDay: number; createdBy: number
+  // بدل ضغط العمل الغائب من الفترة = صفر (normalizeMonthlySalaryPeriods)
+  periods: Array<Omit<MonthlySalaryPeriod, SalaryHistoryOptionalMoneyKey> & Partial<Pick<MonthlySalaryPeriod, SalaryHistoryOptionalMoneyKey>>>; cycleStartDay: number; createdBy: number
 }): Promise<SalaryHistoryRead> {
   if (!em.queryRunner?.isTransactionActive) throw new Error('إضافة مراجعة الأجر تتطلب معاملة نشطة')
   if (!sqlInt(input.employeeId) || !sqlInt(input.createdBy) || !hex(input.currentSourceHash)) invalid('SALARY_HISTORY_IDENTITY_INVALID', 'هوية إثبات الأجر وبصمة المصدر غير صالحتين')
@@ -191,7 +217,7 @@ export async function appendMonthlySalaryHistoryRevision(em: EntityManager, inpu
     const values = segments.slice(offset, offset + 50).map((segment, index) => {
       const at = parameters.length
       parameters.push(versionId, offset + index + 1, segment.effectiveFrom, segment.effectiveTo, segment.currency, segment.effectivePayrollPeriod, segment.effectiveToPayrollPeriod, ...SALARY_HISTORY_MONEY_KEYS.map(key => segment[key]))
-      return `(${Array.from({ length: 13 }, (_unused, i) => i >= 7 ? `CAST(@${at + i} AS decimal(18,2))` : `@${at + i}`).join(', ')})`
+      return `(${Array.from({ length: 7 + SALARY_HISTORY_MONEY_KEYS.length }, (_unused, i) => i >= 7 ? `CAST(@${at + i} AS decimal(18,2))` : `@${at + i}`).join(', ')})`
     })
     await em.query(`INSERT INTO dbo.employee_salary_history ([versionId], [sequence], [effectiveFrom], [effectiveTo], [currency], [effectivePayrollPeriod], [effectiveToPayrollPeriod], ${SALARY_HISTORY_MONEY_KEYS.map(key => `[${key}]`).join(', ')}) VALUES ${values.join(', ')}`, parameters)
   }

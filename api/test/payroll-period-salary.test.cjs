@@ -112,7 +112,8 @@ test('بصمةV1 القديمة لا تتغير بإضافة أعمدة شهري
   const h = history(); h.header = { ...h.header, ...input, contractVersion: null, cycleStartDay: null, contentHash: first }; delete h.header.segments
   h.segments = [{ ...segment, effectivePayrollPeriod: null, effectiveToPayrollPeriod: null }]
   const readBack = await read(em(h), 3)
-  assert.equal(readBack.version.contentHash, first); assert.deepEqual(readBack.segments, [segment])
+  // صف قديم من غير بدل ضغط العمل (ترحيل 071) بيتقري بصفره والبصمة القديمة زي ما هي بالحرف (البدل الصفري برّه البصمة)
+  assert.equal(readBack.version.contentHash, first); assert.deepEqual(readBack.segments, [{ ...segment, workPressureAllowance: '0.00' }])
 })
 test('إلحاق سجل يومي فوق دليل شهري مرفوض قبل أيINSERT', async () => {
   const h = history()

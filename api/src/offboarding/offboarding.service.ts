@@ -88,7 +88,7 @@ const EMP_BRIEF: (keyof Employee)[] = [
 ]
 const EMP_SETTLEMENT: (keyof Employee)[] = [
   'nationalId', 'basicSalary', 'housingAllowance', 'transportAllowance',
-  'otherAllowance', 'phoneAllowance', 'workNatureAllowance', 'payMethod', 'bankName', 'iban',
+  'otherAllowance', 'phoneAllowance', 'workNatureAllowance', 'workPressureAllowance', 'payMethod', 'bankName', 'iban',
 ]
 const pickFields = (o: Employee, keys: (keyof Employee)[]) => {
   const out: Partial<Record<keyof Employee, unknown>> = {}
@@ -674,6 +674,8 @@ export class OffboardingService implements OnApplicationBootstrap {
     // الحجز الجديد قد يستهلك جزءًا وينقل باقي القسط عند الصرف؛ لا نخفي الباقي من التصفية أثناء انتظار الصرف.
     await assertNoHeldLoanInstallments(this.lines.manager, emp.id)
 
+    // أساس المكافأة وبدل الرصيد وسعر الساعة = المكونات الست (من غير بدل ضغط العمل — قرار المالك 26 سبتمبر: مش داخل في نهاية الخدمة).
+    // البدل نفسه بيوصل التصفية جوه «راتب آخر شهر» (صافي بند المسير) بتناسب أيام خدمة الشهر ده بس
     const gross = grossMonthlySalary(emp)
     const dayRate = gross / Number(await this.cfg('payroll.monthly_days', '30'))
 

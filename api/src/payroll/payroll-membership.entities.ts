@@ -32,6 +32,8 @@ export interface PayrollMemberSnapshot {
   salaryComponents?: Array<{
     code: string; nameAr: string; nameEn: string; monthlyAmount: number; earnedAmount: number
   }>
+  // بدل ضغط العمل (قرار المالك 26 سبتمبر): الشهري والمستحق بعد تناسب أيام الخدمة — برّه gross وكل أساس؛ غيابه = مالوش بدل
+  workPressureAllowance?: { monthlyAmount: number; earnedAmount: number }
   salaryMode?: string | null
   exemptDays?: number
   isAttendanceExempt?: boolean

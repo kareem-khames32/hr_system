@@ -4,7 +4,8 @@ const { test } = require('node:test'), assert = require('node:assert/strict'), p
 require('../node_modules/ts-node').register({project:path.join(__dirname,'..','tsconfig.json'),transpileOnly:true,compilerOptions:{jsx:'react-jsx',module:'commonjs',moduleResolution:'node'}})
 const ui = require('../../src/lib/employee-salary-change-api')
 const { ApiError } = require('../../src/lib/api')
-const current = () => ({basicSalary:'9000.00',housingAllowance:'1000.00',transportAllowance:'500.00',phoneAllowance:'0.00',workNatureAllowance:'0.00',otherAllowance:'250.00',currency:'EGP'})
+// الخادم بيرجّع المكونات السبعة: الست + بدل ضغط العمل (ترحيل 071)
+const current = () => ({basicSalary:'9000.00',housingAllowance:'1000.00',transportAllowance:'500.00',phoneAllowance:'0.00',workNatureAllowance:'0.00',otherAllowance:'250.00',workPressureAllowance:'0.00',currency:'EGP'})
 // قاعدة المالك: تغيير الراتب يسري من راتب شهر كامل؛ الخادم يرسل شهر المسير الجاري ودورته (23 → «راتب سبتمبر» = 23/8 → 22/9).
 const context = () => ({employeeId:9,current:current(),historyRevision:3,currentSourceHash:'a'.repeat(64),cycleStartDay:23,currentPayrollPeriod:'2026-09',currentPayrollPeriodBounds:{startDate:'2026-08-23',endDate:'2026-09-22'},historyContract:'MONTHLY'})
 const evidence = () => ({effectivePayrollPeriod:'2026-09',reason:'  قرار زيادة معتمد  ',evidenceReference:'  قرار123  ',previousEffectivePayrollPeriod:''})
@@ -124,10 +125,10 @@ test('custom salary workflows retain required attachment and customer fields whi
  assert.throws(()=>ui.salaryIncreaseRequestPayload({...values,attachmentUrl:''},fields),/قرار الزيادة المرفق/)
 })
 
-test('real financial-step SSR keeps six exact text fields and initially blank payroll months for genuine change only',()=>{
+test('real financial-step SSR keeps seven exact text fields (six + work pressure) and initially blank payroll months for genuine change only',()=>{
  const html=financialStep()
  assert.match(html,/موعد تطبيق تعديل الراتب/);assert.match(html,/يسري من راتب شهر/);assert.match(html,/value="10000.29"/)
- assert.equal((html.match(/inputMode="decimal"/g)??[]).length,6)
+ assert.equal((html.match(/inputMode="decimal"/g)??[]).length,7) // الست + بدل ضغط العمل
  assert.equal((html.match(/type="month"/g)??[]).length,2);assert.doesNotMatch(html,/type="date"/)
  for(const input of html.match(/<input[^>]*type="month"[^>]*>/g)??[])assert.match(input,/value=""/)
  assert.match(html,/max="2026-09"/)
@@ -151,10 +152,10 @@ test('previous salary confirmation displays exact old values and rejects incompl
  }
 })
 
-test('context failure SSR locks six salaries and currency while preserving bank edits and explaining recovery',()=>{
+test('context failure SSR locks seven salaries (six + work pressure) and currency while preserving bank edits and explaining recovery',()=>{
  const html=financialStep({salaryChangeContext:null,salaryContextError:'تعذر تحميل الأجر من الخدمة.'})
  assert.match(html,/يمكنك حفظ البيانات غير المالية/);assert.match(html,/تعذر تحميل الأجر من الخدمة/)
- assert.equal((html.match(/<input[^>]*inputMode="decimal"[^>]*disabled=""/g)??[]).length,6)
+ assert.equal((html.match(/<input[^>]*inputMode="decimal"[^>]*disabled=""/g)??[]).length,7)
  assert.match(html,/<select[^>]*disabled=""/)
  assert.match(html,/<input class="input" list="employee-bank-options"/)
  assert.doesNotMatch(html,/موعد تطبيق تعديل الراتب/)

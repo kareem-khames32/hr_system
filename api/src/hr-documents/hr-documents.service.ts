@@ -9,7 +9,7 @@ import type { BranchScope } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
 import { canReadEmployeeFinance } from '../employees/employee-projection'
-import { grossMonthlySalary } from '../employees/compensation'
+import { paidMonthlySalary } from '../employees/compensation'
 import { EmployeeDocument } from '../assets/assets.entities'
 import { StoredFile } from '../files/stored-file.entity'
 import { storedPath } from '../files/storage'
@@ -162,7 +162,9 @@ export class HrDocumentsService {
       if (financial) {
         if (tokens.has('salary.total') && employee.basicSalary == null) throw new BadRequestException('بيان مطلوب غير متوفر: الراتب الأساسي لحساب إجمالي الراتب')
         const money: Record<string, number | string | null | undefined> = { basic: employee.basicSalary, housing: employee.housingAllowance, transport: employee.transportAllowance,
-          phone: employee.phoneAllowance, workNature: employee.workNatureAllowance, other: employee.otherAllowance, total: grossMonthlySalary(employee) }
+          phone: employee.phoneAllowance, workNature: employee.workNatureAllowance, other: employee.otherAllowance,
+          // الإجمالي المصروف كل شهر = الست + بدل ضغط العمل (بيان راتب مش أساس مؤثرات)
+          workPressure: employee.workPressureAllowance ?? 0, total: paidMonthlySalary(employee) }
         for (const [key, amount] of Object.entries(money)) {
           if (!tokens.has(`salary.${key}`)) continue
           if (amount == null || !Number.isFinite(Number(amount)) || Number(amount) < 0) throw new BadRequestException(`بيانات الراتب غير مكتملة أو غير صالحة: salary.${key}`)

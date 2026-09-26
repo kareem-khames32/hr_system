@@ -1,4 +1,4 @@
-import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
+import { MONTHLY_SALARY_COMPONENTS, PAID_SALARY_COMPONENTS, WORK_PRESSURE_ALLOWANCE } from '../employees/compensation'
 import type { SalaryHistoryRead, SalaryHistorySegment } from './payroll-salary-history'
 import { payrollPeriodBounds, PayrollPeriodError } from './payroll-period'
 
@@ -10,7 +10,10 @@ export type MonthlySalaryHistorySegment = MonthlySalaryPeriod & { effectiveFrom:
 export class PayrollPeriodSalaryError extends Error {
   constructor(readonly code: string, readonly state: 'MISSING' | 'INVALID', message: string) { super(message); this.name = 'PayrollPeriodSalaryError' }
 }
-const keys = MONTHLY_SALARY_COMPONENTS.map(row => row.key)
+// المكونات الست إلزامية في كل فترة، وبدل ضغط العمل (ترحيل 071) اختياري: غيابه = صفر، فمدخلات ما قبله زي ما هي.
+const keys = PAID_SALARY_COMPONENTS.map(row => row.key)
+const requiredKeys: readonly string[] = MONTHLY_SALARY_COMPONENTS.map(row => row.key)
+const optionalKeys: readonly string[] = [WORK_PRESSURE_ALLOWANCE.key]
 const fail = (code: string, message: string): never => { throw new PayrollPeriodSalaryError(code, 'INVALID', message) }
 
 export function salaryPayrollPeriod(value: unknown): string {
@@ -33,16 +36,17 @@ export function salaryPayrollPeriodBounds(referencePeriod: string, cycleStartDay
 export function normalizeMonthlySalaryPeriods(input: unknown, cycleStartDay: number): MonthlySalaryHistorySegment[] {
   if (!Number.isInteger(cycleStartDay) || cycleStartDay < 1 || cycleStartDay > 31) fail('SALARY_PAYROLL_CYCLE_INVALID', 'يوم بداية دورة الرواتب غير صالح')
   if (!Array.isArray(input) || input.length < 1 || input.length > 120) fail('SALARY_PAYROLL_PERIOD_LIMIT', 'أدخل من فترة واحدة إلى 120 فترة راتب شهرية موثقة')
-  const required = ['effectivePayrollPeriod', 'effectiveToPayrollPeriod', 'currency', ...keys]
+  const required = ['effectivePayrollPeriod', 'effectiveToPayrollPeriod', 'currency', ...requiredKeys]
   const rows = (input as unknown[]).map(value => {
-    if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value)) || Object.keys(value).length !== required.length || required.some(key => !Object.prototype.hasOwnProperty.call(value, key))) fail('SALARY_PAYROLL_PERIOD_INVALID', 'حقول فترة الراتب الشهرية غير مكتملة أو تحتوي على حقول غير مسموحة')
+    if (!value || typeof value !== 'object' || Array.isArray(value) || ![Object.prototype, null].includes(Object.getPrototypeOf(value)) || required.some(key => !Object.prototype.hasOwnProperty.call(value, key)) ||
+      Object.keys(value).some(key => !required.includes(key) && !optionalKeys.includes(key))) fail('SALARY_PAYROLL_PERIOD_INVALID', 'حقول فترة الراتب الشهرية غير مكتملة أو تحتوي على حقول غير مسموحة')
     const row = value as Record<string, unknown>, effectivePayrollPeriod = salaryPayrollPeriod(row.effectivePayrollPeriod)
     const effectiveToPayrollPeriod = row.effectiveToPayrollPeriod === null ? null : salaryPayrollPeriod(row.effectiveToPayrollPeriod)
     if (effectiveToPayrollPeriod !== null && effectiveToPayrollPeriod < effectivePayrollPeriod) fail('SALARY_PAYROLL_PERIOD_INVALID', 'شهر نهاية الراتب يسبق شهر بدايته')
     if (row.currency !== 'EGP' && row.currency !== 'SAR') fail('SALARY_PAYROLL_PERIOD_INVALID', 'عملة فترة الراتب يجب أن تكون EGP أو SAR')
     const money = Object.fromEntries(keys.map(key => {
-      const amount = row[key]
-      if (typeof amount !== 'string' || amount.length > 80 || !/^\d+(?:\.\d{1,2})?$/.test(amount)) fail('SALARY_PAYROLL_PERIOD_INVALID', 'مكونات الراتب ستة مبالغ نصية غير سالبة بمنزلتين عشريتين على الأكثر')
+      const amount = optionalKeys.includes(key) && row[key] === undefined ? '0.00' : row[key]
+      if (typeof amount !== 'string' || amount.length > 80 || !/^\d+(?:\.\d{1,2})?$/.test(amount)) fail('SALARY_PAYROLL_PERIOD_INVALID', 'مكونات الراتب مبالغ نصية غير سالبة بمنزلتين عشريتين على الأكثر (الست إلزامية، وبدل ضغط العمل الغائب = صفر)')
       const [whole, fraction = ''] = (amount as string).split('.'), integral = whole.replace(/^0+(?=\d)/, '')
       if (integral.length > 16) fail('SALARY_PAYROLL_PERIOD_INVALID', 'مكوّن الراتب يتجاوز دقة DECIMAL(18,2) ولا يُقرب تلقائيًا')
       return [key, `${integral}.${fraction.padEnd(2, '0')}`]

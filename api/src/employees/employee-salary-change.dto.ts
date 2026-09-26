@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer'
-import { IsDefined, IsIn, IsInt, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator'
+import { IsDefined, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator'
 
 export class EmployeeSalaryValuesDto {
   @IsString() @MaxLength(80) basicSalary: string
@@ -8,6 +8,8 @@ export class EmployeeSalaryValuesDto {
   @IsString() @MaxLength(80) phoneAllowance: string
   @IsString() @MaxLength(80) workNatureAllowance: string
   @IsString() @MaxLength(80) otherAllowance: string
+  // بدل ضغط العمل (ترحيل 071): اختياري — غيابه = قيمته الحالية في الملف (مش صفر)، فالعميل القديم مابيلمسهوش
+  @IsOptional() @IsString() @MaxLength(80) workPressureAllowance?: string
   @IsIn(['SAR', 'EGP']) currency: 'SAR' | 'EGP'
 }
 

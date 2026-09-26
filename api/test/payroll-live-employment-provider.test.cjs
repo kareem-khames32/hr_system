@@ -7,7 +7,7 @@ const { readPayrollLiveEmployment: read } = require('../src/payroll/payroll-live
 const { payrollLiveSourceContent } = require('../src/payroll/payroll-live-source-contract')
 const period = ['2026-06-01', '2026-06-30']
 const employee = extra => ({ id: 42, joinDate: '2020-01-01', actualStartDate: null, status: 'active', isActive: true, archivedAt: null,
-  currency: 'SAR', basicSalary: '9000.00', housingAllowance: '1000.00', transportAllowance: '200.00', phoneAllowance: '50.00', workNatureAllowance: '100.00', otherAllowance: '0.00', ...extra })
+  currency: 'SAR', basicSalary: '9000.00', housingAllowance: '1000.00', transportAllowance: '200.00', phoneAllowance: '50.00', workNatureAllowance: '100.00', otherAllowance: '0.00', workPressureAllowance: '0.00', ...extra })
 const offboarding = (id = 1, extra = {}) => ({ id, employeeId: 42, lastWorkingDay: '2026-06-20', status: 'CLOSED', resignationRequestId: 10, ...extra })
 const history = extra => ({ id: 2, employeeId: 42, changeType: 'STATUS', fieldName: 'status', oldStatus: 'probation', newStatus: 'active', oldValueRaw: '"probation"', newValueRaw: '"active"', changedAt: '2026-01-01T09:00:00.000', requestId: null, ...extra })
 const attendance = (day = '2026-06-01', extra = {}) => ({ id: 3, employeeId: 42, branchId: 1, date: day, checkIn: '09:30', checkOut: '18:30', shiftName: 'وردية', shiftStart: '09:00', shiftEnd: '18:00', shiftId: 2, scheduleSource: 'week', unscheduled: false, status: 'present',
@@ -112,9 +112,10 @@ test('bad end documents, invalid employee state and corrupt lifecycle JSON are d
 test('exact current six-field DECIMAL strings retain large cents but cannot become dated salary segments', async () => {
   const em = manager({ employeeRows: [employee({ basicSalary: '9007199254740991.91', phoneAllowance: '0.09' })] }), result = await read(em, 42, ...period)
   assert.equal(result.compensation.data.current.basicSalary, '9007199254740991.91'); assert.equal(result.compensation.data.current.phoneAllowance, '0.09')
-  assert.equal(Object.keys(result.compensation.data.current).length, 6); assert.equal(result.compensation.data.datedSegments, null); assert.equal('salarySegments' in result.compensation.data, false)
+  // للعرض: المكونات الست + بدل ضغط العمل (ترحيل 071) — المحرك وأسسه على الست بس
+  assert.equal(Object.keys(result.compensation.data.current).length, 7); assert.equal(result.compensation.data.datedSegments, null); assert.equal('salarySegments' in result.compensation.data, false)
   assert.ok(code(result.compensation, 'COMPENSATION_EFFECTIVE_HISTORY_UNSUPPORTED'))
-  for (const key of ['basicSalary', 'housingAllowance', 'transportAllowance', 'phoneAllowance', 'workNatureAllowance', 'otherAllowance']) assert.ok(em.calls[0].sql.includes(`CAST([${key}] AS nvarchar(80))`))
+  for (const key of ['basicSalary', 'housingAllowance', 'transportAllowance', 'phoneAllowance', 'workNatureAllowance', 'otherAllowance', 'workPressureAllowance']) assert.ok(em.calls[0].sql.includes(`CAST([${key}] AS nvarchar(80))`))
 })
 
 test('missing salary components remain null and invalid/number/currency values do not gain fallback defaults', async () => {

@@ -353,6 +353,8 @@ export interface ApiEmployee {
   // ===== إصلاحات ذهاب/عودة — أعمدة مستقلة =====
   fingerprintCode?: string; personalEmail?: string
   phoneAllowance?: number; workNatureAllowance?: number
+  // بدل ضغط العمل (قرار المالك 26 سبتمبر): بيتصرف مع الراتب كل شهر من غير مؤثرات
+  workPressureAllowance?: number
   // ===== مراجع المستندات (payload فقط) — الباك يُنشئ EmployeeDocument لكل عنصر =====
   documentRefs?: { docType: string; fileRef: string; number?: string }[]
   // توثيق الأرشفة — للفلترة في شاشة الأرشيف
@@ -579,6 +581,8 @@ export interface ApiPayrollMemberSnapshot {
   transferredOut?: { lastInScopeDate: string; branchName: string | null; departmentName: string | null; teamName: string | null } | null
   alreadyInRun?: { otherRunId: number | null; name: string | null; status: string; startDate: string; endDate: string; overlapDays: number; kind: string } | null
   salaryComponents?: Array<{ code: string; nameAr: string; nameEn: string; monthlyAmount: number; earnedAmount: number }>
+  // بدل ضغط العمل: الشهري والمستحق (بتناسب أيام الخدمة بس) — برّه gross وكل أساس؛ غيابه = مالوش بدل
+  workPressureAllowance?: { monthlyAmount: number; earnedAmount: number }
   exemptDays?: number; isAttendanceExempt?: boolean
   // الخطوة 13: مصدر راتب شهر المسير أو سبب استبعاده
   salarySource?: { kind: 'MONTHLY_HISTORY' | 'CURRENT_FILE_UNVERIFIED'; referencePeriod: string; currency: string | null
@@ -1608,7 +1612,7 @@ export type ApiOffboardingEmployee = Pick<ApiEmployee, 'id' | 'employeeCode' | '
   Partial<Pick<ApiEmployee,
     | 'fullNameEn' | 'jobTitle' | 'branchId' | 'departmentId' | 'teamId' | 'status' | 'joinDate'
     | 'nationalId' | 'basicSalary' | 'housingAllowance' | 'transportAllowance' | 'phoneAllowance' | 'workNatureAllowance' | 'otherAllowance'
-    | 'payMethod' | 'bankName' | 'iban'>>
+    | 'workPressureAllowance' | 'payMethod' | 'bankName' | 'iban'>>
 // «بنود إخلاء عليّ» — بند معلّق على جهتي أو كمدير مباشر
 export interface ApiMyClearanceItem {
   itemId: number; caseId: number; party: string; label: string; status: string

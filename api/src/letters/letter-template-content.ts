@@ -14,7 +14,7 @@ export const LETTER_VARIABLES = [
   { key: 'date', label: 'تاريخ إصدار الخطاب', sample: '2026-09-11' },
   { key: 'request.ref', label: 'مرجع الطلب', sample: 'REQ-DEMO' },
   { key: 'purpose', label: 'الغرض من الخطاب', sample: 'تقديمه إلى الجهة المختصة' },
-  { key: 'salary.total', label: 'إجمالي الراتب المسجل بملف الموظف', sample: '8500.00' },
+  { key: 'salary.total', label: 'إجمالي الراتب المسجل بملف الموظف (شامل بدل ضغط العمل)', sample: '8500.00' },
   { key: 'salary.currency', label: 'عملة الراتب', sample: 'SAR' },
 ] as const
 

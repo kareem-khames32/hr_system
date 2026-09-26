@@ -1,6 +1,6 @@
 import type { EntityManager } from 'typeorm'
 import { HOLIDAY_WORK_LABEL, HOLIDAY_WORK_SOURCE_PREFIX } from '../attendance/holiday-work'
-import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
+import { PAID_SALARY_COMPONENTS } from '../employees/compensation'
 import { PAYROLL_OBLIGATION_CATEGORY_LABELS } from './payroll-obligation-trace'
 
 // بنود الاستحقاقات والاستقطاعات لكل موظف في المسير (طلب المالك 19 سبتمبر): كل بند عمود باسمه بدل «البدلات» و«إضافات أخرى» و«خصومات أخرى».
@@ -44,8 +44,8 @@ export const PAYROLL_LINE_NAMES = {
 } as const
 export const PAYROLL_LINE_TOTAL_NAMES = { earnings: 'إجمالي الاستحقاقات', deductions: 'إجمالي الاستقطاعات', net: 'الصافي' } as const
 
-// ترتيب الأعمدة: رتبة البند ثم اسمه (البنود المتغيرة: مكونات الراتب بترتيبها، والبدلات والخصومات بأسمائها)
-const SALARY_CODES: readonly string[] = MONTHLY_SALARY_COMPONENTS.map(component => component.code)
+// ترتيب الأعمدة: رتبة البند ثم اسمه (البنود المتغيرة: مكونات الراتب بترتيبها — وآخرها «بدل ضغط العمل» — والبدلات والخصومات بأسمائها)
+const SALARY_CODES: readonly string[] = PAID_SALARY_COMPONENTS.map(component => component.code)
 function lineRank(key: string): number {
   if (key === 'BASIC') return 0
   if (key.startsWith('SALARY:')) { const index = SALARY_CODES.indexOf(key.slice(7)); return 10 + (index < 0 ? 9 : index) }
@@ -184,7 +184,8 @@ export function projectPayrollItemLines(item: PayrollLineItem, facts: ReadonlyMa
   // ===== الاستحقاقات =====
   const basic = cents(item.basicSalary)
   const allowances = cents(item.allowances)
-  // مكونات الراتب الثابتة كما اتحسبت (سكن، انتقال، هاتف، طبيعة عمل، أخرى)؛ لو مجموعها ما يطابقش العمود = سطر واحد «البدلات الثابتة»
+  // مكونات الراتب الثابتة كما اتحسبت (سكن، انتقال، هاتف، طبيعة عمل، أخرى، وبدل ضغط العمل لما يكون له قيمة)؛
+  // لو مجموعها ما يطابقش العمود = سطر واحد «البدلات الثابتة»
   const components = (Array.isArray(breakdown.salaryComponents) ? breakdown.salaryComponents : [])
     .filter((row: any) => row && typeof row.code === 'string' && row.code !== 'BASIC')
   const componentCents = components.reduce((sum: number, row: any) => sum + cents(row.earnedAmount), 0)

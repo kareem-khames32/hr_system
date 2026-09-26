@@ -20,7 +20,7 @@ export function projectEmployee(employee: Employee, user: JwtPayload): Partial<E
   const safe: Partial<Employee> = { ...employee }
   const financialFields: (keyof Employee)[] = [
     'currency', 'salaryCycle', 'basicSalary', 'housingAllowance', 'transportAllowance',
-    'phoneAllowance', 'workNatureAllowance', 'otherAllowance', 'payMethod', 'bankTransferAmount',
+    'phoneAllowance', 'workNatureAllowance', 'otherAllowance', 'workPressureAllowance', 'payMethod', 'bankTransferAmount',
     'bankName', 'bankBranch', 'iban', 'gosiNumber', 'isGosiRegistered', 'gosiBaseSalary',
   ]
   for (const field of financialFields) delete safe[field]
@@ -30,7 +30,7 @@ export function projectEmployee(employee: Employee, user: JwtPayload): Partial<E
 export function projectEmployeeHistory(rows: EmployeeStatusHistory[], user: JwtPayload, employeeId: number) {
   const compatible = rows.map(historyWithLegacyLabels)
   if (canReadEmployeeFinance(user, employeeId)) return compatible
-  const financial = /^(salary|basicSalary|housingAllowance|transportAllowance|phoneAllowance|workNatureAllowance|otherAllowance|iban|bankName|bankBranch|gosiBaseSalary|payMethod|salaryCycle):/i
+  const financial = /^(salary|basicSalary|housingAllowance|transportAllowance|phoneAllowance|workNatureAllowance|otherAllowance|workPressureAllowance|iban|bankName|bankBranch|gosiBaseSalary|payMethod|salaryCycle):/i
   // Legacy financial history shares these text columns with employment status.
   // The reason may repeat amounts, so hide it with both before/after values.
   return compatible.map(row => {

@@ -41,4 +41,6 @@ export class EmployeeSalaryHistory {
   @Column({ type: 'decimal', precision: 18, scale: 2 }) phoneAllowance: string
   @Column({ type: 'decimal', precision: 18, scale: 2 }) workNatureAllowance: string
   @Column({ type: 'decimal', precision: 18, scale: 2 }) otherAllowance: string
+  // بدل ضغط العمل (ترحيل 071): الفترات القديمة بقيمته الافتراضية صفر، فبصماتها المحفوظة زي ما هي بالحرف
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 }) workPressureAllowance: string
 }

@@ -1,6 +1,6 @@
 import { BadRequestException } from '@nestjs/common'
 import type { Workbook } from 'exceljs'
-import { MONTHLY_SALARY_COMPONENTS } from './compensation'
+import { PAID_SALARY_COMPONENTS } from './compensation'
 import { CONTRACT_TYPE_OPTIONS, GENDER_OPTIONS, PAY_METHOD_OPTIONS } from './employee-bulk-update.fields'
 
 // تصدير الموظفين من صفحة الموظفين (طلب المالك 24 سبتمبر): كل بيانات الملف، وأولها كود البصمة — هو الربط بينه
@@ -36,7 +36,7 @@ export interface EmployeeExportRow {
   contractDurationMonths: number | null; noticePeriodDays: number | null
   currency: string | null; salaryCycle: string | null
   basicSalary: number | null; housingAllowance: number | null; transportAllowance: number | null
-  phoneAllowance: number | null; workNatureAllowance: number | null; otherAllowance: number | null
+  phoneAllowance: number | null; workNatureAllowance: number | null; otherAllowance: number | null; workPressureAllowance: number | null
   payMethod: string | null; bankTransferAmount: number | null; bankName: string | null; bankBranch: string | null; iban: string | null
   gosiNumber: string | null; isGosiRegistered: boolean | null; gosiBaseSalary: number | null
   archivedAt: string | null; archiveReason: string | null
@@ -127,8 +127,8 @@ export const EMPLOYEE_EXPORT_COLUMNS: ReadonlyArray<EmployeeExportColumn> = [
   column('نهاية العقد', 14, 'text', row => row.contractEnd),
   column('مدة العقد (شهور)', 12, 'number', row => row.contractDurationMonths),
   column('فترة الإشعار (أيام)', 12, 'number', row => row.noticePeriodDays),
-  // الراتب والبنك والتأمينات — بصلاحية بس
-  ...MONTHLY_SALARY_COMPONENTS.map(component => column(component.nameAr, 14, 'money',
+  // الراتب والبنك والتأمينات — بصلاحية بس (المكونات السبعة، وآخرها «بدل ضغط العمل»)
+  ...PAID_SALARY_COMPONENTS.map(component => column(component.nameAr, 14, 'money',
     row => money(row[component.key as keyof EmployeeExportRow] as number | null), true)),
   column('العملة', 10, 'text', row => text(row.currency), true),
   column('دورة الراتب', 12, 'text', row => mapped(SALARY_CYCLE_LABELS)(row.salaryCycle), true),

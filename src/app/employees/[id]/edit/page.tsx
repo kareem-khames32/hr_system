@@ -138,6 +138,7 @@ export default function EditEmployeePage() {
           otherAllowance: salary?.current.otherAllowance ?? '',
           phoneAllowance: salary?.current.phoneAllowance ?? '',
           workNatureAllowance: salary?.current.workNatureAllowance ?? '',
+          workPressureAllowance: salary?.current.workPressureAllowance ?? '',
           payMethod: emp.payMethod ?? 'transfer',
           bankTransferAmount: emp.bankTransferAmount != null ? String(Number(emp.bankTransferAmount)) : '',
           costCenterId: emp.costCenterId != null ? String(emp.costCenterId) : '',

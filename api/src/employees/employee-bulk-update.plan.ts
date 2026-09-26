@@ -3,7 +3,7 @@
 // القواعد نفسها بتاعة تعديل ملف الموظف تتفحص تاني عند الحفظ (EmployeesService.update) — هنا بتظهر قبل أي حفظ.
 import { inBranchScope } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
-import { MONTHLY_SALARY_COMPONENTS } from './compensation'
+import { PAID_SALARY_COMPONENTS } from './compensation'
 import { birthDateIssue, nationalIdIssue } from './employee-required-fields'
 import { employeePayMethodIssue, PAY_METHOD_LABELS } from '../payroll/pay-split'
 import {
@@ -12,7 +12,7 @@ import {
   type BulkCell, type BulkColumnKey, type BulkFieldKey, type BulkParsed, type BulkSalaryKey,
 } from './employee-bulk-update.fields'
 
-export const SALARY_KEYS = MONTHLY_SALARY_COMPONENTS.map(component => component.key) as BulkSalaryKey[]
+export const SALARY_KEYS = PAID_SALARY_COMPONENTS.map(component => component.key) as BulkSalaryKey[]
 
 export interface BulkSheet { header: BulkCell[]; rows: Array<{ row: number; cells: BulkCell[] }> }
 export interface BulkRecord {

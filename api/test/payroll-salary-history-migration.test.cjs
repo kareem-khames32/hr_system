@@ -57,9 +57,9 @@ before(async () => {
   master = await pool('master'); await master.request().query(`CREATE DATABASE [${database}]`); created = true
   connection = await pool(database)
   ds = await runner.openDataSource(database, [Employee, EmployeeSalaryHistoryVersion, EmployeeSalaryHistory])
-  // هذا الاختبار يثبت عقد011 التاريخي؛ أعمدة012 تختبر مستقلًا ولا تُنسب إلى011.
+  // هذا الاختبار يثبت عقد011 التاريخي؛ أعمدة012 وعمود بدل ضغط العمل (071) تختبر مستقلًا ولا تُنسب إلى011.
   for (const metadata of ds.entityMetadatas) {
-    const later = metadata.tableName === 'employee_salary_history_versions' ? ['contractVersion', 'cycleStartDay'] : metadata.tableName === 'employee_salary_history' ? ['effectivePayrollPeriod', 'effectiveToPayrollPeriod'] : []
+    const later = metadata.tableName === 'employee_salary_history_versions' ? ['contractVersion', 'cycleStartDay'] : metadata.tableName === 'employee_salary_history' ? ['effectivePayrollPeriod', 'effectiveToPayrollPeriod', 'workPressureAllowance'] : []
     metadata.columns = metadata.columns.filter(column => !later.includes(column.databaseName))
     metadata.ownColumns = metadata.ownColumns.filter(column => !later.includes(column.databaseName))
   }

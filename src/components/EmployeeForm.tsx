@@ -107,6 +107,8 @@ export interface EmployeeFormState {
   otherAllowance: string
   phoneAllowance: string
   workNatureAllowance: string
+  // بدل ضغط العمل (قرار المالك 26 سبتمبر): بيتصرف مع الراتب من غير مؤثرات
+  workPressureAllowance: string
   payMethod: string
   // «نقدي + بنك»: مبلغ التحويل البنكي والباقي من صافي الراتب نقدي
   bankTransferAmount: string
@@ -336,6 +338,7 @@ const makeInitialState = (initial?: Partial<EmployeeFormState>): EmployeeFormSta
   otherAllowance: '',
   phoneAllowance: '',
   workNatureAllowance: '',
+  workPressureAllowance: '',
   payMethod: 'transfer',
   bankTransferAmount: '',
   costCenterId: '',
@@ -782,14 +785,16 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     ? teams.filter((t) => t.departmentId === Number(form.departmentId))
     : teams
 
-  // إجمالي الراتب الشهري = الأساسي + البدلات الثابتة (يُحدَّث لحظياً في الخطوة المالية)
+  // إجمالي الراتب الشهري المصروف = الأساسي + البدلات الثابتة + بدل ضغط العمل (يُحدَّث لحظياً في الخطوة المالية)؛
+  // أساس المؤثرات (الإضافي والخصومات ونهاية الخدمة) من غير بدل ضغط العمل — بيظهر تحته لما يكون فيه بدل
+  const workPressureAmount = Number(form.workPressureAllowance) || 0
   const totalMonthlySalary = mode === 'add' ?
     (Number(form.basicSalary) || 0) +
     (Number(form.housingAllowance) || 0) +
     (Number(form.transportAllowance) || 0) +
     (Number(form.phoneAllowance) || 0) +
     (Number(form.workNatureAllowance) || 0) +
-    (Number(form.otherAllowance) || 0) : 0
+    (Number(form.otherAllowance) || 0) + workPressureAmount : 0
 
   // الحقول الإجبارية عند الإضافة (قرار المالك): نفس قاعدة الخادم. في التعديل الناقص القديم لا يمنع الحفظ
   const requiredValuesOf = (state: EmployeeFormState): EmployeeRequiredValues => ({
@@ -913,6 +918,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (mode === 'add' && form.phoneAllowance !== '') payload.phoneAllowance = Number(form.phoneAllowance)
     if (mode === 'add' && form.workNatureAllowance !== '')
       payload.workNatureAllowance = Number(form.workNatureAllowance)
+    if (mode === 'add' && form.workPressureAllowance !== '')
+      payload.workPressureAllowance = Number(form.workPressureAllowance)
     // ===== مراجع المستندات — payload فقط، الباك يُنشئ EmployeeDocument لكل عنصر =====
     if (documentRefs.length > 0) payload.documentRefs = documentRefs
     // ===== المؤهلات والخبرات — تُحفظ بعد الموظف (تحتاج employeeId) =====
@@ -2013,6 +2020,11 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <label className="label">بدلات أخرى</label>
                   <input type={mode === 'edit' ? 'text' : 'number'} inputMode="decimal" disabled={salaryLocked} min="0" className="input disabled:opacity-50" placeholder="0" dir="ltr" value={form.otherAllowance} onChange={(e) => setField('otherAllowance', e.target.value)} />
                 </div>
+                <div>
+                  <label className="label">بدل ضغط العمل</label>
+                  <input type={mode === 'edit' ? 'text' : 'number'} inputMode="decimal" disabled={salaryLocked} min="0" className="input disabled:opacity-50" placeholder="0" dir="ltr" value={form.workPressureAllowance} onChange={(e) => setField('workPressureAllowance', e.target.value)} />
+                  <p className="text-xs text-gray-400 mt-1">بيتصرف كامل مع الراتب كل شهر — من غير مؤثرات: مش داخل في الإضافي ولا الخصومات ولا نهاية الخدمة</p>
+                </div>
               </div>
 
               <div className="p-4 bg-primary-50 rounded-xl">
@@ -2020,6 +2032,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <span className="font-medium text-gray-700">إجمالي الراتب الشهري</span>
                   <span className="text-2xl font-bold text-primary-600">{mode === 'edit' ? employeeSalaryTotal(form) ?? 'غير مكتمل' : formatMoney(totalMonthlySalary)} {form.currency ? currencyLabel(form.currency) : ''}</span>
                 </div>
+                {workPressureAmount > 0 && <p className="text-xs text-gray-600 mt-2">منه بدل ضغط العمل {formatMoney(workPressureAmount)} — بيتصرف كامل ومالوش مؤثرات؛ الإضافي والخصومات ونهاية الخدمة على الباقي من غيره.</p>}
               </div>
 
               {mode === 'add' && <div className="rounded-xl border border-primary-200 bg-primary-50 p-4 space-y-3">

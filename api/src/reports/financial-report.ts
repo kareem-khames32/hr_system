@@ -2,7 +2,7 @@
 // المصدر بنود المسيرات المحفوظة (payroll_items) وتفصيلها وقت الحساب — لا إعادة حساب. الفلوس بقروش صحيحة BigInt وأي منزلة زيادة تُقص (بلا تقريب).
 // كل تفصيل (البدلات، الإضافات، سطور الإجازة، الخصومات) يُقفل على عمود البند نفسه: الباقي غير المفصل يظهر سطرًا صريحًا، فمجموع الأعمدة = الإجمالي دائمًا.
 import { HOLIDAY_WORK_SOURCE_PREFIX } from '../attendance/holiday-work'
-import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
+import { MONTHLY_SALARY_COMPONENTS, PAID_SALARY_COMPONENTS } from '../employees/compensation'
 import { buildBankSheet } from '../payroll/bank-sheet'
 import { recordedDisbursement } from '../payroll/payroll-disbursement-split'
 import { payrollItemSettlementPayout } from '../payroll/payroll-settlement-salary'
@@ -12,8 +12,9 @@ export { cents as financialCents, money as financialMoney }
 
 // ===== التسميات =====
 export const FR_UNSPLIT_ALLOWANCE = 'UNSPLIT'
+// أعمدة البدلات: الخمسة + «بدل ضغط العمل» (مصروف جوه عمود البدلات بسطره في مكونات الراتب المحفوظة)
 export const FR_ALLOWANCE_BUCKETS: ReadonlyArray<{ key: string; label: string }> = [
-  ...MONTHLY_SALARY_COMPONENTS.slice(1).map(component => ({ key: component.code as string, label: component.nameAr as string })),
+  ...PAID_SALARY_COMPONENTS.slice(1).map(component => ({ key: component.code as string, label: component.nameAr as string })),
   { key: FR_UNSPLIT_ALLOWANCE, label: 'بدلات غير مفصلة' },
 ]
 

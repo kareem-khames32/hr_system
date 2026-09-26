@@ -14,9 +14,9 @@ const ui = require('../../src/lib/payroll-salary-history-api')
 const { PayrollSalaryHistoryEditor: Editor, PayrollSalaryHistorySummary: Summary } = require('../../src/components/PayrollSalaryHistoryEditor')
 const { PayrollLiveSourceDetails: Details, PayrollLiveSourcesPanel: Sources } = require('../../src/components/PayrollLiveSourcesPanel')
 const copy = value => JSON.parse(JSON.stringify(value))
-const segment = (extra = {}) => ({ effectiveFrom: '2026-01-01', effectiveTo: null, currency: 'EGP', basicSalary: '9000.01', housingAllowance: '100.02', transportAllowance: '200.03', phoneAllowance: '300.04', workNatureAllowance: '400.05', otherAllowance: '500.06', ...extra })
+const segment = (extra = {}) => ({ effectiveFrom: '2026-01-01', effectiveTo: null, currency: 'EGP', basicSalary: '9000.01', housingAllowance: '100.02', transportAllowance: '200.03', phoneAllowance: '300.04', workNatureAllowance: '400.05', otherAllowance: '500.06', workPressureAllowance: '0.00', ...extra })
 const view = (extra = {}) => ({ employee: { id: 9, employeeCode: 'TEST-9', fullName: 'موظف اختبار', branchId: 7 },
-  current: { currency: 'EGP', basicSalary: '12000.01', housingAllowance: '100.02', transportAllowance: '200.03', phoneAllowance: null, workNatureAllowance: null, otherAllowance: '500.06' },
+  current: { currency: 'EGP', basicSalary: '12000.01', housingAllowance: '100.02', transportAllowance: '200.03', phoneAllowance: null, workNatureAllowance: null, otherAllowance: '500.06', workPressureAllowance: '0.00' },
   currentSourceHash: 'a'.repeat(64), revision: 1, version: { id: 11, revision: 1, reason: 'إثبات من العقد', evidenceReference: 'عقد اختبار 123', createdAt: '2026-09-13T10:00:00Z', createdBy: 4, contentHash: 'b'.repeat(64), currentSourceHash: 'a'.repeat(64) },
   segments: [segment()], capabilities: { canEdit: true }, ...extra })
 const render = (Component, props) => renderToStaticMarkup(React.createElement(Component, props))
@@ -32,10 +32,10 @@ function editorFixture(value, extra = {}, options = {}) {
   try { return render(Editor, { ...props, ...extra }) } finally { React.useState = original }
 }
 
-test('six explicit salary amounts have no inferred zero or date in a new segment', () => {
+test('seven explicit salary amounts (six + work pressure) have no inferred zero or date in a new segment', () => {
   const row = ui.emptySalaryHistorySegment()
   assert.equal(row.effectiveFrom, ''); assert.equal(row.effectiveTo, null)
-  assert.deepEqual(Object.keys(ui.SALARY_HISTORY_FIELDS), ['basicSalary', 'housingAllowance', 'transportAllowance', 'phoneAllowance', 'workNatureAllowance', 'otherAllowance'])
+  assert.deepEqual(Object.keys(ui.SALARY_HISTORY_FIELDS), ['basicSalary', 'housingAllowance', 'transportAllowance', 'phoneAllowance', 'workNatureAllowance', 'otherAllowance', 'workPressureAllowance'])
   for (const field of Object.keys(ui.SALARY_HISTORY_FIELDS)) assert.equal(row[field], '')
   assert.ok(ui.salaryHistoryFormError([row], 'إثبات عقد', 'مستند123'))
 })
@@ -146,12 +146,12 @@ test('initial editor SSR has explicit load action, no invented dated values and 
   assert.match(render(Editor, { ...props, disabled: true }), /<button[^>]*disabled=""/)
 })
 
-test('loaded editor SSR exposes six exact amounts and explicit payroll months without inferring months from legacy dates', () => {
+test('loaded editor SSR exposes seven exact amounts (six + work pressure) and explicit payroll months without inferring months from legacy dates', () => {
   const response = view(); response.segments[0].basicSalary = '9999999999999999.99'
   const html = editorFixture(response)
   assert.match(html, /value="9999999999999999.99"/)
   for (const label of Object.values(ui.SALARY_HISTORY_FIELDS)) assert.ok(html.includes(label))
-  assert.equal((html.match(/inputMode="decimal"/g) ?? []).length, 6)
+  assert.equal((html.match(/inputMode="decimal"/g) ?? []).length, 7)
   assert.equal((html.match(/type="month"/g) ?? []).length, 2)
   assert.doesNotMatch(html, /type="date"|value="2026-01"/)
   assert.match(html, /حدد شهر سريان كل قيمة صراحة/)

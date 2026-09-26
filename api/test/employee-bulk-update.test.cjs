@@ -95,7 +95,7 @@ const snapshot = (extra = {}) => ({
   gender: 'male', birthDate: '1990-01-01', fingerprintCode: '0012', contractType: 'permanent', contractStart: '2020-01-01', contractEnd: null,
   bankName: 'بنك', iban: 'SA0380000000608010167519', payMethod: 'transfer', bankTransferAmount: null, gosiNumber: null, isGosiRegistered: null,
   gosiBaseSalary: null, currency: 'SAR', basicSalary: '5000.00', housingAllowance: '1000.00', transportAllowance: '0.00', phoneAllowance: null,
-  workNatureAllowance: null, otherAllowance: '0.00', ...extra,
+  workNatureAllowance: null, otherAllowance: '0.00', workPressureAllowance: '0.00', ...extra,
 })
 const lookups = (employees, holders = {}) => ({
   employees: new Map(employees.map(row => [row.employeeCode.toUpperCase(), row])),
@@ -216,7 +216,7 @@ test('الخطة: الراتب والبدلات — صلاحية اعتماد ا
   const row = preview.rows[0]
   assert.equal(row.status, 'ready')
   assert.deepEqual(row.salary.values, { basicSalary: '6000.00', housingAllowance: '1000.00', transportAllowance: '0.00', phoneAllowance: '0.00',
-    workNatureAllowance: '0.00', otherAllowance: '0.00' })
+    workNatureAllowance: '0.00', otherAllowance: '0.00', workPressureAllowance: '0.00' })
   assert.deepEqual(row.changes.map(change => [change.field, change.old, change.new]), [['basicSalary', '5000.00', '6000.00']])
   assert.match(row.warnings[0], /حدد «يسري من راتب شهر»/)
   assert.equal(preview.needs.salaryMonth, true)
@@ -230,6 +230,13 @@ test('الخطة: الراتب والبدلات — صلاحية اعتماد ا
   assert.equal(same.rows[0].status, 'unchanged')
   const noCurrency = plan(header, [['E1', '6000', '', '2026-09']], lookups([snapshot({ currency: null })]))
   assert.match(noCurrency.rows[0].errors[0], /عملة أجر الموظف/)
+  // بدل ضغط العمل (قرار المالك 26 سبتمبر): كود الموظف + عموده لوحده كفاية — تغيير مؤرخ واحد والباقي من الأجر الحالي
+  const pressure = plan(['كود الموظف', 'بدل ضغط العمل', 'يسري من راتب شهر'], [['E1', '1000', '2026-09']], data, { mode: 'apply' })
+  assert.equal(pressure.rows[0].status, 'ready', JSON.stringify(pressure.rows[0]))
+  assert.deepEqual(pressure.rows[0].salary.values, { basicSalary: '5000.00', housingAllowance: '1000.00', transportAllowance: '0.00', phoneAllowance: '0.00',
+    workNatureAllowance: '0.00', otherAllowance: '0.00', workPressureAllowance: '1000.00' })
+  assert.deepEqual(pressure.rows[0].changes.map(change => [change.field, change.old, change.new]), [['workPressureAllowance', '0.00', '1000.00']])
+  assert.equal(plan(['كود الموظف', 'بدل ضغط العمل'], [['E1', '-5']], data).rows[0].status, 'error')
 })
 
 test('الملف: الصفوف الفاضية بتتجاهل، أرقام الصفوف زي الملف، والحد 2000 صف', () => {
