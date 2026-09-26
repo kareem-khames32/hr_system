@@ -1,0 +1,90 @@
+module.exports = {
+  "checkedAt": "2026-09-26T03:48:23.286Z",
+  "evidenceDatabaseNames": [
+    "hr_2fa_race_test_6591845bface8b54",
+    "hr_assets_branch_test_76448218a3cf0257",
+    "hr_attendance_race_test_c57373187fa24678",
+    "hr_bulk_update_test_7e7075cd672262c3",
+    "hr_calendar_history_test_97935cefd7de5250",
+    "hr_calendar_transfer_test_e0f77f2c26c57cce",
+    "hr_category_chains_test_eaa450205c54a144",
+    "hr_chain_branch_copy_test_d55c0f6d77a5a030",
+    "hr_chain_disburse_test_3705d1d6fe5c6502",
+    "hr_codex_independent_test_670dea3f8282122a",
+    "hr_codex_r3cacheedges_test_334a6c6a667fb640",
+    "hr_codex_r3portal_test_05e8b77c16392c6b",
+    "hr_codex_r4edges_test_1efd96907a4de678",
+    "hr_codex_r4edges_test_2a374425dff6f01c",
+    "hr_codex_r4edges_test_714ff5dac823b840",
+    "hr_codex_r4edges_test_93e2690538c16d53",
+    "hr_codex_r4edges_test_c6f2754c73060643",
+    "hr_codex_r4independent_test_5d5f04292053a701",
+    "hr_codex_r4independent_test_908729d069c6e53a",
+    "hr_codex_r4independent_test_9e4268555e912504",
+    "hr_codex_r4independent_test_a7f76aa9b30fccd0",
+    "hr_codex_r4independent_test_bfbb78f9b17263d7",
+    "hr_codex_r4migrations_test_278517e2e28cd702",
+    "hr_codex_r4performance_test_d8841a53df201740",
+    "hr_cost_center_test_67991ca70130e924",
+    "hr_decision_race_cbdce9ac8f56d8d5",
+    "hr_domain_2fa_test_add8458e7b110a0f",
+    "hr_employee_export_test_acad1d7d31568605",
+    "hr_employee_suspension_test_a6bcae6eb708c143",
+    "hr_exemption_workflow_test_77e12a7d95e2fbc5",
+    "hr_financial_report_test_f8eaecd7de90a91f",
+    "hr_fulltest_attendance_test_7703a87984c3cbd0",
+    "hr_fulltest_payroll_test_90afc90bcacd39cb",
+    "hr_fulltest_payroll_test_a9ec1f6c4f6a284d",
+    "hr_holiday_work_test_e39cd080cd80b147",
+    "hr_leave_attach_test_4a8839782dcbe94f",
+    "hr_leave_sick_pay_test_9386c21582f2d18b",
+    "hr_leave_year_end_test_ca1f67fc519f118b",
+    "hr_night_shift_test_368729e85213453f",
+    "hr_org_chart_test_815e2d0c68ee8f45",
+    "hr_payroll_allowances_test_1e613a3b868e4794",
+    "hr_payroll_bonuses_test_5456180673b3bebd",
+    "hr_payroll_comp_test_04a919d3bb778453",
+    "hr_payroll_corrections_test_d5aa1d695cd313df",
+    "hr_payroll_coverage_test_f097cc4ebe4639e2",
+    "hr_payroll_exempt_test_a017517c08c7954f",
+    "hr_payroll_history_test_aaac2fdec8963f95",
+    "hr_payroll_installment_ledger_test_cc62b476121cf6c6",
+    "hr_payroll_membership_moves_test_9f90bb685141b5da",
+    "hr_payroll_ot_test_90b0f7da7001cf90",
+    "hr_payroll_policy_definitions_test_436c4e336dbdce1d",
+    "hr_payroll_policy_settings_test_a22dd070d10d37c4",
+    "hr_payroll_typed_deductions_test_8022d360bd834a20",
+    "hr_payroll_waivers_test_8b4d09ef9a36f3d5",
+    "hr_permission_window_test_186b69d0ab9cc27a",
+    "hr_recorded_split_test_d7ab3eaa6d54f0bc",
+    "hr_reports_test_b7d8c127c85744a4",
+    "hr_reports_test_c72ff9e290c4986b",
+    "hr_roles_collation_test_36e4944dc67322da",
+    "hr_roles_scope_test_49b46b5e2f71e944",
+    "hr_run_salary_period_test_aea369b14a823c80",
+    "hr_schedule_range_test_fb46f4cab1450bd0",
+    "hr_sec1_perm_test_0c524662125c99ef",
+    "hr_sec2_roles_test_9f87910c284fa742",
+    "hr_user_branch_scopes_test_e2dcaaf9825e7bfb"
+  ],
+  "checkedDatabases": 65,
+  "remaining": [],
+  "otherCodex": [],
+  "companyLedgerReadOnly": [
+    [
+      {
+        "appliedFiles": 69,
+        "latestAppliedAt": "2026-09-24T10:01:12.2029453"
+      }
+    ],
+    [
+      {
+        "version": "20260924_067_payroll_item_paid_split"
+      }
+    ]
+  ],
+  "secretScan": {
+    "files": 33,
+    "filesWithSecret": []
+  }
+}

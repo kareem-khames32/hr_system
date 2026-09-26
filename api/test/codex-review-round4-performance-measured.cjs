@@ -1,0 +1,1304 @@
+module.exports = [
+  {
+    "label": "daily copied latest round 1",
+    "route": "/attendance/daily?date=2026-09-22",
+    "queries": 554,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 555.21875,
+    "peakRssMiB": 564.33203125,
+    "ms": 829.7696999999989,
+    "status": 200,
+    "responseBytes": 5462,
+    "rows": 4,
+    "topSql": [
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 483,
+        "ms": 4512.103300000012
+      },
+      {
+        "group": "SELECT offboarding_cases",
+        "count": 4,
+        "ms": 134.30559999999969
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 4,
+        "ms": 73.51750000000175
+      },
+      {
+        "group": "SELECT employees",
+        "count": 10,
+        "ms": 61.421000000001186
+      },
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 14,
+        "ms": 39.89150000000154
+      },
+      {
+        "group": "SELECT attendance_days",
+        "count": 8,
+        "ms": 33.97999999999956
+      },
+      {
+        "group": "SELECT attendance_punches",
+        "count": 3,
+        "ms": 25.543399999998655
+      },
+      {
+        "group": "SELECT schedule_day_overrides",
+        "count": 6,
+        "ms": 15.50590000000011
+      }
+    ],
+    "sqlSumMs": 4976.608100000012
+  },
+  {
+    "label": "daily copied latest round 2",
+    "route": "/attendance/daily?date=2026-09-22",
+    "queries": 554,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 560.9140625,
+    "peakRssMiB": 579.3984375,
+    "ms": 511.1239999999998,
+    "status": 200,
+    "responseBytes": 5462,
+    "rows": 4,
+    "topSql": [
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 483,
+        "ms": 3750.6792000000005
+      },
+      {
+        "group": "SELECT offboarding_cases",
+        "count": 4,
+        "ms": 66.70459999999912
+      },
+      {
+        "group": "SELECT employees",
+        "count": 10,
+        "ms": 47.19880000000194
+      },
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 14,
+        "ms": 25.231599999999162
+      },
+      {
+        "group": "SELECT attendance_days",
+        "count": 8,
+        "ms": 16.71600000000035
+      },
+      {
+        "group": "SELECT schedule_day_overrides",
+        "count": 6,
+        "ms": 10.775900000002366
+      },
+      {
+        "group": "SELECT attendance_punches",
+        "count": 3,
+        "ms": 6.503999999998996
+      },
+      {
+        "group": "SELECT attendance_corrections",
+        "count": 3,
+        "ms": 6.454800000001342
+      }
+    ],
+    "sqlSumMs": 3970.5198000000055
+  },
+  {
+    "label": "daily copied latest round 3",
+    "route": "/attendance/daily?date=2026-09-22",
+    "queries": 554,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 579.40234375,
+    "peakRssMiB": 592.87109375,
+    "ms": 449.7397999999994,
+    "status": 200,
+    "responseBytes": 5462,
+    "rows": 4,
+    "topSql": [
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 483,
+        "ms": 3580.8356999999723
+      },
+      {
+        "group": "SELECT offboarding_cases",
+        "count": 4,
+        "ms": 67.77039999999943
+      },
+      {
+        "group": "SELECT employees",
+        "count": 10,
+        "ms": 38.5144000000073
+      },
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 14,
+        "ms": 19.63680000000022
+      },
+      {
+        "group": "SELECT attendance_days",
+        "count": 8,
+        "ms": 15.412099999997736
+      },
+      {
+        "group": "SELECT schedule_day_overrides",
+        "count": 6,
+        "ms": 8.505199999999604
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 4,
+        "ms": 5.352300000000469
+      },
+      {
+        "group": "SELECT schedule_exception_rules",
+        "count": 3,
+        "ms": 4.725900000001275
+      }
+    ],
+    "sqlSumMs": 3772.015499999985
+  },
+  {
+    "label": "daily copied maximum stored rows",
+    "route": "/attendance/daily?date=2026-08-31",
+    "queries": 10073,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 592.93359375,
+    "peakRssMiB": 776.38671875,
+    "ms": 13489.6109,
+    "status": 200,
+    "responseBytes": 1314707,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 1006,
+        "ms": 4162.810699999978
+      },
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 1499,
+        "ms": 1962.8188000000118
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1489,
+        "ms": 1943.8091999999979
+      },
+      {
+        "group": "SELECT attendance_days",
+        "count": 997,
+        "ms": 1326.1659999999647
+      },
+      {
+        "group": "SELECT requests",
+        "count": 987,
+        "ms": 1215.3209999999744
+      },
+      {
+        "group": "SELECT schedule_day_overrides",
+        "count": 992,
+        "ms": 1183.3396999999622
+      },
+      {
+        "group": "SELECT attendance_punches",
+        "count": 497,
+        "ms": 737.7522999999783
+      },
+      {
+        "group": "SELECT offboarding_cases",
+        "count": 497,
+        "ms": 706.0830999999598
+      }
+    ],
+    "sqlSumMs": 15742.767399999873
+  },
+  {
+    "label": "daily 500 cache OFF packet unchanged",
+    "route": "/attendance/daily?date=2026-08-31",
+    "queries": 18950,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 722.6484375,
+    "peakRssMiB": 836.984375,
+    "ms": 25429.563599999998,
+    "status": 200,
+    "responseBytes": 1314707,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 4271,
+        "ms": 5334.74760000009
+      },
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 1006,
+        "ms": 4056.239900000037
+      },
+      {
+        "group": "SELECT employees",
+        "count": 2481,
+        "ms": 3211.657599999813
+      },
+      {
+        "group": "SELECT work_schedules",
+        "count": 1279,
+        "ms": 1586.5090999998392
+      },
+      {
+        "group": "SELECT attendance_days",
+        "count": 997,
+        "ms": 1335.7371999999123
+      },
+      {
+        "group": "SELECT weekly_schedule_entries",
+        "count": 992,
+        "ms": 1240.8663999998753
+      },
+      {
+        "group": "SELECT requests",
+        "count": 987,
+        "ms": 1237.5896999998804
+      },
+      {
+        "group": "SELECT schedule_exception_rules",
+        "count": 992,
+        "ms": 1232.3949000000212
+      }
+    ],
+    "sqlSumMs": 26833.546999999468
+  },
+  {
+    "label": "daily original 88 second scenario",
+    "route": "/attendance/daily?date=2026-09-15",
+    "queries": 5458,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 795.87890625,
+    "peakRssMiB": 833.5390625,
+    "ms": 7645.283100000001,
+    "status": 200,
+    "responseBytes": 719968,
+    "rows": 273,
+    "topSql": [
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 616,
+        "ms": 2929.411499999893
+      },
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 808,
+        "ms": 1071.4452000001183
+      },
+      {
+        "group": "SELECT employees",
+        "count": 802,
+        "ms": 1065.2373999999836
+      },
+      {
+        "group": "SELECT attendance_days",
+        "count": 541,
+        "ms": 784.9365999999354
+      },
+      {
+        "group": "SELECT requests",
+        "count": 532,
+        "ms": 739.640499999965
+      },
+      {
+        "group": "SELECT schedule_day_overrides",
+        "count": 534,
+        "ms": 672.0806999999986
+      },
+      {
+        "group": "SELECT offboarding_cases",
+        "count": 268,
+        "ms": 466.198999999986
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 273,
+        "ms": 393.3941999999952
+      }
+    ],
+    "sqlSumMs": 9520.08030000006
+  },
+  {
+    "label": "daily branch10 cache OFF packet unchanged",
+    "route": "/attendance/daily?date=2026-09-15",
+    "queries": 9833,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 736.87109375,
+    "peakRssMiB": 824.48828125,
+    "ms": 12980.127300000007,
+    "status": 200,
+    "responseBytes": 719968,
+    "rows": 273,
+    "topSql": [
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 616,
+        "ms": 2766.5904999998747
+      },
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 1965,
+        "ms": 2439.654900000147
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1336,
+        "ms": 1789.2241000000067
+      },
+      {
+        "group": "SELECT requests_config",
+        "count": 733,
+        "ms": 848.3602999999857
+      },
+      {
+        "group": "SELECT attendance_days",
+        "count": 541,
+        "ms": 730.1016999999338
+      },
+      {
+        "group": "SELECT weekly_schedule_entries",
+        "count": 534,
+        "ms": 659.8038999999335
+      },
+      {
+        "group": "SELECT schedule_day_overrides",
+        "count": 534,
+        "ms": 654.7974000000249
+      },
+      {
+        "group": "SELECT schedule_exception_rules",
+        "count": 534,
+        "ms": 643.0538999999335
+      }
+    ],
+    "sqlSumMs": 14341.445100000405
+  },
+  {
+    "label": "daily copied today",
+    "route": "/attendance/daily?date=2026-09-26",
+    "queries": 11617,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 783.12890625,
+    "peakRssMiB": 824.84765625,
+    "ms": 7049.8076,
+    "status": 200,
+    "responseBytes": 2785,
+    "rows": 3,
+    "topSql": [
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 3634,
+        "ms": 40973.4221000002
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1919,
+        "ms": 23192.5197999996
+      },
+      {
+        "group": "SELECT schedule_exception_rules",
+        "count": 957,
+        "ms": 11756.110999999844
+      },
+      {
+        "group": "SELECT schedule_day_overrides",
+        "count": 960,
+        "ms": 10585.982900000206
+      },
+      {
+        "group": "SELECT weekly_schedule_entries",
+        "count": 957,
+        "ms": 9969.6853000001
+      },
+      {
+        "group": "SELECT work_schedules",
+        "count": 659,
+        "ms": 6899.184400000071
+      },
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 963,
+        "ms": 6335.495499999917
+      },
+      {
+        "group": "SELECT branches",
+        "count": 479,
+        "ms": 5481.443400000047
+      }
+    ],
+    "sqlSumMs": 126453.5640000001
+  },
+  {
+    "label": "employees copied 616",
+    "route": "/employees",
+    "queries": 4,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 666.66796875,
+    "peakRssMiB": 667.9453125,
+    "ms": 70.47430000000168,
+    "status": 200,
+    "responseBytes": 1122479,
+    "rows": 616,
+    "topSql": [
+      {
+        "group": "SELECT employees",
+        "count": 1,
+        "ms": 23.107300000003306
+      },
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 1,
+        "ms": 21.986699999994016
+      },
+      {
+        "group": "SELECT employee_suspensions",
+        "count": 1,
+        "ms": 2.7712999999930616
+      },
+      {
+        "group": "SELECT users",
+        "count": 1,
+        "ms": 1.966099999990547
+      }
+    ],
+    "sqlSumMs": 49.83139999998093
+  },
+  {
+    "label": "attendance report copied September",
+    "route": "/reports/attendance?month=2026-09",
+    "queries": 2,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 678.44140625,
+    "peakRssMiB": 0,
+    "ms": 21.08619999999064,
+    "status": 200,
+    "responseBytes": 137400,
+    "rows": 526,
+    "topSql": [
+      {
+        "group": "SELECT attendance_days",
+        "count": 1,
+        "ms": 15.037400000001071
+      },
+      {
+        "group": "SELECT users",
+        "count": 1,
+        "ms": 2.7998999999981606
+      }
+    ],
+    "sqlSumMs": 17.83729999999923
+  },
+  {
+    "label": "headcount copied 616",
+    "route": "/reports/headcount",
+    "queries": 3,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 679.703125,
+    "peakRssMiB": 0,
+    "ms": 18.604100000011385,
+    "status": 200,
+    "responseBytes": 1759,
+    "rows": null,
+    "topSql": [
+      {
+        "group": "SELECT employees",
+        "count": 1,
+        "ms": 12.963499999998021
+      },
+      {
+        "group": "SELECT users",
+        "count": 1,
+        "ms": 2.3136000000085915
+      },
+      {
+        "group": "SELECT employee_suspensions",
+        "count": 1,
+        "ms": 1.4637000000075204
+      }
+    ],
+    "sqlSumMs": 16.740800000014133
+  },
+  {
+    "label": "financial copied September",
+    "route": "/reports/financial/payroll-register?period=2026-09",
+    "queries": 5,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 679.70703125,
+    "peakRssMiB": 679.71484375,
+    "ms": 152.3070000000007,
+    "status": 200,
+    "responseBytes": 11260,
+    "rows": 7,
+    "topSql": [
+      {
+        "group": "SELECT payroll_items",
+        "count": 1,
+        "ms": 132.75359999999637
+      },
+      {
+        "group": "SELECT employee_obligations",
+        "count": 1,
+        "ms": 4.511899999997695
+      },
+      {
+        "group": "SELECT users",
+        "count": 1,
+        "ms": 1.9694999999919673
+      },
+      {
+        "group": "SELECT requests_config",
+        "count": 1,
+        "ms": 1.8381000000081258
+      },
+      {
+        "group": "SELECT other",
+        "count": 1,
+        "ms": 1.546199999997043
+      }
+    ],
+    "sqlSumMs": 142.6192999999912
+  },
+  {
+    "label": "payroll list copied",
+    "route": "/payroll/runs",
+    "queries": 2,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 679.8125,
+    "peakRssMiB": 0,
+    "ms": 9.687799999999697,
+    "status": 200,
+    "responseBytes": 16828,
+    "rows": 16,
+    "topSql": [
+      {
+        "group": "SELECT payroll_runs",
+        "count": 1,
+        "ms": 4.611399999994319
+      },
+      {
+        "group": "SELECT users",
+        "count": 1,
+        "ms": 2.4924000000028173
+      }
+    ],
+    "sqlSumMs": 7.103799999997136
+  },
+  {
+    "label": "draft 500",
+    "route": "/payroll/runs",
+    "queries": 536,
+    "writes": 0,
+    "transactions": 2,
+    "maxTransactionMs": 769.8095999999932,
+    "rssStartMiB": 677.4453125,
+    "peakRssMiB": 683.5859375,
+    "ms": 799.3370999999897,
+    "status": 201,
+    "responseBytes": 2770,
+    "rows": 0,
+    "topSql": [
+      {
+        "group": "SELECT employee_salary_history_versions",
+        "count": 500,
+        "ms": 303.38390000011714
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 4,
+        "ms": 138.84070000002976
+      },
+      {
+        "group": "SELECT employee_suspensions",
+        "count": 1,
+        "ms": 77.1304999999993
+      },
+      {
+        "group": "SELECT offboarding_cases",
+        "count": 1,
+        "ms": 70.73270000000775
+      },
+      {
+        "group": "SELECT payroll_period_claims",
+        "count": 1,
+        "ms": 70.017399999997
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1,
+        "ms": 31.283599999995204
+      },
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 1,
+        "ms": 7.203499999988708
+      },
+      {
+        "group": "SELECT payroll_policy_versions",
+        "count": 4,
+        "ms": 6.678700000033132
+      }
+    ],
+    "sqlSumMs": 747.7443000001949
+  },
+  {
+    "label": "calculate 500",
+    "route": "/payroll/runs/17/calculate",
+    "queries": 134562,
+    "writes": 1,
+    "transactions": 2,
+    "maxTransactionMs": 158899.2672,
+    "rssStartMiB": 683.6796875,
+    "peakRssMiB": 989.99609375,
+    "ms": 159775.8414,
+    "status": 201,
+    "responseBytes": 18311790,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "OTHER payroll_daily_accrual",
+        "count": 15000,
+        "ms": 31003.97460000038
+      },
+      {
+        "group": "OTHER payroll_items",
+        "count": 500,
+        "ms": 23087.858799999813
+      },
+      {
+        "group": "SELECT attendance_days",
+        "count": 17500,
+        "ms": 14998.303800001348
+      },
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 16500,
+        "ms": 11550.769199998715
+      },
+      {
+        "group": "SELECT attendance_corrections",
+        "count": 15500,
+        "ms": 10547.367400001487
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 15010,
+        "ms": 10485.180100002428
+      },
+      {
+        "group": "SELECT schedule_day_overrides",
+        "count": 16000,
+        "ms": 10326.090000001263
+      },
+      {
+        "group": "SELECT attendance_punches",
+        "count": 15500,
+        "ms": 10320.782100001874
+      }
+    ],
+    "sqlSumMs": 145452.52130000474
+  },
+  {
+    "label": "payroll detail 500",
+    "route": "/payroll/runs/17",
+    "queries": 18,
+    "writes": 0,
+    "transactions": 1,
+    "maxTransactionMs": 446.75639999998384,
+    "rssStartMiB": 789.4453125,
+    "peakRssMiB": 816.4375,
+    "ms": 600.5522000000055,
+    "status": 200,
+    "responseBytes": 18311790,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_items",
+        "count": 2,
+        "ms": 171.64449999999488
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 4,
+        "ms": 124.11020000002463
+      },
+      {
+        "group": "SELECT overtime_entries",
+        "count": 1,
+        "ms": 47.10309999997844
+      },
+      {
+        "group": "SELECT payroll_period_claims",
+        "count": 1,
+        "ms": 46.79950000002282
+      },
+      {
+        "group": "SELECT payroll_run_members",
+        "count": 1,
+        "ms": 25.115300000004936
+      },
+      {
+        "group": "SELECT users",
+        "count": 2,
+        "ms": 5.305400000012014
+      },
+      {
+        "group": "SELECT payroll_policy_versions",
+        "count": 2,
+        "ms": 1.7668999999877997
+      },
+      {
+        "group": "SELECT requests_config",
+        "count": 1,
+        "ms": 1.4689000000071246
+      }
+    ],
+    "sqlSumMs": 426.0955000000249
+  },
+  {
+    "label": "bank sheet 500",
+    "route": "/payroll/runs/17/bank-sheet",
+    "queries": 20,
+    "writes": 0,
+    "transactions": 1,
+    "maxTransactionMs": 424.33439999999246,
+    "rssStartMiB": 902.54296875,
+    "peakRssMiB": 944.75,
+    "ms": 539.8422000000137,
+    "status": 200,
+    "responseBytes": 105351,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_items",
+        "count": 2,
+        "ms": 173.965200000006
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 4,
+        "ms": 106.74239999998827
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1,
+        "ms": 73.72239999999874
+      },
+      {
+        "group": "SELECT payroll_period_claims",
+        "count": 1,
+        "ms": 49.7383999999729
+      },
+      {
+        "group": "SELECT overtime_entries",
+        "count": 1,
+        "ms": 49.58220000000438
+      },
+      {
+        "group": "SELECT payroll_run_members",
+        "count": 1,
+        "ms": 8.642400000011548
+      },
+      {
+        "group": "SELECT payroll_item_disbursements",
+        "count": 1,
+        "ms": 5.322799999994459
+      },
+      {
+        "group": "SELECT users",
+        "count": 2,
+        "ms": 3.3285000000032596
+      }
+    ],
+    "sqlSumMs": 477.6923999999999
+  },
+  {
+    "label": "financial include draft 500",
+    "route": "/reports/financial/payroll-register?period=2026-07&includeDraft=true&branchId=15",
+    "queries": 4,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 816.57421875,
+    "peakRssMiB": 817.54296875,
+    "ms": 1461.14929999999,
+    "status": 200,
+    "responseBytes": 403481,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_items",
+        "count": 1,
+        "ms": 1436.3916000000027
+      },
+      {
+        "group": "SELECT users",
+        "count": 1,
+        "ms": 2.844100000016624
+      },
+      {
+        "group": "SELECT other",
+        "count": 1,
+        "ms": 1.7051999999966938
+      },
+      {
+        "group": "SELECT requests_config",
+        "count": 1,
+        "ms": 1.6448999999847729
+      }
+    ],
+    "sqlSumMs": 1442.5858000000007
+  },
+  {
+    "label": "approve 500 including acknowledgements",
+    "route": "fixture.approve including prerequisite acknowledgements",
+    "queries": 319656,
+    "writes": 2,
+    "transactions": 7,
+    "maxTransactionMs": 258063.68569999997,
+    "rssStartMiB": 814.515625,
+    "peakRssMiB": 1269.8828125,
+    "ms": 260356.69859999997,
+    "status": 200,
+    "responseBytes": 1996736,
+    "rows": null,
+    "topSql": [
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 60004,
+        "ms": 43562.38319999544
+      },
+      {
+        "group": "SELECT employees",
+        "count": 45504,
+        "ms": 36664.18750000026
+      },
+      {
+        "group": "SELECT requests_config",
+        "count": 30004,
+        "ms": 21889.54099999598
+      },
+      {
+        "group": "SELECT schedule_day_overrides",
+        "count": 30000,
+        "ms": 20826.051300002175
+      },
+      {
+        "group": "SELECT work_schedules",
+        "count": 30000,
+        "ms": 20705.34040000409
+      },
+      {
+        "group": "SELECT weekly_schedule_entries",
+        "count": 30000,
+        "ms": 20225.12610000407
+      },
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 16000,
+        "ms": 12411.857800000638
+      },
+      {
+        "group": "SELECT attendance_days",
+        "count": 15500,
+        "ms": 12376.72220000028
+      }
+    ],
+    "sqlSumMs": 235371.83900000632
+  },
+  {
+    "label": "disbursement 500",
+    "route": "/payroll/disbursement/runs/17",
+    "queries": 6,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 1152.7890625,
+    "peakRssMiB": 1182.10546875,
+    "ms": 375.58889999997336,
+    "status": 200,
+    "responseBytes": 246953,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_items",
+        "count": 1,
+        "ms": 197.28610000002664
+      },
+      {
+        "group": "SELECT payroll_run_members",
+        "count": 1,
+        "ms": 62.99619999999413
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1,
+        "ms": 52.397100000001956
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 1,
+        "ms": 23.84849999996368
+      },
+      {
+        "group": "SELECT users",
+        "count": 1,
+        "ms": 2.6829000000143424
+      },
+      {
+        "group": "SELECT payroll_item_disbursements",
+        "count": 1,
+        "ms": 2.232499999983702
+      }
+    ],
+    "sqlSumMs": 341.44329999998445
+  },
+  {
+    "label": "pay 500",
+    "route": "/payroll/runs/17/pay",
+    "queries": 2514,
+    "writes": 501,
+    "transactions": 1,
+    "maxTransactionMs": 2343.6561999999685,
+    "rssStartMiB": 953.16015625,
+    "peakRssMiB": 1013.8671875,
+    "ms": 2363.2641000000294,
+    "status": 201,
+    "responseBytes": 1996782,
+    "rows": null,
+    "topSql": [
+      {
+        "group": "SELECT attendance_exemptions",
+        "count": 500,
+        "ms": 302.0278999992879
+      },
+      {
+        "group": "OTHER other",
+        "count": 501,
+        "ms": 301.7349999995786
+      },
+      {
+        "group": "SELECT offboarding_cases",
+        "count": 500,
+        "ms": 298.0989000000991
+      },
+      {
+        "group": "SELECT loan_installments",
+        "count": 500,
+        "ms": 285.2930000000051
+      },
+      {
+        "group": "UPDATE payroll_items",
+        "count": 500,
+        "ms": 275.15390000032494
+      },
+      {
+        "group": "SELECT payroll_items",
+        "count": 1,
+        "ms": 272.64240000001155
+      },
+      {
+        "group": "SELECT payroll_period_claims",
+        "count": 2,
+        "ms": 159.71149999997579
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 3,
+        "ms": 97.7436999999336
+      }
+    ],
+    "sqlSumMs": 2085.056499999191
+  },
+  {
+    "label": "paid bank sheet 500",
+    "route": "/payroll/runs/17/bank-sheet",
+    "queries": 19,
+    "writes": 0,
+    "transactions": 1,
+    "maxTransactionMs": 553.8776000000071,
+    "rssStartMiB": 997.16015625,
+    "peakRssMiB": 1023.02734375,
+    "ms": 638.4109000000171,
+    "status": 200,
+    "responseBytes": 105345,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_runs",
+        "count": 4,
+        "ms": 255.2603999999119
+      },
+      {
+        "group": "SELECT payroll_items",
+        "count": 1,
+        "ms": 109.97689999995055
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1,
+        "ms": 51.38630000001285
+      },
+      {
+        "group": "SELECT payroll_period_claims",
+        "count": 1,
+        "ms": 47.85869999998249
+      },
+      {
+        "group": "SELECT overtime_entries",
+        "count": 1,
+        "ms": 45.60560000000987
+      },
+      {
+        "group": "SELECT payroll_run_parity_explanations",
+        "count": 1,
+        "ms": 36.83429999998771
+      },
+      {
+        "group": "SELECT payroll_run_members",
+        "count": 1,
+        "ms": 27.59539999999106
+      },
+      {
+        "group": "SELECT users",
+        "count": 2,
+        "ms": 5.455000000016298
+      }
+    ],
+    "sqlSumMs": 586.8405999998795
+  },
+  {
+    "label": "paid financial 500",
+    "route": "/reports/financial/payroll-register?period=2026-07&branchId=15",
+    "queries": 4,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 1011.1796875,
+    "peakRssMiB": 1011.1953125,
+    "ms": 1466.2366000000038,
+    "status": 200,
+    "responseBytes": 400476,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_items",
+        "count": 1,
+        "ms": 1444.7525000000023
+      },
+      {
+        "group": "SELECT users",
+        "count": 1,
+        "ms": 2.510699999984354
+      },
+      {
+        "group": "SELECT requests_config",
+        "count": 1,
+        "ms": 1.7805999999982305
+      },
+      {
+        "group": "SELECT other",
+        "count": 1,
+        "ms": 1.424799999978859
+      }
+    ],
+    "sqlSumMs": 1450.4685999999638
+  },
+  {
+    "label": "paid disbursement 500",
+    "route": "/payroll/disbursement/runs/17",
+    "queries": 7,
+    "writes": 0,
+    "transactions": 0,
+    "maxTransactionMs": 0,
+    "rssStartMiB": 1011.56640625,
+    "peakRssMiB": 1017.328125,
+    "ms": 204.62020000000484,
+    "status": 200,
+    "responseBytes": 248603,
+    "rows": 500,
+    "topSql": [
+      {
+        "group": "SELECT payroll_items",
+        "count": 1,
+        "ms": 80.62040000001434
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1,
+        "ms": 53.14049999997951
+      },
+      {
+        "group": "SELECT payroll_run_members",
+        "count": 1,
+        "ms": 17.32589999999618
+      },
+      {
+        "group": "SELECT users",
+        "count": 2,
+        "ms": 9.638199999986682
+      },
+      {
+        "group": "SELECT payroll_runs",
+        "count": 1,
+        "ms": 6.602300000027753
+      },
+      {
+        "group": "SELECT payroll_item_disbursements",
+        "count": 1,
+        "ms": 1.661199999973178
+      }
+    ],
+    "sqlSumMs": 168.98849999997765
+  },
+  {
+    "label": "assign month 500 full service",
+    "route": "/attendance/schedule/range",
+    "queries": 13040,
+    "writes": 0,
+    "transactions": 500,
+    "maxTransactionMs": 59.14049999997951,
+    "rssStartMiB": 1052.76171875,
+    "peakRssMiB": 1225.890625,
+    "ms": 16687.638099999982,
+    "status": 201,
+    "responseBytes": 183,
+    "rows": null,
+    "topSql": [
+      {
+        "group": "OTHER weekly_schedule_entries",
+        "count": 2000,
+        "ms": 3412.1359999997658
+      },
+      {
+        "group": "SELECT weekly_schedule_entries",
+        "count": 3000,
+        "ms": 2297.971599995799
+      },
+      {
+        "group": "OTHER schedule_day_overrides",
+        "count": 1000,
+        "ms": 1638.2310000002035
+      },
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 2030,
+        "ms": 1571.0659000001615
+      },
+      {
+        "group": "SELECT schedule_day_overrides",
+        "count": 1500,
+        "ms": 1227.3644000010681
+      },
+      {
+        "group": "SELECT employees",
+        "count": 1001,
+        "ms": 976.8581000019913
+      },
+      {
+        "group": "OTHER other",
+        "count": 1000,
+        "ms": 867.3105000025826
+      },
+      {
+        "group": "SELECT work_schedules",
+        "count": 1000,
+        "ms": 749.6244000008446
+      }
+    ],
+    "sqlSumMs": 13253.516900001152
+  },
+  {
+    "label": "assign month 500 mixed service",
+    "route": "/attendance/schedule/range",
+    "queries": 12265,
+    "writes": 0,
+    "transactions": 475,
+    "maxTransactionMs": 106.374199999962,
+    "rssStartMiB": 1225.90625,
+    "peakRssMiB": 1360.8984375,
+    "ms": 15598.967000000062,
+    "status": 201,
+    "responseBytes": 2183,
+    "rows": null,
+    "topSql": [
+      {
+        "group": "OTHER weekly_schedule_entries",
+        "count": 1675,
+        "ms": 2857.232399998931
+      },
+      {
+        "group": "SELECT weekly_schedule_entries",
+        "count": 2625,
+        "ms": 2130.1709999939194
+      },
+      {
+        "group": "OTHER schedule_day_overrides",
+        "count": 1275,
+        "ms": 1930.0255000002217
+      },
+      {
+        "group": "SELECT attendance_rule_versions",
+        "count": 1930,
+        "ms": 1546.032000003499
+      },
+      {
+        "group": "SELECT schedule_day_overrides",
+        "count": 1425,
+        "ms": 1102.660200002254
+      },
+      {
+        "group": "SELECT employees",
+        "count": 951,
+        "ms": 928.4618000003975
+      },
+      {
+        "group": "OTHER other",
+        "count": 950,
+        "ms": 833.443200002308
+      },
+      {
+        "group": "SELECT work_schedules",
+        "count": 950,
+        "ms": 689.7263999988791
+      }
+    ],
+    "sqlSumMs": 12462.083499999717
+  }
+]
