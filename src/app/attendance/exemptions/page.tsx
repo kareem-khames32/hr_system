@@ -335,6 +335,7 @@ function ExemptionsContent() {
                     {row.approvedByUserId && <div>الموارد البشرية: {row.approvedByName ?? `#${row.approvedByUserId}`}</div>}
                     {row.executiveApprovedByUserId && <div>التنفيذي: {row.executiveApprovedByName ?? `#${row.executiveApprovedByUserId}`}</div>}
                     {row.terminatedByUserId && <div>أنهاه: {row.terminatedByName ?? `#${row.terminatedByUserId}`}</div>}
+                    {row.actions.blockedBy === 'SELF' && <div className="text-warning-600">الاستثناء عليك أنت؛ القرار لمستخدم آخر.</div>}
                     {row.actions.blockedBy === 'CREATOR' && <div className="text-warning-600">أنشأته أنت؛ القرار لمستخدم آخر.</div>}
                     {row.actions.blockedBy === 'HR_APPROVER' && <div className="text-warning-600">اعتمدتَ خطوة الموارد البشرية؛ القرار التنفيذي لمستخدم آخر.</div>}
                     {row.state === 'PENDING_EXECUTIVE' && !row.actions.approveExecutive && <div className="text-warning-600">

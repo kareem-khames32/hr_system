@@ -14,7 +14,7 @@ export interface AttendanceExemptionActions {
   cancel: boolean
   terminate: boolean
   // سبب منع القرار لهذا المستخدم: أنشأ الطلب، أو اعتمد خطوة الموارد البشرية في استثناء قيادي
-  blockedBy: 'CREATOR' | 'HR_APPROVER' | null
+  blockedBy: 'SELF' | 'CREATOR' | 'HR_APPROVER' | null
 }
 
 export interface AttendanceExemptionRow extends ApiAttendanceExemption {

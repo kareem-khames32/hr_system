@@ -715,8 +715,8 @@ test('Owner 26-Sep: the old separation still binds non-HR creators and the HR ma
   const own = await create(selfEmployee, {}, hrSelf)
   assert.deepEqual([own.status, own.approvedByUserId], ['PENDING', null])
   const denied = await request(hrSelf, 'POST', `${route(own.id)}/approve`, { reason: explanation })
-  assert.deepEqual([denied.status, denied.body.code], [403, 'EXEMPT-SOD-CREATOR'])
-  assert.equal((await request(hrSelf, 'GET', '/attendance-exemptions')).body.rows.find(item => item.id === own.id).actions.blockedBy, 'CREATOR')
+  assert.deepEqual([denied.status, denied.body.code], [403, 'EXEMPT-SOD-SELF'])
+  assert.equal((await request(hrSelf, 'GET', '/attendance-exemptions')).body.rows.find(item => item.id === own.id).actions.blockedBy, 'SELF')
   assert.equal((await approve(own, approver)).status, 'APPROVED')
   // منشئ بلا سلطة الموارد البشرية: كما كان
   const plain = await create(await employee(), {}, creator)
@@ -729,4 +729,21 @@ test('Owner 26-Sep: the old separation still binds non-HR creators and the HR ma
   assert.deepEqual([listed.actions.approve, listed.actions.reject, listed.actions.blockedBy], [true, true, null])
   const decided = await approve(legacy, hrManager)
   assert.deepEqual([decided.status, decided.approvedByUserId, decided.createdByUserId], ['APPROVED', hrManager.id, hrManager.id])
+})
+
+test('SoD self: an approver never decides an exemption on himself even when another user created it', async () => {
+  // الثغرة القديمة: المنع كان على المنشئ بس — فصاحب صلاحية الاعتماد كان يعتمد استثناء نفسه لو حد تاني أنشأه
+  const subject = await employee()
+  const selfApprover = await user([viewPerm, approvePerm, executivePerm], branchA.id, { role: 'hr_manager', employeeId: subject.id })
+  const row = await create(subject, {}, creator)
+  assert.deepEqual([row.status, row.approvedByUserId], ['PENDING', null])
+  const listed = (await request(selfApprover, 'GET', '/attendance-exemptions')).body.rows.find(item => item.id === row.id)
+  assert.deepEqual([listed.actions.approve, listed.actions.reject, listed.actions.blockedBy], [false, false, 'SELF'])
+  const approved = await request(selfApprover, 'POST', `${route(row.id)}/approve`, { reason: explanation })
+  assert.deepEqual([approved.status, approved.body.code], [403, 'EXEMPT-SOD-SELF'])
+  const rejected = await request(selfApprover, 'POST', `${route(row.id)}/reject`, { reason: explanation })
+  assert.deepEqual([rejected.status, rejected.body.code], [403, 'EXEMPT-SOD-SELF'])
+  // مستخدم تاني يقرر عادي، وماحدش اتكتب له قرار باسم صاحب الاستثناء
+  assert.equal((await repo('AttendanceExemption').findOneBy({ id: row.id })).status, 'PENDING')
+  assert.equal((await approve(row, approver)).status, 'APPROVED')
 })

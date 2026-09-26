@@ -125,6 +125,10 @@ export class AttendanceExemptionsService {
   // ومعتمد خطوة الموارد البشرية لا يتخذ القرار التنفيذي. قرار المالك 26 سبتمبر: القاعدتان مابيسرّوش على صاحب سلطة
   // الموارد البشرية في استثناء غيره (قراره نهائي، وإنشاؤه بيتعتمد لحظتها أصلًا) — وبيسرّوا على الباقي وعلى استثنائه هو لنفسه.
   private separation(user: JwtPayload, row: AttendanceExemption, executiveStage: boolean) {
+    // صاحب الاستثناء مايقررش فيه (اعتماد أو رفض) حتى لو حد تاني أنشأه — ولا صاحب سلطة الموارد البشرية: استثناؤه لنفسه بقرار غيره
+    if (this.ownExemption(user, row)) {
+      throw new ForbiddenException({ code: 'EXEMPT-SOD-SELF', message: 'لا تقرر في استثناء حضور على نفسك؛ القرار لمستخدم آخر' })
+    }
     const hrFinal = this.hrFinal(user, row.employeeId)
     if (row.createdByUserId === user.sub && !hrFinal) {
       throw new ForbiddenException({ code: 'EXEMPT-SOD-CREATOR', message: 'منشئ طلب الاستثناء لا يعتمده ولا يرفضه؛ القرار لمستخدم آخر، ويستطيع المنشئ إلغاء طلبه' })
@@ -132,6 +136,10 @@ export class AttendanceExemptionsService {
     if (executiveStage && row.approvedByUserId === user.sub && !hrFinal) {
       throw new ForbiddenException({ code: 'EXEMPT-SOD-EXECUTIVE', message: 'من اعتمد خطوة الموارد البشرية لا يتخذ القرار التنفيذي لنفس الاستثناء' })
     }
+  }
+
+  private ownExemption(user: JwtPayload, row: Pick<AttendanceExemption, 'employeeId'>) {
+    return !!user.employeeId && Number(user.employeeId) === Number(row.employeeId)
   }
 
   private today() {
@@ -155,12 +163,13 @@ export class AttendanceExemptionsService {
     const hrFinal = this.hrFinal(user, row.employeeId)
     const creator = row.createdByUserId === user.sub && !hrFinal
     const hrApprover = executiveStage && row.approvedByUserId === user.sub && !hrFinal
+    const self = this.ownExemption(user, row)
     const decisionPerm = executiveStage ? 'attendance_exemption.approve_executive' : 'attendance_exemption.approve'
-    const blockedBy: 'CREATOR' | 'HR_APPROVER' | null = !pending ? null : creator ? 'CREATOR' : hrApprover ? 'HR_APPROVER' : null
+    const blockedBy: 'SELF' | 'CREATOR' | 'HR_APPROVER' | null = !pending ? null : self ? 'SELF' : creator ? 'CREATOR' : hrApprover ? 'HR_APPROVER' : null
     return {
-      approve: pending && !executiveStage && !creator && userHasPerm(user, 'attendance_exemption.approve'),
-      approveExecutive: executiveStage && !creator && !hrApprover && userHasPerm(user, 'attendance_exemption.approve_executive'),
-      reject: pending && !creator && !hrApprover && userHasPerm(user, decisionPerm),
+      approve: pending && !executiveStage && !self && !creator && userHasPerm(user, 'attendance_exemption.approve'),
+      approveExecutive: executiveStage && !self && !creator && !hrApprover && userHasPerm(user, 'attendance_exemption.approve_executive'),
+      reject: pending && !self && !creator && !hrApprover && userHasPerm(user, decisionPerm),
       cancel: pending && userHasPerm(user, 'attendance_exemption.manage'),
       terminate: row.status === 'APPROVED' && !row.terminatedFrom && (!row.effectiveTo || row.effectiveTo >= today) &&
         userHasPerm(user, 'attendance_exemption.approve'),
