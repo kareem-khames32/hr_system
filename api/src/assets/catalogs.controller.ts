@@ -337,7 +337,11 @@ export class CatalogsController {
   private async holidayViews(rows: PublicHoliday[], user: JwtPayload) {
     const names = await holidayAudienceNames(this.holidays.manager)
     const views = rows.map(row => this.holidayView(row, names))
-    if (userHasPerm(user, 'settings.manage') || userHasPerm(user, 'settings.view')) return views
+    if (userHasPerm(user, 'settings.manage') || userHasPerm(user, 'settings.view')) {
+      // حساب الفروع بيشوف العطلة المخصصة لفروع نطاقه بس — تخصيص فرع تاني (وأرقام موظفيه) مش شغله، زي أي تعريف خاص بفرع
+      const scope = branchScopeOf(user)
+      return scope === null ? views : views.filter(view => !view.audience || inBranchScope(scope, view.audience.branchId))
+    }
     const member = await currentHolidayAudienceMember(this.holidays.manager, user.employeeId)
     return views.filter(view => !view.audienceInvalid && (!view.audience || holidayAudienceMatches(view.audience, member)))
       .map(({ audience, ...view }) => ({ ...view, targeted: !!audience }))

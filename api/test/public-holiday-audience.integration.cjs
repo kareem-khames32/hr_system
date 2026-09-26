@@ -404,3 +404,20 @@ test('HA-06: lists — managers see every holiday with its audience; an employee
   const scoped = await calendarOf(U.admin)
   for (const holiday of [H.forX, H.sales, H.team, H.branch, H.all]) assert.ok(scoped.some(row => row.id === holiday.id), `المدير بيشوف ${holiday.name}`)
 })
+
+test('HA-07: a branch-scoped settings account sees targeted holidays of its own branches only — in the holidays list and in the global calendar context — while the fingerprint stays the full one', async () => {
+  // حساب إعدادات مقفول على فرع الشروق: عطلات المعادي المخصصة (وأرقام موظفيها) مش ظاهرة له، واللي للكل ظاهرة
+  U.hrB = await repo('User').save({ email: 'hrB@holiday-audience.invalid', displayName: 'حساب hrB', passwordHash: 'test-only', role: 'hr_manager',
+    branchId: B.b.id, permissions: JSON.stringify(['settings.view', 'attendance.manage']) })
+  const targetedInA = [H.forX, H.sales, H.team, H.branch]
+  const listB = expect(await http(U.hrB, 'GET', '/catalogs/holidays'), 200).map(row => row.id)
+  assert.ok(listB.includes(H.all.id), 'اللي للكل ظاهرة')
+  for (const holiday of targetedInA) assert.ok(!listB.includes(holiday.id), `${holiday.name} مش ظاهرة لحساب فرع تاني`)
+  const listA = expect(await http(U.hrA, 'GET', '/catalogs/holidays'), 200).map(row => row.id)
+  for (const holiday of targetedInA) assert.ok(listA.includes(holiday.id), `${holiday.name} ظاهرة لحساب فرعها`)
+  const contextB = expect(await http(U.hrB, 'GET', '/attendance/calendar-context?scope=GLOBAL&sourceId=0'), 200)
+  const full = await calContext()
+  assert.ok(contextB.current.holidays.every(row => !row.audience || row.audience.branchId === B.b.id), 'مفيش تخصيص فرع تاني في السياق')
+  assert.ok(full.current.holidays.some(row => row.audience && row.audience.branchId === B.a.id), 'حساب الشركة بيشوفها كاملة')
+  assert.equal(contextB.currentSourceHash, full.currentSourceHash, 'البصمة على القيم كاملة زي ما هي')
+})

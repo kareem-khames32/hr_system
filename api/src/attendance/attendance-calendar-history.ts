@@ -237,9 +237,16 @@ export async function calendarSourceContext(em: EntityManager, user: JwtPayload,
   if (!['settings.manage','settings.view','attendance.manage','org.manage','employees.edit'].some(perm => userHasPerm(user, perm))) throw new ForbiddenException('ليس لديك صلاحية قراءة مصدر التقويم')
   await assertCalendarScope(user, scope, sourceId, em, false)
   const source = await readCalendarSource(em, scope, sourceId), latest = source.versions.at(-1)
+  // حساب الفروع بيقرا التقويم العام من غير العطلات المخصصة لفروع برّه نطاقه (تخصيصها وأرقام موظفيها مش شغله) —
+  // للعرض بس: البصمة (currentSourceHash) محسوبة على القيم كاملة، وتعديل التقويم العام أصلًا لحساب الشركة بس
+  const branchScope = branchScopeOf(user)
+  const current = scope === 'GLOBAL' && branchScope !== null
+    ? { ...source.current as GlobalCalendarSnapshot,
+      holidays: (source.current as GlobalCalendarSnapshot).holidays.filter(holiday => !holiday.audience || inBranchScope(branchScope, holiday.audience.branchId)) }
+    : source.current
   return { scope, sourceId, revision: source.revision, currentSourceHash: source.currentSourceHash,
     effectiveFrom: latest?.effectiveFrom ?? null, legacyBaseline: !latest || latest.legacyBaseline,
-    currentMatchesHistory: source.currentMatchesHistory, current: source.current }
+    currentMatchesHistory: source.currentMatchesHistory, current }
 }
 export async function confirmCalendarSource(em: EntityManager, user: JwtPayload, scope: CalendarScope, sourceId: number, change: unknown) {
   transaction(em)
