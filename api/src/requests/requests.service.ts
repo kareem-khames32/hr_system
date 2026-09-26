@@ -1177,6 +1177,10 @@ export class RequestsService {
       if (skipLevel && approverEmployeeId === req.requesterId) {
         throw new BadRequestException('«مدير المدير المباشر» طلع مقدّم الطلب نفسه — راجع المدير المسجّل في ملف مديره المباشر أو عدّل سلسلة الاعتماد')
       }
+      // دايرة أطول في المديرين المسجّلين (X مديره Y، وY مديره Z، وZ مديره X): «مدير المدير» طالع مرؤوس لمقدّم الطلب
+      if (skipLevel && approverEmployeeId && await this.resolver.reportsTo(approverEmployeeId, req.requesterId)) {
+        throw new BadRequestException('«مدير المدير المباشر» تابع لمقدّم الطلب نفسه في سلسلة المديرين المسجّلين (الهيكل فيه دايرة) — راجع المديرين المسجّلين في الملفات أو عدّل سلسلة الاعتماد')
+      }
       const dueAt = s.slaDays
         ? new Date(Date.now() + s.slaDays * 86400000).toISOString()
         : null

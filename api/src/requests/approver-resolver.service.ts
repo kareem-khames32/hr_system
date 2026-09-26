@@ -89,6 +89,19 @@ export class ApproverResolver {
     return { directManagerId: direct, approverId: above && above !== direct ? above : null, top: false }
   }
 
+  // الموظف تابع للمدير ده في سلسلة المديرين المسجّلين في الملفات؟ (مراجعة Codex الجولة 10، CR10-N01: دايرة X←Y←Z←X كانت بتعدّي
+  // و«مدير المدير» يطلع مرؤوس مقدّم الطلب). بالمدير المسجّل بس، من غير التدرّج اللي ممكن يلف طبيعي (مدير فرع جوه قسم مدير تاني)
+  async reportsTo(employeeId: number, managerId: number): Promise<boolean> {
+    const seen = new Set<number>()
+    for (let current: number | null = employeeId; current !== null && !seen.has(current);) {
+      seen.add(current)
+      const row = await this.employees.findOne({ where: { id: current }, select: { id: true, managerEmployeeId: true } })
+      current = row?.managerEmployeeId ?? null
+      if (current === managerId) return true
+    }
+    return false
+  }
+
   // مدير قسم الموظف
   async departmentManagerOf(employeeId: number): Promise<number | null> {
     const emp = await this.employees.findOne({ where: { id: employeeId } })

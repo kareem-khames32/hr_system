@@ -16,6 +16,7 @@ const NAME = /^hr_skip_level_test_[a-f0-9]{16}$/
 const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-skip-level-files-'))
 const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
+const { In } = require('../node_modules/typeorm')
 let app, ds, master, base, created = false
 const B = {}, E = {}, U = {}, C = {}
 const repo = name => { assert.equal(ds.options.database, database); return ds.getRepository(name) }
@@ -165,6 +166,42 @@ test('MDM-06: دايرة في الهيكل (مدير المدير = مقدّم �
   const refused = await submit(U.loopA)
   assert.equal(refused.status, 400, JSON.stringify(refused.body))
   assert.match(JSON.stringify(refused.body), /مقدّم الطلب نفسه/)
+})
+
+test('MDM-06b: دايرة أطول في المديرين المسجّلين (3 و4 أشخاص) — «مدير المدير» مرؤوس لمقدّم الطلب، فالتقديم بيقف (CR10-N01)', async () => {
+  const people = async (prefix, count) => {
+    const rows = []
+    for (let i = 0; i < count; i++) rows.push(await repo('Employee').save({ employeeCode: `${prefix}${i}`, fullName: `دايرة ${prefix}${i}`, branchId: B.nasr.id,
+      status: 'active', isActive: true, joinDate: '2024-01-01' }))
+    for (let i = 0; i < count; i++) await repo('Employee').update({ id: rows[i].id }, { managerEmployeeId: rows[(i + 1) % count].id })
+    return rows
+  }
+  for (const [prefix, count] of [['C3-', 3], ['C4-', 4]]) {
+    const [first] = await people(prefix, count)
+    const account = await repo('User').save({ email: `${prefix}@mdm.test`, displayName: prefix, passwordHash: 'test-only', role: 'employee',
+      branchId: B.nasr.id, employeeId: first.id, permissions: '[]' })
+    const refused = await submit(account)
+    assert.equal(refused.status, 400, `${prefix}: ${JSON.stringify(refused.body)}`)
+    assert.match(JSON.stringify(refused.body), /الهيكل فيه دايرة/)
+    assert.equal(await repo('Request').countBy({ requesterId: first.id, status: 'UNDER_REVIEW' }), 0)
+  }
+})
+
+test('MDM-06c: لفّة التدرّج الطبيعية (مدير فرع جوه قسم مديره تحته) مابتتحسبش دايرة — الخطوة بتروح لمدير الفرع', async () => {
+  const branch = await repo('Branch').save({ code: 'MDM-FB', name: 'فرع التدرّج' })
+  const person = (code, fullName, extra = {}) => repo('Employee').save({ employeeCode: code, fullName, branchId: branch.id, status: 'active', isActive: true,
+    joinDate: '2024-01-01', ...extra })
+  const branchManager = await person('MDM-FB-BM', 'مدير فرع التدرّج')
+  const departmentManager = await person('MDM-FB-DM', 'مدير قسم التدرّج')
+  const department = await repo('Department').save({ name: 'قسم التدرّج', branchId: branch.id, managerEmployeeId: departmentManager.id })
+  await repo('Branch').update({ id: branch.id }, { managerEmployeeId: branchManager.id })
+  // مدير الفرع ومدير القسم من غير مدير مسجّل، والاتنين في نفس القسم: التدرّج بيودّي كل واحد فيهم للتاني
+  await repo('Employee').update({ id: In([branchManager.id, departmentManager.id]) }, { departmentId: department.id })
+  const worker = await person('MDM-FB-W', 'موظف التدرّج', { departmentId: department.id, managerEmployeeId: departmentManager.id })
+  const account = await repo('User').save({ email: 'fallback-worker@mdm.test', displayName: 'fallback', passwordHash: 'test-only', role: 'employee',
+    branchId: branch.id, employeeId: worker.id, permissions: '[]' })
+  const submitted = ok(await submit(account))
+  assert.deepEqual(await stepsOf(submitted.id), [['direct_manager_of_requester', departmentManager.id], ['manager_of_direct_manager', branchManager.id]])
 })
 
 test('MDM-07: السرّي — مابيروحش للمدير المباشر، ولا من باب «مدير المدير» لما يقع عليه', async () => {
