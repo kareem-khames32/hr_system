@@ -321,15 +321,17 @@ test('RC-11: الاستخدام — عدد الطلبات وآخر طلب لكل
 
 test('RC-12: ربط الفئة مايتكتبش من إعدادات النظام العامة، وسلسلة الفئة ماتتنقلش لفرع حتى لو مفيش نوع عليها', async () => {
   refused(await request(U.admin, 'PATCH', '/settings/config', { key: 'requests.category_chain.leaves', value: String(C.A.id) }), 400, /بانِي الطلبات/)
-  // مراجعة Codex الجولة 4 (CR4-B01): SQL Server مابيفرقش بين الحروف الكبيرة والصغيرة، فالمفتاح بحالة أحرف مختلفة (أو بمسافة في
-  // آخره) كان بيلاقي الصف ويعدّي من الحارس — دلوقتي المفتاح لازم يطابق المخزّن بالحرف، وإلا «غير معروف»
-  for (const key of ['REQUESTS.CATEGORY_CHAIN.LEAVES', 'Requests.Category_Chain.Leaves']) {
-    refused(await request(U.admin, 'PATCH', '/settings/config', { key, value: String(C.A.id) }), 404, /غير معروف/)
+  // مراجعة Codex الجولة 4 (CR4-B01): SQL Server مابيفرقش بين الحروف الكبيرة والصغيرة (ولا بيحسب المسافة في الآخر)، فالمفتاح
+  // بكتابة مختلفة كان بيلاقي الصف ويعدّي من الحراس — دلوقتي كل حارس بيشتغل على المفتاح المخزّن بالحرف، أيًا كانت الكتابة
+  for (const key of ['REQUESTS.CATEGORY_CHAIN.LEAVES', 'Requests.Category_Chain.Leaves', 'requests.category_chain.leaves ']) {
+    refused(await request(U.admin, 'PATCH', '/settings/config', { key, value: String(C.A.id) }), 400, /بانِي الطلبات/)
   }
-  // ونفس الشيء لرخصة الاعتماد الذاتي للمسير (كانت بتتفك بالأحرف الكبيرة من غير صلاحية الرخصة)
+  // ورخصة الاعتماد الذاتي للمسير: حساب إعدادات من غير صلاحية الرخصة مايفكهاش بأي كتابة للمفتاح
+  U.settingsOnly = await repo('User').save({ email: 'settings-only@category.test', displayName: 'settings-only', passwordHash: 'test-only', role: 'employee',
+    branchId: null, employeeId: null, permissions: JSON.stringify(['settings.manage']), scopeAllBranches: true })
   await repo('RequestsConfig').save({ key: 'payroll.approval_self_approval_allowed', value: 'false' })
-  for (const key of ['PAYROLL.APPROVAL_SELF_APPROVAL_ALLOWED', 'payroll.approval_self_approval_allowed ']) {
-    refused(await request(U.admin, 'PATCH', '/settings/config', { key, value: 'true' }), 404, /غير معروف/)
+  for (const key of ['payroll.approval_self_approval_allowed', 'PAYROLL.APPROVAL_SELF_APPROVAL_ALLOWED', 'Payroll.Approval_Self_Approval_Allowed', 'payroll.approval_self_approval_allowed ']) {
+    refused(await request(U.settingsOnly, 'PATCH', '/settings/config', { key, value: 'true' }), 403, /PAYRUN-SOD-LICENCE-PERMISSION/)
   }
   assert.equal((await repo('RequestsConfig').findOneByOrFail({ key: 'payroll.approval_self_approval_allowed' })).value, 'false')
   assert.equal((await repo('RequestsConfig').findOneByOrFail({ key: 'requests.category_chain.leaves' })).value, String(C.B.id))

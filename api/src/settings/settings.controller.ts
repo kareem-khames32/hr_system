@@ -668,13 +668,15 @@ export class SettingsController {
   @Patch('config')
   async upsertConfig(@Body() dto: UpsertConfigDto, @CurrentUser() user: JwtPayload) {
     assertCompanyWideWrite(user)
-    // سلسلة الفئة ليها مسارها: تغييرها بينقل الأنواع الماشية عليها في نفس المعاملة — كتابة القيمة هنا كانت هتسيبهم على القديمة
-    if (isCategoryChainKey(dto.key)) throw new BadRequestException('سلسلة الفئة بتتغيّر من «بانِي الطلبات» — مش من هنا')
     // مفاتيح جديدة غير مسموحة إلا من الكود — نعدّل الموجود فقط
     const row = await this.config.findOne({ where: { key: dto.key } })
-    // المطابقة بالحرف: ترتيب SQL Server مابيفرقش بين الحروف الكبيرة والصغيرة، فمفتاح زي «Payroll.X» كان بيلاقي صف
-    // «payroll.x» ويعدّي من كل الحراس اللي تحت (بتقارن النص حرفيًا) — مراجعة Codex الجولة 4
-    if (!row || row.key !== dto.key) throw new NotFoundException(`المفتاح ${dto.key} غير معروف`)
+    if (!row) throw new NotFoundException(`المفتاح ${dto.key} غير معروف`)
+    // المفتاح القانوني من الصف نفسه قبل أي حارس: ترتيب SQL Server مابيفرقش بين الحروف الكبيرة والصغيرة (ولا بيحسب المسافة
+    // في الآخر)، فـ«PAYROLL.X» كان بيلاقي صف «payroll.x» ويعدّي من الحراس اللي بتقارن النص حرفيًا — مراجعة Codex الجولة 4.
+    // من هنا ولتحت كل حارس وكل كتابة على المفتاح المخزّن بالحرف، أيًا كانت كتابة الطلب
+    dto.key = row.key
+    // سلسلة الفئة ليها مسارها: تغييرها بينقل الأنواع الماشية عليها في نفس المعاملة — كتابة القيمة هنا كانت هتسيبهم على القديمة
+    if (isCategoryChainKey(dto.key)) throw new BadRequestException('سلسلة الفئة بتتغيّر من «بانِي الطلبات» — مش من هنا')
     // الخطوة 22 (B5، تصحيح المراجعة): رخصة الشركة الصغيرة تفك فصل المهام في اعتماد المسير — صلاحية مستقلة يمنحها مدير النظام فقط، لا settings.manage وحدها
     const licenceIssue = payrollSelfApprovalLicenceIssue({ key: dto.key, canManageLicence: userHasPerm(user, PAYROLL_SELF_APPROVAL_LICENCE_PERMISSION) })
     if (licenceIssue) throw new ForbiddenException(licenceIssue)
