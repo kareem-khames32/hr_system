@@ -15,6 +15,7 @@ import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
+import { branchLocalParentOfRows, branchLocalSubtree } from '../org/department-tree'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { audienceNeedsEmployee, audienceSubjectOf, parseRequestAudience, requestAudienceAllows, requestTypeInBranch } from '../requests/request-audience'
@@ -218,35 +219,31 @@ export class TypedDeductionsService {
   }
 
   // ===== الهيكل التنظيمي والنطاق (DD-03/04) =====
-  private departmentManagers(rows: Department[], departmentId: number | null | undefined): number[] {
-    const result: number[] = [], seen = new Set<number>()
+  // الشجرة هنا جوه فرع القسم بس (org/department-tree): «الإدارة التنفيذية» فوق كل الفروع مابتتحسبش أب لأقسام فرع تاني —
+  // مدير قسم من فرع تاني تحتها مايتصعّدش لرئيسها التنفيذي، ومديرها مايكسبش «مدير قسم» على أقسام الفروع التانية،
+  // ومسار القسم اللي بيرجع للشاشة مايكشفش اسم قسم من فرع برّه نطاق الحساب.
+  private departmentChain(rows: Department[], departmentId: number | null | undefined): Department[] {
+    const parentOf = branchLocalParentOfRows(rows)
+    const result: Department[] = [], seen = new Set<number>()
     let current = departmentId ? rows.find(row => row.id === departmentId) : undefined
     while (current && !seen.has(current.id)) {
-      seen.add(current.id)
-      if (current.managerEmployeeId) result.push(current.managerEmployeeId)
-      current = current.parentId ? rows.find(row => row.id === current!.parentId) : undefined
+      seen.add(current.id); result.push(current)
+      const parentId = parentOf(current.id)
+      current = parentId !== null ? rows.find(row => row.id === parentId) : undefined
     }
     return result
+  }
+
+  private departmentManagers(rows: Department[], departmentId: number | null | undefined): number[] {
+    return this.departmentChain(rows, departmentId).flatMap(row => row.managerEmployeeId ? [row.managerEmployeeId] : [])
   }
 
   departmentPath(rows: Department[], departmentId: number | null | undefined): number[] {
-    const result: number[] = [], seen = new Set<number>()
-    let current = departmentId ? rows.find(row => row.id === departmentId) : undefined
-    while (current && !seen.has(current.id)) {
-      seen.add(current.id); result.push(current.id)
-      current = current.parentId ? rows.find(row => row.id === current!.parentId) : undefined
-    }
-    return result
+    return this.departmentChain(rows, departmentId).map(row => row.id)
   }
 
   descendants(rows: Department[], roots: Set<number>): Set<number> {
-    const result = new Set(roots)
-    let grew = true
-    while (grew) {
-      grew = false
-      for (const row of rows) if (row.parentId && result.has(row.parentId) && !result.has(row.id)) { result.add(row.id); grew = true }
-    }
-    return result
+    return branchLocalSubtree(roots, rows.map(row => row.id), branchLocalParentOfRows(rows))
   }
 
   // نفس دلالة ApproverResolver: المدير المباشر ← قائد الفريق ← مدير القسم (صعودًا) ← مدير الفرع

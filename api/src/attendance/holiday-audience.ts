@@ -2,13 +2,14 @@ import { BadRequestException, ForbiddenException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
 import { inBranchScope, scopeWord } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
+import { branchLocalParentOf } from '../org/department-tree'
 
 // «تسري على» للعطلة الرسمية (طلب المالك 26 سبتمبر: «اقدر اخصص الاجازات الرسمية علي ناس معينه» — ترحيل 070).
 // NULL = للكل: السلوك القديم بالحرف لكل العطلات الموجودة. غير كده نفس ترتيب منتقي الاستهداف الموحّد:
 //   الفرع كله ← أقسام من الفرع ← فرق من الفرع ← موظفين بالاسم.
 // الشكل المخزن (public_holidays.audience وجوه نسخة التقويم العام) ثابت الترتيب ومرتب الأرقام عشان البصمة ماتتغيرش:
 //   {"level":"branch","branchId":3}
-//   {"level":"departments","branchId":3,"departmentIds":[5,6]}   ← القسم بيشمل أقسامه الفرعية
+//   {"level":"departments","branchId":3,"departmentIds":[5,6]}   ← القسم بيشمل أقسامه الفرعية جوه فرعه
 //   {"level":"teams","branchId":3,"teamIds":[9]}
 //   {"level":"employees","branchId":3,"employeeIds":[11,12]}      ← الموظف برقمه مهما اتنقل
 // فرع الأقسام/الفرق/الموظفين هو فرع الاختيار في المنتقي (للعرض والتعديل)؛ المطابقة نفسها بالقسم/الفريق/رقم الموظف.
@@ -106,7 +107,10 @@ export interface HolidayAudienceMember {
   /** null = تقويم فرع كامل مش موظف بعينه: بيطابق عطلة «الفرع كله» بتاعته بس */
   employeeId: number | null
   branchId: number | null
-  /** قسم الموظف في اليوم ده وأقسامه الأعلى — عطلة القسم بتشمل أقسامه الفرعية */
+  /**
+   * قسم الموظف في اليوم ده وأقسامه الأعلى جوه فرعه — عطلة القسم بتشمل أقسامه الفرعية. «الإدارة التنفيذية» فوق كل الفروع
+   * مابتدخلش مسار قسم من فرع تاني (org/department-tree): عطلة فرع لإدارته التنفيذية ماتوصلش لموظفي فرع تاني تحتها
+   */
   departmentPath: readonly number[]
   teamId: number | null
 }
@@ -127,7 +131,7 @@ export function holidayAudienceMatches(audience: HolidayAudience | null | undefi
 export const holidayAudienceNeedsOrg = (audience: HolidayAudience | null | undefined) =>
   audience?.level === 'departments' || audience?.level === 'teams'
 
-/** القسم وأقسامه الأعلى (من غير لف لو الشجرة فيها دايرة). */
+/** القسم وأقسامه الأعلى (من غير لف لو الشجرة فيها دايرة). مسار الموظف = parentOf من branchLocalParentOf (جوه فرع القسم). */
 export function departmentPathOf(departmentId: number | null | undefined, parentOf: (id: number) => number | null | undefined): number[] {
   const path: number[] = []
   for (let id = departmentId ?? null; id !== null && id !== undefined && !path.includes(id); id = parentOf(id) ?? null) path.push(id)
@@ -144,15 +148,16 @@ export async function currentHolidayAudienceMember(em: EntityManager, employeeId
   const rows: Array<{ branchId: number | null; departmentId: number | null; teamId: number | null }> =
     await em.query('SELECT [branchId], [departmentId], [teamId] FROM [employees] WHERE [id] = @0', [id])
   if (!rows.length) return null
-  const parents = new Map<number, number | null>()
+  const parents = new Map<number, number | null>(), branches = new Map<number, number | null>()
   if (rows[0].departmentId != null) {
-    for (const row of await em.query('SELECT [id], [parentId] FROM [departments]') as Array<{ id: number; parentId: number | null }>) {
+    for (const row of await em.query('SELECT [id], [parentId], [branchId] FROM [departments]') as Array<{ id: number; parentId: number | null; branchId: number | null }>) {
       parents.set(Number(row.id), row.parentId == null ? null : Number(row.parentId))
+      branches.set(Number(row.id), row.branchId == null ? null : Number(row.branchId))
     }
   }
   const num = (value: unknown) => value == null ? null : Number(value)
   return { employeeId: id, branchId: num(rows[0].branchId), teamId: num(rows[0].teamId),
-    departmentPath: departmentPathOf(num(rows[0].departmentId), dep => parents.get(dep)) }
+    departmentPath: departmentPathOf(num(rows[0].departmentId), branchLocalParentOf(dep => parents.get(dep), dep => branches.get(dep))) }
 }
 
 // ===== الوصف =====

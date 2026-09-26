@@ -1,6 +1,7 @@
 // الخطوات 16–18: تعريف المسير كمسودة، ومعاينة العضوية (قراءة فقط)، وتقرير «موظفون بلا مسير» وإقراره.
 // كل النداءات عبر apiFetch؛ الخادم هو المرجع في التحقق والأرقام.
 import { apiFetch, ApiError, type ApiBranch, type ApiDepartment, type ApiPayrollRun, type ApiTeam } from './api'
+import { branchLocalSubtree } from './department-tree'
 import type { PayrollPolicySummary } from './payroll-policies-api'
 
 // includeEmployeeIds = قائمة الإضافة الدائمة: أسماء ضمّها المالك للمسير فوق فلاتره («أضفهم لمسير…» أو نقل من مسير آخر).
@@ -169,15 +170,13 @@ const prefixed = (word: string, name: string) => new RegExp(`^(ال)?${word}`).t
 
 export interface PayrollScopeSummary { text: string; parts: string[]; empty: boolean }
 
-/** أقسام الاختيار مع فروعها (نفس توسعة الخادم للأقسام الفرعية). */
+/**
+ * أقسام الاختيار مع فروعها (نفس توسعة الخادم للأقسام الفرعية): جوه فرع كل قسم بس — «الإدارة التنفيذية» فوق كل الفروع
+ * مابتسحبش أقسام فرع تاني تحتها (department-tree).
+ */
 export function expandDepartmentIds(departments: ApiDepartment[], departmentIds: number[], includeSubDepartments = true): Set<number> {
-  const selected = new Set(departmentIds)
-  if (!includeSubDepartments) return selected
-  for (let grew = true; grew;) {
-    grew = false
-    for (const row of departments) if (row.parentId != null && selected.has(row.parentId) && !selected.has(row.id)) { selected.add(row.id); grew = true }
-  }
-  return selected
+  if (!includeSubDepartments) return new Set(departmentIds)
+  return branchLocalSubtree(departments, departmentIds)
 }
 
 /** جملة واحدة بالعربي تقرأ النطاق الناتج من الاختيار الحالي: «النطاق: فرع النصر — كل الأقسام — كل الفرق». */

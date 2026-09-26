@@ -1,5 +1,6 @@
 import type { EntityManager } from 'typeorm'
 import { isDisposableTestDatabase } from '../auth/jwt-secret'
+import { branchLocalParentOf, branchLocalSubtree } from '../org/department-tree'
 import type { PayrollScopeType } from './payroll.entities'
 
 /**
@@ -320,17 +321,19 @@ export function payrollOrgChangeDates(history: PayrollOrgHistory, employeeId: nu
   return [...dates].sort()
 }
 
+/**
+ * أبو القسم في حسابات المسير والتقويم: من نفس فرعه بس (org/department-tree) — «الإدارة التنفيذية» فوق كل الفروع مابتتحسبش
+ * أب لأقسام فرع تاني، فمسير أو عطلة على الإدارة التنفيذية مايسحبش موظفي فرع تاني تحتها.
+ */
+export function payrollDepartmentParentOf(history: Pick<PayrollOrgHistory, 'departmentParent' | 'departmentBranch'>): (id: number) => number | null {
+  return branchLocalParentOf(id => history.departmentParent.get(id), id => history.departmentBranch.get(id))
+}
+
+/** الأقسام المختارة، ومعاها (includeChildren) أقسامها الفرعية جوه فرع كل قسم. */
 export function payrollDepartmentSet(history: PayrollOrgHistory, departmentIds: number[], includeChildren: boolean): Set<number> {
   const result = new Set(departmentIds)
   if (!includeChildren) return result
-  let grew = true
-  while (grew) {
-    grew = false
-    for (const [id, parent] of history.departmentParent) {
-      if (parent !== null && result.has(parent) && !result.has(id)) { result.add(id); grew = true }
-    }
-  }
-  return result
+  return branchLocalSubtree(result, history.departmentParent.keys(), payrollDepartmentParentOf(history))
 }
 
 /** مطابقة موظف بمكانه لتعريف المسير: OR داخل النوع وAND بين الأنواع، والمُضافون يدويًا يدخلون فوق الفلاتر كلها. */

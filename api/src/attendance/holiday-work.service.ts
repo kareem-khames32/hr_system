@@ -10,6 +10,7 @@ import { AttendanceService } from './attendance.service'
 import { markPayrollDaysDirty } from '../payroll/payroll-daily-accrual'
 import { HolidayWorkOrder } from './holiday-work.entities'
 import { departmentPathOf, holidayAudienceMatches } from './holiday-audience'
+import { branchLocalParentOfRows } from '../org/department-tree'
 import { readCalendarSource } from './attendance-calendar-history'
 import type { CalendarHoliday } from './attendance-calendar-history'
 import { createCalendarResolverCache, selectCalendarVersion } from './attendance-calendar-resolver'
@@ -359,14 +360,15 @@ export class HolidayWorkService {
     const audiences = holidays.map(holiday => holiday.audience!)
     const branches = new Set(audiences.map(audience => audience.branchId))
     const named = new Set(audiences.flatMap(audience => audience.level === 'employees' ? audience.employeeIds : []))
-    const parents = new Map((await this.em.query('SELECT [id], [parentId] FROM [departments]') as Array<{ id: number; parentId: number | null }>)
-      .map(row => [Number(row.id), row.parentId == null ? null : Number(row.parentId)] as const))
+    // مسار القسم جوه فرعه بس (الإدارة التنفيذية فوق الفروع مابتدخلش مسار قسم من فرع تاني) — نفس مسار التقويم المؤرخ
+    const departments = await this.em.query('SELECT [id], [parentId], [branchId] FROM [departments]') as Array<{ id: number; parentId: number | null; branchId: number | null }>
+    const parentOf = branchLocalParentOfRows(departments)
     const targeted = [...(await this.employeesLite()).values()].filter(emp => !INACTIVE_STATUSES.has(emp.status) && holidayWorkGrantMatches(target, emp))
     // الترتيب بس (الحكم دايمًا من التقويم المؤرخ): المذكور بالاسم ← اللي تنظيمه الحالي جوه التخصيص ← باقي فرع التخصيص (اتنقلوا جواه)
     // ← الباقي (اتنقلوا من فرع لفرع). مراجعة Codex الجولة 8 (CR8-N01): انتهاء الحد مايبقاش حكم «يوم عادي»
     const rank = (emp: EmployeeLite) => named.has(emp.employeeId) ? 0
       : audiences.some(audience => holidayAudienceMatches(audience, { employeeId: emp.employeeId, branchId: emp.branchId, teamId: emp.teamId,
-        departmentPath: departmentPathOf(emp.departmentId, id => parents.get(id)) })) ? 1
+        departmentPath: departmentPathOf(emp.departmentId, parentOf) })) ? 1
       : emp.branchId != null && branches.has(emp.branchId) ? 2 : 3
     const ordered = targeted.map(emp => ({ emp, rank: rank(emp) })).sort((a, b) => a.rank - b.rank || a.emp.employeeId - b.emp.employeeId).map(row => row.emp)
     // ذاكرة تقويم واحدة للفحص كله: التقويم العام وتقويم الفرع ونسخ الجداول بتتقري مرة

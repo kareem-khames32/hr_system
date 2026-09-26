@@ -23,7 +23,7 @@ export class Department {
   @Column({ length: 50, nullable: true })
   code: string
 
-  // هرمي — قسم أب
+  // هرمي — قسم أب من نفس الفرع، أو «الإدارة التنفيذية» من أي فرع (فوق كل الفروع — org.service وorg/department-tree)
   @Column({ nullable: true })
   parentId: number
 

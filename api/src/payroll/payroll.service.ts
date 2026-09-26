@@ -48,6 +48,7 @@ import { claimPayrollPeriod, findPayrollConflicts, releasePayrollClaims } from '
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
+import { branchLocalParentOfRows, branchLocalSubtree } from '../org/department-tree'
 import { CostCenter } from '../assets/assets.entities'
 import { loadAttendanceExemptions, exemptionPolicyOnDate } from '../attendance/attendance-exemption-resolver'
 import { Request } from '../requests/entities/request.entity'
@@ -2077,11 +2078,8 @@ export class PayrollService {
     if (filters.departmentIds.length || filters.teamIds.length) {
       const departments = await em.getRepository(Department).find({ select: { id: true, branchId: true, parentId: true, name: true } })
       const byId = new Map(departments.map(row => [row.id, row]))
-      const selected = new Set(filters.departmentIds)
-      for (let grew = true; grew;) {
-        grew = false
-        for (const row of departments) if (row.parentId != null && selected.has(row.parentId) && !selected.has(row.id)) { selected.add(row.id); grew = true }
-      }
+      // الأقسام المختارة بأقسامها الفرعية جوه فرع كل قسم — نفس توسعة العضوية (payrollDepartmentSet)
+      const selected = branchLocalSubtree(filters.departmentIds, departments.map(row => row.id), branchLocalParentOfRows(departments))
       const offDepartments = filters.branchIds.length ? filters.departmentIds.filter(id => !filters.branchIds.includes(byId.get(id)!.branchId)) : []
       if (offDepartments.length) this.bad('PAYRUN-FILTER-UNLINKED', `القسم ${offDepartments.map(id => `«${byId.get(id)?.name}» (#${id})`).join('، ')} لا يتبع الفروع المختارة`, { departmentIds: offDepartments })
       if (filters.teamIds.length) {

@@ -31,6 +31,15 @@ import {
 } from '@/lib/api'
 import { useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 import { EmployeePicker } from '@/components/EmployeePicker'
+import {
+  EXECUTIVE_PARENT_LABEL,
+  departmentTreeRoots,
+  foreignChildrenOf,
+  hasHiddenParent,
+  isCrossBranchChild,
+  parentAfterBranchChange,
+  parentOptionsFor,
+} from '@/lib/department-tree'
 
 const emptyForm = {
   name: '',
@@ -62,6 +71,8 @@ export default function DepartmentsPage() {
   const [expandedDepts, setExpandedDepts] = useState<number[]>([])
 
   const [formData, setFormData] = useState({ ...emptyForm })
+  // تنبيه لما القسم الأب يتشال لوحده (تغيير الفرع أو تعليم الإدارة التنفيذية خلّاه غلط) — مايتشالش في صمت
+  const [parentNote, setParentNote] = useState<string | null>(null)
   const { canWrite: companyWide } = useCompanyWideWrite()
 
   const loadData = async () => {
@@ -76,7 +87,7 @@ export default function DepartmentsPage() {
       setBranches(brs)
       setEmployees(emps)
       setTeams(tms)
-      setExpandedDepts(deps.filter((d) => !d.parentId).map((d) => d.id))
+      setExpandedDepts(departmentTreeRoots(deps).map((d) => d.id))
       setError(null)
     } catch (err: any) {
       setError(err.message)
@@ -133,6 +144,7 @@ export default function DepartmentsPage() {
 
   const handleOpenModal = (dept?: ApiDepartment) => {
     setModalError(null)
+    setParentNote(null)
     if (dept) {
       setEditingDept(dept)
       setFormData({
@@ -239,6 +251,17 @@ export default function DepartmentsPage() {
               {dept.isExecutive && (
                 <span className="text-xs bg-primary-50 text-primary-700 px-2 py-0.5 rounded-full">الإدارة التنفيذية</span>
               )}
+              {/* قسم فرع تحت «الإدارة التنفيذية» (فوق كل الفروع): فرعه ظاهر جنبه */}
+              {isCrossBranchChild(dept, departments) && (
+                <span className="text-xs bg-gray-100 text-gray-600 px-2 py-0.5 rounded-full inline-flex items-center gap-1">
+                  <Building2 size={12} />
+                  {branchNameOf(dept.branchId)}
+                </span>
+              )}
+              {/* حساب الفرع مايشوفش الإدارة التنفيذية: القسم يبان جذر وعليه إنه تابع لها */}
+              {level === 0 && hasHiddenParent(dept, departments) && (
+                <span className="text-xs bg-primary-50 text-primary-700 px-2 py-0.5 rounded-full">تحت الإدارة التنفيذية</span>
+              )}
             </div>
             <p className="text-sm text-gray-500">{managerNameOf(dept.managerEmployeeId)}</p>
           </div>
@@ -305,8 +328,24 @@ export default function DepartmentsPage() {
   }
 
   const totalEmployees = employees.length
-  const rootDepartments = departments.filter((d) => !d.parentId)
+  // الجذور: بلا أب، أو أبوه مش ظاهر (أقسام الفرع اللي تحت الإدارة التنفيذية لحساب الفرع) — ماتختفيش من الشجرة
+  const rootDepartments = departmentTreeRoots(departments)
   const blockedParents = editingDept ? descendantIdsOf(editingDept.id) : new Set<number>()
+  // «القسم الأب»: الإدارة التنفيذية لأي فرع (فوق كل الفروع) وباقي الأقسام من فرع القسم، عدا القسم والأقسام التابعة له
+  const parentOptions = parentOptionsFor(departments, {
+    branchId: formData.branchId ? Number(formData.branchId) : null,
+    editingId: editingDept?.id ?? null,
+    blocked: blockedParents,
+    makingExecutive: formData.isExecutive,
+  })
+  // أب مش ظاهر للحساب = الإدارة التنفيذية في فرع برّه نطاقه: يفضل ظاهر بقيمته عشان الحفظ مايشيلوش من غير قصد
+  const hiddenParent = !!formData.parentId && !departments.some((d) => d.id === Number(formData.parentId))
+  const droppedParentNote = (name: string, why: string) => `اتشال القسم الأب «${name}» — ${why}`
+  // شيل تعليم الإدارة التنفيذية وتحتها أقسام من فروع تانية (غير فرعها بعد الحفظ) — الخادم بيرفضه
+  const unflagBlockers =
+    editingDept?.isExecutive && !formData.isExecutive
+      ? foreignChildrenOf({ ...editingDept, branchId: formData.branchId ? Number(formData.branchId) : editingDept.branchId }, departments)
+      : []
 
   return (
     <MainLayout>
@@ -503,7 +542,7 @@ export default function DepartmentsPage() {
                     </td>
                     <td className="py-4 px-6 text-gray-600">
                       {dept.parentId
-                        ? departments.find((d) => d.id === dept.parentId)?.name
+                        ? departments.find((d) => d.id === dept.parentId)?.name ?? EXECUTIVE_PARENT_LABEL
                         : '-'}
                     </td>
                     <td className="py-4 px-6 text-gray-600">
@@ -639,29 +678,26 @@ export default function DepartmentsPage() {
                     </label>
                     <select
                       value={formData.parentId}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        setParentNote(null)
                         setFormData({ ...formData, parentId: e.target.value })
-                      }
+                      }}
                       className="input w-full"
                     >
                       <option value="">بدون (قسم رئيسي)</option>
-                      {departments
-                        .filter(
-                          (d) =>
-                            d.id !== editingDept?.id &&
-                            !blockedParents.has(d.id) &&
-                            (!formData.branchId ||
-                              d.branchId === Number(formData.branchId))
-                        )
-                        .map((d) => (
-                          <option key={d.id} value={d.id}>
-                            {d.name}
-                          </option>
-                        ))}
+                      {hiddenParent && <option value={formData.parentId}>{EXECUTIVE_PARENT_LABEL}</option>}
+                      {parentOptions.map((o) => (
+                        <option key={o.id} value={o.id}>
+                          {o.label}
+                        </option>
+                      ))}
                     </select>
                     <p className="text-xs text-gray-400 mt-1">
-                      تظهر أقسام الفرع المختار فقط، عدا الأقسام التابعة لهذا القسم
+                      «الإدارة التنفيذية» فوق كل الفروع وتقبل أقسام من أي فرع؛ باقي الأقسام من فرع القسم نفسه، عدا الأقسام التابعة لهذا القسم
                     </p>
+                    {parentNote && (
+                      <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-1">{parentNote}</p>
+                    )}
                   </div>
                 </div>
 
@@ -688,13 +724,16 @@ export default function DepartmentsPage() {
                     </label>
                     <select
                       value={formData.branchId}
-                      onChange={(e) =>
+                      onChange={(e) => {
+                        // الإدارة التنفيذية تفضل أب لأي فرع؛ أب من فرع تاني يتشال بتنبيه — مايفضلش أب غلط مستخبي
+                        const next = parentAfterBranchChange(departments, formData.parentId, e.target.value, formData.isExecutive)
+                        setParentNote(next.dropped ? droppedParentNote(next.dropped, 'من فرع تاني؛ اختار أب من فرع القسم أو «الإدارة التنفيذية»') : null)
                         setFormData({
                           ...formData,
                           branchId: e.target.value,
-                          parentId: '',
+                          parentId: next.parentId,
                         })
-                      }
+                      }}
                       className="input w-full"
                     >
                       <option value="">اختر الفرع</option>
@@ -726,26 +765,43 @@ export default function DepartmentsPage() {
                       <input
                         type="checkbox"
                         checked={formData.isExecutive}
-                        onChange={(e) =>
-                          setFormData({ ...formData, isExecutive: e.target.checked, secretaryId: e.target.checked ? formData.secretaryId : '' })
-                        }
+                        onChange={(e) => {
+                          const checked = e.target.checked
+                          // الإدارة التنفيذية أبوها من فرعها بس: أب من فرع تاني (الإدارة التنفيذية الحالية) يتشال بتنبيه
+                          const next = checked
+                            ? parentAfterBranchChange(departments, formData.parentId, formData.branchId, true)
+                            : { parentId: formData.parentId, dropped: null }
+                          if (next.dropped) setParentNote(droppedParentNote(next.dropped, 'الإدارة التنفيذية أبوها من فرعها بس'))
+                          setFormData({ ...formData, isExecutive: checked, secretaryId: checked ? formData.secretaryId : '', parentId: next.parentId })
+                        }}
                         className="w-4 h-4 mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                       />
                       <span>
                         <span className="block text-sm font-medium text-gray-700">الإدارة التنفيذية</span>
                         <span className="block text-xs text-gray-400">
-                          بتظهر فوق الهيكل التنظيمي، ومدير القسم ده هو الرئيس التنفيذي. قسم واحد بس في الشركة.
+                          بتظهر فوق الهيكل التنظيمي وفوق كل الفروع (تقبل أقسام من أي فرع)، ومدير القسم ده هو الرئيس التنفيذي. قسم واحد بس في الشركة.
                         </span>
                       </span>
                     </label>
                     {formData.isExecutive &&
                       departments
                         .filter((d) => d.isExecutive && d.id !== editingDept?.id)
-                        .map((d) => (
-                          <p key={d.id} className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
-                            «{d.name}» متعلّم إدارة تنفيذية دلوقتي — هيتشال منه التعليم والسكرتير بعد الحفظ
-                          </p>
-                        ))}
+                        .map((d) => {
+                          const foreign = foreignChildrenOf(d, departments).filter((c) => c.id !== editingDept?.id)
+                          return (
+                            <p key={d.id} className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                              «{d.name}» متعلّم إدارة تنفيذية دلوقتي — هيتشال منه التعليم والسكرتير بعد الحفظ
+                              {foreign.length > 0 &&
+                                ` — بس تحته أقسام من فروع تانية (زي «${foreign[0].name}»)، فالحفظ هيترفض لحد ما تنقلها`}
+                            </p>
+                          )
+                        })}
+                    {/* شيل التعليم من الإدارة التنفيذية وتحتها أقسام من فروع تانية: الخادم بيرفض — التنبيه قبل الحفظ */}
+                    {unflagBlockers.length > 0 && (
+                      <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                        تحت القسم ده أقسام من فروع تانية (زي «{unflagBlockers[0].name}») — انقلها الأول قبل شيل «الإدارة التنفيذية»
+                      </p>
+                    )}
                     {formData.isExecutive && (
                       <div>
                         <label htmlFor="department-secretary" className="block text-sm font-medium text-gray-700 mb-2">السكرتير التنفيذي</label>
