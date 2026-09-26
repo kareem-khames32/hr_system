@@ -24,7 +24,8 @@ import type { JwtPayload } from '../auth/auth.service'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 // تراكم المسير يومًا بيوم: علامة «متسخ» رخيصة (دوال خالصة بلا خدمات، فلا حلقة اعتماد بين الموديولين)
 import { markPayrollDaysDirty } from '../payroll/payroll-daily-accrual'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchIdIn, branchScopeOf, branchScopeQb, inBranchScope, scopeWord, userHasPerm } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { PublicHoliday, Shift, WorkSchedule } from '../assets/assets.entities'
 import { Employee } from '../employees/employee.entity'
@@ -435,7 +436,7 @@ export class AttendanceService {
 
   listScheduleRules(user: JwtPayload) {
     const scope = branchScopeOf(user)
-    return this.scheduleRules.find({ where: scope === null ? {} : [{ branchId: IsNull() }, { branchId: scope }], order: { id: 'ASC' } })
+    return this.scheduleRules.find({ where: scope === null ? {} : [{ branchId: IsNull() }, { branchId: branchIdIn(scope) }], order: { id: 'ASC' } })
   }
 
   private validateScheduleRule(data: Record<string, any>) {
@@ -511,11 +512,11 @@ export class AttendanceService {
       governingWindowIds: governing.map(p => p.id), reason: governing.map(p => p.name).join('، ') || 'الإعداد العام للإضافي خارج الفترات المحددة' }
   }
 
-  // مستخدم فرع يشوف فترات «كل الفروع» وفترات فرعه بس
+  // مستخدم فرع يشوف فترات «كل الفروع» وفترات فروعه بس
   listOvertimePeriods(user?: JwtPayload) {
     const scope = user ? branchScopeOf(user) : null
     return this.overtimePeriods.find({
-      where: scope === null ? {} : [{ branchId: IsNull() }, { branchId: scope }],
+      where: scope === null ? {} : [{ branchId: IsNull() }, { branchId: branchIdIn(scope) }],
       order: { fromDate: 'DESC' },
     })
   }
@@ -525,8 +526,8 @@ export class AttendanceService {
     if (!user) return
     const scope = branchScopeOf(user)
     if (scope === null) return
-    if (branchId == null) throw new ForbiddenException('فترة لكل الفروع محتاجة صلاحية على الشركة كلها — اختار فرعك')
-    if (branchId !== scope) throw new ForbiddenException('الفرع خارج نطاق فرعك')
+    if (branchId == null) throw new ForbiddenException(`فترة لكل الفروع محتاجة صلاحية على الشركة كلها — اختار ${scope.length > 1 ? 'فرع من فروعك' : 'فرعك'}`)
+    if (!inBranchScope(scope, branchId)) throw new ForbiddenException(`الفرع خارج نطاق ${scopeWord(scope)}`)
   }
 
   private async overtimePeriodBranch(value: unknown): Promise<number | null> {
@@ -681,7 +682,7 @@ export class AttendanceService {
   // المستخدم، وممنوعة على الموظف نفسه (لا اعتماد للذات) — null = مسموح
   private writeBlock(user: JwtPayload, emp: Employee, selfMessage: string): string | null {
     const scope = branchScopeOf(user)
-    if (scope !== null && emp.branchId !== scope) return 'الموظف خارج نطاق فرعك'
+    if (!inBranchScope(scope, emp.branchId)) return `الموظف خارج نطاق ${scopeWord(scope)}`
     if (user.employeeId != null && emp.id === user.employeeId) return selfMessage
     return null
   }
@@ -876,12 +877,11 @@ export class AttendanceService {
       .orderBy('p.punchTime', 'DESC')
       .addOrderBy('p.id', 'DESC')
       .take(2000)
-    // نطاق الفرع: بصمات موظفي فرع المستخدم (اليتيمة بلا موظف لمدير النظام فقط)
+    // نطاق الفروع: بصمات موظفي فروع المستخدم (اليتيمة بلا موظف لمدير النظام فقط)
     const scope = branchScopeOf(user)
     if (scope !== null) {
-      qb.andWhere('p.employeeId IN (SELECT e.id FROM employees e WHERE e.branchId = :scope)', {
-        scope,
-      })
+      const [inScope, params] = branchScopeQb('e.branchId', scope)
+      qb.andWhere(`p.employeeId IN (SELECT e.id FROM employees e WHERE ${inScope})`, params)
     }
     const rows = await qb.getMany()
     const empIds = [...new Set(rows.map((p) => p.employeeId).filter((id): id is number => !!id))]
@@ -1394,7 +1394,7 @@ export class AttendanceService {
     if (user.employeeId !== employeeId) {
       if (!userHasPerm(user, 'attendance.view_all')) throw new ForbiddenException('لا تملك صلاحية عرض جدول الموظف')
       const scope = branchScopeOf(user)
-      if (scope !== null && scope !== emp?.branchId) throw new ForbiddenException('الموظف خارج نطاق فرعك')
+      if (!inBranchScope(scope, emp?.branchId)) throw new ForbiddenException(`الموظف خارج نطاق ${scopeWord(scope)}`)
     }
     if (!emp) throw new NotFoundException('الموظف غير موجود')
     const [days, weekendDays] = await Promise.all([
@@ -1502,10 +1502,10 @@ export class AttendanceService {
   async materializeAbsencesAll(
     fromDate: string,
     toDate: string,
-    branchId?: number | null
+    scope: BranchScope = null
   ): Promise<{ created: number; failed: number[]; total: number }> {
     const where: Record<string, unknown> = { isActive: true }
-    if (branchId != null) where.branchId = branchId
+    if (scope != null) where.branchId = branchIdIn(scope)
     const emps = await this.employees.find({ where: where as any })
     let created = 0
     const failed: number[] = []
@@ -1857,7 +1857,7 @@ export class AttendanceService {
     if (teamIds.length) {
       const scope = user ? branchScopeOf(user) : null
       const members = (await this.employees.find({
-        where: { teamId: In(teamIds), ...(scope !== null ? { branchId: scope } : {}) },
+        where: { teamId: In(teamIds), ...(scope !== null ? { branchId: branchIdIn(scope) } : {}) },
       })).filter(e => !['terminated', 'archived'].includes(String(e.status)))
       if (!members.length && !employeeIds.length) throw new BadRequestException('مفيش موظفين شغالين في الفرق المختارة')
       employeeIds = [...new Set([...employeeIds, ...members.map(e => e.id)])]
@@ -2766,7 +2766,7 @@ export class AttendanceService {
       const employee = await em.getRepository(Employee).findOneBy({ id: employeeId! })
       const scope = branchScopeOf(user)
       // لا كاشف وجود: خارج النطاق وغير الموجود نفس الرد لمن لا يملك النطاق كله
-      if (!isSelf && scope !== null && employee?.branchId !== scope) throw new ForbiddenException('الموظف خارج نطاق فرعك')
+      if (!isSelf && !inBranchScope(scope, employee?.branchId)) throw new ForbiddenException(`الموظف خارج نطاق ${scopeWord(scope)}`)
       if (!employee) throw new NotFoundException('الموظف غير موجود')
       let exceptEntryId: number | undefined, automatic = false
       if (requestId != null) {
@@ -3141,7 +3141,7 @@ export class AttendanceService {
     const yesterday = localDateOf(y)
     if (to > yesterday) to = yesterday
     if (from > to) return { created: 0, failed: 0 }
-    const r = await this.materializeAbsencesAll(from, to, branchId)
+    const r = await this.materializeAbsencesAll(from, to, branchId == null ? null : [branchId])
     return { created: r.created, failed: r.failed.length }
   }
 
@@ -3385,14 +3385,14 @@ export class AttendanceService {
     return { deleted: !!result.affected, failed }
   }
 
-  // صفوف الجدول/التجاوزات بلا branchId — تُرشَّح بموظفي فرع المستخدم
+  // صفوف الجدول/التجاوزات بلا branchId — تُرشَّح بموظفي فروع المستخدم
   private async scheduleRowsInScope<T extends { employeeId: number }>(
     rows: T[],
     user: JwtPayload
   ): Promise<T[]> {
     const scope = branchScopeOf(user)
     if (scope === null) return rows
-    const emps = await this.employees.find({ where: { branchId: scope } })
+    const emps = await this.employees.find({ where: { branchId: branchIdIn(scope) } })
     const ids = new Set(emps.map((e) => e.id))
     return rows.filter((r) => ids.has(r.employeeId))
   }
@@ -3477,9 +3477,9 @@ export class AttendanceService {
   async daily(user: JwtPayload, date: string) {
     const scope = branchScopeOf(user)
     const where: Record<string, unknown> = { date }
-    if (scope !== null) where.branchId = scope
+    if (scope !== null) where.branchId = branchIdIn(scope)
     const stored = await this.days.find({ where: where as any, order: { employeeId: 'ASC' } })
-    const candidates = (await this.employees.find({ where: scope === null ? {} : { branchId: scope } }))
+    const candidates = (await this.employees.find({ where: scope === null ? {} : { branchId: branchIdIn(scope) } }))
       .filter(emp => (emp.isActive || !!emp.archivedAt) && this.attendanceEmploymentDate(emp, date))
     const projected = await this.projectExemptionDays(stored, candidates, date, date)
     // + مصدر وقتي كل يوم (جهاز/يدوي/تصحيح) لعمود «التحقق»
@@ -3499,11 +3499,11 @@ export class AttendanceService {
   // محسوب (لا بصمة ولا تصحيح) ولا إجازة معتمدة تغطيه، وقد مرّت بداية ورديته +
   // السماحية (المرنة: نهاية نافذة الحضور إن ضُبطت). يوم «بلا وردية» لا وقت
   // مرجعي له فيُترك للتجسيد الليلي. للسجل اليومي وكارت «غائبون» في اللوحة
-  async liveAbsences(date: string, scope: number | null): Promise<Array<AttendanceDay & { live: true }>> {
+  async liveAbsences(date: string, scope: BranchScope): Promise<Array<AttendanceDay & { live: true }>> {
     const now = new Date()
     if (date !== localDateOf(now)) return []
     const nowMin = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60
-    const emps = (await this.employees.find({ where: { isActive: true, ...(scope === null ? {} : { branchId: scope }) } }))
+    const emps = (await this.employees.find({ where: { isActive: true, ...(scope === null ? {} : { branchId: branchIdIn(scope) }) } }))
       .filter(emp => this.attendanceEmploymentDate(emp, date))
     const touched = new Set((await this.days.find({ where: { date } })).map(day => day.employeeId))
     const leaves = await this.leaves.find({ where: { status: 'APPROVED', fromDate: LessThanOrEqual(date), toDate: MoreThanOrEqual(date) } })
@@ -3573,7 +3573,7 @@ export class AttendanceService {
         user.role === 'super_admin' ||
         (user.permissions ?? []).includes('*') ||
         (user.permissions ?? []).includes('attendance.view_all')
-      if (!canViewAll || (scope !== null && emp?.branchId !== scope)) {
+      if (!canViewAll || !inBranchScope(scope, emp?.branchId)) {
         throw new BadRequestException('لا تملك صلاحية عرض حضور غيرك')
       }
     }
@@ -3701,7 +3701,7 @@ export class AttendanceService {
     const empById = new Map(emps.map((e) => [e.id, e]))
     const scope = branchScopeOf(user)
     const rows =
-      scope === null ? all : all.filter((r) => empById.get(r.employeeId)?.branchId === scope)
+      scope === null ? all : all.filter((r) => inBranchScope(scope, empById.get(r.employeeId)?.branchId))
     const reqIds = [...new Set(rows.map((r) => r.requestId).filter((id): id is number => !!id))]
     const reqs: Request[] = []
     for (let i = 0; i < reqIds.length; i += 500) {
@@ -3757,7 +3757,7 @@ export class AttendanceService {
     )
     const scope = branchScopeOf(user)
     if (scope === null) return rows
-    const emps = await this.employees.find({ where: { branchId: scope } })
+    const emps = await this.employees.find({ where: { branchId: branchIdIn(scope) } })
     const ids = new Set(emps.map((e) => e.id))
     return rows.filter((r) => ids.has(r.employeeId))
   }
@@ -3817,10 +3817,10 @@ export class AttendanceService {
     for (const d of dayRows) ids.add(d.employeeId)
     for (const c of corrRows) if (c.employeeId) ids.add(c.employeeId)
     let targets = [...ids]
-    // نطاق الفرع: موظفو فرع المستخدم فقط
+    // نطاق الفروع: موظفو فروع المستخدم فقط
     if (scope !== null && targets.length > 0) {
       const inScope = await this.employees.find({
-        where: { id: In(targets), branchId: scope },
+        where: { id: In(targets), branchId: branchIdIn(scope) },
       })
       const allowed = new Set(inScope.map((e) => e.id))
       targets = targets.filter((id) => allowed.has(id))

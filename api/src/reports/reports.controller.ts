@@ -5,7 +5,8 @@ import { DataSource } from 'typeorm'
 import { localDateOf } from '../attendance/attendance.service'
 import { reportDayRange } from '../attendance/attendance-report-range'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
+import { andBranchScopeSql, branchScopeOf, branchScopeSql, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { readOpenSuspensions } from '../employees/employee-suspensions'
 import { displayEmployeeStatus } from '../employees/employee-suspension-rules'
 import {
@@ -57,22 +58,25 @@ export class ReportsController {
     return { period, from: range.startDate, to: range.endDate }
   }
 
-  private scopeSql(user: JwtPayload, col = 'branchId') {
-    const scope = branchScopeOf(user)
-    return scope !== null ? `AND ${col} = ${scope}` : ''
+  // شرط نطاق فروع المستخدم بمعاملات @n (فرع أو أكتر؛ النطاق الفاضي = ولا صف): أرقام الفروع بتتضاف لـparams
+  // (مش بتتلزق في نص الاستعلام) والشرط بيرجع «AND …» أو فاضي لنطاق الشركة
+  private scopeSql(user: JwtPayload, col: string, params: unknown[]) {
+    return andBranchScopeSql(col, branchScopeOf(user), params)
   }
 
   /**
-   * فرع مطلوب صراحة في مرشح التقرير: رقم صحيح موجب، وحساب الفرع لا يطلب غير فرعه
-   * (نفس رفض /reports/financial/* و/reports/cost-centers بالحرف). null = كل الفروع في نطاق المستخدم.
+   * فرع مطلوب صراحة في مرشح التقرير: رقم صحيح موجب، وحساب الفروع لا يطلب فرع برّه نطاقه
+   * (نفس رفض /reports/financial/* و/reports/cost-centers بالحرف). من غير طلب = نطاق المستخدم (null = كل الفروع).
    */
-  private branchFilterOf(user: JwtPayload, raw?: string): number | null {
+  private branchFilterOf(user: JwtPayload, raw?: string): BranchScope {
     const scope = branchScopeOf(user)
     if (raw === undefined || raw === null || String(raw).trim() === '') return scope
     const branchId = Number(raw)
     if (!Number.isInteger(branchId) || branchId < 1) throw new BadRequestException('رقم الفرع غير صالح')
-    if (scope !== null && branchId !== scope) throw new ForbiddenException('حساب الفرع يشوف تقرير فرعه بس')
-    return branchId
+    if (!inBranchScope(scope, branchId)) {
+      throw new ForbiddenException(scope !== null && scope.length > 1 ? 'حساب الفروع يشوف تقارير فروعه بس' : 'حساب الفرع يشوف تقرير فرعه بس')
+    }
+    return [branchId]
   }
 
   // ===== التعداد: بالفرع والقسم والحالة =====
@@ -82,13 +86,15 @@ export class ReportsController {
   // شاشة الموظفين، فالتعداد والشاشة بيقولوا نفس الكلام.
   @Get('headcount')
   async headcount(@CurrentUser() user: JwtPayload) {
-    const s = this.scopeSql(user, 'e.branchId')
+    const params: unknown[] = []
+    const s = this.scopeSql(user, 'e.branchId', params)
     const rows: Array<{ id: number; status: string; branchName: string | null; departmentName: string | null }> =
       await this.ds.query(
         `SELECT e.id AS id, e.status AS status, b.name AS branchName, d.name AS departmentName
          FROM employees e JOIN branches b ON b.id = e.branchId
          LEFT JOIN departments d ON d.id = e.departmentId
-         WHERE 1=1 ${s}`
+         WHERE 1=1 ${s}`,
+        params
       )
     const today = localDateOf(new Date())
     const suspensions = await readOpenSuspensions(this.ds.manager, today)
@@ -130,7 +136,8 @@ export class ReportsController {
     if (!range) throw new BadRequestException('حدد «من تاريخ» و«إلى تاريخ» أو الشهر بصيغة YYYY-MM')
     // فلتر الفرع يُطبَّق فعلًا (كان يُقبل ويُتجاهل بصمت)، وحساب الفرع ممنوع من فرع غيره
     const branch = this.branchFilterOf(user, branchId)
-    const s = branch !== null ? `AND a.branchId = ${branch}` : ''
+    const params: unknown[] = [range.from, range.to]
+    const s = andBranchScopeSql('a.branchId', branch, params)
     return this.ds.query(
       `SELECT a.employeeId, e.fullName, e.employeeCode,
               SUM(CASE WHEN a.status = 'present' THEN 1 ELSE 0 END) AS presentDays,
@@ -146,7 +153,7 @@ export class ReportsController {
        WHERE a.date BETWEEN @0 AND @1 ${s}
        GROUP BY a.employeeId, e.fullName, e.employeeCode
        ORDER BY e.employeeCode`,
-      [range.from, range.to]
+      params
     )
   }
 
@@ -157,23 +164,25 @@ export class ReportsController {
       throw new BadRequestException('السنة بصيغة YYYY')
     }
     const scope = branchScopeOf(user)
-    const empFilter =
-      scope !== null
-        ? `AND l.employeeId IN (SELECT id FROM employees WHERE branchId = ${scope})`
-        : ''
+    const typeParams: unknown[] = []
+    const inScope = branchScopeSql('branchId', scope, typeParams)
+    const empFilter = inScope ? `AND l.employeeId IN (SELECT id FROM employees WHERE ${inScope})` : ''
     const byType = await this.ds.query(
       `SELECT l.leaveTypeCode, l.leaveTypeCode AS leaveType, COUNT(*) AS requests, SUM(l.days) AS totalDays
        FROM leaves l
        WHERE l.status = 'APPROVED' AND l.fromDate LIKE '${year}%' ${empFilter}
-       GROUP BY l.leaveTypeCode`
+       GROUP BY l.leaveTypeCode`,
+      typeParams
     )
+    const balanceParams: unknown[] = []
     const balances = await this.ds.query(
       `SELECT lb.employeeId, e.fullName, lb.balanceType, lb.entitled, lb.taken,
               lb.openingDays, lb.openingTaken, lb.openingExpiry, lb.adjustmentDays
        FROM leave_balances lb JOIN employees e ON e.id = lb.employeeId
        WHERE lb.period = '${year}'
-       ${scope !== null ? `AND e.branchId = ${scope}` : ''}
-       ORDER BY e.employeeCode, lb.balanceType`
+       ${andBranchScopeSql('e.branchId', scope, balanceParams)}
+       ORDER BY e.employeeCode, lb.balanceType`,
+      balanceParams
     )
     return { byType, balances }
   }
@@ -234,11 +243,9 @@ export class ReportsController {
   ) {
     const range = reportDayRange({ month, from, to })
     if (!range) throw new BadRequestException('حدد «من تاريخ» و«إلى تاريخ» أو الشهر بصيغة YYYY-MM')
-    const scope = branchScopeOf(user)
-    const empFilter =
-      scope !== null
-        ? `AND o.employeeId IN (SELECT id FROM employees WHERE branchId = ${scope})`
-        : ''
+    const params: unknown[] = [range.from, range.to]
+    const inScope = branchScopeSql('branchId', branchScopeOf(user), params)
+    const empFilter = inScope ? `AND o.employeeId IN (SELECT id FROM employees WHERE ${inScope})` : ''
     // مبلغ لقطة الاعتماد يظهر فقط لمن يملك عرض الرواتب؛ مدير الفرع يرى الساعات بلا مبالغ (RP-07)
     const amount = userHasPerm(user, 'payroll.view')
       ? `, CONVERT(varchar(40), SUM(CASE WHEN o.status IN ('APPROVED', 'PAID') THEN o.amountSnapshot END)) AS approvedAmount`
@@ -252,18 +259,20 @@ export class ReportsController {
        WHERE o.date BETWEEN @0 AND @1 ${empFilter}
        GROUP BY o.employeeId, e.fullName, o.status
        ORDER BY e.fullName`,
-      [range.from, range.to]
+      params
     )
   }
 
   // ===== حركة الطلبات بالفئة والحالة =====
   @Get('requests')
   async requests(@CurrentUser() user: JwtPayload) {
-    const s = this.scopeSql(user, 'r.branchId')
+    const params: unknown[] = []
+    const s = this.scopeSql(user, 'r.branchId', params)
     const byType = await this.ds.query(
       `SELECT t.category, r.status, COUNT(*) AS total
        FROM requests r JOIN request_types t ON t.code = r.typeCode
-       WHERE 1=1 ${s} GROUP BY t.category, r.status`
+       WHERE 1=1 ${s} GROUP BY t.category, r.status`,
+      params
     )
     return { byType }
   }

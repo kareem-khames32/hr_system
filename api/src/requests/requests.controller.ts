@@ -25,7 +25,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, Roles, RolesGuard, userHasPerm } from '../auth/guards'
+import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Perm, Roles, RolesGuard, userHasPerm } from '../auth/guards'
 import { EmployeesService } from '../employees/employees.service'
 import { LeaveType } from './entities/leave.entities'
 import { definitionBranchQuery, definitionBranchWhere } from '../common/definition-branch'
@@ -193,7 +193,7 @@ export class RequestsController {
     @CurrentUser() user: JwtPayload,
     @Query('branchId') branchIdRaw?: string
   ) {
-    const scope = branchScopeOf(user) ?? null
+    const scope = branchScopeOf(user)
     if (branchIdRaw == null || branchIdRaw === '') {
       return this.balances.bulkBalances(scope)
     }
@@ -201,7 +201,7 @@ export class RequestsController {
     if (!Number.isInteger(branchId) || branchId <= 0) {
       throw new BadRequestException('رقم الفرع غير صالح')
     }
-    if (scope != null && branchId !== scope) {
+    if (!inBranchScope(scope, branchId)) {
       throw new ForbiddenException('الفرع خارج نطاق صلاحيتك')
     }
     return this.balances.bulkBalances(branchId)

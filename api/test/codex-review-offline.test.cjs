@@ -238,8 +238,11 @@ test('CR-P08: branch scope cannot grant a missing endpoint permission', () => {
   const context = { getHandler: () => AttendanceController.prototype.daily, getClass: () => AttendanceController,
     switchToHttp: () => ({ getRequest: () => ({ user }) }) }
   assert.equal(new RolesGuard(new Reflector()).canActivate(context), false)
-  assert.equal(branchScopeOf({ ...user, scopeAllBranches: 'true' }), 1)
-  assert.equal(branchScopeOf({ ...user, scopeAllBranches: false, branchId: null }), -1)
+  assert.deepEqual(branchScopeOf({ ...user, scopeAllBranches: 'true' }), [1])
+  assert.deepEqual(branchScopeOf({ ...user, scopeAllBranches: false, branchId: null }), [])
+  // نطاق فاضي صريح في التوكن يفضل فاضي — عمره ما يبقى «كل الفروع» ولا يرجع لفرعه الأساسي
+  assert.deepEqual(branchScopeOf({ ...user, scopeAllBranches: false, branchIds: [] }), [])
+  assert.deepEqual(branchScopeOf({ ...user, scopeAllBranches: false, branchIds: [2, 1, 2] }), [2, 1])
 })
 
 test('CR-P09: employee required fields reject omissions and impossible dates', () => {
@@ -281,11 +284,11 @@ test('CR-P11: reject or return without a reason performs no request transaction'
 
 test('CR-P12: asset scope hides foreign IDs and blocks cross-branch transfers', () => {
   const a = require('../src/assets/asset-branch')
-  const status = value => { try { a.assertAssetWritable(1, value); return null } catch (e) { return e.getResponse() } }
+  const status = value => { try { a.assertAssetWritable([1], value); return null } catch (e) { return e.getResponse() } }
   assert.deepEqual(status({ branchId: 2 }), status(null))
-  assert.equal(a.assetWritableBy(1, { branchId: 1 }), true)
-  assert.equal(a.assetWritableBy(-1, { branchId: 1 }), false)
-  assert.ok(a.custodyTransferProblem(1, { branchId: 1 }, { branchId: 2 }))
+  assert.equal(a.assetWritableBy([1], { branchId: 1 }), true)
+  assert.equal(a.assetWritableBy([], { branchId: 1 }), false)
+  assert.ok(a.custodyTransferProblem([1], { branchId: 1 }, { branchId: 2 }))
   assert.equal(a.custodyTransferProblem(null, { branchId: 1 }, { branchId: 2 }), null)
 })
 

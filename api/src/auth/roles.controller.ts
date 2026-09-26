@@ -25,7 +25,17 @@ import {
 } from 'class-validator'
 import { AuthService } from './auth.service'
 import type { JwtPayload } from './auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from './guards'
+import {
+  branchScopeCovers,
+  branchScopeOf,
+  branchScopeQb,
+  CurrentUser,
+  effectiveBranchScope,
+  inBranchScope,
+  JwtAuthGuard,
+  Perm,
+  RolesGuard,
+} from './guards'
 import { adminGrantViolation, ALL_PERMISSIONS, permissionRegistry, ROLE_PRESETS } from './permissions'
 import { Role, UserPermissionOverride } from './role.entity'
 import { User } from './user.entity'
@@ -148,7 +158,7 @@ export class RolesController {
       .select('u.role', 'role')
       .addSelect('COUNT(*)', 'n')
       .groupBy('u.role')
-    if (scope !== null) qb.where('u.branchId = :scope', { scope })
+    if (scope !== null) qb.where(...branchScopeQb('u.branchId', scope))
     const counts = new Map(
       (await qb.getRawMany<{ role: string; n: number | string }>()).map((c) => [
         c.role,
@@ -251,11 +261,11 @@ export class RolesController {
     return { ...saved, permissions: JSON.parse(saved.permissions) }
   }
 
-  // المستخدم خارج نطاق فرع المنفّذ = غير موجود (زي قائمة المستخدمين)
+  // المستخدم خارج نطاق فروع المنفّذ = غير موجود (زي قائمة المستخدمين)
   private async scopedUser(actor: JwtPayload, id: number) {
     const user = await this.users.findOne({ where: { id } })
     const scope = branchScopeOf(actor)
-    if (!user || (scope !== null && user.branchId !== scope)) {
+    if (!user || !inBranchScope(scope, user.branchId)) {
       throw new NotFoundException('المستخدم غير موجود')
     }
     return user
@@ -304,6 +314,10 @@ export class RolesController {
     // حساب «كل الفروع»: أي صلاحية تتمنح له بتسري على الشركة كلها — تجاوزاته لمدير النظام فقط
     if (actor.role !== 'super_admin' && user.scopeAllBranches === true) {
       throw new ForbiddenException('الحساب ده نطاقه «كل الفروع» — تعديل صلاحياته متاح لمدير النظام فقط')
+    }
+    // وحساب نطاقه فيه فرع برّه نطاق المنفّذ: الصلاحية بتسري على الفرع ده — لحساب نطاقه يغطيه بس
+    if (!branchScopeCovers(branchScopeOf(actor), effectiveBranchScope(user))) {
+      throw new ForbiddenException('الحساب ده نطاقه فيه فروع برّه نطاقك — تعديل صلاحياته لحساب نطاقه يغطي كل فروعه')
     }
     const grants = validatePermList(dto.grants ?? [])
     const revokes = validatePermList(dto.revokes ?? [])

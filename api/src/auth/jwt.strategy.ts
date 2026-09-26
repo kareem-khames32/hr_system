@@ -5,6 +5,7 @@ import { PassportStrategy } from '@nestjs/passport'
 import { ExtractJwt, Strategy } from 'passport-jwt'
 import { Repository } from 'typeorm'
 import type { JwtPayload } from './auth.service'
+import { branchScopeCovers, branchScopeOf, effectiveBranchScope } from './guards'
 import { User } from './user.entity'
 
 @Injectable()
@@ -27,7 +28,7 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
   async validate(payload: JwtPayload) {
     const user = await this.users.findOne({
       where: { id: payload.sub },
-      select: ['id', 'isActive', 'tokenVersion', 'scopeAllBranches'],
+      select: ['id', 'isActive', 'tokenVersion', 'scopeAllBranches', 'scopeBranchIds', 'branchId'],
     })
     if (!user || !user.isActive) {
       throw new UnauthorizedException('الحساب معطّل')
@@ -40,6 +41,16 @@ export class JwtStrategy extends PassportStrategy(Strategy) {
     // العكس (العمود اتفتح والتوكن قديم) بيفضل مقفول على الفرع لحد الدخول الجاي: فشل مقفول.
     if (payload.scopeAllBranches === true && user.scopeAllBranches !== true) {
       throw new UnauthorizedException('انتهت صلاحية الجلسة — سجّل الدخول من جديد')
+    }
+    // ونفس الحزام للفروع المختارة: التوكن اللي شايل فروع صريحة (branchIds) مايدّيش فرع مش في نطاق الحساب في القاعدة
+    // دلوقتي (فرع اتشال بـSQL مباشر من غير tokenVersion) — يموت هنا. التضييق من القاعدة بس اللي بيقتله؛ التوسيع بيستنى
+    // الدخول الجاي (فشل مقفول). الدور هنا من التوكن: تغيير الدور نفسه بيزوّد tokenVersion.
+    if (payload.role !== 'super_admin' && payload.scopeAllBranches !== true && Array.isArray(payload.branchIds)) {
+      const current = effectiveBranchScope({ role: payload.role, scopeAllBranches: user.scopeAllBranches,
+        scopeBranchIds: user.scopeBranchIds, branchId: user.branchId })
+      if (!branchScopeCovers(current, branchScopeOf(payload))) {
+        throw new UnauthorizedException('انتهت صلاحية الجلسة — سجّل الدخول من جديد')
+      }
     }
     return payload
   }

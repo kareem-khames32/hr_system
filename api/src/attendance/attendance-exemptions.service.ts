@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchScopeOf, branchScopeQb, inBranchScope, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
@@ -31,8 +31,7 @@ export class AttendanceExemptionsService {
   private async employee(user: JwtPayload, employeeId: number, em = this.windows.manager) {
     const employee = await em.getRepository(Employee).findOneBy({ id: employeeId })
     if (!employee) throw new NotFoundException('الموظف غير موجود')
-    const branch = branchScopeOf(user)
-    if (branch !== null && employee.branchId !== branch) throw new ForbiddenException('الموظف خارج الفرع المسموح لك')
+    if (!inBranchScope(branchScopeOf(user), employee.branchId)) throw new ForbiddenException('الموظف خارج الفرع المسموح لك')
     return employee
   }
 
@@ -292,7 +291,7 @@ export class AttendanceExemptionsService {
     const query = em.getRepository(AttendanceExemption).createQueryBuilder('exemption')
       .innerJoin(Employee, 'employee', 'employee.id = exemption.employeeId')
       .where('1 = 1')
-    if (scope !== null) query.andWhere('employee.branchId = :scope', { scope })
+    if (scope !== null) query.andWhere(...branchScopeQb('employee.branchId', scope))
     if (filters.branchId) query.andWhere('employee.branchId = :branchId', { branchId: filters.branchId })
     if (filters.employeeId) query.andWhere('exemption.employeeId = :employeeId', { employeeId: filters.employeeId })
     if (filters.status) query.andWhere('exemption.status = :status', { status: filters.status })

@@ -112,7 +112,7 @@ export default function ShiftsPage() {
   const branchInfo = useDefinitionBranches()
   const [allowed, setAllowed] = useState(false)
   useEffect(() => { setAllowed(can('settings.manage')) }, [])
-  const canManage = allowed && branchInfo.scope !== -1
+  const canManage = allowed && (branchInfo.scope === null || branchInfo.scope.length > 0)
   const branchScopedNotice = allowed && branchInfo.scope !== null
   const canEditShift = (shift: Shift) => canManage && branchInfo.canEdit(shift.branchId)
 
@@ -196,7 +196,7 @@ export default function ShiftsPage() {
       } else {
         // حساب الشركة يختار الفرع؛ حساب الفرع يتضاف لفرعه تلقائيًا من الخادم
         await createCatalogItem('shifts', { ...payload,
-          ...(branchInfo.scope === null && formData.branchId != null ? { branchId: formData.branchId } : {}) })
+          ...(branchInfo.choosesBranch && formData.branchId != null ? { branchId: formData.branchId } : {}) })
       }
       setShowModal(false)
       loadShifts()

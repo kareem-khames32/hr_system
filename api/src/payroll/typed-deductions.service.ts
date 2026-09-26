@@ -9,7 +9,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { assertCompanyWideWrite, branchScopeOf, userHasPerm } from '../auth/guards'
+import { assertCompanyWideWrite, branchScopeOf, inBranchScope as scopeHasBranch, isEmptyBranchScope, userHasPerm } from '../auth/guards'
 import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
@@ -309,14 +309,12 @@ export class TypedDeductionsService {
       }
       if (rules?.ownerDepartmentId && facts.departments.has(rules.ownerDepartmentId) && this.inFunctionalScope(facts, rules, employee)) bases.push('FUNCTION_OWNER')
     }
-    const scope = branchScopeOf(user)
-    if (userHasPerm(user, MANAGE) && (scope === null || scope === employee.branchId)) bases.push('HR')
+    if (userHasPerm(user, MANAGE) && scopeHasBranch(branchScopeOf(user), employee.branchId)) bases.push('HR')
     return bases
   }
 
   private inBranchScope(user: JwtPayload, employee: Pick<Employee, 'branchId'> | undefined | null) {
-    const scope = branchScopeOf(user)
-    return !!employee && (scope === null || scope === employee.branchId)
+    return !!employee && scopeHasBranch(branchScopeOf(user), employee.branchId)
   }
 
   // ===== B4 (قرار المالك): جمهور نوع الطلب المالي يحكم القدرة فعلًا =====
@@ -572,7 +570,7 @@ export class TypedDeductionsService {
       if (facts.departments.size) structural.add('DEPARTMENT_MANAGER')
       if (facts.branches.size) structural.add('BRANCH_MANAGER')
     }
-    const hr = userHasPerm(user, MANAGE) && branchScopeOf(user) !== -1
+    const hr = userHasPerm(user, MANAGE) && !isEmptyBranchScope(branchScopeOf(user))
     const available = new Set<DeductionCreatorBasis>()
     const types = (await em.getRepository(DeductionType).find({ where: { isActive: true }, order: { code: 'ASC' } })).map(row => this.typeView(row)).filter(type => {
       let allowed = false
@@ -1384,7 +1382,7 @@ export class TypedDeductionsService {
       for (const run of runs) {
         const items = await em.getRepository(PayrollItem).find({ where: { runId: run.id }, select: { id: true, employeeId: true, breakdown: true } })
         const branches = scope === null ? null : await this.employeeBriefs(em, items.map(item => item.employeeId))
-        const inScope = (employeeId: number) => scope === null || branches?.get(employeeId)?.branchId === scope
+        const inScope = (employeeId: number) => scope === null || scopeHasBranch(scope, branches?.get(employeeId)?.branchId)
         const lines = items.filter(item => inScope(item.employeeId)).flatMap(item => {
           try {
             const breakdown = JSON.parse(item.breakdown || '{}')

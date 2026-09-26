@@ -9,6 +9,7 @@
 
 import { useMemo, useState } from 'react'
 import { Building2, Globe, Layers, Search, Users, UsersRound } from 'lucide-react'
+import { canSeeBranch, type BranchScope } from '../lib/branch-scope'
 
 export type OrgTargetLevel = 'company' | 'branch' | 'departments' | 'teams' | 'employees'
 
@@ -40,12 +41,14 @@ export const ORG_TARGET_LEVELS: OrgTargetLevel[] = ['company', 'branch', 'depart
 const INACTIVE_STATUSES = new Set(['terminated', 'archived'])
 export const isTargetableEmployee = (e: OrgPickerEmployee) => !INACTIVE_STATUSES.has(String(e.status ?? ''))
 
-// قيمة البداية: مستخدم الفرع يبدأ من فرعه كله، وغيره من الشركة كلها
+// قيمة البداية: مستخدم الفرع يبدأ من فرعه كله، ومستخدم الفروع المتعددة (branchScope مصفوفة) يختار فرع منها،
+// وغيرهم من الشركة كلها
 export const initialOrgTarget = (
   lockedBranchId?: number | null,
-  levels: OrgTargetLevel[] = ORG_TARGET_LEVELS
+  levels: OrgTargetLevel[] = ORG_TARGET_LEVELS,
+  branchScope?: BranchScope
 ): OrgTarget => {
-  if (lockedBranchId || !levels.includes('company')) {
+  if (lockedBranchId || !levels.includes('company') || Array.isArray(branchScope)) {
     return { level: 'branch', branchId: lockedBranchId ?? null, departmentIds: [], teamIds: [], employeeIds: [] }
   }
   return { level: 'company', branchId: null, departmentIds: [], teamIds: [], employeeIds: [] }
@@ -120,6 +123,7 @@ export function OrgTargetPicker({
   employees = [],
   levels = ORG_TARGET_LEVELS,
   lockedBranchId = null,
+  branchScope,
   disabled = false,
   showCount = true,
 }: {
@@ -133,13 +137,17 @@ export function OrgTargetPicker({
   levels?: OrgTargetLevel[]
   // مستخدم فرع: الشركة كلها مش متاحة، والفرع ثابت
   lockedBranchId?: number | null
+  // نطاق فروع المستخدم (branchScopeOfUser): مصفوفة = الشركة كلها مش متاحة والمنتقي يعرض فروعه بس
+  // (مستخدم الفروع المتعددة يختار فرع منها)؛ null أو من غير = كل الفروع
+  branchScope?: BranchScope
   disabled?: boolean
   showCount?: boolean
 }) {
   const [query, setQuery] = useState('')
   const [departmentFilter, setDepartmentFilter] = useState<number | ''>('')
   const [teamFilter, setTeamFilter] = useState<number | ''>('')
-  const allowCompany = levels.includes('company') && !lockedBranchId
+  const scopedToBranches = Array.isArray(branchScope)
+  const allowCompany = levels.includes('company') && !lockedBranchId && !scopedToBranches
   const innerLevels = (['branch', 'departments', 'teams', 'employees'] as const)
     .filter((l) => levels.includes(l) && (l !== 'teams' || teams !== undefined))
   const teamIds = value.teamIds ?? []
@@ -225,6 +233,7 @@ export function OrgTargetPicker({
           {branches
             .filter((b) => b.isActive !== false || b.id === value.branchId)
             .filter((b) => !lockedBranchId || b.id === lockedBranchId)
+            .filter((b) => canSeeBranch(branchScope ?? null, b.id))
             .map((b) => (
               <option key={b.id} value={b.id}>
                 فرع: {b.name}
@@ -233,6 +242,8 @@ export function OrgTargetPicker({
         </select>
         {lockedBranchId ? (
           <p className="text-xs text-gray-400 mt-1">صلاحيتك على فرعك بس</p>
+        ) : scopedToBranches ? (
+          <p className="text-xs text-gray-400 mt-1">صلاحيتك على فروعك بس — اختار فرع منها</p>
         ) : null}
       </div>
 

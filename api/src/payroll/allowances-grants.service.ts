@@ -2,7 +2,8 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { assertCompanyWideWrite, branchScopeOf } from '../auth/guards'
+import { assertCompanyWideWrite, branchForWrite, branchScopeOf, inBranchScope, isEmptyBranchScope, scopeWord } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import {
   ALLOWANCE_LINE_STATE_LABELS, ALLOWANCE_MAX_EMPLOYEES, ALLOWANCE_OBLIGATION_CATEGORY, ALLOWANCE_SOURCE_PREFIX, AllowanceTarget,
@@ -52,9 +53,9 @@ export class PayrollAllowancesService {
     return value
   }
 
-  private scope(user: JwtPayload) {
+  private scope(user: JwtPayload): BranchScope {
     const scope = branchScopeOf(user)
-    if (scope !== null && scope < 1) throw new ForbiddenException('حسابك مش مربوط بفرع')
+    if (isEmptyBranchScope(scope)) throw new ForbiddenException('حسابك مش مربوط بفرع')
     return scope
   }
 
@@ -88,16 +89,16 @@ export class PayrollAllowancesService {
   }
 
   // ===== أنواع البدلات =====
-  private typeView(row: PayrollAllowanceType, scope: number | null, branches: Map<number, string>) {
+  private typeView(row: PayrollAllowanceType, scope: BranchScope, branches: Map<number, string>) {
     return { id: row.id, code: row.code, name: row.name, branchId: row.branchId, branchName: row.branchId ? branches.get(row.branchId) ?? `فرع #${row.branchId}` : null,
-      isActive: row.isActive, canEdit: scope === null || (row.branchId !== null && row.branchId === scope) }
+      isActive: row.isActive, canEdit: scope === null || (row.branchId !== null && inBranchScope(scope, row.branchId)) }
   }
 
   async listTypes(user: JwtPayload) {
     const scope = this.scope(user)
     const rows = await this.types.find({ order: { name: 'ASC', id: 'ASC' } })
     const branches = await this.branchNames()
-    return rows.filter(row => scope === null || row.branchId === null || row.branchId === scope)
+    return rows.filter(row => row.branchId === null || inBranchScope(scope, row.branchId))
       .sort((a, b) => Number(b.isActive) - Number(a.isActive) || a.name.localeCompare(b.name, 'ar'))
       .map(row => this.typeView(row, scope, branches))
   }
@@ -112,11 +113,12 @@ export class PayrollAllowancesService {
   async createType(user: JwtPayload, input: AllowanceTypeInput) {
     const scope = this.scope(user)
     const name = allowanceTypeName(input.name)
-    const branchId: number | null = input.branchId == null ? (scope ?? null) : Number(input.branchId)
+    // حساب الفرع الواحد: فرعه تلقائيًا؛ حساب الفروع المتعددة لازم يختار فرع منها (مفيش اختيار صامت)
+    const branchId: number | null = input.branchId == null ? (scope === null ? null : branchForWrite(scope, null)) : Number(input.branchId)
     if (branchId === null) assertCompanyWideWrite(user)
     else {
       if (!Number.isSafeInteger(branchId) || branchId < 1) throw new BadRequestException('اختار الفرع')
-      if (scope !== null && branchId !== scope) throw new ForbiddenException('صلاحيتك على فرعك بس')
+      if (!inBranchScope(scope, branchId)) throw new ForbiddenException(`صلاحيتك على ${scopeWord(scope)} بس`)
       const [branch] = await this.em.query('SELECT [id] FROM [branches] WHERE [id] = @0', [branchId])
       if (!branch) throw new BadRequestException('الفرع مش موجود')
     }
@@ -130,7 +132,7 @@ export class PayrollAllowancesService {
   private async editableType(user: JwtPayload, id: number) {
     const scope = this.scope(user)
     const row = await this.types.findOneBy({ id })
-    if (!row || (scope !== null && row.branchId !== null && row.branchId !== scope)) throw new NotFoundException('نوع البدل مش موجود')
+    if (!row || (row.branchId !== null && !inBranchScope(scope, row.branchId))) throw new NotFoundException('نوع البدل مش موجود')
     if (row.branchId === null) assertCompanyWideWrite(user)
     return { row, scope }
   }
@@ -188,7 +190,7 @@ export class PayrollAllowancesService {
   async listGrants(user: JwtPayload, rawPeriod: unknown) {
     const period = this.period(rawPeriod), scope = this.scope(user)
     const all = await this.em.getRepository(PayrollAllowanceGrantLine).find({ where: { period }, order: { id: 'DESC' } })
-    const lines = all.filter(line => scope === null || line.branchId === scope)
+    const lines = all.filter(line => inBranchScope(scope, line.branchId))
     const grants = new Map<number, PayrollAllowanceGrant>()
     for (const chunk of chunks(uniqueIds(lines.map(line => line.grantId)))) {
       for (const row of await this.em.getRepository(PayrollAllowanceGrant).findBy({ id: In(chunk) })) grants.set(row.id, row)
@@ -217,7 +219,7 @@ export class PayrollAllowancesService {
     const names = await this.orgNames()
     const users = await this.userNames([...grants.values()].map(grant => grant.createdByUserId))
     const canWrite = (grant: PayrollAllowanceGrant | undefined, branchId: number | null) =>
-      scope === null || (!!grant && grant.targetLevel !== 'company' && branchId === scope)
+      scope === null || (!!grant && grant.targetLevel !== 'company' && inBranchScope(scope, branchId))
 
     const rows = lines.map(line => {
       const grant = grants.get(line.grantId)
@@ -281,7 +283,7 @@ export class PayrollAllowancesService {
   async createGrant(user: JwtPayload, input: AllowanceGrantInput) {
     const period = this.period(input.period), scope = this.scope(user)
     const type = await this.types.findOneBy({ id: Number(input.allowanceTypeId) })
-    if (!type || (scope !== null && type.branchId !== null && type.branchId !== scope)) throw new BadRequestException('اختار نوع البدل')
+    if (!type || (type.branchId !== null && !inBranchScope(scope, type.branchId))) throw new BadRequestException('اختار نوع البدل')
     if (!type.isActive) throw new BadRequestException('نوع البدل ده موقوف — فعّله الأول')
     const amount = allowanceAmount(input.amount)
     const reason = String(input.reason ?? '').trim()
@@ -302,7 +304,7 @@ export class PayrollAllowancesService {
     } else {
       const branchId = Number(input.branchId)
       if (!Number.isSafeInteger(branchId) || branchId < 1) throw new BadRequestException('اختار الفرع')
-      if (scope !== null && branchId !== scope) throw new ForbiddenException('صلاحيتك على فرعك بس')
+      if (!inBranchScope(scope, branchId)) throw new ForbiddenException(`صلاحيتك على ${scopeWord(scope)} بس`)
       if (type.branchId !== null && type.branchId !== branchId) throw new BadRequestException('نوع البدل ده خاص بفرع تاني')
       const [branch] = await this.em.query('SELECT [id] FROM [branches] WHERE [id] = @0', [branchId])
       if (!branch) throw new BadRequestException('الفرع مش موجود')
@@ -392,7 +394,7 @@ export class PayrollAllowancesService {
     const scope = this.scope(user)
     const lines = this.em.getRepository(PayrollAllowanceGrantLine)
     const line = await lines.findOneBy({ id })
-    if (!line || (scope !== null && line.branchId !== scope)) throw new NotFoundException('سطر البدل مش موجود')
+    if (!line || !inBranchScope(scope, line.branchId)) throw new NotFoundException('سطر البدل مش موجود')
     const grant = await this.em.getRepository(PayrollAllowanceGrant).findOneBy({ id: line.grantId })
     if (!grant || grant.targetLevel === 'company') assertCompanyWideWrite(user)
     if (line.status !== 'ACTIVE') return { id: line.id, status: line.status, recalculateRuns: [] }
@@ -419,13 +421,13 @@ export class PayrollAllowancesService {
     const scope = this.scope(user)
     const grant = await this.em.getRepository(PayrollAllowanceGrant).findOneBy({ id })
     if (!grant) throw new NotFoundException('صرف البدل مش موجود')
-    const visible = (await this.em.getRepository(PayrollAllowanceGrantLine).findBy({ grantId: grant.id })).filter(line => scope === null || line.branchId === scope)
+    const visible = (await this.em.getRepository(PayrollAllowanceGrantLine).findBy({ grantId: grant.id })).filter(line => inBranchScope(scope, line.branchId))
     if (!visible.length) throw new NotFoundException('صرف البدل مش موجود')
     if (grant.targetLevel === 'company' || grant.branchId === null) assertCompanyWideWrite(user)
-    else if (scope !== null && grant.branchId !== scope) throw new ForbiddenException('صلاحيتك على فرعك بس')
+    else if (!inBranchScope(scope, grant.branchId)) throw new ForbiddenException(`صلاحيتك على ${scopeWord(scope)} بس`)
     return this.em.transaction(async em => {
       const active = (await em.getRepository(PayrollAllowanceGrantLine).findBy({ grantId: grant.id, status: 'ACTIVE' }))
-        .filter(line => scope === null || line.branchId === scope)
+        .filter(line => inBranchScope(scope, line.branchId))
       const obligations = new Map<number, EmployeeObligation>()
       for (const chunk of chunks(uniqueIds(active.map(line => line.obligationId)))) {
         for (const row of await em.getRepository(EmployeeObligation).findBy({ id: In(chunk) })) obligations.set(row.id, row)

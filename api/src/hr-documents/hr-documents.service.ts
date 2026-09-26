@@ -4,7 +4,8 @@ import { createHash, randomUUID } from 'crypto'
 import { access, mkdir, unlink, writeFile } from 'fs/promises'
 import { dirname } from 'path'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchIdIn, branchScopeOf, branchScopeQb, inBranchScope, isEmptyBranchScope, scopeWord, userHasPerm } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
 import { canReadEmployeeFinance } from '../employees/employee-projection'
@@ -23,6 +24,16 @@ import { withoutDataPlaceholder } from '../common/data-placeholders'
 export interface HrDocumentInput { templateId: number; revisionId: number; employeeId?: number | null; values: Record<string, string> }
 export interface HrTemplateInput { name: string; category: HrDocumentCategory; draft: unknown; customFields?: unknown; isActive?: boolean }
 const categories = new Set<HrDocumentCategory>(['contract', 'acknowledgement', 'certificate', 'general'])
+
+// فرع المستند العام (بلا موظف) = فرع حساب اللي أصدره — هو اللي بيحكم مين يشوفه بعدين. حساب الفرع الواحد = فرعه؛ حساب
+// الفروع المتعددة = فرعه الأصلي لو من فروعه، وإلا مفيش فرع واحد نختاره بصمت فالإصدار بيترفض. الحساب العام = فرعه أو بلا فرع.
+function generalDocumentBranch(user: JwtPayload, scope: BranchScope): number | null {
+  const home = Number.isSafeInteger(user.branchId) && Number(user.branchId) > 0 ? Number(user.branchId) : null
+  if (scope === null) return home
+  if (scope.length === 1) return scope[0]
+  if (home !== null && scope.includes(home)) return home
+  throw new BadRequestException('حسابك على أكتر من فرع وفرعك الأصلي مش منهم — المستند العام محتاج فرع واحد؛ اختار موظف أو اطلب ضبط فرع حسابك')
+}
 
 @Injectable()
 export class HrDocumentsService {
@@ -108,7 +119,7 @@ export class HrDocumentsService {
   async employees(user: JwtPayload) {
     this.documentsPermission(user)
     const scope = branchScopeOf(user)
-    return this.ds.manager.find(Employee, { where: scope === null ? {} : { branchId: scope }, select: { id: true, fullName: true, employeeCode: true }, order: { fullName: 'ASC' } })
+    return this.ds.manager.find(Employee, { where: scope === null ? {} : { branchId: branchIdIn(scope) }, select: { id: true, fullName: true, employeeCode: true }, order: { fullName: 'ASC' } })
   }
   private input(body: HrDocumentInput): HrDocumentInput {
     for (const key of ['templateId', 'revisionId'] as const) if (!Number.isSafeInteger(body[key]) || body[key] < 1) throw new BadRequestException('معرف القالب أو النسخة غير صالح')
@@ -131,8 +142,8 @@ export class HrDocumentsService {
     const employee = input.employeeId ? await em.findOne(Employee, { where: { id: input.employeeId }, ...(lock ? { lock: { mode: 'pessimistic_read' as const } } : {}) }) : null
     if (input.employeeId && !employee) throw new NotFoundException('الموظف غير موجود')
     const scope = branchScopeOf(user)
-    if (employee && scope !== null && employee.branchId !== scope) throw new ForbiddenException('الموظف خارج نطاق فرعك')
-    if (!employee && scope === -1) throw new ForbiddenException('يلزم تحديد فرع الحساب لإصدار مستند عام')
+    if (employee && !inBranchScope(scope, employee.branchId)) throw new ForbiddenException(`الموظف خارج نطاق ${scopeWord(scope)}`)
+    if (!employee && isEmptyBranchScope(scope)) throw new ForbiddenException('يلزم تحديد فرع الحساب لإصدار مستند عام')
     if (financial && employee && !canReadEmployeeFinance(user, employee.id)) throw new ForbiddenException('هذا القالب يتطلب صلاحية الاطلاع على البيانات المالية للموظف')
     if (!employee && [...tokens].some(key => /^(employee|contract|salary)\./.test(key))) throw new BadRequestException('هذا القالب يستخدم بيانات موظف؛ اختر الموظف أولاً')
     const config = await em.findBy(RequestsConfig, { key: In(['company.name', 'company.name_en', 'company.address', 'company.phone', 'company.commercial_register']) })
@@ -169,7 +180,7 @@ export class HrDocumentsService {
       templateName: revision.name, category: revision.category, revision: revision.revision,
       values: Object.fromEntries([...tokens].map(key => [key, values[key] || ''])),
     }
-    return { snapshot, employee, financial, revision, branchId: employee?.branchId ?? (Number.isSafeInteger(user.branchId) && Number(user.branchId) > 0 ? Number(user.branchId) : null) }
+    return { snapshot, employee, financial, revision, branchId: employee?.branchId ?? generalDocumentBranch(user, scope) }
   }
   async preview(user: JwtPayload, body: HrDocumentInput) {
     const { snapshot } = await this.prepare(this.ds.manager, user, this.input(body), 'HRD-PREVIEW')
@@ -232,13 +243,17 @@ export class HrDocumentsService {
     if (employeeId !== undefined) {
       const employee = await this.ds.manager.findOneBy(Employee, { id: employeeId })
       if (!employee) throw new NotFoundException('الموظف غير موجود')
-      if (scope !== null && employee.branchId !== scope) throw new ForbiddenException('الموظف خارج نطاق فرعك')
+      if (!inBranchScope(scope, employee.branchId)) throw new ForbiddenException(`الموظف خارج نطاق ${scopeWord(scope)}`)
     }
     const query = this.ds.getRepository(HrIssuedDocument).createQueryBuilder('d').leftJoin(Employee, 'e', 'e.id = d.employeeId')
       .select(['d.id', 'd.reference', 'd.employeeId', 'd.employeeDocumentId', 'd.fileId', 'd.templateName', 'd.category', 'd.createdAt', 'd.isFinancial', 'd.branchId'])
       .where('(d.employeeId IS NULL OR e.id IS NOT NULL)')
     if (employeeId !== undefined) query.andWhere('d.employeeId = :employeeId', { employeeId })
-    if (scope !== null) query.andWhere('((d.employeeId IS NOT NULL AND e.branchId = :scope) OR (d.employeeId IS NULL AND d.branchId = :scope))', { scope })
+    if (scope !== null) {
+      const [employeeBranch, params] = branchScopeQb('e.branchId', scope)
+      const [documentBranch] = branchScopeQb('d.branchId', scope)
+      query.andWhere(`((d.employeeId IS NOT NULL AND ${employeeBranch}) OR (d.employeeId IS NULL AND ${documentBranch}))`, params)
+    }
     const rows = await query.orderBy('d.id', 'DESC').getMany()
     return rows.filter(row => !row.isFinancial || (!!row.employeeId && canReadEmployeeFinance(user, row.employeeId))).map(row => this.issuedView(row))
   }

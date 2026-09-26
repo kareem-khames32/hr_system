@@ -158,22 +158,29 @@ test('read-only roles: every permission they carry opens GET routes only (a futu
 test('branchScopeOf: «كل الفروع» opens the scope only on a literal true; everything else stays locked, and the empty scope stays closed', () => {
   const { branchScopeOf, assertCompanyWideWrite } = guards
   assert.equal(branchScopeOf({ role: 'super_admin', branchId: 3 }), null)
-  assert.equal(branchScopeOf({ role: 'hr_manager', branchId: 3 }), 3)
+  assert.deepEqual(branchScopeOf({ role: 'hr_manager', branchId: 3 }), [3])
   assert.equal(branchScopeOf({ role: 'hr_manager', branchId: 3, scopeAllBranches: true }), null)
   assert.equal(branchScopeOf({ role: 'employee', branchId: null, scopeAllBranches: true }), null)
   // أي قيمة غير true الحرفية = مقفول على فرعه
   for (const junk of [false, undefined, null, 1, 'true', 'yes', {}, []]) {
-    assert.equal(branchScopeOf({ role: 'hr_manager', branchId: 3, scopeAllBranches: junk }), 3, String(junk))
+    assert.deepEqual(branchScopeOf({ role: 'hr_manager', branchId: 3, scopeAllBranches: junk }), [3], String(junk))
   }
-  // الحساب القديم بلا فرع: نطاق فاضي (-1) مش كل الفروع — الفشل المقفول باقي
+  // الحساب القديم بلا فرع: نطاق فاضي ([]) مش كل الفروع — الفشل المقفول باقي
   for (const branchId of [null, undefined, 0, -5, 'x', 2.5]) {
-    assert.equal(branchScopeOf({ role: 'hr_manager', branchId }), -1, String(branchId))
-    assert.equal(branchScopeOf({ role: 'hr_manager', branchId, scopeAllBranches: false }), -1)
+    assert.deepEqual(branchScopeOf({ role: 'hr_manager', branchId }), [], String(branchId))
+    assert.deepEqual(branchScopeOf({ role: 'hr_manager', branchId, scopeAllBranches: false }), [])
   }
-  // الكتابة على مستوى الشركة: «كل الفروع» بيعدّي، والمقفول والفاضي لأ
+  // الفروع المختارة في التوكن (branchIds) هي النطاق بالظبط — والفاضية تفضل فاضية (مش فرعه ولا «الكل»)، والقيم البايظة بتتشال
+  assert.deepEqual(branchScopeOf({ role: 'hr_manager', branchId: 3, branchIds: [3, 4] }), [3, 4])
+  assert.deepEqual(branchScopeOf({ role: 'hr_manager', branchId: 3, branchIds: [4] }), [4])
+  assert.deepEqual(branchScopeOf({ role: 'hr_manager', branchId: 3, branchIds: [] }), [])
+  assert.deepEqual(branchScopeOf({ role: 'hr_manager', branchId: 3, branchIds: [0, -1, 'x', 2.5, 4, 4] }), [4])
+  assert.equal(branchScopeOf({ role: 'hr_manager', branchId: 3, branchIds: [3], scopeAllBranches: true }), null)
+  // الكتابة على مستوى الشركة: «كل الفروع» بيعدّي، والمقفول (فرع أو أكتر) والفاضي لأ
   assertCompanyWideWrite({ role: 'super_admin', branchId: 1 })
   assertCompanyWideWrite({ role: 'hr_manager', branchId: 1, scopeAllBranches: true })
-  for (const user of [{ role: 'hr_manager', branchId: 1 }, { role: 'hr_manager', branchId: null }, { role: 'hr_manager', branchId: 1, scopeAllBranches: 'true' }]) {
+  for (const user of [{ role: 'hr_manager', branchId: 1 }, { role: 'hr_manager', branchId: null }, { role: 'hr_manager', branchId: 1, scopeAllBranches: 'true' },
+    { role: 'hr_manager', branchId: 1, branchIds: [1, 2] }, { role: 'hr_manager', branchId: 1, branchIds: [] }]) {
     assert.throws(() => assertCompanyWideWrite(user), error => error.getStatus?.() === 403 && /لكل الشركة/.test(error.message))
   }
 })
@@ -193,7 +200,7 @@ test('scope is not permission: RolesGuard and userHasPerm ignore «كل الفر
   const source = read('api', 'src', 'auth', 'guards.ts')
   const guardBody = source.slice(source.indexOf('export class RolesGuard'), source.indexOf('// فحص برمجي داخل الخدمات'))
   assert.doesNotMatch(guardBody, /scopeAllBranches|branchScopeOf/)
-  assert.match(source, /user\.role === 'super_admin' \|\| user\.scopeAllBranches === true\s+\? null/)
+  assert.match(source, /if \(user\.role === 'super_admin' \|\| user\.scopeAllBranches === true\) return null/)
 })
 
 test('effective permissions = role ∪ grants − revokes (what the users screen shows)', () => {
@@ -214,7 +221,12 @@ test('source guards: only the super admin flips the switch, it bumps tokenVersio
   assert.ok(flip > 0 && locked > flip && save > locked, 'الحراسة قبل الحفظ')
   assert.match(update, /dto\.scopeAllBranches !== undefined && dto\.scopeAllBranches !== wasScopeAll/)
   assert.match(update, /nextRole === 'super_admin' \? false : \(dto\.scopeAllBranches \?\? wasScopeAll\)/)
-  assert.match(update, /if \(scopeChanged\) user\.scopeAllBranches = nextScopeAll/)
+  assert.match(update, /if \(scopeAllChanged\) user\.scopeAllBranches = nextScopeAll/)
+  // والفروع المختارة: تغييرها جزء من «تغيير النطاق» (يبطل التوكنات، وممنوع على حسابك إنت)
+  assert.match(update, /if \(scopeBranchesChanged\) user\.scopeBranchIds = nextScopeBranchIds/)
+  assert.match(update, /const scopeChanged = scopeAllChanged \|\| scopeBranchesChanged/)
+  const manageable = update.indexOf('assertManageableScope(actor, user)')
+  assert.ok(manageable > locked && manageable < save, 'حساب نطاقه أوسع من المنفّذ: الرفض قبل الحفظ')
   assert.match(update, /employeeChanged \|\|\s+scopeChanged\s+\) \{\s+user\.tokenVersion = \(user\.tokenVersion \?\? 0\) \+ 1/)
   // لا أحد يغيّر نطاق حسابه بنفسه
   assert.match(update, /roleChanged \|\| permsChanged \|\| branchChanged \|\| employeeChanged \|\| scopeChanged/)
@@ -229,11 +241,15 @@ test('source guards: only the super admin flips the switch, it bumps tokenVersio
   assert.match(service, /\.\.\.\(scopeAllBranches \? \{ scopeAllBranches: true \} : \{\}\)/)
 
   const strategy = read('api', 'src', 'auth', 'jwt.strategy.ts')
-  assert.match(strategy, /select: \['id', 'isActive', 'tokenVersion', 'scopeAllBranches'\]/)
+  assert.match(strategy, /select: \['id', 'isActive', 'tokenVersion', 'scopeAllBranches', 'scopeBranchIds', 'branchId'\]/)
+  // توكن شايل فروع صريحة أوسع من نطاق الحساب في القاعدة دلوقتي بيموت
+  assert.match(strategy, /if \(!branchScopeCovers\(current, branchScopeOf\(payload\)\)\) \{\s+throw new UnauthorizedException/)
+  assert.match(service, /\.\.\.\(branchIds !== null \? \{ branchIds \} : \{\}\)/)
   assert.match(strategy, /if \(payload\.scopeAllBranches === true && user\.scopeAllBranches !== true\) \{\s+throw new UnauthorizedException/)
 
   const entity = read('api', 'src', 'auth', 'user.entity.ts')
   assert.match(entity, /@Column\(\{ default: false \}\)\s+scopeAllBranches: boolean/)
+  assert.match(entity, /@Column\(\{ type: 'nvarchar', length: 400, nullable: true \}\)\s+scopeBranchIds: string \| null/)
 })
 
 test('migration 064 is tied to the code letter by letter, additive, idempotent by construction and SQL Server 2019-safe', () => {

@@ -45,6 +45,7 @@ import {
 } from '@/lib/api'
 import { OrgTargetPicker, describeOrgTarget, initialOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
 import { localToday } from '@/lib/dates'
+import { branchScopeOfUser, canSeeBranch, type BranchScope } from '@/lib/branch-scope'
 import { fetchOvertimeLogRange } from '@/lib/attendance-range-api'
 import { dayRangeError, dayRangeLabel, type DayRange } from '@/lib/payroll-month-range'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
@@ -652,6 +653,8 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
   const [busyId, setBusyId] = useState<number | null>(null)
   const [showAdd, setShowAdd] = useState(false)
   const [lockedBranchId, setLockedBranchId] = useState<number | null>(null)
+  // نطاق فروع الحساب: فترات فروعه بس اللي يعدّلها، والفترة العامة لحساب على مستوى الشركة
+  const [branchScope, setBranchScope] = useState<BranchScope>(null)
   const today = localToday()
 
   const reload = async () => {
@@ -668,6 +671,7 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
   useEffect(() => {
     const user = getCurrentUser()
     setLockedBranchId(lockedBranchIdOf(user))
+    setBranchScope(branchScopeOfUser(user))
     reload()
     fetchBranches().then(setBranches).catch(() => setBranches([]))
     // الإعداد العام محتاج صلاحية الإعدادات — لو مش متاح بنكتفي بالإشارة لمكانه
@@ -681,7 +685,7 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
 
   const branchName = (branchId?: number | null) =>
     branchId == null ? 'كل الفروع' : branches.find((b) => b.id === branchId)?.name ?? `فرع #${branchId}`
-  const canEdit = (p: ApiOvertimePeriod) => !lockedBranchId || p.branchId === lockedBranchId
+  const canEdit = (p: ApiOvertimePeriod) => canSeeBranch(branchScope, p.branchId)
 
   const toggle = async (p: ApiOvertimePeriod) => {
     setBusyId(p.id)
@@ -841,6 +845,7 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
         <AddOvertimePeriodModal
           branches={branches}
           lockedBranchId={lockedBranchId}
+          branchScope={branchScope}
           onClose={() => setShowAdd(false)}
           onCreated={async (created) => {
             await reload()
@@ -857,11 +862,13 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
 function AddOvertimePeriodModal({
   branches,
   lockedBranchId,
+  branchScope,
   onClose,
   onCreated,
 }: {
   branches: ApiBranch[]
   lockedBranchId: number | null
+  branchScope: BranchScope
   onClose: () => void
   onCreated: (created: ApiOvertimePeriod & { recompute?: ApiOvertimePeriodRecompute }) => Promise<void>
 }) {
@@ -870,7 +877,7 @@ function AddOvertimePeriodModal({
   const [toDate, setToDate] = useState('')
   const [effect, setEffect] = useState<ApiOvertimePeriod['effect']>('OPEN')
   // الفترة للشركة كلها أو فرع — نفس منتقي الاستهداف بمستوى الفرع بس
-  const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(lockedBranchId, ['company', 'branch']))
+  const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(lockedBranchId, ['company', 'branch'], branchScope))
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState('')
 
@@ -966,6 +973,7 @@ function AddOvertimePeriodModal({
             branches={branches}
             levels={['company', 'branch']}
             lockedBranchId={lockedBranchId}
+            branchScope={branchScope}
             disabled={saving}
             showCount={false}
           />

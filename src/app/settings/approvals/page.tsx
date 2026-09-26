@@ -34,12 +34,14 @@ import {
   fetchApprovalChains,
   fetchBranches,
   getCurrentUser,
+  isCompanyWideUser,
   lockedBranchIdOf,
   fetchEmployees,
   fetchRequestTypes,
   replaceChainSteps,
   updateApprovalChain,
 } from '@/lib/api'
+import { branchScopeOfUser, canSeeBranch } from '@/lib/branch-scope'
 
 // شكل سلسلة الاعتماد كما يرجعها الباك إند
 interface ApiChainStep {
@@ -319,10 +321,12 @@ export default function ApprovalsPage() {
       setOpenedForm(JSON.stringify(next))
     } else {
       setEditingChain(null)
+      // الدورة العامة لحساب على مستوى الشركة؛ حساب الفرع الواحد على فرعه، وحساب الفروع المتعددة يختار فرع منها
+      const user = getCurrentUser()
       setFormData({
         name: '',
         code: '',
-        branchId: 'all',
+        branchId: isCompanyWideUser(user) ? 'all' : String(lockedBranchIdOf(user) ?? ''),
         steps: [emptyStep()],
       })
     }
@@ -415,6 +419,7 @@ export default function ApprovalsPage() {
     if (!editingChain && !CODE_RE.test(formData.code.trim())) {
       return 'كود الدورة: أحرف إنجليزية وأرقام و _ أو - فقط (من 3 إلى 50 خانة)'
     }
+    if (formData.branchId === '') return 'اختار الفرع'
     for (const s of formData.steps) {
       if (s.approverRole === 'specific_employee' && s.specificEmployeeId === '') {
         // نفس رسالة الباك إند حرفياً
@@ -1150,7 +1155,9 @@ export default function ApprovalsPage() {
                         : undefined
                     }
                   >
-                    {!copyOf && <option value="all">كل الفروع (دورة عامة)</option>}
+                    {/* الدورة العامة لحساب على مستوى الشركة (أو دورة عامة مفتوحة للعرض)؛ حساب الفروع يختار فرع من فروعه */}
+                    {!copyOf && (isCompanyWideUser(getCurrentUser()) || formData.branchId === 'all') && <option value="all">كل الفروع (دورة عامة)</option>}
+                    {formData.branchId === '' && <option value="" disabled>— اختار الفرع —</option>}
                     {(copyOf ? branchesWithoutVersion(copyOf) : branches).map((b) => (
                       <option
                         key={b.id}
@@ -1402,8 +1409,9 @@ export default function ApprovalsPage() {
                 {/* «سلسلة مختلفة لكل فرع» (طلب المالك 24 سبتمبر): جوّه تعديل السلسلة الأساسية نفسها — المكان اللي بيتدخل
                     طبيعي. نوع الطلب واحد لكل الشركة، وطلب الموظف بيمشي في سلسلة فرعه لو ليه سلسلة خاصة، وإلا في دي. */}
                 {editingChain?.isPrimary && editingChain.branchId === null && (() => {
-                  const locked = lockedBranchIdOf(getCurrentUser())
-                  const rows = locked ? branches.filter((b) => b.id === locked) : branches
+                  // حساب الفروع يشوف ويدير نسخ فروعه بس (فرع أو أكتر)
+                  const scope = branchScopeOfUser(getCurrentUser())
+                  const rows = branches.filter((b) => canSeeBranch(scope, b.id))
                   return (
                     <div className="border border-gray-200 rounded-xl">
                       <div className="px-4 py-3 border-b border-gray-100">

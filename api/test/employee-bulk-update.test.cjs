@@ -117,12 +117,15 @@ const plan = (header, rows, data, extra) => planBulkUpdate(readBulkSheet(sheet(h
 test('الخطة: كود مش موجود، كود متكرر، موظف فرع تاني لحساب فرع، وصف من غير تغيير', () => {
   const data = lookups([snapshot(), snapshot({ id: 2, employeeCode: 'E2', branchId: 2, departmentId: 20, teamId: null })])
   const result = plan(['كود الموظف', 'رقم الجوال'], [['E404', '0509999999'], ['E1', '0501234567'], ['e2', '0507777777'], ['', ''], ['E1', '0508888888']], data,
-    { branchScope: 1 })
+    { branchScope: [1] })
   assert.deepEqual(result.rows.map(row => [row.row, row.status]), [[2, 'error'], [3, 'error'], [4, 'error'], [6, 'error']])
   assert.match(result.rows[0].errors[0], /«E404» مش موجود/)
   assert.match(result.rows[1].errors[0], /متكرر في الملف \(الصفوف 3، 6\)/)
   assert.match(result.rows[2].errors[0], /فرع تاني — خارج صلاحية/)
   assert.equal(result.rows[2].employeeName, null) // بلا اسم موظف فرع تاني
+  // حساب غير مسند (نطاق فاضي) مايوصلش لأي موظف — مش «الكل»؛ ونطاق فرعين يوصل للاتنين
+  assert.match(plan(['كود الموظف', 'رقم الجوال'], [['E1', '0509999999']], data, { branchScope: [] }).rows[0].errors[0], /فرع تاني — خارج صلاحية/)
+  assert.equal(plan(['كود الموظف', 'رقم الجوال'], [['E2', '0507777777']], data, { branchScope: [1, 2] }).rows[0].status, 'ready')
   const unchanged = plan(['كود الموظف', 'رقم الجوال'], [['E1', '0501234567']], data)
   assert.equal(unchanged.rows[0].status, 'unchanged')
   assert.deepEqual(unchanged.summary, { total: 1, ready: 0, unchanged: 1, error: 0 })
@@ -147,7 +150,7 @@ test('الخطة: التكرار — رقم هوية مسجل لموظف تان�
     nationalId: new Map([['1055555555', [{ id: 9, fullName: 'صاحب الهوية', branchId: 1 }]], ['1066666666', [{ id: 10, fullName: 'فرع تاني', branchId: 2 }]]]),
     fingerprintCode: new Map([[uniqueKey('fingerprintCode', 'ab-1'), [{ id: 11, fullName: 'صاحب البصمة', branchId: 1 }]]]),
   })
-  const result = plan(['كود الموظف', 'رقم الهوية / الإقامة', 'رقم البصمة'], [['E1', '1055555555', 'FP-7'], ['E2', '1066666666', 'FP-7']], data, { branchScope: 1 })
+  const result = plan(['كود الموظف', 'رقم الهوية / الإقامة', 'رقم البصمة'], [['E1', '1055555555', 'FP-7'], ['E2', '1066666666', 'FP-7']], data, { branchScope: [1] })
   assert.match(result.rows[0].errors.join(), /مسجل لموظف تاني \(صاحب الهوية\)/)
   assert.match(result.rows[1].errors.join(), /مسجل لموظف تاني — مايتكررش/)
   assert.doesNotMatch(result.rows[1].errors.join(), /فرع تاني/)
@@ -173,8 +176,14 @@ test('الخطة: القسم والفريق بالاسم جوه الفرع، ن�
   assert.deepEqual(branch.rows[0].update, { branchId: 2, departmentId: 20, teamId: null })
   assert.equal(branch.rows[0].branchChange, true)
   assert.equal(branch.needs.org, true)
-  const branchUser = plan(['كود الموظف', 'الفرع', 'القسم'], [['E1', 'جدة', 'المالية']], data, { branchScope: 1 })
+  const branchUser = plan(['كود الموظف', 'الفرع', 'القسم'], [['E1', 'جدة', 'المالية']], data, { branchScope: [1] })
   assert.match(branchUser.rows[0].errors[0], /حساب الفرع مايقدرش ينقل/)
+  // حساب على فرعين ينقل بينهم، ولفرع برّه فروعه لأ
+  const twoBranches = plan(['كود الموظف', 'الفرع', 'القسم'], [['E1', 'جدة', 'المالية']], data, { branchScope: [1, 2] })
+  assert.equal(twoBranches.rows[0].status, 'ready')
+  assert.deepEqual(twoBranches.rows[0].update, { branchId: 2, departmentId: 20, teamId: null })
+  const outside = plan(['كود الموظف', 'الفرع', 'القسم'], [['E1', 'جدة', 'المالية']], data, { branchScope: [1, 3] })
+  assert.match(outside.rows[0].errors[0], /حساب الفروع مايقدرش ينقل موظف لفرع برّه فروعه/)
   const misc = plan(['كود الموظف', 'الدرجة الوظيفية', 'مركز التكلفة', 'كود المدير المباشر', 'المسمى الوظيفي'], [['E1', 'القديمة', 'cc-01', 'M1', 'سائق']], data)
   assert.deepEqual(misc.rows[0].errors, ['المسمى الوظيفي: «سائق» مش في كتالوج المسميات الوظيفية', 'الدرجة الوظيفية: الدرجة «القديمة» معطّلة — اختار درجة فعّالة'])
   const good = plan(['كود الموظف', 'مركز التكلفة', 'كود المدير المباشر', 'المسمى الوظيفي'], [['E1', 'cc-01', 'm1', 'مدير مبيعات']], data)

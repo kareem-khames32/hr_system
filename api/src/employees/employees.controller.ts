@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   Body,
   CanActivate,
   Controller,
@@ -106,12 +107,16 @@ export class EmployeesController {
   @Perm('employees.create')
   @Post()
   async create(@Body() dto: CreateEmployeeDto, @CurrentUser() user: JwtPayload) {
-    // مدير الفرع يضيف داخل فرعه فقط
+    // مدير الفرع يضيف داخل فرعه فقط، وحساب الفروع المتعددة داخل فرع من فروعه يختاره
     const scope = branchScopeOf(user)
     if (scope != null) {
+      if (scope.length === 0) throw new ForbiddenException('حسابك مش مربوط بفرع — مايقدرش يضيف موظفين')
       // فرع مختلف مكتوب صراحةً: رفض واضح بدل ما يتكتب على فرع المستخدم في السكوت ويتأكد له فرع مااختارهوش
-      if (dto.branchId != null && Number(dto.branchId) !== scope) throw new ForbiddenException('مش مسموح تضيف موظف على فرع غير فرعك')
-      dto.branchId = scope
+      if (dto.branchId != null && !scope.includes(Number(dto.branchId))) {
+        throw new ForbiddenException(scope.length > 1 ? 'مش مسموح تضيف موظف على فرع برّه فروعك' : 'مش مسموح تضيف موظف على فرع غير فرعك')
+      }
+      if (dto.branchId == null && scope.length > 1) throw new BadRequestException('حسابك على أكتر من فرع — اختار فرع الموظف')
+      dto.branchId = dto.branchId != null ? Number(dto.branchId) : scope[0]
     }
     return projectEmployee(await this.employees.create(dto, user.sub, scope), user)
   }

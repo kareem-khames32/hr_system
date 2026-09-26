@@ -2,7 +2,8 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { InjectRepository } from '@nestjs/typeorm'
 import { DataSource, EntityManager, In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchScopeOf, branchScopeQb, inBranchScope, userHasPerm } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { localDateOf } from '../attendance/attendance.service'
 import { grossMonthlySalary } from '../employees/compensation'
 import { Employee } from '../employees/employee.entity'
@@ -51,14 +52,19 @@ export class LeaveYearEndService {
     return localDateOf(new Date())
   }
 
-  // نطاق الفرع: حساب الفرع على فرعه بس؛ مدير النظام الشركة كلها أو فرع يختاره
-  private scopeFor(user: JwtPayload, branchIdRaw?: unknown): number | null {
+  // نطاق الفرع: حساب الفروع على فروعه (أو فرع منها يختاره)؛ مدير النظام الشركة كلها أو فرع يختاره
+  private scopeFor(user: JwtPayload, branchIdRaw?: unknown): BranchScope {
     const scope = branchScopeOf(user)
     if (branchIdRaw == null || branchIdRaw === '') return scope
     const branchId = Number(branchIdRaw)
     if (!Number.isInteger(branchId) || branchId <= 0) throw new BadRequestException('رقم الفرع غير صالح')
-    if (scope !== null && branchId !== scope) throw new ForbiddenException('الفرع خارج نطاق صلاحيتك')
-    return branchId
+    if (!inBranchScope(scope, branchId)) throw new ForbiddenException('الفرع خارج نطاق صلاحيتك')
+    return [branchId]
+  }
+
+  // الفرع في الرد: فرع واحد بالرقم زي الأول، والشركة أو أكتر من فرع = null
+  private branchOfScope(scope: BranchScope): number | null {
+    return scope !== null && scope.length === 1 ? scope[0] : null
   }
 
   private assertYear(year: string) {
@@ -67,9 +73,13 @@ export class LeaveYearEndService {
 
   async preview(user: JwtPayload, year: string, branchIdRaw?: unknown) {
     this.assertYear(year)
-    const branchId = this.scopeFor(user, branchIdRaw)
+    return this.previewOf(year, this.scopeFor(user, branchIdRaw))
+  }
+
+  private async previewOf(year: string, scope: BranchScope) {
+    const branchId = this.branchOfScope(scope)
     const today = this.today()
-    const { settings, rows } = await this.balances.yearEndPreview(year, branchId, today)
+    const { settings, rows } = await this.balances.yearEndPreview(year, scope, today)
     const keys = ['entitledTotal', 'used', 'settled', 'remaining', 'carried', 'lapsed', 'settleable'] as const
     const totals = Object.fromEntries(keys.map((k) => [k, 0])) as Record<(typeof keys)[number], number>
     let closed = 0
@@ -96,7 +106,7 @@ export class LeaveYearEndService {
 
   async close(user: JwtPayload, year: string, branchIdRaw?: unknown) {
     this.assertYear(year)
-    const branchId = this.scopeFor(user, branchIdRaw)
+    const scope = this.scopeFor(user, branchIdRaw)
     const currentYear = Number(this.today().slice(0, 4))
     if (Number(year) >= currentYear) {
       throw new BadRequestException(`سنة ${year} لسه ما خلصتش — الإقفال بيبقى بعد آخر يوم فيها`)
@@ -104,9 +114,9 @@ export class LeaveYearEndService {
     if (Number(year) !== currentYear - 1) {
       throw new BadRequestException(`الإقفال للسنة اللي فاتت بس (${currentYear - 1}) — سنة ${year} اترحّلت على اللي بعدها`)
     }
-    const result = await this.balances.closeYear(year, branchId)
-    const after = await this.preview(user, year, branchId ?? undefined)
-    return { ...result, branchId, summary: after.totals }
+    const result = await this.balances.closeYear(year, scope)
+    const after = await this.previewOf(year, scope)
+    return { ...result, branchId: this.branchOfScope(scope), summary: after.totals }
   }
 
   async settle(user: JwtPayload, year: string, employeeId: number, input: SettleLeaveInput) {
@@ -130,7 +140,7 @@ export class LeaveYearEndService {
     return this.ds.transaction(async (em) => {
       // الموظف الأول: نفس ترتيب الأقفال في تعديل الرصيد (موظف ثم صف الرصيد)
       const employee = await em.findOne(Employee, { where: { id: employeeId }, lock: { mode: 'pessimistic_write' } })
-      if (!employee || (scope !== null && employee.branchId !== scope)) throw new NotFoundException('الموظف غير موجود')
+      if (!employee || !inBranchScope(scope, employee.branchId)) throw new NotFoundException('الموظف غير موجود')
       const prior = await em.findOneBy(LeaveBalanceSettlement, { employeeId, idempotencyKey: input.idempotencyKey })
       if (prior) {
         if (prior.mode !== mode || prior.reason !== reason || prior.year !== year || (prior.payrollPeriod ?? null) !== payrollPeriod || prior.actorUserId !== user.sub) {
@@ -195,15 +205,16 @@ export class LeaveYearEndService {
   // سجل التسويات لسنة (بنطاق الفرع)، ولموظف لو اتحدد — بالأسماء مش أرقام
   async history(user: JwtPayload, year: string, employeeIdRaw?: unknown, branchIdRaw?: unknown) {
     this.assertYear(year)
-    const branchId = this.scopeFor(user, branchIdRaw)
+    const scope = this.scopeFor(user, branchIdRaw)
     const qb = this.settlements.createQueryBuilder('s').where('s.year = :year', { year })
     if (employeeIdRaw != null && employeeIdRaw !== '') {
       const employeeId = Number(employeeIdRaw)
       if (!Number.isInteger(employeeId) || employeeId <= 0) throw new BadRequestException('رقم الموظف غير صالح')
       qb.andWhere('s.employeeId = :employeeId', { employeeId })
     }
-    if (branchId !== null) {
-      qb.andWhere('s.employeeId IN (SELECT e.id FROM employees e WHERE e.branchId = :branchId)', { branchId })
+    if (scope !== null) {
+      const [inScope, params] = branchScopeQb('e.branchId', scope)
+      qb.andWhere(`s.employeeId IN (SELECT e.id FROM employees e WHERE ${inScope})`, params)
     }
     const rows = await qb.orderBy('s.id', 'DESC').take(500).getMany()
     const empIds = [...new Set(rows.map((r) => r.employeeId))]

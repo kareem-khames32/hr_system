@@ -96,7 +96,10 @@ test('PATCH /settings/config runs the company profile check, seed + migration 05
 test('cost center endpoint: branch scoped, payroll.view required, registered in AppModule', () => {
   const controller = fs.readFileSync(path.join(root, 'src/reports/cost-center-report.controller.ts'), 'utf8')
   assert.match(controller, /userHasPerm\(user, 'payroll\.view'\)/)
-  assert.match(controller, /const branchId = scope \?\? query\.branchId \?\? null/)
+  // فرع مطلوب برّه النطاق ممنوع؛ فرع واحد = نفس السلوك القديم، وأكتر من فرع = نطاق الفروع كله (branchScope) للخدمة
+  assert.match(controller, /query\.branchId !== undefined && !inBranchScope\(scope, query\.branchId\)/)
+  assert.match(controller, /const branchId = query\.branchId \?\? \(scope !== null && scope\.length === 1 \? scope\[0\] : null\)/)
+  assert.match(controller, /this\.service\.report\(\{ period: query\.period, branchId, branchScope: scope,/)
   const appModule = fs.readFileSync(path.join(root, 'src/app.module.ts'), 'utf8')
   assert.match(appModule, /CostCenterReportController/)
   assert.match(appModule, /providers: \[CostCenterReportService\]/)

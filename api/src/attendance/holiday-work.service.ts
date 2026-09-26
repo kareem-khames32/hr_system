@@ -2,7 +2,8 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { assertCompanyWideWrite, branchScopeOf, userHasPerm } from '../auth/guards'
+import { assertCompanyWideWrite, branchScopeOf, inBranchScope, isEmptyBranchScope, scopeWord, userHasPerm } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { AttendanceService } from './attendance.service'
 // تراكم المسير يومًا بيوم: أمر دوام العطلة بيغيّر أيام الموظفين المشمولين
@@ -56,26 +57,29 @@ export class HolidayWorkService {
 
   private get em(): EntityManager { return this.orders.manager }
 
-  private scope(user: JwtPayload) {
+  private scope(user: JwtPayload): BranchScope {
     const scope = branchScopeOf(user)
-    if (scope !== null && scope < 1) throw new ForbiddenException('حسابك مش مربوط بفرع')
+    if (isEmptyBranchScope(scope)) throw new ForbiddenException('حسابك مش مربوط بفرع')
     return scope
   }
 
-  private visible(order: Pick<HolidayWorkOrder, 'targetLevel' | 'branchId'>, scope: number | null) {
-    return scope === null || order.targetLevel === 'company' || order.branchId === scope
+  private visible(order: Pick<HolidayWorkOrder, 'targetLevel' | 'branchId'>, scope: BranchScope) {
+    return scope === null || order.targetLevel === 'company' || inBranchScope(scope, order.branchId)
   }
 
   private canWrite(user: JwtPayload, order: Pick<HolidayWorkOrder, 'targetLevel' | 'branchId'>) {
     if (!userHasPerm(user, 'attendance.manage')) return false
     const scope = branchScopeOf(user)
     if (order.targetLevel === 'company' || order.branchId == null) return scope === null
-    return scope === null || order.branchId === scope
+    return inBranchScope(scope, order.branchId)
   }
 
   private assertWrite(user: JwtPayload, order: Pick<HolidayWorkOrder, 'targetLevel' | 'branchId'>) {
     if (order.targetLevel === 'company' || order.branchId == null) assertCompanyWideWrite(user)
-    else if (this.scope(user) !== null && order.branchId !== this.scope(user)) throw new ForbiddenException('صلاحيتك على فرعك بس')
+    else {
+      const scope = this.scope(user)
+      if (!inBranchScope(scope, order.branchId)) throw new ForbiddenException(`صلاحيتك على ${scopeWord(scope)} بس`)
+    }
   }
 
   // ===== المضاعف الافتراضي =====
@@ -190,13 +194,13 @@ export class HolidayWorkService {
       const rows: Array<Record<string, unknown>> = []
       let targeted = 0
       if (grant) for (const emp of employees.values()) {
-        if (!INACTIVE_STATUSES.has(emp.status) && (scope === null || emp.branchId === scope) && holidayWorkGrantMatches(grant, emp)) targeted++
+        if (!INACTIVE_STATUSES.has(emp.status) && inBranchScope(scope, emp.branchId) && holidayWorkGrantMatches(grant, emp)) targeted++
       }
       for (const date of grant?.dates ?? []) {
         if (date > today) continue
         for (const day of attendance.get(date) ?? []) {
           const emp = employees.get(day.employeeId)
-          if (!emp || !grant || (scope !== null && emp.branchId !== scope) || !holidayWorkGrantMatches(grant, emp)) continue
+          if (!emp || !grant || !inBranchScope(scope, emp.branchId) || !holidayWorkGrantMatches(grant, emp)) continue
           const winner = order.status === 'ACTIVE' ? holidayWorkGrantsByDate(grants, emp, date, date).get(date) : grant
           const coveredBy = winner && winner.id !== order.id ? winner : null
           const outcome = holidayWorkDayResult({ date, today, day, ...rules, approvedOvertime: overtime.has(`${emp.employeeId}|${date}`) })
@@ -283,7 +287,7 @@ export class HolidayWorkService {
     } else {
       branchId = Number(input.branchId)
       if (!Number.isSafeInteger(branchId) || branchId < 1) throw new BadRequestException('اختار الفرع')
-      if (scope !== null && branchId !== scope) throw new ForbiddenException('صلاحيتك على فرعك بس')
+      if (!inBranchScope(scope, branchId)) throw new ForbiddenException(`صلاحيتك على ${scopeWord(scope)} بس`)
       const [branch] = await this.em.query('SELECT [id] FROM [branches] WHERE [id] = @0', [branchId])
       if (!branch) throw new BadRequestException('الفرع مش موجود')
       const check = async (sql: string, label: string) => {

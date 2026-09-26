@@ -13,6 +13,7 @@ import {
   ApiError, can, fetchBranches, fetchDepartments, fetchEmployees, fetchTeams, getCurrentUser, getToken, lockedBranchIdOf,
   type ApiBranch, type ApiDepartment, type ApiEmployee, type ApiTeam,
 } from '@/lib/api'
+import { branchScopeOfUser, type BranchScope } from '@/lib/branch-scope'
 import { csvDateStamp, downloadCsv } from '@/lib/csv'
 import { localToday } from '@/lib/dates'
 import { OrgTargetPicker, initialOrgTarget, resolveOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
@@ -105,6 +106,8 @@ export default function EmployeesBulkUpdatePage() {
   const [allowed, setAllowed] = useState<boolean | null>(null)
   const [canSalary, setCanSalary] = useState(false)
   const [lockedBranchId, setLockedBranchId] = useState<number | null>(null)
+  // نطاق فروع الحساب: حساب الفروع المتعددة يختار فرع منها (الشركة كلها مش متاحة)
+  const [branchScope, setBranchScope] = useState<BranchScope>(null)
   const [error, setError] = useState('')
 
   // 1) القالب
@@ -133,8 +136,10 @@ export default function EmployeesBulkUpdatePage() {
     setCanSalary(can('payroll.approve'))
     const user = getCurrentUser()
     const locked = lockedBranchIdOf(user)
+    const scope = branchScopeOfUser(user)
     setLockedBranchId(locked)
-    setTarget(initialOrgTarget(locked))
+    setBranchScope(scope)
+    setTarget(initialOrgTarget(locked, undefined, scope))
   }, [])
 
   // بيانات منتقي الموظفين بتتحمل لما يختار «املى القالب» بس
@@ -326,7 +331,7 @@ export default function EmployeesBulkUpdatePage() {
           {prefill && (
             org ? (
               <OrgTargetPicker value={target} onChange={setTarget} branches={org.branches} departments={org.departments}
-                teams={org.teams} employees={org.employees} lockedBranchId={lockedBranchId} disabled={!!downloading} />
+                teams={org.teams} employees={org.employees} lockedBranchId={lockedBranchId} branchScope={branchScope} disabled={!!downloading} />
             ) : (
               <p className="text-sm text-gray-500 flex items-center gap-2"><Loader2 size={16} className="animate-spin" /> بنحمّل الفروع والموظفين…</p>
             )

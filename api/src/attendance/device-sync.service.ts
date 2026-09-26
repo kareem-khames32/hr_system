@@ -4,7 +4,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { Between, Repository } from 'typeorm'
 import { ZkTcpAdapter, ZkTcpError } from './zk-tcp-adapter'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf } from '../auth/guards'
+import { branchIdIn, branchScopeOf, branchScopeQb } from '../auth/guards'
 import { BiometricDevice } from '../assets/assets.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { AttendancePunch } from './attendance.entities'
@@ -78,7 +78,7 @@ export class DeviceSyncService {
     // The secret is selected only for the scoped sync operation, never a catalog response.
     const qb = this.devices.createQueryBuilder('device').addSelect('device.authKey')
       .where('device.id = :id', { id: deviceId })
-    if (scope !== null) qb.andWhere('device.branchId = :scope', { scope })
+    if (scope !== null) qb.andWhere(...branchScopeQb('device.branchId', scope))
     const device = await qb.getOne()
     if (!device) throw new NotFoundException('الجهاز غير موجود')
     if (!device.ip) {
@@ -223,7 +223,7 @@ export class DeviceSyncService {
   // ===== سحب كل الأجهزة النشطة =====
   async syncAll(user?: JwtPayload): Promise<SyncResult[]> {
     const scope = user ? branchScopeOf(user) : null
-    const active = await this.devices.find({ where: { isActive: true, ...(scope !== null ? { branchId: scope } : {}) } })
+    const active = await this.devices.find({ where: { isActive: true, ...(scope !== null ? { branchId: branchIdIn(scope) } : {}) } })
     const results: SyncResult[] = []
     for (const d of active) {
       results.push(await this.syncDevice(d.id, user))
@@ -247,7 +247,7 @@ export class DeviceSyncService {
       .addGroupBy('p.deviceSn')
     const scope = branchScopeOf(user)
     if (scope !== null) {
-      const sns = (await this.devices.find({ where: { branchId: scope } })).map(
+      const sns = (await this.devices.find({ where: { branchId: branchIdIn(scope) } })).map(
         (d) => d.serialNumber
       )
       if (sns.length === 0) return []

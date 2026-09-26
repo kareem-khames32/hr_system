@@ -13,20 +13,23 @@ const source = file => fs.readFileSync(path.join(__dirname, '..', file), 'utf8')
 test('تكرار الهوية/البصمة/الكود: الاسم يظهر لمدير النظام ولنفس الفرع بس، وحساب فرع تاني ياخد رسالة عامة', async () => {
   const other = { id: 5, fullName: 'سارة من فرع أربعة', branchId: 4 }
   assert.equal(employeeNameInScope(other, null), ' (سارة من فرع أربعة)')
-  assert.equal(employeeNameInScope(other, 4), ' (سارة من فرع أربعة)')
-  assert.equal(employeeNameInScope(other, 1), '')
+  assert.equal(employeeNameInScope(other, [4]), ' (سارة من فرع أربعة)')
+  assert.equal(employeeNameInScope(other, [1]), '')
+  // نطاق أكتر من فرع فيه فرعها يشوف الاسم، والنطاق الفاضي (حساب غير مسند) ما يشوفوش
+  assert.equal(employeeNameInScope(other, [1, 4]), ' (سارة من فرع أربعة)')
+  assert.equal(employeeNameInScope(other, []), '')
   const service = Object.create(EmployeesService.prototype)
   service.employees = { findOne: async () => other }
   const conflict = async (data, scope) => {
     try { await service.assertUnique(data, scope) } catch (error) { assert.equal(error.getStatus(), 409); return error.message }
     assert.fail('expected 409')
   }
-  assert.equal(await conflict({ nationalId: '1012345678', excludeId: 9 }, 1), 'رقم الهوية / الإقامة 1012345678 مسجل لموظف آخر')
-  assert.equal(await conflict({ nationalId: '1012345678' }, 4), 'رقم الهوية / الإقامة 1012345678 مسجل لموظف آخر (سارة من فرع أربعة)')
+  assert.equal(await conflict({ nationalId: '1012345678', excludeId: 9 }, [1]), 'رقم الهوية / الإقامة 1012345678 مسجل لموظف آخر')
+  assert.equal(await conflict({ nationalId: '1012345678' }, [4]), 'رقم الهوية / الإقامة 1012345678 مسجل لموظف آخر (سارة من فرع أربعة)')
   assert.equal(await conflict({ nationalId: '1012345678' }, null), 'رقم الهوية / الإقامة 1012345678 مسجل لموظف آخر (سارة من فرع أربعة)')
-  assert.doesNotMatch(await conflict({ fingerprintCode: '777' }, 1), /سارة/)
+  assert.doesNotMatch(await conflict({ fingerprintCode: '777' }, [1]), /سارة/)
   // كود الموظف بقى من النظام (قرار المالك 16 سبتمبر) — مش مدخل فمش بيتفحص تكراره هنا
-  await service.assertUnique({ employeeCode: 'EMP777' }, 1)
+  await service.assertUnique({ employeeCode: 'EMP777' }, [1])
   assert.match(await conflict({ fingerprintCode: '777' }, null), /سارة/)
   // المسارات بتمرر نطاق المستخدم
   const service_ = source('src/employees/employees.service.ts'), controller = source('src/employees/employees.controller.ts')

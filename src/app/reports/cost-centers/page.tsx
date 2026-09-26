@@ -4,7 +4,8 @@ import { Fragment, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import { AlertTriangle, ArrowRight, ChevronDown, ChevronLeft, Download, Info, Landmark, RefreshCw } from 'lucide-react'
-import { fetchBranches, getCurrentUser, isCompanyWideUser, type ApiBranch } from '@/lib/api'
+import { fetchBranches, getCurrentUser, isCompanyWideUser, lockedBranchIdOf, type ApiBranch } from '@/lib/api'
+import { branchScopeOfUser, canSeeBranch, type BranchScope } from '@/lib/branch-scope'
 import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { useCurrency } from '@/lib/currency'
 import { formatMoney } from '@/lib/money'
@@ -23,6 +24,8 @@ const centerKey = (id: number | null) => (id === null ? 'none' : String(id))
 export default function CostCenterReportPage() {
   const currency = useCurrency()
   const [companyWide, setCompanyWide] = useState(false)
+  // نطاق فروع الحساب: حساب الفروع المتعددة يختار فرع من فروعه أو كلها (الخادم بيقصر التقرير على نطاقه)
+  const [branchScope, setBranchScope] = useState<BranchScope>([])
   const [branches, setBranches] = useState<ApiBranch[]>([])
   // التقرير على مسيرات شهر رواتب بالاسم — الافتراضي شهر الرواتب الجاري (بدورة 23 يوم 25 سبتمبر = رواتب أكتوبر) مش الشهر التقويمي
   const payrollMonth = usePayrollMonthContext()
@@ -39,14 +42,18 @@ export default function CostCenterReportPage() {
     const user = getCurrentUser()
     const wide = isCompanyWideUser(user)
     setCompanyWide(wide)
+    setBranchScope(branchScopeOfUser(user))
     fetchBranches().then(setBranches).catch(() => setBranches([]))
   }, [])
+
+  // الفرع بيتختار من القائمة لحساب الشركة ولحساب الفروع المتعددة؛ حساب الفرع الواحد مقفول على فرعه
+  const picksBranch = companyWide || (branchScope !== null && branchScope.length > 1)
 
   const load = () => {
     if (!/^\d{4}-\d{2}$/.test(period)) return
     setLoading(true)
     setError('')
-    fetchCostCenterReport({ period, branchId: companyWide ? branchId : undefined, includeDraft })
+    fetchCostCenterReport({ period, branchId: picksBranch ? branchId : undefined, includeDraft })
       .then((data) => {
         setReport(data)
         setOpen(null)
@@ -59,9 +66,9 @@ export default function CostCenterReportPage() {
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(load, [period, branchId, includeDraft, companyWide])
+  useEffect(load, [period, branchId, includeDraft, companyWide, picksBranch])
 
-  const myBranch = !companyWide ? branches.find((b) => b.id === getCurrentUser()?.branchId) : undefined
+  const myBranch = !picksBranch ? branches.find((b) => b.id === lockedBranchIdOf(getCurrentUser())) : undefined
 
   return (
     <MainLayout>
@@ -100,10 +107,10 @@ export default function CostCenterReportPage() {
             cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today} />
           <div>
             <label className="label">الفرع</label>
-            {companyWide ? (
+            {picksBranch ? (
               <select className="input" value={branchId} onChange={(e) => setBranchId(e.target.value)}>
-                <option value="">كل الفروع</option>
-                {branches.map((branch) => (
+                <option value="">{companyWide ? 'كل الفروع' : 'كل فروعك'}</option>
+                {branches.filter((branch) => canSeeBranch(companyWide ? null : branchScope, branch.id)).map((branch) => (
                   <option key={branch.id} value={branch.id}>
                     {branch.name}
                   </option>

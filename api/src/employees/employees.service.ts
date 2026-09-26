@@ -9,6 +9,8 @@ import {
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Between, EntityManager, In, IsNull, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm'
+import { branchIdIn, branchScopeQb, inBranchScope, scopeWord } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { OffboardingCase } from '../offboarding/offboarding.entities'
 import { OPEN_CASE_STATUSES } from '../offboarding/offboarding-open'
 import { AttendanceService } from '../attendance/attendance.service'
@@ -60,9 +62,9 @@ const REQUIRED_ON_EDIT: Record<string, string> = {
   departmentId: 'القسم مطلوب ولا يمكن مسحه', jobTitle: 'المسمى الوظيفي مطلوب ولا يمكن مسحه', fingerprintCode: 'رقم البصمة مطلوب ولا يمكن مسحه',
 }
 
-/** « (الاسم)» لرسائل التكرار لو صاحب القيمة في نطاق المستخدم (مدير النظام أو نفس الفرع)، وإلا فاضي. */
-export function employeeNameInScope(dup: Pick<Employee, 'fullName' | 'branchId'>, branchScope: number | null): string {
-  return branchScope === null || Number(dup.branchId) === Number(branchScope) ? ` (${dup.fullName})` : ''
+/** « (الاسم)» لرسائل التكرار لو صاحب القيمة في نطاق المستخدم (مدير النظام أو فرع من فروعه)، وإلا فاضي. */
+export function employeeNameInScope(dup: Pick<Employee, 'fullName' | 'branchId'>, branchScope: BranchScope): string {
+  return inBranchScope(branchScope, dup.branchId) ? ` (${dup.fullName})` : ''
 }
 
 /** أول مشكلة في الحقول الإجبارية عند إنشاء موظف (أي مسار: الإضافة أو التعيين من مرشح)، أو null. */
@@ -138,10 +140,10 @@ export class EmployeesService {
     }
   }
 
-  // العزل بالفرع: branchScope = null → الكل (super_admin فقط)
-  async findAll(branchScope: number | null) {
+  // العزل بالفرع: branchScope = null → الكل (نطاق كل الفروع)، مصفوفة = الفروع دي بس
+  async findAll(branchScope: BranchScope) {
     const rows = await this.employees.find({
-      where: branchScope == null ? {} : { branchId: branchScope },
+      where: branchScope == null ? {} : { branchId: branchIdIn(branchScope) },
       order: { id: 'ASC' },
     })
     // HRC-09: نسخ قواعد حضور موظفي النطاق كلها باستعلام واحد بدل استعلام لكل موظف —
@@ -149,7 +151,8 @@ export class EmployeesService {
     const versions = this.employees.manager.getRepository(AttendanceRuleVersion).createQueryBuilder('v')
       .where('v.sourceType = :sourceType', { sourceType: 'EMPLOYEE' })
     if (branchScope != null) {
-      versions.andWhere('v.sourceId IN (SELECT e.id FROM employees e WHERE e.branchId = :branchId)', { branchId: branchScope })
+      const [inScope, params] = branchScopeQb('e.branchId', branchScope)
+      versions.andWhere(`v.sourceId IN (SELECT e.id FROM employees e WHERE ${inScope})`, params)
     }
     const byEmployee = new Map<number, AttendanceRuleVersion[]>()
     for (const version of await versions.getMany()) {
@@ -177,22 +180,22 @@ export class EmployeesService {
   }
 
   // دليل مختصر للنشطين في النطاق — المعرّف والاسم والكود فقط (بلا راتب/هوية/بنك)
-  directory(branchScope: number | null) {
+  directory(branchScope: BranchScope) {
     return this.employees.find({
       select: { id: true, fullName: true, employeeCode: true },
       where: {
         isActive: true,
-        ...(branchScope != null ? { branchId: branchScope } : {}),
+        ...(branchScope != null ? { branchId: branchIdIn(branchScope) } : {}),
       },
       order: { fullName: 'ASC' },
     })
   }
 
-  async findOne(id: number, branchScope: number | null) {
+  async findOne(id: number, branchScope: BranchScope) {
     const emp = await this.employees.findOne({ where: { id } })
     if (!emp) throw new NotFoundException('الموظف غير موجود')
     // منع الوصول عبر الفروع
-    if (branchScope != null && emp.branchId !== branchScope) {
+    if (!inBranchScope(branchScope, emp.branchId)) {
       throw new NotFoundException('الموظف غير موجود')
     }
     return this.attendanceView(emp)
@@ -219,7 +222,7 @@ export class EmployeesService {
     email?: string
     nationalId?: string
     excludeId?: number
-  }, branchScope: number | null) {
+  }, branchScope: BranchScope) {
     const notSelf = data.excludeId ? { id: Not(data.excludeId) } : {}
     const whose = (dup: Employee) => employeeNameInScope(dup, branchScope)
     // كود الموظف يولّده النظام (فريد بفهرس) — مش مدخل ومش مفتاح بصمة؛ رقم البصمة وحده يربط البصمات
@@ -318,7 +321,7 @@ export class EmployeesService {
     }
   }
 
-  async renewContract(id: number, dto: RenewEmployeeContractDto, branchScope: number | null, actorId: number) {
+  async renewContract(id: number, dto: RenewEmployeeContractDto, branchScope: BranchScope, actorId: number) {
     const validDate = (value: string) => {
       if (!/^\d{4}-\d{2}-\d{2}$/.test(value ?? '')) return false
       const date = new Date(`${value}T12:00:00Z`)
@@ -331,7 +334,7 @@ export class EmployeesService {
     if (dto.contractFileRef != null && !/^file:[1-9]\d*$/.test(dto.contractFileRef)) throw new BadRequestException('مرجع ملف العقد غير صالح')
     return this.employees.manager.transaction(async em => {
       const employee = await em.findOne(Employee, { where: { id }, lock: { mode: 'pessimistic_write' } })
-      if (!employee || (branchScope !== null && employee.branchId !== branchScope)) throw new NotFoundException('الموظف غير موجود')
+      if (!employee || !inBranchScope(branchScope, employee.branchId)) throw new NotFoundException('الموظف غير موجود')
       if (['archived', 'terminated', 'resigned', 'retired'].includes(employee.status)) throw new BadRequestException('لا يمكن تجديد عقد موظف انتهت خدمته أو أُرشف')
       if (employee.contractType === 'permanent') throw new BadRequestException('العقد الدائم لا يحتاج تجديد مدة')
       if (employee.contractEnd && dto.contractStart <= employee.contractEnd) throw new ConflictException('يجب أن يبدأ التجديد بعد نهاية العقد الحالي')
@@ -369,7 +372,7 @@ export class EmployeesService {
     if (issue) throw new BadRequestException(issue)
   }
 
-  async create(dto: CreateEmployeeDto, actorId: number, branchScope: number | null) {
+  async create(dto: CreateEmployeeDto, actorId: number, branchScope: BranchScope) {
     // الحقول الإجبارية وشكلها (الاسم بالعربي، الهوية بطول الجنسية، الميلاد…) على كل مسار إنشاء — مش الـDTO بس
     const requiredIssue = employeeCreateIssue(dto, localDateOf(new Date()))
     if (requiredIssue) throw new BadRequestException(requiredIssue)
@@ -568,7 +571,7 @@ export class EmployeesService {
     return employeeSalaryStartContext({ cycleStartDay, today: localDateOf(new Date()), hireDate: value })
   }
 
-  async salaryChangeContext(id: number, branchScope: number | null) {
+  async salaryChangeContext(id: number, branchScope: BranchScope) {
     try {
       return await this.employees.manager.transaction('SERIALIZABLE', async em => {
         const rows = await em.query(`DECLARE @result int;
@@ -577,7 +580,7 @@ export class EmployeesService {
           SELECT @result AS lockResult;`, [`hr:employee-finance:${id}`])
         if (!rows.length || Number(rows[0].lockResult) < 0) throw new ConflictException('توجد عملية مالية جارية للموظف؛ حاول مجددًا')
         const source = await readSalaryHistoryCurrent(em, id)
-        if (!source || (branchScope !== null && source.employee.branchId !== branchScope)) throw new NotFoundException('الموظف غير موجود')
+        if (!source || !inBranchScope(branchScope, source.employee.branchId)) throw new NotFoundException('الموظف غير موجود')
         const history = await readSalaryHistory(em, id)
         // قاعدة المالك: التغيير يسري من راتب شهر؛ الشاشة تعرض شهر المسير الجاري ودورته ولا تقبل شهرًا لاحقًا.
         const cycleStartDay = await readSalaryCycleStartDay(em)
@@ -595,13 +598,14 @@ export class EmployeesService {
   }
 
   // audit (اختياري — التحديث الجماعي من ملف): سبب سجل التغييرات وحقول إضافية تتسجل في نفس المعاملة
-  async update(id: number, dto: UpdateEmployeeDto, branchScope: number | null, actorId?: number,
+  async update(id: number, dto: UpdateEmployeeDto, branchScope: BranchScope, actorId?: number,
     audit?: { reason: string; fields?: ReadonlyArray<keyof Employee> }) {
     const emp = await this.findOne(id, branchScope)
     // الحالة المحفوظة — المعروضة قد تكون «موقوف» مشتقة من فترة إيقاف مؤرخة
     const storedStatus = (emp as Employee & { storedStatus?: Employee['status'] }).storedStatus ?? emp.status
-    if (branchScope != null && dto.branchId !== undefined && dto.branchId !== branchScope) {
-      throw new ForbiddenException('لا يمكنك نقل الموظف خارج نطاق فرعك')
+    // حساب الفروع ينقل الموظف بين فروعه بس — مش لفرع برّه نطاقه
+    if (dto.branchId !== undefined && !inBranchScope(branchScope, dto.branchId)) {
+      throw new ForbiddenException(`لا يمكنك نقل الموظف خارج نطاق ${scopeWord(branchScope)}`)
     }
     if (dto.status !== undefined && !['active', 'probation', 'suspended'].includes(dto.status)) {
       throw new BadRequestException('إنهاء الخدمة والأرشفة لهما مسارات مستقلة')
@@ -694,7 +698,7 @@ export class EmployeesService {
     const saved = await this.employees.manager.transaction(async em => {
       await lockAttendanceRuleMutation(em, [id])
       const fresh = await em.findOneBy(Employee, { id })
-      if (!fresh || (branchScope !== null && fresh.branchId !== branchScope)) throw new NotFoundException('الموظف غير موجود')
+      if (!fresh || !inBranchScope(branchScope, fresh.branchId)) throw new NotFoundException('الموظف غير موجود')
       const beforeChange = { ...fresh }
       const oldStatus = fresh.status
       const branchChanged = dto.branchId !== undefined && dto.branchId !== fresh.branchId
@@ -784,7 +788,7 @@ export class EmployeesService {
   }
 
   // الأرشفة بدل الحذف — التاريخ الوظيفي لا يُمسح (بسبب موثّق)
-  async archive(id: number, branchScope: number | null, reason?: string, actorId?: number) {
+  async archive(id: number, branchScope: BranchScope, reason?: string, actorId?: number) {
     // حد عمود archiveReason (300) قبل أي قراءة أو كتابة — كان 450 فيفشل الحفظ بـ500
     assertArchiveReason(reason)
     await this.findOne(id, branchScope)
@@ -807,7 +811,7 @@ export class EmployeesService {
     })
   }
 
-  async reactivate(id: number, branchScope: number | null, actorId?: number) {
+  async reactivate(id: number, branchScope: BranchScope, actorId?: number) {
     await this.findOne(id, branchScope)
     return this.employees.manager.transaction(async em => {
       const emp = await em.findOneOrFail(Employee, { where: { id }, lock: { mode: 'pessimistic_write' } })
@@ -835,9 +839,9 @@ export class EmployeesService {
     }
   }
 
-  private async scopedEmployee(em: EntityManager, id: number, branchScope: number | null, lock = false) {
+  private async scopedEmployee(em: EntityManager, id: number, branchScope: BranchScope, lock = false) {
     const employee = await em.findOne(Employee, { where: { id }, ...(lock ? { lock: { mode: 'pessimistic_write' as const } } : {}) })
-    if (!employee || (branchScope !== null && employee.branchId !== branchScope)) throw new NotFoundException('الموظف غير موجود')
+    if (!employee || !inBranchScope(branchScope, employee.branchId)) throw new NotFoundException('الموظف غير موجود')
     return employee
   }
 
@@ -859,13 +863,13 @@ export class EmployeesService {
     if (pending) throw new ConflictException(SUSPENSION_LEAVE_OVERLAP_MESSAGE(pending, true))
   }
 
-  async listSuspensions(id: number, branchScope: number | null) {
+  async listSuspensions(id: number, branchScope: BranchScope) {
     await this.scopedEmployee(this.employees.manager, id, branchScope)
     const today = localDateOf(new Date())
     return (await readEmployeeSuspensions(this.employees.manager, id, undefined, { includeCancelled: true })).map(row => suspensionView(row, today))
   }
 
-  async createSuspension(id: number, dto: CreateEmployeeSuspensionDto, branchScope: number | null, actorId: number) {
+  async createSuspension(id: number, dto: CreateEmployeeSuspensionDto, branchScope: BranchScope, actorId: number) {
     const issue = suspensionInputIssue(dto)
     if (issue) throw new BadRequestException(issue)
     await this.assertSuspensionSchema()
@@ -905,7 +909,7 @@ export class EmployeesService {
   }
 
   // إنهاء بدري: يرجع للعمل من returnDate (الافتراضي النهارده). الرجوع في يوم البداية أو قبله = إلغاء
-  async endSuspension(id: number, suspensionId: number, dto: EndEmployeeSuspensionDto, branchScope: number | null, actorId: number) {
+  async endSuspension(id: number, suspensionId: number, dto: EndEmployeeSuspensionDto, branchScope: BranchScope, actorId: number) {
     await this.assertSuspensionSchema()
     const today = localDateOf(new Date())
     const returnDate = dto.returnDate ?? today

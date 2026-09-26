@@ -2,7 +2,8 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { andBranchScopeSql, branchScopeOf, branchScopeSql, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { RequestsService } from '../requests/requests.service'
 import { AttendanceService, localDateOf } from '../attendance/attendance.service'
 
@@ -38,33 +39,43 @@ export class DashboardController {
   @Get('stats')
   async stats(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)
-    const branchWhere = scope !== null ? `WHERE branchId = ${scope}` : ''
-    const andBranch = scope !== null ? `AND branchId = ${scope}` : ''
+    // نطاق الفروع (فرع أو أكتر) شرط بمعاملات @n — كل استعلام له مصفوفة معاملاته
+    const where = (column: string, params: unknown[]) => {
+      const clause = branchScopeSql(column, scope, params)
+      return clause ? `WHERE ${clause}` : ''
+    }
     // اليوم بتوقيت الشركة — toISOString (UTC) كانت تعرض حضور امبارح من 00:00 لـ03:00
     const today = localDateOf(new Date())
 
     // الموظفون الحاليون فقط — المؤرشف والمنتهية خدمته خارج «الإجمالي»
+    const empParams: unknown[] = []
     const [emp] = await this.ds.query(
       `SELECT COUNT(*) AS total,
               SUM(CASE WHEN status = 'active' THEN 1 ELSE 0 END) AS active,
               SUM(CASE WHEN status = 'probation' THEN 1 ELSE 0 END) AS probation
        FROM employees
-       WHERE isActive = 1 AND status NOT IN ('archived', 'terminated') ${andBranch}`
+       WHERE isActive = 1 AND status NOT IN ('archived', 'terminated') ${andBranchScopeSql('branchId', scope, empParams)}`,
+      empParams
     )
     // الفرق بلا عمود فرع — نطاقها من فرع القسم التابعة له
+    const orgParams: unknown[] = []
+    const teamsScope = branchScopeSql('d.branchId', scope, orgParams)
     const [org] = await this.ds.query(
       `SELECT
-        (SELECT COUNT(*) FROM branches ${scope !== null ? `WHERE id = ${scope}` : ''}) AS branches,
-        (SELECT COUNT(*) FROM departments ${branchWhere}) AS departments,
+        (SELECT COUNT(*) FROM branches ${where('id', orgParams)}) AS branches,
+        (SELECT COUNT(*) FROM departments ${where('branchId', orgParams)}) AS departments,
         (SELECT COUNT(*) FROM teams t
-          ${scope !== null ? `JOIN departments d ON d.id = t.departmentId WHERE d.branchId = ${scope}` : ''}) AS teams`
+          ${teamsScope ? `JOIN departments d ON d.id = t.departmentId WHERE ${teamsScope}` : ''}) AS teams`,
+      orgParams
     )
+    const reqParams: unknown[] = []
     const [req] = await this.ds.query(
       `SELECT
         SUM(CASE WHEN status = 'COMPLETED' THEN 1 ELSE 0 END) AS completed,
         SUM(CASE WHEN status = 'REJECTED' THEN 1 ELSE 0 END) AS rejected,
         COUNT(*) AS total
-       FROM requests WHERE 1=1 ${andBranch}`
+       FROM requests WHERE 1=1 ${andBranchScopeSql('branchId', scope, reqParams)}`,
+      reqParams
     )
     // «قيد المراجعة» = ما ينتظر قرار هذا المستخدم فعلاً (نفس حساب صندوق الاعتماد)،
     // لا كل UNDER_REVIEW في الفرع
@@ -73,6 +84,7 @@ export class DashboardController {
     // أو خروج (عمل يوم عطلة/ويك إند = 'holiday'، نصف يوم إجازة ولو ببصمة خروج فقط).
     // مستبعَد عمداً: 'leave' ببصمة (تعارض إجازة كاملة ينتظر قرار HR — معدود في «في إجازة»)
     // و'absent' (معدود في «الغائبون») — كل صف في كارت واحد فقط
+    const attParams: unknown[] = []
     const [att] = await this.ds.query(
       `SELECT
         SUM(CASE WHEN status IN ('present', 'late', 'early_leave')
@@ -83,11 +95,13 @@ export class DashboardController {
         SUM(CASE WHEN status = 'late' THEN 1 ELSE 0 END) AS late,
         SUM(CASE WHEN status = 'early_leave' THEN 1 ELSE 0 END) AS earlyLeave,
         SUM(CASE WHEN status = 'absent' THEN 1 ELSE 0 END) AS absent
-       FROM attendance_days WHERE date = '${today}' ${andBranch}
-         AND NOT ${attendanceExemptSql('attendance_days.employeeId', 'attendance_days.date')}`
+       FROM attendance_days WHERE date = '${today}' ${andBranchScopeSql('branchId', scope, attParams)}
+         AND NOT ${attendanceExemptSql('attendance_days.employeeId', 'attendance_days.date')}`,
+      attParams
     )
     // في إجازة اليوم: موظفون حاليون في النطاق، كل موظف مرة واحدة ولو تداخلت إجازاته.
     // يوم كامل = FULL (أو صباحي + مسائي معاً)؛ نصف اليوم يُعدّ منفصلاً ولا يدخل «في إجازة»
+    const leaveParams: unknown[] = []
     const [onLeave] = await this.ds.query(
       `SELECT
         SUM(CASE WHEN x.fullDay = 1 THEN 1 ELSE 0 END) AS onLeaveToday,
@@ -102,13 +116,16 @@ export class DashboardController {
          JOIN employees e ON e.id = l.employeeId
          WHERE l.status = 'APPROVED' AND l.fromDate <= '${today}' AND l.toDate >= '${today}'
            AND e.isActive = 1 AND e.status NOT IN ('archived', 'terminated')
-           ${scope !== null ? `AND e.branchId = ${scope}` : ''}
+           ${andBranchScopeSql('e.branchId', scope, leaveParams)}
          GROUP BY l.employeeId
-       ) x`
+       ) x`,
+      leaveParams
     )
+    const runParams: unknown[] = []
     const payrollRuns = await this.ds.query(
       `SELECT TOP 5 id, branchId, period, status, totalNet FROM payroll_runs
-       ${branchWhere} ORDER BY period DESC`
+       ${where('branchId', runParams)} ORDER BY period DESC`,
+      runParams
     )
 
     return {
@@ -165,6 +182,7 @@ export class DashboardController {
       d.setDate(d.getDate() - i)
       dates.push(localDateOf(d))
     }
+    const trendParams: unknown[] = []
     const [rows, live, leavesToday] = await Promise.all([
       this.ds.query(
         `SELECT CONVERT(varchar(10), date, 23) AS d,
@@ -174,8 +192,9 @@ export class DashboardController {
          FROM attendance_days
          OUTER APPLY (SELECT CASE WHEN ${attendanceExemptSql('attendance_days.employeeId', 'attendance_days.date')} THEN 1 ELSE 0 END AS isExempt) exemptionDay
          WHERE date >= '${dates[0]}' AND date <= '${today}'
-           ${scope !== null ? `AND branchId = ${scope}` : ''}
-         GROUP BY date`
+           ${andBranchScopeSql('branchId', scope, trendParams)}
+         GROUP BY date`,
+        trendParams
       ) as Promise<Array<{ d: string; attended: number; absent: number; onLeave: number }>>,
       this.liveAbsencesShared(today, scope),
       this.fullDayLeavesToday(today, scope),
@@ -205,12 +224,15 @@ export class DashboardController {
   async departmentStats(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)
     const today = localDateOf(new Date())
+    const empParams: unknown[] = []
+    const attParams: unknown[] = []
     const [emps, att, leavesToday, live, depts] = await Promise.all([
       // موظفو النطاق النشطون — للعدّ ولقسم الغائب اللحظي (صف العرض بلا قسم)
       this.ds.query(
         `SELECT id, departmentId, status,
            CASE WHEN ${attendanceExemptSql('employees.id', `'${today}'`)} THEN 1 ELSE 0 END AS attendanceExempt FROM employees
-         WHERE isActive = 1 ${scope !== null ? `AND branchId = ${scope}` : ''}`
+         WHERE isActive = 1 ${andBranchScopeSql('branchId', scope, empParams)}`,
+        empParams
       ) as Promise<Array<{ id: number; departmentId: number | null; status: string; attendanceExempt: number }>>,
       this.ds.query(
         `SELECT e.departmentId,
@@ -218,9 +240,10 @@ export class DashboardController {
            SUM(CASE WHEN ad.status = 'absent' THEN 1 ELSE 0 END) AS absent
          FROM attendance_days ad
          JOIN employees e ON e.id = ad.employeeId
-         WHERE ad.date = '${today}' ${scope !== null ? `AND ad.branchId = ${scope}` : ''}
+         WHERE ad.date = '${today}' ${andBranchScopeSql('ad.branchId', scope, attParams)}
            AND NOT ${attendanceExemptSql('ad.employeeId', 'ad.date')}
-         GROUP BY e.departmentId`
+         GROUP BY e.departmentId`,
+        attParams
       ) as Promise<Array<{ departmentId: number | null; attended: number; absent: number }>>,
       this.fullDayLeavesToday(today, scope),
       this.liveAbsencesShared(today, scope),
@@ -289,19 +312,21 @@ export class DashboardController {
   // النطاق، كل موظف مرة ولو تداخلت إجازاته، FULL أو صباحي + مسائي معاً
   private fullDayLeavesToday(
     today: string,
-    scope: number | null
+    scope: BranchScope
   ): Promise<Array<{ employeeId: number; departmentId: number | null }>> {
+    const params: unknown[] = []
     return this.ds.query(
       `SELECT l.employeeId, MAX(e.departmentId) AS departmentId
        FROM leaves l
        JOIN employees e ON e.id = l.employeeId
        WHERE l.status = 'APPROVED' AND l.fromDate <= '${today}' AND l.toDate >= '${today}'
          AND e.isActive = 1 AND e.status NOT IN ('archived', 'terminated')
-         ${scope !== null ? `AND e.branchId = ${scope}` : ''}
+         ${andBranchScopeSql('e.branchId', scope, params)}
        GROUP BY l.employeeId
        HAVING MAX(CASE WHEN l.period = 'FULL' THEN 1 ELSE 0 END) = 1
           OR (MAX(CASE WHEN l.period = 'MORNING' THEN 1 ELSE 0 END) = 1
-              AND MAX(CASE WHEN l.period = 'EVENING' THEN 1 ELSE 0 END) = 1)`
+              AND MAX(CASE WHEN l.period = 'EVENING' THEN 1 ELSE 0 END) = 1)`,
+      params
     )
   }
 
@@ -312,12 +337,13 @@ export class DashboardController {
     { at: number; rows: Promise<Array<{ employeeId: number }>> }
   >()
 
-  private liveAbsencesShared(date: string, scope: number | null) {
+  private liveAbsencesShared(date: string, scope: BranchScope) {
     const now = Date.now()
     this.liveAbsCache.forEach((cached, k) => {
       if (now - cached.at > LIVE_ABSENCE_TTL_MS) this.liveAbsCache.delete(k)
     })
-    const key = `${date}|${scope ?? 'all'}`
+    // مفتاح النطاق: «all» أو أرقام الفروع (النطاق الفاضي «none» — مايتخلطش بالكل)
+    const key = `${date}|${scope === null ? 'all' : scope.join(',') || 'none'}`
     let entry = this.liveAbsCache.get(key)
     if (!entry) {
       const rows = this.attendance.liveAbsences(date, scope)

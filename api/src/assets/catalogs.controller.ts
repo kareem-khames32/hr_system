@@ -20,8 +20,11 @@ import type { ObjectLiteral } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import {
   assertCompanyWideWrite,
+  branchIdIn,
   branchScopeOf,
   CurrentUser,
+  inBranchScope,
+  isEmptyBranchScope,
   JwtAuthGuard,
   Perm,
   RolesGuard,
@@ -30,7 +33,7 @@ import {
 import { AttendancePunch, PermissionType } from '../attendance/attendance.entities'
 import { AttendanceService } from '../attendance/attendance.service'
 import { assertDefinitionBranchUnchanged, assertDefinitionWritable, definitionBranchForCreate, definitionBranchQuery,
-  definitionBranchWhere, definitionInBranch } from '../common/definition-branch'
+  definitionBranchWhere } from '../common/definition-branch'
 import { AttendanceRuleVersion } from '../attendance/attendance-rule.entities'
 import { assertCalendarScope, beginCalendarChange, finishCalendarChange } from '../attendance/attendance-calendar-history'
 import { appendAttendanceRuleVersion, assertAttendanceRulePeriodOpen, attendanceRuleChange,
@@ -262,7 +265,7 @@ export class CatalogsController {
     // الورديات وجداول العمل (قرار المالك 16 سبتمبر): حساب الفرع يرى العام + فرعه، والعام يرى الكل
     // أو (مع ?branchId=) العام + الفرع ده — لمنتقي موظف في فرع معيّن
     const definitionKind = kind === 'shifts' || kind === 'work-schedules'
-    const rows = await repo.find({ where: kind === 'devices' && scope !== null ? { branchId: scope }
+    const rows = await repo.find({ where: kind === 'devices' && scope !== null ? { branchId: branchIdIn(scope) }
       : definitionKind ? definitionBranchWhere<ObjectLiteral>(user, {}, definitionBranchQuery(branchIdRaw)) : {}, order: { id: 'ASC' } })
     if (kind === 'shifts' || kind === 'work-schedules') {
       const sourceType = kind === 'shifts' ? 'SHIFT' : 'WORK_SCHEDULE'
@@ -310,7 +313,7 @@ export class CatalogsController {
       const out = []
       for (const ws of rows as WorkSchedule[]) {
         const employeeCount = await this.employees.count({
-          where: { workScheduleId: ws.id, ...(scope !== null ? { branchId: scope } : {}) },
+          where: { workScheduleId: ws.id, ...(scope !== null ? { branchId: branchIdIn(scope) } : {}) },
         })
         out.push({ ...ws, employeeCount })
       }
@@ -336,7 +339,7 @@ export class CatalogsController {
     this.validate(kind, data)
     if (kind === 'devices') {
       const scope = branchScopeOf(user)
-      if (scope !== null && Number(data.branchId) !== scope) throw new ForbiddenException('فرع الجهاز خارج نطاقك')
+      if (!inBranchScope(scope, data.branchId == null ? null : Number(data.branchId))) throw new ForbiddenException('فرع الجهاز خارج نطاقك')
       await this.assertBranch(data.branchId)
     }
     const saved = await this.saveUnique(repo, repo.create(data))
@@ -368,8 +371,8 @@ export class CatalogsController {
     if (!row) throw new NotFoundException('السجل غير موجود')
     if (kind === 'devices') {
       const scope = branchScopeOf(user)
-      if (scope !== null && row.branchId !== scope) throw new NotFoundException('السجل غير موجود')
-      if (scope !== null && body.branchId !== undefined && Number(body.branchId) !== scope) throw new ForbiddenException('فرع الجهاز خارج نطاقك')
+      if (!inBranchScope(scope, row.branchId)) throw new NotFoundException('السجل غير موجود')
+      if (body.branchId !== undefined && !inBranchScope(scope, body.branchId == null ? null : Number(body.branchId))) throw new ForbiddenException('فرع الجهاز خارج نطاقك')
     }
     // الحقول المسموحة فقط، والتحقق على الصف بعد الدمج بنفس قواعد الإنشاء
     const data = this.pick(kind, body)
@@ -466,7 +469,7 @@ export class CatalogsController {
       throw new BadRequestException('حدّد نطاق الإسناد: موظفون بعينهم أو قسم أو كل الموظفين')
     }
     const scope = branchScopeOf(user)
-    const inScope = scope != null ? { branchId: scope } : {}
+    const inScope = scope != null ? { branchId: branchIdIn(scope) } : {}
     let emps: Employee[] = []
     if (b.employeeIds !== undefined) {
       const ids = Array.isArray(b.employeeIds) ? [...new Set(b.employeeIds.map(Number))] : []
@@ -497,7 +500,7 @@ export class CatalogsController {
     // جدول خاص بفرع يتسند لموظفي فرعه بس (قرار المالك 16 سبتمبر): اختيار صريح لموظف من فرع تاني يترفض،
     // والإسناد لقسم أو للكل يقتصر على موظفي فرع الجدول
     const schedule = await this.workSchedules.findOneBy({ id })
-    if (!schedule || !definitionInBranch(schedule.branchId, scope ?? schedule.branchId)) {
+    if (!schedule || (schedule.branchId != null && !inBranchScope(scope, schedule.branchId))) {
       throw new NotFoundException('جدول العمل غير موجود')
     }
     if (schedule.branchId != null) {
@@ -515,7 +518,7 @@ export class CatalogsController {
       await lockAttendanceRuleMutation(m, emps.map(employee => employee.id))
       for (const employee of emps) {
         const fresh = await m.findOneBy(Employee, { id: employee.id })
-        if (!fresh || (scope !== null && fresh.branchId !== scope)) throw new NotFoundException('الموظف غير موجود')
+        if (!fresh || !inBranchScope(scope, fresh.branchId)) throw new NotFoundException('الموظف غير موجود')
         const version = await saveEmployeeAttendanceRule(m, fresh, { workScheduleId: id, ...meta, actorUserId: user.sub })
         if (version) { await m.save(Employee, fresh); assigned++ }
       }
@@ -532,7 +535,7 @@ export class CatalogsController {
   // أولاً في نفس المعاملة إلى جدول نشط يحدده moveTo، وإلا يُرفض الحذف بعددهم. النقل
   // تعديل لبيانات موظفين: employees.edit وكلهم داخل نطاق فرع المستخدم
   private async removeWorkSchedule(id: number, user: JwtPayload, moveTo?: string, body: Record<string, unknown> = {}) {
-    if (branchScopeOf(user) === -1) throw new ForbiddenException('حسابك مش مربوط بفرع، فمينفعش تعدّل تعريفات الدوام')
+    if (isEmptyBranchScope(branchScopeOf(user))) throw new ForbiddenException('حسابك مش مربوط بفرع، فمينفعش تعدّل تعريفات الدوام')
     const meta = attendanceRuleChange(body)
     return this.workSchedules.manager.transaction(async em => {
       await lockAttendanceRuleMutation(em)
@@ -715,7 +718,7 @@ export class CatalogsController {
   private async saveAttendanceSource(kind: 'shifts' | 'work-schedules', id: number | null,
     body: Record<string, unknown>, user: JwtPayload) {
     // حساب الفرع يضيف ويعدّل تعريفات فرعه بس (قرار المالك 16 سبتمبر) — الفحص جوه المعاملة على الصف نفسه
-    if (branchScopeOf(user) === -1) throw new ForbiddenException('حسابك مش مربوط بفرع، فمينفعش تعدّل تعريفات الدوام')
+    if (isEmptyBranchScope(branchScopeOf(user))) throw new ForbiddenException('حسابك مش مربوط بفرع، فمينفعش تعدّل تعريفات الدوام')
     return this.shifts.manager.transaction(async em => {
       await lockAttendanceRuleMutation(em)
       return this.saveAttendanceSourceInTransaction(em, kind, id, body, user)

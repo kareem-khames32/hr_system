@@ -30,6 +30,7 @@ import {
   type ApiHolidayWorkOrder,
   type ApiTeam,
 } from '@/lib/api'
+import { branchScopeOfUser } from '@/lib/branch-scope'
 import { formatMoney } from '@/lib/money'
 
 type StatusFilter = 'ACTIVE' | 'CANCELLED' | 'ALL'
@@ -63,6 +64,8 @@ function HolidayWorkContent() {
     const user = getCurrentUser()
     return lockedBranchIdOf(user)
   }, [])
+  // نطاق فروع الحساب: حساب الفروع المتعددة يختار فرع منها (الشركة كلها لحساب على مستوى الشركة بس)
+  const branchScope = useMemo(() => branchScopeOfUser(getCurrentUser()), [])
   const [status, setStatus] = useState<StatusFilter>('ACTIVE')
   const [kind, setKind] = useState<KindFilter>('ALL')
   const [reload, setReload] = useState(0)
@@ -107,7 +110,7 @@ function HolidayWorkContent() {
 
   const openCreate = () => {
     setFormError('')
-    setForm({ id: null, name: '', target: initialOrgTarget(lockedBranchId), dates: [], dateInput: '', multiplier: settings ? String(settings.multiplier) : '1.5', note: '' })
+    setForm({ id: null, name: '', target: initialOrgTarget(lockedBranchId, undefined, branchScope), dates: [], dateInput: '', multiplier: settings ? String(settings.multiplier) : '1.5', note: '' })
   }
   const openEdit = (order: ApiHolidayWorkOrder) => {
     setFormError('')
@@ -261,7 +264,7 @@ function HolidayWorkContent() {
             <input className="input" maxLength={150} value={form.name} disabled={saving} placeholder="مثال: جرد المخزن يوم الجمعة" onChange={event => setForm({ ...form, name: event.target.value })} />
           </label>
           <OrgTargetPicker value={form.target} onChange={target => setForm({ ...form, target })} branches={branches} departments={departments} teams={teams}
-            employees={employees} lockedBranchId={lockedBranchId} disabled={saving} />
+            employees={employees} lockedBranchId={lockedBranchId} branchScope={branchScope} disabled={saving} />
           <div className="space-y-2 text-sm">
             <span className="font-medium text-gray-700">أيام العطلة</span>
             <div className="flex flex-wrap items-center gap-2">

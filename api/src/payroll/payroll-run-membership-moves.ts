@@ -1,4 +1,5 @@
 import type { EntityManager } from 'typeorm'
+import type { BranchScope } from '../auth/guards'
 import {
   PayrollRunDefinition, PayrollRunExclusion, PayrollRunFilters, payrollRunHasOrgFilters,
 } from './payroll-run-definition'
@@ -175,7 +176,7 @@ export interface PayrollBulkMembershipSplit {
   fromNames: Map<number, string | null>
 }
 
-export function splitPayrollBulkMembership(candidates: PayrollBulkMembershipCandidate[], input: { targetRunId: number; branchScope: number | null }): PayrollBulkMembershipSplit {
+export function splitPayrollBulkMembership(candidates: PayrollBulkMembershipCandidate[], input: { targetRunId: number; branchScope: BranchScope }): PayrollBulkMembershipSplit {
   const groups = new Map<number | null, number[]>()
   const skipped: PayrollBulkMembershipResultRow[] = []
   const namesById = new Map<number, { fullName: string | null; employeeCode: string | null }>()
@@ -187,7 +188,7 @@ export function splitPayrollBulkMembership(candidates: PayrollBulkMembershipCand
   for (const candidate of candidates) {
     namesById.set(candidate.employeeId, { fullName: candidate.fullName, employeeCode: candidate.employeeCode })
     if (!candidate.exists) { skip(candidate, 'EMPLOYEE_NOT_FOUND'); continue }
-    if (input.branchScope !== null && (candidate.branchId ?? null) !== input.branchScope) { skip(candidate, 'OUT_OF_BRANCH_SCOPE'); continue }
+    if (input.branchScope !== null && (candidate.branchId == null || !input.branchScope.includes(Number(candidate.branchId)))) { skip(candidate, 'OUT_OF_BRANCH_SCOPE'); continue }
     if (candidate.homes.some(run => run.id === input.targetRunId)) { skip(candidate, 'ALREADY_IN_RUN'); continue }
     const home = candidate.homes[0] ?? null
     if (!home) { groups.set(null, [...(groups.get(null) ?? []), candidate.employeeId]); continue }

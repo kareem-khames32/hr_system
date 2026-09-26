@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, ArrowLeftRight, Ban, Calendar, CheckCircle, Plus, Search, X } from 'lucide-react'
 import { can, getCurrentUser, lockedBranchIdOf, type ApiBranch, type ApiDepartment, type ApiEmployee, type ApiTeam } from '@/lib/api'
+import { branchScopeOfUser } from '@/lib/branch-scope'
 import EmptyState from '@/components/EmptyState'
 import { PayrollMonthLinesTable } from '@/components/payroll/PayrollMonthLinesTable'
 import { PayrollEmployeeFilters, payrollReasonLabel } from '@/components/payroll/PayrollEmployeeFilters'
@@ -551,8 +552,10 @@ function WaiverForm({ period, branches, departments, teams, employees, onClose, 
     // حساب «كل الفروع» (مدير النظام أو من فتح له نطاق الشركة) مش مقفول على فرع — نفس مرآة branchScopeOf في الخادم
     return lockedBranchIdOf(getCurrentUser())
   }, [])
+  // حساب الفروع المتعددة يختار فرع منها (الشركة كلها لحساب على مستوى الشركة بس)
+  const branchScope = useMemo(() => branchScopeOfUser(getCurrentUser()), [])
   const [kind, setKind] = useState<DeductionKind>('LATENESS')
-  const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(lockedBranchId))
+  const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(lockedBranchId, undefined, branchScope))
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
@@ -593,7 +596,7 @@ function WaiverForm({ period, branches, departments, teams, employees, onClose, 
         </div>
       </div>
       <OrgTargetPicker value={target} onChange={setTarget} branches={branches} departments={departments} teams={teams}
-        employees={employees} lockedBranchId={lockedBranchId} disabled={busy} />
+        employees={employees} lockedBranchId={lockedBranchId} branchScope={branchScope} disabled={busy} />
       <label className="flex flex-col gap-1 text-sm">
         <span className="font-medium text-gray-700">السبب</span>
         <textarea className="input w-full" rows={2} maxLength={500} value={reason} disabled={busy} onChange={e => setReason(e.target.value)} />

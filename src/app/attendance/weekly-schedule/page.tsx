@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { downloadCsv } from '@/lib/csv'
+import { branchScopeOfUser, canSeeBranch, type BranchScope } from '@/lib/branch-scope'
 import { MainLayout } from '@/components/layout'
 import {
   ChevronRight,
@@ -351,8 +352,9 @@ export default function WeeklySchedulePage() {
   const [selectedBranch, setSelectedBranch] = useState('all')
   const [selectedDepartment, setSelectedDepartment] = useState('all')
   const [selectedTeam, setSelectedTeam] = useState('all')
-  // مستخدم فرع: الاستهداف مقفول على فرعه (الفرض الحقيقي في الباك)
+  // مستخدم فرع: الاستهداف مقفول على فرعه، ومستخدم الفروع المتعددة يختار فرع منها (الفرض الحقيقي في الباك)
   const [lockedBranchId, setLockedBranchId] = useState<number | null>(null)
+  const [branchScope, setBranchScope] = useState<BranchScope>(null)
   const [selectedCell, setSelectedCell] = useState<{ empId: number; day: string } | null>(null)
   const [hasChanges, setHasChanges] = useState(false)
   const [showTemplates, setShowTemplates] = useState(false)
@@ -378,6 +380,7 @@ export default function WeeklySchedulePage() {
     fetchTeams().then(setTeamsList).catch(() => setTeamsList([]))
     const user = getCurrentUser()
     setLockedBranchId(lockedBranchIdOf(user))
+    setBranchScope(branchScopeOfUser(user))
     // قواعد الاستثناء — اختيارية للتمييز؛ تُتجاهَل بصمت لو فشلت
     fetchScheduleRules()
       .then(setScheduleRules)
@@ -1386,6 +1389,7 @@ export default function WeeklySchedulePage() {
             shifts={shiftCatalog}
             weekStart={currentWeekStart}
             lockedBranchId={lockedBranchId}
+            branchScope={branchScope}
             onClose={() => setShowBulkAssign(false)}
             onDone={async (message, problems) => {
               setShowBulkAssign(false)
@@ -1620,6 +1624,7 @@ function RangeAssignModal({
   shifts,
   weekStart,
   lockedBranchId,
+  branchScope,
   onClose,
   onDone,
 }: {
@@ -1631,6 +1636,7 @@ function RangeAssignModal({
   shifts: Shift[]
   weekStart: Date
   lockedBranchId: number | null
+  branchScope: BranchScope
   onClose: () => void
   onDone: (message: string, problems: string) => Promise<void>
 }) {
@@ -1640,10 +1646,10 @@ function RangeAssignModal({
   const [target, setTarget] = useState<OrgTarget>(() => {
     const picked = employees.filter((e) => selectedEmployees.includes(e.id))
     const branchIds = [...new Set(picked.map((e) => e.branchId))]
-    if (picked.length > 0 && branchIds.length === 1 && (!lockedBranchId || branchIds[0] === lockedBranchId)) {
+    if (picked.length > 0 && branchIds.length === 1 && (!lockedBranchId || branchIds[0] === lockedBranchId) && canSeeBranch(branchScope, branchIds[0])) {
       return { level: 'employees', branchId: branchIds[0], departmentIds: [], teamIds: [], employeeIds: picked.map((e) => e.id) }
     }
-    return initialOrgTarget(lockedBranchId)
+    return initialOrgTarget(lockedBranchId, undefined, branchScope)
   })
   const [from, setFrom] = useState(weekFrom)
   const [to, setTo] = useState(weekTo)
@@ -1767,6 +1773,7 @@ function RangeAssignModal({
             teams={teams}
             employees={employees}
             lockedBranchId={lockedBranchId}
+            branchScope={branchScope}
             disabled={busy}
           />
 

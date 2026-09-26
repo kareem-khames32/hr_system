@@ -11,7 +11,8 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { Between, EntityManager, In, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchScopeOf, inBranchScope, isEmptyBranchScope, scopeWord, userHasPerm } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { AttendanceService } from '../attendance/attendance.service'
 import { AttendanceDay } from '../attendance/attendance.entities'
 import { Employee } from '../employees/employee.entity'
@@ -221,42 +222,52 @@ export class PayrollService {
 
   // الخطوة 16: النطاق بفلاتر التعريف وفرع كل عضو في آخر يوم من الفترة (أو آخر يوم كان فيه داخل النطاق لمن انتقل).
   private assertScopeAccess(user: JwtPayload, definition: PayrollRunDefinition, memberBranches: Array<number | null>) {
-    const branchId = branchScopeOf(user)
-    if (branchId === null) return
+    const scope = branchScopeOf(user)
+    if (scope === null) return
     const { filters } = definition
-    if (branchId < 1 || filters.allEmployees ||
-      filters.branchIds.some(id => id !== branchId) ||
-      memberBranches.some(id => id !== branchId) ||
-      (!memberBranches.length && !(filters.branchIds.length === 1 && filters.branchIds[0] === branchId))) {
+    // حساب الفروع: فلاتر المسير وفروع أعضائه كلها جوه فروعه، والمسير بلا أعضاء لازم فلتر فروعه يكون منها
+    // (حساب الفرع الواحد = نفس الشرط القديم بالحرف: كله على فرعه، وبلا أعضاء فلتر فرعه هو بس)
+    if (!scope.length || filters.allEmployees ||
+      filters.branchIds.some(id => !inBranchScope(scope, id)) ||
+      memberBranches.some(id => !inBranchScope(scope, id)) ||
+      (!memberBranches.length && !filters.branchIds.length)) {
       throw new ForbiddenException('نطاق المسير خارج الفرع المسموح لك')
     }
   }
 
+  // العضو بلا لقطة عضوية (مسير قديم/مسودة) فرعه مش محفوظ: بيتنسب لفروع تعريف المسير، أو لفروع نطاقه القديم (BRANCH).
+  // يعدّي لحساب الفروع لو الفروع دي كلها جوه نطاقه (فرع واحد = شرط «فرع المسير الوحيد = فرعه» القديم بالحرف).
+  private legacyBranchesInScope(run: Pick<PayrollRun, 'scopeType' | 'scopeIds' | 'branchId'>, scope: number[],
+    definitionBranches: number[] | null = null): boolean {
+    const branchIds = run.scopeIds ? JSON.parse(run.scopeIds) as Array<number | null> : [run.branchId]
+    const candidates = definitionBranches ?? (run.scopeType === 'BRANCH' ? branchIds : [])
+    return candidates.length > 0 && candidates.every(id => inBranchScope(scope, id))
+  }
+
   // C8: عامة لمسار التصحيح (payroll-corrections.service)؛ مسير العكس بلا عضوية ولا بنود يُحكم بنطاق مسيره الأصلي
   async assertRunAccess(user: JwtPayload, run: PayrollRun, em = this.runs.manager): Promise<void> {
-    const branch = branchScopeOf(user)
-    if (branch === null) return
+    const scope = branchScopeOf(user)
+    if (scope === null) return
     if (run.runType === 'REVERSAL' && run.parentRunId) {
       const parent = await em.getRepository(PayrollRun).findOneBy({ id: run.parentRunId })
       if (!parent || parent.id === run.id) throw new ForbiddenException('تعذر التحقق من نطاق المسير الأصلي لمسير العكس')
       return this.assertRunAccess(user, parent, em)
     }
-    if (branch < 1 || run.scopeType === 'COMPANY') throw new ForbiddenException('نطاق المسير خارج الفرع المسموح لك')
+    if (!scope.length || run.scopeType === 'COMPANY') throw new ForbiddenException('نطاق المسير خارج الفرع المسموح لك')
     const members = await em.getRepository(PayrollRunMember).find({ where: { runId: run.id } })
     const items = await em.getRepository(PayrollItem).find({ where: { runId: run.id } })
     const ids = [...new Set([...members, ...items].map(row => row.employeeId))]
-    const branchIds = run.scopeIds ? JSON.parse(run.scopeIds) as number[] : [run.branchId]
+    const branchIds = run.scopeIds ? JSON.parse(run.scopeIds) as Array<number | null> : [run.branchId]
     // الخطوة 16: فروع تعريف المسير الجديد تحكم المسودة قبل أن تُحفظ لها عضوية.
     const definitionBranches = run.definition ? payrollRunDefinitionOf(run).filters.branchIds : null
-    if (definitionBranches?.some(id => id !== branch) || (run.definition && payrollRunDefinitionOf(run).filters.allEmployees)) throw new ForbiddenException('نطاق المسير خارج الفرع المسموح لك')
-    const legacyBranch = definitionBranches ? (definitionBranches.length === 1 ? definitionBranches[0] : null)
-      : run.scopeType === 'BRANCH' && branchIds.length === 1 ? branchIds[0] : null
-    if (!run.definition && run.scopeType === 'BRANCH' && branchIds.some(id => id !== branch)) throw new ForbiddenException('نطاق المسير خارج الفرع المسموح لك')
-    if (!ids.length && legacyBranch !== branch) throw new ForbiddenException('تعذر التحقق من النطاق التاريخي للمسير')
+    if (definitionBranches?.some(id => !inBranchScope(scope, id)) || (run.definition && payrollRunDefinitionOf(run).filters.allEmployees)) throw new ForbiddenException('نطاق المسير خارج الفرع المسموح لك')
+    const legacyInScope = this.legacyBranchesInScope(run, scope, definitionBranches)
+    if (!run.definition && run.scopeType === 'BRANCH' && branchIds.some(id => !inBranchScope(scope, id))) throw new ForbiddenException('نطاق المسير خارج الفرع المسموح لك')
+    if (!ids.length && !legacyInScope) throw new ForbiddenException('تعذر التحقق من النطاق التاريخي للمسير')
     for (const id of ids) {
       const member = members.find(row => row.employeeId === id)
-      const savedBranch = member?.snapshot ? member.snapshot.branchId : legacyBranch
-      if (savedBranch !== branch) throw new ForbiddenException('نطاق العضوية المحفوظ خارج الفرع المسموح لك أو غير موثق تاريخيًا')
+      const allowed = member?.snapshot ? inBranchScope(scope, member.snapshot.branchId) : legacyInScope
+      if (!allowed) throw new ForbiddenException('نطاق العضوية المحفوظ خارج الفرع المسموح لك أو غير موثق تاريخيًا')
     }
   }
 
@@ -1488,24 +1499,23 @@ export class PayrollService {
   }
 
   /** نفس شرط assertRunAccess بالضبط، محسوبًا على صفوف محمّلة دفعة واحدة بدل معاملة وقفل لكل مسير. */
-  private runInBranchScope(run: PayrollRun, branch: number, byId: Map<number, PayrollRun>,
+  private runInBranchScope(run: PayrollRun, scope: number[], byId: Map<number, PayrollRun>,
     membersOf: Map<number, Array<{ employeeId: number; snapshot: PayrollMemberSnapshot | null }>>,
     itemsOf: Map<number, Array<{ employeeId: number }>>): boolean {
     const owner = this.scopeOwnerRun(run, byId)
     if (!owner || owner.scopeType === 'COMPANY') return false
-    const branchIds = owner.scopeIds ? JSON.parse(owner.scopeIds) as number[] : [owner.branchId]
+    const branchIds = owner.scopeIds ? JSON.parse(owner.scopeIds) as Array<number | null> : [owner.branchId]
     const definition = owner.definition ? payrollRunDefinitionOf(owner) : null
     const definitionBranches = definition ? definition.filters.branchIds : null
-    if (definitionBranches?.some(id => id !== branch) || definition?.filters.allEmployees) return false
-    const legacyBranch = definitionBranches ? (definitionBranches.length === 1 ? definitionBranches[0] : null)
-      : owner.scopeType === 'BRANCH' && branchIds.length === 1 ? branchIds[0] : null
-    if (!owner.definition && owner.scopeType === 'BRANCH' && branchIds.some(id => id !== branch)) return false
+    if (definitionBranches?.some(id => !inBranchScope(scope, id)) || definition?.filters.allEmployees) return false
+    const legacyInScope = this.legacyBranchesInScope(owner, scope, definitionBranches)
+    if (!owner.definition && owner.scopeType === 'BRANCH' && branchIds.some(id => !inBranchScope(scope, id))) return false
     const members = membersOf.get(owner.id) ?? [], items = itemsOf.get(owner.id) ?? []
     const ids = [...new Set([...members, ...items].map(row => row.employeeId))]
-    if (!ids.length) return legacyBranch === branch
+    if (!ids.length) return legacyInScope
     return ids.every(id => {
       const member = members.find(row => row.employeeId === id)
-      return (member?.snapshot ? member.snapshot.branchId : legacyBranch) === branch
+      return member?.snapshot ? inBranchScope(scope, member.snapshot.branchId) : legacyInScope
     })
   }
 
@@ -1514,7 +1524,7 @@ export class PayrollService {
     const branch = branchScopeOf(user)
     if (branch === null) return rows.map(run => this.lightRun(run))
     // نطاق الفرع: ثلاثة استعلامات مرتبة بدل قراءة كل مسير في معاملته المستقلة بقفلها (كانت ثوانٍ لمسؤول الفرع).
-    if (branch < 1) return []
+    if (!branch.length) return []
     const byId = new Map(rows.map(run => [run.id, run]))
     const members = await this.members.find({ select: { runId: true, employeeId: true, snapshot: true } })
     const items = await this.items.find({ select: { runId: true, employeeId: true } })
@@ -1670,8 +1680,7 @@ export class PayrollService {
     const branch = branchScopeOf(user)
     if (branch !== null) {
       // نسخة سابقة من مسير مخصّص قد تضم فرعًا آخر؛ لا تُكشف بمجرد تغير عضويته الحالية.
-      const branchIds = run.scopeIds ? JSON.parse(run.scopeIds) as number[] : [run.branchId]
-      const legacyBranch = run.scopeType === 'BRANCH' && branchIds.length === 1 ? branchIds[0] : null
+      const legacyInScope = this.legacyBranchesInScope(run, branch)
       for (const event of events) {
       for (const phase of ['before', 'after']) {
         const payload = event.payload?.[phase] as { members?: PayrollRunMember[]; items?: PayrollItem[] } | null
@@ -1679,8 +1688,8 @@ export class PayrollService {
         const ids = new Set([...members, ...(payload?.items ?? [])].map(row => row.employeeId))
         for (const employeeId of ids) {
           const member = members.find(row => row.employeeId === employeeId)
-          const savedBranch = member?.snapshot ? member.snapshot.branchId : legacyBranch
-          if (savedBranch !== branch) throw new ForbiddenException('سجل هذا المسير يتضمن أعضاء خارج نطاقك التاريخي')
+          const allowed = member?.snapshot ? inBranchScope(branch, member.snapshot.branchId) : legacyInScope
+          if (!allowed) throw new ForbiddenException('سجل هذا المسير يتضمن أعضاء خارج نطاقك التاريخي')
         }
       }
       // سجل التدقيق الداخلي يحتفظ بالمراجع؛ النسخة المعروضة لا تكشف أرقام مسيرات خارج النطاق.
@@ -1741,7 +1750,9 @@ export class PayrollService {
     const branchIds = run.scopeIds ? JSON.parse(run.scopeIds) as number[] : [run.branchId]
     const savedBranch = snapshot ? snapshot.branchId : run.scopeType === 'BRANCH' && branchIds.length === 1 ? branchIds[0] : null
     const scope = branchScopeOf(user)
-    if (!ownPublished && scope !== null && savedBranch !== scope) throw this.payslipNotFound()
+    // فرع البند من لقطة عضويته؛ القسيمة القديمة بلا لقطة بفروع نطاق مسيرها القديم (legacyBranchesInScope)
+    const allowed = scope === null || (snapshot ? inBranchScope(scope, snapshot.branchId) : this.legacyBranchesInScope(run, scope))
+    if (!ownPublished && !allowed) throw this.payslipNotFound()
     // القسيمة القديمة لا تمتلك لقطة هوية أو بنك؛ لا ننسب بيانات الموظف الحالية إلى تاريخها.
     const legacyIdentity = snapshot ? null : await em.getRepository(Employee).findOne({ where: { id: item.employeeId }, select: ['id', 'fullName', 'employeeCode'] })
     // الهوية والبنك والآيبان على القسيمة: قراءة فقط من ملف الموظف، محكومة بنفس صلاحية القسيمة أعلاه.
@@ -1921,7 +1932,7 @@ export class PayrollService {
     const policy = version ? await em.getRepository(PayrollPolicy).findOneBy({ id: version.policyId }) : null
     if (!version || !policy) throw new NotFoundException({ code: 'PAYRUN-POLICY-NOT-FOUND', message: 'نسخة سياسة الرواتب المختارة غير موجودة' })
     const scope = branchScopeOf(user)
-    if (scope !== null && (scope < 1 || (policy.branchId !== null && policy.branchId !== scope))) throw new ForbiddenException('سياسة الرواتب خارج نطاق الفرع المسموح لك')
+    if (scope !== null && (scope.length === 0 || (policy.branchId !== null && !inBranchScope(scope, policy.branchId)))) throw new ForbiddenException('سياسة الرواتب خارج نطاق الفرع المسموح لك')
     if (!policy.isActive || version.status !== 'ACTIVE' || !version.publishedAt) {
       this.bad('PAYRUN-POLICY-NOT-PUBLISHED', `نسخة السياسة «${policy.name}» رقم ${version.versionNo} غير منشورة؛ المسير يرتبط بنسخة منشورة فقط`)
     }
@@ -1969,7 +1980,7 @@ export class PayrollService {
     const policy = version ? await em.getRepository(PayrollPolicy).findOneBy({ id: version.policyId }) : null
     if (!version || !policy) throw new NotFoundException({ code: 'PAYRUN-POLICY-NOT-FOUND', message: 'نسخة سياسة الرواتب المرتبطة بالمسير غير موجودة' })
     const scope = branchScopeOf(user)
-    if (scope !== null && (scope < 1 || (policy.branchId !== null && policy.branchId !== scope))) throw new ForbiddenException('سياسة الرواتب خارج نطاق الفرع المسموح لك')
+    if (scope !== null && (scope.length === 0 || (policy.branchId !== null && !inBranchScope(scope, policy.branchId)))) throw new ForbiddenException('سياسة الرواتب خارج نطاق الفرع المسموح لك')
     await this.assertPolicyBranchScope(em, policy, definition)
   }
 
@@ -1997,8 +2008,10 @@ export class PayrollService {
     if (filters.allEmployees && (payrollRunHasOrgFilters(filters) || filters.employeeIds.length)) this.bad('PAYRUN-FILTER-INVALID', 'اختر «الشركة كلها» أو فلاتر محددة، لا الاثنين معًا')
     const scope = branchScopeOf(user)
     if (scope !== null) {
-      if (scope < 1 || filters.allEmployees || filters.branchIds.some(id => id !== scope)) throw new ForbiddenException('نطاق المسير خارج الفرع المسموح لك')
-      filters.branchIds = [scope]
+      // حساب الفروع: فروع المسير جوه فروعه بس (احتواء مش «مساواة فرع واحد»)، ومن غير فرع مختار = فروعه كلها
+      // (حساب الفرع الواحد = فرعه زي الأول بالحرف)
+      if (!scope.length || filters.allEmployees || filters.branchIds.some(id => !scope.includes(id))) throw new ForbiddenException('نطاق المسير خارج الفرع المسموح لك')
+      if (!filters.branchIds.length) filters.branchIds = [...scope].sort((a, b) => a - b)
     }
     if (!filters.allEmployees && !filters.employeeIds.length && !payrollRunHasOrgFilters(filters)) {
       this.bad('PAYRUN-SCOPE-REQUIRED', 'حدد نطاق المسير: فرعًا أو قسمًا أو فريقًا أو قائمة موظفين')
@@ -2008,15 +2021,17 @@ export class PayrollService {
     const knownIds = async (kind: 'branch' | 'department' | 'team' | 'employee', chunk: number[]): Promise<number[]> => {
       const list = chunk.map((_, index) => `@${index}`).join(', ')
       const scoped = scope !== null && kind !== 'branch'
-      const own = `@${chunk.length}`
+      // فروع الحساب معاملات بعد أرقام القائمة (@n…) — النطاق هنا مش فاضي (اترفض فوق)، فـIN (…) صالح دايمًا
+      const params: unknown[] = [...chunk]
+      const own = scoped ? scope!.map(id => `@${params.push(id) - 1}`).join(', ') : ''
       const snapshot = `CAST(v.[snapshot] AS nvarchar(max))`
       const query = kind === 'branch' ? `SELECT [id] FROM [branches] WHERE [id] IN (${list})`
-        : kind === 'department' ? `SELECT [id] FROM [departments] WHERE [id] IN (${list})${scoped ? ` AND [branchId] = ${own}` : ''}`
-          : kind === 'team' ? `SELECT t.[id] FROM [teams] t LEFT JOIN [departments] d ON d.[id] = t.[departmentId] WHERE t.[id] IN (${list})${scoped ? ` AND d.[branchId] = ${own}` : ''}`
-            : `SELECT e.[id] FROM [employees] e WHERE e.[id] IN (${list})${scoped ? ` AND (e.[branchId] = ${own} OR EXISTS (SELECT 1 FROM [attendance_rule_versions] v
+        : kind === 'department' ? `SELECT [id] FROM [departments] WHERE [id] IN (${list})${scoped ? ` AND [branchId] IN (${own})` : ''}`
+          : kind === 'team' ? `SELECT t.[id] FROM [teams] t LEFT JOIN [departments] d ON d.[id] = t.[departmentId] WHERE t.[id] IN (${list})${scoped ? ` AND d.[branchId] IN (${own})` : ''}`
+            : `SELECT e.[id] FROM [employees] e WHERE e.[id] IN (${list})${scoped ? ` AND (e.[branchId] IN (${own}) OR EXISTS (SELECT 1 FROM [attendance_rule_versions] v
                 WHERE v.[sourceType] = 'EMPLOYEE_ORG' AND v.[sourceId] = e.[id] AND ISJSON(${snapshot}) = 1
-                  AND TRY_CONVERT(int, COALESCE(JSON_VALUE(${snapshot}, '$.data.branchId'), JSON_VALUE(${snapshot}, '$.branchId'))) = ${own}))` : ''}`
-      const rows: Array<{ id: number }> = await em.query(query, scoped ? [...chunk, scope] : chunk)
+                  AND TRY_CONVERT(int, COALESCE(JSON_VALUE(${snapshot}, '$.data.branchId'), JSON_VALUE(${snapshot}, '$.branchId'))) IN (${own})))` : ''}`
+      const rows: Array<{ id: number }> = await em.query(query, params)
       return rows.map(row => Number(row.id))
     }
     const absent = async (kind: 'branch' | 'department' | 'team' | 'employee', ids: number[], label: string, key: string) => {
@@ -2024,7 +2039,7 @@ export class PayrollService {
       const found = new Set<number>()
       for (let offset = 0; offset < ids.length; offset += 500) for (const id of await knownIds(kind, ids.slice(offset, offset + 500))) found.add(id)
       const missing = ids.filter(id => !found.has(id))
-      if (missing.length) this.bad('PAYRUN-SCOPE-UNKNOWN-IDS', `${label} غير موجود${scope !== null ? ' أو خارج فرعك' : ''}: ${missing.join('، ')}`, { [key]: missing })
+      if (missing.length) this.bad('PAYRUN-SCOPE-UNKNOWN-IDS', `${label} غير موجود${scope !== null ? ` أو خارج ${scopeWord(scope)}` : ''}: ${missing.join('، ')}`, { [key]: missing })
     }
     await absent('branch', filters.branchIds, 'رقم الفرع', 'branchIds')
     await absent('department', filters.departmentIds, 'رقم القسم', 'departmentIds')
@@ -2538,9 +2553,9 @@ export class PayrollService {
     return this.readRun(runId, async (em, run) => this.engineView(em, run))
   }
 
-  private reportScope(user: JwtPayload) {
+  private reportScope(user: JwtPayload): BranchScope {
     const scope = branchScopeOf(user)
-    if (scope !== null && scope < 1) throw new ForbiddenException('حساب المستخدم غير مسند إلى فرع صالح')
+    if (isEmptyBranchScope(scope)) throw new ForbiddenException('حساب المستخدم غير مسند إلى فرع صالح')
     return scope
   }
 
@@ -2572,18 +2587,32 @@ export class PayrollService {
   }
 
   // الإقرار الساري: لنسخة الحساب نفسها، ونطاقه يغطي نطاق المستخدم (الشركة، أو فرعه)، وبصمة تقريره تطابق التقرير الآن.
+  // حساب الفروع المتعددة: إقرار الشركة يغطيه، وإلا لازم إقرار ساري لكل فرع من فروعه (عمود scopeBranchId رقم واحد، فإقرار
+  // حساب الفروع بيتسجل صف لكل فرع ببصمة تقرير الفرع ده — acknowledgeUnassigned)، والإقرار المعروض أحدثها.
   private async currentUnassignedAck(em: EntityManager, user: JwtPayload, run: PayrollRun) {
     const scope = this.reportScope(user)
     const acks = await em.getRepository(PayrollRunUnassignedAck).find({ where: { runId: run.id, snapshotVersion: run.snapshotVersion }, order: { id: 'DESC' } })
-    const eligible = acks.filter(ack => ack.scopeBranchId === null || (scope !== null && ack.scopeBranchId === scope))
+    const eligible = acks.filter(ack => ack.scopeBranchId === null || (scope !== null && scope.includes(Number(ack.scopeBranchId))))
     const reports = new Map<string, PayrollUnassignedReport>()
-    for (const ack of eligible) {
+    const valid = async (ack: PayrollRunUnassignedAck) => {
       const key = String(ack.scopeBranchId)
       if (!reports.has(key)) reports.set(key, await buildPayrollUnassignedReport(em, { period: run.period, startDate: run.startDate, endDate: run.endDate,
         branchScope: ack.scopeBranchId, today: localDateOf(new Date()) }))
-      if (reports.get(key)!.reportHash === ack.reportHash) return { ack, eligible, acks }
+      return reports.get(key)!.reportHash === ack.reportHash
     }
-    return { ack: null, eligible, acks }
+    if (scope === null || scope.length === 1) {
+      for (const ack of eligible) if (await valid(ack)) return { ack, eligible, acks }
+      return { ack: null, eligible, acks }
+    }
+    for (const ack of eligible.filter(row => row.scopeBranchId === null)) if (await valid(ack)) return { ack, eligible, acks }
+    let latest: PayrollRunUnassignedAck | null = null
+    for (const branchId of scope) {
+      let found: PayrollRunUnassignedAck | null = null
+      for (const ack of eligible.filter(row => Number(row.scopeBranchId) === branchId)) if (await valid(ack)) { found = ack; break }
+      if (!found) return { ack: null, eligible, acks }
+      if (!latest || found.id > latest.id) latest = found
+    }
+    return { ack: latest, eligible, acks }
   }
 
   private async assertUnassignedAcknowledged(em: EntityManager, user: JwtPayload, run: PayrollRun) {
@@ -2622,10 +2651,25 @@ export class PayrollService {
         throw new ConflictException({ code: 'PAYRUN-UNASSIGNED-STALE', message: 'تغيّر تقرير «موظفون بلا مسير» منذ عرضه؛ راجع النسخة الحالية ثم أقر', reportHash: report.reportHash })
       }
       const note = typeof dto.note === 'string' && dto.note.trim() ? dto.note.trim().slice(0, 500) : null
-      const ack = await em.getRepository(PayrollRunUnassignedAck).save({ runId: run.id, snapshotVersion: run.snapshotVersion, period: run.period,
-        startDate: run.startDate, endDate: run.endDate, scopeBranchId: scope, reportHash: report.reportHash, reportRowCount: report.rows.length, note, acknowledgedBy: user.sub })
-      await this.event(em, user, run.id, 'UNASSIGNED_ACKNOWLEDGED', note, { ackId: ack.id, snapshotVersion: run.snapshotVersion, reportHash: report.reportHash,
-        rowCount: report.rows.length, scopeBranchId: scope, byReason: report.totals.byReason })
+      // الإقرار بنطاقه: الشركة (null) أو فرع واحد صف واحد زي الأول؛ حساب الفروع المتعددة صف لكل فرع من فروعه ببصمة تقرير
+      // الفرع ده (العمود رقم فرع واحد) — والتقرير اللي شافه (كل فروعه) اتطابق فوق بالبصمة
+      const parts: Array<{ scopeBranchId: number | null; report: PayrollUnassignedReport }> = []
+      if (scope === null || scope.length === 1) parts.push({ scopeBranchId: scope === null ? null : scope[0], report })
+      else for (const branchId of scope) {
+        // بالترتيب مش بالتوازي: كلها على اتصال المعاملة الواحد
+        parts.push({ scopeBranchId: branchId, report: await buildPayrollUnassignedReport(em, { period: run.period, startDate: run.startDate, endDate: run.endDate,
+          branchScope: branchId, today: localDateOf(new Date()) }) })
+      }
+      const ackIds: number[] = []
+      for (const part of parts) {
+        const saved = await em.getRepository(PayrollRunUnassignedAck).save({ runId: run.id, snapshotVersion: run.snapshotVersion, period: run.period,
+          startDate: run.startDate, endDate: run.endDate, scopeBranchId: part.scopeBranchId, reportHash: part.report.reportHash, reportRowCount: part.report.rows.length,
+          note, acknowledgedBy: user.sub })
+        ackIds.push(saved.id)
+      }
+      await this.event(em, user, run.id, 'UNASSIGNED_ACKNOWLEDGED', note, { ackId: ackIds[ackIds.length - 1], snapshotVersion: run.snapshotVersion, reportHash: report.reportHash,
+        rowCount: report.rows.length, scopeBranchId: scope === null ? null : scope.length === 1 ? scope[0] : null,
+        ...(scope !== null && scope.length > 1 ? { scopeBranchIds: scope, ackIds } : {}), byReason: report.totals.byReason })
     })
     return this.runUnassignedReport(user, runId)
   }

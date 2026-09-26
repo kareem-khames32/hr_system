@@ -100,6 +100,9 @@ test('branch definitions: company-wide rows are available everywhere, branch row
 const admin = { sub: 1, role: 'super_admin', permissions: ['*'], employeeId: 1, branchId: null }
 const branchHr = { sub: 12, role: 'hr_manager', permissions: ['settings.manage'], employeeId: 21, branchId: 1 }
 const unassigned = { sub: 99, role: 'hr_manager', permissions: ['settings.manage'], employeeId: null, branchId: null }
+// «نطاق الفروع» بعلامات صح (طلب المالك 26 سبتمبر): حساب على الفرعين 1 و2 — فرعه الأصلي 1
+const twoBranchHr = { sub: 13, role: 'hr_manager', permissions: ['settings.manage'], employeeId: 22, branchId: 1, branchIds: [1, 2] }
+const operator = (value) => value && typeof value === 'object' ? [value.type, value.value] : value
 const statusOf = (fn) => { try { fn(); return 200 } catch (error) { return error.getStatus?.() ?? 500 } }
 const statusOfAsync = async (fn) => { try { await fn(); return 200 } catch (error) { return error.getStatus?.() ?? 500 } }
 
@@ -111,7 +114,12 @@ test('lists: a branch account sees company-wide + its branch; the company accoun
   assert.equal(forBranch[0].isActive, true)
   const scoped = branches.definitionBranchWhere(branchHr, {}, 5)
   assert.equal(scoped[1].branchId, 1, 'a branch account cannot ask for another branch')
-  assert.equal(branches.definitionBranchWhere(unassigned)[1].branchId, -1, 'an account with no branch sees company-wide only')
+  assert.deepEqual(operator(branches.definitionBranchWhere(unassigned)[1].branchId), ['in', [-1]], 'an account with no branch sees company-wide only')
+  // حساب الفرعين: العام + فرعيه، ولو حدد فرع منهم = العام + الفرع ده بس، وفرع برّه نطاقه بيتجاهل
+  assert.deepEqual(operator(branches.definitionBranchWhere(twoBranchHr)[1].branchId), ['in', [1, 2]])
+  assert.equal(operator(branches.definitionBranchWhere(twoBranchHr)[0].branchId)[0], 'isNull')
+  assert.equal(branches.definitionBranchWhere(twoBranchHr, {}, 2)[1].branchId, 2)
+  assert.deepEqual(operator(branches.definitionBranchWhere(twoBranchHr, {}, 5)[1].branchId), ['in', [1, 2]])
 })
 
 test('create: branch account = its branch automatically; company account chooses company or an existing active branch', async () => {
@@ -120,6 +128,11 @@ test('create: branch account = its branch automatically; company account chooses
   assert.equal(await branches.definitionBranchForCreate(em, branchHr, 1), 1)
   assert.equal(await statusOfAsync(() => branches.definitionBranchForCreate(em, branchHr, 2)), 403)
   assert.equal(await statusOfAsync(() => branches.definitionBranchForCreate(em, unassigned, null)), 403)
+  // حساب الفرعين: لازم يختار فرع من فرعيه (مفيش اختيار صامت)، وفرع برّه نطاقه ممنوع
+  assert.equal(await statusOfAsync(() => branches.definitionBranchForCreate(em, twoBranchHr, undefined)), 400)
+  assert.equal(await branches.definitionBranchForCreate(em, twoBranchHr, 2), 2)
+  assert.equal(await branches.definitionBranchForCreate(em, twoBranchHr, '1'), 1)
+  assert.equal(await statusOfAsync(() => branches.definitionBranchForCreate(em, twoBranchHr, 5)), 403)
   assert.equal(await branches.definitionBranchForCreate(em, admin, null), null)
   assert.equal(await branches.definitionBranchForCreate(em, admin, ''), null)
   assert.equal(await branches.definitionBranchForCreate(em, admin, 2), 2)
@@ -133,6 +146,10 @@ test('edit: branch account edits its own branch rows only; company rows need a c
   assert.equal(statusOf(() => branches.assertDefinitionWritable(branchHr, { branchId: 1 })), 200)
   assert.equal(statusOf(() => branches.assertDefinitionWritable(branchHr, { branchId: null })), 403)
   assert.equal(statusOf(() => branches.assertDefinitionWritable(branchHr, { branchId: 2 })), 404, 'another branch row looks missing')
+  assert.equal(statusOf(() => branches.assertDefinitionWritable(twoBranchHr, { branchId: 2 })), 200)
+  assert.equal(statusOf(() => branches.assertDefinitionWritable(twoBranchHr, { branchId: 5 })), 404)
+  assert.equal(statusOf(() => branches.assertDefinitionWritable(twoBranchHr, { branchId: null })), 403)
+  assert.equal(statusOf(() => branches.assertDefinitionWritable(unassigned, { branchId: 1 })), 404)
   assert.equal(statusOf(() => branches.assertDefinitionBranchUnchanged({ branchId: 2 }, undefined)), 200)
   assert.equal(statusOf(() => branches.assertDefinitionBranchUnchanged({ branchId: 2 }, 2)), 200)
   assert.equal(statusOf(() => branches.assertDefinitionBranchUnchanged({ branchId: null }, null)), 200)
@@ -163,7 +180,7 @@ test('wiring: every door asks the same helpers (settings, request catalog + subm
   for (const text of ['definitionBranchWhere<ObjectLiteral>(user, {}, definitionBranchQuery(branchIdRaw))', 'assertDefinitionWritable(user, row)',
     'await definitionBranchForCreate(em, user, body.branchId)', "repo.create({ ...this.pick(kind, snapshot), branchId })",
     "throw new BadRequestException('الجدول الافتراضي لازم يكون لكل الشركة، مش لفرع واحد')", 'assertDefinitionWritable(user, ws)',
-    'definitionInBranch(schedule.branchId, scope ?? schedule.branchId)']) {
+    '(schedule.branchId != null && !inBranchScope(scope, schedule.branchId))']) {
     assert.ok(catalogs.includes(text), text)
   }
   assert.ok(!catalogs.includes('تعريف الدوام مشترك بين الفروع؛ تعديله يحتاج نطاق إدارة عام'), 'branch accounts are no longer locked out of their own definitions')

@@ -236,7 +236,7 @@ export default function LeaveTypesPage() {
     try {
       if (editing) await updateLeaveType(editing.id, payload)
       else await createLeaveType({ ...payload, code: form.code,
-        ...(branchInfo.scope === null && form.branchId != null ? { branchId: form.branchId } : {}) })
+        ...(branchInfo.choosesBranch && form.branchId != null ? { branchId: form.branchId } : {}) })
       await load()
       close()
     } catch (err: any) {

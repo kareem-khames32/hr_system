@@ -7,7 +7,7 @@ const fs = require('node:fs')
 const path = require('node:path')
 require('../node_modules/ts-node').register({ project: path.resolve(__dirname, '..', 'tsconfig.json'), transpileOnly: true })
 require('../node_modules/reflect-metadata')
-const { ForbiddenException, NotFoundException } = require('@nestjs/common')
+const { BadRequestException, ForbiddenException, NotFoundException } = require('@nestjs/common')
 const { CandidatesController } = require('../src/assets/candidates.controller')
 const { FinancialExemptionsService } = require('../src/payroll/financial-exemptions.service')
 const { PayrollFinancialExemption } = require('../src/payroll/financial-exemptions.entities')
@@ -29,19 +29,33 @@ test('candidates: a branch user lists only his branch (and unassigned), creates 
     save: async row => row,
   }
   const controller = new CandidatesController(repo, {})
+  const opOf = value => ({ type: value?.type ?? value?._type, value: value?.value ?? value?._value })
   await controller.list(hrBranch1)
   assert.equal(seen[0].length, 2)
-  assert.equal(seen[0][0].branchId, 1)
+  assert.deepEqual(opOf(seen[0][0].branchId), { type: 'in', value: [1] })
   assert.equal(seen[0][1].branchId?.type ?? seen[0][1].branchId?._type, 'isNull')
   await controller.list(admin)
   assert.deepEqual(seen[1], {})
+  // نطاق أكتر من فرع: القائمة من الفروع دي كلها (مش فرعه الأساسي بس)
+  const hrBranches14 = { ...hrBranch1, branchIds: [1, 4] }
+  await controller.list(hrBranches14)
+  assert.deepEqual(opOf(seen[2][0].branchId), { type: 'in', value: [1, 4] })
+  // حساب غير مسند (نطاق فاضي) ما يشوفش غير اللي مالوش فرع — مش «الكل»
+  await controller.list({ ...hrBranch1, branchId: null })
+  assert.deepEqual(opOf(seen[3][0].branchId), { type: 'in', value: [-1] })
 
   assert.equal((await controller.create({ fullName: 'مرشح', positionTitle: 'محاسب', branchId: 4 }, hrBranch1)).branchId, 1)
   assert.equal((await controller.create({ fullName: 'مرشح', positionTitle: 'محاسب', branchId: 4 }, admin)).branchId, 4)
+  // أكتر من فرع: يختار فرع من نطاقه، ومن غير اختيار يترفض (مفيش اختيار صامت)، وبرّه نطاقه ممنوع
+  assert.equal((await controller.create({ fullName: 'مرشح', positionTitle: 'محاسب', branchId: 4 }, hrBranches14)).branchId, 4)
+  await assert.rejects(async () => controller.create({ fullName: 'مرشح', positionTitle: 'محاسب' }, hrBranches14), BadRequestException)
+  await assert.rejects(async () => controller.create({ fullName: 'مرشح', positionTitle: 'محاسب', branchId: 5 }, hrBranches14), ForbiddenException)
+  await assert.rejects(async () => controller.create({ fullName: 'مرشح', positionTitle: 'محاسب', branchId: 1 }, { ...hrBranch1, branchId: null }), ForbiddenException)
 
   await assert.rejects(controller.update(2, { notes: 'x' }, hrBranch1), NotFoundException)
   assert.equal((await controller.update(1, { notes: 'x' }, hrBranch1)).notes, 'x')
   assert.equal((await controller.update(2, { notes: 'y' }, admin)).notes, 'y')
+  assert.equal((await controller.update(2, { notes: 'z' }, hrBranches14)).notes, 'z')
 })
 
 function exemptionsEm({ members = [], items = [], employees = [], grantedBy = [] }) {
@@ -117,7 +131,35 @@ test('leave balance rollover: a branch-scoped call touches only that branch empl
   const controller = fs.readFileSync(path.join(__dirname, '../src/requests/requests.controller.ts'), 'utf8')
   assert.match(controller, /rollover\(@CurrentUser\(\) user: JwtPayload, @Param\('fromPeriod'\) fromPeriod: string\)[\s\S]{0,160}this\.balances\.rollover\(fromPeriod, branchScopeOf\(user\)\)/)
   const service = fs.readFileSync(path.join(__dirname, '../src/requests/leave-balances.service.ts'), 'utf8')
-  assert.match(service, /async ensureYearRows\(period: string, branchId: number \| null = null\)[\s\S]{0,200}\.\.\.\(branchId !== null \? \{ branchId \} : \{\}\)/)
+  assert.match(service, /async ensureYearRows\(period: string, branchId: BranchScope \| number = null\)[\s\S]{0,200}\.\.\.branchScopeWhere\(branchId\)/)
+  // نطاق فاضي (حساب غير مسند) = ولا موظف، مش الشركة كلها
+  assert.match(service, /return list === null \? \{\} : \{ branchId: list\.length === 1 \? list\[0\] : branchIdIn\(list\) \}/)
+})
+
+test('leave balance rollover: a multi-branch scope touches exactly those branches', async () => {
+  const balances = [{ id: 1, employeeId: 10, period: '2025', balanceType: 'annual' }, { id: 2, employeeId: 166, period: '2025', balanceType: 'annual' }, { id: 3, employeeId: 170, period: '2025', balanceType: 'annual' }]
+  const touched = []
+  const employees = [{ id: 10, branchId: 1 }, { id: 166, branchId: 4 }, { id: 170, branchId: 5 }]
+  const matches = (where, row) => {
+    const b = where.branchId
+    if (b === undefined) return true
+    if (typeof b === 'number') return row.branchId === b
+    const list = b?.value ?? b?._value
+    return Array.isArray(list) && list.includes(row.branchId)
+  }
+  const service = new LeaveBalancesService(
+    { find: async ({ where }) => { if (where.employeeId !== undefined) { touched.push(where.employeeId); return [] } return balances.filter(row => row.balanceType === where.balanceType) } },
+    { find: async ({ where }) => employees.filter(row => matches(where, row)) },
+    {})
+  const typeSettings = { carryOverEnabled: true, carryOverMaxDays: null, renewalBasis: 'YEAR_START' }
+  service.accrualSettings = async () => ({ expiryMonths: 3, types: { annual: typeSettings, sick: { ...typeSettings, carryOverEnabled: false } } })
+  service.accrualContext = async () => ({ joinDate: '2020-01-01', settings: { annual: typeSettings, sick: typeSettings }, policy: { annual: 21, sick: 0 } })
+  service.ensureYearRows = async () => 0
+  await service.rollover('2025', [1, 4])
+  assert.deepEqual(touched, [10, 166])
+  touched.length = 0
+  await service.rollover('2025', [])
+  assert.deepEqual(touched, [])
 })
 
 test('payroll draft calculate / recalculate check the run branch scope before revealing its status', () => {

@@ -2,7 +2,8 @@ import { BadRequestException, ForbiddenException, Injectable } from '@nestjs/com
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource, EntityManager, In, Not } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { assertCompanyWideWrite, branchScopeOf } from '../auth/guards'
+import { assertCompanyWideWrite, branchScopeOf, inBranchScope, isEmptyBranchScope } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
@@ -42,7 +43,7 @@ export class SocialInsuranceService {
       defaults: SOCIAL_INSURANCE_DEFAULTS,
       reviewedAt: context.reviewedAt,
       canEdit: scope === null,
-      branches: context.branches.filter(branch => scope === null || branch.id === scope)
+      branches: context.branches.filter(branch => inBranchScope(scope, branch.id))
         .map(branch => ({ id: branch.id, name: branch.name, insuranceSystem: normalizeInsuranceSystem(branch.insuranceSystem) })),
       systems: INSURANCE_SYSTEM_LABELS,
     }
@@ -76,13 +77,18 @@ export class SocialInsuranceService {
     if (branchIdText !== undefined && branchIdText !== '' && !/^[1-9]\d{0,9}$/.test(branchIdText)) throw new BadRequestException('الفرع غير صالح')
     const requested = branchIdText ? Number(branchIdText) : null
     const scope = branchScopeOf(user)
-    if (scope !== null && requested !== null && requested !== scope) throw new ForbiddenException('مش مسموح تشوف فرع غير فرعك')
-    const branchId = scope ?? requested
+    if (requested !== null && !inBranchScope(scope, requested)) {
+      throw new ForbiddenException(scope !== null && scope.length > 1 ? 'مش مسموح تشوف فرع برّه فروعك' : 'مش مسموح تشوف فرع غير فرعك')
+    }
+    // الفروع المعروضة: الفرع المطلوب بعينه، وإلا فروع النطاق كلها (null = كل الفروع)
+    const shown: BranchScope = requested !== null ? [requested] : scope
+    // الفرع في الرد: المطلوب، أو فرع الحساب لو فرع واحد، وإلا null (كل الفروع اللي في النطاق)
+    const branchId = requested ?? (scope !== null && scope.length === 1 ? scope[0] : null)
     const em = this.ds.manager
     const context = await readSocialInsuranceContext(em)
-    const insuredBranches = context.branches.filter(branch => (branchId === null || branch.id === branchId) && context.systemOf(branch.id) !== 'NONE')
+    const insuredBranches = context.branches.filter(branch => inBranchScope(shown, branch.id) && context.systemOf(branch.id) !== 'NONE')
     const branchNames = new Map(context.branches.map(branch => [branch.id, branch.name]))
-    const employees = insuredBranches.length && (scope === null || scope > 0) ? await em.getRepository(Employee).find({
+    const employees = insuredBranches.length && !isEmptyBranchScope(scope) ? await em.getRepository(Employee).find({
       where: { branchId: In(insuredBranches.map(branch => branch.id)), isActive: true, isGosiRegistered: true },
       order: { employeeCode: 'ASC' },
     }) : []

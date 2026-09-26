@@ -1,9 +1,11 @@
 import { BadRequestException, ForbiddenException, NotFoundException } from '@nestjs/common'
+import { inBranchScope } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 
 // فرع الأصل (تدقيق الأدوار D3 — ترحيل 20260922_065): قاعدة واحدة لسجل الأصول ودورة العهدة.
-// النطاق هو ناتج branchScopeOf كما هو: null = كل الفروع، رقم موجب = فرع واحد، وأي قيمة تانية (-1) = نطاق فاضي مايشوفش حاجة.
-// مفيش فحص على اسم الدور هنا ولا عند أي مستدعٍ — الحكم على قيمة النطاق بس.
-export type BranchScope = number | null
+// النطاق هو ناتج branchScopeOf كما هو: null = كل الفروع، مصفوفة = الفروع دي (فرع أو أكتر)، والمصفوفة الفاضية = نطاق
+// فاضي مايشوفش حاجة. مفيش فحص على اسم الدور هنا ولا عند أي مستدعٍ — الحكم على قيمة النطاق بس.
+export type { BranchScope }
 type Branched = { branchId?: number | null }
 
 export const ASSET_NOT_FOUND = 'الأصل غير موجود'
@@ -14,17 +16,17 @@ export const CUSTODY_CROSS_BRANCH = 'الأصل تابع لفرع غير فرع 
 
 const branchOf = (row: Branched | null | undefined): number | null => (row?.branchId == null ? null : Number(row.branchId))
 
-/** يشوف الأصل: حساب كل الفروع، أو أصل فرعه، أو أصل قديم بلا فرع (قراءة بس). النطاق الفاضي مايشوفش حاجة. */
+/** يشوف الأصل: حساب كل الفروع، أو أصل من فروعه، أو أصل قديم بلا فرع (قراءة بس). النطاق الفاضي مايشوفش حاجة. */
 export const assetVisibleTo = (scope: BranchScope, asset: Branched): boolean =>
-  scope === null || (scope > 0 && (branchOf(asset) === null || branchOf(asset) === scope))
+  scope === null || (scope.length > 0 && (branchOf(asset) === null || inBranchScope(scope, branchOf(asset))))
 
-/** يكتب على الأصل: حساب كل الفروع، أو أصل مختوم بفرعه هو. الأصل القديم بلا فرع لحساب كل الفروع بس. */
+/** يكتب على الأصل: حساب كل الفروع، أو أصل مختوم بفرع من فروعه. الأصل القديم بلا فرع لحساب كل الفروع بس. */
 export const assetWritableBy = (scope: BranchScope, asset: Branched): boolean =>
-  scope === null || (scope > 0 && branchOf(asset) !== null && branchOf(asset) === scope)
+  scope === null || (branchOf(asset) !== null && inBranchScope(scope, branchOf(asset)))
 
 /** موظف العهدة جوه نطاق السائل. */
 export const employeeInScope = (scope: BranchScope, employee: Branched | null | undefined): boolean =>
-  scope === null || (!!employee && scope > 0 && branchOf(employee) === scope)
+  scope === null || (!!employee && inBranchScope(scope, branchOf(employee)))
 
 /** قراءة: الأصل الغايب والأصل الخارج عن النطاق نفس الرد بالحرف (لا كاشف وجود). */
 export function assertAssetVisible<T extends Branched>(scope: BranchScope, asset: T | null | undefined): T {

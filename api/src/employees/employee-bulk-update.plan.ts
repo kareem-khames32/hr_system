@@ -1,6 +1,8 @@
 // خطة التحديث الجماعي: من صفوف الملف + بيانات النظام المقروءة → لكل صف الموظف والتغييرات (قديم → جديد) والأخطاء.
 // صرفة بلا قاعدة بيانات: الخدمة تقرأ البيانات وتمررها هنا، والمعاينة والتطبيع يستخدموا نفس الخطة.
 // القواعد نفسها بتاعة تعديل ملف الموظف تتفحص تاني عند الحفظ (EmployeesService.update) — هنا بتظهر قبل أي حفظ.
+import { inBranchScope } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { MONTHLY_SALARY_COMPONENTS } from './compensation'
 import { birthDateIssue, nationalIdIssue } from './employee-required-fields'
 import { employeePayMethodIssue, PAY_METHOD_LABELS } from '../payroll/pay-split'
@@ -98,7 +100,8 @@ export interface BulkLookups {
   holders: Record<BulkUniqueField, ReadonlyMap<string, BulkHolder[]>>
 }
 export interface BulkPlanOptions {
-  branchScope: number | null
+  /** نطاق فروع المنفّذ (branchScopeOf): null = كل الفروع، مصفوفة = الفروع دي بس */
+  branchScope: BranchScope
   today: string
   /** شهر المسير الجاري؛ null = إعداد بداية الدورة مش مثبت */
   currentPayrollPeriod: string | null
@@ -153,7 +156,7 @@ export function planBulkUpdate(file: BulkParsedFile, lookups: BulkLookups, optio
   if (salaryColumns.length && !options.canChangeSalary) {
     fileErrors.push('تعديل الراتب والبدلات محتاج صلاحية «اعتماد المسير» — شيل أعمدة الراتب من الملف أو اطلب الصلاحية')
   }
-  const inScope = (branchId: number | null) => options.branchScope === null || branchId === options.branchScope
+  const inScope = (branchId: number | null) => inBranchScope(options.branchScope, branchId)
   const whose = (holder: BulkHolder) => inScope(holder.branchId) ? ` (${holder.fullName})` : ''
   const codeRows = new Map<string, number[]>()
   for (const record of file.records) if (record.code) codeRows.set(record.code, [...(codeRows.get(record.code) ?? []), record.row])
@@ -241,8 +244,11 @@ export function planBulkUpdate(file: BulkParsedFile, lookups: BulkLookups, optio
       const found = byName(lookups.branches, branch.value, employee.branchId)
       if (found.length !== 1) fieldError('branch', found.length ? `أكتر من فرع بنفس الاسم «${branch.value}»` : `الفرع «${branch.value}» مش موجود`)
       else if (found[0].id !== employee.branchId) {
-        if (options.branchScope !== null) fieldError('branch', 'حساب الفرع مايقدرش ينقل موظف لفرع تاني')
-        else {
+        // حساب الفروع ينقل بين فروعه بس (حساب الفرع الواحد مايقدرش ينقل خالص)
+        if (!inScope(found[0].id)) {
+          fieldError('branch', options.branchScope !== null && options.branchScope.length > 1
+            ? 'حساب الفروع مايقدرش ينقل موظف لفرع برّه فروعه' : 'حساب الفرع مايقدرش ينقل موظف لفرع تاني')
+        } else {
           branchId = found[0].id
           plan.update.branchId = branchId
           plan.branchChange = true

@@ -29,7 +29,7 @@ import {
   ValidateNested,
 } from 'class-validator'
 import { Type } from 'class-transformer'
-import { assertCompanyWideWrite, branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
+import { assertCompanyWideWrite, branchIdIn, branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import { ApprovalChain } from '../requests/entities/approval-chain.entity'
 import { ApprovalStep } from '../requests/entities/approval-step.entity'
 import { Branch } from '../org/entities/branch.entity'
@@ -949,7 +949,8 @@ export class SettingsController {
   @Get('approval-chains')
   async listChains(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)
-    const chains = await this.chains.find({ where: scope === null ? {} : [{ branchId: scope }, { branchId: IsNull() }], order: { id: 'ASC' } })
+    // حساب الفروع: السلاسل العامة + نسخ فروعه (فرع أو أكتر)
+    const chains = await this.chains.find({ where: scope === null ? {} : [{ branchId: branchIdIn(scope) }, { branchId: IsNull() }], order: { id: 'ASC' } })
     const allSteps = await this.steps.find({ order: { stepOrder: 'ASC' } })
     // اسم النوع وفئته من مصدر واحد (مستقل عن فلترة الجمهور) —
     // شاشة السلاسل لا تعتمد على كتالوج الموظف المفلتر
@@ -960,7 +961,7 @@ export class SettingsController {
     // عزل الفروع: سلسلة معمولة لنوع خاص بفرع تاني ماتظهرش لحساب الفرع (ولا اسم النوع)، حتى لو صفها قديم من غير فرع
     const typeHidden = (typeCode: string | null) => {
       const type = typeCode ? typeByCode.get(typeCode) : undefined
-      return scope !== null && !!type && !definitionInBranch(type.branchId, scope)
+      return scope !== null && !!type && type.branchId != null && !inBranchScope(scope, type.branchId)
     }
     return chains.filter((c) => !typeHidden(c.requestTypeCode)).map((c) => ({
       ...c,
@@ -1092,9 +1093,10 @@ export class SettingsController {
     })
   }
 
+  // حساب الفروع يدير نسخ فروعه بس (فرع أو أكتر)؛ السلسلة العامة (null) وفرع برّه نطاقه لحساب على مستوى الشركة
   private assertChainScope(user: JwtPayload, branchId: number | null) {
     const scope = branchScopeOf(user)
-    if (scope !== null && branchId !== scope) {
+    if (!inBranchScope(scope, branchId)) {
       throw new ForbiddenException('تعديل السلسلة العامة أو فرع آخر متاح لمدير النظام فقط')
     }
   }

@@ -119,7 +119,10 @@ test('تاريخ التعيين: سقف سنة قدّام، والمُرحّلو
 
 test('إضافة موظف: فرع غير فرع المستخدم يُرفض صراحةً بدل إعادة كتابته', () => {
   const controller = fs.readFileSync(path.join(__dirname, '../src/employees/employees.controller.ts'), 'utf8').split(String.fromCharCode(13)).join('')
-  assert.ok(controller.includes("throw new ForbiddenException('مش مسموح تضيف موظف على فرع غير فرعك')"))
-  assert.ok(controller.includes('Number(dto.branchId) !== scope'))
-  assert.ok(controller.includes('dto.branchId = scope'), 'الفرع لسه بيتحدد للمستخدم المقيّد لما مايبعتش فرع')
+  assert.ok(controller.includes("throw new ForbiddenException(scope.length > 1 ? 'مش مسموح تضيف موظف على فرع برّه فروعك' : 'مش مسموح تضيف موظف على فرع غير فرعك')"))
+  assert.ok(controller.includes('dto.branchId != null && !scope.includes(Number(dto.branchId))'))
+  // فرع واحد: الفرع بيتحدد للمستخدم المقيّد لما مايبعتش فرع؛ أكتر من فرع: لازم يختار (مفيش اختيار صامت)؛ ونطاق فاضي ممنوع
+  assert.ok(controller.includes('dto.branchId = dto.branchId != null ? Number(dto.branchId) : scope[0]'), 'الفرع لسه بيتحدد للمستخدم المقيّد لما مايبعتش فرع')
+  assert.ok(controller.includes("if (dto.branchId == null && scope.length > 1) throw new BadRequestException('حسابك على أكتر من فرع — اختار فرع الموظف')"))
+  assert.ok(controller.includes("if (scope.length === 0) throw new ForbiddenException('حسابك مش مربوط بفرع — مايقدرش يضيف موظفين')"))
 })

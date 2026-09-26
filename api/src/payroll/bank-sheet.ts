@@ -1,3 +1,4 @@
+import type { BranchScope } from '../auth/guards'
 import { PAY_METHOD_LABELS, PAY_METHODS, payrollPaySplit } from './pay-split'
 import { disbursementMarksByItem, recordedDisbursement, type DisbursementMarkInput, type RecordedDisbursement } from './payroll-disbursement-split'
 import { roundPayrollMoney } from './payroll-money'
@@ -85,7 +86,8 @@ export function bankSheetSources(input: {
   items: ReadonlyArray<BankSheetItemInput>
   employees: ReadonlyArray<BankSheetEmployeeInput>
   members: ReadonlyArray<BankSheetMemberInput>
-  branchScope: number | null
+  /** نطاق فروع المشاهد (branchScopeOf): null = كل الفروع، مصفوفة = الفروع دي بس (الفاضية = ولا فرع) */
+  branchScope: BranchScope
   settlementOf: (breakdown: string | null | undefined) => BankSheetSource['settlementPayout']
   /** حالة المسير — PAID معناها الفلوس اتحركت خلاص */
   runStatus?: string | null
@@ -100,7 +102,7 @@ export function bankSheetSources(input: {
     const employee = byId.get(item.employeeId)
     const snapshot = members.get(item.employeeId)?.snapshot
     const branchId = snapshot ? snapshot.branchId : employee?.branchId ?? null
-    if (input.branchScope !== null && Number(branchId) !== Number(input.branchScope)) continue
+    if (input.branchScope !== null && (branchId == null || !input.branchScope.includes(Number(branchId)))) continue
     sources.push({
       employeeId: item.employeeId,
       employeeCode: snapshot?.employeeCode ?? employee?.employeeCode ?? '',
