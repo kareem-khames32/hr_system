@@ -11,6 +11,8 @@ import { ApprovalChain } from './approval-chain.entity'
 // الأدوار تُحل ديناميكياً من الهيكل التنظيمي وقت التشغيل — شوف ApproverResolver
 export type ApproverRole =
   | 'direct_manager_of_requester'
+  // «مدير المدير المباشر» (طلب المالك 27 سبتمبر) — شوف ApproverResolver.managerOfDirectManagerOf
+  | 'manager_of_direct_manager'
   | 'department_manager_of_requester'
   | 'branch_manager_of_requester'
   | 'receiving_team_manager'

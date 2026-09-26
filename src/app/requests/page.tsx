@@ -104,6 +104,7 @@ const parseJson = <T,>(raw: string | null | undefined, fallback: T): T => {
 
 const roleLabels: Record<string, string> = {
   direct_manager_of_requester: 'المدير المباشر',
+  manager_of_direct_manager: 'مدير المدير المباشر',
   department_manager_of_requester: 'مدير القسم',
   branch_manager_of_requester: 'مدير الفرع',
   receiving_team_manager: 'المدير المستقبِل',

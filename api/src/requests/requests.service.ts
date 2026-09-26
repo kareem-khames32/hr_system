@@ -1144,29 +1144,43 @@ export class RequestsService {
         ? loanAmountThresholdMet(payload.amount, step.thresholdOp, exactThresholds.get(step.id)) : this.thresholdMet(step, payload))
 
     const resolved: ResolvedStep[] = []
+    // خطوات «مدير المدير المباشر» اللي وقعت على المدير المباشر نفسه لأنه رأس الشركة
+    const topSteps = new Set<ResolvedStep>()
     for (const s of active) {
-      const approverEmployeeId = await this.resolver.resolveApproverEmployee(
-        s.approverRole,
-        req.requesterId,
-        payload,
-        s.specificEmployeeId
-      )
-      // السرّي يتخطى المدير المباشر (الشكاوى/البلاغات)
+      const skipLevel = s.approverRole === 'manager_of_direct_manager'
+        ? await this.resolver.managerOfDirectManagerOf(req.requesterId)
+        : null
+      const approverEmployeeId = skipLevel
+        ? skipLevel.approverId
+        : await this.resolver.resolveApproverEmployee(
+            s.approverRole,
+            req.requesterId,
+            payload,
+            s.specificEmployeeId
+          )
+      // السرّي يتخطى المدير المباشر (الشكاوى/البلاغات) — ومعاه «مدير المدير المباشر» لو وقعت على المدير المباشر نفسه
       if (
         type.isConfidential &&
-        s.approverRole === 'direct_manager_of_requester'
+        (s.approverRole === 'direct_manager_of_requester' || skipLevel?.top)
       ) {
         continue
+      }
+      if (skipLevel && !approverEmployeeId) {
+        throw new BadRequestException(await this.skipLevelMissingMessage(skipLevel.directManagerId))
       }
       if (['direct_manager_of_requester', 'department_manager_of_requester',
         'branch_manager_of_requester', 'receiving_team_manager', 'specific_employee'].includes(s.approverRole)
         && !approverEmployeeId) {
         throw new BadRequestException('لا يوجد معتمد محدد لهذه الخطوة — أكمل الهيكل التنظيمي أو عدّل سلسلة الاعتماد')
       }
+      // مدير مديره المسجّل هو مقدّم الطلب نفسه (دايرة في الهيكل) — مايعتمدش طلبه
+      if (skipLevel && approverEmployeeId === req.requesterId) {
+        throw new BadRequestException('«مدير المدير المباشر» طلع مقدّم الطلب نفسه — راجع المدير المسجّل في ملف مديره المباشر أو عدّل سلسلة الاعتماد')
+      }
       const dueAt = s.slaDays
         ? new Date(Date.now() + s.slaDays * 86400000).toISOString()
         : null
-      resolved.push({
+      const step: ResolvedStep = {
         stepOrder: s.stepOrder,
         role: s.approverRole,
         approverEmployeeId,
@@ -1175,9 +1189,30 @@ export class RequestsService {
         dueAt,
         actedAt: null,
         action: null,
-      })
+      }
+      resolved.push(step)
+      if (skipLevel?.top) topSteps.add(step)
     }
-    return { steps: resolved, chain }
+    if (!topSteps.size) return { steps: resolved, chain }
+    // رأس الشركة مابيعتمدش نفس الطلب مرتين: خطوة «مدير المدير المباشر» اللي وقعت عليه بتتشال لو هو
+    // معتمد خطوة تانية في نفس السلسلة (عادةً خطوة «المدير المباشر»)
+    const named = new Set(resolved.filter(step => !topSteps.has(step)).map(step => step.approverEmployeeId))
+    const once: ResolvedStep[] = []
+    for (const step of resolved) {
+      if (topSteps.has(step)) {
+        if (named.has(step.approverEmployeeId)) continue
+        named.add(step.approverEmployeeId)
+      }
+      once.push(step)
+    }
+    return { steps: once, chain }
+  }
+
+  // رسالة «مدير المدير المباشر» الناقص: باسم المدير المباشر اللي محتاج مدير في ملفه
+  private async skipLevelMissingMessage(directManagerId: number | null) {
+    if (!directManagerId) return 'لا يوجد مدير مباشر لمقدّم الطلب — أكمل الهيكل التنظيمي أو عدّل سلسلة الاعتماد'
+    const manager = await this.employees.findOne({ where: { id: directManagerId }, select: { id: true, fullName: true } })
+    return `مفيش «مدير المدير المباشر»: سجّل المدير المباشر لـ«${manager?.fullName ?? 'المدير المباشر'}» في ملفه، أو عدّل سلسلة الاعتماد`
   }
 
   // الخطوة الشرطية: تُفعَّل فقط عند تحقق الشرط (loan >= 5000 → مالية)
@@ -2440,7 +2475,7 @@ export class RequestsService {
 
   private assertOvertimeChain(steps: ResolvedStep[], exempt: boolean) {
     if (!steps.length) throw new BadRequestException('الإضافي لا ينفذ دون خطوات اعتماد صريحة')
-    if (exempt && (!steps.some(step => step.role === 'hr') || !steps.some(step => ['direct_manager_of_requester', 'department_manager_of_requester', 'branch_manager_of_requester', 'executive'].includes(step.role)))) {
+    if (exempt && (!steps.some(step => step.role === 'hr') || !steps.some(step => ['direct_manager_of_requester', 'manager_of_direct_manager', 'department_manager_of_requester', 'branch_manager_of_requester', 'executive'].includes(step.role)))) {
       throw new BadRequestException('إضافي الموظف المستثنى يتطلب اعتماد مدير واعتماد الموارد البشرية صراحةً في السلسلة')
     }
   }

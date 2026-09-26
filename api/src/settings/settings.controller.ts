@@ -261,6 +261,8 @@ class UpdateStepDto {
 // أدوار الموافقة المسموحة — تُحل ديناميكياً وقت التشغيل
 const APPROVER_ROLES = [
   'direct_manager_of_requester',
+  // «مدير المدير المباشر» — خطوة اعتماد بس، مش هدف تصعيد (validateChainSteps)
+  'manager_of_direct_manager',
   'department_manager_of_requester',
   'branch_manager_of_requester',
   'receiving_team_manager',
@@ -1130,6 +1132,10 @@ export class SettingsController {
       }
       if (step.escalateTo === 'specific_employee') {
         throw new BadRequestException('التصعيد إلى موظف محدد يحتاج مساراً يدعم تحديد موظف التصعيد')
+      }
+      // التصعيد بيغيّر دور الخطوة بس ومابيحلّش معتمد جديد، فالتصعيد لـ«مدير المدير المباشر» كان هيوقف الطلب
+      if (step.escalateTo === 'manager_of_direct_manager') {
+        throw new BadRequestException('«مدير المدير المباشر» بيتحط كخطوة اعتماد في السلسلة، مش كجهة تصعيد — اختار جهة تصعيد تانية')
       }
       if (step.approverRole === 'specific_employee') {
         if (!step.specificEmployeeId) throw new BadRequestException('خطوة «موظف بعينه» تحتاج تحديد الموظف')

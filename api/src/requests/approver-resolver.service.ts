@@ -72,6 +72,23 @@ export class ApproverResolver {
     return null
   }
 
+  // «مدير المدير المباشر» (طلب المالك 27 سبتمبر): المدير المباشر لمدير مقدّم الطلب المباشر، بنفس قاعدة
+  // «المدير المباشر» فوق. رأس الشركة (مدير الإدارة التنفيذية) من غير مدير مسجّل في ملفه مافوقوش حد،
+  // فالخطوة بتقع عليه هو (top) — بدل ما التدرّج يوديها لمدير فرعه اللي تحته في الهيكل.
+  // approverId = null: مفيش مدير مباشر، أو مفيش حد فوقه في الهيكل (بيانات ناقصة — التقديم بيقف برسالة)
+  async managerOfDirectManagerOf(employeeId: number): Promise<{ directManagerId: number | null; approverId: number | null; top: boolean }> {
+    const direct = await this.directManagerOf(employeeId)
+    if (!direct) return { directManagerId: null, approverId: null, top: false }
+    const manager = await this.employees.findOne({ where: { id: direct } })
+    if (manager?.managerEmployeeId && manager.managerEmployeeId !== direct) {
+      return { directManagerId: direct, approverId: manager.managerEmployeeId, top: false }
+    }
+    const executive = await this.departments.findOne({ where: { isExecutive: true } })
+    if (executive?.managerEmployeeId === direct) return { directManagerId: direct, approverId: direct, top: true }
+    const above = await this.directManagerOf(direct)
+    return { directManagerId: direct, approverId: above && above !== direct ? above : null, top: false }
+  }
+
   // مدير قسم الموظف
   async departmentManagerOf(employeeId: number): Promise<number | null> {
     const emp = await this.employees.findOne({ where: { id: employeeId } })
@@ -100,6 +117,8 @@ export class ApproverResolver {
     switch (role) {
       case 'direct_manager_of_requester':
         return this.directManagerOf(requesterId)
+      case 'manager_of_direct_manager':
+        return (await this.managerOfDirectManagerOf(requesterId)).approverId
       case 'department_manager_of_requester':
         return this.departmentManagerOf(requesterId)
       case 'branch_manager_of_requester':
@@ -147,6 +166,7 @@ export class ApproverResolver {
 
     switch (step.role) {
       case 'direct_manager_of_requester':
+      case 'manager_of_direct_manager':
       case 'department_manager_of_requester':
       case 'branch_manager_of_requester':
       case 'receiving_team_manager':
