@@ -30,6 +30,7 @@ import {
   updateDepartment,
 } from '@/lib/api'
 import { useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
+import { EmployeePicker } from '@/components/EmployeePicker'
 
 const emptyForm = {
   name: '',
@@ -666,24 +667,17 @@ export default function DepartmentsPage() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label htmlFor="department-manager" className="block text-sm font-medium text-gray-700 mb-2">
                       مدير القسم *
                     </label>
-                    <select
+                    <EmployeePicker
+                      id="department-manager"
+                      employees={employees}
                       value={formData.managerId}
-                      onChange={(e) =>
-                        setFormData({ ...formData, managerId: e.target.value })
-                      }
-                      className="input w-full"
-                    >
-                      <option value="">— اختر الموظف المسؤول —</option>
-                      {employees.map((emp) => (
-                        <option key={emp.id} value={emp.id}>
-                          {emp.fullName}
-                          {emp.jobTitle ? ` — ${emp.jobTitle}` : ''}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(id) => setFormData({ ...formData, managerId: id })}
+                      placeholder="اكتب اسم الموظف المسؤول أو كوده…"
+                      required
+                    />
                     <p className="text-xs text-gray-400 mt-1">
                       يُستخدم في دورات الاعتماد (رئيس القسم)
                     </p>
@@ -754,22 +748,16 @@ export default function DepartmentsPage() {
                         ))}
                     {formData.isExecutive && (
                       <div>
-                        <label className="block text-sm font-medium text-gray-700 mb-2">السكرتير التنفيذي</label>
-                        <select
+                        <label htmlFor="department-secretary" className="block text-sm font-medium text-gray-700 mb-2">السكرتير التنفيذي</label>
+                        {/* فاضي = بدون سكرتير؛ مدير القسم نفسه مش من الاختيارات */}
+                        <EmployeePicker
+                          id="department-secretary"
+                          employees={employees}
+                          filter={(emp) => String(emp.id) !== formData.managerId}
                           value={formData.secretaryId}
-                          onChange={(e) => setFormData({ ...formData, secretaryId: e.target.value })}
-                          className="input w-full"
-                        >
-                          <option value="">— بدون —</option>
-                          {employees
-                            .filter((emp) => String(emp.id) !== formData.managerId)
-                            .map((emp) => (
-                              <option key={emp.id} value={emp.id}>
-                                {emp.fullName}
-                                {emp.jobTitle ? ` — ${emp.jobTitle}` : ''}
-                              </option>
-                            ))}
-                        </select>
+                          onChange={(id) => setFormData({ ...formData, secretaryId: id })}
+                          placeholder="بدون سكرتير — اكتب الاسم أو الكود للاختيار"
+                        />
                         <p className="text-xs text-gray-400 mt-1">
                           بيظهر جنب الرئيس التنفيذي بس في الهيكل، ومش مدير لحد
                         </p>

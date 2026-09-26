@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import { AlertTriangle, CheckCircle2, ExternalLink, Info, Send, Users } from 'lucide-react'
 import { ApiError, can } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
+import { EmployeePicker } from '@/components/EmployeePicker'
 import {
   BONUS_METHOD_UNIT,
   BONUS_ROLE_LABELS,
@@ -43,7 +44,6 @@ export default function BonusRequestForm({ onSubmitted }: { onSubmitted?: () => 
   const [candidates, setCandidates] = useState<BonusCandidate[]>([])
   const [candidatesLoaded, setCandidatesLoaded] = useState(false)
   const [candidateError, setCandidateError] = useState('')
-  const [search, setSearch] = useState('')
   const [employeeId, setEmployeeId] = useState('')
   const [form, setForm] = useState({ inputValue: '', reason: '', targetPeriod: '', attachmentRef: '', confirmNotDuplicate: false })
   const [preview, setPreview] = useState<BonusPreview | null>(null)
@@ -161,9 +161,6 @@ export default function BonusRequestForm({ onSubmitted }: { onSubmitted?: () => 
   const row = preview?.rows[0] ?? null
   const ready = row?.status === 'READY'
   const duplicate = row?.status === 'BONUS_DUPLICATE' || errorKind === 'BONUS_DUPLICATE'
-  const searchText = search.trim()
-  // المختار يظل ظاهراً في القائمة حتى لو استبعده البحث
-  const visible = candidates.filter(candidate => String(candidate.id) === employeeId || !searchText || candidate.fullName.includes(searchText) || candidate.employeeCode.includes(searchText))
 
   return (
     <div className="space-y-4" data-testid="bonus-request-form">
@@ -218,17 +215,17 @@ export default function BonusRequestForm({ onSubmitted }: { onSubmitted?: () => 
           <span className="flex items-center gap-1.5"><Users size={14} className="text-indigo-500" />الموظف المستفيد من المكافأة <span className="text-red-500">*</span></span>
         </label>
         {candidateError && <p role="alert" className="text-sm text-red-600 mb-2">{candidateError}</p>}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-2">
-          <input className="input w-full" placeholder="بحث بالاسم أو الرقم الوظيفي" disabled={busy || noScope} value={search} onChange={event => setSearch(event.target.value)} />
-          <select id="bonus-request-employee" className="input w-full" value={employeeId} disabled={busy || noScope} onChange={event => setEmployeeId(event.target.value)}>
-            <option value="">{noScope ? '— لا يوجد موظفون في نطاقك لهذا النوع —' : !candidatesLoaded ? '— جارٍ تحميل موظفي نطاقك —' : '— اختر الموظف —'}</option>
-            {visible.map(candidate => (
-              <option key={candidate.id} value={candidate.id}>
-                {candidate.fullName} — {candidate.employeeCode}{candidate.teamName ? ` — ${candidate.teamName}` : candidate.departmentName ? ` — ${candidate.departmentName}` : ''}
-              </option>
-            ))}
-          </select>
-        </div>
+        {/* بحث بالاسم أو الرقم الوظيفي في موظفي نطاقك بس؛ الفريق (أو القسم) تحت كل اسم */}
+        <EmployeePicker
+          id="bonus-request-employee"
+          employees={candidates}
+          value={employeeId}
+          disabled={busy || noScope}
+          onChange={id => setEmployeeId(id)}
+          describe={candidate => candidate.teamName || candidate.departmentName}
+          placeholder={noScope ? '— لا يوجد موظفون في نطاقك لهذا النوع —' : !candidatesLoaded ? '— جارٍ تحميل موظفي نطاقك —' : 'اكتب اسم الموظف أو رقمه الوظيفي…'}
+          required
+        />
         <p className="text-xs text-gray-500 mt-1.5">
           القائمة من نطاقك في فرعك لهذا النوع كما يحلّه الخادم. لا تُنزل مكافأة لنفسك ولا لمن يعلوك — الخادم يرفضها.
         </p>

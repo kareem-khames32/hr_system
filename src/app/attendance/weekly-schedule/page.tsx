@@ -3,6 +3,7 @@
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { downloadCsv } from '@/lib/csv'
+import { employeeSearchMatcher } from '@/lib/employee-search'
 import { branchScopeOfUser, canSeeBranch, type BranchScope } from '@/lib/branch-scope'
 import { MainLayout } from '@/components/layout'
 import {
@@ -625,13 +626,12 @@ export default function WeeklySchedulePage() {
   const noScheduleCount = rows.filter((row) => hasNoSchedule(row.id)).length
   const noShiftCount = rows.filter((row) => hasNoShift(row.id)).length
 
-  // تصفية الموظفين
+  // تصفية الموظفين — البحث بالاسم أو الكود بنفس مطابقة منتقي الموظف (الإملاء العربي والكود)
+  const matchesSearchQuery = employeeSearchMatcher(searchQuery)
   const filteredRows = rows.filter((emp) => {
     if (coverageFilter === 'noSchedule' && !hasNoSchedule(emp.id)) return false
     if (coverageFilter === 'noShift' && !hasNoShift(emp.id)) return false
-    const matchesSearch =
-      emp.employeeName.includes(searchQuery) ||
-      emp.employeeCode.toLowerCase().includes(searchQuery.toLowerCase())
+    const matchesSearch = matchesSearchQuery({ fullName: emp.employeeName, employeeCode: emp.employeeCode })
     const matchesBranch = selectedBranch === 'all' || String(emp.branchId) === selectedBranch
     const matchesDepartment = selectedDepartment === 'all' || String(emp.departmentId) === selectedDepartment
     const matchesTeam = selectedTeam === 'all' || String(emp.teamId) === selectedTeam

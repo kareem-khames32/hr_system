@@ -13,6 +13,7 @@ import { DEFAULT_SALARY_CYCLE, SALARY_CYCLE_OPTIONS, clearedEmployeeFields, empl
 
 import { useEffect, useRef, useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import { EmployeePicker } from '@/components/EmployeePicker'
 import {
   can,
   getCurrentUser,
@@ -57,8 +58,8 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 
-// خيار «المدير المباشر» — من قائمة الموظفين أو الدليل المختصر (بلا employees.view)
-type ManagerOption = Pick<ApiEmployee, 'id' | 'fullName' | 'jobTitle'>
+// خيار «المدير المباشر» — من قائمة الموظفين أو الدليل المختصر (بلا employees.view)؛ بحث بالاسم أو الكود
+type ManagerOption = Pick<ApiEmployee, 'id' | 'fullName' | 'jobTitle' | 'employeeCode'>
 
 // مركز التكلفة — من كتالوج الإعدادات
 interface CostCenter {
@@ -1529,15 +1530,14 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
 
               <div className="grid grid-cols-3 gap-4">
                 <div>
-                  <label className="label">المدير المباشر</label>
-                  <select className="input" value={form.managerId} onChange={(e) => setField('managerId', e.target.value)}>
-                    <option value="">اختر (أو يتحدد من الفريق)</option>
-                    {allEmployees.map((emp) => (
-                      <option key={emp.id} value={emp.id}>
-                        {emp.fullName}{emp.jobTitle ? ` - ${emp.jobTitle}` : ''}
-                      </option>
-                    ))}
-                  </select>
+                  <label className="label" htmlFor="employee-manager">المدير المباشر</label>
+                  <EmployeePicker
+                    id="employee-manager"
+                    employees={allEmployees}
+                    value={form.managerId}
+                    onChange={(id) => setField('managerId', id)}
+                    placeholder="اكتب الاسم أو الكود (أو يتحدد من الفريق)"
+                  />
                 </div>
                 <div>
                   <label className="label">موقع العمل</label>

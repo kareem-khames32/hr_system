@@ -39,6 +39,7 @@ import {
   type ApiEmployee,
 } from '@/lib/api'
 import { DISPLAY_LOCALE } from '@/lib/dates'
+import { EmployeePicker } from '@/components/EmployeePicker'
 
 interface Device {
   id: number
@@ -670,21 +671,18 @@ export default function DevicesPage() {
                             </span>
                           ) : (
                             <div className="flex items-center gap-2">
-                              <select
+                              {/* بحث بالاسم أو الكود؛ رقم البصمة الحالي للموظف (لو له) تحت اسمه */}
+                              <EmployeePicker
+                                employees={linkEmployees}
                                 value={linkChoice[u.employeeCode] ?? ''}
-                                onChange={(e) =>
-                                  setLinkChoice((prev) => ({ ...prev, [u.employeeCode]: e.target.value }))
+                                onChange={(id) =>
+                                  setLinkChoice((prev) => ({ ...prev, [u.employeeCode]: id }))
                                 }
-                                className="input text-sm py-1.5 w-56"
-                              >
-                                <option value="">— اختر الموظف —</option>
-                                {linkEmployees.map((emp) => (
-                                  <option key={emp.id} value={String(emp.id)}>
-                                    {emp.fullName} ({emp.employeeCode})
-                                    {emp.fingerprintCode ? ` — بصمة ${emp.fingerprintCode}` : ''}
-                                  </option>
-                                ))}
-                              </select>
+                                describe={(emp) => (emp.fingerprintCode ? `بصمة ${emp.fingerprintCode}` : emp.jobTitle)}
+                                aria-label={`ربط كود البصمة ${u.employeeCode} بموظف`}
+                                className="w-64"
+                                inputClassName="text-sm py-1.5"
+                              />
                               <button
                                 onClick={() => linkCode(u.employeeCode)}
                                 disabled={!linkChoice[u.employeeCode] || linkingCode === u.employeeCode}

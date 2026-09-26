@@ -4,6 +4,7 @@ import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Download, Gift, Plus, RefreshCw, Settings2, Users, X } from 'lucide-react'
 import { ApiError, can } from '@/lib/api'
 import { csvDateStamp, downloadCsv } from '@/lib/csv'
+import { employeeSearchMatcher } from '@/lib/employee-search'
 import type { DeductionApprovalRole, DeductionStepView } from '@/lib/deductions-api'
 import {
   approveBonus, BONUS_METHOD_LABELS, BONUS_METHOD_UNIT, BONUS_ROLE_LABELS, BONUS_STATUS_META, bonusBadgeClass, bonusInputError, cancelBonus,
@@ -383,8 +384,8 @@ function BonusCreator({ creatable, currency, onCreated, initialEmployeeId = null
       : selectionMode === 'BRANCH' ? (branchId ? candidates.filter(row => row.branchId === branchId) : []) : [],
   // eslint-disable-next-line react-hooks/exhaustive-deps
   [selectionMode, teamId, departmentId, branchId, candidates])
-  const searchText = search.trim()
-  const matches = (row: BonusCandidate) => !searchText || row.fullName.includes(searchText) || row.employeeCode.includes(searchText)
+  // البحث بالاسم أو الرقم الوظيفي بنفس مطابقة منتقي الموظف (الإملاء العربي والكود)
+  const matches: (row: BonusCandidate) => boolean = employeeSearchMatcher(search)
   const visible = unitMode ? members.filter(matches)
     : candidates.filter(row => (!branchId || row.branchId === branchId) && (!departmentId || inDepartment(row, departmentId)) && (!teamId || row.teamId === teamId) && matches(row))
   const unitId = selectionMode === 'TEAM' ? teamId : selectionMode === 'DEPARTMENT' ? departmentId : selectionMode === 'BRANCH' ? branchId : ''

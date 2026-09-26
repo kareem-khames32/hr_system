@@ -5,13 +5,13 @@ import Link from 'next/link'
 import { ArrowRight, BookOpen, RefreshCw } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { PayrollSalaryHistoryEditor } from '@/components/PayrollSalaryHistoryEditor'
+import { EmployeePicker } from '@/components/EmployeePicker'
 import { can, fetchEmployeeDirectory, type ApiEmployeeDirectoryEntry } from '@/lib/api'
 import { payrollPoliciesError } from '@/lib/payroll-policies-api'
 
 function SalaryHistoryContent() {
   const [employees, setEmployees] = useState<ApiEmployeeDirectoryEntry[]>([])
   const [employeeId, setEmployeeId] = useState('')
-  const [search, setSearch] = useState('')
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [dirty, setDirty] = useState(false)
@@ -29,8 +29,6 @@ function SalaryHistoryContent() {
     return () => { cancelled = true }
   }, [canView, reload])
 
-  const choices = employees.filter(row => String(row.id) === employeeId || !search.trim() ||
-    `${row.fullName} ${row.employeeCode}`.toLowerCase().includes(search.trim().toLowerCase()))
   const selected = employees.find(row => String(row.id) === employeeId)
 
   return <div className="space-y-6 pb-8">
@@ -44,12 +42,10 @@ function SalaryHistoryContent() {
         <p className="text-sm text-gray-500">اختر الموظف ثم اعرض سجله. لا يلزم إنشاء سياسة رواتب لاستخدام هذه الصفحة.</p>
         <p className="text-xs text-gray-500">قائمة الاختيار تعرض الموظفين النشطين المتاحين لصلاحياتك حاليًا؛ لا تشمل جميع الموظفين التاريخيين.</p>
         <div className="grid sm:grid-cols-2 gap-4">
-          <div><label htmlFor="salary-history-search" className="block text-sm font-medium mb-2">بحث بالاسم أو كود الموظف</label><input id="salary-history-search" className="input" value={search} disabled={loading} placeholder="الاسم أو الكود" onChange={event => setSearch(event.target.value)} /></div>
-          <div><label htmlFor="salary-history-employee" className="block text-sm font-medium mb-2">الموظف</label><select id="salary-history-employee" className="input disabled:opacity-50" value={employeeId} disabled={loading || dirty} onChange={event => {
+          <div><label htmlFor="salary-history-employee" className="block text-sm font-medium mb-2">الموظف — بحث بالاسم أو كود الموظف</label><EmployeePicker id="salary-history-employee" employees={employees} value={employeeId} disabled={loading || dirty} placeholder={loading ? 'جارٍ تحميل الموظفين…' : 'اكتب اسم الموظف أو كوده…'} onChange={value => {
             if (dirty || loading) return
-            const value = event.target.value
             if (!value || employees.some(row => String(row.id) === value)) setEmployeeId(value)
-          }}><option value="">{loading ? 'جارٍ تحميل الموظفين…' : 'اختر الموظف'}</option>{choices.map(row => <option key={row.id} value={row.id}>{row.fullName} · {row.employeeCode}</option>)}</select></div>
+          }} /></div>
         </div>
         {error && <div role="alert" className="text-sm text-red-700 space-y-2"><p>{error}</p><button type="button" className="btn-secondary inline-flex items-center gap-2 disabled:opacity-50" disabled={loading || dirty} onClick={() => { if (!dirty && !loading) setReload(value => value + 1) }}><RefreshCw size={16} />إعادة تحميل الموظفين</button></div>}
         {!loading && !error && employees.length === 0 && <p className="text-sm text-gray-500">لا يوجد موظفون نشطون متاحون في نطاق صلاحياتك.</p>}

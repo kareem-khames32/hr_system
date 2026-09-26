@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import { EmployeePicker } from '@/components/EmployeePicker'
 import Link from 'next/link'
 import {
   ArrowRight,
@@ -540,30 +541,22 @@ export default function TeamsPage() {
                 </div>
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label htmlFor="team-leader" className="block text-sm font-medium text-gray-700 mb-2">
                     قائد الفريق *
                   </label>
-                  <select
-                    value={formData.leaderId}
-                    onChange={(e) =>
-                      setFormData({ ...formData, leaderId: e.target.value })
+                  {/* بحث بالاسم أو الكود في موظفي القسم المختار بس */}
+                  <EmployeePicker
+                    id="team-leader"
+                    employees={employees}
+                    filter={(emp) =>
+                      !formData.departmentId ||
+                      emp.departmentId === Number(formData.departmentId)
                     }
-                    className="input w-full"
-                  >
-                    <option value="">اختر قائد الفريق</option>
-                    {employees
-                      .filter(
-                        (emp) =>
-                          !formData.departmentId ||
-                          emp.departmentId === Number(formData.departmentId)
-                      )
-                      .map((emp) => (
-                        <option key={emp.id} value={emp.id}>
-                          {emp.fullName}
-                          {emp.jobTitle ? ` - ${emp.jobTitle}` : ''}
-                        </option>
-                      ))}
-                  </select>
+                    value={formData.leaderId}
+                    onChange={(id) => setFormData({ ...formData, leaderId: id })}
+                    placeholder="اكتب اسم قائد الفريق أو كوده…"
+                    required
+                  />
                   <p className="text-xs text-gray-500 mt-1">
                     المدير المباشر في الاعتمادات بالترتيب: المدير المباشر المسجّل على الموظف ← قائد
                     الفريق ← مدير القسم ← مدير الفرع؛ فالقائد يعتمد لمن ليس له مدير مسجّل فقط — تظهر

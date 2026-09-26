@@ -10,6 +10,7 @@
 import { useMemo, useState } from 'react'
 import { Building2, Globe, Layers, Search, Users, UsersRound } from 'lucide-react'
 import { canSeeBranch, type BranchScope } from '../lib/branch-scope'
+import { employeeSearchMatcher } from '../lib/employee-search'
 
 export type OrgTargetLevel = 'company' | 'branch' | 'departments' | 'teams' | 'employees'
 
@@ -172,11 +173,12 @@ export function OrgTargetPicker({
   )
   const countIn = (departmentId: number) => branchEmployees.filter((e) => e.departmentId === departmentId).length
   const countInTeam = (teamId: number) => branchEmployees.filter((e) => e.teamId === teamId).length
+  // البحث بالاسم أو الكود بنفس مطابقة منتقي الموظف (الإملاء العربي والكود)
+  const matchesQuery = employeeSearchMatcher(query)
   const visibleEmployees = branchEmployees.filter((e) =>
     (departmentFilter === '' || e.departmentId === departmentFilter) &&
     (teamFilter === '' || e.teamId === teamFilter) &&
-    (!query.trim() || e.fullName.includes(query.trim()) ||
-      String(e.employeeCode ?? '').toLowerCase().includes(query.trim().toLowerCase()))
+    matchesQuery(e)
   )
   const count = resolveOrgTarget(value, employees).length
 

@@ -6,6 +6,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
 import { fetchEmployeeDirectory, type ApiBranch, type ApiDepartment, type ApiEmployee, type ApiTeam } from '../../lib/api'
 import { fetchPayrollPolicies } from '../../lib/payroll-policies-api'
+import { employeeSearchMatcher } from '../../lib/employee-search'
 import { dayRangeLabel, payrollMonthBounds } from '../../lib/payroll-month-range'
 import {
   createPayrollRunDraft, emptyRunFilters, linkedFilterOptions, payrollExclusionCandidates, payrollRunErrorCode, payrollRunErrorMessage,
@@ -150,8 +151,10 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
     name: name.trim() || undefined, policyVersionId, period, filters: selectedFilters, exclusions,
     ...(confirmEmpty ? { confirmEmptyScope: true, emptyScopeReason: emptyReason.trim() } : {}),
   } : null
+  // البحث بالاسم أو الرقم الوظيفي بنفس مطابقة منتقي الموظف (الإملاء العربي والكود)
+  const matchesSearch = employeeSearchMatcher(search)
   const listCandidates = employees.filter(emp => (!filters.branchIds.length || filters.branchIds.includes(emp.branchId)) &&
-    (!search.trim() || emp.fullName.includes(search.trim()) || emp.employeeCode.includes(search.trim()))).slice(0, 60)
+    matchesSearch(emp)).slice(0, 60)
   const employeeName = (id: number) => employees.find(emp => emp.id === id)?.fullName ?? directory.find(row => row.id === id)?.fullName
     ?? candidates.find(row => row.employeeId === id)?.label ?? 'موظف غير معروف'
   const employeeCode = (id: number) => employees.find(emp => emp.id === id)?.employeeCode ?? directory.find(row => row.id === id)?.employeeCode ?? null
@@ -169,11 +172,11 @@ export function PayrollRunDefinitionPanel({ branches, departments, teams, employ
     const person = people.find(row => row.id === id)
     return person ? payrollScopeCoversEmployee(departments, selectedFilters, person, includeSubDepartments) : true
   }
-  const exclusionSearchTerm = exclusionSearch.trim()
+  const matchesExclusionSearch = employeeSearchMatcher(exclusionSearch)
   const exclusionMatches = people
     .filter(person => !excludedIds.includes(person.id) && person.id !== exclusionEmployee)
     .filter(person => mode !== 'LIST' || filters.employeeIds.includes(person.id))
-    .filter(person => !exclusionSearchTerm || person.fullName.includes(exclusionSearchTerm) || person.employeeCode.includes(exclusionSearchTerm))
+    .filter(matchesExclusionSearch)
     .map(person => ({ ...person, covered: payrollScopeCoversEmployee(departments, selectedFilters, person, includeSubDepartments) }))
     .sort((a, b) => Number(b.covered) - Number(a.covered))
   const exclusionResults = exclusionMatches.slice(0, 12)

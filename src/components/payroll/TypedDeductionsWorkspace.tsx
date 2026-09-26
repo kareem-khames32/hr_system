@@ -3,6 +3,7 @@
 import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Plus, RefreshCw, Settings2, Users, X } from 'lucide-react'
 import { ApiError, can, fetchDepartments, fetchEmployees, fetchTeams, type ApiDepartment, type ApiEmployee, type ApiTeam } from '@/lib/api'
+import { employeeSearchMatcher, searchEmployees } from '@/lib/employee-search'
 import {
   approveDeduction, cancelDeduction, createDeductionType, decideSuspendedObligation, DEDUCTION_CATEGORY_LABELS, DEDUCTION_METHOD_LABELS, DEDUCTION_METHOD_UNIT,
   DEDUCTION_ROLE_LABELS, DEDUCTION_STATUS_META, deductionInputError, fetchDeduction, fetchDeductionCandidates, fetchDeductionCreatable,
@@ -425,8 +426,8 @@ function DeductionCreator({ creatable, currency, onCreated }: { creatable: Deduc
       : selectionMode === 'BRANCH' ? (branchId ? candidates.filter(row => row.branchId === branchId) : []) : [],
   // eslint-disable-next-line react-hooks/exhaustive-deps
   [selectionMode, teamId, departmentId, branchId, candidates])
-  const searchText = search.trim()
-  const matches = (row: DeductionCandidate) => !searchText || row.fullName.includes(searchText) || row.employeeCode.includes(searchText)
+  // البحث بالاسم أو الرقم الوظيفي بنفس مطابقة منتقي الموظف (الإملاء العربي والكود)
+  const matches: (row: DeductionCandidate) => boolean = employeeSearchMatcher(search)
   const visible = selectionMode === 'EMPLOYEES'
     ? candidates.filter(row => inBranch(row) && (!departmentId || inDepartment(row, departmentId)) && (!teamId || row.teamId === teamId) && matches(row))
     : members.filter(matches)
@@ -682,7 +683,8 @@ function DeductionTypesPanel({ onChanged }: { onChanged: () => void }) {
     return { ...value, basisEscalationDays: next }
   })
   const ownerTeams = org.teams
-  const employeeMatches = employeeSearch.trim() ? org.employees.filter(row => row.fullName.includes(employeeSearch.trim()) || row.employeeCode.includes(employeeSearch.trim())).slice(0, 20) : []
+  // أقرب 20 بالاسم أو الرقم الوظيفي — نفس مطابقة منتقي الموظف
+  const employeeMatches = employeeSearch.trim() ? searchEmployees(org.employees, employeeSearch).slice(0, 20) : []
 
   return (
     <div className="space-y-3">

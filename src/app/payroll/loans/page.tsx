@@ -22,6 +22,7 @@ import { downloadCsv, csvDateStamp } from '@/lib/csv'
 import { useCurrency } from '@/lib/currency'
 import { fetchLoanCapPreview, loanMoneyInputValid, type LoanCapEvaluation } from '@/lib/loans-api'
 import { LoanCapSummary } from '@/components/payroll/LoanCapSummary'
+import { EmployeePicker } from '@/components/EmployeePicker'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { dateInRange, dayRangeKey, localDayOf, validDayRange } from '@/lib/payroll-month-range'
 import { formatDate } from '@/lib/dates'
@@ -601,10 +602,7 @@ export default function LoansPage() {
               {canOnBehalf && (
                 <div>
                   <label className="label" htmlFor="loan-for-employee">الموظف صاحب السلفة *</label>
-                  <select id="loan-for-employee" className="input" value={forEmployeeId} onChange={(e) => setForEmployeeId(e.target.value ? Number(e.target.value) : '')}>
-                    <option value="">— اختر الموظف —</option>
-                    {directory.map((row) => <option key={row.id} value={row.id}>{row.fullName} — {row.employeeCode}</option>)}
-                  </select>
+                  <EmployeePicker id="loan-for-employee" employees={directory} value={forEmployeeId} onChange={(id) => setForEmployeeId(id ? Number(id) : '')} required />
                   <p className="text-xs text-gray-500 mt-1">السلفة تُقيَّد باسمه ويُفحص سقفه هو.</p>
                 </div>
               )}

@@ -15,6 +15,7 @@ import {
   type ApiEmployee,
 } from '../../lib/api'
 import { branchScopeOfUser, canSeeBranch, type BranchScope } from '../../lib/branch-scope'
+import { EmployeePicker } from '../EmployeePicker'
 import {
   branchesWithoutVersionOf,
   branchVersionsOfChain,
@@ -518,25 +519,19 @@ function ChainEditorDialog({
                     {/* اختيار الموظف — لخطوة «موظف بعينه» فقط */}
                     {step.approverRole === 'specific_employee' && (
                       <div>
-                        <label className="text-xs text-gray-500 mb-1 block">
+                        <label htmlFor={`chain-step-employee-${index}`} className="text-xs text-gray-500 mb-1 block">
                           الموظف المعتمد *
                         </label>
-                        <select
+                        {/* بحث بالاسم أو الكود؛ الموظف المحفوظ لو مش في قائمة الحساب (فرع تاني) يفضل ظاهر باسم رقمه */}
+                        <EmployeePicker
+                          id={`chain-step-employee-${index}`}
+                          employees={employees}
                           value={step.specificEmployeeId}
-                          onChange={(e) => updateStep(index, 'specificEmployeeId', e.target.value)}
-                          className="input w-full text-sm"
-                        >
-                          <option value="">— اختر الموظف —</option>
-                          {employees.map((emp) => (
-                            <option key={emp.id} value={emp.id}>
-                              {emp.fullName}
-                            </option>
-                          ))}
-                          {/* الموظف المحفوظ لو مش في قائمة الحساب (فرع تاني) — يفضل ظاهر باسم رقمه */}
-                          {step.specificEmployeeId !== '' && !employees.some((emp) => String(emp.id) === step.specificEmployeeId) && (
-                            <option value={step.specificEmployeeId}>موظف #{step.specificEmployeeId}</option>
-                          )}
-                        </select>
+                          onChange={(id) => updateStep(index, 'specificEmployeeId', id)}
+                          disabled={readOnly || saving}
+                          required
+                          inputClassName="text-sm"
+                        />
                         <p className="text-xs text-gray-400 mt-1">
                           هذا الموظف بعينه هو من يعتمد الخطوة أياً كان مقدم الطلب
                         </p>

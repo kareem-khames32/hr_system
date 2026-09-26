@@ -4,6 +4,7 @@ import { useEffect, useRef, useState } from 'react'
 import { Database, Search } from 'lucide-react'
 import { can, fetchEmployeeDirectory, type ApiEmployeeDirectoryEntry } from '../lib/api'
 import { PayrollSalaryHistoryEditor } from './PayrollSalaryHistoryEditor'
+import { EmployeePicker } from './EmployeePicker'
 import { localDateStr } from '../lib/dates'
 import { payrollPoliciesError, type PayrollCollectionView } from '../lib/payroll-policies-api'
 import { LIVE_SOURCE_LABELS, liveSourceAmount, liveSourceDate, liveSourceDayKind, liveSourceProofLabel, liveSourceMessage, liveSourceMinutes, liveSourcePeriodError, liveSourceRecord, liveSourceRows, liveSourceRowReasons, liveSourceRowStatus, liveSourceStateLabel, readPayrollLiveSources, type PayrollLiveSources, type LiveSourceSection } from '../lib/payroll-live-sources-api'
@@ -72,7 +73,6 @@ export function PayrollLiveSourcesResult({ result }: { result: PayrollLiveSource
 export function PayrollLiveSourcesPanel({ view, canCalculate, policyDirty, onHistoryDirtyChange }: { view: PayrollCollectionView; canCalculate: boolean; policyDirty: boolean; onHistoryDirtyChange?: (dirty: boolean) => void }) {
   const [employees, setEmployees] = useState<ApiEmployeeDirectoryEntry[]>([])
   const [employeeId, setEmployeeId] = useState('')
-  const [search, setSearch] = useState('')
   const [start, setStart] = useState('')
   const [end, setEnd] = useState('')
   const [result, setResult] = useState<PayrollLiveSources | null>(null)
@@ -111,13 +111,12 @@ export function PayrollLiveSourcesPanel({ view, canCalculate, policyDirty, onHis
     } catch (cause) { if (active.current && !controller.signal.aborted) setError(payrollPoliciesError(cause)) }
     finally { if (active.current && !controller.signal.aborted) setLoading(false) }
   }
-  const choices = employees.filter(row => !search.trim() || `${row.fullName} ${row.employeeCode}`.toLowerCase().includes(search.trim().toLowerCase()) || String(row.id) === employeeId)
   return <section className="card space-y-5" aria-label="فحص مصادر حساب الموظف">
     <div className="flex gap-3"><Database className="text-primary-600 shrink-0" size={22} /><div><h2 className="text-lg font-bold text-gray-800">فحص مصادر حساب الموظف</h2><p className="text-sm text-gray-500 mt-1">راجع الأجر والحضور والإضافي والسلف والمستحقات للفترة المختارة قبل ربطها بالمسير.</p></div></div>
     {!canCalculate ? <p className="text-sm text-gray-500">عرض هذه المصادر يتطلب صلاحية احتساب الرواتب.</p> : <>
       <p className="text-xs text-gray-500">قائمة الاختيار تعرض الموظفين النشطين المتاحين لصلاحياتك حاليًا؛ لا تمثل سجل جميع الموظفين التاريخي.</p>
       {directoryError && <p role="alert" className="text-red-700 text-sm">{directoryError} <button type="button" className="underline disabled:opacity-50" disabled={loading} onClick={() => setReload(value => value + 1)}>إعادة تحميل الموظفين</button></p>}
-      <div className="grid sm:grid-cols-2 gap-4"><div className="space-y-2"><label htmlFor="payroll-source-search" className="text-sm font-medium">بحث في الموظفين النشطين</label><input id="payroll-source-search" className="input" placeholder="الاسم أو كود الموظف" value={search} disabled={loading} onChange={event => setSearch(event.target.value)} /><label htmlFor="payroll-source-employee" className="sr-only">الموظف</label><select id="payroll-source-employee" className="input" value={employeeId} disabled={loading || directoryLoading || historyDirty} onChange={event => { setEmployeeId(event.target.value); clear() }}><option value="">{directoryLoading ? 'جارٍ تحميل الموظفين…' : 'اختر الموظف'}</option>{choices.map(row => <option key={row.id} value={row.id}>{row.fullName} · {row.employeeCode}</option>)}</select></div><div className="grid grid-cols-2 gap-3"><div><label htmlFor="payroll-source-start" className="block text-sm font-medium mb-2">بداية الفترة</label><input id="payroll-source-start" type="date" className="input" value={start} disabled={loading} onChange={event => { setStart(event.target.value); clear() }} /></div><div><label htmlFor="payroll-source-end" className="block text-sm font-medium mb-2">نهاية الفترة</label><input id="payroll-source-end" type="date" className="input" value={end} disabled={loading} onChange={event => { setEnd(event.target.value); clear() }} /></div></div></div>
+      <div className="grid sm:grid-cols-2 gap-4"><div className="space-y-2"><label htmlFor="payroll-source-employee" className="text-sm font-medium">الموظف — بحث في الموظفين النشطين بالاسم أو الكود</label><EmployeePicker id="payroll-source-employee" employees={employees} value={employeeId} disabled={loading || directoryLoading || historyDirty} placeholder={directoryLoading ? 'جارٍ تحميل الموظفين…' : 'اكتب اسم الموظف أو كوده…'} onChange={id => { setEmployeeId(id); clear() }} /></div><div className="grid grid-cols-2 gap-3"><div><label htmlFor="payroll-source-start" className="block text-sm font-medium mb-2">بداية الفترة</label><input id="payroll-source-start" type="date" className="input" value={start} disabled={loading} onChange={event => { setStart(event.target.value); clear() }} /></div><div><label htmlFor="payroll-source-end" className="block text-sm font-medium mb-2">نهاية الفترة</label><input id="payroll-source-end" type="date" className="input" value={end} disabled={loading} onChange={event => { setEnd(event.target.value); clear() }} /></div></div></div>
       {policyDirty && <p className="text-sm text-amber-800">احفظ تعديل ترتيب التحصيل أو تجاهله قبل فحص النسخة المحفوظة.</p>}
       {error && <p role="alert" className="text-sm text-red-700">{error}</p>}
       <button type="button" className="btn-primary inline-flex items-center gap-2 disabled:opacity-50" disabled={loading || directoryLoading || policyDirty || historyDirty || !employeeId || !start || !end} onClick={() => void read()}><Search size={17} />{loading ? 'جارٍ قراءة المصادر…' : 'فحص المصادر'}</button>

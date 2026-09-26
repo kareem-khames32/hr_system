@@ -36,6 +36,7 @@ import {
 } from '@/lib/api'
 import { buildCalendarChange, calendarScopeWritable, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
 import { CalendarChangeFields, CalendarContextSummary, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
+import { EmployeePicker } from '@/components/EmployeePicker'
 
 // أيام الأسبوع بالرموز التي يقرأها محرك الحضور (branch.weekendDays / attendance.weekend_days)
 const WEEK_DAYS = [
@@ -704,24 +705,17 @@ export default function BranchesPage() {
                 {/* Manager & Cost Center */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                    <label htmlFor="branch-manager" className="block text-sm font-medium text-gray-700 mb-2">
                       مدير الفرع *
                     </label>
-                    <select
+                    <EmployeePicker
+                      id="branch-manager"
+                      employees={employees}
                       value={formData.managerId}
-                      onChange={(e) =>
-                        setFormData({ ...formData, managerId: e.target.value })
-                      }
-                      className="input w-full"
-                    >
-                      <option value="">— اختر الموظف المسؤول —</option>
-                      {employees.map((emp) => (
-                        <option key={emp.id} value={emp.id}>
-                          {emp.fullName}
-                          {emp.jobTitle ? ` — ${emp.jobTitle}` : ''}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(id) => setFormData({ ...formData, managerId: id })}
+                      placeholder="اكتب اسم الموظف المسؤول أو كوده…"
+                      required
+                    />
                     <p className="text-xs text-gray-400 mt-1">
                       المدير المُسنَد يُستخدم في دورات الاعتماد وصلاحيات الفرع
                     </p>
