@@ -605,11 +605,17 @@ test('PL-03: settings changes revalidate stored formula rounding atomically whil
   const desired = wholeDefinition(); desired.components.find(row => row.code === 'FORMULA_PAY').formula = 'BASE_SALARY / ROUND(0.5, 0)'
   desired.components.find(row => row.code === 'FORMULA_PAY').roundingMode = null
   desired.components.find(row => row.code === 'FORMULA_PAY').roundingScale = null
-  const saved = await populated(desired), sourceId = saved.versionId
+  // ROUND(0.5, 0) = 1 بـHALF_UP (الافتراضي القديم) وصفر بـFLOOR وDOWN؛ افتراضي النسخة الجديدة بقى DOWN (قرار المالك 16 سبتمبر)
+  // فالمقام صفر من البداية — لذلك النسخة تُنشأ بـHALF_UP صراحةً، والتحويل لأي نمط يصفّر المقام يُرفض ذريًا.
+  const initial = await create({ settings: { roundingMode: 'HALF_UP' } })
+  const saved = await saveValid(initial.policy.id, initial.versions[0].id, desired), sourceId = saved.versionId
   const before = await policySnapshot()
-  expectStatus(await request(admin, 'PATCH', `${endpoint}/${saved.policyId}/versions/${sourceId}`, {
-    expectedRevision: 2, reason: 'نمط تقريب يجعل المقام صفراً', settings: { roundingMode: 'FLOOR' } }), 400)
-  assert.deepEqual(await policySnapshot(), before)
+  for (const roundingMode of ['FLOOR', 'DOWN']) {
+    const rejected = expectStatus(await request(admin, 'PATCH', `${endpoint}/${saved.policyId}/versions/${sourceId}`, {
+      expectedRevision: 2, reason: 'نمط تقريب يجعل المقام صفراً', settings: { roundingMode } }), 400)
+    assert.equal(rejected.code, 'CONSTANT_DIVISION_BY_ZERO', JSON.stringify(rejected))
+    assert.deepEqual(await policySnapshot(), before)
+  }
   const children = {}
   for (const table of definitionTables) children[table] = await rawRows(table, sourceId)
   const updated = expectStatus(await request(admin, 'PATCH', `${endpoint}/${saved.policyId}/versions/${sourceId}`, {

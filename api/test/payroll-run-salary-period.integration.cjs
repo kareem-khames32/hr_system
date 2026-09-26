@@ -192,8 +192,10 @@ test('الخطوة 13: إنشاء الموظف يوثّق أجر التعيين 
   const local = new Date(), today = `${local.getFullYear()}-${String(local.getMonth() + 1).padStart(2, '0')}-${String(local.getDate()).padStart(2, '0')}`
   const current = payrollPeriodOfDate(today, 23), currentBounds = payrollPeriodBounds(current, 23)
   const codeOf = n => `RSPNEW${String(n).padStart(2, '0')}`
+  // الصرف «تحويل بنكي» يتطلب اسم البنك والآيبان عند الإضافة (طريقة الصرف — 16 سبتمبر).
   const create = async (n, extra = {}) => request(admin, 'POST', '/employees', { ...(await employeeRequiredFields(ds, branch.id)), employeeCode: codeOf(n), fullName: `موظف جديد ${n}`, branchId: branch.id,
-    joinDate: currentBounds.startDate, basicSalary: 6000, housingAllowance: 1000, currency: 'SAR', status: 'active', payMethod: 'transfer', ...extra })
+    joinDate: currentBounds.startDate, basicSalary: 6000, housingAllowance: 1000, currency: 'SAR', status: 'active', payMethod: 'transfer',
+    bankName: 'بنك الاختبار', iban: 'SA0380000000608010167519', ...extra })
   const history = async emp => expectStatus(await request(admin, 'GET', `/payroll/employees/${emp.id}/salary-history`), 200)
 
   // سياق النموذج: الدورة والشهر الجاري وشهر التعيين والمدى، بصلاحية الإنشاء فقط.

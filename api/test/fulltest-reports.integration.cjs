@@ -33,8 +33,17 @@ const ABSENT_DAY = '2026-10-08'        // يوم بلا صف حضور أصلًا
 const ABSENT_ROW_DAY = '2026-10-14'    // يوم بصف حضور حالته «غياب»
 const UNPAID_DAY = '2026-10-13'
 const LWD = '2026-10-12'           // آخر يوم عمل لموظف التصفية
-// فترة الإيقاف تبدأ قبل «النهارده» وتغطي دورة شهر التقرير كاملة، فشاشة الموظفين تعرض الحالة «موقوف»
-const SUSPENSION_FROM = new Date(Date.now() - 2 * 86400000).toISOString().slice(0, 10)
+// الإيقاف يغطي دورة شهر التقرير كاملة (فتقرير «بلا مسير» يعرضه «موقوف») ويغطي «النهارده» ±يومين لفرق التوقيت
+// (فشاشة الموظفين والتعداد يعرضوه «موقوف») أيًّا كان يوم التشغيل: الفترتان المتداخلتان أو المتلاصقتان إيقاف واحد،
+// والمتباعدتان إيقافان منفصلان (الإيقاف الواحد بحد أقصى 366 يوم).
+const shiftDate = (date, days) => new Date(Date.parse(`${date}T12:00:00Z`) + days * 86400000).toISOString().slice(0, 10)
+const TODAY = new Date().toISOString().slice(0, 10)
+const SUSPENSIONS = (() => {
+  const [first, second] = [{ fromDate: CYCLE_FROM, toDate: CYCLE_TO }, { fromDate: shiftDate(TODAY, -2), toDate: shiftDate(TODAY, 2) }]
+    .sort((a, b) => a.fromDate.localeCompare(b.fromDate))
+  if (shiftDate(first.toDate, 1) < second.fromDate) return [first, second]
+  return [{ fromDate: first.fromDate, toDate: first.toDate > second.toDate ? first.toDate : second.toDate }]
+})()
 const YEAR = '2026'
 
 // أساس الأرقام: أساسي 6000 + سكن 1200 + انتقال 600 = 7800 ⇒ يوم 260، ساعة 32.50، دقيقة 32.5/60
@@ -336,10 +345,12 @@ test('F1 — أحداث الشهر: إجازة بلا أجر، إضافي، دو
     expect('المكافأة معتمدة', () => assert.equal(state.status, 'APPROVED'))
   }
 
-  // (د) إيقاف عن العمل يغطي «النهارده» ودورة شهر التقرير كاملة ⇒ شاشة الموظفين تعرضه «موقوف»
-  const suspension = await request(hrUser, 'POST', `/employees/${eSuspended.id}/suspensions`,
-    { fromDate: SUSPENSION_FROM, toDate: CYCLE_TO, reason: 'تحقيق إداري — اختبار التقارير' })
-  expect('تسجيل الإيقاف مقبول', () => assert.equal(suspension.status, 201, JSON.stringify(suspension.body)))
+  // (د) إيقاف عن العمل يغطي «النهارده» ودورة شهر التقرير كاملة ⇒ شاشة الموظفين تعرضه «موقوف» (فتراته في SUSPENSIONS)
+  for (const { fromDate, toDate } of SUSPENSIONS) {
+    const suspension = await request(hrUser, 'POST', `/employees/${eSuspended.id}/suspensions`,
+      { fromDate, toDate, reason: 'تحقيق إداري — اختبار التقارير' })
+    expect(`تسجيل الإيقاف ${fromDate} → ${toDate} مقبول`, () => assert.equal(suspension.status, 201, JSON.stringify(suspension.body)))
+  }
 
   // (هـ) سلفة 1500 على ٣ أقساط: واحد مسدّد قبل الشهرين، واحد مستحق داخل شهر التقرير، وواحد بعده
   loanMain = await repo('Loan').save({ employeeId: eTransfer.id, amount: 1500, status: 'DISBURSED', disbursedAt: '2026-07-25' })
@@ -493,6 +504,8 @@ test('RS1 — التعداد: بالفرع والقسم والحالة يطاب�
   // والتعداد بيجمع على عمود employees.status المحفوظ — فلازم الرقمان يتفقوا.
   const list = await ok(hrUser, '/employees', { search: eSuspended.code })
   const listed = (list.items ?? list).find(row => Number(row.id) === eSuspended.id)
+  // الإيقاف يغطي «النهارده» أيًّا كان يوم التشغيل (SUSPENSIONS) ⇒ المقارنة التالية على «موقوف» فعلًا، مش «نشط» في الناحيتين
+  expect('الموقوف يظهر «موقوف» على شاشة الموظفين', () => assert.equal(listed?.status, 'suspended', `شاشة الموظفين=${listed?.status}`))
   expect('حالة الموقوف في التعداد = حالته على شاشة الموظفين', () => assert.equal(
     (byStatus.get('suspended') ?? 0) >= 1, listed?.status === 'suspended',
     `شاشة الموظفين=${listed?.status} وتعداد «موقوف» في التقرير=${byStatus.get('suspended') ?? 0}`))

@@ -18,9 +18,10 @@ const endpoint = '/payroll/policies'
 const settingFields = ['defaultPeriodType', 'cycleStartDay', 'cycleEndMode', 'cycleEndDay', 'baseDaysBasis',
   'monthlyDays', 'dailyHours', 'rateBase', 'roundingMode', 'roundingScale', 'divisionByZeroMode',
   'maxDeductionPctOfGross', 'minNetGuarantee', 'netFloorPct', 'carryOverExcess', 'skipAttendance', 'lateDeductionEnabled', 'currency']
+// قرار المالك (16 سبتمبر): افتراضي التقريب DOWN (قص الفلوس على منزلتين)؛ القيمة المحفوظة قبل التشغيل (HALF_EVEN) تبقى كما هي.
 const seededPolicyConfig = {
   default_period_type: 'CUSTOM_DAY_RANGE', cycle_end_mode: 'DERIVED', cycle_end_day: 'null', base_days_basis: 'FIXED_30',
-  rate_base: 'GROSS', rounding_mode: 'HALF_UP', rounding_scale: '2', division_by_zero_mode: 'ZERO_WITH_WARNING',
+  rate_base: 'GROSS', rounding_mode: 'DOWN', rounding_scale: '2', division_by_zero_mode: 'ZERO_WITH_WARNING',
   max_deduction_pct_of_gross: 'null', min_net_guarantee: 'null', net_floor_pct: 'null', carry_over_excess: 'false', skip_attendance: 'false',
 }
 let app, ds, master, base, created = false, sequence = 0, canary
@@ -253,7 +254,7 @@ test('PL-01 settings: config PATCH accepts every new enum, precise numeric limit
     const valid = {
       default_period_type: ['CALENDAR_MONTH', 'CUSTOM_DAY_RANGE', 'SEMI_MONTHLY'], cycle_end_mode: ['DERIVED', 'FIXED_DAY'],
       cycle_end_day: ['1', '31', 'null'], base_days_basis: ['FIXED_30'], rate_base: ['GROSS', 'BASIC'],
-      rounding_mode: ['HALF_UP', 'HALF_EVEN', 'FLOOR', 'CEIL'], rounding_scale: ['0', '6'],
+      rounding_mode: ['HALF_UP', 'HALF_EVEN', 'FLOOR', 'CEIL', 'DOWN'], rounding_scale: ['0', '6'],
       division_by_zero_mode: ['ZERO_WITH_WARNING', 'FAIL_ROW'], max_deduction_pct_of_gross: ['0', '100', '37.1234', 'null'],
       min_net_guarantee: ['0', '1234.56', 'null'], net_floor_pct: ['0', '100', '12.3456', 'null'],
       carry_over_excess: ['true', 'false'], skip_attendance: ['true', 'false'],
@@ -274,7 +275,7 @@ test('PL-01 settings: config PATCH rejects invalid enums, fractions, precision l
   const invalid = {
     default_period_type: ['monthly', 'custom_day_range', 'null'], cycle_end_mode: ['AUTO', 'null'],
     cycle_end_day: ['0', '32', '1.5', ''], base_days_basis: ['ACTUAL_PERIOD_DAYS', 'WORKING_DAYS', 'null'],
-    rate_base: ['FORMULA', 'NET', 'null'], rounding_mode: ['DOWN', 'half_up', 'null'], rounding_scale: ['-1', '7', '2.5', 'null'],
+    rate_base: ['FORMULA', 'NET', 'null'], rounding_mode: ['TRUNCATE', 'half_up', 'down', 'null'], rounding_scale: ['-1', '7', '2.5', 'null'],
     division_by_zero_mode: ['IGNORE', 'null'], max_deduction_pct_of_gross: ['-0.0001', '100.0001', '12.34567'],
     min_net_guarantee: ['-0.01', '123.456', '9007199254740991', '90071992547409.92'],
     net_floor_pct: ['-1', '101', '12.34567'], carry_over_excess: ['True', '1', '0', 'null'],
@@ -384,7 +385,7 @@ test('PL-01 settings: invalid numbers, forbidden formulas, null cores and forged
   const snapshot = await policySnapshot()
   const invalid = [null, { monthlyDays: 29 }, { monthlyDays: 31 }, { monthlyDays: null }, { dailyHours: null },
     { dailyHours: 0 }, { dailyHours: 24.01 }, { dailyHours: 0.001 }, { cycleStartDay: 1.5 }, { cycleStartDay: 32 },
-    { cycleEndDay: 0 }, { roundingScale: 1.5 }, { roundingScale: 7 }, { roundingMode: 'DOWN' },
+    { cycleEndDay: 0 }, { roundingScale: 1.5 }, { roundingScale: 7 }, { roundingMode: 'TRUNCATE' }, { roundingMode: 'down' },
     { maxDeductionPctOfGross: 0.00001 }, { maxDeductionPctOfGross: 100.0001 }, { netFloorPct: -0.0001 },
     { netFloorPct: 0.00001 }, { minNetGuarantee: 0.001 }, { minNetGuarantee: 9007199254740991 },
     { minNetGuarantee: 90071992547409.92 }, { rateBase: 'FORMULA' }, { rateBaseFormula: 'basic_salary*2' },

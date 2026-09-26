@@ -220,7 +220,9 @@ test('SPEC⑥: all six independent components appear once in the full salary, SQ
 test('SPEC⑥ F1: HTTP employee creation accepts phone and work nature without manufacturing otherAllowance', async () => {
   // الخطوة 13: الإنشاء يوثّق أجر التعيين «يسري من راتب شهر»؛ تاريخ التعيين قديم (2020) فالافتراض الشهر الجاري،
   // ومسير هذا الاختبار لشهر سابق فيُختار شهره صراحةً (من له سجل شهري لا يرجع لراتب الملف).
-  const input = { ...(await employeeRequiredFields(ds, branch.id)), ...employeeData(), salaryEffectivePayrollPeriod: period }
+  // الصرف «تحويل بنكي» يتطلب اسم البنك والآيبان عند الإضافة (طريقة الصرف — 16 سبتمبر).
+  const input = { ...(await employeeRequiredFields(ds, branch.id)), ...employeeData(), salaryEffectivePayrollPeriod: period,
+    bankName: 'بنك الاختبار', iban: 'SA0380000000608010167519' }
   delete input.otherAllowance
   const createdEmployee = await request(admin, 'POST', '/employees', input)
   assert.equal(createdEmployee.status, 201, JSON.stringify(createdEmployee.body))
@@ -400,23 +402,34 @@ test('SPEC⑥: HTTP settlement preview and saved EOS agree with the payroll gros
   const emp = await employee({ joinDate: '2024-07-23', annualLeaveEntitled: false })
   await attendance(emp)
   const run = await calculate([emp]), item = itemFor(run, emp)
+  // قرار المالك (20 سبتمبر): راتب آخر شهر مصدره الوحيد بند المسير، فالتصفية فيها بندان آليان بالظبط:
+  // المكافأة من إجمالي المكونات الستة، وراتب شهر آخر يوم عمل بنفس صافي بند المسير (بلا إعادة حساب).
+  const eosLines = rows => rows.filter(row => String(row.label).startsWith('مكافأة نهاية الخدمة'))
+  const salaryLabel = `راتب آخر شهر ${run.period} (مسير #${run.id}) — مصروف مع التصفية`
+  const salaryLines = rows => rows.filter(row => row.label === salaryLabel)
   const linesBeforePreview = await repo('SettlementLine').count()
   const preview = await request(admin, 'GET', `/offboarding/preview?employeeId=${emp.id}&reason=termination&lastWorkingDay=${endDate}`)
   assert.equal(preview.status, 200, JSON.stringify(preview.body))
   assert.equal(preview.body.serviceYears, 2)
   assert.equal(preview.body.eos.fullMonths, 1)
   assert.equal(preview.body.eos.factor, 1)
-  assert.equal(preview.body.lines.length, 1, JSON.stringify(preview.body.lines))
-  assert.equal(number(preview.body.lines[0].amount), 8600)
-  assert.equal(number(preview.body.lines[0].amount), breakdown(item).gross)
+  assert.equal(preview.body.lines.length, 2, JSON.stringify(preview.body.lines))
+  const [previewEos] = eosLines(preview.body.lines), [previewSalary] = salaryLines(preview.body.lines)
+  assert.ok(previewEos && previewSalary, JSON.stringify(preview.body.lines))
+  assert.equal(number(previewEos.amount), 8600)
+  assert.equal(number(previewEos.amount), breakdown(item).gross)
+  assert.equal(previewSalary.type, 'CREDIT'); assert.equal(number(previewSalary.amount), number(item.netPay))
   assert.equal(await repo('SettlementLine').count(), linesBeforePreview, 'HTTP preview must not create settlement lines')
   const kase = await repo('OffboardingCase').save({ employeeId: emp.id, lastWorkingDay: endDate, status: 'IN_SETTLEMENT', terminationReason: 'termination' })
   const recalc = await request(admin, 'POST', `/offboarding/${kase.id}/recalc-lines`)
   assert.equal(recalc.status, 201, JSON.stringify(recalc.body))
   const lines = await repo('SettlementLine').findBy({ caseId: kase.id })
-  assert.equal(lines.length, 1, JSON.stringify(lines)); assert.equal(number(lines[0].amount), 8600)
-  assert.equal(lines[0].type, 'CREDIT'); assert.equal(lines[0].isAuto, true)
-  t.diagnostic('Manual EOS agreement: 2024-07-23 → 2026-07-22 = 2 years; 2 × 0.5 × full gross 8600 = 8600.')
+  assert.equal(lines.length, 2, JSON.stringify(lines))
+  const [savedEos] = eosLines(lines), [savedSalary] = salaryLines(lines)
+  assert.ok(savedEos && savedSalary, JSON.stringify(lines))
+  assert.equal(number(savedEos.amount), 8600); assert.equal(savedEos.type, 'CREDIT'); assert.equal(savedEos.isAuto, true)
+  assert.equal(number(savedSalary.amount), number(item.netPay)); assert.equal(savedSalary.type, 'CREDIT'); assert.equal(savedSalary.isAuto, true)
+  t.diagnostic('Manual EOS agreement: 2024-07-23 → 2026-07-22 = 2 years; 2 × 0.5 × full gross 8600 = 8600; the last-month salary line = run item net 8600.')
 })
 
 test('SPEC⑥: invalid negative PHONE or WORK_NATURE is rejected over HTTP without changing stored compensation or payroll', async () => {

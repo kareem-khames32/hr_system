@@ -468,9 +468,10 @@ test('العكس مع الخصم المصنف والمكافأة الفردية 
   const e5 = await employee(9000, branch, null, { managerEmployeeId: lead.id })
   const manager = await make('typed-manager', 'employee', [], { employeeId: lead.id })
   const incidentDate = new Date(Date.now() - 3 * 86400000).toLocaleDateString('en-CA')
-  const deductionType = expectStatus(await request(desk, 'POST', '/deductions/types', { code: 'C8_FIXED', nameAr: 'خصم إداري لاختبار التصحيح', category: 'ADMINISTRATIVE',
+  // أنواع الخصم والمكافأة لكل الشركة (عزل الفروع — 16 سبتمبر): يُعرّفها حساب على مستوى الشركة، وحساب الفرع يستخدمها بس
+  const deductionType = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'C8_FIXED', nameAr: 'خصم إداري لاختبار التصحيح', category: 'ADMINISTRATIVE',
     calcMethod: 'FIXED_AMOUNT', creatorScopes: ['DIRECT_MANAGER', 'HR'], approvalSteps: ['HR'], escalationDays: null }), 201)
-  const bonusType = expectStatus(await request(desk, 'POST', '/bonuses/types', { code: 'C8_SPOT', nameAr: 'مكافأة فورية لاختبار التصحيح', calcMethod: 'FIXED_AMOUNT' }), 201)
+  const bonusType = expectStatus(await request(users.admin, 'POST', '/bonuses/types', { code: 'C8_SPOT', nameAr: 'مكافأة فورية لاختبار التصحيح', calcMethod: 'FIXED_AMOUNT' }), 201)
   // المدير المباشر ينشئ والموارد البشرية تعتمد (المكافأة الفردية تحتاج اعتمادًا)
   const approvedDeduction = async (inputValue, targetPeriod) => {
     const row = expectStatus(await request(manager, 'POST', '/deductions', { deductionTypeId: deductionType.id, inputValue, incidentDate, targetPeriod, employeeId: e5.id,
