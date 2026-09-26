@@ -130,17 +130,23 @@ test('BC-04: حساب فرع النصر يعمل نسخة لفرعه بس — م
 })
 
 test('BC-05: الشاشة: «نسخة خاصة بفرع» شغالة بنفس الكود مقفول، والفروع اللي مالهاش نسخة بس', () => {
-  const page = fs.readFileSync(path.join(apiRoot, '..', 'src/app/settings/approvals/page.tsx'), 'utf8').replace(/\r\n/g, '\n')
+  const read = file => fs.readFileSync(path.join(apiRoot, '..', file), 'utf8').replace(/\r\n/g, '\n')
+  const page = read('src/app/settings/approvals/page.tsx')
+  // المحرر نفسه بقى مكوّن مشترك مع «بانِي الطلبات» (طلب المالك 26 سبتمبر) — نفس الكود اتنقل للمكوّن
+  const editor = read('src/components/approvals/ChainEditorModal.tsx')
+  assert.ok(page.includes("import { ChainEditorModal, type ChainEditorTarget } from '@/components/approvals/ChainEditorModal'"))
+  assert.ok(page.includes('<ChainEditorModal'))
   assert.ok(!page.includes('title="النسخ في مرحلة لاحقة"'), 'زرار النسخ المقفول راح')
   assert.ok(page.includes('onClick={() => handleOpenBranchCopy(chain)}'))
-  assert.ok(page.includes('disabled={!!editingChain || !!copyOf}'), 'الكود مقفول على كود العامة')
-  assert.ok(page.includes('{(copyOf ? branchesWithoutVersion(copyOf) : branches).map((b) => ('), 'الفروع اللي مالهاش نسخة بس')
-  assert.ok(page.includes('{!copyOf && <option value="all">كل الفروع (دورة عامة)</option>}'))
+  assert.ok(editor.includes('disabled={!!editingChain || !!copyOf}'), 'الكود مقفول على كود العامة')
+  assert.ok(editor.includes('{(copyOf ? branchesWithoutVersion(copyOf) : branches).map((b) => ('), 'الفروع اللي مالهاش نسخة بس')
+  // السلسلة العامة الجديدة لحساب الشركة بس (حساب الفرع كان بيختارها والخادم بيرفض)
+  assert.ok(editor.includes('{!copyOf && scope === null && <option value="all">كل الفروع (دورة عامة)</option>}'))
   // جوّه تعديل السلسلة الأساسية نفسها: جدول «سلسلة مختلفة لكل فرع» — المكان اللي المالك دخله ومالقاش فيه الفروع
-  assert.ok(page.includes('<p className="text-sm font-medium text-gray-800">سلسلة مختلفة لكل فرع</p>'))
-  assert.ok(page.includes('onClick={() => leaveGeneralFor(() => handleOpenBranchCopy(editingChain, b.id))}>'), 'اعمل سلسلة خاصة للفرع')
-  assert.ok(page.includes('onClick={() => leaveGeneralFor(() => handleOpenModal(version))}>'), 'تعديل سلسلة الفرع')
-  assert.ok(page.includes('const rows = locked ? branches.filter((b) => b.id === locked) : branches'), 'حساب الفرع يشوف فرعه بس')
+  assert.ok(editor.includes('<p className="text-sm font-medium text-gray-800">سلسلة مختلفة لكل فرع</p>'))
+  assert.ok(editor.includes('onClick={() => leaveGeneralFor(() => handleOpenBranchCopy(editingChain, b.id))}>'), 'اعمل سلسلة خاصة للفرع')
+  assert.ok(editor.includes('onClick={() => leaveGeneralFor(() => handleOpenModal(version))}>'), 'تعديل سلسلة الفرع')
+  assert.ok(editor.includes('const rows = allBranches.filter((b) => canSeeBranch(scope, b.id))'), 'حساب الفرع يشوف فروعه بس')
   // تعديلات مش محفوظة على العامة ماتضيعش لما ينقل لسلسلة فرع
-  assert.ok(page.includes('if (editingChain && JSON.stringify(formData) !== openedForm) {'))
+  assert.ok(editor.includes('if (editingChain && JSON.stringify(formData) !== openedForm) {'))
 })

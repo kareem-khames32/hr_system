@@ -16,13 +16,17 @@ import {
   GitBranch,
   Shield,
   Lock,
-  Wallet,
   FileOutput,
   ClipboardList,
   Trash2,
   Users,
   Paperclip,
   X,
+  Layers,
+  ToggleLeft,
+  ToggleRight,
+  History,
+  AlertCircle,
 } from 'lucide-react'
 import {
   ApiDepartment,
@@ -30,6 +34,7 @@ import {
   ApiRequestType,
   ApiTeam,
   CustomFieldDef,
+  can,
   createRequestType,
   fetchAdminRequestTypes,
   fetchApprovalChains,
@@ -37,23 +42,34 @@ import {
   fetchDestinationHandlers,
   fetchEmployees,
   fetchTeams,
+  getCurrentUser,
   updateRequestType,
   updateRequestTypeFull,
 } from '@/lib/api'
 import { categoryLabels } from '@/data/requestsCatalog'
 import { DefinitionBranchBadge, DefinitionBranchField, useDefinitionBranches } from '@/components/DefinitionBranchField'
 import { payloadFieldLabel } from '@/lib/request-payload'
+import { ChainEditorModal, type ChainEditorTarget } from '@/components/approvals/ChainEditorModal'
+import { branchVersionsOfChain, chainStepsText, type ApiChain } from '@/components/approvals/chainEditorModel'
+import { branchScopeOfUser } from '@/lib/branch-scope'
+import {
+  categoryChainLabelsOf,
+  chainUnset,
+  consolidationDefault,
+  consolidationStateOf,
+  customizeTypeChain,
+  fetchRequestCategoryMap,
+  followCategoryChain,
+  setCategoryChain,
+  usageText,
+  type ApiRequestCategoryMap,
+  type ApiTypeChainInfo,
+  type ConsolidationState,
+} from '@/lib/request-category-chains'
 
 const FIXED_HANDLER_LABELS: Record<string, string> = {
   custody_assignments: 'العهد (طلب ونقل وإرجاع)',
   leave_calendar_balance: 'إجازة من الرصيد حسب نوعها',
-}
-
-interface ApprovalChain {
-  id: number
-  code: string
-  nameAr: string
-  isActive: boolean
 }
 
 const phaseLabels: Record<string, string> = {
@@ -216,9 +232,34 @@ const audienceOfForm = (form: BuilderForm, ids: Array<number | string>): StoredA
         },
       }
 
+// فلتر الحالة: «غير مستخدمة» = ولا طلب اتقدّم عليها (للتنضيف — مفيش حاجة بتتعطل لوحدها)
+type StatusFilter = 'all' | 'active' | 'inactive' | 'unused' | 'unused_active'
+
+// «خلّي طلبات الفئة دي كلها على سلسلة واحدة» / «غيّر سلسلة الفئة» — نافذة واحدة
+type CategoryDialog = {
+  category: string
+  // existing = سلسلة موجودة (أو «نفس سلسلة» فئة تانية) · copy = سلسلة جديدة بنسخ خطوات سلسلة · clear = من غير سلسلة للفئة
+  mode: 'existing' | 'copy' | 'clear'
+  chainId: string
+  sourceChainId: string
+  nameAr: string
+  // أنواع (مش ماشية على سلسلة الفئة) هتتنقل للسلسلة
+  selected: number[]
+}
+
+const consolidationStateText: Record<ConsolidationState, string> = {
+  already: 'ماشي على السلسلة دي أصلًا',
+  follower: 'ماشي على سلسلة الفئة الحالية — هيتنقل معاها',
+  fixed: '',
+  unset: 'سلسلته لسه ما اتضبطتش',
+  same: 'نفس الخطوات بالظبط',
+  branches: 'نفس الخطوات، بس نسخ الفروع مختلفة — هيفضل على سلسلته إلا لو علّمت عليه',
+  different: 'سلسلة مختلفة — هيفضل عليها إلا لو علّمت عليه',
+}
+
 export default function RequestTypesPage() {
   const [requestTypes, setRequestTypes] = useState<ApiRequestType[]>([])
-  const [chains, setChains] = useState<ApprovalChain[]>([])
+  const [chains, setChains] = useState<ApiChain[]>([])
   const [handlers, setHandlers] = useState<Array<{ key: string; labelAr: string }>>([])
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [teams, setTeams] = useState<ApiTeam[]>([])
@@ -228,6 +269,7 @@ export default function RequestTypesPage() {
   const [notice, setNotice] = useState<string | null>(null)
   const [searchQuery, setSearchQuery] = useState('')
   const [categoryFilter, setCategoryFilter] = useState('all')
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>('all')
   const [showModal, setShowModal] = useState(false)
   const [modalError, setModalError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -236,8 +278,17 @@ export default function RequestTypesPage() {
   const [updatingId, setUpdatingId] = useState<number | null>(null)
   const [empFilter, setEmpFilter] = useState('')
   const [form, setForm] = useState<BuilderForm>(emptyForm())
-  // سلاسل الاعتماد تحتاج approval_chains.manage — بدونها يُخفى اختيار السلسلة فقط
+  // سلاسل الاعتماد تحتاج approval_chains.manage — بدونها يُخفى اختيار السلسلة وتعديلها فقط
   const [chainsAvailable, setChainsAvailable] = useState(true)
+  // سلسلة كل فئة + وضع كل نوع + استخدامه (طلب المالك 26 سبتمبر) — فشلها لا يُسقط الشاشة
+  const [categoryMap, setCategoryMap] = useState<ApiRequestCategoryMap | null>(null)
+  // محرر السلسلة جوّه الشاشة نفسها (نفس محرر «الاعتمادات والموافقات»)
+  const [editorTarget, setEditorTarget] = useState<ChainEditorTarget | null>(null)
+  const [categoryDialog, setCategoryDialog] = useState<CategoryDialog | null>(null)
+  const [dialogError, setDialogError] = useState<string | null>(null)
+  const [dialogSaving, setDialogSaving] = useState(false)
+  // الربط والتخصيص محتاجين الصلاحيتين؛ ربط الفئة إعداد لكل الشركة (الخادم هو اللي بيفرض)
+  const [access, setAccess] = useState({ chainActions: false, companyWide: false })
   // قوائم الجمهور (الأقسام/الموظفون) بصلاحياتها — فشلها لا يُسقط الشاشة
   const [audienceNote, setAudienceNote] = useState<string | null>(null)
   // فرع كل نوع (قرار المالك 16 سبتمبر): حساب الفرع يعدّل أنواع فرعه بس
@@ -248,20 +299,25 @@ export default function RequestTypesPage() {
   const typeAudienceText = (rt: ApiRequestType) =>
     audienceText(parseJson<StoredAudience | null>(rt.visibleTo, null), rt.branchId != null ? branchInfo.label(rt.branchId) : null, audienceLookup)
 
-  const reloadTypes = async () => {
-    setRequestTypes(await fetchAdminRequestTypes())
+  // بعد أي تغيير في السلاسل: الأنواع + السلاسل + خريطة الفئات مع بعض
+  const reloadAll = async () => {
+    const [types, ch, map] = await Promise.allSettled([fetchAdminRequestTypes(), fetchApprovalChains(), fetchRequestCategoryMap()])
+    if (types.status === 'fulfilled') setRequestTypes(types.value)
+    if (ch.status === 'fulfilled') setChains(ch.value as ApiChain[])
+    if (map.status === 'fulfilled') setCategoryMap(map.value)
   }
 
   useEffect(() => {
     const loadData = async () => {
       // الأنواع والوجهات أساس الشاشة (request_types.manage)؛ الباقي اختياري
-      const [types, hs, ch, deps, emps, tms] = await Promise.allSettled([
+      const [types, hs, ch, deps, emps, tms, map] = await Promise.allSettled([
         fetchAdminRequestTypes(),
         fetchDestinationHandlers(),
         fetchApprovalChains(),
         fetchDepartments(),
         fetchEmployees(),
         fetchTeams(),
+        fetchRequestCategoryMap(),
       ])
       if (tms.status === 'fulfilled') setTeams(tms.value)
       if (types.status === 'fulfilled') setRequestTypes(types.value)
@@ -276,8 +332,9 @@ export default function RequestTypesPage() {
             : 'تعذّر تحميل أنواع الطلبات'
           : null
       )
-      if (ch.status === 'fulfilled') setChains(ch.value)
+      if (ch.status === 'fulfilled') setChains(ch.value as ApiChain[])
       else setChainsAvailable(false)
+      if (map.status === 'fulfilled') setCategoryMap(map.value)
       if (deps.status === 'fulfilled') setDepartments(deps.value)
       if (emps.status === 'fulfilled') setEmployees(emps.value)
       const missing = [
@@ -289,27 +346,65 @@ export default function RequestTypesPage() {
           ? `تعذّر تحميل قائمة ${missing.join(' و')} (صلاحية غير كافية أو خطأ في الخادم) — اختيار الجمهور بها غير متاح`
           : null
       )
+      setAccess({
+        chainActions: ch.status === 'fulfilled' && can('approval_chains.manage') && can('request_types.manage'),
+        companyWide: branchScopeOfUser(getCurrentUser()) === null,
+      })
       setLoading(false)
     }
     loadData()
   }, [])
 
+  // ===== سلاسل الاعتماد جوّه الطلبات =====
+  const typeInfoOf = (rt: ApiRequestType): ApiTypeChainInfo | undefined =>
+    categoryMap?.types.find((t) => t.id === rt.id)
+  const categoryEntryOf = (category: string) => categoryMap?.categories.find((c) => c.category === category)
+  const chainById = (id?: number | null): ApiChain | null => (id ? chains.find((c) => c.id === id) ?? null : null)
+  const chainSummaryById = (id?: number | null) => (id ? categoryMap?.chains.find((c) => c.id === id) ?? null : null)
+  const chainNameOf = (chainId?: number | null) =>
+    !chainId ? 'من غير سلسلة' : chainById(chainId)?.nameAr ?? chainSummaryById(chainId)?.nameAr ?? `سلسلة رقم ${chainId}`
+  const chainStepsOf = (chainId?: number | null): string => {
+    const chain = chainById(chainId)
+    if (chain) return chainStepsText(chain.steps, chain.autoApprove)
+    const summary = chainSummaryById(chainId)
+    return summary ? chainStepsText(summary.stepRoles.map((approverRole) => ({ approverRole })), summary.autoApprove) : ''
+  }
+  const branchVersionCountOf = (chainId?: number | null): number => {
+    const chain = chainById(chainId)
+    return chain ? branchVersionsOfChain(chain, chains).length : chainSummaryById(chainId)?.branchVersions.length ?? 0
+  }
+  const categoryChainIdOf = (category: string) => categoryEntryOf(category)?.chainId ?? null
+  const categoriesOfChain = (chain: ApiChain) => categoryChainLabelsOf(categoryMap, chain.id)
+  const chainTypeNameOf = (chain: ApiChain) =>
+    chain.requestTypeName ?? (chain.requestTypeCode ? requestTypes.find((t) => t.code === chain.requestTypeCode)?.nameAr ?? null : null)
+
   const usedCategories = [...new Set(requestTypes.map((rt) => rt.category))]
+  const usageOf = (rt: ApiRequestType) => typeInfoOf(rt)?.usageCount
 
   const filtered = requestTypes.filter((rt) => {
     const matchesSearch =
       rt.nameAr.includes(searchQuery) ||
       rt.code.toLowerCase().includes(searchQuery.toLowerCase())
     const matchesCategory = categoryFilter === 'all' || rt.category === categoryFilter
-    return matchesSearch && matchesCategory
+    const used = usageOf(rt)
+    const matchesStatus =
+      statusFilter === 'all' ||
+      (statusFilter === 'active' && rt.isActive) ||
+      (statusFilter === 'inactive' && !rt.isActive) ||
+      (statusFilter === 'unused' && used === 0) ||
+      (statusFilter === 'unused_active' && rt.isActive && used === 0)
+    return matchesSearch && matchesCategory && matchesStatus
   })
 
-  const activeCount = requestTypes.filter((rt) => rt.isActive).length
-  const balanceCount = requestTypes.filter((rt) => rt.affectsBalance).length
-  const pdfCount = requestTypes.filter((rt) => rt.autoGeneratesPdf).length
+  // الأنواع متجمّعة بفئاتها بترتيب الكتالوج
+  const categoryOrder = [...Object.keys(categoryLabels), ...usedCategories.filter((c) => !(c in categoryLabels))]
+  const groups = categoryOrder
+    .map((category) => ({ category, types: filtered.filter((rt) => rt.category === category) }))
+    .filter((group) => group.types.length > 0)
 
-  const chainNameOf = (chainId?: number) =>
-    chains.find((c) => c.id === chainId)?.nameAr ?? 'غير مربوط'
+  const activeCount = requestTypes.filter((rt) => rt.isActive).length
+  const followingCount = categoryMap?.types.filter((t) => t.mode === 'category').length ?? 0
+  const unusedActiveCount = requestTypes.filter((rt) => rt.isActive && usageOf(rt) === 0).length
 
   // وجهات بتتنفذ من شاشتها الخاصة ومش في قايمة الاختيار — اسمها بالعربي بدل الكود
   const handlerLabelOf = (key: string) =>
@@ -321,6 +416,7 @@ export default function RequestTypesPage() {
     try {
       const updated = await updateRequestType(rt.id, { isActive: !rt.isActive })
       setRequestTypes(requestTypes.map((t) => (t.id === rt.id ? updated : t)))
+      setNotice(updated.isActive ? `تم تفعيل «${rt.nameAr}»` : `تم تعطيل «${rt.nameAr}» — مابقاش يظهر في التقديم، والطلبات القديمة زي ما هي`)
       setError(null)
     } catch (err: any) {
       setError(err.message)
@@ -329,16 +425,111 @@ export default function RequestTypesPage() {
     }
   }
 
-  const assignChain = async (rt: ApiRequestType, chainId: number) => {
+  // «خصّص سلسلة للطلب ده»: سلسلة باسمه بنفس الخطوات (ونسخ الفروع) — والمحرر يفتح عليها على طول
+  const customizeChain = async (rt: ApiRequestType) => {
     setUpdatingId(rt.id)
     try {
-      const updated = await updateRequestType(rt.id, { approvalChainId: chainId })
-      setRequestTypes(requestTypes.map((t) => (t.id === rt.id ? updated : t)))
+      const result = await customizeTypeChain(rt.id)
+      await reloadAll()
+      setNotice(
+        `«${rt.nameAr}» بقى ليه سلسلة خاصة «${result.chain.nameAr}» بنفس الخطوات${result.branchVersions ? ` ونسخ الفروع (${result.branchVersions})` : ''} — عدّلها زي ما تحب`
+      )
+      setError(null)
+      if (access.chainActions) setEditorTarget({ kind: 'edit', chainId: result.chain.id })
+    } catch (err: any) {
+      setError(err.message)
+    } finally {
+      setUpdatingId(null)
+    }
+  }
+
+  // «رجّعه لسلسلة الفئة» — سلسلته الخاصة بتفضل في المكتبة
+  const followCategory = async (rt: ApiRequestType) => {
+    const categoryChainId = categoryChainIdOf(rt.category)
+    if (!categoryChainId) return
+    if (!window.confirm(`«${rt.nameAr}» هيرجع يمشي على سلسلة الفئة «${chainNameOf(categoryChainId)}» في الطلبات الجديدة. سلسلته الحالية هتفضل في «الاعتمادات والموافقات». متابعة؟`)) return
+    setUpdatingId(rt.id)
+    try {
+      await followCategoryChain(rt.id)
+      await reloadAll()
+      setNotice(`«${rt.nameAr}» رجع لسلسلة الفئة «${chainNameOf(categoryChainId)}»`)
       setError(null)
     } catch (err: any) {
       setError(err.message)
     } finally {
       setUpdatingId(null)
+    }
+  }
+
+  // ===== نافذة سلسلة الفئة =====
+  const categoryTypes = (category: string) => requestTypes.filter((rt) => rt.category === category)
+  // السلسلة المقترحة: اللي عليها أكتر طلبات فعلًا في الفئة (بالاستخدام ثم بالعدد)
+  const suggestedChainFor = (category: string): number | null => {
+    const scores = new Map<number, { usage: number; types: number }>()
+    for (const rt of categoryTypes(category)) {
+      const info = typeInfoOf(rt)
+      const chain = chainById(rt.approvalChainId)
+      if (!chain || info?.mode === 'fixed' || chain.branchId !== null || !chain.isActive || chainUnset(chain)) continue
+      const score = scores.get(chain.id) ?? { usage: 0, types: 0 }
+      scores.set(chain.id, { usage: score.usage + (info?.usageCount ?? 0), types: score.types + 1 })
+    }
+    return [...scores.entries()].sort((a, b) => b[1].usage - a[1].usage || b[1].types - a[1].types)[0]?.[0] ?? null
+  }
+  const dialogTarget = (dialog: CategoryDialog): ApiChain | null =>
+    dialog.mode === 'existing' ? chainById(Number(dialog.chainId)) : dialog.mode === 'copy' ? chainById(Number(dialog.sourceChainId)) : null
+  const dialogRows = (dialog: CategoryDialog) => {
+    const target = dialogTarget(dialog)
+    const current = categoryChainIdOf(dialog.category)
+    return categoryTypes(dialog.category)
+      .map((rt) => ({ rt, state: consolidationStateOf(rt, typeInfoOf(rt), target, current, chains, dialog.mode === 'copy') }))
+      .sort((a, b) => Number(b.rt.isActive) - Number(a.rt.isActive) || a.rt.id - b.rt.id)
+  }
+  const withDefaults = (dialog: CategoryDialog): CategoryDialog => ({
+    ...dialog,
+    selected: dialog.mode === 'clear' ? [] : dialogRows(dialog)
+      .filter(({ rt, state }) => consolidationDefault(rt, state))
+      .map(({ rt }) => rt.id),
+  })
+  const openCategoryDialog = (category: string) => {
+    const current = categoryChainIdOf(category)
+    const initial = current ?? suggestedChainFor(category)
+    setDialogError(null)
+    setCategoryDialog(withDefaults({
+      category,
+      mode: 'existing',
+      chainId: initial ? String(initial) : '',
+      sourceChainId: initial ? String(initial) : '',
+      nameAr: `سلسلة ${categoryLabelOf(category)}`,
+      selected: [],
+    }))
+  }
+  const saveCategoryDialog = async () => {
+    if (!categoryDialog) return
+    const dialog = categoryDialog
+    if (dialog.mode === 'existing' && !dialog.chainId) return setDialogError('اختار السلسلة اللي الفئة هتمشي عليها')
+    if (dialog.mode === 'copy' && !dialog.sourceChainId) return setDialogError('اختار السلسلة اللي هتنسخ خطواتها')
+    if (dialog.mode === 'copy' && dialog.nameAr.trim().length < 3) return setDialogError('اسم السلسلة الجديدة 3 حروف على الأقل')
+    setDialogSaving(true)
+    setDialogError(null)
+    try {
+      const result = await setCategoryChain(dialog.category,
+        dialog.mode === 'clear'
+          ? { chainId: null }
+          : dialog.mode === 'copy'
+            ? { copyFromChainId: Number(dialog.sourceChainId), nameAr: dialog.nameAr.trim(), repointTypeIds: dialog.selected }
+            : { chainId: Number(dialog.chainId), repointTypeIds: dialog.selected })
+      await reloadAll()
+      const label = categoryLabelOf(dialog.category)
+      setNotice(result.chainId === null
+        ? `فئة «${label}» بقت من غير سلسلة عامة — كل طلب فاضل على السلسلة اللي هو عليها`
+        : `فئة «${label}» بقت على «${result.createdChain?.nameAr ?? chainNameOf(result.chainId)}»${result.createdChain ? ' (سلسلة جديدة بنفس الخطوات)' : ''} — ` +
+          (result.repointed.length ? `اتنقل ${result.repointed.length} طلب` : 'ماتنقلش طلبات جديدة'))
+      setError(null)
+      setCategoryDialog(null)
+    } catch (err: any) {
+      setDialogError(err.message)
+    } finally {
+      setDialogSaving(false)
     }
   }
 
@@ -387,7 +578,10 @@ export default function RequestTypesPage() {
       })
     } else {
       setEditing(null)
-      setForm(emptyForm())
+      // النوع الجديد بيمشي على سلسلة فئته لو ليها سلسلة
+      const fresh = emptyForm()
+      const categoryChain = categoryChainIdOf(fresh.category)
+      setForm({ ...fresh, approvalChainId: categoryChain ? String(categoryChain) : '' })
     }
     setEmpFilter('')
     setModalError(null)
@@ -505,7 +699,7 @@ export default function RequestTypesPage() {
         })
         setNotice(`تم إنشاء نوع الطلب «${form.nameAr.trim()}» بنجاح`)
       }
-      await reloadTypes()
+      await reloadAll()
       setShowModal(false)
       setError(null)
     } catch (err: any) {
@@ -530,6 +724,370 @@ export default function RequestTypesPage() {
       e.employeeCode.toLowerCase().includes(empFilter.toLowerCase()))
   )
   const canEditType = (rt: ApiRequestType) => branchInfo.canEdit(rt.branchId)
+  // سلاسل ينفع يتربط بيها النوع: العامة + سلاسل فرعه لو خاص بفرع (نفس شرط الخادم)
+  const formChains = chains.filter((c) => c.branchId === null || (formBranch != null && c.branchId === formBranch))
+  const formCategoryChainId = categoryChainIdOf(form.category)
+
+  // ===== سطر السلسلة في كارت النوع: ماشي على الفئة / سلسلة خاصة + الإجراءات =====
+  const renderTypeChain = (rt: ApiRequestType) => {
+    const info = typeInfoOf(rt)
+    if (!info) {
+      // من غير خريطة الفئات (صلاحية ناقصة/خطأ): اسم السلسلة بس لو متاح
+      return chainsAvailable ? (
+        <div className="flex items-center gap-3 text-sm">
+          <GitBranch size={16} className="text-gray-400" />
+          <span className="text-gray-600">سلسلة الاعتماد:</span>
+          <span className="text-gray-700">{chainNameOf(rt.approvalChainId)}</span>
+        </div>
+      ) : null
+    }
+    const categoryChainId = categoryChainIdOf(rt.category)
+    const busy = updatingId === rt.id
+    const actionsAllowed = access.chainActions && canEditType(rt) && info.mode !== 'fixed'
+    const chain = chainById(rt.approvalChainId)
+    // سلسلته لوحده (مش مشتركة ولا سلسلة فئة، وفي نطاقه): «خصّص» مالهاش لازمة — «تعديل سلسلته» كفاية
+    const ownChain = info.mode === 'custom' && info.chainSharedWith === 0 && !!chain &&
+      categoryChainLabelsOf(categoryMap, chain.id).length === 0 && (chain.branchId ?? null) === (rt.branchId ?? null)
+    return (
+      <div className="rounded-xl bg-gray-50 p-3 space-y-2" data-type-chain={rt.code}>
+        <div className="flex items-center gap-2 flex-wrap text-sm">
+          <GitBranch size={16} className="text-gray-400 shrink-0" />
+          {info.mode === 'category' && (
+            <span className="badge text-xs bg-emerald-50 text-emerald-700">ماشي على سلسلة الفئة</span>
+          )}
+          {info.mode === 'custom' && (
+            <span className="badge text-xs bg-amber-50 text-amber-700">سلسلة خاصة</span>
+          )}
+          {info.mode === 'none' && (
+            <span className="badge text-xs bg-gray-100 text-gray-600">من غير سلسلة</span>
+          )}
+          {info.mode === 'fixed' ? (
+            <span className="text-xs text-gray-600">{info.fixedReason}</span>
+          ) : rt.approvalChainId ? (
+            <span className="text-gray-700 truncate">«{chainNameOf(rt.approvalChainId)}»</span>
+          ) : null}
+        </div>
+        {info.mode !== 'fixed' && rt.approvalChainId && (
+          <p className="text-xs text-gray-500">
+            {chainStepsOf(rt.approvalChainId)}
+            {branchVersionCountOf(rt.approvalChainId) > 0 && ` · ${branchVersionCountOf(rt.approvalChainId)} نسخة فرع`}
+          </p>
+        )}
+        {info.mode === 'custom' && info.chainSharedWith > 0 && (
+          <p className="text-xs text-amber-700">
+            السلسلة دي مشتركة مع {info.chainSharedWith === 1 ? 'طلب تاني' : `${info.chainSharedWith} طلبات تانية`} — تعديلها بيسري عليهم كمان
+          </p>
+        )}
+        {actionsAllowed && (
+          <div className="flex items-center gap-2 flex-wrap pt-1">
+            {info.mode === 'custom' && chain && (
+              <button type="button" className="btn-secondary text-xs px-2.5 py-1" disabled={busy}
+                onClick={() => setEditorTarget({ kind: 'edit', chainId: chain.id })}>
+                تعديل سلسلته
+              </button>
+            )}
+            {(info.mode === 'category' || info.mode === 'none' || (info.mode === 'custom' && !ownChain)) && (
+              <button type="button" className="btn-secondary text-xs px-2.5 py-1" disabled={busy}
+                onClick={() => customizeChain(rt)}>
+                خصّص سلسلة للطلب ده
+              </button>
+            )}
+            {info.mode !== 'category' && categoryChainId && (
+              <button type="button" className="btn-secondary text-xs px-2.5 py-1" disabled={busy}
+                onClick={() => followCategory(rt)}>
+                رجّعه لسلسلة الفئة
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    )
+  }
+
+  // ===== لوحة سلسلة الفئة في رأس كل فئة =====
+  const renderCategoryChain = (category: string) => {
+    if (!categoryMap) {
+      return (
+        <p className="text-sm text-gray-500 bg-gray-50 rounded-xl px-4 py-3">
+          تعذّر تحميل سلسلة الفئة دلوقتي — حدّث الصفحة
+        </p>
+      )
+    }
+    const entry = categoryEntryOf(category)
+    const chainId = entry?.chainId ?? null
+    const chain = chainById(chainId)
+    const summary = chainSummaryById(chainId)
+    const active = chain ? chain.isActive : summary?.isActive ?? true
+    const versions = branchVersionCountOf(chainId)
+    const canWrite = access.chainActions && access.companyWide
+    const notFollowing = categoryTypes(category).filter((rt) => {
+      const info = typeInfoOf(rt)
+      return rt.isActive && info && info.mode !== 'category' && info.mode !== 'fixed'
+    }).length
+    return (
+      <div className="rounded-xl border border-gray-200 bg-white p-4 flex-1 min-w-[18rem] max-w-2xl" data-category-chain={category}>
+        {chainId ? (
+          <>
+            <p className="text-sm text-gray-700 flex items-center gap-2 flex-wrap">
+              <GitBranch size={15} className="text-primary-500" />
+              <span>سلسلة الفئة:</span>
+              <b className="text-gray-900">{chainNameOf(chainId)}</b>
+              {!active && <span className="badge text-xs badge-danger">معطّلة — طلبات الفئة واقفة</span>}
+            </p>
+            <p className="text-xs text-gray-500 mt-1.5">{chainStepsOf(chainId)}</p>
+            <p className="text-xs text-gray-500 mt-1">
+              {entry!.following} من {entry!.typeCount} ماشيين عليها
+              {versions > 0 && ` · ${versions} ${versions === 1 ? 'نسخة فرع' : 'نسخ فروع'}`}
+              {entry!.sharedWith.length > 0 && ` · مشتركة مع: ${entry!.sharedWith.map(categoryLabelOf).join('، ')}`}
+            </p>
+            {entry!.chainMissing && (
+              <p className="text-xs text-danger-600 mt-1 flex items-center gap-1">
+                <AlertCircle size={13} />
+                السلسلة المربوطة مش موجودة — اختار سلسلة تانية للفئة
+              </p>
+            )}
+            <div className="flex items-center gap-2 flex-wrap mt-3">
+              {chain && chainsAvailable && (
+                <button type="button" className="btn-secondary text-sm px-3 py-1.5"
+                  onClick={() => setEditorTarget({ kind: 'edit', chainId: chain.id })}>
+                  تعديل السلسلة
+                </button>
+              )}
+              {canWrite && (
+                <button type="button" className="btn-secondary text-sm px-3 py-1.5" onClick={() => openCategoryDialog(category)}>
+                  {notFollowing > 0 ? 'خلّي طلبات الفئة دي كلها على سلسلة واحدة' : 'غيّر سلسلة الفئة'}
+                </button>
+              )}
+            </div>
+          </>
+        ) : (
+          <>
+            <p className="text-sm text-gray-700 flex items-center gap-2">
+              <GitBranch size={15} className="text-gray-400" />
+              {category === 'financial'
+                ? 'كل طلب مالي بسلسلته — مفيش سلسلة عامة للمالية'
+                : 'الفئة دي لسه مالهاش سلسلة عامة — كل طلب ماشي بسلسلته'}
+            </p>
+            {canWrite && (
+              <button type="button" className={`${category === 'financial' ? 'btn-secondary' : 'btn-primary'} text-sm px-3 py-1.5 mt-3`}
+                onClick={() => openCategoryDialog(category)}>
+                {category === 'financial' ? 'اختار سلسلة واحدة للمالية' : 'خلّي طلبات الفئة دي كلها على سلسلة واحدة'}
+              </button>
+            )}
+          </>
+        )}
+      </div>
+    )
+  }
+
+  const renderTypeCard = (rt: ApiRequestType) => {
+    const customFields = parseJson<CustomFieldDef[]>(
+      (rt as any).customFields,
+      []
+    )
+    const fields = parseRequiredFields(rt.requiredFields)
+    const info = typeInfoOf(rt)
+    return (
+      <div
+        key={rt.id}
+        className={`card p-6 ${!rt.isActive ? 'opacity-70' : ''}`}
+        data-request-type={rt.code}
+      >
+        {/* Header */}
+        <div className="flex items-start justify-between gap-3">
+          <div className="flex items-start gap-4 min-w-0">
+            <div className="w-14 h-14 bg-primary-100 rounded-2xl flex items-center justify-center shrink-0">
+              <FileText size={28} className="text-primary-600" />
+            </div>
+            <div className="min-w-0">
+              <h3 className="font-bold text-gray-800 text-lg">{rt.nameAr}</h3>
+              <p className="text-gray-600 text-sm mt-1">
+                {phaseLabels[rt.phase] ?? rt.phase}
+              </p>
+              {/* الاستخدام — عدد الطلبات وآخر طلب (للتنضيف) */}
+              {info && (
+                <p className={`text-xs mt-1 flex items-center gap-1 ${info.usageCount ? 'text-gray-500' : 'text-amber-700'}`} data-type-usage>
+                  <History size={13} className="shrink-0" />
+                  {usageText(info.usageCount, info.lastRequestAt)}
+                </p>
+              )}
+            </div>
+          </div>
+          <div className="flex items-center gap-1.5 shrink-0">
+            <span className="badge text-xs bg-gray-100 text-gray-600">
+              {categoryLabelOf(rt.category)}
+            </span>
+            <span
+              className={`badge text-xs ${
+                rt.isActive ? 'badge-success' : 'badge-danger'
+              }`}
+            >
+              {rt.isActive ? 'مفعّل' : 'معطّل'}
+            </span>
+            {/* تفعيل/تعطيل من الكارت نفسه — نوع لكل الشركة أو لفرع تاني: للعرض بس من حساب الفرع */}
+            {canEditType(rt) && (
+              <button
+                type="button"
+                onClick={() => toggleStatus(rt)}
+                disabled={updatingId === rt.id}
+                title={rt.isActive ? 'تعطيل النوع' : 'تفعيل النوع'}
+                className="p-1.5 hover:bg-gray-100 rounded-lg transition-colors disabled:opacity-50"
+                data-type-toggle
+              >
+                {rt.isActive ? (
+                  <ToggleRight size={20} className="text-success-600" />
+                ) : (
+                  <ToggleLeft size={20} className="text-gray-400" />
+                )}
+              </button>
+            )}
+            {canEditType(rt) && (
+              <div className="relative">
+                <button
+                  onClick={() =>
+                    setActiveMenu(activeMenu === rt.id ? null : rt.id)
+                  }
+                  className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
+                >
+                  <MoreVertical size={18} className="text-gray-500" />
+                </button>
+                {activeMenu === rt.id && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-10"
+                      onClick={() => setActiveMenu(null)}
+                    />
+                    <div className="absolute left-0 top-full mt-1 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
+                      <button
+                        onClick={() => {
+                          handleOpenModal(rt)
+                          setActiveMenu(null)
+                        }}
+                        className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50"
+                      >
+                        <Edit size={16} />
+                        تعديل
+                      </button>
+                      <button
+                        onClick={() => toggleStatus(rt)}
+                        className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50"
+                      >
+                        {rt.isActive ? (
+                          <>
+                            <XCircle size={16} />
+                            تعطيل
+                          </>
+                        ) : (
+                          <>
+                            <CheckCircle size={16} />
+                            تفعيل
+                          </>
+                        )}
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* مين يشوف الطلب ده (قرار المالك 16 سبتمبر) — ملخص الإعداد نفسه */}
+        <p className="mt-3 text-sm text-blue-800 bg-blue-50 rounded-lg px-3 py-1.5 flex items-start gap-1.5">
+          <Users size={15} className="mt-0.5 shrink-0" />
+          <span>يظهر لـ: {typeAudienceText(rt)}</span>
+        </p>
+        <div className="mt-2 flex flex-wrap items-center gap-2">
+          <DefinitionBranchBadge branchId={rt.branchId} info={branchInfo} />
+          {!canEditType(rt) && (
+            <span className="text-xs text-gray-500">
+              {rt.branchId == null ? 'نوع لكل الشركة — للعرض بس من حساب الفرع' : 'للعرض بس'}
+            </span>
+          )}
+        </div>
+
+        {/* سلسلة الاعتماد جوّه الطلب نفسه (طلب المالك 26 سبتمبر) */}
+        <div className="mt-4">{renderTypeChain(rt)}</div>
+
+        {/* Details */}
+        <div className="mt-4 space-y-2.5">
+          <div className="flex items-center gap-3 text-sm">
+            <FileOutput size={16} className="text-gray-400" />
+            <span className="text-gray-600">الوجهة:</span>
+            <span className="text-gray-700">
+              {handlerLabelOf(rt.destinationHandler)}
+            </span>
+          </div>
+          <div className="flex items-center gap-3 text-sm">
+            {rt.affectsBalance ? (
+              <CheckCircle size={16} className="text-success-500" />
+            ) : (
+              <XCircle size={16} className="text-gray-300" />
+            )}
+            <span className="text-gray-600">يؤثر على الرصيد</span>
+          </div>
+          <div className="flex items-center gap-3 text-sm">
+            {rt.isSecurityRoute ? (
+              <Shield size={16} className="text-indigo-500" />
+            ) : (
+              <XCircle size={16} className="text-gray-300" />
+            )}
+            <span className="text-gray-600">مسار أمني</span>
+          </div>
+          <div className="flex items-center gap-3 text-sm">
+            {rt.isConfidential ? (
+              <Lock size={16} className="text-warning-500" />
+            ) : (
+              <XCircle size={16} className="text-gray-300" />
+            )}
+            <span className="text-gray-600">سري</span>
+          </div>
+          <div className="flex items-center gap-3 text-sm">
+            {rt.autoGeneratesPdf ? (
+              <FileOutput size={16} className="text-success-500" />
+            ) : (
+              <XCircle size={16} className="text-gray-300" />
+            )}
+            <span className="text-gray-600">يولّد PDF تلقائياً</span>
+          </div>
+        </div>
+
+        {/* Fields preview — الحقول المخصّصة إن وُجدت وإلا القديمة */}
+        <div className="mt-4 flex flex-wrap gap-2">
+          {customFields.length > 0
+            ? customFields.map((f) => (
+                <span
+                  key={f.key}
+                  className="text-xs bg-primary-50 text-primary-700 px-2 py-1 rounded-lg border border-primary-100"
+                >
+                  {f.label}
+                  <span className="text-primary-400 mr-1">
+                    ({(fieldTypeLabels as Record<string, string>)[f.type] ?? f.type})
+                  </span>
+                </span>
+              ))
+            : fields.map((f) => (
+                <span
+                  key={f}
+                  className="text-xs bg-gray-50 text-gray-500 px-2 py-1 rounded-lg border border-gray-100"
+                >
+                  {payloadFieldLabel(f)}
+                </span>
+              ))}
+        </div>
+
+        {/* Footer */}
+        <div className="mt-5 pt-4 border-t border-gray-100 flex items-center justify-between text-sm text-gray-500">
+          <span>
+            {customFields.length > 0
+              ? `${customFields.length} حقول مخصّصة`
+              : `${fields.length} حقول مطلوبة`}
+          </span>
+          <span>{rt.phase}</span>
+        </div>
+      </div>
+    )
+  }
 
   return (
     <MainLayout>
@@ -548,7 +1106,7 @@ export default function RequestTypesPage() {
           <div>
             <h1 className="text-2xl font-bold text-gray-800">بانِي الطلبات</h1>
             <p className="text-gray-500 mt-1">
-              كتالوج أنواع الطلبات — أنشئ أنواعاً من الصفر بحقول مخصّصة وجمهور محدد
+              كل أنواع الطلبات وسلاسل اعتمادها في مكان واحد — كل فئة ليها سلسلة عامة، وتقدر تخصّص سلسلة لطلب بعينه ولكل فرع
             </p>
           </div>
           <button
@@ -605,31 +1163,31 @@ export default function RequestTypesPage() {
           </div>
           <div className="card p-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center">
-                <Wallet size={24} className="text-indigo-500" />
+              <div className="w-12 h-12 bg-emerald-50 rounded-xl flex items-center justify-center">
+                <Layers size={24} className="text-emerald-500" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">تؤثر على الرصيد</p>
-                <p className="text-2xl font-bold text-indigo-600">{balanceCount}</p>
+                <p className="text-sm text-gray-500">ماشية على سلسلة الفئة</p>
+                <p className="text-2xl font-bold text-emerald-600">{categoryMap ? followingCount : '-'}</p>
               </div>
             </div>
           </div>
           <div className="card p-4">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 bg-warning-50 rounded-xl flex items-center justify-center">
-                <FileOutput size={24} className="text-warning-500" />
+                <History size={24} className="text-warning-500" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">توّلد PDF تلقائياً</p>
-                <p className="text-2xl font-bold text-gray-800">{pdfCount}</p>
+                <p className="text-sm text-gray-500">مفعّلة ومااستُخدمتش</p>
+                <p className="text-2xl font-bold text-gray-800">{categoryMap ? unusedActiveCount : '-'}</p>
               </div>
             </div>
           </div>
         </div>
 
         {/* Search */}
-        <div className="card p-4">
-          <div className="flex items-center gap-4">
+        <div className="card p-4 space-y-2">
+          <div className="flex items-center gap-4 flex-wrap">
             <div className="relative flex-1">
               <Search
                 size={20}
@@ -655,7 +1213,24 @@ export default function RequestTypesPage() {
                 </option>
               ))}
             </select>
+            <select
+              value={statusFilter}
+              onChange={(e) => setStatusFilter(e.target.value as StatusFilter)}
+              className="input w-56"
+              data-status-filter
+            >
+              <option value="all">كل الحالات</option>
+              <option value="active">المفعّلة بس</option>
+              <option value="inactive">المعطّلة بس</option>
+              <option value="unused" disabled={!categoryMap}>غير مستخدمة (ولا طلب)</option>
+              <option value="unused_active" disabled={!categoryMap}>مفعّلة وغير مستخدمة</option>
+            </select>
           </div>
+          {(statusFilter === 'unused' || statusFilter === 'unused_active') && (
+            <p className="text-xs text-gray-500">
+              الأنواع اللي ماتقدّمش عليها ولا طلب — راجعها وعطّل اللي مش محتاجه من زرار التفعيل في الكارت. مفيش حاجة بتتعطل لوحدها.
+            </p>
+          )}
         </div>
 
         {/* Loading */}
@@ -665,216 +1240,27 @@ export default function RequestTypesPage() {
           </div>
         )}
 
-        {/* Request Types Grid */}
-        {!loading && (
-          <div className="grid grid-cols-2 gap-6">
-            {filtered.map((rt) => {
-              const customFields = parseJson<CustomFieldDef[]>(
-                (rt as any).customFields,
-                []
-              )
-              const fields = parseRequiredFields(rt.requiredFields)
-              return (
-                <div
-                  key={rt.id}
-                  className={`card p-6 relative ${!rt.isActive ? 'opacity-60' : ''}`}
-                >
-                  {/* Badges */}
-                  <div className="absolute top-4 left-4 flex items-center gap-2">
-                    <span className="badge text-xs bg-gray-100 text-gray-600">
-                      {categoryLabelOf(rt.category)}
-                    </span>
-                    <span
-                      className={`badge text-xs ${
-                        rt.isActive ? 'badge-success' : 'badge-danger'
-                      }`}
-                    >
-                      {rt.isActive ? 'مفعّل' : 'معطّل'}
-                    </span>
-                  </div>
-
-                  {/* Menu — نوع لكل الشركة أو لفرع تاني: للعرض بس من حساب الفرع */}
-                  {canEditType(rt) && (
-                  <div className="absolute top-4 left-64">
-                    <button
-                      onClick={() =>
-                        setActiveMenu(activeMenu === rt.id ? null : rt.id)
-                      }
-                      className="p-2 hover:bg-gray-100 rounded-lg transition-colors"
-                    >
-                      <MoreVertical size={18} className="text-gray-500" />
-                    </button>
-                    {activeMenu === rt.id && (
-                      <>
-                        <div
-                          className="fixed inset-0 z-10"
-                          onClick={() => setActiveMenu(null)}
-                        />
-                        <div className="absolute left-0 top-full mt-1 w-48 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
-                          <button
-                            onClick={() => {
-                              handleOpenModal(rt)
-                              setActiveMenu(null)
-                            }}
-                            className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50"
-                          >
-                            <Edit size={16} />
-                            تعديل
-                          </button>
-                          <button
-                            onClick={() => toggleStatus(rt)}
-                            className="w-full flex items-center gap-2 px-4 py-2 text-gray-700 hover:bg-gray-50"
-                          >
-                            {rt.isActive ? (
-                              <>
-                                <XCircle size={16} />
-                                تعطيل
-                              </>
-                            ) : (
-                              <>
-                                <CheckCircle size={16} />
-                                تفعيل
-                              </>
-                            )}
-                          </button>
-                        </div>
-                      </>
-                    )}
-                  </div>
-                  )}
-
-                  {/* Info */}
-                  <div className="flex items-start gap-4 mt-8">
-                    <div className="w-14 h-14 bg-primary-100 rounded-2xl flex items-center justify-center">
-                      <FileText size={28} className="text-primary-600" />
-                    </div>
-                    <div className="flex-1">
-                      <h3 className="font-bold text-gray-800 text-lg">{rt.nameAr}</h3>
-                      <p className="text-gray-600 text-sm mt-2">
-                        {phaseLabels[rt.phase] ?? rt.phase}
-                      </p>
-                      {/* مين يشوف الطلب ده (قرار المالك 16 سبتمبر) — ملخص الإعداد نفسه */}
-                      <p className="mt-2 text-sm text-blue-800 bg-blue-50 rounded-lg px-3 py-1.5 flex items-start gap-1.5">
-                        <Users size={15} className="mt-0.5 shrink-0" />
-                        <span>يظهر لـ: {typeAudienceText(rt)}</span>
-                      </p>
-                      <div className="mt-2 flex flex-wrap items-center gap-2">
-                        <DefinitionBranchBadge branchId={rt.branchId} info={branchInfo} />
-                        {!canEditType(rt) && (
-                          <span className="text-xs text-gray-500">
-                            {rt.branchId == null ? 'نوع لكل الشركة — للعرض بس من حساب الفرع' : 'للعرض بس'}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  </div>
-
-                  {/* Details */}
-                  <div className="mt-5 space-y-2.5">
-                    {/* اختيار السلسلة يحتاج قائمة السلاسل (approval_chains.manage) */}
-                    {chainsAvailable && (
-                      <div className="flex items-center gap-3 text-sm">
-                        <GitBranch size={16} className="text-gray-400" />
-                        <span className="text-gray-600">دورة الاعتماد:</span>
-                        <select
-                          value={rt.approvalChainId ?? ''}
-                          onChange={(e) => {
-                            const chainId = Number(e.target.value)
-                            if (chainId) assignChain(rt, chainId)
-                          }}
-                          disabled={updatingId === rt.id || !canEditType(rt)}
-                          className="input flex-1 py-1.5 text-sm"
-                        >
-                          <option value="" disabled>
-                            {chainNameOf(rt.approvalChainId)}
-                          </option>
-                          {chains.map((c) => (
-                            <option key={c.id} value={c.id}>
-                              {c.nameAr}
-                            </option>
-                          ))}
-                        </select>
-                      </div>
-                    )}
-                    <div className="flex items-center gap-3 text-sm">
-                      <FileOutput size={16} className="text-gray-400" />
-                      <span className="text-gray-600">الوجهة:</span>
-                      <span className="text-gray-700">
-                        {handlerLabelOf(rt.destinationHandler)}
-                      </span>
-                    </div>
-                    <div className="flex items-center gap-3 text-sm">
-                      {rt.affectsBalance ? (
-                        <CheckCircle size={16} className="text-success-500" />
-                      ) : (
-                        <XCircle size={16} className="text-gray-300" />
-                      )}
-                      <span className="text-gray-600">يؤثر على الرصيد</span>
-                    </div>
-                    <div className="flex items-center gap-3 text-sm">
-                      {rt.isSecurityRoute ? (
-                        <Shield size={16} className="text-indigo-500" />
-                      ) : (
-                        <XCircle size={16} className="text-gray-300" />
-                      )}
-                      <span className="text-gray-600">مسار أمني</span>
-                    </div>
-                    <div className="flex items-center gap-3 text-sm">
-                      {rt.isConfidential ? (
-                        <Lock size={16} className="text-warning-500" />
-                      ) : (
-                        <XCircle size={16} className="text-gray-300" />
-                      )}
-                      <span className="text-gray-600">سري</span>
-                    </div>
-                    <div className="flex items-center gap-3 text-sm">
-                      {rt.autoGeneratesPdf ? (
-                        <FileOutput size={16} className="text-success-500" />
-                      ) : (
-                        <XCircle size={16} className="text-gray-300" />
-                      )}
-                      <span className="text-gray-600">يولّد PDF تلقائياً</span>
-                    </div>
-                  </div>
-
-                  {/* Fields preview — الحقول المخصّصة إن وُجدت وإلا القديمة */}
-                  <div className="mt-4 flex flex-wrap gap-2">
-                    {customFields.length > 0
-                      ? customFields.map((f) => (
-                          <span
-                            key={f.key}
-                            className="text-xs bg-primary-50 text-primary-700 px-2 py-1 rounded-lg border border-primary-100"
-                          >
-                            {f.label}
-                            <span className="text-primary-400 mr-1">
-                              ({(fieldTypeLabels as Record<string, string>)[f.type] ?? f.type})
-                            </span>
-                          </span>
-                        ))
-                      : fields.map((f) => (
-                          <span
-                            key={f}
-                            className="text-xs bg-gray-50 text-gray-500 px-2 py-1 rounded-lg border border-gray-100"
-                          >
-                            {payloadFieldLabel(f)}
-                          </span>
-                        ))}
-                  </div>
-
-                  {/* Footer */}
-                  <div className="mt-5 pt-4 border-t border-gray-100 flex items-center justify-between text-sm text-gray-500">
-                    <span>
-                      {customFields.length > 0
-                        ? `${customFields.length} حقول مخصّصة`
-                        : `${fields.length} حقول مطلوبة`}
-                    </span>
-                    <span>{rt.phase}</span>
-                  </div>
-                </div>
-              )
-            })}
-          </div>
-        )}
+        {/* الأنواع بفئاتها — لكل فئة سلسلتها في الرأس */}
+        {!loading && groups.map(({ category, types }) => (
+          <section key={category} className="space-y-4" data-request-category={category}>
+            <div className="card p-5 flex items-start justify-between gap-4 flex-wrap">
+              <div>
+                <h2 className="text-lg font-bold text-gray-800 flex items-center gap-2">
+                  <Layers size={18} className="text-primary-500" />
+                  {categoryLabelOf(category)}
+                </h2>
+                <p className="text-sm text-gray-500 mt-1">
+                  {categoryTypes(category).length} نوع — {categoryTypes(category).filter((rt) => rt.isActive).length} مفعّل
+                  {types.length !== categoryTypes(category).length && ` (ظاهر ${types.length} بالفلتر)`}
+                </p>
+              </div>
+              {renderCategoryChain(category)}
+            </div>
+            <div className="grid grid-cols-2 gap-6">
+              {types.map(renderTypeCard)}
+            </div>
+          </section>
+        ))}
 
         {!loading && filtered.length === 0 && (
           <div className="card p-12 text-center">
@@ -935,7 +1321,16 @@ export default function RequestTypesPage() {
                     </label>
                     <select
                       value={form.category}
-                      onChange={(e) => setForm({ ...form, category: e.target.value })}
+                      onChange={(e) => {
+                        // النوع الجديد بيتبع سلسلة فئته الجديدة (لو ماكانش اختار سلسلة بعينها)
+                        const nextChain = categoryChainIdOf(e.target.value)
+                        const followedOld = !form.approvalChainId || form.approvalChainId === String(categoryChainIdOf(form.category) ?? '')
+                        setForm({
+                          ...form,
+                          category: e.target.value,
+                          ...(followedOld ? { approvalChainId: nextChain ? String(nextChain) : '' } : {}),
+                        })
+                      }}
                       className="input w-full"
                       disabled={!!editing}
                       title={editing ? 'الفئة لا تتغير بعد الإنشاء' : undefined}
@@ -1000,15 +1395,16 @@ export default function RequestTypesPage() {
                   </div>
                 </div>
 
-                {/* دورة الاعتماد والمرفقات */}
+                {/* سلسلة الاعتماد والمرفقات */}
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      دورة الاعتماد (اختياري)
+                      سلسلة الاعتماد
                     </label>
                     {/* بلا approval_chains.manage: لا قائمة سلاسل — يُخفى الاختيار ويبقى الربط كما هو */}
                     {chainsAvailable ? (
                     <>
+                    <div className="flex items-center gap-2">
                     <select
                       value={form.approvalChainId}
                       onChange={(e) =>
@@ -1016,15 +1412,38 @@ export default function RequestTypesPage() {
                       }
                       className="input w-full"
                     >
-                      <option value="">— بدون دورة (تنفيذ فوري) —</option>
-                      {chains.map((c) => (
+                      {editing ? (
+                        !form.approvalChainId && <option value="" disabled>من غير سلسلة</option>
+                      ) : (
+                        <option value="">سلسلة خاصة جديدة باسم الطلب (فاضية لحد ما تضيف خطواتها)</option>
+                      )}
+                      {formCategoryChainId && (
+                        <option value={formCategoryChainId}>
+                          سلسلة الفئة: {chainNameOf(formCategoryChainId)}
+                        </option>
+                      )}
+                      {formChains.filter((c) => c.id !== formCategoryChainId).map((c) => (
                         <option key={c.id} value={c.id}>
-                          {c.nameAr}
+                          {c.nameAr}{c.isActive ? '' : ' (معطّلة)'}
                         </option>
                       ))}
+                      {/* السلسلة المربوطة حاليًا لو مش ضمن القائمة (ربط قديم) — تفضل ظاهرة باسمها */}
+                      {form.approvalChainId && form.approvalChainId !== String(formCategoryChainId ?? '') &&
+                        !formChains.some((c) => String(c.id) === form.approvalChainId) && (
+                          <option value={form.approvalChainId}>{chainNameOf(Number(form.approvalChainId))}</option>
+                        )}
                     </select>
+                    {editing && access.chainActions && chainById(Number(form.approvalChainId)) && (
+                      <button type="button" className="btn-secondary text-sm px-3 py-2 shrink-0"
+                        onClick={() => setEditorTarget({ kind: 'edit', chainId: Number(form.approvalChainId) })}>
+                        افتح السلسلة
+                      </button>
+                    )}
+                    </div>
                     <p className="text-xs text-gray-400 mt-1">
-                      تُدار الدورات من «الاعتمادات والموافقات»
+                      {formCategoryChainId
+                        ? 'الأصل إن الطلب يمشي على سلسلة فئته — وتقدر تخصّص له سلسلة من الكارت'
+                        : 'كل السلاسل في «الاعتمادات والموافقات» — وسلسلة الفئة من رأس الفئة هنا'}
                     </p>
                     </>
                     ) : (
@@ -1452,6 +1871,221 @@ export default function RequestTypesPage() {
             </div>
           </div>
         )}
+
+        {/* ===== «خلّي طلبات الفئة دي كلها على سلسلة واحدة» / «غيّر سلسلة الفئة» ===== */}
+        {categoryDialog && (() => {
+          const dialog = categoryDialog
+          const label = categoryLabelOf(dialog.category)
+          const current = categoryChainIdOf(dialog.category)
+          const rows = dialogRows(dialog)
+          const target = dialogTarget(dialog)
+          const moving = rows.filter(({ rt, state }) => state === 'follower' || (!['fixed', 'already'].includes(state) && dialog.selected.includes(rt.id)))
+          const already = rows.filter(({ state }) => state === 'already').length
+          const generalChains = chains.filter((c) => c.branchId === null)
+          // سلاسل طلبات الفئة دي الأول (الأقرب للاختيار)، وبعدها «نفس سلسلة» فئة تانية، وبعدها الباقي
+          const ownChainIds = new Set(categoryTypes(dialog.category).map((rt) => rt.approvalChainId ?? 0))
+          const ownChains = generalChains.filter((c) => ownChainIds.has(c.id))
+          // «نفس سلسلة» فئة تانية (الإجازات والحضور مثلًا)
+          const otherCategoryChains = (categoryMap?.categories ?? [])
+            .filter((entry) => entry.category !== dialog.category && entry.chainId && chainById(entry.chainId) && !ownChainIds.has(entry.chainId))
+          const restChains = generalChains.filter((c) => !ownChainIds.has(c.id) && !otherCategoryChains.some((entry) => entry.chainId === c.id))
+          const usable = (chain: ApiChain) => chain.isActive && !chainUnset(chain)
+          const change = (patch: Partial<CategoryDialog>) => setCategoryDialog(withDefaults({ ...dialog, ...patch }))
+          return (
+            <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+              <div className="bg-white rounded-2xl w-full max-w-3xl max-h-[90vh] overflow-y-auto" data-category-dialog={dialog.category}>
+                <div className="p-6 border-b border-gray-100 flex items-center justify-between">
+                  <div>
+                    <h2 className="text-xl font-bold text-gray-800">سلسلة فئة «{label}»</h2>
+                    <p className="text-sm text-gray-500 mt-1">
+                      كل طلب في الفئة ماشي على سلسلتها بيتنقل معاها تلقائي. الطلب اللي ليه سلسلة خاصة بيفضل عليها إلا لو علّمت عليه تحت.
+                    </p>
+                  </div>
+                  <button onClick={() => setCategoryDialog(null)} className="p-2 hover:bg-gray-100 rounded-lg" disabled={dialogSaving}>
+                    <X size={20} className="text-gray-500" />
+                  </button>
+                </div>
+
+                <div className="p-6 space-y-5">
+                  {dialogError && (
+                    <div className="bg-red-50 text-red-700 rounded-xl p-4 text-sm flex items-start gap-2">
+                      <AlertCircle size={16} className="shrink-0 mt-0.5" />
+                      <span>{dialogError}</span>
+                    </div>
+                  )}
+
+                  <div className="space-y-3">
+                    <label className="flex items-start gap-2">
+                      <input type="radio" name="categoryChainMode" className="mt-1" checked={dialog.mode === 'existing'}
+                        onChange={() => change({ mode: 'existing' })} />
+                      <div className="flex-1">
+                        <span className="text-sm font-medium text-gray-800">سلسلة موجودة</span>
+                        {dialog.mode === 'existing' && (
+                          <select className="input w-full mt-2" value={dialog.chainId} onChange={(e) => change({ chainId: e.target.value })}>
+                            <option value="">— اختار السلسلة —</option>
+                            {ownChains.length > 0 && (
+                              <optgroup label={`سلاسل طلبات ${label}`}>
+                                {ownChains.map((c) => (
+                                  <option key={c.id} value={c.id} disabled={!usable(c)}>
+                                    {c.nameAr}{!c.isActive ? ' (معطّلة)' : chainUnset(c) ? ' (مالهاش خطوات)' : ''}
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            {otherCategoryChains.length > 0 && (
+                              <optgroup label="نفس سلسلة فئة تانية">
+                                {otherCategoryChains.map((entry) => (
+                                  <option key={`same-${entry.category}`} value={entry.chainId!}>
+                                    نفس سلسلة: {categoryLabelOf(entry.category)} («{chainNameOf(entry.chainId)}»)
+                                  </option>
+                                ))}
+                              </optgroup>
+                            )}
+                            <optgroup label="باقي السلاسل العامة">
+                              {restChains.map((c) => (
+                                <option key={c.id} value={c.id} disabled={!usable(c)}>
+                                  {c.nameAr}{!c.isActive ? ' (معطّلة)' : chainUnset(c) ? ' (مالهاش خطوات)' : ''}
+                                </option>
+                              ))}
+                            </optgroup>
+                          </select>
+                        )}
+                      </div>
+                    </label>
+
+                    <label className="flex items-start gap-2">
+                      <input type="radio" name="categoryChainMode" className="mt-1" checked={dialog.mode === 'copy'}
+                        onChange={() => change({ mode: 'copy' })} />
+                      <div className="flex-1">
+                        <span className="text-sm font-medium text-gray-800">سلسلة جديدة للفئة بخطوات سلسلة موجودة</span>
+                        {dialog.mode === 'copy' && (
+                          <div className="grid grid-cols-2 gap-3 mt-2">
+                            <select className="input w-full" value={dialog.sourceChainId} onChange={(e) => change({ sourceChainId: e.target.value })}>
+                              <option value="">— انسخ خطوات —</option>
+                              {[
+                                { key: 'own', title: `سلاسل طلبات ${label}`, list: ownChains },
+                                { key: 'rest', title: 'باقي السلاسل العامة', list: generalChains.filter((c) => !ownChainIds.has(c.id)) },
+                              ]
+                                .filter((group) => group.list.length > 0)
+                                .map((group) => (
+                                  <optgroup key={group.key} label={group.title}>
+                                    {group.list.map((c) => (
+                                      <option key={c.id} value={c.id} disabled={chainUnset(c)}>
+                                        {c.nameAr}{chainUnset(c) ? ' (مالهاش خطوات)' : ''}
+                                      </option>
+                                    ))}
+                                  </optgroup>
+                                ))}
+                            </select>
+                            <input className="input w-full" value={dialog.nameAr} onChange={(e) => setCategoryDialog({ ...dialog, nameAr: e.target.value })}
+                              placeholder={`سلسلة ${label}`} />
+                            <p className="text-xs text-gray-500 col-span-2">الخطوات ونسخ الفروع بتتنسخ زي ما هي، وبعدها تعدّلها براحتك من «تعديل السلسلة».</p>
+                          </div>
+                        )}
+                      </div>
+                    </label>
+
+                    {current && (
+                      <label className="flex items-start gap-2">
+                        <input type="radio" name="categoryChainMode" className="mt-1" checked={dialog.mode === 'clear'}
+                          onChange={() => change({ mode: 'clear' })} />
+                        <div>
+                          <span className="text-sm font-medium text-gray-800">من غير سلسلة للفئة — كل طلب بسلسلته</span>
+                          {dialog.mode === 'clear' && (
+                            <p className="text-xs text-gray-500 mt-1">
+                              مفيش طلب هيتحرك: الماشيين على «{chainNameOf(current)}» بيفضلوا عليها كسلسلة خاصة.
+                            </p>
+                          )}
+                        </div>
+                      </label>
+                    )}
+                  </div>
+
+                  {dialog.mode !== 'clear' && (
+                    <div className="border border-gray-200 rounded-xl">
+                      <div className="px-4 py-3 border-b border-gray-100 flex items-center justify-between gap-3">
+                        <div>
+                          <p className="text-sm font-medium text-gray-800">الطلبات اللي هتمشي على السلسلة دي</p>
+                          <p className="text-xs text-gray-500 mt-0.5">
+                            متعلّم عليها افتراضيًا: المفعّلة اللي سلسلتها لسه ما اتضبطتش أو بنفس الخطوات بالظبط
+                            {target ? ` («${target.nameAr}»: ${chainStepsText(target.steps, target.autoApprove)})` : ''}
+                          </p>
+                        </div>
+                        <div className="flex items-center gap-2 shrink-0 text-xs">
+                          <button type="button" className="text-primary-600 hover:underline"
+                            onClick={() => setCategoryDialog({ ...dialog, selected: rows.filter(({ state }) => !['fixed', 'follower', 'already'].includes(state)).map(({ rt }) => rt.id) })}>
+                            علّم الكل
+                          </button>
+                          <button type="button" className="text-gray-500 hover:underline" onClick={() => setCategoryDialog({ ...dialog, selected: [] })}>
+                            شيل الكل
+                          </button>
+                        </div>
+                      </div>
+                      <div className="divide-y divide-gray-100 max-h-80 overflow-y-auto">
+                        {rows.map(({ rt, state }) => {
+                          const locked = state === 'follower' || state === 'already' || state === 'fixed'
+                          const checked = state === 'follower' || state === 'already' || (state !== 'fixed' && dialog.selected.includes(rt.id))
+                          const info = typeInfoOf(rt)
+                          return (
+                            <label key={rt.id} className={`flex items-start gap-3 px-4 py-2.5 ${locked ? 'bg-gray-50' : 'hover:bg-gray-50'}`} data-consolidation-row={state}>
+                              <input type="checkbox" className="mt-1" checked={checked} disabled={locked}
+                                onChange={() => setCategoryDialog({ ...dialog, selected: toggleId(dialog.selected, rt.id) })} />
+                              <div className="min-w-0">
+                                <p className="text-sm text-gray-800 flex items-center gap-2 flex-wrap">
+                                  {rt.nameAr}
+                                  {!rt.isActive && <span className="badge text-[10px] bg-gray-100 text-gray-500">معطّل</span>}
+                                </p>
+                                <p className="text-xs text-gray-500">
+                                  {state === 'fixed' ? info?.fixedReason : consolidationStateText[state]}
+                                  {state !== 'fixed' && state !== 'already' && state !== 'follower' && rt.approvalChainId
+                                    ? ` — «${chainNameOf(rt.approvalChainId)}»: ${chainStepsOf(rt.approvalChainId)}` : ''}
+                                  {info ? ` · ${usageText(info.usageCount, info.lastRequestAt)}` : ''}
+                                </p>
+                              </div>
+                            </label>
+                          )
+                        })}
+                      </div>
+                    </div>
+                  )}
+                </div>
+
+                <div className="p-6 border-t border-gray-100 flex items-center justify-between gap-3">
+                  <p className="text-sm text-gray-600" data-category-dialog-summary>
+                    {dialog.mode === 'clear'
+                      ? 'الفئة هتبقى من غير سلسلة عامة — مفيش طلب هيتحرك'
+                      : `هيتنقل للسلسلة ${moving.length} طلب${already ? ` — و${already} عليها أصلًا` : ''}`}
+                  </p>
+                  <div className="flex items-center gap-3">
+                    <button onClick={() => setCategoryDialog(null)} className="btn-secondary" disabled={dialogSaving}>
+                      إلغاء
+                    </button>
+                    <button onClick={saveCategoryDialog} className="btn-primary disabled:opacity-50" disabled={dialogSaving} data-category-dialog-save>
+                      {dialogSaving ? 'جارٍ الحفظ...' : 'حفظ'}
+                    </button>
+                  </div>
+                </div>
+              </div>
+            </div>
+          )
+        })()}
+
+        {/* محرر السلسلة جوّه «بانِي الطلبات» نفسه — نفس محرر المكتبة، وفيه «سلسلة مختلفة لكل فرع» */}
+        <ChainEditorModal
+          target={editorTarget}
+          chains={chains}
+          branches={branchInfo.branches}
+          employees={employees}
+          onNavigate={setEditorTarget}
+          onClose={() => setEditorTarget(null)}
+          onSaved={async (message) => {
+            await reloadAll()
+            setNotice(message)
+            setError(null)
+          }}
+          typeNameOf={chainTypeNameOf}
+          categoriesOf={categoriesOfChain}
+        />
       </div>
     </MainLayout>
   )
