@@ -42,6 +42,9 @@ import { appendAttendanceRuleVersion, assertAttendanceRulePeriodOpen, attendance
   validateAttendanceFlexSource } from '../attendance/attendance-rule-history'
 import { Branch } from '../org/entities/branch.entity'
 import { Employee } from '../employees/employee.entity'
+import { employmentWindowsOf } from '../attendance/attendance-employment'
+import { assertWorkScheduleExceptionsFit, normalizeWorkScheduleExceptions, parseWorkScheduleExceptions } from '../attendance/work-schedule-exceptions'
+import { cycleStartDayOf } from '../attendance/attendance-report-range'
 import {
   AssetType,
   BiometricDevice,
@@ -156,6 +159,8 @@ const WRITABLE: Record<string, Record<string, FieldSpec>> = {
     name: fld('str', 'اسم جدول العمل', { max: 100 }),
     description: fld('str', 'الوصف', { max: 200, nullable: true }),
     weekendDays: fld('str', 'أيام نهاية الأسبوع', { max: 40 }),
+    // بتوصل مصفوفة من الشاشة وبتتحول لنص JSON متحقق منه قبل pick (normalizeWorkScheduleExceptions)
+    weekendExceptions: fld('str', 'استثناءات أيام الراحة', { max: 1000, nullable: true }),
     startTime: fld('time', 'بداية الدوام'),
     endTime: fld('time', 'نهاية الدوام'),
     isDefault: fld('bool', 'الجدول الافتراضي'),
@@ -513,6 +518,11 @@ export class CatalogsController {
       throw new BadRequestException('لا يوجد موظفون نشطون مطابقون ضمن نطاقك')
     }
     const meta = attendanceRuleChange(b)
+    // فترة الخدمة: اللي آخر يوم عمل ليه قبل تاريخ السريان مالوش جدول يتسند — بيتعدّى ويتعد في الرد بدل خطأ
+    const employment = await employmentWindowsOf(this.employees.manager, emps)
+    const before = emps.length
+    emps = emps.filter((e) => { const window = employment.get(e.id); return !window?.endedUnknown && (!window?.to || window.to >= meta.effectiveFrom) })
+    const outsideEmployment = before - emps.length
     let assigned = 0
     await this.employees.manager.transaction(async m => {
       await lockAttendanceRuleMutation(m, emps.map(employee => employee.id))
@@ -528,6 +538,7 @@ export class CatalogsController {
       matched: emps.length,
       assigned,
       unchanged: emps.length - assigned,
+      outsideEmployment, // موظفين خدمتهم انتهت قبل تاريخ السريان — اتعدّوا
     }
   }
 
@@ -736,6 +747,14 @@ export class CatalogsController {
       assertDefinitionBranchUnchanged(row, body.branchId)
     }
     const branchId: number | null = row ? (row.branchId ?? null) : await definitionBranchForCreate(em, user, body.branchId)
+    // استثناءات أيام الراحة (مصفوفة من الشاشة) ← نص JSON متحقق منه، ويوم بداية الشهر المالي الحالي بيتثبت فيها
+    if (kind === 'work-schedules' && Object.prototype.hasOwnProperty.call(body, 'weekendExceptions')) {
+      const raw = body.weekendExceptions
+      const cycle = (await em.query(`SELECT [value] FROM [requests_config] WHERE [key] = 'payroll.cycle_start_day'`))[0]?.value
+      body = { ...body, weekendExceptions: normalizeWorkScheduleExceptions(
+        typeof raw === 'string' && raw.trim() ? parseWorkScheduleExceptions(raw, (message) => { throw new BadRequestException(message) }) : raw,
+        String(body.weekendDays ?? row?.weekendDays ?? 'FRI,SAT'), cycleStartDayOf(cycle)) }
+    }
     const data = this.pick(kind, body)
     const financialChange = !row || Object.keys(data).some(key => !['name', 'description'].includes(key) && data[key] !== row[key])
     const meta = attendanceRuleChange({ effectiveFrom: body.effectiveFrom ?? (!financialChange ? attendanceRuleToday() : undefined),
@@ -750,6 +769,11 @@ export class CatalogsController {
       ...(financialChange ? { flexPolicy: undefined } : {}) })
     if (!row && data.shiftMode === 'flexible' && data.flexEnabled === undefined) snapshot.flexEnabled = true
     this.validate(kind, snapshot)
+    // استثناء بقى مالوش معنى في النسخة الجديدة (مثلًا «دوام آخر سبت» والسبت بقى يوم شغل) بيترفض برسالة واضحة
+    if (kind === 'work-schedules') {
+      assertWorkScheduleExceptionsFit(parseWorkScheduleExceptions(snapshot.weekendExceptions, (message) => { throw new BadRequestException(message) }),
+        String(snapshot.weekendDays ?? ''))
+    }
     // الجدول الافتراضي بيتطبق على كل موظف ملوش جدول في كل الفروع، فمايبقاش خاص بفرع
     if (kind === 'work-schedules' && branchId !== null && snapshot.isDefault) {
       throw new BadRequestException('الجدول الافتراضي لازم يكون لكل الشركة، مش لفرع واحد')

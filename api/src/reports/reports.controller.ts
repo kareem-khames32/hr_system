@@ -151,6 +151,12 @@ export class ReportsController {
               SUM(a.workMinutes) AS totalWorkMinutes
        FROM attendance_days a JOIN employees e ON e.id = a.employeeId
        WHERE a.date BETWEEN @0 AND @1 ${s}
+         -- فترة الخدمة: غياب بعد آخر يوم عمل (ملف إنهاء خدمة غير ملغي بعد التعيين) مش غياب
+         AND NOT (a.status = 'absent' AND EXISTS (
+           SELECT 1 FROM offboarding_cases oc
+            WHERE oc.employeeId = a.employeeId AND oc.status <> 'CANCELLED'
+              AND oc.lastWorkingDay < a.date
+              AND oc.lastWorkingDay >= COALESCE(e.actualStartDate, e.joinDate, '1900-01-01')))
        GROUP BY a.employeeId, e.fullName, e.employeeCode
        ORDER BY e.employeeCode`,
       params

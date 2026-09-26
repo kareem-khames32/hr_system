@@ -158,6 +158,26 @@ test('HTTP ownership, employee-on-behalf privilege and cross-branch approval are
   expect(await http(null, 'POST', '/requests', { typeCode: 'LOAN_INSTALLMENT_DEFER', payload: payload(other) }), 401)
 })
 
+// قرار المالك 26 سبتمبر: «مدير الموارد البشرية قراره نهائي» — التأجيل اللي تقدّمه نيابةً بيتعتمد لحظتها بكل خطوات سلسلته الشرطية
+test('Owner 26-Sep: an installment deferral HR files on behalf is approved at once through the threshold chain and defers with HR as the ledger actor', async () => {
+  const f = await fixture('2000.00')
+  const hrEmployee = await repo('Employee').save({ employeeCode: `LDHR${sequence}`, fullName: 'مدير موارد بشرية للتأجيل', branchId: f.branch.id, joinDate: '2020-01-01',
+    basicSalary: 0, status: 'active', isActive: true, payMethod: 'cash', annualLeaveEntitled: false })
+  const hr = await repo('User').save({ employeeId: hrEmployee.id, branchId: f.branch.id, email: `ld-hr-${sequence}@test.invalid`, displayName: 'مدير الموارد البشرية',
+    role: 'hr_manager', passwordHash: 'isolated-token-only', permissions: JSON.stringify(['requests.create_on_behalf', 'requests.view_all', 'approve.hr']) })
+  const done = expect(await http(hr, 'POST', '/requests', { typeCode: 'LOAN_INSTALLMENT_DEFER', submit: true, onBehalfEmployeeId: f.employee.id, payload: payload(f) }), 201)
+  assert.equal(done.status, 'COMPLETED')
+  assert.deepEqual(JSON.parse(done.resolvedSteps).map(row => [row.role, row.action]), [['direct_manager_of_requester', 'APPROVED'], ['finance', 'APPROVED']])
+  const decisions = await repo('RequestApproval').find({ where: { requestId: done.id }, order: { step: 'ASC' } })
+  assert.deepEqual(decisions.map(row => [row.step, row.approverId, row.action]), [[1, hr.id, 'APPROVED'], [2, hr.id, 'APPROVED']])
+  assert.equal(JSON.parse(done.payload).deferralEvidence.amount, '2000.00')
+  assert.equal((await position(f.installmentId)).financialStatus, 'DEFERRED')
+  const child = await repo('LoanInstallment').findOneByOrFail({ parentInstallmentId: f.installmentId })
+  assert.equal(child.dueDate, `${month(1)}-01`); assert.equal((await position(child.id)).amount, '2000.00')
+  const event = await repo('LoanInstallmentEvent').findOneByOrFail({ requestId: done.id })
+  assert.deepEqual([event.action, event.actorId], ['DEFERRED', hr.id])
+})
+
 test('HTTP RETURN then resubmit rebuilds source evidence and approval conditions while refusing forged evidence patches', async () => {
   const f = await fixture(), pending = expect(await submit(f), 201)
   assert.equal(expect(await approve(f.manager, pending.id, { action: 'RETURN', comment: 'يرجى تغيير شهر التأجيل' }), 201).status, 'RETURNED_FOR_INFO')

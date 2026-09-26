@@ -418,7 +418,11 @@ function BonusCreator({ creatable, currency, onCreated, initialEmployeeId = null
     if (!fresh.totals.ready) { setError('لا يوجد موظف جاهز للإرسال؛ راجع الأسباب بالجدول.'); setBusy(false); return }
     try {
       const created = await submitBonusBatch(input, selection, fresh.previewHash)
-      setResult(`أُرسلت ${created.created.length} مكافأة للاعتماد${created.skipped.length ? `، وتُخطّي ${created.skipped.length} بسبب ظاهر في الجدول` : ''}.`)
+      // مدير الموارد البشرية قراره نهائي: دفعته بتتعتمد لحظة الإرسال، فالرسالة تقول كده بدل «أُرسلت للاعتماد»
+      const skippedNote = created.skipped.length ? `، وتُخطّي ${created.skipped.length} بسبب ظاهر في الجدول` : ''
+      setResult(created.created.length && created.created.every(row => row.status === 'APPROVED')
+        ? `أُنشئت ${created.created.length} مكافأة واعتُمدت فورًا — قرار مدير الموارد البشرية نهائي${skippedNote}.`
+        : `أُرسلت ${created.created.length} مكافأة للاعتماد${skippedNote}.`)
       setSelected(new Set()); setExcluded(new Set())
       setPreview(null); setForm(value => ({ ...value, reason: '', confirmNotDuplicate: false }))
       onCreated()

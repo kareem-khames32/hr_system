@@ -189,8 +189,10 @@ export async function stageLoanRequestSubmission(em: EntityManager, input: { req
 
 // ===== AD-07: كل خطوة اعتماد =====
 export type LoanApprovalDecision = 'WITHIN_CAP' | 'REDUCED' | 'OVERRIDE' | 'EXCEPTIONAL'
+// hrFinal: المعتمد صاحب سلطة الموارد البشرية — قراره نهائي (قرار المالك 26 سبتمبر)، فمنشئ السلفة الاستثنائية
+// لو كان هو مايتمنعش من اعتمادها (والاعتماد الفوري لطلبه نيابةً بيمر من هنا لكل خطوة). غيره يفضل ممنوع (فصل المهام)
 export async function reviewLoanRequestApproval(em: EntityManager, input: { requestId: number; requesterId: number; payload: string | null; actor: JwtPayload; step: number;
-  approvedAmount?: string | null; capOverrideReason?: string | null; comment?: string | null; today?: string }) {
+  approvedAmount?: string | null; capOverrideReason?: string | null; comment?: string | null; today?: string; hrFinal?: boolean }) {
   await lockPayrollEmployees(em, [input.requesterId])
   let stored: Record<string, any>
   try { stored = JSON.parse(input.payload || '{}') } catch { throw new BadRequestException('حمولة طلب السلفة تالفة') }
@@ -203,7 +205,7 @@ export async function reviewLoanRequestApproval(em: EntityManager, input: { requ
     if (!input.comment?.trim()) throw new BadRequestException('اكتب سبب تخفيض مبلغ السلفة في الملاحظة')
     loanScheduleAmounts(decided, schedule.months)
   }
-  if (stored.exceptional === true && stored.exceptionalBy === input.actor.sub) {
+  if (stored.exceptional === true && stored.exceptionalBy === input.actor.sub && input.hrFinal !== true) {
     throw new ForbiddenException({ code: 'LOAN_EXCEPTIONAL_SELF_APPROVAL', message: 'منشئ السلفة الاستثنائية لا يعتمدها بنفسه (فصل المهام)' })
   }
   const evaluation = await evaluateEmployeeLoanCap(em, { employeeId: input.requesterId, amount: decided, months: schedule.months, asOf: input.today ?? localDate(), excludeRequestId: input.requestId })

@@ -134,6 +134,9 @@ before(async () => {
   users.a1 = await user('employee-a1', 'employee', org.branchA.id, people.a1.id)
   users.a3 = await user('employee-a3', 'employee', org.branchA.id, people.a3.id)
   users.solo = await user('employee-solo', 'employee', org.branchA.id, people.solo.id)
+  // مُقترِح بأساس «الموارد البشرية» (bonuses.manage) وتجاوز السقف، من غير سلطة الموارد البشرية: اقتراحه يمشي في سلسلته.
+  // قرار المالك 26 سبتمبر: اقتراح صاحب السلطة (hr_manager / مدير النظام) بيتعتمد لحظتها
+  users.bonusDesk = await user('bonus-desk', 'employee', org.branchA.id, null, ['bonuses.view', 'bonuses.manage', 'bonuses.exceed_cap'])
   await app.get(require('../src/requests/requests-scheduler.service').RequestsScheduler).catchUp()
   await app.get(require('../src/attendance/attendance-scheduler.service').AttendanceScheduler).catchUpIfBehind()
   // أنواع المكافآت والخصومات لكل الشركة: بتتضاف من حساب على مستوى الشركة، وموارد الفرع تشتغل عليها بس
@@ -291,8 +294,10 @@ test('EX-05 rules 1 and 2: above one day of salary escalates to the higher manag
   const over = expectStatus(await request(users.manager, 'POST', '/bonuses', { ...bonus({ inputValue: '9500' }), employeeId: people.a3.id, targetPeriod: '2026-12' }), 400, 'BONUS_ABOVE_CAP')
   assert.equal(over.limit, '9000.00')
   expectStatus(await request(users.hr, 'POST', '/bonuses', { ...bonus({ inputValue: '9500' }), employeeId: people.a3.id, targetPeriod: '2026-12' }), 400, 'BONUS_ABOVE_CAP')
-  const capped = expectStatus(await request(users.admin, 'POST', '/bonuses', { ...bonus({ inputValue: '9500' }), employeeId: people.a3.id, targetPeriod: '2026-12' }), 201)
+  const capped = expectStatus(await request(users.bonusDesk, 'POST', '/bonuses', { ...bonus({ inputValue: '9500' }), employeeId: people.a3.id, targetPeriod: '2026-12' }), 201)
   assert.deepEqual([capped.capExceeded, capped.creator.basis, capped.overrides.capOverride, capped.steps.map(step => step.role)], [true, 'HR', true, ['DEPARTMENT_MANAGER', 'HR']])
+  assert.equal(capped.status, 'IN_APPROVAL', 'a proposer without HR authority keeps the chain')
+  expectStatus(await request(users.bonusDesk, 'POST', `/bonuses/${capped.id}/approve`, { expectedRevision: 0 }), 403, 'BONUS_NOT_CURRENT_APPROVER')
   expectStatus(await request(users.departmentManager, 'POST', `/bonuses/${capped.id}/approve`, { expectedRevision: 0 }), 201)
   const cappedApproved = expectStatus(await request(users.hr, 'POST', `/bonuses/${capped.id}/approve`, { expectedRevision: 1 }), 201)
   assert.equal(cappedApproved.status, 'APPROVED', 'the cap override recorded at proposal carries through approval')
@@ -305,6 +310,50 @@ test('EX-05 rules 1 and 2: above one day of salary escalates to the higher manag
   // الموظف يرى المرفوض/الملغى بحالته بلا ملاحظات المعتمدين الداخلية
   const a3Mine = expectStatus(await request(users.a3, 'GET', '/bonuses/mine'), 200)
   assert.deepEqual(a3Mine.map(row => row.status).sort(), ['CANCELLED', 'WITHDRAWN'])
+})
+
+test('Owner 26-Sep: a bonus HR proposes is approved at once through every step of its captured chain — the same ledger entry, events and final state as a full manual approval; a bulk one too', async () => {
+  // موظف مخصص للاختبار (اختبار القبول بعده يعدّ مكافآت a1 وa2 بالحرف)
+  const target = await employee('BN_HRF', { managerEmployeeId: people.manager.id })
+  const instant = expectStatus(await request(users.hr, 'POST', '/bonuses', { ...bonus({ bonusTypeId: types.performance.id, inputValue: '2', reason: `${REASON} — قرار الموارد البشرية` }),
+    employeeId: target.id, targetPeriod: '2027-01' }), 201)
+  const note = 'اعتماد فوري — مدير الموارد البشرية'
+  assert.deepEqual([instant.status, instant.statusLabel, instant.finalAmount, instant.escalated, instant.creator.basis, instant.decidedByUserId],
+    ['APPROVED', 'معتمد — بانتظار الصرف', '600.00', true, 'HR', users.hr.id])
+  assert.deepEqual(instant.steps.map(step => [step.role, step.status, step.actedByUserId, step.reason]),
+    [['DEPARTMENT_MANAGER', 'APPROVED', users.hr.id, note], ['HR', 'APPROVED', users.hr.id, note]])
+  assert.deepEqual(instant.events.map(event => event.eventType), ['SUBMITTED', 'STEP_APPROVED', 'STEP_APPROVED', 'APPROVED'])
+  assert.ok(instant.events.filter(event => event.eventType !== 'SUBMITTED').every(event => event.actorUserId === users.hr.id && event.payload.instant === true))
+  assert.deepEqual(instant.amountTrace.approvals.map(row => [row.stepOrder, row.amount]), [[1, '600.00'], [2, '600.00']])
+  assert.equal(instant.revision, 2, 'one revision per approved step, as after two manual approvals')
+  const [credit] = instant.obligations
+  assert.deepEqual([credit.type, credit.category, credit.amount, credit.status, credit.targetPeriod, credit.effectiveDate], ['CREDIT', 'bonus', '600.00', 'PENDING', '2027-01', '2027-01-01'])
+  assert.equal((await repo('EmployeeObligation').findOneByOrFail({ id: credit.id })).employeeId, target.id)
+  expectStatus(await request(users.departmentManager, 'POST', `/bonuses/${instant.id}/approve`, { expectedRevision: 2 }), 409, 'BONUS_STATE')
+  // الدفعة من الموارد البشرية: كل طلب منشأ معتمد لحظتها بقيده
+  const body = { ...bonus({ inputValue: '150', reason: `${REASON} — دفعة الموارد البشرية` }), targetPeriod: '2027-01', selection: { mode: 'EMPLOYEES', ids: [target.id], excludeEmployeeIds: [] } }
+  const preview = expectStatus(await request(users.hr, 'POST', '/bonuses/preview', body), 201)
+  const batch = expectStatus(await request(users.hr, 'POST', '/bonuses/bulk', { ...body, previewHash: preview.previewHash }), 201)
+  assert.deepEqual(batch.created.map(row => [row.employeeId, row.status]), [[target.id, 'APPROVED']])
+  const bulkRow = expectStatus(await request(users.hr, 'GET', `/bonuses/${batch.created[0].requestId}`), 200)
+  assert.deepEqual([bulkRow.status, bulkRow.obligations.map(row => row.amount)], ['APPROVED', ['150.00']])
+  for (const id of [instant.id, bulkRow.id]) {
+    expectStatus(await request(users.hr, 'POST', `/bonuses/${id}/cancel`, { expectedRevision: await revisionOf(id), reason: 'إلغاء طلب فحص الاعتماد الفوري للمكافأة' }), 201)
+  }
+})
+
+test('Owner 26-Sep: HR decides a legacy pending bonus it proposed before the decision; the beneficiary never approves his own', async () => {
+  // مكافأة اقترحتها الموارد البشرية قبل القرار ووقفت في سلسلتها: تُدرج مباشرة، ثم تعتمدها الموارد البشرية بنفسها الآن
+  const legacy = await repo('BonusRequest').save({ batchId: null, employeeId: people.solo.id, bonusTypeId: types.spot.id, typeVersion: types.spot.version,
+    typeSnapshot: JSON.stringify({ id: types.spot.id, version: types.spot.version, ...types.spot }), calcMethod: 'FIXED_AMOUNT', inputValue: '120', estimatedAmount: 120,
+    finalAmount: null, amountTrace: '{}', reason: `${REASON} — مكافأة قديمة`, attachmentRef: null, targetPeriod: '2027-02', status: 'IN_APPROVAL',
+    creatorUserId: users.hr.id, creatorEmployeeId: null, scopeBasis: 'HR', scopeSnapshot: '{}', escalated: false, capExceeded: false, outOfScope: false,
+    steps: JSON.stringify([{ order: 1, role: 'HR', approverEmployeeId: null, status: 'PENDING', note: null, escalation: false, actedByUserId: null, actedAt: null, reason: null, adjustedFrom: null, adjustedTo: null }]),
+    overrides: '{}', obligationId: null, decisionReason: null, decidedByUserId: null, decidedAt: null, revision: 0, updatedAt: null })
+  expectStatus(await request(users.solo, 'POST', `/bonuses/${legacy.id}/approve`, { expectedRevision: 0 }), 403, 'BONUS_NOT_CURRENT_APPROVER')
+  const decided = expectStatus(await request(users.hr, 'POST', `/bonuses/${legacy.id}/approve`, { expectedRevision: 0, reason: 'قرار الموارد البشرية' }), 201)
+  assert.deepEqual([decided.status, decided.decidedByUserId, decided.obligations[0].amount], ['APPROVED', users.hr.id, '120.00'])
+  expectStatus(await request(users.hr, 'POST', `/bonuses/${legacy.id}/cancel`, { expectedRevision: decided.revision, reason: 'إلغاء طلب فحص المكافأة القديمة الواقفة' }), 201)
 })
 
 test('Acceptance (step 27): a bulk bonus and a bulk deduction for a team with one employee excluded — preview, stale hash, independent requests, and a paid run where the excluded employee has neither', async () => {

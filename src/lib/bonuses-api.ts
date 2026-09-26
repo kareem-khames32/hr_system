@@ -55,7 +55,8 @@ export interface BonusPreview {
   rows: BonusPreviewRow[]
 }
 export interface BonusBulkResult {
-  batchId: number; created: Array<{ employeeId: number; requestId: number; amount: string }>
+  // status: «APPROVED» لو المُنشئ مدير موارد بشرية (قراره نهائي فتتعتمد الدفعة فورًا)، وإلا «IN_APPROVAL»
+  batchId: number; created: Array<{ employeeId: number; requestId: number; amount: string; status?: string }>
   skipped: Array<{ employeeId: number; fullName: string | null; status: string; message: string | null }>
   totals: BonusPreview['totals']
 }

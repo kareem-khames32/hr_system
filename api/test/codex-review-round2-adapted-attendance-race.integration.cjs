@@ -5,6 +5,8 @@ const fs=require('node:fs'),path=require('node:path'),Module=require('node:modul
 const filename=path.join(__dirname,'attendance-payroll-race.integration.cjs')
 let source=fs.readFileSync(filename,'utf8')
 const old="lastWorkingDay: date, status: 'CLOSED', terminationReason: 'termination'"
-assert.equal(source.split(old).length,2)
-source=source.replace(old,"lastWorkingDay: date, status: 'IN_SETTLEMENT', terminationReason: 'termination'")
+// الأصل اتصلح بالحرف ده (365a9f0) — الملف المصلّح بيتشغل زي ما هو، والقديم بيتعدّل زي الأول
+const adapted="lastWorkingDay: date, status: 'IN_SETTLEMENT', terminationReason: 'termination'"
+assert.equal(source.split(old).length+source.split(adapted).length,3)
+source=source.replace(old,adapted)
 const fixture=new Module(filename,module);fixture.filename=filename;fixture.paths=module.paths;fixture._compile(source,filename)

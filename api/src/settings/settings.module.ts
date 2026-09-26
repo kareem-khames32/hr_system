@@ -7,6 +7,8 @@ import { RequestType } from '../requests/entities/request-type.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { RequestsModule } from '../requests/requests.module'
 import { ConfigDefaultsService } from './config-defaults.service'
+import { RequestCategoryChainsController } from './request-category-chains.controller'
+import { RequestCategoryChainsService } from './request-category-chains.service'
 import { SettingsController } from './settings.controller'
 
 @Module({
@@ -21,8 +23,9 @@ import { SettingsController } from './settings.controller'
       RequestType,
     ]),
   ],
-  controllers: [SettingsController],
+  // سلسلة كل فئة طلبات جوّه «بانِي الطلبات» (طلب المالك 26 سبتمبر)
+  controllers: [SettingsController, RequestCategoryChainsController],
   // مفاتيح الإعدادات الافتراضية الناقصة تُضاف عند الإقلاع
-  providers: [ConfigDefaultsService],
+  providers: [ConfigDefaultsService, RequestCategoryChainsService],
 })
 export class SettingsModule {}

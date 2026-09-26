@@ -394,7 +394,23 @@ export interface ApiRequest {
   confidentialMasked?: boolean
   overtimeReviewRequired?: boolean
   overtime?: ApiOvertimeRequestDetail | null
+  // تفاصيل الطلب (GET /requests/:id): بطاقة صاحب الطلب، ومن قدّمه نيابةً عنه — null لو قدّمه بنفسه
+  // أو كان الطلب سرّيًا محجوبًا عن السائل
+  requester?: ApiRequestRequester | null
+  submittedBy?: ApiRequestSubmittedBy | null
 }
+// صاحب الطلب كما في ملفه الحالي: الاسم والكود والمسمى وتنظيمه ومديره المباشر (نفس حل المدير المباشر في سلسلة الاعتماد)
+export interface ApiRequestRequester {
+  employeeId: number
+  fullName: string
+  employeeCode: string | null
+  jobTitle: string | null
+  departmentName: string | null
+  branchName: string | null
+  teamName: string | null
+  directManagerName: string | null
+}
+export interface ApiRequestSubmittedBy { displayName: string | null }
 export type ApiOvertimeEvidence = OvertimeEvidence
 export interface ApiOvertimePreview extends OvertimeEvidence {
   canSubmit: boolean
@@ -1297,7 +1313,31 @@ export interface ApiWorkSchedule {
   attendanceRuleVersion?: number | null; attendanceRuleEffectiveFrom?: string | null
   // فرع الجدول: null = كل الشركة (قرار المالك 16 سبتمبر)
   branchId?: number | null
+  // استثناءات أيام الراحة جوه الجدول (JSON) — مثلًا آخر سبت في الشهر المالي دوام (قرار المالك 26 سبتمبر)
+  weekendExceptions?: string | null
 }
+// استثناء واحد من استثناءات جدول العمل
+export interface ApiWorkScheduleException {
+  weekday: 'SUN' | 'MON' | 'TUE' | 'WED' | 'THU' | 'FRI' | 'SAT'
+  occurrence: 'ALL' | '1ST' | '2ND' | '3RD' | '4TH' | 'LAST'
+  effect: 'WORK' | 'OFF'
+  basis: 'PAYROLL' | 'CALENDAR'
+  cycleStartDay?: number
+}
+export const parseWorkScheduleExceptions = (value?: string | null): ApiWorkScheduleException[] => {
+  if (!value) return []
+  try { const list = JSON.parse(value); return Array.isArray(list) ? list : [] } catch { return [] }
+}
+// فترة خدمة موظف (من المباشرة لآخر يوم عمل) — الجدول الأسبوعي وأيام العمل
+export interface ApiEmploymentWindow {
+  employeeId: number; workScheduleId: number | null; status: string
+  from: string | null; to: string | null; toSource: 'OFFBOARDING' | 'ARCHIVE' | null
+  endedUnknown?: boolean // منتهية خدمته من غير تاريخ موثّق — خارج الخدمة للإسناد والعرض
+}
+export const fetchEmploymentWindows = (range?: { from: string; to: string }) =>
+  get<ApiEmploymentWindow[]>(`/attendance/employment-windows${range ? `?from=${range.from}&to=${range.to}` : ''}`)
+export const inEmploymentWindow = (window: Pick<ApiEmploymentWindow, 'from' | 'to' | 'endedUnknown'> | undefined, date: string) =>
+  !window || (!window.endedUnknown && (!window.from || date >= window.from) && (!window.to || date <= window.to))
 export interface ApiAttendanceRuleChange { effectiveFrom: string; changeReason: string }
 export interface ApiAttendanceRuleVersion {
   id: number; sourceType: 'SHIFT' | 'WORK_SCHEDULE' | 'EMPLOYEE'; sourceId: number
@@ -1312,7 +1352,7 @@ export const assignWorkSchedule = (
   target: { employeeIds: number[] } | { departmentId: number } | { all: true },
   change?: ApiAttendanceRuleChange
 ) =>
-  post<{ scheduleId: number; matched: number; assigned: number; unchanged: number }>(
+  post<{ scheduleId: number; matched: number; assigned: number; unchanged: number; outsideEmployment?: number }>(
     `/catalogs/work-schedules/${id}/assign`,
     { ...target, ...change }
   )
@@ -1690,6 +1730,7 @@ export const setDayShiftOverridesBulk = (d: {
   // سبب فشل كل موظف/يوم — لا يُبلع
   failed?: Array<{ employeeId: number; date: string; error: string }>
   skipped?: number // موظفون استُبعدوا: خارج نطاق فرعك أو أنت نفسك
+  outsideEmployment?: number // أيام اتعدّت لأنها برّه فترة خدمة الموظف
 }>('/attendance/schedule/day/bulk', d)
 // إسناد وردية لمدة (من تاريخ لتاريخ) لمجموعة موظفين — weekdays اختياري (0 = الأحد … 6 = السبت).
 // الأسبوع الكامل يتخزن وردية أسبوع والباقي أيام خاصة؛ keepDayOverrides يسيب الأيام الخاصة القديمة
@@ -1698,7 +1739,9 @@ export interface ApiScheduleRangeResult {
   removedOverrides: number; keptOverrides: number; recomputed: number
   recomputeFailed: Array<{ employeeId: number; date: string }>
   failed: Array<{ employeeId: number; error: string }>
-  skipped: Array<{ employeeId: number; reason: string }>
+  // outsideEmployment: خدمته مابتلمسش المدة (قبل المباشرة أو بعد آخر يوم عمل) — معلومة مش مشكلة
+  skipped: Array<{ employeeId: number; reason: string; outsideEmployment?: boolean }>
+  partial?: number // موظفين اتطبق عليهم أيام خدمتهم بس من المدة
 }
 // teamIds: الفرق — السيرفر بيجيب أعضاءها الشغالين (في نطاق فرعك)
 export const assignScheduleRange = (d: {

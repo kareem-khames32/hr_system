@@ -95,9 +95,12 @@ async function transition(run, action, body) {
 async function deduction(creator, approver, emp, type, amount) {
   const request1 = expectStatus(await request(creator, 'POST', '/deductions', { employeeId: emp.id, deductionTypeId: type.id, inputValue: amount, incidentDate,
     reason: 'مخالفة موثقة في تقرير الجودة الأسبوعي للقسم', targetPeriod: period, confirmNotDuplicate: true }), 201)
-  const detail = expectStatus(await request(approver, 'GET', `/deductions/${request1.id}`), 200)
-  const approved = expectStatus(await request(approver, 'POST', `/deductions/${request1.id}/approve`, { expectedRevision: detail.revision }), 201)
-  assert.equal(approved.status, 'APPROVED', JSON.stringify(approved))
+  // قرار المالك 26 سبتمبر: خصم صاحب سلطة الموارد البشرية (hr_manager) بيتعتمد لحظة إنشائه؛ غيره يعتمده المعتمِد
+  if (request1.status !== 'APPROVED') {
+    const detail = expectStatus(await request(approver, 'GET', `/deductions/${request1.id}`), 200)
+    const approved = expectStatus(await request(approver, 'POST', `/deductions/${request1.id}/approve`, { expectedRevision: detail.revision }), 201)
+    assert.equal(approved.status, 'APPROVED', JSON.stringify(approved))
+  }
   const [obligation] = await repo('EmployeeObligation').findBy({ deductionRequestId: request1.id })
   assert.ok(obligation)
   return { request: request1, obligation }
@@ -149,6 +152,10 @@ before(async () => {
   users.hr = await user('hr', 'hr_manager', null, [...payroll, 'deductions.view', 'deductions.approve', 'deductions.manage',
     'financial_exemption.view', 'financial_exemption.grant', 'financial_exemption.approve', 'financial_exemption.override_limits'])
   users.hr2 = await user('hr2', 'hr_manager', null, ['payroll.view', 'deductions.view', 'deductions.approve', 'financial_exemption.view', 'financial_exemption.grant',
+    'financial_exemption.approve', 'financial_exemption.override_limits'])
+  // مانح/مُنشئ بأساس «الموارد البشرية» (الصلاحيات نفسها) من غير سلطة الموارد البشرية: فصل المهام وحد نسبة المانح يسريان عليه.
+  // قرار المالك 26 سبتمبر: صاحب السلطة (hr_manager) قراره نهائي — اختباره المخصص آخر الملف
+  users.desk = await user('exemption-desk', 'employee', null, ['payroll.view', 'deductions.view', 'deductions.manage', 'financial_exemption.view', 'financial_exemption.grant',
     'financial_exemption.approve', 'financial_exemption.override_limits'])
   users.dm = await user('department-manager', 'employee', people.dm.id)
   users.manager = await user('direct-manager', 'employee', people.manager.id)
@@ -274,7 +281,7 @@ test('قبول الخطوة 26: كل الخصومات القابلة لموظف 
 test('EX-03/07/08: مدير القسم للحضور بسقف واعتماد، فصل المهام، الإلغاء وإعادة الإعفاء، التهدئة وحد الموظف ونسبة المانح، التأجيل وإعادة الفتح والإلغاء', { timeout: 420000 }, async () => {
   await attendance(people.e2, { late: [day(4)], absent: [day(10)] })
   await attendance(people.dm, { late: [day(4)] })
-  const quality = await deduction(users.hr, users.hr2, people.e2, types.quality, '200')
+  const quality = await deduction(users.desk, users.hr2, people.e2, types.quality, '200')
   const run = await calc([people.e2, people.dm])
   assert.equal(Number(itemOf(run, people.e2).otherDeductions), 200)
   const late = exemption(run, people.e2, { scopeKind: 'SINGLE_ENTRY', targetKind: 'LATENESS_DAY', targetRef: day(4) })
@@ -295,9 +302,9 @@ test('EX-03/07/08: مدير القسم للحضور بسقف واعتماد، ف
   expectStatus(await request(users.dm, 'POST', `/payroll/exemptions/${dmGrant.id}/approve`, {}), 403)
   assert.equal(expectStatus(await request(users.hr, 'POST', `/payroll/exemptions/${dmGrant.id}/approve`, { expectedRevision: 1 }), 201).status, 'ACTIVE')
 
-  // فصل المهام: من أنزل الخصم لا يعفيه؛ غيره يعفيه بتأجيل، والتهدئة 24 ساعة تتطلب تبريرًا لحامل التجاوز
+  // فصل المهام: من أنزل الخصم (بلا سلطة الموارد البشرية) لا يعفيه؛ غيره يعفيه بتأجيل، والتهدئة 24 ساعة تتطلب تبريرًا لحامل التجاوز
   const typed = exemption(run, people.e2, { scopeKind: 'DEDUCTION_TYPE', targetKind: 'TYPED', deductionTypeId: types.quality.id, disposition: 'DEFER_ONE_PERIOD' })
-  expectStatus(await request(users.hr, 'POST', '/payroll/exemptions/preview', typed), 403, 'EXEMPTION_SOD_CREATOR')
+  expectStatus(await request(users.desk, 'POST', '/payroll/exemptions/preview', typed), 403, 'EXEMPTION_SOD_CREATOR')
   expectStatus(await request(users.hr2, 'POST', '/payroll/exemptions/preview', typed), 400, 'EXEMPTION_OVERRIDE_REASON_REQUIRED')
   const deferGrant = await grant(users.hr2, { ...typed, overrideReason: 'الخصم اعتُمد اليوم بخطأ مطبعي في التاريخ وتم التحقق منه' })
   assert.equal(deferGrant.status, 'ACTIVE')
@@ -310,15 +317,19 @@ test('EX-03/07/08: مدير القسم للحضور بسقف واعتماد، ف
   assert.equal(expectStatus(await request(users.hr, 'POST', `/payroll/exemptions/${dmGrant.id}/revoke`, { reason: 'تبين من سجل البوابة أن التأخير غير مرتبط بالحافلة' }), 201).status, 'REVOKED')
   expectStatus(await request(users.dm, 'POST', '/payroll/exemptions/preview', late), 403, 'EXEMPTION_REEXEMPT_REQUIRES_OVERRIDE')
 
-  // حد إعفاءات الموظف في 12 شهرًا ونسبة المانح: التجاوز موثق والإعفاء يُحوّل للاعتماد، والمانح لا يرفضه
+  // حد إعفاءات الموظف في 12 شهرًا ونسبة المانح: التجاوز موثق والإعفاء يُحوّل للاعتماد، والمانح لا يرفضه ولا يعتمده
+  // (مانح أساس «الموارد البشرية» بلا سلطتها؛ صاحب السلطة لا يُحوَّل منحه — الاختبار المخصص آخر الملف)
   await setConfig('financial_exemptions.max_per_employee_year', '1')
   await setConfig('financial_exemptions.max_pct_per_grantor', '1')
   const absence = exemption(run, people.e2, { scopeKind: 'SINGLE_ENTRY', targetKind: 'ABSENCE_DAY', targetRef: day(10) })
-  expectStatus(await request(users.hr, 'POST', '/payroll/exemptions/preview', absence), 400, 'EXEMPTION_OVERRIDE_REASON_REQUIRED')
-  const routed = await grant(users.hr, { ...absence, overrideReason: 'غياب بإذن شفهي من مدير الفرع ثبت لاحقًا بمحضر مكتوب' })
+  expectStatus(await request(users.desk, 'POST', '/payroll/exemptions/preview', absence), 400, 'EXEMPTION_OVERRIDE_REASON_REQUIRED')
+  const routed = await grant(users.desk, { ...absence, overrideReason: 'غياب بإذن شفهي من مدير الفرع ثبت لاحقًا بمحضر مكتوب' })
   assert.equal(routed.status, 'PENDING_APPROVAL')
+  assert.equal(routed.grantorBasis, 'HR')
   assert.ok(routed.warnings.some(row => row.code === 'EXEMPTION_GRANTOR_PCT_APPROVAL'))
   assert.deepEqual(routed.overrides.map(row => row.limit), ['max_per_employee_year'])
+  expectStatus(await request(users.desk, 'POST', `/payroll/exemptions/${routed.id}/approve`, {}), 403, 'EXEMPTION_SOD_GRANTOR')
+  assert.deepEqual([routed.canApprove, routed.canReject], [false, false], 'the grantor without HR authority neither approves nor rejects his own grant')
   await setConfig('financial_exemptions.max_per_employee_year', '4')
   await setConfig('financial_exemptions.max_pct_per_grantor', '0')
 
@@ -328,7 +339,7 @@ test('EX-03/07/08: مدير القسم للحضور بسقف واعتماد، ف
   assert.equal(Number(e2.otherDeductions), 0)
   assert.deepEqual(JSON.parse(e2.breakdown).financialExemptions.lines.map(line => [line.component, line.originalAmount, line.disposition]), [['TYPED', '200.00', 'DEFER_ONE_PERIOD']])
   expectStatus(await transition(recalculated, 'approve'), 409, 'PAYRUN-EXEMPTION-PENDING')
-  expectStatus(await request(users.hr, 'POST', `/payroll/exemptions/${routed.id}/reject`, { reason: 'المحضر المكتوب لا يغطي يوم الغياب المحدد' }), 403, 'EXEMPTION_SOD_GRANTOR')
+  expectStatus(await request(users.desk, 'POST', `/payroll/exemptions/${routed.id}/reject`, { reason: 'المحضر المكتوب لا يغطي يوم الغياب المحدد' }), 403, 'EXEMPTION_SOD_GRANTOR')
   assert.equal(expectStatus(await request(users.hr2, 'POST', `/payroll/exemptions/${routed.id}/reject`, { reason: 'المحضر المكتوب لا يغطي يوم الغياب المحدد' }), 201).status, 'REJECTED')
 
   // الاعتماد ← APPLIED، إعادة الفتح ← ACTIVE، الاعتماد مجددًا بلا إعادة حساب، ثم الصرف يؤجل القسط المصنف بقسط للشهر التالي
@@ -353,4 +364,37 @@ test('EX-03/07/08: مدير القسم للحضور بسقف واعتماد، ف
   const expiring = await grant(users.hr, exemption(cancelled, people.e3, { scopeKind: 'DEDUCTION_TYPE', targetKind: 'LATENESS' }))
   expectStatus(await request(users.hr, 'POST', `/payroll/runs/${cancelled.id}/cancel`, { reason: 'مسير اختبار أُلغي بعد الإعفاء' }), 201)
   assert.equal((await repo('PayrollFinancialExemption').findOneByOrFail({ id: expiring.id })).status, 'EXPIRED')
+})
+
+// ===== قرار المالك 26 سبتمبر: «مدير الموارد البشرية قراره نهائي» =====
+test('Owner 26-Sep: HR authority is final in exemptions — the grantor-% cap warns instead of routing, HR exempts a deduction it created, and decides a legacy pending grant of its own', { timeout: 420000 }, async () => {
+  const e4 = await employee('EX_E4', { managerEmployeeId: people.manager.id })
+  await attendance(e4, { late: [day(6)], absent: [day(12)] })
+  // خصم أنزلته الموارد البشرية: معتمد لحظة إنشائه
+  const own = await deduction(users.hr, users.hr2, e4, types.quality, '200')
+  assert.equal(own.request.status, 'APPROVED')
+  const run = await calc([e4])
+  await setConfig('financial_exemptions.max_pct_per_grantor', '1')
+  try {
+    // الإعفاء من خصم أنزلته هي: مفيش EXEMPTION_SOD_CREATOR — التهدئة وحدها تطلب تبريرًا (تحمل صلاحية التجاوز)
+    const typed = exemption(run, e4, { scopeKind: 'DEDUCTION_TYPE', targetKind: 'TYPED', deductionTypeId: types.quality.id })
+    expectStatus(await request(users.hr, 'POST', '/payroll/exemptions/preview', typed), 400, 'EXEMPTION_OVERRIDE_REASON_REQUIRED')
+    const typedGrant = await grant(users.hr, { ...typed, overrideReason: 'قرار الموارد البشرية بعد مراجعة تقرير الجودة الأسبوعي' })
+    // حد نسبة المانح: تنبيه ظاهر بلا تحويل — المنح ساري فورًا
+    assert.deepEqual([typedGrant.status, typedGrant.grantorBasis, typedGrant.approvedByName], ['ACTIVE', 'HR', null])
+    assert.ok(typedGrant.warnings.some(row => row.code === 'EXEMPTION_GRANTOR_PCT_HR_FINAL'), JSON.stringify(typedGrant.warnings))
+    assert.ok(!typedGrant.warnings.some(row => ['EXEMPTION_GRANTOR_PCT_APPROVAL', 'EXEMPTION_NEEDS_APPROVAL'].includes(row.code)))
+    // منح ثانٍ لها ثم يُعاد لحالة «بانتظار الاعتماد» (منح قديم حوّله الحد قبل القرار): تعتمده هي، ورفضه يبقى للإلغاء
+    const late = await grant(users.hr, exemption(run, e4, { scopeKind: 'SINGLE_ENTRY', targetKind: 'LATENESS_DAY', targetRef: day(6) }))
+    assert.equal(late.status, 'ACTIVE')
+    await repo('PayrollFinancialExemption').update(late.id, { status: 'PENDING_APPROVAL' })
+    const pending = expectStatus(await request(users.hr, 'GET', `/payroll/exemptions/${late.id}`), 200)
+    assert.deepEqual([pending.canApprove, pending.canReject, pending.canRevoke], [true, false, true])
+    expectStatus(await request(users.hr, 'POST', `/payroll/exemptions/${late.id}/reject`, { reason: 'المانح يلغي منحه بدل رفضه دائمًا' }), 403, 'EXEMPTION_SOD_GRANTOR')
+    const decided = expectStatus(await request(users.hr, 'POST', `/payroll/exemptions/${late.id}/approve`, {}), 201)
+    assert.deepEqual([decided.status, decided.approvedByName], ['ACTIVE', 'hr'])
+    // والمانح بلا سلطة الموارد البشرية لا يزال ممنوعًا من الإعفاء من خصم أنزله (الاختبار السابق) ومن اعتماد منحه
+  } finally {
+    await setConfig('financial_exemptions.max_pct_per_grantor', '0')
+  }
 })

@@ -4,6 +4,8 @@ import { Employee } from '../employees/employee.entity'
 import { WorkSchedule } from '../assets/assets.entities'
 import { attendanceRuleDate } from './attendance-rule-history'
 import { readCalendarSource } from './attendance-calendar-history'
+import { parseWorkScheduleExceptions, scheduleExceptionMatches } from './work-schedule-exceptions'
+import type { WorkScheduleException } from './work-schedule-exceptions'
 
 export type CalendarDayKind = 'WORKING' | 'WEEKEND' | 'HOLIDAY'
 export interface CalendarVersionRef {
@@ -38,8 +40,10 @@ const idValid = (value: unknown): value is number => typeof value === 'number' &
 const invalid = (message: string): never => { throw new ConflictException({ code: 'CALENDAR_SOURCE_INVALID', message }) }
 const plain = (value: unknown): value is Record<string, any> => !!value && typeof value === 'object' && !Array.isArray(value)
 
-/** أولوية اليوم واحدة للحضور والإجازات والإضافي؛ الوردية الأسبوعية لا تبطل يوم الراحة. */
-export function evaluateCalendarDay(date: string, country: string | null, weekendDays: string[], holidays: Holiday[], globalRules: Exception[], branchRules: Exception[]): CalendarDayKind {
+/** أولوية اليوم واحدة للحضور والإجازات والإضافي؛ الوردية الأسبوعية لا تبطل يوم الراحة.
+ *  الترتيب: العطلة الرسمية تكسب دايمًا ← أيام راحة الجدول/الفرع/الشركة ← قواعد الشركة ← قواعد الفرع ← استثناءات جدول الموظف. */
+export function evaluateCalendarDay(date: string, country: string | null, weekendDays: string[], holidays: Holiday[], globalRules: Exception[], branchRules: Exception[],
+  scheduleRules: WorkScheduleException[] = []): CalendarDayKind {
   attendanceRuleDate(date)
   const normalizedCountry = String(country ?? '').trim().toUpperCase()
   if (holidays.some(holiday => (!normalizedCountry || !String(holiday.country ?? '').trim() || String(holiday.country).trim().toUpperCase() === normalizedCountry)
@@ -54,6 +58,8 @@ export function evaluateCalendarDay(date: string, country: string | null, weeken
     if (!rule.isActive || rule.weekday !== weekday || !(rule.occurrence === 'ALL' || rule.occurrence === 'LAST' && last || occurrenceIndex[rule.occurrence] === occurrence)) continue
     off = rule.effect === 'OFF'
   }
+  // استثناءات جدول الموظف نفسه (قرار المالك 26 سبتمبر) — الأخص فبتيجي بعد الشركة والفرع
+  for (const rule of scheduleRules) if (scheduleExceptionMatches(date, weekday, rule)) off = rule.effect === 'OFF'
   return off ? 'WEEKEND' : 'WORKING'
 }
 
@@ -121,15 +127,15 @@ async function employeeWeekend(em: EntityManager, employee: Employee, date: stri
   const employeeVersions = await memo(em, cache, `EMPLOYEE_RULE:${employee.id}`, () => readAttendanceCalendarVersions(em, 'EMPLOYEE', employee.id))
   const selected = selectCalendarVersion({ current: { workScheduleId: employee.workScheduleId ?? null }, versions: employeeVersions, revision: 0, currentSourceHash: '' }, 'EMPLOYEE', employee.id, date, strict)
   const assignment = selectedValue(out, selected, 'إسناد جدول الموظف')
-  if (!assignment) return { known: false, override: undefined }
-  if (assignment.workScheduleId === null) return { known: true, override: undefined }
+  if (!assignment) return { known: false, override: undefined, exceptions: [] as WorkScheduleException[] }
+  if (assignment.workScheduleId === null) return { known: true, override: undefined, exceptions: [] as WorkScheduleException[] }
   if (!idValid(assignment.workScheduleId)) return invalid('مرجع جدول الموظف في النسخة غير صالح')
   const id = assignment.workScheduleId, current = await memo(em, cache, `WORK_SCHEDULE_ROW:${id}`, () => em.findOneBy(WorkSchedule, { id }))
   const versions = await memo(em, cache, `WORK_SCHEDULE_RULE:${id}`, () => readAttendanceCalendarVersions(em, 'WORK_SCHEDULE', id))
   if (!current && !versions.length) return invalid('جدول الموظف المشار إليه غير موجود')
   const schedule = selectedValue(out, selectCalendarVersion({ current: current ?? {}, versions, revision: 0, currentSourceHash: '' }, 'WORK_SCHEDULE', id, date, strict), 'أيام راحة جدول الموظف')
-  if (!schedule) return { known: false, override: undefined }
-  return { known: true, override: weekend(schedule.weekendDays, true) }
+  if (!schedule) return { known: false, override: undefined, exceptions: [] as WorkScheduleException[] }
+  return { known: true, override: weekend(schedule.weekendDays, true), exceptions: parseWorkScheduleExceptions(schedule.weekendExceptions, invalid) }
 }
 
 /** قراءة JSON الخام تمنع فساد نسخة إسناد أو جدول من المرور كقيمة افتراضية. */
@@ -153,10 +159,11 @@ async function readAttendanceCalendarVersions(em: EntityManager, sourceType: 'EM
   })
 }
 
-function applyDay(out: ResolvedCalendarDay, global: GlobalCalendar, branch: BranchCalendar, override?: string[], globalLegacy = false) {
+function applyDay(out: ResolvedCalendarDay, global: GlobalCalendar, branch: BranchCalendar, override?: string[], globalLegacy = false,
+  scheduleRules: WorkScheduleException[] = []) {
   const base = override ?? (branch.weekendDays ? weekend(branch.weekendDays) : global.weekendDays == null && globalLegacy ? ['FRI', 'SAT'] : weekend(global.weekendDays))
   out.weekendDays = base
-  out.dayKind = evaluateCalendarDay(out.date, branch.country, base, global.holidays, global.exceptions, branch.exceptions)
+  out.dayKind = evaluateCalendarDay(out.date, branch.country, base, global.holidays, global.exceptions, branch.exceptions, scheduleRules)
   out.working = out.dayKind === 'WORKING'
   return out
 }
@@ -199,6 +206,6 @@ export async function resolveEmployeeCalendarDay(em: EntityManager, employeeId: 
     if (!context) return out
     const override = await employeeWeekend(em, employee, date, strict, out, options.cache)
     if (!override.known) return out
-    return applyDay(out, context.global, context.branch, override.override, context.globalLegacy)
+    return applyDay(out, context.global, context.branch, override.override, context.globalLegacy, override.exceptions)
   } catch (error) { return failed(out, error, strict) }
 }

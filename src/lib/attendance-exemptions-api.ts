@@ -14,7 +14,7 @@ export interface AttendanceExemptionActions {
   cancel: boolean
   terminate: boolean
   // سبب منع القرار لهذا المستخدم: أنشأ الطلب، أو اعتمد خطوة الموارد البشرية في استثناء قيادي
-  blockedBy: 'CREATOR' | 'HR_APPROVER' | null
+  blockedBy: 'SELF' | 'CREATOR' | 'HR_APPROVER' | null
 }
 
 export interface AttendanceExemptionRow extends ApiAttendanceExemption {
@@ -71,10 +71,21 @@ export const EXEMPTION_EVENT_LABELS: Record<string, string> = {
   CREATED: 'إنشاء الطلب',
   HR_APPROVED: 'اعتماد الموارد البشرية',
   EXECUTIVE_APPROVED: 'الاعتماد التنفيذي',
+  // قرار المالك 26 سبتمبر: ما ينشئه مدير الموارد البشرية لغيره يُعتمد لحظة إنشائه باسمه وبسبب الإنشاء نفسه
+  HR_INSTANT_APPROVED: 'اعتماد فوري — أنشأه مدير الموارد البشرية',
+  EXECUTIVE_INSTANT_APPROVED: 'اعتماد تنفيذي فوري — أنشأه مدير الموارد البشرية',
   REJECTED: 'رفض الطلب',
   EXECUTIVE_REJECTED: 'رفض في الخطوة التنفيذية',
   CANCELLED: 'إلغاء الطلب',
   TERMINATED: 'إنهاء الاستثناء',
+}
+
+// رسالة نجاح الإنشاء بحسب ما رجّعه الخادم: مدير الموارد البشرية (بصلاحية الاعتماد) طلبه يُعتمد فورًا، والقيادي بلا
+// صلاحية تنفيذية يفضل بانتظار الاعتماد التنفيذي وحده؛ غيره بانتظار قرار مستخدم آخر
+export function exemptionCreatedNotice(created: Pick<ApiAttendanceExemption, 'id' | 'status' | 'approvedByUserId'>): string {
+  if (created.status === 'APPROVED') return `أُنشئ الاستثناء #${created.id} واعتُمد فورًا — قرار مدير الموارد البشرية نهائي.`
+  if (created.approvedByUserId) return `أُنشئ الاستثناء #${created.id} واعتمدته الموارد البشرية فورًا، وهو بانتظار الاعتماد التنفيذي من مستخدم يحمل صلاحيته.`
+  return `أُنشئ طلب الاستثناء #${created.id} وهو بانتظار قرار مستخدم آخر غير منشئه.`
 }
 
 export const EXEMPTION_DECISION_LABELS: Record<ExemptionDecisionKind, { title: string; submit: string }> = {

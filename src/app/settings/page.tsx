@@ -52,8 +52,8 @@ const groups: { title: string; description: string; links: SettingsLink[] }[] = 
     links: [
       { title: 'المستخدمون', description: 'حسابات الدخول وربطها بالموظفين والفروع.', href: '/settings/users', permission: 'users.manage', icon: Users },
       { title: 'الأدوار والصلاحيات', description: 'الصلاحيات الفعلية الممنوحة لكل دور.', href: '/settings/roles', permission: 'roles.manage', icon: ShieldCheck },
-      { title: 'مسارات الموافقات', description: 'مراحل الاعتماد والجهات المسؤولة وشروط الانتقال.', href: '/settings/approvals', permission: 'approval_chains.manage', icon: FileCheck },
-      { title: 'أنواع الطلبات', description: 'نماذج الطلبات والحقول المطلوبة لكل نوع.', href: '/settings/request-types', permission: 'request_types.manage', icon: FileText },
+      { title: 'مسارات الموافقات', description: 'مكتبة كل سلاسل الاعتماد — وربطها بالطلبات من «أنواع الطلبات».', href: '/settings/approvals', permission: 'approval_chains.manage', icon: FileCheck },
+      { title: 'أنواع الطلبات', description: 'الطلبات بفئاتها وحقولها، وسلسلة اعتماد كل فئة (ولكل فرع).', href: '/settings/request-types', permission: 'request_types.manage', icon: FileText },
       { title: 'أنواع المستندات', description: 'المستندات التي تُرفق بملفات الموظفين.', href: '/settings/documents', permission: 'settings.manage', icon: FileText },
       { title: 'قوالب المستندات', description: 'قوالب العقود والإقرارات ونماذج الموارد البشرية لإصدارها وحفظها وطباعتها.', href: '/settings/document-templates', permission: 'settings.manage', icon: FileText },
       { title: 'قوالب الخطابات', description: 'صياغة خطابات طلبات الموظفين ونشرها وربطها بالموافقات.', href: '/settings/letter-templates', permission: 'settings.manage', icon: FileText },

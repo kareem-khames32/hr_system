@@ -761,6 +761,69 @@ test('OT-10 return: in a closed period changed punches do not block (computed at
   assert.equal(numeric(approved.approvedMinutes), 150); assert.equal(numeric(approved.amountSnapshot), 140.62)
 })
 
+// ===== قرار المالك 26 سبتمبر: «مدير الموارد البشرية قراره نهائي» — إضافي الموارد البشرية نيابةً يُعتمد لحظة تقديمه =====
+const onBehalf = (f, payload) => request(f.hr, 'POST', '/requests', { typeCode: 'OVERTIME', submit: true, onBehalfEmployeeId: f.emp.id,
+  payload: { date: f.day, reason: 'عمل إضافي موثق — قدّمته الموارد البشرية', ...payload } })
+
+test('Owner 26-Sep: overtime HR files on behalf is approved at once through the three steps with the same evidence, events, frozen price and payroll line as the manual chain', async t => {
+  const f = await fixture()
+  await punches(f, '07:52', '19:20')
+  const result = await onBehalf(f, { hours: 3 })
+  assert.equal(result.status, 201, JSON.stringify(result.body)); assert.equal(result.body.status, 'COMPLETED')
+  const entry = await repo('OvertimeEntry').findOneByOrFail({ requestId: result.body.id })
+  assert.deepEqual([entry.status, entry.source, numeric(entry.approvedMinutes), numeric(entry.payableHours), numeric(entry.hourlyRateSnapshot), numeric(entry.amountSnapshot)],
+    ['APPROVED', 'PRE_REQUESTED', 135, 2.25, 37.5, 126.56])
+  const snapshot = toObject(entry.calculationSnapshot)
+  assert.deepEqual([snapshot.submission.submittedByUserId, snapshot.approval.approverId, snapshot.approvalResult.approvedMinutes], [f.hr.id, f.hr.id, 135])
+  const decisions = await repo('RequestApproval').find({ where: { requestId: result.body.id }, order: { step: 'ASC' } })
+  assert.deepEqual(decisions.map(row => [row.step, row.approverId, row.action]), [[1, f.hr.id, 'APPROVED'], [2, f.hr.id, 'APPROVED'], [3, f.hr.id, 'APPROVED']])
+  assert.ok(decisions.every(row => /اعتماد فوري/.test(row.comment)))
+  const events = await repo('OvertimeEntryEvent').find({ where: { entryId: entry.id }, order: { id: 'ASC' } })
+  assert.deepEqual(events.map(event => [event.eventType, event.stepOrder ?? null]), [['SUBMITTED', null], ['STEP_APPROVED', 1], ['STEP_APPROVED', 2], ['STEP_APPROVED', 3], ['APPROVED', null]])
+  assert.ok(events.every(event => event.actorUserId === f.hr.id))
+  const claims = await claimsFor(f)
+  assert.equal(claims.length, 1); assert.equal(claims[0].entryId, entry.id); assert.equal(claims[0].releasedAt, null)
+  // المسير يأخذ اللقطة المالية نفسها مرة واحدة
+  const { item, breakdown } = await payroll(f)
+  assert.equal(numeric(item.overtimeHours), 2.25); assert.equal(numeric(item.overtimeAmount), 126.56)
+  assert.deepEqual(breakdown.overtimeEntryIds, [entry.id])
+  t.diagnostic('Manual: evidence 135 of the 180 requested minutes ⇒ 2.25h × 37.50 × 1.5 = 126.56, approved by HR at submission.')
+})
+
+test('Owner 26-Sep: a closed-period day with an incomplete punch or not over yet refuses the HR instant approval as a whole; complete punches are approved at once from them', async () => {
+  const f = await fixture()
+  await punches(f, '07:00', null)
+  const before = await counts(f)
+  const refused = await onBehalf(f, {})
+  assert.equal(refused.status, 400, JSON.stringify(refused.body))
+  assert.match(refused.body.message, /تعذّر اعتماد الإضافي فورًا/)
+  assert.deepEqual(await counts(f), before, 'no request, entry, decision, claim or event survives')
+  await punches(f, '17:00', null)
+  const done = await onBehalf(f, {})
+  assert.equal(done.status, 201, JSON.stringify(done.body)); assert.equal(done.body.status, 'COMPLETED')
+  const approved = await repo('OvertimeEntry').findOneByOrFail({ requestId: done.body.id })
+  assert.deepEqual([approved.status, numeric(approved.approvedMinutes), numeric(approved.amountSnapshot)], ['APPROVED', 60, 56.25])
+  assert.equal(toObject(approved.calculationSnapshot).approvalResult.computedAtApproval, true)
+  // يوم لسه ماخلصش: الإضافي بيتحسب من بصماته بعد اليوم، فالاعتماد الفوري بيترفض كله ويتقدم من بكرة
+  const current = await fixture({ day: today })
+  const beforeToday = await counts(current)
+  const early = await onBehalf(current, {})
+  assert.equal(early.status, 400, JSON.stringify(early.body))
+  assert.deepEqual(await counts(current), beforeToday)
+})
+
+test('Owner 26-Sep: an eligible exempt employee overtime filed by HR is approved at once for the explicit requested hours without biometric evidence', async () => {
+  const f = await fixture()
+  await repo('AttendanceExemption').save({ employeeId: f.emp.id, effectiveFrom: f.day, effectiveTo: f.day,
+    reasonCode: 'field_role', reason: 'مستثنى مؤهل لإضافي صريح يقدّمه مدير الموارد البشرية', status: 'APPROVED',
+    createdByUserId: admin.id, approvedByUserId: financeApprover.id, approvedAt: new Date(), overtimeEligibleOverride: true })
+  const result = await onBehalf(f, { hours: 2 })
+  assert.equal(result.status, 201, JSON.stringify(result.body)); assert.equal(result.body.status, 'COMPLETED')
+  const entry = await repo('OvertimeEntry').findOneByOrFail({ requestId: result.body.id })
+  assert.deepEqual([entry.status, numeric(entry.approvedMinutes), numeric(entry.payableHours), entry.hoursActual, numeric(entry.amountSnapshot)], ['APPROVED', 120, 2, null, 112.5])
+  assert.equal(toObject(entry.calculationSnapshot).submission.evidence.evidenceMode, 'EXEMPT_APPROVAL')
+})
+
 test('OT request integrity: client financial fields and cross-branch on-behalf submission are rejected without any orphan', async () => {
   const f = await fixture(), outsider = await fixture()
   await punches(f, '08:00', '19:20'); await punches(outsider, '08:00', '19:20')

@@ -130,7 +130,10 @@ export default function BonusRequestForm({ onSubmitted }: { onSubmitted?: () => 
     try {
       const created = await createBonus({ ...input, employeeId: Number(employeeId) })
       const chain = created.steps.filter(step => step.status !== 'SKIPPED').map(step => step.roleLabel).join(' ← ')
-      setResult(`أُرسل طلب المكافأة #${created.id} بمبلغ ${formatBonusMoney(created.estimatedAmount)} ${currency} — ${created.statusLabel}. سلسلة الاعتماد: ${chain}. بعد اعتماد الموارد البشرية تُصرف مع مسير ${created.targetPeriod}، ويراها الموظف في «مكافآتي».`)
+      // قرار المالك 26 سبتمبر: اقتراح مدير الموارد البشرية بيرجع من الخادم معتمدًا لحظتها
+      setResult(created.status === 'APPROVED'
+        ? `أُنشئت المكافأة #${created.id} بمبلغ ${formatBonusMoney(created.finalAmount ?? created.estimatedAmount)} ${currency} واعتُمدت فورًا — قرار مدير الموارد البشرية نهائي. تُصرف مع مسير ${created.targetPeriod}، ويراها الموظف في «مكافآتي».`
+        : `أُرسل طلب المكافأة #${created.id} بمبلغ ${formatBonusMoney(created.estimatedAmount)} ${currency} — ${created.statusLabel}. سلسلة الاعتماد: ${chain}. بعد اعتماد الموارد البشرية تُصرف مع مسير ${created.targetPeriod}، ويراها الموظف في «مكافآتي».`)
       setForm(form => ({ ...form, inputValue: type.defaultValue ?? '', reason: '', attachmentRef: '', confirmNotDuplicate: false }))
       setPreview(null)
       onSubmitted?.()

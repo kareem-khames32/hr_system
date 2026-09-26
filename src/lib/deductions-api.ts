@@ -105,7 +105,8 @@ export interface MyDeductionView {
   decisionReason: string | null; createdAt: string; decidedAt: string | null
 }
 export interface DeductionBulkResult {
-  batchId: number; created: Array<{ employeeId: number; requestId: number; amount: string }>
+  // status: «APPROVED» لو المُنشئ مدير موارد بشرية (قراره نهائي فتتعتمد الدفعة فورًا)، وإلا «IN_APPROVAL»
+  batchId: number; created: Array<{ employeeId: number; requestId: number; amount: string; status?: string }>
   skipped: Array<{ employeeId: number; fullName: string | null; status: string; message: string | null }>
   totals: DeductionPreview['totals']
 }

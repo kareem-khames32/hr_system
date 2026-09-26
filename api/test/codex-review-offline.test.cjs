@@ -327,9 +327,10 @@ test('CR-PERF01: count real daily-service read calls on synthetic closed payroll
     const svc = Object.create(AttendanceService.prototype), date = '2026-08-10'
     const days = Array.from({ length: count }, (_, i) => ({ id: i + 1, employeeId: i + 1, date, branchId: 1,
       scheduleSource: 'employee', status: 'present', checkIn: '08:00', checkOut: '16:00', shiftStart: '08:00', shiftEnd: '16:00' }))
-    const counters = { storedList: 0, employeesList: 0, exemptions: 0, storedDay: 0, closedCheck: 0, punches: 0, corrections: 0 }
+    const counters = { storedList: 0, employeesList: 0, exemptions: 0, storedDay: 0, closedCheck: 0, punches: 0, corrections: 0, employment: 0 }
     const manager = {
-      async query() { counters.closedCheck++; return [{ id: 1 }] },
+      // فترات الخدمة (26 سبتمبر): قراية ملفات إنهاء الخدمة مرة للشاشة كلها (كل ألف موظف) — مش لكل صف
+      async query(text) { if (/offboarding_cases/.test(String(text))) { counters.employment++; return [] } counters.closedCheck++; return [{ id: 1 }] },
       getRepository() { const qb = { where() { return qb }, andWhere() { return qb }, orderBy() { return qb },
         addOrderBy() { return qb }, async getMany() { counters.exemptions++; return [] } }; return { createQueryBuilder: () => qb } },
     }
@@ -344,7 +345,8 @@ test('CR-PERF01: count real daily-service read calls on synthetic closed payroll
     assert.equal(result.length, count)
     assert.equal(counters.exemptions, count); assert.equal(counters.storedDay, count); assert.equal(counters.closedCheck, count)
     const total = Object.values(counters).reduce((a, b) => a + b, 0)
-    assert.equal(total, 3 * count + Math.ceil(count / 500) + 3)
+    assert.equal(counters.employment, Math.ceil(count / 1000))
+    assert.equal(total, 3 * count + Math.ceil(count / 500) + 3 + Math.ceil(count / 1000))
     t.diagnostic(JSON.stringify({ syntheticEmployees: count, readCalls: total, counters, inMemoryMs: Math.round(ms * 100) / 100 }))
   }
 })

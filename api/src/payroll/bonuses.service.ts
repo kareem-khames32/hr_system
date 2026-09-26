@@ -17,6 +17,7 @@ import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
+import { hasHrOverride } from '../requests/approver-resolver.service'
 import { PayrollDecimal } from './payroll-decimal'
 // C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُغلق شهر الموظف أمام المكافأة (تُصرف بالمسير التكميلي)
 import { payrollLineNotReversedSql } from './payroll-reversal-sql'
@@ -423,7 +424,9 @@ export class BonusesService {
       await lockPayrollEmployees(em, [employee.id])
       const evaluation = await this.evaluate(em, user, ctx, employee)
       if (!evaluation.ok) throw this.exception(evaluation)
-      return (await this.persist(em, user, ctx, evaluation, null)).id
+      const saved = await this.persist(em, user, ctx, evaluation, null)
+      if (hasHrOverride(user)) await this.approveInstantly(em, user, saved, ctx, evaluation)
+      return saved.id
     })
     return this.detail(user, id)
   }
@@ -504,10 +507,13 @@ export class BonusesService {
       const batch = await batchRepo.save(batchRepo.create({ bonusTypeId: ctx.type.id, selectionMode: response.selection.mode, selection: JSON.stringify(response.selection),
         targetPeriod: ctx.input.targetPeriod, previewHash: response.previewHash, candidateCount: response.totals.candidates, createdCount: evaluations.length,
         skippedCount: response.totals.candidates - evaluations.length, result: '{}', createdByUserId: user.sub }))
-      const created: Array<{ employeeId: number; requestId: number; amount: string }> = []
+      const created: Array<{ employeeId: number; requestId: number; amount: string; status: string }> = []
+      // قرار المالك 26 سبتمبر: دفعة الموارد البشرية بتتعتمد كلها لحظة إرسالها (نفس الاقتراح الفردي)
+      const instant = hasHrOverride(user)
       for (const evaluation of evaluations) {
         const saved = await this.persist(em, user, ctx, evaluation, batch.id)
-        created.push({ employeeId: evaluation.employee.id, requestId: saved.id, amount: evaluation.amount })
+        if (instant) await this.approveInstantly(em, user, saved, ctx, evaluation)
+        created.push({ employeeId: evaluation.employee.id, requestId: saved.id, amount: evaluation.amount, status: saved.status })
       }
       const skipped = response.rows.filter(row => row.status !== 'READY').map(row => ({ employeeId: row.employeeId, fullName: row.fullName, status: row.status, message: row.message }))
       // سجل تدقيق داخلي فقط (لا يُعاد في أي رد): عدد من في الوحدة خارج نطاق المُقترِح
@@ -525,7 +531,9 @@ export class BonusesService {
   private privileged(user: JwtPayload) { return [VIEW, APPROVE, MANAGE].some(perm => userHasPerm(user, perm)) }
 
   private actorProblem(user: JwtPayload, row: BonusRequest, step: DeductionChainStep, employee: Pick<Employee, 'branchId'> | undefined | null): string | null {
-    if (user.sub === row.creatorUserId) return 'لا يعتمد المُقترِح مكافأته'
+    // المُقترِح لا يعتمد مكافأته — إلا صاحب سلطة الموارد البشرية: قراره نهائي (قرار المالك 26 سبتمبر)، واقتراحه بيتعتمد
+    // لحظتها أصلًا؛ ده بيخص مكافآت قديمة اقترحها قبل القرار وواقفة في سلسلتها. الموظف نفسه ممنوع دايمًا
+    if (user.sub === row.creatorUserId && !hasHrOverride(user)) return 'لا يعتمد المُقترِح مكافأته'
     if (user.employeeId && user.employeeId === row.employeeId) return 'لا يعتمد الموظف مكافأة مقترحة له'
     if ((DEDUCTION_STRUCTURAL_ROLES as readonly string[]).includes(step.role)) {
       return user.role === 'super_admin' || (step.approverEmployeeId !== null && user.employeeId === step.approverEmployeeId) ? null : `الخطوة الحالية بانتظار ${BONUS_LABELS.roles[step.role]}`
@@ -765,29 +773,52 @@ export class BonusesService {
         assertBonusCap(adjusted, capAllowed, 'تعذر تعديل المبلغ: ')
         step.adjustedFrom = amount; step.adjustedTo = adjusted.amount; amount = adjusted.amount
       }
-      step.status = 'APPROVED'; step.actedByUserId = user.sub; step.actedAt = new Date().toISOString(); step.reason = reason
-      const traces = json<Record<string, any>>(row.amountTrace, {})
-      traces.approvals = [...(Array.isArray(traces.approvals) ? traces.approvals : []), { stepOrder: step.order, amount, trace }]
-      row.amountTrace = JSON.stringify(traces)
-      await this.event(em, row.id, 'STEP_APPROVED', user.sub, 'IN_APPROVAL', 'IN_APPROVAL', step.order, reason, { role: step.role, amount, adjustedFrom: step.adjustedFrom })
-      if (!currentDeductionStep(steps)) {
-        // القيد الموجب للموظف المختار نفسه، بشهره المستهدف وبداية دورته (لا يدخل مسودة شهر سابق)
-        const repo = em.getRepository(EmployeeObligation)
-        const saved = await repo.save(repo.create({ employeeId: row.employeeId, type: 'CREDIT', category: BONUS_OBLIGATION_CATEGORY, amount: Number(amount),
-          label: `${rules.nameAr}: ${row.reason}`.slice(0, 300), status: 'PENDING',
-          effectiveDate: salaryPayrollPeriodBounds(row.targetPeriod, settings.cycleStartDay).startDate, sourceRef: `bonus:${row.id}`,
-          createdByUserId: row.creatorUserId, bonusRequestId: row.id, targetPeriod: row.targetPeriod }))
-        const closedRunId = await this.closedRun(em, row.employeeId, row.targetPeriod)
-        row.status = 'APPROVED'; row.finalAmount = amount; row.obligationId = saved.id
-        row.decidedByUserId = user.sub; row.decidedAt = new Date()
-        await this.event(em, row.id, 'APPROVED', user.sub, 'IN_APPROVAL', 'APPROVED', step.order, reason,
-          { amount, obligationId: saved.id, targetPeriod: row.targetPeriod, ...(closedRunId ? { deferredPastClosedRunId: closedRunId } : {}) })
-      }
+      await this.approveStep(em, user, row, steps, step, { amount, trace }, rules, settings, reason)
       row.steps = JSON.stringify(steps); row.revision += 1; row.updatedAt = new Date()
       await em.getRepository(BonusRequest).save(row)
       return null
     })
     return { ...(await this.detail(user, id)), notice }
+  }
+
+  // اعتماد خطوة واحدة بالمبلغ المسعّر، وعند آخر خطوة: القيد الموجب والحالة «معتمد» — دالة واحدة للاعتماد اليدوي (approve)
+  // والفوري (approveInstantly)، فالمكافأة اللي بتعتمدها الموارد البشرية لحظة اقتراحها بتخلص بنفس أثر اعتمادها خطوة بخطوة
+  private async approveStep(em: EntityManager, user: JwtPayload, row: BonusRequest, steps: DeductionChainStep[], step: DeductionChainStep,
+    priced: { amount: string; trace: BonusAmountTrace }, rules: BonusTypeRules, settings: Settings, reason: string | null, instant = false) {
+    const { amount, trace } = priced
+    step.status = 'APPROVED'; step.actedByUserId = user.sub; step.actedAt = new Date().toISOString(); step.reason = reason
+    const traces = json<Record<string, any>>(row.amountTrace, {})
+    traces.approvals = [...(Array.isArray(traces.approvals) ? traces.approvals : []), { stepOrder: step.order, amount, trace }]
+    row.amountTrace = JSON.stringify(traces)
+    await this.event(em, row.id, 'STEP_APPROVED', user.sub, 'IN_APPROVAL', 'IN_APPROVAL', step.order, reason,
+      { role: step.role, amount, adjustedFrom: step.adjustedFrom, ...(instant ? { instant: true } : {}) })
+    if (!currentDeductionStep(steps)) {
+      // القيد الموجب للموظف المختار نفسه، بشهره المستهدف وبداية دورته (لا يدخل مسودة شهر سابق)
+      const repo = em.getRepository(EmployeeObligation)
+      const saved = await repo.save(repo.create({ employeeId: row.employeeId, type: 'CREDIT', category: BONUS_OBLIGATION_CATEGORY, amount: Number(amount),
+        label: `${rules.nameAr}: ${row.reason}`.slice(0, 300), status: 'PENDING',
+        effectiveDate: salaryPayrollPeriodBounds(row.targetPeriod, settings.cycleStartDay).startDate, sourceRef: `bonus:${row.id}`,
+        createdByUserId: row.creatorUserId, bonusRequestId: row.id, targetPeriod: row.targetPeriod }))
+      const closedRunId = await this.closedRun(em, row.employeeId, row.targetPeriod)
+      row.status = 'APPROVED'; row.finalAmount = amount; row.obligationId = saved.id
+      row.decidedByUserId = user.sub; row.decidedAt = new Date()
+      await this.event(em, row.id, 'APPROVED', user.sub, 'IN_APPROVAL', 'APPROVED', step.order, reason,
+        { amount, obligationId: saved.id, targetPeriod: row.targetPeriod, ...(closedRunId ? { deferredPastClosedRunId: closedRunId } : {}), ...(instant ? { instant: true } : {}) })
+    }
+  }
+
+  // قرار المالك 26 سبتمبر: صاحب سلطة الموارد البشرية قراره نهائي — المكافأة اللي بيقترحها (فردية أو ضمن مجموعة) بتتعتمد
+  // لحظة اقتراحها: كل خطوة معلقة في السلسلة الملتقطة (المدير الهيكلي والتصعيد والموارد البشرية) باسمه وبالمبلغ المسعّر عند
+  // الاقتراح، وآخر خطوة بتكتب القيد الموجب — الحالة النهائية هي نفسها بعد اعتماد يدوي كامل. المُقترِح من غيرهم: كما كان
+  private async approveInstantly(em: EntityManager, user: JwtPayload, row: BonusRequest, ctx: EvaluationContext, evaluation: ReadyEvaluation) {
+    const steps = parseDeductionSteps(row.steps)
+    for (let step = currentDeductionStep(steps); step; step = currentDeductionStep(steps)) {
+      await this.approveStep(em, user, row, steps, step, { amount: evaluation.amount, trace: evaluation.trace }, ctx.rules, ctx.settings,
+        'اعتماد فوري — مدير الموارد البشرية', true)
+      row.revision += 1
+    }
+    row.steps = JSON.stringify(steps); row.updatedAt = new Date()
+    await em.getRepository(BonusRequest).save(row)
   }
 
   async reject(user: JwtPayload, id: number, dto: BonusDecisionDto) {

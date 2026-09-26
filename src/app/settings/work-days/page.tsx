@@ -16,6 +16,8 @@ import {
   updateCatalogItem,
   deleteWorkSchedule,
   assignWorkSchedule,
+  fetchEmploymentWindows,
+  parseWorkScheduleExceptions,
   fetchEmployees,
   fetchDepartments,
   fetchTeams,
@@ -34,6 +36,8 @@ import type {
   ApiDepartment,
   ApiTeam,
   ApiAttendanceRuleChange,
+  ApiWorkScheduleException,
+  ApiEmploymentWindow,
 } from '@/lib/api'
 import { OrgTargetPicker, initialOrgTarget, resolveOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
 import { GraceOverridesNote } from '@/components/GraceOverridesNote'
@@ -188,6 +192,11 @@ export default function WorkDaysSettingsPage() {
   // مسودة أيام الراحة للجدول المختار — تُحفظ بزر «حفظ» (الحفظ يعيد احتساب أيام موظفيه)
   const [draftOff, setDraftOff] = useState<string[] | null>(null)
   const [daysError, setDaysError] = useState<string | null>(null)
+  // مسودة استثناءات أيام الراحة للجدول المختار (قرار المالك 26 سبتمبر) — null = بلا تعديل
+  const [draftExceptions, setDraftExceptions] = useState<ApiWorkScheduleException[] | null>(null)
+  // فترات خدمة الموظفين: تنبيه «في الخدمة من غير جدول عمل» فوق، وإسنادهم بضغطة
+  const [employment, setEmployment] = useState<ApiEmploymentWindow[] | null>(null)
+  const [presetAssign, setPresetAssign] = useState<number[] | null>(null)
   // الإسناد تعديل لبيانات الموظفين — يلزمه employees.edit فوق صلاحية الشاشة
   const canAssign = can('employees.edit')
   const [config, setConfig] = useState<Array<{ key: string; value: string }>>([])
@@ -382,6 +391,11 @@ export default function WorkDaysSettingsPage() {
   useEffect(() => {
     reloadSchedules()
   }, [])
+  const reloadEmployment = () => fetchEmploymentWindows().then(setEmployment).catch(() => setEmployment(null))
+  useEffect(() => { reloadEmployment() }, [])
+  // في الخدمة النهارده (أو هيبدأ) ومالوش جدول عمل مسند — بيمشي على الجدول الافتراضي من غير ما حد يختار
+  const withoutSchedule = (employment ?? []).filter(row => row.workScheduleId == null && !row.endedUnknown && (!row.to || row.to >= localToday()))
+  const defaultSchedule = schedules.find(s => s.isDefault && s.isActive) ?? null
 
   const selectedSchedule = schedules.find((s) => s.id === selectedId) ?? null
   const savedOff = parseWeekend(selectedSchedule?.weekendDays)
@@ -398,8 +412,9 @@ export default function WorkDaysSettingsPage() {
   // اختيار جدول — مع تنبيه لو فيه تعديلات أيام غير محفوظة
   const selectSchedule = (id: number) => {
     if (id === selectedId) return
-    if (daysDirty && !confirm('لديك تعديلات غير محفوظة على أيام العمل — تجاهلها؟')) return
+    if ((daysDirty || draftExceptions !== null) && !confirm('لديك تعديلات غير محفوظة على أيام العمل — تجاهلها؟')) return
     setDraftOff(null)
+    setDraftExceptions(null)
     setDaysError(null)
     setSelectedId(id)
   }
@@ -427,6 +442,22 @@ export default function WorkDaysSettingsPage() {
         setDraftOff(null); setDaysError(null)
         await reloadSchedules(selectedSchedule.id)
         setScheduleNotice(`حُفظت أيام العمل من ${change.effectiveFrom}`)
+      } })
+  }
+
+  // حفظ استثناءات أيام الراحة — نسخة مؤرخة زي أيام العمل بالظبط
+  const saveExceptions = () => {
+    if (!selectedSchedule || draftExceptions === null) return
+    const list = draftExceptions
+    setScheduleAction({ title: `حفظ استثناءات جدول «${selectedSchedule.name}»`,
+      description: list.length
+        ? `الاستثناءات: ${list.map(describeScheduleException).join('، ')}. تُحفظ نسخة مؤرخة وتبقى الأيام السابقة بإعداداتها.`
+        : 'مسح كل الاستثناءات. تُحفظ نسخة مؤرخة وتبقى الأيام السابقة بإعداداتها.',
+      run: async change => {
+        await updateCatalogItem('work-schedules', selectedSchedule.id, { weekendExceptions: list, ...change })
+        setDraftExceptions(null)
+        await reloadSchedules(selectedSchedule.id)
+        setScheduleNotice(`حُفظت استثناءات أيام الراحة من ${change.effectiveFrom}`)
       } })
   }
 
@@ -773,6 +804,19 @@ export default function WorkDaysSettingsPage() {
         {scheduleNotice && <p role="status" className="p-3 bg-green-50 text-green-700">{scheduleNotice}</p>}
         {daysError && <p role="alert" className="p-3 bg-red-50 text-red-700">{daysError}</p>}
         {daysDirty && <button disabled={scheduleBusy} onClick={saveWorkDays} className="btn-primary">{scheduleBusy ? 'جارٍ الحفظ…' : 'حفظ أيام العمل'}</button>}
+        {withoutSchedule.length > 0 && (
+          <div role="status" className="p-3 bg-amber-50 border border-amber-200 rounded-xl flex flex-wrap items-center justify-between gap-3">
+            <p className="text-sm text-amber-800">
+              ⚠ {withoutSchedule.length} موظف في الخدمة من غير جدول عمل مسند —
+              {defaultSchedule ? ` ماشيين على الجدول الافتراضي «${defaultSchedule.name}»` : ' ومفيش جدول افتراضي، فأيامهم «بلا وردية»'}.
+            </p>
+            {canAssign && selectedSchedule?.isActive && (
+              <button type="button" className="btn-secondary text-sm" onClick={() => setPresetAssign(withoutSchedule.map(row => row.employeeId))}>
+                عيّن لهم «{selectedSchedule.name}»
+              </button>
+            )}
+          </div>
+        )}
         <div className="grid grid-cols-12 gap-6">
           {/* قائمة الجداول */}
           <div className="col-span-4">
@@ -845,6 +889,11 @@ export default function WorkDaysSettingsPage() {
                           </div>
                         ))}
                       </div>
+                      {parseWorkScheduleExceptions(schedule.weekendExceptions).length > 0 && (
+                        <p className="text-xs text-amber-700 mt-2">
+                          + {parseWorkScheduleExceptions(schedule.weekendExceptions).map(describeScheduleException).join('، ')}
+                        </p>
+                      )}
                     </div>
                   )
                 })}
@@ -970,6 +1019,15 @@ export default function WorkDaysSettingsPage() {
                       ))}
                     </div>
                   </div>
+                  <ScheduleExceptionsEditor
+                    offDays={savedOff}
+                    value={draftExceptions ?? parseWorkScheduleExceptions(selectedSchedule.weekendExceptions)}
+                    dirty={draftExceptions !== null}
+                    daysDirty={daysDirty}
+                    busy={scheduleBusy}
+                    onChange={setDraftExceptions}
+                    onSave={saveExceptions}
+                  />
                 </div>
 
                 {/* القواعد الاستثنائية — backend حقيقي، فعّالة على الحضور */}
@@ -1134,13 +1192,17 @@ export default function WorkDaysSettingsPage() {
         )}
 
         {/* Modal تعيين الجدول للموظفين */}
-        {showAssignModal && selectedSchedule && (
+        {(showAssignModal || presetAssign) && selectedSchedule && (
           <AssignScheduleModal
             schedule={selectedSchedule}
-            onClose={() => setShowAssignModal(false)}
-            onAssign={async () => {
+            presetEmployeeIds={presetAssign ?? undefined}
+            onClose={() => { setShowAssignModal(false); setPresetAssign(null) }}
+            onAssign={async (result) => {
               await reloadSchedules(selectedSchedule.id)
-              setShowAssignModal(false)
+              await reloadEmployment()
+              setShowAssignModal(false); setPresetAssign(null)
+              setScheduleNotice(`اتعيّن جدول «${selectedSchedule.name}» لـ${result.assigned} موظف${result.unchanged ? ` (${result.unchanged} كانوا عليه أصلًا)` : ''}`
+                + (result.outsideEmployment ? ` — ${result.outsideEmployment} خدمتهم انتهت قبل تاريخ السريان واتعدّوا` : ''))
             }}
           />
         )}
@@ -1438,9 +1500,12 @@ function AddScheduleRuleModal({
 // فيه. الاختيار بيتحول لموظفين فعليين — نفس أثر الإسناد القديم بالحرف: الجدول بيتسجل على كل موظف بتاريخ سريانه، ومفيش
 // «افتراضي» بيتخزن لقسم أو فرع. جدول خاص بفرع: المنتقي على فرعه وموظفيه بس (الخادم بيرفض موظف من فرع تاني)،
 // وحساب الفرع مقفول على فرعه.
-function AssignScheduleModal({ schedule, onClose, onAssign }: {
-  schedule: ApiWorkSchedule; onClose: () => void; onAssign: () => Promise<void>
+function AssignScheduleModal({ schedule, presetEmployeeIds, onClose, onAssign }: {
+  schedule: ApiWorkSchedule; presetEmployeeIds?: number[]; onClose: () => void
+  onAssign: (result: { assigned: number; unchanged: number; outsideEmployment?: number }) => Promise<void>
 }) {
+  // قائمة جاهزة (من تنبيه «من غير جدول عمل») — تقدر ترجع للمنتقي بـ«اختيار تاني»
+  const [usePreset, setUsePreset] = useState(!!presetEmployeeIds?.length)
   const scheduleBranchId = schedule.branchId ?? null
   const lockedBranchId = scheduleBranchId ?? lockedBranchIdOf(getCurrentUser())
   // جدول لكل الشركة: حساب الفروع المتعددة يختار فرع من فروعه (الشركة كلها لحساب على مستوى الشركة بس)
@@ -1464,14 +1529,17 @@ function AssignScheduleModal({ schedule, onClose, onAssign }: {
       })
       .catch(err => setError(err instanceof Error ? err.message : 'تعذر تحميل الموظفين'))
   }, [scheduleBranchId])
-  const ids = useMemo(() => org ? resolveOrgTarget(target, org.employees) : [], [org, target])
+  // القائمة الجاهزة بتتقيد بموظفي فرع الجدول (جدول خاص بفرع يتسند لموظفي فرعه بس)
+  const ids = useMemo(() => !org ? [] : usePreset && presetEmployeeIds
+    ? presetEmployeeIds.filter(id => org.employees.some(e => e.id === id))
+    : resolveOrgTarget(target, org.employees), [org, target, usePreset, presetEmployeeIds])
   const save = async () => {
     if (!change.effectiveFrom || !change.changeReason.trim()) { setError('حدد تاريخ سريان الإسناد والسبب'); return }
     if (!ids.length) { setError('مفيش موظفين في الاختيار ده — اختار فرع أو قسم أو فريق أو موظفين'); return }
     setBusy(true); setError('')
     try {
-      await assignWorkSchedule(schedule.id, { employeeIds: ids }, change)
-      await onAssign()
+      const result = await assignWorkSchedule(schedule.id, { employeeIds: ids }, change)
+      await onAssign(result)
     } catch (err) { setError(err instanceof Error ? err.message : 'تعذر إسناد الجدول') }
     finally { setBusy(false) }
   }
@@ -1480,12 +1548,97 @@ function AssignScheduleModal({ schedule, onClose, onAssign }: {
       <h2 className="text-xl font-bold">تعيين جدول «{schedule.name}»</h2>
       {error && <p role="alert" className="text-red-600">{error}</p>}
       {org === null ? <p>جارٍ تحميل الفروع والموظفين…</p> : <>
+        {usePreset ? (
+          <div className="p-3 bg-amber-50 rounded-xl text-sm space-y-2">
+            <p className="text-amber-800">الموظفين اللي في الخدمة ومالهمش جدول عمل ({ids.length}):</p>
+            <p className="text-gray-700">{org.employees.filter(e => ids.includes(e.id)).slice(0, 12).map(e => e.fullName).join('، ')}{ids.length > 12 ? ` و${ids.length - 12} غيرهم` : ''}</p>
+            <button type="button" className="text-primary-600 text-xs underline" disabled={busy} onClick={() => setUsePreset(false)}>اختيار تاني</button>
+          </div>
+        ) : (
         <OrgTargetPicker value={target} onChange={setTarget} branches={org.branches} departments={org.departments}
           teams={org.teams} employees={org.employees} lockedBranchId={lockedBranchId} branchScope={branchScope} disabled={busy} />
+        )}
         {ids.length > 0 && <p className="text-amber-700 text-sm">الجدول الحالي لـ{ids.length} موظف هيتغير للجدول ده من تاريخ السريان.</p>}
       </>}
       <AttendanceRuleChangeFields value={change} onChange={setChange} />
       <div className="flex gap-3"><button disabled={org === null || busy} onClick={save} className="btn-primary">{busy ? 'جارٍ الإسناد…' : 'تأكيد الإسناد'}</button><button disabled={busy} onClick={onClose} className="btn-secondary">إلغاء</button></div>
     </div>
   </div>
+}
+
+
+// ===== استثناءات أيام الراحة جوه الجدول (قرار المالك 26 سبتمبر) =====
+const EXCEPTION_DAY_NAMES: Record<string, string> = { SUN: 'أحد', MON: 'اثنين', TUE: 'ثلاثاء', WED: 'أربعاء', THU: 'خميس', FRI: 'جمعة', SAT: 'سبت' }
+const EXCEPTION_OCCURRENCES: Array<{ value: ApiWorkScheduleException['occurrence']; label: string }> = [
+  { value: 'LAST', label: 'آخر' }, { value: '1ST', label: 'أول' }, { value: '2ND', label: 'تاني' },
+  { value: '3RD', label: 'تالت' }, { value: '4TH', label: 'رابع' }, { value: 'ALL', label: 'كل' },
+]
+function describeScheduleException(rule: ApiWorkScheduleException): string {
+  const day = EXCEPTION_DAY_NAMES[rule.weekday] ?? rule.weekday
+  const occurrence = EXCEPTION_OCCURRENCES.find(o => o.value === rule.occurrence)?.label ?? rule.occurrence
+  const month = rule.occurrence === 'ALL' ? '' : rule.basis === 'PAYROLL'
+    ? ` في الشهر المالي${rule.cycleStartDay ? ` (من يوم ${rule.cycleStartDay})` : ''}` : ' في الشهر الميلادي'
+  return `${occurrence} ${day}${month}: ${rule.effect === 'WORK' ? 'دوام' : 'راحة'}`
+}
+
+function ScheduleExceptionsEditor({ offDays, value, dirty, daysDirty, busy, onChange, onSave }: {
+  offDays: string[]; value: ApiWorkScheduleException[]; dirty: boolean; daysDirty: boolean; busy: boolean
+  onChange: (next: ApiWorkScheduleException[]) => void; onSave: () => void
+}) {
+  const [weekday, setWeekday] = useState<ApiWorkScheduleException['weekday']>(offDays.includes('SAT') ? 'SAT' : ((offDays[0] as ApiWorkScheduleException['weekday']) ?? 'SAT'))
+  const [occurrence, setOccurrence] = useState<ApiWorkScheduleException['occurrence']>('LAST')
+  const [basis, setBasis] = useState<ApiWorkScheduleException['basis']>('PAYROLL')
+  const [error, setError] = useState('')
+  // يوم راحة ← الاستثناء «دوام»، ويوم شغل ← «راحة»
+  const effect: ApiWorkScheduleException['effect'] = offDays.includes(weekday) ? 'WORK' : 'OFF'
+  const add = () => {
+    if (value.some(rule => rule.weekday === weekday && rule.occurrence === occurrence)) { setError('فيه استثناء لنفس اليوم ونفس التكرار'); return }
+    setError('')
+    onChange([...value, { weekday, occurrence, effect, basis }])
+  }
+  return (
+    <div className="mt-6 border-t border-gray-100 pt-4">
+      <h3 className="text-sm font-medium text-gray-600 mb-1">
+        استثناءات أيام الراحة
+        <span className="text-xs text-gray-400 mr-2">(لموظفي الجدول ده بس)</span>
+      </h3>
+      <p className="text-xs text-gray-500 mb-3">
+        مثلًا: الجمعة والسبت راحة ماعدا آخر سبت في الشهر المالي دوام — اليوم ده بيبقى يوم شغل لموظفي الجدول:
+        يظهر في الجدول الأسبوعي تحط عليه وردية، ولو غابوا يتخصم. الشهر المالي من يوم بداية دورة الرواتب لليوم اللي قبله في الشهر اللي بعده.
+      </p>
+      {value.length === 0 && <p className="text-sm text-gray-400 mb-3">مفيش استثناءات — أيام الراحة زي ما هي كل أسبوع.</p>}
+      <ul className="space-y-2 mb-3">
+        {value.map((rule, index) => (
+          <li key={`${rule.weekday}-${rule.occurrence}`} className="flex items-center justify-between p-2 bg-amber-50 rounded-lg text-sm">
+            <span className="text-amber-900">{describeScheduleException(rule)}</span>
+            <button type="button" disabled={busy} onClick={() => onChange(value.filter((_, other) => other !== index))}
+              className="text-red-600 text-xs hover:underline" aria-label="حذف الاستثناء">حذف</button>
+          </li>
+        ))}
+      </ul>
+      <div className="flex flex-wrap items-center gap-2 text-sm">
+        <select aria-label="التكرار" className="input w-24" value={occurrence} onChange={e => setOccurrence(e.target.value as ApiWorkScheduleException['occurrence'])}>
+          {EXCEPTION_OCCURRENCES.map(o => <option key={o.value} value={o.value}>{o.label}</option>)}
+        </select>
+        <select aria-label="اليوم" className="input w-28" value={weekday} onChange={e => setWeekday(e.target.value as ApiWorkScheduleException['weekday'])}>
+          {Object.entries(EXCEPTION_DAY_NAMES).map(([code, name]) => <option key={code} value={code}>{name}</option>)}
+        </select>
+        <select aria-label="أساس الشهر" className="input w-40" value={basis} disabled={occurrence === 'ALL'} onChange={e => setBasis(e.target.value as ApiWorkScheduleException['basis'])}>
+          <option value="PAYROLL">في الشهر المالي</option>
+          <option value="CALENDAR">في الشهر الميلادي</option>
+        </select>
+        <span className={`px-2 py-1 rounded-lg text-xs ${effect === 'WORK' ? 'bg-green-100 text-green-700' : 'bg-gray-100 text-gray-600'}`}>
+          {effect === 'WORK' ? 'يبقى دوام' : 'يبقى راحة'}
+        </span>
+        <button type="button" disabled={busy} onClick={add} className="btn-secondary text-sm py-1.5">+ إضافة استثناء</button>
+      </div>
+      {error && <p role="alert" className="text-red-600 text-xs mt-2">{error}</p>}
+      {daysDirty && dirty && <p className="text-amber-700 text-xs mt-2">احفظ أيام العمل الأول، وبعدين الاستثناءات.</p>}
+      {dirty && (
+        <button type="button" disabled={busy || daysDirty} onClick={onSave} className="btn-primary text-sm mt-3">
+          {busy ? 'جارٍ الحفظ…' : 'حفظ الاستثناءات'}
+        </button>
+      )}
+    </div>
+  )
 }
