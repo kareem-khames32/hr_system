@@ -20,6 +20,7 @@ import {
   NOTIFICATIONS_CHANGED,
 } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
+import { PRODUCT_NAME } from '@/lib/product'
 import { pageTitleFor } from './pageTitles'
 
 interface Notification {
@@ -137,9 +138,9 @@ export default function Header() {
         : 'لوحتي'
       : pageTitleFor(pathname) ?? 'نظام الموارد البشرية'
 
-  // عنوان تبويب المتصفح = عنوان الشاشة (يُعاد تطبيقه لو كتبت Next عنوان الـmetadata العام بعده)
+  // عنوان تبويب المتصفح = عنوان الشاشة | اسم المنتج (يُعاد تطبيقه لو كتبت Next عنوان الـmetadata العام بعده)
   useEffect(() => {
-    const wanted = pageTitle === 'نظام الموارد البشرية' ? pageTitle : `${pageTitle} | نظام الموارد البشرية`
+    const wanted = pageTitle === 'نظام الموارد البشرية' ? PRODUCT_NAME : `${pageTitle} | ${PRODUCT_NAME}`
     const apply = () => {
       if (document.title !== wanted) document.title = wanted
     }

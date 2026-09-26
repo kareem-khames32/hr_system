@@ -11,6 +11,9 @@ import {
   type CurrentUser,
 } from '@/lib/api'
 import { fetchMyPayrollApprovalsCount } from '@/lib/payroll-approval-chain-api'
+import { useBranding } from '@/lib/branding'
+import { BrandLogo } from '@/components/branding/BrandLogo'
+import { PoweredBy } from '@/components/branding/PoweredBy'
 import {
   LayoutDashboard,
   Users,
@@ -23,7 +26,6 @@ import {
   FileText,
   Settings,
   ChevronDown,
-  Building2,
   LogOut,
   Bell,
   ClipboardList,
@@ -285,6 +287,8 @@ export default function Sidebar() {
     return adminMenuDefs.find((item) => item.children?.some((child) => child.href === href))?.id ?? readOpenGroup()
   })
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => getCurrentUser())
+  // اسم الشركة وشعارها من «بيانات الشركة» — بيتحدثوا لوحدهم بعد الحفظ (BRANDING_CHANGED)
+  const brand = useBranding()
   const navRef = useRef<HTMLElement>(null)
   const [inboxError, setInboxError] = useState(false)
   const [inboxRevision, setInboxRevision] = useState(0)
@@ -417,17 +421,28 @@ export default function Sidebar() {
 
   return (
     <aside className="fixed right-0 top-0 h-screen w-72 bg-white border-l border-gray-100 flex flex-col z-50">
-      {/* Logo */}
-      <div className="p-6 border-b border-gray-100">
-        <div className="flex items-center gap-3">
-          <div className="w-12 h-12 bg-gradient-to-br from-primary-500 to-primary-600 rounded-2xl flex items-center justify-center shadow-lg shadow-primary-500/30">
-            <Building2 className="w-7 h-7 text-white" />
+      {/* هوية الشركة لكل المستخدمين: الشعار (أو علامة بالحروف) والاسم — الطويل على سطرين والكامل في التلميح،
+          والشعار العريض بينزّل الاسم لسطر تحته (flex-wrap) */}
+      <div className="px-6 py-5 border-b border-gray-100">
+        {brand.ready ? (
+          <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+            <BrandLogo brand={brand} size="md" />
+            <div className="flex-1 min-w-[8rem]">
+              <p title={brand.companyName} className="font-bold text-gray-800 leading-snug line-clamp-2 break-words">
+                <bdi>{brand.companyName}</bdi>
+              </p>
+              <p className="text-xs text-gray-400 mt-0.5">الموارد البشرية</p>
+            </div>
           </div>
-          <div>
-            <h1 className="font-bold text-gray-800 text-lg">نظام الموارد البشرية</h1>
-            <p className="text-xs text-gray-400">إدارة الموارد البشرية</p>
+        ) : (
+          <div aria-hidden className="flex items-center gap-3">
+            <div className="w-12 h-12 rounded-2xl bg-gray-100 motion-safe:animate-pulse" />
+            <div className="flex-1 space-y-2">
+              <div className="h-4 w-3/4 rounded-lg bg-gray-100 motion-safe:animate-pulse" />
+              <div className="h-3 w-1/3 rounded-lg bg-gray-100 motion-safe:animate-pulse" />
+            </div>
           </div>
-        </div>
+        )}
       </div>
 
       {/* Navigation */}
@@ -529,6 +544,8 @@ export default function Sidebar() {
             <LogOut size={18} className="text-gray-400" />
           </button>
         </div>
+        {/* اسم المنتج صغير في الآخر — الاسم الكبير فوق للشركة */}
+        <PoweredBy className="mt-3" />
       </div>
     </aside>
   )

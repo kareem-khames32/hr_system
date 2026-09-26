@@ -11,6 +11,7 @@ import { RequestsModule } from './requests/requests.module'
 import { AttendanceModule } from './attendance/attendance.module'
 import { PayrollModule } from './payroll/payroll.module'
 import { SettingsModule } from './settings/settings.module'
+import { BrandingModule } from './settings/branding.module'
 import { ExtrasModule } from './assets/extras.module'
 import { OffboardingModule } from './offboarding/offboarding.module'
 import { OnboardingModule } from './onboarding/onboarding.module'
@@ -80,6 +81,8 @@ import { dbPacketSize } from './common/sql-packet-size'
     AttendanceModule,
     PayrollModule,
     SettingsModule,
+    // اسم الشركة وشعارها بلا تسجيل دخول (GET /api/branding) — لصفحة الدخول والقائمة الجانبية
+    BrandingModule,
     ExtrasModule,
     OffboardingModule,
     OnboardingModule,

@@ -4,6 +4,7 @@ import type { EmployeeStatus, AttendanceStatus, CustodyStatus, OvertimeStatus, L
 import type { OvertimeEvidence } from '../../api/src/attendance/overtime-evidence'
 import { clearEmployeeAddDrafts } from './employee-add-draft'
 import { branchScopeOfUser } from './branch-scope'
+import { PRODUCT_NAME } from './product'
 export type { EmployeeStatus, AttendanceStatus, CustodyStatus, OvertimeStatus, LeaveStatus, LeavePeriod, LoanStatus, TransferStatus, LetterStatus, BalanceType, LeaveTypeCode } from '../../api/src/common/domain-status'
 import type { PayrollCalendarChange } from './payroll-calendar-api'
 
@@ -234,6 +235,30 @@ export const resendLoginCode = (challengeToken: string) =>
 // قبل أي مصادقة: هل زر «الدخول بحساب الشركة» يظهر؟ (بلا أي تفصيل عن خادم الدليل)
 export const fetchLoginOptions = () =>
   apiFetch<{ domainLoginEnabled: boolean }>('/auth/login/options')
+
+// ===== هوية الشركة (عامة — صفحة الدخول بتعرضها قبل أي جلسة) =====
+// اسم المنتج ثابت، واسم الشركة وشعارها من «بيانات الشركة». null = الشركة لسه ماضبطتهوش (أو الشعار مش صالح)
+export interface Branding {
+  productName: string
+  companyName: string | null
+  /** رابط الشعار كامل على خادم الـ API وجاهز لـ<img> — الخادم بيرجّعه مسار (/api/branding/logo?v=…) */
+  logoUrl: string | null
+}
+
+// مسار من الخادم (/api/...) → رابط على الـ API نفسه: الواجهة والـ API على أصلين مختلفين،
+// والـ API ممكن يكون ورا بادئة (…/backend/api) فالمسار يتركّب على API_BASE مش على أصل الصفحة
+const apiResourceUrl = (value: unknown): string | null =>
+  typeof value === 'string' && value.startsWith('/api/') ? `${API_BASE}${value.slice('/api'.length)}` : null
+
+export const fetchBranding = async (): Promise<Branding> => {
+  const raw = await apiFetch<Partial<Branding> | null>('/branding')
+  const name = typeof raw?.companyName === 'string' ? raw.companyName.trim() : ''
+  return {
+    productName: typeof raw?.productName === 'string' && raw.productName ? raw.productName : PRODUCT_NAME,
+    companyName: name || null,
+    logoUrl: apiResourceUrl(raw?.logoUrl),
+  }
+}
 
 // ===== حالة الدخول والأمان (شاشة سياسات النظام — settings.manage) =====
 export interface SecurityStatus {
