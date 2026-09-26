@@ -19,6 +19,7 @@ import {
   AlertCircle,
 } from 'lucide-react'
 import { fetchConfig, updateConfig, uploadFile, fetchFileObjectUrl, getCurrentUser, isCompanyWideUser } from '@/lib/api'
+import { BRANDING_CHANGED } from '@/lib/branding'
 import { COMPANY_NAME_PLACEHOLDER, isDataPlaceholder } from '@/lib/data-placeholders'
 
 // بيانات الشركة — تُطبع في رأس المستندات المولَّدة من ملف الموظف وفي نصوصها
@@ -60,7 +61,7 @@ const CARDS: CompanyCard[] = [
       {
         key: 'company.name',
         label: 'اسم الشركة (عربي)',
-        hint: 'الاسم الرسمي كاملاً كما يُكتب في الخطابات — بدونه لا تُنشأ الخطابات الرسمية',
+        hint: 'الاسم الرسمي كاملاً كما يُكتب في الخطابات — بدونه لا تُنشأ الخطابات الرسمية. ويظهر أعلى القائمة الجانبية وفي صفحة الدخول',
         max: 200,
         required: true,
         wide: true,
@@ -339,12 +340,15 @@ export default function CompanySettingsPage() {
     setSaving(true)
     setError('')
     setSuccess('')
+    // الاسم أو الشعار اتحفظ (ولو الحفظ وقف في النص بعدهم) → القائمة الجانبية تحدّث هوية الشركة من غير إعادة تحميل
+    let brandingSaved = false
     try {
       const saved = { ...original }
       for (const key of dirtyKeys) {
         const value = cleanValue(key, values[key] ?? '')
         await updateConfig(key, value)
         saved[key] = value
+        if (key === 'company.name' || key === LOGO_KEY) brandingSaved = true
       }
       setValues((prev) => ({ ...prev, ...saved }))
       setOriginal(saved)
@@ -353,6 +357,7 @@ export default function CompanySettingsPage() {
       setError(e instanceof Error ? e.message : 'تعذر حفظ بيانات الشركة')
     } finally {
       setSaving(false)
+      if (brandingSaved) window.dispatchEvent(new Event(BRANDING_CHANGED))
     }
   }
 
@@ -503,7 +508,7 @@ export default function CompanySettingsPage() {
                   )}
                 </div>
                 <p className="text-xs text-gray-500">
-                  PNG أو JPG أو WEBP حتى 2MB — يظهر أعلى المستند المطبوع
+                  PNG أو JPG أو WEBP حتى 2MB — يظهر أعلى المستند المطبوع وأعلى القائمة الجانبية وفي صفحة الدخول
                 </p>
                 <input
                   ref={fileInput}
