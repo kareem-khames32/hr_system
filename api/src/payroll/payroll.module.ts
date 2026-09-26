@@ -58,10 +58,6 @@ import { PayrollOverviewService } from './payroll-overview.service'
 import { PayrollAllowanceGrant, PayrollAllowanceGrantLine, PayrollAllowanceType } from './allowances-grants.entities'
 import { PayrollAllowancesController } from './allowances-grants.controller'
 import { PayrollAllowancesService } from './allowances-grants.service'
-// «البدل الثابت الشهري» في نفس التابة: إسناد بدل بمبلغ شهري ثابت من شهر لشهر (قيده بيتعمل وقت حساب المسير)
-import { PayrollRecurringAllowance } from './recurring-allowances.entities'
-import { PayrollRecurringAllowancesController } from './recurring-allowances.controller'
-import { PayrollRecurringAllowancesService } from './recurring-allowances.service'
 // تراكم المسير يومًا بيوم: جدول الأيام المتراكمة، وخدمتها، والجار الليلي، وشاشة «آخر يوم محسوب»
 import { PayrollDailyAccrual } from './payroll-daily-accrual.entities'
 import { PayrollDailyAccrualService } from './payroll-daily-accrual.service'
@@ -133,7 +129,6 @@ import { PayrollDisbursementController } from './payroll-disbursement.controller
       PayrollAllowanceType,
       PayrollAllowanceGrant,
       PayrollAllowanceGrantLine,
-      PayrollRecurringAllowance,
       // تراكم المسير يومًا بيوم
       PayrollDailyAccrual,
       // سلسلة اعتماد المسير وقراراتها، وعلامات صرف الموظفين
@@ -144,9 +139,9 @@ import { PayrollDisbursementController } from './payroll-disbursement.controller
   ],
   controllers: [PayrollController, ObligationsController, PayrollRulesController, PayrollPolicyController, PayrollSalaryHistoryController, TypedDeductionsController, BonusesController,
     FinancialExemptionsController, PayrollCorrectionsController, SocialInsuranceController, PayrollBankSheetController, PayrollOverviewController, PayrollAllowancesController,
-    PayrollRecurringAllowancesController, PayrollDailyAccrualController, PayrollApprovalChainController, PayrollDisbursementController],
+    PayrollDailyAccrualController, PayrollApprovalChainController, PayrollDisbursementController],
   providers: [PayrollService, ObligationsService, PayrollRulesService, PayrollPolicyService, PayrollSalaryHistoryService, TypedDeductionsService, TypedDeductionsScheduler, BonusesService,
-    FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService, PayrollAllowancesService, PayrollRecurringAllowancesService,
+    FinancialExemptionsService, PayrollCorrectionsService, SocialInsuranceService, PayrollOverviewService, PayrollAllowancesService,
     PayrollDailyAccrualService, PayrollDailyAccrualScheduler, PayrollApprovalChainService, PayrollDisbursementService],
 })
 export class PayrollModule {}

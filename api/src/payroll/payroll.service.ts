@@ -85,9 +85,6 @@ import { payrollLatenessTierDeduction } from './payroll-lateness-tiers'
 import { readActiveDeductionWaivers, waiveAttendanceDeductionDay, waivedDeductionKinds, waivePolicyShadowTotals, withoutWaivedObligations } from './payroll-deduction-waivers'
 // بدل دوام أيام العطلات (أوامر الموارد البشرية + طلبات «دوام يوم عطلة» المعتمدة) → قيد «بدل» في الدفتر عند الحساب
 import { syncHolidayWorkPayroll } from '../attendance/holiday-work'
-// البدل الثابت الشهري (بدل ضغط عمل…) → قيد «بدل» لكل إسناد بيغطي الشهر عند الحساب، برّه أي أساس خصم أو إضافي
-import { isForeignMonthRecurringCredit, isRecurringAllowanceSourceRef } from './recurring-allowances'
-import { assertRecurringAllowancesCurrent, prepareRecurringAllowancesRun, releaseRecurringAllowanceCredits } from './recurring-allowances-payroll'
 // تراكم المسير يومًا بيوم (قرار المالك 20 سبتمبر): اليوم بيتحسب ليلته، وإقفال الشهر بيقرأه
 import { PayrollDailyAccrualService } from './payroll-daily-accrual.service'
 import { computePayrollPolicyEnginePreNet, parsePayrollEngineParityReport, PAYROLL_DEFAULT_ENGINE_MODE, PAYROLL_ENGINE_MODE_LABELS, PAYROLL_ENGINE_MODES, PAYROLL_PARITY_COMPONENTS,
@@ -714,8 +711,6 @@ export class PayrollService {
     const deductionWaivers = await readActiveDeductionWaivers(em, run.period)
     // أساس مبالغ التراكم الاسترشادية — يُقرأ مرة للمسير كله (لا يمس أي مبلغ يُصرف)
     const accrualBasis = await this.dailyAccrual.deductionBasis(em)
-    // البدل الثابت الشهري: إسنادات الشهر وقيوده لموظفي المسير، تُقرأ مرة للمسير (المزامنة لكل موظف تحت)
-    const recurringAllowances = await prepareRecurringAllowancesRun(em, { period: run.period, employeeIds: covered.map(({ emp }) => emp.id) })
     for (const { emp, coverage, member, claims, salary, org, settlement } of covered) {
       const { coverFrom, coverTo, coverDays } = coverage
       const waived = waivedDeductionKinds(deductionWaivers, { employeeId: emp.id, branchId: org.branchId, departmentId: org.departmentId, teamId: org.teamId })
@@ -925,25 +920,18 @@ export class PayrollService {
         org: { employeeId: emp.id, branchId: org.branchId ?? null, departmentId: org.departmentId ?? null, teamId: org.teamId ?? null },
         from: coverFrom, to: coverTo, period: run.period, basis: { grossMonthly: gross, monthlyDays, dailyHours },
         skipDates: suspendedDates, actorUserId: user.sub ?? null })
-      // 5ب) البدل الثابت الشهري (بدل ضغط عمل مثلًا — طلب المالك 26 سبتمبر): لكل إسناد بيغطي شهر المسير قيد «بدل» CREDIT واحد
-      // بمبلغه الشهري الثابت، أو بنسبة أيام الخدمة للي بدأ أو ساب الشغل جوه الفترة — نفس fullCoverage وcoverDays وmonthlyDays
-      // اللي اتناسب بيها الراتب فوق بالحرف. مالوش دعوة بسعر اليوم/الساعة ولا بالحضور ولا الإضافي ولا الإجازة بدون راتب،
-      // وقيده معلّم «برّه مساحة الخصم» تحت فحماية الصافي والأقساط ما بتاخدش منه. إعادة الحساب بتحدّث نفس القيد (مرجع ثابت).
-      const recurring = await recurringAllowances.sync({ employeeId: emp.id, startDate, fullCoverage, coverDays, monthlyDays, actorUserId: user.sub ?? null })
       const obligationRunId = run.id, obligationRunPeriod = run.period
       // «شيل خصم»: القيد المشال (مسجل/تأمينات/أخرى) ما يدخلش المسير ده ويفضل في الدفتر؛ الإضافات ما بتتشالش
-      // البدل الثابت الشهري بتاع شهر تاني ما يدخلش هنا: بيتصرف مع راتب شهره بس (ما بيترحّلش)
       const pendingObligations = withoutWaivedObligations((
         await em.getRepository(EmployeeObligation).find({
           where: { employeeId: emp.id, status: 'PENDING' },
         })
       ).filter((o) => (!o.effectiveDate || o.effectiveDate <= endDate) && (!o.targetPeriod || o.targetPeriod <= obligationRunPeriod) &&
-        (o.reservedPayrollRunId == null || o.reservedPayrollRunId === obligationRunId) && !isForeignMonthRecurringCredit(o, obligationRunPeriod)), waived)
+        (o.reservedPayrollRunId == null || o.reservedPayrollRunId === obligationRunId)), waived)
       // C2 / DD-11: فئة نوع الخصم المصنف وأولوية ترحيله (النظامي أولًا، الإداري آخر المصنفة)
       const typedObligationFacts = await readTypedObligationFacts(em, pendingObligations)
       const obligationEntry = (o: EmployeeObligation) => ({ id: o.id, amount: round2(Number(o.amount)), category: o.category,
-        deductionRequestId: o.deductionRequestId ?? null, effectiveDate: o.effectiveDate ?? null, ...typedObligationFacts.get(o.id),
-        ...(isRecurringAllowanceSourceRef(o.sourceRef) ? { outsideDeductionBase: true } : {}) })
+        deductionRequestId: o.deductionRequestId ?? null, effectiveDate: o.effectiveDate ?? null, ...typedObligationFacts.get(o.id) })
       // الخطوة 26 (EX-01..08): الإعفاء المالي النشط لهذا الموظف في هذا المسير على المبالغ المطلوبة قبل حماية الصافي — الحضور المُعفى صفر
       // (أو ما بقي بعد يوم مُعفى)، والقيود المصنفة المُعفاة تخرج من الخصم وتبقى في الدفتر حتى الصرف، والأقساط المُعفاة تُؤجل في خطة الأقساط.
       // النظامي والقضائي وغير القابل للإعفاء والاستردادات غير المصنفة والإجازة بلا أجر تبقى. بلا إعفاء نشط تمر المبالغ كما هي.
@@ -1175,9 +1163,6 @@ export class PayrollService {
             socialInsurance,
             // بدل دوام أيام العطلات: لكل يوم مغطى — الأمر/الطلب والساعات والمبلغ وقيده في الدفتر، أو سبب عدم احتسابه
             ...(holidayWork.lines.length ? { holidayWork } : {}),
-            // البدل الثابت الشهري: لكل إسناد بيغطي الشهر — المبلغ الشهري ومبلغ الشهر ده (بعد تناسب المنضم/المغادر) وقيده، أو إن الشهر
-            // اتسوّى قبل كده. الاعتماد بيقارن الإسنادات دي بالحالية (اتضاف أو اتوقف بعد الحساب = أعد الحساب)
-            ...(recurring.lines.length ? { recurringAllowances: recurring } : {}),
           }),
         })
       )
@@ -1215,11 +1200,6 @@ export class PayrollService {
       item.runId = run.id
       await items.save(item)
     }
-    // البدل الثابت الشهري: موظف كان في النسخة السابقة من المسير وخرج منه (استبعاد، نقل، مابقاش في الخدمة) — قيد شهره المُدار
-    // يتلغي، إلا لو في مسير مفتوح تاني لنفس الشهر فيه (بيحسبه هو). فما يفضلش قيد يتيم مستني في الدفتر.
-    const recurringKept = new Set(covered.map(({ emp }) => emp.id))
-    const recurringDropped = previousItems.map(row => row.employeeId).filter(id => !recurringKept.has(id))
-    if (recurringDropped.length) await releaseRecurringAllowanceCredits(em, { period: run.period, employeeIds: recurringDropped, exceptRunId: run.id })
     const after = { snapshotVersion: run.snapshotVersion, totalNet, members: newMembers, items: prepared }
     const oldIds = new Set([...previousMembers.filter(member => member.membershipStatus !== 'EXCLUDED'), ...previousItems].map(member => member.employeeId))
     const newIds = new Set(covered.map(({ emp }) => emp.id))
@@ -1285,11 +1265,7 @@ export class PayrollService {
     if (slot !== null && (typeof slot !== 'object' || !Number.isFinite(Number(slot.netBeforeLoans)) || !Number.isFinite(Number(slot.capConsumed)))) {
       throw new ConflictException('رصيد موضع السلف المحفوظ في تفصيل المسير غير صالح؛ أعد حساب المسودة')
     }
-    // البدل الثابت الشهري برّه مساحة الخصم: خطة الأقساط اتبنت على الصافي من غيره (حماية الصافي)، فيتطرح قبل المقارنة؛
-    // المسير من غيره ما فيهوش الحقل = صفر = نفس المقارنة القديمة بالحرف
-    const outsideBase = Number(breakdown.netProtection?.creditsOutsideBase ?? 0)
-    if (!Number.isFinite(outsideBase) || outsideBase < 0) throw new ConflictException('الإضافات برّه مساحة الخصم في تفصيل المسير غير صالحة؛ أعد حساب المسودة')
-    const planNet = slot ? round2(Number(slot.netBeforeLoans) - socialInsurance).toFixed(2) : round2(netBefore - outsideBase).toFixed(2), planCap = slot ? Number(slot.capConsumed).toFixed(2) : consumed.toFixed(2)
+    const planNet = slot ? round2(Number(slot.netBeforeLoans) - socialInsurance).toFixed(2) : netBefore.toFixed(2), planCap = slot ? Number(slot.capConsumed).toFixed(2) : consumed.toFixed(2)
     if (plan.context.period !== run.period || plan.context.endDate !== run.endDate || plan.context.earnedFixedGross !== earned.toFixed(2) ||
         plan.context.capConsumed !== planCap || plan.context.netBeforeLoans !== planNet ||
         Number(item.loanInstallments) !== deducted || Number(item.netPay) !== round2(netBefore - deducted) ||
@@ -1359,8 +1335,6 @@ export class PayrollService {
       await this.assertAttendanceExemptionSnapshot(em, run, items)
       await this.assertAttendanceRuleSnapshot(em, run, items)
       await this.assertSalarySourceSnapshot(em, run, items)
-      // البدل الثابت الشهري: إسنادات الشهر دلوقتي = اللي اتحسب بيها كل بند (اتضاف أو اتوقف بعد الحساب = أعد الحساب)
-      await assertRecurringAllowancesCurrent(em, run, items)
       await this.assertSettlementBoundary(em, items)
       // الخطوة 26 (EX-01 قاعدة 4): لا إعفاء بانتظار الاعتماد، والحساب طبّق الإعفاءات النشطة الحالية نفسها، وحد المرفق على المبلغ المُسقط فعلًا
       await assertRunExemptionsForApproval(em, run, items)
@@ -1684,10 +1658,6 @@ export class PayrollService {
       await releasePayrollClaims(em, runId)
       await releasePayrollInstallments(em, runId, user.sub, reason)
       await releasePayrollObligations(em, runId)
-      // البدل الثابت الشهري: إلغاء مسير مفتوح يلغي قيود شهره المُدارة لموظفينه (إلا اللي في مسير مفتوح تاني لنفس الشهر)
-      if (status === 'CANCELLED' && payrollRunTypeOf(run) !== 'REVERSAL' && items.length) {
-        await releaseRecurringAllowanceCredits(em, { period: run.period, employeeIds: items.map(item => item.employeeId), exceptRunId: runId })
-      }
       // الخطوة 26: إعادة الفتح تعيد الإعفاء المطبق نشطًا، والإلغاء ينهي الحي
       await releaseRunExemptions(em, runId, status, user.sub, reason)
       // C8 / الخطوة 31: إلغاء مسير العكس قبل تنفيذه يلغي سطوره المعلقة ويُسجل على المسير الأصلي؛ إعادة فتحه المعتمد لا أثر مالي لها

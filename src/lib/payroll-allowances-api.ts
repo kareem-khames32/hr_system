@@ -37,36 +37,6 @@ export interface AllowanceGrantCreated {
   recalculateRuns: RunBrief[]; lockedRuns: RunBrief[]
 }
 
-// «البدل الثابت الشهري»: إسناد نوع بدل لموظفين بمبلغ شهري ثابت من شهر ولحد شهر اختياري (بدل ضغط عمل مثلًا)
-export type RecurringAllowancePhase = 'ACTIVE' | 'UPCOMING' | 'ENDED' | 'STOPPED'
-// حالة الشهر: حالة قيده زي سطر بدل الشهر الواحد، أو شهر مغطى والموظف مش في الخدمة فيه خالص (ما ياخدوش)
-export type RecurringAllowanceMonthState = AllowanceLineState | 'NOT_IN_SERVICE'
-export interface RecurringAllowanceMonth {
-  period: string; state: RecurringAllowanceMonthState; stateLabel: string; amount: number; runId: number | null; runName: string | null; runStatus: string | null
-}
-export interface RecurringAllowanceRow {
-  id: number; employeeId: number; employeeCode: string; fullName: string; branchName: string | null; departmentName: string | null
-  allowanceTypeId: number; typeName: string; amount: number; fromPeriod: string; untilPeriod: string | null; lastPeriod: string | null; coversAnyMonth: boolean
-  status: 'ACTIVE' | 'STOPPED'; phase: RecurringAllowancePhase; stoppedFromPeriod: string | null; stopReason: string | null; stoppedAt: string | null
-  stoppedByName: string | null; reason: string; createdAt: string; createdByName: string | null
-  coversPeriod: boolean; month: RecurringAllowanceMonth | null; months: RecurringAllowanceMonth[]; paidMonths: string[]
-  defaultStopFrom: string | null; canStop: boolean
-}
-export interface RecurringAllowanceList {
-  period: string; ready: boolean; rows: RecurringAllowanceRow[]; totals: { count: number; employees: number; amount: number }
-}
-export interface RecurringAllowanceInput {
-  allowanceTypeId: number; amount: string; targetLevel: string; branchId: number | null
-  departmentIds: number[]; teamIds: number[]; employeeIds: number[]; fromPeriod: string; untilPeriod: string | null; reason: string
-}
-type RunWithPeriod = RunBrief & { period: string }
-export interface RecurringAllowanceCreated {
-  created: number; skippedDuplicates: number; amount: number; monthlyTotal: number; fromPeriod: string; untilPeriod: string | null; recalculateRuns: RunWithPeriod[]
-}
-export interface RecurringAllowanceStopped {
-  id: number; status: 'STOPPED'; stoppedFromPeriod: string; cancelledMonths: string[]; recalculateRuns: RunWithPeriod[]
-}
-
 const post = <T>(path: string, body?: unknown) => apiFetch<T>(path, { method: 'POST', ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
 
 export const fetchAllowanceTypes = () => apiFetch<AllowanceType[]>('/payroll/allowances/types')
@@ -78,7 +48,3 @@ export const createAllowanceGrant = (input: AllowanceGrantInput) => post<Allowan
 export const cancelAllowanceLine = (id: number) => post<{ id: number; status: string; recalculateRuns: RunBrief[] }>(`/payroll/allowances/lines/${id}/cancel`)
 export const cancelAllowanceGrant = (id: number) =>
   post<{ id: number; cancelled: number; locked: number; recalculateRuns: RunBrief[] }>(`/payroll/allowances/grants/${id}/cancel`)
-export const fetchRecurringAllowances = (period: string) => apiFetch<RecurringAllowanceList>(`/payroll/allowances/recurring?period=${encodeURIComponent(period)}`)
-export const createRecurringAllowance = (input: RecurringAllowanceInput) => post<RecurringAllowanceCreated>('/payroll/allowances/recurring', input)
-export const stopRecurringAllowance = (id: number, input: { reason: string; fromPeriod: string | null }) =>
-  post<RecurringAllowanceStopped>(`/payroll/allowances/recurring/${id}/stop`, input)
