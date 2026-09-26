@@ -37,6 +37,9 @@ interface ApiHoliday {
   name: string;
   date: string;
   endDate?: string | null;
+  // «تسري على» (ترحيل 070): العطلة المخصصة لفرع أو أقسام أو فرق أو موظفين بعينهم
+  targeted?: boolean;
+  audienceText?: string;
 }
 
 const eventTypes = [
@@ -103,7 +106,7 @@ export default function CalendarPage() {
       date: h.date,
       endDate: h.endDate ?? undefined,
       type: "holiday" as const,
-      description: "عطلة رسمية",
+      description: h.targeted && h.audienceText ? `عطلة رسمية — تسري على: ${h.audienceText}` : "عطلة رسمية",
     })),
     ...leaves.map((l) => ({
       id: `l-${l.id}`,

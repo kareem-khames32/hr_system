@@ -19,6 +19,9 @@ interface CalendarHoliday {
   date: string
   endDate?: string | null
   country?: string | null
+  // «تسري على» (ترحيل 070): العطلة المخصصة لفرع أو أقسام أو فرق أو موظفين بعينهم
+  targeted?: boolean
+  audienceText?: string
 }
 
 
@@ -254,7 +257,7 @@ export default function LeaveCalendarPage() {
                   </div>
                   <div>
                     <p className="font-medium text-gray-800">{h.name}</p>
-                    <p className="text-sm text-gray-500">عطلة رسمية</p>
+                    <p className="text-sm text-gray-500">{h.targeted && h.audienceText ? `عطلة رسمية — تسري على: ${h.audienceText}` : 'عطلة رسمية'}</p>
                   </div>
                 </div>
                 <div className="text-left">

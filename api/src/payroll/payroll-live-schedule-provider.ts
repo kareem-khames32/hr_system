@@ -1,6 +1,7 @@
 import { BadRequestException } from '@nestjs/common'
 import { EntityManager } from 'typeorm'
 import { createCalendarResolverCache, resolveEmployeeCalendarDay, type ResolvedCalendarDay } from '../attendance/attendance-calendar-resolver'
+import { parseHolidayAudienceColumn, type HolidayAudience } from '../attendance/holiday-audience'
 import { PAYROLL_LIVE_SOURCE_ROW_LIMIT, PayrollLiveSourceIssue, PayrollLiveSourceSection, PayrollLiveSourceState, payrollLiveSourcePeriod } from './payroll-live-source-contract'
 
 type Row = Record<string, any>
@@ -54,7 +55,7 @@ export async function readPayrollLiveSchedule(em: EntityManager, employeeId: num
           OR EXISTS (SELECT 1 FROM [schedule_day_overrides] d WHERE d.[employeeId]=@0 AND d.[date]>=@1 AND d.[date]<=@2 AND d.[shiftId]=v.[sourceId])))
       ORDER BY v.[sourceType], v.[sourceId], v.[effectiveFrom], v.[version], v.[id]`, params)
     configRows = await em.query(`SELECT TOP (5001) [key], [value] FROM [requests_config] WHERE [key]='attendance.weekend_days' ORDER BY [key]`, params)
-    holidayRows = await em.query(`SELECT TOP (5001) [id], [name], CONVERT(varchar(10), [date], 23) AS [date], CONVERT(varchar(10), [endDate], 23) AS [endDate], [country]
+    holidayRows = await em.query(`SELECT TOP (5001) [id], [name], CONVERT(varchar(10), [date], 23) AS [date], CONVERT(varchar(10), [endDate], 23) AS [endDate], [country], [audience]
       FROM [public_holidays] WHERE [date]<=@2 AND ([endDate]>=@1 OR ([endDate] IS NULL AND [date]>=@1))
       AND (NULLIF(LTRIM(RTRIM([country])), '') IS NULL OR EXISTS (SELECT 1 FROM [employees] e JOIN [branches] b ON b.[id]=e.[branchId]
         WHERE e.[id]=@0 AND (NULLIF(LTRIM(RTRIM(b.[country])), '') IS NULL OR UPPER(LTRIM(RTRIM(b.[country])))=UPPER(LTRIM(RTRIM([public_holidays].[country])))))) ORDER BY [date], [id]`, params)
@@ -165,10 +166,17 @@ export async function readPayrollLiveSchedule(em: EntityManager, employeeId: num
       return []
     }
     const ref = validId(row.id) ? `public_holidays:${row.id}` : 'public_holidays'; sourceRefs.push(ref)
-    if (!validId(row.id) || holidayIds.has(row.id) || !text(row.name, 200) || !validDate(row.date) || (row.endDate != null && (!validDate(row.endDate) || row.endDate < row.date)) || !text(row.country, 5) || row.date > periodEnd || (row.endDate ?? row.date) < periodStart) report('SCHEDULE_HOLIDAY_INVALID', 'سجل عطلة رسمية مكرر أو خارج الفترة أو غير صالح', ref)
+    // «تسري على» (ترحيل 070): وصف حالي بس (مستوى التخصيص وفرعه، من غير قائمة الأرقام — دليل كل موظف مايشيلش أسماء غيره)؛
+    // حكم كل يوم للموظف ده نفسه من التقويم المؤرخ تحت (resolveEmployeeCalendarDay → dayKind)
+    let audience: Pick<HolidayAudience, 'level' | 'branchId'> | null = null, audienceValid = true
+    try {
+      const parsed = parseHolidayAudienceColumn(row.audience ?? null, message => { throw new Error(message) })
+      audience = parsed ? { level: parsed.level, branchId: parsed.branchId } : null
+    } catch { audienceValid = false }
+    if (!validId(row.id) || holidayIds.has(row.id) || !text(row.name, 200) || !validDate(row.date) || (row.endDate != null && (!validDate(row.endDate) || row.endDate < row.date)) || !text(row.country, 5) || row.date > periodEnd || (row.endDate ?? row.date) < periodStart || !audienceValid) report('SCHEDULE_HOLIDAY_INVALID', 'سجل عطلة رسمية مكرر أو خارج الفترة أو غير صالح', ref)
     holidayIds.add(row.id)
     return [{ id: validId(row.id) ? row.id : null, name: text(row.name, 200) ? row.name : null, date: validDate(row.date) ? row.date : null, endDate: validDate(row.endDate) ? row.endDate : null,
-      country: row.country, sourceRef: ref }]
+      country: row.country, audience, sourceRef: ref }]
   })
   const exceptionIds = new Set<number>()
   const exceptions = exceptionRows.flatMap(row => {

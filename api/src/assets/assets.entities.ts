@@ -87,6 +87,12 @@ export class PublicHoliday {
 
   @Column({ length: 5 })
   country: string
+
+  // «تسري على» (طلب المالك 26 سبتمبر — ترحيل 070): NULL = للكل (السلوك القديم بالحرف)، غير كده JSON بنفس شكل منتقي
+  // الاستهداف: الفرع كله / أقسام / فرق / موظفين بالاسم (attendance/holiday-audience.ts). بيدخل في نسخة التقويم العام
+  // المؤرخة للعطلة المخصصة بس — العطلة اللي للكل نسختها زي ما هي فبصمتها ماتتغيرش
+  @Column({ type: 'nvarchar', length: 'MAX', nullable: true })
+  audience: string | null
 }
 
 // كتالوج الورديات — تستخدمه شاشة الجدولة

@@ -1,5 +1,6 @@
 import { apiFetch, getCurrentUser, type CurrentUser } from './api'
 import { branchScopeOfUser, canSeeBranch } from './branch-scope'
+import { isHolidayAudience } from './holiday-audience'
 
 export type PayrollCalendarScope = 'GLOBAL' | 'BRANCH' | 'EMPLOYEE'
 export interface PayrollCalendarContext {
@@ -42,7 +43,9 @@ export function validatePayrollCalendarContext(result: PayrollCalendarContext, s
     scope === 'EMPLOYEE' && !(current.branchId === null || idValid(current.branchId))) throw new Error('تفاصيل نطاق التقويم غير مكتملة؛ لا يمكن استخدامها أساسًا للحفظ.')
   const rowsValid = (rows: unknown, check: (row: Record<string, unknown>) => boolean) => Array.isArray(rows) && rows.length <= 10000 && rows.every(row => row && typeof row === 'object' && !Array.isArray(row) && check(row))
   if (scope !== 'EMPLOYEE' && !rowsValid(current.exceptions, row => idValid(row.id) && typeof row.name === 'string' && ['SUN', 'MON', 'TUE', 'WED', 'THU', 'FRI', 'SAT'].includes(String(row.weekday)) && ['ALL', '1ST', '2ND', '3RD', '4TH', 'LAST'].includes(String(row.occurrence)) && ['OFF', 'WORK'].includes(String(row.effect)) && typeof row.isActive === 'boolean') ||
-    scope === 'GLOBAL' && !rowsValid(current.holidays, row => idValid(row.id) && typeof row.name === 'string' && dateValid(row.date) && (row.endDate === null || dateValid(row.endDate) && row.endDate >= String(row.date)) && nullableText(row.country, 5))) throw new Error('عناصر التقويم غير مكتملة؛ أعد تحميل السياق قبل الحفظ.')
+    scope === 'GLOBAL' && !rowsValid(current.holidays, row => idValid(row.id) && typeof row.name === 'string' && dateValid(row.date) && (row.endDate === null || dateValid(row.endDate) && row.endDate >= String(row.date)) && nullableText(row.country, 5)
+      // «تسري على» (ترحيل 070): المفتاح للعطلة المخصصة بس — وشكله لازم يبقى سليم (مايتقراش «للكل» بالغلط)
+      && (!('audience' in row) || isHolidayAudience(row.audience)))) throw new Error('عناصر التقويم غير مكتملة؛ أعد تحميل السياق قبل الحفظ.')
   return result
 }
 export function buildCalendarChange(context: PayrollCalendarContext | null, evidence: CalendarChangeEvidence): PayrollCalendarChange {

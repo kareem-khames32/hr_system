@@ -9,6 +9,7 @@ import { AttendanceService } from './attendance.service'
 // تراكم المسير يومًا بيوم: أمر دوام العطلة بيغيّر أيام الموظفين المشمولين
 import { markPayrollDaysDirty } from '../payroll/payroll-daily-accrual'
 import { HolidayWorkOrder } from './holiday-work.entities'
+import { departmentPathOf, holidayAudienceMatches, parseHolidayAudienceColumn } from './holiday-audience'
 import {
   cancelHolidayWorkObligations, holidayWorkAmount, holidayWorkDayResult, holidayWorkGrantMatches, holidayWorkGrantOf, holidayWorkGrantsByDate,
   holidayWorkToday, HOLIDAY_WORK_LEVELS, HOLIDAY_WORK_MULTIPLIER_KEY, parseHolidayWorkDates, parseHolidayWorkIds, parseHolidayWorkMultiplier,
@@ -308,14 +309,16 @@ export class HolidayWorkService {
     const multiplier = input.multiplier === undefined || input.multiplier === null || input.multiplier === ''
       ? await readHolidayWorkMultiplier(this.em) : parseHolidayWorkMultiplier(input.multiplier)
     const note = input.note == null ? null : String(input.note).trim().slice(0, 500) || null
-    await this.assertHolidayDates(dates, level === 'company' ? null : branchId)
+    await this.assertHolidayDates(dates, { targetLevel: level, branchId: level === 'company' ? null : branchId, targetIds: ids })
     return { name, targetLevel: level, branchId, targetIds: ids.length ? JSON.stringify(ids) : null, dates: JSON.stringify(dates),
       firstDate: dates[0], lastDate: dates[dates.length - 1], multiplier, note }
   }
 
   // الأيام لازم تكون عطلة (ويك إند أو عطلة رسمية) للفرع المستهدف؛ لأمر الشركة: عطلة في فرع واحد على الأقل.
-  // الاستحقاق نفسه بيتحسم لكل موظف من حالة يومه في الحضور (holiday).
-  private async assertHolidayDates(dates: string[], branchId: number | null) {
+  // العطلة الرسمية المخصصة (ترحيل 070) مابتخليش الفرع كله إجازة: اليوم مقبول برضه لو إجازة لموظف مستهدف واحد على الأقل
+  // بتقويمه هو (targetedHolidayOff). الاستحقاق نفسه بيتحسم لكل موظف من حالة يومه في الحضور (holiday).
+  private async assertHolidayDates(dates: string[], target: Pick<HolidayWorkGrant, 'targetLevel' | 'branchId' | 'targetIds'>) {
+    const branchId = target.branchId
     const branches = branchId ? [branchId] : (await this.em.query('SELECT [id] FROM [branches] WHERE [isActive] = 1') as Array<{ id: number }>).map(row => Number(row.id))
     if (!branches.length) return
     const working: string[] = []
@@ -331,11 +334,36 @@ export class HolidayWorkService {
           break
         }
       }
-      if (known && !off) working.push(date)
+      if (known && !off && !(await this.targetedHolidayOff(date, target))) working.push(date)
     }
     if (working.length) {
       throw new BadRequestException(`${working.join('، ')} ${working.length > 1 ? 'أيام عمل عادية' : 'يوم عمل عادي'} — أمر الدوام لأيام العطلة (الويك إند أو العطلات الرسمية) بس`)
     }
+  }
+
+  // يوم شغل للفرع بس عليه عطلة رسمية مخصصة: مقبول لو إجازة لموظف واحد على الأقل من مستهدفي الأمر — الحكم من تقويم الموظف
+  // المؤرخ نفسه. التصفية الأولى (مين ممكن تخصه العطلة) بمكانه الحالي عشان مانحسبش تقويم الفرع كله موظف موظف.
+  private async targetedHolidayOff(date: string, target: Pick<HolidayWorkGrant, 'targetLevel' | 'branchId' | 'targetIds'>): Promise<boolean> {
+    const rows: Array<{ audience: string | null }> = await this.em.query(`SELECT [audience] FROM [public_holidays]
+      WHERE [audience] IS NOT NULL AND [date] <= @0 AND ISNULL([endDate], [date]) >= @0`, [date])
+    const audiences = rows.flatMap(row => {
+      try { const audience = parseHolidayAudienceColumn(row.audience, message => { throw new Error(message) }); return audience ? [audience] : [] } catch { return [] }
+    })
+    if (!audiences.length) return false
+    const parents = new Map((await this.em.query('SELECT [id], [parentId] FROM [departments]') as Array<{ id: number; parentId: number | null }>)
+      .map(row => [Number(row.id), row.parentId == null ? null : Number(row.parentId)] as const))
+    const candidates = [...(await this.employeesLite()).values()].filter(emp => !INACTIVE_STATUSES.has(emp.status) && holidayWorkGrantMatches(target, emp)
+      && audiences.some(audience => holidayAudienceMatches(audience, { employeeId: emp.employeeId, branchId: emp.branchId, teamId: emp.teamId,
+        departmentPath: departmentPathOf(emp.departmentId, id => parents.get(id)) })))
+    for (const emp of candidates.slice(0, 50)) {
+      try {
+        if (!(await this.attendance.calendarDay(emp.employeeId, date)).working) return true
+      } catch {
+        // تقويم الموظف مش مثبت لليوم ده: نفس حكم الفرع فوق — ما نرفضش، وحالة اليوم في الحضور هي الحكم وقت الحساب
+        return true
+      }
+    }
+    return false
   }
 
   async create(user: JwtPayload, input: HolidayWorkOrderInput) {
