@@ -81,7 +81,7 @@ test('monthly editor displays reference month and owner cycle example with no da
   const html = editorFixture(view())
   assert.match(html, /يسري من راتب شهر/); assert.match(html, /23 أغسطس إلى 22 سبتمبر/)
   assert.match(html, /type="month"[^>]*value="2026-09"/); assert.doesNotMatch(html, /type="date"|value="2026-08"/)
-  assert.equal((html.match(/inputMode="decimal"/g) || []).length, 6)
+  assert.equal((html.match(/inputMode="decimal"/g) || []).length, 7) // الست + بدل ضغط العمل
 })
 test('permission denial retains values but prevents monthly saving and adding', () => {
   const html = editorFixture(view(), { canEdit: false })

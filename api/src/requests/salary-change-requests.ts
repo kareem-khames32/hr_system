@@ -6,7 +6,8 @@ import { RequestApproval } from './entities/request-approval.entity'
 import { PayrollDecimal } from '../payroll/payroll-decimal'
 import { payrollLiveSourceContent } from '../payroll/payroll-live-source-contract'
 import { applyEmployeeSalaryChange, readSalaryCycleStartDay } from '../payroll/payroll-salary-change'
-import { readSalaryHistory, readSalaryHistoryCurrent, SALARY_HISTORY_MONEY_KEYS, salaryCurrentSourceHash, salaryHistoryDate, salaryHistoryMoney, salaryHistoryText } from '../payroll/payroll-salary-history'
+import { readSalaryHistory, readSalaryHistoryCurrent, SALARY_HISTORY_MONEY_KEYS, SALARY_HISTORY_OPTIONAL_MONEY_KEYS, SALARY_HISTORY_REQUIRED_MONEY_KEYS,
+  salaryCurrentSourceHash, salaryHistoryDate, salaryHistoryMoney, salaryHistoryMoneyOf, salaryHistoryText, withoutZeroOptionalSalary } from '../payroll/payroll-salary-history'
 import { PayrollPeriodSalaryError, salaryPayrollPeriod } from '../payroll/payroll-period-salary'
 import { payrollPeriodBounds, payrollPeriodOfDate } from '../payroll/payroll-period'
 import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
@@ -58,11 +59,15 @@ export function assertSalaryChangeClientPayload(raw: unknown, required = false):
   return result
 }
 
+// دليل الطلب: المكونات الست إلزامية، وبدل ضغط العمل (ترحيل 071) اختياري — دليل اتقدّم قبل الترحيل مافيهوش = صفر،
+// وبصمته زي ما هي لأن البدل الصفري برّه البصمات (withoutZeroOptionalSalary).
 function salaryShape(raw: unknown): Salary {
-  if (!shape(raw, ['currency', ...SALARY_HISTORY_MONEY_KEYS])) conflict('SALARY_REQUEST_BASIS_INVALID', 'دليل مكونات الأجر غير مكتمل؛ أعد تقديم الطلب')
+  const keys = ['currency', ...SALARY_HISTORY_REQUIRED_MONEY_KEYS]
+  if (!object(raw) || keys.some(key => !Object.prototype.hasOwnProperty.call(raw, key)) ||
+    Object.keys(raw).some(key => !keys.includes(key) && !(SALARY_HISTORY_OPTIONAL_MONEY_KEYS as readonly string[]).includes(key))) conflict('SALARY_REQUEST_BASIS_INVALID', 'دليل مكونات الأجر غير مكتمل؛ أعد تقديم الطلب')
   const value = raw as Payload
   if (!['SAR', 'EGP'].includes(value.currency)) conflict('SALARY_REQUEST_BASIS_INVALID', 'عملة دليل الأجر غير صالحة')
-  return { currency: value.currency, ...Object.fromEntries(SALARY_HISTORY_MONEY_KEYS.map(key => [key, salaryHistoryMoney(value[key])])) } as Salary
+  return { currency: value.currency, ...salaryHistoryMoneyOf(value) } as Salary
 }
 
 /** ملف أجر ناقص (عملة غير محددة أو مكوّن فارغ) لا يُبنى عليه دليل زيادة. كان يرجع 409 «عملة دليل الأجر غير صالحة»
@@ -85,7 +90,8 @@ function increase(newSalary: string, salary: Salary) {
 }
 
 function basisHash(basis: Omit<SalaryChangeBasis, 'contentHash'>, payload: Payload) {
-  return payrollLiveSourceContent({ basis, newSalary: payload.newSalary, effectivePayrollPeriod: payload.effectivePayrollPeriod, reason: payload.reason }).contentHash
+  return payrollLiveSourceContent({ basis: { ...basis, salary: withoutZeroOptionalSalary(basis.salary) }, newSalary: payload.newSalary,
+    effectivePayrollPeriod: payload.effectivePayrollPeriod, reason: payload.reason }).contentHash
 }
 
 export function readStoredSalaryChangePayload(raw: unknown, requireBasis = true): Payload & { salaryChangeBasis?: SalaryChangeBasis; salaryChangeApproval?: SalaryChangeApproval } {

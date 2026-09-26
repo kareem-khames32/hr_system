@@ -28,7 +28,9 @@ export const HR_DOCUMENT_VARIABLES = [
   { key: 'salary.phone', label: 'بدل الهاتف', sample: '100.00' },
   { key: 'salary.workNature', label: 'بدل طبيعة العمل', sample: '200.00' },
   { key: 'salary.other', label: 'البدلات الأخرى', sample: '200.00' },
-  { key: 'salary.total', label: 'إجمالي الراتب المسجل', sample: '8500.00' },
+  // بدل ضغط العمل (قرار المالك 26 سبتمبر): مصروف كل شهر فظاهر في بيان الراتب وداخل إجماليه المصروف (مش أساس لأي مؤثر)
+  { key: 'salary.workPressure', label: 'بدل ضغط العمل', sample: '300.00' },
+  { key: 'salary.total', label: 'إجمالي الراتب المسجل (شامل بدل ضغط العمل)', sample: '8800.00' },
   { key: 'salary.currency', label: 'عملة الراتب', sample: 'SAR' },
   { key: 'date', label: 'تاريخ الإصدار', sample: '2026-09-12' },
   { key: 'document.ref', label: 'مرجع المستند', sample: 'HRD-PREVIEW' },

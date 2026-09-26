@@ -14,8 +14,9 @@ const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
 const { localDateOf } = require('../src/attendance/attendance.service')
 const { RequestsService } = require('../src/requests/requests.service')
-const keys = ['basicSalary', 'housingAllowance', 'transportAllowance', 'phoneAllowance', 'workNatureAllowance', 'otherAllowance']
-const amounts = ['6000.00', '1500.00', '500.00', '300.00', '200.00', '100.00']
+// المكونات السبعة المؤرخة: الست + بدل ضغط العمل (ترحيل 071) — دليل الطلب بيثبتها كلها
+const keys = ['basicSalary', 'housingAllowance', 'transportAllowance', 'phoneAllowance', 'workNatureAllowance', 'otherAllowance', 'workPressureAllowance']
+const amounts = ['6000.00', '1500.00', '500.00', '300.00', '200.00', '100.00', '0.00']
 const today = localDateOf(new Date())
 // قاعدة المالك: الزيادة تسري من راتب شهر كامل؛ دورة الشركة المبذورة 23، والطلب المجدول يُنفَّذ عند بداية دورة شهره.
 const { payrollPeriodOfDate, payrollPeriodBounds, shiftPayrollPeriod } = require('../src/payroll/payroll-period')

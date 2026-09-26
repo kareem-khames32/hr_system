@@ -172,6 +172,11 @@ export default function PayslipPage() {
       const notes = windows.map((window: { effectiveFrom: string; effectiveTo: string | null }) =>
         `خصومات الحضور غير مولّدة في أيام استثناء الحضور من ${window.effectiveFrom} إلى ${window.effectiveTo ?? 'نهاية مفتوحة'}`)
       if (Number(detail.exemptUnpaidLeaveDays) > 0) notes.push(`إجازة بلا أجر ${detail.exemptUnpaidLeaveDays} يوم — غير مخصومة بقرار الاستثناء`)
+      // بدل ضغط العمل (قرار المالك 26 سبتمبر): سطره في الاستحقاقات، ومعاه توضيح إنه من غير مؤثرات
+      const pressure = detail.workPressureAllowance
+      if (pressure && Number(pressure.earnedAmount) > 0) {
+        notes.push(`بدل ضغط العمل ${formatMoney(pressure.earnedAmount)} بيتصرف كامل من غير مؤثرات — مش داخل في الإضافي ولا الخصومات ولا الأقساط${Number(pressure.earnedAmount) < Number(pressure.monthlyAmount) ? ` (بتناسب أيام الخدمة في الفترة من ${formatMoney(pressure.monthlyAmount)} شهريًا)` : ''}`)
+      }
       return notes as string[]
     } catch { return [] }
   })()

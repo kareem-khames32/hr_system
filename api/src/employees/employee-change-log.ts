@@ -2,7 +2,7 @@ import { EntityManager } from 'typeorm'
 import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 
 type ChangeType = NonNullable<EmployeeStatusHistory['changeType']>
-export const FINANCIAL_CHANGE_FIELDS = /^(salary|basicSalary|housingAllowance|transportAllowance|phoneAllowance|workNatureAllowance|otherAllowance|currency|iban|bankName|bankBranch|gosiBaseSalary|payMethod|bankTransferAmount|salaryCycle)$/i
+export const FINANCIAL_CHANGE_FIELDS = /^(salary|basicSalary|housingAllowance|transportAllowance|phoneAllowance|workNatureAllowance|otherAllowance|workPressureAllowance|currency|iban|bankName|bankBranch|gosiBaseSalary|payMethod|bankTransferAmount|salaryCycle)$/i
 export function employeeChangeType(field: string): ChangeType {
   if (field === 'status') return 'STATUS'
   if (/^(iban|bankName|bankBranch|payMethod)$/.test(field)) return 'BANK'

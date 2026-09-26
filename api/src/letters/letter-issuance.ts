@@ -1,7 +1,7 @@
 import { BadRequestException, NotFoundException } from '@nestjs/common'
 import { EntityManager, In } from 'typeorm'
 import { Employee } from '../employees/employee.entity'
-import { grossMonthlySalary } from '../employees/compensation'
+import { paidMonthlySalary } from '../employees/compensation'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { isDataPlaceholder } from '../common/data-placeholders'
 
@@ -29,7 +29,8 @@ export async function assertLetterIssuable(em: EntityManager, employeeId: number
   if (missing.length) {
     throw new BadRequestException(`لا يمكن إصدار الخطاب قبل استكمال: ${missing.join('، ')} — راجع الموارد البشرية`)
   }
-  const salary = grossMonthlySalary(employee)
+  // إجمالي الراتب المسجل بملف الموظف = المصروف كل شهر (الست + بدل ضغط العمل) — بيان راتب مش أساس مؤثرات
+  const salary = paidMonthlySalary(employee)
   if (!Number.isFinite(salary) || salary < 0) throw new BadRequestException('بيانات راتب الموظف غير صالحة لإصدار الخطاب')
   return { employee, company, salary }
 }

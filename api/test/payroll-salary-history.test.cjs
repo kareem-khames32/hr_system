@@ -59,7 +59,11 @@ test('الفترة المفتوحة يجب أن تكون الأخيرة ولا �
   assert.throws(() => normalize([missing]), bad('SALARY_HISTORY_SHAPE_INVALID'))
 })
 test('كل فترة تحمل ست قيم صريحة وعملة محددة ولا تقبل حقولًا محقونة', () => {
-  for (const key of keys) { const row = segment(); delete row[key]; assert.throws(() => normalize([row]), bad('SALARY_HISTORY_SHAPE_INVALID')) }
+  // المكونات الست إلزامية؛ بدل ضغط العمل (ترحيل 071) اختياري — غيابه = صفر، والمدخل القديم بالست بس يفضل مقبول
+  for (const key of keys.filter(key => key !== 'workPressureAllowance')) { const row = segment(); delete row[key]; assert.throws(() => normalize([row]), bad('SALARY_HISTORY_SHAPE_INVALID')) }
+  const legacy = segment(); delete legacy.workPressureAllowance
+  assert.equal(normalize([legacy])[0].workPressureAllowance, '0.00')
+  assert.throws(() => normalize([segment({ workPressureAllowance: '-1.00' })]), bad('SALARY_HISTORY_AMOUNT_INVALID'))
   assert.throws(() => normalize([segment({ currency: 'USD' })]), bad('SALARY_HISTORY_CURRENCY_INVALID'))
   assert.throws(() => normalize([segment({ sourceRef: 'forged' })]), bad('SALARY_HISTORY_SHAPE_INVALID'))
 })

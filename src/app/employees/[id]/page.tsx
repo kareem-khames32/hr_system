@@ -147,6 +147,8 @@ interface EmployeeVM {
   otherAllowance: number
   phoneAllowance: number
   workNatureAllowance: number
+  // بدل ضغط العمل: بيتصرف كامل مع الراتب من غير مؤثرات
+  workPressureAllowance: number
   emergencyContactName: string
   emergencyContactPhone: string
   emergencyRelation: string
@@ -592,17 +594,20 @@ export default function EmployeeProfilePage() {
           otherAllowance: Number(e.otherAllowance ?? 0),
           phoneAllowance: Number(e.phoneAllowance ?? 0),
           workNatureAllowance: Number(e.workNatureAllowance ?? 0),
+          workPressureAllowance: Number(e.workPressureAllowance ?? 0),
           emergencyContactName: e.emergencyContactName || '—',
           emergencyContactPhone: e.emergencyContactPhone || '—',
           emergencyRelation: labelOf(RELATION_AR, e.emergencyRelation),
           emergencyPhoneAlt: val(e.emergencyPhoneAlt),
+          // إجمالي الراتب المصروف كل شهر = الست + بدل ضغط العمل (أساس المؤثرات من غيره)
           totalSalary:
             Number(e.basicSalary ?? 0) +
             Number(e.housingAllowance ?? 0) +
             Number(e.transportAllowance ?? 0) +
             Number(e.otherAllowance ?? 0) +
             Number(e.phoneAllowance ?? 0) +
-            Number(e.workNatureAllowance ?? 0),
+            Number(e.workNatureAllowance ?? 0) +
+            Number(e.workPressureAllowance ?? 0),
           payMethod: PAY_METHOD_AR[e.payMethod] ?? e.payMethod ?? '—',
           // «نقدي + بنك»: تحويل بنكي X — والباقي من الصافي نقدي
           payMethodSplit: e.payMethod === 'mixed' && e.bankTransferAmount != null
@@ -1589,6 +1594,7 @@ export default function EmployeeProfilePage() {
                 <div className="p-4 bg-primary-50 rounded-xl">
                   <p className="text-sm text-primary-600">إجمالي الراتب</p>
                   <p className="font-bold text-primary-600 text-xl mt-1">{formatMoney(employee.totalSalary)} {currency}</p>
+                  {employee.workPressureAllowance > 0 && <p className="text-xs text-primary-600 mt-1">شامل بدل ضغط العمل</p>}
                 </div>
               </div>
 
@@ -1603,6 +1609,12 @@ export default function EmployeeProfilePage() {
                   <div className="p-4 bg-gray-50 rounded-xl">
                     <p className="text-sm text-gray-500">بدل طبيعة العمل</p>
                     <p className="font-bold text-gray-800 text-xl mt-1">{formatMoney(employee.workNatureAllowance)} {currency}</p>
+                  </div>
+                  {/* بدل ضغط العمل (قرار المالك 26 سبتمبر): بيتصرف كامل مع الراتب — من غير مؤثرات */}
+                  <div className="p-4 bg-gray-50 rounded-xl">
+                    <p className="text-sm text-gray-500">بدل ضغط العمل</p>
+                    <p className="font-bold text-gray-800 text-xl mt-1">{formatMoney(employee.workPressureAllowance)} {currency}</p>
+                    <p className="text-xs text-gray-400 mt-1">من غير مؤثرات: مش داخل في الإضافي ولا الخصومات ولا نهاية الخدمة</p>
                   </div>
                 </div>
               </div>

@@ -48,7 +48,8 @@ test('client cannot forge financial basis or approval even as null; legacy incre
 test('submission captures all six exact amounts, branch, actor and revision under caller transaction without writes', async () => {
   const em = manager(), result = await lib.stageSalaryChangeRequest(em, req(), payload({ increase_pct: '0' }), 21)
   assert.equal(result.increase_pct, '10.000000'); assert.equal(result.salaryChangeBasis.currentSourceHash, salaryCurrentSourceHash(salary()))
-  assert.deepEqual(result.salaryChangeBasis.salary, salary()); assert.equal(result.salaryChangeBasis.historyRevision, 0)
+  // الدليل بيثبت المكونات السبعة: الست + بدل ضغط العمل (ملف من غيره = صفر)، وبصمته زي بصمة الست بالحرف
+  assert.deepEqual(result.salaryChangeBasis.salary, { ...salary(), workPressureAllowance: '0.00' }); assert.equal(result.salaryChangeBasis.historyRevision, 0)
   assert.equal(result.salaryChangeBasis.branchId, branchId); assert.equal(result.salaryChangeBasis.stagedByUserId, 21); assert.equal(em.calls.length, 3)
   assert.equal(lib.readStoredSalaryChangePayload(result).newSalary, '6600.00')
 })
@@ -116,7 +117,7 @@ test('due execution calls the shared writer with exact proposed amount, request 
     const result = await lib.executeSalaryChangeRequest(em, request, value, today)
     assert.equal(result.completed, true); assert.equal(inputs.length, 1); assert.equal(inputs[0].actorUserId, actorId)
     assert.equal(inputs[0].requestId, requestId); assert.equal(inputs[0].evidenceReference, `request:${requestId}`)
-    assert.deepEqual(inputs[0].salary, salary({ basicSalary: '6600.00' })); assert.equal(inputs[0].expectedRevision, 0)
+    assert.deepEqual(inputs[0].salary, { ...salary({ basicSalary: '6600.00' }), workPressureAllowance: '0.00' }); assert.equal(inputs[0].expectedRevision, 0)
     assert.equal(inputs[0].effectivePayrollPeriod, '2026-09'); assert.equal('effectiveDate' in inputs[0], false)
   } finally { salaryWriter.applyEmployeeSalaryChange = originalWriter }
 })

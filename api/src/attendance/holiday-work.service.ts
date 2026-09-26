@@ -97,6 +97,7 @@ export class HolidayWorkService {
 
   // ===== القراءة =====
   private async employeesLite(): Promise<Map<number, EmployeeLite>> {
+    // أساس سعر ساعة دوام العطلة = المكونات الست بس؛ بدل ضغط العمل برّه عن قصد (قرار المالك 26 سبتمبر: من غير مؤثرات)
     const rows: Array<Record<string, any>> = await this.em.query(`SELECT [id], [fullName], [employeeCode], [branchId], [departmentId], [teamId], [status],
         ISNULL([basicSalary], 0) + ISNULL([housingAllowance], 0) + ISNULL([transportAllowance], 0) + ISNULL([phoneAllowance], 0)
           + ISNULL([workNatureAllowance], 0) + ISNULL([otherAllowance], 0) AS [gross]

@@ -381,6 +381,13 @@ export class CreateEmployeeDto {
   @Min(0, { message: 'البدل لا يكون سالباً' })
   otherAllowance?: number
 
+  // بدل ضغط العمل (قرار المالك 26 سبتمبر): بيتصرف مع الراتب كل شهر من غير مؤثرات — الفاضي = صفر
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'بدل ضغط العمل رقم' })
+  @Min(0, { message: 'البدل لا يكون سالباً' })
+  workPressureAllowance?: number
+
   @IsOptional()
   @IsIn(['transfer', 'cash', 'mixed', 'visa'], { message: 'طريقة الصرف: نقدي أو تحويل بنكي أو نقدي + بنك' })
   payMethod?: string
@@ -752,6 +759,13 @@ export class UpdateEmployeeDto {
   @IsNumber({}, { message: 'البدلات الأخرى رقم' })
   @Min(0, { message: 'البدل لا يكون سالباً' })
   otherAllowance?: number
+
+  // بدل ضغط العمل (قرار المالك 26 سبتمبر): بيتصرف مع الراتب كل شهر من غير مؤثرات — الفاضي = صفر
+  @IsOptional()
+  @Type(() => Number)
+  @IsNumber({}, { message: 'بدل ضغط العمل رقم' })
+  @Min(0, { message: 'البدل لا يكون سالباً' })
+  workPressureAllowance?: number
 
   @IsOptional()
   @IsIn(['transfer', 'cash', 'mixed', 'visa'], { message: 'طريقة الصرف: نقدي أو تحويل بنكي أو نقدي + بنك' })

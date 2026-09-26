@@ -1,5 +1,5 @@
 import { Type } from 'class-transformer'
-import { ArrayMaxSize, ArrayMinSize, IsArray, IsIn, IsInt, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator'
+import { ArrayMaxSize, ArrayMinSize, IsArray, IsIn, IsInt, IsOptional, IsString, Matches, Max, MaxLength, Min, MinLength, ValidateIf, ValidateNested } from 'class-validator'
 
 export class PayrollSalaryHistorySegmentDto {
   @IsString() @Matches(/^\d{4}-\d{2}-\d{2}$/) effectiveFrom: string
@@ -11,6 +11,8 @@ export class PayrollSalaryHistorySegmentDto {
   @IsString() @MaxLength(80) phoneAllowance: string
   @IsString() @MaxLength(80) workNatureAllowance: string
   @IsString() @MaxLength(80) otherAllowance: string
+  // بدل ضغط العمل (ترحيل 071): اختياري في الفترة — غيابه = صفر
+  @IsOptional() @IsString() @MaxLength(80) workPressureAllowance?: string
 }
 
 export class ReplacePayrollSalaryHistoryDto {
@@ -32,6 +34,8 @@ export class PayrollMonthlySalaryPeriodDto {
   @IsString() @MaxLength(80) phoneAllowance: string
   @IsString() @MaxLength(80) workNatureAllowance: string
   @IsString() @MaxLength(80) otherAllowance: string
+  // بدل ضغط العمل (ترحيل 071): اختياري في الفترة — غيابه = صفر
+  @IsOptional() @IsString() @MaxLength(80) workPressureAllowance?: string
 }
 
 export class ReplacePayrollMonthlySalaryHistoryDto {

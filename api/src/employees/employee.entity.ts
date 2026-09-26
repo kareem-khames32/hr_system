@@ -219,6 +219,11 @@ export class Employee {
   @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
   otherAllowance: number
 
+  // بدل ضغط العمل (قرار المالك 26 سبتمبر): بيتصرف مع الراتب كل شهر وبيظهر للموظف، بس «من غير مؤثرات» —
+  // برّه سعر اليوم والساعة والخصومات والسقف والتأمينات ونهاية الخدمة (compensation.ts). الموظفين القدام = صفر
+  @Column({ type: 'decimal', precision: 18, scale: 2, default: 0 })
+  workPressureAllowance: number
+
   // طريقة الصرف — نقدي / تحويل بنكي / نقدي + بنك (mixed)؛ visa قيمة قديمة
   @Column({ length: 20, default: 'transfer' })
   payMethod: 'transfer' | 'cash' | 'mixed' | 'visa'

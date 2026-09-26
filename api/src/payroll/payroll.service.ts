@@ -87,6 +87,8 @@ import { readActiveDeductionWaivers, waiveAttendanceDeductionDay, waivedDeductio
 import { syncHolidayWorkPayroll } from '../attendance/holiday-work'
 // تراكم المسير يومًا بيوم (قرار المالك 20 سبتمبر): اليوم بيتحسب ليلته، وإقفال الشهر بيقرأه
 import { PayrollDailyAccrualService } from './payroll-daily-accrual.service'
+// بدل ضغط العمل (قرار المالك 26 سبتمبر): خانة في الراتب بتتصرف كاملة فوق الصافي «من غير مؤثرات» — برّه كل أساس وكل خصم وكل قسط
+import { payrollItemWorkPressureEarned, payrollProrateCents, payrollWorkPressurePay, payrollWorkPressureSalaryLine, withWorkPressurePay } from './payroll-work-pressure'
 import { computePayrollPolicyEnginePreNet, parsePayrollEngineParityReport, PAYROLL_DEFAULT_ENGINE_MODE, PAYROLL_ENGINE_MODE_LABELS, PAYROLL_ENGINE_MODES, PAYROLL_PARITY_COMPONENTS,
   payrollParityDifferenceKey, payrollParityEmployeeRow, payrollPolicySwitchIssues, summarizePayrollEngineParity, type PayrollEngineMode, type PayrollParityEmployeeRow,
   payrollApprovalParityIssues, payrollParityPendingGroups, payrollShadowSourceIssueCodes, payrollPolicyEngineWithLoans, type PayrollPolicyEngineFacts } from './payroll-policy-engine-run'
@@ -732,7 +734,7 @@ export class PayrollService {
       // وبنفس الأساس الذي يُحسب به سعر يوم الخصم أدناه. الدورة الكاملة تستحق الشهر كاملًا مهما كان طولها.
       const fullCoverage = coverFrom === startDate && coverTo === endDate
       const prorataFactor = fullCoverage ? 1 : Math.min(coverDays / monthlyDays, 1)
-      const prorateCents = (cents: number) => fullCoverage ? cents : Math.min(cents, Math.trunc(cents * coverDays / monthlyDays))
+      const prorateCents = (cents: number) => payrollProrateCents(cents, { fullCoverage, coverDays, monthlyDays })
       const grossEarnedCents = prorateCents(grossCents)
       const grossEarned = grossEarnedCents / 100
       const earnedCents = monthlyCents.map(prorateCents)
@@ -740,13 +742,16 @@ export class PayrollService {
       const largest = monthlyComponents.indexOf(Math.max(...monthlyComponents))
       earnedCents[largest] += residual
       const earnedComponents = earnedCents.map(cents => cents / 100)
-      // SPEC⑥ / AL-09،AL-11: أسماء وقيم ثابتة للقسيمة؛ لا نفسر المصفوفات التاريخية بترتيب جديد.
-      const salaryComponents = MONTHLY_SALARY_COMPONENTS.map((component, index) => ({
+      // بدل ضغط العمل (قرار المالك 26 سبتمبر): برّه gross وسعر اليوم والساعة وكل الأسس تحت — المكونات الست بس هي أساس المؤثرات.
+      // التعديل الوحيد عليه تناسب أيام الخدمة بنفس قاعدة الراتب بالحرف، ومستحقه بيتضاف للبدلات والصافي في الآخر بعد الحماية والأقساط.
+      const workPressure = payrollWorkPressurePay(salary.workPressureAllowance, { fullCoverage, coverDays, monthlyDays })
+      // SPEC⑥ / AL-09،AL-11: أسماء وقيم ثابتة للقسيمة؛ لا نفسر المصفوفات التاريخية بترتيب جديد. سطر البدل آخرها لما يكون له قيمة.
+      const salaryComponents = [...MONTHLY_SALARY_COMPONENTS.map((component, index) => ({
         code: component.code, nameAr: component.nameAr, nameEn: component.nameEn,
         monthlyAmount: monthlyCents[index] / 100, earnedAmount: earnedComponents[index],
-      }))
+      })), ...(workPressure ? [payrollWorkPressureSalaryLine(workPressure)] : [])]
       Object.assign(member.snapshot!, { basicSalary: basic, allowances, gross, grossEarned, monthlyComponents, earnedComponents, salaryComponents,
-        prorataFactor: Math.round(prorataFactor * 1e6) / 1e6 })
+        prorataFactor: Math.round(prorataFactor * 1e6) / 1e6, ...(workPressure ? { workPressureAllowance: workPressure } : {}) })
       const dayRate = gross / monthlyDays
       const hourRate = dayRate / dailyHours
       const minuteRate = hourRate / 60
@@ -1048,8 +1053,8 @@ export class PayrollService {
           if (policyFinal.earnedComponents && policyFinal.protection && policyFinal.grossEarned !== null && policyNet !== null && policyLoans !== null) {
             const policyEarned = policyFinal.earnedComponents
             paid = { earnedComponents: policyEarned, grossEarned: policyFinal.grossEarned,
-              salaryComponents: MONTHLY_SALARY_COMPONENTS.map((component, index) => ({ code: component.code, nameAr: component.nameAr, nameEn: component.nameEn,
-                monthlyAmount: monthlyCents[index] / 100, earnedAmount: policyEarned[index] })),
+              salaryComponents: [...MONTHLY_SALARY_COMPONENTS.map((component, index) => ({ code: component.code, nameAr: component.nameAr, nameEn: component.nameEn,
+                monthlyAmount: monthlyCents[index] / 100, earnedAmount: policyEarned[index] })), ...(workPressure ? [payrollWorkPressureSalaryLine(workPressure)] : [])],
               latenessDeduction: policyFinal.protection.attendance.lateness, shortfallDeduction: policyFinal.protection.attendance.shortfall, absenceDeduction: policyFinal.protection.attendance.absence,
               otherDeductions: policyFinal.protection.otherDeductions, otherAdditions: policyFinal.protection.otherAdditions, unpaidDeduction: policyFinal.amounts.unpaidLeaveDeduction ?? 0,
               installmentPlan: policyPlan, loanDeduction: policyLoans, netPay: policyNet, netProtection: policyFinal.protection, loanSlot: policyFinal.protection.loanSlot }
@@ -1058,7 +1063,10 @@ export class PayrollService {
           }
         }
       }
-      totalNet = round2(totalNet + paid.netPay)
+      // بدل ضغط العمل يتضاف للبدلات والصافي هنا بس — بعد حماية الصافي والتأمينات والأقساط وبعد تقرير التكافؤ (القديم والمحرك زي بعض)،
+      // فولا خصم ولا قسط بياخد منه حتى لو الخصومات أكبر من الراتب. من غير بدل = نفس الأرقام بالحرف.
+      const itemAmounts = withWorkPressurePay({ allowances: round2(paid.earnedComponents.slice(1).reduce((sum, amount) => sum + amount, 0)), netPay: paid.netPay }, workPressure)
+      totalNet = round2(totalNet + itemAmounts.netPay)
       // تقسيم عمود التأخير المصروف بين سطري القسيمة «التأخير» و«إذن بخصم» (المجموع = العمود بالقرش، فالصافي وإجمالي الخصم ما يتغيرانش).
       const latenessSplit = splitLatenessPermission(paid.latenessDeduction, permissionRequested)
       const leaveLinesAll = payrollLeaveDeductionLines(paid.unpaidDeduction, unpaidOnlyDeduction, unpaidDays, sick.lines)
@@ -1069,7 +1077,8 @@ export class PayrollService {
           employeeId: emp.id,
           // الخطوة 20: المصروف = القديم (LEGACY/SHADOW) أو نتيجة المحرك (POLICY) — paid يحمل المصدر المختار
           basicSalary: paid.earnedComponents[0],
-          allowances: round2(paid.earnedComponents.slice(1).reduce((sum, amount) => sum + amount, 0)),
+          // البدلات المصروفة: الخمسة + بدل ضغط العمل المستحق (عمود المصروف؛ أساس المؤثرات من غيره في التفصيل)
+          allowances: itemAmounts.allowances,
           overtimeHours: otHours,
           overtimeAmount: otAmount,
           lateMinutes,
@@ -1084,7 +1093,7 @@ export class PayrollService {
           otherDeductions: paid.otherDeductions,
           otherAdditions: paid.otherAdditions,
           socialInsuranceDeduction,
-          netPay: paid.netPay,
+          netPay: itemAmounts.netPay,
           payMethod: emp.payMethod ?? 'transfer',
           breakdown: JSON.stringify({
             ...coverage,
@@ -1098,6 +1107,9 @@ export class PayrollService {
             monthlyComponents,
             earnedComponents: paid.earnedComponents,
             salaryComponents: paid.salaryComponents,
+            // بدل ضغط العمل: الشهري والمستحق (بعد تناسب أيام الخدمة بس) — جوه البدلات والصافي وبرّه gross وكل أساس؛
+            // الاعتماد والصرف بيطرحوه قبل مقارنة خطة الأقساط وفحص الصافي السالب. من غير بدل مالوش حقل.
+            ...(workPressure ? { workPressureAllowance: workPressure } : {}),
             salarySource: salary.source,
             prorataFactor: Math.round(prorataFactor * 1e6) / 1e6,
             prorationBasis: 'MONTHLY_DAYS',
@@ -1241,6 +1253,17 @@ export class PayrollService {
     return this.detail(user, runId)
   }
 
+  /**
+   * صافي المؤثرات = صافي البند من غير بدل ضغط العمل المستحق — البدل بيتصرف كامل فوق الصافي ومايغطيش سالبه.
+   * بند من غير بدل (أو تفصيل تالف يرفضه فحص تاني) = صافيه زي ما هو، فالفحص القديم بالحرف.
+   */
+  private effectNet(item: PayrollItem): number {
+    let breakdown: unknown
+    try { breakdown = item.breakdown ? JSON.parse(item.breakdown) : {} } catch { return Number(item.netPay) }
+    const workPressure = payrollItemWorkPressureEarned(breakdown)
+    return workPressure ? round2(Number(item.netPay) - workPressure) : Number(item.netPay)
+  }
+
   private async installmentPlanForItem(em: EntityManager, run: PayrollRun, item: PayrollItem): Promise<PayrollInstallmentPlan | null> {
     let breakdown: any
     try { breakdown = item.breakdown ? JSON.parse(item.breakdown) : {} } catch { throw new ConflictException('تفصيل المسير غير صالح') }
@@ -1253,7 +1276,11 @@ export class PayrollService {
       return null
     }
     if (!isPayrollInstallmentPlan(plan)) throw new ConflictException('خطة أقساط المسير غير صالحة؛ أعد حساب المسودة')
-    const earned = round2(Number(item.basicSalary) + Number(item.allowances))
+    // بدل ضغط العمل جوه البدلات والصافي المحفوظين بس برّه كل أساس: الخطة اتبنت على المستحق والصافي من غيره، فيتطرح قبل المقارنة
+    // ويرجع للصافي في الآخر. بند من غيره = صفر = نفس المقارنة القديمة بالحرف.
+    const workPressure = payrollItemWorkPressureEarned(breakdown)
+    if (workPressure === null) throw new ConflictException('بدل ضغط العمل في تفصيل المسير غير صالح؛ أعد حساب المسودة')
+    const earned = round2(Number(item.basicSalary) + Number(item.allowances) - workPressure)
     const consumed = round2(Number(item.latenessDeduction) + Number(item.shortfallDeduction) + Number(item.absenceDeduction) + Number(item.otherDeductions))
     // التأمينات الاجتماعية (حصة الموظف) تسبق الأقساط: الخطة مبنية على الصافي بعدها
     const socialInsurance = Number(item.socialInsuranceDeduction ?? 0)
@@ -1268,7 +1295,7 @@ export class PayrollService {
     const planNet = slot ? round2(Number(slot.netBeforeLoans) - socialInsurance).toFixed(2) : netBefore.toFixed(2), planCap = slot ? Number(slot.capConsumed).toFixed(2) : consumed.toFixed(2)
     if (plan.context.period !== run.period || plan.context.endDate !== run.endDate || plan.context.earnedFixedGross !== earned.toFixed(2) ||
         plan.context.capConsumed !== planCap || plan.context.netBeforeLoans !== planNet ||
-        Number(item.loanInstallments) !== deducted || Number(item.netPay) !== round2(netBefore - deducted) ||
+        Number(item.loanInstallments) !== deducted || Number(item.netPay) !== round2(netBefore - deducted + workPressure) ||
         !Array.isArray(breakdown.installmentIds) || JSON.stringify([...breakdown.installmentIds].sort((a, b) => a - b)) !== JSON.stringify(ids)) {
       throw new ConflictException('مبالغ المسير أو مصادره لا تطابق خطة الأقساط المحفوظة؛ أعد حساب المسودة')
     }
@@ -1338,8 +1365,9 @@ export class PayrollService {
       await this.assertSettlementBoundary(em, items)
       // الخطوة 26 (EX-01 قاعدة 4): لا إعفاء بانتظار الاعتماد، والحساب طبّق الإعفاءات النشطة الحالية نفسها، وحد المرفق على المبلغ المُسقط فعلًا
       await assertRunExemptionsForApproval(em, run, items)
-      // DD-11: الرصيد السالب (المحمي يتجاوز الاستحقاق) يمنع القبول المالي
-      const negativeNet = items.filter(item => Number(item.netPay) < 0).map(item => item.employeeId)
+      // DD-11: الرصيد السالب (المحمي يتجاوز الاستحقاق) يمنع القبول المالي — على صافي المؤثرات (من غير بدل ضغط العمل):
+      // البدل مابيغطيش إجازة بلا أجر أو تأمينات زادت عن الراتب، فالمشكلة تفضل ظاهرة زي ما كانت
+      const negativeNet = items.filter(item => this.effectNet(item) < 0).map(item => item.employeeId)
       if (negativeNet.length) throw new ConflictException({ code: 'PAYRUN-NET-NEGATIVE', message: 'صافي بعض الموظفين سالب؛ عالج الإجازة بلا أجر أو الاستحقاق ثم أعد الحساب قبل الاعتماد', employeeIds: negativeNet })
       await claimPayrollPeriod(em, run, employeeIds)
       for (const item of items) {
@@ -1445,8 +1473,8 @@ export class PayrollService {
       await lockPayrollEmployees(em, employeeIds)
       await this.assertAttendanceExemptionSnapshot(em, run, items)
       await this.assertSettlementBoundary(em, items)
-      // DD-11 (C2): الصافي السالب المحفوظ يمنع الصرف أيضًا، لا الاعتماد وحده
-      const negativeNetAtPay = items.filter(item => Number(item.netPay) < 0).map(item => item.employeeId)
+      // DD-11 (C2): الصافي السالب المحفوظ يمنع الصرف أيضًا، لا الاعتماد وحده (صافي المؤثرات من غير بدل ضغط العمل)
+      const negativeNetAtPay = items.filter(item => this.effectNet(item) < 0).map(item => item.employeeId)
       if (negativeNetAtPay.length) throw new ConflictException({ code: 'PAYRUN-NET-NEGATIVE', message: 'صافي بعض الموظفين سالب؛ أعد فتح المسير وعالج الإجازة بلا أجر أو الاستحقاق ثم أعد الحساب قبل الصرف', employeeIds: negativeNetAtPay })
       // إقفال الصرف موظف بموظف قبل أي أثر مالي: سبب مكتوب لمن لم يتعلّم «تم الصرف» (مسير بلا علامات = لا شرط)
       const disbursement = await closePayrollRunDisbursement(em, run, items, user.sub, dto.unpaidReason)
@@ -2115,9 +2143,13 @@ export class PayrollService {
         suspensionNote: row.suspensionNote, settlementPayout: row.settlement }
       if (row.status === 'INCLUDED' && row.coverage && row.salary?.ok) {
         const coverage = row.coverage
-        const grossCents = row.salary.monthlyComponents.reduce((sum, amount) => sum + Math.round(amount * 100), 0)
         const fullCoverage = coverage.coverFrom === run.startDate && coverage.coverTo === run.endDate
-        const earned = fullCoverage ? grossCents : Math.min(grossCents, Math.trunc(grossCents * coverage.coverDays / monthlyDays))
+        // راتب الشهر المصروف = الست + بدل ضغط العمل، وكل واحد بيتناسب لوحده بنفس قاعدة الحساب (البدل برّه أساس المؤثرات)
+        const basis = { fullCoverage, coverDays: coverage.coverDays, monthlyDays }
+        const sixCents = row.salary.monthlyComponents.reduce((sum, amount) => sum + Math.round(amount * 100), 0)
+        const workPressureCents = Math.round((row.salary.workPressureAllowance ?? 0) * 100)
+        const grossCents = sixCents + workPressureCents
+        const earned = payrollProrateCents(sixCents, basis) + payrollProrateCents(workPressureCents, basis)
         monthlyCents += grossCents; earnedCents += earned
         included.push({ ...common, hireDate: coverage.hireDate, leaveDate: coverage.leaveDate, coverFrom: coverage.coverFrom, coverTo: coverage.coverTo,
           coverDays: coverage.coverDays, partial: !fullCoverage, prorataFactor: fullCoverage ? 1 : Math.round(Math.min(coverage.coverDays / monthlyDays, 1) * 1e6) / 1e6,

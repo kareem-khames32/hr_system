@@ -8,13 +8,16 @@ import { lockPayrollEmployees } from './payroll-settlement-boundary'
 import { markPayrollRangeDirty } from './payroll-daily-accrual'
 // C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُقفل شهر الأجر (يُصحح الأجر ثم يُصرف بمسير تكميلي)
 import { payrollLineNotReversedSql } from './payroll-reversal-sql'
-import { appendMonthlySalaryHistoryRevision, readSalaryHistory, readSalaryHistoryCurrent,
-  SALARY_HISTORY_MONEY_KEYS, salaryCurrentSourceHash, salaryHistorySchemaMissing,
-  salaryHistoryText, type SalaryHistoryCurrent, type SalaryHistoryRead, type SalaryHistorySegment } from './payroll-salary-history'
+import { appendMonthlySalaryHistoryRevision, isOptionalSalaryKey, readSalaryHistory, readSalaryHistoryCurrent,
+  SALARY_HISTORY_MONEY_KEYS, SALARY_HISTORY_OPTIONAL_MONEY_KEYS, salaryCurrentSourceHash, salaryHistorySchemaMissing,
+  salaryHistoryText, type SalaryHistoryCurrent, type SalaryHistoryOptionalMoneyKey, type SalaryHistoryRead, type SalaryHistorySegment } from './payroll-salary-history'
 import { type MonthlySalaryPeriod, normalizeMonthlySalaryPeriods, PAYROLL_MONTHLY_SALARY_HISTORY_VERSION, PayrollPeriodSalaryError, salaryPayrollPeriod } from './payroll-period-salary'
 import { payrollPeriodBounds, payrollPeriodOfDate, shiftPayrollPeriod } from './payroll-period'
 
-export type EmployeeSalaryValue = Pick<SalaryHistorySegment, typeof SALARY_HISTORY_MONEY_KEYS[number] | 'currency'>
+// أجر كامل بالمكونات السبعة (من السجل أو بعد إكمال البدل الغائب)
+export type FullEmployeeSalaryValue = Pick<SalaryHistorySegment, typeof SALARY_HISTORY_MONEY_KEYS[number] | 'currency'>
+// بدل ضغط العمل اختياري في مدخل التغيير: العميل اللي مابيبعتهوش (شاشة أو طلب قديم) = بدل الملف الحالي زي ما هو، مش صفر
+export type EmployeeSalaryValue = Omit<FullEmployeeSalaryValue, SalaryHistoryOptionalMoneyKey> & Partial<Pick<SalaryHistorySegment, SalaryHistoryOptionalMoneyKey>>
 export interface EmployeeSalaryChangeInput {
   employeeId: number
   actorUserId: number
@@ -32,7 +35,7 @@ export interface EmployeeSalaryChangeInput {
 export interface EmployeeSalaryChangeResult { history: SalaryHistoryRead; current: SalaryHistoryCurrent; changed: boolean; applied: true }
 const bad = (code: string, message: string): never => { throw new BadRequestException({ code, message }) }
 const conflict = (code: string, message: string): never => { throw new ConflictException({ code, message }) }
-const salaryOf = (row: SalaryHistorySegment | MonthlySalaryPeriod): EmployeeSalaryValue => ({ currency: row.currency, ...Object.fromEntries(SALARY_HISTORY_MONEY_KEYS.map(key => [key, row[key]])) } as EmployeeSalaryValue)
+const salaryOf = (row: SalaryHistorySegment | MonthlySalaryPeriod): FullEmployeeSalaryValue => ({ currency: row.currency, ...Object.fromEntries(SALARY_HISTORY_MONEY_KEYS.map(key => [key, row[key]])) } as FullEmployeeSalaryValue)
 const equal = (a: unknown, b: unknown) => payrollLiveSourceContent(a).contentHash === payrollLiveSourceContent(b).contentHash
 const month = (value: unknown): string => {
   try { return salaryPayrollPeriod(value) } catch (error) {
@@ -42,6 +45,11 @@ const month = (value: unknown): string => {
 }
 const periodOnly = (row: SalaryHistorySegment | MonthlySalaryPeriod): MonthlySalaryPeriod => ({ ...salaryOf(row),
   effectivePayrollPeriod: row.effectivePayrollPeriod as string, effectiveToPayrollPeriod: row.effectiveToPayrollPeriod ?? null } as MonthlySalaryPeriod)
+/** بدل ضغط العمل الغائب من مدخل التغيير = قيمته في الملف الحالي، فتغيير الأساسي من شاشة أو طلب قديم ماينزّلش البدل لصفر بالغلط. */
+export function withCurrentOptionalSalary(salary: EmployeeSalaryValue, current: Partial<SalaryHistoryCurrent>): FullEmployeeSalaryValue {
+  const missing = SALARY_HISTORY_OPTIONAL_MONEY_KEYS.filter(key => salary[key] === undefined)
+  return (missing.length ? { ...salary, ...Object.fromEntries(missing.map(key => [key, current[key] ?? '0.00'])) } : salary) as FullEmployeeSalaryValue
+}
 
 /** يوم بداية دورة الرواتب المثبت؛ يُقرأ داخل معاملة الكاتب ولا يُفترض. */
 export async function readSalaryCycleStartDay(em: EntityManager): Promise<number> {
@@ -68,7 +76,7 @@ export function planEmployeeSalaryChange(input: {
   const previous = input.history.segments.map(periodOnly)
   const next = previous.find(row => row.effectivePayrollPeriod > effective)
   const effectiveTo = next ? shiftPayrollPeriod(next.effectivePayrollPeriod, -1) : null
-  const replacement: MonthlySalaryPeriod = { ...salaryOf(input.salary as MonthlySalaryPeriod), effectivePayrollPeriod: effective, effectiveToPayrollPeriod: effectiveTo }
+  const replacement: MonthlySalaryPeriod = { ...salaryOf(withCurrentOptionalSalary(input.salary, input.current) as MonthlySalaryPeriod), effectivePayrollPeriod: effective, effectiveToPayrollPeriod: effectiveTo }
   const retained = previous.flatMap(row => {
     if (row.effectivePayrollPeriod > effective) return [{ ...row }]
     if (row.effectivePayrollPeriod === effective) return []
@@ -86,7 +94,7 @@ export function planEmployeeSalaryChange(input: {
   let segments: ReturnType<typeof normalizeMonthlySalaryPeriods>
   try { segments = normalizeMonthlySalaryPeriods([...retained, replacement], input.cycleStartDay) }
   catch (error) {
-    if (error instanceof PayrollPeriodSalaryError) bad('SALARY_HISTORY_AMOUNT_INVALID', 'مكونات الأجر ستة مبالغ غير سالبة بمنزلتين عشريتين على الأكثر والعملة SAR أو EGP')
+    if (error instanceof PayrollPeriodSalaryError) bad('SALARY_HISTORY_AMOUNT_INVALID', 'مكونات الأجر مبالغ غير سالبة بمنزلتين عشريتين على الأكثر (الست إلزامية وبدل ضغط العمل اختياري) والعملة SAR أو EGP')
     throw error
   }
   const active = segments.find(row => row.effectivePayrollPeriod <= currentPeriod && (row.effectiveToPayrollPeriod === null || row.effectiveToPayrollPeriod >= currentPeriod))
@@ -121,7 +129,9 @@ export async function assertMonthlySalaryHistoryKeepsClosedPeriods(em: EntityMan
       OR (m.[id] IS NOT NULL AND (m.[membershipStatus] IS NULL OR m.[membershipStatus]='INCLUDED')))
       AND ${payrollLineNotReversedSql('r.[id]', '@0')}`, [employeeId])
   const pick = (periods: MonthlySalaryPeriod[], period: string) => periods.find(row => row.effectivePayrollPeriod <= period && (row.effectiveToPayrollPeriod === null || row.effectiveToPayrollPeriod >= period)) ?? null
-  const amounts = (row: Partial<Record<string, string | null>> | null, withCurrency: boolean) => row ? JSON.stringify([...(withCurrency ? [row.currency] : []), ...SALARY_HISTORY_MONEY_KEYS.map(key => row[key])]) : null
+  // لقطة المسير الأقدم من ترحيل 071 مافيهاش بدل ضغط العمل = صفر (قيمته في الشهر ده)، فمايتحسبش تغيير في شهر مقفول
+  const amounts = (row: Partial<Record<string, string | null>> | null, withCurrency: boolean) => row ? JSON.stringify([...(withCurrency ? [row.currency] : []),
+    ...SALARY_HISTORY_MONEY_KEYS.map(key => row[key] === undefined && isOptionalSalaryKey(key) ? '0.00' : row[key])]) : null
   const monthlyPrevious = previous.version?.contractVersion === PAYROLL_MONTHLY_SALARY_HISTORY_VERSION ? previous.segments.map(periodOnly) : null
   for (const row of rows) {
     let saved: string | null, next: string | null
@@ -234,7 +244,7 @@ export async function applyEmployeeSalaryChange(em: EntityManager, input: Employ
     if (!plan.timelineChanged && !plan.currentChanged) return { history: previous, current: current.current, changed: false, applied: true }
     await assertSalaryChangePeriodOpen(em, input.employeeId, previousEffectivePayrollPeriod ?? plan.effectivePayrollPeriod, plan.effectiveToPayrollPeriod, cycleStartDay)
     if (plan.currentChanged) {
-      await em.query(`UPDATE dbo.employees SET ${SALARY_HISTORY_MONEY_KEYS.map((key, index) => `[${key}]=CAST(@${index + 1} AS decimal(18,2))`).join(', ')}, [currency]=@7 WHERE [id]=@0`, [input.employeeId, ...SALARY_HISTORY_MONEY_KEYS.map(key => plan.current[key]), plan.current.currency])
+      await em.query(`UPDATE dbo.employees SET ${SALARY_HISTORY_MONEY_KEYS.map((key, index) => `[${key}]=CAST(@${index + 1} AS decimal(18,2))`).join(', ')}, [currency]=@${SALARY_HISTORY_MONEY_KEYS.length + 1} WHERE [id]=@0`, [input.employeeId, ...SALARY_HISTORY_MONEY_KEYS.map(key => plan.current[key]), plan.current.currency])
       for (const key of [...SALARY_HISTORY_MONEY_KEYS, 'currency'] as const) {
         if (current.current[key] !== plan.current[key]) await recordEmployeeChange(em, { employeeId: input.employeeId, fieldName: key, oldValue: current.current[key], newValue: plan.current[key], changedByUserId: input.actorUserId, requestId: input.requestId, reason: `${reason} — يسري من راتب شهر ${effectivePayrollPeriod} — ${evidenceReference}` })
       }

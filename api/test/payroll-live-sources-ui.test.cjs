@@ -67,9 +67,12 @@ test('current compensation labels are complete and do not claim historical salar
 })
 
 test('monthly compensation requires one salary, reference month and unchanged source beyond the AVAILABLE label', () => {
+  // المزوّد: salary = الست (مدخل المحرك بنفس شكله) وبدل ضغط العمل في selectedSalary لوحده (ترحيل 071)؛ الملف الحالي بالسبعة للعرض
   const salary = { basicSalary: '6000.00', housingAllowance: '100.29', transportAllowance: '0.00', phoneAllowance: '0.00', workNatureAllowance: '0.00', otherAllowance: '0.00' }
-  const data = { basis: 'SINGLE_PAYROLL_PERIOD_SALARY', referencePeriod: '2026-06', current: salary, currentSourceUnchanged: true, datedSegments: [{ from: '2026-06-01', to: '2026-06-15', currency: 'SAR', salary }] }
+  const data = { basis: 'SINGLE_PAYROLL_PERIOD_SALARY', referencePeriod: '2026-06', current: { ...salary, workPressureAllowance: '750.00' }, currentSourceUnchanged: true,
+    selectedSalary: { salary, workPressureAllowance: '750.00' }, datedSegments: [{ from: '2026-06-01', to: '2026-06-15', currency: 'SAR', salary }] }
   assert.match(detail('compensation', data), /راتب شهر 2026-06 موثق بقيمة واحدة/)
+  assert.equal((detail('compensation', data).match(/750\.00/g) || []).length, 2, 'بدل ضغط العمل ظاهر في الملف الحالي وفي راتب الشهر المختار')
   assert.match(detail('compensation', data), /2026-06-15/)
   for (const patch of [{ datedSegments: [] }, { currentSourceUnchanged: false }, { datedSegments: [{ ...data.datedSegments[0], from: '2026-02-30' }] }]) {
     assert.match(detail('compensation', { ...data, ...patch }), /سريانها على الفترة المختارة لم يُثبت بعد/)

@@ -24,7 +24,7 @@ const EXPORT_SELECT = `SELECT e.[id], e.[employeeCode], e.[fingerprintCode], e.[
   e.[recruitmentSource], e.[status], e.[annualLeaveEntitled],
   e.[contractType], e.[contractNumber], ${date('contractStart')}, ${date('contractEnd')}, e.[contractDurationMonths], e.[noticePeriodDays],
   e.[currency], e.[salaryCycle], e.[basicSalary], e.[housingAllowance], e.[transportAllowance], e.[phoneAllowance],
-  e.[workNatureAllowance], e.[otherAllowance], e.[payMethod], e.[bankTransferAmount], e.[bankName], e.[bankBranch], e.[iban],
+  e.[workNatureAllowance], e.[otherAllowance], e.[workPressureAllowance], e.[payMethod], e.[bankTransferAmount], e.[bankName], e.[bankBranch], e.[iban],
   e.[gosiNumber], e.[isGosiRegistered], e.[gosiBaseSalary], ${date('archivedAt')}, e.[archiveReason]
   FROM dbo.employees e`
 

@@ -37,6 +37,9 @@ before(async () => {
   }
   // إعداد المخطط التاريخي كما نُشر في011 قبل الترحيل الجديد، وتسجيل checksum الحقيقي له.
   for (const operation of old.operations) await query(operation.sql)
+  // عمود بدل ضغط العمل (ترحيل 071) لاحق ومستقل عن 011 و012: يُضاف بقيمته الافتراضية صفر زي ما بيضيفه ترحيله، فالكود الحالي
+  // يقرا السجل ويكتبه، والبصمات القديمة (V1) فاضلة مطابقة لأن البدل الصفري برّه البصمة — ده نفسه إثبات التوافق للخلف
+  await query('ALTER TABLE dbo.employee_salary_history ADD [workPressureAllowance] decimal(18,2) NOT NULL CONSTRAINT [DF_b73bb8b205dde1f6de240e81f73] DEFAULT 0')
   await query('CREATE TABLE dbo.payroll_schema_migrations(version nvarchar(150) NOT NULL PRIMARY KEY,checksum char(64) NOT NULL,appliedAt datetime2 NOT NULL DEFAULT SYSDATETIME())')
   await query('INSERT dbo.payroll_schema_migrations(version,checksum) VALUES(@0,@1)', [old.version, old.checksum])
   await query('CREATE TABLE dbo.monthly_migration_canary(id int PRIMARY KEY, snapshotBytes varbinary(max) NOT NULL, amount decimal(18,2) NOT NULL)')
@@ -87,7 +90,7 @@ test('الترحيل يحفظ bytes السجل القديم ومبالغه وhas
   assert.deepEqual(await query('SELECT contractVersion,cycleStartDay FROM employee_salary_history_versions WHERE id=@0', [headerId]), [{ contractVersion: null, cycleStartDay: null }])
   assert.deepEqual(await query('SELECT effectivePayrollPeriod,effectiveToPayrollPeriod FROM employee_salary_history WHERE versionId=@0', [headerId]), [{ effectivePayrollPeriod: null, effectiveToPayrollPeriod: null }])
   const history = await ds.transaction('SERIALIZABLE', em => readSalaryHistory(em, employeeId))
-  assert.equal(history.version.contentHash, legacyHash); assert.equal(history.version.contractVersion, null); assert.deepEqual(history.segments, [legacy])
+  assert.equal(history.version.contentHash, legacyHash); assert.equal(history.version.contractVersion, null); assert.deepEqual(history.segments, [{ ...legacy, workPressureAllowance: '0.00' }])
   assert.throws(() => selectPayrollPeriodSalary(history, '2026-09'), error => error.code === 'SALARY_PAYROLL_PERIOD_EVIDENCE_REQUIRED')
 })
 test('بعد012 تحفظ مراجعة شهرية دقيقة جديدة ويظل أصلV1 بلا تعديل', async () => {

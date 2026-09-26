@@ -1,5 +1,5 @@
 import type { EntityManager } from 'typeorm'
-import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
+import { MONTHLY_SALARY_COMPONENTS, WORK_PRESSURE_ALLOWANCE } from '../employees/compensation'
 import type { PayrollLiveSourceSection } from './payroll-live-source-contract'
 import { payrollLiveSourcePeriod } from './payroll-live-source-contract'
 import { readSalaryHistory, salaryCurrentSourceHash, salaryHistorySchemaMissing, type SalaryHistoryCurrent } from './payroll-salary-history'
@@ -50,8 +50,11 @@ export async function readPayrollLiveCompensation(em: EntityManager, employeeId:
   sourceRefs.push(...selected.sourceRefs.filter(ref => !sourceRefs.includes(ref)))
   if (!['EGP', 'SAR'].includes(policyCurrency ?? '') || row.currency !== policyCurrency) issues.push({ code: 'COMPENSATION_POLICY_CURRENCY_MISMATCH', message: 'عملة راتب شهر المسير لا تطابق عملة السياسة المختارة؛ لا يحول النظام العملة تلقائيًا', sourceRef: selected.sourceRef })
   if (issues.length) return result('UNSUPPORTED')
+  // salary = المكونات الست بس (مدخل محرك السياسة وحقائقه بنفس شكلها بالحرف)؛ بدل ضغط العمل برّه أسس المحرك
+  // فبيتعرض في selectedSalary.workPressureAllowance لوحده (راتب الشهر واحد، فمكانه واحد)
   const salary = Object.fromEntries(MONTHLY_SALARY_COMPONENTS.map(component => [component.key, row[component.key]]))
-  data.selectedSalary = { referencePeriod, effectivePayrollPeriod: row.effectivePayrollPeriod, effectiveToPayrollPeriod: row.effectiveToPayrollPeriod, salary, currency: row.currency, sourceRef: selected.sourceRef, historyRevision: selected.historyRevision, historyContentHash: selected.historyContentHash }
+  data.selectedSalary = { referencePeriod, effectivePayrollPeriod: row.effectivePayrollPeriod, effectiveToPayrollPeriod: row.effectiveToPayrollPeriod, salary,
+    workPressureAllowance: row[WORK_PRESSURE_ALLOWANCE.key], currency: row.currency, sourceRef: selected.sourceRef, historyRevision: selected.historyRevision, historyContentHash: selected.historyContentHash }
   // اسم الحقل باقٍ للتوافق؛ العنصر الوحيد يغطي الخدمة بقيمة شهرية ثابتة، وليس شريحة زيادة يومية.
   data.datedSegments = [{ from: coverage.from, to: coverage.to, currency: row.currency, sourceRef: selected.sourceRef, salary }]
   return result('AVAILABLE')

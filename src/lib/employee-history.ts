@@ -43,7 +43,7 @@ export const EMPLOYEE_FIELD_LABELS: Record<string, string> = {
   iban: 'الحساب البنكي (IBAN)', bankName: 'اسم البنك', bankBranch: 'فرع البنك', payMethod: 'طريقة الصرف',
   salaryCycle: 'دورة الراتب', currency: 'العملة', gosiBaseSalary: 'الراتب الخاضع للتأمينات',
   basicSalary: 'الراتب الأساسي', salary: 'الراتب', housingAllowance: 'بدل السكن', transportAllowance: 'بدل المواصلات',
-  phoneAllowance: 'بدل الهاتف', workNatureAllowance: 'بدل طبيعة العمل', otherAllowance: 'بدلات أخرى',
+  phoneAllowance: 'بدل الهاتف', workNatureAllowance: 'بدل طبيعة العمل', otherAllowance: 'بدلات أخرى', workPressureAllowance: 'بدل ضغط العمل',
   contractType: 'نوع العقد', contractStart: 'تاريخ بداية العقد', contractEnd: 'تاريخ نهاية العقد',
   contractNumber: 'رقم العقد', contractDurationMonths: 'مدة العقد (أشهر)', contract: 'مدة العقد',
   phone: 'رقم الجوال', phoneAlt: 'رقم جوال بديل', address: 'العنوان', maritalStatus: 'الحالة الاجتماعية',
@@ -56,7 +56,7 @@ const CONTRACT_TYPE: Record<string, string> = { permanent: 'دائم', fixed_ter
 const SALARY_CYCLE: Record<string, string> = { monthly: 'شهري', biweekly: 'كل أسبوعين', weekly: 'أسبوعي' }
 const MARITAL: Record<string, string> = { single: 'أعزب', married: 'متزوج', divorced: 'مطلق', widowed: 'أرمل' }
 const RELATION: Record<string, string> = { spouse: 'زوج/زوجة', parent: 'أب/أم', sibling: 'أخ/أخت', child: 'ابن/ابنة', other: 'أخرى' }
-const MONEY_FIELDS = /^(basicSalary|salary|housingAllowance|transportAllowance|phoneAllowance|workNatureAllowance|otherAllowance|gosiBaseSalary)$/
+const MONEY_FIELDS = /^(basicSalary|salary|housingAllowance|transportAllowance|phoneAllowance|workNatureAllowance|otherAllowance|workPressureAllowance|gosiBaseSalary)$/
 
 const COLORS: Record<string, string> = {
   STATUS: 'bg-primary-100 text-primary-600', SALARY: 'bg-success-100 text-success-600', BANK: 'bg-orange-100 text-orange-600',

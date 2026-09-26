@@ -48,7 +48,7 @@ function database({ prior = null, daily = false, salary = money, blockedRun = fa
     if (sql.startsWith('SELECT r.[id], r.[period], m.[snapshot]')) return closedRuns.map(value => ({ ...value }))
     if (sql.startsWith('SELECT ') && sql.includes('FROM dbo.payroll_runs')) return blockedRun ? [{ id: 15 }] : []
     if (sql.startsWith('SELECT ') && sql.includes('FROM dbo.offboarding_cases')) return blockedSettlement ? [{ id: 25 }] : []
-    if (sql.startsWith('UPDATE dbo.employees ')) { for (const [index, key] of keys.entries()) employee[key] = parameters[index + 1]; employee.currency = parameters[7]; return [] }
+    if (sql.startsWith('UPDATE dbo.employees ')) { for (const [index, key] of keys.entries()) employee[key] = parameters[index + 1]; employee.currency = parameters[keys.length + 1]; return [] }
     if (sql.startsWith('INSERT INTO dbo.employee_salary_history_versions')) {
       const [employeeId, revision, reason, evidenceReference, currentSourceHash, contentHash, createdBy, contractVersion, cycleStartDay, createdAt] = parameters
       const header = { id: headers.length + 1, employeeId, revision, reason, evidenceReference, currentSourceHash, contentHash, createdBy, contractVersion, cycleStartDay,
@@ -56,8 +56,8 @@ function database({ prior = null, daily = false, salary = money, blockedRun = fa
       headers.push(header); children.set(header.id, []); return [{ id: header.id }]
     }
     if (sql.startsWith('INSERT INTO dbo.employee_salary_history ')) {
-      for (let offset = 0; offset < parameters.length; offset += 13) {
-        const [versionId, sequence, effectiveFrom, effectiveTo, currency, effectivePayrollPeriod, effectiveToPayrollPeriod, ...values] = parameters.slice(offset, offset + 13)
+      for (let offset = 0, width = 7 + keys.length; offset < parameters.length; offset += width) {
+        const [versionId, sequence, effectiveFrom, effectiveTo, currency, effectivePayrollPeriod, effectiveToPayrollPeriod, ...values] = parameters.slice(offset, offset + width)
         children.get(versionId).push({ sequence, effectiveFrom, effectiveTo, effectivePayrollPeriod, effectiveToPayrollPeriod, currency, ...Object.fromEntries(keys.map((key, index) => [key, values[index]])) })
       }
       return []

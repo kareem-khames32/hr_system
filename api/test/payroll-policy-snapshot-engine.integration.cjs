@@ -401,3 +401,32 @@ test('steps 19–20 at approval (payroll simplification): a tampered or missing 
   const legacyApproval = expect(await request('GET', `/payroll/runs/${legacyRun.id}/events`), 200).find(row => row.eventType === 'APPROVED')
   assert.deepEqual([legacyApproval.payload.engineMode, legacyApproval.payload.parityReportHash], ['LEGACY', null])
 })
+
+test('work-pressure allowance (owner decision 26 Sep) stays outside the policy engine: SHADOW parity is MATCHED on the six, POLICY pays the same item plus the allowance, and approval passes', async () => {
+  // يوم خدمة واحد من 30 بمبالغ بتتقسم من غير قرش توزيع: الأساسي 9000 ← 300.00، وبدل ضغط العمل 600 ← 20.00 بنفس التناسب
+  const pressured = await employee({ workPressureAllowance: 600 }), control = await employee()
+  for (const emp of [pressured, control]) await punch(emp, ['2026-08-22T09:00:00', '2026-08-22T17:00:00'])
+  expect(await request('POST', '/attendance/recompute?date=2026-08-22'), 201)
+  const run = await runWith(await publishedPolicy('معادلات بدل ضغط العمل'), 'مسير بدل ضغط العمل مع المحرك', [pressured.id, control.id])
+  const rowOf = emp => run.engine.report.rows.find(row => row.employeeId === emp.id)
+  assert.deepEqual([rowOf(pressured).status, rowOf(control).status], ['MATCHED', 'MATCHED'], JSON.stringify(run.engine.report.rows))
+  // التكافؤ بيقارن المكونات الست في الطرفين: عمود البدلات صفر في القديم والمحرك، والبدل بيتضاف بعد التقرير
+  const allowances = rowOf(pressured).components.find(item => item.code === 'ALLOWANCES')
+  assert.deepEqual([allowances.legacy, allowances.policy], ['0.00', '0.00'])
+  assert.deepEqual(run.engine.switchIssues, [])
+  const shadowItem = itemOf(run, pressured), controlItem = itemOf(run, control)
+  assert.deepEqual(detailsOf(shadowItem).workPressureAllowance, { monthlyAmount: 600, earnedAmount: 20 })
+  assert.deepEqual([number(shadowItem.basicSalary), number(shadowItem.allowances)], [300, 20])
+  assert.equal(Math.round(number(shadowItem.netPay) * 100) - Math.round(number(controlItem.netPay) * 100), 2000, 'the only difference from the control is the earned allowance')
+
+  expect(await request('POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'POLICY', reason: 'تكافؤ صفري مع بدل ضغط العمل' }), 201)
+  const policyRun = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إعادة الحساب بوضع POLICY مع بدل ضغط العمل' }), 201)
+  assert.deepEqual([policyRun.engineMode, policyRun.engine.report.paidResult], ['POLICY', 'POLICY'])
+  const policyItem = itemOf(policyRun, pressured), detail = detailsOf(policyItem)
+  assert.equal(detail.policyEngine.paidResult, 'POLICY')
+  for (const key of ['basicSalary', 'allowances', 'socialInsuranceDeduction', 'loanInstallments', 'netPay']) assert.equal(number(policyItem[key]), number(shadowItem[key]), key)
+  assert.deepEqual(detail.workPressureAllowance, { monthlyAmount: 600, earnedAmount: 20 })
+  assert.deepEqual(detail.salaryComponents.at(-1), { code: 'WORK_PRESSURE', nameAr: 'بدل ضغط العمل', nameEn: 'Work Pressure Allowance', monthlyAmount: 600, earnedAmount: 20 })
+  await acknowledge(run.id)
+  assert.equal(expect(await request('POST', `/payroll/runs/${run.id}/approve`), 201).status, 'APPROVED')
+})

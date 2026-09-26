@@ -16,8 +16,9 @@ const today = require('../src/attendance/attendance.service').localDateOf(new Da
 // قاعدة المالك: تغيير الراتب يسري من راتب شهر كامل؛ دورة الشركة المبذورة 23.
 const { payrollPeriodOfDate, shiftPayrollPeriod } = require('../src/payroll/payroll-period')
 const currentMonth = payrollPeriodOfDate(today, 23)
+// الأجر الكامل بمكوناته السبعة: الست + بدل ضغط العمل (ترحيل 071، صفر هنا زي أي موظف قديم)
 const baseSalary = { basicSalary: '6000.00', housingAllowance: '1500.00', transportAllowance: '500.00',
-  phoneAllowance: '300.00', workNatureAllowance: '200.00', otherAllowance: '100.00', currency: 'EGP' }
+  phoneAllowance: '300.00', workNatureAllowance: '200.00', otherAllowance: '100.00', workPressureAllowance: '0.00', currency: 'EGP' }
 let app, ds, master, base, created = false, sequence = 0, branchA, branchB, admin, editor, outsider, viewer
 const repo = name => { assert.equal(ds.options.database, database); return ds.getRepository(name) }
 const expect = (r, status) => { assert.equal(r.status, status, JSON.stringify(r.body)); return r.body }
@@ -133,9 +134,9 @@ test('unchanged legacy financial fields may accompany other edits; changed field
   assert.deepEqual(await snapshot(emp), before)
 })
 
-test('profile salary update atomically records all six values, currency, effective date and real actor', async () => {
+test('profile salary update atomically records all seven values (six + work pressure), currency, effective date and real actor', async () => {
   const emp = await employee(), newSalary = { basicSalary: '7000.12', housingAllowance: '1234.56', transportAllowance: '333.33',
-    phoneAllowance: '11.11', workNatureAllowance: '22.22', otherAllowance: '44.44', currency: 'SAR' }
+    phoneAllowance: '11.11', workNatureAllowance: '22.22', otherAllowance: '44.44', workPressureAllowance: '55.55', currency: 'SAR' }
   expect(await patch(emp, await command(emp, newSalary), { jobTitle: 'وظيفة جديدة' }), 200)
   const c = await context(emp), h = await history(emp)
   assert.deepEqual(c.current, newSalary); assert.equal(c.historyRevision, 1)
@@ -145,7 +146,7 @@ test('profile salary update atomically records all six values, currency, effecti
   assert.equal(c.currentPayrollPeriod, currentMonth); assert.equal(c.cycleStartDay, 23); assert.equal(c.historyContract, 'MONTHLY')
   assert.equal(h.version.createdBy, editor.id); assert.equal(h.version.currentSourceHash, c.currentSourceHash)
   const audit = await repo('EmployeeStatusHistory').findBy({ employeeId: emp.id, changeType: 'SALARY' })
-  assert.equal(audit.length, 7)
+  assert.equal(audit.length, 8, 'سبع مكونات اتغيرت + العملة')
   for (const row of audit) { assert.equal(row.changedByUserId, editor.id); assert.equal(row.newValue, newSalary[row.fieldName]); assert.ok(row.reason.includes(`يسري من راتب شهر ${currentMonth}`)) }
   assert.equal(await repo('PayrollRun').count(), 0); assert.equal(await repo('EmployeeObligation').count(), 0)
 })

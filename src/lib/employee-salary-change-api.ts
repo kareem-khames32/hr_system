@@ -58,7 +58,7 @@ export function employeePreviousSalaryCanBeConfirmed(context: EmployeeSalaryChan
 export function buildEmployeeSalaryChange(context: EmployeeSalaryChangeContext, form: EmployeeSalaryValues, evidence: EmployeeSalaryChangeEvidence): EmployeeSalaryChangeCommand | undefined {
   if (!employeeSalaryChanged(context, form)) return undefined
   const values = EMPLOYEE_SALARY_FIELDS.map(key => [key, canonical(form[key])] as const)
-  if (values.some(([, value]) => value === null)) throw new Error('أكمل مكونات الأجر الستة بمبالغ غير سالبة ومنزلتين عشريتين على الأكثر. اكتب صفرًا صريحًا عند عدم الاستحقاق.')
+  if (values.some(([, value]) => value === null)) throw new Error('أكمل مكونات الأجر (الست وبدل ضغط العمل) بمبالغ غير سالبة ومنزلتين عشريتين على الأكثر. اكتب صفرًا صريحًا عند عدم الاستحقاق.')
   if (form.currency !== 'SAR' && form.currency !== 'EGP') throw new Error('اختر عملة الأجر: جنيه مصري أو ريال سعودي.')
   const effective = evidence.effectivePayrollPeriod?.trim()
   if (!validPayrollMonth(effective) || !validPayrollMonth(context.currentPayrollPeriod)) throw new Error('حدد «يسري من راتب شهر» لتغيير الأجر.')

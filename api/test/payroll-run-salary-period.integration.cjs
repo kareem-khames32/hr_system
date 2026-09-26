@@ -216,8 +216,9 @@ test('الخطوة 13: إنشاء الموظف يوثّق أجر التعيين 
   assert.equal(joinerHistory.version.createdBy, admin.id); assert.equal(joinerHistory.version.evidenceReference, 'عقد C-77')
   assert.equal(joinerHistory.version.reason, 'أجر التعيين المثبت عند إنشاء ملف الموظف')
   assert.equal(joinerHistory.segments.length, 1)
+  // المكونات السبعة المؤرخة (بدل ضغط العمل صفر لملف من غيره — ترحيل 071)
   assert.deepEqual({ ...joinerHistory.segments[0] }, { basicSalary: '6000.00', housingAllowance: '1000.00', transportAllowance: '0.00', phoneAllowance: '0.00',
-    workNatureAllowance: '0.00', otherAllowance: '0.00', currency: 'SAR', effectivePayrollPeriod: current, effectiveToPayrollPeriod: null,
+    workNatureAllowance: '0.00', otherAllowance: '0.00', workPressureAllowance: '0.00', currency: 'SAR', effectivePayrollPeriod: current, effectiveToPayrollPeriod: null,
     effectiveFrom: currentBounds.startDate, effectiveTo: null })
   const saved = await repo('Employee').findOneByOrFail({ id: joiner.id })
   await attendance(saved, currentBounds.startDate, currentBounds.endDate)
