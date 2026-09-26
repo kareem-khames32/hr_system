@@ -66,6 +66,8 @@ import { appendOvertimeEvent, assertOvertimeDayAvailable, claimOvertimeDay, desc
 import { queueOvertimeDispatch } from '../requests/overtime-dispatch'
 import { holidayWorkCoversDay } from './holiday-work'
 import { createCalendarResolverCache, resolveBranchCalendarDay, resolveEmployeeCalendarDay, resolveGlobalCalendarDay } from './attendance-calendar-resolver'
+import { employmentOverlaps, employmentWindowOf, employmentWindowsOf, inEmploymentWindow, lastWorkingDaysOf, schedulableOn } from './attendance-employment'
+import type { EmploymentWindow } from './attendance-employment'
 import type { CalendarResolverCache, ResolvedCalendarDay } from './attendance-calendar-resolver'
 import { assertCalendarScope, beginCalendarChange, calendarSourceContext, confirmCalendarSource, finishCalendarChange } from './attendance-calendar-history'
 
@@ -309,6 +311,12 @@ export class AttendanceService {
 
   private employeeRow(employeeId: number) {
     return this.batched(`EMPLOYEE:${employeeId}`, () => this.employees.findOne({ where: { id: employeeId } }))
+  }
+
+  // فترة خدمة الموظف (من المباشرة لآخر يوم عمل في ملف إنهاء الخدمة) — attendance-employment.ts
+  private employmentWindowFor(emp: Employee): Promise<EmploymentWindow> {
+    return this.batched(`EMPLOYMENT:${emp.id}`, async () =>
+      employmentWindowOf(emp, (await lastWorkingDaysOf(this.days.manager, [emp.id])).get(emp.id) ?? []))
   }
 
   private async ruleFor<T extends object>(sourceType: AttendanceRuleSourceType, sourceId: number, date: string, fallback: T) {
@@ -1429,15 +1437,13 @@ export class AttendanceService {
       `${dt.getFullYear()}-${String(dt.getMonth() + 1).padStart(2, '0')}-${String(dt.getDate()).padStart(2, '0')}`
     // ابدأ من تاريخ التعيين إن كان داخل المدى — لا غياب قبل التعيين (قاعدة المالك: تاريخ بدء العمل الفعلي
     // إن وُجد، وإلا تاريخ الالتحاق؛ نفس أساس تغطية الراتب وattendanceEmploymentDate)
+    // ولا بعد آخر يوم عمل (ملف إنهاء الخدمة) أو تاريخ الأرشفة — قرار المالك 26 سبتمبر: الموظف اللي آخر يوم ليه 24
+    // مايتسجلش عليه غياب 25 لحد ما ملفه يتقفل ويتأرشف
+    const employment = await this.employmentWindowFor(emp)
     let start = fromDate
-    const hireDate = emp.actualStartDate || emp.joinDate
-    if (hireDate && hireDate > start) start = hireDate
-    // لا تتجاوز تاريخ الأرشفة إن وُجد
+    if (employment.from && employment.from > start) start = employment.from
     let end = toDate
-    if (emp.archivedAt) {
-      const arch = ymd(new Date(emp.archivedAt))
-      if (arch < end) end = arch
-    }
+    if (employment.to && employment.to < end) end = employment.to
     // ولا تتجاوز اليوم — لا غياب لأيام لم تأتِ بعد
     const today = ymd(new Date())
     if (today < end) end = today
@@ -1619,6 +1625,16 @@ export class AttendanceService {
     ) {
       throw new BadRequestException('تاريخ غير صالح — الصيغة YYYY-MM-DD')
     }
+    if (!dto.clear) {
+      const employment = await this.employmentWindowFor(emp)
+      if (!schedulableOn(employment, dto.date)) {
+        throw new BadRequestException(employment.endedUnknown
+          ? 'خدمة الموظف منتهية ومفيش تاريخ آخر يوم عمل موثّق — مالوش وردية'
+          : employment.to && dto.date > employment.to
+            ? `اليوم ده بعد آخر يوم عمل للموظف (${employment.to}) — مالوش وردية`
+            : `اليوم ده قبل مباشرة الموظف (${employment.from}) — مالوش وردية`)
+      }
+    }
     // وردية اليوم قبل التعديل — تحدّد الأيام المجاورة المتأثرة (الليلية تمتدّ للغد)
     await lockAttendanceRuleMutation(this.days.manager, [emp.id])
     await assertAttendanceRulePeriodOpen(this.days.manager, [emp.id], dto.date, dto.date)
@@ -1748,11 +1764,16 @@ export class AttendanceService {
     // فحص شكل المدخلات والمصدر مبكرًا؛ السريان يُفحص لكل يوم تحت قفل معاملته،
     // فتظل نتيجة التطبيق الجماعي تفصل الأيام الناجحة عن الأيام المرفوضة.
     if (!dto.clear) await this.scheduleShift(dto, [])
-    let applied = 0
+    let applied = 0, outsideEmployment = 0
     // فشل كل موظف/يوم يُرجَع بسببه للواجهة — لا يُبلع («طُبّق 38» بلا تفسير)
     const failed: Array<{ employeeId: number; date: string; error: string }> = []
+    // فترة خدمة كل موظف: يوم قبل مباشرته أو بعد آخر يوم عمل ليه مالوش وردية — بيتعدّى بهدوء ويتعد في الرد
+    const employment = await employmentWindowsOf(this.days.manager,
+      employeeIds.length ? await this.employees.find({ where: { id: In(employeeIds) } }) : [])
     for (const employeeId of employeeIds) {
       for (const date of dates) {
+        const window = employment.get(employeeId)
+        if (!dto.clear && window && !schedulableOn(window, date)) { outsideEmployment++; continue }
         try {
           await this.setDayOverride({
             employeeId,
@@ -1790,7 +1811,26 @@ export class AttendanceService {
       employees: employeeIds.length,
       days: dates.length,
       skipped, // موظفون استُبعدوا: خارج نطاق الفرع أو المستخدم نفسه أو غير موجودين
+      outsideEmployment, // أيام اتعدّت لأنها برّه فترة خدمة الموظف (قبل المباشرة أو بعد آخر يوم عمل)
     }
+  }
+
+  // فترات خدمة موظفي نطاق المستخدم (قرار المالك 26 سبتمبر): الجدول الأسبوعي بيعرض الموظف في أيام خدمته بس،
+  // واللي خدمته انتهت قبل المدة مايظهرش. from/to اختياريين: لو اتبعتوا بيرجع اللي خدمتهم بتلمس المدة بس
+  async employmentWindows(user: JwtPayload, from?: string, to?: string) {
+    const real = (v?: string) => !!v && /^\d{4}-\d{2}-\d{2}$/.test(v) && localDateOf(new Date(`${v}T12:00:00`)) === v
+    if ((from !== undefined || to !== undefined) && (!real(from) || !real(to) || from! > to!)) {
+      throw new BadRequestException('المدة لازم تكون تاريخين صحيحين بصيغة YYYY-MM-DD والبداية قبل النهاية')
+    }
+    const scope = branchScopeOf(user)
+    const emps = await this.employees.find({
+      select: { id: true, branchId: true, joinDate: true, actualStartDate: true, archivedAt: true, workScheduleId: true, status: true },
+      where: scope === null ? {} : { branchId: scope },
+    })
+    const windows = await employmentWindowsOf(this.days.manager, emps)
+    return emps
+      .map(emp => ({ employeeId: emp.id, workScheduleId: emp.workScheduleId ?? null, status: emp.status, ...windows.get(emp.id)! }))
+      .filter(row => !from || !to || employmentOverlaps(row, from, to))
   }
 
   // تجاوزات أسبوع (لعرضها في شاشة الجدولة)
@@ -1856,9 +1896,12 @@ export class AttendanceService {
     const teamIds = [...new Set((dto.teamIds ?? []).map(Number))].filter(id => Number.isInteger(id) && id > 0)
     if (teamIds.length) {
       const scope = user ? branchScopeOf(user) : null
-      const members = (await this.employees.find({
+      const teamRows = await this.employees.find({
         where: { teamId: In(teamIds), ...(scope !== null ? { branchId: scope } : {}) },
-      })).filter(e => !['terminated', 'archived'].includes(String(e.status)))
+      })
+      // المنتهية خدمته قبل المدة مايدخلش؛ اللي آخر يوم ليه جوه المدة بيدخل على أيام خدمته بس (تحت)
+      const teamWindows = await employmentWindowsOf(this.days.manager, teamRows)
+      const members = teamRows.filter(e => employmentOverlaps(teamWindows.get(e.id) ?? employmentWindowOf(e), dto.from, dto.to))
       if (!members.length && !employeeIds.length) throw new BadRequestException('مفيش موظفين شغالين في الفرق المختارة')
       employeeIds = [...new Set([...employeeIds, ...members.map(e => e.id)])]
       if (employeeIds.length > 500) throw new BadRequestException('الدفعة الواحدة لا تزيد عن 500 موظف — قسّم الفرق على أكتر من مرة')
@@ -1866,7 +1909,7 @@ export class AttendanceService {
     if (!employeeIds.length) throw new BadRequestException('اختار موظف واحد على الأقل')
     const emps = await this.employees.find({ where: { id: In(employeeIds) } })
     const byId = new Map(emps.map(e => [e.id, e]))
-    const skipped: Array<{ employeeId: number; reason: string }> = []
+    const skipped: Array<{ employeeId: number; reason: string; outsideEmployment?: boolean }> = []
     // وردية خاصة بفرع تتسند لموظفي فرعها بس — نفس قاعدة إسناد اليوم الواحد
     const shiftRow = await this.shiftsCatalog.findOneBy({ id: shiftId })
     const shiftBranch = shiftRow?.branchId ?? null
@@ -1880,12 +1923,32 @@ export class AttendanceService {
     })
     if (!employeeIds.length) throw new ForbiddenException([...new Set(skipped.map(s => s.reason))].join('، '))
 
-    const plan = { dates, weeks, dayDates, weekShift, dayShift, keep: !!dto.keepDayOverrides }
+    // فترة خدمة كل موظف: الأسبوع يتكتب «وردية أسبوع» لو كل أيامه جوه خدمته، وإلا أيام خدمته منه بس تبقى أيام خاصة؛
+    // واللي خدمته مابتلمسش المدة خالص بيتعدّى بسبب واضح — من غير ما يوقف الباقيين
+    const employment = await employmentWindowsOf(this.days.manager, emps.filter(e => employeeIds.includes(e.id)))
+    const plans = new Map<number, { dates: string[]; weeks: string[]; dayDates: string[]; weekShift: typeof weekShift; dayShift: typeof dayShift; keep: boolean }>()
+    let partial = 0
+    employeeIds = employeeIds.filter(id => {
+      const window = employment.get(id)
+      const own = window ? dates.filter(date => schedulableOn(window, date)) : dates
+      if (!own.length) {
+        skipped.push({ employeeId: id, outsideEmployment: true, reason: window?.endedUnknown ? 'خدمته منتهية'
+          : window?.to && window.to < dto.from ? `خدمته انتهت ${window.to} — قبل المدة` : 'مش في الخدمة في المدة دي' })
+        return false
+      }
+      const ownWeeks = window ? weeks.filter(week => weekOf(week).every(date => schedulableOn(window, date))) : weeks
+      const ownWeekDays = new Set(ownWeeks.flatMap(weekOf))
+      if (own.length < dates.length) partial++
+      plans.set(id, { dates: own, weeks: ownWeeks, dayDates: own.filter(date => !ownWeekDays.has(date)), weekShift, dayShift,
+        keep: !!dto.keepDayOverrides })
+      return true
+    })
     const failed: Array<{ employeeId: number; error: string }> = []
     const recomputeFailed: Array<{ employeeId: number; date: string }> = []
     let applied = 0, recomputed = 0, removedOverrides = 0, keptOverrides = 0
     for (const employeeId of employeeIds) {
       try {
+        const plan = plans.get(employeeId)!
         const result = await this.days.manager.transaction(em => this.inManager(em).applyScheduleRange(employeeId, plan))
         applied++
         recomputed += result.recomputed
@@ -1901,6 +1964,7 @@ export class AttendanceService {
     return {
       ok: true, applied, employees: employeeIds.length, dates: dates.length, weeks: weeks.length,
       days: dayDates.length, removedOverrides, keptOverrides, recomputed, recomputeFailed, failed, skipped,
+      partial, // موظفين اتطبق عليهم جزء من المدة بس (مباشرة أو آخر يوم عمل جوّاها)
     }
   }
 
@@ -1954,7 +2018,7 @@ export class AttendanceService {
       const current = existingOn.get(date)
       if (current && keep) { keptOverrides++; continue }
       const row = current ?? this.dayOverrides.create({ employeeId, date })
-      Object.assign(row, dayShift.get(date))
+      Object.assign(row, newShift(date))
       await this.dayOverrides.save(row)
     }
     // الأيام اللي فاتت (والجار الليلي): المحسوب أو اللي فيه بصمات بس — مفيش يوم يتختلق
@@ -2212,6 +2276,7 @@ export class AttendanceService {
     }
     const emp = await this.employeeRow(employeeId)
     if (!emp) throw new NotFoundException('الموظف غير موجود')
+    const outsideEmployment = !inEmploymentWindow(await this.employmentWindowFor(emp), date)
     const exemption = exemptionOnDate(await this.exemptionsOf(employeeId, date, date), date)
     // يوم لم يأتِ بعد (بالتاريخ المحلي) — يُحسب لكن لا يُحفظ إلا إجازة كاملة أو
     // عطلة (انظر نقطة الحفظ أدناه)
@@ -2612,7 +2677,9 @@ export class AttendanceService {
     // إعادة حساب): ما يتحفظش «غائب» وأي غياب قديم له يتمسح — المسير بيخصمه يوم إيقاف بس
     const suspendedAbsence = status === 'absent' &&
       (await suspendedDatesBetween(this.days.manager, employeeId, date, date)).has(date)
-    const persist = attendanceDayPersists(status, isFuture, suspendedAbsence)
+    // يوم قبل المباشرة أو بعد آخر يوم عمل بلا بصمة: مش غياب (الموظف مش في الخدمة) — نفس معاملة يوم الإيقاف
+    const outsideAbsence = status === 'absent' && outsideEmployment
+    const persist = attendanceDayPersists(status, isFuture, suspendedAbsence || outsideAbsence)
     let day = persist ? await this.days.findOne({ where: { employeeId, date } }) : null
     const storedShift = day ? { start: day.shiftStart, end: day.shiftEnd } : null
     if (!day) day = this.days.create({ employeeId, date })
@@ -2651,19 +2718,20 @@ export class AttendanceService {
       computedAt: new Date(),
     })
     // EX-14: إظهار يوم مفقود أو إعادة تفسير exempt قديم لا يكتب حضورًا من GET.
-    if (readOnly) return Object.assign(this.exemptionView(day, exemption), suspendedAbsence ? { suspended: true } : {})
+    const flags = { ...(suspendedAbsence ? { suspended: true } : {}), ...(outsideAbsence ? { outsideEmployment: true } : {}) }
+    if (readOnly) return Object.assign(this.exemptionView(day, exemption), flags)
     if (!persist) {
       await this.days.delete({ employeeId, date })
-      // صف اليوم اتشال (إيقاف، يوم مستقبلي، بلا وردية) — المسير لازم يعيد قراءته
+      // صف اليوم اتشال (إيقاف، يوم مستقبلي، بلا وردية، خارج فترة الخدمة) — المسير لازم يعيد قراءته
       await markPayrollDaysDirty(this.days.manager, employeeId, [date], 'حذف صف يوم حضور')
-      if (suspendedAbsence && !isFuture) {
+      if ((suspendedAbsence || outsideAbsence) && !isFuture) {
         // يوم الإيقاف المنقضي بلا بصمة: مكتشف قديم لليوم مالوش مبرر، والجار الليلي يتعاد زي اليوم المحفوظ
         await this.clearStaleOvertime(employeeId, date, 'لا بصمة دخول وخروج لليوم')
         if (cascade) await this.recomputeNightNeighbors(employeeId, date, frame, shift.start,
           storedDay ? { start: storedDay.shiftStart, end: storedDay.shiftEnd } : null)
       }
-      // نتيجة للعرض فقط — غير محفوظة (suspended: يوم إيقاف مش غياب)
-      return Object.assign(this.exemptionView(day, exemption), suspendedAbsence ? { suspended: true } : {})
+      // نتيجة للعرض فقط — غير محفوظة (suspended: يوم إيقاف مش غياب، outsideEmployment: مش في الخدمة)
+      return Object.assign(this.exemptionView(day, exemption), flags)
     }
     day = await this.days.save(day)
 
@@ -3006,6 +3074,20 @@ export class AttendanceService {
         throw new ForbiddenException([...new Set(skipped.map((s) => s.reason))].join('، '))
       }
     }
+    // فترة الخدمة: أسبوع مابيلمسش خدمة الموظف (قبل مباشرته أو بعد آخر يوم عمل) بيتعدّى بهدوء بسبب واضح؛
+    // الأسبوع اللي فيه آخر يوم عمل بيتحفظ عادي والأيام اللي بعده ما بتتحسبش (computeDay)
+    if (entries.length) {
+      const ids = [...new Set(entries.map((e) => Number(e.employeeId)))]
+      const employment = await employmentWindowsOf(this.days.manager, await this.employees.find({ where: { id: In(ids) } }))
+      entries = entries.filter((e) => {
+        const window = employment.get(Number(e.employeeId))
+        const weekStart = weekKeyOf(attendanceRuleDate(e.weekStart))
+        if (!window || employmentOverlaps(window, weekStart, dateAfter(weekStart, 6))) return true
+        skipped.push({ employeeId: Number(e.employeeId), reason: window.endedUnknown ? 'خدمته منتهية'
+          : window.to && window.to < weekStart ? `خدمته انتهت ${window.to} — قبل الأسبوع ده` : 'مش في الخدمة في الأسبوع ده' })
+        return false
+      })
+    }
     const saved: ScheduleEntry[] = []
     await lockAttendanceRuleMutation(this.days.manager, [...new Set(entries.map(e => Number(e.employeeId)))])
     for (const entry of entries) {
@@ -3284,23 +3366,32 @@ export class AttendanceService {
     return windows
   }
 
-  private attendanceEmploymentDate(emp: Employee, date: string) {
-    const hireDate = emp.actualStartDate || emp.joinDate
-    return (!hireDate || date >= hireDate) &&
-      (!emp.archivedAt || date <= localDateOf(new Date(emp.archivedAt)))
+  private attendanceEmploymentDate(emp: Employee, date: string, window: EmploymentWindow = employmentWindowOf(emp)) {
+    return inEmploymentWindow(window, date)
   }
 
   // الأيام المعتمدة المستثناة تظهر ولو لم يجسدها التشغيل الليلي. مسار الحساب
   // readOnly يعيد استخدام تفسير العطلة والإجازة والوردية دون كتابة أو كشف إضافي.
-  private async projectExemptionDays(rows: AttendanceDay[], employees: Employee[], from: string, to: string) {
+  private async projectExemptionDays(rows: AttendanceDay[], employees: Employee[], from: string, to: string,
+    knownEmployment?: Map<number, EmploymentWindow>) {
     const windows = await this.exemptionsFor([...rows, ...employees.map(emp => ({ employeeId: emp.id }))]
       .map(row => row.employeeId), from, to)
+    // فترات الخدمة: غياب محفوظ قديم بعد آخر يوم عمل (اتكتب قبل تصحيح 26 سبتمبر) مايتعرضش — المسير أصلًا مابيحسبوش
+    // المستدعي (الشاشة اليومية) بيبعت الفترات اللي قراها — القراية هنا للي ناقص بس
+    const employment = new Map(knownEmployment ?? [])
+    const known = new Set([...employment.keys(), ...employees.map(emp => emp.id)])
+    const rowEmployeeIds = [...new Set(rows.map(row => row.employeeId))].filter(id => !known.has(id))
+    const rowEmployees = rowEmployeeIds.length ? await this.employees.find({ where: { id: In(rowEmployeeIds) } }) : []
+    const missing = [...employees.filter(emp => !employment.has(emp.id)), ...rowEmployees]
+    if (missing.length) for (const [id, window] of await employmentWindowsOf(this.days.manager, missing)) employment.set(id, window)
     const result = new Map<string, AttendanceDayWithExemption>()
     // دفعة واحدة لصفوف الشاشة كلها (المراجعة المستقلة — شاشة الحضور اليومي 122–223 ثانية): التقويم والإعدادات
     // وقواعد الجداول المشتركة بتتقري مرة للصفوف كلها بدل مرة لكل صف — نفس computeDay (قراءة بس) بالحرف
     const scope = this.withBatch()
     for (const row of rows) {
       const exemption = exemptionOnDate(windows.get(row.employeeId) ?? [], row.date)
+      const window = employment.get(row.employeeId)
+      if (row.status === 'absent' && window && !inEmploymentWindow(window, row.date)) continue
       const day = await scope.computeDay(row.employeeId, row.date, false, true)
       result.set(`${row.employeeId}|${row.date}`, day)
     }
@@ -3309,7 +3400,7 @@ export class AttendanceService {
       if (!employeeWindows.length) continue
       for (let date = from; date <= to; date = dateAfter(date, 1)) {
         const key = `${emp.id}|${date}`
-        if (result.has(key) || !this.attendanceEmploymentDate(emp, date) ||
+        if (result.has(key) || !this.attendanceEmploymentDate(emp, date, employment.get(emp.id)) ||
           !exemptionOnDate(employeeWindows, date)) continue
         const day = await scope.computeDay(emp.id, date, false, true)
         result.set(key, Object.assign(day, { id: day.id ?? -emp.id, projected: true }))
@@ -3479,9 +3570,11 @@ export class AttendanceService {
     const where: Record<string, unknown> = { date }
     if (scope !== null) where.branchId = scope
     const stored = await this.days.find({ where: where as any, order: { employeeId: 'ASC' } })
-    const candidates = (await this.employees.find({ where: scope === null ? {} : { branchId: scope } }))
-      .filter(emp => (emp.isActive || !!emp.archivedAt) && this.attendanceEmploymentDate(emp, date))
-    const projected = await this.projectExemptionDays(stored, candidates, date, date)
+    const scoped = await this.employees.find({ where: scope === null ? {} : { branchId: scope } })
+    const employment = await employmentWindowsOf(this.days.manager, scoped)
+    const candidates = scoped
+      .filter(emp => (emp.isActive || !!emp.archivedAt) && this.attendanceEmploymentDate(emp, date, employment.get(emp.id)))
+    const projected = await this.projectExemptionDays(stored, candidates, date, date, employment)
     // + مصدر وقتي كل يوم (جهاز/يدوي/تصحيح) لعمود «التحقق»
     const rows = await this.withPunchSource(
       await this.withDerivedSource(projected),
@@ -3503,8 +3596,9 @@ export class AttendanceService {
     const now = new Date()
     if (date !== localDateOf(now)) return []
     const nowMin = now.getHours() * 60 + now.getMinutes() + now.getSeconds() / 60
-    const emps = (await this.employees.find({ where: { isActive: true, ...(scope === null ? {} : { branchId: scope }) } }))
-      .filter(emp => this.attendanceEmploymentDate(emp, date))
+    const active = await this.employees.find({ where: { isActive: true, ...(scope === null ? {} : { branchId: scope }) } })
+    const employment = await employmentWindowsOf(this.days.manager, active)
+    const emps = active.filter(emp => this.attendanceEmploymentDate(emp, date, employment.get(emp.id)))
     const touched = new Set((await this.days.find({ where: { date } })).map(day => day.employeeId))
     const leaves = await this.leaves.find({ where: { status: 'APPROVED', fromDate: LessThanOrEqual(date), toDate: MoreThanOrEqual(date) } })
     const fullLeave = new Set(leaves.filter(l => (l.period ?? 'FULL') === 'FULL').map(l => l.employeeId))

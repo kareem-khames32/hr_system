@@ -30,11 +30,14 @@ test('قرار الحفظ: يوم الإيقاف بلا بصمة ما يتحفظ
 
 test('computeDay موصول: الإيقاف بيتفحص قبل الحفظ على كل المسارات، والصف القديم بيتمسح والمكتشف القديم يتلغى', () => {
   assert.match(source, /const suspendedAbsence = status === 'absent' &&\s+\(await suspendedDatesBetween\(this\.days\.manager, employeeId, date, date\)\)\.has\(date\)/)
-  assert.match(source, /const persist = attendanceDayPersists\(status, isFuture, suspendedAbsence\)/)
+  // فترة الخدمة (قرار المالك 26 سبتمبر): غياب قبل المباشرة أو بعد آخر يوم عمل بيتعامل زي يوم الإيقاف بالظبط
+  assert.match(source, /const outsideAbsence = status === 'absent' && outsideEmployment/)
+  assert.match(source, /const persist = attendanceDayPersists\(status, isFuture, suspendedAbsence \|\| outsideAbsence\)/)
+  assert.match(source, /const flags = \{ \.\.\.\(suspendedAbsence \? \{ suspended: true \} : \{\}\), \.\.\.\(outsideAbsence \? \{ outsideEmployment: true \} : \{\}\) \}/)
   const notPersist = source.slice(source.indexOf('if (!persist) {'), source.indexOf('day = await this.days.save(day)'))
   assert.match(notPersist, /await this\.days\.delete\(\{ employeeId, date \}\)/)
-  assert.match(notPersist, /if \(suspendedAbsence && !isFuture\) \{\s+[^\n]*\n\s+await this\.clearStaleOvertime\(employeeId, date, 'لا بصمة دخول وخروج لليوم'\)/)
-  assert.match(notPersist, /suspendedAbsence \? \{ suspended: true \} : \{\}/)
+  assert.match(notPersist, /if \(\(suspendedAbsence \|\| outsideAbsence\) && !isFuture\) \{\s+[^\n]*\n\s+await this\.clearStaleOvertime\(employeeId, date, 'لا بصمة دخول وخروج لليوم'\)/)
+  assert.match(notPersist, /return Object\.assign\(this\.exemptionView\(day, exemption\), flags\)/)
   // الحفظ بيحصل بعد قرار الإيقاف مش قبله — مفيش مسار تاني يكتب 'absent'
   assert.ok(source.indexOf('const suspendedAbsence') < source.indexOf('day = await this.days.save(day)'))
   assert.equal((source.match(/status: 'absent', lateMinutes/g) ?? []).length, 1, 'صف الغياب المكتوب يدويًا هو اللحظي بس (مش محفوظ)')

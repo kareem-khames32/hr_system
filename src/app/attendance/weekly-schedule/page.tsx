@@ -44,6 +44,8 @@ import {
   lockedBranchIdOf,
   setDayShiftOverride,
   fetchWorkingDays,
+  fetchEmploymentWindows,
+  inEmploymentWindow,
   fetchScheduleRules,
   type ApiEmployee,
   type ApiDepartment,
@@ -312,6 +314,8 @@ const matchShiftIn = (
   }
 }
 
+type EmploymentMap = Record<number, import('@/lib/api').ApiEmploymentWindow>
+
 export default function WeeklySchedulePage() {
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [departmentsList, setDepartmentsList] = useState<ApiDepartment[]>([])
@@ -351,6 +355,10 @@ export default function WeeklySchedulePage() {
   const [selectedBranch, setSelectedBranch] = useState('all')
   const [selectedDepartment, setSelectedDepartment] = useState('all')
   const [selectedTeam, setSelectedTeam] = useState('all')
+  // فترات الخدمة (قرار المالك 26 سبتمبر): الموظف يظهر في الأسابيع اللي فيها أيام خدمته بس، وأيامه برّه خدمته رمادي
+  const [employment, setEmployment] = useState<EmploymentMap>({})
+  // فلتر التغطية: الكل / من غير جدول عمل / من غير وردية في الأسبوع ده
+  const [coverageFilter, setCoverageFilter] = useState<'all' | 'noSchedule' | 'noShift'>('all')
   // مستخدم فرع: الاستهداف مقفول على فرعه (الفرض الحقيقي في الباك)
   const [lockedBranchId, setLockedBranchId] = useState<number | null>(null)
   const [selectedCell, setSelectedCell] = useState<{ empId: number; day: string } | null>(null)
@@ -438,6 +446,19 @@ export default function WeeklySchedulePage() {
       )
   }
 
+  useEffect(() => {
+    fetchEmploymentWindows()
+      .then(list => setEmployment(Object.fromEntries(list.map(row => [row.employeeId, row]))))
+      .catch(() => setEmployment({}))
+  }, [])
+  const weekFrom = dateOfDayIndex(currentWeekStart, 0)
+  const weekTo = dateOfDayIndex(currentWeekStart, 6)
+  // خدمته بتلمس الأسبوع المعروض؟ (اللي خدمته انتهت قبل الأسبوع أو بتبدأ بعده مايظهرش خالص)
+  const servesWeek = (empId: number) => {
+    const w = employment[empId]
+    return !w || (!w.endedUnknown && (!w.from || w.from <= weekTo) && (!w.to || w.to >= weekFrom))
+  }
+
   // الأيام غير العاملة للأسبوع المعروض — لحساب أيام الدوام/الإجازة الاستثنائية
   useEffect(() => {
     let cancelled = false
@@ -450,8 +471,9 @@ export default function WeeklySchedulePage() {
       const next: Record<number, { skipped: Set<string>; weekend: Set<string> }> = {}
       const failed: string[] = []
       // Limit concurrent calls; each employee uses the same policy engine as attendance.
-      for (let i = 0; i < employees.length && !cancelled; i += 8) {
-        await Promise.all(employees.slice(i, i + 8).map(async (employee) => {
+      const serving = employees.filter(employee => servesWeek(employee.id))
+      for (let i = 0; i < serving.length && !cancelled; i += 8) {
+        await Promise.all(serving.slice(i, i + 8).map(async (employee) => {
           try {
             const result = await fetchWorkingDays(from, to, { employeeId: employee.id })
             next[employee.id] = { skipped: new Set(result.skipped), weekend: new Set(result.weekendDays ?? []) }
@@ -465,7 +487,7 @@ export default function WeeklySchedulePage() {
     })()
     return () => { cancelled = true }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [currentKey, employees])
+  }, [currentKey, employees, employment])
 
   // ننتظر كتالوج الورديات قبل قراءة الأسبوع حتى تُطابَق الورديات
   // بأوقاتها الحيّة لا باللقطة المخزّنة في صف الجدول
@@ -479,7 +501,7 @@ export default function WeeklySchedulePage() {
   const depName = (id?: number) =>
     departmentsList.find((d) => d.id === id)?.name ?? '-'
 
-  const rows: EmployeeRow[] = employees.map((e) => ({
+  const rows: EmployeeRow[] = employees.filter((e) => servesWeek(e.id)).map((e) => ({
     id: e.id,
     employeeCode: e.employeeCode,
     employeeName: e.fullName,
@@ -586,8 +608,24 @@ export default function WeeklySchedulePage() {
     setSelectedCell(null)
   }
 
+  // التغطية (تنبيه فوق + فلتر): من غير جدول عمل مسند (ماشي على الافتراضي)، ومن غير وردية في الأسبوع ده
+  // (فيه يوم شغل في خدمته ساعاته جاية من جدول العمل بس — لا وردية أسبوع ولا وردية يوم)
+  const weekDates = Array.from({ length: 7 }, (_, index) => dateOfDayIndex(currentWeekStart, index))
+  const hasNoSchedule = (empId: number) => (employees.find((e) => e.id === empId)?.workScheduleId ?? null) == null
+  const hasNoShift = (empId: number) => {
+    if (assignments[empId]) return false
+    const calendar = calendars[empId]
+    if (!calendar) return false
+    return weekDates.some((date) => inEmploymentWindow(employment[empId], date) && !calendar.skipped.has(date)
+      && !dayOverrides[`${empId}|${date}`])
+  }
+  const noScheduleCount = rows.filter((row) => hasNoSchedule(row.id)).length
+  const noShiftCount = rows.filter((row) => hasNoShift(row.id)).length
+
   // تصفية الموظفين
   const filteredRows = rows.filter((emp) => {
+    if (coverageFilter === 'noSchedule' && !hasNoSchedule(emp.id)) return false
+    if (coverageFilter === 'noShift' && !hasNoShift(emp.id)) return false
     const matchesSearch =
       emp.employeeName.includes(searchQuery) ||
       emp.employeeCode.toLowerCase().includes(searchQuery.toLowerCase())
@@ -805,6 +843,24 @@ export default function WeeklySchedulePage() {
           </div>
         )}
         {calendarError && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-4">{calendarError}</div>}
+        {(noScheduleCount > 0 || noShiftCount > 0) && (
+          <div role="status" className="bg-amber-50 border border-amber-200 text-amber-900 rounded-xl p-4 flex flex-wrap items-center gap-3">
+            <AlertCircle size={18} />
+            {noScheduleCount > 0 && (
+              <button type="button" onClick={() => setCoverageFilter(coverageFilter === 'noSchedule' ? 'all' : 'noSchedule')}
+                className={`px-3 py-1 rounded-lg text-sm ${coverageFilter === 'noSchedule' ? 'bg-amber-600 text-white' : 'bg-white border border-amber-300'}`}>
+                {noScheduleCount} موظف من غير جدول عمل (ماشيين على الافتراضي)
+              </button>
+            )}
+            {noShiftCount > 0 && (
+              <button type="button" onClick={() => setCoverageFilter(coverageFilter === 'noShift' ? 'all' : 'noShift')}
+                className={`px-3 py-1 rounded-lg text-sm ${coverageFilter === 'noShift' ? 'bg-amber-600 text-white' : 'bg-white border border-amber-300'}`}>
+                {noShiftCount} موظف من غير وردية في الأسبوع ده
+              </button>
+            )}
+            <span className="text-xs text-amber-700">اضغط على الرقم عشان يظهرلك الموظفين دول بس</span>
+          </div>
+        )}
         {notice && <div role="status" className="bg-green-50 text-green-800 rounded-xl p-4">{notice}</div>}
         <p className="text-sm text-gray-500">أيام الراحة والعطلات تُحسب لكل موظف حسب جدول عمله وفرعه. الساعات تشمل تجاوزات الأيام في أيام العمل الفعلية.</p>
 
@@ -916,6 +972,16 @@ export default function WeeklySchedulePage() {
                 </select>
               )}
 
+              <select
+                value={coverageFilter}
+                onChange={e => setCoverageFilter(e.target.value as 'all' | 'noSchedule' | 'noShift')}
+                className="input w-52"
+                aria-label="التغطية"
+              >
+                <option value="all">كل الموظفين</option>
+                <option value="noSchedule">من غير جدول عمل</option>
+                <option value="noShift">من غير وردية في الأسبوع ده</option>
+              </select>
               {selectedEmployees.length > 0 && (
                 <span className="px-3 py-2 bg-primary-100 text-primary-700 rounded-lg text-sm">
                   {selectedEmployees.length} موظف محدد
@@ -1075,6 +1141,17 @@ export default function WeeklySchedulePage() {
                     {/* Schedule Cells */}
                     {weekDays.map((day, dayIndex) => {
                       const dayDate = dateOfDayIndex(currentWeekStart, dayIndex)
+                      const empWindow = employment[employee.id]
+                      if (!inEmploymentWindow(empWindow, dayDate)) {
+                        return (
+                          <td key={day.key} className="p-1.5 text-center">
+                            <div className="w-full rounded-lg py-2.5 px-1 bg-gray-50 text-gray-300 text-xs border border-dashed border-gray-200"
+                              title={empWindow?.to && dayDate > empWindow.to ? `بعد آخر يوم عمل (${empWindow.to}) — مالوش وردية` : `قبل المباشرة (${empWindow?.from ?? ''})`}>
+                              خارج الخدمة
+                            </div>
+                          </td>
+                        )
+                      }
                       const exception = getException(dayIndex, employee.id)
                       const isExceptionalWork = exception === 'work' // ويك إند صار دوام رسمي
                       const isExceptionalOff = exception === 'off'   // يوم عمل صار إجازة بقاعدة
@@ -1675,7 +1752,7 @@ function RangeAssignModal({
     setBusy(true)
     setError('')
     setProgress({ done: 0, total: targetIds.length })
-    let applied = 0, removed = 0, kept = 0, recomputed = 0, recomputeFailed = 0, weeks = 0, days = 0
+    let applied = 0, removed = 0, kept = 0, recomputed = 0, recomputeFailed = 0, weeks = 0, days = 0, outsideService = 0, partialService = 0
     const problems: string[] = []
     // الفرق: طلب لكل فريق والسيرفر بيجيب أعضاءه؛ غير كده: دفعات موظفين
     const batches: Array<{ body: { employeeIds?: number[]; teamIds?: number[] }; ids: number[] }> =
@@ -1708,7 +1785,10 @@ function RangeAssignModal({
           weeks = res.weeks
           days = res.days
           problems.push(...res.failed.map((f) => `${nameOf(f.employeeId)}: ${f.error}`))
-          problems.push(...res.skipped.map((s) => `${nameOf(s.employeeId)}: ${s.reason}`))
+          // خدمته برّه المدة: بيتعد بهدوء (مش مشكلة)؛ والجزئي اتطبق على أيام خدمته بس
+          outsideService += res.skipped.filter((s) => s.outsideEmployment).length
+          partialService += res.partial ?? 0
+          problems.push(...res.skipped.filter((s) => !s.outsideEmployment).map((s) => `${nameOf(s.employeeId)}: ${s.reason}`))
         } catch (e) {
           const message = e instanceof Error ? e.message : 'تعذر حفظ الوردية'
           // خطأ في الطلب نفسه (وردية مش سارية/تاريخ غلط) هيتكرر مع كل دفعة — نوقف
@@ -1729,6 +1809,8 @@ function RangeAssignModal({
         removed ? `اتشال ${removed} يوم خاص قديم` : '',
         kept ? `فضل ${kept} يوم خاص زي ما هو` : '',
         recomputed ? `اتحسب تاني ${recomputed} يوم حضور` : '',
+        partialService ? `${partialService} موظف اتطبق عليهم أيام خدمتهم بس` : '',
+        outsideService ? `${outsideService} موظف خدمتهم مش في المدة دي اتعدّوا` : '',
       ].filter(Boolean)
       const issues = [
         ...problems.slice(0, 8),

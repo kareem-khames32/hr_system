@@ -172,6 +172,11 @@ export class WorkSchedule {
   @Column({ length: 40, default: 'FRI,SAT' })
   weekendDays: string
 
+  // استثناءات أيام الراحة جوه الجدول نفسه (قرار المالك 26 سبتمبر) — JSON، مثلًا «آخر سبت في الشهر المالي دوام»
+  // لموظفي الجدول ده بس. بتدخل في نسخة الجدول المؤرخة زي weekendDays بالظبط (attendance/work-schedule-exceptions.ts)
+  @Column({ type: 'nvarchar', length: 1000, nullable: true })
+  weekendExceptions: string | null
+
   @Column({ length: 5, default: '08:00' })
   startTime: string // HH:mm
 

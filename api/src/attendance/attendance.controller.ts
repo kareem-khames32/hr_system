@@ -424,6 +424,14 @@ export class AttendanceController {
     return this.service.confirmCalendarContext(user, body.scope, body.sourceId, body.calendarChange)
   }
 
+  // فترات خدمة الموظفين (من المباشرة لآخر يوم عمل) — الجدول الأسبوعي وأيام العمل
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Perm('attendance.view_all', 'settings.manage')
+  @Get('employment-windows')
+  employmentWindows(@CurrentUser() user: JwtPayload, @Query('from') from?: string, @Query('to') to?: string) {
+    return this.service.employmentWindows(user, from, to)
+  }
+
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Get('schedule-rules')
