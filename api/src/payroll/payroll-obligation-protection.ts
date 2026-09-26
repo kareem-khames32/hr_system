@@ -5,6 +5,7 @@ import { PayrollDecimal } from './payroll-decimal'
 // (فوق الأرضية، خارج السقف ويُخصم من سعته) ← خصومات الحضور وفائضها يسقط ولا يتحول دينًا ← قيود الدفتر المدينة
 // بترتيب الخصم: الاستردادات ← باقي الأنواع المصنفة ← الإدارية (الأقرب للترحيل) وفائضها يُرحّل كقيد جديد عند الصرف
 // ← أقساط السلف بعدها من الرصيد الباقي (payroll-installment-budget). الأرضية والسقف من إعدادات السياسة؛ null = صفر وبلا سقف.
+// الإضافة المعلّمة outsideDeductionBase (البدل الثابت الشهري) برّه الرصيد ده خالص: بتتصرف كاملة فوق الصافي المحمي.
 export const PAYROLL_OBLIGATION_PROTECTION_VERSION = 'DD11_LEGACY_NET_PROTECTION_V2_20260914' as const
 
 export interface PayrollObligationProtectionSettings {
@@ -21,6 +22,9 @@ export interface PayrollObligationProtectionEntry {
   // فئة نوع الخصم المصنف وأولوية ترحيله من لقطة الطلب (readTypedObligationFacts)؛ غير المصنف بلا قيمة
   typedCategory?: string | null
   carryPriority?: number | null
+  // إضافة برّه مساحة الخصم (البدل الثابت الشهري — بدل ضغط عمل مثلًا، طلب المالك 26 سبتمبر): بتتصرف كاملة ومش بتزوّد اللي
+  // يتخصم أو يتقسّط من الراتب؛ الأرضية والسقف ومساحة الخصم والأقساط كلها على الراتب من غيرها. غيابها = السلوك القديم بالحرف.
+  outsideDeductionBase?: boolean
 }
 // B5 / الخطوة 22: فئات التحصيل بعد المحمي. ترتيب المالك (من نسخة السياسة) يقدّم فئة على أخرى عند عدم كفاية المتاح؛
 // غيابه = الترتيب الافتراضي أعلاه حرفيًا (المصنفة والإدارية مجموعة واحدة بأولوية الترحيل ثم الإدارية آخرًا).
@@ -70,7 +74,9 @@ export function protectPayrollObligations(input: PayrollObligationProtectionInpu
   }
   const gross = decimal(input.earnedFixedGross)
   const credits = input.credits.reduce((sum, row) => sum.add(decimal(row.amount)), zero)
-  const balance = gross.add(decimal(input.overtime)).add(credits).subtract(decimal(input.unpaidLeave))
+  // الإضافات برّه مساحة الخصم بتدخل الصافي («إضافات أخرى») بس مش الرصيد اللي الخصومات والأقساط بتتاخد منه
+  const outsideCredits = input.credits.filter(row => row.outsideDeductionBase === true).reduce((sum, row) => sum.add(decimal(row.amount)), zero)
+  const balance = gross.add(decimal(input.overtime)).add(credits.subtract(outsideCredits)).subtract(decimal(input.unpaidLeave))
   const minNet = optional(input.settings.minNetGuarantee), floorPct = optional(input.settings.netFloorPct), capPct = optional(input.settings.maxDeductionPctOfGross)
   const floor = max(zero, max(minNet ?? zero, floorPct === null ? zero : gross.multiply(floorPct).divide(hundred)))
   const cap = capPct === null ? null : gross.multiply(capPct).divide(hundred)
@@ -151,7 +157,7 @@ export function protectPayrollObligations(input: PayrollObligationProtectionInpu
   const carried = debitLines.reduce((sum, line) => sum + Math.round(line.carried * 100), 0)
   if (carried > 0) warnings.push({ code: 'OBLIGATION_CARRIED', message: `يُرحّل ${(carried / 100).toFixed(2)} من قيود الدفتر إلى المسير التالي عند الصرف` })
   if (statutoryLines.some(line => line.carried > 0)) warnings.push({ code: 'STATUTORY_EXCEEDS_ROOM', message: 'الاستقطاع النظامي أو الحكم القضائي يتجاوز المتاح فوق الأرضية؛ كل القيود الأخرى تُرحّل' })
-  if (balance.compare(zero) < 0) warnings.push({ code: 'NET_NEGATIVE_PROTECTED_ONLY', message: 'الإجازة بلا أجر تتجاوز الاستحقاق؛ الصافي السالب يمنع اعتماد المسير' })
+  if (balance.add(outsideCredits).compare(zero) < 0) warnings.push({ code: 'NET_NEGATIVE_PROTECTED_ONLY', message: 'الإجازة بلا أجر تتجاوز الاستحقاق؛ الصافي السالب يمنع اعتماد المسير' })
   const lines = [...creditLines, ...debitLines]
   return {
     version: PAYROLL_OBLIGATION_PROTECTION_VERSION,
@@ -172,6 +178,9 @@ export function protectPayrollObligations(input: PayrollObligationProtectionInpu
       debitCapacity: (initialDebitCapacity ?? capacityNow()).format(2, 'DOWN'), debitCapacityRemaining: (debitCapacityRemaining ?? capacityNow()).format(2, 'DOWN'),
       // ترتيب المالك المطبق وأقساط موضع السلف؛ الترتيب الافتراضي لا يضيف حقلًا (التتبع السابق كما هو)
       ...(order === null ? {} : { collectionOrder: [...order], loanCollected: loanCollected.format(2, 'DOWN') }),
+      // الإضافات برّه مساحة الخصم (balanceBeforeDeductions من غيرها)؛ الاعتماد بيطرحها من الصافي قبل ما يقارن خطة الأقساط.
+      // من غيرها ما بيتضافش حقل (التتبع السابق كما هو)
+      ...(outsideCredits.isZero() ? {} : { creditsOutsideBase: outsideCredits.format(2, 'DOWN') }),
       warnings,
     },
   }

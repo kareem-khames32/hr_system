@@ -18,6 +18,7 @@ import {
   type AllowanceGrantBatch, type AllowanceGrantCreated, type AllowanceGrantRow, type AllowanceLineState, type AllowanceMonth, type AllowanceType,
 } from '@/lib/payroll-allowances-api'
 import { PayrollMonthLinesTable } from '@/components/payroll/PayrollMonthLinesTable'
+import { PayrollRecurringAllowances } from '@/components/payroll/PayrollRecurringAllowances'
 
 const RUN_STATUS: Record<string, string> = { DRAFT: 'مسودة', CALCULATED: 'محسوب', IN_REVIEW: 'قيد المراجعة', APPROVED: 'معتمد', PAID: 'مصروف', CANCELLED: 'ملغى' }
 const runLabel = (id: number, name: string | null) => name ? `${name} (#${id})` : `مسير #${id}`
@@ -142,8 +143,8 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
       <div className="card space-y-3">
         <div className="flex items-center justify-between gap-3 flex-wrap">
           <div>
-            <h3 className="font-bold text-gray-800">البدلات</h3>
-            <p className="text-xs text-gray-500">بدل بمبلغ ثابت لكل موظف، بيظهر سطر باسمه في إضافات المسير والقسيمة. المسير المسودة أو المحسوب بياخده لما يتحسب تاني؛ المعتمد والمصروف ما بيتغيرش.</p>
+            <h3 className="font-bold text-gray-800">بدل لشهر واحد</h3>
+            <p className="text-xs text-gray-500">بدل لمسير الشهر ده بس بمبلغ لكل موظف، بيظهر سطر باسمه في إضافات المسير والقسيمة. المسير المسودة أو المحسوب بياخده لما يتحسب تاني؛ المعتمد والمصروف ما بيتغيرش. (البدل اللي بينزل كل شهر من «البدل الثابت الشهري» تحت.)</p>
           </div>
           <div className="flex gap-2">
             <button type="button" className="btn-secondary flex items-center gap-2 text-sm" onClick={() => setShowTypes(v => !v)}>
@@ -270,6 +271,10 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
           )}
         </div>
       )}
+
+      {/* طلب المالك 26 سبتمبر: «البدل الثابت الشهري» (بدل ضغط عمل…) — بينزل كل شهر مع الراتب من غير أي مؤثرات */}
+      <PayrollRecurringAllowances period={period} types={types} branches={branches} departments={departments} teams={teams} employees={employees}
+        canWrite={canWrite} matches={matches} onOpenRun={onOpenRun} />
 
       {/* طلب المالك 19 سبتمبر: كل بنود الاستحقاق الداخلة مسيرات الشهر لكل موظف (مش البدلات اليدوية بس) — قراءة بس */}
       <PayrollMonthLinesTable side="earnings" period={period} matches={matches} onOpenRun={onOpenRun} version={version} />

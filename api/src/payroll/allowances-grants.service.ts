@@ -20,15 +20,17 @@ import { lockPayrollEmployees } from './payroll-settlement-boundary'
 
 export interface AllowanceTypeInput { name: string; code?: string | null; branchId?: number | null }
 export interface AllowanceTypeUpdate { name?: string; isActive?: boolean }
-export interface AllowanceGrantInput {
-  period: string
-  allowanceTypeId: number
-  amount: string | number
+export interface AllowanceTargetInput {
   targetLevel: string
   branchId?: number | null
   departmentIds?: number[]
   teamIds?: number[]
   employeeIds?: number[]
+}
+export interface AllowanceGrantInput extends AllowanceTargetInput {
+  period: string
+  allowanceTypeId: number
+  amount: string | number
   reason: string
 }
 
@@ -41,6 +43,59 @@ const money = (value: number) => value / 100
 const idList = (ids: number[], offset = 0) => ids.map((_, index) => `@${index + offset}`).join(', ')
 const chunks = <T>(rows: T[], size = 500) => Array.from({ length: Math.ceil(rows.length / size) }, (_, index) => rows.slice(index * size, (index + 1) * size))
 const parseIds = (raw: string | null | undefined) => { try { return uniqueIds(JSON.parse(raw ?? '[]')) } catch { return [] } }
+
+interface TargetEmployee { id: number; branchId: number | null; departmentId: number | null; teamId: number | null; status: string | null; isActive: boolean | null }
+
+/**
+ * الاستهداف الموحد لصرف بدل لشهر وللبدل الثابت الشهري (نفس القواعد بالحرف): الشركة كلها لحساب على مستوى الشركة ولنوع الشركة بس،
+ * وغير كده فرع جوه نطاق الحساب (ونوع الفرع لفرعه) وأقسامه/فرقه/موظفينه — الموظفين الشغالين بس، بحد ALLOWANCE_MAX_EMPLOYEES.
+ */
+export async function resolveAllowanceTargetInput(em: EntityManager, user: JwtPayload, scope: BranchScope, type: PayrollAllowanceType, input: AllowanceTargetInput) {
+  if (!isAllowanceTargetLevel(input.targetLevel)) throw new BadRequestException('اختار على مين')
+  const target: AllowanceTarget = { level: input.targetLevel, branchId: null, departmentIds: [], teamIds: [], employeeIds: [] }
+  let employees: TargetEmployee[]
+  const loadEmployees = async (where: string, params: unknown[]): Promise<TargetEmployee[]> => (await em.query(`SELECT [id], [branchId], [departmentId], [teamId], [status], [isActive]
+    FROM [employees] ${where}`, params)).map((row: any) => ({ id: Number(row.id), branchId: row.branchId == null ? null : Number(row.branchId),
+    departmentId: row.departmentId == null ? null : Number(row.departmentId), teamId: row.teamId == null ? null : Number(row.teamId),
+    status: row.status ?? null, isActive: row.isActive == null ? null : row.isActive === true || row.isActive === 1 }))
+  let targetIds: number[] = []
+  if (target.level === 'company') {
+    assertCompanyWideWrite(user)
+    if (type.branchId !== null) throw new BadRequestException('البدل ده خاص بفرع — اختار الفرع بتاعه')
+    employees = await loadEmployees('', [])
+  } else {
+    const branchId = Number(input.branchId)
+    if (!Number.isSafeInteger(branchId) || branchId < 1) throw new BadRequestException('اختار الفرع')
+    if (!inBranchScope(scope, branchId)) throw new ForbiddenException(`صلاحيتك على ${scopeWord(scope)} بس`)
+    if (type.branchId !== null && type.branchId !== branchId) throw new BadRequestException('نوع البدل ده خاص بفرع تاني')
+    const [branch] = await em.query('SELECT [id] FROM [branches] WHERE [id] = @0', [branchId])
+    if (!branch) throw new BadRequestException('الفرع مش موجود')
+    target.branchId = branchId
+    if (target.level === 'departments') {
+      targetIds = target.departmentIds = uniqueIds(input.departmentIds)
+      if (!targetIds.length) throw new BadRequestException('اختار قسم واحد على الأقل')
+      const rows = await em.query(`SELECT [id] FROM [departments] WHERE [branchId] = @0 AND [id] IN (${idList(targetIds, 1)})`, [branchId, ...targetIds])
+      if (rows.length !== targetIds.length) throw new BadRequestException('في قسم مختار مش تبع الفرع ده')
+    } else if (target.level === 'teams') {
+      targetIds = target.teamIds = uniqueIds(input.teamIds)
+      if (!targetIds.length) throw new BadRequestException('اختار فريق واحد على الأقل')
+      const rows = await em.query(`SELECT t.[id] FROM [teams] t INNER JOIN [departments] d ON d.[id] = t.[departmentId]
+        WHERE d.[branchId] = @0 AND t.[id] IN (${idList(targetIds, 1)})`, [branchId, ...targetIds])
+      if (rows.length !== targetIds.length) throw new BadRequestException('في فريق مختار مش تبع الفرع ده')
+    } else if (target.level === 'employees') {
+      targetIds = target.employeeIds = uniqueIds(input.employeeIds)
+      if (!targetIds.length) throw new BadRequestException('اختار موظف واحد على الأقل')
+      if (targetIds.length > ALLOWANCE_MAX_EMPLOYEES) throw new BadRequestException(`الحد ${ALLOWANCE_MAX_EMPLOYEES} موظف في المرة`)
+    }
+    employees = await loadEmployees('WHERE [branchId] = @0', [branchId])
+  }
+  const employeeIds = resolveAllowanceTargetEmployees(target, employees)
+  if (target.level === 'employees' && employeeIds.length !== targetIds.length) throw new BadRequestException('في موظف مختار مش تبع الفرع ده أو ساب الشغل')
+  if (!employeeIds.length) throw new BadRequestException('مفيش موظفين شغالين في الاختيار ده')
+  if (employeeIds.length > ALLOWANCE_MAX_EMPLOYEES) throw new BadRequestException(`الحد ${ALLOWANCE_MAX_EMPLOYEES} موظف في المرة`)
+  const branchOf = new Map(employees.map(employee => [employee.id, employee.branchId]))
+  return { target, targetIds, employeeIds, branchOf }
+}
 
 @Injectable()
 export class PayrollAllowancesService {
@@ -289,49 +344,7 @@ export class PayrollAllowancesService {
     const reason = String(input.reason ?? '').trim()
     if (!reason) throw new BadRequestException('اكتب سبب صرف البدل')
     if (reason.length > 500) throw new BadRequestException('السبب أطول من 500 حرف')
-    if (!isAllowanceTargetLevel(input.targetLevel)) throw new BadRequestException('اختار على مين')
-    const target: AllowanceTarget = { level: input.targetLevel, branchId: null, departmentIds: [], teamIds: [], employeeIds: [] }
-    let employees: Array<{ id: number; branchId: number | null; departmentId: number | null; teamId: number | null; status: string | null; isActive: boolean | null }>
-    const loadEmployees = async (where: string, params: unknown[]) => (await this.em.query(`SELECT [id], [branchId], [departmentId], [teamId], [status], [isActive]
-      FROM [employees] ${where}`, params)).map((row: any) => ({ id: Number(row.id), branchId: row.branchId == null ? null : Number(row.branchId),
-      departmentId: row.departmentId == null ? null : Number(row.departmentId), teamId: row.teamId == null ? null : Number(row.teamId),
-      status: row.status ?? null, isActive: row.isActive == null ? null : row.isActive === true || row.isActive === 1 }))
-    let targetIds: number[] = []
-    if (target.level === 'company') {
-      assertCompanyWideWrite(user)
-      if (type.branchId !== null) throw new BadRequestException('البدل ده خاص بفرع — اختار الفرع بتاعه')
-      employees = await loadEmployees('', [])
-    } else {
-      const branchId = Number(input.branchId)
-      if (!Number.isSafeInteger(branchId) || branchId < 1) throw new BadRequestException('اختار الفرع')
-      if (!inBranchScope(scope, branchId)) throw new ForbiddenException(`صلاحيتك على ${scopeWord(scope)} بس`)
-      if (type.branchId !== null && type.branchId !== branchId) throw new BadRequestException('نوع البدل ده خاص بفرع تاني')
-      const [branch] = await this.em.query('SELECT [id] FROM [branches] WHERE [id] = @0', [branchId])
-      if (!branch) throw new BadRequestException('الفرع مش موجود')
-      target.branchId = branchId
-      if (target.level === 'departments') {
-        targetIds = target.departmentIds = uniqueIds(input.departmentIds)
-        if (!targetIds.length) throw new BadRequestException('اختار قسم واحد على الأقل')
-        const rows = await this.em.query(`SELECT [id] FROM [departments] WHERE [branchId] = @0 AND [id] IN (${idList(targetIds, 1)})`, [branchId, ...targetIds])
-        if (rows.length !== targetIds.length) throw new BadRequestException('في قسم مختار مش تبع الفرع ده')
-      } else if (target.level === 'teams') {
-        targetIds = target.teamIds = uniqueIds(input.teamIds)
-        if (!targetIds.length) throw new BadRequestException('اختار فريق واحد على الأقل')
-        const rows = await this.em.query(`SELECT t.[id] FROM [teams] t INNER JOIN [departments] d ON d.[id] = t.[departmentId]
-          WHERE d.[branchId] = @0 AND t.[id] IN (${idList(targetIds, 1)})`, [branchId, ...targetIds])
-        if (rows.length !== targetIds.length) throw new BadRequestException('في فريق مختار مش تبع الفرع ده')
-      } else if (target.level === 'employees') {
-        targetIds = target.employeeIds = uniqueIds(input.employeeIds)
-        if (!targetIds.length) throw new BadRequestException('اختار موظف واحد على الأقل')
-        if (targetIds.length > ALLOWANCE_MAX_EMPLOYEES) throw new BadRequestException(`الحد ${ALLOWANCE_MAX_EMPLOYEES} موظف في المرة`)
-      }
-      employees = await loadEmployees('WHERE [branchId] = @0', [branchId])
-    }
-    const employeeIds = resolveAllowanceTargetEmployees(target, employees)
-    if (target.level === 'employees' && employeeIds.length !== targetIds.length) throw new BadRequestException('في موظف مختار مش تبع الفرع ده أو ساب الشغل')
-    if (!employeeIds.length) throw new BadRequestException('مفيش موظفين شغالين في الاختيار ده')
-    if (employeeIds.length > ALLOWANCE_MAX_EMPLOYEES) throw new BadRequestException(`الحد ${ALLOWANCE_MAX_EMPLOYEES} موظف في المرة`)
-    const branchOf = new Map(employees.map(employee => [employee.id, employee.branchId]))
+    const { target, targetIds, employeeIds, branchOf } = await resolveAllowanceTargetInput(this.em, user, scope, type, input)
 
     const result = await this.em.transaction(async em => {
       // نفس البدل لنفس الموظف في نفس الشهر ما يتصرفش مرتين
