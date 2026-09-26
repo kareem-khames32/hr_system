@@ -156,16 +156,20 @@ after(async t => {
 test('EX-09: creation requires authentication, explicit permission and the employee branch', async () => {
   const own = await employee(), outside = await employee({ branchId: branchB.id })
   const original = await counts()
-  for (const [actor, emp, expected] of [[null, own, 401], [viewer, own, 403], [nobody, own, 403], [hr, outside, 403]]) {
+  // موظف برّه النطاق = نفس رد الرقم اللي مش موجود (مراجعة Codex الجولة 4: فرق 403/404 كان بيكشف وجوده)
+  for (const [actor, emp, expected] of [[null, own, 401], [viewer, own, 403], [nobody, own, 403], [hr, outside, 404]]) {
     const denied = await request(actor, 'POST', '/attendance-exemptions', input(emp))
     assert.equal(denied.status, expected, JSON.stringify(denied.body))
   }
+  const missing = await request(hr, 'POST', '/attendance-exemptions', input({ id: 999999 }))
+  const hidden = await request(hr, 'POST', '/attendance-exemptions', input(outside))
+  assert.deepEqual([hidden.status, hidden.body.message], [missing.status, missing.body.message])
   assert.deepEqual(await counts(), original)
   const outsideWindow = await create(outside, {}, otherHr)
-  assert.equal((await request(hr, 'GET', `/attendance-exemptions/employee/${outside.id}`)).status, 403)
-  assert.equal((await request(hr, 'GET', `${route(outsideWindow.id)}/events`)).status, 403)
-  assert.equal((await request(hr, 'POST', `${route(outsideWindow.id)}/approve`, { reason: explanation })).status, 403)
-  assert.equal((await request(hr, 'POST', `${route(outsideWindow.id)}/cancel`, { reason: explanation })).status, 403)
+  assert.equal((await request(hr, 'GET', `/attendance-exemptions/employee/${outside.id}`)).status, 404)
+  assert.equal((await request(hr, 'GET', `${route(outsideWindow.id)}/events`)).status, 404)
+  assert.equal((await request(hr, 'POST', `${route(outsideWindow.id)}/approve`, { reason: explanation })).status, 404)
+  assert.equal((await request(hr, 'POST', `${route(outsideWindow.id)}/cancel`, { reason: explanation })).status, 404)
   assert.equal((await request(nobody, 'GET', `/attendance-exemptions/employee/${own.id}`)).status, 403)
 })
 

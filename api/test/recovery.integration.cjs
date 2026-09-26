@@ -311,7 +311,8 @@ test('on-behalf submission does not escape the actor branch', async () => {
 test('request details cannot be read by unrelated employees', async () => {
   const req = await repos.Request.save({ typeCode: 'TEST_REQUIRED', requesterId: emp.id,
     branchId: branch.id, status: 'DRAFT', payload: '{}' })
-  assert.equal((await request(outsider, 'GET', `/requests/${req.id}`)).status, 403)
+  // موظف فرع تاني: الطلب برّه نطاقه = «غير موجود» زي الرقم اللي مش موجود (مراجعة Codex الجولة 4 — N02)
+  assert.equal((await request(outsider, 'GET', `/requests/${req.id}`)).status, 404)
 })
 test('future attendance recalculation does not store absence', async () => {
   const service = app.get(require('../src/attendance/attendance.service').AttendanceService)

@@ -68,7 +68,12 @@ test('the request type carries the card data, and the server masks it for a conf
     'branchName: string | null', 'teamName: string | null', 'directManagerName: string | null']) assert.ok(api.includes(key), key)
   const service = read('api/src/requests/requests.service.ts')
   assert.ok(service.includes('if (!party && type?.isConfidential) return { ...this.maskConfidential({ ...this.withCanonicalStepActions(req), approvals }), requester: null, submittedBy: null }'))
-  assert.ok(service.includes('const full = { ...this.withCanonicalStepActions(req), approvals, ...(await this.requestPeople(req)) }'))
+  assert.ok(service.includes('const full = { ...this.withCanonicalStepActions(req), approvals, ...(await this.requestPeople(req, user)) }'))
+  // مراجعة Codex الجولة 4 (CR4-B02): التنظيم الحالي لصاحب الطلب نفسه أو لحساب نطاقه فيه فرع الموظف الحالي بس
+  assert.ok(service.includes('|| inBranchScope(branchScopeOf(user), employee.branchId))'))
+  assert.ok(service.includes('departmentName: null, branchName: null, teamName: null, directManagerName: null, orgHidden: true }'))
+  assert.ok(api.includes('orgHidden?: boolean'))
+  assert.ok(read('src/components/requests/RequestEmployeeCard.tsx').includes('requester.orgHidden ?'))
   // المدير المباشر بنفس حل خطوة «المدير المباشر» في السلسلة
   assert.ok(service.includes('this.resolver.directManagerOf(employee.id)'))
 })

@@ -369,7 +369,8 @@ test('a user scoped to [A, B] sees A and B but never C: employees, org, requests
   const requests = idsOf(expect(await http(s.token, 'GET', '/requests/all'), 200))
   assert.ok(requests.includes(R.a.id) && requests.includes(R.b.id) && !requests.includes(R.c.id))
   expect(await http(s.token, 'GET', `/requests/${R.b.id}`), 200)
-  expect(await http(s.token, 'GET', `/requests/${R.c.id}`), 403)
+  // برّه النطاق = «غير موجود» زي الرقم اللي مش موجود (مراجعة Codex الجولة 4 — N02)
+  expect(await http(s.token, 'GET', `/requests/${R.c.id}`), 404)
   // الحضور
   const daily = expect(await http(s.token, 'GET', `/attendance/daily?date=${D}`), 200)
   const dailyIds = daily.map(row => row.employeeId)
@@ -521,7 +522,7 @@ test('an unassigned non-admin (no branch, not «all branches») sees nothing and
   assert.deepEqual(expect(await http(s.token, 'GET', `/reports/leaves?year=${YEAR}`), 200).balances, [])
   assert.equal((await exportAs(s.token, [E.a1.id, E.b1.id, E.c1.id])).rows, 0)
   expect(await http(s.token, 'GET', `/employees/${E.a1.id}`), 404)
-  expect(await http(s.token, 'GET', `/requests/${R.a.id}`), 403)
+  expect(await http(s.token, 'GET', `/requests/${R.a.id}`), 404)
   expect(await http(s.token, 'GET', `/payroll/runs/${RUN.a.id}`), 403)
   // ولا كتابة
   const employeesBefore = await repo('Employee').count()
@@ -574,4 +575,38 @@ test('the scope rides in the token: a scopeBranchIds change bumps tokenVersion a
   const { iat: _iat2, exp: _exp2, ...claims } = narrowToken.claims
   expect(await http(jwt.sign({ ...claims, branchIds: [B.a.id, B.b.id, B.c.id] }), 'GET', '/employees'), 401)
   assert.deepEqual(branchesOf(expect(await http((await session(U.multi)).token, 'GET', '/employees'), 200)), [B.a.id, B.b.id])
+})
+
+test('round-4 review: out of scope reads exactly like «not found» (requests, attendance exemptions), and a C-only shift or work-schedule history stays hidden', async () => {
+  // مراجعة Codex الجولة 4 (N01 وN02): حساب [أ، ب] معاه إعدادات النظام وعرض الطلبات وإدارة الاستثناءات
+  U.r4 = await repo('User').save({ email: 'r4@branch-scopes.example.com', displayName: 'حساب r4', passwordHash: 'test-only', role: 'hr_manager',
+    branchId: B.a.id, employeeId: null, scopeBranchIds: JSON.stringify([B.a.id, B.b.id]),
+    permissions: JSON.stringify(['settings.manage', 'requests.view_all', 'attendance_exemption.manage']) })
+  const s = await session(U.r4), admin = await session(U.admin)
+  assert.deepEqual(s.claims.branchIds, [B.a.id, B.b.id])
+  // الطلب في ج = نفس رد الرقم اللي مش موجود بالحرف
+  const hiddenRequest = await http(s.token, 'GET', `/requests/${R.c.id}`), missingRequest = await http(s.token, 'GET', '/requests/99999999')
+  assert.deepEqual([hiddenRequest.status, messageOf(hiddenRequest)], [404, messageOf(missingRequest)])
+  assert.equal(missingRequest.status, 404)
+  expect(await http(s.token, 'GET', `/requests/${R.b.id}`), 200)
+  // استثناء حضور لموظف في ج = نفس رد الموظف اللي مش موجود
+  const exemption = employeeId => ({ employeeId, effectiveFrom: D, reasonCode: 'field_role', reason: 'سبب اختبار موثق وواضح يتجاوز عشرين حرفًا لاتخاذ القرار' })
+  const hiddenEmployee = await http(s.token, 'POST', '/attendance-exemptions', exemption(E.c1.id))
+  const missingEmployee = await http(s.token, 'POST', '/attendance-exemptions', exemption(99999999))
+  assert.deepEqual([hiddenEmployee.status, messageOf(hiddenEmployee)], [404, messageOf(missingEmployee)])
+  // تاريخ وردية وجدول عمل خاصين بفرع ج: غير موجودين لحساب [أ، ب]، وظاهرين لمدير النظام؛ والتعريف العام ظاهر للكل
+  const change = { effectiveFrom: D, changeReason: 'اختبار نطاق تاريخ تعريفات الدوام' }
+  const shiftBody = name => ({ name, startTime: '09:00', endTime: '17:00', shiftMode: 'fixed', graceMinutes: 10, flexEnabled: false,
+    flexWindowMinutes: 60, requiredWorkMinutes: 480, ...change })
+  const shiftC = expect(await http(admin.token, 'POST', '/catalogs/shifts', { ...shiftBody('وردية فرع ج'), branchId: B.c.id }), 201)
+  const shiftAll = expect(await http(admin.token, 'POST', '/catalogs/shifts', shiftBody('وردية لكل الشركة')), 201)
+  const scheduleC = expect(await http(admin.token, 'POST', '/catalogs/work-schedules', { name: 'جدول فرع ج', startTime: '09:00', endTime: '17:00',
+    weekendDays: 'FRI,SAT', isActive: true, flexEnabled: false, requiredWorkMinutes: 480, branchId: B.c.id, ...change }), 201)
+  assert.deepEqual([(await repo('Shift').findOneByOrFail({ id: shiftC.id })).branchId, (await repo('WorkSchedule').findOneByOrFail({ id: scheduleC.id })).branchId,
+    (await repo('Shift').findOneByOrFail({ id: shiftAll.id })).branchId], [B.c.id, B.c.id, null])
+  for (const route of [`/attendance-rules/SHIFT/${shiftC.id}/history`, `/attendance-rules/WORK_SCHEDULE/${scheduleC.id}/history`]) {
+    expect(await http(s.token, 'GET', route), 404, route)
+    assert.ok(expect(await http(admin.token, 'GET', route), 200, route).length >= 1)
+  }
+  assert.ok(expect(await http(s.token, 'GET', `/attendance-rules/SHIFT/${shiftAll.id}/history`), 200).length >= 1)
 })

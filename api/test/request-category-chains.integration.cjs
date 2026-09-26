@@ -321,6 +321,17 @@ test('RC-11: الاستخدام — عدد الطلبات وآخر طلب لكل
 
 test('RC-12: ربط الفئة مايتكتبش من إعدادات النظام العامة، وسلسلة الفئة ماتتنقلش لفرع حتى لو مفيش نوع عليها', async () => {
   refused(await request(U.admin, 'PATCH', '/settings/config', { key: 'requests.category_chain.leaves', value: String(C.A.id) }), 400, /بانِي الطلبات/)
+  // مراجعة Codex الجولة 4 (CR4-B01): SQL Server مابيفرقش بين الحروف الكبيرة والصغيرة، فالمفتاح بحالة أحرف مختلفة (أو بمسافة في
+  // آخره) كان بيلاقي الصف ويعدّي من الحارس — دلوقتي المفتاح لازم يطابق المخزّن بالحرف، وإلا «غير معروف»
+  for (const key of ['REQUESTS.CATEGORY_CHAIN.LEAVES', 'Requests.Category_Chain.Leaves']) {
+    refused(await request(U.admin, 'PATCH', '/settings/config', { key, value: String(C.A.id) }), 404, /غير معروف/)
+  }
+  // ونفس الشيء لرخصة الاعتماد الذاتي للمسير (كانت بتتفك بالأحرف الكبيرة من غير صلاحية الرخصة)
+  await repo('RequestsConfig').save({ key: 'payroll.approval_self_approval_allowed', value: 'false' })
+  for (const key of ['PAYROLL.APPROVAL_SELF_APPROVAL_ALLOWED', 'payroll.approval_self_approval_allowed ']) {
+    refused(await request(U.admin, 'PATCH', '/settings/config', { key, value: 'true' }), 404, /غير معروف/)
+  }
+  assert.equal((await repo('RequestsConfig').findOneByOrFail({ key: 'payroll.approval_self_approval_allowed' })).value, 'false')
   assert.equal((await repo('RequestsConfig').findOneByOrFail({ key: 'requests.category_chain.leaves' })).value, String(C.B.id))
   const training = ok(await request(U.admin, 'PUT', '/settings/request-categories/training/chain', { copyFromChainId: C.B.id }))
   assert.deepEqual(training.repointed, [])

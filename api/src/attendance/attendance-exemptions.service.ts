@@ -31,8 +31,8 @@ export class AttendanceExemptionsService {
 
   private async employee(user: JwtPayload, employeeId: number, em = this.windows.manager) {
     const employee = await em.getRepository(Employee).findOneBy({ id: employeeId })
-    if (!employee) throw new NotFoundException('الموظف غير موجود')
-    if (!inBranchScope(branchScopeOf(user), employee.branchId)) throw new ForbiddenException('الموظف خارج الفرع المسموح لك')
+    // برّه النطاق = نفس رد الرقم اللي مش موجود: فرق 403/404 كان بيكشف وجود الموظف (مراجعة Codex الجولة 4)
+    if (!employee || !inBranchScope(branchScopeOf(user), employee.branchId)) throw new NotFoundException('الموظف غير موجود')
     return employee
   }
 

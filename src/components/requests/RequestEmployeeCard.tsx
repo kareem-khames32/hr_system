@@ -28,6 +28,9 @@ export default function RequestEmployeeCard({ requester, submittedBy }: {
           {requester.employeeCode && <p className="text-xs text-gray-500">كود الموظف: <span dir="ltr">{requester.employeeCode}</span></p>}
         </div>
       </div>
+      {requester.orgHidden ? (
+        <p className="text-xs rounded-lg bg-gray-50 text-gray-600 px-3 py-2">الموظف ده اتنقل لفرع برّه نطاقك — بياناته التنظيمية الحالية مش ظاهرة لك</p>
+      ) : (
       <dl className="grid grid-cols-1 sm:grid-cols-2 gap-2">
         {rows.map(([label, value]) => (
           <div key={label} className="min-w-0 rounded-lg bg-gray-50 px-3 py-2">
@@ -36,6 +39,7 @@ export default function RequestEmployeeCard({ requester, submittedBy }: {
           </div>
         ))}
       </dl>
+      )}
       {submittedBy && (
         <p className="text-xs rounded-lg bg-indigo-50 text-indigo-700 px-3 py-2">قدّمه نيابةً: {submittedBy.displayName || 'مستخدم آخر'}</p>
       )}

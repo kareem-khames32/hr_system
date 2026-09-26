@@ -1986,14 +1986,17 @@ export class RequestsService {
       inScope,
       approvals.some((a) => a.approverId === user.sub)
     )
-    if (!party && !(inScope && userHasPerm(user, 'requests.view_all'))) {
+    // طلب برّه النطاق ومش طرف فيه = نفس رد الرقم اللي مش موجود (فرق 403/404 كان بيكشف وجوده — مراجعة Codex الجولة 4)؛
+    // جوه النطاق من غير صلاحية العرض: رفض صريح زي الأول
+    if (!party && !inScope) throw new NotFoundException('الطلب غير موجود')
+    if (!party && !userHasPerm(user, 'requests.view_all')) {
       throw new ForbiddenException('لا تملك صلاحية عرض هذا الطلب')
     }
     const type = await this.types.findOne({ where: { code: definitionCodeOf(req) } })
     // السرّي لغير أطرافه: لا بطاقة موظف ولا منشئ — نفس حجب الهوية في القائمة
     if (!party && type?.isConfidential) return { ...this.maskConfidential({ ...this.withCanonicalStepActions(req), approvals }), requester: null, submittedBy: null }
     // بطاقة صاحب الطلب أعلى شاشات التفاصيل الثلاث (بانتظار موافقتي، طلباتي، لوحة الطلبات)
-    const full = { ...this.withCanonicalStepActions(req), approvals, ...(await this.requestPeople(req)) }
+    const full = { ...this.withCanonicalStepActions(req), approvals, ...(await this.requestPeople(req, user)) }
     if (!type || !this.isOvertimeDefinition(type)) return full
     const entries = await this.overtimeEntries.find({ where: { requestId: req.id, employeeId: req.requesterId } })
     const entry = entries.length === 1 ? entries[0] : null
@@ -2034,12 +2037,19 @@ export class RequestsService {
 
   // بطاقة صاحب الطلب: هويته وتنظيمه الحالي ومديره المباشر (نفس حل خطوة «المدير المباشر» في السلسلة)، ومين قدّمه
   // نيابةً عنه لو المنشئ حساب غير حساب صاحب الطلب. بتتقرا بعد فحص حق الاطلاع، والسرّي المحجوب مابيوصلش هنا
-  private async requestPeople(req: Pick<Request, 'requesterId' | 'createdByUserId'>) {
+  private async requestPeople(req: Pick<Request, 'requesterId' | 'createdByUserId'>, user: JwtPayload) {
     const employee = await this.employees.findOne({ where: { id: req.requesterId },
       select: { id: true, fullName: true, employeeCode: true, jobTitle: true, branchId: true, departmentId: true, teamId: true } })
     let requester: { employeeId: number; fullName: string; employeeCode: string | null; jobTitle: string | null; departmentName: string | null
-      branchName: string | null; teamName: string | null; directManagerName: string | null } | null = null
-    if (employee) {
+      branchName: string | null; teamName: string | null; directManagerName: string | null; orgHidden?: true } | null = null
+    // التنظيم الحالي (المسمى/القسم/الفرع/الفريق/المدير) لصاحب الطلب نفسه أو لحساب نطاقه فيه فرع الموظف الحالي بس:
+    // طلب قديم في فرع اتنقل منه الموظف مايكشفش لحساب الفرع القديم مكانه الجديد (مراجعة Codex الجولة 4) — الاسم والكود بس
+    const orgVisible = !!employee && ((user.employeeId != null && Number(user.employeeId) === employee.id)
+      || inBranchScope(branchScopeOf(user), employee.branchId))
+    if (employee && !orgVisible) {
+      requester = { employeeId: employee.id, fullName: employee.fullName, employeeCode: employee.employeeCode ?? null, jobTitle: null,
+        departmentName: null, branchName: null, teamName: null, directManagerName: null, orgHidden: true }
+    } else if (employee) {
       const [department, branch, team, managerId] = await Promise.all([
         employee.departmentId ? this.ds.getRepository(Department).findOne({ where: { id: employee.departmentId }, select: { id: true, name: true } }) : null,
         employee.branchId ? this.ds.getRepository(Branch).findOne({ where: { id: employee.branchId }, select: { id: true, name: true } }) : null,

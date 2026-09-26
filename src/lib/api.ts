@@ -409,6 +409,8 @@ export interface ApiRequestRequester {
   branchName: string | null
   teamName: string | null
   directManagerName: string | null
+  // الموظف اتنقل لفرع برّه نطاقك: الاسم والكود بس، من غير تنظيمه الحالي
+  orgHidden?: boolean
 }
 export interface ApiRequestSubmittedBy { displayName: string | null }
 export type ApiOvertimeEvidence = OvertimeEvidence

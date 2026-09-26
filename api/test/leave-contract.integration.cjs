@@ -337,6 +337,22 @@ test('Request details carry the employee card: the approver sees identity and or
   // وأطرافه يرونها: المنشئ وصاحب الطلب
   assert.equal((await request(hrAgent, 'GET', `/requests/${secret.body.id}`)).body.requester.fullName, 'BOB')
   assert.equal((await request(bob, 'GET', `/requests/${secret.body.id}`)).body.submittedBy.displayName, 'HR Agent')
+  // مراجعة Codex الجولة 4: bob اتنقل للفرع (ب) — حساب الفرع (أ) لسه بيشوف طلبه القديم في فرعه، بس من غير تنظيمه الجديد
+  await repos.Employee.update(bob.employeeId, { branchId: otherBranch.id })
+  try {
+    const moved = await request(hr, 'GET', `/requests/${live.body.id}`)
+    assert.equal(moved.status, 200, JSON.stringify(moved.body))
+    assert.deepEqual(moved.body.requester, { employeeId: bob.employeeId, fullName: 'BOB', employeeCode: 'BOB', jobTitle: null, departmentName: null,
+      branchName: null, teamName: null, directManagerName: null, orgHidden: true })
+    // وملفه نفسه مرفوض على نفس الحساب — البطاقة ماكانتش لازم تكشف أكتر منه
+    assert.notEqual((await request(hr, 'GET', `/employees/${bob.employeeId}`)).status, 200)
+    // صاحب الطلب نفسه ومدير النظام: البطاقة كاملة بالفرع الجديد
+    assert.equal((await request(bob, 'GET', `/requests/${live.body.id}`)).body.requester.branchName, 'Leave B')
+    const full = (await request(admin, 'GET', `/requests/${live.body.id}`)).body.requester
+    assert.deepEqual([full.branchName, full.jobTitle, full.orgHidden], ['Leave B', 'محاسب', undefined])
+  } finally {
+    await repos.Employee.update(bob.employeeId, { branchId: branch.id })
+  }
 })
 
 test('«طلباتي» shows the rows filed on behalf to their creator, and a confidential type stays with its parties', async () => {

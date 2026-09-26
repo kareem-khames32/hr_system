@@ -169,3 +169,22 @@ test('EW-05: the employment-windows endpoint feeds the weekly schedule (who serv
   assert.ok(!week.some(row => row.employeeId === empC.id || row.employeeId === empD.id), 'اللي خدمتهم انتهت قبل الأسبوع مايظهروش')
   assert.equal((await request(admin, 'GET', '/attendance/employment-windows?from=2026-09-20&to=2026-09-13')).status, 400)
 })
+
+test('EW-06: the attendance report applies the same service window as the screens — archive date without an offboarding case, and before joining', async () => {
+  // مراجعة Codex الجولة 4: التقرير كان بيعدّ غياب بعد تاريخ الأرشفة (من غير ملف إنهاء) والشاشة بتستبعده
+  const archived = await employee({ status: 'terminated', isActive: false, archivedAt: new Date('2026-09-07T15:00:00') })
+  const joiner = await employee({ joinDate: '2026-09-08' })
+  const absent = (emp, date) => ({ employeeId: emp.id, branchId: branch.id, date, status: 'absent', shiftName: 'قديم', shiftStart: '09:00',
+    shiftEnd: '17:00', workMinutes: 0, lateMinutes: 0, deductibleMinutes: 0, earlyLeaveMinutes: 0 })
+  // أيام شغل كلها (مش جمعة ولا سبت): جوه الخدمة 3 و7 سبتمبر للمؤرشف و8 و9 للملتحق — بره الخدمة 8 و9 بعد الأرشفة، و6 و7 قبل المباشرة
+  await repo('AttendanceDay').save([absent(archived, '2026-09-03'), absent(archived, '2026-09-07'), absent(archived, '2026-09-08'),
+    absent(archived, '2026-09-09'), absent(joiner, '2026-09-06'), absent(joiner, '2026-09-07'), absent(joiner, '2026-09-08'), absent(joiner, '2026-09-09')])
+  const report = expect(await request(admin, 'GET', '/reports/attendance?from=2026-09-01&to=2026-09-10'), 200)
+  const count = emp => Number(report.find(row => row.employeeId === emp.id)?.absentDays ?? 0)
+  assert.equal(count(archived), 2, 'المؤرشف من غير ملف إنهاء: الغياب لحد يوم الأرشفة بس')
+  assert.equal(count(joiner), 2, 'الملتحق: الغياب من يوم المباشرة بس')
+  for (const [emp, date, shown] of [[archived, '2026-09-07', true], [archived, '2026-09-08', false], [joiner, '2026-09-07', false], [joiner, '2026-09-08', true]]) {
+    const daily = expect(await request(admin, 'GET', `/attendance/daily?date=${date}`), 200)
+    assert.equal(daily.some(row => row.employeeId === emp.id && row.status === 'absent'), shown, `${emp.employeeCode} ${date}`)
+  }
+})

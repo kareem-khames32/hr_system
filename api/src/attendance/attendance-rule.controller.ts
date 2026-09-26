@@ -4,6 +4,7 @@ import { Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
+import { Shift, WorkSchedule } from '../assets/assets.entities'
 import { AttendanceRuleSourceType, AttendanceRuleVersion } from './attendance-rule.entities'
 
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -19,7 +20,16 @@ export class AttendanceRuleController {
       if (!userHasPerm(user, 'employees.view') && !userHasPerm(user, 'employees.edit')) throw new ForbiddenException('لا تملك صلاحية عرض تاريخ دوام الموظف')
       const employee = await this.versions.manager.findOneBy(Employee, { id: sourceId })
       if (!employee || !inBranchScope(branchScopeOf(user), employee.branchId)) throw new NotFoundException('الموظف غير موجود')
-    } else if (!userHasPerm(user, 'settings.manage')) throw new ForbiddenException('لا تملك صلاحية عرض تاريخ تعريف الدوام')
+    } else {
+      if (!userHasPerm(user, 'settings.manage')) throw new ForbiddenException('لا تملك صلاحية عرض تاريخ تعريف الدوام')
+      // تعريف خاص بفرع برّه نطاق الحساب = غير موجود (مراجعة Codex الجولة 4)؛ التعريف العام (بلا فرع) للكل،
+      // والتعريف الممسوح تاريخه لحساب الشركة بس (مفيش فرع نتحقق منه)
+      const scope = branchScopeOf(user)
+      const definition = await this.versions.manager.findOne(sourceType === 'SHIFT' ? Shift : WorkSchedule,
+        { where: { id: sourceId }, select: { id: true, branchId: true } })
+      const visible = definition ? definition.branchId == null || inBranchScope(scope, definition.branchId) : scope === null
+      if (!visible) throw new NotFoundException('تعريف الدوام غير موجود')
+    }
     return this.versions.find({ where: { sourceType, sourceId }, order: { version: 'DESC' } })
   }
 }
