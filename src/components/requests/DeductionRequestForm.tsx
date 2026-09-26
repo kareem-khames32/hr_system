@@ -120,7 +120,10 @@ export default function DeductionRequestForm({ onSubmitted }: { onSubmitted?: ()
     try {
       const created = await createDeduction({ ...input, employeeId: Number(employeeId) })
       const chain = created.steps.filter(step => step.status !== 'SKIPPED').map(step => step.roleLabel).join(' ← ')
-      setResult(`أُرسل طلب الخصم #${created.id} — ${created.statusLabel}. سلسلة الاعتماد: ${chain}. بعد اعتماد الموارد البشرية يُخصم في مسير ${created.targetPeriod} بحماية الصافي، ويراه الموظف في «خصوماتي» وفي قسيمة راتبه.`)
+      // قرار المالك 26 سبتمبر: خصم مدير الموارد البشرية بيرجع من الخادم معتمدًا لحظتها
+      setResult(created.status === 'APPROVED'
+        ? `أُنشئ الخصم #${created.id} واعتُمد فورًا — قرار مدير الموارد البشرية نهائي. يُخصم في مسير ${created.targetPeriod} بحماية الصافي، ويراه الموظف في «خصوماتي» وفي قسيمة راتبه.`
+        : `أُرسل طلب الخصم #${created.id} — ${created.statusLabel}. سلسلة الاعتماد: ${chain}. بعد اعتماد الموارد البشرية يُخصم في مسير ${created.targetPeriod} بحماية الصافي، ويراه الموظف في «خصوماتي» وفي قسيمة راتبه.`)
       setForm(form => ({ ...form, inputValue: type.defaultValue ?? '', reason: '', attachmentRef: '', installments: 1, confirmNotDuplicate: false }))
       setPreview(null)
       onSubmitted?.()

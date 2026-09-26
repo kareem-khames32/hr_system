@@ -44,9 +44,11 @@ async function request(user, method, endpoint, body) {
   return { status: response.status, body: text ? JSON.parse(text) : null }
 }
 const route = id => `/attendance-exemptions/${id}`
+// مستخدمو المسار بصلاحيات صريحة وبدور employee: قرار المالك 26 سبتمبر خلّى دور hr_manager نفسه سلطة نهائية (إنشاؤه لغيره
+// بيتعتمد لحظتها)، فمسار الاعتماد العادي بفصل مهامه بيتختبر بمستخدمين من غير السلطة دي، والسلطة نفسها بمستخدم hr_manager صريح آخر الملف
 async function user(permissions = [], branchId = branchA.id, extra = {}) {
   return repo('User').save({ email: `exemption-user-${++userNumber}@fixture.invalid`, displayName: `مستخدم اختبار ${userNumber}`,
-    passwordHash: 'test-only', role: 'hr_manager', branchId, permissions: JSON.stringify(permissions), ...extra })
+    passwordHash: 'test-only', role: 'employee', branchId, permissions: JSON.stringify(permissions), ...extra })
 }
 async function employee(extra = {}) {
   return repo('Employee').save({ employeeCode: `EXWF${String(++employeeNumber).padStart(3, '0')}`,
@@ -447,7 +449,7 @@ function cycleStartOf(date, startDay = 23) {
   return formatDate(new Date(base.getFullYear(), base.getMonth() - (base.getDate() >= startDay ? 0 : 1), startDay, 12))
 }
 
-test('S24 SoD: the creator never approves or rejects its own request, even with approval rights or as super_admin', async () => {
+test('S24 SoD: a creator without HR-manager authority never approves or rejects its own request, even with approval rights', async () => {
   const emp = await employee()
   const row = await create(emp)
   const before = await evidence(row)
@@ -463,11 +465,7 @@ test('S24 SoD: the creator never approves or rejects its own request, even with 
   assert.equal(listed.actions.cancel, true)
   assert.equal(listed.actions.blockedBy, 'CREATOR')
   assert.equal((await approve(row)).status, 'APPROVED')
-  const adminRow = await create(await employee(), {}, admin)
-  const adminDenied = await request(admin, 'POST', `${route(adminRow.id)}/approve`, { reason: explanation })
-  assert.equal(adminDenied.status, 403, JSON.stringify(adminDenied.body))
-  assert.equal(adminDenied.body.code, 'EXEMPT-SOD-CREATOR')
-  assert.equal((await approve(adminRow, hr)).approvedByUserId, hr.id)
+  // مدير النظام («*») صار سلطة نهائية: إنشاؤه بيتعتمد لحظتها (الاختبارات آخر الملف)
 })
 
 test('S24 SoD: the HR approver of an executive exemption cannot take or reject the executive step; another user completes it', async () => {
@@ -661,4 +659,74 @@ test('S24 acceptance: an employee without punches has no attendance deduction on
   // بعد الاعتماد لا يغيّر إنهاء الاستثناء الفترة المعتمدة
   const lockedTermination = await request(approver, 'POST', `${route(requested.id)}/terminate`, { effectiveFrom: today, reason: explanation })
   assert.equal(lockedTermination.status, 409, JSON.stringify(lockedTermination.body))
+})
+
+// ===== قرار المالك 26 سبتمبر: «مدير الموارد البشرية قراره نهائي» =====
+test('Owner 26-Sep: an HR manager holding the approve permission creates the exemption already approved by himself — creation reason, instant event, window effective at once', async () => {
+  const hrManager = await user([viewPerm, managePerm, approvePerm], branchA.id, { role: 'hr_manager' })
+  const emp = await employee()
+  const row = await create(emp, { effectiveTo: later }, hrManager)
+  assert.deepEqual([row.status, row.createdByUserId, row.approvedByUserId, row.executiveApprovedByUserId], ['APPROVED', hrManager.id, hrManager.id, null])
+  assert.ok(row.approvedAt)
+  // نفس أثر الاعتماد العادي: النافذة سارية فورًا
+  assert.equal(exemptionOnDate(await loadAttendanceExemptions(ds.manager, emp.id, today, later), today).id, row.id)
+  const history = await events(row, hrManager)
+  assert.deepEqual(history.map(event => event.eventType), ['CREATED', 'HR_INSTANT_APPROVED'])
+  const instant = history.at(-1)
+  assert.deepEqual([instant.actorUserId, instant.reason], [hrManager.id, explanation], 'سبب الاعتماد = سبب الإنشاء')
+  assert.deepEqual([instant.payload.before.status, instant.payload.after.status, instant.payload.after.approvedByUserId], ['PENDING', 'APPROVED', hrManager.id])
+  const listed = (await request(hrManager, 'GET', '/attendance-exemptions')).body.rows.find(item => item.id === row.id)
+  assert.deepEqual([listed.state, listed.approvedByName, listed.actions.blockedBy, listed.actions.terminate], ['ACTIVE', hrManager.displayName, null, true])
+  // لا يُعتمد مرة ثانية، وأي مستخدم آخر يراه معتمدًا
+  assert.equal((await request(approver, 'POST', `${route(row.id)}/approve`, { reason: explanation })).status, 400)
+})
+
+test('Owner 26-Sep: an executive-reason exemption by an HR manager without the executive permission gets the HR step at once and waits for the executive step only; super_admin approves both at once', async () => {
+  const hrManager = await user([viewPerm, managePerm, approvePerm], branchA.id, { role: 'hr_manager' })
+  const emp = await employee()
+  const row = await create(emp, { reasonCode: 'executive' }, hrManager)
+  assert.deepEqual([row.status, row.approvedByUserId, row.executiveApprovedByUserId], ['PENDING', hrManager.id, null])
+  assert.deepEqual(await loadAttendanceExemptions(ds.manager, emp.id, today, later), [], 'no window before the executive step')
+  assert.deepEqual((await events(row, hrManager)).map(event => event.eventType), ['CREATED', 'HR_INSTANT_APPROVED'])
+  const listed = (await request(hrManager, 'GET', '/attendance-exemptions')).body.rows.find(item => item.id === row.id)
+  assert.equal(listed.state, 'PENDING_EXECUTIVE')
+  assert.deepEqual([listed.actions.approve, listed.actions.approveExecutive, listed.actions.blockedBy], [false, false, null])
+  const completed = await request(executive, 'POST', `${route(row.id)}/approve-executive`, { reason: explanation })
+  assert.equal(completed.status, 201, JSON.stringify(completed.body))
+  assert.deepEqual([completed.body.status, completed.body.executiveApprovedByUserId], ['APPROVED', executive.id])
+  assert.equal((await events(row)).at(-1).eventType, 'EXECUTIVE_APPROVED')
+  // مدير النظام يحمل كل الصلاحيات: الخطوتان لحظة الإنشاء، باسمه، وبسبب الإنشاء نفسه
+  const other = await employee()
+  const both = await create(other, { reasonCode: 'executive' }, admin)
+  assert.deepEqual([both.status, both.approvedByUserId, both.executiveApprovedByUserId], ['APPROVED', admin.id, admin.id])
+  const adminEvents = await events(both, admin)
+  assert.deepEqual(adminEvents.map(event => event.eventType), ['CREATED', 'HR_INSTANT_APPROVED', 'EXECUTIVE_INSTANT_APPROVED'])
+  assert.ok(adminEvents.every(event => event.actorUserId === admin.id && event.reason === explanation))
+  assert.equal(exemptionOnDate(await loadAttendanceExemptions(ds.manager, other.id, today, later), today).id, both.id)
+})
+
+test('Owner 26-Sep: the old separation still binds non-HR creators and the HR manager in his own exemption; the HR manager now decides the legacy pending request he created', async () => {
+  // مدير موارد بشرية بلا صلاحية الاعتماد: إنشاؤه يبقى طلبًا معلقًا
+  const noApprove = await user([viewPerm, managePerm], branchA.id, { role: 'hr_manager' })
+  assert.deepEqual([(await create(await employee(), {}, noApprove)).status], ['PENDING'])
+  // استثناؤه هو لنفسه كموظف: معلق، ومنع المنشئ يسري عليه، ومستخدم آخر يعتمده
+  const selfEmployee = await employee()
+  const hrSelf = await user([viewPerm, managePerm, approvePerm], branchA.id, { role: 'hr_manager', employeeId: selfEmployee.id })
+  const own = await create(selfEmployee, {}, hrSelf)
+  assert.deepEqual([own.status, own.approvedByUserId], ['PENDING', null])
+  const denied = await request(hrSelf, 'POST', `${route(own.id)}/approve`, { reason: explanation })
+  assert.deepEqual([denied.status, denied.body.code], [403, 'EXEMPT-SOD-CREATOR'])
+  assert.equal((await request(hrSelf, 'GET', '/attendance-exemptions')).body.rows.find(item => item.id === own.id).actions.blockedBy, 'CREATOR')
+  assert.equal((await approve(own, approver)).status, 'APPROVED')
+  // منشئ بلا سلطة الموارد البشرية: كما كان
+  const plain = await create(await employee(), {}, creator)
+  assert.equal(plain.status, 'PENDING')
+  assert.equal((await request(creator, 'GET', '/attendance-exemptions')).body.rows.find(item => item.id === plain.id).actions.approve, false)
+  // طلب قديم أنشأه مدير الموارد البشرية قبل القرار وواقف: يقرّره هو دلوقتي
+  const hrManager = await user([viewPerm, managePerm, approvePerm], branchA.id, { role: 'hr_manager' })
+  const legacy = await legacyPending(await employee(), { createdByUserId: hrManager.id })
+  const listed = (await request(hrManager, 'GET', '/attendance-exemptions')).body.rows.find(item => item.id === legacy.id)
+  assert.deepEqual([listed.actions.approve, listed.actions.reject, listed.actions.blockedBy], [true, true, null])
+  const decided = await approve(legacy, hrManager)
+  assert.deepEqual([decided.status, decided.approvedByUserId, decided.createdByUserId], ['APPROVED', hrManager.id, hrManager.id])
 })

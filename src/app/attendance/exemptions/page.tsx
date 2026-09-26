@@ -1,7 +1,8 @@
 'use client'
 
 // شاشة استثناء الحضور (خطة المراجعة 24): طلب واعتماد ورفض وإلغاء وإنهاء، بسجل قرار كامل.
-// الإجراءات المعروضة لكل صف تأتي من الخادم (فصل المهام: منشئ الطلب لا يعتمده)، والخادم يعيد كل فحص عند التنفيذ.
+// الإجراءات المعروضة لكل صف تأتي من الخادم (فصل المهام: منشئ الطلب لا يعتمده — إلا مدير الموارد البشرية، وإنشاؤه لغيره
+// بيتعتمد لحظتها: قرار المالك 26 سبتمبر)، والخادم يعيد كل فحص عند التنفيذ.
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Ban, CalendarX, CheckCircle, History, Plus, RefreshCw, Search, ShieldCheck, X, XCircle } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
@@ -23,6 +24,7 @@ import {
   EXEMPTION_STATE_LABELS,
   emptyExemptionForm,
   exemptionCreateBody,
+  exemptionCreatedNotice,
   exemptionCreateFormError,
   exemptionErrorMessage,
   exemptionReasonError,
@@ -105,6 +107,12 @@ function ExemptionsContent() {
     return () => { cancelled = true }
   }, [canView, reload])
 
+  // «بانتظار موافقتي» بيفتح الشاشة على الطلبات المعلقة (?status=PENDING)
+  useEffect(() => {
+    const status = new URLSearchParams(window.location.search).get('status')
+    if (status && STATUS_FILTERS.some(option => option.value === status)) setFilter(status as StatusFilter)
+  }, [])
+
   useEffect(() => {
     if (!createOpen || employees.length) return
     let cancelled = false
@@ -125,6 +133,8 @@ function ExemptionsContent() {
     active: rangeRows.filter(row => row.state === 'ACTIVE').length,
     scheduled: rangeRows.filter(row => row.state === 'SCHEDULED').length,
   }), [rangeRows])
+  // المعلق خارج الفترة المختارة بيتقال بدل ما يختفي بصمت (عدد «بانتظار موافقتي» بيعدّ كل المعلق)
+  const pendingOutsideRange = filter === 'PENDING' ? rows.filter(row => matchesFilter(row.state, 'PENDING') && !rangeRows.includes(row)).length : 0
   const term = search.trim().toLowerCase()
   const visible = rangeRows.filter(row => matchesFilter(row.state, filter) && (!term ||
     `${row.employee?.fullName ?? ''} ${row.employee?.employeeCode ?? ''} #${row.id}`.toLowerCase().includes(term)))
@@ -149,7 +159,8 @@ function ExemptionsContent() {
     try {
       const created = await createAttendanceExemption(exemptionCreateBody(form))
       setCreateOpen(false)
-      setNotice(`أُنشئ طلب الاستثناء #${created.id} وهو بانتظار قرار مستخدم آخر غير منشئه.`)
+      // مدير الموارد البشرية بصلاحية الاعتماد: الخادم بيرجّعه معتمدًا لحظتها (قرار المالك 26 سبتمبر)
+      setNotice(exemptionCreatedNotice(created))
       setReload(value => value + 1)
     } catch (cause) {
       setFormError(exemptionErrorMessage(cause))
@@ -240,6 +251,7 @@ function ExemptionsContent() {
 
       <section className="card space-y-2 text-sm text-gray-600" aria-label="مسار استثناء الحضور">
         <p><strong className="text-gray-800">المسار:</strong> طلب ← اعتماد الموارد البشرية من مستخدم غير منشئ الطلب ← للمناصب القيادية اعتماد تنفيذي من مستخدم آخر ← نافذة سارية بتاريخ ← إنهاء بتاريخ عند الحاجة.</p>
+        <p>ما ينشئه مدير الموارد البشرية لموظف غيره يُعتمد لحظة إنشائه باسمه (قراره نهائي)، والقيادي منه ينتظر الاعتماد التنفيذي وحده ما لم يحمل صلاحيته.</p>
         <p>الموظف المستثنى بلا خصومات حضور وبلا عمل إضافي. والاستثناء لا يرفع خصومات الجودة أو الالتزام أو أقساط السلف؛ رفعها يكون بالإعفاء المالي.</p>
         {data && <p className="text-xs text-gray-500">يبدأ الطلب الجديد من بداية فترة الرواتب السابقة ({data.earliestStart ?? data.currentPeriodStart}) أو بعدها، ولا يغيّر الاستثناء فترة في مسير معتمد أو مصروف.</p>}
       </section>
@@ -286,6 +298,7 @@ function ExemptionsContent() {
           <div role="alert" className="text-sm text-danger-600 flex items-center gap-2"><AlertTriangle size={16} />{error}</div>
         )}
         {data?.truncated && <p className="text-xs text-warning-600">تُعرض أحدث {data.limit} طلب فقط؛ استخدم البحث لتضييق النتائج.</p>}
+        {pendingOutsideRange > 0 && <p className="text-xs text-warning-600">{pendingOutsideRange} طلب آخر بانتظار القرار مدته خارج الفترة المختارة — وسّع الفترة لعرضه.</p>}
         <div className="overflow-x-auto">
           <table className="w-full min-w-[960px]">
             <thead>
@@ -380,7 +393,7 @@ function ExemptionsContent() {
                   <option value="">اختر التصنيف</option>
                   {(Object.keys(EXEMPTION_REASON_LABELS) as ExemptionReasonCode[]).map(code => <option key={code} value={code}>{EXEMPTION_REASON_LABELS[code]}</option>)}
                 </select>
-                {form.reasonCode === 'executive' && <p className="text-xs text-warning-600 mt-1">الاستثناء القيادي يمر بثلاثة أشخاص مختلفين: من يقدّمه، ومن يعتمده في الموارد البشرية، ومن يعتمده تنفيذيًا. اختر تصنيفًا آخر إن لم يتوفر ثلاثة مستخدمين.</p>}
+                {form.reasonCode === 'executive' && <p className="text-xs text-warning-600 mt-1">الاستثناء القيادي يمر بثلاثة أشخاص مختلفين: من يقدّمه، ومن يعتمده في الموارد البشرية، ومن يعتمده تنفيذيًا. اختر تصنيفًا آخر إن لم يتوفر ثلاثة مستخدمين. (ما ينشئه مدير الموارد البشرية تُعتمد خطوة الموارد البشرية فيه فورًا.)</p>}
               </div>
               <div className="sm:col-span-2">
                 <label htmlFor="exemption-reason" className="label">السبب الموثق</label>

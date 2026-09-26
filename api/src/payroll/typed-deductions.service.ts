@@ -18,6 +18,7 @@ import { Team } from '../org/entities/team.entity'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import { RequestType } from '../requests/entities/request-type.entity'
 import { audienceNeedsEmployee, audienceSubjectOf, parseRequestAudience, requestAudienceAllows, requestTypeInBranch } from '../requests/request-audience'
+import { hasHrOverride } from '../requests/approver-resolver.service'
 import { orgPositionsOf } from '../requests/request-audience-positions'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { PayrollDecimal } from './payroll-decimal'
@@ -627,7 +628,9 @@ export class TypedDeductionsService {
       await lockPayrollEmployees(em, [employee.id])
       const evaluation = await this.evaluate(em, user, ctx, employee)
       if (!evaluation.ok) throw this.exception(evaluation)
-      return (await this.persist(em, user, ctx, evaluation, null)).id
+      const saved = await this.persist(em, user, ctx, evaluation, null)
+      if (hasHrOverride(user)) await this.approveInstantly(em, user, saved, ctx, evaluation)
+      return saved.id
     })
     return this.detail(user, id)
   }
@@ -711,10 +714,13 @@ export class TypedDeductionsService {
       const batch = await batchRepo.save(batchRepo.create({ deductionTypeId: ctx.type.id, selectionMode: response.selection.mode, selection: JSON.stringify(response.selection),
         targetPeriod: ctx.input.targetPeriod, previewHash: response.previewHash, candidateCount: response.totals.candidates, createdCount: evaluations.length,
         skippedCount: response.totals.candidates - evaluations.length, result: '{}', createdByUserId: user.sub }))
-      const created: Array<{ employeeId: number; requestId: number; amount: string }> = []
+      const created: Array<{ employeeId: number; requestId: number; amount: string; status: string }> = []
+      // قرار المالك 26 سبتمبر: دفعة الموارد البشرية بتتعتمد كلها لحظة إرسالها (نفس الإنشاء الفردي)
+      const instant = hasHrOverride(user)
       for (const evaluation of evaluations) {
         const saved = await this.persist(em, user, ctx, evaluation, batch.id)
-        created.push({ employeeId: evaluation.employee.id, requestId: saved.id, amount: evaluation.amount })
+        if (instant) await this.approveInstantly(em, user, saved, ctx, evaluation)
+        created.push({ employeeId: evaluation.employee.id, requestId: saved.id, amount: evaluation.amount, status: saved.status })
       }
       const skipped = response.rows.filter(row => row.status !== 'READY').map(row => ({ employeeId: row.employeeId, fullName: row.fullName, status: row.status, message: row.message }))
       // سجل تدقيق داخلي فقط (لا يُعاد في أي رد): عدد من في الوحدة خارج نطاق المُنشئ
@@ -732,7 +738,9 @@ export class TypedDeductionsService {
   private privileged(user: JwtPayload) { return [VIEW, APPROVE, MANAGE].some(perm => userHasPerm(user, perm)) }
 
   private actorProblem(user: JwtPayload, row: DeductionRequest, step: DeductionChainStep, employee: Pick<Employee, 'branchId'> | undefined | null): string | null {
-    if (user.sub === row.creatorUserId) return 'لا يعتمد المُنشئ خصمه'
+    // المُنشئ لا يعتمد خصمه — إلا صاحب سلطة الموارد البشرية: قراره نهائي (قرار المالك 26 سبتمبر)، وإنشاؤه بيتعتمد لحظتها
+    // أصلًا؛ ده بيخص خصومات قديمة أنشأها قبل القرار وواقفة في سلسلتها. الموظف نفسه ممنوع دايمًا
+    if (user.sub === row.creatorUserId && !hasHrOverride(user)) return 'لا يعتمد المُنشئ خصمه'
     if (user.employeeId && user.employeeId === row.employeeId) return 'لا يعتمد الموظف خصمًا عليه'
     if ((DEDUCTION_STRUCTURAL_ROLES as readonly string[]).includes(step.role)) {
       return user.role === 'super_admin' || (step.approverEmployeeId !== null && user.employeeId === step.approverEmployeeId) ? null : `الخطوة الحالية بانتظار ${DEDUCTION_LABELS.roles[step.role]}`
@@ -1042,36 +1050,59 @@ export class TypedDeductionsService {
         // المبلغ المعدل عملة: يُقسّط بالمبلغ لا بالوحدات
         parts = splitDeductionInstallments(amount, row.installments).map((value, index) => ({ period: addPayrollMonths(row.targetPeriod, index), amount: value }))
       }
-      step.status = 'APPROVED'; step.actedByUserId = user.sub; step.actedAt = new Date().toISOString(); step.reason = reason
-      const traces = json<Record<string, any>>(row.amountTrace, {})
-      traces.approvals = [...(Array.isArray(traces.approvals) ? traces.approvals : []), { stepOrder: step.order, amount, trace, installments: parts }]
-      row.amountTrace = JSON.stringify(traces)
-      await this.event(em, row.id, 'STEP_APPROVED', user.sub, 'IN_APPROVAL', 'IN_APPROVAL', step.order, reason, { role: step.role, amount, adjustedFrom: step.adjustedFrom })
-      if (!currentDeductionStep(steps)) {
-        // DD-06 قاعدة 5 + DD-10: القيد المستحق بأقساطه لفترات متتالية بدءًا من الشهر المستهدف
-        const repo = em.getRepository(EmployeeObligation)
-        const obligationIds: number[] = []
-        for (let index = 0; index < parts.length; index++) {
-          const part = parts[index]
-          const unitNote = part.units && part.rate ? ` [${part.units} ${rules.calcMethod === 'DAYS_OF_SALARY' ? 'يوم' : 'ساعة'} × ${money(part.rate)}]` : ''
-          const label = `${rules.nameAr}${parts.length > 1 ? ` (قسط ${index + 1}/${parts.length})` : ''}${unitNote}: ${row.reason}`
-          const saved = await repo.save(repo.create({ employeeId: row.employeeId, type: 'DEBIT', category: TYPED_DEDUCTION_OBLIGATION_CATEGORY,
-            amount: Number(part.amount), label: label.slice(0, 300), status: 'PENDING',
-            effectiveDate: salaryPayrollPeriodBounds(part.period, settings.cycleStartDay).startDate, sourceRef: `deduction:${row.id}`,
-            createdByUserId: row.creatorUserId, deductionRequestId: row.id, targetPeriod: part.period }))
-          obligationIds.push(saved.id)
-        }
-        const closedRunId = await this.closedRun(em, row.employeeId, row.targetPeriod)
-        row.status = 'APPROVED'; row.finalAmount = amount; row.obligationIds = JSON.stringify(obligationIds)
-        row.decidedByUserId = user.sub; row.decidedAt = new Date()
-        await this.event(em, row.id, 'APPROVED', user.sub, 'IN_APPROVAL', 'APPROVED', step.order, reason,
-          { amount, obligationIds, parts, ...(closedRunId ? { deferredPastClosedRunId: closedRunId } : {}) })
-      }
+      await this.approveStep(em, user, row, steps, step, { amount, trace, parts }, rules, settings, reason)
       row.steps = JSON.stringify(steps); row.revision += 1; row.updatedAt = new Date()
       await em.getRepository(DeductionRequest).save(row)
       return null
     })
     return { ...(await this.detail(user, id)), notice }
+  }
+
+  // اعتماد خطوة واحدة بالمبلغ المسعّر، وعند آخر خطوة: قيود الدفتر بأقساطها والحالة «معتمد» — دالة واحدة للاعتماد
+  // اليدوي (approve) والفوري (approveInstantly)، فالخصم اللي بتعتمده الموارد البشرية لحظة إنشائه بيخلص بنفس أثر اعتماده خطوة بخطوة
+  private async approveStep(em: EntityManager, user: JwtPayload, row: DeductionRequest, steps: DeductionChainStep[], step: DeductionChainStep,
+    priced: { amount: string; trace: DeductionAmountTrace; parts: Part[] }, rules: DeductionTypeRules, settings: Settings, reason: string | null, instant = false) {
+    const { amount, trace, parts } = priced
+    step.status = 'APPROVED'; step.actedByUserId = user.sub; step.actedAt = new Date().toISOString(); step.reason = reason
+    const traces = json<Record<string, any>>(row.amountTrace, {})
+    traces.approvals = [...(Array.isArray(traces.approvals) ? traces.approvals : []), { stepOrder: step.order, amount, trace, installments: parts }]
+    row.amountTrace = JSON.stringify(traces)
+    await this.event(em, row.id, 'STEP_APPROVED', user.sub, 'IN_APPROVAL', 'IN_APPROVAL', step.order, reason,
+      { role: step.role, amount, adjustedFrom: step.adjustedFrom, ...(instant ? { instant: true } : {}) })
+    if (!currentDeductionStep(steps)) {
+      // DD-06 قاعدة 5 + DD-10: القيد المستحق بأقساطه لفترات متتالية بدءًا من الشهر المستهدف
+      const repo = em.getRepository(EmployeeObligation)
+      const obligationIds: number[] = []
+      for (let index = 0; index < parts.length; index++) {
+        const part = parts[index]
+        const unitNote = part.units && part.rate ? ` [${part.units} ${rules.calcMethod === 'DAYS_OF_SALARY' ? 'يوم' : 'ساعة'} × ${money(part.rate)}]` : ''
+        const label = `${rules.nameAr}${parts.length > 1 ? ` (قسط ${index + 1}/${parts.length})` : ''}${unitNote}: ${row.reason}`
+        const saved = await repo.save(repo.create({ employeeId: row.employeeId, type: 'DEBIT', category: TYPED_DEDUCTION_OBLIGATION_CATEGORY,
+          amount: Number(part.amount), label: label.slice(0, 300), status: 'PENDING',
+          effectiveDate: salaryPayrollPeriodBounds(part.period, settings.cycleStartDay).startDate, sourceRef: `deduction:${row.id}`,
+          createdByUserId: row.creatorUserId, deductionRequestId: row.id, targetPeriod: part.period }))
+        obligationIds.push(saved.id)
+      }
+      const closedRunId = await this.closedRun(em, row.employeeId, row.targetPeriod)
+      row.status = 'APPROVED'; row.finalAmount = amount; row.obligationIds = JSON.stringify(obligationIds)
+      row.decidedByUserId = user.sub; row.decidedAt = new Date()
+      await this.event(em, row.id, 'APPROVED', user.sub, 'IN_APPROVAL', 'APPROVED', step.order, reason,
+        { amount, obligationIds, parts, ...(closedRunId ? { deferredPastClosedRunId: closedRunId } : {}), ...(instant ? { instant: true } : {}) })
+    }
+  }
+
+  // قرار المالك 26 سبتمبر: صاحب سلطة الموارد البشرية قراره نهائي — الخصم اللي بينشئه (فردي أو ضمن مجموعة) بيتعتمد
+  // لحظة إنشائه: كل خطوة معلقة في السلسلة الملتقطة (المدير الهيكلي والتصعيد والموارد البشرية) باسمه وبالمبلغ المسعّر
+  // عند الإنشاء، وآخر خطوة بتكتب قيود الدفتر — الحالة النهائية هي نفسها بعد اعتماد يدوي كامل. المُنشئ من غيرهم: كما كان
+  private async approveInstantly(em: EntityManager, user: JwtPayload, row: DeductionRequest, ctx: EvaluationContext, evaluation: ReadyEvaluation) {
+    const steps = parseDeductionSteps(row.steps)
+    for (let step = currentDeductionStep(steps); step; step = currentDeductionStep(steps)) {
+      await this.approveStep(em, user, row, steps, step, { amount: evaluation.amount, trace: evaluation.trace, parts: evaluation.parts }, ctx.rules, ctx.settings,
+        'اعتماد فوري — مدير الموارد البشرية', true)
+      row.revision += 1
+    }
+    row.steps = JSON.stringify(steps); row.updatedAt = new Date()
+    await em.getRepository(DeductionRequest).save(row)
   }
 
   async reject(user: JwtPayload, id: number, dto: DeductionDecisionDto) {

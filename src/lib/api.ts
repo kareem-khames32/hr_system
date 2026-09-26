@@ -387,7 +387,23 @@ export interface ApiRequest {
   confidentialMasked?: boolean
   overtimeReviewRequired?: boolean
   overtime?: ApiOvertimeRequestDetail | null
+  // تفاصيل الطلب (GET /requests/:id): بطاقة صاحب الطلب، ومن قدّمه نيابةً عنه — null لو قدّمه بنفسه
+  // أو كان الطلب سرّيًا محجوبًا عن السائل
+  requester?: ApiRequestRequester | null
+  submittedBy?: ApiRequestSubmittedBy | null
 }
+// صاحب الطلب كما في ملفه الحالي: الاسم والكود والمسمى وتنظيمه ومديره المباشر (نفس حل المدير المباشر في سلسلة الاعتماد)
+export interface ApiRequestRequester {
+  employeeId: number
+  fullName: string
+  employeeCode: string | null
+  jobTitle: string | null
+  departmentName: string | null
+  branchName: string | null
+  teamName: string | null
+  directManagerName: string | null
+}
+export interface ApiRequestSubmittedBy { displayName: string | null }
 export type ApiOvertimeEvidence = OvertimeEvidence
 export interface ApiOvertimePreview extends OvertimeEvidence {
   canSubmit: boolean

@@ -459,7 +459,11 @@ function DeductionCreator({ creatable, currency, onCreated }: { creatable: Deduc
     if (!fresh.totals.ready) { setError('لا يوجد موظف جاهز للإرسال؛ راجع الأسباب بالجدول.'); setBusy(false); return }
     try {
       const created = await submitDeductionBatch(input, selection, fresh.previewHash)
-      setResult(`أُرسل ${created.created.length} خصمًا للاعتماد (دفعة #${created.batchId})${created.skipped.length ? `، وتُخطّي ${created.skipped.length} بسبب ظاهر في المعاينة` : ''}.`)
+      // مدير الموارد البشرية قراره نهائي: دفعته بتتعتمد لحظة الإرسال، فالرسالة تقول كده بدل «أُرسل للاعتماد»
+      const skippedNote = created.skipped.length ? `، وتُخطّي ${created.skipped.length} بسبب ظاهر في المعاينة` : ''
+      setResult(created.created.length && created.created.every(row => row.status === 'APPROVED')
+        ? `أُنشئ ${created.created.length} خصمًا واعتُمد فورًا (دفعة #${created.batchId}) — قرار مدير الموارد البشرية نهائي${skippedNote}.`
+        : `أُرسل ${created.created.length} خصمًا للاعتماد (دفعة #${created.batchId})${skippedNote}.`)
       setPreview(null); setSelected(new Set()); setExcluded(new Set()); setForm(value => ({ ...value, reason: '', confirmNotDuplicate: false }))
       onCreated()
     } catch (err) {

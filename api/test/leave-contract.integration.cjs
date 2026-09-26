@@ -265,7 +265,7 @@ test('C1 HR acts on any stuck step, but its inbox only gains the truly stuck one
   assert.equal(confidential.body.find(row => row.id === legacyB.id).confidentialMasked, true)
 })
 
-test('C1 the HR override pushes other people work only: no one approves his own request, and money keeps its cycle', async () => {
+test('C1 + owner 26-Sep: HR own request keeps its chain; money HR files on behalf is approved at once; a creator without HR authority keeps the cycle and cannot approve his own', async () => {
   // طلب الموارد البشرية لنفسها: لا اعتماد فوري ولا اعتماد ذاتي بمخرج الموارد البشرية
   const own = await request(hrAgent, 'POST', '/requests', { typeCode: 'HR_SELF_NOTE', submit: true, payload: { reason: 'طلب شخصي' } })
   assert.equal(own.status, 201, JSON.stringify(own.body))
@@ -274,15 +274,69 @@ test('C1 the HR override pushes other people work only: no one approves his own 
   assert.equal(self.status, 403, JSON.stringify(self.body))
   assert.ok(!(await request(hrAgent, 'GET', '/requests/inbox')).body.some(row => row.id === own.body.id), 'ولا يظهر في صندوقه')
   assert.equal((await request(admin, 'POST', `/requests/${own.body.id}/act`, { action: 'APPROVE' })).status, 201, 'شخص ثانٍ يعتمده')
-  // المال (وكذلك ما يغيّر العقد) لا يُعتمد بنداء التقديم نفسه ولا بمن قدّمه نيابةً
+  // قرار المالك: المال (وما يغيّر العقد) اللي تقدّمه الموارد البشرية نيابةً بيتعتمد وينفَّذ بنداء التقديم نفسه
   const money = await request(hrAgent, 'POST', '/requests', { typeCode: 'MONEY_NOTE', submit: true, onBehalfEmployeeId: bob.employeeId,
     payload: { reason: 'مبلغ للموظف' } })
   assert.equal(money.status, 201, JSON.stringify(money.body))
-  assert.equal(money.body.status, 'UNDER_REVIEW', 'الطلب المالي يبقى بدورته')
-  assert.equal(await repos.RequestApproval.countBy({ requestId: money.body.id }), 0, 'بلا صفوف اعتماد فوري')
-  assert.equal((await request(hrAgent, 'POST', `/requests/${money.body.id}/act`, { action: 'APPROVE' })).status, 403,
+  assert.equal(money.body.status, 'COMPLETED', 'الطلب المالي نيابةً يُعتمد فوراً')
+  const audit = await repos.RequestApproval.findBy({ requestId: money.body.id })
+  assert.equal(audit.length, JSON.parse(money.body.resolvedSteps).length)
+  assert.ok(audit.every(row => row.approverId === hrAgent.id && row.action === 'APPROVED' && /اعتماد فوري/.test(row.comment)))
+  // منشئ نيابةً بلا سلطة الموارد البشرية (زي مسؤول الرواتب): الطلب في دورته، ولا يعتمده بنفسه
+  const desk = await repos.User.save({ email: 'desk@test.invalid', displayName: 'Payroll desk', role: 'employee', branchId: branch.id,
+    permissions: '["requests.create_on_behalf","requests.view_all"]', passwordHash: 'unused' })
+  const byDesk = await request(desk, 'POST', '/requests', { typeCode: 'MONEY_NOTE', submit: true, onBehalfEmployeeId: bob.employeeId, payload: { reason: 'مبلغ من مسؤول الرواتب' } })
+  assert.equal(byDesk.status, 201, JSON.stringify(byDesk.body))
+  assert.equal(byDesk.body.status, 'UNDER_REVIEW', 'منشئ بلا سلطة الموارد البشرية: الطلب بدورته')
+  assert.equal(await repos.RequestApproval.countBy({ requestId: byDesk.body.id }), 0, 'بلا صفوف اعتماد فوري')
+  assert.equal((await request(desk, 'POST', `/requests/${byDesk.body.id}/act`, { action: 'APPROVE' })).status, 403,
     'ومن أنشأه نيابةً لا يعتمده بنفسه — يلزمه شخص ثانٍ')
-  assert.equal((await request(admin, 'POST', `/requests/${money.body.id}/act`, { action: 'APPROVE' })).status, 201)
+  assert.equal((await request(admin, 'POST', `/requests/${byDesk.body.id}/act`, { action: 'APPROVE' })).status, 201)
+})
+
+test('Owner 26-Sep: a legacy request HR filed on behalf before the decision and still pending is now decided by HR himself', async () => {
+  // قبل القرار كان الطلب المالي نيابةً يمشي في دورته ومنشئه ممنوع منه؛ الواقف منه بيتقرر دلوقتي بسلطة الموارد البشرية
+  const legacy = await repos.Request.save({ typeCode: 'MONEY_NOTE', requesterId: bob.employeeId, createdByUserId: hrAgent.id, branchId: branch.id,
+    status: 'UNDER_REVIEW', currentStep: 1, submittedAt: new Date(), payload: JSON.stringify({ reason: 'طلب مالي قديم نيابةً' }),
+    resolvedSteps: JSON.stringify([{ stepOrder: 1, role: 'executive', approverEmployeeId: null, slaDays: null, escalateTo: null, dueAt: null, actedAt: null, action: null }]) })
+  const acted = await request(hrAgent, 'POST', `/requests/${legacy.id}/act`, { action: 'APPROVE', comment: 'قرار الموارد البشرية' })
+  assert.equal(acted.status, 201, JSON.stringify(acted.body))
+  assert.equal(acted.body.status, 'COMPLETED')
+  const [decision] = await repos.RequestApproval.findBy({ requestId: legacy.id })
+  assert.deepEqual([decision.approverId, decision.action], [hrAgent.id, 'APPROVED'])
+})
+
+test('Request details carry the employee card: the approver sees identity and organization, on-behalf rows name the submitter, and a confidential non-party gets none', async () => {
+  const department = await ds.getRepository(require('../src/org/entities/department.entity').Department).save({ name: 'قسم الحسابات', branchId: branch.id })
+  const team = await ds.getRepository(require('../src/org/entities/team.entity').Team).save({ name: 'فريق التحصيل', departmentId: department.id })
+  await repos.Employee.update(bob.employeeId, { departmentId: department.id, teamId: team.id, jobTitle: 'محاسب', managerEmployeeId: alice.employeeId })
+  // صاحب الخطوة المسمّى (alice) يفتح طلب bob اللي قدّمه بنفسه: البطاقة كاملة وبلا «قدّمه نيابةً»
+  const live = await request(bob, 'POST', '/requests', { typeCode: 'LIVE_NOTE', submit: true, payload: { reason: 'طلب لبطاقة الموظف' } })
+  assert.equal(live.status, 201, JSON.stringify(live.body))
+  const seen = await request(alice, 'GET', `/requests/${live.body.id}`)
+  assert.equal(seen.status, 200, JSON.stringify(seen.body))
+  assert.deepEqual(seen.body.requester, { employeeId: bob.employeeId, fullName: 'BOB', employeeCode: 'BOB', jobTitle: 'محاسب', departmentName: 'قسم الحسابات',
+    branchName: 'Leave A', teamName: 'فريق التحصيل', directManagerName: 'ALICE' })
+  assert.equal(seen.body.submittedBy, null)
+  // نيابةً: البطاقة لصاحب الطلب، و«قدّمه نيابةً» باسم حساب المنشئ — لصاحب الطلب وللمنشئ نفسه
+  const filed = await request(hrAgent, 'POST', '/requests', { typeCode: 'LIVE_NOTE', submit: true, onBehalfEmployeeId: bob.employeeId, payload: { reason: 'نيابة لبطاقة الموظف' } })
+  assert.equal(filed.status, 201, JSON.stringify(filed.body))
+  for (const viewer of [hrAgent, bob]) {
+    const detail = await request(viewer, 'GET', `/requests/${filed.body.id}`)
+    assert.equal(detail.status, 200, JSON.stringify(detail.body))
+    assert.equal(detail.body.requester.fullName, 'BOB')
+    assert.deepEqual(detail.body.submittedBy, { displayName: 'HR Agent' })
+  }
+  // السرّي لغير أطرافه (requests.view_all وحدها): لا هوية ولا منشئ
+  const secret = await request(hrAgent, 'POST', '/requests', { typeCode: 'LEAVE_UNPAID', submit: true, onBehalfEmployeeId: bob.employeeId,
+    payload: { fromDate: '2027-02-15', toDate: '2027-02-16', days: 2, unpaidReason: 'نيابة على نوع سرّي للبطاقة' } })
+  assert.equal(secret.status, 201, JSON.stringify(secret.body))
+  const masked = await request(hr, 'GET', `/requests/${secret.body.id}`)
+  assert.equal(masked.status, 200, JSON.stringify(masked.body))
+  assert.deepEqual([masked.body.confidentialMasked, masked.body.requester, masked.body.submittedBy, masked.body.requesterId, masked.body.payload], [true, null, null, null, null])
+  // وأطرافه يرونها: المنشئ وصاحب الطلب
+  assert.equal((await request(hrAgent, 'GET', `/requests/${secret.body.id}`)).body.requester.fullName, 'BOB')
+  assert.equal((await request(bob, 'GET', `/requests/${secret.body.id}`)).body.submittedBy.displayName, 'HR Agent')
 })
 
 test('«طلباتي» shows the rows filed on behalf to their creator, and a confidential type stays with its parties', async () => {

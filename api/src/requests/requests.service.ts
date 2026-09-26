@@ -29,6 +29,9 @@ import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { User } from '../auth/user.entity'
+import { Branch } from '../org/entities/branch.entity'
+import { Department } from '../org/entities/department.entity'
+import { Team } from '../org/entities/team.entity'
 import { StoredFile } from '../files/stored-file.entity'
 import { PermissionType } from '../attendance/attendance.entities'
 import {
@@ -932,36 +935,18 @@ export class RequestsService {
     req.resolvedSteps = JSON.stringify(resolved)
     req.submittedAt = new Date()
 
-    // C1 — طلب تقدّمه الموارد البشرية نيابة عن موظف: يُعتمد فوراً وتُنفَّذ وجهته،
-    // وسجل التدقيق يحمل صفاً لكل خطوة محلولة باسم الفاعل وسببه. بلا مسار تنفيذ
-    // ثانٍ: نفس executeDestinationLocked ونفس جدول الاعتمادات.
-    // الإضافي مستثنى: اعتماده يحمل دقائق ومبلغاً يُراجَعان في خطوة صريحة، وهو
-    // أصلاً ممنوع من التنفيذ بلا معتمدين — الموارد البشرية تعتمده من صندوقها
+    // C1 + قرار المالك 26 سبتمبر («مدير الموارد البشرية قراره نهائي»): طلب يقدّمه صاحب سلطة الموارد
+    // البشرية نيابةً عن موظف آخر يُعتمد فوراً وتُنفَّذ وجهته — كل الأنواع، بما فيها الإضافي والمال وما يغيّر
+    // العقد (كانت مستثناة وبتمشي في دورتها). بلا مسار تنفيذ ثانٍ: نفس executeDestinationLocked ونفس جدول
+    // الاعتمادات، وأي أثر بيكتبه الاعتماد اليدوي خطوة بخطوة بيتكتب هنا بنفس دواله (approveInstantlyOnBehalf).
+    // طلب الموارد البشرية لنفسها كموظف يفضل يمشي في سلسلته
     if (
       resolved.length > 0 &&
-      this.skipsCycleOnBehalf(type) &&
       userHasPerm(user, 'requests.create_on_behalf') &&
       this.resolver.hasHrOverride(user) &&
       !(await this.actorIsRequester(em, user, req))
     ) {
-      const actedAt = new Date().toISOString()
-      for (const step of resolved) {
-        await em.getRepository(RequestApproval).save({
-          requestId: req.id,
-          step: step.stepOrder,
-          approverId: user.sub,
-          action: 'APPROVED',
-          comment: 'اعتماد فوري — قدّمته الموارد البشرية نيابة عن الموظف',
-        })
-        step.actedAt = actedAt
-        step.action = 'APPROVED'
-      }
-      req.resolvedSteps = JSON.stringify(resolved)
-      req.status = 'APPROVED'
-      req.currentStep = null as unknown as number
-      if (isSalaryChangeType(type)) (em.queryRunner!.data.salaryRequestAutoActors ??= new Map<number, number>()).set(req.id, user.sub)
-      await em.getRepository(Request).save(req)
-      return this.executeDestinationLocked(em, req)
+      return this.approveInstantlyOnBehalf(em, req, type, resolved, user)
     }
 
     if (resolved.length === 0) {
@@ -1233,10 +1218,9 @@ export class RequestsService {
       if (group.length === 0) throw new BadRequestException('لا توجد خطوة حالية')
 
       // عضو المجموعة الذي لم يتصرف بعد ويطابق المستخدم.
-      // مخرج الموارد البشرية (C1) لدفع شغل الآخرين وحده: لا يعتمد به أحد طلبه
-      // هو، ولا طلباً أنشأه بنفسه نيابةً — فالمال وتغيير العقد يلزمهما شخص ثانٍ.
-      const selfRequest =
-        req.requesterId === user.employeeId || req.createdByUserId === user.sub
+      // مخرج الموارد البشرية (C1) لدفع شغل الآخرين: لا يعتمد به أحد طلبه هو. ومنشئ الطلب نيابةً
+      // ممنوع من التصرف فيه إلا لو صاحب سلطة الموارد البشرية — قراره نهائي (قرار المالك 26 سبتمبر)
+      const selfRequest = this.isOwnRequestFor(user, req)
       const hrUnblock = !selfRequest
       const mine = group.find(
         (s) => !s.actedAt && this.resolver.satisfies(user, s, { hrUnblock, selfRequest })
@@ -1263,7 +1247,8 @@ export class RequestsService {
         ? await em.getRepository(RequestType).findOne({ where: { code: definitionCodeOf(req) } }) : null
       if (dto.action === 'APPROVE' && isLoanCapRequestType(loanCapType)) {
         req.payload = (await reviewLoanRequestApproval(em, { requestId: req.id, requesterId: req.requesterId, payload: req.payload, actor: user,
-          step: mine.stepOrder, approvedAmount: dto.approvedAmount ?? null, capOverrideReason: dto.capOverrideReason ?? null, comment })).payload
+          step: mine.stepOrder, approvedAmount: dto.approvedAmount ?? null, capOverrideReason: dto.capOverrideReason ?? null, comment,
+          hrFinal: this.resolver.hasHrOverride(user) })).payload
       } else if (dto.approvedAmount != null || dto.capOverrideReason != null) {
         throw new BadRequestException('تخفيض المبلغ أو استثناء السقف متاح مع اعتماد طلب سلفة فقط')
       }
@@ -1956,8 +1941,7 @@ export class RequestsService {
       : new Set<number>()
     const pending = candidates.filter((req) => {
       const resolved = this.parseSteps(req.resolvedSteps)
-      const selfRequest =
-        req.requesterId === user.employeeId || req.createdByUserId === user.sub
+      const selfRequest = this.isOwnRequestFor(user, req)
       const hrUnblock = stuck.has(req.id) && !selfRequest
       // المجموعة الحالية: أي عضو لم يتصرف ويطابق المستخدم
       return resolved.some(
@@ -2005,9 +1989,11 @@ export class RequestsService {
     if (!party && !(inScope && userHasPerm(user, 'requests.view_all'))) {
       throw new ForbiddenException('لا تملك صلاحية عرض هذا الطلب')
     }
-    const full = { ...this.withCanonicalStepActions(req), approvals }
     const type = await this.types.findOne({ where: { code: definitionCodeOf(req) } })
-    if (!party && type?.isConfidential) return this.maskConfidential(full)
+    // السرّي لغير أطرافه: لا بطاقة موظف ولا منشئ — نفس حجب الهوية في القائمة
+    if (!party && type?.isConfidential) return { ...this.maskConfidential({ ...this.withCanonicalStepActions(req), approvals }), requester: null, submittedBy: null }
+    // بطاقة صاحب الطلب أعلى شاشات التفاصيل الثلاث (بانتظار موافقتي، طلباتي، لوحة الطلبات)
+    const full = { ...this.withCanonicalStepActions(req), approvals, ...(await this.requestPeople(req)) }
     if (!type || !this.isOvertimeDefinition(type)) return full
     const entries = await this.overtimeEntries.find({ where: { requestId: req.id, employeeId: req.requesterId } })
     const entry = entries.length === 1 ? entries[0] : null
@@ -2044,6 +2030,31 @@ export class RequestsService {
         stepOrder: event.stepOrder, reason: event.reason, createdAt: event.createdAt,
         beforeMinutes: event.payload?.beforeMinutes ?? null, approvedMinutes: event.payload?.approvedMinutes ?? null })),
     } }
+  }
+
+  // بطاقة صاحب الطلب: هويته وتنظيمه الحالي ومديره المباشر (نفس حل خطوة «المدير المباشر» في السلسلة)، ومين قدّمه
+  // نيابةً عنه لو المنشئ حساب غير حساب صاحب الطلب. بتتقرا بعد فحص حق الاطلاع، والسرّي المحجوب مابيوصلش هنا
+  private async requestPeople(req: Pick<Request, 'requesterId' | 'createdByUserId'>) {
+    const employee = await this.employees.findOne({ where: { id: req.requesterId },
+      select: { id: true, fullName: true, employeeCode: true, jobTitle: true, branchId: true, departmentId: true, teamId: true } })
+    let requester: { employeeId: number; fullName: string; employeeCode: string | null; jobTitle: string | null; departmentName: string | null
+      branchName: string | null; teamName: string | null; directManagerName: string | null } | null = null
+    if (employee) {
+      const [department, branch, team, managerId] = await Promise.all([
+        employee.departmentId ? this.ds.getRepository(Department).findOne({ where: { id: employee.departmentId }, select: { id: true, name: true } }) : null,
+        employee.branchId ? this.ds.getRepository(Branch).findOne({ where: { id: employee.branchId }, select: { id: true, name: true } }) : null,
+        employee.teamId ? this.ds.getRepository(Team).findOne({ where: { id: employee.teamId }, select: { id: true, name: true } }) : null,
+        this.resolver.directManagerOf(employee.id),
+      ])
+      const manager = managerId ? await this.employees.findOne({ where: { id: managerId }, select: { id: true, fullName: true } }) : null
+      requester = { employeeId: employee.id, fullName: employee.fullName, employeeCode: employee.employeeCode ?? null, jobTitle: employee.jobTitle ?? null,
+        departmentName: department?.name ?? null, branchName: branch?.name ?? null, teamName: team?.name ?? null, directManagerName: manager?.fullName ?? null }
+    }
+    const creator = req.createdByUserId
+      ? await this.ds.getRepository(User).findOne({ where: { id: req.createdByUserId }, select: { id: true, displayName: true, employeeId: true } })
+      : null
+    const submittedBy = creator && creator.employeeId !== req.requesterId ? { displayName: creator.displayName ?? null } : null
+    return { requester, submittedBy }
   }
 
   // الكشف يُوجّه للمراجعة فقط؛ لا يحوّل إعداد التنفيذ الفوري إلى اعتماد مالي.
@@ -2150,7 +2161,7 @@ export class RequestsService {
             s.stepOrder === act.step &&
             !s.actedAt &&
             this.resolver.satisfies(user, s, {
-              selfRequest: request.createdByUserId === user.sub,
+              selfRequest: this.isOwnRequestFor(user, request),
             })
         )
       ) {
@@ -2624,18 +2635,64 @@ export class RequestsService {
     return req
   }
 
-  // ما الذي يُعتمد فوراً حين تقدّمه الموارد البشرية نيابةً (C1)؟ كل شيء إلا ما
-  // يحتاج شخصاً ثانياً بطبيعته: الإضافي (دقائقه ومبلغه يُراجعان في خطوة صريحة)،
-  // والمال (سلفة/زيادة راتب/مصروفات…)، وما يغيّر العقد (نقل/ترقية/استقالة/إنهاء).
-  // هذه تبقى بدورتها، والموارد البشرية تدفعها من صندوقها بضغطة
-  private skipsCycleOnBehalf(type: RequestType): boolean {
-    return (
-      !this.isOvertimeDefinition(type) &&
-      !isSalaryChangeType(type) &&
-      !isLoanCapRequestType(type) &&
-      type.category !== 'financial' &&
-      type.category !== 'employment_status'
-    )
+  // الاعتماد الفوري لطلب قدّمته الموارد البشرية نيابةً (C1 وقرار المالك 26 سبتمبر) — جوه معاملة التقديم نفسها.
+  // صف تدقيق لكل خطوة محلولة باسم الفاعل، وكل أثر بيكتبه الاعتماد اليدوي خطوة بخطوة بيتكتب هنا بنفس الدوال:
+  // السلفة: فحص السقف ولقطته لكل خطوة (capApprovals — والتقديم رفض المتجاوز غير الاستثنائي أصلًا)؛ الإضافي:
+  // فحص أدلته وحدث كل خطوة ثم لقطته المالية؛ زيادة الأجر: مرجع المعتمد. الباقي (نقل/ترقية/عقد/استقالة/مصروفات/
+  // تأجيل قسط…) معالجه بيقرأ سجل الاعتمادات بس، فبينفذ هنا زي ما بينفذ بعد آخر معتمد — والمجدول يفضل مجدول
+  private async approveInstantlyOnBehalf(em: EntityManager, req: Request, type: RequestType, resolved: ResolvedStep[], user: JwtPayload) {
+    const comment = 'اعتماد فوري — قدّمته الموارد البشرية نيابة عن الموظف'
+    const actedAt = new Date().toISOString()
+    for (const step of resolved) {
+      if (isLoanCapRequestType(type)) {
+        req.payload = (await reviewLoanRequestApproval(em, { requestId: req.id, requesterId: req.requesterId, payload: req.payload, actor: user,
+          step: step.stepOrder, approvedAmount: null, capOverrideReason: null, comment, hrFinal: true })).payload
+      }
+      await em.getRepository(RequestApproval).save({
+        requestId: req.id,
+        step: step.stepOrder,
+        approverId: user.sub,
+        action: 'APPROVED',
+        comment,
+      })
+      step.actedAt = actedAt
+      step.action = 'APPROVED'
+    }
+    req.resolvedSteps = JSON.stringify(resolved)
+    req.status = 'APPROVED'
+    req.currentStep = null as unknown as number
+    if (this.isOvertimeDefinition(type)) await this.approveOvertimeInstantly(em, req, resolved, user, comment)
+    if (isSalaryChangeType(type)) (em.queryRunner!.data.salaryRequestAutoActors ??= new Map<number, number>()).set(req.id, user.sub)
+    await em.getRepository(Request).save(req)
+    return this.executeDestinationLocked(em, req)
+  }
+
+  // الإضافي بالاعتماد الفوري: نفس فحص كل خطوة في act() (أدلة التقديم وسلسلة المستثنى) وحدث STEP_APPROVED لكل خطوة،
+  // ثم نفس الاعتماد النهائي بلقطته المالية وتعليم أيام المسير. يوم لسه ماخلصش (الفترة المقفولة بتحسب الإضافي من
+  // بصمات اليوم وقت الاعتماد) أو بصمة ناقصة يمنعان الاعتماد الفوري زي ما بيمنعوا المعتمد الأخير — والتقديم كله بيرجع
+  private async approveOvertimeInstantly(em: EntityManager, req: Request, resolved: ResolvedStep[], user: JwtPayload, comment: string) {
+    try {
+      for (const step of resolved) {
+        await this.reviewOvertimeApproval(em, req, user, { action: 'APPROVE' })
+        // السجل بيتقرا بعد مراجعة الخطوة (زي act()) عشان دقائق الحدث تبقى اللي اتراجعت فعلًا
+        const entry = await this.overtimeEntryForRequest(em, req)
+        if (entry) await appendOvertimeEvent(em, { entryId: entry.id, requestId: req.id, actorUserId: user.sub, eventType: 'STEP_APPROVED',
+          stepOrder: step.stepOrder, reason: comment, payload: { role: step.role, approvedMinutes: entry.calculationSnapshot?.review?.approvedMinutes ?? null } })
+      }
+      await this.finalizeOvertimeApproval(em, req, user.sub)
+    } catch (e) {
+      if (e instanceof BadRequestException) {
+        throw new BadRequestException(`تعذّر اعتماد الإضافي فورًا (طلب الموارد البشرية نيابةً يُعتمد لحظة تقديمه): ${e.message}`)
+      }
+      throw e
+    }
+  }
+
+  // فصل المهام في التصرف: صاحب الطلب لا يتصرف فيه أبدًا (حتى الموارد البشرية — طلبها لنفسها يمشي في سلسلته)،
+  // ومنشئه نيابةً لا يتصرف فيه إلا صاحب سلطة الموارد البشرية: قراره نهائي (قرار المالك 26 سبتمبر)، وما ينشئه
+  // لغيره بيتعتمد لحظتها أصلًا — فده بيخص طلبات قديمة أنشأها قبل القرار وواقفة في سلسلتها
+  private isOwnRequestFor(user: JwtPayload, req: Pick<Request, 'requesterId' | 'createdByUserId'>): boolean {
+    return req.requesterId === user.employeeId || (req.createdByUserId === user.sub && !this.resolver.hasHrOverride(user))
   }
 
   // هل الفاعل هو صاحب الطلب نفسه؟ يُقرأ من سجل المستخدم لا من التوكن، لأن

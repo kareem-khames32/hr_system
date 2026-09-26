@@ -5,6 +5,7 @@ import { EntityManager, In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
+import { hasHrOverride } from '../requests/approver-resolver.service'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import type { ExemptionAttachmentDto, ExemptionDecisionDto, ExemptionInputDto, ExemptionListQueryDto, ExemptionReportQueryDto } from './financial-exemptions.dto'
@@ -298,8 +299,10 @@ export class FinancialExemptionsService {
     if (!estimate.lines.length) {
       bad('EXEMPTION_NOTHING_TO_EXEMPT', 'لا يوجد في آخر حساب لهذا المسير خصم يشمله هذا الإعفاء', { protectedItems: estimate.protectedItems })
     }
-    // EX-03 قاعدة 2: لا يعفي المستخدم خصمًا أنزله هو
-    const own = estimate.exemptedObligationIds.map(id => entries.debits.find(row => row.id === id)).find(row => row?.creatorUserId === user.sub)
+    // EX-03 قاعدة 2: لا يعفي المستخدم خصمًا أنزله هو — مدير القسم أو الجهة المالكة اللي أنزل خصمًا مايرجعش يعفيه بنفسه.
+    // قرار المالك 26 سبتمبر: صاحب سلطة الموارد البشرية قراره نهائي، فخصم أنزله (واعتُمد لحظتها) يعفيه هو كمان
+    const hrFinal = hasHrOverride(user)
+    const own = hrFinal ? undefined : estimate.exemptedObligationIds.map(id => entries.debits.find(row => row.id === id)).find(row => row?.creatorUserId === user.sub)
     if (own) forbidden('EXEMPTION_SOD_CREATOR', `لا تعفي خصمًا أنزلته أنت (القيد #${own.id})؛ يمنحه مانح آخر (فصل مهام)`, { obligationId: own.id })
     // EX-02 قاعدة 5/6: التداخل مع الإعفاءات الحية على الموظف في المسير نفسه
     const live = await this.exemptions.manager.getRepository(PayrollFinancialExemption).find({ where: { runId: run.id, employeeId: org.employeeId, status: In([...EXEMPTION_LIVE_STATUSES]) }, order: { id: 'ASC' } })
@@ -344,6 +347,11 @@ export class FinancialExemptionsService {
     const revoked = (await em.getRepository(PayrollFinancialExemption).find({ where: { runId: run.id, employeeId: org.employeeId, status: 'REVOKED', scopeKind: target.scopeKind } }))
       .filter(row => (row.targetKind ?? null) === target.targetKind && (row.deductionTypeId ?? null) === target.deductionTypeId && (row.targetRef ?? null) === target.targetRef)
     if (revoked.length) requireOverride('EXEMPTION_REEXEMPT_REQUIRES_OVERRIDE', 'reexempt_after_revoke', `أُلغي إعفاء سابق على الهدف نفسه (#${revoked[0].id}) وعاد الخصم`, { revokedExemptionId: revoked[0].id })
+    // EX-07: حد نسبة المانح (financial_exemptions.max_pct_per_grantor) = إجمالي ما أعفاه المانح نفسه في المسير (الحي والمطبّق +
+    // الجديد) كنسبة من كل خصومات المسير. تجاوزه بيحوّل حتى منح أساس «الموارد البشرية» لاعتماد موارد بشرية تانية — يعني قيد على
+    // المانح صاحب سلطة الموارد البشرية نفسه. قرار المالك 26 سبتمبر: قراره نهائي، فمنحه بيسري فورًا والتجاوز بيفضل تنبيهًا ظاهرًا
+    // في المعاينة وسجل الإعفاء بلا تحويل. غيره (أساس الموارد البشرية بلا سلطتها، ومدير القسم والجهة المالكة) يتحوّل كما كان
+    const hrFinalGrant = basis === 'HR' && hrFinal
     let routedByPct = false
     if (settings.maxPctPerGrantor > 0) {
       const [base] = await em.query(`SELECT COALESCE(SUM([latenessDeduction]+[shortfallDeduction]+[absenceDeduction]+[otherDeductions]+[loanInstallments]
@@ -352,8 +360,13 @@ export class FinancialExemptionsService {
         WHERE [runId]=@0 AND [grantedByUserId]=@1 AND [status] IN ('PENDING_APPROVAL','ACTIVE','APPLIED')`, [run.id, user.sub])
       const baseTotal = Number(base?.total ?? 0), grantorTotal = Number(mine?.total ?? 0) + Number(estimate.amount)
       if (baseTotal > 0 && (grantorTotal / baseTotal) * 100 > settings.maxPctPerGrantor) {
-        routedByPct = true
-        warnings.push({ code: 'EXEMPTION_GRANTOR_PCT_APPROVAL', message: `إعفاءاتك في هذا المسير ستبلغ ${((grantorTotal / baseTotal) * 100).toFixed(1)}% من خصوماته والحد ${settings.maxPctPerGrantor}%؛ يُحوّل الإعفاء لاعتماد الموارد البشرية` })
+        const pct = ((grantorTotal / baseTotal) * 100).toFixed(1)
+        if (hrFinalGrant) {
+          warnings.push({ code: 'EXEMPTION_GRANTOR_PCT_HR_FINAL', message: `إعفاءاتك في هذا المسير ستبلغ ${pct}% من خصوماته والحد ${settings.maxPctPerGrantor}%؛ قرار مدير الموارد البشرية نهائي فيسري الإعفاء فورًا بلا تحويل للاعتماد` })
+        } else {
+          routedByPct = true
+          warnings.push({ code: 'EXEMPTION_GRANTOR_PCT_APPROVAL', message: `إعفاءاتك في هذا المسير ستبلغ ${pct}% من خصوماته والحد ${settings.maxPctPerGrantor}%؛ يُحوّل الإعفاء لاعتماد الموارد البشرية` })
+        }
       }
     }
     const status: Evaluation['status'] = basis === 'HR' && !routedByPct ? 'ACTIVE' : 'PENDING_APPROVAL'
@@ -441,7 +454,10 @@ export class FinancialExemptionsService {
       if (row.status !== 'PENDING_APPROVAL') conflict('EXEMPTION_STATE', `لا يُعتمد إعفاء حالته «${EXEMPTION_LABELS.statuses[row.status as 'ACTIVE'] ?? row.status}»`)
       const run = await this.loadRun(em, row.runId)
       this.assertRunOpen(run)
-      if (row.grantedByUserId === user.sub) forbidden('EXEMPTION_SOD_GRANTOR', 'لا يعتمد المانح الإعفاء الذي منحه (فصل مهام)')
+      // فصل المهام: المانح لا يعتمد منحه — ده باقٍ لمدير القسم والجهة المالكة (منحهم دايمًا بانتظار الاعتماد)، ولمانح أساس
+      // «الموارد البشرية» من غير سلطتها لما حد النسبة يحوّله. صاحب سلطة الموارد البشرية قراره نهائي (قرار المالك 26 سبتمبر):
+      // منحه بيسري فورًا أصلًا، والمنع مابيسريش عليه في منح قديم واقف قبل القرار
+      if (row.grantedByUserId === user.sub && !hasHrOverride(user)) forbidden('EXEMPTION_SOD_GRANTOR', 'لا يعتمد المانح الإعفاء الذي منحه (فصل مهام)')
       if (user.employeeId && Number(user.employeeId) === row.employeeId) forbidden('EXEMPTION_SELF', 'لا يعتمد المستخدم إعفاءً على نفسه')
       await lockPayrollEmployees(em, [row.employeeId])
       // EX-07 قاعدة 1: الهدف والتداخل والحدود يُعاد فحصها عند الاعتماد على آخر حساب
@@ -472,6 +488,7 @@ export class FinancialExemptionsService {
       const row = await this.lockedRow(em, id, dto.expectedRevision)
       if (!this.inBranch(user, this.orgOfRow(row).branchId)) forbidden('EXEMPTION_FORBIDDEN', 'الإعفاء خارج نطاق فرعك')
       if (row.status !== 'PENDING_APPROVAL') conflict('EXEMPTION_STATE', `لا يُرفض إعفاء حالته «${EXEMPTION_LABELS.statuses[row.status as 'ACTIVE'] ?? row.status}»`)
+      // قاعدة مسار لا فصل مهام: المانح (أيًا كان، حتى صاحب سلطة الموارد البشرية) يلغي منحه بسبب بدل ما يرفضه
       if (row.grantedByUserId === user.sub) forbidden('EXEMPTION_SOD_GRANTOR', 'المانح يلغي إعفاءه بدل رفضه')
       const issue = exemptionReasonIssue(dto.reason, settings.reasonMinLength)
       if (issue) bad(issue.code, issue.message.replace('الإعفاء', 'الرفض'), { minLength: settings.reasonMinLength })
@@ -548,7 +565,9 @@ export class FinancialExemptionsService {
       const inBranch = this.inBranch(user, evaluation.org?.branchId ?? employee?.branchId ?? null)
       const live = EXEMPTION_LIVE_STATUSES.includes(row.status as never)
       const runOpen = run?.status === 'CALCULATED'
-      const decider = userHasPerm(user, APPROVE) && inBranch && row.grantedByUserId !== user.sub && Number(user.employeeId ?? 0) !== row.employeeId
+      const decider = userHasPerm(user, APPROVE) && inBranch && Number(user.employeeId ?? 0) !== row.employeeId
+      // نفس approve()/reject(): المانح لا يعتمد منحه إلا صاحب سلطة الموارد البشرية، ويلغيه بدل رفضه دايمًا
+      const ownGrant = row.grantedByUserId === user.sub
       return {
         id: row.id, runId: row.runId, runName: run?.name ?? null, runStatus: run?.status ?? null, runStatusLabel: run ? RUN_STATUS_LABELS[run.status] ?? run.status : null, period: row.period,
         employeeId: row.employeeId, employeeName: evaluation.org?.fullName ?? employee?.fullName ?? null, employeeCode: evaluation.org?.employeeCode ?? employee?.employeeCode ?? null,
@@ -562,7 +581,7 @@ export class FinancialExemptionsService {
         decidedByName: row.decidedByUserId ? users.get(row.decidedByUserId) ?? null : null, decidedAt: row.decidedAt, decisionReason: row.decisionReason,
         estimatedAmount: money(row.estimatedAmount), exemptedAmountSnapshot: money(row.exemptedAmountSnapshot), lines: row.status === 'APPLIED' ? parseJson(row.appliedLines, []) : evaluation.lines ?? [],
         warnings: evaluation.warnings ?? [], overrides: parseJson(row.overrides, []), supersededById: row.supersededById, revision: row.revision,
-        canApprove: row.status === 'PENDING_APPROVAL' && runOpen && decider, canReject: row.status === 'PENDING_APPROVAL' && decider,
+        canApprove: row.status === 'PENDING_APPROVAL' && runOpen && decider && (!ownGrant || hasHrOverride(user)), canReject: row.status === 'PENDING_APPROVAL' && decider && !ownGrant,
         canRevoke: live && runOpen && (row.grantedByUserId === user.sub || ((userHasPerm(user, GRANT) || userHasPerm(user, APPROVE)) && inBranch)),
         canAttach: [...EXEMPTION_LIVE_STATUSES, 'APPLIED'].includes(row.status as never) && (row.grantedByUserId === user.sub || (userHasPerm(user, GRANT) && inBranch)),
       }

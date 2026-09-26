@@ -4,6 +4,7 @@ import { EntityManager, In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
+import { hasHrOverride } from '../requests/approver-resolver.service'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
@@ -114,13 +115,21 @@ export class AttendanceExemptionsService {
       message: `يوجد طلب استثناء متداخل بانتظار القرار (#${pending.id}) لهذا الموظف؛ اعتمده أو ارفضه أو ألغه أولًا`, exemptionId: pending.id })
   }
 
-  // خطة المراجعة 24 (وبند الصلاحيات 4): فصل المهام داخل القرار نفسه، ويسري على كل الأدوار بما فيها مدير النظام.
-  // منشئ الطلب لا يعتمده ولا يرفضه (يلغيه فقط)، ومعتمد خطوة الموارد البشرية لا يتخذ القرار التنفيذي.
+  // قرار المالك 26 سبتمبر: صاحب سلطة الموارد البشرية قراره نهائي — في استثناء موظف غيره. استثناؤه هو لنفسه
+  // كموظف يفضل يمشي في مساره بقرار مستخدم آخر.
+  private hrFinal(user: JwtPayload, employeeId: number) {
+    return hasHrOverride(user) && employeeId !== user.employeeId
+  }
+
+  // خطة المراجعة 24 (وبند الصلاحيات 4): فصل المهام داخل القرار نفسه — منشئ الطلب لا يعتمده ولا يرفضه (يلغيه فقط)،
+  // ومعتمد خطوة الموارد البشرية لا يتخذ القرار التنفيذي. قرار المالك 26 سبتمبر: القاعدتان مابيسرّوش على صاحب سلطة
+  // الموارد البشرية في استثناء غيره (قراره نهائي، وإنشاؤه بيتعتمد لحظتها أصلًا) — وبيسرّوا على الباقي وعلى استثنائه هو لنفسه.
   private separation(user: JwtPayload, row: AttendanceExemption, executiveStage: boolean) {
-    if (row.createdByUserId === user.sub) {
+    const hrFinal = this.hrFinal(user, row.employeeId)
+    if (row.createdByUserId === user.sub && !hrFinal) {
       throw new ForbiddenException({ code: 'EXEMPT-SOD-CREATOR', message: 'منشئ طلب الاستثناء لا يعتمده ولا يرفضه؛ القرار لمستخدم آخر، ويستطيع المنشئ إلغاء طلبه' })
     }
-    if (executiveStage && row.approvedByUserId === user.sub) {
+    if (executiveStage && row.approvedByUserId === user.sub && !hrFinal) {
       throw new ForbiddenException({ code: 'EXEMPT-SOD-EXECUTIVE', message: 'من اعتمد خطوة الموارد البشرية لا يتخذ القرار التنفيذي لنفس الاستثناء' })
     }
   }
@@ -142,8 +151,10 @@ export class AttendanceExemptionsService {
   private actionsFor(user: JwtPayload, row: AttendanceExemption, today: string) {
     const pending = row.status === 'PENDING'
     const executiveStage = pending && row.reasonCode === 'executive' && !!row.approvedByUserId
-    const creator = row.createdByUserId === user.sub
-    const hrApprover = executiveStage && row.approvedByUserId === user.sub
+    // نفس separation(): منع المنشئ ومعتمد خطوة الموارد البشرية مابيسريش على صاحب سلطة الموارد البشرية في استثناء غيره
+    const hrFinal = this.hrFinal(user, row.employeeId)
+    const creator = row.createdByUserId === user.sub && !hrFinal
+    const hrApprover = executiveStage && row.approvedByUserId === user.sub && !hrFinal
     const decisionPerm = executiveStage ? 'attendance_exemption.approve_executive' : 'attendance_exemption.approve'
     const blockedBy: 'CREATOR' | 'HR_APPROVER' | null = !pending ? null : creator ? 'CREATOR' : hrApprover ? 'HR_APPROVER' : null
     return {
@@ -178,10 +189,30 @@ export class AttendanceExemptionsService {
       await this.noOverlap(em, employee.id, dto.effectiveFrom, dto.effectiveTo ?? null)
       await this.noPendingOverlap(em, employee.id, dto.effectiveFrom, dto.effectiveTo ?? null)
       // أ7: النافذة بلا تجاوز فردي — الإضافي والإجازة بلا أجر للمستثنى يتبعان قرار الشركة الواحد.
-      const row = await em.getRepository(AttendanceExemption).save({ ...dto, effectiveTo: dto.effectiveTo ?? null,
+      const row: AttendanceExemption = await em.getRepository(AttendanceExemption).save({ ...dto, effectiveTo: dto.effectiveTo ?? null,
         overtimeEligibleOverride: null, unpaidLeaveDeductibleOverride: null,
         reason, status: 'PENDING', createdByUserId: user.sub, requiresCheckinForPresence: dto.requiresCheckinForPresence ?? false })
       await this.record(em, user, row, 'CREATED', reason, null)
+      // قرار المالك 26 سبتمبر: صاحب سلطة الموارد البشرية بصلاحية الاعتماد قراره نهائي — الاستثناء اللي بينشئه لموظف غيره
+      // بيتعتمد لحظتها باسمه وبسبب الإنشاء نفسه، بنفس أثر approve(): نفس الحقول والحالة وسجل القرار (فحوص الفترة والتداخل
+      // اتعملت فوق على نفس اللحظة). التصنيف القيادي بيتعتمد تنفيذيًا كمان لو معاه صلاحية الاعتماد التنفيذي، وإلا بيفضل
+      // بانتظار الاعتماد التنفيذي وحده. غيره من المنشئين: الطلب بانتظار قرار مستخدم آخر كما كان
+      if (this.hrFinal(user, employee.id) && userHasPerm(user, 'attendance_exemption.approve')) {
+        const pending = { ...row }, now = new Date(), executive = row.reasonCode === 'executive'
+        row.approvedByUserId = user.sub
+        row.approvedAt = now
+        if (!executive) row.status = 'APPROVED'
+        await em.getRepository(AttendanceExemption).save(row)
+        await this.record(em, user, row, 'HR_INSTANT_APPROVED', reason, pending)
+        if (executive && userHasPerm(user, 'attendance_exemption.approve_executive')) {
+          const hrApproved = { ...row }
+          row.executiveApprovedByUserId = user.sub
+          row.executiveApprovedAt = now
+          row.status = 'APPROVED'
+          await em.getRepository(AttendanceExemption).save(row)
+          await this.record(em, user, row, 'EXECUTIVE_INSTANT_APPROVED', reason, hrApproved)
+        }
+      }
       return row
     })
   }
