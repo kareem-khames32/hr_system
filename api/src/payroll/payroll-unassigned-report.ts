@@ -65,7 +65,9 @@ export interface PayrollUnassignedRow {
 }
 export interface PayrollUnassignedFilters { branchId?: number | null; departmentId?: number | null; teamId?: number | null }
 export interface PayrollUnassignedReport {
-  period: string; startDate: string; endDate: string; scopeBranchId: number | null
+  // نطاق التقرير: null = الشركة كلها، رقم = فرع واحد. حساب الفروع المتعددة: scopeBranchId = null وscopeBranchIds = فروعه
+  // (المفتاح ده مايظهرش لغيره، فبصمة تقرير الشركة والفرع الواحد فاضلة زي ما هي بالحرف والإقرارات المحفوظة سارية)
+  period: string; startDate: string; endDate: string; scopeBranchId: number | null; scopeBranchIds?: number[]
   filters: { branchId: number | null; departmentId: number | null; teamId: number | null }; includeSuspended: boolean
   reportHash: string
   totals: { employed: number; assigned: number; unassigned: number; byReason: Partial<Record<PayrollUnassignedReason, number>> }
@@ -84,6 +86,7 @@ const runLabel = (ref: PayrollUnassignedRunRef) => `المسير #${ref.runId}${
 export function payrollUnassignedReportHash(report: Omit<PayrollUnassignedReport, 'reportHash' | 'totals'>): string {
   return createHash('sha256').update(JSON.stringify({
     period: report.period, startDate: report.startDate, endDate: report.endDate, scopeBranchId: report.scopeBranchId,
+    ...(report.scopeBranchIds ? { scopeBranchIds: report.scopeBranchIds } : {}),
     filters: report.filters, includeSuspended: report.includeSuspended,
     // حالة المسير المرجعي ليست جزءًا من البصمة: اعتماد مسير آخر لا يغير سبب عدم إدراج الموظف فلا يُسقط الإقرار؛
     // الإلغاء يغير كود السبب نفسه (CANCELLED_RUN_ONLY) فيُسقطه.
@@ -93,9 +96,11 @@ export function payrollUnassignedReportHash(report: Omit<PayrollUnassignedReport
 }
 
 export async function buildPayrollUnassignedReport(em: EntityManager, input: {
-  period: string; startDate: string; endDate: string; branchScope: number | null; today: string
+  // نطاق فروع المشاهد: null = الشركة كلها، رقم أو [رقم] = فرع واحد، مصفوفة = الفروع دي (الفاضية = ولا صف)
+  period: string; startDate: string; endDate: string; branchScope: number | number[] | null; today: string
   filters?: PayrollUnassignedFilters; includeSuspended?: boolean
 }): Promise<PayrollUnassignedReport> {
+  const scope: number[] | null = input.branchScope === null ? null : Array.isArray(input.branchScope) ? [...new Set(input.branchScope)].sort((a, b) => a - b) : [input.branchScope]
   const { startDate, endDate } = input
   const filters = { branchId: input.filters?.branchId ?? null, departmentId: input.filters?.departmentId ?? null, teamId: input.filters?.teamId ?? null }
   const history = await loadPayrollOrgHistory(em, input.today)
@@ -168,7 +173,7 @@ export async function buildPayrollUnassignedReport(em: EntityManager, input: {
     const suspended = !!coverage && !problem && suspendedWholeRange(periods, coverage.coverFrom, coverage.coverTo)
     if (suspended && !input.includeSuspended) continue
     const org = payrollOrgAt(history, employee, coverage?.coverTo ?? endDate)
-    if (input.branchScope !== null && org.branchId !== input.branchScope) continue
+    if (scope !== null && (org.branchId == null || !scope.includes(org.branchId))) continue
     if (filters.branchId && org.branchId !== filters.branchId) continue
     if (filterDepartments && (org.departmentId === null || !filterDepartments.has(org.departmentId))) continue
     if (filters.teamId && org.teamId !== filters.teamId) continue
@@ -214,7 +219,9 @@ export async function buildPayrollUnassignedReport(em: EntityManager, input: {
   }
   const byReason: Partial<Record<PayrollUnassignedReason, number>> = {}
   for (const row of rows) byReason[row.reasonCode] = (byReason[row.reasonCode] ?? 0) + 1
-  const base = { period: input.period, startDate, endDate, scopeBranchId: input.branchScope, filters, includeSuspended: input.includeSuspended === true, rows }
+  // فرع واحد = scopeBranchId بالرقم زي الأول؛ أكتر من فرع (أو ولا فرع) = scopeBranchIds عشان البصمة تفرّق النطاقات
+  const scopeFields = scope === null ? { scopeBranchId: null } : scope.length === 1 ? { scopeBranchId: scope[0] } : { scopeBranchId: null, scopeBranchIds: scope }
+  const base = { period: input.period, startDate, endDate, ...scopeFields, filters, includeSuspended: input.includeSuspended === true, rows }
   return { ...base, reportHash: payrollUnassignedReportHash(base),
     totals: { employed, assigned, unassigned: rows.filter(row => row.reasonCode !== 'SUSPENDED').length, byReason } }
 }

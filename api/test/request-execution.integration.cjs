@@ -660,7 +660,8 @@ test('EMP-14 a foreign file or a failure after document save cannot leave change
   const save = service.saveContractDocument
   service.saveContractDocument = async function (...args) { await save.apply(this, args); throw new Error('injected after document save') }
   try {
-    await assert.rejects(service.renewContract(target.employee.id, { ...data, contractFileRef: `file:${owned.id}` }, branch.id, hr.id), /injected after document save/)
+    // نطاق الفروع قائمة (branchScopeOf): حساب الفرع الواحد = [فرعه]
+    await assert.rejects(service.renewContract(target.employee.id, { ...data, contractFileRef: `file:${owned.id}` }, [branch.id], hr.id), /injected after document save/)
   } finally { service.saveContractDocument = save }
   assert.equal((await employeesRepo().findOneBy({ id: target.employee.id })).contractEnd, '2025-12-31')
   assert.equal((await files.findOneBy({ id: owned.id })).employeeId, null)

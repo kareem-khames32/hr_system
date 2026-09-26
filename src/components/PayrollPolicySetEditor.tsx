@@ -137,7 +137,7 @@ export function PayrollPolicyCreateForm({ onCreated, onCancel }: { onCreated: (s
     try {
       onCreated(await createPayrollPolicy({ code: '', name, description: null, effectiveFrom, settings, metadata: { title: 'النسخة الأولى', notes: null },
         // حساب الشركة: null = كل الشركة صراحةً؛ حساب الفرع: من غير فرع والخادم يحط فرعه
-        ...(branchInfo.scope === null ? { branchId } : {}) }))
+        ...(branchInfo.choosesBranch ? { branchId } : {}) }))
     } catch (cause) { setError(errorText(cause)) } finally { setSaving(false) }
   }
 

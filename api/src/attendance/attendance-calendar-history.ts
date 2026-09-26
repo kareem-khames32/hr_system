@@ -3,7 +3,7 @@ import { IsInt, IsString, Matches, MaxLength, Min, MinLength } from 'class-valid
 import { EntityManager, IsNull } from 'typeorm'
 import { PublicHoliday } from '../assets/assets.entities'
 import { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { payrollLiveSourceContent } from '../payroll/payroll-live-source-contract'
@@ -220,7 +220,7 @@ export async function assertCalendarScope(user: JwtPayload, scope: CalendarScope
   }
   const row = scope === 'BRANCH' ? await em.findOneBy(Branch, { id: sourceId }) : await em.findOneBy(Employee, { id: sourceId })
   const branchId = scope === 'BRANCH' ? row?.id : (row as Employee | null)?.branchId
-  if (!row || (branchScope !== null && branchId !== branchScope)) throw new NotFoundException('مصدر التقويم غير موجود في نطاقك')
+  if (!row || !inBranchScope(branchScope, branchId)) throw new NotFoundException('مصدر التقويم غير موجود في نطاقك')
 }
 export async function calendarSourceContext(em: EntityManager, user: JwtPayload, scope: CalendarScope, sourceId: number) {
   if (!['settings.manage','settings.view','attendance.manage','org.manage','employees.edit'].some(perm => userHasPerm(user, perm))) throw new ForbiddenException('ليس لديك صلاحية قراءة مصدر التقويم')

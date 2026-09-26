@@ -1,6 +1,8 @@
 import { Injectable } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
+import { branchScopeSql } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
 import { aggregateCostCenterReport, COST_CENTER_DEDUCTION_FIELDS, COST_CENTER_EARNING_FIELDS, type CostCenterReportRow } from './cost-center-report'
 
@@ -11,6 +13,8 @@ export interface CostCenterReportQuery {
   period: string
   /** فرع محدد، أو null = كل الفروع المسموحة */
   branchId: number | null
+  /** نطاق فروع المستخدم لما مفيش فرع محدد (null/غايب = كل الفروع، مصفوفة = الفروع دي، الفاضية = ولا صف) */
+  branchScope?: BranchScope
   /** true = يشمل المسيرات المحسوبة غير المعتمدة (مسودة) */
   includeDraft: boolean
 }
@@ -33,6 +37,9 @@ export class CostCenterReportService {
     if (query.branchId !== null) {
       params.push(query.branchId)
       branchFilter = `WHERE x.[branchId] = @1`
+    } else if (query.branchScope != null) {
+      // حساب الفروع المتعددة من غير فرع محدد: فروعه كلها بمعاملات (والنطاق الفاضي 1 = 0)
+      branchFilter = `WHERE ${branchScopeSql('x.[branchId]', query.branchScope, params)}`
     }
     // الفرع ومركز التكلفة من لقطة العضو وقت المسير، ولو مفيش لقطة (مسير قديم) من ملف الموظف الحالي
     const rows: CostCenterReportRow[] = await this.ds.query(

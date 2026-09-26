@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { ForbiddenException } from '@nestjs/common'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
+import { branchIdIn, branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { EmployeesService } from '../employees/employees.service'
 import { Team } from '../org/entities/team.entity'
@@ -53,7 +53,7 @@ export class EmployeeExtrasController {
   async listTransfers(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)
     const emps = await this.employees.find({
-      where: scope !== null ? { branchId: scope } : {},
+      where: scope !== null ? { branchId: branchIdIn(scope) } : {},
     })
     const empById = new Map(emps.map((e) => [e.id, e]))
     const allTeams = await this.teams.find()
@@ -94,7 +94,7 @@ export class EmployeeExtrasController {
   async listLoans(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)
     const emps = await this.employees.find({
-      where: scope !== null ? { branchId: scope } : {},
+      where: scope !== null ? { branchId: branchIdIn(scope) } : {},
     })
     const empById = new Map(emps.map((e) => [e.id, e]))
     if (scope !== null && !emps.length) return []

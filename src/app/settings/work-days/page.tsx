@@ -26,6 +26,7 @@ import {
   lockedBranchIdOf,
 } from '@/lib/api'
 import { buildCalendarChange, calendarRuleToggle, calendarScopeWritable, type PayrollCalendarContext, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
+import { branchScopeOfUser } from '@/lib/branch-scope'
 import { CalendarChangeFields, CalendarContextSummary, CalendarMutationDialog, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
 import type {
   ApiScheduleRule,
@@ -1323,7 +1324,8 @@ function AddScheduleRuleModal({
   const [weekday, setWeekday] = useState<ApiScheduleRule['weekday']>('SAT')
   const [occurrence, setOccurrence] = useState<ApiScheduleRule['occurrence']>('LAST')
   const [effect, setEffect] = useState<ApiScheduleRule['effect']>('WORK')
-  const [branchId, setBranchId] = useState<string>(() => calendarScopeWritable('GLOBAL', 0) ? '' : String(getCurrentUser()?.branchId ?? ''))
+  // حساب الفرع الواحد: فرعه؛ حساب الفروع المتعددة يختار فرع منها (القاعدة العامة لحساب على مستوى الشركة بس)
+  const [branchId, setBranchId] = useState<string>(() => calendarScopeWritable('GLOBAL', 0) ? '' : String(lockedBranchIdOf(getCurrentUser()) ?? ''))
   const calendar = useCalendarContext(branchId ? 'BRANCH' : 'GLOBAL', Number(branchId) || 0)
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -1334,6 +1336,10 @@ function AddScheduleRuleModal({
   const handleSubmit = async () => {
     if (!name.trim()) {
       setError('الرجاء إدخال اسم القاعدة')
+      return
+    }
+    if (!branchId && !calendarScopeWritable('GLOBAL', 0)) {
+      setError('اختار الفرع')
       return
     }
     setSaving(true)
@@ -1453,7 +1459,7 @@ function AddScheduleRuleModal({
               onChange={(e) => setBranchId(e.target.value)}
               className="input w-full"
             >
-              {calendarScopeWritable('GLOBAL', 0) && <option value="">كل الفروع</option>}
+              {calendarScopeWritable('GLOBAL', 0) ? <option value="">كل الفروع</option> : !branchId && <option value="" disabled>— اختار الفرع —</option>}
               {branches.filter(branch => calendarScopeWritable('BRANCH', branch.id)).map((b) => (
                 <option key={b.id} value={String(b.id)}>{b.name}</option>
               ))}
@@ -1502,8 +1508,10 @@ function AssignScheduleModal({ schedule, presetEmployeeIds, onClose, onAssign }:
   const [usePreset, setUsePreset] = useState(!!presetEmployeeIds?.length)
   const scheduleBranchId = schedule.branchId ?? null
   const lockedBranchId = scheduleBranchId ?? lockedBranchIdOf(getCurrentUser())
+  // جدول لكل الشركة: حساب الفروع المتعددة يختار فرع من فروعه (الشركة كلها لحساب على مستوى الشركة بس)
+  const branchScope = scheduleBranchId != null ? null : branchScopeOfUser(getCurrentUser())
   const [org, setOrg] = useState<{ branches: ApiBranch[]; departments: ApiDepartment[]; teams: ApiTeam[]; employees: ApiEmployee[] } | null>(null)
-  const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(lockedBranchId))
+  const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(lockedBranchId, undefined, branchScope))
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   const [change, setChange] = useState<ApiAttendanceRuleChange>({ effectiveFrom: localToday(), changeReason: '' })
@@ -1548,7 +1556,7 @@ function AssignScheduleModal({ schedule, presetEmployeeIds, onClose, onAssign }:
           </div>
         ) : (
         <OrgTargetPicker value={target} onChange={setTarget} branches={org.branches} departments={org.departments}
-          teams={org.teams} employees={org.employees} lockedBranchId={lockedBranchId} disabled={busy} />
+          teams={org.teams} employees={org.employees} lockedBranchId={lockedBranchId} branchScope={branchScope} disabled={busy} />
         )}
         {ids.length > 0 && <p className="text-amber-700 text-sm">الجدول الحالي لـ{ids.length} موظف هيتغير للجدول ده من تاريخ السريان.</p>}
       </>}

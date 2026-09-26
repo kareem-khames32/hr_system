@@ -27,6 +27,7 @@ import { Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
 import {
   branchScopeOf,
+  inBranchScope,
   CurrentUser,
   JwtAuthGuard,
   Perm,
@@ -165,7 +166,7 @@ export class QualificationsController {
   private async assertEmployee(user: JwtPayload, employeeId: number) {
     const emp = await this.employees.findOne({ where: { id: employeeId } })
     const scope = branchScopeOf(user)
-    if (!emp || (scope != null && emp.branchId !== scope)) {
+    if (!emp || !inBranchScope(scope, emp.branchId)) {
       throw new NotFoundException('الموظف غير موجود')
     }
   }

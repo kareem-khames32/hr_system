@@ -7,6 +7,7 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Calendar, CheckCircle, Pencil, Plus, Search, Settings2, Wallet, X } from 'lucide-react'
 import { can, getCurrentUser, lockedBranchIdOf, type ApiBranch, type ApiDepartment, type ApiEmployee, type ApiTeam } from '@/lib/api'
+import { branchScopeOfUser, canSeeBranch, type BranchScope } from '@/lib/branch-scope'
 import { formatMoney, sumMoney } from '@/lib/money'
 import EmptyState from '@/components/EmptyState'
 import { ORG_TARGET_LEVELS, OrgTargetPicker, describeOrgTarget, initialOrgTarget, resolveOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
@@ -283,10 +284,16 @@ function useLockedBranchId() {
   }, [])
 }
 
+// نطاق فروع الحساب: null = كل الفروع، مصفوفة = فروعه بس (حساب الفروع المتعددة يختار فرع منها)
+function useBranchScope(): BranchScope {
+  return useMemo(() => branchScopeOfUser(getCurrentUser()), [])
+}
+
 function TypesPanel({ types, error, branches, canWrite, onChanged }: {
   types: AllowanceType[]; error: string; branches: ApiBranch[]; canWrite: boolean; onChanged: () => void
 }) {
   const lockedBranchId = useLockedBranchId()
+  const scope = useBranchScope()
   const [name, setName] = useState('')
   const [code, setCode] = useState('')
   const [branchId, setBranchId] = useState<number | ''>(lockedBranchId ?? '')
@@ -300,6 +307,7 @@ function TypesPanel({ types, error, branches, canWrite, onChanged }: {
   }
   const add = () => {
     if (!name.trim()) { setMessage('اكتب اسم البدل'); return }
+    if (scope !== null && branchId === '') { setMessage('اختار الفرع'); return }
     run(() => createAllowanceType({ name: name.trim(), code: code.trim() || undefined, branchId: branchId === '' ? null : branchId }), () => { setName(''); setCode('') })
   }
 
@@ -352,8 +360,8 @@ function TypesPanel({ types, error, branches, canWrite, onChanged }: {
             <span className="font-medium text-gray-700">لمين</span>
             <select className="input w-full" value={branchId} disabled={busy || lockedBranchId != null}
               onChange={e => setBranchId(e.target.value === '' ? '' : Number(e.target.value))}>
-              {lockedBranchId == null && <option value="">الشركة كلها</option>}
-              {branches.filter(branch => lockedBranchId == null || branch.id === lockedBranchId).map(branch => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
+              {scope === null ? <option value="">الشركة كلها</option> : branchId === '' && <option value="" disabled>— اختار الفرع —</option>}
+              {branches.filter(branch => (lockedBranchId == null || branch.id === lockedBranchId) && canSeeBranch(scope, branch.id)).map(branch => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
             </select>
           </label>
           <button type="button" className="btn-primary flex items-center gap-1.5 disabled:opacity-50" disabled={busy} onClick={add}><Plus size={15} /> ضيف</button>
@@ -369,19 +377,20 @@ function GrantForm({ period, types, branches, departments, teams, employees, onC
   onClose: () => void; onSaved: (result: AllowanceGrantCreated) => void
 }) {
   const lockedBranchId = useLockedBranchId()
-  const usable = types.filter(type => type.isActive && (lockedBranchId == null || type.branchId == null || type.branchId === lockedBranchId))
+  const scope = useBranchScope()
+  const usable = types.filter(type => type.isActive && (type.branchId == null || canSeeBranch(scope, type.branchId)))
   const [typeId, setTypeId] = useState<number | ''>(usable[0]?.id ?? '')
   const type = usable.find(row => row.id === typeId) ?? null
   // نوع خاص بفرع: الاستهداف جوه الفرع ده بس
   const lock = lockedBranchId ?? type?.branchId ?? null
   const levels = lock != null ? ORG_TARGET_LEVELS.filter(level => level !== 'company') : ORG_TARGET_LEVELS
-  const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(lock, levels))
+  const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(lock, levels, scope))
   const [amount, setAmount] = useState('')
   const [reason, setReason] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
   useEffect(() => {
-    setTarget(initialOrgTarget(lock, levels))
+    setTarget(initialOrgTarget(lock, levels, scope))
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [lock])
   useEffect(() => {
@@ -441,7 +450,7 @@ function GrantForm({ period, types, branches, departments, teams, employees, onC
         </div>
       </div>
       <OrgTargetPicker value={target} onChange={setTarget} branches={branches} departments={departments} teams={teams}
-        employees={employees} levels={levels} lockedBranchId={lock} disabled={busy} />
+        employees={employees} levels={levels} lockedBranchId={lock} branchScope={scope} disabled={busy} />
       <label className="flex flex-col gap-1 text-sm">
         <span className="font-medium text-gray-700">السبب</span>
         <textarea className="input w-full" rows={2} maxLength={500} value={reason} disabled={busy} onChange={e => setReason(e.target.value)} />

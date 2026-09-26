@@ -2,7 +2,8 @@ import { BadRequestException, ForbiddenException, Injectable, NotFoundException 
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { assertCompanyWideWrite, branchScopeOf } from '../auth/guards'
+import { assertCompanyWideWrite, branchScopeOf, inBranchScope, isEmptyBranchScope, scopeWord } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { PayrollDeductionWaiver } from './payroll-deduction-waivers.entities'
 import {
   DEDUCTION_WAIVER_KIND_LABELS, DEDUCTION_WAIVER_LEVELS, DeductionWaiverKind, DeductionWaiverLevel, isDeductionWaiverKind, parseWaiverTargetIds,
@@ -71,9 +72,9 @@ export class PayrollOverviewService {
     return value
   }
 
-  private scope(user: JwtPayload) {
+  private scope(user: JwtPayload): BranchScope {
     const scope = branchScopeOf(user)
-    if (scope !== null && scope < 1) throw new ForbiddenException('حسابك مش مربوط بفرع')
+    if (isEmptyBranchScope(scope)) throw new ForbiddenException('حسابك مش مربوط بفرع')
     return scope
   }
 
@@ -155,7 +156,7 @@ export class PayrollOverviewService {
         ...place, ...this.names(place, names),
         runId: run.id, runName: run.name, runStatus: run.status, startDate: run.startDate, endDate: run.endDate,
       }
-    }).filter(row => scope === null || row.branchId === scope)
+    }).filter(row => inBranchScope(scope, row.branchId))
       .sort((a, b) => a.fullName.localeCompare(b.fullName, 'ar') || a.runId - b.runId)
     return { runs, rows }
   }
@@ -179,7 +180,7 @@ export class PayrollOverviewService {
     const report = await this.payroll.unassignedReport(user, { period, includeSuspended: payrollOverviewNeedsSuspended(filters) })
     const names = await this.orgNames()
     const employees = await this.employees(report.rows.map(row => row.employeeId))
-    const rows = report.rows.filter(row => scope === null || row.branchId === scope).map(row => {
+    const rows = report.rows.filter(row => inBranchScope(scope, row.branchId)).map(row => {
       const place = { branchId: row.branchId, departmentId: row.departmentId, teamId: row.teamId }
       return {
         employeeId: row.employeeId, employeeCode: row.employeeCode, fullName: row.fullName, hireDate: row.hireDate,
@@ -326,7 +327,7 @@ export class PayrollOverviewService {
       return { ...row, runName: run?.name ?? null, runStatus: run?.status ?? null, fullName: member?.snapshot.fullName ?? employee?.fullName ?? `#${row.employeeId}`,
         employeeCode: member?.snapshot.employeeCode ?? employee?.employeeCode ?? '', branchId: place.branchId,
         branchName: place.branchId ? names.branches.get(place.branchId) ?? null : null, departmentName: place.departmentId ? names.departments.get(place.departmentId) ?? null : null }
-    }).filter(row => scope === null || row.branchId === scope)
+    }).filter(row => inBranchScope(scope, row.branchId))
       .sort((a, b) => a.fullName.localeCompare(b.fullName, 'ar') || a.runId - b.runId)
     return { period, rows }
   }
@@ -349,7 +350,7 @@ export class PayrollOverviewService {
         const employeeId = Number(item.employeeId)
         const snapshot = parseJson(item.memberSnapshot), employee = employees.get(employeeId)
         const place = this.placeOf(snapshot, employee)
-        if (scope !== null && place.branchId !== scope) continue
+        if (!inBranchScope(scope, place.branchId)) continue
         const run = runs.find(row => row.id === Number(item.runId))!
         const breakdown = parseJson(item.breakdown)
         const base = { employeeId, employeeCode: snapshot.employeeCode ?? employee?.employeeCode ?? '', fullName: snapshot.fullName ?? employee?.fullName ?? `#${employeeId}`,
@@ -406,7 +407,7 @@ export class PayrollOverviewService {
       const visible = items.map(item => {
         const employeeId = Number(item.employeeId), snapshot = parseJson(item.memberSnapshot), employee = employees.get(employeeId)
         return { item, employeeId, snapshot, employee, place: this.placeOf(snapshot, employee) }
-      }).filter(row => scope === null || row.place.branchId === scope)
+      }).filter(row => inBranchScope(scope, row.place.branchId))
       const lines = await describePayrollItemsLines(this.em, visible.map(row => row.item))
       visible.forEach(({ item, employeeId, snapshot, employee, place }, index) => {
         const run = runs.find(row => row.id === Number(item.runId))!
@@ -438,7 +439,7 @@ export class PayrollOverviewService {
   async listWaivers(user: JwtPayload, rawPeriod: unknown) {
     const period = this.period(rawPeriod), scope = this.scope(user)
     const rows = await this.waivers.find({ where: { period, status: 'ACTIVE' }, order: { id: 'DESC' } })
-    const visible = rows.filter(row => scope === null || row.targetLevel === 'company' || row.branchId === scope)
+    const visible = rows.filter(row => row.targetLevel === 'company' || inBranchScope(scope, row.branchId))
     const names = await this.orgNames()
     const employeeIds = visible.filter(row => row.targetLevel === 'employees').flatMap(row => parseWaiverTargetIds(row.targetIds))
     const employees = await this.employees(employeeIds)
@@ -448,7 +449,7 @@ export class PayrollOverviewService {
       return { id: row.id, period: row.period, kind: row.kind, kindLabel: isDeductionWaiverKind(row.kind) ? DEDUCTION_WAIVER_KIND_LABELS[row.kind] : row.kind,
         targetLevel: row.targetLevel, branchId: row.branchId, targetIds: ids, targetText: this.describeTarget(row.targetLevel, row.branchId, ids, names, employees),
         reason: row.reason, createdAt: row.createdAt, createdByName: users.get(row.createdByUserId) ?? null,
-        canCancel: scope === null || (row.targetLevel !== 'company' && row.branchId === scope) }
+        canCancel: scope === null || (row.targetLevel !== 'company' && inBranchScope(scope, row.branchId)) }
     })
   }
 
@@ -488,7 +489,7 @@ export class PayrollOverviewService {
     } else {
       branchId = Number(input.branchId)
       if (!Number.isSafeInteger(branchId) || branchId < 1) throw new BadRequestException('اختار الفرع')
-      if (scope !== null && branchId !== scope) throw new ForbiddenException('صلاحيتك على فرعك بس')
+      if (!inBranchScope(scope, branchId)) throw new ForbiddenException(`صلاحيتك على ${scopeWord(scope)} بس`)
       const [branch] = await this.em.query('SELECT [id] FROM [branches] WHERE [id] = @0', [branchId])
       if (!branch) throw new BadRequestException('الفرع مش موجود')
       if (level === 'departments') {
@@ -520,9 +521,9 @@ export class PayrollOverviewService {
   async cancelWaiver(user: JwtPayload, id: number) {
     const scope = this.scope(user)
     const waiver = await this.waivers.findOne({ where: { id } })
-    if (!waiver || (scope !== null && waiver.targetLevel !== 'company' && waiver.branchId !== scope)) throw new NotFoundException('القاعدة مش موجودة')
+    if (!waiver || (waiver.targetLevel !== 'company' && !inBranchScope(scope, waiver.branchId))) throw new NotFoundException('القاعدة مش موجودة')
     if (waiver.targetLevel === 'company' || waiver.branchId === null) assertCompanyWideWrite(user)
-    else if (scope !== null && waiver.branchId !== scope) throw new ForbiddenException('صلاحيتك على فرعك بس')
+    else if (!inBranchScope(scope, waiver.branchId)) throw new ForbiddenException(`صلاحيتك على ${scopeWord(scope)} بس`)
     if (waiver.status !== 'ACTIVE') return { id: waiver.id, status: waiver.status }
     await this.waivers.update({ id: waiver.id, status: 'ACTIVE' }, { status: 'CANCELLED', cancelledByUserId: user.sub, cancelledAt: new Date() })
     return { id: waiver.id, status: 'CANCELLED' }

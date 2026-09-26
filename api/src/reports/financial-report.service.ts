@@ -2,6 +2,8 @@ import { Injectable } from '@nestjs/common'
 import { ModuleRef } from '@nestjs/core'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
+import { branchScopeSql } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { localDateOf } from '../attendance/attendance.service'
 import { payrollLineNotReversedSql } from '../payroll/payroll-reversal-sql'
 import { PayrollService } from '../payroll/payroll.service'
@@ -13,8 +15,10 @@ import {
 export interface FinancialReportQuery {
   /** شهر الرواتب YYYY-MM؛ فاضي = شهر الرواتب الجاري بدورة payroll.cycle_start_day */
   period?: string
-  /** فرع محدد (أو فرع حساب الفرع إجباريًا)، null = كل الفروع */
+  /** فرع محدد (أو فرع حساب الفرع إجباريًا)، null = كل الفروع (في النطاق) */
   branchId: number | null
+  /** نطاق فروع المستخدم لما مفيش فرع محدد (null/غايب = كل الفروع، مصفوفة = الفروع دي، الفاضية = ولا صف) */
+  branchScope?: BranchScope
   departmentId?: number | null
   /** فريق محدد، null = كل الفرق (نفس مرشح /reports/payroll/*) */
   teamId?: number | null
@@ -67,6 +71,8 @@ export class FinancialReportService {
       filters.push(`x.[${column}] = @${params.length - 1}`)
     }
     filter('branchId', query.branchId)
+    // حساب الفروع المتعددة من غير فرع محدد: فروعه كلها بمعاملات (والنطاق الفاضي 1 = 0)
+    if (query.branchId === null && query.branchScope != null) filters.push(branchScopeSql('x.[branchId]', query.branchScope, params))
     filter('departmentId', query.departmentId)
     filter('teamId', query.teamId)
     filter('costCenterId', query.costCenterId)
@@ -191,6 +197,7 @@ export class FinancialReportService {
       where.push(`e.[${column}] = @${params.length - 1}`)
     }
     filter('branchId', query.branchId)
+    if (query.branchId === null && query.branchScope != null) where.push(branchScopeSql('e.[branchId]', query.branchScope, params))
     filter('departmentId', query.departmentId)
     filter('teamId', query.teamId)
     filter('costCenterId', query.costCenterId)

@@ -14,50 +14,55 @@ const { AssetsController } = require('../src/assets/assets.controller')
 const read = file => fs.readFileSync(path.resolve(apiRoot, '..', file), 'utf8').replace(/\r\n/g, '\n')
 const status = fn => { try { fn(); return null } catch (error) { return [error.getStatus(), error.getResponse().message] } }
 
-test('الرؤية والكتابة بناتج branchScopeOf: null = كل الفروع، فرع = أصوله + القديم قراءة بس، والنطاق الفاضي مايشوفش حاجة', () => {
-  const inA = { branchId: 10 }, inB = { branchId: 11 }, legacy = { branchId: null }, legacyUndefined = {}
-  // [النطاق، الأصل، يشوف، يكتب]
+test('الرؤية والكتابة بناتج branchScopeOf: null = كل الفروع، فرع أو أكتر = أصولها + القديم قراءة بس، والنطاق الفاضي مايشوفش حاجة', () => {
+  const inA = { branchId: 10 }, inB = { branchId: 11 }, inC = { branchId: 12 }, legacy = { branchId: null }, legacyUndefined = {}
+  // [النطاق، الأصل، يشوف، يكتب] — النطاق مصفوفة فروع (طلب المالك 26 سبتمبر: فروع بعلامات صح)
   for (const [scope, asset, visible, writable] of [
     [null, inA, true, true], [null, legacy, true, true],
-    [10, inA, true, true], [10, inB, false, false], [10, legacy, true, false], [10, legacyUndefined, true, false],
-    [-1, inA, false, false], [-1, legacy, false, false], [0, legacy, false, false],
+    [[10], inA, true, true], [[10], inB, false, false], [[10], legacy, true, false], [[10], legacyUndefined, true, false],
+    [[10, 11], inA, true, true], [[10, 11], inB, true, true], [[10, 11], inC, false, false], [[10, 11], legacy, true, false],
+    [[], inA, false, false], [[], legacy, false, false],
   ]) {
     assert.deepEqual([policy.assetVisibleTo(scope, asset), policy.assetWritableBy(scope, asset)], [visible, writable], JSON.stringify([scope, asset]))
   }
   // الفرع رقم حتى لو رجع من القاعدة نص
-  assert.equal(policy.assetWritableBy(10, { branchId: '10' }), true)
+  assert.equal(policy.assetWritableBy([10], { branchId: '10' }), true)
   // لا كاشف وجود: الغايب والخارج عن النطاق نفس الرد بالحرف؛ والأصل اللي بلا فرع (اللي السائل شايفه) بسببه الصريح
-  assert.deepEqual(status(() => policy.assertAssetVisible(10, null)), [404, policy.ASSET_NOT_FOUND])
-  assert.deepEqual(status(() => policy.assertAssetVisible(10, inB)), [404, policy.ASSET_NOT_FOUND])
-  assert.deepEqual(status(() => policy.assertAssetWritable(10, inB)), status(() => policy.assertAssetWritable(10, undefined)))
-  assert.deepEqual(status(() => policy.assertAssetWritable(10, legacy)), [403, policy.ASSET_UNBRANCHED_READ_ONLY])
-  assert.deepEqual(status(() => policy.assertAssetWritable(-1, legacy)), [404, policy.ASSET_NOT_FOUND])
+  assert.deepEqual(status(() => policy.assertAssetVisible([10], null)), [404, policy.ASSET_NOT_FOUND])
+  assert.deepEqual(status(() => policy.assertAssetVisible([10], inB)), [404, policy.ASSET_NOT_FOUND])
+  assert.deepEqual(status(() => policy.assertAssetWritable([10], inB)), status(() => policy.assertAssetWritable([10], undefined)))
+  assert.deepEqual(status(() => policy.assertAssetWritable([10], legacy)), [403, policy.ASSET_UNBRANCHED_READ_ONLY])
+  assert.deepEqual(status(() => policy.assertAssetWritable([], legacy)), [404, policy.ASSET_NOT_FOUND])
   assert.equal(policy.assertAssetWritable(null, legacy), legacy)
-  assert.equal(policy.assertAssetWritable(10, inA), inA)
+  assert.equal(policy.assertAssetWritable([10], inA), inA)
+  assert.equal(policy.assertAssetWritable([10, 11], inB), inB)
+  assert.deepEqual(status(() => policy.assertAssetWritable([10, 11], inC)), [404, policy.ASSET_NOT_FOUND])
 })
 
 test('العهدة جوه الفرع الواحد، والنقل بين فرعين لحساب نطاقه كل الفروع بس — الحكم على قيمة النطاق مش على اسم الدور', () => {
   const A = { branchId: 10 }, B = { branchId: 11 }, legacy = { branchId: null }
-  assert.equal(policy.custodyBranchProblem(10, A, A), null)
+  assert.equal(policy.custodyBranchProblem([10], A, A), null)
   assert.equal(policy.custodyBranchProblem(null, A, A), null)
   assert.equal(policy.custodyBranchProblem(null, A, B), policy.CUSTODY_CROSS_BRANCH, 'حتى حساب كل الفروع مايسلّمش أصل فرع لموظف فرع تاني')
-  assert.equal(policy.custodyBranchProblem(10, legacy, A), policy.ASSET_UNBRANCHED_READ_ONLY)
+  assert.equal(policy.custodyBranchProblem([10], legacy, A), policy.ASSET_UNBRANCHED_READ_ONLY)
   assert.equal(policy.custodyBranchProblem(null, legacy, B), null, 'أصل بلا فرع يسلّمه حساب كل الفروع')
-  assert.equal(policy.custodyTransferProblem(10, A, A), null)
+  assert.equal(policy.custodyTransferProblem([10], A, A), null)
   assert.equal(policy.custodyTransferProblem(undefined, A, A), null)
   assert.equal(policy.custodyTransferProblem(null, A, B), null)
-  for (const scope of [10, 11, -1, undefined]) assert.match(policy.custodyTransferProblem(scope, A, B), /نفس الفرع/, String(scope))
+  // حتى حساب الفرعين (10 و11) مابينقلش بين فرعين — النقل بين فرعين لحساب «كل الفروع» بس (فرع الأصل بيتغير)
+  for (const scope of [[10], [11], [], [10, 11], undefined]) assert.match(policy.custodyTransferProblem(scope, A, B), /نفس الفرع/, String(scope))
   // مدير النظام وحساب «كل الفروع» غير مدير النظام بياخدوا نفس النطاق؛ وحساب الفرع العادي لأ
   assert.equal(branchScopeOf({ role: 'super_admin', branchId: null }), null)
   assert.equal(branchScopeOf({ role: 'hr_manager', branchId: 10, scopeAllBranches: true }), null)
-  assert.equal(branchScopeOf({ role: 'hr_manager', branchId: 10 }), 10)
-  assert.equal(branchScopeOf({ role: 'hr_manager', branchId: null }), -1)
+  assert.deepEqual(branchScopeOf({ role: 'hr_manager', branchId: 10 }), [10])
+  assert.deepEqual(branchScopeOf({ role: 'hr_manager', branchId: null }), [])
+  assert.deepEqual(branchScopeOf({ role: 'hr_manager', branchId: 10, branchIds: [10, 11] }), [10, 11])
   for (const file of ['api/src/assets/asset-branch.ts', 'api/src/assets/assets.controller.ts', 'api/src/requests/custody-execution.ts']) {
     assert.ok(!/role\s*===|super_admin/.test(read(file)), `${file}: مفيش فحص على اسم الدور`)
   }
   // تحديد الفرع: حساب كل الفروع بس، وأصل في عهدة مايتنقلش لفرع غير فرع صاحبها
   assert.equal(status(() => policy.assertAllBranches(null)), null)
-  for (const scope of [10, -1]) assert.deepEqual(status(() => policy.assertAllBranches(scope)), [403, policy.ASSET_BRANCH_ALL_BRANCHES_ONLY])
+  for (const scope of [[10], [], [10, 11]]) assert.deepEqual(status(() => policy.assertAllBranches(scope)), [403, policy.ASSET_BRANCH_ALL_BRANCHES_ONLY])
   assert.equal(policy.assetBranchMoveProblem(11, []), null)
   assert.equal(policy.assetBranchMoveProblem(11, [B, { branchId: '11' }]), null)
   assert.match(policy.assetBranchMoveProblem(11, [B, A]), /فرع تاني/)
@@ -103,7 +108,7 @@ test('الربط: مسارات الأصول بصلاحية العهد وبتقر
   for (const signature of ['createAsset(@Body() dto: CreateAssetDto, @CurrentUser() user: JwtPayload)', 'retireAsset(@Param(\'id\', ParseIntPipe) id: number, @CurrentUser() user: JwtPayload)',
     'reactivateAsset(@Param(\'id\', ParseIntPipe) id: number, @CurrentUser() user: JwtPayload)', 'availableAssets(@CurrentUser() user: JwtPayload)']) assert.ok(controller.includes(signature), signature)
   assert.equal((controller.match(/assertAssetWritable\(/g) ?? []).length, 3, 'التعديل والتقاعد وإعادة التفعيل')
-  assert.match(controller, /where: \{ status: 'AVAILABLE', \.\.\.\(scope === null \? \{\} : \{ branchId: scope \}\) \}/)
+  assert.match(controller, /where: \{ status: 'AVAILABLE', \.\.\.\(scope === null \? \{\} : \{ branchId: branchIdIn\(scope\) \}\) \}/)
   assert.match(controller, /setAssetsBranch\(@Body\(\) dto: SetAssetsBranchDto, @CurrentUser\(\) user: JwtPayload\) \{\n    assertAllBranches\(branchScopeOf\(user\)\)/)
   // مسار «دفعة» متعرّف قبل :id
   assert.ok(controller.indexOf("@Post('assets/branch')") < controller.indexOf("@Patch('assets/:id')"))

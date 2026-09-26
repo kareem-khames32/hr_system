@@ -13,7 +13,7 @@ import { Employee } from '../employees/employee.entity'
 import type { JwtPayload } from './auth.service'
 import { DomainSyncService } from './domain-sync.service'
 import { DirectoryService } from './directory.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, RolesGuard, userHasPerm } from './guards'
+import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, RolesGuard, userHasPerm } from './guards'
 import { legacyUnusablePasswordUserIds, needsPasswordFromLegacy } from './legacy-password-marker'
 import { ROLE_PRESETS } from './permissions'
 import { Role } from './role.entity'
@@ -90,8 +90,8 @@ export class EmployeeLoginAccountController {
     }
     const employee = await this.employees.findOne({ where: { id } })
     const scope = branchScopeOf(actor)
-    // خارج نطاق فرع المشاهد = غير موجود (نفس رد EmployeesService.findOne)
-    if (!employee || (scope != null && employee.branchId !== scope)) {
+    // خارج نطاق فروع المشاهد = غير موجود (نفس رد EmployeesService.findOne)
+    if (!employee || !inBranchScope(scope, employee.branchId)) {
       throw new NotFoundException('الموظف غير موجود')
     }
     // الأقدم هو حساب الموظف — نفس اللي الدخول بالمجال بيختاره لو بالخطأ فيه أكتر من واحد

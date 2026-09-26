@@ -86,7 +86,7 @@ test('تقسيم الاختيار المختلط: مين ينتقل من أنه�
     candidate(8, [open(99)]),                                                // موجود في المسير الهدف
     candidate(9, [], { branchId: 2 }),                                       // موظف خارج نطاق الفرع
     candidate(10, [], { exists: false }),                                    // ملف مش موجود
-  ], { targetRunId: 99, branchScope: 1 })
+  ], { targetRunId: 99, branchScope: [1] })
 
   assert.deepEqual(split.groups, [
     { fromRunId: null, employeeIds: [1] },
@@ -104,4 +104,11 @@ test('تقسيم الاختيار المختلط: مين ينتقل من أنه�
   const company = m.splitPayrollBulkMembership([candidate(9, [], { branchId: 2 })], { targetRunId: 99, branchScope: null })
   assert.deepEqual(company.groups, [{ fromRunId: null, employeeIds: [9] }])
   assert.equal(company.skipped.length, 0)
+  // نطاق فرعين: موظف الفرع التاني جوه النطاق، وحساب غير مسند (نطاق فاضي) يتخطى الكل — مش «الكل»
+  const twoBranches = m.splitPayrollBulkMembership([candidate(9, [], { branchId: 2 }), candidate(11, [], { branchId: 3 })], { targetRunId: 99, branchScope: [1, 2] })
+  assert.deepEqual(twoBranches.groups, [{ fromRunId: null, employeeIds: [9] }])
+  assert.deepEqual(twoBranches.skipped.map(row => [row.employeeId, row.skipCode]), [[11, 'OUT_OF_BRANCH_SCOPE']])
+  const unassigned = m.splitPayrollBulkMembership([candidate(1, [])], { targetRunId: 99, branchScope: [] })
+  assert.deepEqual(unassigned.groups, [])
+  assert.deepEqual(unassigned.skipped.map(row => row.skipCode), ['OUT_OF_BRANCH_SCOPE'])
 })

@@ -695,7 +695,7 @@ export default function RequestTypesPage() {
             : {}),
           visibleTo: visibleTo as Parameters<typeof createRequestType>[0]['visibleTo'],
           // حساب الشركة يختار الفرع؛ حساب الفرع يتضاف لفرعه تلقائيًا من الخادم
-          ...(branchInfo.scope === null && form.branchId != null ? { branchId: form.branchId } : {}),
+          ...(branchInfo.choosesBranch && form.branchId != null ? { branchId: form.branchId } : {}),
         })
         setNotice(`تم إنشاء نوع الطلب «${form.nameAr.trim()}» بنجاح`)
       }
@@ -712,7 +712,7 @@ export default function RequestTypesPage() {
   // فرع النوع اللي بيتعدّل/بيتضاف: نوع الفرع يختار موظفين وأقسام من فرعه بس
   const formBranch: number | null = editing
     ? editing.branchId ?? null
-    : branchInfo.scope === null ? form.branchId : branchInfo.scope === -1 ? null : branchInfo.scope
+    : branchInfo.choosesBranch ? form.branchId : branchInfo.scope?.[0] ?? null
   const formDepartments = departments.filter((d) => formBranch == null || d.branchId === formBranch)
   // فرق «فين»: فرق أقسام فرع النوع (فرع الفريق = فرع قسمه)
   const formTeams = teams.filter((t) => formDepartments.some((d) => d.id === t.departmentId) && (t.isActive !== false || form.teamIds.includes(t.id)))

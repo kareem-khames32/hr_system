@@ -41,7 +41,7 @@ test('الخدمة نفسها بتفرض الحقول الإجبارية وشك�
   assert.equal(employeeCreateIssue(complete({ basicSalary: 0 }), today), 'الراتب الأساسي لازم يكون رقم أكبر من صفر')
   // بلا مستودعات: لو الفحص اتأخر بعد أي قراءة كان هيقع TypeError مش 400
   const service = Object.create(EmployeesService.prototype)
-  await assert.rejects(service.create({ employeeCode: 'CALRECRUIT', fullName: 'مرشح تعيين', branchId: 1, basicSalary: 6000, joinDate: '2026-09-16' }, 12, 1),
+  await assert.rejects(service.create({ employeeCode: 'CALRECRUIT', fullName: 'مرشح تعيين', branchId: 1, basicSalary: 6000, joinDate: '2026-09-16' }, 12, [1]),
     error => error.getStatus?.() === 400 && error.message === 'تاريخ الميلاد مطلوب')
   await assert.rejects(service.create(complete({ fullName: 'Ahmed Ali' }), 12, null), error => error.getStatus?.() === 400 && /بالعربي/.test(error.message))
 })
@@ -55,7 +55,7 @@ test('التعيين بيبعت بيانات النموذج كاملة للخد�
   const result = await controller.hire(3, Object.assign(new HireCandidateDto(), complete()), hrBranch1)
   assert.equal(result.candidate.stage, 'hired'); assert.equal(result.candidate.hiredEmployeeId, 99)
   assert.equal(calls.length, 1)
-  assert.equal(calls[0].scope, 1); assert.equal(calls[0].actor, 12)
+  assert.deepEqual(calls[0].scope, [1]); assert.equal(calls[0].actor, 12)
   assert.equal(calls[0].dto.fullName, 'أحمد محمد السعيد', 'الاسم العربي من النموذج مش اسم المرشح القديم')
   assert.equal(calls[0].dto.status, 'probation'); assert.equal(calls[0].dto.nationalId, '1012345678'); assert.equal(calls[0].dto.fingerprintCode, '900')
   candidates.push({ id: 4, branchId: 1, stage: 'offer', fullName: 'مرشح' })

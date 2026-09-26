@@ -11,7 +11,7 @@ import { Cron } from '@nestjs/schedule'
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, In, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchScopeOf, inBranchScope as scopeHasBranch, scopeWord, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
 import { grossMonthlySalary } from '../employees/compensation'
@@ -77,11 +77,8 @@ const PARTY_PERMS: Record<ClearanceParty, string[]> = {
 }
 
 // الجهات بالصلاحية مقفولة على فرع الموظف (القاعدة الأساسية للعزل) — مثل صندوق
-// الموافقات؛ نطاق null (مدير النظام) = كل الفروع
-const inBranchScope = (user: JwtPayload, branchId?: number | null) => {
-  const scope = branchScopeOf(user)
-  return scope === null || branchId === scope
-}
+// الموافقات؛ نطاق null (مدير النظام) = كل الفروع، وحساب الفروع = الفروع دي بس
+const inBranchScope = (user: JwtPayload, branchId?: number | null) => scopeHasBranch(branchScopeOf(user), branchId)
 
 // SEC-EMP-1: الموظف داخل الملف projection مختصر — الهوية والراتب والبنك
 // لأصحاب التصفية (settlement.edit/approve) فقط
@@ -591,7 +588,7 @@ export class OffboardingService implements OnApplicationBootstrap {
         // الجهة تعتمد بنود موظفي فرعها فقط
         if (!inScope) {
           throw new ForbiddenException(
-            'الموظف خارج نطاق فرعك — جهة الإخلاء تعتمد بنود فرعها فقط'
+            `الموظف خارج نطاق ${scopeWord(branchScopeOf(user))} — جهة الإخلاء تعتمد بنود فرعها فقط`
           )
         }
       }

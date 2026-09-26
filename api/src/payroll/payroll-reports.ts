@@ -10,8 +10,9 @@ import { readLoanInstallmentPositions, type LoanInstallmentPosition } from './pa
 import { PAYROLL_REVERSAL_LINES_TABLE, payrollLineNotReversedSql } from './payroll-reversal-sql'
 
 // تقارير الرواتب (الخطوة 30 / RP-07, RP-08, RP-10, RP-12, PR-07): قراءة فقط، بلا أي كتابة.
-// النطاق: null = كل الشركة، رقم موجب = فرع المستخدم، وأي قيمة أخرى = نطاق فارغ.
-export type PayrollReportScope = number | null
+// النطاق: null = كل الشركة، مصفوفة = فروع المستخدم (فرع أو أكتر — branchScopeOf)، والمصفوفة الفاضية = نطاق فارغ.
+// الرقم الواحد مقبول زي الأول (فرع واحد)، وأي رقم غير صالح = نطاق فارغ.
+export type PayrollReportScope = number | number[] | null
 
 const DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 const DAY_MS = 86_400_000
@@ -49,7 +50,14 @@ export function assertReportRange(from: string, to: string) {
   if ((Date.parse(to) - Date.parse(from)) / DAY_MS > 366) throw new BadRequestException('فترة التقرير لا تتجاوز سنة واحدة')
 }
 
-const emptyScope = (scope: PayrollReportScope) => scope !== null && !(Number.isInteger(scope) && scope > 0)
+const scopeList = (scope: PayrollReportScope): number[] | null =>
+  scope === null ? null : (Array.isArray(scope) ? scope : [scope]).filter(id => Number.isInteger(id) && id > 0)
+const emptyScope = (scope: PayrollReportScope) => { const list = scopeList(scope); return list !== null && list.length === 0 }
+// الفرع ده جوه النطاق؟ (null = الكل؛ فرع مجهول null مش جوه أي نطاق مقفول)
+const inReportScope = (scope: PayrollReportScope, branchId: number | null) => {
+  const list = scopeList(scope)
+  return list === null || (branchId != null && list.includes(Number(branchId)))
+}
 
 function parseIds(value: unknown): number[] {
   if (typeof value !== 'string' || !value.trim()) return []
@@ -231,7 +239,7 @@ export async function payrollRunsReport(em: EntityManager, scope: PayrollReportS
       const runLines = linesByReversalRun.get(Number(run.id)) ?? []
       const parent = runById.get(Number(run.parentRunId))
       const visibleLines = runLines.filter(line => scope === null ||
-        (!!parent && effectiveBranch(parent, memberByKey.get(memberKey(Number(line.originalRunId), Number(line.employeeId)))) === scope))
+        (!!parent && inReportScope(scope, effectiveBranch(parent, memberByKey.get(memberKey(Number(line.originalRunId), Number(line.employeeId)))))))
       if (scope !== null && !visibleLines.length) continue
       resultRuns.push({ ...base, employees: visibleLines.length, excluded: 0, totalNet: reportMoney(-sumCents(visibleLines.map(line => line.netPay))),
         reversedEmployees: 0, reversedNet: '0.00', partial: scope !== null && visibleLines.length < runLines.length })
@@ -239,11 +247,11 @@ export async function payrollRunsReport(em: EntityManager, scope: PayrollReportS
     }
     const runItems = itemsByRun.get(Number(run.id)) ?? []
     const runMembers = membersByRun.get(Number(run.id)) ?? []
-    const inScope = (employeeId: number) => scope === null || effectiveBranch(run, memberByKey.get(memberKey(run.id, employeeId))) === scope
+    const inScope = (employeeId: number) => scope === null || inReportScope(scope, effectiveBranch(run, memberByKey.get(memberKey(run.id, employeeId))))
     const visibleItems = runItems.filter(item => inScope(Number(item.employeeId)))
     const visibleMembers = runMembers.filter(member => inScope(Number(member.employeeId)))
     const visible = scope === null || visibleItems.length > 0 || visibleMembers.length > 0 ||
-      (!runItems.length && !runMembers.length && legacyBranchOf(run) === scope)
+      (!runItems.length && !runMembers.length && inReportScope(scope, legacyBranchOf(run)))
     if (!visible) continue
     const reversed = (item: ItemRow) => reversedKeys.has(memberKey(Number(run.id), Number(item.employeeId)))
     const reversedItems = visibleItems.filter(reversed)
@@ -298,7 +306,13 @@ function employeeWhere(scope: PayrollReportScope, filters: PayrollReportEmployee
     params.push(value)
     where.push(`${alias}.[${column}] = @${params.length - 1}`)
   }
-  add('branchId', scope)
+  // نطاق الفروع: فرع واحد = «=» زي الأول، أكتر من فرع = IN (…) بمعاملات، والفاضي = 1 = 0 (ولا صف)
+  const list = scopeList(scope)
+  if (list !== null) {
+    if (!list.length) where.push('1 = 0')
+    else if (list.length === 1) add('branchId', list[0])
+    else where.push(`${alias}.[branchId] IN (${list.map(id => { params.push(id); return `@${params.length - 1}` }).join(', ')})`)
+  }
   add('branchId', filters.branchId)
   add('departmentId', filters.departmentId)
   add('teamId', filters.teamId)
@@ -308,7 +322,8 @@ function employeeWhere(scope: PayrollReportScope, filters: PayrollReportEmployee
 
 const runRef = (run: RunRow, scope: PayrollReportScope) => {
   // مسير خارج فرع المستخدم لا يُكشف اسمه ولا رقمه (نفس سياسة visibleConflicts).
-  const own = scope === null || (run.scopeType === 'BRANCH' && legacyBranchOf(run) === scope)
+  const ids = run.scopeIds ? parseIds(run.scopeIds) : run.branchId ? [Number(run.branchId)] : []
+  const own = scope === null || (run.scopeType === 'BRANCH' && ids.length > 0 && ids.every(id => inReportScope(scope, id)))
   return { id: own ? Number(run.id) : null, name: own ? run.name : 'مسير خارج نطاق صلاحيتك', period: run.period, status: run.status,
     startDate: run.startDate, endDate: run.endDate }
 }
@@ -900,7 +915,7 @@ export async function payrollVarianceReport(em: EntityManager, scope: PayrollRep
   for (const item of items) {
     const run = runById.get(Number(item.runId))!
     const member = memberByKey.get(memberKey(Number(item.runId), Number(item.employeeId)))
-    if (scope !== null && effectiveBranch(run, member) !== scope) continue
+    if (scope !== null && !inReportScope(scope, effectiveBranch(run, member))) continue
     const employeeId = Number(item.employeeId)
     const row: Accumulator = byEmployee.get(employeeId) ?? { current: null, previous: null, currentRuns: [], previousRuns: [],
       name: member?.fullName ?? identities.get(employeeId)?.fullName ?? null, code: member?.employeeCode ?? identities.get(employeeId)?.employeeCode ?? null }

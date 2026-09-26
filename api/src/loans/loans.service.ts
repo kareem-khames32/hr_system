@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { randomBytes } from 'node:crypto'
 import { DataSource, EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchScopeOf, branchScopeSql, inBranchScope, userHasPerm } from '../auth/guards'
 import { PayrollDecimal } from '../payroll/payroll-decimal'
 import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { repayLoanEarly } from '../payroll/payroll-installment-ledger'
@@ -24,8 +24,8 @@ export class LoansService {
 
   private async employeeInScope(em: EntityManager, user: JwtPayload, employeeId: number, notFound = 'الموظف غير موجود') {
     const [employee] = await em.query('SELECT [id],[branchId],[fullName],[employeeCode] FROM [employees] WHERE [id]=@0', [employeeId])
-    const scope = branchScopeOf(user)
-    if (!employee || (scope !== null && employee.branchId !== scope)) throw new NotFoundException(notFound)
+    // صف SQL خام: الفرع رقم أو null — والمقارنة بفروع النطاق (فرع أو أكتر)
+    if (!employee || !inBranchScope(branchScopeOf(user), employee.branchId == null ? null : Number(employee.branchId))) throw new NotFoundException(notFound)
     return employee
   }
 
@@ -134,7 +134,7 @@ export class LoansService {
       const namedApprover = user.employeeId != null && Array.isArray(steps) && steps.some(step => step?.approverEmployeeId === user.employeeId)
       const privileged = ['requests.view_all', 'payroll.view', 'loans.cap_override', 'approve.hr', 'approve.finance', 'approve.executive', 'approve.payroll'].some(perm => userHasPerm(user, perm))
       const scope = branchScopeOf(user)
-      if (!namedApprover && (!privileged || (scope !== null && req.branchId !== scope))) throw new NotFoundException('طلب السلفة غير موجود')
+      if (!namedApprover && (!privileged || !inBranchScope(scope, req.branchId == null ? null : Number(req.branchId)))) throw new NotFoundException('طلب السلفة غير موجود')
       let payload: Record<string, any>
       try { payload = JSON.parse(req.payload || '{}') } catch { throw new ConflictException('حمولة طلب السلفة تالفة') }
       const schedule = loanScheduleAmounts(payload.amount, payload.months ?? 1)
@@ -211,9 +211,11 @@ export class LoansService {
 
   // ===== AD-13: أرصدة ما بعد الإنهاء =====
   async listRecoveries(user: JwtPayload) {
-    const scope = branchScopeOf(user)
+    // فروع النطاق معاملات @n (فرع أو أكتر؛ الفاضي 1 = 0)
+    const params: unknown[] = []
+    const inScope = branchScopeSql('[branchId]', branchScopeOf(user), params)
     const rows = await this.ds.query(`SELECT ${LOAN_RECOVERY_COLUMNS} FROM [loan_recovery_balances]
-      ${scope === null ? '' : 'WHERE [employeeId] IN (SELECT [id] FROM [employees] WHERE [branchId]=@0)'} ORDER BY [id] DESC`, scope === null ? [] : [scope])
+      ${inScope ? `WHERE [employeeId] IN (SELECT [id] FROM [employees] WHERE ${inScope})` : ''} ORDER BY [id] DESC`, params)
     if (!rows.length) return []
     const ids = JSON.stringify(rows.map((row: any) => row.id)), employeeIds = JSON.stringify([...new Set(rows.map((row: any) => row.employeeId))])
     const employees = await this.ds.query('SELECT [id],[fullName],[employeeCode],[branchId] FROM [employees] WHERE [id] IN (SELECT CAST([value] AS int) FROM OPENJSON(@0))', [employeeIds])

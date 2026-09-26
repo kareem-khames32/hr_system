@@ -1,7 +1,8 @@
 import { Injectable } from '@nestjs/common'
 import { DataSource } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf } from '../auth/guards'
+import { andBranchScopeSql, branchScopeOf } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { localDateOf } from '../attendance/attendance.service'
 import { BULK_CONTENT_TYPES } from './employee-bulk-update.sheet'
 import { canSeeEmployeesFinance } from './employee-projection'
@@ -52,10 +53,13 @@ export class EmployeeExportService {
     return rows
   }
 
-  private rowsById(ids: number[], branchScope: number | null): Promise<EmployeeExportRow[]> {
-    return this.chunked<EmployeeExportRow>(ids, (list, params) => branchScope === null
-      ? this.ds.query(`${EXPORT_SELECT} WHERE e.[id] IN (${list})`, params)
-      : this.ds.query(`${EXPORT_SELECT} WHERE e.[id] IN (${list}) AND e.[branchId] = @${params.length}`, [...params, branchScope]))
+  private rowsById(ids: number[], branchScope: BranchScope): Promise<EmployeeExportRow[]> {
+    return this.chunked<EmployeeExportRow>(ids, (list, params) => {
+      // فروع النطاق معاملات بعد أرقام الموظفين (@n…) — مش ملزوقة في نص الاستعلام
+      const all: unknown[] = [...params]
+      const inScope = andBranchScopeSql('e.[branchId]', branchScope, all)
+      return this.ds.query(`${EXPORT_SELECT} WHERE e.[id] IN (${list}) ${inScope}`, all)
+    })
   }
 
   private async lookups(rows: EmployeeExportRow[]): Promise<EmployeeExportLookups> {

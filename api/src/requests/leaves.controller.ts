@@ -13,7 +13,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { DataSource, In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { branchScopeOf, branchScopeQb, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard, scopeWord } from '../auth/guards'
 import { AttendanceService } from '../attendance/attendance.service'
 import { Employee } from '../employees/employee.entity'
 import { Leave, LeaveType } from './entities/leave.entities'
@@ -75,10 +75,8 @@ export class LeavesController {
     const filtered = () => {
       const qb = this.leaves.createQueryBuilder('l')
       if (scope !== null) {
-        qb.andWhere(
-          'l.employeeId IN (SELECT e.id FROM employees e WHERE e.branchId = :scope)',
-          { scope }
-        )
+        const [inScope, params] = branchScopeQb('e.branchId', scope)
+        qb.andWhere(`l.employeeId IN (SELECT e.id FROM employees e WHERE ${inScope})`, params)
       }
       if (month) {
         const [y, m] = month.split('-').map(Number)
@@ -161,8 +159,8 @@ export class LeavesController {
       const emp = await this.employees.findOne({
         where: { id: leave.employeeId },
       })
-      if (emp?.branchId !== scope) {
-        throw new BadRequestException('الإجازة خارج نطاق فرعك')
+      if (!inBranchScope(scope, emp?.branchId)) {
+        throw new BadRequestException(`الإجازة خارج نطاق ${scopeWord(scope)}`)
       }
     }
     if (leave.status !== 'APPROVED') {

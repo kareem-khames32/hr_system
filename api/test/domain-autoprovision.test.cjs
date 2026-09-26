@@ -188,7 +188,7 @@ test('AP8 — كارت الملف بيتقرا بصلاحية عرض الموظ�
   assert.match(card, /actor\.employeeId !== id && !userHasPerm\(actor, 'employees\.view'\)/)
   assert.match(card, /throw new ForbiddenException\('لا تملك صلاحية عرض الموظفين'\)/)
   // خارج نطاق الفرع = غير موجود
-  assert.match(card, /scope != null && employee\.branchId !== scope[\s\S]{0,120}NotFoundException/)
+  assert.match(card, /!employee \|\| !inBranchScope\(scope, employee\.branchId\)[\s\S]{0,120}NotFoundException/)
   // مفيش users.manage على الكارت (الزرّ هو اللي محتاجها)، وcanSync مرآة حراسة الخادم
   assert.doesNotMatch(card, /@Perm\(/)
   assert.match(card, /canSync: userHasPerm\(actor, 'users\.manage'\) && scope === null/)

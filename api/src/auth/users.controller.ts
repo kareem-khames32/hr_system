@@ -32,7 +32,20 @@ import {
 import { Type } from 'class-transformer'
 import { AuthService } from './auth.service'
 import type { JwtPayload } from './auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from './guards'
+import {
+  branchScopeCovers,
+  branchScopeOf,
+  branchScopeQb,
+  cleanBranchIds,
+  CurrentUser,
+  effectiveBranchScope,
+  inBranchScope,
+  JwtAuthGuard,
+  parseScopeBranchIds,
+  Perm,
+  RolesGuard,
+  scopeWord,
+} from './guards'
 import {
   adminGrantViolation,
   ALL_PERMISSIONS,
@@ -111,6 +124,13 @@ class CreateUserDto {
   @IsOptional()
   @IsBoolean({ message: 'نطاق الحساب غير صالح' })
   scopeAllBranches?: boolean
+
+  // «نطاق الفروع» بعلامات صح: فرع أو أكتر (مش مبعوت/فاضي = فرعه الأصلي بس)
+  @IsOptional()
+  @IsArray({ message: 'فروع النطاق غير صالحة' })
+  @ArrayMaxSize(200, { message: 'فروع النطاق كتير قوي' })
+  @IsInt({ each: true, message: 'فروع النطاق غير صالحة' })
+  scopeBranchIds?: number[]
 }
 
 class UpdateUserDto {
@@ -152,6 +172,13 @@ class UpdateUserDto {
   @IsOptional()
   @IsBoolean({ message: 'نطاق الحساب غير صالح' })
   scopeAllBranches?: boolean
+
+  // «نطاق الفروع» بعلامات صح: فرع أو أكتر. null أو [] = يرجع لفرعه الأصلي بس
+  @IsOptional()
+  @IsArray({ message: 'فروع النطاق غير صالحة' })
+  @ArrayMaxSize(200, { message: 'فروع النطاق كتير قوي' })
+  @IsInt({ each: true, message: 'فروع النطاق غير صالحة' })
+  scopeBranchIds?: number[] | null
 }
 
 // «نطاقه: كل الفروع» بيوسّع كل صلاحية يحملها الحساب على الشركة كلها، فهو تصعيد زي الصلاحيات الحصرية:
@@ -159,6 +186,29 @@ class UpdateUserDto {
 // وإلا مدير موارد بشرية مقفول على فرع يعيّن كلمة مرور لحساب «كل الفروع» في فرعه ويدخل بيه.
 export const SCOPE_ALL_BRANCHES_SUPER_ADMIN_ONLY = 'تغيير نطاق الحساب «فرعه / كل الفروع» متاح لمدير النظام فقط'
 export const SCOPE_ALL_BRANCHES_ACCOUNT_LOCKED = 'الحساب ده نطاقه «كل الفروع» — تعديله متاح لمدير النظام فقط'
+// ونفس المنطق للفروع المختارة بعلامات صح: حساب فروع يدّي فروع جوه نطاقه بس، ومايديرش حساب نطاقه فيه فرع برّه نطاقه
+// (وإلا مدير الفرع 2 يعيّن كلمة مرور لحساب على الفرع 2 و3 ويدخل بيه على الفرع 3)
+export const SCOPE_BRANCHES_OUTSIDE_ACTOR = 'تقدر تدّي فروع جوه نطاقك بس'
+export const SCOPE_WIDER_ACCOUNT_LOCKED = 'الحساب ده نطاقه فيه فروع برّه نطاقك — تعديله لحساب نطاقه يغطي كل فروعه'
+
+/**
+ * نطاق الحساب للشاشة: scopeBranchIds = المختارة بعلامات صح ([] = مفيش اختيار صريح، فرعه الأصلي بس)،
+ * وbranchIds = النطاق الفعّال (null = كل الفروع) — نفس اللي بيتكتب في توكنه.
+ */
+export const scopeView = (user: Pick<User, 'role' | 'scopeAllBranches' | 'scopeBranchIds' | 'branchId'>) => ({
+  scopeBranchIds: parseScopeBranchIds(user.scopeBranchIds),
+  branchIds: effectiveBranchScope(user),
+})
+
+/**
+ * الحساب ده ينفع المنفّذ يديره (كلمة مرور، دور، صلاحيات، فروع…)؟ حساب «كل الفروع» لمدير النظام بس (قرار 22 سبتمبر)،
+ * وحساب نطاقه أوسع من نطاق المنفّذ (فيه فرع برّه نطاقه) لحساب نطاقه يغطيه بس. المنفّذ على مستوى الشركة يغطي أي فروع.
+ */
+export function assertManageableScope(actor: JwtPayload, target: User) {
+  if (actor.role === 'super_admin') return
+  if (target.role !== 'super_admin' && target.scopeAllBranches === true) throw new ForbiddenException(SCOPE_ALL_BRANCHES_ACCOUNT_LOCKED)
+  if (!branchScopeCovers(branchScopeOf(actor), effectiveBranchScope(target))) throw new ForbiddenException(SCOPE_WIDER_ACCOUNT_LOCKED)
+}
 
 // مزامنة حسابات الدومين: معاينة افتراضيًّا، والكتابة محتاجة apply=true صريحة في الجسم
 class DomainSyncDto {
@@ -217,17 +267,47 @@ export class UsersController {
     if (!ok) throw new BadRequestException('الدور غير صالح أو معطّل')
   }
 
-  // الفرع المُسند: في نطاق المنفّذ (غير مدير النظام = فرعه فقط، ولا «بلا فرع»
-  // لأن حساباً غير super_admin بلا فرع يرى كل الفروع) — وموجود فعلاً
+  // الفرع المُسند: في نطاق المنفّذ (حساب الفروع = فرع من فروعه فقط، ولا «بلا فرع») — وموجود فعلاً
   private async assertAssignableBranch(actor: JwtPayload, branchId: number | null) {
     const scope = branchScopeOf(actor)
-    if (scope !== null && branchId !== scope) {
-      throw new ForbiddenException('لا يمكنك إسناد فرع خارج نطاق فرعك')
+    if (!inBranchScope(scope, branchId)) {
+      throw new ForbiddenException(`لا يمكنك إسناد فرع خارج نطاق ${scopeWord(scope)}`)
     }
     if (branchId != null) {
       const branch = await this.branches.findOne({ where: { id: branchId } })
       if (!branch) throw new BadRequestException('الفرع غير موجود')
     }
+  }
+
+  // فرع الحساب الجديد لما محدش حدده ولا فيه موظف مربوط: المنفّذ على مستوى الشركة = بلا فرع (زي الأول)، وحساب
+  // الفرع الواحد = فرعه، وحساب الفروع المتعددة لازم يختار — مفيش اختيار صامت
+  private defaultBranchFor(actor: JwtPayload): number | null {
+    const scope = branchScopeOf(actor)
+    if (scope === null) return null
+    if (scope.length === 1) return scope[0]
+    if (scope.length === 0) throw new ForbiddenException('حسابك مش مربوط بفرع')
+    throw new BadRequestException('حسابك على أكتر من فرع — اختار فرع الحساب')
+  }
+
+  /**
+   * فروع النطاق المختارة بعلامات صح → النص اللي هيتخزن في users.scopeBranchIds (null = فرعه الأصلي بس).
+   * كل فرع لازم يكون موجود، وحساب الفروع يدّي فروع جوه نطاقه بس (المنفّذ على مستوى الشركة يدّي أي فرع).
+   * الاختيار اللي هو فرعه الأصلي بالظبط بيتخزن null: «فرعه بس» شكل واحد، وبيمشي مع فرعه لو اتغيّر.
+   */
+  private async scopeBranchIdsToStore(
+    actor: JwtPayload,
+    raw: number[] | null | undefined,
+    homeBranchId: number | null
+  ): Promise<string | null> {
+    if (raw == null || raw.length === 0) return null
+    const ids = cleanBranchIds(raw)
+    if (ids.length !== raw.length) throw new BadRequestException('فروع النطاق غير صالحة أو مكررة')
+    if (!branchScopeCovers(branchScopeOf(actor), ids)) throw new ForbiddenException(SCOPE_BRANCHES_OUTSIDE_ACTOR)
+    const found = await this.branches.find({ where: { id: In(ids) }, select: ['id'] })
+    if (found.length !== ids.length) throw new BadRequestException('فرع أو أكتر من فروع النطاق غير موجود')
+    const sorted = [...ids].sort((a, b) => a - b)
+    if (sorted.length === 1 && homeBranchId != null && sorted[0] === homeBranchId) return null
+    return JSON.stringify(sorted)
   }
 
   // الموظف المربوط: موجود وفي نطاق المنفّذ، وغير مربوط بحساب آخر
@@ -238,7 +318,7 @@ export class UsersController {
   ) {
     const scope = branchScopeOf(actor)
     const employee = await this.employees.findOne({ where: { id: employeeId } })
-    if (!employee || (scope !== null && employee.branchId !== scope)) {
+    if (!employee || !inBranchScope(scope, employee.branchId)) {
       throw new BadRequestException('الموظف غير موجود')
     }
     const linked = await this.users.findOne({
@@ -272,7 +352,8 @@ export class UsersController {
       .createQueryBuilder('u')
       .addSelect(['u.mustChangePassword', 'u.passwordChangedAt'])
       .orderBy('u.id', 'ASC')
-    if (scope !== null) query.where('u.branchId = :scope', { scope })
+    // حساب الفروع يشوف حسابات فروعه (بفرعها الأصلي)
+    if (scope !== null) query.where(...branchScopeQb('u.branchId', scope))
     const rows = await query.getMany()
     const legacyIds = legacyUnusablePasswordUserIds()
     // لا نُخرج الـ hash أبداً — بس علامة «مستخدم منقول — محتاج باسورد»
@@ -281,6 +362,7 @@ export class UsersController {
       mustChangePassword: !!rest.mustChangePassword,
       // «نطاقه: كل الفروع» — مدير النظام نطاقه كامل بدوره فالعلم عليه دايمًا false
       scopeAllBranches: rest.role !== 'super_admin' && rest.scopeAllBranches === true,
+      ...scopeView(rest),
       legacyNeedsPassword: needsPasswordFromLegacy(rest, legacyIds),
       // «حساب دومين»: مربوط بحساب Active Directory (بيدخل بكلمة المجال، ومفيش كلمة عندنا).
       // الشاشة بتعلّمه عشان المالك يفرّق وهو بيسند الأدوار بين حساب المجال وحساب البريد+الكلمة.
@@ -331,8 +413,8 @@ export class UsersController {
     }
     const targets = await this.users.find({ where: { id: In(ids) } })
     const scope = branchScopeOf(actor)
-    // خارج نطاق فرع المنفّذ = غير موجود (زي القائمة)
-    const visible = targets.filter((u) => scope === null || u.branchId === scope)
+    // خارج نطاق فروع المنفّذ = غير موجود (زي القائمة)
+    const visible = targets.filter((u) => inBranchScope(scope, u.branchId))
     if (visible.length !== ids.length) {
       throw new NotFoundException('مستخدم أو أكتر من المختارين مش موجود')
     }
@@ -346,6 +428,12 @@ export class UsersController {
       if (actor.role !== 'super_admin' && target.scopeAllBranches === true) {
         throw new ForbiddenException(
           `حساب ${target.displayName} نطاقه «كل الفروع» — تغيير كلمة مروره لمدير النظام بس`
+        )
+      }
+      // حساب نطاقه فيه فرع برّه نطاق المنفّذ: كلمة مروره = دخول على الفرع ده، فلحساب نطاقه يغطيه بس
+      if (!branchScopeCovers(scope, effectiveBranchScope(target))) {
+        throw new ForbiddenException(
+          `حساب ${target.displayName} نطاقه فيه فروع برّه نطاقك — تغيير كلمة مروره لحساب نطاقه يغطي كل فروعه`
         )
       }
       const beyond = await this.takeoverBeyond(actor, target)
@@ -397,14 +485,20 @@ export class UsersController {
       employee = await this.assertLinkableEmployee(actor, dto.employeeId)
     }
 
-    // super_admin بلا فرع — غيره يرث فرع الموظف المربوط إن وُجد، وإلا فرع المنفّذ
+    // super_admin بلا فرع — غيره يرث فرع الموظف المربوط إن وُجد، وإلا فرع المنفّذ (لو فرع واحد)
     const branchId =
       dto.role === 'super_admin'
         ? null
-        : (dto.branchId ?? employee?.branchId ?? branchScopeOf(actor))
+        : (dto.branchId ?? employee?.branchId ?? this.defaultBranchFor(actor))
     if (dto.role !== 'super_admin') {
       await this.assertAssignableBranch(actor, branchId)
     }
+    // «نطاق الفروع»: مدير النظام ونطاق «كل الفروع» مالهمش فروع مختارة؛ غيرهم الافتراضي فرعه الأصلي (null)
+    const scopeAll = dto.role !== 'super_admin' && dto.scopeAllBranches === true
+    const scopeBranchIds =
+      dto.role === 'super_admin' || scopeAll
+        ? null
+        : await this.scopeBranchIdsToStore(actor, dto.scopeBranchIds, branchId)
 
     const permissions = validatePermissions(dto.permissions)
     // منح users/roles/settings.manage (بالدور أو بصلاحية إضافية) لمدير النظام فقط
@@ -428,11 +522,12 @@ export class UsersController {
         employeeId: dto.employeeId,
         permissions,
         // مدير النظام نطاقه كامل بدوره — العلم مالوش معنى عليه فمايتخزنش
-        scopeAllBranches: dto.role !== 'super_admin' && dto.scopeAllBranches === true,
+        scopeAllBranches: scopeAll,
+        scopeBranchIds,
       })
     )
     const { passwordHash: _ph, ...rest } = saved
-    return rest
+    return { ...rest, ...scopeView(saved) }
   }
 
   @Patch(':id')
@@ -442,9 +537,9 @@ export class UsersController {
     @Body() dto: UpdateUserDto
   ) {
     const user = await this.users.findOne({ where: { id } })
-    // خارج نطاق فرع المنفّذ = غير موجود (زي القائمة) — يمنع أخذ حسابات فرع آخر
+    // خارج نطاق فروع المنفّذ = غير موجود (زي القائمة) — يمنع أخذ حسابات فرع آخر
     const scope = branchScopeOf(actor)
-    if (!user || (scope !== null && user.branchId !== scope)) {
+    if (!user || !inBranchScope(scope, user.branchId)) {
       throw new NotFoundException('المستخدم غير موجود')
     }
     if (
@@ -469,7 +564,7 @@ export class UsersController {
     const wasScopeAll = user.scopeAllBranches === true
     const nextScopeAll =
       nextRole === 'super_admin' ? false : (dto.scopeAllBranches ?? wasScopeAll)
-    const scopeChanged = nextScopeAll !== wasScopeAll
+    const scopeAllChanged = nextScopeAll !== wasScopeAll
     if (actor.role !== 'super_admin') {
       // فتح «كل الفروع» أو قفله = تصعيد/تنزيل نطاق — لمدير النظام فقط، زي الصلاحيات الحصرية
       if (dto.scopeAllBranches !== undefined && dto.scopeAllBranches !== wasScopeAll) {
@@ -477,8 +572,21 @@ export class UsersController {
       }
       // والحساب المفتوح له لا يديره (دور/صلاحيات/كلمة مرور/تفعيل/فرع/ربط) إلا مدير النظام
       if (wasScopeAll) throw new ForbiddenException(SCOPE_ALL_BRANCHES_ACCOUNT_LOCKED)
+      // وحساب نطاقه فيه فرع برّه نطاق المنفّذ مايديروش غير حساب نطاقه يغطيه
+      assertManageableScope(actor, user)
     }
-    // لا أحد يعدّل دوره أو صلاحياته أو ربط حسابه بنفسه (تصعيد ذاتي / انتحال موظف)
+    // «نطاق الفروع» بعلامات صح: مدير النظام و«كل الفروع» مالهمش فروع مختارة (بتتمسح)، وغيرهم اللي اتبعت
+    // (بعد التحقق) أو المخزّن زي ما هو. الفرع الأصلي الجديد بيدخل في حساب «فرعه بس» (بيتخزن null)
+    const nextBranchId = dto.branchId !== undefined ? (dto.branchId ?? null) : (user.branchId ?? null)
+    const nextScopeBranchIds =
+      nextRole === 'super_admin' || nextScopeAll
+        ? null
+        : dto.scopeBranchIds !== undefined
+          ? await this.scopeBranchIdsToStore(actor, dto.scopeBranchIds, nextBranchId)
+          : (user.scopeBranchIds ?? null)
+    const scopeBranchesChanged = nextScopeBranchIds !== (user.scopeBranchIds ?? null)
+    const scopeChanged = scopeAllChanged || scopeBranchesChanged
+    // لا أحد يعدّل دوره أو صلاحياته أو ربط حسابه أو نطاقه بنفسه (تصعيد ذاتي / انتحال موظف)
     if (
       actor.sub === id &&
       (roleChanged || permsChanged || branchChanged || employeeChanged || scopeChanged)
@@ -536,9 +644,10 @@ export class UsersController {
     if (dto.branchId !== undefined) user.branchId = dto.branchId
     if (dto.employeeId !== undefined) user.employeeId = dto.employeeId
     if (perms !== undefined) user.permissions = perms
-    if (scopeChanged) user.scopeAllBranches = nextScopeAll
+    if (scopeAllChanged) user.scopeAllBranches = nextScopeAll
+    if (scopeBranchesChanged) user.scopeBranchIds = nextScopeBranchIds
     // تغيير أمني (دور/صلاحيات/تعطيل/كلمة مرور/فرع/موظف مربوط/نطاق الفروع) → أبطِل التوكنات
-    // القائمة فوراً (الفرع والموظف و«كل الفروع» داخل الـJWT: نطاق البيانات وهوية الخدمة الذاتية)
+    // القائمة فوراً (الفرع والموظف و«كل الفروع» والفروع المختارة داخل الـJWT: نطاق البيانات وهوية الخدمة الذاتية)
     if (
       dto.role !== undefined ||
       perms !== undefined ||
@@ -552,6 +661,6 @@ export class UsersController {
     }
     const saved = await this.users.save(user)
     const { passwordHash: _ph, ...rest } = saved
-    return rest
+    return { ...rest, ...scopeView(saved) }
   }
 }

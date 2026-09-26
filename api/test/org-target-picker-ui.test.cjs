@@ -120,7 +120,7 @@ test('الشاشات: الجدول الأسبوعي بيعيّن لمدة بال
   assert.match(api, /'\/attendance\/schedule\/range'/)
   assert.match(api, /employeeIds\?: number\[\]; teamIds\?: number\[\]; from: string/)
   const service = fs.readFileSync(path.join(__dirname, '..', 'src', 'attendance', 'attendance.service.ts'), 'utf8')
-  assert.ok(service.includes("where: { teamId: In(teamIds), ...(scope !== null ? { branchId: scope } : {}) },"), 'team members resolved inside the branch scope')
+  assert.ok(service.includes("where: { teamId: In(teamIds), ...(scope !== null ? { branchId: branchIdIn(scope) } : {}) },"), 'team members resolved inside the branch scope')
 })
 
 test('المقفول بيقول سبب القفل: خلية الوردية في وضع «عرض»، و«نشط» في الجدول الافتراضي', () => {

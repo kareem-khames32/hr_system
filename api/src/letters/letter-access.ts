@@ -1,7 +1,7 @@
 import { ForbiddenException, NotFoundException } from '@nestjs/common'
 import { EntityManager } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { canReadEmployeeFinance } from '../employees/employee-projection'
 import type { StoredFile } from '../files/stored-file.entity'
@@ -35,8 +35,7 @@ export async function assertLetterAccess(em: EntityManager, user: JwtPayload, le
   const employee = await em.findOneBy(Employee, { id: letter.employeeId })
   const owner = !!user.employeeId && user.employeeId === letter.employeeId
   if (owner) return employee
-  const scope = branchScopeOf(user)
-  if (!(userHasPerm(user, 'documents.manage') && employee && (scope === null || scope === employee.branchId))) {
+  if (!(userHasPerm(user, 'documents.manage') && employee && inBranchScope(branchScopeOf(user), employee.branchId))) {
     throw new NotFoundException(missing)
   }
   // من هنا السائل مسؤول مستندات في فرع الموظف وشايف خطاباته أصلًا: الرفض المالي بسببه الصريح مش كاشف وجود

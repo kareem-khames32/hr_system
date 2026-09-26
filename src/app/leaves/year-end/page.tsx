@@ -6,6 +6,7 @@ import { AlertTriangle, CalendarCheck, CheckCircle2, Hourglass, Layers, Lock, Re
 import { MainLayout } from '@/components/layout'
 import { OrgTargetPicker, describeOrgTarget, initialOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
 import { can, fetchBranches, getCurrentUser, lockedBranchIdOf, type ApiBranch } from '@/lib/api'
+import { branchScopeOfUser, type BranchScope } from '@/lib/branch-scope'
 import { formatDateTime, localToday } from '@/lib/dates'
 import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { formatMoney } from '@/lib/money'
@@ -38,6 +39,8 @@ export default function LeaveYearEndPage() {
   const [year, setYear] = useState(DEFAULT_YEAR)
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [lockedBranchId, setLockedBranchId] = useState<number | null>(null)
+  // حساب الفروع المتعددة: يختار فرع منها (الشركة كلها لحساب على مستوى الشركة بس)
+  const [branchScope, setBranchScope] = useState<BranchScope>(null)
   const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(null, ['company', 'branch']))
   const [preview, setPreview] = useState<YearEndPreview | null>(null)
   const [history, setHistory] = useState<LeaveSettlement[]>([])
@@ -55,8 +58,10 @@ export default function LeaveYearEndPage() {
   useEffect(() => {
     const user = getCurrentUser()
     const locked = lockedBranchIdOf(user)
+    const scope = branchScopeOfUser(user)
     setLockedBranchId(locked)
-    setTarget(initialOrgTarget(locked, ['company', 'branch']))
+    setBranchScope(scope)
+    setTarget(initialOrgTarget(locked, ['company', 'branch'], scope))
     fetchBranches().then(setBranches).catch(() => setBranches([]))
   }, [])
 
@@ -143,7 +148,7 @@ export default function LeaveYearEndPage() {
             </label>
           </div>
           <OrgTargetPicker value={target} onChange={setTarget} branches={branches} levels={['company', 'branch']}
-            lockedBranchId={lockedBranchId} disabled={closing} showCount={false} />
+            lockedBranchId={lockedBranchId} branchScope={branchScope} disabled={closing} showCount={false} />
           {s && (
             <p className="text-sm text-gray-600 bg-gray-50 rounded-xl p-3">
               الترحيل: {s.carryOverEnabled ? (s.carryOverMaxDays == null ? 'المتبقي كله من غير حد' : `لحد ${Number(s.carryOverMaxDays)} يوم والباقي يسقط`) : 'مقفول — المتبقي كله يسقط'}

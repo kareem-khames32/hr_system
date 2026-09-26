@@ -1,4 +1,5 @@
 import { apiFetch, getCurrentUser, type CurrentUser } from './api'
+import { branchScopeOfUser, canSeeBranch } from './branch-scope'
 
 export type PayrollCalendarScope = 'GLOBAL' | 'BRANCH' | 'EMPLOYEE'
 export interface PayrollCalendarContext {
@@ -14,11 +15,14 @@ const dateValid = (date: unknown): date is string => typeof date === 'string' &&
 function scopeValid(scope: PayrollCalendarScope, sourceId: number) {
   if (!['GLOBAL', 'BRANCH', 'EMPLOYEE'].includes(scope) || (scope === 'GLOBAL' ? sourceId !== 0 : !idValid(sourceId))) throw new Error('نطاق التقويم غير صالح.')
 }
+// مرآة assertCalendarScope في الخادم: العام لحساب «كل الفروع» بس، وتقويم الفرع لحساب نطاقه فيه الفرع ده (فرع أو أكتر).
+// الحساب اللي مش على مستوى الشركة ومالوش فرع (نطاق فاضي) مايكتبش حاجة — مش «الكل».
 export function calendarScopeWritable(scope: PayrollCalendarScope, sourceId: number, user: CurrentUser | null = getCurrentUser()): boolean {
   if (!user) return false
-  if (user.role === 'super_admin' || user.scopeAllBranches === true) return true
-  if (scope === 'GLOBAL') return user.branchId == null
-  if (scope === 'BRANCH') return user.branchId == null || user.branchId === sourceId
+  const branches = branchScopeOfUser(user)
+  if (branches === null) return true
+  if (scope === 'GLOBAL') return false
+  if (scope === 'BRANCH') return canSeeBranch(branches, sourceId)
   return true // نطاق الموظف يُثبت من سياق الخادم؛ لا نستنتجه من معرّف الموظف.
 }
 export async function fetchPayrollCalendarContext(scope: PayrollCalendarScope, sourceId: number, signal?: AbortSignal): Promise<PayrollCalendarContext> {

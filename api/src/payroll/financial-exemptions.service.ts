@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { createHash } from 'node:crypto'
 import { EntityManager, In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { hasHrOverride } from '../requests/approver-resolver.service'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
@@ -108,8 +108,7 @@ export class FinancialExemptionsService {
   }
 
   private inBranch(user: JwtPayload, branchId: number | null | undefined) {
-    const scope = branchScopeOf(user)
-    return scope === null || (scope !== -1 && branchId != null && scope === branchId)
+    return inBranchScope(branchScopeOf(user), branchId)
   }
   private privileged(user: JwtPayload) { return [VIEW, GRANT, APPROVE].some(perm => userHasPerm(user, perm)) }
 

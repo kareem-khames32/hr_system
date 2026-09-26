@@ -34,6 +34,13 @@ export class User {
   @Column({ default: false })
   scopeAllBranches: boolean
 
+  // «نطاق الفروع» بعلامات صح (طلب المالك 26 سبتمبر): JSON لأرقام الفروع زي [2,3] — الحساب يشوف ويدير الفروع دي بس.
+  // null/فاضي = فرعه الأصلي (branchId) زي الأول. «كل الفروع» (scopeAllBranches) أقوى منه. الحساب الفعّال في
+  // effectiveBranchScope (guards.ts) — مصدر واحد للتوكن والشاشة. راكب في التوكن: أي تغيير له بيزوّد tokenVersion.
+  // type صريح: `string | null` بيوصل للـreflection كـObject. ترحيل 068 بيضيفه بنفس النوع والطول بالحرف.
+  @Column({ type: 'nvarchar', length: 400, nullable: true })
+  scopeBranchIds: string | null
+
   // ربط الحساب بالموظف
   @Column({ nullable: true })
   employeeId: number

@@ -1,5 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
+import type { BranchScope } from '../auth/guards'
 import { bankSheetSources, buildBankSheet, type BankSheetEmployeeInput, type BankSheetItemInput, type BankSheetMemberInput } from './bank-sheet'
 import { PAY_METHOD_LABELS } from './pay-split'
 import { payrollItemSettlementPayout } from './payroll-settlement-salary'
@@ -66,7 +67,7 @@ export function buildPayrollDisbursementRows(input: {
   employees: ReadonlyArray<BankSheetEmployeeInput>
   members: ReadonlyArray<MemberLike>
   marks: ReadonlyArray<MarkLike>
-  branchScope: number | null
+  branchScope: BranchScope
 }): { rows: PayrollDisbursementRow[]; mode: PayrollDisbursementMode } {
   const mode = payrollDisbursementMode(input.runStatus, input.marks)
   const open = payrollDisbursementOpen(input.runStatus, mode)

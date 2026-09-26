@@ -29,6 +29,15 @@ import {
   prorate,
 } from './leave-balance-periods'
 import { yearEndSplit } from './leave-year-end.math'
+import { branchIdIn, branchScopeQb, inBranchScope } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
+
+// نطاق الفروع في خدمة الأرصدة: null = الشركة، مصفوفة = الفروع دي (branchScopeOf)، ورقم = فرع واحد (فرع مختار/نداء قديم)
+const asBranchScope = (scope: BranchScope | number): BranchScope => (typeof scope === 'number' ? [scope] : scope)
+const branchScopeWhere = (scope: BranchScope | number) => {
+  const list = asBranchScope(scope)
+  return list === null ? {} : { branchId: list.length === 1 ? list[0] : branchIdIn(list) }
+}
 
 // ============================================================
 // الأرصدة بالطبقات:
@@ -431,8 +440,8 @@ export class LeaveBalancesService {
 
   // أرصدة السنة الجارية لكل موظفي النطاق دفعة واحدة — شاشة الأرصدة (LEV-23).
   // استعلام للموظفين وواحد للصفوف والإعدادات مرة، بدل نداء لكل موظف (~180).
-  // تعذّر حساب موظف يرجع في صفّه (error) ولا يُسقط الباقي؛ branchId null = كل الفروع
-  async bulkBalances(branchId: number | null) {
+  // تعذّر حساب موظف يرجع في صفّه (error) ولا يُسقط الباقي؛ branchId null = كل الفروع، مصفوفة = فروع النطاق
+  async bulkBalances(branchId: BranchScope | number) {
     const onDate = localDateOf(new Date())
     const year = Number(onDate.slice(0, 4))
     const emps = await this.employees.find({
@@ -446,7 +455,7 @@ export class LeaveBalancesService {
         status: true,
         annualLeaveEntitled: true,
       },
-      where: branchId != null ? { branchId } : {},
+      where: branchScopeWhere(branchId),
       order: { id: 'ASC' },
     })
     // صفوف السنة الجارية والسابقة (سنة الذكرى تبدأ في السنة السابقة أحيانًا)
@@ -457,11 +466,10 @@ export class LeaveBalancesService {
         cur: `${year}-%`,
         prev: `${year - 1}-%`,
       })
-    if (branchId != null) {
-      qb.andWhere(
-        'b.employeeId IN (SELECT e.id FROM employees e WHERE e.branchId = :branchId)',
-        { branchId }
-      )
+    const scope = asBranchScope(branchId)
+    if (scope !== null) {
+      const [inScope, params] = branchScopeQb('e.branchId', scope)
+      qb.andWhere(`b.employeeId IN (SELECT e.id FROM employees e WHERE ${inScope})`, params)
     }
     const byEmp = new Map<number, LeaveBalance[]>()
     for (const b of await qb.getMany()) {
@@ -534,7 +542,7 @@ export class LeaveBalancesService {
   async adjust(employeeId: number, dto: {
     balanceType: BalanceType; period: string; delta: number; reason: string;
     idempotencyKey: string; expectedRemaining?: number
-  }, actorUserId: number, branchScope: number | null) {
+  }, actorUserId: number, branchScope: BranchScope | number) {
     const onDate = localDateOf(new Date())
     const reason = dto.reason?.trim()
     const cents = (value: number) => Math.round(value * 100) / 100
@@ -549,7 +557,7 @@ export class LeaveBalancesService {
     return this.balances.manager.transaction(async em => {
       // Employee first serializes first-row creation and freezes branch scope.
       const employee = await em.findOne(Employee, { where: { id: employeeId }, lock: { mode: 'pessimistic_write' } })
-      if (!employee || (branchScope !== null && employee.branchId !== branchScope)) throw new NotFoundException('الموظف غير موجود')
+      if (!employee || !inBranchScope(asBranchScope(branchScope), employee.branchId)) throw new NotFoundException('الموظف غير موجود')
       const ctx = this.contextOf(employee, await this.accrualSettings(em))
       const repo = em.getRepository(LeaveBalance)
       const current = await this.resolveAt(repo, employeeId, dto.balanceType, onDate, ctx)
@@ -691,9 +699,9 @@ export class LeaveBalancesService {
 
   // صفوف السنوي والمرضي اللي تغطي بداية سنة لكل الموظفين النشطين — المرضي
   // مابيترحّلش فصفه لازم يتعمل مع بداية كل سنة (LEV-2). الموجود مابيتلمسش
-  async ensureYearRows(period: string, branchId: number | null = null) {
+  async ensureYearRows(period: string, branchId: BranchScope | number = null) {
     const emps = await this.employees.find({
-      where: { status: Not(In(['terminated', 'archived'])), ...(branchId !== null ? { branchId } : {}) },
+      where: { status: Not(In(['terminated', 'archived'])), ...branchScopeWhere(branchId) },
       select: { id: true, joinDate: true, annualLeaveEntitled: true },
     })
     return this.ensureRowsOf(period, emps, TYPED)
@@ -721,12 +729,12 @@ export class LeaveBalancesService {
 
   // قبل إقفال سنة: صفوف السنة المقفولة الناقصة للأنواع اللي بتترحّل. موظف ماخدش إجازة ولا اتعدّل رصيده
   // مالوش صف فيها، ومتبقيه كان بيضيع من الترحيل بصمت
-  private async ensureClosingRows(fromPeriod: string, branchId: number | null) {
+  private async ensureClosingRows(fromPeriod: string, branchId: BranchScope | number) {
     const settings = await this.accrualSettings()
     const types = TYPED.filter((t) => settings.types[t].carryOverEnabled)
     if (!types.length) return 0
     const emps = await this.employees.find({
-      where: { status: Not(In(['terminated', 'archived'])), ...(branchId !== null ? { branchId } : {}) },
+      where: { status: Not(In(['terminated', 'archived'])), ...branchScopeWhere(branchId) },
       select: { id: true, joinDate: true, annualLeaveEntitled: true },
     })
     return this.ensureRowsOf(fromPeriod, emps, types)
@@ -753,15 +761,15 @@ export class LeaveBalancesService {
   // أساس التجديد (سنة ميلادية أو ذكرى تعيين تبدأ بعد نهاية السنة). وبعده صفوف السنة
   // الجديدة الناقصة لكل النشطين. سنة ذكرى التعيين اللي خلصت خلال السنة المقفولة بتترحّل كمان
   // (التجديد اليومي بيرحّلها أول شهر بس). مايتكررش: المُرحّل مرة واحدة على صف السنة الجديدة
-  // branchId (فصل الفروع): المستخدم المقيد بفرع يرحّل أرصدة موظفي فرعه فقط؛ null = الشركة (المهمة الآلية ومدير النظام)
-  async rollover(fromPeriod: string, branchId: number | null = null) {
+  // branchId (فصل الفروع): المستخدم المقيد بفروع يرحّل أرصدة موظفي فروعه فقط؛ null = الشركة (المهمة الآلية ومدير النظام)
+  async rollover(fromPeriod: string, branchId: BranchScope | number = null) {
     if (!isYearKey(fromPeriod)) throw new BadRequestException('السنة غير صالحة')
     const toPeriod = String(Number(fromPeriod) + 1)
     const settings = await this.accrualSettings()
     const expiry = carryOverExpiry(`${toPeriod}-01-01`, settings.expiryMonths)
     const today = localDateOf(new Date())
     const inBranch = branchId === null ? null
-      : new Set((await this.employees.find({ where: { branchId }, select: { id: true } })).map((e) => e.id))
+      : new Set((await this.employees.find({ where: branchScopeWhere(branchId), select: { id: true } })).map((e) => e.id))
     let created = 0
     for (const t of TYPED) {
       const typeSettings = settings.types[t]
@@ -841,7 +849,7 @@ export class LeaveBalancesService {
 
   // «إقفال السنة» من الشاشة: صفوف السنة المقفولة الناقصة ثم نفس الترحيل، واحد في المرة
   // (المهمة الآلية أو إقفال تاني شغال = تعارض)
-  async closeYear(fromPeriod: string, branchId: number | null) {
+  async closeYear(fromPeriod: string, branchId: BranchScope | number) {
     if (!isYearKey(fromPeriod)) throw new BadRequestException('السنة غير صالحة')
     if (this.rolloverRunning) throw new ConflictException('الإقفال أو الترحيل الآلي شغال دلوقتي — استنى دقيقة وجرّب تاني')
     this.rolloverRunning = true
@@ -898,13 +906,13 @@ export class LeaveBalancesService {
     }
   }
 
-  // معاينة الإقفال لكل موظفي النطاق (branchId null = الشركة): استعلام للموظفين وواحد للصفوف
-  async yearEndPreview(year: string, branchId: number | null, today = localDateOf(new Date())) {
+  // معاينة الإقفال لكل موظفي النطاق (branchId null = الشركة، مصفوفة = فروع النطاق): استعلام للموظفين وواحد للصفوف
+  async yearEndPreview(year: string, branchId: BranchScope | number, today = localDateOf(new Date())) {
     if (!isYearKey(year)) throw new BadRequestException('السنة غير صالحة')
     const y = Number(year)
     const emps = await this.employees.find({
       select: { id: true, fullName: true, employeeCode: true, branchId: true, departmentId: true, joinDate: true, status: true, annualLeaveEntitled: true },
-      where: { status: Not(In(['terminated', 'archived'])), ...(branchId !== null ? { branchId } : {}) },
+      where: { status: Not(In(['terminated', 'archived'])), ...branchScopeWhere(branchId) },
       order: { id: 'ASC' },
     })
     const rows = await this.balances.find({

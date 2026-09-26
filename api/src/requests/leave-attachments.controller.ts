@@ -14,7 +14,7 @@ import { IsString, Matches, MaxLength } from 'class-validator'
 import { DataSource, In } from 'typeorm'
 import { localDateOf } from '../attendance/attendance.service'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
+import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
 import { leaveView } from '../common/leave-contract'
 import { Employee } from '../employees/employee.entity'
 import { StoredFile } from '../files/stored-file.entity'
@@ -42,7 +42,7 @@ export class LeaveAttachmentsController {
       if (!userHasPerm(user, 'leaves.revoke')) throw new ForbiddenException('يرفع مرفق الإجازة صاحبها أو الموارد البشرية')
       const scope = branchScopeOf(user)
       const emp = await this.ds.getRepository(Employee).findOne({ where: { id: leave.employeeId }, select: { id: true, branchId: true } })
-      if (!emp || (scope !== null && emp.branchId !== scope)) throw new NotFoundException('الإجازة غير موجودة')
+      if (!emp || !inBranchScope(scope, emp.branchId)) throw new NotFoundException('الإجازة غير موجودة')
     }
     if (leave.status !== 'APPROVED') throw new BadRequestException('يُرفق المستند لإجازة معتمدة فقط')
     if (leave.attachmentStatus === 'MISSED') {

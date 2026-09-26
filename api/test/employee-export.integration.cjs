@@ -70,7 +70,7 @@ before(async () => {
   E.second = await repo('Employee').save({ employeeCode: 'EMP-0003', fingerprintCode: '7', fullName: 'سارة علي', branchId: B.maadi.id,
     status: 'suspended', isActive: true, joinDate: '2025-12-31' })
   E.other = await repo('Employee').save({ employeeCode: 'EMP-0004', fingerprintCode: '0099', fullName: 'موظف الرياض', branchId: B.riyadh.id, status: 'active', isActive: true })
-  // حساب على مستوى الشركة = «نطاقه: كل الفروع» (scopeAllBranches)؛ من غيره الحساب بلا فرع نطاقه فاضي (branchScopeOf = -1)
+  // حساب على مستوى الشركة = «نطاقه: كل الفروع» (scopeAllBranches)؛ من غيره الحساب بلا فرع نطاقه فاضي (branchScopeOf = [])
   const user = (email, role, branchId, permissions, scopeAllBranches = false) => repo('User').save({ email, displayName: email,
     passwordHash: 'test-only', role, branchId, permissions: JSON.stringify(permissions), scopeAllBranches })
   U.finance = await user('finance@export.test', 'hr_manager', null, ['employees.view', 'payroll.view'], true)

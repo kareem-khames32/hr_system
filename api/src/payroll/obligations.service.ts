@@ -7,7 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf } from '../auth/guards'
+import { branchScopeOf, inBranchScope, scopeWord } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { roundPayrollMoney } from './payroll-money'
 import {
@@ -83,8 +83,8 @@ export class ObligationsService {
     })
     if (!employee) throw new NotFoundException('الموظف غير موجود')
     const scope = branchScopeOf(user)
-    if (scope !== null && employee.branchId !== scope) {
-      throw new ForbiddenException('الموظف خارج نطاق فرعك — لا يمكنك إدارة مديونياته')
+    if (!inBranchScope(scope, employee.branchId)) {
+      throw new ForbiddenException(`الموظف خارج نطاق ${scopeWord(scope)} — لا يمكنك إدارة مديونياته`)
     }
     return employee
   }

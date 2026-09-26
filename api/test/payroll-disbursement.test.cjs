@@ -55,7 +55,7 @@ test('DISB-02: الصفوف من نفس دوال كشف البنوك (مصدر �
   assert.deepEqual([totals.payable, totals.settlement, totals.noAmount], [{ count: 3, total: sheet.totals.net, bank: sheet.totals.bank, cash: sheet.totals.cash }, { count: 1, total: 2400 }, 1])
   assert.deepEqual(totals.payable, { count: 3, total: 14000.6, bank: 8000.1, cash: 6000.5 }, 'الجمع بالقروش: لا كسور عائمة')
   // حساب الفرع يشوف موظفي فرعه بس
-  assert.deepEqual(build('APPROVED', [], 2).rows.map(row => row.employeeId), [3])
+  assert.deepEqual(build('APPROVED', [], [2]).rows.map(row => row.employeeId), [3])
 })
 
 test('DISB-03: صف «تم الصرف» بتقسيمه المثبت وقت العلامة، والتعليم بعد الإقفال للي لسه ماتصرفلوش بس', () => {

@@ -9,7 +9,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { In, MoreThanOrEqual, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchIdIn, branchScopeOf, inBranchScope as scopeHasBranch, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { Employee, EmployeeStatus } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
@@ -62,11 +62,8 @@ const addDays = (ymd: string, n: number): string => {
   return localDateOf(new Date(y, m - 1, d + n))
 }
 
-// الجهات بالصلاحية مقفولة على فرع الموظف — نطاق null (مدير النظام) = كل الفروع
-const inBranchScope = (user: JwtPayload, branchId?: number | null) => {
-  const scope = branchScopeOf(user)
-  return scope === null || branchId === scope
-}
+// الجهات بالصلاحية مقفولة على فرع الموظف — نطاق null (مدير النظام) = كل الفروع، وحساب الفروع = الفروع دي بس
+const inBranchScope = (user: JwtPayload, branchId?: number | null) => scopeHasBranch(branchScopeOf(user), branchId)
 
 export interface OnboardingTaskInput {
   label: string
@@ -135,7 +132,7 @@ export class OnboardingService implements OnApplicationBootstrap {
     const from = addDays(localDateOf(new Date()), -windowDays)
     const scope = branchScopeOf(user)
     const base = {
-      ...(scope !== null ? { branchId: scope } : {}),
+      ...(scope !== null ? { branchId: branchIdIn(scope) } : {}),
       status: Not(In<EmployeeStatus>(['terminated', 'archived'])),
     }
     const recent = await this.employees.find({

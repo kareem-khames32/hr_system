@@ -26,7 +26,7 @@ import {
 } from 'class-validator'
 import { Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
+import { branchIdIn, branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard, scopeWord, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { EmployeeDocument } from './assets.entities'
 import { assertDocTypes } from './doc-types'
@@ -142,7 +142,7 @@ export class DocsController {
     }
     const scope = branchScopeOf(user)
     const emps = await this.employees.find({
-      where: scope !== null ? { branchId: scope } : {},
+      where: scope !== null ? { branchId: branchIdIn(scope) } : {},
     })
     const empById = new Map(emps.map((e) => [e.id, e]))
     const where: Record<string, unknown> = {}
@@ -222,13 +222,13 @@ export class DocsController {
     })
   }
 
-  // نطاق الفرع: غير super_admin يدير مستندات موظفي فرعه فقط
+  // نطاق الفروع: غير super_admin يدير مستندات موظفي فروعه فقط
   private async employeeInScope(user: JwtPayload, employeeId: number) {
     const emp = await this.employees.findOne({ where: { id: employeeId } })
     if (!emp) throw new BadRequestException('الموظف غير موجود')
     const scope = branchScopeOf(user)
-    if (scope !== null && emp.branchId !== scope) {
-      throw new ForbiddenException('الموظف خارج نطاق فرعك')
+    if (!inBranchScope(scope, emp.branchId)) {
+      throw new ForbiddenException(`الموظف خارج نطاق ${scopeWord(scope)}`)
     }
     return emp
   }

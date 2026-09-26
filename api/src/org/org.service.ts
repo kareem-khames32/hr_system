@@ -8,6 +8,8 @@ import {
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Not, Repository } from 'typeorm'
+import { branchIdIn, inBranchScope, scopeWord } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { CostCenter } from '../assets/assets.entities'
 import { AttendanceService } from '../attendance/attendance.service'
 import { normalizeWeekendDays, weekendDaysError } from '../attendance/weekend-days'
@@ -42,15 +44,15 @@ export class OrgService {
   // scope: نطاق المنفّذ (null = كل الفروع) — المدير من فرع خارج النطاق مرفوض
   private async assertManagerExists(
     managerEmployeeId?: number,
-    scope: number | null = null
+    scope: BranchScope = null
   ) {
     if (!managerEmployeeId) return
     const mgr = await this.employees.findOne({
       where: { id: managerEmployeeId },
     })
     if (!mgr) throw new BadRequestException('الموظف المدير غير موجود')
-    if (scope != null && mgr.branchId !== scope) {
-      throw new ForbiddenException('الموظف المدير خارج نطاق فرعك')
+    if (!inBranchScope(scope, mgr.branchId)) {
+      throw new ForbiddenException(`الموظف المدير خارج نطاق ${scopeWord(scope)}`)
     }
   }
 
@@ -81,14 +83,14 @@ export class OrgService {
   }
 
   // ===== الفروع =====
-  // branchScope = null → كل الفروع (super_admin) — غير كده فرع المستخدم فقط
-  findBranches(branchScope: number | null) {
+  // branchScope = null → كل الفروع (super_admin) — غير كده فروع المستخدم فقط
+  findBranches(branchScope: BranchScope) {
     if (branchScope == null) return this.branches.find({ order: { id: 'ASC' } })
-    return this.branches.find({ where: { id: branchScope } })
+    return this.branches.find({ where: { id: branchIdIn(branchScope) }, order: { id: 'ASC' } })
   }
 
-  // scope في كل الكتابات = branchScopeOf(المنفّذ): null لمدير النظام، وإلا فرعه فقط
-  async createBranch(dto: CreateBranchDto, scope: number | null, actorId?: number) {
+  // scope في كل الكتابات = branchScopeOf(المنفّذ): null لمدير النظام، وإلا فروعه فقط
+  async createBranch(dto: CreateBranchDto, scope: BranchScope, actorId?: number) {
     // الفرع الجديد خارج نطاق أي مستخدم مقيَّد بفرعه — لمدير النظام فقط
     if (scope != null) {
       throw new ForbiddenException('إنشاء فرع جديد متاح لمدير النظام فقط')
@@ -109,10 +111,10 @@ export class OrgService {
     })
   }
 
-  async updateBranch(id: number, dto: UpdateBranchDto, scope: number | null, actorId?: number) {
+  async updateBranch(id: number, dto: UpdateBranchDto, scope: BranchScope, actorId?: number) {
     const branch = await this.branches.findOne({ where: { id } })
     // فرع خارج النطاق = غير موجود (زي القراءة)
-    if (!branch || (scope != null && branch.id !== scope)) {
+    if (!branch || !inBranchScope(scope, branch.id)) {
       throw new NotFoundException('الفرع غير موجود')
     }
     // نظام التأمينات بيغيّر خصم المسير — إعداد شركة، مش بيتغير من حساب فرع
@@ -166,15 +168,15 @@ export class OrgService {
   }
 
   // ===== الأقسام =====
-  findDepartments(branchScope: number | null) {
+  findDepartments(branchScope: BranchScope) {
     if (branchScope == null)
       return this.departments.find({ order: { id: 'ASC' } })
-    return this.departments.find({ where: { branchId: branchScope } })
+    return this.departments.find({ where: { branchId: branchIdIn(branchScope) } })
   }
 
-  async createDepartment(dto: CreateDepartmentDto, scope: number | null) {
-    if (scope != null && dto.branchId !== scope) {
-      throw new ForbiddenException('لا يمكنك إسناد فرع خارج نطاق فرعك')
+  async createDepartment(dto: CreateDepartmentDto, scope: BranchScope) {
+    if (!inBranchScope(scope, dto.branchId)) {
+      throw new ForbiddenException(`لا يمكنك إسناد فرع خارج نطاق ${scopeWord(scope)}`)
     }
     const branch = await this.branches.findOne({ where: { id: dto.branchId } })
     if (!branch) throw new BadRequestException('الفرع غير موجود')
@@ -198,7 +200,7 @@ export class OrgService {
   private async prepareExecutiveFields(
     dto: { isExecutive?: boolean; executiveSecretaryEmployeeId?: number | null; managerEmployeeId?: number | null },
     current: Department | null,
-    scope: number | null
+    scope: BranchScope
   ): Promise<boolean> {
     const wasExecutive = !!current?.isExecutive
     const currentSecretary = current?.executiveSecretaryEmployeeId ?? null
@@ -247,16 +249,16 @@ export class OrgService {
   async updateDepartment(
     id: number,
     dto: UpdateDepartmentDto,
-    scope: number | null
+    scope: BranchScope
   ) {
     const dept = await this.departments.findOne({ where: { id } })
     // قسم خارج النطاق = غير موجود (زي القراءة)
-    if (!dept || (scope != null && dept.branchId !== scope)) {
+    if (!dept || !inBranchScope(scope, dept.branchId)) {
       throw new NotFoundException('القسم غير موجود')
     }
     if (dto.branchId) {
-      if (scope != null && dto.branchId !== scope) {
-        throw new ForbiddenException('لا يمكنك إسناد فرع خارج نطاق فرعك')
+      if (!inBranchScope(scope, dto.branchId)) {
+        throw new ForbiddenException(`لا يمكنك إسناد فرع خارج نطاق ${scopeWord(scope)}`)
       }
       const branch = await this.branches.findOne({
         where: { id: dto.branchId },
@@ -272,11 +274,10 @@ export class OrgService {
       })
       if (!parent) throw new BadRequestException('القسم الأب غير موجود')
       if (
-        scope != null &&
         dto.parentId !== dept.parentId &&
-        parent.branchId !== scope
+        !inBranchScope(scope, parent.branchId)
       ) {
-        throw new ForbiddenException('القسم الأب خارج نطاق فرعك')
+        throw new ForbiddenException(`القسم الأب خارج نطاق ${scopeWord(scope)}`)
       }
     }
     await this.assertDepartmentTree(id, dept, dto)
@@ -337,34 +338,34 @@ export class OrgService {
   }
 
   // ===== الفرق =====
-  findTeams(branchScope: number | null) {
+  findTeams(branchScope: BranchScope) {
     if (branchScope == null)
       return this.teams.find({ relations: { department: true } })
     return this.teams.find({
       relations: { department: true },
-      where: { department: { branchId: branchScope } },
+      where: { department: { branchId: branchIdIn(branchScope) } },
     })
   }
 
-  async createTeam(dto: CreateTeamDto, scope: number | null) {
+  async createTeam(dto: CreateTeamDto, scope: BranchScope) {
     const dept = await this.departments.findOne({
       where: { id: dto.departmentId },
     })
     if (!dept) throw new BadRequestException('القسم غير موجود')
-    if (scope != null && dept.branchId !== scope) {
-      throw new ForbiddenException('القسم خارج نطاق فرعك')
+    if (!inBranchScope(scope, dept.branchId)) {
+      throw new ForbiddenException(`القسم خارج نطاق ${scopeWord(scope)}`)
     }
     await this.assertManagerExists(dto.leaderEmployeeId, scope)
     return this.teams.save(this.teams.create(dto as Partial<Team>))
   }
 
-  async updateTeam(id: number, dto: UpdateTeamDto, scope: number | null) {
+  async updateTeam(id: number, dto: UpdateTeamDto, scope: BranchScope) {
     const team = await this.teams.findOne({ where: { id } })
     // نطاق الفريق = فرع قسمه (يُحمَّل منفصلاً حتى لا تطغى العلاقة على departmentId عند الحفظ)
     const current = team
       ? await this.departments.findOne({ where: { id: team.departmentId } })
       : null
-    if (!team || (scope != null && current?.branchId !== scope)) {
+    if (!team || !inBranchScope(scope, current?.branchId)) {
       throw new NotFoundException('الفريق غير موجود')
     }
     if (dto.departmentId) {
@@ -372,8 +373,8 @@ export class OrgService {
         where: { id: dto.departmentId },
       })
       if (!dept) throw new BadRequestException('القسم غير موجود')
-      if (scope != null && dept.branchId !== scope) {
-        throw new ForbiddenException('القسم خارج نطاق فرعك')
+      if (!inBranchScope(scope, dept.branchId)) {
+        throw new ForbiddenException(`القسم خارج نطاق ${scopeWord(scope)}`)
       }
     }
     await this.assertManagerExists(

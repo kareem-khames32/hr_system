@@ -96,8 +96,11 @@ test('مصادر الكشف: الهوية من لقطة العضوية، وبي�
   // موظف بلا صف في الجدول (محذوف/مخفي): الطريقة ترجع للقطة البند بلا انهيار
   assert.deepEqual([all[3].employeeCode, all[3].payMethod, all[3].bankName], ['', 'mixed', null])
 
-  const scoped = bankSheetSources({ items, employees, members, branchScope: 3, settlementOf })
+  const scoped = bankSheetSources({ items, employees, members, branchScope: [3], settlementOf })
   assert.deepEqual(scoped.map(source => source.employeeId), [10, 11])
+  // نطاق فروع متعددة (طلب المالك 26 سبتمبر): كل فروعه، والنطاق الفاضي ولا صف
+  assert.deepEqual(bankSheetSources({ items, employees, members, branchScope: [3, 999], settlementOf }).map(source => source.employeeId), [10, 11])
+  assert.deepEqual(bankSheetSources({ items, employees, members, branchScope: [], settlementOf }), [])
 })
 
 test('ملخص طرق الصرف = نفس صفوف كشف البنوك: بنك + نقدي لكل طريقة، ومجموعهما = الصافي المستحق', () => {

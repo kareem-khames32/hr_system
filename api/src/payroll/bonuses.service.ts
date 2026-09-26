@@ -9,7 +9,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, In, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { assertCompanyWideWrite, branchScopeOf, userHasPerm } from '../auth/guards'
+import { assertCompanyWideWrite, branchScopeOf, inBranchScope as scopeHasBranch, isEmptyBranchScope, userHasPerm } from '../auth/guards'
 import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
@@ -185,8 +185,7 @@ export class BonusesService {
   }
 
   private inBranchScope(user: JwtPayload, employee: Pick<Employee, 'branchId'> | undefined | null) {
-    const scope = branchScopeOf(user)
-    return !!employee && (scope === null || scope === employee.branchId)
+    return !!employee && scopeHasBranch(branchScopeOf(user), employee.branchId)
   }
 
   private scopedBases(user: JwtPayload, ctx: EvaluationContext, employee: Employee) {
@@ -374,7 +373,7 @@ export class BonusesService {
       if (facts.departments.size) structural.add('DEPARTMENT_MANAGER')
       if (facts.branches.size) structural.add('BRANCH_MANAGER')
     }
-    const hr = userHasPerm(user, MANAGE) && branchScopeOf(user) !== -1
+    const hr = userHasPerm(user, MANAGE) && !isEmptyBranchScope(branchScopeOf(user))
     const available = new Set<BonusCreatorBasis>()
     const types = (await em.getRepository(BonusType).find({ where: { isActive: true }, order: { code: 'ASC' } })).map(row => this.typeView(row)).filter(type => {
       let allowed = false

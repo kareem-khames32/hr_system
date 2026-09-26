@@ -6,7 +6,8 @@ import { plainToInstance } from 'class-transformer'
 import { validate, type ValidationError } from 'class-validator'
 import { DataSource } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { andBranchScopeSql, branchScopeOf, inBranchScope, userHasPerm } from '../auth/guards'
+import type { BranchScope } from '../auth/guards'
 import { readCalendarSource } from '../attendance/attendance-calendar-history'
 import { localDateOf } from '../attendance/attendance.service'
 import { PAY_METHOD_LABELS } from '../payroll/pay-split'
@@ -95,10 +96,13 @@ export class EmployeeBulkUpdateService {
     return new Map(rows.map(row => [normalizeBulkCode(row.employeeCode), row]))
   }
 
-  private async snapshotsById(ids: number[], branchScope: number | null): Promise<BulkEmployeeSnapshot[]> {
-    const rows = await this.chunked<BulkEmployeeSnapshot>(ids, (list, params) => branchScope === null
-      ? this.ds.query(`${SNAPSHOT_SELECT} WHERE e.[id] IN (${list})`, params)
-      : this.ds.query(`${SNAPSHOT_SELECT} WHERE e.[id] IN (${list}) AND e.[branchId] = @${params.length}`, [...params, branchScope]))
+  private async snapshotsById(ids: number[], branchScope: BranchScope): Promise<BulkEmployeeSnapshot[]> {
+    const rows = await this.chunked<BulkEmployeeSnapshot>(ids, (list, params) => {
+      // فروع النطاق معاملات بعد أرقام الموظفين — مش ملزوقة في نص الاستعلام
+      const all: unknown[] = [...params]
+      const inScope = andBranchScopeSql('e.[branchId]', branchScope, all)
+      return this.ds.query(`${SNAPSHOT_SELECT} WHERE e.[id] IN (${list}) ${inScope}`, all)
+    })
     return rows.sort((a, b) => a.employeeCode.localeCompare(b.employeeCode, 'en', { numeric: true }))
   }
 
@@ -288,9 +292,9 @@ export class EmployeeBulkUpdateService {
 
   // ===== القالب =====
 
-  private referenceTables(fields: BulkFieldKey[], catalogs: Lookups, branchScope: number | null): BulkReferenceTable[] {
+  private referenceTables(fields: BulkFieldKey[], catalogs: Lookups, branchScope: BranchScope): BulkReferenceTable[] {
     const active = <T extends { isActive?: boolean | null }>(rows: T[]) => rows.filter(row => row.isActive !== false)
-    const branches = active(catalogs.branches).filter(row => branchScope === null || row.id === branchScope)
+    const branches = active(catalogs.branches).filter(row => inBranchScope(branchScope, row.id))
     const branchName = new Map(catalogs.branches.map(row => [row.id, row.name]))
     const departments = active(catalogs.departments).filter(row => branches.some(branch => branch.id === row.branchId))
     const departmentOf = new Map(catalogs.departments.map(row => [row.id, row]))

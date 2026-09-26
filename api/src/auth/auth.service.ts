@@ -13,6 +13,7 @@ import * as bcrypt from 'bcryptjs'
 import { DirectoryAuthError } from './directory.types'
 import { DirectoryService } from './directory.service'
 import { DomainLoginService } from './domain-login.service'
+import { effectiveBranchScope } from './guards'
 import { MailSendError, MailService, maskEmail } from './mail.service'
 import { effectivePermissions, ROLE_PRESETS } from './permissions'
 import { Role, UserPermissionOverride } from './role.entity'
@@ -35,6 +36,9 @@ export interface JwtPayload {
   // «نطاقه: كل الفروع» (users.scopeAllBranches): بيتكتب في التوكن لما يكون مفتوح بس، وbranchScopeOf بيقرأه
   // بمقارنة حرفية `=== true`. تغييره في القاعدة بيزوّد tokenVersion فالتوكن اللي شايل القيمة القديمة يموت.
   scopeAllBranches?: boolean
+  // فروع النطاق صريحة للحساب اللي مش «كل الفروع» (effectiveBranchScope: المختارة بعلامات صح، أو فرعه، أو [] = ولا فرع).
+  // التوكن القديم من غيرها = فرعه (branchId) بس. تغيير الفروع المختارة بيزوّد tokenVersion زي «كل الفروع».
+  branchIds?: number[]
 }
 
 /** الجلسة المفتوحة — نفس شكل رد الدخول الحالي بالحرف (الواجهة بتقرأه كما هو). */
@@ -50,6 +54,8 @@ export interface SessionResponse {
     permissions: string[]
     mustChangePassword: boolean
     scopeAllBranches: boolean
+    // فروع النطاق للواجهة (نفس اللي في التوكن) — مابتتبعتش لحساب «كل الفروع»
+    branchIds?: number[]
   }
 }
 
@@ -316,6 +322,8 @@ export class AuthService {
     const mustChangePassword = !!user.mustChangePassword
     // «كل الفروع» من عمود القاعدة بقيمته الحرفية فقط (bit → true)؛ مدير النظام نطاقه كامل بدوره فمايتكتبش له
     const scopeAllBranches = user.role !== 'super_admin' && user.scopeAllBranches === true
+    // غير كده الفروع صريحة في التوكن (حتى لو فرع واحد أو فاضية) — نفس حساب effectiveBranchScope بالحرف
+    const branchIds = effectiveBranchScope(user)
 
     const payload: JwtPayload = {
       sub: user.id,
@@ -327,6 +335,7 @@ export class AuthService {
       tokenVersion: user.tokenVersion ?? 0,
       ...(mustChangePassword ? { mustChangePassword: true } : {}),
       ...(scopeAllBranches ? { scopeAllBranches: true } : {}),
+      ...(branchIds !== null ? { branchIds } : {}),
     }
 
     return {
@@ -341,6 +350,7 @@ export class AuthService {
         permissions,
         mustChangePassword,
         scopeAllBranches,
+        ...(branchIds !== null ? { branchIds } : {}),
       },
     }
   }

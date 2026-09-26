@@ -3,6 +3,7 @@
 import type { EmployeeStatus, AttendanceStatus, CustodyStatus, OvertimeStatus, LeaveStatus, LeavePeriod, LoanStatus, TransferStatus, LetterStatus, BalanceType, LeaveTypeCode } from '../../api/src/common/domain-status'
 import type { OvertimeEvidence } from '../../api/src/attendance/overtime-evidence'
 import { clearEmployeeAddDrafts } from './employee-add-draft'
+import { branchScopeOfUser } from './branch-scope'
 export type { EmployeeStatus, AttendanceStatus, CustodyStatus, OvertimeStatus, LeaveStatus, LeavePeriod, LoanStatus, TransferStatus, LetterStatus, BalanceType, LeaveTypeCode } from '../../api/src/common/domain-status'
 import type { PayrollCalendarChange } from './payroll-calendar-api'
 
@@ -25,6 +26,9 @@ export interface CurrentUser {
   mustChangePassword?: boolean
   // «نطاقه: كل الفروع» — مدير النظام فتحه للحساب ده (الخادم هو اللي بيفرضه؛ هنا لإظهار الأزرار بس)
   scopeAllBranches?: boolean
+  // فروع نطاق الحساب لما مايكونش «كل الفروع»: المختارة بعلامات صح أو فرعه الأصلي (نفس اللي في التوكن).
+  // الجلسة الأقدم من الخاصية دي = فرعه بس — branchScopeOfUser في branch-scope.ts بيقرأها
+  branchIds?: number[]
 }
 
 // مرآة branchScopeOf في الخادم: الحساب «على مستوى الشركة» = مدير النظام أو حساب فتح له مدير النظام «كل الفروع».
@@ -32,9 +36,12 @@ export interface CurrentUser {
 export const isCompanyWideUser = (user: CurrentUser | null | undefined): boolean =>
   !!user && (user.role === 'super_admin' || user.scopeAllBranches === true)
 
-// الفرع اللي الحساب مقفول عليه في الواجهة — null = مش مقفول (على مستوى الشركة، أو حساب بلا فرع والخادم بيرجّع له نطاق فاضي)
-export const lockedBranchIdOf = (user: CurrentUser | null | undefined): number | null =>
-  user && !isCompanyWideUser(user) && user.branchId ? user.branchId : null
+// الفرع اللي الحساب مقفول عليه في الواجهة — لما نطاقه فرع واحد بالظبط. null = مش مقفول على فرع واحد: على مستوى الشركة،
+// أو على أكتر من فرع (المنتقي بيعرض فروعه بس — branchScopeOfUser)، أو حساب بلا فرع والخادم بيرجّع له نطاق فاضي
+export const lockedBranchIdOf = (user: CurrentUser | null | undefined): number | null => {
+  const scope = branchScopeOfUser(user)
+  return scope !== null && scope.length === 1 ? scope[0] : null
+}
 
 // صفحة «غيّر كلمة المرور» — تحت /login فبتفتح من غير إطار النظام
 export const CHANGE_PASSWORD_PATH = '/login/change-password'
@@ -632,6 +639,9 @@ export interface ApiUser {
   legacyNeedsPassword?: boolean
   // «نطاقه: كل الفروع» (false = مقفول على فرعه) — يفتحه ويقفله مدير النظام فقط
   scopeAllBranches?: boolean
+  // «نطاق الفروع» بعلامات صح: المختارة صراحةً ([] = مفيش اختيار، فرعه الأصلي بس)، والنطاق الفعّال (null = كل الفروع)
+  scopeBranchIds?: number[]
+  branchIds?: number[] | null
   // «حساب دومين»: مربوط بحساب Active Directory — بيدخل بكلمة المجال ومفيش كلمة مرور عندنا.
   // الشاشة بتعلّمه عشان تفرّقه عن حساب البريد+كلمة المرور وإنت بتسند الأدوار.
   isDomainAccount?: boolean
@@ -1113,9 +1123,10 @@ export const fetchBankSheet = (runId: number) => get<ApiBankSheet>(`/payroll/run
 
 // ===== المستخدمون والإعدادات =====
 export const fetchUsers = () => get<ApiUser[]>('/users')
-export const createUser = (u: { email: string; password: string; displayName: string; role: string; branchId?: number; employeeId?: number; permissions?: string[]; scopeAllBranches?: boolean }) =>
+export const createUser = (u: { email: string; password: string; displayName: string; role: string; branchId?: number; employeeId?: number; permissions?: string[]; scopeAllBranches?: boolean; scopeBranchIds?: number[] }) =>
   post<ApiUser>('/users', u)
-export const updateUser = (id: number, u: Partial<{ role: string; isActive: boolean; password: string; mustChangePassword: boolean; branchId: number | null; employeeId: number | null; permissions: string[]; scopeAllBranches: boolean }>) =>
+// scopeBranchIds: فروع النطاق بعلامات صح؛ null أو [] = يرجع لفرعه الأصلي بس
+export const updateUser = (id: number, u: Partial<{ role: string; isActive: boolean; password: string; mustChangePassword: boolean; branchId: number | null; employeeId: number | null; permissions: string[]; scopeAllBranches: boolean; scopeBranchIds: number[] | null }>) =>
   patch<ApiUser>(`/users/${id}`, u)
 // كلمة مرور مؤقتة واحدة لكذا حساب (افتراضيًا: لازم يغيّروها أول دخول)
 export const setTemporaryPassword = (userIds: number[], password: string, mustChangePassword = true) =>

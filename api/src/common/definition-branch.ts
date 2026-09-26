@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { IsNull } from 'typeorm'
 import type { EntityManager, FindOptionsWhere } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf } from '../auth/guards'
+import { branchIdIn, branchScopeOf, inBranchScope } from '../auth/guards'
 import { Branch } from '../org/entities/branch.entity'
 
 // ===== تعريفات الفرع (قرار المالك 16 سبتمبر) =====
@@ -24,31 +24,37 @@ export function definitionBranchQuery(raw: unknown): number | null {
   return Number.isInteger(id) && id > 0 ? id : null
 }
 
-// شرط القوائم والمنتقيات: حساب الفرع يرى العام + فرعه، والحساب العام يرى الكل
+// شرط القوائم والمنتقيات: حساب الفروع يرى العام + فروعه، والحساب العام يرى الكل
 // أو (لو حدد فرعًا) العام + الفرع ده — عشان منتقي موظف في فرع معيّن ما يعرضش تعريفات فرع تاني.
+// حساب الفروع اللي حدد فرع من فروعه = العام + الفرع ده بس؛ فرع برّه نطاقه بيتجاهل (نطاقه كله زي الأول).
 export function definitionBranchWhere<T extends { branchId?: number | null }>(
   user: JwtPayload,
   base: FindOptionsWhere<T> = {} as FindOptionsWhere<T>,
   forBranchId: number | null = null
 ): FindOptionsWhere<T> | FindOptionsWhere<T>[] {
   const scope = branchScopeOf(user)
-  const branch = scope !== null ? scope : forBranchId
-  if (branch === null) return base
+  const branches = scope === null
+    ? (forBranchId === null ? null : [forBranchId])
+    : (forBranchId !== null && scope.includes(forBranchId) ? [forBranchId] : scope)
+  if (branches === null) return base
   return [
     { ...base, branchId: IsNull() },
-    { ...base, branchId: branch },
+    { ...base, branchId: branches.length === 1 ? branches[0] : branchIdIn(branches) },
   ] as FindOptionsWhere<T>[]
 }
 
-// فرع التعريف الجديد: حساب الفرع = فرعه دائمًا، والحساب العام = اللي اختاره (فاضي = كل الشركة)
+// فرع التعريف الجديد: حساب الفرع الواحد = فرعه دائمًا، وحساب الفروع المتعددة = فرع من فروعه لازم يختاره،
+// والحساب العام = اللي اختاره (فاضي = كل الشركة)
 export async function definitionBranchForCreate(em: EntityManager, user: JwtPayload, requested: unknown): Promise<number | null> {
   const scope = branchScopeOf(user)
-  if (scope === -1) throw new ForbiddenException('حسابك مش مربوط بفرع، فمينفعش تضيف تعريفات')
+  if (scope !== null && scope.length === 0) throw new ForbiddenException('حسابك مش مربوط بفرع، فمينفعش تضيف تعريفات')
   const wanted = requested === undefined || requested === null || requested === '' ? null : Number(requested)
   if (wanted !== null && (!Number.isInteger(wanted) || wanted < 1)) throw new BadRequestException('الفرع المختار غير صحيح')
   if (scope !== null) {
-    if (wanted !== null && wanted !== scope) throw new ForbiddenException('تقدر تضيف تعريفات لفرعك بس')
-    return scope
+    if (wanted !== null && !scope.includes(wanted)) throw new ForbiddenException(`تقدر تضيف تعريفات ${scope.length > 1 ? 'لفروعك' : 'لفرعك'} بس`)
+    if (wanted !== null) return wanted
+    if (scope.length === 1) return scope[0]
+    throw new BadRequestException('حسابك على أكتر من فرع — اختار فرع التعريف')
   }
   if (wanted === null) return null
   if (!(await em.getRepository(Branch).existsBy({ id: wanted, isActive: true }))) {
@@ -57,7 +63,7 @@ export async function definitionBranchForCreate(em: EntityManager, user: JwtPayl
   return wanted
 }
 
-// التعديل: حساب الفرع يعدّل تعريفات فرعه بس؛ العام يتعدّل من حساب على مستوى الشركة،
+// التعديل: حساب الفروع يعدّل تعريفات فروعه بس؛ العام يتعدّل من حساب على مستوى الشركة،
 // وتعريف فرع تاني كأنه مش موجود.
 export function assertDefinitionWritable(user: JwtPayload, definition: { branchId?: number | null }) {
   const scope = branchScopeOf(user)
@@ -65,7 +71,7 @@ export function assertDefinitionWritable(user: JwtPayload, definition: { branchI
   if (definition.branchId == null) {
     throw new ForbiddenException('التعريف ده لكل الشركة، وتعديله من حساب على مستوى الشركة بس. تقدر تضيف تعريف خاص بفرعك')
   }
-  if (scope < 1 || Number(definition.branchId) !== scope) throw new NotFoundException('التعريف غير موجود')
+  if (!inBranchScope(scope, definition.branchId)) throw new NotFoundException('التعريف غير موجود')
 }
 
 // فرع التعريف ثابت بعد الإنشاء (زي الكود): تغييره كان هيسيب موظفين وطلبات على تعريف مش متاح لفرعهم

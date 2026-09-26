@@ -22,7 +22,7 @@ import { existsSync, mkdirSync, unlinkSync } from 'fs'
 import { extname, join, relative } from 'path'
 import { randomUUID } from 'crypto'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
+import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
 import { StoredFile } from './stored-file.entity'
 import { Employee } from '../employees/employee.entity'
 import { Request } from '../requests/entities/request.entity'
@@ -111,8 +111,7 @@ export class FilesController {
     const ownerId = employeeId ? Number(employeeId) : user.employeeId
     if (ownerId && ownerId !== user.employeeId) {
       const emp = await this.ds.getRepository(Employee).findOneBy({ id: ownerId })
-      const scope = branchScopeOf(user)
-      if (!emp || (scope !== null && emp.branchId !== scope)) throw new NotFoundException('الموظف غير موجود')
+      if (!emp || !inBranchScope(branchScopeOf(user), emp.branchId)) throw new NotFoundException('الموظف غير موجود')
       if (!userHasPerm(user, 'documents.manage') && !userHasPerm(user, 'employees.edit') && !userHasPerm(user, 'requests.create_on_behalf')) {
         throw new ForbiddenException('لا تملك صلاحية رفع ملفات لهذا الموظف')
       }
@@ -169,8 +168,8 @@ export class FilesController {
     const emp = f.employeeId ? await this.ds.getRepository(Employee).findOneBy({ id: f.employeeId }) : null
     const photoOwner = isEmployeePhoto ? await this.ds.getRepository(Employee).findOneBy({ photoFileId: f.id }) : null
     const scope = branchScopeOf(user)
-    const inScope = !!emp && (scope === null || scope === emp.branchId)
-    const canViewPhoto = isEmployeePhoto && !!photoOwner && (scope === null || scope === photoOwner.branchId) && userHasPerm(user, 'employees.view')
+    const inScope = !!emp && inBranchScope(scope, emp.branchId)
+    const canViewPhoto = isEmployeePhoto && !!photoOwner && inBranchScope(scope, photoOwner.branchId) && userHasPerm(user, 'employees.view')
     // شعار الشركة يُطبع في رأس المستندات المولَّدة — ليس مستنداً حساساً
     const isCompanyLogo = f.entityType === 'company_logo' && f.mime.startsWith('image/')
     let requestAccess = false

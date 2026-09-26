@@ -4,7 +4,8 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import { AlertTriangle, ArrowRight, CalendarRange, Download, Info, Printer, RefreshCw } from 'lucide-react'
-import { fetchBranches, fetchCatalog, fetchDepartments, getCurrentUser, isCompanyWideUser, type ApiBranch, type ApiDepartment } from '@/lib/api'
+import { fetchBranches, fetchCatalog, fetchDepartments, getCurrentUser, isCompanyWideUser, lockedBranchIdOf, type ApiBranch, type ApiDepartment } from '@/lib/api'
+import { branchScopeOfUser, canSeeBranch, type BranchScope } from '@/lib/branch-scope'
 import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { RUN_STATUS_LABELS, type FinancialFilters, type FinancialReportHeader } from './api'
 
@@ -85,19 +86,24 @@ export function FinancialReportShell(props: ShellProps) {
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [costCenters, setCostCenters] = useState<CostCenterOption[]>([])
   const [myBranchId, setMyBranchId] = useState<number | null>(null)
+  // نطاق فروع الحساب: حساب الفروع المتعددة يختار فرع من فروعه أو كلها (الخادم بيقصر التقرير على نطاقه)
+  const [branchScope, setBranchScope] = useState<BranchScope>([])
   // التقارير دي على مسيرات شهر رواتب بالاسم؛ الاختيار بيوضّح أيامه بالظبط (23 أغسطس – 22 سبتمبر)
   const payrollMonth = usePayrollMonthContext()
 
   useEffect(() => {
     const user = getCurrentUser()
     setCompanyWide(isCompanyWideUser(user))
-    setMyBranchId(user?.branchId ?? null)
+    setMyBranchId(lockedBranchIdOf(user))
+    setBranchScope(branchScopeOfUser(user))
     fetchBranches().then(setBranches).catch(() => setBranches([]))
     fetchDepartments().then(setDepartments).catch(() => setDepartments([]))
     fetchCatalog<CostCenterOption>('cost-centers').then(setCostCenters).catch(() => setCostCenters([]))
   }, [])
 
-  const branchForDepartments = companyWide ? (filters.branchId ? Number(filters.branchId) : null) : myBranchId
+  // الفرع بيتختار من القائمة لحساب الشركة ولحساب الفروع المتعددة؛ حساب الفرع الواحد مقفول على فرعه
+  const picksBranch = companyWide || (branchScope !== null && branchScope.length > 1)
+  const branchForDepartments = picksBranch ? (filters.branchId ? Number(filters.branchId) : null) : myBranchId
   const departmentOptions = departments.filter((department) => branchForDepartments === null || department.branchId === branchForDepartments)
   const branchName = (id: number | null) => (id === null ? null : branches.find((branch) => branch.id === id)?.name ?? `#${id}`)
   const filterText = [
@@ -160,14 +166,14 @@ export function FinancialReportShell(props: ShellProps) {
             onChange={(period) => setFilters((current) => ({ ...current, period }))} />
           <div>
             <label className="label">الفرع</label>
-            {companyWide ? (
+            {picksBranch ? (
               <select
                 className="input"
                 value={filters.branchId}
                 onChange={(e) => setFilters((current) => ({ ...current, branchId: e.target.value, departmentId: '' }))}
               >
-                <option value="">كل الفروع</option>
-                {branches.map((branch) => (
+                <option value="">{companyWide ? 'كل الفروع' : 'كل فروعك'}</option>
+                {branches.filter((branch) => canSeeBranch(companyWide ? null : branchScope, branch.id)).map((branch) => (
                   <option key={branch.id} value={branch.id}>{branch.name}</option>
                 ))}
               </select>

@@ -97,7 +97,16 @@ const emptyForm = {
   isActive: true,
   // «نطاقه: فرعه / كل الفروع» — يفتحه ويقفله مدير النظام فقط
   scopeAllBranches: false,
+  // «نطاق الفروع» بعلامات صح: الفروع اللي يشوفها ويديرها (الافتراضي فرعه الأصلي بس)
+  scopeBranchIds: [] as number[],
 }
+
+// الفروع المعلّمة لحساب: نطاقه الفعلي زي ما الخادم حسبه (المختارة أو فرعه الأصلي)؛ «كل الفروع» ومدير النظام = فرعه (لو اتقفل)
+const scopeBranchesOf = (user: ApiUser): number[] =>
+  Array.isArray(user.branchIds) ? user.branchIds : user.branchId ? [user.branchId] : []
+
+// نفس المجموعة؟ (الترتيب مايفرقش)
+const sameBranchSet = (a: number[], b: number[]) => a.length === b.length && [...a].sort((x, y) => x - y).every((id, i) => id === [...b].sort((x, y) => x - y)[i])
 
 // تجاوزات الصلاحيات الدقيقة للمستخدم (فوق حزمة الدور) زي ما الخادم حسبها:
 // النهائي = حزمة الدور ∪ المنح − السحب
@@ -369,7 +378,7 @@ export default function UsersPage() {
 
   const openAddModal = () => {
     setEditingUser(null)
-    setFormData({ ...emptyForm })
+    setFormData({ ...emptyForm, scopeBranchIds: [] })
     setOverrides(null)
     setPermSearch('')
     setModalError(null)
@@ -387,6 +396,8 @@ export default function UsersPage() {
       password: '',
       isActive: user.isActive,
       scopeAllBranches: user.scopeAllBranches === true,
+      // الفروع المعلّمة = نطاقه الفعلي (المختارة أو فرعه الأصلي)؛ حساب «كل الفروع» بيبدأ من فرعه لو اتقفل
+      scopeBranchIds: scopeBranchesOf(user),
     })
     setPermSearch('')
     setModalError(null)
@@ -427,6 +438,20 @@ export default function UsersPage() {
 
   // حساب نطاقه «كل الفروع» مايعدّلوش غير مدير النظام (الخادم بيرفض) — الشاشة بتقفل الحفظ وتقول ليه
   const lockedScopeAllAccount = !!editingUser && editingUser.scopeAllBranches === true && !isSuperAdmin
+  // وحساب نطاقه فيه فرع برّه فروعك (القائمة جاية من الخادم بنطاقك) مايديروش غير حساب نطاقه يغطيه
+  const lockedWiderAccount = !!editingUser && !isCompanyWide && !lockedScopeAllAccount && editingUser.role !== 'super_admin' &&
+    scopeBranchesOf(editingUser).some((id) => !branches.some((b) => b.id === id))
+
+  // فرع الحساب الأصلي اتغيّر: لو نطاقه كان «فرعه بس» يمشي معاه للفرع الجديد، وإلا الفروع المعلّمة زي ما هي
+  const changeHomeBranch = (value: string) => {
+    const oldHome = formData.branchId ? Number(formData.branchId) : null
+    const followsHome = formData.scopeBranchIds.length === 0 || sameBranchSet(formData.scopeBranchIds, oldHome ? [oldHome] : [])
+    setFormData({ ...formData, branchId: value, scopeBranchIds: followsHome ? (value ? [Number(value)] : []) : formData.scopeBranchIds })
+  }
+  const toggleScopeBranch = (branchId: number, checked: boolean) =>
+    setFormData({ ...formData, scopeBranchIds: checked
+      ? [...formData.scopeBranchIds.filter((id) => id !== branchId), branchId]
+      : formData.scopeBranchIds.filter((id) => id !== branchId) })
 
   const handleSave = async () => {
     setSaving(true)
@@ -454,6 +479,11 @@ export default function UsersPage() {
           formData.scopeAllBranches !== (editingUser.scopeAllBranches === true)
             ? { scopeAllBranches: formData.scopeAllBranches }
             : {}),
+          // «نطاق الفروع» بعلامات صح: بيتبعت لما يتغيّر (أو لما «كل الفروع» يتقفل) — الخادم بيتحقق إن كل فرع جوه نطاقك
+          ...(formData.role !== 'super_admin' && !formData.scopeAllBranches &&
+          (editingUser.scopeAllBranches === true || !sameBranchSet(formData.scopeBranchIds, scopeBranchesOf(editingUser)))
+            ? { scopeBranchIds: formData.scopeBranchIds }
+            : {}),
         })
         // حفظ تجاوزات الصلاحيات الدقيقة — المنحة لصلاحية مش في الدور، والسحب لصلاحية جاية من الدور أو من العمود القديم
         if (formData.role !== 'super_admin' && overrides) {
@@ -474,6 +504,10 @@ export default function UsersPage() {
           employeeId: formData.employeeId ? Number(formData.employeeId) : undefined,
           ...(isSuperAdmin && formData.role !== 'super_admin' && formData.scopeAllBranches
             ? { scopeAllBranches: true }
+            : {}),
+          // فروع النطاق بعلامات صح (فاضي أو فرعه بس = فرعه الأصلي — الافتراضي)
+          ...(formData.role !== 'super_admin' && !formData.scopeAllBranches && formData.scopeBranchIds.length
+            ? { scopeBranchIds: formData.scopeBranchIds }
             : {}),
         })
       }
@@ -797,6 +831,12 @@ export default function UsersPage() {
                           <Globe2 size={11} />
                           نطاقه: كل الفروع
                         </span>
+                      ) : !sameBranchSet(scopeBranchesOf(user), user.branchId ? [user.branchId] : []) && scopeBranchesOf(user).length > 0 ? (
+                        // فروع مختارة بعلامات صح (أكتر من فرع، أو فرع غير فرعه الأصلي)
+                        <span className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-sky-50 text-sky-700 border border-sky-200 rounded-full text-xs">
+                          <Building2 size={11} />
+                          نطاقه: {scopeBranchesOf(user).map((id) => branchNameOf(id)).join('، ')}
+                        </span>
                       ) : !user.branchId && user.role !== 'employee' ? (
                         <span
                           className="inline-flex items-center gap-1 mt-1 px-2 py-0.5 bg-red-50 text-red-700 border border-red-100 rounded-full text-xs"
@@ -949,9 +989,7 @@ export default function UsersPage() {
                     <select
                       className="input w-full"
                       value={formData.branchId}
-                      onChange={(e) =>
-                        setFormData({ ...formData, branchId: e.target.value })
-                      }
+                      onChange={(e) => changeHomeBranch(e.target.value)}
                     >
                       <option value="">اختر الفرع</option>
                       {branches.map((branch) => (
@@ -963,7 +1001,7 @@ export default function UsersPage() {
                   </div>
                 </div>
 
-                {/* ===== نطاقه: فرعه / كل الفروع ===== */}
+                {/* ===== نطاق الفروع: فروع محددة بعلامات صح / كل الفروع ===== */}
                 {formData.role === 'super_admin' ? (
                   <div className="bg-gray-50 rounded-xl p-4 text-sm text-gray-500 flex items-center gap-2">
                     <Globe2 size={16} />
@@ -971,10 +1009,10 @@ export default function UsersPage() {
                   </div>
                 ) : (
                   <div className="rounded-xl border border-gray-200 p-4" data-testid="branch-scope-switch">
-                    <p className="text-sm font-medium text-gray-700 mb-2">نطاقه</p>
+                    <p className="text-sm font-medium text-gray-700 mb-2">نطاق الفروع — نطاقه</p>
                     <div className="grid grid-cols-2 gap-2">
                       {([
-                        [false, 'فرعه', 'يشوف ويعدّل بيانات فرعه بس', Building2],
+                        [false, 'فروع محددة', 'يشوف ويعدّل بيانات الفروع اللي تعلّم عليها تحت بس (فرعه أو أكتر)', Building2],
                         [true, 'كل الفروع', 'يشوف النظام كله ويعدّل إعدادات الشركة — بالصلاحيات اللي معاه بس', Globe2],
                       ] as const).map(([value, title, hint, Icon]) => (
                         <label
@@ -1001,11 +1039,34 @@ export default function UsersPage() {
                         </label>
                       ))}
                     </div>
+                    {!formData.scopeAllBranches && (
+                      <div className="mt-3" data-testid="branch-scope-branches">
+                        <p className="text-xs text-gray-600 mb-1.5">علّم على الفروع اللي يشوفها ويديرها — فرع واحد أو أكتر:</p>
+                        <div className="grid grid-cols-2 gap-1.5 max-h-44 overflow-y-auto">
+                          {branches.map((branch) => (
+                            <label key={branch.id} className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+                              <input
+                                type="checkbox"
+                                className="w-4 h-4 rounded border-gray-300"
+                                checked={formData.scopeBranchIds.includes(branch.id)}
+                                disabled={lockedScopeAllAccount || lockedWiderAccount}
+                                onChange={(e) => toggleScopeBranch(branch.id, e.target.checked)}
+                              />
+                              {branch.name}
+                              {String(branch.id) === formData.branchId && <span className="text-xs text-gray-400">(فرعه الأصلي)</span>}
+                            </label>
+                          ))}
+                        </div>
+                        {formData.scopeBranchIds.length === 0 && (
+                          <p className="text-xs text-amber-700 mt-1.5">مفيش فرع متعلّم — الحساب هيبقى على فرعه الأصلي بس، ولو مالوش فرع مش هيشوف حاجة</p>
+                        )}
+                      </div>
+                    )}
                     <p className="text-xs text-gray-500 mt-2 flex items-center gap-1">
                       <Lock size={12} />
                       {isSuperAdmin
-                        ? '«كل الفروع» بتوسّع كل صلاحية معاه على الشركة كلها (ومنها اعتماد الطلبات) — النطاق مش صلاحية: لسه محتاج الصلاحية لكل فعل. تغييره بيقفل جلسته الحالية.'
-                        : 'يغيّره مدير النظام فقط'}
+                        ? '«كل الفروع» بتوسّع كل صلاحية معاه على الشركة كلها (ومنها اعتماد الطلبات) — النطاق مش صلاحية: لسه محتاج الصلاحية لكل فعل. تغيير النطاق بيقفل جلسته الحالية.'
+                        : '«كل الفروع» يغيّره مدير النظام فقط، والفروع اللي تقدر تعلّم عليها هي فروعك بس. تغيير النطاق بيقفل جلسته الحالية.'}
                     </p>
                   </div>
                 )}
@@ -1013,6 +1074,11 @@ export default function UsersPage() {
                 {lockedScopeAllAccount && (
                   <div className="bg-amber-50 text-amber-800 border border-amber-200 rounded-xl p-4 text-sm">
                     الحساب ده نطاقه «كل الفروع» — تعديله (الدور والصلاحيات وكلمة المرور والتفعيل) متاح لمدير النظام فقط.
+                  </div>
+                )}
+                {lockedWiderAccount && (
+                  <div className="bg-amber-50 text-amber-800 border border-amber-200 rounded-xl p-4 text-sm">
+                    الحساب ده نطاقه فيه فروع برّه فروعك — تعديله لحساب نطاقه يغطي كل فروعه (أو مدير النظام).
                   </div>
                 )}
 

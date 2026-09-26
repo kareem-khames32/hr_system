@@ -14,7 +14,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { ArrayMaxSize, IsArray, IsOptional, IsString, MaxLength } from 'class-validator'
 import { Between, In, IsNull, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
+import { branchIdIn, branchScopeOf, CurrentUser, JwtAuthGuard, RolesGuard, userHasPerm } from '../auth/guards'
 import { AttendanceDay } from '../attendance/attendance.entities'
 import { AttendanceService } from '../attendance/attendance.service'
 import { Employee } from '../employees/employee.entity'
@@ -100,7 +100,7 @@ export class PortalController {
     }
     const scope = branchScopeOf(user)
     const emps = await this.employees.find({
-      where: scope !== null ? { branchId: scope } : {},
+      where: scope !== null ? { branchId: branchIdIn(scope) } : {},
     })
     const empById = new Map(emps.map((e) => [e.id, e.fullName]))
 
@@ -372,7 +372,7 @@ export class PortalController {
     const today = ymd(new Date())
     const canViewEmployees = userHasPerm(user, 'employees.view')
     const contractWhere: Record<string, unknown> = { contractEnd: LessThanOrEqual(ymd(horizon)), isActive: true, status: Not(In(['archived', 'terminated'])) }
-    if (canViewEmployees) { if (scope !== null) contractWhere.branchId = scope }
+    if (canViewEmployees) { if (scope !== null) contractWhere.branchId = branchIdIn(scope) }
     else contractWhere.id = user.employeeId || -1
     const expiringContracts = await this.employees.find({ where: contractWhere as any, order: { contractEnd: 'ASC' }, take: 5 })
     for (const emp of expiringContracts) {
@@ -382,7 +382,7 @@ export class PortalController {
         link: canViewEmployees ? `/employees/${emp.id}` : '/profile' })
     }
     const canViewDocuments = userHasPerm(user, 'documents.manage')
-    const docEmployees = await this.employees.find({ where: canViewDocuments ? (scope !== null ? { branchId: scope } : {}) : { id: user.employeeId || -1 }, select: ['id', 'fullName'] })
+    const docEmployees = await this.employees.find({ where: canViewDocuments ? (scope !== null ? { branchId: branchIdIn(scope) } : {}) : { id: user.employeeId || -1 }, select: ['id', 'fullName'] })
     const documents = docEmployees.length ? await this.employees.manager.getRepository(EmployeeDocument).find({ where: {
       employeeId: In(docEmployees.map(e => e.id)), expiryDate: LessThanOrEqual(ymd(horizon)),
     }, order: { expiryDate: 'ASC' }, take: 5 }) : []
@@ -400,7 +400,7 @@ export class PortalController {
         leaveConflict: true,
         date: MoreThanOrEqual(sinceStr),
       }
-      if (scope !== null) conflictWhere.branchId = scope
+      if (scope !== null) conflictWhere.branchId = branchIdIn(scope)
       const conflicts = await this.attendanceDays.find({
         where: conflictWhere as any,
         order: { date: 'DESC' },
@@ -478,7 +478,7 @@ export class PortalController {
         status: 'missing_punch',
         date: MoreThanOrEqual(weekAgoStr),
       }
-      if (scope !== null) mpWhere.branchId = scope
+      if (scope !== null) mpWhere.branchId = branchIdIn(scope)
       const missingDays = await this.attendanceDays.find({
         where: mpWhere as any, select: ['employeeId', 'date'],
       })

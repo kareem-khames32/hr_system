@@ -146,8 +146,11 @@ test('chain list: another branch never sees a chain made for a branch-only type 
     { code: 'CUSTOM_80', nameAr: 'طلب فرع جديد', category: 'general', branchId: 1, approvalChainId: 110 },
   ]
   const fake = {
+    // IsNull() = عامة، وIn(فروع) = نسخ فروع الحساب (نطاق فرع أو أكتر)
     chains: { find: async ({ where }) => Array.isArray(where)
-      ? chains.filter((c) => where.some((w) => typeof w.branchId === 'object' ? c.branchId == null : c.branchId === w.branchId))
+      ? chains.filter((c) => where.some((w) => typeof w.branchId === 'object'
+        ? (w.branchId.type === 'in' ? w.branchId.value.includes(c.branchId) : c.branchId == null)
+        : c.branchId === w.branchId))
       : chains },
     steps: { find: async () => [] },
     requestTypes: { find: async () => types },

@@ -52,12 +52,9 @@ export function assertChainAndTypePerms(user: JwtPayload) {
   }
 }
 
-// فروع نطاق الحساب كقائمة (null = كل الشركة) — بيقبل شكل branchScopeOf الحالي (رقم) والجاي (قائمة) من غير ما يفترض واحد منهم
+// فروع نطاق الحساب كقائمة (null = كل الشركة) — branchScopeOf نفسه بقى قائمة (فرع أو أكتر، والفاضية = ولا فرع)
 function scopeBranchIds(user: JwtPayload): number[] | null {
-  const scope = branchScopeOf(user) as unknown
-  if (scope === null || scope === undefined) return null
-  const list = Array.isArray(scope) ? scope : [scope]
-  return list.map(Number).filter((id) => Number.isInteger(id) && id > 0)
+  return branchScopeOf(user)
 }
 
 @Injectable()

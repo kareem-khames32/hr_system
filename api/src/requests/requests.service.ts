@@ -26,7 +26,7 @@ import {
   Repository,
 } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchIdIn, branchScopeOf, inBranchScope, scopeWord, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { User } from '../auth/user.entity'
 import { Branch } from '../org/entities/branch.entity'
@@ -307,8 +307,8 @@ export class RequestsService {
       })
       if (!target) throw new BadRequestException('الموظف المستهدف غير موجود')
       const scope = branchScopeOf(user)
-      if (scope !== null && target.branchId !== scope) {
-        throw new ForbiddenException('لا يمكنك تقديم طلب لموظف خارج نطاق فرعك')
+      if (!inBranchScope(scope, target.branchId)) {
+        throw new ForbiddenException(`لا يمكنك تقديم طلب لموظف خارج نطاق ${scopeWord(scope)}`)
       }
       requesterId = target.id
     }
@@ -1517,7 +1517,7 @@ export class RequestsService {
       const req = await this.scoped(user, id, em)
       // الإغلاق الإداري يلتزم بفرع الطلب حتى لو كان المستخدم صاحبه أو منشئه.
       const scope = branchScopeOf(user)
-      if (scope !== null && req.branchId !== scope) throw new ForbiddenException('الطلب خارج نطاق فرعك الإداري')
+      if (!inBranchScope(scope, req.branchId)) throw new ForbiddenException(`الطلب خارج نطاق ${scopeWord(scope)} الإداري`)
       const type = await em.getRepository(RequestType).findOne({ where: { code: definitionCodeOf(req) } })
       const salary = !!type && isSalaryChangeType(type)
       const scheduledSalary = req.status === 'IN_EXECUTION' && salary
@@ -1711,7 +1711,7 @@ export class RequestsService {
       const employee = await em.getRepository(Employee).findOneBy({ id: row.employeeId })
       const scope = branchScopeOf(user)
       if (!employee || !employee.isActive) throw new BadRequestException('الموظف المستلم غير نشط')
-      if (scope !== null && employee.branchId !== scope) throw new ForbiddenException('العهدة خارج نطاق فرعك')
+      if (!inBranchScope(scope, employee.branchId)) throw new ForbiddenException(`العهدة خارج نطاق ${scopeWord(scope)}`)
       if (!asset || asset.status === 'RETIRED') throw new BadRequestException('الأصل غير موجود أو متقاعد')
       const crossBranch = await this.custodyRowBranchProblem(em, row, asset, employee)
       if (crossBranch) throw new BadRequestException(crossBranch)
@@ -1752,7 +1752,7 @@ export class RequestsService {
       const recipient = user.employeeId === row.employeeId
       const sender = !!source && source.employeeId === user.employeeId && row.assignedBy === user.employeeId
       const scope = branchScopeOf(user)
-      if (!recipient && !sender && !(userHasPerm(user, 'custody.assign') && employee && (scope === null || employee.branchId === scope))) throw new ForbiddenException('لا تملك صلاحية رفض استلام هذه العهدة أو إلغاء نقلها')
+      if (!recipient && !sender && !(userHasPerm(user, 'custody.assign') && employee && inBranchScope(scope, employee.branchId))) throw new ForbiddenException('لا تملك صلاحية رفض استلام هذه العهدة أو إلغاء نقلها')
       row.status = 'REJECTED'
       row.returnedAt = new Date()
       row.condition = reason.trim()
@@ -1774,7 +1774,7 @@ export class RequestsService {
   ) {
     const scope = branchScopeOf(user)
     const where: Record<string, unknown> = {}
-    if (scope !== null) where.branchId = scope
+    if (scope !== null) where.branchId = branchIdIn(scope)
     if (filters.status) where.status = filters.status
     if (filters.typeCode) {
       const filterDefinition = await this.types.findOneBy({ code: filters.typeCode })
@@ -1819,7 +1819,7 @@ export class RequestsService {
       const target = await this.employees.findOne({ where: { id: onBehalfEmployeeId } })
       if (!target) throw new BadRequestException('الموظف المستهدف غير موجود')
       const scope = branchScopeOf(user)
-      if (scope !== null && target.branchId !== scope) throw new ForbiddenException('لا يمكنك تقديم طلب لموظف خارج نطاق فرعك')
+      if (!inBranchScope(scope, target.branchId)) throw new ForbiddenException(`لا يمكنك تقديم طلب لموظف خارج نطاق ${scopeWord(scope)}`)
       employeeId = target.id
     }
     if (!employeeId) return []
@@ -1928,7 +1928,7 @@ export class RequestsService {
   async inbox(user: JwtPayload) {
     const scope = branchScopeOf(user)
     const where: Record<string, unknown> = { status: 'UNDER_REVIEW' }
-    if (scope !== null) where.branchId = scope
+    if (scope !== null) where.branchId = branchIdIn(scope)
     const candidates = await this.requests.find({
       where: where as any,
       order: { submittedAt: 'ASC' },
@@ -1979,7 +1979,7 @@ export class RequestsService {
       order: { actedAt: 'ASC' },
     })
     const scope = branchScopeOf(user)
-    const inScope = scope === null || req.branchId === scope
+    const inScope = inBranchScope(scope, req.branchId)
     const party = this.seesConfidential(
       user,
       req,
@@ -2148,7 +2148,7 @@ export class RequestsService {
     for (const act of acts) {
       const request = byId.get(act.requestId)
       if (!request || request.requesterId === user.employeeId) continue
-      if (scope !== null && request.branchId !== scope) continue
+      if (!inBranchScope(scope, request.branchId)) continue
       let steps: ResolvedStep[] = []
       try {
         steps = this.parseSteps(request.resolvedSteps)
@@ -2365,7 +2365,7 @@ export class RequestsService {
       const request = byId.get(act.requestId)
       const key = `${act.requestId}:${act.action}`
       if (!request || seen.has(key)) continue
-      if (scope !== null && request.branchId !== scope) continue
+      if (!inBranchScope(scope, request.branchId)) continue
       if (act.action === 'EXECUTION_FAILED' && request.status !== 'IN_EXECUTION') continue
       if (act.action === 'CANCELLED' && !cancelledTransfers.has(request.id)) continue
       seen.add(key)
@@ -2999,8 +2999,8 @@ export class RequestsService {
     if (!req) throw new NotFoundException('الطلب غير موجود')
     const scope = branchScopeOf(user)
     const isOwner = req.requesterId === user.employeeId
-    if (scope !== null && req.branchId !== scope && !isOwner) {
-      throw new ForbiddenException('خارج نطاق فرعك')
+    if (!inBranchScope(scope, req.branchId) && !isOwner) {
+      throw new ForbiddenException(`خارج نطاق ${scopeWord(scope)}`)
     }
     return req
   }

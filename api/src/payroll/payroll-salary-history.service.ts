@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException, ForbiddenException, Injectable,
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchScopeOf, inBranchScope, isEmptyBranchScope, userHasPerm } from '../auth/guards'
 import { EmployeeSalaryHistoryVersion } from './payroll-salary-history.entities'
 import { ReplacePayrollMonthlySalaryHistoryDto, ReplacePayrollSalaryHistoryDto } from './payroll-salary-history.dto'
 import { appendMonthlySalaryHistoryRevision, appendSalaryHistoryRevision, normalizeSalaryHistorySegments, readSalaryHistory, readSalaryHistoryCurrent, salaryHistorySchemaMissing, salaryHistoryText } from './payroll-salary-history'
@@ -17,15 +17,14 @@ export class PayrollSalaryHistoryService {
   private permitted(user: JwtPayload, employeeId: number, write = false) {
     if (!userHasPerm(user, write ? 'payroll.approve' : 'payroll.view')) throw new ForbiddenException('لا تملك صلاحية قراءة أو إثبات سجل الأجر')
     if (!Number.isInteger(employeeId) || employeeId < 1 || employeeId > 2147483647) throw new BadRequestException('معرّف الموظف غير صالح')
-    if (branchScopeOf(user) === -1) throw new ForbiddenException('الحساب غير مسند إلى فرع صالح')
+    if (isEmptyBranchScope(branchScopeOf(user))) throw new ForbiddenException('الحساب غير مسند إلى فرع صالح')
     if (write && (!Number.isInteger(user.sub) || user.sub < 1 || user.sub > 2147483647)) throw new ForbiddenException('هوية المستخدم الذي يثبت الأجر غير صالحة')
   }
 
   private async current(em: EntityManager, user: JwtPayload, employeeId: number) {
     const result = await readSalaryHistoryCurrent(em, employeeId)
     if (!result) throw new NotFoundException('الموظف غير موجود')
-    const scope = branchScopeOf(user)
-    if (scope !== null && result.employee.branchId !== scope) throw new ForbiddenException('الموظف خارج نطاق الفرع المسموح')
+    if (!inBranchScope(branchScopeOf(user), result.employee.branchId)) throw new ForbiddenException('الموظف خارج نطاق الفرع المسموح')
     return result
   }
 

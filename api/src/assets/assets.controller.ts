@@ -18,7 +18,7 @@ import { Type } from 'class-transformer'
 // وصف الشطب وحالة الإرجاع بحد عمود custody_assignments.condition ورسائل عربية
 import { ReturnCustodyDto, WriteOffCustodyDto } from './custody.dto'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { branchIdIn, branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { ApproverResolver } from '../requests/approver-resolver.service'
@@ -119,9 +119,9 @@ export class AssetsController {
   @Get('assets')
   async listAssets(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)
-    if (scope !== null && scope < 1) return []
-    // حساب الفرع: أصول فرعه + الأصول القديمة اللي لسه بلا فرع (قراءة بس)
-    const rows = await this.assets.find({ where: scope === null ? {} : [{ branchId: scope }, { branchId: IsNull() }], order: { id: 'ASC' } })
+    if (scope !== null && scope.length === 0) return []
+    // حساب الفروع: أصول فروعه + الأصول القديمة اللي لسه بلا فرع (قراءة بس)
+    const rows = await this.assets.find({ where: scope === null ? {} : [{ branchId: branchIdIn(scope) }, { branchId: IsNull() }], order: { id: 'ASC' } })
     const holderIds = [...new Set(rows.map((a) => a.currentHolderId).filter(Boolean))]
     const holders = holderIds.length
       ? await this.employees.find({ where: { id: In(holderIds as number[]) } })
@@ -148,10 +148,13 @@ export class AssetsController {
     let branchId: number | null
     if (scope === null) branchId = requested === undefined ? null : await this.existingBranch(requested)
     else {
-      if (scope < 1) throw new ForbiddenException('حسابك مش مربوط بفرع — مايقدرش يضيف أصول')
-      if (requested !== undefined && requested !== scope) throw new ForbiddenException('حساب الفرع بيضيف أصول فرعه بس')
-      // الأصل الجديد بيتختم بفرع اللي أضافه
-      branchId = scope
+      if (scope.length === 0) throw new ForbiddenException('حسابك مش مربوط بفرع — مايقدرش يضيف أصول')
+      if (requested !== undefined && !scope.includes(requested)) {
+        throw new ForbiddenException(scope.length > 1 ? 'حساب الفروع بيضيف أصول فروعه بس' : 'حساب الفرع بيضيف أصول فرعه بس')
+      }
+      // الأصل الجديد بيتختم بفرع اللي أضافه — وحساب الفروع المتعددة لازم يختار فرع منها (مفيش اختيار صامت)
+      if (requested === undefined && scope.length > 1) throw new BadRequestException('حسابك على أكتر من فرع — اختار فرع الأصل')
+      branchId = requested ?? scope[0]
     }
     return this.assets.save(this.assets.create({ ...fields, branchId }))
   }
@@ -231,9 +234,9 @@ export class AssetsController {
   @Get('assets/available')
   async availableAssets(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)
-    if (scope !== null && scope < 1) return []
+    if (scope !== null && scope.length === 0) return []
     const rows = await this.assets.find({
-      where: { status: 'AVAILABLE', ...(scope === null ? {} : { branchId: scope }) },
+      where: { status: 'AVAILABLE', ...(scope === null ? {} : { branchId: branchIdIn(scope) }) },
       order: { category: 'ASC', name: 'ASC' },
     })
     // استبعد الأصول ذات إسناد عهدة مفتوح (تبقى AVAILABLE طوال PENDING_ACK)
@@ -290,7 +293,7 @@ export class AssetsController {
     const candidates = await this.custody.find({ where: { status: 'PENDING_MANAGER_CONFIRM' } })
     if (!candidates.length) return []
     const employees = await this.employees.find({
-      where: { id: In([...new Set(candidates.map(c => c.employeeId))]), ...(scope !== null ? { branchId: scope } : {}) },
+      where: { id: In([...new Set(candidates.map(c => c.employeeId))]), ...(scope !== null ? { branchId: branchIdIn(scope) } : {}) },
     })
     const reports: Employee[] = []
     for (const emp of employees) {
@@ -324,7 +327,7 @@ export class AssetsController {
   async listCustody(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)
     const emps = await this.employees.find({
-      where: scope !== null ? { branchId: scope } : {},
+      where: scope !== null ? { branchId: branchIdIn(scope) } : {},
     })
     // حساب فرع بلا موظفين (أو نطاق فاضي) مالوش عهد يشوفها
     if (scope !== null && emps.length === 0) return []
@@ -463,7 +466,7 @@ export class AssetsController {
   private async assertEmployeeScope(user: JwtPayload, employeeId: number, em = this.employees.manager) {
     const scope = branchScopeOf(user)
     const emp = await em.findOneBy(Employee, { id: employeeId })
-    if (!emp || (scope !== null && emp.branchId !== scope)) throw new NotFoundException('الموظف غير موجود')
+    if (!emp || !inBranchScope(scope, emp.branchId)) throw new NotFoundException('الموظف غير موجود')
     return emp
   }
 }

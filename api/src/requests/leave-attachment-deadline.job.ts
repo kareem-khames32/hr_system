@@ -2,7 +2,7 @@ import { Injectable, Logger, OnApplicationBootstrap, OnModuleDestroy } from '@ne
 import { Cron } from '@nestjs/schedule'
 import { DataSource, In } from 'typeorm'
 import { localDateOf } from '../attendance/attendance.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchScopeOf, branchScopeQb, userHasPerm } from '../auth/guards'
 import type { JwtPayload } from '../auth/auth.service'
 import { Employee } from '../employees/employee.entity'
 import { Leave } from './entities/leave.entities'
@@ -100,7 +100,10 @@ export class LeaveAttachmentDeadlineJob implements OnApplicationBootstrap, OnMod
       const scope = branchScopeOf(user)
       const qb = leaves.createQueryBuilder('l').where('l.status = :status', { status: 'APPROVED' })
         .andWhere('(l.attachmentStatus = :pending OR (l.attachmentStatus = :missed AND l.attachmentDueDate >= :since))', { pending: 'PENDING', missed: 'MISSED', since })
-      if (scope !== null) qb.andWhere('l.employeeId IN (SELECT e.id FROM employees e WHERE e.branchId = :scope)', { scope })
+      if (scope !== null) {
+        const [inScope, params] = branchScopeQb('e.branchId', scope)
+        qb.andWhere(`l.employeeId IN (SELECT e.id FROM employees e WHERE ${inScope})`, params)
+      }
       const rows = await qb.orderBy('l.attachmentDueDate', 'DESC').addOrderBy('l.id', 'DESC').take(50).getMany()
       const pending = rows.filter(row => row.attachmentStatus === 'PENDING')
       if (pending.length) {

@@ -4,7 +4,7 @@ import { EntityManager, In, IsNull, Repository } from 'typeorm'
 import { createHash } from 'node:crypto'
 import { CostCenter } from '../assets/assets.entities'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, userHasPerm } from '../auth/guards'
+import { branchForWrite, branchIdIn, branchScopeOf, inBranchScope, isEmptyBranchScope, scopeWord, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
@@ -56,20 +56,20 @@ export class PayrollPolicyService {
     if (write === 'manage') {
       if (!userHasPerm(user, 'payroll.policy.manage')) throw new ForbiddenException('إنشاء مجموعات سياسات الرواتب وتعديلها ونشرها يتطلب صلاحية «إدارة سياسات الرواتب ونشرها»')
     } else if (!userHasPerm(user, write ? 'payroll.calculate' : 'payroll.view')) throw new ForbiddenException('لا تملك صلاحية إدارة سياسات الرواتب')
-    if (branchScopeOf(user) === -1) throw new ForbiddenException('حساب المستخدم غير مسند إلى فرع صالح')
+    if (isEmptyBranchScope(branchScopeOf(user))) throw new ForbiddenException('حساب المستخدم غير مسند إلى فرع صالح')
   }
 
   private access(user: JwtPayload, policy: PayrollPolicy, write = false) {
     const scope = branchScopeOf(user)
     if (scope === null) return
-    if (scope < 1 || (policy.branchId !== scope && (write || policy.branchId !== null))) {
+    if (scope.length === 0 || (!inBranchScope(scope, policy.branchId) && (write || policy.branchId !== null))) {
       throw new ForbiddenException('السياسة خارج نطاق الفرع المسموح؛ السياسة العامة متاحة للقراءة فقط')
     }
   }
 
   private capabilities(user: JwtPayload, policy: PayrollPolicy) {
     const scope = branchScopeOf(user)
-    const canEdit = policy.isActive && userHasPerm(user, 'payroll.policy.manage') && (scope === null || (scope > 0 && policy.branchId === scope))
+    const canEdit = policy.isActive && userHasPerm(user, 'payroll.policy.manage') && (scope === null || inBranchScope(scope, policy.branchId))
     // النشر بصلاحية الإدارة نفسها وبعد مراجعة الخادم (publish-check)؛ الإسناد للمسير مسار مستقل.
     return { canEdit, canArchive: canEdit, canCloneVersion: canEdit, canPublish: canEdit, canAssign: false, canDelete: false }
   }
@@ -318,7 +318,7 @@ export class PayrollPolicyService {
       const employee = await em.getRepository(Employee).findOne({ where: { id: dto.employeeId }, select: { id: true, employeeCode: true, fullName: true, branchId: true } })
       if (!employee) throw new NotFoundException('الموظف غير موجود')
       const branch = branchScopeOf(user)
-      if (branch !== null && employee.branchId !== branch) throw new ForbiddenException('الموظف خارج نطاق الفرع المسموح؛ إتاحة السياسة لا توسع صلاحية قراءة موظفي الفروع الأخرى')
+      if (!inBranchScope(branch, employee.branchId)) throw new ForbiddenException('الموظف خارج نطاق الفرع المسموح؛ إتاحة السياسة لا توسع صلاحية قراءة موظفي الفروع الأخرى')
       const view = await this.definitionView(em, version)
       const employment = await readPayrollLiveEmployment(em, employee.id, period.startDate, period.endDate)
       const overtime = await readPayrollLiveOvertime(em, employee.id, period.startDate, period.endDate)
@@ -579,7 +579,7 @@ export class PayrollPolicyService {
   async list(user: JwtPayload) {
     this.permitted(user)
     const scope = branchScopeOf(user)
-    const policies = await this.policies.find({ where: scope === null ? {} : [{ branchId: scope }, { branchId: IsNull() }], order: { id: 'DESC' } })
+    const policies = await this.policies.find({ where: scope === null ? {} : [{ branchId: branchIdIn(scope) }, { branchId: IsNull() }], order: { id: 'DESC' } })
     const versions = policies.length ? await this.policies.manager.getRepository(PayrollPolicyVersion).find({ where: { policyId: In(policies.map(row => row.id)) }, order: { versionNo: 'DESC' } }) : []
     const views = await this.versionViews(this.policies.manager, versions)
     return policies.map(policy => ({ policy, versions: views.filter(version => version.policyId === policy.id), capabilities: this.capabilities(user, policy) }))
@@ -647,9 +647,10 @@ export class PayrollPolicyService {
     if (suppliedCode !== null && !/^[A-Z0-9][A-Z0-9_-]*$/.test(suppliedCode)) throw new BadRequestException('كود السياسة يقبل الحروف الإنجليزية والأرقام والشرطة فقط')
     const name = this.text(dto.name, 'اسم السياسة', 200), dates = this.dates(dto.effectiveFrom, dto.effectiveTo)
     const userBranch = branchScopeOf(user)
-    const branchId = dto.branchId === undefined ? userBranch : dto.branchId
+    // حساب الفرع الواحد: فرعه تلقائيًا؛ حساب الفروع المتعددة لازم يختار فرع منها (مفيش اختيار صامت)
+    const branchId = dto.branchId === undefined ? (userBranch === null ? null : branchForWrite(userBranch, null)) : dto.branchId
     if (branchId !== null && (!Number.isInteger(branchId) || branchId < 1)) throw new BadRequestException('معرّف فرع السياسة غير صالح')
-    if (userBranch !== null && branchId !== userBranch) throw new ForbiddenException('إنشاء السياسة متاح داخل فرعك فقط')
+    if (userBranch !== null && !inBranchScope(userBranch, branchId)) throw new ForbiddenException(`إنشاء السياسة متاح داخل ${scopeWord(userBranch)} فقط`)
     try {
       return await this.policies.manager.transaction(async em => {
         const code = suppliedCode ?? await this.generatedCode(em)

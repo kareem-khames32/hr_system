@@ -2,7 +2,7 @@ import { BadRequestException, ForbiddenException, NotFoundException } from '@nes
 import { EntityManager, In, Not } from 'typeorm'
 import { assetVisibleTo, custodyTransferProblem, employeeInScope } from '../assets/asset-branch'
 import { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf } from '../auth/guards'
+import { branchScopeOf, inBranchScope, scopeWord } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { Asset, CustodyAssignment } from './entities/custody.entities'
 import { Request } from './entities/request.entity'
@@ -38,7 +38,7 @@ export async function custodyTransferTarget(em: EntityManager, assignmentId: num
   const crossBranch = custodyTransferProblem(scope, owner, target)
   if (crossBranch || (req?.branchId != null && req.branchId !== owner.branchId)) throw new ForbiddenException(crossBranch ?? 'نقل العهدة يتطلب موظفين في نفس الفرع')
   if (actor) {
-    if (actorScope !== null && (owner.branchId !== actorScope || target.branchId !== actorScope)) throw new ForbiddenException('العهدة أو الموظف المستلم خارج نطاق فرعك')
+    if (actorScope !== null && (!inBranchScope(actorScope, owner.branchId) || !inBranchScope(actorScope, target.branchId))) throw new ForbiddenException(`العهدة أو الموظف المستلم خارج نطاق ${scopeWord(actorScope)}`)
     // والأصل نفسه مايكونش أصل فرع تاني (أصل قديم بلا فرع في حوزة موظف الفرع بيكمّل دورته، وبيتختم بفرع المستلم عند التنشيط)
     if (asset && !assetVisibleTo(actorScope, asset)) throw new ForbiddenException('العهدة أو الموظف المستلم خارج نطاق فرعك')
   }

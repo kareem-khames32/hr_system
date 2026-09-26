@@ -2,7 +2,7 @@ import { Controller, ForbiddenException, Get, Query, UseGuards } from '@nestjs/c
 import { Transform, Type } from 'class-transformer'
 import { IsBoolean, IsInt, IsOptional, Matches, Min } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
+import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import { FinancialReportService, type FinancialReportQuery } from './financial-report.service'
 
 const toBoolean = ({ value }: { value: unknown }) =>
@@ -39,11 +39,12 @@ export class FinancialReportController {
   private scoped(query: FinancialReportQueryDto, user: JwtPayload): FinancialReportQuery {
     if (!userHasPerm(user, 'payroll.view')) throw new ForbiddenException('التقارير المالية محتاجة صلاحية عرض الرواتب')
     const scope = branchScopeOf(user)
-    if (scope !== null && query.branchId !== undefined && query.branchId !== scope) {
-      throw new ForbiddenException('حساب الفرع يشوف تقارير فرعه بس')
+    if (query.branchId !== undefined && !inBranchScope(scope, query.branchId)) {
+      throw new ForbiddenException(scope !== null && scope.length > 1 ? 'حساب الفروع يشوف تقارير فروعه بس' : 'حساب الفرع يشوف تقارير فرعه بس')
     }
-    return { period: query.period, branchId: scope ?? query.branchId ?? null, departmentId: query.departmentId ?? null,
-      teamId: query.teamId ?? null, costCenterId: query.costCenterId ?? null, includeDraft: query.includeDraft === true }
+    // الفرع المطلوب، أو فرع الحساب لو فرع واحد (زي الأول بالحرف)، وإلا null + نطاق فروعه كله (branchScope)
+    return { period: query.period, branchId: query.branchId ?? (scope !== null && scope.length === 1 ? scope[0] : null), branchScope: scope,
+      departmentId: query.departmentId ?? null, teamId: query.teamId ?? null, costCenterId: query.costCenterId ?? null, includeDraft: query.includeDraft === true }
   }
 
   // ١) كشف الرواتب: سطر لكل موظف في كل مسير بالبدلات والإضافي والخصومات بأنواعها والصافي وطريقة الصرف
