@@ -44,6 +44,7 @@ import {
   syncDomainUsers,
   updateUser,
 } from '@/lib/api'
+import { EmployeePicker } from '@/components/EmployeePicker'
 
 const MIN_PASSWORD = 8
 
@@ -1083,23 +1084,17 @@ export default function UsersPage() {
                 )}
 
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label htmlFor="user-linked-employee" className="block text-sm font-medium text-gray-700 mb-2">
                     الموظف المرتبط
                   </label>
-                  <select
-                    className="input w-full"
+                  {/* فاضي = بدون ربط بموظف */}
+                  <EmployeePicker
+                    id="user-linked-employee"
+                    employees={employees}
                     value={formData.employeeId}
-                    onChange={(e) =>
-                      setFormData({ ...formData, employeeId: e.target.value })
-                    }
-                  >
-                    <option value="">بدون ربط بموظف</option>
-                    {employees.map((emp) => (
-                      <option key={emp.id} value={emp.id}>
-                        {emp.fullName} ({emp.employeeCode})
-                      </option>
-                    ))}
-                  </select>
+                    onChange={(id) => setFormData({ ...formData, employeeId: id })}
+                    placeholder="بدون ربط بموظف — اكتب الاسم أو الكود للربط"
+                  />
                 </div>
 
                 {!editingUser && (

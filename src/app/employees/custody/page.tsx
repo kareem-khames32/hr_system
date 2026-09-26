@@ -40,6 +40,7 @@ import {
 import { custodyStatusLabels as statusLabels, custodyStatusStyles as statusStyles } from '@/lib/status-labels'
 import { useCurrency } from '@/lib/currency'
 import { CUSTODY_TEXT_MAX, custodyTextIssue } from '@/lib/input-limits'
+import { EmployeePicker } from '@/components/EmployeePicker'
 
 // حالات العهدة — التسميات الموحّدة في كل النظام
 
@@ -188,6 +189,8 @@ export default function CustodyPage() {
       (!chosenEmployee || a.branchId == null || a.branchId === chosenEmployee.branchId)
   )
   const branchNameOf = (id?: number | null) => (id == null ? 'بلا فرع' : branches.find((b) => b.id === id)?.name ?? `#${id}`)
+  // السطر التاني في منتقي الموظف: المسمى وفرع الموظف (الدليل المختصر مفيهوش فرع — فمايتكتبش «بلا فرع» غلط)
+  const employeeDetail = (emp: ApiEmployee) => [emp.jobTitle, emp.branchId != null ? branchNameOf(emp.branchId) : null].filter(Boolean).join(' — ')
 
   // الأصول القديمة اللي لسه بلا فرع — حساب نطاقه كل الفروع يحدد فرعها (واحد أو دفعة)؛ حساب الفرع يشوفها قراءة بس
   const unbranchedAssets = assets.filter((a) => a.branchId == null)
@@ -756,25 +759,18 @@ export default function CustodyPage() {
               </div>
               <div className="p-6 space-y-4">
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label htmlFor="custody-employee" className="block text-sm font-medium text-gray-700 mb-2">
                     الموظف *
                   </label>
-                  <select
+                  <EmployeePicker
+                    id="custody-employee"
+                    employees={employees}
+                    filter={(emp) => emp.status !== 'archived'}
                     value={formData.employeeId}
-                    onChange={(e) =>
-                      setFormData({ ...formData, employeeId: e.target.value })
-                    }
-                    className="input w-full"
-                  >
-                    <option value="">— اختر الموظف —</option>
-                    {employees
-                      .filter((emp) => emp.status !== 'archived')
-                      .map((emp) => (
-                        <option key={emp.id} value={String(emp.id)}>
-                          {emp.fullName} — {emp.jobTitle ?? emp.employeeCode}
-                        </option>
-                      ))}
-                  </select>
+                    onChange={(id) => setFormData({ ...formData, employeeId: id })}
+                    describe={employeeDetail}
+                    required
+                  />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">
@@ -1075,27 +1071,20 @@ export default function CustodyPage() {
                   </div>
                 )}
                 <div>
-                  <label className="block text-sm font-medium text-gray-700 mb-2">
+                  <label htmlFor="custody-transfer-employee" className="block text-sm font-medium text-gray-700 mb-2">
                     الموظف المستلم *
                   </label>
-                  <select
+                  {/* النشطين غير صاحب العهدة الحالي — بحث بالاسم أو الكود، وفرع كل موظف تحت اسمه */}
+                  <EmployeePicker
+                    id="custody-transfer-employee"
+                    employees={employees}
+                    filter={(emp) => emp.isActive && emp.id !== transferTarget.employeeId}
                     value={transferForm.toEmployeeId}
-                    onChange={(e) =>
-                      setTransferForm({ ...transferForm, toEmployeeId: e.target.value })
-                    }
-                    className="input w-full"
-                  >
-                    <option value="">— اختر الموظف المستلم —</option>
-                    {employees
-                      .filter(
-                        (emp) => emp.isActive && emp.id !== transferTarget.employeeId
-                      )
-                      .map((emp) => (
-                        <option key={emp.id} value={String(emp.id)}>
-                          {emp.fullName} — {emp.employeeCode}
-                        </option>
-                      ))}
-                  </select>
+                    onChange={(id) => setTransferForm({ ...transferForm, toEmployeeId: id })}
+                    describe={employeeDetail}
+                    placeholder="اكتب اسم الموظف المستلم أو كوده…"
+                    required
+                  />
                 </div>
                 <div>
                   <label className="block text-sm font-medium text-gray-700 mb-2">

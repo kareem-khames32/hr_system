@@ -12,6 +12,7 @@ import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'
 import OvertimePreview from '@/components/OvertimePreview'
 import OvertimeRequestSummary from '@/components/OvertimeRequestSummary'
 import TimeSelect, { normalizeTime, timeSpanMinutes } from '@/components/TimeSelect'
+import { EmployeePicker } from '@/components/EmployeePicker'
 import { payloadFieldKind, payloadFieldLabel, payloadNumberProps, payloadSummary, payloadValueLabel } from '@/lib/request-payload'
 import { leaveAttachmentName, leaveAttachmentRequiredNow, leaveAttachmentRuleText, leaveCountsCalendarDays as countsCalendarDaysOf, leaveHalfDayAllowed, leaveRulesHint } from '@/lib/leave-catalog'
 import { salaryIncreaseRequestFields, salaryIncreaseRequestPayload } from '@/lib/employee-salary-change-api'
@@ -139,7 +140,7 @@ const fieldLabels: Record<string, string> = {
   leaveTypeCode: 'نوع الإجازة',
   leaveId: 'رقم الإجازة',
   loanId: 'رقم السلفة',
-  withEmployeeId: 'رقم الموظف البديل',
+  withEmployeeId: 'الموظف البديل',
   toEmployeeId: 'الموظف المستلم',
   toTeamId: 'الفريق الجديد',
   toTitle: 'المسمى الجديد',
@@ -229,12 +230,19 @@ const isNumberField = (f: string) => payloadFieldKind(f) === 'number'
 const fieldKindOf = (key: string, configured?: CustomFieldDef['type']): string =>
   configured && configured !== 'text' ? configured : payloadFieldKind(key)
 
-// حقول تُرسم كقوائم اختيار ذكية (بيانات حقيقية بدل إدخال رقم خام)
-const SMART_SELECT_FIELDS: readonly string[] = ['toTeamId', 'toEmployeeId', 'assignmentId']
+// حقول تُرسم كقوائم اختيار ذكية (بيانات حقيقية بدل إدخال رقم خام) — الموظف البديل في تبديل الوردية منتقي موظف
+// بالاسم أو الكود بدل رقم الموظف الداخلي
+const SMART_SELECT_FIELDS: readonly string[] = ['toTeamId', 'toEmployeeId', 'withEmployeeId', 'assignmentId']
+// الحقول اللي بتختار موظف — قائمتها من الدليل المختصر
+const EMPLOYEE_PICKER_FIELDS: readonly string[] = ['toEmployeeId', 'withEmployeeId']
 
 // مفتاح غير معروف؟ نفكّ الـ camelCase لكلمات مقروءة — لا يظهر مفتاح خام أبداً
 const humanizeKey = (k: string): string =>
   fieldLabels[k] ?? payloadFieldLabel(k)
+// عنوان الحقل المخصّص كما ضبطه الخادم — إلا العنوان الافتراضي القديم «رقم الموظف البديل»: الحقل بقى منتقي موظف
+// بالاسم أو الكود (القيمة المبعوتة لسه id الموظف)
+const customFieldLabel = (f: CustomFieldDef): string =>
+  f.key === 'withEmployeeId' && f.label === 'رقم الموظف البديل' ? fieldLabels.withEmployeeId : f.label
 
 // شكل الصف في الشاشة — مشتق من ApiRequest
 interface MyRequestRow {
@@ -569,7 +577,7 @@ export default function MyRequestsPage() {
           )
         )
     }
-    if (formFieldKeys.includes('toEmployeeId') && employees.length === 0) {
+    if (formFieldKeys.some((key) => EMPLOYEE_PICKER_FIELDS.includes(key)) && employees.length === 0) {
       fetchEmployeeDirectory()
         .then(setEmployees)
         .catch((err) =>
@@ -721,21 +729,15 @@ export default function MyRequestsPage() {
             ))}
         </select>
       )
-    if (key === 'toEmployeeId')
+    // الموظف المستلم (نقل عهدة) والموظف البديل (تبديل وردية): بحث بالاسم أو الكود — والقيمة id الموظف زي ما الخادم مستنيها
+    if (EMPLOYEE_PICKER_FIELDS.includes(key))
       return (
-        <select
-          className="input w-full"
+        <EmployeePicker
+          employees={employees}
           value={fieldValues[key] ?? ''}
-          onChange={(e) => setFieldValue(key, e.target.value)}
-        >
-          <option value="">— اختر الموظف —</option>
-          {employees
-            .map((emp) => (
-              <option key={emp.id} value={emp.id}>
-                {emp.fullName} — {emp.employeeCode}
-              </option>
-            ))}
-        </select>
+          onChange={(id) => setFieldValue(key, id)}
+          aria-label={humanizeKey(key)}
+        />
       )
     if (key === 'assignmentId') {
       const activeCustody = (myCustody ?? []).filter((c) => c.status === 'ACTIVE')
@@ -1486,19 +1488,13 @@ export default function MyRequestsPage() {
                     </label>
                     {onBehalf && (
                       <>
-                        <select
-                          className="input w-full"
+                        <EmployeePicker
+                          employees={employees}
                           value={onBehalfEmployeeId}
-                          onChange={(e) => setOnBehalfEmployeeId(e.target.value)}
-                        >
-                          <option value="">— اختر الموظف —</option>
-                          {employees
-                            .map((emp) => (
-                              <option key={emp.id} value={emp.id}>
-                                {emp.fullName} — {emp.employeeCode}
-                              </option>
-                            ))}
-                        </select>
+                          onChange={(id) => setOnBehalfEmployeeId(id)}
+                          aria-label="الموظف المقدَّم عنه الطلب"
+                          required
+                        />
                         <p className="text-xs text-gray-500">
                           سيُسجَّل الطلب باسم الموظف وسيظهر أنك منشئه
                         </p>
@@ -2001,7 +1997,7 @@ export default function MyRequestsPage() {
                     {customFields.filter(f => f.key !== 'dates' || !isHolidayWork).filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f.key)).map((f) => (
                       <div key={f.key} className={f.type === 'file' || fieldKindOf(f.key, f.type) === 'textarea' ? 'col-span-2' : ''}>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
-                          {f.label}
+                          {customFieldLabel(f)}
                           {f.required && <span className="text-red-500 mr-1">*</span>}
                         </label>
                         {renderSmartField(f.key) ??

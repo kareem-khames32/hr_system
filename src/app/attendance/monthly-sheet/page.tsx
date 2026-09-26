@@ -24,6 +24,7 @@ import {
 import { fetchAttendanceSheetRange } from '@/lib/attendance-range-api'
 import { dayRangeError, dayRangeKey, dayRangeLabel } from '@/lib/payroll-month-range'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
+import { EmployeePicker } from '@/components/EmployeePicker'
 
 const weekdayNames = ['الأحد', 'الاثنين', 'الثلاثاء', 'الأربعاء', 'الخميس', 'الجمعة', 'السبت']
 
@@ -184,17 +185,17 @@ export default function MonthlySheetPage() {
             </p>
           </div>
           <div className="flex items-center gap-3">
-            <select
+            {/* كشف موظف واحد دايمًا: بحث بالاسم أو الكود، ومفيش «من غير موظف» */}
+            <EmployeePicker
+              employees={employees}
               value={employeeId ?? ''}
-              onChange={(e) => setEmployeeId(Number(e.target.value))}
-              className="input w-64"
-            >
-              {employees.map((e) => (
-                <option key={e.id} value={e.id}>
-                  {e.fullName} — {e.employeeCode}
-                </option>
-              ))}
-            </select>
+              onChange={(id) => {
+                if (id) setEmployeeId(Number(id))
+              }}
+              clearable={false}
+              aria-label="الموظف"
+              className="w-72"
+            />
             <button
               onClick={exportCsv}
               disabled={loading || days.length === 0}

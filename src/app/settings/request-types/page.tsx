@@ -49,6 +49,7 @@ import {
 import { categoryLabels } from '@/data/requestsCatalog'
 import { DefinitionBranchBadge, DefinitionBranchField, useDefinitionBranches } from '@/components/DefinitionBranchField'
 import { payloadFieldLabel } from '@/lib/request-payload'
+import { employeeSearchMatcher } from '@/lib/employee-search'
 import { ChainEditorModal, type ChainEditorTarget } from '@/components/approvals/ChainEditorModal'
 import { branchVersionsOfChain, chainStepsText, type ApiChain } from '@/components/approvals/chainEditorModel'
 import { branchScopeOfUser } from '@/lib/branch-scope'
@@ -716,12 +717,12 @@ export default function RequestTypesPage() {
   const formDepartments = departments.filter((d) => formBranch == null || d.branchId === formBranch)
   // فرق «فين»: فرق أقسام فرع النوع (فرع الفريق = فرع قسمه)
   const formTeams = teams.filter((t) => formDepartments.some((d) => d.id === t.departmentId) && (t.isActive !== false || form.teamIds.includes(t.id)))
+  // البحث بالاسم أو الكود بنفس مطابقة منتقي الموظف (الإملاء العربي والكود)
+  const matchesEmpFilter = employeeSearchMatcher(empFilter)
   const filteredEmployees = employees.filter(
     (e) =>
       (formBranch == null || e.branchId === formBranch) &&
-      (!empFilter ||
-      e.fullName.includes(empFilter) ||
-      e.employeeCode.toLowerCase().includes(empFilter.toLowerCase()))
+      matchesEmpFilter(e)
   )
   const canEditType = (rt: ApiRequestType) => branchInfo.canEdit(rt.branchId)
   // سلاسل ينفع يتربط بيها النوع: العامة + سلاسل فرعه لو خاص بفرع (نفس شرط الخادم)

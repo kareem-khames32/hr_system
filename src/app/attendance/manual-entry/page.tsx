@@ -25,6 +25,7 @@ import { localToday } from '@/lib/dates'
 import { fetchPunchesRange } from '@/lib/attendance-range-api'
 import { dateInRange, dayRangeError, dayRangeLabel, payrollMonthRangeOf } from '@/lib/payroll-month-range'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
+import { EmployeePicker } from '@/components/EmployeePicker'
 
 // ============================================================
 // الإدخال اليدوي للحضور: كل بصمة يدوية تُحفظ بمصدرها (MANUAL) ومُدخِلها
@@ -273,21 +274,16 @@ export default function ManualEntryPage() {
             <h3 className="font-bold text-gray-800 mb-4">إدخال سجل حضور جديد</h3>
             <div className="grid grid-cols-2 gap-4">
               <div>
-                <label className="block text-sm font-medium text-gray-700 mb-2">
+                <label htmlFor="manual-entry-employee" className="block text-sm font-medium text-gray-700 mb-2">
                   الموظف
                 </label>
-                <select
-                  className="input w-full"
+                <EmployeePicker
+                  id="manual-entry-employee"
+                  employees={employees}
                   value={formData.employeeId}
-                  onChange={(e) => setFormData({ ...formData, employeeId: e.target.value })}
-                >
-                  <option value="">اختر الموظف</option>
-                  {employees.map((emp) => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.fullName} ({emp.employeeCode})
-                    </option>
-                  ))}
-                </select>
+                  onChange={(id) => setFormData({ ...formData, employeeId: id })}
+                  required
+                />
               </div>
               <div>
                 <label className="block text-sm font-medium text-gray-700 mb-2">

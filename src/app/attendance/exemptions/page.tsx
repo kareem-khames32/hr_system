@@ -7,6 +7,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Ban, CalendarX, CheckCircle, History, Plus, RefreshCw, Search, ShieldCheck, X, XCircle } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
+import { EmployeePicker } from '@/components/EmployeePicker'
 import { periodOverlapsRange } from '@/lib/payroll-month-range'
 import {
   approveAttendanceExemption,
@@ -80,7 +81,6 @@ function ExemptionsContent() {
   const [form, setForm] = useState<ExemptionCreateForm>(emptyExemptionForm())
   const [employees, setEmployees] = useState<ApiEmployeeDirectoryEntry[]>([])
   const [employeesError, setEmployeesError] = useState('')
-  const [employeeSearch, setEmployeeSearch] = useState('')
   const [saving, setSaving] = useState(false)
   const [formError, setFormError] = useState('')
 
@@ -138,15 +138,11 @@ function ExemptionsContent() {
   const term = search.trim().toLowerCase()
   const visible = rangeRows.filter(row => matchesFilter(row.state, filter) && (!term ||
     `${row.employee?.fullName ?? ''} ${row.employee?.employeeCode ?? ''} #${row.id}`.toLowerCase().includes(term)))
-  const employeeTerm = employeeSearch.trim().toLowerCase()
-  const employeeChoices = employees.filter(row => String(row.id) === form.employeeId || !employeeTerm ||
-    `${row.fullName} ${row.employeeCode}`.toLowerCase().includes(employeeTerm))
 
   const openCreate = () => {
     if (!data) return
     setForm(emptyExemptionForm(data.today))
     setFormError('')
-    setEmployeeSearch('')
     setCreateOpen(true)
   }
 
@@ -367,16 +363,16 @@ function ExemptionsContent() {
               <button type="button" disabled={saving} onClick={() => setCreateOpen(false)} className="p-2 hover:bg-gray-100 rounded-lg" aria-label="إغلاق"><X size={20} /></button>
             </div>
             <div className="grid sm:grid-cols-2 gap-4">
-              <div>
-                <label htmlFor="exemption-employee-search" className="label">بحث عن الموظف</label>
-                <input id="exemption-employee-search" className="input" value={employeeSearch} placeholder="الاسم أو الكود" onChange={event => setEmployeeSearch(event.target.value)} />
-              </div>
-              <div>
-                <label htmlFor="exemption-employee" className="label">الموظف</label>
-                <select id="exemption-employee" className="input" value={form.employeeId} onChange={event => setForm({ ...form, employeeId: event.target.value })}>
-                  <option value="">{employees.length ? 'اختر الموظف' : employeesError ? 'تعذر تحميل الموظفين' : 'جارٍ تحميل الموظفين…'}</option>
-                  {employeeChoices.map(row => <option key={row.id} value={row.id}>{row.fullName} · {row.employeeCode}</option>)}
-                </select>
+              <div className="sm:col-span-2">
+                <label htmlFor="exemption-employee" className="label">الموظف — بحث بالاسم أو الكود</label>
+                <EmployeePicker
+                  id="exemption-employee"
+                  employees={employees}
+                  value={form.employeeId}
+                  onChange={id => setForm({ ...form, employeeId: id })}
+                  placeholder={employees.length ? 'اكتب اسم الموظف أو كوده…' : employeesError ? 'تعذر تحميل الموظفين' : 'جارٍ تحميل الموظفين…'}
+                  required
+                />
                 {employeesError && <p className="text-xs text-danger-600 mt-1">{employeesError}</p>}
               </div>
               <div>

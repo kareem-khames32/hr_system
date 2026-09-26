@@ -48,6 +48,7 @@ import {
   ApiEmployee,
 } from '@/lib/api'
 import { docTypeLabel, docTypeSelectOptions, loadDocTypes, type ApiDocType } from '@/lib/doc-types'
+import { EmployeePicker } from '@/components/EmployeePicker'
 import { formatDate } from '@/lib/dates'
 
 interface DocumentRow {
@@ -478,18 +479,15 @@ export default function DocumentsPage() {
               />
             </div>
 
-            <select
+            {/* فلتر الموظف: فاضي = كل الموظفين، وبحث بالاسم أو الكود */}
+            <EmployeePicker
+              employees={employees}
               value={selectedEmployee}
-              onChange={(e) => setSelectedEmployee(e.target.value)}
-              className="input min-w-[180px]"
-            >
-              <option value="">كل الموظفين</option>
-              {employees.map((emp) => (
-                <option key={emp.id} value={String(emp.id)}>
-                  {emp.fullName}
-                </option>
-              ))}
-            </select>
+              onChange={(id) => setSelectedEmployee(id)}
+              placeholder="كل الموظفين"
+              aria-label="فلترة بالموظف"
+              className="min-w-[220px]"
+            />
 
             <button
               onClick={() => setShowFilters(!showFilters)}
@@ -805,22 +803,17 @@ export default function DocumentsPage() {
 
                 <div className="grid grid-cols-2 gap-4">
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">الموظف *</label>
+                    <label htmlFor="document-upload-employee" className="block text-sm font-medium text-gray-700 mb-2">الموظف *</label>
                     {/* موظف المستند ثابت عند التعديل — لا نقل لموظف آخر */}
-                    <select
-                      className="input w-full disabled:opacity-60 disabled:cursor-not-allowed"
+                    <EmployeePicker
+                      id="document-upload-employee"
+                      employees={employees}
                       value={uploadForm.employeeId}
                       disabled={editingId != null}
                       title={editingId != null ? 'لا يمكن نقل المستند لموظف آخر' : undefined}
-                      onChange={(e) => setUploadForm({ ...uploadForm, employeeId: e.target.value })}
-                    >
-                      <option value="">اختر الموظف</option>
-                      {employees.map((emp) => (
-                        <option key={emp.id} value={String(emp.id)}>
-                          {emp.fullName}
-                        </option>
-                      ))}
-                    </select>
+                      onChange={(id) => setUploadForm({ ...uploadForm, employeeId: id })}
+                      required
+                    />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">رقم المستند</label>
