@@ -35,7 +35,8 @@ const repo = name => { assertDisposable(); return ds.getRepository(name) }
 function token(user) {
   return jwt.sign({ sub: user.id, email: user.email, role: user.role, branchId: user.branchId ?? null,
     employeeId: user.employeeId ?? null, tokenVersion: user.tokenVersion ?? 0,
-    permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
+    permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]'),
+    ...(user.scopeAllBranches ? { scopeAllBranches: true } : {}) })
 }
 async function request(user, method, route, body) {
   const response = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json',
@@ -166,9 +167,9 @@ before(async () => {
     role: 'super_admin', branchId: null, permissions: JSON.stringify([]) })
   await require('../src/seed/seed-requests').seedRequests(ds)
 
-  // حساب «إعدادات» عام (بلا فرع = نطاق الشركة) وحساب إعدادات مربوط بفرع
+  // حساب «إعدادات» على كل الفروع («كل الفروع» صريحة — الحساب بلا فرع من غيرها نطاقه فاضي من 22 سبتمبر، مش الشركة)، وحساب إعدادات مربوط بفرع
   settingsUser = await repo('User').save({ email: 'settings@settingstest.invalid', displayName: 'سلمى — الإعدادات',
-    passwordHash: 'test-only', role: 'hr_manager', branchId: null,
+    passwordHash: 'test-only', role: 'hr_manager', branchId: null, scopeAllBranches: true,
     permissions: JSON.stringify(['settings.manage', 'org.manage', 'approval_chains.manage', 'request_types.manage',
       'users.manage', 'roles.manage', 'employees.view', 'employees.edit', 'employees.create', 'attendance.manage',
       'attendance.view_all', 'payroll.view', 'deductions.manage', 'bonuses.manage', 'leave_balances.manage']) })

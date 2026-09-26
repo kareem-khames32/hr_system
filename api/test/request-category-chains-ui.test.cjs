@@ -239,7 +239,9 @@ test('RC-UI-11: الخادم — مسارات بالصلاحيتين، ربط ا
   // مفيش مسح سلاسل ولا تعطيل أنواع من هنا
   assert.ok(!/\.delete\(|isActive: false/.test(service))
   const settings = read('api/src/settings/settings.controller.ts')
-  assert.match(settings, /assertCompanyWideWrite\(user\)\n\s+\/\/[^\n]*\n\s+if \(isCategoryChainKey\(dto\.key\)\) throw new BadRequestException/)
+  // مراجعة Codex الجولة 4 (CR4-B01): منع مفتاح الربط بعد توحيد المفتاح من الصف نفسه — فأي كتابة للمفتاح (حروف كبيرة، مسافة) بتترفض
+  assert.match(settings, /dto\.key = row\.key\n\s+\/\/[^\n]*\n\s+if \(isCategoryChainKey\(dto\.key\)\) throw new BadRequestException/)
+  assert.ok(settings.indexOf('dto.key = row.key') < settings.indexOf('payrollSelfApprovalLicenceIssue({ key: dto.key'), 'التوحيد قبل كل الحراس')
   // resolveChain زي ما هو: السلسلة بالـid ونسخة الفرع بنفس الكود
   const requests = read('api/src/requests/requests.service.ts')
   const resolve = requests.slice(requests.indexOf('private async resolveChain('), requests.indexOf('private thresholdMet('))

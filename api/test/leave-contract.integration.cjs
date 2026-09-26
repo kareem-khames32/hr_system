@@ -344,6 +344,12 @@ test('Request details carry the employee card: the approver sees identity and or
     assert.equal(moved.status, 200, JSON.stringify(moved.body))
     assert.deepEqual(moved.body.requester, { employeeId: bob.employeeId, fullName: 'BOB', employeeCode: 'BOB', jobTitle: null, departmentName: null,
       branchName: null, teamName: null, directManagerName: null, orgHidden: true })
+    // وصندوق الموافقات بتاع المعتمد في الفرع (أ) (alice): الاسم والكود من غير المسمى الحالي (مراجعة Codex الجولة 5)
+    const inbox = await request(alice, 'GET', '/requests/inbox')
+    assert.equal(inbox.status, 200, JSON.stringify(inbox.body))
+    const row = inbox.body.find(item => item.id === live.body.id)
+    assert.ok(row, 'الطلب القديم لسه في صندوق معتمده')
+    assert.deepEqual([row.requesterName, row.requesterCode, row.requesterJobTitle], ['BOB', 'BOB', undefined])
     // وملفه نفسه مرفوض على نفس الحساب — البطاقة ماكانتش لازم تكشف أكتر منه
     assert.notEqual((await request(hr, 'GET', `/employees/${bob.employeeId}`)).status, 200)
     // صاحب الطلب نفسه ومدير النظام: البطاقة كاملة بالفرع الجديد

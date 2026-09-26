@@ -1956,16 +1956,20 @@ export class RequestsService {
     const emps = ids.length
       ? await this.employees.find({
           where: { id: In(ids) },
-          select: ['id', 'fullName', 'employeeCode', 'jobTitle'],
+          select: ['id', 'fullName', 'employeeCode', 'jobTitle', 'branchId'],
         })
       : []
     const empById = new Map(emps.map((e) => [e.id, e]))
-    return pending.map((req) => ({
-      ...this.withCanonicalStepActions(req),
-      requesterName: empById.get(req.requesterId)?.fullName,
-      requesterCode: empById.get(req.requesterId)?.employeeCode,
-      requesterJobTitle: empById.get(req.requesterId)?.jobTitle,
-    }))
+    return pending.map((req) => {
+      const emp = empById.get(req.requesterId)
+      return {
+        ...this.withCanonicalStepActions(req),
+        requesterName: emp?.fullName,
+        requesterCode: emp?.employeeCode,
+        // المسمى الحالي بس لو فرع الموظف الحالي جوه نطاق المعتمد — نفس بطاقة التفاصيل (مراجعة Codex الجولة 5)
+        requesterJobTitle: emp && inBranchScope(scope, emp.branchId) ? emp.jobTitle : undefined,
+      }
+    })
   }
 
   // ===== تفاصيل طلب + سجل الموافقات =====
