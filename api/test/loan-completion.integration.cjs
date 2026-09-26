@@ -95,9 +95,10 @@ after(async () => {
 
 test('AD-01..07: a loan above the cap is refused at submit, and the cap is re-evaluated at every approval step (reduce, refuse override without permission, documented override)', async () => {
   expect(await http(f.owner, 'POST', '/loans/cap-policies', policyBody()), 403)
-  const v1 = expect(await http(f.hr, 'POST', '/loans/cap-policies', policyBody()), 201)
+  // سياسة السقوف لكل الشركة: تكتبها حسابات على مستوى الشركة (حارس الكتابة العامة)، والموارد البشرية للفرع تقرؤها
+  const v1 = expect(await http(f.admin, 'POST', '/loans/cap-policies', policyBody()), 201)
   assert.deepEqual([v1.version, v1.flatCapAmount, v1.isActive], [1, '1500.00', true])
-  expect(await http(f.hr, 'POST', '/loans/cap-policies', policyBody({ flatCapAmount: '0' })), 400)
+  expect(await http(f.admin, 'POST', '/loans/cap-policies', policyBody({ flatCapAmount: '0' })), 400)
 
   const preview = expect(await http(f.owner, 'GET', '/loans/cap-preview?amount=2000&months=4'), 200)
   assert.deepEqual([preview.effectiveCap, preview.governing, preview.allowed], ['1500.00', 'FLAT', false])
@@ -114,7 +115,7 @@ test('AD-01..07: a loan above the cap is refused at submit, and the cap is re-ev
   assert.deepEqual([stagedPayload.capCheck.stage, stagedPayload.capCheck.evaluation.effectiveCap, stagedPayload.capCheck.evaluation.policy.id], ['SUBMIT', '1500.00', v1.id])
 
   // نسخة جديدة بسقف أدنى تسري اليوم: السابقة تُقفل بالأمس وتبقى قابلة للاستعلام
-  const v2 = expect(await http(f.hr, 'POST', `/loans/cap-policies/${v1.id}/versions`, policyBody({ flatCapAmount: '800.00', effectiveFrom: localDate(), reason: 'خفض السقف بقرار الإدارة' })), 201)
+  const v2 = expect(await http(f.admin, 'POST', `/loans/cap-policies/${v1.id}/versions`, policyBody({ flatCapAmount: '800.00', effectiveFrom: localDate(), reason: 'خفض السقف بقرار الإدارة' })), 201)
   assert.deepEqual([v2.version, v2.supersedesId, v2.policyKey], [2, v1.id, v1.policyKey])
   const policies = expect(await http(f.hr, 'GET', '/loans/cap-policies'), 200)
   assert.equal(policies.find(row => row.id === v1.id).effectiveTo, shiftDays(-1))
@@ -134,7 +135,7 @@ test('AD-01..07: a loan above the cap is refused at submit, and the cap is re-ev
   assert.deepEqual([afterStep1.status, afterStep1.currentStep, step1.amount, step1.approvedAmount, step1.capApprovals[0].decision], ['UNDER_REVIEW', 2, '1200.00', '800.00', 'REDUCED'])
 
   // سقف أدنى مرة أخرى بنفس يوم السريان: النسخة 2 تُعطَّل، والخطوة الثانية تُعاد فحصها
-  expect(await http(f.hr, 'POST', `/loans/cap-policies/${v2.id}/versions`, policyBody({ flatCapAmount: '500.00', effectiveFrom: localDate(), reason: 'تشديد إضافي' })), 201)
+  expect(await http(f.admin, 'POST', `/loans/cap-policies/${v2.id}/versions`, policyBody({ flatCapAmount: '500.00', effectiveFrom: localDate(), reason: 'تشديد إضافي' })), 201)
   const v2After = expect(await http(f.hr, 'GET', '/loans/cap-policies'), 200).find(row => row.id === v2.id)
   assert.deepEqual([v2After.isActive, typeof v2After.deactivationReason], [false, 'string'])
   const blocked2 = expect(await act(f.hr, submitted.id), 409)
@@ -152,12 +153,12 @@ test('AD-01..07: a loan above the cap is refused at submit, and the cap is re-ev
   f.cappedLoanId = loan.id
 
   // AD-04: الطلب المكتمل يحجز عداد الشهر
-  expect(await http(f.hr, 'POST', '/loans/cap-policies', policyBody({ name: 'حد عدد الطلبات', scopeType: 'EMPLOYEES', scopeIds: [f.employee.id], flatCapAmount: '500.00', maxOutstandingBalance: null, maxRequestsPerMonth: 1, priority: 1 })), 201)
+  expect(await http(f.admin, 'POST', '/loans/cap-policies', policyBody({ name: 'حد عدد الطلبات', scopeType: 'EMPLOYEES', scopeIds: [f.employee.id], flatCapAmount: '500.00', maxOutstandingBalance: null, maxRequestsPerMonth: 1, priority: 1 })), 201)
   const counted = expect(await http(f.owner, 'POST', '/requests', { typeCode: 'LOAN', submit: true, payload: { amount: '100.00', months: 1 } }), 400)
   assert.equal(counted.cap.violations[0].code, 'MONTHLY_COUNT_REACHED'); assert.equal(counted.cap.usage.requests, 1)
 })
 
-test('AD-09: the HR exceptional loan records reason, category and first installment month; employees cannot create it and its creator cannot approve it', async () => {
+test('AD-09 + owner 26-Sep: the HR exceptional loan records reason, category and first installment month and — HR authority being final — is approved at once with the cap reviewed per step; employees cannot create it, and a creator without HR authority cannot approve his own', async () => {
   const period = addMonths(loanCapWindow('PAYROLL_PERIOD', localDate(), 23).period, 2)
   const payload = { amount: '5000.00', months: 5, exceptional: true, exceptionalCategory: 'MEDICAL', reason: 'علاج طارئ لأحد أفراد الأسرة', firstInstallmentPeriod: period }
   expect(await http(f.owner, 'POST', '/requests', { typeCode: 'LOAN', submit: true, payload }), 403)
@@ -166,17 +167,16 @@ test('AD-09: the HR exceptional loan records reason, category and first installm
   expect(await http(f.hr, 'POST', '/requests', { typeCode: 'LOAN', submit: true, onBehalfEmployeeId: f.employee.id, payload: { ...payload, exceptionalCategory: 'X' } }), 400)
   expect(await http(f.hr, 'POST', '/requests', { typeCode: 'LOAN', submit: true, onBehalfEmployeeId: f.employee.id, payload: { ...payload, firstInstallmentPeriod: '2001-01' } }), 400)
 
+  // الموارد البشرية (approve.hr) نيابةً: اعتماد فوري لكل خطوة، وفحص السقف ولقطته لكل خطوة كالاعتماد اليدوي، والسلفة تُنشأ
   const created = expect(await http(f.hr, 'POST', '/requests', { typeCode: 'LOAN', submit: true, onBehalfEmployeeId: f.employee.id, payload }), 201)
+  assert.equal(created.status, 'COMPLETED')
   const staged = JSON.parse((await requestRow(created.id)).payload)
   assert.deepEqual([staged.exceptional, staged.exceptionalBy, staged.capCheck.evaluation.allowed], [true, f.hr.id, false])
   assert.ok(Number(staged.capCheck.evaluation.excess) > 0)
-
-  const review = expect(await http(f.manager, 'GET', `/loans/requests/${created.id}/cap-review`), 200)
-  assert.deepEqual([review.exceptional, review.exceptionalReason, review.firstInstallmentPeriod], [true, payload.reason, period])
-  expect(await act(f.manager, created.id), 201)
-  const selfApproval = expect(await act(f.hr, created.id), 403)
-  assert.equal(selfApproval.code, 'LOAN_EXCEPTIONAL_SELF_APPROVAL')
-  expect(await act(f.hr2, created.id), 201)
+  assert.deepEqual(staged.capApprovals.map(row => [row.step, row.approverUserId, row.decision]), [[1, f.hr.id, 'EXCEPTIONAL'], [2, f.hr.id, 'EXCEPTIONAL']])
+  const decisions = await raw('SELECT step,approverId,action,comment FROM request_approvals WHERE requestId=@0 ORDER BY step', [created.id])
+  assert.deepEqual(decisions.map(row => [row.step, row.approverId, row.action]), [[1, f.hr.id, 'APPROVED'], [2, f.hr.id, 'APPROVED']])
+  assert.ok(decisions.every(row => /اعتماد فوري/.test(row.comment)))
 
   const loan = await loanOf(created.id)
   assert.deepEqual([loan.amount, Boolean(loan.isExceptional), loan.exceptionalCategory, loan.exceptionalReason, loan.firstInstallmentPeriod, loan.createdByUserId],
@@ -185,6 +185,42 @@ test('AD-09: the HR exceptional loan records reason, category and first installm
   const rows = await installmentsOf(loan.id)
   assert.deepEqual(rows.map(row => [row.dueDate, row.amount]), [0, 1, 2, 3, 4].map(i => [`${addMonths(period, i)}-01`, '1000.00']))
   f.exceptionalLoanId = loan.id
+
+  // منشئ بصلاحية السلفة الاستثنائية بلا سلطة الموارد البشرية (مسؤول رواتب): الطلب في سلسلته ولا يعتمده بنفسه
+  const third = await repo('Employee').save({ employeeCode: 'C6X', fullName: 'موظف C6X', branchId: f.branch.id, departmentId: f.department.id, joinDate: '2020-01-01',
+    basicSalary: 8000, housingAllowance: 2000, transportAllowance: 0, phoneAllowance: 0, workNatureAllowance: 0, otherAllowance: 0, status: 'active', isActive: true,
+    payMethod: 'cash', annualLeaveEntitled: false, managerEmployeeId: f.managerEmployee.id })
+  const desk = await repo('User').save({ employeeId: null, branchId: f.branch.id, email: 'c6-desk@test.invalid', displayName: 'desk', role: 'employee',
+    passwordHash: 'isolated-token-only', permissions: JSON.stringify(['requests.create_on_behalf', 'requests.view_all', 'loans.exceptional']) })
+  const byDesk = expect(await http(desk, 'POST', '/requests', { typeCode: 'LOAN', submit: true, onBehalfEmployeeId: third.id,
+    payload: { ...payload, reason: 'حالة وفاة في الأسرة تحتاج دعمًا عاجلًا' } }), 201)
+  assert.equal(byDesk.status, 'UNDER_REVIEW')
+  assert.equal(JSON.parse((await requestRow(byDesk.id)).payload).exceptionalBy, desk.id)
+  const review = expect(await http(f.manager, 'GET', `/loans/requests/${byDesk.id}/cap-review`), 200)
+  assert.deepEqual([review.exceptional, review.firstInstallmentPeriod], [true, period])
+  expect(await act(f.manager, byDesk.id), 201)
+  expect(await act(desk, byDesk.id), 403)
+  assert.equal((await requestRow(byDesk.id)).status, 'UNDER_REVIEW')
+  expect(await act(f.hr2, byDesk.id), 201)
+  const deskLoan = await loanOf(byDesk.id)
+  assert.deepEqual([deskLoan.amount, deskLoan.createdByUserId, JSON.parse(deskLoan.capSnapshot).capApprovals.map(row => row.decision)], ['5000.00', desk.id, ['EXCEPTIONAL', 'EXCEPTIONAL']])
+})
+
+test('Owner 26-Sep: a regular loan HR files on behalf is refused above the cap at submit and, within the cap, approved at once with a WITHIN_CAP review per step', async () => {
+  const within = await repo('Employee').save({ employeeCode: 'C6W2', fullName: 'موظف C6W2', branchId: f.branch.id, departmentId: f.department.id, joinDate: '2020-01-01',
+    basicSalary: 8000, housingAllowance: 2000, transportAllowance: 0, phoneAllowance: 0, workNatureAllowance: 0, otherAllowance: 0, status: 'active', isActive: true,
+    payMethod: 'cash', annualLeaveEntitled: false, managerEmployeeId: f.managerEmployee.id })
+  const before = (await raw('SELECT COUNT(*) AS n FROM requests'))[0].n
+  const above = expect(await http(f.hr, 'POST', '/requests', { typeCode: 'LOAN', submit: true, onBehalfEmployeeId: within.id, payload: { amount: '900.00', months: 3 } }), 400)
+  assert.equal(above.code, 'LOAN_CAP_EXCEEDED', 'الاعتماد الفوري لا يتخطى السقف: فحصه عند التقديم كما هو')
+  assert.equal((await raw('SELECT COUNT(*) AS n FROM requests'))[0].n, before)
+  const ok = expect(await http(f.hr, 'POST', '/requests', { typeCode: 'LOAN', submit: true, onBehalfEmployeeId: within.id, payload: { amount: '300.00', months: 3 } }), 201)
+  assert.equal(ok.status, 'COMPLETED')
+  const stored = JSON.parse((await requestRow(ok.id)).payload)
+  assert.deepEqual(stored.capApprovals.map(row => [row.step, row.approverUserId, row.decision]), [[1, f.hr.id, 'WITHIN_CAP'], [2, f.hr.id, 'WITHIN_CAP']])
+  const loan = await loanOf(ok.id)
+  assert.deepEqual([loan.amount, loan.installmentMonths, Boolean(loan.isExceptional), loan.createdByUserId], ['300.00', 3, false, f.hr.id])
+  assert.deepEqual((await installmentsOf(loan.id)).map(row => row.amount), ['100.00', '100.00', '100.00'])
 })
 
 test('AD-14: partial early repayment records amount and reference, keeps the ledger consistent, replays safely and refuses overpayment', async () => {
@@ -237,6 +273,16 @@ test('AD-15: the employee sees only his own loan ledger', async () => {
   assert.equal(expect(await http(f.owner, 'GET', `/loans/${f.exceptionalLoanId}/ledger`), 200).id, f.exceptionalLoanId)
   assert.deepEqual(expect(await http(f.other, 'GET', '/loans/mine'), 200).map(loan => loan.id), [otherLoanId])
   assert.equal(expect(await http(f.hr, 'GET', `/loans/${otherLoanId}/ledger`), 200).employeeId, f.otherEmployee.id)
+})
+
+test('Owner 26-Sep: an early settlement HR files on behalf is approved at once and records the repayment with HR as the actor', async () => {
+  const early = expect(await http(f.hr, 'POST', '/requests', { typeCode: 'EARLY_LOAN_SETTLEMENT', submit: true, onBehalfEmployeeId: f.employee.id,
+    payload: { loanId: f.exceptionalLoanId, amount: '100.00', reference: 'HR-NOW-1', method: 'BANK_TRANSFER', mode: 'SHORTEN_TERM' } }), 201)
+  assert.equal(early.status, 'COMPLETED')
+  const decisions = await raw('SELECT step,approverId,comment FROM request_approvals WHERE requestId=@0', [early.id])
+  assert.deepEqual(decisions.map(row => [row.step, row.approverId]), [[1, f.hr.id]]); assert.match(decisions[0].comment, /اعتماد فوري/)
+  const [row] = await raw('SELECT CONVERT(varchar(40),amount) AS amount,reference,requestId,actorId FROM loan_repayments WHERE loanId=@0 AND reference=@1', [f.exceptionalLoanId, 'HR-NOW-1'])
+  assert.deepEqual([row.amount, row.requestId, row.actorId], ['100.00', early.id, f.hr.id])
 })
 
 test('AD-13: a settlement that cannot cover the loan records PENDING_RECOVERY; write-off needs its own permission and a reason', async () => {

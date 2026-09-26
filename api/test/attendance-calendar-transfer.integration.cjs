@@ -110,14 +110,18 @@ after(async t => {
   if (errors.length) throw new AggregateError(errors, 'فشل تنظيف اختبار النقل والتقويم')
 })
 
-test('approved transfer stores dated branch and actual approver while past computeDay retains the historical branch', async () => {
+// قرار المالك 26 سبتمبر: النقل لفرع آخر مبيقدّموش غير مدير النظام («*» = سلطة الموارد البشرية)، فطلبه نيابةً بيتعتمد
+// وينفَّذ لحظة تقديمه — «المعتمد الفعلي» في التاريخ المؤرخ هو هو، من صف الاعتماد الفوري
+test('a transfer the administrator files on behalf is approved at once and stores the dated branch and its actual approver while past computeDay retains the historical branch', async () => {
   const { emp, user } = await employee(), oldToken = token(user), before = await org(emp)
   const oldCalendar = await resolve(emp, yesterday); assert.equal(oldCalendar.dayKind, 'HOLIDAY'); assert.equal(oldCalendar.branchId, branchA.id)
-  const req = await submit(emp); const result = expect(await act(req)); assert.equal(result.status, 'COMPLETED')
+  const result = await submit(emp); assert.equal(result.status, 'COMPLETED')
+  const decisions = await repo('RequestApproval').find({ where: { requestId: result.id } })
+  assert.deepEqual(decisions.map(row => [row.approverId, row.action]), [[admin.id, 'APPROVED']]); assert.match(decisions[0].comment, /اعتماد فوري/)
   const changed = await repo('Employee').findOneByOrFail({ id: emp.id }); assert.equal(changed.branchId, branchB.id); assert.equal(changed.teamId, teamB.id)
   const saved = await org(emp); assert.equal(saved.revision, before.revision + 1); assert.equal(saved.versions.at(-1).effectiveFrom, today)
   assert.equal(saved.versions.at(-1).snapshot.branchId, branchB.id)
-  const actor = await repo('AttendanceRuleVersion').findOneByOrFail({ id: saved.versions.at(-1).id }); assert.equal(actor.actorUserId, hr.id)
+  const actor = await repo('AttendanceRuleVersion').findOneByOrFail({ id: saved.versions.at(-1).id }); assert.equal(actor.actorUserId, admin.id)
   const historical = await resolve(emp, yesterday); assert.equal(historical.branchId, branchA.id); assert.equal(historical.dayKind, 'HOLIDAY')
   const calculated = await app.get(AttendanceService).computeDay(emp.id, yesterday)
   assert.equal(calculated.branchId, branchA.id); assert.equal(calculated.status, 'holiday')
@@ -126,9 +130,9 @@ test('approved transfer stores dated branch and actual approver while past compu
   assert.equal((await request(user, 'GET', '/requests/types', undefined, oldToken)).status, 401)
 })
 
-test('future transfer changes no employee or org version before its date and concurrent scheduler runs apply it once', async () => {
+test('a future transfer approved at once changes no employee or org version before its date and concurrent scheduler runs apply it once with the instant approver', async () => {
   const { emp, user } = await employee(), before = await org(emp), req = await submit(emp, tomorrow)
-  assert.equal(expect(await act(req)).status, 'IN_EXECUTION')
+  assert.equal(req.status, 'IN_EXECUTION', 'الاعتماد الفوري لا يسبق تاريخ السريان: النقل مجدول')
   assert.equal((await org(emp)).revision, before.revision); assert.equal((await repo('Employee').findOneByOrFail({ id: emp.id })).branchId, branchA.id)
   const early = expect(await request(admin, 'POST', '/requests/engine/run-scheduled-transfers', {})); assert.equal(early.executed, 0)
   await withDate(tomorrow, async () => {
@@ -136,7 +140,7 @@ test('future transfer changes no employee or org version before its date and con
     assert.equal(responses.map(row => expect(row).executed).reduce((a, b) => a + b, 0), 1)
   })
   const saved = await org(emp); assert.equal(saved.revision, before.revision + 1); assert.equal(saved.versions.at(-1).effectiveFrom, tomorrow)
-  assert.equal((await repo('AttendanceRuleVersion').findOneByOrFail({ id: saved.versions.at(-1).id })).actorUserId, hr.id)
+  assert.equal((await repo('AttendanceRuleVersion').findOneByOrFail({ id: saved.versions.at(-1).id })).actorUserId, admin.id)
   assert.equal((await repo('Request').findOneByOrFail({ id: req.id })).status, 'COMPLETED')
   assert.equal(await repo('Transfer').count({ where: { requestId: req.id, status: 'EXECUTED' } }), 1)
   assert.equal((await repo('User').findOneByOrFail({ id: user.id })).tokenVersion, 1)
@@ -152,19 +156,33 @@ test('owner-configured automatic transfer records an explicit automatic decision
   assert.equal(row.actorUserId, admin.id); assert.equal(row.effectiveFrom, tomorrow)
 })
 
-test('a financially closed day rolls back transfer, employee, account and approval together', async () => {
+// طلب نقل قديم واقف في دورته قبل قرار المالك (دلوقتي نقل مدير النظام بيتعتمد لحظتها، فالواقف مابيتعملش غير كده)
+async function pendingTransfer(emp, effectiveDate = today) {
+  return repo('Request').save({ typeCode: 'TRANSFER', requesterId: emp.id, branchId: branchA.id, createdByUserId: admin.id, status: 'UNDER_REVIEW', currentStep: 1,
+    submittedAt: new Date(), payload: JSON.stringify({ toTeamId: teamB.id, effectiveDate }),
+    resolvedSteps: JSON.stringify([{ stepOrder: 1, role: 'hr', approverEmployeeId: null, slaDays: null, escalateTo: null, dueAt: null, actedAt: null, action: null }]) })
+}
+
+test('a financially closed day rolls back transfer, employee, account and approval together — at instant approval and at a pending decision alike', async () => {
   for (const status of ['APPROVED', 'PAID']) {
-    const { emp, user } = await employee(), before = await org(emp), req = await submit(emp)
+    const { emp, user } = await employee(), before = await org(emp)
     const run = await repo('PayrollRun').save({ period: today.slice(0, 7), startDate: today, endDate: today, status })
     await repo('PayrollRunMember').save({ runId: run.id, employeeId: emp.id, membershipStatus: 'INCLUDED' })
+    // الاعتماد الفوري: التقديم كله بيرجع — لا طلب ولا اعتماد ولا نقل
+    const refused = await request(admin, 'POST', '/requests', { typeCode: 'TRANSFER', onBehalfEmployeeId: emp.id, submit: true, payload: { toTeamId: teamB.id, effectiveDate: today } })
+    assert.equal(refused.status, 409, JSON.stringify(refused.body))
+    assert.equal(await repo('Request').count({ where: { requesterId: emp.id } }), 0, 'no orphan draft')
+    // والطلب القديم الواقف: القرار نفسه بيرجع
+    const req = await pendingTransfer(emp)
     const response = await act(req); assert.equal(response.status, 409, JSON.stringify(response.body))
     assert.equal((await repo('Employee').findOneByOrFail({ id: emp.id })).branchId, branchA.id)
     assert.equal((await repo('User').findOneByOrFail({ id: user.id })).tokenVersion, 0)
     assert.deepEqual(await org(emp), before)
     assert.equal((await repo('Request').findOneByOrFail({ id: req.id })).status, 'UNDER_REVIEW')
-    assert.equal(await repo('Transfer').count({ where: { requestId: req.id } }), 0)
+    assert.equal(await repo('Transfer').count({ where: { employeeId: emp.id } }), 0)
     assert.equal(await repo('RequestApproval').count({ where: { requestId: req.id } }), 0)
-    assert.equal(await repo('EmployeeStatusHistory').count({ where: { requestId: req.id } }), 0)
+    assert.equal(await repo('EmployeeStatusHistory').count({ where: { employeeId: emp.id } }), 0)
+    await repo('Request').delete({ id: req.id })
     await repo('PayrollRunMember').delete({ runId: run.id }); await repo('PayrollRun').delete({ id: run.id })
   }
 })
@@ -173,7 +191,9 @@ test('cross-branch creator and approver cannot bypass scope to move the employee
   const { emp } = await employee(), before = await org(emp)
   const unauthorizedCreate = await request(hr, 'POST', '/requests', { typeCode: 'TRANSFER', onBehalfEmployeeId: emp.id, submit: true, payload: { toTeamId: teamB.id, effectiveDate: today } })
   assert.equal(unauthorizedCreate.status, 403, JSON.stringify(unauthorizedCreate.body))
-  const req = await submit(emp); assert.equal((await act(req, outsider)).status, 403)
+  // سلطة الموارد البشرية النهائية لا تتخطى نطاق الفرع: موارد فرع آخر لا تتصرف في طلب خارج فرعها
+  const req = await pendingTransfer(emp); assert.equal((await act(req, outsider)).status, 403)
   assert.deepEqual(await org(emp), before); assert.equal((await repo('Employee').findOneByOrFail({ id: emp.id })).branchId, branchA.id)
   assert.equal(await repo('RequestApproval').count({ where: { requestId: req.id } }), 0)
+  await repo('Request').delete({ id: req.id })
 })

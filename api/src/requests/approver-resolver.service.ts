@@ -9,6 +9,21 @@ import type { JwtPayload } from '../auth/auth.service'
 import { ApproverRole } from './entities/approval-step.entity'
 import type { ApprovalAction } from './entities/request-approval.entity'
 
+// سلطة الموارد البشرية: دور hr_manager، أو صلاحية approve.hr (والقديمة hr)، أو «*» (ومنها مدير النظام).
+// دالة صِرفة عشان موديولات الحضور والرواتب تقرأ نفس التعريف من غير حقن المحلِّل.
+// قرار المالك 26 سبتمبر: «مدير الموارد البشرية قراره نهائي» — أي حاجة ينشئها لغيره بتسري فورًا
+// (طلب نيابةً، استثناء حضور، خصم، مكافأة، إعفاء مالي)، ومنعه كمنشئ من الاعتماد اتشال. طلبه هو لنفسه
+// كموظف يفضل يمشي في سلسلته، واعتماد مسير الرواتب بسلسلته المسمّاة ونطاق الفرع مابيتغيّروش.
+export function hasHrOverride(user: Pick<JwtPayload, 'role' | 'permissions'>): boolean {
+  const granted = user.permissions ?? []
+  return (
+    user.role === 'hr_manager' ||
+    granted.includes('*') ||
+    granted.includes('approve.hr') ||
+    granted.includes('hr') // توافق قديم
+  )
+}
+
 // الخطوة بعد حل الأدوار عند التقديم — تُخزَّن JSON على الطلب
 export interface ResolvedStep {
   stepOrder: number
@@ -108,13 +123,7 @@ export class ApproverResolver {
   // نفسه، ولا يفتح محتوى نوع سرّي، ولا يملأ الصندوق بكل طلبات الشركة. لذلك
   // لا يُفعَّل إلا حين يطلبه النداء صراحة (hrUnblock: true)
   hasHrOverride(user: JwtPayload): boolean {
-    const granted = user.permissions ?? []
-    return (
-      user.role === 'hr_manager' ||
-      granted.includes('*') ||
-      granted.includes('approve.hr') ||
-      granted.includes('hr') // توافق قديم
-    )
+    return hasHrOverride(user)
   }
 
   // هل المستخدم الحالي يحق له التصرف في هذه الخطوة؟

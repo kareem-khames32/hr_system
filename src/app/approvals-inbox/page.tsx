@@ -18,12 +18,15 @@ import {
   X,
   Users,
   GraduationCap,
+  ShieldCheck,
 } from 'lucide-react'
 import { categoryLabels } from '@/data/requestsCatalog'
 import MyClearanceItems from '@/components/dashboard/MyClearanceItems'
 import MyApprovalDecisions from '@/components/MyApprovalDecisions'
 // كل مفاتيح الحمولة بتسمياتها — مشترك مع ويدجت لوحة التحكم (SEC-REQ-2)
 import RequestPayload from '@/components/RequestPayload'
+// بطاقة صاحب الطلب أعلى التفاصيل: الاسم والكود والمسمى والقسم والفرع والفريق والمدير المباشر
+import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'
 import OvertimeRequestSummary, { overtimeApprovalLimit, overtimeComputedAtApproval } from '@/components/OvertimeRequestSummary'
 import { payloadSummary } from '@/lib/request-payload'
 import { useCurrency } from '@/lib/currency'
@@ -32,6 +35,7 @@ import { LoanCapSummary } from '@/components/payroll/LoanCapSummary'
 import Link from 'next/link'
 import { fetchDeductions } from '@/lib/deductions-api'
 import { fetchBonuses } from '@/lib/bonuses-api'
+import { fetchAttendanceExemptionList } from '@/lib/attendance-exemptions-api'
 import {
   fetchInbox,
   fetchRequest,
@@ -183,6 +187,17 @@ export default function ApprovalsInboxPage() {
         setPayrollPending({ deductions: deductions.status === 'fulfilled' ? deductions.value.length : 0,
           bonuses: bonuses.status === 'fulfilled' ? bonuses.value.length : 0, admin: can('payroll.view') })
       })
+    return () => { cancelled = true }
+  }, [])
+  // استثناءات حضور بانتظار قراري — لمن يملك اعتمادها فقط، والعدد من إجراءات الخادم لكل صف (نفس «بانتظار قرارك أنت»
+  // في شاشتها: منشئ الطلب ومعتمد خطوته مستبعدان إلا مدير الموارد البشرية). للعرض والانتقال؛ القرار من شاشة الاستثناء
+  const [exemptionsPending, setExemptionsPending] = useState(0)
+  useEffect(() => {
+    if (!can('attendance_exemption.approve') && !can('attendance_exemption.approve_executive')) return
+    let cancelled = false
+    fetchAttendanceExemptionList({ status: 'PENDING' })
+      .then(list => { if (!cancelled) setExemptionsPending(list.rows.filter(row => row.actions.approve || row.actions.approveExecutive).length) })
+      .catch(() => { /* العدد اللي يرفضه الخادم يُخفى وحده */ })
     return () => { cancelled = true }
   }, [])
 
@@ -378,6 +393,20 @@ export default function ApprovalsInboxPage() {
           </div>
         )}
 
+        {exemptionsPending > 0 && (
+          <div className="card p-5">
+            <div className="flex items-center gap-2 mb-3">
+              <ShieldCheck size={18} className="text-primary-600" />
+              <h3 className="font-bold text-gray-800">استثناءات حضور بانتظار موافقتك</h3>
+            </div>
+            <Link href="/attendance/exemptions?status=PENDING" className="inline-flex items-center gap-2 px-4 py-2 bg-gray-50 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-100">
+              طلبات استثناء الحضور المعلقة
+              <span className="badge text-xs bg-primary-100 text-primary-700">{exemptionsPending}</span>
+              <ChevronLeft size={14} />
+            </Link>
+          </div>
+        )}
+
         {/* عهد بانتظار اعتمادي كمدير مباشر — تختفي عند الخلو */}
         {custodyPending.length > 0 && (
           <div className="card p-5">
@@ -565,7 +594,7 @@ export default function ApprovalsInboxPage() {
               <div className="flex justify-between items-center"><h2 className="font-bold text-lg">تفاصيل الطلب #{detailId}</h2><button type="button" aria-label="إغلاق التفاصيل" onClick={() => setDetailId(null)}><X size={20} /></button></div>
               {detailLoading && <p>جارٍ تحميل تفاصيل الطلب...</p>}
               {detailError && <p role="alert" className="text-red-700">{detailError}</p>}
-              {detail && <><RequestPayload payload={detail.payload} /><OvertimeRequestSummary overtime={detail.overtime ?? undefined} reviewRequired={detail.overtimeReviewRequired} /></>}
+              {detail && <><RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} /><RequestPayload payload={detail.payload} /><OvertimeRequestSummary overtime={detail.overtime ?? undefined} reviewRequired={detail.overtimeReviewRequired} /></>}
             </div>
           </div>
         )}
@@ -603,6 +632,7 @@ export default function ApprovalsInboxPage() {
                 {detailLoading && <p>جارٍ تحميل تفاصيل الطلب...</p>}
                 {detailError && <p role="alert" className="text-red-700">{detailError}</p>}
                 {detail?.id === actionModal.item.id && <>
+                  <RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} />
                   <RequestPayload payload={detail.payload} />
                   <OvertimeRequestSummary overtime={detail.overtime ?? undefined} reviewRequired={detail.overtimeReviewRequired} />
                 </>}

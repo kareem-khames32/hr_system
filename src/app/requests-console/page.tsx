@@ -1,6 +1,8 @@
 'use client'
 import LetterDownloadButton from '@/components/LetterDownloadButton'
 import RequestPayload from '@/components/RequestPayload'
+// بطاقة صاحب الطلب أعلى التفاصيل (السرّي المحجوب يرجع بلا بيانات فمابتظهرش)
+import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'
 import { downloadCsv, csvDateStamp } from '@/lib/csv'
 import { canCancelSalaryIncreaseExecution, cancelSalaryIncreaseExecution } from '@/lib/employee-salary-change-api'
 
@@ -593,6 +595,8 @@ export default function RequestsConsolePage() {
                       REQ-{detail.id}
                     </span>
                   </div>
+
+                  <RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} />
 
                   {/* بيانات الطلب — السرّي يحجبه السيرفر لغير المقدّم والمعتمد الفعلي */}
                   {detail.confidentialMasked && (

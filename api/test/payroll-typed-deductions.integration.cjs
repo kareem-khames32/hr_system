@@ -437,7 +437,12 @@ test('Review S25 escalation: a missing department manager falls back to the bran
     [['BRANCH_MANAGER', 'PENDING', true, people.branchManager.id, 'DEPARTMENT_MANAGER'], ['HR', 'PENDING', false, null, null]])
   assert.ok(climbed.events.some(event => event.eventType === 'STEP_FALLBACK'))
   const orphan = await employee('DD_ORPH', { branchId: org.branchB.id, departmentId: null, managerEmployeeId: null })
-  const executive = expectStatus(await request(users.hrB, 'POST', '/deductions', { ...input({ inputValue: '2', reason: `${REASON} — بلا هيكل` }), employeeId: orphan.id, targetPeriod: '2026-12' }), 201)
+  // مُنشئ بأساس «الموارد البشرية» (deductions.manage) من غير سلطة الموارد البشرية: الطلب يمشي في سلسلته.
+  // قرار المالك 26 سبتمبر: إنشاء صاحب السلطة (hr_manager) بيتعتمد لحظتها — الاختبار المخصص قبل فحص المهلة
+  const deskB = await repo('User').save({ email: 'desk-b@typed-deductions.invalid', displayName: 'desk-b', passwordHash: 'test-only', role: 'employee',
+    branchId: org.branchB.id, employeeId: null, permissions: JSON.stringify(['deductions.view', 'deductions.manage']) })
+  const executive = expectStatus(await request(deskB, 'POST', '/deductions', { ...input({ inputValue: '2', reason: `${REASON} — بلا هيكل` }), employeeId: orphan.id, targetPeriod: '2026-12' }), 201)
+  assert.equal(executive.status, 'IN_APPROVAL')
   assert.deepEqual(executive.steps.map(step => [step.role, step.status, step.fallbackFrom]), [['EXECUTIVE', 'PENDING', 'DEPARTMENT_MANAGER'], ['HR', 'PENDING', null]])
   expectStatus(await request(users.hrB, 'POST', `/deductions/${executive.id}/approve`, { expectedRevision: 0 }), 403, 'DEDUCTION_NOT_CURRENT_APPROVER')
   const afterExecutive = expectStatus(await request(users.admin, 'POST', `/deductions/${executive.id}/approve`, { expectedRevision: 0 }), 201)
@@ -562,8 +567,10 @@ test('Review S25 DD-12/DD-11/DD-13 and payslip: the payslip traces each ledger l
   await exempt(carrier)
   const big = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'BIG_FIXED', nameAr: 'غرامة إدارية كبيرة', category: 'ADMINISTRATIVE', calcMethod: 'FIXED_AMOUNT',
     maxPctOfGross: null, escalationDays: null, creatorScopes: ['HR'] }), 201)
+  // قرار المالك 26 سبتمبر: خصم تنشئه الموارد البشرية (hr_manager) بيتعتمد لحظة إنشائه بقيوده
   const heavy = expectStatus(await request(users.hr, 'POST', '/deductions', { ...input({ deductionTypeId: big.id, inputValue: '2500', reason: `${REASON} — ترحيل متكرر` }), employeeId: carrier.id, targetPeriod: '2027-04' }), 201)
-  const heavyApproved = expectStatus(await request(users.admin, 'POST', `/deductions/${heavy.id}/approve`, { expectedRevision: 0 }), 201)
+  assert.equal(heavy.status, 'APPROVED')
+  const heavyApproved = heavy
   const payRun = async period => { const run = await calc(period, [carrier]); expectStatus(await transition(run, 'approve'), 201); expectStatus(await transition(run, 'pay'), 201); return run }
   let firstChild, secondChild
   await repo('RequestsConfig').save({ key: 'deductions.max_carry_forward_count', value: '1' })
@@ -621,6 +628,36 @@ test('Review S25 settings: deduction keys reject values above their maximum and 
   expectStatus(await request(users.admin, 'PATCH', '/settings/config', { key: 'deductions.sla_breach_action', value: 'NOPE' }), 400)
   expectStatus(await request(users.admin, 'PATCH', '/settings/config', { key: 'deductions.bulk_max_employees', value: '5000' }), 200)
   expectStatus(await request(users.admin, 'PATCH', '/settings/config', { key: 'deductions.bulk_max_employees', value: '500' }), 200)
+})
+
+// ===== قرار المالك 26 سبتمبر: «مدير الموارد البشرية قراره نهائي» =====
+test('Owner 26-Sep: a deduction HR creates is approved at once through every captured step with its ledger installments, a bulk one too; HR decides a legacy pending one it created', async () => {
+  const target = await employee('DD_HRF', { managerEmployeeId: people.manager.id })
+  const note = 'اعتماد فوري — مدير الموارد البشرية'
+  // يومان > يوم التصعيد: السلسلة الملتقطة مدير القسم ثم الموارد البشرية — الخطوتان باسم الموارد البشرية لحظة الإنشاء
+  const instant = expectStatus(await request(users.hr, 'POST', '/deductions', { ...input({ inputValue: '2', reason: `${REASON} — قرار الموارد البشرية` }), employeeId: target.id, targetPeriod: '2027-03' }), 201)
+  assert.deepEqual([instant.status, instant.finalAmount, instant.escalated, instant.creator.basis, instant.decidedByUserId], ['APPROVED', '600.00', true, 'HR', users.hr.id])
+  assert.deepEqual(instant.steps.map(step => [step.role, step.status, step.actedByUserId, step.reason]),
+    [['DEPARTMENT_MANAGER', 'APPROVED', users.hr.id, note], ['HR', 'APPROVED', users.hr.id, note]])
+  assert.deepEqual(instant.events.map(event => event.eventType), ['SUBMITTED', 'STEP_APPROVED', 'STEP_APPROVED', 'APPROVED'])
+  assert.ok(instant.events.filter(event => event.eventType !== 'SUBMITTED').every(event => event.actorUserId === users.hr.id && event.payload.instant === true))
+  assert.deepEqual(instant.obligations.map(row => [row.type, row.category, row.amount, row.status, row.targetPeriod]), [['DEBIT', 'typed_deduction', '600.00', 'PENDING', '2027-03']])
+  assert.equal(instant.revision, 2, 'one revision per approved step, as after two manual approvals')
+  expectStatus(await request(users.departmentManager, 'POST', `/deductions/${instant.id}/approve`, { expectedRevision: 2 }), 409, 'DEDUCTION_STATE')
+  // التقسيط: قيد لكل شهر بنفس أثر الاعتماد اليدوي
+  const split = expectStatus(await request(users.hr, 'POST', '/deductions', { ...input({ deductionTypeId: types.admin.id, inputValue: '900', installments: 3, reason: `${REASON} — تقسيط فوري` }), employeeId: target.id, targetPeriod: '2027-03' }), 201)
+  assert.deepEqual([split.status, ...split.obligations.map(row => `${row.targetPeriod}:${row.amount}`)], ['APPROVED', '2027-03:300.00', '2027-04:300.00', '2027-05:300.00'])
+  // الدفعة من الموارد البشرية: كل طلب منشأ معتمد لحظتها
+  const body = { ...input({ inputValue: '0.5', reason: `${REASON} — دفعة الموارد البشرية` }), targetPeriod: '2027-03', selection: { mode: 'EMPLOYEES', ids: [target.id], excludeEmployeeIds: [] } }
+  const preview = expectStatus(await request(users.hr, 'POST', '/deductions/preview', body), 201)
+  const batch = expectStatus(await request(users.hr, 'POST', '/deductions/bulk', { ...body, previewHash: preview.previewHash }), 201)
+  assert.deepEqual(batch.created.map(row => [row.employeeId, row.status]), [[target.id, 'APPROVED']])
+  assert.deepEqual(expectStatus(await request(users.hr, 'GET', `/deductions/${batch.created[0].requestId}`), 200).obligations.map(row => row.amount), ['150.00'])
+  // طلب قديم أنشأته الموارد البشرية قبل القرار وواقف: تقرره هي الآن (والموظف نفسه لا يعتمد خصمًا عليه أبدًا)
+  const legacy = expectStatus(await request(users.manager, 'POST', '/deductions', { ...input({ inputValue: '1', reason: `${REASON} — طلب قديم واقف` }), employeeId: target.id, targetPeriod: '2027-06' }), 201)
+  await repo('DeductionRequest').update(legacy.id, { creatorUserId: users.hr.id, creatorEmployeeId: null, scopeBasis: 'HR' })
+  const decided = expectStatus(await request(users.hr, 'POST', `/deductions/${legacy.id}/approve`, { expectedRevision: 0 }), 201)
+  assert.deepEqual([decided.status, decided.decidedByUserId], ['APPROVED', users.hr.id])
 })
 
 // آخر اختبار: فحص المهلة يمر على كل الطلبات المعلقة في القاعدة المؤقتة

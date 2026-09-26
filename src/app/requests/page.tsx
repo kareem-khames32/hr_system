@@ -7,6 +7,8 @@ import LetterDownloadButton from '@/components/LetterDownloadButton'
 import RequestPayload from '@/components/RequestPayload'
 import BonusRequestForm from '@/components/requests/BonusRequestForm'
 import DeductionRequestForm from '@/components/requests/DeductionRequestForm'
+// بطاقة صاحب الطلب أعلى التفاصيل — وطلب الموارد البشرية نيابةً يقول اتقدّم لمين
+import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'
 import OvertimePreview from '@/components/OvertimePreview'
 import OvertimeRequestSummary from '@/components/OvertimeRequestSummary'
 import TimeSelect, { normalizeTime, timeSpanMinutes } from '@/components/TimeSelect'
@@ -1430,6 +1432,7 @@ export default function MyRequestsPage() {
         {requestDetail && <div className="fixed inset-0 bg-black/50 z-50 flex justify-end" onClick={() => setRequestDetail(null)}>
           <div className="bg-white w-full max-w-lg h-full overflow-y-auto p-6 space-y-5" onClick={e => e.stopPropagation()}>
             <div className="flex items-center justify-between"><h2 className="text-xl font-bold">تفاصيل الطلب #{requestDetail.id}</h2><button onClick={() => setRequestDetail(null)} aria-label="إغلاق التفاصيل"><X size={22} /></button></div>
+            <RequestEmployeeCard requester={requestDetail.requester} submittedBy={requestDetail.submittedBy} />
             <RequestPayload payload={requestDetail.payload} />
             <OvertimeRequestSummary overtime={requestDetail.overtime ?? undefined} reviewRequired={requestDetail.overtimeReviewRequired} />
             <LetterDownloadButton reference={requestDetail.destinationRef} />
