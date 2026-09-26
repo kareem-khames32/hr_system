@@ -2,7 +2,7 @@ import { BadRequestException, ConflictException } from '@nestjs/common'
 import type { EntityManager } from 'typeorm'
 import { Employee } from '../employees/employee.entity'
 import { WorkSchedule } from '../assets/assets.entities'
-import { loadPayrollOrgHistory, payrollOrgAt } from '../payroll/payroll-run-definition'
+import { loadPayrollOrgHistory, payrollDepartmentParentOf, payrollOrgAt } from '../payroll/payroll-run-definition'
 import { attendanceRuleDate, attendanceRuleToday } from './attendance-rule-history'
 import { readCalendarSource } from './attendance-calendar-history'
 import { departmentPathOf, holidayAudienceMatches, holidayAudienceNeedsOrg } from './holiday-audience'
@@ -215,7 +215,7 @@ export async function resolveGlobalCalendarDay(em: EntityManager, date: string, 
  * - القسم والفريق = مكانه في اليوم ده من سجل التنظيم (payrollOrgAt — نفس ما عضوية المسير بتتحسب بيه): الملف الحالي مع التراجع
  *   عن كل نقل اتنفذ بسريان بعد اليوم وكل تعديل قسم/فريق اتسجل بعد اليوم. مفيش نسخة مؤرخة للقسم في التقويم، والملف الحالي لوحده
  *   كان هيقلب عطلة قديمة لموظف اتنقل من القسم قبل حساب مسير فترتها. بيتقري بس لو فيه عطلة أقسام أو فرق واقعة على اليوم.
- *   شجرة الأقسام (القسم الفرعي تبع أبوه) من الهيكل الحالي، زي تعريف المسير.
+ *   شجرة الأقسام (القسم الفرعي تبع أبوه جوه فرعه — الإدارة التنفيذية فوق الفروع مابتدخلش مسار فرع تاني) من الهيكل الحالي، زي تعريف المسير.
  * - الموظف بالاسم = رقمه مهما اتنقل.
  */
 async function audienceMember(em: EntityManager, employee: Employee, branchId: number, date: string, holidays: Holiday[], country: string | null,
@@ -224,7 +224,7 @@ async function audienceMember(em: EntityManager, employee: Employee, branchId: n
   if (!holidays.some(holiday => holidayAudienceNeedsOrg(holiday.audience) && holidayCoversDay(holiday, date, country))) return member
   const history = await memo(em, cache, `ORG_HISTORY:${employee.id}`, () => loadPayrollOrgHistory(em, attendanceRuleToday(), employee.id))
   const at = payrollOrgAt(history, employee, date)
-  return { ...member, teamId: at.teamId, departmentPath: departmentPathOf(at.departmentId, id => history.departmentParent.get(id)) }
+  return { ...member, teamId: at.teamId, departmentPath: departmentPathOf(at.departmentId, payrollDepartmentParentOf(history)) }
 }
 
 export async function resolveEmployeeCalendarDay(em: EntityManager, employeeId: number, date: string, options: Options = {}): Promise<ResolvedCalendarDay> {

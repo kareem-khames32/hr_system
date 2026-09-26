@@ -7,7 +7,7 @@ import {
   NotFoundException,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Not, Repository } from 'typeorm'
+import { EntityManager, Not, Repository } from 'typeorm'
 import { branchIdIn, inBranchScope, scopeWord } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
 import { CostCenter } from '../assets/assets.entities'
@@ -27,6 +27,11 @@ import {
   UpdateDepartmentDto,
   UpdateTeamDto,
 } from './org.dto'
+
+// قسم هيتعلّم «الإدارة التنفيذية» وأبوه من فرع تاني: الأب ده هو الإدارة التنفيذية الحالية (غيرها مرفوض أصلًا)، والتعليم
+// هيتشال منها بالحفظ فتبقى قسم عادي فوق قسم من فرع تاني
+const NEW_EXECUTIVE_UNDER_FOREIGN_PARENT =
+  'القسم الأب في فرع مختلف — والقسم ده هيبقى «الإدارة التنفيذية» بدل أبوه، والإدارة التنفيذية مايبقاش أبوها من فرع تاني: اختر أباً من فرعه أو خليه قسم رئيسي'
 
 @Injectable()
 export class OrgService {
@@ -174,24 +179,49 @@ export class OrgService {
     return this.departments.find({ where: { branchId: branchIdIn(branchScope) } })
   }
 
+  // قفل واحد لتعديلات شجرة الأقسام: فحص الأب والدائرة وقاعدة «الإدارة التنفيذية فوق كل الفروع» والحفظ في معاملة واحدة، فتعديلين
+  // متزامنين مايكسروش الهيكل (مثلًا قسم فرع بيتحط تحت الإدارة التنفيذية وفي نفس اللحظة قسم تاني بيتعلّم إدارة تنفيذية)
+  private async lockDepartmentTree(em: EntityManager) {
+    if (em.connection.options.type !== 'mssql') return
+    const rows = await em.query(`DECLARE @result int;
+      EXEC @result = sys.sp_getapplock @Resource = 'hr:org:department-tree', @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 10000;
+      SELECT @result AS lockResult;`)
+    if (!rows.length || Number(rows[0].lockResult) < 0) {
+      throw new ConflictException('هيكل الأقسام بيتعدل دلوقتي من حد تاني؛ جرّب تاني بعد شوية')
+    }
+  }
+
+  // «الإدارة التنفيذية فوق كل الفروع» (طلب المالك 27 سبتمبر): الأب من فرع تاني مسموح لو هو الإدارة التنفيذية بس، وربط قسم
+  // تحتها لحساب نطاقه يغطي فرعها (زي تغيير الأب في التعديل). أي أب تاني من فرع مختلف مرفوض بنفس الرسالة القديمة
   async createDepartment(dto: CreateDepartmentDto, scope: BranchScope) {
     if (!inBranchScope(scope, dto.branchId)) {
       throw new ForbiddenException(`لا يمكنك إسناد فرع خارج نطاق ${scopeWord(scope)}`)
     }
     const branch = await this.branches.findOne({ where: { id: dto.branchId } })
     if (!branch) throw new BadRequestException('الفرع غير موجود')
-    if (dto.parentId) {
-      const parent = await this.departments.findOne({
-        where: { id: dto.parentId },
-      })
-      if (!parent) throw new BadRequestException('القسم الأب غير موجود')
-      if (parent.branchId !== dto.branchId) {
-        throw new BadRequestException('القسم الأب في فرع مختلف')
+    return this.departments.manager.transaction(async (em) => {
+      await this.lockDepartmentTree(em)
+      const repo = em.getRepository(Department)
+      let foreignParent = false
+      if (dto.parentId) {
+        const parent = await repo.findOne({ where: { id: dto.parentId } })
+        if (!parent) throw new BadRequestException('القسم الأب غير موجود')
+        if (parent.branchId !== dto.branchId) {
+          if (!parent.isExecutive) throw new BadRequestException('القسم الأب في فرع مختلف')
+          if (!inBranchScope(scope, parent.branchId)) {
+            throw new ForbiddenException(`القسم الأب خارج نطاق ${scopeWord(scope)}`)
+          }
+          foreignParent = true
+        }
       }
-    }
-    await this.assertManagerExists(dto.managerEmployeeId, scope)
-    const makesExecutive = await this.prepareExecutiveFields(dto, null, scope)
-    return this.saveDepartment(this.departments.create(dto as Partial<Department>), makesExecutive)
+      await this.assertManagerExists(dto.managerEmployeeId, scope)
+      const makesExecutive = await this.prepareExecutiveFields(dto, null, scope)
+      if (makesExecutive) {
+        if (foreignParent) throw new BadRequestException(NEW_EXECUTIVE_UNDER_FOREIGN_PARENT)
+        await this.assertExecutivesReleasable(em, null)
+      }
+      return this.saveDepartment(em, repo.create(dto as Partial<Department>), makesExecutive)
+    })
   }
 
   // الهيكل التنظيمي: «الإدارة التنفيذية» قسم واحد في الشركة (مديره الرئيس التنفيذي) ومعاه السكرتير التنفيذي.
@@ -235,15 +265,14 @@ export class OrgService {
     return flagChanged
   }
 
-  private saveDepartment(dept: Department, makesExecutive: boolean) {
-    if (!makesExecutive) return this.departments.save(dept)
-    return this.departments.manager.transaction(async (em) => {
-      const saved = await em.getRepository(Department).save(dept)
-      await em
-        .getRepository(Department)
-        .update({ isExecutive: true, id: Not(saved.id) }, { isExecutive: false, executiveSecretaryEmployeeId: null })
-      return saved
-    })
+  // الحفظ جوه معاملة الشجرة؛ تعليم قسم «الإدارة التنفيذية» بيشيل التعليم والسكرتير من أي قسم تاني
+  private async saveDepartment(em: EntityManager, dept: Department, makesExecutive: boolean) {
+    const repo = em.getRepository(Department)
+    const saved = await repo.save(dept)
+    if (makesExecutive) {
+      await repo.update({ isExecutive: true, id: Not(saved.id) }, { isExecutive: false, executiveSecretaryEmployeeId: null })
+    }
+    return saved
   }
 
   async updateDepartment(
@@ -251,63 +280,82 @@ export class OrgService {
     dto: UpdateDepartmentDto,
     scope: BranchScope
   ) {
-    const dept = await this.departments.findOne({ where: { id } })
-    // قسم خارج النطاق = غير موجود (زي القراءة)
-    if (!dept || !inBranchScope(scope, dept.branchId)) {
-      throw new NotFoundException('القسم غير موجود')
-    }
-    if (dto.branchId) {
-      if (!inBranchScope(scope, dto.branchId)) {
-        throw new ForbiddenException(`لا يمكنك إسناد فرع خارج نطاق ${scopeWord(scope)}`)
+    return this.departments.manager.transaction(async (em) => {
+      await this.lockDepartmentTree(em)
+      const repo = em.getRepository(Department)
+      const dept = await repo.findOne({ where: { id } })
+      // قسم خارج النطاق = غير موجود (زي القراءة)
+      if (!dept || !inBranchScope(scope, dept.branchId)) {
+        throw new NotFoundException('القسم غير موجود')
       }
-      const branch = await this.branches.findOne({
-        where: { id: dto.branchId },
-      })
-      if (!branch) throw new BadRequestException('الفرع غير موجود')
-    }
-    if (dto.parentId) {
-      if (dto.parentId === id) {
-        throw new BadRequestException('القسم لا يكون أباً لنفسه')
+      if (dto.branchId) {
+        if (!inBranchScope(scope, dto.branchId)) {
+          throw new ForbiddenException(`لا يمكنك إسناد فرع خارج نطاق ${scopeWord(scope)}`)
+        }
+        const branch = await this.branches.findOne({
+          where: { id: dto.branchId },
+        })
+        if (!branch) throw new BadRequestException('الفرع غير موجود')
       }
-      const parent = await this.departments.findOne({
-        where: { id: dto.parentId },
-      })
-      if (!parent) throw new BadRequestException('القسم الأب غير موجود')
-      if (
-        dto.parentId !== dept.parentId &&
-        !inBranchScope(scope, parent.branchId)
-      ) {
-        throw new ForbiddenException(`القسم الأب خارج نطاق ${scopeWord(scope)}`)
+      if (dto.parentId) {
+        if (dto.parentId === id) {
+          throw new BadRequestException('القسم لا يكون أباً لنفسه')
+        }
+        const parent = await repo.findOne({
+          where: { id: dto.parentId },
+        })
+        if (!parent) throw new BadRequestException('القسم الأب غير موجود')
+        // تغيير الأب لقسم برّه نطاق الحساب مرفوض — ومنه ربط قسم تحت «الإدارة التنفيذية» من حساب مايغطيش فرعها
+        if (
+          dto.parentId !== dept.parentId &&
+          !inBranchScope(scope, parent.branchId)
+        ) {
+          throw new ForbiddenException(`القسم الأب خارج نطاق ${scopeWord(scope)}`)
+        }
       }
-    }
-    await this.assertDepartmentTree(id, dept, dto)
-    await this.assertManagerExists(
-      dto.managerEmployeeId,
-      dto.managerEmployeeId !== dept.managerEmployeeId ? scope : null
-    )
-    const makesExecutive = await this.prepareExecutiveFields(dto, dept, scope)
-    Object.assign(dept, dto)
-    return this.saveDepartment(dept, makesExecutive)
+      // التعليم بعد الحفظ أولًا (حساب الفرع اللي بيغيّره بيترفض هنا)، عشان فحص الهيكل بيحكم على الشكل بعد الحفظ
+      const makesExecutive = await this.prepareExecutiveFields(dto, dept, scope)
+      await this.assertDepartmentTree(em, id, dept, dto, makesExecutive)
+      await this.assertManagerExists(
+        dto.managerEmployeeId,
+        dto.managerEmployeeId !== dept.managerEmployeeId ? scope : null
+      )
+      Object.assign(dept, dto)
+      return this.saveDepartment(em, dept, makesExecutive)
+    })
   }
 
-  // SET-14: الهيكل بعد تعديل القسم — الأب (الجديد أو القائم) في نفس فرع القسم كما
-  // يفحص الإنشاء، ولا يكون من الأقسام التابعة له (A أبوه B وB أبوه A كانت تُحفظ فيلفّ
-  // الهيكل وتحليل المعتمد)، ونقل القسم لفرع آخر لا يترك أقسامه الفرعية في فرعها.
-  // يُفحص عند تغيّر الأب أو الفرع فقط — الهيكل القائم لا يمنع تعديل باقي الحقول
+  // SET-14 + «الإدارة التنفيذية فوق كل الفروع» (طلب المالك 27 سبتمبر): الهيكل بعد تعديل القسم —
+  // - الأب (الجديد أو القائم) في نفس فرع القسم كما يفحص الإنشاء، إلا «الإدارة التنفيذية»: أب مسموح من أي فرع. والقسم اللي
+  //   هيتعلّم إدارة تنفيذية مايبقاش تحت الإدارة التنفيذية الحالية من فرع تاني (التعليم هيتشال منها فتبقى قسم عادي فوقه).
+  // - الأب مايكونش من الأقسام التابعة للقسم (A أبوه B وB أبوه A كانت تُحفظ فيلفّ الهيكل وتحليل المعتمد).
+  // - نقل قسم عادي لفرع آخر لا يترك أقسامه الفرعية في فرعها؛ الإدارة التنفيذية تتنقل عادي وأقسامها في أي فرع.
+  // - القسم العادي عمره ما يبقى أب لقسم من فرع تاني: شيل تعليم الإدارة التنفيذية — صريح (isExecutive: false) أو ضمني (تعليم
+  //   قسم تاني) — مرفوض طول ما تحتها أقسام من فروع تانية.
+  // يُفحص عند تغيّر الأب أو الفرع أو التعليم فقط — الهيكل القائم لا يمنع تعديل باقي الحقول
   private async assertDepartmentTree(
+    em: EntityManager,
     id: number,
     dept: Department,
-    dto: UpdateDepartmentDto
+    dto: UpdateDepartmentDto,
+    makesExecutive: boolean
   ) {
+    const repo = em.getRepository(Department)
     const branchId = dto.branchId ?? dept.branchId
     const parentId = dto.parentId !== undefined ? dto.parentId : dept.parentId
+    // prepareExecutiveFields بيشيل isExecutive من dto لو ماتغيّرش
+    const executiveAfter = dto.isExecutive !== undefined ? !!dto.isExecutive : !!dept.isExecutive
     const branchChanged = branchId !== dept.branchId
-    if (!branchChanged && (parentId ?? null) === (dept.parentId ?? null)) return
+    const parentChanged = (parentId ?? null) !== (dept.parentId ?? null)
+    if (!branchChanged && !parentChanged && executiveAfter === !!dept.isExecutive) return
     if (parentId) {
-      const parent = await this.departments.findOne({ where: { id: parentId } })
+      const parent = await repo.findOne({ where: { id: parentId } })
       if (!parent) throw new BadRequestException('القسم الأب غير موجود')
       if (parent.branchId !== branchId) {
-        throw new BadRequestException('القسم الأب في فرع مختلف — اختر أباً من فرع القسم نفسه')
+        if (!parent.isExecutive) {
+          throw new BadRequestException('القسم الأب في فرع مختلف — اختر أباً من فرع القسم نفسه')
+        }
+        if (makesExecutive) throw new BadRequestException(NEW_EXECUTIVE_UNDER_FOREIGN_PARENT)
       }
       // صعوداً من الأب حتى الجذر: المرور بالقسم نفسه = دائرة
       const seen = new Set<number>()
@@ -321,12 +369,14 @@ export class OrgService {
           throw new BadRequestException('سلسلة أقسام الأب المختار دائرية — صحّح أبوّتها أولاً')
         }
         seen.add(cur)
-        const node: Department | null = await this.departments.findOne({ where: { id: cur } })
+        const node: Department | null = await repo.findOne({ where: { id: cur } })
         cur = node?.parentId ?? null
       }
     }
-    if (branchChanged) {
-      const child = await this.departments.findOne({
+    if (dept.isExecutive && !executiveAfter) {
+      await this.assertNoForeignChildren(em, dept, branchId, null, 'explicit')
+    } else if (branchChanged && !executiveAfter) {
+      const child = await repo.findOne({
         where: { parentId: id, branchId: Not(branchId) },
       })
       if (child) {
@@ -335,6 +385,36 @@ export class OrgService {
         )
       }
     }
+    if (makesExecutive) await this.assertExecutivesReleasable(em, id)
+  }
+
+  // تعليم قسم «الإدارة التنفيذية» بيشيل التعليم من الإدارة التنفيذية الحالية (saveDepartment) — مرفوض طول ما تحتها أقسام من
+  // فروع تانية. newExecutiveId = القسم اللي هيتعلّم (أبوّته نفسه اتفحصت في assertDepartmentTree)، null = قسم جديد
+  private async assertExecutivesReleasable(em: EntityManager, newExecutiveId: number | null) {
+    const current = await em.getRepository(Department).find({
+      where: { isExecutive: true, ...(newExecutiveId ? { id: Not(newExecutiveId) } : {}) },
+      order: { id: 'ASC' },
+    })
+    for (const executive of current) {
+      await this.assertNoForeignChildren(em, executive, executive.branchId, newExecutiveId, 'implicit')
+    }
+  }
+
+  // القسم العادي عمره ما يبقى أب لقسم من فرع تاني: executive بعد شيل تعليمه (في فرعه branchId بعد الحفظ) مايتسابش فوق أقسام
+  // من فروع تانية — الرسالة بتسمّي قسم منهم وبتقول انقلهم الأول
+  private async assertNoForeignChildren(em: EntityManager, executive: Department, branchId: number,
+    skipId: number | null, mode: 'explicit' | 'implicit') {
+    const child = await em.getRepository(Department).findOne({
+      where: { parentId: executive.id, branchId: Not(branchId), ...(skipId ? { id: Not(skipId) } : {}) },
+      order: { id: 'ASC' },
+    })
+    if (!child) return
+    const branch = await em.getRepository(Branch).findOne({ where: { id: child.branchId } })
+    const where = !branch ? `فرع #${child.branchId}` : branch.name.startsWith('فرع') ? branch.name : `فرع ${branch.name}`
+    const move = 'انقل الأقسام دي الأول (تحت قسم من فرعها أو خليها أقسام رئيسية)'
+    throw new BadRequestException(mode === 'explicit'
+      ? `مينفعش تشيل «الإدارة التنفيذية» من «${executive.name}» وتحتها أقسام من فروع تانية زي «${child.name}» (${where}) — ${move}`
+      : `مينفعش تعلّم قسم تاني «إدارة تنفيذية» و«${executive.name}» (الإدارة التنفيذية الحالية) تحتها أقسام من فروع تانية زي «${child.name}» (${where}) — ${move}`)
   }
 
   // ===== الفرق =====
