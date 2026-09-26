@@ -18,8 +18,12 @@ node api/scripts/db-migrate.cjs plan
 # 2) بروفة — نسخة COPY_ONLY جديدة من hr_system الحالية تُستعاد في hr_migrate_rehearsal_* وتُطبق عليها الملفات المعلقة فقط
 #    ثم تُقارن الصفوف والأعمدة والفرق وتُحذف القاعدة المؤقتة (--keep للإبقاء عليها). الـAPI يمكن أن يبقى شغالًا.
 node api/scripts/db-migrate.cjs rehearse
-#    السلسلة كاملة من نقطة ما قبل الرواتب:
+#    السلسلة كاملة من نقطة ما قبل الرواتب (تاريخي — مابقاش فحص ما قبل التطبيق):
 node api/scripts/db-migrate.cjs rehearse --from baseline
+#    تنبيه (26 سبتمبر): ملف 013 (.cjs) بيقرا الجداول بكيانات الكود الحالي، فإعادة تشغيله على نقطة الأساس بتقف عنده
+#    من أول ما اتضافت أعمدة لكياناته في ترحيلات أحدث (069 work_schedules.weekendExceptions، 070 public_holidays.audience):
+#    «Invalid column name». ده مايمسّش التطبيق على القواعد الشغالة (013 متطبق عليها أصلًا وبصمته ثابتة)؛
+#    فحص ما قبل التطبيق هو «rehearse» العادي (من النسخة الحالية). ماتعدّلش 013 عشان يعدّي — بصمته في دفاتر القواعد الشغالة.
 
 # 3) تطبيق على hr_system (وضع الشركة) — أوقف الـAPI أولًا
 node api/scripts/db-migrate.cjs apply --company
