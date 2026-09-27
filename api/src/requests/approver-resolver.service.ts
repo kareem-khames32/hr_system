@@ -7,6 +7,7 @@ import { Department } from '../org/entities/department.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { unitChainUp } from '../org/department-tree'
 import type { JwtPayload } from '../auth/auth.service'
+import { inBranchScope, type BranchScope } from '../auth/guards'
 import { ApproverRole } from './entities/approval-step.entity'
 import type { ApprovalAction } from './entities/request-approval.entity'
 
@@ -123,13 +124,16 @@ export class ApproverResolver {
   // حاطط القسم تحتها. المعتمد مدير الإدارة دي؛ ولو هو مقدّم الطلب نفسه: مدير الإدارة اللي فوقها وهكذا. السرّي مابيتخطّاهاش (زي
   // «مدير القسم»). التقديم بيقف برسالة بتسمّي الوحدة: مفيش قسم، أو مفيش إدارة فوق القسم، أو الإدارة مالهاش مدير، أو المدير الوحيد
   // اللي لقيناه هو مقدّم الطلب
-  async administrationManagerOf(employeeId: number): Promise<AdministrationApproval> {
+  // viewer = نطاق فروع اللي بيقدّم الطلب (مقدّمه أو منشئه نيابةً) — اسم الوحدة في رسالة الإيقاف بيظهر لو جوه نطاقه بس
+  async administrationManagerOf(employeeId: number, viewer?: BranchScope): Promise<AdministrationApproval> {
     const emp = await this.employees.findOne({ where: { id: employeeId }, select: { id: true, departmentId: true, branchId: true } })
     const chain = await this.unitChainOf(emp?.departmentId)
-    // اسم الوحدة في رسالة الإيقاف: المسجّل لو في فرع مقدّم الطلب، وإلا الوصف العام زي بطاقة الطلب — الرسالة بتوصل لمقدّم الطلب
-    // أو لمنشئه نيابةً (ونطاقه فيه فرع المقدّم)، واسم وحدة من فرع تاني مايتكشفش فيها (مراجعة Codex الجولة 12، CR12-B01)
+    // اسم الوحدة في رسالة الإيقاف: المسجّل لو الوحدة جوه نطاق اللي بيقدّم الطلب، وإلا الوصف العام — زي بطاقة الطلب (مراجعة Codex
+    // الجولتين 12 و13، CR12-B01/CR13-B01: منشئ المسودة ممكن مايبقاش نطاقه فيه فرع الموظف بعد نقله). من غير نطاق (نداء داخلي
+    // مالوش قارئ): المسجّل لو في فرع الموظف بس
     const unitName = (unit: Department) =>
-      unit.branchId === emp?.branchId ? unit.name : unit.isExecutive ? 'الإدارة التنفيذية' : 'إدارة في فرع تاني'
+      (viewer !== undefined ? inBranchScope(viewer, unit.branchId) : unit.branchId === emp?.branchId) ? unit.name
+        : unit.isExecutive ? 'الإدارة التنفيذية' : unit.unitType === 'ADMINISTRATION' ? 'إدارة في فرع تاني' : 'قسم في فرع تاني'
     if (!chain.length) {
       return { approverId: null, administrationId: null,
         blocked: 'مقدّم الطلب مش مسجّل في قسم، فمفيش «مدير الإدارة» — سجّل قسمه في ملفه أو عدّل سلسلة الاعتماد' }

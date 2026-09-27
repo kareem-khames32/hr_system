@@ -26,7 +26,7 @@ import {
   Repository,
 } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchIdIn, branchScopeOf, inBranchScope, scopeWord, userHasPerm } from '../auth/guards'
+import { branchIdIn, branchScopeOf, inBranchScope, scopeWord, userHasPerm, type BranchScope } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { User } from '../auth/user.entity'
 import { Branch } from '../org/entities/branch.entity'
@@ -919,7 +919,8 @@ export class RequestsService {
       req.payload = JSON.stringify(await stageLoanRequestSubmission(em, { requestId: req.id, requesterId: req.requesterId, actor: user, payload: JSON.parse(req.payload || '{}') }))
     }
     if (isSalaryChangeType(type)) req.payload = JSON.stringify(await stageSalaryChangeRequest(em, req, JSON.parse(req.payload || '{}'), user.sub))
-    const { steps: resolved, chain, inactiveChain } = await this.resolveChain(type, req, em)
+    // نطاق اللي بيقدّم: رسايل إيقاف السلسلة مابتسمّيش وحدة أو مدير برّه نطاقه
+    const { steps: resolved, chain, inactiveChain } = await this.resolveChain(type, req, em, branchScopeOf(user))
     if (this.isOvertimeDefinition(type)) {
       if (!resolved.length) throw new BadRequestException('الإضافي يتطلب خطوات اعتماد صريحة؛ لا يسمح بتنفيذه فورياً دون معتمدين')
       await this.stageOvertimeSubmission(em, req, resolved, user.sub, resubmission)
@@ -1090,10 +1091,12 @@ export class RequestsService {
   // ترجع السلسلة المستخدمة فعلاً (لقرار autoApprove في submit) — null لو
   // النوع بلا سلسلة أو سلسلته محذوفة (يُحسم كـ«غير مضبوط» = يتوقف)، و inactiveChain
   // لو السلسلة الفعلية معطّلة (SET-3)
+  // viewer = نطاق فروع اللي بيقدّم الطلب (للرسايل بس)؛ النداء الداخلي (الإضافي التلقائي) من غيره
   private async resolveChain(
     type: RequestType,
     req: Request,
-    em: EntityManager = this.ds.manager
+    em: EntityManager = this.ds.manager,
+    viewer?: BranchScope
   ): Promise<{
     steps: ResolvedStep[]
     chain: ApprovalChain | null
@@ -1152,7 +1155,7 @@ export class RequestsService {
         : null
       // «مدير الإدارة»: المعتمد أو سبب الإيقاف برسالة بتسمّي القسم أو الإدارة
       const administration = s.approverRole === 'administration_manager_of_requester'
-        ? await this.resolver.administrationManagerOf(req.requesterId)
+        ? await this.resolver.administrationManagerOf(req.requesterId, viewer)
         : null
       const approverEmployeeId = skipLevel
         ? skipLevel.approverId
@@ -1173,7 +1176,7 @@ export class RequestsService {
         continue
       }
       if (skipLevel && !approverEmployeeId) {
-        throw new BadRequestException(await this.skipLevelMissingMessage(skipLevel.directManagerId))
+        throw new BadRequestException(await this.skipLevelMissingMessage(skipLevel.directManagerId, viewer))
       }
       if (administration?.blocked) throw new BadRequestException(administration.blocked)
       if (['direct_manager_of_requester', 'department_manager_of_requester', 'administration_manager_of_requester',
@@ -1221,10 +1224,12 @@ export class RequestsService {
   }
 
   // رسالة «مدير المدير المباشر» الناقص: باسم المدير المباشر اللي محتاج مدير في ملفه
-  private async skipLevelMissingMessage(directManagerId: number | null) {
+  // اسم المدير بيظهر لو فرعه جوه نطاق اللي بيقدّم الطلب (viewer) بس — نفس حجب رسايل «مدير الإدارة» (مراجعة Codex الجولة 13)
+  private async skipLevelMissingMessage(directManagerId: number | null, viewer?: BranchScope) {
     if (!directManagerId) return 'لا يوجد مدير مباشر لمقدّم الطلب — أكمل الهيكل التنظيمي أو عدّل سلسلة الاعتماد'
-    const manager = await this.employees.findOne({ where: { id: directManagerId }, select: { id: true, fullName: true } })
-    return `مفيش «مدير المدير المباشر»: سجّل المدير المباشر لـ«${manager?.fullName ?? 'المدير المباشر'}» في ملفه، أو عدّل سلسلة الاعتماد`
+    const manager = await this.employees.findOne({ where: { id: directManagerId }, select: { id: true, fullName: true, branchId: true } })
+    const name = manager && (viewer === undefined || inBranchScope(viewer, manager.branchId)) ? manager.fullName : 'المدير المباشر'
+    return `مفيش «مدير المدير المباشر»: سجّل المدير المباشر لـ«${name}» في ملفه، أو عدّل سلسلة الاعتماد`
   }
 
   // الخطوة الشرطية: تُفعَّل فقط عند تحقق الشرط (loan >= 5000 → مالية)
