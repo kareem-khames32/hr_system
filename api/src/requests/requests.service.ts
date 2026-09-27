@@ -385,7 +385,7 @@ export class RequestsService {
       throw new BadRequestException(`حقول ناقصة: ${missing.join('، ')}`)
     }
     // القائمة البيضاء قبل الحفظ — المرفوض لا يترك مسودة مخزّنة بالمفتاح الممنوع (SEC-REQ-2)
-    this.assertPayloadKeys(type, JSON.stringify(payload))
+    this.assertPayloadKeys(type, JSON.stringify(payload), branchScopeOf(user))
     // التقديم المباشر: قيم البنك/المسمى قبل الحفظ — لا مسودة يتيمة (SEC-EMP-2)
     if (dto.submit) this.assertSubmitValues(type, JSON.stringify(payload))
     if (dto.submit && type.destinationHandler === 'letter_pdf_generator') {
@@ -447,7 +447,7 @@ export class RequestsService {
       throw new BadRequestException(this.destinations.unsupportedMessage(type))
     }
     // مفاتيح الحمولة من قائمة النوع البيضاء فقط (SEC-REQ-2)
-    this.assertPayloadKeys(type, req.payload)
+    this.assertPayloadKeys(type, req.payload, branchScopeOf(user))
     // قيم البنك/المسمى إلزامية وصالحة عند التقديم (SEC-EMP-2)
     this.assertSubmitValues(type, req.payload)
     // «دوام يوم عطلة»: كل يوم لازم يكون عطلة (ويك إند/عطلة رسمية) لصاحب الطلب — يوم العمل العادي بيترفض من التقديم
@@ -657,7 +657,8 @@ export class RequestsService {
           if (leaveTypeDef.branchId != null) {
             const owner = await em.getRepository(Employee).findOne({ where: { id: req.requesterId }, select: { id: true, branchId: true } })
             if (!definitionInBranch(leaveTypeDef.branchId, owner?.branchId)) {
-              throw new BadRequestException(`نوع الإجازة «${leaveTypeDef.nameAr}» خاص بفرع تاني — اختر من الأنواع المتاحة`)
+              // من غير اسم النوع: اسم تعريف فرع تاني مايتكشفش في الرسالة (مراجعة Codex الجولة 14، CR14-B01)
+              throw new BadRequestException('نوع الإجازة المختار خاص بفرع تاني — اختر من الأنواع المتاحة')
             }
           }
         }
@@ -929,7 +930,7 @@ export class RequestsService {
     // واضحة — كان بيتجاهل فتمشي الطلبات فيها عادي. الجارية تكمل بخطواتها المخزّنة
     if (inactiveChain) {
       throw new BadRequestException(
-        `سلسلة اعتماد نوع «${type.nameAr}» («${inactiveChain.nameAr}») معطّلة — لا تُقبل عليها طلبات جديدة. ` +
+        `سلسلة اعتماد ${this.typeRef(type, branchScopeOf(user))} (${this.chainRef(inactiveChain, branchScopeOf(user))}) معطّلة — لا تُقبل عليها طلبات جديدة. ` +
           `فعّلها من «سلاسل الاعتماد» أو اربط النوع بسلسلة مفعّلة ثم أعد التقديم`
       )
     }
@@ -955,15 +956,15 @@ export class RequestsService {
       // 1) بلا سلسلة أصلاً (نوع مخصّص/سلسلة محذوفة) → توقف آمن، ممنوع تنفيذ بلا اعتماد
       if (!chain) {
         throw new BadRequestException(
-          `لا توجد سلسلة اعتماد مربوطة بنوع «${type.nameAr}» — ` +
+          `لا توجد سلسلة اعتماد مربوطة ب${this.typeRef(type, branchScopeOf(user))} — ` +
             `اربطه بسلسلة من «سلاسل الاعتماد» وأضِف المعتمدين ثم أعد التقديم`
         )
       }
       // 2) سلسلة فاضية غير معلّمة «تنفيذ فوري» → توقف لحد ما تُضبط
       if (!chain.autoApprove) {
         throw new BadRequestException(
-          `لم تُحدَّد خطوات الاعتماد لنوع «${type.nameAr}» بعد — ` +
-            `افتح «سلاسل الاعتماد» وأضِف المعتمدين لسلسلة «${chain.nameAr}» ثم أعد التقديم`
+          `لم تُحدَّد خطوات الاعتماد ل${this.typeRef(type, branchScopeOf(user))} بعد — ` +
+            `افتح «سلاسل الاعتماد» وأضِف المعتمدين ل${this.chainRef(chain, branchScopeOf(user))} ثم أعد التقديم`
         )
       }
       // 3) تنفيذ فوري بلا موافقات (اختيار صريح من المالك على هذه السلسلة) — الحالة
@@ -1228,8 +1229,10 @@ export class RequestsService {
   private async skipLevelMissingMessage(directManagerId: number | null, viewer?: BranchScope) {
     if (!directManagerId) return 'لا يوجد مدير مباشر لمقدّم الطلب — أكمل الهيكل التنظيمي أو عدّل سلسلة الاعتماد'
     const manager = await this.employees.findOne({ where: { id: directManagerId }, select: { id: true, fullName: true, branchId: true } })
-    const name = manager && (viewer === undefined || inBranchScope(viewer, manager.branchId)) ? manager.fullName : 'المدير المباشر'
-    return `مفيش «مدير المدير المباشر»: سجّل المدير المباشر لـ«${name}» في ملفه، أو عدّل سلسلة الاعتماد`
+    if (!manager || (viewer !== undefined && !inBranchScope(viewer, manager.branchId))) {
+      return 'مفيش «مدير المدير المباشر»: «المدير المباشر» لمقدّم الطلب مالوش مدير مسجّل في ملفه — سجّله، أو عدّل سلسلة الاعتماد'
+    }
+    return `مفيش «مدير المدير المباشر»: سجّل المدير المباشر لـ«${manager.fullName}» في ملفه، أو عدّل سلسلة الاعتماد`
   }
 
   // الخطوة الشرطية: تُفعَّل فقط عند تحقق الشرط (loan >= 5000 → مالية)
@@ -1641,7 +1644,7 @@ export class RequestsService {
       if (!this.destinations.supports(type)) {
         throw new BadRequestException(this.destinations.unsupportedMessage(type))
       }
-      this.assertPayloadKeys(type, req.payload)
+      this.assertPayloadKeys(type, req.payload, branchScopeOf(user))
       // وقيم البنك/المسمى قبل الحفظ أيضاً — الفارغ لا يُسقط المُرجَع لمسودة (SEC-EMP-2)
       this.assertSubmitValues(type, req.payload)
       await this.assertAttachmentOwnership(req, user)
@@ -2909,7 +2912,17 @@ export class RequestsService {
   }
 
   // القائمة البيضاء لحمولة النوع (SEC-REQ-2): أي مفتاح خارجها يُرفض بالاسم
-  private assertPayloadKeys(type: RequestType, rawPayload?: string | null) {
+  // اسم نوع الطلب أو السلسلة في رسايل التقديم: بيظهر لو التعريف عام (من غير فرع) أو فرعه جوه نطاق اللي بيقدّم، وإلا وصف عام —
+  // المسودة بتفضل ملك منشئها بعد ما نطاقه يتغير، واسم تعريف فرع برّه نطاقه مايتكشفش في الرسالة (مراجعة Codex الجولة 14، CR14-B02)
+  private typeRef(type: { nameAr: string; branchId?: number | null }, viewer?: BranchScope) {
+    return viewer === undefined || type.branchId == null || inBranchScope(viewer, type.branchId) ? `نوع «${type.nameAr}»` : 'نوع الطلب ده'
+  }
+
+  private chainRef(chain: { nameAr: string; branchId?: number | null }, viewer?: BranchScope) {
+    return viewer === undefined || chain.branchId == null || inBranchScope(viewer, chain.branchId) ? `سلسلة «${chain.nameAr}»` : 'سلسلة الفرع بتاعته'
+  }
+
+  private assertPayloadKeys(type: RequestType, rawPayload?: string | null, viewer?: BranchScope) {
     let payload: Record<string, unknown> | null = null
     try {
       payload = rawPayload ? JSON.parse(rawPayload) : null
@@ -2955,7 +2968,7 @@ export class RequestsService {
         ? ` — مرفق الطلب اسمه «attachmentUrl» ومرجعه «file:رقم» من رفع الملفات`
         : ' — أزِلها أو عرّفها في «أنواع الطلبات»'
       throw new BadRequestException(
-        `حقول غير معرّفة لنوع «${type.nameAr}»: ${extra.join('، ')}${hint}`
+        `حقول غير معرّفة ل${this.typeRef(type, viewer)}: ${extra.join('، ')}${hint}`
       )
     }
     // SEC-EMP-2: قيم تُكتب في ملف الموظف — تُرفض من التقديم لا عند الاعتماد
