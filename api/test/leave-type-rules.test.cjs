@@ -99,8 +99,9 @@ test('submit path wires the rules: counting mode for stored days, type backdate 
   assert.match(src, /const countedDays = allDays \? total : working/)
   assert.match(src, /const segDays = allDays \? seg\.total : seg\.working/)
   assert.match(src, /if \(!leaveTypeDef \|\| leaveTypeBackdateLimit\(leaveTypeDef\) === null\)/)
-  assert.match(src, /assertLeaveTypeDateRules\(leaveTypeDef,/)
-  assert.match(src, /assertLeaveTypeDaysRules\(leaveTypeDef,/)
+  // القواعد بتاخد النوع باسمه لو جوه نطاق اللي بيقدّم، وإلا نسخة باسم عام (مراجعة Codex الجولة 15، CR15-B01)
+  assert.match(src, /assertLeaveTypeDateRules\(this\.leaveTypeShown\(leaveTypeDef, branchScopeOf\(user\)\),/)
+  assert.match(src, /assertLeaveTypeDaysRules\(this\.leaveTypeShown\(leaveTypeDef, branchScopeOf\(user\)\),/)
   assert.match(src, /this\.leaveTimesInYear\(em, req, leaveTypeDef\.code, year\)/)
   // المرفق القديم (أي اسم مرفق = مطلوب) اتشال لصالح قاعدة النوع
   assert.doesNotMatch(src, /leaveTypeDef\.requiredAttachment &&/)

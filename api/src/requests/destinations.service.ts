@@ -26,6 +26,7 @@ import { leaveCodeOf } from '../common/leave-contract'
 import { Request } from './entities/request.entity'
 import { RequestApproval } from './entities/request-approval.entity'
 import { RequestType } from './entities/request-type.entity'
+import { inBranchScope, type BranchScope } from '../auth/guards'
 import { Leave, LeaveType } from './entities/leave.entities'
 import { initialLeaveAttachment } from './leave-attachment-rules'
 import {
@@ -226,9 +227,12 @@ export class DestinationsService {
   }
 
   // رسالة واحدة للنوع اللي وجهته غير مبنية — للتقديم والتفعيل والتنفيذ
-  unsupportedMessage(type: Pick<RequestType, 'nameAr' | 'destinationHandler'>): string {
+  // viewer = نطاق اللي بيقدّم الطلب: اسم نوع خاص بفرع برّه نطاقه مايظهرش (مراجعة Codex الجولة 15، CR15-N01)؛ من غيره (التفعيل
+  // من «بانِي الطلبات» لمدير التعريف نفسه) الاسم زي ما هو
+  unsupportedMessage(type: Pick<RequestType, 'nameAr' | 'destinationHandler'> & { branchId?: number | null }, viewer?: BranchScope): string {
+    const name = viewer === undefined || type.branchId == null || inBranchScope(viewer, type.branchId) ? `نوع «${type.nameAr}»` : 'نوع الطلب ده'
     return (
-      `نوع «${type.nameAr}» ليس له تنفيذ بعد الاعتماد (الوجهة «${type.destinationHandler}» لم تُبنَ) — ` +
+      `${name} ليس له تنفيذ بعد الاعتماد (الوجهة «${type.destinationHandler}» لم تُبنَ) — ` +
       `لا يُقبل عليه طلب حتى تختار الموارد البشرية وجهة منفّذة أو «سجل فقط» من «بانِي الطلبات»`
     )
   }

@@ -272,7 +272,7 @@ export class RequestsService {
     assertNotLegacyBonusRoute(type)
     // وجهة لسه متبنّتش: لا مسودة ولا تقديم — كان يُعتمد ويُقفل «مكتمل» بلا أثر (REQ-3)
     if (!this.destinations.supports(type)) {
-      throw new BadRequestException(this.destinations.unsupportedMessage(type))
+      throw new BadRequestException(this.destinations.unsupportedMessage(type, branchScopeOf(user)))
     }
     if (type.code === LOAN_DEFERRAL_TYPE) dto = { ...dto, payload: assertLoanDeferralClientPayload(dto.payload ?? {}, !!dto.submit) }
     if (isLoanCapRequestType(type)) assertLoanRequestClientPayload(dto.payload)
@@ -444,7 +444,7 @@ export class RequestsService {
     assertNotLegacyBonusRoute(type)
     // وجهة لسه متبنّتش (مسودة قديمة/إعادة تقديم): لا تقديم (REQ-3)
     if (!this.destinations.supports(type)) {
-      throw new BadRequestException(this.destinations.unsupportedMessage(type))
+      throw new BadRequestException(this.destinations.unsupportedMessage(type, branchScopeOf(user)))
     }
     // مفاتيح الحمولة من قائمة النوع البيضاء فقط (SEC-REQ-2)
     this.assertPayloadKeys(type, req.payload, branchScopeOf(user))
@@ -726,7 +726,7 @@ export class RequestsService {
           const hrOnBehalf =
             userHasPerm(user, 'requests.create_on_behalf') &&
             !(await this.actorIsRequester(em, user, req))
-          assertLeaveTypeDateRules(leaveTypeDef, {
+          assertLeaveTypeDateRules(this.leaveTypeShown(leaveTypeDef, branchScopeOf(user)), {
             fromDate: String(p.fromDate),
             period: p.period,
             today: localDateOf(new Date()),
@@ -845,7 +845,7 @@ export class RequestsService {
             leaveTypeDef.category === 'OCCASION' && Number(leaveTypeDef.maxTimesPerYear) > 0 && /^\d{4}$/.test(year)
               ? await this.leaveTimesInYear(em, req, leaveTypeDef.code, year)
               : 0
-          assertLeaveTypeDaysRules(leaveTypeDef, {
+          assertLeaveTypeDaysRules(this.leaveTypeShown(leaveTypeDef, branchScopeOf(user)), {
             days: Number(p.days),
             attachmentRef: p.attachmentUrl,
             timesThisYear,
@@ -892,7 +892,7 @@ export class RequestsService {
           }
           if (priorLeaves > 0 || inFlight > 0) {
             throw new BadRequestException(
-              `«${leaveTypeDef.nameAr}» تُمنح مرة واحدة طوال الخدمة — للموظف طلب/إجازة سابقة من هذا النوع`
+              `«${this.leaveTypeShown(leaveTypeDef, branchScopeOf(user)).nameAr}» تُمنح مرة واحدة طوال الخدمة — للموظف طلب/إجازة سابقة من هذا النوع`
             )
           }
         }
@@ -1642,7 +1642,7 @@ export class RequestsService {
       assertNotLegacyBonusRoute(type)
       // وجهة لسه متبنّتش: قبل الحفظ عشان المُرجَع مايقعش لمسودة (REQ-3)
       if (!this.destinations.supports(type)) {
-        throw new BadRequestException(this.destinations.unsupportedMessage(type))
+        throw new BadRequestException(this.destinations.unsupportedMessage(type, branchScopeOf(user)))
       }
       this.assertPayloadKeys(type, req.payload, branchScopeOf(user))
       // وقيم البنك/المسمى قبل الحفظ أيضاً — الفارغ لا يُسقط المُرجَع لمسودة (SEC-EMP-2)
@@ -2914,6 +2914,12 @@ export class RequestsService {
   // القائمة البيضاء لحمولة النوع (SEC-REQ-2): أي مفتاح خارجها يُرفض بالاسم
   // اسم نوع الطلب أو السلسلة في رسايل التقديم: بيظهر لو التعريف عام (من غير فرع) أو فرعه جوه نطاق اللي بيقدّم، وإلا وصف عام —
   // المسودة بتفضل ملك منشئها بعد ما نطاقه يتغير، واسم تعريف فرع برّه نطاقه مايتكشفش في الرسالة (مراجعة Codex الجولة 14، CR14-B02)
+  // نوع الإجازة لرسايل قواعدها (نص اليوم، الحد الأدنى، المرة الواحدة…): نفسه لو النوع عام أو فرعه جوه نطاق اللي بيقدّم،
+  // وإلا نسخة اسمها «نوع الإجازة ده» — القواعد نفسها بنفس القيم (مراجعة Codex الجولة 15، CR15-B01)
+  private leaveTypeShown<T extends { nameAr: string; branchId?: number | null }>(leaveType: T, viewer?: BranchScope): T {
+    return viewer === undefined || leaveType.branchId == null || inBranchScope(viewer, leaveType.branchId) ? leaveType : { ...leaveType, nameAr: 'نوع الإجازة ده' }
+  }
+
   private typeRef(type: { nameAr: string; branchId?: number | null }, viewer?: BranchScope) {
     return viewer === undefined || type.branchId == null || inBranchScope(viewer, type.branchId) ? `نوع «${type.nameAr}»` : 'نوع الطلب ده'
   }
