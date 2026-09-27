@@ -2,12 +2,15 @@
 // أسباب إنهاء الخدمة من الإعدادات (قرار المالك 27 سبتمبر): الثمانية الأساسية ثابتة، والمالك بيضيف أسباب مخصصة
 // بمسمى ونسبة من مكافأة نهاية الخدمة (الافتراضي «انقطاع عن العمل» بلا مكافأة). الاختبار على SQL حقيقي: القائمة
 // الافتراضية، الإضافة والرفض، صلاحية الحفظ، فتح ملف بسبب مخصص ومكافأته بنسبته مقارنة بالإنهاء من صاحب العمل،
-// الإيقاف، منع شيل سبب مستخدم وعدم تكرار الأكواد، الكود المش معروف مايتحسبش استقالة، تقسيم القائمة الطويلة على
-// صفوف nvarchar(500)، والمسارات الأساسية زي ما هي. قاعدة اختبار عشوائية تُحذف في النهاية.
+// الإيقاف، منع شيل سبب مستخدم وعدم تكرار الأكواد، الكود المش معروف مايتحسبش استقالة، القايمة كلها في صف واحد
+// nvarchar(4000) بحد طول، والمسارات الأساسية زي ما هي. وقبلهم ترحيل 20260927_073 (توسيع requests_config.value من 500
+// لـ4000) عبر المُرحّل المجمّع من الشكل القديم بصفوف قائمة: القيم زي ما هي، آمن للتكرار، والشكل الغلط يوقف بكوده.
+// قاعدة اختبار عشوائية تُحذف في النهاية.
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
 const fs = require('node:fs'), path = require('node:path'), os = require('node:os'), crypto = require('node:crypto')
 const apiRoot = path.resolve(__dirname, '..')
+const migrate = require('../scripts/db-migrate.cjs')
 require('../node_modules/ts-node').register({ project: path.join(apiRoot, 'tsconfig.json'), transpileOnly: true })
 require('../node_modules/reflect-metadata')
 const sql = require('../node_modules/mssql')
@@ -15,9 +18,12 @@ const env = require('../node_modules/dotenv').parse(fs.readFileSync(path.join(ap
 const database = `hr_termination_reasons_test_${crypto.randomBytes(8).toString('hex')}`
 const NAME = /^hr_termination_reasons_test_[a-f0-9]{16}$/
 const uploads = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-termination-reasons-files-'))
+const migrations = fs.mkdtempSync(path.join(os.tmpdir(), 'hr-termination-reasons-migrations-'))
+const MIGRATIONS = path.join(apiRoot, '..', 'docs/migrations/payroll')
+const FILE = '20260927_073_requests_config_value_4000.sql'
 const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
-let app, ds, master, base, created = false
+let app, ds, master, pool, base, created = false
 const B = {}, E = {}, U = {}, K = {}
 const repo = name => { assert.equal(ds.options.database, database); return ds.getRepository(name) }
 
@@ -58,9 +64,10 @@ const storedRows = async () => (await repo('RequestsConfig').find()).filter(row 
 
 before(async () => {
   assert.equal(env.DB_TYPE || 'mssql', 'mssql')
-  assert.match(database, NAME); assert.notEqual(database, env.DB_DATABASE)
-  master = await new sql.ConnectionPool({ server: env.DB_HOST || 'localhost', port: Number(env.DB_PORT || 1433), user: env.DB_USERNAME,
-    password: env.DB_PASSWORD, database: 'master', options: { encrypt: false, trustServerCertificate: true }, connectionTimeout: 5000 }).connect()
+  assert.match(database, NAME); assert.match(database, migrate.DISPOSABLE_DATABASE); assert.notEqual(database, env.DB_DATABASE)
+  const connection = db => ({ server: env.DB_HOST || 'localhost', port: Number(env.DB_PORT || 1433), user: env.DB_USERNAME,
+    password: env.DB_PASSWORD, database: db, options: { encrypt: false, trustServerCertificate: true }, connectionTimeout: 10000, requestTimeout: 120000 })
+  master = await new sql.ConnectionPool(connection('master')).connect()
   await master.request().query(`CREATE DATABASE [${database}]`); created = true
   Object.assign(process.env, env, { DB_DATABASE: database, DB_SYNCHRONIZE: 'true', NODE_ENV: 'test', JWT_SECRET: secret, UPLOADS_ROOT: uploads })
   app = await require('../node_modules/@nestjs/core').NestFactory.create(require('../src/app.module').AppModule, { logger: ['error'], abortOnError: false })
@@ -71,6 +78,9 @@ before(async () => {
   ds = app.get(require('../node_modules/typeorm').DataSource)
   assert.equal(ds.options.database, database)
   base = `http://127.0.0.1:${app.getHttpServer().address().port}/api`
+  pool = await new sql.ConnectionPool(connection(database)).connect()
+  fs.mkdirSync(path.join(migrations, 'payroll'), { recursive: true })
+  fs.copyFileSync(path.join(MIGRATIONS, FILE), path.join(migrations, 'payroll', FILE))
 
   B.main = await repo('Branch').save({ code: 'TR-M', name: 'فرع اختبار أسباب الإنهاء' })
   const employee = (code, fullName) => repo('Employee').save({ employeeCode: code, fullName, branchId: B.main.id, status: 'active', isActive: true,
@@ -92,6 +102,7 @@ before(async () => {
 after(async t => {
   const errors = []
   try { if (app) await app.close() } catch (error) { errors.push(error) }
+  try { if (pool) await pool.close() } catch (error) { errors.push(error) }
   try {
     if (created && master) {
       assert.match(database, NAME); assert.notEqual(database, env.DB_DATABASE)
@@ -102,8 +113,84 @@ after(async t => {
     }
   } catch (error) { errors.push(error) }
   try { if (master) await master.close() } catch (error) { errors.push(error) }
-  try { fs.rmSync(uploads, { recursive: true, force: true }) } catch (error) { errors.push(error) }
+  for (const dir of [uploads, migrations]) {
+    try {
+      assert.equal(path.dirname(path.resolve(dir)), os.tmpdir()); assert.match(path.basename(dir), /^hr-termination-reasons-(files|migrations)-/)
+      fs.rmSync(dir, { recursive: true, force: true })
+    } catch (error) { errors.push(error) }
+  }
   if (errors.length) throw new AggregateError(errors, 'termination reasons fixture cleanup failed')
+})
+
+test('TR-M1: ترحيل 073 عبر المُرحّل المجمّع من الشكل القديم nvarchar(500) NOT NULL بصفوف قائمة — توسيع بس، القيم زي ما هي، فرق المخطط صفر، آمن للتكرار، والشكل الغلط يوقف بكوده', async () => {
+  const content = fs.readFileSync(path.join(MIGRATIONS, FILE), 'utf8')
+  assert.notEqual(content.charCodeAt(0), 0xfeff, 'من غير BOM'); assert.ok(!content.includes('\r'), 'LF')
+  assert.deepEqual(migrate.forbiddenStatements(content), [], 'ALTER COLUMN بسطر التصريح')
+  assert.deepEqual(migrate.throwCodes(content), [73001, 73002, 73003])
+  assert.doesNotMatch(migrate.stripComments(content), /\b(UPDATE|DELETE|DROP|TRUNCATE|MERGE|INSERT)\b/i, 'إضافي فقط: بلا تعديل بيانات')
+  assert.deepEqual(migrate.analyze(migrate.discover()).problems, [], 'أكواد THROW فريدة بين كل الملفات والملف مقبول')
+  assert.doesNotMatch(migrate.stripComments(content), /\b(GREATEST|LEAST|GENERATE_SERIES|DATETRUNC|JSON_OBJECT|JSON_ARRAY)\s*\(|IS\s+(?:NOT\s+)?DISTINCT\s+FROM/i, 'SQL Server 2019')
+  assert.equal((await ds.driver.createSchemaBuilder().log()).upQueries.length, 0, 'قاعدة synchronize مطابقة للكيانات (value = nvarchar(4000))')
+
+  const shape = async () => (await pool.request().query(`SELECT TYPE_NAME(c.system_type_id) AS type, c.max_length AS maxLength, c.is_nullable AS nullable,
+    c.collation_name AS collation FROM sys.columns c WHERE c.object_id = OBJECT_ID(N'dbo.requests_config') AND c.name = N'value'`)).recordset[0]
+  const values = async () => (await pool.request().query('SELECT [key], [value], DATALENGTH([value]) AS bytes FROM dbo.requests_config ORDER BY [key]')).recordset
+  // ما قبل الترحيل: شكل قاعدة الشركة القديم بالظبط، وصفوف قائمة (المبذورة + قيم على الحد بعربي ومسافات وفاضية)
+  const collation = (await shape()).collation
+  await pool.request().batch('ALTER TABLE dbo.requests_config ALTER COLUMN [value] nvarchar(500) NOT NULL;')
+  assert.deepEqual(await shape(), { type: 'nvarchar', maxLength: 1000, nullable: false, collation })
+  const legacy = [['test.legacy_limit', 'ع'.repeat(499) + 'ز'], ['test.legacy_json', '[{"code":"x","label":"قديم"}]'],
+    ['test.legacy_spaces', '  مسافات في الأول والآخر  '], ['test.legacy_empty', '']]
+  for (const [key, value] of legacy) {
+    await pool.request().input('key', sql.NVarChar, key).input('value', sql.NVarChar, value).query('INSERT INTO dbo.requests_config ([key], [value]) VALUES (@key, @value)')
+  }
+  const before = await values()
+  assert.ok(before.length > legacy.length, 'المبذور موجود كمان')
+  assert.equal(before.find(row => row.key === 'test.legacy_limit').bytes, 1000)
+
+  const record = await migrate.apply({ database, base: migrations, trial: true, schemaDiff: false, quiet: true })
+  assert.equal(record.mode, 'disposable')
+  assert.equal(record.failed, undefined, JSON.stringify(record.failed))
+  assert.equal(record.trial?.passed, true)
+  assert.deepEqual(record.applied.map(item => path.basename(item.file)), [FILE])
+  assert.deepEqual(record.applied[0].guard.widenedColumns, ['requests_config.value: nvarchar(500) → nvarchar(4000)'])
+  assert.deepEqual(record.applied[0].guard.nullabilityChanges, [])
+  assert.equal(record.ledgerComplete, true)
+  assert.deepEqual(record.columns.added.filter(column => !column.startsWith('app_schema_migrations.')), [])
+  assert.deepEqual(record.columns.removedOrRenamed, [])
+  assert.deepEqual(record.rowCounts.differences.filter(d => d.table !== 'app_schema_migrations'), [])
+  const widened = { type: 'nvarchar', maxLength: 8000, nullable: false, collation }
+  assert.deepEqual(await shape(), widened, 'nvarchar(4000) NOT NULL بنفس الـcollation')
+  assert.deepEqual(await values(), before, 'كل قيمة قائمة زي ما هي بالحرف')
+  assert.deepEqual((await ds.driver.createSchemaBuilder().log()).upQueries.map(q => q.query), [], 'فرق المخطط مع الكيانات صفر (RequestsConfig وغيره)')
+
+  // إعادة المُرحّل: مفيش ملف معلق. ونص الترحيل نفسه مرتين برّه الدفتر: آمن للتكرار
+  const replay = await migrate.apply({ database, base: migrations, schemaDiff: false, quiet: true })
+  assert.deepEqual(replay.pendingBefore, []); assert.deepEqual(replay.applied, []); assert.equal(replay.ledgerComplete, true)
+  for (let round = 0; round < 2; round++) for (const batch of migrate.splitBatches(content)) await pool.request().batch(batch)
+  assert.deepEqual(await shape(), widened)
+  assert.deepEqual(await values(), before)
+
+  // الشكل الغلط يوقف التحقق بكوده ومايسيبش أثر (كل حالة جوه معاملة بتترجع) — وnvarchar(max) مابيتضيّقش
+  for (const [ddl, code, maxLength] of [
+    ['ALTER TABLE dbo.requests_config ALTER COLUMN [value] nvarchar(4000) NULL', 73003, 8000],
+    ['ALTER TABLE dbo.requests_config ALTER COLUMN [value] nvarchar(max) NOT NULL', 73002, -1],
+    ['ALTER TABLE dbo.requests_config ALTER COLUMN [value] varchar(8000) NOT NULL', 73001, 8000]]) {
+    const tx = new sql.Transaction(pool)
+    await tx.begin()
+    try {
+      await new sql.Request(tx).batch(ddl)
+      const batches = migrate.splitBatches(content)
+      for (const batch of batches.slice(0, -1)) await new sql.Request(tx).batch(batch)
+      const now = (await new sql.Request(tx).query(`SELECT max_length AS maxLength FROM sys.columns
+        WHERE object_id = OBJECT_ID(N'dbo.requests_config') AND name = N'value'`)).recordset[0]
+      assert.equal(now.maxLength, maxLength, `${ddl}: التوسيع ماتنفذش (والـmax ماتضيّقش)`)
+      await assert.rejects(new sql.Request(tx).batch(batches.at(-1)), error => { assert.equal(error.number, code, error.message); return true })
+    } finally { try { await tx.rollback() } catch { /* أُجهضت من الخادم */ } }
+  }
+  assert.deepEqual(await shape(), widened)
+  assert.deepEqual(await values(), before)
+  for (const [key] of legacy) await pool.request().input('key', sql.NVarChar, key).query('DELETE FROM dbo.requests_config WHERE [key] = @key')
 })
 
 test('TR-01: من غير إعداد — الثمانية الأساسية بمسمياتها ونسبها، و«انقطاع عن العمل» الافتراضي بلا مكافأة', async () => {
@@ -267,25 +354,45 @@ test('TR-09: الكود المش معروف مايتحسبش استقالة ول
   assert.equal(ok(await request(U.admin, 'GET', `/offboarding/${kase.id}`)).terminationReasonLabel, 'mystery_code')
 })
 
-test('TR-10: القائمة الطويلة بتتقسم على صفوف ≤ 500 حرف وبترجع بترتيبها، والصفوف الزيادة بتتشال، والحد 40 سبب', async () => {
+test('TR-10: القايمة كلها في صف واحد nvarchar(4000) — الأطول من 500 حرف بتتحفظ وترجع بترتيبها، والأطول من 4000 مرفوضة 400 من غير ما تكتب حاجة، والحد 40 سبب', async () => {
   const current = inputOf(ok(await request(U.admin, 'GET', REASONS)))
-  const many = Array.from({ length: 12 }, (_, index) => ({ label: `سبب اختبار السعة رقم ${index + 1} — صفوف إعداد متتالية`, eosFactor: '0.25' }))
+  const onlyRows = async () => (await storedRows()).map(row => row.key).sort()
+  const storedValue = async () => (await repo('RequestsConfig').findOneByOrFail({ key: KEY })).value
+  const withCodes = (rows, first) => rows.map((row, index) => ({ code: `custom_${first + index}`, label: row.label, eosFactor: row.eosFactor, active: true }))
+
+  // أطول من الحد القديم (500): صف واحد بقيمته كاملة، مفيش صفوف تكملة
+  const many = Array.from({ length: 12 }, (_, index) => ({ label: `سبب اختبار السعة رقم ${index + 1} — صف إعداد واحد`, eosFactor: '0.25' }))
   const saved = ok(await request(U.admin, 'PUT', REASONS, { reasons: [...current, ...many] }))
   assert.deepEqual(customsOf(saved).map(row => row.label), [...current.map(row => row.label), ...many.map(row => row.label)])
   assert.deepEqual(customsOf(saved).slice(current.length).map(row => row.code), many.map((_, index) => `custom_${4 + index}`))
-  const rows = (await storedRows()).filter(row => row.key !== `${KEY}_seq`)
-  assert.ok(rows.length >= 3, `القائمة اتقسمت على ${rows.length} صف`)
-  for (const row of rows) {
-    assert.ok(row.value.length <= 500, `${row.key}: ${row.value.length}`)
-    assert.ok(Array.isArray(JSON.parse(row.value)), `${row.key} مصفوفة JSON لوحده`)
-  }
-  assert.deepEqual(rows.map(row => row.key).sort(), [KEY, ...rows.slice(1).map((_, index) => `${KEY}.${index + 2}`)].sort())
+  assert.deepEqual(await onlyRows(), [KEY, `${KEY}_seq`], 'صف القايمة وعدّادها بس')
+  const longValue = await storedValue()
+  assert.ok(longValue.length > 500, `${longValue.length} حرف في صف واحد`)
+  assert.equal(longValue, JSON.stringify([...current, ...withCodes(many, 4)]), 'القيمة المحفوظة = JSON القايمة كلها بترتيبها')
+  ok(await request(U.admin, 'PUT', REASONS, { reasons: current }))
 
-  const trimmed = ok(await request(U.admin, 'PUT', REASONS, { reasons: current }))
-  assert.equal(customsOf(trimmed).length, current.length)
-  assert.deepEqual((await storedRows()).map(row => row.key).sort(), [KEY, `${KEY}_seq`], 'الصفوف الزيادة اتشالت')
-  const again = ok(await request(U.admin, 'PUT', REASONS, { reasons: [...current, { label: 'سبب بعد التقسيم', eosFactor: '1' }] }))
-  assert.equal(customsOf(again).at(-1).code, 'custom_16')
+  // قريب من الحد: 27 سبب بمسمى 60 حرف (JSON بين 3000 و4000) — بيتحفظ في الصف نفسه
+  const label = n => `سبب طويل رقم ${String(n).padStart(2, '0')} ` + 'ح'.repeat(44)
+  const near = Array.from({ length: 27 }, (_, index) => ({ label: label(index + 1), eosFactor: '1/3' }))
+  assert.ok(near.every(row => row.label.length === 60))
+  const nearValue = JSON.stringify([...current, ...withCodes(near, 16)])
+  assert.ok(nearValue.length > 3000 && nearValue.length <= 4000, `${nearValue.length}`)
+  const full = ok(await request(U.admin, 'PUT', REASONS, { reasons: [...current, ...near] }))
+  assert.equal(await storedValue(), nearValue)
+  assert.deepEqual(await onlyRows(), [KEY, `${KEY}_seq`])
+
+  // أكتر من 4000 حرف (35 سبب، تحت حد العدد 40): 400 برسالة، ومفيش حاجة اتكتبت ولا رقم كود اتصرف
+  const extra = Array.from({ length: 5 }, (_, index) => ({ label: label(28 + index), eosFactor: '1/3' }))
+  assert.ok(JSON.stringify([...inputOf(full), ...withCodes(extra, 43)]).length > 4000)
+  refused(await request(U.admin, 'PUT', REASONS, { reasons: [...inputOf(full), ...extra] }), 400,
+    /قايمة الأسباب كبرت عن المساحة المتاحة \(4000 حرف\) — احذف أسباب مش مستخدمة أو اختصر المسميات/)
+  const unchanged = ok(await request(U.admin, 'GET', REASONS))
+  assert.equal(unchanged.revision, full.revision); assert.equal(await storedValue(), nearValue)
+
+  ok(await request(U.admin, 'PUT', REASONS, { reasons: current }))
+  const again = ok(await request(U.admin, 'PUT', REASONS, { reasons: [...current, { label: 'سبب بعد الحد', eosFactor: '1' }] }))
+  assert.equal(customsOf(again).at(-1).code, 'custom_43', 'الرفض ماصرفش أكواد، والمشالة مابترجعش')
+  assert.equal((await repo('RequestsConfig').findOneByOrFail({ key: `${KEY}_seq` })).value, '43')
   ok(await request(U.admin, 'PUT', REASONS, { reasons: current }))
   const tooMany = Array.from({ length: 41 }, (_, index) => ({ label: `سبب زيادة ${index + 1}`, eosFactor: '1' }))
   refused(await request(U.admin, 'PUT', REASONS, { reasons: tooMany }), 400, /أقصى عدد للأسباب المخصصة 40/)

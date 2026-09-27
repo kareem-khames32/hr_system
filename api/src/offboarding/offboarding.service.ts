@@ -65,6 +65,7 @@ import {
   lockTerminationReasons,
   planCustomTerminationReasons,
   readCustomTerminationReasons,
+  readCustomTerminationReasonsForSave,
   selectableTerminationReason,
   terminationReasonDisplayLabel,
   terminationReasonsView,
@@ -472,7 +473,7 @@ export class OffboardingService implements OnApplicationBootstrap {
     assertCompanyWideWrite(user)
     const plan = await this.cases.manager.transaction(async (em) => {
       await lockTerminationReasons(em, 'Exclusive')
-      const stored = await readCustomTerminationReasons(em.getRepository(RequestsConfig))
+      const stored = await readCustomTerminationReasonsForSave(em)
       const next = planCustomTerminationReasons({
         current: stored.reasons,
         submitted: dto.reasons ?? [],

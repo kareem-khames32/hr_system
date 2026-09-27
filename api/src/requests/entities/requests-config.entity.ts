@@ -7,6 +7,8 @@ export class RequestsConfig {
   @PrimaryColumn({ length: 100 })
   key: string
 
-  @Column({ length: 500 })
+  // nvarchar(4000) من ترحيل 20260927_073 (قايمة أسباب إنهاء الخدمة المخصصة JSON في صف واحد) — حد
+  // PATCH /settings/config العام للقيمة فاضل 500 (UpsertConfigDto)
+  @Column({ length: 4000 })
   value: string
 }

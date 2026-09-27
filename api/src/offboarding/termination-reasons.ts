@@ -1,6 +1,6 @@
 import { BadRequestException, ConflictException } from '@nestjs/common'
 import { createHash } from 'node:crypto'
-import { EntityManager, In, Like, Repository } from 'typeorm'
+import { EntityManager, In, Repository } from 'typeorm'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { parseFactor, TERMINATION_REASON_LABELS, type EosPolicy } from './eos'
 import {
@@ -14,17 +14,16 @@ import {
 // أسباب إنهاء الخدمة (قرار المالك 27 سبتمبر): الثمانية الأساسية ثابتة بأكوادها ومسمياتها ومعاملاتها
 // (eos.reason_factors وجدول الاستقالة)، والمالك يضيف فوقها أسباب مخصصة من «سياسات النظام» — كل سبب
 // بمسمى ونسبة من مكافأة نهاية الخدمة (المكافأة الكاملة بنفس الشرائح × النسبة، زي أي سبب غير الاستقالة).
-// التخزين في requests_config (مفيش جدول جديد): المفتاح offboarding.custom_termination_reasons بمصفوفة JSON
-// [{ code, label, eosFactor, active }]، وغيابه = الافتراضي «انقطاع عن العمل» بلا مكافأة.
-// عمود القيمة nvarchar(500): القائمة الأطول بتكمل في صفوف .2 و.3… كل صف مصفوفة JSON صالحة لوحده والقائمة
-// = الصفوف بترتيب أرقامها — والكتابة كلها في معاملة واحدة تحت قفل.
+// التخزين في requests_config (مفيش جدول جديد): صف واحد بالمفتاح offboarding.custom_termination_reasons قيمته مصفوفة
+// JSON [{ code, label, eosFactor, active }]، وغيابه = الافتراضي «انقطاع عن العمل» بلا مكافأة. القيمة nvarchar(4000)
+// (ترحيل 20260927_073)، فالقراءة سؤال واحد على صف واحد (ذرية)، والحفظ في معاملة واحدة تحت قفل.
 // ============================================================
 
 export const CUSTOM_TERMINATION_REASONS_KEY = 'offboarding.custom_termination_reasons'
 // آخر رقم اتولّد لكود مخصص (custom_N) — الرقم مايرجعش يتولّد تاني حتى لو سببه اتشال
 export const CUSTOM_TERMINATION_REASONS_SEQ_KEY = 'offboarding.custom_termination_reasons_seq'
-const PART_KEY = /^offboarding\.custom_termination_reasons\.(\d+)$/
-const CONFIG_VALUE_MAX = 500 // requests_config.value nvarchar(500)
+// طول القايمة المحفوظة (JSON) — requests_config.value nvarchar(4000)
+export const CUSTOM_TERMINATION_REASONS_VALUE_MAX = 4000
 export const CUSTOM_TERMINATION_REASONS_MAX = 40
 export const TERMINATION_REASON_LABEL_MIN = 2
 export const TERMINATION_REASON_LABEL_MAX = 60
@@ -58,10 +57,10 @@ export const TERMINATION_REASON_DISPLAY_LABELS: Record<TerminationReason, string
   force_majeure: 'قوة قاهرة',
 }
 
-// صفوف القائمة ليها مسارها (PUT /offboarding/termination-reasons) — PATCH /settings/config مايكتبهاش
+// صف القائمة وعدّادها ليهم مسارهم (PUT /offboarding/termination-reasons) — PATCH /settings/config مايكتبهمش
 export const isCustomTerminationReasonsKey = (key: string): boolean => {
   const k = String(key ?? '').trim().toLowerCase()
-  return k === CUSTOM_TERMINATION_REASONS_KEY || k === CUSTOM_TERMINATION_REASONS_SEQ_KEY || PART_KEY.test(k)
+  return k === CUSTOM_TERMINATION_REASONS_KEY || k === CUSTOM_TERMINATION_REASONS_SEQ_KEY
 }
 
 // المسمى كما يُحفظ: من غير مسافات في الأول والآخر، ومسافة واحدة بين الكلمات
@@ -86,69 +85,56 @@ function storedReason(raw: unknown): CustomTerminationReason | null {
 
 export interface StoredCustomTerminationReasons {
   reasons: CustomTerminationReason[]
-  lastSeq: number
-  stored: boolean // المفتاح موجود (false = القائمة الافتراضية)
-  damaged: boolean // صف أو عنصر تالف اتشال من القراءة
+  stored: boolean // الصف موجود (false = القائمة الافتراضية)
+  damaged: boolean // القيمة أو عنصر فيها تالف (اتكتب من برّه المسار) اتشال من القراءة
 }
 
-// القائمة الفعالة من صفوف الإعداد — مصدر واحد للحساب والعرض والحفظ
-export function parseCustomTerminationReasons(
-  rows: Array<Pick<RequestsConfig, 'key' | 'value'>>
-): StoredCustomTerminationReasons {
-  const byKey = new Map(rows.map((row) => [String(row.key).trim().toLowerCase(), String(row.value ?? '')]))
-  const seq = Number(byKey.get(CUSTOM_TERMINATION_REASONS_SEQ_KEY))
-  const lastSeq = Number.isSafeInteger(seq) && seq > 0 ? seq : 0
-  const main = byKey.get(CUSTOM_TERMINATION_REASONS_KEY)
-  if (main === undefined) {
-    return { reasons: DEFAULT_CUSTOM_TERMINATION_REASONS.map((r) => ({ ...r })), lastSeq, stored: false, damaged: false }
+// القائمة الفعالة من قيمة الصف (null/undefined = الصف مش موجود) — مصدر واحد للحساب والعرض والحفظ
+export function parseCustomTerminationReasons(value: string | null | undefined): StoredCustomTerminationReasons {
+  if (value === undefined || value === null) {
+    return { reasons: DEFAULT_CUSTOM_TERMINATION_REASONS.map((r) => ({ ...r })), stored: false, damaged: false }
   }
-  const parts: Array<[number, string]> = [[1, main]]
-  for (const [key, value] of byKey) {
-    const m = PART_KEY.exec(key)
-    if (m && Number(m[1]) >= 2) parts.push([Number(m[1]), value])
+  let list: unknown
+  try {
+    list = JSON.parse(value)
+  } catch {
+    return { reasons: [], stored: true, damaged: true }
   }
-  parts.sort((a, b) => a[0] - b[0])
+  if (!Array.isArray(list)) return { reasons: [], stored: true, damaged: true }
   let damaged = false
   const reasons: CustomTerminationReason[] = []
-  for (const [, value] of parts) {
-    let list: unknown
-    try {
-      list = JSON.parse(value)
-    } catch {
+  for (const item of list) {
+    const reason = storedReason(item)
+    if (!reason || reasons.some((r) => r.code === reason.code)) {
       damaged = true
       continue
     }
-    if (!Array.isArray(list)) {
-      damaged = true
-      continue
-    }
-    for (const item of list) {
-      const reason = storedReason(item)
-      if (!reason || reasons.some((r) => r.code === reason.code)) {
-        damaged = true
-        continue
-      }
-      reasons.push(reason)
-    }
+    reasons.push(reason)
   }
-  return { reasons, lastSeq, stored: true, damaged }
+  return { reasons, stored: true, damaged }
 }
 
-// القراءة: غياب المفتاح (الافتراضي) بسؤال على المفتاح والعدّاد، والموجود بكل صفوفه في استعلام واحد.
-// القائمة لحد 500 حرف (حوالي 5 أسباب) صف واحد فقراءتها ذرية؛ الأطول لو اتقرت في نفس لحظة حفظ ممكن تطلع
-// ناقصة للحظتها (العرض يبيّن الكود، والمكافأة ترفض 409 بدل ما تخمّن) — والمسارات الحاكمة (الحفظ، وفتح ملف
-// بسبب مخصص) بتقرا تحت القفل (lockTerminationReasons)
+// القراءة: سؤال واحد على صف واحد — ذرية حتى وقت حفظ متزامن (القديمة أو الجديدة كاملة)
 export async function readCustomTerminationReasons(
-  config: Pick<Repository<RequestsConfig>, 'find' | 'findOne'>
+  config: Pick<Repository<RequestsConfig>, 'findOne'>
 ): Promise<StoredCustomTerminationReasons> {
-  const main = await config.findOne({ where: { key: CUSTOM_TERMINATION_REASONS_KEY } })
-  if (!main) {
-    const seq = await config.findOne({ where: { key: CUSTOM_TERMINATION_REASONS_SEQ_KEY } })
-    return parseCustomTerminationReasons(seq ? [seq] : [])
+  const row = await config.findOne({ where: { key: CUSTOM_TERMINATION_REASONS_KEY } })
+  return parseCustomTerminationReasons(row?.value)
+}
+
+// للحفظ بس (تحت القفل الحصري): صف القائمة وعدّاد الأكواد في سؤال واحد
+export async function readCustomTerminationReasonsForSave(
+  em: EntityManager
+): Promise<StoredCustomTerminationReasons & { lastSeq: number }> {
+  const rows = await em.getRepository(RequestsConfig).find({
+    where: { key: In([CUSTOM_TERMINATION_REASONS_KEY, CUSTOM_TERMINATION_REASONS_SEQ_KEY]) },
+  })
+  const valueOf = (key: string) => rows.find((row) => row.key.trim().toLowerCase() === key)?.value
+  const seq = Number(valueOf(CUSTOM_TERMINATION_REASONS_SEQ_KEY))
+  return {
+    ...parseCustomTerminationReasons(valueOf(CUSTOM_TERMINATION_REASONS_KEY)),
+    lastSeq: Number.isSafeInteger(seq) && seq > 0 ? seq : 0,
   }
-  return parseCustomTerminationReasons(
-    await config.find({ where: { key: Like(`${CUSTOM_TERMINATION_REASONS_KEY}%`) } })
-  )
 }
 
 // بصمة محتوى القائمة: الشاشة بترجّعها مع الحفظ، ولو القائمة اتغيرت من حد تاني من وقت ما اتفتحت الحفظ بيترفض
@@ -159,34 +145,22 @@ export const customTerminationReasonsRevision = (reasons: CustomTerminationReaso
     .digest('hex')
     .slice(0, 16)
 
-// القائمة → قيم الصفوف: كل صف مصفوفة JSON ≤ 500 حرف (الأول على المفتاح نفسه، والباقي .2 و.3…)
-export function customTerminationReasonParts(reasons: CustomTerminationReason[]): string[] {
-  const parts: CustomTerminationReason[][] = [[]]
-  for (const reason of reasons) {
-    const last = parts[parts.length - 1]
-    if (last.length > 0 && JSON.stringify([...last, reason]).length > CONFIG_VALUE_MAX) parts.push([reason])
-    else last.push(reason)
-  }
-  return parts.map((part) => JSON.stringify(part))
-}
+const capacityMessage = () =>
+  `قايمة الأسباب كبرت عن المساحة المتاحة (${CUSTOM_TERMINATION_REASONS_VALUE_MAX} حرف) — احذف أسباب مش مستخدمة أو اختصر المسميات`
 
-// الكتابة (جوه معاملة الحفظ وقفلها): الصفوف الجديدة + العدّاد، وشيل صفوف زيادة من قائمة أطول قبل كده
+// الكتابة (جوه معاملة الحفظ وقفلها): صف القائمة كله وعدّاد الأكواد
 export async function writeCustomTerminationReasons(
   em: EntityManager,
   reasons: CustomTerminationReason[],
   lastSeq: number
 ) {
-  const repo = em.getRepository(RequestsConfig)
-  const rows = customTerminationReasonParts(reasons).map((value, index) => ({
-    key: index === 0 ? CUSTOM_TERMINATION_REASONS_KEY : `${CUSTOM_TERMINATION_REASONS_KEY}.${index + 1}`,
-    value,
-  }))
-  await repo.save([...rows, { key: CUSTOM_TERMINATION_REASONS_SEQ_KEY, value: String(lastSeq) }])
-  const keep = new Set(rows.map((row) => row.key))
-  const stale = (await repo.find({ where: { key: Like(`${CUSTOM_TERMINATION_REASONS_KEY}.%`) } }))
-    .map((row) => row.key)
-    .filter((key) => PART_KEY.test(key.toLowerCase()) && !keep.has(key.toLowerCase()))
-  if (stale.length > 0) await repo.delete({ key: In(stale) })
+  const value = JSON.stringify(reasons)
+  // حزام أخير — التخطيط بيرفض قبلها برسالة (planCustomTerminationReasons)
+  if (value.length > CUSTOM_TERMINATION_REASONS_VALUE_MAX) throw new BadRequestException(capacityMessage())
+  await em.getRepository(RequestsConfig).save([
+    { key: CUSTOM_TERMINATION_REASONS_KEY, value },
+    { key: CUSTOM_TERMINATION_REASONS_SEQ_KEY, value: String(lastSeq) },
+  ])
 }
 
 // قفل واحد للقائمة: الحفظ حصري، وفتح ملف بسبب مخصص مشترك — فإيقاف السبب أو شيله مايتزامنش مع ملف
@@ -397,5 +371,7 @@ export function planCustomTerminationReasons(input: {
     added.push(code)
     return { ...row, code }
   })
+  // القايمة كلها في صف واحد nvarchar(4000): المقاس هو JSON المحفوظ نفسه بأكواده الجديدة
+  if (JSON.stringify(reasons).length > CUSTOM_TERMINATION_REASONS_VALUE_MAX) throw new BadRequestException(capacityMessage())
   return { reasons, lastSeq: seq, added, removed: removed.map((r) => r.code) }
 }
