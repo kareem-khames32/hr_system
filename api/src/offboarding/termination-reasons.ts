@@ -261,13 +261,15 @@ export interface TerminationReasonView {
   builtin: boolean
   active: boolean
   eosFactor: string | null // النسبة كما اتكتبت — الاستقالة null (بجدولها eos.resignation_factors)
-  usedByCases?: number // المخصص: عدد ملفات الإنهاء عليه (المستخدم مايتشالش — يتعطل بس)
+  usedByCases?: number // المخصص: عدد ملفات الإنهاء عليه (المستخدم مايتشالش — يتعطل بس) — لحساب الشركة بس
 }
 
+// usage = null: القارئ مش حساب على مستوى الشركة، فمفيش عدد ملفات في الرد — العدد بيشمل ملفات كل الفروع
+// (مراجعة Codex الجولة 12، CR12-B02)، وفحص «المستخدم مايتشالش» جوه مسار الحفظ بيفضل على الشركة كلها
 export function terminationReasonsView(
   policy: EosPolicy,
   customs: CustomTerminationReason[],
-  usage: Map<string, number>
+  usage: Map<string, number> | null
 ): TerminationReasonView[] {
   return [
     ...TERMINATION_REASONS.map((code) => ({
@@ -283,7 +285,7 @@ export function terminationReasonsView(
       builtin: false,
       active: reason.active,
       eosFactor: reason.eosFactor,
-      usedByCases: usage.get(reason.code) ?? 0,
+      ...(usage ? { usedByCases: usage.get(reason.code) ?? 0 } : {}),
     })),
   ]
 }

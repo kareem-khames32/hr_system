@@ -188,10 +188,21 @@ export function serviceYears(joinDate: string, lastWorkingDay: string): number {
   return years + (end - from) / (anniv(years + 1) - from)
 }
 
+// معامل السبب المخصص لو مسجّل فعلًا في قائمته: خاصية مملوكة بمعامل صالح (0..1) — مش خاصية موروثة زي
+// constructor اللي كانت بتعدّي الحارس وتسقط المكافأة لصفر (مراجعة Codex الجولة 12، CR12-N01)
+const customFactorOf = (reason: string, p: EosPolicy) => {
+  const table = p.custom
+  if (!table || !Object.prototype.hasOwnProperty.call(table, reason)) return undefined
+  const entry = table[reason]
+  return entry && typeof entry.factor === 'number' && Number.isFinite(entry.factor) && entry.factor >= 0 && entry.factor <= 1
+    ? entry
+    : undefined
+}
+
 // السبب ليه معامل مكافأة؟ الاستقالة بجدولها، والأساسي من eos.reason_factors، والمخصص من قائمته —
 // غير كده (كود اتكتب من برّه المسار) مايتحسبش بافتراض صامت
 export const eosReasonKnown = (reason: string, p: EosPolicy): boolean =>
-  isBuiltinTerminationReason(reason) || !!p.custom?.[reason]
+  isBuiltinTerminationReason(reason) || !!customFactorOf(reason, p)
 
 export interface EosResult {
   reason: string // كود أساسي أو مخصص
@@ -220,7 +231,7 @@ export function computeEos(
   const laterYears = Math.max(0, years - p.firstTierYears)
   const fullMonths = firstYears * p.firstTierMonths + laterYears * p.laterMonths
   // المخصص: المكافأة الكاملة بنفس الشرائح × نسبته — زي أي سبب أساسي غير الاستقالة
-  const custom = isBuiltinTerminationReason(reason) ? undefined : p.custom?.[reason]
+  const custom = isBuiltinTerminationReason(reason) ? undefined : customFactorOf(reason, p)
   const f: EosFactor =
     reason === 'resignation'
       ? ([...p.resignation].reverse().find((r) => years >= r.fromYears) ?? {

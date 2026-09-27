@@ -124,8 +124,12 @@ export class ApproverResolver {
   // «مدير القسم»). التقديم بيقف برسالة بتسمّي الوحدة: مفيش قسم، أو مفيش إدارة فوق القسم، أو الإدارة مالهاش مدير، أو المدير الوحيد
   // اللي لقيناه هو مقدّم الطلب
   async administrationManagerOf(employeeId: number): Promise<AdministrationApproval> {
-    const emp = await this.employees.findOne({ where: { id: employeeId }, select: { id: true, departmentId: true } })
+    const emp = await this.employees.findOne({ where: { id: employeeId }, select: { id: true, departmentId: true, branchId: true } })
     const chain = await this.unitChainOf(emp?.departmentId)
+    // اسم الوحدة في رسالة الإيقاف: المسجّل لو في فرع مقدّم الطلب، وإلا الوصف العام زي بطاقة الطلب — الرسالة بتوصل لمقدّم الطلب
+    // أو لمنشئه نيابةً (ونطاقه فيه فرع المقدّم)، واسم وحدة من فرع تاني مايتكشفش فيها (مراجعة Codex الجولة 12، CR12-B01)
+    const unitName = (unit: Department) =>
+      unit.branchId === emp?.branchId ? unit.name : unit.isExecutive ? 'الإدارة التنفيذية' : 'إدارة في فرع تاني'
     if (!chain.length) {
       return { approverId: null, administrationId: null,
         blocked: 'مقدّم الطلب مش مسجّل في قسم، فمفيش «مدير الإدارة» — سجّل قسمه في ملفه أو عدّل سلسلة الاعتماد' }
@@ -136,7 +140,7 @@ export class ApproverResolver {
       own = own ?? unit
       if (!unit.managerEmployeeId) {
         return { approverId: null, administrationId: unit.id,
-          blocked: `الإدارة «${unit.name}» مالهاش مدير — حدّد مدير الإدارة من «الإدارات والأقسام» أو عدّل سلسلة الاعتماد` }
+          blocked: `الإدارة «${unitName(unit)}» مالهاش مدير — حدّد مدير الإدارة من «الإدارات والأقسام» أو عدّل سلسلة الاعتماد` }
       }
       // مقدّم الطلب هو مدير إدارته: الخطوة لمدير الإدارة اللي فوقها
       if (unit.managerEmployeeId === employeeId) continue
@@ -144,10 +148,10 @@ export class ApproverResolver {
     }
     if (!own) {
       return { approverId: null, administrationId: null,
-        blocked: `قسم مقدّم الطلب «${chain[0].name}» مش تحت أي إدارة، فمفيش «مدير الإدارة» — حطّ القسم تحت إدارة من «الإدارات والأقسام» أو عدّل سلسلة الاعتماد` }
+        blocked: `قسم مقدّم الطلب «${unitName(chain[0])}» مش تحت أي إدارة، فمفيش «مدير الإدارة» — حطّ القسم تحت إدارة من «الإدارات والأقسام» أو عدّل سلسلة الاعتماد` }
     }
     return { approverId: null, administrationId: own.id,
-      blocked: `مقدّم الطلب هو نفسه مدير «${own.name}» ومفيش إدارة فوقها ليها مدير غيره — عدّل سلسلة الاعتماد أو حطّ الإدارة تحت «الإدارة التنفيذية»` }
+      blocked: `مقدّم الطلب هو نفسه مدير «${unitName(own)}» ومفيش إدارة فوقها ليها مدير غيره — عدّل سلسلة الاعتماد أو حطّ الإدارة تحت «الإدارة التنفيذية»` }
   }
 
   // مدير قسم الموظف

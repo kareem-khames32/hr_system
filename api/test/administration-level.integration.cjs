@@ -303,10 +303,13 @@ test('AL-08: الإيقاف برسالة بتسمّي الوحدة — مفيش 
     assert.deepEqual([stored.status, stored.resolvedSteps, stored.submittedAt], ['DRAFT', null, null], key)
     assert.equal(await repo('RequestApproval').countBy({ requestId: draft.id }), 0, key)
   }
-  // مدير الإدارة الأعلى ناقص وهو اللي الصعود وصله: الرسالة بتسمّيه هو
+  // مدير الإدارة الأعلى ناقص وهو اللي الصعود وصله: الرسالة بتسمّيه هو — والإدارة التنفيذية في فرع تاني غير فرع مقدّم الطلب،
+  // فبوصفها العام من غير اسمها المسجّل (مراجعة Codex الجولة 12، CR12-B01؛ الإدارة من فرعه بتتسمّى باسمها زي «إدارة المعادي» فوق)
   await repo('Department').update({ id: D.exec.id }, { managerEmployeeId: null })
   try {
-    refused(await submitNew(U.salesHead), 400, `الإدارة «${EXEC_NAME}» مالهاش مدير — حدّد مدير الإدارة من «الإدارات والأقسام» أو عدّل سلسلة الاعتماد`)
+    const response = await submitNew(U.salesHead)
+    refused(response, 400, 'الإدارة «الإدارة التنفيذية» مالهاش مدير — حدّد مدير الإدارة من «الإدارات والأقسام» أو عدّل سلسلة الاعتماد')
+    assert.ok(!JSON.stringify(response.body).includes(EXEC_NAME), 'اسم الإدارة التنفيذية المسجّل مايظهرش لفرع تاني')
   } finally {
     await repo('Department').update({ id: D.exec.id }, { managerEmployeeId: E.ceo.id })
   }

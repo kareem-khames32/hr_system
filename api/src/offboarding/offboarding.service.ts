@@ -458,10 +458,12 @@ export class OffboardingService implements OnApplicationBootstrap {
   // القائمة لمعالج الإنهاء (الأساسي + المخصص المفعّل) ولشاشة «سياسات النظام» (والموقوف ونسبة كل سبب)
   async terminationReasons(user: JwtPayload) {
     const customs = await this.customTerminationReasons()
-    const usage = await customTerminationReasonUsage(this.cases.manager)
+    // الحفظ بصلاحية الإعدادات لحساب على مستوى الشركة — نفس PATCH /settings/config
+    const canEdit = userHasPerm(user, 'settings.manage') && branchScopeOf(user) === null
+    // عدد الملفات على كل سبب بيشمل كل الفروع: لحساب الشركة اللي بيعدّل بس (مراجعة Codex الجولة 12، CR12-B02)
+    const usage = canEdit ? await customTerminationReasonUsage(this.cases.manager) : null
     return {
-      // الحفظ بصلاحية الإعدادات لحساب على مستوى الشركة — نفس PATCH /settings/config
-      canEdit: userHasPerm(user, 'settings.manage') && branchScopeOf(user) === null,
+      canEdit,
       // بصمة القائمة: الشاشة بترجّعها مع الحفظ عشان مايرجّعش تعديل حد تاني من غير ما يشوفه
       revision: customTerminationReasonsRevision(customs),
       reasons: terminationReasonsView(await this.eosPolicy(customs), customs, usage),

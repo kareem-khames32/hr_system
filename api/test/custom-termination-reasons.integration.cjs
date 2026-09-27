@@ -124,7 +124,11 @@ after(async t => {
 
 test('TR-M1: ترحيل 073 عبر المُرحّل المجمّع من الشكل القديم nvarchar(500) NOT NULL بصفوف قائمة — توسيع بس، القيم زي ما هي، فرق المخطط صفر، آمن للتكرار، والشكل الغلط يوقف بكوده', async () => {
   const content = fs.readFileSync(path.join(MIGRATIONS, FILE), 'utf8')
-  assert.notEqual(content.charCodeAt(0), 0xfeff, 'من غير BOM'); assert.ok(!content.includes('\r'), 'LF')
+  // الملف في المستودع LF؛ نسخة العمل على Windows بتبقى CRLF (core.autocrlf) والمُرحّل بيوحّدها قبل البصمة — فالفحص على نسخة المستودع
+  assert.notEqual(content.charCodeAt(0), 0xfeff, 'من غير BOM'); assert.ok(!content.replace(/\r\n/g, '\n').includes('\r'), 'نهايات سطور سليمة')
+  const indexed = require('node:child_process').execFileSync('git', ['ls-files', '--eol', '--', `docs/migrations/payroll/${FILE}`],
+    { cwd: path.join(apiRoot, '..'), encoding: 'utf8' })
+  assert.match(indexed, /^i\/lf\b/, 'LF في المستودع')
   assert.deepEqual(migrate.forbiddenStatements(content), [], 'ALTER COLUMN بسطر التصريح')
   assert.deepEqual(migrate.throwCodes(content), [73001, 73002, 73003])
   assert.doesNotMatch(migrate.stripComments(content), /\b(UPDATE|DELETE|DROP|TRUNCATE|MERGE|INSERT)\b/i, 'إضافي فقط: بلا تعديل بيانات')

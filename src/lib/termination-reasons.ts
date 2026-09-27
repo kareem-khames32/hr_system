@@ -9,8 +9,11 @@ export const TERMINATION_REASON_LABELS: Record<TerminationReason, string> = {
 
 // الأساسي بمسماه هنا زي ما هو، والمخصص من الإعدادات بالمسمى اللي راجع مع الملف (terminationReasonLabel)،
 // والكود المش معروف بيظهر زي ما هو
+// (الأساسي بخاصية مملوكة بس — كود زي constructor مايرجّعش دالة موروثة)
 export const terminationReasonLabel = (code?: string | null, serverLabel?: string | null) =>
-  !code ? '—' : (TERMINATION_REASON_LABELS as Record<string, string>)[code] ?? (serverLabel?.trim() || code)
+  !code ? '—'
+    : Object.prototype.hasOwnProperty.call(TERMINATION_REASON_LABELS, code) ? (TERMINATION_REASON_LABELS as Record<string, string>)[code]
+      : (serverLabel?.trim() || code)
 
 // قرار المالك 27 سبتمبر: أسباب مخصصة من «سياسات النظام» — معالج الإنهاء بيعرض المفعّل منها بعد الثمانية الأساسية
 export const activeCustomTerminationReasons = (reasons: ApiTerminationReason[] = []) =>
