@@ -43,6 +43,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { DEVICE_KEY_MIN_LENGTH, deviceKeyWeakness } from '../attendance/device-key'
 import { normalizeWeekendDays, weekendDaysError } from '../attendance/weekend-days'
 import { eosConfigError } from '../offboarding/eos'
+import { isCustomTerminationReasonsKey } from '../offboarding/termination-reasons'
 import { Employee } from '../employees/employee.entity'
 import type { JwtPayload } from '../auth/auth.service'
 import { twoFactorEnableBlock } from '../auth/two-factor-gate'
@@ -679,6 +680,11 @@ export class SettingsController {
     dto.key = row.key
     // سلسلة الفئة ليها مسارها: تغييرها بينقل الأنواع الماشية عليها في نفس المعاملة — كتابة القيمة هنا كانت هتسيبهم على القديمة
     if (isCategoryChainKey(dto.key)) throw new BadRequestException('سلسلة الفئة بتتغيّر من «بانِي الطلبات» — مش من هنا')
+    // أسباب إنهاء الخدمة المخصصة ليها مسارها (PUT /offboarding/termination-reasons): تحقق المسمى والنسبة، وثبات
+    // الكود، ومنع شيل سبب عليه ملفات — كتابة القيمة الخام هنا كانت هتعدّي من ده كله
+    if (isCustomTerminationReasonsKey(dto.key)) {
+      throw new BadRequestException('أسباب إنهاء الخدمة بتتعدل من «سياسات النظام» ← «أسباب إنهاء الخدمة» — مش من هنا')
+    }
     // الخطوة 22 (B5، تصحيح المراجعة): رخصة الشركة الصغيرة تفك فصل المهام في اعتماد المسير — صلاحية مستقلة يمنحها مدير النظام فقط، لا settings.manage وحدها
     const licenceIssue = payrollSelfApprovalLicenceIssue({ key: dto.key, canManageLicence: userHasPerm(user, PAYROLL_SELF_APPROVAL_LICENCE_PERMISSION) })
     if (licenceIssue) throw new ForbiddenException(licenceIssue)

@@ -4,7 +4,6 @@ import {
   ClearanceItem,
   OffboardingCase,
   OffboardingStatus,
-  TerminationReason,
 } from './offboarding.entities'
 
 // الملف المفتوح (قبل الإغلاق/الإلغاء) — ملف واحد مفتوح لكل موظف
@@ -29,7 +28,8 @@ export async function openOffboardingCase(
   input: {
     employeeId: number
     lastWorkingDay: string
-    terminationReason: TerminationReason
+    // أساسي (الاستقالة/التقاعد من الطلبات) أو أي سبب اتفحص في معالج الإنهاء (أساسي أو مخصص مفعّل)
+    terminationReason: string
     resignationRequestId?: number
     noticeDate?: string
     notes?: string

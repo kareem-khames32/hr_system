@@ -1,4 +1,4 @@
-import { TERMINATION_REASONS, type TerminationReason } from './offboarding.entities'
+import { isBuiltinTerminationReason, TERMINATION_REASONS, type TerminationReason } from './offboarding.entities'
 
 // ============================================================
 // مكافأة نهاية الخدمة (EMP-2): شرائح بسنوات الخدمة × معامل سبب الإنهاء.
@@ -23,10 +23,11 @@ export const TERMINATION_REASON_LABELS: Record<TerminationReason, string> = {
   force_majeure: 'قوة قاهرة',
 }
 
-// الملفات القديمة بلا سبب = استقالة (كانت المسار الوحيد لفتح ملف)
+// الملفات القديمة بلا سبب (NULL) = استقالة (كانت المسار الوحيد لفتح ملف) — وده الافتراض الوحيد:
+// أي كود تاني (أساسي أو مخصص أو مش معروف) بيرجع زي ما هو، والمش معروف بيترفض عند حساب المكافأة
 export const caseReason = (k: {
-  terminationReason?: TerminationReason | null
-}): TerminationReason => k.terminationReason ?? 'resignation'
+  terminationReason?: string | null
+}): string => k.terminationReason ?? 'resignation'
 
 // افتراضيات النظام = القيم المزروعة في configSeed (نظام العمل السعودي)
 export const EOS_DEFAULTS = {
@@ -48,10 +49,13 @@ export interface EosPolicy {
   laterMonths: number // أشهر الأجر عن كل سنة بعدها
   resignation: Array<EosFactor & { fromYears: number }>
   reasons: Partial<Record<TerminationReason, EosFactor>>
+  // أسباب الإنهاء المخصصة من الإعدادات (termination-reasons.ts): كود → معامله ومسماه — المفعّل والموقوف
+  // (الملف القديم على سبب اتوقف بيتحسب بمعامله)؛ الخدمة بتضيفها فوق buildEosPolicy
+  custom?: Record<string, EosFactor & { reasonLabel: string }>
 }
 
-// معامل: عشري (0.5) أو كسر (1/3) — بين 0 و1
-const parseFactor = (raw: string | undefined): EosFactor | null => {
+// معامل: عشري (0.5) أو كسر (1/3) — بين 0 و1. نفس المحلل لجداول eos.* ولنسبة السبب المخصص
+export const parseFactor = (raw: string | undefined): EosFactor | null => {
   const s = (raw ?? '').replace(/\s+/g, '')
   const frac = /^(\d+(?:\.\d+)?)\/(\d+(?:\.\d+)?)$/.exec(s)
   const n = frac
@@ -184,8 +188,14 @@ export function serviceYears(joinDate: string, lastWorkingDay: string): number {
   return years + (end - from) / (anniv(years + 1) - from)
 }
 
+// السبب ليه معامل مكافأة؟ الاستقالة بجدولها، والأساسي من eos.reason_factors، والمخصص من قائمته —
+// غير كده (كود اتكتب من برّه المسار) مايتحسبش بافتراض صامت
+export const eosReasonKnown = (reason: string, p: EosPolicy): boolean =>
+  isBuiltinTerminationReason(reason) || !!p.custom?.[reason]
+
 export interface EosResult {
-  reason: TerminationReason
+  reason: string // كود أساسي أو مخصص
+  reasonLabel: string // مسمى السبب في بند المكافأة (الأساسي من TERMINATION_REASON_LABELS)
   years: number
   firstYears: number // سنوات محسوبة بمعدل الشريحة الأولى
   laterYears: number // سنوات بعدها
@@ -199,22 +209,31 @@ export interface EosResult {
 export function computeEos(
   wage: number,
   years: number,
-  reason: TerminationReason,
+  reason: string,
   p: EosPolicy
 ): EosResult {
+  if (!eosReasonKnown(reason, p)) {
+    // الخدمة بتفحص قبل الحساب وترجّع 409 برسالة — ده حزام أخير
+    throw new Error(`سبب إنهاء الخدمة «${reason}» مش معروف — مايتحسبش له معامل مكافأة`)
+  }
   const firstYears = Math.min(years, p.firstTierYears)
   const laterYears = Math.max(0, years - p.firstTierYears)
   const fullMonths = firstYears * p.firstTierMonths + laterYears * p.laterMonths
+  // المخصص: المكافأة الكاملة بنفس الشرائح × نسبته — زي أي سبب أساسي غير الاستقالة
+  const custom = isBuiltinTerminationReason(reason) ? undefined : p.custom?.[reason]
   const f: EosFactor =
     reason === 'resignation'
       ? ([...p.resignation].reverse().find((r) => years >= r.fromYears) ?? {
           factor: 0,
           label: '0',
         })
-      : (p.reasons[reason] ?? { factor: 1, label: '1' })
+      : custom
+        ? { factor: custom.factor, label: custom.label }
+        : (p.reasons[reason as TerminationReason] ?? { factor: 1, label: '1' })
   const full = round2(wage * fullMonths)
   return {
     reason,
+    reasonLabel: custom ? custom.reasonLabel : TERMINATION_REASON_LABELS[reason as TerminationReason],
     years,
     firstYears,
     laterYears,
@@ -235,5 +254,5 @@ export function eosLineLabel(r: EosResult, p: EosPolicy): string {
       : `${n(r.firstYears)}×${n(p.firstTierMonths)} شهر`
   const factor = r.factor !== 1 ? ` × ${r.factorLabel}` : ''
   const none = r.amount === 0 ? ' — لا تستحق' : ''
-  return `مكافأة نهاية الخدمة — ${TERMINATION_REASON_LABELS[r.reason]} (${r.years.toFixed(2)} سنة: ${formula}${factor})${none}`
+  return `مكافأة نهاية الخدمة — ${r.reasonLabel} (${r.years.toFixed(2)} سنة: ${formula}${factor})${none}`
 }

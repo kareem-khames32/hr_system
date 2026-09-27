@@ -11,7 +11,7 @@ import { Cron } from '@nestjs/schedule'
 import { InjectRepository } from '@nestjs/typeorm'
 import { EntityManager, In, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, inBranchScope as scopeHasBranch, scopeWord, userHasPerm } from '../auth/guards'
+import { assertCompanyWideWrite, branchScopeOf, inBranchScope as scopeHasBranch, scopeWord, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
 import { Employee } from '../employees/employee.entity'
 import { grossMonthlySalary } from '../employees/compensation'
@@ -42,22 +42,37 @@ import {
   computeEos,
   EOS_DEFAULTS,
   eosLineLabel,
+  eosReasonKnown,
   isValidYmd,
   serviceYears,
-  TERMINATION_REASON_LABELS,
 } from './eos'
 import {
   ClearanceItem,
   ClearanceParty,
+  isBuiltinTerminationReason,
   OffboardingCase,
   SettlementLine,
-  TerminationReason,
 } from './offboarding.entities'
 import {
   OPEN_CASE_STATUSES,
   OPEN_CUSTODY_STATUSES,
   openOffboardingCase,
 } from './offboarding-open'
+import {
+  customTerminationReasonFactors,
+  customTerminationReasonsRevision,
+  customTerminationReasonUsage,
+  lockTerminationReasons,
+  planCustomTerminationReasons,
+  readCustomTerminationReasons,
+  readCustomTerminationReasonsForSave,
+  selectableTerminationReason,
+  terminationReasonDisplayLabel,
+  terminationReasonsView,
+  writeCustomTerminationReasons,
+  type CustomTerminationReason,
+  type CustomTerminationReasonInput,
+} from './termination-reasons'
 
 const localToday = () => {
   const now = new Date()
@@ -228,7 +243,7 @@ export class OffboardingService implements OnApplicationBootstrap {
     user: JwtPayload,
     dto: {
       employeeId: number
-      reason: TerminationReason
+      reason: string // أساسي أو مخصص مفعّل
       lastWorkingDay: string
       noticeDate?: string
       notes?: string
@@ -240,6 +255,8 @@ export class OffboardingService implements OnApplicationBootstrap {
     if (!emp || !inBranchScope(user, emp.branchId)) {
       throw new NotFoundException('الموظف غير موجود')
     }
+    // السبب قبل الموانع — ويتعاد فحص المخصص تحت القفل جوه معاملة الفتح
+    await this.selectableReason(dto.reason)
     const blocked = await this.terminationBlock(user, emp, dto)
     if (blocked) throw new BadRequestException(blocked)
 
@@ -248,9 +265,10 @@ export class OffboardingService implements OnApplicationBootstrap {
     const revoke = dto.reason === 'death' || !!dto.revokeAccess
     const oldStatus = emp.status
     const kase = await this.cases.manager.transaction(async (em) => {
+      const reason = await this.selectableReason(dto.reason, em)
       const opened = await openOffboardingCase(em, {
         employeeId: emp.id,
-        terminationReason: dto.reason,
+        terminationReason: reason.code,
         lastWorkingDay: dto.lastWorkingDay,
         noticeDate: dto.noticeDate || undefined,
         notes: dto.notes?.trim() || undefined,
@@ -269,7 +287,7 @@ export class OffboardingService implements OnApplicationBootstrap {
       await recordEmployeeChange(em, {
         employeeId: emp.id,
         fieldName: 'status', oldValue: oldStatus, newValue: 'notice_period', changedByUserId: user.sub,
-        reason: `إنهاء خدمة (${TERMINATION_REASON_LABELS[dto.reason]}) — آخر يوم عمل ${dto.lastWorkingDay} — ملف #${opened.id}`,
+        reason: `إنهاء خدمة (${reason.historyLabel}) — آخر يوم عمل ${dto.lastWorkingDay} — ملف #${opened.id}`,
       })
       return opened
     })
@@ -283,12 +301,14 @@ export class OffboardingService implements OnApplicationBootstrap {
   // الإنهاء وآخر يوم عمل، والعهد المفتوحة، وموانع الفتح. المبالغ لأصحاب التصفية فقط
   async preview(
     user: JwtPayload,
-    q: { employeeId: number; reason: TerminationReason; lastWorkingDay: string }
+    q: { employeeId: number; reason: string; lastWorkingDay: string }
   ) {
     const emp = await this.employees.findOne({ where: { id: q.employeeId } })
     if (!emp || !inBranchScope(user, emp.branchId)) {
       throw new NotFoundException('الموظف غير موجود')
     }
+    // نفس أسباب الفتح: أساسي أو مخصص مفعّل
+    await this.selectableReason(q.reason)
     if (!isValidYmd(q.lastWorkingDay)) {
       throw new BadRequestException('آخر يوم عمل تاريخ غير صالح')
     }
@@ -399,9 +419,10 @@ export class OffboardingService implements OnApplicationBootstrap {
       : new Date(emp.createdAt).toISOString().slice(0, 10)
   }
 
-  // EMP-2: سياسة مكافأة نهاية الخدمة من إعدادات المحرك (eos.*)
-  private async eosPolicy() {
-    return buildEosPolicy({
+  // EMP-2: سياسة مكافأة نهاية الخدمة من إعدادات المحرك (eos.*) + معاملات الأسباب المخصصة
+  // (المفعّلة والموقوفة — الملف القديم على سبب اتوقف بيتحسب بنسبته)
+  private async eosPolicy(customs?: CustomTerminationReason[]) {
+    const policy = buildEosPolicy({
       firstTierMonths: await this.cfg('eos.months_per_year', EOS_DEFAULTS.firstTierMonths),
       firstTierYears: await this.cfg('eos.tier1_years', EOS_DEFAULTS.firstTierYears),
       laterMonths: await this.cfg('eos.months_per_year_after', EOS_DEFAULTS.laterMonths),
@@ -411,6 +432,62 @@ export class OffboardingService implements OnApplicationBootstrap {
       ),
       reasonFactors: await this.cfg('eos.reason_factors', EOS_DEFAULTS.reasonFactors),
     })
+    policy.custom = customTerminationReasonFactors(customs ?? (await this.customTerminationReasons()))
+    return policy
+  }
+
+  // ===== أسباب إنهاء الخدمة (قرار المالك 27 سبتمبر) =====
+  // الثمانية الأساسية ثابتة، والمخصصة من «سياسات النظام» (termination-reasons.ts)
+  private async customTerminationReasons() {
+    const stored = await readCustomTerminationReasons(this.config)
+    if (stored.damaged) {
+      this.logger.warn('قائمة أسباب إنهاء الخدمة المخصصة فيها قيم تالفة اتكتبت من برّه الشاشة — اتقرت من غيرها؛ احفظ القائمة من «سياسات النظام»')
+    }
+    return stored.reasons
+  }
+
+  // سبب ملف جديد: أساسي، أو مخصص مفعّل. جوه معاملة الفتح (em) المخصص بيتقري تحت قفل مشترك مع حفظ
+  // القائمة، فإيقاف السبب أو شيله في نفس اللحظة مايعدّيش ملف عليه
+  private async selectableReason(code: string, em?: EntityManager) {
+    if (isBuiltinTerminationReason(code)) return selectableTerminationReason(code, [])
+    if (em) await lockTerminationReasons(em, 'Shared')
+    const { reasons } = await readCustomTerminationReasons(em ? em.getRepository(RequestsConfig) : this.config)
+    return selectableTerminationReason(code, reasons)
+  }
+
+  // القائمة لمعالج الإنهاء (الأساسي + المخصص المفعّل) ولشاشة «سياسات النظام» (والموقوف ونسبة كل سبب)
+  async terminationReasons(user: JwtPayload) {
+    const customs = await this.customTerminationReasons()
+    const usage = await customTerminationReasonUsage(this.cases.manager)
+    return {
+      // الحفظ بصلاحية الإعدادات لحساب على مستوى الشركة — نفس PATCH /settings/config
+      canEdit: userHasPerm(user, 'settings.manage') && branchScopeOf(user) === null,
+      // بصمة القائمة: الشاشة بترجّعها مع الحفظ عشان مايرجّعش تعديل حد تاني من غير ما يشوفه
+      revision: customTerminationReasonsRevision(customs),
+      reasons: terminationReasonsView(await this.eosPolicy(customs), customs, usage),
+    }
+  }
+
+  // حفظ القائمة الكاملة للأسباب المخصصة — ذرّي: القراءة والتحقق والكتابة في معاملة واحدة تحت قفل حصري
+  async saveTerminationReasons(user: JwtPayload, dto: { reasons: CustomTerminationReasonInput[]; revision?: string }) {
+    assertCompanyWideWrite(user)
+    const plan = await this.cases.manager.transaction(async (em) => {
+      await lockTerminationReasons(em, 'Exclusive')
+      const stored = await readCustomTerminationReasonsForSave(em)
+      const next = planCustomTerminationReasons({
+        current: stored.reasons,
+        submitted: dto.reasons ?? [],
+        usage: await customTerminationReasonUsage(em),
+        lastSeq: stored.lastSeq,
+        revision: dto.revision,
+      })
+      await writeCustomTerminationReasons(em, next.reasons, next.lastSeq)
+      return next
+    })
+    this.logger.log(
+      `أسباب إنهاء الخدمة المخصصة: ${plan.reasons.length} سبب (جديد: ${plan.added.join('، ') || '—'}، اتشال: ${plan.removed.join('، ') || '—'}) — بواسطة المستخدم #${user.sub}`
+    )
+    return this.terminationReasons(user)
   }
 
   // ===== القائمة والتفاصيل =====
@@ -429,8 +506,11 @@ export class OffboardingService implements OnApplicationBootstrap {
     const visible = rows.filter((c) =>
       inBranchScope(user, byId.get(c.employeeId)?.branchId)
     )
+    const customs = await this.customTerminationReasons()
     return visible.map(({ settlementNet, settlementFinancialSnapshot: _financialSnapshot, ...c }) => ({
       ...c,
+      // مسمى السبب محلول هنا (والمخصص الموقوف بمسماه) — الشاشة مش محتاجة قائمة الإعدادات عشان تعرضه
+      terminationReasonLabel: terminationReasonDisplayLabel(c.terminationReason, customs),
       openedByUserId: c.openedBy ?? null, settlementApprovedByUserId: c.settlementApprovedBy ?? null,
       ...(seesMoney ? { settlementNet } : {}),
       employeeName: byId.get(c.employeeId)?.fullName ?? `#${c.employeeId}`,
@@ -472,6 +552,7 @@ export class OffboardingService implements OnApplicationBootstrap {
     const { settlementNet, settlementFinancialSnapshot: _financialSnapshot, ...caseInfo } = kase
     const base = {
       ...caseInfo,
+      terminationReasonLabel: terminationReasonDisplayLabel(kase.terminationReason, await this.customTerminationReasons()),
       openedByUserId: kase.openedBy ?? null, settlementApprovedByUserId: kase.settlementApprovedBy ?? null,
       employee: employee
         ? pickFields(
@@ -684,7 +765,15 @@ export class OffboardingService implements OnApplicationBootstrap {
     // (+) مكافأة نهاية الخدمة — صيغة قابلة للإعداد:
     // شهور لكل سنة خدمة (الافتراضي 0.5 شهر/سنة — راجِعها مع القانوني)
     const policy = await this.eosPolicy()
-    const eos = computeEos(gross, serviceYears(this.joinDateOf(emp), kase.lastWorkingDay), caseReason(kase), policy)
+    // المخصص بنسبته من الإعدادات؛ والكود المش معروف (اتكتب من برّه المسار) مايتحسبش بافتراض صامت —
+    // لا استقالة ولا مكافأة كاملة
+    const reason = caseReason(kase)
+    if (!eosReasonKnown(reason, policy)) {
+      throw new ConflictException(
+        `سبب إنهاء الخدمة في الملف («${reason}») مش موجود في «أسباب إنهاء الخدمة» بالإعدادات — مكافأة نهاية الخدمة مابتتحسبش على سبب مش معروف؛ رجّع السبب في الإعدادات قبل بناء التصفية`
+      )
+    }
+    const eos = computeEos(gross, serviceYears(this.joinDateOf(emp), kase.lastWorkingDay), reason, policy)
     if (eos.amount > 0) {
       rows.push({
         caseId: kase.id,

@@ -379,7 +379,7 @@ export default function OffboardingCasePage() {
                 <div>
                   <dt className="text-gray-500">سبب الإنهاء</dt>
                   <dd className="font-medium text-gray-800 mt-1">
-                    {terminationReasonLabel(det.terminationReason)}
+                    {terminationReasonLabel(det.terminationReason, det.terminationReasonLabel)}
                   </dd>
                 </div>
                 <div>

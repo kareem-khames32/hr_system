@@ -15,8 +15,13 @@ import {
   AlertCircle,
   ShieldCheck,
   Send,
+  Plus,
 } from 'lucide-react'
-import { can, fetchConfig, fetchSecurityStatus, sendMailTest, updateConfig, type SecurityStatus } from '@/lib/api'
+import {
+  can, fetchConfig, fetchSecurityStatus, fetchTerminationReasons, saveCustomTerminationReasons, sendMailTest, updateConfig,
+  type ApiTerminationReason, type ApiTerminationReasons, type SecurityStatus,
+} from '@/lib/api'
+import { customTerminationReasonsIssue, TERMINATION_REASON_FACTOR_HINT } from '@/lib/termination-reasons'
 import { invalidateCurrency, useCurrency } from '@/lib/currency'
 import {
   createLoanCapPolicy, createLoanCapPolicyVersion, fetchLoanCapPolicies, formatLoanMoney,
@@ -326,6 +331,141 @@ function LoanAdvanceCapBlock({ onSaveConfig, pendingConfigCount }: { onSaveConfi
       <p className="text-xs text-gray-400">
         {policy ? `الساري الآن: ${policy.percentOfSalary ? `${Number(policy.percentOfSalary)}% من ${policy.salaryBase === 'BASIC' ? 'الراتب الأساسي' : 'إجمالي الراتب'}` : policy.flatCapAmount ? `${formatLoanMoney(policy.flatCapAmount)} ${currency}` : 'بلا حد مبلغ'}`
           : 'لا يوجد سقف سلفة الآن — أي مبلغ يمر في الاعتماد.'}
+      </p>
+    </div>
+  )
+}
+
+// ===== أسباب إنهاء الخدمة (قرار المالك 27 سبتمبر) =====
+// الثمانية الأساسية للقراءة بنسبتها الحالية (والاستقالة بجدولها)، والمخصصة يعدّلها المالك: المسمى والنسبة
+// والتفعيل، ويضيف سبب جديد. الكود بيولّده الخادم ومايتغيرش، والسبب اللي عليه ملفات مايتشالش — يتعطل بس.
+type ReasonDraft = { key: string; code?: string; label: string; eosFactor: string; active: boolean; usedByCases: number }
+const reasonDraft = (reason: ApiTerminationReason): ReasonDraft => ({
+  key: reason.code, code: reason.code, label: reason.label, eosFactor: reason.eosFactor ?? '0', active: reason.active, usedByCases: reason.usedByCases ?? 0,
+})
+const reasonsSnapshot = (rows: ReasonDraft[]) => JSON.stringify(rows.map(({ code, label, eosFactor, active }) => ({ code: code ?? null, label, eosFactor, active })))
+
+function TerminationReasonsBlock({ onSaveConfig, pendingConfigCount }: { onSaveConfig: () => Promise<void>; pendingConfigCount: number }) {
+  const [builtins, setBuiltins] = useState<ApiTerminationReason[]>([])
+  const [rows, setRows] = useState<ReasonDraft[]>([])
+  const [savedSnapshot, setSavedSnapshot] = useState('[]')
+  const [revision, setRevision] = useState('')
+  const [canEdit, setCanEdit] = useState(false)
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState('')
+  const [saved, setSaved] = useState('')
+  const [busy, setBusy] = useState(false)
+  const [newCount, setNewCount] = useState(0)
+
+  const apply = (view: ApiTerminationReasons) => {
+    const customs = view.reasons.filter(reason => !reason.builtin).map(reasonDraft)
+    setBuiltins(view.reasons.filter(reason => reason.builtin))
+    setRows(customs)
+    setSavedSnapshot(reasonsSnapshot(customs))
+    setRevision(view.revision)
+    setCanEdit(view.canEdit)
+  }
+  const load = () => {
+    setLoading(true); setError('')
+    fetchTerminationReasons().then(apply)
+      .catch(e => setError(e instanceof Error ? e.message : 'تعذر تحميل أسباب إنهاء الخدمة'))
+      .finally(() => setLoading(false))
+  }
+  useEffect(load, [])
+
+  const dirty = reasonsSnapshot(rows) !== savedSnapshot
+  const locked = !canEdit || busy
+  const update = (key: string, patch: Partial<ReasonDraft>) => { setRows(prev => prev.map(row => row.key === key ? { ...row, ...patch } : row)); setSaved('') }
+  const addRow = () => { setRows(prev => [...prev, { key: `new-${newCount + 1}`, label: '', eosFactor: '0', active: true, usedByCases: 0 }]); setNewCount(n => n + 1); setSaved('') }
+  const removeRow = (key: string) => { setRows(prev => prev.filter(row => row.key !== key)); setSaved('') }
+
+  const save = async () => {
+    if (!canEdit || busy || !dirty) return
+    const issue = customTerminationReasonsIssue(rows)
+    if (issue) { setError(issue); return }
+    setBusy(true); setError(''); setSaved('')
+    try {
+      // البصمة: لو حد تاني غيّر القائمة من وقت الفتح الخادم بيرفض بدل ما التعديل ده يرجّع تعديله
+      apply(await saveCustomTerminationReasons(rows.map(({ code, label, eosFactor, active }) => ({ ...(code ? { code } : {}), label: label.trim(), eosFactor: eosFactor.trim(), active })), revision))
+      // زر واحد يحفظ معه أي إعداد متغيّر في الشاشة (زي كتلة سقف السلفة) فلا يضيع تغيير
+      if (pendingConfigCount > 0) await onSaveConfig()
+      setSaved(pendingConfigCount > 0 ? `تم حفظ أسباب إنهاء الخدمة و${pendingConfigCount} إعداد` : 'تم حفظ أسباب إنهاء الخدمة')
+    } catch (e) { setError(e instanceof Error ? e.message : 'تعذر حفظ أسباب إنهاء الخدمة') } finally { setBusy(false) }
+  }
+
+  return (
+    <div className="mt-4 pt-4 border-t border-gray-100 space-y-3" data-testid="termination-reasons">
+      <div>
+        <p className="text-sm font-medium text-gray-800">أسباب إنهاء الخدمة</p>
+        <p className="text-xs text-gray-400 mt-0.5">اللي بتظهر في «سبب الإنهاء» بمعالج إنهاء الخدمة. الثمانية الأساسية ثابتة، وتقدر تضيف فوقها أسباب شركتك.</p>
+      </div>
+      <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">{TERMINATION_REASON_FACTOR_HINT}</p>
+      {error && <p role="alert" className="text-sm text-red-600">{error}</p>}
+      {saved && <p role="status" className="text-sm text-success-700">{saved}</p>}
+      {loading ? <p className="text-sm text-gray-400">جارٍ التحميل…</p> : (
+        <div className="overflow-x-auto">
+          <table className="w-full text-sm">
+            <thead>
+              <tr className="bg-gray-50 text-gray-600">
+                <th className="text-right p-2 font-medium">السبب</th>
+                <th className="text-right p-2 font-medium">النسبة من المكافأة</th>
+                <th className="text-right p-2 font-medium">الحالة</th>
+                <th className="p-2"><span className="sr-only">حذف</span></th>
+              </tr>
+            </thead>
+            <tbody>
+              {builtins.map(reason => (
+                <tr key={reason.code} className="border-t border-gray-100 text-gray-600">
+                  <td className="p-2">{reason.label}</td>
+                  <td className="p-2">{reason.eosFactor === null ? 'جدول الاستقالة' : <span dir="ltr">{reason.eosFactor}</span>}</td>
+                  <td className="p-2"><span className="rounded-lg bg-gray-100 px-2 py-0.5 text-xs text-gray-500">أساسي</span></td>
+                  <td className="p-2" />
+                </tr>
+              ))}
+              {rows.map(row => (
+                <tr key={row.key} className="border-t border-gray-100">
+                  <td className="p-2">
+                    <input aria-label="مسمى السبب" className="input w-full min-w-40" maxLength={60} disabled={locked} value={row.label}
+                      placeholder="مثال: إنهاء خلال فترة التجربة" onChange={e => update(row.key, { label: e.target.value })} />
+                  </td>
+                  <td className="p-2">
+                    <input aria-label={`النسبة من المكافأة — ${row.label || 'سبب جديد'}`} className="input w-24" dir="ltr" disabled={locked}
+                      value={row.eosFactor} onChange={e => update(row.key, { eosFactor: e.target.value })} />
+                  </td>
+                  <td className="p-2">
+                    <div className="flex items-center gap-2 whitespace-nowrap">
+                      <button type="button" aria-pressed={row.active} aria-label={`تفعيل «${row.label || 'سبب جديد'}»`} disabled={locked}
+                        onClick={() => update(row.key, { active: !row.active })}
+                        className={`relative w-12 h-6 rounded-full transition-colors ${row.active ? 'bg-primary-500' : 'bg-gray-300'}${!canEdit ? ' opacity-50 cursor-not-allowed' : ''}`}>
+                        <span className={`absolute top-0.5 w-5 h-5 bg-white rounded-full shadow transition-all ${row.active ? 'right-0.5' : 'right-6'}`} />
+                      </button>
+                      <span className="text-xs text-gray-500">{row.active ? 'مفعّل' : 'موقوف'}</span>
+                    </div>
+                  </td>
+                  <td className="p-2 text-left whitespace-nowrap">
+                    {row.usedByCases > 0
+                      ? <span className="text-xs text-gray-500" title="السبب المستخدم مايتشالش — عطّله بس">عليه {row.usedByCases} ملف</span>
+                      : canEdit && <button type="button" className="text-xs text-red-600 hover:underline disabled:opacity-50" disabled={busy} onClick={() => removeRow(row.key)}>حذف</button>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+      )}
+      {canEdit && !loading && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button type="button" className="btn-secondary inline-flex items-center gap-2" disabled={busy} onClick={addRow}>
+            <Plus size={16} />إضافة سبب
+          </button>
+          <button type="button" className="btn-secondary" disabled={busy || !dirty} onClick={save}>
+            {busy ? 'جارٍ الحفظ...' : pendingConfigCount > 0 ? `حفظ أسباب الإنهاء و${pendingConfigCount} إعداد` : 'حفظ أسباب الإنهاء'}
+          </button>
+        </div>
+      )}
+      <p className="text-xs text-gray-400">
+        السبب الموقوف مايظهرش في ملف جديد، والملفات اللي عليه بتفضل بمسماه ونسبته. التصفية المعتمدة مابتتغيرش لما النسبة تتغير.
+        {!canEdit && !loading && ' التعديل لحساب على مستوى الشركة بصلاحية الإعدادات.'}
       </p>
     </div>
   )
@@ -884,6 +1024,7 @@ export default function PoliciesPage() {
                     ))}
                   </div>
                   {g.title === 'أقساط السلف وحماية الصافي' && <LoanAdvanceCapBlock onSaveConfig={handleSave} pendingConfigCount={dirtyKeys.length} />}
+                  {g.title === 'المسير ونهاية الخدمة' && <TerminationReasonsBlock onSaveConfig={handleSave} pendingConfigCount={dirtyKeys.length} />}
                   {g.title === 'الدخول والأمان' && <SecurityStatusBlock status={security} reload={loadSecurity} />}
                 </div>
               )

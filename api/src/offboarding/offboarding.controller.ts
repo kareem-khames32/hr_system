@@ -7,27 +7,29 @@ import {
   ParseIntPipe,
   Patch,
   Post,
+  Put,
   Query,
   UseGuards,
 } from '@nestjs/common'
 import {
+  ArrayMaxSize,
+  IsArray,
   IsBoolean,
-  IsIn,
   IsInt,
   IsNumber,
   IsOptional,
   IsString,
   Matches,
   MaxLength,
-  MinLength,
+  ValidateNested,
 } from 'class-validator'
-import { Type } from 'class-transformer'
+import { Transform, Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
-import { TERMINATION_REASONS, type TerminationReason } from './offboarding.entities'
 import { OffboardingService } from './offboarding.service'
 // بنود التصفية اليدوية — رسائل تحقق عربية بدل رسائل class-validator الإنجليزية الخام
 import { AddLineDto, UpdateLineDto } from './settlement-line.dto'
+import { CUSTOM_TERMINATION_REASONS_MAX, TERMINATION_REASON_CODE } from './termination-reasons'
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/
 
@@ -37,8 +39,10 @@ class CreateCaseDto {
   @IsInt({ message: 'الموظف مطلوب' })
   employeeId: number
 
-  @IsIn([...TERMINATION_REASONS], { message: 'سبب الإنهاء غير معروف' })
-  reason: TerminationReason
+  // أساسي أو مخصص من الإعدادات — وجوده ومفعّل ولا لأ بيتفحص في الخدمة من القائمة الفعالة
+  @IsString({ message: 'سبب الإنهاء غير معروف' })
+  @Matches(TERMINATION_REASON_CODE, { message: 'سبب الإنهاء غير معروف' })
+  reason: string
 
   @Matches(YMD, { message: 'آخر يوم عمل مطلوب بصيغة YYYY-MM-DD' })
   lastWorkingDay: string
@@ -69,11 +73,51 @@ class PreviewQueryDto {
   @IsInt({ message: 'الموظف مطلوب' })
   employeeId: number
 
-  @IsIn([...TERMINATION_REASONS], { message: 'سبب الإنهاء غير معروف' })
-  reason: TerminationReason
+  @IsString({ message: 'سبب الإنهاء غير معروف' })
+  @Matches(TERMINATION_REASON_CODE, { message: 'سبب الإنهاء غير معروف' })
+  reason: string
 
   @Matches(YMD, { message: 'آخر يوم عمل مطلوب بصيغة YYYY-MM-DD' })
   lastWorkingDay: string
+}
+
+// سبب مخصص في قائمة الحفظ — الكود للموجود بس (الجديد من غير كود والخادم بيولّده). حدود المسمى (2–60 بعد
+// التنضيف) والنسبة وعدم التكرار في الخدمة برسائل بالمسمى
+class CustomTerminationReasonDto {
+  @IsOptional()
+  @IsString({ message: 'كود السبب غير معروف' })
+  @MaxLength(30, { message: 'كود السبب غير معروف' })
+  code?: string
+
+  @IsString({ message: 'مسمى السبب مطلوب — من 2 لـ 60 حرف' })
+  @MaxLength(200, { message: 'مسمى السبب بحد أقصى 60 حرف' })
+  label: string
+
+  // نسبة من مكافأة نهاية الخدمة: عشري من 0 لـ 1 أو كسر زي 1/3 (الرقم بيتقبل ويتحول نص)
+  @Transform(({ value }) => (typeof value === 'number' ? String(value) : value))
+  @IsString({ message: 'نسبة المكافأة مطلوبة — رقم من 0 لـ 1 أو كسر زي 1/3' })
+  @MaxLength(20, { message: 'نسبة المكافأة مش صالحة — رقم من 0 لـ 1 أو كسر زي 1/3' })
+  eosFactor: string
+
+  @IsOptional()
+  @IsBoolean({ message: 'تفعيل السبب true أو false' })
+  active?: boolean
+}
+
+class SaveTerminationReasonsDto {
+  @IsArray({ message: 'ابعت القائمة الكاملة للأسباب المخصصة (reasons)' })
+  @ArrayMaxSize(CUSTOM_TERMINATION_REASONS_MAX, {
+    message: `أقصى عدد للأسباب المخصصة ${CUSTOM_TERMINATION_REASONS_MAX} سبب`,
+  })
+  @ValidateNested({ each: true })
+  @Type(() => CustomTerminationReasonDto)
+  reasons: CustomTerminationReasonDto[]
+
+  // بصمة القائمة من GET وقت فتح الشاشة — لو اتغيرت من حد تاني الحفظ بيترفض 409 (اختيارية لنداء مباشر)
+  @IsOptional()
+  @IsString({ message: 'بصمة القائمة نص' })
+  @MaxLength(64, { message: 'بصمة القائمة غير صالحة' })
+  revision?: string
 }
 
 class CompleteItemDto {
@@ -110,6 +154,24 @@ export class OffboardingController {
   @Get('my-items')
   myItems(@CurrentUser() user: JwtPayload) {
     return this.service.myItems(user)
+  }
+
+  // قرار المالك 27 سبتمبر: أسباب إنهاء الخدمة — الثمانية الأساسية + المخصصة من «سياسات النظام».
+  // القراءة لفاتح ملفات الإنهاء (قائمة المعالج) ولشاشة الإعدادات — قبل :id
+  @Perm('offboarding.manage', 'settings.manage')
+  @Get('termination-reasons')
+  terminationReasons(@CurrentUser() user: JwtPayload) {
+    return this.service.terminationReasons(user)
+  }
+
+  // حفظ القائمة الكاملة للأسباب المخصصة (المسمى والنسبة والتفعيل + الجديد) — لحساب على مستوى الشركة
+  @Perm('settings.manage')
+  @Put('termination-reasons')
+  saveTerminationReasons(
+    @CurrentUser() user: JwtPayload,
+    @Body() dto: SaveTerminationReasonsDto
+  ) {
+    return this.service.saveTerminationReasons(user, dto)
   }
 
   // EMP-1: معاينة معالج «إنهاء الخدمة» في ملف الموظف — قبل :id

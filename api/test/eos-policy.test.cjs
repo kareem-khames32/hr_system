@@ -119,6 +119,28 @@ test('legacy missing reason and malformed historical policy use their existing d
   assert.deepEqual(fallback, defaultPolicy)
 })
 
+// قرار المالك 27 سبتمبر: أسباب مخصصة من الإعدادات بنسبة من المكافأة الكاملة (نفس الشرائح)
+test('custom termination reasons use their own factor on the full award, and an unknown code is never resignation or a full award', () => {
+  const { customTerminationReasonFactors } = require('../src/offboarding/termination-reasons')
+  const policy = { ...defaultPolicy, custom: customTerminationReasonFactors([
+    { code: 'absence', label: 'انقطاع عن العمل', eosFactor: '0', active: true },
+    { code: 'custom_1', label: 'إنهاء خلال فترة التجربة', eosFactor: '1/2', active: false },
+  ]) }
+  const full = computeEos(12000, 8, 'termination', policy).amount
+  const half = computeEos(12000, 8, 'custom_1', policy)
+  assert.equal(half.amount, full / 2, 'موقوف أو مفعّل: النسبة من المكافأة الكاملة')
+  assert.equal(half.factorLabel, '1/2')
+  assert.equal(eosLineLabel(half, policy), 'مكافأة نهاية الخدمة — إنهاء خلال فترة التجربة (8.00 سنة: 5×0.5 + 3×1 شهر × 1/2)')
+  const absence = computeEos(12000, 8, 'absence', policy)
+  assert.equal(absence.full, 66000); assert.equal(absence.amount, 0)
+  assert.match(eosLineLabel(absence, policy), /^مكافأة نهاية الخدمة — انقطاع عن العمل .* — لا تستحق$/)
+  // الكود المش معروف: مايتحسبش بافتراض صامت (لا جدول الاستقالة ولا معامل 1)
+  assert.throws(() => computeEos(12000, 8, 'mystery_code', policy), /mystery_code/)
+  assert.throws(() => computeEos(12000, 8, 'absence', defaultPolicy), /absence/, 'السياسة من غير المخصص مابتعرفوش')
+  assert.equal(caseReason({ terminationReason: 'custom_1' }), 'custom_1')
+  assert.equal(caseReason({ terminationReason: '' }), '', 'الافتراض للـNULL بس')
+})
+
 // Repository boundary doubles exercise the real service's preview and persisted
 // line construction without a database. The SQL recovery integration suite
 // separately covers actual repository transactions and persistence.

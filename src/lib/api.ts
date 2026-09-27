@@ -1625,8 +1625,10 @@ export interface ApiOffboardingCase {
   openCustodyCount?: number; net?: number
   // البنود والمبالغ والراتب لأصحاب التصفية فقط (settlement.edit/approve)
   canViewSettlement?: boolean
-  // EMP-2: سبب الإنهاء (TERMINATION_REASON_LABELS) — لـ HR وأصحاب التصفية والموظف ومديره
+  // EMP-2: سبب الإنهاء (TERMINATION_REASON_LABELS) — لـ HR وأصحاب التصفية والموظف ومديره.
+  // الكود أساسي أو مخصص من الإعدادات، ومسماه محلول من الخادم (المخصص الموقوف بيفضل بمسماه)
   terminationReason?: string
+  terminationReasonLabel?: string | null
   // EMP-1: الإنهاء من طرف الشركة — لـ HR وأصحاب التصفية فقط
   noticeDate?: string; notes?: string; exitInterviewNotes?: string
   openedBy?: number; accessRevokedAt?: string
@@ -1645,13 +1647,14 @@ export interface ApiMyClearanceItem {
 }
 export const fetchOffboardingCases = () => get<ApiOffboardingCase[]>('/offboarding')
 export const fetchOffboardingCase = (id: number) => get<ApiOffboardingCase>(`/offboarding/${id}`)
+// الأسباب الثمانية الأساسية — والمخصصة من «سياسات النظام» أكوادها نص (absence، custom_N)
 export type TerminationReason = 'resignation' | 'termination' | 'dismissal' | 'contract_end' | 'retirement' | 'death' | 'disability' | 'force_majeure'
 export interface CreateOffboardingInput {
-  employeeId: number; reason: TerminationReason; lastWorkingDay: string
+  employeeId: number; reason: string; lastWorkingDay: string // أساسي أو مخصص مفعّل
   noticeDate?: string; notes?: string; exitInterviewNotes?: string; revokeAccess?: boolean
 }
 export interface ApiOffboardingPreview {
-  employeeId: number; reason: TerminationReason; lastWorkingDay: string; blockReason: string | null
+  employeeId: number; reason: string; lastWorkingDay: string; blockReason: string | null
   serviceYears: number; canViewSettlement: boolean
   eos: { firstYears: number; laterYears: number; firstTierMonths: number; laterMonths: number; fullMonths: number; factor: number; factorLabel: string }
   openCustody: Array<{ id: number; status: string; assetName: string; serialNumber: string | null }>
@@ -1660,6 +1663,22 @@ export interface ApiOffboardingPreview {
 export const fetchOffboardingPreview = (input: Pick<CreateOffboardingInput, 'employeeId' | 'reason' | 'lastWorkingDay'>) =>
   get<ApiOffboardingPreview>(`/offboarding/preview?${new URLSearchParams({ employeeId: String(input.employeeId), reason: input.reason, lastWorkingDay: input.lastWorkingDay })}`)
 export const createOffboardingCase = (input: CreateOffboardingInput) => post<ApiOffboardingCase>('/offboarding', input)
+// قرار المالك 27 سبتمبر: أسباب إنهاء الخدمة — الثمانية الأساسية (للقراءة) + المخصصة من «سياسات النظام»
+export interface ApiTerminationReason {
+  code: string; label: string; builtin: boolean; active: boolean
+  eosFactor: string | null // النسبة من المكافأة كما اتكتبت — الاستقالة null (بجدولها)
+  usedByCases?: number // المخصص: عدد ملفات الإنهاء عليه (المستخدم مايتشالش — يتعطل بس)
+}
+export interface ApiTerminationReasons {
+  canEdit: boolean
+  revision: string // بصمة القائمة — ترجع مع الحفظ، ولو القائمة اتغيرت من حد تاني الحفظ بيترفض 409
+  reasons: ApiTerminationReason[]
+}
+export const fetchTerminationReasons = () => get<ApiTerminationReasons>('/offboarding/termination-reasons')
+// الحفظ بالقائمة الكاملة للمخصص: الموجود بكوده (ثابت)، والجديد من غير كود والخادم بيولّده
+export interface CustomTerminationReasonInput { code?: string; label: string; eosFactor: string; active: boolean }
+export const saveCustomTerminationReasons = (reasons: CustomTerminationReasonInput[], revision?: string) =>
+  apiFetch<ApiTerminationReasons>('/offboarding/termination-reasons', { method: 'PUT', body: JSON.stringify({ reasons, revision }) })
 export const fetchMyClearanceItems = () => get<ApiMyClearanceItem[]>('/offboarding/my-items')
 export const completeClearanceItem = (itemId: number, d?: { note?: string; amount?: number }) =>
   post<ApiOffboardingCase>(`/offboarding/items/${itemId}/complete`, d ?? {})
