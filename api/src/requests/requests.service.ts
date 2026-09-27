@@ -1150,15 +1150,22 @@ export class RequestsService {
       const skipLevel = s.approverRole === 'manager_of_direct_manager'
         ? await this.resolver.managerOfDirectManagerOf(req.requesterId)
         : null
+      // «مدير الإدارة»: المعتمد أو سبب الإيقاف برسالة بتسمّي القسم أو الإدارة
+      const administration = s.approverRole === 'administration_manager_of_requester'
+        ? await this.resolver.administrationManagerOf(req.requesterId)
+        : null
       const approverEmployeeId = skipLevel
         ? skipLevel.approverId
-        : await this.resolver.resolveApproverEmployee(
-            s.approverRole,
-            req.requesterId,
-            payload,
-            s.specificEmployeeId
-          )
-      // السرّي يتخطى المدير المباشر (الشكاوى/البلاغات) — ومعاه «مدير المدير المباشر» لو وقعت على المدير المباشر نفسه
+        : administration
+          ? administration.approverId
+          : await this.resolver.resolveApproverEmployee(
+              s.approverRole,
+              req.requesterId,
+              payload,
+              s.specificEmployeeId
+            )
+      // السرّي يتخطى المدير المباشر (الشكاوى/البلاغات) — ومعاه «مدير المدير المباشر» لو وقعت على المدير المباشر نفسه.
+      // «مدير الإدارة» مابيتخطّاش (زي «مدير القسم»)
       if (
         type.isConfidential &&
         (s.approverRole === 'direct_manager_of_requester' || skipLevel?.top)
@@ -1168,7 +1175,8 @@ export class RequestsService {
       if (skipLevel && !approverEmployeeId) {
         throw new BadRequestException(await this.skipLevelMissingMessage(skipLevel.directManagerId))
       }
-      if (['direct_manager_of_requester', 'department_manager_of_requester',
+      if (administration?.blocked) throw new BadRequestException(administration.blocked)
+      if (['direct_manager_of_requester', 'department_manager_of_requester', 'administration_manager_of_requester',
         'branch_manager_of_requester', 'receiving_team_manager', 'specific_employee'].includes(s.approverRole)
         && !approverEmployeeId) {
         throw new BadRequestException('لا يوجد معتمد محدد لهذه الخطوة — أكمل الهيكل التنظيمي أو عدّل سلسلة الاعتماد')
@@ -2083,25 +2091,33 @@ export class RequestsService {
   private async requestPeople(req: Pick<Request, 'requesterId' | 'createdByUserId'>, user: JwtPayload) {
     const employee = await this.employees.findOne({ where: { id: req.requesterId },
       select: { id: true, fullName: true, employeeCode: true, jobTitle: true, branchId: true, departmentId: true, teamId: true } })
-    let requester: { employeeId: number; fullName: string; employeeCode: string | null; jobTitle: string | null; departmentName: string | null
-      branchName: string | null; teamName: string | null; directManagerName: string | null; orgHidden?: true } | null = null
-    // التنظيم الحالي (المسمى/القسم/الفرع/الفريق/المدير) لصاحب الطلب نفسه أو لحساب نطاقه فيه فرع الموظف الحالي بس:
+    let requester: { employeeId: number; fullName: string; employeeCode: string | null; jobTitle: string | null; administrationName: string | null
+      departmentName: string | null; branchName: string | null; teamName: string | null; directManagerName: string | null; orgHidden?: true } | null = null
+    // التنظيم الحالي (المسمى/الإدارة/القسم/الفرع/الفريق/المدير) لصاحب الطلب نفسه أو لحساب نطاقه فيه فرع الموظف الحالي بس:
     // طلب قديم في فرع اتنقل منه الموظف مايكشفش لحساب الفرع القديم مكانه الجديد (مراجعة Codex الجولة 4) — الاسم والكود بس
     const orgVisible = !!employee && ((user.employeeId != null && Number(user.employeeId) === employee.id)
       || inBranchScope(branchScopeOf(user), employee.branchId))
     if (employee && !orgVisible) {
       requester = { employeeId: employee.id, fullName: employee.fullName, employeeCode: employee.employeeCode ?? null, jobTitle: null,
-        departmentName: null, branchName: null, teamName: null, directManagerName: null, orgHidden: true }
+        administrationName: null, departmentName: null, branchName: null, teamName: null, directManagerName: null, orgHidden: true }
     } else if (employee) {
-      const [department, branch, team, managerId] = await Promise.all([
+      const [department, branch, team, managerId, units] = await Promise.all([
         employee.departmentId ? this.ds.getRepository(Department).findOne({ where: { id: employee.departmentId }, select: { id: true, name: true } }) : null,
         employee.branchId ? this.ds.getRepository(Branch).findOne({ where: { id: employee.branchId }, select: { id: true, name: true } }) : null,
         employee.teamId ? this.ds.getRepository(Team).findOne({ where: { id: employee.teamId }, select: { id: true, name: true } }) : null,
         this.resolver.directManagerOf(employee.id),
+        this.resolver.unitChainOf(employee.departmentId),
       ])
       const manager = managerId ? await this.employees.findOne({ where: { id: managerId }, select: { id: true, fullName: true } }) : null
+      // «الإدارة»: أقرب وحدة نوعها «إدارة» من قسمه لفوق (نفس صعود «مدير الإدارة»). إدارة في فرع برّه نطاق المشاهد (الإدارة التنفيذية
+      // فوق أقسام الفروع) بتبان باسمها العام من غير اسمها المسجّل — زي حجب اسمها في قوايم حساب الفرع
+      const administration = units.find((unit) => unit.unitType === 'ADMINISTRATION')
+      const administrationName = !administration ? null
+        : inBranchScope(branchScopeOf(user), administration.branchId) ? administration.name
+        : administration.isExecutive ? 'الإدارة التنفيذية' : null
       requester = { employeeId: employee.id, fullName: employee.fullName, employeeCode: employee.employeeCode ?? null, jobTitle: employee.jobTitle ?? null,
-        departmentName: department?.name ?? null, branchName: branch?.name ?? null, teamName: team?.name ?? null, directManagerName: manager?.fullName ?? null }
+        administrationName, departmentName: department?.name ?? null, branchName: branch?.name ?? null, teamName: team?.name ?? null,
+        directManagerName: manager?.fullName ?? null }
     }
     const creator = req.createdByUserId
       ? await this.ds.getRepository(User).findOne({ where: { id: req.createdByUserId }, select: { id: true, displayName: true, employeeId: true } })
@@ -2479,7 +2495,7 @@ export class RequestsService {
 
   private assertOvertimeChain(steps: ResolvedStep[], exempt: boolean) {
     if (!steps.length) throw new BadRequestException('الإضافي لا ينفذ دون خطوات اعتماد صريحة')
-    if (exempt && (!steps.some(step => step.role === 'hr') || !steps.some(step => ['direct_manager_of_requester', 'manager_of_direct_manager', 'department_manager_of_requester', 'branch_manager_of_requester', 'executive'].includes(step.role)))) {
+    if (exempt && (!steps.some(step => step.role === 'hr') || !steps.some(step => ['direct_manager_of_requester', 'manager_of_direct_manager', 'department_manager_of_requester', 'administration_manager_of_requester', 'branch_manager_of_requester', 'executive'].includes(step.role)))) {
       throw new BadRequestException('إضافي الموظف المستثنى يتطلب اعتماد مدير واعتماد الموارد البشرية صراحةً في السلسلة')
     }
   }

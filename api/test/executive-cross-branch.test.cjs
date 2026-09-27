@@ -96,16 +96,17 @@ test('XB-04: «القسم الأب» — الإدارة التنفيذية لأ�
   assert.deepEqual(options({ branchId: 1 }), [[1, 'الإدارة التنفيذية — فوق كل الفروع', true], [2, 'مكتب الرئيس', false]])
   // تعديل مبيعات النصر: هي نفسها وأقسامها التابعة مش اختيارات (دايرة)
   assert.deepEqual(options({ branchId: 2, editingId: 3, blocked: new Set([4]) }).map(o => o[0]), [1, 5])
-  // القسم اللي هيتعلّم إدارة تنفيذية: أب من فرعه بس
-  assert.deepEqual(options({ branchId: 2, makingExecutive: true }).map(o => o[0]), [3, 4, 5])
-  assert.deepEqual(options({ branchId: 1, makingExecutive: true }), [[1, 'الإدارة التنفيذية', false], [2, 'مكتب الرئيس', false]])
+  // الوحدة اللي هتتعلّم إدارة تنفيذية بتبقى «إدارة» فوق كل الوحدات (قرار المالك 27 سبتمبر: «الإدارة ← القسم ← الفريق») — من غير أب
+  assert.deepEqual(options({ branchId: 2, makingExecutive: true }), [])
+  assert.deepEqual(options({ branchId: 1, makingExecutive: true }), [])
   assert.equal(uiTree.executiveParentLabel({ name: 'مكتب مجلس الإدارة' }), 'مكتب مجلس الإدارة (الإدارة التنفيذية) — فوق كل الفروع')
   const after = (parentId, branchId, makingExecutive) => uiTree.parentAfterBranchChange(departments, parentId, branchId, makingExecutive)
   assert.deepEqual(after('1', '2'), { parentId: '1', dropped: null }, 'الإدارة التنفيذية تفضل أب لأي فرع')
   assert.deepEqual(after('2', '2'), { parentId: '', dropped: 'مكتب الرئيس' }, 'أب من فرع تاني يتشال بتنبيه')
   assert.deepEqual(after('3', '2'), { parentId: '3', dropped: null })
   assert.deepEqual(after('1', '2', true), { parentId: '', dropped: 'الإدارة التنفيذية' }, 'الإدارة التنفيذية الجديدة أبوها من فرعها بس')
-  assert.deepEqual(after('1', '1', true), { parentId: '1', dropped: null })
+  // وحتى من فرعها: الإدارة التنفيذية «إدارة» فوق كل الوحدات من غير أب (قرار المالك 27 سبتمبر)
+  assert.deepEqual(after('1', '1', true), { parentId: '', dropped: 'الإدارة التنفيذية' })
   assert.deepEqual(after('', '2'), { parentId: '', dropped: null })
   assert.deepEqual(uiTree.parentAfterBranchChange(nasrOnly, '1', '2'), { parentId: '1', dropped: null }, 'أب مش ظاهر للحساب (الإدارة التنفيذية) بيفضل')
 })
@@ -144,8 +145,10 @@ test('XB-06: شاشة الأقسام — الجذور والشارات واخت�
     'تحت الإدارة التنفيذية',
     'const parentOptions = parentOptionsFor(departments, {',
     '{hiddenParent && <option value={formData.parentId}>{EXECUTIVE_PARENT_LABEL}</option>}',
-    '«الإدارة التنفيذية» فوق كل الفروع وتقبل أقسام من أي فرع؛ باقي الأقسام من فرع القسم نفسه، عدا الأقسام التابعة لهذا القسم',
-    'const next = parentAfterBranchChange(departments, formData.parentId, e.target.value, formData.isExecutive)',
+    // تلميحات «التابع لـ» بقواعد «الإدارة ← القسم ← الفريق» (قرار المالك 27 سبتمبر)
+    'القسم تحت إدارة من فرعه، أو «الإدارة التنفيذية» من أي فرع، أو قسم من فرعه فيبقى قسم فرعي — عدا الأقسام التابعة لهذا القسم',
+    'الإدارة بتبقى رئيسية أو تحت «الإدارة التنفيذية» بس (من أي فرع) — مابتتحطش تحت قسم ولا تحت إدارة تانية',
+    'const next = parentAfterBranchChange(departments, formData.parentId, e.target.value, formData.isExecutive, formData.unitType)',
     '? parentAfterBranchChange(departments, formData.parentId, formData.branchId, true)',
     "departments.find((d) => d.id === dept.parentId)?.name ?? EXECUTIVE_PARENT_LABEL",
     'انقلها الأول قبل شيل «الإدارة التنفيذية»',

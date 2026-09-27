@@ -13,6 +13,8 @@ import {
 import { Type } from 'class-transformer'
 import { WEEKEND_DAYS_HINT, WEEKEND_DAYS_RE } from '../attendance/weekend-days'
 import { CalendarChangeDto } from '../attendance/attendance-calendar-history'
+import { DEPARTMENT_UNIT_TYPES, UNIT_TYPE_MESSAGE } from './entities/department.entity'
+import type { DepartmentUnitType } from './entities/department.entity'
 
 // ===== الفروع =====
 export class CreateBranchDto {
@@ -183,6 +185,11 @@ export class CreateDepartmentDto {
   @IsInt()
   parentId?: number
 
+  // «إدارة» أو «قسم» (قرار المالك 27 سبتمبر) — من غير قيمة: قسم، والإدارة التنفيذية إدارة دايمًا
+  @IsOptional()
+  @IsIn(DEPARTMENT_UNIT_TYPES, { message: UNIT_TYPE_MESSAGE })
+  unitType?: DepartmentUnitType
+
   @IsOptional()
   @Type(() => Number)
   @IsInt()
@@ -225,6 +232,11 @@ export class UpdateDepartmentDto {
   @Type(() => Number)
   @IsInt()
   parentId?: number | null // null = قسم رئيسي (بلا أب)
+
+  // تحويل «قسم» ↔ «إدارة» بقواعد الأب في org.service (الإدارة التنفيذية مابتتحولش قسم)
+  @IsOptional()
+  @IsIn(DEPARTMENT_UNIT_TYPES, { message: UNIT_TYPE_MESSAGE })
+  unitType?: DepartmentUnitType
 
   @IsOptional()
   @Type(() => Number)

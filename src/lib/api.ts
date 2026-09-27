@@ -336,6 +336,8 @@ export interface ApiBranch {
 export interface ApiDepartment {
   id: number; name: string; nameEn?: string; code?: string
   branchId: number; parentId?: number | null; managerEmployeeId?: number; isActive: boolean
+  // «إدارة» أو «قسم» (قرار المالك 27 سبتمبر: «الإدارة ← القسم ← الفريق») — قواعد الأب في الخادم (org.service)
+  unitType?: 'ADMINISTRATION' | 'DEPARTMENT'
   // الهيكل التنظيمي: «الإدارة التنفيذية» (مديرها الرئيس التنفيذي) والسكرتير التنفيذي — لكل الشركة
   isExecutive?: boolean; executiveSecretaryEmployeeId?: number | null
 }
@@ -432,6 +434,8 @@ export interface ApiRequestRequester {
   fullName: string
   employeeCode: string | null
   jobTitle: string | null
+  // أقرب إدارة فوق قسمه (نفس حل «مدير الإدارة») — إدارة في فرع برّه نطاقك بتبان باسمها العام بس
+  administrationName: string | null
   departmentName: string | null
   branchName: string | null
   teamName: string | null

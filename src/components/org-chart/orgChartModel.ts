@@ -1,6 +1,7 @@
 // نموذج الهيكل التنظيمي (بلا واجهة — يتختبر لوحده):
 // «الإدارة التنفيذية» فوق: الرئيس التنفيذي (مدير القسم المعلَّم «إدارة تنفيذية») ومعاه السكرتير التنفيذي جنبه بس،
-// وتحته الإدارات الرئيسية بترتيب أبوّة الأقسام (parentId)، وتحت كل قسم أقسامه الفرعية وفرقه.
+// وتحته الإدارات والأقسام الرئيسية بترتيب الأبوّة (parentId)، وتحت كل وحدة أقسامها الفرعية وفرقها. شارة «إدارة»/«قسم» من
+// نوع الوحدة (unitType — قرار المالك 27 سبتمبر: «الإدارة ← القسم ← الفريق»).
 // البيانات جاية من /branches و/departments و/teams و/employees، وكلها متقيدة بفرع الحساب من الخادم.
 
 // الهيكل لمن على رأس العمل فقط — المنتهية خدمته والمؤرشف خارجه (أعضاءً ومدراء)
@@ -22,6 +23,8 @@ export interface OrgDepartmentInput {
   isActive?: boolean
   isExecutive?: boolean
   executiveSecretaryEmployeeId?: number | null
+  // «إدارة» أو «قسم» (ترحيل 072) — شارة الكارت منه؛ من غيره (بيانات قديمة) القسم الرئيسي بيتعرض إدارة زي الأول
+  unitType?: string | null
 }
 export interface OrgTeamInput {
   id: number
@@ -191,13 +194,15 @@ export function buildOrgChart(input: {
     const teamUnits = byName(teams.filter((t) => t.departmentId === d.id)).map((t) => teamUnit(t, bName))
     const direct = active.filter((e) => deptOf(e) === d.id && !(e.teamId && teamById.has(e.teamId)))
     const inTeams = teamUnits.reduce((s, t) => s + t.headcount, 0)
+    // «الإدارة ← القسم ← الفريق» (قرار المالك 27 سبتمبر): شارة «إدارة» لنوع الوحدة المسجّل
+    const administration = d.unitType ? d.unitType === 'ADMINISTRATION' : top
     return {
       key: `d${d.id}`,
-      kind: top ? 'administration' : 'department',
+      kind: administration ? 'administration' : 'department',
       name: d.name,
       branchName: bName,
       head: person(d.managerEmployeeId),
-      headLabel: top ? 'مدير الإدارة' : 'مدير القسم',
+      headLabel: administration ? 'مدير الإدارة' : 'مدير القسم',
       headcount: direct.length + inTeams + subDepts.reduce((s, c) => s + c.headcount, 0),
       members: memberList(direct, d.managerEmployeeId),
       children: [...subDepts, ...teamUnits],

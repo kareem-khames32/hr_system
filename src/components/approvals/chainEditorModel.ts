@@ -41,6 +41,7 @@ export const roleLabels: Record<string, string> = {
   direct_manager_of_requester: 'المدير المباشر',
   manager_of_direct_manager: 'مدير المدير المباشر',
   department_manager_of_requester: 'مدير القسم',
+  administration_manager_of_requester: 'مدير الإدارة',
   branch_manager_of_requester: 'مدير الفرع',
   receiving_team_manager: 'المدير المستقبِل',
   hr: 'الموارد البشرية',
@@ -56,6 +57,7 @@ export const roleDescriptions: Record<string, string> = {
   direct_manager_of_requester: 'مدير مقدم الطلب المباشر',
   manager_of_direct_manager: 'المدير المباشر لمدير مقدم الطلب — ولو المدير المباشر هو رأس الشركة بتقع عليه هو ومابتتكررش',
   department_manager_of_requester: 'مدير قسم مقدم الطلب',
+  administration_manager_of_requester: 'مدير الإدارة اللي تبعها قسم مقدم الطلب',
   branch_manager_of_requester: 'مدير فرع مقدم الطلب',
   receiving_team_manager: 'مدير الفريق المستقبِل (النقل)',
   hr: 'إدارة الموارد البشرية',
@@ -67,9 +69,9 @@ export const roleDescriptions: Record<string, string> = {
   specific_employee: 'موظف محدد بالاسم يعتمد الخطوة',
 }
 
-// أدوار التصعيد — كل الأدوار عدا «موظف بعينه» و«مدير المدير المباشر» (الخادم بيرفضهم كجهة تصعيد)
+// أدوار التصعيد — كل الأدوار عدا «موظف بعينه» و«مدير المدير المباشر» و«مدير الإدارة» (الخادم بيرفضهم كجهة تصعيد)
 export const escalationRoles = Object.entries(roleLabels).filter(
-  ([id]) => id !== 'specific_employee' && id !== 'manager_of_direct_manager'
+  ([id]) => id !== 'specific_employee' && id !== 'manager_of_direct_manager' && id !== 'administration_manager_of_requester'
 )
 
 export const thresholdFieldLabels: Record<string, string> = {

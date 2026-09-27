@@ -25,7 +25,7 @@ const groups: { title: string; description: string; links: SettingsLink[] }[] = 
     links: [
       { title: 'بيانات الشركة', description: 'الاسم والشعار وبيانات التواصل المستخدمة في المستندات.', href: '/settings/company', permission: 'settings.manage', icon: Building2 },
       { title: 'الفروع', description: 'الفروع وأيام العطلة ومراكز التكلفة المرتبطة بها.', href: '/settings/branches', permission: 'org.manage', icon: GitBranch },
-      { title: 'الأقسام', description: 'الأقسام والتسلسل الإداري داخل كل فرع.', href: '/settings/departments', permission: 'org.manage', icon: Layers3 },
+      { title: 'الإدارات والأقسام', description: 'الإدارات وأقسامها والتسلسل الإداري داخل كل فرع.', href: '/settings/departments', permission: 'org.manage', icon: Layers3 },
       { title: 'الفرق', description: 'فرق العمل والأقسام التي تتبعها.', href: '/settings/teams', permission: 'org.manage', icon: UsersRound },
       { title: 'المسميات الوظيفية', description: 'المسميات المتاحة في ملفات الموظفين.', href: '/settings/job-titles', permission: 'settings.manage', icon: Briefcase },
       { title: 'الدرجات الوظيفية', description: 'الدرجات وحدود الرواتب الخاصة بها.', href: '/settings/grades', permission: 'settings.manage', icon: Award },

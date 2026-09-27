@@ -14,6 +14,8 @@ export type ApproverRole =
   // «مدير المدير المباشر» (طلب المالك 27 سبتمبر) — شوف ApproverResolver.managerOfDirectManagerOf
   | 'manager_of_direct_manager'
   | 'department_manager_of_requester'
+  // «مدير الإدارة» (قرار المالك 27 سبتمبر) — شوف ApproverResolver.administrationManagerOf
+  | 'administration_manager_of_requester'
   | 'branch_manager_of_requester'
   | 'receiving_team_manager'
   | 'hr'

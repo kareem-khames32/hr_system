@@ -4,6 +4,7 @@ import { employeeStatusLabels as statusLabels, requestStatusLabels, requestStatu
 import { useLeaveCatalog } from '@/lib/leave-catalog'
 import { currencyLabel, useCurrency } from '@/lib/currency'
 import { docTypeLabel } from '@/lib/doc-types'
+import { orgPlacement, unitPathLabel } from '@/lib/department-tree'
 
 import { useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
@@ -209,6 +210,9 @@ export default function ProfilePage() {
     branches.find((b) => b.id === id)?.name ?? '—'
   const departmentName = (id?: number | null) =>
     departments.find((d) => d.id === id)?.name ?? '—'
+  // «الإدارة ← القسم ← الفريق» (قرار المالك 27 سبتمبر): أقرب إدارة فوق قسمي — الإدارة التنفيذية في فرع برّه نطاقي باسمها العام
+  const placement = orgPlacement(employee?.departmentId, departments)
+  const administrationName = placement.administrationName ?? '—'
 
   const displayName = employee?.fullName ?? user?.displayName ?? '—'
   const avatarChar = displayName.charAt(0)
@@ -277,7 +281,7 @@ export default function ProfilePage() {
                       <div className="flex items-center gap-4 mt-2 text-sm text-gray-500">
                         <span className="flex items-center gap-1">
                           <Building2 size={14} />
-                          {departmentName(employee?.departmentId)}
+                          {unitPathLabel(employee?.departmentId, departments) || departmentName(employee?.departmentId)}
                         </span>
                         <span className="flex items-center gap-1">
                           <MapPin size={14} />
@@ -421,9 +425,15 @@ export default function ProfilePage() {
                       </span>
                     </div>
                     <div className="flex justify-between py-3 border-b border-gray-100">
+                      <span className="text-gray-500">الإدارة</span>
+                      <span className="font-medium text-gray-800">{administrationName}</span>
+                    </div>
+                    <div className="flex justify-between py-3 border-b border-gray-100">
                       <span className="text-gray-500">القسم</span>
                       <span className="font-medium text-gray-800">
-                        {departmentName(employee?.departmentId)}
+                        {placement.departments.length
+                          ? placement.departments.map((d) => d.name).join(' ← ')
+                          : placement.administration ? '—' : departmentName(employee?.departmentId)}
                       </span>
                     </div>
                     <div className="flex justify-between py-3 border-b border-gray-100">

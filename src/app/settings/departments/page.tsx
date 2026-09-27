@@ -8,13 +8,13 @@ import {
   Plus,
   Search,
   Layers,
+  Landmark,
   Edit,
   Trash2,
   MoreVertical,
   Users,
   ChevronDown,
   Building2,
-  User,
   UsersRound,
 } from 'lucide-react'
 import {
@@ -33,18 +33,26 @@ import { useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 import { EmployeePicker } from '@/components/EmployeePicker'
 import {
   EXECUTIVE_PARENT_LABEL,
+  UNIT_TYPE_LABELS,
+  childAdministrationsOf,
   departmentTreeRoots,
   foreignChildrenOf,
   hasHiddenParent,
+  isAdministration,
   isCrossBranchChild,
+  orgPlacement,
   parentAfterBranchChange,
   parentOptionsFor,
+  unitTypeOf,
+  type UnitType,
 } from '@/lib/department-tree'
 
 const emptyForm = {
   name: '',
   nameEn: '',
   code: '',
+  // «الإدارة ← القسم ← الفريق» (قرار المالك 27 سبتمبر): نوع الوحدة — الإدارة فوق الأقسام
+  unitType: 'DEPARTMENT' as UnitType,
   parentId: '',
   managerId: '',
   branchId: '',
@@ -53,6 +61,19 @@ const emptyForm = {
   isExecutive: false,
   secretaryId: '',
 }
+
+// تلميحات «التابع لـ» بنفس قواعد الخادم (org.service): الإدارة رئيسية أو تحت الإدارة التنفيذية، والقسم تحت إدارة أو قسم من فرعه
+const PARENT_HINTS = {
+  executive: '«الإدارة التنفيذية» فوق كل الإدارات والأقسام وتقبل وحدات من أي فرع — هي نفسها من غير أب',
+  ADMINISTRATION: 'الإدارة بتبقى رئيسية أو تحت «الإدارة التنفيذية» بس (من أي فرع) — مابتتحطش تحت قسم ولا تحت إدارة تانية',
+  DEPARTMENT: 'القسم تحت إدارة من فرعه، أو «الإدارة التنفيذية» من أي فرع، أو قسم من فرعه فيبقى قسم فرعي — عدا الأقسام التابعة لهذا القسم',
+}
+
+// ترتيب الوحدات في الشجرة: الإدارة التنفيذية ثم الإدارات ثم الأقسام، وبالاسم جوه كل نوع
+const unitOrder = (a: ApiDepartment, b: ApiDepartment) =>
+  Number(!!b.isExecutive) - Number(!!a.isExecutive) ||
+  Number(isAdministration(b)) - Number(isAdministration(a)) ||
+  a.name.localeCompare(b.name, 'ar')
 
 export default function DepartmentsPage() {
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
@@ -71,7 +92,7 @@ export default function DepartmentsPage() {
   const [expandedDepts, setExpandedDepts] = useState<number[]>([])
 
   const [formData, setFormData] = useState({ ...emptyForm })
-  // تنبيه لما القسم الأب يتشال لوحده (تغيير الفرع أو تعليم الإدارة التنفيذية خلّاه غلط) — مايتشالش في صمت
+  // تنبيه لما الأب يتشال لوحده (تغيير الفرع أو النوع أو تعليم الإدارة التنفيذية خلّاه غلط) — مايتشالش في صمت
   const [parentNote, setParentNote] = useState<string | null>(null)
   const { canWrite: companyWide } = useCompanyWideWrite()
 
@@ -120,7 +141,7 @@ export default function DepartmentsPage() {
   )
 
   const getChildren = (parentId: number | null) => {
-    return departments.filter((d) => (d.parentId ?? null) === parentId)
+    return departments.filter((d) => (d.parentId ?? null) === parentId).sort(unitOrder)
   }
 
   const getTeamsForDepartment = (deptId: number) => {
@@ -142,7 +163,7 @@ export default function DepartmentsPage() {
     return out
   }
 
-  const handleOpenModal = (dept?: ApiDepartment) => {
+  const handleOpenModal = (dept?: ApiDepartment, unitType: UnitType = 'DEPARTMENT') => {
     setModalError(null)
     setParentNote(null)
     if (dept) {
@@ -151,6 +172,7 @@ export default function DepartmentsPage() {
         name: dept.name,
         nameEn: dept.nameEn ?? '',
         code: dept.code ?? '',
+        unitType: unitTypeOf(dept),
         parentId: dept.parentId ? String(dept.parentId) : '',
         managerId: dept.managerEmployeeId ? String(dept.managerEmployeeId) : '',
         branchId: String(dept.branchId),
@@ -160,9 +182,17 @@ export default function DepartmentsPage() {
       })
     } else {
       setEditingDept(null)
-      setFormData({ ...emptyForm })
+      setFormData({ ...emptyForm, unitType })
     }
     setShowModal(true)
+  }
+
+  // تغيير النوع (إدارة/قسم): أب مابقاش يصلح للنوع الجديد يتشال بتنبيه — الإدارة التنفيذية إدارة دايمًا
+  const changeUnitType = (next: UnitType) => {
+    if (formData.isExecutive || next === formData.unitType) return
+    const moved = parentAfterBranchChange(departments, formData.parentId, formData.branchId, false, next)
+    setParentNote(moved.dropped ? droppedParentNote(moved.dropped, 'الإدارة بتبقى رئيسية أو تحت «الإدارة التنفيذية» بس') : null)
+    setFormData({ ...formData, unitType: next, parentId: moved.parentId })
   }
 
   const handleSave = async () => {
@@ -173,8 +203,9 @@ export default function DepartmentsPage() {
       nameEn: formData.nameEn || undefined,
       code: formData.code || undefined,
       branchId: formData.branchId ? Number(formData.branchId) : undefined,
-      // «بدون» عند التعديل = قسم رئيسي (null يمسح الأب — كان يُهمل فيبقى الأب القديم)
+      // «بدون» عند التعديل = وحدة رئيسية (null يمسح الأب — كان يُهمل فيبقى الأب القديم)
       parentId: formData.parentId ? Number(formData.parentId) : editingDept ? null : undefined,
+      unitType: formData.unitType,
       managerEmployeeId: formData.managerId ? Number(formData.managerId) : undefined,
       // الإدارة التنفيذية تتبعت من حساب على مستوى الشركة بس (الخادم بيرفض تغييرها من حساب فرع)
       ...(companyWide && (editingDept || formData.isExecutive)
@@ -215,6 +246,7 @@ export default function DepartmentsPage() {
     const deptTeams = getTeamsForDepartment(dept.id)
     const hasChildren = children.length > 0 || deptTeams.length > 0
     const isExpanded = expandedDepts.includes(dept.id)
+    const administration = isAdministration(dept)
 
     return (
       <div key={dept.id}>
@@ -240,14 +272,18 @@ export default function DepartmentsPage() {
             <div className="w-7" />
           )}
 
-          <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
-            <Layers size={20} className="text-primary-600" />
+          <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${administration ? 'bg-indigo-100' : 'bg-primary-100'}`}>
+            {administration ? <Landmark size={20} className="text-indigo-600" /> : <Layers size={20} className="text-primary-600" />}
           </div>
 
           <div className="flex-1">
-            <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2 flex-wrap">
               <span className="font-medium text-gray-800">{dept.name}</span>
               <span className="text-xs text-gray-400 font-mono">({dept.code || '—'})</span>
+              {/* «الإدارة ← القسم ← الفريق»: شارة «إدارة» فوق الأقسام */}
+              {administration && !dept.isExecutive && (
+                <span className="text-xs bg-indigo-50 text-indigo-700 px-2 py-0.5 rounded-full">{UNIT_TYPE_LABELS.ADMINISTRATION}</span>
+              )}
               {dept.isExecutive && (
                 <span className="text-xs bg-primary-50 text-primary-700 px-2 py-0.5 rounded-full">الإدارة التنفيذية</span>
               )}
@@ -282,7 +318,7 @@ export default function DepartmentsPage() {
 
         {isExpanded && hasChildren && (
           <div className="border-r-2 border-gray-100 mr-4">
-            {/* Render child departments first */}
+            {/* الإدارات ثم الأقسام (والأقسام الفرعية) تحت الوحدة */}
             {children.map((child) => renderTreeItem(child, level + 1))}
 
             {/* Then render teams */}
@@ -330,21 +366,43 @@ export default function DepartmentsPage() {
   const totalEmployees = employees.length
   // الجذور: بلا أب، أو أبوه مش ظاهر (أقسام الفرع اللي تحت الإدارة التنفيذية لحساب الفرع) — ماتختفيش من الشجرة
   const rootDepartments = departmentTreeRoots(departments)
+  // الشجرة مجمّعة: الإدارات (ومعاها اللي تحت الإدارة التنفيذية المستخبية) وتحتها أقسامها، وبعدها الأقسام اللي مالهاش إدارة
+  const administrationRoots = rootDepartments.filter((d) => isAdministration(d) || hasHiddenParent(d, departments)).sort(unitOrder)
+  const standaloneRoots = rootDepartments.filter((d) => !isAdministration(d) && !hasHiddenParent(d, departments)).sort(unitOrder)
+  const administrationsCount = departments.filter((d) => isAdministration(d)).length
+  const withoutAdministrationCount = departments.filter((d) => !isAdministration(d) && !orgPlacement(d.id, departments).administrationName).length
   const blockedParents = editingDept ? descendantIdsOf(editingDept.id) : new Set<number>()
-  // «القسم الأب»: الإدارة التنفيذية لأي فرع (فوق كل الفروع) وباقي الأقسام من فرع القسم، عدا القسم والأقسام التابعة له
+  // «التابع لـ» بقواعد الخادم: الإدارة رئيسية أو تحت الإدارة التنفيذية، والقسم تحت الإدارة التنفيذية لأي فرع أو إدارة/قسم من فرعه —
+  // عدا الوحدة نفسها والوحدات التابعة لها، والإدارة التنفيذية نفسها من غير أب
   const parentOptions = parentOptionsFor(departments, {
     branchId: formData.branchId ? Number(formData.branchId) : null,
     editingId: editingDept?.id ?? null,
     blocked: blockedParents,
     makingExecutive: formData.isExecutive,
+    unitType: formData.unitType,
   })
+  const administrationParents = parentOptions.filter((o) => o.administration)
+  const departmentParents = parentOptions.filter((o) => !o.administration)
   // أب مش ظاهر للحساب = الإدارة التنفيذية في فرع برّه نطاقه: يفضل ظاهر بقيمته عشان الحفظ مايشيلوش من غير قصد
   const hiddenParent = !!formData.parentId && !departments.some((d) => d.id === Number(formData.parentId))
-  const droppedParentNote = (name: string, why: string) => `اتشال القسم الأب «${name}» — ${why}`
-  // شيل تعليم الإدارة التنفيذية وتحتها أقسام من فروع تانية (غير فرعها بعد الحفظ) — الخادم بيرفضه
+  // أب قديم ظاهر مايصلحش بالقواعد دي (بيانات قبل «الإدارة»): يفضل مختار بقيمته — الخادم مابيفحصش أب ماتغيّرش
+  const currentParent = !hiddenParent && formData.parentId && !parentOptions.some((o) => String(o.id) === formData.parentId)
+    ? departments.find((d) => d.id === Number(formData.parentId)) ?? null
+    : null
+  const droppedParentNote = (name: string, why: string) => `اتشال الأب «${name}» — ${why}`
+  const unitWord = UNIT_TYPE_LABELS[formData.unitType]
+  const parentHint = formData.isExecutive ? PARENT_HINTS.executive : PARENT_HINTS[formData.unitType]
+  // شيل تعليم الإدارة التنفيذية وتحتها أقسام من فروع تانية (غير فرعها بعد الحفظ) أو إدارات — الخادم بيرفضه
   const unflagBlockers =
     editingDept?.isExecutive && !formData.isExecutive
       ? foreignChildrenOf({ ...editingDept, branchId: formData.branchId ? Number(formData.branchId) : editingDept.branchId }, departments)
+      : []
+  const unflagAdministrations =
+    editingDept?.isExecutive && !formData.isExecutive ? childAdministrationsOf(editingDept, departments) : []
+  // تحويل إدارة قائمة لقسم: أقسامها بتبقى أقسام فرعية تحته
+  const becomingSubDepartments =
+    editingDept && isAdministration(editingDept) && formData.unitType === 'DEPARTMENT'
+      ? departments.filter((d) => d.parentId === editingDept.id && !isAdministration(d))
       : []
 
   return (
@@ -356,22 +414,31 @@ export default function DepartmentsPage() {
             الإعدادات
           </Link>
           <ArrowRight size={16} />
-          <span className="text-gray-800">إدارة الأقسام</span>
+          <span className="text-gray-800">الإدارات والأقسام</span>
         </div>
 
         {/* Header */}
         <div className="flex items-center justify-between">
           <div>
-            <h1 className="text-2xl font-bold text-gray-800">الأقسام والإدارات</h1>
-            <p className="text-gray-500 mt-1">الهيكل التنظيمي للشركة</p>
+            <h1 className="text-2xl font-bold text-gray-800">الإدارات والأقسام</h1>
+            <p className="text-gray-500 mt-1">الهيكل التنظيمي للشركة: الإدارة ← القسم ← الفريق</p>
           </div>
-          <button
-            onClick={() => handleOpenModal()}
-            className="btn-primary flex items-center gap-2"
-          >
-            <Plus size={20} />
-            إضافة قسم جديد
-          </button>
+          <div className="flex items-center gap-2">
+            <button
+              onClick={() => handleOpenModal(undefined, 'ADMINISTRATION')}
+              className="btn-secondary flex items-center gap-2"
+            >
+              <Landmark size={20} />
+              إضافة إدارة
+            </button>
+            <button
+              onClick={() => handleOpenModal(undefined, 'DEPARTMENT')}
+              className="btn-primary flex items-center gap-2"
+            >
+              <Plus size={20} />
+              إضافة قسم
+            </button>
+          </div>
         </div>
 
         {/* Error Banner */}
@@ -381,52 +448,45 @@ export default function DepartmentsPage() {
         <div className="grid grid-cols-4 gap-4">
           <div className="card p-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 bg-primary-50 rounded-xl flex items-center justify-center">
-                <Layers size={24} className="text-primary-500" />
+              <div className="w-12 h-12 bg-indigo-50 rounded-xl flex items-center justify-center">
+                <Landmark size={24} className="text-indigo-500" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">إجمالي الأقسام</p>
-                <p className="text-2xl font-bold text-gray-800">{departments.length}</p>
+                <p className="text-sm text-gray-500">الإدارات</p>
+                <p className="text-2xl font-bold text-gray-800">{administrationsCount}</p>
               </div>
             </div>
           </div>
           <div className="card p-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 bg-success-50 rounded-xl flex items-center justify-center">
-                <Layers size={24} className="text-success-500" />
+              <div className="w-12 h-12 bg-primary-50 rounded-xl flex items-center justify-center">
+                <Layers size={24} className="text-primary-500" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">الأقسام الرئيسية</p>
-                <p className="text-2xl font-bold text-success-600">
-                  {rootDepartments.length}
-                </p>
+                <p className="text-sm text-gray-500">الأقسام</p>
+                <p className="text-2xl font-bold text-gray-800">{departments.length - administrationsCount}</p>
               </div>
             </div>
           </div>
           <div className="card p-4">
             <div className="flex items-center gap-3">
               <div className="w-12 h-12 bg-warning-50 rounded-xl flex items-center justify-center">
-                <Users size={24} className="text-warning-500" />
+                <Layers size={24} className="text-warning-500" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">إجمالي الموظفين</p>
-                <p className="text-2xl font-bold text-gray-800">{totalEmployees}</p>
+                <p className="text-sm text-gray-500">أقسام من غير إدارة</p>
+                <p className="text-2xl font-bold text-warning-600">{withoutAdministrationCount}</p>
               </div>
             </div>
           </div>
           <div className="card p-4">
             <div className="flex items-center gap-3">
-              <div className="w-12 h-12 bg-gray-100 rounded-xl flex items-center justify-center">
-                <User size={24} className="text-gray-500" />
+              <div className="w-12 h-12 bg-success-50 rounded-xl flex items-center justify-center">
+                <Users size={24} className="text-success-500" />
               </div>
               <div>
-                <p className="text-sm text-gray-500">متوسط حجم القسم</p>
-                <p className="text-2xl font-bold text-gray-800">
-                  {departments.length > 0
-                    ? Math.round(totalEmployees / departments.length)
-                    : 0}{' '}
-                  موظف
-                </p>
+                <p className="text-sm text-gray-500">إجمالي الموظفين</p>
+                <p className="text-2xl font-bold text-gray-800">{totalEmployees}</p>
               </div>
             </div>
           </div>
@@ -442,7 +502,7 @@ export default function DepartmentsPage() {
               />
               <input
                 type="text"
-                placeholder="البحث عن قسم..."
+                placeholder="البحث عن إدارة أو قسم..."
                 value={searchQuery}
                 onChange={(e) => setSearchQuery(e.target.value)}
                 className="input pr-10 w-full"
@@ -480,10 +540,18 @@ export default function DepartmentsPage() {
           </div>
         )}
 
-        {/* Tree View */}
+        {/* Tree View — الإدارة ← القسم ← القسم الفرعي ← الفريق */}
         {!loading && viewMode === 'tree' && (
           <div className="card p-4">
-            {rootDepartments.map((dept) => renderTreeItem(dept))}
+            {administrationRoots.map((dept) => renderTreeItem(dept))}
+            {standaloneRoots.length > 0 && (
+              <>
+                {administrationRoots.length > 0 && (
+                  <p className="text-xs font-semibold text-gray-400 px-3 pt-4 pb-1 border-t border-gray-100 mt-2">أقسام من غير إدارة</p>
+                )}
+                {standaloneRoots.map((dept) => renderTreeItem(dept))}
+              </>
+            )}
           </div>
         )}
 
@@ -494,13 +562,16 @@ export default function DepartmentsPage() {
               <thead className="bg-gray-50 border-b border-gray-100">
                 <tr>
                   <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
-                    القسم
+                    الاسم
+                  </th>
+                  <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
+                    النوع
                   </th>
                   <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
                     الكود
                   </th>
                   <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
-                    القسم الأب
+                    التابع لـ
                   </th>
                   <th className="text-right py-4 px-6 text-sm font-bold text-gray-700">
                     المدير
@@ -519,21 +590,26 @@ export default function DepartmentsPage() {
               <tbody className="divide-y divide-gray-100">
                 {filteredDepartments.length === 0 && (
                   <tr>
-                    <td colSpan={8} className="px-4 py-10 text-center text-gray-400">لا توجد أقسام مطابقة للبحث</td>
+                    <td colSpan={8} className="px-4 py-10 text-center text-gray-400">لا توجد إدارات أو أقسام مطابقة للبحث</td>
                   </tr>
                 )}
                 {filteredDepartments.map((dept) => (
                   <tr key={dept.id} className="hover:bg-gray-50 transition-colors">
                     <td className="py-4 px-6">
                       <div className="flex items-center gap-3">
-                        <div className="w-10 h-10 bg-primary-100 rounded-xl flex items-center justify-center">
-                          <Layers size={20} className="text-primary-600" />
+                        <div className={`w-10 h-10 rounded-xl flex items-center justify-center ${isAdministration(dept) ? 'bg-indigo-100' : 'bg-primary-100'}`}>
+                          {isAdministration(dept) ? <Landmark size={20} className="text-indigo-600" /> : <Layers size={20} className="text-primary-600" />}
                         </div>
                         <div>
                           <p className="font-medium text-gray-800">{dept.name}</p>
                           <p className="text-sm text-gray-500">{dept.nameEn ?? ''}</p>
                         </div>
                       </div>
+                    </td>
+                    <td className="py-4 px-6">
+                      <span className={`text-xs px-2 py-0.5 rounded-full ${isAdministration(dept) ? 'bg-indigo-50 text-indigo-700' : 'bg-gray-100 text-gray-600'}`}>
+                        {dept.isExecutive ? 'الإدارة التنفيذية' : UNIT_TYPE_LABELS[unitTypeOf(dept)]}
+                      </span>
                     </td>
                     <td className="py-4 px-6">
                       <span className="font-mono text-sm text-primary-600 bg-primary-50 px-2 py-1 rounded">
@@ -590,7 +666,7 @@ export default function DepartmentsPage() {
                               </button>
                               <button
                                 disabled
-                                title="الحذف غير متاح — عطّل القسم من نافذة التعديل"
+                                title="الحذف غير متاح — عطّل الوحدة من نافذة التعديل"
                                 className="w-full flex items-center gap-2 px-4 py-2 text-danger-600 opacity-50 cursor-not-allowed"
                               >
                                 <Trash2 size={16} />
@@ -614,7 +690,9 @@ export default function DepartmentsPage() {
             <div className="bg-white rounded-2xl w-full max-w-xl max-h-[90vh] overflow-y-auto">
               <div className="p-6 border-b border-gray-100">
                 <h2 className="text-xl font-bold text-gray-800">
-                  {editingDept ? 'تعديل القسم' : 'إضافة قسم جديد'}
+                  {editingDept
+                    ? `تعديل ${formData.unitType === 'ADMINISTRATION' ? 'الإدارة' : 'القسم'}`
+                    : formData.unitType === 'ADMINISTRATION' ? 'إضافة إدارة جديدة' : 'إضافة قسم جديد'}
                 </h2>
               </div>
 
@@ -624,10 +702,41 @@ export default function DepartmentsPage() {
                   <div className="bg-red-50 text-red-700 rounded-xl p-4">{modalError}</div>
                 )}
 
+                {/* نوع الوحدة: إدارة (فوق الأقسام) أو قسم */}
+                <div>
+                  <span className="block text-sm font-medium text-gray-700 mb-2">النوع *</span>
+                  <div className="inline-flex items-center gap-1 bg-gray-100 rounded-xl p-1" role="group" aria-label="نوع الوحدة">
+                    {(['ADMINISTRATION', 'DEPARTMENT'] as const).map((type) => (
+                      <button
+                        key={type}
+                        type="button"
+                        aria-pressed={formData.unitType === type}
+                        disabled={formData.isExecutive && type === 'DEPARTMENT'}
+                        onClick={() => changeUnitType(type)}
+                        className={`px-4 py-1.5 rounded-lg text-sm font-medium transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${
+                          formData.unitType === type ? 'bg-white text-primary-600 shadow' : 'text-gray-600 hover:text-gray-800'
+                        }`}
+                      >
+                        {UNIT_TYPE_LABELS[type]}
+                      </button>
+                    ))}
+                  </div>
+                  <p className="text-xs text-gray-400 mt-1">
+                    {formData.isExecutive
+                      ? '«الإدارة التنفيذية» نوعها «إدارة» دايمًا'
+                      : '«إدارة» فوق الأقسام: أقسام فرعها بتتحط تحتها. تحويل إدارة لقسم بيخلّي أقسامها أقسام فرعية'}
+                  </p>
+                  {becomingSubDepartments.length > 0 && (
+                    <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-1">
+                      أقسامها ({becomingSubDepartments.length}) زي «{becomingSubDepartments[0].name}» هتبقى أقسام فرعية تحت القسم ده
+                    </p>
+                  )}
+                </div>
+
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      اسم القسم (عربي) *
+                      اسم {unitWord === 'إدارة' ? 'الإدارة' : 'القسم'} (عربي) *
                     </label>
                     <input
                       type="text"
@@ -636,12 +745,12 @@ export default function DepartmentsPage() {
                         setFormData({ ...formData, name: e.target.value })
                       }
                       className="input w-full"
-                      placeholder="مثال: الموارد البشرية"
+                      placeholder={formData.unitType === 'ADMINISTRATION' ? 'مثال: الإدارة المالية' : 'مثال: الموارد البشرية'}
                     />
                   </div>
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      اسم القسم (إنجليزي)
+                      الاسم (إنجليزي)
                     </label>
                     <input
                       type="text"
@@ -659,7 +768,7 @@ export default function DepartmentsPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label className="block text-sm font-medium text-gray-700 mb-2">
-                      كود القسم *
+                      الكود *
                     </label>
                     <input
                       type="text"
@@ -673,10 +782,11 @@ export default function DepartmentsPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      القسم الأب
+                    <label htmlFor="department-parent" className="block text-sm font-medium text-gray-700 mb-2">
+                      {formData.isExecutive ? 'التابع لـ' : formData.unitType === 'ADMINISTRATION' ? 'الإدارة الأعلى' : 'الإدارة التابع لها / القسم الأب'}
                     </label>
                     <select
+                      id="department-parent"
                       value={formData.parentId}
                       onChange={(e) => {
                         setParentNote(null)
@@ -684,17 +794,33 @@ export default function DepartmentsPage() {
                       }}
                       className="input w-full"
                     >
-                      <option value="">بدون (قسم رئيسي)</option>
+                      <option value="">
+                        {formData.isExecutive
+                          ? 'بدون — فوق كل الإدارات والأقسام'
+                          : formData.unitType === 'ADMINISTRATION' ? 'بدون (إدارة رئيسية)' : 'بدون (قسم رئيسي من غير إدارة)'}
+                      </option>
                       {hiddenParent && <option value={formData.parentId}>{EXECUTIVE_PARENT_LABEL}</option>}
-                      {parentOptions.map((o) => (
-                        <option key={o.id} value={o.id}>
-                          {o.label}
-                        </option>
-                      ))}
+                      {currentParent && <option value={formData.parentId}>{currentParent.name} (الحالي)</option>}
+                      {administrationParents.length > 0 && (
+                        <optgroup label="الإدارات">
+                          {administrationParents.map((o) => (
+                            <option key={o.id} value={o.id}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
+                      {departmentParents.length > 0 && (
+                        <optgroup label="الأقسام — يبقى قسم فرعي تحته">
+                          {departmentParents.map((o) => (
+                            <option key={o.id} value={o.id}>
+                              {o.label}
+                            </option>
+                          ))}
+                        </optgroup>
+                      )}
                     </select>
-                    <p className="text-xs text-gray-400 mt-1">
-                      «الإدارة التنفيذية» فوق كل الفروع وتقبل أقسام من أي فرع؛ باقي الأقسام من فرع القسم نفسه، عدا الأقسام التابعة لهذا القسم
-                    </p>
+                    <p className="text-xs text-gray-400 mt-1">{parentHint}</p>
                     {parentNote && (
                       <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2 mt-1">{parentNote}</p>
                     )}
@@ -704,7 +830,7 @@ export default function DepartmentsPage() {
                 <div className="grid grid-cols-2 gap-4">
                   <div>
                     <label htmlFor="department-manager" className="block text-sm font-medium text-gray-700 mb-2">
-                      مدير القسم *
+                      مدير {unitWord === 'إدارة' ? 'الإدارة' : 'القسم'} *
                     </label>
                     <EmployeePicker
                       id="department-manager"
@@ -715,7 +841,9 @@ export default function DepartmentsPage() {
                       required
                     />
                     <p className="text-xs text-gray-400 mt-1">
-                      يُستخدم في دورات الاعتماد (رئيس القسم)
+                      {formData.unitType === 'ADMINISTRATION'
+                        ? 'يُستخدم في دورات الاعتماد (خطوة «مدير الإدارة»)'
+                        : 'يُستخدم في دورات الاعتماد (رئيس القسم)'}
                     </p>
                   </div>
                   <div>
@@ -726,7 +854,7 @@ export default function DepartmentsPage() {
                       value={formData.branchId}
                       onChange={(e) => {
                         // الإدارة التنفيذية تفضل أب لأي فرع؛ أب من فرع تاني يتشال بتنبيه — مايفضلش أب غلط مستخبي
-                        const next = parentAfterBranchChange(departments, formData.parentId, e.target.value, formData.isExecutive)
+                        const next = parentAfterBranchChange(departments, formData.parentId, e.target.value, formData.isExecutive, formData.unitType)
                         setParentNote(next.dropped ? droppedParentNote(next.dropped, 'من فرع تاني؛ اختار أب من فرع القسم أو «الإدارة التنفيذية»') : null)
                         setFormData({
                           ...formData,
@@ -743,6 +871,9 @@ export default function DepartmentsPage() {
                         </option>
                       ))}
                     </select>
+                    {formData.unitType === 'ADMINISTRATION' && (
+                      <p className="text-xs text-gray-400 mt-1">الإدارة في فرع واحد، وأقسامها من نفس الفرع</p>
+                    )}
                   </div>
                 </div>
 
@@ -755,7 +886,7 @@ export default function DepartmentsPage() {
                     }
                     className="w-4 h-4 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                   />
-                  <span className="text-sm text-gray-700">قسم نشط</span>
+                  <span className="text-sm text-gray-700">{formData.unitType === 'ADMINISTRATION' ? 'إدارة نشطة' : 'قسم نشط'}</span>
                 </label>
 
                 {/* الهيكل التنظيمي: الإدارة التنفيذية والسكرتير التنفيذي (لكل الشركة) */}
@@ -767,19 +898,20 @@ export default function DepartmentsPage() {
                         checked={formData.isExecutive}
                         onChange={(e) => {
                           const checked = e.target.checked
-                          // الإدارة التنفيذية أبوها من فرعها بس: أب من فرع تاني (الإدارة التنفيذية الحالية) يتشال بتنبيه
+                          // الإدارة التنفيذية «إدارة» فوق كل الوحدات من غير أب: الأب القائم يتشال بتنبيه
                           const next = checked
                             ? parentAfterBranchChange(departments, formData.parentId, formData.branchId, true)
                             : { parentId: formData.parentId, dropped: null }
-                          if (next.dropped) setParentNote(droppedParentNote(next.dropped, 'الإدارة التنفيذية أبوها من فرعها بس'))
-                          setFormData({ ...formData, isExecutive: checked, secretaryId: checked ? formData.secretaryId : '', parentId: next.parentId })
+                          if (next.dropped) setParentNote(droppedParentNote(next.dropped, 'الإدارة التنفيذية فوق كل الإدارات والأقسام من غير أب'))
+                          setFormData({ ...formData, isExecutive: checked, secretaryId: checked ? formData.secretaryId : '', parentId: next.parentId,
+                            unitType: checked ? 'ADMINISTRATION' : formData.unitType })
                         }}
                         className="w-4 h-4 mt-0.5 rounded border-gray-300 text-primary-600 focus:ring-primary-500"
                       />
                       <span>
                         <span className="block text-sm font-medium text-gray-700">الإدارة التنفيذية</span>
                         <span className="block text-xs text-gray-400">
-                          بتظهر فوق الهيكل التنظيمي وفوق كل الفروع (تقبل أقسام من أي فرع)، ومدير القسم ده هو الرئيس التنفيذي. قسم واحد بس في الشركة.
+                          بتظهر فوق الهيكل التنظيمي وفوق كل الفروع (تقبل إدارات وأقسام من أي فرع)، ومديرها هو الرئيس التنفيذي. إدارة واحدة بس في الشركة.
                         </span>
                       </span>
                     </label>
@@ -788,15 +920,23 @@ export default function DepartmentsPage() {
                         .filter((d) => d.isExecutive && d.id !== editingDept?.id)
                         .map((d) => {
                           const foreign = foreignChildrenOf(d, departments).filter((c) => c.id !== editingDept?.id)
+                          const administrations = childAdministrationsOf(d, departments).filter((c) => c.id !== editingDept?.id)
                           return (
                             <p key={d.id} className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
                               «{d.name}» متعلّم إدارة تنفيذية دلوقتي — هيتشال منه التعليم والسكرتير بعد الحفظ
-                              {foreign.length > 0 &&
+                              {administrations.length > 0 &&
+                                ` — بس تحته إدارات (زي «${administrations[0].name}»)، فالحفظ هيترفض لحد ما تخليها إدارات رئيسية`}
+                              {administrations.length === 0 && foreign.length > 0 &&
                                 ` — بس تحته أقسام من فروع تانية (زي «${foreign[0].name}»)، فالحفظ هيترفض لحد ما تنقلها`}
                             </p>
                           )
                         })}
-                    {/* شيل التعليم من الإدارة التنفيذية وتحتها أقسام من فروع تانية: الخادم بيرفض — التنبيه قبل الحفظ */}
+                    {/* شيل التعليم من الإدارة التنفيذية وتحتها إدارات أو أقسام من فروع تانية: الخادم بيرفض — التنبيه قبل الحفظ */}
+                    {unflagAdministrations.length > 0 && (
+                      <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
+                        تحت الإدارة دي إدارات (زي «{unflagAdministrations[0].name}») — خلّيها إدارات رئيسية الأول قبل شيل «الإدارة التنفيذية»
+                      </p>
+                    )}
                     {unflagBlockers.length > 0 && (
                       <p className="text-xs text-amber-700 bg-amber-50 rounded-lg px-3 py-2">
                         تحت القسم ده أقسام من فروع تانية (زي «{unflagBlockers[0].name}») — انقلها الأول قبل شيل «الإدارة التنفيذية»
@@ -823,7 +963,7 @@ export default function DepartmentsPage() {
                 ) : (
                   editingDept?.isExecutive && (
                     <p className="text-xs text-gray-500 bg-gray-50 rounded-lg px-3 py-2">
-                      القسم ده «الإدارة التنفيذية» — تغييرها والسكرتير التنفيذي من حساب على مستوى الشركة
+                      الإدارة دي «الإدارة التنفيذية» — تغييرها والسكرتير التنفيذي من حساب على مستوى الشركة
                     </p>
                   )
                 )}
@@ -837,7 +977,11 @@ export default function DepartmentsPage() {
                   إلغاء
                 </button>
                 <button onClick={handleSave} disabled={saving} className="btn-primary">
-                  {saving ? 'جارٍ الحفظ...' : editingDept ? 'حفظ التغييرات' : 'إضافة القسم'}
+                  {saving
+                    ? 'جارٍ الحفظ...'
+                    : editingDept
+                      ? 'حفظ التغييرات'
+                      : formData.unitType === 'ADMINISTRATION' ? 'إضافة الإدارة' : 'إضافة القسم'}
                 </button>
               </div>
             </div>
