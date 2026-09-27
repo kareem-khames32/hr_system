@@ -71,6 +71,7 @@ import {
 import { docTypeLabel } from '@/lib/doc-types'
 import { describeEmployeeHistory, type EmployeeHistoryView } from '@/lib/employee-history'
 import { displayEmployeeAddress } from '@/lib/employee-form-fields'
+import { orgPlacement } from '@/lib/department-tree'
 import { loadCurrency, currencyLabel, useCurrency } from '@/lib/currency'
 import EmployeeSuspensionDialog from '@/components/EmployeeSuspensionDialog'
 import { EmployeePayrollRunsCard } from '@/components/payroll/PayrollRunMoveMemberModal'
@@ -109,6 +110,8 @@ interface EmployeeVM {
   personalEmail: string
   phone: string
   phoneAlt: string
+  // «الإدارة ← القسم ← الفريق» (قرار المالك 27 سبتمبر): أقرب إدارة فوق قسمه، والقسم بمساره تحتها («—» لو هو على الإدارة مباشرة)
+  administration: string
   department: string
   jobTitle: string
   grade: string
@@ -536,6 +539,8 @@ export default function EmployeeProfilePage() {
         const manager = e.managerEmployeeId
           ? empById.get(e.managerEmployeeId)
           : undefined
+        // «الإدارة ← القسم ← الفريق»: صعودًا من قسمه لأقرب إدارة (نفس حل «مدير الإدارة»)؛ الإدارة التنفيذية المستخبية عن حساب الفرع باسمها العام
+        const placement = orgPlacement(e.departmentId, departments)
 
         setEmployee({
           id: e.id,
@@ -548,8 +553,10 @@ export default function EmployeeProfilePage() {
           personalEmail: val(e.personalEmail),
           phone: e.phone ?? '—',
           phoneAlt: val(e.phoneAlt),
-          department:
-            e.departmentId != null ? deptById.get(e.departmentId) ?? '—' : '—',
+          administration: placement.administrationName ?? '—',
+          department: placement.departments.length
+            ? placement.departments.map((d) => d.name).join(' ← ')
+            : placement.administration || e.departmentId == null ? '—' : deptById.get(e.departmentId) ?? '—',
           jobTitle: e.jobTitle ?? '—',
           grade:
             e.gradeId != null
@@ -959,7 +966,7 @@ export default function EmployeeProfilePage() {
                   </div>
                   <div className="flex items-center gap-2 text-sm text-gray-600">
                     <Building2 size={16} className="text-gray-400" />
-                    <span>{employee.department}</span>
+                    <span>{[employee.administration, employee.department].filter((part) => part !== '—').join(' ← ') || '—'}</span>
                   </div>
                   <div className="flex items-center gap-2 text-sm text-gray-600">
                     <MapPin size={16} className="text-gray-400" />
@@ -1337,6 +1344,10 @@ export default function EmployeeProfilePage() {
                     </div>
                     <div className="flex items-center justify-between py-2 border-b border-gray-100">
                       <span className="text-gray-500">الإدارة</span>
+                      <span className="font-medium text-gray-800">{employee.administration}</span>
+                    </div>
+                    <div className="flex items-center justify-between py-2 border-b border-gray-100">
+                      <span className="text-gray-500">القسم</span>
                       <span className="font-medium text-gray-800">{employee.department}</span>
                     </div>
                     <div className="flex items-center justify-between py-2 border-b border-gray-100">

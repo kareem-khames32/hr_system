@@ -265,6 +265,8 @@ const APPROVER_ROLES = [
   // «مدير المدير المباشر» — خطوة اعتماد بس، مش هدف تصعيد (validateChainSteps)
   'manager_of_direct_manager',
   'department_manager_of_requester',
+  // «مدير الإدارة» — خطوة اعتماد بس، مش هدف تصعيد (validateChainSteps)
+  'administration_manager_of_requester',
   'branch_manager_of_requester',
   'receiving_team_manager',
   'hr',
@@ -1142,6 +1144,10 @@ export class SettingsController {
       // التصعيد بيغيّر دور الخطوة بس ومابيحلّش معتمد جديد، فالتصعيد لـ«مدير المدير المباشر» كان هيوقف الطلب
       if (step.escalateTo === 'manager_of_direct_manager') {
         throw new BadRequestException('«مدير المدير المباشر» بيتحط كخطوة اعتماد في السلسلة، مش كجهة تصعيد — اختار جهة تصعيد تانية')
+      }
+      // نفس السبب لـ«مدير الإدارة»: التصعيد مابيحلّش مدير الإدارة، فالخطوة كانت هتقف
+      if (step.escalateTo === 'administration_manager_of_requester') {
+        throw new BadRequestException('«مدير الإدارة» بيتحط كخطوة اعتماد في السلسلة، مش كجهة تصعيد — اختار جهة تصعيد تانية')
       }
       if (step.approverRole === 'specific_employee') {
         if (!step.specificEmployeeId) throw new BadRequestException('خطوة «موظف بعينه» تحتاج تحديد الموظف')

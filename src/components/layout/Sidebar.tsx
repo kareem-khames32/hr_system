@@ -207,7 +207,7 @@ const adminMenuDefs: MenuItem[] = [
     children: [
       { label: 'الإعدادات العامة', href: '/settings', perm: 'settings.manage' },
       { label: 'الفروع', href: '/settings/branches', perm: 'org.manage' },
-      { label: 'الأقسام والإدارات', href: '/settings/departments', perm: 'org.manage' },
+      { label: 'الإدارات والأقسام', href: '/settings/departments', perm: 'org.manage' },
       { label: 'الفرق', href: '/settings/teams', perm: 'org.manage' },
       { label: 'المسميات الوظيفية', href: '/settings/job-titles', perm: 'settings.manage' },
       { label: 'الدرجات الوظيفية', href: '/settings/grades', perm: 'settings.manage' },

@@ -106,6 +106,7 @@ const roleLabels: Record<string, string> = {
   direct_manager_of_requester: 'المدير المباشر',
   manager_of_direct_manager: 'مدير المدير المباشر',
   department_manager_of_requester: 'مدير القسم',
+  administration_manager_of_requester: 'مدير الإدارة',
   branch_manager_of_requester: 'مدير الفرع',
   receiving_team_manager: 'المدير المستقبِل',
   hr: 'الموارد البشرية',

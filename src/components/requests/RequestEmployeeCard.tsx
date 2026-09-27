@@ -14,6 +14,8 @@ export default function RequestEmployeeCard({ requester, submittedBy }: {
   if (!requester) return null
   const rows: Array<[string, string | null]> = [
     ['المسمى الوظيفي', requester.jobTitle],
+    // «الإدارة ← القسم ← الفريق» (قرار المالك 27 سبتمبر): أقرب إدارة فوق قسمه
+    ['الإدارة', requester.administrationName],
     ['القسم', requester.departmentName],
     ['الفرع', requester.branchName],
     ['الفريق', requester.teamName],

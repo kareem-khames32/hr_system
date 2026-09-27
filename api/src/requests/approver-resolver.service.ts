@@ -5,6 +5,7 @@ import { Employee } from '../employees/employee.entity'
 import { Team } from '../org/entities/team.entity'
 import { Department } from '../org/entities/department.entity'
 import { Branch } from '../org/entities/branch.entity'
+import { unitChainUp } from '../org/department-tree'
 import type { JwtPayload } from '../auth/auth.service'
 import { ApproverRole } from './entities/approval-step.entity'
 import type { ApprovalAction } from './entities/request-approval.entity'
@@ -35,6 +36,15 @@ export interface ResolvedStep {
   dueAt: string | null // ISO — يُحسب من slaDays وقت التقديم
   actedAt: string | null
   action: ApprovalAction | null
+}
+
+// حل خطوة «مدير الإدارة»: المعتمد، أو سبب إيقاف التقديم برسالة بتسمّي القسم أو الإدارة
+export interface AdministrationApproval {
+  approverId: number | null
+  // الإدارة اللي الخطوة وقعت على مديرها (أو اللي وقفت عندها)
+  administrationId: number | null
+  // null = المعتمد اتحدد
+  blocked: string | null
 }
 
 @Injectable()
@@ -102,6 +112,44 @@ export class ApproverResolver {
     return false
   }
 
+  // الوحدات من قسم الموظف لفوق بالترتيب (بادئة بقسمه) — «مدير الإدارة» و«الإدارة» في بطاقة صاحب الطلب (org/department-tree)
+  unitChainOf(departmentId: number | null | undefined): Promise<Department[]> {
+    return unitChainUp(departmentId, (id) => this.departments.findOne({ where: { id },
+      select: { id: true, name: true, parentId: true, unitType: true, managerEmployeeId: true, branchId: true, isExecutive: true } }))
+  }
+
+  // «مدير الإدارة» (قرار المالك 27 سبتمبر: الهيكل «الإدارة ← القسم ← الفريق»): صعودًا من قسم مقدّم الطلب الحالي بـparentId، بادئًا
+  // بالقسم نفسه، أول وحدة نوعها «إدارة» هي إدارته — والصعود ممكن يوصل الإدارة التنفيذية برابطها لفرع تاني، وده مقصود لأن الهيكل
+  // حاطط القسم تحتها. المعتمد مدير الإدارة دي؛ ولو هو مقدّم الطلب نفسه: مدير الإدارة اللي فوقها وهكذا. السرّي مابيتخطّاهاش (زي
+  // «مدير القسم»). التقديم بيقف برسالة بتسمّي الوحدة: مفيش قسم، أو مفيش إدارة فوق القسم، أو الإدارة مالهاش مدير، أو المدير الوحيد
+  // اللي لقيناه هو مقدّم الطلب
+  async administrationManagerOf(employeeId: number): Promise<AdministrationApproval> {
+    const emp = await this.employees.findOne({ where: { id: employeeId }, select: { id: true, departmentId: true } })
+    const chain = await this.unitChainOf(emp?.departmentId)
+    if (!chain.length) {
+      return { approverId: null, administrationId: null,
+        blocked: 'مقدّم الطلب مش مسجّل في قسم، فمفيش «مدير الإدارة» — سجّل قسمه في ملفه أو عدّل سلسلة الاعتماد' }
+    }
+    let own: Department | null = null
+    for (const unit of chain) {
+      if (unit.unitType !== 'ADMINISTRATION') continue
+      own = own ?? unit
+      if (!unit.managerEmployeeId) {
+        return { approverId: null, administrationId: unit.id,
+          blocked: `الإدارة «${unit.name}» مالهاش مدير — حدّد مدير الإدارة من «الإدارات والأقسام» أو عدّل سلسلة الاعتماد` }
+      }
+      // مقدّم الطلب هو مدير إدارته: الخطوة لمدير الإدارة اللي فوقها
+      if (unit.managerEmployeeId === employeeId) continue
+      return { approverId: unit.managerEmployeeId, administrationId: unit.id, blocked: null }
+    }
+    if (!own) {
+      return { approverId: null, administrationId: null,
+        blocked: `قسم مقدّم الطلب «${chain[0].name}» مش تحت أي إدارة، فمفيش «مدير الإدارة» — حطّ القسم تحت إدارة من «الإدارات والأقسام» أو عدّل سلسلة الاعتماد` }
+    }
+    return { approverId: null, administrationId: own.id,
+      blocked: `مقدّم الطلب هو نفسه مدير «${own.name}» ومفيش إدارة فوقها ليها مدير غيره — عدّل سلسلة الاعتماد أو حطّ الإدارة تحت «الإدارة التنفيذية»` }
+  }
+
   // مدير قسم الموظف
   async departmentManagerOf(employeeId: number): Promise<number | null> {
     const emp = await this.employees.findOne({ where: { id: employeeId } })
@@ -134,6 +182,8 @@ export class ApproverResolver {
         return (await this.managerOfDirectManagerOf(requesterId)).approverId
       case 'department_manager_of_requester':
         return this.departmentManagerOf(requesterId)
+      case 'administration_manager_of_requester':
+        return (await this.administrationManagerOf(requesterId)).approverId
       case 'branch_manager_of_requester':
         return this.branchManagerOf(requesterId)
       case 'specific_employee':
@@ -181,6 +231,7 @@ export class ApproverResolver {
       case 'direct_manager_of_requester':
       case 'manager_of_direct_manager':
       case 'department_manager_of_requester':
+      case 'administration_manager_of_requester':
       case 'branch_manager_of_requester':
       case 'receiving_team_manager':
       case 'specific_employee':

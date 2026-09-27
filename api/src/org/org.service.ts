@@ -17,7 +17,8 @@ import { beginCalendarChange, finishCalendarChange, readCalendarSource } from '.
 import { attendanceRuleToday, lockAttendanceRuleMutation } from '../attendance/attendance-rule-history'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from './entities/branch.entity'
-import { Department } from './entities/department.entity'
+import { Department, DEPARTMENT_UNIT_TYPES, UNIT_TYPE_MESSAGE } from './entities/department.entity'
+import type { DepartmentUnitType } from './entities/department.entity'
 import { Team } from './entities/team.entity'
 import {
   CreateBranchDto,
@@ -32,6 +33,13 @@ import {
 // هيتشال منها بالحفظ فتبقى قسم عادي فوق قسم من فرع تاني
 const NEW_EXECUTIVE_UNDER_FOREIGN_PARENT =
   'القسم الأب في فرع مختلف — والقسم ده هيبقى «الإدارة التنفيذية» بدل أبوه، والإدارة التنفيذية مايبقاش أبوها من فرع تاني: اختر أباً من فرعه أو خليه قسم رئيسي'
+
+// «الإدارة ← القسم ← الفريق» (قرار المالك 27 سبتمبر): الإدارة مابتتحطش غير تحت الإدارة التنفيذية، والإدارة التنفيذية نفسها «إدارة»
+// فمالهاش أب (مابتبقاش تحت نفسها، والإدارة التنفيذية الحالية بيتشال تعليمها لما وحدة تانية تتعلّم)
+const EXECUTIVE_HAS_NO_PARENT = '«الإدارة التنفيذية» فوق كل الإدارات والأقسام، فمالهاش أب — خليها إدارة رئيسية (من غير أب)'
+const EXECUTIVE_IS_ADMINISTRATION = '«الإدارة التنفيذية» نوعها «إدارة» دايمًا — مينفعش تتحول «قسم»'
+const MOVE_ADMINISTRATIONS = 'خلّي الإدارات دي رئيسية (من غير أب) الأول'
+const unitWord = (unit: Pick<Department, 'unitType'>) => (unit.unitType === 'ADMINISTRATION' ? 'إدارة' : 'قسم')
 
 @Injectable()
 export class OrgService {
@@ -192,7 +200,8 @@ export class OrgService {
   }
 
   // «الإدارة التنفيذية فوق كل الفروع» (طلب المالك 27 سبتمبر): الأب من فرع تاني مسموح لو هو الإدارة التنفيذية بس، وربط قسم
-  // تحتها لحساب نطاقه يغطي فرعها (زي تغيير الأب في التعديل). أي أب تاني من فرع مختلف مرفوض بنفس الرسالة القديمة
+  // تحتها لحساب نطاقه يغطي فرعها (زي تغيير الأب في التعديل). أي أب تاني من فرع مختلف مرفوض بنفس الرسالة القديمة.
+  // نوع الوحدة («إدارة» أو «قسم») وأبوها بقواعد assertUnitParent — من غير نوع: قسم، والإدارة التنفيذية إدارة
   async createDepartment(dto: CreateDepartmentDto, scope: BranchScope) {
     if (!inBranchScope(scope, dto.branchId)) {
       throw new ForbiddenException(`لا يمكنك إسناد فرع خارج نطاق ${scopeWord(scope)}`)
@@ -203,8 +212,9 @@ export class OrgService {
       await this.lockDepartmentTree(em)
       const repo = em.getRepository(Department)
       let foreignParent = false
+      let parent: Department | null = null
       if (dto.parentId) {
-        const parent = await repo.findOne({ where: { id: dto.parentId } })
+        parent = await repo.findOne({ where: { id: dto.parentId } })
         if (!parent) throw new BadRequestException('القسم الأب غير موجود')
         if (parent.branchId !== dto.branchId) {
           if (!parent.isExecutive) throw new BadRequestException('القسم الأب في فرع مختلف')
@@ -216,12 +226,39 @@ export class OrgService {
       }
       await this.assertManagerExists(dto.managerEmployeeId, scope)
       const makesExecutive = await this.prepareExecutiveFields(dto, null, scope)
-      if (makesExecutive) {
-        if (foreignParent) throw new BadRequestException(NEW_EXECUTIVE_UNDER_FOREIGN_PARENT)
-        await this.assertExecutivesReleasable(em, null)
-      }
-      return this.saveDepartment(em, repo.create(dto as Partial<Department>), makesExecutive)
+      if (makesExecutive && foreignParent) throw new BadRequestException(NEW_EXECUTIVE_UNDER_FOREIGN_PARENT)
+      const unitType = this.unitTypeAfter(dto, null, makesExecutive, makesExecutive)
+      this.assertUnitParent(unitType, makesExecutive, parent)
+      if (makesExecutive) await this.assertExecutivesReleasable(em, null)
+      return this.saveDepartment(em, repo.create({ ...dto, unitType } as Partial<Department>), makesExecutive)
     })
+  }
+
+  // نوع الوحدة بعد الحفظ: المبعوت، وإلا تعليمها «الإدارة التنفيذية» بيخلّيها «إدارة» تلقائي (بيتحط في dto للحفظ)، وإلا نوعها
+  // الحالي (الجديدة: «قسم»). القيمة بتتفحص هنا كمان مش في الـDTO بس، والإدارة التنفيذية بعد الحفظ مابتتحولش «قسم»
+  private unitTypeAfter(dto: { unitType?: DepartmentUnitType }, current: Department | null, makesExecutive: boolean,
+    executiveAfter: boolean): DepartmentUnitType {
+    if (dto.unitType !== undefined && !DEPARTMENT_UNIT_TYPES.includes(dto.unitType)) {
+      throw new BadRequestException(UNIT_TYPE_MESSAGE)
+    }
+    if (dto.unitType === 'DEPARTMENT' && executiveAfter) throw new BadRequestException(EXECUTIVE_IS_ADMINISTRATION)
+    if (makesExecutive) dto.unitType = 'ADMINISTRATION'
+    return dto.unitType ?? current?.unitType ?? 'DEPARTMENT'
+  }
+
+  // «الإدارة ← القسم ← الفريق» (قرار المالك 27 سبتمبر) — أبو الوحدة بعد الحفظ حسب نوعها:
+  // - الإدارة: رئيسية، أو تحت «الإدارة التنفيذية» (من أي فرع، بقاعدة الفروع القائمة) — مش تحت قسم ولا تحت إدارة تانية مش تنفيذية.
+  //   والإدارة التنفيذية نفسها مالهاش أب: مابتبقاش تحت نفسها، والإدارة التنفيذية الحالية هيتشال تعليمها لو وحدة تانية اتعلّمت.
+  // - القسم: رئيسي، أو تحت إدارة من فرعه، أو الإدارة التنفيذية من أي فرع، أو قسم من فرعه (قسم فرعي) — قاعدة الفروع القائمة لوحدها.
+  // parent = الأب بعد الحفظ (null = من غير أب)، executiveAfter = الوحدة هتبقى الإدارة التنفيذية بعد الحفظ
+  private assertUnitParent(typeAfter: DepartmentUnitType, executiveAfter: boolean, parent: Department | null) {
+    if (typeAfter !== 'ADMINISTRATION' || !parent) return
+    if (executiveAfter) throw new BadRequestException(EXECUTIVE_HAS_NO_PARENT)
+    if (!parent.isExecutive) {
+      throw new BadRequestException(
+        `الإدارة مابتتحطش تحت «${parent.name}» (${unitWord(parent)}) — الإدارة بتبقى رئيسية (من غير أب) أو تحت «الإدارة التنفيذية» بس`
+      )
+    }
   }
 
   // الهيكل التنظيمي: «الإدارة التنفيذية» قسم واحد في الشركة (مديره الرئيس التنفيذي) ومعاه السكرتير التنفيذي.
@@ -332,7 +369,10 @@ export class OrgService {
   // - نقل قسم عادي لفرع آخر لا يترك أقسامه الفرعية في فرعها؛ الإدارة التنفيذية تتنقل عادي وأقسامها في أي فرع.
   // - القسم العادي عمره ما يبقى أب لقسم من فرع تاني: شيل تعليم الإدارة التنفيذية — صريح (isExecutive: false) أو ضمني (تعليم
   //   قسم تاني) — مرفوض طول ما تحتها أقسام من فروع تانية.
-  // يُفحص عند تغيّر الأب أو الفرع أو التعليم فقط — الهيكل القائم لا يمنع تعديل باقي الحقول
+  // - نوع الوحدة (قرار المالك 27 سبتمبر): أبوها بعد الحفظ بقواعد assertUnitParent — ومنه تحويل قسم لإدارة (أبوه لازم يصلح أب
+  //   لإدارة). تحويل إدارة لقسم مسموح وأقسامها بتبقى أقسام فرعية، إلا الإدارة التنفيذية. والإدارة مابتفضلش تحت وحدة مابقتش
+  //   الإدارة التنفيذية: شيل التعليم أو تحويلها «قسم» مرفوض طول ما تحتها إدارات.
+  // يُفحص عند تغيّر الأب أو الفرع أو التعليم أو النوع فقط — الهيكل القائم لا يمنع تعديل باقي الحقول
   private async assertDepartmentTree(
     em: EntityManager,
     id: number,
@@ -345,11 +385,15 @@ export class OrgService {
     const parentId = dto.parentId !== undefined ? dto.parentId : dept.parentId
     // prepareExecutiveFields بيشيل isExecutive من dto لو ماتغيّرش
     const executiveAfter = dto.isExecutive !== undefined ? !!dto.isExecutive : !!dept.isExecutive
+    // النوع قبل خروج «الهيكل ماتغيّرش»: تحويل الإدارة التنفيذية لقسم مرفوض حتى لو مفيش حاجة تانية بتتغير
+    const typeAfter = this.unitTypeAfter(dto, dept, makesExecutive, executiveAfter)
     const branchChanged = branchId !== dept.branchId
     const parentChanged = (parentId ?? null) !== (dept.parentId ?? null)
-    if (!branchChanged && !parentChanged && executiveAfter === !!dept.isExecutive) return
+    const typeChanged = typeAfter !== (dept.unitType ?? 'DEPARTMENT')
+    if (!branchChanged && !parentChanged && executiveAfter === !!dept.isExecutive && !typeChanged) return
+    let parent: Department | null = null
     if (parentId) {
-      const parent = await repo.findOne({ where: { id: parentId } })
+      parent = await repo.findOne({ where: { id: parentId } })
       if (!parent) throw new BadRequestException('القسم الأب غير موجود')
       if (parent.branchId !== branchId) {
         if (!parent.isExecutive) {
@@ -373,9 +417,15 @@ export class OrgService {
         cur = node?.parentId ?? null
       }
     }
+    this.assertUnitParent(typeAfter, executiveAfter, parent)
     if (dept.isExecutive && !executiveAfter) {
+      await this.assertNoChildAdministrations(em, dept, null, 'explicit')
       await this.assertNoForeignChildren(em, dept, branchId, null, 'explicit')
-    } else if (branchChanged && !executiveAfter) {
+    } else if (typeChanged && typeAfter === 'DEPARTMENT') {
+      // إدارة بتتحول «قسم»: أقسامها بتبقى أقسام فرعية عادي، بس إدارات تحتها (بيانات قديمة بس بالقواعد دي) مابتتحطش تحت قسم
+      await this.assertNoChildAdministrations(em, dept, null, 'type')
+    }
+    if (branchChanged && !executiveAfter && !dept.isExecutive) {
       const child = await repo.findOne({
         where: { parentId: id, branchId: Not(branchId) },
       })
@@ -388,16 +438,33 @@ export class OrgService {
     if (makesExecutive) await this.assertExecutivesReleasable(em, id)
   }
 
-  // تعليم قسم «الإدارة التنفيذية» بيشيل التعليم من الإدارة التنفيذية الحالية (saveDepartment) — مرفوض طول ما تحتها أقسام من
-  // فروع تانية. newExecutiveId = القسم اللي هيتعلّم (أبوّته نفسه اتفحصت في assertDepartmentTree)، null = قسم جديد
+  // تعليم قسم «الإدارة التنفيذية» بيشيل التعليم من الإدارة التنفيذية الحالية (saveDepartment) — مرفوض طول ما تحتها إدارات
+  // أو أقسام من فروع تانية. newExecutiveId = القسم اللي هيتعلّم (أبوّته نفسه اتفحصت في assertDepartmentTree)، null = قسم جديد
   private async assertExecutivesReleasable(em: EntityManager, newExecutiveId: number | null) {
     const current = await em.getRepository(Department).find({
       where: { isExecutive: true, ...(newExecutiveId ? { id: Not(newExecutiveId) } : {}) },
       order: { id: 'ASC' },
     })
     for (const executive of current) {
+      await this.assertNoChildAdministrations(em, executive, newExecutiveId, 'implicit')
       await this.assertNoForeignChildren(em, executive, executive.branchId, newExecutiveId, 'implicit')
     }
+  }
+
+  // الإدارة مابتتحطش غير تحت «الإدارة التنفيذية» (قرار المالك 27 سبتمبر): وحدة هيتشال منها تعليم الإدارة التنفيذية (صريح أو
+  // ضمني) أو هتتحول «قسم» مايتسابش تحتها إدارات — الرسالة بتسمّي إدارة منهم وبتقول خلّيها رئيسية الأول
+  private async assertNoChildAdministrations(em: EntityManager, unit: Department, skipId: number | null,
+    mode: 'explicit' | 'implicit' | 'type') {
+    const child = await em.getRepository(Department).findOne({
+      where: { parentId: unit.id, unitType: 'ADMINISTRATION', ...(skipId ? { id: Not(skipId) } : {}) },
+      order: { id: 'ASC' },
+    })
+    if (!child) return
+    throw new BadRequestException(mode === 'explicit'
+      ? `مينفعش تشيل «الإدارة التنفيذية» من «${unit.name}» وتحتها إدارات زي «${child.name}» — الإدارة مابتتحطش غير تحت «الإدارة التنفيذية»: ${MOVE_ADMINISTRATIONS}`
+      : mode === 'implicit'
+        ? `مينفعش تعلّم قسم تاني «إدارة تنفيذية» و«${unit.name}» (الإدارة التنفيذية الحالية) تحتها إدارات زي «${child.name}» — ${MOVE_ADMINISTRATIONS}`
+        : `مينفعش «${unit.name}» تتحول «قسم» وتحتها إدارات زي «${child.name}» — الإدارة مابتتحطش تحت قسم: ${MOVE_ADMINISTRATIONS}`)
   }
 
   // القسم العادي عمره ما يبقى أب لقسم من فرع تاني: executive بعد شيل تعليمه (في فرعه branchId بعد الحفظ) مايتسابش فوق أقسام

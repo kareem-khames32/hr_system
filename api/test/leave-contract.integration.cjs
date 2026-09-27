@@ -315,8 +315,9 @@ test('Request details carry the employee card: the approver sees identity and or
   assert.equal(live.status, 201, JSON.stringify(live.body))
   const seen = await request(alice, 'GET', `/requests/${live.body.id}`)
   assert.equal(seen.status, 200, JSON.stringify(seen.body))
-  assert.deepEqual(seen.body.requester, { employeeId: bob.employeeId, fullName: 'BOB', employeeCode: 'BOB', jobTitle: 'محاسب', departmentName: 'قسم الحسابات',
-    branchName: 'Leave A', teamName: 'فريق التحصيل', directManagerName: 'ALICE' })
+  // «الإدارة» فاضية: القسم مش تحت إدارة (قرار المالك 27 سبتمبر: «الإدارة ← القسم ← الفريق»)
+  assert.deepEqual(seen.body.requester, { employeeId: bob.employeeId, fullName: 'BOB', employeeCode: 'BOB', jobTitle: 'محاسب', administrationName: null,
+    departmentName: 'قسم الحسابات', branchName: 'Leave A', teamName: 'فريق التحصيل', directManagerName: 'ALICE' })
   assert.equal(seen.body.submittedBy, null)
   // نيابةً: البطاقة لصاحب الطلب، و«قدّمه نيابةً» باسم حساب المنشئ — لصاحب الطلب وللمنشئ نفسه
   const filed = await request(hrAgent, 'POST', '/requests', { typeCode: 'LIVE_NOTE', submit: true, onBehalfEmployeeId: bob.employeeId, payload: { reason: 'نيابة لبطاقة الموظف' } })
@@ -342,8 +343,8 @@ test('Request details carry the employee card: the approver sees identity and or
   try {
     const moved = await request(hr, 'GET', `/requests/${live.body.id}`)
     assert.equal(moved.status, 200, JSON.stringify(moved.body))
-    assert.deepEqual(moved.body.requester, { employeeId: bob.employeeId, fullName: 'BOB', employeeCode: 'BOB', jobTitle: null, departmentName: null,
-      branchName: null, teamName: null, directManagerName: null, orgHidden: true })
+    assert.deepEqual(moved.body.requester, { employeeId: bob.employeeId, fullName: 'BOB', employeeCode: 'BOB', jobTitle: null, administrationName: null,
+      departmentName: null, branchName: null, teamName: null, directManagerName: null, orgHidden: true })
     // وصندوق الموافقات بتاع المعتمد في الفرع (أ) (alice): الاسم والكود من غير المسمى الحالي (مراجعة Codex الجولة 5)
     const inbox = await request(alice, 'GET', '/requests/inbox')
     assert.equal(inbox.status, 200, JSON.stringify(inbox.body))

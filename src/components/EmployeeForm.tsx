@@ -8,6 +8,7 @@ import { loadEmployeeAddDraft, saveEmployeeAddDraft, clearEmployeeAddDraft, type
 import { buildEmployeeSalaryChange, employeeCreateSalaryPeriod, employeeSalaryChanged, employeeSalaryEditPayload, employeeSalaryTotal, employeePreviousSalaryCanBeConfirmed, fetchEmployeeSalaryStartContext, payrollMonthExplanation, type EmployeeSalaryChangeCommand, type EmployeeSalaryChangeContext, type EmployeeSalaryStartContext } from '@/lib/employee-salary-change-api'
 import { SALARY_HISTORY_FIELDS } from '@/lib/payroll-salary-history-api'
 import { buildCalendarChange, employeeCalendarPayload, type PayrollCalendarChange, type PayrollCalendarContext } from '@/lib/payroll-calendar-api'
+import { departmentChoiceGroups } from '@/lib/department-tree'
 import { employeeRequiredIssues, nationalIdHint, type EmployeeRequiredValues } from '../../api/src/employees/employee-required-fields'
 import { DEFAULT_SALARY_CYCLE, SALARY_CYCLE_OPTIONS, clearedEmployeeFields, employeeFullNameAr, employeeFullNameEn, employeeWorkEmailPayload, gradeSelectOptions, initialOpeningBalance, joinEmployeeAddress, jobTitleSelectOptions, openingBalanceIssue, openingBalancePayload, savedDocumentsOf, settleQualificationDrafts, type SavedEmployeeDocument } from '@/lib/employee-form-fields'
 
@@ -778,9 +779,9 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
 
   const avatarLetter = ((arNameAsWhole ? '' : form.firstNameAr.trim()) || fullNameAr).charAt(0)
 
-  const filteredDepartments = form.branchId
-    ? departments.filter((d) => d.branchId === Number(form.branchId))
-    : departments
+  // «الإدارة ← القسم ← الفريق» (قرار المالك 27 سبتمبر): وحدات الفرع المختار مجمّعة بالإدارة وباسم المسار «الإدارة ← القسم»،
+  // والإدارة نفسها اختيار مباشر (موظفوها المباشرين)
+  const departmentGroups = departmentChoiceGroups(departments, { branchId: form.branchId ? Number(form.branchId) : null })
   const filteredTeams = form.departmentId
     ? teams.filter((t) => t.departmentId === Number(form.departmentId))
     : teams
@@ -1495,8 +1496,12 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                     }
                   >
                     <option value="">اختر</option>
-                    {filteredDepartments.map((d) => (
-                      <option key={d.id} value={d.id}>{d.name}</option>
+                    {departmentGroups.map((group) => (
+                      <optgroup key={group.key} label={group.label}>
+                        {group.options.map((option) => (
+                          <option key={option.id} value={option.id}>{option.label}</option>
+                        ))}
+                      </optgroup>
                     ))}
                   </select>
                 </div>

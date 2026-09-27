@@ -15,13 +15,14 @@ const root = path.resolve(__dirname, '..', '..')
 const read = file => fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n')
 const render = props => renderToStaticMarkup(React.createElement(RequestEmployeeCard, props))
 
-const requester = { employeeId: 7, fullName: 'سارة أحمد', employeeCode: 'EMP-007', jobTitle: 'محاسبة أولى', departmentName: 'المالية',
-  branchName: 'فرع الرياض', teamName: 'فريق الحسابات', directManagerName: 'خالد منصور' }
+// «الإدارة» (قرار المالك 27 سبتمبر: «الإدارة ← القسم ← الفريق») = أقرب إدارة فوق قسمه
+const requester = { employeeId: 7, fullName: 'سارة أحمد', employeeCode: 'EMP-007', jobTitle: 'محاسبة أولى', administrationName: 'الإدارة المالية',
+  departmentName: 'المالية', branchName: 'فرع الرياض', teamName: 'فريق الحسابات', directManagerName: 'خالد منصور' }
 
 test('the card shows the employee identity and organization, and says who filed it on behalf', () => {
   const html = render({ requester, submittedBy: { displayName: 'مدير الموارد البشرية' } })
-  for (const text of ['سارة أحمد', 'EMP-007', 'محاسبة أولى', 'المالية', 'فرع الرياض', 'فريق الحسابات', 'خالد منصور',
-    'المسمى الوظيفي', 'القسم', 'الفرع', 'الفريق', 'المدير المباشر', 'قدّمه نيابةً: مدير الموارد البشرية']) {
+  for (const text of ['سارة أحمد', 'EMP-007', 'محاسبة أولى', 'الإدارة المالية', 'المالية', 'فرع الرياض', 'فريق الحسابات', 'خالد منصور',
+    'المسمى الوظيفي', 'الإدارة', 'القسم', 'الفرع', 'الفريق', 'المدير المباشر', 'قدّمه نيابةً: مدير الموارد البشرية']) {
     assert.ok(html.includes(text), text)
   }
   assert.ok(html.includes('aria-label="بيانات الموظف صاحب الطلب"'))
@@ -64,14 +65,14 @@ test('the request type carries the card data, and the server masks it for a conf
   const api = read('src/lib/api.ts')
   assert.ok(api.includes('requester?: ApiRequestRequester | null'))
   assert.ok(api.includes('submittedBy?: ApiRequestSubmittedBy | null'))
-  for (const key of ['employeeId: number', 'fullName: string', 'employeeCode: string | null', 'jobTitle: string | null', 'departmentName: string | null',
-    'branchName: string | null', 'teamName: string | null', 'directManagerName: string | null']) assert.ok(api.includes(key), key)
+  for (const key of ['employeeId: number', 'fullName: string', 'employeeCode: string | null', 'jobTitle: string | null', 'administrationName: string | null',
+    'departmentName: string | null', 'branchName: string | null', 'teamName: string | null', 'directManagerName: string | null']) assert.ok(api.includes(key), key)
   const service = read('api/src/requests/requests.service.ts')
   assert.ok(service.includes('if (!party && type?.isConfidential) return { ...this.maskConfidential({ ...this.withCanonicalStepActions(req), approvals }), requester: null, submittedBy: null }'))
   assert.ok(service.includes('const full = { ...this.withCanonicalStepActions(req), approvals, ...(await this.requestPeople(req, user)) }'))
   // مراجعة Codex الجولة 4 (CR4-B02): التنظيم الحالي لصاحب الطلب نفسه أو لحساب نطاقه فيه فرع الموظف الحالي بس
   assert.ok(service.includes('|| inBranchScope(branchScopeOf(user), employee.branchId))'))
-  assert.ok(service.includes('departmentName: null, branchName: null, teamName: null, directManagerName: null, orgHidden: true }'))
+  assert.ok(service.includes('administrationName: null, departmentName: null, branchName: null, teamName: null, directManagerName: null, orgHidden: true }'))
   assert.ok(api.includes('orgHidden?: boolean'))
   assert.ok(read('src/components/requests/RequestEmployeeCard.tsx').includes('requester.orgHidden ?'))
   // المدير المباشر بنفس حل خطوة «المدير المباشر» في السلسلة

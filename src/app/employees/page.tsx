@@ -33,6 +33,7 @@ import {
 } from '@/lib/api'
 import EmployeeSuspensionDialog from '@/components/EmployeeSuspensionDialog'
 import type { EmployeeSuspension } from '@/lib/employee-suspensions-api'
+import { branchLocalSubtree, departmentChoiceGroups, isAdministration } from '@/lib/department-tree'
 
 interface Employee {
   id: number
@@ -44,6 +45,7 @@ interface Employee {
   email: string
   phone: string
   department: string
+  departmentId: number | null
   jobTitle: string
   status: string
   // الحالة المحفوظة (status قد تكون «موقوف» مشتقة من فترة إيقاف مؤرخة)
@@ -126,6 +128,7 @@ export default function EmployeesPage() {
             e.departmentId != null
               ? deptById.get(e.departmentId) ?? '—'
               : '—',
+          departmentId: e.departmentId ?? null,
           jobTitle: e.jobTitle ?? '—',
           status: e.status,
           storedStatus: e.storedStatus ?? e.status,
@@ -222,6 +225,15 @@ export default function EmployeesPage() {
     return items
   }
 
+  // «الإدارة ← القسم ← الفريق» (قرار المالك 27 سبتمبر): اختيار إدارة بيعرض موظفيها وموظفي أقسامها — أقسامها الفرعية جوه فرعها بس،
+  // نفس توسعة المسير (الإدارة التنفيذية مابتسحبش أقسام فروع تانية تحتها). اختيار قسم = القسم نفسه زي الأول (بالرقم مش بالاسم)
+  const selectedUnit = selectedDepartment === 'all' ? null : departments.find((d) => d.id === Number(selectedDepartment)) ?? null
+  const selectedDepartmentIds = !selectedUnit
+    ? null
+    : isAdministration(selectedUnit)
+      ? branchLocalSubtree(departments, [selectedUnit.id])
+      : new Set([selectedUnit.id])
+
   const filteredEmployees = employees.filter((emp) => {
     const matchesSearch =
       emp.name.includes(searchQuery) ||
@@ -230,7 +242,7 @@ export default function EmployeesPage() {
       emp.email.toLowerCase().includes(searchQuery.toLowerCase())
 
     const matchesDepartment =
-      selectedDepartment === 'all' || emp.department === selectedDepartment
+      selectedDepartment === 'all' || (emp.departmentId != null && !!selectedDepartmentIds?.has(emp.departmentId))
 
     const matchesStatus =
       selectedStatus === 'all' ||
@@ -306,13 +318,18 @@ export default function EmployeesPage() {
             <select
               value={selectedDepartment}
               onChange={(e) => setSelectedDepartment(e.target.value)}
-              className="input w-48"
+              className="input w-56"
+              aria-label="الإدارة أو القسم"
             >
-              <option value="all">كل الأقسام</option>
-              {departments.map((dept) => (
-                <option key={dept.id} value={dept.name}>
-                  {dept.name}
-                </option>
+              <option value="all">كل الإدارات والأقسام</option>
+              {departmentChoiceGroups(departments, { administrationSuffix: 'الإدارة كلها' }).map((group) => (
+                <optgroup key={group.key} label={group.label}>
+                  {group.options.map((option) => (
+                    <option key={option.id} value={option.id}>
+                      {option.label}
+                    </option>
+                  ))}
+                </optgroup>
               ))}
             </select>
 
