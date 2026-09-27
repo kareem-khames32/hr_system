@@ -36,7 +36,7 @@ const groups: { title: string; description: string; links: SettingsLink[] }[] = 
     title: 'السياسات والحضور والإجازات',
     description: 'قواعد الاستحقاق والحساب ومواعيد العمل.',
     links: [
-      { title: 'سياسات النظام', description: 'الإجازات والحضور والمسير وعملة النظام وإعداد استقبال البصمات.', href: '/settings/policies', permission: 'settings.manage', icon: Settings2 },
+      { title: 'سياسات النظام', description: 'الإجازات والحضور والمسير وعملة النظام وأسباب إنهاء الخدمة وإعداد استقبال البصمات.', href: '/settings/policies', permission: 'settings.manage', icon: Settings2 },
       { title: 'معادلات الرواتب', description: 'طريقة حساب الخصومات لكل مجموعة موظفين', href: '/payroll/policies', permission: 'payroll.view', icon: Wallet },
       { title: 'أيام العمل', description: 'جداول أيام العمل والراحة التي تُسند للموظفين.', href: '/settings/work-days', permission: 'settings.manage', icon: CalendarClock },
       { title: 'الورديات', description: 'مواعيد الحضور والانصراف وسماحية التأخير والعمل الإضافي.', href: '/attendance/shifts', permission: 'settings.manage', icon: Clock },

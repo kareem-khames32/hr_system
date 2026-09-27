@@ -29,6 +29,11 @@ export const TERMINATION_REASONS = [
 ] as const
 export type TerminationReason = (typeof TERMINATION_REASONS)[number]
 
+// قرار المالك 27 سبتمبر: فوق الثمانية الأساسية أسباب مخصصة من «سياسات النظام» (termination-reasons.ts)
+// بأكواد يولّدها الخادم (absence، custom_N) — العمود بيشيل الأساسي أو المخصص، وده فحص «أساسي؟» الوحيد
+export const isBuiltinTerminationReason = (code: unknown): code is TerminationReason =>
+  typeof code === 'string' && (TERMINATION_REASONS as readonly string[]).includes(code)
+
 @Entity('offboarding_cases')
 export class OffboardingCase {
   @PrimaryGeneratedColumn()
@@ -41,9 +46,10 @@ export class OffboardingCase {
   @Column({ nullable: true })
   resignationRequestId: number
 
-  // EMP-2: سبب الإنهاء — NULL في الملفات القديمة = استقالة (كانت المسار الوحيد)
+  // EMP-2: سبب الإنهاء — NULL في الملفات القديمة = استقالة (كانت المسار الوحيد).
+  // كود أساسي (TERMINATION_REASONS) أو مخصص من الإعدادات (offboarding.custom_termination_reasons)
   @Column({ type: 'nvarchar', length: 30, nullable: true })
-  terminationReason: TerminationReason
+  terminationReason: string
 
   // EMP-1: الإنهاء من طرف الشركة — تاريخ الإشعار والملاحظات ومقابلة الخروج
   @Column({ type: 'date', nullable: true })

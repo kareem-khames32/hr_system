@@ -6,14 +6,14 @@ import Link from 'next/link'
 import { UserMinus, ArrowRight, Calculator, ClipboardCheck } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import {
-  fetchEmployee, fetchOffboardingPreview, createOffboardingCase,
-  type ApiEmployee, type ApiOffboardingPreview, type TerminationReason,
+  fetchEmployee, fetchOffboardingPreview, createOffboardingCase, fetchTerminationReasons,
+  type ApiEmployee, type ApiOffboardingPreview, type ApiTerminationReason,
 } from '@/lib/api'
 import { currencyLabel, useCurrency } from '@/lib/currency'
 import { employeeStatusLabels, custodyStatusLabels } from '@/lib/status-labels'
 import { localToday } from '@/lib/dates'
-// نفس التسميات تظهر لاحقاً في «تفاصيل القرار» بصفحة ملف إنهاء الخدمة
-import { TERMINATION_REASON_LABELS as reasons } from '@/lib/termination-reasons'
+// نفس التسميات تظهر لاحقاً في «تفاصيل القرار» بصفحة ملف إنهاء الخدمة — والمخصص المفعّل من «سياسات النظام» بعدها
+import { TERMINATION_REASON_LABELS as reasons, activeCustomTerminationReasons } from '@/lib/termination-reasons'
 
 export default function TerminateEmployeePage() {
   const params = useParams<{ id: string }>()
@@ -23,7 +23,9 @@ export default function TerminateEmployeePage() {
   const [employee, setEmployee] = useState<ApiEmployee | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
-  const [reason, setReason] = useState<TerminationReason>('termination')
+  const [reason, setReason] = useState<string>('termination')
+  // الأسباب المخصصة المفعّلة — لو القائمة ماتحمّلتش يفضل الثمانية الأساسية شغالين
+  const [customReasons, setCustomReasons] = useState<ApiTerminationReason[]>([])
   const [lastWorkingDay, setLastWorkingDay] = useState('')
   const [noticeDate, setNoticeDate] = useState(localToday())
   const [notes, setNotes] = useState('')
@@ -45,6 +47,13 @@ export default function TerminateEmployeePage() {
       .finally(() => { if (!cancelled) setLoading(false) })
     return () => { cancelled = true }
   }, [employeeId])
+
+  useEffect(() => {
+    let cancelled = false
+    fetchTerminationReasons().then(view => { if (!cancelled) setCustomReasons(activeCustomTerminationReasons(view.reasons)) })
+      .catch(() => { if (!cancelled) setCustomReasons([]) })
+    return () => { cancelled = true }
+  }, [])
 
   const inputError = () => !lastWorkingDay ? 'حدد آخر يوم عمل' : noticeDate && noticeDate > lastWorkingDay ? 'تاريخ الإشعار لا يمكن أن يكون بعد آخر يوم عمل' : employee?.joinDate && lastWorkingDay < employee.joinDate.slice(0, 10) ? 'آخر يوم عمل لا يمكن أن يسبق تاريخ التعيين' : ''
   const loadPreview = async () => {
@@ -81,7 +90,7 @@ export default function TerminateEmployeePage() {
       <fieldset disabled={saving || createdId !== null} className="card space-y-5 disabled:opacity-70">
         <h2 className="font-bold text-lg">تفاصيل القرار</h2>
         <div className="grid sm:grid-cols-3 gap-4">
-          <label className="text-sm text-gray-600">سبب الإنهاء<select value={reason} onChange={event => setReason(event.target.value as TerminationReason)} className="input mt-2 w-full">{Object.entries(reasons).map(([code, label]) => <option key={code} value={code}>{label}</option>)}</select></label>
+          <label className="text-sm text-gray-600">سبب الإنهاء<select value={reason} onChange={event => setReason(event.target.value)} className="input mt-2 w-full">{Object.entries(reasons).map(([code, label]) => <option key={code} value={code}>{label}</option>)}{customReasons.map(item => <option key={item.code} value={item.code}>{item.label}</option>)}</select></label>
           <label className="text-sm text-gray-600">آخر يوم عمل *<input type="date" value={lastWorkingDay} min={employee.joinDate?.slice(0, 10)} onChange={event => setLastWorkingDay(event.target.value)} className="input mt-2 w-full" /></label>
           <label className="text-sm text-gray-600">تاريخ الإشعار<input type="date" value={noticeDate} max={lastWorkingDay || undefined} onChange={event => setNoticeDate(event.target.value)} className="input mt-2 w-full" /></label>
         </div>
