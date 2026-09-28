@@ -116,6 +116,8 @@ const roleLabels: Record<string, string> = {
   payroll_officer: 'موظف الرواتب',
   it: 'تقنية المعلومات',
   specific_employee: 'موظف محدد',
+  // خطوة النظام: إضافي مكتشف اتعتمد لوحده في فترة عليها «اعتماد تلقائي»
+  system: 'اعتماد تلقائي',
 }
 
 const fieldLabels: Record<string, string> = {

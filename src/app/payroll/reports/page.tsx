@@ -469,7 +469,7 @@ function OvertimeTab({ branches, departments }: { branches: ApiBranch[]; departm
                     <td className="px-4 py-3">{row.fullName ?? '—'}<p className="text-xs text-gray-400">{row.employeeCode ?? ''} {row.departmentName ? `— ${row.departmentName}` : ''}</p></td>
                     <td className="px-4 py-3 text-center" dir="ltr">{row.date}</td>
                     <td className="px-4 py-3">{lookup(OVERTIME_SOURCE_LABELS, row.source)}{row.dayKind && <p className="text-xs text-gray-400">{lookup(DAY_KIND_LABELS, row.dayKind)}</p>}</td>
-                    <td className="px-4 py-3 text-center">{lookup(OVERTIME_STATUS_LABELS, row.status)}</td>
+                    <td className="px-4 py-3 text-center">{lookup(OVERTIME_STATUS_LABELS, row.status)}{row.autoApproved && <p className="text-xs text-indigo-600">اعتماد تلقائي</p>}</td>
                     <td className="px-4 py-3 text-center">{row.detectedMinutes ?? '—'}</td>
                     <td className="px-4 py-3 text-center">{row.requestedMinutes ?? '—'}</td>
                     <td className="px-4 py-3 text-center">{row.approvedMinutes ?? '—'}</td>

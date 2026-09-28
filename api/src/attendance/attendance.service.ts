@@ -215,6 +215,15 @@ export function overtimeWindowRecomputeTargets(
   return [...targets.values()]
 }
 
+// قرار «اعتماد تلقائي» ليوم إضافي مكتشف (overtimeAutoApproval): الفترات المفتوحة اللي عليها العلامة وبتحكم اليوم،
+// وآخر لحظة ممكن بصمة تتنسب فيها لليوم (endsAt) وبعدها مهلة الاستقرار (settledAt)، وهل اليوم خلص دلوقتي
+export interface OvertimeAutoApprovalDecision {
+  periods: Array<{ id: number; name: string; branchId: number | null }>
+  endsAt: Date
+  settledAt: Date
+  finished: boolean
+}
+
 export interface PunchDto {
   employeeCode: string
   timestamp: string // ISO أو 'YYYY-MM-DD HH:mm:ss' من الجهاز
@@ -225,6 +234,8 @@ export interface PunchDto {
 const PUNCH_CODE_MAX = 20
 // بصمة بعد «الآن» تُرفض — سماحية 5 دقائق لفرق ساعة الجهاز عن الخادم
 const FUTURE_PUNCH_TOLERANCE_MS = 5 * 60 * 1000
+// دورة فحص السحب المجدول من الأجهزة (DeviceSyncService.scheduledSync كل 5 دقايق) — جزء من مهلة استقرار يوم الاعتماد التلقائي
+const DEVICE_SYNC_CHECK_MINUTES = 5
 
 @Injectable()
 export class AttendanceService {
@@ -509,18 +520,78 @@ export class AttendanceService {
     return (await this.overtimeWindow(date, branchId)).open
   }
 
-  private async overtimeWindow(date: string, branchId: number): Promise<OvertimeEvidence['window']> {
+  // الفترات الشغالة اللي بتغطي اليوم لفرع يوم العمل (أو «كل الفروع») — أساس النافذة والاعتماد التلقائي مع بعض
+  private async coveringOvertimePeriods(date: string, branchId: number) {
     const periods = await this.overtimePeriods.find({ where: { isActive: true } })
-    const covering = periods.filter(
+    return periods.filter(
       (p) =>
         (p.branchId == null || p.branchId === branchId) &&
         p.fromDate <= date &&
         p.toDate >= date
     )
+  }
+
+  private async overtimeWindow(date: string, branchId: number): Promise<OvertimeEvidence['window']> {
+    const covering = await this.coveringOvertimePeriods(date, branchId)
     const closed = covering.filter(p => p.effect === 'CLOSED')
     const governing = (closed.length ? closed : covering.filter(p => p.effect === 'OPEN')).sort((a, b) => a.id - b.id)
     return { open: closed.length ? false : governing.length ? true : (await this.configValue('overtime.enabled', 'true')) === 'true',
       governingWindowIds: governing.map(p => p.id), reason: governing.map(p => p.name).join('، ') || 'الإعداد العام للإضافي خارج الفترات المحددة' }
+  }
+
+  // ===== «اعتماد تلقائي» للإضافي المكتشف في فترة مفتوحة (قرار المالك 28 سبتمبر) =====
+  // معرّفات الفترات المفتوحة الشغالة اللي عليها «اعتماد تلقائي». مفيش ولا واحدة = توجيه الكشف بنفس الكود القديم بالحرف
+  async autoApproveOvertimePeriodIds(): Promise<Set<number>> {
+    const rows = await this.overtimePeriods.find({ select: { id: true }, where: { isActive: true, effect: 'OPEN', autoApprove: true } })
+    return new Set(rows.map(row => row.id))
+  }
+
+  // هل يوم الإضافي المكتشف بيتعتمد تلقائي؟ الفترات المفتوحة اللي بتحكم اليوم (نفس اختيار overtimeWindow: فرع يوم العمل المؤرخ،
+  // وأي فترة مقفولة بتغطيه بتكسب) وعليها «اعتماد تلقائي»، ولحظة ما اليوم يخلص. null = اليوم مش جوه فترة اعتماد تلقائي
+  // (أو فيه فترة مقفولة) فالإضافي بيمشي في سلسلته زي الأول. evidence = دليل نفس المعاملة: الفترات لازم تكون من نافذته
+  // (governingWindowIds) — لو اتغيرت فترة بين القرايتين مفيش اعتماد تلقائي في الدورة دي
+  async overtimeAutoApproval(employeeId: number, date: string, evidence: OvertimeEvidence, em?: EntityManager,
+    now = new Date()): Promise<OvertimeAutoApprovalDecision | null> {
+    if (em && em !== this.days.manager) return this.inManager(em).overtimeAutoApproval(employeeId, date, evidence, undefined, now)
+    if (!evidence.window.open || evidence.employeeId !== employeeId || evidence.workDate !== date) return null
+    const calendar = await this.calendarDay(employeeId, date)
+    const covering = await this.coveringOvertimePeriods(date, calendar.branchId!)
+    if (covering.some(p => p.effect === 'CLOSED')) return null
+    const periods = covering.filter(p => p.effect === 'OPEN' && p.autoApprove).sort((a, b) => a.id - b.id)
+    if (!periods.length || periods.some(p => !evidence.window.governingWindowIds.includes(p.id))) return null
+    const end = await this.overtimeWorkdayEnd(employeeId, date)
+    return {
+      periods: periods.map(p => ({ id: p.id, name: p.name, branchId: p.branchId ?? null })),
+      ...end,
+      // اليوم خلص: قبل النهارده بتوقيت الشركة، وعدّت مهلة الاستقرار بعد آخر لحظة ممكن بصمة تتنسب فيها لليوم
+      finished: date < localDateOf(now) && now.getTime() >= end.settledAt.getTime(),
+    }
+  }
+
+  // إمتى يوم العمل «يخلص» للاعتماد التلقائي — نفس حد محرك الحضور لنسبة البصمة لليوم (workdayFrame): آخر اليوم التقويمي
+  // للوردية النهارية، وللوردية الليلية حدّ صباح الغد اللي بعده البصمة بتتحسب لليوم الجاي (nightClaimUntil)؛ ومش قبل نهاية
+  // الوردية ولا نهاية نافذة الانصراف. endsAt = أبعدهم. settledAt = بعده بمهلة استقرار: سماحية ساعة الجهاز (نفس سماحية
+  // الاستقبال FUTURE_PUNCH_TOLERANCE_MS) + لو السحب المجدول من الأجهزة شغال: فاصله (attendance.sync_interval_minutes) ودورة
+  // فحص الجدولة (5 دقايق) — فالبصمة اللي اتسجلت على الجهاز قبل الحد توصل قبل الاعتماد
+  async overtimeWorkdayEnd(employeeId: number, date: string, em?: EntityManager): Promise<{ endsAt: Date; settledAt: Date }> {
+    if (em && em !== this.days.manager) return this.inManager(em).overtimeWorkdayEnd(employeeId, date)
+    attendanceRuleDate(date)
+    const shift = await this.shiftFor(employeeId, date)
+    const frame = await this.workdayFrame(employeeId, date, shift)
+    const windows = this.nightWindows(shift.sourceSettings as Shift | null, frame)
+    const instants = [frame.to.getTime() + 1000]
+    const add = (time: string | null | undefined, overnightShift = false) => {
+      if (!time || !/^\d{2}:\d{2}$/.test(time)) return
+      const value = atMinute(date, toMinutes(time) + (overnightShift ? 1440 : 0)).getTime()
+      if (Number.isFinite(value)) instants.push(value)
+    }
+    if (shift.source !== 'none') add(shift.end, frame.overnight)
+    // الليلية: nightWindows نقلت نافذة الانصراف لخط اليوم الممتد (09:00 → 33:00 = صباح الغد)
+    add(windows?.checkoutTo)
+    const endsAt = new Date(Math.max(...instants))
+    const interval = Number(await this.configValue('attendance.sync_interval_minutes', '0'))
+    const pull = Number.isFinite(interval) && interval > 0 ? (interval + DEVICE_SYNC_CHECK_MINUTES) * 60000 : 0
+    return { endsAt, settledAt: new Date(endsAt.getTime() + FUTURE_PUNCH_TOLERANCE_MS + pull) }
   }
 
   // مستخدم فرع يشوف فترات «كل الفروع» وفترات فروعه بس
@@ -555,18 +626,31 @@ export class AttendanceService {
     if (String(fromDate) > String(toDate)) throw new BadRequestException('تاريخ البداية بعد النهاية')
   }
 
+  // «اعتماد تلقائي»: قيمة منطقية صريحة (مفيش "true" نص يشغّل اعتماد مالي بالغلط)، ومعناه للفترة المفتوحة بس —
+  // المقفولة مفيهاش إضافي مكتشف يتعتمد، فبيترفض عليها صراحةً بدل ما يتشال بصمت
+  private assertOvertimePeriodAutoApprove(autoApprove: unknown, effect: string) {
+    if (typeof autoApprove !== 'boolean') throw new BadRequestException('الاعتماد التلقائي (autoApprove) قيمة منطقية (true/false)')
+    if (autoApprove && effect !== 'OPEN') {
+      throw new BadRequestException('الاعتماد التلقائي للفترة المفتوحة بس — الفترة المقفولة مفيهاش إضافي مكتشف يتعتمد؛ شيل «اعتماد تلقائي» (autoApprove: false) أو خلّي الفترة مفتوحة')
+    }
+  }
+
   async createOvertimePeriod(dto: {
     name: string
     fromDate: string
     toDate: string
     effect: string
     branchId?: number | null
+    autoApprove?: boolean
   }, user?: JwtPayload) {
     if (!dto.name?.trim()) throw new BadRequestException('اسم الفترة مطلوب')
     this.validOvertimePeriodDates(dto.fromDate, dto.toDate)
     if (!['OPEN', 'CLOSED'].includes(dto.effect)) {
       throw new BadRequestException('الأثر: OPEN أو CLOSED')
     }
+    // غيابه = لأ (العميل القديم بيفضل زي ما هو)؛ الشاشة بتبعته صريح وبتخليه شغال افتراضيًا للفترة المفتوحة الجديدة
+    const autoApprove = dto.autoApprove ?? false
+    this.assertOvertimePeriodAutoApprove(autoApprove, dto.effect)
     const branchId = await this.overtimePeriodBranch(dto.branchId)
     this.assertOvertimePeriodScope(user, branchId)
     const saved = await this.overtimePeriods.save(
@@ -577,6 +661,7 @@ export class AttendanceService {
         effect: dto.effect as any,
         branchId: branchId as any,
         isActive: true,
+        autoApprove,
       })
     )
     const recompute = await this.recomputeOvertimeWindowDays([saved])
@@ -592,6 +677,7 @@ export class AttendanceService {
       effect: string
       branchId: number | null
       isActive: boolean
+      autoApprove: boolean
     }>,
     user?: JwtPayload
   ) {
@@ -601,6 +687,8 @@ export class AttendanceService {
     if (dto.effect !== undefined && !['OPEN', 'CLOSED'].includes(dto.effect)) {
       throw new BadRequestException('الأثر: OPEN أو CLOSED')
     }
+    // الحالة النهائية بعد التعديل: «اعتماد تلقائي» على فترة مقفولة مرفوض — حتى لو القفل جه من غير ما يتبعت الحقل
+    this.assertOvertimePeriodAutoApprove(dto.autoApprove ?? p.autoApprove, dto.effect ?? p.effect)
     const before = { fromDate: p.fromDate, toDate: p.toDate, branchId: p.branchId ?? null, effect: p.effect, isActive: p.isActive }
     // حقول قابلة للتعديل فقط — ممنوع الجسم يكتب على id
     if (dto.name !== undefined) {
@@ -617,7 +705,10 @@ export class AttendanceService {
       this.assertOvertimePeriodScope(user, p.branchId)
     }
     if (dto.isActive !== undefined) p.isActive = !!dto.isActive
+    if (dto.autoApprove != null) p.autoApprove = dto.autoApprove
     const saved = await this.overtimePeriods.save(p)
+    // «اعتماد تلقائي» لوحده مابيغيرش نافذة اليوم ولا أدلته فمفيش إعادة حساب: المكتشف اللي لسه ما اتوجهش بيتحسم في دورة
+    // التوجيه الجاية (بيتعتمد لو يومه خلص، أو بيروح لسلسلته لو العلامة اتشالت)، واللي في سلسلة اعتماد بيفضل قرار معتمده
     const changed = before.fromDate !== saved.fromDate || before.toDate !== saved.toDate ||
       before.branchId !== (saved.branchId ?? null) || before.effect !== saved.effect || before.isActive !== saved.isActive
     const recompute = changed
@@ -3807,6 +3898,9 @@ export class AttendanceService {
     const reqById = new Map(reqs.map((r) => [r.id, r]))
     const mayConfirm = userHasPerm(user, 'overtime.confirm')
     const requiresConfirmation = true
+    // «اعتماد تلقائي»: المعتمد تلقائيًا بيتعرف من لقطة اعتماده، والمكتشف اللي نافذة يومه فيها فترة اعتماد تلقائي شغالة
+    // بيستنى يومه يخلص (مش واقف) — علامتين بلا أرقام مالية فبتظهر لكل اللي يشوف السطر
+    const autoPeriodIds = rows.some((r) => r.status === 'DETECTED' && !r.requestId) ? await this.autoApproveOvertimePeriodIds() : new Set<number>()
     return {
       month: range.month,
       from: range.from,
@@ -3827,6 +3921,9 @@ export class AttendanceService {
           departmentId: emp?.departmentId ?? null,
           requestStatus: req?.status ?? null,
           requestTypeCode: req?.typeCode ?? null,
+          autoApproved: calculationSnapshot?.approval?.autoApproval != null,
+          autoApprovalPending: r.status === 'DETECTED' && !r.requestId &&
+            ((calculationSnapshot?.evidence?.window?.governingWindowIds ?? []) as number[]).some((id) => autoPeriodIds.has(id)),
           isSelf: user.employeeId != null && r.employeeId === user.employeeId,
           canConfirm: false,
           requiresWorkflow: true,

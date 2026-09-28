@@ -40,7 +40,7 @@ import {
   MAX_RANGE_DAYS,
 } from '../attendance/attendance.service'
 import { OvertimeEntry } from './entities/attendance.entities'
-import { OVERTIME_ZERO_AT_APPROVAL_BLOCKERS, overtimeSubmissionBlockers } from '../attendance/overtime-evidence'
+import { OVERTIME_ZERO_AT_APPROVAL_BLOCKERS, overtimeSubmissionBlockers, type OvertimeEvidence } from '../attendance/overtime-evidence'
 import { ApproverResolver, ResolvedStep } from './approver-resolver.service'
 import { audienceNeedsPositions, audienceSubjectOf, requestAudienceAllows, requestTypeInBranch, type AudiencePositions } from './request-audience'
 import { definitionInBranch } from '../common/definition-branch'
@@ -75,7 +75,9 @@ import { CUSTODY_CROSS_BRANCH, custodyBranchProblem, employeeInScope } from '../
 import { definitionCodeOf, groupLeaveProfiles, isLeaveDefinition, isLeaveRequest, legacyLeaveCode, leaveCodeOf, normalizedLeavePayload } from '../common/leave-contract'
 import { isValidYmd } from '../offboarding/eos'
 import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
-import { buildOvertimeApprovalSnapshot, overtimeWageEvidence } from '../payroll/overtime-financial'
+import { buildOvertimeApprovalSnapshot, overtimeWageEvidence, type OvertimeAutoApprovalMarker } from '../payroll/overtime-financial'
+import { OVERTIME_AUTO_APPROVAL_FALLBACK_EVENT, OVERTIME_AUTO_APPROVED_EVENT, overtimeAutoApprovalComment, overtimeAutoApprovalFallbackReason,
+  SYSTEM_APPROVER_ID, systemApprovalStep, type OvertimeAutoApprovalPeriod } from './overtime-auto-approval'
 // تراكم المسير يومًا بيوم: اعتماد متأخر بيغيّر يوم — نعلّمه «متسخ» فالجار الليلي يعيده
 import { markPayrollDaysDirty } from '../payroll/payroll-daily-accrual'
 import { appendOvertimeEvent, assertOvertimeSubmission, claimOvertimeDay, releaseOvertimeDayClaim } from './overtime-day-claims'
@@ -2086,7 +2088,9 @@ export class RequestsService {
           computedAt: saved.approvalResult.computedAt, message: saved.approvalResult.message } : null,
         // تفاصيل الأجر الأساسي ليست حقلاً عاماً في شاشة الطلب؛ المعتمد يرى ناتج الإضافي فقط.
         approval: approved ? { approvedMinutes: approved.approvedMinutes, hourlyRate: approved.hourlyRate, multiplier: approved.multiplier,
-          amount: approved.amount, dayKind: approved.dayKind, approvedAt: approved.approvedAt, approverId: approved.approverId } : null } : null,
+          amount: approved.amount, dayKind: approved.dayKind, approvedAt: approved.approvedAt, approverId: approved.approverId,
+          // اعتماد تلقائي بفترة «اعتماد تلقائي» (قرار النظام) — علامة بس من غير معرّفات الفترات
+          autoApproved: approved.autoApproval != null } : null } : null,
       events: events.map(event => ({ id: event.id, eventType: event.eventType, actorUserId: event.actorUserId,
         actorName: event.actorUserId ? actorNames.get(event.actorUserId) || null : null,
         stepOrder: event.stepOrder, reason: event.reason, createdAt: event.createdAt,
@@ -2134,7 +2138,8 @@ export class RequestsService {
     return { requester, submittedBy }
   }
 
-  // الكشف يُوجّه للمراجعة فقط؛ لا يحوّل إعداد التنفيذ الفوري إلى اعتماد مالي.
+  // الكشف يُوجّه للمراجعة؛ لا يحوّل إعداد التنفيذ الفوري إلى اعتماد مالي. الاستثناء الوحيد قرار المالك 28 سبتمبر: يوم خلص
+  // جوه فترة مفتوحة عليها «اعتماد تلقائي» بيتعتمد لوحده بنفس الاعتماد النهائي (routeDetectedOvertime).
   @Cron('45 */3 * * * *')
   async reconcileAutoOvertime() {
     return this.routeDetectedOvertime()
@@ -2143,47 +2148,92 @@ export class RequestsService {
   /** التوجيه الفوري لا يمس كشف معاملات أخرى؛ المهمة الدورية تبقى للاستدراك العام. */
   async dispatchDetectedOvertime(entryIds: number[]) {
     const ids = [...new Set(entryIds.filter(id => Number.isSafeInteger(id) && id > 0))]
-    let routed = 0
+    let routed = 0, autoApproved = 0
     // نحافظ على دفعات صغيرة دون تجاوز حد معاملات SQL عند حساب نطاق حضور كبير.
     for (let offset = 0; offset < ids.length; offset += 100) {
-      routed += (await this.routeDetectedOvertime(ids.slice(offset, offset + 100))).routed
+      const result = await this.routeDetectedOvertime(ids.slice(offset, offset + 100))
+      routed += result.routed
+      autoApproved += result.autoApproved
     }
-    return { routed }
+    return { routed, autoApproved }
   }
 
+  // توجيه الإضافي المكتشف لسلسلته — أو اعتماده تلقائي لو يومه خلص جوه فترة مفتوحة عليها «اعتماد تلقائي» (قرار المالك
+  // 28 سبتمبر). شروط الاعتماد التلقائي كلها جوه نفس معاملة التوجيه وتحت قفل الموظف: (أ) نافذة اليوم مفتوحة، (ب) فترة
+  // مفتوحة شغالة بتحكم اليوم لفرع يوم العمل وعليها العلامة ومفيش فترة مقفولة بتغطيه، (ج) اليوم خلص (overtimeWorkdayEnd)،
+  // (د) الموظف مش مستثنى من الحضور في اليوم (إضافي المستثنى باعتماد مدير وموارد بشرية صراحةً — بيفضل في سلسلته)،
+  // (هـ) دليل اليوم من غير موانع، (و) نوع OVERTIME_AUTO مفعّل — والسلسلة مش شرط للاعتماد التلقائي.
+  // يوم لسه ماخلصش بيفضل مكتشف لدورة المهمة الجاية. ومن غير أي فترة «اعتماد تلقائي» التوجيه هو هو بالحرف.
   private async routeDetectedOvertime(entryIds?: number[]) {
     const type = await this.types.findOneBy({ code: 'OVERTIME_AUTO' })
-    if (!type?.isActive || !type.approvalChainId) return { routed: 0 }
+    if (!type?.isActive) return { routed: 0, autoApproved: 0 }
+    const autoPeriodIds = await this.attendance.autoApproveOvertimePeriodIds()
+    if (!type.approvalChainId && !autoPeriodIds.size) return { routed: 0, autoApproved: 0 }
     const pending = await this.overtimeEntries.find({ where: { source: 'BIOMETRIC_DETECTED', status: 'DETECTED', requestId: IsNull(),
       ...(entryIds ? { id: In(entryIds) } : {}) }, take: 100 })
-    let routed = 0
+    const today = localDateOf(new Date())
+    let routed = 0, autoApproved = 0
     for (const found of pending) {
+      // مرشّح للاعتماد التلقائي: نافذة يومه في دليل آخر كشف فيها فترة «اعتماد تلقائي» شغالة (الحسم الفعلي جوه المعاملة
+      // بدليل وفترات اللحظة). غير المرشّح بيتوجه بنفس المسار القديم بالحرف، ومن غير سلسلة مابيتوجهش زي الأول
+      const autoCandidate = autoPeriodIds.size > 0 &&
+        ((found.calculationSnapshot?.evidence?.window?.governingWindowIds ?? []) as number[]).some(id => autoPeriodIds.has(id))
+      if (!autoCandidate && !type.approvalChainId) continue
+      // يوم النهارده (أو بعده) عمره ما يكون خلص: يفضل مكتشف لحد الدورة الجاية من غير معاملة ولا إعادة حساب أدلة
+      if (autoCandidate && found.date >= today) continue
+      // سبب رفض الاعتماد التلقائي (لو حصل) — بيتسجل على السجل مع توجيهه، أو لوحده لو التوجيه كمان ماتمش
+      const attempt: { refusal: { reason: string; periodIds: number[] } | null } = { refusal: null }
       try {
-        const changed = await this.ds.transaction(async em => {
+        const outcome = await this.ds.transaction(async (em): Promise<'ROUTED' | 'AUTO_APPROVED' | null> => {
           await lockPayrollEmployees(em, [found.employeeId])
           em.queryRunner!.data.requestFinanceEmployeeIds = new Set([found.employeeId])
           const entry = await em.getRepository(OvertimeEntry).findOneBy({ id: found.id })
-          if (!entry || entry.status !== 'DETECTED' || entry.requestId) return false
+          if (!entry || entry.status !== 'DETECTED' || entry.requestId) return null
           const employee = await em.getRepository(Employee).findOneBy({ id: entry.employeeId })
-          if (!employee?.isActive) return false
+          if (!employee?.isActive) return null
           // يوم عطلة متغطي بأمر/طلب «دوام يوم عطلة»: بيتحسب بدل مش إضافي — المكتشف يتلغي بأثره بدل ما يتوجه لاعتماد هيترفض
           if (await holidayWorkCoversOvertime(em, entry.employeeId, entry.date)) {
             const stale = await em.getRepository(OvertimeEntry).findOne({ where: { id: entry.id }, lock: { mode: 'pessimistic_write' } })
-            if (!stale || stale.requestId || stale.status !== 'DETECTED') return false
+            if (!stale || stale.requestId || stale.status !== 'DETECTED') return null
             stale.status = 'CANCELLED'
             stale.payableHours = null
             await em.getRepository(OvertimeEntry).save(stale)
             await releaseOvertimeDayClaim(em, stale.id)
             await appendOvertimeEvent(em, { entryId: stale.id, eventType: 'AUTO_CANCELLED', reason: HOLIDAY_WORK_OVERTIME_REFUSAL })
-            return false
+            return null
           }
           const evidence = await this.attendance.overtimeEvidence(entry.employeeId, entry.date, em)
-          if (!evidence.window.open || evidence.blockers.length || evidence.evidenceMode !== 'PUNCH') return false
+          if (!evidence.window.open || evidence.blockers.length || evidence.evidenceMode !== 'PUNCH') return null
+          if (autoCandidate && evidence.exemptionId == null) {
+            const auto = await this.attendance.overtimeAutoApproval(entry.employeeId, entry.date, evidence, em)
+            if (auto) {
+              if (!auto.finished) return null
+              try {
+                // savepoint: أي رفض بيرجّع الاعتماد التلقائي كله (الطلب والقرار والقيد والأحداث) والمعاملة تكمل للتوجيه
+                await em.transaction(inner => this.approveDetectedOvertimeAutomatically(inner, entry.id, employee, evidence, auto.periods))
+                return 'AUTO_APPROVED'
+              } catch (error) {
+                // رفض قاعدة عمل من مسار الاعتماد نفسه: ماينبلعش — الإضافي بيمشي في سلسلته والسبب بيتسجل. أي عطل تاني
+                // (SQL/برمجي) بيرجّع المعاملة كلها والسجل يفضل مكتشف لدورة جاية
+                if (!(error instanceof HttpException) || error.getStatus() >= 500) throw error
+                attempt.refusal = { reason: this.executionFailureText(error), periodIds: auto.periods.map(period => period.id) }
+                this.logger.warn(`تعذّر الاعتماد التلقائي لسجل إضافي مكتشف #${entry.id}؛ بيتوجه لسلسلة الاعتماد: ${attempt.refusal.reason}`)
+              }
+            }
+          }
+          if (!type.approvalChainId) {
+            // مفيش سلسلة يرجع لها: السجل يفضل مكتشف زي أي كشف من غير سلسلة، وسبب الرفض بيتسجل عليه
+            if (attempt.refusal) await this.recordOvertimeAutoApprovalFallback(em, entry.id, null, attempt.refusal)
+            return null
+          }
           await assertOvertimeSubmission(em, evidence, entry.id)
           const req = em.getRepository(Request).create({ typeCode: 'OVERTIME_AUTO', requesterId: employee.id,
             branchId: employee.branchId, payload: JSON.stringify({ date: entry.date, hours: evidence.detectedMinutes / 60, autoDetected: true }), status: 'DRAFT' })
           const { steps, inactiveChain } = await this.resolveChain(type, req, em)
-          if (inactiveChain || !steps.length) return false
+          if (inactiveChain || !steps.length) {
+            if (attempt.refusal) await this.recordOvertimeAutoApprovalFallback(em, entry.id, null, attempt.refusal)
+            return null
+          }
           req.resolvedSteps = JSON.stringify(steps)
           req.submittedAt = new Date()
           req.currentStep = steps[0].stepOrder
@@ -2195,15 +2245,75 @@ export class RequestsService {
           if (!locked || locked.requestId || locked.status !== 'DETECTED') throw new ConflictException('تغير سجل الكشف قبل توجيهه')
           locked.requestId = req.id
           await em.getRepository(OvertimeEntry).save(locked)
+          if (attempt.refusal) await this.recordOvertimeAutoApprovalFallback(em, entry.id, req.id, attempt.refusal)
           await this.stageOvertimeSubmission(em, req, steps, null)
-          return true
+          return 'ROUTED'
         })
-        if (changed) routed++
+        if (outcome === 'ROUTED') routed++
+        else if (outcome === 'AUTO_APPROVED') autoApproved++
       } catch (error) {
         this.logger.warn('تعذر توجيه سجل إضافي مكتشف #' + found.id + '؛ بقي للمراجعة: ' + (error as Error).message)
+        // الاعتماد التلقائي اترفض والتوجيه كمان ماتمش (نفس قاعدة التقديم، أو عطل): السبب مايضيعش مع تراجع المعاملة
+        const refusal = attempt.refusal
+        if (refusal) {
+          await this.ds.transaction(em => this.recordOvertimeAutoApprovalFallback(em, found.id, null, refusal))
+            .catch(recordError => this.logger.warn(`تعذر تسجيل سبب رفض الاعتماد التلقائي لسجل الإضافي #${found.id}: ${(recordError as Error).message}`))
+        }
       }
     }
-    return { routed }
+    return { routed, autoApproved }
+  }
+
+  // الاعتماد التلقائي نفسه: طلب OVERTIME_AUTO بخطوة نظام واحدة، وبعده بالحرف نفس مسار الطلب المعتمد يدويًا —
+  // stageOvertimeSubmission (قواعد التقديم: حجز اليوم وحد الأثر الرجعي وحد الفترات المالية المقفلة) ثم قرار النظام
+  // على خطوته ثم finalizeOvertimeApproval (دليل اليوم نفسه، والدقائق = المكتشف، والسقوف اليومي/الأسبوعي/الشهري، وتسعير
+  // راتب شهر يوم العمل، وترحيل فترة المسير المقفلة، وحدث APPROVED، وتعليم أيام المسير) ثم executeDestinationLocked.
+  // أي رفض منهم بيرمي، والمستدعي بيرجّع الاعتماد كله (savepoint) ويوجّه الإضافي لسلسلته
+  private async approveDetectedOvertimeAutomatically(em: EntityManager, entryId: number, employee: Employee,
+    evidence: OvertimeEvidence, periods: OvertimeAutoApprovalPeriod[]) {
+    const req = em.getRepository(Request).create({ typeCode: 'OVERTIME_AUTO', requesterId: employee.id, branchId: employee.branchId,
+      payload: JSON.stringify({ date: evidence.workDate, hours: evidence.detectedMinutes / 60, autoDetected: true }), status: 'DRAFT' })
+    const steps = [systemApprovalStep()]
+    req.resolvedSteps = JSON.stringify(steps)
+    req.submittedAt = new Date()
+    req.currentStep = steps[0].stepOrder
+    req.status = 'UNDER_REVIEW'
+    await em.getRepository(Request).save(req)
+    em.queryRunner!.data.overtimeRequestIds = new Set([req.id])
+    const locked = await em.getRepository(OvertimeEntry).findOne({ where: { id: entryId }, lock: { mode: 'pessimistic_write' } })
+    if (!locked || locked.requestId || locked.status !== 'DETECTED' || locked.date !== evidence.workDate) throw new ConflictException('تغير سجل الكشف قبل اعتماده تلقائيًا')
+    locked.requestId = req.id
+    await em.getRepository(OvertimeEntry).save(locked)
+    await this.stageOvertimeSubmission(em, req, steps, null)
+    // قرار النظام على خطوته الوحيدة — سجل تدقيق approverId = 0 باسم الفترة (نطاق فرع الطلب بس)
+    const comment = overtimeAutoApprovalComment(periods, req.branchId ?? null)
+    const periodIds = periods.map(period => period.id)
+    await em.getRepository(RequestApproval).save({ requestId: req.id, step: steps[0].stepOrder, approverId: SYSTEM_APPROVER_ID, action: 'APPROVED', comment })
+    steps[0].actedAt = new Date().toISOString()
+    steps[0].action = 'APPROVED'
+    await appendOvertimeEvent(em, { entryId, requestId: req.id, actorUserId: null, eventType: OVERTIME_AUTO_APPROVED_EVENT,
+      stepOrder: steps[0].stepOrder, reason: comment, payload: { periodIds } })
+    assertTransition(req.status, 'APPROVED')
+    req.status = 'APPROVED'
+    req.currentStep = null as unknown as number
+    req.resolvedSteps = JSON.stringify(steps)
+    await this.finalizeOvertimeApproval(em, req, SYSTEM_APPROVER_ID, { periodIds })
+    await em.getRepository(Request).save(req)
+    const executed = await this.executeDestinationLocked(em, req)
+    if (executed.status !== 'COMPLETED') throw new ConflictException('وجهة الإضافي المعتمد تلقائيًا ماكملتش؛ الإضافي بيمشي في سلسلة الاعتماد')
+  }
+
+  // سبب رفض الاعتماد التلقائي على سجل الإضافي (حدث AUTO_APPROVAL_FALLBACK) — مع طلب السلسلة لو اتوجه، ولو فضل مكتشف
+  // بيتسجل مرة لكل سبب جديد (المهمة بتعيد المحاولة كل 3 دقايق فمانكررش نفس السبب)
+  private async recordOvertimeAutoApprovalFallback(em: EntityManager, entryId: number, requestId: number | null,
+    refusal: { reason: string; periodIds: number[] }) {
+    const reason = overtimeAutoApprovalFallbackReason(refusal.reason)
+    if (requestId == null) {
+      const last = await em.getRepository(OvertimeEntryEvent).findOne({ where: { entryId, eventType: OVERTIME_AUTO_APPROVAL_FALLBACK_EVENT }, order: { id: 'DESC' } })
+      if (last && last.requestId == null && last.reason === reason.slice(0, 500)) return
+    }
+    await appendOvertimeEvent(em, { entryId, requestId, actorUserId: null, eventType: OVERTIME_AUTO_APPROVAL_FALLBACK_EVENT, reason,
+      payload: { periodIds: refusal.periodIds } })
   }
 
   // طلبات ألغاها النظام آلياً (سجل CANCELLED بـ approverId = 0 — مثلاً أوفرتايم
@@ -2629,20 +2739,28 @@ export class RequestsService {
     } else if (dto.reductionReason != null) throw new BadRequestException('سبب التخفيض يحتاج تحديد الدقائق المعتمدة')
   }
 
-  private async finalizeOvertimeApproval(em: EntityManager, req: Request, actorUserId: number) {
+  // autoApproval = قرار النظام في فترة «اعتماد تلقائي» (actorUserId = SYSTEM_APPROVER_ID): نفس الاعتماد النهائي بالحرف،
+  // واللقطة بتحمل الفترات اللي سمحت بيه، وحدث APPROVED من غير مستخدم (النظام)
+  private async finalizeOvertimeApproval(em: EntityManager, req: Request, actorUserId: number, autoApproval?: OvertimeAutoApprovalMarker) {
     const entry = await this.overtimeEntryForRequest(em, req)
     if (!entry) throw new ConflictException('لا يوجد سجل إضافي مرتبط يمكن اعتماده')
-    if (this.overtimeComputedAtApproval(entry)) return this.finalizeApprovalTimeOvertime(em, req, entry, actorUserId)
+    if (this.overtimeComputedAtApproval(entry)) {
+      // الحساب وقت الاعتماد للطلب المقدَّم في فترة مقفولة بس — الكشف التلقائي عمره ما يوصل هنا
+      if (autoApproval) throw new ConflictException('طلب الإضافي المحسوب وقت الاعتماد مايتعتمدش تلقائي')
+      return this.finalizeApprovalTimeOvertime(em, req, entry, actorUserId)
+    }
     const evidence = await this.currentOvertimeEvidence(em, req, entry)
     const steps = this.parseSteps(req.resolvedSteps)
     if (steps.some(step => step.action !== 'APPROVED' || !step.actedAt)) throw new ConflictException('لم تكتمل خطوات اعتماد الإضافي')
     const requested = entry.calculationSnapshot!.submission.requestedMinutes
     const approvedMinutes = entry.calculationSnapshot?.review?.approvedMinutes ?? (evidence.evidenceMode === 'EXEMPT_APPROVAL' ? requested : Math.min(evidence.detectedMinutes, requested ?? evidence.detectedMinutes))
-    const values = await buildOvertimeApprovalSnapshot(em, entry, evidence, { approvedMinutes, approverId: actorUserId, reason: entry.calculationSnapshot?.review?.reductionReason })
+    const values = await buildOvertimeApprovalSnapshot(em, entry, evidence, { approvedMinutes, approverId: actorUserId,
+      reason: entry.calculationSnapshot?.review?.reductionReason, ...(autoApproval ? { autoApproval } : {}) })
     Object.assign(entry, values, { status: 'APPROVED' })
     await em.getRepository(OvertimeEntry).save(entry)
-    await appendOvertimeEvent(em, { entryId: entry.id, requestId: req.id, actorUserId, eventType: 'APPROVED', payload: { approval: entry.calculationSnapshot?.approval } })
-    await markPayrollDaysDirty(em, entry.employeeId, [entry.date], 'اعتماد إضافي')
+    await appendOvertimeEvent(em, { entryId: entry.id, requestId: req.id, actorUserId: autoApproval ? null : actorUserId, eventType: 'APPROVED',
+      payload: { approval: entry.calculationSnapshot?.approval } })
+    await markPayrollDaysDirty(em, entry.employeeId, [entry.date], autoApproval ? 'اعتماد إضافي تلقائي' : 'اعتماد إضافي')
   }
 
   // قاعدة المالك (3): طلب الفترة المقفولة بيتحسب إضافيه من بصمات اليوم لحظة الاعتماد النهائي بنفس القاعدة،

@@ -727,6 +727,8 @@ export async function payrollOvertimeReport(em: EntityManager, scope: PayrollRep
       multiplier, hourlyRate: hourlyRate === null ? null : Math.round(hourlyRate * 1e4) / 1e4,
       amount: amount === null ? null : reportMoney(amount), amountSource, amountSourceLabel: OVERTIME_AMOUNT_SOURCE_LABELS[amountSource], issue,
       approverId: approval?.approverId ?? null, approvedAt: approval?.approvedAt ?? null,
+      // اعتماد تلقائي بقرار النظام في فترة إضافي عليها «اعتماد تلقائي» (approverId = 0)
+      autoApproved: approval?.autoApproval != null,
       run: run ? runRef(run, scope) : null, deferredFromRunId: entry.deferredFromRunId ?? null,
     }
   })

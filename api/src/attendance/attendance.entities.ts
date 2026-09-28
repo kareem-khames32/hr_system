@@ -328,4 +328,9 @@ export class OvertimePeriod {
 
   @Column({ default: true })
   isActive: boolean
+
+  // «اعتماد تلقائي» (قرار المالك 28 سبتمبر): الإضافي المكتشف من البصمة في أيام الفترة بيتعتمد لوحده بعد ما
+  // اليوم يخلص — بنفس الاعتماد النهائي والتسعير — من غير سلسلة الاعتماد. للفترة المفتوحة (OPEN) بس (ترحيل 074)
+  @Column({ default: false })
+  autoApprove: boolean
 }
