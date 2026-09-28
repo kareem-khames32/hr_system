@@ -45,6 +45,12 @@ const IdentityFormat = (issue: (value: unknown) => string | null, message: strin
   validate: (value: unknown) => value === null || value === undefined || (typeof value === 'string' && issue(value) === null),
   defaultMessage: () => message,
 } })
+// التعديل: النوع والطول بس — الشكل بيتفحص في الخدمة لو القيمة اتغيرت فعلًا بعد التطبيع (employeeIdentityIssues)، فملف قديم
+// برقم بصيغة قديمة (زي AB/123) يحفظ باقي حقوله والنموذج بيبعت نفس الرقم (مراجعة Codex الجولة 17، CR17-N01)
+const IdentityText = (max: number, message: string) => ValidateBy({ name: 'identityText', validator: {
+  validate: (value: unknown) => value === null || value === undefined || (typeof value === 'string' && value.length <= max),
+  defaultMessage: () => message,
+} })
 // الإنشاء: واحد منهم على الأقل — رسالة واحدة تطلع مع باقي الحقول الناقصة
 const NationalIdOrPassport = () => ValidateBy({ name: 'nationalIdOrPassport', validator: {
   validate: (value: unknown, args) => value != null || (args?.object as { passportNo?: unknown } | undefined)?.passportNo != null,
@@ -517,13 +523,13 @@ export class UpdateEmployeeDto {
   @MaxLength(30)
   phoneAlt?: string
 
-  // null أو فاضي = مسح؛ مسح واحد مسموح لو التاني فاضل بعد الحفظ (الخدمة هي الحكم)
+  // null أو فاضي = مسح؛ مسح واحد مسموح لو التاني فاضل بعد الحفظ (الخدمة هي الحكم، ومعاها شكل القيمة المتغيرة بس)
   @NormalizeIdentity()
-  @IdentityFormat(nationalIdIssue, NATIONAL_ID_FORMAT_MESSAGE)
+  @IdentityText(50, NATIONAL_ID_FORMAT_MESSAGE)
   nationalId?: string | null
 
   @NormalizeIdentity()
-  @IdentityFormat(passportNoIssue, PASSPORT_NO_FORMAT_MESSAGE)
+  @IdentityText(40, PASSPORT_NO_FORMAT_MESSAGE)
   passportNo?: string | null
 
   @IsOptional()

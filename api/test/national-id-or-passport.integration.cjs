@@ -208,6 +208,11 @@ test('ID-04: التعديل — مسح واحد والتاني موجود مسم
   ok(await request(U.admin, 'PATCH', `/employees/${emp.id}`, { nationalId: ' editid2 ', phone: '0551112233' }), 200)
   saved = await fresh(emp.id)
   assert.equal(saved.nationalId, 'EDITID2'); assert.equal(saved.phone, '0551112233')
+  // رقم جواز قديم بصيغة قبل القرار: النموذج بيبعته زي ما هو مع أي تعديل، والحفظ بيعدّي (مراجعة Codex الجولة 17، CR17-N01)
+  await repo('Employee').update({ id: emp.id }, { passportNo: 'AB/123' })
+  ok(await request(U.admin, 'PATCH', `/employees/${emp.id}`, { passportNo: 'AB/123', phone: '0551112234' }), 200)
+  saved = await fresh(emp.id)
+  assert.equal(saved.passportNo, 'AB/123'); assert.equal(saved.phone, '0551112234')
 })
 
 test('ID-05: ملف قديم من غير هوية ولا جواز يفتح ويحفظ باقي حقوله، وقيمة مكررة من قبل القرار مابتمنعش الحفظ', async () => {

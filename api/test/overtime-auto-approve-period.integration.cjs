@@ -693,13 +693,18 @@ const shape = () => ds.query(`SELECT t.name AS type, c.is_nullable AS nullable, 
   FROM sys.columns c JOIN sys.types t ON t.user_type_id = c.user_type_id LEFT JOIN sys.default_constraints d ON d.object_id = c.default_object_id
   WHERE c.object_id = OBJECT_ID('dbo.overtime_periods') AND c.name = 'autoApprove'`)
 const EXPECTED_SHAPE = [{ type: 'bit', nullable: false, df: DF, definition: '((0))' }]
-const content = () => fs.readFileSync(path.join(MIGRATIONS, FILE), 'utf8')
+// نسخة العمل على Windows بتبقى CRLF (core.autocrlf) والمُرحّل بيوحّدها قبل البصمة — الفحص النصي على الشكل الموحّد
+const content = () => fs.readFileSync(path.join(MIGRATIONS, FILE), 'utf8').replace(/\r\n/g, '\n')
 
 test('AA-13: ترحيل 20260928_074 — إضافي بعمود واحد بقيد TypeORM، عبر المُرحّل المجمّع (بروفة ثم تطبيق)، الفترات القائمة صفر، آمن للتكرار، وفرق المخطط صفر', async () => {
   // فحص نصي: من غير BOM ولا CR، مفيش عبارة ممنوعة ولا تعبئة، وأكواده فريدة بين كل الملفات، واسم قيده هو حساب TypeORM
   const raw = fs.readFileSync(path.join(MIGRATIONS, FILE))
   assert.notDeepEqual([...raw.subarray(0, 3)], [0xef, 0xbb, 0xbf], 'من غير BOM')
-  assert.equal(raw.includes(13), false, 'LF بس')
+  // LF في نسخة المستودع (مراجعة Codex الجولة 17، CR17-N02: نسخة العمل CRLF على Windows)
+  const indexed = require('node:child_process').execFileSync('git', ['ls-files', '--eol', '--', `docs/migrations/payroll/${FILE}`],
+    { cwd: path.join(apiRoot, '..'), encoding: 'utf8' })
+  assert.match(indexed, /^i\/lf\b/, 'LF في المستودع')
+  assert.ok(!raw.toString('utf8').replace(/\r\n/g, '\n').includes('\r'), 'نهايات سطور سليمة')
   const text = content()
   assert.deepEqual(migrate.forbiddenStatements(text), [])
   assert.deepEqual(migrate.throwCodes(text), [74001, 74002, 74003, 74004])

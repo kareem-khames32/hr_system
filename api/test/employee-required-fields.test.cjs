@@ -115,7 +115,11 @@ test('CreateEmployeeDto: رسالة عربية واحدة لكل حقل إجبا
   assert.deepEqual(dtoMessages(UpdateEmployeeDto, { phone: '0501234567' }), [], 'التعديل بحقل واحد يمر')
   assert.deepEqual(dtoMessages(UpdateEmployeeDto, { nationalId: null, passportNo: '' }), [], 'المسح في التعديل حكمه في الخدمة')
   assert.equal(plainToInstance(UpdateEmployeeDto, { passportNo: '' }).passportNo, null)
-  assert.deepEqual(dtoMessages(UpdateEmployeeDto, { passportNo: 'x' }), ['رقم جواز السفر: حروف إنجليزية وأرقام وشرطة بس (من 3 لـ 40)'])
+  // التعديل: الـDTO بيفحص النوع والطول بس، والشكل للقيمة المتغيرة فعلًا في الخدمة — رقم قديم بصيغة قديمة يحفظ باقي الملف
+  // (مراجعة Codex الجولة 17، CR17-N01؛ رفض القيمة الجديدة الغلط في الخدمة متغطي في national-id-or-passport ID-02/ID-04)
+  assert.deepEqual(dtoMessages(UpdateEmployeeDto, { passportNo: 'AB/123' }), [], 'رقم قديم بصيغة قديمة يعدّي الـDTO')
+  assert.deepEqual(dtoMessages(UpdateEmployeeDto, { passportNo: 'A'.repeat(41) }), ['رقم جواز السفر: حروف إنجليزية وأرقام وشرطة بس (من 3 لـ 40)'])
+  assert.deepEqual(dtoMessages(UpdateEmployeeDto, { nationalId: 1012345678 }), ['رقم الهوية / الإقامة: حروف إنجليزية وأرقام وشرطة بس (من 3 لـ 50)'], 'رقم مش نص مرفوض')
 })
 
 test('الواجهة: نموذج الموظف يستخدم نفس القاعدة ويعلّم الخانات الإجبارية', () => {

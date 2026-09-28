@@ -41,6 +41,7 @@ import {
 } from '../attendance/attendance.service'
 import { OvertimeEntry } from './entities/attendance.entities'
 import { OVERTIME_ZERO_AT_APPROVAL_BLOCKERS, overtimeSubmissionBlockers, type OvertimeEvidence } from '../attendance/overtime-evidence'
+import { overtimeWindowRedactor } from '../attendance/overtime-window-view'
 import { ApproverResolver, ResolvedStep } from './approver-resolver.service'
 import { audienceNeedsPositions, audienceSubjectOf, requestAudienceAllows, requestTypeInBranch, type AudiencePositions } from './request-audience'
 import { definitionInBranch } from '../common/definition-branch'
@@ -2071,6 +2072,8 @@ export class RequestsService {
       : [])
     const saved = entry.calculationSnapshot
     const approved = saved?.approval
+    // نوافذ الإضافي في الدليل على قد نطاق القارئ: فترة فرع تاني مايظهرش اسمها (مراجعة Codex الجولة 17، CR17-B02)
+    const windowView = await overtimeWindowRedactor(this.ds.manager, branchScopeOf(user), [saved?.submission, saved?.review])
     // الخطوة 13: جاهزية راتب شهر يوم العمل قبل الاعتماد النهائي، حتى لا يُفاجأ المعتمد الأخير بـOT_SALARY_MONTH_EVIDENCE_REQUIRED.
     const wageEvidence = !approved && ['DETECTED', 'SUBMITTED'].includes(entry.status)
       ? await this.ds.transaction(em => overtimeWageEvidence(em, entry.employeeId, entry.date)).catch(() => null) : null
@@ -2080,7 +2083,7 @@ export class RequestsService {
       hoursRequested: entry.hoursRequested, hoursActual: entry.hoursActual, approvedMinutes: entry.approvedMinutes,
       amountSnapshot: entry.amountSnapshot, hourlyRateSnapshot: entry.hourlyRateSnapshot, originalPeriod: entry.originalPeriod,
       deferredFromRunId: entry.deferredFromRunId, calculationSnapshot: saved ? { schemaVersion: saved.schemaVersion,
-        submission: saved.submission ?? null, review: saved.review ?? null,
+        submission: windowView(saved.submission ?? null), review: windowView(saved.review ?? null),
         // نتيجة حساب طلب الفترة المقفولة وقت الاعتماد (بما فيها الصفر) — من غير تفاصيل الأجر.
         approvalResult: saved.approvalResult ? { approvedMinutes: saved.approvalResult.approvedMinutes, detectedMinutes: saved.approvalResult.detectedMinutes,
           rawMinutes: saved.approvalResult.rawMinutes, workedMinutes: saved.approvalResult.workedMinutes, requiredMinutes: saved.approvalResult.requiredMinutes,

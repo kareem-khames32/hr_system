@@ -232,13 +232,15 @@ export class EmployeesService {
   // حساب فرع ياخد رسالة عامة لو الموظف التاني في فرع تاني.
   // رقم الهوية والجواز بيتقارنوا بعد التطبيع؛ وفي التعديل (current = الملف المحفوظ) الرقم اللي ماتغيرش مايتفحصش —
   // ملف قديم بقيمة مكررة من قبل القرار يحفظ باقي حقوله
+  // em = معاملة الحفظ (بعد lockEmployeeIdentities): الفحص بيشوف اللي اتحفظ قبله تحت نفس القفل
   private async assertUnique(data: {
     fingerprintCode?: string
     email?: string
     nationalId?: string | null
     passportNo?: string | null
     excludeId?: number
-  }, branchScope: BranchScope, current?: EmployeeIdentityValues) {
+  }, branchScope: BranchScope, current?: EmployeeIdentityValues, em?: EntityManager) {
+    const employees = em ? em.getRepository(Employee) : this.employees
     const notSelf = data.excludeId ? { id: Not(data.excludeId) } : {}
     const whose = (dup: Employee) => employeeNameInScope(dup, branchScope)
     const changedIdentity = (key: 'nationalId' | 'passportNo') => {
@@ -247,13 +249,13 @@ export class EmployeesService {
     }
     // كود الموظف يولّده النظام (فريد بفهرس) — مش مدخل ومش مفتاح بصمة؛ رقم البصمة وحده يربط البصمات
     if (data.fingerprintCode) {
-      const dup = await this.employees.findOne({ where: { fingerprintCode: data.fingerprintCode, ...notSelf } })
+      const dup = await employees.findOne({ where: { fingerprintCode: data.fingerprintCode, ...notSelf } })
       if (dup) {
         throw new ConflictException(`رقم البصمة ${data.fingerprintCode} مستخدم بالفعل${whose(dup)} — لا يتكرر`)
       }
     }
     if (data.email) {
-      const dup = await this.employees.findOne({
+      const dup = await employees.findOne({
         where: { email: data.email, ...notSelf },
       })
       if (dup) {
@@ -262,7 +264,7 @@ export class EmployeesService {
     }
     const nationalId = changedIdentity('nationalId')
     if (nationalId) {
-      const dup = await this.employees.findOne({
+      const dup = await employees.findOne({
         where: { nationalId: sameIdentity(nationalId), ...notSelf },
       })
       if (dup) {
@@ -271,12 +273,25 @@ export class EmployeesService {
     }
     const passportNo = changedIdentity('passportNo')
     if (passportNo) {
-      const dup = await this.employees.findOne({
+      const dup = await employees.findOne({
         where: { passportNo: sameIdentity(passportNo), ...notSelf },
       })
       if (dup) {
         throw new ConflictException(`رقم الجواز ${passportNo} مسجل لموظف آخر${whose(dup)}`)
       }
+    }
+  }
+
+  // تفرد البصمة والبريد والهوية والجواز تحت التزامن (مراجعة Codex الجولة 17، CR17-B01): حفظين متزامنين لنفس الرقم لموظفين
+  // مختلفين كانوا بيعدّوا الاتنين لأن الفحص كان قبل معاملة الحفظ. دلوقتي الفحص بيتعاد جوه المعاملة بعد القفل ده، فالتاني
+  // بيستنى الأول يخلص ويشوف رقمه المحفوظ. الفحص المبكر قبل المعاملة فاضل للرد السريع بس
+  private async lockEmployeeIdentities(em: EntityManager) {
+    if (em.connection.options.type !== 'mssql') return
+    const rows = await em.query(`DECLARE @result int;
+      EXEC @result = sys.sp_getapplock @Resource = 'hr:employees:identity', @LockMode = 'Exclusive', @LockOwner = 'Transaction', @LockTimeout = 15000;
+      SELECT @result AS lockResult;`)
+    if (!rows.length || Number(rows[0].lockResult) < 0) {
+      throw new ConflictException('بيانات الموظفين بتتحفظ دلوقتي من حد تاني؛ جرّب تاني بعد شوية')
     }
   }
 
@@ -439,6 +454,9 @@ export class EmployeesService {
     }
     const emp = await this.employees.manager.transaction(async em => {
       await lockAttendanceRuleMutation(em)
+      // التفرد جوه المعاملة تحت القفل (CR17-B01)
+      await this.lockEmployeeIdentities(em)
+      await this.assertUnique(dto, branchScope, undefined, em)
       const employeeCode = await generateEmployeeCode(em)
       const result = await em.save(Employee, em.create(Employee, { ...(empDto as Partial<Employee>), employeeCode }))
       {
@@ -731,6 +749,11 @@ export class EmployeesService {
       await lockAttendanceRuleMutation(em, [id])
       const fresh = await em.findOneBy(Employee, { id })
       if (!fresh || !inBranchScope(branchScope, fresh.branchId)) throw new NotFoundException('الموظف غير موجود')
+      // التفرد جوه المعاملة تحت القفل لو التعديل بيلمس بصمة أو بريد أو هوية أو جواز (CR17-B01)؛ «ماتغيرش» على المحفوظ دلوقتي
+      if ([dto.fingerprintCode, dto.email, dto.nationalId, dto.passportNo].some(value => value !== undefined)) {
+        await this.lockEmployeeIdentities(em)
+        await this.assertUnique({ ...dto, excludeId: id }, branchScope, fresh, em)
+      }
       const beforeChange = { ...fresh }
       const oldStatus = fresh.status
       const branchChanged = dto.branchId !== undefined && dto.branchId !== fresh.branchId

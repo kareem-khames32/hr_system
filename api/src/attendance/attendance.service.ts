@@ -62,6 +62,7 @@ import type { AttendanceGraceSource } from './attendance-rule-history'
 import { calculateAttendanceFlex, attendanceIntervalMinutes } from './attendance-flex-calculator'
 import type { AttendanceFlexResult, AttendanceRuleSnapshot, FlexOverrideMode } from './attendance-flex-calculator'
 import { overtimeEvidenceFingerprint, overtimeMinutes, overtimeSubmissionBlockers, selectOvertimePunches, workedOvertime } from './overtime-evidence'
+import { overtimeWindowRedactor } from './overtime-window-view'
 import type { OvertimeEvidence, OvertimeEvidencePolicy, OvertimeBlocker } from './overtime-evidence'
 import { appendOvertimeEvent, assertOvertimeDayAvailable, claimOvertimeDay, describeOvertimeSubmission, findActiveOvertimeEntries, releaseOvertimeDayClaim } from '../requests/overtime-day-claims'
 import { queueOvertimeDispatch } from '../requests/overtime-dispatch'
@@ -2958,9 +2959,11 @@ export class AttendanceService {
       // الفترة المقفولة: نقص البصمات أو الزيادة الأقل من الشرط مايمنعش التقديم — الحساب وقت الاعتماد النهائي.
       const deferral = overtimeSubmissionBlockers(evidence, automatic)
       const blockers = [...deferral.blockers, ...submission]
-      return { ...evidence, blockers, deferredBlockers: deferral.deferred, computeAtApproval: deferral.deferred.length > 0,
+      // نافذة الإضافي على قد نطاق القارئ: فترة فرع تاني مايظهرش اسمها (مراجعة Codex الجولة 17، CR17-B02)
+      const windowView = await overtimeWindowRedactor(em, scope, [evidence])
+      return windowView({ ...evidence, blockers, deferredBlockers: deferral.deferred, computeAtApproval: deferral.deferred.length > 0,
         canSubmit: blockers.length === 0, resubmission: requestId != null,
-        existingRecord: existing[0] ? { id: existing[0].id, status: existing[0].status, requestId: existing[0].requestId ?? null } : null }
+        existingRecord: existing[0] ? { id: existing[0].id, status: existing[0].status, requestId: existing[0].requestId ?? null } : null })
     })
   }
 
@@ -3896,6 +3899,8 @@ export class AttendanceService {
       reqs.push(...(await this.requests.find({ where: { id: In(reqIds.slice(i, i + 500)) } })))
     }
     const reqById = new Map(reqs.map((r) => [r.id, r]))
+    // نوافذ الإضافي في اللقطات على قد نطاق القارئ (مراجعة Codex الجولة 17، CR17-B02)
+    const windowView = await overtimeWindowRedactor(this.days.manager, scope, rows.map((r) => r.calculationSnapshot))
     const mayConfirm = userHasPerm(user, 'overtime.confirm')
     const requiresConfirmation = true
     // «اعتماد تلقائي»: المعتمد تلقائيًا بيتعرف من لقطة اعتماده، والمكتشف اللي نافذة يومه فيها فترة اعتماد تلقائي شغالة
@@ -3909,7 +3914,8 @@ export class AttendanceService {
       entries: rows.map((r) => {
         const emp = empById.get(r.employeeId)
         const req = r.requestId ? reqById.get(r.requestId) : undefined
-        const { calculationSnapshot, hourlyRateSnapshot, amountSnapshot, ...attendanceFields } = r
+        const { calculationSnapshot: storedSnapshot, hourlyRateSnapshot, amountSnapshot, ...attendanceFields } = r
+        const calculationSnapshot = windowView(storedSnapshot)
         const maySeeFinancials = r.employeeId === user.employeeId || userHasPerm(user, 'payroll.view')
         return {
           ...attendanceFields,
@@ -3953,7 +3959,10 @@ export class AttendanceService {
     if (scope === null) return rows
     const emps = await this.employees.find({ where: { branchId: branchIdIn(scope) } })
     const ids = new Set(emps.map((e) => e.id))
-    return rows.filter((r) => ids.has(r.employeeId))
+    const mine = rows.filter((r) => ids.has(r.employeeId))
+    // نوافذ الإضافي على قد نطاق القارئ (مراجعة Codex الجولة 17، CR17-B02)
+    const windowView = await overtimeWindowRedactor(this.days.manager, scope, mine.map((r) => r.calculationSnapshot))
+    return mine.map((r) => ({ ...r, calculationSnapshot: windowView(r.calculationSnapshot) }))
   }
 
   // الاعتماد يمر بكل خطوات الطلب؛ هذا المسار يرفض المكتشف غير الموجه فقط بسبب موثق.
