@@ -47,6 +47,8 @@ export interface OvertimeReportRow {
   detectedMinutes: number | null; requestedMinutes: number | null; approvedMinutes: number | null; differenceMinutes: number | null
   multiplier: number | null; hourlyRate: number | null; amount: Money | null; amountSource: string; amountSourceLabel: string; issue: string | null
   approverId: number | null; approvedAt: string | null; run: ReportRunRef | null; deferredFromRunId: number | null
+  // اعتماد تلقائي بقرار النظام في فترة إضافي عليها «اعتماد تلقائي»
+  autoApproved?: boolean
 }
 export interface OvertimeReport {
   period: string | null; from: string; to: string; rows: OvertimeReportRow[]

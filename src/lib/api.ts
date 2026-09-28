@@ -466,7 +466,8 @@ export interface ApiOvertimeRequestDetail {
     approvalResult?: { approvedMinutes: number; detectedMinutes: number; rawMinutes: number; workedMinutes: number | null; requiredMinutes: number | null;
       checkIn: string | null; checkOut: string | null; computedAt: string; message: string } | null;
     review: { approvedMinutes: number; reductionReason?: string; actorUserId?: number } | null;
-    approval: { approvedMinutes: number; hourlyRate: number; multiplier: number; amount: number; dayKind: string; approvedAt: string; approverId: number } | null;
+    // autoApproved = اعتماد تلقائي بقرار النظام (approverId = 0) في فترة إضافي عليها «اعتماد تلقائي»
+    approval: { approvedMinutes: number; hourlyRate: number; multiplier: number; amount: number; dayKind: string; approvedAt: string; approverId: number; autoApproved?: boolean } | null;
   } | null
   events: { id: number; eventType: string; actorUserId: number | null; actorName?: string | null; stepOrder: number | null;
     reason: string | null; createdAt: string; beforeMinutes: number | null; approvedMinutes: number | null }[]
@@ -955,13 +956,15 @@ export interface ApiOvertimePeriod {
   effect: 'OPEN' | 'CLOSED'
   branchId?: number | null
   isActive: boolean
+  // «اعتماد تلقائي» (قرار المالك 28 سبتمبر): الإضافي المكتشف في الفترة بيتعتمد لوحده بعد ما اليوم يخلص — للمفتوحة بس
+  autoApprove: boolean
 }
 export const fetchOvertimePeriods = () =>
   get<ApiOvertimePeriod[]>('/attendance/overtime-periods')
 // recompute = الأيام اللي فاتت جوه الفترة واتحسبت تاني بعد الحفظ
 export interface ApiOvertimePeriodRecompute { recomputed: number; failed: number }
 export const createOvertimePeriod = (
-  p: Omit<ApiOvertimePeriod, 'id' | 'isActive'>
+  p: Omit<ApiOvertimePeriod, 'id' | 'isActive' | 'autoApprove'> & { autoApprove?: boolean }
 ) => post<ApiOvertimePeriod & { recompute?: ApiOvertimePeriodRecompute }>('/attendance/overtime-periods', p)
 export const updateOvertimePeriod = (id: number, p: Partial<ApiOvertimePeriod>) =>
   patch<ApiOvertimePeriod & { recompute?: ApiOvertimePeriodRecompute }>(`/attendance/overtime-periods/${id}`, p)
@@ -1021,6 +1024,8 @@ export interface ApiOvertimeEntry {
   payrollRunId: number | null
   employeeName: string | null; employeeCode: string | null; departmentId: number | null
   requestStatus: string | null; requestTypeCode: string | null
+  // «اعتماد تلقائي»: اتعتمد بقرار النظام في فترة عليها العلامة، أو مكتشف بيستنى يومه يخلص عشان يتعتمد لوحده
+  autoApproved?: boolean; autoApprovalPending?: boolean
   isSelf: boolean; canConfirm: boolean; canReject?: boolean; requiresWorkflow?: boolean
   approvedMinutes?: number | null; amountSnapshot?: number | null; hourlyRateSnapshot?: number | null
   evidence?: OvertimeEvidence | null

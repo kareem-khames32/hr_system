@@ -23,6 +23,8 @@ const eventLabels: Record<string, string> = {
   RESUBMITTED: 'إعادة تقديم الأدلة', STEP_APPROVED: 'اعتماد خطوة', MINUTES_REDUCED: 'تخفيض الدقائق',
   APPROVED: 'اكتمال الاعتماد وتثبيت القيمة', APPROVED_ZERO: 'اكتمل الاعتماد والإضافي المحسوب = صفر', REJECTED: 'رفض', RETURNED: 'إعادة لاستكمال المعلومات',
   CANCELLED: 'إلغاء', AUTO_CANCELLED: 'إلغاء بعد مراجعة الحضور', CLAIM_RELEASED: 'تحرير حجز اليوم', STEP_ESCALATED: 'تصعيد الخطوة',
+  // «اعتماد تلقائي» لفترة الإضافي المفتوحة (قرار المالك 28 سبتمبر)
+  AUTO_APPROVED: 'اعتماد تلقائي من فترة الإضافي', AUTO_APPROVAL_FALLBACK: 'تعذّر الاعتماد التلقائي — رجع لسلسلة الاعتماد',
 }
 
 // طلب الفترة المقفولة اللي إضافيه بيتحسب من البصمات وقت الاعتماد النهائي (لسه ماتحسبش).
@@ -113,6 +115,7 @@ export default function OvertimeRequestSummary({ overtime, reviewRequired }: {
       {amount != null && <div className="rounded-lg bg-success-50 p-3 text-success-800">
         <p className="text-sm">القيمة المثبتة عند الاعتماد</p><p className="text-lg font-bold">{formatMoney(amount)}</p>
         {approval?.approvedAt && <p className="text-xs mt-1">اعتمدت في {time(approval.approvedAt)}</p>}
+        {approval?.autoApproved && <p className="text-xs mt-1 font-medium">اعتماد تلقائي — فترة إضافي مفتوحة عليها «اعتماد تلقائي»، بعد ما اليوم خلص وبنفس الحساب والسقوف</p>}
       </div>}
       {overtime?.originalPeriod && <p className="text-sm text-amber-800">{overtime.deferredFromRunId != null ? 'مستحق بأثر رجعي عن فترة' : 'فترة الاستحقاق الأصلية'} {overtime.originalPeriod}</p>}
       {!!overtime?.events.length && <div className="border-t border-indigo-100 pt-3">

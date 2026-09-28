@@ -44,6 +44,21 @@ export interface LegacyExplicitOvertimeRequest {
   requestId: number; requestHours: number; entryHoursRequested: number; sourcePayableHours: number | null
 }
 
+/**
+ * «اعتماد تلقائي» (قرار المالك 28 سبتمبر): الإضافي المكتشف في فترة مفتوحة عليها العلامة بيتعتمد بقرار النظام (approverId = 0)
+ * بنفس اللقطة. العلامة بتحمل معرّفات الفترات اللي سمحت بيه، ومن غيرها approverId لازم مستخدم حقيقي (≥ 1) زي الأول.
+ */
+export interface OvertimeAutoApprovalMarker { periodIds: number[] }
+export function isOvertimeAutoApprovalMarker(value: unknown): value is OvertimeAutoApprovalMarker {
+  const ids = (value as { periodIds?: unknown } | null | undefined)?.periodIds
+  return value != null && typeof value === 'object' && !Array.isArray(value) && Object.keys(value).length === 1 &&
+    Array.isArray(ids) && ids.length > 0 && ids.every(id => Number.isSafeInteger(id) && id > 0) && new Set(ids).size === ids.length
+}
+// معتمد اللقطة: مستخدم حقيقي من غير علامة، أو النظام (0) بعلامة اعتماد تلقائي صالحة — مفيش خلط بينهم
+const validOvertimeApprover = (approverId: unknown, autoApproval: unknown) => autoApproval == null
+  ? Number.isSafeInteger(approverId) && Number(approverId) >= 1
+  : approverId === 0 && isOvertimeAutoApprovalMarker(autoApproval)
+
 /** EX-11: نفس المستند والساعات الصريحة للقديم في المسير والتصفية؛ لا اعتماد من بصمة المستثنى. */
 export async function legacyExemptOvertimeSource(em: EntityManager, row: OvertimeEntry, decision: AttendanceExemptionDayPolicy):
   Promise<{ entry: OvertimeEntry; interpretation: LegacyExplicitOvertimeRequest | null } | null> {
@@ -74,7 +89,7 @@ export function overtimeFinancialValue(entry: OvertimeEntry, legacyHourlyRate: n
   const approval = saved?.approval
   if (saved?.schemaVersion !== 1 || approval?.schemaVersion !== 1 || approval.employeeId !== entry.employeeId ||
     approval.workDate !== entry.date || !Number.isSafeInteger(approval.approvedMinutes) || approval.approvedMinutes <= 0 ||
-    !Number.isSafeInteger(approval.approverId) || approval.approverId < 1 || typeof approval.approvedAt !== 'string' || !Number.isFinite(Date.parse(approval.approvedAt)) ||
+    !validOvertimeApprover(approval.approverId, approval.autoApproval) || typeof approval.approvedAt !== 'string' || !Number.isFinite(Date.parse(approval.approvedAt)) ||
     !['WEEKDAY', 'WEEKEND', 'HOLIDAY'].includes(approval.dayKind) || !['PUNCH', 'EXEMPT_APPROVAL'].includes(approval.evidenceMode) ||
     typeof approval.evidenceFingerprint !== 'string' || !/^[a-f0-9]{64}$/.test(approval.evidenceFingerprint) ||
     approval.evidence?.fingerprint !== approval.evidenceFingerprint || approval.evidence?.employeeId !== entry.employeeId ||
@@ -296,11 +311,11 @@ export async function overtimeWageEvidence(em: EntityManager, employeeId: number
 
 /** OT-08/11: تُنشأ اللقطة مرة واحدة داخل معاملة آخر موافقة، ثم يحفظها صاحب المعاملة مع القرار. */
 export async function buildOvertimeApprovalSnapshot(em: EntityManager, entry: OvertimeEntry, evidence: OvertimeEvidence,
-  decision: { approvedMinutes: number; approverId: number; reason?: string }): Promise<Partial<OvertimeEntry>> {
+  decision: { approvedMinutes: number; approverId: number; reason?: string; autoApproval?: OvertimeAutoApprovalMarker }): Promise<Partial<OvertimeEntry>> {
   if (!em.queryRunner?.isTransactionActive) throw new Error('Overtime approval snapshot requires the employee finance transaction')
   if ((entry.calculationSnapshot as any)?.approval || ['APPROVED', 'PAID'].includes(entry.status)) throw new ConflictException('قيمة الإضافي المعتمدة مثبتة ولا يجوز استبدالها')
   if (evidence.employeeId !== entry.employeeId || evidence.workDate !== entry.date || !Number.isSafeInteger(decision.approvedMinutes) ||
-    decision.approvedMinutes <= 0 || !Number.isSafeInteger(decision.approverId) || decision.approverId < 1) throw new BadRequestException('بيانات اعتماد الإضافي غير صالحة')
+    decision.approvedMinutes <= 0 || !validOvertimeApprover(decision.approverId, decision.autoApproval)) throw new BadRequestException('بيانات اعتماد الإضافي غير صالحة')
   const submission = (entry.calculationSnapshot as any)?.submission
   const hasRequestedMinutes = submission != null && Object.prototype.hasOwnProperty.call(submission, 'requestedMinutes')
   const claimed = entry.hoursRequested == null ? null : Number(entry.hoursRequested)
@@ -338,7 +353,10 @@ export async function buildOvertimeApprovalSnapshot(em: EntityManager, entry: Ov
   if (!Number.isSafeInteger(Math.round(amount * 100)) || hourlyRate >= 1e12) throw new BadRequestException('قيمة الإضافي تتجاوز الدقة المالية المدعومة')
   const closed = await closedOvertimePeriod(em, entry.employeeId, entry.date)
   const approval = { schemaVersion: 1, employeeId: entry.employeeId, workDate: entry.date,
-    approvedAt: new Date().toISOString(), approverId: decision.approverId, reason: decision.reason?.trim() || null,
+    approvedAt: new Date().toISOString(), approverId: decision.approverId,
+    // الاعتماد التلقائي بس: الفترات اللي سمحت بيه (اللقطة اليدوية من غير المفتاح ده زي ما كانت بالحرف)
+    ...(decision.autoApproval ? { autoApproval: { periodIds: [...decision.autoApproval.periodIds] } } : {}),
+    reason: decision.reason?.trim() || null,
     approvedMinutes: decision.approvedMinutes, hours, multiplier, hourlyRate, amount,
     wageBase, wageBasis: 'GROSS_MONTHLY_SALARY', wageComponents, monthlyDays, dailyHours, dayKind: evidence.dayKind,
     wagePayrollPeriod, wageSource: { kind: salary.source.kind, referencePeriod: salary.source.referencePeriod, sourceRef: salary.source.sourceRef,

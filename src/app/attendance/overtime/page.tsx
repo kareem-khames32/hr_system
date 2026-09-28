@@ -90,6 +90,9 @@ interface OvertimeEntry {
   windowReason: string | null
   backdateDays: number | null
   blockers: string[]
+  // «اعتماد تلقائي» (قرار المالك 28 سبتمبر): اتعتمد بقرار النظام، أو مكتشف بيستنى يومه يخلص عشان يتعتمد لوحده
+  autoApproved: boolean
+  autoApprovalPending: boolean
 }
 
 // عمر اليوم بالأيام حتى اليوم المحلي — نفس حساب الخادم لحد الأثر الرجعي
@@ -198,6 +201,8 @@ export default function OvertimePage() {
       windowReason: o.evidence?.window?.reason ?? null,
       backdateDays: o.evidence?.policy?.backdateDays ?? null,
       blockers: (o.evidence?.blockers ?? []).map((blocker) => blocker.message),
+      autoApproved: o.autoApproved === true,
+      autoApprovalPending: o.autoApprovalPending === true,
     }))
   }, [rows, departments])
 
@@ -459,6 +464,9 @@ export default function OvertimePage() {
                       <span className={`badge text-xs ${statusConfig[e.status].className}`}>
                         {statusConfig[e.status].label}
                       </span>
+                      {e.autoApproved && (
+                        <p className="mt-1"><span className="badge text-[10px] bg-indigo-50 text-indigo-700" title="اتعتمد لوحده في فترة إضافي عليها «اعتماد تلقائي» بعد ما اليوم خلص — بنفس الحساب والسقوف">اعتماد تلقائي</span></p>
+                      )}
                       {e.requestId != null && e.requestStatus && (
                         <p className="text-[10px] text-gray-400 mt-1">
                           الطلب <span className="font-mono" dir="ltr">#{e.requestId}</span>:{' '}
@@ -480,6 +488,8 @@ export default function OvertimePage() {
                             <p className="text-xs text-amber-700 font-medium" title="لن يصل هذا السطر إلى دورة الاعتماد بوضعه الحالي">
                               {routingBlock(e)}
                             </p>
+                          ) : e.autoApprovalPending ? (
+                            <p className="text-xs text-indigo-600">اعتماد تلقائي — بيتعتمد لوحده بعد ما اليوم يخلص</p>
                           ) : (
                             <p className="text-xs text-gray-400">بانتظار التوجيه إلى دورة الاعتماد</p>
                           )}
@@ -492,7 +502,7 @@ export default function OvertimePage() {
                         </div>
                       )}
                       {e.status === 'APPROVED' && (
-                        <span className="text-xs text-indigo-500">معتمد بانتظار الصرف</span>
+                        <span className="text-xs text-indigo-500">{e.autoApproved ? 'معتمد تلقائي بانتظار الصرف' : 'معتمد بانتظار الصرف'}</span>
                       )}
                       {e.status === 'PAID' && (
                         <span className="text-xs text-success-600">مُقفل ✓</span>
@@ -517,6 +527,8 @@ export default function OvertimePage() {
             تُراجع الساعات من أدلة اليوم، وتثبت الساعات والقيمة عند اكتمال دورة الاعتماد.
             المستثنى من الحضور المستحق للإضافي يقدم ساعات صريحة يعتمدها المدير والموارد البشرية.
             افتح الطلب المرتبط للمراجعة والموافقة؛ الرفض هنا متاح للمكتشف الذي لم يُوجَّه بعد.
+            الاستثناء الوحيد فترة مفتوحة عليها «اعتماد تلقائي»: المكتشف في أيامها بيتعتمد لوحده بعد ما اليوم يخلص بنفس الحساب والسقوف،
+            ولو الاعتماد اترفض (زي تجاوز السقف) بيرجع لسلسلة الاعتماد بسببه.
           </p>
         </div>
 
@@ -703,6 +715,26 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
     }
   }
 
+  // «اعتماد تلقائي» للفترة المفتوحة — مابيعيدش حساب أيام (نافذة اليوم زي ما هي): المكتشف اللي لسه ما اتوجهش بيتحسم في
+  // دورة التوجيه الجاية، واللي في سلسلة اعتماد بيفضل قرار معتمده
+  const toggleAutoApprove = async (p: ApiOvertimePeriod) => {
+    setBusyId(p.id)
+    setError('')
+    setNotice('')
+    try {
+      await updateOvertimePeriod(p.id, { autoApprove: !p.autoApprove })
+      await reload()
+      setNotice(p.autoApprove
+        ? `اتشال «اعتماد تلقائي» من فترة «${p.name}» — الإضافي المكتشف فيها بيمشي في سلسلة الاعتماد`
+        : `اتفعّل «اعتماد تلقائي» لفترة «${p.name}» — الإضافي المكتشف فيها بيتعتمد لوحده بعد ما يومه يخلص`)
+      onChanged()
+    } catch (e) {
+      setError(e instanceof Error ? e.message : 'تعذر تعديل الاعتماد التلقائي للفترة')
+    } finally {
+      setBusyId(null)
+    }
+  }
+
   const remove = async (p: ApiOvertimePeriod) => {
     if (!confirm(`متأكد إنك عايز تحذف فترة «${p.name}»؟`)) return
     setBusyId(p.id)
@@ -759,6 +791,8 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
         إضافة أو تعديل أو حذف فترة بيعيد حساب الأيام اللي فاتت جواها فورًا: القفل بيلغي الإضافي المكتشف
         اللي لسه ما اتبعتش للاعتماد، والفتح بيكتشف الإضافي في الأيام دي. اللي اتبعت للاعتماد فعلًا بيفضل
         قرار المعتمد، والمعتمد أو المصروف مابيتغيرش.
+        الفترة المفتوحة ممكن يبقى عليها «اعتماد تلقائي»: الإضافي المكتشف في أيامها بيتعتمد لوحده بعد ما اليوم يخلص
+        بنفس الحساب والسقوف، ولو الاعتماد اترفض (زي تجاوز السقف) بيرجع لسلسلة الاعتماد.
       </p>
 
       {error && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm mb-4">{error}</div>}
@@ -798,6 +832,10 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
                       <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${p.isActive ? 'bg-success-100 text-success-600' : 'bg-gray-200 text-gray-500'}`}>
                         {p.isActive ? 'شغالة' : 'متوقفة'}
                       </span>
+                      {isOpen && p.autoApprove && (
+                        <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-indigo-100 text-indigo-700"
+                          title="الإضافي المكتشف في الفترة دي بيتعتمد لوحده بعد ما اليوم يخلص">اعتماد تلقائي</span>
+                      )}
                       {current && (
                         <span className="px-2 py-0.5 rounded-full text-xs font-medium bg-amber-100 text-amber-700">سارية النهارده</span>
                       )}
@@ -809,6 +847,12 @@ function OvertimePeriodsSection({ onChanged }: { onChanged: () => void }) {
                       <Building2 size={12} />
                       {branchName(p.branchId)}
                     </span>
+                    {isOpen && canEdit(p) && (
+                      <label className="flex items-center gap-2 mt-2 text-xs text-gray-700 cursor-pointer">
+                        <input type="checkbox" checked={p.autoApprove} disabled={busy} onChange={() => toggleAutoApprove(p)} />
+                        اعتماد تلقائي للإضافي المكتشف في الفترة دي
+                      </label>
+                    )}
                   </div>
                 </div>
                 {canEdit(p) ? (
@@ -876,6 +920,8 @@ function AddOvertimePeriodModal({
   const [fromDate, setFromDate] = useState('')
   const [toDate, setToDate] = useState('')
   const [effect, setEffect] = useState<ApiOvertimePeriod['effect']>('OPEN')
+  // «اعتماد تلقائي» (قرار المالك 28 سبتمبر): شغال افتراضيًا للفترة المفتوحة الجديدة، ومايظهرش ولا يتبعت للمقفولة
+  const [autoApprove, setAutoApprove] = useState(true)
   // الفترة للشركة كلها أو فرع — نفس منتقي الاستهداف بمستوى الفرع بس
   const [target, setTarget] = useState<OrgTarget>(() => initialOrgTarget(lockedBranchId, ['company', 'branch'], branchScope))
   const [saving, setSaving] = useState(false)
@@ -895,6 +941,7 @@ function AddOvertimePeriodModal({
         toDate,
         effect,
         branchId: target.level === 'company' ? undefined : target.branchId,
+        autoApprove: effect === 'OPEN' && autoApprove,
       })
       await onCreated(created)
       onClose()
@@ -967,6 +1014,19 @@ function AddOvertimePeriodModal({
             </div>
           </div>
 
+          {effect === 'OPEN' && (
+            <div className="p-3 rounded-xl border border-indigo-100 bg-indigo-50/60">
+              <label htmlFor="ot-period-auto-approve" className="flex items-center gap-2 text-sm font-medium text-gray-800 cursor-pointer">
+                <input id="ot-period-auto-approve" type="checkbox" checked={autoApprove} disabled={saving}
+                  onChange={(e) => setAutoApprove(e.target.checked)} />
+                اعتماد تلقائي للإضافي المكتشف في الفترة دي
+              </label>
+              <p className="text-xs text-gray-600 mt-1">
+                الإضافي اللي بيتكشف من البصمة في الفترة دي بيتعتمد لوحده بعد ما اليوم يخلص وينزل المسير؛ من غيرها بيمشي في سلسلة الاعتماد
+              </p>
+            </div>
+          )}
+
           <OrgTargetPicker
             value={target}
             onChange={setTarget}
@@ -980,7 +1040,7 @@ function AddOvertimePeriodModal({
 
           <div className="p-3 bg-blue-50 rounded-xl text-sm text-blue-700">
             {fromDate && toDate
-              ? `من ${fromDate} إلى ${toDate} — الإضافي ${effect === 'OPEN' ? 'مفتوح' : 'مقفول'} لـ${describeOrgTarget(target, branches, [])}`
+              ? `من ${fromDate} إلى ${toDate} — الإضافي ${effect === 'OPEN' ? (autoApprove ? 'مفتوح وبيتعتمد تلقائي' : 'مفتوح') : 'مقفول'} لـ${describeOrgTarget(target, branches, [])}`
               : 'حدد التواريخ عشان تشوف ملخص الفترة'}
           </div>
         </div>

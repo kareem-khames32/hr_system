@@ -26,10 +26,15 @@ export function hasHrOverride(user: Pick<JwtPayload, 'role' | 'permissions'>): b
   )
 }
 
+// خطوة النظام: الإضافي المكتشف اللي اتعتمد تلقائي بفترة «اعتماد تلقائي» (قرار المالك 28 سبتمبر) — خطوة واحدة بتتسجل
+// معتمدة بقرار النظام (approverId = 0) في نفس معاملة إنشاء الطلب. مش دور يتضبط في سلاسل الاعتماد (APPROVER_ROLES
+// في الإعدادات مابتقبلوش)، ومحدش بيطابقه في satisfies (إلا مدير النظام، والخطوة أصلًا متصرَّف فيها والطلب مكتمل)
+export const SYSTEM_APPROVAL_ROLE = 'system' as const
+
 // الخطوة بعد حل الأدوار عند التقديم — تُخزَّن JSON على الطلب
 export interface ResolvedStep {
   stepOrder: number
-  role: ApproverRole
+  role: ApproverRole | typeof SYSTEM_APPROVAL_ROLE
   // محدد فقط للأدوار الهيكلية (مدير مباشر/مدير مستقبِل)
   approverEmployeeId: number | null
   slaDays: number | null

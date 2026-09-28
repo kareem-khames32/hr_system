@@ -260,6 +260,11 @@ class OvertimePeriodDto {
   @IsInt({ message: 'الفرع (branchId) رقم صحيح' })
   @Min(1, { message: 'الفرع (branchId) رقم صحيح' })
   branchId?: number | null
+
+  // «اعتماد تلقائي» للإضافي المكتشف في الفترة — للفترة المفتوحة بس (الخدمة بترفضه على المقفولة). غيابه = لأ
+  @IsOptional()
+  @IsBoolean({ message: 'الاعتماد التلقائي (autoApprove) قيمة منطقية (true/false)' })
+  autoApprove?: boolean
 }
 
 class ConfirmOvertimeDto {
