@@ -568,7 +568,8 @@ export default function EmployeeProfilePage() {
           manager: manager?.fullName ?? '—',
           managerTitle: manager?.jobTitle ?? '',
           nationality: e.nationality || '—',
-          nationalId: e.nationalId ?? '—',
+          // رقم الهوية أو الجواز (واحد منهم على الأقل) — الناقص «—»
+          nationalId: val(e.nationalId),
           passportNo: val(e.passportNo),
           passportExpiry: e.passportExpiry ? fmtDate(e.passportExpiry) : '—',
           birthDate: fmtDate(e.birthDate),
@@ -1151,12 +1152,12 @@ export default function EmployeeProfilePage() {
                   <h3 className="text-md font-bold text-gray-700">وثائق الهوية</h3>
                   <div className="grid grid-cols-2 gap-4">
                     <div>
-                      <p className="text-sm text-gray-500">رقم الهوية الوطنية</p>
-                      <p className="font-medium text-gray-800 mt-1 font-mono">{employee.nationalId}</p>
+                      <p className="text-sm text-gray-500">رقم الهوية / الإقامة</p>
+                      <p className="font-medium text-gray-800 mt-1 font-mono"><span dir="ltr">{employee.nationalId}</span></p>
                     </div>
                     <div>
                       <p className="text-sm text-gray-500">رقم جواز السفر</p>
-                      <p className="font-medium text-gray-800 mt-1 font-mono">{employee.passportNo}</p>
+                      <p className="font-medium text-gray-800 mt-1 font-mono"><span dir="ltr">{employee.passportNo}</span></p>
                     </div>
                     <div>
                       <p className="text-sm text-gray-500">تاريخ انتهاء الجواز</p>

@@ -1,6 +1,6 @@
 'use strict'
 // مراجعة 16 سبتمبر — عزل الفروع في ملف الموظف:
-// 1) رسالة تكرار رقم الهوية / البصمة / الكود ماتكشفش اسم موظف في فرع تاني (نفس الفرع أو مدير النظام بيشوفوا الاسم).
+// 1) رسالة تكرار رقم الهوية / الجواز / البصمة / الكود ماتكشفش اسم موظف في فرع تاني (نفس الفرع أو مدير النظام بيشوفوا الاسم).
 // 2) فحص فرع جدول العمل على الفرع بعد الحفظ لما الفرع والجدول يتغيروا في حفظة واحدة، ونقل الموظف (من الملف أو طلب نقل منفّذ)
 //    وجدوله خاص بفرع تاني يترفض برسالة تطلب جدول للفرع الجديد أو لكل الشركة.
 const { test } = require('node:test'), assert = require('node:assert/strict'), path = require('node:path'), fs = require('node:fs')
@@ -27,14 +27,21 @@ test('تكرار الهوية/البصمة/الكود: الاسم يظهر لم�
   assert.equal(await conflict({ nationalId: '1012345678', excludeId: 9 }, [1]), 'رقم الهوية / الإقامة 1012345678 مسجل لموظف آخر')
   assert.equal(await conflict({ nationalId: '1012345678' }, [4]), 'رقم الهوية / الإقامة 1012345678 مسجل لموظف آخر (سارة من فرع أربعة)')
   assert.equal(await conflict({ nationalId: '1012345678' }, null), 'رقم الهوية / الإقامة 1012345678 مسجل لموظف آخر (سارة من فرع أربعة)')
+  // رقم الجواز (قرار المالك 28 سبتمبر): نفس نمط التكرار ونفس الإخفاء، على القيمة المطبّعة
+  assert.equal(await conflict({ passportNo: 'a 12345', excludeId: 9 }, [1]), 'رقم الجواز A12345 مسجل لموظف آخر')
+  assert.equal(await conflict({ passportNo: 'a 12345' }, [4]), 'رقم الجواز A12345 مسجل لموظف آخر (سارة من فرع أربعة)')
+  assert.equal(await conflict({ passportNo: 'A12345' }, null), 'رقم الجواز A12345 مسجل لموظف آخر (سارة من فرع أربعة)')
+  // التعديل: الرقم اللي ماتغيرش (بعد التطبيع) مايتفحصش — ملف قديم بقيمة مكررة يحفظ باقي حقوله
+  await service.assertUnique({ nationalId: '1012345678', passportNo: 'A12345', excludeId: 9 }, [4], { nationalId: '1012 345678', passportNo: 'a12345' })
+  assert.match(await conflict({ nationalId: '1012345678', excludeId: 9 }, [4]), /سارة/)
   assert.doesNotMatch(await conflict({ fingerprintCode: '777' }, [1]), /سارة/)
   // كود الموظف بقى من النظام (قرار المالك 16 سبتمبر) — مش مدخل فمش بيتفحص تكراره هنا
   await service.assertUnique({ employeeCode: 'EMP777' }, [1])
   assert.match(await conflict({ fingerprintCode: '777' }, null), /سارة/)
-  // المسارات بتمرر نطاق المستخدم
+  // المسارات بتمرر نطاق المستخدم (والتعديل بيمرر الملف المحفوظ عشان الرقم اللي ماتغيرش)
   const service_ = source('src/employees/employees.service.ts'), controller = source('src/employees/employees.controller.ts')
   assert.match(service_, /await this\.assertUnique\(dto, branchScope\)/)
-  assert.match(service_, /await this\.assertUnique\(\{ \.\.\.dto, excludeId: id \}, branchScope\)/)
+  assert.match(service_, /await this\.assertUnique\(\{ \.\.\.dto, excludeId: id \}, branchScope, emp\)/)
   assert.match(controller, /this\.employees\.create\(dto, user\.sub, scope\)/)
   assert.equal(service_.split('(${dup.fullName})').length - 1, 1, 'الاسم بيتحط في الرسالة من employeeNameInScope بس')
 })

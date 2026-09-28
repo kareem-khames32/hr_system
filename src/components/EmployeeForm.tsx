@@ -9,7 +9,7 @@ import { buildEmployeeSalaryChange, employeeCreateSalaryPeriod, employeeSalaryCh
 import { SALARY_HISTORY_FIELDS } from '@/lib/payroll-salary-history-api'
 import { buildCalendarChange, employeeCalendarPayload, type PayrollCalendarChange, type PayrollCalendarContext } from '@/lib/payroll-calendar-api'
 import { departmentChoiceGroups } from '@/lib/department-tree'
-import { employeeRequiredIssues, nationalIdHint, type EmployeeRequiredValues } from '../../api/src/employees/employee-required-fields'
+import { employeeRequiredIssues, IDENTITY_HINT, normalizeIdentityNumber, type EmployeeRequiredValues } from '../../api/src/employees/employee-required-fields'
 import { DEFAULT_SALARY_CYCLE, SALARY_CYCLE_OPTIONS, clearedEmployeeFields, employeeFullNameAr, employeeFullNameEn, employeeWorkEmailPayload, gradeSelectOptions, initialOpeningBalance, joinEmployeeAddress, jobTitleSelectOptions, openingBalanceIssue, openingBalancePayload, savedDocumentsOf, settleQualificationDrafts, type SavedEmployeeDocument } from '@/lib/employee-form-fields'
 
 import { useEffect, useRef, useState } from 'react'
@@ -797,10 +797,11 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     (Number(form.workNatureAllowance) || 0) +
     (Number(form.otherAllowance) || 0) + workPressureAmount : 0
 
-  // الحقول الإجبارية عند الإضافة (قرار المالك): نفس قاعدة الخادم. في التعديل الناقص القديم لا يمنع الحفظ
+  // الحقول الإجبارية عند الإضافة (قرار المالك): نفس قاعدة الخادم. في التعديل الناقص القديم لا يمنع الحفظ.
+  // رقم الهوية أو الجواز (قرار المالك 28 سبتمبر): واحد منهم على الأقل وبأي صيغة — نفس رسائل الخادم
   const requiredValuesOf = (state: EmployeeFormState): EmployeeRequiredValues => ({
     fullName: employeeFullNameAr(state), birthDate: state.birthDate, gender: state.gender, nationality: state.nationality,
-    nationalId: state.nationalId, phone: state.phone, fingerprintCode: state.fingerprintCode, joinDate: state.joinDate,
+    nationalId: state.nationalId, passportNo: state.passportNo, phone: state.phone, fingerprintCode: state.fingerprintCode, joinDate: state.joinDate,
     branchId: state.branchId, departmentId: state.departmentId, jobTitle: state.jobTitle, basicSalary: state.basicSalary,
   })
   const [initialRequired] = useState<EmployeeRequiredValues | null>(() => mode === 'edit' && initial ? requiredValuesOf(makeInitialState(initial)) : null)
@@ -824,7 +825,9 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     const workEmail = employeeWorkEmailPayload(mode, form.workEmail, initial?.workEmail)
     if (workEmail !== undefined) payload.email = workEmail
     if (form.phone.trim()) payload.phone = form.phone.trim()
-    if (form.nationalId.trim()) payload.nationalId = form.nationalId.trim()
+    // رقم الهوية والجواز بالشكل المحفوظ (من غير مسافات، أرقام لاتينية، حروف كبيرة)؛ المسح في التعديل من clearedEmployeeFields
+    const nationalId = normalizeIdentityNumber(form.nationalId)
+    if (nationalId) payload.nationalId = nationalId
     if (form.jobTitle) payload.jobTitle = form.jobTitle
     if (form.departmentId) payload.departmentId = Number(form.departmentId)
     if (form.teamId) payload.teamId = Number(form.teamId)
@@ -887,7 +890,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     }))
     // ===== حقول قياسية جديدة — تُرسل فقط عند وجود قيمة =====
     if (form.birthPlace.trim()) payload.birthPlace = form.birthPlace.trim()
-    if (form.passportNo.trim()) payload.passportNo = form.passportNo.trim()
+    const passportNo = normalizeIdentityNumber(form.passportNo)
+    if (passportNo) payload.passportNo = passportNo
     if (form.passportExpiry) payload.passportExpiry = form.passportExpiry
     if (form.phoneAlt.trim()) payload.phoneAlt = form.phoneAlt.trim()
     if (form.country) payload.country = countryCodeOf(form.country)
@@ -1277,7 +1281,8 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
               </div>
 
-              {/* Identity Documents */}
+              {/* Identity Documents — رقم الهوية والجواز جنب بعض: أي صيغة لأي جنسية، وواحد منهم على الأقل (قرار المالك 28 سبتمبر).
+                  الخانة بتتطبّع وإنت بتكتب (من غير مسافات، أرقام لاتينية، حروف كبيرة) فالمعروض هو اللي بيتحفظ */}
               <div className="grid grid-cols-4 gap-4">
                 <div>
                   <label className="label">الجنسية *</label>
@@ -1286,17 +1291,17 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                 </div>
                 <div>
                   <label className="label">رقم الهوية / الإقامة *</label>
-                  <input type="text" inputMode="numeric" className="input" placeholder="1234567890" dir="ltr" maxLength={14} value={form.nationalId} onChange={(e) => setField('nationalId', e.target.value.replace(/\D/g, ''))} />
-                  <p className="text-xs text-gray-400 mt-1">{nationalIdHint(form.nationality)}</p>
+                  <input type="text" className="input" placeholder="1012345678" dir="ltr" autoComplete="off" value={form.nationalId} onChange={(e) => setField('nationalId', normalizeIdentityNumber(e.target.value))} />
                 </div>
                 <div>
-                  <label className="label">رقم جواز السفر</label>
-                  <input type="text" className="input" placeholder="A12345678" dir="ltr" value={form.passportNo} onChange={(e) => setField('passportNo', e.target.value)} />
+                  <label className="label">رقم جواز السفر *</label>
+                  <input type="text" className="input" placeholder="A12345678" dir="ltr" autoComplete="off" value={form.passportNo} onChange={(e) => setField('passportNo', normalizeIdentityNumber(e.target.value))} />
                 </div>
                 <div>
                   <label className="label">تاريخ انتهاء الجواز</label>
                   <input type="date" className="input" value={form.passportExpiry} onChange={(e) => setField('passportExpiry', e.target.value)} />
                 </div>
+                <p className="col-span-2 col-start-2 -mt-3 text-xs text-gray-400">* {IDENTITY_HINT}</p>
               </div>
 
               {/* Contact Info */}

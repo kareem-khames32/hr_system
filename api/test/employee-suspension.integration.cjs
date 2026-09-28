@@ -1,5 +1,5 @@
 // قرارا المالك 16 سبتمبر على قاعدة SQL مؤقتة معزولة (synchronize):
-// 1) الحقول الإجبارية عند إضافة موظف عبر HTTP (الرسائل، رقم الهوية حسب الجنسية، التفرد) وأن ملفًا قديمًا ناقصًا يحفظ باقي حقوله.
+// 1) الحقول الإجبارية عند إضافة موظف عبر HTTP (الرسائل، رقم الهوية أو الجواز بأي صيغة — قرار 28 سبتمبر، التفرد) وأن ملفًا قديمًا ناقصًا يحفظ باقي حقوله.
 // 2) الإيقاف عن العمل لفترة: الحالة «موقوف» مشتقة من التواريخ في القائمة والملف، السجل، التداخل، الإنهاء المبكر والإلغاء،
 //    أيام الإيقاف ليست غيابًا (صف غياب قديم يُشال وتجسيد الغياب يتخطاها)، والمسير يخصمها يومًا بيوم بسطر «أيام إيقاف عن العمل».
 const { test, before, after } = require('node:test')
@@ -89,16 +89,18 @@ after(async t => {
   if (errors.length) throw new AggregateError(errors, 'Employee suspension fixture cleanup failed')
 })
 
-test('إضافة موظف: الحقول الإجبارية برسائل واضحة، الهوية بطول الجنسية وفريدة، ورقم البصمة فريد', async () => {
+test('إضافة موظف: الحقول الإجبارية برسائل واضحة، الهوية أو الجواز بأي صيغة وفريدة، ورقم البصمة فريد', async () => {
   const missing = await request(admin, 'POST', '/employees', { employeeCode: 'REQ001', fullName: 'سارة علي', branchId: branch.id })
   assert.equal(missing.status, 400)
-  for (const text of ['الجنسية مطلوبة', 'رقم البصمة مطلوب', 'الجنس مطلوب', 'تاريخ الميلاد مطلوب', 'رقم الجوال مطلوب', 'رقم الهوية / الإقامة مطلوب',
+  for (const text of ['الجنسية مطلوبة', 'رقم البصمة مطلوب', 'الجنس مطلوب', 'تاريخ الميلاد مطلوب', 'رقم الجوال مطلوب',
+    'لازم رقم الهوية / الإقامة أو رقم جواز السفر — واحد منهم على الأقل',
     'القسم مطلوب', 'المسمى الوظيفي مطلوب', 'تاريخ التعيين مطلوب', 'الراتب الأساسي مطلوب']) assert.ok(messageOf(missing).includes(text), text)
 
-  const saudiWithIqama = await request(admin, 'POST', '/employees', complete({ nationalId: '2123456789' }))
-  assert.equal(saudiWithIqama.status, 400); assert.equal(messageOf(saudiWithIqama), 'رقم الهوية الوطنية للسعودي 10 أرقام ويبدأ بـ1')
-  const residentWrong = await request(admin, 'POST', '/employees', complete({ nationality: 'أردني', nationalId: '1123456789' }))
-  assert.equal(residentWrong.status, 400); assert.equal(messageOf(residentWrong), 'رقم الإقامة لغير السعودي 10 أرقام ويبدأ بـ2')
+  // مفيش قواعد دولة (قرار المالك 28 سبتمبر): إقامة لسعودي أو رقم يبدأ بـ1 لأردني بيتقبلوا — الشكل الغلط بس هو اللي يترفض
+  expectStatus(await request(admin, 'POST', '/employees', complete({ nationalId: '2123456789' })), 201)
+  expectStatus(await request(admin, 'POST', '/employees', complete({ nationality: 'أردني', nationalId: '1123456789' })), 201)
+  const badFormat = await request(admin, 'POST', '/employees', complete({ nationalId: '12/34' }))
+  assert.equal(badFormat.status, 400); assert.equal(messageOf(badFormat), 'رقم الهوية / الإقامة: حروف إنجليزية وأرقام وشرطة بس (من 3 لـ 50)')
   const englishName = await request(admin, 'POST', '/employees', complete({ fullName: 'Khaled Otaibi' }))
   assert.equal(englishName.status, 400); assert.equal(messageOf(englishName), 'الاسم الكامل لازم يكون بالعربي')
 
@@ -112,14 +114,14 @@ test('إضافة موظف: الحقول الإجبارية برسائل واضح
   assert.equal(dupFingerprint.status, 409); assert.match(messageOf(dupFingerprint), /رقم البصمة FP-UNIQ مستخدم بالفعل/)
 })
 
-test('تعديل ملف قديم ناقص: باقي الحقول تتحفظ، والمسح أو تغيير الجنسية المخالف أو «موقوف» بلا تواريخ مرفوض', async () => {
+test('تعديل ملف قديم ناقص: باقي الحقول تتحفظ، والمسح أو «موقوف» بلا تواريخ مرفوض، وتغيير الجنسية مابيعيدش فحص الهوية', async () => {
   const legacy = await employee({ nationalId: '29505051234567', jobTitle: 'فني', nationality: null, gender: null, birthDate: null, phone: null })
   const saved = expectStatus(await request(admin, 'PATCH', `/employees/${legacy.id}`, { phone: '0501234567', fullName: legacy.fullName, nationalId: legacy.nationalId }), 200)
   assert.equal(saved.phone, '0501234567')
   const cleared = await request(admin, 'PATCH', `/employees/${legacy.id}`, { jobTitle: null })
   assert.equal(cleared.status, 400); assert.equal(messageOf(cleared), 'المسمى الوظيفي مطلوب ولا يمكن مسحه')
-  const wrongNationality = await request(admin, 'PATCH', `/employees/${legacy.id}`, { nationality: 'سعودي' })
-  assert.equal(wrongNationality.status, 400); assert.equal(messageOf(wrongNationality), 'رقم الهوية الوطنية للسعودي 10 أرقام ويبدأ بـ1')
+  // رقم الهوية مابقاش مربوط بالجنسية (قرار المالك 28 سبتمبر)
+  expectStatus(await request(admin, 'PATCH', `/employees/${legacy.id}`, { nationality: 'سعودي' }), 200)
   expectStatus(await request(admin, 'PATCH', `/employees/${legacy.id}`, { nationality: 'مصري' }), 200)
   const flip = await request(admin, 'PATCH', `/employees/${legacy.id}`, { status: 'suspended' })
   assert.equal(flip.status, 400); assert.match(messageOf(flip), /«إيقاف مؤقت» بتاريخ من وإلى وسبب/)

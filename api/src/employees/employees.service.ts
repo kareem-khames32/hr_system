@@ -8,7 +8,7 @@ import {
   Optional,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { Between, EntityManager, In, IsNull, LessThanOrEqual, MoreThanOrEqual, Not, Repository } from 'typeorm'
+import { Between, EntityManager, In, IsNull, LessThanOrEqual, MoreThanOrEqual, Not, Raw, Repository } from 'typeorm'
 import { branchIdIn, branchScopeQb, inBranchScope, scopeWord } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
 import { OffboardingCase } from '../offboarding/offboarding.entities'
@@ -34,7 +34,7 @@ import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
 import { recordEmployeeChange } from './employee-change-log'
 import { generateEmployeeCode } from './employee-code'
 import { employeePayMethodIssue } from '../payroll/pay-split'
-import { assertArchiveReason, nextOpeningBalance } from './employee-input-rules'
+import { assertArchiveReason, identityKeySql, nextOpeningBalance } from './employee-input-rules'
 import { Leave, LeaveBalance } from '../requests/entities/leave.entities'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { Request } from '../requests/entities/request.entity'
@@ -47,7 +47,8 @@ import { localDateOf } from '../attendance/attendance.service'
 import { readSalaryHistory, readSalaryHistoryCurrent, SALARY_HISTORY_MONEY_KEYS,
   salaryHistoryMoney, salaryHistorySchemaMissing } from '../payroll/payroll-salary-history'
 import { AttendanceDay } from '../attendance/attendance.entities'
-import { arabicFullNameIssue, birthDateIssue, employeeRequiredIssues, nationalIdIssue, type EmployeeRequiredValues } from './employee-required-fields'
+import { arabicFullNameIssue, birthDateIssue, employeeIdentityIssues, employeeRequiredIssues, identityValue, normalizeIdentityNumber,
+  type EmployeeIdentityValues, type EmployeeRequiredValues } from './employee-required-fields'
 import { addDays, currentSuspension, displayEmployeeStatus, overlappingLeave, overlappingSuspension, SUSPENDABLE_STATUSES,
   SUSPENSION_CLOSED_PAYROLL_MESSAGE, SUSPENSION_LEAVE_OVERLAP_MESSAGE, suspensionEndPlan, suspensionFreedRange, suspensionInputIssue,
   upcomingSuspension } from './employee-suspension-rules'
@@ -55,10 +56,11 @@ import { EmployeeSuspension } from './employee-suspension.entity'
 import { readEmployeeSuspensions, readOpenSuspensions, suspensionTableReady, suspensionView } from './employee-suspensions'
 import type { CreateEmployeeSuspensionDto, EndEmployeeSuspensionDto } from './employees.dto'
 
-// حقول إجبارية عند الإضافة (قرار المالك 16 سبتمبر): في التعديل الغائب بلا تغيير، والمرسل فاضي = مسح مرفوض
+// حقول إجبارية عند الإضافة (قرار المالك 16 سبتمبر): في التعديل الغائب بلا تغيير، والمرسل فاضي = مسح مرفوض.
+// رقم الهوية / الجواز مش هنا: مسح واحد منهم مسموح لو التاني فاضل (employeeIdentityIssues في update)
 const REQUIRED_ON_EDIT: Record<string, string> = {
   nationality: 'الجنسية مطلوبة ولا يمكن مسحها', gender: 'الجنس مطلوب ولا يمكن مسحه', birthDate: 'تاريخ الميلاد مطلوب ولا يمكن مسحه',
-  phone: 'رقم الجوال مطلوب ولا يمكن مسحه', nationalId: 'رقم الهوية / الإقامة مطلوب ولا يمكن مسحه', joinDate: 'تاريخ التعيين مطلوب ولا يمكن مسحه',
+  phone: 'رقم الجوال مطلوب ولا يمكن مسحه', joinDate: 'تاريخ التعيين مطلوب ولا يمكن مسحه',
   departmentId: 'القسم مطلوب ولا يمكن مسحه', jobTitle: 'المسمى الوظيفي مطلوب ولا يمكن مسحه', fingerprintCode: 'رقم البصمة مطلوب ولا يمكن مسحه',
 }
 
@@ -71,6 +73,17 @@ export function employeeNameInScope(dup: Pick<Employee, 'fullName' | 'branchId'>
 export function employeeCreateIssue(dto: object, today: string): string | null {
   return employeeRequiredIssues(dto as EmployeeRequiredValues, { mode: 'add', today })[0]?.message ?? null
 }
+
+/** رقم الهوية / الجواز بالشكل المحفوظ على أي مسار (الـDTO بيطبّعهم، والمسارات الداخلية كمان): الفاضي = null. */
+function normalizeIdentityFields(dto: EmployeeIdentityValues) {
+  for (const key of ['nationalId', 'passportNo'] as const) {
+    const value = identityValue(dto[key])
+    if (value !== undefined) dto[key] = value
+  }
+}
+
+/** مقارنة رقم هوية / جواز محفوظ بالقيمة المطبّعة — المحفوظ القديم بمسافات أو حروف صغيرة أو أرقام عربية بيتطابق كمان. */
+const sameIdentity = (value: string) => Raw(alias => `${identityKeySql(alias)} = :identity`, { identity: value })
 
 @Injectable()
 export class EmployeesService {
@@ -214,17 +227,24 @@ export class EmployeesService {
       attendanceRuleEffectiveFrom: resolved.effectiveFrom, attendanceRuleLegacy: resolved.legacyBaseline })
   }
 
-  // ===== فحوصات التفرد — كود البصمة/البريد/الرقم القومي =====
+  // ===== فحوصات التفرد — كود البصمة/البريد/رقم الهوية/رقم الجواز =====
   // البحث على مستوى الشركة كلها، لكن اسم صاحب القيمة يظهر بس لو في نطاق المستخدم (عزل الفروع):
-  // حساب فرع ياخد رسالة عامة لو الموظف التاني في فرع تاني
+  // حساب فرع ياخد رسالة عامة لو الموظف التاني في فرع تاني.
+  // رقم الهوية والجواز بيتقارنوا بعد التطبيع؛ وفي التعديل (current = الملف المحفوظ) الرقم اللي ماتغيرش مايتفحصش —
+  // ملف قديم بقيمة مكررة من قبل القرار يحفظ باقي حقوله
   private async assertUnique(data: {
     fingerprintCode?: string
     email?: string
-    nationalId?: string
+    nationalId?: string | null
+    passportNo?: string | null
     excludeId?: number
-  }, branchScope: BranchScope) {
+  }, branchScope: BranchScope, current?: EmployeeIdentityValues) {
     const notSelf = data.excludeId ? { id: Not(data.excludeId) } : {}
     const whose = (dup: Employee) => employeeNameInScope(dup, branchScope)
+    const changedIdentity = (key: 'nationalId' | 'passportNo') => {
+      const value = normalizeIdentityNumber(data[key])
+      return value && !(current && value === normalizeIdentityNumber(current[key])) ? value : null
+    }
     // كود الموظف يولّده النظام (فريد بفهرس) — مش مدخل ومش مفتاح بصمة؛ رقم البصمة وحده يربط البصمات
     if (data.fingerprintCode) {
       const dup = await this.employees.findOne({ where: { fingerprintCode: data.fingerprintCode, ...notSelf } })
@@ -240,12 +260,22 @@ export class EmployeesService {
         throw new ConflictException(`البريد ${data.email} مسجل لموظف آخر`)
       }
     }
-    if (data.nationalId) {
+    const nationalId = changedIdentity('nationalId')
+    if (nationalId) {
       const dup = await this.employees.findOne({
-        where: { nationalId: data.nationalId, ...notSelf },
+        where: { nationalId: sameIdentity(nationalId), ...notSelf },
       })
       if (dup) {
-        throw new ConflictException(`رقم الهوية / الإقامة ${data.nationalId} مسجل لموظف آخر${whose(dup)}`)
+        throw new ConflictException(`رقم الهوية / الإقامة ${nationalId} مسجل لموظف آخر${whose(dup)}`)
+      }
+    }
+    const passportNo = changedIdentity('passportNo')
+    if (passportNo) {
+      const dup = await this.employees.findOne({
+        where: { passportNo: sameIdentity(passportNo), ...notSelf },
+      })
+      if (dup) {
+        throw new ConflictException(`رقم الجواز ${passportNo} مسجل لموظف آخر${whose(dup)}`)
       }
     }
   }
@@ -364,16 +394,16 @@ export class EmployeesService {
     })
   }
 
-  // قرار المالك 16 سبتمبر: الاسم بالعربي، رقم الهوية / الإقامة بطول الجنسية، وتاريخ ميلاد قبل النهارده.
-  // الإلزام نفسه في CreateEmployeeDto؛ هنا شكل القيم المكتوبة (يسري على كل مسار إنشاء)
-  private assertIdentity(values: { fullName?: string | null; nationalId?: string | null; nationality?: string | null; birthDate?: string | null }) {
-    const issue = arabicFullNameIssue(values.fullName) ?? nationalIdIssue(values.nationalId, values.nationality)
-      ?? birthDateIssue(values.birthDate, localDateOf(new Date()))
+  // قرار المالك 16 سبتمبر: الاسم بالعربي وتاريخ ميلاد قبل النهارده. الإلزام نفسه في CreateEmployeeDto؛ هنا شكل
+  // القيم المكتوبة (يسري على كل مسار إنشاء). رقم الهوية / الجواز قاعدته في employeeIdentityIssues (قرار 28 سبتمبر)
+  private assertIdentity(values: { fullName?: string | null; birthDate?: string | null }) {
+    const issue = arabicFullNameIssue(values.fullName) ?? birthDateIssue(values.birthDate, localDateOf(new Date()))
     if (issue) throw new BadRequestException(issue)
   }
 
   async create(dto: CreateEmployeeDto, actorId: number, branchScope: BranchScope) {
-    // الحقول الإجبارية وشكلها (الاسم بالعربي، الهوية بطول الجنسية، الميلاد…) على كل مسار إنشاء — مش الـDTO بس
+    normalizeIdentityFields(dto)
+    // الحقول الإجبارية وشكلها (الاسم بالعربي، رقم الهوية أو الجواز، الميلاد…) على كل مسار إنشاء — مش الـDTO بس
     const requiredIssue = employeeCreateIssue(dto, localDateOf(new Date()))
     if (requiredIssue) throw new BadRequestException(requiredIssue)
     this.assertIdentity(dto)
@@ -627,17 +657,19 @@ export class EmployeesService {
       const value = (dto as Record<string, unknown>)[field]
       if (value === null || (typeof value === 'string' && !value.trim())) throw new BadRequestException(message)
     }
-    const nextNationalId = dto.nationalId !== undefined ? dto.nationalId : emp.nationalId
-    const nextNationality = dto.nationality !== undefined ? dto.nationality : emp.nationality
+    // رقم الهوية / الجواز (قرار المالك 28 سبتمبر): أي صيغة؛ مسح واحد مسموح لو التاني فاضل بعد الحفظ ومسح الاتنين مرفوض،
+    // وملف قديم من غير الاتنين يحفظ باقي حقوله. الشكل للرقم اللي اتغير بس — نفس القاعدة المشتركة للشاشة والملف
+    normalizeIdentityFields(dto)
+    const identityIssue = employeeIdentityIssues({
+      nationalId: dto.nationalId !== undefined ? dto.nationalId : emp.nationalId,
+      passportNo: dto.passportNo !== undefined ? dto.passportNo : emp.passportNo,
+    }, { mode: 'edit', initial: emp })[0]
+    if (identityIssue) throw new BadRequestException(identityIssue.message)
     this.assertIdentity({
       fullName: dto.fullName !== undefined && dto.fullName !== emp.fullName ? dto.fullName : null,
-      // رقم الهوية يُعاد فحصه لو اتغير هو أو الجنسية؛ المحفوظ القديم كما هو لا يمنع الحفظ
-      nationalId: (dto.nationalId !== undefined && dto.nationalId !== emp.nationalId)
-        || (dto.nationality !== undefined && dto.nationality !== emp.nationality) ? nextNationalId : null,
-      nationality: nextNationality,
       birthDate: dto.birthDate !== undefined && dto.birthDate !== String(emp.birthDate ?? '').slice(0, 10) ? dto.birthDate : null,
     })
-    await this.assertUnique({ ...dto, excludeId: id }, branchScope)
+    await this.assertUnique({ ...dto, excludeId: id }, branchScope, emp)
     // كود الموظف لا يُعدّل من أحد
     delete (dto as { employeeCode?: unknown }).employeeCode
     // طريقة الصرف على الحالة بعد الحفظ — تُفحص لما التعديل يمسّها؛ ملف قديم ناقص البنك يحفظ باقي حقوله

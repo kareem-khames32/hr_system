@@ -38,6 +38,9 @@ test('العناوين: الاسم بالعربي بأي همزة/تطويل أ�
   const { columns, errors } = fields.mapBulkHeader(['كود الموظف', 'اسم الموظف', 'رقم  الجوال', 'البريد الالكتروني للعمل', 'iban', 'ملاحظات', 'الجنـس'])
   assert.deepEqual(errors, [])
   assert.deepEqual(columns.map(column => column.key), ['code', 'name', 'phone', 'email', 'iban', null, 'gender'])
+  for (const header of ['رقم جواز السفر', 'رقم الجواز', 'جواز السفر', 'Passport No', 'passport']) {
+    assert.equal(fields.mapBulkHeader(['كود الموظف', header]).columns[1].key, 'passportNo', header)
+  }
   const duplicate = fields.mapBulkHeader(['كود الموظف', 'رقم الجوال', 'الجوال'])
   assert.match(duplicate.errors[0], /متكرر/)
   assert.equal(duplicate.columns[2].key, null)
@@ -82,6 +85,14 @@ test('قيم الخلايا: تواريخ بأكتر من شكل، مبالغ، 
   fails('phone', 'abc', /جوال/)
   assert.equal(ok('nationalId', 29001011234567), '29001011234567')
   fails('nationalId', '9.66501E+11', /صيغة علمية/)
+  // رقم الهوية / الجواز (قرار المالك 28 سبتمبر): أي صيغة بعد التطبيع، ويتمسح بـ«مسح»
+  assert.equal(ok('nationalId', ' ab-12٣ '), 'AB-123')
+  assert.equal(ok('passportNo', 'a 1234567'), 'A1234567')
+  assert.equal(ok('nationalId', 'مسح'), null)
+  assert.equal(ok('passportNo', 'مسح'), null)
+  fails('nationalId', '12', /^حروف إنجليزية وأرقام وشرطة بس \(من 3 لـ 50\)$/)
+  fails('passportNo', 'A/1', /^حروف إنجليزية وأرقام وشرطة بس \(من 3 لـ 40\)$/)
+  fails('passportNo', 'X'.repeat(41), /من 3 لـ 40/)
   fails('fingerprintCode', '123456789012345678901', /20 حرف/)
   assert.equal(fields.parseBulkMonth('9/2026'), '2026-09')
   assert.equal(fields.parseBulkMonth('2026-09'), '2026-09')
@@ -91,7 +102,7 @@ test('قيم الخلايا: تواريخ بأكتر من شكل، مبالغ، 
 // ===== الخطة ببيانات وهمية =====
 const snapshot = (extra = {}) => ({
   id: 1, employeeCode: 'E1', fullName: 'موظف أول', status: 'active', branchId: 1, departmentId: 10, teamId: 100, managerEmployeeId: null,
-  costCenterId: null, gradeId: null, jobTitle: 'محاسب', phone: '0501234567', email: 'e1@x.com', nationalId: '1012345678', nationality: 'سعودي',
+  costCenterId: null, gradeId: null, jobTitle: 'محاسب', phone: '0501234567', email: 'e1@x.com', nationalId: '1012345678', passportNo: null, nationality: 'سعودي',
   gender: 'male', birthDate: '1990-01-01', fingerprintCode: '0012', contractType: 'permanent', contractStart: '2020-01-01', contractEnd: null,
   bankName: 'بنك', iban: 'SA0380000000608010167519', payMethod: 'transfer', bankTransferAmount: null, gosiNumber: null, isGosiRegistered: null,
   gosiBaseSalary: null, currency: 'SAR', basicSalary: '5000.00', housingAllowance: '1000.00', transportAllowance: '0.00', phoneAllowance: null,
@@ -107,7 +118,7 @@ const lookups = (employees, holders = {}) => ({
   costCenters: [{ id: 5, code: 'CC-01', name: 'عميل أ', isActive: true }],
   grades: [{ id: 7, name: 'الأولى', isActive: true }, { id: 8, name: 'القديمة', isActive: false }],
   jobTitles: [{ title: 'محاسب', isActive: true }, { title: 'مدير مبيعات', isActive: true }],
-  holders: { fingerprintCode: new Map(), nationalId: new Map(), email: new Map(), ...holders },
+  holders: { fingerprintCode: new Map(), nationalId: new Map(), passportNo: new Map(), email: new Map(), ...holders },
 })
 const options = (extra = {}) => ({ branchScope: null, today: '2026-09-19', currentPayrollPeriod: '2026-09', canChangeSalary: true, salaryMonth: null,
   mode: 'preview', ...extra })
@@ -131,7 +142,7 @@ test('الخطة: كود مش موجود، كود متكرر، موظف فرع �
   assert.deepEqual(unchanged.summary, { total: 1, ready: 0, unchanged: 1, error: 0 })
 })
 
-test('الخطة: التغيير القديم ← الجديد، الأصفار اللي Excel شالها بتتجاهل، والهوية بشكل الجنسية', () => {
+test('الخطة: التغيير القديم ← الجديد، الأصفار اللي Excel شالها بتتجاهل، والهوية بأي صيغة من غير قاعدة جنسية', () => {
   const data = lookups([snapshot()])
   const result = plan(['كود الموظف', 'رقم الجوال', 'رقم البصمة', 'الجنس', 'تاريخ الميلاد'], [['E1', '501234567', '12', 'أنثى', '1991-02-03']], data)
   const row = result.rows[0]
@@ -139,10 +150,49 @@ test('الخطة: التغيير القديم ← الجديد، الأصفار 
   assert.deepEqual(row.update, { gender: 'female', birthDate: '1991-02-03' })
   assert.deepEqual(row.changes.map(change => [change.field, change.old, change.new]), [['birthDate', '1990-01-01', '1991-02-03'], ['gender', 'ذكر', 'أنثى']])
   assert.equal(row.warnings.length, 2)
-  const badId = plan(['كود الموظف', 'رقم الهوية / الإقامة'], [['E1', '2123456789']], data)
-  assert.match(badId.rows[0].errors[0], /للسعودي 10 أرقام ويبدأ بـ1/)
+  const iqamaForSaudi = plan(['كود الموظف', 'رقم الهوية / الإقامة'], [['E1', '2123456789']], data)
+  assert.equal(iqamaForSaudi.rows[0].status, 'ready', 'مفيش قاعدة حسب الجنسية')
+  assert.deepEqual(iqamaForSaudi.rows[0].update, { nationalId: '2123456789' })
+  const badId = plan(['كود الموظف', 'رقم الهوية / الإقامة'], [['E1', '12/34']], data)
+  assert.deepEqual(badId.rows[0].errors, ['رقم الهوية / الإقامة: حروف إنجليزية وأرقام وشرطة بس (من 3 لـ 50)'])
   const future = plan(['كود الموظف', 'تاريخ الميلاد'], [['E1', '2030-01-01']], data)
   assert.match(future.rows[0].errors[0], /قبل النهارده/)
+})
+
+test('الخطة: رقم الهوية أو الجواز — «مسح» واحد لو التاني فاضل، مسح الاتنين مرفوض، والتكرار بعد التطبيع (موظف تاني أو صفين في الملف)', () => {
+  const REQUIRED = 'لازم رقم الهوية / الإقامة أو رقم جواز السفر — واحد منهم على الأقل'
+  const data = lookups([
+    snapshot({ passportNo: null }),
+    snapshot({ id: 2, employeeCode: 'E2', nationalId: null, passportNo: 'p 7001', fingerprintCode: '0002' }),
+    snapshot({ id: 3, employeeCode: 'E3', nationalId: '1033333333', passportNo: 'A3000', fingerprintCode: '0003' }),
+    snapshot({ id: 4, employeeCode: 'E4', nationalId: null, passportNo: null, fingerprintCode: '0004' }),
+  ], {
+    passportNo: new Map([[uniqueKey('passportNo', 'x-900'), [{ id: 9, fullName: 'صاحب الجواز', branchId: 1 }]],
+      [uniqueKey('passportNo', 'y-900'), [{ id: 10, fullName: 'فرع تاني', branchId: 2 }]]]),
+  })
+  const header = ['كود الموظف', 'رقم الهوية / الإقامة', 'رقم جواز السفر', 'رقم الجوال']
+  // مسح الهوية مع جواز جديد = جاهز؛ والجواز المحفوظ بمسافة وحروف صغيرة هو نفس الرقم (مش تغيير)
+  const swap = plan(header, [['E1', 'مسح', 'n 5551', ''], ['E2', '', 'P7001', '']], data)
+  assert.deepEqual(swap.rows.map(row => row.status), ['ready', 'unchanged'])
+  assert.deepEqual(swap.rows[0].update, { nationalId: null, passportNo: 'N5551' })
+  assert.deepEqual(swap.rows[0].changes.map(change => [change.field, change.old, change.new]), [['nationalId', '1012345678', null], ['passportNo', null, 'N5551']])
+  // مسح الوحيد اللي موجود أو الاتنين مرفوض برسالة واحدة؛ ومسح واحد والتاني موجود جاهز
+  const clear = plan(header, [['E1', 'مسح', '', ''], ['E2', '', 'مسح', ''], ['E3', 'مسح', 'مسح', '']], data)
+  assert.deepEqual(clear.rows.map(row => [row.code, row.errors]), [['E1', [REQUIRED]], ['E2', [REQUIRED]], ['E3', [REQUIRED]]])
+  assert.equal(plan(header, [['E3', '', 'مسح', '']], data).rows[0].status, 'ready')
+  // ملف قديم من غير الاتنين: باقي حقوله بتتحدث، و«مسح» على فاضي = من غير تغيير
+  const legacy = plan(header, [['E4', 'مسح', '', '0559990000']], data)
+  assert.equal(legacy.rows[0].status, 'ready')
+  assert.deepEqual(legacy.rows[0].update, { phone: '0559990000' })
+  // التكرار: مع موظف تاني (الاسم بس لو في النطاق)، ومع صف تاني في الملف بعد التطبيع
+  const taken = plan(header, [['E1', '', ' x-9 00 ', ''], ['E3', '', 'Y-900', '']], data, { branchScope: [1] })
+  assert.deepEqual(taken.rows[0].errors, ['رقم الجواز X-900 مسجل لموظف تاني (صاحب الجواز) — مايتكررش'])
+  assert.deepEqual(taken.rows[1].errors, ['رقم الجواز Y-900 مسجل لموظف تاني — مايتكررش'])
+  const inFile = plan(header, [['E1', '', 'k-1', ''], ['E4', 'z-77', 'K-1', ''], ['E3', 'Z-77', '', '']], data)
+  assert.deepEqual(inFile.rows.map(row => row.status), ['error', 'error', 'error'])
+  assert.deepEqual(inFile.rows[0].errors, ['رقم الجواز K-1 متكرر في الملف (الصفوف 2، 3)'])
+  assert.deepEqual(inFile.rows[1].errors, ['رقم الهوية / الإقامة Z-77 متكرر في الملف (الصفوف 3، 4)', 'رقم الجواز K-1 متكرر في الملف (الصفوف 2، 3)'])
+  assert.deepEqual(bulkLookupKeys(readBulkSheet(sheet(header, ['E1', 'ab 1', 'c-2 ', '']))).passportNos, ['C-2'])
 })
 
 test('الخطة: التكرار — رقم هوية مسجل لموظف تاني (الاسم بس لو في النطاق) ورقم بصمة متكرر في الملف', () => {

@@ -4,7 +4,7 @@
 import { inBranchScope } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
 import { PAID_SALARY_COMPONENTS } from './compensation'
-import { birthDateIssue, nationalIdIssue } from './employee-required-fields'
+import { birthDateIssue, employeeIdentityIssues, normalizeIdentityNumber } from './employee-required-fields'
 import { employeePayMethodIssue, PAY_METHOD_LABELS } from '../payroll/pay-split'
 import {
   arabicKey, BULK_FIELD_BY_KEY, BULK_FIELDS, BULK_UPDATE_MAX_ROWS, bulkCellText, CONTRACT_TYPE_OPTIONS, GENDER_OPTIONS, isBlankCell,
@@ -61,30 +61,32 @@ export function readBulkSheet(sheet: BulkSheet): BulkParsedFile {
 
 /** القيم اللي الخدمة محتاجة تقراها من قاعدة البيانات قبل الخطة. */
 export function bulkLookupKeys(file: BulkParsedFile) {
-  const codes = new Set<string>(), fingerprintCodes = new Set<string>(), nationalIds = new Set<string>(), emails = new Set<string>()
+  const codes = new Set<string>(), fingerprintCodes = new Set<string>(), nationalIds = new Set<string>(), passportNos = new Set<string>()
+  const emails = new Set<string>()
   for (const record of file.records) {
     if (record.code) codes.add(record.code)
     const ok = (key: BulkFieldKey) => { const parsed = record.values.get(key); return parsed?.ok && typeof parsed.value === 'string' ? parsed.value : null }
-    const manager = ok('manager'), fingerprint = ok('fingerprintCode'), nationalId = ok('nationalId'), email = ok('email')
+    const manager = ok('manager'), fingerprint = ok('fingerprintCode'), nationalId = ok('nationalId'), passportNo = ok('passportNo'), email = ok('email')
     if (manager) codes.add(normalizeBulkCode(manager))
     if (fingerprint) fingerprintCodes.add(fingerprint)
-    if (nationalId) nationalIds.add(nationalId)
+    if (nationalId) nationalIds.add(uniqueKey('nationalId', nationalId))
+    if (passportNo) passportNos.add(uniqueKey('passportNo', passportNo))
     if (email) emails.add(email)
   }
-  return { codes: [...codes], fingerprintCodes: [...fingerprintCodes], nationalIds: [...nationalIds], emails: [...emails] }
+  return { codes: [...codes], fingerprintCodes: [...fingerprintCodes], nationalIds: [...nationalIds], passportNos: [...passportNos], emails: [...emails] }
 }
 
 type Nullable<T> = { [K in keyof T]: T[K] | null }
 export type BulkEmployeeSnapshot = Nullable<{
   departmentId: number; teamId: number; managerEmployeeId: number; costCenterId: number; gradeId: number; branchId: number
-  jobTitle: string; phone: string; email: string; nationalId: string; nationality: string; gender: string; birthDate: string
+  jobTitle: string; phone: string; email: string; nationalId: string; passportNo: string; nationality: string; gender: string; birthDate: string
   fingerprintCode: string; contractType: string; contractStart: string; contractEnd: string; bankName: string; iban: string
   payMethod: string; bankTransferAmount: string; gosiNumber: string; isGosiRegistered: boolean; gosiBaseSalary: string; currency: string
 }> & Record<BulkSalaryKey, string | null> & { id: number; employeeCode: string; fullName: string; status: string }
 
 export interface BulkRef { id: number; name: string; isActive?: boolean | null }
 export interface BulkHolder { id: number; fullName: string; branchId: number | null }
-export type BulkUniqueField = 'fingerprintCode' | 'nationalId' | 'email'
+export type BulkUniqueField = 'fingerprintCode' | 'nationalId' | 'passportNo' | 'email'
 export interface BulkLookups {
   /** الموظفين اللي أكوادهم في الملف (موظفين ومديرين) — جوه وبرا النطاق — بمفتاح الكود المطبّع */
   employees: ReadonlyMap<string, BulkEmployeeSnapshot>
@@ -136,13 +138,18 @@ export interface BulkPlan {
   needs: { salary: boolean; salaryMonth: boolean; org: boolean }
 }
 
-/** مفتاح التفرد: رقم البصمة بحروف كبيرة، البريد بحروف صغيرة (زي ترتيب قاعدة البيانات غير الحساس لحالة الحروف). */
+/**
+ * مفتاح التفرد: رقم البصمة بحروف كبيرة، البريد بحروف صغيرة (زي ترتيب قاعدة البيانات غير الحساس لحالة الحروف)،
+ * ورقم الهوية / الجواز بعد التطبيع (نفس مقارنة ملف الموظف — identityKeySql في الخادم).
+ */
 export function uniqueKey(field: BulkUniqueField, value: string): string {
+  if (field === 'nationalId' || field === 'passportNo') return normalizeIdentityNumber(value)
   const text = value.trim()
   return field === 'email' ? text.toLowerCase() : field === 'fingerprintCode' ? text.toUpperCase() : text
 }
 
-const UNIQUE_LABEL: Record<BulkUniqueField, string> = { fingerprintCode: 'رقم البصمة', nationalId: 'رقم الهوية / الإقامة', email: 'البريد' }
+const UNIQUE_LABEL: Record<BulkUniqueField, string> = { fingerprintCode: 'رقم البصمة', nationalId: 'رقم الهوية / الإقامة', passportNo: 'رقم الجواز', email: 'البريد' }
+const IDENTITY_FIELDS: ReadonlySet<string> = new Set(['nationalId', 'passportNo'])
 const OPTION_LABEL = (options: Array<{ value: string; label: string }>, value: string | null) =>
   value === null ? null : options.find(option => option.value === value)?.label ?? value
 const dateText = (value: unknown) => value === null || value === undefined || value === '' ? null : String(value).slice(0, 10)
@@ -163,7 +170,7 @@ export function planBulkUpdate(file: BulkParsedFile, lookups: BulkLookups, optio
 
   const rows: BulkPlanRow[] = []
   // القيم الفريدة الجديدة في الملف كله: قيمة واحدة لصفين = الاتنين مرفوضين
-  const claims: Record<BulkUniqueField, Map<string, number[]>> = { fingerprintCode: new Map(), nationalId: new Map(), email: new Map() }
+  const claims: Record<BulkUniqueField, Map<string, number[]>> = { fingerprintCode: new Map(), nationalId: new Map(), passportNo: new Map(), email: new Map() }
   const claimed: Array<{ plan: BulkPlanRow; field: BulkUniqueField; key: string; value: string }> = []
 
   for (const record of file.records) {
@@ -191,9 +198,9 @@ export function planBulkUpdate(file: BulkParsedFile, lookups: BulkLookups, optio
 
     // ===== نصوص وأرقام وتواريخ على ملف الموظف =====
     const simple: Array<[BulkFieldKey, keyof BulkEmployeeSnapshot]> = [
-      ['phone', 'phone'], ['email', 'email'], ['nationalId', 'nationalId'], ['nationality', 'nationality'], ['birthDate', 'birthDate'],
-      ['fingerprintCode', 'fingerprintCode'], ['contractStart', 'contractStart'], ['contractEnd', 'contractEnd'], ['bankName', 'bankName'],
-      ['iban', 'iban'], ['gosiNumber', 'gosiNumber'],
+      ['phone', 'phone'], ['email', 'email'], ['nationalId', 'nationalId'], ['passportNo', 'passportNo'], ['nationality', 'nationality'],
+      ['birthDate', 'birthDate'], ['fingerprintCode', 'fingerprintCode'], ['contractStart', 'contractStart'], ['contractEnd', 'contractEnd'],
+      ['bankName', 'bankName'], ['iban', 'iban'], ['gosiNumber', 'gosiNumber'],
     ]
     for (const [key, column] of simple) {
       const given = value(key)
@@ -201,7 +208,9 @@ export function planBulkUpdate(file: BulkParsedFile, lookups: BulkLookups, optio
       const def = BULK_FIELD_BY_KEY.get(key)!
       const before = def.kind === 'date' ? dateText(employee[column]) : text(employee[column])
       const next = given.value === null ? null : String(given.value)
-      const same = key === 'email' || key === 'iban' ? (before ?? '').toLowerCase() === (next ?? '').toLowerCase() : before === next
+      // رقم الهوية / الجواز: المحفوظ القديم بمسافات أو حروف صغيرة هو نفس الرقم بعد التطبيع — مش تغيير
+      const same = key === 'email' || key === 'iban' ? (before ?? '').toLowerCase() === (next ?? '').toLowerCase()
+        : IDENTITY_FIELDS.has(key) ? normalizeIdentityNumber(before) === normalizeIdentityNumber(next) : before === next
       if (same) continue
       if (def.textual && before && next && /^\d+$/.test(next) && /^[+\d\s-]+$/.test(before) && looseDigits(before) === looseDigits(next)) {
         plan.warnings.push(`${def.label}: «${next}» هو نفس «${before}» من غير الأصفار/الرموز اللي في الأول (غالبًا Excel شالها) — اتساب زي ما هو`)
@@ -227,10 +236,12 @@ export function planBulkUpdate(file: BulkParsedFile, lookups: BulkLookups, optio
       change('gosiBaseSalary', employee.gosiBaseSalary, gosiSalary.value as string)
     }
 
-    // هوية: رقم الهوية يتفحص بشكل الجنسية لو اتغير هو أو الجنسية؛ تاريخ الميلاد قبل النهارده
-    if ('nationalId' in plan.update || 'nationality' in plan.update) {
-      const issue = nationalIdIssue(plan.update.nationalId ?? employee.nationalId, plan.update.nationality ?? employee.nationality)
-      if (issue) fieldError('nationalId', issue)
+    // هوية (قرار المالك 28 سبتمبر): رقم الهوية أو الجواز بأي صيغة (الشكل اتفحص في الخلية) — واحد منهم على الأقل
+    // يفضل للموظف بعد الحفظ، فـ«مسح» واحد مسموح لو التاني موجود؛ نفس قاعدة ملف الموظف. تاريخ الميلاد قبل النهارده
+    if ('nationalId' in plan.update || 'passportNo' in plan.update) {
+      const pick = (key: 'nationalId' | 'passportNo') => (key in plan.update ? plan.update[key] : employee[key]) as string | null
+      for (const issue of employeeIdentityIssues({ nationalId: pick('nationalId'), passportNo: pick('passportNo') },
+        { mode: 'edit', initial: { nationalId: employee.nationalId, passportNo: employee.passportNo } })) plan.errors.push(issue.message)
     }
     if (typeof plan.update.birthDate === 'string') {
       const issue = birthDateIssue(plan.update.birthDate, options.today)
@@ -407,7 +418,7 @@ export function planBulkUpdate(file: BulkParsedFile, lookups: BulkLookups, optio
     }
 
     if (plan.errors.length) continue
-    for (const field of ['fingerprintCode', 'nationalId', 'email'] as const) {
+    for (const field of ['fingerprintCode', 'nationalId', 'passportNo', 'email'] as const) {
       const next = plan.update[field]
       if (typeof next !== 'string' || !next) continue
       const key = uniqueKey(field, next)

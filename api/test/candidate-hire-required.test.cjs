@@ -23,7 +23,7 @@ const dtoMessages = body => validateSync(plainToInstance(HireCandidateDto, body)
 
 test('POST /candidates/:id/hire بيتحقق من نفس الحقول الإجبارية بتاعة إضافة الموظف', () => {
   const old = dtoMessages({ employeeCode: 'CALRECRUIT', branchId: 1, basicSalary: 6000 })
-  for (const text of ['رقم البصمة مطلوب', 'رقم الجوال مطلوب', 'رقم الهوية / الإقامة مطلوب', 'تاريخ الميلاد مطلوب', 'الجنس مطلوب',
+  for (const text of ['رقم البصمة مطلوب', 'رقم الجوال مطلوب', 'لازم رقم الهوية / الإقامة أو رقم جواز السفر', 'تاريخ الميلاد مطلوب', 'الجنس مطلوب',
     'الجنسية مطلوبة', 'المسمى الوظيفي مطلوب', 'القسم مطلوب', 'تاريخ التعيين مطلوب', 'الاسم الكامل بالعربي مطلوب']) {
     assert.ok(old.some(message => message.includes(text)), text)
   }
@@ -39,8 +39,13 @@ test('الخدمة نفسها بتفرض الحقول الإجبارية وشك�
   assert.equal(employeeCreateIssue({ employeeCode: 'X1', fullName: 'أحمد علي', branchId: 1, basicSalary: 6000 }, today), 'تاريخ الميلاد مطلوب')
   assert.equal(employeeCreateIssue(complete({ fingerprintCode: '' }), today), 'رقم البصمة مطلوب')
   assert.equal(employeeCreateIssue(complete({ basicSalary: 0 }), today), 'الراتب الأساسي لازم يكون رقم أكبر من صفر')
+  // رقم الهوية أو الجواز (قرار المالك 28 سبتمبر): واحد يكفي، والاتنين فاضيين رسالة واحدة
+  assert.equal(employeeCreateIssue(complete({ nationalId: undefined, passportNo: 'A1234567' }), today), null)
+  assert.equal(employeeCreateIssue(complete({ nationalId: '' }), today), 'لازم رقم الهوية / الإقامة أو رقم جواز السفر — واحد منهم على الأقل')
   // بلا مستودعات: لو الفحص اتأخر بعد أي قراءة كان هيقع TypeError مش 400
   const service = Object.create(EmployeesService.prototype)
+  await assert.rejects(service.create(complete({ nationalId: '   ' }), 12, [1]),
+    error => error.getStatus?.() === 400 && error.message === 'لازم رقم الهوية / الإقامة أو رقم جواز السفر — واحد منهم على الأقل')
   await assert.rejects(service.create({ employeeCode: 'CALRECRUIT', fullName: 'مرشح تعيين', branchId: 1, basicSalary: 6000, joinDate: '2026-09-16' }, 12, [1]),
     error => error.getStatus?.() === 400 && error.message === 'تاريخ الميلاد مطلوب')
   await assert.rejects(service.create(complete({ fullName: 'Ahmed Ali' }), 12, null), error => error.getStatus?.() === 400 && /بالعربي/.test(error.message))

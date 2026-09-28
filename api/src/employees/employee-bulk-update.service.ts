@@ -16,6 +16,7 @@ import { readSalaryCycleStartDay } from '../payroll/payroll-salary-change'
 import type { Employee } from './employee.entity'
 import { UpdateEmployeeDto } from './employees.dto'
 import { EmployeesService } from './employees.service'
+import { identityKeySql } from './employee-input-rules'
 import type { BulkUpdateOptionsDto, BulkUpdateTemplateDto } from './employee-bulk-update.dto'
 import {
   BULK_CLEAR_WORD, BULK_CODE_HEADER, BULK_FIELD_BY_KEY, BULK_NAME_HEADER, BULK_SALARY_MONTH_HEADER, BULK_UPDATE_MAX_ROWS,
@@ -32,14 +33,14 @@ export interface BulkUploadedFile { buffer: Buffer; originalname: string; size: 
 type Lookups = Omit<BulkLookups, 'employees' | 'people' | 'holders'>
 
 const SNAPSHOT_SELECT = `SELECT e.[id], e.[employeeCode], e.[fullName], e.[status], e.[branchId], e.[departmentId], e.[teamId],
-  e.[managerEmployeeId], e.[costCenterId], e.[gradeId], e.[jobTitle], e.[phone], e.[email], e.[nationalId], e.[nationality], e.[gender],
+  e.[managerEmployeeId], e.[costCenterId], e.[gradeId], e.[jobTitle], e.[phone], e.[email], e.[nationalId], e.[passportNo], e.[nationality], e.[gender],
   CONVERT(varchar(10), e.[birthDate], 23) AS [birthDate], e.[fingerprintCode], e.[contractType],
   CONVERT(varchar(10), e.[contractStart], 23) AS [contractStart], CONVERT(varchar(10), e.[contractEnd], 23) AS [contractEnd],
   e.[bankName], e.[iban], e.[payMethod], CAST(e.[bankTransferAmount] AS nvarchar(80)) AS [bankTransferAmount], e.[gosiNumber],
   e.[isGosiRegistered], CAST(e.[gosiBaseSalary] AS nvarchar(80)) AS [gosiBaseSalary], e.[currency],
   ${SALARY_KEYS.map(key => `CAST(e.[${key}] AS nvarchar(80)) AS [${key}]`).join(', ')}
   FROM dbo.employees e`
-const UNIQUE_COLUMNS: Record<BulkUniqueField, string> = { fingerprintCode: 'fingerprintCode', nationalId: 'nationalId', email: 'email' }
+const UNIQUE_COLUMNS: Record<BulkUniqueField, string> = { fingerprintCode: 'fingerprintCode', nationalId: 'nationalId', passportNo: 'passportNo', email: 'email' }
 const CHUNK = 500
 
 const bad = (message: string): never => { throw new BadRequestException({ code: 'BULK_UPDATE_INVALID', message }) }
@@ -114,8 +115,10 @@ export class EmployeeBulkUpdateService {
 
   private async holders(field: BulkUniqueField, values: string[]) {
     const column = UNIQUE_COLUMNS[field]
+    // رقم الهوية / الجواز: القيم المطلوبة مطبّعة، والمحفوظ بيتطبّع بنفس الطريقة جوه SQL (نفس مقارنة ملف الموظف)
+    const match = field === 'nationalId' || field === 'passportNo' ? identityKeySql(`[${column}]`) : `[${column}]`
     const rows = await this.chunked<BulkHolder & { value: string }>(values, (list, params) =>
-      this.ds.query(`SELECT [id], [fullName], [branchId], [${column}] AS [value] FROM dbo.employees WHERE [${column}] IN (${list})`, params))
+      this.ds.query(`SELECT [id], [fullName], [branchId], [${column}] AS [value] FROM dbo.employees WHERE ${match} IN (${list})`, params))
     const map = new Map<string, BulkHolder[]>()
     for (const row of rows) {
       const key = uniqueKey(field, String(row.value))
@@ -156,12 +159,13 @@ export class EmployeeBulkUpdateService {
     const keys = bulkLookupKeys(parsed)
     const employees = await this.snapshotsByCode(keys.codes)
     const managerIds = [...employees.values()].map(row => row.managerEmployeeId).filter((id): id is number => id !== null)
-    const [people, catalogs, fingerprintCode, nationalId, email, currentPayrollPeriod] = await Promise.all([
+    const [people, catalogs, fingerprintCode, nationalId, passportNo, email, currentPayrollPeriod] = await Promise.all([
       this.people(managerIds), this.catalogs(),
-      this.holders('fingerprintCode', keys.fingerprintCodes), this.holders('nationalId', keys.nationalIds), this.holders('email', keys.emails),
+      this.holders('fingerprintCode', keys.fingerprintCodes), this.holders('nationalId', keys.nationalIds),
+      this.holders('passportNo', keys.passportNos), this.holders('email', keys.emails),
       parsed.fields.some(key => BULK_FIELD_BY_KEY.get(key)?.salary) ? this.currentPayrollPeriod() : Promise.resolve(null),
     ])
-    const plan = planBulkUpdate(parsed, { ...catalogs, employees, people, holders: { fingerprintCode, nationalId, email } }, {
+    const plan = planBulkUpdate(parsed, { ...catalogs, employees, people, holders: { fingerprintCode, nationalId, passportNo, email } }, {
       branchScope: branchScopeOf(user), today: localDateOf(new Date()), currentPayrollPeriod,
       canChangeSalary: userHasPerm(user, 'payroll.approve'), salaryMonth, mode,
     })
@@ -380,6 +384,9 @@ export class EmployeeBulkUpdateService {
         '• الخلية الفاضية = من غير تغيير.' + (clearable.length ? ` عشان تمسح قيمة (${clearable.join('، ')}) اكتب «${BULK_CLEAR_WORD}».` : ''),
         '• الفرع والقسم والفريق والدرجة والمسمى بالاسم زي ما هو في ورقة «القوائم»، ومركز التكلفة بكوده، والمدير المباشر بكود الموظف.',
         '• التواريخ بالشكل 2026-01-31، والمبالغ أرقام بمنزلتين عشريتين على الأكثر.',
+        ...(fields.includes('nationalId') || fields.includes('passportNo')
+          ? [`• رقم الهوية / الإقامة ورقم جواز السفر بأي صيغة لأي جنسية (حروف إنجليزية وأرقام وشرطة) — لازم واحد منهم على الأقل يفضل للموظف، فـ«${BULK_CLEAR_WORD}» في واحد منهم مقبولة لو التاني موجود.`]
+          : []),
         ...(salary ? [`• الراتب والبدلات بتتسجل تغيير واحد مؤرخ في سجل الأجر: اكتب «${BULK_SALARY_MONTH_HEADER}» (مثلاً 2026-09) في العمود أو اختاره في الشاشة، ومعاه سبب ومرجع القرار في الشاشة.`] : []),
         '• نقل الموظف لفرع تاني محتاج اسم القسم الجديد في نفس الصف، وتاريخ سريان وسبب في الشاشة.',
         `• الحد ${BULK_UPDATE_MAX_ROWS} صف في الملف. بعد الرفع بتظهر معاينة بكل تغيير (القديم ← الجديد) والأخطاء قبل ما يتحفظ أي حاجة.`,
