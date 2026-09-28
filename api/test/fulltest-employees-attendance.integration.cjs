@@ -80,7 +80,7 @@ function checker() {
 
 let idSequence = 0
 const uniqueDigits = () => String(Date.now()).slice(-5) + String(++idSequence % 10000).padStart(4, '0')
-/** الحقول الإجبارية بقيم صالحة (سعودي: هوية 10 أرقام تبدأ بـ1) — الكود يولّده النظام. */
+/** الحقول الإجبارية بقيم صالحة (سعودي برقم هوية فريد) — الكود يولّده النظام. */
 function requiredFields(overrides = {}) {
   const digits = uniqueDigits()
   return {
@@ -272,10 +272,10 @@ test('أ2 — مصفوفة التحقق عند الإضافة: كل مدخل غ�
     ['departmentId', undefined], ['jobTitle', undefined], ['basicSalary', undefined]]) {
     await reject(`حقل إجباري ناقص: ${field}`, { [field]: value })
   }
-  // أشكال غلط
-  await reject('هوية سعودي بـ9 أرقام', { nationalId: '123456789' })
-  await reject('هوية سعودي تبدأ بـ2', { nationalId: '2123456789' })
-  await reject('هوية بحروف', { nationalId: '1abcdefghi' })
+  // أشكال غلط — رقم الهوية / الجواز بأي صيغة لأي جنسية (قرار المالك 28 سبتمبر)، الغلط بس رموز غير الشرطة أو طول برّه 3..50/40
+  await reject('هوية فيها رموز', { nationalId: '12/34' })
+  await reject('هوية أقل من 3 خانات', { nationalId: '12' })
+  await reject('جواز فيه حروف عربي', { passportNo: 'أ12345' })
   await reject('آيبان غير صالح', { iban: '12345', payMethod: 'transfer', bankName: 'بنك' })
   await reject('جوال غير صالح', { phone: '123' })
   await reject('بريد غير صالح', { email: 'not-an-email' })
@@ -368,6 +368,7 @@ test('أ5 — حدود التعديل والتعيين المستقبلي: ال�
   expectStatus(await request(admin, 'PATCH', `/employees/${two.id}`, { employeeCode: 'HACK-1' }), 200)
   const afterCode = expectStatus(await request(admin, 'GET', `/employees/${two.id}`), 200)
   check('كود الموظف لا يُعدَّل من العميل', () => assert.equal(afterCode.employeeCode, two.employeeCode))
+  // الموظف من غير جواز: مسح رقم الهوية يسيبه من غير الاتنين — مرفوض (قرار المالك 28 سبتمبر: واحد منهم على الأقل)
   const clearRequired = await request(admin, 'PATCH', `/employees/${two.id}`, { nationalId: '' })
   check('مسح حقل إجباري في التعديل يُرفض', () => assert.equal(clearRequired.status, 400, JSON.stringify(clearRequired.body)))
 

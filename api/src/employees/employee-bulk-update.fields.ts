@@ -1,7 +1,8 @@
 // تحديث بيانات مجموعة موظفين من ملف (Excel أو CSV) بكود الموظف.
 // ملف صرف بلا Nest ولا TypeORM ولا exceljs: الواجهة تستورده لقائمة الحقول، والخادم لقراءة CSV وتطبيع قيم الخلايا.
 import { PAID_SALARY_COMPONENTS } from './compensation'
-import { EMPLOYEE_PHONE_PATTERN } from './employee-required-fields'
+import { EMPLOYEE_PHONE_PATTERN, identityFormatText, NATIONAL_ID_MAX, NATIONAL_ID_PATTERN, normalizeIdentityNumber, PASSPORT_NO_MAX,
+  PASSPORT_NO_PATTERN } from './employee-required-fields'
 
 export const BULK_UPDATE_MAX_ROWS = 2000
 export const BULK_UPDATE_MAX_FILE_BYTES = 5 * 1024 * 1024
@@ -24,14 +25,14 @@ export const BULK_FIELD_GROUPS: ReadonlyArray<{ key: BulkFieldGroup; label: stri
 // أعمدة الراتب: المكونات السبعة المصروفة (آخرها «بدل ضغط العمل») — كود الموظف + البدل يكفي لتحديثه من ملف
 export type BulkSalaryKey = typeof PAID_SALARY_COMPONENTS[number]['key']
 export type BulkFieldKey =
-  | 'phone' | 'email' | 'nationalId' | 'nationality' | 'gender' | 'birthDate'
+  | 'phone' | 'email' | 'nationalId' | 'passportNo' | 'nationality' | 'gender' | 'birthDate'
   | 'fingerprintCode' | 'branch' | 'department' | 'team' | 'jobTitle' | 'costCenter' | 'grade' | 'manager'
   | 'contractType' | 'contractStart' | 'contractEnd'
   | 'bankName' | 'iban' | 'payMethod' | 'bankTransferAmount'
   | 'gosiNumber' | 'isGosiRegistered' | 'gosiBaseSalary'
   | BulkSalaryKey
 
-export type BulkFieldKind = 'text' | 'phone' | 'email' | 'nationalId' | 'date' | 'enum' | 'money' | 'bool' | 'iban' | 'ref'
+export type BulkFieldKind = 'text' | 'phone' | 'email' | 'identity' | 'date' | 'enum' | 'money' | 'bool' | 'iban' | 'ref'
 export interface BulkFieldOption { value: string; label: string; aliases?: string[] }
 export interface BulkFieldDef {
   key: BulkFieldKey
@@ -76,7 +77,12 @@ const optionHint = (options: BulkFieldOption[]) => options.map(option => option.
 export const BULK_FIELDS: ReadonlyArray<BulkFieldDef> = [
   { key: 'phone', label: 'رقم الجوال', group: 'personal', kind: 'phone', textual: true, hint: 'أرقام، ممكن تبدأ بـ+', aliases: ['الجوال', 'الموبايل', 'رقم الموبايل', 'mobile'] },
   { key: 'email', label: 'البريد الإلكتروني للعمل', group: 'personal', kind: 'email', maxLength: 200, clearable: true, hint: 'بريد صالح', aliases: ['البريد الالكتروني', 'الايميل', 'email'] },
-  { key: 'nationalId', label: 'رقم الهوية / الإقامة', group: 'personal', kind: 'nationalId', textual: true, hint: 'أرقام بطول الجنسية', aliases: ['رقم الهوية', 'رقم الاقامة', 'الرقم القومي', 'national id'] },
+  // رقم الهوية أو الجواز (قرار المالك 28 سبتمبر): أي صيغة، و«مسح» واحد منهم مسموح لو التاني فاضل للموظف
+  { key: 'nationalId', label: 'رقم الهوية / الإقامة', group: 'personal', kind: 'identity', maxLength: NATIONAL_ID_MAX, textual: true, clearable: true,
+    hint: `${identityFormatText(NATIONAL_ID_MAX)} — لازم هو أو رقم الجواز`, aliases: ['رقم الهوية', 'رقم الاقامة', 'الرقم القومي', 'national id'] },
+  { key: 'passportNo', label: 'رقم جواز السفر', group: 'personal', kind: 'identity', maxLength: PASSPORT_NO_MAX, textual: true, clearable: true,
+    hint: `${identityFormatText(PASSPORT_NO_MAX)} — لازم هو أو رقم الهوية`,
+    aliases: ['رقم الجواز', 'جواز السفر', 'الجواز', 'passport', 'passport no', 'passport no.', 'passport number'] },
   { key: 'nationality', label: 'الجنسية', group: 'personal', kind: 'text', maxLength: 100, hint: 'مثلاً: سعودي، مصري' },
   { key: 'gender', label: 'الجنس', group: 'personal', kind: 'enum', options: GENDER_OPTIONS, hint: optionHint(GENDER_OPTIONS), aliases: ['النوع'] },
   { key: 'birthDate', label: 'تاريخ الميلاد', group: 'personal', kind: 'date', hint: DATE_HINT },
@@ -253,9 +259,11 @@ export function parseBulkField(def: BulkFieldDef, cell: BulkCell): BulkParsed {
       if (tooLong) return { ok: false, error: `بحد أقصى ${def.maxLength} حرف` }
       return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(value) ? { ok: true, value } : { ok: false, error: 'بريد إلكتروني غير صالح' }
     }
-    case 'nationalId': {
-      const value = text.replace(/[\s-]/g, '')
-      return /^\d{10,14}$/.test(value) ? { ok: true, value } : { ok: false, error: 'أرقام بس (من 10 لـ14 رقم)' }
+    case 'identity': {
+      // نفس تطبيع وشكل شاشة الموظف: من غير مسافات، أرقام لاتينية، حروف إنجليزية كبيرة
+      const value = normalizeIdentityNumber(text)
+      const pattern = def.key === 'passportNo' ? PASSPORT_NO_PATTERN : NATIONAL_ID_PATTERN
+      return pattern.test(value) ? { ok: true, value } : { ok: false, error: identityFormatText(def.maxLength ?? NATIONAL_ID_MAX) }
     }
     case 'iban': {
       const value = text.replace(/[\s-]/g, '').toUpperCase()

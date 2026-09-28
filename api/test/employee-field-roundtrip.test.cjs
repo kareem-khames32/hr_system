@@ -363,3 +363,17 @@ test('شاشة الموظف: بلا مدخل مرونة، وعناوين عرب�
   assert.doesNotMatch(form, /setField\('flexOverrideMode'/)
   assert.match(form, /window\.confirm\('حذف هذا العنصر المحفوظ/)
 })
+
+// ===== 21) رقم الهوية أو الجواز (قرار المالك 28 سبتمبر) =====
+test('الخطوة الأولى: رقم الهوية والجواز جنب بعض بملحوظة واحدة، خانات نصية بأي صيغة، والمحفوظ يرجع ويتمسح', () => {
+  const step1 = renderForm(1, { mode: 'edit', employeeId: 231, initial: { status: 'active', nationality: 'مصري', nationalId: '', passportNo: 'P1234567' } })
+  const identity = step1.slice(step1.indexOf('رقم الهوية / الإقامة *'), step1.indexOf('معلومات الاتصال'))
+  assert.match(identity, /رقم جواز السفر \*/)
+  assert.match(identity, /value="P1234567"/)
+  assert.match(identity, /\* رقم الهوية أو رقم جواز السفر — واحد منهم على الأقل/)
+  assert.doesNotMatch(identity, /inputmode|maxlength="14"/i, 'مش أرقام بس ولا حد 14')
+  assert.doesNotMatch(step1, /تبدأ بـ1|10 أرقام|الرقم القومي/, 'مفيش ملحوظة حسب الجنسية')
+  assert.match(renderForm(1, { mode: 'add' }), /رقم الهوية أو رقم جواز السفر — واحد منهم على الأقل/)
+  // المسح في التعديل: خانة كانت محفوظة واتفضّت تتبعت null (والخادم يقبل لو التاني فاضل)
+  assert.deepEqual(f.clearedEmployeeFields({ nationalId: '1012345678', passportNo: 'P1' }, { nationalId: '', passportNo: 'P1' }), { nationalId: null })
+})

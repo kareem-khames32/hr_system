@@ -19,7 +19,8 @@ import { Transform, Type } from 'class-transformer'
 import { EmployeeSalaryChangeDto } from './employee-salary-change.dto'
 import { CalendarChangeDto } from '../attendance/attendance-calendar-history'
 import { IsNotDataPlaceholder } from '../common/data-placeholders'
-import { EMPLOYEE_PHONE_PATTERN } from './employee-required-fields'
+import { EMPLOYEE_PHONE_PATTERN, IDENTITY_REQUIRED_MESSAGE, identityValue, NATIONAL_ID_FORMAT_MESSAGE, nationalIdIssue,
+  PASSPORT_NO_FORMAT_MESSAGE, passportNoIssue } from './employee-required-fields'
 import { SUSPENSION_REASON_MAX, SUSPENSION_REASON_MIN } from './employee-suspension-rules'
 
 // أعمدة NOT NULL في التعديل: الغائب = بلا تغيير، وnull يُرفض برسالة (IsOptional كان
@@ -34,6 +35,20 @@ const RequiredText = (label: string, max: number, feminine = false) => ValidateB
 const RequiredPositiveNumber = (label: string) => ValidateBy({ name: 'requiredPositiveNumber', validator: {
   validate: (value: unknown) => typeof value === 'number' && Number.isFinite(value) && value > 0,
   defaultMessage: args => args?.value === undefined || args?.value === null || args?.value === '' ? `${label} مطلوب` : `${label} لازم يكون رقم أكبر من صفر`,
+} })
+
+// رقم الهوية / الإقامة ورقم الجواز (قرار المالك 28 سبتمبر): أي صيغة لأي جنسية. النص بيتطبّع قبل الفحص
+// (من غير مسافات، أرقام لاتينية، حروف إنجليزية كبيرة) والفاضي = null؛ الشكل بنفس رسالة القاعدة المشتركة،
+// وأي نوع غير النص مرفوض. الحكم في الخدمة (employeeIdentityIssues) والتفرد في assertUnique.
+const NormalizeIdentity = () => Transform(({ value }) => typeof value === 'string' ? identityValue(value) : value)
+const IdentityFormat = (issue: (value: unknown) => string | null, message: string) => ValidateBy({ name: 'identityFormat', validator: {
+  validate: (value: unknown) => value === null || value === undefined || (typeof value === 'string' && issue(value) === null),
+  defaultMessage: () => message,
+} })
+// الإنشاء: واحد منهم على الأقل — رسالة واحدة تطلع مع باقي الحقول الناقصة
+const NationalIdOrPassport = () => ValidateBy({ name: 'nationalIdOrPassport', validator: {
+  validate: (value: unknown, args) => value != null || (args?.object as { passportNo?: unknown } | undefined)?.passportNo != null,
+  defaultMessage: () => IDENTITY_REQUIRED_MESSAGE,
 } })
 
 // الإيقاف عن العمل لفترة (قرار المالك 16 سبتمبر) — التحقق الكامل في suspensionInputIssue
@@ -132,14 +147,15 @@ export class CreateEmployeeDto {
   @MaxLength(30)
   phoneAlt?: string
 
-  // الطول والبداية حسب الجنسية تفحصهما الخدمة (nationalIdIssue)، والتفرد في assertUnique
-  @Matches(/^\d{10,14}$/, { message: 'رقم الهوية / الإقامة مطلوب — أرقام فقط (من 10 إلى 14 رقم)' })
-  nationalId: string
+  // رقم الهوية / الإقامة أو رقم الجواز — واحد منهم على الأقل وبأي صيغة (قرار المالك 28 سبتمبر)
+  @NormalizeIdentity()
+  @IdentityFormat(nationalIdIssue, NATIONAL_ID_FORMAT_MESSAGE)
+  @NationalIdOrPassport()
+  nationalId?: string | null
 
-  @IsOptional()
-  @IsString()
-  @MaxLength(40)
-  passportNo?: string
+  @NormalizeIdentity()
+  @IdentityFormat(passportNoIssue, PASSPORT_NO_FORMAT_MESSAGE)
+  passportNo?: string | null
 
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'انتهاء الجواز بصيغة YYYY-MM-DD' })
@@ -501,14 +517,14 @@ export class UpdateEmployeeDto {
   @MaxLength(30)
   phoneAlt?: string
 
-  @IsOptional()
-  @Matches(/^\d{10,14}$/, { message: 'الرقم القومي: 10-14 رقماً' })
-  nationalId?: string
+  // null أو فاضي = مسح؛ مسح واحد مسموح لو التاني فاضل بعد الحفظ (الخدمة هي الحكم)
+  @NormalizeIdentity()
+  @IdentityFormat(nationalIdIssue, NATIONAL_ID_FORMAT_MESSAGE)
+  nationalId?: string | null
 
-  @IsOptional()
-  @IsString()
-  @MaxLength(40)
-  passportNo?: string
+  @NormalizeIdentity()
+  @IdentityFormat(passportNoIssue, PASSPORT_NO_FORMAT_MESSAGE)
+  passportNo?: string | null
 
   @IsOptional()
   @Matches(/^\d{4}-\d{2}-\d{2}$/, { message: 'انتهاء الجواز بصيغة YYYY-MM-DD' })

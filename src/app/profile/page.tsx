@@ -358,10 +358,11 @@ export default function ProfilePage() {
                         {employee?.fullNameEn ?? '—'}
                       </span>
                     </div>
+                    {/* رقم الهوية أو الجواز (قرار المالك 28 سبتمبر: واحد منهم يكفي) — اللي موجود فيهم */}
                     <div className="flex justify-between py-3 border-b border-gray-100">
-                      <span className="text-gray-500">رقم الهوية</span>
-                      <span className="font-medium text-gray-800">
-                        {employee?.nationalId ?? '—'}
+                      <span className="text-gray-500">{!employee?.nationalId && employee?.passportNo ? 'رقم جواز السفر' : 'رقم الهوية / الإقامة'}</span>
+                      <span className="font-medium text-gray-800" dir="ltr">
+                        {employee?.nationalId || employee?.passportNo || '—'}
                       </span>
                     </div>
                     <div className="flex justify-between py-3">
