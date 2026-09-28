@@ -4,8 +4,10 @@ import { OvertimePeriod } from './attendance.entities'
 
 // عرض دليل الإضافي لقارئ (مراجعة Codex الجولة 17، CR17-B02): الدليل المخزّن بيحمل نافذة الإضافي وقت الحساب
 // ({ open, governingWindowIds, reason }) — والسبب بأسماء الفترات الحاكمة، وممكن تكون فترة فرع تاني (الموظف اتنقل بعد يوم
-// العمل، أو المعاينة لتاريخ قديم). الرد بيبني السبب من الفترات اللي القارئ يشوفها بس (العامة أو فرعها جوه نطاقه) ويشيل أرقام
-// الباقي. اللقطة المخزّنة وبصمتها ماتتغيرش — ده عرض بس.
+// العمل، أو المعاينة لتاريخ قديم)، ومعاها علامة الاعتماد التلقائي في لقطة الاعتماد ({ autoApproval: { periodIds } } — مراجعة
+// Codex الجولة 18، CR18-B02). الرد بيبني السبب من الفترات اللي القارئ يشوفها بس (العامة أو فرعها جوه نطاقه) ويشيل أرقام
+// الباقي من النافذة والعلامة. الشارات (معتمد تلقائي، منتظر) بتتحسب من اللقطة الأصلية قبل الحجب. اللقطة المخزّنة وبصمتها
+// ماتتغيرش — ده عرض بس.
 // ملف منفصل عن overtime-evidence.ts: الواجهة بتستورد أنواع ده، والملف ده بيستورد حراس الخادم.
 
 type OvertimeWindowView = { open: boolean; governingWindowIds: number[]; reason: string }
@@ -19,6 +21,12 @@ const isPlain = (value: unknown): value is Record<string, unknown> =>
 const isWindow = (value: Record<string, unknown>): value is OvertimeWindowView & Record<string, unknown> =>
   typeof value.open === 'boolean' && typeof value.reason === 'string' && Array.isArray(value.governingWindowIds)
 
+// علامة الاعتماد التلقائي في لقطة الاعتماد: { autoApproval: { periodIds: [...] } }
+const autoApprovalIds = (value: Record<string, unknown>): unknown[] | null => {
+  const marker = value.autoApproval
+  return isPlain(marker) && Array.isArray(marker.periodIds) ? marker.periodIds : null
+}
+
 /** كل أرقام الفترات الحاكمة في أي نافذة جوه القيمة (دليل، لقطة، قايمة سجلات…). */
 export function collectOvertimeWindowIds(value: unknown, into = new Set<number>()): Set<number> {
   if (Array.isArray(value)) {
@@ -27,6 +35,7 @@ export function collectOvertimeWindowIds(value: unknown, into = new Set<number>(
     if (isWindow(value)) {
       for (const id of value.governingWindowIds) if (Number.isSafeInteger(id) && Number(id) > 0) into.add(Number(id))
     }
+    for (const id of autoApprovalIds(value) ?? []) if (Number.isSafeInteger(id) && Number(id) > 0) into.add(Number(id))
     for (const item of Object.values(value)) collectOvertimeWindowIds(item, into)
   }
   return into
@@ -43,6 +52,11 @@ export function redactOvertimeWindows<T>(value: T, periods: ReadonlyMap<number, 
     if (!isPlain(item)) return item
     const copy: Record<string, unknown> = {}
     for (const [key, child] of Object.entries(item)) copy[key] = walk(child)
+    const markerIds = autoApprovalIds(item)
+    if (markerIds) {
+      // العلامة فاضلة (الاعتماد تلقائي فعلًا) بأرقام الفترات اللي القارئ يشوفها بس
+      copy.autoApproval = { ...(copy.autoApproval as Record<string, unknown>), periodIds: markerIds.filter(id => visible(Number(id)) != null) }
+    }
     if (!isWindow(item) || !item.governingWindowIds.length) return copy
     const shown = item.governingWindowIds.map(id => visible(Number(id))).filter((period): period is PeriodRef => period != null)
     const hidden = shown.length < item.governingWindowIds.length

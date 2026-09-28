@@ -752,7 +752,16 @@ export class EmployeesService {
       // التفرد جوه المعاملة تحت القفل لو التعديل بيلمس بصمة أو بريد أو هوية أو جواز (CR17-B01)؛ «ماتغيرش» على المحفوظ دلوقتي
       if ([dto.fingerprintCode, dto.email, dto.nationalId, dto.passportNo].some(value => value !== undefined)) {
         await this.lockEmployeeIdentities(em)
-        await this.assertUnique({ ...dto, excludeId: id }, branchScope, fresh, em)
+        // «واحد منهم على الأقل» وشكل الرقم المتغير على المحفوظ دلوقتي تحت القفل (مراجعة Codex الجولة 18، CR18-B01): تعديلين
+        // متزامنين واحد بيمسح الهوية والتاني الجواز كانوا بيعدّوا الاتنين لأن الفحص فوق كان على الملف قبل المعاملة. القراءة بعد
+        // القفل الحصري، فالتاني بيشوف اللي الأول حفظه
+        const locked = await em.findOne(Employee, { where: { id }, select: { id: true, nationalId: true, passportNo: true, fingerprintCode: true, email: true } })
+        const lockedIdentityIssue = employeeIdentityIssues({
+          nationalId: dto.nationalId !== undefined ? dto.nationalId : locked?.nationalId,
+          passportNo: dto.passportNo !== undefined ? dto.passportNo : locked?.passportNo,
+        }, { mode: 'edit', initial: locked ?? fresh })[0]
+        if (lockedIdentityIssue) throw new BadRequestException(lockedIdentityIssue.message)
+        await this.assertUnique({ ...dto, excludeId: id }, branchScope, locked ?? fresh, em)
       }
       const beforeChange = { ...fresh }
       const oldStatus = fresh.status

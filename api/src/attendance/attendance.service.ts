@@ -3927,9 +3927,10 @@ export class AttendanceService {
           departmentId: emp?.departmentId ?? null,
           requestStatus: req?.status ?? null,
           requestTypeCode: req?.typeCode ?? null,
-          autoApproved: calculationSnapshot?.approval?.autoApproval != null,
+          // الشارات من اللقطة الأصلية قبل الحجب (مراجعة Codex الجولة 18، CR18-N01) — العرض بس هو اللي على قد النطاق
+          autoApproved: storedSnapshot?.approval?.autoApproval != null,
           autoApprovalPending: r.status === 'DETECTED' && !r.requestId &&
-            ((calculationSnapshot?.evidence?.window?.governingWindowIds ?? []) as number[]).some((id) => autoPeriodIds.has(id)),
+            ((storedSnapshot?.evidence?.window?.governingWindowIds ?? []) as number[]).some((id) => autoPeriodIds.has(id)),
           isSelf: user.employeeId != null && r.employeeId === user.employeeId,
           canConfirm: false,
           requiresWorkflow: true,
