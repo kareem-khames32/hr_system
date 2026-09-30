@@ -154,7 +154,9 @@ export class HrDocumentsService {
       'company.name': company['company.name'] || '', 'company.nameEn': company['company.name_en'] || '', 'company.address': company['company.address'] || '',
       'company.phone': company['company.phone'] || '', 'company.commercialRegister': company['company.commercial_register'] || '' }
     if (employee) {
-      for (const key of ['fullName', 'employeeCode', 'jobTitle', 'joinDate', 'nationalId', 'nationality', 'email', 'phone', 'address'] as const) values[`employee.${key}`] = withoutDataPlaceholder(employee[key])
+      for (const key of ['fullName', 'employeeCode', 'jobTitle', 'joinDate', 'nationalId', 'passportNo', 'nationality', 'email', 'phone', 'address'] as const) values[`employee.${key}`] = withoutDataPlaceholder(employee[key])
+      // «رقم الهوية أو الجواز»: الهوية لو موجودة، وإلا الجواز (قرار المالك 30 سبتمبر)
+      values['employee.identityNumber'] = values['employee.nationalId'] || values['employee.passportNo']
       const typeLabels: Record<string, string> = { permanent: 'غير محدد المدة', fixed_term: 'محدد المدة', part_time: 'دوام جزئي', seasonal: 'موسمي' }
       Object.assign(values, { 'contract.startDate': employee.contractStart || '', 'contract.endDate': employee.contractEnd || '', 'contract.number': employee.contractNumber || '',
         'contract.type': typeLabels[employee.contractType] || employee.contractType || '', 'contract.durationMonths': employee.contractDurationMonths == null ? '' : String(employee.contractDurationMonths) })
@@ -175,7 +177,9 @@ export class HrDocumentsService {
     }
     for (const key of tokens) if (!key.startsWith('custom.') && !values[key]?.trim()) {
       const label = HR_DOCUMENT_VARIABLES.find(variable => variable.key === key)?.label || key
-      throw new BadRequestException(`بيان مطلوب غير متوفر: ${label} (${key})`)
+      // موظف بجواز بس: الرفض فاضل، والرسالة بتقول يستخدم «رقم الهوية أو الجواز» في القالب
+      const hint = key === 'employee.nationalId' ? ' — لو الموظف معندوش رقم هوية، استخدم في القالب «رقم الهوية أو الجواز» بدل «رقم الهوية»' : ''
+      throw new BadRequestException(`بيان مطلوب غير متوفر: ${label} (${key})${hint}`)
     }
     const snapshot: HrDocumentSnapshot = { content: resolveHrContent(content, values), companyName: values['company.name'], companyNameEn: values['company.nameEn'],
       companyAddress: values['company.address'], companyPhone: values['company.phone'], commercialRegister: values['company.commercialRegister'], issuedDate: date, requestRef: reference,

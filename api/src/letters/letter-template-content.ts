@@ -8,6 +8,9 @@ export const LETTER_VARIABLES = [
   { key: 'employee.employmentPhrase', label: 'صيغة علاقة العمل الحالية أو السابقة', sample: 'يعمل لدينا' },
   { key: 'employee.joinDate', label: 'تاريخ التعيين', sample: '2022-01-01' },
   { key: 'employee.nationalId', label: 'رقم الهوية', sample: '0000000000' },
+  // نفس متغيرات مستندات الموارد البشرية (قرار المالك 30 سبتمبر): موظف بجواز بس رقم هويته فاضي في الخطاب
+  { key: 'employee.passportNo', label: 'رقم الجواز', sample: 'A00000000' },
+  { key: 'employee.identityNumber', label: 'رقم الهوية أو الجواز', sample: '0000000000' },
   { key: 'company.name', label: 'اسم الشركة', sample: 'شركة المثال — معاينة' },
   { key: 'company.address', label: 'عنوان الشركة', sample: 'الرياض — عنوان توضيحي' },
   { key: 'company.phone', label: 'هاتف الشركة', sample: '0000000000' },
@@ -44,7 +47,7 @@ export function validateLetterContent(raw: unknown): LetterContent {
 }
 
 export function resolveLetterContent(content: LetterContent, values: Record<string, string>): LetterContent {
-  const ltr = new Set(['employee.employeeCode', 'employee.joinDate', 'employee.nationalId', 'company.phone', 'date', 'request.ref', 'salary.total', 'salary.currency'])
+  const ltr = new Set(['employee.employeeCode', 'employee.joinDate', 'employee.nationalId', 'employee.passportNo', 'employee.identityNumber', 'company.phone', 'date', 'request.ref', 'salary.total', 'salary.currency'])
   return Object.fromEntries(fields.map(field => [field, content[field].replace(token, (_all, key: string) => {
     const value = values[key] ?? ''
     return value && ltr.has(key) ? `\u2066${value}\u2069` : value

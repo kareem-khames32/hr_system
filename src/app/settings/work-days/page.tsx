@@ -41,6 +41,7 @@ import type {
 } from '@/lib/api'
 import { OrgTargetPicker, initialOrgTarget, resolveOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
 import { GraceOverridesNote } from '@/components/GraceOverridesNote'
+import { branchWeekendCodes, effectiveWeekend, weekendCodes, workDayRuleWarning } from '@/lib/work-day-rule-warning'
 import {
   Calendar,
   Plus,
@@ -1021,6 +1022,7 @@ export default function WorkDaysSettingsPage() {
                   </div>
                   <ScheduleExceptionsEditor
                     offDays={savedOff}
+                    currentOffDays={offDays}
                     value={draftExceptions ?? parseWorkScheduleExceptions(selectedSchedule.weekendExceptions)}
                     dirty={draftExceptions !== null}
                     daysDirty={daysDirty}
@@ -1327,6 +1329,11 @@ function AddScheduleRuleModal({
   // حساب الفرع الواحد: فرعه؛ حساب الفروع المتعددة يختار فرع منها (القاعدة العامة لحساب على مستوى الشركة بس)
   const [branchId, setBranchId] = useState<string>(() => calendarScopeWritable('GLOBAL', 0) ? '' : String(lockedBranchIdOf(getCurrentUser()) ?? ''))
   const calendar = useCalendarContext(branchId ? 'BRANCH' : 'GLOBAL', Number(branchId) || 0)
+  // تنبيه القاعدة اللي مش هتفرق (قرار المالك 30 سبتمبر): راحة الفرع المختار، ولو بيورث (أو «كل الفروع») فالراحة العامة
+  const branchWeekend = branchId ? branchWeekendCodes(branches.find(branch => branch.id === Number(branchId))?.weekendDays) : null
+  const globalCalendar = useCalendarContext('GLOBAL', 0, !!branchId && !branchWeekend)
+  const globalWeekendText = (branchId ? globalCalendar.context : calendar.context)?.current.weekendDays
+  const ruleWarning = workDayRuleWarning(effect, weekday, effectiveWeekend(branchWeekend, typeof globalWeekendText === 'string' ? weekendCodes(globalWeekendText) : null), 'إجازة')
   const [saving, setSaving] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
@@ -1449,6 +1456,13 @@ function AddScheduleRuleModal({
                 )
               })}
             </div>
+            {/* تنبيه بس — مابيمنعش الإضافة */}
+            {ruleWarning && (
+              <p role="status" className="mt-2 flex items-start gap-1.5 text-xs text-amber-800 bg-amber-50 rounded-lg px-3 py-2" data-testid="schedule-rule-warning">
+                <AlertCircle size={14} className="shrink-0 mt-0.5" />
+                {ruleWarning}
+              </p>
+            )}
           </div>
 
           {/* الفرع */}
@@ -1581,8 +1595,9 @@ function describeScheduleException(rule: ApiWorkScheduleException): string {
   return `${occurrence} ${day}${month}: ${rule.effect === 'WORK' ? 'دوام' : 'راحة'}`
 }
 
-function ScheduleExceptionsEditor({ offDays, value, dirty, daysDirty, busy, onChange, onSave }: {
-  offDays: string[]; value: ApiWorkScheduleException[]; dirty: boolean; daysDirty: boolean; busy: boolean
+// currentOffDays: أيام راحة الجدول زي ما هي على الشاشة دلوقتي (المسودة لو اتغيرت) — التنبيه بيقارن بيها
+function ScheduleExceptionsEditor({ offDays, currentOffDays, value, dirty, daysDirty, busy, onChange, onSave }: {
+  offDays: string[]; currentOffDays: string[]; value: ApiWorkScheduleException[]; dirty: boolean; daysDirty: boolean; busy: boolean
   onChange: (next: ApiWorkScheduleException[]) => void; onSave: () => void
 }) {
   const [weekday, setWeekday] = useState<ApiWorkScheduleException['weekday']>(offDays.includes('SAT') ? 'SAT' : ((offDays[0] as ApiWorkScheduleException['weekday']) ?? 'SAT'))
@@ -1608,13 +1623,20 @@ function ScheduleExceptionsEditor({ offDays, value, dirty, daysDirty, busy, onCh
       </p>
       {value.length === 0 && <p className="text-sm text-gray-400 mb-3">مفيش استثناءات — أيام الراحة زي ما هي كل أسبوع.</p>}
       <ul className="space-y-2 mb-3">
-        {value.map((rule, index) => (
-          <li key={`${rule.weekday}-${rule.occurrence}`} className="flex items-center justify-between p-2 bg-amber-50 rounded-lg text-sm">
-            <span className="text-amber-900">{describeScheduleException(rule)}</span>
-            <button type="button" disabled={busy} onClick={() => onChange(value.filter((_, other) => other !== index))}
-              className="text-red-600 text-xs hover:underline" aria-label="حذف الاستثناء">حذف</button>
-          </li>
-        ))}
+        {value.map((rule, index) => {
+          // تنبيه بس (مابيمنعش الحفظ): «راحة» على يوم هو أصلًا راحة في الجدول، أو «دوام» على يوم شغل أصلًا
+          const warning = workDayRuleWarning(rule.effect, rule.weekday, currentOffDays)
+          return (
+            <li key={`${rule.weekday}-${rule.occurrence}`} className="p-2 bg-amber-50 rounded-lg text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <span className="text-amber-900">{describeScheduleException(rule)}</span>
+                <button type="button" disabled={busy} onClick={() => onChange(value.filter((_, other) => other !== index))}
+                  className="text-red-600 text-xs hover:underline" aria-label="حذف الاستثناء">حذف</button>
+              </div>
+              {warning && <p role="status" className="flex items-start gap-1.5 text-xs text-amber-800 mt-1" data-testid="schedule-exception-warning"><AlertCircle size={13} className="shrink-0 mt-0.5" />{warning}</p>}
+            </li>
+          )
+        })}
       </ul>
       <div className="flex flex-wrap items-center gap-2 text-sm">
         <select aria-label="التكرار" className="input w-24" value={occurrence} onChange={e => setOccurrence(e.target.value as ApiWorkScheduleException['occurrence'])}>

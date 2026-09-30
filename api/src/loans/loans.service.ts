@@ -8,7 +8,7 @@ import { readLoanInstallmentPositions } from '../payroll/payroll-installment-bal
 import { repayLoanEarly } from '../payroll/payroll-installment-ledger'
 import { loanScheduleAmounts } from '../requests/loan-installment-requests'
 import { addDays, LoanCapPolicyValues, loanMoney, normalizeLoanCapPolicyInput } from './loan-caps'
-import { evaluateEmployeeLoanCap, isLoanCapRequestType, LOAN_CAP_POLICY_COLUMNS, loanRequestDayWindow, localDate, parseLoanCapPolicyRow } from './loan-request-caps'
+import { evaluateEmployeeLoanCap, isLoanCapRequestType, LOAN_CAP_POLICY_COLUMNS, loanRequestDayWindow, localDate, parseLoanCapPolicyRow, REGULAR_LOAN_SINGLE_DEDUCTION } from './loan-request-caps'
 import { collectLoanRecovery, LOAN_RECOVERY_COLUMNS, openRecoveryAmount, writeOffLoanRecovery } from './loan-recovery'
 import type { LoanCapPolicyDto, LoanRepaymentDto } from './loans.dto'
 
@@ -109,6 +109,9 @@ export class LoansService {
   async capPreview(user: JwtPayload, query: { employeeId?: string; amount?: string; months?: string }) {
     const target = query.employeeId ? Number(query.employeeId) : user.employeeId
     if (!target) throw new BadRequestException('الحساب غير مربوط بموظف')
+    // السلفة العادية شهر واحد؛ معاينة أكتر من شهر للسلفة الاستثنائية بس (قرار المالك 30 سبتمبر)
+    const months = query.months ? Number(query.months) : 1
+    if (months > 1 && !userHasPerm(user, 'loans.exceptional')) throw new BadRequestException({ code: 'LOAN_REGULAR_SINGLE_DEDUCTION', message: REGULAR_LOAN_SINGLE_DEDUCTION })
     return this.ds.transaction(async em => {
       if (target !== user.employeeId) {
         if (!['loans.exceptional', 'requests.create_on_behalf', 'payroll.view'].some(perm => userHasPerm(user, perm))) {
@@ -117,7 +120,7 @@ export class LoansService {
         await this.employeeInScope(em, user, target)
       }
       const amount = blank(query.amount) ? '0.00' : loanMoney(query.amount, 'المبلغ', true)
-      const evaluation = await evaluateEmployeeLoanCap(em, { employeeId: target, amount, months: query.months ? Number(query.months) : 1, asOf: localDate() })
+      const evaluation = await evaluateEmployeeLoanCap(em, { employeeId: target, amount, months, asOf: localDate() })
       // أيام طلب السلفة من الشهر تظهر في نافذة الطلب قبل التقديم (لا تُحفظ في لقطة السقف)
       return { ...evaluation, requestWindow: await loanRequestDayWindow(em, localDate()) }
     })

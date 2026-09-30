@@ -1030,7 +1030,8 @@ test('F1 — loan.request_open / request_from_day / request_to_day: فتح وق�
   const chain = await repo('ApprovalChain').findOneByOrFail({ code: 'CH_LOAN' })
   await request(admin, 'PATCH', `/settings/approval-chains/${chain.id}/steps`, { steps: [{ approverRole: 'hr', slaDays: 3 }] })
   const tryLoan = async actor => {
-    const created = await request(actor, 'POST', '/requests', { typeCode: 'LOAN', payload: { amount: 1000, months: 4 } })
+    // قرار المالك 30 سبتمبر: السلفة العادية قسط واحد
+    const created = await request(actor, 'POST', '/requests', { typeCode: 'LOAN', payload: { amount: 1000, months: 1 } })
     if (created.status >= 400) return created
     return request(actor, 'POST', `/requests/${created.body.id}/submit`)
   }

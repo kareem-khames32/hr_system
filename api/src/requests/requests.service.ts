@@ -3200,6 +3200,8 @@ export class RequestsService {
     if (type.code === LOAN_DEFERRAL_TYPE) return [...LOAN_DEFERRAL_FIELDS]
     const required: string[] = type.requiredFields ? JSON.parse(type.requiredFields) : []
     if (isSalaryChangeType(type)) return [...new Set([...required.filter(key => !['increase_pct', 'salaryChangeBasis', 'salaryChangeApproval'].includes(key)), ...SALARY_CHANGE_CLIENT_FIELDS])]
+    // قرار المالك 30 سبتمبر: السلفة العادية شهر واحد فعدد الأشهر مش إلزامي (الغايب = 1)؛ الاستثنائية بتبعته من نافذتها
+    if (isLoanCapRequestType(type)) return required.filter(key => key !== 'months')
     // الساعات الاختيارية القديمة للعادي تأتي من البصمة؛ إلزام المستثنى يُفحص من دليل يومه عند التقديم.
     // حقول العميل المخصصة المطلوبة تُضاف بعد هذه القائمة ولا تتغير إعداداتها المحفوظة.
     return type.code === 'OVERTIME' && type.destinationHandler === 'overtime_entries' ? required.filter(key => key !== 'hours') : required

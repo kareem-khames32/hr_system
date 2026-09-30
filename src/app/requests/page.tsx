@@ -16,6 +16,7 @@ import { EmployeePicker } from '@/components/EmployeePicker'
 import { payloadFieldKind, payloadFieldLabel, payloadNumberProps, payloadSummary, payloadValueLabel } from '@/lib/request-payload'
 import { leaveAttachmentName, leaveAttachmentRequiredNow, leaveAttachmentRuleText, leaveCountsCalendarDays as countsCalendarDaysOf, leaveHalfDayAllowed, leaveRulesHint } from '@/lib/leave-catalog'
 import { salaryIncreaseRequestFields, salaryIncreaseRequestPayload } from '@/lib/employee-salary-change-api'
+import { loanRequestKindLabel, REGULAR_LOAN_SINGLE_DEDUCTION_NOTE } from '@/lib/loans-api'
 import {
   Plus,
   Search,
@@ -226,6 +227,10 @@ const handlerLabels: Record<string, string> = {
   training_register: 'سجل التدريب',
   training_expense: 'مصروفات التدريب',
 }
+
+// طلب سلفة بجدول (العادية أو الاستثنائية) — مش السداد المبكر
+const isLoanCapType = (type?: { code: string; destinationHandler?: string | null } | null) =>
+  !!type && type.destinationHandler === 'loans_installments' && type.code !== 'EARLY_LOAN_SETTLEMENT'
 
 // ودجة الحقل ونوعه من خريطة واحدة جنب تسميات المعتمد (src/lib/request-payload.ts) — الشاشة لا تخمّن
 const isDateField = (f: string) => payloadFieldKind(f) === 'date'
@@ -624,6 +629,9 @@ export default function MyRequestsPage() {
   const isPayrollDeduction = selectedTypeDef?.code === 'PAYROLL_DEDUCTION'
   const isPayrollBonus = selectedTypeDef?.code === 'PAYROLL_BONUS'
   const isMoneyRequest = isPayrollDeduction || isPayrollBonus
+  // قرار المالك 30 سبتمبر: السلفة العادية بتتخصم مرة واحدة — مفيش خانة عدد أشهر والطلب بيتبعت بشهر واحد.
+  // التقسيط للسلفة الاستثنائية بس (من /payroll/loans)؛ لو اترجعت للاستكمال هنا بتفضل بأشهرها زي ما هي.
+  const isRegularLoanForm = isLoanCapType(selectedTypeDef) && parseJson<Record<string, unknown>>(editingRequest?.payload, {}).exceptional !== true
   // «دوام يوم عطلة»: مدى «من/إلى» + شرائح أيام العطلة الحقيقية بدل خانة نص يكتبها المستخدم بيده
   const isHolidayWork = formFieldKeys.includes('dates')
   const isLeaveCategory = selectedTypeDef?.category === 'leaves' && !isLeaveCancel
@@ -1060,6 +1068,8 @@ export default function MyRequestsPage() {
         payload[f] = isNumberField(f) && raw !== '' ? Number(raw) : raw
       }
     }
+    // السلفة العادية شهر واحد دايمًا — حتى طلب قديم مُرجَع كان بأشهر بيتبعت بقسط واحد (الخادم بيرفض أكتر من شهر)
+    if (isRegularLoanForm) payload.months = 1
     if (isPermission) {
       if (!permissionType) {
         setSubmitError('اختر نوع الإذن')
@@ -1440,6 +1450,10 @@ export default function MyRequestsPage() {
             <div className="flex items-center justify-between"><h2 className="text-xl font-bold">تفاصيل الطلب #{requestDetail.id}</h2><button onClick={() => setRequestDetail(null)} aria-label="إغلاق التفاصيل"><X size={22} /></button></div>
             <RequestEmployeeCard requester={requestDetail.requester} submittedBy={requestDetail.submittedBy} />
             <RequestPayload payload={requestDetail.payload} />
+            {/* نوع السلفة: «سلفة استثنائية — N قسط» أو «سلفة (مرة واحدة)» */}
+            {(requestDetail.typeCode === 'LOAN' || isLoanCapType(types.find(t => t.code === requestDetail.typeCode))) && loanRequestKindLabel(requestDetail.payload) && (
+              <p className="text-sm font-medium text-gray-700 bg-gray-50 rounded-xl px-3 py-2" data-testid="loan-kind">{loanRequestKindLabel(requestDetail.payload)}</p>
+            )}
             <OvertimeRequestSummary overtime={requestDetail.overtime ?? undefined} reviewRequired={requestDetail.overtimeReviewRequired} />
             <LetterDownloadButton reference={requestDetail.destinationRef} />
             <h3 className="font-bold">تعليقات المعتمدين</h3>
@@ -1658,6 +1672,14 @@ export default function MyRequestsPage() {
                 {/* «مكافأة»: نفس الحكاية — أنواع المكافآت وقيمتها بطريقة حسابها وشهر المسير والموظف
                     والسبب ومرجع المستند، ومعاينة حيّة للمبلغ والسلسلة من الخادم قبل الإرسال */}
                 {selectedType && isPayrollBonus && <BonusRequestForm onSubmitted={load} />}
+
+                {/* السلفة العادية: مفيش عدد أشهر — بتتخصم مرة واحدة (قرار المالك 30 سبتمبر) */}
+                {selectedType && isRegularLoanForm && (
+                  <div className="flex items-start gap-2 text-xs text-blue-700 bg-blue-50 rounded-xl px-3 py-2.5" data-testid="loan-single-deduction-note">
+                    <Info size={14} className="shrink-0 mt-0.5" />
+                    <span>{REGULAR_LOAN_SINGLE_DEDUCTION_NOTE}</span>
+                  </div>
+                )}
 
                 {/* تصحيح/طلب بصمة: تلميح تعبئة البصمة الناقصة */}
                 {selectedType && isPunchCorrection && (
@@ -1998,7 +2020,7 @@ export default function MyRequestsPage() {
                 {/* النموذج من تعريف الحقول المخصّصة — يحل محل الاستنتاج القديم */}
                 {selectedType && hasCustomFields && !isCustodyRequest && !isLeaveCancel && !isMoneyRequest && (
                   <div className="grid grid-cols-2 gap-3">
-                    {customFields.filter(f => f.key !== 'dates' || !isHolidayWork).filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f.key)).map((f) => (
+                    {customFields.filter(f => f.key !== 'dates' || !isHolidayWork).filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f.key)).filter(f => !isRegularLoanForm || f.key !== 'months').map((f) => (
                       <div key={f.key} className={f.type === 'file' || fieldKindOf(f.key, f.type) === 'textarea' ? 'col-span-2' : ''}>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
                           {customFieldLabel(f)}
@@ -2101,7 +2123,7 @@ export default function MyRequestsPage() {
                   !isMoneyRequest &&
                   requiredFields.length > 0 && (
                     <div className="grid grid-cols-2 gap-3">
-                      {requiredFields.filter(f => f !== 'dates' || !isHolidayWork).filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f)).map((f) => (
+                      {requiredFields.filter(f => f !== 'dates' || !isHolidayWork).filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f)).filter(f => !isRegularLoanForm || f !== 'months').map((f) => (
                         <div key={f} className={payloadFieldKind(f) === 'textarea' ? 'col-span-2' : ''}>
                           <label className="block text-sm font-medium text-gray-700 mb-2">
                             {humanizeKey(f)}

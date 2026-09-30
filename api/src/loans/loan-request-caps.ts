@@ -19,6 +19,9 @@ import type { LoanRepaymentMethod, LoanRepaymentMode } from './loans.entities'
 export const LOAN_REQUEST_CLIENT_FIELDS = ['amount', 'months', 'exceptional', 'exceptionalCategory', 'firstInstallmentPeriod'] as const
 export const LOAN_REQUEST_SERVER_FIELDS = ['capCheck', 'capApprovals', 'approvedAmount', 'exceptionalBy'] as const
 export const EARLY_SETTLEMENT_FIELDS = ['amount', 'reference', 'method', 'mode'] as const
+// قرار المالك 30 سبتمبر: السلفة العادية بتتخصم مرة واحدة (شهر واحد)؛ التقسيط للسلفة الاستثنائية بس (loans.exceptional).
+// بيتفحص عند كل تقديم جديد (الموظف والنيابة وإعادة التقديم)؛ الطلبات المعلّقة قبل القرار بتتعتمد بأشهرها المحفوظة.
+export const REGULAR_LOAN_SINGLE_DEDUCTION = 'السلفة العادية بتتخصم مرة واحدة؛ التقسيط للسلفة الاستثنائية بس'
 
 export const isLoanCapRequestType = (type: { code: string; destinationHandler?: string | null } | null | undefined) =>
   !!type && type.destinationHandler === 'loans_installments' && type.code !== 'EARLY_LOAN_SETTLEMENT'
@@ -148,6 +151,7 @@ export async function stageLoanRequestSubmission(em: EntityManager, input: { req
   const exceptional = parseFlag(client.exceptional)
   if (!exceptional) await assertLoanRequestDayWindow(em, today)
   const schedule = loanScheduleAmounts(client.amount, client.months ?? 1)
+  if (!exceptional && schedule.months !== 1) throw new BadRequestException({ code: 'LOAN_REGULAR_SINGLE_DEDUCTION', message: REGULAR_LOAN_SINGLE_DEDUCTION })
   await lockPayrollEmployees(em, [input.requesterId])
   const canExceptional = userHasPerm(input.actor, 'loans.exceptional')
   const cycleStartDay = await intConfig(em, 'payroll.cycle_start_day', 23, 1, 31)

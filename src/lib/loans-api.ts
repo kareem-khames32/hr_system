@@ -67,6 +67,26 @@ export interface LoanRecovery {
 export interface LoanRepaymentResult { eventId: number; repaymentId: number | null; mode: LoanRepaymentMode; amount: string | null; balanceAfter: string | null; replayed: boolean }
 
 export const LOAN_EXCEPTIONAL_CATEGORY_LABELS: Record<string, string> = { MEDICAL: 'حالة طبية', FAMILY: 'ظرف عائلي', EDUCATION: 'التزام دراسي', OTHER: 'أخرى' }
+
+// قرار المالك 30 سبتمبر: السلفة العادية بتتخصم مرة واحدة؛ التقسيط للسلفة الاستثنائية بس (loans.exceptional).
+export const REGULAR_LOAN_SINGLE_DEDUCTION_NOTE = 'بتتخصم مرة واحدة من مسير الشهر اللي بعد الاعتماد'
+/** نوع السلفة في القوائم والتفاصيل: «سلفة استثنائية — N قسط» أو «سلفة (مرة واحدة)».
+ *  السلفة العادية القديمة المقسطة قبل القرار بتفضل بعدد أقساطها: «سلفة — N قسط». */
+export function loanKindLabel(exceptional: boolean | null | undefined, months: number | string | null | undefined): string {
+  const count = Number(months ?? 1)
+  const installments = Number.isInteger(count) && count > 0 ? count : 1
+  if (exceptional === true) return `سلفة استثنائية — ${installments} قسط`
+  return installments > 1 ? `سلفة — ${installments} قسط` : 'سلفة (مرة واحدة)'
+}
+/** نوع طلب السلفة من حمولته المحفوظة (عدد الأشهر الغايب = 1)؛ null للحمولة التالفة */
+export function loanRequestKindLabel(payload: string | null | undefined): string | null {
+  try {
+    const value: unknown = JSON.parse(payload || '{}')
+    if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+    const row = value as { exceptional?: unknown; months?: unknown }
+    return loanKindLabel(row.exceptional === true, typeof row.months === 'number' || typeof row.months === 'string' ? row.months : 1)
+  } catch { return null }
+}
 export const LOAN_REPAYMENT_MODE_LABELS: Record<LoanRepaymentMode, string> = { FULL: 'سداد كلي', SHORTEN_TERM: 'تقصير المدة', REDUCE_INSTALLMENT: 'تخفيض القسط' }
 export const LOAN_REPAYMENT_METHOD_LABELS: Record<LoanRepaymentMethod, string> = { CASH: 'نقدًا', BANK_TRANSFER: 'تحويل بنكي', OTHER: 'أخرى' }
 export const LOAN_SCOPE_LABELS: Record<LoanCapScopeType, string> = { COMPANY: 'الشركة كاملة', BRANCH: 'فروع', DEPARTMENT: 'أقسام', TEAM: 'فرق', EMPLOYEES: 'موظفون محددون' }

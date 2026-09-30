@@ -2,16 +2,20 @@
 
 import { useEffect, useState } from 'react'
 import { X } from 'lucide-react'
-import { createRequest, fetchEmployees, type ApiEmployee } from '@/lib/api'
+import { createRequest, fetchEmployees, getCurrentUser, type ApiEmployee } from '@/lib/api'
 import {
   fetchLoanCapPreview, formatLoanMoney, loanMoneyInputValid, LOAN_EXCEPTIONAL_CATEGORY_LABELS, type LoanCapEvaluation,
 } from '@/lib/loans-api'
+import { EmployeePicker } from '@/components/EmployeePicker'
 import { LoanCapSummary } from './LoanCapSummary'
 
 // AD-09: الموارد البشرية (loans.exceptional) تنشئ سلفة لموظف فوق السقف العادي بسبب مكتوب وتصنيف وشهر أول قسط.
-// الطلب يمر بسلسلة اعتماد السلف، ومنشئه لا يعتمده.
+// قرار المالك 30 سبتمبر: دي السلفة الوحيدة اللي بالأقساط (العادية بتتخصم مرة واحدة)، وبتتفتح من زرار «سلفة استثنائية» في /payroll/loans.
+// الطلب يمر بسلسلة اعتماد السلف (أو يتعتمد على طول لو منشئه صاحب قرار الموارد البشرية)، ومنشئه لا يعملها لنفسه.
 export function LoanExceptionalModal({ currency, onClose, onDone }: { currency: string; onClose: () => void; onDone: () => void }) {
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
+  // الخادم بيرفض سلفة استثنائية لنفسك — فموظف الحساب مش في الاختيارات
+  const [selfEmployeeId, setSelfEmployeeId] = useState<number | null>(null)
   const [employeeId, setEmployeeId] = useState('')
   const [amount, setAmount] = useState('')
   const [months, setMonths] = useState('')
@@ -25,6 +29,7 @@ export function LoanExceptionalModal({ currency, onClose, onDone }: { currency: 
   const [success, setSuccess] = useState('')
 
   useEffect(() => { fetchEmployees().then(rows => setEmployees(rows.filter(row => row.status !== 'terminated' && row.status !== 'archived'))).catch(e => setError(e instanceof Error ? e.message : 'تعذر تحميل الموظفين')) }, [])
+  useEffect(() => { setSelfEmployeeId(getCurrentUser()?.employeeId ?? null) }, [])
   useEffect(() => {
     if (!employeeId) { setPreview(null); return }
     const handle = setTimeout(() => {
@@ -41,7 +46,10 @@ export function LoanExceptionalModal({ currency, onClose, onDone }: { currency: 
     try {
       const request = await createRequest('LOAN', { amount: amount.trim(), months: Number(months), exceptional: true, exceptionalCategory: category, reason: reason.trim(), firstInstallmentPeriod: firstPeriod },
         true, Number(employeeId))
-      setSuccess(`أُنشئ طلب السلفة الاستثنائية رقم ${request.id} وأُرسل لسلسلة اعتماد السلف`); onDone()
+      // صاحب قرار الموارد البشرية نيابةً عن غيره = اعتماد فوري (قرار المالك 26 سبتمبر) فالسلفة وأقساطها بتظهر في السجل على طول
+      setSuccess(request.status === 'COMPLETED'
+        ? `اتسجّلت السلفة الاستثنائية (طلب رقم ${request.id}) واتعتمدت على طول — أقساطها ظاهرة في السجل`
+        : `أُنشئ طلب السلفة الاستثنائية رقم ${request.id} وأُرسل لسلسلة اعتماد السلف`); onDone()
     } catch (e) { setError(e instanceof Error ? e.message : 'تعذر إنشاء السلفة الاستثنائية') } finally { setBusy(false) }
   }
 
@@ -57,10 +65,8 @@ export function LoanExceptionalModal({ currency, onClose, onDone }: { currency: 
         {success && <div role="status" className="bg-success-50 text-success-700 rounded-xl p-3 mb-3">{success}</div>}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="md:col-span-2"><label className="label" htmlFor="exc-employee">الموظف *</label>
-            <select id="exc-employee" className="input" value={employeeId} onChange={e => setEmployeeId(e.target.value)} disabled={busy || !!success}>
-              <option value="">اختر الموظف</option>
-              {employees.map(row => <option key={row.id} value={row.id}>{row.fullName} — {row.employeeCode}</option>)}
-            </select></div>
+            <EmployeePicker id="exc-employee" employees={employees} value={employeeId} onChange={(id) => setEmployeeId(id)}
+              filter={(row) => row.id !== selfEmployeeId} disabled={busy || !!success} required /></div>
           <div><label className="label" htmlFor="exc-amount">المبلغ ({currency}) *</label>
             <input id="exc-amount" className="input" dir="ltr" inputMode="decimal" value={amount} onChange={e => setAmount(e.target.value)} disabled={busy || !!success} /></div>
           <div><label className="label" htmlFor="exc-months">عدد أشهر التقسيط *</label>

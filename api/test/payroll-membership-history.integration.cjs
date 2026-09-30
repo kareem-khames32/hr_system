@@ -79,9 +79,13 @@ async function events(run, user = admin) {
 }
 function assertNoCurrentPrivateValues(payload, live) {
   const serialized = JSON.stringify(payload)
-  for (const field of ['nationalId', 'passportNo', 'iban', 'bankName', 'personalEmail', 'phone', 'address']) {
+  for (const field of ['passportNo', 'personalEmail', 'phone', 'address']) {
     assert.ok(!serialized.includes(live[field]), `Payslip leaked the current employee ${field}`)
     assert.ok(payload.employee?.[field] == null, `Payslip should not expose the live ${field} field`)
+  }
+  // قرار المالك 30 سبتمبر: القسيمة بتعرض بيانات الهوية والبنك الحالية من الملف
+  for (const field of ['nationalId', 'iban', 'bankName']) {
+    assert.equal(payload.employee?.[field], live[field], `Payslip shows the current employee ${field} from the file`)
   }
   assert.notEqual(Number(payload.employee?.basicSalary), live.basicSalary, 'Historical payslip leaked the current salary')
   assert.notEqual(payload.employee?.branchId, live.branchId, 'Historical payslip borrowed the current branch after transfer')
