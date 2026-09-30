@@ -81,6 +81,8 @@ export const clearSession = () => {
     store.removeItem(TOKEN_KEY)
     store.removeItem(USER_KEY)
     clearEmployeeAddDrafts(store)
+    // سياق العملة (src/lib/currency.ts) تبع الجلسة — الخروج بيمسحه (والكاش كمان مربوط بالتوكن، فدخول جديد بيقرا سياق جديد)
+    store.removeItem('hr_currency_context')
   }
 }
 

@@ -5,7 +5,7 @@
 // عملة النظام، وعملة فرع موظف الحساب، ورقم كل فرع في نطاقه وعملته.
 // الاستخدام: const c = useCurrency(employee?.branchId) ثم `${amount.toLocaleString()} ${c}` — ومن غير فرع = عملة الشاشة العامة.
 import { useEffect, useState } from 'react'
-import { apiFetch, getCurrentUser, type CurrentUser } from './api'
+import { apiFetch, getCurrentUser, getToken, type CurrentUser } from './api'
 // نفس قاعدة الخادم بالحرف (ملف صرف مشترك): دولة الفرع ← عملته، ومن غير دولة ← عملة النظام
 export { branchCurrency } from '../../api/src/org/branch-currency'
 
@@ -34,7 +34,7 @@ export const currencyLabel = (code?: string | null): string => (code ? LABELS[co
 export const currencyName = (code?: string | null): string => (code ? NAMES[code] ?? code : '')
 
 const KEY = 'hr_currency_context'
-let cached: { userId: number | null; context: CurrencyContext } | null = null
+let cached: { session: string; context: CurrencyContext } | null = null
 let pending: Promise<CurrencyContext | null> | null = null
 // بيزيد مع كل مسح للكاش: رد قديم وصل بعد المسح مايتخزنش فوق الجديد
 let generation = 0
@@ -46,13 +46,19 @@ const validContext = (value: unknown): value is CurrencyContext => {
     Array.isArray(row.branches) && row.branches.every((branch) => Number.isSafeInteger(branch?.id) && typeof branch?.currency === 'string')
 }
 
-// الكاش لحساب الجلسة الحالي بس — حساب تاني في نفس التبويب مايورثش سياق اللي قبله
-function cachedFor(userId: number | null): CurrencyContext | null {
-  if (cached && cached.userId === userId) return cached.context
+// الكاش مربوط بالجلسة نفسها (رقم الحساب + آخر التوكن): دخول جديد — حتى لنفس الحساب بعد نقله لفرع تاني — بيقرا سياق جديد
+// (مراجعة Codex الجولة 20: CR20-N02)، وحساب تاني في نفس التبويب مايورثش سياق اللي قبله
+const currentSession = (): string | null => {
+  const user = getCurrentUser(), token = getToken()
+  return user && token ? `${user.id}:${token.slice(-24)}` : null
+}
+
+function cachedFor(session: string): CurrencyContext | null {
+  if (cached && cached.session === session) return cached.context
   if (typeof window === 'undefined') return null
   try {
     const stored = JSON.parse(sessionStorage.getItem(KEY) ?? 'null')
-    if (stored && stored.userId === userId && validContext(stored.context)) {
+    if (stored && stored.session === session && validContext(stored.context)) {
       cached = stored
       return stored.context
     }
@@ -62,9 +68,9 @@ function cachedFor(userId: number | null): CurrencyContext | null {
 
 /** سياق العملة (مع كاش الجلسة)؛ null لو مفيش جلسة أو الخادم ماردّش — الشاشة بتفضل من غير رمز عملة بدل رمز غلط. */
 export async function loadCurrencyContext(): Promise<CurrencyContext | null> {
-  const user = getCurrentUser()
-  if (!user) return null
-  const hit = cachedFor(user.id)
+  const session = currentSession()
+  if (!session) return null
+  const hit = cachedFor(session)
   if (hit) return hit
   if (!pending) {
     const started = generation
@@ -72,7 +78,7 @@ export async function loadCurrencyContext(): Promise<CurrencyContext | null> {
       .then((context) => {
         if (!validContext(context)) return null
         if (started !== generation) return context
-        cached = { userId: user.id, context }
+        cached = { session, context }
         try { sessionStorage.setItem(KEY, JSON.stringify(cached)) } catch { /* تخزين غير متاح */ }
         listeners.forEach((listener) => listener(context))
         return context
@@ -121,7 +127,7 @@ export const invalidateCurrency = () => {
 
 /** سياق العملة للشاشة (null لحد ما يتقري). */
 export function useCurrencyContext(): CurrencyContext | null {
-  const [context, setContext] = useState<CurrencyContext | null>(() => (cached && cached.userId === (getCurrentUser()?.id ?? null) ? cached.context : null))
+  const [context, setContext] = useState<CurrencyContext | null>(() => (cached && cached.session === currentSession() ? cached.context : null))
   useEffect(() => {
     let active = true
     const listener = (next: CurrencyContext | null) => { if (active) setContext(next) }

@@ -269,6 +269,16 @@ export class OnboardingService implements OnApplicationBootstrap {
         throw new BadRequestException(missing.length ? hiringDocsTaskBlockedMessage(missing)
           : 'مسوغات التعيين كاملة، فالمهمة بتفضل مكتملة — لو فيه مستند غلط عدّله من «مستندات الموظفين»')
       }
+      // حالة المهمة دي من المستندات بس (CR20-N01): الملاحظة والموعد بيتكتبوا لوحدهم من غير ما نعيد حفظ الكيان كله —
+      // وإلا حالة قديمة اتقرت قبل حذف مستند بالتزامن ترجع «تمّت». وبعد الكتابة بنعيد حسابها من المستندات دلوقتي
+      const patch: Partial<Pick<OnboardingTask, 'note' | 'dueDate'>> = {}
+      if (dto.dueDate !== undefined) patch.dueDate = dto.dueDate
+      if (dto.note !== undefined) patch.note = dto.note.trim()
+      // حفظ جزئي ({ id, ...الخانات دي بس }): TypeORM بيكتب الأعمدة المبعوتة بس، فالحالة المحفوظة ماتتلمسش
+      if (Object.keys(patch).length) await this.tasks.save({ id, ...patch })
+      hiring = (await syncHiringDocsTasks(this.tasks.manager, [task.employeeId])).get(task.employeeId)
+      const saved = (await this.tasks.findOne({ where: { id } })) ?? task
+      return this.view(saved, isHr || isParty, await this.userNames([saved.doneBy]), hiring)
     }
     if (dto.label !== undefined) task.label = this.cleanLabel(dto.label)
     if (dto.party !== undefined) task.party = dto.party

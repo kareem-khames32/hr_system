@@ -1,7 +1,7 @@
 import { BadRequestException, Body, Controller, Get, NotFoundException, Post, Query, UseGuards } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
 import { ArrayMaxSize, ArrayMinSize, IsArray, IsInt, Min } from 'class-validator'
-import { In, Not, Repository } from 'typeorm'
+import { EntityManager, In, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchIdIn, branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
@@ -131,39 +131,57 @@ export class HiringDocumentsController {
   async remind(@CurrentUser() user: JwtPayload, @Body() dto: SendHiringRemindersDto) {
     const ids = [...new Set(dto.employeeIds)]
     const scope = branchScopeOf(user)
-    const found: Employee[] = []
-    for (let i = 0; i < ids.length; i += 1000) {
-      found.push(...await this.employees.find({
-        select: { id: true, status: true, branchId: true },
-        where: { id: In(ids.slice(i, i + 1000)), ...(scope !== null ? { branchId: branchIdIn(scope) } : {}) },
-      }))
-    }
-    if (found.length !== ids.length) throw new NotFoundException('موظف أو أكتر من المختارين غير موجود')
     const manager = this.employees.manager
-    const active = found.filter(employee => !INACTIVE_STATUSES.includes(employee.status))
-    const status = await hiringDocumentsStatus(manager, active.map(employee => employee.id))
-    const sentAt = new Date()
-    const rows = active.flatMap(employee => {
-      const missing = status.get(employee.id)?.missing ?? []
-      return missing.length ? [{ employeeId: employee.id, sentByUserId: user.sub, sentAt,
-        missingDocTypes: reminderCodesJson(missing.map(type => type.code)) }] : []
-    })
-    const saved: Array<{ id: number; employeeId: number }> = []
-    if (rows.length) {
-      await manager.transaction(async em => {
-        // 400 صف × 4 قيم في الدفعة: تحت حد معاملات SQL Server (2100)
-        for (let i = 0; i < rows.length; i += 400) {
-          const part = rows.slice(i, i + 400)
-          const result = await em.insert(HiringDocumentReminder, part)
-          part.forEach((row, index) => saved.push({ id: Number(result.identifiers[index]?.id), employeeId: row.employeeId }))
-        }
+    // فحص سريع من غير أقفال: أي موظف برّه النطاق أو مش موجود = 404 قبل أي قراءة مستندات
+    const found = await this.remindable(manager, ids, scope, false)
+    // قراءة أولى للنواقص برّه المعاملة: لو المستندات مقفولة عند حد تاني بنستنى هنا من غير ما نمسك صفوف الموظفين،
+    // فنقل الموظف مابيقفش ورا التذكير (مراجعة Codex الجولة 20)
+    await hiringDocumentsStatus(manager, found.filter(employee => !INACTIVE_STATUSES.includes(employee.status)).map(employee => employee.id))
+    // الحسم جوه معاملة واحدة (CR20-B01): قفل صفوف الموظفين المختارين (UPDLOCK/HOLDLOCK — نقل أو تعديل الفرع بيستنى الحفظ ده
+    // أو بيسبقه)، وبعدها النطاق والحالة من القراءة المقفولة، والنواقص، والحفظ — فالفرع مايتغيرش بين الفحص والكتابة، وموظف
+    // اتنقل برّه النطاق قبل القفل بيرجّع 404 ومفيش ولا تذكير ولا حالة مستندات في الرد
+    return manager.transaction(async em => {
+      const locked = await this.remindable(em, ids, scope, true)
+      const active = locked.filter(employee => !INACTIVE_STATUSES.includes(employee.status))
+      const status = await hiringDocumentsStatus(em, active.map(employee => employee.id))
+      const sentAt = new Date()
+      const rows = active.flatMap(employee => {
+        const missing = status.get(employee.id)?.missing ?? []
+        return missing.length ? [{ employeeId: employee.id, sentByUserId: user.sub, sentAt,
+          missingDocTypes: reminderCodesJson(missing.map(type => type.code)) }] : []
       })
+      const saved: Array<{ id: number; employeeId: number }> = []
+      // 400 صف × 4 قيم في الدفعة: تحت حد معاملات SQL Server (2100)
+      for (let i = 0; i < rows.length; i += 400) {
+        const part = rows.slice(i, i + 400)
+        const result = await em.insert(HiringDocumentReminder, part)
+        part.forEach((row, index) => saved.push({ id: Number(result.identifiers[index]?.id), employeeId: row.employeeId }))
+      }
+      return {
+        sent: saved.length,
+        skipped: ids.length - saved.length,
+        reminders: saved.map(reminder => ({ ...reminder, sentAt, missing: status.get(reminder.employeeId)?.missing ?? [] })),
+      }
+    })
+  }
+
+  // المختارين كلهم لازم يبقوا موجودين وجوه نطاق المرسل دلوقتي — وإلا 404 للكل (لا تذكير جزئي صامت).
+  // lock = قراءة بقفل تحديث ماسك لحد آخر المعاملة (نفس صفوف نقل الموظف وتعديل فرعه)
+  private async remindable(em: EntityManager, ids: number[], scope: ReturnType<typeof branchScopeOf>, lock: boolean) {
+    const found: Array<Pick<Employee, 'id' | 'status' | 'branchId'>> = []
+    for (let i = 0; i < ids.length; i += 1000) {
+      const chunk = ids.slice(i, i + 1000)
+      if (lock && em.connection.options.type === 'mssql') {
+        found.push(...await em.query(`SELECT [id], [status], [branchId] FROM dbo.employees WITH (UPDLOCK, HOLDLOCK, ROWLOCK)
+          WHERE [id] IN (${chunk.map((_, index) => `@${index}`).join(', ')})`, chunk))
+      } else {
+        found.push(...await em.getRepository(Employee).find({ select: { id: true, status: true, branchId: true }, where: { id: In(chunk) } }))
+      }
     }
-    return {
-      sent: saved.length,
-      skipped: ids.length - saved.length,
-      reminders: saved.map(reminder => ({ ...reminder, sentAt, missing: status.get(reminder.employeeId)?.missing ?? [] })),
+    if (found.length !== ids.length || found.some(employee => !inBranchScope(scope, employee.branchId))) {
+      throw new NotFoundException('موظف أو أكتر من المختارين غير موجود')
     }
+    return found
   }
 
   // «مسوغات التعيين المطلوبة منك» — للموظف نفسه (أي حساب مربوط بموظف): كل نوع مطلوب وهل مرفوع ولا ناقص
