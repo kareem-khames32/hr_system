@@ -30,6 +30,7 @@ import { saveInSqlBatches } from '../common/sql-batches'
 import { RequestsService } from '../requests/requests.service'
 import { LeaveAttachmentDeadlineJob } from '../requests/leave-attachment-deadline.job'
 import { EmployeeDocument, PublicHoliday } from './assets.entities'
+import { hiringDocumentsNotification } from './hiring-documents'
 import { NotificationRead } from './notification-read.entity'
 import { leaveView } from '../common/leave-contract'
 
@@ -408,6 +409,9 @@ export class PortalController {
         body: `${docNames.get(doc.employeeId)} — مستند ينتهي بتاريخ ${doc.expiryDate}`, at: today,
         link: canViewDocuments ? '/employees/documents' : '/my/documents' })
     }
+    // «ناقصك من مسوغات التعيين: …» — للموظف نفسه بعد تذكير من الموارد البشرية وطول ما فيه ناقص (مفتاحه رقم آخر تذكير)
+    const hiringDocs = await hiringDocumentsNotification(this.employees.manager, user.employeeId)
+    if (hiringDocs) items.push(hiringDocs)
     if (userHasPerm(user, 'leaves.revoke')) {
       const since = new Date(Date.now() - 7 * 86400000)
       const sinceStr = `${since.getFullYear()}-${String(since.getMonth() + 1).padStart(2, '0')}-${String(since.getDate()).padStart(2, '0')}`

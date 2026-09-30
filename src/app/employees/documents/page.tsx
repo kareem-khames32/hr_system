@@ -48,6 +48,7 @@ import {
   ApiEmployee,
 } from '@/lib/api'
 import { docTypeLabel, docTypeSelectOptions, loadDocTypes, type ApiDocType } from '@/lib/doc-types'
+import { uploadPrefillFromSearch } from '@/lib/hiring-documents-api'
 import { EmployeePicker } from '@/components/EmployeePicker'
 import { formatDate } from '@/lib/dates'
 
@@ -191,6 +192,12 @@ export default function DocumentsPage() {
       .catch((err) =>
         setDocTypesError(err instanceof Error ? err.message : 'تعذر تحميل أنواع المستندات')
       )
+    // «ارفع الناقص» من «نواقص مسوغات التعيين»: نموذج الإضافة مفتوح على الموظف ونوع المستند الناقص
+    const prefill = uploadPrefillFromSearch(window.location.search)
+    if (prefill) {
+      setUploadForm({ ...emptyForm, ...prefill })
+      setShowUploadModal(true)
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 

@@ -7,10 +7,12 @@ import {
   OnApplicationBootstrap,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { In, MoreThanOrEqual, Not, Repository } from 'typeorm'
+import { In, IsNull, MoreThanOrEqual, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchIdIn, branchScopeOf, inBranchScope as scopeHasBranch, userHasPerm } from '../auth/guards'
 import { User } from '../auth/user.entity'
+import { HIRING_DOCS_TASK_KEY, hiringDocsTaskBlockedMessage, hiringDocsTaskRow, requiredHiringDocTypes, syncHiringDocsTasks,
+  type HiringDocsStatus } from '../assets/hiring-documents'
 import { Employee, EmployeeStatus } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { ApproverResolver } from '../requests/approver-resolver.service'
@@ -160,6 +162,11 @@ export class OnboardingService implements OnApplicationBootstrap {
 
     // أول ظهور للموظف = نسخ القالب الفعّال له (مرة واحدة — بعدها قائمته مستقلة)
     await this.materialize(recent)
+    // «استلام مسوغات التعيين» (ترحيل 075): مهمة نظام لكل موظف في القائمة طول ما فيه نوع مستند مطلوب للتعيين —
+    // بتتعمل مع باقي المهام وللموجودين في القائمة من قبل، وحالتها بتتحسب من المستندات مع كل قراءة
+    const required = await requiredHiringDocTypes(this.tasks.manager)
+    if (required.length) await this.ensureHiringDocsTasks(emps)
+    const hiring = await syncHiringDocsTasks(this.tasks.manager, emps.map((e) => e.id), required)
 
     const empIds = emps.map((e) => e.id)
     const tasks = empIds.length
@@ -206,7 +213,7 @@ export class OnboardingService implements OnApplicationBootstrap {
           joinDate: emp.joinDate ?? null,
           // HR: إضافة مهمة وتعديل الوصف والجهة والموعد والاستبعاد
           canManage: isHr,
-          tasks: list.map((t) => this.view(t, isHr || isParty(t.party), names)),
+          tasks: list.map((t) => this.view(t, isHr || isParty(t.party), names, hiring.get(emp.id))),
         }
       })
     )
@@ -221,7 +228,7 @@ export class OnboardingService implements OnApplicationBootstrap {
   // الإتمام وإعادة الفتح والملاحظة: جهة المهمة أو HR. الوصف والجهة والموعد
   // والاستبعاد («غير مطلوبة») وإعادة فتح المستبعدة: HR في فرع الموظف فقط
   async updateTask(user: JwtPayload, id: number, dto: OnboardingTaskPatch) {
-    const task = await this.tasks.findOne({ where: { id } })
+    let task = await this.tasks.findOne({ where: { id } })
     if (!task) throw new NotFoundException('المهمة غير موجودة')
     const emp = await this.employees.findOne({ where: { id: task.employeeId } })
     if (!emp) throw new NotFoundException('المهمة غير موجودة')
@@ -249,6 +256,20 @@ export class OnboardingService implements OnApplicationBootstrap {
         'تعديل الوصف والجهة والموعد واستبعاد المهمة للموارد البشرية فقط'
       )
     }
+    // «استلام مسوغات التعيين»: حالتها من المستندات — ماتتقفلش (تمّت/غير مطلوبة) والناقص موجود، وبتكتمل لوحدها لما يترفع
+    let hiring: HiringDocsStatus | undefined
+    if (task.systemKey === HIRING_DOCS_TASK_KEY) {
+      if (dto.label !== undefined || dto.party !== undefined) {
+        throw new BadRequestException('وصف مهمة «استلام مسوغات التعيين» وجهتها ثابتين — دي مهمة النظام وبتكتمل لوحدها لما المستندات المطلوبة تترفع')
+      }
+      hiring = (await syncHiringDocsTasks(this.tasks.manager, [task.employeeId])).get(task.employeeId)
+      task = (await this.tasks.findOne({ where: { id } })) ?? task
+      if (dto.status !== undefined && dto.status !== task.status) {
+        const missing = hiring?.missing ?? []
+        throw new BadRequestException(missing.length ? hiringDocsTaskBlockedMessage(missing)
+          : 'مسوغات التعيين كاملة، فالمهمة بتفضل مكتملة — لو فيه مستند غلط عدّله من «مستندات الموظفين»')
+      }
+    }
     if (dto.label !== undefined) task.label = this.cleanLabel(dto.label)
     if (dto.party !== undefined) task.party = dto.party
     if (dto.dueDate !== undefined) task.dueDate = dto.dueDate
@@ -260,7 +281,7 @@ export class OnboardingService implements OnApplicationBootstrap {
       task.doneAt = reopened ? null : new Date()
     }
     await this.tasks.save(task)
-    return this.view(task, isHr || isParty, await this.userNames([task.doneBy]))
+    return this.view(task, isHr || isParty, await this.userNames([task.doneBy]), hiring)
   }
 
   // ===== مهمة إضافية لموظف بعينه — HR في فرع الموظف =====
@@ -330,14 +351,14 @@ export class OnboardingService implements OnApplicationBootstrap {
     return Number.isFinite(n) && n >= 1 ? Math.min(n, 3650) : WINDOW_DEFAULT
   }
 
-  // نسخ القالب الفعّال لكل موظف ليس له مهام بعد
+  // نسخ القالب الفعّال لكل موظف ليس له مهام بعد (مهمة النظام مش من القالب — وجودها لوحده مايمنعش النسخ)
   private async materialize(emps: Employee[]) {
     const candidates = emps.filter((e) => !!e.joinDate)
     if (candidates.length === 0) return
     const have = new Set(
       (
         await this.tasks.find({
-          where: { employeeId: In(candidates.map((e) => e.id)) },
+          where: { employeeId: In(candidates.map((e) => e.id)), systemKey: IsNull() },
           select: { employeeId: true },
         })
       ).map((t) => t.employeeId)
@@ -352,7 +373,7 @@ export class OnboardingService implements OnApplicationBootstrap {
     for (const emp of missing) {
       await this.withLock(emp.id, async () => {
         // فحص ثانٍ داخل القفل — نداء متزامن ربما سبقنا
-        if ((await this.tasks.count({ where: { employeeId: emp.id } })) > 0) return
+        if ((await this.tasks.count({ where: { employeeId: emp.id, systemKey: IsNull() } })) > 0) return
         await this.tasks.insert(
           items.map((it) => ({
             employeeId: emp.id,
@@ -364,6 +385,26 @@ export class OnboardingService implements OnApplicationBootstrap {
             status: 'PENDING' as OnboardingTaskStatus,
           }))
         )
+      })
+    }
+  }
+
+  // مهمة «استلام مسوغات التعيين» لكل موظف في القائمة مالوش واحدة — مرة واحدة لكل موظف (نفس قفل نسخ القالب)
+  private async ensureHiringDocsTasks(emps: Employee[]) {
+    if (emps.length === 0) return
+    const have = new Set(
+      (
+        await this.tasks.find({
+          where: { employeeId: In(emps.map((e) => e.id)), systemKey: HIRING_DOCS_TASK_KEY },
+          select: { employeeId: true },
+        })
+      ).map((t) => t.employeeId)
+    )
+    const today = localDateOf(new Date())
+    for (const emp of emps.filter((e) => !have.has(e.id))) {
+      await this.withLock(emp.id, async () => {
+        if ((await this.tasks.count({ where: { employeeId: emp.id, systemKey: HIRING_DOCS_TASK_KEY } })) > 0) return
+        await this.tasks.insert(hiringDocsTaskRow(emp, today))
       })
     }
   }
@@ -416,8 +457,9 @@ export class OnboardingService implements OnApplicationBootstrap {
     return new Map(rows.map((u) => [u.id, u.displayName]))
   }
 
-  // شكل المهمة للواجهة — canAct: يتمّها أو يعيد فتحها (المستبعدة تعيد فتحها HR)
-  private view(t: OnboardingTask, canAct: boolean, names: Map<number, string>) {
+  // شكل المهمة للواجهة — canAct: يتمّها أو يعيد فتحها (المستبعدة تعيد فتحها HR).
+  // مهمة النظام «استلام مسوغات التعيين» معاها التقدّم (3/5) وأسماء الناقص
+  private view(t: OnboardingTask, canAct: boolean, names: Map<number, string>, hiring?: HiringDocsStatus) {
     return {
       id: t.id,
       employeeId: t.employeeId,
@@ -432,6 +474,12 @@ export class OnboardingService implements OnApplicationBootstrap {
       doneByUserId: t.doneBy ?? null,
       doneByName: t.doneBy ? names.get(t.doneBy) ?? null : null,
       canAct: canAct && t.status !== 'SKIPPED',
+      systemKey: t.systemKey ?? null,
+      ...(t.systemKey === HIRING_DOCS_TASK_KEY ? { hiringDocs: {
+        requiredCount: hiring?.required.length ?? 0,
+        presentCount: hiring?.present.length ?? 0,
+        missing: hiring?.missing ?? [],
+      } } : {}),
     }
   }
 }

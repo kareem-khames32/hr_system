@@ -38,6 +38,9 @@ import { EmployeeExtrasController } from './employee-extras.controller'
 import { PortalController } from './portal.controller'
 import { DocTypesDefaultsService } from './doc-types-defaults.service'
 import { NotificationRead } from './notification-read.entity'
+import { Department } from '../org/entities/department.entity'
+import { HiringDocumentReminder } from './hiring-document-reminder.entity'
+import { HiringDocumentsController } from './hiring-documents.controller'
 
 // الملحقات: العهدة/المستندات/الكتالوجات/المرشحون/النقل/التقويم/الإشعارات
 @Module({
@@ -75,6 +78,8 @@ import { NotificationRead } from './notification-read.entity'
       AttendanceDay,
       PermissionType,
       NotificationRead, // حالة الإشعارات لكل مستخدم (مقروء/محذوف)
+      HiringDocumentReminder, // تذكيرات «مسوغات التعيين» (ترحيل 075)
+      Department,
     ]),
   ],
   controllers: [
@@ -84,6 +89,7 @@ import { NotificationRead } from './notification-read.entity'
     CandidatesController,
     EmployeeExtrasController,
     PortalController,
+    HiringDocumentsController,
   ],
   providers: [DocTypesDefaultsService],
 })

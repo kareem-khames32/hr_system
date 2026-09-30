@@ -30,6 +30,7 @@ const PATH_PERMS: Array<[prefix: string | RegExp, perm: string | string[] | null
   ['/offboarding/', null], // ملف بعينه — الباك يسمح للموظف ومديره وجهات الإخلاء
   ['/offboarding', 'offboarding.manage'],
   ['/employees/documents', 'documents.manage'],
+  ['/employees/hiring-documents', 'documents.manage'],
   ['/employees/transfers', 'transfers.view'],
   ['/settings/users', 'users.manage'],
   ['/settings/roles', 'roles.manage'],

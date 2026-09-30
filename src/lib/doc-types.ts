@@ -8,6 +8,8 @@ export interface ApiDocType {
   code: string
   nameAr: string
   isActive: boolean
+  // «مطلوب للتعيين» (مسوغات التعيين — ترحيل 075)
+  requiredForHiring?: boolean
 }
 
 export async function loadDocTypes(): Promise<ApiDocType[]> {

@@ -134,11 +134,12 @@ const WRITABLE: Record<string, Record<string, FieldSpec>> = {
     name: fld('str', 'اسم النوع', { max: 100 }),
     isActive: fld('bool', 'الحالة'),
   },
-  // أنواع المستندات: الكود ثابت بعد الإنشاء (المستندات تشير إليه) — التعديل للاسم والحالة
+  // أنواع المستندات: الكود ثابت بعد الإنشاء (المستندات تشير إليه) — التعديل للاسم والحالة و«مطلوب للتعيين» (ترحيل 075)
   'doc-types': {
     code: fld('str', 'كود نوع المستند', { max: 50 }),
     nameAr: fld('str', 'اسم نوع المستند', { max: 200 }),
     isActive: fld('bool', 'الحالة'),
+    requiredForHiring: fld('bool', 'مطلوب للتعيين'),
   },
   'permission-types': {
     nameAr: fld('str', 'اسم نوع الإذن', { max: 100 }),
