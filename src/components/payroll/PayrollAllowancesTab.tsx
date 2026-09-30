@@ -14,10 +14,11 @@ import { ORG_TARGET_LEVELS, OrgTargetPicker, describeOrgTarget, initialOrgTarget
 import { usePayrollDayRange } from '@/components/DayRangeFilter'
 import { dayRangeLabel, payrollMonthBounds } from '@/lib/payroll-month-range'
 import {
-  cancelAllowanceGrant, cancelAllowanceLine, createAllowanceGrant, createAllowanceType, fetchAllowanceMonth, fetchAllowanceTypes, updateAllowanceType,
+  allowanceTotalsOf, cancelAllowanceGrant, cancelAllowanceLine, createAllowanceGrant, createAllowanceType, fetchAllowanceMonth, fetchAllowanceTypes, updateAllowanceType,
   type AllowanceGrantBatch, type AllowanceGrantCreated, type AllowanceGrantRow, type AllowanceLineState, type AllowanceMonth, type AllowanceType,
 } from '@/lib/payroll-allowances-api'
 import { PayrollMonthLinesTable } from '@/components/payroll/PayrollMonthLinesTable'
+import type { OrgFilterHandle } from '@/components/OrgFilter'
 
 const RUN_STATUS: Record<string, string> = { DRAFT: 'مسودة', CALCULATED: 'محسوب', IN_REVIEW: 'قيد المراجعة', APPROVED: 'معتمد', PAID: 'مصروف', CANCELLED: 'ملغى' }
 const runLabel = (id: number, name: string | null) => name ? `${name} (#${id})` : `مسير #${id}`
@@ -48,11 +49,13 @@ function RunLinks({ runs, onOpenRun }: { runs: RunBrief[]; onOpenRun: (id: numbe
   return <>{runs.map(run => <button key={run.id} type="button" className="underline" onClick={() => onOpenRun(run.id)}>{runLabel(run.id, run.name)}</button>)}</>
 }
 
-export function PayrollAllowancesTab({ branches, departments, teams, employees, onOpenRun }: {
+export function PayrollAllowancesTab({ branches, departments, teams, employees, org, onOpenRun }: {
   branches: ApiBranch[]
   departments: ApiDepartment[]
   teams: ApiTeam[]
   employees: ApiEmployee[]
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد المشترك في شاشة المسير
+  org: OrgFilterHandle
   onOpenRun: (runId: number) => void
 }) {
   // الافتراضي شهر الرواتب الجاري (بدورة 23 يوم 25 سبتمبر = رواتب أكتوبر) بحدوده — نفس باقي تابات المسير؛
@@ -95,11 +98,15 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
   useEffect(() => { loadTypes() }, [])
   useEffect(() => { setSaved(null); setNotice(null); setShowForm(false); setTypeFilter('') }, [period])
 
-  const matches = (row: { fullName: string; employeeCode: string }) =>
-    !query.trim() || row.fullName.includes(query.trim()) || row.employeeCode.toLowerCase().includes(query.trim().toLowerCase())
-  const rows = (data?.rows ?? []).filter(row => (showCancelled || row.state !== 'CANCELLED') && (!typeFilter || row.allowanceTypeId === typeFilter) && matches(row))
+  // البحث والفلتر الموحد (بالموظف) — نفس المطابقة للجدولين
+  const matches = (row: { fullName: string; employeeCode: string; employeeId: number }) => org.matches(row.employeeId) &&
+    (!query.trim() || row.fullName.includes(query.trim()) || row.employeeCode.toLowerCase().includes(query.trim().toLowerCase()))
+  // سطور موظفي الفلتر الموحد: أزرار الأنواع بإجمالياتها وعدد الملغى منها (مش إجمالي الخادم للنطاق كله جنب سطور متفلترة)
+  const orgRows = (data?.rows ?? []).filter(row => org.matches(row.employeeId))
+  const shownTotals = data ? (org.active ? allowanceTotalsOf(orgRows) : data.totals) : null
+  const rows = orgRows.filter(row => (showCancelled || row.state !== 'CANCELLED') && (!typeFilter || row.allowanceTypeId === typeFilter) && matches(row))
   const shownTotal = sumMoney(rows.filter(row => row.state !== 'CANCELLED').map(row => row.amount))
-  const cancelledCount = (data?.rows ?? []).filter(row => row.state === 'CANCELLED').length
+  const cancelledCount = orgRows.filter(row => row.state === 'CANCELLED').length
 
   const cancelLine = async (row: AllowanceGrantRow) => {
     if (!window.confirm(`إلغاء «${row.typeName}» (${formatMoney(row.amount)}) لـ ${row.fullName}؟`)) return
@@ -137,6 +144,8 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
           <Search size={16} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
           <input type="text" className="input w-full pr-9" placeholder="دوّر بالاسم أو الكود..." value={query} onChange={e => setQuery(e.target.value)} />
         </div>
+        {/* الفرع ← الإدارة ← القسم ← الفريق */}
+        {org.element}
       </div>
 
       <div className="card space-y-3">
@@ -208,9 +217,9 @@ export function PayrollAllowancesTab({ branches, departments, teams, employees, 
           <div className="p-4 border-b border-gray-100 flex flex-wrap gap-2 items-center">
             <button type="button" onClick={() => setTypeFilter('')}
               className={`px-3 py-1 rounded-lg text-sm ${typeFilter === '' ? 'bg-primary-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
-              الكل <span className="font-mono">{formatMoney(data?.totals.amount ?? 0)}</span>
+              الكل <span className="font-mono">{formatMoney(shownTotals?.amount ?? 0)}</span>
             </button>
-            {(data?.totals.byType ?? []).map(entry => (
+            {(shownTotals?.byType ?? []).map(entry => (
               <button key={entry.allowanceTypeId} type="button" onClick={() => setTypeFilter(entry.allowanceTypeId)}
                 className={`px-3 py-1 rounded-lg text-sm ${typeFilter === entry.allowanceTypeId ? 'bg-primary-500 text-white' : 'bg-gray-100 text-gray-600'}`}>
                 {entry.typeName} <span className="font-mono">{formatMoney(entry.amount)}</span> <span className="text-xs opacity-75">({entry.count})</span>

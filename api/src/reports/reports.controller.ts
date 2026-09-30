@@ -13,6 +13,7 @@ import {
   assertReportRange, payrollLoansReport, payrollOvertimeReport, payrollRunsReport, payrollUnassignedReport, payrollVarianceReport,
 } from '../payroll/payroll-reports'
 import { PayrollService } from '../payroll/payroll.service'
+import { orgFilterIsEmpty, orgFilterSql, parseOrgFilter, type OrgFilter, type OrgFilterInput } from '../org/org-filter-params'
 import {
   PayrollLoansReportQuery, PayrollOvertimeReportQuery, PayrollReportFiltersQuery, PayrollRunsReportQuery, PayrollUnassignedReportQuery,
   PayrollVarianceReportQuery,
@@ -65,6 +66,25 @@ export class ReportsController {
   }
 
   /**
+   * فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد في لوحة التقارير (طلب المالك 30 سبتمبر): الفرع والأقسام (الإدارة/القسم المختار
+   * بأقسامه الفرعية جوه فرعه) والفريق — تضييق فوق نطاق الفرع، وفرع برّه النطاق مرفوض بنفس رسالة branchFilterOf.
+   */
+  private orgFilterOf(user: JwtPayload, raw: OrgFilterInput): OrgFilter {
+    const filter = parseOrgFilter(raw)
+    const scope = branchScopeOf(user)
+    if (filter.branchId !== null && !inBranchScope(scope, filter.branchId)) {
+      throw new ForbiddenException(scope !== null && scope.length > 1 ? 'حساب الفروع يشوف تقارير فروعه بس' : 'حساب الفرع يشوف تقرير فرعه بس')
+    }
+    return filter
+  }
+
+  // شروط الفلتر الموحد على جدول موظفين بـalias معيّن كـ«AND …» (معاملات @n بس)
+  private orgSql(alias: string, filter: OrgFilter, params: unknown[]) {
+    return orgFilterSql({ branch: `${alias}.branchId`, department: `${alias}.departmentId`, team: `${alias}.teamId` }, filter, params)
+      .map((clause) => `AND ${clause}`).join(' ')
+  }
+
+  /**
    * فرع مطلوب صراحة في مرشح التقرير: رقم صحيح موجب، وحساب الفروع لا يطلب فرع برّه نطاقه
    * (نفس رفض /reports/financial/* و/reports/cost-centers بالحرف). من غير طلب = نطاق المستخدم (null = كل الفروع).
    */
@@ -85,15 +105,22 @@ export class ReportsController {
   // كان بيتعدّ «على رأس العمل» ومفيش خانة «موقوف» أصلًا. بقى بيقرا الصفوف ويجمّعها بنفس قاعدة
   // شاشة الموظفين، فالتعداد والشاشة بيقولوا نفس الكلام.
   @Get('headcount')
-  async headcount(@CurrentUser() user: JwtPayload) {
+  async headcount(
+    @CurrentUser() user: JwtPayload,
+    @Query('branchId') branchId?: string,
+    @Query('departmentIds') departmentIds?: string,
+    @Query('teamId') teamId?: string
+  ) {
+    const org = this.orgFilterOf(user, { branchId, departmentIds, teamId })
     const params: unknown[] = []
     const s = this.scopeSql(user, 'e.branchId', params)
+    const o = this.orgSql('e', org, params)
     const rows: Array<{ id: number; status: string; branchName: string | null; departmentName: string | null }> =
       await this.ds.query(
         `SELECT e.id AS id, e.status AS status, b.name AS branchName, d.name AS departmentName
          FROM employees e JOIN branches b ON b.id = e.branchId
          LEFT JOIN departments d ON d.id = e.departmentId
-         WHERE 1=1 ${s}`,
+         WHERE 1=1 ${s} ${o}`,
         params
       )
     const today = localDateOf(new Date())
@@ -172,28 +199,38 @@ export class ReportsController {
 
   // ===== الإجازات: الاستهلاك بالنوع + الأرصدة =====
   @Get('leaves')
-  async leaves(@CurrentUser() user: JwtPayload, @Query('year') year: string) {
+  async leaves(
+    @CurrentUser() user: JwtPayload,
+    @Query('year') year: string,
+    @Query('branchId') branchId?: string,
+    @Query('departmentIds') departmentIds?: string,
+    @Query('teamId') teamId?: string
+  ) {
     if (!YEAR_RE.test(year ?? '')) {
       throw new BadRequestException('السنة بصيغة YYYY')
     }
+    const org = this.orgFilterOf(user, { branchId, departmentIds, teamId })
     const scope = branchScopeOf(user)
     const typeParams: unknown[] = []
     const inScope = branchScopeSql('branchId', scope, typeParams)
     const empFilter = inScope ? `AND l.employeeId IN (SELECT id FROM employees WHERE ${inScope})` : ''
+    const orgClauses = orgFilterSql({ branch: 'oe.branchId', department: 'oe.departmentId', team: 'oe.teamId' }, org, typeParams)
+    const orgFilter = orgClauses.length ? `AND l.employeeId IN (SELECT oe.id FROM employees oe WHERE ${orgClauses.join(' AND ')})` : ''
     const byType = await this.ds.query(
       `SELECT l.leaveTypeCode, l.leaveTypeCode AS leaveType, COUNT(*) AS requests, SUM(l.days) AS totalDays
        FROM leaves l
-       WHERE l.status = 'APPROVED' AND l.fromDate LIKE '${year}%' ${empFilter}
+       WHERE l.status = 'APPROVED' AND l.fromDate LIKE '${year}%' ${empFilter} ${orgFilter}
        GROUP BY l.leaveTypeCode`,
       typeParams
     )
     const balanceParams: unknown[] = []
+    const balanceScope = andBranchScopeSql('e.branchId', scope, balanceParams)
     const balances = await this.ds.query(
       `SELECT lb.employeeId, e.fullName, lb.balanceType, lb.entitled, lb.taken,
               lb.openingDays, lb.openingTaken, lb.openingExpiry, lb.adjustmentDays
        FROM leave_balances lb JOIN employees e ON e.id = lb.employeeId
        WHERE lb.period = '${year}'
-       ${andBranchScopeSql('e.branchId', scope, balanceParams)}
+       ${balanceScope} ${this.orgSql('e', org, balanceParams)}
        ORDER BY e.employeeCode, lb.balanceType`,
       balanceParams
     )
@@ -204,9 +241,17 @@ export class ReportsController {
   // الخطوة 30: كل المسيرات تظهر حتى بلا فرع (قسم/فريق/مخصّص)؛ نطاق الفرع من لقطة العضو لا من r.branchId وحده.
   // القائمة تعرض كل المسيرات بحالتها (حتى الملغى والمسودة)، ومجاميع طرق الصرف والخصومات من المعتمد والمصروف
   // وحدهما — إلا بـincludeDraft، نفس علم /reports/financial/* بالحرف، فأرقام الشهر تتطابق بين التقارير.
+  // الفلتر الموحد: موظفين المسير بمكانهم في لقطته (الصافي وطرق الصرف والخصومات منهم بس)
   @Get('payroll')
-  async payroll(@CurrentUser() user: JwtPayload, @Query() query: PayrollRunsReportQuery) {
-    return payrollRunsReport(this.ds.manager, branchScopeOf(user), { includeDraft: query.includeDraft === true })
+  async payroll(
+    @CurrentUser() user: JwtPayload,
+    @Query() query: PayrollRunsReportQuery,
+    @Query('branchId') branchId?: string,
+    @Query('departmentIds') departmentIds?: string,
+    @Query('teamId') teamId?: string
+  ) {
+    const org = this.orgFilterOf(user, { branchId, departmentIds, teamId })
+    return payrollRunsReport(this.ds.manager, branchScopeOf(user), { includeDraft: query.includeDraft === true, org })
   }
 
   // ===== موظفون بلا مسير في الفترة، مع السبب (PR-07 / RP-12) =====
@@ -277,14 +322,29 @@ export class ReportsController {
   }
 
   // ===== حركة الطلبات بالفئة والحالة =====
+  // الفلتر الموحد بمكان صاحب الطلب — والسرّي بفرع الطلب بس: مع اختيار إدارة أو قسم أو فريق مابيتعدّش (العدد مايكشفش مكان صاحبه)
   @Get('requests')
-  async requests(@CurrentUser() user: JwtPayload) {
+  async requests(
+    @CurrentUser() user: JwtPayload,
+    @Query('branchId') branchId?: string,
+    @Query('departmentIds') departmentIds?: string,
+    @Query('teamId') teamId?: string
+  ) {
+    const org = this.orgFilterOf(user, { branchId, departmentIds, teamId })
     const params: unknown[] = []
     const s = this.scopeSql(user, 'r.branchId', params)
+    let o = ''
+    if (!orgFilterIsEmpty(org)) {
+      const confidential = org.departmentIds !== null || org.teamId !== null ? '1 = 0'
+        : org.branchId !== null ? `r.branchId = @${params.push(org.branchId) - 1}` : '1 = 1'
+      const clauses = orgFilterSql({ branch: 'oe.branchId', department: 'oe.departmentId', team: 'oe.teamId' }, org, params)
+      o = `AND ((t.isConfidential = 1 AND ${confidential}) OR (ISNULL(t.isConfidential, 0) = 0
+        AND r.requesterId IN (SELECT oe.id FROM employees oe WHERE ${clauses.join(' AND ')})))`
+    }
     const byType = await this.ds.query(
       `SELECT t.category, r.status, COUNT(*) AS total
        FROM requests r JOIN request_types t ON t.code = r.typeCode
-       WHERE 1=1 ${s} GROUP BY t.category, r.status`,
+       WHERE 1=1 ${s} ${o} GROUP BY t.category, r.status`,
       params
     )
     return { byType }

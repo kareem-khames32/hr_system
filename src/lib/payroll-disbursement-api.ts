@@ -40,6 +40,8 @@ export interface PayrollDisbursementView {
 export interface PayrollDisbursementMarkResult extends PayrollDisbursementView { changed: number; unchanged: number }
 export interface PayrollDisbursementFilter {
   branchId: number | null; departmentId: number | null; teamId: number | null; payMethod: string; state: '' | PayrollDisbursementState; search: string
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد (org.params): الإدارة/القسم المختار بأقسامه الفرعية جوه فرعه
+  departmentIds?: number[] | null
 }
 export interface PayrollDisbursementSummary {
   period: string | null; runId: number | null
@@ -49,13 +51,14 @@ export interface PayrollDisbursementSummary {
 
 export const emptyDisbursementFilter = (): PayrollDisbursementFilter => ({ branchId: null, departmentId: null, teamId: null, payMethod: '', state: '', search: '' })
 export const disbursementFilterCount = (filter: PayrollDisbursementFilter) =>
-  [filter.branchId, filter.departmentId, filter.teamId, filter.payMethod, filter.state, filter.search.trim()].filter(Boolean).length
+  [filter.branchId, filter.departmentId, filter.departmentIds?.length, filter.teamId, filter.payMethod, filter.state, filter.search.trim()].filter(Boolean).length
 
 /** الفلاتر المفعّلة فقط — نفس الجسم لنداء القراءة (query) ونداء التعليم الجماعي (filter). */
 export function disbursementFilterBody(filter: PayrollDisbursementFilter): Record<string, string | number> {
   const body: Record<string, string | number> = {}
   if (filter.branchId) body.branchId = filter.branchId
   if (filter.departmentId) body.departmentId = filter.departmentId
+  if (filter.departmentIds?.length) body.departmentIds = filter.departmentIds.join(',')
   if (filter.teamId) body.teamId = filter.teamId
   if (filter.payMethod) body.payMethod = filter.payMethod
   if (filter.state) body.state = filter.state

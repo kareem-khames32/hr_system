@@ -28,12 +28,11 @@ import {
   archiveEmployee,
   exportEmployeesXlsx,
   fetchFileObjectUrl,
-  ApiDepartment,
   type ApiEmployee,
 } from '@/lib/api'
 import EmployeeSuspensionDialog from '@/components/EmployeeSuspensionDialog'
 import type { EmployeeSuspension } from '@/lib/employee-suspensions-api'
-import { branchLocalSubtree, departmentChoiceGroups, isAdministration } from '@/lib/department-tree'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 interface Employee {
   id: number
@@ -79,13 +78,13 @@ const missingPhotoFileIds = new Set<number>()
 
 export default function EmployeesPage() {
   const [searchQuery, setSearchQuery] = useState('')
-  const [selectedDepartment, setSelectedDepartment] = useState('all')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد (الإدارة أو القسم بأقسامه الفرعية جوه فرعه)
+  const org = useOrgFilter()
   // الافتراضي «الحاليون»: بدون المنتهية خدمتهم والمؤرشفين
   const [selectedStatus, setSelectedStatus] = useState('current')
   const [viewMode, setViewMode] = useState<'table' | 'grid'>('table')
 
   const [employees, setEmployees] = useState<Employee[]>([])
-  const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [photoUrls, setPhotoUrls] = useState<Record<number, string>>({})
@@ -113,7 +112,6 @@ export default function EmployeesPage() {
       ])
       const branchById = new Map(branches.map((b) => [b.id, b.name]))
       const deptById = new Map(depts.map((d) => [d.id, d.name]))
-      setDepartments(depts)
       setEmployees(
         (emps as Array<ApiEmployee & { storedStatus?: string; suspension?: EmployeeSuspension | null }>).map((e) => ({
           id: e.id,
@@ -225,15 +223,8 @@ export default function EmployeesPage() {
     return items
   }
 
-  // «الإدارة ← القسم ← الفريق» (قرار المالك 27 سبتمبر): اختيار إدارة بيعرض موظفيها وموظفي أقسامها — أقسامها الفرعية جوه فرعها بس،
-  // نفس توسعة المسير (الإدارة التنفيذية مابتسحبش أقسام فروع تانية تحتها). اختيار قسم = القسم نفسه زي الأول (بالرقم مش بالاسم)
-  const selectedUnit = selectedDepartment === 'all' ? null : departments.find((d) => d.id === Number(selectedDepartment)) ?? null
-  const selectedDepartmentIds = !selectedUnit
-    ? null
-    : isAdministration(selectedUnit)
-      ? branchLocalSubtree(departments, [selectedUnit.id])
-      : new Set([selectedUnit.id])
-
+  // «الإدارة ← القسم ← الفريق» (قرار المالك 27 سبتمبر) في الفلتر الموحد: الإدارة أو القسم بموظفيه وموظفي أقسامه الفرعية جوه فرعه بس،
+  // نفس توسعة المسير (الإدارة التنفيذية مابتسحبش أقسام فروع تانية تحتها)
   const filteredEmployees = employees.filter((emp) => {
     const matchesSearch =
       emp.name.includes(searchQuery) ||
@@ -241,16 +232,13 @@ export default function EmployeesPage() {
       emp.employeeId.toLowerCase().includes(searchQuery.toLowerCase()) ||
       emp.email.toLowerCase().includes(searchQuery.toLowerCase())
 
-    const matchesDepartment =
-      selectedDepartment === 'all' || (emp.departmentId != null && !!selectedDepartmentIds?.has(emp.departmentId))
-
     const matchesStatus =
       selectedStatus === 'all' ||
       (selectedStatus === 'current'
         ? !FORMER_STATUSES.includes(emp.status)
         : emp.status === selectedStatus)
 
-    return matchesSearch && matchesDepartment && matchesStatus
+    return matchesSearch && org.matches(emp.id) && matchesStatus
   })
 
   // تصدير الصفوف المعروضة (بعد البحث والفلاتر، بترتيبها) لملف Excel بكل بيانات الملف — وأولها كود البصمة.
@@ -299,9 +287,9 @@ export default function EmployeesPage() {
 
         {/* Filters */}
         <div className="card">
-          <div className="flex flex-wrap items-center gap-4">
+          <div className="flex flex-wrap items-center gap-4 min-w-0">
             {/* Search */}
-            <div className="flex-1 min-w-[300px]">
+            <div className="flex-1 min-w-[220px]">
               <div className="relative">
                 <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
@@ -314,30 +302,15 @@ export default function EmployeesPage() {
               </div>
             </div>
 
-            {/* Department Filter */}
-            <select
-              value={selectedDepartment}
-              onChange={(e) => setSelectedDepartment(e.target.value)}
-              className="input w-56"
-              aria-label="الإدارة أو القسم"
-            >
-              <option value="all">كل الإدارات والأقسام</option>
-              {departmentChoiceGroups(departments, { administrationSuffix: 'الإدارة كلها' }).map((group) => (
-                <optgroup key={group.key} label={group.label}>
-                  {group.options.map((option) => (
-                    <option key={option.id} value={option.id}>
-                      {option.label}
-                    </option>
-                  ))}
-                </optgroup>
-              ))}
-            </select>
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
 
             {/* Status Filter */}
             <select
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value)}
-              className="input w-44"
+              className="input w-full sm:w-44"
+              aria-label="الحالة"
             >
               <option value="current">الموظفون الحاليون</option>
               <option value="all">كل الحالات</option>

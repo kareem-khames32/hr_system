@@ -48,6 +48,7 @@ import {
   ApiEmployee,
 } from '@/lib/api'
 import { docTypeLabel, docTypeSelectOptions, loadDocTypes, type ApiDocType } from '@/lib/doc-types'
+import { useOrgFilter } from '@/components/OrgFilter'
 import { uploadPrefillFromSearch } from '@/lib/hiring-documents-api'
 import { EmployeePicker } from '@/components/EmployeePicker'
 import { formatDate } from '@/lib/dates'
@@ -119,6 +120,8 @@ export default function DocumentsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [selectedCategory, setSelectedCategory] = useState('الكل')
   const [selectedEmployee, setSelectedEmployee] = useState('')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد — بيضيّق المستندات كلها (الأرقام اللي فوق كمان)
+  const org = useOrgFilter()
   const [selectedStatus, setSelectedStatus] = useState<string>('')
   const [viewMode, setViewMode] = useState<'grid' | 'list'>('list')
   const [selectedDocs, setSelectedDocs] = useState<number[]>([])
@@ -201,10 +204,13 @@ export default function DocumentsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  // التصنيفات بالكود الخام (قيمة الفلتر) وتُعرض بالعربي
-  const categories = ['الكل', ...Array.from(new Set(documents.map((d) => d.docTypeCode)))]
+  // مستندات موظفي الفرع/الإدارة/القسم/الفريق المختار — الأرقام والتصنيفات والجدول منها
+  const orgDocs = documents.filter((doc) => org.matches(doc.employeeId))
 
-  const filteredDocs = documents.filter((doc) => {
+  // التصنيفات بالكود الخام (قيمة الفلتر) وتُعرض بالعربي
+  const categories = ['الكل', ...Array.from(new Set(orgDocs.map((d) => d.docTypeCode)))]
+
+  const filteredDocs = orgDocs.filter((doc) => {
     const matchesSearch =
       doc.name.includes(searchTerm) ||
       doc.docTypeCode.includes(searchTerm) ||
@@ -223,10 +229,10 @@ export default function DocumentsPage() {
   const missingUploadField = !uploadForm.docType ? 'نوع المستند' : !uploadForm.employeeId ? 'الموظف' : ''
 
   const stats = {
-    total: documents.length,
-    valid: documents.filter((d) => d.status === 'valid').length,
-    expiring: documents.filter((d) => d.status === 'expiring').length,
-    expired: documents.filter((d) => d.status === 'expired').length,
+    total: orgDocs.length,
+    valid: orgDocs.filter((d) => d.status === 'valid').length,
+    expiring: orgDocs.filter((d) => d.status === 'expiring').length,
+    expired: orgDocs.filter((d) => d.status === 'expired').length,
   }
 
   const toggleSelectDoc = (id: number) => {
@@ -474,8 +480,8 @@ export default function DocumentsPage() {
 
         {/* Filters */}
         <div className="card">
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1">
+          <div className="flex flex-wrap items-center gap-4 min-w-0">
+            <div className="relative flex-1 min-w-[220px]">
               <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
@@ -495,6 +501,9 @@ export default function DocumentsPage() {
               aria-label="فلترة بالموظف"
               className="min-w-[220px]"
             />
+
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
 
             <button
               onClick={() => setShowFilters(!showFilters)}

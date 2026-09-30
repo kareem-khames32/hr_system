@@ -106,7 +106,8 @@ test('DISB-UI-01: «صرف الرواتب» — الفلاتر والعلامة 
   for (const text of ['<h1 className="text-2xl font-bold text-gray-800">صرف الرواتب</h1>', 'fetchDisbursementRuns()', 'fetchDisbursementView(id, next)', "new URLSearchParams(window.location.search).get('runId')",
     '<PayrollDisbursementTotalsCards totals={view.totals} />', '<PayrollDisbursementTable rows={view.rows} canMark={canMark} disabled={busy || loading} onToggle={toggle} />',
     '<PayrollDisbursementSummaryTable summary={summary} />',
-    "['branchId', 'الفرع', 'كل الفروع', view.facets.branches]", "['departmentId', 'القسم', 'كل الأقسام', view.facets.departments]", "['teamId', 'الفريق', 'كل الفرق', view.facets.teams]",
+    // الفرع والإدارة والقسم والفريق: الفلتر الموحد (طلب المالك 30 سبتمبر) مكان القوائم التلاتة، وبيتبعت للخادم مع باقي الفلاتر
+    '{org.element}', 'departmentIds: org.params.departmentIds ?? null', 'load(runId, effective)', 'markDisbursementFiltered(runId!, { paid, note, expectedCount }, effective)',
     'طريقة الصرف', 'دوّر بالاسم أو الكود...', 'علّم المفلتر تم الصرف ({view.bulk.markPaid})', 'expectedCount', 'تصدير CSV',
     'disbursementCsvRows(view.rows)', "can('payroll.pay')", 'إقفال الصرف', 'closePayrollDisbursement(view.run.id', 'data-disbursement-unpaid-reason', 'ملخص صرف الشهر',
     'fetchDisbursementSummary({ period: summaryPeriod })', "const canMark = can('payroll.disburse')", 'view.counts.shown']) assert.ok(page.includes(text), text)

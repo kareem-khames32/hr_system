@@ -24,7 +24,8 @@ const TITLES: Record<PayrollLineSide, { title: string; hint: string; empty: stri
 export function PayrollMonthLinesTable({ side, period, matches, onOpenRun, version = 0 }: {
   side: PayrollLineSide
   period: string
-  matches: (row: { fullName: string; employeeCode: string }) => boolean
+  // البحث والفلتر الموحد (بالموظف) — الإجمالي تحت الجدول من الصفوف المطابقة بس
+  matches: (row: { fullName: string; employeeCode: string; employeeId: number }) => boolean
   onOpenRun: (runId: number) => void
   version?: number
 }) {

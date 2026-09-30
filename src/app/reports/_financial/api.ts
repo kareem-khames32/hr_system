@@ -1,11 +1,12 @@
 // التقارير المالية لشهر رواتب — GET /reports/financial/* (نطاق الفرع من الخادم، والمبالغ نصوص عشرية بمنزلتين)
 import { apiFetch } from '@/lib/api'
+import type { OrgFilterParams } from '@/lib/org-filter'
 
 export interface FinancialFilters {
   /** شهر الرواتب YYYY-MM؛ فاضي = الخادم يختار الشهر الجاري */
   period: string
-  branchId: string
-  departmentId: string
+  /** فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد (org.params): الفرع والأقسام (الإدارة/القسم بأقسامه الفرعية جوه فرعه) والفريق */
+  org: OrgFilterParams
   costCenterId: string
   includeDraft: boolean
 }
@@ -16,7 +17,7 @@ export interface FinancialRunRef {
 
 export interface FinancialReportHeader {
   period: string; startDate: string; endDate: string; includeDraft: boolean
-  branchId: number | null; departmentId: number | null; costCenterId: number | null
+  branchId: number | null; departmentId: number | null; departmentIds?: number[] | null; teamId?: number | null; costCenterId: number | null
   runs: FinancialRunRef[]; pendingRuns: FinancialRunRef[]; employerInsuranceAvailable: boolean
 }
 
@@ -84,8 +85,9 @@ export interface LoansReport extends FinancialReportHeader {
 function query(filters: FinancialFilters) {
   const params = new URLSearchParams()
   if (filters.period) params.set('period', filters.period)
-  if (filters.branchId) params.set('branchId', filters.branchId)
-  if (filters.departmentId) params.set('departmentId', filters.departmentId)
+  if (filters.org.branchId) params.set('branchId', String(filters.org.branchId))
+  if (filters.org.departmentIds?.length) params.set('departmentIds', filters.org.departmentIds.join(','))
+  if (filters.org.teamId) params.set('teamId', String(filters.org.teamId))
   if (filters.costCenterId) params.set('costCenterId', filters.costCenterId)
   if (filters.includeDraft) params.set('includeDraft', 'true')
   const text = params.toString()

@@ -64,6 +64,7 @@ import {
   resolveOrgTarget,
   type OrgTarget,
 } from '@/components/OrgTargetPicker'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 // أنواع البيانات
 // صف الوردية كما يرجّعه كتالوج الورديات الحقيقي (/catalogs/shifts)
@@ -354,9 +355,8 @@ export default function WeeklySchedulePage() {
 
   const [searchQuery, setSearchQuery] = useState('')
   // فلترة الجدول بنفس ترتيب الاستهداف: فرع ← أقسامه ← فرقه
-  const [selectedBranch, setSelectedBranch] = useState('all')
-  const [selectedDepartment, setSelectedDepartment] = useState('all')
-  const [selectedTeam, setSelectedTeam] = useState('all')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد مكان قوائم الفرع/القسم/الفريق (الإدارة أو القسم بأقسامه الفرعية جوه فرعه)
+  const org = useOrgFilter()
   // فترات الخدمة (قرار المالك 26 سبتمبر): الموظف يظهر في الأسابيع اللي فيها أيام خدمته بس، وأيامه برّه خدمته رمادي
   const [employment, setEmployment] = useState<EmploymentMap>({})
   // فلتر التغطية: الكل / من غير جدول عمل / من غير وردية في الأسبوع ده
@@ -623,31 +623,18 @@ export default function WeeklySchedulePage() {
     return weekDates.some((date) => inEmploymentWindow(employment[empId], date) && !calendar.skipped.has(date)
       && !dayOverrides[`${empId}|${date}`])
   }
-  const noScheduleCount = rows.filter((row) => hasNoSchedule(row.id)).length
-  const noShiftCount = rows.filter((row) => hasNoShift(row.id)).length
+  // موظفو الفرع/الإدارة/القسم/الفريق المختار — تنبيهات التغطية والجدول منهم
+  const orgRows = rows.filter((row) => org.matches(row.id))
+  const noScheduleCount = orgRows.filter((row) => hasNoSchedule(row.id)).length
+  const noShiftCount = orgRows.filter((row) => hasNoShift(row.id)).length
 
   // تصفية الموظفين — البحث بالاسم أو الكود بنفس مطابقة منتقي الموظف (الإملاء العربي والكود)
   const matchesSearchQuery = employeeSearchMatcher(searchQuery)
-  const filteredRows = rows.filter((emp) => {
+  const filteredRows = orgRows.filter((emp) => {
     if (coverageFilter === 'noSchedule' && !hasNoSchedule(emp.id)) return false
     if (coverageFilter === 'noShift' && !hasNoShift(emp.id)) return false
-    const matchesSearch = matchesSearchQuery({ fullName: emp.employeeName, employeeCode: emp.employeeCode })
-    const matchesBranch = selectedBranch === 'all' || String(emp.branchId) === selectedBranch
-    const matchesDepartment = selectedDepartment === 'all' || String(emp.departmentId) === selectedDepartment
-    const matchesTeam = selectedTeam === 'all' || String(emp.teamId) === selectedTeam
-    return matchesSearch && matchesBranch && matchesDepartment && matchesTeam
+    return matchesSearchQuery({ fullName: emp.employeeName, employeeCode: emp.employeeCode })
   })
-
-  // الأقسام المتاحة للفلترة — أقسام الفرع المختار بس
-  const departments = departmentsList.filter(
-    (d) => selectedBranch === 'all' || String(d.branchId) === selectedBranch
-  )
-  // الفرق المتاحة للفلترة — فرق الأقسام الظاهرة، ولو اخترت قسم: فرقه بس
-  const filterTeams = teamsList.filter((t) =>
-    t.isActive !== false &&
-    departments.some((d) => d.id === t.departmentId) &&
-    (selectedDepartment === 'all' || String(t.departmentId) === selectedDepartment)
-  )
 
   // حفظ التغييرات — upsert لكل موظف تغيّرت ورديته ثم إعادة تحميل الأسبوع
   const saveChanges = async () => {
@@ -930,50 +917,8 @@ export default function WeeklySchedulePage() {
                 />
               </div>
 
-              {/* فلترة بالفرع ثم أقسامه — نفس ترتيب الاستهداف */}
-              {branchesList.length > 1 && (
-                <select
-                  value={selectedBranch}
-                  onChange={e => { setSelectedBranch(e.target.value); setSelectedDepartment('all'); setSelectedTeam('all') }}
-                  className="input w-48"
-                  aria-label="الفرع"
-                >
-                  <option value="all">كل الفروع</option>
-                  {branchesList.map(branch => (
-                    <option key={branch.id} value={branch.id}>
-                      {branch.name}
-                    </option>
-                  ))}
-                </select>
-              )}
-              <select
-                value={selectedDepartment}
-                onChange={e => { setSelectedDepartment(e.target.value); setSelectedTeam('all') }}
-                className="input w-48"
-                aria-label="القسم"
-              >
-                <option value="all">{selectedBranch === 'all' ? 'كل الأقسام' : 'كل أقسام الفرع'}</option>
-                {departments.map(dept => (
-                  <option key={dept.id} value={dept.id}>
-                    {dept.name}
-                  </option>
-                ))}
-              </select>
-              {filterTeams.length > 0 && (
-                <select
-                  value={selectedTeam}
-                  onChange={e => setSelectedTeam(e.target.value)}
-                  className="input w-48"
-                  aria-label="الفريق"
-                >
-                  <option value="all">{selectedDepartment === 'all' ? 'كل الفرق' : 'كل فرق القسم'}</option>
-                  {filterTeams.map(team => (
-                    <option key={team.id} value={team.id}>
-                      {team.name}
-                    </option>
-                  ))}
-                </select>
-              )}
+              {/* الفرع ← الإدارة ← القسم ← الفريق — نفس ترتيب الاستهداف */}
+              {org.element}
 
               <select
                 value={coverageFilter}

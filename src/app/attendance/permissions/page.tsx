@@ -33,6 +33,7 @@ import {
 import { payloadSummary } from '@/lib/request-payload'
 import { dateInRange } from '@/lib/payroll-month-range'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 // حالات محرك الطلبات — تسميات عربية
 
@@ -97,6 +98,8 @@ export default function PermissionsPage() {
   const [searchQuery, setSearchQuery] = useState('')
   // فترة يوم الإذن — الافتراضي شهر الرواتب الجاري (مثلًا 23 → 22)
   const { range, setRange, context } = usePayrollDayRange()
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد على مقدم الطلب
+  const org = useOrgFilter()
 
   const [requests, setRequests] = useState<ApiRequest[]>([])
   const [employees, setEmployees] = useState<Pick<ApiEmployee, 'id' | 'fullName' | 'employeeCode'>[]>([])
@@ -209,8 +212,8 @@ export default function PermissionsPage() {
     }
   })
 
-  // الأذونات اللي يومها داخل الفترة المختارة (العدادات والجدول على نفس الفترة)
-  const rangeRows = range ? rows.filter((p) => dateInRange(p.date, range)) : rows
+  // الأذونات اللي يومها داخل الفترة المختارة ولموظفي الفلتر الموحد (العدادات والجدول على نفس الفترة والفلتر)
+  const rangeRows = (range ? rows.filter((p) => dateInRange(p.date, range)) : rows).filter((p) => org.matches(p.requesterId))
   const stats = {
     all: rangeRows.length,
     pending: rangeRows.filter((p) => ['SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO'].includes(p.status)).length,
@@ -338,6 +341,9 @@ export default function PermissionsPage() {
             </div>
 
             <DayRangeFilter idPrefix="permissions" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
+
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
           </div>
         </div>
 

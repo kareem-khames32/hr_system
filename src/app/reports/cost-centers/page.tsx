@@ -4,9 +4,8 @@ import { Fragment, useEffect, useState } from 'react'
 import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import { AlertTriangle, ArrowRight, ChevronDown, ChevronLeft, Download, Info, Landmark, RefreshCw } from 'lucide-react'
-import { fetchBranches, getCurrentUser, isCompanyWideUser, lockedBranchIdOf, type ApiBranch } from '@/lib/api'
-import { branchScopeOfUser, canSeeBranch, type BranchScope } from '@/lib/branch-scope'
 import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
+import { useOrgFilter } from '@/components/OrgFilter'
 import { useCurrency } from '@/lib/currency'
 import { formatMoney } from '@/lib/money'
 import {
@@ -23,37 +22,24 @@ const centerKey = (id: number | null) => (id === null ? 'none' : String(id))
 // ومن المسيرات المعتمدة والمصروفة للشهر (والمسودات لو اخترت). حساب الفرع يشوف فرعه بس.
 export default function CostCenterReportPage() {
   const currency = useCurrency()
-  const [companyWide, setCompanyWide] = useState(false)
-  // نطاق فروع الحساب: حساب الفروع المتعددة يختار فرع من فروعه أو كلها (الخادم بيقصر التقرير على نطاقه)
-  const [branchScope, setBranchScope] = useState<BranchScope>([])
-  const [branches, setBranches] = useState<ApiBranch[]>([])
   // التقرير على مسيرات شهر رواتب بالاسم — الافتراضي شهر الرواتب الجاري (بدورة 23 يوم 25 سبتمبر = رواتب أكتوبر) مش الشهر التقويمي
   const payrollMonth = usePayrollMonthContext()
   const [period, setPeriod] = useState('')
   useEffect(() => { if (payrollMonth) setPeriod((current) => current || payrollMonth.period) }, [payrollMonth])
-  const [branchId, setBranchId] = useState('')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد مكان قائمة الفرع: بيتبعت للخادم (الفرع والقسم والفريق من لقطة المسير)،
+  // والمراكز وإجمالياتها والتصدير كلها بيه — حساب الفرع الواحد فرعه مقفول
+  const org = useOrgFilter()
   const [includeDraft, setIncludeDraft] = useState(false)
   const [report, setReport] = useState<CostCenterReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [open, setOpen] = useState<string | null>(null)
 
-  useEffect(() => {
-    const user = getCurrentUser()
-    const wide = isCompanyWideUser(user)
-    setCompanyWide(wide)
-    setBranchScope(branchScopeOfUser(user))
-    fetchBranches().then(setBranches).catch(() => setBranches([]))
-  }, [])
-
-  // الفرع بيتختار من القائمة لحساب الشركة ولحساب الفروع المتعددة؛ حساب الفرع الواحد مقفول على فرعه
-  const picksBranch = companyWide || (branchScope !== null && branchScope.length > 1)
-
   const load = () => {
     if (!/^\d{4}-\d{2}$/.test(period)) return
     setLoading(true)
     setError('')
-    fetchCostCenterReport({ period, branchId: picksBranch ? branchId : undefined, includeDraft })
+    fetchCostCenterReport({ period, org: org.params, includeDraft })
       .then((data) => {
         setReport(data)
         setOpen(null)
@@ -66,9 +52,7 @@ export default function CostCenterReportPage() {
   }
 
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(load, [period, branchId, includeDraft, companyWide, picksBranch])
-
-  const myBranch = !picksBranch ? branches.find((b) => b.id === lockedBranchIdOf(getCurrentUser())) : undefined
+  useEffect(load, [period, org.paramsKey, includeDraft])
 
   return (
     <MainLayout>
@@ -102,24 +86,13 @@ export default function CostCenterReportPage() {
           </div>
         </div>
 
-        <div className="card grid grid-cols-1 md:grid-cols-3 gap-4 items-end">
+        <div className="card grid grid-cols-1 md:grid-cols-2 gap-4 items-end">
+          <div className="md:col-span-2 min-w-0" data-cost-center-org-filter>
+            <label className="label">الفرع ← الإدارة ← القسم ← الفريق</label>
+            {org.element}
+          </div>
           <PayrollPeriodSelect id="cost-center-period" label="شهر الرواتب" value={period} onChange={setPeriod}
             cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today} />
-          <div>
-            <label className="label">الفرع</label>
-            {picksBranch ? (
-              <select className="input" value={branchId} onChange={(e) => setBranchId(e.target.value)}>
-                <option value="">{companyWide ? 'كل الفروع' : 'كل فروعك'}</option>
-                {branches.filter((branch) => canSeeBranch(companyWide ? null : branchScope, branch.id)).map((branch) => (
-                  <option key={branch.id} value={branch.id}>
-                    {branch.name}
-                  </option>
-                ))}
-              </select>
-            ) : (
-              <input className="input bg-gray-50" value={myBranch?.name ?? 'فرعك'} disabled />
-            )}
-          </div>
           <label className="flex items-center gap-2 text-sm text-gray-700 pb-2.5">
             <input type="checkbox" checked={includeDraft} onChange={(e) => setIncludeDraft(e.target.checked)} />
             اعرض كمان المسيرات اللي لسه ما اتعتمدتش

@@ -22,10 +22,10 @@ import {
   fetchBranches,
   fetchDepartments,
   reactivateEmployee,
-  type ApiDepartment,
 } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
 import { DayRangeFilter, usePayrollMonthContext } from '@/components/DayRangeFilter'
+import { useOrgFilter } from '@/components/OrgFilter'
 import { dateInRange, validDayRange, type DayRange } from '@/lib/payroll-month-range'
 
 interface ArchivedEmployee {
@@ -62,12 +62,12 @@ export default function ArchivedEmployeesPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
   const [filterReason, setFilterReason] = useState('')
-  const [filterDept, setFilterDept] = useState('')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد — بيضيّق الأرشيف كله (الأرقام اللي فوق كمان)
+  const org = useOrgFilter()
   // فترة الأرشفة: شهر بضغطة أو «من تاريخ / إلى تاريخ» — فاضي = كل التواريخ
   const payrollMonth = usePayrollMonthContext()
   const [archiveRange, setArchiveRange] = useState<DayRange | null>(null)
   const activeRange = validDayRange(archiveRange, null)
-  const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [archivedEmployees, setArchivedEmployees] = useState<ArchivedEmployee[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -83,7 +83,6 @@ export default function ArchivedEmployeesPage() {
       ])
       const branchById = new Map(branches.map((b) => [b.id, b.name]))
       const deptById = new Map(depts.map((d) => [d.id, d.name]))
-      setDepartments(depts)
       setArchivedEmployees(
         emps
           .filter((e) => e.status === 'archived' || e.status === 'terminated')
@@ -132,26 +131,27 @@ export default function ArchivedEmployeesPage() {
     }
   }
 
+  // الأرشيف في الفرع/الإدارة/القسم/الفريق المختار — الأرقام اللي فوق والجدول والتصدير كلهم منه
+  const orgEmployees = archivedEmployees.filter((emp) => org.matches(emp.id))
+
   // أسباب الأرشفة الموجودة فعلاً في البيانات — بدون تكرار
   const reasonOptions = Array.from(
-    new Set(archivedEmployees.map((e) => e.archiveReason).filter(Boolean))
+    new Set(orgEmployees.map((e) => e.archiveReason).filter(Boolean))
   )
 
-  const filteredEmployees = archivedEmployees.filter((emp) => {
+  const filteredEmployees = orgEmployees.filter((emp) => {
     const matchesSearch =
       emp.name.includes(searchTerm) ||
       emp.employeeId.toLowerCase().includes(searchTerm.toLowerCase())
     const matchesStatus = !filterStatus || emp.status === filterStatus
     const matchesReason = !filterReason || emp.archiveReason === filterReason
-    const matchesDept =
-      !filterDept || String(emp.departmentId ?? '') === filterDept
     // الفترة على تاريخ الأرشفة (مقارنة تاريخ فقط) — بلا تاريخ يُستبعد عند تحديد فترة
     const matchesDate = !activeRange || dateInRange(emp.archivedAt, activeRange)
-    return matchesSearch && matchesStatus && matchesReason && matchesDept && matchesDate
+    return matchesSearch && matchesStatus && matchesReason && matchesDate
   })
 
-  const archivedCount = archivedEmployees.filter((e) => e.status === 'archived').length
-  const terminatedCount = archivedEmployees.filter((e) => e.status === 'terminated').length
+  const archivedCount = orgEmployees.filter((e) => e.status === 'archived').length
+  const terminatedCount = orgEmployees.filter((e) => e.status === 'terminated').length
   // إعادة التفعيل للمؤرشف والمنتهي خدمته معاً — reactivate في الباك يقبل الحالتين
   const reactivatableCount = archivedCount + terminatedCount
 
@@ -291,20 +291,8 @@ export default function ArchivedEmployeesPage() {
                 </option>
               ))}
             </select>
-            {/* القسم */}
-            <select
-              value={filterDept}
-              onChange={(e) => setFilterDept(e.target.value)}
-              className="input w-44"
-              title="القسم"
-            >
-              <option value="">كل الأقسام</option>
-              {departments.map((dep) => (
-                <option key={dep.id} value={String(dep.id)}>
-                  {dep.name}
-                </option>
-              ))}
-            </select>
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
             {/* فترة الأرشفة: شهر بضغطة أو من / إلى بأي يوم */}
             <DayRangeFilter idPrefix="archived" value={archiveRange} onChange={setArchiveRange} onClear={() => setArchiveRange(null)} maxDays={null}
               cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today} />

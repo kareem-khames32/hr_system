@@ -40,6 +40,8 @@ export interface PayrollOverviewFilterState {
   search: string
   branchId: number | null
   departmentId: number | null
+  // الفلتر الموحد (org.params): الإدارة/القسم المختار بأقسامه الفرعية جوه فرعه
+  departmentIds?: number[] | null
   teamId: number | null
   jobTitle: string
   statuses: PayrollEmploymentStatus[]
@@ -61,7 +63,7 @@ export const emptyPayrollOverviewFilters = (): PayrollOverviewFilterState => ({
 /** عدد الفلاتر المفعّلة (المنظور «الكل / المدرجين / بلا مسير» مش فلتر — له مفتاحه الخاص). */
 export function payrollOverviewFilterCount(filters: PayrollOverviewFilterState): number {
   return [
-    filters.search.trim() !== '', filters.branchId !== null, filters.departmentId !== null, filters.teamId !== null,
+    filters.search.trim() !== '', filters.branchId !== null, filters.departmentId !== null, !!filters.departmentIds?.length, filters.teamId !== null,
     filters.jobTitle.trim() !== '', filters.statuses.length > 0, filters.hiredFrom !== null || filters.hiredTo !== null,
     filters.runId !== null, filters.reasonCode !== '',
   ].filter(Boolean).length
@@ -75,6 +77,7 @@ export function payrollOverviewQuery(period: string, filters?: PayrollOverviewFi
   if (f.search.trim()) params.set('search', f.search.trim())
   if (f.branchId !== null) params.set('branchId', String(f.branchId))
   if (f.departmentId !== null) params.set('departmentId', String(f.departmentId))
+  if (f.departmentIds?.length) params.set('departmentIds', f.departmentIds.join(','))
   if (f.teamId !== null) params.set('teamId', String(f.teamId))
   if (f.jobTitle.trim()) params.set('jobTitle', f.jobTitle.trim())
   if (f.statuses.length) params.set('statuses', f.statuses.join(','))

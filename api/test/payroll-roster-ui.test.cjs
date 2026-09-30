@@ -45,9 +45,11 @@ test('نداءات الفلاتر والجدول الموحد ووجهات ال�
 
 test('شريط الفلاتر: بحث وفرع وقسم وفريق ومسمى وحالة ومدى تعيين، وعدّاد الفلاتر و«مسح الفلاتر» وعدد الصفوف', () => {
   const filters = read('src/components/payroll/PayrollEmployeeFilters.tsx')
+  // الفرع والإدارة والقسم والفريق = الفلتر الموحد (طلب المالك 30 سبتمبر) مكان القوائم التلاتة، و«مسح الفلاتر» بيمسحه كمان
   for (const text of ['data-payroll-employee-filters', 'data-active-filter-count', 'data-clear-filters', 'data-filtered-row-count',
-    'مسح الفلاتر', 'فلتر مفعّل', 'payrollOverviewFilterCount(value)', 'linkedFilterOptions(']) assert.ok(filters.includes(text), text)
-  for (const label of ['الفرع', 'القسم', 'الفريق', 'المسمى الوظيفي', 'حالة الموظف', 'تاريخ التعيين', 'المسير', 'سبب عدم الإدراج']) {
+    'مسح الفلاتر', 'فلتر مفعّل', 'payrollOverviewFilterCount(value)', '{org.element}', 'org.reset()',
+    '>الفرع ← الإدارة ← القسم ← الفريق<']) assert.ok(filters.includes(text), text)
+  for (const label of ['المسمى الوظيفي', 'حالة الموظف', 'تاريخ التعيين', 'المسير', 'سبب عدم الإدراج']) {
     assert.ok(filters.includes(`>${label}<`), label)
   }
   // «كل التواريخ» من DayRangeFilter نفسه (onClear) — مش فلتر تاريخ جديد

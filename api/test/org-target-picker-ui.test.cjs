@@ -103,10 +103,10 @@ test('الشاشات: الجدول الأسبوعي بيعيّن لمدة بال
   assert.match(weekly, /تعيين وردية لمدة/)
   assert.match(weekly, /الشهر ده/); assert.match(weekly, /الشهر الجاي/)
   assert.doesNotMatch(weekly, /BulkAssignModal/)
-  // الفرق: المنتقي بياخدها، وفلتر الجدول بالترتيب فرع ← قسم ← فريق، والإسناد بيبعت teamIds
+  // الفرق: المنتقي بياخدها، وفلتر الجدول هو الفلتر الموحد «الفرع ← الإدارة ← القسم ← الفريق» (طلب المالك 30 سبتمبر)، والإسناد بيبعت teamIds
   assert.match(weekly, /teams=\{teams\}/); assert.match(weekly, /teams=\{teamsList\}/)
-  assert.match(weekly, /aria-label="الفريق"/)
-  assert.match(weekly, /setSelectedDepartment\(e\.target\.value\); setSelectedTeam\('all'\)/)
+  assert.match(weekly, /\{org\.element\}/)
+  assert.match(weekly, /const orgRows = rows\.filter\(\(row\) => org\.matches\(row\.id\)\)/)
   assert.match(weekly, /body: \{ teamIds: \[teamId\] \}/)
   const overtime = src('app/attendance/overtime/page.tsx')
   assert.match(overtime, /id="overtime-periods"/)

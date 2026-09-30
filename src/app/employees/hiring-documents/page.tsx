@@ -4,8 +4,8 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { ArrowRight, CheckCircle2, CheckSquare, FileWarning, Search, Send, Square, Upload } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
-import { can, fetchBranches, getCurrentUser, type ApiBranch } from '@/lib/api'
-import { branchScopeOfUser, canSeeBranch, type BranchScope } from '@/lib/branch-scope'
+import { useOrgFilter } from '@/components/OrgFilter'
+import { can } from '@/lib/api'
 import { formatDate } from '@/lib/dates'
 import {
   fetchHiringMissing,
@@ -24,9 +24,9 @@ export default function HiringDocumentsPage() {
   const [error, setError] = useState('')
   const [notice, setNotice] = useState('')
   const [search, setSearch] = useState('')
-  const [branchId, setBranchId] = useState('')
-  const [branches, setBranches] = useState<ApiBranch[]>([])
-  const [branchScope, setBranchScope] = useState<BranchScope>([])
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد: الفرع بيتبعت للخادم، والإدارة/القسم/الفريق على الصفوف اللي رجعت
+  const org = useOrgFilter()
+  const branchId = org.params.branchId ?? ''
   const [selected, setSelected] = useState<number[]>([])
   const [sending, setSending] = useState(false)
   const [reloadKey, setReloadKey] = useState(0)
@@ -34,9 +34,7 @@ export default function HiringDocumentsPage() {
   const [canEditTypes, setCanEditTypes] = useState(false)
 
   useEffect(() => {
-    setBranchScope(branchScopeOfUser(getCurrentUser()))
     setCanEditTypes(can('settings.manage'))
-    fetchBranches().then(setBranches).catch(() => setBranches([]))
   }, [])
 
   // البحث بيتبعت للخادم بعد ما الكتابة تهدى شوية؛ الفرع على طول
@@ -64,10 +62,18 @@ export default function HiringDocumentsPage() {
     }
   }, [search, branchId, reloadKey])
 
-  const rows = report?.employees ?? []
+  // الصفوف في الفلتر بس — الاختيار والتذكير والعدد منها
+  const rows = (report?.employees ?? []).filter((row) => org.matches(row.employeeId))
   const required = report?.required ?? []
-  // منتقي الفرع لحساب الشركة أو اللي على أكتر من فرع — حساب الفرع الواحد بيشوف فرعه بس
-  const picksBranch = branchScope === null || branchScope.length > 1
+  // الاختيار مايفضلش فيه موظف اتشال من الجدول بالفلتر (التذكير يروح للظاهرين المختارين بس)
+  const visibleKey = rows.map((row) => row.employeeId).join(',')
+  useEffect(() => {
+    setSelected((prev) => {
+      const next = prev.filter((id) => rows.some((row) => row.employeeId === id))
+      return next.length === prev.length ? prev : next
+    })
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [visibleKey])
   const allSelected = rows.length > 0 && rows.every((row) => selected.includes(row.employeeId))
 
   const toggle = (id: number) =>
@@ -159,23 +165,8 @@ export default function HiringDocumentsPage() {
                   onChange={(e) => setSearch(e.target.value)}
                 />
               </div>
-              {picksBranch && (
-                <select
-                  className="input w-auto min-w-[180px]"
-                  aria-label="الفرع"
-                  value={branchId}
-                  onChange={(e) => setBranchId(e.target.value)}
-                >
-                  <option value="">كل الفروع</option>
-                  {branches
-                    .filter((branch) => canSeeBranch(branchScope, branch.id))
-                    .map((branch) => (
-                      <option key={branch.id} value={branch.id}>
-                        {branch.name}
-                      </option>
-                    ))}
-                </select>
-              )}
+              {/* الفرع ← الإدارة ← القسم ← الفريق */}
+              {org.element}
               <button
                 onClick={remind}
                 disabled={!selected.length || sending}
@@ -200,7 +191,9 @@ export default function HiringDocumentsPage() {
                     <p className="text-gray-600">
                       {search.trim()
                         ? 'مفيش موظف ناقصه مستندات بالاسم أو الكود ده'
-                        : 'كل الموظفين مسلّمين مسوغات التعيين كاملة'}
+                        : org.active
+                          ? 'مفيش موظف ناقصه مستندات في الفلتر ده'
+                          : 'كل الموظفين مسلّمين مسوغات التعيين كاملة'}
                     </p>
                   </div>
                 ) : (

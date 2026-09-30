@@ -8,6 +8,7 @@ import { overtimeFinancialValue } from './overtime-financial'
 import { payrollEmploymentCoverage } from './payroll-employment'
 import { readLoanInstallmentPositions, type LoanInstallmentPosition } from './payroll-installment-balances'
 import { PAYROLL_REVERSAL_LINES_TABLE, payrollLineNotReversedSql } from './payroll-reversal-sql'
+import { orgFilterIsEmpty, orgFilterMatches, type OrgFilter } from '../org/org-filter-params'
 
 // تقارير الرواتب (الخطوة 30 / RP-07, RP-08, RP-10, RP-12, PR-07): قراءة فقط، بلا أي كتابة.
 // النطاق: null = كل الشركة، مصفوفة = فروع المستخدم (فرع أو أكتر — branchScopeOf)، والمصفوفة الفاضية = نطاق فارغ.
@@ -141,6 +142,11 @@ export interface PayrollReportDraftOption {
   includeDraft?: boolean
 }
 
+export interface PayrollRunsReportOptions extends PayrollReportDraftOption {
+  /** فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد فوق نطاق الفرع: بمكان الموظف في لقطة المسير (org-filter-params) */
+  org?: OrgFilter | null
+}
+
 export function payrollRunScopeLabel(run: Pick<RunRow, 'scopeType' | 'scopeIds' | 'employeeIds' | 'branchId'>, names: OrgNames) {
   const ids = run.scopeIds ? parseIds(run.scopeIds) : run.branchId ? [run.branchId] : []
   const named = (map: Map<number, string>, prefix: string) =>
@@ -165,11 +171,14 @@ function legacyBranchOf(run: Pick<RunRow, 'scopeType' | 'scopeIds' | 'branchId'>
 interface MemberRow {
   runId: number; employeeId: number; membershipStatus: string | null; exclusionReason: string | null
   hasSnapshot: number; snapshotBranchId: string | null; capturedAt: string | null; fullName: string | null; employeeCode: string | null
+  snapshotDepartmentId?: string | null; snapshotTeamId?: string | null
 }
 
 const MEMBER_SELECT = `SELECT m.[runId], m.[employeeId], m.[membershipStatus], m.[exclusionReason],
   CASE WHEN ISJSON(CAST(m.[snapshot] AS nvarchar(max))) = 1 THEN 1 ELSE 0 END AS [hasSnapshot],
   CASE WHEN ISJSON(CAST(m.[snapshot] AS nvarchar(max))) = 1 THEN JSON_VALUE(CAST(m.[snapshot] AS nvarchar(max)), '$.branchId') END AS [snapshotBranchId],
+  CASE WHEN ISJSON(CAST(m.[snapshot] AS nvarchar(max))) = 1 THEN JSON_VALUE(CAST(m.[snapshot] AS nvarchar(max)), '$.departmentId') END AS [snapshotDepartmentId],
+  CASE WHEN ISJSON(CAST(m.[snapshot] AS nvarchar(max))) = 1 THEN JSON_VALUE(CAST(m.[snapshot] AS nvarchar(max)), '$.teamId') END AS [snapshotTeamId],
   CASE WHEN ISJSON(CAST(m.[snapshot] AS nvarchar(max))) = 1 THEN JSON_VALUE(CAST(m.[snapshot] AS nvarchar(max)), '$.capturedAt') END AS [capturedAt],
   CASE WHEN ISJSON(CAST(m.[snapshot] AS nvarchar(max))) = 1 THEN JSON_VALUE(CAST(m.[snapshot] AS nvarchar(max)), '$.fullName') END AS [fullName],
   CASE WHEN ISJSON(CAST(m.[snapshot] AS nvarchar(max))) = 1 THEN JSON_VALUE(CAST(m.[snapshot] AS nvarchar(max)), '$.employeeCode') END AS [employeeCode]
@@ -193,6 +202,16 @@ function effectiveBranch(run: RunRow, member: MemberRow | undefined) {
   return legacyBranchOf(run)
 }
 
+// مكان الموظف في المسير للفلتر الموحد: فرعه وقسمه وفريقه من لقطته (زي نطاق الفرع)، ومن غير لقطة الفرع القديم بس
+function effectivePlacement(run: RunRow, member: MemberRow | undefined) {
+  const snapped = !!member && Number(member.hasSnapshot) === 1
+  return {
+    branchId: effectiveBranch(run, member),
+    departmentId: snapped ? toNumberOrNull(member!.snapshotDepartmentId ?? null) : null,
+    teamId: snapped ? toNumberOrNull(member!.snapshotTeamId ?? null) : null,
+  }
+}
+
 const ITEM_MONEY_COLUMNS = ['basicSalary', 'allowances', 'overtimeAmount', 'otherAdditions', 'latenessDeduction', 'shortfallDeduction',
   'absenceDeduction', 'unpaidLeaveDeduction', 'loanInstallments', 'otherDeductions', 'socialInsuranceDeduction', 'netPay'] as const
 type ItemMoneyColumn = typeof ITEM_MONEY_COLUMNS[number]
@@ -207,9 +226,12 @@ const groupBy = <T, K>(rows: T[], key: (row: T) => K) => {
 }
 
 // ===== ١) ملخص المسيرات: كل المسيرات حتى التي بلا فرع (LEFT JOIN منطقي) =====
-export async function payrollRunsReport(em: EntityManager, scope: PayrollReportScope, options: PayrollReportDraftOption = {}) {
+export async function payrollRunsReport(em: EntityManager, scope: PayrollReportScope, options: PayrollRunsReportOptions = {}) {
   const includeDraft = options.includeDraft === true
   if (emptyScope(scope)) return { includeDraft, runs: [], byMethod: [], deductions: [] }
+  // الفلتر الموحد: موظفين المسير اللي مكانهم في لقطته جوه الفلتر بس (والمسير اللي مالوش حد فيه مابيظهرش)
+  const org = options.org && !orgFilterIsEmpty(options.org) ? options.org : null
+  const narrowed = scope !== null || org !== null
   const names = await loadOrgNames(em)
   const runs: RunRow[] = await em.query(`SELECT ${RUN_COLUMNS} FROM [payroll_runs] r ORDER BY r.[period] DESC, r.[id] DESC`)
   const members: MemberRow[] = await em.query(MEMBER_SELECT)
@@ -232,26 +254,35 @@ export async function payrollRunsReport(em: EntityManager, scope: PayrollReportS
       branchId: run.branchId === null ? null : Number(run.branchId),
       branchName: run.branchId === null ? null : names.branches.get(Number(run.branchId)) ?? null,
       startDate: run.startDate, endDate: run.endDate,
-      storedTotalNet: scope === null ? reportMoney(reportCents(run.totalNet)) : null,
+      storedTotalNet: !narrowed ? reportMoney(reportCents(run.totalNet)) : null,
     }
     if (runType === 'REVERSAL') {
       // مسير العكس: بلا بنود؛ موظفوه سطور عكسه وصافيه سالب مجموعها، ونطاق الفرع من لقطة العضو في المسير الأصلي
       const runLines = linesByReversalRun.get(Number(run.id)) ?? []
       const parent = runById.get(Number(run.parentRunId))
-      const visibleLines = runLines.filter(line => scope === null ||
-        (!!parent && inReportScope(scope, effectiveBranch(parent, memberByKey.get(memberKey(Number(line.originalRunId), Number(line.employeeId)))))))
-      if (scope !== null && !visibleLines.length) continue
+      const visibleLines = runLines.filter(line => {
+        if (!narrowed) return true
+        if (!parent) return false
+        const member = memberByKey.get(memberKey(Number(line.originalRunId), Number(line.employeeId)))
+        return (scope === null || inReportScope(scope, effectiveBranch(parent, member))) &&
+          (org === null || orgFilterMatches(effectivePlacement(parent, member), org))
+      })
+      if (narrowed && !visibleLines.length) continue
       resultRuns.push({ ...base, employees: visibleLines.length, excluded: 0, totalNet: reportMoney(-sumCents(visibleLines.map(line => line.netPay))),
-        reversedEmployees: 0, reversedNet: '0.00', partial: scope !== null && visibleLines.length < runLines.length })
+        reversedEmployees: 0, reversedNet: '0.00', partial: narrowed && visibleLines.length < runLines.length })
       continue
     }
     const runItems = itemsByRun.get(Number(run.id)) ?? []
     const runMembers = membersByRun.get(Number(run.id)) ?? []
-    const inScope = (employeeId: number) => scope === null || inReportScope(scope, effectiveBranch(run, memberByKey.get(memberKey(run.id, employeeId))))
+    const inScope = (employeeId: number) => {
+      const member = memberByKey.get(memberKey(run.id, employeeId))
+      return (scope === null || inReportScope(scope, effectiveBranch(run, member))) &&
+        (org === null || orgFilterMatches(effectivePlacement(run, member), org))
+    }
     const visibleItems = runItems.filter(item => inScope(Number(item.employeeId)))
     const visibleMembers = runMembers.filter(member => inScope(Number(member.employeeId)))
-    const visible = scope === null || visibleItems.length > 0 || visibleMembers.length > 0 ||
-      (!runItems.length && !runMembers.length && inReportScope(scope, legacyBranchOf(run)))
+    const visible = !narrowed || visibleItems.length > 0 || visibleMembers.length > 0 ||
+      (org === null && !runItems.length && !runMembers.length && inReportScope(scope, legacyBranchOf(run)))
     if (!visible) continue
     const reversed = (item: ItemRow) => reversedKeys.has(memberKey(Number(run.id), Number(item.employeeId)))
     const reversedItems = visibleItems.filter(reversed)
@@ -264,7 +295,7 @@ export async function payrollRunsReport(em: EntityManager, scope: PayrollReportS
       totalNet: reportMoney(sumCents(visibleItems.map(item => item.netPay))),
       // بنود هذا المسير التي نُفّذ عكس صرفها (يقابلها سطر سالب في مسير العكس المربوط)
       reversedEmployees: reversedItems.length, reversedNet: reportMoney(sumCents(reversedItems.map(item => item.netPay))),
-      partial: scope !== null && visibleItems.length < runItems.length,
+      partial: narrowed && visibleItems.length < runItems.length,
     })
   }
 

@@ -8,6 +8,7 @@ import { canCancelSalaryIncreaseExecution, cancelSalaryIncreaseExecution } from 
 
 import { useEffect, useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import { useOrgFilter } from '@/components/OrgFilter'
 import {
   Search,
   Download,
@@ -101,6 +102,9 @@ interface CompanyRequestRow {
   definitionCode?: string | null
   requesterName: string // يُخفى في السرّي
   department: string
+  // الموظف صاحب الطلب (للفلتر الموحد) — والسرّي بيتفلتر بفرع الطلب بس عشان الفلتر مايكشفش إدارته أو قسمه
+  requesterId: number | null
+  masked: boolean
   branchId: number | null
   submittedAt: string
   status: RequestStatus
@@ -144,7 +148,8 @@ export default function RequestsConsolePage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [filterCategory, setFilterCategory] = useState<'' | RequestCategory>('')
   const [filterStatus, setFilterStatus] = useState<'' | RequestStatus>('')
-  const [filterBranch, setFilterBranch] = useState('')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد
+  const org = useOrgFilter()
   const [detail, setDetail] = useState<ApiRequest | null>(null)
   const [detailLoading, setDetailLoading] = useState(false)
   const [executionCancelReason, setExecutionCancelReason] = useState('')
@@ -188,6 +193,8 @@ export default function RequestsConsolePage() {
                 ? '(سرّي)'
                 : r.requesterName ?? requester?.fullName ?? `موظف #${r.requesterId}`,
               department: masked ? '(سرّي)' : department,
+              requesterId: masked ? null : r.requesterId ?? null,
+              masked,
               branchId: r.branchId ?? null,
               submittedAt: (r.submittedAt ?? r.createdAt).slice(0, 10),
               status: r.status as RequestStatus,
@@ -229,27 +236,29 @@ export default function RequestsConsolePage() {
     }
   }
 
-  const filtered = requests.filter((r) => {
+  // طلبات الفرع/الإدارة/القسم/الفريق المختار في الفلتر الموحد (بمكان صاحب الطلب) — الأرقام والجدول والتصدير منها.
+  // السرّي بفرع الطلب بس: اختيار إدارة أو قسم أو فريق بيخفيه بدل ما يكشف مكان صاحبه
+  const orgRequests = requests.filter((r) => (r.masked ? org.matchesPlacement({ branchId: r.branchId }) : org.matches(r.requesterId)))
+  const filtered = orgRequests.filter((r) => {
     const type = requestDefinition(types, r)
     return (
       (r.displayId.includes(searchQuery) ||
         r.requesterName.includes(searchQuery) ||
         (type?.nameAr ?? '').includes(searchQuery)) &&
       (!filterCategory || type?.category === filterCategory) &&
-      (!filterStatus || r.status === filterStatus) &&
-      (!filterBranch || String(r.branchId ?? '') === filterBranch)
+      (!filterStatus || r.status === filterStatus)
     )
   })
 
   const counts = {
-    total: requests.length,
-    open: requests.filter((r) =>
+    total: orgRequests.length,
+    open: orgRequests.filter((r) =>
       ['SUBMITTED', 'UNDER_REVIEW', 'RETURNED_FOR_INFO'].includes(r.status)
     ).length,
-    executing: requests.filter((r) =>
+    executing: orgRequests.filter((r) =>
       ['APPROVED', 'IN_EXECUTION'].includes(r.status)
     ).length,
-    completed: requests.filter((r) => r.status === 'COMPLETED').length,
+    completed: orgRequests.filter((r) => r.status === 'COMPLETED').length,
   }
 
   const detailType = detail ? requestDefinition(types, detail) : undefined
@@ -379,18 +388,8 @@ export default function RequestsConsolePage() {
                     </option>
                   ))}
                 </select>
-                <select
-                  value={filterBranch}
-                  onChange={(e) => setFilterBranch(e.target.value)}
-                  className="input w-48"
-                >
-                  <option value="">كل الفروع</option>
-                  {branches.map((b) => (
-                    <option key={b.id} value={String(b.id)}>
-                      {b.name}
-                    </option>
-                  ))}
-                </select>
+                {/* الفرع ← الإدارة ← القسم ← الفريق */}
+                {org.element}
               </div>
             </div>
 

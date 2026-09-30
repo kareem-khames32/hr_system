@@ -1,8 +1,9 @@
 import { Body, Controller, Get, Param, ParseIntPipe, Post, Query, UseGuards } from '@nestjs/common'
 import { Allow, ArrayMaxSize, ArrayMinSize, ArrayUnique, IsArray, IsBoolean, IsIn, IsInt, IsOptional, IsString, Matches, MaxLength, Min, ValidateNested } from 'class-validator'
-import { Type } from 'class-transformer'
+import { Transform, Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { ORG_FILTER_MAX_UNITS } from '../org/org-filter-params'
 import { PAYROLL_DISBURSE_BULK_MAX, PAYROLL_DISBURSE_PERMISSION, type PayrollDisbursementState } from './payroll-disbursement'
 import { PayrollDisbursementService } from './payroll-disbursement.service'
 
@@ -11,6 +12,9 @@ const STATES: PayrollDisbursementState[] = ['PAID', 'UNPAID', 'SETTLEMENT', 'NO_
 class PayrollDisbursementFilterDto {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) branchId?: number
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) departmentId?: number
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد: الإدارة/القسم المختار بأقسامه الفرعية جوه فرعه («3,4,5» في الاستعلام أو مصفوفة)
+  @IsOptional() @Transform(({ value }) => (typeof value === 'string' ? value.split(',').map((part) => Number(part.trim())) : value))
+  @IsArray() @ArrayMaxSize(ORG_FILTER_MAX_UNITS) @IsInt({ each: true }) @Min(1, { each: true }) departmentIds?: number[]
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) teamId?: number
   @IsOptional() @IsString() @MaxLength(20) payMethod?: string
   @IsOptional() @IsIn(STATES) state?: PayrollDisbursementState

@@ -37,7 +37,8 @@ export interface PayrollDisbursementRow {
 }
 export interface PayrollDisbursementBucket { count: number; total: number; bank: number; cash: number }
 export interface PayrollDisbursementFilter {
-  branchId?: number | null; departmentId?: number | null; teamId?: number | null
+  // departmentIds: الفلتر الموحد — الإدارة/القسم المختار بأقسامه الفرعية جوه فرعه (أي واحد منها)
+  branchId?: number | null; departmentId?: number | null; departmentIds?: number[] | null; teamId?: number | null
   payMethod?: string | null; state?: PayrollDisbursementState | null; search?: string | null
 }
 
@@ -118,6 +119,7 @@ export function filterPayrollDisbursementRows(rows: readonly PayrollDisbursement
   const search = filter.search ? normalized(filter.search) : ''
   return rows.filter(row => (filter.branchId == null || row.branchId === filter.branchId)
     && (filter.departmentId == null || row.departmentId === filter.departmentId)
+    && (filter.departmentIds == null || (row.departmentId != null && filter.departmentIds.includes(row.departmentId)))
     && (filter.teamId == null || row.teamId === filter.teamId)
     && (!filter.payMethod || row.payMethod === filter.payMethod)
     && (!filter.state || row.state === filter.state)

@@ -41,6 +41,7 @@ import { custodyStatusLabels as statusLabels, custodyStatusStyles as statusStyle
 import { useCurrency } from '@/lib/currency'
 import { CUSTODY_TEXT_MAX, custodyTextIssue } from '@/lib/input-limits'
 import { EmployeePicker } from '@/components/EmployeePicker'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 // حالات العهدة — التسميات الموحّدة في كل النظام
 
@@ -83,7 +84,8 @@ export default function CustodyPage() {
   const [error, setError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
-  const [filterBranch, setFilterBranch] = useState('')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد على صاحب العهدة — بيضيّق السجل كله (الأرقام اللي فوق كمان)
+  const org = useOrgFilter()
   const [showModal, setShowModal] = useState(false)
   const [saving, setSaving] = useState(false)
   const [formData, setFormData] = useState({ employeeId: '', assetId: '' })
@@ -155,24 +157,25 @@ export default function CustodyPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const filtered = records.filter(
+  // عهد موظفي الفرع/الإدارة/القسم/الفريق المختار — الأرقام والجدول منها
+  const orgRecords = records.filter((r) => org.matches(r.employeeId))
+  const filtered = orgRecords.filter(
     (r) =>
       (r.employeeName.includes(searchQuery) ||
         r.assetName.includes(searchQuery) ||
         r.serialNumber.includes(searchQuery)) &&
-      (!filterStatus || r.status === filterStatus) &&
-      (!filterBranch || String(r.branchId) === filterBranch)
+      (!filterStatus || r.status === filterStatus)
   )
 
   const stats = {
-    active: records.filter((r) => r.status === 'ACTIVE').length,
-    pending: records.filter((r) =>
+    active: orgRecords.filter((r) => r.status === 'ACTIVE').length,
+    pending: orgRecords.filter((r) =>
       ['PENDING_ACK', 'PENDING_MANAGER_CONFIRM', 'RETURN_REQUESTED'].includes(r.status)
     ).length,
-    lostDamaged: records.filter(
+    lostDamaged: orgRecords.filter(
       (r) => r.status === 'LOST' || r.status === 'DAMAGED'
     ).length,
-    returned: records.filter((r) => r.status === 'RETURNED').length,
+    returned: orgRecords.filter((r) => r.status === 'RETURNED').length,
   }
 
   // الأصول المتاحة للتسليم فقط: AVAILABLE (لا المتقاعدة/المُكهّنة ولا المُسنَدة)
@@ -570,8 +573,8 @@ export default function CustodyPage() {
 
         {/* Filters */}
         <div className="card p-4">
-          <div className="flex items-center gap-3">
-            <div className="relative flex-1">
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
+            <div className="relative flex-1 min-w-[220px]">
               <Search
                 size={18}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
@@ -587,7 +590,8 @@ export default function CustodyPage() {
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="input w-56"
+              className="input w-full sm:w-56"
+              aria-label="الحالة"
             >
               <option value="">كل الحالات</option>
               {Object.entries(statusLabels).map(([id, label]) => (
@@ -596,18 +600,8 @@ export default function CustodyPage() {
                 </option>
               ))}
             </select>
-            <select
-              value={filterBranch}
-              onChange={(e) => setFilterBranch(e.target.value)}
-              className="input w-56"
-            >
-              <option value="">كل الفروع</option>
-              {branches.map((b) => (
-                <option key={b.id} value={String(b.id)}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
           </div>
         </div>
 

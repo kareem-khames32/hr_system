@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, Download, Gift, Plus, RefreshCw, Settings2, Users, X } from 'lucide-react'
 import { ApiError, can } from '@/lib/api'
 import { csvDateStamp, downloadCsv } from '@/lib/csv'
@@ -16,6 +16,7 @@ import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/Compa
 import { DayRangeFilter, PayrollPeriodSelect, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { dayRangeKey, validDayRange, type DayRange, type PayrollMonthContext } from '@/lib/payroll-month-range'
 import { useBranchCurrency } from '@/lib/currency'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 // C4 / الخطوة 27: مساحة المكافآت — القائمة والاعتماد (المدير الأعلى عند التصعيد ثم الموارد البشرية)، والاقتراح لموظف واحد
 // أو اختيار أو فريق أو قسم أو فرع بمعاينة أرقام حقيقية واستبعاد، وكتالوج الأنواع. الخادم يعيد فحص النطاق والسقف والتكرار
@@ -60,7 +61,11 @@ export function BonusesWorkspace({ currency, mode, focusRequestId = null, initia
   // «من تاريخ / إلى تاريخ» على تاريخ الطلب (أو شهر رواتب بضغطة) — الافتراضي شهر الرواتب الجاري، والفلترة على الخادم قبل حد الـ500
   const { range, setRange, context } = usePayrollDayRange()
   const listRange = validDayRange(range)
-  const [outsideRange, setOutsideRange] = useState(0)
+  // الطلبات اللي تاريخها برا الفترة (بتتعد تحت الجدول بنفس الفلتر الموحد)
+  const [outsideRows, setOutsideRows] = useState<BonusView[]>([])
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد في شاشة المكافآت (الإدارة) بس — مش في «مكافآتي» (المدير)
+  const org = useOrgFilter({ enabled: mode === 'admin' })
+  const outsideRange = outsideRows.filter(row => org.matches(row.employee.id)).length
   const latest = useRef(0)
   useEffect(() => {
     const view = urlParam('view')
@@ -79,7 +84,7 @@ export function BonusesWorkspace({ currency, mode, focusRequestId = null, initia
         if (request !== latest.current) return
         const inRange = new Set(list.map(row => row.id))
         setRows(list)
-        setOutsideRange(everything ? everything.filter(row => !inRange.has(row.id)).length : 0)
+        setOutsideRows(everything ? everything.filter(row => !inRange.has(row.id)) : [])
       })
       .catch(error => { if (request === latest.current) setLoadError(errorText(error, 'تعذر تحميل المكافآت')) })
       .finally(() => { if (request === latest.current) setLoadingRows(false) })
@@ -109,8 +114,10 @@ export function BonusesWorkspace({ currency, mode, focusRequestId = null, initia
         </div>
       </div>
       {loadError && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm flex items-center gap-2"><AlertTriangle size={16} />{loadError}</div>}
-      {tab === 'list' && <BonusList rows={rows} loading={loadingRows} filters={filters} setFilters={setFilters} reload={loadRows} currency={currency}
-        reasonMinLength={creatable?.reasonMinLength ?? 20} focusRequestId={focusRequestId} range={range} setRange={setRange} context={context} outsideRange={outsideRange} />}
+      {tab === 'list' && <BonusList rows={rows.filter(row => org.matches(row.employee.id))} truncated={rows.length >= LIST_LIMIT} loading={loadingRows}
+        filters={filters} setFilters={setFilters} reload={loadRows} currency={currency}
+        reasonMinLength={creatable?.reasonMinLength ?? 20} focusRequestId={focusRequestId} range={range} setRange={setRange} context={context} outsideRange={outsideRange}
+        orgElement={mode === 'admin' ? org.element : null} />}
       {tab === 'create' && creatable && <BonusCreator creatable={creatable} currency={currency} initialEmployeeId={initialEmployeeId} initialPeriod={initialPeriod} onCreated={() => { setFilters(value => ({ ...value, view: 'created' })); setTab('list'); loadRows() }} />}
       {tab === 'types' && canManage && <BonusTypesPanel onChanged={() => fetchBonusCreatable().then(setCreatable).catch(() => undefined)} />}
     </div>
@@ -120,10 +127,13 @@ export function BonusesWorkspace({ currency, mode, focusRequestId = null, initia
 // نفس حد قائمة الخادم (أحدث 500 طلب مرئي في الفترة)
 const LIST_LIMIT = 500
 
-function BonusList({ rows, loading, filters, setFilters, reload, currency, reasonMinLength, focusRequestId, range, setRange, context, outsideRange }: {
-  rows: BonusView[]; loading: boolean; filters: ListFilters; setFilters: (update: (value: ListFilters) => ListFilters) => void
+function BonusList({ rows, truncated, loading, filters, setFilters, reload, currency, reasonMinLength, focusRequestId, range, setRange, context, outsideRange, orgElement }: {
+  // rows = صفوف الخادم في الفلتر الموحد (الجدول والتصدير منها)؛ truncated = الخادم وصل لحد الـ500 (قبل الفلتر)
+  rows: BonusView[]; truncated: boolean; loading: boolean; filters: ListFilters; setFilters: (update: (value: ListFilters) => ListFilters) => void
   reload: () => void; currency: string; reasonMinLength: number; focusRequestId: number | null
   range: DayRange | null; setRange: (range: DayRange) => void; context: PayrollMonthContext | null; outsideRange: number
+  // شريط الفلتر الموحد (شاشة الإدارة بس) — null في «مكافآتي»
+  orgElement: ReactNode
 }) {
   const [expanded, setExpanded] = useState<number | null>(null)
   const [detail, setDetail] = useState<BonusView | null>(null)
@@ -196,11 +206,13 @@ function BonusList({ rows, loading, filters, setFilters, reload, currency, reaso
         <PayrollPeriodSelect id="bonuses-target-period" label="شهر المسير المستهدف" value={filters.targetPeriod} allLabel="كل الشهور"
           onChange={targetPeriod => setFilters(value => ({ ...value, targetPeriod }))} cycleStartDay={context?.cycleStartDay} today={context?.today} className="w-auto" />
         <DayRangeFilter idPrefix="bonuses" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
+        {/* الفرع ← الإدارة ← القسم ← الفريق */}
+        {orgElement}
         <button type="button" className="btn-secondary flex items-center gap-1" onClick={reload}><RefreshCw size={16} />تحديث</button>
         <button type="button" className="btn-secondary flex items-center gap-1 disabled:opacity-50" onClick={exportCsv} disabled={loading || shown.length === 0}><Download size={16} />تصدير CSV</button>
       </div>
       {outsideRange > 0 && <p className="text-xs text-gray-500" data-outside-range>فيه {outsideRange} طلب {filters.view === 'pending_me' ? 'بانتظار اعتمادك ' : ''}تاريخه برا الفترة المختارة — اختار شهر تاني أو غيّر «من تاريخ» / «إلى تاريخ» عشان تشوفهم.</p>}
-      {rows.length >= LIST_LIMIT && <p className="text-xs text-warning-700" data-list-limit>بيظهر أحدث {LIST_LIMIT} طلب في الفترة — ضيّق الفترة عشان تشوف الأقدم.</p>}
+      {truncated && <p className="text-xs text-warning-700" data-list-limit>بيظهر أحدث {LIST_LIMIT} طلب في الفترة — ضيّق الفترة عشان تشوف الأقدم.</p>}
       {notice && <div role="status" className="bg-primary-50 text-primary-700 rounded-xl p-3 text-sm flex items-center justify-between">{notice}<button type="button" aria-label="إغلاق" onClick={() => setNotice('')}><X size={14} /></button></div>}
       {loading ? (
         <div className="flex items-center justify-center py-10"><div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>

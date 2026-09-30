@@ -12,6 +12,7 @@ import {
   AlertTriangle,
 } from 'lucide-react'
 import { fetchCalendar, type ApiLeave } from '@/lib/api'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 interface CalendarHoliday {
   id: number
@@ -43,7 +44,10 @@ export default function LeaveCalendarPage() {
   })
   const [weekendDays, setWeekendDays] = useState<string[]>([])
   const [holidays, setHolidays] = useState<CalendarHoliday[]>([])
-  const [leaves, setLeaves] = useState<ApiLeave[]>([])
+  const [allLeaves, setLeaves] = useState<ApiLeave[]>([])
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد على إجازات الموظفين (العطلات الرسمية زي ما هي)
+  const org = useOrgFilter()
+  const leaves = allLeaves.filter((leave) => org.matches(leave.employeeId))
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -120,6 +124,8 @@ export default function LeaveCalendarPage() {
 
         {/* Calendar Navigation */}
         <div className="card">
+          {/* الفرع ← الإدارة ← القسم ← الفريق */}
+          <div className="mb-4">{org.element}</div>
           <div className="flex items-center justify-between mb-6">
             <button
               onClick={prevMonth}

@@ -26,6 +26,14 @@ import {
   UpdateTeamDto,
 } from './org.dto'
 
+// صلاحيات عرض الشاشات اللي فيها الفلتر الموحد (الموظفين والمستندات والعهد والنقل وإنهاء الخدمة والحضور والاستثناءات والإجازات
+// والأرصدة والمسير والصرف والخصومات والمكافآت والطلبات والتقارير والمستخدمين)
+export const ORG_FILTER_VIEW_PERMS = [
+  'employees.view', 'documents.manage', 'custody.assign', 'transfers.view', 'offboarding.manage', 'attendance.view_all',
+  'attendance_exemption.view', 'leaves.view_all', 'leave_balances.manage', 'payroll.view', 'payroll.disburse', 'deductions.view',
+  'bonuses.view', 'requests.view_all', 'reports.view', 'users.manage',
+]
+
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
 export class OrgController {
@@ -76,6 +84,14 @@ export class OrgController {
     @Body() dto: UpdateDepartmentDto
   ) {
     return this.org.updateDepartment(id, dto, branchScopeOf(user))
+  }
+
+  // ===== فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد في كل شاشة فيها موظفين (طلب المالك 30 سبتمبر) =====
+  // الشجرة ومكان كل موظف بنطاق فروع الحساب — لأي حساب عنده صلاحية عرض شاشة من الشاشات اللي بتستخدمه (يكفي واحدة)
+  @Get('org/filter-context')
+  @Perm(...ORG_FILTER_VIEW_PERMS)
+  filterContext(@CurrentUser() user: JwtPayload) {
+    return this.org.filterContext(branchScopeOf(user))
   }
 
   // ===== الفرق =====

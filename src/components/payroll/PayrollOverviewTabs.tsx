@@ -14,6 +14,7 @@ import { PayrollEmployeeFilters, payrollReasonLabel } from '@/components/payroll
 import { PayrollMoveToRunModal, type PayrollMoveCandidate } from '@/components/payroll/PayrollMoveToRunModal'
 import { OrgTargetPicker, describeOrgTarget, initialOrgTarget, resolveOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
 import { usePayrollDayRange } from '@/components/DayRangeFilter'
+import type { OrgFilterHandle } from '@/components/OrgFilter'
 import { dayRangeLabel, payrollMonthBounds } from '@/lib/payroll-month-range'
 import {
   cancelDeductionWaiver, createDeductionWaiver, DEDUCTION_KIND_LABELS, DEDUCTION_KINDS, emptyPayrollOverviewFilters, fetchDeductionWaivers,
@@ -85,12 +86,14 @@ function Loading() {
   return <div className="flex justify-center py-12"><div className="w-7 h-7 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>
 }
 
-export function PayrollOverviewTabs({ tab, branches, departments, teams, employees, onOpenRun }: {
+export function PayrollOverviewTabs({ tab, branches, departments, teams, employees, org, onOpenRun }: {
   tab: PayrollOverviewTab
   branches: ApiBranch[]
   departments: ApiDepartment[]
   teams: ApiTeam[]
   employees: ApiEmployee[]
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد المشترك في شاشة المسير
+  org: OrgFilterHandle
   onOpenRun: (runId: number) => void
 }) {
   // فاضي لحد ما نعرف شهر الرواتب الجاري (useMonthData مش بيحمّل غير YYYY-MM صحيح) — بدل تحميل مزدوج
@@ -101,11 +104,18 @@ export function PayrollOverviewTabs({ tab, branches, departments, teams, employe
   useEffect(() => { if (payrollMonth && !periodTouched) setPeriod(payrollMonth.period) }, [payrollMonth, periodTouched])
   const periodRange = payrollMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(period) ? payrollMonthBounds(period, payrollMonth.cycleStartDay) : null
   const [query, setQuery] = useState('')
-  const matches = (row: { fullName: string; employeeCode: string }) =>
-    !query.trim() || row.fullName.includes(query.trim()) || row.employeeCode.toLowerCase().includes(query.trim().toLowerCase())
+  // البحث والفلتر الموحد على صفوف التضارب والاستقطاعات (والإجمالي تحت الجدول من الصفوف دي بس)
+  const matches = (row: { fullName: string; employeeCode: string; employeeId: number }) =>
+    org.matches(row.employeeId) &&
+    (!query.trim() || row.fullName.includes(query.trim()) || row.employeeCode.toLowerCase().includes(query.trim().toLowerCase()))
   // فلاتر مشتركة بين «الكل / المدرجين / بلا مسير» — بتفضل زي ما هي لما تبدّل بينهم ولما تغيّر الشهر
   const [filters, setFilters] = useState<PayrollOverviewFilterState>(emptyPayrollOverviewFilters)
-  const filterProps = { branches, departments, teams, cycleStartDay: payrollMonth?.cycleStartDay ?? null, today: payrollMonth?.to ?? null }
+  // الفرع والإدارة/القسم (بأقسامه الفرعية) والفريق من الفلتر الموحد، وبتتبعت للخادم مع باقي الفلاتر
+  const effective = useMemo<PayrollOverviewFilterState>(() => ({ ...filters, branchId: org.params.branchId ?? null, departmentId: null,
+    departmentIds: org.params.departmentIds ?? null, teamId: org.params.teamId ?? null }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filters, org.paramsKey])
+  const filterProps = { org, cycleStartDay: payrollMonth?.cycleStartDay ?? null, today: payrollMonth?.to ?? null }
 
   return (
     <div className="space-y-4" data-payroll-overview-tab={tab}>
@@ -121,10 +131,12 @@ export function PayrollOverviewTabs({ tab, branches, departments, teams, employe
             <input type="text" className="input w-full pr-9" placeholder="دوّر بالاسم أو الكود..." value={query} onChange={e => setQuery(e.target.value)} />
           </div>
         )}
+        {/* الفرع ← الإدارة ← القسم ← الفريق (التبويبات التلاتة التانية جوه شريط فلاترها) */}
+        {!PAYROLL_FILTERED_TABS.includes(tab) && org.element}
       </div>
-      {tab === 'roster' && <RosterTab period={period} filters={filters} onFilters={setFilters} onOpenRun={onOpenRun} {...filterProps} />}
-      {tab === 'included' && <IncludedTab period={period} filters={filters} onFilters={setFilters} onOpenRun={onOpenRun} {...filterProps} />}
-      {tab === 'unassigned' && <UnassignedTab period={period} filters={filters} onFilters={setFilters} onOpenRun={onOpenRun} {...filterProps} />}
+      {tab === 'roster' && <RosterTab period={period} filters={effective} onFilters={setFilters} onOpenRun={onOpenRun} {...filterProps} />}
+      {tab === 'included' && <IncludedTab period={period} filters={effective} onFilters={setFilters} onOpenRun={onOpenRun} {...filterProps} />}
+      {tab === 'unassigned' && <UnassignedTab period={period} filters={effective} onFilters={setFilters} onOpenRun={onOpenRun} {...filterProps} />}
       {tab === 'conflicts' && <ConflictsTab period={period} matches={matches} onOpenRun={onOpenRun} />}
       {tab === 'deductions' && <DeductionsTab period={period} matches={matches} onOpenRun={onOpenRun}
         branches={branches} departments={departments} teams={teams} employees={employees} />}
@@ -132,27 +144,25 @@ export function PayrollOverviewTabs({ tab, branches, departments, teams, employe
   )
 }
 
-type Matches = (row: { fullName: string; employeeCode: string }) => boolean
+type Matches = (row: { fullName: string; employeeCode: string; employeeId: number }) => boolean
 interface FilteredTabProps {
   period: string
   filters: PayrollOverviewFilterState
   onFilters: (next: PayrollOverviewFilterState) => void
   onOpenRun: (id: number) => void
-  branches: ApiBranch[]
-  departments: ApiDepartment[]
-  teams: ApiTeam[]
+  org: OrgFilterHandle
   cycleStartDay: number | null
   today: string | null
 }
 const statusText = (status: string | null | undefined) => status ? PAYROLL_EMPLOYMENT_STATUS_LABELS[status] ?? status : '—'
 
-function IncludedTab({ period, filters, onFilters, onOpenRun, branches, departments, teams, cycleStartDay, today }: FilteredTabProps) {
+function IncludedTab({ period, filters, onFilters, onOpenRun, org, cycleStartDay, today }: FilteredTabProps) {
   // التبويب ده كله «مدرجين»، فمنظور الجدول الموحد ما ينطبقش عليه (الفلاتر مشتركة بينهم)
   const { data, error, loading } = useFilteredMonthData<OverviewIncluded>(period, { ...filters, membership: 'all' }, fetchPayrollIncluded)
   const rows = data?.rows ?? []
   return (
     <div className="space-y-4">
-      <PayrollEmployeeFilters value={filters} onChange={onFilters} branches={branches} departments={departments} teams={teams}
+      <PayrollEmployeeFilters value={filters} onChange={onFilters} org={org}
         jobTitles={data?.jobTitleOptions ?? []} runs={data?.runOptions ?? []} cycleStartDay={cycleStartDay} today={today}
         shownCount={rows.length} totalCount={data?.total ?? 0} idPrefix="payroll-included" />
       {error && <div className="card text-danger-600 text-sm">{error}</div>}
@@ -199,7 +209,7 @@ function IncludedTab({ period, filters, onFilters, onOpenRun, branches, departme
  * قرار المالك (20 سبتمبر): جدول واحد لكل موظفي الشهر بعمود «المسير» ومنظور «الكل / المدرجين في مسير / بلا مسير»،
  * مع اختيار متعدد و«نقل لمسير…» بنافذة واحدة بتتعامل مع الخليط (اللي في مسير يتنقل، واللي بلاه يتضاف) ونتيجة لكل موظف.
  */
-function RosterTab({ period, filters, onFilters, onOpenRun, branches, departments, teams, cycleStartDay, today }: FilteredTabProps) {
+function RosterTab({ period, filters, onFilters, onOpenRun, org, cycleStartDay, today }: FilteredTabProps) {
   const [version, setVersion] = useState(0)
   const { data, error, loading } = useFilteredMonthData<OverviewRoster>(period, filters, fetchPayrollRoster, version)
   const [picked, setPicked] = useState<number[]>([])
@@ -229,7 +239,7 @@ function RosterTab({ period, filters, onFilters, onOpenRun, branches, department
         ))}
       </div>
 
-      <PayrollEmployeeFilters value={filters} onChange={onFilters} branches={branches} departments={departments} teams={teams}
+      <PayrollEmployeeFilters value={filters} onChange={onFilters} org={org}
         jobTitles={data?.jobTitleOptions ?? []} runs={data?.runOptions ?? []} reasons={data?.reasonOptions ?? []}
         cycleStartDay={cycleStartDay} today={today} shownCount={rows.length} totalCount={data?.total ?? 0} idPrefix="payroll-roster" />
 
@@ -320,7 +330,7 @@ function RosterTab({ period, filters, onFilters, onOpenRun, branches, department
  * قرار المالك (20 سبتمبر): من هنا تختار موظف أو أكتر و«أضفهم لمسير…» — بيبقوا أعضاء دائمين في المسير ده من الشهر ده ورايح،
  * ومسير الشهر الجديد بينسخ القائمة زي ما هي. التبويب بيفضى منهم بعد الإضافة (وبعد حساب المسودة لو المسير لسه مسودة).
  */
-function UnassignedTab({ period, filters, onFilters, onOpenRun, branches, departments, teams, cycleStartDay, today }: FilteredTabProps) {
+function UnassignedTab({ period, filters, onFilters, onOpenRun, org, cycleStartDay, today }: FilteredTabProps) {
   const [version, setVersion] = useState(0)
   // التبويب ده كله «بلا مسير»، فمنظور الجدول الموحد ما ينطبقش عليه (الفلاتر مشتركة بينهم)
   const { data, error, loading } = useFilteredMonthData<OverviewUnassigned>(period, { ...filters, membership: 'all' }, fetchPayrollWithoutRun, version)
@@ -339,7 +349,7 @@ function UnassignedTab({ period, filters, onFilters, onOpenRun, branches, depart
 
   return (
     <div className="space-y-4">
-      <PayrollEmployeeFilters value={filters} onChange={onFilters} branches={branches} departments={departments} teams={teams}
+      <PayrollEmployeeFilters value={filters} onChange={onFilters} org={org}
         jobTitles={data?.jobTitleOptions ?? []} reasons={data?.reasonOptions ?? []} cycleStartDay={cycleStartDay} today={today}
         shownCount={rows.length} totalCount={data?.total ?? 0} idPrefix="payroll-unassigned" />
       {error && <div className="card text-danger-600 text-sm">{error}</div>}

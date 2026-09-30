@@ -17,6 +17,8 @@ import { DayRangeFilter, PayrollPeriodSelect, usePayrollDayRange, usePayrollMont
 import { dayRangeKey, payrollMonthBounds, periodOverlapsRange, validDayRange, type DayRange } from '@/lib/payroll-month-range'
 import { downloadCsv } from '@/lib/csv'
 import { useCurrency } from '@/lib/currency'
+import { useOrgFilter } from '@/components/OrgFilter'
+import { orgFilterQueryValues } from '@/lib/org-filter'
 import {
   DAY_KIND_LABELS,
   EMPLOYEE_STATUS_LABELS,
@@ -153,14 +155,17 @@ function RunsTab() {
   const [report, setReport] = useState<PayrollRunsReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد: بيتبعت للخادم (موظفين كل مسير بمكانهم في لقطته — الصافي والعدد والمجاميع منهم)
+  const org = useOrgFilter()
   const load = () => {
     setLoading(true); setError('')
-    fetchPayrollRunsReport()
+    fetchPayrollRunsReport(orgFilterQueryValues(org.params))
       .then(setReport)
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل تقرير المسيرات'))
       .finally(() => setLoading(false))
   }
-  useEffect(load, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, [org.paramsKey])
   // تبسيط الرواتب (2026-09-15): مسيرات عكس الصرف والتكميلي لا تظهر في التقرير ولا تدخل مجاميعه ولا ملف التصدير
   const runs = (report?.runs ?? []).filter((run) => run.runType !== 'REVERSAL' && run.runType !== 'SUPPLEMENTARY')
   // «من تاريخ / إلى تاريخ»: المسيرات اللي فترتها بتتقاطع مع المدى — الافتراضي شهر الرواتب الجاري
@@ -185,8 +190,10 @@ function RunsTab() {
           <ExportButton table={report ? runsReportCsv({ ...report, runs: shownRuns }) : null} file={reportFileName('runs')} />
         </div>
       </div>
-      <div className="card">
+      <div className="card space-y-3">
         <DayRangeFilter idPrefix="payroll-runs-report" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
+        {/* الفرع ← الإدارة ← القسم ← الفريق */}
+        {org.element}
       </div>
       {error && <ErrorBanner message={error} />}
       {loading ? <Spinner /> : report && (

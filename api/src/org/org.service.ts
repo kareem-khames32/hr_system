@@ -7,8 +7,8 @@ import {
   NotFoundException,
 } from '@nestjs/common'
 import { InjectRepository } from '@nestjs/typeorm'
-import { EntityManager, Not, Repository } from 'typeorm'
-import { branchIdIn, inBranchScope, scopeWord } from '../auth/guards'
+import { EntityManager, In, Not, Repository } from 'typeorm'
+import { branchIdIn, inBranchScope, isEmptyBranchScope, scopeWord } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
 import { CostCenter } from '../assets/assets.entities'
 import { AttendanceService } from '../attendance/attendance.service'
@@ -41,6 +41,14 @@ const EXECUTIVE_HAS_NO_PARENT = '«الإدارة التنفيذية» فوق ك
 const EXECUTIVE_IS_ADMINISTRATION = '«الإدارة التنفيذية» نوعها «إدارة» دايمًا — مينفعش تتحول «قسم»'
 const MOVE_ADMINISTRATIONS = 'خلّي الإدارات دي رئيسية (من غير أب) الأول'
 const unitWord = (unit: Pick<Department, 'unitType'>) => (unit.unitType === 'ADMINISTRATION' ? 'إدارة' : 'قسم')
+
+// رد GET /org/filter-context — شجرة نطاق الحساب ومكان كل موظف فيها (أرقام بس، من غير أسماء موظفين ولا بيانات شخصية)
+export interface OrgFilterContext {
+  branches: Array<{ id: number; name: string }>
+  units: Array<{ id: number; name: string; branchId: number; parentId: number | null; unitType: DepartmentUnitType; isExecutive: boolean }>
+  teams: Array<{ id: number; name: string; departmentId: number; branchId: number }>
+  employees: Array<{ id: number; branchId: number | null; departmentId: number | null; teamId: number | null }>
+}
 
 @Injectable()
 export class OrgService {
@@ -508,6 +516,62 @@ export class OrgService {
     throw new BadRequestException(mode === 'explicit'
       ? `مينفعش تشيل «الإدارة التنفيذية» من «${executive.name}» وتحتها أقسام من فروع تانية زي «${child.name}» (${where}) — ${move}`
       : `مينفعش تعلّم قسم تاني «إدارة تنفيذية» و«${executive.name}» (الإدارة التنفيذية الحالية) تحتها أقسام من فروع تانية زي «${child.name}» (${where}) — ${move}`)
+  }
+
+  // ===== فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد (طلب المالك 30 سبتمبر) =====
+  // كل شاشة فيها موظفين بتفلتر بالشجرة دي ومكان كل موظف فيها — بنطاق فروع الحساب بس. الوحدات والفرق المفعّلة في الفروع المفعّلة جوه
+  // النطاق، والموظفين بكل حالاتهم (المنتهية خدمتهم والمؤرشفين كمان عشان الصفوف القديمة تتفلتر) برقمهم ومكانهم بس — من غير أسماء ولا
+  // أي بيانات شخصية. أي رقم برّه اللي راجع ما بيطلعش: أب الوحدة لو مش ظاهر (زي «الإدارة التنفيذية» في فرع برّه النطاق) بيبقى null،
+  // وقسم/فريق الموظف لو مش ظاهر بيبقى null — فمفيش اسم ولا رقم من فرع برّه النطاق.
+  async filterContext(scope: BranchScope): Promise<OrgFilterContext> {
+    if (isEmptyBranchScope(scope)) return { branches: [], units: [], teams: [], employees: [] }
+    const branches = await this.branches.find({
+      where: scope === null ? { isActive: true } : { isActive: true, id: branchIdIn(scope) },
+      select: { id: true, name: true },
+      order: { id: 'ASC' },
+    })
+    const branchIds = branches.map((b) => b.id)
+    const units = branchIds.length
+      ? await this.departments.find({
+          where: { isActive: true, branchId: In(branchIds) },
+          select: { id: true, name: true, branchId: true, parentId: true, unitType: true, isExecutive: true },
+          order: { id: 'ASC' },
+        })
+      : []
+    const unitById = new Map(units.map((u) => [u.id, u]))
+    const teams = units.length
+      ? await this.teams.find({
+          where: { isActive: true, departmentId: In([...unitById.keys()]) },
+          select: { id: true, name: true, departmentId: true },
+          order: { id: 'ASC' },
+        })
+      : []
+    const teamIds = new Set(teams.map((t) => t.id))
+    const employees = await this.employees.find({
+      where: scope === null ? {} : { branchId: branchIdIn(scope) },
+      select: { id: true, branchId: true, departmentId: true, teamId: true },
+      order: { id: 'ASC' },
+    })
+    const visible = (id: number | null | undefined, set: { has(id: number): boolean }) =>
+      id != null && set.has(Number(id)) ? Number(id) : null
+    return {
+      branches: branches.map((b) => ({ id: b.id, name: b.name })),
+      units: units.map((u) => ({
+        id: u.id,
+        name: u.name,
+        branchId: u.branchId,
+        parentId: visible(u.parentId, unitById),
+        unitType: u.unitType === 'ADMINISTRATION' || u.unitType === 'DEPARTMENT' ? u.unitType : u.isExecutive ? 'ADMINISTRATION' : 'DEPARTMENT',
+        isExecutive: u.isExecutive === true,
+      })),
+      teams: teams.map((t) => ({ id: t.id, name: t.name, departmentId: t.departmentId, branchId: unitById.get(t.departmentId)!.branchId })),
+      employees: employees.map((e) => ({
+        id: e.id,
+        branchId: e.branchId ?? null,
+        departmentId: visible(e.departmentId, unitById),
+        teamId: visible(e.teamId, teamIds),
+      })),
+    }
   }
 
   // ===== الفرق =====

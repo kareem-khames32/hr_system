@@ -11,6 +11,7 @@ import { dayRangeLabel } from '@/lib/payroll-month-range'
 import { defaultPayRecord, payRecordReady, type PayRecordDraft } from '@/components/payroll/PayrollPayRecordForm'
 import { PayrollDisbursementSummaryTable, PayrollDisbursementTable, PayrollDisbursementTotalsCards } from '@/components/payroll/PayrollDisbursementBoard'
 import { PAY_CHANNEL_LABELS, type PayrollPayChannel } from '@/lib/payroll-runs-api'
+import { useOrgFilter } from '@/components/OrgFilter'
 import {
   closePayrollDisbursement, DISBURSEMENT_CSV_HEADER, DISBURSEMENT_MODE_LABELS, DISBURSEMENT_STATE_LABELS, disbursementCsvRows, disbursementCsvTotals,
   disbursementFilterCount, disbursementUnpaidReasonReady, emptyDisbursementFilter, fetchDisbursementRuns, fetchDisbursementSummary, fetchDisbursementView,
@@ -43,6 +44,13 @@ export default function PayrollDisbursementPage() {
   const [summaryPeriod, setSummaryPeriod] = useState('')
   const request = useRef(0)
   const canMark = can('payroll.disburse')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد مكان قوائم الفرع/القسم/الفريق: بيتبعت للخادم مع باقي الفلاتر (العرض والإجماليات
+  // و«علّم المفلتر» كلها بنفس الفلتر هناك، على مكان الموظف في لقطة المسير)
+  const org = useOrgFilter({ disabled: busy })
+  const effective = useMemo<PayrollDisbursementFilter>(() => ({ ...filter, branchId: org.params.branchId ?? null, departmentId: null,
+    departmentIds: org.params.departmentIds ?? null, teamId: org.params.teamId ?? null }),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    [filter, org.paramsKey])
 
   useEffect(() => {
     fetchDisbursementRuns()
@@ -67,7 +75,7 @@ export default function PayrollDisbursementPage() {
       if (current === request.current) setLoading(false)
     }
   }, [])
-  useEffect(() => { if (runId != null) load(runId, filter) }, [runId, filter, load])
+  useEffect(() => { if (runId != null) load(runId, effective) }, [runId, effective, load])
 
   // البحث بمهلة قصيرة عشان مايبعتش للخادم مع كل حرف
   useEffect(() => {
@@ -108,13 +116,13 @@ export default function PayrollDisbursementPage() {
       setBusy(false)
     }
   }
-  const toggle = (row: PayrollDisbursementRow) => act(() => markDisbursement(runId!, { itemIds: [row.itemId], paid: row.state !== 'PAID', note }, filter),
+  const toggle = (row: PayrollDisbursementRow) => act(() => markDisbursement(runId!, { itemIds: [row.itemId], paid: row.state !== 'PAID', note }, effective),
     () => row.state === 'PAID' ? `اتلغت علامة «${row.fullName}»` : `اتعلّم «${row.fullName}» تم الصرف`)
   const markFiltered = (paid: boolean) => {
     if (!view) return
     const expectedCount = paid ? view.bulk.markPaid : view.bulk.markUnpaid
     if (!expectedCount) return
-    return act(() => markDisbursementFiltered(runId!, { paid, note, expectedCount }, filter), changed => paid ? `اتعلّم ${changed} موظف تم الصرف` : `اتلغت علامة ${changed} موظف`)
+    return act(() => markDisbursementFiltered(runId!, { paid, note, expectedCount }, effective), changed => paid ? `اتعلّم ${changed} موظف تم الصرف` : `اتلغت علامة ${changed} موظف`)
   }
   const closeRun = async () => {
     if (!view || busy || !payRecordReady(payRecord)) return
@@ -123,7 +131,7 @@ export default function PayrollDisbursementPage() {
       await closePayrollDisbursement(view.run.id, { channel: payRecord.channel as PayrollPayChannel, reference: payRecord.reference, unpaidReason })
       setDone('اتقفل الصرف: المسير بقى مصروف، والإضافي وأقساط السلف اتقفلوا')
       setRuns(await fetchDisbursementRuns())
-      await load(view.run.id, filter)
+      await load(view.run.id, effective)
     } catch (cause) {
       setError(messageOf(cause, 'تعذر إقفال الصرف'))
     } finally {
@@ -132,7 +140,7 @@ export default function PayrollDisbursementPage() {
   }
 
   const periods = useMemo(() => [...new Set(runs.map(run => run.period))].sort().reverse(), [runs])
-  const filterCount = disbursementFilterCount({ ...filter, search: searchText })
+  const filterCount = disbursementFilterCount({ ...effective, search: searchText })
   const leftover = view ? view.totals.unpaid.count : 0
   const needsReason = !!view && view.run.mode === 'PER_EMPLOYEE' && leftover > 0
   const exportCsv = () => view && downloadCsv(`صرف-الرواتب-${view.run.period}-${view.run.id}.csv`, DISBURSEMENT_CSV_HEADER,
@@ -189,7 +197,7 @@ export default function PayrollDisbursementPage() {
                 <div className="flex items-center gap-3 text-sm text-gray-600">
                   <span>ظاهر <b>{view.counts.shown}</b> من {view.counts.all} موظف</span>
                   <button type="button" className="btn-secondary text-xs px-2 py-1 flex items-center gap-1 disabled:opacity-50" disabled={busy || filterCount === 0}
-                    onClick={() => { setFilter(emptyDisbursementFilter()); setSearchText('') }}><X size={13} />مسح الفلاتر</button>
+                    onClick={() => { setFilter(emptyDisbursementFilter()); setSearchText(''); org.reset() }}><X size={13} />مسح الفلاتر</button>
                 </div>
               </div>
               <div className="flex flex-wrap items-end gap-3">
@@ -200,17 +208,10 @@ export default function PayrollDisbursementPage() {
                     <input type="text" className="input w-full pr-9" placeholder="دوّر بالاسم أو الكود..." value={searchText} onChange={event => setSearchText(event.target.value)} />
                   </span>
                 </label>
-                {([['branchId', 'الفرع', 'كل الفروع', view.facets.branches], ['departmentId', 'القسم', 'كل الأقسام', view.facets.departments],
-                  ['teamId', 'الفريق', 'كل الفرق', view.facets.teams]] as const).map(([key, title, all, options]) => (
-                  <label key={key} className="flex flex-col gap-1 text-sm">
-                    <span className="font-medium text-gray-700">{title}</span>
-                    <select className="input w-44" value={filter[key] ?? ''} disabled={busy}
-                      onChange={event => setFilter(current => ({ ...current, [key]: event.target.value ? Number(event.target.value) : null }))}>
-                      <option value="">{all}</option>
-                      {options.map(option => <option key={option.id} value={option.id}>{option.name}</option>)}
-                    </select>
-                  </label>
-                ))}
+                <div className="flex flex-col gap-1 text-sm min-w-0" data-disbursement-org-filter>
+                  <span className="font-medium text-gray-700">الفرع ← الإدارة ← القسم ← الفريق</span>
+                  {org.element}
+                </div>
                 <label className="flex flex-col gap-1 text-sm">
                   <span className="font-medium text-gray-700">طريقة الصرف</span>
                   <select className="input w-40" value={filter.payMethod} disabled={busy} onChange={event => setFilter(current => ({ ...current, payMethod: event.target.value }))}>

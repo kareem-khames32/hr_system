@@ -1,8 +1,9 @@
 import { Controller, ForbiddenException, Get, Query, UseGuards } from '@nestjs/common'
 import { Transform, Type } from 'class-transformer'
-import { IsBoolean, IsInt, IsOptional, Matches, Min } from 'class-validator'
+import { ArrayMaxSize, IsArray, IsBoolean, IsInt, IsOptional, Matches, Min } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
+import { ORG_FILTER_MAX_UNITS } from '../org/org-filter-params'
 import { CostCenterReportService } from './cost-center-report.service'
 
 const toBoolean = ({ value }: { value: unknown }) =>
@@ -14,6 +15,15 @@ export class CostCenterReportQueryDto {
 
   @IsOptional() @Type(() => Number) @IsInt({ message: 'رقم الفرع غير صالح' }) @Min(1)
   branchId?: number
+
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد: الإدارة/القسم المختار بأقسامه الفرعية جوه فرعه («3,4,5»)، والفريق
+  @IsOptional() @Transform(({ value }) => (typeof value === 'string' ? value.split(',').map((part) => Number(part.trim())) : value))
+  @IsArray({ message: 'الأقسام المختارة غير صالحة' }) @ArrayMaxSize(ORG_FILTER_MAX_UNITS, { message: 'الأقسام المختارة كتير' })
+  @IsInt({ each: true, message: 'الأقسام المختارة غير صالحة' }) @Min(1, { each: true, message: 'الأقسام المختارة غير صالحة' })
+  departmentIds?: number[]
+
+  @IsOptional() @Type(() => Number) @IsInt({ message: 'رقم الفريق غير صالح' }) @Min(1)
+  teamId?: number
 
   @IsOptional() @Transform(toBoolean) @IsBoolean({ message: 'إظهار المسودات يقبل true أو false فقط' })
   includeDraft?: boolean
@@ -35,6 +45,7 @@ export class CostCenterReportController {
     }
     // الفرع المطلوب، أو فرع الحساب لو فرع واحد (زي الأول بالحرف)، وإلا null + نطاق فروعه كله (branchScope)
     const branchId = query.branchId ?? (scope !== null && scope.length === 1 ? scope[0] : null)
-    return this.service.report({ period: query.period, branchId, branchScope: scope, includeDraft: query.includeDraft === true })
+    return this.service.report({ period: query.period, branchId, branchScope: scope, includeDraft: query.includeDraft === true,
+      departmentIds: query.departmentIds?.length ? [...new Set(query.departmentIds)] : null, teamId: query.teamId ?? null })
   }
 }

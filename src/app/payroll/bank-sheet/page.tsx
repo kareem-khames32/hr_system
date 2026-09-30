@@ -7,6 +7,8 @@ import { fetchBankSheet, fetchPayrollRuns, type ApiBankSheet, type ApiPayrollRun
 import { downloadCsv } from '@/lib/csv'
 import { formatMoney } from '@/lib/money'
 import { dayRangeLabel } from '@/lib/payroll-month-range'
+import { useOrgFilter } from '@/components/OrgFilter'
+import { filterBankSheet } from '@/lib/bank-sheet-filter'
 
 // كشف البنوك (قرار المالك): لكل مسير — مين بيتحوله كام على أي بنك، وكام نقدي، وإجمالي كل بنك.
 // حساب الفرع بيشوف مسيرات وموظفي فرعه بس (الخادم بيفلتر).
@@ -53,7 +55,10 @@ function downloadExcel(sheet: ApiBankSheet) {
 export default function PayrollBankSheetPage() {
   const [runs, setRuns] = useState<ApiPayrollRun[]>([])
   const [runId, setRunId] = useState('')
-  const [sheet, setSheet] = useState<ApiBankSheet | null>(null)
+  const [fullSheet, setSheet] = useState<ApiBankSheet | null>(null)
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد: الكشف بصفوف الفلتر بس، وكل إجمالياته وتصديره منها
+  const org = useOrgFilter()
+  const sheet = useMemo(() => (fullSheet && org.active ? filterBankSheet(fullSheet, org.matches) : fullSheet), [fullSheet, org.active, org.matches])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -106,12 +111,16 @@ export default function PayrollBankSheetPage() {
           </div>
         </div>
 
-        <div className="card">
-          <label className="label">المسير</label>
-          <select className="input max-w-md" value={runId} onChange={(e) => setRunId(e.target.value)}>
-            {runs.length === 0 && <option value="">مفيش مسيرات محسوبة</option>}
-            {runs.map(run => <option key={run.id} value={run.id}>{runLabel(run)} — {run.period}{run.startDate && run.endDate ? ` (${dayRangeLabel({ from: String(run.startDate).slice(0, 10), to: String(run.endDate).slice(0, 10) })})` : ''}</option>)}
-          </select>
+        <div className="card space-y-3">
+          <div>
+            <label className="label">المسير</label>
+            <select className="input max-w-md" value={runId} onChange={(e) => setRunId(e.target.value)}>
+              {runs.length === 0 && <option value="">مفيش مسيرات محسوبة</option>}
+              {runs.map(run => <option key={run.id} value={run.id}>{runLabel(run)} — {run.period}{run.startDate && run.endDate ? ` (${dayRangeLabel({ from: String(run.startDate).slice(0, 10), to: String(run.endDate).slice(0, 10) })})` : ''}</option>)}
+            </select>
+          </div>
+          {/* الفرع ← الإدارة ← القسم ← الفريق */}
+          {org.element}
         </div>
 
         {error && (
@@ -206,7 +215,7 @@ export default function PayrollBankSheetPage() {
             )}
 
             <div className="card overflow-x-auto">
-              {empty ? <p className="text-sm text-gray-400">مفيش موظفين في المسير ده</p> : (
+              {empty ? <p className="text-sm text-gray-400">{org.active ? 'مفيش موظفين من المسير ده في الفلتر' : 'مفيش موظفين في المسير ده'}</p> : (
                 <table className="w-full">
                   <thead className="bg-gray-50">
                     <tr>

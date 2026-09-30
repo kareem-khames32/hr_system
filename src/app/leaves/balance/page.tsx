@@ -5,6 +5,7 @@ import { localToday } from '@/lib/dates'
 import { useLeaveCatalog } from '@/lib/leave-catalog'
 import { Fragment, useEffect, useRef, useState } from 'react'
 import { MainLayout } from '@/components/layout'
+import { useOrgFilter } from '@/components/OrgFilter'
 import {
   Search,
   Calendar,
@@ -71,7 +72,8 @@ export default function LeaveBalancesPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
-  const [filterBranch, setFilterBranch] = useState('')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد — بيضيّق الأرصدة كلها (الأرقام والتصدير كمان)
+  const org = useOrgFilter()
   const [expanded, setExpanded] = useState<number | null>(null)
   const [adjustingEmployeeId, setAdjustingEmployeeId] = useState<number | null>(null)
   const [adjustType, setAdjustType] = useState('')
@@ -180,23 +182,24 @@ export default function LeaveBalancesPage() {
   const depName = (id?: number) =>
     departments.find((d) => d.id === id)?.name ?? '-'
 
-  const filtered = rows.filter(
+  // أرصدة موظفي الفرع/الإدارة/القسم/الفريق المختار — الأرقام والجدول والتصدير منها
+  const orgRows = rows.filter((r) => org.matches(r.emp.id))
+  const filtered = orgRows.filter(
     (r) =>
-      (r.emp.fullName.includes(searchQuery) ||
-        r.emp.employeeCode.toLowerCase().includes(searchQuery.toLowerCase())) &&
-      (!filterBranch || String(r.emp.branchId) === filterBranch)
+      r.emp.fullName.includes(searchQuery) ||
+      r.emp.employeeCode.toLowerCase().includes(searchQuery.toLowerCase())
   )
 
-  const balanceTypes = Array.from(new Set(rows.flatMap(row => row.balances.map(balance => balance.balanceType)))).sort()
+  const balanceTypes = Array.from(new Set(orgRows.flatMap(row => row.balances.map(balance => balance.balanceType)))).sort()
   const balanceLabel = (source: string) => leaveCatalog.types.find(type => type.balanceSource?.toLowerCase() === source.toLowerCase())?.nameAr ?? ({ annual: 'الرصيد السنوي', sick: 'الرصيد المرضي', casual: 'الرصيد العارض' } as Record<string, string>)[source] ?? source
   const columnCount = 2 + balanceTypes.length * 3
   const stats = {
-    totalRemaining: rows.reduce((s, r) => s + remainingOf(balanceOf(r, 'annual')), 0),
-    expiring: rows.filter((r) => expiringSoon(balanceOf(r, 'annual'))).length,
-    lowBalance: rows.filter(
+    totalRemaining: orgRows.reduce((s, r) => s + remainingOf(balanceOf(r, 'annual')), 0),
+    expiring: orgRows.filter((r) => expiringSoon(balanceOf(r, 'annual'))).length,
+    lowBalance: orgRows.filter(
       (r) => balanceOf(r, 'annual') && remainingOf(balanceOf(r, 'annual')) < 5
     ).length,
-    totalOpening: rows.reduce((s, r) => s + openingAvailable(balanceOf(r, 'annual')), 0),
+    totalOpening: orgRows.reduce((s, r) => s + openingAvailable(balanceOf(r, 'annual')), 0),
   }
 
   return (
@@ -276,17 +279,17 @@ export default function LeaveBalancesPage() {
           </div>
         )}
         {/* موظفون تعذّر حساب أرصدتهم على السيرفر — مش «بلا رصيد» */}
-        {rows.some((r) => r.error) && (
+        {orgRows.some((r) => r.error) && (
           <div className="bg-red-50 text-red-700 rounded-xl p-4 flex items-center gap-2">
             <AlertTriangle size={18} />
-            تعذّر حساب رصيد {rows.filter((r) => r.error).length} موظف — السبب ظاهر في صف كل موظف
+            تعذّر حساب رصيد {orgRows.filter((r) => r.error).length} موظف — السبب ظاهر في صف كل موظف
           </div>
         )}
 
         {/* Filters */}
         <div className="card p-4">
-          <div className="flex items-center gap-3">
-            <div className="relative flex-1">
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
+            <div className="relative flex-1 min-w-[220px]">
               <Search
                 size={18}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
@@ -299,18 +302,8 @@ export default function LeaveBalancesPage() {
                 onChange={(e) => setSearchQuery(e.target.value)}
               />
             </div>
-            <select
-              value={filterBranch}
-              onChange={(e) => setFilterBranch(e.target.value)}
-              className="input w-56"
-            >
-              <option value="">كل الفروع</option>
-              {branches.map((b) => (
-                <option key={b.id} value={b.id}>
-                  {b.name}
-                </option>
-              ))}
-            </select>
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
           </div>
         </div>
 

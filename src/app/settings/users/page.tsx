@@ -45,6 +45,7 @@ import {
   updateUser,
 } from '@/lib/api'
 import { EmployeePicker } from '@/components/EmployeePicker'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 const MIN_PASSWORD = 8
 
@@ -145,6 +146,8 @@ export default function UsersPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [filterRole, setFilterRole] = useState('all')
   const [filterStatus, setFilterStatus] = useState('all')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد
+  const org = useOrgFilter()
   const [showModal, setShowModal] = useState(false)
   const [modalError, setModalError] = useState<string | null>(null)
   const [saving, setSaving] = useState(false)
@@ -361,7 +364,11 @@ export default function UsersPage() {
   const formatLastLogin = (lastLoginAt?: string) =>
     lastLoginAt ? lastLoginAt.replace('T', ' ').slice(0, 16) : '-'
 
-  const filteredUsers = users.filter((user) => {
+  // الفلتر الموحد: المستخدم المربوط بموظف بمكان موظفه، والمش مربوط بفرعه الأصلي بس (اختيار إدارة أو قسم أو فريق بيخفيه) —
+  // الأرقام اللي فوق والجدول منهم
+  const orgUsers = users.filter((user) =>
+    user.employeeId ? org.matches(user.employeeId) : org.matchesPlacement({ branchId: user.branchId ?? null }))
+  const filteredUsers = orgUsers.filter((user) => {
     const term = searchTerm.trim().toLowerCase()
     const matchesSearch =
       !term || user.displayName.toLowerCase().includes(term) || user.email.toLowerCase().includes(term)
@@ -371,10 +378,10 @@ export default function UsersPage() {
   })
 
   const stats = {
-    total: users.length,
-    active: users.filter((u) => statusOf(u) === 'active').length,
-    inactive: users.filter((u) => statusOf(u) === 'inactive').length,
-    pending: users.filter((u) => statusOf(u) === 'pending').length,
+    total: orgUsers.length,
+    active: orgUsers.filter((u) => statusOf(u) === 'active').length,
+    inactive: orgUsers.filter((u) => statusOf(u) === 'inactive').length,
+    pending: orgUsers.filter((u) => statusOf(u) === 'pending').length,
   }
 
   const openAddModal = () => {
@@ -668,8 +675,8 @@ export default function UsersPage() {
 
         {/* Filters */}
         <div className="card">
-          <div className="flex items-center gap-4">
-            <div className="relative flex-1">
+          <div className="flex flex-wrap items-center gap-4 min-w-0">
+            <div className="relative flex-1 min-w-[220px]">
               <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
               <input
                 type="text"
@@ -679,10 +686,13 @@ export default function UsersPage() {
                 onChange={(e) => setSearchTerm(e.target.value)}
               />
             </div>
+            {/* الفرع ← الإدارة ← القسم ← الفريق (بمكان الموظف المربوط بالحساب) */}
+            {org.element}
             <select
               value={filterRole}
               onChange={(e) => setFilterRole(e.target.value)}
-              className="input w-48"
+              className="input w-full sm:w-48"
+              aria-label="الدور"
             >
               <option value="all">كل الأدوار</option>
               {roles.map((role) => (
@@ -694,7 +704,8 @@ export default function UsersPage() {
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="input w-40"
+              className="input w-full sm:w-40"
+              aria-label="الحالة"
             >
               <option value="all">كل الحالات</option>
               <option value="active">نشط</option>

@@ -107,6 +107,24 @@ export const closeLeaveYear = (year: string, branchId?: number | null) =>
   apiFetch<{ fromPeriod: string; toPeriod: string; created: number; ensured: number; closingEnsured: number; maxCarry: number | null; summary: YearEndTotals }>(
     `/leaves/year-end/${year}/close`, { method: 'POST', body: JSON.stringify(branchId ? { branchId } : {}) })
 
+/**
+ * إجماليات صفوف معيّنة بنفس حساب الخادم (previewOf في leave-year-end.service): الصف اللي فيه خطأ مابيتحسبش، وكل رقم بيتقرّب لقرشين
+ * مع كل جمع، والمقفول «اتقفل» والخالص من غير إقفال «مستني الإقفال». للشاشة لما الفلتر الموحد يضيّق الصفوف (الإقفال نفسه على الهدف كله).
+ */
+export function yearEndTotalsOf(rows: YearEndRow[]): YearEndTotals {
+  const cents = (value: number) => Math.round(value * 100) / 100
+  const keys = ['entitledTotal', 'used', 'settled', 'remaining', 'carried', 'lapsed', 'settleable'] as const
+  const totals: YearEndTotals = { entitledTotal: 0, used: 0, settled: 0, remaining: 0, carried: 0, lapsed: 0, settleable: 0, employees: 0, closed: 0, pending: 0 }
+  for (const row of rows) {
+    if (row.error) continue
+    for (const key of keys) totals[key] = cents(totals[key] + Number(row[key] ?? 0))
+    totals.employees++
+    if (row.closed) totals.closed++
+    else if (row.ended) totals.pending++
+  }
+  return totals
+}
+
 export const SETTLEMENT_MODE_LABELS: Record<LeaveSettlementMode, string> = {
   PAID: 'اتصرف بدل',
   ZEROED: 'اتصفّر',

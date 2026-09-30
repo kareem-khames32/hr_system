@@ -19,6 +19,7 @@ import { Employee } from '../employees/employee.entity'
 import { Leave, LeaveType } from './entities/leave.entities'
 import { LeaveBalancesService } from './leave-balances.service'
 import { leaveView } from '../common/leave-contract'
+import { orgFilterIsEmpty, orgFilterQb, parseOrgFilter } from '../org/org-filter-params'
 
 // سجل الإجازات (الوجهة الدائمة) — قراءة بنطاق الفرع
 @UseGuards(JwtAuthGuard, RolesGuard)
@@ -50,8 +51,13 @@ export class LeavesController {
     @Query('q') q?: string, // اسم الموظف أو كوده
     @Query('page') pageRaw?: string,
     @Query('pageSize') pageSizeRaw?: string,
-    @Query('leaveTypeCode') leaveTypeCode?: string
+    @Query('leaveTypeCode') leaveTypeCode?: string,
+    // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد (org-filter-params) — تضييق فوق نطاق الفرع، على الصفحة والإحصاءات
+    @Query('branchId') branchId?: string,
+    @Query('departmentIds') departmentIds?: string,
+    @Query('teamId') teamId?: string
   ) {
+    const org = parseOrgFilter({ branchId, departmentIds, teamId })
     if (leaveTypeCode && leaveType && leaveTypeCode !== leaveType) {
       throw new BadRequestException('leaveTypeCode وleaveType يشيران إلى نوعين مختلفين')
     }
@@ -77,6 +83,11 @@ export class LeavesController {
       if (scope !== null) {
         const [inScope, params] = branchScopeQb('e.branchId', scope)
         qb.andWhere(`l.employeeId IN (SELECT e.id FROM employees e WHERE ${inScope})`, params)
+      }
+      if (!orgFilterIsEmpty(org)) {
+        const clauses = orgFilterQb(org, { branch: 'oe.branchId', department: 'oe.departmentId', team: 'oe.teamId' })
+        qb.andWhere(`l.employeeId IN (SELECT oe.id FROM employees oe WHERE ${clauses.map(([clause]) => clause).join(' AND ')})`,
+          Object.assign({}, ...clauses.map(([, params]) => params)))
       }
       if (month) {
         const [y, m] = month.split('-').map(Number)
