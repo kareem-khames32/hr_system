@@ -77,8 +77,9 @@ const fmtDateTime = (v?: string | null) =>
 export default function OffboardingCasePage() {
   const params = useParams<{ id: string }>()
   const caseId = Number(params.id)
-  const currency = useCurrency()
   const [det, setDet] = useState<ApiOffboardingCase | null>(null)
+  // العملة تبع فرع الموظف (قرار المالك 30 سبتمبر)
+  const currency = useCurrency(det?.employee?.branchId)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   // أخطاء الإجراءات (حارس العهدة/الطرف الخطأ) تُعرض نصاً كما وردت من الباك

@@ -396,6 +396,10 @@ export default function EmployeesBulkUpdatePage() {
                 {preview.ignoredColumns.length > 0 && (
                   <p className="text-amber-700">أعمدة مش معروفة واتجاهلت: {preview.ignoredColumns.join('، ')}</p>
                 )}
+                {/* العملة تبع الفرع (قرار المالك 30 سبتمبر): مالهاش عمود في التحديث الجماعي */}
+                {preview.ignoredColumns.some(header => /^(ال)?عمل[ةه]$|^currency$/i.test(header.trim())) && (
+                  <p className="text-amber-700">عمود «العملة» اتجاهل: عملة الموظف بتتبع فرعه (دولة الفرع من «الإعدادات ← الفروع») ومابتتغيرش من الملف.</p>
+                )}
               </div>
 
               <div className="grid grid-cols-2 md:grid-cols-4 gap-3">

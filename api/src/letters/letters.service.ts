@@ -17,6 +17,7 @@ import { LetterRenderer } from './letter-renderer.service'
 import { resolveLetterContent } from './letter-template-content'
 import { IssuedLetterSnapshot } from './letter-template.entities'
 import { localDateOf } from '../attendance/attendance.service'
+import { readBranchCurrency } from '../org/branch-currency-db'
 
 @Injectable()
 export class LettersService {
@@ -45,6 +46,8 @@ export class LettersService {
       // نفس فحص التقديم (letter-issuance) — البيانات قد تتغير بين التقديم وآخر اعتماد
       const { company, salary } = await assertLetterIssuable(em, employee.id)
       const date = localDateOf(new Date())
+      // عملة الراتب في الخطاب = عملة فرع الموظف (قرار المالك 30 سبتمبر: العملة تبع الفرع)
+      const currency = await readBranchCurrency(em, employee.branchId)
       const values: Record<string, string> = {
         'employee.fullName': employee.fullName, 'employee.employeeCode': employee.employeeCode,
         'employee.jobTitle': employee.jobTitle, 'employee.joinDate': employee.joinDate,
@@ -53,7 +56,7 @@ export class LettersService {
         // «رقم الهوية أو الجواز»: الهوية لو موجودة، وإلا الجواز
         'employee.identityNumber': employee.nationalId?.trim() || employee.passportNo?.trim() || '', 'company.name': company['company.name'],
         'company.address': company['company.address'] || '', 'company.phone': company['company.phone'] || '',
-        date, 'request.ref': `REQ-${req.id}`, purpose, 'salary.total': salary.toFixed(2), 'salary.currency': employee.currency || 'SAR',
+        date, 'request.ref': `REQ-${req.id}`, purpose, 'salary.total': salary.toFixed(2), 'salary.currency': currency,
       }
       snapshot = { content: resolveLetterContent(revision.content, values), companyName: company['company.name'], companyNameEn: company['company.name_en'] || '', companyAddress: company['company.address'] || '', companyPhone: company['company.phone'] || '', commercialRegister: company['company.commercial_register'] || '', issuedDate: date, requestRef: `REQ-${req.id}` }
       templateId = template.id

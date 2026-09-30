@@ -249,12 +249,15 @@ test('الخطوة 13: إنشاء الموظف يوثّق أجر التعيين 
   for (const [n, extra, wanted] of [
     [6, { salaryEffectivePayrollPeriod: shiftPayrollPeriod(current, -1) }, 'EMPLOYEE_SALARY_START_BEFORE_HIRE'],
     [7, { salaryEffectivePayrollPeriod: shiftPayrollPeriod(current, 1) }, 'EMPLOYEE_SALARY_START_TOO_LATE'],
-    [8, { currency: 'AED' }, 'EMPLOYEE_SALARY_CURRENCY_REQUIRED'],
   ]) {
     const rejected = await create(n, extra)
     assert.equal(rejected.status, 400, JSON.stringify(rejected.body)); assert.equal(rejected.body.code, wanted)
     assert.equal(await repo('Employee').countBy({ employeeCode: codeOf(n) }), 0, `${wanted} يرجّع إنشاء الملف كله`)
   }
+  // العملة تبع الفرع (قرار المالك 30 سبتمبر): العملة المبعوتة (حتى AED) بتتجاهل، وأجر التعيين بيتوثّق بعملة الفرع (من غير دولة = عملة النظام)
+  const ignoredCurrency = expectStatus(await create(8, { currency: 'AED' }), 201)
+  assert.equal((await repo('Employee').findOneByOrFail({ id: ignoredCurrency.id })).currency, 'SAR')
+  assert.equal((await history(ignoredCurrency)).segments[0].currency, 'SAR')
   assert.equal(await repo('Employee').countBy({ employeeCode: codeOf(5) }), 0)
   assert.equal((await create(10, { salaryEffectivePayrollPeriod: '2026-9' })).status, 400)
 

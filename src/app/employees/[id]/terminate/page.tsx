@@ -9,7 +9,7 @@ import {
   fetchEmployee, fetchOffboardingPreview, createOffboardingCase, fetchTerminationReasons,
   type ApiEmployee, type ApiOffboardingPreview, type ApiTerminationReason,
 } from '@/lib/api'
-import { currencyLabel, useCurrency } from '@/lib/currency'
+import { useCurrency } from '@/lib/currency'
 import { employeeStatusLabels, custodyStatusLabels } from '@/lib/status-labels'
 import { localToday } from '@/lib/dates'
 // نفس التسميات تظهر لاحقاً في «تفاصيل القرار» بصفحة ملف إنهاء الخدمة — والمخصص المفعّل من «سياسات النظام» بعدها
@@ -19,7 +19,6 @@ export default function TerminateEmployeePage() {
   const params = useParams<{ id: string }>()
   const router = useRouter()
   const employeeId = Number(params.id)
-  const systemCurrency = useCurrency()
   const [employee, setEmployee] = useState<ApiEmployee | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -35,7 +34,8 @@ export default function TerminateEmployeePage() {
   const [previewing, setPreviewing] = useState(false)
   const [saving, setSaving] = useState(false)
   const [createdId, setCreatedId] = useState<number | null>(null)
-  const currency = employee?.currency ? currencyLabel(employee.currency) : systemCurrency
+  // العملة تبع فرع الموظف (قرار المالك 30 سبتمبر)
+  const currency = useCurrency(employee?.branchId)
   const previewMatches = preview?.employeeId === employeeId && preview.reason === reason && preview.lastWorkingDay === lastWorkingDay
 
   useEffect(() => {

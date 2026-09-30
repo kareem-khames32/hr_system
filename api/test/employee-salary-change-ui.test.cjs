@@ -152,11 +152,12 @@ test('previous salary confirmation displays exact old values and rejects incompl
  }
 })
 
-test('context failure SSR locks seven salaries (six + work pressure) and currency while preserving bank edits and explaining recovery',()=>{
+test('context failure SSR locks seven salaries (six + work pressure) with the currency read-only by branch while preserving bank edits and explaining recovery',()=>{
  const html=financialStep({salaryChangeContext:null,salaryContextError:'تعذر تحميل الأجر من الخدمة.'})
  assert.match(html,/يمكنك حفظ البيانات غير المالية/);assert.match(html,/تعذر تحميل الأجر من الخدمة/)
  assert.equal((html.match(/<input[^>]*inputMode="decimal"[^>]*disabled=""/g)??[]).length,7)
- assert.match(html,/<select[^>]*disabled=""/)
+ // العملة تبع الفرع (قرار المالك 30 سبتمبر): سطر قراءة بس، مش خانة اختيار
+ assert.doesNotMatch(html,/<option value="(SAR|EGP)"/);assert.match(html,/العملة: /)
  assert.match(html,/<input class="input" list="employee-bank-options"/)
  assert.doesNotMatch(html,/موعد تطبيق تعديل الراتب/)
 })

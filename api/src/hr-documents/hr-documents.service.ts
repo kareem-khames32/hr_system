@@ -16,6 +16,7 @@ import { storedPath } from '../files/storage'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { LetterRenderer } from '../letters/letter-renderer.service'
 import { localDateOf } from '../attendance/attendance.service'
+import { readBranchCurrency } from '../org/branch-currency-db'
 import { HrDocumentCategory, HrDocumentSnapshot, HrDocumentTemplate, HrDocumentTemplateRevision, HrIssuedDocument } from './hr-document.entities'
 import { HR_DOCUMENT_VARIABLES, hrContentVariables, resolveHrContent, validateHrContent, validateHrFields, validateHrValues } from './hr-document-content'
 import { assertHrDocumentAccess, assertHrDocumentFileAccess } from './hr-document-access'
@@ -172,7 +173,8 @@ export class HrDocumentsService {
           if (amount == null || !Number.isFinite(Number(amount)) || Number(amount) < 0) throw new BadRequestException(`بيانات الراتب غير مكتملة أو غير صالحة: salary.${key}`)
           values[`salary.${key}`] = Number(amount).toFixed(2)
         }
-        values['salary.currency'] = employee.currency || ''
+        // عملة فرع الموظف (قرار المالك 30 سبتمبر: العملة تبع الفرع) — مش العمود المحفوظ في الملف
+        values['salary.currency'] = await readBranchCurrency(em, employee.branchId)
       }
     }
     for (const key of tokens) if (!key.startsWith('custom.') && !values[key]?.trim()) {

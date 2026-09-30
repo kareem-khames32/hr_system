@@ -2,7 +2,7 @@
 import { DISPLAY_LOCALE, localToday } from '@/lib/dates'
 import { formatMoney } from '@/lib/money'
 
-import { currencyLabel } from '@/lib/currency'
+import { currencyLabel, currencyName, useCurrencyContext } from '@/lib/currency'
 import { employeeStatusLabels as statusLabels } from '@/lib/status-labels'
 import { loadEmployeeAddDraft, saveEmployeeAddDraft, clearEmployeeAddDraft, type EmployeeAddDraft } from '@/lib/employee-add-draft'
 import { buildEmployeeSalaryChange, employeeCreateSalaryPeriod, employeeSalaryChanged, employeeSalaryEditPayload, employeeSalaryTotal, employeePreviousSalaryCanBeConfirmed, fetchEmployeeSalaryStartContext, payrollMonthExplanation, type EmployeeSalaryChangeCommand, type EmployeeSalaryChangeContext, type EmployeeSalaryStartContext } from '@/lib/employee-salary-change-api'
@@ -531,6 +531,11 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
   })
   const salaryLocked = mode === 'edit' && !salaryChangeContext
   const salaryChanged = mode === 'edit' && !!salaryChangeContext && employeeSalaryChanged(salaryChangeContext, form)
+  // العملة تبع الفرع (قرار المالك 30 سبتمبر): قراءة بس — عملة الفرع المختار، والخادم بيسجل تغيير الأجر بيها. ملف قديم من غير عملة
+  // مايوقفش تغيير الأجر (بيتبعت بعملة الفرع)، والتعديل غير المالي مابيلمسش العملة المحفوظة
+  const currencyContext = useCurrencyContext()
+  const branchCurrencyCode = form.branchId ? currencyContext?.branches.find((branch) => branch.id === Number(form.branchId))?.currency ?? '' : ''
+  const salaryForm = salaryChanged && !['SAR', 'EGP'].includes(form.currency) && branchCurrencyCode ? { ...form, currency: branchCurrencyCode } : form
   const [draftUserId, setDraftUserId] = useState<number | null>(null)
   const [sessionDraft, setSessionDraft] = useState<EmployeeAddDraft | null>(null)
   const [draftError, setDraftError] = useState('')
@@ -904,7 +909,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     if (form.recruitmentSource) payload.recruitmentSource = form.recruitmentSource
     if (form.gradeId) payload.gradeId = Number(form.gradeId)
     if (form.workLocation.trim()) payload.workLocation = form.workLocation.trim()
-    if (mode === 'add' && form.currency) payload.currency = form.currency
+    // العملة مابتتبعتش: الخادم بيحط عملة الفرع
     if (mode === 'add') {
       const salaryPeriod = employeeCreateSalaryPeriod(salaryStart, createSalaryPeriod, form)
       if (salaryPeriod) payload.salaryEffectivePayrollPeriod = salaryPeriod
@@ -942,7 +947,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
     }
     if (mode === 'add') return payload
     const employeePayload = employeeCalendarPayload(payload, initial?.branchId ?? '', form.branchId, calendarContext, orgChangeEvidence(), calendarInitialConfirmation)
-    return employeeSalaryEditPayload(employeePayload, salaryChangeContext, form, salaryEvidence)
+    return employeeSalaryEditPayload(employeePayload, salaryChangeContext, salaryForm, salaryEvidence)
   }
 
   const handleSubmit = async () => {
@@ -971,7 +976,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
   // تحقق الحقول الإجبارية لكل خطوة قبل السماح بالتالي
   const stepIssue = (step: number): string | null => {
     if (step === 3 && salaryChanged && salaryChangeContext) {
-      try { buildEmployeeSalaryChange(salaryChangeContext, form, salaryEvidence) }
+      try { buildEmployeeSalaryChange(salaryChangeContext, salaryForm, salaryEvidence) }
       catch (cause) { return cause instanceof Error ? cause.message : 'راجع بيانات تغيير الأجر.' }
     }
     if (step === 3 && mode === 'add') {
@@ -1963,16 +1968,11 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <label className="label">الراتب الأساسي{mode === 'add' ? ' *' : ''}</label>
                   <input type={mode === 'edit' ? 'text' : 'number'} inputMode="decimal" disabled={salaryLocked} className="input disabled:opacity-50" placeholder="10000" dir="ltr" value={form.basicSalary} onChange={(e) => setField('basicSalary', e.target.value)} />
                 </div>
-                <div>
-                  <label className="label">العملة</label>
-                  <select className="input disabled:opacity-50" disabled={salaryLocked} value={form.currency} onChange={(e) => setField('currency', e.target.value)}>
-                    {mode === 'edit' && <option value="">غير محددة — اختر عند تغيير الأجر</option>}
-                    {mode === 'edit' && form.currency && !['SAR', 'EGP', 'AED'].includes(form.currency) && <option value={form.currency}>{form.currency} — القيمة الحالية</option>}
-                    <option value="SAR">ريال سعودي (SAR)</option>
-                    {/* D8: عملات المسير SAR وEGP؛ AED يظهر فقط لقيمة محفوظة سابقًا */}
-                    {form.currency === 'AED' && <option value="AED">درهم إماراتي (AED)</option>}
-                    <option value="EGP">جنيه مصري (EGP)</option>
-                  </select>
+                <div className="flex items-end">
+                  {/* العملة مش اختيار (قرار المالك 30 سبتمبر): بتتبع دولة الفرع من «الإعدادات ← الفروع» */}
+                  <p className="text-sm text-gray-700 pb-2" data-branch-currency>
+                    {branchCurrencyCode ? `العملة: ${currencyName(branchCurrencyCode)} (حسب الفرع)` : 'العملة: بتتحدد حسب الفرع — اختار الفرع الأول'}
+                  </p>
                 </div>
                 <div>
                   <label className="label">طريقة الدفع</label>
@@ -2040,7 +2040,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
               <div className="p-4 bg-primary-50 rounded-xl">
                 <div className="flex flex-wrap items-center justify-between gap-2">
                   <span className="font-medium text-gray-700">إجمالي الراتب الشهري</span>
-                  <span className="text-2xl font-bold text-primary-600">{mode === 'edit' ? employeeSalaryTotal(form) ?? 'غير مكتمل' : formatMoney(totalMonthlySalary)} {form.currency ? currencyLabel(form.currency) : ''}</span>
+                  <span className="text-2xl font-bold text-primary-600">{mode === 'edit' ? employeeSalaryTotal(form) ?? 'غير مكتمل' : formatMoney(totalMonthlySalary)} {currencyLabel(branchCurrencyCode)}</span>
                 </div>
                 {workPressureAmount > 0 && <p className="text-xs text-gray-600 mt-2">منه بدل ضغط العمل {formatMoney(workPressureAmount)} — بيتصرف كامل ومالوش مؤثرات؛ الإضافي والخصومات ونهاية الخدمة على الباقي من غيره.</p>}
               </div>

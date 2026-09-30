@@ -48,6 +48,7 @@ import { Asset, CustodyAssignment } from './entities/custody.entities'
 import { RequestsConfig } from './entities/requests-config.entity'
 import { LettersService } from '../letters/letters.service'
 import { Employee } from '../employees/employee.entity'
+import { readBranchCurrency } from '../org/branch-currency-db'
 import { User } from '../auth/user.entity'
 import { localDateOf } from '../attendance/attendance.service'
 import {
@@ -578,7 +579,12 @@ export class DestinationsService {
     const { emp, team, department, managerId } = await validateTransfer(em, req, {
       employeeId: transfer.employeeId, toTeamId: transfer.toTeam, effectiveDate: transfer.effectiveDate,
     }, true, transfer.id)
-    const changes = { teamId: team.id, departmentId: department.id, branchId: department.branchId, managerEmployeeId: managerId as any }
+    const changes: Partial<Employee> = { teamId: team.id, departmentId: department.id, branchId: department.branchId, managerEmployeeId: managerId as any }
+    // العملة تبع الفرع (قرار المالك 30 سبتمبر): النقل لفرع عملته غير عملة الفرع القديم بيغيّر عملة الموظف (تسمية بس، والمبالغ زي ما هي)
+    if (emp.branchId !== department.branchId) {
+      const before = await readBranchCurrency(em, emp.branchId), after = await readBranchCurrency(em, department.branchId)
+      if (before !== after && emp.currency !== after) changes.currency = after
+    }
     let calendarActor: number | null = null
     if (emp.branchId !== department.branchId) {
       // جدول خاص بفرع يتسند لموظفي فرعه بس: الموظف مايتنقلش لفرع تاني وهو على جدول فرعه القديم

@@ -107,10 +107,11 @@ function numberToArabicWords(num: number, currency: string): string {
 
 export default function PayslipPage() {
   const params = useParams<{ id: string }>()
-  const currency = useCurrency()
   const [item, setItem] = useState<ApiPayrollItem | null>(null)
   const [run, setRun] = useState<ApiPayrollRun | null>(null)
   const [employee, setEmployee] = useState<ApiEmployee | null>(null)
+  // العملة تبع فرع الموظف في لقطة المسير (قرار المالك 30 سبتمبر)
+  const currency = useCurrency(employee?.branchId)
   const [branch, setBranch] = useState<ApiBranch | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')

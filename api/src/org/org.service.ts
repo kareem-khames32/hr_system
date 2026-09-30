@@ -16,6 +16,7 @@ import { normalizeWeekendDays, weekendDaysError } from '../attendance/weekend-da
 import { beginCalendarChange, finishCalendarChange, readCalendarSource } from '../attendance/attendance-calendar-history'
 import { attendanceRuleToday, lockAttendanceRuleMutation } from '../attendance/attendance-rule-history'
 import { Employee } from '../employees/employee.entity'
+import { branchCountryOf, branchInsuranceIssue, normalizeBranchCountry } from './branch-currency'
 import { Branch } from './entities/branch.entity'
 import { Department, DEPARTMENT_UNIT_TYPES, UNIT_TYPE_MESSAGE } from './entities/department.entity'
 import type { DepartmentUnitType } from './entities/department.entity'
@@ -95,6 +96,17 @@ export class OrgService {
     }
   }
 
+  // دولة الفرع (قرار المالك 30 سبتمبر): مصر أو السعودية — منها عملة الفرع كله ونظام تأميناته. الفاضي مسموح للفروع القديمة،
+  // ورمز قديم تاني (غير مصر والسعودية) يفضل زي ما هو طول ما ماتغيّرش. الرمز بيتحفظ بحروف كبيرة (كان بيتحفظ زي ما اتبعت)
+  private normalizeBranchCountryField(dto: { country?: string | null }, current: Branch | null) {
+    if (dto.country === undefined) return
+    const code = normalizeBranchCountry(dto.country)
+    if (code !== null && !branchCountryOf(code) && code !== normalizeBranchCountry(current?.country)) {
+      throw new BadRequestException('دولة الفرع يا مصر (EG) يا السعودية (SA) — اختارها من القايمة')
+    }
+    dto.country = code
+  }
+
   // ===== الفروع =====
   // branchScope = null → كل الفروع (super_admin) — غير كده فروع المستخدم فقط
   findBranches(branchScope: BranchScope) {
@@ -114,6 +126,10 @@ export class OrgService {
     }
     await this.assertManagerExists(dto.managerEmployeeId)
     await this.normalizeBranchRefs(dto, null)
+    this.normalizeBranchCountryField(dto, null)
+    // نظام التأمينات لازم يمشي مع دولة الفرع: فرع مصري بدون/المصرية، وفرع سعودي بدون/السعودية
+    const insuranceIssue = branchInsuranceIssue(dto.country, dto.insuranceSystem)
+    if (insuranceIssue) throw new BadRequestException(insuranceIssue)
     return this.branches.manager.transaction(async em => {
       await lockAttendanceRuleMutation(em)
       const saved = await em.save(Branch, em.create(Branch, dto as Partial<Branch>))
@@ -146,10 +162,20 @@ export class OrgService {
       dto.managerEmployeeId !== branch.managerEmployeeId ? scope : null
     )
     await this.normalizeBranchRefs(dto, branch)
+    this.normalizeBranchCountryField(dto, branch)
     const { calendarChange, ...fields } = dto
     const saved = await this.branches.manager.transaction(async em => {
       await lockAttendanceRuleMutation(em)
       const fresh = await em.findOneByOrFail(Branch, { id })
+      // نظام التأمينات يمشي مع دولة الفرع بعد الحفظ — يتفحص لما الدولة أو نظام التأمينات بيتغيروا بس (على الصف المقفول)، ومفيش
+      // تغيير تلقائي لنظام تأمينات فرع قائم أبدًا لأنه بيحرك فلوس: فرع قديم مختلف بيحفظ باقي حقوله وشاشة الفروع بتنبّه عليه
+      const countryChanged = fields.country !== undefined && normalizeBranchCountry(fields.country) !== normalizeBranchCountry(fresh.country)
+      const insuranceChanged = fields.insuranceSystem !== undefined && fields.insuranceSystem !== (fresh.insuranceSystem ?? 'NONE')
+      if (countryChanged || insuranceChanged) {
+        const insuranceIssue = branchInsuranceIssue(fields.country !== undefined ? fields.country : fresh.country,
+          fields.insuranceSystem !== undefined ? fields.insuranceSystem : fresh.insuranceSystem)
+        if (insuranceIssue) throw new BadRequestException(insuranceIssue)
+      }
       const calendarTouched = (fields.country !== undefined && (fields.country?.toUpperCase() ?? null) !== (fresh.country?.toUpperCase() ?? null))
         || (fields.weekendDays !== undefined && (fields.weekendDays ?? null) !== (fresh.weekendDays ?? null))
       const before = calendarTouched || calendarChange ? await beginCalendarChange(em, 'BRANCH', id, calendarChange, actorId!) : null
