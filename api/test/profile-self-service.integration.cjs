@@ -233,23 +233,32 @@ test('PD-02: invalid values are refused at submission with an Arabic message and
   }
 })
 
-test('PD-03: national ID and passport stay unique — at submission, again at the final approval, and under two simultaneous approvals', async () => {
+test('PD-03: national ID and passport stay unique — checked at the final approval only (no oracle for the employee), and under two simultaneous approvals', async () => {
   const holder = await person({ nationalId: 'TAKEN-ID-1', passportNo: 'TAKEN-P-1', fullName: 'صاحب الأرقام المحجوزة' })
   await person({ nationalId: 'JED-ID-9', fullName: 'موظفة فرع جدة' }, 'jeddah')
   const { employee, user } = await person()
-  const requests = await repo('Request').countBy({ requesterId: employee.id })
   const leaks = []
   for (const [payload, expected] of [
     [{ nationalId: 'taken-id-1' }, 'رقم الهوية / الإقامة TAKEN-ID-1 مسجل لموظف آخر — راجع الرقم'],
     [{ passportNo: ' taken-p-١ ' }, 'رقم الجواز TAKEN-P-1 مسجل لموظف آخر — راجع الرقم'],
     [{ nationalId: 'jed-id-9' }, 'رقم الهوية / الإقامة JED-ID-9 مسجل لموظف آخر — راجع الرقم'],
   ]) {
-    const response = await submit(user, payload)
-    assert.equal(response.status, 400, JSON.stringify(response.body)); assert.equal(message(response), expected)
-    leaks.push(response.body)
+    // التقديم مابيقولش للموظف إن الرقم مسجل لحد تاني (ولا في فرع تاني) — الرد زي أي رقم جديد
+    const submitted = await submit(user, payload)
+    assert.equal(submitted.status, 201, JSON.stringify(submitted.body))
+    assert.doesNotMatch(JSON.stringify(submitted.body), /مسجل لموظف آخر/)
+    const created = ok(submitted)
+    // المعتمد هو اللي بيعرف وقت الاعتماد، والطلب بيفضل في صندوقه والملف مااتغيرش
+    const refused = await approve(U.hr, created.id)
+    assert.equal(refused.status, 400, JSON.stringify(refused.body))
+    assert.equal(message(refused), `لم يُعتمد الطلب — ${expected}. الطلب باقٍ في صندوقك: ارفضه أو أرجعه لاستكمال المعلومات`)
+    assert.equal((await repo('Request').findOneByOrFail({ id: created.id })).status, 'UNDER_REVIEW')
+    leaks.push(refused.body)
   }
-  assert.equal(await repo('Request').countBy({ requesterId: employee.id }), requests)
-  // الرسائل مابتقولش اسم صاحب الرقم ولا فرعه ولا رقمه في النظام
+  const unchanged = await fresh(employee.id)
+  assert.ok(!['TAKEN-ID-1', 'JED-ID-9'].includes(unchanged.nationalId), 'الملف مااتغيرش برقم هوية مكرر')
+  assert.notEqual(unchanged.passportNo, 'TAKEN-P-1')
+  // رسالة المعتمد مابتقولش اسم صاحب الرقم ولا فرعه ولا رقمه في النظام
   assert.doesNotMatch(JSON.stringify(leaks), new RegExp(`موظفة فرع جدة|جدة|صاحب الأرقام|"${holder.employee.id}"|${holder.employee.employeeCode}`))
 
   // طلبين لموظفين مختلفين بنفس الجواز الجديد: الاتنين عدّوا التقديم، والتاني بيترفض وقت الاعتماد

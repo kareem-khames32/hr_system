@@ -6,6 +6,7 @@ import { Employee } from '../employees/employee.entity'
 import { Branch } from './entities/branch.entity'
 import { Department } from './entities/department.entity'
 import { Team } from './entities/team.entity'
+import { CurrencyContextController } from './currency-context.controller'
 import { OrgController } from './org.controller'
 import { OrgService } from './org.service'
 
@@ -15,7 +16,8 @@ import { OrgService } from './org.service'
     TypeOrmModule.forFeature([Branch, Department, Team, Employee, CostCenter]),
     AttendanceModule, // إعادة حساب الحضور بعد تغيير دولة الفرع (عطلاته الرسمية)
   ],
-  controllers: [OrgController],
+  // عملة الفرع للشاشات (GET settings/currency-context) — مع الفروع لأن العملة تبع دولة الفرع
+  controllers: [OrgController, CurrencyContextController],
   providers: [OrgService],
   exports: [OrgService],
 })

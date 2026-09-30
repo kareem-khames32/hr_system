@@ -7,7 +7,6 @@ import { RequestType } from '../requests/entities/request-type.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { RequestsModule } from '../requests/requests.module'
 import { ConfigDefaultsService } from './config-defaults.service'
-import { CurrencyContextController } from './currency-context.controller'
 import { RequestCategoryChainsController } from './request-category-chains.controller'
 import { RequestCategoryChainsService } from './request-category-chains.service'
 import { SettingsController } from './settings.controller'
@@ -25,7 +24,7 @@ import { SettingsController } from './settings.controller'
     ]),
   ],
   // سلسلة كل فئة طلبات جوّه «بانِي الطلبات» (طلب المالك 26 سبتمبر)، وعملة الشاشات لأي مستخدم داخل (30 سبتمبر)
-  controllers: [SettingsController, RequestCategoryChainsController, CurrencyContextController],
+  controllers: [SettingsController, RequestCategoryChainsController],
   // مفاتيح الإعدادات الافتراضية الناقصة تُضاف عند الإقلاع
   providers: [ConfigDefaultsService, RequestCategoryChainsService],
 })

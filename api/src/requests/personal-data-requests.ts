@@ -75,14 +75,17 @@ function assertChangesValid(employee: Employee, changes: ReadonlyArray<PersonalD
   if (email && !isEmail(email)) throw new BadRequestException(PERSONAL_EMAIL_MESSAGE)
 }
 
-/** التقديم وإعادة التقديم: نفس فحوص الاعتماد بدري (الشكل والإلزام والتفرد) — ولا حاجة بتتكتب في ملف الموظف قبل الاعتماد النهائي. */
+/**
+ * التقديم وإعادة التقديم: فحوص الشكل والإلزام بدري — ولا حاجة بتتكتب في ملف الموظف قبل الاعتماد النهائي.
+ * التفرد مابيتفحصش هنا: الموظف العادي مايعرفش إن رقم هوية أو جواز مسجل لحد تاني في الشركة (ولا في فرع تاني)؛
+ * بيتفحص وقت الاعتماد النهائي تحت القفل، والمعتمد بيرفض أو يرجّع الطلب للتصحيح.
+ */
 export async function validatePersonalDataRequest(em: EntityManager, req: Pick<Request, 'requesterId' | 'payload'>) {
   const employee = await em.getRepository(Employee).findOne({ where: { id: req.requesterId } })
   if (!employee) throw new BadRequestException('الموظف المطلوب تحديث بياناته غير موجود')
   const changes = personalDataChanges(employee, parsePayload(req.payload))
   if (!changes.length) throw new BadRequestException(`${PERSONAL_DATA_NO_CHANGE} — عدّل خانة واحدة على الأقل عن البيانات الحالية`)
   assertChangesValid(employee, changes)
-  await assertIdentityUnique(em, employee.id, changes)
 }
 
 /**

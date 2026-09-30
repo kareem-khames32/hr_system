@@ -187,5 +187,6 @@ test('UI-05: الشاشات متوصلة — «الإدارات والأقسام
   assert.ok(profile.includes('<span className="text-gray-500">القسم</span>\n                      <span className="font-medium text-gray-800">{employee.department}</span>'))
   const mine = read('src/app/profile/page.tsx')
   assert.ok(mine.includes('const placement = orgPlacement(employee?.departmentId, departments)'))
-  assert.ok(mine.includes('<span className="font-medium text-gray-800">{administrationName}</span>'))
+  // «ملفي الشخصي» اتظبط للموبايل 30 سبتمبر (كلاسات لفّ زيادة) — المهم إن الإدارة ظاهرة في بطاقته
+  assert.match(mine, /<span className="font-medium text-gray-800[^"]*">\{administrationName\}<\/span>/)
 })
