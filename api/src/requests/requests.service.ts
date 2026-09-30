@@ -92,6 +92,8 @@ import { assertSalaryChangeClientPayload, assertSalaryRequestUnexecuted, isSalar
 
 import { assertLoanRequestClientPayload, EARLY_SETTLEMENT_FIELDS, isEarlySettlementType, isLoanCapRequestType, LOAN_REQUEST_CLIENT_FIELDS, loanResubmissionBase,
   LOAN_REQUEST_SERVER_FIELDS, readEarlySettlementPayload, reviewLoanRequestApproval, stageLoanRequestSubmission } from '../loans/loan-request-caps'
+import { PERSONAL_DATA_FIELDS, personalDataField } from '../employees/employee-personal-data'
+import { assertPersonalDataKeys, PERSONAL_DATA_HANDLER, validatePersonalDataRequest } from './personal-data-requests'
 
 export interface ActDto {
   action: 'APPROVE' | 'REJECT' | 'RETURN'
@@ -473,6 +475,8 @@ export class RequestsService {
     }
     await this.assertAttachmentOwnership(req, user)
     await validateEmploymentRequest(em, req, type)
+    // «تحديث بيانات شخصية»: نفس فحوص الاعتماد النهائي بدري (الشكل والإلزام والتفرد) — ولا حاجة بتتطبق قبل الاعتماد
+    if (type.destinationHandler === PERSONAL_DATA_HANDLER) await validatePersonalDataRequest(em, req)
     if (type.destinationHandler === 'custody_transfer') {
       const payload = JSON.parse(req.payload || '{}')
       await custodyTransferTarget(em, Number(payload.assignmentId), Number(payload.toEmployeeId), req, user)
@@ -2995,7 +2999,9 @@ export class RequestsService {
         { key: 'toPeriod', label: 'شهر التأجيل (YYYY-MM)', type: 'text', required: true },
         { key: 'reason', label: 'سبب التأجيل', type: 'text', required: true },
       ],
-      PERSONAL_DATA_UPDATE: [{ key: 'phone', label: 'رقم الهاتف', type: 'text' }, { key: 'phoneAlt', label: 'رقم هاتف بديل', type: 'text' }, { key: 'address', label: 'العنوان', type: 'text' }, { key: 'maritalStatus', label: 'الحالة الاجتماعية', type: 'select', options: ['single', 'married', 'divorced', 'widowed'] }],
+      // «تحديث بيانات شخصية» (قرار المالك 30 سبتمبر): كل الحقول اللي الموظف يقدر يعدّلها — ولا واحد منهم إلزامي في الطلب (بيبعت اللي اتغير بس)
+      PERSONAL_DATA_UPDATE: PERSONAL_DATA_FIELDS.map(field => ({ key: field.key, label: field.label,
+        type: field.kind === 'date' ? 'date' : field.options ? 'select' : 'text', ...(field.options ? { options: field.options.map(option => option.value) } : {}) })),
       EMERGENCY_CONTACT: [{ key: 'name', label: 'اسم جهة اتصال الطوارئ', type: 'text', required: true }, { key: 'phone', label: 'رقم جهة اتصال الطوارئ', type: 'text', required: true }, { key: 'relation', label: 'صلة القرابة', type: 'text' }, { key: 'phoneAlt', label: 'رقم طوارئ بديل', type: 'text' }],
       TITLE_CHANGE: [{ key: 'toTitle', label: 'المسمى الوظيفي الجديد', type: 'text', required: true }, { key: 'effectiveDate', label: 'تاريخ السريان (اختياري)', type: 'date' }],
       CONTRACT_RENEWAL: [{ key: 'contractStart', label: 'بداية العقد الجديد', type: 'date', required: true }, { key: 'contractEnd', label: 'نهاية العقد الجديد', type: 'date', required: true }, { key: 'contractNumber', label: 'رقم العقد', type: 'text' }],
@@ -3089,6 +3095,10 @@ export class RequestsService {
     } catch {
       /* customFields تالف — تجاهل */
     }
+    // «تحديث بيانات شخصية»: عمود موظف برّه القايمة (بنك، راتب، فرع…) مرفوض برسالة الطريق الصح حتى لو اتعرّف حقل في النوع
+    if (type.destinationHandler === PERSONAL_DATA_HANDLER) {
+      assertPersonalDataKeys(payload ?? {}, new Set(this.ds.getMetadata(Employee).columns.map(column => column.propertyName)))
+    }
     const extra = Object.keys(payload ?? {}).filter((k) => !allowed.has(k))
     if (extra.length > 0) {
       // مفتاح مرفق بالاسم الخطأ: الرسالة تسمّي الحقل الصحيح (attachmentUrl) بدل «عرّفه في أنواع الطلبات»
@@ -3124,7 +3134,7 @@ export class RequestsService {
       for (const [key, col] of Object.entries(recordFields)) {
         const v = p[key]
         if (v === undefined || v === null || v === '') continue
-        const label = labels[key] ?? key
+        const label = labels[key] ?? (type.destinationHandler === PERSONAL_DATA_HANDLER ? personalDataField(key)?.label : undefined) ?? key
         if (typeof v !== 'string' && typeof v !== 'number') {
           throw new BadRequestException(`«${label}» يجب أن يكون نصاً`)
         }

@@ -1,5 +1,7 @@
 // ملخّص حمولة الطلب للمعتمد — مشترك بين صندوق الموافقات و«طلباتي» وويدجت «طلبات في الانتظار».
 // كل مفاتيح الحمولة تُعرض للمعتمد — المفتاح المخفي كان يمرّ تغييره بلا علمه (SEC-REQ-2)
+// خانات «تحديث بيانات شخصية» (الاسم والميلاد والهوية والجواز والطوارئ…) بأسمائها العربية من نفس قايمة الخادم
+import { personalDataField, personalDataOptionLabel } from '../../api/src/employees/employee-personal-data'
 
 const fieldLabels: Record<string, string> = {
   date: 'التاريخ',
@@ -104,6 +106,9 @@ const fieldKinds: Record<string, RequestFieldKind> = {
   note: 'textarea',
   // «دوام يوم عطلة»: نص أيام مفصولة بفاصلة — النموذج يبنيه من مدى «من/إلى» وشرائح الأيام
   dates: 'text',
+  // «تحديث بيانات شخصية»: رقم الهوية نص بحروف وشرطة (مش رقم رغم إنه بينتهي بـId)، وانتهاء الجواز تاريخ
+  nationalId: 'text',
+  passportExpiry: 'date',
 }
 
 /** ودجة المفتاح؛ المفتاح غير المعروف يرجع للاستنتاج القديم (تاريخ ثم رقم ثم نص). */
@@ -157,6 +162,7 @@ export const payloadValueLabel = (k: string, v: unknown): string => {
   if (k === 'leaveType' || k === 'leaveTypeCode') return leaveTypeCodeLabels[String(v)] ?? String(v)
   if (k === 'autoDetected') return v ? 'اكتشفه محرك الحضور' : 'قدّمه الموظف'
   if (k === 'maritalStatus' && v) return ({ single: 'أعزب', married: 'متزوج', divorced: 'مطلق', widowed: 'أرمل' } as Record<string, string>)[String(v)] ?? String(v)
+  if ((k === 'gender' || k === 'emergencyRelation') && v) return personalDataOptionLabel(k, v)
   if (k === 'contractType' && v) return ({ fixed_term: 'محدد المدة', indefinite: 'غير محدد المدة', part_time: 'دوام جزئي', temporary: 'مؤقت' } as Record<string, string>)[String(v)] ?? String(v)
   if (k === 'assetIds' && Array.isArray(v)) return assetCountLabel(v.length)
   if (Array.isArray(v)) return v.map((item) => payloadValueLabel(k, item)).join('، ') || '(قائمة فارغة)'
@@ -175,6 +181,7 @@ export const payloadValueLabel = (k: string, v: unknown): string => {
 // مفتاح بلا تسمية يُفكّ لكلمات مقروءة بدل إخفائه
 const labelOf = (k: string): string =>
   fieldLabels[k] ??
+  personalDataField(k)?.label ??
   k
     .replace(/([a-z0-9])([A-Z])/g, '$1 $2')
     .replace(/[_-]+/g, ' ')

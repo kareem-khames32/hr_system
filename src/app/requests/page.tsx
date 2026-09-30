@@ -187,7 +187,9 @@ const periodLabels: Record<string, string> = {
 }
 
 const optionLabel = (value: string) => ({ single: 'أعزب', married: 'متزوج', divorced: 'مطلق', widowed: 'أرمل',
-  permanent: 'غير محدد المدة', fixed_term: 'محدد المدة', part_time: 'دوام جزئي', seasonal: 'موسمي' } as Record<string, string>)[value] ?? value
+  permanent: 'غير محدد المدة', fixed_term: 'محدد المدة', part_time: 'دوام جزئي', seasonal: 'موسمي',
+  // «تحديث بيانات شخصية»: الجنس وصلة القرابة لجهة الطوارئ
+  male: 'ذكر', female: 'أنثى', spouse: 'زوج/زوجة', parent: 'أب/أم', sibling: 'أخ/أخت', child: 'ابن/ابنة', other: 'أخرى' } as Record<string, string>)[value] ?? value
 
 // وجهات التنفيذ — للأنواع المبنية من «بانِي الطلبات» (بدون تسريب كود الـ handler)
 const handlerLabels: Record<string, string> = {
