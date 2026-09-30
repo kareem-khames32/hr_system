@@ -20,8 +20,9 @@ import {
 import { can, fetchEmployeeDirectory, fetchLoans, createRequest, getCurrentUser, type ApiEmployeeDirectoryEntry } from '@/lib/api'
 import { downloadCsv, csvDateStamp } from '@/lib/csv'
 import { useCurrency } from '@/lib/currency'
-import { fetchLoanCapPreview, loanMoneyInputValid, type LoanCapEvaluation } from '@/lib/loans-api'
+import { fetchLoanCapPreview, loanKindLabel, loanMoneyInputValid, REGULAR_LOAN_SINGLE_DEDUCTION_NOTE, type LoanCapEvaluation } from '@/lib/loans-api'
 import { LoanCapSummary } from '@/components/payroll/LoanCapSummary'
+import { LoanExceptionalModal } from '@/components/payroll/LoanExceptionalModal'
 import { EmployeePicker } from '@/components/EmployeePicker'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { dateInRange, dayRangeKey, localDayOf, validDayRange } from '@/lib/payroll-month-range'
@@ -57,6 +58,9 @@ interface Loan {
   requestedAt?: string | null
   employeeName?: string
   employeeCode?: string | null
+  // «سلفة استثنائية — N قسط» أو «سلفة (مرة واحدة)» — القديمة بلا عدد مسجّل بعدد أقساطها الأصلية
+  isExceptional?: boolean | null
+  installmentMonths?: number | null
   installments: LoanInstallment[]
   paidCount: number
   paidAmount: Money
@@ -113,6 +117,8 @@ type CapPreview = LoanCapEvaluation & { requestWindow?: { fromDay: number; toDay
 type LoanDateBasis = 'all' | 'requested' | 'installment'
 const loanRequestDay = (loan: Loan) => localDayOf(loan.requestedAt ?? loan.disbursedAt ?? null)
 
+const loanKind = (loan: Loan) => loanKindLabel(loan.isExceptional, loan.installmentMonths ?? loan.installments.filter(item => item.parentInstallmentId === null).length)
+
 const LOAN_STATUS_LABELS: Record<string, string> = { APPROVED: 'معتمد', DISBURSED: 'جاري السداد', SETTLED: 'مكتمل' }
 const loanStatusLabel = (status: string) => LOAN_STATUS_LABELS[status] ?? 'غير معروف'
 
@@ -163,9 +169,10 @@ export default function LoansPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
-  // نموذج طلب سلفة جديد
+  // نموذج طلب سلفة جديد — السلفة العادية شهر واحد (قرار المالك 30 سبتمبر)، والتقسيط من «سلفة استثنائية» بس
   const [loanAmount, setLoanAmount] = useState('')
-  const [loanMonths, setLoanMonths] = useState('')
+  const [showExceptionalModal, setShowExceptionalModal] = useState(false)
+  const [canExceptional, setCanExceptional] = useState(false)
   const [submitting, setSubmitting] = useState(false)
   const [submitError, setSubmitError] = useState('')
   const [submitSuccess, setSubmitSuccess] = useState('')
@@ -177,6 +184,7 @@ export default function LoansPage() {
   const [forEmployeeId, setForEmployeeId] = useState<number | ''>('')
   useEffect(() => {
     setCanOnBehalf(can('requests.create_on_behalf'))
+    setCanExceptional(can('loans.exceptional'))
     setSelfEmployeeId(getCurrentUser()?.employeeId ?? null)
   }, [])
   useEffect(() => {
@@ -187,12 +195,11 @@ export default function LoansPage() {
   useEffect(() => {
     if (!showNewLoanModal || !targetEmployeeId) { setNewLoanCap(null); return }
     const handle = setTimeout(() => {
-      fetchLoanCapPreview({ employeeId: targetEmployeeId, amount: loanMoneyInputValid(loanAmount) ? loanAmount.trim() : undefined,
-        months: /^[1-9]\d{0,3}$/.test(loanMonths) ? Number(loanMonths) : undefined })
+      fetchLoanCapPreview({ employeeId: targetEmployeeId, amount: loanMoneyInputValid(loanAmount) ? loanAmount.trim() : undefined })
         .then(setNewLoanCap).catch(() => setNewLoanCap(null))
     }, 300)
     return () => clearTimeout(handle)
-  }, [showNewLoanModal, loanAmount, loanMonths, targetEmployeeId])
+  }, [showNewLoanModal, loanAmount, targetEmployeeId])
 
   const loadLoans = () => {
     setError('')
@@ -210,13 +217,13 @@ export default function LoansPage() {
     setSubmitSuccess('')
     setSubmitting(true)
     try {
+      // السلفة العادية بتتخصم مرة واحدة: شهر واحد دايمًا
       await createRequest('LOAN', {
         amount: loanAmount,
-        months: Number(loanMonths),
+        months: 1,
       }, true, targetEmployeeId && targetEmployeeId !== selfEmployeeId ? targetEmployeeId : undefined)
       setSubmitSuccess('تم إرسال طلب السلفة للاعتماد — سيظهر في السجل بعد اكتمال الموافقات')
       setLoanAmount('')
-      setLoanMonths('')
       loadLoans()
     } catch (e) {
       setSubmitError(e instanceof Error ? e.message : 'تعذر إرسال الطلب')
@@ -274,6 +281,17 @@ export default function LoansPage() {
               <Download size={18} />
               تصدير CSV
             </button>
+            {/* التقسيط للسلفة الاستثنائية بس — للموارد البشرية المخوّلة (loans.exceptional) */}
+            {canExceptional && (
+              <button
+                type="button"
+                onClick={() => setShowExceptionalModal(true)}
+                className="btn-secondary flex items-center gap-2"
+              >
+                <Plus size={18} />
+                سلفة استثنائية
+              </button>
+            )}
             <button
               onClick={() => setShowNewLoanModal(true)}
               className="btn-primary flex items-center gap-2"
@@ -440,6 +458,7 @@ export default function LoansPage() {
                             {loan.requestId ? `طلب رقم ${loan.requestId}` : `سلفة رقم ${loan.id}`}
                             {loanRequestDay(loan) ? ` — ${formatDate(loanRequestDay(loan))}` : ''}
                           </p>
+                          <p className={`text-xs mt-0.5 ${loan.isExceptional ? 'text-amber-700' : 'text-gray-500'}`}>{loanKind(loan)}</p>
                         </div>
                       </div>
                     </td>
@@ -547,7 +566,8 @@ export default function LoansPage() {
             <h3 className="font-bold text-gray-800 mb-2">تقديم الطلب</h3>
             <ul className="text-sm text-gray-600 space-y-1">
               <li>• يقدَّم الطلب من محرك الطلبات (نوع «سلفة»)</li>
-              <li>• يحدد الموظف المبلغ وعدد الأشهر</li>
+              <li>• يحدد الموظف المبلغ، والسلفة العادية بتتخصم مرة واحدة</li>
+              <li>• التقسيط للسلفة الاستثنائية بس (من زرار «سلفة استثنائية»)</li>
             </ul>
           </div>
           <div className="card border-r-4 border-warning-500">
@@ -619,17 +639,8 @@ export default function LoansPage() {
                   dir="ltr"
                 />
               </div>
-              <div>
-                <label className="label">عدد أشهر السداد *</label>
-                <input
-                  type="number"
-                  value={loanMonths}
-                  onChange={(e) => setLoanMonths(e.target.value)}
-                  className="input"
-                  placeholder="0"
-                  dir="ltr"
-                />
-              </div>
+              {/* قرار المالك 30 سبتمبر: مفيش عدد أشهر للسلفة العادية — التقسيط من «سلفة استثنائية» */}
+              <p className="text-sm text-gray-700 bg-gray-50 rounded-xl p-3" data-testid="loan-single-deduction-note">{REGULAR_LOAN_SINGLE_DEDUCTION_NOTE}</p>
               {newLoanCap && <LoanCapSummary cap={newLoanCap} currency={currency} title="المتاح لهذا الموظف الآن" />}
               {newLoanCap?.requestWindow && (!newLoanCap.requestWindow.open || newLoanCap.requestWindow.fromDay !== 1 || newLoanCap.requestWindow.toDay !== 31) && (
                 <p className={`text-sm rounded-xl p-3 ${newLoanCap.requestWindow.open ? 'bg-gray-50 text-gray-600' : 'bg-amber-50 text-amber-800'}`}>{newLoanCap.requestWindow.message}</p>
@@ -639,7 +650,7 @@ export default function LoansPage() {
             <div className="flex items-center gap-3 mt-6 pt-4 border-t border-gray-100">
               <button
                 onClick={submitNewLoan}
-                disabled={submitting || !loanAmount || !loanMonths || !targetEmployeeId || newLoanCap?.requestWindow?.open === false || (newLoanCap !== null && !newLoanCap.allowed)}
+                disabled={submitting || !loanAmount || !targetEmployeeId || newLoanCap?.requestWindow?.open === false || (newLoanCap !== null && !newLoanCap.allowed)}
                 className="btn-primary flex-1 disabled:opacity-50 disabled:cursor-not-allowed"
               >
                 {submitting ? 'جارٍ الإرسال...' : 'إرسال الطلب'}
@@ -657,6 +668,11 @@ export default function LoansPage() {
             </div>
           </div>
         </div>
+      )}
+
+      {/* السلفة الاستثنائية (بالأقساط) — الموارد البشرية لموظف غيرها، والسجل يتحدّث بعد الإنشاء */}
+      {showExceptionalModal && canExceptional && (
+        <LoanExceptionalModal currency={currency} onClose={() => setShowExceptionalModal(false)} onDone={loadLoans} />
       )}
     </MainLayout>
   )

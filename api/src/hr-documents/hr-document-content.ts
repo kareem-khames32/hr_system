@@ -8,6 +8,9 @@ export const HR_DOCUMENT_VARIABLES = [
   { key: 'employee.jobTitle', label: 'المسمى الوظيفي', sample: 'أخصائي موارد بشرية' },
   { key: 'employee.joinDate', label: 'تاريخ التعيين', sample: '2024-01-01' },
   { key: 'employee.nationalId', label: 'رقم الهوية', sample: '0000000000' },
+  // قرار المالك 30 سبتمبر: موظف بجواز بس (من غير رقم هوية) يطلعله مستند — رقم الجواز، و«الهوية أو الجواز» = الهوية لو موجودة وإلا الجواز
+  { key: 'employee.passportNo', label: 'رقم الجواز', sample: 'A00000000' },
+  { key: 'employee.identityNumber', label: 'رقم الهوية أو الجواز', sample: '0000000000' },
   { key: 'employee.nationality', label: 'الجنسية', sample: 'جنسية توضيحية' },
   { key: 'employee.email', label: 'البريد الإلكتروني', sample: 'employee@example.invalid' },
   { key: 'employee.phone', label: 'هاتف الموظف', sample: '0000000000' },
@@ -90,7 +93,7 @@ export function validateHrValues(raw: unknown, fields: HrDocumentField[], requir
 }
 
 export function resolveHrContent(content: LetterContent, values: Record<string, string>): LetterContent {
-  const ltr = new Set(['employee.employeeCode', 'employee.joinDate', 'employee.nationalId', 'employee.email', 'employee.phone', 'company.phone',
+  const ltr = new Set(['employee.employeeCode', 'employee.joinDate', 'employee.nationalId', 'employee.passportNo', 'employee.identityNumber', 'employee.email', 'employee.phone', 'company.phone',
     'company.commercialRegister', 'contract.startDate', 'contract.endDate', 'contract.durationMonths', 'contract.number', 'date', 'document.ref'])
   const result = Object.fromEntries(CONTENT_KEYS.map(key => [key, content[key].replace(token, (_match, variable: string) => {
     const value = values[variable] || ''

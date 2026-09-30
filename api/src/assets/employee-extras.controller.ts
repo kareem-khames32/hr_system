@@ -104,10 +104,13 @@ export class EmployeeExtrasController {
       .addSelect('loan.requestId', 'requestId').addSelect('loan.employeeId', 'employeeId')
       .addSelect('CONVERT(varchar(40), loan.amount)', 'amount').addSelect('loan.status', 'status')
       .addSelect('loan.disbursedAt', 'disbursedAt')
+      // نوع السلفة في القائمة: «سلفة استثنائية — N قسط» أو «سلفة (مرة واحدة)» (قرار المالك 30 سبتمبر)
+      .addSelect('loan.isExceptional', 'isExceptional').addSelect('loan.installmentMonths', 'installmentMonths')
       .leftJoin(Request, 'req', 'req.id = loan.requestId').addSelect('req.createdAt', 'requestedAt')
       .orderBy('loan.id', 'DESC')
     if (scope !== null) query.where('loan.employeeId IN (:...ids)', { ids: emps.map(employee => employee.id) })
-    const rows = await query.getRawMany<{ id: number; requestId: number | null; employeeId: number; amount: string; status: string; disbursedAt: Date | null; requestedAt: Date | null }>()
+    const rows = await query.getRawMany<{ id: number; requestId: number | null; employeeId: number; amount: string; status: string; disbursedAt: Date | null; requestedAt: Date | null
+      isExceptional: boolean | number | null; installmentMonths: number | null }>()
     const result = []
     for (const loan of rows) {
       const inst = (await readLoanInstallmentPositions(this.loans.manager, loan.employeeId, loan.id))
@@ -118,6 +121,7 @@ export class EmployeeExtrasController {
         .reduce((sum, item) => sum.add(PayrollDecimal.from(item.remainingAmount)), PayrollDecimal.from('0'))
       result.push({
         ...loan,
+        isExceptional: loan.isExceptional === true || loan.isExceptional === 1,
         employeeName: empById.get(loan.employeeId)?.fullName ?? `#${loan.employeeId}`,
         employeeCode: empById.get(loan.employeeId)?.employeeCode ?? null,
         installments: inst,

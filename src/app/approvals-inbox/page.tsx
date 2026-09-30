@@ -30,7 +30,7 @@ import RequestEmployeeCard from '@/components/requests/RequestEmployeeCard'
 import OvertimeRequestSummary, { overtimeApprovalLimit, overtimeComputedAtApproval } from '@/components/OvertimeRequestSummary'
 import { payloadSummary } from '@/lib/request-payload'
 import { useCurrency } from '@/lib/currency'
-import { approveLoanRequest, fetchLoanCapReview, formatLoanMoney, LOAN_APPROVAL_DECISION_LABELS, LOAN_EXCEPTIONAL_CATEGORY_LABELS, type LoanCapReview } from '@/lib/loans-api'
+import { approveLoanRequest, fetchLoanCapReview, formatLoanMoney, LOAN_APPROVAL_DECISION_LABELS, LOAN_EXCEPTIONAL_CATEGORY_LABELS, loanKindLabel, loanRequestKindLabel, type LoanCapReview } from '@/lib/loans-api'
 import { LoanCapSummary } from '@/components/payroll/LoanCapSummary'
 import Link from 'next/link'
 import { fetchDeductions } from '@/lib/deductions-api'
@@ -598,7 +598,10 @@ export default function ApprovalsInboxPage() {
               <div className="flex justify-between items-center"><h2 className="font-bold text-lg">تفاصيل الطلب #{detailId}</h2><button type="button" aria-label="إغلاق التفاصيل" onClick={() => setDetailId(null)}><X size={20} /></button></div>
               {detailLoading && <p>جارٍ تحميل تفاصيل الطلب...</p>}
               {detailError && <p role="alert" className="text-red-700">{detailError}</p>}
-              {detail && <><RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} /><RequestPayload payload={detail.payload} /><OvertimeRequestSummary overtime={detail.overtime ?? undefined} reviewRequired={detail.overtimeReviewRequired} /></>}
+              {detail && <><RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} /><RequestPayload payload={detail.payload} />
+                {/* نوع السلفة: «سلفة استثنائية — N قسط» أو «سلفة (مرة واحدة)» */}
+                {detail.typeCode === 'LOAN' && loanRequestKindLabel(detail.payload) && <p className="text-sm font-medium text-gray-700 bg-gray-50 rounded-xl px-3 py-2" data-testid="loan-kind">{loanRequestKindLabel(detail.payload)}</p>}
+                <OvertimeRequestSummary overtime={detail.overtime ?? undefined} reviewRequired={detail.overtimeReviewRequired} /></>}
             </div>
           </div>
         )}
@@ -638,6 +641,8 @@ export default function ApprovalsInboxPage() {
                 {detail?.id === actionModal.item.id && <>
                   <RequestEmployeeCard requester={detail.requester} submittedBy={detail.submittedBy} />
                   <RequestPayload payload={detail.payload} />
+                  {/* الاعتماد بيعرض النوع في مراجعة السقف تحت؛ الرفض والإرجاع من الحمولة */}
+                  {detail.typeCode === 'LOAN' && !isLoanApproval && loanRequestKindLabel(detail.payload) && <p className="text-sm font-medium text-gray-700 bg-gray-50 rounded-xl px-3 py-2" data-testid="loan-kind">{loanRequestKindLabel(detail.payload)}</p>}
                   <OvertimeRequestSummary overtime={detail.overtime ?? undefined} reviewRequired={detail.overtimeReviewRequired} />
                 </>}
                 {isLoanApproval && (
@@ -645,7 +650,7 @@ export default function ApprovalsInboxPage() {
                     <p className="font-medium text-gray-700">مراجعة سقف السلفة</p>
                     {loanReviewError && <p role="alert" className="text-sm text-red-600">{loanReviewError}</p>}
                     {loanReview && <>
-                      <p className="text-sm text-gray-600">المطلوب {formatLoanMoney(loanReview.requestedAmount)} — المعروض للاعتماد {formatLoanMoney(loanReview.currentAmount)} {currency} على {loanReview.months} شهر{loanReview.firstInstallmentPeriod ? ` — أول قسط ${loanReview.firstInstallmentPeriod}` : ''}</p>
+                      <p className="text-sm text-gray-600">المطلوب {formatLoanMoney(loanReview.requestedAmount)} — المعروض للاعتماد {formatLoanMoney(loanReview.currentAmount)} {currency} — {loanKindLabel(loanReview.exceptional, loanReview.months)}{loanReview.firstInstallmentPeriod ? ` — أول قسط ${loanReview.firstInstallmentPeriod}` : ''}</p>
                       {loanReview.exceptional && <p className="text-sm bg-amber-50 text-amber-800 rounded-lg p-2">سلفة استثنائية ({LOAN_EXCEPTIONAL_CATEGORY_LABELS[loanReview.exceptionalCategory ?? ''] ?? loanReview.exceptionalCategory}): {loanReview.exceptionalReason}</p>}
                       {loanReview.policyChanged && <p role="alert" className="text-sm bg-red-50 text-red-700 rounded-lg p-2">تنبيه: تغيّرت سياسة السقف أو قيمته منذ التقديم (السقف عند التقديم {formatLoanMoney(loanReview.submitted?.effectiveCap)}).</p>}
                       <LoanCapSummary cap={loanReview.current} currency={currency} title="السقف الآن" />

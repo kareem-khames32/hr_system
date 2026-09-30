@@ -100,16 +100,17 @@ test('AD-01..07: a loan above the cap is refused at submit, and the cap is re-ev
   assert.deepEqual([v1.version, v1.flatCapAmount, v1.isActive], [1, '1500.00', true])
   expect(await http(f.admin, 'POST', '/loans/cap-policies', policyBody({ flatCapAmount: '0' })), 400)
 
-  const preview = expect(await http(f.owner, 'GET', '/loans/cap-preview?amount=2000&months=4'), 200)
+  // قرار المالك 30 سبتمبر: السلفة العادية قسط واحد — المعاينة والتقديم من غير عدد أشهر (الغايب = 1)
+  const preview = expect(await http(f.owner, 'GET', '/loans/cap-preview?amount=2000'), 200)
   assert.deepEqual([preview.effectiveCap, preview.governing, preview.allowed], ['1500.00', 'FLAT', false])
 
   const before = (await raw('SELECT COUNT(*) AS n FROM requests'))[0].n
-  const refused = expect(await http(f.owner, 'POST', '/requests', { typeCode: 'LOAN', submit: true, payload: { amount: '2000.00', months: 4 } }), 400)
+  const refused = expect(await http(f.owner, 'POST', '/requests', { typeCode: 'LOAN', submit: true, payload: { amount: '2000.00', months: 1 } }), 400)
   assert.equal(refused.code, 'LOAN_CAP_EXCEEDED'); assert.match(refused.message, /السقف المقطوع/)
   assert.equal((await raw('SELECT COUNT(*) AS n FROM requests'))[0].n, before)
-  expect(await http(f.owner, 'POST', '/requests', { typeCode: 'LOAN', submit: true, payload: { amount: '900.00', months: 3, capCheck: { forged: true } } }), 400)
+  expect(await http(f.owner, 'POST', '/requests', { typeCode: 'LOAN', submit: true, payload: { amount: '900.00', months: 1, capCheck: { forged: true } } }), 400)
 
-  const submitted = expect(await http(f.owner, 'POST', '/requests', { typeCode: 'LOAN', submit: true, payload: { amount: '1200.00', months: 4 } }), 201)
+  const submitted = expect(await http(f.owner, 'POST', '/requests', { typeCode: 'LOAN', submit: true, payload: { amount: '1200.00' } }), 201)
   assert.equal(submitted.status, 'UNDER_REVIEW')
   const stagedPayload = JSON.parse((await requestRow(submitted.id)).payload)
   assert.deepEqual([stagedPayload.capCheck.stage, stagedPayload.capCheck.evaluation.effectiveCap, stagedPayload.capCheck.evaluation.policy.id], ['SUBMIT', '1500.00', v1.id])
@@ -145,11 +146,11 @@ test('AD-01..07: a loan above the cap is refused at submit, and the cap is re-ev
   expect(await act(f.hr2, submitted.id, { capOverrideReason: 'التزام علاجي موثق بمستند مرفق لدى الموارد البشرية' }), 201)
   assert.equal((await requestRow(submitted.id)).status, 'COMPLETED')
   const loan = await loanOf(submitted.id)
-  assert.deepEqual([loan.amount, loan.requestedAmount, loan.installmentMonths, Boolean(loan.isExceptional)], ['800.00', '1200.00', 4, false])
+  assert.deepEqual([loan.amount, loan.requestedAmount, loan.installmentMonths, Boolean(loan.isExceptional)], ['800.00', '1200.00', 1, false])
   const snapshot = JSON.parse(loan.capSnapshot)
   assert.deepEqual(snapshot.capApprovals.map(row => [row.step, row.decision, row.amount]), [[1, 'REDUCED', '800.00'], [2, 'OVERRIDE', '800.00']])
   assert.match(snapshot.capApprovals[1].reason, /التزام علاجي/)
-  assert.deepEqual((await installmentsOf(loan.id)).map(row => row.amount), ['200.00', '200.00', '200.00', '200.00'])
+  assert.deepEqual((await installmentsOf(loan.id)).map(row => row.amount), ['800.00'])
   f.cappedLoanId = loan.id
 
   // AD-04: الطلب المكتمل يحجز عداد الشهر
@@ -211,16 +212,16 @@ test('Owner 26-Sep: a regular loan HR files on behalf is refused above the cap a
     basicSalary: 8000, housingAllowance: 2000, transportAllowance: 0, phoneAllowance: 0, workNatureAllowance: 0, otherAllowance: 0, status: 'active', isActive: true,
     payMethod: 'cash', annualLeaveEntitled: false, managerEmployeeId: f.managerEmployee.id })
   const before = (await raw('SELECT COUNT(*) AS n FROM requests'))[0].n
-  const above = expect(await http(f.hr, 'POST', '/requests', { typeCode: 'LOAN', submit: true, onBehalfEmployeeId: within.id, payload: { amount: '900.00', months: 3 } }), 400)
+  const above = expect(await http(f.hr, 'POST', '/requests', { typeCode: 'LOAN', submit: true, onBehalfEmployeeId: within.id, payload: { amount: '900.00', months: 1 } }), 400)
   assert.equal(above.code, 'LOAN_CAP_EXCEEDED', 'الاعتماد الفوري لا يتخطى السقف: فحصه عند التقديم كما هو')
   assert.equal((await raw('SELECT COUNT(*) AS n FROM requests'))[0].n, before)
-  const ok = expect(await http(f.hr, 'POST', '/requests', { typeCode: 'LOAN', submit: true, onBehalfEmployeeId: within.id, payload: { amount: '300.00', months: 3 } }), 201)
+  const ok = expect(await http(f.hr, 'POST', '/requests', { typeCode: 'LOAN', submit: true, onBehalfEmployeeId: within.id, payload: { amount: '300.00', months: 1 } }), 201)
   assert.equal(ok.status, 'COMPLETED')
   const stored = JSON.parse((await requestRow(ok.id)).payload)
   assert.deepEqual(stored.capApprovals.map(row => [row.step, row.approverUserId, row.decision]), [[1, f.hr.id, 'WITHIN_CAP'], [2, f.hr.id, 'WITHIN_CAP']])
   const loan = await loanOf(ok.id)
-  assert.deepEqual([loan.amount, loan.installmentMonths, Boolean(loan.isExceptional), loan.createdByUserId], ['300.00', 3, false, f.hr.id])
-  assert.deepEqual((await installmentsOf(loan.id)).map(row => row.amount), ['100.00', '100.00', '100.00'])
+  assert.deepEqual([loan.amount, loan.installmentMonths, Boolean(loan.isExceptional), loan.createdByUserId], ['300.00', 1, false, f.hr.id])
+  assert.deepEqual((await installmentsOf(loan.id)).map(row => row.amount), ['300.00'])
 })
 
 test('AD-14: partial early repayment records amount and reference, keeps the ledger consistent, replays safely and refuses overpayment', async () => {

@@ -210,11 +210,19 @@ test('HTTP two independent approvals cannot defer the same installment twice', a
   assert.equal(await repo('LoanInstallmentEvent').count({ where: { installmentId: f.installmentId, action: 'DEFERRED' } }), 1)
 })
 
+// قرار المالك 30 سبتمبر: التقسيط للسلفة الاستثنائية بس — الموارد البشرية المخوّلة (loans.exceptional) نيابةً عن الموظف، بلا اعتماد فوري
+async function exceptionalDesk(f) {
+  return repo('User').save({ employeeId: null, branchId: f.branch.id, email: `ld-desk-${sequence}@test.invalid`, displayName: 'مكتب السلف الاستثنائية',
+    role: 'employee', passwordHash: 'isolated-token-only', permissions: JSON.stringify(['requests.create_on_behalf', 'requests.view_all', 'loans.exceptional']) })
+}
+const exceptionalLoan = (desk, f, amount, months) => http(desk, 'POST', '/requests', { typeCode: 'LOAN', submit: true, onBehalfEmployeeId: f.employee.id,
+  payload: { amount, months, exceptional: true, exceptionalCategory: 'FAMILY', reason: 'ظرف عائلي موثق لدى الموارد البشرية', firstInstallmentPeriod: month(1) } })
+
 test('HTTP explicit new loans conserve cents and reject sub-unit installments and excess schedule length before approval', async () => {
-  const f = await fixture()
+  const f = await fixture(), desk = await exceptionalDesk(f)
   const createLoan = (amount, months) => http(f.owner, 'POST', '/requests', { typeCode: 'LOAN', submit: true, payload: { amount, months } })
   for (const values of [['1.99', 2], ['10000.00', 1001], ['2.001', 1]]) expect(await createLoan(...values), 400)
-  const pending = expect(await createLoan('1000.00', 7), 201); assert.equal(JSON.parse(pending.payload).amount, '1000.00')
+  const pending = expect(await exceptionalLoan(desk, f, '1000.00', 7), 201); assert.equal(JSON.parse(pending.payload).amount, '1000.00')
   expect(await approve(f.manager, pending.id), 201)
   const loan = await repo('Loan').findOneByOrFail({ requestId: pending.id })
   const amounts = await raw('SELECT CAST(amount AS nvarchar(80)) AS amount FROM loan_installments WHERE loanId=@0 ORDER BY id', [loan.id])
@@ -233,8 +241,8 @@ test('HTTP custom early-settlement handler uses real approval and closes only th
 })
 
 test('HTTP creation cannot push total open installments beyond the allocator limit at final approval', async () => {
-  const f = await fixture()
-  const pending = expect(await http(f.owner, 'POST', '/requests', { typeCode: 'LOAN', submit: true, payload: { amount: '1000.00', months: 1000 } }), 201)
+  const f = await fixture(), desk = await exceptionalDesk(f)
+  const pending = expect(await exceptionalLoan(desk, f, '1000.00', 1000), 201)
   const response = await approve(f.manager, pending.id); expect(response, 400); assert.match(response.body.message, /1000/)
   assert.equal((await repo('Request').findOneByOrFail({ id: pending.id })).status, 'UNDER_REVIEW')
   assert.equal(await repo('Loan').count({ where: { requestId: pending.id } }), 0)

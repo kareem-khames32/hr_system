@@ -35,7 +35,7 @@ function mapTokens(text: string, variables: ApiLetterTemplateVariable[], mode: '
     if (!variable) return original
     if (mode === 'sample') {
       const value = String(variable.sample)
-      return ['employee.employeeCode', 'employee.joinDate', 'employee.nationalId', 'company.phone', 'date', 'request.ref', 'salary.total', 'salary.currency'].includes(variableKey(variable.key)) ? `\u2066${value}\u2069` : value
+      return ['employee.employeeCode', 'employee.joinDate', 'employee.nationalId', 'employee.passportNo', 'employee.identityNumber', 'company.phone', 'date', 'request.ref', 'salary.total', 'salary.currency'].includes(variableKey(variable.key)) ? `\u2066${value}\u2069` : value
     }
     return `{{${mode === 'readable' ? variable.label : variableKey(variable.key)}}}`
   })

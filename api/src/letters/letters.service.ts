@@ -49,7 +49,9 @@ export class LettersService {
         'employee.fullName': employee.fullName, 'employee.employeeCode': employee.employeeCode,
         'employee.jobTitle': employee.jobTitle, 'employee.joinDate': employee.joinDate,
         'employee.employmentPhrase': ['terminated', 'archived'].includes(employee.status) ? 'سبق أن عمل لدينا' : 'يعمل لدينا',
-        'employee.nationalId': employee.nationalId || '', 'company.name': company['company.name'],
+        'employee.nationalId': employee.nationalId || '', 'employee.passportNo': employee.passportNo || '',
+        // «رقم الهوية أو الجواز»: الهوية لو موجودة، وإلا الجواز
+        'employee.identityNumber': employee.nationalId?.trim() || employee.passportNo?.trim() || '', 'company.name': company['company.name'],
         'company.address': company['company.address'] || '', 'company.phone': company['company.phone'] || '',
         date, 'request.ref': `REQ-${req.id}`, purpose, 'salary.total': salary.toFixed(2), 'salary.currency': employee.currency || 'SAR',
       }

@@ -178,7 +178,7 @@ export function LoanCapPoliciesPanel({ currency }: { currency: string }) {
                       <option value="PAYROLL_PERIOD">فترة المسير</option><option value="CALENDAR">الشهر التقويمي</option>
                     </select></div>
                   <div><label className="label" htmlFor="cap-outstanding">سقف المديونية القائمة ({currency})</label><input id="cap-outstanding" className="input" dir="ltr" inputMode="decimal" value={form.maxOutstandingBalance ?? ''} onChange={e => set({ maxOutstandingBalance: e.target.value })} /></div>
-                  <div><label className="label" htmlFor="cap-max-months">أقصى أشهر للتقسيط</label><input id="cap-max-months" className="input" dir="ltr" inputMode="numeric" value={String(form.maxInstallmentMonths ?? '')} onChange={e => set({ maxInstallmentMonths: e.target.value })} /></div>
+                  {/* «أقصى أشهر للتقسيط» اتشالت من الشاشة (قرار المالك 30 سبتمبر): السلفة العادية قسط واحد، والقيمة المحفوظة بتفضل زي ما هي في النسخة الجديدة */}
                 </div>
               </details>
               <div className="md:col-span-2"><label className="label" htmlFor="cap-reason">{editing.base ? 'سبب التعديل *' : 'ملاحظة'}</label><textarea id="cap-reason" className="input" rows={2} maxLength={500} value={form.reason ?? ''} onChange={e => set({ reason: e.target.value })} /></div>

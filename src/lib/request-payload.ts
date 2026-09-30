@@ -182,8 +182,8 @@ const labelOf = (k: string): string =>
 
 export const payloadFieldLabel = labelOf
 
-// حقول يكتبها الخادم للتدقيق (فحص سقف السلفة وقراراته) — تعرضها الشاشة ملخصًا عربيًا مستقلًا، ولا تظهر خامًا في حمولة الطلب.
-export const SERVER_PAYLOAD_KEYS: readonly string[] = ['capCheck', 'capApprovals', 'exceptionalBy']
+// حقول يكتبها الخادم للتدقيق (فحص سقف السلفة وقراراته، ومين اختار شهر أول قسط) — تعرضها الشاشة ملخصًا عربيًا مستقلًا، ولا تظهر خامًا في حمولة الطلب.
+export const SERVER_PAYLOAD_KEYS: readonly string[] = ['capCheck', 'capApprovals', 'exceptionalBy', 'firstInstallmentPeriodBy']
 
 // كل مفاتيح المستخدم بلا حد أقصى ولا فلترة نوع — «مفتاح: قيمة • مفتاح: قيمة»
 // omit: مفاتيح تعرضها الشاشة في أعمدتها الخاصة فقط (لا تُكرَّر) — الباقي كله يظهر
