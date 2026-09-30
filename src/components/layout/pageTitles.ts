@@ -24,6 +24,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/employees/bulk-update', 'تحديث جماعي من Excel'],
   ['/employees/documents/create', 'إصدار مستند'],
   ['/employees/documents', 'مستندات الموظفين'],
+  ['/employees/hiring-documents', 'نواقص مسوغات التعيين'],
   ['/employees/custody', 'سجل العهد'],
   ['/employees/transfers', 'سجل النقل'],
   ['/employees/archived', 'المؤرشفون ومنتهو الخدمة'],

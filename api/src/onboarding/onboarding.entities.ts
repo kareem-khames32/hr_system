@@ -85,6 +85,11 @@ export class OnboardingTask {
   @Column({ type: 'datetime', nullable: true })
   doneAt: Date | null
 
+  // مهمة النظام (ترحيل 075): 'HIRING_DOCS' = «استلام مسوغات التعيين» — حالتها من المستندات نفسها (تكتمل لوحدها لما
+  // كل المطلوب يترفع وترجع مفتوحة لو حاجة اتشالت). NULL = مهمة عادية من القالب أو أضافتها الموارد البشرية
+  @Column({ type: 'nvarchar', length: 40, nullable: true })
+  systemKey: string | null
+
   @CreateDateColumn()
   createdAt: Date
 }

@@ -4,6 +4,7 @@ import {
   Controller,
   ForbiddenException,
   Get,
+  Logger,
   NotFoundException,
   Param,
   ParseIntPipe,
@@ -30,6 +31,7 @@ import { branchIdIn, branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Pe
 import { Employee } from '../employees/employee.entity'
 import { EmployeeDocument } from './assets.entities'
 import { assertDocTypes } from './doc-types'
+import { syncHiringDocsTasks } from './hiring-documents'
 import { linkEmployeeFiles } from '../files/link-employee-files'
 
 // تاريخ تقويمي صحيح بصيغة YYYY-MM-DD برسالة واحدة — الـregex وحده كان يمرّر
@@ -123,6 +125,8 @@ class UpdateDocumentDto {
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('documents')
 export class DocsController {
+  private readonly logger = new Logger(DocsController.name)
+
   constructor(
     @InjectRepository(EmployeeDocument)
     private readonly docs: Repository<EmployeeDocument>,
@@ -182,10 +186,12 @@ export class DocsController {
     if (dto.issueDate && dto.expiryDate && dto.expiryDate < dto.issueDate) {
       throw new BadRequestException('تاريخ الانتهاء قبل تاريخ الإصدار')
     }
-    return this.docs.manager.transaction(async em => {
+    const saved = await this.docs.manager.transaction(async em => {
       await linkEmployeeFiles(em, dto.employeeId, [dto.fileRef], user.sub)
       return em.save(EmployeeDocument, em.create(EmployeeDocument, dto))
     })
+    await this.syncHiringDocs(saved.employeeId)
+    return saved
   }
 
   @Perm('documents.manage')
@@ -216,10 +222,22 @@ export class DocsController {
     for (const [key, value] of Object.entries(changes)) {
       if (value !== undefined) Object.assign(doc, { [key]: value })
     }
-    return this.docs.manager.transaction(async em => {
+    const saved = await this.docs.manager.transaction(async em => {
       if (fileRef !== undefined && fileRef !== null) await linkEmployeeFiles(em, doc.employeeId, [fileRef], user.sub)
       return em.save(EmployeeDocument, doc)
     })
+    await this.syncHiringDocs(saved.employeeId)
+    return saved
+  }
+
+  // «استلام مسوغات التعيين» في تهيئة الموظف: بتكتمل لوحدها لما آخر مستند مطلوب يترفع وترجع مفتوحة لو النوع أو الملف اتغيّر.
+  // بعد حفظ المستند وبأفضل جهد: فشلها مايرجّعش الحفظ، وقائمة التهيئة بتعيد الحساب مع كل قراءة
+  private async syncHiringDocs(employeeId: number) {
+    try {
+      await syncHiringDocsTasks(this.docs.manager, [employeeId])
+    } catch (e) {
+      this.logger.warn(`تعذر تحديث مهمة مسوغات التعيين للموظف ${employeeId}: ${(e as Error).message}`)
+    }
   }
 
   // نطاق الفروع: غير super_admin يدير مستندات موظفي فروعه فقط

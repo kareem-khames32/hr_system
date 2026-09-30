@@ -24,6 +24,7 @@ import {
   X,
 } from 'lucide-react'
 import {
+  can,
   fetchOnboarding,
   updateOnboardingTask,
   addOnboardingTask,
@@ -37,6 +38,7 @@ import {
   type OnboardingParty,
 } from '@/lib/api'
 import { localDateStr, localToday } from '@/lib/dates'
+import { hiringDocNames, hiringDocsOfTask, hiringProgressText, hiringTaskLockReason, uploadMissingHref } from '@/lib/hiring-documents-api'
 
 const PARTIES: OnboardingParty[] = ['hr', 'it', 'custody', 'finance', 'manager']
 
@@ -211,6 +213,8 @@ export default function OnboardingPage() {
     const overdue = task.status === 'PENDING' && task.dueDate < today
     const busy = busyTask === task.id
     const draft = editing && editing.id === task.id ? editing : null
+    // «استلام مسوغات التعيين» مهمة النظام: حالتها من المستندات — خانتها مقفولة بالسبب، ومن غير تعديل ولا استبعاد
+    const hiring = hiringDocsOfTask(task)
     return (
       <div
         key={task.id}
@@ -226,9 +230,11 @@ export default function OnboardingPage() {
       >
         <button
           onClick={() => toggleTask(task)}
-          disabled={!task.canAct || busy}
+          disabled={!task.canAct || busy || !!hiring}
           title={
-            task.canAct
+            hiring
+              ? hiringTaskLockReason(hiring)
+              : task.canAct
               ? done
                 ? 'إعادة فتح المهمة'
                 : 'تعليم المهمة كمكتملة'
@@ -324,6 +330,31 @@ export default function OnboardingPage() {
                 </span>
                 {skipped && <span className="text-xs text-gray-400">غير مطلوبة</span>}
               </div>
+              {hiring && (
+                <div className="mt-1.5 text-xs space-y-1">
+                  <p className={hiring.missing.length ? 'text-warning-700 font-medium' : 'text-success-700 font-medium'}>
+                    {hiringProgressText(hiring)}
+                    {hiring.missing.length > 0 && (
+                      <span className="text-gray-600 font-normal"> — ناقص: {hiringDocNames(hiring.missing)}</span>
+                    )}
+                  </p>
+                  {hiring.missing.length > 0 ? (
+                    <p className="text-gray-400">
+                      بتكتمل لوحدها لما الناقص يترفع
+                      {can('documents.manage') && (
+                        <>
+                          {' — '}
+                          <Link href={uploadMissingHref(emp.id, hiring.missing[0].code)} className="text-primary-600 hover:underline">
+                            ارفع الناقص
+                          </Link>
+                        </>
+                      )}
+                    </p>
+                  ) : (
+                    done && !task.doneByName && <p className="text-gray-400">اكتملت لوحدها بعد رفع كل المستندات المطلوبة</p>
+                  )}
+                </div>
+              )}
               {done && task.doneByName && (
                 <p className="text-xs text-gray-400 mt-1">
                   تمّت بواسطة {task.doneByName}
@@ -338,7 +369,7 @@ export default function OnboardingPage() {
             </>
           )}
         </div>
-        {emp.canManage && !draft && (
+        {emp.canManage && !draft && !hiring && (
           <div className="flex items-center gap-1 shrink-0">
             <button
               onClick={() =>

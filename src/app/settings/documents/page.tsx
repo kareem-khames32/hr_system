@@ -56,6 +56,7 @@ export default function DocumentTypesPage() {
   const [showAdd, setShowAdd] = useState(false)
   const [newName, setNewName] = useState('')
   const [newCode, setNewCode] = useState('')
+  const [newRequired, setNewRequired] = useState(false)
   const [editingId, setEditingId] = useState<number | null>(null)
   const [editingName, setEditingName] = useState('')
   const [busy, setBusy] = useState(false)
@@ -167,9 +168,10 @@ export default function DocumentTypesPage() {
       setActionError('الكود حروف إنجليزية صغيرة وأرقام و_ ويبدأ بحرف — مثل work_permit')
       return
     }
-    if (await run(() => createCatalogItem('doc-types', { code, nameAr, isActive: true }))) {
+    if (await run(() => createCatalogItem('doc-types', { code, nameAr, isActive: true, requiredForHiring: newRequired }))) {
       setNewName('')
       setNewCode('')
+      setNewRequired(false)
       setShowAdd(false)
     }
   }
@@ -187,6 +189,10 @@ export default function DocumentTypesPage() {
 
   const handleToggle = (t: ApiDocType) =>
     run(() => updateCatalogItem('doc-types', t.id, { isActive: !t.isActive }))
+
+  // «مطلوب للتعيين»: كل موظف لازم يكون عنده النوع ده بملف مرفوع، وتهيئته ماتكتملش من غيره
+  const handleRequired = (t: ApiDocType) =>
+    run(() => updateCatalogItem('doc-types', t.id, { requiredForHiring: !t.requiredForHiring }))
 
   return (
     <MainLayout>
@@ -272,6 +278,15 @@ export default function DocumentTypesPage() {
                 </p>
               </div>
             </div>
+            <label className="flex items-center gap-2 text-sm text-gray-700 cursor-pointer">
+              <input
+                type="checkbox"
+                className="rounded"
+                checked={newRequired}
+                onChange={(e) => setNewRequired(e.target.checked)}
+              />
+              مطلوب للتعيين — لازم كل موظف يسلّمه، وتهيئته ماتكتملش من غيره
+            </label>
             <div className="flex justify-end gap-2">
               <button onClick={() => setShowAdd(false)} className="btn-secondary">
                 إلغاء
@@ -401,6 +416,7 @@ export default function DocumentTypesPage() {
                   <tr>
                     <th className="text-right py-3 px-4 font-medium text-gray-700">نوع المستند</th>
                     <th className="text-center py-3 px-4 font-medium text-gray-700">الحالة</th>
+                    <th className="text-center py-3 px-4 font-medium text-gray-700">مطلوب للتعيين</th>
                     {canSeeDocs && (
                       <>
                         <th className="text-center py-3 px-4 font-medium text-gray-700">
@@ -470,6 +486,31 @@ export default function DocumentTypesPage() {
                           >
                             {t.isActive ? 'مفعّل' : 'معطّل'}
                           </span>
+                        </td>
+                        <td className="py-3 px-4 text-center">
+                          {canWrite ? (
+                            <button
+                              onClick={() => handleRequired(t)}
+                              disabled={busy}
+                              aria-pressed={!!t.requiredForHiring}
+                              title={
+                                t.requiredForHiring
+                                  ? 'اضغط عشان يبقى مش مطلوب للتعيين'
+                                  : 'اضغط عشان يبقى مطلوب من كل موظف عند التعيين'
+                              }
+                              className={`text-xs px-3 py-1.5 rounded-lg font-medium transition-colors ${
+                                t.requiredForHiring
+                                  ? 'bg-primary-500 text-white hover:bg-primary-600'
+                                  : 'bg-gray-100 text-gray-600 hover:bg-gray-200'
+                              }`}
+                            >
+                              {t.requiredForHiring ? 'مطلوب ✓' : 'مش مطلوب'}
+                            </button>
+                          ) : t.requiredForHiring ? (
+                            <span className="badge badge-primary text-xs">مطلوب</span>
+                          ) : (
+                            <span className="text-gray-400">-</span>
+                          )}
                         </td>
                         {canSeeDocs && (
                           <>
@@ -543,6 +584,18 @@ export default function DocumentTypesPage() {
             <p className="text-xs text-gray-400 px-4 py-3 border-t">
               النوع المعطَّل لا يظهر عند رفع مستند جديد، والمستندات المسجلة به تبقى كما هي. الحذف
               غير متاح — عطّل النوع بدلاً منه
+            </p>
+            <p className="text-xs text-gray-500 px-4 pb-3">
+              «مطلوب للتعيين»: لازم كل موظف يكون عنده النوع ده بملف مرفوع، ومهمة «استلام مسوغات التعيين» في تهيئته
+              ماتكتملش غير لما يترفع.
+              {canSeeDocs && (
+                <>
+                  {' '}الناقص عند كل موظف في{' '}
+                  <Link href="/employees/hiring-documents" className="text-primary-600 hover:underline">
+                    نواقص مسوغات التعيين
+                  </Link>
+                </>
+              )}
             </p>
           </div>
         )}

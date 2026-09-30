@@ -76,6 +76,7 @@ const adminMenuDefs: MenuItem[] = [
       { label: 'إدارة العقود', href: '/employees/contracts', perm: 'employees.view' },
       { label: 'تحديث جماعي من Excel', href: '/employees/bulk-update', perm: 'employees.edit' },
       { label: 'مستندات الموظفين', href: '/employees/documents', perm: 'documents.manage' },
+      { label: 'نواقص مسوغات التعيين', href: '/employees/hiring-documents', perm: 'documents.manage' },
       { label: 'إصدار مستند', href: '/employees/documents/create', perm: 'documents.manage' },
       { label: 'سجل العهد', href: '/employees/custody', perm: 'custody.assign' },
       { label: 'سجل النقل', href: '/employees/transfers', perm: 'transfers.view' },
