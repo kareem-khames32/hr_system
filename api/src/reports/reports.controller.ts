@@ -338,6 +338,10 @@ export class ReportsController {
       const confidential = org.departmentIds !== null || org.teamId !== null ? '1 = 0'
         : org.branchId !== null ? `r.branchId = @${params.push(org.branchId) - 1}` : '1 = 1'
       const clauses = orgFilterSql({ branch: 'oe.branchId', department: 'oe.departmentId', team: 'oe.teamId' }, org, params)
+      // مكان صاحب الطلب الحالي بيتقري جوه نطاق القارئ بس (CR21-B01): صاحب طلب قديم اتنقل لفرع برّه النطاق مايطابقش أي قسم أو
+      // فريق — نفس رد رقم مش موجود — فالعدد مايكشفش تنظيمه الجديد. الإجمالي من غير فلتر زي ما هو (بفرع الطلب).
+      const readerScope = branchScopeSql('oe.branchId', branchScopeOf(user), params)
+      if (readerScope) clauses.push(readerScope)
       o = `AND ((t.isConfidential = 1 AND ${confidential}) OR (ISNULL(t.isConfidential, 0) = 0
         AND r.requesterId IN (SELECT oe.id FROM employees oe WHERE ${clauses.join(' AND ')})))`
     }

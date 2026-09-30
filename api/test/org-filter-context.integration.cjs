@@ -232,3 +232,28 @@ test('OFC-05: تضييق الخادم بمعاملات الفلتر — جوه �
   assert.equal((await request(U.nasrHr, 'GET', `/reports/headcount?branchId=${B.main.id}`)).status, 403)
   assert.equal(total(ok(await request(U.admin, 'GET', `/reports/headcount?branchId=${B.main.id}`)).byStatus), 2)
 })
+
+test('OFC-06: أعداد الطلبات — صاحب طلب قديم اتنقل لفرع برّه النطاق قسمه وفريقه الجداد مايبانوش من العدد (CR21-B01)', async () => {
+  await repo('RequestType').save({ code: 'OFC_PERSONAL', nameAr: 'تحديث بيانات للاختبار', category: 'personal_data', destinationHandler: 'employee_record',
+    requiredFields: '[]', isActive: true, isConfidential: false })
+  // موظف في فرع النصر (في نطاق القارئ) قدّم طلب وهو في النصر، وبعدها اتنقل لقسم وفريق في المعادي (برّه نطاق القارئ)
+  const mover = await repo('Employee').save({ employeeCode: 'OFC900', fullName: 'موظف اتنقل بعد الطلب', branchId: B.nasr.id, departmentId: D.nasrRetail.id,
+    joinDate: '2020-01-01', status: 'active', isActive: true, basicSalary: 9000, currency: 'EGP', payMethod: 'cash' })
+  await repo('Request').save({ typeCode: 'OFC_PERSONAL', requesterId: mover.id, branchId: B.nasr.id, status: 'UNDER_REVIEW', payload: '{}' })
+  const maadiTeam = await repo('Team').save({ isActive: true, name: 'فريق تشغيل المعادي', code: 'OFC_T_MAADI', departmentId: D.maadiOps.id })
+  await repo('Employee').update({ id: mover.id }, { branchId: B.maadi.id, departmentId: D.maadiOps.id, teamId: maadiTeam.id })
+  const count = body => body.byType.reduce((sum, row) => sum + Number(row.total), 0)
+  const all = ok(await request(U.nasrHr, 'GET', '/reports/requests'))
+  assert.ok(count(all) >= 1, 'الطلب القديم بفرع النصر فاضل في إجمالي النصر من غير فلتر')
+  const foreignDepartment = ok(await request(U.nasrHr, 'GET', `/reports/requests?departmentIds=${D.maadiOps.id}`))
+  const foreignTeam = ok(await request(U.nasrHr, 'GET', `/reports/requests?teamId=${maadiTeam.id}`))
+  const missing = ok(await request(U.nasrHr, 'GET', '/reports/requests?departmentIds=999999'))
+  assert.deepEqual(foreignDepartment, missing, 'قسم برّه النطاق زي رقم مش موجود بالظبط')
+  assert.equal(count(foreignTeam), 0, 'فريق برّه النطاق مابيعدّش حاجة')
+  // جوه النطاق الفلتر شغال عادي: قسم التجزئة في النصر مابقاش فيه صاحب الطلب ده
+  const ownRetail = ok(await request(U.nasrHr, 'GET', `/reports/requests?departmentIds=${D.nasrRetail.id}`))
+  assert.equal(count(ownRetail), 0)
+  // حساب الشركة كلها بيشوف مكانه الجديد عادي (جوه نطاقه)
+  const companyWide = ok(await request(U.admin, 'GET', `/reports/requests?departmentIds=${D.maadiOps.id}`))
+  assert.ok(count(companyWide) >= 1)
+})

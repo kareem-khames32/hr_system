@@ -22,6 +22,8 @@ export interface BankSheetSource {
    * موجود ⇒ الصف بيعرض اللي اتصرف فعلًا لا ملف الموظف الحالي. غير موجود ⇒ الملف الحالي زي ما هو.
    */
   recorded?: RecordedDisbursement | null
+  /** مكان الموظف في لقطة المسير (فرعه وقسمه وفريقه وقت الحساب) — الفلتر الموحد بيطابق عليه، مش مكانه الحالي (CR21-B02) */
+  placement?: { branchId: number | null; departmentId: number | null; teamId: number | null }
 }
 
 export interface BankSheetRow {
@@ -68,11 +70,12 @@ export interface BankSheetItemInput {
 }
 export interface BankSheetEmployeeInput {
   id: number; employeeCode?: string | null; fullName?: string | null; branchId?: number | null
+  departmentId?: number | null; teamId?: number | null
   payMethod?: string | null; bankTransferAmount?: unknown; bankName?: string | null; iban?: string | null
 }
 export interface BankSheetMemberInput {
   employeeId: number
-  snapshot?: { employeeCode?: string | null; fullName?: string | null; branchId?: number | null } | null
+  snapshot?: { employeeCode?: string | null; fullName?: string | null; branchId?: number | null; departmentId?: number | null; teamId?: number | null } | null
 }
 
 /**
@@ -117,6 +120,10 @@ export function bankSheetSources(input: {
       recorded: recordedDisbursement({ runStatus: input.runStatus, itemPayMethod: item.payMethod,
         itemPaid: { payMethod: item.paidPayMethod ?? null, bankAmount: item.paidBankAmount, cashAmount: item.paidCashAmount },
         mark: item.id == null ? null : markOf.get(item.id) ?? null }),
+      // من اللقطة لو موجودة (نفس مصدر الفرع فوق)، وإلا ملف الموظف الحالي للمسيرات القديمة اللي من غير لقطة
+      placement: snapshot
+        ? { branchId: snapshot.branchId ?? null, departmentId: snapshot.departmentId ?? null, teamId: snapshot.teamId ?? null }
+        : { branchId: employee?.branchId ?? null, departmentId: employee?.departmentId ?? null, teamId: employee?.teamId ?? null },
     })
   }
   return sources

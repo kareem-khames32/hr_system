@@ -3,12 +3,12 @@
 import { useEffect, useMemo, useState } from 'react'
 import { AlertTriangle, Download, FileSpreadsheet, Printer } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
-import { fetchBankSheet, fetchPayrollRuns, type ApiBankSheet, type ApiPayrollRun } from '@/lib/api'
+import { fetchPayrollRuns, type ApiBankSheet, type ApiPayrollRun } from '@/lib/api'
 import { downloadCsv } from '@/lib/csv'
 import { formatMoney } from '@/lib/money'
 import { dayRangeLabel } from '@/lib/payroll-month-range'
 import { useOrgFilter } from '@/components/OrgFilter'
-import { filterBankSheet } from '@/lib/bank-sheet-filter'
+import { fetchBankSheetFor } from '@/lib/reports-org-api'
 
 // كشف البنوك (قرار المالك): لكل مسير — مين بيتحوله كام على أي بنك، وكام نقدي، وإجمالي كل بنك.
 // حساب الفرع بيشوف مسيرات وموظفي فرعه بس (الخادم بيفلتر).
@@ -55,10 +55,11 @@ function downloadExcel(sheet: ApiBankSheet) {
 export default function PayrollBankSheetPage() {
   const [runs, setRuns] = useState<ApiPayrollRun[]>([])
   const [runId, setRunId] = useState('')
-  const [fullSheet, setSheet] = useState<ApiBankSheet | null>(null)
+  const [sheet, setSheet] = useState<ApiBankSheet | null>(null)
   // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد: الكشف بصفوف الفلتر بس، وكل إجمالياته وتصديره منها
   const org = useOrgFilter()
-  const sheet = useMemo(() => (fullSheet && org.active ? filterBankSheet(fullSheet, org.matches) : fullSheet), [fullSheet, org.active, org.matches])
+  // الفلتر بيتبعت للخادم (org.params)، والخادم بيطابق بمكان الموظف في لقطة المسير (CR21-B02) وبيحسب الإجماليات من الصفوف دي —
+  // فالكشف وتصديره بيطابقوا التقرير المالي بنفس الفلتر حتى لو الموظف اتنقل بعد الحساب
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState('')
 
@@ -79,12 +80,13 @@ export default function PayrollBankSheetPage() {
     if (!runId) { setSheet(null); return }
     let alive = true
     setLoading(true); setError('')
-    fetchBankSheet(Number(runId))
+    fetchBankSheetFor(Number(runId), org.params)
       .then(result => { if (alive) setSheet(result) })
       .catch(cause => { if (alive) { setSheet(null); setError(cause instanceof Error ? cause.message : 'تعذّر تحميل كشف البنوك') } })
       .finally(() => { if (alive) setLoading(false) })
     return () => { alive = false }
-  }, [runId])
+    // eslint-disable-next-line react-hooks/exhaustive-deps -- org.params بيتغير مع org.paramsKey
+  }, [runId, org.paramsKey])
 
   const empty = !sheet || sheet.rows.length === 0
   const bankRows = useMemo(() => sheet?.rows ?? [], [sheet])

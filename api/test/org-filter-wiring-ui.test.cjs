@@ -63,7 +63,7 @@ const SCREENS = [
   ['src/components/payroll/PayrollMonthLinesTable.tsx', ['employeeId: number }) => boolean', 'sumMoney(rows.map(row => row.totals[side]))'], []],
   ['src/app/payroll/loans/page.tsx', ['const orgLoans = loans.filter((l) => org.matches(l.employeeId))', 'const openLoans = orgLoans.filter',
     'const datedLoans = !activeRange ? orgLoans : orgLoans.filter'], []],
-  ['src/app/payroll/bank-sheet/page.tsx', ['filterBankSheet(fullSheet, org.matches)', 'downloadCsv(`${fileBase(sheet)}.csv`, HEADER, [...sheetRows(sheet), ...sheetTotals(sheet)])'], []],
+  ['src/app/payroll/bank-sheet/page.tsx', ['fetchBankSheetFor(Number(runId), org.params)', '}, [runId, org.paramsKey])', 'downloadCsv(`${fileBase(sheet)}.csv`, HEADER, [...sheetRows(sheet), ...sheetTotals(sheet)])'], ['filterBankSheet', 'org.matches']],
   ['src/app/payroll/disbursement/page.tsx', ['departmentIds: org.params.departmentIds ?? null', 'load(runId, effective)',
     'markDisbursementFiltered(runId!, { paid, note, expectedCount }, effective)', 'org.reset()'], ['view.facets.branches', 'view.facets.departments', 'view.facets.teams']],
   ['src/components/payroll/TypedDeductionsWorkspace.tsx', ["useOrgFilter({ enabled: mode === 'admin' })", 'rows={rows.filter(row => org.matches(row.employee.id))}',

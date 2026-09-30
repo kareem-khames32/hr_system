@@ -1,6 +1,6 @@
 // لوحة التقارير بالفلتر الموحد («الفرع ← الإدارة ← القسم ← الفريق» — طلب المالك 30 سبتمبر): التعداد والإجازات والرواتب والطلبات
 // أرقام مجمّعة في الخادم، فالفلتر بيتبعت له (org.params) والخادم بيضيّق بيه فوق نطاق الفرع. من غير فلتر = نفس النداءات القديمة بالظبط.
-import { apiFetch } from './api'
+import { apiFetch, type ApiBankSheet } from './api'
 import { orgFilterQuery, type OrgFilterParams } from './org-filter'
 
 const withOrg = (path: string, params: OrgFilterParams, base?: URLSearchParams) => {
@@ -15,3 +15,7 @@ export const fetchLeavesReportFor = (year: string, params: OrgFilterParams) =>
   apiFetch<any>(withOrg('/reports/leaves', params, new URLSearchParams({ year })))
 export const fetchPayrollReportFor = (params: OrgFilterParams) => apiFetch<any>(withOrg('/reports/payroll', params))
 export const fetchRequestsReportFor = (params: OrgFilterParams) => apiFetch<any>(withOrg('/reports/requests', params))
+
+// كشف البنوك بالفلتر الموحد: الخادم بيفلتر بمكان الموظف في لقطة المسير (CR21-B02) وبيحسب الإجماليات من الصفوف المفلترة
+export const fetchBankSheetFor = (runId: number, params: OrgFilterParams) =>
+  apiFetch<ApiBankSheet>(withOrg(`/payroll/runs/${runId}/bank-sheet`, params))

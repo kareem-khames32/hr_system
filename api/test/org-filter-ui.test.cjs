@@ -6,7 +6,8 @@
 //  OF-03) شريط الفلتر: أربع قوائم بـ«الكل»، والفرع المقفول، و«مسح الفلتر» لما يشتغل، وبيلف على الموبايل.
 //  OF-04) التحميل مرة للجلسة (طلب واحد مشترك) وتحديث بالطلب.
 //  OF-05) الخادم: قراءة المعاملات (أرقام موجبة بس) والشروط بمعاملات عمرها ما بتتلزق في نص الاستعلام، وفلاتر المسير والصرف بالأقسام.
-//  OF-06) الإجماليات بعد الفلتر بنفس حساب الخادم: كشف البنوك، والبدلات، وإقفال سنة الإجازات، والتأمينات.
+//  OF-06) الإجماليات بعد الفلتر بنفس حساب الخادم: البدلات، وإقفال سنة الإجازات، والتأمينات.
+//  OF-07) كشف البنوك بيتفلتر في الخادم بمكان الموظف في لقطة المسير (CR21-B02) — موظف اتنقل بعد الحساب بيفضل في فلتر فرعه وقسمه وقتها.
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
 const path = require('node:path')
@@ -25,7 +26,7 @@ const { OrgFilterBar } = require('../../src/components/OrgFilter')
 const server = require('../src/org/org-filter-params')
 const overview = require('../src/payroll/payroll-overview-filters')
 const disbursement = require('../src/payroll/payroll-disbursement')
-const { filterBankSheet } = require('../../src/lib/bank-sheet-filter')
+const bankSheet = require('../src/payroll/bank-sheet')
 const { allowanceTotalsOf } = require('../../src/lib/payroll-allowances-api')
 const { yearEndTotalsOf } = require('../../src/lib/leave-year-end-api')
 const { filterSocialInsuranceReport } = require('../../src/lib/social-insurance-api')
@@ -234,24 +235,33 @@ test('OF-05: الخادم — قراءة المعاملات والشروط بم�
   assert.deepEqual(disbursement.filterPayrollDisbursementRows(rows, {}).map(r => r.employeeId), [1, 2, 3, 4])
 })
 
-test('OF-06: الإجماليات بعد الفلتر بنفس حساب الخادم — كشف البنوك والبدلات وإقفال السنة والتأمينات', () => {
-  const bankRow = (employeeId, bankName, netPay, bankAmount, cashAmount, issue = null) =>
-    ({ employeeId, employeeCode: `E${employeeId}`, fullName: `م${employeeId}`, payMethod: 'transfer', payMethodLabel: 'تحويل', bankName, iban: null, netPay, bankAmount, cashAmount, issue })
-  const sheet = {
-    run: { id: 1, name: null, period: '2026-09', status: 'APPROVED', startDate: '2026-08-23', endDate: '2026-09-22' },
-    rows: [bankRow(1, 'بنك أ', 1000.1, 1000.1, 0), bankRow(2, 'بنك ب', 500.2, 300.1, 200.1, 'مفيش آيبان'), bankRow(3, 'بنك أ', 700, 700, 0), bankRow(4, null, 90.05, 0, 90.05)],
-    banks: [], totals: { employees: 4, bank: 2000.2, cash: 290.15, net: 2290.35 }, issues: { employees: 1, bank: 300.1, cash: 200.1, rows: [] },
-    settlement: { employees: 2, total: 1500, rows: [{ employeeId: 5, employeeCode: 'E5', fullName: 'م5', netPay: 1000, lastWorkingDay: '2026-09-10', caseId: 3 },
-      { employeeId: 6, employeeCode: 'E6', fullName: 'م6', netPay: 500, lastWorkingDay: '2026-09-11', caseId: 4 }] },
-  }
-  const keep = new Set([1, 2, 4, 6])
-  const filtered = filterBankSheet(sheet, id => keep.has(id))
-  assert.deepEqual(filtered.rows.map(r => r.employeeId), [1, 2, 4])
-  assert.deepEqual(filtered.totals, { employees: 3, bank: 1300.2, cash: 290.15, net: 1590.35 })
-  assert.deepEqual(filtered.banks, [{ bankName: 'بنك أ', employees: 1, total: 1000.1 }, { bankName: 'بنك ب', employees: 1, total: 300.1 }], 'البنك للي ليه تحويل بس')
-  assert.deepEqual([filtered.issues.employees, filtered.issues.bank, filtered.issues.cash], [1, 300.1, 200.1])
-  assert.deepEqual([filtered.settlement.employees, filtered.settlement.total, filtered.settlement.rows.map(r => r.employeeId)], [1, 500, [6]])
+test('OF-07: كشف البنوك — الفلتر في الخادم بمكان لقطة المسير، والإجماليات من الصفوف المفلترة', () => {
+  // الموظف 1 كان في القسم 4 وقت الحساب واتنقل بعدها للقسم 9 في فرع تاني؛ الموظف 2 في القسم 5؛ الموظف 3 في القسم 6
+  const employees = [
+    { id: 1, employeeCode: 'E1', fullName: 'م1', branchId: 3, departmentId: 9, teamId: null, payMethod: 'transfer', bankName: 'بنك أ', iban: 'SA0000000000000000000001' },
+    { id: 2, employeeCode: 'E2', fullName: 'م2', branchId: 2, departmentId: 5, teamId: 1, payMethod: 'cash' },
+    { id: 3, employeeCode: 'E3', fullName: 'م3', branchId: 2, departmentId: 6, teamId: null, payMethod: 'cash' },
+  ]
+  const members = [
+    { employeeId: 1, snapshot: { employeeCode: 'E1', fullName: 'م1', branchId: 2, departmentId: 4, teamId: null } },
+    { employeeId: 2, snapshot: { employeeCode: 'E2', fullName: 'م2', branchId: 2, departmentId: 5, teamId: 1 } },
+    { employeeId: 3, snapshot: { employeeCode: 'E3', fullName: 'م3', branchId: 2, departmentId: 6, teamId: null } },
+  ]
+  const items = [{ id: 11, employeeId: 1, netPay: '6000.11' }, { id: 12, employeeId: 2, netPay: '3000.22' }, { id: 13, employeeId: 3, netPay: '100.00' }]
+  const sources = bankSheet.bankSheetSources({ items, employees, members, branchScope: [2], settlementOf: () => null })
+  assert.deepEqual(sources.map(s => [s.employeeId, s.placement]), [[1, { branchId: 2, departmentId: 4, teamId: null }],
+    [2, { branchId: 2, departmentId: 5, teamId: 1 }], [3, { branchId: 2, departmentId: 6, teamId: null }]], 'المكان من اللقطة مش من الملف الحالي')
+  const org = server.parseOrgFilter({ branchId: '2', departmentIds: '4,5' })
+  const kept = sources.filter(s => server.orgFilterMatches(s.placement, org))
+  const sheet = bankSheet.buildBankSheet(kept)
+  assert.deepEqual(sheet.rows.map(r => r.employeeId).sort(), [1, 2], 'المنقول بعد الحساب فاضل في فلتر قسمه وقت المسير')
+  assert.deepEqual(sheet.totals, { employees: 2, bank: 6000.11, cash: 3000.22, net: 9000.33 })
+  // مسير قديم من غير لقطة: المكان من الملف الحالي (زي فرع الكشف بالظبط)
+  const legacy = bankSheet.bankSheetSources({ items: [items[1]], employees, members: [], branchScope: null, settlementOf: () => null })
+  assert.deepEqual(legacy[0].placement, { branchId: 2, departmentId: 5, teamId: 1 })
+})
 
+test('OF-06: الإجماليات بعد الفلتر بنفس حساب الخادم — البدلات وإقفال السنة والتأمينات', () => {
   const line = (id, employeeId, allowanceTypeId, typeName, amount, state = 'PENDING') => ({ id, employeeId, allowanceTypeId, typeName, amount, state })
   const totals = allowanceTotalsOf([line(1, 1, 1, 'بدل سكن', 100.1), line(2, 1, 2, 'بدل انتقال', 50.05), line(3, 2, 1, 'بدل سكن', 99.9),
     line(4, 3, 1, 'بدل سكن', 1000, 'CANCELLED')])
