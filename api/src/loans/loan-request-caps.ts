@@ -17,7 +17,8 @@ import type { LoanRepaymentMethod, LoanRepaymentMode } from './loans.entities'
 
 // AD-01..09 (C6): السقف يُفحص عند التقديم ويُعاد عند كل خطوة اعتماد تحت القفل المالي للموظف.
 export const LOAN_REQUEST_CLIENT_FIELDS = ['amount', 'months', 'exceptional', 'exceptionalCategory', 'firstInstallmentPeriod'] as const
-export const LOAN_REQUEST_SERVER_FIELDS = ['capCheck', 'capApprovals', 'approvedAmount', 'exceptionalBy'] as const
+// firstInstallmentPeriodBy: مين من المخوّلين (loans.exceptional) اختار شهر أول قسط لسلفة عادية — الختم الافتراضي مالوش علامة
+export const LOAN_REQUEST_SERVER_FIELDS = ['capCheck', 'capApprovals', 'approvedAmount', 'exceptionalBy', 'firstInstallmentPeriodBy'] as const
 export const EARLY_SETTLEMENT_FIELDS = ['amount', 'reference', 'method', 'mode'] as const
 // قرار المالك 30 سبتمبر: السلفة العادية بتتخصم مرة واحدة (شهر واحد)؛ التقسيط للسلفة الاستثنائية بس (loans.exceptional).
 // بيتفحص عند كل تقديم جديد (الموظف والنيابة وإعادة التقديم)؛ الطلبات المعلّقة قبل القرار بتتعتمد بأشهرها المحفوظة.
@@ -147,18 +148,21 @@ export async function evaluateEmployeeLoanCap(em: EntityManager, input: { employ
 // ===== AD-05/07/09: التقديم =====
 export async function stageLoanRequestSubmission(em: EntityManager, input: { requestId: number; requesterId: number; actor: JwtPayload; payload: Record<string, unknown>; today?: string }) {
   const today = input.today ?? localDate()
-  const { capCheck: _capCheck, capApprovals: _capApprovals, approvedAmount: _approved, exceptionalBy: _by, ...client } = input.payload
+  const { capCheck: _capCheck, capApprovals: _capApprovals, approvedAmount: _approved, exceptionalBy: _by, firstInstallmentPeriodBy: chosenBy, ...client } = input.payload
   const exceptional = parseFlag(client.exceptional)
   if (!exceptional) await assertLoanRequestDayWindow(em, today)
   const schedule = loanScheduleAmounts(client.amount, client.months ?? 1)
   if (!exceptional && schedule.months !== 1) throw new BadRequestException({ code: 'LOAN_REGULAR_SINGLE_DEDUCTION', message: REGULAR_LOAN_SINGLE_DEDUCTION })
   await lockPayrollEmployees(em, [input.requesterId])
   const canExceptional = userHasPerm(input.actor, 'loans.exceptional')
+  // شهر أول قسط لسلفة عادية اختاره مخوّل في تقديم سابق (علامة الخادم) بيعدّي في إعادة التقديم زي ما هو، حتى لو اللي بيعيد
+  // التقديم الموظف نفسه. العميل مايقدرش يكتب العلامة، وإعادة التقديم بتشيلها لو التعديل فيه شهر (loanResubmissionBase)
+  const carriedChoice = !exceptional && typeof chosenBy === 'number' && Number.isSafeInteger(chosenBy) && chosenBy > 0 ? chosenBy : null
   const cycleStartDay = await intConfig(em, 'payroll.cycle_start_day', 23, 1, 31)
   const currentPeriod = loanCapWindow('PAYROLL_PERIOD', today, cycleStartDay).period
   let firstInstallmentPeriod: string | null = null
   if (!blank(client.firstInstallmentPeriod)) {
-    if (!canExceptional) throw new ForbiddenException({ code: 'LOAN_FIRST_PERIOD_FORBIDDEN', message: 'تحديد شهر أول قسط متاح للموارد البشرية المخوّلة فقط' })
+    if (!canExceptional && carriedChoice === null) throw new ForbiddenException({ code: 'LOAN_FIRST_PERIOD_FORBIDDEN', message: 'تحديد شهر أول قسط متاح للموارد البشرية المخوّلة فقط' })
     firstInstallmentPeriod = loanPeriod(client.firstInstallmentPeriod, 'شهر أول قسط')
     const ahead = await intConfig(em, 'loan.first_installment_max_months_ahead', 12, 0, 120), last = addMonths(currentPeriod, ahead)
     if (firstInstallmentPeriod < currentPeriod || firstInstallmentPeriod > last) {
@@ -182,13 +186,24 @@ export async function stageLoanRequestSubmission(em: EntityManager, input: { req
     if (!evaluation.allowed) {
       throw new BadRequestException({ code: 'LOAN_CAP_EXCEEDED', message: `لا يمكن تقديم السلفة: ${evaluation.violations.map(row => row.message).join('؛ ')}`, cap: evaluation })
     }
-    if (firstInstallmentPeriod) staged.firstInstallmentPeriod = firstInstallmentPeriod
+    if (firstInstallmentPeriod) Object.assign(staged, { firstInstallmentPeriod, firstInstallmentPeriodBy: carriedChoice ?? input.actor.sub })
   }
   // شهر أول قسط يُختم مرة واحدة عند التقديم فيراه الموظف والمعتمد قبل الاعتماد (القرار د)؛
   // الافتراضي هو افتراضي المعالج نفسه: أول الشهر التالي.
   if (!firstInstallmentPeriod) staged.firstInstallmentPeriod = addMonths(today.slice(0, 7), 1)
   staged.capCheck = { stage: 'SUBMIT', checkedAt: new Date().toISOString(), actorUserId: input.actor.sub, evaluation }
   return staged
+}
+
+/** إعادة تقديم سلفة مُرجَعة للاستكمال — الحمولة المحفوظة قبل دمج تعديل العميل. شهر أول قسط اللي الخادم ختمه لوحده
+ *  (الشهر اللي بعد التقديم) مش مدخل عميل: بيتشال فيتختم تاني من شهر إعادة التقديم — كان بيتقري كمدخل فالموظف ياخد 403.
+ *  المختار بمخوّل (علامة firstInstallmentPeriodBy) وشهر السلفة الاستثنائية بيعدّوا زي ما هم. ولو التعديل نفسه فيه شهر،
+ *  العلامة القديمة بتتشال فيتفحص كمدخل جديد بصلاحية اللي بيعيد التقديم (الموظف مايقدرش يحط شهر). */
+export function loanResubmissionBase(stored: Record<string, unknown>, patch?: Record<string, unknown> | null): Record<string, unknown> {
+  const base = { ...stored }
+  if (patch && own(patch, 'firstInstallmentPeriod')) delete base.firstInstallmentPeriodBy
+  else if (base.exceptional !== true && blank(base.firstInstallmentPeriodBy)) delete base.firstInstallmentPeriod
+  return base
 }
 
 // ===== AD-07: كل خطوة اعتماد =====

@@ -90,7 +90,7 @@ import { assertLoanDeferralClientPayload, assertLoanReferenceId, LOAN_DEFERRAL_F
 import { assertSalaryChangeClientPayload, assertSalaryRequestUnexecuted, isSalaryChangeType, readStoredSalaryChangePayload, SALARY_CHANGE_CLIENT_FIELDS, SALARY_CHANGE_HANDLER, salaryChangeExecutionDate,
   salaryIncreaseThresholdMet, stageSalaryChangeRequest } from './salary-change-requests'
 
-import { assertLoanRequestClientPayload, EARLY_SETTLEMENT_FIELDS, isEarlySettlementType, isLoanCapRequestType, LOAN_REQUEST_CLIENT_FIELDS,
+import { assertLoanRequestClientPayload, EARLY_SETTLEMENT_FIELDS, isEarlySettlementType, isLoanCapRequestType, LOAN_REQUEST_CLIENT_FIELDS, loanResubmissionBase,
   LOAN_REQUEST_SERVER_FIELDS, readEarlySettlementPayload, reviewLoanRequestApproval, stageLoanRequestSubmission } from '../loans/loan-request-caps'
 
 export interface ActDto {
@@ -1620,6 +1620,8 @@ export class RequestsService {
         const stored = JSON.parse(req.payload || '{}')
         req.payload = JSON.stringify(Object.fromEntries(Object.entries(stored).filter(([key]) => !['salaryChangeBasis', 'salaryChangeApproval', 'increase_pct'].includes(key))))
       }
+      // سلفة مُرجَعة: شهر أول قسط اللي الخادم ختمه لوحده مابيتقريش كمدخل عميل عند إعادة التقديم — بيتختم تاني (loanResubmissionBase)
+      if (isLoanCapRequestType(type)) req.payload = JSON.stringify(loanResubmissionBase(JSON.parse(req.payload || '{}'), payload))
       if (payload) {
         if (this.isOvertimeRequest(req, em)) this.assertOvertimeClientPayload(payload)
         if (isLoanCapRequestType(type)) assertLoanRequestClientPayload(payload)

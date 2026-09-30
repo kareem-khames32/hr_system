@@ -30,6 +30,10 @@ async function http(user, method, route, body) {
 function expect(result, status) { assert.equal(result.status, status, JSON.stringify(result.body)); return result.body }
 const loan = (user, payload, extra = {}) => http(user, 'POST', '/requests', { typeCode: 'LOAN', submit: true, payload, ...extra })
 const act = (user, id) => http(user, 'POST', `/requests/${id}/act`, { action: 'APPROVE', comment: 'اعتماد السلفة' })
+const giveBack = (user, id) => http(user, 'POST', `/requests/${id}/act`, { action: 'RETURN', comment: 'استكمل بيانات السلفة وأعد الإرسال' })
+const resubmit = (user, id, payload) => http(user, 'POST', `/requests/${id}/resubmit`, payload === undefined ? {} : { payload })
+const statusOf = async id => (await raw('SELECT status FROM requests WHERE id=@0', [id]))[0].status
+const periodOf = payload => [payload.firstInstallmentPeriod, payload.firstInstallmentPeriodBy]
 const requestCount = async () => (await raw('SELECT COUNT(*) AS n FROM requests'))[0].n
 async function storedPayload(id) { return JSON.parse((await raw('SELECT payload FROM requests WHERE id=@0', [id]))[0].payload) }
 async function loanOf(requestId) {
@@ -75,6 +79,9 @@ before(async () => {
   f.hr = await user(f.hrEmployee, 'hr', ['requests.view_all', 'requests.create_on_behalf', 'approve.hr', 'loans.exceptional', 'payroll.view'])
   // تقديم نيابةً بلا صلاحية السلفة الاستثنائية وبلا اعتماد فوري
   f.desk = await user(f.deskEmployee, 'desk', ['requests.view_all', 'requests.create_on_behalf'])
+  // موارد بشرية بصلاحية السلفة الاستثنائية (تختار شهر أول قسط) من غير اعتماد فوري — طلبها بيمشي في السلسلة ويترجع
+  f.hrDeskEmployee = await person('SGLX')
+  f.hrDesk = await user(f.hrDeskEmployee, 'hrdesk', ['requests.view_all', 'requests.create_on_behalf', 'loans.exceptional'])
   const cycle = Number((await repo('RequestsConfig').findOneBy({ key: 'payroll.cycle_start_day' }))?.value ?? 23)
   f.firstPeriod = addMonths(loanCapWindow('PAYROLL_PERIOD', localDate(), cycle).period, 1)
 }, { timeout: 60000 })
@@ -175,4 +182,60 @@ test('the loans list and the employee ledger carry the loan kind (exceptional fl
   const mine = expect(await http(f.owner, 'GET', '/loans/mine'), 200)
   assert.deepEqual(mine.map(item => [item.id, item.isExceptional, item.installmentMonths]).sort((a, b) => a[0] - b[0]),
     [[f.regularLoanId, false, 1], [f.exceptionalLoanId, true, 4], [f.legacyLoanId, false, 3]].sort((a, b) => a[0] - b[0]))
+})
+
+// إعادة تقديم سلفة مُرجَعة: شهر أول قسط اللي الخادم ختمه لوحده كان بيتقري كمدخل عميل فالموظف ياخد 403 LOAN_FIRST_PERIOD_FORBIDDEN
+test('resubmit: a returned regular loan resubmitted by the employee goes through and the month is re-stamped from today; the employee still cannot set or forge a month', async () => {
+  const restamped = addMonths(localDate().slice(0, 7), 1)
+  const submitted = expect(await loan(f.owner, { amount: '250.00' }), 201)
+  assert.deepEqual(periodOf(await storedPayload(submitted.id)), [restamped, undefined], 'the default stamp carries no chooser')
+  // طلب اتقدّم من شهور: ختمه القديم لسه في حمولته (نحاكيه في القاعدة المؤقتة)
+  await raw("UPDATE requests SET payload=JSON_MODIFY(payload,'$.firstInstallmentPeriod','2025-12') WHERE id=@0", [submitted.id])
+  expect(await giveBack(f.manager, submitted.id), 201)
+  assert.equal(await statusOf(submitted.id), 'RETURNED_FOR_INFO')
+  // الموظف مايقدرش يحط شهر ولا يزوّر علامة المخوّل — والطلب يفضل مُرجَع بحمولته زي ما هي
+  assert.equal(expect(await resubmit(f.owner, submitted.id, { firstInstallmentPeriod: addMonths(f.firstPeriod, 2) }), 403).code, 'LOAN_FIRST_PERIOD_FORBIDDEN')
+  expect(await resubmit(f.owner, submitted.id, { firstInstallmentPeriodBy: f.hrDesk.id }), 400)
+  assert.equal(await statusOf(submitted.id), 'RETURNED_FOR_INFO')
+  assert.equal((await storedPayload(submitted.id)).firstInstallmentPeriod, '2025-12')
+  // نفس تعديل شاشة «طلباتي» (المبلغ وشهر واحد): بيعدّي، والشهر بيتختم تاني من شهر إعادة التقديم
+  const again = expect(await resubmit(f.owner, submitted.id, { amount: '250.00', months: 1 }), 201)
+  assert.equal(again.status, 'UNDER_REVIEW')
+  const stored = await storedPayload(submitted.id)
+  assert.deepEqual([...periodOf(stored), stored.months], [restamped, undefined, 1])
+  // ومن غير أي تعديل كمان
+  expect(await giveBack(f.manager, submitted.id), 201)
+  await raw("UPDATE requests SET payload=JSON_MODIFY(payload,'$.firstInstallmentPeriod','2025-12') WHERE id=@0", [submitted.id])
+  assert.equal(expect(await resubmit(f.owner, submitted.id), 201).status, 'UNDER_REVIEW')
+  assert.deepEqual(periodOf(await storedPayload(submitted.id)), [restamped, undefined])
+})
+
+test('resubmit: a month HR chose (loans.exceptional) survives unchanged — a regular loan filed on behalf, even when the employee resubmits, and an exceptional loan', async () => {
+  const chosen = addMonths(f.firstPeriod, 2)
+  const regular = expect(await loan(f.hrDesk, { amount: '180.00', firstInstallmentPeriod: chosen }, { onBehalfEmployeeId: f.employee.id }), 201)
+  assert.equal(regular.status, 'UNDER_REVIEW', 'no instant approval without HR authority')
+  assert.deepEqual(periodOf(await storedPayload(regular.id)), [chosen, f.hrDesk.id])
+  expect(await giveBack(f.manager, regular.id), 201)
+  // الموظف نفسه بيعيد التقديم بتعديل شاشة «طلباتي»: الشهر اللي اختارته الموارد البشرية يفضل زي ما هو
+  expect(await resubmit(f.owner, regular.id, { amount: '180.00', months: 1 }), 201)
+  assert.deepEqual(periodOf(await storedPayload(regular.id)), [chosen, f.hrDesk.id])
+  // ومنشئه من غير تعديل: برضه زي ما هو
+  expect(await giveBack(f.manager, regular.id), 201)
+  expect(await resubmit(f.hrDesk, regular.id), 201)
+  assert.deepEqual(periodOf(await storedPayload(regular.id)), [chosen, f.hrDesk.id])
+  // والموظف مايقدرش يغيّره
+  expect(await giveBack(f.manager, regular.id), 201)
+  assert.equal(expect(await resubmit(f.owner, regular.id, { firstInstallmentPeriod: f.firstPeriod }), 403).code, 'LOAN_FIRST_PERIOD_FORBIDDEN')
+  assert.deepEqual(periodOf(await storedPayload(regular.id)), [chosen, f.hrDesk.id])
+
+  const month = addMonths(f.firstPeriod, 3)
+  const exceptional = expect(await loan(f.hrDesk, { amount: '900.00', months: 3, exceptional: true, exceptionalCategory: 'FAMILY',
+    reason: 'ظرف عائلي موثق لدى الموارد البشرية', firstInstallmentPeriod: month }, { onBehalfEmployeeId: f.employee.id }), 201)
+  assert.equal(exceptional.status, 'UNDER_REVIEW')
+  expect(await giveBack(f.manager, exceptional.id), 201)
+  // السلفة الاستثنائية بيعيد تقديمها المخوّل بس
+  expect(await resubmit(f.owner, exceptional.id), 403)
+  expect(await resubmit(f.hrDesk, exceptional.id, { reason: 'ظرف عائلي موثق بمستند جديد لدى الموارد البشرية' }), 201)
+  const stored = await storedPayload(exceptional.id)
+  assert.deepEqual([stored.exceptional, stored.months, stored.firstInstallmentPeriod, stored.exceptionalBy], [true, 3, month, f.hrDesk.id])
 })

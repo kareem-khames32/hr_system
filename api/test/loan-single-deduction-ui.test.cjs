@@ -13,7 +13,8 @@ require('../node_modules/ts-node').register({ project: path.join(__dirname, '..'
 require('../node_modules/reflect-metadata')
 const loansUi = require('../../src/lib/loans-api')
 const warning = require('../../src/lib/work-day-rule-warning')
-const { LOAN_REQUEST_CLIENT_FIELDS, REGULAR_LOAN_SINGLE_DEDUCTION } = require('../src/loans/loan-request-caps')
+const { LOAN_REQUEST_CLIENT_FIELDS, LOAN_REQUEST_SERVER_FIELDS, loanResubmissionBase, REGULAR_LOAN_SINGLE_DEDUCTION } = require('../src/loans/loan-request-caps')
+const { SERVER_PAYLOAD_KEYS } = require('../../src/lib/request-payload')
 const { LOAN_EXCEPTIONAL_CATEGORIES } = require('../src/loans/loan-caps')
 const root = path.resolve(__dirname, '..', '..')
 const read = file => fs.readFileSync(path.join(root, file), 'utf8').replace(/\r\n/g, '\n')
@@ -34,6 +35,22 @@ test('loan kind labels: «سلفة استثنائية — N قسط», «سلفة
   assert.equal(loansUi.loanRequestKindLabel('[]'), null)
   // نفس رسالة الخادم بالحرف
   assert.equal(REGULAR_LOAN_SINGLE_DEDUCTION, 'السلفة العادية بتتخصم مرة واحدة؛ التقسيط للسلفة الاستثنائية بس')
+})
+
+test('resubmitting a returned loan: the server default month is dropped (re-stamped), a month an authorized user chose or an exceptional month is kept, and a month in the patch drops the old chooser', () => {
+  assert.deepEqual(loanResubmissionBase({ amount: '250.00', months: 1, firstInstallmentPeriod: '2025-12', capCheck: { stage: 'SUBMIT' } }, { amount: '250.00', months: 1 }),
+    { amount: '250.00', months: 1, capCheck: { stage: 'SUBMIT' } })
+  assert.deepEqual(loanResubmissionBase({ firstInstallmentPeriod: '2025-12' }), {}, 'no patch at all: same rule')
+  assert.deepEqual(loanResubmissionBase({ firstInstallmentPeriod: '2026-12', firstInstallmentPeriodBy: 7 }, { amount: '1.00' }), { firstInstallmentPeriod: '2026-12', firstInstallmentPeriodBy: 7 })
+  assert.deepEqual(loanResubmissionBase({ exceptional: true, firstInstallmentPeriod: '2026-12', exceptionalBy: 7 }), { exceptional: true, firstInstallmentPeriod: '2026-12', exceptionalBy: 7 })
+  assert.deepEqual(loanResubmissionBase({ firstInstallmentPeriod: '2026-12', firstInstallmentPeriodBy: 7 }, { firstInstallmentPeriod: '2027-01' }), { firstInstallmentPeriod: '2026-12' },
+    'a month in the patch is new client input: the old chooser mark goes, and the merge takes the patch month')
+  const stored = { firstInstallmentPeriod: '2025-12' }
+  loanResubmissionBase(stored)
+  assert.deepEqual(stored, { firstInstallmentPeriod: '2025-12' }, 'the stored payload object is not mutated')
+  // العلامة يكتبها الخادم بس، ومابتظهرش خام في حمولة الطلب على الشاشة
+  assert.ok(LOAN_REQUEST_SERVER_FIELDS.includes('firstInstallmentPeriodBy'))
+  assert.ok(SERVER_PAYLOAD_KEYS.includes('firstInstallmentPeriodBy'))
 })
 
 test('«سلفي»: no months input, the request is one month, the note is shown, and the list works at phone width (cards under md, the table from md)', () => {
