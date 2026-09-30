@@ -12,6 +12,7 @@ import {
   History,
 } from 'lucide-react'
 import { fetchTransfers } from '@/lib/api'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 // ============================================================
 // سجل النقل بين الفرق (§7.2)
@@ -22,6 +23,7 @@ import { fetchTransfers } from '@/lib/api'
 interface TransferRow {
   id: number
   requestId?: number
+  employeeId: number
   employeeName: string
   fromTeamName: string
   toTeamName: string
@@ -45,6 +47,8 @@ export default function TransfersPage() {
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
   const [filter, setFilter] = useState('')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد بمكان الموظف الحالي — بيضيّق السجل كله (الأرقام كمان)
+  const org = useOrgFilter()
 
   useEffect(() => {
     const load = async () => {
@@ -56,6 +60,7 @@ export default function TransfersPage() {
           rows.map((t: any) => ({
             id: t.id,
             requestId: t.requestId ?? undefined,
+            employeeId: Number(t.employeeId),
             employeeName: t.employeeName ?? `#${t.employeeId}`,
             fromTeamName: t.fromTeamName ?? (!t.fromTeam ? 'بدون فريق' : `#${t.fromTeam}`),
             toTeamName: t.toTeamName ?? `#${t.toTeam}`,
@@ -76,18 +81,20 @@ export default function TransfersPage() {
     load()
   }, [])
 
-  const filtered = transfers.filter((t) => !filter || t.status === filter)
+  // تنقلات موظفي الفرع/الإدارة/القسم/الفريق المختار — الأرقام والأزرار والقائمة منها
+  const orgTransfers = transfers.filter((t) => org.matches(t.employeeId))
+  const filtered = orgTransfers.filter((t) => !filter || t.status === filter)
 
   const todayPlus30 = new Date(Date.now() + 30 * 86400000)
     .toISOString()
     .slice(0, 10)
   const counts = {
-    total: transfers.length,
-    scheduled: transfers.filter((t) => t.status === 'SCHEDULED').length,
-    soon: transfers.filter(
+    total: orgTransfers.length,
+    scheduled: orgTransfers.filter((t) => t.status === 'SCHEDULED').length,
+    soon: orgTransfers.filter(
       (t) => t.status === 'SCHEDULED' && t.effectiveDate <= todayPlus30
     ).length,
-    executed: transfers.filter((t) => t.status === 'EXECUTED').length,
+    executed: orgTransfers.filter((t) => t.status === 'EXECUTED').length,
   }
 
   return (
@@ -157,6 +164,9 @@ export default function TransfersPage() {
           </div>
         </div>
 
+        {/* الفرع ← الإدارة ← القسم ← الفريق */}
+        {org.element}
+
         {/* Filter */}
         <div className="flex gap-2 flex-wrap">
           <button
@@ -165,10 +175,10 @@ export default function TransfersPage() {
               !filter ? 'bg-primary-500 text-white' : 'bg-gray-100 text-gray-600'
             }`}
           >
-            الكل ({transfers.length})
+            الكل ({orgTransfers.length})
           </button>
           {Object.keys(statusConfig).map((st) => {
-            const c = transfers.filter((t) => t.status === st).length
+            const c = orgTransfers.filter((t) => t.status === st).length
             if (!c) return null
             return (
               <button

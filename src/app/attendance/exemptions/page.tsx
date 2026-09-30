@@ -8,6 +8,7 @@ import { AlertTriangle, Ban, CalendarX, CheckCircle, History, Plus, RefreshCw, S
 import { MainLayout } from '@/components/layout'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { EmployeePicker } from '@/components/EmployeePicker'
+import { useOrgFilter } from '@/components/OrgFilter'
 import { periodOverlapsRange } from '@/lib/payroll-month-range'
 import {
   approveAttendanceExemption,
@@ -75,6 +76,8 @@ function ExemptionsContent() {
   const [search, setSearch] = useState('')
   // الاستثناءات اللي مدتها بتتقاطع مع الفترة — الافتراضي شهر الرواتب الجاري (مثلًا 23 → 22)
   const { range, setRange, context } = usePayrollDayRange()
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد
+  const org = useOrgFilter()
   const [notice, setNotice] = useState('')
 
   const [createOpen, setCreateOpen] = useState(false)
@@ -123,7 +126,8 @@ function ExemptionsContent() {
     return () => { cancelled = true }
   }, [createOpen, employees.length])
 
-  const rows = useMemo(() => data?.rows ?? [], [data])
+  // طلبات موظفي الفرع/الإدارة/القسم/الفريق المختار في الفلتر الموحد — العدادات والجدول منها
+  const rows = useMemo(() => (data?.rows ?? []).filter(row => org.matches(row.employeeId)), [data, org.matches])
   const minLength = data?.reasonMinLength ?? 20
   // العدادات والجدول على نفس الفترة المختارة (الاستثناءات اللي مدتها بتتقاطع معاها)
   const rangeRows = useMemo(() => rows.filter(row => !range || periodOverlapsRange(row.effectiveFrom, row.effectiveTo, range)), [rows, range])
@@ -289,6 +293,8 @@ function ExemptionsContent() {
             </select>
           </div>
           <DayRangeFilter idPrefix="exemptions" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
+          {/* الفرع ← الإدارة ← القسم ← الفريق */}
+          {org.element}
         </div>
         {error && (
           <div role="alert" className="text-sm text-danger-600 flex items-center gap-2"><AlertTriangle size={16} />{error}</div>

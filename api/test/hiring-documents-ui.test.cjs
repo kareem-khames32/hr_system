@@ -104,8 +104,10 @@ test('HD-UI-03: الشاشات متوصلة — أنواع المستندات، 
 
   // «نواقص مسوغات التعيين»: بحث وفرع واختيار وتذكير ورفع
   const page = read('src/app/employees/hiring-documents/page.tsx')
+  // الفرع والإدارة والقسم والفريق: الفلتر الموحد (طلب المالك 30 سبتمبر) — الفرع للخادم والباقي على الصفوف، والتذكير للظاهرين بس
   for (const text of ['fetchHiringMissing({ search, branchId })', 'await sendHiringReminders(selected)', 'setNotice(reminderResultText(result))',
-    'placeholder="بحث باسم الموظف أو كوده..."', '<option value="">كل الفروع</option>', 'canSeeBranch(branchScope, branch.id)',
+    'placeholder="بحث باسم الموظف أو كوده..."', '{org.element}', 'const branchId = org.params.branchId ?? \'\'',
+    '.filter((row) => org.matches(row.employeeId))', 'const next = prev.filter((id) => rows.some((row) => row.employeeId === id))',
     "{sending ? 'جارٍ الإرسال...' : 'ابعت تذكير'}", 'href={uploadMissingHref(row.employeeId, doc.code)}',
     'href={uploadMissingHref(row.employeeId, row.missing[0]?.code)}', "{row.lastReminderAt ? formatDate(row.lastReminderAt) : 'ماتبعتش'}",
     'مفيش مستندات متعلّمة «مطلوب للتعيين»', 'onClick={toggleAll}']) {

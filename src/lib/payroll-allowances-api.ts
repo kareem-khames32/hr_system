@@ -48,3 +48,26 @@ export const createAllowanceGrant = (input: AllowanceGrantInput) => post<Allowan
 export const cancelAllowanceLine = (id: number) => post<{ id: number; status: string; recalculateRuns: RunBrief[] }>(`/payroll/allowances/lines/${id}/cancel`)
 export const cancelAllowanceGrant = (id: number) =>
   post<{ id: number; cancelled: number; locked: number; recalculateRuns: RunBrief[] }>(`/payroll/allowances/grants/${id}/cancel`)
+
+/**
+ * إجماليات سطور بدلات معيّنة بنفس حساب الخادم (grants في allowances-grants.service): الملغى برّه، والجمع بالقرش، وكل نوع بعدد سطوره
+ * ومبلغه مرتب بالاسم. للشاشة لما الفلتر الموحد («الفرع ← الإدارة ← القسم ← الفريق») يضيّق السطور — ماتعرضش إجمالي الخادم جنبها.
+ */
+export function allowanceTotalsOf(rows: readonly AllowanceGrantRow[]): AllowanceMonth['totals'] {
+  const cents = (value: unknown) => Math.round(Number(value ?? 0) * 100)
+  const active = rows.filter(row => row.state !== 'CANCELLED')
+  const byType = new Map<number, { allowanceTypeId: number; typeName: string; count: number; cents: number }>()
+  for (const row of active) {
+    const entry = byType.get(row.allowanceTypeId) ?? { allowanceTypeId: row.allowanceTypeId, typeName: row.typeName, count: 0, cents: 0 }
+    entry.count++
+    entry.cents += cents(row.amount)
+    byType.set(row.allowanceTypeId, entry)
+  }
+  return {
+    count: active.length,
+    employees: new Set(active.map(row => row.employeeId)).size,
+    amount: active.reduce((sum, row) => sum + cents(row.amount), 0) / 100,
+    byType: [...byType.values()].sort((a, b) => a.typeName.localeCompare(b.typeName, 'ar'))
+      .map(entry => ({ allowanceTypeId: entry.allowanceTypeId, typeName: entry.typeName, count: entry.count, amount: entry.cents / 100 })),
+  }
+}

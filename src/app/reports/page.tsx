@@ -16,13 +16,9 @@ import {
   UserCheck,
   UserMinus,
 } from 'lucide-react'
-import {
-  can,
-  fetchHeadcountReport,
-  fetchLeavesReport,
-  fetchPayrollReport,
-  fetchRequestsReport,
-} from '@/lib/api'
+import { can } from '@/lib/api'
+import { fetchHeadcountReportFor, fetchLeavesReportFor, fetchPayrollReportFor, fetchRequestsReportFor } from '@/lib/reports-org-api'
+import { useOrgFilter } from '@/components/OrgFilter'
 import { fetchAttendanceReportRange, fetchOvertimeReportRange } from '@/lib/attendance-range-api'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { dayRangeKey, dayRangeLabel, validDayRange, type DayRange } from '@/lib/payroll-month-range'
@@ -109,10 +105,15 @@ export default function ReportsPage() {
   const leaveCatalog = useLeaveCatalog()
   const leaveTypeLabels = leaveCatalog.labels
   const [headcount, setHeadcount] = useState<HeadcountReport | null>(null)
-  const [attendance, setAttendance] = useState<AttendanceRow[]>([])
+  const [allAttendance, setAttendance] = useState<AttendanceRow[]>([])
   const [leaves, setLeaves] = useState<LeavesReport | null>(null)
   const [payroll, setPayroll] = useState<PayrollReport | null>(null)
-  const [overtime, setOvertime] = useState<OvertimeRow[]>([])
+  const [allOvertime, setOvertime] = useState<OvertimeRow[]>([])
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد للوحة كلها: التعداد والإجازات والرواتب والطلبات بيتفلتروا في الخادم،
+  // والحضور والإضافي (صف لكل موظف) هنا — والبطاقات والتصدير من نفس الصفوف
+  const org = useOrgFilter()
+  const attendance = allAttendance.filter((row) => org.matches(Number(row.employeeId)))
+  const overtime = allOvertime.filter((row) => org.matches(Number(row.employeeId)))
   const [requests, setRequests] = useState<RequestsReport | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -149,10 +150,10 @@ export default function ReportsPage() {
     if (listRange) loadRange(listRange)
     try {
       const [hc, lv, pr, rq] = await Promise.all([
-        fetchHeadcountReport(),
-        fetchLeavesReport(currentYear),
-        fetchPayrollReport(),
-        fetchRequestsReport(),
+        fetchHeadcountReportFor(org.params),
+        fetchLeavesReportFor(currentYear, org.params),
+        fetchPayrollReportFor(org.params),
+        fetchRequestsReportFor(org.params),
       ])
       setHeadcount(hc)
       setLeaves(lv)
@@ -166,10 +167,11 @@ export default function ReportsPage() {
     }
   }
 
+  // أول مرة، وكل ما الفلتر الموحد يتغير (الأرقام المجمّعة من الخادم بالفلتر)
   useEffect(() => {
     loadData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [org.paramsKey])
   useEffect(() => {
     if (listRange) loadRange(listRange)
     // eslint-disable-next-line react-hooks/exhaustive-deps
@@ -348,6 +350,15 @@ export default function ReportsPage() {
 
         {/* التقارير المالية لشهر الرواتب (محتاجة صلاحية عرض الرواتب) — ظاهرة حتى لو باقي اللوحة ما حمّلتش */}
         {canPayroll && <FinancialReportLinks />}
+
+        {/* الفرع ← الإدارة ← القسم ← الفريق — للوحة كلها */}
+        <div className="card space-y-2" data-reports-org-filter>
+          <p className="text-sm font-medium text-gray-700">الفرع والإدارة والقسم والفريق (للوحة كلها)</p>
+          {org.element}
+          {(org.params.departmentIds || org.params.teamId) && (
+            <p className="text-xs text-gray-500">الطلبات السرّية مش بتتعد لما تختار إدارة أو قسم أو فريق — عشان العدد مايكشفش مكان صاحبها.</p>
+          )}
+        </div>
 
         {/* فترة الحضور والعمل الإضافي: شهر رواتب بضغطة أو «من تاريخ / إلى تاريخ» بأي يوم */}
         <div className="card space-y-2">

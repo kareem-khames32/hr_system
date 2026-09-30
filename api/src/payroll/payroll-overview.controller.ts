@@ -19,6 +19,8 @@ class OverviewRosterQuery extends OverviewPeriodQuery {
   @IsOptional() @IsString() @MaxLength(200) search?: string
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) branchId?: number
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) departmentId?: number
+  // الفلتر الموحد: الإدارة/القسم المختار بأقسامه الفرعية جوه فرعه، مفصولة بفاصلة (3,4,5)
+  @IsOptional() @IsString() @MaxLength(4000) departmentIds?: string
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) teamId?: number
   @IsOptional() @IsString() @MaxLength(200) jobTitle?: string
   /** حالات الموظف مفصولة بفاصلة: active,probation,suspended… */

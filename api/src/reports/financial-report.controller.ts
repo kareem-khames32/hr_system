@@ -1,8 +1,9 @@
 import { Controller, ForbiddenException, Get, Query, UseGuards } from '@nestjs/common'
 import { Transform, Type } from 'class-transformer'
-import { IsBoolean, IsInt, IsOptional, Matches, Min } from 'class-validator'
+import { ArrayMaxSize, IsArray, IsBoolean, IsInt, IsOptional, Matches, Min } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
+import { ORG_FILTER_MAX_UNITS } from '../org/org-filter-params'
 import { FinancialReportService, type FinancialReportQuery } from './financial-report.service'
 
 const toBoolean = ({ value }: { value: unknown }) =>
@@ -17,6 +18,12 @@ export class FinancialReportQueryDto {
 
   @IsOptional() @Type(() => Number) @IsInt({ message: 'رقم القسم غير صالح' }) @Min(1)
   departmentId?: number
+
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد: الإدارة/القسم المختار بأقسامه الفرعية جوه فرعه («3,4,5»)، من لقطة المسير زي القسم
+  @IsOptional() @Transform(({ value }) => (typeof value === 'string' ? value.split(',').map((part) => Number(part.trim())) : value))
+  @IsArray({ message: 'الأقسام المختارة غير صالحة' }) @ArrayMaxSize(ORG_FILTER_MAX_UNITS, { message: 'الأقسام المختارة كتير' })
+  @IsInt({ each: true, message: 'الأقسام المختارة غير صالحة' }) @Min(1, { each: true, message: 'الأقسام المختارة غير صالحة' })
+  departmentIds?: number[]
 
   // الفريق: نفس مرشح /reports/payroll/* عشان الفلتر ما يبقاش مقبولًا ومتجاهلًا بصمت
   @IsOptional() @Type(() => Number) @IsInt({ message: 'رقم الفريق غير صالح' }) @Min(1)
@@ -44,7 +51,8 @@ export class FinancialReportController {
     }
     // الفرع المطلوب، أو فرع الحساب لو فرع واحد (زي الأول بالحرف)، وإلا null + نطاق فروعه كله (branchScope)
     return { period: query.period, branchId: query.branchId ?? (scope !== null && scope.length === 1 ? scope[0] : null), branchScope: scope,
-      departmentId: query.departmentId ?? null, teamId: query.teamId ?? null, costCenterId: query.costCenterId ?? null, includeDraft: query.includeDraft === true }
+      departmentId: query.departmentId ?? null, departmentIds: query.departmentIds?.length ? [...new Set(query.departmentIds)] : null,
+      teamId: query.teamId ?? null, costCenterId: query.costCenterId ?? null, includeDraft: query.includeDraft === true }
   }
 
   // ١) كشف الرواتب: سطر لكل موظف في كل مسير بالبدلات والإضافي والخصومات بأنواعها والصافي وطريقة الصرف

@@ -22,6 +22,8 @@ export interface PayrollOverviewFilterInput {
   search?: unknown
   branchId?: unknown
   departmentId?: unknown
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد: الإدارة/القسم المختار بأقسامه الفرعية جوه فرعه («3,4,5»)
+  departmentIds?: unknown
   teamId?: unknown
   jobTitle?: unknown
   statuses?: unknown
@@ -36,6 +38,8 @@ export interface PayrollOverviewFilters {
   search: string
   branchId: number | null
   departmentId: number | null
+  // موجودة بس لما الفلتر الموحد يبعتها (أي قسم منها)
+  departmentIds?: number[]
   teamId: number | null
   jobTitle: string
   statuses: PayrollEmploymentStatus[]
@@ -82,10 +86,14 @@ export function normalizePayrollOverviewFilters(input: PayrollOverviewFilterInpu
   const membership = text(raw.membership) as PayrollMembershipView
   const statuses = [...new Set(list(raw.statuses).filter(isPayrollEmploymentStatus))].sort()
   const from = day(raw.hiredFrom), to = day(raw.hiredTo)
+  // الأقسام: أرقام صالحة بس (الغلط يسقط زي باقي الفلاتر)، وقائمة كل قيمها غلط = فلتر مايطابقش حد (مش «الكل» بصمت)
+  const departmentParts = list(raw.departmentIds)
+  const departmentIds = [...new Set(departmentParts.map(id).filter((value): value is number => value !== null))].sort((a, b) => a - b)
   return {
     search: text(raw.search).slice(0, 200),
     branchId: id(raw.branchId),
     departmentId: id(raw.departmentId),
+    ...(departmentParts.length ? { departmentIds: departmentIds.length ? departmentIds : [-1] } : {}),
     teamId: id(raw.teamId),
     jobTitle: text(raw.jobTitle).slice(0, 200),
     statuses,
@@ -113,6 +121,7 @@ export function matchesPayrollOverviewFilter(row: PayrollOverviewFilterRow, filt
   if (!payrollOverviewSearchMatches(row, filters.search)) return false
   if (filters.branchId !== null && (row.branchId ?? null) !== filters.branchId) return false
   if (filters.departmentId !== null && (row.departmentId ?? null) !== filters.departmentId) return false
+  if (filters.departmentIds && (row.departmentId == null || !filters.departmentIds.includes(Number(row.departmentId)))) return false
   if (filters.teamId !== null && (row.teamId ?? null) !== filters.teamId) return false
   if (filters.jobTitle && fold(row.jobTitle ?? '') !== fold(filters.jobTitle)) return false
   if (filters.statuses.length && !filters.statuses.includes((row.employmentStatus ?? '') as PayrollEmploymentStatus)) return false
@@ -132,7 +141,7 @@ export function matchesPayrollOverviewFilter(row: PayrollOverviewFilterRow, filt
 /** عدد الفلاتر المفعّلة (للشارة على الشاشة) — «الكل» في المنظور مش فلتر. */
 export function payrollOverviewActiveFilterCount(filters: PayrollOverviewFilters): number {
   return [
-    filters.search !== '', filters.branchId !== null, filters.departmentId !== null, filters.teamId !== null,
+    filters.search !== '', filters.branchId !== null, filters.departmentId !== null, !!filters.departmentIds, filters.teamId !== null,
     filters.jobTitle !== '', filters.statuses.length > 0, filters.hiredFrom !== null || filters.hiredTo !== null,
     filters.runId !== null, filters.reasonCode !== '',
   ].filter(Boolean).length

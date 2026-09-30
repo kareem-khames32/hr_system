@@ -234,7 +234,9 @@ test('payroll screens: day range on deductions/bonuses/runs report; run period s
     assert.ok(source.includes('if (request !== latest.current) return'), file)
     assert.doesNotMatch(source, /dateInRange\(localDayOf\(row\.createdAt\)/, `${file}: no browser-side date filter over a capped list`)
     assert.ok(source.includes('[focused, ...rows]'), `${file}: the linked request always shows`)
-    assert.ok(source.includes('برا الفترة المختارة') && source.includes('setOutsideRange(everything ? everything.filter(row => !inRange.has(row.id)).length : 0)'),
+    // العدد بالفلتر الموحد كمان (طلب المالك 30 سبتمبر): اللي برا الفترة من موظفي الفرع/القسم المختار بس
+    assert.ok(source.includes('برا الفترة المختارة') && source.includes('setOutsideRows(everything ? everything.filter(row => !inRange.has(row.id)) : [])')
+      && source.includes('const outsideRange = outsideRows.filter(row => org.matches(row.employee.id)).length'),
       `${file}: pending approvals outside the range are counted, not silently hidden`)
     assert.ok(source.includes('rows.length >= LIST_LIMIT'), `${file}: the 500 cap is said out loud`)
     assert.ok(source.includes('rows.length === 0 && outsideRange === 0'), `${file}: a manager with older requests still gets the workspace`)

@@ -44,6 +44,7 @@ import {
   type ApiOvertimePeriodRecompute,
 } from '@/lib/api'
 import { OrgTargetPicker, describeOrgTarget, initialOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
+import { useOrgFilter } from '@/components/OrgFilter'
 import { localToday } from '@/lib/dates'
 import { branchScopeOfUser, canSeeBranch, type BranchScope } from '@/lib/branch-scope'
 import { fetchOvertimeLogRange } from '@/lib/attendance-range-api'
@@ -139,6 +140,8 @@ export default function OvertimePage() {
   const [searchQuery, setSearchQuery] = useState('')
   const [filterSource, setFilterSource] = useState<'' | OvertimeSource>('')
   const [filterStatus, setFilterStatus] = useState<'' | OvertimeStatus>('')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد — بيضيّق السجل كله (الإحصاءات كمان)
+  const org = useOrgFilter()
   const [rejectEntry, setRejectEntry] = useState<OvertimeEntry | null>(null)
   const [rejectReason, setRejectReason] = useState('')
   const [rejectError, setRejectError] = useState('')
@@ -206,7 +209,9 @@ export default function OvertimePage() {
     }))
   }, [rows, departments])
 
-  const filtered = entries.filter(
+  // سطور موظفي الفرع/الإدارة/القسم/الفريق المختار — الإحصاءات والجدول منها
+  const orgEntries = entries.filter((e) => org.matches(e.employeeId))
+  const filtered = orgEntries.filter(
     (e) =>
       (e.employeeName.includes(searchQuery) ||
         e.employeeCode.toLowerCase().includes(searchQuery.toLowerCase()) ||
@@ -217,15 +222,15 @@ export default function OvertimePage() {
 
   // إحصاءات الشهر المحدد من كل حالاته
   const stats = {
-    detected: entries.filter((e) => e.status === 'DETECTED').length,
-    submitted: entries.filter((e) => e.status === 'SUBMITTED').length,
+    detected: orgEntries.filter((e) => e.status === 'DETECTED').length,
+    submitted: orgEntries.filter((e) => e.status === 'SUBMITTED').length,
     approvedHours: round2(
-      entries
+      orgEntries
         .filter((e) => e.status === 'APPROVED')
         .reduce((s, e) => s + (e.approvedMinutes != null ? e.approvedMinutes / 60 : e.payableHours ?? 0), 0)
     ),
     paidHours: round2(
-      entries.filter((e) => e.status === 'PAID').reduce((s, e) => s + (e.approvedMinutes != null ? e.approvedMinutes / 60 : e.payableHours ?? 0), 0)
+      orgEntries.filter((e) => e.status === 'PAID').reduce((s, e) => s + (e.approvedMinutes != null ? e.approvedMinutes / 60 : e.payableHours ?? 0), 0)
     ),
   }
 
@@ -351,10 +356,13 @@ export default function OvertimePage() {
               />
             </div>
             <DayRangeFilter idPrefix="overtime" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
             <select
               value={filterSource}
               onChange={(e) => setFilterSource(e.target.value as '' | OvertimeSource)}
-              className="input w-52"
+              className="input w-full sm:w-52"
+              aria-label="المصدر"
             >
               <option value="">كل المصادر</option>
               <option value="BIOMETRIC_DETECTED">مُكتشَف من البصمة</option>
@@ -363,7 +371,8 @@ export default function OvertimePage() {
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value as '' | OvertimeStatus)}
-              className="input w-56"
+              className="input w-full sm:w-56"
+              aria-label="الحالة"
             >
               <option value="">كل الحالات</option>
               {Object.entries(statusConfig).map(([id, cfg]) => (

@@ -1,13 +1,14 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import { downloadCsv } from '@/lib/csv'
 import { formatMoney } from '@/lib/money'
 import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
+import { useOrgFilter } from '@/components/OrgFilter'
 import {
-  fetchSocialInsuranceReport, fetchSocialInsuranceSettings, INSURANCE_CATEGORY_LABELS, INSURANCE_SYSTEM_LABELS, saveSocialInsuranceSettings,
+  fetchSocialInsuranceReport, fetchSocialInsuranceSettings, filterSocialInsuranceReport, INSURANCE_CATEGORY_LABELS, INSURANCE_SYSTEM_LABELS, saveSocialInsuranceSettings,
   type SocialInsuranceReport, type SocialInsuranceSettings, type SocialInsuranceSettingsView,
 } from '@/lib/social-insurance-api'
 
@@ -120,15 +121,18 @@ export default function PayrollGosiPage() {
   // التقرير على مسيرات شهر رواتب بالاسم — الافتراضي شهر الرواتب الجاري (مش الشهر التقويمي)، والاختيار بيوضّح أيامه
   const payrollMonth = usePayrollMonthContext()
   const [period, setPeriod] = useState('')
-  const [branchId, setBranchId] = useState('')
-  const [report, setReport] = useState<SocialInsuranceReport | null>(null)
+  const [fullReport, setReport] = useState<SocialInsuranceReport | null>(null)
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد مكان قائمة الفرع: التقرير بصفوفه بس، والإجماليات والتصدير منها
+  const org = useOrgFilter()
+  const report = useMemo(() => (fullReport && org.active ? filterSocialInsuranceReport(fullReport, org.matches) : fullReport),
+    [fullReport, org.active, org.matches])
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
   const load = (target = period) => {
     if (!target) return
     setLoading(true); setError(null)
-    fetchSocialInsuranceReport(target, branchId ? Number(branchId) : null)
+    fetchSocialInsuranceReport(target, null)
       .then(setReport)
       .catch((cause) => setError(cause instanceof Error ? cause.message : 'تعذر تحميل تقرير التأمينات'))
       .finally(() => setLoading(false))
@@ -167,15 +171,8 @@ export default function PayrollGosiPage() {
           <div className="flex flex-wrap items-end gap-4">
             <PayrollPeriodSelect id="gosi-period" label="شهر الرواتب" value={period} onChange={setPeriod} className="w-56"
               cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today} />
-            {view && view.branches.length > 1 && (
-              <div>
-                <label className="label">الفرع</label>
-                <select className="input" value={branchId} onChange={(event) => setBranchId(event.target.value)}>
-                  <option value="">كل الفروع</option>
-                  {view.branches.map(branch => <option key={branch.id} value={branch.id}>{branch.name} — {INSURANCE_SYSTEM_LABELS[branch.insuranceSystem]}</option>)}
-                </select>
-              </div>
-            )}
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
             <button type="button" onClick={() => load()} disabled={loading || !period} className="btn-primary disabled:opacity-50">عرض</button>
             <button type="button" onClick={() => exportRows('csv')} disabled={!report?.rows.length} className="btn-secondary disabled:opacity-50">تصدير CSV</button>
             <button type="button" onClick={() => exportRows('xls')} disabled={!report?.rows.length} className="btn-secondary disabled:opacity-50">تصدير Excel</button>

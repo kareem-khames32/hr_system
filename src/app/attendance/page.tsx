@@ -36,6 +36,7 @@ import {
 } from '@/lib/api'
 import { localDateStr, localToday } from '@/lib/dates'
 import { downloadCsv } from '@/lib/csv'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 // الصف المعروض — كل القيم محسوبة من السيرفر (لا حساب محلي)
 interface AttendanceRecord {
@@ -181,7 +182,8 @@ const getStatusBadge = (status: AttendanceRecord['status']) => {
 
 export default function AttendancePage() {
   const [selectedDate, setSelectedDate] = useState(todayStr())
-  const [selectedDepartment, setSelectedDepartment] = useState('all')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد — بيضيّق سجل اليوم كله (الأرقام والتصدير كمان)
+  const org = useOrgFilter()
   const [selectedStatus, setSelectedStatus] = useState('all')
   const [selectedShift, setSelectedShift] = useState('all')
   const [searchQuery, setSearchQuery] = useState('')
@@ -287,15 +289,17 @@ export default function AttendancePage() {
     })
   }, [days, employees, departments, branches])
 
+  // سجل موظفي الفرع/الإدارة/القسم/الفريق المختار — الأرقام والجدول والتصدير منه
+  const orgRecords = records.filter((r) => org.matches(r.employeeId))
+
   // التصفية والبحث — على العميل
-  const filteredRecords = records.filter((r) => {
+  const filteredRecords = orgRecords.filter((r) => {
     if (
       searchQuery &&
       !r.employeeName.includes(searchQuery) &&
       !r.employeeCode.toLowerCase().includes(searchQuery.toLowerCase())
     )
       return false
-    if (selectedDepartment !== 'all' && r.department !== selectedDepartment) return false
     if (selectedStatus === 'exempt' ? !r.attendanceExempt : selectedStatus !== 'all' && r.status !== selectedStatus) return false
     // «بلا وردية مُسندة»: جدول العمل الافتراضي مفترَض أو بلا وردية إطلاقاً
     if (
@@ -306,20 +310,16 @@ export default function AttendancePage() {
     return true
   })
 
-  const departmentOptions = Array.from(new Set(records.map((r) => r.department))).filter(
-    (d) => d !== '-'
-  )
-
-  // الإحصائيات من صفوف السيرفر
+  // الإحصائيات من صفوف السيرفر (في الفلتر الموحد)
   const stats = {
-    total: records.length,
-    present: records.filter((r) => r.status === 'present').length,
-    absent: records.filter((r) => r.status === 'absent').length,
-    late: records.filter((r) => r.status === 'late').length,
-    earlyLeave: records.filter((r) => r.status === 'early_leave').length,
-    partialLeave: records.filter((r) => r.status === 'partial_leave').length,
+    total: orgRecords.length,
+    present: orgRecords.filter((r) => r.status === 'present').length,
+    absent: orgRecords.filter((r) => r.status === 'absent').length,
+    late: orgRecords.filter((r) => r.status === 'late').length,
+    earlyLeave: orgRecords.filter((r) => r.status === 'early_leave').length,
+    partialLeave: orgRecords.filter((r) => r.status === 'partial_leave').length,
     // بصمة طرف واحد ليوم منقضٍ — خارج عدّ «حاضر» حتى تُصحَّح
-    missingPunch: records.filter((r) => r.status === 'missing_punch').length,
+    missingPunch: orgRecords.filter((r) => r.status === 'missing_punch').length,
   }
 
   return (
@@ -448,7 +448,7 @@ export default function AttendancePage() {
             </div>
 
             {/* Search */}
-            <div className="flex-1 min-w-[250px]">
+            <div className="flex-1 min-w-[220px]">
               <div className="relative">
                 <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
@@ -461,25 +461,15 @@ export default function AttendancePage() {
               </div>
             </div>
 
-            {/* Department Filter */}
-            <select
-              value={selectedDepartment}
-              onChange={(e) => setSelectedDepartment(e.target.value)}
-              className="input w-44"
-            >
-              <option value="all">كل الأقسام</option>
-              {departmentOptions.map((dep) => (
-                <option key={dep} value={dep}>
-                  {dep}
-                </option>
-              ))}
-            </select>
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
 
             {/* Status Filter */}
             <select
               value={selectedStatus}
               onChange={(e) => setSelectedStatus(e.target.value)}
-              className="input w-36"
+              className="input w-full sm:w-36"
+              aria-label="الحالة"
             >
               <option value="all">كل الحالات</option>
               <option value="present">حاضر</option>
@@ -499,7 +489,7 @@ export default function AttendancePage() {
             <select
               value={selectedShift}
               onChange={(e) => setSelectedShift(e.target.value)}
-              className="input w-44"
+              className="input w-full sm:w-44"
               title="لم تُسند لهم وردية ولا جدول عمل — طُبّق الجدول الافتراضي أو بلا وردية إطلاقاً"
             >
               <option value="all">كل الورديات</option>

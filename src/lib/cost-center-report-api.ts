@@ -1,6 +1,7 @@
 // تقرير مراكز التكلفة لشهر رواتب — GET /reports/cost-centers (نطاق الفرع من الخادم)
 import { apiFetch } from './api'
 import { downloadCsv } from './csv'
+import { appendOrgFilterParams, type OrgFilterParams } from './org-filter'
 
 export interface CostCenterReportEmployee {
   employeeId: number; employeeCode: string | null; fullName: string | null; branchName: string | null
@@ -20,9 +21,11 @@ export interface CostCenterReport {
   totals: { headcount: number; gross: string; deductions: string; net: string; employerInsurance: string | null }
 }
 
-export function fetchCostCenterReport(params: { period: string; branchId?: string; includeDraft?: boolean }) {
+// org = فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد (org.params) — الخادم بيضيّق بيه فوق نطاق الفرع
+export function fetchCostCenterReport(params: { period: string; branchId?: string; includeDraft?: boolean; org?: OrgFilterParams }) {
   const query = new URLSearchParams({ period: params.period })
   if (params.branchId) query.set('branchId', params.branchId)
+  appendOrgFilterParams(query, params.org)
   if (params.includeDraft) query.set('includeDraft', 'true')
   return apiFetch<CostCenterReport>(`/reports/cost-centers?${query.toString()}`)
 }

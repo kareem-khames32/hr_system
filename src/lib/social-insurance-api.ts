@@ -32,3 +32,19 @@ export const saveSocialInsuranceSettings = (settings: SocialInsuranceSettings) =
   apiFetch<SocialInsuranceSettingsView>('/social-insurance/settings', { method: 'PUT', body: JSON.stringify(settings) })
 export const fetchSocialInsuranceReport = (period: string, branchId?: number | null) =>
   apiFetch<SocialInsuranceReport>(`/social-insurance/report?period=${encodeURIComponent(period)}${branchId ? `&branchId=${branchId}` : ''}`)
+
+/**
+ * التقرير بصفوف الفلتر الموحد («الفرع ← الإدارة ← القسم ← الفريق») بس، وإجمالياته منها بنفس حساب الخادم (social-insurance.service):
+ * الجمع بالقرش، والإجمالي = حصة الموظف + حصة صاحب العمل، بمنزلتين. الشاشة ماتعرضش إجمالي الخادم جنب صفوف متفلترة.
+ */
+export function filterSocialInsuranceReport(report: SocialInsuranceReport, keep: (employeeId: number) => boolean): SocialInsuranceReport {
+  const rows = report.rows.filter(row => keep(row.employeeId))
+  const cents = (pick: (row: SocialInsuranceReportRow) => number) => rows.reduce((sum, row) => sum + Math.round(pick(row) * 100), 0)
+  const money = (value: number) => (value / 100).toFixed(2)
+  const employeeCents = cents(row => row.employeeShare), employerCents = cents(row => row.employerShare)
+  return {
+    ...report, rows,
+    totals: { employees: rows.length, insuredSalary: money(cents(row => row.insuredSalary)), employeeShare: money(employeeCents),
+      employerShare: money(employerCents), total: money(employeeCents + employerCents) },
+  }
+}

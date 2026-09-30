@@ -1,6 +1,6 @@
 'use client'
 
-import { Fragment, useEffect, useMemo, useRef, useState } from 'react'
+import { Fragment, useEffect, useMemo, useRef, useState, type ReactNode } from 'react'
 import { AlertTriangle, CheckCircle2, ChevronDown, ChevronUp, ClipboardList, Plus, RefreshCw, Settings2, Users, X } from 'lucide-react'
 import { ApiError, can, fetchDepartments, fetchEmployees, fetchTeams, type ApiDepartment, type ApiEmployee, type ApiTeam } from '@/lib/api'
 import { employeeSearchMatcher, searchEmployees } from '@/lib/employee-search'
@@ -16,6 +16,7 @@ import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/Compa
 import { DayRangeFilter, PayrollPeriodSelect, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { validDayRange, type DayRange, type PayrollMonthContext } from '@/lib/payroll-month-range'
 import { useBranchCurrency } from '@/lib/currency'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 // الخطوة 25: مساحة الخصومات المصنفة — القائمة والاعتماد (مع الاعتراض والعكس وقرارات الأقساط المعلقة)، والإنشاء لموظف أو
 // اختيار أو فريق أو قسم أو فرع بمعاينة واستبعاد، وكتالوج الأنواع، والتقارير. الخادم يعيد فحص النطاق والحدود والتكرار
@@ -56,7 +57,11 @@ export function TypedDeductionsWorkspace({ currency, mode, focusRequestId = null
   // «من تاريخ / إلى تاريخ» على تاريخ الطلب (أو شهر رواتب بضغطة) — الافتراضي شهر الرواتب الجاري، والفلترة على الخادم قبل حد الـ500
   const { range, setRange, context } = usePayrollDayRange()
   const listRange = validDayRange(range)
-  const [outsideRange, setOutsideRange] = useState(0)
+  // الطلبات اللي تاريخها برا الفترة (بتتعد تحت الجدول بنفس الفلتر الموحد)
+  const [outsideRows, setOutsideRows] = useState<DeductionView[]>([])
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد في شاشة الخصومات (الإدارة) بس — مش في «خصوماتي» (المدير)
+  const org = useOrgFilter({ enabled: mode === 'admin' })
+  const outsideRange = outsideRows.filter(row => org.matches(row.employee.id)).length
   const latest = useRef(0)
   useEffect(() => {
     const view = urlParam('view')
@@ -75,7 +80,7 @@ export function TypedDeductionsWorkspace({ currency, mode, focusRequestId = null
         if (request !== latest.current) return
         const inRange = new Set(list.map(row => row.id))
         setRows(list)
-        setOutsideRange(everything ? everything.filter(row => !inRange.has(row.id)).length : 0)
+        setOutsideRows(everything ? everything.filter(row => !inRange.has(row.id)) : [])
       })
       .catch(error => { if (request === latest.current) setLoadError(errorText(error, 'تعذر تحميل الخصومات المصنفة')) })
       .finally(() => { if (request === latest.current) setLoadingRows(false) })
@@ -107,9 +112,10 @@ export function TypedDeductionsWorkspace({ currency, mode, focusRequestId = null
         </div>
       </div>
       {loadError && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm flex items-center gap-2"><AlertTriangle size={16} />{loadError}</div>}
-      {tab === 'list' && <DeductionList rows={rows} loading={loadingRows} filters={filters} setFilters={setFilters} reload={loadRows} currency={currency}
+      {tab === 'list' && <DeductionList rows={rows.filter(row => org.matches(row.employee.id))} truncated={rows.length >= LIST_LIMIT} loading={loadingRows}
+        filters={filters} setFilters={setFilters} reload={loadRows} currency={currency}
         reasonMinLength={creatable?.reasonMinLength ?? 20} currentPeriod={creatable?.currentPeriod ?? ''} focusRequestId={focusRequestId}
-        range={range} setRange={setRange} context={context} outsideRange={outsideRange} />}
+        range={range} setRange={setRange} context={context} outsideRange={outsideRange} orgElement={mode === 'admin' ? org.element : null} />}
       {tab === 'create' && creatable && <DeductionCreator creatable={creatable} currency={currency} onCreated={() => { setFilters(value => ({ ...value, view: 'created' })); setTab('list'); loadRows() }} />}
       {tab === 'types' && canManage && <DeductionTypesPanel onChanged={() => fetchDeductionCreatable().then(setCreatable).catch(() => undefined)} />}
     </div>
@@ -120,10 +126,13 @@ type ListFilters = { view: 'all' | 'pending_me' | 'created'; status: string; tar
 // نفس حد قائمة الخادم (أحدث 500 طلب مرئي في الفترة)
 const LIST_LIMIT = 500
 
-function DeductionList({ rows, loading, filters, setFilters, reload, currency, reasonMinLength, currentPeriod, focusRequestId, range, setRange, context, outsideRange }: {
-  rows: DeductionView[]; loading: boolean; filters: ListFilters; setFilters: (update: (value: ListFilters) => ListFilters) => void
+function DeductionList({ rows, truncated, loading, filters, setFilters, reload, currency, reasonMinLength, currentPeriod, focusRequestId, range, setRange, context, outsideRange, orgElement }: {
+  // rows = صفوف الخادم في الفلتر الموحد؛ truncated = الخادم وصل لحد الـ500 (قبل الفلتر)
+  rows: DeductionView[]; truncated: boolean; loading: boolean; filters: ListFilters; setFilters: (update: (value: ListFilters) => ListFilters) => void
   reload: () => void; currency: string; reasonMinLength: number; currentPeriod: string; focusRequestId: number | null
   range: DayRange | null; setRange: (range: DayRange) => void; context: PayrollMonthContext | null; outsideRange: number
+  // شريط الفلتر الموحد (شاشة الإدارة بس) — null في «خصوماتي»
+  orgElement: ReactNode
 }) {
   const [expanded, setExpanded] = useState<number | null>(null)
   const [detail, setDetail] = useState<DeductionView | null>(null)
@@ -144,7 +153,7 @@ function DeductionList({ rows, loading, filters, setFilters, reload, currency, r
     fetchDeduction(focusRequestId).then(view => { setFocused(view); setExpanded(view.id); setDetail(view) })
       .catch(error => setNotice(errorText(error, 'تعذر فتح طلب الخصم المطلوب')))
   }, [focusRequestId])
-  // الصفوف جاية من الخادم متفلترة بالفترة؛ الطلب المفتوح من رابط يظهر دايمًا حتى لو تاريخه برّاها
+  // الصفوف جاية من الخادم متفلترة بالفترة (وبالفلتر الموحد)؛ الطلب المفتوح من رابط يظهر دايمًا حتى لو تاريخه برّاها
   const shown = focused && !rows.some(row => row.id === focused.id) ? [focused, ...rows] : rows
 
   const toggle = (row: DeductionView) => {
@@ -200,10 +209,12 @@ function DeductionList({ rows, loading, filters, setFilters, reload, currency, r
         <PayrollPeriodSelect id="deductions-target-period" label="شهر المسير المستهدف" value={filters.targetPeriod} allLabel="كل الشهور"
           onChange={targetPeriod => setFilters(value => ({ ...value, targetPeriod }))} cycleStartDay={context?.cycleStartDay} today={context?.today} className="w-auto" />
         <DayRangeFilter idPrefix="deductions" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
+        {/* الفرع ← الإدارة ← القسم ← الفريق */}
+        {orgElement}
         <button type="button" className="btn-secondary flex items-center gap-1" onClick={reload}><RefreshCw size={16} />تحديث</button>
       </div>
       {outsideRange > 0 && <p className="text-xs text-gray-500" data-outside-range>فيه {outsideRange} طلب {filters.view === 'pending_me' ? 'بانتظار اعتمادك ' : ''}تاريخه برا الفترة المختارة — اختار شهر تاني أو غيّر «من تاريخ» / «إلى تاريخ» عشان تشوفهم.</p>}
-      {rows.length >= LIST_LIMIT && <p className="text-xs text-warning-700" data-list-limit>بيظهر أحدث {LIST_LIMIT} طلب في الفترة — ضيّق الفترة عشان تشوف الأقدم.</p>}
+      {truncated && <p className="text-xs text-warning-700" data-list-limit>بيظهر أحدث {LIST_LIMIT} طلب في الفترة — ضيّق الفترة عشان تشوف الأقدم.</p>}
       {notice && <div role="status" className="bg-primary-50 text-primary-700 rounded-xl p-3 text-sm flex items-center justify-between">{notice}<button type="button" aria-label="إغلاق" onClick={() => setNotice('')}><X size={14} /></button></div>}
       {loading ? (
         <div className="flex items-center justify-center py-10"><div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" /></div>

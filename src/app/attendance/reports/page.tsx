@@ -18,6 +18,7 @@ import { fetchAttendanceReportRange, fetchOvertimeReportRange } from '@/lib/atte
 import { dayRangeError, dayRangeKey, dayRangeLabel } from '@/lib/payroll-month-range'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { filterAttendanceReportRows } from '@/lib/attendance-report-search'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 interface AttendanceReportRow {
   employeeId: number
@@ -54,9 +55,11 @@ export default function AttendanceReportsPage() {
   // الافتراضي شهر الرواتب الجاري (مثلًا 23 → 22) مش الشهر التقويمي، والفلتر باليوم
   const { range, setRange, context } = usePayrollDayRange()
   const [searchTerm, setSearchTerm] = useState('')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد — بيضيّق الجدولين والإحصاءات والتصدير
+  const org = useOrgFilter()
 
-  const [attendanceRows, setAttendanceRows] = useState<AttendanceReportRow[]>([])
-  const [overtimeRows, setOvertimeRows] = useState<OvertimeReportRow[]>([])
+  const [allAttendanceRows, setAttendanceRows] = useState<AttendanceReportRow[]>([])
+  const [allOvertimeRows, setOvertimeRows] = useState<OvertimeReportRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
 
@@ -73,6 +76,10 @@ export default function AttendanceReportsPage() {
       .finally(() => setLoading(false))
   }, [range])
   const rangeTitle = range ? dayRangeLabel(range) : ''
+
+  // صفوف موظفي الفرع/الإدارة/القسم/الفريق المختار (الرقم ممكن يرجع نص من الاستعلام)
+  const attendanceRows = allAttendanceRows.filter((row) => org.matches(Number(row.employeeId)))
+  const overtimeRows = allOvertimeRows.filter((row) => org.matches(Number(row.employeeId)))
 
   // البحث يطبَّق على الجدولين بنفس المطابقة (الاسم أو الرقم الوظيفي)
   const { attendance: filteredData, overtime: filteredOvertime } = filterAttendanceReportRows(attendanceRows, overtimeRows, searchTerm)
@@ -162,6 +169,8 @@ export default function AttendanceReportsPage() {
               />
             </div>
             <DayRangeFilter idPrefix="attendance-report" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
           </div>
         </div>
 

@@ -58,8 +58,8 @@ test('سجل الإجازات بيقرأ employee/date ويحطهم في فلا�
   assert.match(leaves, /import \{ isDayKey, validDayRange, type DayRange \} from '@\/lib\/payroll-month-range'/)
   // الرابط يُستهلك مرة واحدة فلا يرجع بعد أي تغيير فلتر
   assert.match(leaves, /window\.history\.replaceState\(null, '', window\.location\.pathname\)/)
-  // ولا فلتر جديد اتضاف: نفس الحالات الأربعة
-  assert.match(leaves, /const filtersKey = `\$\{activeTab\}\|\$\{selectedType\}\|\$\{search\}\|\$\{fromFilter\}\|\$\{toFilter\}`/)
+  // الرابط مابيضيفش فلتر: نفس الحالات الأربعة، وبعدها الفلتر الموحد «الفرع ← الإدارة ← القسم ← الفريق» (طلب المالك 30 سبتمبر)
+  assert.match(leaves, /const filtersKey = `\$\{activeTab\}\|\$\{selectedType\}\|\$\{search\}\|\$\{fromFilter\}\|\$\{toFilter\}\|\$\{org\.paramsKey\}`/)
 })
 
 test('القرار على الإذن من صفّه: اعتماد ورفض بسبب بنفس actOnRequest وقاعدة صندوق الموافقات', () => {

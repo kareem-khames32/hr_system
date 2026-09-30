@@ -2,11 +2,13 @@
 
 // طلب المالك (20 سبتمبر): فلاتر واحدة لتبويبي «المدرجين بالمسير» و«موظفين ليس لديهم مسير» وللجدول الموحد.
 // كل الفلاتر بتشتغل مع بعض وبتتبعت للخادم (الفلترة هناك بنطاق الفرع)، وشارة بعدد الفلاتر المفعّلة و«مسح الفلاتر».
+// الفرع والإدارة والقسم والفريق = الفلتر الموحد (طلب المالك 30 سبتمبر) مكان القوائم التلاتة القديمة — قيمه بتوصل هنا في value
+// (branchId/departmentIds/teamId) والخادم بيفلتر بيها زي الأول.
 
 import { Filter, Search, X } from 'lucide-react'
-import type { ApiBranch, ApiDepartment, ApiTeam } from '@/lib/api'
+import type { OrgFilterHandle } from '@/components/OrgFilter'
 import { DayRangeFilter } from '@/components/DayRangeFilter'
-import { linkedFilterOptions, UNASSIGNED_REASON_LABELS, type PayrollUnassignedReason } from '@/lib/payroll-runs-api'
+import { UNASSIGNED_REASON_LABELS, type PayrollUnassignedReason } from '@/lib/payroll-runs-api'
 import {
   emptyPayrollOverviewFilters, PAYROLL_EMPLOYMENT_STATUS_OPTIONS, payrollOverviewFilterCount,
   type OverviewRunOption, type PayrollEmploymentStatus, type PayrollOverviewFilterState,
@@ -18,14 +20,13 @@ export const payrollRunOptionLabel = (run: OverviewRunOption) =>
 export const payrollReasonLabel = (code: string) => UNASSIGNED_REASON_LABELS[code as PayrollUnassignedReason] ?? code
 
 export function PayrollEmployeeFilters({
-  value, onChange, branches, departments, teams, jobTitles, runs, reasons, cycleStartDay, today, disabled,
+  value, onChange, org, jobTitles, runs, reasons, cycleStartDay, today, disabled,
   shownCount, totalCount, idPrefix = 'payroll-roster',
 }: {
   value: PayrollOverviewFilterState
   onChange: (next: PayrollOverviewFilterState) => void
-  branches: ApiBranch[]
-  departments: ApiDepartment[]
-  teams: ApiTeam[]
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد (مشترك بين التبويبات)
+  org: OrgFilterHandle
   jobTitles: string[]
   /** فلتر «في أنهي مسير» — بلاش قيمة = الفلتر ما يظهرش */
   runs?: OverviewRunOption[]
@@ -38,23 +39,9 @@ export function PayrollEmployeeFilters({
   totalCount: number
   idPrefix?: string
 }) {
+  // الفرع المقفول على حساب الفرع الواحد مش فلتر (org.params فاضية لحد ما يختار حاجة)
   const count = payrollOverviewFilterCount(value)
   const set = (patch: Partial<PayrollOverviewFilterState>) => onChange({ ...value, ...patch })
-  // الفلاتر المترابطة: الأقسام جوّه الفرع المختار، والفرق جوّه القسم المختار
-  const linked = linkedFilterOptions(branches, departments, teams, {
-    branchIds: value.branchId ? [value.branchId] : [], departmentIds: value.departmentId ? [value.departmentId] : [],
-    teamIds: [], employeeIds: [],
-  })
-  const pickBranch = (branchId: number | null) => {
-    const nextDepartments = linkedFilterOptions(branches, departments, teams, { branchIds: branchId ? [branchId] : [], departmentIds: [], teamIds: [], employeeIds: [] }).departments
-    const departmentId = value.departmentId && nextDepartments.some(row => row.id === value.departmentId) ? value.departmentId : null
-    const nextTeams = linkedFilterOptions(branches, departments, teams, { branchIds: branchId ? [branchId] : [], departmentIds: departmentId ? [departmentId] : [], teamIds: [], employeeIds: [] }).teams
-    set({ branchId, departmentId, teamId: value.teamId && nextTeams.some(row => row.id === value.teamId) ? value.teamId : null })
-  }
-  const pickDepartment = (departmentId: number | null) => {
-    const nextTeams = linkedFilterOptions(branches, departments, teams, { branchIds: value.branchId ? [value.branchId] : [], departmentIds: departmentId ? [departmentId] : [], teamIds: [], employeeIds: [] }).teams
-    set({ departmentId, teamId: value.teamId && nextTeams.some(row => row.id === value.teamId) ? value.teamId : null })
-  }
   const toggleStatus = (status: PayrollEmploymentStatus) => set({
     statuses: value.statuses.includes(status) ? value.statuses.filter(row => row !== status) : [...value.statuses, status],
   })
@@ -70,7 +57,7 @@ export function PayrollEmployeeFilters({
         <div className="flex items-center gap-3 text-sm text-gray-600">
           <span data-filtered-row-count>ظاهر <b>{shownCount}</b> من {totalCount} موظف</span>
           <button type="button" className="btn-secondary text-xs px-2 py-1 flex items-center gap-1 disabled:opacity-50" data-clear-filters
-            disabled={disabled || count === 0} onClick={() => onChange({ ...emptyPayrollOverviewFilters(), membership: value.membership })}>
+            disabled={disabled || count === 0} onClick={() => { org.reset(); onChange({ ...emptyPayrollOverviewFilters(), membership: value.membership }) }}>
             <X size={13} /> مسح الفلاتر
           </button>
         </div>
@@ -85,30 +72,10 @@ export function PayrollEmployeeFilters({
               disabled={disabled} value={value.search} onChange={event => set({ search: event.target.value })} />
           </span>
         </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-gray-700">الفرع</span>
-          <select id={`${idPrefix}-branch`} className="input w-44" disabled={disabled} value={value.branchId ?? ''}
-            onChange={event => pickBranch(event.target.value ? Number(event.target.value) : null)}>
-            <option value="">كل الفروع</option>
-            {branches.map(branch => <option key={branch.id} value={branch.id}>{branch.name}</option>)}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-gray-700">القسم</span>
-          <select id={`${idPrefix}-department`} className="input w-44" disabled={disabled} value={value.departmentId ?? ''}
-            onChange={event => pickDepartment(event.target.value ? Number(event.target.value) : null)}>
-            <option value="">كل الأقسام</option>
-            {linked.departments.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}
-          </select>
-        </label>
-        <label className="flex flex-col gap-1 text-sm">
-          <span className="font-medium text-gray-700">الفريق</span>
-          <select id={`${idPrefix}-team`} className="input w-40" disabled={disabled} value={value.teamId ?? ''}
-            onChange={event => set({ teamId: event.target.value ? Number(event.target.value) : null })}>
-            <option value="">كل الفرق</option>
-            {linked.teams.map(row => <option key={row.id} value={row.id}>{row.name}</option>)}
-          </select>
-        </label>
+        <div className="flex flex-col gap-1 text-sm min-w-0" data-payroll-org-filter>
+          <span className="font-medium text-gray-700">الفرع ← الإدارة ← القسم ← الفريق</span>
+          {org.element}
+        </div>
         <label className="flex flex-col gap-1 text-sm">
           <span className="font-medium text-gray-700">المسمى الوظيفي</span>
           <select id={`${idPrefix}-job-title`} className="input w-48" disabled={disabled} value={value.jobTitle}

@@ -5,6 +5,7 @@ import Link from 'next/link'
 import { AlertTriangle, CalendarCheck, CheckCircle2, Hourglass, Layers, Lock, RefreshCw, Search, Wallet, X } from 'lucide-react'
 import { MainLayout } from '@/components/layout'
 import { OrgTargetPicker, describeOrgTarget, initialOrgTarget, type OrgTarget } from '@/components/OrgTargetPicker'
+import { useOrgFilter } from '@/components/OrgFilter'
 import { can, fetchBranches, getCurrentUser, lockedBranchIdOf, type ApiBranch } from '@/lib/api'
 import { branchScopeOfUser, type BranchScope } from '@/lib/branch-scope'
 import { formatDateTime, localToday } from '@/lib/dates'
@@ -16,6 +17,7 @@ import {
   fetchYearEndPreview,
   fetchYearEndSettlements,
   settleLeaveBalance,
+  yearEndTotalsOf,
   type LeaveSettlement,
   type LeaveSettlementMode,
   type YearEndPreview,
@@ -68,6 +70,8 @@ export default function LeaveYearEndPage() {
   // الشركة كلها = null؛ فرع لسه ما اتختارش = مانحمّلش
   const branchId = target.level === 'company' ? null : target.branchId
   const ready = target.level === 'company' || target.branchId != null
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد للعرض بس (الإقفال على «على مين؟» كله) — فرعه مقفول على فرع الإقفال لو اتختار
+  const org = useOrgFilter({ lockBranchId: branchId, disabled: closing })
 
   const load = async () => {
     if (!ready) { setPreview(null); setHistory([]); setLoading(false); return }
@@ -88,16 +92,22 @@ export default function LeaveYearEndPage() {
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load() }, [year, branchId, ready])
 
+  // صفوف موظفي الفلتر الموحد — الأرقام اللي فوق والجدول منها
+  const orgRows = useMemo(() => (preview?.rows ?? []).filter((r) => org.matches(r.employee.id)), [preview, org.matches])
   const rows = useMemo(() => {
     const q = query.trim().toLowerCase()
-    return (preview?.rows ?? []).filter((r) =>
+    return orgRows.filter((r) =>
       (!q || r.employee.fullName.toLowerCase().includes(q) || String(r.employee.employeeCode ?? '').toLowerCase().includes(q)) &&
       (!onlyOpen || (!r.error && (Number(r.settleable ?? 0) > 0 || !r.closed))))
-  }, [preview, query, onlyOpen])
+  }, [orgRows, query, onlyOpen])
 
   const branchName = (id: number | null | undefined) => branches.find((b) => b.id === id)?.name ?? ''
   const s = preview?.settings
+  // إجماليات «على مين؟» كله — تأكيد الإقفال عليها لأن الإقفال على الهدف كله مش على الفلتر
   const totals = preview?.totals
+  // الأرقام المعروضة: لو الفلتر شغال تتحسب من صفوفه بس (نفس حساب الخادم)
+  const shownTotals = preview && org.active ? yearEndTotalsOf(orgRows) : totals
+  const orgHistory = history.filter((h) => org.matches(h.employeeId))
 
   const runClose = async () => {
     setClosing(true)
@@ -149,6 +159,16 @@ export default function LeaveYearEndPage() {
           </div>
           <OrgTargetPicker value={target} onChange={setTarget} branches={branches} levels={['company', 'branch']}
             lockedBranchId={lockedBranchId} branchScope={branchScope} disabled={closing} showCount={false} />
+          {ready && (
+            <div className="space-y-1">
+              <p className="text-sm font-medium text-gray-700">عرض الصفوف (الفرع ← الإدارة ← القسم ← الفريق)</p>
+              {/* الفرع ← الإدارة ← القسم ← الفريق */}
+              {org.element}
+              {org.active && (
+                <p className="text-xs text-gray-500">الفلتر للعرض بس — الإقفال على «{describeOrgTarget(target, branches, [])}» كله</p>
+              )}
+            </div>
+          )}
           {s && (
             <p className="text-sm text-gray-600 bg-gray-50 rounded-xl p-3">
               الترحيل: {s.carryOverEnabled ? (s.carryOverMaxDays == null ? 'المتبقي كله من غير حد' : `لحد ${Number(s.carryOverMaxDays)} يوم والباقي يسقط`) : 'مقفول — المتبقي كله يسقط'}
@@ -173,13 +193,13 @@ export default function LeaveYearEndPage() {
           </div>
         )}
 
-        {preview && totals && (
+        {preview && shownTotals && (
           <div className="grid grid-cols-2 lg:grid-cols-5 gap-4">
-            <Stat icon={<Wallet size={22} className="text-primary-500" />} label="المتبقي" value={days(totals.remaining)} hint={`${totals.employees} موظف`} />
-            <Stat icon={<Layers size={22} className="text-purple-500" />} label="يترحّل للسنة الجاية" value={days(totals.carried)} />
-            <Stat icon={<Hourglass size={22} className="text-warning-500" />} label="يسقط" value={days(totals.lapsed)} />
-            <Stat icon={<CalendarCheck size={22} className="text-success-600" />} label="اتسوّى" value={days(totals.settled)} />
-            <Stat icon={<Lock size={22} className="text-gray-500" />} label="مستني الإقفال" value={`${totals.pending} موظف`} hint={`${totals.closed} اتقفل`} />
+            <Stat icon={<Wallet size={22} className="text-primary-500" />} label="المتبقي" value={days(shownTotals.remaining)} hint={`${shownTotals.employees} موظف`} />
+            <Stat icon={<Layers size={22} className="text-purple-500" />} label="يترحّل للسنة الجاية" value={days(shownTotals.carried)} />
+            <Stat icon={<Hourglass size={22} className="text-warning-500" />} label="يسقط" value={days(shownTotals.lapsed)} />
+            <Stat icon={<CalendarCheck size={22} className="text-success-600" />} label="اتسوّى" value={days(shownTotals.settled)} />
+            <Stat icon={<Lock size={22} className="text-gray-500" />} label="مستني الإقفال" value={`${shownTotals.pending} موظف`} hint={`${shownTotals.closed} اتقفل`} />
           </div>
         )}
 
@@ -273,7 +293,7 @@ export default function LeaveYearEndPage() {
           )}
         </div>
 
-        {history.length > 0 && (
+        {orgHistory.length > 0 && (
           <div className="card overflow-hidden p-0">
             <p className="font-semibold text-gray-800 px-4 pt-4">سجل التسويات — {year}</p>
             <div className="overflow-x-auto">
@@ -284,7 +304,7 @@ export default function LeaveYearEndPage() {
                   </tr>
                 </thead>
                 <tbody>
-                  {history.map((h) => (
+                  {orgHistory.map((h) => (
                     <tr key={h.id} className="table-row">
                       <td className="table-cell">{h.employeeName} <span className="text-xs text-gray-400">{h.employeeCode}</span></td>
                       <td className="table-cell">{h.days}</td>

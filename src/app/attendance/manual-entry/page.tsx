@@ -26,6 +26,7 @@ import { fetchPunchesRange } from '@/lib/attendance-range-api'
 import { dateInRange, dayRangeError, dayRangeLabel, payrollMonthRangeOf } from '@/lib/payroll-month-range'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { EmployeePicker } from '@/components/EmployeePicker'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 // ============================================================
 // الإدخال اليدوي للحضور: كل بصمة يدوية تُحفظ بمصدرها (MANUAL) ومُدخِلها
@@ -51,6 +52,8 @@ export default function ManualEntryPage() {
   // الفترة باليوم — الافتراضي شهر الرواتب الجاري (مثلًا 23 → 22)
   const { range, setRange, context } = usePayrollDayRange()
   const [searchTerm, setSearchTerm] = useState('')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد — بيضيّق السجل كله (الأرقام كمان)
+  const org = useOrgFilter()
   const [showForm, setShowForm] = useState(false)
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
   const [punches, setPunches] = useState<ApiPunch[]>([])
@@ -177,7 +180,9 @@ export default function ManualEntryPage() {
     }
   }
 
-  const filteredPunches = punches.filter(
+  // بصمات موظفي الفرع/الإدارة/القسم/الفريق المختار — الأرقام والجدول منها
+  const orgPunches = punches.filter((p) => org.matches(p.employeeId))
+  const filteredPunches = orgPunches.filter(
     (p) =>
       (p.employeeName ?? '').includes(searchTerm) ||
       p.employeeCode.toLowerCase().includes(searchTerm.toLowerCase())
@@ -186,10 +191,10 @@ export default function ManualEntryPage() {
   // إحصاءات الشهر من السجل الحقيقي
   const dayKey = (p: ApiPunch) => `${p.employeeId ?? p.employeeCode}|${p.workDate}`
   const stats = {
-    total: punches.length,
-    employees: new Set(punches.map((p) => p.employeeId ?? p.employeeCode)).size,
-    days: new Set(punches.map(dayKey)).size,
-    missing: new Set(punches.filter((p) => p.dayStatus === 'missing_punch').map(dayKey)).size,
+    total: orgPunches.length,
+    employees: new Set(orgPunches.map((p) => p.employeeId ?? p.employeeCode)).size,
+    days: new Set(orgPunches.map(dayKey)).size,
+    missing: new Set(orgPunches.filter((p) => p.dayStatus === 'missing_punch').map(dayKey)).size,
   }
 
   return (
@@ -366,6 +371,8 @@ export default function ManualEntryPage() {
               />
             </div>
             <DayRangeFilter idPrefix="manual-entry" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
           </div>
         </div>
 

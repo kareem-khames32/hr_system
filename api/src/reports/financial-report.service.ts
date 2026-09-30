@@ -20,6 +20,8 @@ export interface FinancialReportQuery {
   /** نطاق فروع المستخدم لما مفيش فرع محدد (null/غايب = كل الفروع، مصفوفة = الفروع دي، الفاضية = ولا صف) */
   branchScope?: BranchScope
   departmentId?: number | null
+  /** الفلتر الموحد: أي قسم من دول (الإدارة/القسم المختار بأقسامه الفرعية جوه فرعه)، null = كل الأقسام */
+  departmentIds?: number[] | null
   /** فريق محدد، null = كل الفرق (نفس مرشح /reports/payroll/*) */
   teamId?: number | null
   costCenterId?: number | null
@@ -74,6 +76,7 @@ export class FinancialReportService {
     // حساب الفروع المتعددة من غير فرع محدد: فروعه كلها بمعاملات (والنطاق الفاضي 1 = 0)
     if (query.branchId === null && query.branchScope != null) filters.push(branchScopeSql('x.[branchId]', query.branchScope, params))
     filter('departmentId', query.departmentId)
+    if (query.departmentIds?.length) filters.push(`x.[departmentId] IN (${query.departmentIds.map(id => `@${params.push(id) - 1}`).join(', ')})`)
     filter('teamId', query.teamId)
     filter('costCenterId', query.costCenterId)
     const money = [...MONEY_COLUMNS, ...(insurance ? [INSURANCE_COLUMN] : [])]
@@ -133,7 +136,7 @@ export class FinancialReportService {
     const runList = [...runs.values()].sort((a, b) => a.startDate.localeCompare(b.startDate) || a.id - b.id)
     return {
       header: { ...header, includeDraft: query.includeDraft, branchId: query.branchId, departmentId: query.departmentId ?? null,
-        teamId: query.teamId ?? null, costCenterId: query.costCenterId ?? null,
+        departmentIds: query.departmentIds ?? null, teamId: query.teamId ?? null, costCenterId: query.costCenterId ?? null,
         runs: runList.filter(run => run.included), pendingRuns: runList.filter(run => !run.included), employerInsuranceAvailable: insurance },
       rows, insurance,
     }
@@ -199,6 +202,7 @@ export class FinancialReportService {
     filter('branchId', query.branchId)
     if (query.branchId === null && query.branchScope != null) where.push(branchScopeSql('e.[branchId]', query.branchScope, params))
     filter('departmentId', query.departmentId)
+    if (query.departmentIds?.length) where.push(`e.[departmentId] IN (${query.departmentIds.map(id => `@${params.push(id) - 1}`).join(', ')})`)
     filter('teamId', query.teamId)
     filter('costCenterId', query.costCenterId)
     const whereSql = where.length ? `WHERE ${where.join(' AND ')}` : ''

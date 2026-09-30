@@ -103,7 +103,8 @@ export function reportQuery(params: Record<string, QueryValue>) {
   return text ? `?${text}` : ''
 }
 
-export const fetchPayrollRunsReport = () => apiFetch<PayrollRunsReport>('/reports/payroll')
+// الفلتر الموحد اختياري (branchId/departmentIds/teamId) — من غيره نفس النداء القديم بالظبط
+export const fetchPayrollRunsReport = (params: Record<string, QueryValue> = {}) => apiFetch<PayrollRunsReport>(`/reports/payroll${reportQuery(params)}`)
 export const fetchPayrollUnassignedReport = (params: Record<string, QueryValue>) =>
   apiFetch<UnassignedReport>(`/reports/payroll/unassigned${reportQuery(params)}`)
 export const fetchPayrollOvertimeReport = (params: Record<string, QueryValue>) =>

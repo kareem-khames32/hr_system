@@ -38,6 +38,7 @@ import {
   type OnboardingParty,
 } from '@/lib/api'
 import { localDateStr, localToday } from '@/lib/dates'
+import { useOrgFilter } from '@/components/OrgFilter'
 import { hiringDocNames, hiringDocsOfTask, hiringProgressText, hiringTaskLockReason, uploadMissingHref } from '@/lib/hiring-documents-api'
 
 const PARTIES: OnboardingParty[] = ['hr', 'it', 'custody', 'finance', 'manager']
@@ -88,6 +89,8 @@ export default function OnboardingPage() {
   const [error, setError] = useState('')
   const [busyTask, setBusyTask] = useState<number | null>(null)
   const [filter, setFilter] = useState<'active' | 'done' | 'all'>('active')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد — بيضيّق القائمة كلها (الأرقام والعدّادات كمان)
+  const org = useOrgFilter()
   // المهام اللي أقدر أتمّها فقط (جهتي/المدير المباشر)
   const [mineOnly, setMineOnly] = useState(false)
   // تعديل مهمة (HR): الوصف والجهة والموعد
@@ -183,8 +186,10 @@ export default function OnboardingPage() {
     }
   }
 
-  const inProgress = list.filter((e) => progressOf(e) < 100).length
-  const overdueTasks = list.reduce(
+  // موظفو الفرع/الإدارة/القسم/الفريق المختار — الأرقام والعدّادات والقائمة منهم
+  const orgList = list.filter((e) => org.matches(e.id))
+  const inProgress = orgList.filter((e) => progressOf(e) < 100).length
+  const overdueTasks = orgList.reduce(
     (s, e) =>
       s + e.tasks.filter((t) => t.status === 'PENDING' && t.dueDate < today).length,
     0
@@ -194,6 +199,7 @@ export default function OnboardingPage() {
   const visible = useMemo(
     () =>
       list
+        .filter((e) => org.matches(e.id))
         .map((e) => (mineOnly ? { ...e, tasks: e.tasks.filter((t) => t.canAct) } : e))
         .filter((e) => !mineOnly || e.tasks.length > 0)
         .filter((e) =>
@@ -203,7 +209,7 @@ export default function OnboardingPage() {
             ? progressOf(e) === 100
             : progressOf(e) < 100
         ),
-    [list, mineOnly, filter]
+    [list, mineOnly, filter, org.matches]
   )
 
   const renderTask = (emp: ApiOnboardingEmployee, task: ApiOnboardingTask) => {
@@ -527,7 +533,7 @@ export default function OnboardingPage() {
             <div>
               <p className="text-sm text-gray-500">اكتملت تهيئتهم</p>
               <p className="text-2xl font-bold text-success-600">
-                {list.length - inProgress}
+                {orgList.length - inProgress}
               </p>
             </div>
           </div>
@@ -548,8 +554,8 @@ export default function OnboardingPage() {
             {(
               [
                 ['active', `قيد التهيئة (${inProgress})`],
-                ['done', `مكتملة (${list.length - inProgress})`],
-                ['all', `الكل (${list.length})`],
+                ['done', `مكتملة (${orgList.length - inProgress})`],
+                ['all', `الكل (${orgList.length})`],
               ] as const
             ).map(([key, label]) => (
               <button
@@ -565,6 +571,8 @@ export default function OnboardingPage() {
               </button>
             ))}
           </div>
+          {/* الفرع ← الإدارة ← القسم ← الفريق */}
+          {org.element}
           <label className="flex items-center gap-2 text-sm text-gray-600 cursor-pointer">
             <input
               type="checkbox"

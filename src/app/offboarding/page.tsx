@@ -14,6 +14,7 @@ import {
 } from 'lucide-react'
 import { fetchOffboardingCases, type ApiOffboardingCase } from '@/lib/api'
 import { useCurrency } from '@/lib/currency'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 // حالات ملف إنهاء الخدمة كما في الباك إند
 const statusLabels: Record<string, string> = {
@@ -42,6 +43,8 @@ export default function OffboardingPage() {
   const [error, setError] = useState('')
   const [searchQuery, setSearchQuery] = useState('')
   const [filterStatus, setFilterStatus] = useState('')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد — بيضيّق الملفات كلها (الأرقام اللي فوق كمان)
+  const org = useOrgFilter()
 
   useEffect(() => {
     fetchOffboardingCases()
@@ -52,7 +55,9 @@ export default function OffboardingPage() {
       .finally(() => setLoading(false))
   }, [])
 
-  const filtered = cases.filter(
+  // ملفات موظفي الفرع/الإدارة/القسم/الفريق المختار — الأرقام والجدول منها
+  const orgCases = cases.filter((c) => org.matches(c.employeeId))
+  const filtered = orgCases.filter(
     (c) =>
       ((c.employeeName ?? '').includes(searchQuery) ||
         (c.employeeCode ?? '').includes(searchQuery)) &&
@@ -61,10 +66,10 @@ export default function OffboardingPage() {
 
   // إحصائيات حقيقية من البيانات
   const stats = {
-    inClearance: cases.filter((c) => c.status === 'IN_CLEARANCE').length,
-    inSettlement: cases.filter((c) => c.status === 'IN_SETTLEMENT').length,
-    settled: cases.filter((c) => c.status === 'SETTLED').length,
-    closed: cases.filter((c) => c.status === 'CLOSED').length,
+    inClearance: orgCases.filter((c) => c.status === 'IN_CLEARANCE').length,
+    inSettlement: orgCases.filter((c) => c.status === 'IN_SETTLEMENT').length,
+    settled: orgCases.filter((c) => c.status === 'SETTLED').length,
+    closed: orgCases.filter((c) => c.status === 'CLOSED').length,
   }
 
   return (
@@ -127,8 +132,8 @@ export default function OffboardingPage() {
 
         {/* Filters */}
         <div className="card p-4">
-          <div className="flex items-center gap-3">
-            <div className="relative flex-1">
+          <div className="flex flex-wrap items-center gap-3 min-w-0">
+            <div className="relative flex-1 min-w-[220px]">
               <Search
                 size={18}
                 className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
@@ -144,7 +149,8 @@ export default function OffboardingPage() {
             <select
               value={filterStatus}
               onChange={(e) => setFilterStatus(e.target.value)}
-              className="input w-56"
+              className="input w-full sm:w-56"
+              aria-label="الحالة"
             >
               <option value="">كل الحالات</option>
               {Object.entries(statusLabels).map(([id, label]) => (
@@ -153,6 +159,8 @@ export default function OffboardingPage() {
                 </option>
               ))}
             </select>
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
           </div>
         </div>
 

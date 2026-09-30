@@ -25,6 +25,7 @@ import { LoanCapSummary } from '@/components/payroll/LoanCapSummary'
 import { LoanExceptionalModal } from '@/components/payroll/LoanExceptionalModal'
 import { EmployeePicker } from '@/components/EmployeePicker'
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
+import { useOrgFilter } from '@/components/OrgFilter'
 import { dateInRange, dayRangeKey, localDayOf, validDayRange } from '@/lib/payroll-month-range'
 import { formatDate } from '@/lib/dates'
 
@@ -162,6 +163,8 @@ export default function LoansPage() {
   // «من تاريخ / إلى تاريخ» (أو شهر رواتب بضغطة) — على تاريخ الطلب أو على شهر القسط
   const [dateBasis, setDateBasis] = useState<LoanDateBasis>('all')
   const { range, setRange, context } = usePayrollDayRange()
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد على قائمة السلف بس (نموذج السلفة الجديدة زي ما هو)
+  const org = useOrgFilter()
   const [showNewLoanModal, setShowNewLoanModal] = useState(false)
   const [expandedId, setExpandedId] = useState<number | null>(null)
 
@@ -232,11 +235,14 @@ export default function LoansPage() {
     }
   }
 
+  // سلف موظفي الفرع/الإدارة/القسم/الفريق المختار في الفلتر الموحد — الكروت والتبويبات والجدول والتصدير منها
+  const orgLoans = loans.filter((l) => org.matches(l.employeeId))
+
   // Calculate stats
-  const openLoans = loans.filter((l) => centsOf(l.remainingAmount) > BigInt(0))
+  const openLoans = orgLoans.filter((l) => centsOf(l.remainingAmount) > BigInt(0))
   const stats = {
     totalActive: openLoans.reduce((sum, l) => sum + centsOf(l.remainingAmount), BigInt(0)),
-    disbursedCount: loans.filter((l) => l.status === 'DISBURSED').length,
+    disbursedCount: orgLoans.filter((l) => l.status === 'DISBURSED').length,
     activeCount: openLoans.length,
     monthlyDeductions: openLoans.reduce((sum, l) => {
       const due = l.installments.filter(isOpenInstallment), nextPeriod = due[0]?.dueDate.slice(0, 7)
@@ -245,9 +251,9 @@ export default function LoansPage() {
     }, BigInt(0)),
   }
 
-  // الفترة بتفلتر الجدول والتبويبات والتصدير؛ كروت الإجماليات فوق فاضلة على كل السلف
+  // الفترة بتفلتر الجدول والتبويبات والتصدير؛ كروت الإجماليات فوق فاضلة على كل سلف الفلتر الموحد
   const activeRange = dateBasis === 'all' ? null : validDayRange(range)
-  const datedLoans = !activeRange ? loans : loans.filter((loan) => dateBasis === 'requested'
+  const datedLoans = !activeRange ? orgLoans : orgLoans.filter((loan) => dateBasis === 'requested'
     ? dateInRange(loanRequestDay(loan), activeRange)
     : loan.installments.some((item) => dateInRange(item.dueDate, activeRange)))
   const datedOpen = datedLoans.filter((l) => centsOf(l.remainingAmount) > BigInt(0)).length
@@ -397,8 +403,8 @@ export default function LoansPage() {
 
         {/* Filters */}
         <div className="card">
-          <div className="flex flex-wrap items-end gap-4">
-            <div className="flex-1 min-w-[300px]">
+          <div className="flex flex-wrap items-end gap-4 min-w-0">
+            <div className="flex-1 min-w-[220px]">
               <div className="relative">
                 <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
@@ -419,6 +425,8 @@ export default function LoansPage() {
               </select>
             </label>
             <DayRangeFilter idPrefix="loans" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} disabled={dateBasis === 'all'} />
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
           </div>
         </div>
 

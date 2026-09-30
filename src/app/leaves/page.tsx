@@ -22,6 +22,8 @@ import { downloadCsv } from '@/lib/csv'
 import { fetchLeaves, revokeLeave, can, type ApiLeavePage } from '@/lib/api'
 import { DayRangeFilter, usePayrollMonthContext } from '@/components/DayRangeFilter'
 import { isDayKey, validDayRange, type DayRange } from '@/lib/payroll-month-range'
+import { useOrgFilter } from '@/components/OrgFilter'
+import { orgFilterQueryValues } from '@/lib/org-filter'
 
 // سجل الإجازات — هذا هو «سجل الوجهة» بعد اكتمال الموافقات في محرك الطلبات.
 // الاعتماد/الرفض يتم في صندوق الموافقات، وليس هنا.
@@ -79,6 +81,8 @@ export default function LeavesPage() {
   // البحث بيتبعت بعد ما الكتابة تقف — طلب واحد مش طلب لكل حرف
   const [search, setSearch] = useState('')
   const [selectedType, setSelectedType] = useState('all')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد — بيتبعت للخادم (السجل مرقّم والإحصاءات من هناك)
+  const org = useOrgFilter()
   // «من تاريخ / إلى تاريخ» اختياري (الإجازات المتقاطعة مع المدى) أو شهر رواتب بضغطة — فاضي = كل التواريخ
   const payrollMonth = usePayrollMonthContext()
   const [dateRange, setDateRange] = useState<DayRange | null>(null)
@@ -106,6 +110,7 @@ export default function LeavesPage() {
       to: toFilter || undefined,
       page,
       pageSize: PAGE_SIZE,
+      ...orgFilterQueryValues(org.params),
     })
       .then(setData)
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل سجل الإجازات'))
@@ -138,7 +143,7 @@ export default function LeavesPage() {
   }, [searchQuery])
 
   // أي فلتر جديد يرجع لأول صفحة؛ التحميل مرة واحدة بعدها
-  const filtersKey = `${activeTab}|${selectedType}|${search}|${fromFilter}|${toFilter}`
+  const filtersKey = `${activeTab}|${selectedType}|${search}|${fromFilter}|${toFilter}|${org.paramsKey}`
   const [lastFilters, setLastFilters] = useState(filtersKey)
   useEffect(() => {
     if (filtersKey !== lastFilters) {
@@ -268,7 +273,7 @@ export default function LeavesPage() {
         <div className="card">
           <div className="flex flex-wrap items-end gap-4">
             {/* Search */}
-            <div className="flex-1 min-w-[300px]">
+            <div className="flex-1 min-w-[220px]">
               <div className="relative">
                 <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
@@ -298,6 +303,9 @@ export default function LeavesPage() {
             {/* Date Range — الإجازات المتقاطعة مع المدى */}
             <DayRangeFilter idPrefix="leaves" value={dateRange} onChange={setDateRange} onClear={() => setDateRange(null)} maxDays={null}
               cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today} />
+
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
           </div>
         </div>
 

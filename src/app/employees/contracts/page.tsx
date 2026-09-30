@@ -26,6 +26,7 @@ import {
   uploadFile,
   ApiEmployee,
 } from '@/lib/api'
+import { useOrgFilter } from '@/components/OrgFilter'
 
 // حقول العقد على كيان الموظف (ليست بعد ضمن ApiEmployee)
 type ContractFields = {
@@ -120,6 +121,8 @@ export default function ContractsPage() {
   const [searchTerm, setSearchTerm] = useState('')
   const [filterStatus, setFilterStatus] = useState('all')
   const [filterType, setFilterType] = useState('all')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد — بيضيّق العقود كلها (الأرقام والتنبيه كمان)
+  const org = useOrgFilter()
   const [showRenewalModal, setShowRenewalModal] = useState(false)
   const [selectedContract, setSelectedContract] = useState<ContractRow | null>(null)
   const [renewForm, setRenewForm] = useState({
@@ -185,9 +188,11 @@ export default function ContractsPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  const contractTypes = Array.from(new Set(contracts.map((c) => c.contractType)))
+  // عقود الفرع/الإدارة/القسم/الفريق المختار — الأرقام والجدول والتصدير كلهم منها
+  const orgContracts = contracts.filter((contract) => org.matches(contract.employeeId))
+  const contractTypes = Array.from(new Set(orgContracts.map((c) => c.contractType)))
 
-  const filteredContracts = contracts.filter((contract) => {
+  const filteredContracts = orgContracts.filter((contract) => {
     const matchesSearch =
       contract.employeeName.includes(searchTerm) ||
       contract.employeeCode.includes(searchTerm) ||
@@ -199,10 +204,10 @@ export default function ContractsPage() {
   })
 
   const stats = {
-    total: contracts.length,
-    active: contracts.filter((c) => c.status === 'active' || c.status === 'unlimited').length,
-    expiring: contracts.filter((c) => c.status === 'expiring').length,
-    expired: contracts.filter((c) => c.status === 'expired').length,
+    total: orgContracts.length,
+    active: orgContracts.filter((c) => c.status === 'active' || c.status === 'unlimited').length,
+    expiring: orgContracts.filter((c) => c.status === 'expiring').length,
+    expired: orgContracts.filter((c) => c.status === 'expired').length,
   }
 
   // تصدير الصفوف المعروضة (بعد البحث والفلاتر) إلى CSV
@@ -408,8 +413,8 @@ export default function ContractsPage() {
 
         {/* Filters */}
         <div className="card p-4">
-          <div className="flex items-center gap-4">
-            <div className="flex-1 relative">
+          <div className="flex flex-wrap items-center gap-4 min-w-0">
+            <div className="flex-1 min-w-[220px] relative">
               <Search className="absolute right-3 top-1/2 transform -translate-y-1/2 text-gray-400" size={20} />
               <input
                 type="text"
@@ -419,7 +424,9 @@ export default function ContractsPage() {
                 className="input pr-10 w-full"
               />
             </div>
-            <div className="flex items-center gap-2">
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
+            <div className="flex flex-wrap items-center gap-2 min-w-0">
               <Filter size={18} className="text-gray-400" />
               <select
                 value={filterStatus}

@@ -53,6 +53,7 @@ import { PayrollConflictResolution } from '@/components/payroll/PayrollConflictR
 import { PayrollOverviewTabs, type PayrollOverviewTab } from '@/components/payroll/PayrollOverviewTabs'
 // «تابة البدلات»: صرف بدل لشهر على استهداف (يدخل إضافات المسير باسمه)
 import { PayrollAllowancesTab } from '@/components/payroll/PayrollAllowancesTab'
+import { useOrgFilter } from '@/components/OrgFilter'
 import { defaultPayRecord, PayrollPayRecordForm, PayrollPayRecordSummary, payRecordReady, type PayRecordDraft } from '@/components/payroll/PayrollPayRecordForm'
 // قرار المالك (22 سبتمبر): سلسلة اعتماد المسير — مين اعتمد ومين عليه الدور، و«اعتمد خطوتي» / «ارفض بسبب» لصاحب الخطوة
 import { PayrollApprovalChainStrip } from '@/components/payroll/PayrollApprovalChainStrip'
@@ -202,6 +203,8 @@ export default function PayrollPage() {
   const [tab, setTab] = useState<PayrollPageTab>('runs')
 
   const [searchQuery, setSearchQuery] = useState('')
+  // فلتر «الفرع ← الإدارة ← القسم ← الفريق» الموحد — واحد لكل تبويبات شاشة المسير (بنود المسير والجداول الشهرية والبدلات)
+  const org = useOrgFilter()
   // الخطوة 16: «مسير جديد» (تعريف مسودة) منفصل عن «احتساب المسودة» و«إعادة حساب مسير»
   const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [teams, setTeams] = useState<ApiTeam[]>([])
@@ -551,6 +554,9 @@ export default function PayrollPage() {
   const items: ApiPayrollItem[] = runDetail?.items ?? []
 
   const filteredItems = items.filter((item) => {
+    // الفلتر الموحد بمكان الموظف وقت المسير (لقطته — زي التقارير المالية)، ومن غير لقطة بمكانه الحالي
+    const snapshot = snapshotOf(item.employeeId)
+    if (!(snapshot ? org.matchesPlacement(snapshot) : org.matches(item.employeeId))) return false
     if (!searchQuery) return true
     const emp = employeeOf(item.employeeId)
     return (
@@ -1070,8 +1076,11 @@ export default function PayrollPage() {
           </div>
         )}
 
-        {/* ملخص طرق الصرف — من تقرير الباك إند */}
-        {runDetail && payMethods && Object.keys(payMethods).length > 0 && (
+        {/* ملخص طرق الصرف — من تقرير الباك إند، للمسير كله: مابيظهرش جنب بنود متفلترة بالفرع/القسم */}
+        {runDetail && payMethods && Object.keys(payMethods).length > 0 && org.active && (
+          <p className="text-xs text-gray-500" data-pay-methods-hidden>ملخص طرق الصرف للمسير كله — بيظهر لما تمسح فلتر الفرع/الإدارة/القسم/الفريق.</p>
+        )}
+        {runDetail && payMethods && Object.keys(payMethods).length > 0 && !org.active && (
           <div className="card border-2 border-teal-200">
             <div className="flex items-center justify-between mb-4">
               <div>
@@ -1104,10 +1113,10 @@ export default function PayrollPage() {
           </div>
         )}
 
-        {/* البحث */}
+        {/* البحث والفلتر الموحد — الأرقام اللي فوق والجدول والتصدير كلهم من البنود الظاهرة */}
         <div className="card">
-          <div className="flex flex-wrap items-center gap-4">
-            <div className="flex-1 min-w-[300px]">
+          <div className="flex flex-wrap items-center gap-4 min-w-0">
+            <div className="flex-1 min-w-[220px]">
               <div className="relative">
                 <Search size={18} className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400" />
                 <input
@@ -1119,6 +1128,8 @@ export default function PayrollPage() {
                 />
               </div>
             </div>
+            {/* الفرع ← الإدارة ← القسم ← الفريق */}
+            {org.element}
           </div>
         </div>
 
@@ -1334,10 +1345,10 @@ export default function PayrollPage() {
           )}
         </div>
         </>) : tab === 'allowances' ? (
-          <PayrollAllowancesTab branches={branches} departments={departments} teams={teams} employees={employees}
+          <PayrollAllowancesTab branches={branches} departments={departments} teams={teams} org={org} employees={employees}
             onOpenRun={(id) => { setTab('runs'); loadDetail(id) }} />
         ) : (
-          <PayrollOverviewTabs tab={tab} branches={branches} departments={departments} teams={teams} employees={employees}
+          <PayrollOverviewTabs tab={tab} branches={branches} departments={departments} teams={teams} employees={employees} org={org}
             onOpenRun={(id) => { setTab('runs'); loadDetail(id) }} />
         )}
       </div>

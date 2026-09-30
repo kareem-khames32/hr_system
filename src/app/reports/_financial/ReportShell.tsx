@@ -4,14 +4,14 @@ import { useEffect, useRef, useState, type ReactNode } from 'react'
 import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import { AlertTriangle, ArrowRight, CalendarRange, Download, Info, Printer, RefreshCw } from 'lucide-react'
-import { fetchBranches, fetchCatalog, fetchDepartments, getCurrentUser, isCompanyWideUser, lockedBranchIdOf, type ApiBranch, type ApiDepartment } from '@/lib/api'
-import { branchScopeOfUser, canSeeBranch, type BranchScope } from '@/lib/branch-scope'
+import { fetchBranches, fetchCatalog, type ApiBranch } from '@/lib/api'
 import { PayrollPeriodSelect, usePayrollMonthContext } from '@/components/DayRangeFilter'
+import { useOrgFilter } from '@/components/OrgFilter'
 import { RUN_STATUS_LABELS, type FinancialFilters, type FinancialReportHeader } from './api'
 
 interface CostCenterOption { id: number; code?: string; name: string }
 
-const EMPTY_FILTERS: FinancialFilters = { period: '', branchId: '', departmentId: '', costCenterId: '', includeDraft: false }
+const EMPTY_FILTERS: FinancialFilters = { period: '', org: {}, costCenterId: '', includeDraft: false }
 
 /** تحميل تقرير مالي بالفلاتر: أول مرة من غير شهر (الخادم يختار شهر الرواتب الجاري) وبعدها بالشهر اللي رجع. */
 export function useFinancialReport<T extends FinancialReportHeader>(fetcher: (filters: FinancialFilters) => Promise<T>) {
@@ -49,6 +49,7 @@ export function useFinancialReport<T extends FinancialReportHeader>(fetcher: (fi
         if (request === latest.current) setLoading(false)
       })
   }
+  const orgKey = JSON.stringify(filters.org)
   useEffect(() => {
     if (adopted.current !== null && adopted.current === filters.period) {
       adopted.current = null
@@ -57,7 +58,7 @@ export function useFinancialReport<T extends FinancialReportHeader>(fetcher: (fi
     adopted.current = null
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [filters.period, filters.branchId, filters.departmentId, filters.costCenterId, filters.includeDraft])
+  }, [filters.period, orgKey, filters.costCenterId, filters.includeDraft])
   return { filters, setFilters, report, loading, error, reload: load }
 }
 
@@ -77,38 +78,31 @@ interface ShellProps {
   children: ReactNode
 }
 
-// الإطار المشترك للتقارير المالية: الفلاتر (شهر الرواتب بحدوده، الفرع، القسم، مركز التكلفة، المسيرات اللي لسه ما اتعتمدتش)،
-// والمسيرات الداخلة في الأرقام، والتصدير لملف يفتح في Excel، والطباعة بعرض الصفحة.
+// الإطار المشترك للتقارير المالية: الفلاتر (شهر الرواتب بحدوده، الفلتر الموحد «الفرع ← الإدارة ← القسم ← الفريق»، مركز التكلفة،
+// المسيرات اللي لسه ما اتعتمدتش)، والمسيرات الداخلة في الأرقام، والتصدير لملف يفتح في Excel، والطباعة بعرض الصفحة.
+// الفلتر الموحد بيتبعت للخادم (الأرقام والإجماليات كلها من هناك بنفس الفلتر) — حساب الفرع الواحد فرعه مقفول.
 export function FinancialReportShell(props: ShellProps) {
   const { title, description, filters, setFilters, header, loading, error, onRefresh, onExport, exportDisabled, note, children } = props
-  const [companyWide, setCompanyWide] = useState(false)
   const [branches, setBranches] = useState<ApiBranch[]>([])
-  const [departments, setDepartments] = useState<ApiDepartment[]>([])
   const [costCenters, setCostCenters] = useState<CostCenterOption[]>([])
-  const [myBranchId, setMyBranchId] = useState<number | null>(null)
-  // نطاق فروع الحساب: حساب الفروع المتعددة يختار فرع من فروعه أو كلها (الخادم بيقصر التقرير على نطاقه)
-  const [branchScope, setBranchScope] = useState<BranchScope>([])
   // التقارير دي على مسيرات شهر رواتب بالاسم؛ الاختيار بيوضّح أيامه بالظبط (23 أغسطس – 22 سبتمبر)
   const payrollMonth = usePayrollMonthContext()
+  const org = useOrgFilter()
 
   useEffect(() => {
-    const user = getCurrentUser()
-    setCompanyWide(isCompanyWideUser(user))
-    setMyBranchId(lockedBranchIdOf(user))
-    setBranchScope(branchScopeOfUser(user))
     fetchBranches().then(setBranches).catch(() => setBranches([]))
-    fetchDepartments().then(setDepartments).catch(() => setDepartments([]))
     fetchCatalog<CostCenterOption>('cost-centers').then(setCostCenters).catch(() => setCostCenters([]))
   }, [])
 
-  // الفرع بيتختار من القائمة لحساب الشركة ولحساب الفروع المتعددة؛ حساب الفرع الواحد مقفول على فرعه
-  const picksBranch = companyWide || (branchScope !== null && branchScope.length > 1)
-  const branchForDepartments = picksBranch ? (filters.branchId ? Number(filters.branchId) : null) : myBranchId
-  const departmentOptions = departments.filter((department) => branchForDepartments === null || department.branchId === branchForDepartments)
+  // الفلتر الموحد جوه فلاتر التقرير (useFinancialReport بيحمّل من جديد لما يتغير)
+  useEffect(() => {
+    setFilters((current) => (JSON.stringify(current.org) === org.paramsKey ? current : { ...current, org: org.params }))
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [org.paramsKey])
+
   const branchName = (id: number | null) => (id === null ? null : branches.find((branch) => branch.id === id)?.name ?? `#${id}`)
   const filterText = [
-    header?.branchId ? `الفرع: ${branchName(header.branchId)}` : 'كل الفروع',
-    header?.departmentId ? `القسم: ${departments.find((d) => d.id === header.departmentId)?.name ?? `#${header.departmentId}`}` : null,
+    org.label ? org.label : header?.branchId ? `الفرع: ${branchName(header.branchId)}` : 'كل الفروع — كل الأقسام',
     header?.costCenterId ? `مركز التكلفة: ${costCenters.find((c) => c.id === header.costCenterId)?.name ?? `#${header.costCenterId}`}` : null,
     header?.includeDraft ? 'شامل المسيرات اللي لسه ما اتعتمدتش' : 'المسيرات المعتمدة والمصروفة بس',
   ].filter(Boolean).join(' — ')
@@ -160,40 +154,14 @@ export function FinancialReportShell(props: ShellProps) {
           </div>
         </div>
 
-        <div className="card grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-4 items-end fr-no-print">
+        <div className="card grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4 items-end fr-no-print">
+          <div className="sm:col-span-2 lg:col-span-3 min-w-0" data-financial-org-filter>
+            <label className="label">الفرع ← الإدارة ← القسم ← الفريق</label>
+            {org.element}
+          </div>
           <PayrollPeriodSelect id="financial-report-period" label="شهر الرواتب" value={filters.period}
             cycleStartDay={payrollMonth?.cycleStartDay} today={payrollMonth?.today}
             onChange={(period) => setFilters((current) => ({ ...current, period }))} />
-          <div>
-            <label className="label">الفرع</label>
-            {picksBranch ? (
-              <select
-                className="input"
-                value={filters.branchId}
-                onChange={(e) => setFilters((current) => ({ ...current, branchId: e.target.value, departmentId: '' }))}
-              >
-                <option value="">{companyWide ? 'كل الفروع' : 'كل فروعك'}</option>
-                {branches.filter((branch) => canSeeBranch(companyWide ? null : branchScope, branch.id)).map((branch) => (
-                  <option key={branch.id} value={branch.id}>{branch.name}</option>
-                ))}
-              </select>
-            ) : (
-              <input className="input bg-gray-50" value={branchName(myBranchId) ?? 'فرعك'} disabled />
-            )}
-          </div>
-          <div>
-            <label className="label">القسم</label>
-            <select
-              className="input"
-              value={filters.departmentId}
-              onChange={(e) => setFilters((current) => ({ ...current, departmentId: e.target.value }))}
-            >
-              <option value="">كل الأقسام</option>
-              {departmentOptions.map((department) => (
-                <option key={department.id} value={department.id}>{department.name}</option>
-              ))}
-            </select>
-          </div>
           <div>
             <label className="label">مركز التكلفة</label>
             <select

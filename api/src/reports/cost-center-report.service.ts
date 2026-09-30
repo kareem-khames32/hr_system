@@ -15,6 +15,10 @@ export interface CostCenterReportQuery {
   branchId: number | null
   /** نطاق فروع المستخدم لما مفيش فرع محدد (null/غايب = كل الفروع، مصفوفة = الفروع دي، الفاضية = ولا صف) */
   branchScope?: BranchScope
+  /** الفلتر الموحد: أي قسم من دول (الإدارة/القسم المختار بأقسامه الفرعية جوه فرعه)، من لقطة المسير زي الفرع */
+  departmentIds?: number[] | null
+  /** الفلتر الموحد: فريق محدد من لقطة المسير */
+  teamId?: number | null
   /** true = يشمل المسيرات المحسوبة غير المعتمدة (مسودة) */
   includeDraft: boolean
 }
@@ -33,15 +37,19 @@ export class CostCenterReportService {
     const moneyColumns = [...COST_CENTER_EARNING_FIELDS, ...COST_CENTER_DEDUCTION_FIELDS, 'netPay'].filter(column => insurance || column !== INSURANCE_DEDUCTION_COLUMN)
     const statuses = query.includeDraft ? `r.[status] <> 'CANCELLED'` : `r.[status] IN ('APPROVED', 'PAID')`
     const params: unknown[] = [query.period]
-    let branchFilter = ''
+    const where: string[] = []
     if (query.branchId !== null) {
       params.push(query.branchId)
-      branchFilter = `WHERE x.[branchId] = @1`
+      where.push(`x.[branchId] = @${params.length - 1}`)
     } else if (query.branchScope != null) {
       // حساب الفروع المتعددة من غير فرع محدد: فروعه كلها بمعاملات (والنطاق الفاضي 1 = 0)
-      branchFilter = `WHERE ${branchScopeSql('x.[branchId]', query.branchScope, params)}`
+      where.push(branchScopeSql('x.[branchId]', query.branchScope, params))
     }
-    // الفرع ومركز التكلفة من لقطة العضو وقت المسير، ولو مفيش لقطة (مسير قديم) من ملف الموظف الحالي
+    // الفلتر الموحد (الإدارة/القسم بأقسامه الفرعية، والفريق) بمعاملات بس
+    if (query.departmentIds?.length) where.push(`x.[departmentId] IN (${query.departmentIds.map(id => `@${params.push(id) - 1}`).join(', ')})`)
+    if (query.teamId != null) where.push(`x.[teamId] = @${params.push(query.teamId) - 1}`)
+    const branchFilter = where.length ? `WHERE ${where.join(' AND ')}` : ''
+    // الفرع والقسم والفريق ومركز التكلفة من لقطة العضو وقت المسير، ولو مفيش لقطة (مسير قديم) من ملف الموظف الحالي
     const rows: CostCenterReportRow[] = await this.ds.query(
       `SELECT x.*, b.[name] AS [branchName], cc.[code] AS [costCenterCode], COALESCE(cc.[name], x.[snapCostCenterName]) AS [costCenterName]
        FROM (
@@ -49,6 +57,8 @@ export class CostCenterReportService {
            COALESCE(JSON_VALUE(s.[snap], '$.employeeCode'), e.[employeeCode]) AS [employeeCode],
            COALESCE(JSON_VALUE(s.[snap], '$.fullName'), e.[fullName]) AS [fullName],
            CASE WHEN s.[snap] IS NOT NULL THEN TRY_CONVERT(int, JSON_VALUE(s.[snap], '$.branchId')) ELSE e.[branchId] END AS [branchId],
+           CASE WHEN s.[snap] IS NOT NULL THEN TRY_CONVERT(int, JSON_VALUE(s.[snap], '$.departmentId')) ELSE e.[departmentId] END AS [departmentId],
+           CASE WHEN s.[snap] IS NOT NULL THEN TRY_CONVERT(int, JSON_VALUE(s.[snap], '$.teamId')) ELSE e.[teamId] END AS [teamId],
            CASE WHEN s.[snap] IS NOT NULL THEN TRY_CONVERT(int, JSON_VALUE(s.[snap], '$.costCenterId')) ELSE e.[costCenterId] END AS [costCenterId],
            JSON_VALUE(s.[snap], '$.costCenterName') AS [snapCostCenterName],
            ${moneyColumns.map(column => `CONVERT(varchar(40), i.[${column}]) AS [${column}]`).join(', ')},
