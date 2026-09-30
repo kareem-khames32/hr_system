@@ -72,7 +72,7 @@ import { docTypeLabel } from '@/lib/doc-types'
 import { describeEmployeeHistory, type EmployeeHistoryView } from '@/lib/employee-history'
 import { displayEmployeeAddress } from '@/lib/employee-form-fields'
 import { orgPlacement } from '@/lib/department-tree'
-import { loadCurrency, currencyLabel, useCurrency } from '@/lib/currency'
+import { loadCurrencyContext, currencyCodeFor, currencyLabel, useCurrency } from '@/lib/currency'
 import EmployeeSuspensionDialog from '@/components/EmployeeSuspensionDialog'
 import { EmployeePayrollRunsCard } from '@/components/payroll/PayrollRunMoveMemberModal'
 import { SUSPENSION_STATE_LABELS, suspensionHistoryNote, suspensionPeriodText, type EmployeeSuspension } from '@/lib/employee-suspensions-api'
@@ -467,14 +467,14 @@ export default function EmployeeProfilePage() {
       setLoading(true)
       setError('')
       try {
-        const [profile, branches, departments, teams, allEmployees, currencyNow, qualifications, grades, workSchedules, costCenters, leaveTypes, attendanceRules, systemUsers] =
+        const [profile, branches, departments, teams, allEmployees, currencyContext, qualifications, grades, workSchedules, costCenters, leaveTypes, attendanceRules, systemUsers] =
           await Promise.all([
             fetchEmployeeProfile(Number(params.id)),
             fetchBranches(),
             fetchDepartments(),
             fetchTeams(),
             fetchEmployees(),
-            loadCurrency(),
+            loadCurrencyContext(),
             fetchQualifications(Number(params.id)).catch(() => null),
             fetchCatalog<{ id: number; name: string }>('grades').catch(
               () => [] as { id: number; name: string }[]
@@ -489,6 +489,8 @@ export default function EmployeeProfilePage() {
           ])
         setQuals(qualifications)
         const e = profile.employee as ApiEmployee & EmployeeExtras
+        // العملة تبع فرع الموظف (قرار المالك 30 سبتمبر) — مش العمود المحفوظ في ملفه
+        const currencyCode = currencyCodeFor(currencyContext, e.branchId)
         // الإيقاف عن العمل: الساري/القادم وسجله كامل (الحالة المحفوظة في storedStatus)
         setSuspensionInfo({
           storedStatus: e.storedStatus ?? e.status,
@@ -621,7 +623,7 @@ export default function EmployeeProfilePage() {
           payMethodSplit: e.payMethod === 'mixed' && e.bankTransferAmount != null
             ? `تحويل بنكي ${formatMoney(e.bankTransferAmount)} — نقدي الباقي من صافي الراتب` : null,
           salaryCycle: labelOf(SALARY_CYCLE_AR, e.salaryCycle),
-          currencyCode: labelOf(CURRENCY_AR, e.currency),
+          currencyCode: labelOf(CURRENCY_AR, currencyCode),
           bankName: e.bankName ?? '—',
           bankBranch: val(e.bankBranch),
           bankAccount: e.iban ?? '—',
@@ -642,8 +644,8 @@ export default function EmployeeProfilePage() {
           annualLeaveEntitled: e.annualLeaveEntitled !== false,
           attendanceRuleEffectiveFrom: e.attendanceRuleEffectiveFrom ?? 'لا يوجد تاريخ سريان مسجل',
           annualEntitlementDays: annual?.annualEntitlement ?? null,
-          salaryCurrency: e.currency ? currencyLabel(e.currency) : currencyNow,
-          salaryCurrencyName: e.currency ? (CURRENCY_AR[e.currency] ?? e.currency) : currencyNow,
+          salaryCurrency: currencyLabel(currencyCode),
+          salaryCurrencyName: currencyCode ? (CURRENCY_AR[currencyCode] ?? currencyCode) : '',
           branchCountry: branches.find(b => b.id === e.branchId)?.country ?? '',
           leaveBalance: {
             annual: {
@@ -678,7 +680,7 @@ export default function EmployeeProfilePage() {
         )
 
         // السجل الوظيفي: عنوان عربي لكل حقل وأسماء الفريق/القسم/الفرع/المدير بدل «teamId:3»
-        const employeeCurrency = e.currency ? currencyLabel(e.currency) : currencyNow
+        const employeeCurrency = currencyLabel(currencyCode)
         setHistoryEvents(
           (profile.history ?? []).map((h: any) =>
             describeEmployeeHistory(h, {

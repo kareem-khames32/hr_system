@@ -31,7 +31,7 @@ function errorText(cause: unknown): string {
 const labelClass = 'block text-sm font-medium text-gray-700 mb-1'
 const CURRENCY_LABELS: Record<Settings['currency'], string> = { SAR: 'ريال سعودي', EGP: 'جنيه مصري' }
 
-// الحقول الظاهرة فقط: الدورة وساعات اليوم والعملة وحماية الصافي. بقية إعدادات النسخة تبقى كما هي وتُرسل مع الحفظ.
+// الحقول الظاهرة فقط: الدورة وساعات اليوم وحماية الصافي. بقية إعدادات النسخة (ومنها العملة اللي الخادم بيحطها) تبقى كما هي وتُرسل مع الحفظ.
 export function PolicySettingsFields({ value, onChange, disabled }: { value: Settings; onChange: (next: Settings) => void; disabled?: boolean }) {
   const set = <K extends keyof Settings>(key: K, next: Settings[K]) => onChange({ ...value, [key]: next })
   const custom = value.defaultPeriodType === 'CUSTOM_DAY_RANGE'
@@ -68,13 +68,11 @@ export function PolicySettingsFields({ value, onChange, disabled }: { value: Set
     </fieldset>
 
     <fieldset disabled={disabled} className="grid md:grid-cols-3 gap-3 min-w-0">
-      <legend className="text-sm font-bold text-gray-800 mb-2">ساعات العمل والعملة</legend>
+      <legend className="text-sm font-bold text-gray-800 mb-2">ساعات العمل</legend>
       <label><span className={labelClass}>ساعات العمل اليومية</span>
         <input className="input w-full" type="number" min={0.01} max={24} step={0.01} value={value.dailyHours} onChange={event => set('dailyHours', Number(event.target.value))} /></label>
-      <label><span className={labelClass}>العملة</span>
-        <select className="input w-full" value={value.currency} onChange={event => set('currency', event.target.value as Settings['currency'])}>
-          {(Object.keys(CURRENCY_LABELS) as Settings['currency'][]).map(code => <option key={code} value={code}>{CURRENCY_LABELS[code]}</option>)}
-        </select></label>
+      {/* العملة مش اختيار هنا (قرار المالك 30 سبتمبر): الخادم بيحطها عند الحفظ — معادلات فرع بعملة فرعها، ومعادلات كل الشركة بعملة النظام */}
+      <p className="md:col-span-2 self-end text-sm text-gray-500">العملة بتتحدد لوحدها: معادلات الفرع بعملة الفرع (من دولته)، ومعادلات كل الشركة بعملة النظام.</p>
     </fieldset>
 
     <fieldset disabled={disabled} className="grid md:grid-cols-3 gap-3 min-w-0">

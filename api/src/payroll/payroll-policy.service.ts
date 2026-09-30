@@ -7,6 +7,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { branchForWrite, branchIdIn, branchScopeOf, inBranchScope, isEmptyBranchScope, scopeWord, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
+import { readBranchCurrency } from '../org/branch-currency-db'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
@@ -513,7 +514,9 @@ export class PayrollPolicyService {
       const policy = await this.policy(em, user, policyId, true), version = await this.version(em, policyId, versionId)
       this.expected(version.revision, dto.expectedRevision)
       if (version.contractVersion !== 'SRS_V1') throw new ConflictException({ code: 'POLICY_FORMULA_CONTRACT_UNSUPPORTED', message: 'حفظ البنود متاح لعقد SRS_V1 فقط؛ النسخة التاريخية تحتفظ بعقدها' })
-      const settings = this.definitionSettings(version, dto.settings), checked = this.definitionCheck(dto.definition, settings, dto.autoOrder)
+      const settings = this.definitionSettings(version, dto.settings)
+      if (dto.settings !== undefined) settings.currency = await this.derivedCurrency(em, policy.branchId)
+      const checked = this.definitionCheck(dto.definition, settings, dto.autoOrder)
       const collection = this.replacementCollection(checked.definition, version.collectionPolicy, dto.collection)
       this.requireAcknowledgements(checked.requiredAcknowledgements, dto.acknowledgedWarnings)
       // تحذير تصحيح الترتيب حدث لمرة واحدة؛ لا يبقى شرطًا معلقًا بعد حفظ التسلسل المصحح.
@@ -559,6 +562,13 @@ export class PayrollPolicyService {
   private async versionViews(em: EntityManager, versions: PayrollPolicyVersion[]) {
     const ends = await this.effectiveEnds(em, [...new Set(versions.map(row => row.policyId))]), seals = await this.sealsOf(em, versions.map(row => row.id))
     return versions.map(version => this.versionView(version, { end: ends.get(version.id), seal: seals.get(version.id) ?? null }))
+  }
+
+  // عملة المعادلات مش اختيار (قرار المالك 30 سبتمبر: العملة تبع الفرع): معادلات فرع = عملة فرعها (من دولته)، ومعادلات كل الشركة =
+  // عملة النظام. بتتحط عند حفظ الإعدادات (الإنشاء وتعديل الإعدادات أو البنود معاها) بعد فحص المبعوت؛ حفظ التواريخ والبيانات الوصفية
+  // والنسخ من غير إعدادات مابيلمسوش نسخة قائمة. العمود فاضل زي ما هو والمسير بيقراه
+  private derivedCurrency(em: EntityManager, branchId: number | null): Promise<PayrollPolicySettings['currency']> {
+    return readBranchCurrency(em, branchId)
   }
 
   private async initialSettings(em: EntityManager, patch: Partial<PayrollPolicySettings> | undefined) {
@@ -659,6 +669,7 @@ export class PayrollPolicyService {
         if (branchId !== null && !await em.getRepository(Branch).existsBy({ id: branchId, isActive: true })) throw new BadRequestException('فرع السياسة غير موجود أو معطل')
         const scope = await this.scope(em, branchId, dto.defaultScopeType ?? null, dto.defaultScopeIds ?? null)
         const settings = await this.initialSettings(em, dto.settings)
+        settings.currency = await this.derivedCurrency(em, branchId)
         // أ1: الفارغ صار معناه «بلا شرائح: الخصم بالدقيقة»، فالمعادلة الجديدة تبدأ بشرائح التأخير المعمول بها
         // (أحدث مجموعة مفعّلة) لا بلا شرائح؛ تُعدَّل أو تُفرَّغ بعدها من لوحة «طريقة الخصم».
         const currentTierSet = await em.getRepository(PayrollLatenessTierSet).findOne({ where: { isActive: true }, order: { id: 'DESC' } })
@@ -773,6 +784,7 @@ export class PayrollPolicyService {
         dto.effectiveTo === undefined ? version.effectiveTo : dto.effectiveTo)
       const metadata = this.metadata(dto.metadata, version.metadata)
       const settings = patchPayrollPolicySettings(version, dto.settings)
+      if (dto.settings !== undefined) settings.currency = await this.derivedCurrency(em, policy.branchId)
       let definitionAcknowledgements: string[] | undefined
       if (dto.settings !== undefined && (version.catalogVersion !== null || version.engineVersion !== null)) {
         if (version.catalogVersion !== PAYROLL_SRS_CATALOG_VERSION || version.engineVersion !== PAYROLL_FORMULA_ENGINE_VERSION) throw new ConflictException({ code: 'POLICY_DEFINITION_ENGINE_UNSUPPORTED', message: 'أصلح تعريف البنود كاملًا قبل تغيير إعدادات نسخة ذات إصدار غير مدعوم' })

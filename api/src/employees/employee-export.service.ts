@@ -4,6 +4,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { andBranchScopeSql, branchScopeOf } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
 import { localDateOf } from '../attendance/attendance.service'
+import { readBranchCurrencies, readSystemCurrency } from '../org/branch-currency-db'
 import { BULK_CONTENT_TYPES } from './employee-bulk-update.sheet'
 import { canSeeEmployeesFinance } from './employee-projection'
 import {
@@ -36,6 +37,10 @@ export class EmployeeExportService {
   async export(employeeIds: number[], user: JwtPayload) {
     const ids = [...new Set(employeeIds)]
     const rows = await this.rowsById(ids, branchScopeOf(user))
+    // عمود «العملة» = عملة فرع الموظف (قرار المالك 30 سبتمبر: العملة تبع الفرع)، مش العمود المحفوظ في الملف
+    const system = await readSystemCurrency(this.ds.manager)
+    const currencies = new Map((await readBranchCurrencies(this.ds.manager, null, system)).map(row => [row.id, row.currency]))
+    for (const row of rows) row.currency = (row.branchId != null ? currencies.get(Number(row.branchId)) : undefined) ?? system
     const byId = new Map(rows.map(row => [row.id, row]))
     const ordered = ids.map(id => byId.get(id)).filter((row): row is EmployeeExportRow => !!row)
     const columns = employeeExportColumns(canSeeEmployeesFinance(user))

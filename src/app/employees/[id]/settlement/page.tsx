@@ -100,9 +100,10 @@ function Spinner() {
 function SettlementContent({ employeeId, backHref }: { employeeId: number; backHref: string }) {
   const searchParams = useSearchParams()
   const caseParam = searchParams.get('case')
-  const currency = useCurrency()
 
   const [det, setDet] = useState<ApiOffboardingCase | null>(null)
+  // العملة تبع فرع الموظف (قرار المالك 30 سبتمبر)
+  const currency = useCurrency(det?.employee?.branchId)
   const [loading, setLoading] = useState(true)
   const [notFound, setNotFound] = useState(false)
   const [error, setError] = useState('')

@@ -71,7 +71,7 @@ test('جلب الحدود يرسل تاريخ التعيين وحده ويرفض
   }
 })
 
-test('خطوة البيانات المالية في نموذج الإضافة تعرض «يسري من راتب شهر» لأجر التعيين، وعملات المسير SAR وEGP فقط', () => {
+test('خطوة البيانات المالية في نموذج الإضافة تعرض «يسري من راتب شهر» لأجر التعيين، والعملة سطر قراءة حسب الفرع من غير اختيار', () => {
   const React = require('../../node_modules/react'), Module = require('node:module')
   const { renderToStaticMarkup } = require('../../node_modules/react-dom/server')
   const load = Module._load, useState = React.useState
@@ -91,6 +91,7 @@ test('خطوة البيانات المالية في نموذج الإضافة ت
   assert.match(html, /يسري من راتب شهر/)
   assert.equal((html.match(/<input[^>]*type="month"[^>]*>/g) ?? []).length, 1)
   assert.match(html, /أيام الفترة قبل تاريخ التعيين لا تُحسب غيابًا ولا خصمًا/)
-  assert.match(html, /<option value="SAR"[ >]/); assert.match(html, /<option value="EGP"[ >]/)
-  assert.doesNotMatch(html, /<option value="AED"/)
+  // العملة تبع الفرع (قرار المالك 30 سبتمبر): مفيش اختيار عملة في النموذج — سطر قراءة بس، والخادم بيحط عملة الفرع
+  assert.doesNotMatch(html, /<option value="(SAR|EGP|AED)"/)
+  assert.match(html, /العملة: بتتحدد حسب الفرع — اختار الفرع الأول/)
 })

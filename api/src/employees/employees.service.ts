@@ -28,6 +28,7 @@ import { DomainSyncService, type DomainProvisionResult } from '../auth/domain-sy
 import { EmployeeDocument, Grade } from '../assets/assets.entities'
 import { assertDocTypes } from '../assets/doc-types'
 import { Branch } from '../org/entities/branch.entity'
+import { readBranchCurrency } from '../org/branch-currency-db'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
 import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
@@ -417,6 +418,8 @@ export class EmployeesService {
   }
 
   async create(dto: CreateEmployeeDto, actorId: number, branchScope: BranchScope) {
+    // العملة تبع الفرع (قرار المالك 30 سبتمبر): أي عملة مبعوتة بتتجاهل، والخادم بيحط عملة الفرع جوه المعاملة (من دولته أو عملة النظام)
+    delete (dto as { currency?: unknown }).currency
     normalizeIdentityFields(dto)
     // الحقول الإجبارية وشكلها (الاسم بالعربي، رقم الهوية أو الجواز، الميلاد…) على كل مسار إنشاء — مش الـDTO بس
     const requiredIssue = employeeCreateIssue(dto, localDateOf(new Date()))
@@ -458,7 +461,8 @@ export class EmployeesService {
       await this.lockEmployeeIdentities(em)
       await this.assertUnique(dto, branchScope, undefined, em)
       const employeeCode = await generateEmployeeCode(em)
-      const result = await em.save(Employee, em.create(Employee, { ...(empDto as Partial<Employee>), employeeCode }))
+      const currency = await readBranchCurrency(em, dto.branchId)
+      const result = await em.save(Employee, em.create(Employee, { ...(empDto as Partial<Employee>), employeeCode, currency }))
       {
         const change = attendanceRuleChange({ effectiveFrom: attendanceEffectiveFrom, changeReason: attendanceChangeReason }, true)
         // المصدر قبل إنشاء الموظف لا يحمل إسنادًا سابقًا؛ لا ننسب الدوام الحالي للماضي.
@@ -649,6 +653,9 @@ export class EmployeesService {
   async update(id: number, dto: UpdateEmployeeDto, branchScope: BranchScope, actorId?: number,
     audit?: { reason: string; fields?: ReadonlyArray<keyof Employee> }) {
     const emp = await this.findOne(id, branchScope)
+    // العملة تبع الفرع (قرار المالك 30 سبتمبر): العملة المبعوتة بتتجاهل. التعديل العادي مابيعيدش كتابة عملة الملف (جزء من الأجر
+    // الموثق)، والنقل لفرع عملته مختلفة بيغيّرها تحت، وتغيير الأجر بيتسجل بعملة الفرع
+    delete (dto as { currency?: unknown }).currency
     // الحالة المحفوظة — المعروضة قد تكون «موقوف» مشتقة من فترة إيقاف مؤرخة
     const storedStatus = (emp as Employee & { storedStatus?: Employee['status'] }).storedStatus ?? emp.status
     // حساب الفروع ينقل الموظف بين فروعه بس — مش لفرع برّه نطاقه
@@ -795,6 +802,14 @@ export class EmployeesService {
       }
       // نقل لفرع تاني والجدول الساري (أو المؤرخ بعد النقل) خاص بفرع غيره → يترفض لحد ما يتختار جدول للفرع الجديد أو لكل الشركة
       if (branchChanged) await assertEmployeeSchedulesFitBranch(em, fresh, dto.branchId!, calendarChange?.effectiveFrom ?? attendanceRuleToday())
+      // العملة تبع الفرع (قرار المالك 30 سبتمبر): تغيير الأجر بيتسجل دايمًا بعملة فرع الموظف بعد الحفظ (العملة المبعوتة بتتجاهل)، والنقل
+      // لفرع عملته غير عملة الفرع القديم بيغيّر عملة الملف (تحت، بعد تغيير الأجر لو معاه). النقل بين فرعين بنفس العملة مابيلمسهاش
+      let branchCurrencyChange: string | null = null
+      if (branchChanged) {
+        const before = await readBranchCurrency(em, beforeChange.branchId), after = await readBranchCurrency(em, dto.branchId)
+        if (before !== after && beforeChange.currency !== after) branchCurrencyChange = after
+      }
+      if (salaryChange) salaryChange.salary.currency = await readBranchCurrency(em, fresh.branchId)
       // workScheduleId يُحفظ عبر نسخته أعلاه، وبقية الحقول المرسلة وحدها تُدمج في
       // الصف المعاد قراءته داخل القفل كي لا تدهس إسنادًا أو بيانات حفظت بالتزامن.
       const { workScheduleId: _workScheduleId, ...otherFields } = employeeFields
@@ -808,6 +823,16 @@ export class EmployeesService {
       if (salaryChange) {
         if (!Number.isInteger(actorId) || !actorId) throw new BadRequestException('هوية المستخدم المنفذ مطلوبة لتغيير الأجر')
         await applyEmployeeSalaryChange(em, { ...salaryChange, employeeId: id, actorUserId: actorId })
+      }
+      // عملة الفرع الجديد لو تغيير الأجر (لو كان معاه) ماكتبهاش: تسمية بس، والمبالغ زي ما هي من غير تحويل — وسجل الأجر القديم بعملته
+      // بيتراجع ويتثبّت بالعملة الجديدة قبل أي تغيير أجر تاني (رسالة تغيير الأجر بتقول كده)
+      if (branchCurrencyChange) {
+        const stored = await em.findOne(Employee, { where: { id }, select: { id: true, currency: true } })
+        if (stored && stored.currency !== branchCurrencyChange) {
+          await em.update(Employee, { id }, { currency: branchCurrencyChange })
+          await recordEmployeeChange(em, { employeeId: id, fieldName: 'currency', oldValue: stored.currency, newValue: branchCurrencyChange,
+            changedByUserId: actorId, reason: `${audit?.reason ?? 'تعديل من ملف الموظف'} — عملة الفرع الجديد (تسمية بس من غير تحويل مبالغ)` })
+        }
       }
       const result = await em.findOneByOrFail(Employee, { id })
       await linkEmployeeFiles(em, id, [contractFileRef, ...(documentRefs ?? []).map(r => r.fileRef),

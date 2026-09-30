@@ -7,7 +7,7 @@ import { PayrollDecimal } from '../payroll/payroll-decimal'
 import { payrollLiveSourceContent } from '../payroll/payroll-live-source-contract'
 import { applyEmployeeSalaryChange, readSalaryCycleStartDay } from '../payroll/payroll-salary-change'
 import { readSalaryHistory, readSalaryHistoryCurrent, SALARY_HISTORY_MONEY_KEYS, SALARY_HISTORY_OPTIONAL_MONEY_KEYS, SALARY_HISTORY_REQUIRED_MONEY_KEYS,
-  salaryCurrentSourceHash, salaryHistoryDate, salaryHistoryMoney, salaryHistoryMoneyOf, salaryHistoryText, withoutZeroOptionalSalary } from '../payroll/payroll-salary-history'
+  salaryCurrentSourceHash, salaryDriftIsCurrencyOnly, salaryHistoryDate, salaryHistoryMoney, salaryHistoryMoneyOf, salaryHistoryText, withoutZeroOptionalSalary } from '../payroll/payroll-salary-history'
 import { PayrollPeriodSalaryError, salaryPayrollPeriod } from '../payroll/payroll-period-salary'
 import { payrollPeriodBounds, payrollPeriodOfDate } from '../payroll/payroll-period'
 import { MONTHLY_SALARY_COMPONENTS } from '../employees/compensation'
@@ -74,7 +74,8 @@ function salaryShape(raw: unknown): Salary {
  * أو «كل مكوّن أجر مبلغ نصي صريح…» دون أن يعرف الموظف أو المعتمد ما الناقص ولا من يستكمله. */
 export function assertSalaryRequestFileComplete(current: Record<string, unknown> & { currency?: unknown }) {
   if (current.currency !== 'SAR' && current.currency !== 'EGP') {
-    throw new BadRequestException({ code: 'SALARY_REQUEST_CURRENCY_REQUIRED', message: 'عملة أجر الموظف غير محددة في ملفه (ريال SAR أو جنيه EGP) — تضبطها الموارد البشرية من ملف الموظف ثم يُقدَّم طلب زيادة الراتب' })
+    // العملة تبع الفرع (قرار المالك 30 سبتمبر): مابقاش ليها خانة في الملف — أول تغيير أجر من ملف الموظف بيسجلها بعملة فرعه
+    throw new BadRequestException({ code: 'SALARY_REQUEST_CURRENCY_REQUIRED', message: 'عملة أجر الموظف غير محددة في ملفه — تثبّت الموارد البشرية أجره من «البيانات المالية» في ملف الموظف (العملة بتتسجل حسب فرعه)، وبعدين يُقدَّم طلب زيادة الراتب' })
   }
   const missing = MONTHLY_SALARY_COMPONENTS.filter(component => current[component.key] == null || current[component.key] === '')
   if (missing.length) {
@@ -147,7 +148,9 @@ async function currentBasis(em: EntityManager, req: Pick<Request, 'requesterId' 
   if (!current || current.employee.branchId !== req.branchId) conflict('SALARY_REQUEST_EMPLOYEE_CHANGED', 'تغير نطاق الموظف أثناء قراءة دليل الأجر')
   assertSalaryRequestFileComplete(current!.current)
   const salary = salaryShape(current!.current)
-  if (history.version && history.version.currentSourceHash !== current!.currentSourceHash) conflict('SALARY_REQUEST_HISTORY_DRIFT', 'سجل الأجر السابق لا يطابق الملف الحالي؛ راجعه قبل تقديم زيادة جديدة')
+  if (history.version && history.version.currentSourceHash !== current!.currentSourceHash) conflict('SALARY_REQUEST_HISTORY_DRIFT', salaryDriftIsCurrencyOnly(current!.current, history.version.currentSourceHash)
+    ? 'عملة الموظف اتغيرت لما اتنقل لفرع عملته مختلفة، وسجل أجره لسه بالعملة القديمة — الموارد البشرية تثبّت أجره بالعملة الجديدة من «سجل الأجر» الأول، وبعدين يُقدَّم طلب الزيادة'
+    : 'سجل الأجر السابق لا يطابق الملف الحالي؛ راجعه قبل تقديم زيادة جديدة')
   return { current: current!, salary, history }
 }
 

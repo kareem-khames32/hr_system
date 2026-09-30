@@ -91,11 +91,13 @@ function assertSettingsView(version, status) {
   assert.ok(Array.isArray(version.settingsIssues))
   if (status === 'COMPLETE') assert.equal(version.settingsIssues.length, 0)
 }
+// العملة تبع الفرع (قرار المالك 30 سبتمبر): الخادم بيحط عملة المعادلات عند حفظ الإعدادات — فروع الاختبار من غير دولة، فالعملة
+// عملة النظام (SAR في قاعدة الاختبار). اشتقاقها من الفرع أو من عملة النظام متختبر في currency-follows-branch.integration.cjs
 function completeSettings(overrides = {}) {
   return { defaultPeriodType: 'CUSTOM_DAY_RANGE', cycleStartDay: 23, cycleEndMode: 'FIXED_DAY', cycleEndDay: 22,
     baseDaysBasis: 'FIXED_30', monthlyDays: 30, dailyHours: 7.25, rateBase: 'BASIC', roundingMode: 'CEIL', roundingScale: 4,
     divisionByZeroMode: 'FAIL_ROW', maxDeductionPctOfGross: 37.1234, minNetGuarantee: 1234.56, netFloorPct: 12.3456,
-    carryOverExcess: true, skipAttendance: true, lateDeductionEnabled: false, currency: 'EGP', ...overrides }
+    carryOverExcess: true, skipAttendance: true, lateDeductionEnabled: false, currency: 'SAR', ...overrides }
 }
 async function legacyVersion(overrides = {}) {
   const created = await create()

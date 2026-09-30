@@ -401,7 +401,8 @@ export function planBulkUpdate(file: BulkParsedFile, lookups: BulkLookups, optio
       const changed = SALARY_KEYS.filter(key => values[key] !== current(key))
       if (changed.length) {
         const month = record.salaryMonth?.ok ? record.salaryMonth.value : options.salaryMonth
-        if (employee.currency !== 'SAR' && employee.currency !== 'EGP') plan.errors.push('الراتب: عملة أجر الموظف مش محددة (ريال أو جنيه) — عدّلها من ملف الموظف الأول')
+        // العملة تبع الفرع (قرار المالك 30 سبتمبر): التغيير نفسه بيتسجل بعملة الفرع، بس الملف القديم من غير عملة مالهوش أجر حالي موثق يتبني عليه
+        if (employee.currency !== 'SAR' && employee.currency !== 'EGP') plan.errors.push('الراتب: عملة أجر الموظف مش متسجلة في ملفه — غيّر أجره مرة من «البيانات المالية» في ملف الموظف (العملة بتتسجل حسب فرعه) وبعدين ارفع الملف تاني')
         else if (!options.currentPayrollPeriod) plan.errors.push('الراتب: إعداد بداية دورة الرواتب مش مثبت — راجعه قبل تعديل الأجر')
         else {
           if (month && month > options.currentPayrollPeriod) {

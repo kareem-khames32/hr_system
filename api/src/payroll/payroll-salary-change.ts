@@ -9,7 +9,7 @@ import { markPayrollRangeDirty } from './payroll-daily-accrual'
 // C8 / الخطوة 31: بند مسير عُكس صرفه بسطر منفذ لا يُقفل شهر الأجر (يُصحح الأجر ثم يُصرف بمسير تكميلي)
 import { payrollLineNotReversedSql } from './payroll-reversal-sql'
 import { appendMonthlySalaryHistoryRevision, isOptionalSalaryKey, readSalaryHistory, readSalaryHistoryCurrent,
-  SALARY_HISTORY_MONEY_KEYS, SALARY_HISTORY_OPTIONAL_MONEY_KEYS, salaryCurrentSourceHash, salaryHistorySchemaMissing,
+  SALARY_HISTORY_MONEY_KEYS, SALARY_HISTORY_OPTIONAL_MONEY_KEYS, salaryCurrentSourceHash, salaryDriftIsCurrencyOnly, salaryHistorySchemaMissing,
   salaryHistoryText, type SalaryHistoryCurrent, type SalaryHistoryOptionalMoneyKey, type SalaryHistoryRead, type SalaryHistorySegment } from './payroll-salary-history'
 import { type MonthlySalaryPeriod, normalizeMonthlySalaryPeriods, PAYROLL_MONTHLY_SALARY_HISTORY_VERSION, PayrollPeriodSalaryError, salaryPayrollPeriod } from './payroll-period-salary'
 import { payrollPeriodBounds, payrollPeriodOfDate, shiftPayrollPeriod } from './payroll-period'
@@ -239,7 +239,9 @@ export async function applyEmployeeSalaryChange(em: EntityManager, input: Employ
     const previous = await readSalaryHistory(em, input.employeeId)
     if (previous.revision !== input.expectedRevision) throw new ConflictException({ code: 'SALARY_HISTORY_REVISION_CONFLICT', message: 'تغير سجل الأجر منذ فتحه؛ حدّث البيانات قبل الحفظ', currentRevision: previous.revision })
     if (current.currentSourceHash !== input.expectedCurrentSourceHash) conflict('SALARY_HISTORY_CURRENT_SOURCE_CHANGED', 'تغير الأجر الحالي منذ فتح النموذج؛ حدّث البيانات قبل الحفظ')
-    if (previous.version && previous.version.currentSourceHash !== current.currentSourceHash) conflict('SALARY_CHANGE_HISTORY_SOURCE_CHANGED', 'تغير الأجر الحالي خارج سجل السريان؛ راجع إثبات سجل الأجر قبل إضافة تغيير جديد')
+    if (previous.version && previous.version.currentSourceHash !== current.currentSourceHash) conflict('SALARY_CHANGE_HISTORY_SOURCE_CHANGED', salaryDriftIsCurrencyOnly(current.current, previous.version.currentSourceHash)
+      ? 'عملة الموظف اتغيرت لما اتنقل لفرع عملته مختلفة، وسجل أجره لسه بالعملة القديمة — ثبّت أجره بالعملة الجديدة من «سجل الأجر» الأول، وبعدين عدّل الراتب'
+      : 'تغير الأجر الحالي خارج سجل السريان؛ راجع إثبات سجل الأجر قبل إضافة تغيير جديد')
     const plan = planEmployeeSalaryChange({ history: previous, current: current.current, salary: input.salary, effectivePayrollPeriod, currentPayrollPeriod, cycleStartDay, previousEffectivePayrollPeriod })
     if (!plan.timelineChanged && !plan.currentChanged) return { history: previous, current: current.current, changed: false, applied: true }
     await assertSalaryChangePeriodOpen(em, input.employeeId, previousEffectivePayrollPeriod ?? plan.effectivePayrollPeriod, plan.effectiveToPayrollPeriod, cycleStartDay)

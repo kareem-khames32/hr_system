@@ -15,6 +15,7 @@ import {
 import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 import { DayRangeFilter, PayrollPeriodSelect, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { validDayRange, type DayRange, type PayrollMonthContext } from '@/lib/payroll-month-range'
+import { useBranchCurrency } from '@/lib/currency'
 
 // الخطوة 25: مساحة الخصومات المصنفة — القائمة والاعتماد (مع الاعتراض والعكس وقرارات الأقساط المعلقة)، والإنشاء لموظف أو
 // اختيار أو فريق أو قسم أو فرع بمعاينة واستبعاد، وكتالوج الأنواع، والتقارير. الخادم يعيد فحص النطاق والحدود والتكرار
@@ -128,6 +129,8 @@ function DeductionList({ rows, loading, filters, setFilters, reload, currency, r
   const [detail, setDetail] = useState<DeductionView | null>(null)
   const [focused, setFocused] = useState<DeductionView | null>(null)
   const [action, setAction] = useState<{ kind: ActionKind; row: DeductionView; obligationId?: number } | null>(null)
+  // عملة كل صف = عملة فرع موظفه (قرار المالك 30 سبتمبر)؛ بتظهر جنب المبلغ لما تختلف عن عملة عنوان العمود
+  const currencyOf = useBranchCurrency()
   const [reason, setReason] = useState('')
   const [adjusted, setAdjusted] = useState('')
   const [targetPeriod, setTargetPeriod] = useState('')
@@ -231,6 +234,7 @@ function DeductionList({ rows, loading, filters, setFilters, reload, currency, r
                       <td className="table-cell"><span className="font-medium text-gray-800">{row.employee.fullName ?? `موظف #${row.employee.id}`}</span><span className="block text-xs text-gray-400">{row.employee.employeeCode}</span></td>
                       <td className="table-cell text-sm">{row.type.nameAr}<span className="block text-xs text-gray-400">{row.type.calcMethodLabel}: {row.inputValue}</span></td>
                       <td className="table-cell text-center font-mono">{formatDeductionMoney(row.finalAmount ?? row.estimatedAmount)}
+                        {currencyOf(row.employee.branchId) !== currency && <span className="font-sans text-xs text-gray-500"> {currencyOf(row.employee.branchId)}</span>}
                         {row.installments > 1 && <span className="block text-xs text-gray-400">{row.installments} أقساط</span>}
                         {row.reversedAmount !== '0.00' && <span className="block text-xs text-success-700">معكوس {formatDeductionMoney(row.reversedAmount)}</span>}</td>
                       <td className="table-cell text-center font-mono" dir="ltr">{row.targetPeriod}</td>
@@ -342,7 +346,7 @@ function DeductionList({ rows, loading, filters, setFilters, reload, currency, r
               <h4 className="font-bold text-gray-800">{ACTION_TITLES[action.kind]} #{action.row.id}</h4>
               <button type="button" aria-label="إغلاق" onClick={() => setAction(null)}><X size={18} /></button>
             </div>
-            <p className="text-sm text-gray-600">{action.row.employee.fullName} — {action.row.type.nameAr} — {formatDeductionMoney(action.row.finalAmount ?? action.row.estimatedAmount)} {currency} لشهر <span dir="ltr">{action.row.targetPeriod}</span></p>
+            <p className="text-sm text-gray-600">{action.row.employee.fullName} — {action.row.type.nameAr} — {formatDeductionMoney(action.row.finalAmount ?? action.row.estimatedAmount)} {currencyOf(action.row.employee.branchId)} لشهر <span dir="ltr">{action.row.targetPeriod}</span></p>
             {action.kind === 'approve' && action.row.capabilities.canAdjust && (
               <label className="block text-sm text-gray-600">تعديل المبلغ (اختياري، بحدود النوع)
                 <input className="input mt-1" dir="ltr" inputMode="decimal" value={adjusted} onChange={event => setAdjusted(event.target.value)} placeholder={action.row.estimatedAmount} />

@@ -91,6 +91,16 @@ export function salaryCurrentSourceHash(current: SalaryHistoryCurrent): string {
   return payrollLiveSourceContent(withoutZeroOptionalSalary({ ...normalized, currency: row.currency })).contentHash
 }
 
+/**
+ * الفرق بين الأجر الحالي وبصمة سجل الأجر هو العملة بس (نفس المبالغ)؟ — الموظف اتنقل لفرع عملته مختلفة (قرار المالك 30 سبتمبر: العملة
+ * تبع الفرع). للرسالة بس: الحكم نفسه (السجل مايطابقش الملف ويتراجع) مابيتغيرش.
+ */
+export function salaryDriftIsCurrencyOnly(current: SalaryHistoryCurrent, recordedHash: string): boolean {
+  try {
+    return ([null, 'SAR', 'EGP'] as const).some(currency => currency !== current.currency && salaryCurrentSourceHash({ ...current, currency }) === recordedHash)
+  } catch { return false }
+}
+
 export function salaryHistoryContentHash(input: { employeeId: number; revision: number; reason: string; evidenceReference: string; currentSourceHash: string; segments: SalaryHistorySegment[] }): string {
   // أعمدة012 الفارغة لا تدخل بصمةV1؛ تبقى كل البصمات السابقة مطابقة حرفيًا. وكذلك بدل ضغط العمل الصفري (ترحيل 071).
   const segments = input.segments.map(({ effectivePayrollPeriod, effectiveToPayrollPeriod, ...row }) => {

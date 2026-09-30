@@ -15,6 +15,7 @@ import {
 import { CompanyWideReadOnlyNote, useCompanyWideWrite } from '@/components/CompanyWideReadOnly'
 import { DayRangeFilter, PayrollPeriodSelect, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { dayRangeKey, validDayRange, type DayRange, type PayrollMonthContext } from '@/lib/payroll-month-range'
+import { useBranchCurrency } from '@/lib/currency'
 
 // C4 / الخطوة 27: مساحة المكافآت — القائمة والاعتماد (المدير الأعلى عند التصعيد ثم الموارد البشرية)، والاقتراح لموظف واحد
 // أو اختيار أو فريق أو قسم أو فرع بمعاينة أرقام حقيقية واستبعاد، وكتالوج الأنواع. الخادم يعيد فحص النطاق والسقف والتكرار
@@ -128,6 +129,8 @@ function BonusList({ rows, loading, filters, setFilters, reload, currency, reaso
   const [detail, setDetail] = useState<BonusView | null>(null)
   const [focused, setFocused] = useState<BonusView | null>(null)
   const [action, setAction] = useState<{ kind: ActionKind; row: BonusView } | null>(null)
+  // عملة كل صف = عملة فرع موظفه (قرار المالك 30 سبتمبر)؛ بتظهر جنب المبلغ لما تختلف عن عملة عنوان العمود
+  const currencyOf = useBranchCurrency()
   const [reason, setReason] = useState('')
   const [amount, setAmount] = useState('')
   const [busy, setBusy] = useState(false)
@@ -228,6 +231,7 @@ function BonusList({ rows, loading, filters, setFilters, reload, currency, reaso
                       <td className="table-cell"><span className="font-medium text-gray-800">{row.employee.fullName ?? `موظف #${row.employee.id}`}</span><span className="block text-xs text-gray-400">{row.employee.employeeCode}</span></td>
                       <td className="table-cell text-sm">{row.type.nameAr}<span className="block text-xs text-gray-400">{row.type.calcMethodLabel}: {row.inputValue}</span></td>
                       <td className="table-cell text-center font-mono text-success-700">{formatBonusMoney(row.finalAmount ?? row.estimatedAmount)}
+                        {currencyOf(row.employee.branchId) !== currency && <span className="font-sans text-xs text-gray-500"> {currencyOf(row.employee.branchId)}</span>}
                         {row.reversedAmount !== '0.00' && <span className="block text-xs text-red-600">مسترد {formatBonusMoney(row.reversedAmount)}</span>}</td>
                       <td className="table-cell text-center font-mono" dir="ltr">{row.targetPeriod}</td>
                       <td className="table-cell text-sm">{row.creator.name ?? `مستخدم #${row.creator.userId}`}<span className="block text-xs text-gray-400">{row.creator.basisLabel}</span></td>
@@ -294,7 +298,7 @@ function BonusList({ rows, loading, filters, setFilters, reload, currency, reaso
               <h4 className="font-bold text-gray-800">{ACTION_TITLES[action.kind]} #{action.row.id}</h4>
               <button type="button" aria-label="إغلاق" onClick={() => setAction(null)}><X size={18} /></button>
             </div>
-            <p className="text-sm text-gray-600">{action.row.employee.fullName} — {action.row.type.nameAr} — {formatBonusMoney(action.row.finalAmount ?? action.row.estimatedAmount)} {currency} لشهر <span dir="ltr">{action.row.targetPeriod}</span></p>
+            <p className="text-sm text-gray-600">{action.row.employee.fullName} — {action.row.type.nameAr} — {formatBonusMoney(action.row.finalAmount ?? action.row.estimatedAmount)} {currencyOf(action.row.employee.branchId)} لشهر <span dir="ltr">{action.row.targetPeriod}</span></p>
             {action.kind === 'approve' && action.row.capabilities.canAdjust && (
               <label className="block text-sm text-gray-600">تعديل المبلغ (اختياري، بحدود النوع وسقفه)
                 <input className="input mt-1" dir="ltr" inputMode="decimal" value={amount} onChange={event => setAmount(event.target.value)} placeholder={action.row.estimatedAmount} />

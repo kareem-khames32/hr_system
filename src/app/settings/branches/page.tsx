@@ -20,6 +20,8 @@ import {
   UserCheck,
   Landmark,
   Calendar,
+  Banknote,
+  AlertTriangle,
 } from 'lucide-react'
 import {
   ApiBranch,
@@ -37,6 +39,9 @@ import {
 import { buildCalendarChange, calendarScopeWritable, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
 import { CalendarChangeFields, CalendarContextSummary, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
 import { EmployeePicker } from '@/components/EmployeePicker'
+import { currencyLabel, currencyName, invalidateCurrency, useCurrencyContext } from '@/lib/currency'
+import { BRANCH_COUNTRIES, BRANCH_COUNTRY_NAMES, branchCountryOf, branchCurrency, branchInsuranceIssue, branchInsuranceOptions,
+  normalizeBranchCountry } from '../../../../api/src/org/branch-currency'
 
 // أيام الأسبوع بالرموز التي يقرأها محرك الحضور (branch.weekendDays / attendance.weekend_days)
 const WEEK_DAYS = [
@@ -91,6 +96,18 @@ const INSURANCE_SYSTEM_LABELS: Record<NonNullable<ApiBranch['insuranceSystem']>,
   EGYPTIAN: 'التأمينات المصرية',
 }
 
+// العملة تبع دولة الفرع (قرار المالك 30 سبتمبر) — نفس قاعدة الخادم: مصر جنيه، السعودية ريال، ومن غير دولة عملة النظام
+const currencyText = (country: string | null | undefined, defaultCurrency: string | undefined) => {
+  if (!branchCountryOf(country) && !defaultCurrency) return '—'
+  const code = branchCurrency(country, defaultCurrency)
+  return `${currencyName(code)} (${currencyLabel(code)})`
+}
+const countryText = (country: string | null | undefined) => {
+  const code = normalizeBranchCountry(country)
+  const known = branchCountryOf(code)
+  return known ? BRANCH_COUNTRY_NAMES[known] : code ? `${code} (رمز قديم)` : 'من غير دولة'
+}
+
 export default function BranchesPage() {
   const [branches, setBranches] = useState<ApiBranch[]>([])
   const [employees, setEmployees] = useState<ApiEmployee[]>([])
@@ -105,6 +122,8 @@ export default function BranchesPage() {
 
   const [formData, setFormData] = useState({ ...emptyForm })
   const companyWide = isCompanyWideUser(getCurrentUser())
+  // عملة النظام للفروع من غير دولة (من غير صلاحية إعدادات)
+  const defaultCurrency = useCurrencyContext()?.defaultCurrency
   const calendar = useCalendarContext('BRANCH', editingBranch?.id ?? 0, showModal && !!editingBranch)
   useEffect(() => {
     if (!calendar.context) return
@@ -190,6 +209,11 @@ export default function BranchesPage() {
       setModalError('العطلة الأسبوعية لا تكون كل أيام الأسبوع — يلزم يوم عمل واحد على الأقل')
       return
     }
+    // الفرع الجديد لازم دولته (منها عملته ونظام تأميناته)؛ الفاضي للفروع القديمة بس
+    if (!editingBranch && !branchCountryOf(formData.country)) {
+      setModalError('اختار دولة الفرع (مصر أو السعودية) — منها عملة الفرع ونظام تأميناته')
+      return
+    }
     let calendarChange: PayrollCalendarChange | undefined
     if (calendarChanged) {
       try { calendarChange = buildCalendarChange(calendar.context, calendar.evidence) }
@@ -239,6 +263,8 @@ export default function BranchesPage() {
         // إنشاء الفرع لا يقبل isActive — نعطّله بعد الإنشاء لو طُلب ذلك
         if (!formData.isActive) await updateBranch(created.id, { isActive: false })
       }
+      // دولة الفرع بتغيّر عملته في كل الشاشات — السياق المخزن للجلسة يتقري من جديد
+      invalidateCurrency()
       await loadData()
       setShowModal(false)
     } catch (err: any) {
@@ -253,6 +279,7 @@ export default function BranchesPage() {
     try {
       const updated = await updateBranch(branch.id, { isActive: !branch.isActive })
       setBranches((prev) => prev.map((b) => (b.id === updated.id ? updated : b)))
+      invalidateCurrency()
       setError(null)
     } catch (err: any) {
       setError(err.message)
@@ -515,6 +542,24 @@ export default function BranchesPage() {
                   </span>
                   <span className="text-xs text-gray-400">العطلة الأسبوعية</span>
                 </div>
+                <div className="mt-2 flex items-center gap-2">
+                  <Banknote size={14} className="text-gray-400" />
+                  <span className="text-xs text-gray-500 bg-gray-50 px-2 py-1 rounded-lg">
+                    {countryText(branch.country)} — {currencyText(branch.country, defaultCurrency)}
+                  </span>
+                  <span className="text-xs text-gray-400">دولة الفرع وعملته</span>
+                </div>
+                {!branchCountryOf(branch.country) && (
+                  <p className="mt-2 text-xs text-amber-700">
+                    حدد دولة الفرع (مصر أو السعودية) من «تعديل» — عملته دلوقتي عملة النظام
+                  </p>
+                )}
+                {branchInsuranceIssue(branch.country, branch.insuranceSystem) && (
+                  <p className="mt-2 flex items-start gap-1 text-xs text-amber-700" role="alert">
+                    <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                    {branchInsuranceIssue(branch.country, branch.insuranceSystem)}
+                  </p>
+                )}
               </div>
             ))}
           </div>
@@ -609,24 +654,34 @@ export default function BranchesPage() {
                     />
                   </div>
                   <div>
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      الدولة
+                    <label htmlFor="branch-country" className="block text-sm font-medium text-gray-700 mb-2">
+                      دولة الفرع
                     </label>
-                    <input
-                      type="text"
+                    <select
+                      id="branch-country"
                       value={formData.country}
                       disabled={!!editingBranch && (!calendar.context || calendar.context.currentMatchesHistory === false || !calendarScopeWritable('BRANCH', editingBranch.id))}
                       onChange={(e) =>
-                        setFormData({ ...formData, country: e.target.value.toUpperCase() })
+                        setFormData({ ...formData, country: e.target.value })
                       }
-                      className="input w-full font-mono"
-                      placeholder="مثال: SA"
-                      maxLength={5}
-                      dir="ltr"
-                    />
+                      className="input w-full"
+                    >
+                      {/* الفاضي للفروع القديمة بس — والرمز القديم (غير مصر والسعودية) يفضل ظاهر لحد ما يتغير */}
+                      {(!editingBranch || !formData.country) && <option value="">— اختار الدولة —</option>}
+                      {formData.country && !branchCountryOf(formData.country) && (
+                        <option value={formData.country}>{formData.country} (رمز قديم)</option>
+                      )}
+                      {BRANCH_COUNTRIES.map((code) => (
+                        <option key={code} value={code}>{BRANCH_COUNTRY_NAMES[code]}</option>
+                      ))}
+                    </select>
+                    <p className="text-sm text-gray-700 mt-1">
+                      العملة: {currencyText(formData.country, defaultCurrency)}
+                      {!branchCountryOf(formData.country) ? ' — عملة النظام لحد ما تحدد الدولة' : ' (حسب الدولة)'}
+                    </p>
                     <p className="text-xs text-gray-400 mt-1">
-                      تسري على الفرع العطلات الرسمية لدولته فقط — فارغ = كل العطلات. تغيير
-                      الدولة يتطلب تحديد تاريخ تطبيق القرار وسببه
+                      دولة الفرع بتحدد عملته ونظام تأميناته والعطلات الرسمية اللي بتسري عليه — من غير دولة
+                      تسري كل العطلات. تغيير الدولة يتطلب تحديد تاريخ تطبيق القرار وسببه
                     </p>
                   </div>
                 </div>
@@ -643,10 +698,19 @@ export default function BranchesPage() {
                     }
                     className="input w-full"
                   >
-                    {Object.entries(INSURANCE_SYSTEM_LABELS).map(([value, label]) => (
-                      <option key={value} value={value}>{label}</option>
-                    ))}
+                    {/* الاختيارات حسب دولة الفرع (مصر: بدون/المصرية، السعودية: بدون/السعودية)؛ القيمة المحفوظة المختلفة بتفضل ظاهرة ومابتتغيرش لوحدها */}
+                    {(Object.keys(INSURANCE_SYSTEM_LABELS) as Array<keyof typeof INSURANCE_SYSTEM_LABELS>)
+                      .filter((value) => value === formData.insuranceSystem || branchInsuranceOptions(formData.country).includes(value))
+                      .map((value) => (
+                        <option key={value} value={value}>{INSURANCE_SYSTEM_LABELS[value]}</option>
+                      ))}
                   </select>
+                  {branchInsuranceIssue(formData.country, formData.insuranceSystem) && (
+                    <p className="flex items-start gap-1 text-xs text-amber-700 mt-1" role="alert">
+                      <AlertTriangle size={14} className="shrink-0 mt-0.5" />
+                      {branchInsuranceIssue(formData.country, formData.insuranceSystem)}
+                    </p>
+                  )}
                   <p className="text-xs text-gray-400 mt-1">
                     موظفين الفرع المسجلين في التأمينات بتتخصم حصتهم في المسير بنسب «التأمينات»
                     {companyWide ? '' : ' — بيتغير من حساب على مستوى الشركة بس'}
