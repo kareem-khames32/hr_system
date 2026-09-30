@@ -1242,7 +1242,7 @@ export default function MyRequestsPage() {
     <MainLayout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex max-lg:flex-wrap items-center justify-between max-lg:gap-3">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">طلباتي</h1>
             <p className="text-gray-500 mt-1">
@@ -1318,7 +1318,7 @@ export default function MyRequestsPage() {
                   </span>
                 </button>
               ))}
-              <div className="relative flex-1 max-w-xs mr-auto">
+              <div className="relative flex-1 max-w-xs mr-auto max-lg:basis-full max-lg:max-w-none">
                 <Search
                   size={18}
                   className="absolute right-3 top-1/2 -translate-y-1/2 text-gray-400"
@@ -1997,9 +1997,9 @@ export default function MyRequestsPage() {
 
                 {/* النموذج من تعريف الحقول المخصّصة — يحل محل الاستنتاج القديم */}
                 {selectedType && hasCustomFields && !isCustodyRequest && !isLeaveCancel && !isMoneyRequest && (
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     {customFields.filter(f => f.key !== 'dates' || !isHolidayWork).filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f.key)).map((f) => (
-                      <div key={f.key} className={f.type === 'file' || fieldKindOf(f.key, f.type) === 'textarea' ? 'col-span-2' : ''}>
+                      <div key={f.key} className={f.type === 'file' || fieldKindOf(f.key, f.type) === 'textarea' ? 'sm:col-span-2' : ''}>
                         <label className="block text-sm font-medium text-gray-700 mb-2">
                           {customFieldLabel(f)}
                           {f.required && <span className="text-red-500 mr-1">*</span>}
@@ -2100,9 +2100,9 @@ export default function MyRequestsPage() {
                   !isLeaveCancel &&
                   !isMoneyRequest &&
                   requiredFields.length > 0 && (
-                    <div className="grid grid-cols-2 gap-3">
+                    <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                       {requiredFields.filter(f => f !== 'dates' || !isHolidayWork).filter(f => !isOvertime || !['date', 'hours', 'reason', ...(isAutomaticOvertime ? ['autoDetected'] : [])].includes(f)).map((f) => (
-                        <div key={f} className={payloadFieldKind(f) === 'textarea' ? 'col-span-2' : ''}>
+                        <div key={f} className={payloadFieldKind(f) === 'textarea' ? 'sm:col-span-2' : ''}>
                           <label className="block text-sm font-medium text-gray-700 mb-2">
                             {humanizeKey(f)}
                           </label>
@@ -2135,7 +2135,7 @@ export default function MyRequestsPage() {
                   )}
 
                 {isOvertime && <div className="space-y-4">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
                     <div><label htmlFor="overtime-date" className="block text-sm font-medium text-gray-700 mb-2">تاريخ العمل <span className="text-red-500">*</span></label><input id="overtime-date" type="date" readOnly={isAutomaticOvertime} className="input w-full read-only:bg-gray-50" value={overtimeDate} onChange={event => setFieldValue('date', event.target.value)} /></div>
                     {!isAutomaticOvertime && <div><label htmlFor="overtime-hours" className="block text-sm font-medium text-gray-700 mb-2">الساعات المطلوبة {overtimeHoursRequired ? <span className="text-red-500">*</span> : '(اختياري)'}</label><input id="overtime-hours" type="number" min="0" step="any" className="input w-full" placeholder="مثال: 2.25" value={fieldValues.hours ?? ''} onChange={event => setFieldValue('hours', event.target.value)} /><p className="text-xs text-gray-500 mt-1">عند تركها فارغة يُستخدم وقت النظام، إلا للمستثنى من الحضور.</p></div>}
                   </div>

@@ -290,7 +290,7 @@ export default function CalendarPage() {
                 {/* Day Headers */}
                 <div className="grid grid-cols-7 gap-1 mb-2">
                   {arabicDays.map((day) => (
-                    <div key={day} className="text-center py-2 text-sm font-medium text-gray-500">
+                    <div key={day} className="text-center py-2 text-[10px] sm:text-sm font-medium text-gray-500 max-sm:truncate">
                       {day}
                     </div>
                   ))}
@@ -306,7 +306,7 @@ export default function CalendarPage() {
                       <div
                         key={day.key}
                         data-date={day.key}
-                        className={`${view === 'week' ? 'min-h-[330px]' : 'min-h-[100px]'} min-w-0 p-1.5 border rounded-lg transition-colors ${
+                        className={`${view === 'week' ? 'min-h-[330px]' : 'min-h-[100px]'} min-w-0 p-0.5 sm:p-1.5 border rounded-lg transition-colors ${
                           day.isInRange
                             ? "bg-white border-gray-200 hover:border-primary-300"
                             : "bg-gray-50 border-gray-100"
@@ -324,7 +324,7 @@ export default function CalendarPage() {
                               type="button"
                               key={event.id}
                               onClick={() => setSelectedEvent(event)}
-                              className={`block w-full text-right text-[11px] px-1.5 py-1 rounded break-words text-white ${getEventColor(event.type)}`}
+                              className={`block w-full text-right text-[11px] px-1 sm:px-1.5 py-1 rounded break-words max-sm:truncate text-white ${getEventColor(event.type)}`}
                               title={event.title}
                             >
                               {event.title}
@@ -404,7 +404,7 @@ export default function CalendarPage() {
         {/* Event Detail Modal */}
         {selectedEvent && (
           <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-xl w-full max-w-md">
+            <div className="bg-white rounded-xl w-full max-w-md max-lg:max-h-[90vh] max-lg:overflow-y-auto">
               <div className={`p-6 rounded-t-xl ${getEventColor(selectedEvent.type)}`}>
                 <div className="flex items-center gap-3">
                   {(() => {

@@ -185,7 +185,7 @@ export default function PayslipPage() {
     <MainLayout>
       <div className="space-y-6">
         {/* Breadcrumb */}
-        <div className="flex items-center justify-between">
+        <div className="flex max-lg:flex-wrap items-center justify-between max-lg:gap-3">
           <div className="flex items-center gap-2 text-sm text-gray-500">
             <Link href="/payroll" className="hover:text-primary-600">
               الرواتب
@@ -217,7 +217,7 @@ export default function PayslipPage() {
         ) : item && run && employee ? (
         <div className="card max-w-4xl mx-auto" id="payslip">
           {/* Header */}
-          <div className="flex items-start justify-between border-b border-gray-200 pb-6 mb-6">
+          <div className="flex items-start justify-between max-lg:gap-4 border-b border-gray-200 pb-6 mb-6">
             {/* تبسيط الرواتب (2026-09-15): مربع الشعار بحرفي «HR» اللاتينيين أُخفي؛ اسم الفرع يبقى عنوانًا للقسيمة */}
             <div className="flex items-center gap-4">
               <div>
@@ -241,7 +241,7 @@ export default function PayslipPage() {
           {/* تبسيط الرواتب (2026-09-15): شريطا عكس الصرف والمسير التكميلي أُخفيا من القسيمة */}
 
           {/* Employee Info */}
-          <div className="grid grid-cols-2 gap-8 mb-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 mb-8">
             <div className="space-y-4">
               <h3 className="font-bold text-gray-700 border-b border-gray-200 pb-2">بيانات الموظف</h3>
               <div className="grid grid-cols-2 gap-y-3 text-sm">
@@ -294,13 +294,13 @@ export default function PayslipPage() {
                 <span className="font-medium text-gray-800">{employee.bankName ?? '—'}</span>
 
                 <span className="text-gray-500">رقم الحساب البنكي الدولي:</span>
-                <span className="font-medium text-gray-800 font-mono text-xs">{employee.iban ?? '—'}</span>
+                <span className="font-medium text-gray-800 font-mono text-xs max-lg:break-all">{employee.iban ?? '—'}</span>
               </div>
             </div>
           </div>
 
           {/* Salary Details */}
-          <div className="grid grid-cols-2 gap-8 mb-8">
+          <div className="grid grid-cols-1 sm:grid-cols-2 gap-8 mb-8">
             {/* Earnings */}
             <div>
               <h3 className="font-bold text-success-700 bg-success-50 px-4 py-2 rounded-t-xl">
@@ -385,13 +385,13 @@ export default function PayslipPage() {
             </div>
           )}
           <div className="bg-gradient-to-r from-primary-500 to-primary-600 rounded-2xl p-6 text-white mb-8">
-            <div className="flex items-center justify-between">
-              <div>
+            <div className="flex items-center justify-between max-lg:gap-4">
+              <div className="max-lg:min-w-0 max-lg:break-words">
                 <p className="text-primary-100">صافي الراتب</p>
                 <p className="text-4xl font-bold mt-1">{formatMoney(netSalary)} {currency}</p>
                 <p className="text-primary-200 text-sm mt-2">{numberToArabicWords(netSalary, currency)}</p>
               </div>
-              <div className="w-20 h-20 bg-white/20 rounded-2xl flex items-center justify-center">
+              <div className="w-20 h-20 bg-white/20 rounded-2xl hidden sm:flex items-center justify-center max-lg:shrink-0">
                 <CreditCard size={40} />
               </div>
             </div>

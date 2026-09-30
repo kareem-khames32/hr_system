@@ -48,7 +48,7 @@ export default function AttendanceChart() {
 
   return (
     <div className="card">
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex max-lg:flex-wrap items-center justify-between max-lg:gap-3 mb-6">
         <div>
           <h3 className="text-lg font-bold text-gray-800">إحصائيات الحضور</h3>
           {trend && (

@@ -108,7 +108,7 @@ export default function QuickActions() {
   return (
     <div className="card">
       <h3 className="text-lg font-bold text-gray-800 mb-6">الوصول السريع</h3>
-      <div className="grid grid-cols-4 gap-4">
+      <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
         {visible.map((action) => (
           <Link
             key={action.id}

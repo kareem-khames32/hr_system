@@ -134,7 +134,7 @@ export default function MyAttendancePage() {
               <p>{window.reason}</p>
             </div>)}
             {Number(summary.exemptDays ?? 0) > 0 && <p className="card p-4 text-sm text-gray-600">مستثنى من الحضور: {summary.exemptDays} يوم — بدون خصومات حضور في الأيام المشمولة.</p>}
-            <div className="grid grid-cols-3 md:grid-cols-5 xl:grid-cols-10 gap-4">
+            <div className="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-5 xl:grid-cols-10 gap-4">
               <div className="card p-4 text-center">
                 <p className="text-2xl font-bold text-success-600">{Number(summary.present ?? 0)}</p>
                 <p className="text-sm text-gray-500">يوم حضور</p>
@@ -205,7 +205,7 @@ export default function MyAttendancePage() {
             ) : (
               <div className="card overflow-hidden p-0">
                 <div className="overflow-x-auto">
-                  <table className="w-full">
+                  <table className="w-full max-sm:whitespace-nowrap">
                     <thead>
                       <tr className="table-header">
                         <th className="text-right px-4 py-3">اليوم</th>

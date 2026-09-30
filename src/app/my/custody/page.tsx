@@ -191,7 +191,7 @@ export default function MyCustodyPage() {
               </div>
             ) : (
               <div className="overflow-x-auto">
-                <table className="w-full">
+                <table className="w-full max-sm:whitespace-nowrap">
                   <thead>
                     <tr className="table-header">
                       <th className="text-right px-4 py-3">العهدة</th>
@@ -297,7 +297,7 @@ export default function MyCustodyPage() {
         )}
       </div>
       {rejecting && <div className="fixed inset-0 bg-black/50 z-50 flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="رفض استلام العهدة">
-        <div className="bg-white rounded-2xl w-full max-w-lg p-6 space-y-4">
+        <div className="bg-white rounded-2xl w-full max-w-lg max-lg:max-h-[90vh] max-lg:overflow-y-auto p-6 space-y-4">
           <h2 className="font-bold text-lg">رفض استلام {rejecting.assetName ?? `الأصل #${rejecting.assetId}`}</h2>
           <p className="text-sm text-gray-600">سجّل سبب عدم استلام العهدة ليُراجع مع المسؤول.</p>
           {error && <p role="alert" className="text-red-700">{error}</p>}

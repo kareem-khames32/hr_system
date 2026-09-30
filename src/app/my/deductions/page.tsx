@@ -103,7 +103,7 @@ export default function MyDeductionsPage() {
         </div>
         {objecting && (
           <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" role="dialog" aria-modal="true">
-            <div className="bg-white rounded-2xl p-6 w-full max-w-lg space-y-3">
+            <div className="bg-white rounded-2xl p-6 w-full max-w-lg max-lg:max-h-[90vh] max-lg:overflow-y-auto space-y-3">
               <h4 className="font-bold text-gray-800">اعتراض على {objecting.type.nameAr} #{objecting.id}</h4>
               <p className="text-sm text-gray-600">{formatDeductionMoney(objecting.amount)} {currency} لشهر <span dir="ltr">{objecting.targetPeriod}</span>. يظهر اعتراضك لكل معتمِد، ولا يُعتمد الخصم قبل الرد عليه.</p>
               <textarea className="input min-h-[100px] w-full" maxLength={1000} value={text} onChange={event => setText(event.target.value)} placeholder="اكتب سبب اعتراضك" />

@@ -36,7 +36,7 @@ export default function DashboardPage() {
     <MainLayout>
       <div className="space-y-6">
         {/* العنوان + مبدّل معاينة اللوحات (لمن يملك لوحة الإدارة فقط) */}
-        <div className="flex items-center justify-between">
+        <div className="flex max-lg:flex-wrap items-center justify-between max-lg:gap-3">
           <h1 className="text-2xl font-bold text-gray-800">
             {view === 'admin' ? 'لوحة التحكم' : 'لوحتي'}
           </h1>

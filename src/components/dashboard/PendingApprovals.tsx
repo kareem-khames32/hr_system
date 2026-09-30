@@ -133,13 +133,13 @@ export default function PendingApprovals() {
                 className="flex items-center gap-4 p-4 bg-gray-50 rounded-xl hover:bg-gray-100 transition-colors"
               >
                 {/* Avatar */}
-                <div className="w-12 h-12 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
+                <div className="w-12 h-12 bg-gradient-to-br from-primary-400 to-primary-600 rounded-xl hidden sm:flex items-center justify-center text-white font-bold text-lg flex-shrink-0">
                   {name.charAt(0)}
                 </div>
 
                 {/* Info */}
                 <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
+                  <div className="flex max-lg:flex-wrap items-center gap-2">
                     <p className="font-medium text-gray-800">{name}</p>
                     <span className="badge badge-primary flex items-center gap-1">
                       {getCategoryIcon(type?.category)}

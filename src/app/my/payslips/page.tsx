@@ -83,8 +83,8 @@ export default function MyPayslipsPage() {
             {/* آخر قسيمة */}
             {latest && (
               <div className="card bg-gradient-to-br from-primary-500 to-primary-600 text-white">
-                <div className="flex items-center justify-between">
-                  <div>
+                <div className="flex items-center justify-between max-lg:gap-4">
+                  <div className="max-lg:min-w-0 max-lg:break-words">
                     <p className="text-primary-100">صافي آخر راتب — فترة {latest.run.period}</p>
                     <p className="text-4xl font-bold mt-1">
                       {formatMoney(latest.item.netPay)} {currency}
@@ -93,7 +93,7 @@ export default function MyPayslipsPage() {
                       {sorted.length} قسيمة راتب في سجلك
                     </p>
                   </div>
-                  <div className="w-20 h-20 bg-white/20 rounded-2xl flex items-center justify-center">
+                  <div className="w-20 h-20 bg-white/20 rounded-2xl hidden sm:flex items-center justify-center max-lg:shrink-0">
                     <DollarSign size={40} className="text-white" />
                   </div>
                 </div>
@@ -111,7 +111,7 @@ export default function MyPayslipsPage() {
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full">
+                  <table className="w-full max-sm:whitespace-nowrap">
                     <thead>
                       <tr className="table-header">
                         <th className="text-right px-4 py-3">الفترة</th>
