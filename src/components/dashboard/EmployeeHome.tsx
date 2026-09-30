@@ -212,9 +212,10 @@ export default function EmployeeHome() {
     <div className="space-y-6">
       {/* ترحيب + حالة اليوم */}
       <div className="card p-6 bg-gradient-to-l from-primary-500 to-primary-600 text-white">
-        <div className="flex items-center justify-between gap-4">
+        {/* على الموبايل مربع البصمة بينزل تحت التحية بدل ما يزنقها */}
+        <div className="flex max-lg:flex-wrap items-center justify-between gap-4">
           <div>
-            <h2 className="text-2xl font-bold">
+            <h2 className="text-xl sm:text-2xl font-bold">
               {greeting}، {user?.displayName ?? ''} 👋
             </h2>
             {shiftLine && <p className="text-primary-100 mt-1">{shiftLine}</p>}
@@ -289,7 +290,7 @@ export default function EmployeeHome() {
                 <Bell size={20} className="text-primary-500" />
                 <h3 className="font-bold text-gray-800">مطلوب منك</h3>
               </div>
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
                 {actionItems.map((item) => (
                   <div
                     key={item.id}
@@ -319,9 +320,9 @@ export default function EmployeeHome() {
             </div>
           )}
 
-          <div className="grid grid-cols-3 gap-6">
+          <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
             {/* طلباتي — أحدث 5 من السيرفر */}
-            <div className="card p-6 col-span-2">
+            <div className="card p-6 lg:col-span-2">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-2">
                   <ClipboardList size={20} className="text-primary-500" />
@@ -347,7 +348,7 @@ export default function EmployeeHome() {
                           <p className="font-medium text-gray-800 text-sm">
                             {typeNameOf(req.typeCode)}
                           </p>
-                          <p className="text-xs text-gray-400" dir="ltr">
+                          <p className="text-xs text-gray-400 max-lg:whitespace-nowrap" dir="ltr">
                             REQ-{req.id} • {(req.submittedAt ?? req.createdAt).slice(0, 10)}
                           </p>
                         </div>

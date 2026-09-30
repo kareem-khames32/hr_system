@@ -214,7 +214,7 @@ export const ORG_CHART_CSS = `
   @page { size: A3 landscape; margin: 10mm; }
   html, body { background: #fff !important; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
   aside, header, .oc-noprint { display: none !important; }
-  .mr-72 { margin-right: 0 !important; }
+  .lg\\:mr-72 { margin-right: 0 !important; }
   main { padding: 0 !important; }
   .oc-scroll { overflow: visible !important; max-height: none !important; border: 0 !important; box-shadow: none !important; padding: 0 !important; }
   .oc-card { box-shadow: none !important; break-inside: avoid; }}

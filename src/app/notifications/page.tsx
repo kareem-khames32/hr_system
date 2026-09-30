@@ -143,7 +143,7 @@ export default function NotificationsPage() {
     <MainLayout>
       <div className="space-y-6">
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex max-lg:flex-wrap items-center justify-between max-lg:gap-3">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">الإشعارات</h1>
             <p className="text-gray-500 mt-1">
@@ -217,14 +217,14 @@ export default function NotificationsPage() {
                     }`}
                     onClick={() => handleClick(notification)}
                   >
-                    <div className="flex items-start gap-4">
-                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center ${typeColors[notification.type]}`}>
+                    <div className="flex items-start gap-3 sm:gap-4">
+                      <div className={`w-12 h-12 rounded-2xl flex items-center justify-center max-lg:shrink-0 ${typeColors[notification.type]}`}>
                         <TypeIcon size={24} />
                       </div>
-                      <div className="flex-1">
-                        <div className="flex items-start justify-between">
-                          <div>
-                            <div className="flex items-center gap-2 mb-1">
+                      <div className="flex-1 max-lg:min-w-0">
+                        <div className="flex items-start justify-between max-lg:gap-2">
+                          <div className="max-lg:min-w-0 max-lg:break-words">
+                            <div className="flex max-lg:flex-wrap items-center gap-2 mb-1">
                               <h3 className={`font-bold ${!notification.read ? 'text-gray-900' : 'text-gray-700'}`}>
                                 {notification.title}
                               </h3>

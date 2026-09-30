@@ -201,7 +201,7 @@ export default function MyLeavesPage() {
       <div className="space-y-6">
         {leaveCatalog.error && <div role="alert" className="bg-amber-50 text-amber-800 rounded-xl p-3 text-sm">تعذر تحميل أنواع الإجازات: {leaveCatalog.error} <button type="button" className="underline" onClick={leaveCatalog.retry}>إعادة المحاولة</button></div>}
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex max-lg:flex-wrap items-center justify-between max-lg:gap-3">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">إجازاتي وأرصدتي</h1>
             <p className="text-gray-500 mt-1">
@@ -231,9 +231,9 @@ export default function MyLeavesPage() {
         ) : (
           <>
             {/* Balance layer cards */}
-            <div className="grid grid-cols-2 gap-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               {balances.length === 0 && (
-                <div className="card p-8 text-center col-span-2">
+                <div className="card p-8 text-center sm:col-span-2">
                   <Calendar size={40} className="mx-auto text-gray-300 mb-3" />
                   <p className="text-gray-500">لا توجد أرصدة إجازات لحسابك</p>
                 </div>
@@ -374,7 +374,7 @@ export default function MyLeavesPage() {
                 </div>
               ) : (
                 <div className="overflow-x-auto">
-                  <table className="w-full">
+                  <table className="w-full max-sm:whitespace-nowrap">
                     <thead>
                       <tr className="table-header">
                         <th className="text-right px-4 py-3">النوع</th>
@@ -473,8 +473,8 @@ export default function MyLeavesPage() {
 
       {/* طلب إلغاء إجازة معتمدة (LEAVE_MODIFY_CANCEL) */}
       {cancelTarget && (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
-          <div className="bg-white rounded-2xl w-full max-w-md p-6 shadow-xl">
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 max-lg:p-4">
+          <div className="bg-white rounded-2xl w-full max-w-md max-lg:max-h-[90vh] max-lg:overflow-y-auto p-6 shadow-xl">
             <div className="flex items-center justify-between mb-4">
               <h3 className="font-bold text-gray-800 text-lg">طلب إلغاء إجازة</h3>
               <button

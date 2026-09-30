@@ -341,7 +341,7 @@ function DeductionList({ rows, loading, filters, setFilters, reload, currency, r
       )}
       {action && (
         <div className="fixed inset-0 bg-black/40 flex items-center justify-center z-50 p-4" role="dialog" aria-modal="true">
-          <div className="bg-white rounded-2xl p-6 w-full max-w-lg space-y-3">
+          <div className="bg-white rounded-2xl p-6 w-full max-w-lg max-lg:max-h-[90vh] max-lg:overflow-y-auto space-y-3">
             <div className="flex items-center justify-between">
               <h4 className="font-bold text-gray-800">{ACTION_TITLES[action.kind]} #{action.row.id}</h4>
               <button type="button" aria-label="إغلاق" onClick={() => setAction(null)}><X size={18} /></button>

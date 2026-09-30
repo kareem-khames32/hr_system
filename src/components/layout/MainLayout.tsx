@@ -1,6 +1,6 @@
 'use client'
 
-import { createContext, useContext, useEffect, useState } from 'react'
+import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import { ShieldAlert } from 'lucide-react'
@@ -84,6 +84,11 @@ const ShellContext = createContext(false)
 export function AppShell({ children }: MainLayoutProps) {
   const pathname = usePathname() ?? ''
   const [authed, setAuthed] = useState<boolean | null>(null)
+  // الموبايل (أقل من lg): القائمة الجانبية درج بيتفتح من زرار القائمة في الهيدر — من lg وفوق ثابتة زي ما هي
+  const [navOpen, setNavOpen] = useState(false)
+  const menuButtonRef = useRef<HTMLButtonElement>(null)
+  const openNav = useCallback(() => setNavOpen(true), [])
+  const closeNav = useCallback(() => setNavOpen(false), [])
   const bare = isBarePath(pathname)
 
   // حارس الدخول: كل شاشات النظام تمر من هنا — بلا توكن → صفحة اللوجين
@@ -100,6 +105,37 @@ export function AppShell({ children }: MainLayoutProps) {
     }
     setAuthed(true)
   }, [bare, pathname])
+
+  // الدرج بيتقفل مع أي انتقال لصفحة تانية
+  useEffect(() => {
+    setNavOpen(false)
+  }, [pathname])
+
+  // والدرج مفتوح: Esc بيقفله، والصفحة اللي وراه ماتتحركش، والشاشة لو كبرت لـlg بيتقفل (القائمة هناك ثابتة)
+  useEffect(() => {
+    if (!navOpen) return
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') setNavOpen(false)
+    }
+    const desktop = window.matchMedia('(min-width: 1024px)')
+    const onDesktop = () => {
+      if (desktop.matches) setNavOpen(false)
+    }
+    // قفل تمرير الصفحة: التمرير هنا بتاع الـhtml (globals.css حاطط overflow-x عليه فهو اللي بيتنقل للـviewport)،
+    // فالقفل عليه هو — قفل الـbody مش هيوقف التمرير وكمان بيفك تثبيت الهيدر
+    const html = document.documentElement
+    const previousOverflow = html.style.overflow
+    html.style.overflow = 'hidden'
+    window.addEventListener('keydown', onKey)
+    desktop.addEventListener('change', onDesktop)
+    return () => {
+      html.style.overflow = previousOverflow
+      window.removeEventListener('keydown', onKey)
+      desktop.removeEventListener('change', onDesktop)
+      // التركيز كان جوّه الدرج (رابط أو زرار القفل) → يرجع لزرار القائمة من غير ما الصفحة تتحرك
+      if (document.getElementById('app-sidebar')?.contains(document.activeElement)) menuButtonRef.current?.focus({ preventScroll: true })
+    }
+  }, [navOpen])
 
   if (bare) return <>{children}</>
 
@@ -121,10 +157,12 @@ export function AppShell({ children }: MainLayoutProps) {
   return (
     <ShellContext.Provider value>
       <div className="min-h-screen bg-gray-50">
-        <Sidebar />
-        <div className="mr-72">
-          <Header />
-          <main className="p-8">
+        <Sidebar open={navOpen} onClose={closeNav} />
+        {/* خلفية معتمة ورا الدرج (أقل من lg) — الضغط عليها بيقفله؛ فوق الهيدر (z-40) وتحت الدرج (z-50) */}
+        {navOpen && <div aria-hidden="true" onClick={closeNav} className="fixed inset-0 z-[45] bg-gray-900/40 lg:hidden" />}
+        <div className="lg:mr-72">
+          <Header onMenuClick={openNav} menuOpen={navOpen} menuButtonRef={menuButtonRef} />
+          <main className="p-4 lg:p-8">
             {allowed ? (
               children
             ) : (

@@ -12,7 +12,7 @@ export default function EmptyState({
   className?: string
 }) {
   return (
-    <div className={clsx('card p-12 text-center', className)}>
+    <div className={clsx('card px-6 py-12 sm:p-12 text-center', className)}>
       <Icon size={48} className="mx-auto text-gray-300 mb-4" />
       <p className="text-gray-500">{title}</p>
     </div>

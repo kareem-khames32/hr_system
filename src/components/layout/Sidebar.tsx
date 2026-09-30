@@ -26,6 +26,7 @@ import {
   FileText,
   Settings,
   ChevronDown,
+  X,
   LogOut,
   Bell,
   ClipboardList,
@@ -279,7 +280,13 @@ const PATH_ALIASES: Array<[prefix: string, href: string]> = [
   ['/my/exemptions', '/my/payslips'],
 ]
 
-export default function Sidebar() {
+interface SidebarProps {
+  // أقل من lg القائمة درج: مفتوح ولا لأ، وقفله (الخلفية المعتمة وEsc والانتقال في AppShell)
+  open?: boolean
+  onClose?: () => void
+}
+
+export default function Sidebar({ open = false, onClose }: SidebarProps) {
   const pathname = usePathname() ?? ''
   // القائمة تُركَّب بعد التحقق من الجلسة على العميل — قراءة التخزين المحلي هنا آمنة وتمنع وميض قائمة فارغة
   // المفتوحة = مجموعة الشاشة الحالية من أول رسم (بلا وميض مجموعة مغلقة)، وإلا آخر مجموعة فتحها المستخدم
@@ -291,6 +298,7 @@ export default function Sidebar() {
   // اسم الشركة وشعارها من «بيانات الشركة» — بيتحدثوا لوحدهم بعد الحفظ (BRANDING_CHANGED)
   const brand = useBranding()
   const navRef = useRef<HTMLElement>(null)
+  const closeRef = useRef<HTMLButtonElement>(null)
   const [inboxError, setInboxError] = useState(false)
   const [inboxRevision, setInboxRevision] = useState(0)
   const [inboxCount, setInboxCount] = useState<number>(0)
@@ -409,6 +417,15 @@ export default function Sidebar() {
     else if (box.bottom > navBox.bottom - 8) nav.scrollTop += box.bottom - navBox.bottom + 48
   }, [activeHref])
 
+  // الدرج لما يتفتح التركيز يدخل جوّاه (زرار القفل) — لقارئ الشاشة والكيبورد
+  useEffect(() => {
+    if (open) closeRef.current?.focus({ preventScroll: true })
+  }, [open])
+  // أي رابط جوّه الدرج بيقفله — حتى رابط الصفحة المفتوحة (مفيش انتقال يقفله من AppShell)
+  const closeOnLink = (event: React.MouseEvent<HTMLElement>) => {
+    if ((event.target as HTMLElement).closest('a')) onClose?.()
+  }
+
   const toggleExpanded = (id: string) => {
     const next = openGroup === id ? null : id
     setOpenGroup(next)
@@ -421,10 +438,29 @@ export default function Sidebar() {
     children?.some((child) => child.href === activeHref)
 
   return (
-    <aside className="fixed right-0 top-0 h-screen w-72 bg-white border-l border-gray-100 flex flex-col z-50">
+    <aside
+      id="app-sidebar"
+      className={clsx(
+        'fixed right-0 top-0 h-screen w-72 bg-white border-l border-gray-100 flex flex-col z-50',
+        // أقل من lg: درج من اليمين بطول الشاشة الظاهرة، وهو مقفول برّه الشاشة ومخفي عن التركيز (invisible بعد ما يخلص الانزلاق)؛
+        // من lg وفوق مفيش ولا كلاس من دول — القائمة ثابتة زي ما هي بالظبط
+        'max-lg:bottom-0 max-lg:h-auto max-lg:duration-200 max-lg:ease-out max-lg:motion-reduce:transition-none',
+        open ? 'max-lg:transition-transform' : 'max-lg:invisible max-lg:translate-x-full max-lg:transition-[transform,visibility]'
+      )}
+    >
+      {/* قفل الدرج (أقل من lg بس) */}
+      <button
+        ref={closeRef}
+        type="button"
+        onClick={onClose}
+        aria-label="إغلاق القائمة"
+        className="lg:hidden absolute top-3 left-3 p-2 rounded-lg text-gray-400 hover:bg-gray-100 hover:text-gray-600"
+      >
+        <X size={20} />
+      </button>
       {/* هوية الشركة لكل المستخدمين: الشعار (أو علامة بالحروف) والاسم — الطويل على سطرين والكامل في التلميح،
           والشعار العريض بينزّل الاسم لسطر تحته (flex-wrap) */}
-      <div className="px-6 py-5 border-b border-gray-100">
+      <div className="px-6 py-5 border-b border-gray-100 max-lg:pl-14">
         {brand.ready ? (
           <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
             <BrandLogo brand={brand} size="md" />
@@ -447,7 +483,7 @@ export default function Sidebar() {
       </div>
 
       {/* Navigation */}
-      <nav ref={navRef} className="flex-1 overflow-y-auto p-4 space-y-1">
+      <nav ref={navRef} onClick={closeOnLink} className="flex-1 overflow-y-auto p-4 space-y-1">
         {inboxError && <div role="alert" className="text-xs text-amber-700 p-2">تعذر تحديث صندوق الموافقات. <button type="button" className="underline" onClick={() => setInboxRevision(value => value + 1)}>إعادة المحاولة</button></div>}
         {menuItems.map((item) => (
           <div key={item.id}>

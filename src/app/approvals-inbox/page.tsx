@@ -348,7 +348,7 @@ export default function ApprovalsInboxPage() {
       <div className="space-y-6">
         {custodyError && <div role="alert" className="bg-amber-50 text-amber-800 p-3 rounded-xl">تعذر تحميل عهد المدير: {custodyError} <button onClick={loadCustodyPending} className="underline">إعادة المحاولة</button></div>}
         {/* Header */}
-        <div className="flex items-center justify-between">
+        <div className="flex max-lg:flex-wrap items-center justify-between max-lg:gap-3">
           <div>
             <h1 className="text-2xl font-bold text-gray-800">بانتظار موافقتي</h1>
             <p className="text-gray-500 mt-1">
@@ -437,7 +437,7 @@ export default function ApprovalsInboxPage() {
                       </p>
                       <p className="text-xs text-gray-500">
                         الموظف: {c.employeeName ?? `#${c.employeeId}`} — تاريخ التسليم:{' '}
-                        <span dir="ltr">{String(c.assignedAt ?? '').slice(0, 10)}</span>
+                        <span dir="ltr" className="max-lg:whitespace-nowrap">{String(c.assignedAt ?? '').slice(0, 10)}</span>
                       </p>
                     </div>
                   </div>
@@ -507,8 +507,9 @@ export default function ApprovalsInboxPage() {
                       item.slaDaysLeft !== null && item.slaDaysLeft <= 0 ? 'border-2 border-red-200' : ''
                     }`}
                   >
-                    <div className="flex items-start justify-between gap-4">
-                      <div className="flex items-start gap-4 flex-1">
+                    {/* على الموبايل أزرار القرار بتنزل سطر لوحدها تحت بيانات الطلب */}
+                    <div className="flex max-lg:flex-wrap items-start justify-between gap-4">
+                      <div className="flex items-start gap-4 flex-1 max-lg:min-w-0 max-lg:basis-64">
                         <div
                           className={`w-12 h-12 rounded-2xl flex items-center justify-center shrink-0 ${cfg.color}`}
                         >
@@ -535,7 +536,7 @@ export default function ApprovalsInboxPage() {
                           </div>
                           <p className="text-sm text-gray-600 mt-1.5">{item.details}</p>
                           <button type="button" onClick={() => setDetailId(item.id)} className="text-primary-600 text-sm underline mt-2">عرض التفاصيل والمرفقات</button>
-                          <div className="flex items-center gap-3 mt-2 text-xs text-gray-400">
+                          <div className="flex max-lg:flex-wrap items-center gap-3 mt-2 text-xs text-gray-400">
                             <span>
                               مقدّم من: <span className="text-gray-600 font-medium">{item.requester}</span>
                             </span>

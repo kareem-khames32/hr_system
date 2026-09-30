@@ -1,6 +1,6 @@
 'use client'
 
-import { useCallback, useEffect, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState, type Ref } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
 import {
@@ -12,6 +12,7 @@ import {
   Calendar,
   Sun,
   Moon,
+  Menu,
 } from 'lucide-react'
 import {
   can,
@@ -45,7 +46,14 @@ const formatTime = (at: string) => {
   return formatDate(at)
 }
 
-export default function Header() {
+interface HeaderProps {
+  // زرار القائمة (أقل من lg بس): بيفتح القائمة الجانبية كدرج
+  onMenuClick?: () => void
+  menuOpen?: boolean
+  menuButtonRef?: Ref<HTMLButtonElement>
+}
+
+export default function Header({ onMenuClick, menuOpen = false, menuButtonRef }: HeaderProps) {
   const pathname = usePathname() ?? ''
   const [showNotifications, setShowNotifications] = useState(false)
   const [notifications, setNotifications] = useState<Notification[]>([])
@@ -154,18 +162,33 @@ export default function Header() {
 
   return (
     <header className="sticky top-0 z-40 bg-white/80 backdrop-blur-lg border-b border-gray-100">
-      <div className="flex items-center justify-between px-8 py-4">
-        {/* Page Title & Breadcrumb */}
-        <div>
-          <h2 className="text-xl xl:text-2xl font-bold text-gray-800">{pageTitle}</h2>
-          <div className="flex items-center gap-2 text-sm text-gray-400 mt-1">
-            <Calendar size={14} />
-            <span>{formattedDate}</span>
+      <div className="flex items-center justify-between max-lg:gap-3 px-4 py-3 lg:px-8 lg:py-4">
+        {/* زرار القائمة (أقل من lg) + عنوان الصفحة — على الموبايل العنوان سطر واحد بيتقص والتاريخ بيستخبى */}
+        <div className="flex items-center gap-3 max-lg:min-w-0">
+          {onMenuClick && (
+            <button
+              ref={menuButtonRef}
+              type="button"
+              onClick={onMenuClick}
+              aria-label="فتح القائمة"
+              aria-expanded={menuOpen}
+              aria-controls="app-sidebar"
+              className="lg:hidden print:hidden shrink-0 p-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"
+            >
+              <Menu size={20} className="text-gray-600" />
+            </button>
+          )}
+          <div className="max-lg:min-w-0">
+            <h2 className="text-lg lg:text-xl xl:text-2xl font-bold text-gray-800 max-lg:truncate">{pageTitle}</h2>
+            <div className="hidden sm:flex items-center gap-2 text-sm text-gray-400 mt-1">
+              <Calendar size={14} />
+              <span>{formattedDate}</span>
+            </div>
           </div>
         </div>
 
         {/* Actions */}
-        <div className="flex items-center gap-4">
+        <div className="flex items-center gap-2 lg:gap-4 max-lg:shrink-0">
           {canSearch && <form onSubmit={submitSearch} className="relative hidden xl:block">
             <div className="flex items-center gap-2 bg-gray-100 rounded-xl px-4 py-2.5 w-64">
               <Search size={18} className="text-gray-400" />
@@ -174,8 +197,8 @@ export default function Header() {
             </div>
           </form>}
 
-          {/* Notifications */}
-          <div className="relative">
+          {/* Notifications — على الموبايل القائمة بتتموضع على عرض الهيدر كله (مش الجرس) فتفضل جوّه الشاشة */}
+          <div className="sm:relative">
             <button
               aria-label="الإشعارات"
               onClick={() => setShowNotifications(!showNotifications)}
@@ -190,14 +213,14 @@ export default function Header() {
             </button>
 
             {showNotifications && (
-              <div className="absolute left-0 top-full mt-2 w-96 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
+              <div className="absolute left-4 sm:left-0 top-full mt-2 w-[calc(100vw-2rem)] sm:w-96 bg-white rounded-2xl shadow-xl border border-gray-100 overflow-hidden">
                 <div className="p-4 border-b border-gray-100 flex items-center justify-between">
                   <h3 className="font-bold text-gray-800">الإشعارات</h3>
                   <button onClick={markAllRead} disabled={markingRead || unreadCount === 0} className="text-sm text-primary-500 hover:text-primary-600 disabled:opacity-50">
                     تحديد الكل كمقروء
                   </button>
                 </div>
-                <div className="max-h-96 overflow-y-auto">
+                <div className="max-h-[50vh] sm:max-h-96 overflow-y-auto">
                   {notificationError && <div role="alert" className="p-4 text-sm text-red-700">{notificationError} <button className="underline" onClick={loadNotifications}>إعادة المحاولة</button></div>}
                   {!notificationError && notifications.length === 0 && (
                     <p className="p-4 text-sm text-gray-500 text-center">لا توجد إشعارات</p>
@@ -251,8 +274,8 @@ export default function Header() {
             )}
           </div>
 
-          {/* Settings */}
-          {can('settings.manage') && <Link href="/settings" aria-label="الإعدادات" className="p-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"><Settings size={20} className="text-gray-600" /></Link>}
+          {/* Settings — على الموبايل الترس بيستخبى (الإعدادات في القائمة) والهيدر يفضل فيه الجرس وزرار القائمة */}
+          {can('settings.manage') && <Link href="/settings" aria-label="الإعدادات" className="hidden sm:block p-3 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"><Settings size={20} className="text-gray-600" /></Link>}
         </div>
       </div>
     </header>
