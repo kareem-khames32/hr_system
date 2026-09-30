@@ -449,7 +449,11 @@ test('personal and emergency request forms expose editable fields mapped to thei
   const { employee, user } = await person({ phone: 'original phone' })
   const types = await request(user, 'GET', '/requests/types')
   const personal = types.body.find(t => t.code === 'PERSONAL_DATA_UPDATE')
-  assert.deepEqual(JSON.parse(personal.customFields).map(f => f.key), ['phone', 'phoneAlt', 'address', 'maritalStatus'])
+  // قرار المالك 30 سبتمبر: «تعديل الملف» = كل البيانات الشخصية والهوية والتواصل والطوارئ (employee-personal-data.ts)
+  assert.deepEqual(JSON.parse(personal.customFields).map(f => f.key), ['fullName', 'fullNameEn', 'birthDate', 'birthPlace', 'gender', 'nationality',
+    'maritalStatus', 'nationalId', 'passportNo', 'passportExpiry', 'phone', 'phoneAlt', 'personalEmail', 'address', 'postalCode',
+    'emergencyContactName', 'emergencyRelation', 'emergencyContactPhone', 'emergencyPhoneAlt'])
+  assert.deepEqual(JSON.parse(personal.requiredFields), [], 'no personal field is mandatory in the request — only changed fields are sent')
   const emergency = types.body.find(t => t.code === 'EMERGENCY_CONTACT')
   assert.deepEqual(JSON.parse(emergency.customFields).map(f => f.key), ['name', 'phone', 'relation', 'phoneAlt'])
   const update = await submit(user, 'EMERGENCY_CONTACT', { name: 'Emergency person', phone: '12345', relation: 'Sibling' })
@@ -896,19 +900,24 @@ for (const clear of [null]) test(`REQ-10 allowed personal fields persist with ex
   }
   assert.equal(saved.emergencyContactName, 'Unaffected fixture contact')
   assert.equal(saved.jobTitle, target.employee.jobTitle)
-  const cleared = await submit(target.user, 'PERSONAL_DATA_UPDATE', Object.fromEntries(Object.keys(personalChanged).map(field => [field, clear])))
+  // رقم الجوال إجباري في ملف الموظف: مايتمسحش (نفس تعديل الموارد البشرية — قرار المالك 30 سبتمبر)؛ الباقي بيتمسح بـnull
+  const phoneCleared = await submit(target.user, 'PERSONAL_DATA_UPDATE', { phone: clear })
+  assert.equal(phoneCleared.status, 400); assert.match(phoneCleared.body.message, /رقم الجوال مطلوب ولا يمكن مسحه/)
+  const optional = Object.keys(personalChanged).filter(field => field !== 'phone')
+  const cleared = await submit(target.user, 'PERSONAL_DATA_UPDATE', Object.fromEntries(optional.map(field => [field, clear])))
   assert.equal(cleared.status, 201, JSON.stringify(cleared.body))
   const clearedEmployee = await employeesRepo().findOneBy({ id: target.employee.id })
   const clearAudit = await histories().findBy({ requestId: cleared.body.id })
-  assert.equal(clearAudit.length, 4)
-  for (const field of Object.keys(personalChanged)) {
+  assert.equal(clearAudit.length, 3)
+  for (const field of optional) {
     assert.equal(clearedEmployee[field], clear)
     const record = clearAudit.find(item => item.fieldName === field)
     assert.equal(record.oldValue, personalChanged[field]); assert.equal(record.newValue, clear)
   }
-  const repeat = await submit(target.user, 'PERSONAL_DATA_UPDATE', Object.fromEntries(Object.keys(personalChanged).map(field => [field, clear])))
+  assert.equal(clearedEmployee.phone, personalChanged.phone)
+  const repeat = await submit(target.user, 'PERSONAL_DATA_UPDATE', Object.fromEntries(optional.map(field => [field, clear])))
   assert.equal(repeat.status, 400); assert.match(repeat.body.message, /لم تتغير/)
-  assert.equal(await histories().countBy({ employeeId: target.employee.id }), 8)
+  assert.equal(await histories().countBy({ employeeId: target.employee.id }), 7)
 })
 
 test('REQ-10 blank strings sent by the requests screen for untouched fields keep saved personal data (only changed fields are written)', async () => {
@@ -970,8 +979,10 @@ test('REQ-10 a missing employee or a failure after data/history writes rolls bac
 
 test('REQ-10 simultaneous personal requests preserve the committed before/after chain', async () => {
   const target = await person(personalInitial)
-  const first = await queuedPersonal(target.employee.id, { phone: 'First committed phone' })
-  const second = await queuedPersonal(target.employee.id, { phone: 'Second committed phone' })
+  // أرقام جوال بالشكل الصح — الاعتماد النهائي بيفحص شكل الجوال (قرار المالك 30 سبتمبر)
+  const firstPhone = '0501110001', secondPhone = '0501110002'
+  const first = await queuedPersonal(target.employee.id, { phone: firstPhone })
+  const second = await queuedPersonal(target.employee.id, { phone: secondPhone })
   const service = destinationService(), handler = service.handlers.employee_record
   const EmployeeEntity = require('../src/employees/employee.entity').Employee
   let release, entered, a, b, secondFinished = false, blockingSession
@@ -1008,11 +1019,11 @@ test('REQ-10 simultaneous personal requests preserve the committed before/after 
     release()
     const results = await bounded(Promise.all([a, b]))
     for (const response of results) assert.equal(response.status, 201, JSON.stringify(response.body))
-    assert.equal((await employeesRepo().findOneBy({ id: target.employee.id })).phone, 'Second committed phone')
+    assert.equal((await employeesRepo().findOneBy({ id: target.employee.id })).phone, secondPhone)
     const firstAudit = await histories().findOneBy({ requestId: first.id })
     const secondAudit = await histories().findOneBy({ requestId: second.id })
-    assert.equal(firstAudit.oldValue, personalInitial.phone); assert.equal(firstAudit.newValue, 'First committed phone')
-    assert.equal(secondAudit.oldValue, 'First committed phone'); assert.equal(secondAudit.newValue, 'Second committed phone')
+    assert.equal(firstAudit.oldValue, personalInitial.phone); assert.equal(firstAudit.newValue, firstPhone)
+    assert.equal(secondAudit.oldValue, firstPhone); assert.equal(secondAudit.newValue, secondPhone)
   } finally {
     release(); await Promise.allSettled([a, b].filter(Boolean)); service.handlers.employee_record = handler
   }

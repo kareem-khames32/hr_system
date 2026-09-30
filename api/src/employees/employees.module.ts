@@ -20,6 +20,7 @@ import {
   EmployeeSkill,
 } from './qualifications.entities'
 import { EmployeesController } from './employees.controller'
+import { EmployeeSelfPhotoController } from './employee-self-photo.controller'
 import { QualificationsController } from './qualifications.controller'
 import { EmployeesService } from './employees.service'
 import { EmployeeExportService } from './employee-export.service'
@@ -50,7 +51,7 @@ import { EmployeeExportService } from './employee-export.service'
     // فمفيش روتين إنشاء تاني. AuthModule مابيستوردش EmployeesModule (بياخد الكيان لوحده) فمفيش حلقة.
     AuthModule,
   ],
-  controllers: [EmployeesController, QualificationsController],
+  controllers: [EmployeesController, QualificationsController, EmployeeSelfPhotoController],
   providers: [EmployeesService, EmployeeExportService],
   exports: [EmployeesService],
 })

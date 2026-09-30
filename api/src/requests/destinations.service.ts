@@ -63,6 +63,7 @@ import { appendEmployeeOrgCalendar } from '../attendance/attendance-calendar-his
 import { assertEmployeeSchedulesFitBranch } from '../attendance/attendance-rule-history'
 import { assertLeaveOutsideSuspension } from '../employees/employee-suspension-overlap'
 import { DATA_PLACEHOLDER_REJECTED, isDataPlaceholder } from '../common/data-placeholders'
+import { applyPersonalDataRequest, PERSONAL_DATA_COLUMNS } from './personal-data-requests'
 
 // ناتج تنفيذ الوجهة: المرجع الدائم + هل اكتمل فوراً أم ينتظر (سريان/تأكيد استلام)
 export interface DestinationResult {
@@ -84,7 +85,8 @@ const refOf = (prefix: string, id: number): string =>
 // «تحديث بيانات الموظف»: مفتاح الحمولة → عمود الموظف، لكل معالج على حدة (SEC-REQ-2).
 // البنك (bankName/iban) خارجها نهائياً — يتغيّر من المسار الأمني payroll_bank_secure وحده
 export const RECORD_UPDATE_FIELDS: Record<string, Record<string, keyof Employee>> = {
-  employee_record: { phone: 'phone', phoneAlt: 'phoneAlt', address: 'address', maritalStatus: 'maritalStatus' },
+  // «تحديث بيانات شخصية» (قرار المالك 30 سبتمبر): البيانات الشخصية والهوية والتواصل والطوارئ — القايمة في employee-personal-data.ts
+  employee_record: Object.fromEntries(PERSONAL_DATA_COLUMNS.map(column => [column, column])),
   // جهة اتصال الطوارئ (تنفيذ آلي بلا معتمد): حقول الطوارئ فقط — لا تمس بيانات الموظف نفسه
   employee_record_auto: {
     name: 'emergencyContactName',
@@ -673,6 +675,13 @@ export class DestinationsService {
       return { ref: refOf('EMP', hist.id), completed: true }
     }
 
+  // «تحديث بيانات شخصية» (قرار المالك 30 سبتمبر): نفس قواعد تعديل الموارد البشرية وقت الاعتماد النهائي، والتفرد تحت قفل الهوية —
+  // أي مشكلة ترجّع الاعتماد كله ومفيش حاجة بتتطبق (personal-data-requests.ts)
+  private personalDataHandler: Handler = async (em, req, _t, payload) => {
+    const historyId = await applyPersonalDataRequest(em, req, payload)
+    return { ref: refOf('EMP', historyId), completed: true }
+  }
+
   // المسار الأمني: تغيير الحساب البنكي — بعد الدورة الأمنية فقط
   private bankChangeHandler: Handler = async (em, req, _t, payload) => {
     const emp = await em.getRepository(Employee).findOne({
@@ -1007,7 +1016,7 @@ export class DestinationsService {
     contracts_register: executeContract,
     shift_schedule: executeShiftSwap,
     // بيانات شخصية
-    employee_record: this.employeeRecordHandler(RECORD_UPDATE_FIELDS.employee_record),
+    employee_record: this.personalDataHandler,
     employee_record_auto: this.employeeRecordHandler(
       RECORD_UPDATE_FIELDS.employee_record_auto
     ),
