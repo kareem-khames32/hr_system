@@ -233,6 +233,17 @@ test('(ج) التصفية = المسير بالظبط، والمسير بيست�
   const blocked = await approveRun(run)
   assert.equal(blocked.status, 409, JSON.stringify(blocked.body))
   assert.match(blocked.body.message, /لا يطابق راتب آخر شهر في تصفيته المعتمدة/)
+  // قارئ الرواتب بياخد المبلغين في الرفض؛ صلاحية الاعتماد من غير «عرض مسيرات الرواتب» بتاخد نفس الرفض من غير صافي الموظف وراتب تصفيته
+  assert.match(blocked.body.message, /\d\.\d{2}\)/, blocked.body.message)
+  const approveOnly = await repo('User').save({ email: 'approve-only@payroll-settle.invalid', displayName: 'approve-only', passwordHash: 'test-only',
+    role: 'employee', branchId: branchA.id, permissions: JSON.stringify(['payroll.approve']) })
+  const approveOnlyToken = jwt.sign({ sub: approveOnly.id, email: approveOnly.email, role: approveOnly.role, branchId: branchA.id, employeeId: null,
+    tokenVersion: 0, permissions: ['payroll.approve'] })
+  const blindResponse = await fetch(`${base}/payroll/runs/${run.id}/approve`, { method: 'POST', headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${approveOnlyToken}` } })
+  const blind = await blindResponse.json()
+  assert.equal(blindResponse.status, 409, JSON.stringify(blind))
+  assert.match(blind.message, /لا يطابق راتب آخر شهر في تصفيته المعتمدة/)
+  assert.ok(!/\d\.\d{2}/.test(blind.message), blind.message)
   await repo('SettlementLine').update({ id: salaryLines[0].id }, { amount: Number(leaverItem.netPay) })
   const ok = await approveRun(run)
   assert.equal(ok.status, 201, JSON.stringify(ok.body))

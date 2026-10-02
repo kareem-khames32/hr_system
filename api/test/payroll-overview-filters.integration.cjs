@@ -238,10 +238,66 @@ test('(د) حساب الفرع: الفلاتر والنقل بنطاق فرعه 
   assert.equal((await roster(branchUser, { period, jobTitle: 'أمين مخزن', branchId: branchB.id })).rows.length, 0, 'فلتر فرع تاني ما يكسرش النطاق')
   assert.ok((await roster(admin, { period, jobTitle: 'أمين مخزن' })).rows.length >= 2, 'حساب الشركة يشوف الاتنين')
 
+  const missingId = 987654321
   const bulk = expectStatus(await request(branchUser, 'POST', `/payroll/runs/${run.id}/members/bulk`,
-    { employeeIds: [inBranch.id, otherBranch.id], reason: 'ضم أمناء المخازن للمسير' }), 201)
+    { employeeIds: [inBranch.id, otherBranch.id, missingId], reason: 'ضم أمناء المخازن للمسير' }), 201)
   const outcome = id => bulk.results.find(row => row.employeeId === id)
   assert.equal(outcome(inBranch.id).outcome, 'ADDED')
+  assert.equal(outcome(inBranch.id).fullName, 'هدى المعادي')
   assert.equal(outcome(otherBranch.id).outcome, 'SKIPPED')
   assert.match(outcome(otherBranch.id).skipReason, /نطاق فرعك/, 'الموظف بره الفرع يتخطى بسببه مش برفض النداء كله')
+  // فصل الفروع: موظف الفرع التاني بيتخطى من غير اسمه ولا كوده، وبنفس رد الرقم اللي مش موجود أصلًا
+  const { employeeId: _a, ...foreign } = outcome(otherBranch.id), { employeeId: _b, ...missing } = outcome(missingId)
+  assert.deepEqual(foreign, missing)
+  assert.deepEqual([foreign.fullName, foreign.employeeCode, foreign.fromRunId, foreign.fromRunName], [null, null, null, null])
+  assert.ok(!JSON.stringify(bulk).includes('رامي النصر') && !JSON.stringify(bulk).includes(otherBranch.employeeCode), 'ولا اسم ولا كود لموظف الفرع التاني في الرد')
+})
+
+test('(هـ) فصل الفروع في شاشات الشهر: مسير كل أعضائه في فرع تاني مايتعرضش لحساب فرع، ومسير شهر لاحق بنفس الاسم برّه نطاقه مايتعدّلش، ورد إلغاء قيد على قد صلاحية القراءة', async () => {
+  const period = '2027-11'
+  const account = (email, permissions) => repo('User').save({ email: `${email}@overview-filters-test.invalid`, displayName: email, passwordHash: 'test-only',
+    role: 'hr', branchId: branchA.id, permissions: JSON.stringify(permissions) })
+  const reader = await account('branch-reader', ['payroll.view', 'payroll.calculate'])
+  const calcOnly = await account('branch-calc-only', ['payroll.calculate'])
+  const mine = await employee({ fullName: 'نهى المعادي', departmentId: deptOps.id, jobTitle: 'كاتب' })
+  const foreign = await employee({ fullName: 'وائل النصر', branchId: branchB.id, departmentId: deptOther.id, jobTitle: 'كاتب' })
+  const ownRun = await draft('مسير كتبة المعادي', period, { employeeIds: [mine.id] })
+  const foreignRun = await draft('مسير النصر السري', period, { employeeIds: [foreign.id] })
+  for (const run of [ownRun, foreignRun]) expectStatus(await request(admin, 'POST', `/payroll/runs/${run.id}/calculate`, {}), 201)
+
+  // عدّ مسيرات الشهر وقوايمها لحساب الفرع: المسير اللي فيه موظف من فرعه بس. حساب الشركة زي ما كان
+  assert.deepEqual([(await included(reader, { period })).runs, (await included(admin, { period })).runs], [1, 2])
+  for (const route of ['/payroll/overview/deductions', '/payroll/overview/lines']) {
+    const scoped = expectStatus(await request(reader, 'GET', query(route, { period })), 200)
+    assert.deepEqual(scoped.runs.map(run => run.id), [ownRun.id], route)
+    const text = JSON.stringify(scoped)
+    assert.ok(!text.includes('مسير النصر السري') && !text.includes('وائل النصر'), `${route}: مسير الفرع التاني مايظهرش`)
+    assert.deepEqual(expectStatus(await request(admin, 'GET', query(route, { period })), 200).runs.map(run => run.id), [ownRun.id, foreignRun.id], route)
+  }
+  // «شيل خصم» بصلاحية الحساب لوحدها: المسيرات اللي هتتأثر = مسيرات نطاقه بس
+  const waiver = expectStatus(await request(calcOnly, 'POST', '/payroll/overview/waivers',
+    { period, kind: 'LATENESS', targetLevel: 'branch', branchId: branchA.id, reason: 'شيل تأخير الشهر لفرع المعادي' }), 201)
+  assert.deepEqual([waiver.recalculateRuns.map(run => run.id), waiver.lockedRuns], [[ownRun.id], []])
+
+  // سلسلة المسير بالاسم: مسيرين في شهور جاية بنفس اسم مسير الفرع، واحد تعريفه فرع النصر والتاني قايمته فيها موظف النصر.
+  // ضم موظف لمسير الفرع بيتنفذ، والاتنين مابيتلمسوش، ومفيش رفض يسمّي أرقام تعريفهم
+  const laterByBranch = await draft('مسير كتبة المعادي', '2027-12', { branchIds: [branchB.id], departmentIds: [deptOther.id] })
+  const laterByList = await draft('مسير كتبة المعادي', '2028-01', { employeeIds: [foreign.id] })
+  const definitionsBefore = [(await runRow(laterByBranch.id)).definition, (await runRow(laterByList.id)).definition]
+  const joiner = await employee({ fullName: 'هاني المنضم', departmentId: deptOps.id, jobTitle: 'كاتب' })
+  const added = expectStatus(await request(calcOnly, 'POST', `/payroll/runs/${ownRun.id}/members`, { employeeIds: [joiner.id], reason: 'ضم كاتب جديد لمسير المعادي' }), 201)
+  assert.deepEqual([added.added, added.recalculated, added.recalculateRuns, added.lockedRuns], [[joiner.id], true, [], []])
+  assert.deepEqual([(await runRow(laterByBranch.id)).definition, (await runRow(laterByList.id)).definition], definitionsBefore, 'مسيرات الشهور الجاية اللي برّه نطاقه ماتلمسوش')
+  const addedText = JSON.stringify(added)
+  for (const hidden of [`"id":${laterByBranch.id}`, `"id":${laterByList.id}`, String(foreign.id), '"items"', '"members"']) assert.ok(!addedText.includes(hidden), `${hidden} مش في رد الضم`)
+  const members = definitionOf(await runRow(ownRun.id)).filters
+  assert.ok(members.employeeIds.includes(joiner.id) || members.includeEmployeeIds.includes(joiner.id), 'والموظف اتضم لمسير الفرع فعلًا')
+
+  // إلغاء قيد في الدفتر: صلاحية الحساب لوحدها بتاخد رقمه وحالته، وقارئ الرواتب بياخد صف القيد
+  const obligation = amount => repo('EmployeeObligation').save({ employeeId: mine.id, type: 'CREDIT', category: 'manual', amount, label: 'بدل مهمة سري', status: 'PENDING' })
+  const first = await obligation(1234.56), second = await obligation(777.25)
+  assert.deepEqual(expectStatus(await request(calcOnly, 'POST', `/obligations/${first.id}/cancel`), 201), { id: first.id, status: 'CANCELLED' })
+  assert.deepEqual(expectStatus(await request(calcOnly, 'POST', `/obligations/${first.id}/cancel`), 201), { id: first.id, status: 'CANCELLED' }, 'والملغي قبل كده نفس الرد')
+  const full = expectStatus(await request(reader, 'POST', `/obligations/${second.id}/cancel`), 201)
+  assert.deepEqual([full.id, full.status, Number(full.amount), full.label], [second.id, 'CANCELLED', 777.25, 'بدل مهمة سري'])
 })

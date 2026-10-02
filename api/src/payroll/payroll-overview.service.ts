@@ -127,6 +127,18 @@ export class PayrollOverviewService {
     return { branchId: pick('branchId'), departmentId: pick('departmentId'), teamId: pick('teamId') }
   }
 
+  /**
+   * مسيرات الشهر اللي فيها عضو من نطاق الحساب (فرع العضو من لقطته). حساب الشركة: الكل.
+   * مسير كل أعضائه في فرع تاني مايتعرضش لحساب فرع — لا رقمه ولا اسمه ولا حالته ولا في عدّ.
+   */
+  private async runsInScope(scope: BranchScope, runs: RunRow[]): Promise<RunRow[]> {
+    if (scope === null) return runs
+    const members = await this.includedMembers(runs)
+    const employees = await this.employees(members.map(row => row.employeeId))
+    const ids = new Set(members.filter(member => inBranchScope(scope, this.placeOf(member.snapshot, employees.get(member.employeeId)).branchId)).map(member => member.runId))
+    return runs.filter(run => ids.has(run.id))
+  }
+
   // ===== الفلاتر المشتركة بين التبويبات (طلب المالك 20 سبتمبر): بحث وفرع وقسم وفريق ومسمى وحالة وتاريخ تعيين ومسير وسبب =====
   // النطاق (فرع الحساب) بيتفرض الأول دايمًا، والفلتر بيشتغل جوّاه بس.
   private names(place: { branchId: number | null; departmentId: number | null; teamId: number | null }, names: OrgNames) {
@@ -198,7 +210,9 @@ export class PayrollOverviewService {
     const filters = normalizePayrollOverviewFilters(rawFilters)
     const { runs, rows } = await this.includedRows(user, period)
     const filtered = rows.filter(row => matchesPayrollOverviewFilter(row, filters))
-    return { period, filters, runs: runs.length, total: rows.length,
+    // عدد مسيرات الشهر: لحساب الفروع المسيرات اللي فيها موظف من نطاقه بس (مش عدّ الشركة كلها)
+    const runCount = this.scope(user) === null ? runs.length : new Set(rows.map(row => row.runId)).size
+    return { period, filters, runs: runCount, total: rows.length,
       employees: new Set(filtered.map(row => row.employeeId)).size, rows: filtered,
       runOptions: [...new Map(rows.map(row => [row.runId, { id: row.runId, name: row.runName, status: row.runStatus }])).values()],
       jobTitleOptions: jobTitles(rows) }
@@ -388,7 +402,7 @@ export class PayrollOverviewService {
     rows.sort((a, b) => a.kind.localeCompare(b.kind) || a.fullName.localeCompare(b.fullName, 'ar') || a.runId - b.runId)
     const totals: Partial<Record<DeductionWaiverKind, number>> = {}
     for (const row of rows) totals[row.kind] = money(cents(totals[row.kind] ?? 0) + cents(row.amount))
-    return { period, runs: runs.map(run => ({ id: run.id, name: run.name, status: run.status })), totals, rows }
+    return { period, runs: (await this.runsInScope(scope, runs)).map(run => ({ id: run.id, name: run.name, status: run.status })), totals, rows }
   }
 
   // ===== كل بنود الشهر (طلب المالك 19 سبتمبر): صف لكل موظف في كل مسير محسوب، وكل بند استحقاق واستقطاع باسمه =====
@@ -418,7 +432,7 @@ export class PayrollOverviewService {
       })
     }
     rows.sort((a, b) => a.fullName.localeCompare(b.fullName, 'ar') || a.runId - b.runId)
-    return { period, runs: runs.map(run => ({ id: run.id, name: run.name, status: run.status })), columns: payrollLineColumns(rows), rows }
+    return { period, runs: (await this.runsInScope(scope, runs)).map(run => ({ id: run.id, name: run.name, status: run.status })), columns: payrollLineColumns(rows), rows }
   }
 
   private async fixedShiftDays(items: Array<Record<string, any>>, runs: RunRow[]) {
@@ -512,8 +526,8 @@ export class PayrollOverviewService {
     }
     const saved = await this.waivers.save(this.waivers.create({ period, kind: input.kind, targetLevel: level, branchId,
       targetIds: ids.length ? JSON.stringify(ids) : null, reason, status: 'ACTIVE', createdByUserId: user.sub }))
-    // المسيرات اللي هيأثر فيها بعد إعادة الحساب (المعتمد والمصروف ما بيتغيرش)
-    const runs = await this.monthRuns(period)
+    // المسيرات اللي هيأثر فيها بعد إعادة الحساب (المعتمد والمصروف ما بيتغيرش) — لحساب الفروع: اللي فيها موظف من نطاقه بس
+    const runs = await this.runsInScope(scope, await this.monthRuns(period))
     return { id: saved.id, recalculateRuns: runs.filter(run => OPEN_STATUSES.includes(run.status)).map(run => ({ id: run.id, name: run.name, status: run.status })),
       lockedRuns: runs.filter(run => !OPEN_STATUSES.includes(run.status)).map(run => ({ id: run.id, name: run.name, status: run.status })) }
   }

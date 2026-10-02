@@ -108,7 +108,8 @@ test('DISB-06: خدمة الصرف لا تكتب غير جدول العلاما�
   assert.equal((controller.match(/@Perm\(PAYROLL_DISBURSE_PERMISSION, 'payroll\.view'\)\n  @Get\(/g) ?? []).length, 3)
   const payroll = read('src/payroll/payroll.service.ts')
   const pay = payroll.slice(payroll.indexOf('  async pay(user: JwtPayload'), payroll.indexOf('  // ===== الاستعلام (بنطاق الفرع)'))
-  const close = pay.indexOf('closePayrollRunDisbursement(em, run, items, user.sub, dto.unpaidReason)')
+  // آخر معامل = هل الرد بالمبالغ (قارئ الرواتب)؛ رفض الإقفال لغيره بعدد الباقيين من غير إجماليهم
+  const close = pay.indexOf("closePayrollRunDisbursement(em, run, items, user.sub, dto.unpaidReason, userHasPerm(user, 'payroll.view'))")
   assert.ok(close > 0 && close < pay.indexOf("{ status: 'PAID', payrollRunId: runId }") && close < pay.indexOf('postPayrollInstallments('), 'فحص الإقفال قبل أي أثر مالي')
   assert.ok(close > pay.indexOf("if (run.status !== 'APPROVED')"), 'بعد فحص الحالة: الآثار في انتقال واحد APPROVED→PAID')
   assert.equal((pay.match(/run\.status = 'PAID'/g) ?? []).length, 2, 'انتقال PAID في pay وحده (مسير العكس والمسير العادي)')

@@ -3,7 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm'
 import { createHash } from 'node:crypto'
 import { EntityManager, In, Not, Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { userHasPerm } from '../auth/guards'
+import { branchScopeOf, userHasPerm } from '../auth/guards'
 import { PayrollItem, PayrollRun, PayrollRunMember } from './payroll.entities'
 import { PayrollRunEvent } from './payroll-membership.entities'
 import { PayrollRunReversalLine } from './payroll-corrections.entities'
@@ -75,7 +75,7 @@ export class PayrollCorrectionsService {
     return current
   }
 
-  private async chainRuns(em: EntityManager, rootId: number): Promise<CorrectionRunLite[]> {
+  private async chainRuns(em: EntityManager, rootId: number): Promise<PayrollRun[]> {
     const found = new Map<number, PayrollRun>()
     const root = await em.getRepository(PayrollRun).findOne({ where: { id: rootId } })
     if (root) found.set(root.id, root)
@@ -85,24 +85,41 @@ export class PayrollCorrectionsService {
       frontier = children.filter(child => !found.has(child.id)).map(child => child.id)
       for (const child of children) found.set(child.id, child)
     }
-    return [...found.values()].map(run => ({ id: run.id, name: run.name, period: run.period, status: run.status, runType: run.runType, parentRunId: run.parentRunId,
-      totalNet: run.totalNet, correctionReason: run.correctionReason, paidAt: run.paidAt, approvedAt: run.approvedAt, createdAt: run.createdAt }))
+    return [...found.values()]
   }
 
-  private async reconciliation(em: EntityManager, rootId: number) {
-    const chain = await this.chainRuns(em, rootId)
+  /**
+   * تسوية السلسلة على قد نطاق القارئ. حساب الفروع بياخد بنود وسطور عكس موظفي نطاقه بس (فرع العضو من لقطته في مسير البند، زي القسيمة):
+   * مسير تكميلي لموظفي فرع واحد مربوط بمسير فيه فروع تانية مايفتحش أسماء وصافي باقي الفروع. ومسير في السلسلة مالوش بند من نطاقه
+   * مايتعرضش، واللي فيه فروع تانية بيتعرض من غير صافيه الكلي.
+   */
+  private async reconciliation(em: EntityManager, user: JwtPayload, rootId: number) {
+    const chainRuns = await this.chainRuns(em, rootId)
+    const chain: CorrectionRunLite[] = chainRuns.map(run => ({ id: run.id, name: run.name, period: run.period, status: run.status, runType: run.runType, parentRunId: run.parentRunId,
+      totalNet: run.totalNet, correctionReason: run.correctionReason, paidAt: run.paidAt, approvedAt: run.approvedAt, createdAt: run.createdAt }))
     const runIds = chain.map(run => run.id)
-    const items: Array<{ id: number; runId: number; employeeId: number; netPay: string }> = []
+    const allItems: Array<{ id: number; runId: number; employeeId: number; netPay: string }> = []
     for (let offset = 0; offset < runIds.length; offset += 500) {
       const chunk = runIds.slice(offset, offset + 500)
-      items.push(...(await em.query(`SELECT [id],[runId],[employeeId],CONVERT(varchar(40),[netPay]) AS [netPay] FROM [payroll_items] WHERE [runId] IN (${chunk.map((_, index) => `@${index}`).join(',')})`, chunk))
+      allItems.push(...(await em.query(`SELECT [id],[runId],[employeeId],CONVERT(varchar(40),[netPay]) AS [netPay] FROM [payroll_items] WHERE [runId] IN (${chunk.map((_, index) => `@${index}`).join(',')})`, chunk))
         .map((row: any) => ({ id: Number(row.id), runId: Number(row.runId), employeeId: Number(row.employeeId), netPay: row.netPay })))
     }
     const reversalIds = chain.filter(run => payrollRunTypeOf(run) === 'REVERSAL').map(run => run.id)
-    const lines = reversalIds.length ? await em.getRepository(PayrollRunReversalLine).find({ where: { reversalRunId: In(reversalIds) }, order: { id: 'ASC' } }) : []
+    const allLines = reversalIds.length ? await em.getRepository(PayrollRunReversalLine).find({ where: { reversalRunId: In(reversalIds) }, order: { id: 'ASC' } }) : []
+    const scoped = branchScopeOf(user) !== null
+    const inScope = await this.payroll.itemScopeOf(user, runIds, em)
+    const items = scoped ? allItems.filter(item => inScope(item.runId, item.employeeId)) : allItems
+    const lines = scoped ? allLines.filter(line => inScope(line.originalRunId, line.employeeId)) : allLines
     const summary = summarizePayrollCorrections(rootId, chain, items, lines)
+    let runs: Array<Omit<typeof summary.runs[number], 'totalNet'> & { totalNet: string | null }> = summary.runs
+    if (scoped) {
+      const touched = new Set([...items.map(item => item.runId), ...lines.map(line => line.reversalRunId)])
+      const whole = new Set<number>()
+      for (const run of chainRuns) if (await this.payroll.runAccessible(user, run, em)) whole.add(run.id)
+      runs = summary.runs.filter(run => whole.has(run.id) || touched.has(run.id)).map(run => whole.has(run.id) ? run : { ...run, totalNet: null })
+    }
     const names = await this.employeeNames(em, runIds, summary.employees.map(row => row.employeeId))
-    return { ...summary, employees: summary.employees.map(row => ({ ...row, fullName: names.get(row.employeeId)?.fullName ?? null, employeeCode: names.get(row.employeeId)?.employeeCode ?? null })),
+    return { ...summary, runs, employees: summary.employees.map(row => ({ ...row, fullName: names.get(row.employeeId)?.fullName ?? null, employeeCode: names.get(row.employeeId)?.employeeCode ?? null })),
       items, lines }
   }
 
@@ -110,7 +127,7 @@ export class PayrollCorrectionsService {
    * من يُصرف له مسير تكميلي مربوط بهذا المسير: موظف في عضويته (داخل أو مستبعد) أو بنوده، وليس له حجز أو مسير معتمد/مصروف حاجب على الفترة الآن
    * (البند المعكوس المنفذ يحرر حجزه). غير المؤهل يُعرض بسببه.
    */
-  private async supplementaryCandidates(em: EntityManager, run: PayrollRun) {
+  private async supplementaryCandidates(em: EntityManager, user: JwtPayload, run: PayrollRun) {
     if (payrollRunTypeOf(run) === 'REVERSAL') return { available: false, reason: 'مسير العكس لا يُربط به مسير تكميلي؛ اربطه بالمسير الأصلي', candidates: [] }
     if (run.status !== 'PAID') return { available: false, reason: 'المسير التكميلي يُربط بمسير مصروف', candidates: [] }
     if (!run.policyVersionId) return { available: false, reason: 'مسير سابق بلا نسخة سياسة منشورة؛ المسير التكميلي يُحتسب بنسخة سياسة المسير الأصلي', candidates: [] }
@@ -138,6 +155,10 @@ export class PayrollCorrectionsService {
       ].filter((note): note is string => !!note)
       return { exemptionIds: own.map(row => row.id), carriedExemptionIds: carried.map(row => row.id), warning: notes.length ? notes.join(' — ') : null }
     }
+    // رقم مسير حاجب أو مسودة متعارضة برّه نطاق الحساب مايتقالش (نفس حجب تعارضات شاشة المسير)
+    const visible = await this.payroll.runVisibility(user, em)
+    const shown = new Map<number, boolean>()
+    for (const id of new Set(conflicts.map(row => row.otherRunId))) shown.set(id, await visible(id))
     const candidates = ids.map(employeeId => {
       const own = conflicts.filter(row => row.employeeId === employeeId)
       const blocking = own.filter(row => row.blocking)
@@ -146,11 +167,12 @@ export class PayrollCorrectionsService {
       const basis = reversed ? 'REVERSED' : member?.membershipStatus === 'EXCLUDED' ? 'EXCLUDED' : items.some(item => item.employeeId === employeeId) ? 'PAID_IN_RUN' : 'MEMBER'
       const reason = blocking.length ? (blocking.some(row => row.otherRunId === run.id)
           ? (pending.some(line => line.employeeId === employeeId) ? 'بنده في هذا المسير بانتظار تنفيذ العكس' : 'مصروف في هذا المسير؛ اعكس بنده أولًا')
-          : `مرتبط بالمسير #${blocking[0].otherRunId} (${blocking[0].status})`)
+          : shown.get(blocking[0].otherRunId) ? `مرتبط بالمسير #${blocking[0].otherRunId} (${blocking[0].status})` : `مرتبط بمسير خارج نطاق صلاحيتك (${blocking[0].status})`)
         : null
       const exemptions = reversed ? exemptionsOf(employeeId) : { exemptionIds: [], carriedExemptionIds: [], warning: null }
       return { employeeId, fullName: names.get(employeeId)?.fullName ?? null, employeeCode: names.get(employeeId)?.employeeCode ?? null, basis,
-        eligible: !blocking.length, reason, draftRuns: own.filter(row => !row.blocking).map(row => ({ runId: row.otherRunId, status: row.status })), ...exemptions }
+        eligible: !blocking.length, reason,
+        draftRuns: own.filter(row => !row.blocking).map(row => ({ runId: shown.get(row.otherRunId) ? row.otherRunId : null, status: row.status })), ...exemptions }
     })
     return { available: true, reason: null, candidates: candidates.filter(row => row.eligible || row.basis === 'REVERSED' || row.basis === 'EXCLUDED') }
   }
@@ -160,7 +182,7 @@ export class PayrollCorrectionsService {
     const run = await this.runOr404(em, runId)
     await this.payroll.assertRunAccess(user, run, em)
     const root = await this.rootOf(em, run)
-    const { items, lines, ...reconciliation } = await this.reconciliation(em, root.id)
+    const { items, lines, ...reconciliation } = await this.reconciliation(em, user, root.id)
     const correction = await describePayrollRunCorrection(em, run)
     const correctable = run.status === 'PAID' && payrollRunTypeOf(run) !== 'REVERSAL'
     const reversible = correctable ? items.filter(item => item.runId === run.id).map(item => {
@@ -173,7 +195,7 @@ export class PayrollCorrectionsService {
       run: { id: run.id, name: run.name, period: run.period, status: run.status, runType: payrollRunTypeOf(run), runTypeLabel: PAYROLL_RUN_TYPE_LABELS[payrollRunTypeOf(run)] },
       root: { id: root.id, name: root.name, period: root.period, status: root.status },
       correction, reconciliation, reversible,
-      supplementary: await this.supplementaryCandidates(em, run),
+      supplementary: await this.supplementaryCandidates(em, user, run),
       permissions: { canReverse: correctable && userHasPerm(user, 'payroll.reverse'), canSupplement: correctable && userHasPerm(user, 'payroll.calculate') },
     }
   }
@@ -257,7 +279,7 @@ export class PayrollCorrectionsService {
     const run = await this.runOr404(em, runId)
     await this.payroll.assertRunAccess(user, run, em)
     this.assertCorrectable(run, 'إنشاء مسير تكميلي')
-    const eligibility = await this.supplementaryCandidates(em, run)
+    const eligibility = await this.supplementaryCandidates(em, user, run)
     if (!eligibility.available) throw conflict('PAYRUN-SUPPLEMENTARY-UNAVAILABLE', eligibility.reason ?? 'المسير التكميلي غير متاح لهذا المسير')
     const ids = [...new Set(dto.employeeIds)].sort((a, b) => a - b)
     const notEligible = ids.filter(id => !eligibility.candidates.some(row => row.employeeId === id && row.eligible))
@@ -293,7 +315,7 @@ export class PayrollCorrectionsService {
     const chains: Array<ReconciliationSummary & { root: { id: number; name: string | null; period: string; status: string } }> = []
     for (const root of [...roots.values()].sort((a, b) => a.period.localeCompare(b.period) || a.id - b.id)) {
       try { await this.payroll.assertRunAccess(user, root, em) } catch (error) { if (error instanceof ForbiddenException) continue; throw error }
-      const { items: _items, lines: _lines, ...summary } = await this.reconciliation(em, root.id)
+      const { items: _items, lines: _lines, ...summary } = await this.reconciliation(em, user, root.id)
       chains.push({ root: { id: root.id, name: root.name, period: root.period, status: root.status }, ...summary })
     }
     const total = (key: 'reversedNet' | 'supplementaryPaidNet' | 'settlementDifference' | 'pendingReversalNet' | 'supplementaryOpenNet') => money(chains.reduce((sum, chain) => sum + cents(chain.totals[key]), 0))

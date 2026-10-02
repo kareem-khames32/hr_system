@@ -7,7 +7,7 @@ import {
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { branchScopeOf, inBranchScope, scopeWord } from '../auth/guards'
+import { branchScopeOf, inBranchScope, scopeWord, userHasPerm } from '../auth/guards'
 import { Employee } from '../employees/employee.entity'
 import { roundPayrollMoney } from './payroll-money'
 import {
@@ -104,8 +104,11 @@ export class ObligationsService {
     if (row.status === 'APPLIED') {
       throw new BadRequestException('طُبِّقت في مسير مصروف — لا يمكن إلغاؤها')
     }
-    if (row.status === 'CANCELLED') return row
+    // صف القيد (مبلغه وسببه ومسيره) لقارئ الرواتب بس — صلاحية الحساب لوحدها بتلغي وبتاخد رقم القيد وحالته
+    // (GET /obligations/employee/:id نفسه محتاج عرض مسيرات الرواتب)
+    const view = (saved: EmployeeObligation) => userHasPerm(user, 'payroll.view') ? saved : { id: saved.id, status: saved.status }
+    if (row.status === 'CANCELLED') return view(row)
     row.status = 'CANCELLED'
-    return this.repo.save(row)
+    return view(await this.repo.save(row))
   }
 }

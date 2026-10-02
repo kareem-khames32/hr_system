@@ -93,13 +93,23 @@ test('تقسيم الاختيار المختلط: مين ينتقل من أنه�
     { fromRunId: 20, employeeIds: [2, 3] },
     { fromRunId: 30, employeeIds: [4] },
   ], 'الإضافة أولًا ثم النقل من كل مسير مرة واحدة')
+  // حساب مقيد بفروع: الرقم اللي مش موجود والموظف اللي برّه فروعه رد واحد (مفيش كاشف وجود)
   assert.deepEqual(split.skipped.map(row => [row.employeeId, row.skipCode]), [
     [5, 'LOCKED_RUN'], [6, 'SOURCE_OUT_OF_SCOPE'], [7, 'SOURCE_NO_NAME'], [8, 'ALREADY_IN_RUN'],
-    [9, 'OUT_OF_BRANCH_SCOPE'], [10, 'EMPLOYEE_NOT_FOUND'],
+    [9, 'OUT_OF_BRANCH_SCOPE'], [10, 'OUT_OF_BRANCH_SCOPE'],
   ])
   for (const row of split.skipped) assert.ok(row.skipReason && row.skipReason.length > 3, `سبب عربي مكتوب لـ${row.employeeId}`)
-  assert.equal(split.skipped.find(row => row.employeeId === 5).fromRunName, 'مسير 40', 'اسم المسير المقفول يظهر مع السبب')
+  const skippedRow = id => split.skipped.find(row => row.employeeId === id)
+  assert.equal(skippedRow(5).fromRunName, 'مسير 40', 'اسم المسير المقفول يظهر مع السبب')
   assert.equal(split.fromNames.get(20), 'مسير 20')
+  // فصل الفروع: موظف برّه فروع الحساب من غير اسمه ولا كوده، ومسير برّه نطاق الحساب من غير رقمه ولا اسمه
+  for (const id of [9, 10]) assert.deepEqual([skippedRow(id).fullName, skippedRow(id).employeeCode, skippedRow(id).skipReason], [null, null, skippedRow(9).skipReason])
+  assert.deepEqual([skippedRow(6).fromRunId, skippedRow(6).fromRunName, skippedRow(6).fullName], [null, null, 'موظف 6'])
+  assert.ok(!split.namesById.has(9) && !split.namesById.has(10) && split.namesById.has(1))
+  assert.ok(!JSON.stringify(split.skipped).includes('مسير 50'), 'اسم المسير اللي برّه النطاق مش في الرد')
+  // حساب الشركة: الرقم اللي مش موجود بيتقال «مش موجود»
+  assert.deepEqual(m.splitPayrollBulkMembership([candidate(10, [], { exists: false })], { targetRunId: 99, branchScope: null }).skipped.map(row => [row.skipCode, row.fullName]),
+    [['EMPLOYEE_NOT_FOUND', null]])
   // بلا نطاق فرع: الموظف اللي في فرع تاني يعدي عادي
   const company = m.splitPayrollBulkMembership([candidate(9, [], { branchId: 2 })], { targetRunId: 99, branchScope: null })
   assert.deepEqual(company.groups, [{ fromRunId: null, employeeIds: [9] }])

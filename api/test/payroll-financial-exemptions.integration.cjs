@@ -547,3 +547,75 @@ test('CR23-B01: ملكية نوع الخصم ماتعدّيش فصل الفرو�
     await setConfig('financial_exemptions.cooldown_hours', '24')
   }
 })
+
+test('CR24-B01: إدارة قسم في فرع تاني ماتفتحش مسير الفرع ده في شاشة الإعفاءات — لا اسمه ولا رقمه ولا شهره ولا حالته', { timeout: 420000 }, async () => {
+  // مدير القسم ملفه وحسابه في فرع الإعفاءات، والقسم اللي بيديره في فرع خارجي. المسير فيه موظف من القسم الخارجي بس
+  const foreignBranch = await repo('Branch').save({ code: 'EX_C', name: 'فرع خارجي' })
+  const foreignDepartment = await repo('Department').save({ branchId: foreignBranch.id, name: 'قسم في الفرع الخارجي', code: 'EX_DC' })
+  const managerEmployee = await employee('EX_XM', { managerEmployeeId: people.branchManager.id })
+  await repo('Department').update(foreignDepartment.id, { managerEmployeeId: managerEmployee.id })
+  const crossManager = await repo('User').save({ email: 'cross-manager@exemptions.invalid', displayName: 'cross-manager', passwordHash: 'test-only', role: 'employee',
+    branchId: org.branch.id, employeeId: managerEmployee.id, permissions: '[]' })
+  const foreignOnly = await employee('EX_F1', { fullName: 'موظف القسم الخارجي', branchId: foreignBranch.id, departmentId: foreignDepartment.id })
+  const foreignMate = await employee('EX_F2', { fullName: 'زميل في القسم الخارجي', branchId: foreignBranch.id, departmentId: foreignDepartment.id })
+  const nearMember = await employee('EX_N1', { managerEmployeeId: people.manager.id })
+  await attendance(foreignOnly)
+  for (const emp of [foreignMate, nearMember]) await attendance(emp, { late: [day(3)] })
+  const secretName = 'مسير الفرع الخارجي السري'
+  const run = expectStatus(await request(users.admin, 'POST', '/payroll/runs/calculate-defined', { period, scopeType: 'CUSTOM', employeeIds: [foreignOnly.id], name: secretName }), 201)
+
+  // المسير كله برّه فروع حسابه: مرفوض في العرض والمرشحين من غير أي بيانات عن المسير
+  for (const route of [`/payroll/exemptions/runs/${run.id}`, `/payroll/exemptions/runs/${run.id}/candidates`]) {
+    const refused = await request(crossManager, 'GET', route)
+    assert.deepEqual([refused.status, refused.body.code], [403, 'EXEMPTION_RUN_OUT_OF_SCOPE'], `${route}: ${JSON.stringify(refused.body)}`)
+    const text = JSON.stringify(refused.body)
+    for (const hidden of [secretName, 'snapshotVersion', 'canGrant', 'CALCULATED', period, 'موظف القسم الخارجي']) assert.ok(!text.includes(hidden), `${hidden} مايظهرش في الرفض`)
+  }
+  // ومش في المسيرات اللي يقدر يمنح فيها، وحساب الشركة شايفه زي ما هو
+  assert.ok(!expectStatus(await request(crossManager, 'GET', '/payroll/exemptions/grantable-runs'), 200).some(row => row.id === run.id))
+  assert.equal(expectStatus(await request(users.admin, 'GET', `/payroll/exemptions/runs/${run.id}`), 200).run.name, secretName)
+
+  // مسير فيه موظف من فرع حسابه: بيتفتح له (فيه عضو من فرعه)، وموظف القسم الخارجي مالوش أي أساس عنده ولا بيظهر في المرشحين
+  const mixed = expectStatus(await request(users.admin, 'POST', '/payroll/runs/calculate-defined', { period, scopeType: 'CUSTOM', employeeIds: [nearMember.id, foreignMate.id],
+    name: `مسير فرعين للإعفاء ${++sequence}` }), 201)
+  const view = expectStatus(await request(crossManager, 'GET', `/payroll/exemptions/runs/${mixed.id}`), 200)
+  assert.deepEqual([view.run.id, view.exemptions], [mixed.id, []])
+  const candidates = expectStatus(await request(crossManager, 'GET', `/payroll/exemptions/runs/${mixed.id}/candidates`), 200)
+  assert.deepEqual(candidates.employees, [])
+  assert.ok(!JSON.stringify(candidates).includes('زميل في القسم الخارجي'))
+  assert.deepEqual([(await request(crossManager, 'GET', `/payroll/exemptions/runs/${mixed.id}/candidates?employeeId=${foreignMate.id}`)).body.code], ['EXEMPTION_OUT_OF_SCOPE'])
+
+  // عضوية موظف فرع تاني في المسير ماتتكشفش: العضو (زميل القسم الخارجي) وغير العضو (موظف المسير التاني) بياخدوا نفس الرفض بالحرف
+  const all = emp => exemption(mixed, emp, { scopeKind: 'ALL_DEDUCTIONS' })
+  const memberPreview = await request(crossManager, 'POST', '/payroll/exemptions/preview', all(foreignMate))
+  const outsiderPreview = await request(crossManager, 'POST', '/payroll/exemptions/preview', all(foreignOnly))
+  assert.deepEqual([memberPreview.status, memberPreview.body.code], [403, 'EXEMPTION_OUT_OF_SCOPE'])
+  assert.deepEqual([outsiderPreview.status, outsiderPreview.body], [memberPreview.status, memberPreview.body])
+  const detailOf = async emp => { const response = await request(crossManager, 'GET', `/payroll/exemptions/runs/${mixed.id}/candidates?employeeId=${emp.id}`); return [response.status, response.body] }
+  assert.deepEqual(await detailOf(foreignOnly), await detailOf(foreignMate))
+  // موظف من فرعه مش عضو في المسير: لسه بيتقال له «مش عضو»
+  expectStatus(await request(users.hr, 'POST', '/payroll/exemptions/preview', all(people.e3)), 400, 'EXEMPTION_NOT_MEMBER')
+
+  // حساب بلا أي صفة في الإعفاءات: نفس الرفض لمسير موجود ومسير مش موجود وعضو وغير عضو — قبل قراءة أي حاجة
+  const probe = (runId, emp) => request(users.e2, 'POST', '/payroll/exemptions/preview', { ...all(emp), runId })
+  const answers = [await probe(mixed.id, nearMember), await probe(mixed.id, foreignOnly), await probe(99999999, nearMember)]
+  assert.deepEqual(answers.map(answer => [answer.status, answer.body.code]), Array(3).fill([403, 'EXEMPTION_OUT_OF_SCOPE']))
+  assert.deepEqual(answers.map(answer => answer.body.message), Array(3).fill(memberPreview.body.message))
+  for (const route of [`/payroll/exemptions/runs/${mixed.id}`, '/payroll/exemptions/runs/99999999', `/payroll/exemptions/runs/${mixed.id}/candidates`, '/payroll/exemptions/runs/99999999/candidates']) {
+    const refused = await request(users.e2, 'GET', route)
+    assert.deepEqual([refused.status, refused.body.code], [403, 'EXEMPTION_FORBIDDEN'], route)
+  }
+
+  // حد نسبة المانح محسوب على خصومات المسير كله: مانح حسابه على فرع والمسير فيه فرع تاني بيتقال له إن الحد اتعدّى من غير النسبة
+  // (النسبة بتدل على إجمالي خصومات الفرع التاني). حساب الشركة بياخد النسبة زي ما كانت
+  await setConfig('financial_exemptions.max_pct_per_grantor', '1')
+  try {
+    const lateness = exemption(mixed, nearMember, { scopeKind: 'DEDUCTION_TYPE', targetKind: 'LATENESS' })
+    const pctWarning = async user => expectStatus(await request(user, 'POST', '/payroll/exemptions/preview', lateness), 201).warnings.find(row => row.code.startsWith('EXEMPTION_GRANTOR_PCT'))
+    const scopedWarning = await pctWarning(users.desk)
+    assert.ok(scopedWarning && scopedWarning.message.includes('ستتجاوز حد 1% من خصوماته') && !/ستبلغ/.test(scopedWarning.message), JSON.stringify(scopedWarning))
+    assert.match((await pctWarning(users.admin)).message, /ستبلغ \d+(\.\d+)?% من خصوماته والحد 1%/)
+  } finally {
+    await setConfig('financial_exemptions.max_pct_per_grantor', '0')
+  }
+})

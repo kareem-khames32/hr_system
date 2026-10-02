@@ -171,7 +171,7 @@ export interface PayrollDisbursementClose {
  * - مسير فيه علامات وناقص ناس ← سبب مكتوب إلزامي، وبيتكتب على صف كل واحد ناقص «لم يتم» فيفضل ظاهر لحد ما يتصرفله.
  */
 export async function closePayrollRunDisbursement(em: EntityManager, run: { id: number }, items: ReadonlyArray<{ id: number; employeeId: number; netPay: unknown; breakdown?: string | null }>,
-  actorUserId: number, unpaidReasonInput: unknown): Promise<PayrollDisbursementClose> {
+  actorUserId: number, unpaidReasonInput: unknown, amounts = true): Promise<PayrollDisbursementClose> {
   const repo = em.getRepository(PayrollItemDisbursement)
   const marks = await repo.find({ where: { runId: run.id } })
   const paidMarks = marks.filter(mark => mark.status === 'PAID')
@@ -191,7 +191,8 @@ export async function closePayrollRunDisbursement(em: EntityManager, run: { id: 
   if (!leftover.length) return { mode: 'PER_EMPLOYEE', paidCount: paidMarks.length, paidTotal, unpaidCount: 0, unpaidTotal: 0, unpaidEmployeeIds: [], unpaidReason: null }
   const reason = typeof unpaidReasonInput === 'string' ? unpaidReasonInput.trim() : ''
   if (reason.length < 3 || reason.length > PAYROLL_DISBURSE_NOTE_MAX) {
-    throw new BadRequestException({ code: 'PAYRUN-DISBURSE-UNPAID-REASON', unpaidCount: leftover.length, unpaidTotal,
+    // إجمالي صافي الباقيين لقارئ الرواتب بس؛ صلاحية الصرف لوحدها بتاخد العدد
+    throw new BadRequestException({ code: 'PAYRUN-DISBURSE-UNPAID-REASON', unpaidCount: leftover.length, ...(amounts ? { unpaidTotal } : {}),
       message: `فيه ${leftover.length} موظف لسه متعلّمش «تم الصرف» — اقفل الصرف من شاشة «صرف الرواتب» بسبب مكتوب للباقيين (من 3 إلى ${PAYROLL_DISBURSE_NOTE_MAX} حرف)، أو علّمهم الأول` })
   }
   const now = new Date()

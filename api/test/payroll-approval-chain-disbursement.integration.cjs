@@ -619,6 +619,10 @@ test('«إقفال الصرف» = pay(): إعادة الفتح مرفوضة بع
   // اتعلّم 2 من 4: الإقفال من غير سبب مرفوض قبل أي أثر
   const refused = expectCode(await pay({ channel: 'MIXED', reference: `${SERIES} ${PERIOD}` }), 400, 'PAYRUN-DISBURSE-UNPAID-REASON')
   assert.deepEqual([refused.unpaidCount, refused.unpaidTotal], [2, 6000 + Number((await itemOf(eOT)).netPay)])
+  // صلاحية الصرف من غير «عرض مسيرات الرواتب»: نفس الرفض بعدد الباقيين من غير إجمالي صافيهم
+  const payOnly = await account('pay-only', 'صراف بلا عرض الرواتب', 'employee', branchA.id, ['payroll.pay'])
+  const blind = expectCode(await request(payOnly, 'POST', `/payroll/runs/${runA.id}/pay`, { channel: 'MIXED', reference: `${SERIES} ${PERIOD}` }), 400, 'PAYRUN-DISBURSE-UNPAID-REASON')
+  assert.deepEqual([blind.unpaidCount, 'unpaidTotal' in blind], [2, false])
   expectCode(await pay({ channel: 'MIXED', reference: `${SERIES} ${PERIOD}`, unpaidReason: 'لا' }), 400, 'PAYRUN-DISBURSE-UNPAID-REASON')
   assert.deepEqual(await effects(), beforePay)
   assert.equal((await runRow(runA.id)).status, 'APPROVED')

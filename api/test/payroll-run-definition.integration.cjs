@@ -469,3 +469,63 @@ test('Review fixes: a department/team edit from the employee file (no transfer) 
   assert.ok(moved, JSON.stringify(now.totals))
   assert.equal(moved.departmentId, newUnit.department.id)
 })
+
+test('B0.1s-3: معاينة العضوية — صلاحية الحساب من غير عرض الرواتب بتاخدها من غير مبالغ، ومسير برّه نطاق الحساب مايتسمّاش في سبب الاستبعاد', async () => {
+  const unitA = await org(branchA), unitB = await org(branchB)
+  const mine = await employee(unitA), booked = await employee(unitA), far = await employee(unitB)
+  // مسير معتمد فيه موظف من كل فرع: برّه نطاق حساب فرع القاهرة، وموظف فرعه محجوز فيه
+  const mixedName = 'مسير مشترك سري — أغسطس'
+  const mixed = await calculateDraft(await createDraft({ name: mixedName, policyVersionId: policyTwo.versionId, period, filters: { employeeIds: [booked.id, far.id] } }))
+  await acknowledge(mixed)
+  assert.equal(expectStatus(await request(admin, 'POST', `/payroll/runs/${mixed.id}/approve`), 201).status, 'APPROVED')
+  assert.equal((await request(officerA, 'GET', `/payroll/runs/${mixed.id}`)).status, 403, 'المسير المشترك برّه نطاق حساب الفرع')
+  const calcOnly = await repo('User').save({ email: 'calc-only@run-definition-test.invalid', displayName: 'calc-only', passwordHash: 'test-only',
+    role: 'employee', branchId: branchA.id, permissions: JSON.stringify(['payroll.calculate']) })
+  const definition = { policyVersionId: policyOne.versionId, period, filters: { branchIds: [branchA.id], departmentIds: [unitA.department.id] } }
+
+  // قارئ رواتب الفرع: المعاينة بمبالغها، والمسير المشترك من غير رقمه ولا اسمه — في otherRun وفي نص السبب
+  const full = expectStatus(await request(officerA, 'POST', '/payroll/runs/membership-preview', definition), 201)
+  assert.deepEqual(full.included.map(row => [row.employeeId, row.monthlyGross, row.earnedGross]), [[mine.id, 6000, 6000]])
+  assert.match(full.previewHash, /^[a-f0-9]{64}$/)
+  const bookedRow = full.excluded.find(row => row.employeeId === booked.id)
+  assert.deepEqual([bookedRow.code, bookedRow.otherRun.otherRunId, bookedRow.otherRun.name, bookedRow.otherRun.status], ['EXC_ALREADY_IN_RUN', null, 'مسير خارج نطاق صلاحيتك', 'APPROVED'])
+  assert.equal(bookedRow.message, `مدرج في مسير خارج نطاق صلاحيتك (APPROVED) لفترة ${startDate} → ${endDate}`)
+  assert.ok(!JSON.stringify(full).includes(mixedName) && !JSON.stringify(full).includes(`#${mixed.id}`), 'ولا اسم ولا رقم للمسير اللي برّه النطاق')
+  // حساب الشركة: السبب برقم المسير واسمه زي ما كان
+  const company = expectStatus(await request(admin, 'POST', '/payroll/runs/membership-preview', definition), 201)
+  const companyRow = company.excluded.find(row => row.employeeId === booked.id)
+  assert.deepEqual([companyRow.otherRun.otherRunId, companyRow.otherRun.name], [mixed.id, mixedName])
+  assert.ok(companyRow.message.includes(`#${mixed.id}`) && companyRow.message.includes(mixedName), companyRow.message)
+
+  // صلاحية الحساب لوحدها: نفس الصفوف بالحرف من غير راتب الشهر ولا المستحق ولا البصمة — للتعريف اللي لسه ماتحفظش وللمسودة المحفوظة
+  const blind = expectStatus(await request(calcOnly, 'POST', '/payroll/runs/membership-preview', definition), 201)
+  assert.deepEqual([blind.previewHash, blind.totals.monthlyGross, blind.totals.earnedGross], [null, null, null])
+  assert.deepEqual(blind.included, full.included.map(row => ({ ...row, monthlyGross: null, earnedGross: null })))
+  assert.deepEqual(blind.excluded, full.excluded)
+  assert.deepEqual({ ...blind.totals, monthlyGross: 6000, earnedGross: 6000 }, full.totals)
+  assert.ok(!/"(monthlyGross|earnedGross)":\d/.test(JSON.stringify(blind)), 'ولا مبلغ في المعاينة')
+  const draft = await createDraft({ ...definition, name: 'مسودة محاسب من غير عرض الرواتب' }, calcOnly)
+  assert.ok(!('items' in draft) && !('members' in draft) && !('totalNet' in draft), 'رد إنشاء المسودة حالة المسير بس')
+  const stored = expectStatus(await request(calcOnly, 'GET', `/payroll/runs/${draft.id}/membership-preview`), 200)
+  assert.deepEqual([stored.previewHash, stored.totals.monthlyGross, stored.totals.earnedGross, stored.included.map(row => [row.employeeId, row.monthlyGross, row.earnedGross])],
+    [null, null, null, [[mine.id, null, null]]])
+  const storedFull = expectStatus(await request(officerA, 'GET', `/payroll/runs/${draft.id}/membership-preview`), 200)
+  assert.deepEqual([storedFull.totals.monthlyGross, storedFull.included.map(row => row.monthlyGross)], [6000, [6000]])
+  // حدث المسودة بيحفظ أرقام المعاينة زي ما هي (سجل للمراجعة بيقراه قارئ الرواتب)
+  const created = (await repo('PayrollRunEvent').find({ where: { runId: draft.id, eventType: 'DRAFT_CREATED' } }))[0]
+  assert.deepEqual([created.payload.previewTotals.monthlyGross, /^[a-f0-9]{64}$/.test(created.payload.previewHash)], [6000, true])
+
+  // إقرار «بلا مسير» من حساب الشركة: عدد صفوف تقريره وأسبابه وبصمته على كل الفروع، فقارئ الفرع بياخد مين أقرّ وإمتى من غيرهم
+  const calculated = await calculateDraft(draft, officerA)
+  await acknowledge(calculated, admin)
+  const scopedAck = expectStatus(await request(officerA, 'GET', `/payroll/runs/${draft.id}/unassigned`), 200).acknowledgement
+  assert.deepEqual([scopedAck.latest.scopeBranchId, scopedAck.latest.rowCount, scopedAck.latest.reportHash, scopedAck.current?.rowCount ?? null], [null, null, null, null])
+  assert.equal(scopedAck.latest.acknowledgedByName, 'admin')
+  const companyAck = expectStatus(await request(admin, 'GET', `/payroll/runs/${draft.id}/unassigned`), 200).acknowledgement
+  assert.ok(Number.isInteger(companyAck.latest.rowCount) && /^[a-f0-9]{64}$/.test(companyAck.latest.reportHash), JSON.stringify(companyAck.latest))
+  const ackKeys = async user => {
+    const payload = expectStatus(await request(user, 'GET', `/payroll/runs/${draft.id}/events`), 200).find(event => event.eventType === 'UNASSIGNED_ACKNOWLEDGED').payload
+    return ['rowCount', 'byReason', 'reportHash'].filter(key => key in payload)
+  }
+  assert.deepEqual([await ackKeys(officerA), await ackKeys(admin)], [[], ['rowCount', 'byReason', 'reportHash']])
+})

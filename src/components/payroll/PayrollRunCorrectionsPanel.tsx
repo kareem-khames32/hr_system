@@ -303,7 +303,7 @@ export function PayrollRunCorrectionsPanel({ run, employeeName, onOpenRun }: {
                             <td className="p-2 text-xs">
                               {row.eligible ? <span className="text-success-700">مؤهل</span> : <span className="text-red-700">{row.reason}</span>}
                               {row.warning && <p className="text-amber-800">{row.warning}</p>}
-                              {row.draftRuns.length > 0 && <p className="text-gray-500">مسودات قائمة له: {row.draftRuns.map(draft => `#${draft.runId}`).join('، ')}</p>}
+                              {row.draftRuns.length > 0 && <p className="text-gray-500">مسودات قائمة له: {row.draftRuns.map(draft => draft.runId === null ? 'مسير خارج نطاق صلاحيتك' : `#${draft.runId}`).join('، ')}</p>}
                             </td>
                           </tr>
                         ))}

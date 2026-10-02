@@ -306,6 +306,14 @@ test('step 20: a run with differences cannot switch to POLICY until every differ
   await repo('EmployeeObligation').save({ employeeId: odd.id, type: 'CREDIT', category: 'bonus', amount: 5, label: 'مكافأة اختبار بعد التحويل', status: 'PENDING' })
   const blocked = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إضافة دفتر بعد التحويل' }), 409)
   assert.equal(blocked.code, 'PAYRUN-POLICY-PARITY-UNEXPLAINED')
+  // أرقام الفرق لكل موظف في الرفض لقارئ الرواتب؛ صلاحية الحساب لوحدها بتاخد الموظف والبند والسبب من غير المبلغين
+  assert.ok(blocked.issues.length > 0 && blocked.issues.every(issue => 'legacy' in issue && 'policy' in issue), JSON.stringify(blocked.issues))
+  const calcOnly = await repo('User').save({ email: 'calc-only@policy-engine-test.invalid', displayName: 'calc-only', passwordHash: 'test-only', role: 'employee',
+    branchId: branch.id, permissions: JSON.stringify(['payroll.calculate']) })
+  const blind = expect(await request('POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إضافة دفتر بعد التحويل' }, calcOnly), 409)
+  assert.equal(blind.code, 'PAYRUN-POLICY-PARITY-UNEXPLAINED')
+  assert.deepEqual(blind.issues.map(issue => Object.keys(issue).sort()), blocked.issues.map(() => ['component', 'employeeId', 'reason']))
+  assert.deepEqual(blind.issues.map(issue => [issue.employeeId, issue.component]), blocked.issues.map(issue => [issue.employeeId, issue.component]))
   // يبقى صافي المحرك المصروف قبل الإضافة: 99.99
   assert.equal(number((await repo('PayrollItem').findOneByOrFail({ runId: run.id, employeeId: odd.id })).netPay), 99.99, 'the refused recalculation writes nothing')
   expect(await request('POST', `/payroll/runs/${run.id}/engine-mode`, { mode: 'SHADOW', reason: 'العودة للظل حتى تُفسر الفروق الجديدة' }), 201)

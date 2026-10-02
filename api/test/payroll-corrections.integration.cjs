@@ -571,3 +571,73 @@ test('العكس مع الخصم المصنف والمكافأة الفردية 
     ['PAID', supplementary.id, '150.00', '50.00', '100.00', '200.00'])
   assert.equal(expectStatus(await request(desk, 'GET', `/payroll/runs/${august.id}/corrections`), 200).reconciliation.totals.settlementDifference, '0.00')
 })
+
+test('فصل الفروع في التصحيح: تكميلي لموظفي فرع واحد مربوط بمسير فيه فرعين — قارئ رواتب الفرع بياخد تسوية موظفي فرعه بس، ومسير حاجب برّه نطاقه مايتسمّاش', { timeout: 900000 }, async () => {
+  // حسابين على مستوى الشركة: واحد يحسب وينشئ والتاني يعتمد ويصرف (فصل المهام)
+  const admin2 = await repo('User').save({ email: 'admin2@payroll-corrections-test.invalid', displayName: 'admin2', passwordHash: 'test-only', role: 'super_admin',
+    branchId: null, permissions: '[]' })
+  const approveAndPay = async (run, reference) => {
+    expectStatus(await request(admin2, 'POST', `/payroll/runs/${run.id}/approve`), 201)
+    expectStatus(await request(admin2, 'POST', `/payroll/runs/${run.id}/pay`, { channel: 'BANK_TRANSFER', reference }), 201)
+  }
+  const reverse = async (run, emp, creator, reference) => {
+    const preview = expectStatus(await request(creator, 'POST', `/payroll/runs/${run.id}/reversal-preview`, { employeeIds: [emp.id] }), 201)
+    const reversal = expectStatus(await request(creator, 'POST', `/payroll/runs/${run.id}/reversals`, { employeeIds: [emp.id], reason: REASON, previewHash: preview.previewHash }), 201)
+    await approveAndPay(reversal, reference)
+    return reversal
+  }
+  // سياسة على مستوى الشركة: المسير يقدر يضم فرعين
+  const createdPolicy = expectStatus(await request(users.admin, 'POST', '/payroll/policies', { name: 'مجموعة الشركة لتصحيح مسير الفرعين', effectiveFrom: policyStart, settings: { ...cycle23 } }), 201)
+  const published = expectStatus(await request(users.admin, 'POST', `/payroll/policies/${createdPolicy.policy.id}/versions/${createdPolicy.versions[0].id}/publish`,
+    { expectedRevision: createdPolicy.versions[0].revision, reason: 'نشر مجموعة الشركة لاختبار تصحيح مسير الفرعين' }), 200)
+  const companyVersionId = published.version.id
+  const near = await employee(4444.44), far = await employee(7777.77, org.other)
+
+  // ١) مسير مصروف فيه موظف من كل فرع، اتعكس بند موظف فرع القارئ، واتعمله مسير تكميلي لوحده
+  let mixed = expectStatus(await request(users.admin, 'POST', '/payroll/runs', { name: 'مسير فرعين — قبل التصحيح', policyVersionId: companyVersionId, period,
+    filters: { employeeIds: [near.id, far.id] } }), 201)
+  mixed = await calculate(mixed, users.admin)
+  const farItem = itemOf(mixed, far)
+  await approveAndPay(mixed, 'TRX-C8-MIXED')
+  const reversal = await reverse(mixed, near, users.admin, 'REFUND-C8-MIXED')
+  let supplementary = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${mixed.id}/supplementary`, { employeeIds: [near.id], reason: REASON }), 201)
+  supplementary = await calculate(supplementary, users.admin)
+
+  // قارئ رواتب الفرع: المسير الأصلي مش بيتقري له، والتكميلي بيتقري (كل أعضائه من فرعه) — وتسويته لموظف فرعه بس
+  expectStatus(await request(users.desk, 'GET', `/payroll/runs/${mixed.id}`), 403)
+  expectStatus(await request(users.desk, 'GET', `/payroll/runs/${mixed.id}/corrections`), 403)
+  const view = expectStatus(await request(users.desk, 'GET', `/payroll/runs/${supplementary.id}/corrections`), 200)
+  assert.deepEqual([view.reconciliation.employees.map(row => row.employeeId), view.reconciliation.totals.employees], [[near.id], 1])
+  assert.equal(view.reconciliation.employees[0].originalNet, money(itemOf(mixed, near).netPay), 'بند موظف فرعه في المسير الأصلي ظاهر له زي قسيمته')
+  // مسيرات السلسلة: الأصلي وعكسه من غير صافيهم الكلي (المسير فيه الفرع التاني)، والتكميلي بصافيه
+  assert.deepEqual(view.reconciliation.runs.map(row => [row.id, row.totalNet === null]), [[mixed.id, true], [reversal.id, true], [supplementary.id, false]])
+  const text = JSON.stringify(view)
+  assert.ok(Number(farItem.netPay) > 7000, 'صافي موظف الفرع التاني موجود فعلًا في المسير')
+  for (const hidden of [far.fullName, far.employeeCode, money(farItem.netPay), `"employeeId":${far.id}`]) assert.ok(!text.includes(hidden), `${hidden} مايظهرش لقارئ الفرع`)
+  // حساب الشركة: التسوية كاملة زي ما كانت
+  const full = expectStatus(await request(users.admin, 'GET', `/payroll/runs/${supplementary.id}/corrections`), 200)
+  assert.deepEqual(full.reconciliation.employees.map(row => row.employeeId).sort((a, b) => a - b), [near.id, far.id].sort((a, b) => a - b))
+  assert.ok(full.reconciliation.runs.every(row => row.totalNet !== null))
+  assert.equal(full.reconciliation.employees.find(row => row.employeeId === far.id).originalNet, money(farItem.netPay))
+
+  // ٢) مرشح المسير التكميلي محجوز في مسير برّه نطاق القارئ: السبب بيتقال من غير رقم المسير
+  const branchPolicy = await publishPolicy('مجموعة فرع التصحيح — مسير الحاجب')
+  const mover = await employee(3333.33), farMate = await employee(6666.66, org.other)
+  let own = expectStatus(await request(users.desk, 'POST', '/payroll/runs', { name: 'مسير الفرع — قبل الحجز', policyVersionId: branchPolicy.versionId, period,
+    filters: { employeeIds: [mover.id] } }), 201)
+  own = await calculate(own, users.desk)
+  expectStatus(await request(users.approver, 'POST', `/payroll/runs/${own.id}/approve`), 201)
+  expectStatus(await request(users.approver, 'POST', `/payroll/runs/${own.id}/pay`, { channel: 'BANK_TRANSFER', reference: 'TRX-C8-OWN' }), 201)
+  await reverse(own, mover, users.admin, 'REFUND-C8-OWN')
+  let blocker = expectStatus(await request(users.admin, 'POST', '/payroll/runs', { name: 'مسير حاجب سري', policyVersionId: companyVersionId, period,
+    filters: { employeeIds: [mover.id, farMate.id] } }), 201)
+  blocker = await calculate(blocker, users.admin)
+  expectStatus(await request(admin2, 'POST', `/payroll/runs/${blocker.id}/approve`), 201)
+  expectStatus(await request(users.desk, 'GET', `/payroll/runs/${blocker.id}`), 403)
+  const scoped = expectStatus(await request(users.desk, 'GET', `/payroll/runs/${own.id}/corrections`), 200).supplementary.candidates.find(row => row.employeeId === mover.id)
+  assert.deepEqual([scoped.eligible, scoped.reason], [false, 'مرتبط بمسير خارج نطاق صلاحيتك (APPROVED)'])
+  const refused = expectStatus(await request(users.desk, 'POST', `/payroll/runs/${own.id}/supplementary`, { employeeIds: [mover.id], reason: REASON }), 409, 'PAYRUN-SUPPLEMENTARY-NOT-ELIGIBLE')
+  assert.ok(!JSON.stringify(refused).includes(`#${blocker.id}`) && !JSON.stringify(refused).includes('مسير حاجب سري'), JSON.stringify(refused))
+  const company = expectStatus(await request(users.admin, 'GET', `/payroll/runs/${own.id}/corrections`), 200).supplementary.candidates.find(row => row.employeeId === mover.id)
+  assert.equal(company.reason, `مرتبط بالمسير #${blocker.id} (APPROVED)`)
+})

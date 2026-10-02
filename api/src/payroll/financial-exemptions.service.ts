@@ -54,6 +54,8 @@ const VIEW = 'financial_exemption.view', GRANT = 'financial_exemption.grant', AP
 const EXEMPTION_NOT_REVERSED_DECISION_SQL = `${payrollLineNotReversedSql('e.[runId]', 'e.[employeeId]')}
   OR (e.[scopeKind]<>'ALL_DEDUCTIONS' AND ISNULL(e.[targetKind], '') NOT IN ('LATENESS','SHORTFALL','ABSENCE','LATENESS_DAY','SHORTFALL_DAY','ABSENCE_DAY'))`
 const RUN_STATUS_LABELS: Record<string, string> = { DRAFT: 'مسودة', CALCULATED: 'محسوب', APPROVED: 'معتمد', PAID: 'مصروف', CANCELLED: 'ملغى' }
+// رفض واحد بالحرف لكل من مالوش أساس منح: حساب بلا صفة في الإعفاءات، وموظف برّه نطاق المانح (عضو في المسير أو لأ) — فالرد مايكشفش عضوية ولا وجود
+const OUT_OF_SCOPE_MESSAGE = 'الموظف أو الخصم خارج نطاق منح الإعفاء لك: الموارد البشرية بصلاحية منح الإعفاء في فرع الموظف، أو مدير القسم لخصومات حضور قسمه، أو مدير الجهة المالكة لنوع خصمها'
 const bad = (code: string, message: string, details: Record<string, unknown> = {}): never => { throw new BadRequestException({ code, message, ...details }) }
 const forbidden = (code: string, message: string, details: Record<string, unknown> = {}): never => { throw new ForbiddenException({ code, message, ...details }) }
 const conflict = (code: string, message: string, details: Record<string, unknown> = {}): never => { throw new ConflictException({ code, message, ...details }) }
@@ -125,11 +127,12 @@ export class FinancialExemptionsService {
     return orgs
   }
 
-  // مسير بلا عضو في فرع المستخدم (ولا في أقسامه ولا إعفاء منحه هو) لا تُكشف بياناته لمستخدم مقيد بفرع
-  private async assertRunInScope(em: EntityManager, user: JwtPayload, facts: OrgFacts, runId: number, orgs: Map<number, { branchId: number | null; departmentId: number | null }>) {
+  // مسير بلا عضو في فروع الحساب (ولا إعفاء منحه هو) لا تُكشف بياناته لمستخدم مقيد بفرع.
+  // CR24-B01: إدارة قسم في فرع تاني ماتفتحش رأس المسير (اسمه ورقمه وشهره وحالته) — نفس قاعدة CR23-B01 في المرشحين والمنح
+  private async assertRunInScope(em: EntityManager, user: JwtPayload, runId: number, orgs: Map<number, { branchId: number | null; departmentId: number | null }>) {
     if (branchScopeOf(user) === null) return
     for (const org of orgs.values()) {
-      if (this.inBranch(user, org.branchId) || (!!org.departmentId && facts.departments.has(org.departmentId))) return
+      if (this.inBranch(user, org.branchId)) return
     }
     if (await em.getRepository(PayrollFinancialExemption).count({ where: { runId, grantedByUserId: user.sub } })) return
     forbidden('EXEMPTION_RUN_OUT_OF_SCOPE', 'المسير خارج نطاق فرعك')
@@ -229,7 +232,7 @@ export class FinancialExemptionsService {
   }
 
   /**
-   * EX-03: أساس المنح. الموارد البشرية بـfinancial_exemption.grant في فرع الموظف: كل ما يقبل الإعفاء؛ مدير القسم (بلا صلاحية نظام) لقسمه بفروعه:
+   * EX-03: أساس المنح. الموارد البشرية بـfinancial_exemption.grant في فرع الموظف: كل ما يقبل الإعفاء؛ مدير القسم (بلا صلاحية نظام) لموظفي قسمه اللي في فروع حسابه:
    * خصومات الحضور الآلية فقط؛ مدير الجهة المالكة: نوع خصمها المصنف فقط. «كل الخصومات» وتأجيل الأقساط للموارد البشرية وحدها.
    */
   private async basisFor(em: EntityManager, user: JwtPayload, facts: OrgFacts, org: MemberOrg, target: ExemptionTarget, settings: Settings): Promise<ExemptionGrantorBasis> {
@@ -248,9 +251,7 @@ export class FinancialExemptionsService {
       const type = typeId ? await em.getRepository(DeductionType).findOne({ where: { id: typeId }, select: { id: true, ownerDepartmentId: true } }) : null
       functionOwner = !!type?.ownerDepartmentId && facts.departments.has(type.ownerDepartmentId)
     }
-    if (!departmentManager && !functionOwner) {
-      forbidden('EXEMPTION_OUT_OF_SCOPE', 'الموظف أو الخصم خارج نطاق منح الإعفاء لك: الموارد البشرية بصلاحية منح الإعفاء في فرع الموظف، أو مدير القسم لخصومات حضور قسمه، أو مدير الجهة المالكة لنوع خصمها')
-    }
+    if (!departmentManager && !functionOwner) forbidden('EXEMPTION_OUT_OF_SCOPE', OUT_OF_SCOPE_MESSAGE)
     if (target.scopeKind === 'ALL_DEDUCTIONS') forbidden('EXEMPTION_ALL_REQUIRES_HR', 'إعفاء «كل الخصومات القابلة» للموارد البشرية فقط (EX-07)')
     if (isAttendanceComponent(component)) {
       if (departmentManager) return 'DEPARTMENT_MANAGER'
@@ -263,11 +264,29 @@ export class FinancialExemptionsService {
     return forbidden('EXEMPTION_BASIS_TARGET', 'تأجيل أقساط السلف بالإعفاء للموارد البشرية فقط')
   }
 
+  /** صفة المانح قبل أي قراءة: حساب بلا صلاحية منح ولا قسم بيديره مالوش أساس مهما كان المسير أو الموظف، فبياخد الرفض قبل ما يتقري مسير أو عضوية. */
+  private async grantorFacts(em: EntityManager, user: JwtPayload): Promise<OrgFacts> {
+    const facts = await this.org.facts(em, user)
+    if (!userHasPerm(user, GRANT) && !facts.departments.size) forbidden('EXEMPTION_OUT_OF_SCOPE', OUT_OF_SCOPE_MESSAGE)
+    return facts
+  }
+
+  /** مكان عضو المسير. موظف مش عضو وملفه برّه فروع الحساب (أو مش موجود) بياخد رفض «خارج النطاق» نفسه — عضوية موظف فرع تاني في مسير ماتتكشفش. */
+  private async scopedMemberOrg(em: EntityManager, user: JwtPayload, run: PayrollRun, employeeId: number, message: string): Promise<MemberOrg> {
+    try { return await this.memberOrg(em, run, employeeId) }
+    catch (error) {
+      if (!(error instanceof BadRequestException)) throw error
+      const file = await em.getRepository(Employee).findOne({ where: { id: employeeId }, select: { id: true, branchId: true } })
+      if (!file || !this.inBranch(user, file.branchId)) forbidden('EXEMPTION_OUT_OF_SCOPE', message)
+      throw error
+    }
+  }
+
   private async evaluate(em: EntityManager, user: JwtPayload, dto: ExemptionInputDto): Promise<Evaluation> {
     const settings = await this.settings(em)
+    const facts = await this.grantorFacts(em, user)
     const run = await this.loadRun(em, dto.runId)
-    const org = await this.memberOrg(em, run, dto.employeeId)
-    const facts = await this.org.facts(em, user)
+    const org = await this.scopedMemberOrg(em, user, run, dto.employeeId, OUT_OF_SCOPE_MESSAGE)
     const target = normalizeExemptionTarget(dto)
     const { disposition } = normalizeExemptionDisposition(target, dto.disposition)
     const basis = await this.basisFor(em, user, facts, org, target, settings)
@@ -362,11 +381,15 @@ export class FinancialExemptionsService {
       const baseTotal = Number(base?.total ?? 0), grantorTotal = Number(mine?.total ?? 0) + Number(estimate.amount)
       if (baseTotal > 0 && (grantorTotal / baseTotal) * 100 > settings.maxPctPerGrantor) {
         const pct = ((grantorTotal / baseTotal) * 100).toFixed(1)
+        // الحد محسوب على خصومات المسير كله. النسبة نفسها بتتقال للي المسير كله في نطاقه بس: لحساب فرع والمسير فيه فروع تانية
+        // النسبة بتدل على إجمالي خصومات الفروع التانية، فبيتقال له إن الحد اتعدّى من غير الرقم
+        const wholeRun = branchScopeOf(user) === null || [...(await this.runOrgs(em, run.id)).values()].every(member => this.inBranch(user, member.branchId))
+        const share = wholeRun ? `ستبلغ ${pct}% من خصوماته والحد ${settings.maxPctPerGrantor}%` : `ستتجاوز حد ${settings.maxPctPerGrantor}% من خصوماته`
         if (hrFinalGrant) {
-          warnings.push({ code: 'EXEMPTION_GRANTOR_PCT_HR_FINAL', message: `إعفاءاتك في هذا المسير ستبلغ ${pct}% من خصوماته والحد ${settings.maxPctPerGrantor}%؛ قرار مدير الموارد البشرية نهائي فيسري الإعفاء فورًا بلا تحويل للاعتماد` })
+          warnings.push({ code: 'EXEMPTION_GRANTOR_PCT_HR_FINAL', message: `إعفاءاتك في هذا المسير ${share}؛ قرار مدير الموارد البشرية نهائي فيسري الإعفاء فورًا بلا تحويل للاعتماد` })
         } else {
           routedByPct = true
-          warnings.push({ code: 'EXEMPTION_GRANTOR_PCT_APPROVAL', message: `إعفاءاتك في هذا المسير ستبلغ ${pct}% من خصوماته والحد ${settings.maxPctPerGrantor}%؛ يُحوّل الإعفاء لاعتماد الموارد البشرية` })
+          warnings.push({ code: 'EXEMPTION_GRANTOR_PCT_APPROVAL', message: `إعفاءاتك في هذا المسير ${share}؛ يُحوّل الإعفاء لاعتماد الموارد البشرية` })
         }
       }
     }
@@ -398,6 +421,8 @@ export class FinancialExemptionsService {
 
   async create(user: JwtPayload, dto: ExemptionInputDto) {
     const id = await this.manager.transaction(async em => {
+      // صفة المانح قبل الأقفال: حساب بلا أساس مايقفلش مسير ولا موظف
+      await this.grantorFacts(em, user)
       await this.lockRun(em, dto.runId)
       await lockPayrollEmployees(em, [dto.employeeId])
       const evaluation = await this.evaluate(em, user, dto)
@@ -612,11 +637,12 @@ export class FinancialExemptionsService {
   /** قائمة إعفاءات مسير للشاشة: الحالة وحدود المنح وصلاحيات المستخدم، وهل تغيّرت الإعفاءات بعد آخر حساب (إعادة الحساب مطلوبة). */
   async runView(user: JwtPayload, runId: number) {
     return this.manager.transaction(async em => {
-      const run = await this.loadRun(em, runId)
+      // الصفة قبل قراءة المسير: حساب بلا صفة في الإعفاءات مايعرفش من الرد إن رقم المسير موجود
       const facts = await this.org.facts(em, user)
       if (!this.privileged(user) && !facts.departments.size) forbidden('EXEMPTION_FORBIDDEN', 'عرض إعفاءات المسير يتطلب صلاحية الإعفاءات أو إدارة قسم')
+      const run = await this.loadRun(em, runId)
       const orgs = await this.runOrgs(em, runId)
-      await this.assertRunInScope(em, user, facts, runId, orgs)
+      await this.assertRunInScope(em, user, runId, orgs)
       const settings = await this.settings(em)
       const rows = await em.getRepository(PayrollFinancialExemption).find({ where: { runId }, order: { id: 'DESC' } })
       const employees = rows.length ? new Map((await em.getRepository(Employee).find({ where: { id: In([...new Set(rows.map(row => row.employeeId))]) }, select: { id: true, branchId: true, departmentId: true } })).map(row => [row.id, row])) : new Map<number, Employee>()
@@ -644,12 +670,12 @@ export class FinancialExemptionsService {
   /** من يمكن للمستخدم إعفاؤه في المسير، أو (مع employeeId) خصومات الموظف القابلة للإعفاء في آخر حساب مع المحمي والحدود. */
   async candidates(user: JwtPayload, runId: number, employeeId?: number) {
     return this.manager.transaction(async em => {
-      const run = await this.loadRun(em, runId)
       const settings = await this.settings(em)
       const facts = await this.org.facts(em, user)
       const hr = userHasPerm(user, GRANT)
       if (!hr && !facts.departments.size) forbidden('EXEMPTION_FORBIDDEN', 'منح الإعفاء المالي للموارد البشرية أو لمدير القسم أو الجهة المالكة')
-      await this.assertRunInScope(em, user, facts, runId, await this.runOrgs(em, runId))
+      const run = await this.loadRun(em, runId)
+      await this.assertRunInScope(em, user, runId, await this.runOrgs(em, runId))
       const ownedTypes = facts.departments.size ? new Set((await em.getRepository(DeductionType).find({ select: { id: true, ownerDepartmentId: true } }))
         .filter(type => type.ownerDepartmentId && facts.departments.has(type.ownerDepartmentId)).map(type => type.id)) : new Set<number>()
       const basesOf = (org: Pick<MemberOrg, 'branchId' | 'departmentId' | 'employeeId'>, typedTypeIds: number[]) => {
@@ -679,7 +705,9 @@ export class FinancialExemptionsService {
           .filter(row => row.bases.length).map(row => ({ ...row, basisLabels: row.bases.map(basis => EXEMPTION_LABELS.bases[basis]) }))
           .sort((a, b) => (a.fullName ?? '').localeCompare(b.fullName ?? '', 'ar')) }
       }
-      const org = await this.memberOrg(em, run, employeeId)
+      const org = await this.scopedMemberOrg(em, user, run, employeeId, 'الموظف خارج نطاق منح الإعفاء لك')
+      // موظف برّه فروع الحساب مالوش أساس مهما كانت قيوده: الرفض قبل قراءة بنده (مايتأثرش بحالة حساب بنده)
+      if (!this.inBranch(user, org.branchId)) forbidden('EXEMPTION_OUT_OF_SCOPE', 'الموظف خارج نطاق منح الإعفاء لك')
       const entries = await this.itemEntries(em, run, employeeId)
       const bases = basesOf(org, entries.debits.map(row => row.deductionTypeId).filter((id): id is number => !!id))
       if (!bases.length) forbidden('EXEMPTION_OUT_OF_SCOPE', 'الموظف خارج نطاق منح الإعفاء لك')

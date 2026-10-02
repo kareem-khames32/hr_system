@@ -852,7 +852,9 @@ export class PayrollPolicyService {
   }
 
   // المراجعة نفسها تخدم الفحص (قراءة) والنشر (تحت القفل الحصري)؛ لا يُنشر ما لم يُفحص بالقواعد نفسها.
-  private async publishReview(em: EntityManager, policy: PayrollPolicy, version: PayrollPolicyVersion) {
+  // namedRuns: أرقام المسيرات المعتمدة اللي بتمنع النشر بتتقال للي يقدر يقراها — حساب الشركة، أو سياسة مملوكة لفرع (مسيراتها كلها جوه الفرع ده).
+  // حساب فرع بيراجع سياسة عامة: مسيراتها ممكن تكون في فروع تانية، فبيتقال له المانع من غير أرقام ولا شهور
+  private async publishReview(em: EntityManager, policy: PayrollPolicy, version: PayrollPolicyVersion, namedRuns = true) {
     const issues: PayrollPolicyPublishIssue[] = [], warnings: PayrollPolicyPublishIssue[] = []
     if (!policy.isActive) issues.push({ code: 'POLICY_ARCHIVED', message: 'هوية السياسة مؤرشفة؛ لا تُنشر نسخها' })
     if (version.status !== 'DRAFT' || version.frozenAt !== null || version.publishedAt !== null || version.publishedBy !== null) {
@@ -902,7 +904,9 @@ export class PayrollPolicyService {
       WHERE ([policyId] = @0${byVersion ? ' OR [policyVersionId] IN (SELECT [id] FROM [payroll_policy_versions] WHERE [policyId] = @0)' : ''})
         AND [status] IN ('APPROVED', 'PAID') AND [endDate] >= @1${version.effectiveTo === null ? '' : ' AND [startDate] <= @2'} ORDER BY [startDate]`,
     version.effectiveTo === null ? [policy.id, version.effectiveFrom] : [policy.id, version.effectiveFrom, version.effectiveTo])
-    if (lockedRuns.length) issues.push({ code: 'POLICY_PERIOD_LOCKED', message: `مسيرات معتمدة أو مصروفة بهذه السياسة داخل السريان: ${lockedRuns.map(run => `#${run.id} (${run.period})`).join('، ')}؛ اختر بداية بعدها` })
+    if (lockedRuns.length) issues.push({ code: 'POLICY_PERIOD_LOCKED', message: namedRuns
+      ? `مسيرات معتمدة أو مصروفة بهذه السياسة داخل السريان: ${lockedRuns.map(run => `#${run.id} (${run.period})`).join('، ')}؛ اختر بداية بعدها`
+      : 'توجد مسيرات معتمدة أو مصروفة بهذه السياسة داخل السريان؛ اختر بداية بعدها' })
     return { publishable: issues.length === 0, issues, warnings, cycle, periods, supersedes,
       definitionStatus: view.definitionStatus, collectionState: view.collectionState }
   }
@@ -915,7 +919,7 @@ export class PayrollPolicyService {
         SELECT @result AS lockResult;`, [`hr:payroll:policy:${policyId}`])
       if (!lock.length || Number(lock[0].lockResult) < 0) throw new ConflictException('تعذر مراجعة النشر أثناء تعديل جارٍ على السياسة؛ حاول مجددًا')
       const policy = await this.policy(em, user, policyId), version = await this.version(em, policyId, versionId)
-      const review = await this.publishReview(em, policy, version)
+      const review = await this.publishReview(em, policy, version, branchScopeOf(user) === null || policy.branchId !== null)
       const capabilities = this.capabilities(user, policy)
       // النسخة المنشورة: تُعاد حساب بصمة محتواها الحالي وتُقارن بالختم المحفوظ (أي عبث مباشر بالقاعدة يظهر هنا).
       const integrity = await this.integrity(em, version)
@@ -937,7 +941,7 @@ export class PayrollPolicyService {
       await this.lock(em, String(policyId))
       const policy = await this.policy(em, user, policyId, true), version = await this.version(em, policyId, versionId)
       this.expected(version.revision, dto.expectedRevision)
-      const review = await this.publishReview(em, policy, version)
+      const review = await this.publishReview(em, policy, version, branchScopeOf(user) === null || policy.branchId !== null)
       if (!review.publishable) {
         throw new ConflictException({ code: 'POLICY_PUBLISH_BLOCKED', message: `تعذر نشر النسخة: ${review.issues.map(issue => issue.message).join('؛ ')}`, issues: review.issues, warnings: review.warnings })
       }

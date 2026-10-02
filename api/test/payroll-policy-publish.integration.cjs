@@ -228,6 +228,17 @@ test('Publishing checks cycle alignment, closes the previous published version a
   const byVersion = expectStatus(await request(hrManager, 'GET', versionRoute(aswan.policy.id, aswan.versions[0].id, '/publish-check')), 200)
   const lockedByVersion = byVersion.issues.find(issue => issue.code === 'POLICY_PERIOD_LOCKED')
   assert.ok(lockedByVersion && lockedByVersion.message.includes(`#${versionRun.id}`), JSON.stringify(byVersion.issues))
+
+  // سياسة عامة (كل الفروع) ومسير معتمد بيها في فرع تاني: حساب فرع القاهرة بيتقال له المانع من غير رقم المسير ولا شهره، وحساب الشركة بياخدهم
+  const general = expectStatus(await request(admin, 'POST', endpoint, { code: 'GENERALLOCK', name: 'مجموعة عامة للفروع', effectiveFrom: '2026-09-23', settings: cycle23 }), 201)
+  const foreignRun = await repo('PayrollRun').save({ name: 'مسير فرع آخر بالمجموعة العامة', branchId: branchB.id, scopeType: 'BRANCH', scopeIds: JSON.stringify([branchB.id]),
+    employeeIds: JSON.stringify([]), policyId: general.policy.id, period: '2026-12', startDate: '2026-11-23', endDate: '2026-12-22', status: 'APPROVED',
+    totalNet: 0, approvedBy: admin.id, approvedAt: new Date('2026-12-23T08:00:00Z'), snapshotVersion: 0 })
+  const lockedIssue = async user => expectStatus(await request(user, 'GET', versionRoute(general.policy.id, general.versions[0].id, '/publish-check')), 200)
+    .issues.find(issue => issue.code === 'POLICY_PERIOD_LOCKED')
+  const scopedIssue = await lockedIssue(hrManager)
+  assert.ok(scopedIssue && !scopedIssue.message.includes(`#${foreignRun.id}`) && !scopedIssue.message.includes('2026-12'), JSON.stringify(scopedIssue))
+  assert.ok((await lockedIssue(admin)).message.includes(`#${foreignRun.id} (2026-12)`))
 })
 
 test('Reviewer defect: a fixed end day that breaks contiguity cannot be created, saved or published; start − 1 equals the derived cycle; codes are generated', async () => {

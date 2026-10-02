@@ -75,6 +75,14 @@ test('membership preview view shows the read-only notice, coverage, the formula 
   for (const value of ['FIXED_30', 'أساس الأيام', '0.500000', 'EXC_ALREADY_IN_RUN', 'TRANSFERRED_OUT', 'المسير #42', 'href="/payroll?run=42"', 'CAIRO']) assert.ok(!text.includes(value), value)
   assert.ok(!html.includes('استبعاد بسبب مكتوب'), 'without onExclude the preview offers no action')
   previewFixture = preview
+
+  // حساب معاه صلاحية الحساب من غير «عرض مسيرات الرواتب»: الخادم بيرجّع المبالغ null، فالأسماء والتغطية تظهر والمبالغ «—» من غير شارتَي الإجمالي
+  const blind = { ...preview, previewHash: null, totals: { ...preview.totals, monthlyGross: null, earnedGross: null },
+    included: preview.included.map(row => ({ ...row, monthlyGross: null, earnedGross: null })) }
+  const blindText = renderToStaticMarkup(React.createElement(PayrollMembershipPreviewView, { preview: blind, currency: 'SAR' })).replace(/<!-- -->/g, '')
+  for (const value of ['ليلى', '2026-08-08 → 2026-08-22', 'الداخلون: 1', 'سجل الأجر الشهري']) assert.ok(blindText.includes(value), value)
+  for (const value of ['6,000.00', '3,000.00', 'راتب الشهر للداخلين', 'المستحق قبل البنود:', 'NaN']) assert.ok(!blindText.includes(value), value)
+  assert.ok(blindText.includes('—'), 'the two amount cells show a dash')
 })
 
 // معاينة فيها موظف بمشكلة بيانات (يمنع الحساب) وآخر مستبعد يدويًا.

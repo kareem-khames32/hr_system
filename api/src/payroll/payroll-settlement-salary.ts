@@ -79,7 +79,8 @@ const isSalaryLine = (line: { isAuto?: boolean | null; type?: string | null; lab
  * إمّا إعادة حساب بأثر رجعي غيّرت الرقم، أو تصفية اتعمدت قبل ما مسير الشهر يتحسب فبقيت بلا بند راتب
  * (ساعتها الصف مستبعد من المستحق والراتب هيضيع) — الحالتين بيتمسكوا قبل ما فلوس تتحرك.
  */
-export async function assertSettlementSalaryMatchesItem(em: EntityManager, employeeId: number, caseId: number, netPay: number) {
+// amounts = false للي معاه صلاحية الاعتماد أو الصرف من غير «عرض مسيرات الرواتب»: الرفض بيتقال من غير صافي الموظف وراتب تصفيته
+export async function assertSettlementSalaryMatchesItem(em: EntityManager, employeeId: number, caseId: number, netPay: number, amounts = true) {
   if (!Number.isSafeInteger(caseId) || caseId < 1) return
   const kases: Array<{ status: string }> = await em.query(
     'SELECT [status] AS status FROM [offboarding_cases] WHERE [id] = @0 AND [employeeId] = @1', [caseId, employeeId])
@@ -92,11 +93,11 @@ export async function assertSettlementSalaryMatchesItem(em: EntityManager, emplo
   if (!rows.length) {
     throw new ConflictException(
       `التصفية المعتمدة #${caseId} ما فيهاش بند «${SETTLEMENT_SALARY_LINE_PREFIX}» (اتعمدت قبل حساب مسير الشهر) — ` +
-      `راتب الشهر (${money(item)}) مستبعد من المستحق للصرف وهيضيع؛ أعد فتح التصفية وولّد بنودها من المسير قبل الاعتماد أو الصرف`)
+      `راتب الشهر${amounts ? ` (${money(item)})` : ''} مستبعد من المستحق للصرف وهيضيع؛ أعد فتح التصفية وولّد بنودها من المسير قبل الاعتماد أو الصرف`)
   }
   if (settled !== item) {
     throw new ConflictException(
-      `صافي الموظف في المسير (${money(item)}) لا يطابق راتب آخر شهر في تصفيته المعتمدة #${caseId} (${money(settled)}) — ` +
+      `صافي الموظف في المسير${amounts ? ` (${money(item)})` : ''} لا يطابق راتب آخر شهر في تصفيته المعتمدة #${caseId}${amounts ? ` (${money(settled)})` : ''} — ` +
       'سوّ الفرق بتسوية مالية على التصفية قبل الاعتماد أو الصرف')
   }
 }

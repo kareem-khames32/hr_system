@@ -12,7 +12,10 @@
 //  LK-05) GET /reports/payroll (لوحة التقارير) وآخر المسيرات في GET /dashboard/stats: لقارئ الرواتب بس.
 //  LK-06) تقرير حوكمة الإعفاءات: صافي المسير المحفوظ لقارئ الشركة بس، والمكافآت بموظفي نطاق القارئ.
 //  LK-07) (CR23-B02) إعادة فتح المسير وإلغاؤه بصلاحية العملية من غير «عرض مسيرات الرواتب»: العملية بتتنفذ، والرد حالة المسير بس
-//         من غير بنود ولا أعضاء ولا أسماء ولا مبالغ. آخر اختبار في الملف لأنه بيلغي المسير متعدد الفروع.
+//         من غير بنود ولا أعضاء ولا أسماء ولا مبالغ. بيلغي المسير متعدد الفروع، فأي اختبار بعده مابيستخدمهوش.
+//  LK-08) (CR24-B02) «ضم موظفين للمسير» (المفرد والمختلط) بصلاحية الحساب من غير «عرض مسيرات الرواتب»: العضوية بتتغير، والحقل run
+//         حالة المسير بس. وموظف فرع تاني أو رقم مش موجود بيتخطوا برد واحد من غير اسم ولا كود. قارئ الرواتب بياخد تفاصيل المسير زي GET.
+//  LK-09) معاينة عضوية المسير المحفوظ بصلاحية الحساب من غير عرض الرواتب: الأسماء والتغطية من غير راتب الشهر ولا المستحق ولا البصمة.
 // Run (من api/): node --test test/payroll-response-leaks.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -36,6 +39,8 @@ const B = {}, E = {}, U = {}
 let run, mineItem, colleagueItem
 // مسير تاني فيه موظف من كل فرع، ورد اعتماد المسير الأول
 let run2, nearItem, farItem, approveResponse
+// مسير تالت محسوب (مش معتمد) لعمليات العضوية والمعاينة
+let run3
 
 function assertDisposable() {
   assert.match(database, migrate.DISPOSABLE_DATABASE); assert.match(database, NAME)
@@ -74,6 +79,10 @@ const COLLEAGUE_SALARY = 17341.37, MY_SALARY = 6000
 // موظف الفرع التاني في المسير متعدد الفروع: راتبه ومكافأته أرقام مميزة برضه
 const FAR_SALARY = 8123.45, FAR_BONUS = 4321.09
 const mentionsColleague = body => { const text = JSON.stringify(body); return text.includes('17341') || text.includes(`"employeeId":${E.colleague.id}`) }
+// مسير العضوية: رواتب مميزة لأعضائه وللموظف اللي بينضم ولموظف الفرع التاني
+const M1_SALARY = 9111.11, M2_SALARY = 9222.22, M3_SALARY = 9333.33, FOREIGN_SALARY = 5555.55, MISSING_EMPLOYEE_ID = 987654321
+const membershipLeaks = body => { const text = JSON.stringify(body); return ['9111', '9222', '9333', '5555', '"items"', '"members"', '"engine"', '"totalNet"', '"netPay"',
+  'موظف فرع تاني برّه المسير', 'LK-009'].filter(part => text.includes(part)) }
 
 before(async () => {
   assert.equal(env.DB_TYPE || 'mssql', 'mssql')
@@ -136,6 +145,26 @@ before(async () => {
   const report2 = ok(await request(U.admin, 'GET', `/payroll/runs/${run2.id}/unassigned`))
   ok(await request(U.admin, 'POST', `/payroll/runs/${run2.id}/unassigned-ack`, { reportHash: report2.reportHash }), 201)
   ok(await request(U.admin, 'POST', `/payroll/runs/${run2.id}/approve`), 201)
+
+  // مسير العضوية (بعد اعتماد الاتنين اللي فوق عشان مايغيّرش تقاريرهم): محسوب ومفتوح، وكل أعضائه في فرع حساب المحاسب
+  E.m1 = await employee('LK-006', 'عضو أول في مسير العضوية', M1_SALARY)
+  E.m2 = await employee('LK-007', 'عضو تاني في مسير العضوية', M2_SALARY)
+  E.m3 = await employee('LK-008', 'موظف بينضم للمسير', M3_SALARY)
+  E.foreign = await employee('LK-009', 'موظف فرع تاني برّه المسير', FOREIGN_SALARY, B.other)
+  for (const emp of [E.m1, E.m2, E.m3, E.foreign]) await attendance(emp)
+  // صلاحية الحساب لوحدها (حساب فرع)، ومعاها عرض الرواتب
+  U.calculator = await user('calculator@leaks.test', 'employee', B.main, null, ['payroll.calculate'])
+  U.calcReader = await user('calcreader@leaks.test', 'hr_manager', B.main, null, ['payroll.calculate', 'payroll.view'])
+  // تغيير العضوية مع إعادة الحساب متاح لمسير له تعريف: مسودة بمعادلة منشورة (نفس دورة يوم 23) ثم احتسابها
+  const policy = ok(await request(U.admin, 'POST', '/payroll/policies', { name: 'معادلة مسير العضوية', effectiveFrom: startDate,
+    settings: { defaultPeriodType: 'CUSTOM_DAY_RANGE', cycleStartDay: 23, cycleEndMode: 'DERIVED', cycleEndDay: null } }), 201)
+  const [version] = policy.versions
+  const published = ok(await request(U.admin, 'POST', `/payroll/policies/${policy.policy.id}/versions/${version.id}/publish`,
+    { expectedRevision: version.revision, reason: 'نشر معادلة اختبار العضوية' }))
+  const draft = ok(await request(U.admin, 'POST', '/payroll/runs', { name: 'مسير العضوية', policyVersionId: published.version.id, period,
+    filters: { employeeIds: [E.m1.id, E.m2.id] } }), 201)
+  run3 = ok(await request(U.admin, 'POST', `/payroll/runs/${draft.id}/calculate`, {}), 201)
+  assert.deepEqual([run3.status, run3.items.length], ['CALCULATED', 2])
 }, { timeout: 300000 })
 
 after(async t => {
@@ -309,4 +338,65 @@ test('LK-07: إعادة فتح المسير وإلغاؤه من غير «عرض 
   const detail = ok(await request(U.admin, 'GET', `/payroll/runs/${run2.id}`))
   assert.equal(detail.status, 'CANCELLED')
   assert.deepEqual(detail.items.map(item => item.employeeId).sort((a, b) => a - b), [E.near.id, E.far.id].sort((a, b) => a - b))
+})
+
+test('LK-08: «ضم موظفين للمسير» بصلاحية الحساب من غير «عرض مسيرات الرواتب» — العضوية بتتغير والرد حالة المسير بس', async () => {
+  // مايقدرش يقرا المسير أصلًا
+  assert.equal((await request(U.calculator, 'GET', `/payroll/runs/${run3.id}`)).status, 403)
+
+  // اختيار مختلط مابيغيّرش العضوية: عضو موجود بالفعل، وموظف فرع تاني، ورقم مش موجود. الرد مايبقاش باب لقراءة المسير ولا لأسماء فرع تاني
+  const bulk = ok(await request(U.calculator, 'POST', `/payroll/runs/${run3.id}/members/bulk`,
+    { employeeIds: [E.m1.id, E.foreign.id, MISSING_EMPLOYEE_ID], reason: 'تأكيد عضو موجود بالفعل' }), 201)
+  assert.deepEqual(Object.keys(bulk.run).sort(), SAFE_RUN_KEYS)
+  assert.deepEqual(membershipLeaks(bulk), [], 'رد الضم المختلط من غير بنود ولا مبالغ ولا اسم موظف الفرع التاني')
+  assert.deepEqual(bulk.results.map(row => [row.employeeId, row.outcome, row.skipCode, row.fullName, row.employeeCode]), [
+    [E.m1.id, 'SKIPPED', 'ALREADY_IN_RUN', 'عضو أول في مسير العضوية', 'LK-006'],
+    [E.foreign.id, 'SKIPPED', 'OUT_OF_BRANCH_SCOPE', null, null],
+    [MISSING_EMPLOYEE_ID, 'SKIPPED', 'OUT_OF_BRANCH_SCOPE', null, null],
+  ])
+  // موظف الفرع التاني والرقم اللي مش موجود: نفس الرد بالحرف
+  const [, foreign, missing] = bulk.results.map(({ employeeId: _id, ...row }) => row)
+  assert.deepEqual(foreign, missing)
+
+  // ضم موظف فعلًا: المسير المحسوب بيتعاد حسابه بالعضو الجديد
+  const single = ok(await request(U.calculator, 'POST', `/payroll/runs/${run3.id}/members`, { employeeIds: [E.m3.id], reason: 'ضم موظف جديد للمسير' }), 201)
+  assert.deepEqual(Object.keys(single.run).sort(), SAFE_RUN_KEYS)
+  assert.deepEqual([single.run.id, single.run.status, single.added, single.recalculated], [run3.id, 'CALCULATED', [E.m3.id], true])
+  assert.deepEqual(membershipLeaks(single), [], 'رد الضم من غير بنود ولا مبالغ')
+  // والعملية اتنفذت فعلًا: التلاتة في المسير بأرقامهم (الدليل إن الأرقام موجودة والرد ماجابهاش)
+  const detail = ok(await request(U.admin, 'GET', `/payroll/runs/${run3.id}`))
+  assert.deepEqual(detail.items.map(item => item.employeeId).sort((a, b) => a - b), [E.m1.id, E.m2.id, E.m3.id].sort((a, b) => a - b))
+  assert.deepEqual(membershipLeaks(detail).filter(part => /^9/.test(part)), ['9111', '9222', '9333'])
+
+  // موظف الفرع التاني بالنداء المفرد: مرفوض من غير اسمه، وبنفس رسالة الرقم اللي مش موجود
+  const refusals = []
+  for (const id of [E.foreign.id, MISSING_EMPLOYEE_ID]) {
+    const refused = await request(U.calculator, 'POST', `/payroll/runs/${run3.id}/members`, { employeeIds: [id], reason: 'محاولة ضم من برّه الفرع' })
+    assert.equal(refused.status, 400, JSON.stringify(refused.body))
+    assert.deepEqual(membershipLeaks(refused.body), [])
+    refusals.push(String(refused.body.message).replace(String(id), '#'))
+  }
+  assert.equal(refusals[0], refusals[1])
+
+  // قارئ الرواتب: الرد زي ما كان — تفاصيل المسير ببنوده، مطابقة لشاشة المسير
+  const reader = ok(await request(U.calcReader, 'POST', `/payroll/runs/${run3.id}/members/bulk`, { employeeIds: [E.m1.id], reason: 'عرض مخول لعضو موجود' }), 201)
+  assert.deepEqual(reader.run, ok(await request(U.calcReader, 'GET', `/payroll/runs/${run3.id}`)))
+  assert.equal(reader.run.items.length, 3)
+})
+
+test('LK-09: معاينة عضوية المسير بصلاحية الحساب من غير «عرض مسيرات الرواتب» — الأسماء والتغطية من غير راتب الشهر ولا المستحق', async () => {
+  const route = `/payroll/runs/${run3.id}/membership-preview`
+  const full = ok(await request(U.calcReader, 'GET', route))
+  assert.match(full.previewHash, /^[a-f0-9]{64}$/)
+  assert.ok(full.included.length >= 2 && full.included.every(row => row.monthlyGross > 0 && row.earnedGross > 0), JSON.stringify(full.included))
+  assert.equal(full.totals.monthlyGross, Math.round(full.included.reduce((sum, row) => sum + row.monthlyGross * 100, 0)) / 100)
+
+  const blind = ok(await request(U.calculator, 'GET', route))
+  assert.deepEqual([blind.previewHash, blind.totals.monthlyGross, blind.totals.earnedGross], [null, null, null])
+  // نفس الصفوف بالحرف، والمبالغ بس اللي اتشالت
+  assert.deepEqual(blind.included, full.included.map(row => ({ ...row, monthlyGross: null, earnedGross: null })))
+  assert.deepEqual(blind.excluded, full.excluded)
+  assert.deepEqual({ ...blind.totals, monthlyGross: full.totals.monthlyGross, earnedGross: full.totals.earnedGross }, full.totals)
+  assert.ok(blind.included.some(row => row.fullName === 'عضو أول في مسير العضوية' && row.coverDays > 0), 'الأسماء والتغطية زي ما هي')
+  assert.deepEqual(['9111', '9222', '9333'].filter(part => JSON.stringify(blind).includes(part)), [], 'ولا راتب في المعاينة')
 })

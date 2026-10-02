@@ -134,7 +134,7 @@ export type PayrollBulkMembershipOutcome = typeof PAYROLL_BULK_MEMBERSHIP_OUTCOM
 export const PAYROLL_BULK_SKIP_LABELS: Record<string, string> = {
   ALREADY_IN_RUN: 'موجود في المسير ده أصلًا',
   LOCKED_RUN: 'مسيره الحالي في الشهر ده معتمد أو مصروف — الشهر المقفول ما يتغيرش',
-  OUT_OF_BRANCH_SCOPE: 'خارج نطاق فرعك',
+  OUT_OF_BRANCH_SCOPE: 'مش موجود أو خارج نطاق فرعك',
   SOURCE_OUT_OF_SCOPE: 'مسيره الحالي خارج نطاق فرعك',
   SOURCE_NO_NAME: 'مسيره الحالي قديم بلا اسم — اعمله من «مسير جديد» باسم ثابت قبل النقل',
   SOURCE_RUN_TYPE: 'مسيره الحالي تكميلي أو عكس صرف — غيّر العضوية من المسير العادي',
@@ -185,14 +185,17 @@ export function splitPayrollBulkMembership(candidates: PayrollBulkMembershipCand
     employeeId: candidate.employeeId, fullName: candidate.fullName, employeeCode: candidate.employeeCode, outcome: 'SKIPPED',
     fromRunId: from?.id ?? null, fromRunName: from?.name ?? null, skipCode: code, skipReason: payrollBulkSkipText(code),
   })
+  // فصل الفروع: حساب مقيد بفروع مايعرفش من الرد إن رقم موظف برّه فروعه موجود ولا اسمه ولا كوده — «مش موجود» و«خارج النطاق» رد واحد
+  const unnamed = (candidate: PayrollBulkMembershipCandidate): PayrollBulkMembershipCandidate => ({ ...candidate, fullName: null, employeeCode: null })
   for (const candidate of candidates) {
+    if (!candidate.exists) { skip(unnamed(candidate), input.branchScope === null ? 'EMPLOYEE_NOT_FOUND' : 'OUT_OF_BRANCH_SCOPE'); continue }
+    if (input.branchScope !== null && (candidate.branchId == null || !input.branchScope.includes(Number(candidate.branchId)))) { skip(unnamed(candidate), 'OUT_OF_BRANCH_SCOPE'); continue }
     namesById.set(candidate.employeeId, { fullName: candidate.fullName, employeeCode: candidate.employeeCode })
-    if (!candidate.exists) { skip(candidate, 'EMPLOYEE_NOT_FOUND'); continue }
-    if (input.branchScope !== null && (candidate.branchId == null || !input.branchScope.includes(Number(candidate.branchId)))) { skip(candidate, 'OUT_OF_BRANCH_SCOPE'); continue }
     if (candidate.homes.some(run => run.id === input.targetRunId)) { skip(candidate, 'ALREADY_IN_RUN'); continue }
     const home = candidate.homes[0] ?? null
     if (!home) { groups.set(null, [...(groups.get(null) ?? []), candidate.employeeId]); continue }
-    if (!home.visible) { skip(candidate, 'SOURCE_OUT_OF_SCOPE', home); continue }
+    // مسير الموظف الحالي برّه نطاق الحساب: السبب بيتقال من غير رقم المسير ولا اسمه
+    if (!home.visible) { skip(candidate, 'SOURCE_OUT_OF_SCOPE'); continue }
     if (home.runType !== 'REGULAR') { skip(candidate, 'SOURCE_RUN_TYPE', home); continue }
     if (!(PAYROLL_MEMBERSHIP_OPEN_STATUSES as readonly string[]).includes(home.status)) { skip(candidate, 'LOCKED_RUN', home); continue }
     if (!payrollRunSeriesName(home.name)) { skip(candidate, 'SOURCE_NO_NAME', home); continue }

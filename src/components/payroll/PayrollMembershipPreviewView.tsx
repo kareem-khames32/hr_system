@@ -7,7 +7,8 @@ import {
 import { formatMoney } from '../../lib/money'
 
 // الخطوة 22 (B5): منسّق المبالغ الموحد
-const money = (value: number) => formatMoney(value)
+// المبلغ null = الحساب معاه صلاحية الحساب من غير «عرض مسيرات الرواتب»، فالخادم مابيرجّعش المبالغ
+const money = (value: number | null) => value === null ? '—' : formatMoney(value)
 const salaryKind: Record<string, string> = { MONTHLY_HISTORY: 'سجل الأجر الشهري', CURRENT_FILE_UNVERIFIED: 'راتب الملف — غير موثق' }
 const statusText: Record<string, string> = { DRAFT: 'مسودة', CALCULATED: 'محسوب', IN_REVIEW: 'مراجعة', APPROVED: 'معتمد', PAID: 'مصروف', CANCELLED: 'ملغى' }
 
@@ -49,8 +50,8 @@ export function PayrollMembershipPreviewView({ preview, currency, onExclude, exc
       </div>
       <div className="flex flex-wrap gap-2">
         {chips.map(([label, value, tone]) => <span key={label} className={`badge ${tone}`}>{label}: {value}</span>)}
-        <span className="badge bg-gray-100 text-gray-700">راتب الشهر للداخلين: {money(totals.monthlyGross)} {currency}</span>
-        <span className="badge bg-gray-100 text-gray-700">المستحق قبل البنود: {money(totals.earnedGross)} {currency}</span>
+        {totals.monthlyGross !== null && <span className="badge bg-gray-100 text-gray-700">راتب الشهر للداخلين: {money(totals.monthlyGross)} {currency}</span>}
+        {totals.earnedGross !== null && <span className="badge bg-gray-100 text-gray-700">المستحق قبل البنود: {money(totals.earnedGross)} {currency}</span>}
       </div>
       {preview.emptyScopeRequiresConfirmation && <p role="alert" className="rounded-xl bg-red-50 p-3 text-sm text-red-700">
         النطاق لا يضم أي موظف في آخر يوم من الفترة؛ الحفظ يتطلب تأكيدًا صريحًا مع السبب.</p>}

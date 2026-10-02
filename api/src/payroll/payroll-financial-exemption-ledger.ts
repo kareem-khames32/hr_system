@@ -95,7 +95,7 @@ async function attachmentDays(em: EntityManager) {
  * قبل اعتماد المسير (EX-01 قاعدة 4، EX-07 قاعدة 1): لا إعفاء بانتظار الاعتماد، والحساب طبّق الإعفاءات النشطة الحالية نفسها بمراجعاتها
  * (منح أو إلغاء بعد الحساب يلزم إعادة الحساب)، والمبلغ المُسقط فعلًا فوق حد المرفق يحتاج مرفقًا.
  */
-export async function assertRunExemptionsForApproval(em: EntityManager, run: Pick<PayrollRun, 'id'>, items: PayrollItem[]) {
+export async function assertRunExemptionsForApproval(em: EntityManager, run: Pick<PayrollRun, 'id'>, items: PayrollItem[], amounts = true) {
   const rows = await em.getRepository(PayrollFinancialExemption).find({ where: { runId: run.id, status: In(['PENDING_APPROVAL', 'ACTIVE']) }, order: { id: 'ASC' } })
   const pending = rows.filter(row => row.status === 'PENDING_APPROVAL')
   if (pending.length) {
@@ -113,6 +113,8 @@ export async function assertRunExemptionsForApproval(em: EntityManager, run: Pic
     for (const row of active) {
       const amount = saved?.totals.byExemption.find(entry => entry.exemptionId === row.id)?.amount ?? '0.00'
       if (exemptionNeedsAttachment(amount, dayRate, days, row.attachmentRef)) {
+        // المبلغ والحد (= أيام × سعر يوم الموظف) لقارئ الرواتب بس؛ صلاحية الاعتماد لوحدها بتاخد رقم الإعفاء
+        if (!amounts) throw conflict('EXEMPTION_ATTACHMENT_REQUIRED', `الإعفاء #${row.id} أسقط مبلغًا فوق حد المرفق بلا مرفق؛ أضف مرجع المرفق للإعفاء ثم أعد الاعتماد`, { exemptionId: row.id })
         throw conflict('EXEMPTION_ATTACHMENT_REQUIRED', `الإعفاء #${row.id} أسقط ${amount} وهو فوق حد ${exemptionAttachmentThreshold(dayRate, days)} بلا مرفق؛ أضف مرجع المرفق للإعفاء ثم أعد الاعتماد`,
           { exemptionId: row.id, amount, threshold: exemptionAttachmentThreshold(dayRate, days) })
       }

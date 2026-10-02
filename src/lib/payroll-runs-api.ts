@@ -38,7 +38,8 @@ interface PreviewCommon {
 }
 export interface PayrollPreviewIncluded extends PreviewCommon {
   hireDate: string; leaveDate: string | null; coverFrom: string; coverTo: string; coverDays: number; partial: boolean
-  prorataFactor: number; monthlyDays: number; dayBasis: string; monthlyGross: number; earnedGross: number
+  // المبالغ null لحساب معاه صلاحية الحساب من غير «عرض مسيرات الرواتب» (الخادم مابيرجّعهاش له)
+  prorataFactor: number; monthlyDays: number; dayBasis: string; monthlyGross: number | null; earnedGross: number | null
   salarySource: { kind: 'MONTHLY_HISTORY' | 'CURRENT_FILE_UNVERIFIED'; referencePeriod: string; effectivePayrollPeriod: string | null; currency: string | null; warning: string | null }
   draftConflicts: PayrollRunConflictRef[]
 }
@@ -49,13 +50,13 @@ export interface PayrollPreviewExcluded extends PreviewCommon {
   transferredOut: { lastInScopeDate: string; branchName: string | null; departmentName: string | null; teamName: string | null } | null
 }
 export interface PayrollMembershipPreview {
-  readOnly: true; previewHash: string
+  readOnly: true; previewHash: string | null
   run: { id: number | null; name: string | null; period: string; startDate: string; endDate: string; policy: PayrollRunPolicyRef | null }
   basis: { monthlyDays: number; dayBasis: string }
   selection: PayrollRunSelection
   emptyScopeRequiresConfirmation: boolean
   totals: { candidates: number; included: number; excluded: number; partial: number; dataProblems: number; alreadyInRun: number; transferredOut: number
-    manualExclusions: number; draftConflictEmployees: number; monthlyGross: number; earnedGross: number
+    manualExclusions: number; draftConflictEmployees: number; monthlyGross: number | null; earnedGross: number | null
     settlementPayout: number; suspended: number }
   included: PayrollPreviewIncluded[]; excluded: PayrollPreviewExcluded[]
   unusedExclusions: Array<{ employeeId: number; reason: string }>
@@ -70,7 +71,8 @@ export interface PayrollUnassignedRow {
   runs: Array<{ runId: number | null; name: string | null; status: string; period: string; startDate: string; endDate: string; exclusionReason: string | null }>
 }
 export interface PayrollUnassignedAck {
-  id: number; snapshotVersion: number; scopeBranchId: number | null; reportHash: string; rowCount: number; note: string | null
+  // reportHash وrowCount = null لإقرار نطاقه أوسع من نطاق القارئ (إقرار حساب الشركة لقارئ فرع)
+  id: number; snapshotVersion: number; scopeBranchId: number | null; reportHash: string | null; rowCount: number | null; note: string | null
   acknowledgedBy: number; acknowledgedByName: string | null; acknowledgedAt: string
 }
 export interface PayrollUnassignedReport {

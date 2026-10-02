@@ -42,13 +42,15 @@ export interface PayrollReconciliationEmployee {
 }
 export interface PayrollReconciliation {
   rootRunId: number
-  runs: Array<{ id: number; name: string | null; period: string; status: string; runType: PayrollRunType; runTypeLabel: string; parentRunId: number | null; totalNet: string; correctionReason: string | null }>
+  // totalNet = null لمسير فيه فروع برّه نطاق الحساب (صافيه الكلي مش بتاع قارئ فرع واحد)
+  runs: Array<{ id: number; name: string | null; period: string; status: string; runType: PayrollRunType; runTypeLabel: string; parentRunId: number | null; totalNet: string | null; correctionReason: string | null }>
   employees: PayrollReconciliationEmployee[]
   totals: { employees: number; originalNet: string; supplementaryPaidNet: string; supplementaryOpenNet: string; reversedNet: string; pendingReversalNet: string; effectiveNet: string; settlementDifference: string }
 }
 export interface PayrollSupplementaryCandidate {
   employeeId: number; fullName: string | null; employeeCode: string | null; basis: string; eligible: boolean; reason: string | null
-  draftRuns: Array<{ runId: number; status: string }>
+  // runId = null لمسودة برّه نطاق الحساب
+  draftRuns: Array<{ runId: number | null; status: string }>
   // إعفاء مالي مطبق في المسير الأصلي لمن عُكس بنده: إعفاء خصومات الحضور يُنقل للتكميلي عند إنشائه (carriedExemptionIds)
   exemptionIds?: number[]; carriedExemptionIds?: number[]; warning?: string | null
 }

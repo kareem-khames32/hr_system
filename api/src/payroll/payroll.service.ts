@@ -288,14 +288,32 @@ export class PayrollService {
     return userHasPerm(user, 'payroll.view') ? this.lightRun(run) : this.ownPayslipRun(run)
   }
 
-  // هل المسير كله في نطاق المستخدم؟ (نفس حكم assertRunAccess من غير ما يرمي)
-  private async runAccessible(user: JwtPayload, run: PayrollRun, em = this.runs.manager): Promise<boolean> {
+  // هل المسير كله في نطاق المستخدم؟ (نفس حكم assertRunAccess من غير ما يرمي) — عامة لمسار التصحيح وشاشات الشهر
+  async runAccessible(user: JwtPayload, run: PayrollRun, em = this.runs.manager): Promise<boolean> {
     try {
       await this.assertRunAccess(user, run, em)
       return true
     } catch (error) {
       if (error instanceof ForbiddenException) return false
       throw error
+    }
+  }
+
+  // فصل الفروع على مستوى البند (نفس حكم القسيمة): عضو المسير بفرع لقطته، والقديم بلا لقطة بفروع نطاق مسيره القديم.
+  // مسير فيه فروع تانية مش بيتقري كله لحساب فرع، بس بند موظف فرعه فيه بيتقري — فأي تجميع على سلسلة مسيرات بياخد بنود نطاقه بس.
+  async itemScopeOf(user: JwtPayload, runIds: number[], em = this.runs.manager): Promise<(runId: number, employeeId: number) => boolean> {
+    const scope = branchScopeOf(user)
+    if (scope === null) return () => true
+    const ids = [...new Set(runIds)]
+    if (!scope.length || !ids.length) return () => false
+    const runs = new Map((await em.getRepository(PayrollRun).find({ where: { id: In(ids) } })).map(run => [run.id, run]))
+    const members = await em.getRepository(PayrollRunMember).find({ where: { runId: In(ids) }, select: { runId: true, employeeId: true, snapshot: true } })
+    const snapshots = new Map(members.map(member => [`${member.runId}:${member.employeeId}`, member.snapshot ?? null]))
+    return (runId, employeeId) => {
+      const run = runs.get(runId)
+      if (!run) return false
+      const snapshot = snapshots.get(`${runId}:${employeeId}`)
+      return snapshot ? inBranchScope(scope, snapshot.branchId) : this.legacyBranchesInScope(run, scope)
     }
   }
 
@@ -443,7 +461,8 @@ export class PayrollService {
     }
   }
 
-  private async assertSettlementBoundary(em: EntityManager, items: PayrollItem[]) {
+  // amounts = false للي معاه صلاحية الاعتماد أو الصرف من غير «عرض مسيرات الرواتب»: الرفض بيتقال من غير صافي الموظف
+  private async assertSettlementBoundary(em: EntityManager, items: PayrollItem[], amounts = true) {
     for (const item of items) {
       const claims = await getSettlementFinancialClaims(em, item.employeeId)
       const breakdown = item.breakdown ? JSON.parse(item.breakdown) : {}
@@ -453,7 +472,7 @@ export class PayrollService {
       }
       // قرار المالك (20 سبتمبر): صف «تصفية — مصروف مع التصفية» لازم يساوي بند الراتب في التصفية المعتمدة بالظبط.
       if (breakdown.settlementPayout) {
-        await assertSettlementSalaryMatchesItem(em, item.employeeId, Number(breakdown.settlementPayout.caseId), Number(item.netPay))
+        await assertSettlementSalaryMatchesItem(em, item.employeeId, Number(breakdown.settlementPayout.caseId), Number(item.netPay), amounts)
       }
       if ((breakdown.overtimeEntryIds ?? []).length) {
         if (!Array.isArray(breakdown.overtimeEntryIds) || breakdown.overtimeEntryIds.some((id: unknown) => !Number.isSafeInteger(id) || Number(id) < 1) ||
@@ -1208,9 +1227,12 @@ export class PayrollService {
 
     // الخطوة 20: POLICY لا يصرف نتيجة فيها قيمة غائبة أو فرق بلا سبب مكتوب؛ تُرجع المعاملة كلها.
     if (policyBlocked.length) {
+      // أرقام الفرق لكل موظف (الأساسي والبدلات والصافي بالطريقتين) لقارئ الرواتب بس؛ صلاحية الحساب لوحدها بتاخد الموظف والبند والسبب
+      const reader = userHasPerm(user, 'payroll.view')
       throw new ConflictException({ code: 'PAYRUN-POLICY-PARITY-UNEXPLAINED',
         message: `وضع POLICY يصرف نتيجة محرك السياسة، ويوجد ${policyBlocked.length} فرقًا بلا سبب مكتوب أو بقيمة غائبة؛ اكتب سبب كل فرق من «محرك الحساب» أو أعد المسير إلى SHADOW`,
-        issues: policyBlocked.slice(0, 100) })
+        issues: policyBlocked.slice(0, 100).map(row => reader ? row
+          : { employeeId: row.employeeId, component: row.component, reason: row.policy === null ? 'قيمة غائبة' : 'فرق بلا سبب مكتوب' }) })
     }
     run.totalNet = totalNet
     run.status = 'CALCULATED'
@@ -1389,9 +1411,9 @@ export class PayrollService {
       await this.assertAttendanceExemptionSnapshot(em, run, items)
       await this.assertAttendanceRuleSnapshot(em, run, items)
       await this.assertSalarySourceSnapshot(em, run, items)
-      await this.assertSettlementBoundary(em, items)
+      await this.assertSettlementBoundary(em, items, userHasPerm(user, 'payroll.view'))
       // الخطوة 26 (EX-01 قاعدة 4): لا إعفاء بانتظار الاعتماد، والحساب طبّق الإعفاءات النشطة الحالية نفسها، وحد المرفق على المبلغ المُسقط فعلًا
-      await assertRunExemptionsForApproval(em, run, items)
+      await assertRunExemptionsForApproval(em, run, items, userHasPerm(user, 'payroll.view'))
       // DD-11: الرصيد السالب (المحمي يتجاوز الاستحقاق) يمنع القبول المالي — على صافي المؤثرات (من غير بدل ضغط العمل):
       // البدل مابيغطيش إجازة بلا أجر أو تأمينات زادت عن الراتب، فالمشكلة تفضل ظاهرة زي ما كانت
       const negativeNet = items.filter(item => this.effectNet(item) < 0).map(item => item.employeeId)
@@ -1499,12 +1521,12 @@ export class PayrollService {
       const employeeIds = await this.validateRunMembers(em, run, items)
       await lockPayrollEmployees(em, employeeIds)
       await this.assertAttendanceExemptionSnapshot(em, run, items)
-      await this.assertSettlementBoundary(em, items)
+      await this.assertSettlementBoundary(em, items, userHasPerm(user, 'payroll.view'))
       // DD-11 (C2): الصافي السالب المحفوظ يمنع الصرف أيضًا، لا الاعتماد وحده (صافي المؤثرات من غير بدل ضغط العمل)
       const negativeNetAtPay = items.filter(item => this.effectNet(item) < 0).map(item => item.employeeId)
       if (negativeNetAtPay.length) throw new ConflictException({ code: 'PAYRUN-NET-NEGATIVE', message: 'صافي بعض الموظفين سالب؛ أعد فتح المسير وعالج الإجازة بلا أجر أو الاستحقاق ثم أعد الحساب قبل الصرف', employeeIds: negativeNetAtPay })
       // إقفال الصرف موظف بموظف قبل أي أثر مالي: سبب مكتوب لمن لم يتعلّم «تم الصرف» (مسير بلا علامات = لا شرط)
-      const disbursement = await closePayrollRunDisbursement(em, run, items, user.sub, dto.unpaidReason)
+      const disbursement = await closePayrollRunDisbursement(em, run, items, user.sub, dto.unpaidReason, userHasPerm(user, 'payroll.view'))
       // تثبيت اللي اتصرف فعلًا على كل بند اتصرف (ترحيل 067 — العيب N02 المتبقّي، مراجعة مستقلة 24 سبتمبر):
       // طريقة الصرف وتقسيمها من ملف الموظف في هذه اللحظة = نفس اللي كشف البنك كان بيقوله قبل الصرف بلحظة.
       // بعد كده تعديل ملف الموظف مابيغيّرش واقعة صرف حصلت، والرقم مابينقلبش من بنك لنقدي عند الإقفال.
@@ -1761,6 +1783,15 @@ export class PayrollService {
         const { conflictRunIds: _conflictRunIds, ...visible } = event.payload
         event.payload = visible
       }
+      // إقرار «بلا مسير» بنطاق أوسع من نطاق القارئ (إقرار حساب الشركة مثلًا): عدد صفوف تقريره وأسبابه وبصمته فيهم فروع تانية
+      if (event.eventType === 'UNASSIGNED_ACKNOWLEDGED' && event.payload) {
+        const scopes = Array.isArray(event.payload.scopeBranchIds) ? event.payload.scopeBranchIds as number[]
+          : event.payload.scopeBranchId == null ? null : [Number(event.payload.scopeBranchId)]
+        if (scopes === null || scopes.some(id => !inBranchScope(branch, id))) {
+          const { rowCount: _rowCount, byReason: _byReason, reportHash: _reportHash, ...visible } = event.payload
+          event.payload = visible
+        }
+      }
       for (const phase of ['before', 'after']) {
         const members = (event.payload?.[phase] as { members?: Array<{ snapshot?: PayrollMemberSnapshot | null }> } | null)?.members ?? []
         for (const member of members) {
@@ -1955,8 +1986,8 @@ export class PayrollService {
     }
   }
 
-  // رقم مسير آخر لا يُكشف لمستخدم فرع لا يملك قراءته.
-  private async runVisibility(user: JwtPayload, em: EntityManager) {
+  // رقم مسير آخر لا يُكشف لمستخدم فرع لا يملك قراءته. (عامة: مسار التصحيح بيحجب بيها مسيرات تعارض المرشحين)
+  async runVisibility(user: JwtPayload, em: EntityManager) {
     const cache = new Map<number, boolean>()
     return async (runId: number | null | undefined) => {
       if (runId == null) return false
@@ -2194,9 +2225,13 @@ export class PayrollService {
             currency: row.salary.source.currency, warning: row.salary.source.warning },
           draftConflicts: await Promise.all(row.draftConflicts.map(conflictView)) })
       } else {
-        excluded.push({ ...common, code: row.code, label: PAYROLL_EXCLUSION_LABELS[row.code ?? ''] ?? row.code, message: row.message,
+        const otherRun = row.alreadyInRun ? await conflictView(row.alreadyInRun) : null
+        // نص سبب «مدرج في مسير آخر» فيه رقم المسير واسمه؛ مسير برّه نطاق الحساب يتقال من غيرهم (زي otherRun نفسه)
+        const message = otherRun && otherRun.otherRunId === null
+          ? `مدرج في مسير خارج نطاق صلاحيتك (${otherRun.status}) لفترة ${otherRun.startDate} → ${otherRun.endDate}` : row.message
+        excluded.push({ ...common, code: row.code, label: PAYROLL_EXCLUSION_LABELS[row.code ?? ''] ?? row.code, message,
           manualReason: row.manualReason, dataProblem: row.dataProblem, coverDays: row.coverage?.coverDays ?? null,
-          otherRun: row.alreadyInRun ? await conflictView(row.alreadyInRun) : null,
+          otherRun,
           transferredOut: 'transferredOut' in org ? org.transferredOut : null })
       }
     }
@@ -2224,6 +2259,14 @@ export class PayrollService {
       status: context.version.status, cycleStartDay: context.version.cycleStartDay, defaultPeriodType: context.version.defaultPeriodType }
   }
 
+  // معاينة العضوية بصلاحية الحساب من غير «عرض مسيرات الرواتب»: الأسماء والتغطية وأسباب الاستبعاد زي ما هي، من غير راتب الشهر ولا المستحق
+  // (لكل موظف وفي الإجمالي) ومن غير بصمة المعاينة (بتتحسب من المبالغ). قارئ الرواتب بياخدها كاملة، وحدث المسودة بيحفظ الأرقام زي ما هي.
+  private previewView(user: JwtPayload, preview: Awaited<ReturnType<PayrollService['membershipPreview']>>) {
+    if (userHasPerm(user, 'payroll.view')) return preview
+    return { ...preview, previewHash: null, totals: { ...preview.totals, monthlyGross: null, earnedGross: null },
+      included: preview.included.map(row => ({ ...row, monthlyGross: null, earnedGross: null })) }
+  }
+
   // معاينة تعريف لم يُحفظ (أو تعديل مسودة قائمة عبر runId) — قراءة فقط.
   async previewRunDefinition(user: JwtPayload, dto: PayrollRunDefinitionInput & { runId?: number }) {
     // قراءة سجل الأجر تتطلب معاملة (قراءة متسقة)؛ لا كتابة داخلها.
@@ -2243,7 +2286,7 @@ export class PayrollService {
     const name = typeof dto.name === 'string' && dto.name.trim() ? dto.name.trim() : null
     const preview = await this.membershipPreview(em, user, { id: previous?.id ?? null, name, period: context.period, startDate: context.startDate, endDate: context.endDate },
       definition, [], this.policyViewOf(context))
-    return { ...preview, nameTaken: name ? await this.runNameTaken(em, name, context.period, previous?.id ?? null) : false }
+    return { ...this.previewView(user, preview), nameTaken: name ? await this.runNameTaken(em, name, context.period, previous?.id ?? null) : false }
   }
 
   // معاينة التعريف المحفوظ: للمسودة ما سيدخل عند الحساب، وللمحسوب ما ستنتجه إعادة الحساب الآن — قراءة فقط.
@@ -2252,8 +2295,8 @@ export class PayrollService {
       await this.assertRunAccess(user, run, em)
       if (!['DRAFT', 'CALCULATED'].includes(run.status)) throw this.stateError('معاينة العضوية', run.status)
       const previousMembers = await em.getRepository(PayrollRunMember).find({ where: { runId }, order: { employeeId: 'ASC' } })
-      return this.membershipPreview(em, user, { id: run.id, name: run.name, period: run.period, startDate: run.startDate, endDate: run.endDate },
-        payrollRunDefinitionOf(run), previousMembers, await this.runPolicyView(em, run))
+      return this.previewView(user, await this.membershipPreview(em, user, { id: run.id, name: run.name, period: run.period, startDate: run.startDate, endDate: run.endDate },
+        payrollRunDefinitionOf(run), previousMembers, await this.runPolicyView(em, run)))
     })
   }
 
@@ -2649,8 +2692,11 @@ export class PayrollService {
   }
 
   // اسم من أقرّ بالتقرير يظهر على الشاشة بدل رقم المستخدم
-  private ackView(ack: PayrollRunUnassignedAck, names: Map<number, string>) {
-    return { id: ack.id, snapshotVersion: ack.snapshotVersion, scopeBranchId: ack.scopeBranchId, reportHash: ack.reportHash, rowCount: ack.reportRowCount,
+  // عدد صفوف التقرير وبصمته للي نطاق الإقرار جوه نطاقه: إقرار حساب الشركة عدده على كل الفروع، فحساب فرع بياخد مين أقرّ وإمتى بس
+  private ackView(ack: PayrollRunUnassignedAck, names: Map<number, string>, scope: BranchScope) {
+    const covered = scope === null || (ack.scopeBranchId !== null && scope.includes(Number(ack.scopeBranchId)))
+    return { id: ack.id, snapshotVersion: ack.snapshotVersion, scopeBranchId: ack.scopeBranchId, reportHash: covered ? ack.reportHash : null,
+      rowCount: covered ? ack.reportRowCount : null,
       note: ack.note, acknowledgedBy: ack.acknowledgedBy, acknowledgedByName: names.get(ack.acknowledgedBy) ?? null, acknowledgedAt: ack.acknowledgedAt }
   }
 
@@ -2699,8 +2745,9 @@ export class PayrollService {
       const { ack, acks } = run.status === 'DRAFT' ? { ack: null, acks: [] as PayrollRunUnassignedAck[] } : await this.currentUnassignedAck(em, user, run)
       const latest = acks[0] ?? await em.getRepository(PayrollRunUnassignedAck).findOne({ where: { runId }, order: { id: 'DESC' } })
       const ackNames = await this.userNames(em, [ack?.acknowledgedBy, latest?.acknowledgedBy])
+      const viewerScope = this.reportScope(user)
       return { ...(await this.visibleReport(user, report, em)), runId: run.id, runStatus: run.status, snapshotVersion: run.snapshotVersion,
-        acknowledgement: { required: true, current: ack ? this.ackView(ack, ackNames) : null, latest: latest ? this.ackView(latest, ackNames) : null,
+        acknowledgement: { required: true, current: ack ? this.ackView(ack, ackNames, viewerScope) : null, latest: latest ? this.ackView(latest, ackNames, viewerScope) : null,
           stale: !ack && !!latest, canAcknowledge: run.status === 'CALCULATED' && (userHasPerm(user, 'payroll.approve') || userHasPerm(user, 'payroll.calculate')) } }
     })
   }
@@ -2840,7 +2887,16 @@ export class PayrollService {
           if (row.period === period) continue
           await this.lockRun(em, row.id)
           const run = await em.getRepository(PayrollRun).findOneByOrFail({ id: row.id })
-          const result = await this.applyRunMembership(em, user, run, { ...change, reason })
+          // السلسلة بالاسم على مستوى الشركة. مسير شهر لاحق بنفس الاسم الحساب مايقدرش يقراه، وتعريفه فيه فرع أو رقم برّه نطاقه:
+          // مايتعدّلش من هنا، ومن غير رفض يسمّي أرقام تعريفه. (مسودة لسه من غير أعضاء وتعريفها كله جوه نطاقه بتتعدّل زي الأول.)
+          const readable = await this.runAccessible(user, run, em)
+          let result: Awaited<ReturnType<PayrollService['applyRunMembership']>>
+          try { result = await this.applyRunMembership(em, user, run, { ...change, reason }) }
+          catch (error) {
+            const code = error instanceof BadRequestException ? (error.getResponse() as { code?: unknown })?.code : null
+            if (!readable && (error instanceof ForbiddenException || code === 'PAYRUN-SCOPE-UNKNOWN-IDS')) continue
+            throw error
+          }
           if (result.changed && run.status === 'CALCULATED') recalculate.push(this.runRef(run))
         }
       }
@@ -2882,9 +2938,17 @@ export class PayrollService {
       ...(source ? await findPayrollRunSeriesLocked(this.runs.manager, { name: payrollRunSeriesName(source.name), fromPeriod: period }) : []),
       ...await findPayrollRunSeriesLocked(this.runs.manager, { name: payrollRunSeriesName(target.name), fromPeriod: period }),
     ].map(row => this.runRef(row))
+    // مسيرات السلسلة في الأشهر اللاحقة بتتعرض للي يقدر يقراها بس: الاسم واحد، لكن رقم مسير وشهره وحالته مش لحساب المسير ده برّه نطاقه
+    const visible = await this.runVisibility(user, this.runs.manager)
+    const shown = async (rows: Array<ReturnType<PayrollService['runRef']>>) => {
+      const result: Array<ReturnType<PayrollService['runRef']>> = []
+      for (const row of rows) if (await visible(row.id)) result.push(row)
+      return result
+    }
     return { runId, fromPeriod: period, employeeIds, moved, recalculated: anchorRecalculated,
       added: [...new Set(applied.added)], alreadyMember: [...new Set(applied.alreadyMember)], removed: [...new Set(applied.removed)],
-      recalculateRuns: recalculate, lockedRuns: locked, run: await this.detail(user, runId) }
+      // CR24-B02: بنود المسير وأعضاؤه في الرد لقارئ الرواتب بس — صلاحية الحساب بتغيّر العضوية وبترجّع حالة المسير
+      recalculateRuns: await shown(recalculate), lockedRuns: await shown(locked), run: await this.mutationResult(user, runId) }
   }
 
   /**
@@ -2963,7 +3027,7 @@ export class PayrollService {
     return { runId, period, fromPeriod: period, target: this.runRef(target), results,
       moved: of('MOVED'), added: of('ADDED'), skipped: of('SKIPPED'), recalculated,
       recalculateRuns: [...recalculateRuns.values()], lockedRuns: [...lockedRuns.values()],
-      run: await this.detail(user, runId) }
+      run: await this.mutationResult(user, runId) }
   }
 
   /** نص رسالة استثناء Nest أيًّا كان شكل جسمه (نص، أو {message}، أو {code,message}). */
