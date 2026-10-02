@@ -183,7 +183,7 @@ export class PayrollCorrectionsService {
     await this.payroll.assertRunAccess(user, run, em)
     const root = await this.rootOf(em, run)
     const { items, lines, ...reconciliation } = await this.reconciliation(em, user, root.id)
-    const correction = await describePayrollRunCorrection(em, run)
+    const correction = await this.payroll.scopedRunCorrection(user, em, await describePayrollRunCorrection(em, run))
     const correctable = run.status === 'PAID' && payrollRunTypeOf(run) !== 'REVERSAL'
     const reversible = correctable ? items.filter(item => item.runId === run.id).map(item => {
       const line = lines.filter(row => row.originalItemId === item.id && row.status !== 'CANCELLED').sort((a, b) => b.id - a.id)[0]

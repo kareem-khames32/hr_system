@@ -32,7 +32,8 @@ export interface PayrollCorrectionLine {
 export interface PayrollRunCorrectionView {
   runType: PayrollRunType; runTypeLabel: string; correctionReason: string | null
   parentRun: { id: number; name: string | null; period: string; status: string; runType: PayrollRunType } | null
-  children: Array<{ id: number; name: string | null; period: string; status: string; runType: PayrollRunType; runTypeLabel: string; totalNet: string; createdAt: string; correctionReason: string | null }>
+  // totalNet = null لمسير تابع فيه فروع برّه نطاق الحساب (رأسه بس: رقمه واسمه وحالته)؛ والتابع اللي مفيهوش حاجة من نطاقه مابيرجعش
+  children: Array<{ id: number; name: string | null; period: string; status: string; runType: PayrollRunType; runTypeLabel: string; totalNet: string | null; createdAt: string; correctionReason: string | null }>
   lines: PayrollCorrectionLine[]
 }
 export interface PayrollReconciliationEmployee {

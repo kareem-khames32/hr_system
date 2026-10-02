@@ -63,6 +63,10 @@ const money = (value: unknown) => value === null || value === undefined ? null :
 const cents = (value: unknown) => Math.round(roundPayrollMoney(Number(value)) * 100)
 const sumLines = (lines: ExemptionLine[]) => (lines.reduce((total, line) => total + cents(line.exemptedAmount), 0) / 100).toFixed(2)
 const parseJson = <T>(text: string | null | undefined, fallback: T): T => { if (!text) return fallback; try { return JSON.parse(text) as T } catch { return fallback } }
+// CR25: نسخة إعفاء اتنقلت لمسير تكميلي بقرارها الأصلي (carriedFrom) مش منح جديد من مانحها — مابتفتحش له مسيرها ولا بتظهر له ولا بيلغيها
+// برّه نطاقه (الموظف اتنقل لفرع تاني). المانح بيشوفها بنطاقه زي أي إعفاء في فرعه.
+const grantedByUser = (user: JwtPayload, row: Pick<PayrollFinancialExemption, 'grantedByUserId' | 'evaluation'>) =>
+  row.grantedByUserId === user.sub && !parseJson<{ carriedFrom?: unknown }>(row.evaluation, {}).carriedFrom
 
 interface Settings {
   reasonMinLength: number; attachmentDays: number; maxPerEmployeeYear: number; maxPctPerGrantor: number
@@ -134,7 +138,8 @@ export class FinancialExemptionsService {
     for (const org of orgs.values()) {
       if (this.inBranch(user, org.branchId)) return
     }
-    if (await em.getRepository(PayrollFinancialExemption).count({ where: { runId, grantedByUserId: user.sub } })) return
+    const granted = await em.getRepository(PayrollFinancialExemption).find({ where: { runId, grantedByUserId: user.sub }, select: { id: true, grantedByUserId: true, evaluation: true } })
+    if (granted.some(row => grantedByUser(user, row))) return
     forbidden('EXEMPTION_RUN_OUT_OF_SCOPE', 'المسير خارج نطاق فرعك')
   }
 
@@ -532,7 +537,7 @@ export class FinancialExemptionsService {
       if (!peek) throw new NotFoundException({ code: 'EXEMPTION_NOT_FOUND', message: 'الإعفاء غير موجود' })
       await this.lockRun(em, peek.runId)
       const row = await this.lockedRow(em, id, dto.expectedRevision)
-      const inScope = row.grantedByUserId === user.sub || ((userHasPerm(user, GRANT) || userHasPerm(user, APPROVE)) && this.inBranch(user, this.orgOfRow(row).branchId))
+      const inScope = grantedByUser(user, row) || ((userHasPerm(user, GRANT) || userHasPerm(user, APPROVE)) && this.inBranch(user, this.orgOfRow(row).branchId))
       if (!inScope) forbidden('EXEMPTION_FORBIDDEN', 'إلغاء الإعفاء للمانح نفسه أو للموارد البشرية في فرع الموظف')
       if (row.status === 'APPLIED') conflict('EXEMPTION_APPLIED', `الإعفاء #${row.id} مطبق في مسير معتمد ولا يُلغى؛ صحح الخطأ بإنشاء خصم جديد بدورة اعتماد كاملة يذكر الإعفاء #${row.id}`)
       if (!EXEMPTION_LIVE_STATUSES.includes(row.status as never)) conflict('EXEMPTION_STATE', `لا يُلغى إعفاء حالته «${EXEMPTION_LABELS.statuses[row.status as 'ACTIVE'] ?? row.status}»`)
@@ -548,7 +553,7 @@ export class FinancialExemptionsService {
   async attach(user: JwtPayload, id: number, dto: ExemptionAttachmentDto) {
     await this.manager.transaction(async em => {
       const row = await this.lockedRow(em, id)
-      const inScope = row.grantedByUserId === user.sub || (userHasPerm(user, GRANT) && this.inBranch(user, this.orgOfRow(row).branchId))
+      const inScope = grantedByUser(user, row) || (userHasPerm(user, GRANT) && this.inBranch(user, this.orgOfRow(row).branchId))
       if (!inScope) forbidden('EXEMPTION_FORBIDDEN', 'إضافة المرفق للمانح نفسه أو للموارد البشرية في فرع الموظف')
       if (![...EXEMPTION_LIVE_STATUSES, 'APPLIED'].includes(row.status as never)) conflict('EXEMPTION_STATE', 'لا يُضاف مرفق لإعفاء منتهٍ أو مرفوض')
       const ref = String(dto.attachmentRef ?? '').trim()
@@ -577,7 +582,7 @@ export class FinancialExemptionsService {
     const org = this.orgOfRow(row)
     const branchId = org.branchId ?? employee?.branchId ?? null, departmentId = org.departmentId ?? employee?.departmentId ?? null
     if (this.privileged(user) && this.inBranch(user, branchId)) return true
-    if (row.grantedByUserId === user.sub) return true
+    if (grantedByUser(user, row)) return true
     // مدير القسم من غير صلاحية إعفاءات: إعفاءات خصومات الحضور في قسمه بس (هي اللي بيمنحها). إعفاء خصم مصنف أو تأجيل قسط سلفة
     // أو «كل الخصومات» منحته جهة تانية فيه مبالغ خصومات الموظف وسلفه — مايتعرضش له. ولو منح المدير الهيكلي مقفول من الإعدادات فمالوش صفة في الإعفاءات أصلًا
     return departmentManagerEnabled && this.inBranch(user, branchId) && !!departmentId && facts.departments.has(departmentId) && isAttendanceComponent(exemptionComponentOf(exemptionRuleOf(row)))
@@ -610,8 +615,8 @@ export class FinancialExemptionsService {
         estimatedAmount: money(row.estimatedAmount), exemptedAmountSnapshot: money(row.exemptedAmountSnapshot), lines: row.status === 'APPLIED' ? parseJson(row.appliedLines, []) : evaluation.lines ?? [],
         warnings: evaluation.warnings ?? [], overrides: parseJson(row.overrides, []), supersededById: row.supersededById, revision: row.revision,
         canApprove: row.status === 'PENDING_APPROVAL' && runOpen && decider && (!ownGrant || hasHrOverride(user)), canReject: row.status === 'PENDING_APPROVAL' && decider && !ownGrant,
-        canRevoke: live && runOpen && (row.grantedByUserId === user.sub || ((userHasPerm(user, GRANT) || userHasPerm(user, APPROVE)) && inBranch)),
-        canAttach: [...EXEMPTION_LIVE_STATUSES, 'APPLIED'].includes(row.status as never) && (row.grantedByUserId === user.sub || (userHasPerm(user, GRANT) && inBranch)),
+        canRevoke: live && runOpen && (grantedByUser(user, row) || ((userHasPerm(user, GRANT) || userHasPerm(user, APPROVE)) && inBranch)),
+        canAttach: [...EXEMPTION_LIVE_STATUSES, 'APPLIED'].includes(row.status as never) && (grantedByUser(user, row) || (userHasPerm(user, GRANT) && inBranch)),
       }
     })
   }
@@ -625,13 +630,36 @@ export class FinancialExemptionsService {
       if (!this.visible(user, facts, row, employee, (await this.settings(em)).departmentManagerEnabled)) forbidden('EXEMPTION_FORBIDDEN', 'الإعفاء خارج نطاقك')
       const [view] = await this.views(em, user, [row])
       const events = await em.getRepository(PayrollFinancialExemptionEvent).find({ where: { exemptionId: id }, order: { id: 'ASC' } })
+      // CR25-B01: «اتنقل للمسير التكميلي» — لو نسخة التكميلي برّه نطاق القارئ (الموظف اتنقل لفرع تاني) رقم المسير والنسخة مايتقالوش
+      const hidden = await this.hiddenCarriedCopies(em, user, facts, events)
       const names = await this.names(em, [row])
       const actors = events.map(event => event.actorUserId).filter((value): value is number => !!value)
       const actorNames = actors.length ? new Map((await em.query(`SELECT [id],[displayName] FROM [users] WHERE [id] IN (${actors.map((_, i) => `@${i}`).join(',')})`, actors) as Array<{ id: number; displayName: string | null }>)
         .map(entry => [Number(entry.id), entry.displayName || `مستخدم #${entry.id}`])) : names.users
-      return { ...view, events: events.map(event => ({ id: event.id, eventType: event.eventType, fromStatus: event.fromStatus, toStatus: event.toStatus, reason: event.reason,
-        actorName: event.actorUserId ? actorNames.get(event.actorUserId) ?? null : null, createdAt: event.createdAt, payload: parseJson(event.payload, null) })) }
+      return { ...view, events: events.map(event => {
+        const payload = parseJson<Record<string, unknown> | null>(event.payload, null)
+        const masked = event.eventType === 'CARRIED_TO_SUPPLEMENTARY' && !!payload && hidden.has(Number(payload.carriedExemptionId))
+        return { id: event.id, eventType: event.eventType, fromStatus: event.fromStatus, toStatus: event.toStatus,
+          reason: masked ? (event.reason ?? '').replace(`المسير التكميلي #${payload!.supplementaryRunId}`, 'مسير تكميلي خارج نطاق صلاحيتك') : event.reason,
+          actorName: event.actorUserId ? actorNames.get(event.actorUserId) ?? null : null, createdAt: event.createdAt,
+          payload: masked ? { ...payload, supplementaryRunId: null, carriedExemptionId: null } : payload }
+      }) }
     })
+  }
+
+  // نسخ التكميلي المذكورة في أحداث «اتنقل للمسير التكميلي» اللي القارئ مايشوفهاش (بنفس حكم visible)
+  private async hiddenCarriedCopies(em: EntityManager, user: JwtPayload, facts: OrgFacts, events: PayrollFinancialExemptionEvent[]) {
+    const ids = [...new Set(events.filter(event => event.eventType === 'CARRIED_TO_SUPPLEMENTARY')
+      .map(event => Number(parseJson<{ carriedExemptionId?: unknown }>(event.payload, {}).carriedExemptionId)).filter(id => Number.isSafeInteger(id) && id > 0))]
+    if (branchScopeOf(user) === null || !ids.length) return new Set<number>()
+    const copies = await em.getRepository(PayrollFinancialExemption).find({ where: { id: In(ids) } })
+    const employees = copies.length ? new Map((await em.getRepository(Employee).find({ where: { id: In([...new Set(copies.map(row => row.employeeId))]) },
+      select: { id: true, branchId: true, departmentId: true } })).map(row => [row.id, row])) : new Map<number, Employee>()
+    const { departmentManagerEnabled } = await this.settings(em)
+    return new Set(ids.filter(id => {
+      const copy = copies.find(row => row.id === id)
+      return !copy || !this.visible(user, facts, copy, employees.get(copy.employeeId), departmentManagerEnabled)
+    }))
   }
 
   /** قائمة إعفاءات مسير للشاشة: الحالة وحدود المنح وصلاحيات المستخدم، وهل تغيّرت الإعفاءات بعد آخر حساب (إعادة الحساب مطلوبة). */

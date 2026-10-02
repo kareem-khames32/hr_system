@@ -641,3 +641,132 @@ test('فصل الفروع في التصحيح: تكميلي لموظفي فرع 
   const company = expectStatus(await request(users.admin, 'GET', `/payroll/runs/${own.id}/corrections`), 200).supplementary.candidates.find(row => row.employeeId === mover.id)
   assert.equal(company.reason, `مرتبط بالمسير #${blocker.id} (APPROVED)`)
 })
+
+test('CR25-B01: روابط التصحيح بنطاق القارئ — تكميلي اتحسب لموظف اتنقل لفرع تاني مايظهرش لقارئ الفرع الأول في «المسيرات المربوطة» ولا في قسيمته القديمة، والتكميلي المختلط رأسه بس', { timeout: 900000 }, async () => {
+  const admin3 = await repo('User').save({ email: 'admin3@payroll-corrections-test.invalid', displayName: 'admin3', passwordHash: 'test-only', role: 'super_admin',
+    branchId: null, permissions: '[]' })
+  const approveAndPay = async (run, reference) => {
+    expectStatus(await request(admin3, 'POST', `/payroll/runs/${run.id}/approve`), 201)
+    expectStatus(await request(admin3, 'POST', `/payroll/runs/${run.id}/pay`, { channel: 'BANK_TRANSFER', reference }), 201)
+  }
+  const reverse = async (run, emps, reference) => {
+    const employeeIds = emps.map(emp => emp.id)
+    const preview = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${run.id}/reversal-preview`, { employeeIds }), 201)
+    const reversal = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${run.id}/reversals`, { employeeIds, reason: REASON, previewHash: preview.previewHash }), 201)
+    await approveAndPay(reversal, reference)
+    return reversal
+  }
+  const createdPolicy = expectStatus(await request(users.admin, 'POST', '/payroll/policies', { name: 'مجموعة الشركة لروابط التصحيح', effectiveFrom: policyStart, settings: { ...cycle23 } }), 201)
+  const published = expectStatus(await request(users.admin, 'POST', `/payroll/policies/${createdPolicy.policy.id}/versions/${createdPolicy.versions[0].id}/publish`,
+    { expectedRevision: createdPolicy.versions[0].revision, reason: 'نشر مجموعة الشركة لاختبار روابط التصحيح' }), 200)
+  const companyVersionId = published.version.id
+  const paidRun = async (name, emps, reference) => {
+    let run = expectStatus(await request(users.admin, 'POST', '/payroll/runs', { name, policyVersionId: companyVersionId, period, filters: { employeeIds: emps.map(emp => emp.id) } }), 201)
+    run = await calculate(run, users.admin)
+    await approveAndPay(run, reference)
+    return run
+  }
+  const childOf = (body, id) => body.correction.children.find(child => child.id === id) ?? null
+
+  // ١) تكميلي كل أعضائه في الفرع التاني: مايظهرش خالص لقارئ الفرع، لا في المسير الأصلي ولا في قسيمة الموظف القديمة
+  const solo = await employee(5123.45)
+  const original = await paidRun('مسير الفرع قبل نقل الموظف', [solo], 'TRX-R25-SOLO')
+  const reversal = await reverse(original, [solo], 'REFUND-R25-SOLO')
+  await repo('Employee').update(solo.id, { branchId: org.other.id, basicSalary: 9876.54 })
+  let foreign = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${original.id}/supplementary`, { employeeIds: [solo.id], reason: REASON }), 201)
+  foreign = await calculate(foreign, users.admin)
+  assert.equal(foreign.members.find(row => row.employeeId === solo.id).snapshot.branchId, org.other.id)
+  await approveAndPay(foreign, 'TRX-R25-FOREIGN')
+  expectStatus(await request(users.desk, 'GET', `/payroll/runs/${foreign.id}`), 403)
+  const foreignNet = money(itemOf(foreign, solo).netPay)
+  for (const route of [`/payroll/runs/${original.id}`, `/payroll/runs/${original.id}/corrections`]) {
+    const body = expectStatus(await request(users.desk, 'GET', route), 200)
+    assert.equal(childOf(body, foreign.id), null, `${route}: التكميلي برّه النطاق مايتعرضش`)
+    assert.equal(childOf(body, reversal.id).totalNet, money(-Number(itemOf(original, solo).netPay)), `${route}: مسير العكس (نطاق المسير الأصلي) بصافيه`)
+    const text = JSON.stringify(body)
+    for (const hidden of [foreignNet, foreign.name]) assert.ok(!text.includes(hidden), `${route}: ${hidden}`)
+  }
+  const oldItem = itemOf(original, solo).id
+  const deskPayslip = expectStatus(await request(users.desk, 'GET', `/payroll/items/${oldItem}`), 200)
+  assert.deepEqual([deskPayslip.reversal.line.reversalRunId, deskPayslip.reversal.supplementary], [reversal.id, []], 'قسيمة التكميلي برّه النطاق مش في القسيمة القديمة')
+  assert.ok(!JSON.stringify(deskPayslip).includes(foreignNet))
+  // صاحب القسيمة بيشوف قسيمته التكميلية، وحساب الشركة بيشوف كل حاجة زي الأول
+  const owner = await repo('User').save({ email: 'solo@payroll-corrections-test.invalid', displayName: 'solo', passwordHash: 'test-only', role: 'employee',
+    branchId: org.other.id, employeeId: solo.id, permissions: '[]' })
+  const own = expectStatus(await request(owner, 'GET', `/payroll/items/${oldItem}`), 200)
+  assert.deepEqual(own.reversal.supplementary.map(row => [row.runId, row.netPay]), [[foreign.id, foreignNet]])
+  const companyPayslip = expectStatus(await request(users.admin, 'GET', `/payroll/items/${oldItem}`), 200)
+  assert.deepEqual(companyPayslip.reversal.supplementary.map(row => row.runId), [foreign.id])
+  const companyChild = childOf(expectStatus(await request(users.admin, 'GET', `/payroll/runs/${original.id}`), 200), foreign.id)
+  assert.deepEqual([companyChild.totalNet, companyChild.correctionReason], [foreignNet, REASON])
+
+  // ٢) تكميلي فيه موظف من الفرع وموظف اتنقل: رأسه بس (رقمه واسمه وحالته) من غير صافيه وسبب تصحيحه
+  const stay = await employee(4321.09), mover = await employee(6789.01)
+  const shared = await paidRun('مسير الفرع قبل نقل واحد من اتنين', [stay, mover], 'TRX-R25-MIXED')
+  await reverse(shared, [stay, mover], 'REFUND-R25-MIXED')
+  await repo('Employee').update(mover.id, { branchId: org.other.id })
+  let mixed = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${shared.id}/supplementary`, { employeeIds: [stay.id, mover.id], reason: REASON }), 201)
+  mixed = await calculate(mixed, users.admin)
+  for (const route of [`/payroll/runs/${shared.id}`, `/payroll/runs/${shared.id}/corrections`]) {
+    const head = childOf(expectStatus(await request(users.desk, 'GET', route), 200), mixed.id)
+    assert.deepEqual([head.id, head.name, head.status, head.totalNet, head.correctionReason], [mixed.id, mixed.name, 'CALCULATED', null, null], route)
+  }
+  const full = childOf(expectStatus(await request(users.admin, 'GET', `/payroll/runs/${shared.id}`), 200), mixed.id)
+  assert.equal(full.totalNet, money(mixed.totalNet))
+})
+
+test('CR25-B01: إعفاء منقول لتكميلي موظف اتنقل لفرع تاني — النسخة بمكانه الجديد، ومانح الإعفاء الأصلي في الفرع القديم مايشوفهاش ولا يلغيها ولا يفتح بيها التكميلي، ورقم التكميلي مايتقالش في سجلاته', { timeout: 900000 }, async () => {
+  const exemptionPerms = ['financial_exemption.view', 'financial_exemption.grant', 'financial_exemption.approve', 'financial_exemption.override_limits']
+  const grantor = await repo('User').save({ email: 'r25-grantor@payroll-corrections-test.invalid', displayName: 'r25-grantor', passwordHash: 'test-only', role: 'hr_manager',
+    branchId: org.branch.id, permissions: JSON.stringify(['payroll.view', 'payroll.calculate', 'payroll.reverse', ...exemptionPerms]) })
+  await setConfig('financial_exemptions.max_pct_per_grantor', '0')
+  await setConfig('financial_exemptions.max_per_employee_year', '5')
+  const createdPolicy = expectStatus(await request(users.admin, 'POST', '/payroll/policies', { name: 'مجموعة الشركة للإعفاء المنقول', effectiveFrom: policyStart, settings: { ...cycle23 } }), 201)
+  const published = expectStatus(await request(users.admin, 'POST', `/payroll/policies/${createdPolicy.policy.id}/versions/${createdPolicy.versions[0].id}/publish`,
+    { expectedRevision: createdPolicy.versions[0].revision, reason: 'نشر مجموعة الشركة لاختبار الإعفاء المنقول' }), 200)
+  const emp = await employee(6100, org.branch, { date: '2026-08-03', minutes: 60 })
+  const reason = 'عطل بوابة البصمة صباح يوم الواقعة بمحضر الموارد البشرية الرسمي رقم 25'
+  const grantInput = target => ({ runId: target.id, employeeId: emp.id, reason, scopeKind: 'DEDUCTION_TYPE', targetKind: 'LATENESS' })
+
+  let run = expectStatus(await request(grantor, 'POST', '/payroll/runs', { name: 'مسير الإعفاء قبل النقل', policyVersionId: published.version.id, period, filters: { employeeIds: [emp.id] } }), 201)
+  run = await calculate(run, grantor)
+  const shown = expectStatus(await request(grantor, 'POST', '/payroll/exemptions/preview', grantInput(run)), 201)
+  const exemption = expectStatus(await request(grantor, 'POST', '/payroll/exemptions', { ...grantInput(run), previewHash: shown.previewHash }), 201)
+  run = expectStatus(await request(grantor, 'POST', `/payroll/runs/${run.id}/recalculate`, { reason: 'إعادة حساب بعد قرار الإعفاء من خصم التأخير' }), 201)
+  await acknowledge(run, users.approver)
+  expectStatus(await request(users.approver, 'POST', `/payroll/runs/${run.id}/approve`), 201)
+  expectStatus(await request(users.approver, 'POST', `/payroll/runs/${run.id}/pay`, { channel: 'BANK_TRANSFER', reference: 'TRX-R25-EXEMPT' }), 201)
+  const preview = expectStatus(await request(grantor, 'POST', `/payroll/runs/${run.id}/reversal-preview`, { employeeIds: [emp.id] }), 201)
+  const reversal = expectStatus(await request(grantor, 'POST', `/payroll/runs/${run.id}/reversals`, { employeeIds: [emp.id], reason: REASON, previewHash: preview.previewHash }), 201)
+  expectStatus(await request(users.approver, 'POST', `/payroll/runs/${reversal.id}/approve`), 201)
+  expectStatus(await request(users.approver, 'POST', `/payroll/runs/${reversal.id}/pay`, { channel: 'BANK_TRANSFER', reference: 'REFUND-R25-EXEMPT' }), 201)
+
+  // الموظف اتنقل للفرع التاني، وحساب الشركة عمل له التكميلي: النسخة المنقولة بمكانه الجديد
+  await repo('Employee').update(emp.id, { branchId: org.other.id })
+  const supplementary = expectStatus(await request(users.admin, 'POST', `/payroll/runs/${run.id}/supplementary`, { employeeIds: [emp.id], reason: REASON }), 201)
+  const [copy] = await repo('PayrollFinancialExemption').find({ where: { runId: supplementary.id } })
+  assert.ok(copy, 'الإعفاء اتنقل للتكميلي')
+  assert.deepEqual([JSON.parse(copy.evaluation).org.branchId, copy.grantedByUserId, JSON.parse(copy.evaluation).carriedFrom.exemptionId], [org.other.id, grantor.id, exemption.id])
+
+  // المانح في الفرع القديم: مايشوفش النسخة ولا يلغيها ولا يفتح بيها إعفاءات التكميلي
+  expectStatus(await request(grantor, 'GET', `/payroll/exemptions/${copy.id}`), 403, 'EXEMPTION_FORBIDDEN')
+  expectStatus(await request(grantor, 'POST', `/payroll/exemptions/${copy.id}/revoke`, { reason: 'إلغاء من حساب الفرع القديم', expectedRevision: copy.revision }), 403, 'EXEMPTION_FORBIDDEN')
+  expectStatus(await request(grantor, 'GET', `/payroll/exemptions/runs/${supplementary.id}`), 403, 'EXEMPTION_RUN_OUT_OF_SCOPE')
+  assert.equal((await repo('PayrollFinancialExemption').findOneByOrFail({ id: copy.id })).status, 'ACTIVE')
+  // وسجل إعفائه الأصلي وسجل مسيره بيقولوا إنه اتنقل من غير رقم التكميلي ولا رقم النسخة
+  const source = expectStatus(await request(grantor, 'GET', `/payroll/exemptions/${exemption.id}`), 200)
+  const carriedTo = source.events.find(event => event.eventType === 'CARRIED_TO_SUPPLEMENTARY')
+  assert.deepEqual([carriedTo.payload.supplementaryRunId, carriedTo.payload.carriedExemptionId], [null, null])
+  assert.ok(!carriedTo.reason.includes(`#${supplementary.id}`) && carriedTo.reason.includes('مسير تكميلي خارج نطاق صلاحيتك'), carriedTo.reason)
+  const created = expectStatus(await request(grantor, 'GET', `/payroll/runs/${run.id}/events`), 200).find(event => event.eventType === 'SUPPLEMENTARY_CREATED')
+  assert.deepEqual([created.payload.supplementaryRunId, created.payload.name, created.payload.carriedExemptions], [null, null, []])
+  for (const body of [source, created]) assert.ok(!JSON.stringify(body).includes(supplementary.name), JSON.stringify(body))
+
+  // حساب الشركة: كل حاجة زي ما هي
+  const full = expectStatus(await request(users.admin, 'GET', `/payroll/exemptions/${exemption.id}`), 200).events.find(event => event.eventType === 'CARRIED_TO_SUPPLEMENTARY')
+  assert.deepEqual([full.payload.supplementaryRunId, full.payload.carriedExemptionId], [supplementary.id, copy.id])
+  assert.ok(full.reason.includes(`#${supplementary.id}`))
+  const fullEvent = expectStatus(await request(users.admin, 'GET', `/payroll/runs/${run.id}/events`), 200).find(event => event.eventType === 'SUPPLEMENTARY_CREATED')
+  assert.deepEqual([fullEvent.payload.supplementaryRunId, fullEvent.payload.carriedExemptions.map(row => row.exemptionId)], [supplementary.id, [copy.id]])
+  expectStatus(await request(users.admin, 'GET', `/payroll/exemptions/${copy.id}`), 200)
+})
