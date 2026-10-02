@@ -299,6 +299,18 @@ export function moduleOfJob(job: string): ModuleKey | null {
   return MODULE_KEYS.find((module) => moduleDefOf(module).jobs.includes(job)) ?? null
 }
 
+/**
+ * صلاحيات تابعة لموديول اختياري ومسارات أساسية بتطلبها: تعديل الراتب في ملف الموظف محتاج payroll.approve، وقواعد جدول الدوام
+ * (أساسية مع أيام العمل) محتاجة attendance.manage. بتفضل ظاهرة في شاشة الأدوار والمستخدمين حتى لو موديولها مقفول.
+ */
+export const PERMISSIONS_USED_BY_CORE: readonly string[] = ['payroll.approve', 'attendance.manage']
+
+/** الصلاحية تتعرض في شاشة الأدوار والمستخدمين؟ (موديولها مفعّل، أو مسار أساسي بيطلبها) */
+export function permissionShown(permission: string, enabledModules: ReadonlySet<string> | readonly string[]): boolean {
+  const has = (module: string) => Array.isArray(enabledModules) ? enabledModules.includes(module) : (enabledModules as ReadonlySet<string>).has(module)
+  return PERMISSIONS_USED_BY_CORE.includes(permission) || has(moduleOfPermission(permission) ?? 'platform')
+}
+
 /** موديول صلاحية (شاشة الأدوار). null = صلاحية مش مسجّلة لموديول. */
 export function moduleOfPermission(permission: string): ModuleKey | null {
   return MODULE_KEYS.find((module) => moduleDefOf(module).permissions.includes(permission)) ?? null

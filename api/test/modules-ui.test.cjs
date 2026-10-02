@@ -247,6 +247,10 @@ test('MU-06: شاشة «الإعدادات ← الموديولات» — في �
   assert.match(page, /setClosing\(\{ module, impact: await fetchModuleImpact\(module\.key\) \}\)/)
   assert.ok(page.includes('هيفضلوا يكمّلوا اعتمادهم عادي، بس مفيش طلب جديد هيتقدّم'))
   assert.ok(page.includes('البيانات كلها بتفضل محفوظة'))
+  // ملاحظات الأثر الخاصة بالموديول، وتغيير الجمهور بيتكتب «غيّر جمهور» مش «فعّل»، وتنبيه إن اللي برّه الجمهور مش هيعتمد
+  assert.ok(page.includes('{(closing.impact.notes ?? []).map((note) => ('))
+  assert.match(page, /event\.kind === 'module' && event\.enabled === null \? `غيّر جمهور/)
+  assert.ok(page.includes('اللي برّه الاختيار مش هيقدر يعتمد ولا يأكد حاجة في الموديول ده كمان'))
   // الباقة: الفرق قبل التطبيق
   assert.match(page, /setPreset\(await fetchPresetDiff\(key\)\)/)
   assert.ok(page.includes('هيتفتح') && page.includes('هيتقفل') && page.includes('طبّق الباقة'))
@@ -317,7 +321,19 @@ test('MU-07: الحالة بتتجدد من غير دخول جديد — الق�
     await settle()
     assert.equal(enabledCalls(calls), 0)
   })
+  // أول قراءة للجلسة فشلت: الشاشة بتشتغل على افتراضي السجل من غير تخزين، والقراءة الجاية الناجحة بتتخزن
+  modules.invalidateModules(); sessionStorage.clear()
+  await fetched(() => { throw new TypeError('Failed to fetch') }, async calls => { assert.deepEqual(await modules.loadModules(), modules.DEFAULT_MODULES); assert.equal(calls.length, 1) })
+  assert.equal(sessionStorage.getItem('hr_enabled_modules'), null)
+  await fetched(() => json(after), async calls => { assert.deepEqual(await modules.loadModules(), after); assert.equal(calls.length, 1) })
+  assert.deepEqual(JSON.parse(sessionStorage.getItem('hr_enabled_modules')).enabled, after)
+  // مؤقّت إعادة المحاولة بيتلغي مع المسح (مايسيبش نداء معلّق بعد الخروج)
+  modules.invalidateModules()
   const source = read('src/lib/modules.ts')
+  // …وإعادة المحاولة بتحصل لوحدها، وأول نجاح بعد فشل بيتبلّغ للشاشات المفتوحة (حارس المسارات مايفضلش على الافتراضي)
+  assert.match(source, /if \(next !== previous && \(previous \|\| failedOnce\)\) listeners\.forEach\(\(listener\) => listener\(\)\)/)
+  assert.match(source, /retryTimer = setTimeout\(\(\) => \{ retryTimer = null; if \(currentSession\(\) === session && !cachedFor\(session\)\) void fetchModules\(session\) \}, RETRY_MS\)/)
+  assert.match(source, /if \(retryTimer\) \{ clearTimeout\(retryTimer\); retryTimer = null \}/)
   assert.match(source, /const FRESH_MS = 5 \* 60_000/)
   assert.match(source, /onApiRouteMissing\(\(\) => \{/)
   assert.match(read('src/lib/api.ts'), /if \(isRouteMissing\(res\.status, message\) && !path\.startsWith\('\/modules\/enabled'\)\) routeMissingListener\?\.\(\)/)
@@ -394,7 +410,7 @@ test('MU-08: شاشات الأساس مع موديول مقفول — اللين
   const policies = read('src/app/settings/policies/page.tsx')
   for (const part of ["title: 'الإجازات',\n    module: 'leave',", "title: 'العمل الإضافي (الأوفرتايم)',\n    module: 'overtime',", "title: 'أقساط السلف وحماية الصافي',\n    module: 'payroll',",
     'if (g.module && !moduleOn(g.module)) return null', "const loansOn = useModuleEnabled('loans')", 'if (!loansOn) return null',
-    "const offboardingOn = useModuleEnabled('offboarding')", 'if (!offboardingOn) return null',
+    "const offboardingOn = useModuleEnabled('offboarding')", 'if (!offboardingOn) return null', 'useEffect(load, [loansOn])', 'useEffect(load, [offboardingOn])',
     "if (!payrollOn || !can('payroll.view')) return"]) assert.ok(policies.includes(part), part)
   assert.ok(read('src/app/settings/work-days/page.tsx').includes('{overtimeOn && <div className="card">'))
   assert.ok(read('src/components/GraceOverridesNote.tsx').includes('if (!shiftsOn) return null'))

@@ -191,7 +191,8 @@ test('MS-04: الرفض — تبعيات وأساسي ومجهول وجسم غل
 })
 
 test('MS-05: أثر القفل قبل القفل — الطلبات المفتوحة والبيانات الشغالة', async () => {
-  assert.deepEqual(ok(await request(U.admin, 'GET', '/modules/attendance/impact')), { key: 'attendance', nameAr: 'الحضور والبصمة', openRequests: 0, items: [] })
+  assert.deepEqual(ok(await request(U.admin, 'GET', '/modules/attendance/impact')), { key: 'attendance', nameAr: 'الحضور والبصمة', openRequests: 0, items: [],
+    notes: ['من يوم القفل المسير مش هيحسب غياب ولا تأخير: مفيش بصمات بتتجمع. والأيام دي مش هتتحسب غياب بعد ما الموديول يتفتح تاني.'] })
   const day = new Date(); day.setDate(day.getDate() + 3)
   const iso = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`
   ok(await request(U.cairo, 'POST', '/requests', { typeCode: 'REMOTE_WORK', submit: true, payload: { fromDate: iso, toDate: iso } }), 201)
@@ -200,7 +201,11 @@ test('MS-05: أثر القفل قبل القفل — الطلبات المفتو
   ok(await request(U.cairo, 'POST', '/requests', { typeCode: 'REMOTE_WORK', payload: { fromDate: iso, toDate: iso } }), 201)
   await repo('BiometricDevice').save({ name: 'جهاز المدخل', serialNumber: 'MS-DEVICE-1', ip: '10.0.0.9', port: 4370, isActive: true, branchId: B.cairo.id })
   assert.deepEqual(ok(await request(U.admin, 'GET', '/modules/attendance/impact')),
-    { key: 'attendance', nameAr: 'الحضور والبصمة', openRequests: 2, items: [{ label: 'أجهزة بصمة مفعّلة', count: 1 }] })
+    { key: 'attendance', nameAr: 'الحضور والبصمة', openRequests: 2, items: [{ label: 'أجهزة بصمة مفعّلة', count: 1 }],
+      notes: ['من يوم القفل المسير مش هيحسب غياب ولا تأخير: مفيش بصمات بتتجمع. والأيام دي مش هتتحسب غياب بعد ما الموديول يتفتح تاني.'] })
+  // موديول من غير ملاحظة خاصة: قايمة فاضية؛ والعهد بتقول إن طلب العهدة المعتمد هيستنى
+  assert.deepEqual(ok(await request(U.admin, 'GET', '/modules/recruitment/impact')).notes, [])
+  assert.match(ok(await request(U.admin, 'GET', '/modules/custody/impact')).notes[0], /هيستنى لحد ما الموديول يتفتح تاني/)
   await repo('Candidate').save([{ fullName: 'مرشح أول', positionTitle: 'محاسب', stage: 'interview', branchId: B.cairo.id },
     { fullName: 'مرشح اتعيّن', positionTitle: 'محاسب', stage: 'hired', branchId: B.cairo.id }])
   assert.deepEqual(ok(await request(U.modulesAll, 'GET', '/modules/recruitment/impact')).items, [{ label: 'مرشحين في المسار', count: 1 }])
@@ -248,9 +253,22 @@ test('MS-07: المزايا الفرعية وجمهور التفعيل من ال
   const cleared = ok(await request(U.admin, 'PUT', '/modules/custody', { audience: null }))
   assert.equal(moduleOf(cleared, 'custody').audience, null)
   ok(await request(U.alex, 'GET', '/custody/mine'))
+  // تغيير الجمهور لوحده حدث من غير حالة (enabled = null: «غيّر جمهور» مش «فعّل»)، ومابيغيّرش «مين فتح أو قفل وإمتى»
   const events = ok(await request(U.admin, 'GET', '/modules/events'))
   assert.deepEqual(events.map(row => [row.kind, row.key, row.enabled, row.audience?.where?.ids ?? null]),
-    [['module', 'custody', true, null], ['module', 'custody', true, [B.cairo.id]], ['feature', 'platform.demo_screens', false, null], ['feature', 'platform.demo_screens', true, null]])
+    [['module', 'custody', null, null], ['module', 'custody', null, [B.cairo.id]], ['feature', 'platform.demo_screens', false, null], ['feature', 'platform.demo_screens', true, null]])
+  // طلب من غير تغيير: لا حدث ولا كتابة
+  const untouched = await repo('SystemModule').findOneByOrFail({ key: 'custody' })
+  ok(await request(U.admin, 'PUT', '/modules/custody', {}))
+  assert.equal(ok(await request(U.admin, 'GET', '/modules/events')).length, events.length)
+  // قفل حقيقي بيتسجّل بحالته ووقته، وتغيير الجمهور بعده مابيلمسش الوقت ده
+  ok(await request(U.admin, 'PUT', '/modules/custody', { enabled: false }))
+  const closedRow = await repo('SystemModule').findOneByOrFail({ key: 'custody' })
+  assert.ok(new Date(closedRow.enabledAt) >= new Date(untouched.enabledAt))
+  ok(await request(U.admin, 'PUT', '/modules/custody', { audience: { mode: 'roles', ids: ['hr_manager'] } }))
+  const audienceRow = await repo('SystemModule').findOneByOrFail({ key: 'custody' })
+  assert.deepEqual([audienceRow.enabled, new Date(audienceRow.enabledAt).getTime()], [false, new Date(closedRow.enabledAt).getTime()])
+  assert.deepEqual(ok(await request(U.admin, 'GET', '/modules/events')).slice(0, 2).map(row => [row.kind, row.key, row.enabled]), [['module', 'custody', null], ['module', 'custody', false]])
   await clearRows()
 })
 
@@ -270,5 +288,11 @@ test('MS-08: شاشة الأدوار — صلاحيات الموديول الم�
   assert.equal((await request(U.hr, 'GET', '/candidates')).status, 404, 'الصلاحية موجودة والموديول مقفول = 404')
   ok(await request(U.admin, 'PUT', '/modules/recruitment', { enabled: true }))
   ok(await request(U.hr, 'GET', '/candidates'))
+  await clearRows()
+  // صلاحية تابعة لموديول اختياري ومسار أساسي بيطلبها بتفضل ظاهرة: تعديل الراتب في ملف الموظف (payroll.approve)، وقواعد جدول الدوام (attendance.manage)
+  for (const key of ['loans', 'payroll', 'shifts', 'overtime', 'attendance']) ok(await request(U.admin, 'PUT', `/modules/${key}`, { enabled: false }))
+  enabled = await flags()
+  assert.deepEqual([enabled['payroll.approve'], enabled['attendance.manage']], [true, true])
+  assert.deepEqual([enabled['payroll.view'], enabled['payroll.calculate'], enabled['attendance.view_all'], enabled['overtime.confirm']], [false, false, false, false])
   await clearRows()
 })

@@ -26,11 +26,16 @@ const KEY = 'hr_enabled_modules'
 const FRESH_MS = 5 * 60_000
 // أقل مدة بين تجديدين سببهم مسار رجّع «مش موجود» (صفحة بتنادي مسار غلط ماتعملش سيل نداءات)
 const MISS_REFRESH_MS = 30_000
+// لو أول قراءة للجلسة فشلت: إعادة محاولة بعد المدة دي (الشاشات بتشتغل على افتراضي السجل لحد ما تنجح)
+const RETRY_MS = 5_000
 let cached: { session: string; enabled: EnabledModules; at: number } | null = null
 let pending: { session: string; request: Promise<EnabledModules> } | null = null
 // بيزيد مع كل مسح للكاش: رد قديم وصل بعد المسح مايتخزنش فوق الجديد
 let generation = 0
 let lastMissRefresh = 0
+// أول قراءة للجلسة فشلت ولسه مانجحتش، ومؤقّت إعادة المحاولة
+let failedOnce = false
+let retryTimer: ReturnType<typeof setTimeout> | null = null
 const listeners = new Set<() => void>()
 
 const valid = (value: unknown): value is EnabledModules => {
@@ -75,10 +80,21 @@ function fetchModules(session: string): Promise<EnabledModules> {
       const next = previous && sameEnabled(previous, enabled) ? previous : enabled
       cached = { session, enabled: next, at: Date.now() }
       try { sessionStorage.setItem(KEY, JSON.stringify(cached)) } catch { /* تخزين غير متاح */ }
-      if (previous && next !== previous) listeners.forEach((listener) => listener())
+      // الشاشات المفتوحة بتتبلّغ لو الحالة اتغيّرت، ولو دي أول قراءة ناجحة بعد فشل (كانت شغالة على افتراضي السجل)
+      if (next !== previous && (previous || failedOnce)) listeners.forEach((listener) => listener())
+      failedOnce = false
       return next
     })
-    .catch(kept)
+    .catch(() => {
+      // مفيش حالة مخزّنة والقراءة فشلت: جرّب تاني بعد شوية بدل ما التبويب يفضل على الافتراضي لحد الدخول الجاي
+      if (!(cached && cached.session === session)) {
+        failedOnce = true
+        if (typeof window !== 'undefined' && !retryTimer) {
+          retryTimer = setTimeout(() => { retryTimer = null; if (currentSession() === session && !cachedFor(session)) void fetchModules(session) }, RETRY_MS)
+        }
+      }
+      return kept()
+    })
     .finally(() => { if (pending?.request === request) pending = null })
   pending = { session, request }
   return request
@@ -101,6 +117,8 @@ export const invalidateModules = () => {
   cached = null
   pending = null
   lastMissRefresh = 0
+  failedOnce = false
+  if (retryTimer) { clearTimeout(retryTimer); retryTimer = null }
   try { if (typeof window !== 'undefined') sessionStorage.removeItem(KEY) } catch { /* تخزين غير متاح */ }
   listeners.forEach((listener) => listener())
 }

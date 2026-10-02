@@ -21,6 +21,17 @@ interface Loaded {
   audiences: Record<string, string>
   /** الصفوف زي ما هي (شاشة الموديولات) */
   rows: Record<string, { enabledAt: Date | null; enabledBy: number | null }>
+  /** فترات قفل كل موديول اللي خلصت (من يوم القفل ليوم الفتح، بالتاريخ المحلي) — من سجل الفتح والقفل */
+  offIntervals: Record<string, Array<{ from: string; to: string }>>
+}
+
+const localDate = (value: Date) => `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, '0')}-${String(value.getDate()).padStart(2, '0')}`
+const EMPTY_STATE = (): Loaded => ({ at: Date.now(), state: { modules: {}, features: {} }, audiences: {}, rows: {}, offIntervals: {} })
+
+// اللي بيحصل بعد قفل موديول معين غير «شاشاته بتختفي» — بيتعرض في تأكيد القفل
+const CLOSE_NOTES: Partial<Record<ModuleKey, string[]>> = {
+  attendance: ['من يوم القفل المسير مش هيحسب غياب ولا تأخير: مفيش بصمات بتتجمع. والأيام دي مش هتتحسب غياب بعد ما الموديول يتفتح تاني.'],
+  custody: ['طلب عهدة اتعتمد ومستني تأكيد الاستلام أو اعتماد المدير هيستنى لحد ما الموديول يتفتح تاني.'],
 }
 
 // رقم خطأ SQL Server «Invalid object name»: الجدولين لسه ماتعملوش (الكود اتنشر قبل ترحيل 076)
@@ -42,43 +53,63 @@ export class ModulesService {
   private cache: Loaded | null = null
   private loading: Promise<Loaded> | null = null
   private missingTablesWarned = false
+  // بيزيد مع كل مسح للكاش: قراءة بدأت قبل الكتابة مايتخزنش ناتجها (القديم) بوقت جديد
+  private generation = 0
   private readonly subjects = new Map<number, { at: number; subject: AudienceSubject }>()
 
   constructor(private readonly ds: DataSource) {}
 
   /** بعد أي كتابة (أو في الاختبارات بعد تعديل مباشر في القاعدة) */
   invalidate(): void {
+    this.generation += 1
     this.cache = null
+    this.loading = null
     this.subjects.clear()
   }
 
   private async load(): Promise<Loaded> {
     if (this.cache && Date.now() - this.cache.at < ModulesService.CACHE_MS) return this.cache
-    if (!this.loading) this.loading = this.read().finally(() => { this.loading = null })
+    if (!this.loading) {
+      const reading: Promise<Loaded> = this.read().finally(() => { if (this.loading === reading) this.loading = null })
+      this.loading = reading
+    }
     return this.loading
   }
 
   private async read(): Promise<Loaded> {
+    const generation = this.generation
+    // الناتج بيتخزن لو مفيش كتابة حصلت والقراءة شغالة؛ غير كده بيرجع لصاحبه من غير تخزين والقراءة الجاية بتجيب الجديد
+    const keep = (loaded: Loaded) => { if (generation === this.generation) this.cache = loaded; return loaded }
     try {
       const modules = await this.ds.getRepository(SystemModule).find()
       const features = await this.ds.getRepository(SystemModuleFeature).find()
-      const loaded: Loaded = { at: Date.now(), state: { modules: {}, features: {} }, audiences: {}, rows: {} }
+      const events = await this.ds.getRepository(SystemModuleEvent).find({ where: { kind: 'module' }, order: { id: 'ASC' }, select: { id: true, key: true, enabled: true, at: true } })
+      const loaded = EMPTY_STATE()
       for (const row of modules) {
         loaded.state.modules[row.key] = !!row.enabled
         loaded.rows[row.key] = { enabledAt: row.enabledAt ?? null, enabledBy: row.enabledBy ?? null }
         if (row.audience && parseRequestAudience(row.audience)) loaded.audiences[row.key] = row.audience
       }
       for (const row of features) loaded.state.features[row.key] = !!row.enabled
-      this.cache = loaded
-      return loaded
+      // فترات القفل اللي خلصت: حدث قفل وبعده حدث فتح (حدث تغيير الجمهور enabled = null مابيتحسبش)
+      const closedOn: Record<string, string> = {}
+      for (const event of events) {
+        if (event.enabled === null || event.enabled === undefined) continue
+        const day = localDate(new Date(event.at))
+        if (!event.enabled) { if (!(event.key in closedOn)) closedOn[event.key] = day; continue }
+        if (event.key in closedOn) {
+          (loaded.offIntervals[event.key] ??= []).push({ from: closedOn[event.key], to: day })
+          delete closedOn[event.key]
+        }
+      }
+      return keep(loaded)
     } catch (error) {
       if (sqlErrorNumber(error) === MISSING_TABLE) {
         if (!this.missingTablesWarned) {
           this.logger.warn('جدولا الموديولات غير موجودين (ترحيل 076 لسه ماتطبقش) — كل الموديولات على قيمها الافتراضية في السجل')
           this.missingTablesWarned = true
         }
-        this.cache = { at: Date.now(), state: { modules: {}, features: {} }, audiences: {}, rows: {} }
-        return this.cache
+        return keep(EMPTY_STATE())
       }
       if (this.cache) {
         this.logger.warn(`تعذرت قراءة حالة الموديولات، مكمّلين بآخر حالة مقروءة: ${(error as Error)?.message ?? error}`)
@@ -103,6 +134,17 @@ export class ModulesService {
 
   async isFeatureEnabled(feature: string): Promise<boolean> {
     return featureEnabled(await this.state(), feature)
+  }
+
+  /**
+   * الموديول كان مقفول في اليوم ده؟ مقفول دلوقتي = أي يوم؛ ومفتوح دلوقتي = اليوم جوه فترة قفل سابقة (من يوم القفل ليوم الفتح).
+   * محرك الحضور بيسأل قبل ما يحسب يوم: والحضور مقفول مفيش بصمات بتتجمع، فاليوم اللي من غير سجل مايتحسبش غياب — لا في المسير
+   * ولا في لحاق الغياب بعد ما الموديول يتفتح تاني.
+   */
+  async wasOffOn(module: ModuleKey, date: string): Promise<boolean> {
+    const loaded = await this.load()
+    if (!moduleEnabled(loaded.state, module)) return true
+    return (loaded.offIntervals[module] ?? []).some((interval) => date >= interval.from && date <= interval.to)
   }
 
   /** المهمة المجدولة تشتغل؟ (موديولها مفعّل، أو مالهاش موديول مسجّل) */
@@ -133,12 +175,17 @@ export class ModulesService {
   }
 
   /** الموديول مفعّل للمستخدم ده؟ (الحالة العامة + جمهور التفعيل لو له جمهور). مدير النظام بيعدّي الجمهور. */
-  async allowedFor(module: ModuleKey, user: JwtPayload | null | undefined): Promise<boolean> {
+  async allowedFor(module: ModuleKey, user: JwtPayload | null | undefined, seen: ReadonlySet<string> = new Set()): Promise<boolean> {
     const loaded = await this.load()
     if (!moduleEnabled(loaded.state, module)) return false
+    if (!user) return true // مسار عام: الجمهور بيتفحص بعد الدخول
+    // الجمهور بينزل على اللي بيعتمد على الموديول: اللي برّه جمهور الحضور برّه الورديات والإضافي كمان
+    const next = new Set(seen).add(module)
+    for (const dependency of moduleDefOf(module).dependsOn) {
+      if (isModuleKey(dependency) && !next.has(dependency) && !(await this.allowedFor(dependency, user, next))) return false
+    }
     const audience = loaded.audiences[module]
     if (!audience || moduleDefOf(module).core) return true
-    if (!user) return true // مسار عام: الجمهور بيتفحص بعد الدخول
     return requestAudienceAllows(audience, await this.subjectOf(user, audience), 'submit')
   }
 
@@ -206,6 +253,8 @@ export class ModulesService {
     const def = moduleDefOf(module)
     if (def.core && change.enabled === false) throw new BadRequestException(`«${def.nameAr}» موديول أساسي ومايتقفلش`)
     if (def.core && change.audience) throw new BadRequestException(`«${def.nameAr}» موديول أساسي ومفعّل لكل الشركة`)
+    // طلب من غير تغيير: مفيش كتابة ولا حدث في السجل
+    if (change.enabled === undefined && change.audience === undefined) return this.catalog()
     await this.write(async (em) => {
       await this.lock(em)
       const state = await this.freshState(em)
@@ -225,10 +274,14 @@ export class ModulesService {
       const row = (await repo.findOne({ where: { key: module } })) ?? repo.create({ key: module, enabled: def.core || def.defaultEnabled, audience: null })
       if (change.enabled !== undefined) row.enabled = def.core ? true : change.enabled
       if (change.audience !== undefined) row.audience = this.audienceJson(change.audience)
-      row.enabledAt = new Date()
-      row.enabledBy = user.sub
+      const at = new Date()
+      // «مين فتح أو قفل وإمتى» بيتغيّر مع الفتح والقفل بس؛ تغيير الجمهور لوحده حدث enabled = null («غيّر جمهور»)
+      if (change.enabled !== undefined || !row.enabledAt) {
+        row.enabledAt = at
+        row.enabledBy = user.sub
+      }
       await repo.save(row)
-      await this.record(em, { kind: 'module', key: module, enabled: !!row.enabled, audience: row.audience ?? null, byUserId: user.sub, at: row.enabledAt })
+      await this.record(em, { kind: 'module', key: module, enabled: change.enabled === undefined ? null : !!row.enabled, audience: row.audience ?? null, byUserId: user.sub, at })
     })
     this.invalidate()
     return this.catalog()
@@ -327,7 +380,7 @@ export class ModulesService {
     const openRequests = codes.length ? await this.ds.getRepository(Request).count({ where: [{ ...open, typeCode: In(codes) }, { ...open, definitionCode: In(codes) }] }) : 0
     const items: Array<{ label: string; count: number }> = []
     for (const [label, count] of await this.liveData(module)) if (count > 0) items.push({ label, count })
-    return { key: module, nameAr: moduleDefOf(module).nameAr, openRequests, items }
+    return { key: module, nameAr: moduleDefOf(module).nameAr, openRequests, items, notes: CLOSE_NOTES[module] ?? [] }
   }
 
   // بيانات الموديول الشغالة دلوقتي (للتنبيه قبل القفل) — أسماء الكيانات نصوص عشان السجل مايستوردش كل الموديولات

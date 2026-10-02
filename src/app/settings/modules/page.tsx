@@ -167,6 +167,8 @@ export default function ModulesSettingsPage() {
     return `${whoText}${whereText}`
   }
   const eventText = (event: ModuleEvent) => event.kind === 'preset' ? `طبّق باقة «${event.nameAr}»`
+    // حدث موديول من غير حالة = تغيير جمهور بس
+    : event.kind === 'module' && event.enabled === null ? `غيّر جمهور «${event.nameAr}» إلى: ${audienceText(event.audience)}`
     : `${event.enabled ? 'فعّل' : 'قفل'} ${event.kind === 'feature' ? 'ميزة' : ''} «${event.nameAr}»${event.audience ? ` (مفعّل لـ ${audienceText(event.audience)})` : ''}`
 
   const pick = <T,>(list: T[], value: T) => (list.includes(value) ? list.filter((item) => item !== value) : [...list, value])
@@ -330,6 +332,9 @@ export default function ModulesSettingsPage() {
               {closing.impact.items.map((item) => <li key={item.label}>• {item.label}: <span className="font-medium">{item.count}</span></li>)}
             </ul>
           )}
+          {(closing.impact.notes ?? []).map((note) => (
+            <p key={note} className="bg-amber-50 text-amber-800 rounded-xl px-4 py-3 text-sm">{note}</p>
+          ))}
           <div className="flex justify-end gap-3 pt-2">
             <button type="button" onClick={() => setClosing(null)} className="btn-secondary">رجوع</button>
             <button type="button" onClick={confirmClose} className="btn-danger">اقفل الموديول</button>
@@ -368,6 +373,7 @@ export default function ModulesSettingsPage() {
       {audienceOf && (
         <Modal title={`مين «${audienceOf.nameAr}» مفعّل لهم`} onClose={() => setAudienceOf(null)}>
           <p className="text-sm text-gray-500">اللي برّه الاختيار مش هيشوف الموديول ولا يستخدمه. مدير النظام بيشوفه دايمًا. الاختيار مابيغيّرش أي حساب ولا مهمة آلية.</p>
+          <p className="bg-amber-50 text-amber-800 rounded-xl px-4 py-3 text-sm">خلّي بالك: اللي برّه الاختيار مش هيقدر يعتمد ولا يأكد حاجة في الموديول ده كمان، حتى لو متسمّي معتمد أو مدير مباشر. لو فيه معتمدين أو مديرين لازم يشتغلوا عليه، دخّلهم في الاختيار.</p>
           {modalError && <div role="alert" className="bg-red-50 text-red-700 rounded-xl p-3 text-sm">{modalError}</div>}
           <div>
             <p className="label">مين</p>

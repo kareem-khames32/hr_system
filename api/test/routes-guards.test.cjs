@@ -52,11 +52,23 @@ for (const controller of collectControllers(AppModule)) {
       id: `${controller.name}.${name}`, controller: controller.name, name,
       routes: prefixes.flatMap(prefix => paths.map(sub => `${METHODS[method]} /${[prefix, sub].filter(part => part && part !== '/').join('/')}`)),
       perms: read(PERMS_KEY) ?? [], modules: read(REQUIRE_MODULE_KEY) ?? [], byParam: read(REQUIRE_MODULE_PARAM_KEY) ?? null,
-      ownModules: Reflect.getMetadata(REQUIRE_MODULE_KEY, fn) ?? null, guards,
+      ownModules: Reflect.getMetadata(REQUIRE_MODULE_KEY, fn) ?? null, classModules: Reflect.getMetadata(REQUIRE_MODULE_KEY, controller) ?? [], guards,
     })
   }
 }
 const byId = new Map(handlers.map(handler => [handler.id, handler]))
+// كل مسار عليه وسم موديول خاص بيه (بيكسب على وسم الكنترولر)، بالاسم — RG-04
+const HANDLER_TAGS = {
+  AttendanceController: { assignScheduleRange: ['shifts'], calendarContext: ['platform'], clearWeekSchedule: ['shifts'], confirmCalendarContext: ['platform'], confirmOvertime: ['overtime'], createOvertimePeriod: ['overtime'], createScheduleRule: ['platform'], deleteOvertimePeriod: ['overtime'], deleteScheduleRule: ['platform'], employmentWindows: ['platform'], listOvertimePeriods: ['overtime'], listScheduleRules: ['platform'], overtimeLog: ['overtime'], overtimePreview: ['overtime'], payrollMonth: ['platform'], pendingOvertime: ['overtime'], setDayOverride: ['shifts'], setDayOverridesBulk: ['shifts'], updateOvertimePeriod: ['overtime'], updateScheduleRule: ['platform'], upsertSchedule: ['shifts'], weekDayOverrides: ['shifts'], weekSchedule: ['shifts'], workingDays: ['platform'] },
+  DashboardController: { attendanceTrend: ['attendance'], departmentStats: ['attendance'] },
+  EmployeeExtrasController: { listLoans: ['loans'] },
+  FinancialReportController: { loans: ['loans'], overtime: ['payroll','overtime'] },
+  LoansController: { capReview: ['requests'] },
+  PortalController: { dismissNotification: ['notifications'], markNotificationsRead: ['notifications'], notifications: ['notifications'] },
+  ReportsController: { attendance: ['attendance'], leaves: ['leave'], overtime: ['overtime'], payroll: ['payroll'], payrollLoans: ['loans'], payrollOvertime: ['payroll','overtime'], payrollUnassigned: ['payroll'], payrollVariance: ['payroll'] },
+  RequestsController: { acknowledge: ['custody'], activeLeaveTypes: ['leave'], adjustBalance: ['leave'], balanceAdjustments: ['leave'], bulkBalances: ['leave'], employeeBalances: ['leave'], handover: ['custody'], managerConfirm: ['custody'], myBalances: ['leave'], myLeaves: ['leave'], reconcileOvertime: ['overtime'], rejectCustody: ['custody'], rollover: ['leave'], transfer: ['custody'] },
+  SettingsController: { createChain: ['requests'], createLeaveType: ['leave'], createRequestType: ['requests'], destinationHandlers: ['requests'], listChains: ['requests'], listLeaveTypes: ['leave'], listRequestTypes: ['requests'], replaceChainSteps: ['requests'], updateChain: ['requests'], updateLeaveType: ['leave'], updateRequestType: ['requests'], updateStep: ['requests'] },
+}
 const guarded = (handler, guard) => handler.guards.includes(guard)
 
 test('RG-01: كل مسار تابع لموديول مسجّل', () => {
@@ -171,6 +183,14 @@ test('RG-04: المسارات اللي بتخدم أكتر من موديول م�
     assert.ok(own.length > 0, controller)
     for (const handler of own) assert.deepEqual(handler.modules, [module], handler.id)
   }
+  // كل وسم موديول على مستوى الـhandler مثبّت بالاسم: شيل وسم بيفتح مساره مع موديوله مقفول، وإضافة وسم قرار لازم يبان هنا
+  const tagged = {}
+  for (const handler of handlers.filter(item => item.ownModules)) (tagged[handler.controller] ??= {})[handler.name] = handler.ownModules
+  assert.deepEqual(tagged, HANDLER_TAGS)
+  assert.equal(Object.values(tagged).reduce((sum, own) => sum + Object.keys(own).length, 0), 67)
+  // ووسم الـhandler دايمًا غير وسم الكنترولر (وسم مكرر مالوش معنى وبيخبّي غلطة)
+  for (const handler of handlers.filter(item => item.ownModules)) assert.notDeepEqual(handler.ownModules, handler.classModules, handler.id)
+
   // شاشة الموديولات نفسها: صلاحيتها settings.modules على كل مساراتها
   const admin = handlers.filter(handler => handler.controller === 'ModulesAdminController')
   assert.equal(admin.length, 7)

@@ -26,6 +26,7 @@ import { lockPayrollEmployees } from '../payroll/payroll-settlement-boundary'
 import { markPayrollDaysDirty } from '../payroll/payroll-daily-accrual'
 import { branchIdIn, branchScopeOf, branchScopeQb, inBranchScope, scopeWord, userHasPerm } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
+import { ModulesService } from '../modules-registry/modules.service'
 import { User } from '../auth/user.entity'
 import { PublicHoliday, Shift, WorkSchedule } from '../assets/assets.entities'
 import { Employee } from '../employees/employee.entity'
@@ -276,8 +277,14 @@ export class AttendanceService {
     @InjectRepository(WorkSchedule)
     private readonly workSchedules: Repository<WorkSchedule>,
     @InjectRepository(Shift)
-    private readonly shiftsCatalog: Repository<Shift>
+    private readonly shiftsCatalog: Repository<Shift>,
+    private readonly modules: ModulesService
   ) {}
+
+  // موديول الحضور كان مقفول في اليوم ده؟ (خدمة اتبنت بالإيد في اختبار وحدة من غير حقن = الموديول مفعّل)
+  private attendanceWasOff(date: string): Promise<boolean> | boolean {
+    return this.modules ? this.modules.wasOffOn('attendance', date) : false
+  }
 
   // A payroll calculation already owns the employee lock. Rebind repositories
   // locally so nested attendance/OT reads and writes share its transaction.
@@ -2367,6 +2374,18 @@ export class AttendanceService {
       return Object.assign(this.days.create({ employeeId, date, status: 'present',
         lateMinutes: 0, earlyLeaveMinutes: 0, deductibleMinutes: 0, workMinutes: 0,
         attendanceReviewRequired: true, attendanceReviewReason: 'الفترة مقفلة ولا يوجد سجل حضور محفوظ لهذا اليوم',
+      }), { attendanceExempt: false, exemption: null })
+    }
+    // موديول الحضور مقفول دلوقتي، أو كان مقفول في اليوم ده: مفيش بصمات بتتجمع، فاليوم اللي من غير سجل مايتحسبش غياب ولا بيتولد له
+    // صف، والمحفوظ من قبل القفل بيتقرا زي ما هو. الشرط هنا عشان يمشي على كل اللي بينادوا computeDay: المسير وتراكمه اليومي،
+    // ولحاق الغياب بعد ما الموديول يتفتح تاني، وإعادة الحساب بعد تعديل عطلة أو إنهاء إيقاف.
+    if (await this.attendanceWasOff(date)) {
+      if (storedDay) return Object.assign(storedDay, {
+        attendanceExempt: storedDay.attendanceRuleSnapshot?.attendanceExempt ?? storedDay.status === 'exempt',
+        exemption: null,
+      })
+      return Object.assign(this.days.create({ employeeId, date, status: 'present',
+        lateMinutes: 0, earlyLeaveMinutes: 0, deductibleMinutes: 0, workMinutes: 0,
       }), { attendanceExempt: false, exemption: null })
     }
     const emp = await this.employeeRow(employeeId)

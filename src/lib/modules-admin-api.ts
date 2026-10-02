@@ -31,6 +31,8 @@ export interface ModuleImpact {
   openRequests: number
   // بيانات شغالة تانية (عهد مسلّمة، مسيرات مفتوحة…) بتفضل زي ما هي
   items: Array<{ label: string; count: number }>
+  // اللي بيحصل بعد قفل الموديول ده بالذات غير اختفاء شاشاته
+  notes: string[]
 }
 export interface PresetDiff { preset: ModulePreset; nameAr: string; enable: ModuleRef[]; disable: ModuleRef[] }
 export interface ModuleEvent {

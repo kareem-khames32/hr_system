@@ -14,6 +14,8 @@
 //  ME-07) المزايا الفرعية والباقات: الميزة بتتفتح وتتقفل، والباقة بتعرض الفرق قبل التطبيق وبتتطبق.
 //  ME-08) الإشعارات والتقويم: إشعارات الموديول المقفول وإجازات التقويم مابتظهرش.
 //  ME-09) قبل ترحيل 076 (الجداول مش موجودة): كل حاجة شغالة على الافتراضي.
+//  ME-11) الحضور مقفول: محرك الحضور مابيحسبش غياب عن أيام القفل (لا في المسير ولا في لحاق الغياب بعد الفتح)، واللي قبل القفل زي ما هو.
+//  ME-12) وراثة الجمهور للموديول المعتمِد، ومسار الوردية جوه كنترولر الحضور والكتالوج، والطلب المُرجَع بيتقدّم تاني والموديول مقفول.
 //  ME-10) مسارات الأساس اللي بتجمّع بيانات موديولات اختيارية (ملف الموظف ولوحة التحكم): جزء الموديول المقفول بيرجع فاضي، والمسار نفسه شغال.
 //         وطلب السلفة المفتوح بتتراجع سقفه بعد قفل السلف. (مكتوب قبل ME-09 في الملف لأن ME-09 بيشيل الجداول.)
 // Run (من api/): node --test test/modules-enforcement.integration.cjs
@@ -27,6 +29,7 @@ require('../node_modules/reflect-metadata')
 const sql = require('../node_modules/mssql')
 const env = require('../node_modules/dotenv').parse(fs.readFileSync(path.join(apiRoot, '.env')))
 const registry = require('../src/modules-registry/registry')
+const { In } = require('../node_modules/typeorm')
 
 const database = `hr_modules_test_${crypto.randomBytes(8).toString('hex')}`
 const NAME = /^hr_modules_test_[a-f0-9]{16}$/
@@ -402,6 +405,88 @@ test('ME-08: الإشعارات والتقويم — بتوع الموديول �
   await clearRows()
   mine = await ids(U.cairo)
   assert.ok(mine.includes(`missing-punch-${yesterday}`)); assert.ok(mine.includes(`leave-revoked-${leave.id}`))
+})
+
+test('ME-11: الحضور مقفول — محرك الحضور مابيحسبش غياب عن أيام القفل، ولا بعد ما يتفتح تاني', async () => {
+  await clearRows()
+  const attendance = app.get(require('../src/attendance/attendance.service').AttendanceService)
+  await repo('RequestsConfig').save({ key: 'attendance.weekend_days', value: 'FRI,SAT' })
+  const person = code => repo('Employee').save({ employeeCode: code, fullName: 'موظف ' + code, branchId: B.cairo.id, departmentId: D.cairo.id, status: 'active', isActive: true,
+    joinDate: '2022-01-01', basicSalary: 9000 })
+  const rows = async emp => (await repo('AttendanceDay').find({ where: { employeeId: emp.id }, order: { date: 'ASC' } })).map(row => [String(row.date).slice(0, 10), row.status])
+  const from = daysAgo(14), to = daysAgo(0)
+
+  // الحضور مفعّل: الأيام اللي فاتت من غير بصمة بتتسجّل غياب (ده اللي المسير بيخصمه)
+  const on = await person('MOD-ABS-1')
+  const created = await attendance.materializeAbsences(on.id, from, to)
+  assert.ok(created >= 8, 'أيام شغل في آخر 15 يوم من غير بصمة = غياب: ' + created)
+  assert.ok((await rows(on)).every(([, status]) => status === 'absent'))
+
+  // الحضور مقفول (ومعاه الورديات والإضافي): نفس النداء مابيولّدش ولا صف — مفيش بصمات بتتجمع فمفيش غياب
+  for (const key of ['shifts', 'overtime', 'attendance']) await modules.setModule(admin(), key, { enabled: false })
+  const off = await person('MOD-ABS-2')
+  assert.equal(await attendance.materializeAbsences(off.id, from, to), 0)
+  assert.deepEqual(await rows(off), [])
+  // والمحفوظ من قبل القفل زي ما هو (مابيتمسحش ولا بيتغيّر)
+  const before = await rows(on)
+  await attendance.materializeAbsences(on.id, from, to)
+  assert.deepEqual(await rows(on), before)
+  // نفس الحكم لنداء اليوم الواحد (ده اللي تراكم المسير وإعادة الحساب بعد تعديل عطلة بينادوه)
+  const single = await attendance.computeDay(off.id, daysAgo(3), false)
+  assert.equal(single.status, 'present'); assert.deepEqual(await rows(off), [])
+  assert.deepEqual([await modules.wasOffOn('attendance', daysAgo(40)), await modules.wasOffOn('attendance', to)], [true, true], 'مقفول دلوقتي = أي يوم')
+
+  // القفل كان من 5 أيام واتفتح النهارده: أيام القفل (من يوم القفل ليوم الفتح) مابتتحسبش غياب في اللحاق، واللي قبلها بتتحسب
+  await repo('SystemModuleEvent').update({ kind: 'module', key: 'attendance', enabled: false }, { at: new Date(Date.now() - 5 * 86400000) })
+  for (const key of ['attendance', 'shifts', 'overtime']) await modules.setModule(admin(), key, { enabled: true })
+  const offStart = daysAgo(5)
+  assert.deepEqual([await modules.wasOffOn('attendance', daysAgo(6)), await modules.wasOffOn('attendance', offStart), await modules.wasOffOn('attendance', to)], [false, true, true])
+  const back = await person('MOD-ABS-3')
+  const later = await attendance.materializeAbsences(back.id, from, to)
+  const backRows = await rows(back)
+  assert.ok(later >= 3 && backRows.length === later, JSON.stringify(backRows))
+  assert.ok(backRows.every(([date, status]) => status === 'absent' && date < offStart), 'ولا يوم من أيام القفل اتسجّل غياب: ' + JSON.stringify(backRows))
+  // والأيام دي تفضل من غير غياب حتى بعد ما سجل الفتح والقفل يتقري من جديد
+  modules.invalidate()
+  assert.equal(await attendance.materializeAbsences(back.id, offStart, to), 0)
+  await repo('AttendanceDay').delete({ employeeId: In([on.id, off.id, back.id]) })
+  await clearRows(); await repo('SystemModuleEvent').clear(); modules.invalidate()
+})
+
+test('ME-12: وراثة الجمهور، ومسارات الورديات جوه كنترولر الحضور والكتالوج، والطلب المُرجَع والموديول مقفول', async () => {
+  await clearRows()
+  // الجمهور بينزل على اللي بيعتمد على الموديول: برّه جمهور الحضور = برّه الورديات والإضافي كمان
+  await modules.setModule(admin(), 'attendance', { audience: { mode: 'all', where: { mode: 'branches', ids: [B.cairo.id] } } })
+  const cairo = (await enabledFor(U.cairo)).modules, alex = (await enabledFor(U.alex)).modules
+  for (const key of ['attendance', 'shifts', 'overtime']) { assert.ok(cairo.includes(key), key); assert.ok(!alex.includes(key), key + ' برّه الجمهور') }
+  assert.ok(alex.includes('leave') && alex.includes('payroll'), 'اللي مابيعتمدش على الحضور زي ما هو')
+  ok(await request(U.cairo, 'GET', '/attendance/my-today'))
+  gone(await request(U.alex, 'GET', '/attendance/my-today'), 'GET', '/attendance/my-today')
+  await clearRows()
+
+  // الورديات مقفولة والحضور مفعّل: مسارات الورديات جوه كنترولر الحضور وكتالوجها وتاريخ تعريفها 404، وباقي الحضور والكتالوجات شغال
+  await modules.setModule(admin(), 'shifts', { enabled: false })
+  const week = isoDate(new Date())
+  gone(await request(admin(), 'GET', `/attendance/schedule?weekStart=${week}`), 'GET', `/attendance/schedule?weekStart=${week}`)
+  gone(await request(admin(), 'GET', '/catalogs/shifts'), 'GET', '/catalogs/shifts')
+  gone(await request(admin(), 'GET', '/attendance-rules/SHIFT/1/history'), 'GET', '/attendance-rules/SHIFT/1/history')
+  ok(await request(U.cairo, 'GET', '/attendance/my-today'))
+  ok(await request(admin(), 'GET', '/catalogs/holidays'))
+  const scheduleHistory = await request(admin(), 'GET', '/attendance-rules/WORK_SCHEDULE/999999/history')
+  assert.notEqual(scheduleHistory.body?.message, 'Cannot GET /api/attendance-rules/WORK_SCHEDULE/999999/history', 'تاريخ جدول أيام العمل أساسي: الرد من الخدمة')
+  await clearRows()
+
+  // طلب اترجّع لصاحبه وبعدين موديوله اتقفل: بيتقدّم تاني ويكمّل اعتماده، وطلب جديد من نفس النوع مرفوض
+  const day = daysAgo(-9)
+  const returned = ok(await request(U.cairo, 'POST', '/requests', { typeCode: 'REMOTE_WORK', submit: true, payload: { fromDate: day, toDate: day } }), 201)
+  ok(await request(U.hr, 'POST', `/requests/${returned.id}/act`, { action: 'RETURN', comment: 'وضّح مكان الشغل' }), 201)
+  assert.equal((await repo('Request').findOneByOrFail({ id: returned.id })).status, 'RETURNED_FOR_INFO')
+  await setRow('attendance', false)
+  assert.equal((await request(U.cairo, 'POST', '/requests', { typeCode: 'REMOTE_WORK', submit: true, payload: { fromDate: day, toDate: day } })).status, 404)
+  assert.equal(ok(await request(U.cairo, 'POST', `/requests/${returned.id}/resubmit`, { payload: { fromDate: day, toDate: day, note: 'من البيت' } }), 201).status, 'UNDER_REVIEW')
+  ok(await request(U.hr, 'POST', `/requests/${returned.id}/act`, { action: 'APPROVE' }), 201)
+  assert.equal((await repo('Request').findOneByOrFail({ id: returned.id })).status, 'COMPLETED')
+  await clearRows()
 })
 
 test('ME-10: مسارات الأساس اللي بتجمّع بيانات موديولات اختيارية — جزء الموديول المقفول بيرجع فاضي، والمسار شغال', async () => {

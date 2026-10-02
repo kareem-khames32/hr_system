@@ -9,6 +9,7 @@
 //  MR-07) التبعيات عند القفل والفتح: الناقص والمعتمد.
 //  MR-08) كل صلاحية في سجل الصلاحيات لها موديول (شاشة الأدوار بتعرض صلاحيات الموديولات المفعّلة بس).
 //  MR-09) كل معالج تنفيذ في أنواع الطلبات المزروعة له موديول متوقع.
+//  MR-10) صلاحيات تابعة لموديول اختياري ومسار أساسي بيطلبها بتفضل ظاهرة في شاشة الأدوار.
 // Run (من api/): node --test test/modules-registry.test.cjs
 const { test } = require('node:test')
 const assert = require('node:assert/strict')
@@ -279,6 +280,18 @@ test('MR-08: كل صلاحية في سجل الصلاحيات لها موديو�
   assert.deepEqual(unowned, [], `صلاحيات من غير موديول: ${unowned.join(', ')}`)
   const unknown = MODULE_KEYS.flatMap(key => MODULES[key].permissions).filter(key => !ALL_PERMISSIONS.includes(key))
   assert.deepEqual(unknown, [], `صلاحيات في سجل الموديولات مش في سجل الصلاحيات: ${unknown.join(', ')}`)
+})
+
+test('MR-10: صلاحيات تابعة لموديول اختياري ومسار أساسي بيطلبها بتفضل ظاهرة في شاشة الأدوار', () => {
+  const { PERMISSIONS } = require('../src/auth/permissions')
+  assert.deepEqual([...registry.PERMISSIONS_USED_BY_CORE], ['payroll.approve', 'attendance.manage'])
+  for (const key of registry.PERMISSIONS_USED_BY_CORE) assert.ok(Object.prototype.hasOwnProperty.call(PERMISSIONS, key), key + ' صلاحية مسجّلة')
+  const all = registry.enabledSnapshot(state()).modules
+  const noPayroll = registry.enabledSnapshot(state({ payroll: false })).modules
+  const noAttendance = registry.enabledSnapshot(state({ attendance: false })).modules
+  assert.deepEqual(['payroll.approve', 'payroll.view', 'loans.repay', 'employees.view'].map(key => registry.permissionShown(key, noPayroll)), [true, false, false, true])
+  assert.deepEqual(['attendance.manage', 'attendance.view_all', 'overtime.confirm', 'leaves.view_all'].map(key => registry.permissionShown(key, new Set(noAttendance))), [true, false, false, true])
+  for (const key of Object.keys(PERMISSIONS)) assert.equal(registry.permissionShown(key, all), true, key)
 })
 
 test('MR-09: أنواع الطلبات المزروعة — كل نوع في موديوله، وكل معالج تنفيذ حقيقي متسجّل لموديول', () => {

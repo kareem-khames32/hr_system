@@ -65,7 +65,7 @@ export class SystemModuleEvent {
   @Column({ type: 'nvarchar', length: 100 })
   key: string
 
-  // الحالة بعد التغيير (NULL لتطبيق الباقة نفسه — موديولاتها ليها صفوفها)
+  // الحالة بعد التغيير (NULL لتطبيق الباقة نفسه — موديولاتها ليها صفوفها — ولتغيير جمهور الموديول من غير فتح أو قفل)
   @Column({ type: 'bit', nullable: true })
   enabled: boolean | null
 

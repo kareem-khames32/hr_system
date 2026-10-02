@@ -421,10 +421,11 @@ export default function MyRequestsPage() {
     }
   }
 
+  // (وبيتعاد لما حالة موديول إنهاء الخدمة توصل أو تتغيّر: ملف الاستقالة بيتقري معاه)
   useEffect(() => {
     load()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [])
+  }, [offboardingOn])
 
   // فتح نموذج نوع بعينه من رابط (مثلاً «بصمة ناقصة» في كشف الحضور ← طلب تصحيح
   // بصمة معبّأ بالتاريخ والطرف الناقص): /requests?type=PUNCH_CORRECTION&date=…&punchType=OUT

@@ -41,7 +41,7 @@ import { Role, UserPermissionOverride } from './role.entity'
 import { User } from './user.entity'
 import { RequireModule } from '../modules-registry/module.guard'
 import { ModulesService } from '../modules-registry/modules.service'
-import { moduleOfPermission } from '../modules-registry/registry'
+import { permissionShown } from '../modules-registry/registry'
 
 class CreateRoleDto {
   // حد 30 = طول عمود users.role — الكود الأطول لا يمكن إسناده لمستخدم
@@ -146,7 +146,7 @@ export class RolesController {
     const enabled = new Set((await this.modules.enabledFor(null)).modules)
     return permissionRegistry().map((entry) => ({
       ...entry,
-      moduleEnabled: enabled.has(moduleOfPermission(entry.key) ?? 'platform'),
+      moduleEnabled: permissionShown(entry.key, enabled),
       carriedBy: roles
         .filter((role) => role.isActive && role.permissions.includes(entry.key))
         .map((role) => ({ code: role.code, nameAr: role.nameAr })),

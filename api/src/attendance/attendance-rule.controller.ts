@@ -6,8 +6,10 @@ import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, RolesGuard, us
 import { Employee } from '../employees/employee.entity'
 import { Shift, WorkSchedule } from '../assets/assets.entities'
 import { AttendanceRuleSourceType, AttendanceRuleVersion } from './attendance-rule.entities'
-import { RequireModule } from '../modules-registry/module.guard'
+import { RequireModule, RequireModuleByParam } from '../modules-registry/module.guard'
 
+// جداول أيام العمل ودوام الموظف أساسي؛ تاريخ تعريف وردية تابع لموديول الورديات
+@RequireModuleByParam('sourceType', { SHIFT: 'shifts' })
 @RequireModule('platform')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('attendance-rules')

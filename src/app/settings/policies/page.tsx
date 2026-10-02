@@ -267,7 +267,8 @@ function LoanAdvanceCapBlock({ onSaveConfig, pendingConfigCount }: { onSaveConfi
       .catch(e => setError(e instanceof Error ? e.message : 'تعذر تحميل سقف السلفة'))
       .finally(() => setLoading(false))
   }
-  useEffect(load, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, [loansOn])
 
   const save = async () => {
     if (!canManage || busy) return
@@ -384,7 +385,8 @@ function TerminationReasonsBlock({ onSaveConfig, pendingConfigCount }: { onSaveC
       .catch(e => setError(e instanceof Error ? e.message : 'تعذر تحميل أسباب إنهاء الخدمة'))
       .finally(() => setLoading(false))
   }
-  useEffect(load, [])
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  useEffect(load, [offboardingOn])
 
   const dirty = reasonsSnapshot(rows) !== savedSnapshot
   const locked = !canEdit || busy
