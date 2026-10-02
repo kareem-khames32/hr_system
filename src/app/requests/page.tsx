@@ -17,6 +17,7 @@ import { payloadFieldKind, payloadFieldLabel, payloadNumberProps, payloadSummary
 import { leaveAttachmentName, leaveAttachmentRequiredNow, leaveAttachmentRuleText, leaveCountsCalendarDays as countsCalendarDaysOf, leaveHalfDayAllowed, leaveRulesHint } from '@/lib/leave-catalog'
 import { salaryIncreaseRequestFields, salaryIncreaseRequestPayload } from '@/lib/employee-salary-change-api'
 import { loanRequestKindLabel, REGULAR_LOAN_SINGLE_DEDUCTION_NOTE } from '@/lib/loans-api'
+import { useModuleEnabled } from '@/lib/modules'
 import {
   Plus,
   Search,
@@ -315,6 +316,7 @@ const statusIcons: Partial<Record<RequestStatus, typeof Clock>> = {
 
 export default function MyRequestsPage() {
   const [types, setTypes] = useState<ApiRequestType[]>([])
+  const offboardingOn = useModuleEnabled('offboarding')
   const [requests, setRequests] = useState<MyRequestRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
@@ -404,7 +406,8 @@ export default function MyRequestsPage() {
         fetchRequestTypes(),
         // «طلباتي» وحدها تعرض معها ما قدّمه المستخدم نيابةً عن غيره، موسوماً باسمه
         apiFetch<ApiRequest[]>('/requests/mine?includeOnBehalf=1'),
-        fetchMyOffboardingCase().catch(() => null),
+        // ملف الاستقالة من موديول إنهاء الخدمة: مقفول = مفيش نداء
+        offboardingOn ? fetchMyOffboardingCase().catch(() => null) : Promise.resolve(null),
       ])
       setTypes(typeList)
       setRequests(mine.map((r) => mapRequest(r, typeList)))
@@ -1203,6 +1206,11 @@ export default function MyRequestsPage() {
   const resubmit = async (id: number) => {
     try {
       const detail = await fetchRequest(id)
+      // نوع الطلب مش في المتاح دلوقتي (موديوله اتقفل بعد التقديم): النموذج مايتبنيش من غير تعريفه وقوايمه
+      if (!types.some((type) => type.code === (isLeaveRequest(detail) ? 'LEAVE' : detail.typeCode))) {
+        setError('نوع الطلب ده متوقف دلوقتي، فماينفعش يتعدّل ويتبعت تاني من هنا. تقدر تسحب الطلب، أو تستنى لما يتفعّل تاني.')
+        return
+      }
       const payload = parseJson<Record<string, unknown>>(detail.payload, {})
       if (isLeaveRequest(detail)) payload.leaveTypeCode = leaveCodeOf(payload, definitionCodeOf(detail))
       setEditingRequest(detail)

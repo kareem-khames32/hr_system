@@ -58,6 +58,7 @@ import {
   Clock,
 } from 'lucide-react'
 import Link from 'next/link'
+import ModuleLink from '@/components/ModuleLink'
 
 // خيار «المدير المباشر» — من قائمة الموظفين أو الدليل المختصر (بلا employees.view)؛ بحث بالاسم أو الكود
 type ManagerOption = Pick<ApiEmployee, 'id' | 'fullName' | 'jobTitle' | 'employeeCode'>
@@ -2064,7 +2065,7 @@ export default function EmployeeForm({ mode, initial, onSubmit, submitting, erro
                   <label className="label">مرجع العقد أو القرار<input className="input mt-1" maxLength={200} value={salaryEvidence.evidenceReference} onChange={event => setSalaryEvidence(previous => ({ ...previous, evidenceReference: event.target.value }))} /></label>
                 </div>
                 <p className="text-sm text-gray-600">الراتب الجديد يسري على شهر المسير كاملًا بلا تقسيم داخله{salaryChangeContext ? ` — ${payrollMonthExplanation(salaryChangeContext)}` : ''}. تعديل الملف يقبل شهر المسير الجاري أو شهرًا سابقًا. للزيادة من شهر لاحق استخدم <Link href="/requests" className="underline text-primary-700">طلب زيادة راتب</Link>؛ الأجر الحالي لا يتغير قبل بداية ذلك الشهر واعتماد الطلب.</p>
-                {salaryChangeContext?.historyContract === 'DAILY' && <p className="text-sm text-amber-800">سجل أجر هذا الموظف بتواريخ يومية لا تحدد شهر الراتب؛ حوّله إلى «يسري من راتب شهر» من <Link href="/payroll/salary-history" className="underline">سجل الأجر</Link> قبل تعديل الراتب.</p>}
+                {salaryChangeContext?.historyContract === 'DAILY' && <p className="text-sm text-amber-800">سجل أجر هذا الموظف بتواريخ يومية لا تحدد شهر الراتب؛ حوّله إلى «يسري من راتب شهر» من <ModuleLink href="/payroll/salary-history" className="underline">سجل الأجر</ModuleLink> قبل تعديل الراتب.</p>}
                 {salaryChangeContext?.historyRevision === 0 && <div className="space-y-3 border-t border-primary-200 pt-3">
                   <p className="text-sm font-medium text-gray-800">القيم السابقة التي ستُوثّق عند تأكيد شهر سابق</p>
                   <dl className="grid grid-cols-2 sm:grid-cols-3 gap-3 text-sm">

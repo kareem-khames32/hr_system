@@ -73,6 +73,7 @@ import { describeEmployeeHistory, type EmployeeHistoryView } from '@/lib/employe
 import { displayEmployeeAddress } from '@/lib/employee-form-fields'
 import { orgPlacement } from '@/lib/department-tree'
 import { loadCurrencyContext, currencyCodeFor, currencyLabel, useCurrency } from '@/lib/currency'
+import { useModuleEnabled } from '@/lib/modules'
 import EmployeeSuspensionDialog from '@/components/EmployeeSuspensionDialog'
 import { EmployeePayrollRunsCard } from '@/components/payroll/PayrollRunMoveMemberModal'
 import { SUSPENSION_STATE_LABELS, suspensionHistoryNote, suspensionPeriodText, type EmployeeSuspension } from '@/lib/employee-suspensions-api'
@@ -417,6 +418,11 @@ export default function EmployeeProfilePage() {
   const params = useParams<{ id: string }>()
   const [activeTab, setActiveTab] = useState('personal')
   const systemCurrency = useCurrency()
+  // أجزاء الملف التابعة لموديولات اختيارية بتختفي مع موديولها (الخادم كمان مابيرجّعش بياناتها)
+  const leaveOn = useModuleEnabled('leave')
+  const custodyOn = useModuleEnabled('custody')
+  const payrollOn = useModuleEnabled('payroll')
+  const offboardingOn = useModuleEnabled('offboarding')
   const [showActionsMenu, setShowActionsMenu] = useState(false)
   const [showDocumentModal, setShowDocumentModal] = useState(false)
 
@@ -481,7 +487,8 @@ export default function EmployeeProfilePage() {
             ),
             fetchCatalog<import('@/lib/api').ApiWorkSchedule>('work-schedules', localToday()),
             fetchCatalog<{ id: number; code: string; name: string }>('cost-centers'),
-            fetchActiveLeaveTypes(),
+            // أسماء أنواع الإجازات اختيارية: موديول الإجازات المقفول مايوقّعش الملف (الأسماء بترجع للأسماء المعروفة)
+            fetchActiveLeaveTypes().catch(() => [] as Awaited<ReturnType<typeof fetchActiveLeaveTypes>>),
             // سجل الدوام (سبب تغيير الجدول/المرونة) — اختياري: فشله لا يعطل الملف
             fetchAttendanceRuleHistory('EMPLOYEE', Number(params.id)).catch(() => [] as ApiAttendanceRuleVersion[]),
             // أسماء المستخدمين لعرض اسم من سجّل التغيير بدل «المستخدم #12» — اختياري
@@ -1011,7 +1018,7 @@ export default function EmployeeProfilePage() {
                   تعديل
                 </Link>
               )}
-              <div className="relative">
+              {(offboardingOn || canSuspend) && <div className="relative">
                 <button
                   onClick={() => setShowActionsMenu(!showActionsMenu)}
                   className="p-2.5 bg-gray-100 rounded-xl hover:bg-gray-200 transition-colors"
@@ -1026,14 +1033,14 @@ export default function EmployeeProfilePage() {
                       onClick={() => setShowActionsMenu(false)}
                     />
                     <div className="absolute left-0 top-full mt-2 w-56 bg-white rounded-xl shadow-lg border border-gray-100 py-2 z-20">
-                      <Link
+                      {offboardingOn && <Link
                         href={`/employees/${employee.id}/settlement`}
                         className="flex items-center gap-3 px-4 py-3 text-gray-700 hover:bg-gray-50 transition-colors"
                         onClick={() => setShowActionsMenu(false)}
                       >
                         <Calculator size={18} className="text-primary-500" />
                         <span>تصفية المستحقات</span>
-                      </Link>
+                      </Link>}
                       {/* إيقاف مؤقت بالتواريخ والسبب — أو إنهاء الإيقاف القائم */}
                       {canSuspend && (
                         <button
@@ -1047,7 +1054,7 @@ export default function EmployeeProfilePage() {
                       )}
                       {/* EMP-1: الإنهاء لـ HR (offboarding.manage) ولموظف على رأس العمل —
                           فترة الإشعار معناها ملف مفتوح بالفعل (تصفية المستحقات) */}
-                      {can('offboarding.manage') &&
+                      {offboardingOn && can('offboarding.manage') &&
                         ['active', 'probation', 'suspended'].includes(employee.status) && (
                           <>
                             <div className="border-t border-gray-100 my-1" />
@@ -1064,12 +1071,12 @@ export default function EmployeeProfilePage() {
                     </div>
                   </>
                 )}
-              </div>
+              </div>}
             </div>
           </div>
 
           {/* Quick Stats */}
-          <div className="grid grid-cols-4 gap-4 mt-6 pt-6 border-t border-gray-100">
+          <div className={`grid ${leaveOn ? 'grid-cols-4' : 'grid-cols-3'} gap-4 mt-6 pt-6 border-t border-gray-100`}>
             <div className="text-center">
               <p className="text-sm text-gray-500">تاريخ التعيين</p>
               <p className="font-bold text-gray-800 mt-1">{employee.joinDate}</p>
@@ -1084,18 +1091,18 @@ export default function EmployeeProfilePage() {
               <p className="text-sm text-gray-500">الدرجة الوظيفية</p>
               <p className="font-bold text-gray-800 mt-1">{employee.grade}</p>
             </div>
-            <div className="text-center">
+            {leaveOn && <div className="text-center">
               <p className="text-sm text-gray-500">رصيد الإجازات</p>
               <p className="font-bold text-primary-600 mt-1">{employee.leaveBalance.annual.remaining} يوم</p>
               <p className="text-xs text-gray-400 mt-0.5">إجازة سنوية</p>
-            </div>
+            </div>}
           </div>
         </div>
 
         {/* Tabs */}
         <div className="card p-2">
           <div className="flex items-center gap-2 overflow-x-auto">
-            {tabs.filter((tab) => tab.id !== 'financial' || canViewFinancial).map((tab) => (
+            {tabs.filter((tab) => (tab.id !== 'financial' || canViewFinancial) && (tab.id !== 'leaves' || leaveOn) && (tab.id !== 'assets' || custodyOn)).map((tab) => (
               <button
                 key={tab.id}
                 onClick={() => setActiveTab(tab.id)}
@@ -1701,7 +1708,7 @@ export default function EmployeeProfilePage() {
               </div>
 
               {/* قرار المالك (20 سبتمبر): مسير الموظف قائمة دائمة — يظهر هنا ومنه «نقل لمسير آخر» من شهر ورايح */}
-              {can('payroll.view') && <EmployeePayrollRunsCard employeeId={employee.id} employeeName={employee.name} />}
+              {payrollOn && can('payroll.view') && <EmployeePayrollRunsCard employeeId={employee.id} employeeName={employee.name} />}
             </div>
           )}
 

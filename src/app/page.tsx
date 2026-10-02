@@ -14,6 +14,7 @@ import {
 } from '@/components/dashboard'
 import EmployeeHome from '@/components/dashboard/EmployeeHome'
 import MyClearanceItems from '@/components/dashboard/MyClearanceItems'
+import { useModuleEnabled } from '@/lib/modules'
 import { LayoutDashboard, User } from 'lucide-react'
 
 // اللوحة تُختار بالصلاحية لا باسم الدور: dashboard.view_all → لوحة الإدارة، وغير ذلك → لوحتي.
@@ -22,6 +23,8 @@ export default function DashboardPage() {
   // null حتى تُقرأ الجلسة بعد التركيب (localStorage غير متاح على السيرفر)
   const [view, setView] = useState<'admin' | 'employee' | null>(null)
   const [canAdmin, setCanAdmin] = useState(false)
+  // ويدجتات الحضور (المنحنى وإحصائيات الأقسام) تابعة لموديول الحضور: بتختفي معاه، وجارتها بتاخد العرض كله
+  const attendanceOn = useModuleEnabled('attendance')
 
   useEffect(() => {
     const allowed = can('dashboard.view_all')
@@ -84,12 +87,12 @@ export default function DashboardPage() {
             {/* Main Content Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Attendance Chart - Takes 2 columns */}
-              <div className="lg:col-span-2">
+              {attendanceOn && <div className="lg:col-span-2">
                 <AttendanceChart />
-              </div>
+              </div>}
 
               {/* Upcoming Events */}
-              <div>
+              <div className={attendanceOn ? undefined : 'lg:col-span-3'}>
                 <UpcomingEvents />
               </div>
             </div>
@@ -100,12 +103,12 @@ export default function DashboardPage() {
             {/* Bottom Grid */}
             <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
               {/* Department Stats - Takes 2 columns */}
-              <div className="lg:col-span-2">
+              {attendanceOn && <div className="lg:col-span-2">
                 <DepartmentStats />
-              </div>
+              </div>}
 
               {/* Recent Activities */}
-              <div>
+              <div className={attendanceOn ? undefined : 'lg:col-span-3'}>
                 <RecentActivities />
               </div>
             </div>

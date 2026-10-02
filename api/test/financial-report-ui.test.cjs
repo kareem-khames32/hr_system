@@ -48,9 +48,11 @@ test('the reports hub and the payroll reports page link all financial reports, a
   assert.match(hub, /\{canPayroll && <FinancialReportLinks \/>\}/)
   assert.match(hub, /setCanPayroll\(can\('payroll\.view'\)\)/)
   // B0.1s-2: ملخص مسيرات الرواتب في اللوحة (فلوس) لقارئ الرواتب بس — من غير نداء ولا بطاقات لغيره، وباقي اللوحة شغال
-  assert.ok(hub.includes("can('payroll.view') ? fetchPayrollReportFor(org.params) : Promise.resolve(null),"))
-  assert.ok(hub.includes("].filter((card) => card.id !== 'payroll' || canPayroll)"))
-  assert.equal(hub.split('{canPayroll && <div className="card">').length - 1, 2, 'بطاقة إجمالي الرواتب وقسم «مسيرات الرواتب»')
+  // (B0.4) ومعاها بوابة الموديول: القسم بيظهر لو موديول الرواتب مفعّل والمستخدم قارئ رواتب
+  assert.ok(hub.includes("optionalReport(payrollOn && can('payroll.view'), () => fetchPayrollReportFor(org.params)),"))
+  assert.ok(hub.includes("].filter((card) => available(card.href) && (card.id !== 'payroll' || canPayroll))"))
+  assert.ok(hub.includes('const showPayroll = payrollOn && canPayroll'))
+  assert.equal(hub.split('{showPayroll && <div className="card">').length - 1, 2, 'بطاقة إجمالي الرواتب وقسم «مسيرات الرواتب»')
   const payrollReports = read('src/app/payroll/reports/page.tsx')
   assert.match(payrollReports, /\{canReports && <FinancialReportLinks title="التقارير المالية للشهر" \/>\}/)
 })

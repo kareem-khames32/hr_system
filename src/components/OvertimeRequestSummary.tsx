@@ -1,6 +1,6 @@
 'use client'
 
-import Link from 'next/link'
+import ModuleLink from '@/components/ModuleLink'
 import type { ApiOvertimeRequestDetail } from '@/lib/api'
 import { DISPLAY_LOCALE } from '@/lib/dates'
 import { formatMoney } from '@/lib/money'
@@ -106,7 +106,7 @@ export default function OvertimeRequestSummary({ overtime, reviewRequired }: {
           {' '}· المحسوب {duration(result.detectedMinutes)}</p>
       </div>}
       {overtime?.wageEvidence && !overtime.wageEvidence.ready && <div role="alert" className="rounded-lg bg-amber-50 p-3 text-sm text-amber-800 space-y-1">
-        <p>يُسعَّر الإضافي عند الاعتماد النهائي على راتب شهر <span dir="ltr">{overtime.wageEvidence.wagePayrollPeriod}</span> الذي يقع فيه يوم العمل، ولا يوجد لهذا الشهر راتب موثق؛ الاعتماد النهائي سيُرفض حتى يُثبت راتب الشهر من <Link href="/payroll/salary-history" className="underline">سجل الأجر</Link>.</p>
+        <p>يُسعَّر الإضافي عند الاعتماد النهائي على راتب شهر <span dir="ltr">{overtime.wageEvidence.wagePayrollPeriod}</span> الذي يقع فيه يوم العمل، ولا يوجد لهذا الشهر راتب موثق؛ الاعتماد النهائي سيُرفض حتى يُثبت راتب الشهر من <ModuleLink href="/payroll/salary-history" className="underline">سجل الأجر</ModuleLink>.</p>
         {overtime.wageEvidence.message && <p className="text-xs">{overtime.wageEvidence.message}</p>}
       </div>}
       {overtime?.wageEvidence?.ready && overtime.wageEvidence.sourceKind === 'CURRENT_FILE_UNVERIFIED' && <p className="text-xs text-amber-700">

@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { AlertTriangle } from 'lucide-react'
 import { fetchCatalog } from '@/lib/api'
+import { useModuleEnabled } from '@/lib/modules'
 
 // وردية الكتالوج بسماحيتها — graceMinutes = NULL تعني أنها تتبع القيمة العامة
 interface ShiftGrace {
@@ -19,13 +20,18 @@ interface ShiftGrace {
 export function GraceOverridesNote({ globalGrace }: { globalGrace?: string | null }) {
   const [shifts, setShifts] = useState<ShiftGrace[] | null>(null)
   const [error, setError] = useState(false)
+  // موديول الورديات مقفول: مفيش ورديات تغلب السماحية العامة، فمفيش ملاحظة ولا نداء
+  const shiftsOn = useModuleEnabled('shifts')
 
   useEffect(() => {
+    if (!shiftsOn) return
+    setError(false)
     fetchCatalog<ShiftGrace>('shifts')
       .then(setShifts)
       .catch(() => setError(true))
-  }, [])
+  }, [shiftsOn])
 
+  if (!shiftsOn) return null
   if (error) {
     return (
       <p className="text-xs text-gray-400 mt-2">

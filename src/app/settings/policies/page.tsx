@@ -28,6 +28,7 @@ import {
   type LoanCapPolicy, type LoanCapPolicyInput,
 } from '@/lib/loans-api'
 import { GraceOverridesNote } from '@/components/GraceOverridesNote'
+import { useModuleEnabled, useModules, type ModuleKey } from '@/lib/modules'
 import { fetchPayrollPolicies, type PayrollPolicySummary } from '@/lib/payroll-policies-api'
 import { buildCalendarChange, calendarScopeWritable, type PayrollCalendarChange } from '@/lib/payroll-calendar-api'
 import { CalendarChangeFields, CalendarContextSummary, CalendarScopeConfirmation, useCalendarContext } from '@/components/PayrollCalendarChange'
@@ -55,6 +56,8 @@ interface PolicyGroup {
   iconBg: string
   iconColor: string
   note?: string // ملاحظة تُعرض تحت العنوان (مثلاً: يُضبط من شاشة أخرى)
+  // المجموعة كلها إعدادات موديول اختياري: بتختفي لو مقفول (القيم بتفضل محفوظة زي ما هي)
+  module?: ModuleKey
   fields: PolicyField[]
 }
 
@@ -85,6 +88,7 @@ const normalizeWeekend = (v: string): string | null => {
 const GROUPS: PolicyGroup[] = [
   {
     title: 'الإجازات',
+    module: 'leave',
     icon: Calendar,
     iconBg: 'bg-primary-50',
     iconColor: 'text-primary-500',
@@ -149,6 +153,7 @@ const GROUPS: PolicyGroup[] = [
   },
   {
     title: 'العمل الإضافي (الأوفرتايم)',
+    module: 'overtime',
     icon: Timer,
     iconBg: 'bg-warning-50',
     iconColor: 'text-warning-500',
@@ -160,6 +165,7 @@ const GROUPS: PolicyGroup[] = [
   },
   {
     title: 'أقساط السلف وحماية الصافي',
+    module: 'payroll',
     icon: Wallet,
     iconBg: 'bg-blue-50',
     iconColor: 'text-blue-500',
@@ -240,8 +246,11 @@ function LoanAdvanceCapBlock({ onSaveConfig, pendingConfigCount }: { onSaveConfi
   const [capValue, setCapValue] = useState('')
   const [salaryBase, setSalaryBase] = useState<'BASIC' | 'GROSS'>('GROSS')
   const canManage = can('loans.policies')
+  // موديول السلف مقفول: البلوك مايتعرضش ومايناديش مسار السلف
+  const loansOn = useModuleEnabled('loans')
 
   const load = () => {
+    if (!loansOn) return
     setLoading(true); setError('')
     fetchLoanCapPolicies()
       .then(rows => {
@@ -295,6 +304,7 @@ function LoanAdvanceCapBlock({ onSaveConfig, pendingConfigCount }: { onSaveConfi
     } catch (e) { setError(e instanceof Error ? e.message : 'تعذر حفظ سقف السلفة') } finally { setBusy(false) }
   }
 
+  if (!loansOn) return null
   return (
     <div className="mt-4 pt-4 border-t border-gray-100 space-y-3" data-testid="loan-advance-cap">
       <p className="text-sm font-medium text-gray-800">سقف السلفة للموظف</p>
@@ -365,7 +375,10 @@ function TerminationReasonsBlock({ onSaveConfig, pendingConfigCount }: { onSaveC
     setRevision(view.revision)
     setCanEdit(view.canEdit)
   }
+  // موديول إنهاء الخدمة مقفول: البلوك مايتعرضش ومايناديش مساره
+  const offboardingOn = useModuleEnabled('offboarding')
   const load = () => {
+    if (!offboardingOn) return
     setLoading(true); setError('')
     fetchTerminationReasons().then(apply)
       .catch(e => setError(e instanceof Error ? e.message : 'تعذر تحميل أسباب إنهاء الخدمة'))
@@ -393,6 +406,7 @@ function TerminationReasonsBlock({ onSaveConfig, pendingConfigCount }: { onSaveC
     } catch (e) { setError(e instanceof Error ? e.message : 'تعذر حفظ أسباب إنهاء الخدمة') } finally { setBusy(false) }
   }
 
+  if (!offboardingOn) return null
   return (
     <div className="mt-4 pt-4 border-t border-gray-100 space-y-3" data-testid="termination-reasons">
       <div>
@@ -515,12 +529,13 @@ function policyCycleLabel(summary: PayrollPolicySummary): { name: string; start:
 
 function PayrollPeriodSetting({ value, original, disabled, onChange }: { value: string; original: string; disabled: boolean; onChange: (value: string) => void }) {
   const [policies, setPolicies] = useState<PayrollPolicySummary[] | null>(null)
+  const payrollOn = useModuleEnabled('payroll')
   useEffect(() => {
-    if (!can('payroll.view')) return
+    if (!payrollOn || !can('payroll.view')) return
     const controller = new AbortController()
     fetchPayrollPolicies(controller.signal).then(setPolicies).catch(() => setPolicies(null))
     return () => controller.abort()
-  }, [])
+  }, [payrollOn])
   const valid = validCycleDay(value), start = Number(value)
   const changed = value.trim() !== original.trim() && valid && validCycleDay(original)
   const current = validCycleDay(original) ? payrollPeriodOfToday(Number(original)) : null
@@ -766,6 +781,9 @@ export default function PoliciesPage() {
     setSuccess('')
   }
 
+  // مجموعات وبلوكات الموديولات الاختيارية بتختفي مع موديولها
+  const enabledModules = useModules()
+  const moduleOn = (module: ModuleKey) => !!enabledModules?.modules.includes(module)
   const dirtyKeys = Object.keys(values).filter((k) => values[k] !== original[k])
   const fieldByKey = new Map(
     GROUPS.flatMap((g) => g.fields).map((f) => [f.key, f])
@@ -988,6 +1006,7 @@ export default function PoliciesPage() {
         ) : (
           <div className="space-y-6">
             {GROUPS.map((g) => {
+              if (g.module && !moduleOn(g.module)) return null
               const fields = g.fields.filter((f) => known.has(f.key))
               if (fields.length === 0) return null
               const GroupIcon = g.icon

@@ -211,7 +211,8 @@ test('attendance screens open on the payroll month with «من تاريخ / إل
     assert.doesNotMatch(page, /type="month"/, file)
     assert.doesNotMatch(page, /localMonth\(\)/, file)
   }
-  assert.match(read('src/app/attendance/reports/page.tsx'), /Promise\.all\(\[fetchAttendanceReportRange\(range\), fetchOvertimeReportRange\(range\)\]\)/)
+  // الإضافي موديول لوحده (B0.4): تقريره بيتطلب لو مفعّل بس، بنفس الفترة
+  assert.match(read('src/app/attendance/reports/page.tsx'), /Promise\.all\(\[fetchAttendanceReportRange\(range\), overtimeOn \? fetchOvertimeReportRange\(range\) : Promise\.resolve\(\[\]\)\]\)/)
   const sheet = read('src/app/attendance/monthly-sheet/page.tsx')
   assert.match(sheet, /fetchAttendanceSheetRange\(employeeId, range\)/)
   assert.match(sheet, /get\('employeeId'\)/, 'رابط ?employeeId= يفتح كشف موظف معين')
@@ -279,7 +280,8 @@ test('loans screen: filter by request date or by instalment month, with the mont
 
 test('reports dashboard: attendance and overtime summaries follow the range filter, not the calendar month', () => {
   const page = read('src/app/reports/page.tsx')
-  assert.ok(page.includes('Promise.all([fetchAttendanceReportRange(target), fetchOvertimeReportRange(target)])'))
+  // كل تقرير بيتطلب لو موديوله مفعّل (B0.4)، بنفس الفترة
+  assert.ok(page.includes('Promise.all([attendanceOn ? fetchAttendanceReportRange(target) : Promise.resolve([]), overtimeOn ? fetchOvertimeReportRange(target) : Promise.resolve([])])'))
   assert.ok(page.includes('<DayRangeFilter idPrefix="reports-attendance" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />'))
   assert.ok(page.includes('downloadCsv(`attendance-${listRange ? dayRangeKey(listRange) : \'range\'}-${stamp}.csv`'))
   assert.ok(page.includes('downloadCsv(`overtime-${listRange ? dayRangeKey(listRange) : \'range\'}-${stamp}.csv`'))

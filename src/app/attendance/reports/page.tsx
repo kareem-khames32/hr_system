@@ -19,6 +19,7 @@ import { dayRangeError, dayRangeKey, dayRangeLabel } from '@/lib/payroll-month-r
 import { DayRangeFilter, usePayrollDayRange } from '@/components/DayRangeFilter'
 import { filterAttendanceReportRows } from '@/lib/attendance-report-search'
 import { useOrgFilter } from '@/components/OrgFilter'
+import { useModuleEnabled } from '@/lib/modules'
 
 interface AttendanceReportRow {
   employeeId: number
@@ -62,19 +63,21 @@ export default function AttendanceReportsPage() {
   const [allOvertimeRows, setOvertimeRows] = useState<OvertimeReportRow[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // الإضافي موديول لوحده: لو مقفول تقرير الحضور بيشتغل من غير جدول الساعات الإضافية
+  const overtimeOn = useModuleEnabled('overtime')
 
   useEffect(() => {
     if (!range || dayRangeError(range)) return
     setLoading(true)
     setError('')
-    Promise.all([fetchAttendanceReportRange(range), fetchOvertimeReportRange(range)])
+    Promise.all([fetchAttendanceReportRange(range), overtimeOn ? fetchOvertimeReportRange(range) : Promise.resolve([])])
       .then(([att, ot]) => {
         setAttendanceRows(Array.isArray(att) ? att : [])
         setOvertimeRows(Array.isArray(ot) ? ot : [])
       })
       .catch((e) => setError(e instanceof Error ? e.message : 'تعذر تحميل التقارير'))
       .finally(() => setLoading(false))
-  }, [range])
+  }, [range, overtimeOn])
   const rangeTitle = range ? dayRangeLabel(range) : ''
 
   // صفوف موظفي الفرع/الإدارة/القسم/الفريق المختار (الرقم ممكن يرجع نص من الاستعلام)
@@ -116,7 +119,7 @@ export default function AttendanceReportsPage() {
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
 
         {/* Stats */}
-        <div className="grid grid-cols-4 gap-4">
+        <div className={`grid ${overtimeOn ? 'grid-cols-4' : 'grid-cols-3'} gap-4`}>
           <div className="card flex items-center gap-4">
             <div className="w-12 h-12 bg-primary-100 rounded-2xl flex items-center justify-center">
               <TrendingUp size={24} className="text-primary-600" />
@@ -144,7 +147,7 @@ export default function AttendanceReportsPage() {
               <p className="text-2xl font-bold text-gray-800">{stats.totalLate}</p>
             </div>
           </div>
-          <div className="card flex items-center gap-4">
+          {overtimeOn && <div className="card flex items-center gap-4">
             <div className="w-12 h-12 bg-success-50 rounded-2xl flex items-center justify-center">
               <BarChart3 size={24} className="text-success-600" />
             </div>
@@ -152,7 +155,7 @@ export default function AttendanceReportsPage() {
               <p className="text-sm text-gray-500">ساعات إضافية مستحقة</p>
               <p className="text-2xl font-bold text-gray-800">{stats.totalOvertime}</p>
             </div>
-          </div>
+          </div>}
         </div>
 
         {/* Filters */}
@@ -237,7 +240,7 @@ export default function AttendanceReportsPage() {
             </div>
 
             {/* Overtime Report Table */}
-            <div className="card overflow-hidden">
+            {overtimeOn && <div className="card overflow-hidden">
               <h2 className="text-lg font-bold text-gray-800 px-4 pt-4 pb-2">
                 تقرير الساعات الإضافية — {rangeTitle}
               </h2>
@@ -287,7 +290,7 @@ export default function AttendanceReportsPage() {
                   )}
                 </tbody>
               </table>
-            </div>
+            </div>}
           </>
         )}
       </div>

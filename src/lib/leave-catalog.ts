@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from 'react'
 import { fetchActiveLeaveTypes, type ApiLeaveTypeOption } from '@/lib/api'
+import { useModuleEnabled } from '@/lib/modules'
 
 // Historical rows may reference a disabled standard type. Current catalog names
 // always win; these labels are display fallbacks, never submission options.
@@ -106,14 +107,20 @@ export function useLeaveCatalog() {
   const [types, setTypes] = useState<ApiLeaveTypeOption[]>([])
   const [error, setError] = useState('')
   const [revision, setRevision] = useState(0)
+  // موديول الإجازات مقفول: مفيش نداء ولا رسالة خطأ، والأسماء في السجلات القديمة بتتعرض من HISTORICAL_LABELS
+  const leaveEnabled = useModuleEnabled('leave')
   useEffect(() => {
     let cancelled = false
     setError('')
+    if (!leaveEnabled) {
+      setTypes([])
+      return
+    }
     fetchActiveLeaveTypes()
       .then((rows) => { if (!cancelled) setTypes(rows) })
       .catch((err) => { if (!cancelled) setError(err instanceof Error ? err.message : 'تعذر تحميل أنواع الإجازات') })
     return () => { cancelled = true }
-  }, [revision])
+  }, [revision, leaveEnabled])
   return {
     types,
     labels: { ...HISTORICAL_LABELS, ...Object.fromEntries(types.map((type) => [type.code, type.nameAr])) },

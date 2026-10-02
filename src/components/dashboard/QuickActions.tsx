@@ -12,6 +12,7 @@ import {
 } from 'lucide-react'
 import Link from 'next/link'
 import { can } from '@/lib/api'
+import { useRouteFilter } from '@/lib/modules'
 
 interface QuickAction {
   id: string
@@ -102,7 +103,9 @@ const quickActions: QuickAction[] = [
 
 export default function QuickActions() {
   // الاختصارات المسموحة فقط — لا رابط ينتهي بشاشة «غير مصرح»
-  const visible = quickActions.filter((a) => !a.perms || a.perms.every((p) => can(p)))
+  // …ولا بشاشة موديول مقفول
+  const available = useRouteFilter()
+  const visible = quickActions.filter((a) => (!a.perms || a.perms.every((p) => can(p))) && available(a.href))
   if (visible.length === 0) return null
 
   return (

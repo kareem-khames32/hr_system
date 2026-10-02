@@ -37,6 +37,7 @@ import {
   statusStyles,
   type RequestStatus,
 } from '@/data/requestsCatalog'
+import { useModuleEnabled } from '@/lib/modules'
 
 // حالة يوم الحضور كما يحسبها السيرفر
 const dayStatusLabels: Record<string, string> = {
@@ -106,6 +107,10 @@ export default function EmployeeHome() {
   const [loading, setLoading] = useState(true)
   // ويدجتات تعذر تحميلها — فشل نداء لا يُسقط اللوحة كلها
   const [failed, setFailed] = useState<string[]>([])
+  // ويدجت موديول مقفول (الحضور، الإجازات، العهد): مفيش نداء ولا بطاقة ولا رسالة خطأ
+  const attendanceOn = useModuleEnabled('attendance')
+  const leaveOn = useModuleEnabled('leave')
+  const custodyOn = useModuleEnabled('custody')
 
   useEffect(() => {
     if (!getCurrentUser()?.employeeId) {
@@ -120,12 +125,12 @@ export default function EmployeeHome() {
         return fallback
       })
     Promise.all([
-      soft(fetchMyToday(), null, 'حضور اليوم'),
+      attendanceOn ? soft(fetchMyToday(), null, 'حضور اليوم') : Promise.resolve(null),
       soft(fetchMyRequests(), [] as ApiRequest[], 'طلباتي'),
       // أسماء الأنواع: فشلها لا يُذكر — الاسم من الكتالوج احتياطاً
       soft(fetchRequestTypes(), [] as ApiRequestType[]),
-      soft(fetchMyBalances(), [] as ApiBalance[], 'أرصدة الإجازات'),
-      soft(fetchMyCustody(), [] as ApiCustody[], 'العهد'),
+      leaveOn ? soft(fetchMyBalances(), [] as ApiBalance[], 'أرصدة الإجازات') : Promise.resolve([] as ApiBalance[]),
+      custodyOn ? soft(fetchMyCustody(), [] as ApiCustody[], 'العهد') : Promise.resolve([] as ApiCustody[]),
     ]).then(([myToday, mine, typeList, bals, myCustody]) => {
       if (cancelled) return
       setToday(myToday)
@@ -139,7 +144,7 @@ export default function EmployeeHome() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [attendanceOn, leaveOn, custodyOn])
 
   const greeting = new Date().getHours() < 12 ? 'صباح الخير' : 'مساء الخير'
   const day = today?.day ?? null
@@ -377,7 +382,7 @@ export default function EmployeeHome() {
 
             <div className="space-y-6">
               {/* أرصدتي — محسوبة من السيرفر بطبقاتها */}
-              <div className="card p-6">
+              {leaveOn && <div className="card p-6">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
                     <Wallet size={20} className="text-primary-500" />
@@ -444,10 +449,10 @@ export default function EmployeeHome() {
                     </p>
                   </div>
                 )}
-              </div>
+              </div>}
 
               {/* عهدي — الجارية فقط */}
-              <div className="card p-6">
+              {custodyOn && <div className="card p-6">
                 <div className="flex items-center justify-between mb-4">
                   <div className="flex items-center gap-2">
                     <Package size={20} className="text-primary-500" />
@@ -487,7 +492,7 @@ export default function EmployeeHome() {
                     ))}
                   </div>
                 )}
-              </div>
+              </div>}
             </div>
           </div>
         </>

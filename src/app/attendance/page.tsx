@@ -4,7 +4,7 @@ import { useEffect, useMemo, useState } from 'react'
 import { MainLayout } from '@/components/layout'
 import { AttendanceFlexSummary } from '@/components/AttendanceFlexSummary'
 import { NextDayCheckoutHint } from '@/components/NextDayCheckoutHint'
-import Link from 'next/link'
+import ModuleLink from '@/components/ModuleLink'
 import {
   Search,
   Download,
@@ -617,14 +617,15 @@ export default function AttendancePage() {
                           {getStatusBadge(record.status)}
                           {record.attendanceExempt && record.status !== 'exempt' && <span className="badge bg-gray-100 text-gray-600">مستثنى من الحضور</span>}
                           {record.leaveConflict && (
-                            <Link
+                            <ModuleLink
                               href={leaveConflictHref(record)}
                               className="badge bg-amber-100 text-amber-700 hover:bg-amber-200 flex items-center gap-1"
                               title="الموظف حضر يوم إجازته المعتمدة — يفتح سجل الإجازات على هذا الموظف ويومه: إلغاء الإجازة يحسبه دواماً ويرجع الرصيد"
+                              fallback={<span className="badge bg-amber-100 text-amber-700 flex items-center gap-1"><AlertTriangle size={12} />بصم رغم الإجازة</span>}
                             >
                               <AlertTriangle size={12} />
                               بصم رغم الإجازة
-                            </Link>
+                            </ModuleLink>
                           )}
                           {record.punchAnomalies && (
                             <span

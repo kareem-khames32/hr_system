@@ -36,6 +36,7 @@ import Link from 'next/link'
 import { fetchDeductions } from '@/lib/deductions-api'
 import { fetchBonuses } from '@/lib/bonuses-api'
 import { fetchAttendanceExemptionList } from '@/lib/attendance-exemptions-api'
+import { useModuleEnabled } from '@/lib/modules'
 import {
   fetchInbox,
   fetchRequest,
@@ -183,7 +184,12 @@ export default function ApprovalsInboxPage() {
   const [custodyConfirming, setCustodyConfirming] = useState<number | null>(null)
   // خصومات ومكافآت بانتظار موافقتي — للعرض والانتقال فقط؛ الاعتماد من شاشاتها. العدد الذي يرفضه الخادم يُخفى وحده
   const [payrollPending, setPayrollPending] = useState<{ deductions: number; bonuses: number; admin: boolean } | null>(null)
+  // بطاقات الموديولات الاختيارية في الصندوق (خصومات ومكافآت، استثناءات حضور، عهد): الموديول المقفول مفيش نداء له ولا بطاقة ولا رسالة خطأ
+  const payrollOn = useModuleEnabled('payroll')
+  const attendanceOn = useModuleEnabled('attendance')
+  const custodyOn = useModuleEnabled('custody')
   useEffect(() => {
+    if (!payrollOn) { setPayrollPending(null); return }
     let cancelled = false
     Promise.allSettled([fetchDeductions({ view: 'pending_me' }), fetchBonuses({ view: 'pending_me' })])
       .then(([deductions, bonuses]) => {
@@ -192,23 +198,26 @@ export default function ApprovalsInboxPage() {
           bonuses: bonuses.status === 'fulfilled' ? bonuses.value.length : 0, admin: can('payroll.view') })
       })
     return () => { cancelled = true }
-  }, [])
+  }, [payrollOn])
   // استثناءات حضور بانتظار قراري — لمن يملك اعتمادها فقط، والعدد من إجراءات الخادم لكل صف (نفس «بانتظار قرارك أنت»
   // في شاشتها: منشئ الطلب ومعتمد خطوته مستبعدان إلا مدير الموارد البشرية). للعرض والانتقال؛ القرار من شاشة الاستثناء
   const [exemptionsPending, setExemptionsPending] = useState(0)
   useEffect(() => {
+    if (!attendanceOn) { setExemptionsPending(0); return }
     if (!can('attendance_exemption.approve') && !can('attendance_exemption.approve_executive')) return
     let cancelled = false
     fetchAttendanceExemptionList({ status: 'PENDING' })
       .then(list => { if (!cancelled) setExemptionsPending(list.rows.filter(row => row.actions.approve || row.actions.approveExecutive).length) })
       .catch(() => { /* العدد اللي يرفضه الخادم يُخفى وحده */ })
     return () => { cancelled = true }
-  }, [])
+  }, [attendanceOn])
 
-  const loadCustodyPending = () =>
-    fetchCustodyPendingMyConfirm()
+  const loadCustodyPending = () => {
+    if (!custodyOn) { setCustodyPending([]); setCustodyError(''); return Promise.resolve() }
+    return fetchCustodyPendingMyConfirm()
       .then((rows) => { setCustodyPending(rows); setCustodyError('') })
       .catch((err) => setCustodyError(err instanceof Error ? err.message : 'تعذر تحميل العهد التي تنتظر تأكيدك'))
+  }
 
   const confirmCustody = async (id: number) => {
     setCustodyConfirming(id)
@@ -274,9 +283,12 @@ export default function ApprovalsInboxPage() {
 
   useEffect(() => {
     load()
-    loadCustodyPending()
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
+  useEffect(() => {
+    loadCustodyPending()
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [custodyOn])
 
   const filtered = items.filter((i) => !filterType || i.category === filterType)
   const overdue = items.filter((i) => i.slaDaysLeft !== null && i.slaDaysLeft <= 0).length

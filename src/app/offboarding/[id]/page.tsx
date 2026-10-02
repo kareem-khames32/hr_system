@@ -3,6 +3,7 @@ import { useParams } from 'next/navigation'
 
 import { useEffect, useState } from 'react'
 import Link from 'next/link'
+import ModuleLink from '@/components/ModuleLink'
 import { MainLayout } from '@/components/layout'
 import {
   ArrowRight,
@@ -422,19 +423,21 @@ export default function OffboardingCasePage() {
                 </p>
                 {/* سجل العهد لمسؤول العهد (custody.assign)، و«عهدي» للموظف نفسه — غيرهم بلا رابط */}
                 {can('custody.assign') ? (
-                  <Link
+                  <ModuleLink
                     href="/employees/custody"
                     className="text-sm font-medium text-warning-700 underline hover:text-warning-600 shrink-0"
+                    fallback={null}
                   >
                     سجل العهد
-                  </Link>
+                  </ModuleLink>
                 ) : getCurrentUser()?.employeeId === det.employeeId ? (
-                  <Link
+                  <ModuleLink
                     href="/my/custody"
                     className="text-sm font-medium text-warning-700 underline hover:text-warning-600 shrink-0"
+                    fallback={null}
                   >
                     عهدي
-                  </Link>
+                  </ModuleLink>
                 ) : null}
               </div>
             )}

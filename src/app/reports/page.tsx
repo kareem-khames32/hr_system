@@ -16,7 +16,8 @@ import {
   UserCheck,
   UserMinus,
 } from 'lucide-react'
-import { can } from '@/lib/api'
+import { ApiError, can } from '@/lib/api'
+import { useModuleEnabled, useRouteFilter } from '@/lib/modules'
 import { fetchHeadcountReportFor, fetchLeavesReportFor, fetchPayrollReportFor, fetchRequestsReportFor } from '@/lib/reports-org-api'
 import { useOrgFilter } from '@/components/OrgFilter'
 import { fetchAttendanceReportRange, fetchOvertimeReportRange } from '@/lib/attendance-range-api'
@@ -120,6 +121,14 @@ export default function ReportsPage() {
   const [selectedCategory, setSelectedCategory] = useState('all')
   const [canPayroll, setCanPayroll] = useState(false)
   useEffect(() => { setCanPayroll(can('payroll.view')) }, [])
+  // اللوحة شاشة أساسية بتجمّع تقارير موديولات اختيارية: الموديول المقفول قسمه وبطاقته بيختفوا، والباقي شغال
+  const attendanceOn = useModuleEnabled('attendance')
+  const overtimeOn = useModuleEnabled('overtime')
+  const leaveOn = useModuleEnabled('leave')
+  const payrollOn = useModuleEnabled('payroll')
+  const available = useRouteFilter()
+  // قسم الرواتب: الموديول مفعّل والمستخدم قارئ رواتب (الخادم بيرفض تقرير المسيرات لغيره)
+  const showPayroll = payrollOn && canPayroll
 
   // السنة بالتوقيت المحلي — toISOString (UTC) كانت تفتح السنة السابقة من 00:00 لـ03:00 يوم 1 يناير
   const currentYear = localToday().slice(0, 4)
@@ -132,9 +141,10 @@ export default function ReportsPage() {
   const rangeRequest = useRef(0)
 
   const loadRange = (target: DayRange) => {
+    if (!attendanceOn && !overtimeOn) return
     const request = ++rangeRequest.current
     setRangeLoading(true)
-    Promise.all([fetchAttendanceReportRange(target), fetchOvertimeReportRange(target)])
+    Promise.all([attendanceOn ? fetchAttendanceReportRange(target) : Promise.resolve([]), overtimeOn ? fetchOvertimeReportRange(target) : Promise.resolve([])])
       .then(([att, ot]) => {
         if (request !== rangeRequest.current) return
         setAttendance(att)
@@ -145,15 +155,19 @@ export default function ReportsPage() {
       .finally(() => { if (request === rangeRequest.current) setRangeLoading(false) })
   }
 
+  // تقرير موديول اختياري: مايتطلبش وموديوله مقفول، ولو اتقفل والشاشة مفتوحة (404) قسمه بيفضى من غير ما اللوحة كلها تقع
+  const optionalReport = <T,>(on: boolean, load: () => Promise<T>): Promise<T | null> =>
+    on ? load().catch((err) => { if (err instanceof ApiError && err.status === 404) return null; throw err }) : Promise.resolve(null)
+
   const loadData = async () => {
     setLoading(true)
     if (listRange) loadRange(listRange)
     try {
       const [hc, lv, pr, rq] = await Promise.all([
         fetchHeadcountReportFor(org.params),
-        fetchLeavesReportFor(currentYear, org.params),
-        // مسيرات الرواتب فلوس: لقارئ الرواتب بس (الخادم بيرفض غيره)، وغيره اللوحة بتشتغل له من غير قسم الرواتب
-        can('payroll.view') ? fetchPayrollReportFor(org.params) : Promise.resolve(null),
+        optionalReport(leaveOn, () => fetchLeavesReportFor(currentYear, org.params)),
+        // مسيرات الرواتب فلوس: لقارئ الرواتب بس، وغيره اللوحة بتشتغل له من غير قسم الرواتب
+        optionalReport(payrollOn && can('payroll.view'), () => fetchPayrollReportFor(org.params)),
         fetchRequestsReportFor(org.params),
       ])
       setHeadcount(hc)
@@ -172,11 +186,11 @@ export default function ReportsPage() {
   useEffect(() => {
     loadData()
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [org.paramsKey])
+  }, [org.paramsKey, leaveOn, payrollOn])
   useEffect(() => {
     if (listRange) loadRange(listRange)
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [listRange?.from, listRange?.to])
+  }, [listRange?.from, listRange?.to, attendanceOn, overtimeOn])
 
   // ===== مشتقات القوى العاملة =====
   const totalEmployees =
@@ -287,8 +301,8 @@ export default function ReportsPage() {
       href: '/requests-console',
       stat: `${totalRequests} طلب`,
     },
-  // بطاقة تقرير الرواتب لقارئ الرواتب بس
-  ].filter((card) => card.id !== 'payroll' || canPayroll)
+  // بطاقة تقرير موديول مقفول ماتتعرضش (شاشتها مش متاحة)، وبطاقة تقرير الرواتب لقارئ الرواتب بس
+  ].filter((card) => available(card.href) && (card.id !== 'payroll' || canPayroll))
 
   // تصدير CSV حقيقي لكل بطاقة من البيانات المحمّلة نفسها (الخطوة 30: لا زر تصدير بلا ملف)
   const exportReport = (id: string) => {
@@ -363,11 +377,11 @@ export default function ReportsPage() {
         </div>
 
         {/* فترة الحضور والعمل الإضافي: شهر رواتب بضغطة أو «من تاريخ / إلى تاريخ» بأي يوم */}
-        <div className="card space-y-2">
+        {(attendanceOn || overtimeOn) && <div className="card space-y-2">
           <p className="text-sm font-medium text-gray-700">فترة الحضور والعمل الإضافي</p>
           <DayRangeFilter idPrefix="reports-attendance" value={range} onChange={setRange} cycleStartDay={context?.cycleStartDay} today={context?.today} />
           {rangeError && <p role="alert" className="text-sm text-red-600">{rangeError}</p>}
-        </div>
+        </div>}
 
         {/* Error Banner */}
         {error && <div className="bg-red-50 text-red-700 rounded-xl p-4">{error}</div>}
@@ -382,7 +396,7 @@ export default function ReportsPage() {
         {!loading && !error && (
           <>
             {/* Key Metrics */}
-            <div className={`grid ${canPayroll ? 'grid-cols-4' : 'grid-cols-3'} gap-4`}>
+            <div className={`grid ${showPayroll ? 'grid-cols-4' : 'grid-cols-3'} gap-4`}>
               <div className="card">
                 <div className="flex items-center justify-between mb-4">
                   <div className="w-12 h-12 bg-primary-100 rounded-2xl flex items-center justify-center">
@@ -413,7 +427,7 @@ export default function ReportsPage() {
                 <p className="text-3xl font-bold text-gray-800">{archivedEmployees}</p>
               </div>
 
-              {canPayroll && <div className="card">
+              {showPayroll && <div className="card">
                 <div className="flex items-center justify-between mb-4">
                   <div className="w-12 h-12 bg-blue-100 rounded-2xl flex items-center justify-center">
                     <DollarSign size={24} className="text-blue-600" />
@@ -554,7 +568,7 @@ export default function ReportsPage() {
               </div>
 
               {/* Attendance in the chosen range */}
-              <div className={`card ${rangeLoading ? 'opacity-60' : ''}`}>
+              {attendanceOn && <div className={`card ${rangeLoading ? 'opacity-60' : ''}`}>
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-lg font-bold text-gray-800">
                     الحضور مقابل التأخير ({periodText})
@@ -605,10 +619,10 @@ export default function ReportsPage() {
                     أيام تأخير
                   </span>
                 </div>
-              </div>
+              </div>}
 
               {/* Payroll Runs */}
-              {canPayroll && <div className="card">
+              {showPayroll && <div className="card">
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-lg font-bold text-gray-800">مسيرات الرواتب</h2>
                 </div>
@@ -727,7 +741,7 @@ export default function ReportsPage() {
               </div>}
 
               {/* Leaves this year */}
-              <div className="card">
+              {leaveOn && <div className="card">
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-lg font-bold text-gray-800">
                     الإجازات هذا العام ({currentYear})
@@ -762,10 +776,10 @@ export default function ReportsPage() {
                     {leaves?.balances.length ?? 0} سجل رصيد إجازات
                   </span>
                 </div>
-              </div>
+              </div>}
 
               {/* Overtime in the chosen range */}
-              <div className={`card ${rangeLoading ? 'opacity-60' : ''}`}>
+              {overtimeOn && <div className={`card ${rangeLoading ? 'opacity-60' : ''}`}>
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-lg font-bold text-gray-800">
                     العمل الإضافي ({periodText})
@@ -801,7 +815,7 @@ export default function ReportsPage() {
                     {overtime.reduce((s, o) => s + Number(o.entries), 0)} إدخال أوفرتايم
                   </span>
                 </div>
-              </div>
+              </div>}
             </div>
 
             {/* Available Reports */}

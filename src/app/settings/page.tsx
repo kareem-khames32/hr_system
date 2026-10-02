@@ -3,6 +3,7 @@
 import Link from 'next/link'
 import { MainLayout } from '@/components/layout'
 import { can } from '@/lib/api'
+import { useRouteFilter } from '@/lib/modules'
 import {
   ArrowLeft, Award, Briefcase, Building2, CalendarDays, CalendarClock,
   Clock, FileCheck, FileText, Fingerprint, GitBranch, Layers3,
@@ -64,8 +65,10 @@ const groups: { title: string; description: string; links: SettingsLink[] }[] = 
 
 // Render only after MainLayout checks the browser account and route permission.
 function SettingsDirectory() {
+  // لينك شاشة موديول مقفول (ورديات، أجهزة بصمة، أنواع إجازات…) مايتعرضش
+  const available = useRouteFilter()
   const visibleGroups = groups
-    .map((group) => ({ ...group, links: group.links.filter((link) => can(link.permission)) }))
+    .map((group) => ({ ...group, links: group.links.filter((link) => can(link.permission) && available(link.href)) }))
     .filter((group) => group.links.length > 0)
 
   return (

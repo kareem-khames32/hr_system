@@ -2,6 +2,7 @@
 
 import { useEffect, useMemo, useState } from 'react'
 import Link from 'next/link'
+import { useModuleEnabled } from '@/lib/modules'
 import { MainLayout } from '@/components/layout'
 import {
   fetchConfig,
@@ -364,6 +365,7 @@ export default function WorkDaysSettingsPage() {
   }
 
   const otEnabled = (otValues[OVERTIME_ENABLED_KEY] ?? '') === 'true'
+  const overtimeOn = useModuleEnabled('overtime')
   const overtimeMonthlyDays = Number(configValue('payroll.monthly_days'))
   const overtimeDailyHours = Number(configValue('payroll.daily_hours'))
   const overtimeDivisorsValid = Number.isFinite(overtimeMonthlyDays) && overtimeMonthlyDays > 0 && Number.isFinite(overtimeDailyHours) && overtimeDailyHours > 0
@@ -621,8 +623,8 @@ export default function WorkDaysSettingsPage() {
               </div>
             </div>
 
-            {/* العمل الإضافي (الأوفرتايم) — تحكّم HR الفعلي عبر config */}
-            <div className="card">
+            {/* العمل الإضافي (الأوفرتايم) — تحكّم HR الفعلي عبر config. بيختفي لو موديول الإضافي مقفول */}
+            {overtimeOn && <div className="card">
               <div className="flex items-center justify-between mb-4">
                 <div className="flex items-center gap-3">
                   <div className="w-10 h-10 bg-amber-100 rounded-xl flex items-center justify-center">
@@ -782,7 +784,7 @@ export default function WorkDaysSettingsPage() {
                   <span className="text-sm text-primary-600 shrink-0">افتح الشاشة ←</span>
                 </Link>
               </div>
-            </div>
+            </div>}
             </>
           )
         )}

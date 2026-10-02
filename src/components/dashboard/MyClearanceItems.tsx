@@ -4,6 +4,7 @@ import { useEffect, useState } from 'react'
 import Link from 'next/link'
 import { ChevronLeft, ClipboardCheck } from 'lucide-react'
 import { fetchMyClearanceItems, type ApiMyClearanceItem } from '@/lib/api'
+import { useModuleEnabled } from '@/lib/modules'
 
 // أسماء جهات إخلاء الطرف — نفس شاشة ملف إنهاء الخدمة
 const partyLabels: Record<string, string> = {
@@ -18,8 +19,11 @@ const partyLabels: Record<string, string> = {
 // (تختفي عند الخلو) والإتمام من داخل ملف إنهاء الخدمة
 export default function MyClearanceItems() {
   const [items, setItems] = useState<ApiMyClearanceItem[]>([])
+  // موديول إنهاء الخدمة مقفول: مفيش بنود إخلاء ولا نداء
+  const offboardingOn = useModuleEnabled('offboarding')
 
   useEffect(() => {
+    if (!offboardingOn) { setItems([]); return }
     let cancelled = false
     fetchMyClearanceItems()
       .then((rows) => {
@@ -31,7 +35,7 @@ export default function MyClearanceItems() {
     return () => {
       cancelled = true
     }
-  }, [])
+  }, [offboardingOn])
 
   if (items.length === 0) return null
 

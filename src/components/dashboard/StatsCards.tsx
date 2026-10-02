@@ -10,6 +10,7 @@ import {
   Briefcase,
 } from 'lucide-react'
 import { fetchDashboardStats, type ApiDashboardStats } from '@/lib/api'
+import { useModuleEnabled } from '@/lib/modules'
 
 interface StatCard {
   id: string
@@ -26,6 +27,9 @@ export default function StatsCards() {
   const [stats, setStats] = useState<ApiDashboardStats | null>(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
+  // كروت الحضور والإجازات بتختفي مع موديولها (الخادم بيرجّع أرقامها أصفار)
+  const attendanceOn = useModuleEnabled('attendance')
+  const leaveOn = useModuleEnabled('leave')
 
   useEffect(() => {
     let cancelled = false
@@ -113,7 +117,7 @@ export default function StatsCards() {
       iconBg: 'bg-danger-50',
       iconColor: 'text-danger-600',
     },
-  ]
+  ].filter((card) => (attendanceOn || !['present', 'late', 'absent'].includes(card.id)) && (leaveOn || card.id !== 'on-leave'))
 
   return (
     <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">

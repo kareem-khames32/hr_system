@@ -9,6 +9,7 @@ import { can, createEmployee, fetchCandidates, getCurrentUser, hireCandidate, ty
 import { candidateHireBlock, candidateHireInitial, candidateIdFromSearch } from '@/lib/candidate-hire'
 import { clearEmployeeAddDraft } from '@/lib/employee-add-draft'
 import { saveQualifications } from '@/lib/save-qualifications'
+import { useModuleEnabled } from '@/lib/modules'
 
 export default function AddEmployeePage() {
   const [submitting, setSubmitting] = useState(false)
@@ -21,7 +22,10 @@ export default function AddEmployeePage() {
   const [candidate, setCandidate] = useState<ApiCandidate | null>(null)
   const [candidateError, setCandidateError] = useState('')
 
+  // موديول التوظيف مقفول: رقم المرشح في الرابط بيتجاهل والشاشة «إضافة موظف» عادية
+  const recruitmentOn = useModuleEnabled('recruitment')
   useEffect(() => {
+    if (!recruitmentOn) { setCandidateId(null); setCandidate(null); setCandidateError(''); return }
     const id = candidateIdFromSearch(window.location.search)
     if (id === 'invalid') { setCandidateId(null); setCandidateError('رقم المرشح غير صالح'); return }
     setCandidateId(id)
@@ -34,7 +38,7 @@ export default function AddEmployeePage() {
         else setCandidate(found ?? null)
       })
       .catch((err) => setCandidateError(err instanceof Error ? err.message : 'تعذر تحميل بيانات المرشح'))
-  }, [])
+  }, [recruitmentOn])
 
   const handleSubmit = async (payload: EmployeeFormPayload) => {
     if (creating.current || createdId.current) return

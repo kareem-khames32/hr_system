@@ -76,7 +76,7 @@ const SCREENS = [
   ['src/app/requests-console/page.tsx', ['const orgRequests = requests.filter((r) => (r.masked ? org.matchesPlacement({ branchId: r.branchId }) : org.matches(r.requesterId)))',
     'total: orgRequests.length', 'const filtered = orgRequests.filter', 'requesterId: masked ? null : r.requesterId ?? null'], ['filterBranch']],
   ['src/app/reports/page.tsx', ['fetchHeadcountReportFor(org.params)', 'fetchLeavesReportFor(currentYear, org.params)', 'fetchPayrollReportFor(org.params)',
-    'fetchRequestsReportFor(org.params)', 'const attendance = allAttendance.filter', 'const overtime = allOvertime.filter', '}, [org.paramsKey])'], []],
+    'fetchRequestsReportFor(org.params)', 'const attendance = allAttendance.filter', 'const overtime = allOvertime.filter', '}, [org.paramsKey, leaveOn, payrollOn])'], []],
   ['src/app/reports/_financial/ReportShell.tsx', ['{ ...current, org: org.params }', 'org.label ? org.label'], ['filters.branchId', 'filters.departmentId', 'departmentOptions']],
   ['src/app/reports/cost-centers/page.tsx', ['fetchCostCenterReport({ period, org: org.params, includeDraft })', 'useEffect(load, [period, org.paramsKey, includeDraft])'], ['setBranchId']],
   ['src/app/settings/users/page.tsx', ['user.employeeId ? org.matches(user.employeeId) : org.matchesPlacement({ branchId: user.branchId ?? null })',

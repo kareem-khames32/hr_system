@@ -3,6 +3,7 @@
 import { employeeStatusLabels as statusLabels, requestStatusLabels, requestStatusStyles as requestStatusColors, custodyStatusLabels, custodyStatusStyles, payMethodLabels } from '@/lib/status-labels'
 import { useLeaveCatalog } from '@/lib/leave-catalog'
 import { useOwnCurrency } from '@/lib/currency'
+import { useModuleEnabled } from '@/lib/modules'
 import { docTypeLabel } from '@/lib/doc-types'
 import { orgPlacement, unitPathLabel } from '@/lib/department-tree'
 
@@ -278,6 +279,9 @@ function ProfileEditDialog({ employee, pending, personalType, bankType, typesErr
 export default function ProfilePage() {
   const leaveCatalog = useLeaveCatalog()
   const systemCurrency = useOwnCurrency()
+  // أجزاء الإجازات والعهدة بتختفي مع موديولها (من غير نداء ولا رسالة خطأ)
+  const leaveOn = useModuleEnabled('leave')
+  const custodyOn = useModuleEnabled('custody')
   const leaveTypeLabels = leaveCatalog.labels
   const [activeTab, setActiveTab] = useState('info')
   const [user, setUser] = useState<CurrentUser | null>(null)
@@ -323,7 +327,7 @@ export default function ProfilePage() {
         fetchDepartments()
           .then(setDepartments)
           .catch((err) => sectionError('الأقسام', err))
-        fetchMyBalances()
+        if (leaveOn) fetchMyBalances()
           .then(setBalances)
           .catch((err) => sectionError('أرصدة الإجازات', err))
         const myRequests = await fetchMyRequests().catch((err) => { sectionError('الطلبات', err); return [] as ApiRequest[] })
@@ -358,7 +362,8 @@ export default function ProfilePage() {
         setLoading(false)
       }
     })()
-  }, [reloadRevision])
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [reloadRevision, leaveOn])
 
   // صورة الموظف — رابط blob بالتوكن (يُلغى عند التفريغ)
   useEffect(() => {
@@ -438,8 +443,8 @@ export default function ProfilePage() {
 
   const tabs = [
     { id: 'info', label: 'المعلومات الشخصية', icon: User },
-    { id: 'leaves', label: 'الإجازات', icon: Calendar },
-    { id: 'requests', label: 'الطلبات والعهدة', icon: Clock },
+    ...(leaveOn ? [{ id: 'leaves', label: 'الإجازات', icon: Calendar }] : []),
+    { id: 'requests', label: custodyOn ? 'الطلبات والعهدة' : 'الطلبات', icon: Clock },
     { id: 'documents', label: 'المستندات', icon: FileText },
   ]
 
@@ -714,7 +719,7 @@ export default function ProfilePage() {
                   </div>
                 </div>
 
-                <div className="card">
+                {leaveOn && <div className="card">
                   <h2 className="text-lg font-bold text-gray-800 mb-4 flex items-center gap-2">
                     <Calendar size={20} className="text-primary-600" />
                     أرصدة الإجازات
@@ -743,11 +748,11 @@ export default function ProfilePage() {
                       ))
                     )}
                   </div>
-                </div>
+                </div>}
               </div>
             )}
 
-            {activeTab === 'leaves' && (
+            {activeTab === 'leaves' && leaveOn && (
               <div className="card">
                 <h2 className="text-lg font-bold text-gray-800 mb-6">آخر الإجازات</h2>
                 {leaves.length === 0 ? (
@@ -825,7 +830,7 @@ export default function ProfilePage() {
                   )}
                 </div>
 
-                <div className="card">
+                {custodyOn && <div className="card">
                   <h2 className="text-lg font-bold text-gray-800 mb-6">العهدة</h2>
                   {custody.length === 0 ? (
                     <p className="text-gray-500 text-sm">
@@ -861,7 +866,7 @@ export default function ProfilePage() {
                       ))}
                     </div>
                   )}
-                </div>
+                </div>}
               </div>
             )}
 

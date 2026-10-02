@@ -2,6 +2,7 @@
 
 import Link from 'next/link'
 import { Banknote, FileSpreadsheet, Landmark, MinusCircle, PieChart, Timer, Wallet } from 'lucide-react'
+import { useRouteFilter } from '@/lib/modules'
 
 // التقارير المالية لشهر الرواتب — نفس القائمة في «لوحة التقارير» و«تقرير الرواتب»
 export const FINANCIAL_REPORT_LINKS = [
@@ -14,6 +15,10 @@ export const FINANCIAL_REPORT_LINKS = [
 ] as const
 
 export function FinancialReportLinks({ title = 'التقارير المالية' }: { title?: string }) {
+  // تقرير موديول مقفول (السلف، الإضافي) لينكه مايتعرضش، والبطاقة كلها بتختفي لو مفيش تقارير متاحة
+  const available = useRouteFilter()
+  const links = FINANCIAL_REPORT_LINKS.filter((report) => available(report.href))
+  if (!links.length) return null
   return (
     <div className="card">
       <h2 className="text-lg font-bold text-gray-800 mb-1 flex items-center gap-2">
@@ -22,7 +27,7 @@ export function FinancialReportLinks({ title = 'التقارير المالية'
       </h2>
       <p className="text-sm text-gray-500 mb-4">لشهر رواتب بحدوده، بالفرع والقسم ومركز التكلفة، مع تصدير Excel وطباعة</p>
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-        {FINANCIAL_REPORT_LINKS.map((report) => {
+        {links.map((report) => {
           const Icon = report.icon
           return (
             <Link key={report.href} href={report.href} className="p-4 bg-gray-50 rounded-2xl hover:bg-gray-100 transition-colors group flex items-start gap-3">
