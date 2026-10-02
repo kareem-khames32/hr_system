@@ -235,9 +235,11 @@ export class FinancialExemptionsService {
   private async basisFor(em: EntityManager, user: JwtPayload, facts: OrgFacts, org: MemberOrg, target: ExemptionTarget, settings: Settings): Promise<ExemptionGrantorBasis> {
     if (userHasPerm(user, GRANT) && this.inBranch(user, org.branchId)) return 'HR'
     const component = exemptionComponentOf(target)
-    const departmentManager = settings.departmentManagerEnabled && !!org.departmentId && facts.departments.has(org.departmentId)
+    // CR23-B01: الأساس الهيكلي جوه نطاق فروع الحساب بس — إدارة القسم أو ملكية نوع الخصم ماتعدّيش فصل الفروع
+    const inScope = this.inBranch(user, org.branchId)
+    const departmentManager = inScope && settings.departmentManagerEnabled && !!org.departmentId && facts.departments.has(org.departmentId)
     let functionOwner = false
-    if (component === 'TYPED' && facts.departments.size) {
+    if (inScope && component === 'TYPED' && facts.departments.size) {
       let typeId = target.targetKind === 'TYPED' ? target.deductionTypeId : null
       if (target.targetKind === 'OBLIGATION') {
         const [row] = await em.query(`SELECT r.[deductionTypeId] FROM [employee_obligations] o INNER JOIN [deduction_requests] r ON r.[id]=o.[deductionRequestId] WHERE o.[id]=@0`, [Number(target.targetRef)])
@@ -553,7 +555,7 @@ export class FinancialExemptionsService {
     if (row.grantedByUserId === user.sub) return true
     // مدير القسم من غير صلاحية إعفاءات: إعفاءات خصومات الحضور في قسمه بس (هي اللي بيمنحها). إعفاء خصم مصنف أو تأجيل قسط سلفة
     // أو «كل الخصومات» منحته جهة تانية فيه مبالغ خصومات الموظف وسلفه — مايتعرضش له. ولو منح المدير الهيكلي مقفول من الإعدادات فمالوش صفة في الإعفاءات أصلًا
-    return departmentManagerEnabled && !!departmentId && facts.departments.has(departmentId) && isAttendanceComponent(exemptionComponentOf(exemptionRuleOf(row)))
+    return departmentManagerEnabled && this.inBranch(user, branchId) && !!departmentId && facts.departments.has(departmentId) && isAttendanceComponent(exemptionComponentOf(exemptionRuleOf(row)))
   }
 
   private async views(em: EntityManager, user: JwtPayload, rows: PayrollFinancialExemption[]) {
@@ -652,7 +654,9 @@ export class FinancialExemptionsService {
         .filter(type => type.ownerDepartmentId && facts.departments.has(type.ownerDepartmentId)).map(type => type.id)) : new Set<number>()
       const basesOf = (org: Pick<MemberOrg, 'branchId' | 'departmentId' | 'employeeId'>, typedTypeIds: number[]) => {
         const bases: ExemptionGrantorBasis[] = []
-        if (hr && this.inBranch(user, org.branchId)) bases.push('HR')
+        // CR23-B01: موظف برّه نطاق فروع الحساب مالوش أي أساس — لا اسمه ولا قيوده بيرجعوا، مهما كانت ملكية النوع أو إدارة القسم
+        if (!this.inBranch(user, org.branchId)) return bases
+        if (hr) bases.push('HR')
         if (settings.departmentManagerEnabled && org.departmentId && facts.departments.has(org.departmentId)) bases.push('DEPARTMENT_MANAGER')
         if (typedTypeIds.some(id => ownedTypes.has(id))) bases.push('FUNCTION_OWNER')
         return bases
@@ -773,7 +777,7 @@ export class FinancialExemptionsService {
       const runs = new Map<number, { id: number; name: string | null; period: string; candidates: number }>()
       for (const row of rows) {
         if (Number(row.employeeId) === Number(user.employeeId ?? 0) || facts.superiors.has(Number(row.employeeId))) continue
-        const eligible = (hr && this.inBranch(user, row.branchId)) || (settings.departmentManagerEnabled && row.departmentId != null && facts.departments.has(Number(row.departmentId)))
+        const eligible = this.inBranch(user, row.branchId) && (hr || (settings.departmentManagerEnabled && row.departmentId != null && facts.departments.has(Number(row.departmentId))))
         if (!eligible) continue
         const entry = runs.get(Number(row.runId)) ?? { id: Number(row.runId), name: row.name, period: row.period, candidates: 0 }
         entry.candidates++

@@ -11,6 +11,8 @@
 //         وقارئ الرواتب على مستوى الشركة بياخد بيانات المسير زي ما هي.
 //  LK-05) GET /reports/payroll (لوحة التقارير) وآخر المسيرات في GET /dashboard/stats: لقارئ الرواتب بس.
 //  LK-06) تقرير حوكمة الإعفاءات: صافي المسير المحفوظ لقارئ الشركة بس، والمكافآت بموظفي نطاق القارئ.
+//  LK-07) (CR23-B02) إعادة فتح المسير وإلغاؤه بصلاحية العملية من غير «عرض مسيرات الرواتب»: العملية بتتنفذ، والرد حالة المسير بس
+//         من غير بنود ولا أعضاء ولا أسماء ولا مبالغ. آخر اختبار في الملف لأنه بيلغي المسير متعدد الفروع.
 // Run (من api/): node --test test/payroll-response-leaks.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -108,6 +110,9 @@ before(async () => {
   // قارئ رواتب على مستوى الشركة (نطاقه «كل الفروع»)، وحساب فرع معاه التقارير واللوحة وعرض الإعفاءات من غير صلاحية رواتب
   U.companyReader = await user('company@leaks.test', 'hr_manager', null, null, ['payroll.view', 'reports.view', 'dashboard.view_all', 'financial_exemption.view'], { scopeAllBranches: true })
   U.branchViewer = await user('viewer@leaks.test', 'employee', B.main, null, ['reports.view', 'dashboard.view_all', 'financial_exemption.view'])
+  // صلاحية العملية لوحدها من غير عرض الرواتب (نطاقه كل الفروع)
+  U.reopener = await user('reopener@leaks.test', 'employee', null, null, ['payroll.reopen'], { scopeAllBranches: true })
+  U.canceller = await user('canceller@leaks.test', 'employee', null, null, ['payroll.cancel'], { scopeAllBranches: true })
   await repo('RequestsConfig').save([
     { key: 'payroll.cycle_start_day', value: '23' }, { key: 'payroll.monthly_days', value: '30' }, { key: 'payroll.daily_hours', value: '8' },
     { key: 'payroll.late_deduction_enabled', value: 'true' }, { key: 'attendance.absence_penalty_days', value: '1' }, { key: 'attendance.weekend_days', value: 'FRI,SAT' },
@@ -284,4 +289,24 @@ test('LK-06: تقرير حوكمة الإعفاءات — صافي المسير 
   const company = ok(await request(U.companyReader, 'GET', route))
   const companyRow = company.byRun.find(row => row.runId === run2.id)
   assert.deepEqual([Number(companyRow.totalNet), companyRow.bonuses], [Number(stored.totalNet), FAR_BONUS.toFixed(2)])
+})
+
+test('LK-07: إعادة فتح المسير وإلغاؤه من غير «عرض مسيرات الرواتب» — العملية بتتنفذ والرد حالة المسير بس', async () => {
+  // مايقدرش يقرا المسير أصلًا
+  for (const actor of [U.reopener, U.canceller]) assert.equal((await request(actor, 'GET', `/payroll/runs/${run2.id}`)).status, 403)
+  const leaked = body => { const text = JSON.stringify(body); return ['7000', '8123', 'موظف فرع القارئ', 'موظف الفرع التاني', '"items"', '"members"', '"engine"', '"totalNet"'].filter(part => text.includes(part)) }
+
+  const reopened = ok(await request(U.reopener, 'POST', `/payroll/runs/${run2.id}/reopen`, { reason: 'مراجعة بند قبل الصرف بطلب المالية' }), 201)
+  assert.deepEqual(Object.keys(reopened).sort(), SAFE_RUN_KEYS)
+  assert.deepEqual([reopened.id, reopened.status], [run2.id, 'CALCULATED'])
+  assert.deepEqual(leaked(reopened), [], 'رد إعادة الفتح من غير بنود ولا أسماء ولا مبالغ')
+
+  const cancelled = ok(await request(U.canceller, 'POST', `/payroll/runs/${run2.id}/cancel`, { reason: 'إلغاء مسودة اختبار بعد إعادة الفتح' }), 201)
+  assert.deepEqual(Object.keys(cancelled).sort(), SAFE_RUN_KEYS)
+  assert.deepEqual([cancelled.id, cancelled.status], [run2.id, 'CANCELLED'])
+  assert.deepEqual(leaked(cancelled), [])
+  // والعمليتين اتنفذوا فعلًا، وقارئ الرواتب بيشوف المسير ببنوده زي ما هو
+  const detail = ok(await request(U.admin, 'GET', `/payroll/runs/${run2.id}`))
+  assert.equal(detail.status, 'CANCELLED')
+  assert.deepEqual(detail.items.map(item => item.employeeId).sort((a, b) => a - b), [E.near.id, E.far.id].sort((a, b) => a - b))
 })

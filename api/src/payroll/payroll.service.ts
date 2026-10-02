@@ -274,6 +274,20 @@ export class PayrollService {
     }
   }
 
+  // رد عملية على المسير (احتساب، مسودة، إعادة فتح، إلغاء، إنشاء عكس أو تكميلي): تفاصيل المسير ببنوده وأعضائه لقارئ الرواتب بس. صلاحية العملية لوحدها
+  // (payroll.reopen مثلًا) مش صلاحية عرض، فصاحبها بياخد حالة المسير من غير بنود ولا أسماء ولا مبالغ — وGET /payroll/runs/:id بيرفضه برضه
+  async mutationResult(user: JwtPayload, runId: number) {
+    if (userHasPerm(user, 'payroll.view')) return this.detail(user, runId)
+    const run = await this.runs.findOneBy({ id: runId })
+    if (!run) throw new NotFoundException('المسير غير موجود')
+    return this.ownPayslipRun(run)
+  }
+
+  // رد الاعتماد والصرف: صف المسير من غير لقطة السياسة وتقرير التكافؤ لقارئ الرواتب، وحالة المسير بس لغيره
+  private runResponse(user: JwtPayload, run: PayrollRun) {
+    return userHasPerm(user, 'payroll.view') ? this.lightRun(run) : this.ownPayslipRun(run)
+  }
+
   // هل المسير كله في نطاق المستخدم؟ (نفس حكم assertRunAccess من غير ما يرمي)
   private async runAccessible(user: JwtPayload, run: PayrollRun, em = this.runs.manager): Promise<boolean> {
     try {
@@ -1262,7 +1276,7 @@ export class PayrollService {
         ...(membershipPlan ? { membership: { added: membershipPlan.added, removed: membershipPlan.removed, reason: dto.membership?.reason ?? null } } : {}) })
     return run.id
     })
-    return this.detail(user, runId)
+    return this.mutationResult(user, runId)
   }
 
   /**
@@ -1329,7 +1343,7 @@ export class PayrollService {
       // صلاحية الاعتماد وحدها لا تتخطى سلسلة الاعتماد؛ بلا سلسلة = لا مانع
       await assertPayrollRunHasNoChain(em, run)
       // الرد من غير لقطة السياسة وتقرير التكافؤ (فيهم أرقام كل موظف): صلاحية الاعتماد لوحدها مش صلاحية عرض الرواتب
-      return this.lightRun(await this.approveLocked(em, user, run, null))
+      return this.runResponse(user, await this.approveLocked(em, user, run, null))
     })
   }
 
@@ -1479,7 +1493,7 @@ export class PayrollService {
           paidBy: user.sub, channel: payRecord.channel, channelLabel: PAYROLL_PAY_CHANNEL_LABELS[payRecord.channel], reference: payRecord.reference, effects: summary })
         await this.event(em, user, ready.parent.id, 'REVERSAL_POSTED', run.correctionReason ? run.correctionReason.slice(0, 500) : null,
           { reversalRunId: run.id, employeeIds: ready.employeeIds, totalNet: Number(run.totalNet), effects: summary })
-        return run
+        return this.runResponse(user, run)
       }
       const items = await em.getRepository(PayrollItem).find({ where: { runId } })
       const employeeIds = await this.validateRunMembers(em, run, items)
@@ -1525,7 +1539,7 @@ export class PayrollService {
         paidBy: user.sub, channel: payRecord.channel, channelLabel: PAYROLL_PAY_CHANNEL_LABELS[payRecord.channel], reference: payRecord.reference,
         // الصرف للمسير كله مرة واحدة (RUN_LEVEL) أو موظف بموظف (PER_EMPLOYEE) بعدد وإجمالي من اتصرف له ومن لم يُصرف له وسببه
         disbursement })
-      return this.lightRun(run)
+      return this.runResponse(user, run)
     })
   }
 
@@ -1679,14 +1693,14 @@ export class PayrollService {
   async reopen(user: JwtPayload, runId: number, reason: string) {
     if (!userHasPerm(user, 'payroll.reopen')) throw new ForbiddenException('ليست لديك صلاحية إعادة فتح المسير')
     await this.changeRunState(user, runId, 'APPROVED', 'CALCULATED', 'REOPENED', this.requireReason(reason))
-    return this.detail(user, runId)
+    return this.mutationResult(user, runId)
   }
 
   async cancel(user: JwtPayload, runId: number, reason: string) {
     if (!userHasPerm(user, 'payroll.cancel')) throw new ForbiddenException('ليست لديك صلاحية إلغاء المسير')
     // الخطوة 16: المسودة (قبل الحساب) تُلغى بالمسار نفسه وتبقى محفوظة بسجلها.
     await this.changeRunState(user, runId, ['CALCULATED', 'DRAFT'], 'CANCELLED', 'CANCELLED', this.requireReason(reason))
-    return this.detail(user, runId)
+    return this.mutationResult(user, runId)
   }
 
   private async changeRunState(user: JwtPayload, runId: number, expected: PayrollRun['status'] | PayrollRun['status'][], status: PayrollRun['status'], eventType: string, reason: string) {
@@ -2247,7 +2261,7 @@ export class PayrollService {
   // C8 / الخطوة 31: correction = مسير تكميلي مربوط بمسير مصروف (من payroll-corrections.service بعد فحص الأهلية)
   async createRunDraft(user: JwtPayload, dto: PayrollRunDefinitionInput,
     correction?: { runType: 'SUPPLEMENTARY'; parentRunId: number; correctionReason: string; startDate: string; endDate: string; employeeIds: number[] }) {
-    return this.detail(user, await this.saveRunDraft(user, dto, correction))
+    return this.mutationResult(user, await this.saveRunDraft(user, dto, correction))
   }
 
   // حفظ المسودة نفسه (تحقق الاسم والسياسة وفترتها والتعريف ونطاق الفرع والنطاق الفارغ ثم الحفظ وحدثه) — «مسير جديد» و«إنشاء مسيرات الشهر الجديد» بنفس المسار
@@ -2413,7 +2427,7 @@ export class PayrollService {
         after: { name, period: context.period, startDate: context.startDate, endDate: context.endDate, policyVersionId: context.version.id, definition },
         previewTotals: preview.totals, previewHash: preview.previewHash })
     })
-    return this.detail(user, runId)
+    return this.mutationResult(user, runId)
   }
 
   // «احتساب المسودة» (أول حساب) منفصل عن «إعادة حساب مسير» (بسبب إلزامي).

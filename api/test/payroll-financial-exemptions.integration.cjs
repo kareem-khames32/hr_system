@@ -498,3 +498,52 @@ test('B0.1s: مرشحين الإعفاء على قد أساس صاحب الطل�
     await setConfig('financial_exemptions.department_manager_enabled', 'true')
   }
 })
+
+test('CR23-B01: ملكية نوع الخصم ماتعدّيش فصل الفروع — موظف فرع تاني مابيظهرش لمدير الجهة المالكة في مرشحين الإعفاء ولا بتفاصيله', { timeout: 420000 }, async () => {
+  // جهة مالكة في فرع الإعفاءات، ونوع خصم مملوك لها، وموظف في فرع تاني عليه خصم من النوع ده، ومسير فيه موظف من كل فرع
+  const otherBranch = await repo('Branch').save({ code: 'EX_B', name: 'فرع تاني' })
+  const otherDepartment = await repo('Department').save({ branchId: otherBranch.id, name: 'قسم الفرع التاني', code: 'EX_DB' })
+  const ownerDepartment = await repo('Department').save({ branchId: org.branch.id, name: 'قسم مراقبة الجودة', code: 'EX_DQ2' })
+  const ownerEmployee = await employee('EX_OW2', { departmentId: ownerDepartment.id, managerEmployeeId: people.branchManager.id })
+  await repo('Department').update(ownerDepartment.id, { managerEmployeeId: ownerEmployee.id })
+  const owner = await repo('User').save({ email: 'type-owner-2@exemptions.invalid', displayName: 'type-owner-2', passwordHash: 'test-only', role: 'employee',
+    branchId: org.branch.id, employeeId: ownerEmployee.id, permissions: '[]' })
+  const ownedType = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'EX_OWNED2', nameAr: 'خصم مراقبة الجودة', category: 'PERFORMANCE', calcMethod: 'FIXED_AMOUNT',
+    creatorScopes: ['HR'], approvalSteps: ['HR'], escalationDays: null, isExemptable: true, ownerDepartmentId: ownerDepartment.id }), 201)
+  const near = await employee('EX_E8', { managerEmployeeId: people.manager.id })
+  const far = await employee('EX_E9', { fullName: 'موظف الفرع التاني للإعفاء', branchId: otherBranch.id, departmentId: otherDepartment.id })
+  await attendance(near); await attendance(far)
+  const nearDeduction = await deduction(users.hr, users.hr2, near, ownedType, '95.25')
+  const farDeduction = await deduction(users.admin, users.admin, far, ownedType, '147.89')
+  const run = expectStatus(await request(users.admin, 'POST', '/payroll/runs/calculate-defined', { period, scopeType: 'CUSTOM', employeeIds: [near.id, far.id],
+    name: `مسير فرعين للإعفاء ${++sequence}` }), 201)
+  const route = `/payroll/exemptions/runs/${run.id}/candidates`
+
+  // مدير النظام شايف الاتنين — الدليل إن خصم موظف الفرع التاني موجود فعلًا في المسير
+  const all = expectStatus(await request(users.admin, 'GET', `${route}?employeeId=${far.id}`), 200)
+  assert.deepEqual(all.typedObligations.map(row => [row.obligationId, row.amount]), [[farDeduction.obligation.id, '147.89']])
+
+  // مدير الجهة المالكة (نطاقه فرع الإعفاءات): موظف فرعه بس في القايمة، وموظف الفرع التاني مش فيها بأي شكل
+  const list = expectStatus(await request(owner, 'GET', route), 200)
+  assert.deepEqual(list.employees.map(row => [row.employeeId, row.bases]), [[near.id, ['FUNCTION_OWNER']]])
+  const listText = JSON.stringify(list)
+  for (const hidden of ['موظف الفرع التاني للإعفاء', 'EX_E9', `"employeeId":${far.id}`, `"branchId":${otherBranch.id}`]) assert.ok(!listText.includes(hidden), `${hidden} مايظهرش في القايمة`)
+  // وتفاصيله ومعاينة إعفائه مرفوضين من غير أي بيانات عنه
+  const detail = await request(owner, 'GET', `${route}?employeeId=${far.id}`)
+  assert.deepEqual([detail.status, detail.body.code], [403, 'EXEMPTION_OUT_OF_SCOPE'])
+  const detailText = JSON.stringify(detail.body)
+  for (const hidden of ['147.89', 'موظف الفرع التاني للإعفاء', `"obligationId":${farDeduction.obligation.id}`]) assert.ok(!detailText.includes(hidden), `${hidden} مايظهرش في الرفض`)
+  await setConfig('financial_exemptions.cooldown_hours', '0')
+  try {
+    expectStatus(await request(owner, 'POST', '/payroll/exemptions/preview',
+      exemption(run, far, { scopeKind: 'SINGLE_ENTRY', targetKind: 'OBLIGATION', targetRef: String(farDeduction.obligation.id) })), 403, 'EXEMPTION_OUT_OF_SCOPE')
+    // وصلاحيته جوه نطاقه زي ما هي: موظف فرعه بيتعاين ويتعفي
+    const own = expectStatus(await request(owner, 'GET', `${route}?employeeId=${near.id}`), 200)
+    assert.deepEqual(own.typedObligations.map(row => [row.obligationId, row.amount]), [[nearDeduction.obligation.id, '95.25']])
+    const preview = expectStatus(await request(owner, 'POST', '/payroll/exemptions/preview',
+      exemption(run, near, { scopeKind: 'SINGLE_ENTRY', targetKind: 'OBLIGATION', targetRef: String(nearDeduction.obligation.id) })), 201)
+    assert.deepEqual([preview.basis, preview.estimatedAmount], ['FUNCTION_OWNER', '95.25'])
+  } finally {
+    await setConfig('financial_exemptions.cooldown_hours', '24')
+  }
+})

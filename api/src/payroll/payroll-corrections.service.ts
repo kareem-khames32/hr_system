@@ -247,7 +247,7 @@ export class PayrollCorrectionsService {
         payload: { reversalRunId: reversal.id, employeeIds: items.map(item => item.employeeId), totalNet: -Number(totalNet) } })
       return reversal.id
     })
-    return this.payroll.detail(user, reversalRunId)
+    return this.payroll.mutationResult(user, reversalRunId)
   }
 
   /** مسير تكميلي مربوط بالمسير المصروف: مسودة بنسخة سياسته وفترته وقائمة الموظفين المؤهلين، ثم الحساب والاعتماد والصرف المعتادة. */
