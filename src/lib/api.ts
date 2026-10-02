@@ -83,6 +83,8 @@ export const clearSession = () => {
     clearEmployeeAddDrafts(store)
     // سياق العملة (src/lib/currency.ts) تبع الجلسة — الخروج بيمسحه (والكاش كمان مربوط بالتوكن، فدخول جديد بيقرا سياق جديد)
     store.removeItem('hr_currency_context')
+    // الموديولات المفعّلة للمستخدم (src/lib/modules.ts) تبع الجلسة برضه
+    store.removeItem('hr_enabled_modules')
   }
 }
 
@@ -118,6 +120,12 @@ const arabicErrorMessage = (status: number, message: string): string => {
   if (/[؀-ۿ]/.test(message)) return message
   return GENERIC_ERRORS[status] ?? (status >= 500 ? 'حدث خطأ في الخادم — أعد المحاولة بعد قليل' : `تعذر تنفيذ الطلب (${status})`)
 }
+
+// مسار رجّع 404 بشكل «مسار مش موجود» (Cannot GET …): ده رد الموديول المقفول. src/lib/modules.ts بيسجّل نفسه هنا
+// عشان يجدّد حالة الموديولات لتبويب فاتح من قبل القفل (التسجيل من هناك عشان الملف ده مايستوردش منه)
+let routeMissingListener: (() => void) | null = null
+export const onApiRouteMissing = (listener: () => void) => { routeMissingListener = listener }
+const isRouteMissing = (status: number, message: string) => status === 404 && /^Cannot [A-Z]+ \//.test(message)
 
 // نداء عام — يضيف التوكن تلقائياً ويرمي ApiError برسالة السيرفر
 export async function apiFetch<T>(
@@ -176,6 +184,7 @@ export async function apiFetch<T>(
     ) {
       window.location.href = CHANGE_PASSWORD_PATH
     }
+    if (isRouteMissing(res.status, message) && !path.startsWith('/modules/enabled')) routeMissingListener?.()
     throw new ApiError(res.status, arabicErrorMessage(res.status, message), details)
   }
 
@@ -1558,6 +1567,8 @@ export interface ApiPermission {
   description: string; group: string; groupLabelAr: string
   // منحها (لدور أو لمستخدم) متاح لمدير النظام فقط
   superAdminOnly: boolean
+  // موديول الصلاحية مفعّل؟ صلاحية الموديول المقفول مابتتعرضش في الشاشات، والممنوحة منها بتفضل محفوظة
+  moduleEnabled: boolean
   // الأدوار المفعّلة اللي شايلاها — فاضية = صلاحية «يتيمة» مايحملهاش أي دور (مدير النظام شايل الكل ضمنيًا)
   carriedBy: Array<{ code: string; nameAr: string }>
 }
@@ -1584,6 +1595,7 @@ export const fetchPermissionsRegistry = async (): Promise<ApiPermission[]> =>
     group: p.group ?? 'other',
     groupLabelAr: p.groupLabelAr ?? p.group ?? 'أخرى',
     superAdminOnly: p.superAdminOnly === true,
+    moduleEnabled: p.moduleEnabled !== false,
     carriedBy: p.carriedBy ?? [],
   }))
 export const fetchRolesFull = () => get<ApiRole[]>('/roles')

@@ -63,6 +63,7 @@ import { AUDIENCE_POSITION_KEYS, AUDIENCE_WHERE_MODES, AUDIENCE_WHO_MODES } from
 import { CATEGORY_CHAIN_KEY_PREFIX, REQUEST_CATEGORY_LABELS, categoryChainMap, isCategoryChainKey } from '../requests/request-category-chains'
 import { Department } from '../org/entities/department.entity'
 import { Team } from '../org/entities/team.entity'
+import { RequireModule } from '../modules-registry/module.guard'
 
 class UpsertConfigDto {
   @IsOptional()
@@ -523,6 +524,7 @@ class UpdateRequestTypeFullDto {
 }
 
 // إعدادات النظام — كلها للأدمن/HR
+@RequireModule('platform')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Perm('settings.manage')
 @Controller('settings')
@@ -859,11 +861,13 @@ export class SettingsController {
 
   // ===== أنواع الإجازات =====
   // حساب الفرع يرى أنواع الشركة كلها + أنواع فرعه؛ الحساب العام يرى الكل (قرار المالك 16 سبتمبر)
+  @RequireModule('leave')
   @Get('leave-types')
   listLeaveTypes(@CurrentUser() user: JwtPayload) {
     return this.leaveTypes.find({ where: definitionBranchWhere<LeaveType>(user), order: { id: 'ASC' } })
   }
 
+  @RequireModule('leave')
   @Post('leave-types')
   async createLeaveType(@Body() dto: CreateLeaveTypeDto, @CurrentUser() user: JwtPayload) {
     const branchId = await definitionBranchForCreate(this.leaveTypes.manager, user, dto.branchId)
@@ -881,6 +885,7 @@ export class SettingsController {
     return this.leaveTypes.save(Object.assign(row, this.leaveTypeInput(dto, row)))
   }
 
+  @RequireModule('leave')
   @Patch('leave-types/:id')
   async updateLeaveType(
     @Param('id', ParseIntPipe) id: number,
@@ -962,6 +967,7 @@ export class SettingsController {
   }
 
   // ===== سلاسل الاعتماد (عرض + تعديل SLA/العتبات) =====
+  @RequireModule('requests')
   @Perm('approval_chains.manage')
   @Get('approval-chains')
   async listChains(@CurrentUser() user: JwtPayload) {
@@ -993,6 +999,7 @@ export class SettingsController {
     }))
   }
 
+  @RequireModule('requests')
   @Perm('approval_chains.manage')
   @Patch('approval-steps/:id')
   async updateStep(
@@ -1011,6 +1018,7 @@ export class SettingsController {
   }
 
   // ===== بانِي السلاسل: إنشاء سلسلة كاملة بخطواتها =====
+  @RequireModule('requests')
   @Perm('approval_chains.manage')
   @Post('approval-chains')
   async createChain(@Body() dto: CreateChainDto, @CurrentUser() user: JwtPayload) {
@@ -1041,6 +1049,7 @@ export class SettingsController {
     })
   }
 
+  @RequireModule('requests')
   @Perm('approval_chains.manage')
   @Patch('approval-chains/:id')
   async updateChain(
@@ -1101,6 +1110,7 @@ export class SettingsController {
 
   // استبدال خطوات سلسلة بالكامل — الطلبات الجارية لا تتأثر
   // (خطواتها محلولة ومخزنة على الطلب نفسه وقت التقديم)
+  @RequireModule('requests')
   @Perm('approval_chains.manage')
   @Patch('approval-chains/:id/steps')
   async replaceChainSteps(
@@ -1171,6 +1181,7 @@ export class SettingsController {
   }
 
   // ===== بانِي الطلبات: عرض + إنشاء من الصفر + تعديل شامل =====
+  @RequireModule('requests')
   @Perm('request_types.manage')
   @Get('request-types')
   async listRequestTypes(@CurrentUser() user: JwtPayload) {
@@ -1187,6 +1198,7 @@ export class SettingsController {
   }
 
   // الوجهات المتاحة — لقائمة اختيار البانِي
+  @RequireModule('requests')
   @Perm('request_types.manage')
   @Get('destination-handlers')
   destinationHandlers() {
@@ -1282,6 +1294,7 @@ export class SettingsController {
   }
 
   // §2.2: نوع طلب جديد من الصفر
+  @RequireModule('requests')
   @Perm('request_types.manage')
   @Post('request-types')
   async createRequestType(@Body() dto: CreateRequestTypeDto, @CurrentUser() user: JwtPayload) {
@@ -1361,6 +1374,7 @@ export class SettingsController {
   }
 
   // تعديل شامل: اسم/تفعيل/سلسلة/حقول/جمهور/وجهة/مرفقات
+  @RequireModule('requests')
   @Perm('request_types.manage')
   @Patch('request-types/:id')
   async updateRequestType(

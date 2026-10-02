@@ -3,8 +3,9 @@
 import { createContext, useCallback, useContext, useEffect, useRef, useState } from 'react'
 import Link from 'next/link'
 import { usePathname } from 'next/navigation'
-import { ShieldAlert } from 'lucide-react'
+import { EyeOff, ShieldAlert } from 'lucide-react'
 import { can, CHANGE_PASSWORD_PATH, getCurrentUser, getToken } from '@/lib/api'
+import { routeAvailable, useModules } from '@/lib/modules'
 import Sidebar from './Sidebar'
 import Header from './Header'
 
@@ -33,6 +34,7 @@ const PATH_PERMS: Array<[prefix: string | RegExp, perm: string | string[] | null
   ['/employees/hiring-documents', 'documents.manage'],
   ['/employees/transfers', 'transfers.view'],
   ['/settings/users', 'users.manage'],
+  ['/settings/modules', 'settings.modules'],
   ['/settings/roles', 'roles.manage'],
   ['/settings/request-types', 'request_types.manage'],
   ['/settings/approvals', 'approval_chains.manage'],
@@ -90,6 +92,8 @@ export function AppShell({ children }: MainLayoutProps) {
   const openNav = useCallback(() => setNavOpen(true), [])
   const closeNav = useCallback(() => setNavOpen(false), [])
   const bare = isBarePath(pathname)
+  // الموديولات المفعّلة للمستخدم (الإعدادات ← الموديولات) — بتتقري مرة للجلسة؛ null لحد ما تتقري
+  const modules = useModules()
 
   // حارس الدخول: كل شاشات النظام تمر من هنا — بلا توكن → صفحة اللوجين
   useEffect(() => {
@@ -139,8 +143,8 @@ export function AppShell({ children }: MainLayoutProps) {
 
   if (bare) return <>{children}</>
 
-  // لا نعرض محتوى محمي قبل التحقق (يمنع وميض البيانات)
-  if (!authed) {
+  // لا نعرض محتوى محمي قبل التحقق (يمنع وميض البيانات)، ولا القائمة قبل ما الموديولات المفعّلة تتقري (يمنع وميض بنود مقفولة)
+  if (!authed || !modules) {
     return (
       <div className="min-h-screen bg-gray-50 flex items-center justify-center">
         <div className="w-8 h-8 border-2 border-primary-500 border-t-transparent rounded-full animate-spin" />
@@ -153,6 +157,8 @@ export function AppShell({ children }: MainLayoutProps) {
   const allowed =
     !requiredPerm ||
     (Array.isArray(requiredPerm) ? requiredPerm : [requiredPerm]).every((p) => can(p))
+  // شاشة موديول مقفول (أو ميزة مقفولة) اتفتحت بالرابط مباشرة: «الصفحة دي مش متاحة» — الخادم برضه بيرجّع 404 لمساراتها
+  const available = routeAvailable(pathname, modules)
 
   return (
     <ShellContext.Provider value>
@@ -163,7 +169,20 @@ export function AppShell({ children }: MainLayoutProps) {
         <div className="lg:mr-72">
           <Header onMenuClick={openNav} menuOpen={navOpen} menuButtonRef={menuButtonRef} />
           <main className="p-4 lg:p-8">
-            {allowed ? (
+            {!available ? (
+              <div className="card p-12 text-center max-w-lg mx-auto mt-12">
+                <div className="w-16 h-16 bg-gray-100 rounded-2xl flex items-center justify-center mx-auto mb-4">
+                  <EyeOff size={32} className="text-gray-400" />
+                </div>
+                <h2 className="text-xl font-bold text-gray-800 mb-2">الصفحة دي مش متاحة</h2>
+                <p className="text-gray-500 mb-6">
+                  الشاشة دي تبع جزء من النظام مش مفعّل عندكم — لو محتاجها كلّم مدير النظام يفعّلها من الإعدادات
+                </p>
+                <Link href="/" className="btn-primary inline-flex items-center gap-2">
+                  العودة إلى لوحتي
+                </Link>
+              </div>
+            ) : allowed ? (
               children
             ) : (
               <div className="card p-12 text-center max-w-lg mx-auto mt-12">

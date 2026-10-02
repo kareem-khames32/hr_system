@@ -3,6 +3,7 @@ import { Allow, IsIn, IsOptional, IsString, MaxLength } from 'class-validator'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { HolidayWorkService } from './holiday-work.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // الشكل بس هنا؛ التحقق الحقيقي (الفرع والأيام والمضاعف) في الخدمة
 class HolidayWorkOrderDto {
@@ -28,6 +29,7 @@ class HolidayWorkListQuery {
 }
 
 // «دوام أيام العطلات» تحت الحضور: أوامر الموارد البشرية + طلبات الموظفين المعتمدة وتفصيلها من البصمات
+@RequireModule('overtime')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('attendance/holiday-work')
 export class HolidayWorkController {

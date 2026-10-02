@@ -30,6 +30,7 @@ import { EmployeesService } from './employees.service'
 import { projectEmployee } from './employee-projection'
 import { parseEmployeeExportIds } from './employee-export'
 import { EmployeeExportService } from './employee-export.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // تغيير الأجر (أو قراءة سياقه للتغيير) يغيّر صافي المسير → اعتماد المسير شرط إضافي
 // فوق employees.edit — مدير النظام يتخطى (userHasPerm)
@@ -53,6 +54,7 @@ class SalaryChangeAuthorityGuard implements CanActivate {
   }
 }
 
+@RequireModule('employees')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('employees')
 export class EmployeesController {

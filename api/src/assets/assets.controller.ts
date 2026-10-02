@@ -27,6 +27,7 @@ import {
   ASSET_NOT_FOUND, ASSET_UNBRANCHED_READ_ONLY, CUSTODY_NOT_FOUND, assertAllBranches, assertAssetWritable, assertValidBranchId,
   assetBranchMoveProblem, assetVisibleTo, assetWritableBy, custodyBranchProblem, employeeInScope,
 } from './asset-branch'
+import { RequireModule } from '../modules-registry/module.guard'
 
 class CreateAssetDto {
   @IsString({ message: 'اسم الأصل مطلوب' })
@@ -102,6 +103,7 @@ class AssignCustodyDto {
 // إدارة العهدة والأصول (مسار HR المباشر — بجانب مسار الطلبات).
 // عزل الفروع (تدقيق الأدوار D3): الأصل له فرع، وحساب الفرع يشوف ويعدّل أصول وعهد فرعه بس؛ القاعدة كلها في asset-branch.ts
 // وبتحكم على ناتج branchScopeOf (null = كل الفروع) — مش على اسم الدور.
+@RequireModule('custody')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
 export class AssetsController {

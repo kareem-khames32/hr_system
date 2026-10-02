@@ -18,6 +18,7 @@ import { legacyUnusablePasswordUserIds, needsPasswordFromLegacy } from './legacy
 import { ROLE_PRESETS } from './permissions'
 import { Role } from './role.entity'
 import { User } from './user.entity'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // ===== كارت «مرتبط بحساب دخول» في ملف الموظف =====
 // قرار المالك 22 سبتمبر (بالليل): وهو واقف على ملف موظف عايز يعرف فورًا «ده مرتبط بحساب دخول؟
@@ -68,6 +69,7 @@ const DOMAIN_ACCOUNT_SUMMARY = 'مرتبط بحساب دخول من الدومي
 const LOCAL_ACCOUNT_SUMMARY = 'مرتبط بحساب دخول عندنا — بيدخل بالبريد وكلمة المرور'
 const NO_ACCOUNT_SUMMARY = 'مش مرتبط بأي حساب دخول — الموظف ده مايقدرش يدخل النظام'
 
+@RequireModule('platform')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('employees')
 export class EmployeeLoginAccountController {

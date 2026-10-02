@@ -30,6 +30,7 @@ import { OffboardingService } from './offboarding.service'
 // بنود التصفية اليدوية — رسائل تحقق عربية بدل رسائل class-validator الإنجليزية الخام
 import { AddLineDto, UpdateLineDto } from './settlement-line.dto'
 import { CUSTOM_TERMINATION_REASONS_MAX, TERMINATION_REASON_CODE } from './termination-reasons'
+import { RequireModule } from '../modules-registry/module.guard'
 
 const YMD = /^\d{4}-\d{2}-\d{2}$/
 
@@ -133,6 +134,7 @@ class CompleteItemDto {
 }
 
 // إنهاء الخدمة: إخلاء الطرف (الجهات تعتمد بنودها) + التصفية
+@RequireModule('offboarding')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('offboarding')
 export class OffboardingController {

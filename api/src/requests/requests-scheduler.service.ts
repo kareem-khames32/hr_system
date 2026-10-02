@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common'
 import { Cron } from '@nestjs/schedule'
+import { ModulesService } from '../modules-registry/modules.service'
 import { LeaveBalancesService } from './leave-balances.service'
 import { RequestsService } from './requests.service'
 
@@ -13,7 +14,8 @@ export class RequestsScheduler implements OnApplicationBootstrap {
 
   constructor(
     private readonly requests: RequestsService,
-    private readonly balances: LeaveBalancesService
+    private readonly balances: LeaveBalancesService,
+    private readonly modules: ModulesService
   ) {}
 
   onApplicationBootstrap() {
@@ -34,6 +36,7 @@ export class RequestsScheduler implements OnApplicationBootstrap {
   // كل يوم 00:15 — النقل المجدول
   @Cron('15 0 * * *')
   async transfers() {
+    if (!(await this.modules.jobEnabled('requests.scheduled-transfers'))) return
     const { executed, employmentExecuted, cancelled } = await this.requests.runScheduledTransfers()
     if (executed || employmentExecuted) this.logger.log(`نُفّذ ${executed} نقل و${employmentExecuted} تغيير وظيفي مجدول`)
     if (cancelled) this.logger.warn(`أُلغي ${cancelled} نقل مجدول مكرر (يُنفَّذ الأول فقط) — السبب مسجل على كل طلب`)
@@ -42,6 +45,7 @@ export class RequestsScheduler implements OnApplicationBootstrap {
   // كل ساعة — التصعيد
   @Cron('0 * * * *')
   async escalations() {
+    if (!(await this.modules.jobEnabled('requests.escalations'))) return
     const { escalated } = await this.requests.runEscalations()
     if (escalated > 0) this.logger.log(`تم تصعيد ${escalated} طلب`)
   }
@@ -51,6 +55,8 @@ export class RequestsScheduler implements OnApplicationBootstrap {
   // وبعده تجديد سنوات الرصيد بذكرى التعيين (يومي، مستقل عن نجاح الترحيل السنوي)
   @Cron('5 0 * * *')
   async yearStart() {
+    // موديول الإجازات مقفول = مفيش ترحيل ولا تجديد أرصدة (الفتح بعدين بيلحق: علامة الإتمام بالسنة)
+    if (!(await this.modules.jobEnabled('leave.year-start'))) return
     try {
       const r = await this.balances.catchUpRollover()
       if (r) {

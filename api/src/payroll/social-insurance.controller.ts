@@ -2,8 +2,10 @@ import { Body, Controller, Get, Put, Query, UseGuards } from '@nestjs/common'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { SocialInsuranceService } from './social-insurance.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // التأمينات الاجتماعية (السعودية / المصرية): الإعدادات لكل الشركة (تعديلها لحساب على مستوى الشركة)، وتقرير الشهر بفلتر الفرع.
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('social-insurance')
 export class SocialInsuranceController {

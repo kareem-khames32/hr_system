@@ -21,8 +21,11 @@ import { EmployeeDocument } from './assets.entities'
 import { canReadEmployeeFinance, projectEmployee, projectEmployeeHistory } from '../employees/employee-projection'
 import { readLoanInstallmentPositions } from '../payroll/payroll-installment-balances'
 import { PayrollDecimal } from '../payroll/payroll-decimal'
+import { RequireModule } from '../modules-registry/module.guard'
+import { ModulesService } from '../modules-registry/modules.service'
 
 // لوج النقل + التاريخ الوظيفي + الملف المجمّع للموظف + السلف
+@RequireModule('employees')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
 export class EmployeeExtrasController {
@@ -44,7 +47,8 @@ export class EmployeeExtrasController {
     private readonly docs: Repository<EmployeeDocument>,
     @InjectRepository(Loan) private readonly loans: Repository<Loan>,
     @InjectRepository(LoanInstallment)
-    private readonly installments: Repository<LoanInstallment>
+    private readonly installments: Repository<LoanInstallment>,
+    private readonly modules: ModulesService
   ) {}
 
   // ===== لوج النقل بين الفرق (بتاريخ السريان) =====
@@ -89,6 +93,7 @@ export class EmployeeExtrasController {
   }
 
   // ===== السلف وأقساطها =====
+  @RequireModule('loans')
   @Perm('payroll.view')
   @Get('loans')
   async listLoans(@CurrentUser() user: JwtPayload) {
@@ -143,14 +148,19 @@ export class EmployeeExtrasController {
       throw new ForbiddenException('لا تملك صلاحية عرض ملفات الموظفين')
     }
     const employee = await this.employeesService.findOne(id, branchScopeOf(user))
+    // الملف مسار أساسي بيجمّع بيانات موديولات اختيارية: الموديول المقفول (أو المش مفعّل للمستخدم ده) جزؤه بيرجع فاضي،
+    // زي ما مساراته نفسها مابترجّعش حاجة
+    const [leaveOn, loansOn, custodyOn] = await Promise.all([
+      this.modules.allowedFor('leave', user), this.modules.allowedFor('loans', user), this.modules.allowedFor('custody', user),
+    ])
     const [empLeaves, viewBalances, empHistory, empDocs, empLoans] =
       await Promise.all([
-        this.leaves.find({ where: { employeeId: id }, order: { fromDate: 'DESC' } }),
+        leaveOn ? this.leaves.find({ where: { employeeId: id }, order: { fromDate: 'DESC' } }) : Promise.resolve([]),
         // الأرصدة بالاستحقاق الشهري المتراكم (لا الخام) — نفس ما يراه الموظف
-        this.leaveBalances.allBalances(id),
+        leaveOn ? this.leaveBalances.allBalances(id) : Promise.resolve([]),
         this.history.find({ where: { employeeId: id }, order: { changedAt: 'DESC' } }),
         this.docs.find({ where: { employeeId: id }, order: { id: 'DESC' } }),
-        canReadEmployeeFinance(user, id) ? this.loans.find({ where: { employeeId: id }, order: { id: 'DESC' } }) : Promise.resolve([]),
+        loansOn && canReadEmployeeFinance(user, id) ? this.loans.find({ where: { employeeId: id }, order: { id: 'DESC' } }) : Promise.resolve([]),
       ])
     // نُبقي شكل الأرصدة كما يتوقعه الفرونت (خام) لكن بقيَم متراكمة صحيحة
     const empBalances = viewBalances.map((b: any) => ({
@@ -167,10 +177,10 @@ export class EmployeeExtrasController {
       adjustmentDays: b.adjustmentDays,
       openingExpiry: b.opening?.expiry ?? null,
     }))
-    const custodyRows = await this.custody.find({
+    const custodyRows = custodyOn ? await this.custody.find({
       where: { employeeId: id },
       order: { assignedAt: 'DESC' },
-    })
+    }) : []
     const assetIds = [...new Set(custodyRows.map((c) => c.assetId))]
     const assetRows = assetIds.length
       ? await this.assets.find({ where: { id: In(assetIds) } })

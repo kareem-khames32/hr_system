@@ -4,7 +4,9 @@ import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { PayrollFormulaBodyPipe } from './payroll-formula.dto'
 import { ReplacePayrollMonthlySalaryHistoryDto, ReplacePayrollSalaryHistoryDto } from './payroll-salary-history.dto'
 import { PayrollSalaryHistoryService } from './payroll-salary-history.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll/employees/:employeeId/salary-history')
 export class PayrollSalaryHistoryController {

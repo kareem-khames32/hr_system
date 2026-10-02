@@ -6,6 +6,7 @@ import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { ORG_FILTER_MAX_UNITS } from '../org/org-filter-params'
 import { PAYROLL_DISBURSE_BULK_MAX, PAYROLL_DISBURSE_PERMISSION, type PayrollDisbursementState } from './payroll-disbursement'
 import { PayrollDisbursementService } from './payroll-disbursement.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 const STATES: PayrollDisbursementState[] = ['PAID', 'UNPAID', 'SETTLEMENT', 'NO_AMOUNT']
 
@@ -43,6 +44,7 @@ class PayrollDisbursementSummaryDto {
 }
 
 // صرف الرواتب موظف بموظف. القراءة لحامل payroll.disburse أو payroll.view، والتعليم لحامل payroll.disburse وحده.
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll/disbursement')
 export class PayrollDisbursementController {

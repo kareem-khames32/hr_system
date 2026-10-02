@@ -5,6 +5,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import { ORG_FILTER_MAX_UNITS } from '../org/org-filter-params'
 import { FinancialReportService, type FinancialReportQuery } from './financial-report.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 const toBoolean = ({ value }: { value: unknown }) =>
   value === true || value === 'true' || value === '1' ? true : value === false || value === 'false' || value === '0' ? false : value
@@ -37,6 +38,7 @@ export class FinancialReportQueryDto {
 }
 
 // التقارير المالية لشهر رواتب: مبالغ رواتب فردية، فمحتاجة صلاحية عرض الرواتب فوق التقارير. حساب الفرع يشوف فرعه بس.
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Perm('reports.view')
 @Controller('reports/financial')
@@ -74,12 +76,14 @@ export class FinancialReportController {
   }
 
   // ٤) السلف: الأرصدة القائمة وأقساط الشهر
+  @RequireModule('loans')
   @Get('loans')
   loans(@Query() query: FinancialReportQueryDto, @CurrentUser() user: JwtPayload) {
     return this.service.loans(this.scoped(query, user))
   }
 
   // ٥) الإضافي المعتمد اللي دخل مسيرات الشهر بالموظف والقسم
+  @RequireModule('payroll', 'overtime')
   @Get('overtime')
   overtime(@Query() query: FinancialReportQueryDto, @CurrentUser() user: JwtPayload) {
     return this.service.overtime(this.scoped(query, user))

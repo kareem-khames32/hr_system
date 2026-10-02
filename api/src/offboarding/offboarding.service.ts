@@ -17,6 +17,7 @@ import { Employee } from '../employees/employee.entity'
 import { grossMonthlySalary } from '../employees/compensation'
 import { LeaveBalancesService } from '../requests/leave-balances.service'
 import { ApproverResolver } from '../requests/approver-resolver.service'
+import { ModulesService } from '../modules-registry/modules.service'
 import { Asset, CustodyAssignment } from '../requests/entities/custody.entities'
 import { EmployeeObligation } from '../requests/entities/financial.entities'
 import { EmployeeStatusHistory } from '../requests/entities/employment.entities'
@@ -174,7 +175,8 @@ export class OffboardingService implements OnApplicationBootstrap {
     @InjectRepository(RequestsConfig)
     private readonly config: Repository<RequestsConfig>,
     private readonly resolver: ApproverResolver,
-    private readonly leaveBalances: LeaveBalancesService
+    private readonly leaveBalances: LeaveBalancesService,
+    private readonly modules: ModulesService
   ) {}
 
   // SPEC①/ح٢-ب: كل تغييرات التصفية المالية تمر بنفس قفل حساب وصرف المسير.
@@ -193,7 +195,7 @@ export class OffboardingService implements OnApplicationBootstrap {
       em.getRepository(Employee), em.getRepository(User), em.getRepository(CustodyAssignment), em.getRepository(Asset),
       em.getRepository(EmployeeObligation), em.getRepository(LeaveBalance), em.getRepository(OvertimeEntry),
       em.getRepository(Loan), em.getRepository(LoanInstallment), em.getRepository(EmployeeStatusHistory),
-      em.getRepository(RequestsConfig), this.resolver, this.leaveBalances,
+      em.getRepository(RequestsConfig), this.resolver, this.leaveBalances, this.modules,
     )
   }
 
@@ -1252,6 +1254,8 @@ export class OffboardingService implements OnApplicationBootstrap {
   // يومياً 00:30: الحالات المعتمدة اللي حل آخر يوم عمل فيها
   @Cron('30 0 * * *')
   async finalizeDue() {
+    // موديول إنهاء الخدمة مقفول = مفيش إتمام آلي (الفتح بعدين بيلحق عند الإقلاع أو في أول دورة)
+    if (!(await this.modules.jobEnabled('offboarding.finalize-due'))) return { finalized: 0 }
     return this.finalizeDueFor()
   }
 

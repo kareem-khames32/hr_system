@@ -3,6 +3,7 @@ import { IsIn, IsInt, IsNumber, IsOptional, IsString, IsUUID, Matches, MaxLength
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { LeaveYearEndService } from './leave-year-end.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 class CloseLeaveYearDto {
   // فاضي = الشركة كلها (مدير النظام)؛ حساب الفرع على فرعه بس
@@ -34,6 +35,7 @@ class SettleLeaveBalanceDto {
 }
 
 // إقفال سنة الإجازات: المعاينة لمن يشوف الأرصدة، والتسوية والإقفال لإدارة الأرصدة
+@RequireModule('leave')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('leaves/year-end')
 export class LeaveYearEndController {

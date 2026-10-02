@@ -5,6 +5,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { ALLOWANCE_MAX_EMPLOYEES, ALLOWANCE_TARGET_LEVELS } from './allowances-grants'
 import { PayrollAllowancesService } from './allowances-grants.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 const PERIOD = /^\d{4}-(0[1-9]|1[0-2])$/
 
@@ -36,6 +37,7 @@ class CreateAllowanceGrantDto {
 }
 
 // «تابة البدلات» في شاشة المسير — العرض بـpayroll.view، والإضافة والإلغاء بـpayroll.calculate، والنطاق (الفرع) في الخدمة
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll/allowances')
 export class PayrollAllowancesController {

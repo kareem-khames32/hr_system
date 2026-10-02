@@ -117,6 +117,7 @@ const PAGE_TITLES: Array<[prefix: string | RegExp, title: string]> = [
   ['/settings/letter-templates', 'قوالب الخطابات'],
   ['/settings/users', 'المستخدمين'],
   ['/settings/roles', 'الأدوار والصلاحيات'],
+  ['/settings/modules', 'الموديولات'],
   ['/settings', 'الإعدادات العامة'],
 ]
 

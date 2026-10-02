@@ -20,8 +20,10 @@ import { Leave, LeaveType } from './entities/leave.entities'
 import { LeaveBalancesService } from './leave-balances.service'
 import { leaveView } from '../common/leave-contract'
 import { orgFilterIsEmpty, orgFilterQb, parseOrgFilter } from '../org/org-filter-params'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // سجل الإجازات (الوجهة الدائمة) — قراءة بنطاق الفرع
+@RequireModule('leave')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Perm('leaves.view_all')
 @Controller('leaves')

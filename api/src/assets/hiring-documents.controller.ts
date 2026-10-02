@@ -9,6 +9,7 @@ import { Branch } from '../org/entities/branch.entity'
 import { Department } from '../org/entities/department.entity'
 import { HiringDocumentReminder } from './hiring-document-reminder.entity'
 import { hiringDocumentsStatus, reminderCodesJson, requiredHiringDocTypes } from './hiring-documents'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // «ابعت تذكير» للموظفين المختارين من تقرير النواقص
 class SendHiringRemindersDto {
@@ -52,6 +53,7 @@ export function hiringSearchMatcher(query: unknown): (employee: Pick<Employee, '
 
 // «مسوغات التعيين» (طلب المالك 30 سبتمبر): تقرير الناقص عند كل موظف وتذكيره، و«المطلوب منّي» للموظف نفسه.
 // التقرير والتذكير لمدير مستندات الموظفين في نطاق فروعه بس — موظف برّه النطاق = غير موجود (404) من غير اسمه ولا رقمه.
+@RequireModule('documents')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('hiring-documents')
 export class HiringDocumentsController {

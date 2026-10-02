@@ -15,6 +15,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { assertCompanyWideWrite, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { LatenessTierMode } from './payroll-rules.entities'
 import { PayrollRulesService } from './payroll-rules.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // الخطوة 21: الشكل والقيم يُتحقق منهما في الخدمة برسائل عربية (validatePayrollLatenessTiers)
 class TierSetDto {
@@ -50,6 +51,7 @@ class TierDto {
 }
 
 // معادلات الرواتب: إدارة شرائح التأخير — أدوار الإدارة فقط
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll/rules')
 export class PayrollRulesController {

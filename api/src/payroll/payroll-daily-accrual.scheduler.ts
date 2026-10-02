@@ -2,6 +2,7 @@ import { Injectable, Logger } from '@nestjs/common'
 import { Cron } from '@nestjs/schedule'
 import { InjectRepository } from '@nestjs/typeorm'
 import { Repository } from 'typeorm'
+import { ModulesService } from '../modules-registry/modules.service'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { PayrollDailyAccrualService } from './payroll-daily-accrual.service'
 import { PAYROLL_ACCRUAL_ENABLED_KEY, PAYROLL_ACCRUAL_HOUR_KEY } from './payroll-daily-accrual'
@@ -19,7 +20,8 @@ export class PayrollDailyAccrualScheduler {
 
   constructor(
     private readonly accrual: PayrollDailyAccrualService,
-    @InjectRepository(RequestsConfig) private readonly config: Repository<RequestsConfig>
+    @InjectRepository(RequestsConfig) private readonly config: Repository<RequestsConfig>,
+    private readonly modules: ModulesService
   ) {}
 
   // كل ساعة عند الدقيقة 15، والشغل الحقيقي في الساعة المضبوطة بس (الافتراضي 02:15 —
@@ -28,6 +30,7 @@ export class PayrollDailyAccrualScheduler {
   @Cron('15 * * * *')
   async hourly() {
     try {
+      if (!(await this.modules.jobEnabled('payroll.daily-accrual'))) return
       if ((await this.setting(PAYROLL_ACCRUAL_ENABLED_KEY, 'true')) !== 'true') return
       const hour = Number(await this.setting(PAYROLL_ACCRUAL_HOUR_KEY, '2'))
       const target = Number.isFinite(hour) && hour >= 0 && hour <= 23 ? hour : 2

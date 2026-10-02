@@ -20,6 +20,7 @@ import { Employee } from '../employees/employee.entity'
 import { StoredFile } from '../files/stored-file.entity'
 import { Leave } from './entities/leave.entities'
 import { leaveAttachmentOverdue } from './leave-attachment-rules'
+import { RequireModule } from '../modules-registry/module.guard'
 
 class AttachLeaveFileDto {
   // مرجع الملف المرفوع أولًا عبر POST /files/upload (نفس آلية مرفقات الطلبات)
@@ -28,6 +29,7 @@ class AttachLeaveFileDto {
 }
 
 // مرفق الإجازة «بعد الرجوع»: الموظف نفسه أو الموارد البشرية (leaves.revoke) في نطاق فرعها يربط الملف المرفوع بالإجازة
+@RequireModule('leave')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('leaves')
 export class LeaveAttachmentsController {

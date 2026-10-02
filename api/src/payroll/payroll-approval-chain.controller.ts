@@ -5,6 +5,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { PAYROLL_CHAIN_MANAGE_PERMISSION } from './payroll-approval-chain'
 import { PayrollApprovalChainService } from './payroll-approval-chain.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // الخطوات والسبب يُتحقق منهما في الخدمة برسائل عربية ورموز (لا نص class-validator الإنجليزي)
 class PayrollChainSaveDto {
@@ -21,6 +22,7 @@ class PayrollApproverSearchDto {
   @IsOptional() @IsString() @MaxLength(100) search?: string
 }
 
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll')
 export class PayrollApprovalChainController {

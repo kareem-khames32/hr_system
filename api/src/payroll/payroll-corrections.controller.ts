@@ -4,6 +4,7 @@ import { Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { PayrollCorrectionsService } from './payroll-corrections.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // C8 / الخطوة 31: تصحيح المسير المصروف — العكس والمسير التكميلي وتقرير التسويات.
 // السبب يُتحقق منه في الخدمة (رمز عربي PAYRUN-CORRECTION-REASON) لا بنص class-validator.
@@ -28,6 +29,7 @@ class PayrollCorrectionsReportQueryDto {
   @Matches(/^\d{4}-\d{2}$/, { message: 'نهاية الفترة بصيغة YYYY-MM' }) toPeriod: string
 }
 
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll')
 export class PayrollCorrectionsController {

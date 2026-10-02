@@ -9,6 +9,7 @@ import {
 import { IsEmail, IsString, Matches, MaxLength, MinLength } from 'class-validator'
 import { AuthService, JwtPayload } from './auth.service'
 import { AllowPendingPasswordChange, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from './guards'
+import { RequireModule } from '../modules-registry/module.guard'
 
 class LoginDto {
   @IsEmail()
@@ -68,6 +69,7 @@ class ChangePasswordDto {
   newPassword: string
 }
 
+@RequireModule('platform')
 @Controller('auth')
 export class AuthController {
   constructor(private readonly auth: AuthService) {}

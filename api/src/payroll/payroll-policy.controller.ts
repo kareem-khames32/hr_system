@@ -10,10 +10,12 @@ import { PreviewPayrollInputFactsDto } from './payroll-input-facts-api.dto'
 import { PreviewPayrollInstallmentsDto } from './payroll-installment-preview.dto'
 import { PreviewPayrollPolicyExecutionDto, UpdatePayrollCollectionPolicyDto } from './payroll-collection-api.dto'
 import { ReadPayrollLiveSourcesDto } from './payroll-live-sources.dto'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // unknown يحافظ على الجسم الخام أمام المرشح العام؛ expectedType يطبق الكلاس ويرفض الحقول الزائدة محليًا.
 const strictBody = (expectedType: new () => object) => new ValidationPipe({ expectedType, transform: true, whitelist: true, forbidNonWhitelisted: true })
 
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll/policies')
 export class PayrollPolicyController {

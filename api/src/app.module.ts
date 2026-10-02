@@ -24,6 +24,7 @@ import { ReportsController } from './reports/reports.controller'
 import { CostCenterReportController } from './reports/cost-center-report.controller'
 import { CostCenterReportService } from './reports/cost-center-report.service'
 import { FinancialReportModule } from './reports/financial-report.module'
+import { ModulesRegistryModule } from './modules-registry/modules-registry.module'
 import { validateEnv } from './auth/jwt-secret'
 import { dbPacketSize } from './common/sql-packet-size'
 
@@ -71,6 +72,9 @@ import { dbPacketSize } from './common/sql-packet-size'
     }),
 
     ScheduleModule.forRoot(),
+
+    // تشغيل وقفل الموديولات: حارس عام بيرجّع 404 لمسارات الموديول المقفول (@RequireModule)، وGET /api/modules/enabled
+    ModulesRegistryModule,
 
     AuthModule,
     OrgModule,

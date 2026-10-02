@@ -62,6 +62,7 @@ import {
 import { DOC_TYPE_CODE_RE } from './doc-types'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { commKeyNumber, ZkTcpError } from '../attendance/zk-tcp-adapter'
+import { RequireModule, RequireModuleByParam } from '../modules-registry/module.guard'
 
 // قراءة الكتالوجات الحساسة بصلاحية (يكفي امتلاك أيٍّ منها) — الباقي مفتوح لأي
 // مستخدم لأن شاشات الخدمة الذاتية تحتاجه (العطلات، أنواع الإذن، الورديات...)
@@ -202,6 +203,8 @@ const holidayRanges = (list: PublicHoliday[]): Array<[string, string]> => {
 
 // كتالوجات الإعدادات: عطلات/ورديات/أجهزة/مسميات/درجات/أنواع أصول
 // CRUD موحّد بسيط — القراءة للجميع (والحساس بصلاحية) والتعديل للأدمن/HR
+@RequireModule('platform')
+@RequireModuleByParam('kind', { shifts: 'shifts', devices: 'attendance', 'asset-types': 'custody', 'permission-types': 'leave' })
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('catalogs')
 export class CatalogsController {

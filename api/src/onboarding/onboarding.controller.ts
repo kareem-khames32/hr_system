@@ -31,6 +31,7 @@ import {
   OnboardingTaskStatus,
 } from './onboarding.entities'
 import { OnboardingService } from './onboarding.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // تاريخ تقويمي صحيح YYYY-MM-DD — الـregex وحده يمرّر 2026-02-31 (مثل المستندات)
 const IsYmdDate = (message: string) =>
@@ -154,6 +155,7 @@ class UpdateTemplateItemDto {
 }
 
 // تهيئة الموظفين الجدد: قالب مهام + قائمة محفوظة لكل موظف بجهتها وموعدها
+@RequireModule('onboarding')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('onboarding')
 export class OnboardingController {

@@ -3,9 +3,11 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { PayrollDailyAccrualService } from './payroll-daily-accrual.service'
 import { PayrollService } from './payroll.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // تراكم المسير اليومي في شاشة المسير: «آخر يوم محسوب» وزرار «حدّث الحساب».
 // القراءة بصلاحية عرض المسير، والتحديث بصلاحية حسابه — ونطاق الفرع من خدمة المسير نفسها.
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll/runs')
 export class PayrollDailyAccrualController {

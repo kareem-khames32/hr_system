@@ -29,6 +29,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { PayrollScopeType } from './payroll.entities'
 import { PayrollService } from './payroll.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 class CalculateDto {
   @IsOptional()
@@ -262,6 +263,7 @@ class PayrollNextPeriodDto {
 }
 
 // المسير محصور بأدوار الإدارة — الدورة الكاملة (محاسب → HR → مالي → تنفيذي) لاحقاً
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll')
 export class PayrollController {

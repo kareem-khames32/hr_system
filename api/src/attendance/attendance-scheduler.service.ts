@@ -1,5 +1,6 @@
 import { Injectable, Logger, OnApplicationBootstrap } from '@nestjs/common'
 import { Cron } from '@nestjs/schedule'
+import { ModulesService } from '../modules-registry/modules.service'
 import { AttendanceService } from './attendance.service'
 
 // المهمة الدورية لمحرك الحضور:
@@ -10,7 +11,7 @@ import { AttendanceService } from './attendance.service'
 export class AttendanceScheduler implements OnApplicationBootstrap {
   private readonly logger = new Logger(AttendanceScheduler.name)
 
-  constructor(private readonly attendance: AttendanceService) {}
+  constructor(private readonly attendance: AttendanceService, private readonly modules: ModulesService) {}
 
   // عند الإقلاع (بعد دقيقة، بلا انتظار — لا يؤخّر الإقلاع): لحاق فوري لو آخر يوم
   // مُنجز قبل أمس — سيرفر كان مقفولاً ليلة أو أكثر، أو أُعيد تشغيله أثناء تشغيل
@@ -37,6 +38,8 @@ export class AttendanceScheduler implements OnApplicationBootstrap {
 
   private async runCatchUp(onlyIfBehind: boolean) {
     try {
+      // موديول الحضور مقفول = مفيش تجسيد غياب (الفتح بعدين بيلحق من آخر يوم مُنجز)
+      if (!(await this.modules.jobEnabled('attendance.materialize-absences'))) return
       const res = await this.attendance.materializeAbsencesCatchUp({ onlyIfBehind })
       if (res && res.created > 0) {
         this.logger.log(`تم تجسيد ${res.created} يوم غياب (${res.from} → ${res.to})`)

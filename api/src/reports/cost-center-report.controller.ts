@@ -5,6 +5,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import { ORG_FILTER_MAX_UNITS } from '../org/org-filter-params'
 import { CostCenterReportService } from './cost-center-report.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 const toBoolean = ({ value }: { value: unknown }) =>
   value === true || value === 'true' || value === '1' ? true : value === false || value === 'false' || value === '0' ? false : value
@@ -30,6 +31,7 @@ export class CostCenterReportQueryDto {
 }
 
 // تقرير مراكز التكلفة لشهر: مبالغ رواتب فردية، فيحتاج صلاحية عرض الرواتب فوق التقارير. حساب الفرع يشوف فرعه بس.
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Perm('reports.view')
 @Controller('reports/cost-centers')

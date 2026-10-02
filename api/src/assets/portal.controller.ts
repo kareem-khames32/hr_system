@@ -33,6 +33,9 @@ import { EmployeeDocument, PublicHoliday } from './assets.entities'
 import { hiringDocumentsNotification } from './hiring-documents'
 import { NotificationRead } from './notification-read.entity'
 import { leaveView } from '../common/leave-contract'
+import { ModulesService } from '../modules-registry/modules.service'
+import { routeAvailable } from '../modules-registry/registry'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // تصنيف صريح لكل إشعار — الواجهة تبني فلاترها من التصنيفات الموجودة فعلاً
 type NotificationCategory = 'request' | 'approval' | 'leave' | 'attendance' | 'contract' | 'document'
@@ -64,6 +67,7 @@ const NOTIFICATIONS_LIMIT = 15
 
 // التقويم الموحّد + الإشعارات المشتقة (بلا جدول إشعارات — من الأحداث الفعلية؛
 // المحفوظ حالة القراءة/الحذف لكل مستخدم فقط في notification_reads)
+@RequireModule('self_service')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
 export class PortalController {
@@ -85,7 +89,8 @@ export class PortalController {
     @InjectRepository(NotificationRead)
     private readonly notificationReads: Repository<NotificationRead>,
     private readonly attendance: AttendanceService,
-    private readonly leaveAttachments: LeaveAttachmentDeadlineJob
+    private readonly leaveAttachments: LeaveAttachmentDeadlineJob,
+    private readonly modules: ModulesService
   ) {}
 
   // ===== التقويم: عطلات + إجازات معتمدة في الشهر =====
@@ -131,7 +136,8 @@ export class PortalController {
       return [{ id: h.id, name: h.name, date: h.date, endDate: h.endDate ?? null, country: h.country ?? null, targeted: !!audience,
         audienceText: describeHolidayAudience(audience, names) }]
     })
-    const allLeaves = await this.leaves.find({
+    // إجازات التقويم تبع موديول الإجازات: مقفول (أو مش مفعّل للمستخدم) = التقويم بالعطلات بس
+    const allLeaves = !(await this.modules.allowedFor('leave', user)) ? [] : await this.leaves.find({
       where:
         scope !== null
           ? { status: 'APPROVED', employeeId: In(emps.map((e) => e.id)) }
@@ -169,6 +175,7 @@ export class PortalController {
 
   // ===== الإشعارات المشتقة للمستخدم الحالي =====
   // read: قرأها المستخدم (محفوظة في notification_reads)، والمحذوف من قائمته لا يرجع
+  @RequireModule('notifications')
   @Get('notifications')
   async notifications(@CurrentUser() user: JwtPayload) {
     const items = await this.buildNotifications(user)
@@ -190,6 +197,7 @@ export class PortalController {
 
   // تحديد كمقروء: ids محددة أو (بدونها) كل الإشعارات الظاهرة — مفتاح لا يخص
   // المستخدم حالياً يُتجاهل (لا صفوف لإشعارات غير قائمة)
+  @RequireModule('notifications')
   @Patch('notifications/read')
   async markNotificationsRead(
     @CurrentUser() user: JwtPayload,
@@ -209,6 +217,7 @@ export class PortalController {
   }
 
   // حذف إشعار من قائمة المستخدم (إخفاء) — المجمّع يظهر ثانيةً مع أول عنصر جديد فيه
+  @RequireModule('notifications')
   @Delete('notifications/:id')
   async dismissNotification(@CurrentUser() user: JwtPayload, @Param('id') id: string) {
     const item = (await this.buildNotifications(user)).find((n) => n.id === id)
@@ -272,6 +281,9 @@ export class PortalController {
   // الإشعارات الحالية للمستخدم (مرتبة بالأحدث) — بلا حالة قراءة
   private async buildNotifications(user: JwtPayload): Promise<NotificationItem[]> {
     const items: NotificationItem[] = []
+    // إشعارات الموديول المقفول (أو اللي مش مفعّل للمستخدم) مابتتبنيش أصلًا، وأي إشعار رابطه شاشة مقفولة بيتشال في الآخر
+    const enabled = await this.modules.enabledFor(user)
+    const on = (module: string) => (enabled.modules as string[]).includes(module)
 
     // 1) قرارات على طلباتي
     if (user.employeeId) {
@@ -322,7 +334,7 @@ export class PortalController {
       }
 
       // 1ب) إجازة أُلغيت من الموارد البشرية (إلغاء مباشر — بلا طلب)
-      const revoked = await this.leaves.find({
+      const revoked = !on('leave') ? [] : await this.leaves.find({
         where: {
           employeeId: user.employeeId,
           status: 'CANCELLED',
@@ -346,7 +358,7 @@ export class PortalController {
 
       // 1ج) الخصومات المصنفة (C2 / DD-08 قاعدة 4): الموظف يُخطر بكل تغيير حالة على خصم عليه
       const deductionEvents: Array<{ id: number; requestId: number; eventType: string; createdAt: Date; reason: string | null; typeSnapshot: string | null }> =
-        await this.employees.manager.query(`SELECT TOP (20) e.[id], e.[requestId], e.[eventType], e.[createdAt], e.[reason], r.[typeSnapshot]
+        !on('payroll') ? [] : await this.employees.manager.query(`SELECT TOP (20) e.[id], e.[requestId], e.[eventType], e.[createdAt], e.[reason], r.[typeSnapshot]
           FROM [deduction_request_events] e INNER JOIN [deduction_requests] r ON r.[id]=e.[requestId]
           WHERE r.[employeeId]=@0 AND e.[eventType] IN ('SUBMITTED','APPROVED','REJECTED','CANCELLED','REVERSED','CARRY_FORWARD','CARRY_SUSPENDED','CARRY_RESUMED','CARRY_DROPPED','OBJECTION_RESPONDED')
           ORDER BY e.[id] DESC`, [user.employeeId])
@@ -365,7 +377,7 @@ export class PortalController {
       }
       // 1د) الإعفاء المالي (الخطوة 26 / EX-03 قاعدة 5): الموظف يُخطر بكل إعفاء عليه — المنح والاعتماد والتطبيق في المسير والإلغاء
       const exemptionEvents: Array<{ id: number; exemptionId: number; eventType: string; createdAt: Date; period: string }> =
-        await this.employees.manager.query(`SELECT TOP (20) e.[id], e.[exemptionId], e.[eventType], e.[createdAt], x.[period]
+        !on('payroll') ? [] : await this.employees.manager.query(`SELECT TOP (20) e.[id], e.[exemptionId], e.[eventType], e.[createdAt], x.[period]
           FROM [payroll_financial_exemption_events] e INNER JOIN [payroll_financial_exemptions] x ON x.[id]=e.[exemptionId]
           WHERE e.[employeeId]=@0 AND e.[eventType] IN ('GRANTED','APPROVED','APPLIED','REVOKED','REJECTED')
           ORDER BY e.[id] DESC`, [user.employeeId])
@@ -412,7 +424,7 @@ export class PortalController {
     // «ناقصك من مسوغات التعيين: …» — للموظف نفسه بعد تذكير من الموارد البشرية وطول ما فيه ناقص (مفتاحه رقم آخر تذكير)
     const hiringDocs = await hiringDocumentsNotification(this.employees.manager, user.employeeId)
     if (hiringDocs) items.push(hiringDocs)
-    if (userHasPerm(user, 'leaves.revoke')) {
+    if (on('leave') && on('attendance') && userHasPerm(user, 'leaves.revoke')) {
       const since = new Date(Date.now() - 7 * 86400000)
       const sinceStr = `${since.getFullYear()}-${String(since.getMonth() + 1).padStart(2, '0')}-${String(since.getDate()).padStart(2, '0')}`
       const conflictWhere: Record<string, unknown> = {
@@ -448,7 +460,7 @@ export class PortalController {
     // الحضور يُنبَّه بعددها في نطاقه (آخر 7 أيام)
     const weekAgo = new Date(Date.now() - 7 * 86400000)
     const weekAgoStr = `${weekAgo.getFullYear()}-${String(weekAgo.getMonth() + 1).padStart(2, '0')}-${String(weekAgo.getDate()).padStart(2, '0')}`
-    if (user.employeeId) {
+    if (on('attendance') && user.employeeId) {
       const mine = await this.attendanceDays.find({
         where: {
           employeeId: user.employeeId,
@@ -492,7 +504,7 @@ export class PortalController {
         }
       }
     }
-    if (userHasPerm(user, 'attendance.manage')) {
+    if (on('attendance') && userHasPerm(user, 'attendance.manage')) {
       const mpWhere: Record<string, unknown> = {
         status: 'missing_punch',
         date: MoreThanOrEqual(weekAgoStr),
@@ -562,8 +574,8 @@ export class PortalController {
     }
 
     // 3د) مرفق الإجازة «بعد الرجوع»: تذكير يومي بالمعلق وإخطار بالتحويل بدون راتب — للموظف وللموارد البشرية في نطاقها
-    items.push(...await this.leaveAttachments.notificationsFor(user))
+    if (on('leave')) items.push(...await this.leaveAttachments.notificationsFor(user))
 
-    return items.sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
+    return items.filter((item) => routeAvailable(item.link, enabled)).sort((a, b) => new Date(b.at).getTime() - new Date(a.at).getTime())
   }
 }

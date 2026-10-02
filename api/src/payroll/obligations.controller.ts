@@ -20,6 +20,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { ObligationType } from '../requests/entities/financial.entities'
 import { ObligationsService } from './obligations.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 class CreateObligationDto {
   @Type(() => Number)
@@ -46,6 +47,7 @@ class CreateObligationDto {
   effectiveDate?: string
 }
 
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('obligations')
 export class ObligationsController {

@@ -1,7 +1,9 @@
 import { Controller, Get } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
+import { RequireModule } from '../modules-registry/module.guard'
 
+@RequireModule('platform')
 @Controller('health')
 export class HealthController {
   constructor(@InjectDataSource() private readonly dataSource: DataSource) {}

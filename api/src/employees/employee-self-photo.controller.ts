@@ -6,6 +6,7 @@ import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, RolesGuard } f
 import { linkEmployeeFiles } from '../files/link-employee-files'
 import { StoredFile } from '../files/stored-file.entity'
 import { Employee } from './employee.entity'
+import { RequireModule } from '../modules-registry/module.guard'
 
 export class SetOwnPhotoDto {
   // رقم الملف من POST /files/upload (entityType=employee_photo)، أو null لمسح الصورة
@@ -18,6 +19,7 @@ export class SetOwnPhotoDto {
 // صورة الموظف لنفسه من «ملفي الشخصي» (قرار المالك 30 سبتمبر): من غير اعتماد ومن غير employees.edit — ملف صاحب الحساب بس
 // (user.employeeId)، مايقدرش يلمس صورة موظف تاني. الصورة لازم يكون رافعها هو بنفسه (stored_files.uploadedBy) كصورة موظف،
 // وبعد الربط صاحبها بيشوفها وأي حد عنده employees.view في نطاق فرعه (نفس قاعدة files.controller).
+@RequireModule('employees')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('employees')
 export class EmployeeSelfPhotoController {

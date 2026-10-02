@@ -4,6 +4,7 @@ import { Type } from 'class-transformer'
 import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { RequestCategoryChainsService } from './request-category-chains.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 class SetCategoryChainDto {
   // سلسلة موجودة للفئة، أو null = الفئة من غير سلسلة (كل طلب بسلسلته)
@@ -36,6 +37,7 @@ class SetCategoryChainDto {
 
 // ===== سلسلة اعتماد لكل فئة جوّه «بانِي الطلبات» (طلب المالك 26 سبتمبر) =====
 // القراءة لأي حد من الاتنين؛ الكتابة محتاجة الصلاحيتين (بتتفحص جوّه الخدمة)، وربط الفئة إعداد لكل الشركة.
+@RequireModule('requests')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('settings')
 export class RequestCategoryChainsController {

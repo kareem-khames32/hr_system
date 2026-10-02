@@ -37,6 +37,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { AttendanceService, localDateOf, PunchDto } from './attendance.service'
 import { cycleStartDayOf, payrollMonthContext, payrollMonthContextOfPeriod, reportDayRange } from './attendance-report-range'
 import { DeviceSyncService } from './device-sync.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // عنصر البصمة داخل الدفعة — يُتحقق منه عنصراً عنصراً: عنصر بلا وقت كان يرمي
 // TypeError (500) ويُسقط الدفعة كلها، وكود أطول من العمود (20) يفشل في القاعدة.
@@ -294,6 +295,7 @@ class OvertimePreviewDto {
   requestId?: number
 }
 
+@RequireModule('attendance')
 @Controller('attendance')
 export class AttendanceController {
   constructor(
@@ -305,6 +307,7 @@ export class AttendanceController {
 
   // شهر الرواتب (مثلًا 23 أغسطس → 22 سبتمبر) — الافتراضي لفلاتر الحضور والرواتب.
   // ?date=YYYY-MM-DD: شهر الرواتب اللي فيه اليوم ده، ?period=YYYY-MM: شهر بالاسم، ومن غيرهم: الشهر الجاري.
+  @RequireModule('platform')
   @UseGuards(JwtAuthGuard)
   @Get('payroll-month')
   async payrollMonth(@Query('date') date?: string, @Query('period') period?: string) {
@@ -361,6 +364,7 @@ export class AttendanceController {
     return this.service.deleteManualPunch(user, id)
   }
 
+  @RequireModule('shifts')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Post('schedule')
@@ -369,6 +373,7 @@ export class AttendanceController {
   }
 
   // قراءة الجدول: لمن يرى حضور النطاق فقط، ومقصورة على موظفي فرعه
+  @RequireModule('shifts')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.view_all')
   @Get('schedule')
@@ -376,6 +381,7 @@ export class AttendanceController {
     return this.service.weekSchedule(week, user)
   }
 
+  @RequireModule('shifts')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Delete('schedule/:weekStart/:employeeId')
@@ -384,6 +390,7 @@ export class AttendanceController {
   }
 
   // تجاوز وردية يوم بعينه (حالة خاصة) — أو مسحه بـ clear:true
+  @RequireModule('shifts')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Post('schedule/day')
@@ -392,6 +399,7 @@ export class AttendanceController {
   }
 
   // تجاوز وردية يوم لمجموعة موظفين دفعة واحدة (نطاق: شركة/فرع/قسم)
+  @RequireModule('shifts')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Post('schedule/day/bulk')
@@ -400,6 +408,7 @@ export class AttendanceController {
   }
 
   // إسناد وردية لمدة (من تاريخ لتاريخ، واختياريًا أيام أسبوع بعينها) لمجموعة موظفين
+  @RequireModule('shifts')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Post('schedule/range')
@@ -407,6 +416,7 @@ export class AttendanceController {
     return this.service.assignScheduleRange(dto, user)
   }
 
+  @RequireModule('shifts')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.view_all')
   @Get('schedule/day-overrides')
@@ -415,6 +425,7 @@ export class AttendanceController {
   }
 
   // ===== قواعد استثناء أيام العمل (آخر سبت = دوام رسمي...) =====
+  @RequireModule('platform')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('settings.manage', 'org.manage', 'employees.edit', 'attendance.manage')
   @Get('calendar-context')
@@ -422,6 +433,7 @@ export class AttendanceController {
     return this.service.calendarContext(user, scope, Number(sourceId))
   }
 
+  @RequireModule('platform')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('settings.manage', 'org.manage', 'employees.edit')
   @Post('calendar-context/confirm')
@@ -430,6 +442,7 @@ export class AttendanceController {
   }
 
   // فترات خدمة الموظفين (من المباشرة لآخر يوم عمل) — الجدول الأسبوعي وأيام العمل
+  @RequireModule('platform')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.view_all', 'settings.manage')
   @Get('employment-windows')
@@ -437,6 +450,7 @@ export class AttendanceController {
     return this.service.employmentWindows(user, from, to)
   }
 
+  @RequireModule('platform')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Get('schedule-rules')
@@ -444,6 +458,7 @@ export class AttendanceController {
     return this.service.listScheduleRules(user)
   }
 
+  @RequireModule('platform')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Post('schedule-rules')
@@ -462,6 +477,7 @@ export class AttendanceController {
     return this.service.createScheduleRule(dto, user)
   }
 
+  @RequireModule('platform')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Patch('schedule-rules/:id')
@@ -473,6 +489,7 @@ export class AttendanceController {
     return this.service.updateScheduleRule(id, dto, user)
   }
 
+  @RequireModule('platform')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Delete('schedule-rules/:id')
@@ -481,6 +498,7 @@ export class AttendanceController {
   }
 
   // ===== فترات فتح/قفل الأوفرتايم بالتواريخ =====
+  @RequireModule('overtime')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Get('overtime-periods')
@@ -488,6 +506,7 @@ export class AttendanceController {
     return this.service.listOvertimePeriods(user)
   }
 
+  @RequireModule('overtime')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Post('overtime-periods')
@@ -495,6 +514,7 @@ export class AttendanceController {
     return this.service.createOvertimePeriod(dto, user)
   }
 
+  @RequireModule('overtime')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Patch('overtime-periods/:id')
@@ -506,6 +526,7 @@ export class AttendanceController {
     return this.service.updateOvertimePeriod(id, dto, user)
   }
 
+  @RequireModule('overtime')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('attendance.manage')
   @Delete('overtime-periods/:id')
@@ -515,6 +536,7 @@ export class AttendanceController {
 
   // أيام العمل الفعلية في مدى (خدمة ذاتية) — لتلميح نموذج الإجازة:
   // «سيُخصم X يوم فقط — Y يوم عطلة داخل المدى»
+  @RequireModule('platform')
   @UseGuards(JwtAuthGuard)
   @Get('working-days')
   workingDays(
@@ -570,6 +592,7 @@ export class AttendanceController {
   }
 
   // الأوفرتايم المكتشف من البصمة بانتظار تأكيد المدير
+  @RequireModule('overtime')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('overtime.confirm')
   @Get('overtime/pending')
@@ -577,6 +600,7 @@ export class AttendanceController {
     return this.service.pendingOvertime(user)
   }
 
+  @RequireModule('overtime')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Get('overtime/preview')
   overtimePreview(@CurrentUser() user: JwtPayload, @Query() dto: OvertimePreviewDto) {
@@ -585,6 +609,7 @@ export class AttendanceController {
 
   // سجل الأوفرتايم لشهر (?month=YYYY-MM) بكل الحالات وحالة الطلب المرتبط + الإعداد
   // الحيّ «المكتشف يتطلب تأكيداً» — لمن يرى حضور النطاق (التأكيد لصاحب الصلاحية فقط)
+  @RequireModule('overtime')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('overtime.confirm', 'attendance.view_all')
   @Get('overtime')
@@ -593,6 +618,7 @@ export class AttendanceController {
     return this.service.overtimeLog(user, month, range && !range.month ? { from: range.from, to: range.to } : undefined)
   }
 
+  @RequireModule('overtime')
   @UseGuards(JwtAuthGuard, RolesGuard)
   @Perm('overtime.confirm')
   @Post('overtime/:id/confirm')

@@ -8,8 +8,10 @@ import { bankSheetSources, buildBankSheet } from './bank-sheet'
 import { PayrollItemDisbursement } from './payroll-disbursement.entities'
 import { payrollItemSettlementPayout } from './payroll-settlement-salary'
 import { PayrollService } from './payroll.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // كشف البنوك لمسير: مين بيتحوله كام على أي بنك، وكام نقدي. حساب الفرع يشوف موظفي فرعه بس.
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll')
 export class PayrollBankSheetController {

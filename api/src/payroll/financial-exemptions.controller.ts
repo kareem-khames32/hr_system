@@ -3,10 +3,12 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { ExemptionAttachmentDto, ExemptionDecisionDto, ExemptionInputDto, ExemptionListQueryDto, ExemptionReportQueryDto } from './financial-exemptions.dto'
 import { FinancialExemptionsService } from './financial-exemptions.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // الخطوة 26 — الإعفاء المالي في مسير (EX-01..08): المنح للموارد البشرية بـfinancial_exemption.grant في فرع الموظف،
 // ولمدير القسم (خصومات الحضور لقسمه بسقف) ومدير الجهة المالكة (نوع خصمها) بلا صلاحية نظام وباعتماد الموارد البشرية.
 // الفحص الحقيقي للنطاق وفصل المهام والحدود والحالة داخل الخدمة.
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll/exemptions')
 export class FinancialExemptionsController {

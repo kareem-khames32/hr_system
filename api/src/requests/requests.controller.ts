@@ -34,6 +34,7 @@ import { RequestsService } from './requests.service'
 import { leaveTypeView } from '../common/leave-contract'
 // ملاحظة النقل تُحفظ في custody_assignments.condition nvarchar(100) — الحد نفسه في الـDTO والخدمة
 import { TransferCustodyDto } from '../assets/custody.dto'
+import { RequireModule } from '../modules-registry/module.guard'
 
 class CreateRequestDto {
   @IsString()
@@ -130,6 +131,7 @@ class AdjustLeaveBalanceDto {
   expectedRemaining?: number
 }
 
+@RequireModule('requests')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
 export class RequestsController {
@@ -151,6 +153,7 @@ export class RequestsController {
   // حقول العرض فقط؛ الإدارة الكاملة تبقى على /settings/leave-types (settings.manage)
   // نوع الإجازة الخاص بفرع يظهر لفرعه بس (قرار المالك 16 سبتمبر): حساب الفرع = العام + فرعه،
   // والحساب العام = الكل أو (مع ?branchId=) العام + فرع الموظف اللي بيقدّم له
+  @RequireModule('leave')
   @Get(['requests/leave-types', 'leaves/types'])
   async activeLeaveTypes(@CurrentUser() user: JwtPayload, @Query('branchId') branchIdRaw?: string) {
     return (await this.leaveTypes.find({
@@ -187,6 +190,7 @@ export class RequestsController {
   // أرصدة كل موظفي النطاق دفعة واحدة لشاشة الأرصدة (LEV-23) — كانت بتنادي
   // leave-balances/:employeeId لكل موظف وتبلع الفشل كأنه «بلا رصيد».
   // branchId اختياري؛ المقيَّد بفرعه مايطلبش فرع تاني. قبل ':id' عشان مايلتقطهوش
+  @RequireModule('leave')
   @Perm('leaves.view_all', 'employees.view')
   @Get(['requests/leave-balances', 'leaves/balances'])
   bulkBalances(
@@ -208,11 +212,13 @@ export class RequestsController {
   }
 
   // أرصدة إجازاتي بالطبقات (افتتاحي مُرحّل + استحقاق السنة)
+  @RequireModule('leave')
   @Get(['requests/leave-balances/mine', 'leaves/balances/mine'])
   myBalances(@CurrentUser() user: JwtPayload) {
     return user.employeeId ? this.balances.allBalances(user.employeeId) : []
   }
 
+  @RequireModule('leave')
   @Perm('leaves.view_all', 'employees.view')
   @Get(['requests/leave-balances/:employeeId', 'leaves/balances/:employeeId'])
   async employeeBalances(
@@ -225,6 +231,7 @@ export class RequestsController {
   }
 
   // الترحيل السنوي: متبقي السنة → طبقة افتتاحية بصلاحية للسنة الجديدة
+  @RequireModule('leave')
   @Perm('leave_balances.manage')
   @Post(['requests/leave-balances/:employeeId/adjust', 'leaves/balances/:employeeId/adjust'])
   adjustBalance(
@@ -235,6 +242,7 @@ export class RequestsController {
     return this.balances.adjust(employeeId, dto, user.sub, branchScopeOf(user))
   }
 
+  @RequireModule('leave')
   @Perm('leave_balances.manage')
   @Get(['requests/leave-balances/:employeeId/adjustments', 'leaves/balances/:employeeId/adjustments'])
   async balanceAdjustments(
@@ -246,6 +254,7 @@ export class RequestsController {
     return this.balances.adjustmentHistory(employeeId, period)
   }
 
+  @RequireModule('leave')
   @Perm('leave_balances.manage')
   @Post(['requests/leave-balances/rollover/:fromPeriod', 'leaves/balances/rollover/:fromPeriod'])
   rollover(@CurrentUser() user: JwtPayload, @Param('fromPeriod') fromPeriod: string) {
@@ -263,6 +272,7 @@ export class RequestsController {
   }
 
   // إجازاتي المعتمدة — لمنتقي «إلغاء/تعديل إجازة» (خدمة ذاتية)
+  @RequireModule('leave')
   @Get(['requests/my-leaves', 'leaves/mine'])
   myLeaves(@CurrentUser() user: JwtPayload, @Query('employeeId') employeeId?: string) {
     // employeeId: إجازات موظف تاني لطلب إلغاء نيابةً عنه (الصلاحية والنطاق بيتفحصوا في الخدمة)
@@ -361,6 +371,7 @@ export class RequestsController {
   }
 
   // تأكيد استلام العهدة (الموظف) → بانتظار اعتماد المدير
+  @RequireModule('custody')
   @Post(['requests/custody/:assignmentId/acknowledge', 'custody/:assignmentId/acknowledge'])
   acknowledge(
     @CurrentUser() user: JwtPayload,
@@ -370,6 +381,7 @@ export class RequestsController {
   }
 
   // الموظف يعلّم «سلّمت العهدة» → مسؤول العهد يؤكد الاستلام والحالة
+  @RequireModule('custody')
   @Post(['requests/custody/:assignmentId/reject', 'custody/:assignmentId/reject'])
   rejectCustody(
     @CurrentUser() user: JwtPayload,
@@ -379,6 +391,7 @@ export class RequestsController {
     return this.service.rejectCustody(user, assignmentId, dto.reason)
   }
 
+  @RequireModule('custody')
   @Post(['requests/custody/:assignmentId/handover', 'custody/:assignmentId/handover'])
   handover(
     @CurrentUser() user: JwtPayload,
@@ -388,6 +401,7 @@ export class RequestsController {
   }
 
   // نقل عهدة نشطة لموظف آخر (أمين العهدة) → المستلم يقبل ثم مديره يؤكد
+  @RequireModule('custody')
   @Post(['requests/custody/:assignmentId/transfer', 'custody/:assignmentId/transfer'])
   transfer(
     @CurrentUser() user: JwtPayload,
@@ -403,6 +417,7 @@ export class RequestsController {
   }
 
   // اعتماد المدير المباشر → العهدة ACTIVE (الملزِم قانونياً)
+  @RequireModule('custody')
   @Post(['requests/custody/:assignmentId/manager-confirm', 'custody/:assignmentId/manager-confirm'])
   managerConfirm(
     @CurrentUser() user: JwtPayload,
@@ -425,6 +440,7 @@ export class RequestsController {
   }
 
   // توجيه الأوفرتايم المكتشف لسلسلته يدوياً (الـ cron يشغّله كل 3 دقائق)
+  @RequireModule('overtime')
   @Perm('attendance.manage', 'overtime.confirm')
   @Post('requests/engine/reconcile-overtime')
   reconcileOvertime() {

@@ -5,6 +5,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { AttendanceExemptionsService } from './attendance-exemptions.service'
 import type { AttendanceExemptionReasonCode, AttendanceExemptionStatus } from './attendance-exemption.entities'
+import { RequireModule } from '../modules-registry/module.guard'
 
 class CreateAttendanceExemptionDto {
   @Type(() => Number) @IsInt() @Min(1) employeeId: number
@@ -27,6 +28,7 @@ class ListAttendanceExemptionsQuery {
   @IsOptional() @Type(() => Number) @IsInt() @Min(1) branchId?: number
 }
 
+@RequireModule('attendance')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('attendance-exemptions')
 export class AttendanceExemptionsController {

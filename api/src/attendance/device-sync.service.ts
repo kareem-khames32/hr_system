@@ -6,6 +6,7 @@ import { ZkTcpAdapter, ZkTcpError } from './zk-tcp-adapter'
 import type { JwtPayload } from '../auth/auth.service'
 import { branchIdIn, branchScopeOf, branchScopeQb } from '../auth/guards'
 import { BiometricDevice } from '../assets/assets.entities'
+import { ModulesService } from '../modules-registry/modules.service'
 import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { AttendancePunch } from './attendance.entities'
 import { AttendanceService } from './attendance.service'
@@ -69,7 +70,8 @@ export class DeviceSyncService {
     private readonly punches: Repository<AttendancePunch>,
     @InjectRepository(RequestsConfig)
     private readonly config: Repository<RequestsConfig>,
-    private readonly attendance: AttendanceService
+    private readonly attendance: AttendanceService,
+    private readonly modules: ModulesService
   ) {}
 
   // ===== سحب جهاز واحد الآن =====
@@ -281,6 +283,7 @@ export class DeviceSyncService {
   // ===== الجدولة: كل 5 دقائق نفحص هل حان موعد السحب (الفاصل من الإعدادات) =====
   @Cron('*/5 * * * *')
   async scheduledSync() {
+    if (!(await this.modules.jobEnabled('attendance.device-sync'))) return
     const cfg = await this.config.findOne({
       where: { key: 'attendance.sync_interval_minutes' },
     })

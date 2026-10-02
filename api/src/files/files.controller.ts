@@ -30,6 +30,7 @@ import { RequestsService } from '../requests/requests.service'
 import { storedPath, uploadsRoot } from './storage'
 import { assertHrDocumentFileAccess } from '../hr-documents/hr-document-access'
 import { assertLetterFileAccess } from '../letters/letter-access'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // التخزين المحلي المنظم: uploads/YYYY-MM/
 
@@ -56,6 +57,7 @@ const monthDir = () => {
 }
 
 // رفع وتحميل الملفات الفعلية — سكانات ومستندات وتقارير طبية
+@RequireModule('platform')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('files')
 export class FilesController {

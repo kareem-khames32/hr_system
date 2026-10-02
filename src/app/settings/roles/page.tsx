@@ -57,6 +57,8 @@ const sameSet = (a: string[], b: string[]) => a.length === b.length && a.every((
 export default function RolesPage() {
   const [roles, setRoles] = useState<ApiRole[]>([])
   const [registry, setRegistry] = useState<ApiPermission[]>([])
+  // صلاحيات موديولات مقفولة: مابتتعرضش، والدور اللي شايلها بيفضل شايلها بعد الحفظ
+  const [hiddenKeys, setHiddenKeys] = useState<string[]>([])
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState<string | null>(null)
   const [notice, setNotice] = useState<string | null>(null)
@@ -81,7 +83,8 @@ export default function RolesPage() {
       // فالشاشة تعمل لمن يملك roles.manage وحدها
       const [r, reg] = await Promise.all([fetchRolesFull(), fetchPermissionsRegistry()])
       setRoles(r)
-      setRegistry(reg)
+      setRegistry(reg.filter((p) => p.moduleEnabled))
+      setHiddenKeys(reg.filter((p) => !p.moduleEnabled).map((p) => p.key))
       setError(null)
     } catch (err: any) {
       setError(err.message)
@@ -106,7 +109,7 @@ export default function RolesPage() {
     return Array.from(groups.entries()).map(([key, value]) => ({ key, ...value }))
   }, [registry])
 
-  const registryKeys = useMemo(() => new Set(registry.map((p) => p.key)), [registry])
+  const registryKeys = useMemo(() => new Set([...registry.map((p) => p.key), ...hiddenKeys]), [registry, hiddenKeys])
   const labelOf = useMemo(() => Object.fromEntries(registry.map((p) => [p.key, p.labelAr])), [registry])
   // صلاحية مفيش أي دور مفعّل شايلها (مدير النظام شايل الكل ضمنيًا فمش محسوب)
   const orphans = useMemo(() => registry.filter((p) => p.carriedBy.length === 0), [registry])
@@ -199,6 +202,7 @@ export default function RolesPage() {
       // ترتيب ثابت: بترتيب سجل الصلاحيات، وبلا تكرار — فالمحفوظ مايتغيّرش شكله مع كل فتح وقفل
       const ordered = [
         ...registry.map((p) => p.key).filter((k) => form.permissions.includes(k)),
+        ...hiddenKeys.filter((k) => form.permissions.includes(k)),
         ...unknownInForm,
       ].filter((k, i, all) => all.indexOf(k) === i)
       if (editingRole) {

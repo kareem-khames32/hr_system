@@ -3,9 +3,11 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { BonusBulkPreviewDto, BonusBulkSubmitDto, BonusDecisionDto, BonusListQueryDto, BonusReverseDto, BonusTypeDto, CreateBonusDto } from './bonuses.dto'
 import { BonusesService } from './bonuses.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // C4 / الخطوة 27: المكافآت — الاقتراح للمدير الهيكلي على مرؤوسيه (مباشر/فريق/قسم/فرع) ولحامل bonuses.manage في نطاق فرعه،
 // والقرار الأخير للموارد البشرية. الفحص الحقيقي للنطاق والسقف والخطوة داخل الخدمة.
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('bonuses')
 export class BonusesController {

@@ -6,7 +6,9 @@ import { branchScopeOf, CurrentUser, inBranchScope, JwtAuthGuard, RolesGuard, us
 import { Employee } from '../employees/employee.entity'
 import { Shift, WorkSchedule } from '../assets/assets.entities'
 import { AttendanceRuleSourceType, AttendanceRuleVersion } from './attendance-rule.entities'
+import { RequireModule } from '../modules-registry/module.guard'
 
+@RequireModule('platform')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('attendance-rules')
 export class AttendanceRuleController {

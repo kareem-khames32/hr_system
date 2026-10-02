@@ -60,6 +60,7 @@ import { Employee } from '../employees/employee.entity'
 import { Branch } from '../org/entities/branch.entity'
 import { DomainSyncService } from './domain-sync.service'
 import { legacyUnusablePasswordUserIds, needsPasswordFromLegacy } from './legacy-password-marker'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // الصلاحيات الإضافية القابلة للمنح = سجل الصلاحيات المركزي كاملاً
 // + أسماء قديمة للتوافق (كانت hardcoded قبل السجل)
@@ -242,6 +243,7 @@ class TemporaryPasswordDto {
 }
 
 // إدارة حسابات الدخول — منفصلة عن سجل الموظف نفسه
+@RequireModule('platform')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Perm('users.manage')
 @Controller('users')

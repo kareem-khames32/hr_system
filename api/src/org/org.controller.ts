@@ -25,6 +25,7 @@ import {
   UpdateDepartmentDto,
   UpdateTeamDto,
 } from './org.dto'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // صلاحيات عرض الشاشات اللي فيها الفلتر الموحد (الموظفين والمستندات والعهد والنقل وإنهاء الخدمة والحضور والاستثناءات والإجازات
 // والأرصدة والمسير والصرف والخصومات والمكافآت والطلبات والتقارير والمستخدمين)
@@ -34,6 +35,7 @@ export const ORG_FILTER_VIEW_PERMS = [
   'bonuses.view', 'requests.view_all', 'reports.view', 'users.manage',
 ]
 
+@RequireModule('org')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
 export class OrgController {

@@ -28,6 +28,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { EmployeesService } from '../employees/employees.service'
 import { CreateEmployeeDto } from '../employees/employees.dto'
 import { Candidate, CandidateStage } from './assets.entities'
+import { RequireModule } from '../modules-registry/module.guard'
 
 const STAGES: CandidateStage[] = [
   'applied',
@@ -89,6 +90,7 @@ class UpdateCandidateDto {
 export class HireCandidateDto extends CreateEmployeeDto {}
 
 // المرشحون — pipeline التوظيف حتى التعيين الفعلي
+@RequireModule('recruitment')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Perm('candidates.manage')
 @Controller('candidates')

@@ -6,6 +6,7 @@ import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { DEDUCTION_WAIVER_KINDS, DEDUCTION_WAIVER_LEVELS } from './payroll-deduction-waivers'
 import { PAYROLL_MEMBERSHIP_VIEWS } from './payroll-overview-filters'
 import { PayrollOverviewService } from './payroll-overview.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 class OverviewPeriodQuery {
   @Matches(/^\d{4}-(0[1-9]|1[0-2])$/, { message: 'اختار الشهر بصيغة YYYY-MM' }) period: string
@@ -44,6 +45,7 @@ class CreateDeductionWaiverDto {
 }
 
 // تبويبات شاشة المسير (المدرجين، بلا مسير، التضارب، الاستقطاعات) و«شيل خصم» — بنطاق الفرع في الخدمة
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('payroll/overview')
 export class PayrollOverviewController {

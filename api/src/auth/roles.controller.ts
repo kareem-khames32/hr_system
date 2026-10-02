@@ -39,6 +39,9 @@ import {
 import { adminGrantViolation, ALL_PERMISSIONS, permissionRegistry, ROLE_PRESETS } from './permissions'
 import { Role, UserPermissionOverride } from './role.entity'
 import { User } from './user.entity'
+import { RequireModule } from '../modules-registry/module.guard'
+import { ModulesService } from '../modules-registry/modules.service'
+import { moduleOfPermission } from '../modules-registry/registry'
 
 class CreateRoleDto {
   // حد 30 = طول عمود users.role — الكود الأطول لا يمكن إسناده لمستخدم
@@ -109,6 +112,7 @@ const sameSet = (a: string[], b: string[]) => {
 }
 
 // إدارة الأدوار (حزم الصلاحيات) + تجاوزات المستخدمين
+@RequireModule('platform')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller()
 export class RolesController {
@@ -117,7 +121,8 @@ export class RolesController {
     @InjectRepository(UserPermissionOverride)
     private readonly overrides: Repository<UserPermissionOverride>,
     @InjectRepository(User) private readonly users: Repository<User>,
-    private readonly auth: AuthService
+    private readonly auth: AuthService,
+    private readonly modules: ModulesService
   ) {}
 
   // سجل الصلاحيات الكامل — لشاشات الإدارة: كل صلاحية بتسميتها وشرحها ووحدتها، ومين شايلها من الأدوار.
@@ -137,8 +142,11 @@ export class RolesController {
       }
       return { code: role.code, nameAr: role.nameAr, isActive: !!role.isActive, permissions }
     })
+    // صلاحية موديول مقفول: الشاشة مابتعرضهاش، والممنوحة منها بتفضل محفوظة على الدور والمستخدم ومالهاش أثر لحد ما الموديول يتفتح
+    const enabled = new Set((await this.modules.enabledFor(null)).modules)
     return permissionRegistry().map((entry) => ({
       ...entry,
+      moduleEnabled: enabled.has(moduleOfPermission(entry.key) ?? 'platform'),
       carriedBy: roles
         .filter((role) => role.isActive && role.permissions.includes(entry.key))
         .map((role) => ({ code: role.code, nameAr: role.nameAr })),

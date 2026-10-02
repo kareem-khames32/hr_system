@@ -6,12 +6,14 @@ import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { BulkUpdateOptionsDto, BulkUpdateTemplateDto } from './employee-bulk-update.dto'
 import { BULK_UPDATE_MAX_FILE_BYTES } from './employee-bulk-update.fields'
 import { EmployeeBulkUpdateService, type BulkUploadedFile } from './employee-bulk-update.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // الملف بيتقري من الذاكرة (مش بيتخزن): ملف واحد بحد 5 ميجا
 const upload = () => FileInterceptor('file', { limits: { fileSize: BULK_UPDATE_MAX_FILE_BYTES, files: 1, fields: 20 } })
 
 // تحديث بيانات مجموعة موظفين من ملف Excel/CSV بكود الموظف — نفس صلاحية تعديل الموظف، وعزل الفرع في الخدمة؛
 // أعمدة الراتب محتاجة كمان «اعتماد المسير» (زي تعديل الأجر من ملف الموظف)
+@RequireModule('employees')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('employees/bulk-update')
 export class EmployeeBulkUpdateController {

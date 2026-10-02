@@ -89,6 +89,8 @@ export const PERMISSIONS: Record<string, string> = {
   'dashboard.view_all': 'لوحة التحكم الإدارية',
   'calendar.view_all': 'تقويم النطاق (إجازات الجميع)',
   'settings.manage': 'إعدادات النظام (المفاتيح والكتالوجات)',
+  // تشغيل وقفل أجزاء النظام لكل الشركة — لا يمنحها إلا مدير النظام (SUPER_ADMIN_ONLY_GRANTS)
+  'settings.modules': 'تفعيل وقفل موديولات النظام',
   'request_types.manage': 'بانِي أنواع الطلبات',
   'approval_chains.manage': 'بانِي دورات الاعتماد',
   'candidates.manage': 'المرشحون والتعيين',
@@ -138,7 +140,7 @@ export const PERMISSION_MODULES: Array<{ key: string; labelAr: string; permissio
   { key: 'offboarding', labelAr: 'إنهاء الخدمة', permissions: ['offboarding.manage', 'settlement.edit', 'settlement.approve'] },
   { key: 'insights', labelAr: 'التقارير واللوحات', permissions: ['reports.view', 'dashboard.view_all', 'calendar.view_all'] },
   { key: 'access', labelAr: 'الحسابات والأدوار', permissions: ['users.manage', 'roles.manage'] },
-  { key: 'settings', labelAr: 'إعدادات النظام', permissions: ['settings.manage', 'request_types.manage', 'approval_chains.manage'] },
+  { key: 'settings', labelAr: 'إعدادات النظام', permissions: ['settings.manage', 'settings.modules', 'request_types.manage', 'approval_chains.manage'] },
 ]
 
 // سطر واحد بيقول الصلاحية بتفتح إيه فعلًا (من جرد مسارات الـAPI، مش من اسمها)
@@ -208,6 +210,7 @@ export const PERMISSION_DESCRIPTIONS: Record<string, string> = {
   'users.manage': 'ينشئ حسابات الدخول ويغيّر دورها وفرعها وكلمة مرورها ويعطّلها — لا يمنحها إلا مدير النظام',
   'roles.manage': 'ينشئ الأدوار ويعدّل صلاحيات كل دور، ويمنح أو يسحب صلاحية من مستخدم بعينه — لا يمنحها إلا مدير النظام',
   'settings.manage': 'يعدّل إعدادات النظام والكتالوجات والعطلات وقوالب الخطابات؛ وإعداد «لكل الشركة» بيتعدّل بس من حساب نطاقه «كل الفروع» — لا يمنحها إلا مدير النظام',
+  'settings.modules': 'يفتح ويقفل موديولات النظام ومزاياها الفرعية ويحدد مين الموديول مفعّل لهم، ويطبّق الباقات — لا يمنحها إلا مدير النظام',
   'request_types.manage': 'ينشئ أنواع الطلبات ويعدّل حقولها وجمهورها',
   'approval_chains.manage': 'ينشئ دورات اعتماد الطلبات ويعدّل خطواتها',
 }
@@ -238,6 +241,8 @@ export const permissionRegistry = () =>
 // البشرية (users.manage) لا يصنع حساباً أو دوراً أو تجاوزاً يحملها
 export const SUPER_ADMIN_ONLY_GRANTS = [
   'users.manage', 'roles.manage', 'settings.manage',
+  // قفل موديول بيوقف شاشاته ومهامه لكل الشركة: مدير الموارد البشرية مايصنعش حساب أو دور يحملها
+  'settings.modules',
   'attendance_exemption.approve_executive', 'attendance_exemption.approve',
   'payroll.reopen', 'payroll.cancel', 'overtime.adjust',
   // C8: عكس صرف مسير مصروف يعيد مستحقات وديونًا مالية — يحملها دور الموارد البشرية ولا يمنحها لغيره

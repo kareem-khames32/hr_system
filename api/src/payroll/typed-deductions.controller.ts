@@ -14,9 +14,11 @@ import {
   DeductionTypeDto,
 } from './typed-deductions.dto'
 import { TypedDeductionsService } from './typed-deductions.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // الخصومات المصنّفة: الإنشاء متاح للمدير الهيكلي (مباشر/فريق/قسم/فرع) بحسب نطاق النوع،
 // ولحامل deductions.manage في نطاق فرعه. الفحص الحقيقي للنطاق والخطوة داخل الخدمة.
+@RequireModule('payroll')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('deductions')
 export class TypedDeductionsController {

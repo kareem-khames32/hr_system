@@ -5,6 +5,7 @@ import type { JwtPayload } from '../auth/auth.service'
 import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import type { HrDocumentCategory } from './hr-document.entities'
 import { HrDocumentsService } from './hr-documents.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 class CreateHrTemplateDto {
   @IsString() @MaxLength(150) name: string
@@ -34,6 +35,7 @@ class PreviewHrDocumentDto {
 }
 class IssueHrDocumentDto extends PreviewHrDocumentDto { @IsUUID() idempotencyKey: string }
 
+@RequireModule('documents')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('hr-documents')
 export class HrDocumentsController {

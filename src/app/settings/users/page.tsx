@@ -200,7 +200,8 @@ export default function UsersPage() {
       setBranches(brs)
       setEmployees(emps)
       setRoles(rls)
-      setRegistry(reg)
+      // صلاحيات الموديولات المقفولة مابتتعرضش؛ الممنوح أو المسحوب منها محفوظ في الخادم زي ما هو
+      setRegistry(reg.filter((p) => p.moduleEnabled))
       setError(null)
     } catch (err: any) {
       setError(err.message)

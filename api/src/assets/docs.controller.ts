@@ -33,6 +33,7 @@ import { EmployeeDocument } from './assets.entities'
 import { assertDocTypes } from './doc-types'
 import { syncHiringDocsTasks } from './hiring-documents'
 import { linkEmployeeFiles } from '../files/link-employee-files'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // تاريخ تقويمي صحيح بصيغة YYYY-MM-DD برسالة واحدة — الـregex وحده كان يمرّر
 // 2026-02-31 فيقلبه تعريف mssql بصمت إلى 2026-03-03 (ويتخطى فحص الانتهاء قبل الإصدار)
@@ -122,6 +123,7 @@ class UpdateDocumentDto {
 }
 
 // مستندات الموظفين — بصلاحية وتنبيه انتهاء
+@RequireModule('documents')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('documents')
 export class DocsController {

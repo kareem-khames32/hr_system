@@ -4,6 +4,7 @@ import { DataSource, In } from 'typeorm'
 import { localDateOf } from '../attendance/attendance.service'
 import { branchScopeOf, branchScopeQb, userHasPerm } from '../auth/guards'
 import type { JwtPayload } from '../auth/auth.service'
+import { ModulesService } from '../modules-registry/modules.service'
 import { Employee } from '../employees/employee.entity'
 import { Leave } from './entities/leave.entities'
 import { leaveAttachmentOverdue } from './leave-attachment-rules'
@@ -30,7 +31,7 @@ export class LeaveAttachmentDeadlineJob implements OnApplicationBootstrap, OnMod
   private readonly logger = new Logger(LeaveAttachmentDeadlineJob.name)
   private catchUpTimer: NodeJS.Timeout | null = null
 
-  constructor(private readonly ds: DataSource) {}
+  constructor(private readonly ds: DataSource, private readonly modules: ModulesService) {}
 
   // لحاق بعد الإقلاع (تعطل الخادم وقت المهمة لا يؤخر التحويل يومًا كاملًا)
   onApplicationBootstrap() {
@@ -47,6 +48,8 @@ export class LeaveAttachmentDeadlineJob implements OnApplicationBootstrap, OnMod
   async daily() {
     if (!this.ds.isInitialized) return
     try {
+      // موديول الإجازات مقفول = مفيش تحويل لبدون راتب (run() نفسها من غير الشرط ده: الاختبار والتشغيل اليدوي)
+      if (!(await this.modules.jobEnabled('leave.attachment-deadline'))) return
       const { reminders, missed } = await this.run()
       if (reminders.length || missed.length) {
         this.logger.log(`مرفقات الإجازات بعد الرجوع: ${reminders.length} تذكير، ${missed.length} تحوّلت بدون راتب لانقضاء المهلة`)

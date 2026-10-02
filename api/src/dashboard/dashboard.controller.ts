@@ -6,6 +6,8 @@ import { andBranchScopeSql, branchScopeOf, branchScopeSql, CurrentUser, JwtAuthG
 import type { BranchScope } from '../auth/guards'
 import { RequestsService } from '../requests/requests.service'
 import { AttendanceService, localDateOf } from '../attendance/attendance.service'
+import { RequireModule } from '../modules-registry/module.guard'
+import { ModulesService } from '../modules-registry/modules.service'
 
 // «حضر فعلاً» — تعريف كارت «الحاضرون اليوم» في stats نفسه (في الموعد + متأخر + منصرف
 // بدري، وأي صف آخر ببصمة عدا الإجازة والغياب) لمنحنى الحضور وإحصائيات الأقسام.
@@ -26,6 +28,7 @@ const attendanceExemptSql = (employeeId: string, date: string) =>
 const LIVE_ABSENCE_TTL_MS = 30_000
 
 // إحصائيات اللوحة — استعلامات مجمعة بنطاق الفرع
+@RequireModule('platform')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Perm('dashboard.view_all')
 @Controller('dashboard')
@@ -33,7 +36,8 @@ export class DashboardController {
   constructor(
     @InjectDataSource() private readonly ds: DataSource,
     private readonly requestsService: RequestsService,
-    private readonly attendance: AttendanceService
+    private readonly attendance: AttendanceService,
+    private readonly modules: ModulesService
   ) {}
 
   @Get('stats')
@@ -80,12 +84,16 @@ export class DashboardController {
     // «قيد المراجعة» = ما ينتظر قرار هذا المستخدم فعلاً (نفس حساب صندوق الاعتماد)،
     // لا كل UNDER_REVIEW في الفرع
     const underReview = (await this.requestsService.inbox(user)).length
+    // اللوحة مسار أساسي بيجمّع أرقام موديولات اختيارية: الموديول المقفول (أو المش مفعّل للمستخدم ده) أرقامه أصفار من غير استعلام
+    const [attendanceOn, leaveOn, payrollOn] = await Promise.all([
+      this.modules.allowedFor('attendance', user), this.modules.allowedFor('leave', user), this.modules.allowedFor('payroll', user),
+    ])
     // attended = كل من حضر فعلاً: في الموعد + متأخر + منصرف بدري، وأي صف آخر ببصمة دخول
     // أو خروج (عمل يوم عطلة/ويك إند = 'holiday'، نصف يوم إجازة ولو ببصمة خروج فقط).
     // مستبعَد عمداً: 'leave' ببصمة (تعارض إجازة كاملة ينتظر قرار HR — معدود في «في إجازة»)
     // و'absent' (معدود في «الغائبون») — كل صف في كارت واحد فقط
     const attParams: unknown[] = []
-    const [att] = await this.ds.query(
+    const [att] = !attendanceOn ? [{} as Record<string, number | null>] : await this.ds.query(
       `SELECT
         SUM(CASE WHEN status IN ('present', 'late', 'early_leave')
                    OR (status NOT IN ('leave', 'absent')
@@ -102,7 +110,7 @@ export class DashboardController {
     // في إجازة اليوم: موظفون حاليون في النطاق، كل موظف مرة واحدة ولو تداخلت إجازاته.
     // يوم كامل = FULL (أو صباحي + مسائي معاً)؛ نصف اليوم يُعدّ منفصلاً ولا يدخل «في إجازة»
     const leaveParams: unknown[] = []
-    const [onLeave] = await this.ds.query(
+    const [onLeave] = !leaveOn ? [{} as Record<string, number | null>] : await this.ds.query(
       `SELECT
         SUM(CASE WHEN x.fullDay = 1 THEN 1 ELSE 0 END) AS onLeaveToday,
         SUM(CASE WHEN x.fullDay = 0 THEN 1 ELSE 0 END) AS halfDayLeaveToday
@@ -123,7 +131,7 @@ export class DashboardController {
     )
     // آخر المسيرات بصافيها لقارئ الرواتب بس: صلاحية اللوحة لوحدها ماتكشفش إجمالي رواتب
     const runParams: unknown[] = []
-    const payrollRuns = !userHasPerm(user, 'payroll.view') ? [] : await this.ds.query(
+    const payrollRuns = !(payrollOn && userHasPerm(user, 'payroll.view')) ? [] : await this.ds.query(
       `SELECT TOP 5 id, branchId, period, status, totalNet FROM payroll_runs
        ${where('branchId', runParams)} ORDER BY period DESC`,
       runParams
@@ -156,7 +164,7 @@ export class DashboardController {
         // الغياب يُجسَّد ليلاً فقط، فكان الكارت صفراً طول اليوم
         absent:
           Number(att.absent ?? 0) +
-          (await this.attendance.liveAbsences(today, scope)).length,
+          (attendanceOn ? (await this.attendance.liveAbsences(today, scope)).length : 0),
       },
       onLeaveToday: Number(onLeave.onLeaveToday ?? 0),
       halfDayLeaveToday: Number(onLeave.halfDayLeaveToday ?? 0),
@@ -168,6 +176,7 @@ export class DashboardController {
   // (month) حتى اليوم بنطاق الفرع. الأيام المنقضية من صفوفها المُجسَّدة (حضر/غائب/
   // إجازة — التجسيد الليلي يكتب صف «إجازة» لكل يوم عمل فيها)، واليوم الجاري بتعريفات
   // الكروت نفسها: الغياب اللحظي والإجازات المعتمدة (صفوف اليوم لا تُجسَّد إلا ليلاً)
+  @RequireModule('attendance')
   @Get('attendance-trend')
   async attendanceTrend(
     @CurrentUser() user: JwtPayload,
@@ -221,6 +230,7 @@ export class DashboardController {
   // إحصائيات الأقسام لليوم (كانت 7 أقسام مخترعة): لكل قسم الموظفون الحاليون، ومن حضر،
   // والغائب (المُجسَّد + اللحظي)، ومن في إجازة يوم كامل — بتعريفات كروت اليوم، و«بدون
   // قسم» لمن لا قسم له فيطابق المجموع الكروت. القسم بلا موظفين ولا حركة اليوم لا يُعرض
+  @RequireModule('attendance')
   @Get('departments')
   async departmentStats(@CurrentUser() user: JwtPayload) {
     const scope = branchScopeOf(user)

@@ -3,9 +3,11 @@ import type { JwtPayload } from '../auth/auth.service'
 import { assertCompanyWideWrite, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { DeactivateLoanCapPolicyDto, LoanCapPolicyDto, LoanCapPreviewQueryDto, LoanRecoveryCollectDto, LoanRecoveryWriteOffDto, LoanRepaymentDto } from './loans.dto'
 import { LoansService } from './loans.service'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // C6 / الخطوة 29: سقوف السلف، السلفة الاستثنائية، السداد المبكر الجزئي، الرصيد بعد الإنهاء، ودفتر الموظف.
 // GET /loans (قائمة الرواتب القديمة) يبقى في EmployeeExtrasController بصلاحية payroll.view.
+@RequireModule('loans')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('loans')
 export class LoansController {
@@ -44,7 +46,9 @@ export class LoansController {
     return this.loans.deactivatePolicy(user, id, dto.reason)
   }
 
-  // المعتمد يرى لقطة التقديم مقابل السقف الآن وتنبيه تغيّر السياسة
+  // المعتمد يرى لقطة التقديم مقابل السقف الآن وتنبيه تغيّر السياسة.
+  // تابع لمحرك الطلبات مش لموديول السلف: طلب سلفة مفتوح بيكمّل اعتماده (بمراجعة سقفه) حتى لو موديول السلف اتقفل بعد تقديمه
+  @RequireModule('requests')
   @Get('requests/:requestId/cap-review')
   capReview(@CurrentUser() user: JwtPayload, @Param('requestId', ParseIntPipe) requestId: number) { return this.loans.requestCapReview(user, requestId) }
 

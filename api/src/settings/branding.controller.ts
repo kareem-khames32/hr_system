@@ -7,6 +7,7 @@ import { RequestsConfig } from '../requests/entities/requests-config.entity'
 import { StoredFile } from '../files/stored-file.entity'
 import { storedPath } from '../files/storage'
 import { withoutDataPlaceholder } from '../common/data-placeholders'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // اسم المنتج ثابت (طلب المالك 26 سبتمبر): «بواسطة Logic Leap HR» في الدخول وآخر القائمة وعنوان التبويب
 export const PRODUCT_NAME = 'Logic Leap HR'
@@ -29,6 +30,7 @@ interface ConfiguredLogo {
  * الشعار = الملف المضبوط في company.logo_file_id بالظبط: مفيش مدخل رقم ملف، فمفيش ملف تاني يتوصله من هنا.
  * (الحراس في النظام لكل كنترولر لوحده بـ@UseGuards — مفيش حارس عام، فالكنترولر ده مفتوح زي /auth/login/options)
  */
+@RequireModule('platform')
 @Controller('branding')
 export class BrandingController {
   constructor(

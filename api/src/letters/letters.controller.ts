@@ -5,6 +5,7 @@ import { CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
 import { LettersService } from './letters.service'
 import { LetterTemplatesService } from './letter-templates.service'
 import { IsBoolean, IsInt, IsObject, IsString, MaxLength, Min, ValidateIf } from 'class-validator'
+import { RequireModule } from '../modules-registry/module.guard'
 
 class CreateTemplateDto {
   @IsString() @MaxLength(150) name: string
@@ -20,6 +21,7 @@ class PublishTemplateDto { @IsInt() @Min(1) version: number }
 class BindTemplateDto { @IsInt() @Min(1) templateId: number }
 class PreviewTemplateDto { @IsObject() draft: Record<string, unknown> }
 
+@RequireModule('documents')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('letters')
 export class LettersController {

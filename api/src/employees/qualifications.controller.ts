@@ -42,6 +42,7 @@ import {
   EmployeeLanguage,
   EmployeeSkill,
 } from './qualifications.entities'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // ===== DTOs — التحقق في الباك مهما كان الفرونت =====
 class EducationDto {
@@ -135,6 +136,7 @@ class LanguageDto {
 // مؤهلات الموظف وخبراته — خمس قوائم مستقلة (إضافة/عرض/حذف)
 // العرض: صاحب الملف أو employees.view · التعديل: employees.edit
 // غير صاحب الملف مقفول على نطاق فرعه، والحذف مربوط بالموظف نفسه
+@RequireModule('employees')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('employees/:id')
 export class QualificationsController {

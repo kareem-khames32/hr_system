@@ -18,10 +18,12 @@ import {
   PayrollLoansReportQuery, PayrollOvertimeReportQuery, PayrollReportFiltersQuery, PayrollRunsReportQuery, PayrollUnassignedReportQuery,
   PayrollVarianceReportQuery,
 } from './payroll-reports.dto'
+import { RequireModule } from '../modules-registry/module.guard'
 
 const YEAR_RE = /^\d{4}$/
 
 // التقارير المجمعة — استعلامات حقيقية بنطاق الفرع
+@RequireModule('reports')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Perm('reports.view')
 @Controller('reports')
@@ -150,6 +152,7 @@ export class ReportsController {
   }
 
   // ===== الحضور الشهري لكل موظف =====
+  @RequireModule('attendance')
   @Get('attendance')
   async attendance(
     @CurrentUser() user: JwtPayload,
@@ -198,6 +201,7 @@ export class ReportsController {
   }
 
   // ===== الإجازات: الاستهلاك بالنوع + الأرصدة =====
+  @RequireModule('leave')
   @Get('leaves')
   async leaves(
     @CurrentUser() user: JwtPayload,
@@ -243,6 +247,7 @@ export class ReportsController {
   // وحدهما — إلا بـincludeDraft، نفس علم /reports/financial/* بالحرف، فأرقام الشهر تتطابق بين التقارير.
   // الفلتر الموحد: موظفين المسير بمكانهم في لقطته (الصافي وطرق الصرف والخصومات منهم بس)
   // صافي كل مسير وبنوده (ومع الفلتر على فريق من موظف واحد = راتبه) فلوس: محتاجة صلاحية الرواتب زي باقي تقارير الرواتب
+  @RequireModule('payroll')
   @Get('payroll')
   async payroll(
     @CurrentUser() user: JwtPayload,
@@ -257,6 +262,7 @@ export class ReportsController {
   }
 
   // ===== موظفون بلا مسير في الفترة، مع السبب (PR-07 / RP-12) =====
+  @RequireModule('payroll')
   @Get('payroll/unassigned')
   async payrollUnassigned(@CurrentUser() user: JwtPayload, @Query() query: PayrollUnassignedReportQuery) {
     this.requirePayrollView(user)
@@ -266,6 +272,7 @@ export class ReportsController {
   }
 
   // ===== العمل الإضافي بالمبالغ ومصدر كل مبلغ (RP-07) =====
+  @RequireModule('payroll', 'overtime')
   @Get('payroll/overtime')
   async payrollOvertime(@CurrentUser() user: JwtPayload, @Query() query: PayrollOvertimeReportQuery) {
     this.requirePayrollView(user)
@@ -275,6 +282,7 @@ export class ReportsController {
   }
 
   // ===== السلف: الأصل والمسدد والمتبقي و«قسط س من ص» والتقادم والتحصيل المتوقع (RP-08) =====
+  @RequireModule('loans')
   @Get('payroll/loans')
   async payrollLoans(@CurrentUser() user: JwtPayload, @Query() query: PayrollLoansReportQuery) {
     this.requirePayrollView(user)
@@ -287,6 +295,7 @@ export class ReportsController {
 
   // ===== الفروق بين شهرين لكل موظف مع تفسير البنود (RP-10) =====
   // المعتمد والمصروف وحدهما، إلا بـincludeDraft — فإجمالي الشهر هنا = إجمالي كشف الرواتب المالي لنفس الشهر
+  @RequireModule('payroll')
   @Get('payroll/variance')
   async payrollVariance(@CurrentUser() user: JwtPayload, @Query() query: PayrollVarianceReportQuery) {
     this.requirePayrollView(user)
@@ -294,6 +303,7 @@ export class ReportsController {
   }
 
   // ===== الأوفرتايم الشهري =====
+  @RequireModule('overtime')
   @Get('overtime')
   async overtime(
     @CurrentUser() user: JwtPayload,

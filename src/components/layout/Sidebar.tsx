@@ -11,6 +11,7 @@ import {
   type CurrentUser,
 } from '@/lib/api'
 import { fetchMyPayrollApprovalsCount } from '@/lib/payroll-approval-chain-api'
+import { DEFAULT_MODULES, routeAvailable, useModules } from '@/lib/modules'
 import { useBranding } from '@/lib/branding'
 import { BrandLogo } from '@/components/branding/BrandLogo'
 import { PoweredBy } from '@/components/branding/PoweredBy'
@@ -208,6 +209,7 @@ const adminMenuDefs: MenuItem[] = [
     icon: <Settings size={20} />,
     children: [
       { label: 'الإعدادات العامة', href: '/settings', perm: 'settings.manage' },
+      { label: 'الموديولات', href: '/settings/modules', perm: 'settings.modules' },
       { label: 'الفروع', href: '/settings/branches', perm: 'org.manage' },
       { label: 'الإدارات والأقسام', href: '/settings/departments', perm: 'org.manage' },
       { label: 'الفرق', href: '/settings/teams', perm: 'org.manage' },
@@ -295,6 +297,9 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
     return adminMenuDefs.find((item) => item.children?.some((child) => child.href === href))?.id ?? readOpenGroup()
   })
   const [currentUser, setCurrentUser] = useState<CurrentUser | null>(() => getCurrentUser())
+  // الموديولات المفعّلة للمستخدم (الإعدادات ← الموديولات): بند الموديول المقفول مابيظهرش — ولحد ما تتقري، افتراضي السجل
+  const enabledModules = useModules() ?? DEFAULT_MODULES
+  const payrollOn = enabledModules.modules.includes('payroll')
   // اسم الشركة وشعارها من «بيانات الشركة» — بيتحدثوا لوحدهم بعد الحفظ (BRANDING_CHANGED)
   const brand = useBranding()
   const navRef = useRef<HTMLElement>(null)
@@ -314,26 +319,29 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       fetchInbox()
         .then((rows) => { setInboxCount(rows.length); setInboxError(false) })
         .catch(() => setInboxError(true))
-      // «مسيرات بانتظار اعتمادي» تظهر بس لما فيه مسير منتظره فعلًا؛ فشل النداء مايظهرش حاجة
-      fetchMyPayrollApprovalsCount()
+      // «مسيرات بانتظار اعتمادي» تظهر بس لما فيه مسير منتظره فعلًا؛ فشل النداء مايظهرش حاجة. والرواتب مقفولة = مفيش نداء أصلًا
+      if (!payrollOn) setPayrollApprovals(0)
+      else fetchMyPayrollApprovalsCount()
         .then((result) => setPayrollApprovals(result.count))
         .catch(() => setPayrollApprovals(0))
     }
-  }, [inboxRevision, pathname])
+  }, [inboxRevision, pathname, payrollOn])
 
-  // القائمة تُبنى من صلاحيات المستخدم الحالي — الفرض الحقيقي في الباك إند
+  // القائمة تُبنى من صلاحيات المستخدم الحالي والموديولات المفعّلة — الفرض الحقيقي في الباك إند
   const menuItems = useMemo<MenuItem[]>(() => {
     if (!currentUser) return []
+    // البند يظهر لو موديول مساره مفعّل (والميزة لو المسار ورا ميزة) — من سجل الموديولات
+    const available = (href?: string) => !href || routeAvailable(href, enabledModules)
 
     // العناصر الإدارية المسموحة: المجموعة تظهر إذا بقي فيها عنصر واحد على الأقل
     const adminItems: MenuItem[] = []
     for (const item of adminMenuDefs) {
       if (item.perm && !can(item.perm)) continue
       if (item.children) {
-        const visibleChildren = item.children.filter((c) => !c.perm || can(c.perm))
+        const visibleChildren = item.children.filter((c) => (!c.perm || can(c.perm)) && available(c.href))
         if (visibleChildren.length === 0) continue
         adminItems.push({ ...item, children: visibleChildren })
-      } else {
+      } else if (available(item.href)) {
         adminItems.push(item)
       }
     }
@@ -393,8 +401,8 @@ export default function Sidebar({ open = false, onClose }: SidebarProps) {
       { id: 'calendar', label: 'التقويم', icon: <Calendar size={20} />, href: '/calendar' },
     ]
 
-    return [...portalItems, ...adminItems]
-  }, [currentUser, inboxCount, inboxError, payrollApprovals])
+    return [...portalItems.filter((item) => available(item.href)), ...adminItems]
+  }, [currentUser, inboxCount, inboxError, payrollApprovals, enabledModules])
 
   const activeHref = activeHrefFor(pathname, menuItems)
   const activeGroup = menuItems.find((item) => item.children?.some((child) => child.href === activeHref))?.id

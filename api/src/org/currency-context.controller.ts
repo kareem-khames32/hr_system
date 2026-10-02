@@ -4,10 +4,12 @@ import type { JwtPayload } from '../auth/auth.service'
 import { branchScopeOf, CurrentUser, JwtAuthGuard, RolesGuard } from '../auth/guards'
 import { branchCurrency } from './branch-currency'
 import { readBranchCurrencies, readSystemCurrency } from './branch-currency-db'
+import { RequireModule } from '../modules-registry/module.guard'
 
 // عملة الشاشات لأي مستخدم داخل (قرار المالك 30 سبتمبر: العملة تبع الفرع) — من غير settings.manage، فالموظف مابقاش يشوف «ر.س» وشركته
 // بالجنيه. الرد: عملة النظام العامة، وعملة فرع موظف الحساب نفسه، ورقم كل فرع في نطاق الحساب وعملته بس (مفيش اسم ولا بيان تاني،
 // ومفيش فرع برّه النطاق).
+@RequireModule('platform')
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('settings')
 export class CurrencyContextController {

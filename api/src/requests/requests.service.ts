@@ -93,6 +93,8 @@ import { assertSalaryChangeClientPayload, assertSalaryRequestUnexecuted, isSalar
 import { assertLoanRequestClientPayload, EARLY_SETTLEMENT_FIELDS, isEarlySettlementType, isLoanCapRequestType, LOAN_REQUEST_CLIENT_FIELDS, loanResubmissionBase,
   LOAN_REQUEST_SERVER_FIELDS, readEarlySettlementPayload, reviewLoanRequestApproval, stageLoanRequestSubmission } from '../loans/loan-request-caps'
 import { PERSONAL_DATA_FIELDS, personalDataField } from '../employees/employee-personal-data'
+import { ModulesService } from '../modules-registry/modules.service'
+import { moduleOfRequestType } from '../modules-registry/registry'
 import { assertPersonalDataKeys, PERSONAL_DATA_HANDLER, validatePersonalDataRequest } from './personal-data-requests'
 
 export interface ActDto {
@@ -169,6 +171,11 @@ function assertNotLegacyBonusRoute(type: { code?: string; destinationHandler?: s
   if (workspace) throw new BadRequestException({ code: 'MONEY_WORKSPACE_REQUIRED', message: workspace })
 }
 
+// حالة الموديولات لخدمة اتبنت من غير حقن (اختبارات الوحدة بتبني RequestsService بالإيد بالتبعيات اللي محتاجاها بس): كله مفعّل
+const MODULES_ALWAYS_ON: Pick<ModulesService, 'allowedFor' | 'isEnabled' | 'jobEnabled'> = {
+  allowedFor: async () => true, isEnabled: async () => true, jobEnabled: async () => true,
+}
+
 @Injectable()
 export class RequestsService {
   private readonly logger = new Logger(RequestsService.name)
@@ -192,15 +199,21 @@ export class RequestsService {
     @InjectRepository(Employee)
     private readonly employees: Repository<Employee>,
     @InjectRepository(OvertimeEntry)
-    private readonly overtimeEntries: Repository<OvertimeEntry>
+    private readonly overtimeEntries: Repository<OvertimeEntry>,
+    private readonly modules: ModulesService
   ) {}
+
+  // حارس الموديولات: في التطبيق ModulesService محقونة دايمًا (Nest بيرفض الإقلاع من غيرها)
+  private get moduleGate() {
+    return this.modules ?? MODULES_ALWAYS_ON
+  }
 
   // ===== الكتالوج — مفلتر بجمهور كل نوع (visible_to) =====
   async catalog(user?: JwtPayload) {
     const chains = await this.chains.find()
     const letterTypes = await this.letterTemplates.availableTypeCodes()
     const actualLoanType = await this.types.findOneBy({ code: 'LOAN' })
-    const all = (
+    const every = (
       await this.types.find({
         where: { isActive: true },
         order: { category: 'ASC', id: 'ASC' },
@@ -229,6 +242,9 @@ export class RequestsService {
         requiredFields: JSON.stringify([...new Set([...JSON.parse(t.requiredFields || '[]'), 'effectiveDate'])]),
       } : {}),
     }))
+    // نوع الطلب التابع لموديول مقفول (أو مش مفعّل للمستخدم ده) مايظهرش في التقديم؛ الطلبات المفتوحة منه بتكمّل سلسلتها
+    const all: typeof every = []
+    for (const type of every) if (await this.moduleGate.allowedFor(moduleOfRequestType(type), user)) all.push(type)
     if (!user) return groupLeaveProfiles(all)
     const emp = user.employeeId
       ? await this.employees.findOne({ where: { id: user.employeeId } })
@@ -242,6 +258,11 @@ export class RequestsService {
     const subjectBranch = emp?.branchId ?? user.branchId ?? null
     return groupLeaveProfiles(all.filter((t) => requestTypeInBranch(t, subjectBranch, companyWide)
       && this.audienceAllows(t, user, emp, 'catalog', positions)))
+  }
+
+  // نوع طلب موديوله مقفول (أو مش مفعّل للمستخدم): نفس رد «النوع غير موجود» — مانكشفش إن الموديول موجود
+  private async assertTypeModuleEnabled(type: Pick<RequestType, 'code' | 'destinationHandler'>, user: JwtPayload) {
+    if (!(await this.moduleGate.allowedFor(moduleOfRequestType(type), user))) throw new NotFoundException('نوع الطلب غير موجود')
   }
 
   // هل النوع متاح للمستخدم ده؟ (ب4)
@@ -266,6 +287,7 @@ export class RequestsService {
       where: { code: dto.definitionCode || dto.typeCode, isActive: true },
     })
     if (!type) throw new NotFoundException('نوع الطلب غير موجود')
+    await this.assertTypeModuleEnabled(type, user)
     if (dto.definitionCode && !(dto.typeCode === 'LEAVE' && isLeaveDefinition(type))) {
       throw new BadRequestException('تعريف الطلب لا يطابق فئة الطلب')
     }
@@ -440,6 +462,8 @@ export class RequestsService {
 
     const type = await em.getRepository(RequestType).findOne({ where: { code: definitionCodeOf(req) } })
     if (!type) throw new NotFoundException('نوع الطلب غير موجود')
+    // مسودة من نوع موديوله اتقفل مابتتقدمش؛ الطلب المرجّع للاستكمال مفتوح أصلًا فبيكمّل سلسلته
+    if (!resubmission) await this.assertTypeModuleEnabled(type, user)
     if (!type.isActive) throw new BadRequestException('نوع الطلب معطّل')
     if (isLeaveDefinition(type)) {
       req.payload = JSON.stringify(this.leavePayload(type, JSON.parse(req.payload || '{}')))
@@ -2151,6 +2175,7 @@ export class RequestsService {
   // جوه فترة مفتوحة عليها «اعتماد تلقائي» بيتعتمد لوحده بنفس الاعتماد النهائي (routeDetectedOvertime).
   @Cron('45 */3 * * * *')
   async reconcileAutoOvertime() {
+    if (!(await this.moduleGate.jobEnabled('overtime.reconcile-auto'))) return { routed: 0, autoApproved: 0 }
     return this.routeDetectedOvertime()
   }
 
@@ -2174,6 +2199,8 @@ export class RequestsService {
   // (هـ) دليل اليوم من غير موانع، (و) نوع OVERTIME_AUTO مفعّل — والسلسلة مش شرط للاعتماد التلقائي.
   // يوم لسه ماخلصش بيفضل مكتشف لدورة المهمة الجاية. ومن غير أي فترة «اعتماد تلقائي» التوجيه هو هو بالحرف.
   private async routeDetectedOvertime(entryIds?: number[]) {
+    // موديول الإضافي مقفول: المكتشف بيفضل مكتشف (مابيتوجهش ولا بيتعتمد)، والفتح بعدين بيلحقه
+    if (!(await this.moduleGate.isEnabled('overtime'))) return { routed: 0, autoApproved: 0 }
     const type = await this.types.findOneBy({ code: 'OVERTIME_AUTO' })
     if (!type?.isActive) return { routed: 0, autoApproved: 0 }
     const autoPeriodIds = await this.attendance.autoApproveOvertimePeriodIds()
