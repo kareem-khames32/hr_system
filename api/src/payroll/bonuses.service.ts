@@ -188,6 +188,20 @@ export class BonusesService {
     return !!employee && scopeHasBranch(branchScopeOf(user), employee.branchId)
   }
 
+  // أسس الاقتراح اللي المستخدم يملكها لنوع مكافأة (قبل اختيار موظف): موقعه في الهيكل لو اقتراح المدير مفعّل، أو صلاحية
+  // الموارد البشرية بنطاق فرع. هي اللي بتحدد «الأنواع المتاحة» (creatable) ومين يستلم إعداد النوع في المعاينة.
+  private typeBases(user: JwtPayload, settings: Pick<Settings, 'managerCreationEnabled'>, facts: OrgFacts, rules: Pick<BonusTypeRules, 'creatorScopes'>): BonusCreatorBasis[] {
+    const structural = new Set<BonusCreatorBasis>()
+    if (settings.managerCreationEnabled && facts.employeeId) {
+      if (facts.directReports > 0) structural.add('DIRECT_MANAGER')
+      if (facts.teams.size) structural.add('TEAM_LEADER')
+      if (facts.departments.size) structural.add('DEPARTMENT_MANAGER')
+      if (facts.branches.size) structural.add('BRANCH_MANAGER')
+    }
+    const hr = userHasPerm(user, MANAGE) && !isEmptyBranchScope(branchScopeOf(user))
+    return rules.creatorScopes.filter(scope => scope === 'HR' ? hr : structural.has(scope))
+  }
+
   private scopedBases(user: JwtPayload, ctx: EvaluationContext, employee: Employee) {
     // عزل الفروع: حساب مقفول على فرع ما ينزلش خصم/مكافأة على موظف في فرع تاني حتى لو الهيكل رابطهم
     if (!this.inBranchScope(user, employee)) return []
@@ -244,11 +258,16 @@ export class BonusesService {
     return new ForbiddenException({ code: 'BONUS_OUT_OF_SCOPE', message: 'الموظف خارج نطاق صلاحيتك لهذا النوع من المكافآت' })
   }
 
-  private async context(em: EntityManager, user: JwtPayload, dto: BonusInputDto): Promise<EvaluationContext> {
+  // typeConfigInResponse: المعاينة (والإرسال الجماعي) بيرجّعوا إعداد النوع في الرد، فلازم صاحب الطلب يبقى له أساس اقتراح في النوع.
+  // الاقتراح الفردي مابيرجّعش الإعداد، وردود رفضه (نفسك، من يعلوك، خارج النطاق) زي ما هي.
+  private async context(em: EntityManager, user: JwtPayload, dto: BonusInputDto, typeConfigInResponse = false): Promise<EvaluationContext> {
     const settings = await this.settings(em)
     const type = await em.getRepository(BonusType).findOneBy({ id: dto.bonusTypeId })
     if (!type) throw new NotFoundException({ code: 'BONUS_TYPE_NOT_FOUND', message: 'نوع المكافأة غير معرّف في الكتالوج' })
     const rules = bonusTypeRulesFromRow(type)
+    const facts = await this.org.facts(em, user)
+    // من مالوش أي أساس اقتراح في النوع ده مايعرفش عنه حاجة: لا حالته ولا حدوده ولا إعداده في المعاينة — نفس رد «خارج النطاق»
+    if (typeConfigInResponse && !this.typeBases(user, settings, facts, rules).length) throw this.outOfScope()
     if (!rules.isActive) bad('BONUS_TYPE_INACTIVE', 'نوع المكافأة معطل ولا يقبل اقتراحات جديدة')
     const reason = typeof dto.reason === 'string' ? dto.reason.trim() : ''
     if (reason.length < settings.reasonMinLength) bad('BONUS_REASON_TOO_SHORT', `سبب المكافأة لا يقل عن ${settings.reasonMinLength} حرفًا`, { minLength: settings.reasonMinLength })
@@ -256,7 +275,6 @@ export class BonusesService {
     const today = this.today()
     const currentPeriod = payrollPeriodOfDate(today, settings.cycleStartDay)
     if (dto.targetPeriod > addPayrollMonths(currentPeriod, 12)) bad('BONUS_PERIOD_TOO_FAR', 'الشهر المستهدف لا يتجاوز 12 شهرًا بعد شهر المسير الحالي')
-    const facts = await this.org.facts(em, user)
     return { type, rules, settings, facts, today, currentPeriod, canExceedCap: userHasPerm(user, EXCEED_CAP),
       input: { inputValue: String(dto.inputValue ?? '').trim(), reason, targetPeriod: dto.targetPeriod, attachmentRef: dto.attachmentRef?.trim() || null, confirmNotDuplicate: dto.confirmNotDuplicate === true } }
   }
@@ -366,21 +384,11 @@ export class BonusesService {
   async creatable(user: JwtPayload) {
     const em = this.manager
     const settings = await this.settings(em), facts = await this.org.facts(em, user)
-    const structural = new Set<BonusCreatorBasis>()
-    if (settings.managerCreationEnabled && facts.employeeId) {
-      if (facts.directReports > 0) structural.add('DIRECT_MANAGER')
-      if (facts.teams.size) structural.add('TEAM_LEADER')
-      if (facts.departments.size) structural.add('DEPARTMENT_MANAGER')
-      if (facts.branches.size) structural.add('BRANCH_MANAGER')
-    }
-    const hr = userHasPerm(user, MANAGE) && !isEmptyBranchScope(branchScopeOf(user))
     const available = new Set<BonusCreatorBasis>()
     const types = (await em.getRepository(BonusType).find({ where: { isActive: true }, order: { code: 'ASC' } })).map(row => this.typeView(row)).filter(type => {
-      let allowed = false
-      for (const scope of type.creatorScopes) {
-        if (scope === 'HR' ? hr : structural.has(scope)) { available.add(scope); allowed = true }
-      }
-      return allowed
+      const mine = this.typeBases(user, settings, facts, type)
+      for (const scope of mine) available.add(scope)
+      return mine.length > 0
     })
     const bases = BONUS_CREATOR_BASES.filter(basis => available.has(basis))
     const today = this.today()
@@ -451,7 +459,7 @@ export class BonusesService {
   }
 
   private async buildPreview(em: EntityManager, user: JwtPayload, dto: BonusBulkPreviewDto, lock: boolean) {
-    const ctx = await this.context(em, user, dto)
+    const ctx = await this.context(em, user, dto, true)
     const mode = dto.selection.mode as BonusSelectionMode
     const ids = [...new Set(dto.selection.ids)].sort((a, b) => a - b)
     if (!ids.length) bad('BONUS_SELECTION_EMPTY', 'اختر موظفًا أو فريقًا أو قسمًا أو فرعًا')

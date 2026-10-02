@@ -315,6 +315,24 @@ export class TypedDeductionsService {
     return !!employee && scopeHasBranch(branchScopeOf(user), employee.branchId)
   }
 
+  // أسس الإنشاء اللي المستخدم يملكها لنوع خصم (قبل اختيار موظف): موقعه في الهيكل جوه الجهة المالكة لو إنشاء المدير مفعّل،
+  // أو إدارته للجهة المالكة، أو صلاحية الموارد البشرية بنطاق فرع. هي اللي بتحدد «الأنواع المتاحة» (creatable) ومين يستلم
+  // إعداد النوع في المعاينة.
+  private typeBases(user: JwtPayload, settings: Pick<Settings, 'managerCreationEnabled'>, facts: Facts,
+    rules: Pick<DeductionTypeRules, 'creatorScopes' | 'ownerDepartmentId'>): DeductionCreatorBasis[] {
+    const structural = new Set<DeductionCreatorBasis>()
+    if (settings.managerCreationEnabled && facts.employeeId) {
+      if (facts.directReports > 0) structural.add('DIRECT_MANAGER')
+      if (facts.teams.size) structural.add('TEAM_LEADER')
+      if (facts.departments.size) structural.add('DEPARTMENT_MANAGER')
+      if (facts.branches.size) structural.add('BRANCH_MANAGER')
+    }
+    const hr = userHasPerm(user, MANAGE) && !isEmptyBranchScope(branchScopeOf(user))
+    return rules.creatorScopes.filter(scope => scope === 'HR' ? hr
+      : scope === 'FUNCTION_OWNER' ? settings.managerCreationEnabled && !!facts.employeeId && !!rules.ownerDepartmentId && facts.departments.has(rules.ownerDepartmentId)
+        : structural.has(scope) && this.creatorInOwnerUnit(facts, rules))
+  }
+
   // ===== B4 (قرار المالك): جمهور نوع الطلب المالي يحكم القدرة فعلًا =====
   // «خصم» و«مكافأة» كارتان في المجموعة المالية؛ من يخفيه عنه visibleTo لا يراه في «طلب جديد»
   // ولا يُنشئ منه ولو أرسل مباشرةً إلى /deductions أو /bonuses.
@@ -407,11 +425,16 @@ export class TypedDeductionsService {
     return new ForbiddenException({ code: 'DEDUCTION_OUT_OF_SCOPE', message: 'الموظف خارج نطاق صلاحيتك لهذا النوع من الخصومات' })
   }
 
-  private async context(em: EntityManager, user: JwtPayload, dto: DeductionInputDto): Promise<EvaluationContext> {
+  // typeConfigInResponse: المعاينة (والإرسال الجماعي) بيرجّعوا إعداد النوع في الرد، فلازم صاحب الطلب يبقى له أساس إنشاء في النوع.
+  // الإنشاء الفردي مابيرجّعش الإعداد، وردود رفضه (نفسك، من يعلوك، خارج النطاق) زي ما هي.
+  private async context(em: EntityManager, user: JwtPayload, dto: DeductionInputDto, typeConfigInResponse = false): Promise<EvaluationContext> {
     const settings = await this.settings(em)
     const type = await em.getRepository(DeductionType).findOneBy({ id: dto.deductionTypeId })
     if (!type) throw new NotFoundException({ code: 'DEDUCTION_TYPE_NOT_FOUND', message: 'نوع الخصم غير معرّف في الكتالوج' })
     const rules = deductionTypeRulesFromRow(type)
+    const facts = await this.facts(em, user)
+    // من مالوش أي أساس إنشاء في النوع ده مايعرفش عنه حاجة: لا حالته ولا حدوده ولا إعداده في المعاينة — نفس رد «خارج النطاق»
+    if (typeConfigInResponse && !this.typeBases(user, settings, facts, rules).length) throw this.outOfScope()
     if (!rules.isActive) bad('DEDUCTION_TYPE_INACTIVE', 'نوع الخصم معطل ولا يقبل طلبات جديدة')
     const reason = typeof dto.reason === 'string' ? dto.reason.trim() : ''
     if (reason.length < settings.reasonMinLength) bad('DEDUCTION_REASON_TOO_SHORT', `سبب الخصم لا يقل عن ${settings.reasonMinLength} حرفًا`, { minLength: settings.reasonMinLength })
@@ -426,7 +449,6 @@ export class TypedDeductionsService {
     if (installments > rules.maxInstallments) bad('DEDUCTION_INSTALLMENTS_ABOVE_MAX', `عدد الأقساط ${installments} يتجاوز الحد ${rules.maxInstallments} لهذا النوع`, { limit: rules.maxInstallments })
     const attachmentRef = dto.attachmentRef?.trim() || null
     if (rules.requiresAttachment && !attachmentRef) bad('DEDUCTION_ATTACHMENT_REQUIRED', 'هذا النوع يتطلب مرفقًا أو مرجع مستند')
-    const facts = await this.facts(em, user)
     return { type, rules, settings, facts, today, currentPeriod,
       input: { inputValue: String(dto.inputValue ?? '').trim(), incidentDate: dto.incidentDate, reason, targetPeriod, installments, attachmentRef, confirmNotDuplicate: dto.confirmNotDuplicate === true } }
   }
@@ -561,24 +583,11 @@ export class TypedDeductionsService {
   async creatable(user: JwtPayload) {
     const em = this.manager
     const settings = await this.settings(em), facts = await this.facts(em, user)
-    const structural = new Set<DeductionCreatorBasis>()
-    if (settings.managerCreationEnabled && facts.employeeId) {
-      if (facts.directReports > 0) structural.add('DIRECT_MANAGER')
-      if (facts.teams.size) structural.add('TEAM_LEADER')
-      if (facts.departments.size) structural.add('DEPARTMENT_MANAGER')
-      if (facts.branches.size) structural.add('BRANCH_MANAGER')
-    }
-    const hr = userHasPerm(user, MANAGE) && !isEmptyBranchScope(branchScopeOf(user))
     const available = new Set<DeductionCreatorBasis>()
     const types = (await em.getRepository(DeductionType).find({ where: { isActive: true }, order: { code: 'ASC' } })).map(row => this.typeView(row)).filter(type => {
-      let allowed = false
-      for (const scope of type.creatorScopes) {
-        const ok = scope === 'HR' ? hr
-          : scope === 'FUNCTION_OWNER' ? settings.managerCreationEnabled && !!facts.employeeId && !!type.ownerDepartmentId && facts.departments.has(type.ownerDepartmentId)
-            : structural.has(scope) && this.creatorInOwnerUnit(facts, type)
-        if (ok) { available.add(scope); allowed = true }
-      }
-      return allowed
+      const mine = this.typeBases(user, settings, facts, type)
+      for (const scope of mine) available.add(scope)
+      return mine.length > 0
     })
     const bases = DEDUCTION_CREATOR_BASES.filter(basis => available.has(basis))
     const today = this.today()
@@ -650,7 +659,7 @@ export class TypedDeductionsService {
   }
 
   private async buildPreview(em: EntityManager, user: JwtPayload, dto: DeductionBulkPreviewDto, lock: boolean) {
-    const ctx = await this.context(em, user, dto)
+    const ctx = await this.context(em, user, dto, true)
     const mode = dto.selection.mode as DeductionSelectionMode
     const ids = [...new Set(dto.selection.ids)].sort((a, b) => a - b)
     if (!ids.length) bad('DEDUCTION_SELECTION_EMPTY', 'اختر موظفًا أو فريقًا أو قسمًا أو فرعًا')

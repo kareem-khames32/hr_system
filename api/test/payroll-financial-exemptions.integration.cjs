@@ -289,6 +289,20 @@ test('EX-03/07/08: مدير القسم للحضور بسقف واعتماد، ف
   // مدير القسم: موظف قسمه فقط، خصومات الحضور فقط، لا «كل الخصومات»، لا لنفسه؛ منحه ينتظر اعتماد الموارد البشرية
   const dmCandidates = expectStatus(await request(users.dm, 'GET', `/payroll/exemptions/runs/${run.id}/candidates`), 200)
   assert.deepEqual(dmCandidates.employees.map(row => [row.employeeId, row.bases]), [[people.e2.id, ['DEPARTMENT_MANAGER']]])
+  // B0.1s: تفاصيل الموظف على قد أساس صاحب الطلب. مدير القسم (من غير أي صلاحية) بياخد خصومات الحضور بس — كان بياخد كمان الخصم
+  // المصنف بمبلغه والاستردادات وأقساط السلف والإجازة بلا أجر. الموارد البشرية بتاخد الصورة الكاملة زي ما كانت.
+  const dmEntries = expectStatus(await request(users.dm, 'GET', `/payroll/exemptions/runs/${run.id}/candidates?employeeId=${people.e2.id}`), 200)
+  assert.deepEqual(dmEntries.bases, ['DEPARTMENT_MANAGER'])
+  assert.ok(Number(dmEntries.requested.lateness) > 0 && Number(dmEntries.requested.absence) > 0, JSON.stringify(dmEntries.requested))
+  assert.deepEqual(dmEntries.attendanceDays.map(row => row.date), [day(4), day(10)])
+  assert.deepEqual([dmEntries.typedObligations, dmEntries.typedTypes, dmEntries.recoveries, dmEntries.installments, dmEntries.unpaidLeave], [[], [], [], [], null])
+  assert.ok(!JSON.stringify(dmEntries).includes(`"obligationId":${quality.obligation.id}`), 'قيد الخصم المصنف مايوصلش لمدير القسم')
+  assert.ok(dmEntries.attachmentThreshold, 'حد المبلغ (سقف المانح) بيفضل')
+  const hrEntries = expectStatus(await request(users.hr, 'GET', `/payroll/exemptions/runs/${run.id}/candidates?employeeId=${people.e2.id}`), 200)
+  assert.deepEqual(hrEntries.typedObligations.map(row => [row.obligationId, row.amount]), [[quality.obligation.id, '200.00']])
+  assert.deepEqual(hrEntries.typedTypes.map(row => [row.deductionTypeId, row.amount]), [[types.quality.id, '200.00']])
+  assert.ok(hrEntries.dayRate !== null && hrEntries.unpaidLeave !== null)
+  assert.deepEqual(hrEntries.attendanceDays, dmEntries.attendanceDays)
   // مساحة «إعفاءاتي» لمدير القسم: المسير المحسوب بعدد موظفي نطاقه (بلا نفسه)
   const grantable = expectStatus(await request(users.dm, 'GET', '/payroll/exemptions/grantable-runs'), 200)
   assert.deepEqual(grantable.filter(row => row.id === run.id).map(row => row.candidates), [1])
@@ -311,6 +325,15 @@ test('EX-03/07/08: مدير القسم للحضور بسقف واعتماد، ف
   assert.deepEqual(deferGrant.overrides.map(row => row.limit), ['cooldown_hours'])
   // عمر الاعتماد يُقاس بالتوقيت نفسه الذي كُتب به (لا إزاحة ثلاث ساعات بين المحلي وUTC)
   assert.ok(deferGrant.overrides[0].ageMinutes >= 0 && deferGrant.overrides[0].ageMinutes < 60, JSON.stringify(deferGrant.overrides))
+  // B0.1s: مدير القسم بيشوف إعفاءات خصومات الحضور في قسمه (واللي منحه هو). إعفاء الخصم المصنف اللي منحته الموارد البشرية — بسطوره
+  // ومبلغه — كان ظاهر له في قايمة المسير وفي تفاصيل الموظف وبالرقم مباشرة
+  const dmRunView = expectStatus(await request(users.dm, 'GET', `/payroll/exemptions/runs/${run.id}`), 200)
+  assert.deepEqual(dmRunView.exemptions.map(row => row.id), [dmGrant.id])
+  expectStatus(await request(users.dm, 'GET', `/payroll/exemptions/${deferGrant.id}`), 403, 'EXEMPTION_FORBIDDEN')
+  const dmAfter = expectStatus(await request(users.dm, 'GET', `/payroll/exemptions/runs/${run.id}/candidates?employeeId=${people.e2.id}`), 200)
+  assert.deepEqual(dmAfter.exemptions.map(row => row.id), [dmGrant.id])
+  const hrRunView = expectStatus(await request(users.hr, 'GET', `/payroll/exemptions/runs/${run.id}`), 200)
+  assert.deepEqual(hrRunView.exemptions.map(row => row.id).sort((a, b) => a - b), [dmGrant.id, deferGrant.id].sort((a, b) => a - b))
 
   // الإلغاء بسبب ثم إعادة الإعفاء نفسه تتطلب صلاحية التجاوز
   expectStatus(await request(users.hr, 'POST', `/payroll/exemptions/${dmGrant.id}/revoke`, { reason: 'قصير' }), 400, 'EXEMPTION_REASON_TOO_SHORT')

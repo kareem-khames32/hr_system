@@ -387,7 +387,7 @@ export class FinancialExemptionsService {
       dispositionLabel: EXEMPTION_LABELS.dispositions[evaluation.disposition], basis: evaluation.basis, basisLabel: EXEMPTION_LABELS.bases[evaluation.basis],
       status: evaluation.status, statusLabel: EXEMPTION_LABELS.statuses[evaluation.status], estimatedAmount: evaluation.estimate.amount, lines: evaluation.estimate.lines,
       protectedItems: evaluation.estimate.protectedItems, warnings: evaluation.warnings, overrides: evaluation.overrides, supersedes: evaluation.supersedes,
-      attachmentThreshold: evaluation.attachmentThreshold, dayRate: evaluation.dayRate, previewHash: evaluation.previewHash }
+      attachmentThreshold: evaluation.attachmentThreshold, dayRate: evaluation.basis === 'FUNCTION_OWNER' ? null : evaluation.dayRate, previewHash: evaluation.previewHash }
   }
 
   async preview(user: JwtPayload, dto: ExemptionInputDto) {
@@ -551,7 +551,9 @@ export class FinancialExemptionsService {
     const branchId = org.branchId ?? employee?.branchId ?? null, departmentId = org.departmentId ?? employee?.departmentId ?? null
     if (this.privileged(user) && this.inBranch(user, branchId)) return true
     if (row.grantedByUserId === user.sub) return true
-    return !!departmentId && facts.departments.has(departmentId)
+    // مدير القسم من غير صلاحية إعفاءات: إعفاءات خصومات الحضور في قسمه بس (هي اللي بيمنحها). إعفاء خصم مصنف أو تأجيل قسط سلفة
+    // أو «كل الخصومات» منحته جهة تانية فيه مبالغ خصومات الموظف وسلفه — مايتعرضش له
+    return !!departmentId && facts.departments.has(departmentId) && isAttendanceComponent(exemptionComponentOf(exemptionRuleOf(row)))
   }
 
   private async views(em: EntityManager, user: JwtPayload, rows: PayrollFinancialExemption[]) {
@@ -692,25 +694,34 @@ export class FinancialExemptionsService {
         typeGroups.set(row.deductionTypeId, group)
       }
       const live = await em.getRepository(PayrollFinancialExemption).find({ where: { runId, employeeId }, order: { id: 'DESC' } })
+      // الرد على قد أساس صاحب الطلب (نفس حدود basisFor): الموارد البشرية الصورة الكاملة؛ مدير القسم خصومات الحضور بس (وسعر اليوم،
+      // زي معاينة الخصم والمكافأة للمدير الهيكلي)؛ مدير الجهة المالكة قيود أنواع جهته بس. أقساط السلف والاستردادات والإجازة بلا أجر
+      // وباقي الخصومات المصنفة للموارد البشرية وحدها. حد المبلغ (سقف المانح) بيفضل للكل: هو الحد اللي المانح نفسه محكوم بيه.
+      const full = bases.includes('HR'), attendanceBasis = full || bases.includes('DEPARTMENT_MANAGER')
+      const typedInBasis = (row: { deductionTypeId?: number | null }) => full || (!!row.deductionTypeId && ownedTypes.has(row.deductionTypeId))
+      const employeeRow = await em.getRepository(Employee).findOne({ where: { id: employeeId }, select: { id: true, branchId: true, departmentId: true } })
       return {
         run: { id: run.id, name: run.name, period: run.period, status: run.status }, employee: org, bases, basisLabels: bases.map(basis => EXEMPTION_LABELS.bases[basis]),
-        dayRate: money(entries.dayRate), attachmentThreshold: exemptionAttachmentThreshold(entries.dayRate, settings.attachmentDays), attachmentThresholdDays: settings.attachmentDays,
-        requested: { lateness: money(entries.attendance.requested.lateness), shortfall: money(entries.attendance.requested.shortfall), absence: money(entries.attendance.requested.absence) },
-        attendanceDays: dates.map(date => {
+        dayRate: attendanceBasis ? money(entries.dayRate) : null, attachmentThreshold: exemptionAttachmentThreshold(entries.dayRate, settings.attachmentDays),
+        attachmentThresholdDays: settings.attachmentDays,
+        requested: attendanceBasis
+          ? { lateness: money(entries.attendance.requested.lateness), shortfall: money(entries.attendance.requested.shortfall), absence: money(entries.attendance.requested.absence) }
+          : { lateness: null, shortfall: null, absence: null },
+        attendanceDays: !attendanceBasis ? [] : dates.map(date => {
           const day = entries.attendance.days.find(row => row.date === date)
           return { date, lateness: money(day?.lateness ?? 0), shortfall: money(day?.shortfall ?? 0), absence: money(absent.has(date) ? entries.attendance.absenceDayAmount : 0) }
         }),
-        typedObligations: typed.map(row => ({ obligationId: row.id, amount: money(row.amount), deductionTypeId: row.deductionTypeId, typeName: row.typeName, typedCategory: row.typedCategory,
+        typedObligations: typed.filter(typedInBasis).map(row => ({ obligationId: row.id, amount: money(row.amount), deductionTypeId: row.deductionTypeId, typeName: row.typeName, typedCategory: row.typedCategory,
           targetPeriod: row.targetPeriod, label: row.label, exemptable: !(protectedCategory(row.typedCategory) || row.isExemptable === false || ownCreator(row)),
           // فصل المهام (EX-03 قاعدة 2): من أنزل الخصم لا يلغيه. يُقال على الشاشة قبل الضغط بدل رفض 403 بعده.
           protectedReason: protectedCategory(row.typedCategory) ? 'استقطاع نظامي أو حكم قضائي: غير قابل للإعفاء إطلاقًا'
             : row.isExemptable === false ? 'نوع الخصم معرّف غير قابل للإعفاء'
             : ownCreator(row) ? 'أنت من أنزل هذا الخصم؛ يلغيه مستخدم آخر' : null })),
-        typedTypes: [...typeGroups.values()].map(group => ({ ...group, amount: money(group.amount) })),
-        recoveries: entries.debits.filter(row => row.deductionRequestId == null).map(row => ({ obligationId: row.id, amount: money(row.amount), label: row.label, category: row.category,
+        typedTypes: [...typeGroups.values()].filter(typedInBasis).map(group => ({ ...group, amount: money(group.amount) })),
+        recoveries: !full ? [] : entries.debits.filter(row => row.deductionRequestId == null).map(row => ({ obligationId: row.id, amount: money(row.amount), label: row.label, category: row.category,
           protectedReason: 'استرداد غير مصنف لا يقبل الإعفاء المالي؛ يُعالج من مصدره' })),
-        installments: entries.installments, unpaidLeave: money(entries.unpaidLeave),
-        exemptions: await this.views(em, user, live),
+        installments: full ? entries.installments : [], unpaidLeave: full ? money(entries.unpaidLeave) : null,
+        exemptions: await this.views(em, user, live.filter(row => this.visible(user, facts, row, employeeRow))),
       }
     })
   }

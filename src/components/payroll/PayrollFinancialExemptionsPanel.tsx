@@ -399,7 +399,7 @@ export function PayrollFinancialExemptionsPanel({ runId, runStatus, snapshotVers
             </select>
           </label>
           {entries && (<>
-            <p className="text-xs text-gray-600">سعر اليوم {formatMoney(entries.dayRate)} · حد المبلغ بلا مرفق {formatMoney(entries.attachmentThreshold)} ({entries.attachmentThresholdDays} يوم) · أساس المنح: {entries.basisLabels.join('، ')}</p>
+            <p className="text-xs text-gray-600">{entries.dayRate !== null ? `سعر اليوم ${formatMoney(entries.dayRate)} · ` : ''}حد المبلغ بلا مرفق {formatMoney(entries.attachmentThreshold)} ({entries.attachmentThresholdDays} يوم) · أساس المنح: {entries.basisLabels.join('، ')}</p>
             <div className="flex flex-wrap gap-4 text-sm">
               {allowAll && <label className="flex items-center gap-1"><input type="radio" checked={scopeKind === 'ALL_DEDUCTIONS'} onChange={() => { setScopeKind('ALL_DEDUCTIONS'); setTarget('') }} /> كل الخصومات القابلة للإعفاء</label>}
               <label className="flex items-center gap-1"><input type="radio" checked={scopeKind === 'DEDUCTION_TYPE'} onChange={() => { setScopeKind('DEDUCTION_TYPE'); setTarget('') }} /> نوع خصم</label>

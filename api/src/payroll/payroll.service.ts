@@ -1570,6 +1570,15 @@ export class PayrollService {
     return rest as PayrollRun
   }
 
+  // قسيمة الموظف نفسه (بوابة الموظف، من غير صلاحية رواتب): بيانات المسير اللي القسيمة بتعرضها بس.
+  // صف المسير الكامل فيه صافي المسير كله وتعريفه (المستبعدين بأسبابهم وأرقام الموظفين) ومين حسب واعتمد وصرف —
+  // وتقرير التكافؤ ولقطة السياسة فيهم أرقام كل موظف في المسير — ودول مش بتوع صاحب القسيمة.
+  private ownPayslipRun(run: PayrollRun) {
+    return { id: run.id, name: run.name ?? null, period: run.period, startDate: run.startDate, endDate: run.endDate, status: run.status,
+      branchId: run.branchId ?? null, paidAt: run.paidAt ?? null, payChannel: run.payChannel ?? null, payReference: run.payReference ?? null,
+      runType: run.runType ?? null, parentRunId: run.parentRunId ?? null, correctionReason: run.correctionReason ?? null }
+  }
+
   async detail(user: JwtPayload, runId: number) {
     return this.readRun(runId, async (em, run) => {
     await this.assertRunAccess(user, run, em)
@@ -1752,7 +1761,7 @@ export class PayrollService {
         if (!['APPROVED', 'PAID'].includes(run.status)) return null
         const currentItem = await em.getRepository(PayrollItem).findOneBy({ id: item.id, employeeId })
         // C8: القسيمة المعكوسة تبقى في سجل الموظف موسومة بعكسها وبقسيمة المسير التكميلي إن وُجدت
-        return currentItem ? { item: currentItem, run, reversal: await describePayrollItemReversal(em, currentItem) } : null
+        return currentItem ? { item: currentItem, run: this.ownPayslipRun(run), reversal: await describePayrollItemReversal(em, currentItem) } : null
       })
       if (published) result.push(published)
     }
@@ -1815,7 +1824,9 @@ export class PayrollService {
       : Number(item.unpaidLeaveDeduction) > 0 ? [{ code: 'UNPAID_LEAVE', label: 'إجازة بدون راتب', days: Number(item.unpaidLeaveDays), payPercent: 0, amount: Number(item.unpaidLeaveDeduction) }] : []
     // طلب المالك 19 سبتمبر: الاستحقاقات والاستقطاعات بندًا بندًا بأسمائها (نفس جدول المسير وتصديره)، مجموعها = الأعمدة المحفوظة
     const [lines] = await describePayrollItemsLines(em, [item])
-    return { item, run: this.lightRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY', obligationDetails, financialExemptions, reversal, leaveDeductions, lines }
+    // قارئ الرواتب في نطاقه بياخد بيانات المسير زي ما هي؛ صاحب القسيمة من غير الصلاحية (أو والقسيمة برّه نطاقه) بياخد بيانات القسيمة بس
+    const payrollReader = userHasPerm(user, 'payroll.view') && allowed
+    return { item, run: payrollReader ? this.lightRun(run) : this.ownPayslipRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY', obligationDetails, financialExemptions, reversal, leaveDeductions, lines }
     })
   }
 

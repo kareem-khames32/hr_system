@@ -56,14 +56,15 @@ export interface ExemptionCandidate { employeeId: number; fullName: string | nul
 export interface ExemptionEmployeeEntries {
   run: { id: number; name: string | null; period: string; status: string }
   employee: { employeeId: number; fullName: string | null; employeeCode: string | null }
-  bases: string[]; basisLabels: string[]; dayRate: string; attachmentThreshold: string; attachmentThresholdDays: number
-  requested: { lateness: string; shortfall: string; absence: string }
+  // سعر اليوم null لمدير الجهة المالكة، والإجازة بلا أجر للموارد البشرية بس، وخصومات الحضور null لمن مش أساسه الحضور
+  bases: string[]; basisLabels: string[]; dayRate: string | null; attachmentThreshold: string; attachmentThresholdDays: number
+  requested: { lateness: string | null; shortfall: string | null; absence: string | null }
   attendanceDays: Array<{ date: string; lateness: string; shortfall: string; absence: string }>
   typedObligations: Array<{ obligationId: number; amount: string; deductionTypeId: number | null; typeName: string | null; typedCategory: string | null; targetPeriod: string | null; label: string; exemptable: boolean; protectedReason: string | null }>
   typedTypes: Array<{ deductionTypeId: number; typeName: string | null; exemptable: boolean; amount: string }>
   recoveries: Array<{ obligationId: number; amount: string; label: string; category: string; protectedReason: string }>
   installments: Array<{ installmentId: number; loanId: number; dueDate: string; amount: string }>
-  unpaidLeave: string
+  unpaidLeave: string | null
   exemptions: ExemptionView[]
 }
 export interface ExemptionInput {
@@ -74,7 +75,7 @@ export interface ExemptionPreview {
   runId: number; employeeId: number; employeeName: string | null; scopeKind: ExemptionScopeKind; disposition: ExemptionDisposition; dispositionLabel: string
   basis: string; basisLabel: string; status: ExemptionStatus; statusLabel: string; estimatedAmount: string; lines: ExemptionLine[]
   protectedItems: ExemptionProtectedItem[]; warnings: ExemptionWarning[]; overrides: Array<Record<string, unknown>>; supersedes: number[]
-  attachmentThreshold: string; dayRate: string; previewHash: string
+  attachmentThreshold: string; dayRate: string | null; previewHash: string
 }
 export interface MyExemptionView {
   id: number; runId: number; runName: string | null; period: string; targetLabel: string; dispositionLabel: string; status: ExemptionStatus; statusLabel: string

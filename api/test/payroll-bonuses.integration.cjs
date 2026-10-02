@@ -409,6 +409,43 @@ test('Acceptance (step 27): a bulk bonus and a bulk deduction for a team with on
   assert.deepEqual((await request(users.a3, 'GET', '/bonuses/mine')).body.filter(row => row.targetPeriod === '2026-10'), [])
 })
 
+test('B0.1s: المعاينة مابترجّعش إعداد نوع المكافأة ولا نوع الخصم لحساب مالوش أساس فيه — والمدير والموارد البشرية زي ما هم', async () => {
+  const selection = { mode: 'EMPLOYEES', ids: [people.a1.id], excludeEmployeeIds: [] }
+  const bonusBody = { ...bonus({ reason: `${REASON} — فحص إعداد النوع` }), targetPeriod: '2026-11', selection }
+  const deductionBody = { deductionTypeId: types.commitment.id, inputValue: '0.5', incidentDate: '2026-07-01', reason: `${REASON} — فحص إعداد النوع`, targetPeriod: '2026-11', selection }
+  // موظف من غير مرؤوسين ومن غير أي صلاحية: كان بياخد إعداد النوع كامل (الحدود وسلسلة الاعتماد ومين يقترح) من المعاينة
+  for (const stranger of [users.solo, users.a1, users.a3]) {
+    for (const [route, body, code] of [['/bonuses/preview', bonusBody, 'BONUS_OUT_OF_SCOPE'], ['/deductions/preview', deductionBody, 'DEDUCTION_OUT_OF_SCOPE']]) {
+      const refused = await request(stranger, 'POST', route, body)
+      assert.deepEqual([refused.status, refused.body.code], [403, code], `${stranger.email} ${route}`)
+      assert.deepEqual(Object.keys(refused.body).sort(), ['code', 'message'], 'الرفض من غير أي إعداد')
+      // والإرسال الجماعي بهاش قديم كان بيرجّع نفس المعاينة جوه رد 409
+      const bulk = await request(stranger, 'POST', route.replace('preview', 'bulk'), { ...body, previewHash: '0'.repeat(64) })
+      assert.equal(bulk.status, 403, JSON.stringify(bulk.body))
+      assert.ok(!('preview' in bulk.body) && !JSON.stringify(bulk.body).includes('creatorScopes'))
+    }
+  }
+  // نوع معطّل أو مش موجود: اللي مالوش أساس مايعرفش حالته
+  const inactive = expectStatus(await request(users.admin, 'POST', '/bonuses/types', { code: 'B01S_OFF', nameAr: 'نوع معطل للاختبار', calcMethod: 'FIXED_AMOUNT', isActive: false }), 201)
+  const strangerInactive = await request(users.solo, 'POST', '/bonuses/preview', { ...bonusBody, bonusTypeId: inactive.id })
+  assert.deepEqual([strangerInactive.status, strangerInactive.body.code], [403, 'BONUS_OUT_OF_SCOPE'])
+  expectStatus(await request(users.manager, 'POST', '/bonuses/preview', { ...bonusBody, bonusTypeId: inactive.id }), 400, 'BONUS_TYPE_INACTIVE')
+  // أصحاب الأساس زي ما هم: المدير المباشر وقائد الفريق والموارد البشرية بياخدوا المعاينة بإعداد النوع
+  for (const creator of [users.manager, users.teamLeader, users.hr]) {
+    const preview = expectStatus(await request(creator, 'POST', '/bonuses/preview', bonusBody), 201)
+    assert.equal(preview.type.id, types.spot.id); assert.ok(Array.isArray(preview.type.creatorScopes))
+    assert.deepEqual(preview.rows.map(row => row.employeeId), [people.a1.id])
+    const deductionPreview = expectStatus(await request(creator, 'POST', '/deductions/preview', deductionBody), 201)
+    assert.equal(deductionPreview.type.id, types.commitment.id)
+  }
+  // ومدير قسم في فرع تاني له أساس في النوع (مدير قسم) بس الموظف برّه نطاقه: المعاينة بترجع والصف «خارج النطاق» من غير اسم
+  const outsider = expectStatus(await request(users.outsider, 'POST', '/bonuses/preview', bonusBody), 201)
+  assert.deepEqual(outsider.rows.map(row => [row.status, row.fullName]), [['BONUS_OUT_OF_SCOPE', null]])
+  // الاقتراح الفردي: ردود الرفض زي ما هي (مابيرجّعش إعداد النوع أصلًا)
+  expectStatus(await request(users.solo, 'POST', '/bonuses', { ...bonus(), employeeId: people.solo.id, targetPeriod: '2026-11' }), 403, 'BONUS_SELF')
+  expectStatus(await request(users.solo, 'POST', '/bonuses', { ...bonus(), employeeId: people.a1.id, targetPeriod: '2026-11' }), 403, 'BONUS_OUT_OF_SCOPE')
+})
+
 test('Scope, settings and closed legacy routes: previews never reveal staff outside scope, bonuses.* keys validate, direct bonus credits and legacy BONUS requests are refused', async () => {
   const body = sel => ({ ...bonus({ reason: `${REASON} — فحص النطاق` }), targetPeriod: '2026-11', selection: sel })
   const hidden = expectStatus(await request(users.outsider, 'POST', '/bonuses/preview', body({ mode: 'BRANCH', ids: [org.branchA.id] })), 201)
