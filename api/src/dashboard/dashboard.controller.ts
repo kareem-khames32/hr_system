@@ -2,7 +2,7 @@ import { Controller, Get, Query, UseGuards } from '@nestjs/common'
 import { InjectDataSource } from '@nestjs/typeorm'
 import { DataSource } from 'typeorm'
 import type { JwtPayload } from '../auth/auth.service'
-import { andBranchScopeSql, branchScopeOf, branchScopeSql, CurrentUser, JwtAuthGuard, Perm, RolesGuard } from '../auth/guards'
+import { andBranchScopeSql, branchScopeOf, branchScopeSql, CurrentUser, JwtAuthGuard, Perm, RolesGuard, userHasPerm } from '../auth/guards'
 import type { BranchScope } from '../auth/guards'
 import { RequestsService } from '../requests/requests.service'
 import { AttendanceService, localDateOf } from '../attendance/attendance.service'
@@ -121,8 +121,9 @@ export class DashboardController {
        ) x`,
       leaveParams
     )
+    // آخر المسيرات بصافيها لقارئ الرواتب بس: صلاحية اللوحة لوحدها ماتكشفش إجمالي رواتب
     const runParams: unknown[] = []
-    const payrollRuns = await this.ds.query(
+    const payrollRuns = !userHasPerm(user, 'payroll.view') ? [] : await this.ds.query(
       `SELECT TOP 5 id, branchId, period, status, totalNet FROM payroll_runs
        ${where('branchId', runParams)} ORDER BY period DESC`,
       runParams

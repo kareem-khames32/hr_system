@@ -546,14 +546,14 @@ export class FinancialExemptionsService {
     return { users, employees, runs, types }
   }
 
-  private visible(user: JwtPayload, facts: OrgFacts, row: PayrollFinancialExemption, employee?: Pick<Employee, 'branchId' | 'departmentId'> | null) {
+  private visible(user: JwtPayload, facts: OrgFacts, row: PayrollFinancialExemption, employee: Pick<Employee, 'branchId' | 'departmentId'> | null | undefined, departmentManagerEnabled: boolean) {
     const org = this.orgOfRow(row)
     const branchId = org.branchId ?? employee?.branchId ?? null, departmentId = org.departmentId ?? employee?.departmentId ?? null
     if (this.privileged(user) && this.inBranch(user, branchId)) return true
     if (row.grantedByUserId === user.sub) return true
     // مدير القسم من غير صلاحية إعفاءات: إعفاءات خصومات الحضور في قسمه بس (هي اللي بيمنحها). إعفاء خصم مصنف أو تأجيل قسط سلفة
-    // أو «كل الخصومات» منحته جهة تانية فيه مبالغ خصومات الموظف وسلفه — مايتعرضش له
-    return !!departmentId && facts.departments.has(departmentId) && isAttendanceComponent(exemptionComponentOf(exemptionRuleOf(row)))
+    // أو «كل الخصومات» منحته جهة تانية فيه مبالغ خصومات الموظف وسلفه — مايتعرضش له. ولو منح المدير الهيكلي مقفول من الإعدادات فمالوش صفة في الإعفاءات أصلًا
+    return departmentManagerEnabled && !!departmentId && facts.departments.has(departmentId) && isAttendanceComponent(exemptionComponentOf(exemptionRuleOf(row)))
   }
 
   private async views(em: EntityManager, user: JwtPayload, rows: PayrollFinancialExemption[]) {
@@ -595,7 +595,7 @@ export class FinancialExemptionsService {
       if (!row) throw new NotFoundException({ code: 'EXEMPTION_NOT_FOUND', message: 'الإعفاء غير موجود' })
       const facts = await this.org.facts(em, user)
       const employee = await em.getRepository(Employee).findOne({ where: { id: row.employeeId }, select: { id: true, branchId: true, departmentId: true } })
-      if (!this.visible(user, facts, row, employee)) forbidden('EXEMPTION_FORBIDDEN', 'الإعفاء خارج نطاقك')
+      if (!this.visible(user, facts, row, employee, (await this.settings(em)).departmentManagerEnabled)) forbidden('EXEMPTION_FORBIDDEN', 'الإعفاء خارج نطاقك')
       const [view] = await this.views(em, user, [row])
       const events = await em.getRepository(PayrollFinancialExemptionEvent).find({ where: { exemptionId: id }, order: { id: 'ASC' } })
       const names = await this.names(em, [row])
@@ -618,7 +618,7 @@ export class FinancialExemptionsService {
       const settings = await this.settings(em)
       const rows = await em.getRepository(PayrollFinancialExemption).find({ where: { runId }, order: { id: 'DESC' } })
       const employees = rows.length ? new Map((await em.getRepository(Employee).find({ where: { id: In([...new Set(rows.map(row => row.employeeId))]) }, select: { id: true, branchId: true, departmentId: true } })).map(row => [row.id, row])) : new Map<number, Employee>()
-      const visibleRows = rows.filter(row => this.visible(user, facts, row, employees.get(row.employeeId)))
+      const visibleRows = rows.filter(row => this.visible(user, facts, row, employees.get(row.employeeId), settings.departmentManagerEnabled))
       let recalcEmployeeIds: number[] = []
       if (run.status === 'CALCULATED') {
         const applied: Array<{ employeeId: number; applied: string | null }> = await em.query(`SELECT [employeeId], JSON_QUERY([breakdown], '$.financialExemptions.applied') AS [applied] FROM [payroll_items] WHERE [runId]=@0`, [runId])
@@ -721,7 +721,7 @@ export class FinancialExemptionsService {
         recoveries: !full ? [] : entries.debits.filter(row => row.deductionRequestId == null).map(row => ({ obligationId: row.id, amount: money(row.amount), label: row.label, category: row.category,
           protectedReason: 'استرداد غير مصنف لا يقبل الإعفاء المالي؛ يُعالج من مصدره' })),
         installments: full ? entries.installments : [], unpaidLeave: full ? money(entries.unpaidLeave) : null,
-        exemptions: await this.views(em, user, live.filter(row => this.visible(user, facts, row, employeeRow))),
+        exemptions: await this.views(em, user, live.filter(row => this.visible(user, facts, row, employeeRow, settings.departmentManagerEnabled))),
       }
     })
   }
@@ -737,7 +737,8 @@ export class FinancialExemptionsService {
       if (query.period) where.period = query.period
       const rows = await em.getRepository(PayrollFinancialExemption).find({ where, order: { id: 'DESC' }, take: 2000 })
       const employees = rows.length ? new Map((await em.getRepository(Employee).find({ where: { id: In([...new Set(rows.map(row => row.employeeId))]) }, select: { id: true, branchId: true, departmentId: true } })).map(row => [row.id, row])) : new Map<number, Employee>()
-      return this.views(em, user, rows.filter(row => this.visible(user, facts, row, employees.get(row.employeeId))).slice(0, 500))
+      const { departmentManagerEnabled } = await this.settings(em)
+      return this.views(em, user, rows.filter(row => this.visible(user, facts, row, employees.get(row.employeeId), departmentManagerEnabled)).slice(0, 500))
     })
   }
 
@@ -872,11 +873,15 @@ export class FinancialExemptionsService {
       }).sort((a, b) => b.drainRatePct - a.drainRatePct)
 
       // 4) بحسب المسير: المُعفى والمكافآت المصروفة وأثرهما
-      const bonuses: Array<{ runId: number; amount: number }> = closedIds.length ? await em.query(`SELECT [appliedPayrollRunId] AS [runId], SUM(COALESCE([appliedAmount],[amount])) AS [amount] FROM [employee_obligations]
-        WHERE [status]='APPLIED' AND [type]='CREDIT' AND [category]='bonus' AND [payrollReversalRunId] IS NULL AND [appliedPayrollRunId] IN (${closedIds.map((_, index) => `@${index}`).join(',')}) GROUP BY [appliedPayrollRunId]`, closedIds) : []
+      // المكافآت بموظفي نطاق القارئ بس (مسير فيه فروع تانية مايجمعش مكافآتهم)، وصافي المسير المحفوظ (إجمالي كل فروعه) لقارئ الرواتب على مستوى الشركة بس
+      const bonuses: Array<{ runId: number; employeeId: number; amount: number }> = closedIds.length ? await em.query(`SELECT [appliedPayrollRunId] AS [runId], [employeeId], SUM(COALESCE([appliedAmount],[amount])) AS [amount] FROM [employee_obligations]
+        WHERE [status]='APPLIED' AND [type]='CREDIT' AND [category]='bonus' AND [payrollReversalRunId] IS NULL AND [appliedPayrollRunId] IN (${closedIds.map((_, index) => `@${index}`).join(',')}) GROUP BY [appliedPayrollRunId], [employeeId]`, closedIds) : []
+      const scopedPairs = new Set(scopedItems.map(item => `${Number(item.runId)}:${Number(item.employeeId)}`))
+      const runBonuses = (runId: number) => bonuses.filter(row => Number(row.runId) === runId && scopedPairs.has(`${runId}:${Number(row.employeeId)}`)).reduce((sum, row) => sum + cents(row.amount), 0)
+      const wholeRunTotals = branchScopeOf(user) === null && userHasPerm(user, 'payroll.view')
       const byRun = closedRuns.filter(run => scopedItems.some(item => item.runId === Number(run.id))).map(run => ({ runId: Number(run.id), name: run.name, period: run.period, status: run.status,
         statusLabel: RUN_STATUS_LABELS[run.status] ?? run.status, exempted: text(applied.filter(row => row.runId === Number(run.id)).reduce((sum, row) => sum + amountOf(row), 0)),
-        bonuses: text(cents(bonuses.find(row => Number(row.runId) === Number(run.id))?.amount ?? 0)), totalNet: money(run.totalNet) }))
+        bonuses: text(runBonuses(Number(run.id))), totalNet: wholeRunTotals ? money(run.totalNet) : null }))
         .sort((a, b) => a.period.localeCompare(b.period) || a.runId - b.runId)
 
       // 5) الاستثناءات: فوق حد المرفق بلا مرفق، وإعادة الإعفاء بعد إلغاء، ومنح المدير الهيكلي المرفوض، وتجاوزات الحدود

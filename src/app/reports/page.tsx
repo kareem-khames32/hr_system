@@ -152,7 +152,8 @@ export default function ReportsPage() {
       const [hc, lv, pr, rq] = await Promise.all([
         fetchHeadcountReportFor(org.params),
         fetchLeavesReportFor(currentYear, org.params),
-        fetchPayrollReportFor(org.params),
+        // مسيرات الرواتب فلوس: لقارئ الرواتب بس (الخادم بيرفض غيره)، وغيره اللوحة بتشتغل له من غير قسم الرواتب
+        can('payroll.view') ? fetchPayrollReportFor(org.params) : Promise.resolve(null),
         fetchRequestsReportFor(org.params),
       ])
       setHeadcount(hc)
@@ -286,7 +287,8 @@ export default function ReportsPage() {
       href: '/requests-console',
       stat: `${totalRequests} طلب`,
     },
-  ]
+  // بطاقة تقرير الرواتب لقارئ الرواتب بس
+  ].filter((card) => card.id !== 'payroll' || canPayroll)
 
   // تصدير CSV حقيقي لكل بطاقة من البيانات المحمّلة نفسها (الخطوة 30: لا زر تصدير بلا ملف)
   const exportReport = (id: string) => {
@@ -380,7 +382,7 @@ export default function ReportsPage() {
         {!loading && !error && (
           <>
             {/* Key Metrics */}
-            <div className="grid grid-cols-4 gap-4">
+            <div className={`grid ${canPayroll ? 'grid-cols-4' : 'grid-cols-3'} gap-4`}>
               <div className="card">
                 <div className="flex items-center justify-between mb-4">
                   <div className="w-12 h-12 bg-primary-100 rounded-2xl flex items-center justify-center">
@@ -411,7 +413,7 @@ export default function ReportsPage() {
                 <p className="text-3xl font-bold text-gray-800">{archivedEmployees}</p>
               </div>
 
-              <div className="card">
+              {canPayroll && <div className="card">
                 <div className="flex items-center justify-between mb-4">
                   <div className="w-12 h-12 bg-blue-100 rounded-2xl flex items-center justify-center">
                     <DollarSign size={24} className="text-blue-600" />
@@ -421,7 +423,7 @@ export default function ReportsPage() {
                 <p className="text-3xl font-bold text-gray-800">
                   {payrollTotal.toLocaleString('en-US')}
                 </p>
-              </div>
+              </div>}
             </div>
 
             {/* Charts Grid */}
@@ -606,7 +608,7 @@ export default function ReportsPage() {
               </div>
 
               {/* Payroll Runs */}
-              <div className="card">
+              {canPayroll && <div className="card">
                 <div className="flex items-center justify-between mb-6">
                   <h2 className="text-lg font-bold text-gray-800">مسيرات الرواتب</h2>
                 </div>
@@ -722,7 +724,7 @@ export default function ReportsPage() {
                     </div>
                   ))}
                 </div>
-              </div>
+              </div>}
 
               {/* Leaves this year */}
               <div className="card">

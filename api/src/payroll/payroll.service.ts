@@ -274,6 +274,17 @@ export class PayrollService {
     }
   }
 
+  // هل المسير كله في نطاق المستخدم؟ (نفس حكم assertRunAccess من غير ما يرمي)
+  private async runAccessible(user: JwtPayload, run: PayrollRun, em = this.runs.manager): Promise<boolean> {
+    try {
+      await this.assertRunAccess(user, run, em)
+      return true
+    } catch (error) {
+      if (error instanceof ForbiddenException) return false
+      throw error
+    }
+  }
+
   // يقبل أي قيمة من الطلب (نص ناقص أو غير نصي) ويرد بكود عربي موحد بدل رسالة class-validator.
   private requireReason(reason?: unknown) {
     if (typeof reason !== 'string' || !reason.trim() || reason.trim().length > 500) {
@@ -1317,7 +1328,8 @@ export class PayrollService {
       if (run.status !== 'CALCULATED') throw new BadRequestException(payrollRunStateIssue('اعتماد المسير', run.status, ['CALCULATED']))
       // صلاحية الاعتماد وحدها لا تتخطى سلسلة الاعتماد؛ بلا سلسلة = لا مانع
       await assertPayrollRunHasNoChain(em, run)
-      return this.approveLocked(em, user, run, null)
+      // الرد من غير لقطة السياسة وتقرير التكافؤ (فيهم أرقام كل موظف): صلاحية الاعتماد لوحدها مش صلاحية عرض الرواتب
+      return this.lightRun(await this.approveLocked(em, user, run, null))
     })
   }
 
@@ -1513,7 +1525,7 @@ export class PayrollService {
         paidBy: user.sub, channel: payRecord.channel, channelLabel: PAYROLL_PAY_CHANNEL_LABELS[payRecord.channel], reference: payRecord.reference,
         // الصرف للمسير كله مرة واحدة (RUN_LEVEL) أو موظف بموظف (PER_EMPLOYEE) بعدد وإجمالي من اتصرف له ومن لم يُصرف له وسببه
         disbursement })
-      return run
+      return this.lightRun(run)
     })
   }
 
@@ -1824,8 +1836,9 @@ export class PayrollService {
       : Number(item.unpaidLeaveDeduction) > 0 ? [{ code: 'UNPAID_LEAVE', label: 'إجازة بدون راتب', days: Number(item.unpaidLeaveDays), payPercent: 0, amount: Number(item.unpaidLeaveDeduction) }] : []
     // طلب المالك 19 سبتمبر: الاستحقاقات والاستقطاعات بندًا بندًا بأسمائها (نفس جدول المسير وتصديره)، مجموعها = الأعمدة المحفوظة
     const [lines] = await describePayrollItemsLines(em, [item])
-    // قارئ الرواتب في نطاقه بياخد بيانات المسير زي ما هي؛ صاحب القسيمة من غير الصلاحية (أو والقسيمة برّه نطاقه) بياخد بيانات القسيمة بس
-    const payrollReader = userHasPerm(user, 'payroll.view') && allowed
+    // قارئ الرواتب اللي المسير كله في نطاقه بياخد بيانات المسير زي ما هي. صاحب القسيمة من غير الصلاحية، وقارئ فرع والمسير فيه فروع تانية
+    // (صافي المسير وتعريفه ومستبعدوه مش بتوع فرعه — وGET /payroll/runs/:id نفسه بيرفضه)، بياخدوا بيانات القسيمة بس
+    const payrollReader = userHasPerm(user, 'payroll.view') && allowed && await this.runAccessible(user, run, em)
     return { item, run: payrollReader ? this.lightRun(run) : this.ownPayslipRun(run), employee, member, identitySource: snapshot ? 'SNAPSHOT' : 'CURRENT_NAME_ONLY', obligationDetails, financialExemptions, reversal, leaveDeductions, lines }
     })
   }

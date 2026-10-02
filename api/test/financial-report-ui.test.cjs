@@ -47,6 +47,10 @@ test('the reports hub and the payroll reports page link all financial reports, a
   const hub = read('src/app/reports/page.tsx')
   assert.match(hub, /\{canPayroll && <FinancialReportLinks \/>\}/)
   assert.match(hub, /setCanPayroll\(can\('payroll\.view'\)\)/)
+  // B0.1s-2: ملخص مسيرات الرواتب في اللوحة (فلوس) لقارئ الرواتب بس — من غير نداء ولا بطاقات لغيره، وباقي اللوحة شغال
+  assert.ok(hub.includes("can('payroll.view') ? fetchPayrollReportFor(org.params) : Promise.resolve(null),"))
+  assert.ok(hub.includes("].filter((card) => card.id !== 'payroll' || canPayroll)"))
+  assert.equal(hub.split('{canPayroll && <div className="card">').length - 1, 2, 'بطاقة إجمالي الرواتب وقسم «مسيرات الرواتب»')
   const payrollReports = read('src/app/payroll/reports/page.tsx')
   assert.match(payrollReports, /\{canReports && <FinancialReportLinks title="التقارير المالية للشهر" \/>\}/)
 })

@@ -20,10 +20,11 @@ const secret = crypto.randomBytes(48).toString('hex')
 const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
 let app, master, ds, base, admin, branch, created = false, employeeNumber = 0
 const repo = name => { assert.equal(ds.options.database, database); return ds.getRepository(name) }
-// شهر مسير في المستقبل (اليوم داخل سبتمبر 2026): تجسيد الغياب وإعادة حساب اليوم ما بيتجاوزانش اليوم،
-// فصفوف الحضور المكتوبة للاختبار تُقرأ كما هي — نفس أسلوب باقي اختبارات المسير.
-const PERIOD = '2026-10'
-const LATE_DAYS = ['2026-10-05', '2026-10-12'], PERMISSION_DAY = '2026-10-29'
+// شهر مسير في المستقبل دايمًا: تجسيد الغياب وإعادة حساب اليوم ما بيتجاوزانش اليوم، فصفوف الحضور المكتوبة للاختبار تُقرأ كما هي.
+// الشهر أكتوبر في سنة جاية بنفس أيام أسبوع أكتوبر 2026 (fixtures/future-calendar.cjs) — الاختبار مابيعتمدش على تاريخ تشغيله.
+const { future } = require('./fixtures/future-calendar.cjs')
+const PERIOD = future('2026-10')
+const LATE_DAYS = [future('2026-10-05'), future('2026-10-12')], PERMISSION_DAY = future('2026-10-29')
 // الراتب 14400 على 30 يومًا و8 ساعات: سعر اليوم 480 وسعر الدقيقة 1.00 — فالأرقام تقرأ بالعين
 const GROSS = 14400, LATE_MINUTES = 135, PERMISSION_MINUTES = 120
 const LATENESS_ONLY = 270, PERMISSION_AMOUNT = 120, OLD_SINGLE_LINE = 390

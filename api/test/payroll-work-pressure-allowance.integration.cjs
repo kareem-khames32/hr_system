@@ -43,9 +43,10 @@ const jwt = new (require('../node_modules/@nestjs/jwt').JwtService)({ secret })
 const MIGRATIONS = path.join(repoRoot, 'docs/migrations/payroll')
 const FILE = '20260926_071_employee_work_pressure_allowance.sql'
 const DF = { employees: 'DF_a224ba42fd335e5eea40372899f', history: 'DF_b73bb8b205dde1f6de240e81f73' }
-// شهور مسير في المستقبل (اليوم داخل سبتمبر 2026، الدورة من يوم 1): تجسيد الغياب وإعادة حساب اليوم ما بيتجاوزانش اليوم،
-// فصفوف الحضور المكتوبة للاختبار تُقرأ كما هي — نفس أسلوب باقي اختبارات المسير.
-const OCT = '2026-10', NOV = '2026-11'
+// شهور مسير في المستقبل دايمًا (الدورة من يوم 1): تجسيد الغياب وإعادة حساب اليوم ما بيتجاوزانش اليوم، فصفوف الحضور المكتوبة للاختبار تُقرأ كما هي.
+// أكتوبر ونوفمبر في سنة جاية بنفس أيام أسبوع 2026 (fixtures/future-calendar.cjs) — الاختبار مابيعتمدش على تاريخ تشغيله. D('2026-10-05') = نفس اليوم هناك.
+const { future: D } = require('./fixtures/future-calendar.cjs')
+const OCT = D('2026-10'), NOV = D('2026-11')
 const SIX = { basicSalary: '6000.00', housingAllowance: '0.00', transportAllowance: '0.00', phoneAllowance: '0.00', workNatureAllowance: '0.00', otherAllowance: '0.00' }
 let app, ds, master, pool, baseUrl, created = false, employeeNumber = 0, runNumber = 0
 const B = {}, E = {}, U = {}, R = {}
@@ -237,21 +238,26 @@ test('WP-A: 6000 + 1000 with an absent day, lateness, shortfall, one unpaid day,
   // خصم مصنف مسعّر بالأيام: يوم واحد من راتب شهر الاستهداف = 6000 ÷ 30 = 200.00 (لو البدل داخل كان 233.33)
   const type = expect(await http(U.admin, 'POST', '/deductions/types', { code: 'WP_DAYS', nameAr: 'خصم التزام بالأيام', category: 'DISCIPLINARY',
     calcMethod: 'DAYS_OF_SALARY', creatorScopes: ['HR'], approvalSteps: ['HR'], escalationDays: null }), 201)
-  const deduction = expect(await http(U.admin, 'POST', '/deductions', { deductionTypeId: type.id, inputValue: '1', incidentDate, employeeId: emp.id, targetPeriod: OCT,
+  // الخادم بيرفض شهر مستهدف أبعد من 12 شهر بعد شهر المسير الحالي، وشهر الاختبار في سنة مستقبلية: الخصم بيتقدّم ويتعتمد على شهر
+  // المسير الحالي (نفس الراتب ونفس التسعير)، وبعدين الطلب وقيده بيتنقلوا لشهر الاختبار زي ما هم
+  const currentPeriod = new Date().toLocaleDateString('en-CA').slice(0, 7)
+  const deduction = expect(await http(U.admin, 'POST', '/deductions', { deductionTypeId: type.id, inputValue: '1', incidentDate, employeeId: emp.id, targetPeriod: currentPeriod,
     reason: 'تأخر متكرر عن تسليم تقرير الوردية الصباحية' }), 201)
   assert.equal(deduction.estimatedAmount, '200.00', 'تسعير الخصم بالأيام على 6000 مش 7000')
   // المُنشئ هو الموارد البشرية وخطوة الاعتماد الوحيدة هي الموارد البشرية ⇒ بيتعتمد عند الإنشاء؛ السعر النهائي بيتعاد على راتب الشهر
   const approved = deduction.status === 'APPROVED' ? deduction
     : expect(await http(U.approver, 'POST', `/deductions/${deduction.id}/approve`, { expectedRevision: deduction.revision, reason: 'موثق بمحضر الوردية' }), 201)
   assert.equal(approved.status, 'APPROVED'); assert.equal(approved.finalAmount, '200.00'); assert.equal(approved.obligations[0].amount, '200.00')
+  await repo('DeductionRequest').update(deduction.id, { targetPeriod: OCT })
+  assert.equal((await repo('EmployeeObligation').update({ deductionRequestId: deduction.id }, { targetPeriod: OCT })).affected, 1)
 
   await repo('AttendanceDay').save([
-    attendanceDay(emp, '2026-10-05', { status: 'absent', checkIn: null, checkOut: null, workMinutes: 0 }),
-    attendanceDay(emp, '2026-10-06', { status: 'late', checkIn: '08:48', lateMinutes: 48, workMinutes: 432 }),
-    attendanceDay(emp, '2026-10-07', { checkOut: '15:30', workMinutes: 450, shortfallMinutes: 30 }),
+    attendanceDay(emp, D('2026-10-05'), { status: 'absent', checkIn: null, checkOut: null, workMinutes: 0 }),
+    attendanceDay(emp, D('2026-10-06'), { status: 'late', checkIn: '08:48', lateMinutes: 48, workMinutes: 432 }),
+    attendanceDay(emp, D('2026-10-07'), { checkOut: '15:30', workMinutes: 450, shortfallMinutes: 30 }),
   ])
-  await repo('Leave').save({ employeeId: emp.id, leaveTypeCode: 'UNPAID', fromDate: '2026-10-08', toDate: '2026-10-08', days: 1, period: 'FULL', isUnpaid: true, status: 'APPROVED' })
-  await repo('OvertimeEntry').save({ employeeId: emp.id, date: '2026-10-12', source: 'PRE_REQUESTED', hoursRequested: 2, payableHours: 2, rate: 1.5, status: 'APPROVED' })
+  await repo('Leave').save({ employeeId: emp.id, leaveTypeCode: 'UNPAID', fromDate: D('2026-10-08'), toDate: D('2026-10-08'), days: 1, period: 'FULL', isUnpaid: true, status: 'APPROVED' })
+  await repo('OvertimeEntry').save({ employeeId: emp.id, date: D('2026-10-12'), source: 'PRE_REQUESTED', hoursRequested: 2, payableHours: 2, rate: 1.5, status: 'APPROVED' })
   await setConfig('payroll.policy.max_deduction_pct_of_gross', '7')
   let run
   try { run = await calc(OCT, [emp]) } finally { await setConfig('payroll.policy.max_deduction_pct_of_gross', 'null') }
@@ -310,10 +316,10 @@ test('WP-A: 6000 + 1000 with an absent day, lateness, shortfall, one unpaid day,
 test('WP-B: debts bigger than the salary plus a loan installment — the 1000 is still paid whole; approval, payment, the employee payslip and profile all carry it', async t => {
   const b1 = await employee({ workPressureAllowance: 1000 }), b2 = await employee({ workPressureAllowance: 1000 })
   const debit = (emp, amount) => repo('EmployeeObligation').save({ employeeId: emp.id, type: 'DEBIT', category: 'custody_shortfall', amount, label: 'عجز عهدة اختبار',
-    status: 'PENDING', effectiveDate: '2026-10-01' })
+    status: 'PENDING', effectiveDate: D('2026-10-01') })
   const loan = async emp => {
     const row = await repo('Loan').save({ employeeId: emp.id, amount: 1500, status: 'DISBURSED' })
-    await repo('LoanInstallment').save({ loanId: row.id, dueDate: '2026-10-10', amount: 500, paid: false, paidAmount: '0.00', financialStatus: 'DUE', financialRevision: 1 })
+    await repo('LoanInstallment').save({ loanId: row.id, dueDate: D('2026-10-10'), amount: 500, paid: false, paidAmount: '0.00', financialStatus: 'DUE', financialRevision: 1 })
     return row
   }
   const debt1 = await debit(b1, 9000), debt2 = await debit(b2, 5800)
@@ -333,7 +339,7 @@ test('WP-B: debts bigger than the salary plus a loan installment — the 1000 is
   expect(await http(U.admin, 'POST', `/payroll/runs/${run.id}/unassigned-ack`, { reportHash: report.reportHash }), 201)
   expect(await http(U.admin, 'POST', `/payroll/runs/${run.id}/approve`), 201, 'اعتماد')
   expect(await http(U.admin, 'POST', `/payroll/runs/${run.id}/pay`, { channel: 'CASH', reference: `WP-${run.id}` }), 201, 'صرف')
-  const installment = await repo('LoanInstallment').findOneByOrFail({ loanId: (await repo('Loan').findOneByOrFail({ employeeId: b2.id })).id, dueDate: '2026-10-10' })
+  const installment = await repo('LoanInstallment').findOneByOrFail({ loanId: (await repo('Loan').findOneByOrFail({ employeeId: b2.id })).id, dueDate: D('2026-10-10') })
   assert.equal(money(installment.paidAmount), 200, 'اتسدد من القسط 200 بس')
   assert.equal((await repo('EmployeeObligation').findOneByOrFail({ id: debt2.id })).status, 'APPLIED')
   // الموظف: قسيمته المنشورة فيها السطر، وملفه فيه البدل
@@ -351,10 +357,10 @@ test('WP-B: debts bigger than the salary plus a loan installment — the 1000 is
 })
 
 test('WP-C: a joiner mid-period gets the allowance prorated by the same service-day rule as the salary; the control without it differs by exactly that amount', async t => {
-  const joiner = await employee({ joinDate: '2026-10-10', workPressureAllowance: 1000 }), control = await employee({ joinDate: '2026-10-10' })
+  const joiner = await employee({ joinDate: D('2026-10-10'), workPressureAllowance: 1000 }), control = await employee({ joinDate: D('2026-10-10') })
   const run = await calc(OCT, [joiner, control])
   const item = itemOf(run, joiner), detail = breakdown(item), base = itemOf(run, control)
-  assert.equal(detail.coverDays, 22); assert.equal(detail.coverFrom, '2026-10-10')
+  assert.equal(detail.coverDays, 22); assert.equal(detail.coverFrom, D('2026-10-10'))
   assert.equal(money(item.basicSalary), 4400, '6000 × 22/30'); assert.equal(detail.dayRate, 200, 'سعر اليوم على الشهر كامل')
   assert.deepEqual(detail.workPressureAllowance, { monthlyAmount: 1000, earnedAmount: 733.33 }, '1000 × 22/30 = 733.333… مقصوص')
   assert.equal(money(item.allowances), 733.33); assert.equal(money(item.netPay), 5133.33)
@@ -387,7 +393,7 @@ test('WP-E: end of service in the settlement preview equals a control employee w
   const run = await calc(OCT, [withAllowance, control])
   const eos = rows => rows.filter(row => String(row.label).startsWith('مكافأة نهاية الخدمة'))
   const salaryLine = rows => rows.find(row => String(row.label).startsWith('راتب آخر شهر'))
-  const preview = async emp => expect(await http(U.admin, 'GET', `/offboarding/preview?employeeId=${emp.id}&reason=termination&lastWorkingDay=2026-10-31`), 200).lines
+  const preview = async emp => expect(await http(U.admin, 'GET', `/offboarding/preview?employeeId=${emp.id}&reason=termination&lastWorkingDay=${D('2026-10-31')}`), 200).lines
   const [a, b] = [await preview(withAllowance), await preview(control)]
   assert.equal(eos(a).length, 1); assert.deepEqual(eos(a).map(row => money(row.amount)), eos(b).map(row => money(row.amount)), 'المكافأة على الست بس')
   assert.equal(money(salaryLine(a).amount), money(itemOf(run, withAllowance).netPay)); assert.equal(money(salaryLine(a).amount), 7000)
@@ -434,7 +440,7 @@ test('WP-G: bulk update from Excel — employee code + «بدل ضغط العم�
 test('WP-N: the allowance never covers a negative effect net — unpaid leave beyond the salary still blocks approval although the paid net is positive', async () => {
   // أكتوبر 31 يوم كله بلا أجر: 31 × 200 = 6200 أكبر من المستحق 6000 ⇒ صافي المؤثرات −200؛ البدل بيتضاف فوقه (800) بس مابيغطيهوش
   const emp = await employee({ workPressureAllowance: 1000 })
-  await repo('Leave').save({ employeeId: emp.id, leaveTypeCode: 'UNPAID', fromDate: '2026-10-01', toDate: '2026-10-31', days: 31, period: 'FULL', isUnpaid: true, status: 'APPROVED' })
+  await repo('Leave').save({ employeeId: emp.id, leaveTypeCode: 'UNPAID', fromDate: D('2026-10-01'), toDate: D('2026-10-31'), days: 31, period: 'FULL', isUnpaid: true, status: 'APPROVED' })
   const run = await calc(OCT, [emp]), item = itemOf(run, emp)
   assert.equal(money(item.unpaidLeaveDeduction), 6200); assert.equal(money(item.netPay), 800)
   assert.ok(breakdown(item).netProtection.warnings.some(warning => warning.code === 'NET_NEGATIVE_PROTECTED_ONLY'))

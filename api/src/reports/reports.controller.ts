@@ -242,6 +242,7 @@ export class ReportsController {
   // القائمة تعرض كل المسيرات بحالتها (حتى الملغى والمسودة)، ومجاميع طرق الصرف والخصومات من المعتمد والمصروف
   // وحدهما — إلا بـincludeDraft، نفس علم /reports/financial/* بالحرف، فأرقام الشهر تتطابق بين التقارير.
   // الفلتر الموحد: موظفين المسير بمكانهم في لقطته (الصافي وطرق الصرف والخصومات منهم بس)
+  // صافي كل مسير وبنوده (ومع الفلتر على فريق من موظف واحد = راتبه) فلوس: محتاجة صلاحية الرواتب زي باقي تقارير الرواتب
   @Get('payroll')
   async payroll(
     @CurrentUser() user: JwtPayload,
@@ -250,6 +251,7 @@ export class ReportsController {
     @Query('departmentIds') departmentIds?: string,
     @Query('teamId') teamId?: string
   ) {
+    this.requirePayrollView(user)
     const org = this.orgFilterOf(user, { branchId, departmentIds, teamId })
     return payrollRunsReport(this.ds.manager, branchScopeOf(user), { includeDraft: query.includeDraft === true, org })
   }

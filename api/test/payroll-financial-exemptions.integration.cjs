@@ -421,3 +421,80 @@ test('Owner 26-Sep: HR authority is final in exemptions — the grantor-% cap wa
     await setConfig('financial_exemptions.max_pct_per_grantor', '0')
   }
 })
+
+test('B0.1s: مرشحين الإعفاء على قد أساس صاحب الطلب — مدير القسم مابياخدش الأقساط ولا الخصومات المصنفة، ومدير الجهة المالكة قيود نوع جهته بس، وقفل منح المدير الهيكلي بيشيل صفته', { timeout: 420000 }, async () => {
+  // موظف عليه من كل نوع: تأخير (حضور)، قسط سلفة، خصم مصنف مملوك لجهة، وخصم مصنف تاني
+  const e7 = await employee('EX_E7', { managerEmployeeId: people.manager.id })
+  const ownerDepartment = await repo('Department').save({ branchId: org.branch.id, name: 'قسم جودة المنتج', code: 'EX_DQ' })
+  const ownerEmployee = await employee('EX_OW', { departmentId: ownerDepartment.id, managerEmployeeId: people.branchManager.id })
+  await repo('Department').update(ownerDepartment.id, { managerEmployeeId: ownerEmployee.id })
+  const owner = await repo('User').save({ email: 'type-owner@exemptions.invalid', displayName: 'type-owner', passwordHash: 'test-only', role: 'employee',
+    branchId: org.branch.id, employeeId: ownerEmployee.id, permissions: '[]' })
+  const ownedType = expectStatus(await request(users.admin, 'POST', '/deductions/types', { code: 'EX_OWNED', nameAr: 'خصم جودة المنتج', category: 'PERFORMANCE', calcMethod: 'FIXED_AMOUNT',
+    creatorScopes: ['HR'], approvalSteps: ['HR'], escalationDays: null, isExemptable: true, ownerDepartmentId: ownerDepartment.id }), 201)
+  await attendance(e7, { late: [day(6)] })
+  const owned = await deduction(users.hr, users.hr2, e7, ownedType, '150')
+  const other = await deduction(users.desk, users.hr2, e7, types.quality, '120')
+  const loan = await repo('Loan').save({ employeeId: e7.id, amount: 600, status: 'DISBURSED', disbursedAt: new Date(`${period}-01T08:00:00Z`) })
+  const [installment] = await repo('LoanInstallment').save([{ loanId: loan.id, dueDate: day(10), amount: 300, paid: false }, { loanId: loan.id, dueDate: `${nextPeriod}-10`, amount: 300, paid: false }])
+  const run = await calc([e7])
+  const route = `/payroll/exemptions/runs/${run.id}/candidates?employeeId=${e7.id}`
+
+  // الموارد البشرية: الصورة الكاملة — وهي الدليل إن كل جزء موجود فعلًا في الموظف ده
+  const hr = expectStatus(await request(users.hr, 'GET', route), 200)
+  assert.deepEqual(hr.bases, ['HR'])
+  assert.deepEqual(hr.installments.map(row => row.installmentId), [installment.id])
+  assert.deepEqual(hr.typedObligations.map(row => row.obligationId).sort((a, b) => a - b), [owned.obligation.id, other.obligation.id].sort((a, b) => a - b))
+  assert.deepEqual(hr.typedTypes.map(row => row.deductionTypeId).sort((a, b) => a - b), [types.quality.id, ownedType.id].sort((a, b) => a - b))
+  assert.ok(hr.dayRate !== null && hr.unpaidLeave !== null && Number(hr.requested.lateness) > 0)
+  assert.deepEqual(hr.attendanceDays.map(row => row.date), [day(6)])
+
+  // مدير القسم: خصومات الحضور وسعر اليوم بس — القسط والخصمين المصنفين مش في الرد خالص
+  const dm = expectStatus(await request(users.dm, 'GET', route), 200)
+  assert.deepEqual(dm.bases, ['DEPARTMENT_MANAGER'])
+  assert.deepEqual([dm.typedObligations, dm.typedTypes, dm.recoveries, dm.installments, dm.unpaidLeave], [[], [], [], [], null])
+  assert.deepEqual([dm.attendanceDays, dm.requested.lateness, dm.dayRate], [hr.attendanceDays, hr.requested.lateness, hr.dayRate])
+  const dmText = JSON.stringify(dm)
+  for (const hidden of [`"installmentId":${installment.id}`, `"obligationId":${owned.obligation.id}`, `"obligationId":${other.obligation.id}`, 'خصم جودة المنتج', '"150.00"', '"120.00"']) {
+    assert.ok(!dmText.includes(hidden), `${hidden} مايوصلش لمدير القسم`)
+  }
+
+  // مدير الجهة المالكة: قيود نوع جهته بس، من غير سعر اليوم ولا خصومات الحضور ولا القسط ولا الخصم المصنف التاني
+  const fo = expectStatus(await request(owner, 'GET', route), 200)
+  assert.deepEqual(fo.bases, ['FUNCTION_OWNER'])
+  assert.deepEqual(fo.typedObligations.map(row => [row.obligationId, row.amount]), [[owned.obligation.id, '150.00']])
+  assert.deepEqual(fo.typedTypes.map(row => [row.deductionTypeId, row.amount]), [[ownedType.id, '150.00']])
+  assert.deepEqual([fo.dayRate, fo.requested, fo.attendanceDays, fo.recoveries, fo.installments, fo.unpaidLeave],
+    [null, { lateness: null, shortfall: null, absence: null }, [], [], [], null])
+  const foText = JSON.stringify(fo)
+  for (const hidden of [`"installmentId":${installment.id}`, `"obligationId":${other.obligation.id}`, '"120.00"', day(6)]) assert.ok(!foText.includes(hidden), `${hidden} مايوصلش لمدير الجهة المالكة`)
+  // قايمة المرشحين: الموظف ظاهر له بأساس الجهة المالكة بس
+  const foList = expectStatus(await request(owner, 'GET', `/payroll/exemptions/runs/${run.id}/candidates`), 200)
+  assert.deepEqual(foList.employees.map(row => [row.employeeId, row.bases]), [[e7.id, ['FUNCTION_OWNER']]])
+  // المعاينة: نوع جهته بيتعاين من غير سعر اليوم، وخصومات الحضور والخصم المصنف التاني مرفوضين له
+  // (التهدئة بعد اعتماد الخصم بتتقفل للمعاينة دي بس: الخصم لسه معتمد من دقيقة)
+  await setConfig('financial_exemptions.cooldown_hours', '0')
+  try {
+    const foPreview = expectStatus(await request(owner, 'POST', '/payroll/exemptions/preview',
+      exemption(run, e7, { scopeKind: 'SINGLE_ENTRY', targetKind: 'OBLIGATION', targetRef: String(owned.obligation.id) })), 201)
+    assert.deepEqual([foPreview.basis, foPreview.dayRate, foPreview.estimatedAmount], ['FUNCTION_OWNER', null, '150.00'])
+    expectStatus(await request(owner, 'POST', '/payroll/exemptions/preview', exemption(run, e7, { scopeKind: 'SINGLE_ENTRY', targetKind: 'LATENESS_DAY', targetRef: day(6) })), 403, 'EXEMPTION_OUT_OF_SCOPE')
+    expectStatus(await request(owner, 'POST', '/payroll/exemptions/preview', exemption(run, e7, { scopeKind: 'SINGLE_ENTRY', targetKind: 'OBLIGATION', targetRef: String(other.obligation.id) })), 403, 'EXEMPTION_OUT_OF_SCOPE')
+  } finally {
+    await setConfig('financial_exemptions.cooldown_hours', '24')
+  }
+
+  // إعفاء حضور منحته الموارد البشرية في قسم المدير: بيشوفه طول ما منح المدير الهيكلي مفعّل، ومابيشوفوش لما يتقفل
+  const lateGrant = await grant(users.hr, exemption(run, e7, { scopeKind: 'SINGLE_ENTRY', targetKind: 'LATENESS_DAY', targetRef: day(6) }))
+  assert.equal(expectStatus(await request(users.dm, 'GET', `/payroll/exemptions/${lateGrant.id}`), 200).id, lateGrant.id)
+  assert.ok(expectStatus(await request(users.dm, 'GET', `/payroll/exemptions?runId=${run.id}`), 200).some(row => row.id === lateGrant.id))
+  await setConfig('financial_exemptions.department_manager_enabled', 'false')
+  try {
+    expectStatus(await request(users.dm, 'GET', `/payroll/exemptions/${lateGrant.id}`), 403, 'EXEMPTION_FORBIDDEN')
+    assert.deepEqual(expectStatus(await request(users.dm, 'GET', `/payroll/exemptions?runId=${run.id}`), 200).filter(row => row.id === lateGrant.id), [])
+    // الموارد البشرية زي ما هي
+    assert.equal(expectStatus(await request(users.hr, 'GET', `/payroll/exemptions/${lateGrant.id}`), 200).id, lateGrant.id)
+  } finally {
+    await setConfig('financial_exemptions.department_manager_enabled', 'true')
+  }
+})

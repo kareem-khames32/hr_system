@@ -56,7 +56,9 @@ async function changeSalary(f, basicSalary) {
   const context = await request(admin, 'GET', `/employees/${f.emp.id}/salary-change-context`)
   assert.equal(context.status, 200, JSON.stringify(context.body))
   return request(admin, 'PATCH', `/employees/${f.emp.id}`, { salaryChange: { expectedRevision: context.body.historyRevision,
-    expectedCurrentSourceHash: context.body.currentSourceHash, effectivePayrollPeriod: context.body.currentPayrollPeriod,
+    // التغيير بيسري من شهر يوم العمل نفسه: أول أيام الشهر يوم العمل (آخر أربعاء فات) بيقع في الشهر اللي قبله، ولو التغيير اتسجّل من
+    // الشهر الحالي الموظف بيبقى من غير راتب موثق في شهر المسير المطلوب — والاختبار كان بيفشل أول أسبوع من كل شهر
+    expectedCurrentSourceHash: context.body.currentSourceHash, effectivePayrollPeriod: f.day.slice(0, 7) < context.body.currentPayrollPeriod ? f.day.slice(0, 7) : context.body.currentPayrollPeriod,
     reason: 'تغيير أجر بعد اعتماد الإضافي للاختبار', evidenceReference: `fixture:${f.emp.id}:salary`, salary: { ...context.body.current, basicSalary } } })
 }
 // كود دولة فريد لكل تركيب بحروف لاتينية كبيرة فقط (2–5) كما يشترط فحص لقطة التقويم؛ «T1» كان يُرفض فتتوقف المجموعة قبل منطق الإضافي

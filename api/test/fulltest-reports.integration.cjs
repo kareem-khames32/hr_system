@@ -1203,12 +1203,14 @@ test('RS20 — الصلاحيات: الموظف العادي ممنوع، وال
     '/reports/financial/payroll-register', '/reports/financial/payroll-cost', '/reports/financial/deductions',
     '/reports/financial/loans', '/reports/financial/overtime', '/reports/cost-centers',
     '/reports/payroll/unassigned', '/reports/payroll/overtime', '/reports/payroll/loans', '/reports/payroll/variance',
+    // B0.1s: ملخص المسيرات نفسه فلوس (صافي كل مسير وبنوده، ومع فلتر الفريق = راتب موظف) — زي إخوته
+    '/reports/payroll',
   ]
   for (const route of moneyRoutes) {
     const blocked = await get(reportOnlyUser, route, { period: PERIOD })
     expect(`${route} محجوب على من يملك التقارير بلا الرواتب`, () => assert.equal(blocked.status, 403, `status=${blocked.status}`))
   }
-  const plainRoutes = [...moneyRoutes, '/reports/headcount', '/reports/attendance', '/reports/leaves', '/reports/payroll', '/reports/requests', '/reports/overtime']
+  const plainRoutes = [...moneyRoutes, '/reports/headcount', '/reports/attendance', '/reports/leaves', '/reports/requests', '/reports/overtime']
   for (const route of plainRoutes) {
     const blocked = await get(eCash.user, route, { period: PERIOD, month: PERIOD, year: YEAR })
     expect(`${route} ممنوع على الموظف العادي`, () => assert.equal(blocked.status, 403, `status=${blocked.status}`))

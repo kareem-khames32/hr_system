@@ -6,6 +6,11 @@
 //  LK-02) GET /payroll/items/:id لصاحب القسيمة من غير صلاحية رواتب: نفس البيانات المحدودة. وقارئ الرواتب في نطاقه لسه بياخد
 //         بيانات المسير زي ما كانت (من غير اللقطة والتقرير)، وقارئ رواتب صاحب قسيمة برّه نطاقه بياخد المحدودة.
 //  LK-03) بعد الصرف: مرجع الصرف وقناته باقيين في قسيمة الموظف (الشاشة بتعرضهم له)، ومين صرف مش في الرد.
+//         ورد الاعتماد والصرف نفسه من غير لقطة السياسة وتقرير التكافؤ.
+//  LK-04) مسير فيه فرعين: قارئ رواتب فرع واحد بياخد قسيمة موظف فرعه ببيانات القسيمة بس (المسير كله برّه نطاقه)،
+//         وقارئ الرواتب على مستوى الشركة بياخد بيانات المسير زي ما هي.
+//  LK-05) GET /reports/payroll (لوحة التقارير) وآخر المسيرات في GET /dashboard/stats: لقارئ الرواتب بس.
+//  LK-06) تقرير حوكمة الإعفاءات: صافي المسير المحفوظ لقارئ الشركة بس، والمكافآت بموظفي نطاق القارئ.
 // Run (من api/): node --test test/payroll-response-leaks.integration.cjs
 const { test, before, after } = require('node:test')
 const assert = require('node:assert/strict')
@@ -27,6 +32,8 @@ const period = '2026-07', startDate = '2026-06-23', endDate = '2026-07-22'
 let app, ds, master, base, created = false
 const B = {}, E = {}, U = {}
 let run, mineItem, colleagueItem
+// مسير تاني فيه موظف من كل فرع، ورد اعتماد المسير الأول
+let run2, nearItem, farItem, approveResponse
 
 function assertDisposable() {
   assert.match(database, migrate.DISPOSABLE_DATABASE); assert.match(database, NAME)
@@ -37,7 +44,9 @@ const repo = name => { assertDisposable(); return ds.getRepository(name) }
 async function request(user, method, route, body) {
   await writeParityReasonsBeforeApproval(request, user, method, route)
   const token = jwt.sign({ sub: user.id, email: user.email, role: user.role, branchId: user.branchId ?? null, employeeId: user.employeeId ?? null,
-    tokenVersion: 0, permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]') })
+    tokenVersion: 0, permissions: user.role === 'super_admin' ? ['*'] : JSON.parse(user.permissions || '[]'),
+    // حساب «كل الفروع» (مش مدير نظام): النطاق في التوكن زي ما تسجيل الدخول بيكتبه، وJwtStrategy بيطابقه مع صف المستخدم
+    ...(user.scopeAllBranches ? { scopeAllBranches: true } : {}) })
   const response = await fetch(base + route, { method, headers: { 'Content-Type': 'application/json', Authorization: `Bearer ${token}` },
     ...(body === undefined ? {} : { body: JSON.stringify(body) }) })
   const text = await response.text()
@@ -60,6 +69,8 @@ const FORBIDDEN_RUN_KEYS = ['parityReport', 'policySnapshot', 'policySnapshotHas
   'approvedBy', 'paidBy', 'calculatedBy', 'policyId', 'policyVersionId', 'engineMode', 'parityExcludedReason', 'snapshotVersion']
 // راتب الزميل رقم مميز مايتلخبطش مع أي رقم تاني في الرد
 const COLLEAGUE_SALARY = 17341.37, MY_SALARY = 6000
+// موظف الفرع التاني في المسير متعدد الفروع: راتبه ومكافأته أرقام مميزة برضه
+const FAR_SALARY = 8123.45, FAR_BONUS = 4321.09
 const mentionsColleague = body => { const text = JSON.stringify(body); return text.includes('17341') || text.includes(`"employeeId":${E.colleague.id}`) }
 
 before(async () => {
@@ -83,21 +94,27 @@ before(async () => {
     basicSalary, housingAllowance: 0, transportAllowance: 0, otherAllowance: 0, status: 'active', isActive: true, payMethod: 'transfer' })
   E.me = await employee('LK-001', 'موظف صاحب القسيمة', MY_SALARY)
   E.colleague = await employee('LK-002', 'زميل في نفس المسير', COLLEAGUE_SALARY)
-  const user = (email, role, branch, employeeId, permissions) => repo('User').save({ email, displayName: email, passwordHash: 'isolated-test-token-only', role,
-    branchId: branch ? branch.id : null, employeeId, permissions: JSON.stringify(permissions) })
+  const user = (email, role, branch, employeeId, permissions, extra = {}) => repo('User').save({ email, displayName: email, passwordHash: 'isolated-test-token-only', role,
+    branchId: branch ? branch.id : null, employeeId, permissions: JSON.stringify(permissions), ...extra })
   U.admin = await user('admin@leaks.test', 'super_admin', null, null, ['*'])
   U.me = await user('me@leaks.test', 'employee', B.main, E.me.id, [])
   U.reader = await user('reader@leaks.test', 'hr_manager', B.main, null, ['payroll.view'])
   // قارئ رواتب فرع تاني وهو نفسه صاحب القسيمة: القسيمة برّه نطاق صلاحيته، فبيشوفها كصاحبها بس
   E.outside = await employee('LK-003', 'قارئ رواتب فرع تاني', 5000)
   U.outsideReader = await user('outside@leaks.test', 'hr_manager', B.other, E.outside.id, ['payroll.view'])
+  // مسير فيه فرعين: موظف من فرع القارئ وموظف من فرع تاني
+  E.near = await employee('LK-004', 'موظف فرع القارئ', 7000)
+  E.far = await employee('LK-005', 'موظف الفرع التاني', FAR_SALARY, B.other)
+  // قارئ رواتب على مستوى الشركة (نطاقه «كل الفروع»)، وحساب فرع معاه التقارير واللوحة وعرض الإعفاءات من غير صلاحية رواتب
+  U.companyReader = await user('company@leaks.test', 'hr_manager', null, null, ['payroll.view', 'reports.view', 'dashboard.view_all', 'financial_exemption.view'], { scopeAllBranches: true })
+  U.branchViewer = await user('viewer@leaks.test', 'employee', B.main, null, ['reports.view', 'dashboard.view_all', 'financial_exemption.view'])
   await repo('RequestsConfig').save([
     { key: 'payroll.cycle_start_day', value: '23' }, { key: 'payroll.monthly_days', value: '30' }, { key: 'payroll.daily_hours', value: '8' },
     { key: 'payroll.late_deduction_enabled', value: 'true' }, { key: 'attendance.absence_penalty_days', value: '1' }, { key: 'attendance.weekend_days', value: 'FRI,SAT' },
     { key: 'payroll.salary_evidence_mode', value: 'MONTHLY_HISTORY_OR_CURRENT_FILE' },
   ])
   await require('./fixtures/payroll-small-company-approval.cjs').allowSmallCompanyApproval(repo)
-  for (const emp of [E.me, E.colleague, E.outside]) await attendance(emp)
+  for (const emp of [E.me, E.colleague, E.outside, E.near, E.far]) await attendance(emp)
 
   run = ok(await request(U.admin, 'POST', '/payroll/runs/calculate-defined', { period, scopeType: 'CUSTOM', employeeIds: [E.me.id, E.colleague.id, E.outside.id],
     name: 'مسير اختبار التسريبات' }), 201)
@@ -105,8 +122,16 @@ before(async () => {
   assert.ok(mineItem && colleagueItem)
   const report = ok(await request(U.admin, 'GET', `/payroll/runs/${run.id}/unassigned`))
   ok(await request(U.admin, 'POST', `/payroll/runs/${run.id}/unassigned-ack`, { reportHash: report.reportHash }), 201)
-  ok(await request(U.admin, 'POST', `/payroll/runs/${run.id}/approve`), 201)
-}, { timeout: 240000 })
+  approveResponse = ok(await request(U.admin, 'POST', `/payroll/runs/${run.id}/approve`), 201)
+
+  run2 = ok(await request(U.admin, 'POST', '/payroll/runs/calculate-defined', { period, scopeType: 'CUSTOM', employeeIds: [E.near.id, E.far.id],
+    name: 'مسير فرعين' }), 201)
+  nearItem = run2.items.find(item => item.employeeId === E.near.id); farItem = run2.items.find(item => item.employeeId === E.far.id)
+  assert.ok(nearItem && farItem)
+  const report2 = ok(await request(U.admin, 'GET', `/payroll/runs/${run2.id}/unassigned`))
+  ok(await request(U.admin, 'POST', `/payroll/runs/${run2.id}/unassigned-ack`, { reportHash: report2.reportHash }), 201)
+  ok(await request(U.admin, 'POST', `/payroll/runs/${run2.id}/approve`), 201)
+}, { timeout: 300000 })
 
 after(async t => {
   const errors = []
@@ -175,7 +200,13 @@ test('LK-02: القسيمة — صاحبها من غير صلاحية بياخد
 })
 
 test('LK-03: بعد الصرف — مرجع الصرف وقناته في قسيمة الموظف، ومين صرف مش في الرد', async () => {
-  ok(await request(U.admin, 'POST', `/payroll/runs/${run.id}/pay`, { channel: 'BANK_TRANSFER', reference: 'TRX-LEAK-0001' }), 201)
+  const payResponse = ok(await request(U.admin, 'POST', `/payroll/runs/${run.id}/pay`, { channel: 'BANK_TRANSFER', reference: 'TRX-LEAK-0001' }), 201)
+  // رد الاعتماد والصرف: حالة المسير من غير لقطة السياسة وتقرير التكافؤ (فيهم أرقام كل موظف) — صلاحية الاعتماد أو الصرف مش صلاحية عرض الرواتب
+  assert.deepEqual([approveResponse.id, approveResponse.status, payResponse.id, payResponse.status], [run.id, 'APPROVED', run.id, 'PAID'])
+  for (const response of [approveResponse, payResponse]) {
+    for (const key of ['parityReport', 'policySnapshot']) assert.ok(!(key in response), `${key} مايرجعش في رد الاعتماد أو الصرف`)
+    assert.ok(!JSON.stringify(response).includes('17341'), 'ولا راتب موظف في الرد')
+  }
   const stored = await repo('PayrollRun').findOneByOrFail({ id: run.id })
   assert.equal(stored.status, 'PAID'); assert.equal(stored.paidBy, U.admin.id)
   const [slip] = ok(await request(U.me, 'GET', '/payroll/my-payslips'))
@@ -186,4 +217,71 @@ test('LK-03: بعد الصرف — مرجع الصرف وقناته في قسي�
   assert.deepEqual(Object.keys(own.run).sort(), SAFE_RUN_KEYS)
   assert.equal(own.run.payReference, 'TRX-LEAK-0001')
   assert.equal(mentionsColleague([slip, own]), false)
+})
+
+test('LK-04: مسير فيه فرعين — قارئ رواتب فرع واحد بياخد قسيمة موظف فرعه ببيانات القسيمة بس، وقارئ الشركة بياخد بيانات المسير', async () => {
+  const stored = await repo('PayrollRun').findOneByOrFail({ id: run2.id })
+  assert.ok(Number(stored.totalNet) > FAR_SALARY && String(stored.employeeIds).includes(String(E.far.id)), 'المسير المحفوظ بيجمع الفرعين')
+  // المسير كله برّه نطاق قارئ الفرع: شاشة المسير بترفضه
+  assert.equal((await request(U.reader, 'GET', `/payroll/runs/${run2.id}`)).status, 403)
+  // وقسيمة موظف فرعه بتتفتح له، ببيانات القسيمة بس — من غير صافي المسير ولا تعريفه ولا أرقام موظفي الفرع التاني
+  const near = ok(await request(U.reader, 'GET', `/payroll/items/${nearItem.id}`))
+  assert.equal(near.item.employeeId, E.near.id)
+  assert.deepEqual(Object.keys(near.run).sort(), SAFE_RUN_KEYS)
+  for (const key of FORBIDDEN_RUN_KEYS) assert.ok(!(key in near.run), `run.${key} مايرجعش لقارئ فرع والمسير فيه فرع تاني`)
+  const text = JSON.stringify(near)
+  assert.ok(!text.includes('8123') && !text.includes(`"employeeId":${E.far.id}`) && !text.includes('موظف الفرع التاني'), 'ولا رقم ولا اسم لموظف الفرع التاني')
+  // قسيمة موظف الفرع التاني: 404 بنفس الرسالة
+  const far = await request(U.reader, 'GET', `/payroll/items/${farItem.id}`)
+  assert.deepEqual([far.status, far.body.message], [404, 'بند المسير غير موجود'])
+  // المسير اللي كله في فرعه: بيانات المسير زي ما كانت (LK-02)، فالتضييق على المسير متعدد الفروع بس
+  assert.ok('totalNet' in ok(await request(U.reader, 'GET', `/payroll/items/${mineItem.id}`)).run)
+
+  // قارئ الرواتب على مستوى الشركة: بيانات المسير زي ما هي، للقسيمتين
+  for (const item of [nearItem, farItem]) {
+    const company = ok(await request(U.companyReader, 'GET', `/payroll/items/${item.id}`))
+    assert.equal(Number(company.run.totalNet), Number(stored.totalNet))
+    for (const key of ['definition', 'employeeIds', 'approvedBy', 'scopeType']) assert.ok(key in company.run, `قارئ الشركة بياخد run.${key}`)
+    for (const key of ['parityReport', 'policySnapshot']) assert.ok(!(key in company.run))
+  }
+})
+
+test('LK-05: تقرير مسيرات الرواتب في لوحة التقارير وآخر المسيرات في لوحة التحكم — لقارئ الرواتب بس', async () => {
+  // «التقارير» من غير «عرض مسيرات الرواتب»: التقرير مرفوض، بفلتر ومن غير فلتر (فلتر على فريق من موظف واحد كان بيرجّع راتبه)
+  for (const route of ['/reports/payroll', `/reports/payroll?branchId=${B.main.id}`, '/reports/payroll?includeDraft=true']) {
+    const blocked = await request(U.branchViewer, 'GET', route)
+    assert.equal(blocked.status, 403, `${route}: ${JSON.stringify(blocked.body)}`)
+    assert.ok(!JSON.stringify(blocked.body).includes('totalNet'))
+  }
+  // التقارير غير المالية شغالة له زي ما هي
+  ok(await request(U.branchViewer, 'GET', '/reports/headcount'))
+  // قارئ الرواتب: التقرير زي ما كان
+  const report = ok(await request(U.companyReader, 'GET', '/reports/payroll'))
+  assert.deepEqual([run.id, run2.id].map(id => report.runs.some(row => row.id === id)), [true, true])
+
+  // لوحة التحكم: صلاحية اللوحة لوحدها ماتجيبش صافي المسيرات
+  const stats = ok(await request(U.branchViewer, 'GET', '/dashboard/stats'))
+  assert.deepEqual(stats.payrollRuns, [])
+  assert.ok(stats.employees.total >= 1, 'باقي أرقام اللوحة زي ما هي')
+  const full = ok(await request(U.companyReader, 'GET', '/dashboard/stats'))
+  assert.ok(full.payrollRuns.some(row => row.id === run2.id && Number(row.totalNet) > FAR_SALARY), JSON.stringify(full.payrollRuns))
+})
+
+test('LK-06: تقرير حوكمة الإعفاءات — صافي المسير المحفوظ لقارئ الشركة بس، والمكافآت بموظفي نطاق القارئ', async () => {
+  // مكافأة مصروفة لموظف الفرع التاني في المسير متعدد الفروع
+  await repo('EmployeeObligation').save({ employeeId: E.far.id, type: 'CREDIT', category: 'bonus', amount: FAR_BONUS, label: 'مكافأة موظف الفرع التاني',
+    status: 'APPLIED', appliedPayrollRunId: run2.id, appliedAmount: FAR_BONUS })
+  const stored = await repo('PayrollRun').findOneByOrFail({ id: run2.id })
+  const route = `/payroll/exemptions/report?fromPeriod=${period}&toPeriod=${period}`
+  // حساب فرع معاه عرض الإعفاءات من غير صلاحية رواتب: المسير ظاهر (فيه موظف من فرعه) من غير إجمالي المسير ولا مكافأة الفرع التاني
+  const scoped = ok(await request(U.branchViewer, 'GET', route))
+  const scopedRow = scoped.byRun.find(row => row.runId === run2.id)
+  assert.ok(scopedRow, JSON.stringify(scoped.byRun))
+  assert.deepEqual([scopedRow.totalNet, scopedRow.bonuses], [null, '0.00'])
+  assert.ok(scoped.byRun.every(row => row.totalNet === null))
+  assert.ok(!JSON.stringify(scoped).includes('4321') && !JSON.stringify(scoped).includes('8123'), 'ولا رقم من الفرع التاني')
+  // قارئ الرواتب على مستوى الشركة: الأرقام زي ما كانت
+  const company = ok(await request(U.companyReader, 'GET', route))
+  const companyRow = company.byRun.find(row => row.runId === run2.id)
+  assert.deepEqual([Number(companyRow.totalNet), companyRow.bonuses], [Number(stored.totalNet), FAR_BONUS.toFixed(2)])
 })

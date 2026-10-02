@@ -259,7 +259,12 @@ test('runs report lists runs without a branch, keeps cancelled runs out of total
   assert.deepEqual(new Set(scoped.runs.map(run => run.id)), new Set([R.dept.id, R.duplicate.id, R.cancelled.id]), 'مدير الفرع أ يرى مسيرات أعضاء فرعه فقط')
   assert.equal(scoped.runs.find(run => run.id === R.dept.id).partial, false)
   assert.deepEqual((await get(noScope, '/reports/payroll')).runs, [], 'حساب بلا فرع لا يرى شيئًا')
-  assert.equal((await get(viewerA, '/reports/payroll')).runs.length, 3, 'مركز التقارير وحده يكفي للملخص')
+  // B0.1s-2: الملخص فلوس (صافي كل مسير وبنوده، ومسير أو فريق من موظف واحد = راتبه) — «التقارير» لوحدها مابقتش تكفي، بفلتر ومن غير فلتر
+  for (const route of ['/reports/payroll', '/reports/payroll?includeDraft=true', `/reports/payroll?branchId=${branchA.id}`]) {
+    const blocked = await request(viewerA, 'GET', route)
+    assert.equal(blocked.status, 403, route)
+    assert.ok(!JSON.stringify(blocked.body).includes('totalNet'), route)
+  }
   assert.equal((await request(null, 'GET', '/reports/payroll')).status, 401)
 })
 
