@@ -144,6 +144,13 @@ export class FinancialExemptionsService {
     forbidden('EXEMPTION_RUN_OUT_OF_SCOPE', 'المسير خارج نطاق فرعك')
   }
 
+  // CR27-B01: قفل مسير الإعفاء قبل صفه — العضوية (ومكان النسخة المنقولة) ماتتغيرش بإعادة حساب في نص العملية
+  private async lockRunOfExemption(em: EntityManager, id: number) {
+    const peek = await em.getRepository(PayrollFinancialExemption).findOne({ where: { id }, select: { id: true, runId: true } })
+    if (!peek) throw new NotFoundException({ code: 'EXEMPTION_NOT_FOUND', message: 'الإعفاء غير موجود' })
+    await this.lockRun(em, peek.runId)
+  }
+
   // نفس قفل المسير في PayrollService (الحساب والاعتماد والانتقالات): المنح والاعتماد والإلغاء لا تتداخل مع إعادة الحساب
   private async lockRun(em: EntityManager, runId: number) {
     const rows = await em.query(`DECLARE @result int;
@@ -426,7 +433,7 @@ export class FinancialExemptionsService {
   }
 
   async create(user: JwtPayload, dto: ExemptionInputDto) {
-    const id = await this.manager.transaction(async em => {
+    return this.manager.transaction(async em => {
       // صفة المانح قبل الأقفال: حساب بلا أساس مايقفلش مسير ولا موظف
       await this.grantorFacts(em, user)
       await this.lockRun(em, dto.runId)
@@ -457,9 +464,8 @@ export class FinancialExemptionsService {
         await em.getRepository(DeductionRequestEvent).save({ requestId, eventType: 'EXEMPTION_GRANTED', actorUserId: user.sub, fromStatus: null, toStatus: null, stepOrder: null,
           reason: `إعفاء مالي #${row.id} (${EXEMPTION_LABELS.statuses[row.status as 'ACTIVE']}) في مسير ${row.period}: ${row.reason}`.slice(0, 1000), payload: JSON.stringify({ exemptionId: row.id, runId: row.runId }) })
       }
-      return row.id
+      return this.detailIn(em, user, row.id)
     })
-    return this.detail(user, id)
   }
 
   private async lockedRow(em: EntityManager, id: number, expectedRevision?: number) {
@@ -497,7 +503,7 @@ export class FinancialExemptionsService {
 
   async approve(user: JwtPayload, id: number, dto: ExemptionDecisionDto) {
     if (!userHasPerm(user, APPROVE)) forbidden('EXEMPTION_APPROVE_FORBIDDEN', 'اعتماد الإعفاء المالي يتطلب صلاحية اعتماد الإعفاءات')
-    await this.manager.transaction(async em => {
+    return this.manager.transaction(async em => {
       const peek = await em.getRepository(PayrollFinancialExemption).findOneBy({ id })
       if (!peek) throw new NotFoundException({ code: 'EXEMPTION_NOT_FOUND', message: 'الإعفاء غير موجود' })
       await this.lockRun(em, peek.runId)
@@ -529,14 +535,15 @@ export class FinancialExemptionsService {
       await em.getRepository(PayrollFinancialExemption).update({ id: row.id, status: 'PENDING_APPROVAL' }, { status: 'ACTIVE', approvedByUserId: user.sub, approvedAt: new Date(),
         estimatedAmount: estimate.amount, revision: row.revision + 1, updatedAt: new Date() })
       await recordExemptionEvent(em, row, 'APPROVED', user.sub, 'PENDING_APPROVAL', 'ACTIVE', note || null, { estimatedAmount: estimate.amount })
+      return this.detailIn(em, user, id)
     })
-    return this.detail(user, id)
   }
 
   async reject(user: JwtPayload, id: number, dto: ExemptionDecisionDto) {
     if (!userHasPerm(user, APPROVE)) forbidden('EXEMPTION_APPROVE_FORBIDDEN', 'رفض الإعفاء المالي يتطلب صلاحية اعتماد الإعفاءات')
-    await this.manager.transaction(async em => {
+    return this.manager.transaction(async em => {
       const settings = await this.settings(em)
+      await this.lockRunOfExemption(em, id)
       const row = await this.lockedRow(em, id, dto.expectedRevision)
       if (!this.inBranch(user, this.orgOfRow(row).branchId)) forbidden('EXEMPTION_FORBIDDEN', 'الإعفاء خارج نطاق فرعك')
       if (row.status !== 'PENDING_APPROVAL') conflict('EXEMPTION_STATE', `لا يُرفض إعفاء حالته «${EXEMPTION_LABELS.statuses[row.status as 'ACTIVE'] ?? row.status}»`)
@@ -546,13 +553,13 @@ export class FinancialExemptionsService {
       if (issue) bad(issue.code, issue.message.replace('الإعفاء', 'الرفض'), { minLength: settings.reasonMinLength })
       await em.getRepository(PayrollFinancialExemption).update({ id: row.id }, { status: 'REJECTED', decidedByUserId: user.sub, decidedAt: new Date(), decisionReason: String(dto.reason).trim(), revision: row.revision + 1, updatedAt: new Date() })
       await recordExemptionEvent(em, row, 'REJECTED', user.sub, row.status, 'REJECTED', String(dto.reason).trim(), null)
+      return this.detailIn(em, user, id)
     })
-    return this.detail(user, id)
   }
 
   /** EX-08 قاعدة 3/4: إلغاء إعفاء حي قبل اعتماد المسير بسبب ≥ الحد، من المانح أو الموارد البشرية؛ المطبق لا يُلغى. */
   async revoke(user: JwtPayload, id: number, dto: ExemptionDecisionDto) {
-    await this.manager.transaction(async em => {
+    return this.manager.transaction(async em => {
       const settings = await this.settings(em)
       const peek = await em.getRepository(PayrollFinancialExemption).findOneBy({ id })
       if (!peek) throw new NotFoundException({ code: 'EXEMPTION_NOT_FOUND', message: 'الإعفاء غير موجود' })
@@ -567,12 +574,13 @@ export class FinancialExemptionsService {
       if (issue) bad(issue.code, issue.message.replace('الإعفاء', 'الإلغاء'), { minLength: settings.reasonMinLength })
       await em.getRepository(PayrollFinancialExemption).update({ id: row.id }, { status: 'REVOKED', decidedByUserId: user.sub, decidedAt: new Date(), decisionReason: String(dto.reason).trim(), revision: row.revision + 1, updatedAt: new Date() })
       await recordExemptionEvent(em, row, 'REVOKED', user.sub, row.status, 'REVOKED', String(dto.reason).trim(), { note: 'أعد حساب المسير ليعود الخصم' })
+      return this.detailIn(em, user, id)
     })
-    return this.detail(user, id)
   }
 
   async attach(user: JwtPayload, id: number, dto: ExemptionAttachmentDto) {
-    await this.manager.transaction(async em => {
+    return this.manager.transaction(async em => {
+      await this.lockRunOfExemption(em, id)
       const row = await this.lockedRow(em, id)
       const inScope = grantedByUser(user, row) || (userHasPerm(user, GRANT) && this.inBranch(user, this.orgOfRow(row).branchId))
       if (!inScope) forbidden('EXEMPTION_FORBIDDEN', 'إضافة المرفق للمانح نفسه أو للموارد البشرية في فرع الموظف')
@@ -581,8 +589,8 @@ export class FinancialExemptionsService {
       if (ref.length < 3) bad('EXEMPTION_ATTACHMENT_INVALID', 'مرجع المرفق من 3 إلى 300 حرف')
       await em.getRepository(PayrollFinancialExemption).update({ id: row.id }, { attachmentRef: ref, updatedAt: new Date() })
       await recordExemptionEvent(em, row, 'ATTACHMENT_ADDED', user.sub, row.status, row.status, null, { previous: row.attachmentRef ?? null, attachmentRef: ref })
+      return this.detailIn(em, user, id)
     })
-    return this.detail(user, id)
   }
 
   // ===== القراءة =====
@@ -643,30 +651,34 @@ export class FinancialExemptionsService {
   }
 
   async detail(user: JwtPayload, id: number) {
-    return this.manager.transaction(async em => {
-      const row = await em.getRepository(PayrollFinancialExemption).findOneBy({ id })
-      if (!row) throw new NotFoundException({ code: 'EXEMPTION_NOT_FOUND', message: 'الإعفاء غير موجود' })
-      await this.loadCarriedPlaces(em, [row])
-      const facts = await this.org.facts(em, user)
-      const employee = await em.getRepository(Employee).findOne({ where: { id: row.employeeId }, select: { id: true, branchId: true, departmentId: true } })
-      if (!this.visible(user, facts, row, employee, (await this.settings(em)).departmentManagerEnabled)) forbidden('EXEMPTION_FORBIDDEN', 'الإعفاء خارج نطاقك')
-      const [view] = await this.views(em, user, [row])
-      const events = await em.getRepository(PayrollFinancialExemptionEvent).find({ where: { exemptionId: id }, order: { id: 'ASC' } })
-      // CR25-B01: «اتنقل للمسير التكميلي» — لو نسخة التكميلي برّه نطاق القارئ (الموظف اتنقل لفرع تاني) رقم المسير والنسخة مايتقالوش
-      const hidden = await this.hiddenCarriedCopies(em, user, facts, events)
-      const names = await this.names(em, [row])
-      const actors = events.map(event => event.actorUserId).filter((value): value is number => !!value)
-      const actorNames = actors.length ? new Map((await em.query(`SELECT [id],[displayName] FROM [users] WHERE [id] IN (${actors.map((_, i) => `@${i}`).join(',')})`, actors) as Array<{ id: number; displayName: string | null }>)
-        .map(entry => [Number(entry.id), entry.displayName || `مستخدم #${entry.id}`])) : names.users
-      return { ...view, events: events.map(event => {
-        const payload = parseJson<Record<string, unknown> | null>(event.payload, null)
-        const masked = event.eventType === 'CARRIED_TO_SUPPLEMENTARY' && !!payload && hidden.has(Number(payload.carriedExemptionId))
-        return { id: event.id, eventType: event.eventType, fromStatus: event.fromStatus, toStatus: event.toStatus,
-          reason: masked ? (event.reason ?? '').replace(`المسير التكميلي #${payload!.supplementaryRunId}`, 'مسير تكميلي خارج نطاق صلاحيتك') : event.reason,
-          actorName: event.actorUserId ? actorNames.get(event.actorUserId) ?? null : null, createdAt: event.createdAt,
-          payload: masked ? { ...payload, supplementaryRunId: null, carriedExemptionId: null } : payload }
-      }) }
-    })
+    return this.manager.transaction(async em => this.detailIn(em, user, id))
+  }
+
+  // CR27-B01: عرض الإعفاء بعد أي عملية بيتحسب جوه معاملتها وتحت قفل مسيرها — رفض العرض (النطاق اتغير) بيرجّع العملية كلها،
+  // فمفيش رد 403 بيخبّي كتابة اتسجلت، ولا عملية بتتم بنطاق اتغير وهي شغالة
+  private async detailIn(em: EntityManager, user: JwtPayload, id: number) {
+    const row = await em.getRepository(PayrollFinancialExemption).findOneBy({ id })
+    if (!row) throw new NotFoundException({ code: 'EXEMPTION_NOT_FOUND', message: 'الإعفاء غير موجود' })
+    await this.loadCarriedPlaces(em, [row])
+    const facts = await this.org.facts(em, user)
+    const employee = await em.getRepository(Employee).findOne({ where: { id: row.employeeId }, select: { id: true, branchId: true, departmentId: true } })
+    if (!this.visible(user, facts, row, employee, (await this.settings(em)).departmentManagerEnabled)) forbidden('EXEMPTION_FORBIDDEN', 'الإعفاء خارج نطاقك')
+    const [view] = await this.views(em, user, [row])
+    const events = await em.getRepository(PayrollFinancialExemptionEvent).find({ where: { exemptionId: id }, order: { id: 'ASC' } })
+    // CR25-B01: «اتنقل للمسير التكميلي» — لو نسخة التكميلي برّه نطاق القارئ (الموظف اتنقل لفرع تاني) رقم المسير والنسخة مايتقالوش
+    const hidden = await this.hiddenCarriedCopies(em, user, facts, events)
+    const names = await this.names(em, [row])
+    const actors = events.map(event => event.actorUserId).filter((value): value is number => !!value)
+    const actorNames = actors.length ? new Map((await em.query(`SELECT [id],[displayName] FROM [users] WHERE [id] IN (${actors.map((_, i) => `@${i}`).join(',')})`, actors) as Array<{ id: number; displayName: string | null }>)
+      .map(entry => [Number(entry.id), entry.displayName || `مستخدم #${entry.id}`])) : names.users
+    return { ...view, events: events.map(event => {
+      const payload = parseJson<Record<string, unknown> | null>(event.payload, null)
+      const masked = event.eventType === 'CARRIED_TO_SUPPLEMENTARY' && !!payload && hidden.has(Number(payload.carriedExemptionId))
+      return { id: event.id, eventType: event.eventType, fromStatus: event.fromStatus, toStatus: event.toStatus,
+        reason: masked ? (event.reason ?? '').replace(`المسير التكميلي #${payload!.supplementaryRunId}`, 'مسير تكميلي خارج نطاق صلاحيتك') : event.reason,
+        actorName: event.actorUserId ? actorNames.get(event.actorUserId) ?? null : null, createdAt: event.createdAt,
+        payload: masked ? { ...payload, supplementaryRunId: null, carriedExemptionId: null } : payload }
+    }) }
   }
 
   // نسخ التكميلي المذكورة في أحداث «اتنقل للمسير التكميلي» اللي القارئ مايشوفهاش (بنفس حكم visible)

@@ -785,4 +785,37 @@ test('CR25-B01 / CR26: إعفاء منقول لتكميلي فيه موظف ات
   assert.deepEqual(fullEvent.payload.carriedExemptions.map(row => row.exemptionId).sort((a, b) => a - b), [copies[stay.id].id, copies[mover.id].id].sort((a, b) => a - b))
   const full = expectStatus(await request(users.admin, 'GET', `/payroll/exemptions/${sources[mover.id].id}`), 200).events.find(event => event.eventType === 'CARRIED_TO_SUPPLEMENTARY')
   assert.deepEqual([full.payload.supplementaryRunId, full.payload.carriedExemptionId], [supplementary.id, copies[mover.id].id])
+
+  // CR27-B01: مرفق النسخة وإعادة حساب التكميلي ماتتداخلش — المرفق بيقفل المسير قبل صف الإعفاء (نفس قفل إعادة الحساب)،
+  // فإعادة الحساب اللي بتبدأ والمرفق شغال بتستنى لحد ما يخلص، والمرفق بيتكتب بالنطاق اللي بدأ بيه وبيرجع رده من نفس المعاملة
+  const service = app.get(require('../src/payroll/financial-exemptions.service').FinancialExemptionsService)
+  const original = service.loadCarriedPlaces
+  let entered, release, armed = true
+  const reached = new Promise(resolve => { entered = resolve }), gate = new Promise(resolve => { release = resolve })
+  service.loadCarriedPlaces = async function (em, rows) {
+    await original.call(this, em, rows)
+    if (armed && rows.length === 1 && rows[0].id === copies[stay.id].id) { armed = false; entered(); await gate }
+  }
+  let attaching, recalculating
+  try {
+    attaching = request(grantor, 'POST', `/payroll/exemptions/${copies[stay.id].id}/attachment`, { attachmentRef: 'محضر-قبل-النقل' })
+    await reached
+    await repo('Employee').update(stay.id, { branchId: org.other.id })
+    let recalculated = false
+    recalculating = request(users.admin, 'POST', `/payroll/runs/${supplementary.id}/recalculate`, { reason: 'إعادة حساب بعد نقل الموظف للفرع التاني' }).then(response => { recalculated = true; return response })
+    await new Promise(resolve => setTimeout(resolve, 1500))
+    assert.equal(recalculated, false, 'إعادة الحساب مستنية قفل المسير لحد ما المرفق يخلص')
+  } finally {
+    release(); service.loadCarriedPlaces = original
+  }
+  const [attached, recalculated] = await Promise.all([attaching, recalculating])
+  assert.equal(expectStatus(attached, 201).attachmentRef, 'محضر-قبل-النقل', 'المرفق اتكتب بالنطاق اللي بدأ بيه ورده من نفس المعاملة')
+  expectStatus(recalculated, 201)
+  assert.equal((await repo('PayrollRunMember').findOneByOrFail({ runId: supplementary.id, employeeId: stay.id })).snapshot.branchId, org.other.id)
+  // بعد ما العضوية اتنقلت: نفس الحساب مايشوفش النسخة ولا يكتب فيها، والرفض من غير كتابة
+  const events = async () => (await repo('PayrollFinancialExemptionEvent').findBy({ exemptionId: copies[stay.id].id, eventType: 'ATTACHMENT_ADDED' })).length
+  const before = await events()
+  expectStatus(await request(grantor, 'POST', `/payroll/exemptions/${copies[stay.id].id}/attachment`, { attachmentRef: 'محضر-بعد-النقل' }), 403, 'EXEMPTION_FORBIDDEN')
+  assert.deepEqual([(await repo('PayrollFinancialExemption').findOneByOrFail({ id: copies[stay.id].id })).attachmentRef, await events()], ['محضر-قبل-النقل', before])
+  expectStatus(await request(otherHr, 'GET', `/payroll/exemptions/${copies[stay.id].id}`), 200)
 })
